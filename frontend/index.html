@@ -46,6 +46,12 @@
             <span>Logs</span>
           </button>
         </li>
+        <li>
+          <button id="tabChat" class="sidebar-link" role="tab" aria-selected="false" aria-controls="chatView">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            <span>Chat IA</span>
+          </button>
+        </li>
       </ul>
 
       <div class="sidebar-footer">
@@ -268,6 +274,51 @@
             </div>
           </div>
           <pre id="logsOutput" class="terminal logs-terminal"></pre>
+        </section>
+      </main>
+
+      <!-- ========= CHAT AI VIEW ========= -->
+      <main id="chatView" class="page-content hidden" role="tabpanel" aria-labelledby="tabChat">
+        <section class="chat-panel">
+          <div class="statusbar chat-statusbar">
+            <span class="meta">Chat IA — converse com a IA para gerenciar seu computador</span>
+            <div class="actions">
+              <button id="chatConfigBtn" class="btn subtle">Configurar IA</button>
+              <button id="chatToolsBtn" class="btn subtle">Ver Ferramentas</button>
+              <button id="chatClearBtn" class="btn danger">Limpar Chat</button>
+            </div>
+          </div>
+
+          <!-- Config panel (hidden by default) -->
+          <div id="chatConfigPanel" class="chat-config hidden">
+            <div class="chat-config-field">
+              <label for="chatEndpoint">Endpoint (URL da API)</label>
+              <input id="chatEndpoint" type="url" placeholder="https://api.openai.com/v1/chat/completions" />
+            </div>
+            <div class="chat-config-field">
+              <label for="chatApiKey">API Key</label>
+              <input id="chatApiKey" type="password" placeholder="sk-..." />
+            </div>
+            <div class="chat-config-field">
+              <label for="chatModel">Modelo</label>
+              <input id="chatModel" type="text" placeholder="gpt-4o-mini" />
+            </div>
+            <button id="chatSaveConfigBtn" class="btn primary">Salvar Configuracao</button>
+          </div>
+
+          <!-- Tools panel (hidden by default) -->
+          <div id="chatToolsPanel" class="chat-tools-panel hidden">
+            <div id="chatToolsList" class="chat-tools-list"></div>
+          </div>
+
+          <!-- Messages area -->
+          <div id="chatMessages" class="chat-messages"></div>
+
+          <!-- Input -->
+          <div class="chat-input-wrap">
+            <textarea id="chatInput" class="chat-input" placeholder="Digite sua mensagem... (Enter para  nova linha, Shift+Enter para enviar)" rows="2"></textarea>
+            <button id="chatSendBtn" class="btn primary chat-send-btn">Enviar</button>
+          </div>
         </section>
       </main>
     </div>

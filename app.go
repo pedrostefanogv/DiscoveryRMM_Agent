@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -14,9 +15,11 @@ import (
 	"github.com/energye/systray"
 	"github.com/samber/lo"
 
+	"winget-store/internal/ai"
 	"winget-store/internal/data"
 	"winget-store/internal/export"
 	"winget-store/internal/inventory"
+	"winget-store/internal/mcp"
 	"winget-store/internal/models"
 	"winget-store/internal/services"
 	"winget-store/internal/winget"
@@ -111,6 +114,9 @@ type App struct {
 	exportCfg exportConfig
 	logs      logBuffer
 
+	mcpRegistry *mcp.Registry
+	chatSvc     *ai.Service
+
 	startupMu  sync.RWMutex
 	startupErr error
 	startupWg  sync.WaitGroup
@@ -121,11 +127,21 @@ func NewApp() *App {
 	wingetClient := winget.NewClient(wingetTimeout)
 	inventoryProvider := inventory.NewProvider(inventoryTimeout)
 
-	return &App{
-		catalogSvc: services.NewCatalogService(catalogClient),
-		appsSvc:    services.NewAppsService(wingetClient),
-		invSvc:     services.NewInventoryService(inventoryProvider),
+	reg := mcp.NewRegistry()
+	chatSvc := ai.NewService(reg)
+
+	a := &App{
+		catalogSvc:  services.NewCatalogService(catalogClient),
+		appsSvc:     services.NewAppsService(wingetClient),
+		invSvc:      services.NewInventoryService(inventoryProvider),
+		mcpRegistry: reg,
+		chatSvc:     chatSvc,
 	}
+
+	// Register all Discovery tools in the MCP registry.
+	mcp.RegisterDiscoveryTools(reg, a)
+
+	return a
 }
 
 func (a *App) startup(ctx context.Context) {
@@ -476,4 +492,138 @@ func exportDirCandidates() []string {
 
 	paths = append(paths, filepath.Join(".", "DiscoveryExports"))
 	return lo.Uniq(paths)
+}
+
+// -----------------------------------------------------------------------
+// AppBridge implementation (used by MCP tool registry)
+// -----------------------------------------------------------------------
+
+func (a *App) GetInventoryJSON() (json.RawMessage, error) {
+	report, err := a.GetInventory()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(report)
+}
+
+func (a *App) SearchCatalog(query string) (json.RawMessage, error) {
+	catalog, err := a.catalogSvc.GetCatalog(a.ctx)
+	if err != nil {
+		return nil, err
+	}
+	q := strings.ToLower(query)
+	var matches []models.AppItem
+	for _, item := range catalog.Packages {
+		if strings.Contains(strings.ToLower(item.Name), q) ||
+			strings.Contains(strings.ToLower(item.ID), q) ||
+			strings.Contains(strings.ToLower(item.Publisher), q) {
+			matches = append(matches, item)
+			if len(matches) >= 20 {
+				break
+			}
+		}
+	}
+	return json.Marshal(matches)
+}
+
+func (a *App) InstallPackage(id string) (string, error)   { return a.Install(id) }
+func (a *App) UninstallPackage(id string) (string, error) { return a.Uninstall(id) }
+func (a *App) UpgradePackage(id string) (string, error)   { return a.Upgrade(id) }
+func (a *App) UpgradeAllPackages() (string, error)        { return a.UpgradeAll() }
+
+func (a *App) GetPendingUpdatesJSON() (json.RawMessage, error) {
+	items, err := a.GetPendingUpdates()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(items)
+}
+
+func (a *App) ExportMarkdown() (string, error) { return a.ExportInventoryMarkdown() }
+func (a *App) ExportPDF() (string, error)      { return a.ExportInventoryPDF() }
+
+func (a *App) GetOsqueryStatusJSON() (json.RawMessage, error) {
+	status, _ := a.GetOsqueryStatus()
+	return json.Marshal(status)
+}
+
+func (a *App) GetLogsText() string {
+	return strings.Join(a.logs.getAll(), "\n")
+}
+
+// -----------------------------------------------------------------------
+// Chat AI methods (exposed to frontend via Wails)
+// -----------------------------------------------------------------------
+
+// ChatConfig is the frontend-facing AI configuration.
+type ChatConfig struct {
+	Endpoint string `json:"endpoint"`
+	APIKey   string `json:"apiKey"`
+	Model    string `json:"model"`
+}
+
+// ChatMessage is a single message for the frontend.
+type ChatMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+// SetChatConfig updates the LLM API settings.
+func (a *App) SetChatConfig(cfg ChatConfig) {
+	a.chatSvc.SetConfig(ai.Config{
+		Endpoint: cfg.Endpoint,
+		APIKey:   cfg.APIKey,
+		Model:    cfg.Model,
+	})
+}
+
+// GetChatConfig returns the current config (API key masked).
+func (a *App) GetChatConfig() ChatConfig {
+	c := a.chatSvc.GetConfig()
+	return ChatConfig{
+		Endpoint: c.Endpoint,
+		APIKey:   c.APIKey,
+		Model:    c.Model,
+	}
+}
+
+// SendChatMessage sends a user message and returns the assistant response.
+func (a *App) SendChatMessage(message string) (string, error) {
+	return a.chatSvc.Send(a.ctx, message)
+}
+
+// ClearChatHistory resets the conversation.
+func (a *App) ClearChatHistory() {
+	a.chatSvc.ClearHistory()
+}
+
+// GetChatHistory returns the conversation for display.
+func (a *App) GetChatHistory() []ChatMessage {
+	history := a.chatSvc.GetHistory()
+	msgs := make([]ChatMessage, 0, len(history))
+	for _, m := range history {
+		if m.Role == "tool" || (m.Role == "assistant" && m.Content == "" && len(m.ToolCalls) > 0) {
+			continue // hide internal tool calls from display
+		}
+		msgs = append(msgs, ChatMessage{Role: m.Role, Content: m.Content})
+	}
+	return msgs
+}
+
+// GetAvailableTools returns the list of MCP tools for display.
+func (a *App) GetAvailableTools() []map[string]string {
+	tools := a.mcpRegistry.Tools()
+	result := make([]map[string]string, len(tools))
+	for i, t := range tools {
+		result[i] = map[string]string{
+			"name":        t.Name,
+			"description": t.Description,
+		}
+	}
+	return result
+}
+
+// GetMCPRegistry returns the registry (used by main.go for MCP server mode).
+func (a *App) GetMCPRegistry() *mcp.Registry {
+	return a.mcpRegistry
 }

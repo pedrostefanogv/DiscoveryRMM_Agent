@@ -4,11 +4,14 @@ import (
 	"context"
 	"embed"
 	"log"
+	"os"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
+
+	"winget-store/internal/mcp"
 )
 
 //go:embed all:frontend
@@ -20,6 +23,12 @@ var assets embed.FS
 var Version = "dev"
 
 func main() {
+	// If started with --mcp, run as a stdio MCP server (for Claude Desktop, etc).
+	if len(os.Args) > 1 && os.Args[1] == "--mcp" {
+		runMCPServer()
+		return
+	}
+
 	app := NewApp()
 
 	err := wails.Run(&options.App{
@@ -41,5 +50,27 @@ func main() {
 	})
 	if err != nil {
 		log.Fatal(err)
+	}
+}
+
+// runMCPServer starts the app in headless MCP server mode (JSON-RPC over stdio).
+func runMCPServer() {
+	app := NewApp()
+	// Initialize a background context for the app services.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	app.ctx = ctx
+	app.cancel = cancel
+
+	srv := mcp.NewServer(app.GetMCPRegistry(), mcp.ServerInfo{
+		Name:    "discovery",
+		Version: Version,
+	})
+
+	log.SetOutput(os.Stderr) // keep logs out of the JSON-RPC stream
+	log.Println("[mcp] servidor MCP iniciado via stdio")
+
+	if err := srv.Run(ctx, os.Stdin, os.Stdout); err != nil {
+		log.Fatalf("[mcp] erro: %v", err)
 	}
 }

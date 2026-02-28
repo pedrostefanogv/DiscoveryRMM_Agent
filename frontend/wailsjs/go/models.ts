@@ -1,3 +1,55 @@
+export namespace main {
+	
+	export class ChatConfig {
+	    endpoint: string;
+	    apiKey: string;
+	    model: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ChatConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.endpoint = source["endpoint"];
+	        this.apiKey = source["apiKey"];
+	        this.model = source["model"];
+	    }
+	}
+	export class ChatMessage {
+	    role: string;
+	    content: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ChatMessage(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.role = source["role"];
+	        this.content = source["content"];
+	    }
+	}
+
+}
+
+export namespace mcp {
+	
+	export class Registry {
+	
+	
+	    static createFrom(source: any = {}) {
+	        return new Registry(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	
+	    }
+	}
+
+}
+
 export namespace models {
 	
 	export class AppItem {

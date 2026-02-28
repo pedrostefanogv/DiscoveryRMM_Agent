@@ -79,6 +79,21 @@ const autoexecOutputEl = document.getElementById('autoexecOutput');
 const softwareSearchInputEl = document.getElementById('softwareSearchInput');
 const softwareTableBodyEl = document.getElementById('softwareTableBody');
 const softwareCountEl = document.getElementById('softwareCount');
+const chatViewEl = document.getElementById('chatView');
+const tabChatBtn = document.getElementById('tabChat');
+const chatMessagesEl = document.getElementById('chatMessages');
+const chatInputEl = document.getElementById('chatInput');
+const chatSendBtn = document.getElementById('chatSendBtn');
+const chatConfigBtn = document.getElementById('chatConfigBtn');
+const chatToolsBtn = document.getElementById('chatToolsBtn');
+const chatClearBtn = document.getElementById('chatClearBtn');
+const chatConfigPanel = document.getElementById('chatConfigPanel');
+const chatToolsPanel = document.getElementById('chatToolsPanel');
+const chatToolsList = document.getElementById('chatToolsList');
+const chatSaveConfigBtn = document.getElementById('chatSaveConfigBtn');
+const chatEndpointEl = document.getElementById('chatEndpoint');
+const chatApiKeyEl = document.getElementById('chatApiKey');
+const chatModelEl = document.getElementById('chatModel');
 const softwarePrevBtn = document.getElementById('softwarePrevBtn');
 const softwareNextBtn = document.getElementById('softwareNextBtn');
 const softwarePageInfoEl = document.getElementById('softwarePageInfo');
@@ -317,12 +332,14 @@ function setActiveTab(tab) {
     updates: updatesViewEl,
     inventory: inventoryViewEl,
     logs: logsViewEl,
+    chat: chatViewEl,
   };
   var tabs = {
     store: tabStoreBtn,
     updates: tabUpdatesBtn,
     inventory: tabInventoryBtn,
     logs: tabLogsBtn,
+    chat: tabChatBtn,
   };
 
   Object.keys(views).forEach(function (key) {
@@ -1008,6 +1025,9 @@ tabInventoryBtn.addEventListener('click', function () {
   }
 });
 tabLogsBtn.addEventListener('click', function () { setActiveTab('logs'); });
+if (tabChatBtn) {
+  tabChatBtn.addEventListener('click', function () { setActiveTab('chat'); loadChatConfig(); });
+}
 
 // Category filter (searchable list)
 if (categorySearchEl) {
@@ -1123,7 +1143,140 @@ if (redactToggleEl) {
 
 updateSortIndicators();
 
+// =========================================================================
+// CHAT AI
+// =========================================================================
+
+var chatSending = false;
+
+function addChatMessage(role, content) {
+  if (!chatMessagesEl) return;
+  var div = document.createElement('div');
+  div.className = 'chat-msg ' + role;
+  div.textContent = content;
+  chatMessagesEl.appendChild(div);
+  chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
+  return div;
+}
+
+function removeChatThinking() {
+  if (!chatMessagesEl) return;
+  var thinking = chatMessagesEl.querySelector('.chat-msg.thinking');
+  if (thinking) thinking.remove();
+}
+
+async function sendChatMessage() {
+  if (chatSending || !chatInputEl) return;
+  var text = chatInputEl.value.trim();
+  if (!text) return;
+
+  chatInputEl.value = '';
+  addChatMessage('user', text);
+
+  chatSending = true;
+  if (chatSendBtn) chatSendBtn.disabled = true;
+  addChatMessage('thinking', 'Pensando...');
+
+  try {
+    var reply = await appApi().SendChatMessage(text);
+    removeChatThinking();
+    addChatMessage('assistant', reply || '(sem resposta)');
+  } catch (err) {
+    removeChatThinking();
+    addChatMessage('assistant', 'Erro: ' + String(err));
+  } finally {
+    chatSending = false;
+    if (chatSendBtn) chatSendBtn.disabled = false;
+    if (chatInputEl) chatInputEl.focus();
+  }
+}
+
+async function loadChatConfig() {
+  try {
+    var cfg = await appApi().GetChatConfig();
+    if (chatEndpointEl && cfg.endpoint) chatEndpointEl.value = cfg.endpoint;
+    if (chatModelEl && cfg.model) chatModelEl.value = cfg.model;
+    // Don't set API key — it's masked
+  } catch (_) {}
+}
+
+async function saveChatConfig() {
+  var endpoint = chatEndpointEl ? chatEndpointEl.value.trim() : '';
+  var apiKey = chatApiKeyEl ? chatApiKeyEl.value.trim() : '';
+  var model = chatModelEl ? chatModelEl.value.trim() : '';
+
+  if (!endpoint || !apiKey || !model) {
+    showFeedback('Preencha todos os campos de configuracao', true);
+    return;
+  }
+
+  try {
+    await appApi().SetChatConfig({ endpoint: endpoint, apiKey: apiKey, model: model });
+    showFeedback('Configuracao de IA salva com sucesso');
+    if (chatConfigPanel) chatConfigPanel.classList.add('hidden');
+  } catch (err) {
+    showFeedback('Erro ao salvar configuracao: ' + String(err), true);
+  }
+}
+
+async function loadChatTools() {
+  if (!chatToolsList) return;
+  try {
+    var tools = await appApi().GetAvailableTools();
+    chatToolsList.innerHTML = (tools || []).map(function (t) {
+      return '<span class="chat-tool-badge" title="' + escapeHtml(t.description) + '">' +
+        escapeHtml(t.name) +
+      '</span>';
+    }).join('');
+  } catch (_) {
+    chatToolsList.innerHTML = '<span class="meta">Erro ao carregar ferramentas</span>';
+  }
+}
+
+function initChat() {
+  if (chatSendBtn) {
+    chatSendBtn.addEventListener('click', sendChatMessage);
+  }
+  if (chatInputEl) {
+    chatInputEl.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' && e.shiftKey) {
+        e.preventDefault();
+        sendChatMessage();
+      }
+    });
+  }
+  if (chatConfigBtn && chatConfigPanel) {
+    chatConfigBtn.addEventListener('click', function () {
+      chatConfigPanel.classList.toggle('hidden');
+      if (chatToolsPanel) chatToolsPanel.classList.add('hidden');
+      loadChatConfig();
+    });
+  }
+  if (chatToolsBtn && chatToolsPanel) {
+    chatToolsBtn.addEventListener('click', function () {
+      chatToolsPanel.classList.toggle('hidden');
+      if (chatConfigPanel) chatConfigPanel.classList.add('hidden');
+      loadChatTools();
+    });
+  }
+  if (chatClearBtn) {
+    chatClearBtn.addEventListener('click', async function () {
+      try {
+        await appApi().ClearChatHistory();
+        if (chatMessagesEl) chatMessagesEl.innerHTML = '';
+        showFeedback('Chat limpo');
+      } catch (err) {
+        showFeedback('Erro: ' + String(err), true);
+      }
+    });
+  }
+  if (chatSaveConfigBtn) {
+    chatSaveConfigBtn.addEventListener('click', saveChatConfig);
+  }
+}
+
 initTheme();
 setActiveTab('store');
 loadCatalog();
 loadSidebarUser();
+initChat();
