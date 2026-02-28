@@ -1,0 +1,636 @@
+export namespace models {
+	
+	export class AppItem {
+	    id: string;
+	    name: string;
+	    publisher: string;
+	    version: string;
+	    description: string;
+	    homepage: string;
+	    license: string;
+	    tags: string[];
+	    installCommand: string;
+	    category: string;
+	    icon: string;
+	    lastUpdated: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AppItem(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.publisher = source["publisher"];
+	        this.version = source["version"];
+	        this.description = source["description"];
+	        this.homepage = source["homepage"];
+	        this.license = source["license"];
+	        this.tags = source["tags"];
+	        this.installCommand = source["installCommand"];
+	        this.category = source["category"];
+	        this.icon = source["icon"];
+	        this.lastUpdated = source["lastUpdated"];
+	    }
+	}
+	export class AutoexecItem {
+	    path: string;
+	    name: string;
+	    source: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AutoexecItem(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.name = source["name"];
+	        this.source = source["source"];
+	    }
+	}
+	export class BatteryInfo {
+	    manufacturer: string;
+	    model: string;
+	    serialNumber: string;
+	    cycleCount: number;
+	    state: string;
+	    charging: boolean;
+	    charged: boolean;
+	    designedCapacityMAh: number;
+	    maxCapacityMAh: number;
+	    currentCapacityMAh: number;
+	    percentRemaining: number;
+	    amperageMA: number;
+	    voltageMV: number;
+	    minutesUntilEmpty: number;
+	    minutesToFullCharge: number;
+	    chemistry: string;
+	    health: string;
+	    condition: string;
+	    manufactureDateEpoch: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new BatteryInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.manufacturer = source["manufacturer"];
+	        this.model = source["model"];
+	        this.serialNumber = source["serialNumber"];
+	        this.cycleCount = source["cycleCount"];
+	        this.state = source["state"];
+	        this.charging = source["charging"];
+	        this.charged = source["charged"];
+	        this.designedCapacityMAh = source["designedCapacityMAh"];
+	        this.maxCapacityMAh = source["maxCapacityMAh"];
+	        this.currentCapacityMAh = source["currentCapacityMAh"];
+	        this.percentRemaining = source["percentRemaining"];
+	        this.amperageMA = source["amperageMA"];
+	        this.voltageMV = source["voltageMV"];
+	        this.minutesUntilEmpty = source["minutesUntilEmpty"];
+	        this.minutesToFullCharge = source["minutesToFullCharge"];
+	        this.chemistry = source["chemistry"];
+	        this.health = source["health"];
+	        this.condition = source["condition"];
+	        this.manufactureDateEpoch = source["manufactureDateEpoch"];
+	    }
+	}
+	export class BitLockerInfo {
+	    deviceId: string;
+	    driveLetter: string;
+	    persistentVolumeId: string;
+	    conversionStatus: number;
+	    protectionStatus: number;
+	    encryptionMethod: string;
+	    version: number;
+	    percentageEncrypted: number;
+	    lockStatus: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new BitLockerInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.deviceId = source["deviceId"];
+	        this.driveLetter = source["driveLetter"];
+	        this.persistentVolumeId = source["persistentVolumeId"];
+	        this.conversionStatus = source["conversionStatus"];
+	        this.protectionStatus = source["protectionStatus"];
+	        this.encryptionMethod = source["encryptionMethod"];
+	        this.version = source["version"];
+	        this.percentageEncrypted = source["percentageEncrypted"];
+	        this.lockStatus = source["lockStatus"];
+	    }
+	}
+	export class CPUFeature {
+	    feature: string;
+	    value: string;
+	    outputRegister: string;
+	    outputBit: number;
+	    inputEAX: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new CPUFeature(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.feature = source["feature"];
+	        this.value = source["value"];
+	        this.outputRegister = source["outputRegister"];
+	        this.outputBit = source["outputBit"];
+	        this.inputEAX = source["inputEAX"];
+	    }
+	}
+	export class CPUInfo {
+	    deviceId: string;
+	    model: string;
+	    manufacturer: string;
+	    processorType: string;
+	    cpuStatus: number;
+	    numberOfCores: number;
+	    logicalProcessors: number;
+	    addressWidth: number;
+	    currentClockSpeed: number;
+	    maxClockSpeed: number;
+	    socketDesignation: string;
+	    availability: string;
+	    loadPercentage: number;
+	    numberOfEfficiencyCores: number;
+	    numberOfPerformanceCores: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new CPUInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.deviceId = source["deviceId"];
+	        this.model = source["model"];
+	        this.manufacturer = source["manufacturer"];
+	        this.processorType = source["processorType"];
+	        this.cpuStatus = source["cpuStatus"];
+	        this.numberOfCores = source["numberOfCores"];
+	        this.logicalProcessors = source["logicalProcessors"];
+	        this.addressWidth = source["addressWidth"];
+	        this.currentClockSpeed = source["currentClockSpeed"];
+	        this.maxClockSpeed = source["maxClockSpeed"];
+	        this.socketDesignation = source["socketDesignation"];
+	        this.availability = source["availability"];
+	        this.loadPercentage = source["loadPercentage"];
+	        this.numberOfEfficiencyCores = source["numberOfEfficiencyCores"];
+	        this.numberOfPerformanceCores = source["numberOfPerformanceCores"];
+	    }
+	}
+	export class Catalog {
+	    generated: string;
+	    count: number;
+	    packagesWithIcon: number;
+	    packages: AppItem[];
+	
+	    static createFrom(source: any = {}) {
+	        return new Catalog(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.generated = source["generated"];
+	        this.count = source["count"];
+	        this.packagesWithIcon = source["packagesWithIcon"];
+	        this.packages = this.convertValues(source["packages"], AppItem);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class DiskInfo {
+	    device: string;
+	    label: string;
+	    fileSystem: string;
+	    type: string;
+	    sizeGB: number;
+	    freeGB: number;
+	    freeKnown: boolean;
+	    bootPartition: boolean;
+	    manufacturer: string;
+	    model: string;
+	    serial: string;
+	    partitions: number;
+	    description: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new DiskInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.device = source["device"];
+	        this.label = source["label"];
+	        this.fileSystem = source["fileSystem"];
+	        this.type = source["type"];
+	        this.sizeGB = source["sizeGB"];
+	        this.freeGB = source["freeGB"];
+	        this.freeKnown = source["freeKnown"];
+	        this.bootPartition = source["bootPartition"];
+	        this.manufacturer = source["manufacturer"];
+	        this.model = source["model"];
+	        this.serial = source["serial"];
+	        this.partitions = source["partitions"];
+	        this.description = source["description"];
+	    }
+	}
+	export class GPUInfo {
+	    name: string;
+	    manufacturer: string;
+	    driverVersion: string;
+	    vramGB: number;
+	    status: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new GPUInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.manufacturer = source["manufacturer"];
+	        this.driverVersion = source["driverVersion"];
+	        this.vramGB = source["vramGB"];
+	        this.status = source["status"];
+	    }
+	}
+	export class HardwareInfo {
+	    hostname: string;
+	    manufacturer: string;
+	    model: string;
+	    cpu: string;
+	    logicalCores: number;
+	    cores: number;
+	    memoryGB: number;
+	    motherboardManufacturer: string;
+	    motherboardModel: string;
+	    motherboardSerial: string;
+	    biosVendor: string;
+	    biosVersion: string;
+	    biosReleaseDate: string;
+	    biosSerial: string;
+	    memoryModulesCount: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new HardwareInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.hostname = source["hostname"];
+	        this.manufacturer = source["manufacturer"];
+	        this.model = source["model"];
+	        this.cpu = source["cpu"];
+	        this.logicalCores = source["logicalCores"];
+	        this.cores = source["cores"];
+	        this.memoryGB = source["memoryGB"];
+	        this.motherboardManufacturer = source["motherboardManufacturer"];
+	        this.motherboardModel = source["motherboardModel"];
+	        this.motherboardSerial = source["motherboardSerial"];
+	        this.biosVendor = source["biosVendor"];
+	        this.biosVersion = source["biosVersion"];
+	        this.biosReleaseDate = source["biosReleaseDate"];
+	        this.biosSerial = source["biosSerial"];
+	        this.memoryModulesCount = source["memoryModulesCount"];
+	    }
+	}
+	export class StartupItem {
+	    name: string;
+	    path: string;
+	    args: string;
+	    type: string;
+	    source: string;
+	    status: string;
+	    username: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new StartupItem(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.path = source["path"];
+	        this.args = source["args"];
+	        this.type = source["type"];
+	        this.source = source["source"];
+	        this.status = source["status"];
+	        this.username = source["username"];
+	    }
+	}
+	export class SoftwareItem {
+	    name: string;
+	    version: string;
+	    publisher: string;
+	    installId: string;
+	    serial: string;
+	    source: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new SoftwareItem(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.version = source["version"];
+	        this.publisher = source["publisher"];
+	        this.installId = source["installId"];
+	        this.serial = source["serial"];
+	        this.source = source["source"];
+	    }
+	}
+	export class NetworkInfo {
+	    interface: string;
+	    friendlyName: string;
+	    mac: string;
+	    ipv4: string;
+	    ipv6: string;
+	    gateway: string;
+	    type: string;
+	    mtu: number;
+	    linkSpeedMbps: number;
+	    connectionStatus: string;
+	    enabled: boolean;
+	    physicalAdapter: boolean;
+	    dhcpEnabled: boolean;
+	    dnsServers: string;
+	    description: string;
+	    manufacturer: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new NetworkInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.interface = source["interface"];
+	        this.friendlyName = source["friendlyName"];
+	        this.mac = source["mac"];
+	        this.ipv4 = source["ipv4"];
+	        this.ipv6 = source["ipv6"];
+	        this.gateway = source["gateway"];
+	        this.type = source["type"];
+	        this.mtu = source["mtu"];
+	        this.linkSpeedMbps = source["linkSpeedMbps"];
+	        this.connectionStatus = source["connectionStatus"];
+	        this.enabled = source["enabled"];
+	        this.physicalAdapter = source["physicalAdapter"];
+	        this.dhcpEnabled = source["dhcpEnabled"];
+	        this.dnsServers = source["dnsServers"];
+	        this.description = source["description"];
+	        this.manufacturer = source["manufacturer"];
+	    }
+	}
+	export class MonitorInfo {
+	    name: string;
+	    manufacturer: string;
+	    serial: string;
+	    resolution: string;
+	    status: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new MonitorInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.manufacturer = source["manufacturer"];
+	        this.serial = source["serial"];
+	        this.resolution = source["resolution"];
+	        this.status = source["status"];
+	    }
+	}
+	export class MemoryModule {
+	    handle: string;
+	    arrayHandle: string;
+	    formFactor: string;
+	    totalWidth: number;
+	    dataWidth: number;
+	    sizeMB: number;
+	    set: number;
+	    slot: string;
+	    bank: string;
+	    memoryTypeDetails: string;
+	    maxSpeedMTs: number;
+	    manufacturer: string;
+	    partNumber: string;
+	    serial: string;
+	    assetTag: string;
+	    sizeGB: number;
+	    speedMHz: number;
+	    type: string;
+	    minVoltageMV: number;
+	    maxVoltageMV: number;
+	    configuredVoltageMV: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new MemoryModule(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.handle = source["handle"];
+	        this.arrayHandle = source["arrayHandle"];
+	        this.formFactor = source["formFactor"];
+	        this.totalWidth = source["totalWidth"];
+	        this.dataWidth = source["dataWidth"];
+	        this.sizeMB = source["sizeMB"];
+	        this.set = source["set"];
+	        this.slot = source["slot"];
+	        this.bank = source["bank"];
+	        this.memoryTypeDetails = source["memoryTypeDetails"];
+	        this.maxSpeedMTs = source["maxSpeedMTs"];
+	        this.manufacturer = source["manufacturer"];
+	        this.partNumber = source["partNumber"];
+	        this.serial = source["serial"];
+	        this.assetTag = source["assetTag"];
+	        this.sizeGB = source["sizeGB"];
+	        this.speedMHz = source["speedMHz"];
+	        this.type = source["type"];
+	        this.minVoltageMV = source["minVoltageMV"];
+	        this.maxVoltageMV = source["maxVoltageMV"];
+	        this.configuredVoltageMV = source["configuredVoltageMV"];
+	    }
+	}
+	export class LoggedInUser {
+	    user: string;
+	    type: string;
+	    tty: string;
+	    host: string;
+	    pid: number;
+	    sid: string;
+	    registry: string;
+	    time: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new LoggedInUser(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.user = source["user"];
+	        this.type = source["type"];
+	        this.tty = source["tty"];
+	        this.host = source["host"];
+	        this.pid = source["pid"];
+	        this.sid = source["sid"];
+	        this.registry = source["registry"];
+	        this.time = source["time"];
+	    }
+	}
+	export class OperatingSystem {
+	    name: string;
+	    version: string;
+	    build: string;
+	    architecture: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new OperatingSystem(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.version = source["version"];
+	        this.build = source["build"];
+	        this.architecture = source["architecture"];
+	    }
+	}
+	export class InventoryReport {
+	    collectedAt: string;
+	    source: string;
+	    hardware: HardwareInfo;
+	    os: OperatingSystem;
+	    loggedInUsers: LoggedInUser[];
+	    battery: BatteryInfo[];
+	    bitLocker: BitLockerInfo[];
+	    cpuInfo: CPUInfo[];
+	    cpuFeatures: CPUFeature[];
+	    memoryModules: MemoryModule[];
+	    monitors: MonitorInfo[];
+	    gpus: GPUInfo[];
+	    volumes: DiskInfo[];
+	    physicalDisks: DiskInfo[];
+	    disks: DiskInfo[];
+	    networks: NetworkInfo[];
+	    software: SoftwareItem[];
+	    startupItems: StartupItem[];
+	    autoexec: AutoexecItem[];
+	
+	    static createFrom(source: any = {}) {
+	        return new InventoryReport(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.collectedAt = source["collectedAt"];
+	        this.source = source["source"];
+	        this.hardware = this.convertValues(source["hardware"], HardwareInfo);
+	        this.os = this.convertValues(source["os"], OperatingSystem);
+	        this.loggedInUsers = this.convertValues(source["loggedInUsers"], LoggedInUser);
+	        this.battery = this.convertValues(source["battery"], BatteryInfo);
+	        this.bitLocker = this.convertValues(source["bitLocker"], BitLockerInfo);
+	        this.cpuInfo = this.convertValues(source["cpuInfo"], CPUInfo);
+	        this.cpuFeatures = this.convertValues(source["cpuFeatures"], CPUFeature);
+	        this.memoryModules = this.convertValues(source["memoryModules"], MemoryModule);
+	        this.monitors = this.convertValues(source["monitors"], MonitorInfo);
+	        this.gpus = this.convertValues(source["gpus"], GPUInfo);
+	        this.volumes = this.convertValues(source["volumes"], DiskInfo);
+	        this.physicalDisks = this.convertValues(source["physicalDisks"], DiskInfo);
+	        this.disks = this.convertValues(source["disks"], DiskInfo);
+	        this.networks = this.convertValues(source["networks"], NetworkInfo);
+	        this.software = this.convertValues(source["software"], SoftwareItem);
+	        this.startupItems = this.convertValues(source["startupItems"], StartupItem);
+	        this.autoexec = this.convertValues(source["autoexec"], AutoexecItem);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	
+	
+	
+	
+	export class OsqueryStatus {
+	    installed: boolean;
+	    path: string;
+	    suggestedPackageID: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new OsqueryStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.installed = source["installed"];
+	        this.path = source["path"];
+	        this.suggestedPackageID = source["suggestedPackageID"];
+	    }
+	}
+	
+	
+	export class UpgradeItem {
+	    name: string;
+	    id: string;
+	    currentVersion: string;
+	    availableVersion: string;
+	    source: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new UpgradeItem(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.id = source["id"];
+	        this.currentVersion = source["currentVersion"];
+	        this.availableVersion = source["availableVersion"];
+	        this.source = source["source"];
+	    }
+	}
+
+}
+
