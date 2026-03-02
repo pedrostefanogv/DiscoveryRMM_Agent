@@ -52,6 +52,12 @@
             <span>Chat IA</span>
           </button>
         </li>
+        <li>
+          <button id="tabSupport" class="sidebar-link" role="tab" aria-selected="false" aria-controls="supportView">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            <span>Suporte</span>
+          </button>
+        </li>
       </ul>
 
       <div class="sidebar-footer">
@@ -285,6 +291,7 @@
             <div class="actions">
               <button id="chatConfigBtn" class="btn subtle">Configurar IA</button>
               <button id="chatToolsBtn" class="btn subtle">Ver Ferramentas</button>
+              <button id="chatLogsBtn" class="btn subtle">Ver Logs IA</button>
               <button id="chatClearBtn" class="btn danger">Limpar Chat</button>
             </div>
           </div>
@@ -303,6 +310,7 @@
               <label for="chatModel">Modelo</label>
               <input id="chatModel" type="text" placeholder="gpt-4o-mini" />
             </div>
+            <button id="chatTestConfigBtn" class="btn subtle">Testar Configuracao</button>
             <button id="chatSaveConfigBtn" class="btn primary">Salvar Configuracao</button>
           </div>
 
@@ -316,8 +324,79 @@
 
           <!-- Input -->
           <div class="chat-input-wrap">
-            <textarea id="chatInput" class="chat-input" placeholder="Digite sua mensagem... (Enter para  nova linha, Shift+Enter para enviar)" rows="2"></textarea>
+            <textarea id="chatInput" class="chat-input" placeholder="Digite sua mensagem... (Enter para enviar, Shift+Enter para nova linha)" rows="2"></textarea>
             <button id="chatSendBtn" class="btn primary chat-send-btn">Enviar</button>
+          </div>
+
+          <div id="chatLogsModal" class="chat-logs-modal hidden" aria-hidden="true">
+            <div class="chat-logs-card">
+              <div class="chat-logs-head">
+                <strong>Logs do Chat IA</strong>
+                <div class="actions">
+                  <button id="chatLogsRefreshBtn" class="btn subtle">Atualizar</button>
+                  <button id="chatLogsCloseBtn" class="btn danger">Fechar</button>
+                </div>
+              </div>
+              <pre id="chatLogsOutput" class="chat-logs-output"></pre>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <!-- ========= SUPPORT VIEW ========= -->
+      <main id="supportView" class="page-content hidden" role="tabpanel" aria-labelledby="tabSupport">
+        <section class="support-panel">
+          <div class="statusbar">
+            <span class="meta">Suporte — abertura e acompanhamento de chamados</span>
+          </div>
+
+          <div class="support-layout">
+            <!-- Formulário de abertura -->
+            <div class="support-form-wrap">
+              <h2>Abrir Chamado</h2>
+              <form id="supportForm" class="support-form" autocomplete="off">
+                <div class="form-field">
+                  <label for="ticketSubject">Assunto</label>
+                  <input id="ticketSubject" type="text" placeholder="Resumo do problema" required />
+                </div>
+                <div class="form-field">
+                  <label for="ticketCategory">Categoria</label>
+                  <select id="ticketCategory" required>
+                    <option value="">Selecione...</option>
+                    <option value="Hardware">Hardware</option>
+                    <option value="Software">Software</option>
+                    <option value="Rede">Rede</option>
+                    <option value="Acesso">Acesso / Permissoes</option>
+                    <option value="Email">E-mail</option>
+                    <option value="Impressora">Impressora</option>
+                    <option value="VPN">VPN</option>
+                    <option value="Outro">Outro</option>
+                  </select>
+                </div>
+                <div class="form-field">
+                  <label for="ticketPriority">Prioridade</label>
+                  <select id="ticketPriority" required>
+                    <option value="Baixa">Baixa</option>
+                    <option value="Media" selected>Media</option>
+                    <option value="Alta">Alta</option>
+                    <option value="Critica">Critica</option>
+                  </select>
+                </div>
+                <div class="form-field">
+                  <label for="ticketDescription">Descricao</label>
+                  <textarea id="ticketDescription" rows="5" placeholder="Descreva o problema com detalhes..." required></textarea>
+                </div>
+                <button type="submit" class="btn primary">Enviar Chamado</button>
+              </form>
+            </div>
+
+            <!-- Lista de chamados -->
+            <div class="support-tickets-wrap">
+              <h2>Meus Chamados</h2>
+              <div id="supportTicketsList" class="support-tickets-list">
+                <div class="meta">Nenhum chamado aberto.</div>
+              </div>
+            </div>
           </div>
         </section>
       </main>

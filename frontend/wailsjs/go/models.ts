@@ -30,6 +30,30 @@ export namespace main {
 	        this.content = source["content"];
 	    }
 	}
+	export class SupportTicket {
+	    id: string;
+	    subject: string;
+	    category: string;
+	    priority: string;
+	    description: string;
+	    status: string;
+	    createdAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new SupportTicket(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.subject = source["subject"];
+	        this.category = source["category"];
+	        this.priority = source["priority"];
+	        this.description = source["description"];
+	        this.status = source["status"];
+	        this.createdAt = source["createdAt"];
+	    }
+	}
 
 }
 

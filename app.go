@@ -31,6 +31,7 @@ const (
 	catalogTimeout   = 10 * time.Minute
 	wingetTimeout    = 5 * time.Minute
 	inventoryTimeout = 45 * time.Second
+	chatConfigFile   = "chat_config.json"
 
 	WindowWidth  = 1280
 	WindowHeight = 860
@@ -72,6 +73,43 @@ func (e *exportConfig) set(v bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.redact = v
+}
+
+// SupportTicket represents a mock support ticket.
+type SupportTicket struct {
+	ID          string `json:"id"`
+	Subject     string `json:"subject"`
+	Category    string `json:"category"`
+	Priority    string `json:"priority"`
+	Description string `json:"description"`
+	Status      string `json:"status"`
+	CreatedAt   string `json:"createdAt"`
+}
+
+// ticketStore manages an in-memory list of support tickets.
+type ticketStore struct {
+	mu      sync.RWMutex
+	tickets []SupportTicket
+	nextID  int
+}
+
+func (ts *ticketStore) create(t SupportTicket) SupportTicket {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.nextID++
+	t.ID = fmt.Sprintf("TK-%04d", ts.nextID)
+	t.Status = "Aberto"
+	t.CreatedAt = time.Now().Format("02/01/2006 15:04")
+	ts.tickets = append(ts.tickets, t)
+	return t
+}
+
+func (ts *ticketStore) getAll() []SupportTicket {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	out := make([]SupportTicket, len(ts.tickets))
+	copy(out, ts.tickets)
+	return out
 }
 
 // logBuffer stores command output lines for the embedded terminal view.
@@ -116,6 +154,7 @@ type App struct {
 
 	mcpRegistry *mcp.Registry
 	chatSvc     *ai.Service
+	tickets     ticketStore
 
 	startupMu  sync.RWMutex
 	startupErr error
@@ -137,6 +176,10 @@ func NewApp() *App {
 		mcpRegistry: reg,
 		chatSvc:     chatSvc,
 	}
+	a.chatSvc.SetLogger(func(line string) {
+		a.logs.append("[chat] " + line)
+	})
+	a.loadPersistedChatConfig()
 
 	// Register all Discovery tools in the MCP registry.
 	mcp.RegisterDiscoveryTools(reg, a)
@@ -494,6 +537,82 @@ func exportDirCandidates() []string {
 	return lo.Uniq(paths)
 }
 
+func chatConfigPathCandidates() []string {
+	paths := make([]string, 0, 4)
+
+	if runtime.GOOS == "windows" {
+		if localAppData := strings.TrimSpace(os.Getenv("LOCALAPPDATA")); localAppData != "" {
+			paths = append(paths, filepath.Join(localAppData, "Discovery", chatConfigFile))
+		}
+	}
+
+	if exe, err := os.Executable(); err == nil && strings.TrimSpace(exe) != "" {
+		paths = append(paths, filepath.Join(filepath.Dir(exe), chatConfigFile))
+	}
+
+	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
+		paths = append(paths, filepath.Join(home, ".discovery", chatConfigFile))
+	}
+
+	paths = append(paths, filepath.Join(".", chatConfigFile))
+	return lo.Uniq(paths)
+}
+
+func (a *App) loadPersistedChatConfig() {
+	for _, path := range chatConfigPathCandidates() {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+
+		var cfg ChatConfig
+		if err := json.Unmarshal(data, &cfg); err != nil {
+			a.logs.append("[chat] falha ao ler configuracao persistida: " + err.Error())
+			return
+		}
+
+		if strings.TrimSpace(cfg.Endpoint) == "" || strings.TrimSpace(cfg.APIKey) == "" || strings.TrimSpace(cfg.Model) == "" {
+			a.logs.append("[chat] configuracao persistida ignorada: campos obrigatorios ausentes")
+			return
+		}
+
+		a.chatSvc.SetConfig(ai.Config{
+			Endpoint: cfg.Endpoint,
+			APIKey:   cfg.APIKey,
+			Model:    cfg.Model,
+		})
+		a.logs.append("[chat] configuracao carregada de " + path)
+		return
+	}
+}
+
+func (a *App) persistChatConfig(cfg ChatConfig) error {
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return fmt.Errorf("falha ao serializar configuracao do chat: %w", err)
+	}
+
+	var errs []string
+	for _, path := range chatConfigPathCandidates() {
+		dir := filepath.Dir(path)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			errs = append(errs, dir+": "+err.Error())
+			continue
+		}
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			errs = append(errs, path+": "+err.Error())
+			continue
+		}
+		a.logs.append("[chat] configuracao salva em " + path)
+		return nil
+	}
+
+	if len(errs) == 0 {
+		return fmt.Errorf("nenhum caminho valido para salvar configuracao do chat")
+	}
+	return fmt.Errorf("falha ao salvar configuracao do chat: %s", strings.Join(errs, " | "))
+}
+
 // -----------------------------------------------------------------------
 // AppBridge implementation (used by MCP tool registry)
 // -----------------------------------------------------------------------
@@ -568,9 +687,32 @@ type ChatMessage struct {
 	Content string `json:"content"`
 }
 
-// SetChatConfig updates the LLM API settings.
-func (a *App) SetChatConfig(cfg ChatConfig) {
+// SetChatConfig updates and persists the LLM API settings.
+func (a *App) SetChatConfig(cfg ChatConfig) error {
+	if strings.TrimSpace(cfg.Endpoint) == "" || strings.TrimSpace(cfg.APIKey) == "" || strings.TrimSpace(cfg.Model) == "" {
+		return fmt.Errorf("configuracao de IA incompleta: defina endpoint, apiKey e model")
+	}
+
 	a.chatSvc.SetConfig(ai.Config{
+		Endpoint: cfg.Endpoint,
+		APIKey:   cfg.APIKey,
+		Model:    cfg.Model,
+	})
+
+	if err := a.persistChatConfig(cfg); err != nil {
+		return err
+	}
+	return nil
+}
+
+// TestChatConfig checks whether the informed LLM settings are valid without saving them.
+func (a *App) TestChatConfig(cfg ChatConfig) (string, error) {
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	return a.chatSvc.TestConfig(ctx, ai.Config{
 		Endpoint: cfg.Endpoint,
 		APIKey:   cfg.APIKey,
 		Model:    cfg.Model,
@@ -626,4 +768,18 @@ func (a *App) GetAvailableTools() []map[string]string {
 // GetMCPRegistry returns the registry (used by main.go for MCP server mode).
 func (a *App) GetMCPRegistry() *mcp.Registry {
 	return a.mcpRegistry
+}
+
+// -----------------------------------------------------------------------
+// Support tickets (mock — in-memory)
+// -----------------------------------------------------------------------
+
+// CreateSupportTicket creates a new ticket and returns it.
+func (a *App) CreateSupportTicket(t SupportTicket) SupportTicket {
+	return a.tickets.create(t)
+}
+
+// GetSupportTickets returns all tickets.
+func (a *App) GetSupportTickets() []SupportTicket {
+	return a.tickets.getAll()
 }

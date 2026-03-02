@@ -916,6 +916,167 @@ input[type="search"] {
 .sidebar-user-type {
   font-size: 0.7rem;
   color: rgba(236,226,205,0.5);
+}
+
+/* ================================================================
+   SUPPORT PANEL
+   ================================================================ */
+
+.support-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.support-layout {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .support-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.support-form-wrap,
+.support-tickets-wrap {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 24px;
+}
+
+.support-form-wrap h2,
+.support-tickets-wrap h2 {
+  font-size: 1.1rem;
+  margin: 0 0 16px;
+  font-weight: 700;
+}
+
+.support-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.form-field label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.form-field input,
+.form-field select,
+.form-field textarea {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.9rem;
+  transition: border-color 0.15s;
+}
+
+.form-field input:focus,
+.form-field select:focus,
+.form-field textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.form-field textarea {
+  resize: vertical;
+  min-height: 80px;
+}
+
+/* Tickets list */
+.support-tickets-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 520px;
+  overflow-y: auto;
+}
+
+.support-ticket-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ticket-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.ticket-id {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.ticket-status {
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-weight: 600;
+}
+
+.badge-open {
+  background: rgba(11,110,79,0.15);
+  color: var(--accent);
+}
+
+.ticket-priority {
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-weight: 600;
+}
+
+.priority-baixa   { background: rgba(11,110,79,0.12); color: #0b6e4f; }
+.priority-media   { background: rgba(244,162,89,0.18); color: #b5761e; }
+.priority-alta     { background: rgba(154,3,30,0.12);  color: #9a031e; }
+.priority-critica  { background: rgba(154,3,30,0.25);  color: #9a031e; font-weight: 700; }
+
+.ticket-subject {
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.ticket-meta {
+  display: flex;
+  gap: 16px;
+  font-size: 0.8rem;
+  color: var(--muted);
+  flex-wrap: wrap;
+}
+
+.ticket-desc {
+  font-size: 0.85rem;
+  color: var(--muted);
+  white-space: pre-wrap;
+  max-height: 80px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1073,4 +1234,48 @@ input[type="search"] {
 .chat-send-btn {
   align-self: flex-end;
   padding: 10px 20px;
+}
+
+.chat-logs-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+}
+
+.chat-logs-card {
+  width: min(980px, 96vw);
+  height: min(78vh, 760px);
+  background: var(--surface, #f7f4ec);
+  border: 1px solid var(--border, #d1ccc2);
+  border-radius: 14px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 16px 50px rgba(0, 0, 0, 0.25);
+}
+
+.chat-logs-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border, #d1ccc2);
+}
+
+.chat-logs-output {
+  margin: 0;
+  padding: 12px 14px;
+  flex: 1;
+  overflow: auto;
+  background: #131313;
+  color: #b8e6bf;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.82rem;
+  line-height: 1.5;
 }

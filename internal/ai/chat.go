@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -46,6 +47,7 @@ type Service struct {
 	cfg      Config
 	registry *mcp.Registry
 	history  []Message
+	logger   func(string)
 }
 
 // NewService creates a chat service.
@@ -54,6 +56,13 @@ func NewService(registry *mcp.Registry) *Service {
 		registry: registry,
 		history:  []Message{},
 	}
+}
+
+// SetLogger configures an optional callback for chat diagnostics.
+func (s *Service) SetLogger(logger func(string)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.logger = logger
 }
 
 // SetConfig updates the LLM API configuration.
@@ -102,6 +111,7 @@ func (s *Service) Send(ctx context.Context, userMessage string) (string, error) 
 	s.mu.Lock()
 	cfg := s.cfg
 	s.mu.Unlock()
+	s.logf("mensagem recebida (%d chars)", len(strings.TrimSpace(userMessage)))
 
 	if cfg.Endpoint == "" || cfg.APIKey == "" || cfg.Model == "" {
 		return "", fmt.Errorf("configuracao de IA incompleta: defina endpoint, apiKey e model")
@@ -113,9 +123,12 @@ func (s *Service) Send(ctx context.Context, userMessage string) (string, error) 
 
 	// Build tool definitions.
 	tools := s.registry.OpenAIFunctions()
+	s.logf("ferramentas disponiveis: %d", len(tools))
 
-	// Allow up to 5 rounds of tool calling.
-	for range 5 {
+	// Allow up to 8 rounds of tool calling before forcing a final answer.
+	const maxToolRounds = 8
+	for round := 1; round <= maxToolRounds; round++ {
+		s.logf("rodada de ferramentas %d/%d", round, maxToolRounds)
 		s.mu.RLock()
 		messages := s.buildMessages()
 		s.mu.RUnlock()
@@ -129,12 +142,15 @@ func (s *Service) Send(ctx context.Context, userMessage string) (string, error) 
 
 		// If the LLM didn't request any tool calls, treat as final answer.
 		if len(msg.ToolCalls) == 0 {
+			s.logf("resposta final sem ferramentas")
 			assistant := Message{Role: "assistant", Content: msg.Content}
 			s.mu.Lock()
 			s.history = append(s.history, assistant)
 			s.mu.Unlock()
 			return msg.Content, nil
 		}
+
+		s.logf("modelo solicitou %d chamada(s) de ferramenta", len(msg.ToolCalls))
 
 		// Record the assistant message with tool calls.
 		assistantMsg := Message{
@@ -148,9 +164,11 @@ func (s *Service) Send(ctx context.Context, userMessage string) (string, error) 
 
 		// Execute each tool call and record results.
 		for _, tc := range msg.ToolCalls {
+			s.logf("chamando ferramenta: %s", tc.Function.Name)
 			result, callErr := s.registry.Call(tc.Function.Name, json.RawMessage(tc.Function.Arguments))
 			var content string
 			if callErr != nil {
+				s.logf("ferramenta %s retornou erro: %v", tc.Function.Name, callErr)
 				content = fmt.Sprintf("Erro: %v", callErr)
 			} else {
 				b, _ := json.Marshal(result)
@@ -159,6 +177,7 @@ func (s *Service) Send(ctx context.Context, userMessage string) (string, error) 
 				if len(content) > 20000 {
 					content = content[:20000] + "... (truncado)"
 				}
+				s.logf("ferramenta %s executada com sucesso", tc.Function.Name)
 			}
 			toolMsg := Message{
 				Role:       "tool",
@@ -171,7 +190,40 @@ func (s *Service) Send(ctx context.Context, userMessage string) (string, error) 
 		}
 	}
 
+	// Last attempt: ask for a direct answer without tools to avoid dead loops.
+	s.logf("limite de rodadas atingido; tentando resposta final sem ferramentas")
+	s.mu.RLock()
+	messages := s.buildMessages()
+	s.mu.RUnlock()
+	messages = append(messages, map[string]any{
+		"role":    "user",
+		"content": "Pare de chamar ferramentas e responda diretamente ao usuario com base no contexto atual.",
+	})
+
+	resp, err := s.callLLM(ctx, cfg, messages, nil)
+	if err == nil && len(resp.Choices) > 0 {
+		final := strings.TrimSpace(resp.Choices[0].Message.Content)
+		if final != "" {
+			s.logf("resposta final sem ferramentas obtida apos fallback")
+			s.mu.Lock()
+			s.history = append(s.history, Message{Role: "assistant", Content: final})
+			s.mu.Unlock()
+			return final, nil
+		}
+	}
+
+	s.logf("falha: limite de chamadas de ferramentas excedido")
+
 	return "", fmt.Errorf("limite de chamadas de ferramentas excedido")
+}
+
+func (s *Service) logf(format string, args ...any) {
+	s.mu.RLock()
+	logger := s.logger
+	s.mu.RUnlock()
+	if logger != nil {
+		logger(fmt.Sprintf(format, args...))
+	}
 }
 
 func (s *Service) buildMessages() []map[string]any {
@@ -258,4 +310,28 @@ func (s *Service) callLLM(ctx context.Context, cfg Config, messages []map[string
 		return nil, fmt.Errorf("LLM retornou resposta vazia")
 	}
 	return &result, nil
+}
+
+// TestConfig validates whether the provided configuration can reach the LLM.
+// It performs a lightweight request without modifying chat history.
+func (s *Service) TestConfig(ctx context.Context, cfg Config) (string, error) {
+	if cfg.Endpoint == "" || cfg.APIKey == "" || cfg.Model == "" {
+		return "", fmt.Errorf("configuracao de IA incompleta: defina endpoint, apiKey e model")
+	}
+
+	messages := []map[string]any{
+		{"role": "system", "content": "Responda apenas com OK."},
+		{"role": "user", "content": "Teste de conectividade."},
+	}
+
+	resp, err := s.callLLM(ctx, cfg, messages, nil)
+	if err != nil {
+		return "", err
+	}
+
+	content := ""
+	if len(resp.Choices) > 0 {
+		content = resp.Choices[0].Message.Content
+	}
+	return content, nil
 }

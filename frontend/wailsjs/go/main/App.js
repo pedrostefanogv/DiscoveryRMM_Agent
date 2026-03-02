@@ -10,6 +10,10 @@ export function ClearLogs() {
   return window['go']['main']['App']['ClearLogs']();
 }
 
+export function CreateSupportTicket(arg1) {
+  return window['go']['main']['App']['CreateSupportTicket'](arg1);
+}
+
 export function ExportInventoryMarkdown() {
   return window['go']['main']['App']['ExportInventoryMarkdown']();
 }
@@ -82,6 +86,10 @@ export function GetStartupError() {
   return window['go']['main']['App']['GetStartupError']();
 }
 
+export function GetSupportTickets() {
+  return window['go']['main']['App']['GetSupportTickets']();
+}
+
 export function Install(arg1) {
   return window['go']['main']['App']['Install'](arg1);
 }
@@ -116,6 +124,10 @@ export function SetChatConfig(arg1) {
 
 export function SetExportRedaction(arg1) {
   return window['go']['main']['App']['SetExportRedaction'](arg1);
+}
+
+export function TestChatConfig(arg1) {
+  return window['go']['main']['App']['TestChatConfig'](arg1);
 }
 
 export function Uninstall(arg1) {

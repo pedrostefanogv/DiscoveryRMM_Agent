@@ -81,19 +81,29 @@ const softwareTableBodyEl = document.getElementById('softwareTableBody');
 const softwareCountEl = document.getElementById('softwareCount');
 const chatViewEl = document.getElementById('chatView');
 const tabChatBtn = document.getElementById('tabChat');
+const supportViewEl = document.getElementById('supportView');
+const tabSupportBtn = document.getElementById('tabSupport');
+const supportFormEl = document.getElementById('supportForm');
+const supportTicketsListEl = document.getElementById('supportTicketsList');
 const chatMessagesEl = document.getElementById('chatMessages');
 const chatInputEl = document.getElementById('chatInput');
 const chatSendBtn = document.getElementById('chatSendBtn');
 const chatConfigBtn = document.getElementById('chatConfigBtn');
 const chatToolsBtn = document.getElementById('chatToolsBtn');
+const chatLogsBtn = document.getElementById('chatLogsBtn');
 const chatClearBtn = document.getElementById('chatClearBtn');
 const chatConfigPanel = document.getElementById('chatConfigPanel');
 const chatToolsPanel = document.getElementById('chatToolsPanel');
 const chatToolsList = document.getElementById('chatToolsList');
+const chatTestConfigBtn = document.getElementById('chatTestConfigBtn');
 const chatSaveConfigBtn = document.getElementById('chatSaveConfigBtn');
 const chatEndpointEl = document.getElementById('chatEndpoint');
 const chatApiKeyEl = document.getElementById('chatApiKey');
 const chatModelEl = document.getElementById('chatModel');
+const chatLogsModal = document.getElementById('chatLogsModal');
+const chatLogsOutput = document.getElementById('chatLogsOutput');
+const chatLogsCloseBtn = document.getElementById('chatLogsCloseBtn');
+const chatLogsRefreshBtn = document.getElementById('chatLogsRefreshBtn');
 const softwarePrevBtn = document.getElementById('softwarePrevBtn');
 const softwareNextBtn = document.getElementById('softwareNextBtn');
 const softwarePageInfoEl = document.getElementById('softwarePageInfo');
@@ -333,6 +343,7 @@ function setActiveTab(tab) {
     inventory: inventoryViewEl,
     logs: logsViewEl,
     chat: chatViewEl,
+    support: supportViewEl,
   };
   var tabs = {
     store: tabStoreBtn,
@@ -340,6 +351,7 @@ function setActiveTab(tab) {
     inventory: tabInventoryBtn,
     logs: tabLogsBtn,
     chat: tabChatBtn,
+    support: tabSupportBtn,
   };
 
   Object.keys(views).forEach(function (key) {
@@ -1028,6 +1040,9 @@ tabLogsBtn.addEventListener('click', function () { setActiveTab('logs'); });
 if (tabChatBtn) {
   tabChatBtn.addEventListener('click', function () { setActiveTab('chat'); loadChatConfig(); });
 }
+if (tabSupportBtn) {
+  tabSupportBtn.addEventListener('click', function () { setActiveTab('support'); loadSupportTickets(); });
+}
 
 // Category filter (searchable list)
 if (categorySearchEl) {
@@ -1219,6 +1234,29 @@ async function saveChatConfig() {
   }
 }
 
+async function testChatConfig() {
+  var endpoint = chatEndpointEl ? chatEndpointEl.value.trim() : '';
+  var apiKey = chatApiKeyEl ? chatApiKeyEl.value.trim() : '';
+  var model = chatModelEl ? chatModelEl.value.trim() : '';
+
+  if (!endpoint || !apiKey || !model) {
+    showFeedback('Preencha todos os campos antes de testar', true);
+    return;
+  }
+
+  if (chatTestConfigBtn) chatTestConfigBtn.disabled = true;
+  try {
+    showFeedback('Testando configuracao de IA...');
+    var reply = await appApi().TestChatConfig({ endpoint: endpoint, apiKey: apiKey, model: model });
+    var normalized = String(reply || '').trim();
+    showFeedback('Teste concluido com sucesso' + (normalized ? ': ' + normalized : ''));
+  } catch (err) {
+    showFeedback('Falha no teste da configuracao: ' + String(err), true);
+  } finally {
+    if (chatTestConfigBtn) chatTestConfigBtn.disabled = false;
+  }
+}
+
 async function loadChatTools() {
   if (!chatToolsList) return;
   try {
@@ -1233,13 +1271,40 @@ async function loadChatTools() {
   }
 }
 
+async function loadChatDebugLogs() {
+  if (!chatLogsOutput) return;
+  try {
+    var lines = await appApi().GetLogs();
+    var chatLines = (lines || []).filter(function (line) {
+      return String(line).startsWith('[chat]');
+    });
+    chatLogsOutput.textContent = chatLines.length ? chatLines.join('\n') : '(sem logs de chat ainda)';
+    chatLogsOutput.scrollTop = chatLogsOutput.scrollHeight;
+  } catch (err) {
+    chatLogsOutput.textContent = 'Erro ao carregar logs: ' + String(err);
+  }
+}
+
+function openChatLogsModal() {
+  if (!chatLogsModal) return;
+  chatLogsModal.classList.remove('hidden');
+  chatLogsModal.setAttribute('aria-hidden', 'false');
+  loadChatDebugLogs();
+}
+
+function closeChatLogsModal() {
+  if (!chatLogsModal) return;
+  chatLogsModal.classList.add('hidden');
+  chatLogsModal.setAttribute('aria-hidden', 'true');
+}
+
 function initChat() {
   if (chatSendBtn) {
     chatSendBtn.addEventListener('click', sendChatMessage);
   }
   if (chatInputEl) {
     chatInputEl.addEventListener('keydown', function (e) {
-      if (e.key === 'Enter' && e.shiftKey) {
+      if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         sendChatMessage();
       }
@@ -1259,6 +1324,20 @@ function initChat() {
       loadChatTools();
     });
   }
+  if (chatLogsBtn) {
+    chatLogsBtn.addEventListener('click', openChatLogsModal);
+  }
+  if (chatLogsCloseBtn) {
+    chatLogsCloseBtn.addEventListener('click', closeChatLogsModal);
+  }
+  if (chatLogsRefreshBtn) {
+    chatLogsRefreshBtn.addEventListener('click', loadChatDebugLogs);
+  }
+  if (chatLogsModal) {
+    chatLogsModal.addEventListener('click', function (e) {
+      if (e.target === chatLogsModal) closeChatLogsModal();
+    });
+  }
   if (chatClearBtn) {
     chatClearBtn.addEventListener('click', async function () {
       try {
@@ -1273,6 +1352,9 @@ function initChat() {
   if (chatSaveConfigBtn) {
     chatSaveConfigBtn.addEventListener('click', saveChatConfig);
   }
+  if (chatTestConfigBtn) {
+    chatTestConfigBtn.addEventListener('click', testChatConfig);
+  }
 }
 
 initTheme();
@@ -1280,3 +1362,67 @@ setActiveTab('store');
 loadCatalog();
 loadSidebarUser();
 initChat();
+initSupport();
+
+// =========================================================================
+// SUPPORT TICKETS
+// =========================================================================
+
+function initSupport() {
+  if (!supportFormEl) return;
+  supportFormEl.addEventListener('submit', async function (e) {
+    e.preventDefault();
+    var subject = document.getElementById('ticketSubject').value.trim();
+    var category = document.getElementById('ticketCategory').value;
+    var priority = document.getElementById('ticketPriority').value;
+    var description = document.getElementById('ticketDescription').value.trim();
+
+    if (!subject || !category || !description) {
+      showToast('Preencha todos os campos obrigatorios', 'error');
+      return;
+    }
+
+    try {
+      var ticket = await appApi().CreateSupportTicket({
+        subject: subject,
+        category: category,
+        priority: priority,
+        description: description,
+      });
+      showToast('Chamado ' + ticket.id + ' criado com sucesso!', 'success');
+      supportFormEl.reset();
+      loadSupportTickets();
+    } catch (err) {
+      showToast('Erro ao criar chamado: ' + String(err), 'error');
+    }
+  });
+}
+
+async function loadSupportTickets() {
+  if (!supportTicketsListEl) return;
+  try {
+    var tickets = await appApi().GetSupportTickets();
+    if (!tickets || !tickets.length) {
+      supportTicketsListEl.innerHTML = '<div class="meta">Nenhum chamado aberto.</div>';
+      return;
+    }
+    supportTicketsListEl.innerHTML = tickets.map(function (t) {
+      var priorityClass = 'priority-' + (t.priority || 'media').toLowerCase();
+      return '<div class="support-ticket-card">' +
+        '<div class="ticket-header">' +
+          '<span class="ticket-id">' + escapeHtml(t.id) + '</span>' +
+          '<span class="ticket-status badge-open">' + escapeHtml(t.status) + '</span>' +
+          '<span class="ticket-priority ' + priorityClass + '">' + escapeHtml(t.priority) + '</span>' +
+        '</div>' +
+        '<div class="ticket-subject">' + escapeHtml(t.subject) + '</div>' +
+        '<div class="ticket-meta">' +
+          '<span>Categoria: ' + escapeHtml(t.category) + '</span>' +
+          '<span>Aberto em: ' + escapeHtml(t.createdAt) + '</span>' +
+        '</div>' +
+        '<div class="ticket-desc">' + escapeHtml(t.description) + '</div>' +
+      '</div>';
+    }).join('');
+  } catch (err) {
+    supportTicketsListEl.innerHTML = '<div class="meta">Erro ao carregar chamados.</div>';
+  }
+}
