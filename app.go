@@ -14,6 +14,7 @@ import (
 
 	"github.com/energye/systray"
 	"github.com/samber/lo"
+	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"winget-store/internal/ai"
 	"winget-store/internal/data"
@@ -800,6 +801,35 @@ func (a *App) SendChatMessage(message string) (string, error) {
 	done := a.beginActivity("chat IA")
 	defer done()
 	return a.chatSvc.Send(a.ctx, message)
+}
+
+// StartChatStream sends a chat message and streams the response via Wails events.
+// Returns immediately; the response arrives token by token via events:
+//
+//	chat:token   — partial text token (string)
+//	chat:thinking — progress status during tool calls (string)
+//	chat:done    — stream finished (no data)
+//	chat:error   — error message (string)
+func (a *App) StartChatStream(message string) {
+	done := a.beginActivity("chat IA")
+	go func() {
+		defer done()
+		_, err := a.chatSvc.SendStream(
+			a.ctx,
+			message,
+			func(token string) {
+				wailsRuntime.EventsEmit(a.ctx, "chat:token", token)
+			},
+			func(status string) {
+				wailsRuntime.EventsEmit(a.ctx, "chat:thinking", status)
+			},
+		)
+		if err != nil {
+			wailsRuntime.EventsEmit(a.ctx, "chat:error", err.Error())
+		} else {
+			wailsRuntime.EventsEmit(a.ctx, "chat:done")
+		}
+	}()
 }
 
 func (a *App) beginActivity(activity string) func() {

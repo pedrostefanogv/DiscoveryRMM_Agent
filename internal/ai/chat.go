@@ -3,6 +3,7 @@
 package ai
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -358,8 +359,258 @@ func (s *Service) callLLM(ctx context.Context, cfg Config, messages []map[string
 	return &result, nil
 }
 
+// streamDeltaChunk is one SSE chunk from an OpenAI-compatible streaming response.
+type streamDeltaChunk struct {
+	Choices []struct {
+		Delta struct {
+			Role      string            `json:"role"`
+			Content   string            `json:"content"`
+			ToolCalls []streamToolDelta `json:"tool_calls"`
+		} `json:"delta"`
+		FinishReason *string `json:"finish_reason"`
+	} `json:"choices"`
+	Error *struct {
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
+type streamToolDelta struct {
+	Index    int    `json:"index"`
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
+}
+
+// callLLMStream sends a request with stream:true and calls onToken for every text delta.
+// Returns the full assembled content and any tool calls requested by the model.
+// If the server returns regular JSON instead of SSE (provider fallback), it is parsed normally.
+func (s *Service) callLLMStream(ctx context.Context, cfg Config, messages []map[string]any, tools []map[string]any, onToken func(string)) (string, []ToolCall, error) {
+	body := map[string]any{
+		"model":    cfg.Model,
+		"messages": messages,
+		"stream":   true,
+	}
+	if len(tools) > 0 {
+		body["tools"] = tools
+	}
+
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return "", nil, fmt.Errorf("falha ao serializar request: %w", err)
+	}
+
+	reqCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, cfg.Endpoint, bytes.NewReader(payload))
+	if err != nil {
+		return "", nil, fmt.Errorf("falha ao criar request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
+	req.Header.Set("Accept", "text/event-stream")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", nil, fmt.Errorf("falha na chamada ao LLM: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		data, _ := io.ReadAll(resp.Body)
+		return "", nil, fmt.Errorf("LLM retornou status %d: %s", resp.StatusCode, string(data))
+	}
+
+	// Fallback: some providers return application/json even when stream:true is requested.
+	if strings.Contains(resp.Header.Get("Content-Type"), "application/json") {
+		data, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return "", nil, fmt.Errorf("falha ao ler resposta do LLM: %w", readErr)
+		}
+		var result llmResponse
+		if jsonErr := json.Unmarshal(data, &result); jsonErr != nil {
+			return "", nil, fmt.Errorf("falha ao decodificar resposta do LLM: %w", jsonErr)
+		}
+		if result.Error != nil {
+			return "", nil, fmt.Errorf("erro do LLM: %s", result.Error.Message)
+		}
+		if len(result.Choices) == 0 {
+			return "", nil, fmt.Errorf("LLM retornou resposta vazia")
+		}
+		msg := result.Choices[0].Message
+		if onToken != nil && msg.Content != "" {
+			onToken(msg.Content)
+		}
+		return msg.Content, msg.ToolCalls, nil
+	}
+
+	// Parse SSE stream line by line.
+	var contentBuf strings.Builder
+	toolCallsMap := make(map[int]*ToolCall)
+	toolArgsMap := make(map[int]*strings.Builder)
+
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 64*1024), 512*1024)
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		data := strings.TrimPrefix(line, "data: ")
+		if data == "[DONE]" {
+			break
+		}
+
+		var chunk streamDeltaChunk
+		if jsonErr := json.Unmarshal([]byte(data), &chunk); jsonErr != nil {
+			continue
+		}
+		if chunk.Error != nil {
+			return "", nil, fmt.Errorf("erro do LLM: %s", chunk.Error.Message)
+		}
+		if len(chunk.Choices) == 0 {
+			continue
+		}
+
+		delta := chunk.Choices[0].Delta
+
+		if delta.Content != "" {
+			contentBuf.WriteString(delta.Content)
+			if onToken != nil {
+				onToken(delta.Content)
+			}
+		}
+
+		for _, tc := range delta.ToolCalls {
+			idx := tc.Index
+			if _, exists := toolCallsMap[idx]; !exists {
+				toolCallsMap[idx] = &ToolCall{Type: "function"}
+				toolArgsMap[idx] = &strings.Builder{}
+			}
+			if tc.ID != "" {
+				toolCallsMap[idx].ID = tc.ID
+			}
+			if tc.Type != "" {
+				toolCallsMap[idx].Type = tc.Type
+			}
+			if tc.Function.Name != "" {
+				toolCallsMap[idx].Function.Name = tc.Function.Name
+			}
+			toolArgsMap[idx].WriteString(tc.Function.Arguments)
+		}
+	}
+
+	if scanErr := scanner.Err(); scanErr != nil {
+		return "", nil, fmt.Errorf("erro ao ler stream: %w", scanErr)
+	}
+
+	var toolCalls []ToolCall
+	for i := 0; i < len(toolCallsMap); i++ {
+		tc, ok := toolCallsMap[i]
+		if !ok {
+			continue
+		}
+		if args, ok2 := toolArgsMap[i]; ok2 {
+			tc.Function.Arguments = args.String()
+		}
+		toolCalls = append(toolCalls, *tc)
+	}
+
+	return contentBuf.String(), toolCalls, nil
+}
+
+// SendStream is like Send but streams the final text response token-by-token via onToken.
+// Tool-call intermediate rounds are executed silently; onStatus receives progress updates.
+func (s *Service) SendStream(ctx context.Context, userMessage string, onToken func(string), onStatus func(string)) (string, error) {
+	s.mu.Lock()
+	cfg := s.cfg
+	s.mu.Unlock()
+	s.logf("stream: mensagem recebida (%d chars)", len(strings.TrimSpace(userMessage)))
+
+	if cfg.Endpoint == "" || cfg.APIKey == "" || cfg.Model == "" {
+		return "", fmt.Errorf("configuracao de IA incompleta: defina endpoint, apiKey e model")
+	}
+
+	s.mu.Lock()
+	s.history = append(s.history, Message{Role: "user", Content: userMessage})
+	s.mu.Unlock()
+
+	tools := s.registry.OpenAIFunctions()
+	s.logf("stream: ferramentas disponiveis: %d", len(tools))
+
+	const maxToolRounds = 8
+	for round := 1; round <= maxToolRounds; round++ {
+		s.logf("stream: rodada %d/%d", round, maxToolRounds)
+
+		s.mu.RLock()
+		messages := s.buildMessages(resolveSystemPrompt(cfg))
+		s.mu.RUnlock()
+
+		content, toolCalls, err := s.callLLMStream(ctx, cfg, messages, tools, onToken)
+		if err != nil {
+			return "", err
+		}
+
+		if len(toolCalls) == 0 {
+			s.logf("stream: resposta final sem ferramentas")
+			s.mu.Lock()
+			s.history = append(s.history, Message{Role: "assistant", Content: content})
+			s.mu.Unlock()
+			return content, nil
+		}
+
+		s.logf("stream: modelo solicitou %d chamada(s) de ferramenta", len(toolCalls))
+		assistantMsg := Message{
+			Role:      "assistant",
+			Content:   content,
+			ToolCalls: toolCalls,
+		}
+		s.mu.Lock()
+		s.history = append(s.history, assistantMsg)
+		s.mu.Unlock()
+
+		for _, tc := range toolCalls {
+			s.logf("stream: chamando ferramenta: %s", tc.Function.Name)
+			if onStatus != nil {
+				onStatus("Executando: " + tc.Function.Name + "...")
+			}
+			result, callErr := s.registry.Call(tc.Function.Name, json.RawMessage(tc.Function.Arguments))
+			var toolContent string
+			if callErr != nil {
+				s.logf("stream: ferramenta %s retornou erro: %v", tc.Function.Name, callErr)
+				toolContent = fmt.Sprintf("Erro: %v", callErr)
+			} else {
+				b, _ := json.Marshal(result)
+				toolContent = string(b)
+				if len(toolContent) > 20000 {
+					toolContent = toolContent[:20000] + "... (truncado)"
+				}
+				s.logf("stream: ferramenta %s executada com sucesso", tc.Function.Name)
+			}
+			toolMsg := Message{
+				Role:       "tool",
+				Content:    toolContent,
+				ToolCallID: tc.ID,
+			}
+			s.mu.Lock()
+			s.history = append(s.history, toolMsg)
+			s.mu.Unlock()
+		}
+
+		if onStatus != nil {
+			onStatus("Preparando resposta...")
+		}
+	}
+
+	s.logf("stream: limite de rodadas atingido")
+	return "", fmt.Errorf("limite de chamadas de ferramentas excedido")
+}
+
 // TestConfig validates whether the provided configuration can reach the LLM.
-// It performs a lightweight request without modifying chat history.
 func (s *Service) TestConfig(ctx context.Context, cfg Config) (string, error) {
 	if cfg.Endpoint == "" || cfg.APIKey == "" || cfg.Model == "" {
 		return "", fmt.Errorf("configuracao de IA incompleta: defina endpoint, apiKey e model")

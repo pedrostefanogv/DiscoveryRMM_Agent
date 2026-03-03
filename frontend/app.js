@@ -1197,6 +1197,118 @@ updateSortIndicators();
 var chatSending = false;
 var chatThinkingPollId = null;
 
+// Streaming state
+var streamingBubble = null;
+var streamingRawContent = '';
+var streamingRafPending = false;
+
+function flushStreamingContent() {
+  streamingRafPending = false;
+  if (!streamingBubble) return;
+  var contentEl = streamingBubble.querySelector('.stream-content');
+  if (!contentEl) {
+    contentEl = document.createElement('div');
+    contentEl.className = 'stream-content';
+    var thinkingEl = streamingBubble.querySelector('.stream-thinking');
+    if (thinkingEl) {
+      streamingBubble.insertBefore(contentEl, thinkingEl);
+      thinkingEl.style.display = 'none';
+    } else {
+      streamingBubble.appendChild(contentEl);
+    }
+  }
+  contentEl.innerHTML = renderAssistantMarkdown(streamingRawContent);
+  scheduleChatScrollToBottom();
+}
+
+function onStreamToken(token) {
+  streamingRawContent += token;
+  if (!streamingRafPending) {
+    streamingRafPending = true;
+    requestAnimationFrame(flushStreamingContent);
+  }
+}
+
+function onStreamThinking(status) {
+  if (!streamingBubble) return;
+  var thinkingEl = streamingBubble.querySelector('.stream-thinking');
+  if (!thinkingEl) return;
+  if (!streamingRawContent) {
+    thinkingEl.style.display = '';
+    thinkingEl.textContent = status || 'Pensando...';
+    scheduleChatScrollToBottom();
+  }
+}
+
+function finaliseStreamingBubble() {
+  if (!streamingBubble) return;
+  // Flush any remaining buffered content immediately.
+  streamingRafPending = false;
+  flushStreamingContent();
+
+  // Remove streaming indicators.
+  var thinkingEl = streamingBubble.querySelector('.stream-thinking');
+  if (thinkingEl) thinkingEl.remove();
+  var cursor = streamingBubble.querySelector('.stream-cursor');
+  if (cursor) cursor.remove();
+  streamingBubble.classList.remove('streaming');
+
+  // Add quick-action buttons if applicable.
+  var finalContent = streamingRawContent;
+  var dynamicActions = extractChatActionOptions(finalContent);
+  if (dynamicActions.length > 0) {
+    appendChatQuickActions(streamingBubble, dynamicActions);
+  } else if (shouldSuggestChatActions(finalContent)) {
+    appendChatQuickActions(streamingBubble, null);
+  }
+
+  streamingBubble = null;
+  streamingRawContent = '';
+  scheduleChatScrollToBottom();
+}
+
+function onStreamDone() {
+  stopThinkingStatusUpdates();
+  finaliseStreamingBubble();
+  chatSending = false;
+  if (chatSendBtn) chatSendBtn.disabled = false;
+  if (chatInputEl) chatInputEl.focus();
+}
+
+function onStreamError(errMsg) {
+  stopThinkingStatusUpdates();
+  if (streamingBubble) {
+    // Show whatever content arrived; fallback to error text if nothing came.
+    if (!streamingRawContent) {
+      streamingRawContent = 'Erro: ' + String(errMsg || 'falha desconhecida');
+    }
+    finaliseStreamingBubble();
+  } else {
+    addChatMessage('assistant', 'Erro: ' + String(errMsg || 'falha desconhecida'));
+  }
+  chatSending = false;
+  if (chatSendBtn) chatSendBtn.disabled = false;
+  if (chatInputEl) chatInputEl.focus();
+}
+
+// Register Wails event listeners once the runtime is ready.
+(function registerChatStreamEvents() {
+  function doRegister() {
+    if (window.runtime && window.runtime.EventsOn) {
+      window.runtime.EventsOn('chat:token', onStreamToken);
+      window.runtime.EventsOn('chat:thinking', onStreamThinking);
+      window.runtime.EventsOn('chat:done', onStreamDone);
+      window.runtime.EventsOn('chat:error', onStreamError);
+    }
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', doRegister);
+  } else {
+    // Runtime may not be injected yet — defer slightly.
+    setTimeout(doRegister, 200);
+  }
+})();
+
 function scrollChatToBottom() {
   if (chatMessagesEl) chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
   if (chatViewEl) chatViewEl.scrollTop = chatViewEl.scrollHeight;
@@ -1564,20 +1676,32 @@ async function sendChatMessage() {
 
   chatSending = true;
   if (chatSendBtn) chatSendBtn.disabled = true;
-  var thinkingEl = addChatMessage('thinking', 'Pensando...');
-  startThinkingStatusUpdates(thinkingEl);
+
+  // Create the streaming bubble immediately.
+  streamingRawContent = '';
+  streamingRafPending = false;
+  streamingBubble = document.createElement('div');
+  streamingBubble.className = 'chat-msg assistant streaming';
+
+  var thinkingEl = document.createElement('div');
+  thinkingEl.className = 'stream-thinking';
+  thinkingEl.textContent = 'Pensando...';
+  streamingBubble.appendChild(thinkingEl);
+
+  var cursorEl = document.createElement('span');
+  cursorEl.className = 'stream-cursor';
+  streamingBubble.appendChild(cursorEl);
+
+  if (chatMessagesEl) chatMessagesEl.appendChild(streamingBubble);
+  scheduleChatScrollToBottom();
 
   try {
-    var reply = await appApi().SendChatMessage(text);
-    removeChatThinking();
-    addChatMessage('assistant', reply || '(sem resposta)');
+    // StartChatStream returns immediately; response arrives via events.
+    appApi().StartChatStream(text).catch(function (err) {
+      onStreamError(String(err));
+    });
   } catch (err) {
-    removeChatThinking();
-    addChatMessage('assistant', 'Erro: ' + String(err));
-  } finally {
-    chatSending = false;
-    if (chatSendBtn) chatSendBtn.disabled = false;
-    if (chatInputEl) chatInputEl.focus();
+    onStreamError(String(err));
   }
 }
 

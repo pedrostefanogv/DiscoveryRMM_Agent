@@ -1527,6 +1527,35 @@ input[type="search"] {
   padding: 6px 14px;
 }
 
+/* ---- Streaming response bubble ---- */
+.chat-msg.assistant.streaming {
+  min-height: 36px;
+}
+
+.stream-thinking {
+  font-style: italic;
+  color: var(--muted, #665a4c);
+  font-size: 0.85rem;
+  opacity: 0.75;
+  padding: 2px 0;
+}
+
+.stream-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  background: var(--accent, #0b6e4f);
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  border-radius: 1px;
+  animation: blink-cursor 0.8s step-start infinite;
+}
+
+@keyframes blink-cursor {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
+
 .chat-input-wrap {
   flex-shrink: 0;
   display: flex;

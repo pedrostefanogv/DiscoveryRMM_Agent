@@ -142,6 +142,10 @@ export function ShouldHideOnClose() {
   return window['go']['main']['App']['ShouldHideOnClose']();
 }
 
+export function StartChatStream(arg1) {
+  return window['go']['main']['App']['StartChatStream'](arg1);
+}
+
 export function TestChatConfig(arg1) {
   return window['go']['main']['App']['TestChatConfig'](arg1);
 }

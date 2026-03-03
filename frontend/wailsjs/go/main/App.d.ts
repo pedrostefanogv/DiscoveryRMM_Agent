@@ -75,6 +75,8 @@ export function SetExportRedaction(arg1:boolean):Promise<void>;
 
 export function ShouldHideOnClose():Promise<boolean>;
 
+export function StartChatStream(arg1:string):Promise<void>;
+
 export function TestChatConfig(arg1:main.ChatConfig):Promise<string>;
 
 export function Uninstall(arg1:string):Promise<string>;
