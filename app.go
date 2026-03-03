@@ -21,6 +21,7 @@ import (
 	"winget-store/internal/inventory"
 	"winget-store/internal/mcp"
 	"winget-store/internal/models"
+	"winget-store/internal/processutil"
 	"winget-store/internal/services"
 	"winget-store/internal/winget"
 )
@@ -170,11 +171,16 @@ type App struct {
 	tickets     ticketStore
 	knowledge   []KnowledgeArticle
 
-	startupMu  sync.RWMutex
-	startupErr error
-	startupWg  sync.WaitGroup
-	closeMu    sync.RWMutex
-	allowClose bool
+	startupMu   sync.RWMutex
+	startupErr  error
+	startupWg   sync.WaitGroup
+	activityMu  sync.Mutex
+	activeOps   int
+	lastIdle    bool
+	idleKnown   bool
+	idleCapable bool
+	closeMu     sync.RWMutex
+	allowClose  bool
 }
 
 func NewApp() *App {
@@ -209,9 +215,12 @@ func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	a.cancel = cancel
 	a.startTray()
+	a.applyIdleMode(true)
 	a.startupWg.Add(1)
 	go func() {
 		defer a.startupWg.Done()
+		done := a.beginActivity("inventario inicial")
+		defer done()
 		report, err := a.invSvc.GetInventory(ctx)
 		if err != nil {
 			log.Printf("[startup] falha ao coletar inventario em background: %v", err)
@@ -228,6 +237,7 @@ func (a *App) startup(ctx context.Context) {
 // work and waits for goroutines to finish.
 func (a *App) shutdown(ctx context.Context) {
 	systray.Quit()
+	a.applyIdleMode(false)
 	if a.cancel != nil {
 		a.cancel()
 	}
@@ -264,6 +274,8 @@ func (a *App) GetCatalog() (models.Catalog, error) {
 }
 
 func (a *App) Install(id string) (string, error) {
+	done := a.beginActivity("instalacao")
+	defer done()
 	a.logs.append("[install " + id + "] " + time.Now().Format("15:04:05"))
 	out, err := a.appsSvc.Install(a.ctx, id)
 	a.logs.append(out)
@@ -271,6 +283,8 @@ func (a *App) Install(id string) (string, error) {
 }
 
 func (a *App) Uninstall(id string) (string, error) {
+	done := a.beginActivity("desinstalacao")
+	defer done()
 	a.logs.append("[uninstall " + id + "] " + time.Now().Format("15:04:05"))
 	out, err := a.appsSvc.Uninstall(a.ctx, id)
 	a.logs.append(out)
@@ -278,6 +292,8 @@ func (a *App) Uninstall(id string) (string, error) {
 }
 
 func (a *App) Upgrade(id string) (string, error) {
+	done := a.beginActivity("atualizacao")
+	defer done()
 	a.logs.append("[upgrade " + id + "] " + time.Now().Format("15:04:05"))
 	out, err := a.appsSvc.Upgrade(a.ctx, id)
 	a.logs.append(out)
@@ -285,6 +301,8 @@ func (a *App) Upgrade(id string) (string, error) {
 }
 
 func (a *App) UpgradeAll() (string, error) {
+	done := a.beginActivity("atualizacao em lote")
+	defer done()
 	a.logs.append("[upgrade --all] " + time.Now().Format("15:04:05"))
 	out, err := a.appsSvc.UpgradeAll(a.ctx)
 	a.logs.append(out)
@@ -292,6 +310,8 @@ func (a *App) UpgradeAll() (string, error) {
 }
 
 func (a *App) ListInstalled() (string, error) {
+	done := a.beginActivity("listagem de instalados")
+	defer done()
 	out, err := a.appsSvc.ListInstalled(a.ctx)
 	a.logs.append("[list] " + time.Now().Format("15:04:05"))
 	a.logs.append(out)
@@ -299,6 +319,8 @@ func (a *App) ListInstalled() (string, error) {
 }
 
 func (a *App) GetInventory() (models.InventoryReport, error) {
+	done := a.beginActivity("coleta de inventario")
+	defer done()
 	if cached, ok := a.invCache.get(); ok {
 		return cached, nil
 	}
@@ -312,6 +334,8 @@ func (a *App) GetInventory() (models.InventoryReport, error) {
 }
 
 func (a *App) RefreshInventory() (models.InventoryReport, error) {
+	done := a.beginActivity("atualizacao de inventario")
+	defer done()
 	report, err := a.invSvc.GetInventory(a.ctx)
 	if err != nil {
 		return models.InventoryReport{}, err
@@ -338,6 +362,8 @@ func (a *App) InstallOsquery() (string, error) {
 
 // GetPendingUpdates runs `winget upgrade` and parses the output into structured items.
 func (a *App) GetPendingUpdates() ([]models.UpgradeItem, error) {
+	done := a.beginActivity("checagem de atualizacoes")
+	defer done()
 	raw, _ := a.appsSvc.ListUpgradable(a.ctx)
 	a.logs.append("[winget upgrade] " + time.Now().Format("15:04:05"))
 	a.logs.append(raw)
@@ -469,6 +495,8 @@ func (a *App) getRedact() bool {
 }
 
 func (a *App) ExportInventoryMarkdown() (string, error) {
+	done := a.beginActivity("exportacao markdown")
+	defer done()
 	report, err := a.getInventoryForExport()
 	if err != nil {
 		return "", err
@@ -489,6 +517,8 @@ func (a *App) ExportInventoryMarkdown() (string, error) {
 }
 
 func (a *App) ExportInventoryPDF() (string, error) {
+	done := a.beginActivity("exportacao pdf")
+	defer done()
 	report, err := a.getInventoryForExport()
 	if err != nil {
 		return "", err
@@ -767,7 +797,69 @@ func (a *App) GetChatConfig() ChatConfig {
 
 // SendChatMessage sends a user message and returns the assistant response.
 func (a *App) SendChatMessage(message string) (string, error) {
+	done := a.beginActivity("chat IA")
+	defer done()
 	return a.chatSvc.Send(a.ctx, message)
+}
+
+func (a *App) beginActivity(activity string) func() {
+	a.activityMu.Lock()
+	a.activeOps++
+	shouldLeaveIdle := a.activeOps == 1
+	a.activityMu.Unlock()
+
+	if shouldLeaveIdle {
+		supported := a.applyIdleMode(false)
+		if supported {
+			a.logs.append("[efficiency] modo eficiencia desativado: " + activity)
+		}
+	}
+
+	return func() {
+		a.activityMu.Lock()
+		if a.activeOps > 0 {
+			a.activeOps--
+		}
+		shouldEnterIdle := a.activeOps == 0
+		a.activityMu.Unlock()
+
+		if shouldEnterIdle {
+			supported := a.applyIdleMode(true)
+			if supported {
+				a.logs.append("[efficiency] modo eficiencia ativado (aguardo)")
+			}
+		}
+	}
+}
+
+func (a *App) applyIdleMode(idle bool) bool {
+	a.activityMu.Lock()
+	if a.lastIdle == idle && a.idleKnown {
+		supported := a.idleCapable
+		a.activityMu.Unlock()
+		return supported
+	}
+	a.lastIdle = idle
+	a.activityMu.Unlock()
+
+	supported, err := processutil.SetEfficiencyMode(idle)
+	a.activityMu.Lock()
+	a.idleKnown = true
+	a.idleCapable = supported
+	a.activityMu.Unlock()
+
+	if err != nil {
+		a.logs.append("[efficiency] erro ao alterar modo: " + err.Error())
+	}
+
+	if idle {
+		if trimErr := processutil.TrimCurrentProcessWorkingSet(); trimErr != nil {
+			a.logs.append("[efficiency] erro ao reduzir memoria: " + trimErr.Error())
+		}
+	}
+
+	a.updateTrayIdleState(idle, supported)
+	return supported
 }
 
 // ClearChatHistory resets the conversation.

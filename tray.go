@@ -14,9 +14,9 @@ var trayIconICO []byte
 // It must be called after the Wails context is stored in a.ctx.
 func (a *App) startTray() {
 	go systray.Run(func() {
-		systray.SetIcon(trayIconICO)
-		systray.SetTitle("Discovery")
-		systray.SetTooltip("Discovery – Winget Store")
+		setTrayIcon(trayIconICO)
+		setTrayTitle("Discovery")
+		setTrayTooltip("Discovery - Winget Store")
 
 		systray.SetOnClick(func(menu systray.IMenu) {
 			wailsRuntime.WindowShow(a.ctx)
@@ -38,4 +38,21 @@ func (a *App) startTray() {
 			wailsRuntime.Quit(a.ctx)
 		})
 	}, nil)
+}
+
+func (a *App) updateTrayIdleState(idle bool, supported bool) {
+	if !supported {
+		setTrayTitle("Discovery")
+		setTrayTooltip("Discovery - Winget Store")
+		return
+	}
+
+	if idle {
+		setTrayTitle("Discovery Eco")
+		setTrayTooltip("Discovery - Modo de eficiencia ativo (aguardo)")
+		return
+	}
+
+	setTrayTitle("Discovery")
+	setTrayTooltip("Discovery - Processando")
 }
