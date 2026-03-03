@@ -19,11 +19,13 @@ type AppBridge interface {
 	ExportMarkdown() (string, error)
 	ExportPDF() (string, error)
 	GetOsqueryStatusJSON() (json.RawMessage, error)
+	ListInstalled() (string, error)
 	GetLogsText() string
 }
 
 // RegisterDiscoveryTools adds all Discovery app tools to the registry.
 func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
+	// ========== INVENTARIO ==========
 	reg.Register(Tool{
 		Name:        "get_inventory",
 		Description: "Retorna o inventario completo do computador: hardware, SO, discos, rede, usuarios logados, bateria, CPU, GPU, memoria, BitLocker, software instalado, startup items.",
@@ -32,6 +34,25 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 		},
 	})
 
+	reg.Register(Tool{
+		Name:        "export_inventory_markdown",
+		Description: "Exporta o relatorio de inventario em formato Markdown e retorna o caminho do arquivo gerado.",
+		Handler: func(args map[string]any) (any, error) {
+			path, err := app.ExportMarkdown()
+			return map[string]string{"path": path}, err
+		},
+	})
+
+	reg.Register(Tool{
+		Name:        "export_inventory_pdf",
+		Description: "Exporta o relatorio de inventario em formato PDF e retorna o caminho do arquivo gerado.",
+		Handler: func(args map[string]any) (any, error) {
+			path, err := app.ExportPDF()
+			return map[string]string{"path": path}, err
+		},
+	})
+
+	// ========== BUSCA E INSTALACAO ==========
 	reg.Register(Tool{
 		Name:        "search_packages",
 		Description: "Pesquisa pacotes no catalogo winget por nome, ID ou publisher. Retorna ate 20 resultados.",
@@ -59,6 +80,16 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 				return nil, fmt.Errorf("id do pacote nao pode ser vazio")
 			}
 			out, err := app.InstallPackage(id)
+			return map[string]string{"output": out}, err
+		},
+	})
+
+	// ========== GERENCIAMENTO DE PACOTES INSTALADOS ==========
+	reg.Register(Tool{
+		Name:        "list_installed_packages",
+		Description: "Lista todos os pacotes (programas) atualmente instalados na maquina, detectados pelo winget.",
+		Handler: func(args map[string]any) (any, error) {
+			out, err := app.ListInstalled()
 			return map[string]string{"output": out}, err
 		},
 	})
@@ -96,15 +127,6 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 	})
 
 	reg.Register(Tool{
-		Name:        "upgrade_all_packages",
-		Description: "Atualiza todos os pacotes que possuem atualizacao disponivel via winget.",
-		Handler: func(args map[string]any) (any, error) {
-			out, err := app.UpgradeAllPackages()
-			return map[string]string{"output": out}, err
-		},
-	})
-
-	reg.Register(Tool{
 		Name:        "get_pending_updates",
 		Description: "Lista todos os pacotes que possuem atualizacoes disponiveis, com versao atual e versao disponivel.",
 		Handler: func(args map[string]any) (any, error) {
@@ -113,23 +135,15 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 	})
 
 	reg.Register(Tool{
-		Name:        "export_inventory_markdown",
-		Description: "Exporta o relatorio de inventario em formato Markdown e retorna o caminho do arquivo gerado.",
+		Name:        "upgrade_all_packages",
+		Description: "Atualiza todos os pacotes que possuem atualizacao disponivel via winget.",
 		Handler: func(args map[string]any) (any, error) {
-			path, err := app.ExportMarkdown()
-			return map[string]string{"path": path}, err
+			out, err := app.UpgradeAllPackages()
+			return map[string]string{"output": out}, err
 		},
 	})
 
-	reg.Register(Tool{
-		Name:        "export_inventory_pdf",
-		Description: "Exporta o relatorio de inventario em formato PDF e retorna o caminho do arquivo gerado.",
-		Handler: func(args map[string]any) (any, error) {
-			path, err := app.ExportPDF()
-			return map[string]string{"path": path}, err
-		},
-	})
-
+	// ========== SISTEMA E DIAGNOSTICOS ==========
 	reg.Register(Tool{
 		Name:        "get_osquery_status",
 		Description: "Verifica se o osquery esta instalado no computador e retorna o caminho do binario.",

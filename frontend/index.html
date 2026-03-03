@@ -310,6 +310,10 @@
               <label for="chatModel">Modelo</label>
               <input id="chatModel" type="text" placeholder="gpt-4o-mini" />
             </div>
+            <div class="chat-config-field">
+              <label for="chatSystemPrompt">Instrucoes do Assistente (Opcional)</label>
+              <textarea id="chatSystemPrompt" rows="5" placeholder="Ex.: Responda com foco em inventario corporativo e sempre cite riscos antes de executar acoes." spellcheck="true" lang="pt-BR" autocapitalize="sentences" autocomplete="on"></textarea>
+            </div>
             <button id="chatTestConfigBtn" class="btn subtle">Testar Configuracao</button>
             <button id="chatSaveConfigBtn" class="btn primary">Salvar Configuracao</button>
           </div>
@@ -324,7 +328,7 @@
 
           <!-- Input -->
           <div class="chat-input-wrap">
-            <textarea id="chatInput" class="chat-input" placeholder="Digite sua mensagem... (Enter para enviar, Shift+Enter para nova linha)" rows="2"></textarea>
+            <textarea id="chatInput" class="chat-input" placeholder="Digite sua mensagem... (Enter para enviar, Shift+Enter para nova linha)" rows="2" spellcheck="true" lang="pt-BR" autocapitalize="sentences" autocomplete="on"></textarea>
             <button id="chatSendBtn" class="btn primary chat-send-btn">Enviar</button>
           </div>
 

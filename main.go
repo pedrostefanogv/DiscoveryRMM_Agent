@@ -35,6 +35,9 @@ func main() {
 		Title:  "Discovery",
 		Width:  WindowWidth,
 		Height: WindowHeight,
+		// Keep right-click context menu enabled in production so users can use
+		// built-in spellcheck suggestions/corrections in text fields.
+		EnableDefaultContextMenu: true,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},

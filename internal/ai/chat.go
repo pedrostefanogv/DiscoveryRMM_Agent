@@ -18,9 +18,10 @@ import (
 
 // Config holds the LLM API settings.
 type Config struct {
-	Endpoint string `json:"endpoint"` // e.g. "https://api.openai.com/v1/chat/completions"
-	APIKey   string `json:"apiKey"`
-	Model    string `json:"model"` // e.g. "gpt-4o-mini"
+	Endpoint     string `json:"endpoint"` // e.g. "https://api.openai.com/v1/chat/completions"
+	APIKey       string `json:"apiKey"`
+	Model        string `json:"model"`        // e.g. "gpt-4o-mini"
+	SystemPrompt string `json:"systemPrompt"` // optional custom assistant instructions
 }
 
 // Message represents a single chat message.
@@ -101,9 +102,54 @@ func (s *Service) GetHistory() []Message {
 	return out
 }
 
-const systemPrompt = `Voce é o assistente Discovery, integrado a uma aplicacao de gerenciamento de inventario e pacotes Windows.
-Voce pode usar as ferramentas disponíveis para consultar informacoes do computador, instalar/desinstalar/atualizar pacotes via winget, e exportar relatorios.
-Responda sempre em portugues brasileiro de forma clara e objetiva. Quando o usuario pedir algo que envolva os dados do computador ou pacotes, use as ferramentas automaticamente.`
+const defaultSystemPrompt = `Voce e o assistente Discovery, integrado a um aplicativo de gerenciamento de inventario e pacotes Windows.
+Responda sempre em portugues brasileiro, com linguagem amigavel e acessivel para qualquer pessoa, evitando jargao tecnico desnecessario.
+
+O que voce pode fazer (use as ferramentas disponiveis automaticamente quando fizer sentido):
+- Consultar informacoes do computador: hardware, sistema operacional, discos, rede, memoria, GPU, bateria, BitLocker, softwares instalados, usuarios logados e mais (get_inventory).
+- Pesquisar programas disponiveis no catalogo winget (search_packages).
+- Instalar, desinstalar ou atualizar programas via winget (install_package, uninstall_package, upgrade_package, upgrade_all_packages).
+- Verificar quais programas tem atualizacao pendente (get_pending_updates).
+- Exportar um relatorio completo do computador em Markdown ou PDF (export_inventory_markdown, export_inventory_pdf).
+- Verificar se o osquery esta presente no computador (get_osquery_status).
+
+Regras de comportamento:
+1. Faca somente o que o usuario pedir ou perguntar; nao execute nada extra por conta propria.
+2. Antes de instalar, desinstalar, atualizar ou exportar qualquer coisa, sempre pesquise primeiro (search_packages / get_pending_updates) para confirmar o ID correto e informe o usuario.
+3. Peca aprovacao explicita antes de qualquer acao que altere o computador. Explique em uma frase simples o que sera feito e aguarde confirmacao.
+4. Ao mostrar dados do inventario, resuma as informacoes mais relevantes em linguagem clara; nao despeje dados brutos.
+5. Quando uma acao for concluida, confirme de forma acolhedora incluindo o que foi feito e detalhes uteis (ex.: nome e versao do programa instalado).
+
+Recursos de formatacao:
+Voce pode usar Markdown para enriquecer suas respostas e melhorar a clareza:
+- **negrito** para destaques importantes ou nomes de programas/recursos
+- *italico* para enfase ou observacoes adicionais
+- backticks para nomes de comandos, caminhos ou valores tecnicos
+- blocos de codigo para output de comandos
+- > citacao para avisos, dicas ou advertencias importantes
+- # Titulo, ## Subtitulo para organizar respostas longas
+- [link](url) para referencias externas
+- Listas numeradas (1. 2. 3.) para passos sequenciais
+- Tabelas Markdown para comparar dados ou listar informacoes tabulares. Use o formato padrao com | e --- para separar cabecalho e dados, incluindo alinhamento com :---:, ---: se necessario. Exemplo:
+  | Nome | Versao | Status |
+  |------|--------|--------|
+  | App  | 1.0    | OK     |
+Use a formatacao com moderacao; mantenha a resposta legivel e natural.
+
+Botoes interativos:
+O chat possui botoes dinamicos. Qualquer linha da sua resposta que comece com "- " ou "* " sera exibida como um botao clicavel para o usuario. Use esse recurso sempre que fizer sentido para facilitar a interacao:
+- Ao oferecer opcoes ou escolhas, liste cada alternativa em sua propria linha com "- " no inicio (maximo 6 opcoes). Escreva cada opcao de forma curta e direta, pois o texto vira o rotulo do botao.
+- Ao pedir confirmacao, inclua opcoes como "- Sim, pode prosseguir" e "- Nao, cancelar" para que o usuario responda com um clique.
+- Ao sugerir proximos passos apos uma acao concluida, liste as sugestoes com "- " para que tambem virem botoes.
+Nunca use "- " para informacoes descritivas que nao sejam opcoes clicaveis; use frases corridas ou paragrafos para explicacoes.`
+
+func resolveSystemPrompt(cfg Config) string {
+	prompt := strings.TrimSpace(cfg.SystemPrompt)
+	if prompt == "" {
+		return defaultSystemPrompt
+	}
+	return prompt
+}
 
 // Send processes a user message: appends it to history, calls the LLM
 // (possibly multiple rounds for tool calls), and returns the assistant reply.
@@ -130,7 +176,7 @@ func (s *Service) Send(ctx context.Context, userMessage string) (string, error) 
 	for round := 1; round <= maxToolRounds; round++ {
 		s.logf("rodada de ferramentas %d/%d", round, maxToolRounds)
 		s.mu.RLock()
-		messages := s.buildMessages()
+		messages := s.buildMessages(resolveSystemPrompt(cfg))
 		s.mu.RUnlock()
 
 		resp, err := s.callLLM(ctx, cfg, messages, tools)
@@ -193,7 +239,7 @@ func (s *Service) Send(ctx context.Context, userMessage string) (string, error) 
 	// Last attempt: ask for a direct answer without tools to avoid dead loops.
 	s.logf("limite de rodadas atingido; tentando resposta final sem ferramentas")
 	s.mu.RLock()
-	messages := s.buildMessages()
+	messages := s.buildMessages(resolveSystemPrompt(cfg))
 	s.mu.RUnlock()
 	messages = append(messages, map[string]any{
 		"role":    "user",
@@ -226,7 +272,7 @@ func (s *Service) logf(format string, args ...any) {
 	}
 }
 
-func (s *Service) buildMessages() []map[string]any {
+func (s *Service) buildMessages(systemPrompt string) []map[string]any {
 	msgs := make([]map[string]any, 0, len(s.history)+1)
 	msgs = append(msgs, map[string]any{"role": "system", "content": systemPrompt})
 
@@ -334,4 +380,79 @@ func (s *Service) TestConfig(ctx context.Context, cfg Config) (string, error) {
 		content = resp.Choices[0].Message.Content
 	}
 	return content, nil
+}
+
+// Formatting helper functions for rich chat responses.
+// These can be used by the service or called externally to build formatted messages.
+
+// Bold wraps text in **bold** markdown.
+func Bold(text string) string {
+	return "**" + text + "**"
+}
+
+// Italic wraps text in *italic* markdown.
+func Italic(text string) string {
+	return "*" + text + "*"
+}
+
+// Code wraps text in inline `code` markdown.
+func Code(text string) string {
+	return "`" + text + "`"
+}
+
+// CodeBlock wraps text in a markdown code block with optional language.
+func CodeBlock(code, language string) string {
+	if language == "" {
+		return "```\n" + code + "\n```"
+	}
+	return "```" + language + "\n" + code + "\n```"
+}
+
+// Warn creates a warning/important message block.
+func Warn(message string) string {
+	return "> ⚠️ " + message
+}
+
+// Tip creates a helpful tip block.
+func Tip(message string) string {
+	return "> 💡 " + message
+}
+
+// Note creates an informational note block.
+func Note(message string) string {
+	return "> ℹ️ " + message
+}
+
+// Success creates a success confirmation message.
+func Success(message string) string {
+	return "> ✅ " + message
+}
+
+// Heading creates a markdown heading (level 1-6).
+func Heading(level int, text string) string {
+	if level < 1 {
+		level = 1
+	}
+	if level > 6 {
+		level = 6
+	}
+	return strings.Repeat("#", level) + " " + text
+}
+
+// List creates a markdown bullet point list from strings.
+func List(items ...string) string {
+	var buf strings.Builder
+	for _, item := range items {
+		buf.WriteString("- " + item + "\n")
+	}
+	return strings.TrimSuffix(buf.String(), "\n")
+}
+
+// OrderedList creates a numbered list from strings.
+func OrderedList(items ...string) string {
+	var buf strings.Builder
+	for i, item := range items {
+		buf.WriteString(fmt.Sprintf("%d. %s\n", i+1, item))
+	}
+	return strings.TrimSuffix(buf.String(), "\n")
 }

@@ -577,9 +577,10 @@ func (a *App) loadPersistedChatConfig() {
 		}
 
 		a.chatSvc.SetConfig(ai.Config{
-			Endpoint: cfg.Endpoint,
-			APIKey:   cfg.APIKey,
-			Model:    cfg.Model,
+			Endpoint:     cfg.Endpoint,
+			APIKey:       cfg.APIKey,
+			Model:        cfg.Model,
+			SystemPrompt: cfg.SystemPrompt,
 		})
 		a.logs.append("[chat] configuracao carregada de " + path)
 		return
@@ -676,9 +677,10 @@ func (a *App) GetLogsText() string {
 
 // ChatConfig is the frontend-facing AI configuration.
 type ChatConfig struct {
-	Endpoint string `json:"endpoint"`
-	APIKey   string `json:"apiKey"`
-	Model    string `json:"model"`
+	Endpoint     string `json:"endpoint"`
+	APIKey       string `json:"apiKey"`
+	Model        string `json:"model"`
+	SystemPrompt string `json:"systemPrompt"`
 }
 
 // ChatMessage is a single message for the frontend.
@@ -694,9 +696,10 @@ func (a *App) SetChatConfig(cfg ChatConfig) error {
 	}
 
 	a.chatSvc.SetConfig(ai.Config{
-		Endpoint: cfg.Endpoint,
-		APIKey:   cfg.APIKey,
-		Model:    cfg.Model,
+		Endpoint:     cfg.Endpoint,
+		APIKey:       cfg.APIKey,
+		Model:        cfg.Model,
+		SystemPrompt: cfg.SystemPrompt,
 	})
 
 	if err := a.persistChatConfig(cfg); err != nil {
@@ -713,9 +716,10 @@ func (a *App) TestChatConfig(cfg ChatConfig) (string, error) {
 	}
 
 	return a.chatSvc.TestConfig(ctx, ai.Config{
-		Endpoint: cfg.Endpoint,
-		APIKey:   cfg.APIKey,
-		Model:    cfg.Model,
+		Endpoint:     cfg.Endpoint,
+		APIKey:       cfg.APIKey,
+		Model:        cfg.Model,
+		SystemPrompt: cfg.SystemPrompt,
 	})
 }
 
@@ -723,9 +727,10 @@ func (a *App) TestChatConfig(cfg ChatConfig) (string, error) {
 func (a *App) GetChatConfig() ChatConfig {
 	c := a.chatSvc.GetConfig()
 	return ChatConfig{
-		Endpoint: c.Endpoint,
-		APIKey:   c.APIKey,
-		Model:    c.Model,
+		Endpoint:     c.Endpoint,
+		APIKey:       c.APIKey,
+		Model:        c.Model,
+		SystemPrompt: c.SystemPrompt,
 	}
 }
 

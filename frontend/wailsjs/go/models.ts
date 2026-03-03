@@ -4,6 +4,7 @@ export namespace main {
 	    endpoint: string;
 	    apiKey: string;
 	    model: string;
+	    systemPrompt: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new ChatConfig(source);
@@ -14,6 +15,7 @@ export namespace main {
 	        this.endpoint = source["endpoint"];
 	        this.apiKey = source["apiKey"];
 	        this.model = source["model"];
+	        this.systemPrompt = source["systemPrompt"];
 	    }
 	}
 	export class ChatMessage {
