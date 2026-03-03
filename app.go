@@ -384,7 +384,24 @@ func (a *App) ClearLogs() {
 
 // parseUpgradeOutput parses the tabular output of `winget upgrade`.
 func parseUpgradeOutput(raw string) []models.UpgradeItem {
-	lines := strings.Split(raw, "\n")
+	// winget emits progress spinners using bare \r (no \n) to overwrite the same
+	// terminal line. This means the spinner content and the actual table header end
+	// up in the same \n-delimited segment. Simulate terminal CR-overwrite: for each
+	// \n-terminated line keep only the last \r-delimited non-empty segment.
+	rawLines := strings.Split(raw, "\n")
+	lines := make([]string, 0, len(rawLines))
+	for _, l := range rawLines {
+		parts := strings.Split(l, "\r")
+		last := ""
+		for j := len(parts) - 1; j >= 0; j-- {
+			if strings.TrimSpace(parts[j]) != "" {
+				last = parts[j]
+				break
+			}
+		}
+		lines = append(lines, last)
+	}
+
 	var items []models.UpgradeItem
 	headerIdx := -1
 
