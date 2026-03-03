@@ -83,8 +83,22 @@ const chatViewEl = document.getElementById('chatView');
 const tabChatBtn = document.getElementById('tabChat');
 const supportViewEl = document.getElementById('supportView');
 const tabSupportBtn = document.getElementById('tabSupport');
+const knowledgeViewEl = document.getElementById('knowledgeView');
+const tabKnowledgeBtn = document.getElementById('tabKnowledge');
 const supportFormEl = document.getElementById('supportForm');
 const supportTicketsListEl = document.getElementById('supportTicketsList');
+const kbSearchInputEl = document.getElementById('kbSearchInput');
+const kbArticlesListEl = document.getElementById('kbArticlesList');
+const kbArticleDetailEl = document.getElementById('kbArticleDetail');
+const kbDetailTitleEl = document.getElementById('kbDetailTitle');
+const kbDetailMetaEl = document.getElementById('kbDetailMeta');
+const kbDetailContentEl = document.getElementById('kbDetailContent');
+const kbOpenFullBtn = document.getElementById('kbOpenFullBtn');
+const kbReaderModal = document.getElementById('kbReaderModal');
+const kbReaderTitleEl = document.getElementById('kbReaderTitle');
+const kbReaderMetaEl = document.getElementById('kbReaderMeta');
+const kbReaderContentEl = document.getElementById('kbReaderContent');
+const kbReaderCloseBtn = document.getElementById('kbReaderCloseBtn');
 const chatMessagesEl = document.getElementById('chatMessages');
 const chatInputEl = document.getElementById('chatInput');
 const chatSendBtn = document.getElementById('chatSendBtn');
@@ -137,6 +151,8 @@ const softwarePageSize = 30;
 let inventoryLoadedOnce = false;
 let pendingUpdates = [];
 let logsAutoRefreshId = null;
+let knowledgeArticles = [];
+let selectedKnowledgeArticleID = '';
 
 function appApi() {
   if (!window.go || !window.go.main || !window.go.main.App) {
@@ -345,6 +361,7 @@ function setActiveTab(tab) {
     logs: logsViewEl,
     chat: chatViewEl,
     support: supportViewEl,
+    knowledge: knowledgeViewEl,
   };
   var tabs = {
     store: tabStoreBtn,
@@ -353,6 +370,7 @@ function setActiveTab(tab) {
     logs: tabLogsBtn,
     chat: tabChatBtn,
     support: tabSupportBtn,
+    knowledge: tabKnowledgeBtn,
   };
 
   Object.keys(views).forEach(function (key) {
@@ -1046,7 +1064,16 @@ if (tabChatBtn) {
   tabChatBtn.addEventListener('click', function () { setActiveTab('chat'); loadChatConfig(); });
 }
 if (tabSupportBtn) {
-  tabSupportBtn.addEventListener('click', function () { setActiveTab('support'); loadSupportTickets(); });
+  tabSupportBtn.addEventListener('click', function () {
+    setActiveTab('support');
+    loadSupportTickets();
+  });
+}
+if (tabKnowledgeBtn) {
+  tabKnowledgeBtn.addEventListener('click', function () {
+    setActiveTab('knowledge');
+    loadKnowledgeBase();
+  });
 }
 
 // Category filter (searchable list)
@@ -1776,4 +1803,151 @@ async function loadSupportTickets() {
   } catch (err) {
     supportTicketsListEl.innerHTML = '<div class="meta">Erro ao carregar chamados.</div>';
   }
+}
+
+function renderKnowledgeArticleDetail(article) {
+  if (!kbArticleDetailEl || !kbDetailTitleEl || !kbDetailMetaEl || !kbDetailContentEl) return;
+  if (!article) {
+    kbArticleDetailEl.classList.add('hidden');
+    kbDetailTitleEl.textContent = '';
+    kbDetailMetaEl.textContent = '';
+    kbDetailContentEl.textContent = '';
+    return;
+  }
+
+  kbDetailTitleEl.textContent = article.title || '-';
+  kbDetailMetaEl.innerHTML =
+    '<span>' + escapeHtml(article.id || '-') + '</span>' +
+    '<span>' + escapeHtml(article.category || '-') + '</span>' +
+    '<span>Nivel: ' + escapeHtml(article.difficulty || '-') + '</span>' +
+    '<span>Leitura: ' + escapeHtml(String(article.readTimeMin || '-')) + ' min</span>' +
+    '<span>Atualizado: ' + escapeHtml(article.updatedAt || '-') + '</span>';
+  kbDetailContentEl.textContent = article.content || '';
+  kbArticleDetailEl.classList.remove('hidden');
+}
+
+function openKnowledgeReader(article) {
+  if (!kbReaderModal || !kbReaderTitleEl || !kbReaderMetaEl || !kbReaderContentEl || !article) return;
+
+  kbReaderTitleEl.textContent = article.title || '-';
+  kbReaderMetaEl.innerHTML =
+    '<span>' + escapeHtml(article.id || '-') + '</span>' +
+    '<span>' + escapeHtml(article.category || '-') + '</span>' +
+    '<span>Nivel: ' + escapeHtml(article.difficulty || '-') + '</span>' +
+    '<span>Leitura: ' + escapeHtml(String(article.readTimeMin || '-')) + ' min</span>' +
+    '<span>Atualizado: ' + escapeHtml(article.updatedAt || '-') + '</span>';
+  kbReaderContentEl.textContent = article.content || '';
+  kbReaderModal.classList.remove('hidden');
+  kbReaderModal.setAttribute('aria-hidden', 'false');
+}
+
+function closeKnowledgeReader() {
+  if (!kbReaderModal) return;
+  kbReaderModal.classList.add('hidden');
+  kbReaderModal.setAttribute('aria-hidden', 'true');
+}
+
+function renderKnowledgeArticles(items) {
+  if (!kbArticlesListEl) return;
+  var list = items || [];
+  if (!list.length) {
+    kbArticlesListEl.innerHTML = '<div class="meta">Nenhum artigo encontrado.</div>';
+    renderKnowledgeArticleDetail(null);
+    return;
+  }
+
+  kbArticlesListEl.innerHTML = list.map(function (a) {
+    var tags = Array.isArray(a.tags) ? a.tags : [];
+    var isActive = selectedKnowledgeArticleID && selectedKnowledgeArticleID === a.id;
+    return '<button class="kb-article-card ' + (isActive ? 'active' : '') + '" data-kb-id="' + escapeHtmlAttr(a.id) + '">' +
+      '<span class="kb-article-title">' + escapeHtml(a.title || '-') + '</span>' +
+      '<span class="kb-article-summary">' + escapeHtml(a.summary || '-') + '</span>' +
+      '<span class="kb-article-badges">' +
+        '<span class="kb-badge">' + escapeHtml(a.category || '-') + '</span>' +
+        '<span class="kb-badge">' + escapeHtml(a.difficulty || '-') + '</span>' +
+      '</span>' +
+      '<span class="kb-article-tags">' + tags.map(function (t) { return '<em>#' + escapeHtml(t) + '</em>'; }).join(' ') + '</span>' +
+    '</button>';
+  }).join('');
+}
+
+function selectKnowledgeArticle(id) {
+  if (!id) return;
+  selectedKnowledgeArticleID = id;
+  var article = knowledgeArticles.find(function (a) { return a.id === id; });
+  renderKnowledgeArticleDetail(article || null);
+
+  // Re-render only visual active state without changing current filter.
+  var q = kbSearchInputEl ? kbSearchInputEl.value.trim() : '';
+  filterKnowledgeArticles(q);
+}
+
+function filterKnowledgeArticles(query) {
+  var q = String(query || '').trim().toLowerCase();
+  var filtered = knowledgeArticles;
+  if (q) {
+    filtered = knowledgeArticles.filter(function (a) {
+      var tags = Array.isArray(a.tags) ? a.tags.join(' ') : '';
+      return String(a.title || '').toLowerCase().includes(q) ||
+        String(a.category || '').toLowerCase().includes(q) ||
+        String(a.summary || '').toLowerCase().includes(q) ||
+        String(a.content || '').toLowerCase().includes(q) ||
+        String(tags).toLowerCase().includes(q);
+    });
+  }
+
+  if (filtered.length && !filtered.some(function (a) { return a.id === selectedKnowledgeArticleID; })) {
+    selectedKnowledgeArticleID = filtered[0].id;
+  }
+
+  renderKnowledgeArticles(filtered);
+  var selected = filtered.find(function (a) { return a.id === selectedKnowledgeArticleID; });
+  renderKnowledgeArticleDetail(selected || null);
+}
+
+async function loadKnowledgeBase() {
+  if (!kbArticlesListEl) return;
+  try {
+    kbArticlesListEl.innerHTML = '<div class="meta">Carregando artigos...</div>';
+    knowledgeArticles = await appApi().GetKnowledgeBaseArticles();
+    knowledgeArticles = Array.isArray(knowledgeArticles) ? knowledgeArticles : [];
+    if (knowledgeArticles.length && !selectedKnowledgeArticleID) {
+      selectedKnowledgeArticleID = knowledgeArticles[0].id;
+    }
+    filterKnowledgeArticles(kbSearchInputEl ? kbSearchInputEl.value : '');
+  } catch (err) {
+    kbArticlesListEl.innerHTML = '<div class="meta">Erro ao carregar base de conhecimento.</div>';
+    renderKnowledgeArticleDetail(null);
+  }
+}
+
+if (kbArticlesListEl) {
+  kbArticlesListEl.addEventListener('click', function (e) {
+    var btn = e.target.closest('.kb-article-card');
+    if (!btn || !btn.dataset.kbId) return;
+    selectKnowledgeArticle(btn.dataset.kbId);
+  });
+}
+
+if (kbSearchInputEl) {
+  kbSearchInputEl.addEventListener('input', debounce(function () {
+    filterKnowledgeArticles(kbSearchInputEl.value);
+  }, 250));
+}
+
+if (kbOpenFullBtn) {
+  kbOpenFullBtn.addEventListener('click', function () {
+    var article = knowledgeArticles.find(function (a) { return a.id === selectedKnowledgeArticleID; });
+    if (article) openKnowledgeReader(article);
+  });
+}
+
+if (kbReaderCloseBtn) {
+  kbReaderCloseBtn.addEventListener('click', closeKnowledgeReader);
+}
+
+if (kbReaderModal) {
+  kbReaderModal.addEventListener('click', function (e) {
+    if (e.target === kbReaderModal) closeKnowledgeReader();
+  });
 }

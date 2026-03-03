@@ -32,6 +32,34 @@ export namespace main {
 	        this.content = source["content"];
 	    }
 	}
+	export class KnowledgeArticle {
+	    id: string;
+	    title: string;
+	    category: string;
+	    summary: string;
+	    content: string;
+	    tags: string[];
+	    difficulty: string;
+	    readTimeMin: number;
+	    updatedAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new KnowledgeArticle(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.title = source["title"];
+	        this.category = source["category"];
+	        this.summary = source["summary"];
+	        this.content = source["content"];
+	        this.tags = source["tags"];
+	        this.difficulty = source["difficulty"];
+	        this.readTimeMin = source["readTimeMin"];
+	        this.updatedAt = source["updatedAt"];
+	    }
+	}
 	export class SupportTicket {
 	    id: string;
 	    subject: string;

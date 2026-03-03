@@ -34,7 +34,7 @@ func (a *App) startTray() {
 
 		mQuit := systray.AddMenuItem("Sair", "Encerrar o aplicativo")
 		mQuit.Click(func() {
-			systray.Quit()
+			a.RequestAppClose()
 			wailsRuntime.Quit(a.ctx)
 		})
 	}, nil)

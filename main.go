@@ -31,6 +31,21 @@ func main() {
 
 	app := NewApp()
 
+	singleInstance := &options.SingleInstanceLock{
+		UniqueId: "com.discovery.winget-store",
+		OnSecondInstanceLaunch: func(data options.SecondInstanceData) {
+			log.Printf("[single-instance] segunda abertura bloqueada. args=%v", data.Args)
+			if app.ctx == nil {
+				return
+			}
+			wailsRuntime.WindowUnminimise(app.ctx)
+			wailsRuntime.WindowShow(app.ctx)
+			// Brief always-on-top toggle helps bring the existing window to foreground.
+			wailsRuntime.WindowSetAlwaysOnTop(app.ctx, true)
+			wailsRuntime.WindowSetAlwaysOnTop(app.ctx, false)
+		},
+	}
+
 	err := wails.Run(&options.App{
 		Title:  "Discovery",
 		Width:  WindowWidth,
@@ -44,9 +59,13 @@ func main() {
 		OnStartup:  app.startup,
 		OnShutdown: app.shutdown,
 		OnBeforeClose: func(ctx context.Context) (prevent bool) {
+			if !app.ShouldHideOnClose() {
+				return false
+			}
 			wailsRuntime.WindowHide(ctx)
 			return true // hide to tray instead of quitting
 		},
+		SingleInstanceLock: singleInstance,
 		Bind: []interface{}{
 			app,
 		},

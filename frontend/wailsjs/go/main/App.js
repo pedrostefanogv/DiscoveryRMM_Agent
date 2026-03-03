@@ -54,6 +54,10 @@ export function GetInventoryJSON() {
   return window['go']['main']['App']['GetInventoryJSON']();
 }
 
+export function GetKnowledgeBaseArticles() {
+  return window['go']['main']['App']['GetKnowledgeBaseArticles']();
+}
+
 export function GetLogs() {
   return window['go']['main']['App']['GetLogs']();
 }
@@ -110,8 +114,16 @@ export function RefreshInventory() {
   return window['go']['main']['App']['RefreshInventory']();
 }
 
+export function RequestAppClose() {
+  return window['go']['main']['App']['RequestAppClose']();
+}
+
 export function SearchCatalog(arg1) {
   return window['go']['main']['App']['SearchCatalog'](arg1);
+}
+
+export function SearchKnowledgeBaseArticles(arg1) {
+  return window['go']['main']['App']['SearchKnowledgeBaseArticles'](arg1);
 }
 
 export function SendChatMessage(arg1) {
@@ -124,6 +136,10 @@ export function SetChatConfig(arg1) {
 
 export function SetExportRedaction(arg1) {
   return window['go']['main']['App']['SetExportRedaction'](arg1);
+}
+
+export function ShouldHideOnClose() {
+  return window['go']['main']['App']['ShouldHideOnClose']();
 }
 
 export function TestChatConfig(arg1) {

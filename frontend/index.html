@@ -58,6 +58,12 @@
             <span>Suporte</span>
           </button>
         </li>
+        <li>
+          <button id="tabKnowledge" class="sidebar-link" role="tab" aria-selected="false" aria-controls="knowledgeView">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+            <span>Base de Conhecimento</span>
+          </button>
+        </li>
       </ul>
 
       <div class="sidebar-footer">
@@ -400,6 +406,47 @@
               <div id="supportTicketsList" class="support-tickets-list">
                 <div class="meta">Nenhum chamado aberto.</div>
               </div>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <!-- ========= KNOWLEDGE BASE VIEW ========= -->
+      <main id="knowledgeView" class="page-content hidden" role="tabpanel" aria-labelledby="tabKnowledge">
+        <section class="knowledge-panel">
+          <div class="statusbar">
+            <div>
+              <strong>Base de Conhecimento</strong>
+              <div class="meta">Artigos de manutencao e troubleshooting de PCs</div>
+            </div>
+            <input id="kbSearchInput" type="search" class="kb-search-input" placeholder="Buscar por titulo, categoria, tag ou conteudo" />
+          </div>
+
+          <div class="knowledge-layout">
+            <aside>
+              <div id="kbArticlesList" class="kb-articles-list">
+                <div class="meta">Carregando artigos...</div>
+              </div>
+            </aside>
+
+            <article id="kbArticleDetail" class="kb-article-detail hidden">
+              <h2 id="kbDetailTitle"></h2>
+              <div id="kbDetailMeta" class="kb-detail-meta"></div>
+              <pre id="kbDetailContent" class="kb-detail-content"></pre>
+              <div class="kb-detail-actions">
+                <button id="kbOpenFullBtn" class="btn primary">Abrir em tela cheia</button>
+              </div>
+            </article>
+          </div>
+
+          <div id="kbReaderModal" class="kb-reader-modal hidden" aria-hidden="true">
+            <div class="kb-reader-card">
+              <div class="kb-reader-head">
+                <strong id="kbReaderTitle">Artigo</strong>
+                <button id="kbReaderCloseBtn" class="btn danger">Fechar</button>
+              </div>
+              <div id="kbReaderMeta" class="kb-detail-meta"></div>
+              <pre id="kbReaderContent" class="kb-reader-content"></pre>
             </div>
           </div>
         </section>

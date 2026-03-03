@@ -86,6 +86,19 @@ type SupportTicket struct {
 	CreatedAt   string `json:"createdAt"`
 }
 
+// KnowledgeArticle represents a knowledge base article for support guidance.
+type KnowledgeArticle struct {
+	ID          string   `json:"id"`
+	Title       string   `json:"title"`
+	Category    string   `json:"category"`
+	Summary     string   `json:"summary"`
+	Content     string   `json:"content"`
+	Tags        []string `json:"tags"`
+	Difficulty  string   `json:"difficulty"`
+	ReadTimeMin int      `json:"readTimeMin"`
+	UpdatedAt   string   `json:"updatedAt"`
+}
+
 // ticketStore manages an in-memory list of support tickets.
 type ticketStore struct {
 	mu      sync.RWMutex
@@ -155,10 +168,13 @@ type App struct {
 	mcpRegistry *mcp.Registry
 	chatSvc     *ai.Service
 	tickets     ticketStore
+	knowledge   []KnowledgeArticle
 
 	startupMu  sync.RWMutex
 	startupErr error
 	startupWg  sync.WaitGroup
+	closeMu    sync.RWMutex
+	allowClose bool
 }
 
 func NewApp() *App {
@@ -175,6 +191,7 @@ func NewApp() *App {
 		invSvc:      services.NewInventoryService(inventoryProvider),
 		mcpRegistry: reg,
 		chatSvc:     chatSvc,
+		knowledge:   mockKnowledgeBaseArticles(),
 	}
 	a.chatSvc.SetLogger(func(line string) {
 		a.logs.append("[chat] " + line)
@@ -215,6 +232,20 @@ func (a *App) shutdown(ctx context.Context) {
 		a.cancel()
 	}
 	a.startupWg.Wait()
+}
+
+// RequestAppClose allows the next window-close cycle to terminate the process.
+func (a *App) RequestAppClose() {
+	a.closeMu.Lock()
+	a.allowClose = true
+	a.closeMu.Unlock()
+}
+
+// ShouldHideOnClose reports whether close events should hide to tray.
+func (a *App) ShouldHideOnClose() bool {
+	a.closeMu.RLock()
+	defer a.closeMu.RUnlock()
+	return !a.allowClose
 }
 
 // GetStartupError returns the error (if any) from the background startup
@@ -787,4 +818,179 @@ func (a *App) CreateSupportTicket(t SupportTicket) SupportTicket {
 // GetSupportTickets returns all tickets.
 func (a *App) GetSupportTickets() []SupportTicket {
 	return a.tickets.getAll()
+}
+
+// GetKnowledgeBaseArticles returns all mock knowledge base articles.
+func (a *App) GetKnowledgeBaseArticles() []KnowledgeArticle {
+	out := make([]KnowledgeArticle, len(a.knowledge))
+	copy(out, a.knowledge)
+	return out
+}
+
+// SearchKnowledgeBaseArticles filters articles by title/category/tags/content.
+func (a *App) SearchKnowledgeBaseArticles(query string) []KnowledgeArticle {
+	q := strings.TrimSpace(strings.ToLower(query))
+	if q == "" {
+		return a.GetKnowledgeBaseArticles()
+	}
+
+	matches := make([]KnowledgeArticle, 0, len(a.knowledge))
+	for _, article := range a.knowledge {
+		if strings.Contains(strings.ToLower(article.Title), q) ||
+			strings.Contains(strings.ToLower(article.Category), q) ||
+			strings.Contains(strings.ToLower(article.Summary), q) ||
+			strings.Contains(strings.ToLower(article.Content), q) {
+			matches = append(matches, article)
+			continue
+		}
+
+		for _, tag := range article.Tags {
+			if strings.Contains(strings.ToLower(tag), q) {
+				matches = append(matches, article)
+				break
+			}
+		}
+	}
+
+	return matches
+}
+
+func mockKnowledgeBaseArticles() []KnowledgeArticle {
+	return []KnowledgeArticle{
+		{
+			ID:          "KB-001",
+			Title:       "Checklist Rapido de Manutencao Preventiva para PCs",
+			Category:    "Manutencao Preventiva",
+			Summary:     "Passo a passo mensal para manter desktop e notebook estaveis e evitar travamentos.",
+			Difficulty:  "Basico",
+			ReadTimeMin: 6,
+			UpdatedAt:   "02/03/2026",
+			Tags:        []string{"poeira", "limpeza", "temperatura", "preventiva"},
+			Content: `Objetivo
+Aplicar uma rotina simples para reduzir superaquecimento, lentidao e falhas comuns.
+
+Passos recomendados
+1. Limpar entradas de ar, ventoinhas e filtros com pincel antiestatico.
+2. Verificar temperatura media de CPU/GPU em uso comum e em carga.
+3. Confirmar espaco livre no SSD/HDD (idealmente acima de 20%).
+4. Revisar programas que iniciam com o Windows e desativar excessos.
+5. Aplicar atualizacoes de sistema e drivers criticos.
+
+Sinais de alerta
+- Ventoinha constantemente em velocidade maxima.
+- Quedas de desempenho apos 20-30 minutos de uso.
+- Reinicios aleatorios durante tarefas simples.
+
+Periodicidade sugerida
+- Uso corporativo: mensal.
+- Uso domestico moderado: a cada 2 meses.`,
+		},
+		{
+			ID:          "KB-002",
+			Title:       "PC Muito Lento: Diagnostico em 10 Minutos",
+			Category:    "Desempenho",
+			Summary:     "Fluxo rapido para identificar gargalo em disco, memoria, CPU ou software em segundo plano.",
+			Difficulty:  "Intermediario",
+			ReadTimeMin: 8,
+			UpdatedAt:   "02/03/2026",
+			Tags:        []string{"lentidao", "cpu", "memoria", "ssd", "startup"},
+			Content: `Objetivo
+Encontrar a principal causa de lentidao sem formatar a maquina.
+
+Roteiro rapido
+1. Abrir gerenciador de tarefas e observar uso de CPU, memoria e disco por 2 minutos.
+2. Se disco em 100% frequente, checar saude do armazenamento e espaco livre.
+3. Se memoria acima de 85% constante, revisar apps residentes e abas excessivas.
+4. Se CPU alta sem motivo claro, verificar antivirais/scans agendados e processos suspeitos.
+5. Confirmar versao do sistema e pendencias de update.
+
+Acao imediata recomendada
+- Remover softwares nao utilizados.
+- Reduzir itens de inicializacao.
+- Migrar de HDD para SSD quando aplicavel.
+
+Quando escalar
+- Lentidao persiste apos reinicializacao limpa.
+- Disco apresenta erros SMART ou falhas de leitura.`,
+		},
+		{
+			ID:          "KB-003",
+			Title:       "Superaquecimento em Notebook: Causas e Correcao",
+			Category:    "Hardware",
+			Summary:     "Como validar fluxo de ar, pasta termica e perfil de energia para reduzir aquecimento.",
+			Difficulty:  "Intermediario",
+			ReadTimeMin: 7,
+			UpdatedAt:   "02/03/2026",
+			Tags:        []string{"temperatura", "cooler", "pasta termica", "energia"},
+			Content: `Sintomas comuns
+- Teclado e base muito quentes.
+- Queda brusca de FPS ou travamentos ao abrir varias tarefas.
+
+Checklist tecnico
+1. Conferir obstrucao de saidas de ar e funcionamento das ventoinhas.
+2. Verificar plano de energia (evitar modo desempenho maximo continuo).
+3. Testar elevacao traseira do notebook para melhorar ventilacao.
+4. Monitorar temperatura em repouso e em carga por 10 minutos.
+
+Corretivas
+- Limpeza interna completa.
+- Troca de pasta termica em equipamento fora de garantia.
+- Ajuste de limite de desempenho para uso diario.
+
+Observacao
+Se a temperatura sobe muito rapido mesmo em repouso, indicar avaliacao tecnica presencial.`,
+		},
+		{
+			ID:          "KB-004",
+			Title:       "Windows Nao Inicia: Procedimento Seguro de Recuperacao",
+			Category:    "Sistema Operacional",
+			Summary:     "Fluxo de recuperacao por etapas para evitar perda de dados em falhas de boot.",
+			Difficulty:  "Avancado",
+			ReadTimeMin: 9,
+			UpdatedAt:   "02/03/2026",
+			Tags:        []string{"boot", "reparo", "restauracao", "seguranca de dados"},
+			Content: `Prioridade
+Preservar dados antes de qualquer acao destrutiva.
+
+Etapas
+1. Tentar inicializacao em modo de recuperacao automatica.
+2. Executar reparo de inicializacao.
+3. Se falhar, abrir prompt de comando no ambiente de recuperacao e validar integridade do disco.
+4. Restaurar para ponto anterior quando disponivel.
+5. Como ultimo recurso, reinstalacao com backup previo.
+
+Boas praticas
+- Registrar mensagens de erro exibidas em tela.
+- Validar backup em midia externa antes de formatar.
+
+Nao recomendado
+- Repetir desligamentos forcados em sequencia.
+- Aplicar comandos sem confirmar a particao correta.`,
+		},
+		{
+			ID:          "KB-005",
+			Title:       "Troca de SSD: Pos-Migracao e Validacao Final",
+			Category:    "Upgrade de Hardware",
+			Summary:     "Itens de validacao apos clonagem ou instalacao limpa para garantir estabilidade do equipamento.",
+			Difficulty:  "Basico",
+			ReadTimeMin: 5,
+			UpdatedAt:   "02/03/2026",
+			Tags:        []string{"ssd", "upgrade", "clonagem", "desempenho"},
+			Content: `Checklist pos-migracao
+1. Confirmar reconhecimento do SSD no sistema e BIOS/UEFI.
+2. Validar particao de boot e ordem de inicializacao.
+3. Verificar espaco livre e integridade basica do sistema.
+4. Executar atualizacoes pendentes e reiniciar.
+5. Rodar teste rapido de leitura/escrita para comparar com esperado.
+
+Resultado esperado
+- Inicializacao mais rapida.
+- Menor tempo para abrir aplicativos.
+- Reducao de congelamentos intermitentes.
+
+Se houver problema
+- Revisar modo SATA/UEFI.
+- Confirmar se clonagem copiou particoes de sistema corretamente.`,
+		},
+	}
 }

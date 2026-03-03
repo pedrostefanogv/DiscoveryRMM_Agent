@@ -31,6 +31,8 @@ export function GetInventory():Promise<models.InventoryReport>;
 
 export function GetInventoryJSON():Promise<json.RawMessage>;
 
+export function GetKnowledgeBaseArticles():Promise<Array<main.KnowledgeArticle>>;
+
 export function GetLogs():Promise<Array<string>>;
 
 export function GetLogsText():Promise<string>;
@@ -59,13 +61,19 @@ export function ListInstalled():Promise<string>;
 
 export function RefreshInventory():Promise<models.InventoryReport>;
 
+export function RequestAppClose():Promise<void>;
+
 export function SearchCatalog(arg1:string):Promise<json.RawMessage>;
+
+export function SearchKnowledgeBaseArticles(arg1:string):Promise<Array<main.KnowledgeArticle>>;
 
 export function SendChatMessage(arg1:string):Promise<string>;
 
 export function SetChatConfig(arg1:main.ChatConfig):Promise<void>;
 
 export function SetExportRedaction(arg1:boolean):Promise<void>;
+
+export function ShouldHideOnClose():Promise<boolean>;
 
 export function TestChatConfig(arg1:main.ChatConfig):Promise<string>;
 
