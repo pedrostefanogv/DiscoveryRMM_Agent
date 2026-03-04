@@ -1,5 +1,23 @@
 export namespace main {
 	
+	export class AgentStatus {
+	    connected: boolean;
+	    agentId: string;
+	    server: string;
+	    lastEvent: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AgentStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.connected = source["connected"];
+	        this.agentId = source["agentId"];
+	        this.server = source["server"];
+	        this.lastEvent = source["lastEvent"];
+	    }
+	}
 	export class ChatConfig {
 	    endpoint: string;
 	    apiKey: string;
@@ -32,6 +50,24 @@ export namespace main {
 	        this.content = source["content"];
 	    }
 	}
+	export class DebugConfig {
+	    scheme: string;
+	    server: string;
+	    authToken: string;
+	    agentId: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new DebugConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.scheme = source["scheme"];
+	        this.server = source["server"];
+	        this.authToken = source["authToken"];
+	        this.agentId = source["agentId"];
+	    }
+	}
 	export class KnowledgeArticle {
 	    id: string;
 	    title: string;
@@ -59,6 +95,41 @@ export namespace main {
 	        this.readTimeMin = source["readTimeMin"];
 	        this.updatedAt = source["updatedAt"];
 	    }
+	}
+	export class RealtimeStatus {
+	    natsConnected: boolean;
+	    signalrConnectedAgents: number;
+	    // Go type: time
+	    checkedAtUtc: any;
+	
+	    static createFrom(source: any = {}) {
+	        return new RealtimeStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.natsConnected = source["natsConnected"];
+	        this.signalrConnectedAgents = source["signalrConnectedAgents"];
+	        this.checkedAtUtc = this.convertValues(source["checkedAtUtc"], null);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class SupportTicket {
 	    id: string;

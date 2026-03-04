@@ -1,12 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -16,6 +20,7 @@ import (
 	"github.com/samber/lo"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
+	"winget-store/internal/agentconn"
 	"winget-store/internal/ai"
 	"winget-store/internal/data"
 	"winget-store/internal/export"
@@ -27,6 +32,8 @@ import (
 	"winget-store/internal/winget"
 )
 
+var guidPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
 // Application-level constants for timeouts, URLs and window dimensions.
 const (
 	catalogURL       = "https://raw.githubusercontent.com/pedrostefanogv/winget-package-explo/refs/heads/main/public/data/packages.json"
@@ -34,6 +41,7 @@ const (
 	wingetTimeout    = 5 * time.Minute
 	inventoryTimeout = 45 * time.Second
 	chatConfigFile   = "chat_config.json"
+	debugConfigFile  = "debug_config.json"
 
 	WindowWidth  = 1280
 	WindowHeight = 860
@@ -169,8 +177,12 @@ type App struct {
 
 	mcpRegistry *mcp.Registry
 	chatSvc     *ai.Service
+	agentConn   *agentconn.Runtime
 	tickets     ticketStore
 	knowledge   []KnowledgeArticle
+
+	debugMu     sync.RWMutex
+	debugConfig DebugConfig
 
 	startupMu   sync.RWMutex
 	startupErr  error
@@ -200,10 +212,25 @@ func NewApp() *App {
 		chatSvc:     chatSvc,
 		knowledge:   mockKnowledgeBaseArticles(),
 	}
+	a.agentConn = agentconn.NewRuntime(agentconn.Options{
+		LoadConfig: func() agentconn.Config {
+			cfg := a.GetDebugConfig()
+			return agentconn.Config{
+				Scheme:    cfg.Scheme,
+				Server:    cfg.Server,
+				AuthToken: cfg.AuthToken,
+				AgentID:   cfg.AgentID,
+			}
+		},
+		Logf: func(format string, args ...any) {
+			a.logs.append("[agent] " + fmt.Sprintf(format, args...))
+		},
+	})
 	a.chatSvc.SetLogger(func(line string) {
 		a.logs.append("[chat] " + line)
 	})
 	a.loadPersistedChatConfig()
+	a.loadPersistedDebugConfig()
 
 	// Register all Discovery tools in the MCP registry.
 	mcp.RegisterDiscoveryTools(reg, a)
@@ -231,6 +258,13 @@ func (a *App) startup(ctx context.Context) {
 			return
 		}
 		a.invCache.set(report)
+		a.syncInventoryOnStartup(ctx, report)
+	}()
+
+	a.startupWg.Add(1)
+	go func() {
+		defer a.startupWg.Done()
+		a.agentConn.Run(ctx)
 	}()
 }
 
@@ -614,6 +648,744 @@ func exportDirCandidates() []string {
 
 	paths = append(paths, filepath.Join(".", "DiscoveryExports"))
 	return lo.Uniq(paths)
+}
+
+func debugConfigPathCandidates() []string {
+	paths := make([]string, 0, 4)
+
+	if runtime.GOOS == "windows" {
+		if localAppData := strings.TrimSpace(os.Getenv("LOCALAPPDATA")); localAppData != "" {
+			paths = append(paths, filepath.Join(localAppData, "Discovery", debugConfigFile))
+		}
+	}
+
+	if exe, err := os.Executable(); err == nil && strings.TrimSpace(exe) != "" {
+		paths = append(paths, filepath.Join(filepath.Dir(exe), debugConfigFile))
+	}
+
+	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
+		paths = append(paths, filepath.Join(home, ".discovery", debugConfigFile))
+	}
+
+	paths = append(paths, filepath.Join(".", debugConfigFile))
+	return lo.Uniq(paths)
+}
+
+func (a *App) loadPersistedDebugConfig() {
+	for _, path := range debugConfigPathCandidates() {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+
+		var cfg DebugConfig
+		if err := json.Unmarshal(data, &cfg); err != nil {
+			a.logs.append("[debug] falha ao ler configuracao persistida: " + err.Error())
+			return
+		}
+
+		if !isValidDebugScheme(cfg.Scheme) {
+			a.logs.append("[debug] configuracao persistida ignorada: scheme invalido")
+			return
+		}
+
+		a.debugMu.Lock()
+		a.debugConfig = cfg
+		a.debugMu.Unlock()
+		a.logs.append("[debug] configuracao carregada de " + path)
+		return
+	}
+}
+
+func (a *App) persistDebugConfig(cfg DebugConfig) error {
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return fmt.Errorf("falha ao serializar configuracao de debug: %w", err)
+	}
+
+	var errs []string
+	for _, path := range debugConfigPathCandidates() {
+		dir := filepath.Dir(path)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			errs = append(errs, dir+": "+err.Error())
+			continue
+		}
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			errs = append(errs, path+": "+err.Error())
+			continue
+		}
+		a.logs.append("[debug] configuracao salva em " + path)
+		return nil
+	}
+
+	if len(errs) == 0 {
+		return fmt.Errorf("nenhum caminho valido para salvar configuracao de debug")
+	}
+	return fmt.Errorf("falha ao salvar configuracao de debug: %s", strings.Join(errs, " | "))
+}
+
+// DebugConfig holds server connection settings for the debug page.
+type DebugConfig struct {
+	Scheme    string `json:"scheme"`    // "http", "https" or "nats"
+	Server    string `json:"server"`    // hostname:port or IP
+	AuthToken string `json:"authToken"` // bearer token
+	AgentID   string `json:"agentId"`   // agent identifier
+}
+
+// GetDebugConfig returns the current debug configuration.
+func (a *App) GetDebugConfig() DebugConfig {
+	a.debugMu.RLock()
+	defer a.debugMu.RUnlock()
+	return a.debugConfig
+}
+
+// AgentStatus is the frontend-facing agent connection snapshot.
+type AgentStatus struct {
+	Connected bool   `json:"connected"`
+	AgentID   string `json:"agentId"`
+	Server    string `json:"server"`
+	LastEvent string `json:"lastEvent"`
+}
+
+// RealtimeStatus represents server-side realtime transport health.
+type RealtimeStatus struct {
+	NATSConnected          bool      `json:"natsConnected"`
+	SignalRConnectedAgents int       `json:"signalrConnectedAgents"`
+	CheckedAtUTC           time.Time `json:"checkedAtUtc"`
+}
+
+// GetAgentStatus returns the current agent connectivity status.
+func (a *App) GetAgentStatus() AgentStatus {
+	if a.agentConn == nil {
+		return AgentStatus{}
+	}
+	s := a.agentConn.GetStatus()
+	return AgentStatus{
+		Connected: s.Connected,
+		AgentID:   s.AgentID,
+		Server:    s.Server,
+		LastEvent: s.LastEvent,
+	}
+}
+
+// SetDebugConfig validates, stores and persists the debug connection settings.
+func (a *App) SetDebugConfig(cfg DebugConfig) error {
+	cfg.Scheme = strings.TrimSpace(strings.ToLower(cfg.Scheme))
+	if !isValidDebugScheme(cfg.Scheme) {
+		return fmt.Errorf("scheme invalido: use 'http', 'https' ou 'nats'")
+	}
+	if strings.TrimSpace(cfg.Server) == "" {
+		return fmt.Errorf("servidor nao pode ser vazio")
+	}
+	if cfg.Scheme == "nats" && !guidPattern.MatchString(strings.TrimSpace(cfg.AgentID)) {
+		return fmt.Errorf("agentId invalido para NATS: informe um GUID valido")
+	}
+
+	a.logs.append(fmt.Sprintf("[debug] atualizando configuracao: scheme=%s server=%s agentId=%s", cfg.Scheme, strings.TrimSpace(cfg.Server), strings.TrimSpace(cfg.AgentID)))
+
+	a.debugMu.Lock()
+	a.debugConfig = cfg
+	a.debugMu.Unlock()
+
+	if err := a.persistDebugConfig(cfg); err != nil {
+		a.logs.append("[debug] falha ao persistir configuracao: " + err.Error())
+		return err
+	}
+	if a.agentConn != nil {
+		a.logs.append("[debug] solicitando reload da conexao do agente")
+		a.agentConn.Reload()
+	}
+	a.logs.append("[debug] configuracao aplicada com sucesso")
+	return nil
+}
+
+// TestDebugConnection calls GET {scheme}://{server}/api/agent-auth/me with the
+// Bearer token and returns the raw response body (or a descriptive error).
+func (a *App) TestDebugConnection(cfg DebugConfig) (string, error) {
+	cfg.Scheme = strings.TrimSpace(strings.ToLower(cfg.Scheme))
+	if !isValidDebugScheme(cfg.Scheme) {
+		return "", fmt.Errorf("scheme invalido: use 'http', 'https' ou 'nats'")
+	}
+	server := strings.TrimSpace(cfg.Server)
+	if server == "" {
+		return "", fmt.Errorf("servidor nao pode ser vazio")
+	}
+	a.logs.append(fmt.Sprintf("[debug-test] iniciando teste: scheme=%s server=%s agentId=%s", cfg.Scheme, server, strings.TrimSpace(cfg.AgentID)))
+	if cfg.Scheme == "nats" {
+		if !guidPattern.MatchString(strings.TrimSpace(cfg.AgentID)) {
+			err := fmt.Errorf("agentId invalido para NATS: informe um GUID valido")
+			a.logs.append("[debug-test] falha: " + err.Error())
+			return "", err
+		}
+		out, err := agentconn.FetchNATSInfo(server, 10*time.Second)
+		if err != nil {
+			a.logs.append("[debug-test] falha no teste NATS: " + err.Error())
+			return "", err
+		}
+		a.logs.append("[debug-test] teste NATS concluido com sucesso")
+		return out, nil
+	}
+
+	target := cfg.Scheme + "://" + server + "/api/agent-auth/me"
+	client := &http.Client{Timeout: 10 * time.Second}
+	req, err := http.NewRequest(http.MethodGet, target, nil)
+	if err != nil {
+		return "", fmt.Errorf("URL invalida: %w", err)
+	}
+	if strings.TrimSpace(cfg.AuthToken) != "" {
+		req.Header.Set("Authorization", "Bearer "+cfg.AuthToken)
+	}
+	if strings.TrimSpace(cfg.AgentID) != "" {
+		req.Header.Set("X-Agent-ID", cfg.AgentID)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		wrapped := fmt.Errorf("falha ao conectar em %s: %w", target, err)
+		a.logs.append("[debug-test] falha no teste HTTP: " + wrapped.Error())
+		return "", wrapped
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		wrapped := fmt.Errorf("erro ao ler resposta (%s): %w", resp.Status, err)
+		a.logs.append("[debug-test] falha no teste HTTP: " + wrapped.Error())
+		return "", wrapped
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		wrapped := fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(body)))
+		a.logs.append("[debug-test] falha no teste HTTP: " + wrapped.Error())
+		return "", wrapped
+	}
+
+	// Pretty-print JSON if possible
+	var pretty interface{}
+	if json.Unmarshal(body, &pretty) == nil {
+		if formatted, err := json.MarshalIndent(pretty, "", "  "); err == nil {
+			a.logs.append("[debug-test] teste HTTP concluido com sucesso")
+			return string(formatted), nil
+		}
+	}
+	a.logs.append("[debug-test] teste HTTP concluido com sucesso")
+	return string(body), nil
+}
+
+// GetRealtimeStatus queries /api/realtime/status from the configured HTTP server.
+func (a *App) GetRealtimeStatus() (RealtimeStatus, error) {
+	cfg := a.GetDebugConfig()
+	cfg.Scheme = strings.TrimSpace(strings.ToLower(cfg.Scheme))
+	if cfg.Scheme != "http" && cfg.Scheme != "https" {
+		return RealtimeStatus{}, fmt.Errorf("status indisponivel: configure scheme http/https")
+	}
+	server := strings.TrimSpace(cfg.Server)
+	if server == "" {
+		return RealtimeStatus{}, fmt.Errorf("servidor nao pode ser vazio")
+	}
+
+	target := cfg.Scheme + "://" + server + "/api/realtime/status"
+	req, err := http.NewRequest(http.MethodGet, target, nil)
+	if err != nil {
+		return RealtimeStatus{}, fmt.Errorf("URL invalida: %w", err)
+	}
+	if strings.TrimSpace(cfg.AuthToken) != "" {
+		req.Header.Set("Authorization", "Bearer "+cfg.AuthToken)
+	}
+	if strings.TrimSpace(cfg.AgentID) != "" {
+		req.Header.Set("X-Agent-ID", cfg.AgentID)
+	}
+
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		return RealtimeStatus{}, fmt.Errorf("falha ao conectar em %s: %w", target, err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return RealtimeStatus{}, fmt.Errorf("erro ao ler resposta (%s): %w", resp.Status, err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return RealtimeStatus{}, fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+
+	var out RealtimeStatus
+	if err := json.Unmarshal(body, &out); err != nil {
+		return RealtimeStatus{}, fmt.Errorf("resposta invalida de /api/realtime/status: %w", err)
+	}
+	return out, nil
+}
+
+type agentHardwareEnvelope struct {
+	Hostname               string                    `json:"hostname"`
+	DisplayName            string                    `json:"displayName"`
+	Status                 int                       `json:"status"`
+	OperatingSystem        string                    `json:"operatingSystem"`
+	OSVersion              string                    `json:"osVersion"`
+	AgentVersion           string                    `json:"agentVersion"`
+	LastIPAddress          string                    `json:"lastIpAddress"`
+	MACAddress             string                    `json:"macAddress"`
+	Hardware               agentHardwareInfo         `json:"hardware"`
+	Disks                  []agentDiskInfo           `json:"disks"`
+	NetworkAdapters        []agentNetworkAdapterInfo `json:"networkAdapters"`
+	MemoryModules          []agentMemoryModuleInfo   `json:"memoryModules"`
+	InventoryRaw           string                    `json:"inventoryRaw"`
+	InventorySchemaVersion string                    `json:"inventorySchemaVersion"`
+	InventoryCollectedAt   string                    `json:"inventoryCollectedAt"`
+}
+
+type agentHardwareInfo struct {
+	InventoryRaw            string `json:"inventoryRaw"`
+	InventorySchemaVersion  string `json:"inventorySchemaVersion"`
+	InventoryCollectedAt    string `json:"inventoryCollectedAt"`
+	Manufacturer            string `json:"manufacturer"`
+	Model                   string `json:"model"`
+	SerialNumber            string `json:"serialNumber"`
+	MotherboardManufacturer string `json:"motherboardManufacturer"`
+	MotherboardModel        string `json:"motherboardModel"`
+	MotherboardSerialNumber string `json:"motherboardSerialNumber"`
+	Processor               string `json:"processor"`
+	ProcessorCores          int    `json:"processorCores"`
+	ProcessorThreads        int    `json:"processorThreads"`
+	ProcessorArchitecture   string `json:"processorArchitecture"`
+	TotalMemoryBytes        int64  `json:"totalMemoryBytes"`
+	BIOSVersion             string `json:"biosVersion"`
+	BIOSManufacturer        string `json:"biosManufacturer"`
+	OSName                  string `json:"osName"`
+	OSVersion               string `json:"osVersion"`
+	OSBuild                 string `json:"osBuild"`
+	OSArchitecture          string `json:"osArchitecture"`
+	CollectedAt             string `json:"collectedAt"`
+	UpdatedAt               string `json:"updatedAt"`
+}
+
+type agentDiskInfo struct {
+	DriveLetter    string `json:"driveLetter"`
+	Label          string `json:"label"`
+	FileSystem     string `json:"fileSystem"`
+	TotalSizeBytes int64  `json:"totalSizeBytes"`
+	FreeSpaceBytes int64  `json:"freeSpaceBytes"`
+	MediaType      string `json:"mediaType"`
+	CollectedAt    string `json:"collectedAt"`
+}
+
+type agentNetworkAdapterInfo struct {
+	Name          string `json:"name"`
+	MACAddress    string `json:"macAddress"`
+	IPAddress     string `json:"ipAddress"`
+	SubnetMask    string `json:"subnetMask"`
+	Gateway       string `json:"gateway"`
+	DNSServers    string `json:"dnsServers"`
+	IsDhcpEnabled bool   `json:"isDhcpEnabled"`
+	AdapterType   string `json:"adapterType"`
+	Speed         string `json:"speed"`
+	CollectedAt   string `json:"collectedAt"`
+}
+
+type agentMemoryModuleInfo struct {
+	Slot          string `json:"slot"`
+	CapacityBytes int64  `json:"capacityBytes"`
+	SpeedMhz      int    `json:"speedMhz"`
+	MemoryType    string `json:"memoryType"`
+	Manufacturer  string `json:"manufacturer"`
+	PartNumber    string `json:"partNumber"`
+	SerialNumber  string `json:"serialNumber"`
+	CollectedAt   string `json:"collectedAt"`
+}
+
+type agentSoftwareEnvelope struct {
+	CollectedAt string              `json:"collectedAt"`
+	Software    []agentSoftwareItem `json:"software"`
+}
+
+type agentSoftwareItem struct {
+	Name      string `json:"name"`
+	Version   string `json:"version"`
+	Publisher string `json:"publisher"`
+	InstallID string `json:"installId"`
+	Serial    string `json:"serial"`
+	Source    string `json:"source"`
+}
+
+func (a *App) syncInventoryOnStartup(ctx context.Context, report models.InventoryReport) {
+	cfg := a.GetDebugConfig()
+	server := strings.TrimSpace(cfg.Server)
+	if cfg.Scheme != "http" && cfg.Scheme != "https" {
+		a.logs.append("[agent-sync] ignorado: sincronizacao HTTP indisponivel para scheme atual")
+		return
+	}
+	if server == "" || strings.TrimSpace(cfg.AuthToken) == "" || strings.TrimSpace(cfg.AgentID) == "" {
+		a.logs.append("[agent-sync] ignorado: faltam server/token/agentId no Debug")
+		return
+	}
+
+	hardwarePayload := buildAgentHardwareEnvelope(report)
+	a.logs.append(fmt.Sprintf(
+		"[agent-sync] hardware payload: collectedAt=%s disks=%d networkAdapters=%d memoryModules=%d hostname=%s",
+		hardwarePayload.InventoryCollectedAt,
+		len(hardwarePayload.Disks),
+		len(hardwarePayload.NetworkAdapters),
+		len(hardwarePayload.MemoryModules),
+		hardwarePayload.Hostname,
+	))
+	hardwareBody, err := json.Marshal(hardwarePayload)
+	if err != nil {
+		a.logs.append("[agent-sync] falha ao serializar inventario: " + err.Error())
+	} else {
+		hardwareEndpoint := cfg.Scheme + "://" + server + "/api/agent-auth/me/hardware"
+		if err := a.sendAgentInventoryRequest(ctx, hardwareEndpoint, cfg, http.MethodPost, hardwareBody); err != nil {
+			a.logs.append("[agent-sync] POST hardware falhou: " + err.Error())
+			if err := a.sendAgentInventoryRequest(ctx, hardwareEndpoint, cfg, http.MethodPut, hardwareBody); err != nil {
+				a.logs.append("[agent-sync] PUT hardware falhou: " + err.Error())
+			} else {
+				a.logs.append("[agent-sync] inventario de hardware atualizado via PUT")
+			}
+		} else {
+			a.logs.append("[agent-sync] inventario de hardware enviado via POST")
+		}
+	}
+
+	softwarePayload := buildAgentSoftwareEnvelope(report)
+	a.logs.append(fmt.Sprintf(
+		"[agent-sync] software payload: collectedAt=%s softwareCount=%d",
+		softwarePayload.CollectedAt,
+		len(softwarePayload.Software),
+	))
+	softwareBody, err := json.Marshal(softwarePayload)
+	if err != nil {
+		a.logs.append("[agent-sync] falha ao serializar softwares: " + err.Error())
+		return
+	}
+
+	softwareEndpoint := cfg.Scheme + "://" + server + "/api/agent-auth/me/software"
+	a.logs.append("[agent-sync] endpoint software: " + softwareEndpoint)
+	if err := a.sendAgentInventoryRequest(ctx, softwareEndpoint, cfg, http.MethodPost, softwareBody); err != nil {
+		a.logs.append("[agent-sync] POST software falhou: " + err.Error())
+		if err := a.sendAgentInventoryRequest(ctx, softwareEndpoint, cfg, http.MethodPut, softwareBody); err != nil {
+			a.logs.append("[agent-sync] PUT software falhou: " + err.Error())
+			return
+		}
+		a.logs.append("[agent-sync] inventario de software atualizado via PUT")
+		return
+	}
+	a.logs.append("[agent-sync] inventario de software enviado via POST")
+}
+
+func (a *App) sendAgentInventoryRequest(parent context.Context, endpoint string, cfg DebugConfig, method string, body []byte) error {
+	ctx, cancel := context.WithTimeout(parent, 20*time.Second)
+	defer cancel()
+
+	a.logs.append("[agent-sync] request: " + method + " " + endpoint)
+	a.logs.append("[agent-sync] request headers: Authorization=Bearer " + cfg.AuthToken + "; X-Agent-ID=" + cfg.AgentID + "; Content-Type=application/json")
+	a.logs.append("[agent-sync] request body: " + string(body))
+
+	req, err := http.NewRequestWithContext(ctx, method, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+cfg.AuthToken)
+	req.Header.Set("X-Agent-ID", cfg.AgentID)
+
+	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(respBody)))
+	}
+	return nil
+}
+
+func buildAgentSoftwareEnvelope(report models.InventoryReport) agentSoftwareEnvelope {
+	collected := strings.TrimSpace(report.CollectedAt)
+	if collected == "" {
+		collected = time.Now().UTC().Format(time.RFC3339)
+	}
+
+	software := make([]agentSoftwareItem, 0, len(report.Software))
+	for _, s := range report.Software {
+		name := strings.TrimSpace(s.Name)
+		if name == "" {
+			continue
+		}
+		source := strings.TrimSpace(s.Source)
+		if source == "" {
+			source = "osquery/programs"
+		}
+		software = append(software, agentSoftwareItem{
+			Name:      name,
+			Version:   strings.TrimSpace(s.Version),
+			Publisher: strings.TrimSpace(s.Publisher),
+			InstallID: strings.TrimSpace(s.InstallID),
+			Serial:    strings.TrimSpace(s.Serial),
+			Source:    source,
+		})
+	}
+
+	return agentSoftwareEnvelope{
+		CollectedAt: collected,
+		Software:    software,
+	}
+}
+
+func buildAgentHardwareEnvelope(report models.InventoryReport) agentHardwareEnvelope {
+	collected := strings.TrimSpace(report.CollectedAt)
+	if collected == "" {
+		collected = time.Now().UTC().Format(time.RFC3339)
+	}
+	updated := time.Now().UTC().Format(time.RFC3339)
+
+	memTotalBytes := int64(report.Hardware.MemoryGB * 1024 * 1024 * 1024)
+	if memTotalBytes < 0 {
+		memTotalBytes = 0
+	}
+
+	disks := make([]agentDiskInfo, 0, len(report.Disks))
+	for _, d := range report.Disks {
+		total := int64(d.SizeGB * 1024 * 1024 * 1024)
+		if total < 0 {
+			total = 0
+		}
+		free := int64(d.FreeGB * 1024 * 1024 * 1024)
+		if free < 0 || !d.FreeKnown {
+			free = 0
+		}
+		disks = append(disks, agentDiskInfo{
+			DriveLetter:    normalizeDriveLetter(d.Device),
+			Label:          d.Label,
+			FileSystem:     d.FileSystem,
+			TotalSizeBytes: total,
+			FreeSpaceBytes: free,
+			MediaType:      d.Type,
+			CollectedAt:    collected,
+		})
+	}
+
+	adapters := make([]agentNetworkAdapterInfo, 0, len(report.Networks))
+	for _, n := range report.Networks {
+		name := firstNonEmptyString(strings.TrimSpace(n.FriendlyName), strings.TrimSpace(n.Interface))
+		adapters = append(adapters, agentNetworkAdapterInfo{
+			Name:          name,
+			MACAddress:    n.MAC,
+			IPAddress:     firstNonEmptyString(strings.TrimSpace(n.IPv4), strings.TrimSpace(n.IPv6)),
+			SubnetMask:    "",
+			Gateway:       n.Gateway,
+			DNSServers:    normalizeDNSServers(n.DNSServers),
+			IsDhcpEnabled: n.DHCPEnabled,
+			AdapterType:   n.Type,
+			Speed:         formatLinkSpeed(n.LinkSpeedMbps),
+			CollectedAt:   collected,
+		})
+	}
+
+	modules := make([]agentMemoryModuleInfo, 0, len(report.MemoryModules))
+	for _, m := range report.MemoryModules {
+		capacity := int64(m.SizeGB * 1024 * 1024 * 1024)
+		if capacity <= 0 {
+			capacity = int64(m.SizeMB) * 1024 * 1024
+		}
+		if capacity < 0 {
+			capacity = 0
+		}
+		modules = append(modules, agentMemoryModuleInfo{
+			Slot:          m.Slot,
+			CapacityBytes: capacity,
+			SpeedMhz:      m.SpeedMHz,
+			MemoryType:    m.Type,
+			Manufacturer:  m.Manufacturer,
+			PartNumber:    m.PartNumber,
+			SerialNumber:  m.Serial,
+			CollectedAt:   collected,
+		})
+	}
+	rawJSON := buildCleanInventoryRaw(report, disks, adapters, modules)
+	lastIP := ""
+	primaryMAC := ""
+	for _, n := range adapters {
+		if lastIP == "" {
+			lastIP = strings.TrimSpace(n.IPAddress)
+		}
+		if primaryMAC == "" {
+			primaryMAC = strings.TrimSpace(n.MACAddress)
+		}
+		if lastIP != "" && primaryMAC != "" {
+			break
+		}
+	}
+
+	hostname := strings.TrimSpace(report.Hardware.Hostname)
+	osName := strings.TrimSpace(report.OS.Name)
+	osVersion := strings.TrimSpace(report.OS.Version)
+
+	envelope := agentHardwareEnvelope{
+		Hostname:        hostname,
+		DisplayName:     hostname,
+		Status:          1,
+		OperatingSystem: osName,
+		OSVersion:       osVersion,
+		AgentVersion:    strings.TrimSpace(Version),
+		LastIPAddress:   lastIP,
+		MACAddress:      primaryMAC,
+		Hardware: agentHardwareInfo{
+			InventoryRaw:            rawJSON,
+			InventorySchemaVersion:  "discovery.inventory.v1",
+			InventoryCollectedAt:    collected,
+			Manufacturer:            report.Hardware.Manufacturer,
+			Model:                   report.Hardware.Model,
+			SerialNumber:            report.Hardware.MotherboardSerial,
+			MotherboardManufacturer: report.Hardware.MotherboardManufacturer,
+			MotherboardModel:        report.Hardware.MotherboardModel,
+			MotherboardSerialNumber: report.Hardware.MotherboardSerial,
+			Processor:               report.Hardware.CPU,
+			ProcessorCores:          report.Hardware.Cores,
+			ProcessorThreads:        report.Hardware.LogicalCores,
+			ProcessorArchitecture:   report.OS.Architecture,
+			TotalMemoryBytes:        memTotalBytes,
+			BIOSVersion:             report.Hardware.BIOSVersion,
+			BIOSManufacturer:        report.Hardware.BIOSVendor,
+			OSName:                  osName,
+			OSVersion:               osVersion,
+			OSBuild:                 report.OS.Build,
+			OSArchitecture:          report.OS.Architecture,
+			CollectedAt:             collected,
+			UpdatedAt:               updated,
+		},
+		Disks:                  disks,
+		NetworkAdapters:        adapters,
+		MemoryModules:          modules,
+		InventoryRaw:           rawJSON,
+		InventorySchemaVersion: "discovery.inventory.v1",
+		InventoryCollectedAt:   collected,
+	}
+	return envelope
+}
+
+func buildCleanInventoryRaw(
+	report models.InventoryReport,
+	disks []agentDiskInfo,
+	networkAdapters []agentNetworkAdapterInfo,
+	memoryModules []agentMemoryModuleInfo,
+) string {
+	clean := map[string]any{
+		"collectedAt": report.CollectedAt,
+		"source":      report.Source,
+		"hardware": map[string]any{
+			"hostname":                report.Hardware.Hostname,
+			"manufacturer":            report.Hardware.Manufacturer,
+			"model":                   report.Hardware.Model,
+			"cpu":                     report.Hardware.CPU,
+			"cores":                   report.Hardware.Cores,
+			"logicalCores":            report.Hardware.LogicalCores,
+			"memoryGB":                report.Hardware.MemoryGB,
+			"motherboardManufacturer": report.Hardware.MotherboardManufacturer,
+			"motherboardModel":        report.Hardware.MotherboardModel,
+			"motherboardSerial":       report.Hardware.MotherboardSerial,
+			"biosVendor":              report.Hardware.BIOSVendor,
+			"biosVersion":             report.Hardware.BIOSVersion,
+		},
+		"os": report.OS,
+		"disks": mapSlice(disks, func(d agentDiskInfo) map[string]any {
+			return map[string]any{
+				"driveLetter":    d.DriveLetter,
+				"label":          d.Label,
+				"fileSystem":     d.FileSystem,
+				"totalSizeBytes": d.TotalSizeBytes,
+				"freeSpaceBytes": d.FreeSpaceBytes,
+				"mediaType":      d.MediaType,
+			}
+		}),
+		"networkAdapters": mapSlice(networkAdapters, func(n agentNetworkAdapterInfo) map[string]any {
+			return map[string]any{
+				"name":          n.Name,
+				"macAddress":    n.MACAddress,
+				"ipAddress":     n.IPAddress,
+				"gateway":       n.Gateway,
+				"dnsServers":    n.DNSServers,
+				"isDhcpEnabled": n.IsDhcpEnabled,
+				"adapterType":   n.AdapterType,
+				"speed":         n.Speed,
+			}
+		}),
+		"memoryModules": mapSlice(memoryModules, func(m agentMemoryModuleInfo) map[string]any {
+			return map[string]any{
+				"slot":          m.Slot,
+				"capacityBytes": m.CapacityBytes,
+				"speedMhz":      m.SpeedMhz,
+				"memoryType":    m.MemoryType,
+				"manufacturer":  m.Manufacturer,
+				"partNumber":    m.PartNumber,
+				"serialNumber":  m.SerialNumber,
+			}
+		}),
+	}
+	b, err := json.Marshal(clean)
+	if err != nil {
+		return "{}"
+	}
+	return string(b)
+}
+
+func mapSlice[T any, R any](in []T, fn func(T) R) []R {
+	out := make([]R, 0, len(in))
+	for _, item := range in {
+		out = append(out, fn(item))
+	}
+	return out
+}
+
+func normalizeDNSServers(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	parts := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ';' || r == '|' || r == ' '
+	})
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	if len(out) == 0 {
+		return ""
+	}
+	return strings.Join(out, ",")
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func formatLinkSpeed(linkSpeedMbps int) string {
+	if linkSpeedMbps <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d", linkSpeedMbps)
+}
+
+func normalizeDriveLetter(device string) string {
+	device = strings.TrimSpace(device)
+	if len(device) >= 2 && device[1] == ':' {
+		return strings.ToUpper(device[:1]) + ":"
+	}
+	return device
+}
+
+func isValidDebugScheme(s string) bool {
+	s = strings.TrimSpace(strings.ToLower(s))
+	return s == "http" || s == "https" || s == "nats"
 }
 
 func chatConfigPathCandidates() []string {

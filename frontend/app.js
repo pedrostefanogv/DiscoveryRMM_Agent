@@ -141,6 +141,24 @@ const updateSelectAllEl = document.getElementById('updateSelectAll');
 const logsOutputEl = document.getElementById('logsOutput');
 const refreshLogsBtn = document.getElementById('refreshLogsBtn');
 const clearLogsBtn = document.getElementById('clearLogsBtn');
+const tabDebugBtn = document.getElementById('tabDebug');
+const debugViewEl = document.getElementById('debugView');
+const debugSchemeEl = document.getElementById('debugScheme');
+const debugServerEl = document.getElementById('debugServer');
+const debugAuthTokenEl = document.getElementById('debugAuthToken');
+const debugAgentIDEl = document.getElementById('debugAgentID');
+const debugSaveBtn = document.getElementById('debugSaveBtn');
+const debugTestBtn = document.getElementById('debugTestBtn');
+const debugStatusEl = document.getElementById('debugStatus');
+const debugResponseWrapEl = document.getElementById('debugResponseWrap');
+const debugResponseLabelEl = document.getElementById('debugResponseLabel');
+const debugResponseEl = document.getElementById('debugResponse');
+const agentStatusDotEl = document.getElementById('agentStatusDot');
+const agentStatusLabelEl = document.getElementById('agentStatusLabel');
+const agentStatusDetailEl = document.getElementById('agentStatusDetail');
+const agentStatusRefreshBtn = document.getElementById('agentStatusRefreshBtn');
+
+let agentStatusPollId = null;
 
 let inventorySoftware = [];
 let inventorySoftwareFiltered = [];
@@ -362,6 +380,7 @@ function setActiveTab(tab) {
     chat: chatViewEl,
     support: supportViewEl,
     knowledge: knowledgeViewEl,
+    debug: debugViewEl,
   };
   var tabs = {
     store: tabStoreBtn,
@@ -371,6 +390,7 @@ function setActiveTab(tab) {
     chat: tabChatBtn,
     support: tabSupportBtn,
     knowledge: tabKnowledgeBtn,
+    debug: tabDebugBtn,
   };
 
   Object.keys(views).forEach(function (key) {
@@ -391,6 +411,10 @@ function setActiveTab(tab) {
   if (tab !== 'logs' && logsAutoRefreshId) {
     clearInterval(logsAutoRefreshId);
     logsAutoRefreshId = null;
+  }
+  // Stop agent status poll when leaving debug tab
+  if (tab !== 'debug') {
+    stopAgentStatusPoll();
   }
   // Start logs auto-refresh when entering logs tab
   if (tab === 'logs') {
@@ -1074,6 +1098,9 @@ if (tabKnowledgeBtn) {
     setActiveTab('knowledge');
     loadKnowledgeBase();
   });
+}
+if (tabDebugBtn) {
+  tabDebugBtn.addEventListener('click', function () { setActiveTab('debug'); loadDebugConfig(); });
 }
 
 // Category filter (searchable list)
@@ -2073,5 +2100,124 @@ if (kbReaderCloseBtn) {
 if (kbReaderModal) {
   kbReaderModal.addEventListener('click', function (e) {
     if (e.target === kbReaderModal) closeKnowledgeReader();
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Debug page
+// ---------------------------------------------------------------------------
+
+function setDebugStatus(message, type) {
+  if (!debugStatusEl) return;
+  debugStatusEl.textContent = message;
+  debugStatusEl.className = 'debug-status' + (type ? ' ' + type : '');
+}
+
+function renderAgentStatus(s) {
+  if (!agentStatusDotEl || !agentStatusLabelEl) return;
+  agentStatusDotEl.className = 'agent-status-indicator ' + (s && s.connected ? 'online' : 'offline');
+  agentStatusLabelEl.textContent = s && s.connected ? 'Online' : 'Offline / Desconectado';
+  if (agentStatusDetailEl) {
+    var parts = [];
+    if (s && s.agentId) parts.push('ID: ' + s.agentId);
+    if (s && s.server) parts.push('servidor: ' + s.server);
+    if (s && s.lastEvent) parts.push(s.lastEvent);
+    agentStatusDetailEl.textContent = parts.join('  ·  ');
+  }
+}
+
+function refreshAgentStatus() {
+  try {
+    appApi().GetAgentStatus().then(function (s) {
+      renderAgentStatus(s);
+    }).catch(function () {
+      renderAgentStatus(null);
+    });
+  } catch (e) {
+    renderAgentStatus(null);
+  }
+}
+
+function startAgentStatusPoll() {
+  refreshAgentStatus();
+  if (!agentStatusPollId) {
+    agentStatusPollId = setInterval(refreshAgentStatus, 5000);
+  }
+}
+
+function stopAgentStatusPoll() {
+  if (agentStatusPollId) {
+    clearInterval(agentStatusPollId);
+    agentStatusPollId = null;
+  }
+}
+
+if (agentStatusRefreshBtn) {
+  agentStatusRefreshBtn.addEventListener('click', refreshAgentStatus);
+}
+
+function loadDebugConfig() {
+  try {
+    appApi().GetDebugConfig().then(function (cfg) {
+      if (debugSchemeEl) debugSchemeEl.value = cfg.scheme || 'https';
+      if (debugServerEl) debugServerEl.value = cfg.server || '';
+      if (debugAuthTokenEl) debugAuthTokenEl.value = cfg.authToken || '';
+      if (debugAgentIDEl) debugAgentIDEl.value = cfg.agentId || '';
+      updateDebugResponseLabel();
+    }).catch(function () {});
+  } catch (e) {}
+  startAgentStatusPoll();
+}
+
+function updateDebugResponseLabel() {
+  if (!debugResponseLabelEl) return;
+  var scheme = debugSchemeEl ? String(debugSchemeEl.value || '').toLowerCase() : 'https';
+  if (scheme === 'nats') {
+    debugResponseLabelEl.innerHTML = 'Resposta de <code>NATS INFO</code>';
+  } else {
+    debugResponseLabelEl.innerHTML = 'Resposta de <code>/api/agent-auth/me</code>';
+  }
+}
+
+if (debugSchemeEl) {
+  debugSchemeEl.addEventListener('change', updateDebugResponseLabel);
+}
+
+if (debugSaveBtn) {
+  debugSaveBtn.addEventListener('click', function () {
+    setDebugStatus('Salvando...', '');
+    appApi().SetDebugConfig({
+      scheme: debugSchemeEl ? debugSchemeEl.value : 'https',
+      server: debugServerEl ? debugServerEl.value.trim() : '',
+      authToken: debugAuthTokenEl ? debugAuthTokenEl.value : '',
+      agentId: debugAgentIDEl ? debugAgentIDEl.value.trim() : '',
+    }).then(function () {
+      setDebugStatus('Configuracao salva com sucesso.', 'success');
+      setTimeout(refreshAgentStatus, 1500);
+    }).catch(function (err) {
+      setDebugStatus('Erro ao salvar: ' + (err.message || String(err)), 'error');
+    });
+  });
+}
+
+if (debugTestBtn) {
+  debugTestBtn.addEventListener('click', function () {
+    setDebugStatus('Testando conexao...', '');
+    updateDebugResponseLabel();
+    if (debugResponseWrapEl) debugResponseWrapEl.classList.add('hidden');
+    if (debugResponseEl) debugResponseEl.textContent = '';
+    appApi().TestDebugConnection({
+      scheme: debugSchemeEl ? debugSchemeEl.value : 'https',
+      server: debugServerEl ? debugServerEl.value.trim() : '',
+      authToken: debugAuthTokenEl ? debugAuthTokenEl.value : '',
+      agentId: debugAgentIDEl ? debugAgentIDEl.value.trim() : '',
+    }).then(function (body) {
+      setDebugStatus('Conectado com sucesso.', 'success');
+      if (debugResponseEl) debugResponseEl.textContent = body;
+      if (debugResponseWrapEl) debugResponseWrapEl.classList.remove('hidden');
+    }).catch(function (err) {
+      setDebugStatus('Falha na conexao: ' + (err.message || String(err)), 'error');
+      if (debugResponseWrapEl) debugResponseWrapEl.classList.add('hidden');
+    });
   });
 }

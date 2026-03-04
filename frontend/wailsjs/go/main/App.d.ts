@@ -19,6 +19,8 @@ export function ExportMarkdown():Promise<string>;
 
 export function ExportPDF():Promise<string>;
 
+export function GetAgentStatus():Promise<main.AgentStatus>;
+
 export function GetAvailableTools():Promise<Array<Record<string, string>>>;
 
 export function GetCatalog():Promise<models.Catalog>;
@@ -26,6 +28,8 @@ export function GetCatalog():Promise<models.Catalog>;
 export function GetChatConfig():Promise<main.ChatConfig>;
 
 export function GetChatHistory():Promise<Array<main.ChatMessage>>;
+
+export function GetDebugConfig():Promise<main.DebugConfig>;
 
 export function GetInventory():Promise<models.InventoryReport>;
 
@@ -46,6 +50,8 @@ export function GetOsqueryStatusJSON():Promise<json.RawMessage>;
 export function GetPendingUpdates():Promise<Array<models.UpgradeItem>>;
 
 export function GetPendingUpdatesJSON():Promise<json.RawMessage>;
+
+export function GetRealtimeStatus():Promise<main.RealtimeStatus>;
 
 export function GetStartupError():Promise<string>;
 
@@ -71,6 +77,8 @@ export function SendChatMessage(arg1:string):Promise<string>;
 
 export function SetChatConfig(arg1:main.ChatConfig):Promise<void>;
 
+export function SetDebugConfig(arg1:main.DebugConfig):Promise<void>;
+
 export function SetExportRedaction(arg1:boolean):Promise<void>;
 
 export function ShouldHideOnClose():Promise<boolean>;
@@ -78,6 +86,8 @@ export function ShouldHideOnClose():Promise<boolean>;
 export function StartChatStream(arg1:string):Promise<void>;
 
 export function TestChatConfig(arg1:main.ChatConfig):Promise<string>;
+
+export function TestDebugConnection(arg1:main.DebugConfig):Promise<string>;
 
 export function Uninstall(arg1:string):Promise<string>;
 

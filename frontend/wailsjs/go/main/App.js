@@ -30,6 +30,10 @@ export function ExportPDF() {
   return window['go']['main']['App']['ExportPDF']();
 }
 
+export function GetAgentStatus() {
+  return window['go']['main']['App']['GetAgentStatus']();
+}
+
 export function GetAvailableTools() {
   return window['go']['main']['App']['GetAvailableTools']();
 }
@@ -44,6 +48,10 @@ export function GetChatConfig() {
 
 export function GetChatHistory() {
   return window['go']['main']['App']['GetChatHistory']();
+}
+
+export function GetDebugConfig() {
+  return window['go']['main']['App']['GetDebugConfig']();
 }
 
 export function GetInventory() {
@@ -84,6 +92,10 @@ export function GetPendingUpdates() {
 
 export function GetPendingUpdatesJSON() {
   return window['go']['main']['App']['GetPendingUpdatesJSON']();
+}
+
+export function GetRealtimeStatus() {
+  return window['go']['main']['App']['GetRealtimeStatus']();
 }
 
 export function GetStartupError() {
@@ -134,6 +146,10 @@ export function SetChatConfig(arg1) {
   return window['go']['main']['App']['SetChatConfig'](arg1);
 }
 
+export function SetDebugConfig(arg1) {
+  return window['go']['main']['App']['SetDebugConfig'](arg1);
+}
+
 export function SetExportRedaction(arg1) {
   return window['go']['main']['App']['SetExportRedaction'](arg1);
 }
@@ -148,6 +164,10 @@ export function StartChatStream(arg1) {
 
 export function TestChatConfig(arg1) {
   return window['go']['main']['App']['TestChatConfig'](arg1);
+}
+
+export function TestDebugConnection(arg1) {
+  return window['go']['main']['App']['TestDebugConnection'](arg1);
 }
 
 export function Uninstall(arg1) {

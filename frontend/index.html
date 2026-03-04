@@ -64,6 +64,12 @@
             <span>Base de Conhecimento</span>
           </button>
         </li>
+        <li>
+          <button id="tabDebug" class="sidebar-link" role="tab" aria-selected="false" aria-controls="debugView">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            <span>Debug</span>
+          </button>
+        </li>
       </ul>
 
       <div class="sidebar-footer">
@@ -447,6 +453,62 @@
               </div>
               <div id="kbReaderMeta" class="kb-detail-meta"></div>
               <pre id="kbReaderContent" class="kb-reader-content"></pre>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <!-- ========= DEBUG VIEW ========= -->
+      <main id="debugView" class="page-content hidden" role="tabpanel" aria-labelledby="tabDebug">
+        <section class="debug-panel">
+          <div class="statusbar">
+            <span class="meta">Debug &mdash; configuracao de conexao com servidor remoto</span>
+          </div>
+
+          <!-- Agent connection status -->
+          <div class="debug-agent-status-wrap">
+            <h2>Status do Agente</h2>
+            <div id="agentStatusCard" class="agent-status-card">
+              <div class="agent-status-indicator" id="agentStatusDot"></div>
+              <div class="agent-status-info">
+                <span id="agentStatusLabel" class="agent-status-label">Verificando...</span>
+                <span id="agentStatusDetail" class="agent-status-detail"></span>
+              </div>
+              <button id="agentStatusRefreshBtn" class="btn subtle" title="Atualizar status">Atualizar</button>
+            </div>
+          </div>
+
+          <div class="debug-config-wrap">
+            <h2>Configuracoes de Conexao</h2>
+            <div class="debug-config-form">
+              <div class="form-field">
+                <label for="debugServer">Servidor</label>
+                <div class="debug-server-row">
+                  <select id="debugScheme" class="debug-scheme-select">
+                    <option value="https">https://</option>
+                    <option value="http">http://</option>
+                    <option value="nats">nats://</option>
+                  </select>
+                  <input id="debugServer" type="text" placeholder="servidor.exemplo.com:8080" autocomplete="off" spellcheck="false" />
+                </div>
+              </div>
+              <div class="form-field">
+                <label for="debugAuthToken">Token de Autenticacao</label>
+                <input id="debugAuthToken" type="password" placeholder="Bearer token..." autocomplete="off" />
+              </div>
+              <div class="form-field">
+                <label for="debugAgentID">Agent ID</label>
+                <input id="debugAgentID" type="text" placeholder="agent-xxxx" autocomplete="off" spellcheck="false" />
+              </div>
+              <div class="debug-actions">
+                <button id="debugTestBtn" class="btn subtle">Testar Conexao</button>
+                <button id="debugSaveBtn" class="btn primary">Salvar Configuracao</button>
+              </div>
+              <div id="debugStatus" class="debug-status" aria-live="polite"></div>
+              <div id="debugResponseWrap" class="debug-response-wrap hidden">
+                <label id="debugResponseLabel" class="debug-response-label">Resposta do teste de conexao</label>
+                <pre id="debugResponse" class="debug-response"></pre>
+              </div>
             </div>
           </div>
         </section>
