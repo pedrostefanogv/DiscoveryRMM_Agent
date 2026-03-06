@@ -1,13 +1,21 @@
 {
   "$schema": "https://wails.io/schemas/config.v2.json",
-  "name": "winget-store",
-  "outputfilename": "winget-store",
-  "frontend:install": "",
-  "frontend:build": "",
-  "frontend:dev:watcher": "",
-  "frontend:dev:serverUrl": "",
+  "version": "2",
+  "name": "meduza-discovery",
+  "outputfilename": "meduza-discovery",
+  "frontend:dir": "frontend",
+  "build:dir": "build",
+  "wailsjsdir": "./frontend/wailsjs",
   "author": {
-    "name": "",
-    "email": ""
-  }
+    "name": "Pedro Stefano",
+    "email": "pedro@pstefano.com.br"
+  },
+  "info": {
+    "companyName": "Meduza",
+    "productName": "Meduza Discovery",
+    "productVersion": "1.0.0",
+    "copyright": "Copyright © 2026 Meduza",
+    "comments": "Solução de monitoramento, gerenciamento e suporte para ambientes Windows"
+  },
+  "nsisType": "multiple"
 }

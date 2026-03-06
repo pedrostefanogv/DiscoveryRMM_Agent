@@ -1,5 +1,8 @@
 # Build output
-/build/
+/build/bin/
+/build/windows/installer/tmp/
+/build/windows/installer/wails_tools.nsh
+/build/windows/icon.backup.ico
 /dist/
 
 # Wails
@@ -13,8 +16,19 @@ wails.exe
 *.dylib
 *.test
 *.out
+*.log
+*.tmp
 go.work
 go.work.sum
+
+# Coverage
+coverage.out
+coverage.txt
+
+# Environment
+.env
+.env.*
+!.env.example
 
 # Export output
 DiscoveryExports/
