@@ -87,6 +87,33 @@ const knowledgeViewEl = document.getElementById('knowledgeView');
 const tabKnowledgeBtn = document.getElementById('tabKnowledge');
 const supportFormEl = document.getElementById('supportForm');
 const supportTicketsListEl = document.getElementById('supportTicketsList');
+// Support — extended refs
+const agentContextBannerEl = document.getElementById('agentContextBanner');
+const agentContextTextEl = document.getElementById('agentContextText');
+const agentContextErrorEl = document.getElementById('agentContextError');
+const agentContextErrorTextEl = document.getElementById('agentContextErrorText');
+const ticketsLoadingEl = document.getElementById('ticketsLoading');
+const refreshTicketsBtnEl = document.getElementById('refreshTicketsBtn');
+const newTicketBtnEl = document.getElementById('newTicketBtn');
+const supportCreateFormEl = document.getElementById('supportCreateForm');
+const supportTicketDetailEl = document.getElementById('supportTicketDetail');
+const backToFormBtnEl = document.getElementById('backToFormBtn');
+const ticketDetailIdEl = document.getElementById('ticketDetailId');
+const ticketDetailStatusEl = document.getElementById('ticketDetailStatus');
+const ticketDetailPriorityEl = document.getElementById('ticketDetailPriority');
+const ticketDetailTitleEl = document.getElementById('ticketDetailTitle');
+const ticketDetailMetaEl = document.getElementById('ticketDetailMeta');
+const ticketDetailDescEl = document.getElementById('ticketDetailDesc');
+const ticketClosePanelEl = document.getElementById('ticketClosePanel');
+const closeTicketRatingEl = document.getElementById('closeTicketRating');
+const closeTicketWorkflowStateSelectEl = document.getElementById('closeTicketWorkflowStateSelect');
+const closeTicketWorkflowStateIdEl = document.getElementById('closeTicketWorkflowStateId');
+const closeTicketCommentEl = document.getElementById('closeTicketComment');
+const closeTicketBtnEl = document.getElementById('closeTicketBtn');
+const commentsListEl = document.getElementById('commentsList');
+const commentInputEl = document.getElementById('commentInput');
+const submitCommentBtnEl = document.getElementById('submitCommentBtn');
+const ticketFormStatusEl = document.getElementById('ticketFormStatus');
 const kbSearchInputEl = document.getElementById('kbSearchInput');
 const kbArticlesListEl = document.getElementById('kbArticlesList');
 const kbArticleDetailEl = document.getElementById('kbArticleDetail');
@@ -102,6 +129,7 @@ const kbReaderCloseBtn = document.getElementById('kbReaderCloseBtn');
 const chatMessagesEl = document.getElementById('chatMessages');
 const chatInputEl = document.getElementById('chatInput');
 const chatSendBtn = document.getElementById('chatSendBtn');
+const chatStopBtn = document.getElementById('chatStopBtn');
 const chatConfigBtn = document.getElementById('chatConfigBtn');
 const chatToolsBtn = document.getElementById('chatToolsBtn');
 const chatLogsBtn = document.getElementById('chatLogsBtn');
@@ -143,8 +171,9 @@ const refreshLogsBtn = document.getElementById('refreshLogsBtn');
 const clearLogsBtn = document.getElementById('clearLogsBtn');
 const tabDebugBtn = document.getElementById('tabDebug');
 const debugViewEl = document.getElementById('debugView');
-const debugSchemeEl = document.getElementById('debugScheme');
-const debugServerEl = document.getElementById('debugServer');
+const apiSchemeEl = document.getElementById('apiScheme');
+const apiServerEl = document.getElementById('apiServer');
+const natsServerEl = document.getElementById('natsServer');
 const debugAuthTokenEl = document.getElementById('debugAuthToken');
 const debugAgentIDEl = document.getElementById('debugAgentID');
 const debugSaveBtn = document.getElementById('debugSaveBtn');
@@ -157,8 +186,11 @@ const agentStatusDotEl = document.getElementById('agentStatusDot');
 const agentStatusLabelEl = document.getElementById('agentStatusLabel');
 const agentStatusDetailEl = document.getElementById('agentStatusDetail');
 const agentStatusRefreshBtn = document.getElementById('agentStatusRefreshBtn');
+const watchdogHealthContainer = document.getElementById('watchdogHealthContainer');
+const watchdogRefreshBtn = document.getElementById('watchdogRefreshBtn');
 
 let agentStatusPollId = null;
+let watchdogPollId = null;
 
 let inventorySoftware = [];
 let inventorySoftwareFiltered = [];
@@ -415,6 +447,7 @@ function setActiveTab(tab) {
   // Stop agent status poll when leaving debug tab
   if (tab !== 'debug') {
     stopAgentStatusPoll();
+    stopWatchdogPoll();
   }
   // Start logs auto-refresh when entering logs tab
   if (tab === 'logs') {
@@ -1222,6 +1255,7 @@ updateSortIndicators();
 // =========================================================================
 
 var chatSending = false;
+var chatStopRequested = false;
 var chatThinkingPollId = null;
 
 // Streaming state
@@ -1245,7 +1279,34 @@ function flushStreamingContent() {
     }
   }
   contentEl.innerHTML = renderAssistantMarkdown(streamingRawContent);
+  bindInternalChatLinks(contentEl);
   scheduleChatScrollToBottom();
+}
+
+function setChatBusy(isBusy) {
+  chatSending = !!isBusy;
+  if (chatSendBtn) chatSendBtn.disabled = !!isBusy;
+  if (chatStopBtn) {
+    chatStopBtn.classList.toggle('hidden', !isBusy);
+    chatStopBtn.disabled = !isBusy;
+    chatStopBtn.textContent = 'Stop';
+  }
+}
+
+function requestStopChatStream() {
+  if (!chatSending) return;
+  chatStopRequested = true;
+  if (chatStopBtn) {
+    chatStopBtn.disabled = true;
+    chatStopBtn.textContent = 'Parando...';
+  }
+  try {
+    appApi().StopChatStream().catch(function () {
+      // If backend stop fails, UI still waits stream terminal event.
+    });
+  } catch (_) {
+    // ignore
+  }
 }
 
 function onStreamToken(token) {
@@ -1297,13 +1358,25 @@ function finaliseStreamingBubble() {
 function onStreamDone() {
   stopThinkingStatusUpdates();
   finaliseStreamingBubble();
-  chatSending = false;
-  if (chatSendBtn) chatSendBtn.disabled = false;
+  chatStopRequested = false;
+  setChatBusy(false);
   if (chatInputEl) chatInputEl.focus();
 }
 
 function onStreamError(errMsg) {
   stopThinkingStatusUpdates();
+
+  if (chatStopRequested) {
+    if (streamingBubble && !streamingRawContent) {
+      streamingRawContent = '_Resposta interrompida pelo usuário._';
+    }
+    finaliseStreamingBubble();
+    chatStopRequested = false;
+    setChatBusy(false);
+    if (chatInputEl) chatInputEl.focus();
+    return;
+  }
+
   if (streamingBubble) {
     // Show whatever content arrived; fallback to error text if nothing came.
     if (!streamingRawContent) {
@@ -1313,8 +1386,18 @@ function onStreamError(errMsg) {
   } else {
     addChatMessage('assistant', 'Erro: ' + String(errMsg || 'falha desconhecida'));
   }
-  chatSending = false;
-  if (chatSendBtn) chatSendBtn.disabled = false;
+  setChatBusy(false);
+  if (chatInputEl) chatInputEl.focus();
+}
+
+function onStreamStopped() {
+  stopThinkingStatusUpdates();
+  if (streamingBubble && !streamingRawContent) {
+    streamingRawContent = '_Resposta interrompida pelo usuário._';
+  }
+  finaliseStreamingBubble();
+  chatStopRequested = false;
+  setChatBusy(false);
   if (chatInputEl) chatInputEl.focus();
 }
 
@@ -1326,6 +1409,8 @@ function onStreamError(errMsg) {
       window.runtime.EventsOn('chat:thinking', onStreamThinking);
       window.runtime.EventsOn('chat:done', onStreamDone);
       window.runtime.EventsOn('chat:error', onStreamError);
+      window.runtime.EventsOn('chat:stopped', onStreamStopped);
+      window.runtime.EventsOn('watchdog:unhealthy', onWatchdogUnhealthy);
     }
   }
   if (document.readyState === 'loading') {
@@ -1335,6 +1420,17 @@ function onStreamError(errMsg) {
     setTimeout(doRegister, 200);
   }
 })();
+
+function onWatchdogUnhealthy(data) {
+  var componentName = formatComponentName(data.component || 'unknown');
+  var message = 'Watchdog: ' + componentName + ' esta ' + (data.status || 'unhealthy') + ' - ' + (data.message || 'sem detalhes');
+  showToast(message, 'warning');
+  
+  // Refresh watchdog display if on debug tab
+  if (activeTab === 'debug') {
+    refreshWatchdogHealth();
+  }
+}
 
 function scrollChatToBottom() {
   if (chatMessagesEl) chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
@@ -1485,8 +1581,23 @@ function formatInlineChatMarkdown(text) {
     return token;
   });
 
-  escaped = escaped.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, function (_, label, url) {
-    return '<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + label + '</a>';
+  escaped = escaped.replace(/\[([^\]]+)\]\(((?:https?:\/\/|(?:discovery|app):\/\/)[^\s)]+)\)/g, function (_, label, url) {
+    var safeLabel = String(label || '').trim();
+    if (/^(?:discovery|app):\/\//i.test(url)) {
+      var parts = safeLabel.split('|').map(function (p) { return p.trim(); }).filter(Boolean);
+      if (parts.length >= 2) {
+        var title = parts[0];
+        var subtitle = parts[1];
+        var meta = parts.slice(2).join(' • ');
+        return '<a href="#" class="chat-internal-link chat-internal-card" data-internal-url="' + escapeHtmlAttr(url) + '">' +
+          '<span class="chat-internal-card-title">' + title + '</span>' +
+          '<span class="chat-internal-card-subtitle">' + subtitle + '</span>' +
+          (meta ? '<span class="chat-internal-card-meta">' + meta + '</span>' : '') +
+        '</a>';
+      }
+      return '<a href="#" class="chat-internal-link" data-internal-url="' + escapeHtmlAttr(url) + '">' + safeLabel + '</a>';
+    }
+    return '<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + safeLabel + '</a>';
   });
 
   escaped = escaped
@@ -1500,6 +1611,97 @@ function formatInlineChatMarkdown(text) {
   }
 
   return escaped;
+}
+
+function parseInternalAppRoute(url) {
+  try {
+    var parsed = new URL(String(url || ''));
+    var scheme = (parsed.protocol || '').replace(':', '').toLowerCase();
+    if (scheme !== 'discovery' && scheme !== 'app') return null;
+
+    var segments = [];
+    if (parsed.hostname) segments.push(parsed.hostname.toLowerCase());
+    if (parsed.pathname) {
+      segments = segments.concat(parsed.pathname.split('/').filter(Boolean).map(function (s) { return s.toLowerCase(); }));
+    }
+
+    var ticketId = parsed.searchParams.get('ticketId') || parsed.searchParams.get('id') || '';
+    if (!ticketId && segments[0] === 'support' && segments[1] === 'ticket' && segments[2]) {
+      ticketId = segments[2];
+    }
+
+    var tabBySegment;
+    switch (segments[0]) {
+      case 'support':
+      case 'tickets':
+        tabBySegment = 'support';
+        break;
+      case 'store':
+        tabBySegment = 'store';
+        break;
+      case 'updates':
+        tabBySegment = 'updates';
+        break;
+      case 'inventory':
+        tabBySegment = 'inventory';
+        break;
+      case 'logs':
+        tabBySegment = 'logs';
+        break;
+      case 'chat':
+        tabBySegment = 'chat';
+        break;
+      case 'knowledge':
+        tabBySegment = 'knowledge';
+        break;
+      case 'debug':
+        tabBySegment = 'debug';
+        break;
+      default:
+        tabBySegment = undefined;
+    }
+
+    if (!tabBySegment) return null;
+    return { tab: tabBySegment, ticketId: ticketId };
+  } catch (_) {
+    return null;
+  }
+}
+
+async function navigateInternalAppRoute(url) {
+  var route = parseInternalAppRoute(url);
+  if (!route) {
+    showToast('Link interno inválido: ' + String(url || ''), 'error');
+    return;
+  }
+
+  setActiveTab(route.tab);
+
+  if (route.tab === 'support') {
+    await loadSupportTickets();
+    if (route.ticketId) {
+      try {
+        var ticket = await appApi().GetSupportTicketDetails(route.ticketId);
+        showTicketDetail(ticket);
+      } catch (err) {
+        showToast('Não foi possível abrir o chamado: ' + String(err), 'error');
+      }
+    }
+  }
+}
+
+function bindInternalChatLinks(containerEl) {
+  if (!containerEl) return;
+  var links = containerEl.querySelectorAll('a.chat-internal-link[data-internal-url]');
+  links.forEach(function (link) {
+    if (link.dataset.boundInternalClick === '1') return;
+    link.dataset.boundInternalClick = '1';
+    link.addEventListener('click', function (e) {
+      e.preventDefault();
+      var internalURL = link.getAttribute('data-internal-url') || '';
+      navigateInternalAppRoute(internalURL);
+    });
+  });
 }
 
 function renderAssistantMarkdown(content) {
@@ -1665,6 +1867,7 @@ function addChatMessage(role, content) {
 
   if (role === 'assistant') {
     div.innerHTML = renderAssistantMarkdown(content);
+    bindInternalChatLinks(div);
   } else {
     div.textContent = content;
   }
@@ -1701,8 +1904,8 @@ async function sendChatMessage() {
   chatInputEl.value = '';
   addChatMessage('user', text);
 
-  chatSending = true;
-  if (chatSendBtn) chatSendBtn.disabled = true;
+  chatStopRequested = false;
+  setChatBusy(true);
 
   // Create the streaming bubble immediately.
   streamingRawContent = '';
@@ -1831,6 +2034,9 @@ function initChat() {
   if (chatSendBtn) {
     chatSendBtn.addEventListener('click', sendChatMessage);
   }
+  if (chatStopBtn) {
+    chatStopBtn.addEventListener('click', requestStopChatStream);
+  }
   if (chatInputEl) {
     chatInputEl.addEventListener('keydown', function (e) {
       if (e.key === 'Enter' && !e.shiftKey) {
@@ -1897,62 +2103,464 @@ initSupport();
 // SUPPORT TICKETS
 // =========================================================================
 
+var currentTicketId = '';
+var currentTicket = null;
+var workflowStatesCache = null;
+var workflowStatesCacheKey = '';
+var WORKFLOW_STATES_CACHE_TTL_MS = 10 * 60 * 1000;
+
+var priorityLabels = { 1: 'Baixa', 2: 'Média', 3: 'Alta', 4: 'Crítica' };
+var priorityClasses = { 1: 'p-baixa', 2: 'p-media', 3: 'p-alta', 4: 'p-critica' };
+
+function ticketPriorityLabel(p) { return priorityLabels[p] || 'N/A'; }
+function ticketPriorityClass(p) { return priorityClasses[p] || 'p-media'; }
+
+function formatDateTime(v) {
+  if (!v) return '';
+  return String(v).replace('T', ' ').substring(0, 16);
+}
+
+function renderStars(rating) {
+  if (rating === null || rating === undefined || rating === '') return 'Sem avaliação';
+  var value = Number(rating);
+  if (!Number.isFinite(value) || value < 0) return 'Sem avaliação';
+  var stars = '★★★★★'.slice(0, Math.min(5, Math.floor(value)));
+  var empty = '☆☆☆☆☆'.slice(0, 5 - Math.min(5, Math.floor(value)));
+  return stars + empty + ' (' + value + '/5)';
+}
+
+function workflowMetaText(state) {
+  if (!state) return '';
+  var flags = [];
+  if (state.isInitial) flags.push('Inicial');
+  if (state.isFinal) flags.push('Final');
+  if (state.displayOrder || state.displayOrder === 0) flags.push('Ordem ' + state.displayOrder);
+  return flags.join(' • ');
+}
+
+function ticketHasFinalState(ticket) {
+  if (!ticket || !ticket.workflowState) return false;
+  var ws = ticket.workflowState;
+  if (ws.isFinal) return true;
+  var name = String(ws.name || '').toLowerCase();
+  return name.indexOf('fechado') >= 0 || name.indexOf('closed') >= 0 || name.indexOf('resolvido') >= 0;
+}
+
+function buildWorkflowProfileKey(cfg) {
+  if (!cfg) return 'default';
+  var scheme = String(cfg.apiScheme || '').trim().toLowerCase();
+  var server = String(cfg.apiServer || '').trim().toLowerCase();
+  var agentId = String(cfg.agentId || '').trim().toLowerCase();
+  return [scheme, server, agentId].join('|');
+}
+
+function workflowStatesStorageKey(profileKey) {
+  return 'discovery.support.workflow-states.v1.' + profileKey;
+}
+
+function readWorkflowStatesLocal(profileKey) {
+  try {
+    if (!window.localStorage) return null;
+    var raw = window.localStorage.getItem(workflowStatesStorageKey(profileKey));
+    if (!raw) return null;
+
+    var payload = JSON.parse(raw);
+    if (!payload || !Array.isArray(payload.states) || !payload.expiresAt) {
+      window.localStorage.removeItem(workflowStatesStorageKey(profileKey));
+      return null;
+    }
+
+    if (Date.now() > Number(payload.expiresAt)) {
+      window.localStorage.removeItem(workflowStatesStorageKey(profileKey));
+      return null;
+    }
+
+    return payload.states;
+  } catch (e) {
+    return null;
+  }
+}
+
+function writeWorkflowStatesLocal(profileKey, states) {
+  try {
+    if (!window.localStorage) return;
+    var payload = {
+      states: Array.isArray(states) ? states : [],
+      expiresAt: Date.now() + WORKFLOW_STATES_CACHE_TTL_MS,
+    };
+    window.localStorage.setItem(workflowStatesStorageKey(profileKey), JSON.stringify(payload));
+  } catch (e) {
+    // ignore storage quota/privacy errors
+  }
+}
+
+function populateWorkflowStateOptions(states, currentWorkflowStateId) {
+  if (!closeTicketWorkflowStateSelectEl) return;
+
+  var options = ['<option value="">Fechar com estado padrão</option>'];
+  var finalStates = (states || []).filter(function (s) { return !!s && s.isFinal; });
+  var available = finalStates.length ? finalStates : (states || []);
+
+  available.forEach(function (s) {
+    var label = s.name || (s.id ? ('Estado ' + s.id.substring(0, 8)) : 'Estado');
+    if (s.isFinal) label += ' (Final)';
+    if (s.displayOrder || s.displayOrder === 0) label += ' • Ordem ' + s.displayOrder;
+    options.push('<option value="' + escapeHtmlAttr(s.id) + '">' + escapeHtml(label) + '</option>');
+  });
+
+  options.push('<option value="__manual__">Informar GUID manualmente</option>');
+  closeTicketWorkflowStateSelectEl.innerHTML = options.join('');
+
+  if (currentWorkflowStateId && available.some(function (s) { return s.id === currentWorkflowStateId; })) {
+    closeTicketWorkflowStateSelectEl.value = currentWorkflowStateId;
+  } else {
+    closeTicketWorkflowStateSelectEl.value = '';
+  }
+
+  if (closeTicketWorkflowStateIdEl) {
+    closeTicketWorkflowStateIdEl.classList.add('hidden');
+    closeTicketWorkflowStateIdEl.value = '';
+  }
+}
+
+async function loadWorkflowStatesForClose(ticket) {
+  if (!closeTicketWorkflowStateSelectEl) return;
+
+  var profileKey = 'default';
+  try {
+    var cfg = await appApi().GetDebugConfig();
+    profileKey = buildWorkflowProfileKey(cfg);
+  } catch (e) {
+    profileKey = 'default';
+  }
+
+  if (workflowStatesCacheKey === profileKey && workflowStatesCache && workflowStatesCache.length) {
+    populateWorkflowStateOptions(workflowStatesCache, ticket && ticket.workflowState ? ticket.workflowState.id : '');
+    return;
+  }
+
+  var localStates = readWorkflowStatesLocal(profileKey);
+  if (localStates && localStates.length) {
+    workflowStatesCache = localStates;
+    workflowStatesCacheKey = profileKey;
+    populateWorkflowStateOptions(workflowStatesCache, ticket && ticket.workflowState ? ticket.workflowState.id : '');
+    return;
+  }
+
+  try {
+    var states = await appApi().GetTicketWorkflowStates();
+    workflowStatesCache = Array.isArray(states) ? states : [];
+    workflowStatesCacheKey = profileKey;
+    writeWorkflowStatesLocal(profileKey, workflowStatesCache);
+    populateWorkflowStateOptions(workflowStatesCache, ticket && ticket.workflowState ? ticket.workflowState.id : '');
+  } catch (err) {
+    closeTicketWorkflowStateSelectEl.innerHTML =
+      '<option value="">Fechar com estado padrão</option>' +
+      '<option value="__manual__">Informar GUID manualmente</option>';
+    closeTicketWorkflowStateSelectEl.value = '';
+  }
+}
+
+function showTicketFormStatus(msg, isError) {
+  if (!ticketFormStatusEl) return;
+  ticketFormStatusEl.textContent = msg;
+  ticketFormStatusEl.className = 'form-status' + (isError ? ' form-status-error' : ' form-status-ok');
+  ticketFormStatusEl.classList.remove('hidden');
+}
+function hideTicketFormStatus() {
+  if (ticketFormStatusEl) ticketFormStatusEl.classList.add('hidden');
+}
+
 function initSupport() {
   if (!supportFormEl) return;
+
   supportFormEl.addEventListener('submit', async function (e) {
     e.preventDefault();
-    var subject = document.getElementById('ticketSubject').value.trim();
-    var category = document.getElementById('ticketCategory').value;
-    var priority = document.getElementById('ticketPriority').value;
-    var description = document.getElementById('ticketDescription').value.trim();
+    var title = document.getElementById('ticketTitle') ? document.getElementById('ticketTitle').value.trim() : '';
+    var category = document.getElementById('ticketCategory') ? document.getElementById('ticketCategory').value : '';
+    var priority = parseInt(document.getElementById('ticketPriority') ? document.getElementById('ticketPriority').value : '2', 10);
+    var description = document.getElementById('ticketDescription') ? document.getElementById('ticketDescription').value.trim() : '';
 
-    if (!subject || !category || !description) {
-      showToast('Preencha todos os campos obrigatorios', 'error');
+    if (!title || !description) {
+      showToast('Preencha título e descrição', 'error');
       return;
     }
 
+    var btn = document.getElementById('submitTicketBtn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Enviando...'; }
+    showTicketFormStatus('Enviando chamado...', false);
+
     try {
-      var ticket = await appApi().CreateSupportTicket({
-        subject: subject,
-        category: category,
-        priority: priority,
-        description: description,
-      });
-      showToast('Chamado ' + ticket.id + ' criado com sucesso!', 'success');
+      var ticket = await appApi().CreateSupportTicket({ title: title, description: description, priority: priority, category: category });
+      showToast('Chamado criado com sucesso!', 'success');
       supportFormEl.reset();
+      hideTicketFormStatus();
       loadSupportTickets();
     } catch (err) {
+      showTicketFormStatus('Erro ao criar chamado: ' + String(err), true);
       showToast('Erro ao criar chamado: ' + String(err), 'error');
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = 'Enviar Chamado'; }
     }
   });
+
+  if (refreshTicketsBtnEl) {
+    refreshTicketsBtnEl.addEventListener('click', function () { loadSupportTickets(); });
+  }
+  if (newTicketBtnEl) {
+    newTicketBtnEl.addEventListener('click', function () { closeTicketDetail(); });
+  }
+  if (backToFormBtnEl) {
+    backToFormBtnEl.addEventListener('click', function () { closeTicketDetail(); });
+  }
+  if (submitCommentBtnEl) {
+    submitCommentBtnEl.addEventListener('click', async function () {
+      if (!currentTicketId || !commentInputEl) return;
+      var content = commentInputEl.value.trim();
+      if (!content) { showToast('Digite um comentário', 'error'); return; }
+      submitCommentBtnEl.disabled = true;
+      try {
+        await appApi().AddTicketComment(currentTicketId, '', content);
+        commentInputEl.value = '';
+        showToast('Comentário enviado', 'success');
+        loadTicketComments(currentTicketId);
+      } catch (err) {
+        showToast('Erro ao enviar comentário: ' + String(err), 'error');
+      } finally {
+        submitCommentBtnEl.disabled = false;
+      }
+    });
+  }
+
+  if (closeTicketBtnEl) {
+    closeTicketBtnEl.addEventListener('click', async function () {
+      if (!currentTicketId) return;
+
+      var rating = null;
+      if (closeTicketRatingEl && closeTicketRatingEl.value !== '') {
+        rating = parseInt(closeTicketRatingEl.value, 10);
+        if (Number.isNaN(rating) || rating < 0 || rating > 5) {
+          showToast('Avaliação inválida. Informe de 0 a 5.', 'error');
+          return;
+        }
+      }
+
+      var comment = closeTicketCommentEl ? closeTicketCommentEl.value.trim() : '';
+      var workflowStateId = '';
+      if (closeTicketWorkflowStateSelectEl && closeTicketWorkflowStateSelectEl.value === '__manual__') {
+        workflowStateId = closeTicketWorkflowStateIdEl ? closeTicketWorkflowStateIdEl.value.trim() : '';
+      } else if (closeTicketWorkflowStateSelectEl) {
+        workflowStateId = closeTicketWorkflowStateSelectEl.value.trim();
+      } else if (closeTicketWorkflowStateIdEl) {
+        workflowStateId = closeTicketWorkflowStateIdEl.value.trim();
+      }
+
+      closeTicketBtnEl.disabled = true;
+      closeTicketBtnEl.textContent = 'Fechando...';
+
+      try {
+        var payload = { comment: comment, workflowStateId: workflowStateId };
+        if (rating !== null) payload.rating = rating;
+        var ticket = await appApi().CloseSupportTicket(currentTicketId, payload);
+        showToast('Chamado fechado com sucesso', 'success');
+        currentTicket = ticket;
+        renderTicketDetail(ticket);
+        if (closeTicketCommentEl) closeTicketCommentEl.value = '';
+        if (closeTicketRatingEl) closeTicketRatingEl.value = '';
+        if (closeTicketWorkflowStateIdEl) closeTicketWorkflowStateIdEl.value = '';
+        if (closeTicketWorkflowStateSelectEl) closeTicketWorkflowStateSelectEl.value = '';
+        await loadSupportTickets();
+      } catch (err) {
+        showToast('Erro ao fechar chamado: ' + String(err), 'error');
+      } finally {
+        closeTicketBtnEl.disabled = false;
+        closeTicketBtnEl.textContent = 'Fechar Chamado';
+      }
+    });
+  }
+
+  if (closeTicketWorkflowStateSelectEl && closeTicketWorkflowStateIdEl) {
+    closeTicketWorkflowStateSelectEl.addEventListener('change', function () {
+      var manual = closeTicketWorkflowStateSelectEl.value === '__manual__';
+      closeTicketWorkflowStateIdEl.classList.toggle('hidden', !manual);
+      if (!manual) closeTicketWorkflowStateIdEl.value = '';
+    });
+  }
 }
 
 async function loadSupportTickets() {
   if (!supportTicketsListEl) return;
+
+  // show loading
+  if (ticketsLoadingEl) ticketsLoadingEl.classList.remove('hidden');
+  supportTicketsListEl.innerHTML = '';
+
+  // Resolve agent context for the banner
+  try {
+    var agent = await appApi().GetAgentInfo();
+    if (agentContextBannerEl && agentContextTextEl) {
+      var clientText = agent.clientId ? ' | Cliente: ' + agent.clientId : '';
+      var siteText = agent.siteId ? ' | Site: ' + agent.siteId : '';
+      agentContextTextEl.textContent = 'Agente: ' + (agent.hostname || agent.agentId) + ' - ID: ' + agent.agentId + clientText + siteText;
+      agentContextBannerEl.classList.remove('hidden');
+    }
+    if (agentContextErrorEl) agentContextErrorEl.classList.add('hidden');
+  } catch (err) {
+    if (agentContextErrorEl && agentContextErrorTextEl) {
+      agentContextErrorTextEl.textContent = String(err);
+      agentContextErrorEl.classList.remove('hidden');
+    }
+    if (agentContextBannerEl) agentContextBannerEl.classList.add('hidden');
+    if (ticketsLoadingEl) ticketsLoadingEl.classList.add('hidden');
+    supportTicketsListEl.innerHTML = '<div class="meta">Servidor não configurado. Configure em Debug.</div>';
+    return;
+  }
+
   try {
     var tickets = await appApi().GetSupportTickets();
+    if (ticketsLoadingEl) ticketsLoadingEl.classList.add('hidden');
     if (!tickets || !tickets.length) {
-      supportTicketsListEl.innerHTML = '<div class="meta">Nenhum chamado aberto.</div>';
+      supportTicketsListEl.innerHTML = '<div class="meta">Nenhum chamado aberto vinculado a este agente.</div>';
       return;
     }
     supportTicketsListEl.innerHTML = tickets.map(function (t) {
-      var priorityClass = 'priority-' + (t.priority || 'media').toLowerCase();
-      return '<div class="support-ticket-card">' +
+      var statusName = (t.workflowState && t.workflowState.name) ? t.workflowState.name : 'Aberto';
+      var statusColor = (t.workflowState && t.workflowState.color) ? t.workflowState.color : '#0b6e4f';
+      var statusMeta = workflowMetaText(t.workflowState);
+      var priLabel = ticketPriorityLabel(t.priority);
+      var priClass = ticketPriorityClass(t.priority);
+      var cat = t.category || '';
+      var date = formatDateTime(t.createdAt);
+      var ratingText = renderStars(t.rating);
+      return '<button class="support-ticket-card" data-id="' + escapeHtml(t.id) + '" data-ticket=\'' + escapeAttr(t) + '\'>' +
         '<div class="ticket-header">' +
-          '<span class="ticket-id">' + escapeHtml(t.id) + '</span>' +
-          '<span class="ticket-status badge-open">' + escapeHtml(t.status) + '</span>' +
-          '<span class="ticket-priority ' + priorityClass + '">' + escapeHtml(t.priority) + '</span>' +
+          '<span class="ticket-id-badge">#' + escapeHtml(t.id.substring(0, 8)) + '</span>' +
+          '<span class="ticket-status-badge" style="background:' + escapeHtml(statusColor) + '20;color:' + escapeHtml(statusColor) + '">' + escapeHtml(statusName) + '</span>' +
+          '<span class="ticket-priority-badge ' + priClass + '">' + escapeHtml(priLabel) + '</span>' +
         '</div>' +
-        '<div class="ticket-subject">' + escapeHtml(t.subject) + '</div>' +
+        '<div class="ticket-subject">' + escapeHtml(t.title) + '</div>' +
         '<div class="ticket-meta">' +
-          '<span>Categoria: ' + escapeHtml(t.category) + '</span>' +
-          '<span>Aberto em: ' + escapeHtml(t.createdAt) + '</span>' +
+          (cat ? '<span>' + escapeHtml(cat) + '</span>' : '') +
+          (date ? '<span>' + escapeHtml(date) + '</span>' : '') +
+          (statusMeta ? '<span>' + escapeHtml(statusMeta) + '</span>' : '') +
+          '<span>' + escapeHtml(ratingText) + '</span>' +
         '</div>' +
-        '<div class="ticket-desc">' + escapeHtml(t.description) + '</div>' +
+      '</button>';
+    }).join('');
+
+    // attach click handlers
+    supportTicketsListEl.querySelectorAll('.support-ticket-card').forEach(function (card) {
+      card.addEventListener('click', function () {
+        try {
+          var t = JSON.parse(card.getAttribute('data-ticket').replace(/&apos;/g, "'"));
+          showTicketDetail(t);
+        } catch (e) { /* ignore */ }
+      });
+    });
+  } catch (err) {
+    if (ticketsLoadingEl) ticketsLoadingEl.classList.add('hidden');
+    supportTicketsListEl.innerHTML = '<div class="meta">Erro ao carregar chamados: ' + escapeHtml(String(err)) + '</div>';
+  }
+}
+
+function escapeAttr(obj) {
+  return JSON.stringify(obj).replace(/'/g, '&apos;').replace(/"/g, '&quot;');
+}
+
+function showTicketDetail(t) {
+  currentTicketId = t.id;
+  currentTicket = t;
+  if (supportCreateFormEl) supportCreateFormEl.classList.add('hidden');
+  if (supportTicketDetailEl) supportTicketDetailEl.classList.remove('hidden');
+
+  renderTicketDetail(t);
+  loadWorkflowStatesForClose(t);
+  loadTicketComments(t.id);
+
+  appApi().GetSupportTicketDetails(t.id)
+    .then(function (fresh) {
+      if (!fresh || currentTicketId !== t.id) return;
+      currentTicket = fresh;
+      renderTicketDetail(fresh);
+      loadWorkflowStatesForClose(fresh);
+      loadTicketComments(t.id);
+    })
+    .catch(function () { /* mantém dados já exibidos */ });
+}
+
+function renderTicketDetail(t) {
+  var statusName = (t.workflowState && t.workflowState.name) ? t.workflowState.name : 'Aberto';
+  var statusColor = (t.workflowState && t.workflowState.color) ? t.workflowState.color : '#0b6e4f';
+  var statusMeta = workflowMetaText(t.workflowState);
+  var priLabel = ticketPriorityLabel(t.priority);
+  var priClass = ticketPriorityClass(t.priority);
+  var date = formatDateTime(t.createdAt);
+  var cat = t.category || '';
+  var ratedAt = formatDateTime(t.ratedAt);
+  var ratedBy = t.ratedBy || '';
+  var isFinal = ticketHasFinalState(t);
+
+  if (ticketDetailIdEl) ticketDetailIdEl.textContent = '#' + t.id.substring(0, 8);
+  if (ticketDetailStatusEl) {
+    ticketDetailStatusEl.textContent = statusName;
+    ticketDetailStatusEl.style.background = statusColor + '20';
+    ticketDetailStatusEl.style.color = statusColor;
+  }
+  if (ticketDetailPriorityEl) {
+    ticketDetailPriorityEl.textContent = priLabel;
+    ticketDetailPriorityEl.className = 'ticket-priority-badge ' + priClass;
+  }
+  if (ticketDetailTitleEl) ticketDetailTitleEl.textContent = t.title || '';
+  if (ticketDetailMetaEl) {
+    ticketDetailMetaEl.innerHTML =
+      (cat ? '<span>' + escapeHtml(cat) + '</span>' : '') +
+      (date ? '<span>Aberto em: ' + escapeHtml(date) + '</span>' : '') +
+      (statusMeta ? '<span>' + escapeHtml(statusMeta) + '</span>' : '') +
+      '<span>Avaliação: ' + escapeHtml(renderStars(t.rating)) + '</span>' +
+      (ratedAt ? '<span>Avaliado em: ' + escapeHtml(ratedAt) + '</span>' : '') +
+      (ratedBy ? '<span>Avaliado por: ' + escapeHtml(ratedBy) + '</span>' : '');
+  }
+  if (ticketDetailDescEl) ticketDetailDescEl.textContent = t.description || '';
+
+  if (ticketClosePanelEl) {
+    ticketClosePanelEl.classList.toggle('hidden', isFinal);
+  }
+}
+
+function closeTicketDetail() {
+  currentTicketId = '';
+  currentTicket = null;
+  if (supportTicketDetailEl) supportTicketDetailEl.classList.add('hidden');
+  if (supportCreateFormEl) supportCreateFormEl.classList.remove('hidden');
+  if (closeTicketWorkflowStateSelectEl) closeTicketWorkflowStateSelectEl.value = '';
+  if (closeTicketWorkflowStateIdEl) {
+    closeTicketWorkflowStateIdEl.value = '';
+    closeTicketWorkflowStateIdEl.classList.add('hidden');
+  }
+}
+
+async function loadTicketComments(ticketId) {
+  if (!commentsListEl) return;
+  commentsListEl.innerHTML = '<div class="meta">Carregando comentários...</div>';
+  try {
+    var comments = await appApi().GetTicketComments(ticketId);
+    if (!comments || !comments.length) {
+      commentsListEl.innerHTML = '<div class="meta">Nenhum comentário.</div>';
+      return;
+    }
+    commentsListEl.innerHTML = comments.map(function (c) {
+      var date = c.createdAt ? c.createdAt.replace('T', ' ').substring(0, 16) : '';
+      return '<div class="comment-card' + (c.isInternal ? ' comment-internal' : '') + '">' +
+        '<div class="comment-header">' +
+          '<span class="comment-author">' + escapeHtml(c.author || 'Usuário') + '</span>' +
+          (date ? '<span class="comment-date">' + escapeHtml(date) + '</span>' : '') +
+          (c.isInternal ? '<span class="comment-internal-badge">Interno</span>' : '') +
+        '</div>' +
+        '<div class="comment-content">' + escapeHtml(c.content) + '</div>' +
       '</div>';
     }).join('');
   } catch (err) {
-    supportTicketsListEl.innerHTML = '<div class="meta">Erro ao carregar chamados.</div>';
+    commentsListEl.innerHTML = '<div class="meta">Erro ao carregar comentários: ' + escapeHtml(String(err)) + '</div>';
   }
 }
 
@@ -2156,42 +2764,111 @@ if (agentStatusRefreshBtn) {
   agentStatusRefreshBtn.addEventListener('click', refreshAgentStatus);
 }
 
+// ========== Watchdog Health Monitor ==========
+
+function refreshWatchdogHealth() {
+  if (!watchdogHealthContainer) return;
+
+  try {
+    appApi().GetWatchdogHealth().then(function (checks) {
+      renderWatchdogHealth(checks);
+    }).catch(function (err) {
+      watchdogHealthContainer.innerHTML = '<div class="watchdog-loading">Erro ao carregar status: ' + err + '</div>';
+    });
+  } catch (e) {
+    watchdogHealthContainer.innerHTML = '<div class="watchdog-loading">Watchdog nao disponivel</div>';
+  }
+}
+
+function renderWatchdogHealth(checks) {
+  if (!watchdogHealthContainer) return;
+
+  if (!checks || checks.length === 0) {
+    watchdogHealthContainer.innerHTML = '<div class="watchdog-loading">Nenhum componente monitorado</div>';
+    return;
+  }
+
+  var html = '';
+  for (var i = 0; i < checks.length; i++) {
+    var check = checks[i];
+    var statusClass = (check.status || 'unknown').toLowerCase();
+    var componentName = formatComponentName(check.component);
+    var badgeClass = check.recoverable ? 'recoverable' : 'not-recoverable';
+    var badgeText = check.recoverable ? 'Auto-recuperavel' : 'Manual';
+    
+    html += '<div class="watchdog-component-card ' + statusClass + '">';
+    html += '  <div class="watchdog-status-dot ' + statusClass + '"></div>';
+    html += '  <div class="watchdog-component-info">';
+    html += '    <div class="watchdog-component-name">' + componentName + '</div>';
+    html += '    <div class="watchdog-component-message">' + (check.message || 'Sem informacoes') + '</div>';
+    html += '  </div>';
+    html += '  <div class="watchdog-component-badge ' + badgeClass + '">' + badgeText + '</div>';
+    html += '</div>';
+  }
+
+  watchdogHealthContainer.innerHTML = html;
+}
+
+function formatComponentName(component) {
+  var names = {
+    'tray': 'System Tray',
+    'ai_service': 'Servico de IA',
+    'agent_connection': 'Conexao do Agente',
+    'inventory': 'Inventario',
+    'ui_runtime': 'Runtime UI'
+  };
+  return names[component] || component;
+}
+
+function startWatchdogPoll() {
+  stopWatchdogPoll();
+  refreshWatchdogHealth();
+  watchdogPollId = setInterval(refreshWatchdogHealth, 15000); // Update every 15s
+}
+
+function stopWatchdogPoll() {
+  if (watchdogPollId) {
+    clearInterval(watchdogPollId);
+    watchdogPollId = null;
+  }
+}
+
+if (watchdogRefreshBtn) {
+  watchdogRefreshBtn.addEventListener('click', refreshWatchdogHealth);
+}
+
 function loadDebugConfig() {
   try {
     appApi().GetDebugConfig().then(function (cfg) {
-      if (debugSchemeEl) debugSchemeEl.value = cfg.scheme || 'https';
-      if (debugServerEl) debugServerEl.value = cfg.server || '';
+      if (apiSchemeEl) apiSchemeEl.value = cfg.apiScheme || 'https';
+      if (apiServerEl) apiServerEl.value = cfg.apiServer || '';
+      if (natsServerEl) natsServerEl.value = cfg.natsServer || '';
       if (debugAuthTokenEl) debugAuthTokenEl.value = cfg.authToken || '';
       if (debugAgentIDEl) debugAgentIDEl.value = cfg.agentId || '';
       updateDebugResponseLabel();
     }).catch(function () {});
   } catch (e) {}
   startAgentStatusPoll();
+  startWatchdogPoll();
 }
 
 function updateDebugResponseLabel() {
   if (!debugResponseLabelEl) return;
-  var scheme = debugSchemeEl ? String(debugSchemeEl.value || '').toLowerCase() : 'https';
-  if (scheme === 'nats') {
-    debugResponseLabelEl.innerHTML = 'Resposta de <code>NATS INFO</code>';
-  } else {
-    debugResponseLabelEl.innerHTML = 'Resposta de <code>/api/agent-auth/me</code>';
-  }
-}
-
-if (debugSchemeEl) {
-  debugSchemeEl.addEventListener('change', updateDebugResponseLabel);
+  debugResponseLabelEl.innerHTML = 'Resposta do teste de conexao';
 }
 
 if (debugSaveBtn) {
   debugSaveBtn.addEventListener('click', function () {
     setDebugStatus('Salvando...', '');
     appApi().SetDebugConfig({
-      scheme: debugSchemeEl ? debugSchemeEl.value : 'https',
-      server: debugServerEl ? debugServerEl.value.trim() : '',
+      apiScheme: apiSchemeEl ? apiSchemeEl.value : 'https',
+      apiServer: apiServerEl ? apiServerEl.value.trim() : '',
+      natsServer: natsServerEl ? natsServerEl.value.trim() : '',
       authToken: debugAuthTokenEl ? debugAuthTokenEl.value : '',
       agentId: debugAgentIDEl ? debugAgentIDEl.value.trim() : '',
     }).then(function () {
+      workflowStatesCache = null;
+      workflowStatesCacheKey = '';
       setDebugStatus('Configuracao salva com sucesso.', 'success');
       setTimeout(refreshAgentStatus, 1500);
     }).catch(function (err) {
@@ -2207,8 +2884,9 @@ if (debugTestBtn) {
     if (debugResponseWrapEl) debugResponseWrapEl.classList.add('hidden');
     if (debugResponseEl) debugResponseEl.textContent = '';
     appApi().TestDebugConnection({
-      scheme: debugSchemeEl ? debugSchemeEl.value : 'https',
-      server: debugServerEl ? debugServerEl.value.trim() : '',
+      apiScheme: apiSchemeEl ? apiSchemeEl.value : 'https',
+      apiServer: apiServerEl ? apiServerEl.value.trim() : '',
+      natsServer: natsServerEl ? natsServerEl.value.trim() : '',
       authToken: debugAuthTokenEl ? debugAuthTokenEl.value : '',
       agentId: debugAgentIDEl ? debugAgentIDEl.value.trim() : '',
     }).then(function (body) {

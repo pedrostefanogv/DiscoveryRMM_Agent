@@ -62,6 +62,8 @@ func main() {
 			if !app.ShouldHideOnClose() {
 				return false
 			}
+			// Limpar caches em memória antes de ir para o tray
+			app.clearMemoryCaches()
 			wailsRuntime.WindowHide(ctx)
 			return true // hide to tray instead of quitting
 		},

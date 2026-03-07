@@ -342,6 +342,7 @@
           <div class="chat-input-wrap">
             <textarea id="chatInput" class="chat-input" placeholder="Digite sua mensagem... (Enter para enviar, Shift+Enter para nova linha)" rows="2" spellcheck="true" lang="pt-BR" autocapitalize="sentences" autocomplete="on"></textarea>
             <button id="chatSendBtn" class="btn primary chat-send-btn">Enviar</button>
+            <button id="chatStopBtn" class="btn danger chat-stop-btn hidden">Stop</button>
           </div>
 
           <div id="chatLogsModal" class="chat-logs-modal hidden" aria-hidden="true">
@@ -363,54 +364,132 @@
       <main id="supportView" class="page-content hidden" role="tabpanel" aria-labelledby="tabSupport">
         <section class="support-panel">
           <div class="statusbar">
-            <span class="meta">Suporte — abertura e acompanhamento de chamados</span>
+            <div>
+              <strong>Suporte</strong>
+              <div class="meta">Chamados vinculados a este agente</div>
+            </div>
+            <div class="actions">
+              <button id="refreshTicketsBtn" class="btn subtle">Atualizar Lista</button>
+              <button id="newTicketBtn" class="btn primary">+ Novo Chamado</button>
+            </div>
+          </div>
+
+          <!-- Agent context banner -->
+          <div id="agentContextBanner" class="agent-ctx-banner hidden">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+            <span id="agentContextText" class="meta"></span>
+          </div>
+          <div id="agentContextError" class="agent-ctx-error hidden">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            <span id="agentContextErrorText" class="meta"></span>
           </div>
 
           <div class="support-layout">
-            <!-- Formulário de abertura -->
-            <div class="support-form-wrap">
-              <h2>Abrir Chamado</h2>
-              <form id="supportForm" class="support-form" autocomplete="off">
-                <div class="form-field">
-                  <label for="ticketSubject">Assunto</label>
-                  <input id="ticketSubject" type="text" placeholder="Resumo do problema" required />
-                </div>
-                <div class="form-field">
-                  <label for="ticketCategory">Categoria</label>
-                  <select id="ticketCategory" required>
-                    <option value="">Selecione...</option>
-                    <option value="Hardware">Hardware</option>
-                    <option value="Software">Software</option>
-                    <option value="Rede">Rede</option>
-                    <option value="Acesso">Acesso / Permissoes</option>
-                    <option value="Email">E-mail</option>
-                    <option value="Impressora">Impressora</option>
-                    <option value="VPN">VPN</option>
-                    <option value="Outro">Outro</option>
-                  </select>
-                </div>
-                <div class="form-field">
-                  <label for="ticketPriority">Prioridade</label>
-                  <select id="ticketPriority" required>
-                    <option value="Baixa">Baixa</option>
-                    <option value="Media" selected>Media</option>
-                    <option value="Alta">Alta</option>
-                    <option value="Critica">Critica</option>
-                  </select>
-                </div>
-                <div class="form-field">
-                  <label for="ticketDescription">Descricao</label>
-                  <textarea id="ticketDescription" rows="5" placeholder="Descreva o problema com detalhes..." required></textarea>
-                </div>
-                <button type="submit" class="btn primary">Enviar Chamado</button>
-              </form>
+            <!-- Left: ticket list -->
+            <div class="support-tickets-section">
+              <div class="support-sec-header">
+                <span class="meta">Meus Chamados</span>
+                <span id="ticketsLoading" class="tickets-loading hidden">Carregando...</span>
+              </div>
+              <div id="supportTicketsList" class="support-tickets-list">
+                <div class="meta">Nenhum chamado.</div>
+              </div>
             </div>
 
-            <!-- Lista de chamados -->
-            <div class="support-tickets-wrap">
-              <h2>Meus Chamados</h2>
-              <div id="supportTicketsList" class="support-tickets-list">
-                <div class="meta">Nenhum chamado aberto.</div>
+            <!-- Right: create form / ticket detail -->
+            <div class="support-side-panel">
+              <!-- Create form (default) -->
+              <div id="supportCreateForm" class="support-form-card">
+                <h3>Abrir Chamado</h3>
+                <form id="supportForm" class="support-form" autocomplete="off">
+                  <div class="form-field">
+                    <label for="ticketTitle">Título *</label>
+                    <input id="ticketTitle" type="text" placeholder="Resumo do problema" required maxlength="200" />
+                  </div>
+                  <div class="form-row">
+                    <div class="form-field">
+                      <label for="ticketCategory">Categoria</label>
+                      <select id="ticketCategory">
+                        <option value="">Selecione...</option>
+                        <option value="Hardware">Hardware</option>
+                        <option value="Software">Software</option>
+                        <option value="Rede">Rede</option>
+                        <option value="Acesso">Acesso / Permissões</option>
+                        <option value="Email">E-mail</option>
+                        <option value="Impressora">Impressora</option>
+                        <option value="VPN">VPN</option>
+                        <option value="Outro">Outro</option>
+                      </select>
+                    </div>
+                    <div class="form-field">
+                      <label for="ticketPriority">Prioridade</label>
+                      <select id="ticketPriority">
+                        <option value="1">Baixa</option>
+                        <option value="2" selected>Média</option>
+                        <option value="3">Alta</option>
+                        <option value="4">Crítica</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div class="form-field">
+                    <label for="ticketDescription">Descrição *</label>
+                    <textarea id="ticketDescription" rows="6" placeholder="Descreva o problema com detalhes..." required></textarea>
+                  </div>
+                  <div id="ticketFormStatus" class="form-status hidden"></div>
+                  <button type="submit" id="submitTicketBtn" class="btn primary full">Enviar Chamado</button>
+                </form>
+              </div>
+
+              <!-- Ticket detail (hidden by default) -->
+              <div id="supportTicketDetail" class="support-form-card hidden">
+                <button id="backToFormBtn" class="btn subtle back-btn">← Voltar ao formulário</button>
+                <div class="ticket-detail-top">
+                  <span id="ticketDetailId" class="ticket-id-badge"></span>
+                  <span id="ticketDetailStatus" class="ticket-status-badge"></span>
+                  <span id="ticketDetailPriority" class="ticket-priority-badge"></span>
+                </div>
+                <h3 id="ticketDetailTitle" class="ticket-detail-title"></h3>
+                <div id="ticketDetailMeta" class="ticket-detail-meta"></div>
+                <div id="ticketDetailDesc" class="ticket-detail-desc"></div>
+
+                <div id="ticketClosePanel" class="ticket-close-panel">
+                  <h4>Fechar Chamado</h4>
+                  <div class="form-row">
+                    <div class="form-field">
+                      <label for="closeTicketRating">Avaliação (0-5)</label>
+                      <select id="closeTicketRating">
+                        <option value="">Sem avaliação</option>
+                        <option value="0">0</option>
+                        <option value="1">1</option>
+                        <option value="2">2</option>
+                        <option value="3">3</option>
+                        <option value="4">4</option>
+                        <option value="5">5</option>
+                      </select>
+                    </div>
+                    <div class="form-field">
+                      <label for="closeTicketWorkflowStateSelect">Estado final (opcional)</label>
+                      <select id="closeTicketWorkflowStateSelect">
+                        <option value="">Fechar com estado padrão</option>
+                      </select>
+                      <input id="closeTicketWorkflowStateId" class="hidden" type="text" placeholder="GUID do estado final customizado" />
+                    </div>
+                  </div>
+                  <div class="form-field">
+                    <label for="closeTicketComment">Comentário de fechamento (opcional)</label>
+                    <textarea id="closeTicketComment" rows="3" placeholder="Descreva a solução aplicada..."></textarea>
+                  </div>
+                  <button id="closeTicketBtn" class="btn danger">Fechar Chamado</button>
+                </div>
+
+                <div class="comments-section">
+                  <h4>Comentários</h4>
+                  <div id="commentsList" class="comments-list"><div class="meta">Carregando...</div></div>
+                  <div class="comment-compose">
+                    <textarea id="commentInput" rows="3" placeholder="Escreva um comentário..."></textarea>
+                    <button id="submitCommentBtn" class="btn primary">Enviar Comentário</button>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -478,27 +557,44 @@
             </div>
           </div>
 
+          <!-- Watchdog Health Monitor -->
+          <div class="debug-watchdog-wrap">
+            <h2>Monitor de Saude (Watchdog)</h2>
+            <div class="watchdog-info">
+              <p class="meta">Monitoramento automatico de componentes criticos. Alertas e recuperacao automatica em caso de travamentos.</p>
+            </div>
+            <div id="watchdogHealthContainer" class="watchdog-health-container">
+              <div class="watchdog-loading">Carregando status...</div>
+            </div>
+            <div class="watchdog-actions">
+              <button id="watchdogRefreshBtn" class="btn subtle">Atualizar Status</button>
+            </div>
+          </div>
+
           <div class="debug-config-wrap">
             <h2>Configuracoes de Conexao</h2>
             <div class="debug-config-form">
               <div class="form-field">
-                <label for="debugServer">Servidor</label>
+                <label for="apiServer">Servidor API (HTTP/HTTPS)</label>
                 <div class="debug-server-row">
-                  <select id="debugScheme" class="debug-scheme-select">
+                  <select id="apiScheme" class="debug-scheme-select">
                     <option value="https">https://</option>
                     <option value="http">http://</option>
-                    <option value="nats">nats://</option>
                   </select>
-                  <input id="debugServer" type="text" placeholder="servidor.exemplo.com:8080" autocomplete="off" spellcheck="false" />
+                  <input id="apiServer" type="text" placeholder="api.exemplo.com:5288" autocomplete="off" spellcheck="false" />
                 </div>
               </div>
               <div class="form-field">
-                <label for="debugAuthToken">Token de Autenticacao</label>
+                <label for="debugAuthToken">Token de Autenticacao (API)</label>
                 <input id="debugAuthToken" type="password" placeholder="Bearer token..." autocomplete="off" />
               </div>
               <div class="form-field">
-                <label for="debugAgentID">Agent ID</label>
-                <input id="debugAgentID" type="text" placeholder="agent-xxxx" autocomplete="off" spellcheck="false" />
+                <label for="natsServer">Servidor NATS (Comandos)</label>
+                <input id="natsServer" type="text" placeholder="nats.exemplo.com:4222" autocomplete="off" spellcheck="false" />
+              </div>
+              <div class="form-field">
+                <label for="debugAgentID">Agent ID (NATS)</label>
+                <input id="debugAgentID" type="text" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" autocomplete="off" spellcheck="false" />
               </div>
               <div class="debug-actions">
                 <button id="debugTestBtn" class="btn subtle">Testar Conexao</button>

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -23,12 +25,14 @@ import (
 	"winget-store/internal/agentconn"
 	"winget-store/internal/ai"
 	"winget-store/internal/data"
+	"winget-store/internal/database"
 	"winget-store/internal/export"
 	"winget-store/internal/inventory"
 	"winget-store/internal/mcp"
 	"winget-store/internal/models"
 	"winget-store/internal/processutil"
 	"winget-store/internal/services"
+	"winget-store/internal/watchdog"
 	"winget-store/internal/winget"
 )
 
@@ -85,15 +89,108 @@ func (e *exportConfig) set(v bool) {
 	e.redact = v
 }
 
-// SupportTicket represents a mock support ticket.
-type SupportTicket struct {
-	ID          string `json:"id"`
-	Subject     string `json:"subject"`
-	Category    string `json:"category"`
-	Priority    string `json:"priority"`
+// AgentInfo holds key identifiers resolved from the server for the connected agent.
+type AgentInfo struct {
+	AgentID  string `json:"agentId"`
+	ClientID string `json:"clientId"`
+	SiteID   string `json:"siteId"`
+	Hostname string `json:"hostname"`
+	Name     string `json:"displayName"`
+}
+
+// APIWorkflowState is the workflow state embedded in a ticket response.
+type APIWorkflowState struct {
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Color        string `json:"color"`
+	IsInitial    bool   `json:"isInitial"`
+	IsFinal      bool   `json:"isFinal"`
+	DisplayOrder int    `json:"displayOrder"`
+}
+
+func (w *APIWorkflowState) UnmarshalJSON(data []byte) error {
+	type alias APIWorkflowState
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+
+	var out alias
+	out.ID = strings.TrimSpace(fmt.Sprint(raw["id"]))
+	out.Name = strings.TrimSpace(fmt.Sprint(raw["name"]))
+	out.Color = strings.TrimSpace(fmt.Sprint(raw["color"]))
+	out.IsInitial = toBool(raw["isInitial"], raw["initial"])
+	out.IsFinal = toBool(raw["isFinal"], raw["final"], raw["isTerminal"])
+	out.DisplayOrder = toInt(raw["displayOrder"], raw["order"], raw["sortOrder"], raw["position"])
+	*w = APIWorkflowState(out)
+	return nil
+}
+
+// TicketPriority normalizes priority values from API responses.
+// The backend may return integer (1..4) or enum strings (Low..Critical).
+type TicketPriority int
+
+func (p *TicketPriority) UnmarshalJSON(data []byte) error {
+	trimmed := strings.TrimSpace(string(data))
+	if trimmed == "" || trimmed == "null" {
+		*p = TicketPriority(0)
+		return nil
+	}
+
+	var n int
+	if err := json.Unmarshal(data, &n); err == nil {
+		*p = TicketPriority(normalizePriority(n))
+		return nil
+	}
+
+	var s string
+	if err := json.Unmarshal(data, &s); err == nil {
+		*p = TicketPriority(priorityLabelToInt(s))
+		return nil
+	}
+
+	return fmt.Errorf("prioridade inválida")
+}
+
+// APITicket is the ticket representation returned by the remote API.
+type APITicket struct {
+	ID            string            `json:"id"`
+	Title         string            `json:"title"`
+	Description   string            `json:"description"`
+	Priority      TicketPriority    `json:"priority"`
+	Category      *string           `json:"category,omitempty"`
+	AgentID       *string           `json:"agentId,omitempty"`
+	ClientID      string            `json:"clientId"`
+	SiteID        *string           `json:"siteId,omitempty"`
+	CreatedAt     string            `json:"createdAt"`
+	WorkflowState *APIWorkflowState `json:"workflowState,omitempty"`
+	Rating        *int              `json:"rating,omitempty"`
+	RatedAt       *string           `json:"ratedAt,omitempty"`
+	RatedBy       *string           `json:"ratedBy,omitempty"`
+}
+
+// TicketComment is a comment on a ticket.
+type TicketComment struct {
+	ID         string `json:"id"`
+	Author     string `json:"author"`
+	Content    string `json:"content"`
+	IsInternal bool   `json:"isInternal"`
+	CreatedAt  string `json:"createdAt"`
+}
+
+// CreateTicketInput is the frontend-facing request to create a ticket.
+type CreateTicketInput struct {
+	Title       string `json:"title"`
 	Description string `json:"description"`
-	Status      string `json:"status"`
-	CreatedAt   string `json:"createdAt"`
+	Priority    int    `json:"priority"` // 1=Baixa 2=Média 3=Alta 4=Crítica
+	Category    string `json:"category"`
+}
+
+// CloseTicketInput is the frontend-facing request to close a ticket.
+type CloseTicketInput struct {
+	Rating          *int   `json:"rating,omitempty"`
+	Comment         string `json:"comment,omitempty"`
+	WorkflowStateID string `json:"workflowStateId,omitempty"`
 }
 
 // KnowledgeArticle represents a knowledge base article for support guidance.
@@ -109,30 +206,30 @@ type KnowledgeArticle struct {
 	UpdatedAt   string   `json:"updatedAt"`
 }
 
-// ticketStore manages an in-memory list of support tickets.
-type ticketStore struct {
-	mu      sync.RWMutex
-	tickets []SupportTicket
-	nextID  int
+// agentInfoCache caches the agent identifiers resolved from /api/agent-auth/me.
+type agentInfoCache struct {
+	mu     sync.RWMutex
+	info   AgentInfo
+	loaded bool
 }
 
-func (ts *ticketStore) create(t SupportTicket) SupportTicket {
-	ts.mu.Lock()
-	defer ts.mu.Unlock()
-	ts.nextID++
-	t.ID = fmt.Sprintf("TK-%04d", ts.nextID)
-	t.Status = "Aberto"
-	t.CreatedAt = time.Now().Format("02/01/2006 15:04")
-	ts.tickets = append(ts.tickets, t)
-	return t
+func (c *agentInfoCache) get() (AgentInfo, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.info, c.loaded
 }
 
-func (ts *ticketStore) getAll() []SupportTicket {
-	ts.mu.RLock()
-	defer ts.mu.RUnlock()
-	out := make([]SupportTicket, len(ts.tickets))
-	copy(out, ts.tickets)
-	return out
+func (c *agentInfoCache) set(info AgentInfo) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.info = info
+	c.loaded = true
+}
+
+func (c *agentInfoCache) invalidate() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.loaded = false
 }
 
 // logBuffer stores command output lines for the embedded terminal view.
@@ -164,13 +261,28 @@ func (l *logBuffer) clear() {
 	l.lines = nil
 }
 
-type App struct {
-	ctx        context.Context
-	cancel     context.CancelFunc
-	catalogSvc *services.CatalogService
-	appsSvc    *services.AppsService
-	invSvc     *services.InventoryService
+// getDataDir retorna o diretório de dados da aplicação
+func getDataDir() string {
+	if runtime.GOOS == "windows" {
+		if localAppData := strings.TrimSpace(os.Getenv("LOCALAPPDATA")); localAppData != "" {
+			return filepath.Join(localAppData, "Discovery")
+		}
+	}
+	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
+		return filepath.Join(home, ".discovery")
+	}
+	return "."
+}
 
+type App struct {
+	ctx           context.Context
+	cancel        context.CancelFunc
+	catalogSvc    *services.CatalogService
+	catalogClient *data.HTTPClient
+	appsSvc       *services.AppsService
+	invSvc        *services.InventoryService
+
+	db        *database.DB
 	invCache  inventoryCache
 	exportCfg exportConfig
 	logs      logBuffer
@@ -178,8 +290,9 @@ type App struct {
 	mcpRegistry *mcp.Registry
 	chatSvc     *ai.Service
 	agentConn   *agentconn.Runtime
-	tickets     ticketStore
+	agentInfo   agentInfoCache
 	knowledge   []KnowledgeArticle
+	watchdogSvc *watchdog.Watchdog
 
 	debugMu     sync.RWMutex
 	debugConfig DebugConfig
@@ -204,13 +317,18 @@ func NewApp() *App {
 	reg := mcp.NewRegistry()
 	chatSvc := ai.NewService(reg)
 
+	// Initialize watchdog with default config
+	watchdogSvc := watchdog.New(watchdog.DefaultConfig())
+
 	a := &App{
-		catalogSvc:  services.NewCatalogService(catalogClient),
-		appsSvc:     services.NewAppsService(wingetClient),
-		invSvc:      services.NewInventoryService(inventoryProvider),
-		mcpRegistry: reg,
-		chatSvc:     chatSvc,
-		knowledge:   mockKnowledgeBaseArticles(),
+		catalogSvc:    services.NewCatalogService(catalogClient),
+		catalogClient: catalogClient,
+		appsSvc:       services.NewAppsService(wingetClient),
+		invSvc:        services.NewInventoryService(inventoryProvider),
+		mcpRegistry:   reg,
+		chatSvc:       chatSvc,
+		knowledge:     mockKnowledgeBaseArticles(),
+		watchdogSvc:   watchdogSvc,
 	}
 	a.agentConn = agentconn.NewRuntime(agentconn.Options{
 		LoadConfig: func() agentconn.Config {
@@ -235,6 +353,9 @@ func NewApp() *App {
 	// Register all Discovery tools in the MCP registry.
 	mcp.RegisterDiscoveryTools(reg, a)
 
+	// Register watchdog recovery actions for critical components
+	a.registerWatchdogRecovery()
+
 	return a
 }
 
@@ -242,13 +363,40 @@ func (a *App) startup(ctx context.Context) {
 	ctx, cancel := context.WithCancel(ctx)
 	a.ctx = ctx
 	a.cancel = cancel
+
+	// Start watchdog monitoring
+	a.watchdogSvc.Start(ctx)
+	log.Println("[startup] watchdog iniciado")
+
 	a.startTray()
 	a.applyIdleMode(true)
+
+	// Inicializar database SQLite
+	dataDir := getDataDir()
+	db, err := database.Open(dataDir)
+	if err != nil {
+		log.Printf("[startup] AVISO: falha ao abrir database: %v", err)
+	} else {
+		a.db = db
+		log.Printf("[startup] database SQLite inicializado em %s", dataDir)
+
+		// Configurar cache persistente no catalogClient
+		if a.catalogClient != nil {
+			a.catalogClient.SetDatabase(db)
+		}
+	}
+
 	a.startupWg.Add(1)
-	go func() {
+	watchdog.SafeGoWithContext(ctx, "inventory-startup", a.watchdogSvc, watchdog.ComponentInventory, func(ctx context.Context) {
 		defer a.startupWg.Done()
 		done := a.beginActivity("inventario inicial")
 		defer done()
+
+		// Periodic heartbeat during inventory collection
+		heartbeat := watchdog.NewPeriodicHeartbeat(a.watchdogSvc, watchdog.ComponentInventory, 20*time.Second)
+		heartbeat.Start(ctx)
+		defer heartbeat.Stop()
+
 		report, err := a.invSvc.GetInventory(ctx)
 		if err != nil {
 			log.Printf("[startup] falha ao coletar inventario em background: %v", err)
@@ -259,13 +407,19 @@ func (a *App) startup(ctx context.Context) {
 		}
 		a.invCache.set(report)
 		a.syncInventoryOnStartup(ctx, report)
-	}()
+	})
 
 	a.startupWg.Add(1)
-	go func() {
+	watchdog.SafeGoWithContext(ctx, "agent-connection", a.watchdogSvc, watchdog.ComponentAgent, func(ctx context.Context) {
 		defer a.startupWg.Done()
+
+		// Periodic heartbeat for agent connection
+		heartbeat := watchdog.NewPeriodicHeartbeat(a.watchdogSvc, watchdog.ComponentAgent, 25*time.Second)
+		heartbeat.Start(ctx)
+		defer heartbeat.Stop()
+
 		a.agentConn.Run(ctx)
-	}()
+	})
 }
 
 // shutdown is called when the application is closing; it cancels background
@@ -273,10 +427,24 @@ func (a *App) startup(ctx context.Context) {
 func (a *App) shutdown(ctx context.Context) {
 	systray.Quit()
 	a.applyIdleMode(false)
+
+	// Stop watchdog
+	if a.watchdogSvc != nil {
+		a.watchdogSvc.Stop()
+		log.Println("[shutdown] watchdog parado")
+	}
+
 	if a.cancel != nil {
 		a.cancel()
 	}
 	a.startupWg.Wait()
+
+	// Fechar database
+	if a.db != nil {
+		if err := a.db.Close(); err != nil {
+			log.Printf("[shutdown] erro ao fechar database: %v", err)
+		}
+	}
 }
 
 // RequestAppClose allows the next window-close cycle to terminate the process.
@@ -293,6 +461,22 @@ func (a *App) ShouldHideOnClose() bool {
 	return !a.allowClose
 }
 
+// clearMemoryCaches limpa caches em memória para economizar recursos quando
+// o app está minimizado no tray. Os dados persistem no SQLite e serão
+// recarregados quando necessário.
+func (a *App) clearMemoryCaches() {
+	// Limpar cache de AgentInfo em memória (mantém no SQLite)
+	a.agentInfo.invalidate()
+
+	// Limpar cache de inventário em memória
+	a.invCache.mu.Lock()
+	a.invCache.loaded = false
+	a.invCache.report = models.InventoryReport{}
+	a.invCache.mu.Unlock()
+
+	log.Println("[tray] caches em memória limpos para economizar recursos")
+}
+
 // GetStartupError returns the error (if any) from the background startup
 // inventory collection, so the frontend can display a meaningful message.
 func (a *App) GetStartupError() string {
@@ -302,6 +486,84 @@ func (a *App) GetStartupError() string {
 		return a.startupErr.Error()
 	}
 	return ""
+}
+
+// registerWatchdogRecovery defines recovery actions for critical components.
+func (a *App) registerWatchdogRecovery() {
+	// Tray recovery: attempt to restart systray (limited effectiveness)
+	a.watchdogSvc.RegisterRecovery(watchdog.ComponentTray, func(component watchdog.Component) error {
+		log.Println("[watchdog] tentando recuperar tray (limitado - systray nao suporta restart)")
+		// Systray doesn't support restart, but we can update state
+		a.updateTrayIdleState(false, true)
+		time.Sleep(2 * time.Second)
+		a.updateTrayIdleState(true, true)
+		return nil
+	})
+
+	// Agent connection recovery: signal reconnection attempt
+	a.watchdogSvc.RegisterRecovery(watchdog.ComponentAgent, func(component watchdog.Component) error {
+		log.Println("[watchdog] agente connection parece travado - verificando status")
+		status := a.agentConn.GetStatus()
+		if !status.Connected {
+			log.Println("[watchdog] agente desconectado - aguardando reconexao automatica")
+		}
+		return nil
+	})
+
+	// AI service recovery: stop any stuck stream
+	a.watchdogSvc.RegisterRecovery(watchdog.ComponentAI, func(component watchdog.Component) error {
+		log.Println("[watchdog] AI service travado - cancelando stream ativo")
+		stopped := a.chatSvc.StopStream()
+		if stopped {
+			log.Println("[watchdog] stream AI cancelado com sucesso")
+			wailsRuntime.EventsEmit(a.ctx, "chat:error", "Stream interrompido automaticamente por travamento")
+		}
+		return nil
+	})
+
+	// Inventory recovery: clear cache to force refresh
+	a.watchdogSvc.RegisterRecovery(watchdog.ComponentInventory, func(component watchdog.Component) error {
+		log.Println("[watchdog] inventario travado - limpando cache")
+		a.invCache.mu.Lock()
+		a.invCache.loaded = false
+		a.invCache.mu.Unlock()
+		return nil
+	})
+
+	// On unhealthy callback: emit event to frontend
+	a.watchdogSvc.OnUnhealthy(func(check watchdog.HealthCheck) {
+		if a.ctx != nil {
+			wailsRuntime.EventsEmit(a.ctx, "watchdog:unhealthy", map[string]interface{}{
+				"component":   string(check.Component),
+				"status":      string(check.Status),
+				"message":     check.Message,
+				"recoverable": check.Recoverable,
+			})
+		}
+	})
+}
+
+// GetWatchdogHealth returns the current health status of all monitored components.
+func (a *App) GetWatchdogHealth() []map[string]interface{} {
+	if a.watchdogSvc == nil {
+		return []map[string]interface{}{}
+	}
+
+	checks := a.watchdogSvc.GetHealth()
+	result := make([]map[string]interface{}, len(checks))
+
+	for i, check := range checks {
+		result[i] = map[string]interface{}{
+			"component":   string(check.Component),
+			"status":      string(check.Status),
+			"message":     check.Message,
+			"lastBeat":    check.LastBeat.Format(time.RFC3339),
+			"checkedAt":   check.CheckedAt.Format(time.RFC3339),
+			"recoverable": check.Recoverable,
+		}
+	}
+
+	return result
 }
 
 func (a *App) GetCatalog() (models.Catalog, error) {
@@ -726,10 +988,18 @@ func (a *App) persistDebugConfig(cfg DebugConfig) error {
 
 // DebugConfig holds server connection settings for the debug page.
 type DebugConfig struct {
-	Scheme    string `json:"scheme"`    // "http", "https" or "nats"
-	Server    string `json:"server"`    // hostname:port or IP
+	// API Server (HTTP/HTTPS) - para tickets, inventário, etc
+	ApiScheme string `json:"apiScheme"` // "http" or "https"
+	ApiServer string `json:"apiServer"` // hostname:port or IP
 	AuthToken string `json:"authToken"` // bearer token
-	AgentID   string `json:"agentId"`   // agent identifier
+
+	// NATS Server - para comandos de agente
+	NatsServer string `json:"natsServer"` // hostname:port for NATS
+	AgentID    string `json:"agentId"`    // agent identifier
+
+	// Deprecated: mantidos para compatibilidade com agentConn
+	Scheme string `json:"scheme,omitempty"` // "http", "https" or "nats"
+	Server string `json:"server,omitempty"` // hostname:port or IP
 }
 
 // GetDebugConfig returns the current debug configuration.
@@ -770,22 +1040,58 @@ func (a *App) GetAgentStatus() AgentStatus {
 
 // SetDebugConfig validates, stores and persists the debug connection settings.
 func (a *App) SetDebugConfig(cfg DebugConfig) error {
-	cfg.Scheme = strings.TrimSpace(strings.ToLower(cfg.Scheme))
-	if !isValidDebugScheme(cfg.Scheme) {
-		return fmt.Errorf("scheme invalido: use 'http', 'https' ou 'nats'")
-	}
-	if strings.TrimSpace(cfg.Server) == "" {
-		return fmt.Errorf("servidor nao pode ser vazio")
-	}
-	if cfg.Scheme == "nats" && !guidPattern.MatchString(strings.TrimSpace(cfg.AgentID)) {
-		return fmt.Errorf("agentId invalido para NATS: informe um GUID valido")
+	// Trim and normalize
+	cfg.ApiScheme = strings.TrimSpace(strings.ToLower(cfg.ApiScheme))
+	cfg.ApiServer = strings.TrimSpace(cfg.ApiServer)
+	cfg.NatsServer = strings.TrimSpace(cfg.NatsServer)
+	cfg.AgentID = strings.TrimSpace(cfg.AgentID)
+	cfg.AuthToken = strings.TrimSpace(cfg.AuthToken)
+
+	// Validação do servidor API
+	if cfg.ApiServer != "" {
+		if cfg.ApiScheme != "http" && cfg.ApiScheme != "https" {
+			return fmt.Errorf("apiScheme invalido: use 'http' ou 'https'")
+		}
 	}
 
-	a.logs.append(fmt.Sprintf("[debug] atualizando configuracao: scheme=%s server=%s agentId=%s", cfg.Scheme, strings.TrimSpace(cfg.Server), strings.TrimSpace(cfg.AgentID)))
+	// Validação do servidor NATS
+	if cfg.NatsServer != "" {
+		if !guidPattern.MatchString(cfg.AgentID) {
+			return fmt.Errorf("agentId invalido para NATS: informe um GUID valido")
+		}
+	}
+
+	// Pelo menos um servidor deve estar configurado
+	if cfg.ApiServer == "" && cfg.NatsServer == "" {
+		return fmt.Errorf("configure pelo menos um servidor (API ou NATS)")
+	}
+
+	// Popula campos legados para compatibilidade com agentConn
+	// Prioriza NATS se ambos estiverem configurados (agente precisa de comandos)
+	if cfg.NatsServer != "" {
+		cfg.Scheme = "nats"
+		cfg.Server = cfg.NatsServer
+	} else if cfg.ApiServer != "" {
+		cfg.Scheme = cfg.ApiScheme
+		cfg.Server = cfg.ApiServer
+	}
+
+	a.logs.append(fmt.Sprintf("[debug] atualizando configuracao: api=%s://%s nats=%s agentId=%s",
+		cfg.ApiScheme, cfg.ApiServer, cfg.NatsServer, cfg.AgentID))
 
 	a.debugMu.Lock()
 	a.debugConfig = cfg
 	a.debugMu.Unlock()
+
+	// Invalidar cache em memória
+	a.agentInfo.invalidate()
+
+	// Invalidar cache em SQLite
+	if a.db != nil {
+		if err := a.db.CacheDelete("agent_info"); err != nil {
+			log.Printf("[debug] aviso: falha ao limpar cache SQLite: %v", err)
+		}
+	}
 
 	if err := a.persistDebugConfig(cfg); err != nil {
 		a.logs.append("[debug] falha ao persistir configuracao: " + err.Error())
@@ -799,92 +1105,105 @@ func (a *App) SetDebugConfig(cfg DebugConfig) error {
 	return nil
 }
 
-// TestDebugConnection calls GET {scheme}://{server}/api/agent-auth/me with the
-// Bearer token and returns the raw response body (or a descriptive error).
+// TestDebugConnection tests connectivity to configured servers and returns diagnostic info.
 func (a *App) TestDebugConnection(cfg DebugConfig) (string, error) {
-	cfg.Scheme = strings.TrimSpace(strings.ToLower(cfg.Scheme))
-	if !isValidDebugScheme(cfg.Scheme) {
-		return "", fmt.Errorf("scheme invalido: use 'http', 'https' ou 'nats'")
-	}
-	server := strings.TrimSpace(cfg.Server)
-	if server == "" {
-		return "", fmt.Errorf("servidor nao pode ser vazio")
-	}
-	a.logs.append(fmt.Sprintf("[debug-test] iniciando teste: scheme=%s server=%s agentId=%s", cfg.Scheme, server, strings.TrimSpace(cfg.AgentID)))
-	if cfg.Scheme == "nats" {
-		if !guidPattern.MatchString(strings.TrimSpace(cfg.AgentID)) {
-			err := fmt.Errorf("agentId invalido para NATS: informe um GUID valido")
-			a.logs.append("[debug-test] falha: " + err.Error())
-			return "", err
-		}
-		out, err := agentconn.FetchNATSInfo(server, 10*time.Second)
+	cfg.ApiScheme = strings.TrimSpace(strings.ToLower(cfg.ApiScheme))
+	cfg.ApiServer = strings.TrimSpace(cfg.ApiServer)
+	cfg.NatsServer = strings.TrimSpace(cfg.NatsServer)
+	cfg.AgentID = strings.TrimSpace(cfg.AgentID)
+	cfg.AuthToken = strings.TrimSpace(cfg.AuthToken)
+
+	var results []string
+
+	// Testa servidor API se configurado
+	if cfg.ApiServer != "" {
+		a.logs.append(fmt.Sprintf("[debug-test] testando API: %s://%s", cfg.ApiScheme, cfg.ApiServer))
+		target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/agent-auth/me"
+		client := &http.Client{Timeout: 10 * time.Second}
+		req, err := http.NewRequest(http.MethodGet, target, nil)
 		if err != nil {
-			a.logs.append("[debug-test] falha no teste NATS: " + err.Error())
+			return "", fmt.Errorf("URL invalida para API: %w", err)
+		}
+		if cfg.AuthToken != "" {
+			req.Header.Set("Authorization", "Bearer "+cfg.AuthToken)
+		}
+		if cfg.AgentID != "" {
+			req.Header.Set("X-Agent-ID", cfg.AgentID)
+		}
+
+		resp, err := client.Do(req)
+		if err != nil {
+			wrapped := fmt.Errorf("falha ao conectar na API %s: %w", target, err)
+			a.logs.append("[debug-test] " + wrapped.Error())
+			return "", wrapped
+		}
+		defer resp.Body.Close()
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			wrapped := fmt.Errorf("erro ao ler resposta da API (%s): %w", resp.Status, err)
+			a.logs.append("[debug-test] " + wrapped.Error())
+			return "", wrapped
+		}
+
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			wrapped := fmt.Errorf("API HTTP %s: %s", resp.Status, strings.TrimSpace(string(body)))
+			a.logs.append("[debug-test] " + wrapped.Error())
+			return "", wrapped
+		}
+
+		// Pretty-print JSON if possible
+		var pretty interface{}
+		if json.Unmarshal(body, &pretty) == nil {
+			if formatted, err := json.MarshalIndent(pretty, "", "  "); err == nil {
+				results = append(results, "=== Servidor API ===\n"+string(formatted))
+			} else {
+				results = append(results, "=== Servidor API ===\n"+string(body))
+			}
+		} else {
+			results = append(results, "=== Servidor API ===\n"+string(body))
+		}
+		a.logs.append("[debug-test] teste API concluido com sucesso")
+	}
+
+	// Testa servidor NATS se configurado
+	if cfg.NatsServer != "" {
+		if !guidPattern.MatchString(cfg.AgentID) {
+			err := fmt.Errorf("agentId invalido para NATS: informe um GUID valido")
+			a.logs.append("[debug-test] " + err.Error())
 			return "", err
 		}
-		a.logs.append("[debug-test] teste NATS concluido com sucesso")
-		return out, nil
-	}
-
-	target := cfg.Scheme + "://" + server + "/api/agent-auth/me"
-	client := &http.Client{Timeout: 10 * time.Second}
-	req, err := http.NewRequest(http.MethodGet, target, nil)
-	if err != nil {
-		return "", fmt.Errorf("URL invalida: %w", err)
-	}
-	if strings.TrimSpace(cfg.AuthToken) != "" {
-		req.Header.Set("Authorization", "Bearer "+cfg.AuthToken)
-	}
-	if strings.TrimSpace(cfg.AgentID) != "" {
-		req.Header.Set("X-Agent-ID", cfg.AgentID)
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		wrapped := fmt.Errorf("falha ao conectar em %s: %w", target, err)
-		a.logs.append("[debug-test] falha no teste HTTP: " + wrapped.Error())
-		return "", wrapped
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		wrapped := fmt.Errorf("erro ao ler resposta (%s): %w", resp.Status, err)
-		a.logs.append("[debug-test] falha no teste HTTP: " + wrapped.Error())
-		return "", wrapped
-	}
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		wrapped := fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(body)))
-		a.logs.append("[debug-test] falha no teste HTTP: " + wrapped.Error())
-		return "", wrapped
-	}
-
-	// Pretty-print JSON if possible
-	var pretty interface{}
-	if json.Unmarshal(body, &pretty) == nil {
-		if formatted, err := json.MarshalIndent(pretty, "", "  "); err == nil {
-			a.logs.append("[debug-test] teste HTTP concluido com sucesso")
-			return string(formatted), nil
+		a.logs.append(fmt.Sprintf("[debug-test] testando NATS: %s", cfg.NatsServer))
+		out, err := agentconn.FetchNATSInfo(cfg.NatsServer, 10*time.Second)
+		if err != nil {
+			wrapped := fmt.Errorf("falha ao conectar no NATS %s: %w", cfg.NatsServer, err)
+			a.logs.append("[debug-test] " + wrapped.Error())
+			return "", wrapped
 		}
+		results = append(results, "=== Servidor NATS ===\n"+out)
+		a.logs.append("[debug-test] teste NATS concluido com sucesso")
 	}
-	a.logs.append("[debug-test] teste HTTP concluido com sucesso")
-	return string(body), nil
+
+	if len(results) == 0 {
+		return "", fmt.Errorf("nenhum servidor configurado para testar")
+	}
+
+	return strings.Join(results, "\n\n"), nil
 }
 
 // GetRealtimeStatus queries /api/realtime/status from the configured HTTP server.
 func (a *App) GetRealtimeStatus() (RealtimeStatus, error) {
 	cfg := a.GetDebugConfig()
-	cfg.Scheme = strings.TrimSpace(strings.ToLower(cfg.Scheme))
-	if cfg.Scheme != "http" && cfg.Scheme != "https" {
-		return RealtimeStatus{}, fmt.Errorf("status indisponivel: configure scheme http/https")
+	cfg.ApiScheme = strings.TrimSpace(strings.ToLower(cfg.ApiScheme))
+	cfg.ApiServer = strings.TrimSpace(cfg.ApiServer)
+	if cfg.ApiServer == "" {
+		return RealtimeStatus{}, fmt.Errorf("servidor API nao configurado")
 	}
-	server := strings.TrimSpace(cfg.Server)
-	if server == "" {
-		return RealtimeStatus{}, fmt.Errorf("servidor nao pode ser vazio")
+	if cfg.ApiScheme != "http" && cfg.ApiScheme != "https" {
+		return RealtimeStatus{}, fmt.Errorf("apiScheme invalido: use http ou https")
 	}
 
-	target := cfg.Scheme + "://" + server + "/api/realtime/status"
+	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/realtime/status"
 	req, err := http.NewRequest(http.MethodGet, target, nil)
 	if err != nil {
 		return RealtimeStatus{}, fmt.Errorf("URL invalida: %w", err)
@@ -1010,17 +1329,50 @@ type agentSoftwareItem struct {
 
 func (a *App) syncInventoryOnStartup(ctx context.Context, report models.InventoryReport) {
 	cfg := a.GetDebugConfig()
-	server := strings.TrimSpace(cfg.Server)
-	if cfg.Scheme != "http" && cfg.Scheme != "https" {
-		a.logs.append("[agent-sync] ignorado: sincronizacao HTTP indisponivel para scheme atual")
+	cfg.ApiServer = strings.TrimSpace(cfg.ApiServer)
+	cfg.ApiScheme = strings.TrimSpace(strings.ToLower(cfg.ApiScheme))
+	if cfg.ApiServer == "" || strings.TrimSpace(cfg.AuthToken) == "" || strings.TrimSpace(cfg.AgentID) == "" {
+		a.logs.append("[agent-sync] ignorado: faltam apiServer/token/agentId no Debug")
 		return
 	}
-	if server == "" || strings.TrimSpace(cfg.AuthToken) == "" || strings.TrimSpace(cfg.AgentID) == "" {
-		a.logs.append("[agent-sync] ignorado: faltam server/token/agentId no Debug")
+	if cfg.ApiScheme != "http" && cfg.ApiScheme != "https" {
+		a.logs.append("[agent-sync] ignorado: apiScheme invalido (use http ou https)")
 		return
 	}
 
+	// Serializar payloads
 	hardwarePayload := buildAgentHardwareEnvelope(report)
+	hardwareBody, err := json.Marshal(hardwarePayload)
+	if err != nil {
+		a.logs.append("[agent-sync] falha ao serializar inventario: " + err.Error())
+		return
+	}
+
+	softwarePayload := buildAgentSoftwareEnvelope(report)
+	softwareBody, err := json.Marshal(softwarePayload)
+	if err != nil {
+		a.logs.append("[agent-sync] falha ao serializar softwares: " + err.Error())
+		return
+	}
+
+	// Verificar se deve sincronizar com a API
+	if a.db != nil {
+		shouldSync, reason, err := a.db.ShouldSyncInventory(cfg.AgentID, hardwareBody, softwareBody)
+		if err != nil {
+			a.logs.append("[agent-sync] erro ao verificar diff: " + err.Error())
+			// Continua e tenta sincronizar em caso de erro
+		} else if !shouldSync {
+			a.logs.append(fmt.Sprintf("[agent-sync] SYNC IGNORADO: %s", reason))
+			// Salvar snapshot local mesmo sem enviar para API
+			if err := a.db.SaveInventorySnapshot(cfg.AgentID, hardwareBody, softwareBody); err != nil {
+				a.logs.append("[agent-sync] aviso: falha ao salvar snapshot local: " + err.Error())
+			}
+			return
+		} else {
+			a.logs.append(fmt.Sprintf("[agent-sync] SYNC NECESSARIO: %s", reason))
+		}
+	}
+
 	a.logs.append(fmt.Sprintf(
 		"[agent-sync] hardware payload: collectedAt=%s disks=%d networkAdapters=%d memoryModules=%d hostname=%s",
 		hardwarePayload.InventoryCollectedAt,
@@ -1029,47 +1381,57 @@ func (a *App) syncInventoryOnStartup(ctx context.Context, report models.Inventor
 		len(hardwarePayload.MemoryModules),
 		hardwarePayload.Hostname,
 	))
-	hardwareBody, err := json.Marshal(hardwarePayload)
-	if err != nil {
-		a.logs.append("[agent-sync] falha ao serializar inventario: " + err.Error())
-	} else {
-		hardwareEndpoint := cfg.Scheme + "://" + server + "/api/agent-auth/me/hardware"
-		if err := a.sendAgentInventoryRequest(ctx, hardwareEndpoint, cfg, http.MethodPost, hardwareBody); err != nil {
-			a.logs.append("[agent-sync] POST hardware falhou: " + err.Error())
-			if err := a.sendAgentInventoryRequest(ctx, hardwareEndpoint, cfg, http.MethodPut, hardwareBody); err != nil {
-				a.logs.append("[agent-sync] PUT hardware falhou: " + err.Error())
-			} else {
-				a.logs.append("[agent-sync] inventario de hardware atualizado via PUT")
-			}
+
+	// Enviar hardware
+	hardwareEndpoint := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/agent-auth/me/hardware"
+	hardwareSuccess := false
+	if err := a.sendAgentInventoryRequest(ctx, hardwareEndpoint, cfg, http.MethodPost, hardwareBody); err != nil {
+		a.logs.append("[agent-sync] POST hardware falhou: " + err.Error())
+		if err := a.sendAgentInventoryRequest(ctx, hardwareEndpoint, cfg, http.MethodPut, hardwareBody); err != nil {
+			a.logs.append("[agent-sync] PUT hardware falhou: " + err.Error())
 		} else {
-			a.logs.append("[agent-sync] inventario de hardware enviado via POST")
+			a.logs.append("[agent-sync] inventario de hardware atualizado via PUT")
+			hardwareSuccess = true
 		}
+	} else {
+		a.logs.append("[agent-sync] inventario de hardware enviado via POST")
+		hardwareSuccess = true
 	}
 
-	softwarePayload := buildAgentSoftwareEnvelope(report)
 	a.logs.append(fmt.Sprintf(
 		"[agent-sync] software payload: collectedAt=%s softwareCount=%d",
 		softwarePayload.CollectedAt,
 		len(softwarePayload.Software),
 	))
-	softwareBody, err := json.Marshal(softwarePayload)
-	if err != nil {
-		a.logs.append("[agent-sync] falha ao serializar softwares: " + err.Error())
-		return
-	}
 
-	softwareEndpoint := cfg.Scheme + "://" + server + "/api/agent-auth/me/software"
+	// Enviar software
+	softwareEndpoint := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/agent-auth/me/software"
 	a.logs.append("[agent-sync] endpoint software: " + softwareEndpoint)
+	softwareSuccess := false
 	if err := a.sendAgentInventoryRequest(ctx, softwareEndpoint, cfg, http.MethodPost, softwareBody); err != nil {
 		a.logs.append("[agent-sync] POST software falhou: " + err.Error())
 		if err := a.sendAgentInventoryRequest(ctx, softwareEndpoint, cfg, http.MethodPut, softwareBody); err != nil {
 			a.logs.append("[agent-sync] PUT software falhou: " + err.Error())
-			return
+		} else {
+			a.logs.append("[agent-sync] inventario de software atualizado via PUT")
+			softwareSuccess = true
 		}
-		a.logs.append("[agent-sync] inventario de software atualizado via PUT")
-		return
+	} else {
+		a.logs.append("[agent-sync] inventario de software enviado via POST")
+		softwareSuccess = true
 	}
-	a.logs.append("[agent-sync] inventario de software enviado via POST")
+
+	// Se sync foi bem-sucedido, atualizar controle e salvar snapshot
+	if hardwareSuccess && softwareSuccess && a.db != nil {
+		if err := a.db.SaveInventorySnapshot(cfg.AgentID, hardwareBody, softwareBody); err != nil {
+			a.logs.append("[agent-sync] aviso: falha ao salvar snapshot: " + err.Error())
+		}
+		if err := a.db.UpdateLastSyncTime("inventory_sync:"+cfg.AgentID, "success"); err != nil {
+			a.logs.append("[agent-sync] aviso: falha ao atualizar timestamp de sync: " + err.Error())
+		} else {
+			a.logs.append("[agent-sync] snapshot salvo e timestamp atualizado")
+		}
+	}
 }
 
 func (a *App) sendAgentInventoryRequest(parent context.Context, endpoint string, cfg DebugConfig, method string, body []byte) error {
@@ -1601,24 +1963,66 @@ func (a *App) SendChatMessage(message string) (string, error) {
 //	chat:error   — error message (string)
 func (a *App) StartChatStream(message string) {
 	done := a.beginActivity("chat IA")
+
+	// Create stream monitor to detect stalled streams
+	streamMonitor := watchdog.NewStreamMonitor(
+		"ai-chat-stream",
+		90*time.Second, // Alert if no activity for 90s
+		func() {
+			// Stream stalled - force stop
+			log.Println("[watchdog] AI stream travado - forcando interrupcao")
+			a.chatSvc.StopStream()
+			if a.ctx != nil {
+				wailsRuntime.EventsEmit(a.ctx, "chat:error", "Stream interrompido automaticamente por inatividade")
+			}
+		},
+	)
+
 	go func() {
 		defer done()
+
+		// Start monitoring
+		streamMonitor.Start(a.ctx)
+		defer streamMonitor.Stop()
+
+		// Send initial heartbeat for AI component
+		if a.watchdogSvc != nil {
+			a.watchdogSvc.Heartbeat(watchdog.ComponentAI)
+		}
+
 		_, err := a.chatSvc.SendStream(
 			a.ctx,
 			message,
 			func(token string) {
+				streamMonitor.Activity() // Record activity on each token
+				if a.watchdogSvc != nil {
+					a.watchdogSvc.Heartbeat(watchdog.ComponentAI)
+				}
 				wailsRuntime.EventsEmit(a.ctx, "chat:token", token)
 			},
 			func(status string) {
+				streamMonitor.Activity() // Record activity on status updates
+				if a.watchdogSvc != nil {
+					a.watchdogSvc.Heartbeat(watchdog.ComponentAI)
+				}
 				wailsRuntime.EventsEmit(a.ctx, "chat:thinking", status)
 			},
 		)
 		if err != nil {
-			wailsRuntime.EventsEmit(a.ctx, "chat:error", err.Error())
+			if errors.Is(err, context.Canceled) {
+				wailsRuntime.EventsEmit(a.ctx, "chat:stopped")
+			} else {
+				wailsRuntime.EventsEmit(a.ctx, "chat:error", err.Error())
+			}
 		} else {
 			wailsRuntime.EventsEmit(a.ctx, "chat:done")
 		}
 	}()
+}
+
+// StopChatStream interrupts the active streamed AI response, if running.
+func (a *App) StopChatStream() bool {
+	return a.chatSvc.StopStream()
 }
 
 func (a *App) beginActivity(activity string) func() {
@@ -1718,17 +2122,859 @@ func (a *App) GetMCPRegistry() *mcp.Registry {
 }
 
 // -----------------------------------------------------------------------
-// Support tickets (mock — in-memory)
+// Support tickets — real API integration
 // -----------------------------------------------------------------------
 
-// CreateSupportTicket creates a new ticket and returns it.
-func (a *App) CreateSupportTicket(t SupportTicket) SupportTicket {
-	return a.tickets.create(t)
+func (a *App) supportLogf(format string, args ...any) {
+	a.logs.append("[support] " + fmt.Sprintf(format, args...))
 }
 
-// GetSupportTickets returns all tickets.
-func (a *App) GetSupportTickets() []SupportTicket {
-	return a.tickets.getAll()
+func shortBodyForLog(body []byte) string {
+	s := strings.TrimSpace(string(body))
+	if len(s) > 400 {
+		return s[:400] + "..."
+	}
+	return s
+}
+
+func normalizePriority(v int) int {
+	if v < 1 || v > 4 {
+		return 2
+	}
+	return v
+}
+
+func priorityIntToLabel(v int) string {
+	switch normalizePriority(v) {
+	case 1:
+		return "Low"
+	case 3:
+		return "High"
+	case 4:
+		return "Critical"
+	default:
+		return "Medium"
+	}
+}
+
+func priorityLabelToInt(label string) int {
+	switch strings.ToLower(strings.TrimSpace(label)) {
+	case "1", "low", "baixa":
+		return 1
+	case "3", "high", "alta":
+		return 3
+	case "4", "critical", "critica", "crítica":
+		return 4
+	case "2", "medium", "media", "média":
+		fallthrough
+	default:
+		return 2
+	}
+}
+
+func toInt(values ...any) int {
+	for _, v := range values {
+		switch n := v.(type) {
+		case float64:
+			return int(n)
+		case float32:
+			return int(n)
+		case int:
+			return n
+		case int64:
+			return int(n)
+		case json.Number:
+			if i, err := n.Int64(); err == nil {
+				return int(i)
+			}
+		case string:
+			s := strings.TrimSpace(n)
+			if s == "" {
+				continue
+			}
+			var parsed int
+			if _, err := fmt.Sscanf(s, "%d", &parsed); err == nil {
+				return parsed
+			}
+		}
+	}
+	return 0
+}
+
+func toBool(values ...any) bool {
+	for _, v := range values {
+		switch b := v.(type) {
+		case bool:
+			return b
+		case string:
+			s := strings.ToLower(strings.TrimSpace(b))
+			if s == "true" || s == "1" || s == "yes" || s == "sim" {
+				return true
+			}
+			if s == "false" || s == "0" || s == "no" || s == "nao" || s == "não" {
+				return false
+			}
+		case float64:
+			return b != 0
+		case int:
+			return b != 0
+		}
+	}
+	return false
+}
+
+func setAgentAuthHeaders(req *http.Request, token string) {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return
+	}
+	req.Header.Set("X-Agent-Token", token)
+	req.Header.Set("Authorization", "Bearer "+token)
+}
+
+func extractAgentInfoFromJSON(body []byte, cfg DebugConfig) (AgentInfo, error) {
+	var raw map[string]any
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return AgentInfo{}, fmt.Errorf("resposta inválida de /api/agent-auth/me: %w", err)
+	}
+
+	asMap := func(v any) map[string]any {
+		m, _ := v.(map[string]any)
+		return m
+	}
+	getStr := func(m map[string]any, keys ...string) string {
+		for _, k := range keys {
+			if v, ok := m[k]; ok {
+				s := strings.TrimSpace(fmt.Sprint(v))
+				if s != "" && s != "<nil>" {
+					return s
+				}
+			}
+		}
+		return ""
+	}
+
+	candidates := []map[string]any{raw}
+	for _, key := range []string{"data", "agent", "result", "payload"} {
+		if m := asMap(raw[key]); m != nil {
+			candidates = append(candidates, m)
+		}
+	}
+
+	info := AgentInfo{}
+	for _, c := range candidates {
+		if info.AgentID == "" {
+			info.AgentID = getStr(c, "agentId", "agentID", "id")
+		}
+		if info.ClientID == "" {
+			info.ClientID = getStr(c, "clientId", "clientID")
+		}
+		if info.ClientID == "" {
+			if client := asMap(c["client"]); client != nil {
+				info.ClientID = getStr(client, "id", "clientId", "clientID")
+			}
+		}
+		if info.SiteID == "" {
+			info.SiteID = getStr(c, "siteId", "siteID")
+		}
+		if info.SiteID == "" {
+			if site := asMap(c["site"]); site != nil {
+				info.SiteID = getStr(site, "id", "siteId", "siteID")
+			}
+		}
+		if info.Hostname == "" {
+			info.Hostname = getStr(c, "hostname", "hostName")
+		}
+		if info.Name == "" {
+			info.Name = getStr(c, "displayName", "name")
+		}
+	}
+
+	if s := strings.TrimSpace(cfg.AgentID); s != "" {
+		info.AgentID = s
+	}
+
+	info.AgentID = strings.TrimSpace(info.AgentID)
+	info.ClientID = strings.TrimSpace(info.ClientID)
+	info.SiteID = strings.TrimSpace(info.SiteID)
+	info.Hostname = strings.TrimSpace(info.Hostname)
+	info.Name = strings.TrimSpace(info.Name)
+
+	return info, nil
+}
+
+// fetchAgentContext resolves clientId/siteId from /api/agent-auth/me (cached).
+func (a *App) fetchAgentContext() (AgentInfo, error) {
+	// 1. Tentar carregar do cache em memória primeiro (mais rápido)
+	if info, ok := a.agentInfo.get(); ok {
+		if strings.TrimSpace(info.ClientID) != "" {
+			return info, nil
+		}
+		a.supportLogf("cache em memória sem clientId; ignorando e recarregando do servidor")
+		a.agentInfo.invalidate()
+	}
+
+	// 2. Tentar carregar do SQLite (cache persistente)
+	if a.db != nil {
+		var cached AgentInfo
+		found, err := a.db.CacheGetJSON("agent_info", &cached)
+		if err == nil && found {
+			if strings.TrimSpace(cached.ClientID) != "" {
+				a.agentInfo.set(cached) // Cachear em memória também
+				return cached, nil
+			}
+			a.supportLogf("cache SQLite sem clientId; removendo entrada e atualizando do servidor")
+			if delErr := a.db.CacheDelete("agent_info"); delErr != nil {
+				log.Printf("[support] aviso: falha ao limpar cache SQLite agent_info inválido: %v", delErr)
+			}
+		}
+	}
+
+	// 3. Buscar do servidor
+	cfg := a.GetDebugConfig()
+	cfg.ApiScheme = strings.TrimSpace(strings.ToLower(cfg.ApiScheme))
+	cfg.ApiServer = strings.TrimSpace(cfg.ApiServer)
+	if cfg.ApiServer == "" || strings.TrimSpace(cfg.AuthToken) == "" {
+		err := fmt.Errorf("configuração de servidor API incompleta: preencha apiServer e token no Debug")
+		a.supportLogf("falha ao resolver contexto do agente: %v", err)
+		return AgentInfo{}, err
+	}
+	if cfg.ApiScheme != "http" && cfg.ApiScheme != "https" {
+		err := fmt.Errorf("apiScheme inválido: use http ou https")
+		a.supportLogf("falha ao resolver contexto do agente: %v", err)
+		return AgentInfo{}, err
+	}
+
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/agent-auth/me"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		wrapped := fmt.Errorf("URL inválida: %w", err)
+		a.supportLogf("falha ao montar request de contexto do agente: %v", wrapped)
+		return AgentInfo{}, wrapped
+	}
+	setAgentAuthHeaders(req, cfg.AuthToken)
+
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		wrapped := fmt.Errorf("falha ao conectar em %s: %w", target, err)
+		a.supportLogf("erro HTTP ao resolver contexto do agente: %v", wrapped)
+		return AgentInfo{}, wrapped
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		wrapped := fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(body)))
+		a.supportLogf("/api/agent-auth/me retornou erro: %v", wrapped)
+		return AgentInfo{}, wrapped
+	}
+
+	info, err := extractAgentInfoFromJSON(body, cfg)
+	if err != nil {
+		a.supportLogf("falha ao decodificar /api/agent-auth/me: %v", err)
+		return AgentInfo{}, err
+	}
+	if info.ClientID == "" {
+		err := fmt.Errorf("clientId não retornado por /api/agent-auth/me: verifique token/escopo do agente")
+		a.supportLogf("%v | resposta=%s", err, shortBodyForLog(body))
+		return AgentInfo{}, err
+	}
+
+	// 4. Salvar em ambos os caches (memória + SQLite)
+	a.agentInfo.set(info)
+	if a.db != nil {
+		// Cache por 24 horas
+		if err := a.db.CacheSetJSON("agent_info", info, 24*time.Hour); err != nil {
+			log.Printf("[support] aviso: falha ao salvar no cache SQLite (agent_info): %v", err)
+		}
+	}
+	a.supportLogf("contexto do agente resolvido: agentId=%s clientId=%s siteId=%s", info.AgentID, info.ClientID, info.SiteID)
+
+	return info, nil
+}
+
+// GetAgentInfo resolves and returns the current agent identifiers from the server.
+func (a *App) GetAgentInfo() (AgentInfo, error) {
+	return a.fetchAgentContext()
+}
+
+// GetSupportTickets returns tickets linked to this agent (filtered by agentId).
+func (a *App) GetSupportTickets() ([]APITicket, error) {
+	a.supportLogf("listando chamados vinculados ao agente")
+	info, err := a.fetchAgentContext()
+	if err != nil {
+		a.supportLogf("falha ao obter contexto para listagem de chamados: %v", err)
+		return nil, err
+	}
+	if strings.TrimSpace(info.ClientID) == "" {
+		err := fmt.Errorf("clientId não resolvido: verifique a configuração do agente")
+		a.supportLogf("%v (agentId=%s)", err, info.AgentID)
+		return nil, err
+	}
+
+	cfg := a.GetDebugConfig()
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/agent-auth/me/tickets"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		wrapped := fmt.Errorf("URL inválida: %w", err)
+		a.supportLogf("falha ao montar request de listagem: %v", wrapped)
+		return nil, wrapped
+	}
+	setAgentAuthHeaders(req, cfg.AuthToken)
+
+	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+	if err != nil {
+		wrapped := fmt.Errorf("falha ao buscar chamados: %w", err)
+		a.supportLogf("erro HTTP ao listar chamados: %v", wrapped)
+		return nil, wrapped
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		wrapped := fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(body)))
+		a.supportLogf("erro na listagem de chamados: %v", wrapped)
+		return nil, wrapped
+	}
+
+	var tickets []APITicket
+	if err := json.Unmarshal(body, &tickets); err != nil {
+		// Try paginated response envelope
+		var envelope struct {
+			Items []APITicket `json:"items"`
+			Data  []APITicket `json:"data"`
+		}
+		if err2 := json.Unmarshal(body, &envelope); err2 == nil {
+			if envelope.Items != nil {
+				tickets = envelope.Items
+			} else {
+				tickets = envelope.Data
+			}
+		} else {
+			return nil, fmt.Errorf("resposta inválida ao listar chamados: %w", err)
+		}
+	}
+	if tickets == nil {
+		tickets = []APITicket{}
+	}
+
+	// Endpoint /me/tickets já é escopado ao agente autenticado.
+	a.supportLogf("listagem concluída: %d chamado(s) retornado(s)", len(tickets))
+	return tickets, nil
+}
+
+// CreateSupportTicket opens a new ticket linked to this agent.
+func (a *App) CreateSupportTicket(input CreateTicketInput) (APITicket, error) {
+	a.supportLogf("criando chamado: title=%q priority=%d category=%q", strings.TrimSpace(input.Title), input.Priority, strings.TrimSpace(input.Category))
+	info, err := a.fetchAgentContext()
+	if err != nil {
+		a.supportLogf("falha ao obter contexto para criação de chamado: %v", err)
+		return APITicket{}, err
+	}
+	if strings.TrimSpace(info.ClientID) == "" {
+		err := fmt.Errorf("clientId não resolvido: verifique a configuração do agente")
+		a.supportLogf("%v (agentId=%s)", err, info.AgentID)
+		return APITicket{}, err
+	}
+
+	cfg := a.GetDebugConfig()
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	type createReq struct {
+		DepartmentID      *string `json:"departmentId,omitempty"`
+		WorkflowProfileID *string `json:"workflowProfileId,omitempty"`
+		Title             string  `json:"title"`
+		Description       string  `json:"description"`
+		Priority          *string `json:"priority,omitempty"`
+		Category          *string `json:"category,omitempty"`
+	}
+
+	payload := createReq{
+		Title:       strings.TrimSpace(input.Title),
+		Description: strings.TrimSpace(input.Description),
+	}
+	if c := strings.TrimSpace(input.Category); c != "" {
+		payload.Category = &c
+	}
+	if input.Priority > 0 {
+		pri := priorityIntToLabel(input.Priority)
+		payload.Priority = &pri
+	}
+
+	reqBody, err := json.Marshal(payload)
+	if err != nil {
+		wrapped := fmt.Errorf("erro ao serializar chamado: %w", err)
+		a.supportLogf("falha ao serializar payload de chamado: %v", wrapped)
+		return APITicket{}, wrapped
+	}
+
+	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/agent-auth/me/tickets"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(reqBody))
+	if err != nil {
+		wrapped := fmt.Errorf("URL inválida: %w", err)
+		a.supportLogf("falha ao montar request de criação: %v", wrapped)
+		return APITicket{}, wrapped
+	}
+	req.Header.Set("Content-Type", "application/json")
+	setAgentAuthHeaders(req, cfg.AuthToken)
+
+	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+	if err != nil {
+		wrapped := fmt.Errorf("falha ao criar chamado: %w", err)
+		a.supportLogf("erro HTTP ao criar chamado: %v", wrapped)
+		return APITicket{}, wrapped
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		wrapped := fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(respBody)))
+		a.supportLogf("erro na criação do chamado: %v | payload=%s | resposta=%s", wrapped, shortBodyForLog(reqBody), shortBodyForLog(respBody))
+		return APITicket{}, wrapped
+	}
+
+	var ticket APITicket
+	if err := json.Unmarshal(respBody, &ticket); err != nil {
+		wrapped := fmt.Errorf("resposta inválida ao criar chamado: %w", err)
+		a.supportLogf("falha ao decodificar resposta da criação: %v | resposta=%s", wrapped, shortBodyForLog(respBody))
+		return APITicket{}, wrapped
+	}
+	a.supportLogf("chamado criado com sucesso: ticketId=%s", ticket.ID)
+	return ticket, nil
+}
+
+// GetSupportTicketDetails returns a single ticket if it belongs to the authenticated agent.
+func (a *App) GetSupportTicketDetails(ticketID string) (APITicket, error) {
+	ticketID = strings.TrimSpace(ticketID)
+	if !guidPattern.MatchString(ticketID) {
+		return APITicket{}, fmt.Errorf("ticketId inválido")
+	}
+
+	cfg := a.GetDebugConfig()
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/agent-auth/me/tickets/" + ticketID
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return APITicket{}, err
+	}
+	setAgentAuthHeaders(req, cfg.AuthToken)
+
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		return APITicket{}, fmt.Errorf("falha ao buscar ticket: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return APITicket{}, fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+
+	var ticket APITicket
+	if err := json.Unmarshal(body, &ticket); err != nil {
+		var envelope struct {
+			Ticket *APITicket `json:"ticket"`
+			Data   *APITicket `json:"data"`
+			Item   *APITicket `json:"item"`
+		}
+		if err2 := json.Unmarshal(body, &envelope); err2 == nil {
+			switch {
+			case envelope.Ticket != nil:
+				ticket = *envelope.Ticket
+			case envelope.Data != nil:
+				ticket = *envelope.Data
+			case envelope.Item != nil:
+				ticket = *envelope.Item
+			default:
+				return APITicket{}, fmt.Errorf("resposta inválida: ticket não encontrado no payload")
+			}
+		} else {
+			return APITicket{}, fmt.Errorf("resposta inválida: %w", err)
+		}
+	}
+
+	return ticket, nil
+}
+
+func parseWorkflowStatesFromBody(body []byte) ([]APIWorkflowState, error) {
+	var states []APIWorkflowState
+	if err := json.Unmarshal(body, &states); err == nil {
+		return states, nil
+	}
+
+	var envelope struct {
+		Items []APIWorkflowState `json:"items"`
+		Data  []APIWorkflowState `json:"data"`
+		State []APIWorkflowState `json:"states"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return nil, err
+	}
+
+	switch {
+	case envelope.Items != nil:
+		return envelope.Items, nil
+	case envelope.Data != nil:
+		return envelope.Data, nil
+	case envelope.State != nil:
+		return envelope.State, nil
+	default:
+		return []APIWorkflowState{}, nil
+	}
+}
+
+// GetTicketWorkflowStates returns available workflow states for tickets.
+// It probes known endpoints because deployments may expose different routes.
+func (a *App) GetTicketWorkflowStates() ([]APIWorkflowState, error) {
+	cfg := a.GetDebugConfig()
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	base := strings.TrimSpace(cfg.ApiScheme) + "://" + strings.TrimSpace(cfg.ApiServer)
+	paths := []string{
+		"/api/agent-auth/me/tickets/workflow-states",
+		"/api/agent-auth/me/workflow-states",
+		"/api/agent-auth/workflow-states",
+	}
+
+	var lastErr error
+	for _, p := range paths {
+		target := base + p
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+		if err != nil {
+			lastErr = fmt.Errorf("URL inválida: %w", err)
+			continue
+		}
+		setAgentAuthHeaders(req, cfg.AuthToken)
+
+		resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+		if err != nil {
+			lastErr = fmt.Errorf("falha ao buscar estados de workflow: %w", err)
+			continue
+		}
+
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		if resp.StatusCode == http.StatusNotFound {
+			lastErr = fmt.Errorf("endpoint não encontrado em %s", p)
+			continue
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			lastErr = fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(body)))
+			continue
+		}
+
+		states, err := parseWorkflowStatesFromBody(body)
+		if err != nil {
+			lastErr = fmt.Errorf("resposta inválida de estados de workflow: %w", err)
+			continue
+		}
+
+		if states == nil {
+			states = []APIWorkflowState{}
+		}
+
+		sort.SliceStable(states, func(i, j int) bool {
+			if states[i].DisplayOrder == states[j].DisplayOrder {
+				return strings.ToLower(states[i].Name) < strings.ToLower(states[j].Name)
+			}
+			return states[i].DisplayOrder < states[j].DisplayOrder
+		})
+
+		a.supportLogf("workflow states carregados: %d estado(s) via %s", len(states), p)
+		return states, nil
+	}
+
+	if lastErr == nil {
+		lastErr = fmt.Errorf("não foi possível carregar estados de workflow")
+	}
+	return nil, lastErr
+}
+
+// GetTicketComments returns comments for a given ticket.
+func (a *App) GetTicketComments(ticketID string) ([]TicketComment, error) {
+	ticketID = strings.TrimSpace(ticketID)
+	if !guidPattern.MatchString(ticketID) {
+		return nil, fmt.Errorf("ticketId inválido")
+	}
+	cfg := a.GetDebugConfig()
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/agent-auth/me/tickets/" + ticketID + "/comments"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return nil, err
+	}
+	setAgentAuthHeaders(req, cfg.AuthToken)
+
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("falha ao buscar comentários: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+
+	var comments []TicketComment
+	if err := json.Unmarshal(body, &comments); err != nil {
+		var envelope struct {
+			Items []TicketComment `json:"items"`
+			Data  []TicketComment `json:"data"`
+		}
+		if err2 := json.Unmarshal(body, &envelope); err2 == nil {
+			if envelope.Items != nil {
+				comments = envelope.Items
+			} else {
+				comments = envelope.Data
+			}
+		} else {
+			return nil, fmt.Errorf("resposta inválida: %w", err)
+		}
+	}
+	if comments == nil {
+		comments = []TicketComment{}
+	}
+	return comments, nil
+}
+
+// AddTicketCommentWithOptions adds a comment and returns the created comment.
+func (a *App) AddTicketCommentWithOptions(ticketID, content string, isInternal bool) (TicketComment, error) {
+	ticketID = strings.TrimSpace(ticketID)
+	if !guidPattern.MatchString(ticketID) {
+		return TicketComment{}, fmt.Errorf("ticketId inválido")
+	}
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return TicketComment{}, fmt.Errorf("content não pode ser vazio")
+	}
+
+	cfg := a.GetDebugConfig()
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	payload := map[string]any{
+		"content":    content,
+		"isInternal": isInternal,
+	}
+	body, _ := json.Marshal(payload)
+
+	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/agent-auth/me/tickets/" + ticketID + "/comments"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
+	if err != nil {
+		return TicketComment{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	setAgentAuthHeaders(req, cfg.AuthToken)
+
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		return TicketComment{}, fmt.Errorf("falha ao enviar comentário: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return TicketComment{}, fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(respBody)))
+	}
+
+	var created TicketComment
+	if len(respBody) == 0 {
+		return created, nil
+	}
+	if err := json.Unmarshal(respBody, &created); err != nil {
+		return TicketComment{}, fmt.Errorf("resposta inválida ao criar comentário: %w", err)
+	}
+	return created, nil
+}
+
+// AddTicketComment adds a comment to a ticket.
+func (a *App) AddTicketComment(ticketID, author, content string) error {
+	_ = author // Mantido por compatibilidade da assinatura pública do método.
+	_, err := a.AddTicketCommentWithOptions(ticketID, content, false)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+// CloseSupportTicket closes a ticket with optional rating/comment/final workflow state.
+func (a *App) CloseSupportTicket(ticketID string, input CloseTicketInput) (APITicket, error) {
+	ticketID = strings.TrimSpace(ticketID)
+	if !guidPattern.MatchString(ticketID) {
+		return APITicket{}, fmt.Errorf("ticketId inválido")
+	}
+
+	workflowStateID := strings.TrimSpace(input.WorkflowStateID)
+	if workflowStateID != "" && !guidPattern.MatchString(workflowStateID) {
+		return APITicket{}, fmt.Errorf("workflowStateId inválido")
+	}
+
+	if input.Rating != nil {
+		if *input.Rating < 0 || *input.Rating > 5 {
+			return APITicket{}, fmt.Errorf("rating inválido: informe valor entre 0 e 5")
+		}
+	}
+
+	cfg := a.GetDebugConfig()
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	payload := map[string]any{}
+	if input.Rating != nil {
+		payload["rating"] = *input.Rating
+	}
+	if c := strings.TrimSpace(input.Comment); c != "" {
+		payload["comment"] = c
+	}
+	if workflowStateID != "" {
+		payload["workflowStateId"] = workflowStateID
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return APITicket{}, fmt.Errorf("erro ao serializar payload de fechamento: %w", err)
+	}
+
+	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/agent-auth/me/tickets/" + ticketID + "/close"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
+	if err != nil {
+		return APITicket{}, fmt.Errorf("URL inválida: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	setAgentAuthHeaders(req, cfg.AuthToken)
+
+	a.supportLogf("fechando chamado %s", ticketID)
+	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+	if err != nil {
+		return APITicket{}, fmt.Errorf("falha ao fechar chamado: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return APITicket{}, fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(respBody)))
+	}
+
+	var ticket APITicket
+	if len(respBody) == 0 {
+		a.supportLogf("chamado %s fechado (resposta vazia); buscando detalhes atualizados", ticketID)
+		return a.GetSupportTicketDetails(ticketID)
+	}
+	if err := json.Unmarshal(respBody, &ticket); err != nil {
+		var envelope struct {
+			Ticket *APITicket `json:"ticket"`
+			Data   *APITicket `json:"data"`
+			Item   *APITicket `json:"item"`
+		}
+		if err2 := json.Unmarshal(respBody, &envelope); err2 == nil {
+			switch {
+			case envelope.Ticket != nil:
+				ticket = *envelope.Ticket
+			case envelope.Data != nil:
+				ticket = *envelope.Data
+			case envelope.Item != nil:
+				ticket = *envelope.Item
+			default:
+				return APITicket{}, fmt.Errorf("resposta inválida ao fechar chamado")
+			}
+		} else {
+			return APITicket{}, fmt.Errorf("resposta inválida ao fechar chamado: %w", err)
+		}
+	}
+
+	a.supportLogf("chamado fechado com sucesso: ticketId=%s", ticket.ID)
+	return ticket, nil
+}
+
+// CloseAgentTicket closes an agent ticket via MCP tool.
+func (a *App) CloseAgentTicket(ticketID string, rating *int, comment, workflowStateID string) (json.RawMessage, error) {
+	ticket, err := a.CloseSupportTicket(ticketID, CloseTicketInput{
+		Rating:          rating,
+		Comment:         comment,
+		WorkflowStateID: workflowStateID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(ticket)
+}
+
+// GetAgentInfoJSON returns the agent info as JSON (for MCP tools).
+func (a *App) GetAgentInfoJSON() (json.RawMessage, error) {
+	info, err := a.fetchAgentContext()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(info)
+}
+
+// ListAgentTickets returns agent tickets as JSON (for MCP tools).
+func (a *App) ListAgentTickets() (json.RawMessage, error) {
+	tickets, err := a.GetSupportTickets()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(tickets)
+}
+
+// GetAgentTicketDetails returns one agent ticket as JSON (for MCP tools).
+func (a *App) GetAgentTicketDetails(ticketID string) (json.RawMessage, error) {
+	ticket, err := a.GetSupportTicketDetails(ticketID)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(ticket)
+}
+
+// AddAgentTicketComment adds a comment to an agent ticket via MCP tool.
+func (a *App) AddAgentTicketComment(ticketID, content string, isInternal bool) (json.RawMessage, error) {
+	comment, err := a.AddTicketCommentWithOptions(ticketID, content, isInternal)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(comment)
+}
+
+// CreateAgentTicket creates a ticket via MCP tool.
+func (a *App) CreateAgentTicket(title, description string, priority int, category string) (json.RawMessage, error) {
+	ticket, err := a.CreateSupportTicket(CreateTicketInput{
+		Title:       title,
+		Description: description,
+		Priority:    priority,
+		Category:    category,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(ticket)
 }
 
 // GetKnowledgeBaseArticles returns all mock knowledge base articles.

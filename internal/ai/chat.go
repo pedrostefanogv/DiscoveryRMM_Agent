@@ -50,6 +50,10 @@ type Service struct {
 	registry *mcp.Registry
 	history  []Message
 	logger   func(string)
+
+	streamMu           sync.Mutex
+	activeStreamID     uint64
+	activeStreamCancel context.CancelFunc
 }
 
 // NewService creates a chat service.
@@ -92,6 +96,37 @@ func (s *Service) ClearHistory() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.history = []Message{}
+}
+
+func (s *Service) registerStreamCancel(cancel context.CancelFunc) uint64 {
+	s.streamMu.Lock()
+	defer s.streamMu.Unlock()
+	s.activeStreamID++
+	id := s.activeStreamID
+	s.activeStreamCancel = cancel
+	return id
+}
+
+func (s *Service) unregisterStreamCancel(id uint64) {
+	s.streamMu.Lock()
+	defer s.streamMu.Unlock()
+	if s.activeStreamID == id {
+		s.activeStreamCancel = nil
+	}
+}
+
+// StopStream cancels the currently running streamed response, if any.
+func (s *Service) StopStream() bool {
+	s.streamMu.Lock()
+	cancel := s.activeStreamCancel
+	s.activeStreamCancel = nil
+	s.streamMu.Unlock()
+
+	if cancel != nil {
+		cancel()
+		return true
+	}
+	return false
 }
 
 // GetHistory returns a copy of the conversation history (for display).
@@ -142,7 +177,13 @@ O chat possui botoes dinamicos. Qualquer linha da sua resposta que comece com "-
 - Ao oferecer opcoes ou escolhas, liste cada alternativa em sua propria linha com "- " no inicio (maximo 6 opcoes). Escreva cada opcao de forma curta e direta, pois o texto vira o rotulo do botao.
 - Ao pedir confirmacao, inclua opcoes como "- Sim, pode prosseguir" e "- Nao, cancelar" para que o usuario responda com um clique.
 - Ao sugerir proximos passos apos uma acao concluida, liste as sugestoes com "- " para que tambem virem botoes.
-Nunca use "- " para informacoes descritivas que nao sejam opcoes clicaveis; use frases corridas ou paragrafos para explicacoes.`
+Nunca use "- " para informacoes descritivas que nao sejam opcoes clicaveis; use frases corridas ou paragrafos para explicacoes.
+
+Navegacao interna do app:
+- Existem ferramentas MCP para navegacao interna: get_internal_navigation_routes e build_internal_navigation_link.
+- Sempre que fizer sentido, use essas ferramentas para montar links internos discovery://.
+- Para gerar card clicavel pequeno no chat, produza markdown no formato [Titulo | Subtitulo | Meta](discovery://rota).
+- Para botao interno simples, use [Abrir](discovery://rota).`
 
 func resolveSystemPrompt(cfg Config) string {
 	prompt := strings.TrimSpace(cfg.SystemPrompt)
@@ -526,6 +567,13 @@ func (s *Service) callLLMStream(ctx context.Context, cfg Config, messages []map[
 // SendStream is like Send but streams the final text response token-by-token via onToken.
 // Tool-call intermediate rounds are executed silently; onStatus receives progress updates.
 func (s *Service) SendStream(ctx context.Context, userMessage string, onToken func(string), onStatus func(string)) (string, error) {
+	streamCtx, streamCancel := context.WithCancel(ctx)
+	streamID := s.registerStreamCancel(streamCancel)
+	defer func() {
+		s.unregisterStreamCancel(streamID)
+		streamCancel()
+	}()
+
 	s.mu.Lock()
 	cfg := s.cfg
 	s.mu.Unlock()
@@ -544,13 +592,17 @@ func (s *Service) SendStream(ctx context.Context, userMessage string, onToken fu
 
 	const maxToolRounds = 8
 	for round := 1; round <= maxToolRounds; round++ {
+		if err := streamCtx.Err(); err != nil {
+			return "", err
+		}
+
 		s.logf("stream: rodada %d/%d", round, maxToolRounds)
 
 		s.mu.RLock()
 		messages := s.buildMessages(resolveSystemPrompt(cfg))
 		s.mu.RUnlock()
 
-		content, toolCalls, err := s.callLLMStream(ctx, cfg, messages, tools, onToken)
+		content, toolCalls, err := s.callLLMStream(streamCtx, cfg, messages, tools, onToken)
 		if err != nil {
 			return "", err
 		}
@@ -574,6 +626,10 @@ func (s *Service) SendStream(ctx context.Context, userMessage string, onToken fu
 		s.mu.Unlock()
 
 		for _, tc := range toolCalls {
+			if err := streamCtx.Err(); err != nil {
+				return "", err
+			}
+
 			s.logf("stream: chamando ferramenta: %s", tc.Function.Name)
 			if onStatus != nil {
 				onStatus("Executando: " + tc.Function.Name + "...")

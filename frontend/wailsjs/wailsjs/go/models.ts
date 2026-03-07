@@ -1,5 +1,102 @@
 export namespace main {
 	
+	export class APIWorkflowState {
+	    id: string;
+	    name: string;
+	    color: string;
+	    isInitial: boolean;
+	    isFinal: boolean;
+	    displayOrder: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new APIWorkflowState(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.color = source["color"];
+	        this.isInitial = source["isInitial"];
+	        this.isFinal = source["isFinal"];
+	        this.displayOrder = source["displayOrder"];
+	    }
+	}
+	export class APITicket {
+	    id: string;
+	    title: string;
+	    description: string;
+	    priority: number;
+	    category?: string;
+	    agentId?: string;
+	    clientId: string;
+	    siteId?: string;
+	    createdAt: string;
+	    workflowState?: APIWorkflowState;
+	    rating?: number;
+	    ratedAt?: string;
+	    ratedBy?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new APITicket(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.title = source["title"];
+	        this.description = source["description"];
+	        this.priority = source["priority"];
+	        this.category = source["category"];
+	        this.agentId = source["agentId"];
+	        this.clientId = source["clientId"];
+	        this.siteId = source["siteId"];
+	        this.createdAt = source["createdAt"];
+	        this.workflowState = this.convertValues(source["workflowState"], APIWorkflowState);
+	        this.rating = source["rating"];
+	        this.ratedAt = source["ratedAt"];
+	        this.ratedBy = source["ratedBy"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	export class AgentInfo {
+	    agentId: string;
+	    clientId: string;
+	    siteId: string;
+	    hostname: string;
+	    displayName: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AgentInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.agentId = source["agentId"];
+	        this.clientId = source["clientId"];
+	        this.siteId = source["siteId"];
+	        this.hostname = source["hostname"];
+	        this.displayName = source["displayName"];
+	    }
+	}
 	export class AgentStatus {
 	    connected: boolean;
 	    agentId: string;
@@ -50,11 +147,48 @@ export namespace main {
 	        this.content = source["content"];
 	    }
 	}
+	export class CloseTicketInput {
+	    rating?: number;
+	    comment?: string;
+	    workflowStateId?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new CloseTicketInput(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.rating = source["rating"];
+	        this.comment = source["comment"];
+	        this.workflowStateId = source["workflowStateId"];
+	    }
+	}
+	export class CreateTicketInput {
+	    title: string;
+	    description: string;
+	    priority: number;
+	    category: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new CreateTicketInput(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.title = source["title"];
+	        this.description = source["description"];
+	        this.priority = source["priority"];
+	        this.category = source["category"];
+	    }
+	}
 	export class DebugConfig {
-	    scheme: string;
-	    server: string;
+	    apiScheme: string;
+	    apiServer: string;
 	    authToken: string;
+	    natsServer: string;
 	    agentId: string;
+	    scheme?: string;
+	    server?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new DebugConfig(source);
@@ -62,10 +196,13 @@ export namespace main {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.apiScheme = source["apiScheme"];
+	        this.apiServer = source["apiServer"];
+	        this.authToken = source["authToken"];
+	        this.natsServer = source["natsServer"];
+	        this.agentId = source["agentId"];
 	        this.scheme = source["scheme"];
 	        this.server = source["server"];
-	        this.authToken = source["authToken"];
-	        this.agentId = source["agentId"];
 	    }
 	}
 	export class KnowledgeArticle {
@@ -131,27 +268,23 @@ export namespace main {
 		    return a;
 		}
 	}
-	export class SupportTicket {
+	export class TicketComment {
 	    id: string;
-	    subject: string;
-	    category: string;
-	    priority: string;
-	    description: string;
-	    status: string;
+	    author: string;
+	    content: string;
+	    isInternal: boolean;
 	    createdAt: string;
 	
 	    static createFrom(source: any = {}) {
-	        return new SupportTicket(source);
+	        return new TicketComment(source);
 	    }
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
-	        this.subject = source["subject"];
-	        this.category = source["category"];
-	        this.priority = source["priority"];
-	        this.description = source["description"];
-	        this.status = source["status"];
+	        this.author = source["author"];
+	        this.content = source["content"];
+	        this.isInternal = source["isInternal"];
 	        this.createdAt = source["createdAt"];
 	    }
 	}
