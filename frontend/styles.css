@@ -851,6 +851,8 @@ input[type="search"] {
   font-family: 'Space Grotesk', sans-serif;
   font-size: 0.9rem;
   color: #fff;
+  background: #1f1a14;
+  border: 1px solid rgba(255, 255, 255, 0.18);
   box-shadow: 0 4px 20px rgba(0,0,0,0.25);
   animation: toastIn 0.3s ease forwards;
 }
@@ -858,6 +860,7 @@ input[type="search"] {
 .toast.success { background: #0b6e4f; }
 .toast.error   { background: #9a031e; }
 .toast.info    { background: #1f1a14; }
+.toast.warning { background: #8a4e12; }
 
 .toast.removing {
   animation: toastOut 0.3s ease forwards;
@@ -1444,12 +1447,119 @@ input[type="search"] {
 
 .kb-detail-content {
   margin: 0;
-  white-space: pre-wrap;
   max-height: calc(100vh - 420px);
   overflow-y: auto;
   font-family: 'Space Grotesk', sans-serif;
   font-size: 0.95rem;
   line-height: 1.55;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+}
+
+.kb-detail-content p,
+.kb-reader-content p {
+  margin: 0 0 10px;
+}
+
+.kb-detail-content h1,
+.kb-detail-content h2,
+.kb-detail-content h3,
+.kb-detail-content h4,
+.kb-reader-content h1,
+.kb-reader-content h2,
+.kb-reader-content h3,
+.kb-reader-content h4 {
+  margin: 14px 0 8px;
+  line-height: 1.25;
+}
+
+.kb-detail-content ul,
+.kb-detail-content ol,
+.kb-reader-content ul,
+.kb-reader-content ol {
+  margin: 0 0 10px 22px;
+}
+
+.kb-detail-content pre,
+.kb-reader-content pre {
+  margin: 8px 0 12px;
+  background: #1f2522;
+  color: #e8f5ef;
+  border-radius: 8px;
+  padding: 10px;
+  overflow-x: auto;
+}
+
+.kb-detail-content code,
+.kb-reader-content code {
+  font-family: 'JetBrains Mono', 'Consolas', monospace;
+  background: rgba(0, 0, 0, 0.05);
+  padding: 1px 5px;
+  border-radius: 5px;
+}
+
+.kb-detail-content pre code,
+.kb-reader-content pre code {
+  background: transparent;
+  padding: 0;
+}
+
+.kb-detail-content a,
+.kb-reader-content a {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.kb-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  margin: 8px 0 12px;
+}
+
+.kb-markdown-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.92rem;
+}
+
+.kb-markdown-table th,
+.kb-markdown-table td {
+  border: 1px solid var(--border);
+  padding: 8px 10px;
+  vertical-align: top;
+}
+
+.kb-markdown-table thead th {
+  background: var(--surface-2);
+  font-weight: 700;
+}
+
+.kb-syntax-com {
+  color: #7a8e84;
+}
+
+.kb-syntax-kw {
+  color: #2f6a45;
+  font-weight: 700;
+}
+
+.kb-syntax-typ {
+  color: #315e8c;
+}
+
+.kb-syntax-str {
+  color: #8a3c2b;
+}
+
+.kb-syntax-num {
+  color: #5d4f9f;
+}
+
+.kb-syntax-key {
+  color: #8a4e12;
+  font-weight: 600;
 }
 
 .kb-detail-actions {
@@ -1491,7 +1601,6 @@ input[type="search"] {
   margin: 0;
   flex: 1;
   overflow: auto;
-  white-space: pre-wrap;
   font-family: 'Space Grotesk', sans-serif;
   font-size: 1rem;
   line-height: 1.6;

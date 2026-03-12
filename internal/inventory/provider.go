@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	"winget-store/internal/ctxutil"
@@ -13,7 +14,9 @@ import (
 // Provider orchestrates inventory collection using osquery (preferred)
 // with a PowerShell fallback.
 type Provider struct {
-	timeout time.Duration
+	timeout          time.Duration
+	progressMu       sync.RWMutex
+	progressCallback func()
 }
 
 // NewProvider creates a Provider with the given per-collection timeout.
@@ -21,17 +24,37 @@ func NewProvider(timeout time.Duration) *Provider {
 	return &Provider{timeout: timeout}
 }
 
+// SetProgressCallback registers a hook called during long-running collection steps.
+func (p *Provider) SetProgressCallback(cb func()) {
+	p.progressMu.Lock()
+	p.progressCallback = cb
+	p.progressMu.Unlock()
+}
+
+func (p *Provider) emitProgressHeartbeat() {
+	p.progressMu.RLock()
+	cb := p.progressCallback
+	p.progressMu.RUnlock()
+	if cb != nil {
+		cb()
+	}
+}
+
 // Collect gathers a full inventory report. It tries osquery first; if
 // osquery is unavailable or fails, it falls back to PowerShell/CIM.
 func (p *Provider) Collect(ctx context.Context) (models.InventoryReport, error) {
+	p.emitProgressHeartbeat()
 	if report, err := p.collectWithOsquery(ctx); err == nil {
+		p.emitProgressHeartbeat()
 		return report, nil
 	}
 
+	p.emitProgressHeartbeat()
 	report, err := p.collectWithPowerShell(ctx)
 	if err != nil {
 		return models.InventoryReport{}, err
 	}
+	p.emitProgressHeartbeat()
 	return report, nil
 }
 
@@ -69,7 +92,7 @@ func (p *Provider) collectWithOsquery(ctx context.Context) (models.InventoryRepo
 		{name: "routes", sql: "SELECT interface, gateway, destination FROM routes WHERE destination IN ('0.0.0.0', '::')"},
 	}
 
-	results := runParallelQueries(runCtx, bin, queries)
+	results := runParallelQueries(runCtx, bin, queries, p.emitProgressHeartbeat)
 
 	// Check required queries.
 	for _, q := range queries {
@@ -142,7 +165,8 @@ func (p *Provider) collectWithOsquery(ctx context.Context) (models.InventoryRepo
 
 	report.Hardware.MemoryModulesCount = len(report.MemoryModules)
 
-	if details, derr := collectWindowsHardwareDetails(runCtx); derr == nil {
+	p.emitProgressHeartbeat()
+	if details, derr := collectWindowsHardwareDetails(runCtx, p.emitProgressHeartbeat); derr == nil {
 		if report.Hardware.MotherboardSerial == "" {
 			report.Hardware.MotherboardSerial = details.MotherboardSerial
 		}
@@ -179,6 +203,7 @@ func (p *Provider) collectWithOsquery(ctx context.Context) (models.InventoryRepo
 	if len(report.Disks) == 0 {
 		report.Disks = report.PhysicalDisks
 	}
+	p.emitProgressHeartbeat()
 
 	return report, nil
 }
@@ -188,7 +213,7 @@ func (p *Provider) collectWithPowerShell(ctx context.Context) (models.InventoryR
 	runCtx, cancel := ctxutil.WithTimeout(ctx, p.timeout)
 	defer cancel()
 
-	report, err := collectWithPowerShell(runCtx)
+	report, err := collectWithPowerShell(runCtx, p.emitProgressHeartbeat)
 	if err != nil {
 		return models.InventoryReport{}, err
 	}

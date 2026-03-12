@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -201,6 +202,9 @@ type KnowledgeArticle struct {
 	Summary     string   `json:"summary"`
 	Content     string   `json:"content"`
 	Tags        []string `json:"tags"`
+	Author      string   `json:"author"`
+	Scope       string   `json:"scope"`
+	PublishedAt string   `json:"publishedAt"`
 	Difficulty  string   `json:"difficulty"`
 	ReadTimeMin int      `json:"readTimeMin"`
 	UpdatedAt   string   `json:"updatedAt"`
@@ -291,7 +295,6 @@ type App struct {
 	chatSvc     *ai.Service
 	agentConn   *agentconn.Runtime
 	agentInfo   agentInfoCache
-	knowledge   []KnowledgeArticle
 	watchdogSvc *watchdog.Watchdog
 
 	debugMu     sync.RWMutex
@@ -327,9 +330,11 @@ func NewApp() *App {
 		invSvc:        services.NewInventoryService(inventoryProvider),
 		mcpRegistry:   reg,
 		chatSvc:       chatSvc,
-		knowledge:     mockKnowledgeBaseArticles(),
 		watchdogSvc:   watchdogSvc,
 	}
+	inventoryProvider.SetProgressCallback(func() {
+		a.pulseInventoryHeartbeat()
+	})
 	a.agentConn = agentconn.NewRuntime(agentconn.Options{
 		LoadConfig: func() agentconn.Config {
 			cfg := a.GetDebugConfig()
@@ -392,12 +397,7 @@ func (a *App) startup(ctx context.Context) {
 		done := a.beginActivity("inventario inicial")
 		defer done()
 
-		// Periodic heartbeat during inventory collection
-		heartbeat := watchdog.NewPeriodicHeartbeat(a.watchdogSvc, watchdog.ComponentInventory, 20*time.Second)
-		heartbeat.Start(ctx)
-		defer heartbeat.Stop()
-
-		report, err := a.invSvc.GetInventory(ctx)
+		report, err := a.collectInventoryWithHeartbeat(ctx)
 		if err != nil {
 			log.Printf("[startup] falha ao coletar inventario em background: %v", err)
 			a.startupMu.Lock()
@@ -615,6 +615,24 @@ func (a *App) ListInstalled() (string, error) {
 	return out, err
 }
 
+func (a *App) pulseInventoryHeartbeat() {
+	if a.watchdogSvc != nil {
+		a.watchdogSvc.Heartbeat(watchdog.ComponentInventory)
+	}
+}
+
+func (a *App) collectInventoryWithHeartbeat(ctx context.Context) (models.InventoryReport, error) {
+	if a.watchdogSvc == nil {
+		return a.invSvc.GetInventory(ctx)
+	}
+
+	heartbeat := watchdog.NewPeriodicHeartbeat(a.watchdogSvc, watchdog.ComponentInventory, 20*time.Second)
+	heartbeat.Start(ctx)
+	defer heartbeat.Stop()
+
+	return a.invSvc.GetInventory(ctx)
+}
+
 func (a *App) GetInventory() (models.InventoryReport, error) {
 	done := a.beginActivity("coleta de inventario")
 	defer done()
@@ -622,7 +640,7 @@ func (a *App) GetInventory() (models.InventoryReport, error) {
 		return cached, nil
 	}
 
-	report, err := a.invSvc.GetInventory(a.ctx)
+	report, err := a.collectInventoryWithHeartbeat(a.ctx)
 	if err != nil {
 		return models.InventoryReport{}, err
 	}
@@ -633,7 +651,7 @@ func (a *App) GetInventory() (models.InventoryReport, error) {
 func (a *App) RefreshInventory() (models.InventoryReport, error) {
 	done := a.beginActivity("atualizacao de inventario")
 	defer done()
-	report, err := a.invSvc.GetInventory(a.ctx)
+	report, err := a.collectInventoryWithHeartbeat(a.ctx)
 	if err != nil {
 		return models.InventoryReport{}, err
 	}
@@ -1237,46 +1255,50 @@ func (a *App) GetRealtimeStatus() (RealtimeStatus, error) {
 }
 
 type agentHardwareEnvelope struct {
-	Hostname               string                    `json:"hostname"`
-	DisplayName            string                    `json:"displayName"`
-	Status                 int                       `json:"status"`
-	OperatingSystem        string                    `json:"operatingSystem"`
-	OSVersion              string                    `json:"osVersion"`
-	AgentVersion           string                    `json:"agentVersion"`
-	LastIPAddress          string                    `json:"lastIpAddress"`
-	MACAddress             string                    `json:"macAddress"`
-	Hardware               agentHardwareInfo         `json:"hardware"`
-	Disks                  []agentDiskInfo           `json:"disks"`
-	NetworkAdapters        []agentNetworkAdapterInfo `json:"networkAdapters"`
-	MemoryModules          []agentMemoryModuleInfo   `json:"memoryModules"`
-	InventoryRaw           string                    `json:"inventoryRaw"`
-	InventorySchemaVersion string                    `json:"inventorySchemaVersion"`
-	InventoryCollectedAt   string                    `json:"inventoryCollectedAt"`
+	Hostname               string                  `json:"hostname"`
+	DisplayName            string                  `json:"displayName"`
+	Status                 string                  `json:"status"`
+	OperatingSystem        string                  `json:"operatingSystem"`
+	OSVersion              string                  `json:"osVersion"`
+	AgentVersion           string                  `json:"agentVersion"`
+	LastIPAddress          string                  `json:"lastIpAddress"`
+	MACAddress             string                  `json:"macAddress"`
+	Hardware               agentHardwareInfo       `json:"hardware"`
+	Components             agentHardwareComponents `json:"components"`
+	InventoryRaw           json.RawMessage         `json:"inventoryRaw"`
+	InventorySchemaVersion string                  `json:"inventorySchemaVersion"`
+	InventoryCollectedAt   string                  `json:"inventoryCollectedAt"`
+}
+
+type agentHardwareComponents struct {
+	Disks           []agentDiskInfo           `json:"disks"`
+	NetworkAdapters []agentNetworkAdapterInfo `json:"networkAdapters"`
+	MemoryModules   []agentMemoryModuleInfo   `json:"memoryModules"`
 }
 
 type agentHardwareInfo struct {
-	InventoryRaw            string `json:"inventoryRaw"`
-	InventorySchemaVersion  string `json:"inventorySchemaVersion"`
-	InventoryCollectedAt    string `json:"inventoryCollectedAt"`
-	Manufacturer            string `json:"manufacturer"`
-	Model                   string `json:"model"`
-	SerialNumber            string `json:"serialNumber"`
-	MotherboardManufacturer string `json:"motherboardManufacturer"`
-	MotherboardModel        string `json:"motherboardModel"`
-	MotherboardSerialNumber string `json:"motherboardSerialNumber"`
-	Processor               string `json:"processor"`
-	ProcessorCores          int    `json:"processorCores"`
-	ProcessorThreads        int    `json:"processorThreads"`
-	ProcessorArchitecture   string `json:"processorArchitecture"`
-	TotalMemoryBytes        int64  `json:"totalMemoryBytes"`
-	BIOSVersion             string `json:"biosVersion"`
-	BIOSManufacturer        string `json:"biosManufacturer"`
-	OSName                  string `json:"osName"`
-	OSVersion               string `json:"osVersion"`
-	OSBuild                 string `json:"osBuild"`
-	OSArchitecture          string `json:"osArchitecture"`
-	CollectedAt             string `json:"collectedAt"`
-	UpdatedAt               string `json:"updatedAt"`
+	InventoryRaw            json.RawMessage `json:"inventoryRaw"`
+	InventorySchemaVersion  string          `json:"inventorySchemaVersion"`
+	InventoryCollectedAt    string          `json:"inventoryCollectedAt"`
+	Manufacturer            string          `json:"manufacturer"`
+	Model                   string          `json:"model"`
+	SerialNumber            string          `json:"serialNumber"`
+	MotherboardManufacturer string          `json:"motherboardManufacturer"`
+	MotherboardModel        string          `json:"motherboardModel"`
+	MotherboardSerialNumber string          `json:"motherboardSerialNumber"`
+	Processor               string          `json:"processor"`
+	ProcessorCores          int             `json:"processorCores"`
+	ProcessorThreads        int             `json:"processorThreads"`
+	ProcessorArchitecture   string          `json:"processorArchitecture"`
+	TotalMemoryBytes        int64           `json:"totalMemoryBytes"`
+	BIOSVersion             string          `json:"biosVersion"`
+	BIOSManufacturer        string          `json:"biosManufacturer"`
+	OSName                  string          `json:"osName"`
+	OSVersion               string          `json:"osVersion"`
+	OSBuild                 string          `json:"osBuild"`
+	OSArchitecture          string          `json:"osArchitecture"`
+	CollectedAt             string          `json:"collectedAt"`
+	UpdatedAt               string          `json:"updatedAt"`
 }
 
 type agentDiskInfo struct {
@@ -1328,6 +1350,7 @@ type agentSoftwareItem struct {
 }
 
 func (a *App) syncInventoryOnStartup(ctx context.Context, report models.InventoryReport) {
+	a.pulseInventoryHeartbeat()
 	cfg := a.GetDebugConfig()
 	cfg.ApiServer = strings.TrimSpace(cfg.ApiServer)
 	cfg.ApiScheme = strings.TrimSpace(strings.ToLower(cfg.ApiScheme))
@@ -1376,17 +1399,19 @@ func (a *App) syncInventoryOnStartup(ctx context.Context, report models.Inventor
 	a.logs.append(fmt.Sprintf(
 		"[agent-sync] hardware payload: collectedAt=%s disks=%d networkAdapters=%d memoryModules=%d hostname=%s",
 		hardwarePayload.InventoryCollectedAt,
-		len(hardwarePayload.Disks),
-		len(hardwarePayload.NetworkAdapters),
-		len(hardwarePayload.MemoryModules),
+		len(hardwarePayload.Components.Disks),
+		len(hardwarePayload.Components.NetworkAdapters),
+		len(hardwarePayload.Components.MemoryModules),
 		hardwarePayload.Hostname,
 	))
 
 	// Enviar hardware
 	hardwareEndpoint := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/agent-auth/me/hardware"
 	hardwareSuccess := false
+	a.pulseInventoryHeartbeat()
 	if err := a.sendAgentInventoryRequest(ctx, hardwareEndpoint, cfg, http.MethodPost, hardwareBody); err != nil {
 		a.logs.append("[agent-sync] POST hardware falhou: " + err.Error())
+		a.pulseInventoryHeartbeat()
 		if err := a.sendAgentInventoryRequest(ctx, hardwareEndpoint, cfg, http.MethodPut, hardwareBody); err != nil {
 			a.logs.append("[agent-sync] PUT hardware falhou: " + err.Error())
 		} else {
@@ -1408,8 +1433,10 @@ func (a *App) syncInventoryOnStartup(ctx context.Context, report models.Inventor
 	softwareEndpoint := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/agent-auth/me/software"
 	a.logs.append("[agent-sync] endpoint software: " + softwareEndpoint)
 	softwareSuccess := false
+	a.pulseInventoryHeartbeat()
 	if err := a.sendAgentInventoryRequest(ctx, softwareEndpoint, cfg, http.MethodPost, softwareBody); err != nil {
 		a.logs.append("[agent-sync] POST software falhou: " + err.Error())
+		a.pulseInventoryHeartbeat()
 		if err := a.sendAgentInventoryRequest(ctx, softwareEndpoint, cfg, http.MethodPut, softwareBody); err != nil {
 			a.logs.append("[agent-sync] PUT software falhou: " + err.Error())
 		} else {
@@ -1435,6 +1462,7 @@ func (a *App) syncInventoryOnStartup(ctx context.Context, report models.Inventor
 }
 
 func (a *App) sendAgentInventoryRequest(parent context.Context, endpoint string, cfg DebugConfig, method string, body []byte) error {
+	a.pulseInventoryHeartbeat()
 	ctx, cancel := context.WithTimeout(parent, 20*time.Second)
 	defer cancel()
 
@@ -1452,14 +1480,17 @@ func (a *App) sendAgentInventoryRequest(parent context.Context, endpoint string,
 
 	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
 	if err != nil {
+		a.pulseInventoryHeartbeat()
 		return err
 	}
 	defer resp.Body.Close()
 
 	respBody, _ := io.ReadAll(resp.Body)
+	a.pulseInventoryHeartbeat()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(respBody)))
 	}
+	a.pulseInventoryHeartbeat()
 	return nil
 }
 
@@ -1471,20 +1502,20 @@ func buildAgentSoftwareEnvelope(report models.InventoryReport) agentSoftwareEnve
 
 	software := make([]agentSoftwareItem, 0, len(report.Software))
 	for _, s := range report.Software {
-		name := strings.TrimSpace(s.Name)
+		name := trimToMaxLen(strings.TrimSpace(s.Name), 300)
 		if name == "" {
 			continue
 		}
-		source := strings.TrimSpace(s.Source)
+		source := trimToMaxLen(strings.TrimSpace(s.Source), 120)
 		if source == "" {
 			source = "osquery/programs"
 		}
 		software = append(software, agentSoftwareItem{
 			Name:      name,
-			Version:   strings.TrimSpace(s.Version),
-			Publisher: strings.TrimSpace(s.Publisher),
-			InstallID: strings.TrimSpace(s.InstallID),
-			Serial:    strings.TrimSpace(s.Serial),
+			Version:   trimToMaxLen(strings.TrimSpace(s.Version), 120),
+			Publisher: trimToMaxLen(strings.TrimSpace(s.Publisher), 300),
+			InstallID: trimToMaxLen(strings.TrimSpace(s.InstallID), 1000),
+			Serial:    trimToMaxLen(strings.TrimSpace(s.Serial), 1000),
 			Source:    source,
 		})
 	}
@@ -1509,6 +1540,10 @@ func buildAgentHardwareEnvelope(report models.InventoryReport) agentHardwareEnve
 
 	disks := make([]agentDiskInfo, 0, len(report.Disks))
 	for _, d := range report.Disks {
+		driveLetter := trimToMaxLen(normalizeDriveLetter(d.Device), 10)
+		if driveLetter == "" {
+			continue
+		}
 		total := int64(d.SizeGB * 1024 * 1024 * 1024)
 		if total < 0 {
 			total = 0
@@ -1518,29 +1553,32 @@ func buildAgentHardwareEnvelope(report models.InventoryReport) agentHardwareEnve
 			free = 0
 		}
 		disks = append(disks, agentDiskInfo{
-			DriveLetter:    normalizeDriveLetter(d.Device),
-			Label:          d.Label,
-			FileSystem:     d.FileSystem,
+			DriveLetter:    driveLetter,
+			Label:          trimToMaxLen(strings.TrimSpace(d.Label), 200),
+			FileSystem:     trimToMaxLen(strings.TrimSpace(d.FileSystem), 50),
 			TotalSizeBytes: total,
 			FreeSpaceBytes: free,
-			MediaType:      d.Type,
+			MediaType:      trimToMaxLen(strings.TrimSpace(d.Type), 50),
 			CollectedAt:    collected,
 		})
 	}
 
 	adapters := make([]agentNetworkAdapterInfo, 0, len(report.Networks))
 	for _, n := range report.Networks {
-		name := firstNonEmptyString(strings.TrimSpace(n.FriendlyName), strings.TrimSpace(n.Interface))
+		name := trimToMaxLen(firstNonEmptyString(strings.TrimSpace(n.FriendlyName), strings.TrimSpace(n.Interface)), 200)
+		if name == "" {
+			continue
+		}
 		adapters = append(adapters, agentNetworkAdapterInfo{
 			Name:          name,
-			MACAddress:    n.MAC,
-			IPAddress:     firstNonEmptyString(strings.TrimSpace(n.IPv4), strings.TrimSpace(n.IPv6)),
+			MACAddress:    trimToMaxLen(strings.TrimSpace(n.MAC), 32),
+			IPAddress:     trimToMaxLen(firstNonEmptyString(strings.TrimSpace(n.IPv4), strings.TrimSpace(n.IPv6)), 45),
 			SubnetMask:    "",
-			Gateway:       n.Gateway,
-			DNSServers:    normalizeDNSServers(n.DNSServers),
+			Gateway:       trimToMaxLen(strings.TrimSpace(n.Gateway), 45),
+			DNSServers:    trimToMaxLen(normalizeDNSServers(n.DNSServers), 500),
 			IsDhcpEnabled: n.DHCPEnabled,
-			AdapterType:   n.Type,
-			Speed:         formatLinkSpeed(n.LinkSpeedMbps),
+			AdapterType:   trimToMaxLen(strings.TrimSpace(n.Type), 50),
+			Speed:         trimToMaxLen(formatLinkSpeed(n.LinkSpeedMbps), 50),
 			CollectedAt:   collected,
 		})
 	}
@@ -1555,13 +1593,13 @@ func buildAgentHardwareEnvelope(report models.InventoryReport) agentHardwareEnve
 			capacity = 0
 		}
 		modules = append(modules, agentMemoryModuleInfo{
-			Slot:          m.Slot,
+			Slot:          trimToMaxLen(strings.TrimSpace(m.Slot), 50),
 			CapacityBytes: capacity,
 			SpeedMhz:      m.SpeedMHz,
-			MemoryType:    m.Type,
-			Manufacturer:  m.Manufacturer,
-			PartNumber:    m.PartNumber,
-			SerialNumber:  m.Serial,
+			MemoryType:    trimToMaxLen(strings.TrimSpace(m.Type), 50),
+			Manufacturer:  trimToMaxLen(strings.TrimSpace(m.Manufacturer), 200),
+			PartNumber:    trimToMaxLen(strings.TrimSpace(m.PartNumber), 100),
+			SerialNumber:  trimToMaxLen(strings.TrimSpace(m.Serial), 100),
 			CollectedAt:   collected,
 		})
 	}
@@ -1580,46 +1618,51 @@ func buildAgentHardwareEnvelope(report models.InventoryReport) agentHardwareEnve
 		}
 	}
 
-	hostname := strings.TrimSpace(report.Hardware.Hostname)
-	osName := strings.TrimSpace(report.OS.Name)
-	osVersion := strings.TrimSpace(report.OS.Version)
+	hostname := trimToMaxLen(strings.TrimSpace(report.Hardware.Hostname), 100)
+	if len(hostname) < 2 {
+		hostname = "unknown-host"
+	}
+	osName := trimToMaxLen(strings.TrimSpace(report.OS.Name), 100)
+	osVersion := trimToMaxLen(strings.TrimSpace(report.OS.Version), 100)
 
 	envelope := agentHardwareEnvelope{
 		Hostname:        hostname,
-		DisplayName:     hostname,
-		Status:          1,
+		DisplayName:     trimToMaxLen(hostname, 100),
+		Status:          "Online",
 		OperatingSystem: osName,
 		OSVersion:       osVersion,
-		AgentVersion:    strings.TrimSpace(Version),
-		LastIPAddress:   lastIP,
-		MACAddress:      primaryMAC,
+		AgentVersion:    trimToMaxLen(strings.TrimSpace(Version), 100),
+		LastIPAddress:   trimToMaxLen(lastIP, 45),
+		MACAddress:      trimToMaxLen(primaryMAC, 17),
 		Hardware: agentHardwareInfo{
 			InventoryRaw:            rawJSON,
 			InventorySchemaVersion:  "discovery.inventory.v1",
 			InventoryCollectedAt:    collected,
-			Manufacturer:            report.Hardware.Manufacturer,
-			Model:                   report.Hardware.Model,
-			SerialNumber:            report.Hardware.MotherboardSerial,
-			MotherboardManufacturer: report.Hardware.MotherboardManufacturer,
-			MotherboardModel:        report.Hardware.MotherboardModel,
-			MotherboardSerialNumber: report.Hardware.MotherboardSerial,
-			Processor:               report.Hardware.CPU,
+			Manufacturer:            trimToMaxLen(strings.TrimSpace(report.Hardware.Manufacturer), 200),
+			Model:                   trimToMaxLen(strings.TrimSpace(report.Hardware.Model), 200),
+			SerialNumber:            trimToMaxLen(strings.TrimSpace(report.Hardware.MotherboardSerial), 100),
+			MotherboardManufacturer: trimToMaxLen(strings.TrimSpace(report.Hardware.MotherboardManufacturer), 200),
+			MotherboardModel:        trimToMaxLen(strings.TrimSpace(report.Hardware.MotherboardModel), 200),
+			MotherboardSerialNumber: trimToMaxLen(strings.TrimSpace(report.Hardware.MotherboardSerial), 100),
+			Processor:               trimToMaxLen(strings.TrimSpace(report.Hardware.CPU), 200),
 			ProcessorCores:          report.Hardware.Cores,
 			ProcessorThreads:        report.Hardware.LogicalCores,
-			ProcessorArchitecture:   report.OS.Architecture,
+			ProcessorArchitecture:   trimToMaxLen(strings.TrimSpace(report.OS.Architecture), 50),
 			TotalMemoryBytes:        memTotalBytes,
-			BIOSVersion:             report.Hardware.BIOSVersion,
-			BIOSManufacturer:        report.Hardware.BIOSVendor,
+			BIOSVersion:             trimToMaxLen(strings.TrimSpace(report.Hardware.BIOSVersion), 100),
+			BIOSManufacturer:        trimToMaxLen(strings.TrimSpace(report.Hardware.BIOSVendor), 200),
 			OSName:                  osName,
 			OSVersion:               osVersion,
-			OSBuild:                 report.OS.Build,
-			OSArchitecture:          report.OS.Architecture,
+			OSBuild:                 trimToMaxLen(strings.TrimSpace(report.OS.Build), 100),
+			OSArchitecture:          trimToMaxLen(strings.TrimSpace(report.OS.Architecture), 50),
 			CollectedAt:             collected,
 			UpdatedAt:               updated,
 		},
-		Disks:                  disks,
-		NetworkAdapters:        adapters,
-		MemoryModules:          modules,
+		Components: agentHardwareComponents{
+			Disks:           disks,
+			NetworkAdapters: adapters,
+			MemoryModules:   modules,
+		},
 		InventoryRaw:           rawJSON,
 		InventorySchemaVersion: "discovery.inventory.v1",
 		InventoryCollectedAt:   collected,
@@ -1632,7 +1675,7 @@ func buildCleanInventoryRaw(
 	disks []agentDiskInfo,
 	networkAdapters []agentNetworkAdapterInfo,
 	memoryModules []agentMemoryModuleInfo,
-) string {
+) json.RawMessage {
 	clean := map[string]any{
 		"collectedAt": report.CollectedAt,
 		"source":      report.Source,
@@ -1687,9 +1730,9 @@ func buildCleanInventoryRaw(
 	}
 	b, err := json.Marshal(clean)
 	if err != nil {
-		return "{}"
+		return json.RawMessage("{}")
 	}
-	return string(b)
+	return json.RawMessage(b)
 }
 
 func mapSlice[T any, R any](in []T, fn func(T) R) []R {
@@ -1743,6 +1786,14 @@ func normalizeDriveLetter(device string) string {
 		return strings.ToUpper(device[:1]) + ":"
 	}
 	return device
+}
+
+func trimToMaxLen(value string, max int) string {
+	value = strings.TrimSpace(value)
+	if max <= 0 || len(value) <= max {
+		return value
+	}
+	return strings.TrimSpace(value[:max])
 }
 
 func isValidDebugScheme(s string) bool {
@@ -2977,26 +3028,369 @@ func (a *App) CreateAgentTicket(title, description string, priority int, categor
 	return json.Marshal(ticket)
 }
 
-// GetKnowledgeBaseArticles returns all mock knowledge base articles.
-func (a *App) GetKnowledgeBaseArticles() []KnowledgeArticle {
-	out := make([]KnowledgeArticle, len(a.knowledge))
-	copy(out, a.knowledge)
+func toStringSlice(value any) []string {
+	arr, ok := value.([]any)
+	if !ok {
+		if strArr, ok := value.([]string); ok {
+			return strArr
+		}
+		return nil
+	}
+	out := make([]string, 0, len(arr))
+	for _, item := range arr {
+		s := strings.TrimSpace(fmt.Sprint(item))
+		if s != "" && s != "<nil>" {
+			out = append(out, s)
+		}
+	}
 	return out
+}
+
+func estimateReadTimeMin(markdown string) int {
+	words := len(strings.Fields(strings.TrimSpace(markdown)))
+	if words <= 0 {
+		return 1
+	}
+	minutes := words / 180
+	if words%180 != 0 {
+		minutes++
+	}
+	if minutes < 1 {
+		minutes = 1
+	}
+	return minutes
+}
+
+func buildSummary(content string) string {
+	if strings.TrimSpace(content) == "" {
+		return ""
+	}
+	lines := strings.Split(content, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(strings.TrimLeft(line, "#*-0123456789. "))
+		if line != "" {
+			if len(line) > 180 {
+				return line[:180] + "..."
+			}
+			return line
+		}
+	}
+	return ""
+}
+
+func parseKnowledgeArticle(raw map[string]any) KnowledgeArticle {
+	article := KnowledgeArticle{
+		ID:          strings.TrimSpace(fmt.Sprint(raw["id"])),
+		Title:       strings.TrimSpace(fmt.Sprint(raw["title"])),
+		Category:    strings.TrimSpace(fmt.Sprint(raw["category"])),
+		Summary:     strings.TrimSpace(fmt.Sprint(raw["summary"])),
+		Content:     strings.TrimSpace(fmt.Sprint(raw["content"])),
+		Tags:        toStringSlice(raw["tags"]),
+		Author:      strings.TrimSpace(fmt.Sprint(raw["author"])),
+		Scope:       strings.TrimSpace(fmt.Sprint(raw["scope"])),
+		PublishedAt: strings.TrimSpace(fmt.Sprint(raw["publishedAt"])),
+		Difficulty:  strings.TrimSpace(fmt.Sprint(raw["difficulty"])),
+		UpdatedAt:   strings.TrimSpace(fmt.Sprint(raw["updatedAt"])),
+	}
+
+	if article.ID == "<nil>" {
+		article.ID = ""
+	}
+	if article.Title == "<nil>" {
+		article.Title = ""
+	}
+	if article.Category == "<nil>" {
+		article.Category = ""
+	}
+	if article.Summary == "<nil>" {
+		article.Summary = ""
+	}
+	if article.Content == "<nil>" {
+		article.Content = ""
+	}
+	if article.Author == "<nil>" {
+		article.Author = ""
+	}
+	if article.Scope == "<nil>" {
+		article.Scope = ""
+	}
+	if article.PublishedAt == "<nil>" {
+		article.PublishedAt = ""
+	}
+	if article.Difficulty == "<nil>" {
+		article.Difficulty = ""
+	}
+	if article.UpdatedAt == "<nil>" {
+		article.UpdatedAt = ""
+	}
+
+	if article.Summary == "" {
+		article.Summary = buildSummary(article.Content)
+	}
+	if article.Difficulty == "" {
+		scope := strings.ToLower(strings.TrimSpace(article.Scope))
+		switch scope {
+		case "global":
+			article.Difficulty = "Global"
+		case "client":
+			article.Difficulty = "Cliente"
+		case "site":
+			article.Difficulty = "Site"
+		}
+	}
+
+	article.ReadTimeMin = toInt(raw["readTimeMin"], raw["readTime"])
+	if article.ReadTimeMin <= 0 {
+		article.ReadTimeMin = estimateReadTimeMin(article.Content)
+	}
+	if article.UpdatedAt == "" {
+		article.UpdatedAt = article.PublishedAt
+	}
+
+	return article
+}
+
+func parseKnowledgeListBody(body []byte) ([]KnowledgeArticle, error) {
+	var direct []map[string]any
+	if err := json.Unmarshal(body, &direct); err == nil {
+		out := make([]KnowledgeArticle, 0, len(direct))
+		for _, item := range direct {
+			out = append(out, parseKnowledgeArticle(item))
+		}
+		return out, nil
+	}
+
+	var envelope map[string]any
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return nil, err
+	}
+
+	for _, key := range []string{"items", "data", "articles", "knowledge", "result"} {
+		arr, ok := envelope[key].([]any)
+		if !ok {
+			continue
+		}
+		out := make([]KnowledgeArticle, 0, len(arr))
+		for _, entry := range arr {
+			if m, ok := entry.(map[string]any); ok {
+				out = append(out, parseKnowledgeArticle(m))
+			}
+		}
+		return out, nil
+	}
+
+	return []KnowledgeArticle{}, nil
+}
+
+func parseKnowledgeDetailBody(body []byte) (KnowledgeArticle, error) {
+	var direct map[string]any
+	if err := json.Unmarshal(body, &direct); err != nil {
+		return KnowledgeArticle{}, err
+	}
+
+	for _, key := range []string{"item", "data", "article", "result"} {
+		if inner, ok := direct[key].(map[string]any); ok {
+			return parseKnowledgeArticle(inner), nil
+		}
+	}
+
+	return parseKnowledgeArticle(direct), nil
+}
+
+const (
+	knowledgeListCacheTTL   = 5 * time.Minute
+	knowledgeDetailCacheTTL = 30 * time.Minute
+)
+
+func knowledgeCacheScope(cfg DebugConfig, info AgentInfo) string {
+	parts := []string{
+		strings.TrimSpace(strings.ToLower(cfg.ApiScheme)),
+		strings.TrimSpace(strings.ToLower(cfg.ApiServer)),
+		strings.TrimSpace(strings.ToLower(info.ClientID)),
+		strings.TrimSpace(strings.ToLower(info.SiteID)),
+		strings.TrimSpace(strings.ToLower(info.AgentID)),
+	}
+	for i, p := range parts {
+		parts[i] = url.QueryEscape(p)
+	}
+	return strings.Join(parts, ":")
+}
+
+func (a *App) fetchKnowledgeList(info AgentInfo, category string) ([]KnowledgeArticle, error) {
+	cfg := a.GetDebugConfig()
+	base := strings.TrimSpace(strings.ToLower(cfg.ApiScheme)) + "://" + strings.TrimSpace(cfg.ApiServer)
+	if strings.TrimSpace(cfg.ApiServer) == "" || strings.TrimSpace(cfg.AuthToken) == "" {
+		return nil, fmt.Errorf("configuração de servidor API incompleta: preencha apiServer e token no Debug")
+	}
+	cacheKey := "knowledge:list:" + knowledgeCacheScope(cfg, info) + ":" + url.QueryEscape(strings.TrimSpace(strings.ToLower(category)))
+
+	if a.db != nil {
+		var cached []KnowledgeArticle
+		if found, err := a.db.CacheGetJSON(cacheKey, &cached); err == nil && found {
+			if cached == nil {
+				return []KnowledgeArticle{}, nil
+			}
+			return cached, nil
+		}
+	}
+
+	path := "/api/agent-auth/knowledge"
+	if c := strings.TrimSpace(category); c != "" {
+		path += "?category=" + url.QueryEscape(c)
+	}
+	target := base + path
+
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return nil, fmt.Errorf("URL inválida: %w", err)
+	}
+	setAgentAuthHeaders(req, cfg.AuthToken)
+
+	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("falha ao buscar artigos da base de conhecimento: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+
+	articles, err := parseKnowledgeListBody(body)
+	if err != nil {
+		return nil, fmt.Errorf("resposta inválida ao listar artigos: %w", err)
+	}
+	if articles == nil {
+		articles = []KnowledgeArticle{}
+	}
+
+	if a.db != nil {
+		if err := a.db.CacheSetJSON(cacheKey, articles, knowledgeListCacheTTL); err != nil {
+			log.Printf("[support] aviso: falha ao salvar cache de knowledge list: %v", err)
+		}
+	}
+
+	return articles, nil
+}
+
+func (a *App) fetchKnowledgeDetail(info AgentInfo, articleID string) (KnowledgeArticle, error) {
+	articleID = strings.TrimSpace(articleID)
+	if articleID == "" {
+		return KnowledgeArticle{}, fmt.Errorf("articleId inválido")
+	}
+
+	cfg := a.GetDebugConfig()
+	if strings.TrimSpace(cfg.ApiServer) == "" || strings.TrimSpace(cfg.AuthToken) == "" {
+		return KnowledgeArticle{}, fmt.Errorf("configuração de servidor API incompleta: preencha apiServer e token no Debug")
+	}
+	cacheKey := "knowledge:detail:" + knowledgeCacheScope(cfg, info) + ":" + url.QueryEscape(strings.ToLower(articleID))
+
+	if a.db != nil {
+		var cached KnowledgeArticle
+		if found, err := a.db.CacheGetJSON(cacheKey, &cached); err == nil && found {
+			if strings.TrimSpace(cached.ID) != "" {
+				return cached, nil
+			}
+		}
+	}
+
+	target := strings.TrimSpace(strings.ToLower(cfg.ApiScheme)) + "://" + strings.TrimSpace(cfg.ApiServer) + "/api/agent-auth/knowledge/" + url.PathEscape(articleID)
+
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return KnowledgeArticle{}, fmt.Errorf("URL inválida: %w", err)
+	}
+	setAgentAuthHeaders(req, cfg.AuthToken)
+
+	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+	if err != nil {
+		return KnowledgeArticle{}, fmt.Errorf("falha ao buscar detalhe do artigo: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return KnowledgeArticle{}, fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+
+	article, err := parseKnowledgeDetailBody(body)
+	if err != nil {
+		return KnowledgeArticle{}, fmt.Errorf("resposta inválida no detalhe do artigo: %w", err)
+	}
+
+	if a.db != nil && strings.TrimSpace(article.ID) != "" {
+		if err := a.db.CacheSetJSON(cacheKey, article, knowledgeDetailCacheTTL); err != nil {
+			log.Printf("[support] aviso: falha ao salvar cache de knowledge detail: %v", err)
+		}
+	}
+
+	return article, nil
+}
+
+// GetKnowledgeBaseArticles returns knowledge-base articles available to the authenticated agent.
+func (a *App) GetKnowledgeBaseArticles() []KnowledgeArticle {
+	info, err := a.fetchAgentContext()
+	if err != nil {
+		a.supportLogf("falha ao resolver contexto para knowledge base: %v", err)
+		return []KnowledgeArticle{}
+	}
+
+	articles, err := a.fetchKnowledgeList(info, "")
+	if err != nil {
+		a.supportLogf("falha ao listar base de conhecimento: %v", err)
+		return []KnowledgeArticle{}
+	}
+
+	for i := range articles {
+		if strings.TrimSpace(articles[i].Content) != "" || strings.TrimSpace(articles[i].ID) == "" {
+			continue
+		}
+		detail, err := a.fetchKnowledgeDetail(info, articles[i].ID)
+		if err != nil {
+			a.supportLogf("falha ao carregar markdown do artigo %s: %v", articles[i].ID, err)
+			continue
+		}
+		if strings.TrimSpace(detail.Content) != "" {
+			articles[i].Content = detail.Content
+		}
+		if strings.TrimSpace(articles[i].Summary) == "" {
+			articles[i].Summary = detail.Summary
+		}
+		if len(articles[i].Tags) == 0 {
+			articles[i].Tags = detail.Tags
+		}
+	}
+
+	return articles
 }
 
 // SearchKnowledgeBaseArticles filters articles by title/category/tags/content.
 func (a *App) SearchKnowledgeBaseArticles(query string) []KnowledgeArticle {
+	articles := a.GetKnowledgeBaseArticles()
 	q := strings.TrimSpace(strings.ToLower(query))
 	if q == "" {
-		return a.GetKnowledgeBaseArticles()
+		return articles
 	}
 
-	matches := make([]KnowledgeArticle, 0, len(a.knowledge))
-	for _, article := range a.knowledge {
+	matches := make([]KnowledgeArticle, 0, len(articles))
+	for _, article := range articles {
 		if strings.Contains(strings.ToLower(article.Title), q) ||
 			strings.Contains(strings.ToLower(article.Category), q) ||
 			strings.Contains(strings.ToLower(article.Summary), q) ||
-			strings.Contains(strings.ToLower(article.Content), q) {
+			strings.Contains(strings.ToLower(article.Content), q) ||
+			strings.Contains(strings.ToLower(article.Author), q) ||
+			strings.Contains(strings.ToLower(article.Scope), q) {
 			matches = append(matches, article)
 			continue
 		}
@@ -3010,144 +3404,4 @@ func (a *App) SearchKnowledgeBaseArticles(query string) []KnowledgeArticle {
 	}
 
 	return matches
-}
-
-func mockKnowledgeBaseArticles() []KnowledgeArticle {
-	return []KnowledgeArticle{
-		{
-			ID:          "KB-001",
-			Title:       "Checklist Rapido de Manutencao Preventiva para PCs",
-			Category:    "Manutencao Preventiva",
-			Summary:     "Passo a passo mensal para manter desktop e notebook estaveis e evitar travamentos.",
-			Difficulty:  "Basico",
-			ReadTimeMin: 6,
-			UpdatedAt:   "02/03/2026",
-			Tags:        []string{"poeira", "limpeza", "temperatura", "preventiva"},
-			Content: `Objetivo
-Aplicar uma rotina simples para reduzir superaquecimento, lentidao e falhas comuns.
-
-Passos recomendados
-1. Limpar entradas de ar, ventoinhas e filtros com pincel antiestatico.
-2. Verificar temperatura media de CPU/GPU em uso comum e em carga.
-3. Confirmar espaco livre no SSD/HDD (idealmente acima de 20%).
-4. Revisar programas que iniciam com o Windows e desativar excessos.
-5. Aplicar atualizacoes de sistema e drivers criticos.
-
-Sinais de alerta
-- Ventoinha constantemente em velocidade maxima.
-- Quedas de desempenho apos 20-30 minutos de uso.
-- Reinicios aleatorios durante tarefas simples.
-
-Periodicidade sugerida
-- Uso corporativo: mensal.
-- Uso domestico moderado: a cada 2 meses.`,
-		},
-		{
-			ID:          "KB-002",
-			Title:       "PC Muito Lento: Diagnostico em 10 Minutos",
-			Category:    "Desempenho",
-			Summary:     "Fluxo rapido para identificar gargalo em disco, memoria, CPU ou software em segundo plano.",
-			Difficulty:  "Intermediario",
-			ReadTimeMin: 8,
-			UpdatedAt:   "02/03/2026",
-			Tags:        []string{"lentidao", "cpu", "memoria", "ssd", "startup"},
-			Content: `Objetivo
-Encontrar a principal causa de lentidao sem formatar a maquina.
-
-Roteiro rapido
-1. Abrir gerenciador de tarefas e observar uso de CPU, memoria e disco por 2 minutos.
-2. Se disco em 100% frequente, checar saude do armazenamento e espaco livre.
-3. Se memoria acima de 85% constante, revisar apps residentes e abas excessivas.
-4. Se CPU alta sem motivo claro, verificar antivirais/scans agendados e processos suspeitos.
-5. Confirmar versao do sistema e pendencias de update.
-
-Acao imediata recomendada
-- Remover softwares nao utilizados.
-- Reduzir itens de inicializacao.
-- Migrar de HDD para SSD quando aplicavel.
-
-Quando escalar
-- Lentidao persiste apos reinicializacao limpa.
-- Disco apresenta erros SMART ou falhas de leitura.`,
-		},
-		{
-			ID:          "KB-003",
-			Title:       "Superaquecimento em Notebook: Causas e Correcao",
-			Category:    "Hardware",
-			Summary:     "Como validar fluxo de ar, pasta termica e perfil de energia para reduzir aquecimento.",
-			Difficulty:  "Intermediario",
-			ReadTimeMin: 7,
-			UpdatedAt:   "02/03/2026",
-			Tags:        []string{"temperatura", "cooler", "pasta termica", "energia"},
-			Content: `Sintomas comuns
-- Teclado e base muito quentes.
-- Queda brusca de FPS ou travamentos ao abrir varias tarefas.
-
-Checklist tecnico
-1. Conferir obstrucao de saidas de ar e funcionamento das ventoinhas.
-2. Verificar plano de energia (evitar modo desempenho maximo continuo).
-3. Testar elevacao traseira do notebook para melhorar ventilacao.
-4. Monitorar temperatura em repouso e em carga por 10 minutos.
-
-Corretivas
-- Limpeza interna completa.
-- Troca de pasta termica em equipamento fora de garantia.
-- Ajuste de limite de desempenho para uso diario.
-
-Observacao
-Se a temperatura sobe muito rapido mesmo em repouso, indicar avaliacao tecnica presencial.`,
-		},
-		{
-			ID:          "KB-004",
-			Title:       "Windows Nao Inicia: Procedimento Seguro de Recuperacao",
-			Category:    "Sistema Operacional",
-			Summary:     "Fluxo de recuperacao por etapas para evitar perda de dados em falhas de boot.",
-			Difficulty:  "Avancado",
-			ReadTimeMin: 9,
-			UpdatedAt:   "02/03/2026",
-			Tags:        []string{"boot", "reparo", "restauracao", "seguranca de dados"},
-			Content: `Prioridade
-Preservar dados antes de qualquer acao destrutiva.
-
-Etapas
-1. Tentar inicializacao em modo de recuperacao automatica.
-2. Executar reparo de inicializacao.
-3. Se falhar, abrir prompt de comando no ambiente de recuperacao e validar integridade do disco.
-4. Restaurar para ponto anterior quando disponivel.
-5. Como ultimo recurso, reinstalacao com backup previo.
-
-Boas praticas
-- Registrar mensagens de erro exibidas em tela.
-- Validar backup em midia externa antes de formatar.
-
-Nao recomendado
-- Repetir desligamentos forcados em sequencia.
-- Aplicar comandos sem confirmar a particao correta.`,
-		},
-		{
-			ID:          "KB-005",
-			Title:       "Troca de SSD: Pos-Migracao e Validacao Final",
-			Category:    "Upgrade de Hardware",
-			Summary:     "Itens de validacao apos clonagem ou instalacao limpa para garantir estabilidade do equipamento.",
-			Difficulty:  "Basico",
-			ReadTimeMin: 5,
-			UpdatedAt:   "02/03/2026",
-			Tags:        []string{"ssd", "upgrade", "clonagem", "desempenho"},
-			Content: `Checklist pos-migracao
-1. Confirmar reconhecimento do SSD no sistema e BIOS/UEFI.
-2. Validar particao de boot e ordem de inicializacao.
-3. Verificar espaco livre e integridade basica do sistema.
-4. Executar atualizacoes pendentes e reiniciar.
-5. Rodar teste rapido de leitura/escrita para comparar com esperado.
-
-Resultado esperado
-- Inicializacao mais rapida.
-- Menor tempo para abrir aplicativos.
-- Reducao de congelamentos intermitentes.
-
-Se houver problema
-- Revisar modo SATA/UEFI.
-- Confirmar se clonagem copiou particoes de sistema corretamente.`,
-		},
-	}
 }

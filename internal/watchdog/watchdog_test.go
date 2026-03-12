@@ -224,6 +224,73 @@ func TestPeriodicHeartbeat(t *testing.T) {
 	}
 }
 
+func TestWatchdog_ComponentSpecificThresholds(t *testing.T) {
+	cfg := Config{
+		HeartbeatInterval:   1 * time.Second,
+		UnhealthyThreshold:  3 * time.Second,
+		DegradedThreshold:   2 * time.Second,
+		CheckInterval:       200 * time.Millisecond,
+		EnableAutoRecovery:  false,
+		MaxRecoveryAttempts: 3,
+		ComponentThresholds: map[Component]Thresholds{
+			ComponentInventory: {
+				DegradedThreshold:  4 * time.Second,
+				UnhealthyThreshold: 6 * time.Second,
+			},
+		},
+	}
+
+	wd := New(cfg)
+	wd.Heartbeat(ComponentInventory)
+	wd.Heartbeat(ComponentAI)
+
+	time.Sleep(3500 * time.Millisecond)
+
+	inventory := wd.GetComponentHealth(ComponentInventory)
+	if inventory.Status != StatusHealthy {
+		t.Errorf("Expected inventory healthy with custom threshold, got %s", inventory.Status)
+	}
+
+	ai := wd.GetComponentHealth(ComponentAI)
+	if ai.Status != StatusUnhealthy {
+		t.Errorf("Expected AI unhealthy with default threshold, got %s", ai.Status)
+	}
+}
+
+func TestWatchdog_UnhealthyNotifyCooldown(t *testing.T) {
+	cfg := Config{
+		HeartbeatInterval:       1 * time.Second,
+		UnhealthyThreshold:      500 * time.Millisecond,
+		DegradedThreshold:       300 * time.Millisecond,
+		CheckInterval:           100 * time.Millisecond,
+		EnableAutoRecovery:      false,
+		MaxRecoveryAttempts:     3,
+		UnhealthyNotifyCooldown: 600 * time.Millisecond,
+		ComponentThresholds:     nil,
+	}
+
+	wd := New(cfg)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	notifyCount := 0
+	wd.OnUnhealthy(func(check HealthCheck) {
+		notifyCount++
+	})
+
+	wd.Start(ctx)
+	defer wd.Stop()
+
+	wd.Heartbeat(ComponentInventory)
+
+	// Wait long enough to trigger unhealthy multiple times, but within cooldown windows.
+	time.Sleep(1700 * time.Millisecond)
+
+	if notifyCount < 2 || notifyCount > 3 {
+		t.Errorf("Expected 2-3 notifications with cooldown applied, got %d", notifyCount)
+	}
+}
+
 func TestSafeGo_RecoversPanic(t *testing.T) {
 	// This test just ensures SafeGo doesn't crash the test
 	done := make(chan bool)

@@ -28,7 +28,10 @@ type windowsHardwareDetails struct {
 
 // collectWindowsHardwareDetails runs a PowerShell script that gathers
 // motherboard, BIOS, memory, monitor and GPU details via Win32 CIM classes.
-func collectWindowsHardwareDetails(ctx context.Context) (windowsHardwareDetails, error) {
+func collectWindowsHardwareDetails(ctx context.Context, progress func()) (windowsHardwareDetails, error) {
+	if progress != nil {
+		progress()
+	}
 	script := `$ErrorActionPreference = 'Stop'
 $mb = Get-CimInstance Win32_BaseBoard | Select-Object -First 1
 $bios = Get-CimInstance Win32_BIOS | Select-Object -First 1
@@ -87,6 +90,9 @@ $result | ConvertTo-Json -Depth 6 -Compress`
 	cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", script)
 	processutil.HideWindow(cmd)
 	output, err := cmd.CombinedOutput()
+	if progress != nil {
+		progress()
+	}
 	if err != nil {
 		return windowsHardwareDetails{}, fmt.Errorf("erro no detalhe de hardware windows: %w | saida: %s", err, strings.TrimSpace(string(output)))
 	}
@@ -95,12 +101,18 @@ $result | ConvertTo-Json -Depth 6 -Compress`
 	if err := json.Unmarshal(output, &details); err != nil {
 		return windowsHardwareDetails{}, fmt.Errorf("erro ao parsear detalhe de hardware windows: %w", err)
 	}
+	if progress != nil {
+		progress()
+	}
 
 	return details, nil
 }
 
 // collectWithPowerShell is the full PowerShell-based inventory fallback.
-func collectWithPowerShell(ctx context.Context) (models.InventoryReport, error) {
+func collectWithPowerShell(ctx context.Context, progress func()) (models.InventoryReport, error) {
+	if progress != nil {
+		progress()
+	}
 	script := `$ErrorActionPreference = 'Stop'
 $cs = Get-CimInstance Win32_ComputerSystem
 $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
@@ -200,6 +212,9 @@ $result | ConvertTo-Json -Depth 6 -Compress`
 	cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", script)
 	processutil.HideWindow(cmd)
 	output, err := cmd.CombinedOutput()
+	if progress != nil {
+		progress()
+	}
 	if err != nil {
 		return models.InventoryReport{}, fmt.Errorf("erro no fallback powershell: %w | saida: %s", err, strings.TrimSpace(string(output)))
 	}
@@ -239,6 +254,9 @@ $result | ConvertTo-Json -Depth 6 -Compress`
 
 	if err := json.Unmarshal(output, &raw); err != nil {
 		return models.InventoryReport{}, fmt.Errorf("erro ao parsear json do powershell: %w", err)
+	}
+	if progress != nil {
+		progress()
 	}
 
 	report := models.InventoryReport{
@@ -294,7 +312,7 @@ $result | ConvertTo-Json -Depth 6 -Compress`
 		})
 	}
 
-	if details, derr := collectWindowsHardwareDetails(ctx); derr == nil {
+	if details, derr := collectWindowsHardwareDetails(ctx, progress); derr == nil {
 		report.Hardware.MotherboardManufacturer = details.MotherboardManufacturer
 		report.Hardware.MotherboardModel = details.MotherboardModel
 		report.Hardware.MotherboardSerial = details.MotherboardSerial
@@ -308,6 +326,9 @@ $result | ConvertTo-Json -Depth 6 -Compress`
 	}
 	report.Hardware.MemoryModulesCount = len(report.MemoryModules)
 	sanitizeHardwareFields(&report)
+	if progress != nil {
+		progress()
+	}
 
 	return report, nil
 }

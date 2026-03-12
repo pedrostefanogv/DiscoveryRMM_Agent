@@ -51,10 +51,14 @@ const maxConcurrentQueries = 6
 // runParallelQueries executes all queries concurrently (up to
 // maxConcurrentQueries at a time) and returns results keyed by query name.
 // The provided context should already have a timeout.
-func runParallelQueries(ctx context.Context, binary string, queries []osqueryQuery) map[string]osqueryResult {
+func runParallelQueries(ctx context.Context, binary string, queries []osqueryQuery, progress func()) map[string]osqueryResult {
 	results := make([]osqueryResult, len(queries))
 	var wg sync.WaitGroup
 	wg.Add(len(queries))
+
+	if progress != nil {
+		progress()
+	}
 
 	sem := make(chan struct{}, maxConcurrentQueries)
 
@@ -65,6 +69,9 @@ func runParallelQueries(ctx context.Context, binary string, queries []osqueryQue
 			defer func() { <-sem }() // release
 			rows, err := queryOsquery(ctx, binary, query.sql)
 			results[idx] = osqueryResult{name: query.name, rows: rows, err: err}
+			if progress != nil {
+				progress()
+			}
 		}(i, q)
 	}
 

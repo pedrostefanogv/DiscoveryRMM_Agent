@@ -212,6 +212,9 @@ export namespace main {
 	    summary: string;
 	    content: string;
 	    tags: string[];
+	    author: string;
+	    scope: string;
+	    publishedAt: string;
 	    difficulty: string;
 	    readTimeMin: number;
 	    updatedAt: string;
@@ -228,6 +231,9 @@ export namespace main {
 	        this.summary = source["summary"];
 	        this.content = source["content"];
 	        this.tags = source["tags"];
+	        this.author = source["author"];
+	        this.scope = source["scope"];
+	        this.publishedAt = source["publishedAt"];
 	        this.difficulty = source["difficulty"];
 	        this.readTimeMin = source["readTimeMin"];
 	        this.updatedAt = source["updatedAt"];

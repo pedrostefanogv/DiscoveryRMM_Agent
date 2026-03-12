@@ -57,17 +57,34 @@ type Config struct {
 	EnableAutoRecovery bool
 	// MaxRecoveryAttempts limits recovery retries per component
 	MaxRecoveryAttempts int
+	// UnhealthyNotifyCooldown limits how often unhealthy callbacks are emitted per component
+	UnhealthyNotifyCooldown time.Duration
+	// ComponentThresholds allows per-component degraded/unhealthy overrides
+	ComponentThresholds map[Component]Thresholds
+}
+
+// Thresholds defines degraded/unhealthy timing for a component.
+type Thresholds struct {
+	DegradedThreshold  time.Duration
+	UnhealthyThreshold time.Duration
 }
 
 // DefaultConfig returns sensible defaults for watchdog.
 func DefaultConfig() Config {
 	return Config{
-		HeartbeatInterval:   30 * time.Second,
-		UnhealthyThreshold:  90 * time.Second,
-		DegradedThreshold:   60 * time.Second,
-		CheckInterval:       15 * time.Second,
-		EnableAutoRecovery:  true,
-		MaxRecoveryAttempts: 3,
+		HeartbeatInterval:       30 * time.Second,
+		UnhealthyThreshold:      90 * time.Second,
+		DegradedThreshold:       60 * time.Second,
+		CheckInterval:           15 * time.Second,
+		EnableAutoRecovery:      true,
+		MaxRecoveryAttempts:     3,
+		UnhealthyNotifyCooldown: 60 * time.Second,
+		ComponentThresholds: map[Component]Thresholds{
+			ComponentInventory: {
+				DegradedThreshold:  90 * time.Second,
+				UnhealthyThreshold: 150 * time.Second,
+			},
+		},
 	}
 }
 
@@ -79,6 +96,7 @@ type Watchdog struct {
 	heartbeats    map[Component]time.Time
 	recoveryFuncs map[Component]RecoveryAction
 	recoveryCount map[Component]int
+	lastNotified  map[Component]time.Time
 	lastCheck     time.Time
 
 	onUnhealthy func(HealthCheck)
@@ -90,11 +108,18 @@ type Watchdog struct {
 
 // New creates a new watchdog with the given configuration.
 func New(cfg Config) *Watchdog {
+	copiedThresholds := make(map[Component]Thresholds, len(cfg.ComponentThresholds))
+	for component, thresholds := range cfg.ComponentThresholds {
+		copiedThresholds[component] = thresholds
+	}
+	cfg.ComponentThresholds = copiedThresholds
+
 	return &Watchdog{
 		cfg:           cfg,
 		heartbeats:    make(map[Component]time.Time),
 		recoveryFuncs: make(map[Component]RecoveryAction),
 		recoveryCount: make(map[Component]int),
+		lastNotified:  make(map[Component]time.Time),
 	}
 }
 
@@ -194,6 +219,7 @@ func (w *Watchdog) ResetRecoveryCount(component Component) {
 
 func (w *Watchdog) buildHealthCheck(component Component, lastBeat, now time.Time) HealthCheck {
 	elapsed := now.Sub(lastBeat)
+	degradedThreshold, unhealthyThreshold := w.thresholdsFor(component)
 	check := HealthCheck{
 		Component:   component,
 		LastBeat:    lastBeat,
@@ -201,18 +227,41 @@ func (w *Watchdog) buildHealthCheck(component Component, lastBeat, now time.Time
 		Recoverable: w.recoveryFuncs[component] != nil,
 	}
 
-	if elapsed > w.cfg.UnhealthyThreshold {
+	if elapsed > unhealthyThreshold {
 		check.Status = StatusUnhealthy
-		check.Message = fmt.Sprintf("sem heartbeat ha %v (limite: %v)", elapsed.Round(time.Second), w.cfg.UnhealthyThreshold)
-	} else if elapsed > w.cfg.DegradedThreshold {
+		check.Message = fmt.Sprintf("sem heartbeat ha %v (limite: %v)", elapsed.Round(time.Second), unhealthyThreshold)
+	} else if elapsed > degradedThreshold {
 		check.Status = StatusDegraded
-		check.Message = fmt.Sprintf("heartbeat atrasado em %v (limite: %v)", elapsed.Round(time.Second), w.cfg.DegradedThreshold)
+		check.Message = fmt.Sprintf("heartbeat atrasado em %v (limite: %v)", elapsed.Round(time.Second), degradedThreshold)
 	} else {
 		check.Status = StatusHealthy
 		check.Message = fmt.Sprintf("saudavel (ultimo heartbeat: %v atrás)", elapsed.Round(time.Second))
 	}
 
 	return check
+}
+
+func (w *Watchdog) thresholdsFor(component Component) (time.Duration, time.Duration) {
+	degraded := w.cfg.DegradedThreshold
+	unhealthy := w.cfg.UnhealthyThreshold
+
+	if override, ok := w.cfg.ComponentThresholds[component]; ok {
+		if override.DegradedThreshold > 0 {
+			degraded = override.DegradedThreshold
+		}
+		if override.UnhealthyThreshold > 0 {
+			unhealthy = override.UnhealthyThreshold
+		}
+	}
+
+	if unhealthy <= 0 {
+		unhealthy = 1 * time.Second
+	}
+	if degraded <= 0 || degraded >= unhealthy {
+		degraded = unhealthy / 2
+	}
+
+	return degraded, unhealthy
 }
 
 func (w *Watchdog) performHealthChecks() {
@@ -222,30 +271,40 @@ func (w *Watchdog) performHealthChecks() {
 	w.mu.Unlock()
 
 	for _, check := range checks {
-		// Reset recovery count if component is now healthy (recovered)
-		if check.Status == StatusHealthy {
+		switch check.Status {
+		case StatusHealthy:
+			// Reset recovery count if component is now healthy (recovered)
 			w.mu.Lock()
 			if w.recoveryCount[check.Component] > 0 {
 				log.Printf("[watchdog] %s totalmente recuperado - resetando contador", check.Component)
 				w.recoveryCount[check.Component] = 0
 			}
 			w.mu.Unlock()
-		} else if check.Status == StatusUnhealthy {
+		case StatusUnhealthy:
 			log.Printf("[watchdog] ALERTA: %s %s - %s", check.Component, check.Status, check.Message)
 			w.handleUnhealthy(check)
-		} else if check.Status == StatusDegraded {
+		case StatusDegraded:
 			log.Printf("[watchdog] AVISO: %s %s - %s", check.Component, check.Status, check.Message)
 		}
 	}
 }
 
 func (w *Watchdog) handleUnhealthy(check HealthCheck) {
-	// Notify callback if set
-	w.mu.RLock()
+	// Notify callback if set (with per-component cooldown to avoid alert storms)
+	w.mu.Lock()
 	callback := w.onUnhealthy
-	w.mu.RUnlock()
+	notify := true
+	if w.cfg.UnhealthyNotifyCooldown > 0 {
+		if last := w.lastNotified[check.Component]; !last.IsZero() && time.Since(last) < w.cfg.UnhealthyNotifyCooldown {
+			notify = false
+		}
+	}
+	if notify {
+		w.lastNotified[check.Component] = time.Now()
+	}
+	w.mu.Unlock()
 
-	if callback != nil {
+	if callback != nil && notify {
 		go w.safeRun(func() {
 			callback(check)
 		})
