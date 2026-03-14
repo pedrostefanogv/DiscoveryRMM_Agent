@@ -16,9 +16,21 @@ type AppBridge interface {
 	UpgradePackage(id string) (string, error)
 	UpgradeAllPackages() (string, error)
 	GetPendingUpdatesJSON() (json.RawMessage, error)
+	GetPackageActionsJSON() (json.RawMessage, error)
 	ExportMarkdown() (string, error)
 	ExportPDF() (string, error)
 	GetOsqueryStatusJSON() (json.RawMessage, error)
+	ListPrintersJSON() (json.RawMessage, error)
+	InstallPrinterJSON(name, driverName, portName, portAddress string) (json.RawMessage, error)
+	InstallSharedPrinterJSON(connectionPath string, setDefault bool) (json.RawMessage, error)
+	RemovePrinterJSON(name string) (json.RawMessage, error)
+	GetPrinterConfigJSON(name string) (json.RawMessage, error)
+	ListPrintJobsJSON(printerName string) (json.RawMessage, error)
+	RemovePrintJobJSON(printerName string, jobID int) (json.RawMessage, error)
+	GetSpoolerStatusJSON() (json.RawMessage, error)
+	RestartSpoolerJSON() (json.RawMessage, error)
+	ClearPrintQueueJSON(printerName string) (json.RawMessage, error)
+	ListPrinterDriversJSON() (json.RawMessage, error)
 	ListInstalled() (string, error)
 	GetLogsText() string
 	// Tickets
@@ -141,6 +153,14 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 	})
 
 	reg.Register(Tool{
+		Name:        "get_package_actions",
+		Description: "Retorna o mapa de acao contextual por pacote (install, uninstall, upgrade).",
+		Handler: func(args map[string]any) (any, error) {
+			return app.GetPackageActionsJSON()
+		},
+	})
+
+	reg.Register(Tool{
 		Name:        "upgrade_all_packages",
 		Description: "Atualiza todos os pacotes que possuem atualizacao disponivel via winget.",
 		Handler: func(args map[string]any) (any, error) {
@@ -155,6 +175,166 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 		Description: "Verifica se o osquery esta instalado no computador e retorna o caminho do binario.",
 		Handler: func(args map[string]any) (any, error) {
 			return app.GetOsqueryStatusJSON()
+		},
+	})
+
+	// ========== IMPRESSORAS ==========
+	reg.Register(Tool{
+		Name:        "list_printers",
+		Description: "Lista as impressoras instaladas no Windows com driver, porta e status.",
+		Handler: func(args map[string]any) (any, error) {
+			return app.ListPrintersJSON()
+		},
+	})
+
+	reg.Register(Tool{
+		Name:        "install_printer",
+		Description: "Instala uma impressora usando nome, driver, porta e opcionalmente um endereco para criar a porta TCP/IP.",
+		Params: []ToolParam{
+			{Name: "name", Type: "string", Description: "Nome da impressora", Required: true},
+			{Name: "driverName", Type: "string", Description: "Nome do driver de impressao", Required: true},
+			{Name: "portName", Type: "string", Description: "Nome da porta local ou TCP/IP", Required: true},
+			{Name: "portAddress", Type: "string", Description: "IP ou hostname para criar a porta, se ela ainda nao existir", Required: false},
+		},
+		Handler: func(args map[string]any) (any, error) {
+			name, err := requiredStringArg(args, "name")
+			if err != nil {
+				return nil, err
+			}
+			driverName, err := requiredStringArg(args, "driverName")
+			if err != nil {
+				return nil, err
+			}
+			portName, err := requiredStringArg(args, "portName")
+			if err != nil {
+				return nil, err
+			}
+			portAddress := optionalStringArg(args, "portAddress")
+			return app.InstallPrinterJSON(name, driverName, portName, portAddress)
+		},
+	})
+
+	reg.Register(Tool{
+		Name:        "install_shared_printer",
+		Description: "Instala uma impressora compartilhada via caminho UNC, por exemplo \\\\servidor\\fila.",
+		Params: []ToolParam{
+			{Name: "connectionPath", Type: "string", Description: "Caminho UNC da impressora compartilhada (ex: \\\\servidor\\impressora)", Required: true},
+			{Name: "setDefault", Type: "boolean", Description: "Se true, define a impressora instalada como padrao", Required: false},
+		},
+		Handler: func(args map[string]any) (any, error) {
+			connectionPath, err := requiredStringArg(args, "connectionPath")
+			if err != nil {
+				return nil, err
+			}
+			setDefault := false
+			if value, ok := args["setDefault"].(bool); ok {
+				setDefault = value
+			}
+			return app.InstallSharedPrinterJSON(connectionPath, setDefault)
+		},
+	})
+
+	reg.Register(Tool{
+		Name:        "remove_printer",
+		Description: "Remove uma impressora instalada pelo nome.",
+		Params: []ToolParam{
+			{Name: "name", Type: "string", Description: "Nome da impressora", Required: true},
+		},
+		Handler: func(args map[string]any) (any, error) {
+			name, err := requiredStringArg(args, "name")
+			if err != nil {
+				return nil, err
+			}
+			return app.RemovePrinterJSON(name)
+		},
+	})
+
+	reg.Register(Tool{
+		Name:        "get_printer_config",
+		Description: "Retorna a configuracao atual de impressao para uma impressora especifica.",
+		Params: []ToolParam{
+			{Name: "printerName", Type: "string", Description: "Nome da impressora", Required: true},
+		},
+		Handler: func(args map[string]any) (any, error) {
+			printerName, err := requiredStringArg(args, "printerName")
+			if err != nil {
+				return nil, err
+			}
+			return app.GetPrinterConfigJSON(printerName)
+		},
+	})
+
+	reg.Register(Tool{
+		Name:        "list_print_jobs",
+		Description: "Lista os jobs atualmente na fila de uma impressora.",
+		Params: []ToolParam{
+			{Name: "printerName", Type: "string", Description: "Nome da impressora", Required: true},
+		},
+		Handler: func(args map[string]any) (any, error) {
+			printerName, err := requiredStringArg(args, "printerName")
+			if err != nil {
+				return nil, err
+			}
+			return app.ListPrintJobsJSON(printerName)
+		},
+	})
+
+	reg.Register(Tool{
+		Name:        "remove_print_job",
+		Description: "Cancela um job especifico da fila de impressao.",
+		Params: []ToolParam{
+			{Name: "printerName", Type: "string", Description: "Nome da impressora", Required: true},
+			{Name: "jobId", Type: "integer", Description: "ID numerico do job de impressao", Required: true},
+		},
+		Handler: func(args map[string]any) (any, error) {
+			printerName, err := requiredStringArg(args, "printerName")
+			if err != nil {
+				return nil, err
+			}
+			jobID, err := requiredIntArg(args, "jobId")
+			if err != nil {
+				return nil, err
+			}
+			return app.RemovePrintJobJSON(printerName, jobID)
+		},
+	})
+
+	reg.Register(Tool{
+		Name:        "spooler_status",
+		Description: "Consulta o status atual do servico Spooler de impressao.",
+		Handler: func(args map[string]any) (any, error) {
+			return app.GetSpoolerStatusJSON()
+		},
+	})
+
+	reg.Register(Tool{
+		Name:        "restart_spooler",
+		Description: "Reinicia o servico Spooler e retorna o status apos o restart.",
+		Handler: func(args map[string]any) (any, error) {
+			return app.RestartSpoolerJSON()
+		},
+	})
+
+	reg.Register(Tool{
+		Name:        "clear_queue",
+		Description: "Limpa todos os jobs pendentes da fila de uma impressora.",
+		Params: []ToolParam{
+			{Name: "printerName", Type: "string", Description: "Nome da impressora", Required: true},
+		},
+		Handler: func(args map[string]any) (any, error) {
+			printerName, err := requiredStringArg(args, "printerName")
+			if err != nil {
+				return nil, err
+			}
+			return app.ClearPrintQueueJSON(printerName)
+		},
+	})
+
+	reg.Register(Tool{
+		Name:        "list_drivers",
+		Description: "Lista os drivers de impressora instalados no Windows.",
+		Handler: func(args map[string]any) (any, error) {
+			return app.ListPrinterDriversJSON()
 		},
 	})
 
@@ -349,4 +529,41 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 			return app.CreateAgentTicket(title, description, priority, category)
 		},
 	})
+}
+
+func requiredStringArg(args map[string]any, name string) (string, error) {
+	value, _ := args[name].(string)
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", fmt.Errorf("%s nao pode ser vazio", name)
+	}
+	return value, nil
+}
+
+func optionalStringArg(args map[string]any, name string) string {
+	value, _ := args[name].(string)
+	return strings.TrimSpace(value)
+}
+
+func requiredIntArg(args map[string]any, name string) (int, error) {
+	value, ok := args[name]
+	if !ok {
+		return 0, fmt.Errorf("%s nao pode ser vazio", name)
+	}
+
+	switch typed := value.(type) {
+	case int:
+		if typed <= 0 {
+			return 0, fmt.Errorf("%s deve ser maior que zero", name)
+		}
+		return typed, nil
+	case float64:
+		parsed := int(typed)
+		if float64(parsed) != typed || parsed <= 0 {
+			return 0, fmt.Errorf("%s deve ser um inteiro maior que zero", name)
+		}
+		return parsed, nil
+	default:
+		return 0, fmt.Errorf("%s deve ser um inteiro", name)
+	}
 }

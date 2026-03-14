@@ -55,3 +55,7 @@ go build ./...
 - Persistencia local de preferencia/favoritos.
 - Filtros por categoria/licenca/tags.
 - Empacotamento NSIS e assinatura do binario.
+
+## Documentacao do instalador
+
+- Guia unico de payload e parametros: `DOCs/INSTALADOR_PAYLOAD_E_PARAMETROS.md`

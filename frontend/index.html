@@ -311,21 +311,26 @@
           <!-- Config panel (hidden by default) -->
           <div id="chatConfigPanel" class="chat-config hidden">
             <div class="chat-config-field">
-              <label for="chatEndpoint">Endpoint (URL da API)</label>
-              <input id="chatEndpoint" type="url" placeholder="https://api.openai.com/v1/chat/completions" />
+              <label for="chatEndpoint">Servidor API (opcional)</label>
+              <input id="chatEndpoint" type="url" placeholder="https://seu-servidor" />
             </div>
             <div class="chat-config-field">
-              <label for="chatApiKey">API Key</label>
-              <input id="chatApiKey" type="password" placeholder="sk-..." />
+              <label for="chatApiKey">Token do Agente (opcional)</label>
+              <input id="chatApiKey" type="password" placeholder="mdz_..." />
             </div>
             <div class="chat-config-field">
-              <label for="chatModel">Modelo</label>
-              <input id="chatModel" type="text" placeholder="gpt-4o-mini" />
+              <label for="chatModel">Modelo (compatibilidade)</label>
+              <input id="chatModel" type="text" placeholder="agent-auth" />
+            </div>
+            <div class="chat-config-field">
+              <label for="chatMaxTokens">Max Tokens (opcional)</label>
+              <input id="chatMaxTokens" type="number" min="0" step="1" placeholder="0" />
             </div>
             <div class="chat-config-field">
               <label for="chatSystemPrompt">Instrucoes do Assistente (Opcional)</label>
               <textarea id="chatSystemPrompt" rows="5" placeholder="Ex.: Responda com foco em inventario corporativo e sempre cite riscos antes de executar acoes." spellcheck="true" lang="pt-BR" autocapitalize="sentences" autocomplete="on"></textarea>
             </div>
+            <div class="meta">Se endpoint/token ficarem vazios, o chat usa automaticamente apiScheme/apiServer/authToken da aba Debug.</div>
             <button id="chatTestConfigBtn" class="btn subtle">Testar Configuracao</button>
             <button id="chatSaveConfigBtn" class="btn primary">Salvar Configuracao</button>
           </div>
@@ -612,6 +617,14 @@
     </div>
   </div>
 
+  <script src="js/app-utils.js"></script>
+  <script src="js/app-store-updates.js"></script>
+  <script src="js/app-inventory.js"></script>
+  <script src="js/app-chat.js"></script>
+  <script src="js/app-support.js"></script>
+  <script src="js/app-knowledge.js"></script>
+  <script src="js/app-debug.js"></script>
   <script src="app.js"></script>
+  <script src="js/app-init.js"></script>
 </body>
 </html>

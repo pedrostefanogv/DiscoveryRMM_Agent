@@ -74,6 +74,67 @@ func TestHTTPClient_GetCatalog_304NotModified(t *testing.T) {
 	}
 }
 
+func TestHTTPClient_GetCatalog_LoadsFromSQLiteAndRevalidates(t *testing.T) {
+	calls := 0
+	catalog := models.Catalog{Count: 7, Packages: []models.AppItem{{ID: "cached", Name: "Cached"}}}
+	body, _ := json.Marshal(catalog)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if r.Header.Get("If-None-Match") != `"sqlite-etag"` {
+			t.Fatalf("expected If-None-Match sqlite-etag, got %q", r.Header.Get("If-None-Match"))
+		}
+		w.WriteHeader(http.StatusNotModified)
+	}))
+	defer srv.Close()
+
+	client := NewHTTPClient(srv.URL, 5*time.Second)
+	mem := newMemoryCatalogCache()
+	_ = mem.CacheSetJSON(catalogDataCacheKey, catalog, 24*time.Hour)
+	_ = mem.CacheSetJSON(catalogMetaCacheKey, catalogMeta{ETag: `"sqlite-etag"`}, 24*time.Hour)
+	client.SetDatabase(mem)
+
+	result, err := client.GetCatalog(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Count != 7 {
+		t.Fatalf("count = %d, want 7", result.Count)
+	}
+	if calls != 1 {
+		t.Fatalf("server calls = %d, want 1", calls)
+	}
+	_ = body
+}
+
+type memoryCatalogCache struct {
+	items map[string][]byte
+}
+
+func newMemoryCatalogCache() *memoryCatalogCache {
+	return &memoryCatalogCache{items: map[string][]byte{}}
+}
+
+func (m *memoryCatalogCache) CacheGetJSON(key string, target interface{}) (bool, error) {
+	raw, ok := m.items[key]
+	if !ok {
+		return false, nil
+	}
+	if err := json.Unmarshal(raw, target); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (m *memoryCatalogCache) CacheSetJSON(key string, obj interface{}, _ time.Duration) error {
+	raw, err := json.Marshal(obj)
+	if err != nil {
+		return err
+	}
+	m.items[key] = raw
+	return nil
+}
+
 func TestHTTPClient_GetCatalog_ServerError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)

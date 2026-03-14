@@ -2,6 +2,7 @@ package export
 
 import (
 	"fmt"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,6 +14,12 @@ import (
 
 const maxPDFSoftwareItems = 200
 
+const (
+	pdfFontFamily       = "DiscoveryUTF8"
+	pdfFontPathEnvVar   = "DISCOVERY_PDF_TTF"
+	pdfFontConfigEnvVar = "DISCOVERY_PDF_FONT_DIR"
+)
+
 // WritePDF writes the inventory report as a PDF file to outPath.
 // If redact is true, sensitive fields (serials, MACs, hostname) are masked.
 func WritePDF(r models.InventoryReport, outPath string, redact bool) error {
@@ -22,11 +29,12 @@ func WritePDF(r models.InventoryReport, outPath string, redact bool) error {
 	}
 
 	pdf := fpdf.New("P", "mm", "A4", "")
+	tryEnableUTF8Font(pdf)
 	pdf.SetMargins(12, 12, 12)
 	pdf.AddPage()
-	pdf.SetFont("Arial", "B", 14)
+	setPDFFont(pdf, "B", 14)
 	pdf.CellFormat(0, 8, "Inventario Discovery", "", 1, "L", false, 0, "")
-	pdf.SetFont("Arial", "", 10)
+	setPDFFont(pdf, "", 10)
 	pdf.CellFormat(0, 6, "Coletado em: "+safePDF(r.CollectedAt), "", 1, "L", false, 0, "")
 	pdf.CellFormat(0, 6, "Fonte: "+safePDF(r.Source), "", 1, "L", false, 0, "")
 
@@ -56,9 +64,9 @@ func WritePDF(r models.InventoryReport, outPath string, redact bool) error {
 	})
 
 	if len(r.LoggedInUsers) > 0 {
-		pdf.SetFont("Arial", "B", 11)
+		setPDFFont(pdf, "B", 11)
 		pdf.CellFormat(0, 7, "Usuarios Logados", "", 1, "L", false, 0, "")
-		pdf.SetFont("Arial", "", 9)
+		setPDFFont(pdf, "", 9)
 		for _, u := range r.LoggedInUsers {
 			sid := u.SID
 			if redact {
@@ -82,9 +90,9 @@ func WritePDF(r models.InventoryReport, outPath string, redact bool) error {
 		"Softwares: " + strconv.Itoa(len(r.Software)),
 	})
 
-	pdf.SetFont("Arial", "B", 11)
+	setPDFFont(pdf, "B", 11)
 	pdf.CellFormat(0, 7, fmt.Sprintf("Softwares (primeiros %d)", maxPDFSoftwareItems), "", 1, "L", false, 0, "")
-	pdf.SetFont("Arial", "", 9)
+	setPDFFont(pdf, "", 9)
 	limit := len(r.Software)
 	if limit > maxPDFSoftwareItems {
 		limit = maxPDFSoftwareItems
@@ -115,13 +123,34 @@ func WritePDF(r models.InventoryReport, outPath string, redact bool) error {
 }
 
 func addSection(pdf *fpdf.Fpdf, title string, lines []string) {
-	pdf.SetFont("Arial", "B", 11)
+	setPDFFont(pdf, "B", 11)
 	pdf.CellFormat(0, 7, title, "", 1, "L", false, 0, "")
-	pdf.SetFont("Arial", "", 9)
+	setPDFFont(pdf, "", 9)
 	for _, line := range lines {
 		pdf.MultiCell(0, 5, line, "", "L", false)
 	}
 	pdf.Ln(1)
+}
+
+func setPDFFont(pdf *fpdf.Fpdf, style string, size float64) {
+	pdf.SetFont(pdfFontFamily, style, size)
+	if pdf.Err() {
+		_ = pdf.Error()
+		pdf.SetFont("Arial", style, size)
+	}
+}
+
+func tryEnableUTF8Font(pdf *fpdf.Fpdf) {
+	fontPath := strings.TrimSpace(os.Getenv(pdfFontPathEnvVar))
+	if fontPath == "" {
+		fontDir := strings.TrimSpace(os.Getenv(pdfFontConfigEnvVar))
+		if fontDir != "" {
+			pdf.SetFontLocation(fontDir)
+		}
+		return
+	}
+	pdf.AddUTF8Font(pdfFontFamily, "", fontPath)
+	pdf.AddUTF8Font(pdfFontFamily, "B", fontPath)
 }
 
 // safePDF cleans a string for safe use in PDF cells.

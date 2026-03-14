@@ -15,6 +15,10 @@ export function ClearChatHistory():Promise<void>;
 
 export function ClearLogs():Promise<void>;
 
+export function ClearPrintQueue(arg1:string):Promise<json.RawMessage>;
+
+export function ClearPrintQueueJSON(arg1:string):Promise<json.RawMessage>;
+
 export function CloseAgentTicket(arg1:string,arg2:any,arg3:string,arg4:string):Promise<json.RawMessage>;
 
 export function CloseSupportTicket(arg1:string,arg2:main.CloseTicketInput):Promise<main.APITicket>;
@@ -65,11 +69,23 @@ export function GetOsqueryStatus():Promise<models.OsqueryStatus>;
 
 export function GetOsqueryStatusJSON():Promise<json.RawMessage>;
 
+export function GetPackageActions():Promise<Record<string, string>>;
+
+export function GetPackageActionsJSON():Promise<json.RawMessage>;
+
 export function GetPendingUpdates():Promise<Array<models.UpgradeItem>>;
 
 export function GetPendingUpdatesJSON():Promise<json.RawMessage>;
 
+export function GetPrinterConfig(arg1:string):Promise<json.RawMessage>;
+
+export function GetPrinterConfigJSON(arg1:string):Promise<json.RawMessage>;
+
 export function GetRealtimeStatus():Promise<main.RealtimeStatus>;
+
+export function GetSpoolerStatus():Promise<json.RawMessage>;
+
+export function GetSpoolerStatusJSON():Promise<json.RawMessage>;
 
 export function GetStartupError():Promise<string>;
 
@@ -89,13 +105,45 @@ export function InstallOsquery():Promise<string>;
 
 export function InstallPackage(arg1:string):Promise<string>;
 
+export function InstallPrinter(arg1:string,arg2:string,arg3:string,arg4:string):Promise<json.RawMessage>;
+
+export function InstallPrinterJSON(arg1:string,arg2:string,arg3:string,arg4:string):Promise<json.RawMessage>;
+
+export function InstallSharedPrinter(arg1:string,arg2:boolean):Promise<json.RawMessage>;
+
+export function InstallSharedPrinterJSON(arg1:string,arg2:boolean):Promise<json.RawMessage>;
+
 export function ListAgentTickets():Promise<json.RawMessage>;
 
 export function ListInstalled():Promise<string>;
 
+export function ListPrintJobs(arg1:string):Promise<json.RawMessage>;
+
+export function ListPrintJobsJSON(arg1:string):Promise<json.RawMessage>;
+
+export function ListPrinterDrivers():Promise<json.RawMessage>;
+
+export function ListPrinterDriversJSON():Promise<json.RawMessage>;
+
+export function ListPrinters():Promise<json.RawMessage>;
+
+export function ListPrintersJSON():Promise<json.RawMessage>;
+
 export function RefreshInventory():Promise<models.InventoryReport>;
 
+export function RemovePrintJob(arg1:string,arg2:number):Promise<json.RawMessage>;
+
+export function RemovePrintJobJSON(arg1:string,arg2:number):Promise<json.RawMessage>;
+
+export function RemovePrinter(arg1:string):Promise<json.RawMessage>;
+
+export function RemovePrinterJSON(arg1:string):Promise<json.RawMessage>;
+
 export function RequestAppClose():Promise<void>;
+
+export function RestartSpooler():Promise<json.RawMessage>;
+
+export function RestartSpoolerJSON():Promise<json.RawMessage>;
 
 export function SearchCatalog(arg1:string):Promise<json.RawMessage>;
 

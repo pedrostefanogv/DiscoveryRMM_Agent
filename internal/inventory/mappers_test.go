@@ -213,3 +213,15 @@ func TestSanitizeHardwareValue(t *testing.T) {
 		}
 	}
 }
+
+func TestFindOsqueryBinary_NegativeCacheCanBeInvalidated(t *testing.T) {
+	InvalidateOsqueryBinaryCache()
+
+	_, _ = FindOsqueryBinary()
+
+	InvalidateOsqueryBinaryCache()
+	path, err := FindOsqueryBinary()
+	if err == nil && path == "" {
+		t.Fatalf("expected non-empty path when err is nil")
+	}
+}

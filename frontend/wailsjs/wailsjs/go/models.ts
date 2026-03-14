@@ -120,6 +120,7 @@ export namespace main {
 	    apiKey: string;
 	    model: string;
 	    systemPrompt: string;
+	    maxTokens: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new ChatConfig(source);
@@ -131,6 +132,7 @@ export namespace main {
 	        this.apiKey = source["apiKey"];
 	        this.model = source["model"];
 	        this.systemPrompt = source["systemPrompt"];
+	        this.maxTokens = source["maxTokens"];
 	    }
 	}
 	export class ChatMessage {

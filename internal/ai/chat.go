@@ -10,19 +10,23 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"winget-store/internal/mcp"
 )
 
 // Config holds the LLM API settings.
 type Config struct {
-	Endpoint     string `json:"endpoint"` // e.g. "https://api.openai.com/v1/chat/completions"
-	APIKey       string `json:"apiKey"`
-	Model        string `json:"model"`        // e.g. "gpt-4o-mini"
-	SystemPrompt string `json:"systemPrompt"` // optional custom assistant instructions
+	Endpoint     string `json:"endpoint"` // Agent base URL (e.g. "https://server") or explicit chat endpoint
+	APIKey       string `json:"apiKey"`   // agent bearer token (mdz_...)
+	Model        string `json:"model"`    // kept for compatibility; not used by AgentAuth backend
+	SystemPrompt string `json:"systemPrompt"`
+	MaxTokens    int    `json:"maxTokens"`
 }
 
 // Message represents a single chat message.
@@ -45,11 +49,12 @@ type ToolCall struct {
 
 // Service manages conversations with an LLM that can call tools.
 type Service struct {
-	mu       sync.RWMutex
-	cfg      Config
-	registry *mcp.Registry
-	history  []Message
-	logger   func(string)
+	mu        sync.RWMutex
+	cfg       Config
+	registry  *mcp.Registry
+	history   []Message
+	sessionID string
+	logger    func(string)
 
 	streamMu           sync.Mutex
 	activeStreamID     uint64
@@ -96,6 +101,7 @@ func (s *Service) ClearHistory() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.history = []Message{}
+	s.sessionID = ""
 }
 
 func (s *Service) registerStreamCancel(cancel context.CancelFunc) uint64 {
@@ -198,111 +204,287 @@ func resolveSystemPrompt(cfg Config) string {
 func (s *Service) Send(ctx context.Context, userMessage string) (string, error) {
 	s.mu.Lock()
 	cfg := s.cfg
+	sessionID := s.sessionID
 	s.mu.Unlock()
 	s.logf("mensagem recebida (%d chars)", len(strings.TrimSpace(userMessage)))
 
-	if cfg.Endpoint == "" || cfg.APIKey == "" || cfg.Model == "" {
-		return "", fmt.Errorf("configuracao de IA incompleta: defina endpoint, apiKey e model")
+	if strings.TrimSpace(cfg.Endpoint) == "" || strings.TrimSpace(cfg.APIKey) == "" {
+		return "", fmt.Errorf("configuracao de IA incompleta: defina endpoint e token de agente")
+	}
+	if err := validateChatMessage(userMessage); err != nil {
+		return "", err
 	}
 
 	s.mu.Lock()
 	s.history = append(s.history, Message{Role: "user", Content: userMessage})
 	s.mu.Unlock()
 
-	// Build tool definitions.
-	tools := s.registry.OpenAIFunctions()
-	s.logf("ferramentas disponiveis: %d", len(tools))
+	resp, err := s.callAgentChatSync(ctx, cfg, userMessage, sessionID)
+	if err != nil {
+		return "", err
+	}
 
-	// Allow up to 8 rounds of tool calling before forcing a final answer.
-	const maxToolRounds = 8
-	for round := 1; round <= maxToolRounds; round++ {
-		s.logf("rodada de ferramentas %d/%d", round, maxToolRounds)
-		s.mu.RLock()
-		messages := s.buildMessages(resolveSystemPrompt(cfg))
-		s.mu.RUnlock()
+	assistant := strings.TrimSpace(resp.AssistantMessage)
+	if assistant == "" {
+		assistant = "(sem resposta)"
+	}
 
-		resp, err := s.callLLM(ctx, cfg, messages, tools)
-		if err != nil {
-			return "", err
+	s.mu.Lock()
+	if strings.TrimSpace(resp.SessionID) != "" {
+		s.sessionID = strings.TrimSpace(resp.SessionID)
+	}
+	s.history = append(s.history, Message{Role: "assistant", Content: assistant})
+	s.mu.Unlock()
+
+	return assistant, nil
+}
+
+type agentChatRequest struct {
+	Message   string  `json:"message"`
+	SessionID *string `json:"sessionId,omitempty"`
+	MaxTokens *int    `json:"maxTokens,omitempty"`
+}
+
+type agentChatSyncResponse struct {
+	SessionID               string `json:"sessionId"`
+	AssistantMessage        string `json:"assistantMessage"`
+	TokensUsed              int    `json:"tokensUsed"`
+	ConversationTokensTotal int    `json:"conversationTokensTotal"`
+	LatencyMs               int    `json:"latencyMs"`
+}
+
+type agentChatStreamEvent struct {
+	Type      string `json:"type"`
+	Content   string `json:"content"`
+	SessionID string `json:"sessionId"`
+	Error     string `json:"error"`
+	LatencyMs int    `json:"latencyMs"`
+}
+
+func (s *Service) buildAgentChatRequest(message, sessionID string, maxTokens int) agentChatRequest {
+	req := agentChatRequest{Message: message}
+	if strings.TrimSpace(sessionID) != "" {
+		tmp := strings.TrimSpace(sessionID)
+		req.SessionID = &tmp
+	}
+	if maxTokens > 0 {
+		tmp := maxTokens
+		req.MaxTokens = &tmp
+	}
+	return req
+}
+
+func normalizeAgentChatBaseURL(endpoint string) (string, error) {
+	raw := strings.TrimSpace(endpoint)
+	if raw == "" {
+		return "", fmt.Errorf("endpoint do chat nao informado")
+	}
+	u, err := url.Parse(raw)
+	if err != nil || strings.TrimSpace(u.Scheme) == "" || strings.TrimSpace(u.Host) == "" {
+		return "", fmt.Errorf("endpoint de chat invalido")
+	}
+	path := strings.TrimSpace(u.Path)
+	if path == "" || path == "/" {
+		u.Path = ""
+		u.RawQuery = ""
+		u.Fragment = ""
+		return strings.TrimRight(u.String(), "/"), nil
+	}
+	idx := strings.Index(path, "/api/agent-auth")
+	if idx >= 0 {
+		u.Path = path[:idx]
+		u.RawQuery = ""
+		u.Fragment = ""
+		return strings.TrimRight(u.String(), "/"), nil
+	}
+	if strings.Contains(path, "/api/") {
+		return "", fmt.Errorf("endpoint deve apontar para a base do servidor ou /api/agent-auth")
+	}
+	u.RawQuery = ""
+	u.Fragment = ""
+	return strings.TrimRight(u.String(), "/"), nil
+}
+
+func (s *Service) callAgentChatSync(ctx context.Context, cfg Config, message, sessionID string) (*agentChatSyncResponse, error) {
+	baseURL, err := normalizeAgentChatBaseURL(cfg.Endpoint)
+	if err != nil {
+		return nil, err
+	}
+
+	requestBody := s.buildAgentChatRequest(message, sessionID, cfg.MaxTokens)
+	payload, err := json.Marshal(requestBody)
+	if err != nil {
+		return nil, fmt.Errorf("falha ao serializar request de chat: %w", err)
+	}
+
+	reqCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	defer cancel()
+
+	endpoint := baseURL + "/api/agent-auth/me/ai-chat"
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, endpoint, bytes.NewReader(payload))
+	if err != nil {
+		return nil, fmt.Errorf("falha ao criar request de chat: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(cfg.APIKey))
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("falha ao chamar chat: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("falha ao ler resposta de chat: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == http.StatusRequestTimeout {
+			return nil, fmt.Errorf("chat expirou (timeout): %s", strings.TrimSpace(string(body)))
+		}
+		return nil, fmt.Errorf("chat retornou status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var result agentChatSyncResponse
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("falha ao decodificar resposta de chat: %w", err)
+	}
+	return &result, nil
+}
+
+func (s *Service) callAgentChatStream(
+	ctx context.Context,
+	cfg Config,
+	message string,
+	sessionID string,
+	onToken func(string),
+) (string, string, bool, error) {
+	baseURL, err := normalizeAgentChatBaseURL(cfg.Endpoint)
+	if err != nil {
+		return "", "", false, err
+	}
+
+	requestBody := s.buildAgentChatRequest(message, sessionID, cfg.MaxTokens)
+	payload, err := json.Marshal(requestBody)
+	if err != nil {
+		return "", "", false, fmt.Errorf("falha ao serializar request de stream: %w", err)
+	}
+
+	reqCtx, cancel := context.WithTimeout(ctx, 130*time.Second)
+	defer cancel()
+
+	endpoint := baseURL + "/api/agent-auth/me/ai-chat/stream"
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, endpoint, bytes.NewReader(payload))
+	if err != nil {
+		return "", "", false, fmt.Errorf("falha ao criar request de stream: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(cfg.APIKey))
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", "", false, fmt.Errorf("falha ao chamar stream: %w", err)
+	}
+	defer resp.Body.Close()
+
+	contentType := strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Type")))
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode == http.StatusUnauthorized {
+			return "", "", false, fmt.Errorf("nao autorizado (401): verifique token do agente")
+		}
+		return "", "", false, fmt.Errorf("stream retornou status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	if !strings.Contains(contentType, "text/event-stream") {
+		// O backend deveria streamar; se respondeu JSON, tratamos como fallback.
+		return "", "", false, fmt.Errorf("resposta sem SSE (content-type: %s)", contentType)
+	}
+
+	var contentBuf strings.Builder
+	currentSessionID := ""
+	hasToken := false
+
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
+
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if data == "" {
+			continue
 		}
 
-		msg := resp.Choices[0].Message
-
-		// If the LLM didn't request any tool calls, treat as final answer.
-		if len(msg.ToolCalls) == 0 {
-			s.logf("resposta final sem ferramentas")
-			assistant := Message{Role: "assistant", Content: msg.Content}
-			s.mu.Lock()
-			s.history = append(s.history, assistant)
-			s.mu.Unlock()
-			return msg.Content, nil
+		var evt agentChatStreamEvent
+		if err := json.Unmarshal([]byte(data), &evt); err != nil {
+			continue
 		}
 
-		s.logf("modelo solicitou %d chamada(s) de ferramenta", len(msg.ToolCalls))
-
-		// Record the assistant message with tool calls.
-		assistantMsg := Message{
-			Role:      "assistant",
-			Content:   msg.Content,
-			ToolCalls: msg.ToolCalls,
-		}
-		s.mu.Lock()
-		s.history = append(s.history, assistantMsg)
-		s.mu.Unlock()
-
-		// Execute each tool call and record results.
-		for _, tc := range msg.ToolCalls {
-			s.logf("chamando ferramenta: %s", tc.Function.Name)
-			result, callErr := s.registry.Call(tc.Function.Name, json.RawMessage(tc.Function.Arguments))
-			var content string
-			if callErr != nil {
-				s.logf("ferramenta %s retornou erro: %v", tc.Function.Name, callErr)
-				content = fmt.Sprintf("Erro: %v", callErr)
-			} else {
-				b, _ := json.Marshal(result)
-				content = string(b)
-				// Truncate very large results.
-				if len(content) > 20000 {
-					content = content[:20000] + "... (truncado)"
+		switch strings.TrimSpace(strings.ToLower(evt.Type)) {
+		case "token":
+			if evt.Content != "" {
+				hasToken = true
+				contentBuf.WriteString(evt.Content)
+				if onToken != nil {
+					onToken(evt.Content)
 				}
-				s.logf("ferramenta %s executada com sucesso", tc.Function.Name)
 			}
-			toolMsg := Message{
-				Role:       "tool",
-				Content:    content,
-				ToolCallID: tc.ID,
+		case "done":
+			if strings.TrimSpace(evt.SessionID) != "" {
+				currentSessionID = strings.TrimSpace(evt.SessionID)
 			}
-			s.mu.Lock()
-			s.history = append(s.history, toolMsg)
-			s.mu.Unlock()
+			return contentBuf.String(), currentSessionID, hasToken, nil
+		case "error":
+			msg := strings.TrimSpace(evt.Error)
+			if msg == "" {
+				msg = "stream retornou erro"
+			}
+			return contentBuf.String(), currentSessionID, hasToken, fmt.Errorf("%s", msg)
 		}
 	}
 
-	// Last attempt: ask for a direct answer without tools to avoid dead loops.
-	s.logf("limite de rodadas atingido; tentando resposta final sem ferramentas")
-	s.mu.RLock()
-	messages := s.buildMessages(resolveSystemPrompt(cfg))
-	s.mu.RUnlock()
-	messages = append(messages, map[string]any{
-		"role":    "user",
-		"content": "Pare de chamar ferramentas e responda diretamente ao usuario com base no contexto atual.",
-	})
-
-	resp, err := s.callLLM(ctx, cfg, messages, nil)
-	if err == nil && len(resp.Choices) > 0 {
-		final := strings.TrimSpace(resp.Choices[0].Message.Content)
-		if final != "" {
-			s.logf("resposta final sem ferramentas obtida apos fallback")
-			s.mu.Lock()
-			s.history = append(s.history, Message{Role: "assistant", Content: final})
-			s.mu.Unlock()
-			return final, nil
-		}
+	if err := scanner.Err(); err != nil {
+		return contentBuf.String(), currentSessionID, hasToken, fmt.Errorf("erro ao ler stream: %w", err)
 	}
 
-	s.logf("falha: limite de chamadas de ferramentas excedido")
+	if currentSessionID != "" || contentBuf.Len() > 0 {
+		return contentBuf.String(), currentSessionID, hasToken, nil
+	}
 
-	return "", fmt.Errorf("limite de chamadas de ferramentas excedido")
+	return "", "", hasToken, fmt.Errorf("stream encerrado sem evento final")
+}
+
+var blockedMessagePatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)<script[^>]*>`),
+	regexp.MustCompile(`(?i)javascript:`),
+	regexp.MustCompile(`(?i)eval\s*\(`),
+	regexp.MustCompile(`(?i)on[a-z]+\s*=`),
+	regexp.MustCompile(`(?i)<iframe[^>]*>`),
+	regexp.MustCompile(`(?i)<object[^>]*>`),
+	regexp.MustCompile(`(?i)<embed[^>]*>`),
+}
+
+func validateChatMessage(message string) error {
+	trimmed := strings.TrimSpace(message)
+	if trimmed == "" {
+		return fmt.Errorf("mensagem obrigatoria")
+	}
+	if len([]byte(trimmed)) > 2048 {
+		return fmt.Errorf("mensagem excede 2048 bytes UTF-8")
+	}
+	if !utf8.ValidString(trimmed) {
+		return fmt.Errorf("mensagem invalida: UTF-8 incorreto")
+	}
+	for _, pattern := range blockedMessagePatterns {
+		if pattern.MatchString(trimmed) {
+			return fmt.Errorf("mensagem contem padrao bloqueado")
+		}
+	}
+	return nil
 }
 
 func (s *Service) logf(format string, args ...any) {
@@ -334,236 +516,6 @@ func (s *Service) buildMessages(systemPrompt string) []map[string]any {
 	return msgs
 }
 
-// llmResponse is just enough of the OpenAI chat completion response.
-type llmResponse struct {
-	Choices []struct {
-		Message struct {
-			Role      string     `json:"role"`
-			Content   string     `json:"content"`
-			ToolCalls []ToolCall `json:"tool_calls"`
-		} `json:"message"`
-	} `json:"choices"`
-	Error *struct {
-		Message string `json:"message"`
-	} `json:"error"`
-}
-
-func (s *Service) callLLM(ctx context.Context, cfg Config, messages []map[string]any, tools []map[string]any) (*llmResponse, error) {
-	body := map[string]any{
-		"model":    cfg.Model,
-		"messages": messages,
-	}
-	if len(tools) > 0 {
-		body["tools"] = tools
-	}
-
-	payload, err := json.Marshal(body)
-	if err != nil {
-		return nil, fmt.Errorf("falha ao serializar request: %w", err)
-	}
-
-	reqCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, cfg.Endpoint, bytes.NewReader(payload))
-	if err != nil {
-		return nil, fmt.Errorf("falha ao criar request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("falha na chamada ao LLM: %w", err)
-	}
-	defer resp.Body.Close()
-
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("falha ao ler resposta do LLM: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("LLM retornou status %d: %s", resp.StatusCode, string(data))
-	}
-
-	var result llmResponse
-	if err := json.Unmarshal(data, &result); err != nil {
-		return nil, fmt.Errorf("falha ao decodificar resposta do LLM: %w", err)
-	}
-	if result.Error != nil {
-		return nil, fmt.Errorf("erro do LLM: %s", result.Error.Message)
-	}
-	if len(result.Choices) == 0 {
-		return nil, fmt.Errorf("LLM retornou resposta vazia")
-	}
-	return &result, nil
-}
-
-// streamDeltaChunk is one SSE chunk from an OpenAI-compatible streaming response.
-type streamDeltaChunk struct {
-	Choices []struct {
-		Delta struct {
-			Role      string            `json:"role"`
-			Content   string            `json:"content"`
-			ToolCalls []streamToolDelta `json:"tool_calls"`
-		} `json:"delta"`
-		FinishReason *string `json:"finish_reason"`
-	} `json:"choices"`
-	Error *struct {
-		Message string `json:"message"`
-	} `json:"error"`
-}
-
-type streamToolDelta struct {
-	Index    int    `json:"index"`
-	ID       string `json:"id"`
-	Type     string `json:"type"`
-	Function struct {
-		Name      string `json:"name"`
-		Arguments string `json:"arguments"`
-	} `json:"function"`
-}
-
-// callLLMStream sends a request with stream:true and calls onToken for every text delta.
-// Returns the full assembled content and any tool calls requested by the model.
-// If the server returns regular JSON instead of SSE (provider fallback), it is parsed normally.
-func (s *Service) callLLMStream(ctx context.Context, cfg Config, messages []map[string]any, tools []map[string]any, onToken func(string)) (string, []ToolCall, error) {
-	body := map[string]any{
-		"model":    cfg.Model,
-		"messages": messages,
-		"stream":   true,
-	}
-	if len(tools) > 0 {
-		body["tools"] = tools
-	}
-
-	payload, err := json.Marshal(body)
-	if err != nil {
-		return "", nil, fmt.Errorf("falha ao serializar request: %w", err)
-	}
-
-	reqCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, cfg.Endpoint, bytes.NewReader(payload))
-	if err != nil {
-		return "", nil, fmt.Errorf("falha ao criar request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
-	req.Header.Set("Accept", "text/event-stream")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return "", nil, fmt.Errorf("falha na chamada ao LLM: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		data, _ := io.ReadAll(resp.Body)
-		return "", nil, fmt.Errorf("LLM retornou status %d: %s", resp.StatusCode, string(data))
-	}
-
-	// Fallback: some providers return application/json even when stream:true is requested.
-	if strings.Contains(resp.Header.Get("Content-Type"), "application/json") {
-		data, readErr := io.ReadAll(resp.Body)
-		if readErr != nil {
-			return "", nil, fmt.Errorf("falha ao ler resposta do LLM: %w", readErr)
-		}
-		var result llmResponse
-		if jsonErr := json.Unmarshal(data, &result); jsonErr != nil {
-			return "", nil, fmt.Errorf("falha ao decodificar resposta do LLM: %w", jsonErr)
-		}
-		if result.Error != nil {
-			return "", nil, fmt.Errorf("erro do LLM: %s", result.Error.Message)
-		}
-		if len(result.Choices) == 0 {
-			return "", nil, fmt.Errorf("LLM retornou resposta vazia")
-		}
-		msg := result.Choices[0].Message
-		if onToken != nil && msg.Content != "" {
-			onToken(msg.Content)
-		}
-		return msg.Content, msg.ToolCalls, nil
-	}
-
-	// Parse SSE stream line by line.
-	var contentBuf strings.Builder
-	toolCallsMap := make(map[int]*ToolCall)
-	toolArgsMap := make(map[int]*strings.Builder)
-
-	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 64*1024), 512*1024)
-
-	for scanner.Scan() {
-		line := scanner.Text()
-		if !strings.HasPrefix(line, "data: ") {
-			continue
-		}
-		data := strings.TrimPrefix(line, "data: ")
-		if data == "[DONE]" {
-			break
-		}
-
-		var chunk streamDeltaChunk
-		if jsonErr := json.Unmarshal([]byte(data), &chunk); jsonErr != nil {
-			continue
-		}
-		if chunk.Error != nil {
-			return "", nil, fmt.Errorf("erro do LLM: %s", chunk.Error.Message)
-		}
-		if len(chunk.Choices) == 0 {
-			continue
-		}
-
-		delta := chunk.Choices[0].Delta
-
-		if delta.Content != "" {
-			contentBuf.WriteString(delta.Content)
-			if onToken != nil {
-				onToken(delta.Content)
-			}
-		}
-
-		for _, tc := range delta.ToolCalls {
-			idx := tc.Index
-			if _, exists := toolCallsMap[idx]; !exists {
-				toolCallsMap[idx] = &ToolCall{Type: "function"}
-				toolArgsMap[idx] = &strings.Builder{}
-			}
-			if tc.ID != "" {
-				toolCallsMap[idx].ID = tc.ID
-			}
-			if tc.Type != "" {
-				toolCallsMap[idx].Type = tc.Type
-			}
-			if tc.Function.Name != "" {
-				toolCallsMap[idx].Function.Name = tc.Function.Name
-			}
-			toolArgsMap[idx].WriteString(tc.Function.Arguments)
-		}
-	}
-
-	if scanErr := scanner.Err(); scanErr != nil {
-		return "", nil, fmt.Errorf("erro ao ler stream: %w", scanErr)
-	}
-
-	var toolCalls []ToolCall
-	for i := 0; i < len(toolCallsMap); i++ {
-		tc, ok := toolCallsMap[i]
-		if !ok {
-			continue
-		}
-		if args, ok2 := toolArgsMap[i]; ok2 {
-			tc.Function.Arguments = args.String()
-		}
-		toolCalls = append(toolCalls, *tc)
-	}
-
-	return contentBuf.String(), toolCalls, nil
-}
-
 // SendStream is like Send but streams the final text response token-by-token via onToken.
 // Tool-call intermediate rounds are executed silently; onStatus receives progress updates.
 func (s *Service) SendStream(ctx context.Context, userMessage string, onToken func(string), onStatus func(string)) (string, error) {
@@ -576,117 +528,86 @@ func (s *Service) SendStream(ctx context.Context, userMessage string, onToken fu
 
 	s.mu.Lock()
 	cfg := s.cfg
+	sessionID := s.sessionID
 	s.mu.Unlock()
 	s.logf("stream: mensagem recebida (%d chars)", len(strings.TrimSpace(userMessage)))
 
-	if cfg.Endpoint == "" || cfg.APIKey == "" || cfg.Model == "" {
-		return "", fmt.Errorf("configuracao de IA incompleta: defina endpoint, apiKey e model")
+	if strings.TrimSpace(cfg.Endpoint) == "" || strings.TrimSpace(cfg.APIKey) == "" {
+		return "", fmt.Errorf("configuracao de IA incompleta: defina endpoint e token de agente")
+	}
+	if err := validateChatMessage(userMessage); err != nil {
+		return "", err
 	}
 
 	s.mu.Lock()
 	s.history = append(s.history, Message{Role: "user", Content: userMessage})
 	s.mu.Unlock()
 
-	tools := s.registry.OpenAIFunctions()
-	s.logf("stream: ferramentas disponiveis: %d", len(tools))
-
-	const maxToolRounds = 8
-	for round := 1; round <= maxToolRounds; round++ {
-		if err := streamCtx.Err(); err != nil {
-			return "", err
-		}
-
-		s.logf("stream: rodada %d/%d", round, maxToolRounds)
-
-		s.mu.RLock()
-		messages := s.buildMessages(resolveSystemPrompt(cfg))
-		s.mu.RUnlock()
-
-		content, toolCalls, err := s.callLLMStream(streamCtx, cfg, messages, tools, onToken)
-		if err != nil {
-			return "", err
-		}
-
-		if len(toolCalls) == 0 {
-			s.logf("stream: resposta final sem ferramentas")
-			s.mu.Lock()
-			s.history = append(s.history, Message{Role: "assistant", Content: content})
-			s.mu.Unlock()
-			return content, nil
-		}
-
-		s.logf("stream: modelo solicitou %d chamada(s) de ferramenta", len(toolCalls))
-		assistantMsg := Message{
-			Role:      "assistant",
-			Content:   content,
-			ToolCalls: toolCalls,
-		}
-		s.mu.Lock()
-		s.history = append(s.history, assistantMsg)
-		s.mu.Unlock()
-
-		for _, tc := range toolCalls {
-			if err := streamCtx.Err(); err != nil {
-				return "", err
-			}
-
-			s.logf("stream: chamando ferramenta: %s", tc.Function.Name)
-			if onStatus != nil {
-				onStatus("Executando: " + tc.Function.Name + "...")
-			}
-			result, callErr := s.registry.Call(tc.Function.Name, json.RawMessage(tc.Function.Arguments))
-			var toolContent string
-			if callErr != nil {
-				s.logf("stream: ferramenta %s retornou erro: %v", tc.Function.Name, callErr)
-				toolContent = fmt.Sprintf("Erro: %v", callErr)
-			} else {
-				b, _ := json.Marshal(result)
-				toolContent = string(b)
-				if len(toolContent) > 20000 {
-					toolContent = toolContent[:20000] + "... (truncado)"
-				}
-				s.logf("stream: ferramenta %s executada com sucesso", tc.Function.Name)
-			}
-			toolMsg := Message{
-				Role:       "tool",
-				Content:    toolContent,
-				ToolCallID: tc.ID,
-			}
-			s.mu.Lock()
-			s.history = append(s.history, toolMsg)
-			s.mu.Unlock()
-		}
-
-		if onStatus != nil {
-			onStatus("Preparando resposta...")
-		}
+	if onStatus != nil {
+		onStatus("Conectando ao servidor...")
 	}
 
-	s.logf("stream: limite de rodadas atingido")
-	return "", fmt.Errorf("limite de chamadas de ferramentas excedido")
+	content, streamSessionID, hasToken, err := s.callAgentChatStream(streamCtx, cfg, userMessage, sessionID, onToken)
+	if err != nil {
+		if streamCtx.Err() != nil {
+			return "", streamCtx.Err()
+		}
+		s.logf("stream: falha (%v), fallback para endpoint sincrono", err)
+		if onStatus != nil {
+			onStatus("Alternando para resposta padrao...")
+		}
+		syncResp, syncErr := s.callAgentChatSync(streamCtx, cfg, userMessage, sessionID)
+		if syncErr != nil {
+			if hasToken && strings.TrimSpace(content) != "" {
+				s.mu.Lock()
+				s.history = append(s.history, Message{Role: "assistant", Content: content})
+				s.mu.Unlock()
+				return content, nil
+			}
+			return "", syncErr
+		}
+		assistant := strings.TrimSpace(syncResp.AssistantMessage)
+		if assistant == "" {
+			assistant = "(sem resposta)"
+		}
+		if onToken != nil {
+			onToken(assistant)
+		}
+		s.mu.Lock()
+		if strings.TrimSpace(syncResp.SessionID) != "" {
+			s.sessionID = strings.TrimSpace(syncResp.SessionID)
+		}
+		s.history = append(s.history, Message{Role: "assistant", Content: assistant})
+		s.mu.Unlock()
+		return assistant, nil
+	}
+
+	assistant := strings.TrimSpace(content)
+	if assistant == "" {
+		assistant = "(sem resposta)"
+	}
+
+	s.mu.Lock()
+	if strings.TrimSpace(streamSessionID) != "" {
+		s.sessionID = strings.TrimSpace(streamSessionID)
+	}
+	s.history = append(s.history, Message{Role: "assistant", Content: assistant})
+	s.mu.Unlock()
+
+	return assistant, nil
 }
 
 // TestConfig validates whether the provided configuration can reach the LLM.
 func (s *Service) TestConfig(ctx context.Context, cfg Config) (string, error) {
-	if cfg.Endpoint == "" || cfg.APIKey == "" || cfg.Model == "" {
-		return "", fmt.Errorf("configuracao de IA incompleta: defina endpoint, apiKey e model")
+	if strings.TrimSpace(cfg.Endpoint) == "" || strings.TrimSpace(cfg.APIKey) == "" {
+		return "", fmt.Errorf("configuracao de IA incompleta: defina endpoint e token de agente")
 	}
 
-	messages := []map[string]any{
-		{"role": "system", "content": "Responda apenas com OK."},
-		{"role": "user", "content": "Teste de conectividade."},
-	}
-
-	resp, err := s.callLLM(ctx, cfg, messages, nil)
+	resp, err := s.callAgentChatSync(ctx, cfg, "Teste de conectividade. Responda apenas com OK.", "")
 	if err != nil {
 		return "", err
 	}
-
-	content := ""
-	if len(resp.Choices) > 0 {
-		content = resp.Choices[0].Message.Content
-	}
-	return content, nil
+	return strings.TrimSpace(resp.AssistantMessage), nil
 }
 
 // Formatting helper functions for rich chat responses.

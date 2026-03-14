@@ -94,6 +94,10 @@ export function GetPendingUpdatesJSON() {
   return window['go']['main']['App']['GetPendingUpdatesJSON']();
 }
 
+export function GetPackageActionsJSON() {
+  return window['go']['main']['App']['GetPackageActionsJSON']();
+}
+
 export function GetRealtimeStatus() {
   return window['go']['main']['App']['GetRealtimeStatus']();
 }

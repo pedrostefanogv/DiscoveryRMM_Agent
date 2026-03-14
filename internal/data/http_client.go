@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,6 +23,16 @@ type CatalogCache interface {
 	CacheGetJSON(key string, target interface{}) (bool, error)
 	CacheSetJSON(key string, obj interface{}, ttl time.Duration) error
 }
+
+type catalogMeta struct {
+	ETag         string `json:"etag"`
+	LastModified string `json:"lastModified"`
+}
+
+const (
+	catalogDataCacheKey = "winget_catalog"
+	catalogMetaCacheKey = "winget_catalog_meta"
+)
 
 // HTTPClient fetches the remote catalog with ETag/Last-Modified caching
 // and a body size limit.
@@ -55,40 +66,80 @@ func (c *HTTPClient) GetCatalog(ctx context.Context) (models.Catalog, error) {
 	// 1. Tentar cache em memória primeiro (mais rápido)
 	c.mu.RLock()
 	if c.cachedData != nil {
-		defer c.mu.RUnlock()
-		return *c.cachedData, nil
+		cached := *c.cachedData
+		etag := c.cachedETag
+		lm := c.cachedLM
+		c.mu.RUnlock()
+
+		if fresh, ok := c.tryRevalidateRemote(ctx, etag, lm); ok {
+			return fresh, nil
+		}
+		return cached, nil
 	}
 	c.mu.RUnlock()
 
 	// 2. Tentar cache persistente no SQLite
 	if c.db != nil {
 		var cached models.Catalog
-		found, err := c.db.CacheGetJSON("winget_catalog", &cached)
+		found, err := c.db.CacheGetJSON(catalogDataCacheKey, &cached)
 		if err == nil && found {
+			var meta catalogMeta
+			if ok, metaErr := c.db.CacheGetJSON(catalogMetaCacheKey, &meta); metaErr != nil || !ok {
+				meta = catalogMeta{}
+			}
+
 			// Carregar em memória também
 			c.mu.Lock()
 			c.cachedData = &cached
+			c.cachedETag = strings.TrimSpace(meta.ETag)
+			c.cachedLM = strings.TrimSpace(meta.LastModified)
+			c.cachedAt = time.Now()
 			c.mu.Unlock()
+
+			if fresh, ok := c.tryRevalidateRemote(ctx, strings.TrimSpace(meta.ETag), strings.TrimSpace(meta.LastModified)); ok {
+				return fresh, nil
+			}
 			return cached, nil
 		}
 	}
 
 	// 3. Baixar do servidor remoto
+	fresh, err := c.fetchRemoteCatalog(ctx, "", "")
+	if err == nil {
+		return fresh, nil
+	}
+
+	// On network/error, return cache if available.
+	c.mu.RLock()
+	hasCached := c.cachedData != nil
+	if hasCached {
+		cached := *c.cachedData
+		c.mu.RUnlock()
+		return cached, nil
+	}
+	c.mu.RUnlock()
+
+	return models.Catalog{}, err
+}
+
+func (c *HTTPClient) tryRevalidateRemote(ctx context.Context, etag, lm string) (models.Catalog, bool) {
+	fresh, err := c.fetchRemoteCatalog(ctx, etag, lm)
+	if err != nil {
+		return models.Catalog{}, false
+	}
+	return fresh, true
+}
+
+func (c *HTTPClient) fetchRemoteCatalog(ctx context.Context, etag, lm string) (models.Catalog, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.url, nil)
 	if err != nil {
 		return models.Catalog{}, fmt.Errorf("erro ao montar requisicao: %w", err)
 	}
 
-	// Add conditional headers from cache.
-	c.mu.RLock()
-	etag := c.cachedETag
-	lm := c.cachedLM
-	c.mu.RUnlock()
-
-	if etag != "" {
+	if strings.TrimSpace(etag) != "" {
 		req.Header.Set("If-None-Match", etag)
 	}
-	if lm != "" {
+	if strings.TrimSpace(lm) != "" {
 		req.Header.Set("If-Modified-Since", lm)
 	}
 
@@ -97,12 +148,12 @@ func (c *HTTPClient) GetCatalog(ctx context.Context) (models.Catalog, error) {
 		// On network error, return cache if available.
 		c.mu.RLock()
 		hasCached := c.cachedData != nil
-		c.mu.RUnlock()
 		if hasCached {
-			c.mu.RLock()
-			defer c.mu.RUnlock()
-			return *c.cachedData, nil
+			cached := *c.cachedData
+			c.mu.RUnlock()
+			return cached, nil
 		}
+		c.mu.RUnlock()
 		return models.Catalog{}, fmt.Errorf("erro ao baixar catalogo: %w", err)
 	}
 	defer resp.Body.Close()
@@ -110,13 +161,13 @@ func (c *HTTPClient) GetCatalog(ctx context.Context) (models.Catalog, error) {
 	// 304 Not Modified — return cached copy.
 	if resp.StatusCode == http.StatusNotModified {
 		c.mu.RLock()
-		hasCached := c.cachedData != nil
-		c.mu.RUnlock()
-		if hasCached {
-			c.mu.RLock()
-			defer c.mu.RUnlock()
-			return *c.cachedData, nil
+		if c.cachedData != nil {
+			cached := *c.cachedData
+			c.mu.RUnlock()
+			return cached, nil
 		}
+		c.mu.RUnlock()
+		return models.Catalog{}, fmt.Errorf("catalogo retornou 304 sem cache local")
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -140,10 +191,14 @@ func (c *HTTPClient) GetCatalog(ctx context.Context) (models.Catalog, error) {
 
 	// Update cache in SQLite (24h TTL)
 	if c.db != nil {
-		if err := c.db.CacheSetJSON("winget_catalog", catalog, 24*time.Hour); err != nil {
+		if err := c.db.CacheSetJSON(catalogDataCacheKey, catalog, 24*time.Hour); err != nil {
 			// Log error but don't fail the request
 			// (o app.go pode logar isso)
 		}
+		_ = c.db.CacheSetJSON(catalogMetaCacheKey, catalogMeta{
+			ETag:         resp.Header.Get("ETag"),
+			LastModified: resp.Header.Get("Last-Modified"),
+		}, 24*time.Hour)
 	}
 
 	return catalog, nil

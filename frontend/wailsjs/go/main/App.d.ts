@@ -51,6 +51,8 @@ export function GetPendingUpdates():Promise<Array<models.UpgradeItem>>;
 
 export function GetPendingUpdatesJSON():Promise<json.RawMessage>;
 
+export function GetPackageActionsJSON():Promise<json.RawMessage>;
+
 export function GetRealtimeStatus():Promise<main.RealtimeStatus>;
 
 export function GetStartupError():Promise<string>;

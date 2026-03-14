@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
+	"time"
 
 	"winget-store/internal/models"
 	"winget-store/internal/processutil"
@@ -84,33 +86,77 @@ func runParallelQueries(ctx context.Context, binary string, queries []osqueryQue
 	return m
 }
 
-// osqueryBinaryCache stores the result of FindOsqueryBinary for reuse.
-var (
-	osqueryBinaryOnce sync.Once
-	osqueryBinaryPath string
-	osqueryBinaryErr  error
+const (
+	osqueryPositiveCacheTTL = 10 * time.Minute
+	osqueryNegativeCacheTTL = 15 * time.Second
 )
 
+type osqueryBinaryCache struct {
+	mu        sync.RWMutex
+	path      string
+	err       error
+	checkedAt time.Time
+}
+
+var osqueryCache osqueryBinaryCache
+
 // FindOsqueryBinary attempts to locate the osqueryi executable.
-// The result is cached after the first successful or unsuccessful lookup.
+// Results are cached with TTL and can be invalidated after install.
 func FindOsqueryBinary() (string, error) {
-	osqueryBinaryOnce.Do(func() {
-		candidates := []string{
-			"osqueryi.exe",
-			"osqueryi",
-			`C:\\Program Files\\osquery\\osqueryi.exe`,
-		}
+	now := time.Now()
 
-		for _, c := range candidates {
-			if path, err := exec.LookPath(c); err == nil {
-				osqueryBinaryPath = path
-				return
+	osqueryCache.mu.RLock()
+	path := osqueryCache.path
+	err := osqueryCache.err
+	checkedAt := osqueryCache.checkedAt
+	osqueryCache.mu.RUnlock()
+
+	if !checkedAt.IsZero() {
+		age := now.Sub(checkedAt)
+		if err == nil && path != "" {
+			if age < osqueryPositiveCacheTTL {
+				if _, statErr := os.Stat(path); statErr == nil {
+					return path, nil
+				}
 			}
+		} else if age < osqueryNegativeCacheTTL {
+			return "", err
 		}
+	}
 
-		osqueryBinaryErr = fmt.Errorf("osqueryi nao encontrado")
-	})
-	return osqueryBinaryPath, osqueryBinaryErr
+	resolvedPath, resolveErr := resolveOsqueryBinary()
+	osqueryCache.mu.Lock()
+	osqueryCache.path = resolvedPath
+	osqueryCache.err = resolveErr
+	osqueryCache.checkedAt = now
+	osqueryCache.mu.Unlock()
+
+	return resolvedPath, resolveErr
+}
+
+// InvalidateOsqueryBinaryCache forces the next FindOsqueryBinary call to re-check PATH/filesystem.
+func InvalidateOsqueryBinaryCache() {
+	osqueryCache.mu.Lock()
+	osqueryCache.path = ""
+	osqueryCache.err = nil
+	osqueryCache.checkedAt = time.Time{}
+	osqueryCache.mu.Unlock()
+}
+
+func resolveOsqueryBinary() (string, error) {
+	candidates := []string{
+		"osqueryi.exe",
+		"osqueryi",
+		`C:\\Program Files\\osquery\\osqueryi.exe`,
+	}
+
+	for _, c := range candidates {
+		if path, err := exec.LookPath(c); err == nil {
+			return path, nil
+		}
+	}
+
+	return "", fmt.Errorf("osqueryi nao encontrado")
 }
 
 // GetOsqueryStatus checks whether osqueryi is available on this machine.

@@ -16,6 +16,9 @@ Unicode true
 ## > makensis -DARG_WAILS_ARM64_BINARY=..\..\bin\app.exe
 ## For a installer with both architectures:
 ## > makensis -DARG_WAILS_AMD64_BINARY=..\..\bin\app-amd64.exe -DARG_WAILS_ARM64_BINARY=..\..\bin\app-arm64.exe
+##
+## Build-time defaults for installer configuration (optional):
+## > makensis ... -DARG_DEFAULT_URL=api.example.com -DARG_DEFAULT_KEY=key_xpto -DARG_DEFAULT_DISCOVERY=1 -DARG_DEFAULT_MINIMAL=1
 ####
 ## The following information is taken from the ProjectInfo file, but they can be overwritten here.
 ####
@@ -34,6 +37,31 @@ Unicode true
 !define INFO_COPYRIGHT      "Copyright (c) 2026 Meduza"
 !define PRODUCT_EXECUTABLE  "meduza-discovery.exe"
 !define UNINST_KEY_NAME     "Meduza.Discovery"
+
+## Build-time defaults (can be overridden by install-time CLI parameters)
+!ifdef ARG_DEFAULT_URL
+!define BUILD_DEFAULT_URL "${ARG_DEFAULT_URL}"
+!else
+!define BUILD_DEFAULT_URL ""
+!endif
+
+!ifdef ARG_DEFAULT_KEY
+!define BUILD_DEFAULT_KEY "${ARG_DEFAULT_KEY}"
+!else
+!define BUILD_DEFAULT_KEY ""
+!endif
+
+!ifdef ARG_DEFAULT_DISCOVERY
+!define BUILD_DEFAULT_DISCOVERY "${ARG_DEFAULT_DISCOVERY}"
+!else
+!define BUILD_DEFAULT_DISCOVERY "1"
+!endif
+
+!ifdef ARG_DEFAULT_MINIMAL
+!define BUILD_DEFAULT_MINIMAL "${ARG_DEFAULT_MINIMAL}"
+!else
+!define BUILD_DEFAULT_MINIMAL "0"
+!endif
 ####
 ## !define REQUEST_EXECUTION_LEVEL "admin"            # Default "admin"  see also https://nsis.sourceforge.io/Docs/Chapter4.html
 ####
@@ -109,11 +137,22 @@ ShowInstDetails show # This will always show the installation details.
 Function .onInit
    !insertmacro wails.checkArchitecture
    
-   # Definir valores padrão
-   StrCpy $ServerUrl ""
-   StrCpy $ServerKey ""
-   StrCpy $DiscoveryEnabled "1"
-   StrCpy $MinimalMode "0"
+   # Definir valores padrão vindos do build
+   StrCpy $ServerUrl "${BUILD_DEFAULT_URL}"
+   StrCpy $ServerKey "${BUILD_DEFAULT_KEY}"
+   StrCpy $DiscoveryEnabled "${BUILD_DEFAULT_DISCOVERY}"
+   StrCpy $MinimalMode "${BUILD_DEFAULT_MINIMAL}"
+
+   # Normalizar defaults inválidos
+   ${If} $DiscoveryEnabled != "0"
+   ${AndIf} $DiscoveryEnabled != "1"
+      StrCpy $DiscoveryEnabled "1"
+   ${EndIf}
+
+   ${If} $MinimalMode != "0"
+   ${AndIf} $MinimalMode != "1"
+      StrCpy $MinimalMode "0"
+   ${EndIf}
    
    # Obter parâmetros da linha de comando
    ${GetParameters} $R0
@@ -133,7 +172,10 @@ Function .onInit
    # Parse DISCOVERY (0 ou 1)
    ${GetOptions} $R0 "/DISCOVERY=" $R1
    ${If} $R1 != ""
-      StrCpy $DiscoveryEnabled $R1
+      ${If} $R1 == "0"
+      ${OrIf} $R1 == "1"
+         StrCpy $DiscoveryEnabled $R1
+      ${EndIf}
    ${EndIf}
    
    # Verificar modo mínimo
@@ -245,8 +287,34 @@ SectionEnd
 
 # Função para salvar as configurações do agente
 Function SaveAgentConfig
-   # Criar arquivo de configuração em $INSTDIR\config.json
-   FileOpen $0 "$INSTDIR\config.json" w
+   # Ler LOCALAPPDATA diretamente da variável de ambiente.
+   # IMPORTANTE: $LOCALAPPDATA do NSIS não é confiável aqui porque wails.setShellContext
+   # chama SetShellVarContext all (para instalar para todos os usuários), o que faz
+   # $LOCALAPPDATA apontar para o perfil do sistema e não do usuário atual.
+   # ReadEnvStr sempre retorna o valor real do processo que invocou o instalador.
+   ReadEnvStr $R0 "LOCALAPPDATA"
+   ${If} $R0 == ""
+      MessageBox MB_ICONSTOP "Variavel de ambiente LOCALAPPDATA nao encontrada. Nao foi possivel gravar a configuracao do agente."
+      Abort
+   ${EndIf}
+
+   DetailPrint "Salvando config em $R0\Discovery\config.json"
+   ClearErrors
+   CreateDirectory "$R0\Discovery"
+   ${If} ${Errors}
+      DetailPrint "ERRO: nao foi possivel criar a pasta $R0\Discovery"
+      MessageBox MB_ICONSTOP "Falha ao criar a pasta de configuracao em $R0\Discovery"
+      Abort
+   ${EndIf}
+
+   Delete "$INSTDIR\config.json"
+   ClearErrors
+   FileOpen $0 "$R0\Discovery\config.json" w
+   ${If} ${Errors}
+      DetailPrint "ERRO: nao foi possivel abrir $R0\Discovery\config.json para escrita"
+      MessageBox MB_ICONSTOP "Falha ao gravar o arquivo de configuracao em $R0\Discovery\config.json"
+      Abort
+   ${EndIf}
    
    FileWrite $0 "{$\r$\n"
    FileWrite $0 '  "serverUrl": "$ServerUrl",$\r$\n'
@@ -255,4 +323,5 @@ Function SaveAgentConfig
    FileWrite $0 "}$\r$\n"
    
    FileClose $0
+   DetailPrint "Config salvo com sucesso em $R0\Discovery\config.json"
 FunctionEnd

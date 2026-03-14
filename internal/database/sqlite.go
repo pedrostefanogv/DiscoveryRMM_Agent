@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -272,7 +274,53 @@ func inventorySoftwareChanged(oldJSON, newJSON []byte) bool {
 		return true
 	}
 
-	// Comparação simples: se JSON mudou, considera como mudança
-	// (em produção poderia fazer diff mais sofisticado)
-	return string(oldJSON) != string(newJSON)
+	oldNorm, oldErr := normalizeInventorySoftwareJSON(oldJSON)
+	newNorm, newErr := normalizeInventorySoftwareJSON(newJSON)
+
+	// Fallback seguro para formato inesperado.
+	if oldErr != nil || newErr != nil {
+		return string(oldJSON) != string(newJSON)
+	}
+
+	if len(oldNorm) != len(newNorm) {
+		return true
+	}
+
+	for i := range oldNorm {
+		if oldNorm[i] != newNorm[i] {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeInventorySoftwareJSON(raw []byte) ([]string, error) {
+	var payload struct {
+		Software []struct {
+			Name      string `json:"name"`
+			Version   string `json:"version"`
+			Publisher string `json:"publisher"`
+			InstallID string `json:"installId"`
+			Source    string `json:"source"`
+		} `json:"software"`
+	}
+
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil, err
+	}
+
+	items := make([]string, 0, len(payload.Software))
+	for _, s := range payload.Software {
+		key := strings.ToLower(strings.TrimSpace(s.Name)) + "|" +
+			strings.TrimSpace(s.Version) + "|" +
+			strings.ToLower(strings.TrimSpace(s.Publisher)) + "|" +
+			strings.TrimSpace(s.InstallID) + "|" +
+			strings.ToLower(strings.TrimSpace(s.Source))
+		if strings.TrimSpace(key) == "||||" {
+			continue
+		}
+		items = append(items, key)
+	}
+	sort.Strings(items)
+	return items, nil
 }

@@ -22,6 +22,14 @@ export function ClearLogs() {
   return window['go']['main']['App']['ClearLogs']();
 }
 
+export function ClearPrintQueue(arg1) {
+  return window['go']['main']['App']['ClearPrintQueue'](arg1);
+}
+
+export function ClearPrintQueueJSON(arg1) {
+  return window['go']['main']['App']['ClearPrintQueueJSON'](arg1);
+}
+
 export function CloseAgentTicket(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['CloseAgentTicket'](arg1, arg2, arg3, arg4);
 }
@@ -122,6 +130,14 @@ export function GetOsqueryStatusJSON() {
   return window['go']['main']['App']['GetOsqueryStatusJSON']();
 }
 
+export function GetPackageActions() {
+  return window['go']['main']['App']['GetPackageActions']();
+}
+
+export function GetPackageActionsJSON() {
+  return window['go']['main']['App']['GetPackageActionsJSON']();
+}
+
 export function GetPendingUpdates() {
   return window['go']['main']['App']['GetPendingUpdates']();
 }
@@ -130,8 +146,24 @@ export function GetPendingUpdatesJSON() {
   return window['go']['main']['App']['GetPendingUpdatesJSON']();
 }
 
+export function GetPrinterConfig(arg1) {
+  return window['go']['main']['App']['GetPrinterConfig'](arg1);
+}
+
+export function GetPrinterConfigJSON(arg1) {
+  return window['go']['main']['App']['GetPrinterConfigJSON'](arg1);
+}
+
 export function GetRealtimeStatus() {
   return window['go']['main']['App']['GetRealtimeStatus']();
+}
+
+export function GetSpoolerStatus() {
+  return window['go']['main']['App']['GetSpoolerStatus']();
+}
+
+export function GetSpoolerStatusJSON() {
+  return window['go']['main']['App']['GetSpoolerStatusJSON']();
 }
 
 export function GetStartupError() {
@@ -170,6 +202,22 @@ export function InstallPackage(arg1) {
   return window['go']['main']['App']['InstallPackage'](arg1);
 }
 
+export function InstallPrinter(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['InstallPrinter'](arg1, arg2, arg3, arg4);
+}
+
+export function InstallPrinterJSON(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['InstallPrinterJSON'](arg1, arg2, arg3, arg4);
+}
+
+export function InstallSharedPrinter(arg1, arg2) {
+  return window['go']['main']['App']['InstallSharedPrinter'](arg1, arg2);
+}
+
+export function InstallSharedPrinterJSON(arg1, arg2) {
+  return window['go']['main']['App']['InstallSharedPrinterJSON'](arg1, arg2);
+}
+
 export function ListAgentTickets() {
   return window['go']['main']['App']['ListAgentTickets']();
 }
@@ -178,12 +226,60 @@ export function ListInstalled() {
   return window['go']['main']['App']['ListInstalled']();
 }
 
+export function ListPrintJobs(arg1) {
+  return window['go']['main']['App']['ListPrintJobs'](arg1);
+}
+
+export function ListPrintJobsJSON(arg1) {
+  return window['go']['main']['App']['ListPrintJobsJSON'](arg1);
+}
+
+export function ListPrinterDrivers() {
+  return window['go']['main']['App']['ListPrinterDrivers']();
+}
+
+export function ListPrinterDriversJSON() {
+  return window['go']['main']['App']['ListPrinterDriversJSON']();
+}
+
+export function ListPrinters() {
+  return window['go']['main']['App']['ListPrinters']();
+}
+
+export function ListPrintersJSON() {
+  return window['go']['main']['App']['ListPrintersJSON']();
+}
+
 export function RefreshInventory() {
   return window['go']['main']['App']['RefreshInventory']();
 }
 
+export function RemovePrintJob(arg1, arg2) {
+  return window['go']['main']['App']['RemovePrintJob'](arg1, arg2);
+}
+
+export function RemovePrintJobJSON(arg1, arg2) {
+  return window['go']['main']['App']['RemovePrintJobJSON'](arg1, arg2);
+}
+
+export function RemovePrinter(arg1) {
+  return window['go']['main']['App']['RemovePrinter'](arg1);
+}
+
+export function RemovePrinterJSON(arg1) {
+  return window['go']['main']['App']['RemovePrinterJSON'](arg1);
+}
+
 export function RequestAppClose() {
   return window['go']['main']['App']['RequestAppClose']();
+}
+
+export function RestartSpooler() {
+  return window['go']['main']['App']['RestartSpooler']();
+}
+
+export function RestartSpoolerJSON() {
+  return window['go']['main']['App']['RestartSpoolerJSON']();
 }
 
 export function SearchCatalog(arg1) {
