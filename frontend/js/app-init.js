@@ -16,6 +16,12 @@ function initAppBindings() {
   reloadBtn.addEventListener('click', loadCatalog);
   upgradeAllBtn.addEventListener('click', runUpgradeAll);
   installedBtn.addEventListener('click', listInstalled);
+  if (tabStatusBtn) {
+    tabStatusBtn.addEventListener('click', function () {
+      setActiveTab('status');
+      loadStatusOverview();
+    });
+  }
   tabStoreBtn.addEventListener('click', function () { setActiveTab('store'); });
   tabUpdatesBtn.addEventListener('click', function () { setActiveTab('updates'); });
   tabInventoryBtn.addEventListener('click', function () {
@@ -196,7 +202,8 @@ async function bootstrapApp() {
     setActiveTab('logs');
     loadLogs();
   } else {
-    setActiveTab('store');
+    setActiveTab('status');
+    loadStatusOverview();
   }
 
   loadCatalog();

@@ -22,10 +22,12 @@ const installedOutputEl = document.getElementById('installedOutput');
 const reloadBtn = document.getElementById('reloadBtn');
 const upgradeAllBtn = document.getElementById('upgradeAllBtn');
 const installedBtn = document.getElementById('installedBtn');
+const tabStatusBtn = document.getElementById('tabStatus');
 const tabStoreBtn = document.getElementById('tabStore');
 const tabUpdatesBtn = document.getElementById('tabUpdates');
 const tabInventoryBtn = document.getElementById('tabInventory');
 const tabLogsBtn = document.getElementById('tabLogs');
+const statusViewEl = document.getElementById('statusView');
 const storeViewEl = document.getElementById('storeView');
 const updatesViewEl = document.getElementById('updatesView');
 const inventoryViewEl = document.getElementById('inventoryView');
@@ -202,7 +204,7 @@ let pendingUpdates = [];
 let logsAutoRefreshId = null;
 let knowledgeArticles = [];
 let selectedKnowledgeArticleID = '';
-let activeTab = 'store';
+let activeTab = 'status';
 let runtimeFlags = {
   debugMode: false,
 };
@@ -301,6 +303,7 @@ function setActiveTab(tab) {
 
   activeTab = tab;
   var views = {
+    status: statusViewEl,
     store: storeViewEl,
     updates: updatesViewEl,
     inventory: inventoryViewEl,
@@ -312,6 +315,7 @@ function setActiveTab(tab) {
     debug: debugViewEl,
   };
   var tabs = {
+    status: tabStatusBtn,
     store: tabStoreBtn,
     updates: tabUpdatesBtn,
     inventory: tabInventoryBtn,
@@ -342,11 +346,21 @@ function setActiveTab(tab) {
     clearInterval(logsAutoRefreshId);
     logsAutoRefreshId = null;
   }
+
+  if (tab !== 'status' && typeof stopStatusPoll === 'function') {
+    stopStatusPoll();
+  }
+
   // Stop agent status poll when leaving debug tab
   if (tab !== 'debug') {
     stopAgentStatusPoll();
     stopWatchdogPoll();
   }
+
+  if (tab === 'status' && typeof startStatusPoll === 'function') {
+    startStatusPoll();
+  }
+
   // Start logs auto-refresh when entering logs tab
   if (tab === 'logs') {
     loadLogs();
