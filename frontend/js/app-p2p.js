@@ -1,6 +1,7 @@
 "use strict";
 
 var p2pRefreshTimerId = null;
+var p2pPeerArtifactIndex = [];
 
 function p2pApi() {
   return appApi();
@@ -83,11 +84,16 @@ function p2pRenderPeers(peers) {
   }
 
   if (peerSelect) {
+    var previous = peerSelect.value || '';
     peerSelect.innerHTML = (peers || []).map(function (peer) {
       var id = peer.agentId || '';
       var label = (peer.agentId || '-') + ' - ' + ((peer.address || '-') + (peer.port ? ':' + peer.port : ''));
       return '<option value="' + p2pEscapeHtml(id) + '">' + p2pEscapeHtml(label) + '</option>';
     }).join('');
+    if (previous && Array.prototype.some.call(peerSelect.options, function (opt) { return opt.value === previous; })) {
+      peerSelect.value = previous;
+    }
+    p2pRenderRemoteArtifactsForSelectedPeer();
   }
 
   if (auditPeerFilter) {
@@ -102,6 +108,27 @@ function p2pRenderPeers(peers) {
       auditPeerFilter.value = current;
     }
   }
+}
+
+function p2pRenderRemoteArtifactsForSelectedPeer() {
+  var artifactSelect = p2pEl('artifactSelect');
+  var peerSelect = p2pEl('peerSelect');
+  if (!artifactSelect || !peerSelect) return;
+
+  var selectedPeer = (peerSelect.value || '').trim();
+  var peerEntry = null;
+  for (var i = 0; i < p2pPeerArtifactIndex.length; i++) {
+    if ((p2pPeerArtifactIndex[i].peerAgentId || '').trim() === selectedPeer) {
+      peerEntry = p2pPeerArtifactIndex[i];
+      break;
+    }
+  }
+
+  var artifacts = (peerEntry && peerEntry.artifacts) ? peerEntry.artifacts : [];
+  artifactSelect.innerHTML = artifacts.map(function (artifact) {
+    var name = artifact.artifactName || '';
+    return '<option value="' + p2pEscapeHtml(name) + '">' + p2pEscapeHtml(name || '-') + '</option>';
+  }).join('');
 }
 
 function p2pRenderArtifacts(artifacts) {
@@ -122,10 +149,8 @@ function p2pRenderArtifacts(artifacts) {
     }
   }
 
-  if (artifactSelect) {
-    artifactSelect.innerHTML = (artifacts || []).map(function (artifact) {
-      return '<option value="' + p2pEscapeHtml(artifact.artifactName || '') + '">' + p2pEscapeHtml(artifact.artifactName || '-') + '</option>';
-    }).join('');
+  if (artifactSelect && !artifactSelect.options.length) {
+    artifactSelect.innerHTML = '';
   }
 }
 
@@ -208,6 +233,7 @@ async function loadP2PView() {
       p2pApi().GetP2PPeers(),
       p2pApi().GetP2PConfig(),
       p2pApi().ListP2PArtifacts(),
+      p2pApi().GetP2PPeerArtifactIndex().catch(function () { return []; }),
       p2pApi().ListP2PAuditEventsFiltered(
         auditAction ? auditAction.value : 'all',
         auditPeer ? auditPeer.value : 'all',
@@ -219,7 +245,9 @@ async function loadP2PView() {
     p2pRenderPeers(results[1] || []);
     p2pFillConfig(results[2] || {});
     p2pRenderArtifacts(results[3] || []);
-    p2pRenderAudit(results[4] || []);
+    p2pPeerArtifactIndex = results[4] || [];
+    p2pRenderRemoteArtifactsForSelectedPeer();
+    p2pRenderAudit(results[5] || []);
   } catch (err) {
     p2pSetStatus('Falha ao atualizar: ' + (err && err.message ? err.message : String(err)), 'error');
   }
@@ -232,6 +260,7 @@ function initP2PPage() {
   var publishArtifactBtn = p2pEl('publishArtifactBtn');
   var publishRealArtifactBtn = p2pEl('publishRealArtifactBtn');
   var replicateBtn = p2pEl('replicateBtn');
+  var peerSelect = p2pEl('peerSelect');
   var auditActionFilter = p2pEl('auditActionFilter');
   var auditPeerFilter = p2pEl('auditPeerFilter');
   var auditStatusFilter = p2pEl('auditStatusFilter');
@@ -299,13 +328,18 @@ function initP2PPage() {
       var peerSelect = p2pEl('peerSelect');
       var artifactName = artifactSelect ? artifactSelect.value : '';
       var peerID = peerSelect ? peerSelect.value : '';
-      p2pApi().ReplicateP2PArtifactToPeer(artifactName, peerID).then(function (msg) {
-        p2pSetStatus(msg || 'Replicacao concluida.', 'ok');
+      p2pApi().PullP2PArtifactFromPeer(artifactName, peerID).then(function (artifact) {
+        var label = artifact && artifact.artifactName ? artifact.artifactName : artifactName;
+        p2pSetStatus('Artifact baixado do peer: ' + label, 'ok');
         loadP2PView();
       }).catch(function (err) {
-        p2pSetStatus('Falha na replicacao: ' + (err && err.message ? err.message : String(err)), 'error');
+        p2pSetStatus('Falha no pull do peer: ' + (err && err.message ? err.message : String(err)), 'error');
       });
     });
+  }
+
+  if (peerSelect) {
+    peerSelect.addEventListener('change', p2pRenderRemoteArtifactsForSelectedPeer);
   }
 
   [auditActionFilter, auditPeerFilter, auditStatusFilter].forEach(function (el) {

@@ -296,42 +296,7 @@ func (s *p2pTransferServer) localArtifactsSnapshot() []P2PArtifactView {
 }
 
 func (s *p2pTransferServer) handleReplicate(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	var access P2PArtifactAccess
-	if err := json.NewDecoder(r.Body).Decode(&access); err != nil {
-		http.Error(w, "payload invalido", http.StatusBadRequest)
-		return
-	}
-	access.ArtifactName = sanitizeArtifactName(access.ArtifactName)
-	if access.ArtifactName == "" || strings.TrimSpace(access.URL) == "" {
-		http.Error(w, "artifact/url invalidos", http.StatusBadRequest)
-		return
-	}
-	if err := s.verifyReplicationControl(r, access); err != nil {
-		http.Error(w, err.Error(), http.StatusUnauthorized)
-		return
-	}
-
-	path, size, err := s.downloadArtifact(access)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
-	}
-
-	if s.app != nil && s.app.p2pCoord != nil {
-		s.app.p2pCoord.recordBytesDownloaded(size)
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"ok":           true,
-		"artifactName": access.ArtifactName,
-		"path":         path,
-		"sizeBytes":    size,
-	})
+	http.Error(w, "modo push desabilitado: use transferencia pull sob demanda", http.StatusGone)
 }
 
 func (s *p2pTransferServer) downloadArtifact(access P2PArtifactAccess) (string, int64, error) {

@@ -318,6 +318,10 @@ export function PublishP2PTestArtifact(arg1, arg2) {
   return window['go']['main']['App']['PublishP2PTestArtifact'](arg1, arg2);
 }
 
+export function PullP2PArtifactFromPeer(arg1, arg2) {
+  return window['go']['main']['App']['PullP2PArtifactFromPeer'](arg1, arg2);
+}
+
 export function RefreshAutomationPolicy(arg1) {
   return window['go']['main']['App']['RefreshAutomationPolicy'](arg1);
 }

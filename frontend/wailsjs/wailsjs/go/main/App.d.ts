@@ -163,6 +163,8 @@ export function ListPrintersJSON():Promise<json.RawMessage>;
 
 export function PublishP2PTestArtifact(arg1:string,arg2:string):Promise<main.P2PArtifactView>;
 
+export function PullP2PArtifactFromPeer(arg1:string,arg2:string):Promise<main.P2PArtifactView>;
+
 export function RefreshAutomationPolicy(arg1:boolean):Promise<main.AutomationStateView>;
 
 export function RefreshInventory():Promise<models.InventoryReport>;
