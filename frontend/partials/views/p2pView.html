@@ -1,0 +1,152 @@
+<main id="p2pView" class="page-content hidden" role="tabpanel" aria-labelledby="tabP2P">
+  <section class="p2p-panel">
+    <div class="statusbar page-bar">
+      <span class="meta">P2P nativo: descoberta, distribuicao hibrida e cache temporario</span>
+      <div class="actions">
+        <button id="refreshBtn" class="btn subtle">Atualizar</button>
+        <button id="cleanupBtn" class="btn subtle">Limpar Cache Expirado</button>
+      </div>
+    </div>
+
+    <article class="card">
+      <h3>Status</h3>
+      <div id="statusGrid" class="status-grid"></div>
+    </article>
+
+    <div class="inventory-grid">
+      <article class="card wide">
+        <h3>Artifacts Locais</h3>
+        <div class="form-grid" style="margin-bottom: 12px;">
+          <div>
+            <label for="artifactName">Nome do artifact</label>
+            <input id="artifactName" type="text" placeholder="pacote-demo.bin" />
+          </div>
+          <div style="grid-column: 1 / -1;">
+            <label for="artifactContent">Conteudo de teste</label>
+            <input id="artifactContent" type="text" placeholder="conteudo de teste para distribuir via P2P" />
+          </div>
+        </div>
+        <div class="actions" style="margin-bottom: 10px;">
+          <button id="publishArtifactBtn" class="btn primary">Publicar Artifact Teste</button>
+          <button id="publishRealArtifactBtn" class="btn subtle">Selecionar Arquivo Real</button>
+        </div>
+        <div class="software-table-wrap">
+          <table class="software-table">
+            <thead>
+              <tr>
+                <th>Artifact</th>
+                <th>Tamanho</th>
+                <th>Checksum</th>
+              </tr>
+            </thead>
+            <tbody id="artifactsBody"></tbody>
+          </table>
+        </div>
+      </article>
+
+      <article class="card">
+        <h3>Replicacao</h3>
+        <div class="form-grid">
+          <div>
+            <label for="artifactSelect">Artifact</label>
+            <select id="artifactSelect"></select>
+          </div>
+          <div>
+            <label for="peerSelect">Peer</label>
+            <select id="peerSelect"></select>
+          </div>
+        </div>
+        <div class="actions" style="margin-top: 10px;">
+          <button id="replicateBtn" class="btn primary">Replicar para Peer</button>
+        </div>
+      </article>
+    </div>
+
+    <div class="inventory-grid">
+      <article class="card wide">
+        <h3>Peers Descobertos</h3>
+        <div class="software-table-wrap">
+          <table class="software-table">
+            <thead>
+              <tr>
+                <th>Agent</th>
+                <th>Endereco</th>
+                <th>Origem</th>
+                <th>Visto em</th>
+              </tr>
+            </thead>
+            <tbody id="peersBody"></tbody>
+          </table>
+        </div>
+      </article>
+
+      <article class="card wide">
+        <h3>Configuracao P2P</h3>
+        <div class="form-grid">
+          <div>
+            <label for="enabled">Ativo</label>
+            <select id="enabled"><option value="true">true</option><option value="false">false</option></select>
+          </div>
+          <div>
+            <label for="mode">Discovery</label>
+            <select id="mode"><option value="mdns">mdns</option><option value="udp">udp</option></select>
+          </div>
+          <div>
+            <label for="ttl">TTL (horas)</label>
+            <input id="ttl" type="number" min="24" max="720" />
+          </div>
+          <div>
+            <label for="seedPercent">Seed %</label>
+            <input id="seedPercent" type="number" min="1" max="100" />
+          </div>
+          <div>
+            <label for="minSeeds">Min seeds</label>
+            <input id="minSeeds" type="number" min="1" max="200" />
+          </div>
+          <div>
+            <label for="tokenMinutes">Token (min)</label>
+            <input id="tokenMinutes" type="number" min="1" max="120" />
+          </div>
+          <div style="grid-column: 1 / -1;">
+            <label for="sharedSecret">Shared Secret (opcional)</label>
+            <input id="sharedSecret" type="password" placeholder="habilita autenticacao do endpoint /p2p/replicate" />
+          </div>
+        </div>
+        <div class="actions" style="margin-top: 10px;">
+          <button id="saveConfigBtn" class="btn primary">Salvar</button>
+        </div>
+        <div id="statusLine" class="meta" style="margin-top: 8px;"></div>
+      </article>
+    </div>
+
+    <article class="card wide">
+      <h3>Auditoria</h3>
+      <div class="form-grid" style="margin-bottom: 10px;">
+        <div>
+          <label for="auditActionFilter">Acao</label>
+          <select id="auditActionFilter">
+            <option value="all">todas</option>
+            <option value="auto-distribute">auto-distribute</option>
+            <option value="queue">queue</option>
+            <option value="replicate">replicate</option>
+            <option value="skip-duplicate">skip-duplicate</option>
+            <option value="cooldown">cooldown</option>
+          </select>
+        </div>
+        <div>
+          <label for="auditPeerFilter">Peer</label>
+          <select id="auditPeerFilter"><option value="all">todos</option></select>
+        </div>
+        <div>
+          <label for="auditStatusFilter">Status</label>
+          <select id="auditStatusFilter">
+            <option value="all">todos</option>
+            <option value="success">sucesso</option>
+            <option value="error">erro</option>
+          </select>
+        </div>
+      </div>
+      <div id="auditList" class="automation-task-list"></div>
+    </article>
+  </section>
+</main>

@@ -157,12 +157,15 @@ const logsOriginFilterEl = document.getElementById('logsOriginFilter');
 const refreshLogsBtn = document.getElementById('refreshLogsBtn');
 const clearLogsBtn = document.getElementById('clearLogsBtn');
 const tabDebugBtn = document.getElementById('tabDebug');
+const tabP2PBtn = document.getElementById('tabP2P');
 const debugViewEl = document.getElementById('debugView');
+const p2pViewEl = document.getElementById('p2pView');
 const apiSchemeEl = document.getElementById('apiScheme');
 const apiServerEl = document.getElementById('apiServer');
 const natsServerEl = document.getElementById('natsServer');
 const debugAuthTokenEl = document.getElementById('debugAuthToken');
 const debugAgentIDEl = document.getElementById('debugAgentID');
+const automationP2PWingetInstallEnabledEl = document.getElementById('automationP2PWingetInstallEnabled');
 const debugSaveBtn = document.getElementById('debugSaveBtn');
 const debugTestBtn = document.getElementById('debugTestBtn');
 const debugStatusEl = document.getElementById('debugStatus');
@@ -231,7 +234,7 @@ function isRuntimeTabAllowed(tab) {
   if (isDebugRuntimeMode()) {
     return true;
   }
-  return tab !== 'logs' && tab !== 'debug' && tab !== 'automation';
+  return tab !== 'logs' && tab !== 'debug' && tab !== 'automation' && tab !== 'p2p';
 }
 
 function applyRuntimeTabVisibility() {
@@ -240,11 +243,15 @@ function applyRuntimeTabVisibility() {
   if (tabLogsBtn) tabLogsBtn.classList.toggle('hidden', hiddenInNormal);
   if (tabDebugBtn) tabDebugBtn.classList.toggle('hidden', hiddenInNormal);
   if (tabAutomationBtn) tabAutomationBtn.classList.toggle('hidden', hiddenInNormal);
+  const openP2PDebugStatusBtnEl = document.getElementById('openP2PDebugStatusBtn');
+  if (openP2PDebugStatusBtnEl) openP2PDebugStatusBtnEl.classList.toggle('hidden', hiddenInNormal);
+  if (tabP2PBtn) tabP2PBtn.classList.toggle('hidden', hiddenInNormal);
 
   if (hiddenInNormal) {
     if (logsViewEl) logsViewEl.classList.add('hidden');
     if (debugViewEl) debugViewEl.classList.add('hidden');
     if (automationViewEl) automationViewEl.classList.add('hidden');
+    if (p2pViewEl) p2pViewEl.classList.add('hidden');
   }
 
   if (!isRuntimeTabAllowed(activeTab)) {
@@ -329,6 +336,7 @@ function setActiveTab(tab) {
     support: supportViewEl,
     knowledge: knowledgeViewEl,
     automation: automationViewEl,
+    p2p: p2pViewEl,
     debug: debugViewEl,
   };
   var tabs = {
@@ -341,6 +349,7 @@ function setActiveTab(tab) {
     support: tabSupportBtn,
     knowledge: tabKnowledgeBtn,
     automation: tabAutomationBtn,
+    p2p: tabP2PBtn,
     debug: tabDebugBtn,
   };
 
@@ -354,6 +363,7 @@ function setActiveTab(tab) {
     support: 'Suporte',
     knowledge: 'Base de Conhecimento',
     automation: 'Automacao',
+    p2p: 'P2P',
     debug: 'Debug',
   };
 

@@ -14,6 +14,7 @@
   var statusGrid = document.getElementById("statusGrid");
   var peersBody = document.getElementById("peersBody");
   var artifactsBody = document.getElementById("artifactsBody");
+  var auditList = document.getElementById("auditList");
   var statusLine = document.getElementById("statusLine");
   var artifactSelectEl = document.getElementById("artifactSelect");
   var peerSelectEl = document.getElementById("peerSelect");
@@ -22,6 +23,9 @@
   var publishArtifactBtn = document.getElementById("publishArtifactBtn");
   var publishRealArtifactBtn = document.getElementById("publishRealArtifactBtn");
   var replicateBtn = document.getElementById("replicateBtn");
+  var auditActionFilterEl = document.getElementById("auditActionFilter");
+  var auditPeerFilterEl = document.getElementById("auditPeerFilter");
+  var auditStatusFilterEl = document.getElementById("auditStatusFilter");
 
   var enabledEl = document.getElementById("enabled");
   var modeEl = document.getElementById("mode");
@@ -62,6 +66,8 @@
     rows.push(["Plano seeds", (plan.selectedSeeds || 0) + " / " + (plan.totalAgents || 0)]);
     rows.push(["Publicados", String(metrics.publishedArtifacts || 0)]);
     rows.push(["Replicacoes", String(metrics.replicationsSucceeded || 0) + " ok / " + String(metrics.replicationsFailed || 0) + " falhas"]);
+    rows.push(["Fila", String(metrics.queuedReplications || 0) + " aguardando / " + String(metrics.activeReplications || 0) + " ativas"]);
+    rows.push(["Auto sync", String(metrics.autoDistributionRuns || 0)]);
     rows.push(["Bytes P2P", String(metrics.bytesServed || 0) + " up / " + String(metrics.bytesDownloaded || 0) + " down"]);
 
     statusGrid.innerHTML = rows.map(function (entry) {
@@ -91,6 +97,19 @@
         return '<option value="' + escapeHtml(peer.agentId || '') + '">' + escapeHtml((peer.agentId || '-') + ' - ' + ((peer.address || '-') + (peer.port ? ':' + peer.port : ''))) + '</option>';
       }).join("");
     }
+
+    if (auditPeerFilterEl) {
+      var current = auditPeerFilterEl.value || "all";
+      var options = ['<option value="all">todos</option>'];
+      options = options.concat(peers.map(function (peer) {
+        var id = peer.agentId || '';
+        return '<option value="' + escapeHtml(id) + '">' + escapeHtml(id || '-') + '</option>';
+      }));
+      auditPeerFilterEl.innerHTML = options.join("");
+      if (Array.prototype.some.call(auditPeerFilterEl.options, function (opt) { return opt.value === current; })) {
+        auditPeerFilterEl.value = current;
+      }
+    }
   }
 
   function renderArtifacts(artifacts) {
@@ -114,6 +133,25 @@
         return '<option value="' + escapeHtml(artifact.artifactName || '') + '">' + escapeHtml(artifact.artifactName || '-') + '</option>';
       }).join('');
     }
+  }
+
+  function renderAudit(events) {
+    if (!auditList) return;
+    if (!events || !events.length) {
+      auditList.innerHTML = '<div class="audit-item"><div class="audit-head"><span>Sem eventos</span><span>-</span></div><div>Nenhuma atividade registrada.</div></div>';
+      return;
+    }
+
+    auditList.innerHTML = events.map(function (event) {
+      var itemClass = event.success ? "audit-item ok" : "audit-item error";
+      var summary = [event.action || "evento", event.source || "-", event.peerAgentId || "-"].join(" / ");
+      var artifact = event.artifactName ? ("Artifact: " + event.artifactName) : "Artifact: -";
+      return '<div class="' + itemClass + '">' +
+        '<div class="audit-head"><span class="mono">' + escapeHtml(summary) + '</span><span>' + escapeHtml(formatDate(event.timestampUtc)) + '</span></div>' +
+        '<div>' + escapeHtml(artifact) + '</div>' +
+        '<div>' + escapeHtml(event.message || '-') + '</div>' +
+        '</div>';
+    }).join('');
   }
 
   function fillConfig(cfg) {
@@ -140,16 +178,24 @@
   }
 
   function refreshAll() {
+    var auditAction = auditActionFilterEl ? auditActionFilterEl.value : "all";
+    var auditPeer = auditPeerFilterEl ? auditPeerFilterEl.value : "all";
+    var auditStatus = auditStatusFilterEl ? auditStatusFilterEl.value : "all";
+
     Promise.all([
       appApi().GetP2PDebugStatus(),
       appApi().GetP2PPeers(),
       appApi().GetP2PConfig(),
-      appApi().ListP2PArtifacts()
+      appApi().ListP2PArtifacts(),
+      appApi().ListP2PAuditEventsFiltered(auditAction, auditPeer, auditStatus).catch(function () {
+        return appApi().ListP2PAuditEvents();
+      })
     ]).then(function (results) {
       renderStatus(results[0] || {});
       renderPeers(results[1] || []);
       fillConfig(results[2] || {});
       renderArtifacts(results[3] || []);
+      renderAudit(results[4] || []);
     }).catch(function (err) {
       setStatus("Falha ao atualizar: " + (err && err.message ? err.message : String(err)), "error");
     });
@@ -231,6 +277,16 @@
         setStatus("Falha na replicacao: " + (err && err.message ? err.message : String(err)), "error");
       });
     });
+  }
+
+  if (auditActionFilterEl) {
+    auditActionFilterEl.addEventListener("change", refreshAll);
+  }
+  if (auditPeerFilterEl) {
+    auditPeerFilterEl.addEventListener("change", refreshAll);
+  }
+  if (auditStatusFilterEl) {
+    auditStatusFilterEl.addEventListener("change", refreshAll);
   }
 
   refreshAll();

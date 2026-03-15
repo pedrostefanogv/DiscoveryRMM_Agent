@@ -378,6 +378,7 @@ export namespace main {
 	    agentId: string;
 	    scheme?: string;
 	    server?: string;
+	    automationP2pWingetInstallEnabled?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new DebugConfig(source);
@@ -392,6 +393,7 @@ export namespace main {
 	        this.agentId = source["agentId"];
 	        this.scheme = source["scheme"];
 	        this.server = source["server"];
+	        this.automationP2pWingetInstallEnabled = source["automationP2pWingetInstallEnabled"];
 	    }
 	}
 	export class KnowledgeArticle {
@@ -448,6 +450,24 @@ export namespace main {
 	        this.expiresAtUtc = source["expiresAtUtc"];
 	    }
 	}
+	export class P2PArtifactAvailabilityView {
+	    artifactName: string;
+	    found: boolean;
+	    peerAgentIds: string[];
+	    peerCount: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new P2PArtifactAvailabilityView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.artifactName = source["artifactName"];
+	        this.found = source["found"];
+	        this.peerAgentIds = source["peerAgentIds"];
+	        this.peerCount = source["peerCount"];
+	    }
+	}
 	export class P2PArtifactView {
 	    artifactName: string;
 	    sizeBytes: number;
@@ -466,6 +486,30 @@ export namespace main {
 	        this.checksumSha256 = source["checksumSha256"];
 	    }
 	}
+	export class P2PAuditEvent {
+	    timestampUtc: string;
+	    action: string;
+	    artifactName?: string;
+	    peerAgentId?: string;
+	    source?: string;
+	    success: boolean;
+	    message: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new P2PAuditEvent(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.timestampUtc = source["timestampUtc"];
+	        this.action = source["action"];
+	        this.artifactName = source["artifactName"];
+	        this.peerAgentId = source["peerAgentId"];
+	        this.source = source["source"];
+	        this.success = source["success"];
+	        this.message = source["message"];
+	    }
+	}
 	export class P2PConfig {
 	    enabled: boolean;
 	    discoveryMode: string;
@@ -475,6 +519,7 @@ export namespace main {
 	    httpListenPortRangeStart: number;
 	    httpListenPortRangeEnd: number;
 	    authTokenRotationMinutes: number;
+	    sharedSecret?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new P2PConfig(source);
@@ -490,6 +535,7 @@ export namespace main {
 	        this.httpListenPortRangeStart = source["httpListenPortRangeStart"];
 	        this.httpListenPortRangeEnd = source["httpListenPortRangeEnd"];
 	        this.authTokenRotationMinutes = source["authTokenRotationMinutes"];
+	        this.sharedSecret = source["sharedSecret"];
 	    }
 	}
 	export class P2PMetrics {
@@ -499,6 +545,10 @@ export namespace main {
 	    replicationsFailed: number;
 	    bytesServed: number;
 	    bytesDownloaded: number;
+	    queuedReplications: number;
+	    activeReplications: number;
+	    autoDistributionRuns: number;
+	    catalogRefreshRuns: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new P2PMetrics(source);
@@ -512,6 +562,10 @@ export namespace main {
 	        this.replicationsFailed = source["replicationsFailed"];
 	        this.bytesServed = source["bytesServed"];
 	        this.bytesDownloaded = source["bytesDownloaded"];
+	        this.queuedReplications = source["queuedReplications"];
+	        this.activeReplications = source["activeReplications"];
+	        this.autoDistributionRuns = source["autoDistributionRuns"];
+	        this.catalogRefreshRuns = source["catalogRefreshRuns"];
 	    }
 	}
 	export class P2PSeedPlan {
@@ -583,6 +637,42 @@ export namespace main {
 		}
 	}
 	
+	export class P2PPeerArtifactIndexView {
+	    peerAgentId: string;
+	    lastUpdatedUtc: string;
+	    source: string;
+	    artifacts: P2PArtifactView[];
+	
+	    static createFrom(source: any = {}) {
+	        return new P2PPeerArtifactIndexView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.peerAgentId = source["peerAgentId"];
+	        this.lastUpdatedUtc = source["lastUpdatedUtc"];
+	        this.source = source["source"];
+	        this.artifacts = this.convertValues(source["artifacts"], P2PArtifactView);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class P2PPeerView {
 	    agentId: string;
 	    host: string;

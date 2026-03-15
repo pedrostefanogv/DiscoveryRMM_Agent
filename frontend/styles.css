@@ -192,6 +192,7 @@ body {
 #supportViewMount,
 #knowledgeViewMount,
 #automationViewMount,
+#p2pViewMount,
 #debugViewMount {
   display: contents;
 }

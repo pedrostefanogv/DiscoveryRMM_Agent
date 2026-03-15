@@ -14,6 +14,7 @@ const statusRealtimeEl = document.getElementById('statusRealtime');
 const statusRealtimeAgentsEl = document.getElementById('statusRealtimeAgents');
 const statusInventoryAtEl = document.getElementById('statusInventoryAt');
 const statusMessageEl = document.getElementById('statusMessage');
+const openP2PDebugStatusBtnEl = document.getElementById('openP2PDebugStatusBtn');
 
 function statusSafe(value, fallback) {
   if (value === null || value === undefined || String(value).trim() === '') {
@@ -114,6 +115,14 @@ function stopStatusPoll() {
 function initStatusPage() {
   if (statusRefreshBtnEl) {
     statusRefreshBtnEl.addEventListener('click', loadStatusOverview);
+  }
+  if (openP2PDebugStatusBtnEl) {
+    openP2PDebugStatusBtnEl.addEventListener('click', function () {
+      setActiveTab('p2p');
+      if (typeof loadP2PView === 'function') {
+        loadP2PView();
+      }
+    });
   }
 }
 

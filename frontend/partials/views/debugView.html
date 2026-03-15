@@ -54,6 +54,13 @@
             <label for="debugAgentID">Agent ID (NATS)</label>
             <input id="debugAgentID" type="text" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" autocomplete="off" spellcheck="false" />
           </div>
+          <div class="form-field">
+            <label for="automationP2PWingetInstallEnabled">Automacao: instalar via P2P-first (teste)</label>
+            <select id="automationP2PWingetInstallEnabled">
+              <option value="false">false (usar Winget CLI)</option>
+              <option value="true">true (tentar P2P e fallback Winget)</option>
+            </select>
+          </div>
           <div class="debug-actions">
             <button id="debugTestBtn" class="btn subtle">Testar Conexao</button>
             <button id="debugSaveBtn" class="btn primary">Salvar Configuracao</button>

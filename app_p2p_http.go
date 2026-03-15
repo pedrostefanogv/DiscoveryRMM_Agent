@@ -80,6 +80,7 @@ func (s *p2pTransferServer) Start(ctx context.Context, cfg P2PConfig, agentID, t
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/p2p/artifact/", s.handleArtifact)
+	mux.HandleFunc("/p2p/artifact/access", s.handleArtifactAccess)
 	mux.HandleFunc("/p2p/peers", s.handlePeers)
 	mux.HandleFunc("/p2p/replicate", s.handleReplicate)
 	mux.HandleFunc("/p2p/health", func(w http.ResponseWriter, r *http.Request) {
@@ -238,11 +239,60 @@ func (s *p2pTransferServer) handlePeers(w http.ResponseWriter, r *http.Request) 
 	}
 	agentID := s.agentID
 	s.mu.RUnlock()
+	artifacts := s.localArtifactsSnapshot()
 
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"agentId":    agentID,
-		"knownPeers": peers,
+		"agentId":       agentID,
+		"knownPeers":    peers,
+		"artifacts":     artifacts,
+		"catalogSource": "self",
+		"updatedAtUtc":  time.Now().UTC().Format(time.RFC3339),
 	})
+}
+
+func (s *p2pTransferServer) handleArtifactAccess(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		ArtifactName string `json:"artifactName"`
+		RequesterID  string `json:"requesterId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "payload invalido", http.StatusBadRequest)
+		return
+	}
+
+	req.ArtifactName = sanitizeArtifactName(req.ArtifactName)
+	req.RequesterID = strings.TrimSpace(req.RequesterID)
+	if req.ArtifactName == "" {
+		http.Error(w, "artifact invalido", http.StatusBadRequest)
+		return
+	}
+	if req.RequesterID == "" {
+		req.RequesterID = "peer-anon"
+	}
+
+	access, err := s.BuildArtifactAccess(req.ArtifactName, req.RequesterID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(access)
+}
+
+func (s *p2pTransferServer) localArtifactsSnapshot() []P2PArtifactView {
+	if s.app == nil || s.app.p2pCoord == nil {
+		return []P2PArtifactView{}
+	}
+	artifacts, err := s.app.p2pCoord.ListArtifacts()
+	if err != nil {
+		return []P2PArtifactView{}
+	}
+	return artifacts
 }
 
 func (s *p2pTransferServer) handleReplicate(w http.ResponseWriter, r *http.Request) {

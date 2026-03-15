@@ -94,9 +94,12 @@ func (c *syncCoordinator) Run(ctx context.Context) {
 
 func (c *syncCoordinator) HandlePing(ping agentconn.SyncPing) {
 	if strings.TrimSpace(ping.Resource) == "" {
+		c.app.logs.append("[sync] ping ignorado: resource vazio")
 		return
 	}
+	c.app.logs.append(fmt.Sprintf("[sync] ping recebido: eventId=%s resource=%s variant=%s revision=%s", strings.TrimSpace(ping.EventID), strings.TrimSpace(ping.Resource), strings.TrimSpace(ping.InstallationType), strings.TrimSpace(ping.Revision)))
 	if c.isProcessedEvent(ping.EventID) {
+		c.app.logs.append("[sync] ping ignorado: eventId duplicado=" + strings.TrimSpace(ping.EventID))
 		return
 	}
 	trigger := syncTrigger{
@@ -168,6 +171,9 @@ func (c *syncCoordinator) processTrigger(ctx context.Context, trigger syncTrigge
 	resource := strings.ToLower(strings.TrimSpace(queued.Resource))
 	variant := strings.TrimSpace(queued.Variant)
 	revision := strings.TrimSpace(queued.Revision)
+	if c.app.p2pCoord != nil {
+		c.app.p2pCoord.RefreshPeerArtifactIndex(ctx, "sync-trigger")
+	}
 
 	var err error
 	var appStorePolicy AppStoreEffectivePolicy

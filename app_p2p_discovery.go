@@ -37,7 +37,7 @@ type p2pDiscoveredPeer struct {
 
 type p2pDiscoveryProvider interface {
 	Name() string
-	Start(ctx context.Context, self p2pSelfEndpoint, onPeer func(peer p2pDiscoveredPeer)) error
+	Start(ctx context.Context, self p2pSelfEndpoint, onPeer func(peer p2pDiscoveredPeer), onTrace func(message string)) error
 }
 
 type p2pMDNSProvider struct{}
@@ -46,7 +46,7 @@ func (p *p2pMDNSProvider) Name() string {
 	return p2pDiscoveryMDNS
 }
 
-func (p *p2pMDNSProvider) Start(ctx context.Context, self p2pSelfEndpoint, onPeer func(peer p2pDiscoveredPeer)) error {
+func (p *p2pMDNSProvider) Start(ctx context.Context, self p2pSelfEndpoint, onPeer func(peer p2pDiscoveredPeer), onTrace func(message string)) error {
 	instance := self.AgentID
 	if strings.TrimSpace(instance) == "" {
 		hostname, _ := os.Hostname()
@@ -91,10 +91,19 @@ func (p *p2pMDNSProvider) Start(ctx context.Context, self p2pSelfEndpoint, onPee
 				}
 				peer := parseMDNSEntry(entry)
 				if peer.AgentID == "" {
+					if onTrace != nil {
+						onTrace("mDNS entry ignorado: sem agentId")
+					}
 					continue
 				}
 				if strings.EqualFold(strings.TrimSpace(peer.AgentID), strings.TrimSpace(self.AgentID)) {
+					if onTrace != nil {
+						onTrace("mDNS entry ignorado: self agentId=" + strings.TrimSpace(peer.AgentID))
+					}
 					continue
+				}
+				if onTrace != nil {
+					onTrace(fmt.Sprintf("mDNS peer encontrado: agentId=%s addr=%s:%d", strings.TrimSpace(peer.AgentID), strings.TrimSpace(peer.Address), peer.Port))
 				}
 				onPeer(peer)
 			}
@@ -129,7 +138,7 @@ func (p *p2pUDPProvider) Name() string {
 	return p2pDiscoveryUDP
 }
 
-func (p *p2pUDPProvider) Start(ctx context.Context, self p2pSelfEndpoint, onPeer func(peer p2pDiscoveredPeer)) error {
+func (p *p2pUDPProvider) Start(ctx context.Context, self p2pSelfEndpoint, onPeer func(peer p2pDiscoveredPeer), onTrace func(message string)) error {
 	addr := &net.UDPAddr{IP: net.IPv4zero, Port: p2pUDPPort}
 	conn, err := net.ListenUDP("udp4", addr)
 	if err != nil {
@@ -156,9 +165,15 @@ func (p *p2pUDPProvider) Start(ctx context.Context, self p2pSelfEndpoint, onPeer
 			}
 			var msg p2pUDPAnnouncement
 			if err := json.Unmarshal(buffer[:n], &msg); err != nil {
+				if onTrace != nil {
+					onTrace("UDP anuncio ignorado: payload invalido")
+				}
 				continue
 			}
 			if strings.EqualFold(strings.TrimSpace(msg.AgentID), strings.TrimSpace(self.AgentID)) {
+				if onTrace != nil {
+					onTrace("UDP anuncio ignorado: self agentId=" + strings.TrimSpace(msg.AgentID))
+				}
 				continue
 			}
 			peerAddress := ""
@@ -174,6 +189,9 @@ func (p *p2pUDPProvider) Start(ctx context.Context, self p2pSelfEndpoint, onPeer
 				KnownPeers:   msg.KnownPeers,
 				ConnectedVia: p2pDiscoveryUDP,
 			})
+			if onTrace != nil {
+				onTrace(fmt.Sprintf("UDP anuncio recebido: agentId=%s addr=%s:%d", strings.TrimSpace(msg.AgentID), strings.TrimSpace(peerAddress), msg.Port))
+			}
 		}
 	}()
 
@@ -189,6 +207,9 @@ func (p *p2pUDPProvider) Start(ctx context.Context, self p2pSelfEndpoint, onPeer
 			})
 			if err == nil {
 				_, _ = conn.WriteToUDP(payload, broadcastAddr)
+				if onTrace != nil {
+					onTrace(fmt.Sprintf("UDP anuncio enviado: agentId=%s port=%d", strings.TrimSpace(self.AgentID), self.Port))
+				}
 			}
 		}
 		announce()

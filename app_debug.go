@@ -88,6 +88,9 @@ type DebugConfig struct {
 	// Deprecated: mantidos para compatibilidade com agentConn
 	Scheme string `json:"scheme,omitempty"` // "http", "https" or "nats"
 	Server string `json:"server,omitempty"` // hostname:port or IP
+
+	// AutomationP2PWingetInstallEnabled routes Winget installs through P2P-first flow in debug mode.
+	AutomationP2PWingetInstallEnabled bool `json:"automationP2pWingetInstallEnabled,omitempty"`
 }
 
 // InstallerConfig is the bootstrap config saved by the NSIS installer.
@@ -195,7 +198,11 @@ func (a *App) loadConnectionConfigFromProduction() {
 		a.applyP2PConfig(defaultP2PConfig())
 		return
 	}
-	a.applyP2PConfig(inst.P2P)
+	p2pCfg := normalizeP2PConfig(inst.P2P)
+	p2pCfg.Enabled = true
+	p2pCfg.DiscoveryMode = p2pDiscoveryMDNS
+	a.applyP2PConfig(p2pCfg)
+	a.logs.append("[config] P2P inicializado com enabled=true e discovery=mdns")
 
 	if strings.TrimSpace(inst.ApiScheme) == "" || strings.TrimSpace(inst.ApiServer) == "" {
 		scheme, server, parseErr := parseInstallerServerURL(inst.ServerURL)

@@ -70,6 +70,10 @@ export function ExportPDF() {
   return window['go']['main']['App']['ExportPDF']();
 }
 
+export function FindP2PArtifactPeers(arg1) {
+  return window['go']['main']['App']['FindP2PArtifactPeers'](arg1);
+}
+
 export function GetAgentInfo() {
   return window['go']['main']['App']['GetAgentInfo']();
 }
@@ -152,6 +156,10 @@ export function GetP2PConfig() {
 
 export function GetP2PDebugStatus() {
   return window['go']['main']['App']['GetP2PDebugStatus']();
+}
+
+export function GetP2PPeerArtifactIndex() {
+  return window['go']['main']['App']['GetP2PPeerArtifactIndex']();
 }
 
 export function GetP2PPeers() {
@@ -274,6 +282,14 @@ export function ListP2PArtifacts() {
   return window['go']['main']['App']['ListP2PArtifacts']();
 }
 
+export function ListP2PAuditEvents() {
+  return window['go']['main']['App']['ListP2PAuditEvents']();
+}
+
+export function ListP2PAuditEventsFiltered(arg1, arg2, arg3) {
+  return window['go']['main']['App']['ListP2PAuditEventsFiltered'](arg1, arg2, arg3);
+}
+
 export function ListPrintJobs(arg1) {
   return window['go']['main']['App']['ListPrintJobs'](arg1);
 }
@@ -308,6 +324,10 @@ export function RefreshAutomationPolicy(arg1) {
 
 export function RefreshInventory() {
   return window['go']['main']['App']['RefreshInventory']();
+}
+
+export function RefreshP2PPeerCatalog() {
+  return window['go']['main']['App']['RefreshP2PPeerCatalog']();
 }
 
 export function RemovePrintJob(arg1, arg2) {
@@ -348,6 +368,10 @@ export function SearchCatalog(arg1) {
 
 export function SearchKnowledgeBaseArticles(arg1) {
   return window['go']['main']['App']['SearchKnowledgeBaseArticles'](arg1);
+}
+
+export function SelectAndPublishP2PArtifact() {
+  return window['go']['main']['App']['SelectAndPublishP2PArtifact']();
 }
 
 export function SendChatMessage(arg1) {

@@ -110,6 +110,32 @@
     .status-line { min-height: 20px; font-size: 0.86rem; }
     .status-line.error { color: var(--danger); }
     .status-line.ok { color: var(--accent); }
+    .audit-list {
+      display: grid;
+      gap: 8px;
+      max-height: 320px;
+      overflow: auto;
+    }
+    .audit-item {
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,0.55);
+      border-radius: 10px;
+      padding: 10px;
+    }
+    .audit-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      font-size: 0.8rem;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+    .audit-item.ok {
+      border-left: 4px solid var(--accent);
+    }
+    .audit-item.error {
+      border-left: 4px solid var(--danger);
+    }
     @media (max-width: 980px) {
       .grid { grid-template-columns: 1fr; }
     }
@@ -233,6 +259,36 @@
         </div>
         <div id="statusLine" class="status-line"></div>
       </div>
+    </div>
+
+    <div class="panel">
+      <h2>Auditoria</h2>
+      <div class="form-grid" style="margin-bottom: 10px;">
+        <div>
+          <label for="auditActionFilter">Acao</label>
+          <select id="auditActionFilter">
+            <option value="all">todas</option>
+            <option value="auto-distribute">auto-distribute</option>
+            <option value="queue">queue</option>
+            <option value="replicate">replicate</option>
+            <option value="skip-duplicate">skip-duplicate</option>
+            <option value="cooldown">cooldown</option>
+          </select>
+        </div>
+        <div>
+          <label for="auditPeerFilter">Peer</label>
+          <select id="auditPeerFilter"><option value="all">todos</option></select>
+        </div>
+        <div>
+          <label for="auditStatusFilter">Status</label>
+          <select id="auditStatusFilter">
+            <option value="all">todos</option>
+            <option value="success">sucesso</option>
+            <option value="error">erro</option>
+          </select>
+        </div>
+      </div>
+      <div id="auditList" class="audit-list"></div>
     </div>
   </div>
 

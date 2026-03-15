@@ -80,6 +80,15 @@ function initAppBindings() {
     });
   }
 
+  if (tabP2PBtn) {
+    tabP2PBtn.addEventListener('click', function () {
+      setActiveTab('p2p');
+      if (typeof loadP2PView === 'function') {
+        loadP2PView();
+      }
+    });
+  }
+
   if (categorySearchEl) {
     categorySearchEl.addEventListener('input', debounce(function () {
       renderCategoryList(categorySearchEl.value);
@@ -242,6 +251,9 @@ async function bootstrapApp() {
   initKnowledge();
   initAutomation();
   initDebug();
+  if (typeof initP2PPage === 'function') {
+    initP2PPage();
+  }
 }
 
 bootstrapApp();

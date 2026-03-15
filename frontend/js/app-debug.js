@@ -129,6 +129,7 @@ function loadDebugConfig() {
       if (natsServerEl) natsServerEl.value = cfg.natsServer || '';
       if (debugAuthTokenEl) debugAuthTokenEl.value = cfg.authToken || '';
       if (debugAgentIDEl) debugAgentIDEl.value = cfg.agentId || '';
+      if (automationP2PWingetInstallEnabledEl) automationP2PWingetInstallEnabledEl.value = String(!!cfg.automationP2pWingetInstallEnabled);
       updateDebugResponseLabel();
     }).catch(function () {});
   } catch (e) {}
@@ -145,13 +146,10 @@ function initDebug() {
   var openP2PDebugWindowBtn = document.getElementById('openP2PDebugWindowBtn');
   if (openP2PDebugWindowBtn) {
     openP2PDebugWindowBtn.addEventListener('click', function () {
-      var features = 'popup=yes,width=1120,height=780,resizable=yes,scrollbars=yes';
-      var win = window.open('p2p-debug.html', 'discovery-p2p-debug', features);
-      if (!win) {
-        setDebugStatus('Falha ao abrir janela P2P. Verifique bloqueio de popup.', 'error');
-        return;
+      setActiveTab('p2p');
+      if (typeof loadP2PView === 'function') {
+        loadP2PView();
       }
-      win.focus();
     });
   }
 
@@ -172,6 +170,7 @@ function initDebug() {
         natsServer: natsServerEl ? natsServerEl.value.trim() : '',
         authToken: debugAuthTokenEl ? debugAuthTokenEl.value : '',
         agentId: debugAgentIDEl ? debugAgentIDEl.value.trim() : '',
+        automationP2pWingetInstallEnabled: automationP2PWingetInstallEnabledEl ? automationP2PWingetInstallEnabledEl.value === 'true' : false,
       }).then(function () {
         workflowStatesCache = null;
         workflowStatesCacheKey = '';

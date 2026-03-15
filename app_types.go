@@ -77,6 +77,22 @@ type P2PPeerView struct {
 	ConnectedVia string `json:"connectedVia"`
 }
 
+// P2PPeerArtifactIndexView is the known artifact inventory announced by a peer.
+type P2PPeerArtifactIndexView struct {
+	PeerAgentID    string            `json:"peerAgentId"`
+	LastUpdatedUTC string            `json:"lastUpdatedUtc"`
+	Source         string            `json:"source"`
+	Artifacts      []P2PArtifactView `json:"artifacts"`
+}
+
+// P2PArtifactAvailabilityView summarizes which peers can currently provide an artifact.
+type P2PArtifactAvailabilityView struct {
+	ArtifactName string   `json:"artifactName"`
+	Found        bool     `json:"found"`
+	PeerAgentIDs []string `json:"peerAgentIds"`
+	PeerCount    int      `json:"peerCount"`
+}
+
 // P2PArtifactAccess is an authenticated one-shot descriptor for peer downloads.
 type P2PArtifactAccess struct {
 	ArtifactName   string `json:"artifactName"`
@@ -102,6 +118,21 @@ type P2PMetrics struct {
 	ReplicationsFailed    int   `json:"replicationsFailed"`
 	BytesServed           int64 `json:"bytesServed"`
 	BytesDownloaded       int64 `json:"bytesDownloaded"`
+	QueuedReplications    int   `json:"queuedReplications"`
+	ActiveReplications    int   `json:"activeReplications"`
+	AutoDistributionRuns  int   `json:"autoDistributionRuns"`
+	CatalogRefreshRuns    int   `json:"catalogRefreshRuns"`
+}
+
+// P2PAuditEvent records important operational events for the P2P debug window.
+type P2PAuditEvent struct {
+	TimestampUTC string `json:"timestampUtc"`
+	Action       string `json:"action"`
+	ArtifactName string `json:"artifactName,omitempty"`
+	PeerAgentID  string `json:"peerAgentId,omitempty"`
+	Source       string `json:"source,omitempty"`
+	Success      bool   `json:"success"`
+	Message      string `json:"message"`
 }
 
 func (c *inventoryCache) get() (models.InventoryReport, bool) {

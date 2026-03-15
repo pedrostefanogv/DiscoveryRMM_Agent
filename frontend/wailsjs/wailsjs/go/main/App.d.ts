@@ -39,6 +39,8 @@ export function ExportMarkdown():Promise<string>;
 
 export function ExportPDF():Promise<string>;
 
+export function FindP2PArtifactPeers(arg1:string):Promise<main.P2PArtifactAvailabilityView>;
+
 export function GetAgentInfo():Promise<main.AgentInfo>;
 
 export function GetAgentInfoJSON():Promise<json.RawMessage>;
@@ -80,6 +82,8 @@ export function GetP2PArtifactAccess(arg1:string,arg2:string):Promise<main.P2PAr
 export function GetP2PConfig():Promise<main.P2PConfig>;
 
 export function GetP2PDebugStatus():Promise<main.P2PDebugStatus>;
+
+export function GetP2PPeerArtifactIndex():Promise<Array<main.P2PPeerArtifactIndexView>>;
 
 export function GetP2PPeers():Promise<Array<main.P2PPeerView>>;
 
@@ -141,6 +145,10 @@ export function ListInstalled():Promise<string>;
 
 export function ListP2PArtifacts():Promise<Array<main.P2PArtifactView>>;
 
+export function ListP2PAuditEvents():Promise<Array<main.P2PAuditEvent>>;
+
+export function ListP2PAuditEventsFiltered(arg1:string,arg2:string,arg3:string):Promise<Array<main.P2PAuditEvent>>;
+
 export function ListPrintJobs(arg1:string):Promise<json.RawMessage>;
 
 export function ListPrintJobsJSON(arg1:string):Promise<json.RawMessage>;
@@ -158,6 +166,8 @@ export function PublishP2PTestArtifact(arg1:string,arg2:string):Promise<main.P2P
 export function RefreshAutomationPolicy(arg1:boolean):Promise<main.AutomationStateView>;
 
 export function RefreshInventory():Promise<models.InventoryReport>;
+
+export function RefreshP2PPeerCatalog():Promise<void>;
 
 export function RemovePrintJob(arg1:string,arg2:number):Promise<json.RawMessage>;
 
@@ -178,6 +188,8 @@ export function RestartSpoolerJSON():Promise<json.RawMessage>;
 export function SearchCatalog(arg1:string):Promise<json.RawMessage>;
 
 export function SearchKnowledgeBaseArticles(arg1:string):Promise<Array<main.KnowledgeArticle>>;
+
+export function SelectAndPublishP2PArtifact():Promise<main.P2PArtifactView>;
 
 export function SendChatMessage(arg1:string):Promise<string>;
 

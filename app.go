@@ -144,7 +144,7 @@ func NewApp(opts AppStartupOptions) *App {
 	}, func(line string) {
 		a.logs.append("[automation] " + line)
 	})
-	a.automationSvc.SetPackageManager(a.appsSvc)
+	a.automationSvc.SetPackageManager(newAutomationPackageManagerRouter(a, a.appsSvc))
 	a.automationSvc.SetPackageAuthorization(func(ctx context.Context, installationType automation.AppInstallationType, packageID, operation string) error {
 		return a.authorizeAutomationPackage(ctx, string(installationType), packageID, operation)
 	})

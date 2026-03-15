@@ -14,6 +14,7 @@
     { mountId: "supportViewMount", path: "partials/views/supportView.html" },
     { mountId: "knowledgeViewMount", path: "partials/views/knowledgeView.html" },
     { mountId: "automationViewMount", path: "partials/views/automationView.html" },
+    { mountId: "p2pViewMount", path: "partials/views/p2pView.html" },
     { mountId: "debugViewMount", path: "partials/views/debugView.html" },
   ];
 
@@ -26,6 +27,7 @@
     "js/app-support.js",
     "js/app-knowledge.js",
     "js/app-automation.js",
+    "js/app-p2p.js",
     "js/app-status.js",
     "js/app-debug.js",
     "app.js",

@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestP2PSeedCountRule(t *testing.T) {
 	tests := []struct {
@@ -51,5 +54,60 @@ func TestBuildP2PSeedPlan(t *testing.T) {
 	}
 	if plan.TotalAgents != 25 {
 		t.Fatalf("total agents = %d, want 25", plan.TotalAgents)
+	}
+}
+
+func TestListAuditEventsFiltered(t *testing.T) {
+	c := &p2pCoordinator{}
+	c.audit = []P2PAuditEvent{
+		{TimestampUTC: time.Now().UTC().Format(time.RFC3339), Action: "replicate", PeerAgentID: "peer-a", Success: true, Message: "ok"},
+		{TimestampUTC: time.Now().UTC().Format(time.RFC3339), Action: "queue", PeerAgentID: "peer-b", Success: true, Message: "queued"},
+		{TimestampUTC: time.Now().UTC().Format(time.RFC3339), Action: "replicate", PeerAgentID: "peer-a", Success: false, Message: "error"},
+	}
+
+	failedReplicate := c.ListAuditEventsFiltered("replicate", "peer-a", "error")
+	if len(failedReplicate) != 1 {
+		t.Fatalf("expected 1 failed replicate event, got %d", len(failedReplicate))
+	}
+	if failedReplicate[0].Success {
+		t.Fatalf("expected filtered event to be failure")
+	}
+}
+
+func TestArtifactPriorityByResource(t *testing.T) {
+	c := &p2pCoordinator{}
+	high := c.artifactPriority("appstore", "stable", "appstore-catalog-v2.json")
+	medium := c.artifactPriority("appstore", "stable", "agent-stable-package.bin")
+	low := c.artifactPriority("appstore", "stable", "unrelated-backup.dat")
+
+	if !(high < medium && medium < low) {
+		t.Fatalf("unexpected priority order: high=%d medium=%d low=%d", high, medium, low)
+	}
+}
+
+func TestFindArtifactPeersFromIndex(t *testing.T) {
+	c := &p2pCoordinator{
+		peers:         make(map[string]p2pPeerState),
+		peerArtifacts: make(map[string]p2pPeerArtifactState),
+	}
+	now := time.Now().UTC()
+	c.peers["peer-a"] = p2pPeerState{Peer: p2pDiscoveredPeer{AgentID: "peer-a"}, LastSeenUTC: now}
+	c.peers["peer-b"] = p2pPeerState{Peer: p2pDiscoveredPeer{AgentID: "peer-b"}, LastSeenUTC: now}
+	c.peerArtifacts["peer-a"] = p2pPeerArtifactState{
+		Artifacts: []P2PArtifactView{{ArtifactName: "xyz.bin"}},
+	}
+	c.peerArtifacts["peer-b"] = p2pPeerArtifactState{
+		Artifacts: []P2PArtifactView{{ArtifactName: "other.bin"}},
+	}
+
+	availability := c.FindArtifactPeers("xyz.bin")
+	if !availability.Found {
+		t.Fatal("expected artifact availability to be found")
+	}
+	if availability.PeerCount != 1 {
+		t.Fatalf("expected 1 peer, got %d", availability.PeerCount)
+	}
+	if len(availability.PeerAgentIDs) != 1 || availability.PeerAgentIDs[0] != "peer-a" {
+		t.Fatalf("unexpected peer list: %+v", availability.PeerAgentIDs)
 	}
 }

@@ -3,13 +3,14 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
 	"net/http"
 	"os"
 	"path/filepath"
-	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -30,14 +31,25 @@ const (
 	defaultP2PTokenRotationMinutes     = 15
 	p2pCoordinatorDiscoveryTickSeconds = 30
 	p2pCoordinatorCleanupTickHours     = 1
+	p2pReplicationWorkers              = 2
+	p2pReplicationQueueSize            = 64
+	p2pPeerReplicationCooldown         = 20 * time.Second
+	p2pAuditLimit                      = 100
+	p2pReplicationDedupTTL             = 24 * time.Hour
 )
+
+var errP2PDuplicateReplication = errors.New("artifact ja distribuido recentemente para este peer")
 
 type p2pCoordinator struct {
 	app *App
 
 	mu                sync.RWMutex
 	peers             map[string]p2pPeerState
+	peerArtifacts     map[string]p2pPeerArtifactState
 	metrics           P2PMetrics
+	audit             []P2PAuditEvent
+	peerLastAttempt   map[string]time.Time
+	replicationDedup  map[string]time.Time
 	knownPeers        int
 	lastCleanupUTC    time.Time
 	lastDiscoveryTick time.Time
@@ -46,6 +58,7 @@ type p2pCoordinator struct {
 	listenAddress     string
 	discoveryProvider p2pDiscoveryProvider
 	transferServer    *p2pTransferServer
+	replicationQueue  chan p2pReplicationJob
 }
 
 type p2pPeerState struct {
@@ -53,11 +66,29 @@ type p2pPeerState struct {
 	LastSeenUTC time.Time
 }
 
+type p2pPeerArtifactState struct {
+	Artifacts      []P2PArtifactView
+	LastUpdatedUTC time.Time
+	Source         string
+}
+
+type p2pReplicationJob struct {
+	ArtifactName string
+	Checksum     string
+	TargetPeerID string
+	Source       string
+	Result       chan error
+}
+
 func newP2PCoordinator(app *App) *p2pCoordinator {
 	return &p2pCoordinator{
-		app:            app,
-		peers:          make(map[string]p2pPeerState),
-		transferServer: newP2PTransferServer(app),
+		app:              app,
+		peers:            make(map[string]p2pPeerState),
+		peerArtifacts:    make(map[string]p2pPeerArtifactState),
+		peerLastAttempt:  make(map[string]time.Time),
+		replicationDedup: make(map[string]time.Time),
+		transferServer:   newP2PTransferServer(app),
+		replicationQueue: make(chan p2pReplicationJob, p2pReplicationQueueSize),
 	}
 }
 
@@ -196,6 +227,27 @@ func (a *App) GetP2PPeers() []P2PPeerView {
 	return a.p2pCoord.GetPeers()
 }
 
+func (a *App) RefreshP2PPeerCatalog() {
+	if a.p2pCoord == nil {
+		return
+	}
+	a.p2pCoord.RefreshPeerArtifactIndex(context.Background(), "manual")
+}
+
+func (a *App) GetP2PPeerArtifactIndex() []P2PPeerArtifactIndexView {
+	if a.p2pCoord == nil {
+		return []P2PPeerArtifactIndexView{}
+	}
+	return a.p2pCoord.GetPeerArtifactIndex()
+}
+
+func (a *App) FindP2PArtifactPeers(artifactName string) P2PArtifactAvailabilityView {
+	if a.p2pCoord == nil {
+		return P2PArtifactAvailabilityView{ArtifactName: sanitizeArtifactName(artifactName), PeerAgentIDs: []string{}}
+	}
+	return a.p2pCoord.FindArtifactPeers(artifactName)
+}
+
 func (a *App) GetP2PTempDir() string {
 	return a.p2pTempDir()
 }
@@ -253,10 +305,32 @@ func (a *App) SelectAndPublishP2PArtifact() (P2PArtifactView, error) {
 }
 
 func (a *App) ReplicateP2PArtifactToPeer(artifactName, targetPeerID string) (string, error) {
+	return "", fmt.Errorf("modo push desabilitado: use transferencia pull sob demanda")
+}
+
+func (a *App) PullP2PArtifactFromPeer(artifactName, sourcePeerID string) (P2PArtifactView, error) {
 	if a.p2pCoord == nil {
-		return "", fmt.Errorf("coordinator P2P indisponivel")
+		return P2PArtifactView{}, fmt.Errorf("coordinator P2P indisponivel")
 	}
-	return a.p2pCoord.ReplicateArtifactToPeer(artifactName, targetPeerID)
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return a.p2pCoord.DownloadArtifactFromPeer(ctx, artifactName, sourcePeerID)
+}
+
+func (a *App) ListP2PAuditEvents() []P2PAuditEvent {
+	if a.p2pCoord == nil {
+		return []P2PAuditEvent{}
+	}
+	return a.p2pCoord.ListAuditEvents()
+}
+
+func (a *App) ListP2PAuditEventsFiltered(action, peerAgentID, status string) []P2PAuditEvent {
+	if a.p2pCoord == nil {
+		return []P2PAuditEvent{}
+	}
+	return a.p2pCoord.ListAuditEventsFiltered(action, peerAgentID, status)
 }
 
 func (c *p2pCoordinator) Run(ctx context.Context) {
@@ -283,6 +357,9 @@ func (c *p2pCoordinator) Run(ctx context.Context) {
 	if err := c.startDiscovery(ctx); err != nil {
 		c.setLastError(err)
 		c.app.logs.append("[p2p] erro ao iniciar descoberta de peers: " + err.Error())
+	}
+	for workerIndex := 0; workerIndex < p2pReplicationWorkers; workerIndex++ {
+		go c.replicationWorker(ctx)
 	}
 	_ = c.discoveryTick(time.Now())
 
@@ -321,21 +398,31 @@ func (c *p2pCoordinator) OnResourceSynced(resource, variant, revision string) {
 
 	c.app.logs.append(fmt.Sprintf("[p2p] plano calculado apos sync resource=%s variant=%s revision=%s totalAgents=%d seeds=%d",
 		resource, variant, revision, plan.TotalAgents, plan.SelectedSeeds))
+	c.appendAudit("auto-distribute", "", "", "sync", true, "modo pull-only: distribuicao forçada desabilitada")
 }
 
 func (c *p2pCoordinator) GetStatus() P2PDebugStatus {
 	cfg := c.app.GetP2PConfig()
 	c.mu.RLock()
+	active := c.app.runtimeFlags.DebugMode && cfg.Enabled
+	listenAddress := c.listenAddress
+	if strings.TrimSpace(listenAddress) == "" && c.transferServer != nil {
+		listenAddress = c.transferServer.BaseURL()
+	}
+	lastDiscoveryTick := c.lastDiscoveryTick
+	if lastDiscoveryTick.IsZero() && active {
+		lastDiscoveryTick = time.Now().UTC()
+	}
 	defer c.mu.RUnlock()
 	return P2PDebugStatus{
-		Active:               c.app.runtimeFlags.DebugMode && cfg.Enabled,
+		Active:               active,
 		DiscoveryMode:        cfg.DiscoveryMode,
 		KnownPeers:           c.knownPeers,
-		ListenAddress:        c.listenAddress,
+		ListenAddress:        listenAddress,
 		TempDir:              c.app.p2pTempDir(),
 		TempTTLHours:         cfg.TempTTLHours,
 		LastCleanupUTC:       formatTimeRFC3339(c.lastCleanupUTC),
-		LastDiscoveryTickUTC: formatTimeRFC3339(c.lastDiscoveryTick),
+		LastDiscoveryTickUTC: formatTimeRFC3339(lastDiscoveryTick),
 		LastError:            c.lastErr,
 		CurrentSeedPlan:      c.currentSeedPlan,
 		Metrics:              c.metrics,
@@ -361,6 +448,90 @@ func (c *p2pCoordinator) GetPeers() []P2PPeerView {
 	return out
 }
 
+func (c *p2pCoordinator) GetPeerArtifactIndex() []P2PPeerArtifactIndexView {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	out := make([]P2PPeerArtifactIndexView, 0, len(c.peerArtifacts))
+	for key, state := range c.peerArtifacts {
+		peerID := key
+		if peer, ok := c.peers[key]; ok && strings.TrimSpace(peer.Peer.AgentID) != "" {
+			peerID = strings.TrimSpace(peer.Peer.AgentID)
+		}
+		artifacts := make([]P2PArtifactView, len(state.Artifacts))
+		copy(artifacts, state.Artifacts)
+		out = append(out, P2PPeerArtifactIndexView{
+			PeerAgentID:    peerID,
+			LastUpdatedUTC: formatTimeRFC3339(state.LastUpdatedUTC),
+			Source:         strings.TrimSpace(state.Source),
+			Artifacts:      artifacts,
+		})
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return strings.ToLower(strings.TrimSpace(out[i].PeerAgentID)) < strings.ToLower(strings.TrimSpace(out[j].PeerAgentID))
+	})
+	return out
+}
+
+func (c *p2pCoordinator) FindArtifactPeers(artifactName string) P2PArtifactAvailabilityView {
+	safeArtifact := sanitizeArtifactName(artifactName)
+	target := strings.ToLower(strings.TrimSpace(safeArtifact))
+	result := P2PArtifactAvailabilityView{
+		ArtifactName: strings.TrimSpace(safeArtifact),
+		PeerAgentIDs: []string{},
+	}
+	if target == "" {
+		return result
+	}
+
+	for _, peer := range c.GetPeerArtifactIndex() {
+		for _, artifact := range peer.Artifacts {
+			if strings.ToLower(strings.TrimSpace(artifact.ArtifactName)) != target {
+				continue
+			}
+			result.PeerAgentIDs = append(result.PeerAgentIDs, strings.TrimSpace(peer.PeerAgentID))
+			break
+		}
+	}
+	sort.Strings(result.PeerAgentIDs)
+	result.PeerCount = len(result.PeerAgentIDs)
+	result.Found = result.PeerCount > 0
+	return result
+}
+
+func (c *p2pCoordinator) ListAuditEvents() []P2PAuditEvent {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	out := make([]P2PAuditEvent, len(c.audit))
+	copy(out, c.audit)
+	return out
+}
+
+func (c *p2pCoordinator) ListAuditEventsFiltered(action, peerAgentID, status string) []P2PAuditEvent {
+	action = strings.ToLower(strings.TrimSpace(action))
+	peerAgentID = strings.ToLower(strings.TrimSpace(peerAgentID))
+	status = strings.ToLower(strings.TrimSpace(status))
+
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	out := make([]P2PAuditEvent, 0, len(c.audit))
+	for _, event := range c.audit {
+		if action != "" && action != "all" && strings.ToLower(strings.TrimSpace(event.Action)) != action {
+			continue
+		}
+		if peerAgentID != "" && peerAgentID != "all" && strings.ToLower(strings.TrimSpace(event.PeerAgentID)) != peerAgentID {
+			continue
+		}
+		if status == "success" && !event.Success {
+			continue
+		}
+		if (status == "error" || status == "failed") && event.Success {
+			continue
+		}
+		out = append(out, event)
+	}
+	return out
+}
+
 func (c *p2pCoordinator) GetArtifactAccess(artifactName, targetPeerID string) (P2PArtifactAccess, error) {
 	c.mu.RLock()
 	transfer := c.transferServer
@@ -369,6 +540,75 @@ func (c *p2pCoordinator) GetArtifactAccess(artifactName, targetPeerID string) (P
 		return P2PArtifactAccess{}, fmt.Errorf("servidor de transferencia indisponivel")
 	}
 	return transfer.BuildArtifactAccess(artifactName, targetPeerID)
+}
+
+func (c *p2pCoordinator) DownloadArtifactFromPeer(ctx context.Context, artifactName, sourcePeerID string) (P2PArtifactView, error) {
+	artifactName = sanitizeArtifactName(artifactName)
+	if artifactName == "" {
+		return P2PArtifactView{}, fmt.Errorf("artifact invalido")
+	}
+	peer, err := c.findPeerByAgentID(sourcePeerID)
+	if err != nil {
+		return P2PArtifactView{}, err
+	}
+
+	requesterID := strings.TrimSpace(c.app.GetDebugConfig().AgentID)
+	if requesterID == "" {
+		requesterID = "peer-local"
+	}
+
+	endpoint := fmt.Sprintf("http://%s:%d/p2p/artifact/access", strings.TrimSpace(peer.Address), peer.Port)
+	payload, _ := json.Marshal(map[string]string{
+		"artifactName": artifactName,
+		"requesterId":  requesterID,
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(string(payload)))
+	if err != nil {
+		return P2PArtifactView{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
+	if err != nil {
+		return P2PArtifactView{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return P2PArtifactView{}, fmt.Errorf("falha ao obter acesso remoto HTTP %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+
+	var access P2PArtifactAccess
+	if err := json.NewDecoder(resp.Body).Decode(&access); err != nil {
+		return P2PArtifactView{}, err
+	}
+	c.mu.RLock()
+	transfer := c.transferServer
+	c.mu.RUnlock()
+	if transfer == nil {
+		return P2PArtifactView{}, fmt.Errorf("servidor de transferencia indisponivel")
+	}
+
+	path, size, err := transfer.downloadArtifact(access)
+	if err != nil {
+		return P2PArtifactView{}, err
+	}
+	c.recordBytesDownloaded(size)
+	info, statErr := os.Stat(path)
+	if statErr != nil {
+		return P2PArtifactView{}, statErr
+	}
+	checksum, checksumErr := computeFileSHA256(path)
+	if checksumErr != nil {
+		return P2PArtifactView{}, checksumErr
+	}
+	c.appendAudit("pull", artifactName, sourcePeerID, "automation", true, "artifact baixado do peer")
+	return P2PArtifactView{
+		ArtifactName:   artifactName,
+		SizeBytes:      info.Size(),
+		ModifiedAtUTC:  formatTimeRFC3339(info.ModTime()),
+		ChecksumSHA256: checksum,
+	}, nil
 }
 
 func (c *p2pCoordinator) ListArtifacts() ([]P2PArtifactView, error) {
@@ -499,22 +739,26 @@ func (c *p2pCoordinator) PublishFile(sourcePath string) (P2PArtifactView, error)
 }
 
 func (c *p2pCoordinator) ReplicateArtifactToPeer(artifactName, targetPeerID string) (string, error) {
+	return "", fmt.Errorf("modo push desabilitado: use transferencia pull sob demanda")
+}
+
+func (c *p2pCoordinator) replicateArtifactToPeerNow(artifactName, targetPeerID string) error {
 	peer, err := c.findPeerByAgentID(targetPeerID)
 	if err != nil {
 		c.recordReplicationResult(false)
-		return "", err
+		return err
 	}
 	access, err := c.GetArtifactAccess(artifactName, targetPeerID)
 	if err != nil {
 		c.recordReplicationResult(false)
-		return "", err
+		return err
 	}
 
 	endpoint := fmt.Sprintf("http://%s:%d/p2p/replicate", peer.Address, peer.Port)
 	body, err := json.Marshal(access)
 	if err != nil {
 		c.recordReplicationResult(false)
-		return "", err
+		return err
 	}
 
 	c.mu.Lock()
@@ -524,7 +768,7 @@ func (c *p2pCoordinator) ReplicateArtifactToPeer(artifactName, targetPeerID stri
 	req, err := http.NewRequest(http.MethodPost, endpoint, strings.NewReader(string(body)))
 	if err != nil {
 		c.recordReplicationResult(false)
-		return "", err
+		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	for key, value := range c.transferServer.BuildReplicationHeaders(strings.TrimSpace(c.app.GetDebugConfig().AgentID), access) {
@@ -537,17 +781,17 @@ func (c *p2pCoordinator) ReplicateArtifactToPeer(artifactName, targetPeerID stri
 	resp, err := (&http.Client{Timeout: 45 * time.Second}).Do(req)
 	if err != nil {
 		c.recordReplicationResult(false)
-		return "", err
+		return err
 	}
 	defer resp.Body.Close()
 
 	responseBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		c.recordReplicationResult(false)
-		return "", fmt.Errorf("replicacao falhou HTTP %s: %s", resp.Status, strings.TrimSpace(string(responseBody)))
+		return fmt.Errorf("replicacao falhou HTTP %s: %s", resp.Status, strings.TrimSpace(string(responseBody)))
 	}
 	c.recordReplicationResult(true)
-	return fmt.Sprintf("artifact %s replicado para %s", artifactName, targetPeerID), nil
+	return nil
 }
 
 func (c *p2pCoordinator) currentAgentsEstimate() int {
@@ -566,6 +810,7 @@ func (c *p2pCoordinator) discoveryTick(now time.Time) error {
 	for key, peer := range c.peers {
 		if now.Sub(peer.LastSeenUTC) > 2*time.Minute {
 			delete(c.peers, key)
+			delete(c.peerArtifacts, key)
 		}
 	}
 	c.knownPeers = len(c.peers)
@@ -631,12 +876,18 @@ func (c *p2pCoordinator) startDiscovery(ctx context.Context) error {
 
 	if err := provider.Start(ctx, p2pSelfEndpoint{AgentID: selfAgentID, Host: selfHost, Port: port}, func(peer p2pDiscoveredPeer) {
 		c.upsertPeer(peer)
+	}, func(message string) {
+		if strings.TrimSpace(message) == "" {
+			return
+		}
+		c.app.logs.append("[p2p][discovery] " + message)
 	}); err != nil {
 		return err
 	}
 
 	c.mu.Lock()
 	c.discoveryProvider = provider
+	c.lastDiscoveryTick = time.Now().UTC()
 	c.mu.Unlock()
 	c.app.logs.append("[p2p] descoberta iniciada via " + provider.Name())
 	return nil
@@ -652,9 +903,19 @@ func (c *p2pCoordinator) upsertPeer(peer p2pDiscoveredPeer) {
 	key := strings.ToLower(strings.TrimSpace(peer.AgentID))
 
 	c.mu.Lock()
+	previous, existed := c.peers[key]
 	c.peers[key] = p2pPeerState{Peer: peer, LastSeenUTC: time.Now().UTC()}
 	c.knownPeers = len(c.peers)
 	c.mu.Unlock()
+
+	if !existed {
+		c.app.logs.append(fmt.Sprintf("[p2p] peer descoberto: agentId=%s source=%s addr=%s:%d", strings.TrimSpace(peer.AgentID), strings.TrimSpace(peer.Source), strings.TrimSpace(peer.Address), peer.Port))
+		return
+	}
+
+	if strings.TrimSpace(previous.Peer.Address) != strings.TrimSpace(peer.Address) || previous.Peer.Port != peer.Port || strings.TrimSpace(previous.Peer.Source) != strings.TrimSpace(peer.Source) {
+		c.app.logs.append(fmt.Sprintf("[p2p] peer atualizado: agentId=%s source=%s addr=%s:%d", strings.TrimSpace(peer.AgentID), strings.TrimSpace(peer.Source), strings.TrimSpace(peer.Address), peer.Port))
+	}
 }
 
 func (c *p2pCoordinator) findPeerByAgentID(agentID string) (P2PPeerView, error) {
@@ -698,9 +959,280 @@ func (c *p2pCoordinator) recordBytesDownloaded(size int64) {
 	c.mu.Unlock()
 }
 
+func (c *p2pCoordinator) enqueueReplicationJob(job p2pReplicationJob) error {
+	job.ArtifactName = sanitizeArtifactName(job.ArtifactName)
+	job.Checksum = strings.TrimSpace(job.Checksum)
+	job.TargetPeerID = strings.TrimSpace(job.TargetPeerID)
+	job.Source = strings.TrimSpace(job.Source)
+	if job.Source == "" {
+		job.Source = "manual"
+	}
+	if job.ArtifactName == "" {
+		return fmt.Errorf("artifact invalido")
+	}
+	if job.TargetPeerID == "" {
+		return fmt.Errorf("peer alvo nao informado")
+	}
+	if job.Checksum == "" {
+		resolvedChecksum, err := c.resolveArtifactChecksum(job.ArtifactName)
+		if err != nil {
+			return err
+		}
+		job.Checksum = resolvedChecksum
+	}
+
+	now := time.Now().UTC()
+	c.mu.Lock()
+	c.pruneDedupLocked(now)
+	if c.wasRecentlyReplicatedLocked(job.TargetPeerID, job.ArtifactName, job.Checksum, now) {
+		c.mu.Unlock()
+		c.appendAudit("skip-duplicate", job.ArtifactName, job.TargetPeerID, job.Source, true, errP2PDuplicateReplication.Error())
+		return errP2PDuplicateReplication
+	}
+	c.mu.Unlock()
+
+	select {
+	case c.replicationQueue <- job:
+		c.mu.Lock()
+		c.metrics.QueuedReplications++
+		c.mu.Unlock()
+		c.appendAudit("queue", job.ArtifactName, job.TargetPeerID, job.Source, true, "replicacao enfileirada")
+		return nil
+	default:
+		c.appendAudit("queue", job.ArtifactName, job.TargetPeerID, job.Source, false, "fila de replicacao cheia")
+		return fmt.Errorf("fila de replicacao cheia")
+	}
+}
+
+func (c *p2pCoordinator) replicationWorker(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case job := <-c.replicationQueue:
+			c.mu.Lock()
+			if c.metrics.QueuedReplications > 0 {
+				c.metrics.QueuedReplications--
+			}
+			c.metrics.ActiveReplications++
+			c.mu.Unlock()
+
+			err := c.processReplicationJob(job)
+			if job.Result != nil {
+				job.Result <- err
+			}
+		}
+	}
+}
+
+func (c *p2pCoordinator) processReplicationJob(job p2pReplicationJob) error {
+	peerKey := strings.ToLower(strings.TrimSpace(job.TargetPeerID))
+	now := time.Now().UTC()
+
+	c.mu.Lock()
+	lastAttempt := c.peerLastAttempt[peerKey]
+	if !lastAttempt.IsZero() && now.Sub(lastAttempt) < p2pPeerReplicationCooldown {
+		if c.metrics.ActiveReplications > 0 {
+			c.metrics.ActiveReplications--
+		}
+		c.mu.Unlock()
+		err := fmt.Errorf("peer em cooldown de replicacao")
+		c.appendAudit("cooldown", job.ArtifactName, job.TargetPeerID, job.Source, false, err.Error())
+		return err
+	}
+	c.peerLastAttempt[peerKey] = now
+	c.mu.Unlock()
+
+	err := c.replicateArtifactToPeerNow(job.ArtifactName, job.TargetPeerID)
+	if err != nil {
+		c.appendAudit("replicate", job.ArtifactName, job.TargetPeerID, job.Source, false, err.Error())
+	} else {
+		c.markReplicated(job.TargetPeerID, job.ArtifactName, job.Checksum)
+		c.appendAudit("replicate", job.ArtifactName, job.TargetPeerID, job.Source, true, "replicacao concluida")
+	}
+
+	c.mu.Lock()
+	if c.metrics.ActiveReplications > 0 {
+		c.metrics.ActiveReplications--
+	}
+	c.mu.Unlock()
+	return err
+}
+
+func (c *p2pCoordinator) appendAudit(action, artifactName, peerAgentID, source string, success bool, message string) {
+	event := P2PAuditEvent{
+		TimestampUTC: formatTimeRFC3339(time.Now().UTC()),
+		Action:       strings.TrimSpace(action),
+		ArtifactName: strings.TrimSpace(artifactName),
+		PeerAgentID:  strings.TrimSpace(peerAgentID),
+		Source:       strings.TrimSpace(source),
+		Success:      success,
+		Message:      strings.TrimSpace(message),
+	}
+	c.mu.Lock()
+	c.audit = append([]P2PAuditEvent{event}, c.audit...)
+	if len(c.audit) > p2pAuditLimit {
+		c.audit = c.audit[:p2pAuditLimit]
+	}
+	c.mu.Unlock()
+}
+
+func (c *p2pCoordinator) autoDistributeLocalArtifacts(resource, variant, revision string) {
+	artifacts, err := c.ListArtifacts()
+	if err != nil {
+		c.appendAudit("auto-distribute", "", "", "sync", false, err.Error())
+		return
+	}
+	peers := c.selectAutoDistributionPeers(c.GetPeers())
+	if len(artifacts) == 0 || len(peers) == 0 {
+		c.appendAudit("auto-distribute", "", "", "sync", true, "sem artifacts ou peers elegiveis")
+		return
+	}
+
+	c.mu.Lock()
+	c.metrics.AutoDistributionRuns++
+	c.mu.Unlock()
+
+	sort.SliceStable(artifacts, func(i, j int) bool {
+		pi := c.artifactPriority(resource, variant, artifacts[i].ArtifactName)
+		pj := c.artifactPriority(resource, variant, artifacts[j].ArtifactName)
+		if pi != pj {
+			return pi < pj
+		}
+		return strings.ToLower(artifacts[i].ArtifactName) < strings.ToLower(artifacts[j].ArtifactName)
+	})
+
+	enqueued := 0
+	skippedDuplicates := 0
+	for _, artifact := range artifacts {
+		for _, peer := range peers {
+			err := c.enqueueReplicationJob(p2pReplicationJob{
+				ArtifactName: artifact.ArtifactName,
+				Checksum:     artifact.ChecksumSHA256,
+				TargetPeerID: peer.AgentID,
+				Source:       "sync",
+			})
+			if err == nil {
+				enqueued++
+				continue
+			}
+			if errors.Is(err, errP2PDuplicateReplication) {
+				skippedDuplicates++
+			}
+		}
+	}
+	c.appendAudit("auto-distribute", "", "", "sync", true, fmt.Sprintf("resource=%s variant=%s revision=%s jobs=%d duplicates=%d", resource, variant, revision, enqueued, skippedDuplicates))
+}
+
+func (c *p2pCoordinator) artifactPriority(resource, variant, artifactName string) int {
+	name := strings.ToLower(strings.TrimSpace(artifactName))
+	res := strings.ToLower(strings.TrimSpace(resource))
+	varKey := strings.ToLower(strings.TrimSpace(variant))
+
+	if res != "" && strings.Contains(name, res) {
+		return 0
+	}
+	if varKey != "" && strings.Contains(name, varKey) {
+		return 1
+	}
+	if res == "appstore" && (strings.Contains(name, "catalog") || strings.Contains(name, "store")) {
+		return 0
+	}
+	if res == "automationpolicy" && strings.Contains(name, "automation") {
+		return 0
+	}
+	if res == "configuration" && strings.Contains(name, "config") {
+		return 0
+	}
+	return 2
+}
+
+func (c *p2pCoordinator) resolveArtifactChecksum(artifactName string) (string, error) {
+	artifacts, err := c.ListArtifacts()
+	if err != nil {
+		return "", err
+	}
+	target := strings.ToLower(strings.TrimSpace(artifactName))
+	for _, artifact := range artifacts {
+		if strings.ToLower(strings.TrimSpace(artifact.ArtifactName)) != target {
+			continue
+		}
+		if strings.TrimSpace(artifact.ChecksumSHA256) == "" {
+			break
+		}
+		return strings.TrimSpace(artifact.ChecksumSHA256), nil
+	}
+	return "", fmt.Errorf("checksum do artifact nao encontrado")
+}
+
+func (c *p2pCoordinator) dedupKey(peerAgentID, artifactName, checksum string) string {
+	return strings.ToLower(strings.TrimSpace(peerAgentID)) + "|" + strings.ToLower(strings.TrimSpace(artifactName)) + "|" + strings.ToLower(strings.TrimSpace(checksum))
+}
+
+func (c *p2pCoordinator) wasRecentlyReplicatedLocked(peerAgentID, artifactName, checksum string, now time.Time) bool {
+	if strings.TrimSpace(checksum) == "" {
+		return false
+	}
+	last, ok := c.replicationDedup[c.dedupKey(peerAgentID, artifactName, checksum)]
+	if !ok {
+		return false
+	}
+	return now.Sub(last) < p2pReplicationDedupTTL
+}
+
+func (c *p2pCoordinator) markReplicated(peerAgentID, artifactName, checksum string) {
+	if strings.TrimSpace(checksum) == "" {
+		return
+	}
+	now := time.Now().UTC()
+	c.mu.Lock()
+	c.pruneDedupLocked(now)
+	c.replicationDedup[c.dedupKey(peerAgentID, artifactName, checksum)] = now
+	c.mu.Unlock()
+}
+
+func (c *p2pCoordinator) pruneDedupLocked(now time.Time) {
+	for key, ts := range c.replicationDedup {
+		if now.Sub(ts) >= p2pReplicationDedupTTL {
+			delete(c.replicationDedup, key)
+		}
+	}
+}
+
+func (c *p2pCoordinator) selectAutoDistributionPeers(peers []P2PPeerView) []P2PPeerView {
+	status := c.GetStatus()
+	leechers := len(peers) - maxInt(status.CurrentSeedPlan.SelectedSeeds-1, 0)
+	if leechers <= 0 {
+		return []P2PPeerView{}
+	}
+	if leechers > len(peers) {
+		leechers = len(peers)
+	}
+	return peers[:leechers]
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
 func (c *p2pCoordinator) pullPeerGossip(ctx context.Context) {
+	c.RefreshPeerArtifactIndex(ctx, "gossip")
+}
+
+func (c *p2pCoordinator) RefreshPeerArtifactIndex(ctx context.Context, source string) {
 	peers := c.GetPeers()
 	client := &http.Client{Timeout: 3 * time.Second}
+	source = strings.TrimSpace(source)
+	if source == "" {
+		source = "refresh"
+	}
+
+	c.mu.Lock()
+	c.metrics.CatalogRefreshRuns++
+	c.mu.Unlock()
 
 	for _, peer := range peers {
 		if strings.TrimSpace(peer.Address) == "" || peer.Port <= 0 {
@@ -720,7 +1252,9 @@ func (c *p2pCoordinator) pullPeerGossip(ctx context.Context) {
 			continue
 		}
 		var payload struct {
-			KnownPeers []P2PPeerView `json:"knownPeers"`
+			KnownPeers    []P2PPeerView     `json:"knownPeers"`
+			Artifacts     []P2PArtifactView `json:"artifacts"`
+			CatalogSource string            `json:"catalogSource"`
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&payload); err == nil {
 			for _, p := range payload.KnownPeers {
@@ -734,9 +1268,51 @@ func (c *p2pCoordinator) pullPeerGossip(ctx context.Context) {
 					ConnectedVia: "gossip",
 				})
 			}
+			catalogSource := strings.TrimSpace(payload.CatalogSource)
+			if catalogSource == "" {
+				catalogSource = source
+			}
+			c.upsertPeerArtifacts(peer.AgentID, payload.Artifacts, catalogSource)
+			if len(payload.Artifacts) > 0 {
+				c.app.logs.append(fmt.Sprintf("[p2p] catalogo atualizado: peer=%s artifacts=%d source=%s", strings.TrimSpace(peer.AgentID), len(payload.Artifacts), catalogSource))
+			}
 		}
 		resp.Body.Close()
 	}
+}
+
+func (c *p2pCoordinator) upsertPeerArtifacts(peerAgentID string, artifacts []P2PArtifactView, source string) {
+	peerKey := strings.ToLower(strings.TrimSpace(peerAgentID))
+	if peerKey == "" {
+		return
+	}
+	if source == "" {
+		source = "unknown"
+	}
+	clean := make([]P2PArtifactView, 0, len(artifacts))
+	for _, artifact := range artifacts {
+		name := sanitizeArtifactName(artifact.ArtifactName)
+		if name == "" {
+			continue
+		}
+		clean = append(clean, P2PArtifactView{
+			ArtifactName:   name,
+			SizeBytes:      artifact.SizeBytes,
+			ModifiedAtUTC:  strings.TrimSpace(artifact.ModifiedAtUTC),
+			ChecksumSHA256: strings.TrimSpace(artifact.ChecksumSHA256),
+		})
+	}
+	sort.SliceStable(clean, func(i, j int) bool {
+		return strings.ToLower(strings.TrimSpace(clean[i].ArtifactName)) < strings.ToLower(strings.TrimSpace(clean[j].ArtifactName))
+	})
+
+	c.mu.Lock()
+	c.peerArtifacts[peerKey] = p2pPeerArtifactState{
+		Artifacts:      clean,
+		LastUpdatedUTC: time.Now().UTC(),
+		Source:         source,
+	}
+	c.mu.Unlock()
 }
 
 func parsePortFromURL(raw string) (int, error) {
@@ -753,13 +1329,11 @@ func parsePortFromURL(raw string) (int, error) {
 }
 
 func (a *App) p2pTempDir() string {
-	base := getDataDir()
-	if runtime.GOOS == "windows" {
-		if localAppData := strings.TrimSpace(os.Getenv("LOCALAPPDATA")); localAppData != "" {
-			base = filepath.Join(localAppData, "Discovery")
-		}
+	base := strings.TrimSpace(os.TempDir())
+	if base == "" {
+		base = getDataDir()
 	}
-	return filepath.Join(base, "TempP2P")
+	return filepath.Join(base, "Discovery", "TempP2P")
 }
 
 func (a *App) cleanupExpiredP2PTempArtifacts(now time.Time) (int, error) {
