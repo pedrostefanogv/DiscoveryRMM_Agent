@@ -43,6 +43,9 @@ const (
 	chatConfigFile   = "chat_config.json"
 	debugConfigFile  = "debug_config.json"
 
+	// Temporarily disable efficiency mode until we revisit this behavior.
+	efficiencyModeEnabled = false
+
 	WindowWidth  = 1280
 	WindowHeight = 860
 )
@@ -474,6 +477,16 @@ func (a *App) beginActivity(activity string) func() {
 }
 
 func (a *App) applyIdleMode(idle bool) bool {
+	if !efficiencyModeEnabled {
+		a.activityMu.Lock()
+		a.idleKnown = true
+		a.idleCapable = false
+		a.lastIdle = false
+		a.activityMu.Unlock()
+		a.updateTrayIdleState(false, false)
+		return false
+	}
+
 	a.activityMu.Lock()
 	if a.lastIdle == idle && a.idleKnown {
 		supported := a.idleCapable

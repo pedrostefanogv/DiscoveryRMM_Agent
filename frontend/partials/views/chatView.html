@@ -1,0 +1,62 @@
+<main id="chatView" class="page-content hidden" role="tabpanel" aria-labelledby="tabChat">
+    <section class="chat-panel">
+      <div class="statusbar page-bar chat-statusbar">
+        <span class="meta">Chat IA - converse com a IA para gerenciar seu computador</span>
+        <div class="actions">
+          <button id="chatToolsBtn" class="btn subtle">Ver Ferramentas</button>
+          <button id="chatClearBtn" class="btn danger">Limpar Chat</button>
+        </div>
+      </div>
+
+      <div id="chatConfigPanel" class="chat-config hidden">
+        <div class="chat-config-field">
+          <label for="chatEndpoint">Servidor API (opcional)</label>
+          <input id="chatEndpoint" type="url" placeholder="https://seu-servidor" />
+        </div>
+        <div class="chat-config-field">
+          <label for="chatApiKey">Token do Agente (opcional)</label>
+          <input id="chatApiKey" type="password" placeholder="mdz_..." />
+        </div>
+        <div class="chat-config-field">
+          <label for="chatModel">Modelo (compatibilidade)</label>
+          <input id="chatModel" type="text" placeholder="agent-auth" />
+        </div>
+        <div class="chat-config-field">
+          <label for="chatMaxTokens">Max Tokens (opcional)</label>
+          <input id="chatMaxTokens" type="number" min="0" step="1" placeholder="0" />
+        </div>
+        <div class="chat-config-field">
+          <label for="chatSystemPrompt">Instrucoes do Assistente (Opcional)</label>
+          <textarea id="chatSystemPrompt" rows="5" placeholder="Ex.: Responda com foco em inventario corporativo e sempre cite riscos antes de executar acoes." spellcheck="true" lang="pt-BR" autocapitalize="sentences" autocomplete="on"></textarea>
+        </div>
+        <div class="meta">Se endpoint/token ficarem vazios, o chat usa automaticamente apiScheme/apiServer/authToken da aba Debug.</div>
+        <button id="chatTestConfigBtn" class="btn subtle">Testar Configuracao</button>
+        <button id="chatSaveConfigBtn" class="btn primary">Salvar Configuracao</button>
+      </div>
+
+      <div id="chatToolsPanel" class="chat-tools-panel hidden">
+        <div id="chatToolsList" class="chat-tools-list"></div>
+      </div>
+
+      <div id="chatMessages" class="chat-messages"></div>
+
+      <div class="chat-input-wrap">
+        <textarea id="chatInput" class="chat-input" placeholder="Digite sua mensagem... (Enter para enviar, Shift+Enter para nova linha)" rows="2" spellcheck="true" lang="pt-BR" autocapitalize="sentences" autocomplete="on"></textarea>
+        <button id="chatSendBtn" class="btn primary chat-send-btn">Enviar</button>
+        <button id="chatStopBtn" class="btn danger chat-stop-btn hidden">Stop</button>
+      </div>
+
+      <div id="chatLogsModal" class="chat-logs-modal hidden" aria-hidden="true">
+        <div class="chat-logs-card">
+          <div class="chat-logs-head section-bar">
+            <strong>Logs do Chat IA</strong>
+            <div class="actions">
+              <button id="chatLogsRefreshBtn" class="btn subtle">Atualizar</button>
+              <button id="chatLogsCloseBtn" class="btn danger">Fechar</button>
+            </div>
+          </div>
+          <pre id="chatLogsOutput" class="chat-logs-output"></pre>
+        </div>
+      </div>
+    </section>
+  </main>

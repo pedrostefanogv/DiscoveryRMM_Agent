@@ -1,0 +1,39 @@
+<main id="knowledgeView" class="page-content hidden" role="tabpanel" aria-labelledby="tabKnowledge">
+    <section class="knowledge-panel">
+      <div class="statusbar page-bar">
+        <div>
+          <strong>Base de Conhecimento</strong>
+          <div class="meta">Artigos de manutencao e troubleshooting de PCs</div>
+        </div>
+        <input id="kbSearchInput" type="search" class="kb-search-input" placeholder="Buscar por titulo, categoria, tag ou conteudo" />
+      </div>
+
+      <div class="knowledge-layout">
+        <aside>
+          <div id="kbArticlesList" class="kb-articles-list">
+            <div class="meta">Carregando artigos...</div>
+          </div>
+        </aside>
+
+        <article id="kbArticleDetail" class="kb-article-detail hidden">
+          <h2 id="kbDetailTitle"></h2>
+          <div id="kbDetailMeta" class="kb-detail-meta"></div>
+          <div id="kbDetailContent" class="kb-detail-content"></div>
+          <div class="kb-detail-actions">
+            <button id="kbOpenFullBtn" class="btn primary">Abrir em tela cheia</button>
+          </div>
+        </article>
+      </div>
+
+      <div id="kbReaderModal" class="kb-reader-modal hidden" aria-hidden="true">
+        <div class="kb-reader-card">
+          <div class="kb-reader-head section-bar">
+            <strong id="kbReaderTitle">Artigo</strong>
+            <button id="kbReaderCloseBtn" class="btn danger">Fechar</button>
+          </div>
+          <div id="kbReaderMeta" class="kb-detail-meta"></div>
+          <div id="kbReaderContent" class="kb-reader-content"></div>
+        </div>
+      </div>
+    </section>
+  </main>

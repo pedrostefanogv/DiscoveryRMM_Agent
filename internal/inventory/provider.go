@@ -196,6 +196,7 @@ func (p *Provider) collectWithOsquery(ctx context.Context) (models.InventoryRepo
 			report.GPUs = details.GPUs
 		}
 		report.Monitors = details.Monitors
+		report.Printers = details.Printers
 	}
 	sanitizeHardwareFields(&report)
 

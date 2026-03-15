@@ -201,7 +201,7 @@ async function checkPendingUpdates() {
 
 function renderUpdatesTable() {
   if (!pendingUpdates.length) {
-    updatesTableBodyEl.innerHTML = '<tr><td colspan="7" class="meta">Nenhuma atualizacao pendente.</td></tr>';
+    updatesTableBodyEl.innerHTML = '<tr><td colspan="5" class="meta">Nenhuma atualizacao pendente.</td></tr>';
     upgradeSelectedBtn.disabled = true;
     if (updateSelectAllEl) updateSelectAllEl.checked = false;
     return;
@@ -210,10 +210,8 @@ function renderUpdatesTable() {
     return '<tr>' +
       '<td class="update-check-col"><input type="checkbox" class="update-check" data-idx="' + i + '" data-id="' + escapeHtmlAttr(u.id) + '" /></td>' +
       '<td>' + escapeHtml(u.name || '-') + '</td>' +
-      '<td>' + escapeHtml(u.id || '-') + '</td>' +
       '<td>' + escapeHtml(u.currentVersion || '-') + '</td>' +
       '<td>' + escapeHtml(u.availableVersion || '-') + '</td>' +
-      '<td>' + escapeHtml(u.source || '-') + '</td>' +
       '<td><button class="btn primary" data-action="upgrade" data-id="' + escapeHtmlAttr(u.id) + '">Atualizar</button></td>' +
     '</tr>';
   }).join('');

@@ -26,7 +26,6 @@ function initAppBindings() {
   tabUpdatesBtn.addEventListener('click', function () { setActiveTab('updates'); });
   tabInventoryBtn.addEventListener('click', function () {
     setActiveTab('inventory');
-    refreshOsqueryStatus();
     if (!inventoryLoadedOnce) {
       loadInventory();
     }
@@ -133,13 +132,24 @@ function initAppBindings() {
   if (sidebarToggleBtn && sidebarEl) {
     sidebarToggleBtn.addEventListener('click', function () {
       sidebarEl.classList.toggle('collapsed');
+      if (typeof syncWindowChromeSidebarWidth === 'function') {
+        syncWindowChromeSidebarWidth();
+      }
     });
   }
 
-  refreshInventoryBtn.addEventListener('click', function () { loadInventory(true); });
-  installOsqueryBtn.addEventListener('click', installOsquery);
-  exportInventoryBtn.addEventListener('click', exportInventory);
-  exportInventoryPdfBtn.addEventListener('click', exportInventoryPdf);
+  if (refreshInventoryBtn) {
+    refreshInventoryBtn.addEventListener('click', function () { loadInventory(true); });
+  }
+  if (installOsqueryBtn) {
+    installOsqueryBtn.addEventListener('click', installOsquery);
+  }
+  if (exportInventoryBtn) {
+    exportInventoryBtn.addEventListener('click', exportInventory);
+  }
+  if (exportInventoryPdfBtn) {
+    exportInventoryPdfBtn.addEventListener('click', exportInventoryPdf);
+  }
 
   softwareSearchInputEl.addEventListener('input', debounce(applySoftwareFilter, 300));
   softwarePrevBtn.addEventListener('click', function () {
@@ -190,6 +200,9 @@ async function bootstrapApp() {
   initAppBindings();
   updateSortIndicators();
   initTheme();
+  if (typeof syncWindowChromeSidebarWidth === 'function') {
+    syncWindowChromeSidebarWidth();
+  }
   setRuntimeFlags({ debugMode: false });
   try {
     var flags = await appApi().GetRuntimeFlags();

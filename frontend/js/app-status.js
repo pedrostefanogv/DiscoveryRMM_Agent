@@ -39,11 +39,13 @@ function renderStatusOverview(data) {
     statusConnectionLabelEl.textContent = connected ? 'Online' : 'Offline';
   }
 
-  var detailParts = [];
-  if (data && data.agentId) detailParts.push('ID: ' + data.agentId);
-  if (data && data.server) detailParts.push('Servidor: ' + data.server);
+  var line1 = 'PC: ' + statusSafe(data && data.hostname, 'Computador local');
+  var serverPart = 'Servidor: ' + statusSafe(data && data.server, '-');
+  var connPart = 'Conexao: ' + statusSafe(data && data.connectionType, '-');
+  var line2 = serverPart + ' / ' + connPart;
+
   if (statusConnectionDetailEl) {
-    statusConnectionDetailEl.textContent = detailParts.length ? detailParts.join(' | ') : 'Sem identificacao de agente.';
+    statusConnectionDetailEl.textContent = line1 + '\n' + line2;
   }
 
   if (statusAppVersionEl) statusAppVersionEl.textContent = statusSafe(data && data.appVersion, 'dev');
@@ -85,6 +87,9 @@ function renderStatusError(message) {
 }
 
 async function loadStatusOverview() {
+  if (document.hidden) {
+    return;
+  }
   try {
     var data = await appApi().GetStatusOverview();
     renderStatusOverview(data || {});

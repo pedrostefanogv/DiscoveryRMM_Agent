@@ -53,9 +53,10 @@ func main() {
 	}
 
 	err := wails.Run(&options.App{
-		Title:  "Discovery",
-		Width:  WindowWidth,
-		Height: WindowHeight,
+		Title:     "Discovery",
+		Width:     WindowWidth,
+		Height:    WindowHeight,
+		Frameless: true,
 		// Keep right-click context menu enabled in production so users can use
 		// built-in spellcheck suggestions/corrections in text fields.
 		EnableDefaultContextMenu: true,

@@ -92,6 +92,9 @@ ManifestDPIAware true
 !define MUI_UNICON "..\icon.ico"
 # !define MUI_WELCOMEFINISHPAGE_BITMAP "resources\leftimage.bmp" #Include this to add a bitmap on the left side of the Welcome Page. Must be a size of 164x314
 !define MUI_FINISHPAGE_NOAUTOCLOSE # Wait on the INSTFILES page so the user can take a look into the details of the installation steps
+!define MUI_FINISHPAGE_RUN
+!define MUI_FINISHPAGE_RUN_TEXT "Abrir ${INFO_PRODUCTNAME} agora"
+!define MUI_FINISHPAGE_RUN_FUNCTION LaunchInstalledApp
 !define MUI_ABORTWARNING # This will warn the user if they exit from the installer.
 
 # Variáveis para armazenar as configurações
@@ -259,6 +262,7 @@ Section
 
     CreateShortcut "$SMPROGRAMS\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
     CreateShortCut "$DESKTOP\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
+   CreateShortCut "$SMSTARTUP\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
     
     # Salvar configurações do agente
     Call SaveAgentConfig
@@ -278,6 +282,7 @@ Section "uninstall"
 
     Delete "$SMPROGRAMS\${INFO_PRODUCTNAME}.lnk"
     Delete "$DESKTOP\${INFO_PRODUCTNAME}.lnk"
+   Delete "$SMSTARTUP\${INFO_PRODUCTNAME}.lnk"
 
     !insertmacro wails.unassociateFiles
     !insertmacro wails.unassociateCustomProtocols
@@ -328,4 +333,8 @@ Function SaveAgentConfig
    
    FileClose $0
    DetailPrint "Config salvo com sucesso em $R0\Discovery\config.json"
+FunctionEnd
+
+Function LaunchInstalledApp
+   Exec '"$INSTDIR\${PRODUCT_EXECUTABLE}"'
 FunctionEnd

@@ -93,6 +93,8 @@ export function GetSpoolerStatusJSON():Promise<json.RawMessage>;
 
 export function GetStartupError():Promise<string>;
 
+export function GetStatusOverview():Promise<main.StatusOverview>;
+
 export function GetSupportTicketDetails(arg1:string):Promise<main.APITicket>;
 
 export function GetSupportTickets():Promise<Array<main.APITicket>>;

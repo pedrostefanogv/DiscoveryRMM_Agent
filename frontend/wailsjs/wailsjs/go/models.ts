@@ -475,6 +475,63 @@ export namespace main {
 	        this.debugMode = source["debugMode"];
 	    }
 	}
+	export class StatusOverview {
+	    connected: boolean;
+	    connectionLabel: string;
+	    hostname: string;
+	    server: string;
+	    connectionType: string;
+	    appVersion: string;
+	    osName: string;
+	    osVersion: string;
+	    lastInventoryCollected: string;
+	    realtimeAvailable: boolean;
+	    realtimeNatsConnected: boolean;
+	    realtimeConnectedAgents: number;
+	    realtimeMessage: string;
+	    // Go type: time
+	    checkedAtUtc: any;
+	
+	    static createFrom(source: any = {}) {
+	        return new StatusOverview(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.connected = source["connected"];
+	        this.connectionLabel = source["connectionLabel"];
+	        this.hostname = source["hostname"];
+	        this.server = source["server"];
+	        this.connectionType = source["connectionType"];
+	        this.appVersion = source["appVersion"];
+	        this.osName = source["osName"];
+	        this.osVersion = source["osVersion"];
+	        this.lastInventoryCollected = source["lastInventoryCollected"];
+	        this.realtimeAvailable = source["realtimeAvailable"];
+	        this.realtimeNatsConnected = source["realtimeNatsConnected"];
+	        this.realtimeConnectedAgents = source["realtimeConnectedAgents"];
+	        this.realtimeMessage = source["realtimeMessage"];
+	        this.checkedAtUtc = this.convertValues(source["checkedAtUtc"], null);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class TicketComment {
 	    id: string;
 	    author: string;

@@ -24,6 +24,7 @@ type windowsHardwareDetails struct {
 	MemoryModules           []models.MemoryModule `json:"memoryModules"`
 	Monitors                []models.MonitorInfo  `json:"monitors"`
 	GPUs                    []models.GPUInfo      `json:"gpus"`
+	Printers                []models.PrinterInfo  `json:"printers"`
 }
 
 // collectWindowsHardwareDetails runs a PowerShell script that gathers
@@ -56,6 +57,32 @@ $gpus = Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue | Fo
 		status = $_.Status
 	}
 }
+$printers = @()
+try {
+	$printers = @(Get-Printer -ErrorAction Stop | ForEach-Object {
+		$status = ''
+		try { $status = $_.PrinterStatus.ToString() } catch { $status = [string]$_.PrinterStatus }
+		$typeText = ''
+		try { $typeText = [string]$_.Type } catch {}
+		$isNetwork = $false
+		if ($typeText -match 'Connection' -or $_.PortName -like 'IP_*' -or $_.PortName -like '\\*') {
+			$isNetwork = $true
+		}
+		[PSCustomObject]@{
+			name = [string]$_.Name
+			driverName = [string]$_.DriverName
+			portName = [string]$_.PortName
+			printerStatus = $status
+			isDefault = [bool]$_.Default
+			isNetworkPrinter = $isNetwork
+			shared = [bool]$_.Shared
+			shareName = [string]$_.ShareName
+			location = [string]$_.Location
+		}
+	})
+} catch {
+	$printers = @()
+}
 $mons = @()
 try {
   $mons = Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorID -ErrorAction Stop | ForEach-Object {
@@ -84,6 +111,7 @@ $result = [PSCustomObject]@{
 	memoryModules = @($ram)
 	monitors = @($mons)
 	gpus = @($gpus)
+	printers = @($printers)
 }
 $result | ConvertTo-Json -Depth 6 -Compress`
 
@@ -139,6 +167,32 @@ $net = Get-NetAdapter -IncludeHidden -ErrorAction SilentlyContinue | ForEach-Obj
 		description = $_.InterfaceDescription
 		manufacturer = ''
 	}
+}
+$printers = @()
+try {
+	$printers = @(Get-Printer -ErrorAction Stop | ForEach-Object {
+		$status = ''
+		try { $status = $_.PrinterStatus.ToString() } catch { $status = [string]$_.PrinterStatus }
+		$typeText = ''
+		try { $typeText = [string]$_.Type } catch {}
+		$isNetwork = $false
+		if ($typeText -match 'Connection' -or $_.PortName -like 'IP_*' -or $_.PortName -like '\\*') {
+			$isNetwork = $true
+		}
+		[PSCustomObject]@{
+			name = [string]$_.Name
+			driverName = [string]$_.DriverName
+			portName = [string]$_.PortName
+			printerStatus = $status
+			isDefault = [bool]$_.Default
+			isNetworkPrinter = $isNetwork
+			shared = [bool]$_.Shared
+			shareName = [string]$_.ShareName
+			location = [string]$_.Location
+		}
+	})
+} catch {
+	$printers = @()
 }
 $sw = Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*, HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\* -ErrorAction SilentlyContinue |
       Where-Object { $_.DisplayName } |
@@ -202,6 +256,7 @@ $result = [PSCustomObject]@{
 	physicalDisks = $physical
 	disks = $logical
 	networks = $net
+	printers = @($printers)
   software = $sw
 	startupItems = $startup
 	autoexec = $autoexec
@@ -240,6 +295,7 @@ $result | ConvertTo-Json -Depth 6 -Compress`
 		PhysicalDisks []models.DiskInfo    `json:"physicalDisks"`
 		Disks         []models.DiskInfo    `json:"disks"`
 		Networks      []models.NetworkInfo `json:"networks"`
+		Printers      []models.PrinterInfo `json:"printers"`
 		Software      []struct {
 			Name      string `json:"name"`
 			Version   string `json:"version"`
@@ -288,6 +344,7 @@ $result | ConvertTo-Json -Depth 6 -Compress`
 		PhysicalDisks: raw.PhysicalDisks,
 		Disks:         raw.Disks,
 		Networks:      raw.Networks,
+		Printers:      raw.Printers,
 		Software:      make([]models.SoftwareItem, 0, len(raw.Software)),
 		StartupItems:  raw.StartupItems,
 		Autoexec:      raw.Autoexec,
@@ -323,6 +380,9 @@ $result | ConvertTo-Json -Depth 6 -Compress`
 		report.MemoryModules = details.MemoryModules
 		report.Monitors = details.Monitors
 		report.GPUs = details.GPUs
+		if len(report.Printers) == 0 {
+			report.Printers = details.Printers
+		}
 	}
 	report.Hardware.MemoryModulesCount = len(report.MemoryModules)
 	sanitizeHardwareFields(&report)

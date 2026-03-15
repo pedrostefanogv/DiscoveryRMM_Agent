@@ -58,6 +58,12 @@ func (a *App) startTray() {
 }
 
 func (a *App) updateTrayIdleState(idle bool, supported bool) {
+	if !efficiencyModeEnabled {
+		setTrayTitle("Discovery")
+		setTrayTooltip("Discovery - Winget Store")
+		return
+	}
+
 	if !supported {
 		setTrayTitle("Discovery")
 		setTrayTooltip("Discovery - Winget Store")

@@ -129,3 +129,48 @@ func TestBuildAgentSoftwareEnvelope_AppliesContractLimits(t *testing.T) {
 		t.Fatalf("source = %q, esperado fallback %q", item.Source, "osquery/programs")
 	}
 }
+
+func TestBuildAgentHardwareEnvelope_IncludesPrintersInComponents(t *testing.T) {
+	report := models.InventoryReport{
+		CollectedAt: "2026-03-12T19:31:36Z",
+		Hardware: models.HardwareInfo{
+			Hostname: "PC-123",
+		},
+		OS: models.OperatingSystem{
+			Name: "Windows 11 Pro",
+		},
+		Printers: []models.PrinterInfo{
+			{
+				Name:             "HP LaserJet Pro M404",
+				DriverName:       "HP Universal Printing PCL 6",
+				PortName:         "IP_192.168.1.50",
+				PrinterStatus:    "Ready",
+				IsDefault:        true,
+				IsNetworkPrinter: true,
+				Shared:           false,
+				Location:         "Financeiro",
+			},
+		},
+	}
+
+	env := buildAgentHardwareEnvelope(report)
+	if len(env.Components.Printers) != 1 {
+		t.Fatalf("esperado 1 impressora no components.printers, veio %d", len(env.Components.Printers))
+	}
+	p := env.Components.Printers[0]
+	if p.Name != "HP LaserJet Pro M404" {
+		t.Fatalf("name = %q", p.Name)
+	}
+	if p.DriverName != "HP Universal Printing PCL 6" {
+		t.Fatalf("driverName = %q", p.DriverName)
+	}
+	if p.PortName != "IP_192.168.1.50" {
+		t.Fatalf("portName = %q", p.PortName)
+	}
+	if !p.IsDefault || !p.IsNetworkPrinter {
+		t.Fatalf("flags de impressora invalidas: isDefault=%v isNetworkPrinter=%v", p.IsDefault, p.IsNetworkPrinter)
+	}
+	if p.ShareName != nil {
+		t.Fatalf("shareName esperado nil para impressora nao compartilhada, veio %v", *p.ShareName)
+	}
+}

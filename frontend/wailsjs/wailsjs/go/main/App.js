@@ -178,6 +178,10 @@ export function GetStartupError() {
   return window['go']['main']['App']['GetStartupError']();
 }
 
+export function GetStatusOverview() {
+  return window['go']['main']['App']['GetStatusOverview']();
+}
+
 export function GetSupportTicketDetails(arg1) {
   return window['go']['main']['App']['GetSupportTicketDetails'](arg1);
 }

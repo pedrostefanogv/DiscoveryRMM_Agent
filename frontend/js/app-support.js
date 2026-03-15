@@ -168,6 +168,27 @@ function hideTicketFormStatus() {
   if (ticketFormStatusEl) ticketFormStatusEl.classList.add('hidden');
 }
 
+function openNewTicketModal() {
+  if (supportCreateOverlayEl) {
+    supportCreateOverlayEl.classList.remove('hidden');
+    supportCreateOverlayEl.setAttribute('aria-hidden', 'false');
+  }
+  if (supportCreateFormEl) {
+    supportCreateFormEl.classList.remove('hidden');
+  }
+  hideTicketFormStatus();
+}
+
+function closeNewTicketModal() {
+  if (supportCreateOverlayEl) {
+    supportCreateOverlayEl.classList.add('hidden');
+    supportCreateOverlayEl.setAttribute('aria-hidden', 'true');
+  }
+  if (supportCreateFormEl) {
+    supportCreateFormEl.classList.add('hidden');
+  }
+}
+
 function initSupport() {
   if (!supportFormEl) return;
 
@@ -192,6 +213,7 @@ function initSupport() {
       showToast('Chamado criado com sucesso!', 'success');
       supportFormEl.reset();
       hideTicketFormStatus();
+      closeNewTicketModal();
       loadSupportTickets();
     } catch (err) {
       showTicketFormStatus('Erro ao criar chamado: ' + String(err), true);
@@ -205,7 +227,13 @@ function initSupport() {
     refreshTicketsBtnEl.addEventListener('click', function () { loadSupportTickets(); });
   }
   if (newTicketBtnEl) {
-    newTicketBtnEl.addEventListener('click', function () { closeTicketDetail(); });
+    newTicketBtnEl.addEventListener('click', function () { openNewTicketModal(); });
+  }
+  if (closeNewTicketBtnEl) {
+    closeNewTicketBtnEl.addEventListener('click', function () { closeNewTicketModal(); });
+  }
+  if (supportCreateOverlayEl) {
+    supportCreateOverlayEl.addEventListener('click', function () { closeNewTicketModal(); });
   }
   if (backToFormBtnEl) {
     backToFormBtnEl.addEventListener('click', function () { closeTicketDetail(); });
@@ -288,6 +316,8 @@ function initSupport() {
 async function loadSupportTickets() {
   if (!supportTicketsListEl) return;
 
+  closeNewTicketModal();
+
   // show loading
   if (ticketsLoadingEl) ticketsLoadingEl.classList.remove('hidden');
   supportTicketsListEl.innerHTML = '';
@@ -296,9 +326,11 @@ async function loadSupportTickets() {
   try {
     var agent = await appApi().GetAgentInfo();
     if (agentContextBannerEl && agentContextTextEl) {
-      var clientText = agent.clientId ? ' | Cliente: ' + agent.clientId : '';
-      var siteText = agent.siteId ? ' | Site: ' + agent.siteId : '';
-      agentContextTextEl.textContent = 'Agente: ' + (agent.hostname || agent.agentId) + ' - ID: ' + agent.agentId + clientText + siteText;
+      var computerName = (agent && agent.hostname) ? String(agent.hostname).trim() : '';
+      if (!computerName) {
+        computerName = 'Computador local';
+      }
+      agentContextTextEl.textContent = 'Agente: ' + computerName;
       agentContextBannerEl.classList.remove('hidden');
     }
     if (agentContextErrorEl) agentContextErrorEl.classList.add('hidden');
@@ -310,6 +342,8 @@ async function loadSupportTickets() {
     if (agentContextBannerEl) agentContextBannerEl.classList.add('hidden');
     if (ticketsLoadingEl) ticketsLoadingEl.classList.add('hidden');
     supportTicketsListEl.innerHTML = '<div class="meta">Servidor nao configurado. Configure em Debug.</div>';
+    if (supportSidePanelEl) supportSidePanelEl.classList.add('hidden');
+    if (supportTicketDetailEl) supportTicketDetailEl.classList.add('hidden');
     return;
   }
 
@@ -317,9 +351,13 @@ async function loadSupportTickets() {
     var tickets = await appApi().GetSupportTickets();
     if (ticketsLoadingEl) ticketsLoadingEl.classList.add('hidden');
     if (!tickets || !tickets.length) {
-      supportTicketsListEl.innerHTML = '<div class="meta">Nenhum chamado aberto vinculado a este agente.</div>';
+      supportTicketsListEl.innerHTML = '<div class="meta">Nenhum chamado no momento. Clique em "Novo Chamado" para abrir um.</div>';
+      if (supportSidePanelEl) supportSidePanelEl.classList.add('hidden');
+      if (supportTicketDetailEl) supportTicketDetailEl.classList.add('hidden');
       return;
     }
+    if (supportSidePanelEl) supportSidePanelEl.classList.add('hidden');
+    if (supportTicketDetailEl) supportTicketDetailEl.classList.add('hidden');
     supportTicketsListEl.innerHTML = tickets.map(function (t) {
       var statusName = (t.workflowState && t.workflowState.name) ? t.workflowState.name : 'Aberto';
       var statusColor = (t.workflowState && t.workflowState.color) ? t.workflowState.color : '#0b6e4f';
@@ -367,7 +405,7 @@ function escapeAttr(obj) {
 function showTicketDetail(t) {
   currentTicketId = t.id;
   currentTicket = t;
-  if (supportCreateFormEl) supportCreateFormEl.classList.add('hidden');
+  if (supportSidePanelEl) supportSidePanelEl.classList.remove('hidden');
   if (supportTicketDetailEl) supportTicketDetailEl.classList.remove('hidden');
 
   renderTicketDetail(t);
@@ -428,7 +466,7 @@ function closeTicketDetail() {
   currentTicketId = '';
   currentTicket = null;
   if (supportTicketDetailEl) supportTicketDetailEl.classList.add('hidden');
-  if (supportCreateFormEl) supportCreateFormEl.classList.remove('hidden');
+  if (supportSidePanelEl) supportSidePanelEl.classList.add('hidden');
   if (closeTicketWorkflowStateSelectEl) closeTicketWorkflowStateSelectEl.value = '';
   if (closeTicketWorkflowStateIdEl) {
     closeTicketWorkflowStateIdEl.value = '';

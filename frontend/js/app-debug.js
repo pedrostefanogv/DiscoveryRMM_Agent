@@ -24,6 +24,7 @@ function renderAgentStatus(s) {
 }
 
 function refreshAgentStatus() {
+  if (document.hidden) return;
   try {
     appApi().GetAgentStatus().then(function (s) {
       renderAgentStatus(s);
@@ -52,6 +53,7 @@ function stopAgentStatusPoll() {
 // ========== Watchdog Health Monitor ==========
 
 function refreshWatchdogHealth() {
+  if (document.hidden) return;
   if (!watchdogHealthContainer) return;
 
   try {

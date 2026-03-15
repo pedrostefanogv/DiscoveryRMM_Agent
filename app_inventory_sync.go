@@ -33,6 +33,7 @@ type agentHardwareComponents struct {
 	Disks           []agentDiskInfo           `json:"disks"`
 	NetworkAdapters []agentNetworkAdapterInfo `json:"networkAdapters"`
 	MemoryModules   []agentMemoryModuleInfo   `json:"memoryModules"`
+	Printers        []agentPrinterInfo        `json:"printers"`
 }
 
 type agentHardwareInfo struct {
@@ -94,6 +95,19 @@ type agentMemoryModuleInfo struct {
 	CollectedAt   string `json:"collectedAt"`
 }
 
+type agentPrinterInfo struct {
+	Name             string  `json:"name"`
+	DriverName       string  `json:"driverName"`
+	PortName         string  `json:"portName"`
+	PrinterStatus    string  `json:"printerStatus"`
+	IsDefault        bool    `json:"isDefault"`
+	IsNetworkPrinter bool    `json:"isNetworkPrinter"`
+	Shared           bool    `json:"shared"`
+	ShareName        *string `json:"shareName"`
+	Location         string  `json:"location"`
+	CollectedAt      string  `json:"collectedAt"`
+}
+
 type agentSoftwareEnvelope struct {
 	CollectedAt string              `json:"collectedAt"`
 	Software    []agentSoftwareItem `json:"software"`
@@ -152,11 +166,12 @@ func (a *App) syncInventoryOnStartup(ctx context.Context, report models.Inventor
 	}
 
 	a.logs.append(fmt.Sprintf(
-		"[agent-sync] hardware payload: collectedAt=%s disks=%d networkAdapters=%d memoryModules=%d hostname=%s",
+		"[agent-sync] hardware payload: collectedAt=%s disks=%d networkAdapters=%d memoryModules=%d printers=%d hostname=%s",
 		hardwarePayload.InventoryCollectedAt,
 		len(hardwarePayload.Components.Disks),
 		len(hardwarePayload.Components.NetworkAdapters),
 		len(hardwarePayload.Components.MemoryModules),
+		len(hardwarePayload.Components.Printers),
 		hardwarePayload.Hostname,
 	))
 
@@ -355,7 +370,26 @@ func buildAgentHardwareEnvelope(report models.InventoryReport) agentHardwareEnve
 			CollectedAt:   collected,
 		})
 	}
-	rawJSON := buildCleanInventoryRaw(report, disks, adapters, modules)
+	printers := make([]agentPrinterInfo, 0, len(report.Printers))
+	for _, p := range report.Printers {
+		name := trimToMaxLen(strings.TrimSpace(p.Name), 200)
+		if name == "" {
+			continue
+		}
+		printers = append(printers, agentPrinterInfo{
+			Name:             name,
+			DriverName:       trimToMaxLen(strings.TrimSpace(p.DriverName), 200),
+			PortName:         trimToMaxLen(strings.TrimSpace(p.PortName), 200),
+			PrinterStatus:    trimToMaxLen(strings.TrimSpace(p.PrinterStatus), 60),
+			IsDefault:        p.IsDefault,
+			IsNetworkPrinter: p.IsNetworkPrinter,
+			Shared:           p.Shared,
+			ShareName:        optionalStringPtr(trimToMaxLen(strings.TrimSpace(p.ShareName), 200)),
+			Location:         trimToMaxLen(strings.TrimSpace(p.Location), 200),
+			CollectedAt:      collected,
+		})
+	}
+	rawJSON := buildCleanInventoryRaw(report, disks, adapters, modules, printers)
 	lastIP := ""
 	primaryMAC := ""
 	for _, n := range adapters {
@@ -414,6 +448,7 @@ func buildAgentHardwareEnvelope(report models.InventoryReport) agentHardwareEnve
 			Disks:           disks,
 			NetworkAdapters: adapters,
 			MemoryModules:   modules,
+			Printers:        printers,
 		},
 		InventoryRaw:           rawJSON,
 		InventorySchemaVersion: "discovery.inventory.v1",
@@ -427,25 +462,9 @@ func buildCleanInventoryRaw(
 	disks []agentDiskInfo,
 	networkAdapters []agentNetworkAdapterInfo,
 	memoryModules []agentMemoryModuleInfo,
+	printers []agentPrinterInfo,
 ) json.RawMessage {
-	clean := map[string]any{
-		"collectedAt": report.CollectedAt,
-		"source":      report.Source,
-		"hardware": map[string]any{
-			"hostname":                report.Hardware.Hostname,
-			"manufacturer":            report.Hardware.Manufacturer,
-			"model":                   report.Hardware.Model,
-			"cpu":                     report.Hardware.CPU,
-			"cores":                   report.Hardware.Cores,
-			"logicalCores":            report.Hardware.LogicalCores,
-			"memoryGB":                report.Hardware.MemoryGB,
-			"motherboardManufacturer": report.Hardware.MotherboardManufacturer,
-			"motherboardModel":        report.Hardware.MotherboardModel,
-			"motherboardSerial":       report.Hardware.MotherboardSerial,
-			"biosVendor":              report.Hardware.BIOSVendor,
-			"biosVersion":             report.Hardware.BIOSVersion,
-		},
-		"os": report.OS,
+	components := map[string]any{
 		"disks": mapSlice(disks, func(d agentDiskInfo) map[string]any {
 			return map[string]any{
 				"driveLetter":    d.DriveLetter,
@@ -479,6 +498,44 @@ func buildCleanInventoryRaw(
 				"serialNumber":  m.SerialNumber,
 			}
 		}),
+		"printers": mapSlice(printers, func(p agentPrinterInfo) map[string]any {
+			return map[string]any{
+				"name":             p.Name,
+				"driverName":       p.DriverName,
+				"portName":         p.PortName,
+				"printerStatus":    p.PrinterStatus,
+				"isDefault":        p.IsDefault,
+				"isNetworkPrinter": p.IsNetworkPrinter,
+				"shared":           p.Shared,
+				"shareName":        p.ShareName,
+				"location":         p.Location,
+			}
+		}),
+	}
+
+	clean := map[string]any{
+		"collectedAt": report.CollectedAt,
+		"source":      report.Source,
+		"hardware": map[string]any{
+			"hostname":                report.Hardware.Hostname,
+			"manufacturer":            report.Hardware.Manufacturer,
+			"model":                   report.Hardware.Model,
+			"cpu":                     report.Hardware.CPU,
+			"cores":                   report.Hardware.Cores,
+			"logicalCores":            report.Hardware.LogicalCores,
+			"memoryGB":                report.Hardware.MemoryGB,
+			"motherboardManufacturer": report.Hardware.MotherboardManufacturer,
+			"motherboardModel":        report.Hardware.MotherboardModel,
+			"motherboardSerial":       report.Hardware.MotherboardSerial,
+			"biosVendor":              report.Hardware.BIOSVendor,
+			"biosVersion":             report.Hardware.BIOSVersion,
+		},
+		"os":              report.OS,
+		"components":      components,
+		"disks":           components["disks"],
+		"networkAdapters": components["networkAdapters"],
+		"memoryModules":   components["memoryModules"],
+		"printers":        components["printers"],
 	}
 	b, err := json.Marshal(clean)
 	if err != nil {
@@ -546,4 +603,12 @@ func trimToMaxLen(value string, max int) string {
 		return value
 	}
 	return strings.TrimSpace(value[:max])
+}
+
+func optionalStringPtr(value string) *string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	return &value
 }

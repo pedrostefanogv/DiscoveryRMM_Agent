@@ -17,6 +17,7 @@ type InventoryReport struct {
 	PhysicalDisks []DiskInfo      `json:"physicalDisks"`
 	Disks         []DiskInfo      `json:"disks"`
 	Networks      []NetworkInfo   `json:"networks"`
+	Printers      []PrinterInfo   `json:"printers"`
 	Software      []SoftwareItem  `json:"software"`
 	StartupItems  []StartupItem   `json:"startupItems"`
 	Autoexec      []AutoexecItem  `json:"autoexec"`
@@ -218,4 +219,16 @@ type NetworkInfo struct {
 	DNSServers       string `json:"dnsServers"`
 	Description      string `json:"description"`
 	Manufacturer     string `json:"manufacturer"`
+}
+
+type PrinterInfo struct {
+	Name             string `json:"name"`
+	DriverName       string `json:"driverName"`
+	PortName         string `json:"portName"`
+	PrinterStatus    string `json:"printerStatus"`
+	IsDefault        bool   `json:"isDefault"`
+	IsNetworkPrinter bool   `json:"isNetworkPrinter"`
+	Shared           bool   `json:"shared"`
+	ShareName        string `json:"shareName"`
+	Location         string `json:"location"`
 }

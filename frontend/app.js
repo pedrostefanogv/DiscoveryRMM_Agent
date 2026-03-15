@@ -17,6 +17,7 @@ let catalogPage = 1;
 const cardsEl = document.getElementById('cards');
 const searchEl = document.getElementById('searchInput');
 const infoEl = document.getElementById('catalogInfo');
+const pageTitleEl = document.getElementById('pageTitle');
 const feedbackEl = document.getElementById('feedback');
 const installedOutputEl = document.getElementById('installedOutput');
 const reloadBtn = document.getElementById('reloadBtn');
@@ -77,6 +78,9 @@ const agentContextErrorTextEl = document.getElementById('agentContextErrorText')
 const ticketsLoadingEl = document.getElementById('ticketsLoading');
 const refreshTicketsBtnEl = document.getElementById('refreshTicketsBtn');
 const newTicketBtnEl = document.getElementById('newTicketBtn');
+const closeNewTicketBtnEl = document.getElementById('closeNewTicketBtn');
+const supportCreateOverlayEl = document.getElementById('supportCreateOverlay');
+const supportSidePanelEl = document.getElementById('supportSidePanel');
 const supportCreateFormEl = document.getElementById('supportCreateForm');
 const supportTicketDetailEl = document.getElementById('supportTicketDetail');
 const backToFormBtnEl = document.getElementById('backToFormBtn');
@@ -139,6 +143,7 @@ const catalogPageInfoEl = document.getElementById('catalogPageInfo');
 const sidebarEl = document.getElementById('sidebar');
 const sidebarToggleBtn = document.getElementById('sidebarToggle');
 const storeActionsEl = document.getElementById('storeActions');
+const updatesActionsEl = document.getElementById('updatesActions');
 const categorySearchEl = document.getElementById('categorySearch');
 const categoryListEl = document.getElementById('categoryList');
 const toastContainerEl = document.getElementById('toastContainer');
@@ -209,6 +214,15 @@ let runtimeFlags = {
   debugMode: false,
 };
 
+function isAppWindowVisible() {
+  return typeof document === 'undefined' || !document.hidden;
+}
+
+function setUISuspended(suspended) {
+  window.__discoveryUISuspended = !!suspended;
+  document.dispatchEvent(new CustomEvent(suspended ? 'ui:suspend' : 'ui:resume'));
+}
+
 function isDebugRuntimeMode() {
   return !!runtimeFlags.debugMode;
 }
@@ -253,8 +267,10 @@ function appApi() {
 }
 
 function showFeedback(message, isError) {
-  feedbackEl.textContent = message;
-  feedbackEl.style.color = isError ? '#9a031e' : '#665a4c';
+  if (feedbackEl) {
+    feedbackEl.textContent = message;
+    feedbackEl.style.color = isError ? '#9a031e' : '#665a4c';
+  }
   showToast(message, isError ? 'error' : 'info');
 }
 
@@ -271,6 +287,7 @@ function showToast(message, type) {
 }
 
 function setExportStatus(message, isError) {
+  if (!exportStatusEl) return;
   exportStatusEl.textContent = message;
   exportStatusEl.classList.remove('success', 'error');
   exportStatusEl.classList.add(isError ? 'error' : 'success');
@@ -327,6 +344,19 @@ function setActiveTab(tab) {
     debug: tabDebugBtn,
   };
 
+  var titles = {
+    status: 'Status',
+    store: 'Loja',
+    updates: 'Atualizacoes',
+    inventory: 'Inventario',
+    logs: 'Logs',
+    chat: 'Chat IA',
+    support: 'Suporte',
+    knowledge: 'Base de Conhecimento',
+    automation: 'Automacao',
+    debug: 'Debug',
+  };
+
   Object.keys(views).forEach(function (key) {
     if (views[key]) views[key].classList.toggle('hidden', key !== tab);
     if (tabs[key]) {
@@ -336,6 +366,8 @@ function setActiveTab(tab) {
   });
 
   if (storeActionsEl) storeActionsEl.classList.toggle('hidden', tab !== 'store');
+  if (updatesActionsEl) updatesActionsEl.classList.toggle('hidden', tab !== 'updates');
+  if (pageTitleEl) pageTitleEl.textContent = titles[tab] || 'Discovery';
 
   if (tab === 'chat') {
     scheduleChatScrollToBottom();
@@ -358,23 +390,54 @@ function setActiveTab(tab) {
   }
 
   if (tab === 'status' && typeof startStatusPoll === 'function') {
-    startStatusPoll();
+    if (isAppWindowVisible()) startStatusPoll();
   }
 
   // Start logs auto-refresh when entering logs tab
   if (tab === 'logs') {
     loadLogs();
-    if (!logsAutoRefreshId) {
+    if (isAppWindowVisible() && !logsAutoRefreshId) {
       logsAutoRefreshId = setInterval(loadLogs, 3000);
     }
   }
 }
+
+function handleWindowVisibilityChange() {
+  if (!isAppWindowVisible()) {
+    setUISuspended(true);
+    if (logsAutoRefreshId) {
+      clearInterval(logsAutoRefreshId);
+      logsAutoRefreshId = null;
+    }
+    if (typeof stopStatusPoll === 'function') stopStatusPoll();
+    if (typeof stopAgentStatusPoll === 'function') stopAgentStatusPoll();
+    if (typeof stopWatchdogPoll === 'function') stopWatchdogPoll();
+    return;
+  }
+
+  setUISuspended(false);
+
+  if (activeTab === 'status' && typeof startStatusPoll === 'function') {
+    startStatusPoll();
+  }
+  if (activeTab === 'debug') {
+    if (typeof startAgentStatusPoll === 'function') startAgentStatusPoll();
+    if (typeof startWatchdogPoll === 'function') startWatchdogPoll();
+  }
+  if (activeTab === 'logs' && !logsAutoRefreshId) {
+    logsAutoRefreshId = setInterval(loadLogs, 3000);
+  }
+}
+
+document.addEventListener('visibilitychange', handleWindowVisibilityChange);
+setUISuspended(!isAppWindowVisible());
 
 // ---------------------------------------------------------------------------
 // Logs tab
 // ---------------------------------------------------------------------------
 
 async function loadLogs() {
+  if (window.__discoveryUISuspended || document.hidden) return;
   try {
     var lines = await appApi().GetLogs();
     logsOutputEl.textContent = (lines || []).join('\n') || '(sem logs)';
@@ -430,3 +493,19 @@ function updateThemeIcon(isDark) {
   }
   if (label) label.textContent = isDark ? 'Tema Claro' : 'Tema Escuro';
 }
+
+function syncWindowChromeSidebarWidth() {
+  if (!sidebarEl) return;
+  var mobile = window.matchMedia && window.matchMedia('(max-width: 960px)').matches;
+  var widthPx = 220;
+
+  if (mobile && sidebarEl.classList.contains('collapsed')) {
+    widthPx = 0;
+  } else if (sidebarEl.classList.contains('collapsed')) {
+    widthPx = 68;
+  }
+
+  document.documentElement.style.setProperty('--sidebar-current-width', widthPx + 'px');
+}
+
+window.addEventListener('resize', syncWindowChromeSidebarWidth);

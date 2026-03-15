@@ -57,6 +57,9 @@ function requestStopChatStream() {
 
 function onStreamToken(token) {
   streamingRawContent += token;
+  if (document.hidden || window.__discoveryUISuspended) {
+    return;
+  }
   if (!streamingRafPending) {
     streamingRafPending = true;
     requestAnimationFrame(flushStreamingContent);
@@ -64,6 +67,7 @@ function onStreamToken(token) {
 }
 
 function onStreamThinking(status) {
+  if (document.hidden || window.__discoveryUISuspended) return;
   if (!streamingBubble) return;
   var thinkingEl = streamingBubble.querySelector('.stream-thinking');
   if (!thinkingEl) return;
@@ -211,6 +215,7 @@ function scrollChatToBottom() {
 }
 
 function scheduleChatScrollToBottom() {
+  if (document.hidden || window.__discoveryUISuspended) return;
   // Run after current and next paint to keep bottom lock even after dynamic layout updates.
   scrollChatToBottom();
   requestAnimationFrame(function () {
@@ -314,6 +319,12 @@ function stopThinkingStatusUpdates() {
     chatThinkingPollId = null;
   }
 }
+
+function handleChatUISuspend() {
+  stopThinkingStatusUpdates();
+}
+
+document.addEventListener('ui:suspend', handleChatUISuspend);
 
 function startThinkingStatusUpdates(thinkingEl) {
   stopThinkingStatusUpdates();

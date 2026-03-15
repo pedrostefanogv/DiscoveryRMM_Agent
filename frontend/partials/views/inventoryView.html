@@ -1,0 +1,100 @@
+<main id="inventoryView" class="page-content hidden" role="tabpanel" aria-labelledby="tabInventory">
+    <section class="inventory-panel">
+      <div class="statusbar page-bar">
+        <div class="inventory-head">
+          <span id="inventoryInfo">Inventario nao carregado</span>
+          <span id="inventoryProgress" class="loading hidden" aria-live="polite">Coletando dados de inventario...</span>
+        </div>
+        <div class="inventory-actions">
+          <button id="refreshInventoryBtn" class="btn primary">Coletar Inventario</button>
+        </div>
+      </div>
+
+      <div class="inventory-grid">
+        <article class="card inventory-card">
+          <h3>Hardware</h3>
+          <div id="hardwareOutput" class="facts-grid"></div>
+        </article>
+        <article class="card inventory-card">
+          <h3>Sistema Operacional</h3>
+          <div id="osOutput" class="facts-grid"></div>
+        </article>
+        <article class="card inventory-card wide">
+          <h3>Usuarios Logados</h3>
+          <div id="loggedUsersOutput" class="simple-list"></div>
+        </article>
+        <article class="card inventory-card wide">
+          <h3>Volumes (logical_drives)</h3>
+          <div id="volumeOutput" class="disk-list"></div>
+        </article>
+        <article class="card inventory-card wide">
+          <h3>Interfaces de Rede</h3>
+          <div id="networkOutput" class="network-list"></div>
+        </article>
+        <article class="card inventory-card wide">
+          <h3>Memoria (Pentes)</h3>
+          <div id="memoryOutput" class="simple-list"></div>
+        </article>
+        <article class="card inventory-card wide">
+          <h3>Monitores</h3>
+          <div id="monitorOutput" class="simple-list"></div>
+        </article>
+        <article class="card inventory-card wide">
+          <h3>GPU</h3>
+          <div id="gpuOutput" class="simple-list"></div>
+        </article>
+        <article class="card inventory-card wide">
+          <h3>Bateria</h3>
+          <div id="batteryOutput" class="simple-list"></div>
+        </article>
+        <article class="card inventory-card wide">
+          <h3>BitLocker</h3>
+          <div id="bitlockerOutput" class="simple-list"></div>
+        </article>
+        <article class="card inventory-card wide">
+          <h3>CPU Info</h3>
+          <div id="cpuInfoOutput" class="simple-list"></div>
+        </article>
+        <article class="card inventory-card wide">
+          <h3>CPU Features (cpuid)</h3>
+          <div id="cpuidOutput" class="simple-list"></div>
+        </article>
+        <article class="card inventory-card wide">
+          <h3>Startup Items</h3>
+          <div id="startupOutput" class="simple-list"></div>
+        </article>
+        <article class="card inventory-card wide">
+          <h3>Autoexec</h3>
+          <div id="autoexecOutput" class="simple-list"></div>
+        </article>
+      </div>
+
+      <article class="card inventory-card">
+        <h3>Softwares Instalados</h3>
+        <div class="software-toolbar">
+          <div id="softwareCount" class="meta"></div>
+          <input id="softwareSearchInput" type="search" placeholder="Pesquisar software por nome, versao ou publisher" />
+        </div>
+        <div class="software-table-wrap">
+          <table class="software-table">
+            <thead>
+              <tr>
+                <th data-sort-key="name" class="sortable">Nome</th>
+                <th data-sort-key="version" class="sortable">Versao</th>
+                <th data-sort-key="publisher" class="sortable">Publisher</th>
+                <th data-sort-key="installId" class="sortable">ID Instalacao</th>
+                <th data-sort-key="serial" class="sortable">Serial</th>
+                <th data-sort-key="source" class="sortable">Origem</th>
+              </tr>
+            </thead>
+            <tbody id="softwareTableBody"></tbody>
+          </table>
+        </div>
+        <div class="software-pagination">
+          <button id="softwarePrevBtn" class="btn subtle">Anterior</button>
+          <span id="softwarePageInfo" class="meta">Pagina 1</span>
+          <button id="softwareNextBtn" class="btn subtle">Proxima</button>
+        </div>
+      </article>
+    </section>
+  </main>

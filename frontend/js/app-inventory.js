@@ -208,9 +208,12 @@ function renderCPUFeatures(items) {
 }
 
 function setInventoryLoading(isLoading) {
-  inventoryProgressEl.classList.toggle('hidden', !isLoading);
+  if (inventoryProgressEl) {
+    inventoryProgressEl.classList.toggle('hidden', !isLoading);
+  }
   var buttons = [refreshInventoryBtn, exportInventoryBtn, exportInventoryPdfBtn];
   buttons.forEach(function (btn) {
+    if (!btn) return;
     btn.disabled = isLoading;
     btn.setAttribute('aria-busy', String(isLoading));
   });
@@ -312,12 +315,11 @@ async function loadInventory(forceRefresh) {
     showFeedback('Coletando inventario...');
     var report = forceRefresh ? await appApi().RefreshInventory() : await appApi().GetInventory();
 
-    inventoryInfoEl.textContent = 'Coletado em ' + (report.collectedAt || '-') + ' via ' + (report.source || '-');
+    inventoryInfoEl.textContent = 'Coletado em ' + (report.collectedAt || '-');
     renderFacts(hardwareOutputEl, report.hardware);
     renderFacts(osOutputEl, report.os);
     renderLoggedUsers(report.loggedInUsers || []);
     renderVolumes(report.volumes || report.disks || []);
-    renderPhysicalDisks(report.physicalDisks || []);
     renderNetworks(report.networks || []);
     renderMemoryModules(report.memoryModules || []);
     renderMonitors(report.monitors || []);
@@ -378,6 +380,7 @@ async function loadSidebarUser() {
 }
 
 async function exportInventory() {
+  if (!exportInventoryBtn) return;
   try {
     showFeedback('Exportando inventario em Markdown...');
     setExportStatus('Exportacao Markdown em andamento...');
@@ -400,6 +403,7 @@ async function exportInventory() {
 }
 
 async function exportInventoryPdf() {
+  if (!exportInventoryPdfBtn) return;
   try {
     showFeedback('Exportando inventario em PDF...');
     setExportStatus('Exportacao PDF em andamento...');
@@ -422,6 +426,7 @@ async function exportInventoryPdf() {
 }
 
 async function refreshOsqueryStatus() {
+  if (!osqueryStatusEl || !installOsqueryBtn) return;
   try {
     var status = await appApi().GetOsqueryStatus();
     if (status.installed) {
@@ -439,6 +444,7 @@ async function refreshOsqueryStatus() {
 }
 
 async function installOsquery() {
+  if (!installOsqueryBtn) return;
   try {
     showFeedback('Instalando osquery via winget...');
     installOsqueryBtn.disabled = true;
