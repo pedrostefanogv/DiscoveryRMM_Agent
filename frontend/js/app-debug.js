@@ -99,6 +99,7 @@ function formatComponentName(component) {
     'tray': 'System Tray',
     'ai_service': 'Servico de IA',
     'agent_connection': 'Conexao do Agente',
+    'automation_service': 'Automacao',
     'inventory': 'Inventario',
     'ui_runtime': 'Runtime UI'
   };

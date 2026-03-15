@@ -13,11 +13,12 @@ import (
 type Component string
 
 const (
-	ComponentTray      Component = "tray"
-	ComponentAI        Component = "ai_service"
-	ComponentAgent     Component = "agent_connection"
-	ComponentInventory Component = "inventory"
-	ComponentUI        Component = "ui_runtime"
+	ComponentTray       Component = "tray"
+	ComponentAI         Component = "ai_service"
+	ComponentAgent      Component = "agent_connection"
+	ComponentAutomation Component = "automation_service"
+	ComponentInventory  Component = "inventory"
+	ComponentUI         Component = "ui_runtime"
 )
 
 // Status represents the health status of a component.

@@ -48,6 +48,13 @@ function initAppBindings() {
     });
   }
 
+  if (tabAutomationBtn) {
+    tabAutomationBtn.addEventListener('click', function () {
+      setActiveTab('automation');
+      loadAutomationState();
+    });
+  }
+
   if (tabDebugBtn) {
     tabDebugBtn.addEventListener('click', function () {
       setActiveTab('debug');
@@ -173,16 +180,31 @@ function initAppBindings() {
   }
 }
 
-function bootstrapApp() {
+async function bootstrapApp() {
   initAppBindings();
   updateSortIndicators();
   initTheme();
-  setActiveTab('store');
+  setRuntimeFlags({ debugMode: false });
+  try {
+    var flags = await appApi().GetRuntimeFlags();
+    setRuntimeFlags(flags || { debugMode: false });
+  } catch (_) {
+    setRuntimeFlags({ debugMode: false });
+  }
+
+  if (isDebugRuntimeMode()) {
+    setActiveTab('logs');
+    loadLogs();
+  } else {
+    setActiveTab('store');
+  }
+
   loadCatalog();
   loadSidebarUser();
   initChat();
   initSupport();
   initKnowledge();
+  initAutomation();
   initDebug();
 }
 

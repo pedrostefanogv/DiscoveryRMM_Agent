@@ -78,6 +78,10 @@ export function GetAgentTicketDetails(arg1) {
   return window['go']['main']['App']['GetAgentTicketDetails'](arg1);
 }
 
+export function GetAutomationState() {
+  return window['go']['main']['App']['GetAutomationState']();
+}
+
 export function GetAvailableTools() {
   return window['go']['main']['App']['GetAvailableTools']();
 }
@@ -156,6 +160,10 @@ export function GetPrinterConfigJSON(arg1) {
 
 export function GetRealtimeStatus() {
   return window['go']['main']['App']['GetRealtimeStatus']();
+}
+
+export function GetRuntimeFlags() {
+  return window['go']['main']['App']['GetRuntimeFlags']();
 }
 
 export function GetSpoolerStatus() {
@@ -248,6 +256,10 @@ export function ListPrinters() {
 
 export function ListPrintersJSON() {
   return window['go']['main']['App']['ListPrintersJSON']();
+}
+
+export function RefreshAutomationPolicy(arg1) {
+  return window['go']['main']['App']['RefreshAutomationPolicy'](arg1);
 }
 
 export function RefreshInventory() {

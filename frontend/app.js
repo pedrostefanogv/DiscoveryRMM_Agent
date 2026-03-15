@@ -63,6 +63,8 @@ const supportViewEl = document.getElementById('supportView');
 const tabSupportBtn = document.getElementById('tabSupport');
 const knowledgeViewEl = document.getElementById('knowledgeView');
 const tabKnowledgeBtn = document.getElementById('tabKnowledge');
+const automationViewEl = document.getElementById('automationView');
+const tabAutomationBtn = document.getElementById('tabAutomation');
 const supportFormEl = document.getElementById('supportForm');
 const supportTicketsListEl = document.getElementById('supportTicketsList');
 // Support - extended refs
@@ -167,6 +169,16 @@ const agentStatusDetailEl = document.getElementById('agentStatusDetail');
 const agentStatusRefreshBtn = document.getElementById('agentStatusRefreshBtn');
 const watchdogHealthContainer = document.getElementById('watchdogHealthContainer');
 const watchdogRefreshBtn = document.getElementById('watchdogRefreshBtn');
+const automationRefreshBtn = document.getElementById('automationRefreshBtn');
+const automationIncludeScriptContentEl = document.getElementById('automationIncludeScriptContent');
+const automationStatusEl = document.getElementById('automationStatus');
+const automationSummaryEl = document.getElementById('automationSummary');
+const automationNotesEl = document.getElementById('automationNotes');
+const automationTasksEl = document.getElementById('automationTasks');
+const automationTaskCountEl = document.getElementById('automationTaskCount');
+const automationPendingCallbacksEl = document.getElementById('automationPendingCallbacks');
+const automationExecutionsEl = document.getElementById('automationExecutions');
+const automationExecutionCountEl = document.getElementById('automationExecutionCount');
 
 let agentStatusPollId = null;
 let watchdogPollId = null;
@@ -191,6 +203,45 @@ let logsAutoRefreshId = null;
 let knowledgeArticles = [];
 let selectedKnowledgeArticleID = '';
 let activeTab = 'store';
+let runtimeFlags = {
+  debugMode: false,
+};
+
+function isDebugRuntimeMode() {
+  return !!runtimeFlags.debugMode;
+}
+
+function isRuntimeTabAllowed(tab) {
+  if (isDebugRuntimeMode()) {
+    return true;
+  }
+  return tab !== 'logs' && tab !== 'debug' && tab !== 'automation';
+}
+
+function applyRuntimeTabVisibility() {
+  var hiddenInNormal = !isDebugRuntimeMode();
+
+  if (tabLogsBtn) tabLogsBtn.classList.toggle('hidden', hiddenInNormal);
+  if (tabDebugBtn) tabDebugBtn.classList.toggle('hidden', hiddenInNormal);
+  if (tabAutomationBtn) tabAutomationBtn.classList.toggle('hidden', hiddenInNormal);
+
+  if (hiddenInNormal) {
+    if (logsViewEl) logsViewEl.classList.add('hidden');
+    if (debugViewEl) debugViewEl.classList.add('hidden');
+    if (automationViewEl) automationViewEl.classList.add('hidden');
+  }
+
+  if (!isRuntimeTabAllowed(activeTab)) {
+    setActiveTab('store');
+  }
+}
+
+function setRuntimeFlags(flags) {
+  runtimeFlags = {
+    debugMode: !!(flags && flags.debugMode),
+  };
+  applyRuntimeTabVisibility();
+}
 
 function appApi() {
   if (!window.go || !window.go.main || !window.go.main.App) {
@@ -244,6 +295,10 @@ function renderCardList(targetEl, items, emptyMessage, cardRenderer, opts) {
 }
 
 function setActiveTab(tab) {
+  if (!isRuntimeTabAllowed(tab)) {
+    tab = 'store';
+  }
+
   activeTab = tab;
   var views = {
     store: storeViewEl,
@@ -253,6 +308,7 @@ function setActiveTab(tab) {
     chat: chatViewEl,
     support: supportViewEl,
     knowledge: knowledgeViewEl,
+    automation: automationViewEl,
     debug: debugViewEl,
   };
   var tabs = {
@@ -263,6 +319,7 @@ function setActiveTab(tab) {
     chat: tabChatBtn,
     support: tabSupportBtn,
     knowledge: tabKnowledgeBtn,
+    automation: tabAutomationBtn,
     debug: tabDebugBtn,
   };
 

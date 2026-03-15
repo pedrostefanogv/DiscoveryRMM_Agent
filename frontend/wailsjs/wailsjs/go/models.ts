@@ -115,6 +115,193 @@ export namespace main {
 	        this.lastEvent = source["lastEvent"];
 	    }
 	}
+	export class AutomationExecutionView {
+	    executionId: string;
+	    commandId?: string;
+	    taskId?: string;
+	    taskName?: string;
+	    actionType?: string;
+	    actionLabel?: string;
+	    installationType?: string;
+	    installationLabel?: string;
+	    sourceType?: string;
+	    sourceLabel?: string;
+	    triggerType?: string;
+	    triggerLabel?: string;
+	    status: string;
+	    statusLabel: string;
+	    success: boolean;
+	    exitCode: number;
+	    exitCodeSet: boolean;
+	    errorMessage?: string;
+	    output?: string;
+	    packageId?: string;
+	    scriptId?: string;
+	    correlationId?: string;
+	    startedAt?: string;
+	    finishedAt?: string;
+	    metadataJson?: string;
+	    durationLabel?: string;
+	    summaryLine?: string;
+	    hasPendingCallback: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new AutomationExecutionView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.executionId = source["executionId"];
+	        this.commandId = source["commandId"];
+	        this.taskId = source["taskId"];
+	        this.taskName = source["taskName"];
+	        this.actionType = source["actionType"];
+	        this.actionLabel = source["actionLabel"];
+	        this.installationType = source["installationType"];
+	        this.installationLabel = source["installationLabel"];
+	        this.sourceType = source["sourceType"];
+	        this.sourceLabel = source["sourceLabel"];
+	        this.triggerType = source["triggerType"];
+	        this.triggerLabel = source["triggerLabel"];
+	        this.status = source["status"];
+	        this.statusLabel = source["statusLabel"];
+	        this.success = source["success"];
+	        this.exitCode = source["exitCode"];
+	        this.exitCodeSet = source["exitCodeSet"];
+	        this.errorMessage = source["errorMessage"];
+	        this.output = source["output"];
+	        this.packageId = source["packageId"];
+	        this.scriptId = source["scriptId"];
+	        this.correlationId = source["correlationId"];
+	        this.startedAt = source["startedAt"];
+	        this.finishedAt = source["finishedAt"];
+	        this.metadataJson = source["metadataJson"];
+	        this.durationLabel = source["durationLabel"];
+	        this.summaryLine = source["summaryLine"];
+	        this.hasPendingCallback = source["hasPendingCallback"];
+	    }
+	}
+	export class AutomationTaskView {
+	    commandId?: string;
+	    taskId: string;
+	    name: string;
+	    description?: string;
+	    actionType: string;
+	    actionLabel: string;
+	    installationType?: string;
+	    installationLabel?: string;
+	    packageId?: string;
+	    scriptId?: string;
+	    scriptName?: string;
+	    scriptVersion?: string;
+	    scriptType?: string;
+	    scriptTypeLabel?: string;
+	    commandPayload?: string;
+	    scopeType: string;
+	    scopeLabel: string;
+	    requiresApproval: boolean;
+	    triggerImmediate: boolean;
+	    triggerRecurring: boolean;
+	    triggerOnUserLogin: boolean;
+	    triggerOnAgentCheckIn: boolean;
+	    scheduleCron?: string;
+	    includeTags?: string[];
+	    excludeTags?: string[];
+	    lastUpdatedAt?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AutomationTaskView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.commandId = source["commandId"];
+	        this.taskId = source["taskId"];
+	        this.name = source["name"];
+	        this.description = source["description"];
+	        this.actionType = source["actionType"];
+	        this.actionLabel = source["actionLabel"];
+	        this.installationType = source["installationType"];
+	        this.installationLabel = source["installationLabel"];
+	        this.packageId = source["packageId"];
+	        this.scriptId = source["scriptId"];
+	        this.scriptName = source["scriptName"];
+	        this.scriptVersion = source["scriptVersion"];
+	        this.scriptType = source["scriptType"];
+	        this.scriptTypeLabel = source["scriptTypeLabel"];
+	        this.commandPayload = source["commandPayload"];
+	        this.scopeType = source["scopeType"];
+	        this.scopeLabel = source["scopeLabel"];
+	        this.requiresApproval = source["requiresApproval"];
+	        this.triggerImmediate = source["triggerImmediate"];
+	        this.triggerRecurring = source["triggerRecurring"];
+	        this.triggerOnUserLogin = source["triggerOnUserLogin"];
+	        this.triggerOnAgentCheckIn = source["triggerOnAgentCheckIn"];
+	        this.scheduleCron = source["scheduleCron"];
+	        this.includeTags = source["includeTags"];
+	        this.excludeTags = source["excludeTags"];
+	        this.lastUpdatedAt = source["lastUpdatedAt"];
+	    }
+	}
+	export class AutomationStateView {
+	    available: boolean;
+	    connected: boolean;
+	    loadedFromCache: boolean;
+	    upToDate: boolean;
+	    includeScriptContent: boolean;
+	    policyFingerprint?: string;
+	    generatedAt?: string;
+	    lastSyncAt?: string;
+	    lastAttemptAt?: string;
+	    lastError?: string;
+	    correlationId?: string;
+	    taskCount: number;
+	    pendingCallbacks: number;
+	    tasks?: AutomationTaskView[];
+	    recentExecutions?: AutomationExecutionView[];
+	
+	    static createFrom(source: any = {}) {
+	        return new AutomationStateView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.available = source["available"];
+	        this.connected = source["connected"];
+	        this.loadedFromCache = source["loadedFromCache"];
+	        this.upToDate = source["upToDate"];
+	        this.includeScriptContent = source["includeScriptContent"];
+	        this.policyFingerprint = source["policyFingerprint"];
+	        this.generatedAt = source["generatedAt"];
+	        this.lastSyncAt = source["lastSyncAt"];
+	        this.lastAttemptAt = source["lastAttemptAt"];
+	        this.lastError = source["lastError"];
+	        this.correlationId = source["correlationId"];
+	        this.taskCount = source["taskCount"];
+	        this.pendingCallbacks = source["pendingCallbacks"];
+	        this.tasks = this.convertValues(source["tasks"], AutomationTaskView);
+	        this.recentExecutions = this.convertValues(source["recentExecutions"], AutomationExecutionView);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
 	export class ChatConfig {
 	    endpoint: string;
 	    apiKey: string;
@@ -275,6 +462,18 @@ export namespace main {
 		    }
 		    return a;
 		}
+	}
+	export class RuntimeFlags {
+	    debugMode: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new RuntimeFlags(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.debugMode = source["debugMode"];
+	    }
 	}
 	export class TicketComment {
 	    id: string;

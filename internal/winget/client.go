@@ -14,6 +14,8 @@ import (
 
 var idPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
+const wingetNoApplicableUpgradeCode = "0x8a15002b"
+
 type Client struct {
 	timeout time.Duration
 }
@@ -90,12 +92,49 @@ func (c *Client) run(ctx context.Context, args ...string) (string, error) {
 	output, err := cmd.CombinedOutput()
 	text := strings.TrimSpace(string(output))
 	if err != nil {
+		if shouldTreatErrorAsSuccess(args, text, err) {
+			return text, nil
+		}
 		if text == "" {
 			text = err.Error()
 		}
 		return text, fmt.Errorf("erro executando winget %s: %w", strings.Join(args, " "), err)
 	}
 	return text, nil
+}
+
+func shouldTreatErrorAsSuccess(args []string, output string, err error) bool {
+	if len(args) == 0 || err == nil {
+		return false
+	}
+	command := strings.ToLower(strings.TrimSpace(args[0]))
+	if command != "install" && command != "upgrade" {
+		return false
+	}
+	errText := strings.ToLower(err.Error())
+	if strings.Contains(errText, wingetNoApplicableUpgradeCode) {
+		return true
+	}
+	return hasNoopUpgradeOutput(output)
+}
+
+func hasNoopUpgradeOutput(output string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(output))
+	if normalized == "" {
+		return false
+	}
+	markers := []string{
+		"nenhuma atualiza",
+		"nenhuma vers",
+		"no available upgrade found",
+		"no newer package versions are available",
+	}
+	for _, marker := range markers {
+		if strings.Contains(normalized, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func validateID(id string) error {

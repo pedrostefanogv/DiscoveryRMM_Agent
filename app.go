@@ -18,6 +18,7 @@ import (
 
 	"winget-store/internal/agentconn"
 	"winget-store/internal/ai"
+	"winget-store/internal/automation"
 	"winget-store/internal/data"
 	"winget-store/internal/database"
 	"winget-store/internal/inventory"
@@ -62,6 +63,7 @@ func getDataDir() string {
 type App struct {
 	ctx           context.Context
 	cancel        context.CancelFunc
+	runtimeFlags  RuntimeFlags
 	catalogSvc    *services.CatalogService
 	catalogClient *data.HTTPClient
 	appsSvc       *services.AppsService
@@ -73,11 +75,12 @@ type App struct {
 	exportCfg exportConfig
 	logs      logBuffer
 
-	mcpRegistry *mcp.Registry
-	chatSvc     *ai.Service
-	agentConn   *agentconn.Runtime
-	agentInfo   agentInfoCache
-	watchdogSvc *watchdog.Watchdog
+	mcpRegistry   *mcp.Registry
+	chatSvc       *ai.Service
+	automationSvc *automation.Service
+	agentConn     *agentconn.Runtime
+	agentInfo     agentInfoCache
+	watchdogSvc   *watchdog.Watchdog
 
 	debugMu     sync.RWMutex
 	debugConfig DebugConfig
@@ -94,7 +97,7 @@ type App struct {
 	allowClose  bool
 }
 
-func NewApp() *App {
+func NewApp(opts AppStartupOptions) *App {
 	catalogClient := data.NewHTTPClient(catalogURL, catalogTimeout)
 	wingetClient := winget.NewClient(wingetTimeout)
 	inventoryProvider := inventory.NewProvider(inventoryTimeout)
@@ -107,6 +110,7 @@ func NewApp() *App {
 	watchdogSvc := watchdog.New(watchdog.DefaultConfig())
 
 	a := &App{
+		runtimeFlags:  RuntimeFlags{DebugMode: opts.DebugMode},
 		catalogSvc:    services.NewCatalogService(catalogClient),
 		catalogClient: catalogClient,
 		appsSvc:       services.NewAppsService(wingetClient),
@@ -116,6 +120,21 @@ func NewApp() *App {
 		chatSvc:       chatSvc,
 		watchdogSvc:   watchdogSvc,
 	}
+	a.automationSvc = automation.NewService(func() automation.RuntimeConfig {
+		cfg := a.GetDebugConfig()
+		baseURL := strings.TrimSpace(cfg.ApiScheme) + "://" + strings.TrimSpace(cfg.ApiServer)
+		if strings.TrimSpace(cfg.ApiScheme) == "" || strings.TrimSpace(cfg.ApiServer) == "" {
+			baseURL = ""
+		}
+		return automation.RuntimeConfig{
+			BaseURL: baseURL,
+			Token:   strings.TrimSpace(cfg.AuthToken),
+			AgentID: strings.TrimSpace(cfg.AgentID),
+		}
+	}, func(line string) {
+		a.logs.append("[automation] " + line)
+	})
+	a.automationSvc.SetPackageManager(a.appsSvc)
 	inventoryProvider.SetProgressCallback(func() {
 		a.pulseInventoryHeartbeat()
 	})
@@ -152,7 +171,16 @@ func NewApp() *App {
 	// Register watchdog recovery actions for critical components
 	a.registerWatchdogRecovery()
 
+	if opts.DebugMode {
+		a.logs.append("[startup] modo debug ativo por tecla de atalho (execucao atual)")
+	}
+
 	return a
+}
+
+// GetRuntimeFlags returns runtime-only startup flags for the current execution.
+func (a *App) GetRuntimeFlags() RuntimeFlags {
+	return a.runtimeFlags
 }
 
 func (a *App) startup(ctx context.Context) {
@@ -179,6 +207,9 @@ func (a *App) startup(ctx context.Context) {
 		// Configurar cache persistente no catalogClient
 		if a.catalogClient != nil {
 			a.catalogClient.SetDatabase(db)
+		}
+		if a.automationSvc != nil {
+			a.automationSvc.SetDB(db)
 		}
 	}
 
@@ -213,6 +244,22 @@ func (a *App) startup(ctx context.Context) {
 		defer heartbeat.Stop()
 
 		a.agentConn.Run(ctx)
+	})
+
+	a.startupWg.Add(1)
+	watchdog.SafeGoWithContext(ctx, "automation-service", a.watchdogSvc, watchdog.ComponentAutomation, func(ctx context.Context) {
+		defer a.startupWg.Done()
+		if a.automationSvc == nil {
+			return
+		}
+
+		heartbeat := watchdog.NewPeriodicHeartbeat(a.watchdogSvc, watchdog.ComponentAutomation, 25*time.Second)
+		heartbeat.Start(ctx)
+		defer heartbeat.Stop()
+
+		a.automationSvc.Run(ctx, func() {
+			a.watchdogSvc.Heartbeat(watchdog.ComponentAutomation)
+		})
 	})
 }
 
@@ -323,6 +370,20 @@ func (a *App) registerWatchdogRecovery() {
 		a.invCache.loaded = false
 		a.invCache.mu.Unlock()
 		return nil
+	})
+
+	// Automation recovery: tentar um novo refresh de policy.
+	a.watchdogSvc.RegisterRecovery(watchdog.ComponentAutomation, func(component watchdog.Component) error {
+		log.Println("[watchdog] automacao degradada - tentando refresh de policy")
+		if a.automationSvc == nil {
+			return nil
+		}
+		ctx := a.ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		_, err := a.automationSvc.RefreshPolicy(ctx, false)
+		return err
 	})
 
 	// On unhealthy callback: emit event to frontend

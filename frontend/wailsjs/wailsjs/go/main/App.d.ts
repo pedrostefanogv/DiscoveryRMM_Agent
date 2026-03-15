@@ -43,6 +43,8 @@ export function GetAgentStatus():Promise<main.AgentStatus>;
 
 export function GetAgentTicketDetails(arg1:string):Promise<json.RawMessage>;
 
+export function GetAutomationState():Promise<main.AutomationStateView>;
+
 export function GetAvailableTools():Promise<Array<Record<string, string>>>;
 
 export function GetCatalog():Promise<models.Catalog>;
@@ -82,6 +84,8 @@ export function GetPrinterConfig(arg1:string):Promise<json.RawMessage>;
 export function GetPrinterConfigJSON(arg1:string):Promise<json.RawMessage>;
 
 export function GetRealtimeStatus():Promise<main.RealtimeStatus>;
+
+export function GetRuntimeFlags():Promise<main.RuntimeFlags>;
 
 export function GetSpoolerStatus():Promise<json.RawMessage>;
 
@@ -128,6 +132,8 @@ export function ListPrinterDriversJSON():Promise<json.RawMessage>;
 export function ListPrinters():Promise<json.RawMessage>;
 
 export function ListPrintersJSON():Promise<json.RawMessage>;
+
+export function RefreshAutomationPolicy(arg1:boolean):Promise<main.AutomationStateView>;
 
 export function RefreshInventory():Promise<models.InventoryReport>;
 

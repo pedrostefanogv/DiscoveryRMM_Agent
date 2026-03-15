@@ -23,13 +23,19 @@ var assets embed.FS
 var Version = "dev"
 
 func main() {
+	startupDebugMode := detectStartupDebugMode()
+
 	// If started with --mcp, run as a stdio MCP server (for Claude Desktop, etc).
 	if len(os.Args) > 1 && os.Args[1] == "--mcp" {
 		runMCPServer()
 		return
 	}
 
-	app := NewApp()
+	if startupDebugMode {
+		log.Println("[startup] Shift/Ctrl detectado: inicializando em modo debug (transitorio)")
+	}
+
+	app := NewApp(AppStartupOptions{DebugMode: startupDebugMode})
 
 	singleInstance := &options.SingleInstanceLock{
 		UniqueId: "com.discovery.winget-store",
@@ -79,7 +85,7 @@ func main() {
 
 // runMCPServer starts the app in headless MCP server mode (JSON-RPC over stdio).
 func runMCPServer() {
-	app := NewApp()
+	app := NewApp(AppStartupOptions{})
 	// Initialize a background context for the app services.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
