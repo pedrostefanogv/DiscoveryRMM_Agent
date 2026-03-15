@@ -29,6 +29,81 @@ type RuntimeFlags struct {
 	StartMinimized bool `json:"startMinimized"`
 }
 
+// P2PConfig controls debug-only peer discovery and local transfer behavior.
+type P2PConfig struct {
+	Enabled                  bool   `json:"enabled"`
+	DiscoveryMode            string `json:"discoveryMode"`
+	TempTTLHours             int    `json:"tempTtlHours"`
+	SeedPercent              int    `json:"seedPercent"`
+	MinSeeds                 int    `json:"minSeeds"`
+	HTTPListenPortRangeStart int    `json:"httpListenPortRangeStart"`
+	HTTPListenPortRangeEnd   int    `json:"httpListenPortRangeEnd"`
+	AuthTokenRotationMinutes int    `json:"authTokenRotationMinutes"`
+	SharedSecret             string `json:"sharedSecret,omitempty"`
+}
+
+// P2PSeedPlan summarizes how many agents should seed from external HTTP.
+type P2PSeedPlan struct {
+	TotalAgents       int `json:"totalAgents"`
+	ConfiguredPercent int `json:"configuredPercent"`
+	MinSeeds          int `json:"minSeeds"`
+	SelectedSeeds     int `json:"selectedSeeds"`
+}
+
+// P2PDebugStatus contains coordinator state shown in debug UI.
+type P2PDebugStatus struct {
+	Active               bool        `json:"active"`
+	DiscoveryMode        string      `json:"discoveryMode"`
+	KnownPeers           int         `json:"knownPeers"`
+	ListenAddress        string      `json:"listenAddress"`
+	TempDir              string      `json:"tempDir"`
+	TempTTLHours         int         `json:"tempTtlHours"`
+	LastCleanupUTC       string      `json:"lastCleanupUtc"`
+	LastDiscoveryTickUTC string      `json:"lastDiscoveryTickUtc"`
+	LastError            string      `json:"lastError"`
+	CurrentSeedPlan      P2PSeedPlan `json:"currentSeedPlan"`
+	Metrics              P2PMetrics  `json:"metrics"`
+}
+
+// P2PPeerView is the frontend-facing snapshot of a discovered peer.
+type P2PPeerView struct {
+	AgentID      string `json:"agentId"`
+	Host         string `json:"host"`
+	Address      string `json:"address"`
+	Port         int    `json:"port"`
+	Source       string `json:"source"`
+	LastSeenUTC  string `json:"lastSeenUtc"`
+	KnownPeers   int    `json:"knownPeers"`
+	ConnectedVia string `json:"connectedVia"`
+}
+
+// P2PArtifactAccess is an authenticated one-shot descriptor for peer downloads.
+type P2PArtifactAccess struct {
+	ArtifactName   string `json:"artifactName"`
+	URL            string `json:"url"`
+	ChecksumSHA256 string `json:"checksumSha256"`
+	SizeBytes      int64  `json:"sizeBytes"`
+	ExpiresAtUTC   string `json:"expiresAtUtc"`
+}
+
+// P2PArtifactView describes an artifact available in the local temporary cache.
+type P2PArtifactView struct {
+	ArtifactName   string `json:"artifactName"`
+	SizeBytes      int64  `json:"sizeBytes"`
+	ModifiedAtUTC  string `json:"modifiedAtUtc"`
+	ChecksumSHA256 string `json:"checksumSha256"`
+}
+
+// P2PMetrics captures debug-visible transfer and replication counters.
+type P2PMetrics struct {
+	PublishedArtifacts    int   `json:"publishedArtifacts"`
+	ReplicationsStarted   int   `json:"replicationsStarted"`
+	ReplicationsSucceeded int   `json:"replicationsSucceeded"`
+	ReplicationsFailed    int   `json:"replicationsFailed"`
+	BytesServed           int64 `json:"bytesServed"`
+	BytesDownloaded       int64 `json:"bytesDownloaded"`
+}
+
 func (c *inventoryCache) get() (models.InventoryReport, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()

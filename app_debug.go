@@ -92,13 +92,14 @@ type DebugConfig struct {
 
 // InstallerConfig is the bootstrap config saved by the NSIS installer.
 type InstallerConfig struct {
-	ServerURL        string `json:"serverUrl"`
-	APIKey           string `json:"apiKey"`
-	DiscoveryEnabled *bool  `json:"discoveryEnabled,omitempty"`
-	ApiScheme        string `json:"apiScheme,omitempty"`
-	ApiServer        string `json:"apiServer,omitempty"`
-	AuthToken        string `json:"authToken,omitempty"`
-	AgentID          string `json:"agentId,omitempty"`
+	ServerURL        string    `json:"serverUrl"`
+	APIKey           string    `json:"apiKey"`
+	DiscoveryEnabled *bool     `json:"discoveryEnabled,omitempty"`
+	ApiScheme        string    `json:"apiScheme,omitempty"`
+	ApiServer        string    `json:"apiServer,omitempty"`
+	AuthToken        string    `json:"authToken,omitempty"`
+	AgentID          string    `json:"agentId,omitempty"`
+	P2P              P2PConfig `json:"p2p,omitempty"`
 }
 
 func (c *InstallerConfig) UnmarshalJSON(data []byte) error {
@@ -110,6 +111,7 @@ func (c *InstallerConfig) UnmarshalJSON(data []byte) error {
 		ApiServer        string          `json:"apiServer,omitempty"`
 		AuthToken        string          `json:"authToken,omitempty"`
 		AgentID          string          `json:"agentId,omitempty"`
+		P2P              P2PConfig       `json:"p2p,omitempty"`
 	}
 
 	var raw rawInstallerConfig
@@ -130,6 +132,7 @@ func (c *InstallerConfig) UnmarshalJSON(data []byte) error {
 		ApiServer:        raw.ApiServer,
 		AuthToken:        raw.AuthToken,
 		AgentID:          raw.AgentID,
+		P2P:              normalizeP2PConfig(raw.P2P),
 	}
 	return nil
 }
@@ -189,8 +192,10 @@ func (a *App) loadConnectionConfigFromProduction() {
 	inst, path, err := loadInstallerConfig()
 	if err != nil {
 		a.logs.append("[config] config de producao nao encontrado: " + err.Error())
+		a.applyP2PConfig(defaultP2PConfig())
 		return
 	}
+	a.applyP2PConfig(inst.P2P)
 
 	if strings.TrimSpace(inst.ApiScheme) == "" || strings.TrimSpace(inst.ApiServer) == "" {
 		scheme, server, parseErr := parseInstallerServerURL(inst.ServerURL)
@@ -355,6 +360,7 @@ func loadInstallerConfig() (InstallerConfig, string, error) {
 		cfg.ApiServer = strings.TrimSpace(cfg.ApiServer)
 		cfg.AuthToken = strings.TrimSpace(cfg.AuthToken)
 		cfg.AgentID = strings.TrimSpace(cfg.AgentID)
+		cfg.P2P = normalizeP2PConfig(cfg.P2P)
 
 		if cfg.ServerURL == "" && (cfg.ApiScheme == "" || cfg.ApiServer == "") {
 			continue

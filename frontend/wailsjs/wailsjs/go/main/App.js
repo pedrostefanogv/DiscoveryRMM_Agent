@@ -14,6 +14,10 @@ export function AddTicketCommentWithOptions(arg1, arg2, arg3) {
   return window['go']['main']['App']['AddTicketCommentWithOptions'](arg1, arg2, arg3);
 }
 
+export function CleanupP2PTempNow() {
+  return window['go']['main']['App']['CleanupP2PTempNow']();
+}
+
 export function ClearChatHistory() {
   return window['go']['main']['App']['ClearChatHistory']();
 }
@@ -36,6 +40,10 @@ export function CloseAgentTicket(arg1, arg2, arg3, arg4) {
 
 export function CloseSupportTicket(arg1, arg2) {
   return window['go']['main']['App']['CloseSupportTicket'](arg1, arg2);
+}
+
+export function ComputeP2PSeedPlan(arg1) {
+  return window['go']['main']['App']['ComputeP2PSeedPlan'](arg1);
 }
 
 export function CreateAgentTicket(arg1, arg2, arg3, arg4) {
@@ -132,6 +140,26 @@ export function GetOsqueryStatus() {
 
 export function GetOsqueryStatusJSON() {
   return window['go']['main']['App']['GetOsqueryStatusJSON']();
+}
+
+export function GetP2PArtifactAccess(arg1, arg2) {
+  return window['go']['main']['App']['GetP2PArtifactAccess'](arg1, arg2);
+}
+
+export function GetP2PConfig() {
+  return window['go']['main']['App']['GetP2PConfig']();
+}
+
+export function GetP2PDebugStatus() {
+  return window['go']['main']['App']['GetP2PDebugStatus']();
+}
+
+export function GetP2PPeers() {
+  return window['go']['main']['App']['GetP2PPeers']();
+}
+
+export function GetP2PTempDir() {
+  return window['go']['main']['App']['GetP2PTempDir']();
 }
 
 export function GetPackageActions() {
@@ -242,6 +270,10 @@ export function ListInstalled() {
   return window['go']['main']['App']['ListInstalled']();
 }
 
+export function ListP2PArtifacts() {
+  return window['go']['main']['App']['ListP2PArtifacts']();
+}
+
 export function ListPrintJobs(arg1) {
   return window['go']['main']['App']['ListPrintJobs'](arg1);
 }
@@ -266,6 +298,10 @@ export function ListPrintersJSON() {
   return window['go']['main']['App']['ListPrintersJSON']();
 }
 
+export function PublishP2PTestArtifact(arg1, arg2) {
+  return window['go']['main']['App']['PublishP2PTestArtifact'](arg1, arg2);
+}
+
 export function RefreshAutomationPolicy(arg1) {
   return window['go']['main']['App']['RefreshAutomationPolicy'](arg1);
 }
@@ -288,6 +324,10 @@ export function RemovePrinter(arg1) {
 
 export function RemovePrinterJSON(arg1) {
   return window['go']['main']['App']['RemovePrinterJSON'](arg1);
+}
+
+export function ReplicateP2PArtifactToPeer(arg1, arg2) {
+  return window['go']['main']['App']['ReplicateP2PArtifactToPeer'](arg1, arg2);
 }
 
 export function RequestAppClose() {
@@ -324,6 +364,10 @@ export function SetDebugConfig(arg1) {
 
 export function SetExportRedaction(arg1) {
   return window['go']['main']['App']['SetExportRedaction'](arg1);
+}
+
+export function SetP2PConfig(arg1) {
+  return window['go']['main']['App']['SetP2PConfig'](arg1);
 }
 
 export function ShouldHideOnClose() {

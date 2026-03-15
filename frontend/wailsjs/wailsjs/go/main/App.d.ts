@@ -11,6 +11,8 @@ export function AddTicketComment(arg1:string,arg2:string,arg3:string):Promise<vo
 
 export function AddTicketCommentWithOptions(arg1:string,arg2:string,arg3:boolean):Promise<main.TicketComment>;
 
+export function CleanupP2PTempNow():Promise<string>;
+
 export function ClearChatHistory():Promise<void>;
 
 export function ClearLogs():Promise<void>;
@@ -22,6 +24,8 @@ export function ClearPrintQueueJSON(arg1:string):Promise<json.RawMessage>;
 export function CloseAgentTicket(arg1:string,arg2:any,arg3:string,arg4:string):Promise<json.RawMessage>;
 
 export function CloseSupportTicket(arg1:string,arg2:main.CloseTicketInput):Promise<main.APITicket>;
+
+export function ComputeP2PSeedPlan(arg1:number):Promise<main.P2PSeedPlan>;
 
 export function CreateAgentTicket(arg1:string,arg2:string,arg3:number,arg4:string):Promise<json.RawMessage>;
 
@@ -70,6 +74,16 @@ export function GetMCPRegistry():Promise<mcp.Registry>;
 export function GetOsqueryStatus():Promise<models.OsqueryStatus>;
 
 export function GetOsqueryStatusJSON():Promise<json.RawMessage>;
+
+export function GetP2PArtifactAccess(arg1:string,arg2:string):Promise<main.P2PArtifactAccess>;
+
+export function GetP2PConfig():Promise<main.P2PConfig>;
+
+export function GetP2PDebugStatus():Promise<main.P2PDebugStatus>;
+
+export function GetP2PPeers():Promise<Array<main.P2PPeerView>>;
+
+export function GetP2PTempDir():Promise<string>;
 
 export function GetPackageActions():Promise<Record<string, string>>;
 
@@ -125,6 +139,8 @@ export function ListAgentTickets():Promise<json.RawMessage>;
 
 export function ListInstalled():Promise<string>;
 
+export function ListP2PArtifacts():Promise<Array<main.P2PArtifactView>>;
+
 export function ListPrintJobs(arg1:string):Promise<json.RawMessage>;
 
 export function ListPrintJobsJSON(arg1:string):Promise<json.RawMessage>;
@@ -137,6 +153,8 @@ export function ListPrinters():Promise<json.RawMessage>;
 
 export function ListPrintersJSON():Promise<json.RawMessage>;
 
+export function PublishP2PTestArtifact(arg1:string,arg2:string):Promise<main.P2PArtifactView>;
+
 export function RefreshAutomationPolicy(arg1:boolean):Promise<main.AutomationStateView>;
 
 export function RefreshInventory():Promise<models.InventoryReport>;
@@ -148,6 +166,8 @@ export function RemovePrintJobJSON(arg1:string,arg2:number):Promise<json.RawMess
 export function RemovePrinter(arg1:string):Promise<json.RawMessage>;
 
 export function RemovePrinterJSON(arg1:string):Promise<json.RawMessage>;
+
+export function ReplicateP2PArtifactToPeer(arg1:string,arg2:string):Promise<string>;
 
 export function RequestAppClose():Promise<void>;
 
@@ -166,6 +186,8 @@ export function SetChatConfig(arg1:main.ChatConfig):Promise<void>;
 export function SetDebugConfig(arg1:main.DebugConfig):Promise<void>;
 
 export function SetExportRedaction(arg1:boolean):Promise<void>;
+
+export function SetP2PConfig(arg1:main.P2PConfig):Promise<void>;
 
 export function ShouldHideOnClose():Promise<boolean>;
 

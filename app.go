@@ -84,12 +84,15 @@ type App struct {
 	automationSvc  *automation.Service
 	agentConn      *agentconn.Runtime
 	syncCoord      *syncCoordinator
+	p2pCoord       *p2pCoordinator
 	agentInfo      agentInfoCache
 	appStorePolicy appStorePolicyCache
 	watchdogSvc    *watchdog.Watchdog
 
 	debugMu     sync.RWMutex
 	debugConfig DebugConfig
+	p2pMu       sync.RWMutex
+	p2pConfig   P2PConfig
 
 	startupMu   sync.RWMutex
 	startupErr  error
@@ -168,6 +171,8 @@ func NewApp(opts AppStartupOptions) *App {
 		},
 	})
 	a.syncCoord = newSyncCoordinator(a)
+	a.p2pConfig = defaultP2PConfig()
+	a.p2pCoord = newP2PCoordinator(a)
 	a.chatSvc.SetLogger(func(line string) {
 		a.logs.append("[chat] " + line)
 	})
@@ -288,6 +293,15 @@ func (a *App) startup(ctx context.Context) {
 			return
 		}
 		a.syncCoord.Run(ctx)
+	})
+
+	a.startupWg.Add(1)
+	watchdog.SafeGoWithContext(ctx, "p2p-coordinator", a.watchdogSvc, watchdog.ComponentAgent, func(ctx context.Context) {
+		defer a.startupWg.Done()
+		if a.p2pCoord == nil {
+			return
+		}
+		a.p2pCoord.Run(ctx)
 	})
 }
 

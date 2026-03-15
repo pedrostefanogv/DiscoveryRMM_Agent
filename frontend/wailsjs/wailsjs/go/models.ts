@@ -428,6 +428,188 @@ export namespace main {
 	        this.updatedAt = source["updatedAt"];
 	    }
 	}
+	export class P2PArtifactAccess {
+	    artifactName: string;
+	    url: string;
+	    checksumSha256: string;
+	    sizeBytes: number;
+	    expiresAtUtc: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new P2PArtifactAccess(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.artifactName = source["artifactName"];
+	        this.url = source["url"];
+	        this.checksumSha256 = source["checksumSha256"];
+	        this.sizeBytes = source["sizeBytes"];
+	        this.expiresAtUtc = source["expiresAtUtc"];
+	    }
+	}
+	export class P2PArtifactView {
+	    artifactName: string;
+	    sizeBytes: number;
+	    modifiedAtUtc: string;
+	    checksumSha256: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new P2PArtifactView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.artifactName = source["artifactName"];
+	        this.sizeBytes = source["sizeBytes"];
+	        this.modifiedAtUtc = source["modifiedAtUtc"];
+	        this.checksumSha256 = source["checksumSha256"];
+	    }
+	}
+	export class P2PConfig {
+	    enabled: boolean;
+	    discoveryMode: string;
+	    tempTtlHours: number;
+	    seedPercent: number;
+	    minSeeds: number;
+	    httpListenPortRangeStart: number;
+	    httpListenPortRangeEnd: number;
+	    authTokenRotationMinutes: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new P2PConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.discoveryMode = source["discoveryMode"];
+	        this.tempTtlHours = source["tempTtlHours"];
+	        this.seedPercent = source["seedPercent"];
+	        this.minSeeds = source["minSeeds"];
+	        this.httpListenPortRangeStart = source["httpListenPortRangeStart"];
+	        this.httpListenPortRangeEnd = source["httpListenPortRangeEnd"];
+	        this.authTokenRotationMinutes = source["authTokenRotationMinutes"];
+	    }
+	}
+	export class P2PMetrics {
+	    publishedArtifacts: number;
+	    replicationsStarted: number;
+	    replicationsSucceeded: number;
+	    replicationsFailed: number;
+	    bytesServed: number;
+	    bytesDownloaded: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new P2PMetrics(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.publishedArtifacts = source["publishedArtifacts"];
+	        this.replicationsStarted = source["replicationsStarted"];
+	        this.replicationsSucceeded = source["replicationsSucceeded"];
+	        this.replicationsFailed = source["replicationsFailed"];
+	        this.bytesServed = source["bytesServed"];
+	        this.bytesDownloaded = source["bytesDownloaded"];
+	    }
+	}
+	export class P2PSeedPlan {
+	    totalAgents: number;
+	    configuredPercent: number;
+	    minSeeds: number;
+	    selectedSeeds: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new P2PSeedPlan(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.totalAgents = source["totalAgents"];
+	        this.configuredPercent = source["configuredPercent"];
+	        this.minSeeds = source["minSeeds"];
+	        this.selectedSeeds = source["selectedSeeds"];
+	    }
+	}
+	export class P2PDebugStatus {
+	    active: boolean;
+	    discoveryMode: string;
+	    knownPeers: number;
+	    listenAddress: string;
+	    tempDir: string;
+	    tempTtlHours: number;
+	    lastCleanupUtc: string;
+	    lastDiscoveryTickUtc: string;
+	    lastError: string;
+	    currentSeedPlan: P2PSeedPlan;
+	    metrics: P2PMetrics;
+	
+	    static createFrom(source: any = {}) {
+	        return new P2PDebugStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.active = source["active"];
+	        this.discoveryMode = source["discoveryMode"];
+	        this.knownPeers = source["knownPeers"];
+	        this.listenAddress = source["listenAddress"];
+	        this.tempDir = source["tempDir"];
+	        this.tempTtlHours = source["tempTtlHours"];
+	        this.lastCleanupUtc = source["lastCleanupUtc"];
+	        this.lastDiscoveryTickUtc = source["lastDiscoveryTickUtc"];
+	        this.lastError = source["lastError"];
+	        this.currentSeedPlan = this.convertValues(source["currentSeedPlan"], P2PSeedPlan);
+	        this.metrics = this.convertValues(source["metrics"], P2PMetrics);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	export class P2PPeerView {
+	    agentId: string;
+	    host: string;
+	    address: string;
+	    port: number;
+	    source: string;
+	    lastSeenUtc: string;
+	    knownPeers: number;
+	    connectedVia: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new P2PPeerView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.agentId = source["agentId"];
+	        this.host = source["host"];
+	        this.address = source["address"];
+	        this.port = source["port"];
+	        this.source = source["source"];
+	        this.lastSeenUtc = source["lastSeenUtc"];
+	        this.knownPeers = source["knownPeers"];
+	        this.connectedVia = source["connectedVia"];
+	    }
+	}
+	
 	export class RealtimeStatus {
 	    natsConnected: boolean;
 	    signalrConnectedAgents: number;
@@ -465,6 +647,7 @@ export namespace main {
 	}
 	export class RuntimeFlags {
 	    debugMode: boolean;
+	    startMinimized: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new RuntimeFlags(source);
@@ -473,6 +656,7 @@ export namespace main {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.debugMode = source["debugMode"];
+	        this.startMinimized = source["startMinimized"];
 	    }
 	}
 	export class StatusOverview {

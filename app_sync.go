@@ -200,6 +200,9 @@ func (c *syncCoordinator) processTrigger(ctx context.Context, trigger syncTrigge
 			"updatedAt": time.Now().UTC().Format(time.RFC3339),
 		})
 	}
+	if c.app.p2pCoord != nil {
+		c.app.p2pCoord.OnResourceSynced(queued.Resource, variant, revision)
+	}
 	c.app.logs.append("[sync] recurso sincronizado: " + queued.Resource + " variant=" + variant + " source=" + queued.Source)
 }
 

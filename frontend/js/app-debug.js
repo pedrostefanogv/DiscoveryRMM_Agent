@@ -142,6 +142,19 @@ function updateDebugResponseLabel() {
 }
 
 function initDebug() {
+  var openP2PDebugWindowBtn = document.getElementById('openP2PDebugWindowBtn');
+  if (openP2PDebugWindowBtn) {
+    openP2PDebugWindowBtn.addEventListener('click', function () {
+      var features = 'popup=yes,width=1120,height=780,resizable=yes,scrollbars=yes';
+      var win = window.open('p2p-debug.html', 'discovery-p2p-debug', features);
+      if (!win) {
+        setDebugStatus('Falha ao abrir janela P2P. Verifique bloqueio de popup.', 'error');
+        return;
+      }
+      win.focus();
+    });
+  }
+
   if (agentStatusRefreshBtn) {
     agentStatusRefreshBtn.addEventListener('click', refreshAgentStatus);
   }
