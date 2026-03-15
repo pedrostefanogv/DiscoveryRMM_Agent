@@ -319,7 +319,11 @@ Function SaveAgentConfig
    FileWrite $0 "{$\r$\n"
    FileWrite $0 '  "serverUrl": "$ServerUrl",$\r$\n'
    FileWrite $0 '  "apiKey": "$ServerKey",$\r$\n'
-   FileWrite $0 '  "discoveryEnabled": $DiscoveryEnabled$\r$\n'
+   ${If} $DiscoveryEnabled == "1"
+      FileWrite $0 '  "discoveryEnabled": true$\r$\n'
+   ${Else}
+      FileWrite $0 '  "discoveryEnabled": false$\r$\n'
+   ${EndIf}
    FileWrite $0 "}$\r$\n"
    
    FileClose $0

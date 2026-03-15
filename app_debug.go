@@ -101,6 +101,83 @@ type InstallerConfig struct {
 	AgentID          string `json:"agentId,omitempty"`
 }
 
+func (c *InstallerConfig) UnmarshalJSON(data []byte) error {
+	type rawInstallerConfig struct {
+		ServerURL        string          `json:"serverUrl"`
+		APIKey           string          `json:"apiKey"`
+		DiscoveryEnabled json.RawMessage `json:"discoveryEnabled,omitempty"`
+		ApiScheme        string          `json:"apiScheme,omitempty"`
+		ApiServer        string          `json:"apiServer,omitempty"`
+		AuthToken        string          `json:"authToken,omitempty"`
+		AgentID          string          `json:"agentId,omitempty"`
+	}
+
+	var raw rawInstallerConfig
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+
+	discoveryEnabled, err := parseInstallerBool(raw.DiscoveryEnabled)
+	if err != nil {
+		return fmt.Errorf("discoveryEnabled invalido: %w", err)
+	}
+
+	*c = InstallerConfig{
+		ServerURL:        raw.ServerURL,
+		APIKey:           raw.APIKey,
+		DiscoveryEnabled: discoveryEnabled,
+		ApiScheme:        raw.ApiScheme,
+		ApiServer:        raw.ApiServer,
+		AuthToken:        raw.AuthToken,
+		AgentID:          raw.AgentID,
+	}
+	return nil
+}
+
+func parseInstallerBool(raw json.RawMessage) (*bool, error) {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return nil, nil
+	}
+
+	var asBool bool
+	if err := json.Unmarshal(raw, &asBool); err == nil {
+		return &asBool, nil
+	}
+
+	var asNumber int
+	if err := json.Unmarshal(raw, &asNumber); err == nil {
+		switch asNumber {
+		case 0:
+			value := false
+			return &value, nil
+		case 1:
+			value := true
+			return &value, nil
+		default:
+			return nil, fmt.Errorf("numero fora do intervalo esperado: %d", asNumber)
+		}
+	}
+
+	var asString string
+	if err := json.Unmarshal(raw, &asString); err == nil {
+		switch strings.TrimSpace(strings.ToLower(asString)) {
+		case "true", "1", "yes", "on":
+			value := true
+			return &value, nil
+		case "false", "0", "no", "off":
+			value := false
+			return &value, nil
+		case "":
+			return nil, nil
+		default:
+			return nil, fmt.Errorf("texto invalido: %q", asString)
+		}
+	}
+
+	return nil, fmt.Errorf("formato nao suportado")
+}
+
 // GetDebugConfig returns the current debug configuration.
 func (a *App) GetDebugConfig() DebugConfig {
 	a.debugMu.RLock()
