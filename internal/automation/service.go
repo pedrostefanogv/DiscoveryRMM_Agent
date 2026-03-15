@@ -30,6 +30,7 @@ type Service struct {
 	getConfig        func() RuntimeConfig
 	logger           func(string)
 	packageManager   PackageManager
+	packageAuthorize PackageAuthorizationFunc
 	state            State
 	currentAgent     string
 	cron             *cron.Cron
@@ -59,6 +60,12 @@ func (s *Service) SetPackageManager(manager PackageManager) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.packageManager = manager
+}
+
+func (s *Service) SetPackageAuthorization(authorize PackageAuthorizationFunc) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.packageAuthorize = authorize
 }
 
 func (s *Service) Run(ctx context.Context, onBeat func()) {
@@ -257,6 +264,7 @@ func (s *Service) executeTaskAsync(ctx context.Context, agentID string, task Aut
 	}
 	s.activeTasks[activeKey] = true
 	packages := s.packageManager
+	authorize := s.packageAuthorize
 	s.mu.Unlock()
 
 	go func() {
@@ -306,7 +314,7 @@ func (s *Service) executeTaskAsync(ctx context.Context, agentID string, task Aut
 			}
 		}
 
-		result := executeTask(ctx, packages, task)
+		result := executeTask(ctx, packages, authorize, task)
 		entry.FinishedAt = time.Now().UTC()
 		entry.Success = result.Success
 		entry.SuccessSet = true

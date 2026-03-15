@@ -230,6 +230,10 @@ export function InstallSharedPrinterJSON(arg1, arg2) {
   return window['go']['main']['App']['InstallSharedPrinterJSON'](arg1, arg2);
 }
 
+export function IsTrayReady() {
+  return window['go']['main']['App']['IsTrayReady']();
+}
+
 export function ListAgentTickets() {
   return window['go']['main']['App']['ListAgentTickets']();
 }

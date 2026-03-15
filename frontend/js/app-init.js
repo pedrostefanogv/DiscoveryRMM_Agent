@@ -12,17 +12,30 @@ function initAppBindings() {
     runAction(action, id);
   });
 
-  searchEl.addEventListener('input', debounce(applyFilter, 300));
-  reloadBtn.addEventListener('click', loadCatalog);
-  upgradeAllBtn.addEventListener('click', runUpgradeAll);
-  installedBtn.addEventListener('click', listInstalled);
+  if (searchEl) {
+    searchEl.addEventListener('input', debounce(applyFilter, 300));
+  }
+  if (reloadBtn) {
+    reloadBtn.addEventListener('click', loadCatalog);
+  }
+  if (upgradeAllBtn) {
+    upgradeAllBtn.addEventListener('click', runUpgradeAll);
+  }
+  if (installedBtn) {
+    installedBtn.addEventListener('click', listInstalled);
+  }
   if (tabStatusBtn) {
     tabStatusBtn.addEventListener('click', function () {
       setActiveTab('status');
       loadStatusOverview();
     });
   }
-  tabStoreBtn.addEventListener('click', function () { setActiveTab('store'); });
+  tabStoreBtn.addEventListener('click', function () {
+    setActiveTab('store');
+    if (typeof handleStoreTabActivated === 'function') {
+      handleStoreTabActivated();
+    }
+  });
   tabUpdatesBtn.addEventListener('click', function () { setActiveTab('updates'); });
   tabInventoryBtn.addEventListener('click', function () {
     setActiveTab('inventory');
@@ -124,6 +137,9 @@ function initAppBindings() {
 
   if (refreshLogsBtn) {
     refreshLogsBtn.addEventListener('click', loadLogs);
+  }
+  if (logsOriginFilterEl) {
+    logsOriginFilterEl.addEventListener('change', renderLogsOutput);
   }
   if (clearLogsBtn) {
     clearLogsBtn.addEventListener('click', clearLogs);

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"winget-store/internal/models"
 )
@@ -18,12 +19,14 @@ type inventoryCache struct {
 
 // AppStartupOptions controls transient runtime behavior for each execution.
 type AppStartupOptions struct {
-	DebugMode bool
+	DebugMode      bool
+	StartMinimized bool
 }
 
 // RuntimeFlags are exposed to the frontend to control runtime-only UI behavior.
 type RuntimeFlags struct {
-	DebugMode bool `json:"debugMode"`
+	DebugMode      bool `json:"debugMode"`
+	StartMinimized bool `json:"startMinimized"`
 }
 
 func (c *inventoryCache) get() (models.InventoryReport, bool) {
@@ -262,6 +265,77 @@ type agentInfoCache struct {
 	mu     sync.RWMutex
 	info   AgentInfo
 	loaded bool
+}
+
+// AppStoreInstallationType representa os tipos suportados no app-store do agent.
+type AppStoreInstallationType string
+
+const (
+	AppStoreInstallationWinget     AppStoreInstallationType = "Winget"
+	AppStoreInstallationChocolatey AppStoreInstallationType = "Chocolatey"
+)
+
+// AppStoreItem representa um item permitido retornado por /api/agent-auth/me/app-store.
+type AppStoreItem struct {
+	InstallationType    string            `json:"installationType"`
+	PackageID           string            `json:"packageId"`
+	Name                string            `json:"name"`
+	Description         string            `json:"description"`
+	IconURL             string            `json:"iconUrl"`
+	Publisher           string            `json:"publisher"`
+	Version             string            `json:"version"`
+	InstallCommand      string            `json:"installCommand"`
+	InstallerURLsByArch map[string]string `json:"installerUrlsByArch"`
+	AutoUpdateEnabled   bool              `json:"autoUpdateEnabled"`
+	SourceScope         string            `json:"sourceScope"`
+}
+
+// AppStoreResponse representa o envelope do endpoint /api/agent-auth/me/app-store.
+type AppStoreResponse struct {
+	InstallationType string         `json:"installationType"`
+	Count            int            `json:"count"`
+	Items            []AppStoreItem `json:"items"`
+}
+
+// AppStoreEffectivePolicy consolida os itens permitidos para todos os tipos suportados.
+type AppStoreEffectivePolicy struct {
+	Items     []AppStoreItem `json:"items"`
+	FetchedAt string         `json:"fetchedAt"`
+}
+
+type appStorePolicyCache struct {
+	mu       sync.RWMutex
+	policy   AppStoreEffectivePolicy
+	loadedAt time.Time
+	loaded   bool
+}
+
+func (c *appStorePolicyCache) get(maxAge time.Duration) (AppStoreEffectivePolicy, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if !c.loaded {
+		return AppStoreEffectivePolicy{}, false
+	}
+	if maxAge > 0 && time.Since(c.loadedAt) > maxAge {
+		return AppStoreEffectivePolicy{}, false
+	}
+	return c.policy, true
+}
+
+func (c *appStorePolicyCache) set(policy AppStoreEffectivePolicy) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.policy = policy
+	c.loadedAt = time.Now()
+	c.loaded = true
+}
+
+func (c *appStorePolicyCache) invalidate() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.policy = AppStoreEffectivePolicy{}
+	c.loadedAt = time.Time{}
+	c.loaded = false
 }
 
 func (c *agentInfoCache) get() (AgentInfo, bool) {

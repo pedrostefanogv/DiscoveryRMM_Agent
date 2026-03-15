@@ -1,31 +1,26 @@
 <main id="storeView" class="page-content" role="tabpanel" aria-labelledby="tabStore">
-    <div class="store-layout">
-      <aside class="sidepanel">
-        <h2>Filtros</h2>
-        <input id="searchInput" type="search" placeholder="Buscar por nome, id ou publisher" />
-
-        <h3>Categoria</h3>
-        <div class="category-filter-wrap">
-          <input id="categorySearch" type="search" class="category-search" placeholder="Pesquisar categoria..." autocomplete="off" />
-          <ul id="categoryList" class="category-list"></ul>
-        </div>
-
-        <button id="installedBtn" class="btn subtle full">Listar Instalados</button>
-        <pre id="installedOutput" class="terminal"></pre>
-      </aside>
-
-      <section class="content">
-        <div class="statusbar page-bar">
-          <span id="catalogInfo">Carregando...</span>
-        </div>
-
-        <div id="cards" class="cards"></div>
-
-        <div class="catalog-pagination">
-          <button id="catalogPrevBtn" class="btn subtle" disabled>Anterior</button>
-          <span id="catalogPageInfo" class="meta">Pagina 1</span>
-          <button id="catalogNextBtn" class="btn subtle" disabled>Proxima</button>
-        </div>
-      </section>
+  <section class="store-layout">
+    <div class="store-toolbar">
+      <input id="searchInput" type="search" placeholder="Pesquisar aplicativo por nome, id ou publisher" />
+      <div class="actions">
+        <button id="reloadBtn" class="btn subtle">Recarregar Catalogo</button>
+      </div>
     </div>
-  </main>
+
+    <div class="statusbar page-bar">
+      <span id="catalogInfo">Carregando...</span>
+    </div>
+
+    <section class="store-main">
+      <div class="store-cards-wrap">
+        <div id="cards" class="cards"></div>
+      </div>
+
+      <footer class="catalog-pagination">
+        <button id="catalogPrevBtn" class="btn subtle" disabled>Anterior</button>
+        <span id="catalogPageInfo" class="meta">Pagina 1</span>
+        <button id="catalogNextBtn" class="btn subtle" disabled>Proxima</button>
+      </footer>
+    </section>
+  </section>
+</main>

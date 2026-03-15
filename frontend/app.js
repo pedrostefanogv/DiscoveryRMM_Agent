@@ -48,13 +48,13 @@ const loggedUsersOutputEl = document.getElementById('loggedUsersOutput');
 const volumeOutputEl = document.getElementById('volumeOutput');
 const physicalDiskOutputEl = document.getElementById('physicalDiskOutput');
 const networkOutputEl = document.getElementById('networkOutput');
+const printerOutputEl = document.getElementById('printerOutput');
 const memoryOutputEl = document.getElementById('memoryOutput');
 const monitorOutputEl = document.getElementById('monitorOutput');
 const gpuOutputEl = document.getElementById('gpuOutput');
 const batteryOutputEl = document.getElementById('batteryOutput');
 const bitlockerOutputEl = document.getElementById('bitlockerOutput');
 const cpuInfoOutputEl = document.getElementById('cpuInfoOutput');
-const cpuidOutputEl = document.getElementById('cpuidOutput');
 const startupOutputEl = document.getElementById('startupOutput');
 const autoexecOutputEl = document.getElementById('autoexecOutput');
 const softwareSearchInputEl = document.getElementById('softwareSearchInput');
@@ -142,8 +142,6 @@ const catalogNextBtn = document.getElementById('catalogNextBtn');
 const catalogPageInfoEl = document.getElementById('catalogPageInfo');
 const sidebarEl = document.getElementById('sidebar');
 const sidebarToggleBtn = document.getElementById('sidebarToggle');
-const storeActionsEl = document.getElementById('storeActions');
-const updatesActionsEl = document.getElementById('updatesActions');
 const categorySearchEl = document.getElementById('categorySearch');
 const categoryListEl = document.getElementById('categoryList');
 const toastContainerEl = document.getElementById('toastContainer');
@@ -155,6 +153,7 @@ const updatesInfoEl = document.getElementById('updatesInfo');
 const updatesProgressEl = document.getElementById('updatesProgress');
 const updateSelectAllEl = document.getElementById('updateSelectAll');
 const logsOutputEl = document.getElementById('logsOutput');
+const logsOriginFilterEl = document.getElementById('logsOriginFilter');
 const refreshLogsBtn = document.getElementById('refreshLogsBtn');
 const clearLogsBtn = document.getElementById('clearLogsBtn');
 const tabDebugBtn = document.getElementById('tabDebug');
@@ -207,6 +206,7 @@ const softwarePageSize = 30;
 let inventoryLoadedOnce = false;
 let pendingUpdates = [];
 let logsAutoRefreshId = null;
+let logsLastLines = [];
 let knowledgeArticles = [];
 let selectedKnowledgeArticleID = '';
 let activeTab = 'status';
@@ -365,8 +365,6 @@ function setActiveTab(tab) {
     }
   });
 
-  if (storeActionsEl) storeActionsEl.classList.toggle('hidden', tab !== 'store');
-  if (updatesActionsEl) updatesActionsEl.classList.toggle('hidden', tab !== 'updates');
   if (pageTitleEl) pageTitleEl.textContent = titles[tab] || 'Discovery';
 
   if (tab === 'chat') {
@@ -440,17 +438,63 @@ async function loadLogs() {
   if (window.__discoveryUISuspended || document.hidden) return;
   try {
     var lines = await appApi().GetLogs();
-    logsOutputEl.textContent = (lines || []).join('\n') || '(sem logs)';
-    logsOutputEl.scrollTop = logsOutputEl.scrollHeight;
+    logsLastLines = lines || [];
+    renderLogsOutput();
   } catch (_) {
     // silent - auto-refresh shouldn't spam errors
   }
 }
 
+function normalizeLogSource(rawSource) {
+  var source = String(rawSource || '').toLowerCase().trim();
+  if (!source) return 'other';
+
+  if (source === 'agent-sync') return 'sync';
+  if (source.indexOf('sync') === 0) return 'sync';
+  if (source.indexOf('winget') === 0 || source.indexOf('install') === 0 || source.indexOf('upgrade') === 0 || source.indexOf('list') === 0) return 'updates';
+  if (source.indexOf('inventory') === 0 || source.indexOf('efficiency') === 0) return 'inventory';
+  if (source.indexOf('printer') === 0) return 'printer';
+  if (source.indexOf('debug') === 0 || source.indexOf('config') === 0 || source.indexOf('installer-bootstrap') === 0) return 'debug';
+  if (source.indexOf('startup') === 0 || source.indexOf('shutdown') === 0 || source.indexOf('tray') === 0) return 'startup';
+  if (source.indexOf('watchdog') === 0 || source.indexOf('stream-monitor') === 0 || source.indexOf('operation-monitor') === 0) return 'watchdog';
+  if (source.indexOf('agent') === 0) return 'agent';
+  if (source.indexOf('automation') === 0) return 'automation';
+  if (source.indexOf('support') === 0) return 'support';
+  if (source.indexOf('chat') === 0) return 'chat';
+
+  return 'other';
+}
+
+function detectLogOrigin(line) {
+  var text = String(line || '');
+  var match = text.match(/^\[([^\]]+)\]/);
+  if (!match || !match[1]) {
+    return 'other';
+  }
+
+  var token = match[1].trim().split(/\s+/)[0] || '';
+  return normalizeLogSource(token);
+}
+
+function renderLogsOutput() {
+  var selectedOrigin = logsOriginFilterEl ? String(logsOriginFilterEl.value || 'all') : 'all';
+  var lines = logsLastLines || [];
+
+  if (selectedOrigin !== 'all') {
+    lines = lines.filter(function (line) {
+      return detectLogOrigin(line) === selectedOrigin;
+    });
+  }
+
+  logsOutputEl.textContent = lines.join('\n') || (selectedOrigin === 'all' ? '(sem logs)' : '(sem logs para a origem selecionada)');
+  logsOutputEl.scrollTop = logsOutputEl.scrollHeight;
+}
+
 async function clearLogs() {
   try {
     await appApi().ClearLogs();
-    logsOutputEl.textContent = '(logs limpos)';
+    logsLastLines = [];
+    renderLogsOutput();
     showToast('Logs limpos', 'info');
   } catch (error) {
     showToast('Erro ao limpar logs: ' + String(error), 'error');

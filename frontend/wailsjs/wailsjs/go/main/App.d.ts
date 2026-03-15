@@ -119,6 +119,8 @@ export function InstallSharedPrinter(arg1:string,arg2:boolean):Promise<json.RawM
 
 export function InstallSharedPrinterJSON(arg1:string,arg2:boolean):Promise<json.RawMessage>;
 
+export function IsTrayReady():Promise<boolean>;
+
 export function ListAgentTickets():Promise<json.RawMessage>;
 
 export function ListInstalled():Promise<string>;

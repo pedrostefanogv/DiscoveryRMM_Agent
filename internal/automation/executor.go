@@ -16,23 +16,25 @@ const (
 	maxStoredOutputBytes    = 64 * 1024
 )
 
-func executeTask(ctx context.Context, packages PackageManager, task AutomationTask) ExecutionResult {
+type PackageAuthorizationFunc func(ctx context.Context, installationType AppInstallationType, packageID, operation string) error
+
+func executeTask(ctx context.Context, packages PackageManager, authorize PackageAuthorizationFunc, task AutomationTask) ExecutionResult {
 	if task.RequiresApproval {
 		return ExecutionResult{Success: false, ExitCode: 10, ExitCodeSet: true, ErrorMessage: "tarefa exige aprovacao e nao pode ser executada automaticamente"}
 	}
 
 	switch task.ActionType {
 	case ActionInstallPackage:
-		return executePackageAction(ctx, packages, task, "install")
+		return executePackageAction(ctx, packages, authorize, task, "install")
 	case ActionUpdatePackage:
-		return executePackageAction(ctx, packages, task, "upgrade")
+		return executePackageAction(ctx, packages, authorize, task, "upgrade")
 	case ActionRemovePackage:
-		return executePackageAction(ctx, packages, task, "uninstall")
+		return executePackageAction(ctx, packages, authorize, task, "uninstall")
 	case ActionUpdateOrInstallPackage:
-		if result := executePackageAction(ctx, packages, task, "upgrade"); result.Success {
+		if result := executePackageAction(ctx, packages, authorize, task, "upgrade"); result.Success {
 			return result
 		}
-		return executePackageAction(ctx, packages, task, "install")
+		return executePackageAction(ctx, packages, authorize, task, "install")
 	case ActionRunScript:
 		return executeScript(ctx, task)
 	case ActionCustomCommand:
@@ -42,7 +44,7 @@ func executeTask(ctx context.Context, packages PackageManager, task AutomationTa
 	}
 }
 
-func executePackageAction(ctx context.Context, packages PackageManager, task AutomationTask, operation string) ExecutionResult {
+func executePackageAction(ctx context.Context, packages PackageManager, authorize PackageAuthorizationFunc, task AutomationTask, operation string) ExecutionResult {
 	packageID := strings.TrimSpace(task.PackageID)
 	if packageID == "" {
 		return ExecutionResult{Success: false, ExitCode: 2, ExitCodeSet: true, ErrorMessage: "packageId obrigatorio para acao de pacote"}
@@ -51,6 +53,12 @@ func executePackageAction(ctx context.Context, packages PackageManager, task Aut
 	installationType := task.InstallationType
 	if installationType == "" {
 		installationType = InstallationWinget
+	}
+
+	if authorize != nil {
+		if err := authorize(ctx, installationType, packageID, operation); err != nil {
+			return ExecutionResult{Success: false, ExitCode: 13, ExitCodeSet: true, ErrorMessage: err.Error()}
+		}
 	}
 
 	switch installationType {

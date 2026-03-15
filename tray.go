@@ -2,6 +2,8 @@ package main
 
 import (
 	_ "embed"
+	"log"
+	"runtime/debug"
 	"time"
 
 	"github.com/energye/systray"
@@ -16,6 +18,8 @@ var trayIconICO []byte
 // startTray initialises the system-tray icon in a background goroutine.
 // It must be called after the Wails context is stored in a.ctx.
 func (a *App) startTray() {
+	a.trayReady.Store(false)
+
 	watchdog.SafeGo("tray-main", func() {
 		// Start periodic heartbeat for tray
 		if a.watchdogSvc != nil {
@@ -35,26 +39,52 @@ func (a *App) startTray() {
 			}
 
 			systray.SetOnClick(func(menu systray.IMenu) {
-				wailsRuntime.WindowShow(a.ctx)
+				a.safeTrayAction("tray-click", func() {
+					wailsRuntime.WindowUnminimise(a.ctx)
+					wailsRuntime.WindowShow(a.ctx)
+				})
 			})
 			systray.SetOnDClick(func(menu systray.IMenu) {
-				wailsRuntime.WindowShow(a.ctx)
+				a.safeTrayAction("tray-double-click", func() {
+					wailsRuntime.WindowUnminimise(a.ctx)
+					wailsRuntime.WindowShow(a.ctx)
+				})
 			})
 
 			mShow := systray.AddMenuItem("Abrir", "Mostrar a janela")
 			mShow.Click(func() {
-				wailsRuntime.WindowShow(a.ctx)
+				a.safeTrayAction("tray-menu-open", func() {
+					wailsRuntime.WindowUnminimise(a.ctx)
+					wailsRuntime.WindowShow(a.ctx)
+				})
 			})
 
 			systray.AddSeparator()
 
 			mQuit := systray.AddMenuItem("Sair", "Encerrar o aplicativo")
 			mQuit.Click(func() {
-				a.RequestAppClose()
-				wailsRuntime.Quit(a.ctx)
+				a.safeTrayAction("tray-menu-quit", func() {
+					a.RequestAppClose()
+					go wailsRuntime.Quit(a.ctx)
+				})
 			})
-		}, nil)
+
+			a.trayReady.Store(true)
+			log.Println("[tray] pronto: icone e menu inicializados")
+		}, func() {
+			a.trayReady.Store(false)
+			log.Println("[tray] encerrado")
+		})
 	})
+}
+
+func (a *App) safeTrayAction(name string, fn func()) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[tray] PANIC em callback '%s': %v\n%s", name, r, debug.Stack())
+		}
+	}()
+	fn()
 }
 
 func (a *App) updateTrayIdleState(idle bool, supported bool) {

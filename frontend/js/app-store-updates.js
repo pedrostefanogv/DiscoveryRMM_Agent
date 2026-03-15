@@ -1,5 +1,40 @@
 "use strict";
 
+var storeCatalogDirty = false;
+
+function handleStoreTabActivated() {
+  if (!storeCatalogDirty) return;
+  storeCatalogDirty = false;
+  loadCatalog();
+}
+
+function onStoreCatalogUpdated(data) {
+  storeCatalogDirty = true;
+
+  if (activeTab === 'store' && !window.__discoveryUISuspended && !document.hidden) {
+    storeCatalogDirty = false;
+    loadCatalog();
+    showToast('Loja atualizada por sync' + (data && data.variant ? ' (' + data.variant + ')' : ''), 'info');
+    return;
+  }
+
+  showToast('Novos dados da loja recebidos via sync', 'info');
+}
+
+(function registerStoreSyncEvents() {
+  function doRegister() {
+    if (window.runtime && window.runtime.EventsOn) {
+      window.runtime.EventsOn('store:catalog-updated', onStoreCatalogUpdated);
+    }
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', doRegister);
+  } else {
+    setTimeout(doRegister, 200);
+  }
+})();
+
 // ---------------------------------------------------------------------------
 // Catalog card rendering with pagination
 // ---------------------------------------------------------------------------
@@ -27,9 +62,10 @@ function renderCards() {
     }
 
     var action = getContextAction(pkg.id);
-    var actionButton = '<button class="btn primary" data-action="' + escapeHtmlAttr(action.action) + '" data-id="' + escapeHtmlAttr(pkg.id) + '">' + escapeHtml(action.label) + '</button>';
+    var actionClass = action.action === 'install' ? 'btn primary' : 'btn danger';
+    var actionButton = '<button class="' + actionClass + '" data-action="' + escapeHtmlAttr(action.action) + '" data-id="' + escapeHtmlAttr(pkg.id) + '">' + escapeHtml(action.label) + '</button>';
 
-    return '<article class="card">' +
+    return '<article class="card store-card">' +
       iconHtml +
       '<h3>' + escapeHtml(pkg.name || pkg.id) + '</h3>' +
       '<div class="meta">' + escapeHtml(publisher) + ' | ' + escapeHtml(version) + '</div>' +
@@ -37,8 +73,6 @@ function renderCards() {
       '<p class="desc">' + escapeHtml(description).slice(0, 180) + '</p>' +
       '<div class="card-actions">' +
         actionButton +
-        '<button class="btn danger" data-action="uninstall" data-id="' + escapeHtmlAttr(pkg.id) + '">Remover</button>' +
-        '<button class="btn" data-action="upgrade" data-id="' + escapeHtmlAttr(pkg.id) + '">Atualizar</button>' +
       '</div>' +
     '</article>';
   }).join('');
@@ -54,12 +88,10 @@ function updateCatalogPagination() {
 }
 
 function applyFilter() {
-  var q = searchEl.value.trim().toLowerCase();
-  var cat = state.selectedCategory;
+  var q = searchEl ? searchEl.value.trim().toLowerCase() : '';
   catalogPage = 1;
 
   state.filtered = state.allPackages.filter(function (pkg) {
-    if (cat && String(pkg.category || '').toLowerCase() !== cat.toLowerCase()) return false;
     if (!q) return true;
     return [pkg.name, pkg.id, pkg.publisher, pkg.category]
       .filter(Boolean)
@@ -77,13 +109,12 @@ async function loadCatalog() {
     await loadPackageActions(api);
     state.filtered = state.allPackages;
     catalogPage = 1;
-    infoEl.textContent = 'Pacotes: ' + (catalog.count || state.allPackages.length) + ' | Com icone: ' + (catalog.packagesWithIcon || 0);
-    populateCategories();
+    infoEl.textContent = 'Apps permitidos: ' + (catalog.count || state.allPackages.length) + ' | Com icone: ' + (catalog.packagesWithIcon || 0);
     applyFilter();
     showFeedback('Catalogo carregado.');
   } catch (error) {
     showFeedback(String(error), true);
-    infoEl.textContent = 'Falha ao carregar catalogo';
+    infoEl.textContent = 'Falha ao carregar apps permitidos';
   }
 }
 
@@ -102,8 +133,7 @@ async function loadPackageActions(api) {
 function getContextAction(packageId) {
   var key = String(packageId || '').toLowerCase();
   var action = state.packageActions[key];
-  if (action === 'upgrade') return { action: 'upgrade', label: 'Atualizar' };
-  if (action === 'uninstall') return { action: 'uninstall', label: 'Remover' };
+  if (action === 'upgrade' || action === 'uninstall') return { action: 'uninstall', label: 'Remover' };
   return { action: 'install', label: 'Instalar' };
 }
 
@@ -145,7 +175,9 @@ async function runAction(action, id) {
     else if (action === 'upgrade') output = await appApi().Upgrade(id);
 
     showFeedback(action + ' concluido para ' + id);
-    installedOutputEl.textContent = output || '(sem saida)';
+    if (installedOutputEl) {
+      installedOutputEl.textContent = output || '(sem saida)';
+    }
   } catch (error) {
     showFeedback(String(error), true);
   }
@@ -156,7 +188,9 @@ async function runUpgradeAll() {
     showFeedback('Atualizando todos os apps...');
     var output = await appApi().UpgradeAll();
     showFeedback('Atualizacao geral concluida.');
-    installedOutputEl.textContent = output || '(sem saida)';
+    if (installedOutputEl) {
+      installedOutputEl.textContent = output || '(sem saida)';
+    }
   } catch (error) {
     showFeedback(String(error), true);
   }
@@ -166,7 +200,9 @@ async function listInstalled() {
   try {
     showFeedback('Consultando apps instalados...');
     var output = await appApi().ListInstalled();
-    installedOutputEl.textContent = output || '(sem saida)';
+    if (installedOutputEl) {
+      installedOutputEl.textContent = output || '(sem saida)';
+    }
     showFeedback('Lista de instalados atualizada.');
   } catch (error) {
     showFeedback(String(error), true);

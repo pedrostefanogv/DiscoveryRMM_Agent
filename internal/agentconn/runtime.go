@@ -32,6 +32,7 @@ const (
 	natsCommandTpl     = "agent.%s.command"
 	natsHeartbeatTpl   = "agent.%s.heartbeat"
 	natsResultTpl      = "agent.%s.result"
+	natsSyncPingTpl    = "agent.%s.sync.ping"
 	natsDashboardTopic = "dashboard.events"
 )
 
@@ -61,6 +62,21 @@ type natsDashboardEvent struct {
 	Timestamp string `json:"timestamp"`
 }
 
+// SyncPing representa um evento de invalidação de sync recebido pelo agent.
+type SyncPing struct {
+	EventID          string `json:"eventId"`
+	AgentID          string `json:"agentId"`
+	EventType        string `json:"eventType"`
+	Resource         string `json:"resource"`
+	ScopeType        string `json:"scopeType"`
+	ScopeID          string `json:"scopeId"`
+	InstallationType string `json:"installationType"`
+	Revision         string `json:"revision"`
+	Reason           string `json:"reason"`
+	ChangedAtUTC     string `json:"changedAtUtc"`
+	CorrelationID    string `json:"correlationId"`
+}
+
 // Config is the backend communication configuration sourced from Debug settings.
 type Config struct {
 	Scheme    string
@@ -73,6 +89,7 @@ type Config struct {
 type Options struct {
 	LoadConfig func() Config
 	Logf       func(format string, args ...any)
+	OnSyncPing func(SyncPing)
 }
 
 // Status is a point-in-time snapshot of the agent connection state.
@@ -298,6 +315,7 @@ func (r *Runtime) runNATSSession(ctx context.Context, cfg Config) error {
 	cmdSubject := fmt.Sprintf(natsCommandTpl, cfg.AgentID)
 	hbSubject := fmt.Sprintf(natsHeartbeatTpl, cfg.AgentID)
 	resultSubject := fmt.Sprintf(natsResultTpl, cfg.AgentID)
+	syncPingSubject := fmt.Sprintf(natsSyncPingTpl, cfg.AgentID)
 
 	if err := publishJSON(nc, hbSubject, natsHeartbeatEnvelope{IPAddress: ipAddr, AgentVersion: "discovery"}); err != nil {
 		r.logf("falha ao publicar heartbeat inicial: %v", err)
@@ -313,7 +331,7 @@ func (r *Runtime) runNATSSession(ctx context.Context, cfg Config) error {
 	})
 
 	r.setStatusConnected(cfg.AgentID, natsURL)
-	r.logf("agente conectado ao NATS (subject=%s)", cmdSubject)
+	r.logf("agente conectado ao NATS (subject=%s, syncSubject=%s)", cmdSubject, syncPingSubject)
 
 	_, err = nc.Subscribe(cmdSubject, func(msg *nats.Msg) {
 		var env natsCommandEnvelope
@@ -359,6 +377,18 @@ func (r *Runtime) runNATSSession(ctx context.Context, cfg Config) error {
 	})
 	if err != nil {
 		return fmt.Errorf("falha ao inscrever no subject de comando: %w", err)
+	}
+
+	_, err = nc.Subscribe(syncPingSubject, func(msg *nats.Msg) {
+		var ping SyncPing
+		if err := json.Unmarshal(msg.Data, &ping); err != nil {
+			r.logf("mensagem de sync ping NATS invalida: %v", err)
+			return
+		}
+		r.emitSyncPing(ping)
+	})
+	if err != nil {
+		return fmt.Errorf("falha ao inscrever no subject de sync ping: %w", err)
 	}
 
 	heartbeatTicker := time.NewTicker(heartbeatEvery)
@@ -545,15 +575,24 @@ func (r *Runtime) handleSignalRPayload(ctx context.Context, conn *websocket.Conn
 		switch t {
 		case 1:
 			target, _ := msg["target"].(string)
-			if !strings.EqualFold(target, "ExecuteCommand") {
+			if strings.EqualFold(target, "ExecuteCommand") {
+				cmdID, cmdType, cmdPayload := parseExecuteArgs(msg["arguments"])
+				if cmdID == "" {
+					r.logf("ExecuteCommand ignorado: cmdId vazio")
+					continue
+				}
+				go r.executeAndRespond(ctx, conn, cmdID, cmdType, cmdPayload)
 				continue
 			}
-			cmdID, cmdType, cmdPayload := parseExecuteArgs(msg["arguments"])
-			if cmdID == "" {
-				r.logf("ExecuteCommand ignorado: cmdId vazio")
+			if strings.EqualFold(target, "SyncPing") {
+				ping, ok := parseSyncPingArgs(msg["arguments"])
+				if !ok {
+					r.logf("SyncPing ignorado: payload invalido")
+					continue
+				}
+				r.emitSyncPing(ping)
 				continue
 			}
-			go r.executeAndRespond(ctx, conn, cmdID, cmdType, cmdPayload)
 		case 6:
 			// Ping frame from server.
 			continue
@@ -676,6 +715,35 @@ func parseExecuteArgs(raw any) (cmdID, cmdType string, payload any) {
 	return "", "", nil
 }
 
+func parseSyncPingArgs(raw any) (SyncPing, bool) {
+	arr, ok := raw.([]any)
+	if !ok || len(arr) == 0 {
+		return SyncPing{}, false
+	}
+	first, ok := arr[0].(map[string]any)
+	if !ok {
+		return SyncPing{}, false
+	}
+
+	ping := SyncPing{
+		EventID:          strings.TrimSpace(toString(first["eventId"])),
+		AgentID:          strings.TrimSpace(toString(first["agentId"])),
+		EventType:        strings.TrimSpace(toString(first["eventType"])),
+		Resource:         strings.TrimSpace(toString(first["resource"])),
+		ScopeType:        strings.TrimSpace(toString(first["scopeType"])),
+		ScopeID:          strings.TrimSpace(toString(first["scopeId"])),
+		InstallationType: strings.TrimSpace(toString(first["installationType"])),
+		Revision:         strings.TrimSpace(toString(first["revision"])),
+		Reason:           strings.TrimSpace(toString(first["reason"])),
+		ChangedAtUTC:     strings.TrimSpace(toString(first["changedAtUtc"])),
+		CorrelationID:    strings.TrimSpace(toString(first["correlationId"])),
+	}
+	if ping.Resource == "" {
+		return SyncPing{}, false
+	}
+	return ping, true
+}
+
 func splitSignalRRecords(data []byte) []string {
 	parts := strings.Split(string(data), string([]byte{0x1e}))
 	out := make([]string, 0, len(parts))
@@ -772,5 +840,15 @@ func (r *Runtime) waitOrStop(ctx context.Context, d time.Duration) {
 func (r *Runtime) logf(format string, args ...any) {
 	if r.opts.Logf != nil {
 		r.opts.Logf(format, args...)
+	}
+}
+
+func (r *Runtime) emitSyncPing(ping SyncPing) {
+	if strings.TrimSpace(ping.Resource) == "" {
+		return
+	}
+	r.logf("sync ping recebido: resource=%s installationType=%s revision=%s eventId=%s", ping.Resource, ping.InstallationType, ping.Revision, ping.EventID)
+	if r.opts.OnSyncPing != nil {
+		r.opts.OnSyncPing(ping)
 	}
 }

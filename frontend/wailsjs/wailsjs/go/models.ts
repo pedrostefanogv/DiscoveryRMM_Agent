@@ -938,6 +938,34 @@ export namespace models {
 	        this.source = source["source"];
 	    }
 	}
+	export class PrinterInfo {
+	    name: string;
+	    driverName: string;
+	    portName: string;
+	    printerStatus: string;
+	    isDefault: boolean;
+	    isNetworkPrinter: boolean;
+	    shared: boolean;
+	    shareName: string;
+	    location: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new PrinterInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.driverName = source["driverName"];
+	        this.portName = source["portName"];
+	        this.printerStatus = source["printerStatus"];
+	        this.isDefault = source["isDefault"];
+	        this.isNetworkPrinter = source["isNetworkPrinter"];
+	        this.shared = source["shared"];
+	        this.shareName = source["shareName"];
+	        this.location = source["location"];
+	    }
+	}
 	export class NetworkInfo {
 	    interface: string;
 	    friendlyName: string;
@@ -1113,6 +1141,7 @@ export namespace models {
 	    physicalDisks: DiskInfo[];
 	    disks: DiskInfo[];
 	    networks: NetworkInfo[];
+	    printers: PrinterInfo[];
 	    software: SoftwareItem[];
 	    startupItems: StartupItem[];
 	    autoexec: AutoexecItem[];
@@ -1139,6 +1168,7 @@ export namespace models {
 	        this.physicalDisks = this.convertValues(source["physicalDisks"], DiskInfo);
 	        this.disks = this.convertValues(source["disks"], DiskInfo);
 	        this.networks = this.convertValues(source["networks"], NetworkInfo);
+	        this.printers = this.convertValues(source["printers"], PrinterInfo);
 	        this.software = this.convertValues(source["software"], SoftwareItem);
 	        this.startupItems = this.convertValues(source["startupItems"], StartupItem);
 	        this.autoexec = this.convertValues(source["autoexec"], AutoexecItem);
@@ -1183,6 +1213,7 @@ export namespace models {
 	        this.suggestedPackageID = source["suggestedPackageID"];
 	    }
 	}
+	
 	
 	
 	export class UpgradeItem {

@@ -5,6 +5,7 @@ import (
 	"embed"
 	"log"
 	"os"
+	"strings"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -24,9 +25,10 @@ var Version = "dev"
 
 func main() {
 	startupDebugMode := detectStartupDebugMode()
+	startupMinimized := hasStartupArg("--startup-minimized")
 
 	// If started with --mcp, run as a stdio MCP server (for Claude Desktop, etc).
-	if len(os.Args) > 1 && os.Args[1] == "--mcp" {
+	if hasStartupArg("--mcp") {
 		runMCPServer()
 		return
 	}
@@ -34,8 +36,11 @@ func main() {
 	if startupDebugMode {
 		log.Println("[startup] Shift/Ctrl detectado: inicializando em modo debug (transitorio)")
 	}
+	if startupMinimized {
+		log.Println("[startup] execucao automatica detectada: iniciar minimizado no tray")
+	}
 
-	app := NewApp(AppStartupOptions{DebugMode: startupDebugMode})
+	app := NewApp(AppStartupOptions{DebugMode: startupDebugMode, StartMinimized: startupMinimized})
 
 	singleInstance := &options.SingleInstanceLock{
 		UniqueId: "com.discovery.winget-store",
@@ -69,6 +74,10 @@ func main() {
 			if !app.ShouldHideOnClose() {
 				return false
 			}
+			if !app.IsTrayReady() {
+				log.Println("[tray] close solicitado antes do tray ficar pronto; encerrando app para evitar estado sem menu")
+				return false
+			}
 			// Limpar caches em memória antes de ir para o tray
 			app.clearMemoryCaches()
 			wailsRuntime.WindowHide(ctx)
@@ -82,6 +91,15 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+}
+
+func hasStartupArg(arg string) bool {
+	for _, value := range os.Args[1:] {
+		if strings.EqualFold(strings.TrimSpace(value), arg) {
+			return true
+		}
+	}
+	return false
 }
 
 // runMCPServer starts the app in headless MCP server mode (JSON-RPC over stdio).

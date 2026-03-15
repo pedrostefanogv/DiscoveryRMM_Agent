@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/energye/systray"
@@ -78,12 +79,14 @@ type App struct {
 	exportCfg exportConfig
 	logs      logBuffer
 
-	mcpRegistry   *mcp.Registry
-	chatSvc       *ai.Service
-	automationSvc *automation.Service
-	agentConn     *agentconn.Runtime
-	agentInfo     agentInfoCache
-	watchdogSvc   *watchdog.Watchdog
+	mcpRegistry    *mcp.Registry
+	chatSvc        *ai.Service
+	automationSvc  *automation.Service
+	agentConn      *agentconn.Runtime
+	syncCoord      *syncCoordinator
+	agentInfo      agentInfoCache
+	appStorePolicy appStorePolicyCache
+	watchdogSvc    *watchdog.Watchdog
 
 	debugMu     sync.RWMutex
 	debugConfig DebugConfig
@@ -98,6 +101,7 @@ type App struct {
 	idleCapable bool
 	closeMu     sync.RWMutex
 	allowClose  bool
+	trayReady   atomic.Bool
 }
 
 func NewApp(opts AppStartupOptions) *App {
@@ -138,6 +142,9 @@ func NewApp(opts AppStartupOptions) *App {
 		a.logs.append("[automation] " + line)
 	})
 	a.automationSvc.SetPackageManager(a.appsSvc)
+	a.automationSvc.SetPackageAuthorization(func(ctx context.Context, installationType automation.AppInstallationType, packageID, operation string) error {
+		return a.authorizeAutomationPackage(ctx, string(installationType), packageID, operation)
+	})
 	inventoryProvider.SetProgressCallback(func() {
 		a.pulseInventoryHeartbeat()
 	})
@@ -154,7 +161,13 @@ func NewApp(opts AppStartupOptions) *App {
 		Logf: func(format string, args ...any) {
 			a.logs.append("[agent] " + fmt.Sprintf(format, args...))
 		},
+		OnSyncPing: func(ping agentconn.SyncPing) {
+			if a.syncCoord != nil {
+				a.syncCoord.HandlePing(ping)
+			}
+		},
 	})
+	a.syncCoord = newSyncCoordinator(a)
 	a.chatSvc.SetLogger(func(line string) {
 		a.logs.append("[chat] " + line)
 	})
@@ -196,6 +209,9 @@ func (a *App) startup(ctx context.Context) {
 	log.Println("[startup] watchdog iniciado")
 
 	a.startTray()
+	if a.runtimeFlags.StartMinimized {
+		a.hideWindowOnStartup()
+	}
 	a.applyIdleMode(true)
 
 	// Inicializar database SQLite
@@ -264,6 +280,44 @@ func (a *App) startup(ctx context.Context) {
 			a.watchdogSvc.Heartbeat(watchdog.ComponentAutomation)
 		})
 	})
+
+	a.startupWg.Add(1)
+	watchdog.SafeGoWithContext(ctx, "sync-coordinator", a.watchdogSvc, watchdog.ComponentAgent, func(ctx context.Context) {
+		defer a.startupWg.Done()
+		if a.syncCoord == nil {
+			return
+		}
+		a.syncCoord.Run(ctx)
+	})
+}
+
+// hideWindowOnStartup keeps the app running in tray when launched by Windows startup.
+func (a *App) hideWindowOnStartup() {
+	watchdog.SafeGoWithContext(a.ctx, "startup-hide-window", a.watchdogSvc, watchdog.ComponentTray, func(ctx context.Context) {
+		ticker := time.NewTicker(200 * time.Millisecond)
+		defer ticker.Stop()
+
+		timeout := time.NewTimer(12 * time.Second)
+		defer timeout.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-timeout.C:
+				log.Println("[startup] aviso: timeout aguardando tray para iniciar minimizado")
+				return
+			case <-ticker.C:
+				if !a.IsTrayReady() {
+					continue
+				}
+				wailsRuntime.WindowMinimise(a.ctx)
+				wailsRuntime.WindowHide(a.ctx)
+				log.Println("[startup] janela iniciada minimizada no tray")
+				return
+			}
+		}
+	})
 }
 
 // shutdown is called when the application is closing; it cancels background
@@ -306,12 +360,18 @@ func (a *App) ShouldHideOnClose() bool {
 	return !a.allowClose
 }
 
+// IsTrayReady reports whether tray menu/actions are fully initialized.
+func (a *App) IsTrayReady() bool {
+	return a.trayReady.Load()
+}
+
 // clearMemoryCaches limpa caches em memória para economizar recursos quando
 // o app está minimizado no tray. Os dados persistem no SQLite e serão
 // recarregados quando necessário.
 func (a *App) clearMemoryCaches() {
 	// Limpar cache de AgentInfo em memória (mantém no SQLite)
 	a.agentInfo.invalidate()
+	a.appStorePolicy.invalidate()
 
 	// Limpar cache de inventário em memória
 	a.invCache.mu.Lock()

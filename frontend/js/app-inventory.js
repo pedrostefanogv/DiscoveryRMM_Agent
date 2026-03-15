@@ -68,6 +68,29 @@ function renderNetworks(networks) {
   }, { maxItems: 100 });
 }
 
+function renderPrinters(items) {
+  renderCardList(printerOutputEl, items, 'Nenhuma impressora encontrada.', function (p) {
+    var summary = [
+      'Driver: ' + escapeHtml(p.driverName || '-'),
+      'Porta: ' + escapeHtml(p.portName || '-'),
+      'Status: ' + escapeHtml(p.status || '-'),
+      'Padrao: ' + (p.defaultPrinter ? 'sim' : 'nao')
+    ].join(' | ');
+
+    return '<div class="network-card">' +
+      '<strong>' + escapeHtml(p.name || 'Impressora') + '</strong>' +
+      '<span class="meta printer-card-summary">' + summary + '</span>' +
+      '<details class="printer-card-details">' +
+        '<summary>Detalhes</summary>' +
+        '<span class="meta">Compartilhada: ' + (p.shared ? 'sim' : 'nao') + ' | Share: ' + escapeHtml(p.shareName || '-') + '</span>' +
+        '<span class="meta">Rede: ' + (p.networkPrinter ? 'sim' : 'nao') + ' | Local: ' + (p.localPrinter ? 'sim' : 'nao') + '</span>' +
+        '<span class="meta">Trabalhos: ' + escapeHtml(p.jobCount != null ? p.jobCount : '-') + '</span>' +
+        '<span class="meta">KeepPrintedJobs: ' + (p.keepPrintedJobs ? 'sim' : 'nao') + ' | Published: ' + (p.published ? 'sim' : 'nao') + '</span>' +
+      '</details>' +
+    '</div>';
+  });
+}
+
 function renderStartupItems(items) {
   renderCardList(startupOutputEl, items, 'Nenhum startup item encontrado.', function (s) {
     return '<div class="network-card">' +
@@ -196,17 +219,6 @@ function renderCPUInfo(items) {
   });
 }
 
-function renderCPUFeatures(items) {
-  renderCardList(cpuidOutputEl, items, 'Nenhuma feature CPUID encontrada.', function (f) {
-    return '<div class="network-card">' +
-      '<strong>' + escapeHtml(f.feature || '-') + '</strong>' +
-      '<span class="meta">Valor: ' + escapeHtml(f.value || '-') + '</span>' +
-      '<span class="meta">Register/Bit: ' + escapeHtml(f.outputRegister || '-') + ' / ' + escapeHtml(f.outputBit != null ? f.outputBit : '-') + '</span>' +
-      '<span class="meta">Input EAX: ' + escapeHtml(f.inputEAX || '-') + '</span>' +
-    '</div>';
-  }, { maxItems: 200 });
-}
-
 function setInventoryLoading(isLoading) {
   if (inventoryProgressEl) {
     inventoryProgressEl.classList.toggle('hidden', !isLoading);
@@ -321,13 +333,13 @@ async function loadInventory(forceRefresh) {
     renderLoggedUsers(report.loggedInUsers || []);
     renderVolumes(report.volumes || report.disks || []);
     renderNetworks(report.networks || []);
+    renderPrinters(report.printers || []);
     renderMemoryModules(report.memoryModules || []);
     renderMonitors(report.monitors || []);
     renderGPUs(report.gpus || []);
     renderBattery(report.battery || []);
     renderBitLocker(report.bitLocker || []);
     renderCPUInfo(report.cpuInfo || []);
-    renderCPUFeatures(report.cpuFeatures || []);
     renderStartupItems(report.startupItems || []);
     renderAutoexec(report.autoexec || []);
 

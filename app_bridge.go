@@ -20,7 +20,7 @@ func (a *App) GetInventoryJSON() (json.RawMessage, error) {
 }
 
 func (a *App) SearchCatalog(query string) (json.RawMessage, error) {
-	catalog, err := a.catalogSvc.GetCatalog(a.ctx)
+	catalog, err := a.GetCatalog()
 	if err != nil {
 		return nil, err
 	}

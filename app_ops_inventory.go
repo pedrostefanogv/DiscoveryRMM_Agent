@@ -2,22 +2,40 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"os/exec"
+	"strings"
 	"time"
 
 	"winget-store/internal/inventory"
 	"winget-store/internal/models"
+	"winget-store/internal/processutil"
 	"winget-store/internal/watchdog"
 )
 
 func (a *App) GetCatalog() (models.Catalog, error) {
-	return a.catalogSvc.GetCatalog(a.ctx)
+	return a.getCatalogFromAppStore(a.ctx)
 }
 
 func (a *App) Install(id string) (string, error) {
 	done := a.beginActivity("instalacao")
 	defer done()
 	a.logs.append("[install " + id + "] " + time.Now().Format("15:04:05"))
-	out, err := a.appsSvc.Install(a.ctx, id)
+	allowed, err := a.resolveAllowedPackage(a.ctx, id)
+	if err != nil {
+		a.logs.append("[install blocked] " + err.Error())
+		return "", err
+	}
+
+	var out string
+	switch normalizeAppStoreInstallationType(allowed.InstallationType) {
+	case string(AppStoreInstallationWinget):
+		out, err = a.appsSvc.Install(a.ctx, id)
+	case string(AppStoreInstallationChocolatey):
+		out, err = a.runChocolatey(a.ctx, "install", id)
+	default:
+		err = fmt.Errorf("installationType %q não suportado", allowed.InstallationType)
+	}
 	a.logs.append(out)
 	return out, err
 }
@@ -35,7 +53,21 @@ func (a *App) Upgrade(id string) (string, error) {
 	done := a.beginActivity("atualizacao")
 	defer done()
 	a.logs.append("[upgrade " + id + "] " + time.Now().Format("15:04:05"))
-	out, err := a.appsSvc.Upgrade(a.ctx, id)
+	allowed, err := a.resolveAllowedPackage(a.ctx, id)
+	if err != nil {
+		a.logs.append("[upgrade blocked] " + err.Error())
+		return "", err
+	}
+
+	var out string
+	switch normalizeAppStoreInstallationType(allowed.InstallationType) {
+	case string(AppStoreInstallationWinget):
+		out, err = a.appsSvc.Upgrade(a.ctx, id)
+	case string(AppStoreInstallationChocolatey):
+		out, err = a.runChocolatey(a.ctx, "upgrade", id)
+	default:
+		err = fmt.Errorf("installationType %q não suportado", allowed.InstallationType)
+	}
 	a.logs.append(out)
 	return out, err
 }
@@ -114,13 +146,60 @@ func (a *App) InstallOsquery() (string, error) {
 		}
 		return "osquery ja instalado", nil
 	}
+	allowed, err := a.resolveAllowedPackage(a.ctx, status.SuggestedPackageID)
+	if err != nil {
+		return "", err
+	}
 
-	out, err := a.appsSvc.Install(a.ctx, status.SuggestedPackageID)
+	var out string
+	switch normalizeAppStoreInstallationType(allowed.InstallationType) {
+	case string(AppStoreInstallationWinget):
+		out, err = a.appsSvc.Install(a.ctx, status.SuggestedPackageID)
+	case string(AppStoreInstallationChocolatey):
+		out, err = a.runChocolatey(a.ctx, "install", status.SuggestedPackageID)
+	default:
+		err = fmt.Errorf("installationType %q não suportado", allowed.InstallationType)
+	}
 	if err != nil {
 		return out, err
 	}
 	inventory.InvalidateOsqueryBinaryCache()
 	return out, nil
+}
+
+func (a *App) runChocolatey(ctx context.Context, operation, packageID string) (string, error) {
+	if _, err := exec.LookPath("choco"); err != nil {
+		return "", fmt.Errorf("Chocolatey não encontrado no host")
+	}
+
+	packageID = strings.TrimSpace(packageID)
+	if packageID == "" {
+		return "", fmt.Errorf("id do pacote é obrigatório")
+	}
+
+	args := []string{operation, packageID, "-y", "--no-progress"}
+	if operation == "install" {
+		args = []string{"install", packageID, "-y", "--no-progress"}
+	}
+	if operation == "upgrade" {
+		args = []string{"upgrade", packageID, "-y", "--no-progress"}
+	}
+
+	runCtx := ctx
+	if runCtx == nil {
+		runCtx = context.Background()
+	}
+	cmd := exec.CommandContext(runCtx, "choco", args...)
+	processutil.HideWindow(cmd)
+	output, err := cmd.CombinedOutput()
+	text := strings.TrimSpace(string(output))
+	if err != nil {
+		if text == "" {
+			text = err.Error()
+		}
+		return text, fmt.Errorf("erro executando chocolatey %s: %w", strings.Join(args, " "), err)
+	}
+	return text, nil
 }
 
 // GetPendingUpdates runs `winget upgrade` and parses the output into structured items.
