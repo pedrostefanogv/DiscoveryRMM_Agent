@@ -18,7 +18,7 @@ import (
 
 	"github.com/samber/lo"
 
-	"winget-store/internal/agentconn"
+	"discovery/internal/agentconn"
 )
 
 func (a *App) loadPersistedDebugConfig() {

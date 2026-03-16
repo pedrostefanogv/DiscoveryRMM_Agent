@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"winget-store/internal/models"
+	"discovery/internal/models"
 )
 
 func TestBuildMarkdown_Basic(t *testing.T) {

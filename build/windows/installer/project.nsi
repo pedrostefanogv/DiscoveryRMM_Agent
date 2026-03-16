@@ -30,12 +30,12 @@ Unicode true
 ###
 ## !define PRODUCT_EXECUTABLE  "Application.exe"      # Default "${INFO_PROJECTNAME}.exe"
 ## !define UNINST_KEY_NAME     "UninstKeyInRegistry"  # Default "${INFO_COMPANYNAME}${INFO_PRODUCTNAME}"
-!define INFO_PROJECTNAME    "meduza-discovery"
+!define INFO_PROJECTNAME    "discovery"
 !define INFO_COMPANYNAME    "Meduza"
-!define INFO_PRODUCTNAME    "Meduza Discovery"
+!define INFO_PRODUCTNAME    "Discovery"
 !define INFO_PRODUCTVERSION "1.0.0"
 !define INFO_COPYRIGHT      "Copyright (c) 2026 Meduza"
-!define PRODUCT_EXECUTABLE  "meduza-discovery.exe"
+!define PRODUCT_EXECUTABLE  "discovery.exe"
 !define UNINST_KEY_NAME     "Meduza.Discovery"
 
 ## Build-time defaults (can be overridden by install-time CLI parameters)

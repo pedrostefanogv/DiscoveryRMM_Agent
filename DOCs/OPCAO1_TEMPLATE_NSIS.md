@@ -1,10 +1,10 @@
 # Opcao 01: Instalador Dinamico com Template NSIS (Servidor C#)
 
 ## Objetivo
-Implementar geracao sob demanda de instaladores do Meduza Discovery, ja pre-configurados por cliente/dispositivo (URL, API Key, flags de comportamento), sem recompilar o binario Go/Wails a cada solicitacao.
+Implementar geracao sob demanda de instaladores do Discovery, ja pre-configurados por cliente/dispositivo (URL, API Key, flags de comportamento), sem recompilar o binario Go/Wails a cada solicitacao.
 
 ## Resumo da Estrategia
-A estrategia usa um binario base ja compilado do agente (`meduza-discovery.exe`) e um template NSIS (`project.nsi.template`).
+A estrategia usa um binario base ja compilado do agente (`discovery.exe`) e um template NSIS (`project.nsi.template`).
 
 Fluxo:
 1. API C# recebe requisicao para gerar instalador.
@@ -38,7 +38,7 @@ Cliente/Admin Portal
 
 ```text
 templates/
-  meduza-discovery.exe
+  discovery.exe
   project.nsi.template
   icon.ico
   LICENSE.txt (opcional)
@@ -46,8 +46,8 @@ templates/
 generated/
   {requestId}/
     project.nsi
-    meduza-discovery.exe
-    meduza-discovery-{clientId}.exe
+    discovery.exe
+    discovery-{clientId}.exe
 
 logs/
   installer-jobs.log
@@ -104,10 +104,10 @@ No `project.nsi.template`, manter placeholders claros:
 ## Exemplo de Template NSIS (trecho)
 
 ```nsis
-!define INFO_PROJECTNAME    "meduza-discovery"
+!define INFO_PROJECTNAME    "discovery"
 !define INFO_COMPANYNAME    "Meduza"
-!define INFO_PRODUCTNAME    "Meduza Discovery"
-!define PRODUCT_EXECUTABLE  "meduza-discovery.exe"
+!define INFO_PRODUCTNAME    "Discovery"
+!define PRODUCT_EXECUTABLE  "discovery.exe"
 !define UNINST_KEY_NAME     "Meduza.Discovery"
 
 !define SERVER_HOST         "{{SERVER_HOST}}"
@@ -143,7 +143,7 @@ Passos no servico:
 1. Validar payload e autorizacao da chamada.
 2. Buscar/validar cliente e licenca.
 3. Criar pasta temporaria unica (`generated/{requestId}`).
-4. Copiar `meduza-discovery.exe` base e assets necessarios.
+4. Copiar `discovery.exe` base e assets necessarios.
 5. Ler template NSIS e substituir placeholders.
 6. Gravar `project.nsi` final.
 7. Executar `makensis`.
@@ -162,8 +162,8 @@ public async Task<InstallerResult> GenerateAsync(GenerateInstallerRequest req)
     var workDir = Path.Combine(_generatedRoot, requestId);
     Directory.CreateDirectory(workDir);
 
-    File.Copy(Path.Combine(_templatesRoot, "meduza-discovery.exe"),
-              Path.Combine(workDir, "meduza-discovery.exe"), true);
+    File.Copy(Path.Combine(_templatesRoot, "discovery.exe"),
+              Path.Combine(workDir, "discovery.exe"), true);
 
     var template = await File.ReadAllTextAsync(Path.Combine(_templatesRoot, "project.nsi.template"));
 
@@ -178,7 +178,7 @@ public async Task<InstallerResult> GenerateAsync(GenerateInstallerRequest req)
     var nsiPath = Path.Combine(workDir, "project.nsi");
     await File.WriteAllTextAsync(nsiPath, nsi);
 
-    var outExe = Path.Combine(workDir, $"meduza-discovery-{req.ClientId}.exe");
+    var outExe = Path.Combine(workDir, $"discovery-{req.ClientId}.exe");
     await RunMakensisAsync(nsiPath, outExe, workDir);
 
     var url = await _artifactStore.PublishAsync(outExe, req.ExpiresInMinutes);
@@ -216,12 +216,12 @@ Com a implementacao atual do seu NSIS:
 Exemplo final para override manual:
 
 ```powershell
-meduza-discovery-acme-001.exe /URL="api.alt.example.com" /KEY="outra-key" /DISCOVERY=0 /MINIMAL
+discovery-acme-001.exe /URL="api.alt.example.com" /KEY="outra-key" /DISCOVERY=0 /MINIMAL
 ```
 
 ## Plano de Implementacao (pratico)
 
-1. Congelar um binario base aprovado (`meduza-discovery.exe`).
+1. Congelar um binario base aprovado (`discovery.exe`).
 2. Criar `project.nsi.template` com placeholders.
 3. Implementar endpoint `POST /api/installers/generate`.
 4. Implementar servico de geracao + execucao do `makensis`.

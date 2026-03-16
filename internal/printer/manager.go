@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"winget-store/internal/processutil"
+	"discovery/internal/processutil"
 )
 
 const printerModulePreamble = `$ErrorActionPreference = 'Stop'

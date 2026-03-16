@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"winget-store/internal/models"
+	"discovery/internal/models"
 )
 
 // maxCatalogSize limits the response body to prevent runaway memory usage

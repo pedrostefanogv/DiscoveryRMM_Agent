@@ -10,8 +10,8 @@ import (
 
 	"github.com/samber/lo"
 
-	"winget-store/internal/export"
-	"winget-store/internal/models"
+	"discovery/internal/export"
+	"discovery/internal/models"
 )
 
 func (a *App) SetExportRedaction(redact bool) {

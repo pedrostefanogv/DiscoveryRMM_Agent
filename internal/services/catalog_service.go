@@ -3,7 +3,7 @@ package services
 import (
 	"context"
 
-	"winget-store/internal/models"
+	"discovery/internal/models"
 )
 
 type CatalogProvider interface {

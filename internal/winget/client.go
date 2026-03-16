@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"winget-store/internal/ctxutil"
-	"winget-store/internal/processutil"
+	"discovery/internal/ctxutil"
+	"discovery/internal/processutil"
 )
 
 var idPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)

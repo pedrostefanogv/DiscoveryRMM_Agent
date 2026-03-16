@@ -12,7 +12,7 @@ import (
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
-	"winget-store/internal/agentconn"
+	"discovery/internal/agentconn"
 )
 
 const (

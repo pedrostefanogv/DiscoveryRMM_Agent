@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"winget-store/internal/models"
+	"discovery/internal/models"
 )
 
 // -----------------------------------------------------------------------

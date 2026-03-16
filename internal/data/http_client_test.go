@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"winget-store/internal/models"
+	"discovery/internal/models"
 )
 
 func TestHTTPClient_GetCatalog_Success(t *testing.T) {

@@ -3,7 +3,7 @@ package inventory
 import (
 	"strings"
 
-	"winget-store/internal/models"
+	"discovery/internal/models"
 )
 
 // -----------------------------------------------------------------------

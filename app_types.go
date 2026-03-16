@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"winget-store/internal/models"
+	"discovery/internal/models"
 )
 
 // inventoryCache manages thread-safe caching of the last inventory report.

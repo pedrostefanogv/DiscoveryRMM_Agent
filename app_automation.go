@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"winget-store/internal/automation"
+	"discovery/internal/automation"
 )
 
 func (a *App) GetAutomationState() AutomationStateView {

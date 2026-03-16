@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"winget-store/internal/models"
+	"discovery/internal/models"
 )
 
 func TestBuildAgentHardwareEnvelope_UsesStringStatusAndRawInventoryObject(t *testing.T) {

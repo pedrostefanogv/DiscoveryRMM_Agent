@@ -11,7 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/robfig/cron/v3"
 
-	"winget-store/internal/database"
+	"discovery/internal/database"
 )
 
 const (

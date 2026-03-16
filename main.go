@@ -12,7 +12,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
-	"winget-store/internal/mcp"
+	"discovery/internal/mcp"
 )
 
 //go:embed all:frontend
@@ -43,7 +43,7 @@ func main() {
 	app := NewApp(AppStartupOptions{DebugMode: startupDebugMode, StartMinimized: startupMinimized})
 
 	singleInstance := &options.SingleInstanceLock{
-		UniqueId: "com.discovery.winget-store",
+		UniqueId: "com.discovery.app",
 		OnSecondInstanceLaunch: func(data options.SecondInstanceData) {
 			log.Printf("[single-instance] segunda abertura bloqueada. args=%v", data.Args)
 			if app.ctx == nil {

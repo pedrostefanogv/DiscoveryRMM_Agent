@@ -1,4 +1,4 @@
-# Winget Store (Wails + Go)
+# Discovery (Wails + Go)
 
 Aplicativo desktop em Go com UI estilo loja para consumir o catalogo remoto e executar instalacao/remocao/atualizacao via winget.
 
@@ -12,7 +12,7 @@ Aplicativo desktop em Go com UI estilo loja para consumir o catalogo remoto e ex
 - Aba de inventario (hardware + sistema + softwares).
 - Coleta por `osqueryi --json` quando disponivel, com fallback via PowerShell.
 - Deteccao de `osquery` e botao de instalacao via `winget` (`osquery.osquery`) quando nao encontrado.
-- Build desktop gerado em `build/bin/winget-store.exe`.
+- Build desktop gerado em `build/bin/discovery.exe`.
 
 ## Estrutura
 

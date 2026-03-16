@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"winget-store/internal/processutil"
+	"discovery/internal/processutil"
 )
 
 const (

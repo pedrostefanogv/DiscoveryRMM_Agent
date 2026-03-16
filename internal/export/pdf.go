@@ -9,7 +9,7 @@ import (
 
 	"github.com/go-pdf/fpdf"
 
-	"winget-store/internal/models"
+	"discovery/internal/models"
 )
 
 const maxPDFSoftwareItems = 200

@@ -7,8 +7,8 @@ import (
 	"os/exec"
 	"strings"
 
-	"winget-store/internal/models"
-	"winget-store/internal/processutil"
+	"discovery/internal/models"
+	"discovery/internal/processutil"
 )
 
 // windowsHardwareDetails holds supplemental hardware data collected via

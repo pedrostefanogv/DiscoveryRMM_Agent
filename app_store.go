@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"winget-store/internal/models"
+	"discovery/internal/models"
 )
 
 const (

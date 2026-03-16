@@ -14,9 +14,9 @@ import (
 	"github.com/samber/lo"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
-	"winget-store/internal/ai"
-	"winget-store/internal/mcp"
-	"winget-store/internal/watchdog"
+	"discovery/internal/ai"
+	"discovery/internal/mcp"
+	"discovery/internal/watchdog"
 )
 
 func chatConfigPathCandidates() []string {

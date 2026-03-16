@@ -1,7 +1,7 @@
 // Package export — shared redaction logic for all export formats.
 package export
 
-import "winget-store/internal/models"
+import "discovery/internal/models"
 
 // Redacted is the placeholder used in place of sensitive field values.
 const Redacted = "***"

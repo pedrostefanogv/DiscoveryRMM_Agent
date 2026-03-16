@@ -9,7 +9,7 @@ import (
 	"github.com/energye/systray"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
-	"winget-store/internal/watchdog"
+	"discovery/internal/watchdog"
 )
 
 //go:embed build/windows/icon.ico
@@ -31,7 +31,7 @@ func (a *App) startTray() {
 		systray.Run(func() {
 			setTrayIcon(trayIconICO)
 			setTrayTitle("Discovery")
-			setTrayTooltip("Discovery - Winget Store")
+			setTrayTooltip("Discovery")
 
 			// Send immediate heartbeat on tray ready
 			if a.watchdogSvc != nil {
@@ -90,13 +90,13 @@ func (a *App) safeTrayAction(name string, fn func()) {
 func (a *App) updateTrayIdleState(idle bool, supported bool) {
 	if !efficiencyModeEnabled {
 		setTrayTitle("Discovery")
-		setTrayTooltip("Discovery - Winget Store")
+		setTrayTooltip("Discovery")
 		return
 	}
 
 	if !supported {
 		setTrayTitle("Discovery")
-		setTrayTooltip("Discovery - Winget Store")
+		setTrayTooltip("Discovery")
 		return
 	}
 

@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 
-	"winget-store/internal/models"
+	"discovery/internal/models"
 )
 
 // -----------------------------------------------------------------------

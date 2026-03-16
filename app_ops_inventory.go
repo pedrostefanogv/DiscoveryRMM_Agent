@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"winget-store/internal/inventory"
-	"winget-store/internal/models"
-	"winget-store/internal/processutil"
-	"winget-store/internal/watchdog"
+	"discovery/internal/inventory"
+	"discovery/internal/models"
+	"discovery/internal/processutil"
+	"discovery/internal/watchdog"
 )
 
 func (a *App) GetCatalog() (models.Catalog, error) {

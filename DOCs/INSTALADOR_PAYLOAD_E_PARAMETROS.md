@@ -149,7 +149,7 @@ makensis -DARG_WAILS_ARM64_BINARY=..\..\bin\app.exe
 makensis -DARG_WAILS_AMD64_BINARY=..\..\bin\app-amd64.exe -DARG_WAILS_ARM64_BINARY=..\..\bin\app-arm64.exe
 
 # Build com defaults embutidos (URL/KEY/DISCOVERY/MINIMAL)
-makensis -DARG_WAILS_AMD64_BINARY=..\..\bin\meduza-discovery.exe -DARG_DEFAULT_URL=api.acme.meduza.com -DARG_DEFAULT_KEY=key_xpto -DARG_DEFAULT_DISCOVERY=1 -DARG_DEFAULT_MINIMAL=1
+makensis -DARG_WAILS_AMD64_BINARY=..\..\bin\discovery.exe -DARG_DEFAULT_URL=api.acme.meduza.com -DARG_DEFAULT_KEY=key_xpto -DARG_DEFAULT_DISCOVERY=1 -DARG_DEFAULT_MINIMAL=1
 ```
 
 Saida padrao definida no NSIS:
@@ -175,7 +175,7 @@ Observacoes de comportamento:
 ## 4. Exemplo completo (override manual)
 
 ```powershell
-meduza-discovery-acme-001.exe /URL="api.alt.example.com" /KEY="outra-key" /DISCOVERY=0 /MINIMAL
+discovery-acme-001.exe /URL="api.alt.example.com" /KEY="outra-key" /DISCOVERY=0 /MINIMAL
 ```
 
 ## 5. Placeholders do template dinamico (quando aplicavel)

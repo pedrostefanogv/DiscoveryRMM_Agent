@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"winget-store/internal/models"
-	"winget-store/internal/processutil"
+	"discovery/internal/models"
+	"discovery/internal/processutil"
 )
 
 // osqueryQuery describes a single osquery SQL query to execute.

@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"winget-store/internal/processutil"
-	"winget-store/internal/services"
+	"discovery/internal/processutil"
+	"discovery/internal/services"
 )
 
 type automationPackageManagerRouter struct {

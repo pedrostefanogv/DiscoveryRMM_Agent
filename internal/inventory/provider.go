@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"winget-store/internal/ctxutil"
-	"winget-store/internal/models"
+	"discovery/internal/ctxutil"
+	"discovery/internal/models"
 )
 
 // Provider orchestrates inventory collection using osquery (preferred)

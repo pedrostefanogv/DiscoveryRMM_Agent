@@ -17,7 +17,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"winget-store/internal/mcp"
+	"discovery/internal/mcp"
 )
 
 // Config holds the LLM API settings.

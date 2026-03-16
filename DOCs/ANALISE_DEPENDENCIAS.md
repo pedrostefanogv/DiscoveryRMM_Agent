@@ -1,4 +1,4 @@
-# Análise de Dependências - Projeto Meduza Discovery
+# Análise de Dependências - Projeto Discovery
 
 **Data**: 6 de março de 2026  
 **Status Global**: ✅ Estável | ⚠️ Com actualizações disponíveis

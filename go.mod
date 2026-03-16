@@ -1,4 +1,4 @@
-module winget-store
+module discovery
 
 go 1.26.0
 

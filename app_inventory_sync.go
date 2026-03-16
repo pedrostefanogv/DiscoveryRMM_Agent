@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"winget-store/internal/models"
+	"discovery/internal/models"
 )
 
 type agentHardwareEnvelope struct {
