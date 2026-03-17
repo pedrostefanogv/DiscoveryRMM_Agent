@@ -4,6 +4,7 @@
         <span class="meta">Chat IA - converse com a IA para gerenciar seu computador</span>
         <div class="actions">
           <button id="chatToolsBtn" class="btn subtle">Ver Ferramentas</button>
+          <button id="chatMemoriesBtn" class="btn subtle hidden">Memórias</button>
           <button id="chatClearBtn" class="btn danger">Limpar Chat</button>
         </div>
       </div>
@@ -56,6 +57,21 @@
             </div>
           </div>
           <pre id="chatLogsOutput" class="chat-logs-output"></pre>
+        </div>
+      </div>
+
+      <div id="chatMemoriesModal" class="chat-logs-modal hidden" aria-hidden="true">
+        <div class="chat-logs-card">
+          <div class="chat-logs-head section-bar">
+            <strong>Memórias Locais</strong>
+            <div class="actions">
+              <button id="chatMemoriesRefreshBtn" class="btn subtle">Atualizar</button>
+              <button id="chatMemoriesCloseBtn" class="btn danger">Fechar</button>
+            </div>
+          </div>
+          <div id="chatMemoriesList" class="chat-logs-output">
+            <div class="meta">Nenhuma memoria encontrada.</div>
+          </div>
         </div>
       </div>
     </section>

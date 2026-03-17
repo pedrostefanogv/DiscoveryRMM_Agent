@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"discovery/internal/database"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -34,6 +35,12 @@ type AppBridge interface {
 	ListPrinterDriversJSON() (json.RawMessage, error)
 	ListInstalled() (string, error)
 	GetLogsText() string
+
+	// Memorias locais (notas)
+	GetLocalMemories() ([]database.MemoryNote, error)
+	AddLocalMemory(content string) (database.MemoryNote, error)
+	DeleteLocalMemory(id int64) error
+
 	// Tickets
 	GetAgentInfoJSON() (json.RawMessage, error)
 	ListAgentTickets() (json.RawMessage, error)
@@ -176,6 +183,45 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 		Description: "Verifica se o osquery esta instalado no computador e retorna o caminho do binario.",
 		Handler: func(args map[string]any) (any, error) {
 			return app.GetOsqueryStatusJSON()
+		},
+	})
+
+	// ========== MEMORIAS LOCAIS ==========
+	reg.Register(Tool{
+		Name:        "memory/list",
+		Description: "Lista as memorias/anotacoes locais gravadas pelo agente.",
+		Handler: func(args map[string]any) (any, error) {
+			return app.GetLocalMemories()
+		},
+	})
+
+	reg.Register(Tool{
+		Name:        "memory/create",
+		Description: "Cria uma nova memorias/anotacao local.",
+		Params: []ToolParam{
+			{Name: "content", Type: "string", Description: "Conteudo da anotacao", Required: true},
+		},
+		Handler: func(args map[string]any) (any, error) {
+			content, err := requiredStringArg(args, "content")
+			if err != nil {
+				return nil, err
+			}
+			return app.AddLocalMemory(content)
+		},
+	})
+
+	reg.Register(Tool{
+		Name:        "memory/delete",
+		Description: "Remove uma memorias/anotacao local pelo ID.",
+		Params: []ToolParam{
+			{Name: "id", Type: "integer", Description: "ID da anotacao", Required: true},
+		},
+		Handler: func(args map[string]any) (any, error) {
+			id, err := requiredIntArg(args, "id")
+			if err != nil {
+				return nil, err
+			}
+			return map[string]bool{"ok": true}, app.DeleteLocalMemory(int64(id))
 		},
 	})
 

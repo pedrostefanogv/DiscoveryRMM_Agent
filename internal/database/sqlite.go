@@ -164,6 +164,13 @@ func (db *DB) initialize() error {
 			updated_at INTEGER NOT NULL,
 			PRIMARY KEY (agent_id, marker_key)
 		);
+
+		CREATE TABLE IF NOT EXISTS memory_notes (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			content TEXT NOT NULL,
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL
+		);
 	`
 
 	_, err := db.conn.Exec(schema)
@@ -251,6 +258,64 @@ func (db *DB) CacheGetJSON(key string, target interface{}) (bool, error) {
 		return false, nil // Não encontrado
 	}
 	return true, json.Unmarshal(data, target)
+}
+
+// MemoryNote representa uma anotação/memória local persistida.
+type MemoryNote struct {
+	ID        int64     `json:"id"`
+	Content   string    `json:"content"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+// ListMemoryNotes retorna todas as notas ordenadas pela mais recente.
+func (db *DB) ListMemoryNotes() ([]MemoryNote, error) {
+	rows, err := db.conn.Query("SELECT id, content, created_at, updated_at FROM memory_notes ORDER BY created_at DESC")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]MemoryNote, 0)
+	for rows.Next() {
+		var n MemoryNote
+		var createdAt, updatedAt int64
+		if err := rows.Scan(&n.ID, &n.Content, &createdAt, &updatedAt); err != nil {
+			return nil, err
+		}
+		n.CreatedAt = time.Unix(createdAt, 0)
+		n.UpdatedAt = time.Unix(updatedAt, 0)
+		out = append(out, n)
+	}
+	return out, rows.Err()
+}
+
+// CreateMemoryNote insere uma nova anotação e retorna o registro criado.
+func (db *DB) CreateMemoryNote(content string) (MemoryNote, error) {
+	now := time.Now().Unix()
+	res, err := db.conn.Exec(
+		"INSERT INTO memory_notes (content, created_at, updated_at) VALUES (?, ?, ?)",
+		content, now, now,
+	)
+	if err != nil {
+		return MemoryNote{}, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return MemoryNote{}, err
+	}
+	return MemoryNote{
+		ID:        id,
+		Content:   content,
+		CreatedAt: time.Unix(now, 0),
+		UpdatedAt: time.Unix(now, 0),
+	}, nil
+}
+
+// DeleteMemoryNote remove uma anotação pelo ID.
+func (db *DB) DeleteMemoryNote(id int64) error {
+	_, err := db.conn.Exec("DELETE FROM memory_notes WHERE id = ?", id)
+	return err
 }
 
 // SaveInventorySnapshot salva um snapshot de inventário para histórico

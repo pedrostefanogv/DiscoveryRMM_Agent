@@ -817,6 +817,67 @@ async function loadChatDebugLogs() {
   }
 }
 
+async function loadChatMemories() {
+  if (!chatMemoriesList) return;
+  try {
+    var notes = await appApi().GetLocalMemories();
+    if (!notes || !notes.length) {
+      chatMemoriesList.innerHTML = '<div class="meta">Nenhuma memoria encontrada.</div>';
+      return;
+    }
+
+    var html = notes.map(function (n) {
+      var created = n.createdAt ? new Date(n.createdAt).toLocaleString() : '';
+      var updated = n.updatedAt ? new Date(n.updatedAt).toLocaleString() : '';
+      return '<div class="chat-memory-item">' +
+        '<div class="chat-memory-meta"><span>' + escapeHtml(created) + '</span>' +
+        (updated && updated !== created ? ' <span>(atualizado: ' + escapeHtml(updated) + ')</span>' : '') +
+        '</div>' +
+        '<div class="chat-memory-content">' + escapeHtml(n.content) + '</div>' +
+        '<div class="chat-memory-actions">' +
+        '<button class="btn danger chat-memory-delete-btn" data-id="' + escapeHtml(String(n.id)) + '">Excluir</button>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+
+    chatMemoriesList.innerHTML = html;
+
+    // Attach delete handlers
+    var deleteButtons = chatMemoriesList.querySelectorAll('.chat-memory-delete-btn');
+    deleteButtons.forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var id = parseInt(btn.getAttribute('data-id'), 10);
+        if (!Number.isFinite(id)) return;
+        deleteChatMemory(id);
+      });
+    });
+  } catch (err) {
+    chatMemoriesList.innerHTML = '<div class="meta">Erro ao carregar memorias: ' + escapeHtml(String(err)) + '</div>';
+  }
+}
+
+function openChatMemoriesModal() {
+  if (!chatMemoriesModal) return;
+  chatMemoriesModal.classList.remove('hidden');
+  chatMemoriesModal.setAttribute('aria-hidden', 'false');
+  loadChatMemories();
+}
+
+function closeChatMemoriesModal() {
+  if (!chatMemoriesModal) return;
+  chatMemoriesModal.classList.add('hidden');
+  chatMemoriesModal.setAttribute('aria-hidden', 'true');
+}
+
+function deleteChatMemory(id) {
+  if (!chatMemoriesList) return;
+  appApi().DeleteLocalMemory(id).then(function () {
+    loadChatMemories();
+  }).catch(function (err) {
+    showFeedback('Erro ao excluir memorias: ' + String(err), true);
+  });
+}
+
 function openChatLogsModal() {
   if (!chatLogsModal) return;
   chatLogsModal.classList.remove('hidden');
@@ -873,6 +934,23 @@ function initChat() {
       if (e.target === chatLogsModal) closeChatLogsModal();
     });
   }
+
+  if (chatMemoriesBtn) {
+    chatMemoriesBtn.classList.toggle('hidden', !isDebugRuntimeMode());
+    chatMemoriesBtn.addEventListener('click', openChatMemoriesModal);
+  }
+  if (chatMemoriesCloseBtn) {
+    chatMemoriesCloseBtn.addEventListener('click', closeChatMemoriesModal);
+  }
+  if (chatMemoriesRefreshBtn) {
+    chatMemoriesRefreshBtn.addEventListener('click', loadChatMemories);
+  }
+  if (chatMemoriesModal) {
+    chatMemoriesModal.addEventListener('click', function (e) {
+      if (e.target === chatMemoriesModal) closeChatMemoriesModal();
+    });
+  }
+
   if (chatClearBtn) {
     chatClearBtn.addEventListener('click', async function () {
       try {
