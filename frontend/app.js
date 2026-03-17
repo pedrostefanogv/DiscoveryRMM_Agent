@@ -234,12 +234,14 @@ function isRuntimeTabAllowed(tab) {
   if (isDebugRuntimeMode()) {
     return true;
   }
-  return tab !== 'logs' && tab !== 'debug' && tab !== 'automation' && tab !== 'p2p';
+  // In normal mode we hide tabs/views that are only relevant for debugging.
+  return tab !== 'logs' && tab !== 'debug' && tab !== 'automation' && tab !== 'p2p' && tab !== 'inventory';
 }
 
 function applyRuntimeTabVisibility() {
   var hiddenInNormal = !isDebugRuntimeMode();
 
+  if (tabInventoryBtn) tabInventoryBtn.classList.toggle('hidden', hiddenInNormal);
   if (tabLogsBtn) tabLogsBtn.classList.toggle('hidden', hiddenInNormal);
   if (tabDebugBtn) tabDebugBtn.classList.toggle('hidden', hiddenInNormal);
   if (tabAutomationBtn) tabAutomationBtn.classList.toggle('hidden', hiddenInNormal);
@@ -248,6 +250,7 @@ function applyRuntimeTabVisibility() {
   if (tabP2PBtn) tabP2PBtn.classList.toggle('hidden', hiddenInNormal);
 
   if (hiddenInNormal) {
+    if (inventoryViewEl) inventoryViewEl.classList.add('hidden');
     if (logsViewEl) logsViewEl.classList.add('hidden');
     if (debugViewEl) debugViewEl.classList.add('hidden');
     if (automationViewEl) automationViewEl.classList.add('hidden');

@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -343,6 +344,49 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 		Description: "Retorna os logs recentes de operacoes do winget (instalacao, atualizacao, etc).",
 		Handler: func(args map[string]any) (any, error) {
 			return map[string]string{"logs": app.GetLogsText()}, nil
+		},
+	})
+
+	reg.Register(Tool{
+		Name:        "ping_host",
+		Description: "Verifica se um host/IP na rede local esta online usando ping (apenas redes privadas).",
+		Params: []ToolParam{
+			{Name: "host", Type: "string", Description: "Nome ou IP (privado) a ser verificado", Required: true},
+			{Name: "count", Type: "integer", Description: "Numero de pacotes ping (padrao 1)", Required: false},
+			{Name: "timeoutSeconds", Type: "integer", Description: "Timeout em segundos (padrao 5)", Required: false},
+		},
+		Handler: func(args map[string]any) (any, error) {
+			host, err := requiredStringArg(args, "host")
+			if err != nil {
+				return nil, err
+			}
+			count := 1
+			if v, ok := args["count"]; ok {
+				if n, ok := v.(float64); ok {
+					count = int(n)
+				}
+				if n, ok := v.(int); ok {
+					count = n
+				}
+			}
+			timeout := 5
+			if v, ok := args["timeoutSeconds"]; ok {
+				if n, ok := v.(float64); ok {
+					timeout = int(n)
+				}
+				if n, ok := v.(int); ok {
+					timeout = n
+				}
+			}
+			return PingHost(context.Background(), host, count, timeout)
+		},
+	})
+
+	reg.Register(Tool{
+		Name:        "flush_dns",
+		Description: "Limpa o cache DNS do sistema (ipconfig /flushdns no Windows).",
+		Handler: func(args map[string]any) (any, error) {
+			return FlushDNS(context.Background())
 		},
 	})
 
