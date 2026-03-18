@@ -365,18 +365,28 @@ func (a *App) refreshAgentConfiguration(ctx context.Context) error {
 
 	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
 	if err != nil {
+		// fallback to cached config when request fails
+		_ = a.loadCachedAgentConfiguration()
 		return err
 	}
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		_ = a.loadCachedAgentConfiguration()
 		return fmt.Errorf("configuration retornou HTTP %s: %s", resp.Status, strings.TrimSpace(string(body)))
 	}
 
 	if a.db != nil {
 		_ = a.db.CacheSet("agent_configuration_raw", body, 30*24*time.Hour)
 	}
+
+	cfgParsed, err := parseAgentConfiguration(body)
+	if err != nil {
+		a.logs.append("[sync] falha ao parsear configuration do agent: " + err.Error())
+		return nil
+	}
+	a.setAgentConfiguration(cfgParsed)
 	a.logs.append("[sync] configuração do agent atualizada")
 	return nil
 }

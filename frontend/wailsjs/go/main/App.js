@@ -54,6 +54,10 @@ export function GetDebugConfig() {
   return window['go']['main']['App']['GetDebugConfig']();
 }
 
+export function GetAgentConfiguration() {
+  return window['go']['main']['App']['GetAgentConfiguration']();
+}
+
 export function GetInventory() {
   return window['go']['main']['App']['GetInventory']();
 }

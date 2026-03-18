@@ -288,6 +288,11 @@ func (a *App) GetAgentInfo() (AgentInfo, error) {
 
 // GetSupportTickets returns tickets linked to this agent (filtered by agentId).
 func (a *App) GetSupportTickets() ([]APITicket, error) {
+	if !a.featureEnabled(a.GetAgentConfiguration().SupportEnabled) {
+		a.supportLogf("suporte desabilitado pela configuração do agente")
+		return []APITicket{}, nil
+	}
+
 	a.supportLogf("listando chamados vinculados ao agente")
 	info, err := a.fetchAgentContext()
 	if err != nil {
@@ -1170,6 +1175,11 @@ func (a *App) fetchKnowledgeDetail(info AgentInfo, articleID string) (KnowledgeA
 
 // GetKnowledgeBaseArticles returns knowledge-base articles available to the authenticated agent.
 func (a *App) GetKnowledgeBaseArticles() []KnowledgeArticle {
+	if !a.featureEnabled(a.GetAgentConfiguration().KnowledgeBaseEnabled) {
+		a.supportLogf("base de conhecimento desabilitada pela configuração do agente")
+		return []KnowledgeArticle{}
+	}
+
 	info, err := a.fetchAgentContext()
 	if err != nil {
 		a.supportLogf("falha ao resolver contexto para knowledge base: %v", err)

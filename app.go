@@ -94,6 +94,9 @@ type App struct {
 	p2pMu       sync.RWMutex
 	p2pConfig   P2PConfig
 
+	agentConfigMu sync.RWMutex
+	agentConfig   AgentConfiguration
+
 	startupMu   sync.RWMutex
 	startupErr  error
 	startupWg   sync.WaitGroup
@@ -202,6 +205,21 @@ func NewApp(opts AppStartupOptions) *App {
 // GetRuntimeFlags returns runtime-only startup flags for the current execution.
 func (a *App) GetRuntimeFlags() RuntimeFlags {
 	return a.runtimeFlags
+}
+
+// GetAgentConfiguration returns the last-known configuration retrieved from the server.
+func (a *App) GetAgentConfiguration() AgentConfiguration {
+	a.agentConfigMu.RLock()
+	cfg := a.agentConfig
+	a.agentConfigMu.RUnlock()
+	return cfg
+}
+
+func (a *App) featureEnabled(flag *bool) bool {
+	if flag == nil {
+		return true
+	}
+	return *flag
 }
 
 func (a *App) startup(ctx context.Context) {

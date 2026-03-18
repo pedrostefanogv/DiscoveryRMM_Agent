@@ -98,6 +98,10 @@ func (a *App) fetchAppStoreByInstallationType(ctx context.Context, installationT
 }
 
 func (a *App) loadEffectiveAppStorePolicy(ctx context.Context, forceRefresh bool) (AppStoreEffectivePolicy, error) {
+	if !a.featureEnabled(a.GetAgentConfiguration().AppStoreEnabled) {
+		return AppStoreEffectivePolicy{}, fmt.Errorf("app store desabilitada pela configuração do agente")
+	}
+
 	if !forceRefresh {
 		if cached, ok := a.appStorePolicy.get(appStoreMemoryCacheTTL); ok {
 			return cached, nil

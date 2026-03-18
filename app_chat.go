@@ -197,6 +197,10 @@ func (a *App) SendChatMessage(message string) (string, error) {
 	done := a.beginActivity("chat IA")
 	defer done()
 
+	if cfg := a.GetAgentConfiguration(); cfg.ChatAIEnabled != nil && !*cfg.ChatAIEnabled {
+		return "", fmt.Errorf("Chat AI desabilitado pela configuracao do servidor")
+	}
+
 	current := a.chatSvc.GetConfig()
 	runtimeCfg, err := a.resolveAgentChatRuntimeConfig(ChatConfig{
 		Endpoint:     current.Endpoint,
@@ -215,6 +219,12 @@ func (a *App) SendChatMessage(message string) (string, error) {
 // StartChatStream sends a chat message and streams the response via Wails events.
 func (a *App) StartChatStream(message string) {
 	done := a.beginActivity("chat IA")
+
+	if cfg := a.GetAgentConfiguration(); cfg.ChatAIEnabled != nil && !*cfg.ChatAIEnabled {
+		wailsRuntime.EventsEmit(a.ctx, "chat:error", "Chat AI desabilitado pela configuracao do servidor")
+		done()
+		return
+	}
 
 	streamMonitor := watchdog.NewStreamMonitor(
 		"ai-chat-stream",

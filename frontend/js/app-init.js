@@ -244,6 +244,25 @@ async function bootstrapApp() {
     loadStatusOverview();
   }
 
+  // Hide tabs based on agent configuration feature flags.
+  try {
+    var cfg = await appApi().GetAgentConfiguration();
+    if (cfg) {
+      hideTabIfNeeded(tabStoreBtn, storeViewEl, cfg.appStoreEnabled);
+      hideTabIfNeeded(tabChatBtn, chatViewEl, cfg.chatAIEnabled);
+      hideTabIfNeeded(tabSupportBtn, supportViewEl, cfg.supportEnabled);
+      hideTabIfNeeded(tabKnowledgeBtn, knowledgeViewEl, cfg.knowledgeBaseEnabled);
+
+      // Ensure the active tab is visible (fallback to status)
+      var active = document.querySelector('.sidebar-link.active');
+      if (active && active.classList.contains('hidden')) {
+        setActiveTab('status');
+      }
+    }
+  } catch (_) {
+    // ignore; leave tabs as-is
+  }
+
   loadCatalog();
   loadSidebarUser();
   initChat();
@@ -253,6 +272,14 @@ async function bootstrapApp() {
   initDebug();
   if (typeof initP2PPage === 'function') {
     initP2PPage();
+  }
+}
+
+function hideTabIfNeeded(tabBtn, viewEl, flag) {
+  if (!tabBtn) return;
+  if (flag === false) {
+    tabBtn.classList.add('hidden');
+    if (viewEl) viewEl.classList.add('hidden');
   }
 }
 
