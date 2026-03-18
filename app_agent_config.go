@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -194,7 +195,10 @@ func (a *App) applyAgentConfiguration(cfg AgentConfiguration) {
 		}
 	}
 
-	// (future) apply more flags as needed
+	// MeshCentral agent install (runs once; idempotent via meshCentralInstalled flag in config.json)
+	if cfg.MeshCentralEnabledEffective != nil && *cfg.MeshCentralEnabledEffective {
+		go a.triggerMeshCentralInstallIfNeeded(context.Background())
+	}
 }
 
 func (a *App) loadCachedAgentConfiguration() error {

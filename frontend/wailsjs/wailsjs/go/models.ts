@@ -1,3 +1,46 @@
+export namespace database {
+	
+	export class MemoryNote {
+	    id: number;
+	    content: string;
+	    // Go type: time
+	    createdAt: any;
+	    // Go type: time
+	    updatedAt: any;
+	
+	    static createFrom(source: any = {}) {
+	        return new MemoryNote(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.content = source["content"];
+	        this.createdAt = this.convertValues(source["createdAt"], null);
+	        this.updatedAt = this.convertValues(source["updatedAt"], null);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+}
+
 export namespace main {
 	
 	export class APIWorkflowState {
@@ -77,6 +120,94 @@ export namespace main {
 		}
 	}
 	
+	export class AgentAutoUpdateConfig {
+	    enabled: boolean;
+	    checkEveryHours: number;
+	    allowUserDelay: boolean;
+	    maxDelayHours: number;
+	    forceRestartDelay: boolean;
+	    restartDelayHours: number;
+	    updateOnLogon: boolean;
+	    maintenanceWindows: string[];
+	    silentInstall: boolean;
+	    autoRollbackOnFailure: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new AgentAutoUpdateConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.checkEveryHours = source["checkEveryHours"];
+	        this.allowUserDelay = source["allowUserDelay"];
+	        this.maxDelayHours = source["maxDelayHours"];
+	        this.forceRestartDelay = source["forceRestartDelay"];
+	        this.restartDelayHours = source["restartDelayHours"];
+	        this.updateOnLogon = source["updateOnLogon"];
+	        this.maintenanceWindows = source["maintenanceWindows"];
+	        this.silentInstall = source["silentInstall"];
+	        this.autoRollbackOnFailure = source["autoRollbackOnFailure"];
+	    }
+	}
+	export class AgentConfiguration {
+	    recoveryEnabled?: boolean;
+	    discoveryEnabled?: boolean;
+	    p2pFilesEnabled?: boolean;
+	    supportEnabled?: boolean;
+	    meshCentralEnabledEffective?: boolean;
+	    meshCentralGroupPolicyProfile: string;
+	    chatAIEnabled?: boolean;
+	    knowledgeBaseEnabled?: boolean;
+	    appStoreEnabled?: boolean;
+	    inventoryIntervalHours?: number;
+	    agentHeartbeatIntervalSeconds?: number;
+	    siteId: string;
+	    clientId: string;
+	    resolvedAt: string;
+	    autoUpdate: AgentAutoUpdateConfig;
+	
+	    static createFrom(source: any = {}) {
+	        return new AgentConfiguration(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.recoveryEnabled = source["recoveryEnabled"];
+	        this.discoveryEnabled = source["discoveryEnabled"];
+	        this.p2pFilesEnabled = source["p2pFilesEnabled"];
+	        this.supportEnabled = source["supportEnabled"];
+	        this.meshCentralEnabledEffective = source["meshCentralEnabledEffective"];
+	        this.meshCentralGroupPolicyProfile = source["meshCentralGroupPolicyProfile"];
+	        this.chatAIEnabled = source["chatAIEnabled"];
+	        this.knowledgeBaseEnabled = source["knowledgeBaseEnabled"];
+	        this.appStoreEnabled = source["appStoreEnabled"];
+	        this.inventoryIntervalHours = source["inventoryIntervalHours"];
+	        this.agentHeartbeatIntervalSeconds = source["agentHeartbeatIntervalSeconds"];
+	        this.siteId = source["siteId"];
+	        this.clientId = source["clientId"];
+	        this.resolvedAt = source["resolvedAt"];
+	        this.autoUpdate = this.convertValues(source["autoUpdate"], AgentAutoUpdateConfig);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class AgentInfo {
 	    agentId: string;
 	    clientId: string;

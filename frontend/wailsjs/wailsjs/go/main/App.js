@@ -6,6 +6,10 @@ export function AddAgentTicketComment(arg1, arg2, arg3) {
   return window['go']['main']['App']['AddAgentTicketComment'](arg1, arg2, arg3);
 }
 
+export function AddLocalMemory(arg1) {
+  return window['go']['main']['App']['AddLocalMemory'](arg1);
+}
+
 export function AddTicketComment(arg1, arg2, arg3) {
   return window['go']['main']['App']['AddTicketComment'](arg1, arg2, arg3);
 }
@@ -54,6 +58,10 @@ export function CreateSupportTicket(arg1) {
   return window['go']['main']['App']['CreateSupportTicket'](arg1);
 }
 
+export function DeleteLocalMemory(arg1) {
+  return window['go']['main']['App']['DeleteLocalMemory'](arg1);
+}
+
 export function ExportInventoryMarkdown() {
   return window['go']['main']['App']['ExportInventoryMarkdown']();
 }
@@ -72,6 +80,10 @@ export function ExportPDF() {
 
 export function FindP2PArtifactPeers(arg1) {
   return window['go']['main']['App']['FindP2PArtifactPeers'](arg1);
+}
+
+export function GetAgentConfiguration() {
+  return window['go']['main']['App']['GetAgentConfiguration']();
 }
 
 export function GetAgentInfo() {
@@ -124,6 +136,10 @@ export function GetInventoryJSON() {
 
 export function GetKnowledgeBaseArticles() {
   return window['go']['main']['App']['GetKnowledgeBaseArticles']();
+}
+
+export function GetLocalMemories() {
+  return window['go']['main']['App']['GetLocalMemories']();
 }
 
 export function GetLogs() {

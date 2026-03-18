@@ -95,26 +95,28 @@ type DebugConfig struct {
 
 // InstallerConfig is the bootstrap config saved by the NSIS installer.
 type InstallerConfig struct {
-	ServerURL        string    `json:"serverUrl"`
-	APIKey           string    `json:"apiKey"`
-	DiscoveryEnabled *bool     `json:"discoveryEnabled,omitempty"`
-	ApiScheme        string    `json:"apiScheme,omitempty"`
-	ApiServer        string    `json:"apiServer,omitempty"`
-	AuthToken        string    `json:"authToken,omitempty"`
-	AgentID          string    `json:"agentId,omitempty"`
-	P2P              P2PConfig `json:"p2p,omitempty"`
+	ServerURL            string    `json:"serverUrl"`
+	APIKey               string    `json:"apiKey"`
+	DiscoveryEnabled     *bool     `json:"discoveryEnabled,omitempty"`
+	ApiScheme            string    `json:"apiScheme,omitempty"`
+	ApiServer            string    `json:"apiServer,omitempty"`
+	AuthToken            string    `json:"authToken,omitempty"`
+	AgentID              string    `json:"agentId,omitempty"`
+	P2P                  P2PConfig `json:"p2p,omitempty"`
+	MeshCentralInstalled bool      `json:"meshCentralInstalled,omitempty"`
 }
 
 func (c *InstallerConfig) UnmarshalJSON(data []byte) error {
 	type rawInstallerConfig struct {
-		ServerURL        string          `json:"serverUrl"`
-		APIKey           string          `json:"apiKey"`
-		DiscoveryEnabled json.RawMessage `json:"discoveryEnabled,omitempty"`
-		ApiScheme        string          `json:"apiScheme,omitempty"`
-		ApiServer        string          `json:"apiServer,omitempty"`
-		AuthToken        string          `json:"authToken,omitempty"`
-		AgentID          string          `json:"agentId,omitempty"`
-		P2P              P2PConfig       `json:"p2p,omitempty"`
+		ServerURL            string          `json:"serverUrl"`
+		APIKey               string          `json:"apiKey"`
+		DiscoveryEnabled     json.RawMessage `json:"discoveryEnabled,omitempty"`
+		ApiScheme            string          `json:"apiScheme,omitempty"`
+		ApiServer            string          `json:"apiServer,omitempty"`
+		AuthToken            string          `json:"authToken,omitempty"`
+		AgentID              string          `json:"agentId,omitempty"`
+		P2P                  P2PConfig       `json:"p2p,omitempty"`
+		MeshCentralInstalled bool            `json:"meshCentralInstalled,omitempty"`
 	}
 
 	var raw rawInstallerConfig
@@ -128,14 +130,15 @@ func (c *InstallerConfig) UnmarshalJSON(data []byte) error {
 	}
 
 	*c = InstallerConfig{
-		ServerURL:        raw.ServerURL,
-		APIKey:           raw.APIKey,
-		DiscoveryEnabled: discoveryEnabled,
-		ApiScheme:        raw.ApiScheme,
-		ApiServer:        raw.ApiServer,
-		AuthToken:        raw.AuthToken,
-		AgentID:          raw.AgentID,
-		P2P:              normalizeP2PConfig(raw.P2P),
+		ServerURL:            raw.ServerURL,
+		APIKey:               raw.APIKey,
+		DiscoveryEnabled:     discoveryEnabled,
+		ApiScheme:            raw.ApiScheme,
+		ApiServer:            raw.ApiServer,
+		AuthToken:            raw.AuthToken,
+		AgentID:              raw.AgentID,
+		P2P:                  normalizeP2PConfig(raw.P2P),
+		MeshCentralInstalled: raw.MeshCentralInstalled,
 	}
 	return nil
 }
