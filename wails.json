@@ -11,10 +11,10 @@
     "email": "pedro@pstefano.com.br"
   },
   "info": {
-    "companyName": "Meduza",
+    "companyName": "Discovery RMM",
     "productName": "Discovery",
     "productVersion": "1.0.0",
-    "copyright": "Copyright © 2026 Meduza",
+    "copyright": "Copyright © 2026 Discovery RMM",
     "comments": "Solução de monitoramento, gerenciamento e suporte para ambientes Windows"
   },
   "nsisType": "multiple"
