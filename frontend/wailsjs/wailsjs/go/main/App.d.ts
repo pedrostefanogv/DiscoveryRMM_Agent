@@ -95,9 +95,13 @@ export function GetP2PConfig():Promise<main.P2PConfig>;
 
 export function GetP2PDebugStatus():Promise<main.P2PDebugStatus>;
 
+export function GetP2PDistributionStatus(arg1:context.Context):Promise<Array<main.P2PDistributionStatus>>;
+
 export function GetP2PPeerArtifactIndex():Promise<Array<main.P2PPeerArtifactIndexView>>;
 
 export function GetP2PPeers():Promise<Array<main.P2PPeerView>>;
+
+export function GetP2PSeedPlanRecommendation(arg1:context.Context):Promise<main.P2PSeedPlanRecommendation>;
 
 export function GetP2PTempDir():Promise<string>;
 
@@ -173,6 +177,8 @@ export function ListPrinters():Promise<json.RawMessage>;
 
 export function ListPrintersJSON():Promise<json.RawMessage>;
 
+export function PostP2PTelemetry(arg1:context.Context):Promise<void>;
+
 export function PublishP2PTestArtifact(arg1:string,arg2:string):Promise<main.P2PArtifactView>;
 
 export function PullP2PArtifactFromPeer(arg1:string,arg2:string):Promise<main.P2PArtifactView>;
@@ -220,6 +226,8 @@ export function SetP2PConfig(arg1:main.P2PConfig):Promise<void>;
 export function ShouldHideOnClose():Promise<boolean>;
 
 export function StartChatStream(arg1:string):Promise<void>;
+
+export function StartP2PTelemetryLoop(arg1:context.Context):Promise<void>;
 
 export function StopChatStream():Promise<boolean>;
 

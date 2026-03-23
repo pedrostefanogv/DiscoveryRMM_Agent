@@ -653,6 +653,20 @@ export namespace main {
 	        this.message = source["message"];
 	    }
 	}
+	export class P2PBootstrapConfig {
+	    bootstrapPeers?: string[];
+	    preferLan: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new P2PBootstrapConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.bootstrapPeers = source["bootstrapPeers"];
+	        this.preferLan = source["preferLan"];
+	    }
+	}
 	export class P2PConfig {
 	    enabled: boolean;
 	    discoveryMode: string;
@@ -665,6 +679,8 @@ export namespace main {
 	    authTokenRotationMinutes: number;
 	    sharedSecret?: string;
 	    chunkSizeBytes?: number;
+	    maxBandwidthBytesPerSec?: number;
+	    bootstrapConfig?: P2PBootstrapConfig;
 	
 	    static createFrom(source: any = {}) {
 	        return new P2PConfig(source);
@@ -683,7 +699,27 @@ export namespace main {
 	        this.authTokenRotationMinutes = source["authTokenRotationMinutes"];
 	        this.sharedSecret = source["sharedSecret"];
 	        this.chunkSizeBytes = source["chunkSizeBytes"];
+	        this.maxBandwidthBytesPerSec = source["maxBandwidthBytesPerSec"];
+	        this.bootstrapConfig = this.convertValues(source["bootstrapConfig"], P2PBootstrapConfig);
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class P2PMetrics {
 	    publishedArtifacts: number;
@@ -787,6 +823,26 @@ export namespace main {
 		    return a;
 		}
 	}
+	export class P2PDistributionStatus {
+	    artifactId: string;
+	    artifactName?: string;
+	    peerCount: number;
+	    peerAgentIds?: string[];
+	    lastUpdatedUtc?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new P2PDistributionStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.artifactId = source["artifactId"];
+	        this.artifactName = source["artifactName"];
+	        this.peerCount = source["peerCount"];
+	        this.peerAgentIds = source["peerAgentIds"];
+	        this.lastUpdatedUtc = source["lastUpdatedUtc"];
+	    }
+	}
 	
 	export class P2PPeerArtifactIndexView {
 	    peerAgentId: string;
@@ -851,6 +907,40 @@ export namespace main {
 	    }
 	}
 	
+	export class P2PSeedPlanRecommendation {
+	    siteId?: string;
+	    generatedAtUtc?: string;
+	    plan: P2PSeedPlan;
+	
+	    static createFrom(source: any = {}) {
+	        return new P2PSeedPlanRecommendation(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.siteId = source["siteId"];
+	        this.generatedAtUtc = source["generatedAtUtc"];
+	        this.plan = this.convertValues(source["plan"], P2PSeedPlan);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class RealtimeStatus {
 	    natsConnected: boolean;
 	    signalrConnectedAgents: number;

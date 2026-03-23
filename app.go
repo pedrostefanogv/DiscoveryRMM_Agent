@@ -95,10 +95,11 @@ type App struct {
 	appStorePolicy appStorePolicyCache
 	watchdogSvc    *watchdog.Watchdog
 
-	debugMu     sync.RWMutex
-	debugConfig DebugConfig
-	p2pMu       sync.RWMutex
-	p2pConfig   P2PConfig
+	debugMu          sync.RWMutex
+	debugConfig      DebugConfig
+	p2pMu            sync.RWMutex
+	p2pConfig        P2PConfig
+	p2pSeedPlanCache cachedP2PSeedPlan
 
 	agentConfigMu sync.RWMutex
 	agentConfig   AgentConfiguration
@@ -236,6 +237,8 @@ func (a *App) startup(ctx context.Context) {
 	// Start watchdog monitoring
 	a.watchdogSvc.Start(ctx)
 	log.Println("[startup] watchdog iniciado")
+
+	go a.StartP2PTelemetryLoop(ctx)
 
 	a.startTray()
 	if a.runtimeFlags.StartMinimized {

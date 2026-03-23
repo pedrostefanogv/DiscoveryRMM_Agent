@@ -54,6 +54,20 @@ type P2PConfig struct {
 	// ChunkSizeBytes is the target size for each chunk in swarm downloads.
 	// 0 means use the default (8 MB). Minimum enforced: 1 MB.
 	ChunkSizeBytes int64 `json:"chunkSizeBytes,omitempty"`
+	// MaxBandwidthBytesPerSec caps the combined P2P swarm download throughput.
+	// 0 means unlimited. Minimum enforced when set: 64 KB/s.
+	MaxBandwidthBytesPerSec int64 `json:"maxBandwidthBytesPerSec,omitempty"`
+	// BootstrapConfig holds static peer addresses for libp2p-mode startup.
+	BootstrapConfig P2PBootstrapConfig `json:"bootstrapConfig,omitempty"`
+}
+
+// P2PBootstrapConfig configures static bootstrap peers for libp2p discovery.
+type P2PBootstrapConfig struct {
+	// BootstrapPeers is a list of libp2p multiaddr strings including peer IDs,
+	// e.g. "/ip4/10.0.0.1/tcp/4001/p2p/12D3KooW...".
+	BootstrapPeers []string `json:"bootstrapPeers,omitempty"`
+	// PreferLAN prioritises RFC-1918 addresses when connecting to discovered peers.
+	PreferLAN bool `json:"preferLan"`
 }
 
 // P2PSeedPlan summarizes how many agents should seed from external HTTP.
@@ -62,6 +76,13 @@ type P2PSeedPlan struct {
 	ConfiguredPercent int `json:"configuredPercent"`
 	MinSeeds          int `json:"minSeeds"`
 	SelectedSeeds     int `json:"selectedSeeds"`
+}
+
+// P2PSeedPlanRecommendation is the server-facing payload for fleet/site seed guidance.
+type P2PSeedPlanRecommendation struct {
+	SiteID         string      `json:"siteId,omitempty"`
+	GeneratedAtUTC string      `json:"generatedAtUtc,omitempty"`
+	Plan           P2PSeedPlan `json:"plan"`
 }
 
 // P2PDebugStatus contains coordinator state shown in debug UI.
@@ -159,6 +180,24 @@ type P2PMetrics struct {
 	CatalogRefreshRuns    int   `json:"catalogRefreshRuns"`
 	ChunkedDownloads      int   `json:"chunkedDownloads"`
 	ChunksDownloaded      int64 `json:"chunksDownloaded"`
+}
+
+// P2PTelemetryPayload is periodically sent to the server to report swarm health.
+type P2PTelemetryPayload struct {
+	AgentID         string      `json:"agentId,omitempty"`
+	SiteID          string      `json:"siteId,omitempty"`
+	CollectedAtUTC  string      `json:"collectedAtUtc"`
+	Metrics         P2PMetrics  `json:"metrics"`
+	CurrentSeedPlan P2PSeedPlan `json:"currentSeedPlan"`
+}
+
+// P2PDistributionStatus describes operation-facing distribution state per artifactId.
+type P2PDistributionStatus struct {
+	ArtifactID     string   `json:"artifactId"`
+	ArtifactName   string   `json:"artifactName,omitempty"`
+	PeerCount      int      `json:"peerCount"`
+	PeerAgentIDs   []string `json:"peerAgentIds,omitempty"`
+	LastUpdatedUTC string   `json:"lastUpdatedUtc,omitempty"`
 }
 
 // P2PAuditEvent records important operational events for the P2P debug window.

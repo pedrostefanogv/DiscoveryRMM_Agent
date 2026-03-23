@@ -96,11 +96,18 @@ func TestFindArtifactPeersFromIndex(t *testing.T) {
 	now := time.Now().UTC()
 	c.peers["peer-a"] = p2pPeerState{Peer: p2pDiscoveredPeer{AgentID: "peer-a"}, LastSeenUTC: now}
 	c.peers["peer-b"] = p2pPeerState{Peer: p2pDiscoveredPeer{AgentID: "peer-b"}, LastSeenUTC: now}
+	// ArtifactID must be populated — name-only lookup was removed.
 	c.peerArtifacts["peer-a"] = p2pPeerArtifactState{
-		Artifacts: []P2PArtifactView{{ArtifactName: "xyz.bin"}},
+		Artifacts: []P2PArtifactView{{
+			ArtifactID:   CanonicalArtifactID("", "xyz.bin", ""),
+			ArtifactName: "xyz.bin",
+		}},
 	}
 	c.peerArtifacts["peer-b"] = p2pPeerArtifactState{
-		Artifacts: []P2PArtifactView{{ArtifactName: "other.bin"}},
+		Artifacts: []P2PArtifactView{{
+			ArtifactID:   CanonicalArtifactID("", "other.bin", ""),
+			ArtifactName: "other.bin",
+		}},
 	}
 
 	availability := c.FindArtifactPeers("xyz.bin")
@@ -112,6 +119,15 @@ func TestFindArtifactPeersFromIndex(t *testing.T) {
 	}
 	if len(availability.PeerAgentIDs) != 1 || availability.PeerAgentIDs[0] != "peer-a" {
 		t.Fatalf("unexpected peer list: %+v", availability.PeerAgentIDs)
+	}
+
+	// Peer without explicit ArtifactID must NOT be found via name fallback.
+	c.peerArtifacts["peer-c"] = p2pPeerArtifactState{
+		Artifacts: []P2PArtifactView{{ArtifactName: "xyz.bin"}}, // no ArtifactID
+	}
+	availability2 := c.FindArtifactPeers("xyz.bin")
+	if availability2.PeerCount != 1 {
+		t.Fatalf("expected only peer-a (id-based), got %d peers: %v", availability2.PeerCount, availability2.PeerAgentIDs)
 	}
 }
 

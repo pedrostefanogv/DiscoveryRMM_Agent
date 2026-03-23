@@ -178,12 +178,20 @@ export function GetP2PDebugStatus() {
   return window['go']['main']['App']['GetP2PDebugStatus']();
 }
 
+export function GetP2PDistributionStatus(arg1) {
+  return window['go']['main']['App']['GetP2PDistributionStatus'](arg1);
+}
+
 export function GetP2PPeerArtifactIndex() {
   return window['go']['main']['App']['GetP2PPeerArtifactIndex']();
 }
 
 export function GetP2PPeers() {
   return window['go']['main']['App']['GetP2PPeers']();
+}
+
+export function GetP2PSeedPlanRecommendation(arg1) {
+  return window['go']['main']['App']['GetP2PSeedPlanRecommendation'](arg1);
 }
 
 export function GetP2PTempDir() {
@@ -334,6 +342,10 @@ export function ListPrintersJSON() {
   return window['go']['main']['App']['ListPrintersJSON']();
 }
 
+export function PostP2PTelemetry(arg1) {
+  return window['go']['main']['App']['PostP2PTelemetry'](arg1);
+}
+
 export function PublishP2PTestArtifact(arg1, arg2) {
   return window['go']['main']['App']['PublishP2PTestArtifact'](arg1, arg2);
 }
@@ -428,6 +440,10 @@ export function ShouldHideOnClose() {
 
 export function StartChatStream(arg1) {
   return window['go']['main']['App']['StartChatStream'](arg1);
+}
+
+export function StartP2PTelemetryLoop(arg1) {
+  return window['go']['main']['App']['StartP2PTelemetryLoop'](arg1);
 }
 
 export function StopChatStream() {

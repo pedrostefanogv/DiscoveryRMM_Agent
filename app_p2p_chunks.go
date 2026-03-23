@@ -13,13 +13,82 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/time/rate"
 )
 
 const (
 	defaultChunkSizeBytes = 8 * 1024 * 1024 // 8 MB
 	minChunkSizeBytes     = 1 * 1024 * 1024 // 1 MB
 	maxParallelChunks     = 4
+	// p2pBandwidthBurst is the token-bucket burst size for download rate limiting.
+	// Set to 4 MB so that any realistic single HTTP read (≤ 64 KB) fits inside
+	// the burst window, preventing spurious WaitN errors.
+	p2pBandwidthBurst = 4 * 1024 * 1024
 )
+
+// p2pChunkScheduler tracks per-peer error counts and enforces an optional
+// bandwidth rate limit across all parallel chunk downloads.
+type p2pChunkScheduler struct {
+	mu          sync.Mutex
+	errorCounts map[string]int
+	limiter     *rate.Limiter
+}
+
+// newP2PChunkScheduler creates a scheduler; bytesPerSec == 0 means unlimited.
+func newP2PChunkScheduler(bytesPerSec int64) *p2pChunkScheduler {
+	s := &p2pChunkScheduler{errorCounts: make(map[string]int)}
+	if bytesPerSec > 0 {
+		s.limiter = rate.NewLimiter(rate.Limit(bytesPerSec), p2pBandwidthBurst)
+	}
+	return s
+}
+
+// pickPeer selects the peer with the fewest recorded errors.
+// Falls back to round-robin when error counts are equal (e.g. first request).
+func (s *p2pChunkScheduler) pickPeer(chunkIdx int, peers []P2PArtifactAccess) P2PArtifactAccess {
+	if len(peers) == 1 {
+		return peers[0]
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// Default: round-robin anchor so peers without errors are distributed evenly.
+	best := peers[chunkIdx%len(peers)]
+	bestErr := s.errorCounts[best.URL]
+	for _, p := range peers {
+		if e := s.errorCounts[p.URL]; e < bestErr {
+			bestErr = e
+			best = p
+		}
+	}
+	return best
+}
+
+// recordError increments the error tally for the given peer URL.
+func (s *p2pChunkScheduler) recordError(peerURL string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.errorCounts[peerURL]++
+}
+
+// waitBandwidth blocks until the rate limiter grants n bytes.
+// It splits large n values into burst-sized chunks to be safe with WaitN.
+func (s *p2pChunkScheduler) waitBandwidth(ctx context.Context, n int) {
+	if s.limiter == nil || n <= 0 {
+		return
+	}
+	remaining := n
+	for remaining > 0 {
+		chunk := remaining
+		if chunk > p2pBandwidthBurst {
+			chunk = p2pBandwidthBurst
+		}
+		if err := s.limiter.WaitN(ctx, chunk); err != nil {
+			return // context cancelled
+		}
+		remaining -= chunk
+	}
+}
 
 // P2PChunkManifest describes how an artifact is divided for swarm download.
 type P2PChunkManifest struct {
@@ -152,7 +221,8 @@ func (s *p2pTransferServer) handleArtifactManifest(w http.ResponseWriter, r *htt
 
 // downloadChunk downloads a single chunk from a peer using an HTTP Range request.
 // The destFile path is the target file to write.
-func downloadChunk(ctx context.Context, baseURL string, chunk P2PChunk, destFile string) error {
+// sched is optional; when non-nil it applies bandwidth rate limiting.
+func downloadChunk(ctx context.Context, baseURL string, chunk P2PChunk, destFile string, sched *p2pChunkScheduler) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL, nil)
 	if err != nil {
 		return err
@@ -185,18 +255,27 @@ func downloadChunk(ctx context.Context, baseURL string, chunk P2PChunk, destFile
 		return fmt.Errorf("chunk %d: checksum divergente", chunk.Index)
 	}
 
+	// Throttle bandwidth: wait for rate-limiter tokens proportional to chunk size.
+	if sched != nil {
+		sched.waitBandwidth(ctx, len(data))
+	}
+
 	return os.WriteFile(destFile, data, 0o644)
 }
 
 // downloadChunked downloads an artifact from multiple peers in parallel chunks.
-// peers must contain at least one element. When len(peers) > 1 chunks are
-// distributed round-robin; with a single peer it degrades gracefully to sequential.
+// peers must contain at least one element. When len(peers) > 1, chunks are
+// distributed using scored peer selection (fewest errors wins); with a single
+// peer it degrades gracefully to sequential.
+// sched is optional; when non-nil it provides scored peer selection and bandwidth
+// rate limiting. Pass nil for a plain round-robin / unlimited download.
 // Returns the final assembled file path and total bytes written.
 func downloadChunked(
 	ctx context.Context,
 	peers []P2PArtifactAccess,
 	manifest P2PChunkManifest,
 	destDir string,
+	sched *p2pChunkScheduler,
 ) (string, int64, error) {
 	if len(peers) == 0 {
 		return "", 0, fmt.Errorf("nenhum peer disponivel para download")
@@ -234,9 +313,17 @@ func downloadChunked(
 				}
 			}
 
-			// Pick peer round-robin by chunk index.
-			access := peers[i%len(peers)]
-			err := downloadChunk(ctx, access.URL, chunk, chunkFile)
+			// Pick peer by score (fewest errors) falling back to round-robin.
+			var access P2PArtifactAccess
+			if sched != nil {
+				access = sched.pickPeer(i, peers)
+			} else {
+				access = peers[i%len(peers)]
+			}
+			err := downloadChunk(ctx, access.URL, chunk, chunkFile, sched)
+			if err != nil && sched != nil {
+				sched.recordError(access.URL)
+			}
 			results <- chunkResult{index: i, err: err}
 		}(i, chunk)
 	}

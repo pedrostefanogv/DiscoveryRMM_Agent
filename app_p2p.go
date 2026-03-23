@@ -155,6 +155,16 @@ func normalizeP2PConfig(cfg P2PConfig) P2PConfig {
 		out.ChunkSizeBytes = minChunkSizeBytes
 	}
 
+	// Validate MaxBandwidthBytesPerSec: clamp negatives to 0 (unlimited);
+	// enforce a sensible floor of 64 KB/s when a non-zero value is given.
+	if out.MaxBandwidthBytesPerSec < 0 {
+		out.MaxBandwidthBytesPerSec = 0
+	}
+	const minBandwidthBytesPerSec = 64 * 1024
+	if out.MaxBandwidthBytesPerSec > 0 && out.MaxBandwidthBytesPerSec < minBandwidthBytesPerSec {
+		out.MaxBandwidthBytesPerSec = minBandwidthBytesPerSec
+	}
+
 	// Validate P2PMode.
 	switch strings.TrimSpace(strings.ToLower(out.P2PMode)) {
 	case P2PModeLegacy, P2PModeHybrid, P2PModeLibp2pOnly:
@@ -258,6 +268,8 @@ func (a *App) GetP2PPeerArtifactIndex() []P2PPeerArtifactIndexView {
 	return a.p2pCoord.GetPeerArtifactIndex()
 }
 
+// FindP2PArtifactPeers returns availability of an artifact across known peers.
+// Lookup is performed exclusively by canonical ArtifactID.
 func (a *App) FindP2PArtifactPeers(artifactName string) P2PArtifactAvailabilityView {
 	if a.p2pCoord == nil {
 		return P2PArtifactAvailabilityView{ArtifactName: sanitizeArtifactName(artifactName), PeerAgentIDs: []string{}}
@@ -503,30 +515,27 @@ func (c *p2pCoordinator) GetPeerArtifactIndex() []P2PPeerArtifactIndexView {
 	return out
 }
 
+// FindArtifactPeers returns a summary of which peers currently advertise the
+// named artifact. Lookup uses canonical ArtifactID exclusively — name-based
+// matching has been removed. Callers must ensure peers populate ArtifactID.
 func (c *p2pCoordinator) FindArtifactPeers(artifactName string) P2PArtifactAvailabilityView {
 	safeArtifact := sanitizeArtifactName(artifactName)
 	artifactID := CanonicalArtifactID("", safeArtifact, "")
-	target := strings.ToLower(strings.TrimSpace(safeArtifact))
 	result := P2PArtifactAvailabilityView{
 		ArtifactID:   artifactID,
 		ArtifactName: strings.TrimSpace(safeArtifact),
 		PeerAgentIDs: []string{},
 	}
-	if target == "" {
+	if artifactID == "" {
 		return result
 	}
 
 	for _, peer := range c.GetPeerArtifactIndex() {
 		for _, artifact := range peer.Artifacts {
-			if artifactID != "" && strings.EqualFold(strings.TrimSpace(artifact.ArtifactID), artifactID) {
+			if strings.EqualFold(strings.TrimSpace(artifact.ArtifactID), artifactID) {
 				result.PeerAgentIDs = append(result.PeerAgentIDs, strings.TrimSpace(peer.PeerAgentID))
 				break
 			}
-			if strings.ToLower(strings.TrimSpace(artifact.ArtifactName)) != target {
-				continue
-			}
-			result.PeerAgentIDs = append(result.PeerAgentIDs, strings.TrimSpace(peer.PeerAgentID))
-			break
 		}
 	}
 	sort.Strings(result.PeerAgentIDs)
@@ -746,7 +755,8 @@ func (c *p2pCoordinator) downloadArtifactSwarm(ctx context.Context, artifactName
 	}
 
 	destDir := c.app.p2pTempDir()
-	path, totalBytes, err := downloadChunked(ctx, accesses, manifest, destDir)
+	sched := newP2PChunkScheduler(cfg.MaxBandwidthBytesPerSec)
+	path, totalBytes, err := downloadChunked(ctx, accesses, manifest, destDir, sched)
 	if err != nil {
 		c.appendAudit("swarm-pull", artifactName, "", "automation", false, err.Error())
 		return P2PArtifactView{}, err
@@ -1052,7 +1062,11 @@ func (c *p2pCoordinator) startDiscovery(ctx context.Context) error {
 	}
 
 	if err := provider.Start(ctx, p2pSelfEndpoint{AgentID: selfAgentID, Host: selfHost, Port: port}, func(peer p2pDiscoveredPeer) {
-		c.upsertPeer(peer)
+		if c.upsertPeer(peer) {
+			// Novo peer descoberto: busca imediata do catálogo e peers dele,
+			// sem esperar o próximo tick do coordinador (propagação gossip).
+			go c.refreshSinglePeer(ctx, peer)
+		}
 	}, func(message string) {
 		if strings.TrimSpace(message) == "" {
 			return
@@ -1070,12 +1084,15 @@ func (c *p2pCoordinator) startDiscovery(ctx context.Context) error {
 	return nil
 }
 
-func (c *p2pCoordinator) upsertPeer(peer p2pDiscoveredPeer) {
+// upsertPeer inserts or updates a discovered peer. Returns true when the peer
+// was not previously known (newly inserted), so callers can trigger an
+// immediate gossip fetch for that peer.
+func (c *p2pCoordinator) upsertPeer(peer p2pDiscoveredPeer) bool {
 	if strings.TrimSpace(peer.AgentID) == "" {
-		return
+		return false
 	}
 	if strings.TrimSpace(peer.Address) == "" || peer.Port <= 0 {
-		return
+		return false
 	}
 	key := strings.ToLower(strings.TrimSpace(peer.AgentID))
 
@@ -1087,12 +1104,13 @@ func (c *p2pCoordinator) upsertPeer(peer p2pDiscoveredPeer) {
 
 	if !existed {
 		c.app.logs.append(fmt.Sprintf("[p2p] peer descoberto: agentId=%s source=%s addr=%s:%d", strings.TrimSpace(peer.AgentID), strings.TrimSpace(peer.Source), strings.TrimSpace(peer.Address), peer.Port))
-		return
+		return true
 	}
 
 	if strings.TrimSpace(previous.Peer.Address) != strings.TrimSpace(peer.Address) || previous.Peer.Port != peer.Port || strings.TrimSpace(previous.Peer.Source) != strings.TrimSpace(peer.Source) {
 		c.app.logs.append(fmt.Sprintf("[p2p] peer atualizado: agentId=%s source=%s addr=%s:%d", strings.TrimSpace(peer.AgentID), strings.TrimSpace(peer.Source), strings.TrimSpace(peer.Address), peer.Port))
 	}
+	return false
 }
 
 func (c *p2pCoordinator) findPeerByAgentID(agentID string) (P2PPeerView, error) {
@@ -1397,6 +1415,50 @@ func maxInt(a, b int) int {
 
 func (c *p2pCoordinator) pullPeerGossip(ctx context.Context) {
 	c.RefreshPeerArtifactIndex(ctx, "gossip")
+}
+
+// refreshSinglePeer faz um fetch imediato de /p2p/peers em um único peer recém-descoberto.
+// Isso propaga o catálogo e a lista de peers dele sem esperar o próximo tick do coordinator.
+func (c *p2pCoordinator) refreshSinglePeer(ctx context.Context, peer p2pDiscoveredPeer) {
+	if strings.TrimSpace(peer.Address) == "" || peer.Port <= 0 {
+		return
+	}
+	url := fmt.Sprintf("http://%s:%d/p2p/peers", peer.Address, peer.Port)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return
+	}
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil || resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if resp != nil {
+			resp.Body.Close()
+		}
+		return
+	}
+	var payload struct {
+		KnownPeers []P2PPeerView     `json:"knownPeers"`
+		Artifacts  []P2PArtifactView `json:"artifacts"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err == nil {
+		for _, p := range payload.KnownPeers {
+			c.upsertPeer(p2pDiscoveredPeer{
+				AgentID:      strings.TrimSpace(p.AgentID),
+				Host:         strings.TrimSpace(p.Host),
+				Address:      strings.TrimSpace(p.Address),
+				Port:         p.Port,
+				Source:       "gossip",
+				KnownPeers:   p.KnownPeers,
+				ConnectedVia: "gossip",
+			})
+		}
+		if len(payload.Artifacts) > 0 {
+			c.upsertPeerArtifacts(peer.AgentID, payload.Artifacts, "gossip-immediate")
+			c.app.logs.append(fmt.Sprintf("[p2p][gossip] peer novo: agentId=%s artifacts=%d peers-transitivos=%d",
+				strings.TrimSpace(peer.AgentID), len(payload.Artifacts), len(payload.KnownPeers)))
+		}
+	}
+	resp.Body.Close()
 }
 
 func (c *p2pCoordinator) RefreshPeerArtifactIndex(ctx context.Context, source string) {

@@ -13,6 +13,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/p2p/discovery/mdns"
+	"github.com/multiformats/go-multiaddr"
 )
 
 const (
@@ -33,7 +34,11 @@ type p2pLibP2PPeerInfo struct {
 // built-in mDNS service (distinct from the existing grandcat/zeroconf path).
 // When a peer is found, a /discovery-p2p/1.0.0 stream is opened to exchange
 // {agentId, httpPort}, which the coordinator then uses for artifact transfers.
-type p2pLibP2PProvider struct{}
+type p2pLibP2PProvider struct {
+	// bootstrapPeers holds optional static multiaddr strings (including peer IDs)
+	// to connect to at startup, enabling discovery in non-multicast networks.
+	bootstrapPeers []string
+}
 
 func (p *p2pLibP2PProvider) Name() string { return p2pDiscoveryLibP2P }
 
@@ -88,6 +93,36 @@ func (p *p2pLibP2PProvider) Start(
 
 	notifee := &libp2pMDNSNotifee{h: h, self: self, onPeer: onPeer, onTrace: onTrace}
 	svc := mdns.NewMdnsService(h, p2pLibP2PRendezvous, notifee)
+
+	// Connect to static bootstrap peers, if configured.
+	// These are used in corporate/VPN networks where mDNS multicast is blocked.
+	for _, addrStr := range p.bootstrapPeers {
+		addrStr = strings.TrimSpace(addrStr)
+		if addrStr == "" {
+			continue
+		}
+		ma, err := multiaddr.NewMultiaddr(addrStr)
+		if err != nil {
+			if onTrace != nil {
+				onTrace(fmt.Sprintf("libp2p bootstrap peer multiaddr invalido %q: %v", addrStr, err))
+			}
+			continue
+		}
+		pi, err := peer.AddrInfoFromP2pAddr(ma)
+		if err != nil {
+			if onTrace != nil {
+				onTrace(fmt.Sprintf("libp2p bootstrap peer info invalido %q: %v", addrStr, err))
+			}
+			continue
+		}
+		if err := h.Connect(ctx, *pi); err != nil {
+			if onTrace != nil {
+				onTrace(fmt.Sprintf("libp2p bootstrap connect falhou %s: %v", addrStr, err))
+			}
+		} else if onTrace != nil {
+			onTrace(fmt.Sprintf("libp2p bootstrap peer conectado: %s", addrStr))
+		}
+	}
 
 	go func() {
 		<-ctx.Done()
@@ -209,11 +244,11 @@ func (m *p2pMultiProvider) Start(
 func pickDiscoveryProvider(cfg P2PConfig) p2pDiscoveryProvider {
 	switch cfg.P2PMode {
 	case P2PModeLibp2pOnly:
-		return &p2pLibP2PProvider{}
+		return &p2pLibP2PProvider{bootstrapPeers: cfg.BootstrapConfig.BootstrapPeers}
 	case P2PModeHybrid:
 		return &p2pMultiProvider{providers: []p2pDiscoveryProvider{
 			&p2pMDNSProvider{},
-			&p2pLibP2PProvider{},
+			&p2pLibP2PProvider{bootstrapPeers: cfg.BootstrapConfig.BootstrapPeers},
 		}}
 	default: // legacy
 		if cfg.DiscoveryMode == p2pDiscoveryUDP {
