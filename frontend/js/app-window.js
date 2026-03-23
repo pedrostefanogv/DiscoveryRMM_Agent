@@ -23,11 +23,11 @@
 
   function updateWindowMeta() {
     if (document.hidden) return;
-    if (!(window.go && window.go.main && window.go.main.App && typeof window.go.main.App.GetStatusOverview === 'function')) {
+    if (!(window.go && window.go.app && window.go.app.App && typeof window.go.app.App.GetStatusOverview === 'function')) {
       return;
     }
 
-    window.go.main.App.GetStatusOverview().then(function (status) {
+    window.go.app.App.GetStatusOverview().then(function (status) {
       if (metaPC) metaPC.textContent = 'PC: ' + ((status && status.hostname) ? status.hostname : '-');
       if (metaServer) metaServer.textContent = 'Servidor: ' + ((status && status.server) ? status.server : '-');
       if (metaConn) metaConn.textContent = 'Conexao: ' + ((status && status.connectionType) ? status.connectionType : '-');

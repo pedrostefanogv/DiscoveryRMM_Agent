@@ -12,16 +12,16 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
+	appkg "discovery/app"
 	"discovery/internal/mcp"
 )
 
 //go:embed all:frontend
 var assets embed.FS
 
-// Version is set at build time via ldflags:
-//
-//	go build -ldflags "-X main.Version=1.2.3"
-var Version = "dev"
+// Version mirrors app.Version for the MCP server entrypoint.
+// Set at build time via ldflags: -X discovery/app.Version=1.2.3
+var Version = appkg.Version
 
 func main() {
 	startupDebugMode := detectStartupDebugMode()
@@ -58,27 +58,28 @@ func main() {
 		log.Println("[startup] execucao automatica detectada: iniciar minimizado no tray")
 	}
 
-	app := NewApp(AppStartupOptions{DebugMode: startupDebugMode, StartMinimized: startupMinimized})
+	app := appkg.NewApp(appkg.AppStartupOptions{DebugMode: startupDebugMode, StartMinimized: startupMinimized, TrayIcon: trayIconICO})
 
 	singleInstance := &options.SingleInstanceLock{
 		UniqueId: "com.discovery.app",
 		OnSecondInstanceLaunch: func(data options.SecondInstanceData) {
 			log.Printf("[single-instance] segunda abertura bloqueada. args=%v", data.Args)
-			if app.ctx == nil {
+			ctx := app.Ctx()
+			if ctx == nil {
 				return
 			}
-			wailsRuntime.WindowUnminimise(app.ctx)
-			wailsRuntime.WindowShow(app.ctx)
+			wailsRuntime.WindowUnminimise(ctx)
+			wailsRuntime.WindowShow(ctx)
 			// Brief always-on-top toggle helps bring the existing window to foreground.
-			wailsRuntime.WindowSetAlwaysOnTop(app.ctx, true)
-			wailsRuntime.WindowSetAlwaysOnTop(app.ctx, false)
+			wailsRuntime.WindowSetAlwaysOnTop(ctx, true)
+			wailsRuntime.WindowSetAlwaysOnTop(ctx, false)
 		},
 	}
 
 	err := wails.Run(&options.App{
 		Title:     "Discovery",
-		Width:     WindowWidth,
-		Height:    WindowHeight,
+		Width:     appkg.WindowWidth,
+		Height:    appkg.WindowHeight,
 		Frameless: true,
 		// Keep right-click context menu enabled in production so users can use
 		// built-in spellcheck suggestions/corrections in text fields.
@@ -86,8 +87,8 @@ func main() {
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
-		OnStartup:  app.startup,
-		OnShutdown: app.shutdown,
+		OnStartup:  appkg.AppStartup(app),
+		OnShutdown: appkg.AppShutdown(app),
 		OnBeforeClose: func(ctx context.Context) (prevent bool) {
 			if !app.ShouldHideOnClose() {
 				return false
@@ -97,7 +98,7 @@ func main() {
 				return false
 			}
 			// Limpar caches em memória antes de ir para o tray
-			app.clearMemoryCaches()
+			app.ClearMemoryCaches()
 			wailsRuntime.WindowHide(ctx)
 			return true // hide to tray instead of quitting
 		},
@@ -132,12 +133,11 @@ func parseArgValue(argName string) string {
 
 // runMCPServer starts the app in headless MCP server mode (JSON-RPC over stdio).
 func runMCPServer() {
-	app := NewApp(AppStartupOptions{})
+	app := appkg.NewApp(appkg.AppStartupOptions{})
 	// Initialize a background context for the app services.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	app.ctx = ctx
-	app.cancel = cancel
+	app.SetContext(ctx)
 
 	srv := mcp.NewServer(app.GetMCPRegistry(), mcp.ServerInfo{
 		Name:    "discovery",

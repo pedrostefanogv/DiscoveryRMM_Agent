@@ -2,10 +2,10 @@
 
 (function () {
   function appApi() {
-    if (!window.go || !window.go.main || !window.go.main.App) {
+    if (!window.go || !window.go.app || !window.go.app.App) {
       throw new Error("API do Wails indisponivel");
     }
-    return window.go.main.App;
+    return window.go.app.App;
   }
 
   var refreshBtn = document.getElementById("refreshBtn");

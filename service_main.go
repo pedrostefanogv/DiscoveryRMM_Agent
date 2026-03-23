@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"discovery/internal/service"
 	"fmt"
 	"io"
 	"log"
@@ -10,6 +9,9 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+
+	appkg "discovery/app"
+	"discovery/internal/service"
 )
 
 // ServiceMode indica se a aplicação está rodando como Windows Service
@@ -24,7 +26,7 @@ func runAsService(logFile string) error {
 	fmt.Println("[SERVICE] Iniciando Discovery Agent como Windows Service")
 
 	// Criar diretório de dados (C:\ProgramData\Discovery)
-	dataDir := getDataDir()
+	dataDir := appkg.GetDataDir()
 	if err := ensureDataDir(dataDir); err != nil {
 		fmt.Fprintf(os.Stderr, "[SERVICE] Erro ao criar diretório de dados: %v\n", err)
 		return err
@@ -70,7 +72,7 @@ func runAsService(logFile string) error {
 }
 
 func getDefaultLogFile() string {
-	dataDir := getDataDir()
+	dataDir := appkg.GetDataDir()
 	return dataDir + "\\logs\\discovery-service.log"
 }
 
