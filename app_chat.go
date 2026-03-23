@@ -20,9 +20,14 @@ import (
 )
 
 func chatConfigPathCandidates() []string {
-	paths := make([]string, 0, 4)
+	paths := make([]string, 0, 5)
 
 	if runtime.GOOS == "windows" {
+		// 1º: C:\ProgramData\Discovery (compartilhado entre usuários)
+		if programData := strings.TrimSpace(os.Getenv("ProgramData")); programData != "" {
+			paths = append(paths, filepath.Join(programData, "Discovery", chatConfigFile))
+		}
+		// 2º: LOCALAPPDATA\Discovery (fallback compatibilidade)
 		if localAppData := strings.TrimSpace(os.Getenv("LOCALAPPDATA")); localAppData != "" {
 			paths = append(paths, filepath.Join(localAppData, "Discovery", chatConfigFile))
 		}

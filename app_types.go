@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -87,6 +89,7 @@ type P2PPeerArtifactIndexView struct {
 
 // P2PArtifactAvailabilityView summarizes which peers can currently provide an artifact.
 type P2PArtifactAvailabilityView struct {
+	ArtifactID   string   `json:"artifactId"`
 	ArtifactName string   `json:"artifactName"`
 	Found        bool     `json:"found"`
 	PeerAgentIDs []string `json:"peerAgentIds"`
@@ -95,6 +98,7 @@ type P2PArtifactAvailabilityView struct {
 
 // P2PArtifactAccess is an authenticated one-shot descriptor for peer downloads.
 type P2PArtifactAccess struct {
+	ArtifactID     string `json:"artifactId"`
 	ArtifactName   string `json:"artifactName"`
 	URL            string `json:"url"`
 	ChecksumSHA256 string `json:"checksumSha256"`
@@ -104,10 +108,29 @@ type P2PArtifactAccess struct {
 
 // P2PArtifactView describes an artifact available in the local temporary cache.
 type P2PArtifactView struct {
-	ArtifactName   string `json:"artifactName"`
-	SizeBytes      int64  `json:"sizeBytes"`
-	ModifiedAtUTC  string `json:"modifiedAtUtc"`
-	ChecksumSHA256 string `json:"checksumSha256"`
+	ArtifactID       string `json:"artifactId"`
+	ArtifactName     string `json:"artifactName"`
+	Version          string `json:"version,omitempty"`
+	SizeBytes        int64  `json:"sizeBytes"`
+	ModifiedAtUTC    string `json:"modifiedAtUtc"`
+	ChecksumSHA256   string `json:"checksumSha256"`
+	Available        bool   `json:"available"`
+	LastHeartbeatUTC string `json:"lastHeartbeatUtc"`
+}
+
+func CanonicalArtifactID(artifactID, artifactName, sourceURL string) string {
+	if id := strings.TrimSpace(artifactID); id != "" {
+		return id
+	}
+	if rawURL := strings.TrimSpace(strings.ToLower(sourceURL)); rawURL != "" {
+		sum := sha256.Sum256([]byte(rawURL))
+		return "urlsha256:" + hex.EncodeToString(sum[:])
+	}
+	name := sanitizeArtifactName(artifactName)
+	if name != "" {
+		return "name:" + strings.ToLower(name)
+	}
+	return ""
 }
 
 // P2PMetrics captures debug-visible transfer and replication counters.

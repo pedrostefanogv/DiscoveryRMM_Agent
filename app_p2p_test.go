@@ -1,6 +1,8 @@
 package main
 
 import (
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -109,5 +111,19 @@ func TestFindArtifactPeersFromIndex(t *testing.T) {
 	}
 	if len(availability.PeerAgentIDs) != 1 || availability.PeerAgentIDs[0] != "peer-a" {
 		t.Fatalf("unexpected peer list: %+v", availability.PeerAgentIDs)
+	}
+}
+
+func TestResolveP2PTempDir(t *testing.T) {
+	windowsPath := resolveP2PTempDir("windows")
+	wantWindows := filepath.Join("C:\\", "Windows", "Temp", "Discovery", "P2P_Temp")
+	if !strings.EqualFold(filepath.Clean(windowsPath), filepath.Clean(wantWindows)) {
+		t.Fatalf("windows path = %q, want %q", windowsPath, wantWindows)
+	}
+
+	linuxPath := resolveP2PTempDir("linux")
+	wantLinux := filepath.Join(getDataDir(), "TempP2P")
+	if linuxPath != wantLinux {
+		t.Fatalf("linux path = %q, want %q", linuxPath, wantLinux)
 	}
 }

@@ -7,13 +7,14 @@ Escopo coberto:
 - API de bootstrap pos-instalacao (`POST /api/agent-install/register`)
 - Parametros de build do instalador (Wails + NSIS)
 - Parametros de execucao do instalador (.exe)
+- Comportamento de instalacao all-users (Windows Service + Task Scheduler)
 
 ## 0. Fluxo pos-instalacao (URL + KEY)
 
 Fluxo esperado apos instalar:
-1. Instalador grava `%LOCALAPPDATA%\Discovery\config.json` com `serverUrl` e `apiKey`.
+1. Instalador grava `C:\ProgramData\Discovery\config.json`.
 2. No startup, o app le esse arquivo.
-3. O app usa a `apiKey` como deploy token e chama `POST /api/agent-install/register` no servidor informado.
+3. Se necessario, o app usa `apiKey`/deploy token e chama `POST /api/agent-install/register` no servidor informado.
 4. A API retorna `token` + `agentId`.
 5. O app persiste esses dados no proprio `config.json` de producao (`authToken` e `agentId`) para as proximas inicializacoes.
 6. A `apiKey` e removida do arquivo apos o primeiro registro bem-sucedido.
@@ -21,14 +22,25 @@ Fluxo esperado apos instalar:
 Caminho padrao do arquivo de producao no Windows:
 
 ```text
-%LOCALAPPDATA%\Discovery\config.json
+C:\ProgramData\Discovery\config.json
 ```
 
 Observacao:
 - O fluxo legado de auto-registro por `deployToken` foi removido.
 - O caminho oficial de bootstrap e `POST /api/agent-install/register` com `Authorization: Bearer <deploy_token>`.
 - O instalador remove um `config.json` legado no diretório de instalação para evitar conflito de origem.
-- Se o instalador nao conseguir criar/gravar `%LOCALAPPDATA%\Discovery\config.json`, a instalacao e interrompida com erro.
+- Se o instalador nao conseguir criar/gravar `C:\ProgramData\Discovery\config.json`, a instalacao e interrompida com erro.
+- O arquivo pode conter campos canônicos e legados por compatibilidade (`server_url`/`auth_token` e `serverUrl`/`apiKey`).
+
+### Cache temporario P2P (Windows)
+
+Para cenarios com multiplos usuarios no mesmo host, o cache P2P usa diretório compartilhado no Windows:
+
+```text
+C:\Windows\Temp\Discovery\P2P_Temp
+```
+
+Esse caminho e usado para publicar, baixar e limpar artifacts temporarios do P2P.
 
 Payload enviado para `POST /api/agent-install/register`:
 
@@ -172,13 +184,41 @@ Observacoes de comportamento:
 - Instalacao silenciosa NSIS padrao continua disponivel via `/S` (comportamento NSIS).
 - Em caso de conflito, CLI de instalacao prevalece sobre os defaults embutidos no build.
 
-## 4. Exemplo completo (override manual)
+## 4. Comportamento all-users no Windows (implementacao atual)
+
+Durante a instalacao, o NSIS executa estas acoes:
+
+1. Registra o Windows Service `DiscoveryAgent` com inicio automatico (`start= auto`) e argumento `--service`.
+2. Configura politica de recuperacao do service para reiniciar automaticamente em falhas.
+3. Registra task agendada `DiscoveryAgentUI` com trigger `At log on of any user`.
+4. A task inicia a UI com delay de 30 segundos e argumentos:
+
+```text
+--startup-minimized --startup-source=task-scheduler
+```
+
+5. Remove atalho legado de startup (`$SMSTARTUP`) durante migracao.
+
+No uninstall:
+
+1. Remove service `DiscoveryAgent`.
+2. Remove task `DiscoveryAgentUI`.
+3. Mantem limpeza de atalho legado de startup.
+
+Comandos uteis para verificacao:
+
+```powershell
+sc query DiscoveryAgent
+schtasks /query /tn "DiscoveryAgentUI"
+```
+
+## 5. Exemplo completo (override manual)
 
 ```powershell
 discovery-acme-001.exe /URL="api.alt.example.com" /KEY="outra-key" /DISCOVERY=0 /MINIMAL
 ```
 
-## 5. Placeholders do template dinamico (quando aplicavel)
+## 6. Placeholders do template dinamico (quando aplicavel)
 
 No fluxo de geracao dinamica de `project.nsi.template`, os placeholders documentados sao:
 
@@ -194,7 +234,7 @@ No fluxo de geracao dinamica de `project.nsi.template`, os placeholders document
 - `{{MINIMAL_DEFAULT}}`
 - `{{CLIENT_ID}}`
 
-## 6. Fontes no repositorio
+## 7. Fontes no repositorio
 
 - `build/windows/installer/project.nsi`
 - `DOCs/OPCAO1_TEMPLATE_NSIS.md`

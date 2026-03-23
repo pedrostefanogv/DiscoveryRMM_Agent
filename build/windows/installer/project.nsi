@@ -37,6 +37,8 @@ Unicode true
 !define INFO_COPYRIGHT      "Copyright (c) 2026 Discovery"
 !define PRODUCT_EXECUTABLE  "discovery.exe"
 !define UNINST_KEY_NAME     "Discovery.RMM"
+!define DISCOVERY_SERVICE_NAME "DiscoveryAgent"
+!define DISCOVERY_UI_TASK_NAME "DiscoveryAgentUI"
 
 ## Build-time defaults (can be overridden by install-time CLI parameters)
 !ifdef ARG_DEFAULT_URL
@@ -260,12 +262,20 @@ Section
 
     !insertmacro wails.files
 
-    CreateShortcut "$SMPROGRAMS\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
-    CreateShortCut "$DESKTOP\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
-   CreateShortCut "$SMSTARTUP\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}" "--startup-minimized"
+   CreateShortcut "$SMPROGRAMS\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
+   CreateShortCut "$DESKTOP\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
+
+      # Garantir estrutura compartilhada em ProgramData
+      Call EnsureSharedDataDir
     
     # Salvar configurações do agente
     Call SaveAgentConfig
+
+      # Registrar e iniciar serviço Windows (modo headless 24/7)
+      Call RegisterWindowsService
+
+      # Registrar autostart da UI via Task Scheduler (At log on of any user)
+      Call RegisterUIStartupTask
 
     !insertmacro wails.associateFiles
     !insertmacro wails.associateCustomProtocols
@@ -275,6 +285,12 @@ SectionEnd
 
 Section "uninstall"
     !insertmacro wails.setShellContext
+
+   # Encerrar/remover service antes de limpar binários
+   Call UnregisterWindowsService
+
+   # Remover task agendada de autostart da UI
+   Call UnregisterUIStartupTask
 
     RMDir /r "$AppData\${PRODUCT_EXECUTABLE}" # Remove the WebView2 DataPath
 
@@ -292,14 +308,10 @@ SectionEnd
 
 # Função para salvar as configurações do agente
 Function SaveAgentConfig
-   # Ler LOCALAPPDATA diretamente da variável de ambiente.
-   # IMPORTANTE: $LOCALAPPDATA do NSIS não é confiável aqui porque wails.setShellContext
-   # chama SetShellVarContext all (para instalar para todos os usuários), o que faz
-   # $LOCALAPPDATA apontar para o perfil do sistema e não do usuário atual.
-   # ReadEnvStr sempre retorna o valor real do processo que invocou o instalador.
-   ReadEnvStr $R0 "LOCALAPPDATA"
+   # Config compartilhada em ProgramData para suportar múltiplos usuários.
+   StrCpy $R0 "$COMMONAPPDATA"
    ${If} $R0 == ""
-      MessageBox MB_ICONSTOP "Variavel de ambiente LOCALAPPDATA nao encontrada. Nao foi possivel gravar a configuracao do agente."
+      MessageBox MB_ICONSTOP "Pasta ProgramData nao encontrada. Nao foi possivel gravar a configuracao do agente."
       Abort
    ${EndIf}
 
@@ -322,12 +334,21 @@ Function SaveAgentConfig
    ${EndIf}
    
    FileWrite $0 "{$\r$\n"
+   # Formato canônico (service)
+   FileWrite $0 '  "server_url": "$ServerUrl",$\r$\n'
+   FileWrite $0 '  "auth_token": "$ServerKey",$\r$\n'
+   FileWrite $0 '  "api_scheme": "https",$\r$\n'
+   FileWrite $0 '  "api_server": "$ServerUrl",$\r$\n'
+   FileWrite $0 '  "inventory_sync_interval_minutes": 15,$\r$\n'
+   # Formato legado (compatibilidade)
    FileWrite $0 '  "serverUrl": "$ServerUrl",$\r$\n'
    FileWrite $0 '  "apiKey": "$ServerKey",$\r$\n'
    ${If} $DiscoveryEnabled == "1"
-      FileWrite $0 '  "discoveryEnabled": true$\r$\n'
+      FileWrite $0 '  "discoveryEnabled": true,$\r$\n'
+      FileWrite $0 '  "p2p_enabled": true$\r$\n'
    ${Else}
-      FileWrite $0 '  "discoveryEnabled": false$\r$\n'
+      FileWrite $0 '  "discoveryEnabled": false,$\r$\n'
+      FileWrite $0 '  "p2p_enabled": false$\r$\n'
    ${EndIf}
    FileWrite $0 "}$\r$\n"
    
@@ -337,4 +358,60 @@ FunctionEnd
 
 Function LaunchInstalledApp
    Exec '"$INSTDIR\${PRODUCT_EXECUTABLE}"'
+FunctionEnd
+
+Function EnsureSharedDataDir
+   CreateDirectory "$COMMONAPPDATA\Discovery"
+   CreateDirectory "$COMMONAPPDATA\Discovery\logs"
+FunctionEnd
+
+Function RegisterWindowsService
+   DetailPrint "Registrando Windows Service ${DISCOVERY_SERVICE_NAME}"
+
+   # Remover versão anterior (idempotente)
+   ExecWait '"$SYSDIR\sc.exe" stop "${DISCOVERY_SERVICE_NAME}"' $R0
+   ExecWait '"$SYSDIR\sc.exe" delete "${DISCOVERY_SERVICE_NAME}"' $R0
+
+   # Registrar serviço com inicialização automática
+   ExecWait '"$SYSDIR\sc.exe" create "${DISCOVERY_SERVICE_NAME}" binPath= "\"$INSTDIR\${PRODUCT_EXECUTABLE}\" --service" start= auto DisplayName= "Discovery Agent Service"' $R0
+   ${If} $R0 != 0
+      MessageBox MB_ICONSTOP "Falha ao registrar o Windows Service (${DISCOVERY_SERVICE_NAME}). Codigo: $R0"
+      Abort
+   ${EndIf}
+
+   # Configurar recuperação automática
+   ExecWait '"$SYSDIR\sc.exe" failure "${DISCOVERY_SERVICE_NAME}" reset= 86400 actions= restart/5000/restart/5000/restart/5000' $R1
+   ExecWait '"$SYSDIR\sc.exe" description "${DISCOVERY_SERVICE_NAME}" "Discovery background service (multi-user)"' $R1
+
+   # Iniciar serviço após instalação
+   ExecWait '"$SYSDIR\sc.exe" start "${DISCOVERY_SERVICE_NAME}"' $R1
+   ${If} $R1 != 0
+      DetailPrint "Aviso: service instalado, mas falhou ao iniciar automaticamente. Codigo: $R1"
+   ${EndIf}
+FunctionEnd
+
+Function RegisterUIStartupTask
+   DetailPrint "Registrando tarefa de autostart da UI (${DISCOVERY_UI_TASK_NAME})"
+
+   # Limpar atalho legado de startup (migração)
+   Delete "$SMSTARTUP\${INFO_PRODUCTNAME}.lnk"
+
+   ExecWait '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -Command "try { $action = New-ScheduledTaskAction -Execute ''$INSTDIR\${PRODUCT_EXECUTABLE}'' -Argument ''--startup-minimized --startup-source=task-scheduler''; $trigger = New-ScheduledTaskTrigger -AtLogOn; $trigger.Delay = ''PT30S''; $principal = New-ScheduledTaskPrincipal -GroupId ''S-1-5-32-545'' -LogonType Interactive -RunLevel Limited; Register-ScheduledTask -TaskName ''${DISCOVERY_UI_TASK_NAME}'' -Action $action -Trigger $trigger -Principal $principal -Description ''Discovery UI autostart for any logged-on user'' -Force | Out-Null; exit 0 } catch { Write-Output $_.Exception.Message; exit 1 }"' $R0
+   ${If} $R0 != 0
+      MessageBox MB_ICONSTOP "Falha ao registrar tarefa de autostart da UI (${DISCOVERY_UI_TASK_NAME}). Codigo: $R0"
+      Abort
+   ${EndIf}
+FunctionEnd
+
+Function UnregisterWindowsService
+   DetailPrint "Removendo Windows Service ${DISCOVERY_SERVICE_NAME}"
+   ExecWait '"$SYSDIR\sc.exe" stop "${DISCOVERY_SERVICE_NAME}"' $R0
+   ExecWait '"$SYSDIR\sc.exe" delete "${DISCOVERY_SERVICE_NAME}"' $R0
+FunctionEnd
+
+Function UnregisterUIStartupTask
+   DetailPrint "Removendo tarefa de autostart da UI (${DISCOVERY_UI_TASK_NAME})"
+   ExecWait '"$SYSDIR\schtasks.exe" /Delete /TN "${DISCOVERY_UI_TASK_NAME}" /F' $R0
+   # Manter limpeza de atalho legado para instalações antigas
+   Delete "$SMSTARTUP\${INFO_PRODUCTNAME}.lnk"
 FunctionEnd

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -474,8 +475,10 @@ func (c *p2pCoordinator) GetPeerArtifactIndex() []P2PPeerArtifactIndexView {
 
 func (c *p2pCoordinator) FindArtifactPeers(artifactName string) P2PArtifactAvailabilityView {
 	safeArtifact := sanitizeArtifactName(artifactName)
+	artifactID := CanonicalArtifactID("", safeArtifact, "")
 	target := strings.ToLower(strings.TrimSpace(safeArtifact))
 	result := P2PArtifactAvailabilityView{
+		ArtifactID:   artifactID,
 		ArtifactName: strings.TrimSpace(safeArtifact),
 		PeerAgentIDs: []string{},
 	}
@@ -485,6 +488,10 @@ func (c *p2pCoordinator) FindArtifactPeers(artifactName string) P2PArtifactAvail
 
 	for _, peer := range c.GetPeerArtifactIndex() {
 		for _, artifact := range peer.Artifacts {
+			if artifactID != "" && strings.EqualFold(strings.TrimSpace(artifact.ArtifactID), artifactID) {
+				result.PeerAgentIDs = append(result.PeerAgentIDs, strings.TrimSpace(peer.PeerAgentID))
+				break
+			}
 			if strings.ToLower(strings.TrimSpace(artifact.ArtifactName)) != target {
 				continue
 			}
@@ -604,10 +611,14 @@ func (c *p2pCoordinator) DownloadArtifactFromPeer(ctx context.Context, artifactN
 	}
 	c.appendAudit("pull", artifactName, sourcePeerID, "automation", true, "artifact baixado do peer")
 	return P2PArtifactView{
-		ArtifactName:   artifactName,
-		SizeBytes:      info.Size(),
-		ModifiedAtUTC:  formatTimeRFC3339(info.ModTime()),
-		ChecksumSHA256: checksum,
+		ArtifactID:       CanonicalArtifactID(access.ArtifactID, artifactName, ""),
+		ArtifactName:     artifactName,
+		Version:          "",
+		SizeBytes:        info.Size(),
+		ModifiedAtUTC:    formatTimeRFC3339(info.ModTime()),
+		ChecksumSHA256:   checksum,
+		Available:        true,
+		LastHeartbeatUTC: formatTimeRFC3339(time.Now().UTC()),
 	}, nil
 }
 
@@ -639,10 +650,14 @@ func (c *p2pCoordinator) ListArtifacts() ([]P2PArtifactView, error) {
 			continue
 		}
 		artifacts = append(artifacts, P2PArtifactView{
-			ArtifactName:   name,
-			SizeBytes:      info.Size(),
-			ModifiedAtUTC:  formatTimeRFC3339(info.ModTime()),
-			ChecksumSHA256: checksum,
+			ArtifactID:       CanonicalArtifactID("", name, ""),
+			ArtifactName:     name,
+			Version:          "",
+			SizeBytes:        info.Size(),
+			ModifiedAtUTC:    formatTimeRFC3339(info.ModTime()),
+			ChecksumSHA256:   checksum,
+			Available:        true,
+			LastHeartbeatUTC: formatTimeRFC3339(time.Now().UTC()),
 		})
 	}
 	return artifacts, nil
@@ -673,10 +688,14 @@ func (c *p2pCoordinator) PublishTestArtifact(artifactName, content string) (P2PA
 	c.metrics.PublishedArtifacts++
 	c.mu.Unlock()
 	return P2PArtifactView{
-		ArtifactName:   artifactName,
-		SizeBytes:      info.Size(),
-		ModifiedAtUTC:  formatTimeRFC3339(info.ModTime()),
-		ChecksumSHA256: checksum,
+		ArtifactID:       CanonicalArtifactID("", artifactName, ""),
+		ArtifactName:     artifactName,
+		Version:          "",
+		SizeBytes:        info.Size(),
+		ModifiedAtUTC:    formatTimeRFC3339(info.ModTime()),
+		ChecksumSHA256:   checksum,
+		Available:        true,
+		LastHeartbeatUTC: formatTimeRFC3339(time.Now().UTC()),
 	}, nil
 }
 
@@ -731,10 +750,14 @@ func (c *p2pCoordinator) PublishFile(sourcePath string) (P2PArtifactView, error)
 	c.metrics.PublishedArtifacts++
 	c.mu.Unlock()
 	return P2PArtifactView{
-		ArtifactName:   artifactName,
-		SizeBytes:      info.Size(),
-		ModifiedAtUTC:  formatTimeRFC3339(info.ModTime()),
-		ChecksumSHA256: checksum,
+		ArtifactID:       CanonicalArtifactID("", artifactName, ""),
+		ArtifactName:     artifactName,
+		Version:          "",
+		SizeBytes:        info.Size(),
+		ModifiedAtUTC:    formatTimeRFC3339(info.ModTime()),
+		ChecksumSHA256:   checksum,
+		Available:        true,
+		LastHeartbeatUTC: formatTimeRFC3339(time.Now().UTC()),
 	}, nil
 }
 
@@ -1328,12 +1351,20 @@ func parsePortFromURL(raw string) (int, error) {
 	return strconv.Atoi(portPart)
 }
 
-func (a *App) p2pTempDir() string {
-	base := strings.TrimSpace(os.TempDir())
-	if base == "" {
-		base = getDataDir()
+func resolveP2PTempDir(goos string) string {
+	if strings.EqualFold(strings.TrimSpace(goos), "windows") {
+		// Usar pasta temporária do Windows para permitir limpeza automática pelo sistema.
+		windowsDir := strings.TrimSpace(os.Getenv("WINDIR"))
+		if windowsDir == "" {
+			windowsDir = filepath.Join("C:\\", "Windows")
+		}
+		return filepath.Join(windowsDir, "Temp", "Discovery", "P2P_Temp")
 	}
-	return filepath.Join(base, "Discovery", "TempP2P")
+	return filepath.Join(getDataDir(), "TempP2P")
+}
+
+func (a *App) p2pTempDir() string {
+	return resolveP2PTempDir(runtime.GOOS)
 }
 
 func (a *App) cleanupExpiredP2PTempArtifacts(now time.Time) (int, error) {

@@ -52,8 +52,14 @@ const (
 )
 
 // getDataDir retorna o diretório de dados da aplicação
+// Prioridade (Windows): C:\ProgramData\Discovery -> LOCALAPPDATA\Discovery -> home/.discovery
 func getDataDir() string {
 	if runtime.GOOS == "windows" {
+		// 1º: Usar C:\ProgramData\Discovery (compartilhado entre usuários)
+		if programData := strings.TrimSpace(os.Getenv("ProgramData")); programData != "" {
+			return filepath.Join(programData, "Discovery")
+		}
+		// 2º: Fallback para LOCALAPPDATA\Discovery (compatibilidade)
 		if localAppData := strings.TrimSpace(os.Getenv("LOCALAPPDATA")); localAppData != "" {
 			return filepath.Join(localAppData, "Discovery")
 		}
@@ -518,9 +524,14 @@ func (a *App) GetWatchdogHealth() []map[string]interface{} {
 }
 
 func debugConfigPathCandidates() []string {
-	paths := make([]string, 0, 4)
+	paths := make([]string, 0, 5)
 
 	if runtime.GOOS == "windows" {
+		// 1º: C:\ProgramData\Discovery (compartilhado entre usuários)
+		if programData := strings.TrimSpace(os.Getenv("ProgramData")); programData != "" {
+			paths = append(paths, filepath.Join(programData, "Discovery", debugConfigFile))
+		}
+		// 2º: LOCALAPPDATA\Discovery (fallback compatibilidade)
 		if localAppData := strings.TrimSpace(os.Getenv("LOCALAPPDATA")); localAppData != "" {
 			paths = append(paths, filepath.Join(localAppData, "Discovery", debugConfigFile))
 		}

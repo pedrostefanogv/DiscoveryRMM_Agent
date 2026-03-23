@@ -140,15 +140,22 @@ func findBestArtifactForPackage(artifacts []P2PArtifactView, packageID string) s
 		if name == "" {
 			continue
 		}
+		artifactKey := normalizePackageLookupKey(artifact.ArtifactID)
 		ext := strings.ToLower(filepath.Ext(name))
 		if ext != ".exe" && ext != ".msi" {
 			continue
 		}
 		norm := normalizePackageLookupKey(name)
-		if !strings.Contains(norm, key) {
+		if !strings.Contains(norm, key) && !strings.Contains(artifactKey, key) {
 			continue
 		}
 		score := 0
+		if artifactKey == key {
+			score += 5
+		}
+		if strings.HasPrefix(artifactKey, key) {
+			score += 3
+		}
 		if strings.HasPrefix(norm, key) {
 			score += 2
 		}

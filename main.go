@@ -26,6 +26,16 @@ var Version = "dev"
 func main() {
 	startupDebugMode := detectStartupDebugMode()
 	startupMinimized := hasStartupArg("--startup-minimized")
+	startupSource := strings.TrimSpace(parseArgValue("--startup-source"))
+
+	// If started with --service, run as Windows Service (headless, no UI).
+	if hasStartupArg("--service") {
+		logFile := parseArgValue("--log-file")
+		if err := runAsService(logFile); err != nil {
+			log.Fatalf("[SERVICE] erro fatal: %v", err)
+		}
+		return
+	}
 
 	// If started with --mcp, run as a stdio MCP server (for Claude Desktop, etc).
 	if hasStartupArg("--mcp") {
@@ -36,6 +46,14 @@ func main() {
 	if startupDebugMode {
 		log.Println("[startup] Shift/Ctrl detectado: inicializando em modo debug (transitorio)")
 	}
+	if startupSource == "" {
+		if startupMinimized {
+			startupSource = "autostart"
+		} else {
+			startupSource = "manual"
+		}
+	}
+	log.Printf("[startup] origem da execucao: %s", startupSource)
 	if startupMinimized {
 		log.Println("[startup] execucao automatica detectada: iniciar minimizado no tray")
 	}
@@ -100,6 +118,16 @@ func hasStartupArg(arg string) bool {
 		}
 	}
 	return false
+}
+
+// parseArgValue extrai o valor de um argumento no formato --key=value
+func parseArgValue(argName string) string {
+	for _, arg := range os.Args[1:] {
+		if strings.HasPrefix(strings.ToLower(arg), strings.ToLower(argName)+"=") {
+			return arg[len(argName)+1:]
+		}
+	}
+	return ""
 }
 
 // runMCPServer starts the app in headless MCP server mode (JSON-RPC over stdio).

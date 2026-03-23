@@ -311,9 +311,14 @@ func (a *App) bootstrapAgentCredentialsFromInstallerConfig(ctx context.Context) 
 }
 
 func installerConfigPathCandidates() []string {
-	paths := make([]string, 0, 4)
+	paths := make([]string, 0, 5)
 
 	if runtime.GOOS == "windows" {
+		// 1º: C:\ProgramData\Discovery (compartilhado entre usuários)
+		if programData := strings.TrimSpace(os.Getenv("ProgramData")); programData != "" {
+			paths = append(paths, filepath.Join(programData, "Discovery", "config.json"))
+		}
+		// 2º: LOCALAPPDATA\Discovery (fallback compatibilidade)
 		if localAppData := strings.TrimSpace(os.Getenv("LOCALAPPDATA")); localAppData != "" {
 			paths = append(paths, filepath.Join(localAppData, "Discovery", "config.json"))
 		}
@@ -332,9 +337,14 @@ func installerConfigPathCandidates() []string {
 }
 
 func installerConfigWriteCandidates(sourcePath string) []string {
-	paths := make([]string, 0, 4)
+	paths := make([]string, 0, 5)
 
 	if runtime.GOOS == "windows" {
+		// 1º: C:\ProgramData\Discovery (preferência - compartilhado entre usuários)
+		if programData := strings.TrimSpace(os.Getenv("ProgramData")); programData != "" {
+			paths = append(paths, filepath.Join(programData, "Discovery", "config.json"))
+		}
+		// 2º: LOCALAPPDATA\Discovery (fallback compatibilidade)
 		if localAppData := strings.TrimSpace(os.Getenv("LOCALAPPDATA")); localAppData != "" {
 			paths = append(paths, filepath.Join(localAppData, "Discovery", "config.json"))
 		}
@@ -786,9 +796,7 @@ func (a *App) GetRealtimeStatus() (RealtimeStatus, error) {
 	if err != nil {
 		return RealtimeStatus{}, fmt.Errorf("URL invalida: %w", err)
 	}
-	if strings.TrimSpace(cfg.AuthToken) != "" {
-		req.Header.Set("Authorization", "Bearer "+cfg.AuthToken)
-	}
+	setAgentAuthHeaders(req, cfg.AuthToken)
 	if strings.TrimSpace(cfg.AgentID) != "" {
 		req.Header.Set("X-Agent-ID", cfg.AgentID)
 	}
