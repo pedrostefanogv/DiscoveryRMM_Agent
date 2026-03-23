@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"discovery/app/netutil"
 )
 
 func (a *App) supportLogf(format string, args ...any) {
@@ -110,15 +112,6 @@ func toBool(values ...any) bool {
 		}
 	}
 	return false
-}
-
-func setAgentAuthHeaders(req *http.Request, token string) {
-	token = strings.TrimSpace(token)
-	if token == "" {
-		return
-	}
-	req.Header.Set("X-Agent-Token", token)
-	req.Header.Set("Authorization", "Bearer "+token)
 }
 
 func extractAgentInfoFromJSON(body []byte, cfg DebugConfig) (AgentInfo, error) {
@@ -242,7 +235,7 @@ func (a *App) fetchAgentContext() (AgentInfo, error) {
 		a.supportLogf("falha ao montar request de contexto do agente: %v", wrapped)
 		return AgentInfo{}, wrapped
 	}
-	setAgentAuthHeaders(req, cfg.AuthToken)
+	netutil.SetAgentAuthHeaders(req, cfg.AuthToken)
 
 	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
 	if err != nil {
@@ -317,7 +310,7 @@ func (a *App) GetSupportTickets() ([]APITicket, error) {
 		a.supportLogf("falha ao montar request de listagem: %v", wrapped)
 		return nil, wrapped
 	}
-	setAgentAuthHeaders(req, cfg.AuthToken)
+	netutil.SetAgentAuthHeaders(req, cfg.AuthToken)
 
 	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
 	if err != nil {
@@ -414,7 +407,7 @@ func (a *App) CreateSupportTicket(input CreateTicketInput) (APITicket, error) {
 		return APITicket{}, wrapped
 	}
 	req.Header.Set("Content-Type", "application/json")
-	setAgentAuthHeaders(req, cfg.AuthToken)
+	netutil.SetAgentAuthHeaders(req, cfg.AuthToken)
 
 	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
 	if err != nil {
@@ -459,7 +452,7 @@ func (a *App) GetSupportTicketDetails(ticketID string) (APITicket, error) {
 	if err != nil {
 		return APITicket{}, err
 	}
-	setAgentAuthHeaders(req, cfg.AuthToken)
+	netutil.SetAgentAuthHeaders(req, cfg.AuthToken)
 
 	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
 	if err != nil {
@@ -548,7 +541,7 @@ func (a *App) GetTicketWorkflowStates() ([]APIWorkflowState, error) {
 			lastErr = fmt.Errorf("URL inválida: %w", err)
 			continue
 		}
-		setAgentAuthHeaders(req, cfg.AuthToken)
+		netutil.SetAgentAuthHeaders(req, cfg.AuthToken)
 
 		resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
 		if err != nil {
@@ -612,7 +605,7 @@ func (a *App) GetTicketComments(ticketID string) ([]TicketComment, error) {
 	if err != nil {
 		return nil, err
 	}
-	setAgentAuthHeaders(req, cfg.AuthToken)
+	netutil.SetAgentAuthHeaders(req, cfg.AuthToken)
 
 	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
 	if err != nil {
@@ -676,7 +669,7 @@ func (a *App) AddTicketCommentWithOptions(ticketID, content string, isInternal b
 		return TicketComment{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	setAgentAuthHeaders(req, cfg.AuthToken)
+	netutil.SetAgentAuthHeaders(req, cfg.AuthToken)
 
 	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
 	if err != nil {
@@ -755,7 +748,7 @@ func (a *App) CloseSupportTicket(ticketID string, input CloseTicketInput) (APITi
 		return APITicket{}, fmt.Errorf("URL inválida: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	setAgentAuthHeaders(req, cfg.AuthToken)
+	netutil.SetAgentAuthHeaders(req, cfg.AuthToken)
 
 	a.supportLogf("fechando chamado %s", ticketID)
 	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
@@ -1084,7 +1077,7 @@ func (a *App) fetchKnowledgeList(info AgentInfo, category string) ([]KnowledgeAr
 	if err != nil {
 		return nil, fmt.Errorf("URL inválida: %w", err)
 	}
-	setAgentAuthHeaders(req, cfg.AuthToken)
+	netutil.SetAgentAuthHeaders(req, cfg.AuthToken)
 
 	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
 	if err != nil {
@@ -1146,7 +1139,7 @@ func (a *App) fetchKnowledgeDetail(info AgentInfo, articleID string) (KnowledgeA
 	if err != nil {
 		return KnowledgeArticle{}, fmt.Errorf("URL inválida: %w", err)
 	}
-	setAgentAuthHeaders(req, cfg.AuthToken)
+	netutil.SetAgentAuthHeaders(req, cfg.AuthToken)
 
 	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
 	if err != nil {

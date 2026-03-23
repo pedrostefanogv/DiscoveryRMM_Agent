@@ -1,11 +1,39 @@
-package app
+package updates
 
 import (
+	"context"
 	"strings"
 	"time"
 
 	"discovery/internal/models"
 )
+
+// AppsService defines the package manager surface used by updates.
+type AppsService interface {
+	ListUpgradable(ctx context.Context) (string, error)
+	ListInstalled(ctx context.Context) (string, error)
+}
+
+// ActivityFunc starts and ends a user-visible activity.
+type ActivityFunc func(string) func()
+
+// Options wires the updates service.
+type Options struct {
+	Apps          AppsService
+	BeginActivity ActivityFunc
+	Logf          func(string)
+	Now           func() time.Time
+	Ctx           func() context.Context
+}
+
+// Service handles update discovery and package actions.
+type Service struct {
+	apps          AppsService
+	beginActivity ActivityFunc
+	logf          func(string)
+	now           func() time.Time
+	ctx           func() context.Context
+}
 
 const (
 	packageActionInstall   = "install"
@@ -13,18 +41,83 @@ const (
 	packageActionUpgrade   = "upgrade"
 )
 
+// NewService builds a updates service.
+func NewService(opts Options) *Service {
+	logf := opts.Logf
+	if logf == nil {
+		logf = func(string) {}
+	}
+	now := opts.Now
+	if now == nil {
+		now = time.Now
+	}
+	return &Service{
+		apps:          opts.Apps,
+		beginActivity: opts.BeginActivity,
+		logf:          logf,
+		now:           now,
+		ctx:           opts.Ctx,
+	}
+}
+
 // GetPendingUpdates runs `winget upgrade` and parses the output into structured items.
-func (a *App) GetPendingUpdates() ([]models.UpgradeItem, error) {
-	done := a.beginActivity("checagem de atualizacoes")
-	defer done()
-	raw, err := a.appsSvc.ListUpgradable(a.ctx)
-	a.logs.append("[winget upgrade] " + time.Now().Format("15:04:05"))
-	a.logs.append(raw)
+func (s *Service) GetPendingUpdates() ([]models.UpgradeItem, error) {
+	done := s.beginActivity("checagem de atualizacoes")
+	if done != nil {
+		defer done()
+	}
+	ctx := context.Background()
+	if s.ctx != nil {
+		ctx = s.ctx()
+	}
+	raw, err := s.apps.ListUpgradable(ctx)
+	s.logf("[winget upgrade] " + s.now().Format("15:04:05"))
+	s.logf(raw)
 	if err != nil {
 		return nil, err
 	}
 	items := parseUpgradeOutput(raw)
 	return items, nil
+}
+
+// GetPackageActions returns a contextual action map keyed by package id.
+// Values: install, uninstall, upgrade.
+func (s *Service) GetPackageActions() (map[string]string, error) {
+	done := s.beginActivity("contexto de pacotes")
+	if done != nil {
+		defer done()
+	}
+
+	actions := map[string]string{}
+	ctx := context.Background()
+	if s.ctx != nil {
+		ctx = s.ctx()
+	}
+
+	installedRaw, err := s.apps.ListInstalled(ctx)
+	if err != nil {
+		return actions, err
+	}
+	s.logf("[winget list] " + s.now().Format("15:04:05"))
+	s.logf(installedRaw)
+
+	for _, id := range parseInstalledOutput(installedRaw) {
+		actions[strings.ToLower(id)] = packageActionUninstall
+	}
+
+	updatesRaw, updatesErr := s.apps.ListUpgradable(ctx)
+	s.logf("[winget upgrade] " + s.now().Format("15:04:05"))
+	s.logf(updatesRaw)
+	if updatesErr == nil {
+		for _, u := range parseUpgradeOutput(updatesRaw) {
+			if strings.TrimSpace(u.ID) == "" {
+				continue
+			}
+			actions[strings.ToLower(u.ID)] = packageActionUpgrade
+		}
+	}
+
+	return actions, nil
 }
 
 // parseUpgradeOutput parses the tabular output of `winget upgrade`.
@@ -150,40 +243,6 @@ func safeSubstring(s string, start, end int) string {
 	return string(runes[start:end])
 }
 
-// GetPackageActions returns a contextual action map keyed by package id.
-// Values: install, uninstall, upgrade.
-func (a *App) GetPackageActions() (map[string]string, error) {
-	done := a.beginActivity("contexto de pacotes")
-	defer done()
-
-	actions := map[string]string{}
-
-	installedRaw, err := a.appsSvc.ListInstalled(a.ctx)
-	if err != nil {
-		return actions, err
-	}
-	a.logs.append("[winget list] " + time.Now().Format("15:04:05"))
-	a.logs.append(installedRaw)
-
-	for _, id := range parseInstalledOutput(installedRaw) {
-		actions[strings.ToLower(id)] = packageActionUninstall
-	}
-
-	updatesRaw, updatesErr := a.appsSvc.ListUpgradable(a.ctx)
-	a.logs.append("[winget upgrade] " + time.Now().Format("15:04:05"))
-	a.logs.append(updatesRaw)
-	if updatesErr == nil {
-		for _, u := range parseUpgradeOutput(updatesRaw) {
-			if strings.TrimSpace(u.ID) == "" {
-				continue
-			}
-			actions[strings.ToLower(u.ID)] = packageActionUpgrade
-		}
-	}
-
-	return actions, nil
-}
-
 func parseInstalledOutput(raw string) []string {
 	rawLines := strings.Split(raw, "\n")
 	lines := make([]string, 0, len(rawLines))
@@ -243,6 +302,5 @@ func parseInstalledOutput(raw string) []string {
 		}
 		ids = append(ids, id)
 	}
-
 	return ids
 }

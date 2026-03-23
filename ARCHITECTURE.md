@@ -26,40 +26,59 @@ O **Discovery Agent** é um aplicativo de inventário e gerenciamento de TI para
 
 ## 2. Estrutura de Diretórios
 
+> **Nota importante sobre o diretório `app/`:** o núcleo ainda permanece majoritariamente no mesmo `package app`, porque os métodos expostos ao Wails e boa parte do estado central continuam ancorados em `App`. Nesta fase, a modularização começou pela extração de tipos e contratos de baixo risco para subpacotes reais, como `app/automation`, `app/appstore`, `app/p2pmeta` e `app/supportmeta`, preservando a API pública do pacote `app` por meio de aliases/wrappers compatíveis.
+
 ```
 discovery/
 ├── app/                        # Pacote principal da aplicação (package app)
-│   ├── app.go                  # App struct — hub central, lifecycle
-│   ├── types.go                # Tipos compartilhados (App/P2P/export structs)
-│   ├── logging.go              # logBuffer — ring buffer em memória + arquivo
-│   ├── status.go               # StatusOverview — health snapshot para UI
-│   ├── memory.go               # CRUD de notas locais (memory notes)
-│   ├── bridge.go               # AppBridge — expõe métodos App ao MCP registry
-│   ├── chat.go                 # Chat AI: config, histórico, streaming, MCP tools
-│   ├── export.go               # Export de inventário em Markdown e PDF
-│   ├── mesh.go                 # Integração MeshCentral (remote management)
-│   ├── support.go              # Tickets de suporte: criação, prioridades
-│   ├── updates.go              # Parser de `winget upgrade` output
-│   ├── store.go                # App store catalog + cache (ETag + SQLite)
-│   ├── printers.go             # Gerenciamento de impressoras
-│   ├── sync.go                 # syncCoordinator — sync de políticas com servidor
-│   ├── agent_config.go         # AgentConfiguration — config baixada do servidor
-│   ├── debug.go                # DebugConfig, credenciais de conexão, bootstrap
-│   ├── tray.go                 # System tray (icon, menu, heartbeat)
-│   ├── tray_text_other.go      # Wrappers systray (non-Darwin)
-│   ├── tray_text_darwin.go     # Wrappers systray (Darwin)
-│   ├── inventory_sync.go       # Constrói payloads de inventário para o servidor
-│   ├── inventory_ops.go        # Operações de inventário (coleta, cache, osquery)
-│   ├── automation.go           # Wrapper de automação → frontend UI
-│   ├── automation_p2p.go       # Router de pacotes: P2P vs HTTP vs winget
-│   ├── p2p.go                  # p2pCoordinator — núcleo do sistema P2P
-│   ├── p2p_http.go             # Servidor HTTP P2P para transferência de artefatos
-│   ├── p2p_chunks.go           # Scheduler de downloads em chunks/swarm
-│   ├── p2p_discovery.go        # Provedores de descoberta: mDNS, UDP
-│   ├── p2p_libp2p.go           # Provider libp2p + modo hybrid/libp2p-only
-│   ├── p2p_libp2p_transport.go # Transport layer libp2p
-│   ├── p2p_onboarding.go       # Loop de onboarding para agents sem servidor
-│   └── p2p_api.go              # API do servidor: seed plan, telemetry P2P
+│   ├── appstore/               # Subpacote real: tipos e cache da app store
+│   │   └── types.go            # Item, Response, EffectivePolicy, PolicyCache
+│   ├── automation/             # Subpacote real: tipos da automação para UI
+│   │   └── types.go            # StateView, TaskView, ExecutionView
+│   ├── p2pmeta/                # Subpacote real: tipos e contratos leves do domínio P2P
+│   │   └── types.go            # Config, views, telemetry, onboarding, seed-plan e cache leve
+│   ├── supportmeta/            # Subpacote real: DTOs e cache leve de chat/suporte/tickets
+│   │   └── types.go            # AgentInfo, workflow/tickets, knowledge base e cache leve
+│   ├── Core
+│   │   ├── app.go              # App struct — hub central, lifecycle
+│   │   ├── types.go            # Tipos compartilhados e aliases compatíveis do pacote app
+│   │   ├── bridge.go           # AppBridge — expõe métodos App ao MCP registry
+│   │   ├── logging.go          # logBuffer — ring buffer em memória + arquivo
+│   │   └── memory.go           # CRUD de notas locais
+│   ├── Configuração e Conexão
+│   │   ├── debug.go            # Lógica de conexão, bootstrap e persistência
+│   │   ├── debug_status.go     # Tipos/status de debug e parser do InstallerConfig
+│   │   ├── agent_config.go     # Configuração do agent vinda do servidor
+│   │   └── sync.go             # syncCoordinator — sync de políticas/resources
+│   ├── Inventário e App Store
+│   │   ├── inventory_ops.go    # Coleta, cache, installs, osquery
+│   │   ├── inventory_sync.go   # Payloads de inventário para o servidor
+│   │   ├── store.go            # App store catalog + cache (ETag + SQLite)
+│   │   ├── printers.go         # Gerenciamento de impressoras
+│   │   └── updates.go          # Parser de winget upgrade
+│   ├── Automação
+│   │   ├── automation.go       # Wrapper de automação para UI
+│   │   └── automation_p2p.go   # Router P2P vs HTTP vs winget
+│   ├── P2P
+│   │   ├── p2p.go              # p2pCoordinator — núcleo do sistema P2P + regras/runtime ainda no package app
+│   │   ├── p2p_http.go         # Servidor HTTP P2P
+│   │   ├── p2p_chunks.go       # Swarm/chunks scheduler
+│   │   ├── p2p_discovery.go    # Descoberta mDNS/UDP
+│   │   ├── p2p_libp2p.go       # Provider libp2p + hybrid/libp2p-only
+│   │   ├── p2p_libp2p_transport.go # Transport layer libp2p
+│   │   ├── p2p_onboarding.go   # Onboarding entre peers
+│   │   └── p2p_api.go          # Seed plan + telemetry P2P
+│   └── UI e Suporte
+│       ├── chat.go             # Chat AI e MCP tools
+│       ├── export.go           # Export Markdown/PDF
+│       ├── status.go           # Snapshot de saúde para UI
+│       ├── support.go          # Tickets de suporte
+│       ├── mesh.go             # Integração MeshCentral
+│       ├── tray.go             # System tray
+│       ├── tray_text_other.go  # Wrappers systray non-Darwin
+│       └── tray_text_darwin.go # Wrappers systray Darwin
+
+> **Próxima etapa prevista:** consolidar fisicamente `chat.go` e `support.go` em uma área única de suporte, aproveitando a base já extraída em `app/supportmeta` para reduzir dependências e diminuir a dispersão entre `types.go`, bridge MCP e integrações de UI.
 │
 ├── internal/                   # Pacotes internos (lógica sem dependência do App)
 │   ├── agentconn/              # Conexão NATS/WebSocket com servidor central
@@ -217,39 +236,68 @@ service_main.go ──► internal/service (ServiceManager headless)
 
 ### Package `app/`
 
+`app/` está organizado logicamente por domínio, mesmo permanecendo fisicamente plano por causa da restrição do `package app` em Go.
+
+#### Core
+
 | Arquivo | Responsabilidade |
 |---------|-----------------|
 | `app.go` | `App` struct central. Campos de estado, `NewApp()`, `startup()`, `shutdown()`, `beginActivity()`, lifecycle helpers. |
-| `types.go` | Todos os tipos expostos ao frontend: `AppStartupOptions`, `RuntimeFlags`, `P2PConfig`, `P2PBootstrapConfig`, `P2PSeedPlan`, `P2PMetrics`, `P2PAuditEvent`, `AgentInfo`, `exportConfig`, `APIWorkflowState`, etc. |
-| `logging.go` | `logBuffer`: ring buffer thread-safe (5k linhas), persistência opcional em arquivo, redação de tokens. |
-| `status.go` | `GetStatusOverview()` → `StatusOverview`: snapshot de saúde geral (conexão, versão, idade do inventário). |
-| `memory.go` | CRUD de notas locais (`GetLocalMemories`, `AddLocalMemory`, `DeleteLocalMemory`) via SQLite. |
+| `types.go` | Tipos compartilhados usados por quase todo o pacote: `AppStartupOptions`, `RuntimeFlags`, `P2PConfig`, `P2PMetrics`, views de UI e tipos auxiliares. |
 | `bridge.go` | Implementa a interface `AppBridge` esperada por `internal/mcp/register.go`. Converte resultados internos → JSON para ferramentas MCP. |
-| `chat.go` | Config de chat (`ChatConfig`, `ChatMessage`), histórico em memória, streaming, integração com `internal/ai`. |
-| `export.go` | `ExportInventoryMarkdown()` e `ExportInventoryPDF()`: busca inventário, redação de PII, escrita em Downloads. |
-| `mesh.go` | Instalação automática do MeshCentral Agent quando habilitado no servidor. |
-| `support.go` | Criação de tickets de suporte, normalização de prioridades e status. |
-| `updates.go` | `GetPendingUpdates()`: executa `winget upgrade` e faz parse da saída tabular com tratamento de spinner CR. |
-| `store.go` | Fetch e cache do app store (`AppStoreResponse`). Cache de 2 min em memória + 30 dias SQLite + ETag. |
+| `logging.go` | `logBuffer`: ring buffer thread-safe, persistência opcional em arquivo e sanitização de tokens. |
+| `memory.go` | CRUD de notas locais via SQLite. |
+
+#### Configuração e Conexão
+
+| Arquivo | Responsabilidade |
+|---------|-----------------|
+| `debug.go` | `DebugConfig`: credenciais de conexão, bootstrap de token/agentID, persistência multi-path e status de conectividade. |
+| `agent_config.go` | `AgentConfiguration`: parse, cache e aplicação de políticas baixadas do servidor (feature flags, P2P, timeouts, auto-update). |
+| `sync.go` | `syncCoordinator`: polling de manifest do servidor, download incremental de resources e deduplicação de eventos. |
+
+#### Inventário e App Store
+
+| Arquivo | Responsabilidade |
+|---------|-----------------|
+| `inventory_ops.go` | Operações de inventário: `GetInventory()`, `RefreshInventory()`, installs/upgrades e estado do osquery. |
+| `inventory_sync.go` | Constrói `agentHardwareEnvelope` e `agentSoftwareEnvelope` para POST no servidor. Filtra e normaliza payloads. |
+| `store.go` | Fetch e cache do app store (`AppStoreResponse`). Cache em memória + SQLite + ETag. |
 | `printers.go` | Listagem, instalação e remoção de impressoras. |
-| `sync.go` | `syncCoordinator`: polling de manifest do servidor, download incremental de resources (revision-based), deduplicação de eventos. |
-| `agent_config.go` | `AgentConfiguration`: parse, cache e aplicação de configurações baixadas do servidor (feature flags, P2P policy, timeouts). |
-| `debug.go` | `DebugConfig`: credenciais de conexão. Bootstrap de token/agentID. Persistência multi-path. Registro via deploy token. |
-| `tray.go` | System tray: ícone, menu (Abrir/Sair), heartbeat watchdog, click handlers. Recebe icon bytes via parâmetro. |
-| `tray_text_other.go` | Wrappers de `systray.Set*` para plataformas não-Darwin. |
-| `tray_text_darwin.go` | Wrappers de `systray.Set*` para Darwin. |
-| `inventory_ops.go` | Operações de inventário: `GetInventory()` (cache+heartbeat), `RefreshInventory()`, `Install/Uninstall/Upgrade`, `GetOsqueryStatus()`. |
-| `inventory_sync.go` | Constrói `agentHardwareEnvelope` e `agentSoftwareEnvelope` para POST no servidor. Filtra e normaliza campos. |
-| `automation.go` | Bridge entre `internal/automation.Service` e frontend. Traduz enums → labels UI. |
-| `automation_p2p.go` | `automationPackageManagerRouter`: decide se install usa P2P (swarm) vs HTTP vs winget nativo. |
-| `p2p.go` | `p2pCoordinator`: núcleo do P2P. Descoberta de peers, replicação, swarm download, deduplicação, audit trail. |
-| `p2p_http.go` | `p2pTransferServer`: HTTP local para servir artefatos (autenticação por HMAC token). Endpoint de onboarding. |
-| `p2p_chunks.go` | `p2pChunkScheduler`: divide artefatos em chunks, distribui entre peers paralelos, bandwidth cap. |
-| `p2p_discovery.go` | `p2pDiscoveryProvider` interface + providers: `p2pMDNSProvider` (zeroconf) e UDP broadcast. |
-| `p2p_libp2p.go` | `p2pLibP2PProvider` e `p2pMultiProvider`: integração libp2p com DHT, bootstrap estático, modos hybrid/libp2p-only. |
+| `updates.go` | `GetPendingUpdates()`: executa `winget upgrade` e faz parse robusto da saída tabular. |
+
+#### Automação
+
+| Arquivo | Responsabilidade |
+|---------|-----------------|
+| `automation.go` | Bridge entre `internal/automation.Service` e frontend. Traduz estado e enums para a UI. |
+| `automation_p2p.go` | `automationPackageManagerRouter`: decide se instalação usa P2P (swarm), HTTP ou winget nativo. |
+
+#### P2P
+
+| Arquivo | Responsabilidade |
+|---------|-----------------|
+| `p2p.go` | `p2pCoordinator`: núcleo do P2P. Descoberta de peers, replicação, swarm download, deduplicação e audit trail. |
+| `p2p_http.go` | `p2pTransferServer`: HTTP local para servir artefatos e receber onboarding. |
+| `p2p_chunks.go` | `p2pChunkScheduler`: divide artefatos em chunks, distribui entre peers e aplica bandwidth cap. |
+| `p2p_discovery.go` | `p2pDiscoveryProvider` interface + providers: `p2pMDNSProvider` e UDP broadcast. |
+| `p2p_libp2p.go` | `p2pLibP2PProvider` e `p2pMultiProvider`: integração libp2p com DHT, bootstrap estático e modos hybrid/libp2p-only. |
 | `p2p_libp2p_transport.go` | Transport layer libp2p (stream handling). |
 | `p2p_onboarding.go` | `p2pOnboardingState`: loop de onboarding para agentes genéricos. Retry com backoff exponencial. |
-| `p2p_api.go` | Chamadas ao servidor para seed planning e telemetry P2P. Loop de telemetry em background. |
+| `p2p_api.go` | Chamadas ao servidor para seed planning e telemetry P2P. |
+
+#### UI, Apresentação e Suporte
+
+| Arquivo | Responsabilidade |
+|---------|-----------------|
+| `chat.go` | Config de chat, histórico em memória, streaming e integração com `internal/ai` e `internal/mcp`. |
+| `export.go` | `ExportInventoryMarkdown()` e `ExportInventoryPDF()`: busca inventário, aplica redação de PII e grava arquivos. |
+| `status.go` | `GetStatusOverview()` → `StatusOverview`: snapshot de saúde geral para a UI. |
+| `support.go` | Criação de tickets de suporte, normalização de prioridade e serialização para API. |
+| `mesh.go` | Instalação automática do MeshCentral Agent quando habilitado no servidor. |
+| `tray.go` | System tray: ícone, menu, heartbeat watchdog e ações de janela. |
+| `tray_text_other.go` | Wrappers de `systray.Set*` para plataformas não-Darwin. |
+| `tray_text_darwin.go` | Wrappers de `systray.Set*` para Darwin. |
 
 ### Package `internal/`
 
@@ -391,6 +439,7 @@ main --mcp → runMCPServer()
 - **Logging**: `a.logs.append("[modulo] mensagem")` — ring buffer acessível via `GetLogs()` no frontend
 - **Config persistence**: SQLite `CacheSetJSON` / `CacheGetJSON` — nunca gravar credenciais em texto simples sem necessidade
 - **Cross-domain calls**: `app/` pode importar qualquer `internal/`; `internal/` não deve importar `app/`
+- **Organização física do `app/`**: manter arquivos no mesmo diretório enquanto forem `package app`. Separação em subpastas exige subpacotes Go e refatoração explícita de imports e bindings.
 
 ---
 
@@ -425,8 +474,6 @@ go build -ldflags "-X discovery/app.Version=1.2.3"
 ### Wails JS Bindings
 
 Os arquivos em `frontend/wailsjs/go/app/` são **gerados automaticamente** pelo Wails ao rodar `wails dev` ou `wails build`. O namespace JS é `window.go.app.App.*`.
-
-> ⚠️ **Limpeza pós-reorganização:** Os arquivos `_deleted_*.go` na raiz do projeto podem ser deletados com segurança — todos têm `//go:build ignore` e não afetam o build. São resquícios da migração para o `package app/`.
 
 ---
 

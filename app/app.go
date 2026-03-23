@@ -6,7 +6,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -14,9 +13,10 @@ import (
 	"time"
 
 	"github.com/energye/systray"
-	"github.com/samber/lo"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
+	"discovery/app/debug"
+	"discovery/app/updates"
 	"discovery/internal/agentconn"
 	"discovery/internal/ai"
 	"discovery/internal/automation"
@@ -32,8 +32,6 @@ import (
 	"discovery/internal/winget"
 )
 
-var guidPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
-
 // Version is the application version, set at build time via ldflags:
 //
 //	go build -ldflags "-X discovery/app.Version=1.2.3"
@@ -47,7 +45,6 @@ const (
 	inventoryTimeout = 45 * time.Second
 	printerTimeout   = 30 * time.Second
 	chatConfigFile   = "chat_config.json"
-	debugConfigFile  = "debug_config.json"
 
 	// Temporarily disable efficiency mode until we revisit this behavior.
 	efficiencyModeEnabled = false
@@ -103,9 +100,10 @@ type App struct {
 	agentInfo      agentInfoCache
 	appStorePolicy appStorePolicyCache
 	watchdogSvc    *watchdog.Watchdog
+	debugSvc       *debug.Service
+	updatesSvc     *updates.Service
+	exporter       *updates.Exporter
 
-	debugMu          sync.RWMutex
-	debugConfig      DebugConfig
 	p2pMu            sync.RWMutex
 	p2pConfig        P2PConfig
 	p2pSeedPlanCache cachedP2PSeedPlan
@@ -191,11 +189,40 @@ func NewApp(opts AppStartupOptions) *App {
 			}
 		},
 	})
+	a.debugSvc = debug.NewService(debug.Options{
+		Logf: func(line string) {
+			a.logs.append(line)
+		},
+		AgentConn:          a.agentConn,
+		AgentInfo:          &a.agentInfo,
+		DB:                 a.db,
+		NormalizeP2PConfig: normalizeP2PConfig,
+		ApplyP2PConfig:     a.applyP2PConfig,
+		DefaultP2PConfig:   defaultP2PConfig,
+		P2PDiscoveryMDNS:   p2pDiscoveryMDNS,
+		Version:            Version,
+	})
 	a.syncCoord = newSyncCoordinator(a)
 	a.p2pConfig = defaultP2PConfig()
 	a.p2pCoord = newP2PCoordinator(a)
 	a.chatSvc.SetLogger(func(line string) {
 		a.logs.append("[chat] " + line)
+	})
+	a.updatesSvc = updates.NewService(updates.Options{
+		Apps:          a.appsSvc,
+		BeginActivity: a.beginActivity,
+		Logf:          a.logs.append,
+		Ctx: func() context.Context {
+			return a.ctx
+		},
+	})
+	a.exporter = updates.NewExporter(updates.ExportOptions{
+		BeginActivity: a.beginActivity,
+		Inventory: func() (models.InventoryReport, error) {
+			return a.getInventoryForExport()
+		},
+		GetRedact: a.getRedact,
+		SetRedact: a.exportCfg.set,
 	})
 	if logPath := strings.TrimSpace(os.Getenv("DISCOVERY_LOG_FILE")); logPath != "" {
 		if err := a.logs.enableFilePersistence(logPath); err != nil {
@@ -205,7 +232,7 @@ func NewApp(opts AppStartupOptions) *App {
 		}
 	}
 	a.loadPersistedChatConfig()
-	a.loadConnectionConfigFromProduction()
+	a.debugSvc.LoadConnectionConfigFromProduction()
 
 	// Register all Discovery tools in the MCP registry.
 	mcp.RegisterDiscoveryTools(reg, a)
@@ -321,7 +348,9 @@ func (a *App) startup(ctx context.Context) {
 		defer a.startupWg.Done()
 
 		// Bootstrap pós-instalação: se houver URL/KEY do instalador, resolver token/agentId.
-		a.bootstrapAgentCredentialsFromInstallerConfig(ctx)
+		if a.debugSvc != nil {
+			a.debugSvc.BootstrapAgentCredentialsFromInstallerConfig(ctx)
+		}
 
 		// Periodic heartbeat for agent connection
 		heartbeat := watchdog.NewPeriodicHeartbeat(a.watchdogSvc, watchdog.ComponentAgent, 25*time.Second)
@@ -446,7 +475,7 @@ func (a *App) IsTrayReady() bool {
 func (a *App) clearMemoryCaches() {
 	// Limpar cache de AgentInfo em memória (mantém no SQLite)
 	a.agentInfo.invalidate()
-	a.appStorePolicy.invalidate()
+	a.appStorePolicy.Invalidate()
 
 	// Limpar cache de inventário em memória
 	a.invCache.mu.Lock()
@@ -558,32 +587,6 @@ func (a *App) GetWatchdogHealth() []map[string]interface{} {
 	}
 
 	return result
-}
-
-func debugConfigPathCandidates() []string {
-	paths := make([]string, 0, 5)
-
-	if runtime.GOOS == "windows" {
-		// 1º: C:\ProgramData\Discovery (compartilhado entre usuários)
-		if programData := strings.TrimSpace(os.Getenv("ProgramData")); programData != "" {
-			paths = append(paths, filepath.Join(programData, "Discovery", debugConfigFile))
-		}
-		// 2º: LOCALAPPDATA\Discovery (fallback compatibilidade)
-		if localAppData := strings.TrimSpace(os.Getenv("LOCALAPPDATA")); localAppData != "" {
-			paths = append(paths, filepath.Join(localAppData, "Discovery", debugConfigFile))
-		}
-	}
-
-	if exe, err := os.Executable(); err == nil && strings.TrimSpace(exe) != "" {
-		paths = append(paths, filepath.Join(filepath.Dir(exe), debugConfigFile))
-	}
-
-	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
-		paths = append(paths, filepath.Join(home, ".discovery", debugConfigFile))
-	}
-
-	paths = append(paths, filepath.Join(".", debugConfigFile))
-	return lo.Uniq(paths)
 }
 
 func (a *App) beginActivity(activity string) func() {

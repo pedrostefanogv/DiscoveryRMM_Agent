@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	p2pmeta "discovery/app/p2pmeta"
 )
 
 const (
@@ -19,10 +21,7 @@ const (
 )
 
 // cachedP2PSeedPlan stores the last server recommendation for local reuse.
-type cachedP2PSeedPlan struct {
-	Plan         P2PSeedPlanRecommendation
-	FetchedAtUTC time.Time
-}
+type cachedP2PSeedPlan = p2pmeta.CachedSeedPlan
 
 // GetP2PSeedPlanRecommendation returns a cached plan when fresh, otherwise
 // fetches from API and updates local cache.

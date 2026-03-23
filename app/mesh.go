@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"discovery/app/netutil"
 	"discovery/internal/processutil"
 )
 
@@ -80,7 +81,7 @@ func (a *App) fetchMeshInstallInfo(ctx context.Context) (MeshCentralInstallInfo,
 	if err != nil {
 		return MeshCentralInstallInfo{}, fmt.Errorf("falha ao criar requisicao: %w", err)
 	}
-	setAgentAuthHeaders(req, token)
+	netutil.SetAgentAuthHeaders(req, token)
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := http.DefaultClient.Do(req)

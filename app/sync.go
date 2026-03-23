@@ -12,6 +12,7 @@ import (
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
+	"discovery/app/netutil"
 	"discovery/internal/agentconn"
 )
 
@@ -320,7 +321,7 @@ func (a *App) fetchSyncManifest(ctx context.Context) (SyncManifestResponse, erro
 		return SyncManifestResponse{}, err
 	}
 	req.Header.Set("Accept", "application/json")
-	setAgentAuthHeaders(req, token)
+	netutil.SetAgentAuthHeaders(req, token)
 
 	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
 	if err != nil {
@@ -361,7 +362,7 @@ func (a *App) refreshAgentConfiguration(ctx context.Context) error {
 		return err
 	}
 	req.Header.Set("Accept", "application/json")
-	setAgentAuthHeaders(req, token)
+	netutil.SetAgentAuthHeaders(req, token)
 
 	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
 	if err != nil {

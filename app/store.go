@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"discovery/app/netutil"
 	"discovery/internal/models"
 )
 
@@ -61,7 +62,7 @@ func (a *App) fetchAppStoreByInstallationType(ctx context.Context, installationT
 		return AppStoreResponse{}, fmt.Errorf("falha ao criar request da app-store: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
-	setAgentAuthHeaders(req, token)
+	netutil.SetAgentAuthHeaders(req, token)
 
 	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
 	if err != nil {
@@ -103,14 +104,14 @@ func (a *App) loadEffectiveAppStorePolicy(ctx context.Context, forceRefresh bool
 	}
 
 	if !forceRefresh {
-		if cached, ok := a.appStorePolicy.get(appStoreMemoryCacheTTL); ok {
+		if cached, ok := a.appStorePolicy.Get(appStoreMemoryCacheTTL); ok {
 			return cached, nil
 		}
 		if a.db != nil {
 			var persisted AppStoreEffectivePolicy
 			found, err := a.db.CacheGetJSON(appStoreCacheKey, &persisted)
 			if err == nil && found {
-				a.appStorePolicy.set(persisted)
+				a.appStorePolicy.Set(persisted)
 				return persisted, nil
 			}
 		}
@@ -154,7 +155,7 @@ func (a *App) loadEffectiveAppStorePolicy(ctx context.Context, forceRefresh bool
 		Items:     items,
 		FetchedAt: time.Now().UTC().Format(time.RFC3339),
 	}
-	a.appStorePolicy.set(policy)
+	a.appStorePolicy.Set(policy)
 	if a.db != nil {
 		if err := a.db.CacheSetJSON(appStoreCacheKey, policy, appStoreSQLiteCacheTTL); err != nil {
 			a.supportLogf("aviso: falha ao salvar cache da app-store: %v", err)

@@ -1,4 +1,4 @@
-package app
+package updates
 
 import (
 	"fmt"
@@ -14,24 +14,66 @@ import (
 	"discovery/internal/models"
 )
 
-func (a *App) SetExportRedaction(redact bool) {
-	a.exportCfg.set(redact)
+// InventoryGetter resolves inventory for export.
+type InventoryGetter func() (models.InventoryReport, error)
+
+// ExportOptions wires the export service.
+type ExportOptions struct {
+	BeginActivity ActivityFunc
+	Inventory     InventoryGetter
+	GetRedact     func() bool
+	SetRedact     func(bool)
+	Now           func() time.Time
 }
 
-func (a *App) getRedact() bool {
-	return a.exportCfg.get()
+// Exporter handles inventory exports.
+type Exporter struct {
+	beginActivity ActivityFunc
+	inventory     InventoryGetter
+	getRedact     func() bool
+	setRedact     func(bool)
+	now           func() time.Time
 }
 
-func (a *App) ExportInventoryMarkdown() (string, error) {
-	done := a.beginActivity("exportacao markdown")
-	defer done()
-	report, err := a.getInventoryForExport()
+// NewExporter builds an exporter.
+func NewExporter(opts ExportOptions) *Exporter {
+	now := opts.Now
+	if now == nil {
+		now = time.Now
+	}
+	return &Exporter{
+		beginActivity: opts.BeginActivity,
+		inventory:     opts.Inventory,
+		getRedact:     opts.GetRedact,
+		setRedact:     opts.SetRedact,
+		now:           now,
+	}
+}
+
+// SetRedaction toggles data redaction in exports.
+func (e *Exporter) SetRedaction(redact bool) {
+	if e.setRedact != nil {
+		e.setRedact(redact)
+	}
+}
+
+// ExportInventoryMarkdown exports inventory data in Markdown format.
+func (e *Exporter) ExportInventoryMarkdown() (string, error) {
+	done := e.beginActivity("exportacao markdown")
+	if done != nil {
+		defer done()
+	}
+	report, err := e.inventory()
 	if err != nil {
 		return "", err
 	}
 
-	content := export.BuildMarkdown(report, a.getRedact())
-	stamp := time.Now().Format("20060102-150405")
+	redact := false
+	if e.getRedact != nil {
+		redact = e.getRedact()
+	}
+	content := export.BuildMarkdown(report, redact)
+	stamp := e.now().Format("20060102-150405")
 	fileName := "inventory-" + stamp + ".md"
 
 	path, err := writeWithFallback(fileName, func(outPath string) error {
@@ -44,38 +86,32 @@ func (a *App) ExportInventoryMarkdown() (string, error) {
 	return path, nil
 }
 
-func (a *App) ExportInventoryPDF() (string, error) {
-	done := a.beginActivity("exportacao pdf")
-	defer done()
-	report, err := a.getInventoryForExport()
+// ExportInventoryPDF exports inventory data in PDF format.
+func (e *Exporter) ExportInventoryPDF() (string, error) {
+	done := e.beginActivity("exportacao pdf")
+	if done != nil {
+		defer done()
+	}
+	report, err := e.inventory()
 	if err != nil {
 		return "", err
 	}
 
-	stamp := time.Now().Format("20060102-150405")
+	redact := false
+	if e.getRedact != nil {
+		redact = e.getRedact()
+	}
+	stamp := e.now().Format("20060102-150405")
 	fileName := "inventory-" + stamp + ".pdf"
 
 	path, err := writeWithFallback(fileName, func(outPath string) error {
-		return export.WritePDF(report, outPath, a.getRedact())
+		return export.WritePDF(report, outPath, redact)
 	})
 	if err != nil {
 		return "", err
 	}
 
 	return path, nil
-}
-
-func (a *App) getInventoryForExport() (models.InventoryReport, error) {
-	if cached, ok := a.invCache.get(); ok {
-		return cached, nil
-	}
-
-	report, err := a.invSvc.GetInventory(a.ctx)
-	if err != nil {
-		return models.InventoryReport{}, err
-	}
-	a.invCache.set(report)
-	return report, nil
 }
 
 func writeWithFallback(fileName string, writer func(outPath string) error) (string, error) {

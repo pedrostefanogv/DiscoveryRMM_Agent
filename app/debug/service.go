@@ -1,0 +1,525 @@
+package debug
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"os"
+	"path/filepath"
+	"regexp"
+	"runtime"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/samber/lo"
+
+	"discovery/app/netutil"
+	"discovery/app/p2pmeta"
+	"discovery/internal/agentconn"
+)
+
+const debugConfigFile = "debug_config.json"
+
+var guidPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+// AgentConn abstracts the agent connection runtime.
+type AgentConn interface {
+	Reload()
+	GetStatus() agentconn.Status
+}
+
+// AgentInfoCache exposes the cache invalidation needed by debug actions.
+type AgentInfoCache interface {
+	Invalidate()
+}
+
+// CacheDB exposes the cache invalidation needed by debug actions.
+type CacheDB interface {
+	CacheDelete(key string) error
+}
+
+// Options configures the debug service.
+type Options struct {
+	Logf               func(string)
+	AgentConn          AgentConn
+	AgentInfo          AgentInfoCache
+	DB                 CacheDB
+	NormalizeP2PConfig func(p2pmeta.Config) p2pmeta.Config
+	ApplyP2PConfig     func(p2pmeta.Config)
+	DefaultP2PConfig   func() p2pmeta.Config
+	P2PDiscoveryMDNS   string
+	Version            string
+}
+
+// Service owns runtime debug configuration and related workflows.
+type Service struct {
+	mu     sync.RWMutex
+	config Config
+
+	logf               func(string)
+	agentConn          AgentConn
+	agentInfo          AgentInfoCache
+	db                 CacheDB
+	normalizeP2PConfig func(p2pmeta.Config) p2pmeta.Config
+	applyP2PConfig     func(p2pmeta.Config)
+	defaultP2PConfig   func() p2pmeta.Config
+	p2pDiscoveryMDNS   string
+	version            string
+}
+
+// NewService builds a debug service with its dependencies.
+func NewService(opts Options) *Service {
+	logf := opts.Logf
+	if logf == nil {
+		logf = func(string) {}
+	}
+	return &Service{
+		logf:               logf,
+		agentConn:          opts.AgentConn,
+		agentInfo:          opts.AgentInfo,
+		db:                 opts.DB,
+		normalizeP2PConfig: opts.NormalizeP2PConfig,
+		applyP2PConfig:     opts.ApplyP2PConfig,
+		defaultP2PConfig:   opts.DefaultP2PConfig,
+		p2pDiscoveryMDNS:   strings.TrimSpace(opts.P2PDiscoveryMDNS),
+		version:            strings.TrimSpace(opts.Version),
+	}
+}
+
+// LoadPersistedConfig loads debug configuration from disk if available.
+func (s *Service) LoadPersistedConfig() {
+	for _, path := range debugConfigPathCandidates() {
+		data, err := osReadFile(path)
+		if err != nil {
+			continue
+		}
+
+		var cfg Config
+		if err := json.Unmarshal(data, &cfg); err != nil {
+			s.logf("[debug] falha ao ler configuracao persistida: " + err.Error())
+			return
+		}
+
+		if !isValidDebugScheme(cfg.Scheme) {
+			s.logf("[debug] configuracao persistida ignorada: scheme invalido")
+			return
+		}
+
+		s.mu.Lock()
+		s.config = cfg
+		s.mu.Unlock()
+		s.logf("[debug] configuracao carregada de " + path)
+		return
+	}
+}
+
+// PersistConfig persists debug configuration to disk.
+func (s *Service) PersistConfig(cfg Config) error {
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return fmt.Errorf("falha ao serializar configuracao de debug: %w", err)
+	}
+
+	var errs []string
+	for _, path := range debugConfigPathCandidates() {
+		dir := filepath.Dir(path)
+		if err := osMkdirAll(dir, 0o755); err != nil {
+			errs = append(errs, dir+": "+err.Error())
+			continue
+		}
+		if err := osWriteFile(path, data, 0o600); err != nil {
+			errs = append(errs, path+": "+err.Error())
+			continue
+		}
+		s.logf("[debug] configuracao salva em " + path)
+		return nil
+	}
+
+	if len(errs) == 0 {
+		return fmt.Errorf("nenhum caminho valido para salvar configuracao de debug")
+	}
+	return fmt.Errorf("falha ao salvar configuracao de debug: %s", strings.Join(errs, " | "))
+}
+
+// GetConfig returns the current debug configuration.
+func (s *Service) GetConfig() Config {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.config
+}
+
+// LoadConnectionConfigFromProduction loads bootstrap configuration and applies runtime settings.
+func (s *Service) LoadConnectionConfigFromProduction() {
+	inst, path, err := s.loadInstallerConfig()
+	if err != nil {
+		s.logf("[config] config de producao nao encontrado: " + err.Error())
+		if s.defaultP2PConfig != nil && s.applyP2PConfig != nil {
+			s.applyP2PConfig(s.defaultP2PConfig())
+		}
+		return
+	}
+	if s.applyP2PConfig != nil {
+		p2pCfg := inst.P2P
+		if s.normalizeP2PConfig != nil {
+			p2pCfg = s.normalizeP2PConfig(p2pCfg)
+		}
+		p2pCfg.Enabled = true
+		if s.p2pDiscoveryMDNS != "" {
+			p2pCfg.DiscoveryMode = s.p2pDiscoveryMDNS
+		}
+		s.applyP2PConfig(p2pCfg)
+		s.logf("[config] P2P inicializado com enabled=true e discovery=mdns")
+	}
+
+	if strings.TrimSpace(inst.ApiScheme) == "" || strings.TrimSpace(inst.ApiServer) == "" {
+		scheme, server, parseErr := parseInstallerServerURL(inst.ServerURL)
+		if parseErr == nil {
+			inst.ApiScheme = scheme
+			inst.ApiServer = server
+		}
+	}
+
+	if strings.TrimSpace(inst.ApiScheme) == "" || strings.TrimSpace(inst.ApiServer) == "" {
+		s.logf("[config] config de producao sem apiScheme/apiServer: " + path)
+		return
+	}
+
+	if strings.TrimSpace(inst.AuthToken) == "" || strings.TrimSpace(inst.AgentID) == "" {
+		s.logf("[config] config de producao carregado sem authToken/agentId (bootstrap pendente): " + path)
+		return
+	}
+
+	s.ApplyRuntimeConnectionConfig(inst.ApiScheme, inst.ApiServer, inst.AuthToken, inst.AgentID)
+	s.logf("[config] credenciais carregadas do config de producao: " + path)
+}
+
+// ApplyRuntimeConnectionConfig updates runtime connection settings.
+func (s *Service) ApplyRuntimeConnectionConfig(apiScheme, apiServer, authToken, agentID string) {
+	cfg := s.GetConfig()
+	cfg.ApiScheme = strings.TrimSpace(strings.ToLower(apiScheme))
+	cfg.ApiServer = strings.TrimSpace(apiServer)
+	cfg.AuthToken = strings.TrimSpace(authToken)
+	cfg.AgentID = strings.TrimSpace(agentID)
+
+	if cfg.NatsServer != "" {
+		cfg.Scheme = "nats"
+		cfg.Server = cfg.NatsServer
+	} else {
+		cfg.Scheme = cfg.ApiScheme
+		cfg.Server = cfg.ApiServer
+	}
+
+	s.mu.Lock()
+	s.config = cfg
+	s.mu.Unlock()
+}
+
+// BootstrapAgentCredentialsFromInstallerConfig registers the agent when needed and persists token+agentId.
+func (s *Service) BootstrapAgentCredentialsFromInstallerConfig(ctx context.Context) {
+	cfg := s.GetConfig()
+	if strings.TrimSpace(cfg.ApiServer) != "" && strings.TrimSpace(cfg.AuthToken) != "" && strings.TrimSpace(cfg.AgentID) != "" {
+		return
+	}
+
+	inst, path, err := s.loadInstallerConfig()
+	if err != nil {
+		s.logf("[installer-bootstrap] sem bootstrap de instalador: " + err.Error())
+		return
+	}
+
+	scheme, server, err := parseInstallerServerURL(inst.ServerURL)
+	if err != nil {
+		s.logf("[installer-bootstrap] serverUrl invalida no config do instalador: " + err.Error())
+		return
+	}
+
+	if strings.TrimSpace(inst.AuthToken) != "" && strings.TrimSpace(inst.AgentID) != "" {
+		s.ApplyRuntimeConnectionConfig(scheme, server, inst.AuthToken, inst.AgentID)
+		s.logf("[installer-bootstrap] credenciais ja presentes no config de producao (" + path + ")")
+		if s.agentConn != nil {
+			s.agentConn.Reload()
+		}
+		return
+	}
+
+	if strings.TrimSpace(inst.APIKey) == "" {
+		s.logf("[installer-bootstrap] apiKey ausente no config de producao; nao foi possivel gerar token")
+		return
+	}
+
+	s.logf("[installer-bootstrap] registrando agente em " + scheme + "://" + server + "/api/agent-install/register")
+	token, agentID, resolvedScheme, err := s.registerAgentFromDeployToken(ctx, scheme, server, inst.APIKey)
+	if err != nil {
+		s.logf("[installer-bootstrap] falha ao obter credenciais: " + err.Error())
+		return
+	}
+
+	inst.ApiScheme = resolvedScheme
+	inst.ApiServer = server
+	inst.AuthToken = token
+	inst.AgentID = agentID
+	inst.APIKey = ""
+	writePath, err := persistInstallerConfig(path, inst)
+	if err != nil {
+		s.logf("[installer-bootstrap] falha ao persistir config de producao: " + err.Error())
+		return
+	}
+	if writePath != path {
+		if err := scrubInstallerConfigSource(path, inst); err != nil {
+			s.logf("[installer-bootstrap] aviso: falha ao limpar apiKey no config de origem: " + err.Error())
+		}
+	}
+
+	s.ApplyRuntimeConnectionConfig(inst.ApiScheme, inst.ApiServer, inst.AuthToken, inst.AgentID)
+
+	s.logf("[installer-bootstrap] credenciais aplicadas com sucesso (leitura: " + path + ", persistencia: " + writePath + ", agentId=" + agentID + ")")
+	if s.agentConn != nil {
+		s.agentConn.Reload()
+	}
+}
+
+// GetAgentStatus returns the current agent connectivity status.
+func (s *Service) GetAgentStatus() AgentStatus {
+	if s.agentConn == nil {
+		return AgentStatus{}
+	}
+	src := s.agentConn.GetStatus()
+	return AgentStatus{
+		Connected: src.Connected,
+		AgentID:   src.AgentID,
+		Server:    src.Server,
+		LastEvent: src.LastEvent,
+	}
+}
+
+// SetConfig validates, stores and persists the debug connection settings.
+func (s *Service) SetConfig(cfg Config) error {
+	cfg.ApiScheme = strings.TrimSpace(strings.ToLower(cfg.ApiScheme))
+	cfg.ApiServer = strings.TrimSpace(cfg.ApiServer)
+	cfg.NatsServer = strings.TrimSpace(cfg.NatsServer)
+	cfg.AgentID = strings.TrimSpace(cfg.AgentID)
+	cfg.AuthToken = strings.TrimSpace(cfg.AuthToken)
+
+	if cfg.ApiServer != "" {
+		if cfg.ApiScheme != "http" && cfg.ApiScheme != "https" {
+			return fmt.Errorf("apiScheme invalido: use 'http' ou 'https'")
+		}
+	}
+
+	if cfg.NatsServer != "" {
+		if !guidPattern.MatchString(cfg.AgentID) {
+			return fmt.Errorf("agentId invalido para NATS: informe um GUID valido")
+		}
+	}
+
+	if cfg.ApiServer == "" && cfg.NatsServer == "" {
+		return fmt.Errorf("configure pelo menos um servidor (API ou NATS)")
+	}
+
+	if cfg.NatsServer != "" {
+		cfg.Scheme = "nats"
+		cfg.Server = cfg.NatsServer
+	} else if cfg.ApiServer != "" {
+		cfg.Scheme = cfg.ApiScheme
+		cfg.Server = cfg.ApiServer
+	}
+
+	s.logf(fmt.Sprintf("[debug] atualizando configuracao: api=%s://%s nats=%s agentId=%s",
+		cfg.ApiScheme, cfg.ApiServer, cfg.NatsServer, cfg.AgentID))
+
+	s.mu.Lock()
+	s.config = cfg
+	s.mu.Unlock()
+
+	if s.agentInfo != nil {
+		s.agentInfo.Invalidate()
+	}
+
+	if s.db != nil {
+		if err := s.db.CacheDelete("agent_info"); err != nil {
+			log.Printf("[debug] aviso: falha ao limpar cache SQLite: %v", err)
+		}
+	}
+
+	if err := s.PersistConfig(cfg); err != nil {
+		s.logf("[debug] falha ao persistir configuracao: " + err.Error())
+		return err
+	}
+	if s.agentConn != nil {
+		s.logf("[debug] solicitando reload da conexao do agente")
+		s.agentConn.Reload()
+	}
+	s.logf("[debug] configuracao aplicada com sucesso")
+	return nil
+}
+
+// TestConnection tests connectivity to configured servers and returns diagnostic info.
+func (s *Service) TestConnection(cfg Config) (string, error) {
+	cfg.ApiScheme = strings.TrimSpace(strings.ToLower(cfg.ApiScheme))
+	cfg.ApiServer = strings.TrimSpace(cfg.ApiServer)
+	cfg.NatsServer = strings.TrimSpace(cfg.NatsServer)
+	cfg.AgentID = strings.TrimSpace(cfg.AgentID)
+	cfg.AuthToken = strings.TrimSpace(cfg.AuthToken)
+
+	var results []string
+
+	if cfg.ApiServer != "" {
+		s.logf(fmt.Sprintf("[debug-test] testando API: %s://%s", cfg.ApiScheme, cfg.ApiServer))
+		target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/agent-auth/me"
+		client := &http.Client{Timeout: 10 * time.Second}
+		req, err := http.NewRequest(http.MethodGet, target, nil)
+		if err != nil {
+			return "", fmt.Errorf("URL invalida para API: %w", err)
+		}
+		if cfg.AuthToken != "" {
+			req.Header.Set("Authorization", "Bearer "+cfg.AuthToken)
+		}
+		if cfg.AgentID != "" {
+			req.Header.Set("X-Agent-ID", cfg.AgentID)
+		}
+
+		resp, err := client.Do(req)
+		if err != nil {
+			wrapped := fmt.Errorf("falha ao conectar na API %s: %w", target, err)
+			s.logf("[debug-test] " + wrapped.Error())
+			return "", wrapped
+		}
+		defer resp.Body.Close()
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			wrapped := fmt.Errorf("erro ao ler resposta da API (%s): %w", resp.Status, err)
+			s.logf("[debug-test] " + wrapped.Error())
+			return "", wrapped
+		}
+
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			wrapped := fmt.Errorf("API HTTP %s: %s", resp.Status, strings.TrimSpace(string(body)))
+			s.logf("[debug-test] " + wrapped.Error())
+			return "", wrapped
+		}
+
+		var pretty interface{}
+		if json.Unmarshal(body, &pretty) == nil {
+			if formatted, err := json.MarshalIndent(pretty, "", "  "); err == nil {
+				results = append(results, "=== Servidor API ===\n"+string(formatted))
+			} else {
+				results = append(results, "=== Servidor API ===\n"+string(body))
+			}
+		} else {
+			results = append(results, "=== Servidor API ===\n"+string(body))
+		}
+		s.logf("[debug-test] teste API concluido com sucesso")
+	}
+
+	if cfg.NatsServer != "" {
+		if !guidPattern.MatchString(cfg.AgentID) {
+			err := fmt.Errorf("agentId invalido para NATS: informe um GUID valido")
+			s.logf("[debug-test] " + err.Error())
+			return "", err
+		}
+		s.logf(fmt.Sprintf("[debug-test] testando NATS: %s", cfg.NatsServer))
+		out, err := agentconn.FetchNATSInfo(cfg.NatsServer, 10*time.Second)
+		if err != nil {
+			wrapped := fmt.Errorf("falha ao conectar no NATS %s: %w", cfg.NatsServer, err)
+			s.logf("[debug-test] " + wrapped.Error())
+			return "", wrapped
+		}
+		results = append(results, "=== Servidor NATS ===\n"+out)
+		s.logf("[debug-test] teste NATS concluido com sucesso")
+	}
+
+	if len(results) == 0 {
+		return "", fmt.Errorf("nenhum servidor configurado para testar")
+	}
+
+	return strings.Join(results, "\n\n"), nil
+}
+
+// GetRealtimeStatus queries /api/realtime/status from the configured HTTP server.
+func (s *Service) GetRealtimeStatus() (RealtimeStatus, error) {
+	cfg := s.GetConfig()
+	cfg.ApiScheme = strings.TrimSpace(strings.ToLower(cfg.ApiScheme))
+	cfg.ApiServer = strings.TrimSpace(cfg.ApiServer)
+	if cfg.ApiServer == "" {
+		return RealtimeStatus{}, fmt.Errorf("servidor API nao configurado")
+	}
+	if cfg.ApiScheme != "http" && cfg.ApiScheme != "https" {
+		return RealtimeStatus{}, fmt.Errorf("apiScheme invalido: use http ou https")
+	}
+
+	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/realtime/status"
+	req, err := http.NewRequest(http.MethodGet, target, nil)
+	if err != nil {
+		return RealtimeStatus{}, fmt.Errorf("URL invalida: %w", err)
+	}
+	netutil.SetAgentAuthHeaders(req, cfg.AuthToken)
+	if strings.TrimSpace(cfg.AgentID) != "" {
+		req.Header.Set("X-Agent-ID", cfg.AgentID)
+	}
+
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		return RealtimeStatus{}, fmt.Errorf("falha ao conectar em %s: %w", target, err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return RealtimeStatus{}, fmt.Errorf("erro ao ler resposta (%s): %w", resp.Status, err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return RealtimeStatus{}, fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+
+	var out RealtimeStatus
+	if err := json.Unmarshal(body, &out); err != nil {
+		return RealtimeStatus{}, fmt.Errorf("resposta invalida de /api/realtime/status: %w", err)
+	}
+	return out, nil
+}
+
+func isValidDebugScheme(s string) bool {
+	s = strings.TrimSpace(strings.ToLower(s))
+	return s == "http" || s == "https" || s == "nats"
+}
+
+func debugConfigPathCandidates() []string {
+	paths := make([]string, 0, 5)
+
+	if runtime.GOOS == "windows" {
+		// 1o: C:\ProgramData\Discovery (compartilhado entre usuarios)
+		if programData := strings.TrimSpace(osGetenv("ProgramData")); programData != "" {
+			paths = append(paths, filepath.Join(programData, "Discovery", debugConfigFile))
+		}
+		// 2o: LOCALAPPDATA\Discovery (fallback compatibilidade)
+		if localAppData := strings.TrimSpace(osGetenv("LOCALAPPDATA")); localAppData != "" {
+			paths = append(paths, filepath.Join(localAppData, "Discovery", debugConfigFile))
+		}
+	}
+
+	if exe, err := osExecutable(); err == nil && strings.TrimSpace(exe) != "" {
+		paths = append(paths, filepath.Join(filepath.Dir(exe), debugConfigFile))
+	}
+
+	if home, err := osUserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
+		paths = append(paths, filepath.Join(home, ".discovery", debugConfigFile))
+	}
+
+	paths = append(paths, filepath.Join(".", debugConfigFile))
+	return lo.Uniq(paths)
+}
+
+// os wrappers to simplify tests.
+var (
+	osReadFile    = os.ReadFile
+	osWriteFile   = os.WriteFile
+	osMkdirAll    = os.MkdirAll
+	osExecutable  = os.Executable
+	osUserHomeDir = os.UserHomeDir
+	osGetenv      = os.Getenv
+)

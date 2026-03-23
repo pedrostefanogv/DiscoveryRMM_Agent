@@ -1,4 +1,4 @@
-package app
+package debug
 
 import (
 	"encoding/json"
@@ -8,27 +8,22 @@ import (
 	"testing"
 )
 
-func TestInstallerConfigUnmarshalDiscoveryEnabledBool(t *testing.T) {
-	var cfg InstallerConfig
-	err := json.Unmarshal([]byte(`{"serverUrl":"api.example.com","apiKey":"key","discoveryEnabled":true}`), &cfg)
-	if err != nil {
-		t.Fatalf("unmarshal bool: %v", err)
-	}
-	if cfg.DiscoveryEnabled == nil || !*cfg.DiscoveryEnabled {
-		t.Fatalf("discoveryEnabled deveria ser true")
-	}
-}
-
-func TestInstallerConfigUnmarshalDiscoveryEnabledNumericCompatibility(t *testing.T) {
+func TestInstallerConfigUnmarshalDiscoveryEnabledCompat(t *testing.T) {
 	tests := []struct {
 		name string
 		raw  string
 		want bool
 	}{
-		{name: "one means true", raw: `{"discoveryEnabled":1}`, want: true},
-		{name: "zero means false", raw: `{"discoveryEnabled":0}`, want: false},
-		{name: "string one means true", raw: `{"discoveryEnabled":"1"}`, want: true},
-		{name: "string false means false", raw: `{"discoveryEnabled":"false"}`, want: false},
+		{name: "bool true", raw: `{"discoveryEnabled":true}`, want: true},
+		{name: "bool false", raw: `{"discoveryEnabled":false}`, want: false},
+		{name: "number 1", raw: `{"discoveryEnabled":1}`, want: true},
+		{name: "number 0", raw: `{"discoveryEnabled":0}`, want: false},
+		{name: "string true", raw: `{"discoveryEnabled":"true"}`, want: true},
+		{name: "string false", raw: `{"discoveryEnabled":"false"}`, want: false},
+		{name: "string yes", raw: `{"discoveryEnabled":"yes"}`, want: true},
+		{name: "string no", raw: `{"discoveryEnabled":"no"}`, want: false},
+		{name: "string 1", raw: `{"discoveryEnabled":"1"}`, want: true},
+		{name: "string 0", raw: `{"discoveryEnabled":"0"}`, want: false},
 	}
 
 	for _, tc := range tests {
@@ -82,15 +77,10 @@ func TestGetRealtimeStatus_SetsAgentAuthHeadersAndAgentID(t *testing.T) {
 		t.Fatalf("url.Parse: %v", err)
 	}
 
-	a := &App{}
-	a.debugConfig = DebugConfig{
-		ApiScheme: "http",
-		ApiServer: u.Host,
-		AuthToken: token,
-		AgentID:   agentID,
-	}
+	svc := NewService(Options{})
+	svc.ApplyRuntimeConnectionConfig("http", u.Host, token, agentID)
 
-	status, err := a.GetRealtimeStatus()
+	status, err := svc.GetRealtimeStatus()
 	if err != nil {
 		t.Fatalf("GetRealtimeStatus: %v", err)
 	}
