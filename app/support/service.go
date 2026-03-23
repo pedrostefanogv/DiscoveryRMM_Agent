@@ -211,7 +211,7 @@ func toBool(values ...any) bool {
 	return false
 }
 
-func extractAgentInfoFromJSON(body []byte, cfg DebugConfig) (AgentInfo, error) {
+func extractAgentInfoFromJSON(body []byte, cfg debug.Config) (AgentInfo, error) {
 	var raw map[string]any
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return AgentInfo{}, fmt.Errorf("resposta inválida de /api/agent-auth/me: %w", err)
@@ -1127,7 +1127,7 @@ const (
 	knowledgeDetailCacheTTL = 30 * time.Minute
 )
 
-func knowledgeCacheScope(cfg DebugConfig, info AgentInfo) string {
+func knowledgeCacheScope(cfg debug.Config, info AgentInfo) string {
 	parts := []string{
 		strings.TrimSpace(strings.ToLower(cfg.ApiScheme)),
 		strings.TrimSpace(strings.ToLower(cfg.ApiServer)),
@@ -1303,6 +1303,30 @@ func (s *Service) GetKnowledgeBaseArticles() []KnowledgeArticle {
 	}
 
 	return articles
+}
+
+// GetKnowledgeArticles returns articles optionally filtered by category.
+func (s *Service) GetKnowledgeArticles(category string) ([]KnowledgeArticle, error) {
+	if !s.featureEnabled(s.knowledgeEnabled()) {
+		s.supportLogf("base de conhecimento desabilitada pela configuração do agente")
+		return []KnowledgeArticle{}, nil
+	}
+	info, err := s.fetchAgentContext()
+	if err != nil {
+		s.supportLogf("falha ao resolver contexto para knowledge base: %v", err)
+		return nil, err
+	}
+	return s.fetchKnowledgeList(info, category)
+}
+
+// GetKnowledgeArticleDetails returns a single article by ID.
+func (s *Service) GetKnowledgeArticleDetails(articleID string) (KnowledgeArticle, error) {
+	info, err := s.fetchAgentContext()
+	if err != nil {
+		s.supportLogf("falha ao resolver contexto para knowledge detail: %v", err)
+		return KnowledgeArticle{}, err
+	}
+	return s.fetchKnowledgeDetail(info, articleID)
 }
 
 // SearchKnowledgeBaseArticles filters articles by title/category/tags/content.

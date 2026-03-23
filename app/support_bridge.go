@@ -3,8 +3,6 @@ package app
 import (
 	"encoding/json"
 	"fmt"
-
-	"discovery/internal/models"
 )
 
 func (a *App) GetAgentInfo() (AgentInfo, error) {
@@ -124,28 +122,4 @@ func (a *App) GetKnowledgeArticleDetails(articleID string) (KnowledgeArticle, er
 		return KnowledgeArticle{}, fmt.Errorf("support service indisponivel")
 	}
 	return a.supportSvc.GetKnowledgeArticleDetails(articleID)
-}
-
-// Allow support service to reuse configuration types.
-func (a *App) GetAgentConfiguration() AgentConfiguration {
-	return a.getAgentConfiguration()
-}
-
-func (a *App) getAgentConfiguration() AgentConfiguration {
-	a.agentConfigMu.RLock()
-	cfg := a.agentConfig
-	a.agentConfigMu.RUnlock()
-	return cfg
-}
-
-// GetAgentConfiguration is already defined in app.go; keep this proxy for support usage.
-func (a *App) GetAgentConfigurationForSupport() AgentConfiguration {
-	return a.GetAgentConfiguration()
-}
-
-func (a *App) GetLogsOverview() (models.LogOverview, error) {
-	if a == nil || a.supportSvc == nil {
-		return models.LogOverview{}, fmt.Errorf("support service indisponivel")
-	}
-	return a.supportSvc.GetLogsOverview()
 }

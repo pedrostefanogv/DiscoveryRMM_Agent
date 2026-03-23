@@ -166,7 +166,7 @@ func NewApp(opts AppStartupOptions) *App {
 		}
 	}, func(line string) {
 		a.logs.append("[automation] " + line)
-			supportSvc:     &appsupport.Service{},
+	})
 	a.automationSvc.SetPackageManager(newAutomationPackageManagerRouter(a, a.appsSvc))
 	a.automationSvc.SetPackageAuthorization(func(ctx context.Context, installationType automation.AppInstallationType, packageID, operation string) error {
 		return a.authorizeAutomationPackage(ctx, string(installationType), packageID, operation)
@@ -211,6 +211,40 @@ func NewApp(opts AppStartupOptions) *App {
 	a.p2pCoord = newP2PCoordinator(a)
 	a.chatSvc.SetLogger(func(line string) {
 		a.logs.append("[chat] " + line)
+	})
+	a.inventorySvc = appinventory.NewService(appinventory.Options{
+		Apps:           a.appsSvc,
+		Inventory:      a.invSvc,
+		Cache:          &a.invCache,
+		Watchdog:       a.watchdogSvc,
+		ResolveAllowed: a.resolveAllowedPackage,
+		GetCatalog:     a.getCatalogFromAppStore,
+		BeginActivity:  a.beginActivity,
+		Logf:           a.logs.append,
+		Ctx: func() context.Context {
+			return a.ctx
+		},
+		DB:          a.db,
+		DebugConfig: a.GetDebugConfig,
+		Version:     Version,
+	})
+	a.supportSvc = appsupport.NewService(appsupport.Options{
+		Logf:        a.logs.append,
+		Ctx:         func() context.Context { return a.ctx },
+		DB:          a.db,
+		AgentInfo:   &a.agentInfo,
+		DebugConfig: a.GetDebugConfig,
+		FeatureEnabled: func(flag *bool) bool {
+			return a.featureEnabled(flag)
+		},
+		SupportEnabled: func() *bool {
+			cfg := a.GetAgentConfiguration()
+			return cfg.SupportEnabled
+		},
+		KnowledgeEnabled: func() *bool {
+			cfg := a.GetAgentConfiguration()
+			return cfg.KnowledgeBaseEnabled
+		},
 	})
 	a.updatesSvc = updates.NewService(updates.Options{
 		Apps:          a.appsSvc,

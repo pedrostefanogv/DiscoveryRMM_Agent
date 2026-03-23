@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"discovery/app/debug"
 )
 
 func TestLoadEffectiveAppStorePolicyMergesWingetAndChocolatey(t *testing.T) {
@@ -32,11 +34,8 @@ func TestLoadEffectiveAppStorePolicyMergesWingetAndChocolatey(t *testing.T) {
 	defer server.Close()
 
 	app := &App{ctx: context.Background()}
-	app.debugConfig = DebugConfig{
-		ApiScheme: "http",
-		ApiServer: strings.TrimPrefix(server.URL, "http://"),
-		AuthToken: token,
-	}
+	app.debugSvc = debug.NewService(debug.Options{})
+	app.debugSvc.ApplyRuntimeConnectionConfig("http", strings.TrimPrefix(server.URL, "http://"), token, "")
 
 	policy, err := app.loadEffectiveAppStorePolicy(context.Background(), true)
 	if err != nil {

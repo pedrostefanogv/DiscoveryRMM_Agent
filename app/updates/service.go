@@ -80,6 +80,16 @@ func (s *Service) GetPendingUpdates() ([]models.UpgradeItem, error) {
 	return items, nil
 }
 
+// ParseUpgradeOutput exposes the parsing logic for tests and callers.
+func ParseUpgradeOutput(raw string) []models.UpgradeItem {
+	return parseUpgradeOutput(raw)
+}
+
+// ParseInstalledOutput exposes the installed list parsing.
+func ParseInstalledOutput(raw string) []string {
+	return parseInstalledOutput(raw)
+}
+
 // GetPackageActions returns a contextual action map keyed by package id.
 // Values: install, uninstall, upgrade.
 func (s *Service) GetPackageActions() (map[string]string, error) {

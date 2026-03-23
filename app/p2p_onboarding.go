@@ -288,7 +288,7 @@ func (s *p2pTransferServer) handleP2POnboard(w http.ResponseWriter, r *http.Requ
 	}
 }
 
-func (s *p2pTransferServer) handleOnboardOffer(w http.ResponseWriter, r *http.Request) {
+func (s *p2pTransferServer) handleOnboardOffer(w http.ResponseWriter, _ *http.Request) {
 	if s.app == nil {
 		http.Error(w, "unavailable", http.StatusServiceUnavailable)
 		return

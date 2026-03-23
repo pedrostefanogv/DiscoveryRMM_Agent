@@ -1,124 +1,4 @@
-export namespace database {
-	
-	export class MemoryNote {
-	    id: number;
-	    content: string;
-	    // Go type: time
-	    createdAt: any;
-	    // Go type: time
-	    updatedAt: any;
-	
-	    static createFrom(source: any = {}) {
-	        return new MemoryNote(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.content = source["content"];
-	        this.createdAt = this.convertValues(source["createdAt"], null);
-	        this.updatedAt = this.convertValues(source["updatedAt"], null);
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-
-}
-
-export namespace main {
-	
-	export class APIWorkflowState {
-	    id: string;
-	    name: string;
-	    color: string;
-	    isInitial: boolean;
-	    isFinal: boolean;
-	    displayOrder: number;
-	
-	    static createFrom(source: any = {}) {
-	        return new APIWorkflowState(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.name = source["name"];
-	        this.color = source["color"];
-	        this.isInitial = source["isInitial"];
-	        this.isFinal = source["isFinal"];
-	        this.displayOrder = source["displayOrder"];
-	    }
-	}
-	export class APITicket {
-	    id: string;
-	    title: string;
-	    description: string;
-	    priority: number;
-	    category?: string;
-	    agentId?: string;
-	    clientId: string;
-	    siteId?: string;
-	    createdAt: string;
-	    workflowState?: APIWorkflowState;
-	    rating?: number;
-	    ratedAt?: string;
-	    ratedBy?: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new APITicket(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.title = source["title"];
-	        this.description = source["description"];
-	        this.priority = source["priority"];
-	        this.category = source["category"];
-	        this.agentId = source["agentId"];
-	        this.clientId = source["clientId"];
-	        this.siteId = source["siteId"];
-	        this.createdAt = source["createdAt"];
-	        this.workflowState = this.convertValues(source["workflowState"], APIWorkflowState);
-	        this.rating = source["rating"];
-	        this.ratedAt = source["ratedAt"];
-	        this.ratedBy = source["ratedBy"];
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
+export namespace app {
 	
 	export class AgentAutoUpdateConfig {
 	    enabled: boolean;
@@ -208,231 +88,6 @@ export namespace main {
 		    return a;
 		}
 	}
-	export class AgentInfo {
-	    agentId: string;
-	    clientId: string;
-	    siteId: string;
-	    hostname: string;
-	    displayName: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new AgentInfo(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.agentId = source["agentId"];
-	        this.clientId = source["clientId"];
-	        this.siteId = source["siteId"];
-	        this.hostname = source["hostname"];
-	        this.displayName = source["displayName"];
-	    }
-	}
-	export class AgentStatus {
-	    connected: boolean;
-	    agentId: string;
-	    server: string;
-	    lastEvent: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new AgentStatus(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.connected = source["connected"];
-	        this.agentId = source["agentId"];
-	        this.server = source["server"];
-	        this.lastEvent = source["lastEvent"];
-	    }
-	}
-	export class AutomationExecutionView {
-	    executionId: string;
-	    commandId?: string;
-	    taskId?: string;
-	    taskName?: string;
-	    actionType?: string;
-	    actionLabel?: string;
-	    installationType?: string;
-	    installationLabel?: string;
-	    sourceType?: string;
-	    sourceLabel?: string;
-	    triggerType?: string;
-	    triggerLabel?: string;
-	    status: string;
-	    statusLabel: string;
-	    success: boolean;
-	    exitCode: number;
-	    exitCodeSet: boolean;
-	    errorMessage?: string;
-	    output?: string;
-	    packageId?: string;
-	    scriptId?: string;
-	    correlationId?: string;
-	    startedAt?: string;
-	    finishedAt?: string;
-	    metadataJson?: string;
-	    durationLabel?: string;
-	    summaryLine?: string;
-	    hasPendingCallback: boolean;
-	
-	    static createFrom(source: any = {}) {
-	        return new AutomationExecutionView(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.executionId = source["executionId"];
-	        this.commandId = source["commandId"];
-	        this.taskId = source["taskId"];
-	        this.taskName = source["taskName"];
-	        this.actionType = source["actionType"];
-	        this.actionLabel = source["actionLabel"];
-	        this.installationType = source["installationType"];
-	        this.installationLabel = source["installationLabel"];
-	        this.sourceType = source["sourceType"];
-	        this.sourceLabel = source["sourceLabel"];
-	        this.triggerType = source["triggerType"];
-	        this.triggerLabel = source["triggerLabel"];
-	        this.status = source["status"];
-	        this.statusLabel = source["statusLabel"];
-	        this.success = source["success"];
-	        this.exitCode = source["exitCode"];
-	        this.exitCodeSet = source["exitCodeSet"];
-	        this.errorMessage = source["errorMessage"];
-	        this.output = source["output"];
-	        this.packageId = source["packageId"];
-	        this.scriptId = source["scriptId"];
-	        this.correlationId = source["correlationId"];
-	        this.startedAt = source["startedAt"];
-	        this.finishedAt = source["finishedAt"];
-	        this.metadataJson = source["metadataJson"];
-	        this.durationLabel = source["durationLabel"];
-	        this.summaryLine = source["summaryLine"];
-	        this.hasPendingCallback = source["hasPendingCallback"];
-	    }
-	}
-	export class AutomationTaskView {
-	    commandId?: string;
-	    taskId: string;
-	    name: string;
-	    description?: string;
-	    actionType: string;
-	    actionLabel: string;
-	    installationType?: string;
-	    installationLabel?: string;
-	    packageId?: string;
-	    scriptId?: string;
-	    scriptName?: string;
-	    scriptVersion?: string;
-	    scriptType?: string;
-	    scriptTypeLabel?: string;
-	    commandPayload?: string;
-	    scopeType: string;
-	    scopeLabel: string;
-	    requiresApproval: boolean;
-	    triggerImmediate: boolean;
-	    triggerRecurring: boolean;
-	    triggerOnUserLogin: boolean;
-	    triggerOnAgentCheckIn: boolean;
-	    scheduleCron?: string;
-	    includeTags?: string[];
-	    excludeTags?: string[];
-	    lastUpdatedAt?: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new AutomationTaskView(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.commandId = source["commandId"];
-	        this.taskId = source["taskId"];
-	        this.name = source["name"];
-	        this.description = source["description"];
-	        this.actionType = source["actionType"];
-	        this.actionLabel = source["actionLabel"];
-	        this.installationType = source["installationType"];
-	        this.installationLabel = source["installationLabel"];
-	        this.packageId = source["packageId"];
-	        this.scriptId = source["scriptId"];
-	        this.scriptName = source["scriptName"];
-	        this.scriptVersion = source["scriptVersion"];
-	        this.scriptType = source["scriptType"];
-	        this.scriptTypeLabel = source["scriptTypeLabel"];
-	        this.commandPayload = source["commandPayload"];
-	        this.scopeType = source["scopeType"];
-	        this.scopeLabel = source["scopeLabel"];
-	        this.requiresApproval = source["requiresApproval"];
-	        this.triggerImmediate = source["triggerImmediate"];
-	        this.triggerRecurring = source["triggerRecurring"];
-	        this.triggerOnUserLogin = source["triggerOnUserLogin"];
-	        this.triggerOnAgentCheckIn = source["triggerOnAgentCheckIn"];
-	        this.scheduleCron = source["scheduleCron"];
-	        this.includeTags = source["includeTags"];
-	        this.excludeTags = source["excludeTags"];
-	        this.lastUpdatedAt = source["lastUpdatedAt"];
-	    }
-	}
-	export class AutomationStateView {
-	    available: boolean;
-	    connected: boolean;
-	    loadedFromCache: boolean;
-	    upToDate: boolean;
-	    includeScriptContent: boolean;
-	    policyFingerprint?: string;
-	    generatedAt?: string;
-	    lastSyncAt?: string;
-	    lastAttemptAt?: string;
-	    lastError?: string;
-	    correlationId?: string;
-	    taskCount: number;
-	    pendingCallbacks: number;
-	    tasks?: AutomationTaskView[];
-	    recentExecutions?: AutomationExecutionView[];
-	
-	    static createFrom(source: any = {}) {
-	        return new AutomationStateView(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.available = source["available"];
-	        this.connected = source["connected"];
-	        this.loadedFromCache = source["loadedFromCache"];
-	        this.upToDate = source["upToDate"];
-	        this.includeScriptContent = source["includeScriptContent"];
-	        this.policyFingerprint = source["policyFingerprint"];
-	        this.generatedAt = source["generatedAt"];
-	        this.lastSyncAt = source["lastSyncAt"];
-	        this.lastAttemptAt = source["lastAttemptAt"];
-	        this.lastError = source["lastError"];
-	        this.correlationId = source["correlationId"];
-	        this.taskCount = source["taskCount"];
-	        this.pendingCallbacks = source["pendingCallbacks"];
-	        this.tasks = this.convertValues(source["tasks"], AutomationTaskView);
-	        this.recentExecutions = this.convertValues(source["recentExecutions"], AutomationExecutionView);
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	
 	export class ChatConfig {
 	    endpoint: string;
 	    apiKey: string;
@@ -466,515 +121,6 @@ export namespace main {
 	        this.role = source["role"];
 	        this.content = source["content"];
 	    }
-	}
-	export class CloseTicketInput {
-	    rating?: number;
-	    comment?: string;
-	    workflowStateId?: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new CloseTicketInput(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.rating = source["rating"];
-	        this.comment = source["comment"];
-	        this.workflowStateId = source["workflowStateId"];
-	    }
-	}
-	export class CreateTicketInput {
-	    title: string;
-	    description: string;
-	    priority: number;
-	    category: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new CreateTicketInput(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.title = source["title"];
-	        this.description = source["description"];
-	        this.priority = source["priority"];
-	        this.category = source["category"];
-	    }
-	}
-	export class DebugConfig {
-	    apiScheme: string;
-	    apiServer: string;
-	    authToken: string;
-	    natsServer: string;
-	    agentId: string;
-	    scheme?: string;
-	    server?: string;
-	    automationP2pWingetInstallEnabled?: boolean;
-	
-	    static createFrom(source: any = {}) {
-	        return new DebugConfig(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.apiScheme = source["apiScheme"];
-	        this.apiServer = source["apiServer"];
-	        this.authToken = source["authToken"];
-	        this.natsServer = source["natsServer"];
-	        this.agentId = source["agentId"];
-	        this.scheme = source["scheme"];
-	        this.server = source["server"];
-	        this.automationP2pWingetInstallEnabled = source["automationP2pWingetInstallEnabled"];
-	    }
-	}
-	export class KnowledgeArticle {
-	    id: string;
-	    title: string;
-	    category: string;
-	    summary: string;
-	    content: string;
-	    tags: string[];
-	    author: string;
-	    scope: string;
-	    publishedAt: string;
-	    difficulty: string;
-	    readTimeMin: number;
-	    updatedAt: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new KnowledgeArticle(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.title = source["title"];
-	        this.category = source["category"];
-	        this.summary = source["summary"];
-	        this.content = source["content"];
-	        this.tags = source["tags"];
-	        this.author = source["author"];
-	        this.scope = source["scope"];
-	        this.publishedAt = source["publishedAt"];
-	        this.difficulty = source["difficulty"];
-	        this.readTimeMin = source["readTimeMin"];
-	        this.updatedAt = source["updatedAt"];
-	    }
-	}
-	export class P2PArtifactAccess {
-	    artifactId: string;
-	    artifactName: string;
-	    url: string;
-	    checksumSha256: string;
-	    sizeBytes: number;
-	    expiresAtUtc: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new P2PArtifactAccess(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.artifactId = source["artifactId"];
-	        this.artifactName = source["artifactName"];
-	        this.url = source["url"];
-	        this.checksumSha256 = source["checksumSha256"];
-	        this.sizeBytes = source["sizeBytes"];
-	        this.expiresAtUtc = source["expiresAtUtc"];
-	    }
-	}
-	export class P2PArtifactAvailabilityView {
-	    artifactId: string;
-	    artifactName: string;
-	    found: boolean;
-	    peerAgentIds: string[];
-	    peerCount: number;
-	
-	    static createFrom(source: any = {}) {
-	        return new P2PArtifactAvailabilityView(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.artifactId = source["artifactId"];
-	        this.artifactName = source["artifactName"];
-	        this.found = source["found"];
-	        this.peerAgentIds = source["peerAgentIds"];
-	        this.peerCount = source["peerCount"];
-	    }
-	}
-	export class P2PArtifactView {
-	    artifactId: string;
-	    artifactName: string;
-	    version?: string;
-	    sizeBytes: number;
-	    modifiedAtUtc: string;
-	    checksumSha256: string;
-	    available: boolean;
-	    lastHeartbeatUtc: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new P2PArtifactView(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.artifactId = source["artifactId"];
-	        this.artifactName = source["artifactName"];
-	        this.version = source["version"];
-	        this.sizeBytes = source["sizeBytes"];
-	        this.modifiedAtUtc = source["modifiedAtUtc"];
-	        this.checksumSha256 = source["checksumSha256"];
-	        this.available = source["available"];
-	        this.lastHeartbeatUtc = source["lastHeartbeatUtc"];
-	    }
-	}
-	export class P2PAuditEvent {
-	    timestampUtc: string;
-	    action: string;
-	    artifactName?: string;
-	    peerAgentId?: string;
-	    source?: string;
-	    success: boolean;
-	    message: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new P2PAuditEvent(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.timestampUtc = source["timestampUtc"];
-	        this.action = source["action"];
-	        this.artifactName = source["artifactName"];
-	        this.peerAgentId = source["peerAgentId"];
-	        this.source = source["source"];
-	        this.success = source["success"];
-	        this.message = source["message"];
-	    }
-	}
-	export class P2PBootstrapConfig {
-	    bootstrapPeers?: string[];
-	    preferLan: boolean;
-	
-	    static createFrom(source: any = {}) {
-	        return new P2PBootstrapConfig(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.bootstrapPeers = source["bootstrapPeers"];
-	        this.preferLan = source["preferLan"];
-	    }
-	}
-	export class P2PConfig {
-	    enabled: boolean;
-	    discoveryMode: string;
-	    p2pMode?: string;
-	    tempTtlHours: number;
-	    seedPercent: number;
-	    minSeeds: number;
-	    httpListenPortRangeStart: number;
-	    httpListenPortRangeEnd: number;
-	    authTokenRotationMinutes: number;
-	    sharedSecret?: string;
-	    chunkSizeBytes?: number;
-	    maxBandwidthBytesPerSec?: number;
-	    bootstrapConfig?: P2PBootstrapConfig;
-	
-	    static createFrom(source: any = {}) {
-	        return new P2PConfig(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.enabled = source["enabled"];
-	        this.discoveryMode = source["discoveryMode"];
-	        this.p2pMode = source["p2pMode"];
-	        this.tempTtlHours = source["tempTtlHours"];
-	        this.seedPercent = source["seedPercent"];
-	        this.minSeeds = source["minSeeds"];
-	        this.httpListenPortRangeStart = source["httpListenPortRangeStart"];
-	        this.httpListenPortRangeEnd = source["httpListenPortRangeEnd"];
-	        this.authTokenRotationMinutes = source["authTokenRotationMinutes"];
-	        this.sharedSecret = source["sharedSecret"];
-	        this.chunkSizeBytes = source["chunkSizeBytes"];
-	        this.maxBandwidthBytesPerSec = source["maxBandwidthBytesPerSec"];
-	        this.bootstrapConfig = this.convertValues(source["bootstrapConfig"], P2PBootstrapConfig);
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	export class P2PMetrics {
-	    publishedArtifacts: number;
-	    replicationsStarted: number;
-	    replicationsSucceeded: number;
-	    replicationsFailed: number;
-	    bytesServed: number;
-	    bytesDownloaded: number;
-	    queuedReplications: number;
-	    activeReplications: number;
-	    autoDistributionRuns: number;
-	    catalogRefreshRuns: number;
-	    chunkedDownloads: number;
-	    chunksDownloaded: number;
-	
-	    static createFrom(source: any = {}) {
-	        return new P2PMetrics(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.publishedArtifacts = source["publishedArtifacts"];
-	        this.replicationsStarted = source["replicationsStarted"];
-	        this.replicationsSucceeded = source["replicationsSucceeded"];
-	        this.replicationsFailed = source["replicationsFailed"];
-	        this.bytesServed = source["bytesServed"];
-	        this.bytesDownloaded = source["bytesDownloaded"];
-	        this.queuedReplications = source["queuedReplications"];
-	        this.activeReplications = source["activeReplications"];
-	        this.autoDistributionRuns = source["autoDistributionRuns"];
-	        this.catalogRefreshRuns = source["catalogRefreshRuns"];
-	        this.chunkedDownloads = source["chunkedDownloads"];
-	        this.chunksDownloaded = source["chunksDownloaded"];
-	    }
-	}
-	export class P2PSeedPlan {
-	    totalAgents: number;
-	    configuredPercent: number;
-	    minSeeds: number;
-	    selectedSeeds: number;
-	
-	    static createFrom(source: any = {}) {
-	        return new P2PSeedPlan(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.totalAgents = source["totalAgents"];
-	        this.configuredPercent = source["configuredPercent"];
-	        this.minSeeds = source["minSeeds"];
-	        this.selectedSeeds = source["selectedSeeds"];
-	    }
-	}
-	export class P2PDebugStatus {
-	    active: boolean;
-	    discoveryMode: string;
-	    knownPeers: number;
-	    listenAddress: string;
-	    tempDir: string;
-	    tempTtlHours: number;
-	    lastCleanupUtc: string;
-	    lastDiscoveryTickUtc: string;
-	    lastError: string;
-	    currentSeedPlan: P2PSeedPlan;
-	    metrics: P2PMetrics;
-	
-	    static createFrom(source: any = {}) {
-	        return new P2PDebugStatus(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.active = source["active"];
-	        this.discoveryMode = source["discoveryMode"];
-	        this.knownPeers = source["knownPeers"];
-	        this.listenAddress = source["listenAddress"];
-	        this.tempDir = source["tempDir"];
-	        this.tempTtlHours = source["tempTtlHours"];
-	        this.lastCleanupUtc = source["lastCleanupUtc"];
-	        this.lastDiscoveryTickUtc = source["lastDiscoveryTickUtc"];
-	        this.lastError = source["lastError"];
-	        this.currentSeedPlan = this.convertValues(source["currentSeedPlan"], P2PSeedPlan);
-	        this.metrics = this.convertValues(source["metrics"], P2PMetrics);
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	export class P2PDistributionStatus {
-	    artifactId: string;
-	    artifactName?: string;
-	    peerCount: number;
-	    peerAgentIds?: string[];
-	    lastUpdatedUtc?: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new P2PDistributionStatus(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.artifactId = source["artifactId"];
-	        this.artifactName = source["artifactName"];
-	        this.peerCount = source["peerCount"];
-	        this.peerAgentIds = source["peerAgentIds"];
-	        this.lastUpdatedUtc = source["lastUpdatedUtc"];
-	    }
-	}
-	
-	export class P2PPeerArtifactIndexView {
-	    peerAgentId: string;
-	    lastUpdatedUtc: string;
-	    source: string;
-	    artifacts: P2PArtifactView[];
-	
-	    static createFrom(source: any = {}) {
-	        return new P2PPeerArtifactIndexView(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.peerAgentId = source["peerAgentId"];
-	        this.lastUpdatedUtc = source["lastUpdatedUtc"];
-	        this.source = source["source"];
-	        this.artifacts = this.convertValues(source["artifacts"], P2PArtifactView);
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	export class P2PPeerView {
-	    agentId: string;
-	    host: string;
-	    address: string;
-	    port: number;
-	    source: string;
-	    lastSeenUtc: string;
-	    knownPeers: number;
-	    connectedVia: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new P2PPeerView(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.agentId = source["agentId"];
-	        this.host = source["host"];
-	        this.address = source["address"];
-	        this.port = source["port"];
-	        this.source = source["source"];
-	        this.lastSeenUtc = source["lastSeenUtc"];
-	        this.knownPeers = source["knownPeers"];
-	        this.connectedVia = source["connectedVia"];
-	    }
-	}
-	
-	export class P2PSeedPlanRecommendation {
-	    siteId?: string;
-	    generatedAtUtc?: string;
-	    plan: P2PSeedPlan;
-	
-	    static createFrom(source: any = {}) {
-	        return new P2PSeedPlanRecommendation(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.siteId = source["siteId"];
-	        this.generatedAtUtc = source["generatedAtUtc"];
-	        this.plan = this.convertValues(source["plan"], P2PSeedPlan);
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	export class RealtimeStatus {
-	    natsConnected: boolean;
-	    signalrConnectedAgents: number;
-	    // Go type: time
-	    checkedAtUtc: any;
-	
-	    static createFrom(source: any = {}) {
-	        return new RealtimeStatus(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.natsConnected = source["natsConnected"];
-	        this.signalrConnectedAgents = source["signalrConnectedAgents"];
-	        this.checkedAtUtc = this.convertValues(source["checkedAtUtc"], null);
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
 	}
 	export class RuntimeFlags {
 	    debugMode: boolean;
@@ -1047,25 +193,323 @@ export namespace main {
 		    return a;
 		}
 	}
-	export class TicketComment {
-	    id: string;
-	    author: string;
-	    content: string;
-	    isInternal: boolean;
-	    createdAt: string;
+
+}
+
+export namespace automation {
+	
+	export class ExecutionView {
+	    executionId: string;
+	    commandId?: string;
+	    taskId?: string;
+	    taskName?: string;
+	    actionType?: string;
+	    actionLabel?: string;
+	    installationType?: string;
+	    installationLabel?: string;
+	    sourceType?: string;
+	    sourceLabel?: string;
+	    triggerType?: string;
+	    triggerLabel?: string;
+	    status: string;
+	    statusLabel: string;
+	    success: boolean;
+	    exitCode: number;
+	    exitCodeSet: boolean;
+	    errorMessage?: string;
+	    output?: string;
+	    packageId?: string;
+	    scriptId?: string;
+	    correlationId?: string;
+	    startedAt?: string;
+	    finishedAt?: string;
+	    metadataJson?: string;
+	    durationLabel?: string;
+	    summaryLine?: string;
+	    hasPendingCallback: boolean;
 	
 	    static createFrom(source: any = {}) {
-	        return new TicketComment(source);
+	        return new ExecutionView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.executionId = source["executionId"];
+	        this.commandId = source["commandId"];
+	        this.taskId = source["taskId"];
+	        this.taskName = source["taskName"];
+	        this.actionType = source["actionType"];
+	        this.actionLabel = source["actionLabel"];
+	        this.installationType = source["installationType"];
+	        this.installationLabel = source["installationLabel"];
+	        this.sourceType = source["sourceType"];
+	        this.sourceLabel = source["sourceLabel"];
+	        this.triggerType = source["triggerType"];
+	        this.triggerLabel = source["triggerLabel"];
+	        this.status = source["status"];
+	        this.statusLabel = source["statusLabel"];
+	        this.success = source["success"];
+	        this.exitCode = source["exitCode"];
+	        this.exitCodeSet = source["exitCodeSet"];
+	        this.errorMessage = source["errorMessage"];
+	        this.output = source["output"];
+	        this.packageId = source["packageId"];
+	        this.scriptId = source["scriptId"];
+	        this.correlationId = source["correlationId"];
+	        this.startedAt = source["startedAt"];
+	        this.finishedAt = source["finishedAt"];
+	        this.metadataJson = source["metadataJson"];
+	        this.durationLabel = source["durationLabel"];
+	        this.summaryLine = source["summaryLine"];
+	        this.hasPendingCallback = source["hasPendingCallback"];
+	    }
+	}
+	export class TaskView {
+	    commandId?: string;
+	    taskId: string;
+	    name: string;
+	    description?: string;
+	    actionType: string;
+	    actionLabel: string;
+	    installationType?: string;
+	    installationLabel?: string;
+	    packageId?: string;
+	    scriptId?: string;
+	    scriptName?: string;
+	    scriptVersion?: string;
+	    scriptType?: string;
+	    scriptTypeLabel?: string;
+	    commandPayload?: string;
+	    scopeType: string;
+	    scopeLabel: string;
+	    requiresApproval: boolean;
+	    triggerImmediate: boolean;
+	    triggerRecurring: boolean;
+	    triggerOnUserLogin: boolean;
+	    triggerOnAgentCheckIn: boolean;
+	    scheduleCron?: string;
+	    includeTags?: string[];
+	    excludeTags?: string[];
+	    lastUpdatedAt?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new TaskView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.commandId = source["commandId"];
+	        this.taskId = source["taskId"];
+	        this.name = source["name"];
+	        this.description = source["description"];
+	        this.actionType = source["actionType"];
+	        this.actionLabel = source["actionLabel"];
+	        this.installationType = source["installationType"];
+	        this.installationLabel = source["installationLabel"];
+	        this.packageId = source["packageId"];
+	        this.scriptId = source["scriptId"];
+	        this.scriptName = source["scriptName"];
+	        this.scriptVersion = source["scriptVersion"];
+	        this.scriptType = source["scriptType"];
+	        this.scriptTypeLabel = source["scriptTypeLabel"];
+	        this.commandPayload = source["commandPayload"];
+	        this.scopeType = source["scopeType"];
+	        this.scopeLabel = source["scopeLabel"];
+	        this.requiresApproval = source["requiresApproval"];
+	        this.triggerImmediate = source["triggerImmediate"];
+	        this.triggerRecurring = source["triggerRecurring"];
+	        this.triggerOnUserLogin = source["triggerOnUserLogin"];
+	        this.triggerOnAgentCheckIn = source["triggerOnAgentCheckIn"];
+	        this.scheduleCron = source["scheduleCron"];
+	        this.includeTags = source["includeTags"];
+	        this.excludeTags = source["excludeTags"];
+	        this.lastUpdatedAt = source["lastUpdatedAt"];
+	    }
+	}
+	export class StateView {
+	    available: boolean;
+	    connected: boolean;
+	    loadedFromCache: boolean;
+	    upToDate: boolean;
+	    includeScriptContent: boolean;
+	    policyFingerprint?: string;
+	    generatedAt?: string;
+	    lastSyncAt?: string;
+	    lastAttemptAt?: string;
+	    lastError?: string;
+	    correlationId?: string;
+	    taskCount: number;
+	    pendingCallbacks: number;
+	    tasks?: TaskView[];
+	    recentExecutions?: ExecutionView[];
+	
+	    static createFrom(source: any = {}) {
+	        return new StateView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.available = source["available"];
+	        this.connected = source["connected"];
+	        this.loadedFromCache = source["loadedFromCache"];
+	        this.upToDate = source["upToDate"];
+	        this.includeScriptContent = source["includeScriptContent"];
+	        this.policyFingerprint = source["policyFingerprint"];
+	        this.generatedAt = source["generatedAt"];
+	        this.lastSyncAt = source["lastSyncAt"];
+	        this.lastAttemptAt = source["lastAttemptAt"];
+	        this.lastError = source["lastError"];
+	        this.correlationId = source["correlationId"];
+	        this.taskCount = source["taskCount"];
+	        this.pendingCallbacks = source["pendingCallbacks"];
+	        this.tasks = this.convertValues(source["tasks"], TaskView);
+	        this.recentExecutions = this.convertValues(source["recentExecutions"], ExecutionView);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+}
+
+export namespace database {
+	
+	export class MemoryNote {
+	    id: number;
+	    content: string;
+	    // Go type: time
+	    createdAt: any;
+	    // Go type: time
+	    updatedAt: any;
+	
+	    static createFrom(source: any = {}) {
+	        return new MemoryNote(source);
 	    }
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
-	        this.author = source["author"];
 	        this.content = source["content"];
-	        this.isInternal = source["isInternal"];
-	        this.createdAt = source["createdAt"];
+	        this.createdAt = this.convertValues(source["createdAt"], null);
+	        this.updatedAt = this.convertValues(source["updatedAt"], null);
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+}
+
+export namespace debug {
+	
+	export class AgentStatus {
+	    connected: boolean;
+	    agentId: string;
+	    server: string;
+	    lastEvent: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AgentStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.connected = source["connected"];
+	        this.agentId = source["agentId"];
+	        this.server = source["server"];
+	        this.lastEvent = source["lastEvent"];
+	    }
+	}
+	export class Config {
+	    apiScheme: string;
+	    apiServer: string;
+	    authToken: string;
+	    natsServer: string;
+	    agentId: string;
+	    scheme?: string;
+	    server?: string;
+	    automationP2pWingetInstallEnabled?: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new Config(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.apiScheme = source["apiScheme"];
+	        this.apiServer = source["apiServer"];
+	        this.authToken = source["authToken"];
+	        this.natsServer = source["natsServer"];
+	        this.agentId = source["agentId"];
+	        this.scheme = source["scheme"];
+	        this.server = source["server"];
+	        this.automationP2pWingetInstallEnabled = source["automationP2pWingetInstallEnabled"];
+	    }
+	}
+	export class RealtimeStatus {
+	    natsConnected: boolean;
+	    signalrConnectedAgents: number;
+	    // Go type: time
+	    checkedAtUtc: any;
+	
+	    static createFrom(source: any = {}) {
+	        return new RealtimeStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.natsConnected = source["natsConnected"];
+	        this.signalrConnectedAgents = source["signalrConnectedAgents"];
+	        this.checkedAtUtc = this.convertValues(source["checkedAtUtc"], null);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 
 }
@@ -1749,6 +1193,581 @@ export namespace models {
 	        this.currentVersion = source["currentVersion"];
 	        this.availableVersion = source["availableVersion"];
 	        this.source = source["source"];
+	    }
+	}
+
+}
+
+export namespace p2pmeta {
+	
+	export class ArtifactAccess {
+	    artifactId: string;
+	    artifactName: string;
+	    url: string;
+	    checksumSha256: string;
+	    sizeBytes: number;
+	    expiresAtUtc: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ArtifactAccess(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.artifactId = source["artifactId"];
+	        this.artifactName = source["artifactName"];
+	        this.url = source["url"];
+	        this.checksumSha256 = source["checksumSha256"];
+	        this.sizeBytes = source["sizeBytes"];
+	        this.expiresAtUtc = source["expiresAtUtc"];
+	    }
+	}
+	export class ArtifactAvailabilityView {
+	    artifactId: string;
+	    artifactName: string;
+	    found: boolean;
+	    peerAgentIds: string[];
+	    peerCount: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ArtifactAvailabilityView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.artifactId = source["artifactId"];
+	        this.artifactName = source["artifactName"];
+	        this.found = source["found"];
+	        this.peerAgentIds = source["peerAgentIds"];
+	        this.peerCount = source["peerCount"];
+	    }
+	}
+	export class ArtifactView {
+	    artifactId: string;
+	    artifactName: string;
+	    version?: string;
+	    sizeBytes: number;
+	    modifiedAtUtc: string;
+	    checksumSha256: string;
+	    available: boolean;
+	    lastHeartbeatUtc: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ArtifactView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.artifactId = source["artifactId"];
+	        this.artifactName = source["artifactName"];
+	        this.version = source["version"];
+	        this.sizeBytes = source["sizeBytes"];
+	        this.modifiedAtUtc = source["modifiedAtUtc"];
+	        this.checksumSha256 = source["checksumSha256"];
+	        this.available = source["available"];
+	        this.lastHeartbeatUtc = source["lastHeartbeatUtc"];
+	    }
+	}
+	export class AuditEvent {
+	    timestampUtc: string;
+	    action: string;
+	    artifactName?: string;
+	    peerAgentId?: string;
+	    source?: string;
+	    success: boolean;
+	    message: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AuditEvent(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.timestampUtc = source["timestampUtc"];
+	        this.action = source["action"];
+	        this.artifactName = source["artifactName"];
+	        this.peerAgentId = source["peerAgentId"];
+	        this.source = source["source"];
+	        this.success = source["success"];
+	        this.message = source["message"];
+	    }
+	}
+	export class BootstrapConfig {
+	    bootstrapPeers?: string[];
+	    preferLan: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new BootstrapConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.bootstrapPeers = source["bootstrapPeers"];
+	        this.preferLan = source["preferLan"];
+	    }
+	}
+	export class Config {
+	    enabled: boolean;
+	    discoveryMode: string;
+	    p2pMode?: string;
+	    tempTtlHours: number;
+	    seedPercent: number;
+	    minSeeds: number;
+	    httpListenPortRangeStart: number;
+	    httpListenPortRangeEnd: number;
+	    authTokenRotationMinutes: number;
+	    sharedSecret?: string;
+	    chunkSizeBytes?: number;
+	    maxBandwidthBytesPerSec?: number;
+	    bootstrapConfig?: BootstrapConfig;
+	
+	    static createFrom(source: any = {}) {
+	        return new Config(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.discoveryMode = source["discoveryMode"];
+	        this.p2pMode = source["p2pMode"];
+	        this.tempTtlHours = source["tempTtlHours"];
+	        this.seedPercent = source["seedPercent"];
+	        this.minSeeds = source["minSeeds"];
+	        this.httpListenPortRangeStart = source["httpListenPortRangeStart"];
+	        this.httpListenPortRangeEnd = source["httpListenPortRangeEnd"];
+	        this.authTokenRotationMinutes = source["authTokenRotationMinutes"];
+	        this.sharedSecret = source["sharedSecret"];
+	        this.chunkSizeBytes = source["chunkSizeBytes"];
+	        this.maxBandwidthBytesPerSec = source["maxBandwidthBytesPerSec"];
+	        this.bootstrapConfig = this.convertValues(source["bootstrapConfig"], BootstrapConfig);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Metrics {
+	    publishedArtifacts: number;
+	    replicationsStarted: number;
+	    replicationsSucceeded: number;
+	    replicationsFailed: number;
+	    bytesServed: number;
+	    bytesDownloaded: number;
+	    queuedReplications: number;
+	    activeReplications: number;
+	    autoDistributionRuns: number;
+	    catalogRefreshRuns: number;
+	    chunkedDownloads: number;
+	    chunksDownloaded: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new Metrics(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.publishedArtifacts = source["publishedArtifacts"];
+	        this.replicationsStarted = source["replicationsStarted"];
+	        this.replicationsSucceeded = source["replicationsSucceeded"];
+	        this.replicationsFailed = source["replicationsFailed"];
+	        this.bytesServed = source["bytesServed"];
+	        this.bytesDownloaded = source["bytesDownloaded"];
+	        this.queuedReplications = source["queuedReplications"];
+	        this.activeReplications = source["activeReplications"];
+	        this.autoDistributionRuns = source["autoDistributionRuns"];
+	        this.catalogRefreshRuns = source["catalogRefreshRuns"];
+	        this.chunkedDownloads = source["chunkedDownloads"];
+	        this.chunksDownloaded = source["chunksDownloaded"];
+	    }
+	}
+	export class SeedPlan {
+	    totalAgents: number;
+	    configuredPercent: number;
+	    minSeeds: number;
+	    selectedSeeds: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new SeedPlan(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.totalAgents = source["totalAgents"];
+	        this.configuredPercent = source["configuredPercent"];
+	        this.minSeeds = source["minSeeds"];
+	        this.selectedSeeds = source["selectedSeeds"];
+	    }
+	}
+	export class DebugStatus {
+	    active: boolean;
+	    discoveryMode: string;
+	    knownPeers: number;
+	    listenAddress: string;
+	    tempDir: string;
+	    tempTtlHours: number;
+	    lastCleanupUtc: string;
+	    lastDiscoveryTickUtc: string;
+	    lastError: string;
+	    currentSeedPlan: SeedPlan;
+	    metrics: Metrics;
+	
+	    static createFrom(source: any = {}) {
+	        return new DebugStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.active = source["active"];
+	        this.discoveryMode = source["discoveryMode"];
+	        this.knownPeers = source["knownPeers"];
+	        this.listenAddress = source["listenAddress"];
+	        this.tempDir = source["tempDir"];
+	        this.tempTtlHours = source["tempTtlHours"];
+	        this.lastCleanupUtc = source["lastCleanupUtc"];
+	        this.lastDiscoveryTickUtc = source["lastDiscoveryTickUtc"];
+	        this.lastError = source["lastError"];
+	        this.currentSeedPlan = this.convertValues(source["currentSeedPlan"], SeedPlan);
+	        this.metrics = this.convertValues(source["metrics"], Metrics);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class DistributionStatus {
+	    artifactId: string;
+	    artifactName?: string;
+	    peerCount: number;
+	    peerAgentIds?: string[];
+	    lastUpdatedUtc?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new DistributionStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.artifactId = source["artifactId"];
+	        this.artifactName = source["artifactName"];
+	        this.peerCount = source["peerCount"];
+	        this.peerAgentIds = source["peerAgentIds"];
+	        this.lastUpdatedUtc = source["lastUpdatedUtc"];
+	    }
+	}
+	
+	export class PeerArtifactIndexView {
+	    peerAgentId: string;
+	    lastUpdatedUtc: string;
+	    source: string;
+	    artifacts: ArtifactView[];
+	
+	    static createFrom(source: any = {}) {
+	        return new PeerArtifactIndexView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.peerAgentId = source["peerAgentId"];
+	        this.lastUpdatedUtc = source["lastUpdatedUtc"];
+	        this.source = source["source"];
+	        this.artifacts = this.convertValues(source["artifacts"], ArtifactView);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class PeerView {
+	    agentId: string;
+	    host: string;
+	    address: string;
+	    port: number;
+	    source: string;
+	    lastSeenUtc: string;
+	    knownPeers: number;
+	    connectedVia: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new PeerView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.agentId = source["agentId"];
+	        this.host = source["host"];
+	        this.address = source["address"];
+	        this.port = source["port"];
+	        this.source = source["source"];
+	        this.lastSeenUtc = source["lastSeenUtc"];
+	        this.knownPeers = source["knownPeers"];
+	        this.connectedVia = source["connectedVia"];
+	    }
+	}
+	
+	export class SeedPlanRecommendation {
+	    siteId?: string;
+	    generatedAtUtc?: string;
+	    plan: SeedPlan;
+	
+	    static createFrom(source: any = {}) {
+	        return new SeedPlanRecommendation(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.siteId = source["siteId"];
+	        this.generatedAtUtc = source["generatedAtUtc"];
+	        this.plan = this.convertValues(source["plan"], SeedPlan);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+}
+
+export namespace supportmeta {
+	
+	export class APIWorkflowState {
+	    id: string;
+	    name: string;
+	    color: string;
+	    isInitial: boolean;
+	    isFinal: boolean;
+	    displayOrder: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new APIWorkflowState(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.color = source["color"];
+	        this.isInitial = source["isInitial"];
+	        this.isFinal = source["isFinal"];
+	        this.displayOrder = source["displayOrder"];
+	    }
+	}
+	export class APITicket {
+	    id: string;
+	    title: string;
+	    description: string;
+	    priority: number;
+	    category?: string;
+	    agentId?: string;
+	    clientId: string;
+	    siteId?: string;
+	    createdAt: string;
+	    workflowState?: APIWorkflowState;
+	    rating?: number;
+	    ratedAt?: string;
+	    ratedBy?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new APITicket(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.title = source["title"];
+	        this.description = source["description"];
+	        this.priority = source["priority"];
+	        this.category = source["category"];
+	        this.agentId = source["agentId"];
+	        this.clientId = source["clientId"];
+	        this.siteId = source["siteId"];
+	        this.createdAt = source["createdAt"];
+	        this.workflowState = this.convertValues(source["workflowState"], APIWorkflowState);
+	        this.rating = source["rating"];
+	        this.ratedAt = source["ratedAt"];
+	        this.ratedBy = source["ratedBy"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	export class AgentInfo {
+	    agentId: string;
+	    clientId: string;
+	    siteId: string;
+	    hostname: string;
+	    displayName: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AgentInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.agentId = source["agentId"];
+	        this.clientId = source["clientId"];
+	        this.siteId = source["siteId"];
+	        this.hostname = source["hostname"];
+	        this.displayName = source["displayName"];
+	    }
+	}
+	export class CloseTicketInput {
+	    rating?: number;
+	    comment?: string;
+	    workflowStateId?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new CloseTicketInput(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.rating = source["rating"];
+	        this.comment = source["comment"];
+	        this.workflowStateId = source["workflowStateId"];
+	    }
+	}
+	export class CreateTicketInput {
+	    title: string;
+	    description: string;
+	    priority: number;
+	    category: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new CreateTicketInput(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.title = source["title"];
+	        this.description = source["description"];
+	        this.priority = source["priority"];
+	        this.category = source["category"];
+	    }
+	}
+	export class KnowledgeArticle {
+	    id: string;
+	    title: string;
+	    category: string;
+	    summary: string;
+	    content: string;
+	    tags: string[];
+	    author: string;
+	    scope: string;
+	    publishedAt: string;
+	    difficulty: string;
+	    readTimeMin: number;
+	    updatedAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new KnowledgeArticle(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.title = source["title"];
+	        this.category = source["category"];
+	        this.summary = source["summary"];
+	        this.content = source["content"];
+	        this.tags = source["tags"];
+	        this.author = source["author"];
+	        this.scope = source["scope"];
+	        this.publishedAt = source["publishedAt"];
+	        this.difficulty = source["difficulty"];
+	        this.readTimeMin = source["readTimeMin"];
+	        this.updatedAt = source["updatedAt"];
+	    }
+	}
+	export class TicketComment {
+	    id: string;
+	    author: string;
+	    content: string;
+	    isInternal: boolean;
+	    createdAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new TicketComment(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.author = source["author"];
+	        this.content = source["content"];
+	        this.isInternal = source["isInternal"];
+	        this.createdAt = source["createdAt"];
 	    }
 	}
 
