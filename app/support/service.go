@@ -1,4 +1,4 @@
-package app
+package support
 
 import (
 	"bytes"
@@ -9,15 +9,112 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
 
+	"discovery/app/debug"
 	"discovery/app/netutil"
+	"discovery/app/supportmeta"
 )
 
-func (a *App) supportLogf(format string, args ...any) {
-	a.logs.append("[support] " + fmt.Sprintf(format, args...))
+var guidPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+type AgentInfo = supportmeta.AgentInfo
+
+type APIWorkflowState = supportmeta.APIWorkflowState
+
+type TicketPriority = supportmeta.TicketPriority
+
+type APITicket = supportmeta.APITicket
+
+type TicketComment = supportmeta.TicketComment
+
+type CreateTicketInput = supportmeta.CreateTicketInput
+
+type CloseTicketInput = supportmeta.CloseTicketInput
+
+type KnowledgeArticle = supportmeta.KnowledgeArticle
+
+// AgentInfoCache handles cached agent identity values.
+type AgentInfoCache interface {
+	Get() (AgentInfo, bool)
+	Set(AgentInfo)
+	Invalidate()
+}
+
+// CacheDB exposes the cache operations needed by support.
+type CacheDB interface {
+	CacheGetJSON(key string, out any) (bool, error)
+	CacheSetJSON(key string, value any, ttl time.Duration) error
+	CacheDelete(key string) error
+}
+
+// Options wires the support service.
+type Options struct {
+	Logf             func(string)
+	Ctx              func() context.Context
+	DB               CacheDB
+	AgentInfo        AgentInfoCache
+	DebugConfig      func() debug.Config
+	FeatureEnabled   func(*bool) bool
+	SupportEnabled   func() *bool
+	KnowledgeEnabled func() *bool
+}
+
+// Service handles support and knowledge base APIs.
+type Service struct {
+	logf             func(string)
+	ctx              func() context.Context
+	db               CacheDB
+	agentInfo        AgentInfoCache
+	debugConfig      func() debug.Config
+	featureEnabled   func(*bool) bool
+	supportEnabled   func() *bool
+	knowledgeEnabled func() *bool
+}
+
+// NewService builds a support service.
+func NewService(opts Options) *Service {
+	logf := opts.Logf
+	if logf == nil {
+		logf = func(string) {}
+	}
+	ctx := opts.Ctx
+	if ctx == nil {
+		ctx = context.Background
+	}
+	debugConfig := opts.DebugConfig
+	if debugConfig == nil {
+		debugConfig = func() debug.Config { return debug.Config{} }
+	}
+	featureEnabled := opts.FeatureEnabled
+	if featureEnabled == nil {
+		featureEnabled = func(flag *bool) bool { return flag == nil || *flag }
+	}
+	supportEnabled := opts.SupportEnabled
+	if supportEnabled == nil {
+		supportEnabled = func() *bool { return nil }
+	}
+	knowledgeEnabled := opts.KnowledgeEnabled
+	if knowledgeEnabled == nil {
+		knowledgeEnabled = func() *bool { return nil }
+	}
+	return &Service{
+		logf:             logf,
+		ctx:              ctx,
+		db:               opts.DB,
+		agentInfo:        opts.AgentInfo,
+		debugConfig:      debugConfig,
+		featureEnabled:   featureEnabled,
+		supportEnabled:   supportEnabled,
+		knowledgeEnabled: knowledgeEnabled,
+	}
+}
+
+func (s *Service) supportLogf(format string, args ...any) {
+	s.logf("[support] " + fmt.Sprintf(format, args...))
 }
 
 func shortBodyForLog(body []byte) string {
@@ -186,45 +283,45 @@ func extractAgentInfoFromJSON(body []byte, cfg DebugConfig) (AgentInfo, error) {
 }
 
 // fetchAgentContext resolves clientId/siteId from /api/agent-auth/me (cached).
-func (a *App) fetchAgentContext() (AgentInfo, error) {
-	if info, ok := a.agentInfo.get(); ok {
+func (s *Service) fetchAgentContext() (AgentInfo, error) {
+	if info, ok := s.agentInfo.Get(); ok {
 		if strings.TrimSpace(info.ClientID) != "" {
 			return info, nil
 		}
-		a.supportLogf("cache em memória sem clientId; ignorando e recarregando do servidor")
-		a.agentInfo.invalidate()
+		s.supportLogf("cache em memória sem clientId; ignorando e recarregando do servidor")
+		s.agentInfo.Invalidate()
 	}
 
-	if a.db != nil {
+	if s.db != nil {
 		var cached AgentInfo
-		found, err := a.db.CacheGetJSON("agent_info", &cached)
+		found, err := s.db.CacheGetJSON("agent_info", &cached)
 		if err == nil && found {
 			if strings.TrimSpace(cached.ClientID) != "" {
-				a.agentInfo.set(cached)
+				s.agentInfo.Set(cached)
 				return cached, nil
 			}
-			a.supportLogf("cache SQLite sem clientId; removendo entrada e atualizando do servidor")
-			if delErr := a.db.CacheDelete("agent_info"); delErr != nil {
+			s.supportLogf("cache SQLite sem clientId; removendo entrada e atualizando do servidor")
+			if delErr := s.db.CacheDelete("agent_info"); delErr != nil {
 				log.Printf("[support] aviso: falha ao limpar cache SQLite agent_info inválido: %v", delErr)
 			}
 		}
 	}
 
-	cfg := a.GetDebugConfig()
+	cfg := s.debugConfig()
 	cfg.ApiScheme = strings.TrimSpace(strings.ToLower(cfg.ApiScheme))
 	cfg.ApiServer = strings.TrimSpace(cfg.ApiServer)
 	if cfg.ApiServer == "" || strings.TrimSpace(cfg.AuthToken) == "" {
 		err := fmt.Errorf("configuração de servidor API incompleta: preencha apiServer e token no Debug")
-		a.supportLogf("falha ao resolver contexto do agente: %v", err)
+		s.supportLogf("falha ao resolver contexto do agente: %v", err)
 		return AgentInfo{}, err
 	}
 	if cfg.ApiScheme != "http" && cfg.ApiScheme != "https" {
 		err := fmt.Errorf("apiScheme inválido: use http ou https")
-		a.supportLogf("falha ao resolver contexto do agente: %v", err)
+		s.supportLogf("falha ao resolver contexto do agente: %v", err)
 		return AgentInfo{}, err
 	}
 
-	ctx := a.ctx
+	ctx := s.ctx()
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -232,7 +329,7 @@ func (a *App) fetchAgentContext() (AgentInfo, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		wrapped := fmt.Errorf("URL inválida: %w", err)
-		a.supportLogf("falha ao montar request de contexto do agente: %v", wrapped)
+		s.supportLogf("falha ao montar request de contexto do agente: %v", wrapped)
 		return AgentInfo{}, wrapped
 	}
 	netutil.SetAgentAuthHeaders(req, cfg.AuthToken)
@@ -240,7 +337,7 @@ func (a *App) fetchAgentContext() (AgentInfo, error) {
 	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
 	if err != nil {
 		wrapped := fmt.Errorf("falha ao conectar em %s: %w", target, err)
-		a.supportLogf("erro HTTP ao resolver contexto do agente: %v", wrapped)
+		s.supportLogf("erro HTTP ao resolver contexto do agente: %v", wrapped)
 		return AgentInfo{}, wrapped
 	}
 	defer resp.Body.Close()
@@ -248,58 +345,58 @@ func (a *App) fetchAgentContext() (AgentInfo, error) {
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		wrapped := fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(body)))
-		a.supportLogf("/api/agent-auth/me retornou erro: %v", wrapped)
+		s.supportLogf("/api/agent-auth/me retornou erro: %v", wrapped)
 		return AgentInfo{}, wrapped
 	}
 
 	info, err := extractAgentInfoFromJSON(body, cfg)
 	if err != nil {
-		a.supportLogf("falha ao decodificar /api/agent-auth/me: %v", err)
+		s.supportLogf("falha ao decodificar /api/agent-auth/me: %v", err)
 		return AgentInfo{}, err
 	}
 	if info.ClientID == "" {
 		err := fmt.Errorf("clientId não retornado por /api/agent-auth/me: verifique token/escopo do agente")
-		a.supportLogf("%v | resposta=%s", err, shortBodyForLog(body))
+		s.supportLogf("%v | resposta=%s", err, shortBodyForLog(body))
 		return AgentInfo{}, err
 	}
 
-	a.agentInfo.set(info)
-	if a.db != nil {
-		if err := a.db.CacheSetJSON("agent_info", info, 24*time.Hour); err != nil {
+	s.agentInfo.Set(info)
+	if s.db != nil {
+		if err := s.db.CacheSetJSON("agent_info", info, 24*time.Hour); err != nil {
 			log.Printf("[support] aviso: falha ao salvar no cache SQLite (agent_info): %v", err)
 		}
 	}
-	a.supportLogf("contexto do agente resolvido: agentId=%s clientId=%s siteId=%s", info.AgentID, info.ClientID, info.SiteID)
+	s.supportLogf("contexto do agente resolvido: agentId=%s clientId=%s siteId=%s", info.AgentID, info.ClientID, info.SiteID)
 
 	return info, nil
 }
 
 // GetAgentInfo resolves and returns the current agent identifiers from the server.
-func (a *App) GetAgentInfo() (AgentInfo, error) {
-	return a.fetchAgentContext()
+func (s *Service) GetAgentInfo() (AgentInfo, error) {
+	return s.fetchAgentContext()
 }
 
 // GetSupportTickets returns tickets linked to this agent (filtered by agentId).
-func (a *App) GetSupportTickets() ([]APITicket, error) {
-	if !a.featureEnabled(a.GetAgentConfiguration().SupportEnabled) {
-		a.supportLogf("suporte desabilitado pela configuração do agente")
+func (s *Service) GetSupportTickets() ([]APITicket, error) {
+	if !s.featureEnabled(s.supportEnabled()) {
+		s.supportLogf("suporte desabilitado pela configuração do agente")
 		return []APITicket{}, nil
 	}
 
-	a.supportLogf("listando chamados vinculados ao agente")
-	info, err := a.fetchAgentContext()
+	s.supportLogf("listando chamados vinculados ao agente")
+	info, err := s.fetchAgentContext()
 	if err != nil {
-		a.supportLogf("falha ao obter contexto para listagem de chamados: %v", err)
+		s.supportLogf("falha ao obter contexto para listagem de chamados: %v", err)
 		return nil, err
 	}
 	if strings.TrimSpace(info.ClientID) == "" {
 		err := fmt.Errorf("clientId não resolvido: verifique a configuração do agente")
-		a.supportLogf("%v (agentId=%s)", err, info.AgentID)
+		s.supportLogf("%v (agentId=%s)", err, info.AgentID)
 		return nil, err
 	}
 
-	cfg := a.GetDebugConfig()
-	ctx := a.ctx
+	cfg := s.debugConfig()
+	ctx := s.ctx()
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -307,7 +404,7 @@ func (a *App) GetSupportTickets() ([]APITicket, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		wrapped := fmt.Errorf("URL inválida: %w", err)
-		a.supportLogf("falha ao montar request de listagem: %v", wrapped)
+		s.supportLogf("falha ao montar request de listagem: %v", wrapped)
 		return nil, wrapped
 	}
 	netutil.SetAgentAuthHeaders(req, cfg.AuthToken)
@@ -315,7 +412,7 @@ func (a *App) GetSupportTickets() ([]APITicket, error) {
 	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
 	if err != nil {
 		wrapped := fmt.Errorf("falha ao buscar chamados: %w", err)
-		a.supportLogf("erro HTTP ao listar chamados: %v", wrapped)
+		s.supportLogf("erro HTTP ao listar chamados: %v", wrapped)
 		return nil, wrapped
 	}
 	defer resp.Body.Close()
@@ -323,7 +420,7 @@ func (a *App) GetSupportTickets() ([]APITicket, error) {
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		wrapped := fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(body)))
-		a.supportLogf("erro na listagem de chamados: %v", wrapped)
+		s.supportLogf("erro na listagem de chamados: %v", wrapped)
 		return nil, wrapped
 	}
 
@@ -347,26 +444,26 @@ func (a *App) GetSupportTickets() ([]APITicket, error) {
 		tickets = []APITicket{}
 	}
 
-	a.supportLogf("listagem concluída: %d chamado(s) retornado(s)", len(tickets))
+	s.supportLogf("listagem concluída: %d chamado(s) retornado(s)", len(tickets))
 	return tickets, nil
 }
 
 // CreateSupportTicket opens a new ticket linked to this agent.
-func (a *App) CreateSupportTicket(input CreateTicketInput) (APITicket, error) {
-	a.supportLogf("criando chamado: title=%q priority=%d category=%q", strings.TrimSpace(input.Title), input.Priority, strings.TrimSpace(input.Category))
-	info, err := a.fetchAgentContext()
+func (s *Service) CreateSupportTicket(input CreateTicketInput) (APITicket, error) {
+	s.supportLogf("criando chamado: title=%q priority=%d category=%q", strings.TrimSpace(input.Title), input.Priority, strings.TrimSpace(input.Category))
+	info, err := s.fetchAgentContext()
 	if err != nil {
-		a.supportLogf("falha ao obter contexto para criação de chamado: %v", err)
+		s.supportLogf("falha ao obter contexto para criação de chamado: %v", err)
 		return APITicket{}, err
 	}
 	if strings.TrimSpace(info.ClientID) == "" {
 		err := fmt.Errorf("clientId não resolvido: verifique a configuração do agente")
-		a.supportLogf("%v (agentId=%s)", err, info.AgentID)
+		s.supportLogf("%v (agentId=%s)", err, info.AgentID)
 		return APITicket{}, err
 	}
 
-	cfg := a.GetDebugConfig()
-	ctx := a.ctx
+	cfg := s.debugConfig()
+	ctx := s.ctx()
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -395,7 +492,7 @@ func (a *App) CreateSupportTicket(input CreateTicketInput) (APITicket, error) {
 	reqBody, err := json.Marshal(payload)
 	if err != nil {
 		wrapped := fmt.Errorf("erro ao serializar chamado: %w", err)
-		a.supportLogf("falha ao serializar payload de chamado: %v", wrapped)
+		s.supportLogf("falha ao serializar payload de chamado: %v", wrapped)
 		return APITicket{}, wrapped
 	}
 
@@ -403,7 +500,7 @@ func (a *App) CreateSupportTicket(input CreateTicketInput) (APITicket, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(reqBody))
 	if err != nil {
 		wrapped := fmt.Errorf("URL inválida: %w", err)
-		a.supportLogf("falha ao montar request de criação: %v", wrapped)
+		s.supportLogf("falha ao montar request de criação: %v", wrapped)
 		return APITicket{}, wrapped
 	}
 	req.Header.Set("Content-Type", "application/json")
@@ -412,7 +509,7 @@ func (a *App) CreateSupportTicket(input CreateTicketInput) (APITicket, error) {
 	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
 	if err != nil {
 		wrapped := fmt.Errorf("falha ao criar chamado: %w", err)
-		a.supportLogf("erro HTTP ao criar chamado: %v", wrapped)
+		s.supportLogf("erro HTTP ao criar chamado: %v", wrapped)
 		return APITicket{}, wrapped
 	}
 	defer resp.Body.Close()
@@ -420,29 +517,29 @@ func (a *App) CreateSupportTicket(input CreateTicketInput) (APITicket, error) {
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		wrapped := fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(respBody)))
-		a.supportLogf("erro na criação do chamado: %v | payload=%s | resposta=%s", wrapped, shortBodyForLog(reqBody), shortBodyForLog(respBody))
+		s.supportLogf("erro na criação do chamado: %v | payload=%s | resposta=%s", wrapped, shortBodyForLog(reqBody), shortBodyForLog(respBody))
 		return APITicket{}, wrapped
 	}
 
 	var ticket APITicket
 	if err := json.Unmarshal(respBody, &ticket); err != nil {
 		wrapped := fmt.Errorf("resposta inválida ao criar chamado: %w", err)
-		a.supportLogf("falha ao decodificar resposta da criação: %v | resposta=%s", wrapped, shortBodyForLog(respBody))
+		s.supportLogf("falha ao decodificar resposta da criação: %v | resposta=%s", wrapped, shortBodyForLog(respBody))
 		return APITicket{}, wrapped
 	}
-	a.supportLogf("chamado criado com sucesso: ticketId=%s", ticket.ID)
+	s.supportLogf("chamado criado com sucesso: ticketId=%s", ticket.ID)
 	return ticket, nil
 }
 
 // GetSupportTicketDetails returns a single ticket if it belongs to the authenticated agent.
-func (a *App) GetSupportTicketDetails(ticketID string) (APITicket, error) {
+func (s *Service) GetSupportTicketDetails(ticketID string) (APITicket, error) {
 	ticketID = strings.TrimSpace(ticketID)
 	if !guidPattern.MatchString(ticketID) {
 		return APITicket{}, fmt.Errorf("ticketId inválido")
 	}
 
-	cfg := a.GetDebugConfig()
-	ctx := a.ctx
+	cfg := s.debugConfig()
+	ctx := s.ctx()
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -519,9 +616,9 @@ func parseWorkflowStatesFromBody(body []byte) ([]APIWorkflowState, error) {
 }
 
 // GetTicketWorkflowStates returns available workflow states for tickets.
-func (a *App) GetTicketWorkflowStates() ([]APIWorkflowState, error) {
-	cfg := a.GetDebugConfig()
-	ctx := a.ctx
+func (s *Service) GetTicketWorkflowStates() ([]APIWorkflowState, error) {
+	cfg := s.debugConfig()
+	ctx := s.ctx()
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -578,7 +675,7 @@ func (a *App) GetTicketWorkflowStates() ([]APIWorkflowState, error) {
 			return states[i].DisplayOrder < states[j].DisplayOrder
 		})
 
-		a.supportLogf("workflow states carregados: %d estado(s) via %s", len(states), p)
+		s.supportLogf("workflow states carregados: %d estado(s) via %s", len(states), p)
 		return states, nil
 	}
 
@@ -589,13 +686,13 @@ func (a *App) GetTicketWorkflowStates() ([]APIWorkflowState, error) {
 }
 
 // GetTicketComments returns comments for a given ticket.
-func (a *App) GetTicketComments(ticketID string) ([]TicketComment, error) {
+func (s *Service) GetTicketComments(ticketID string) ([]TicketComment, error) {
 	ticketID = strings.TrimSpace(ticketID)
 	if !guidPattern.MatchString(ticketID) {
 		return nil, fmt.Errorf("ticketId inválido")
 	}
-	cfg := a.GetDebugConfig()
-	ctx := a.ctx
+	cfg := s.debugConfig()
+	ctx := s.ctx()
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -641,7 +738,7 @@ func (a *App) GetTicketComments(ticketID string) ([]TicketComment, error) {
 }
 
 // AddTicketCommentWithOptions adds a comment and returns the created comment.
-func (a *App) AddTicketCommentWithOptions(ticketID, content string, isInternal bool) (TicketComment, error) {
+func (s *Service) AddTicketCommentWithOptions(ticketID, content string, isInternal bool) (TicketComment, error) {
 	ticketID = strings.TrimSpace(ticketID)
 	if !guidPattern.MatchString(ticketID) {
 		return TicketComment{}, fmt.Errorf("ticketId inválido")
@@ -651,8 +748,8 @@ func (a *App) AddTicketCommentWithOptions(ticketID, content string, isInternal b
 		return TicketComment{}, fmt.Errorf("content não pode ser vazio")
 	}
 
-	cfg := a.GetDebugConfig()
-	ctx := a.ctx
+	cfg := s.debugConfig()
+	ctx := s.ctx()
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -693,9 +790,9 @@ func (a *App) AddTicketCommentWithOptions(ticketID, content string, isInternal b
 }
 
 // AddTicketComment adds a comment to a ticket.
-func (a *App) AddTicketComment(ticketID, author, content string) error {
+func (s *Service) AddTicketComment(ticketID, author, content string) error {
 	_ = author
-	_, err := a.AddTicketCommentWithOptions(ticketID, content, false)
+	_, err := s.AddTicketCommentWithOptions(ticketID, content, false)
 	if err != nil {
 		return err
 	}
@@ -703,7 +800,7 @@ func (a *App) AddTicketComment(ticketID, author, content string) error {
 }
 
 // CloseSupportTicket closes a ticket with optional rating/comment/final workflow state.
-func (a *App) CloseSupportTicket(ticketID string, input CloseTicketInput) (APITicket, error) {
+func (s *Service) CloseSupportTicket(ticketID string, input CloseTicketInput) (APITicket, error) {
 	ticketID = strings.TrimSpace(ticketID)
 	if !guidPattern.MatchString(ticketID) {
 		return APITicket{}, fmt.Errorf("ticketId inválido")
@@ -720,8 +817,8 @@ func (a *App) CloseSupportTicket(ticketID string, input CloseTicketInput) (APITi
 		}
 	}
 
-	cfg := a.GetDebugConfig()
-	ctx := a.ctx
+	cfg := s.debugConfig()
+	ctx := s.ctx()
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -750,7 +847,7 @@ func (a *App) CloseSupportTicket(ticketID string, input CloseTicketInput) (APITi
 	req.Header.Set("Content-Type", "application/json")
 	netutil.SetAgentAuthHeaders(req, cfg.AuthToken)
 
-	a.supportLogf("fechando chamado %s", ticketID)
+	s.supportLogf("fechando chamado %s", ticketID)
 	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
 	if err != nil {
 		return APITicket{}, fmt.Errorf("falha ao fechar chamado: %w", err)
@@ -764,8 +861,8 @@ func (a *App) CloseSupportTicket(ticketID string, input CloseTicketInput) (APITi
 
 	var ticket APITicket
 	if len(respBody) == 0 {
-		a.supportLogf("chamado %s fechado (resposta vazia); buscando detalhes atualizados", ticketID)
-		return a.GetSupportTicketDetails(ticketID)
+		s.supportLogf("chamado %s fechado (resposta vazia); buscando detalhes atualizados", ticketID)
+		return s.GetSupportTicketDetails(ticketID)
 	}
 	if err := json.Unmarshal(respBody, &ticket); err != nil {
 		var envelope struct {
@@ -789,13 +886,13 @@ func (a *App) CloseSupportTicket(ticketID string, input CloseTicketInput) (APITi
 		}
 	}
 
-	a.supportLogf("chamado fechado com sucesso: ticketId=%s", ticket.ID)
+	s.supportLogf("chamado fechado com sucesso: ticketId=%s", ticket.ID)
 	return ticket, nil
 }
 
 // CloseAgentTicket closes an agent ticket via MCP tool.
-func (a *App) CloseAgentTicket(ticketID string, rating *int, comment, workflowStateID string) (json.RawMessage, error) {
-	ticket, err := a.CloseSupportTicket(ticketID, CloseTicketInput{
+func (s *Service) CloseAgentTicket(ticketID string, rating *int, comment, workflowStateID string) (json.RawMessage, error) {
+	ticket, err := s.CloseSupportTicket(ticketID, CloseTicketInput{
 		Rating:          rating,
 		Comment:         comment,
 		WorkflowStateID: workflowStateID,
@@ -807,8 +904,8 @@ func (a *App) CloseAgentTicket(ticketID string, rating *int, comment, workflowSt
 }
 
 // GetAgentInfoJSON returns the agent info as JSON (for MCP tools).
-func (a *App) GetAgentInfoJSON() (json.RawMessage, error) {
-	info, err := a.fetchAgentContext()
+func (s *Service) GetAgentInfoJSON() (json.RawMessage, error) {
+	info, err := s.fetchAgentContext()
 	if err != nil {
 		return nil, err
 	}
@@ -816,8 +913,8 @@ func (a *App) GetAgentInfoJSON() (json.RawMessage, error) {
 }
 
 // ListAgentTickets returns agent tickets as JSON (for MCP tools).
-func (a *App) ListAgentTickets() (json.RawMessage, error) {
-	tickets, err := a.GetSupportTickets()
+func (s *Service) ListAgentTickets() (json.RawMessage, error) {
+	tickets, err := s.GetSupportTickets()
 	if err != nil {
 		return nil, err
 	}
@@ -825,8 +922,8 @@ func (a *App) ListAgentTickets() (json.RawMessage, error) {
 }
 
 // GetAgentTicketDetails returns one agent ticket as JSON (for MCP tools).
-func (a *App) GetAgentTicketDetails(ticketID string) (json.RawMessage, error) {
-	ticket, err := a.GetSupportTicketDetails(ticketID)
+func (s *Service) GetAgentTicketDetails(ticketID string) (json.RawMessage, error) {
+	ticket, err := s.GetSupportTicketDetails(ticketID)
 	if err != nil {
 		return nil, err
 	}
@@ -834,8 +931,8 @@ func (a *App) GetAgentTicketDetails(ticketID string) (json.RawMessage, error) {
 }
 
 // AddAgentTicketComment adds a comment to an agent ticket via MCP tool.
-func (a *App) AddAgentTicketComment(ticketID, content string, isInternal bool) (json.RawMessage, error) {
-	comment, err := a.AddTicketCommentWithOptions(ticketID, content, isInternal)
+func (s *Service) AddAgentTicketComment(ticketID, content string, isInternal bool) (json.RawMessage, error) {
+	comment, err := s.AddTicketCommentWithOptions(ticketID, content, isInternal)
 	if err != nil {
 		return nil, err
 	}
@@ -843,8 +940,8 @@ func (a *App) AddAgentTicketComment(ticketID, content string, isInternal bool) (
 }
 
 // CreateAgentTicket creates a ticket via MCP tool.
-func (a *App) CreateAgentTicket(title, description string, priority int, category string) (json.RawMessage, error) {
-	ticket, err := a.CreateSupportTicket(CreateTicketInput{
+func (s *Service) CreateAgentTicket(title, description string, priority int, category string) (json.RawMessage, error) {
+	ticket, err := s.CreateSupportTicket(CreateTicketInput{
 		Title:       title,
 		Description: description,
 		Priority:    priority,
@@ -1044,17 +1141,17 @@ func knowledgeCacheScope(cfg DebugConfig, info AgentInfo) string {
 	return strings.Join(parts, ":")
 }
 
-func (a *App) fetchKnowledgeList(info AgentInfo, category string) ([]KnowledgeArticle, error) {
-	cfg := a.GetDebugConfig()
+func (s *Service) fetchKnowledgeList(info AgentInfo, category string) ([]KnowledgeArticle, error) {
+	cfg := s.debugConfig()
 	base := strings.TrimSpace(strings.ToLower(cfg.ApiScheme)) + "://" + strings.TrimSpace(cfg.ApiServer)
 	if strings.TrimSpace(cfg.ApiServer) == "" || strings.TrimSpace(cfg.AuthToken) == "" {
 		return nil, fmt.Errorf("configuração de servidor API incompleta: preencha apiServer e token no Debug")
 	}
 	cacheKey := "knowledge:list:" + knowledgeCacheScope(cfg, info) + ":" + url.QueryEscape(strings.TrimSpace(strings.ToLower(category)))
 
-	if a.db != nil {
+	if s.db != nil {
 		var cached []KnowledgeArticle
-		if found, err := a.db.CacheGetJSON(cacheKey, &cached); err == nil && found {
+		if found, err := s.db.CacheGetJSON(cacheKey, &cached); err == nil && found {
 			if cached == nil {
 				return []KnowledgeArticle{}, nil
 			}
@@ -1068,7 +1165,7 @@ func (a *App) fetchKnowledgeList(info AgentInfo, category string) ([]KnowledgeAr
 	}
 	target := base + path
 
-	ctx := a.ctx
+	ctx := s.ctx()
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -1098,8 +1195,8 @@ func (a *App) fetchKnowledgeList(info AgentInfo, category string) ([]KnowledgeAr
 		articles = []KnowledgeArticle{}
 	}
 
-	if a.db != nil {
-		if err := a.db.CacheSetJSON(cacheKey, articles, knowledgeListCacheTTL); err != nil {
+	if s.db != nil {
+		if err := s.db.CacheSetJSON(cacheKey, articles, knowledgeListCacheTTL); err != nil {
 			log.Printf("[support] aviso: falha ao salvar cache de knowledge list: %v", err)
 		}
 	}
@@ -1107,21 +1204,21 @@ func (a *App) fetchKnowledgeList(info AgentInfo, category string) ([]KnowledgeAr
 	return articles, nil
 }
 
-func (a *App) fetchKnowledgeDetail(info AgentInfo, articleID string) (KnowledgeArticle, error) {
+func (s *Service) fetchKnowledgeDetail(info AgentInfo, articleID string) (KnowledgeArticle, error) {
 	articleID = strings.TrimSpace(articleID)
 	if articleID == "" {
 		return KnowledgeArticle{}, fmt.Errorf("articleId inválido")
 	}
 
-	cfg := a.GetDebugConfig()
+	cfg := s.debugConfig()
 	if strings.TrimSpace(cfg.ApiServer) == "" || strings.TrimSpace(cfg.AuthToken) == "" {
 		return KnowledgeArticle{}, fmt.Errorf("configuração de servidor API incompleta: preencha apiServer e token no Debug")
 	}
 	cacheKey := "knowledge:detail:" + knowledgeCacheScope(cfg, info) + ":" + url.QueryEscape(strings.ToLower(articleID))
 
-	if a.db != nil {
+	if s.db != nil {
 		var cached KnowledgeArticle
-		if found, err := a.db.CacheGetJSON(cacheKey, &cached); err == nil && found {
+		if found, err := s.db.CacheGetJSON(cacheKey, &cached); err == nil && found {
 			if strings.TrimSpace(cached.ID) != "" {
 				return cached, nil
 			}
@@ -1130,7 +1227,7 @@ func (a *App) fetchKnowledgeDetail(info AgentInfo, articleID string) (KnowledgeA
 
 	target := strings.TrimSpace(strings.ToLower(cfg.ApiScheme)) + "://" + strings.TrimSpace(cfg.ApiServer) + "/api/agent-auth/knowledge/" + url.PathEscape(articleID)
 
-	ctx := a.ctx
+	ctx := s.ctx()
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -1157,8 +1254,8 @@ func (a *App) fetchKnowledgeDetail(info AgentInfo, articleID string) (KnowledgeA
 		return KnowledgeArticle{}, fmt.Errorf("resposta inválida no detalhe do artigo: %w", err)
 	}
 
-	if a.db != nil && strings.TrimSpace(article.ID) != "" {
-		if err := a.db.CacheSetJSON(cacheKey, article, knowledgeDetailCacheTTL); err != nil {
+	if s.db != nil && strings.TrimSpace(article.ID) != "" {
+		if err := s.db.CacheSetJSON(cacheKey, article, knowledgeDetailCacheTTL); err != nil {
 			log.Printf("[support] aviso: falha ao salvar cache de knowledge detail: %v", err)
 		}
 	}
@@ -1167,21 +1264,21 @@ func (a *App) fetchKnowledgeDetail(info AgentInfo, articleID string) (KnowledgeA
 }
 
 // GetKnowledgeBaseArticles returns knowledge-base articles available to the authenticated agent.
-func (a *App) GetKnowledgeBaseArticles() []KnowledgeArticle {
-	if !a.featureEnabled(a.GetAgentConfiguration().KnowledgeBaseEnabled) {
-		a.supportLogf("base de conhecimento desabilitada pela configuração do agente")
+func (s *Service) GetKnowledgeBaseArticles() []KnowledgeArticle {
+	if !s.featureEnabled(s.knowledgeEnabled()) {
+		s.supportLogf("base de conhecimento desabilitada pela configuração do agente")
 		return []KnowledgeArticle{}
 	}
 
-	info, err := a.fetchAgentContext()
+	info, err := s.fetchAgentContext()
 	if err != nil {
-		a.supportLogf("falha ao resolver contexto para knowledge base: %v", err)
+		s.supportLogf("falha ao resolver contexto para knowledge base: %v", err)
 		return []KnowledgeArticle{}
 	}
 
-	articles, err := a.fetchKnowledgeList(info, "")
+	articles, err := s.fetchKnowledgeList(info, "")
 	if err != nil {
-		a.supportLogf("falha ao listar base de conhecimento: %v", err)
+		s.supportLogf("falha ao listar base de conhecimento: %v", err)
 		return []KnowledgeArticle{}
 	}
 
@@ -1189,9 +1286,9 @@ func (a *App) GetKnowledgeBaseArticles() []KnowledgeArticle {
 		if strings.TrimSpace(articles[i].Content) != "" || strings.TrimSpace(articles[i].ID) == "" {
 			continue
 		}
-		detail, err := a.fetchKnowledgeDetail(info, articles[i].ID)
+		detail, err := s.fetchKnowledgeDetail(info, articles[i].ID)
 		if err != nil {
-			a.supportLogf("falha ao carregar markdown do artigo %s: %v", articles[i].ID, err)
+			s.supportLogf("falha ao carregar markdown do artigo %s: %v", articles[i].ID, err)
 			continue
 		}
 		if strings.TrimSpace(detail.Content) != "" {
@@ -1209,8 +1306,8 @@ func (a *App) GetKnowledgeBaseArticles() []KnowledgeArticle {
 }
 
 // SearchKnowledgeBaseArticles filters articles by title/category/tags/content.
-func (a *App) SearchKnowledgeBaseArticles(query string) []KnowledgeArticle {
-	articles := a.GetKnowledgeBaseArticles()
+func (s *Service) SearchKnowledgeBaseArticles(query string) []KnowledgeArticle {
+	articles := s.GetKnowledgeBaseArticles()
 	q := strings.TrimSpace(strings.ToLower(query))
 	if q == "" {
 		return articles

@@ -99,6 +99,14 @@ func (c *inventoryCache) set(r models.InventoryReport) {
 	c.loaded = true
 }
 
+func (c *inventoryCache) Get() (models.InventoryReport, bool) {
+	return c.get()
+}
+
+func (c *inventoryCache) Set(r models.InventoryReport) {
+	c.set(r)
+}
+
 // exportConfig holds the current export options.
 type exportConfig struct {
 	mu     sync.RWMutex
@@ -198,6 +206,14 @@ func (c *agentInfoCache) set(info AgentInfo) {
 
 func (c *agentInfoCache) invalidate() {
 	c.inner.Invalidate()
+}
+
+func (c *agentInfoCache) Get() (AgentInfo, bool) {
+	return c.inner.Get()
+}
+
+func (c *agentInfoCache) Set(info AgentInfo) {
+	c.inner.Set(info)
 }
 
 func (c *agentInfoCache) Invalidate() {

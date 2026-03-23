@@ -16,6 +16,8 @@ import (
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"discovery/app/debug"
+	appinventory "discovery/app/inventory"
+	appsupport "discovery/app/support"
 	"discovery/app/updates"
 	"discovery/internal/agentconn"
 	"discovery/internal/ai"
@@ -103,6 +105,8 @@ type App struct {
 	debugSvc       *debug.Service
 	updatesSvc     *updates.Service
 	exporter       *updates.Exporter
+	inventorySvc   *appinventory.Service
+	supportSvc     *appsupport.Service
 
 	p2pMu            sync.RWMutex
 	p2pConfig        P2PConfig
@@ -162,7 +166,7 @@ func NewApp(opts AppStartupOptions) *App {
 		}
 	}, func(line string) {
 		a.logs.append("[automation] " + line)
-	})
+			supportSvc:     &appsupport.Service{},
 	a.automationSvc.SetPackageManager(newAutomationPackageManagerRouter(a, a.appsSvc))
 	a.automationSvc.SetPackageAuthorization(func(ctx context.Context, installationType automation.AppInstallationType, packageID, operation string) error {
 		return a.authorizeAutomationPackage(ctx, string(installationType), packageID, operation)
@@ -340,7 +344,9 @@ func (a *App) startup(ctx context.Context) {
 			return
 		}
 		a.invCache.set(report)
-		a.syncInventoryOnStartup(ctx, report)
+		if a.inventorySvc != nil {
+			a.inventorySvc.SyncInventoryOnStartup(ctx, report)
+		}
 	})
 
 	a.startupWg.Add(1)

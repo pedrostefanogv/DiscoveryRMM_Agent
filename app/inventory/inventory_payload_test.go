@@ -1,4 +1,4 @@
-package app
+package inventory
 
 import (
 	"encoding/json"
@@ -21,7 +21,7 @@ func TestBuildAgentHardwareEnvelope_UsesStringStatusAndRawInventoryObject(t *tes
 		},
 	}
 
-	env := buildAgentHardwareEnvelope(report)
+	env := buildAgentHardwareEnvelope(report, "dev")
 	body, err := json.Marshal(env)
 	if err != nil {
 		t.Fatalf("marshal envelope: %v", err)
@@ -73,7 +73,7 @@ func TestBuildAgentHardwareEnvelope_FiltersInvalidRequiredComponents(t *testing.
 		},
 	}
 
-	env := buildAgentHardwareEnvelope(report)
+	env := buildAgentHardwareEnvelope(report, "dev")
 	if len(env.Components.Disks) != 2 {
 		t.Fatalf("esperado 2 discos validos (somente o vazio deve ser filtrado), veio %d", len(env.Components.Disks))
 	}
@@ -153,7 +153,7 @@ func TestBuildAgentHardwareEnvelope_IncludesPrintersInComponents(t *testing.T) {
 		},
 	}
 
-	env := buildAgentHardwareEnvelope(report)
+	env := buildAgentHardwareEnvelope(report, "dev")
 	if len(env.Components.Printers) != 1 {
 		t.Fatalf("esperado 1 impressora no components.printers, veio %d", len(env.Components.Printers))
 	}

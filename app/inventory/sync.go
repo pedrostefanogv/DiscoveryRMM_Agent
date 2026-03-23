@@ -1,4 +1,4 @@
-package app
+package inventory
 
 import (
 	"bytes"
@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"discovery/app/debug"
 	"discovery/internal/models"
 )
 
@@ -122,50 +123,51 @@ type agentSoftwareItem struct {
 	Source    string `json:"source"`
 }
 
-func (a *App) syncInventoryOnStartup(ctx context.Context, report models.InventoryReport) {
-	a.pulseInventoryHeartbeat()
-	cfg := a.GetDebugConfig()
+// SyncInventoryOnStartup sends inventory payloads when credentials are available.
+func (s *Service) SyncInventoryOnStartup(ctx context.Context, report models.InventoryReport) {
+	s.pulseInventoryHeartbeat()
+	cfg := s.debugConfig()
 	cfg.ApiServer = strings.TrimSpace(cfg.ApiServer)
 	cfg.ApiScheme = strings.TrimSpace(strings.ToLower(cfg.ApiScheme))
 	if cfg.ApiServer == "" || strings.TrimSpace(cfg.AuthToken) == "" || strings.TrimSpace(cfg.AgentID) == "" {
-		a.logs.append("[agent-sync] ignorado: faltam apiServer/token/agentId no Debug")
+		s.logf("[agent-sync] ignorado: faltam apiServer/token/agentId no Debug")
 		return
 	}
 	if cfg.ApiScheme != "http" && cfg.ApiScheme != "https" {
-		a.logs.append("[agent-sync] ignorado: apiScheme invalido (use http ou https)")
+		s.logf("[agent-sync] ignorado: apiScheme invalido (use http ou https)")
 		return
 	}
 
-	hardwarePayload := buildAgentHardwareEnvelope(report)
+	hardwarePayload := buildAgentHardwareEnvelope(report, s.version)
 	hardwareBody, err := json.Marshal(hardwarePayload)
 	if err != nil {
-		a.logs.append("[agent-sync] falha ao serializar inventario: " + err.Error())
+		s.logf("[agent-sync] falha ao serializar inventario: " + err.Error())
 		return
 	}
 
 	softwarePayload := buildAgentSoftwareEnvelope(report)
 	softwareBody, err := json.Marshal(softwarePayload)
 	if err != nil {
-		a.logs.append("[agent-sync] falha ao serializar softwares: " + err.Error())
+		s.logf("[agent-sync] falha ao serializar softwares: " + err.Error())
 		return
 	}
 
-	if a.db != nil {
-		shouldSync, reason, err := a.db.ShouldSyncInventory(cfg.AgentID, hardwareBody, softwareBody)
+	if s.db != nil {
+		shouldSync, reason, err := s.db.ShouldSyncInventory(cfg.AgentID, hardwareBody, softwareBody)
 		if err != nil {
-			a.logs.append("[agent-sync] erro ao verificar diff: " + err.Error())
+			s.logf("[agent-sync] erro ao verificar diff: " + err.Error())
 		} else if !shouldSync {
-			a.logs.append(fmt.Sprintf("[agent-sync] SYNC IGNORADO: %s", reason))
-			if err := a.db.SaveInventorySnapshot(cfg.AgentID, hardwareBody, softwareBody); err != nil {
-				a.logs.append("[agent-sync] aviso: falha ao salvar snapshot local: " + err.Error())
+			s.logf(fmt.Sprintf("[agent-sync] SYNC IGNORADO: %s", reason))
+			if err := s.db.SaveInventorySnapshot(cfg.AgentID, hardwareBody, softwareBody); err != nil {
+				s.logf("[agent-sync] aviso: falha ao salvar snapshot local: " + err.Error())
 			}
 			return
 		} else {
-			a.logs.append(fmt.Sprintf("[agent-sync] SYNC NECESSARIO: %s", reason))
+			s.logf(fmt.Sprintf("[agent-sync] SYNC NECESSARIO: %s", reason))
 		}
 	}
 
-	a.logs.append(fmt.Sprintf(
+	s.logf(fmt.Sprintf(
 		"[agent-sync] hardware payload: collectedAt=%s disks=%d networkAdapters=%d memoryModules=%d printers=%d hostname=%s",
 		hardwarePayload.InventoryCollectedAt,
 		len(hardwarePayload.Components.Disks),
@@ -177,65 +179,65 @@ func (a *App) syncInventoryOnStartup(ctx context.Context, report models.Inventor
 
 	hardwareEndpoint := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/agent-auth/me/hardware"
 	hardwareSuccess := false
-	a.pulseInventoryHeartbeat()
-	if err := a.sendAgentInventoryRequest(ctx, hardwareEndpoint, cfg, http.MethodPost, hardwareBody); err != nil {
-		a.logs.append("[agent-sync] POST hardware falhou: " + err.Error())
-		a.pulseInventoryHeartbeat()
-		if err := a.sendAgentInventoryRequest(ctx, hardwareEndpoint, cfg, http.MethodPut, hardwareBody); err != nil {
-			a.logs.append("[agent-sync] PUT hardware falhou: " + err.Error())
+	s.pulseInventoryHeartbeat()
+	if err := s.sendAgentInventoryRequest(ctx, hardwareEndpoint, cfg, http.MethodPost, hardwareBody); err != nil {
+		s.logf("[agent-sync] POST hardware falhou: " + err.Error())
+		s.pulseInventoryHeartbeat()
+		if err := s.sendAgentInventoryRequest(ctx, hardwareEndpoint, cfg, http.MethodPut, hardwareBody); err != nil {
+			s.logf("[agent-sync] PUT hardware falhou: " + err.Error())
 		} else {
-			a.logs.append("[agent-sync] inventario de hardware atualizado via PUT")
+			s.logf("[agent-sync] inventario de hardware atualizado via PUT")
 			hardwareSuccess = true
 		}
 	} else {
-		a.logs.append("[agent-sync] inventario de hardware enviado via POST")
+		s.logf("[agent-sync] inventario de hardware enviado via POST")
 		hardwareSuccess = true
 	}
 
-	a.logs.append(fmt.Sprintf(
+	s.logf(fmt.Sprintf(
 		"[agent-sync] software payload: collectedAt=%s softwareCount=%d",
 		softwarePayload.CollectedAt,
 		len(softwarePayload.Software),
 	))
 
 	softwareEndpoint := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/agent-auth/me/software"
-	a.logs.append("[agent-sync] endpoint software: " + softwareEndpoint)
+	s.logf("[agent-sync] endpoint software: " + softwareEndpoint)
 	softwareSuccess := false
-	a.pulseInventoryHeartbeat()
-	if err := a.sendAgentInventoryRequest(ctx, softwareEndpoint, cfg, http.MethodPost, softwareBody); err != nil {
-		a.logs.append("[agent-sync] POST software falhou: " + err.Error())
-		a.pulseInventoryHeartbeat()
-		if err := a.sendAgentInventoryRequest(ctx, softwareEndpoint, cfg, http.MethodPut, softwareBody); err != nil {
-			a.logs.append("[agent-sync] PUT software falhou: " + err.Error())
+	s.pulseInventoryHeartbeat()
+	if err := s.sendAgentInventoryRequest(ctx, softwareEndpoint, cfg, http.MethodPost, softwareBody); err != nil {
+		s.logf("[agent-sync] POST software falhou: " + err.Error())
+		s.pulseInventoryHeartbeat()
+		if err := s.sendAgentInventoryRequest(ctx, softwareEndpoint, cfg, http.MethodPut, softwareBody); err != nil {
+			s.logf("[agent-sync] PUT software falhou: " + err.Error())
 		} else {
-			a.logs.append("[agent-sync] inventario de software atualizado via PUT")
+			s.logf("[agent-sync] inventario de software atualizado via PUT")
 			softwareSuccess = true
 		}
 	} else {
-		a.logs.append("[agent-sync] inventario de software enviado via POST")
+		s.logf("[agent-sync] inventario de software enviado via POST")
 		softwareSuccess = true
 	}
 
-	if hardwareSuccess && softwareSuccess && a.db != nil {
-		if err := a.db.SaveInventorySnapshot(cfg.AgentID, hardwareBody, softwareBody); err != nil {
-			a.logs.append("[agent-sync] aviso: falha ao salvar snapshot: " + err.Error())
+	if hardwareSuccess && softwareSuccess && s.db != nil {
+		if err := s.db.SaveInventorySnapshot(cfg.AgentID, hardwareBody, softwareBody); err != nil {
+			s.logf("[agent-sync] aviso: falha ao salvar snapshot: " + err.Error())
 		}
-		if err := a.db.UpdateLastSyncTime("inventory_sync:"+cfg.AgentID, "success"); err != nil {
-			a.logs.append("[agent-sync] aviso: falha ao atualizar timestamp de sync: " + err.Error())
+		if err := s.db.UpdateLastSyncTime("inventory_sync:"+cfg.AgentID, "success"); err != nil {
+			s.logf("[agent-sync] aviso: falha ao atualizar timestamp de sync: " + err.Error())
 		} else {
-			a.logs.append("[agent-sync] snapshot salvo e timestamp atualizado")
+			s.logf("[agent-sync] snapshot salvo e timestamp atualizado")
 		}
 	}
 }
 
-func (a *App) sendAgentInventoryRequest(parent context.Context, endpoint string, cfg DebugConfig, method string, body []byte) error {
-	a.pulseInventoryHeartbeat()
+func (s *Service) sendAgentInventoryRequest(parent context.Context, endpoint string, cfg debug.Config, method string, body []byte) error {
+	s.pulseInventoryHeartbeat()
 	ctx, cancel := context.WithTimeout(parent, 20*time.Second)
 	defer cancel()
 
-	a.logs.append("[agent-sync] request: " + method + " " + endpoint)
-	a.logs.append("[agent-sync] request headers: Authorization=Bearer " + sanitizeToken(cfg.AuthToken) + "; X-Agent-ID=" + cfg.AgentID + "; Content-Type=application/json")
-	a.logs.append("[agent-sync] request body: " + truncateLogBody(body, 2000))
+	s.logf("[agent-sync] request: " + method + " " + endpoint)
+	s.logf("[agent-sync] request headers: Authorization=Bearer " + sanitizeToken(cfg.AuthToken) + "; X-Agent-ID=" + cfg.AgentID + "; Content-Type=application/json")
+	s.logf("[agent-sync] request body: " + truncateLogBody(body, 2000))
 
 	req, err := http.NewRequestWithContext(ctx, method, endpoint, bytes.NewReader(body))
 	if err != nil {
@@ -247,17 +249,17 @@ func (a *App) sendAgentInventoryRequest(parent context.Context, endpoint string,
 
 	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
 	if err != nil {
-		a.pulseInventoryHeartbeat()
+		s.pulseInventoryHeartbeat()
 		return err
 	}
 	defer resp.Body.Close()
 
 	respBody, _ := io.ReadAll(resp.Body)
-	a.pulseInventoryHeartbeat()
+	s.pulseInventoryHeartbeat()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(respBody)))
 	}
-	a.pulseInventoryHeartbeat()
+	s.pulseInventoryHeartbeat()
 	return nil
 }
 
@@ -293,7 +295,7 @@ func buildAgentSoftwareEnvelope(report models.InventoryReport) agentSoftwareEnve
 	}
 }
 
-func buildAgentHardwareEnvelope(report models.InventoryReport) agentHardwareEnvelope {
+func buildAgentHardwareEnvelope(report models.InventoryReport, version string) agentHardwareEnvelope {
 	collected := strings.TrimSpace(report.CollectedAt)
 	if collected == "" {
 		collected = time.Now().UTC().Format(time.RFC3339)
@@ -411,36 +413,39 @@ func buildAgentHardwareEnvelope(report models.InventoryReport) agentHardwareEnve
 	osName := trimToMaxLen(strings.TrimSpace(report.OS.Name), 100)
 	osVersion := trimToMaxLen(strings.TrimSpace(report.OS.Version), 100)
 
+	if version == "" {
+		version = "dev"
+	}
 	envelope := agentHardwareEnvelope{
 		Hostname:        hostname,
 		DisplayName:     trimToMaxLen(hostname, 100),
 		Status:          "Online",
 		OperatingSystem: osName,
 		OSVersion:       osVersion,
-		AgentVersion:    trimToMaxLen(strings.TrimSpace(Version), 100),
-		LastIPAddress:   trimToMaxLen(lastIP, 45),
-		MACAddress:      trimToMaxLen(primaryMAC, 17),
+		AgentVersion:    trimToMaxLen(strings.TrimSpace(version), 100),
+		LastIPAddress:   lastIP,
+		MACAddress:      primaryMAC,
 		Hardware: agentHardwareInfo{
 			InventoryRaw:            rawJSON,
-			InventorySchemaVersion:  "discovery.inventory.v1",
+			InventorySchemaVersion:  report.InventorySchemaVersion,
 			InventoryCollectedAt:    collected,
-			Manufacturer:            trimToMaxLen(strings.TrimSpace(report.Hardware.Manufacturer), 200),
-			Model:                   trimToMaxLen(strings.TrimSpace(report.Hardware.Model), 200),
-			SerialNumber:            trimToMaxLen(strings.TrimSpace(report.Hardware.MotherboardSerial), 100),
-			MotherboardManufacturer: trimToMaxLen(strings.TrimSpace(report.Hardware.MotherboardManufacturer), 200),
-			MotherboardModel:        trimToMaxLen(strings.TrimSpace(report.Hardware.MotherboardModel), 200),
-			MotherboardSerialNumber: trimToMaxLen(strings.TrimSpace(report.Hardware.MotherboardSerial), 100),
-			Processor:               trimToMaxLen(strings.TrimSpace(report.Hardware.CPU), 200),
-			ProcessorCores:          report.Hardware.Cores,
-			ProcessorThreads:        report.Hardware.LogicalCores,
-			ProcessorArchitecture:   trimToMaxLen(strings.TrimSpace(report.OS.Architecture), 50),
+			Manufacturer:            trimToMaxLen(strings.TrimSpace(report.Hardware.Manufacturer), 100),
+			Model:                   trimToMaxLen(strings.TrimSpace(report.Hardware.Model), 100),
+			SerialNumber:            trimToMaxLen(strings.TrimSpace(report.Hardware.SerialNumber), 100),
+			MotherboardManufacturer: trimToMaxLen(strings.TrimSpace(report.Hardware.MotherboardManufacturer), 100),
+			MotherboardModel:        trimToMaxLen(strings.TrimSpace(report.Hardware.MotherboardModel), 100),
+			MotherboardSerialNumber: trimToMaxLen(strings.TrimSpace(report.Hardware.MotherboardSerialNumber), 100),
+			Processor:               trimToMaxLen(strings.TrimSpace(report.Hardware.Processor), 100),
+			ProcessorCores:          report.Hardware.ProcessorCores,
+			ProcessorThreads:        report.Hardware.ProcessorThreads,
+			ProcessorArchitecture:   trimToMaxLen(strings.TrimSpace(report.Hardware.ProcessorArchitecture), 100),
 			TotalMemoryBytes:        memTotalBytes,
 			BIOSVersion:             trimToMaxLen(strings.TrimSpace(report.Hardware.BIOSVersion), 100),
-			BIOSManufacturer:        trimToMaxLen(strings.TrimSpace(report.Hardware.BIOSVendor), 200),
+			BIOSManufacturer:        trimToMaxLen(strings.TrimSpace(report.Hardware.BIOSManufacturer), 100),
 			OSName:                  osName,
 			OSVersion:               osVersion,
 			OSBuild:                 trimToMaxLen(strings.TrimSpace(report.OS.Build), 100),
-			OSArchitecture:          trimToMaxLen(strings.TrimSpace(report.OS.Architecture), 50),
+			OSArchitecture:          trimToMaxLen(strings.TrimSpace(report.OS.Architecture), 100),
 			CollectedAt:             collected,
 			UpdatedAt:               updated,
 		},
@@ -451,124 +456,49 @@ func buildAgentHardwareEnvelope(report models.InventoryReport) agentHardwareEnve
 			Printers:        printers,
 		},
 		InventoryRaw:           rawJSON,
-		InventorySchemaVersion: "discovery.inventory.v1",
+		InventorySchemaVersion: report.InventorySchemaVersion,
 		InventoryCollectedAt:   collected,
 	}
+
 	return envelope
 }
 
-func buildCleanInventoryRaw(
-	report models.InventoryReport,
-	disks []agentDiskInfo,
-	networkAdapters []agentNetworkAdapterInfo,
-	memoryModules []agentMemoryModuleInfo,
-	printers []agentPrinterInfo,
-) json.RawMessage {
-	components := map[string]any{
-		"disks": mapSlice(disks, func(d agentDiskInfo) map[string]any {
-			return map[string]any{
-				"driveLetter":    d.DriveLetter,
-				"label":          d.Label,
-				"fileSystem":     d.FileSystem,
-				"totalSizeBytes": d.TotalSizeBytes,
-				"freeSpaceBytes": d.FreeSpaceBytes,
-				"mediaType":      d.MediaType,
-			}
-		}),
-		"networkAdapters": mapSlice(networkAdapters, func(n agentNetworkAdapterInfo) map[string]any {
-			return map[string]any{
-				"name":          n.Name,
-				"macAddress":    n.MACAddress,
-				"ipAddress":     n.IPAddress,
-				"gateway":       n.Gateway,
-				"dnsServers":    n.DNSServers,
-				"isDhcpEnabled": n.IsDhcpEnabled,
-				"adapterType":   n.AdapterType,
-				"speed":         n.Speed,
-			}
-		}),
-		"memoryModules": mapSlice(memoryModules, func(m agentMemoryModuleInfo) map[string]any {
-			return map[string]any{
-				"slot":          m.Slot,
-				"capacityBytes": m.CapacityBytes,
-				"speedMhz":      m.SpeedMhz,
-				"memoryType":    m.MemoryType,
-				"manufacturer":  m.Manufacturer,
-				"partNumber":    m.PartNumber,
-				"serialNumber":  m.SerialNumber,
-			}
-		}),
-		"printers": mapSlice(printers, func(p agentPrinterInfo) map[string]any {
-			return map[string]any{
-				"name":             p.Name,
-				"driverName":       p.DriverName,
-				"portName":         p.PortName,
-				"printerStatus":    p.PrinterStatus,
-				"isDefault":        p.IsDefault,
-				"isNetworkPrinter": p.IsNetworkPrinter,
-				"shared":           p.Shared,
-				"shareName":        p.ShareName,
-				"location":         p.Location,
-			}
-		}),
-	}
+func buildCleanInventoryRaw(report models.InventoryReport, disks []agentDiskInfo, adapters []agentNetworkAdapterInfo, modules []agentMemoryModuleInfo, printers []agentPrinterInfo) json.RawMessage {
+	clean := report
+	clean.Disks = nil
+	clean.Networks = nil
+	clean.MemoryModules = nil
+	clean.Printers = nil
 
-	clean := map[string]any{
-		"collectedAt": report.CollectedAt,
-		"source":      report.Source,
-		"hardware": map[string]any{
-			"hostname":                report.Hardware.Hostname,
-			"manufacturer":            report.Hardware.Manufacturer,
-			"model":                   report.Hardware.Model,
-			"cpu":                     report.Hardware.CPU,
-			"cores":                   report.Hardware.Cores,
-			"logicalCores":            report.Hardware.LogicalCores,
-			"memoryGB":                report.Hardware.MemoryGB,
-			"motherboardManufacturer": report.Hardware.MotherboardManufacturer,
-			"motherboardModel":        report.Hardware.MotherboardModel,
-			"motherboardSerial":       report.Hardware.MotherboardSerial,
-			"biosVendor":              report.Hardware.BIOSVendor,
-			"biosVersion":             report.Hardware.BIOSVersion,
-		},
-		"os":              report.OS,
-		"components":      components,
-		"disks":           components["disks"],
-		"networkAdapters": components["networkAdapters"],
-		"memoryModules":   components["memoryModules"],
-		"printers":        components["printers"],
+	raw, _ := json.Marshal(clean)
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return raw
 	}
-	b, err := json.Marshal(clean)
-	if err != nil {
-		return json.RawMessage("{}")
-	}
-	return json.RawMessage(b)
-}
-
-func mapSlice[T any, R any](in []T, fn func(T) R) []R {
-	out := make([]R, 0, len(in))
-	for _, item := range in {
-		out = append(out, fn(item))
-	}
+	payload["disks"] = disks
+	payload["networks"] = adapters
+	payload["memoryModules"] = modules
+	payload["printers"] = printers
+	out, _ := json.Marshal(payload)
 	return out
 }
 
 func normalizeDNSServers(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return ""
-	}
 	parts := strings.FieldsFunc(raw, func(r rune) bool {
 		return r == ',' || r == ';' || r == '|' || r == ' '
 	})
 	out := make([]string, 0, len(parts))
+	seen := map[string]struct{}{}
 	for _, p := range parts {
 		p = strings.TrimSpace(p)
-		if p != "" {
-			out = append(out, p)
+		if p == "" {
+			continue
 		}
-	}
-	if len(out) == 0 {
-		return ""
+		if _, ok := seen[p]; ok {
+			continue
+		}
+		seen[p] = struct{}{}
+		out = append(out, p)
 	}
 	return strings.Join(out, ",")
 }
@@ -576,7 +506,7 @@ func normalizeDNSServers(raw string) string {
 func firstNonEmptyString(values ...string) string {
 	for _, v := range values {
 		if strings.TrimSpace(v) != "" {
-			return v
+			return strings.TrimSpace(v)
 		}
 	}
 	return ""
@@ -586,29 +516,52 @@ func formatLinkSpeed(linkSpeedMbps int) string {
 	if linkSpeedMbps <= 0 {
 		return ""
 	}
-	return fmt.Sprintf("%d", linkSpeedMbps)
+	return fmt.Sprintf("%d Mbps", linkSpeedMbps)
 }
 
 func normalizeDriveLetter(device string) string {
-	device = strings.TrimSpace(device)
-	if len(device) >= 2 && device[1] == ':' {
-		return strings.ToUpper(device[:1]) + ":"
+	device = strings.TrimSpace(strings.ToUpper(device))
+	if device == "" {
+		return ""
+	}
+	if len(device) == 1 {
+		return device + ":"
+	}
+	if len(device) == 2 && strings.HasSuffix(device, ":") {
+		return device
 	}
 	return device
 }
 
 func trimToMaxLen(value string, max int) string {
-	value = strings.TrimSpace(value)
-	if max <= 0 || len(value) <= max {
+	if len(value) <= max {
 		return value
 	}
-	return strings.TrimSpace(value[:max])
+	runes := []rune(value)
+	if len(runes) <= max {
+		return value
+	}
+	return string(runes[:max])
 }
 
 func optionalStringPtr(value string) *string {
-	value = strings.TrimSpace(value)
-	if value == "" {
+	if strings.TrimSpace(value) == "" {
 		return nil
 	}
 	return &value
+}
+
+func sanitizeToken(token string) string {
+	token = strings.TrimSpace(token)
+	if len(token) <= 8 {
+		return token
+	}
+	return token[:4] + "***" + token[len(token)-4:]
+}
+
+func truncateLogBody(body []byte, max int) string {
+	if len(body) <= max {
+		return string(body)
+	}
+	return string(body[:max]) + "..."
 }
