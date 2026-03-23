@@ -62,6 +62,10 @@ export function DeleteLocalMemory(arg1) {
   return window['go']['main']['App']['DeleteLocalMemory'](arg1);
 }
 
+export function DownloadP2PArtifactSwarm(arg1) {
+  return window['go']['main']['App']['DownloadP2PArtifactSwarm'](arg1);
+}
+
 export function ExportInventoryMarkdown() {
   return window['go']['main']['App']['ExportInventoryMarkdown']();
 }
@@ -380,6 +384,10 @@ export function RestartSpooler() {
 
 export function RestartSpoolerJSON() {
   return window['go']['main']['App']['RestartSpoolerJSON']();
+}
+
+export function RunOnboardingLoop(arg1) {
+  return window['go']['main']['App']['RunOnboardingLoop'](arg1);
 }
 
 export function SearchCatalog(arg1) {

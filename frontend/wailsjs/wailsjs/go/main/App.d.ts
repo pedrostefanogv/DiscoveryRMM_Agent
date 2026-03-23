@@ -5,6 +5,7 @@ import {database} from '../models';
 import {main} from '../models';
 import {models} from '../models';
 import {mcp} from '../models';
+import {context} from '../models';
 
 export function AddAgentTicketComment(arg1:string,arg2:string,arg3:boolean):Promise<json.RawMessage>;
 
@@ -35,6 +36,8 @@ export function CreateAgentTicket(arg1:string,arg2:string,arg3:number,arg4:strin
 export function CreateSupportTicket(arg1:main.CreateTicketInput):Promise<main.APITicket>;
 
 export function DeleteLocalMemory(arg1:number):Promise<void>;
+
+export function DownloadP2PArtifactSwarm(arg1:string):Promise<main.P2PArtifactView>;
 
 export function ExportInventoryMarkdown():Promise<string>;
 
@@ -195,6 +198,8 @@ export function RequestAppClose():Promise<void>;
 export function RestartSpooler():Promise<json.RawMessage>;
 
 export function RestartSpoolerJSON():Promise<json.RawMessage>;
+
+export function RunOnboardingLoop(arg1:context.Context):Promise<void>;
 
 export function SearchCatalog(arg1:string):Promise<json.RawMessage>;
 

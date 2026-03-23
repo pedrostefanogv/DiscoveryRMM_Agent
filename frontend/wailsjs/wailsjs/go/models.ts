@@ -562,6 +562,7 @@ export namespace main {
 	    }
 	}
 	export class P2PArtifactAccess {
+	    artifactId: string;
 	    artifactName: string;
 	    url: string;
 	    checksumSha256: string;
@@ -574,6 +575,7 @@ export namespace main {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.artifactId = source["artifactId"];
 	        this.artifactName = source["artifactName"];
 	        this.url = source["url"];
 	        this.checksumSha256 = source["checksumSha256"];
@@ -582,6 +584,7 @@ export namespace main {
 	    }
 	}
 	export class P2PArtifactAvailabilityView {
+	    artifactId: string;
 	    artifactName: string;
 	    found: boolean;
 	    peerAgentIds: string[];
@@ -593,6 +596,7 @@ export namespace main {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.artifactId = source["artifactId"];
 	        this.artifactName = source["artifactName"];
 	        this.found = source["found"];
 	        this.peerAgentIds = source["peerAgentIds"];
@@ -600,10 +604,14 @@ export namespace main {
 	    }
 	}
 	export class P2PArtifactView {
+	    artifactId: string;
 	    artifactName: string;
+	    version?: string;
 	    sizeBytes: number;
 	    modifiedAtUtc: string;
 	    checksumSha256: string;
+	    available: boolean;
+	    lastHeartbeatUtc: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new P2PArtifactView(source);
@@ -611,10 +619,14 @@ export namespace main {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.artifactId = source["artifactId"];
 	        this.artifactName = source["artifactName"];
+	        this.version = source["version"];
 	        this.sizeBytes = source["sizeBytes"];
 	        this.modifiedAtUtc = source["modifiedAtUtc"];
 	        this.checksumSha256 = source["checksumSha256"];
+	        this.available = source["available"];
+	        this.lastHeartbeatUtc = source["lastHeartbeatUtc"];
 	    }
 	}
 	export class P2PAuditEvent {
@@ -644,6 +656,7 @@ export namespace main {
 	export class P2PConfig {
 	    enabled: boolean;
 	    discoveryMode: string;
+	    p2pMode?: string;
 	    tempTtlHours: number;
 	    seedPercent: number;
 	    minSeeds: number;
@@ -651,6 +664,7 @@ export namespace main {
 	    httpListenPortRangeEnd: number;
 	    authTokenRotationMinutes: number;
 	    sharedSecret?: string;
+	    chunkSizeBytes?: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new P2PConfig(source);
@@ -660,6 +674,7 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.enabled = source["enabled"];
 	        this.discoveryMode = source["discoveryMode"];
+	        this.p2pMode = source["p2pMode"];
 	        this.tempTtlHours = source["tempTtlHours"];
 	        this.seedPercent = source["seedPercent"];
 	        this.minSeeds = source["minSeeds"];
@@ -667,6 +682,7 @@ export namespace main {
 	        this.httpListenPortRangeEnd = source["httpListenPortRangeEnd"];
 	        this.authTokenRotationMinutes = source["authTokenRotationMinutes"];
 	        this.sharedSecret = source["sharedSecret"];
+	        this.chunkSizeBytes = source["chunkSizeBytes"];
 	    }
 	}
 	export class P2PMetrics {
@@ -680,6 +696,8 @@ export namespace main {
 	    activeReplications: number;
 	    autoDistributionRuns: number;
 	    catalogRefreshRuns: number;
+	    chunkedDownloads: number;
+	    chunksDownloaded: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new P2PMetrics(source);
@@ -697,6 +715,8 @@ export namespace main {
 	        this.activeReplications = source["activeReplications"];
 	        this.autoDistributionRuns = source["autoDistributionRuns"];
 	        this.catalogRefreshRuns = source["catalogRefreshRuns"];
+	        this.chunkedDownloads = source["chunkedDownloads"];
+	        this.chunksDownloaded = source["chunksDownloaded"];
 	    }
 	}
 	export class P2PSeedPlan {

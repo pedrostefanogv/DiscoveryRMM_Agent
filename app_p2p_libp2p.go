@@ -1,0 +1,236 @@
+package main
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"time"
+
+	libp2p "github.com/libp2p/go-libp2p"
+	"github.com/libp2p/go-libp2p/core/host"
+	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/p2p/discovery/mdns"
+)
+
+const (
+	p2pDiscoveryLibP2P        = "libp2p"
+	p2pLibP2PRendezvous       = "discovery-agent-v1"
+	p2pLibP2PProtocolID       = "/discovery-p2p/1.0.0"
+	p2pLibP2PHandshakeTimeout = 5 * time.Second
+)
+
+// p2pLibP2PPeerInfo is exchanged over the /discovery-p2p/1.0.0 stream.
+type p2pLibP2PPeerInfo struct {
+	AgentID  string `json:"agentId"`
+	HTTPPort int    `json:"httpPort"`
+}
+
+// p2pLibP2PProvider implements p2pDiscoveryProvider using go-libp2p mDNS.
+// It advertises the local agent on the LAN and discovers peers via libp2p's
+// built-in mDNS service (distinct from the existing grandcat/zeroconf path).
+// When a peer is found, a /discovery-p2p/1.0.0 stream is opened to exchange
+// {agentId, httpPort}, which the coordinator then uses for artifact transfers.
+type p2pLibP2PProvider struct{}
+
+func (p *p2pLibP2PProvider) Name() string { return p2pDiscoveryLibP2P }
+
+func (p *p2pLibP2PProvider) Start(
+	ctx context.Context,
+	self p2pSelfEndpoint,
+	onPeer func(peer p2pDiscoveredPeer),
+	onTrace func(string),
+) error {
+	h, err := libp2p.New(
+		libp2p.ListenAddrStrings("/ip4/0.0.0.0/tcp/0"),
+	)
+	if err != nil {
+		return fmt.Errorf("libp2p host: %w", err)
+	}
+
+	// Stream handler (responder side): when a peer opens a stream to us,
+	// read their info, respond with ours, then emit onPeer.
+	h.SetStreamHandler(p2pLibP2PProtocolID, func(s network.Stream) {
+		defer s.Close()
+		_ = s.SetDeadline(time.Now().Add(p2pLibP2PHandshakeTimeout))
+
+		var remote p2pLibP2PPeerInfo
+		if err := json.NewDecoder(bufio.NewReader(s)).Decode(&remote); err != nil {
+			return
+		}
+		mine := p2pLibP2PPeerInfo{AgentID: self.AgentID, HTTPPort: self.Port}
+		if err := json.NewEncoder(s).Encode(mine); err != nil {
+			return
+		}
+
+		if strings.TrimSpace(remote.AgentID) == "" || remote.HTTPPort <= 0 {
+			return
+		}
+		remoteAddr := extractIPFromMultiaddr(s.Conn().RemoteMultiaddr().String())
+		if remoteAddr == "" {
+			return
+		}
+		if onTrace != nil {
+			onTrace(fmt.Sprintf("libp2p peer (inbound): agentId=%s addr=%s:%d",
+				remote.AgentID, remoteAddr, remote.HTTPPort))
+		}
+		onPeer(p2pDiscoveredPeer{
+			AgentID:      strings.TrimSpace(remote.AgentID),
+			Host:         remoteAddr,
+			Address:      remoteAddr,
+			Port:         remote.HTTPPort,
+			Source:       p2pDiscoveryLibP2P,
+			ConnectedVia: p2pDiscoveryLibP2P,
+		})
+	})
+
+	notifee := &libp2pMDNSNotifee{h: h, self: self, onPeer: onPeer, onTrace: onTrace}
+	svc := mdns.NewMdnsService(h, p2pLibP2PRendezvous, notifee)
+
+	go func() {
+		<-ctx.Done()
+		_ = svc.Close()
+		_ = h.Close()
+	}()
+
+	if onTrace != nil {
+		onTrace(fmt.Sprintf("libp2p host iniciado: peerID=%s", h.ID()))
+	}
+	return nil
+}
+
+// libp2pMDNSNotifee handles peers discovered by libp2p's mDNS service.
+type libp2pMDNSNotifee struct {
+	h       host.Host
+	self    p2pSelfEndpoint
+	onPeer  func(p2pDiscoveredPeer)
+	onTrace func(string)
+}
+
+func (n *libp2pMDNSNotifee) HandlePeerFound(pi peer.AddrInfo) {
+	if pi.ID == n.h.ID() {
+		return // ignore self
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), p2pLibP2PHandshakeTimeout)
+	defer cancel()
+
+	if err := n.h.Connect(ctx, pi); err != nil {
+		if n.onTrace != nil {
+			n.onTrace(fmt.Sprintf("libp2p connect falhou peer=%s: %v", pi.ID, err))
+		}
+		return
+	}
+
+	s, err := n.h.NewStream(ctx, pi.ID, p2pLibP2PProtocolID)
+	if err != nil {
+		if n.onTrace != nil {
+			n.onTrace(fmt.Sprintf("libp2p stream falhou peer=%s: %v", pi.ID, err))
+		}
+		return
+	}
+	defer s.Close()
+	_ = s.SetDeadline(time.Now().Add(p2pLibP2PHandshakeTimeout))
+
+	// Initiator sends first, then reads response.
+	mine := p2pLibP2PPeerInfo{AgentID: n.self.AgentID, HTTPPort: n.self.Port}
+	if err := json.NewEncoder(s).Encode(mine); err != nil {
+		return
+	}
+	var remote p2pLibP2PPeerInfo
+	if err := json.NewDecoder(bufio.NewReader(s)).Decode(&remote); err != nil {
+		return
+	}
+
+	if strings.TrimSpace(remote.AgentID) == "" || remote.HTTPPort <= 0 {
+		return
+	}
+
+	// Prefer a non-loopback address from the peer's advertised addrs.
+	remoteAddr := ""
+	for _, addr := range pi.Addrs {
+		ip := extractIPFromMultiaddr(addr.String())
+		if ip != "" && ip != "127.0.0.1" && ip != "::1" {
+			remoteAddr = ip
+			break
+		}
+	}
+	if remoteAddr == "" && len(pi.Addrs) > 0 {
+		remoteAddr = extractIPFromMultiaddr(pi.Addrs[0].String())
+	}
+	if remoteAddr == "" {
+		if n.onTrace != nil {
+			n.onTrace(fmt.Sprintf("libp2p peer sem endereço IP: peerID=%s", pi.ID))
+		}
+		return
+	}
+
+	if n.onTrace != nil {
+		n.onTrace(fmt.Sprintf("libp2p peer encontrado: agentId=%s addr=%s:%d",
+			remote.AgentID, remoteAddr, remote.HTTPPort))
+	}
+	n.onPeer(p2pDiscoveredPeer{
+		AgentID:      strings.TrimSpace(remote.AgentID),
+		Host:         remoteAddr,
+		Address:      remoteAddr,
+		Port:         remote.HTTPPort,
+		Source:       p2pDiscoveryLibP2P,
+		ConnectedVia: p2pDiscoveryLibP2P,
+	})
+}
+
+// p2pMultiProvider runs two discovery providers concurrently (used for hybrid mode).
+// Peers emitted by either provider are forwarded to the coordinator with their
+// respective Source field set, so de-dup by agentID happens naturally in upsertPeer.
+type p2pMultiProvider struct {
+	providers []p2pDiscoveryProvider
+}
+
+func (m *p2pMultiProvider) Name() string { return "multi" }
+
+func (m *p2pMultiProvider) Start(
+	ctx context.Context,
+	self p2pSelfEndpoint,
+	onPeer func(p2pDiscoveredPeer),
+	onTrace func(string),
+) error {
+	for _, p := range m.providers {
+		if err := p.Start(ctx, self, onPeer, onTrace); err != nil {
+			return fmt.Errorf("provider %s falhou: %w", p.Name(), err)
+		}
+	}
+	return nil
+}
+
+// pickDiscoveryProvider returns the correct provider based on P2PConfig.
+// This is the single place where transport selection is resolved.
+func pickDiscoveryProvider(cfg P2PConfig) p2pDiscoveryProvider {
+	switch cfg.P2PMode {
+	case P2PModeLibp2pOnly:
+		return &p2pLibP2PProvider{}
+	case P2PModeHybrid:
+		return &p2pMultiProvider{providers: []p2pDiscoveryProvider{
+			&p2pMDNSProvider{},
+			&p2pLibP2PProvider{},
+		}}
+	default: // legacy
+		if cfg.DiscoveryMode == p2pDiscoveryUDP {
+			return &p2pUDPProvider{}
+		}
+		return &p2pMDNSProvider{}
+	}
+}
+
+// extractIPFromMultiaddr extracts the IP address from a libp2p multiaddr string.
+// E.g. "/ip4/192.168.1.5/tcp/41080" → "192.168.1.5".
+func extractIPFromMultiaddr(ma string) string {
+	parts := strings.Split(ma, "/")
+	for i, part := range parts {
+		if (part == "ip4" || part == "ip6") && i+1 < len(parts) {
+			return parts[i+1]
+		}
+	}
+	return ""
+}

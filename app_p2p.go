@@ -147,6 +147,22 @@ func normalizeP2PConfig(cfg P2PConfig) P2PConfig {
 	}
 	out.SharedSecret = strings.TrimSpace(out.SharedSecret)
 
+	// Validate ChunkSizeBytes.
+	if out.ChunkSizeBytes == 0 {
+		out.ChunkSizeBytes = defaultChunkSizeBytes
+	}
+	if out.ChunkSizeBytes < minChunkSizeBytes {
+		out.ChunkSizeBytes = minChunkSizeBytes
+	}
+
+	// Validate P2PMode.
+	switch strings.TrimSpace(strings.ToLower(out.P2PMode)) {
+	case P2PModeLegacy, P2PModeHybrid, P2PModeLibp2pOnly:
+		out.P2PMode = strings.TrimSpace(strings.ToLower(out.P2PMode))
+	default:
+		out.P2PMode = P2PModeLegacy
+	}
+
 	return out
 }
 
@@ -318,6 +334,20 @@ func (a *App) PullP2PArtifactFromPeer(artifactName, sourcePeerID string) (P2PArt
 		ctx = context.Background()
 	}
 	return a.p2pCoord.DownloadArtifactFromPeer(ctx, artifactName, sourcePeerID)
+}
+
+// DownloadP2PArtifactSwarm finds all peers that have the artifact and performs
+// a chunked swarm download when ≥2 peers are available; otherwise falls back
+// to the single-peer path.
+func (a *App) DownloadP2PArtifactSwarm(artifactName string) (P2PArtifactView, error) {
+	if a.p2pCoord == nil {
+		return P2PArtifactView{}, fmt.Errorf("coordinator P2P indisponivel")
+	}
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return a.p2pCoord.downloadArtifactSwarm(ctx, artifactName)
 }
 
 func (a *App) ListP2PAuditEvents() []P2PAuditEvent {
@@ -622,6 +652,135 @@ func (c *p2pCoordinator) DownloadArtifactFromPeer(ctx context.Context, artifactN
 	}, nil
 }
 
+// downloadArtifactSwarm finds all peers that claim to have the artifact and
+// performs a chunked swarm download when ≥2 peers are available.
+// Falls back to the single-peer path when fewer peers are found.
+func (c *p2pCoordinator) downloadArtifactSwarm(ctx context.Context, artifactName string) (P2PArtifactView, error) {
+	artifactName = sanitizeArtifactName(artifactName)
+	if artifactName == "" {
+		return P2PArtifactView{}, fmt.Errorf("artifact invalido")
+	}
+
+	avail := c.FindArtifactPeers(artifactName)
+	if !avail.Found || len(avail.PeerAgentIDs) == 0 {
+		return P2PArtifactView{}, fmt.Errorf("nenhum peer possui o artifact %q", artifactName)
+	}
+
+	// Collect access tokens from all available peers (best-effort).
+	var accesses []P2PArtifactAccess
+	requesterID := strings.TrimSpace(c.app.GetDebugConfig().AgentID)
+	if requesterID == "" {
+		requesterID = "peer-local"
+	}
+
+	for _, peerID := range avail.PeerAgentIDs {
+		peerView, err := c.findPeerByAgentID(peerID)
+		if err != nil {
+			continue
+		}
+		endpoint := fmt.Sprintf("http://%s:%d/p2p/artifact/access",
+			strings.TrimSpace(peerView.Address), peerView.Port)
+		payload, _ := json.Marshal(map[string]string{
+			"artifactName": artifactName,
+			"requesterId":  requesterID,
+		})
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint,
+			strings.NewReader(string(payload)))
+		if err != nil {
+			continue
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
+		if err != nil {
+			continue
+		}
+		var acc P2PArtifactAccess
+		decErr := json.NewDecoder(resp.Body).Decode(&acc)
+		resp.Body.Close()
+		if decErr == nil && strings.TrimSpace(acc.URL) != "" {
+			accesses = append(accesses, acc)
+		}
+	}
+
+	if len(accesses) == 0 {
+		return P2PArtifactView{}, fmt.Errorf("nenhum peer retornou token de acesso para %q", artifactName)
+	}
+
+	// Single peer → existing download path (no manifest overhead).
+	c.mu.RLock()
+	transfer := c.transferServer
+	c.mu.RUnlock()
+	if transfer == nil {
+		return P2PArtifactView{}, fmt.Errorf("servidor de transferencia indisponivel")
+	}
+
+	cfg := c.app.GetP2PConfig()
+
+	if len(accesses) < 2 || cfg.ChunkSizeBytes == 0 {
+		path, size, err := transfer.downloadArtifact(accesses[0])
+		if err != nil {
+			return P2PArtifactView{}, err
+		}
+		c.recordBytesDownloaded(size)
+		return c.buildArtifactView(artifactName, accesses[0].ArtifactID, path)
+	}
+
+	// Multi-peer → fetch manifest from primary peer and download in chunks.
+	primaryURL := strings.Replace(accesses[0].URL,
+		"/p2p/artifact/"+strings.ReplaceAll(artifactName, " ", "%20"),
+		"/p2p/artifact/"+strings.ReplaceAll(artifactName, " ", "%20")+"/manifest", 1)
+
+	manifestReq, err := http.NewRequestWithContext(ctx, http.MethodGet, primaryURL, nil)
+	if err != nil {
+		return P2PArtifactView{}, err
+	}
+	manifestResp, err := (&http.Client{Timeout: 20 * time.Second}).Do(manifestReq)
+	if err != nil {
+		return P2PArtifactView{}, fmt.Errorf("manifest indisponivel: %w", err)
+	}
+	var manifest P2PChunkManifest
+	decErr := json.NewDecoder(manifestResp.Body).Decode(&manifest)
+	manifestResp.Body.Close()
+	if decErr != nil {
+		return P2PArtifactView{}, fmt.Errorf("manifest invalido: %w", decErr)
+	}
+
+	destDir := c.app.p2pTempDir()
+	path, totalBytes, err := downloadChunked(ctx, accesses, manifest, destDir)
+	if err != nil {
+		c.appendAudit("swarm-pull", artifactName, "", "automation", false, err.Error())
+		return P2PArtifactView{}, err
+	}
+	c.recordBytesDownloaded(totalBytes)
+	c.recordChunkedDownload(manifest.TotalChunks)
+	c.appendAudit("swarm-pull", artifactName, fmt.Sprintf("%d peers", len(accesses)),
+		"automation", true, fmt.Sprintf("download em %d chunks de %d peers", manifest.TotalChunks, len(accesses)))
+
+	artifactID := CanonicalArtifactID(manifest.ArtifactID, artifactName, "")
+	return c.buildArtifactView(artifactName, artifactID, path)
+}
+
+// buildArtifactView reads stat + checksum for a file and returns a P2PArtifactView.
+func (c *p2pCoordinator) buildArtifactView(artifactName, artifactID, path string) (P2PArtifactView, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return P2PArtifactView{}, err
+	}
+	checksum, err := computeFileSHA256(path)
+	if err != nil {
+		return P2PArtifactView{}, err
+	}
+	return P2PArtifactView{
+		ArtifactID:       CanonicalArtifactID(artifactID, artifactName, ""),
+		ArtifactName:     artifactName,
+		SizeBytes:        info.Size(),
+		ModifiedAtUTC:    formatTimeRFC3339(info.ModTime()),
+		ChecksumSHA256:   checksum,
+		Available:        true,
+		LastHeartbeatUTC: formatTimeRFC3339(time.Now().UTC()),
+	}, nil
+}
+
 func (c *p2pCoordinator) ListArtifacts() ([]P2PArtifactView, error) {
 	dir := c.app.p2pTempDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -882,12 +1041,7 @@ func (c *p2pCoordinator) startTransferServer(ctx context.Context) error {
 
 func (c *p2pCoordinator) startDiscovery(ctx context.Context) error {
 	cfg := c.app.GetP2PConfig()
-	var provider p2pDiscoveryProvider
-	if cfg.DiscoveryMode == p2pDiscoveryUDP {
-		provider = &p2pUDPProvider{}
-	} else {
-		provider = &p2pMDNSProvider{}
-	}
+	provider := pickDiscoveryProvider(cfg)
 
 	selfHost, _ := os.Hostname()
 	selfAgentID := strings.TrimSpace(c.app.GetDebugConfig().AgentID)
@@ -1318,11 +1472,42 @@ func (c *p2pCoordinator) upsertPeerArtifacts(peerAgentID string, artifacts []P2P
 		if name == "" {
 			continue
 		}
+		canonicalID := CanonicalArtifactID(artifact.ArtifactID, name, "")
+		newChecksum := strings.TrimSpace(artifact.ChecksumSHA256)
+		// Log mismatch vs previously known checksum for same artifactId (audit Epic 1).
+		if canonicalID != "" && newChecksum != "" {
+			c.mu.RLock()
+			if prev, ok := c.peerArtifacts[peerKey]; ok {
+				for _, pa := range prev.Artifacts {
+					if strings.EqualFold(strings.TrimSpace(pa.ArtifactID), canonicalID) &&
+						strings.TrimSpace(pa.ChecksumSHA256) != "" &&
+						!strings.EqualFold(strings.TrimSpace(pa.ChecksumSHA256), newChecksum) {
+						short := func(s string) string {
+							if len(s) > 8 {
+								return s[:8]
+							}
+							return s
+						}
+						c.app.logs.append(fmt.Sprintf("[p2p][audit] checksum divergente artifactId=%s peer=%s: anterior=%s... novo=%s...",
+							canonicalID, peerAgentID, short(pa.ChecksumSHA256), short(newChecksum)))
+					}
+				}
+			}
+			c.mu.RUnlock()
+		}
+		heartbeat := strings.TrimSpace(artifact.LastHeartbeatUTC)
+		if heartbeat == "" {
+			heartbeat = formatTimeRFC3339(time.Now().UTC())
+		}
 		clean = append(clean, P2PArtifactView{
-			ArtifactName:   name,
-			SizeBytes:      artifact.SizeBytes,
-			ModifiedAtUTC:  strings.TrimSpace(artifact.ModifiedAtUTC),
-			ChecksumSHA256: strings.TrimSpace(artifact.ChecksumSHA256),
+			ArtifactID:       canonicalID,
+			ArtifactName:     name,
+			Version:          strings.TrimSpace(artifact.Version),
+			SizeBytes:        artifact.SizeBytes,
+			ModifiedAtUTC:    strings.TrimSpace(artifact.ModifiedAtUTC),
+			ChecksumSHA256:   newChecksum,
+			Available:        true,
+			LastHeartbeatUTC: heartbeat,
 		})
 	}
 	sort.SliceStable(clean, func(i, j int) bool {

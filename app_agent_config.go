@@ -181,21 +181,31 @@ func (a *App) setAgentConfiguration(cfg AgentConfiguration) {
 
 // applyAgentConfiguration adjusts runtime behavior based on the agent configuration.
 func (a *App) applyAgentConfiguration(cfg AgentConfiguration) {
-	// P2P toggle
+	// P2P files toggle.
 	if cfg.P2PFilesEnabled != nil {
 		p2pCfg := a.GetP2PConfig()
 		p2pCfg.Enabled = *cfg.P2PFilesEnabled
 		a.applyP2PConfig(p2pCfg)
 	}
 
-	// Sync interval (if specified)
+	// Discovery onboarding toggle — governs whether this agent participates in P2P onboarding.
+	if cfg.DiscoveryEnabled != nil {
+		p2pCfg := a.GetP2PConfig()
+		if !*cfg.DiscoveryEnabled && strings.TrimSpace(p2pCfg.P2PMode) == "" {
+			p2pCfg.P2PMode = P2PModeLegacy
+		}
+		a.applyP2PConfig(p2pCfg)
+		a.logs.append(fmt.Sprintf("[config] discoveryEnabled=%t aplicado ao modo P2P", *cfg.DiscoveryEnabled))
+	}
+
+	// Sync interval (if specified).
 	if cfg.InventoryIntervalHours != nil && a.syncCoord != nil {
 		if *cfg.InventoryIntervalHours > 0 {
 			a.syncCoord.setPollEvery(time.Duration(*cfg.InventoryIntervalHours) * time.Hour)
 		}
 	}
 
-	// MeshCentral agent install (runs once; idempotent via meshCentralInstalled flag in config.json)
+	// MeshCentral agent install (runs once; idempotent via meshCentralInstalled flag in config.json).
 	if cfg.MeshCentralEnabledEffective != nil && *cfg.MeshCentralEnabledEffective {
 		go a.triggerMeshCentralInstallIfNeeded(context.Background())
 	}

@@ -79,10 +79,11 @@ func (s *p2pTransferServer) Start(ctx context.Context, cfg P2PConfig, agentID, t
 	baseURL := fmt.Sprintf("http://%s:%d", host, port)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/p2p/artifact/", s.handleArtifact)
+	mux.HandleFunc("/p2p/artifact/", s.handleArtifactOrManifest)
 	mux.HandleFunc("/p2p/artifact/access", s.handleArtifactAccess)
 	mux.HandleFunc("/p2p/peers", s.handlePeers)
 	mux.HandleFunc("/p2p/replicate", s.handleReplicate)
+	mux.HandleFunc("/p2p/config/onboard", s.handleP2POnboard)
 	mux.HandleFunc("/p2p/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -175,12 +176,21 @@ func (s *p2pTransferServer) BuildArtifactAccess(artifactName, targetPeerID strin
 	}
 
 	return P2PArtifactAccess{
+		ArtifactID:     CanonicalArtifactID("", artifactName, ""),
 		ArtifactName:   artifactName,
 		URL:            downloadURL,
 		ChecksumSHA256: checksum,
 		SizeBytes:      info.Size(),
 		ExpiresAtUTC:   expiresAt.UTC().Format(time.RFC3339),
 	}, nil
+}
+
+func (s *p2pTransferServer) handleArtifactOrManifest(w http.ResponseWriter, r *http.Request) {
+	if strings.HasSuffix(r.URL.Path, "/manifest") {
+		s.handleArtifactManifest(w, r)
+		return
+	}
+	s.handleArtifact(w, r)
 }
 
 func (s *p2pTransferServer) handleArtifact(w http.ResponseWriter, r *http.Request) {
@@ -229,6 +239,13 @@ func (s *p2pTransferServer) handlePeers(w http.ResponseWriter, r *http.Request) 
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
+	}
+	// In libp2p_only mode HTTP gossip between peers is disabled to reduce attack surface.
+	if s.app != nil {
+		if cfg := s.app.GetP2PConfig(); strings.TrimSpace(cfg.P2PMode) == P2PModeLibp2pOnly {
+			http.Error(w, "gossip desabilitado no modo libp2p_only", http.StatusGone)
+			return
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 

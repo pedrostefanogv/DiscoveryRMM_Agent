@@ -31,10 +31,19 @@ type RuntimeFlags struct {
 	StartMinimized bool `json:"startMinimized"`
 }
 
-// P2PConfig controls debug-only peer discovery and local transfer behavior.
+// P2PMode constants control the transport plane used by the P2P coordinator.
+const (
+	P2PModeLegacy     = "legacy"      // mDNS/UDP discovery + HTTP transfer (default)
+	P2PModeHybrid     = "hybrid"      // mDNS/UDP discovery + libp2p transfer layer
+	P2PModeLibp2pOnly = "libp2p_only" // libp2p only; HTTP P2P surface restricted to loopback
+)
+
+// P2PConfig controls peer discovery and local transfer behavior.
 type P2PConfig struct {
-	Enabled                  bool   `json:"enabled"`
-	DiscoveryMode            string `json:"discoveryMode"`
+	Enabled       bool   `json:"enabled"`
+	DiscoveryMode string `json:"discoveryMode"`
+	// P2PMode selects the transport plane: "legacy", "hybrid", or "libp2p_only".
+	P2PMode                  string `json:"p2pMode,omitempty"`
 	TempTTLHours             int    `json:"tempTtlHours"`
 	SeedPercent              int    `json:"seedPercent"`
 	MinSeeds                 int    `json:"minSeeds"`
@@ -42,6 +51,9 @@ type P2PConfig struct {
 	HTTPListenPortRangeEnd   int    `json:"httpListenPortRangeEnd"`
 	AuthTokenRotationMinutes int    `json:"authTokenRotationMinutes"`
 	SharedSecret             string `json:"sharedSecret,omitempty"`
+	// ChunkSizeBytes is the target size for each chunk in swarm downloads.
+	// 0 means use the default (8 MB). Minimum enforced: 1 MB.
+	ChunkSizeBytes int64 `json:"chunkSizeBytes,omitempty"`
 }
 
 // P2PSeedPlan summarizes how many agents should seed from external HTTP.
@@ -145,6 +157,8 @@ type P2PMetrics struct {
 	ActiveReplications    int   `json:"activeReplications"`
 	AutoDistributionRuns  int   `json:"autoDistributionRuns"`
 	CatalogRefreshRuns    int   `json:"catalogRefreshRuns"`
+	ChunkedDownloads      int   `json:"chunkedDownloads"`
+	ChunksDownloaded      int64 `json:"chunksDownloaded"`
 }
 
 // P2PAuditEvent records important operational events for the P2P debug window.
@@ -156,6 +170,33 @@ type P2PAuditEvent struct {
 	Source       string `json:"source,omitempty"`
 	Success      bool   `json:"success"`
 	Message      string `json:"message"`
+}
+
+// P2POnboardingRequest is the payload exchanged to onboard a generic (unconfigured) agent.
+type P2POnboardingRequest struct {
+	ServerURL    string `json:"serverUrl"`
+	DeployKey    string `json:"deployKey"`
+	ExpiresAtUTC string `json:"expiresAtUtc"`
+	SourceAgent  string `json:"sourceAgent"`
+	Nonce        string `json:"nonce"`     // random per-request — prevents replay
+	Signature    string `json:"signature"` // HMAC-SHA256(sourceAgent|serverUrl|deployKey|expiresAt|nonce, key=deployKey)
+}
+
+// P2POnboardingResult is the response from the target agent after receiving onboarding.
+type P2POnboardingResult struct {
+	AgentID    string `json:"agentId"`
+	Registered bool   `json:"registered"`
+	Message    string `json:"message"`
+}
+
+// P2POnboardingAuditEvent records who configured whom and the outcome.
+type P2POnboardingAuditEvent struct {
+	TimestampUTC  string `json:"timestampUtc"`
+	SourceAgentID string `json:"sourceAgentId"`
+	TargetAgentID string `json:"targetAgentId,omitempty"`
+	ServerURL     string `json:"serverUrl"`
+	Success       bool   `json:"success"`
+	Message       string `json:"message"`
 }
 
 func (c *inventoryCache) get() (models.InventoryReport, bool) {
