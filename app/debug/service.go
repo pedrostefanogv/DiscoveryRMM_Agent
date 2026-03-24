@@ -218,13 +218,45 @@ func (s *Service) ApplyRuntimeConnectionConfig(apiScheme, apiServer, authToken, 
 	s.mu.Unlock()
 }
 
-// BootstrapAgentCredentialsFromInstallerConfig registers the agent when needed and persists token+agentId.
-func (s *Service) BootstrapAgentCredentialsFromInstallerConfig(ctx context.Context) {
-	cfg := s.GetConfig()
-	if strings.TrimSpace(cfg.ApiServer) != "" && strings.TrimSpace(cfg.AuthToken) != "" && strings.TrimSpace(cfg.AgentID) != "" {
-		return
+func (s *Service) testAgentAPIConnectivity(ctx context.Context, apiScheme, apiServer, authToken, agentID string) error {
+	apiScheme = strings.TrimSpace(strings.ToLower(apiScheme))
+	apiServer = strings.TrimSpace(apiServer)
+	authToken = strings.TrimSpace(authToken)
+	agentID = strings.TrimSpace(agentID)
+
+	if apiScheme == "" || apiServer == "" {
+		return fmt.Errorf("apiScheme/apiServer ausente")
 	}
 
+	target := apiScheme + "://" + apiServer + "/api/agent-auth/me"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return fmt.Errorf("falha ao criar requisicao: %w", err)
+	}
+	if authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+authToken)
+	}
+	if agentID != "" {
+		req.Header.Set("X-Agent-ID", agentID)
+	}
+
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		return fmt.Errorf("falha ao conectar na API %s: %w", target, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		preview := strings.TrimSpace(string(body))
+		return fmt.Errorf("API HTTP %s: %s", resp.Status, preview)
+	}
+
+	return nil
+}
+
+// BootstrapAgentCredentialsFromInstallerConfig registers the agent when needed and persists token+agentId.
+func (s *Service) BootstrapAgentCredentialsFromInstallerConfig(ctx context.Context) {
 	inst, path, err := s.loadInstallerConfig()
 	if err != nil {
 		s.logf("[installer-bootstrap] sem bootstrap de instalador: " + err.Error())
@@ -237,17 +269,46 @@ func (s *Service) BootstrapAgentCredentialsFromInstallerConfig(ctx context.Conte
 		return
 	}
 
+	inst.ApiScheme = scheme
+	inst.ApiServer = server
+
 	if strings.TrimSpace(inst.AuthToken) != "" && strings.TrimSpace(inst.AgentID) != "" {
 		s.ApplyRuntimeConnectionConfig(scheme, server, inst.AuthToken, inst.AgentID)
-		s.logf("[installer-bootstrap] credenciais ja presentes no config de producao (" + path + ")")
+		s.logf("[installer-bootstrap] credenciais presentes no config de producao (" + path + ")")
 		if s.agentConn != nil {
 			s.agentConn.Reload()
 		}
-		return
+
+		testCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		err := s.testAgentAPIConnectivity(testCtx, scheme, server, inst.AuthToken, inst.AgentID)
+		cancel()
+		if err == nil {
+			if strings.TrimSpace(inst.APIKey) != "" {
+				inst.APIKey = ""
+				writePath, err := persistInstallerConfig(path, inst)
+				if err != nil {
+					s.logf("[installer-bootstrap] falha ao limpar deploy token: " + err.Error())
+				} else {
+					if writePath != path {
+						if err := scrubInstallerConfigSource(path, inst); err != nil {
+							s.logf("[installer-bootstrap] aviso: falha ao limpar deploy token no config de origem: " + err.Error())
+						}
+					}
+					if overridePath := findInstallerOverridePath(); overridePath != "" && overridePath != path {
+						if err := scrubInstallerConfigSource(overridePath, inst); err != nil {
+							s.logf("[installer-bootstrap] aviso: falha ao limpar deploy token no override: " + err.Error())
+						}
+					}
+				}
+			}
+			s.logf("[installer-bootstrap] credenciais validas; deploy token removido")
+			return
+		}
+		s.logf("[installer-bootstrap] credenciais invalidas, tentando re-registrar: " + err.Error())
 	}
 
 	if strings.TrimSpace(inst.APIKey) == "" {
-		s.logf("[installer-bootstrap] apiKey ausente no config de producao; nao foi possivel gerar token")
+		s.logf("[installer-bootstrap] deploy token ausente; nao foi possivel registrar agente")
 		return
 	}
 
@@ -270,7 +331,12 @@ func (s *Service) BootstrapAgentCredentialsFromInstallerConfig(ctx context.Conte
 	}
 	if writePath != path {
 		if err := scrubInstallerConfigSource(path, inst); err != nil {
-			s.logf("[installer-bootstrap] aviso: falha ao limpar apiKey no config de origem: " + err.Error())
+			s.logf("[installer-bootstrap] aviso: falha ao limpar deploy token no config de origem: " + err.Error())
+		}
+	}
+	if overridePath := findInstallerOverridePath(); overridePath != "" && overridePath != path {
+		if err := scrubInstallerConfigSource(overridePath, inst); err != nil {
+			s.logf("[installer-bootstrap] aviso: falha ao limpar deploy token no override: " + err.Error())
 		}
 	}
 

@@ -326,7 +326,12 @@ Function SaveAgentConfig
 
    Delete "$INSTDIR\config.json"
    ClearErrors
-   FileOpen $0 "$R0\Discovery\config.json" w
+   IfFileExists "$R0\Discovery\config.json" 0 +3
+   StrCpy $R1 "$R0\Discovery\installer.json"
+   Goto +2
+   StrCpy $R1 "$R0\Discovery\config.json"
+   DetailPrint "Salvando config em $R1"
+   FileOpen $0 "$R1" w
    ${If} ${Errors}
       DetailPrint "ERRO: nao foi possivel abrir $R0\Discovery\config.json para escrita"
       MessageBox MB_ICONSTOP "Falha ao gravar o arquivo de configuracao em $R0\Discovery\config.json"
@@ -336,7 +341,6 @@ Function SaveAgentConfig
    FileWrite $0 "{$\r$\n"
    # Formato canônico (service)
    FileWrite $0 '  "server_url": "$ServerUrl",$\r$\n'
-   FileWrite $0 '  "auth_token": "$ServerKey",$\r$\n'
    FileWrite $0 '  "api_scheme": "https",$\r$\n'
    FileWrite $0 '  "api_server": "$ServerUrl",$\r$\n'
    FileWrite $0 '  "inventory_sync_interval_minutes": 15,$\r$\n'
