@@ -371,6 +371,8 @@ func (a *App) startup(ctx context.Context) {
 		done := a.beginActivity("inventario inicial")
 		defer done()
 
+		a.ensureOsqueryInstalled(ctx)
+
 		report, err := a.collectInventoryWithHeartbeat(ctx)
 		if err != nil {
 			log.Printf("[startup] falha ao coletar inventario em background: %v", err)
@@ -435,6 +437,45 @@ func (a *App) startup(ctx context.Context) {
 		}
 		a.p2pCoord.Run(ctx)
 	})
+}
+
+func (a *App) startupLogf(format string, args ...any) {
+	line := fmt.Sprintf(format, args...)
+	log.Print(line)
+	a.logs.append(line)
+}
+
+func (a *App) ensureOsqueryInstalled(ctx context.Context) {
+	if runtime.GOOS != "windows" {
+		return
+	}
+	if a.appsSvc == nil {
+		a.startupLogf("[startup] aviso: apps service indisponivel; nao foi possivel verificar osquery")
+		return
+	}
+
+	status := inventory.GetOsqueryStatus()
+	if status.Installed {
+		return
+	}
+
+	packageID := strings.TrimSpace(status.SuggestedPackageID)
+	if packageID == "" {
+		packageID = "osquery.osquery"
+	}
+
+	a.startupLogf("[startup] osquery ausente; instalando via winget (%s)", packageID)
+	out, err := a.appsSvc.Install(ctx, packageID)
+	if out != "" {
+		a.startupLogf("[startup] winget install output: %s", out)
+	}
+	if err != nil {
+		a.startupLogf("[startup] aviso: falha ao instalar osquery via winget: %v", err)
+		return
+	}
+
+	inventory.InvalidateOsqueryBinaryCache()
+	a.startupLogf("[startup] osquery instalado com sucesso")
 }
 
 // hideWindowOnStartup keeps the app running in tray when launched by Windows startup.

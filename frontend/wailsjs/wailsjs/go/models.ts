@@ -437,6 +437,7 @@ export namespace debug {
 	    agentId: string;
 	    server: string;
 	    lastEvent: string;
+	    transport?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new AgentStatus(source);
@@ -448,6 +449,7 @@ export namespace debug {
 	        this.agentId = source["agentId"];
 	        this.server = source["server"];
 	        this.lastEvent = source["lastEvent"];
+	        this.transport = source["transport"];
 	    }
 	}
 	export class Config {
@@ -455,6 +457,7 @@ export namespace debug {
 	    apiServer: string;
 	    authToken: string;
 	    natsServer: string;
+	    natsWsServer: string;
 	    agentId: string;
 	    scheme?: string;
 	    server?: string;
@@ -470,6 +473,7 @@ export namespace debug {
 	        this.apiServer = source["apiServer"];
 	        this.authToken = source["authToken"];
 	        this.natsServer = source["natsServer"];
+	        this.natsWsServer = source["natsWsServer"];
 	        this.agentId = source["agentId"];
 	        this.scheme = source["scheme"];
 	        this.server = source["server"];
