@@ -15,6 +15,7 @@ type Config struct {
 	ApiServer                         string `json:"apiServer"`
 	AuthToken                         string `json:"authToken"`
 	NatsServer                        string `json:"natsServer"`
+	NatsWsServer                      string `json:"natsWsServer"`
 	AgentID                           string `json:"agentId"`
 	Scheme                            string `json:"scheme,omitempty"`
 	Server                            string `json:"server,omitempty"`
@@ -30,6 +31,8 @@ type InstallerConfig struct {
 	ApiServer            string         `json:"apiServer,omitempty"`
 	AuthToken            string         `json:"authToken,omitempty"`
 	AgentID              string         `json:"agentId,omitempty"`
+	NatsServer           string         `json:"natsServer,omitempty"`
+	NatsWsServer         string         `json:"natsWsServer,omitempty"`
 	P2P                  p2pmeta.Config `json:"p2p,omitempty"`
 	MeshCentralInstalled bool           `json:"meshCentralInstalled,omitempty"`
 }
@@ -43,6 +46,8 @@ func (c *InstallerConfig) UnmarshalJSON(data []byte) error {
 		ApiServer            string          `json:"apiServer,omitempty"`
 		AuthToken            string          `json:"authToken,omitempty"`
 		AgentID              string          `json:"agentId,omitempty"`
+		NatsServer           string          `json:"natsServer,omitempty"`
+		NatsWsServer         string          `json:"natsWsServer,omitempty"`
 		P2P                  p2pmeta.Config  `json:"p2p,omitempty"`
 		MeshCentralInstalled bool            `json:"meshCentralInstalled,omitempty"`
 	}
@@ -65,6 +70,8 @@ func (c *InstallerConfig) UnmarshalJSON(data []byte) error {
 		ApiServer:            raw.ApiServer,
 		AuthToken:            raw.AuthToken,
 		AgentID:              raw.AgentID,
+		NatsServer:           raw.NatsServer,
+		NatsWsServer:         raw.NatsWsServer,
 		P2P:                  raw.P2P,
 		MeshCentralInstalled: raw.MeshCentralInstalled,
 	}
@@ -119,6 +126,7 @@ type AgentStatus struct {
 	AgentID   string `json:"agentId"`
 	Server    string `json:"server"`
 	LastEvent string `json:"lastEvent"`
+	Transport string `json:"transport,omitempty"`
 }
 
 // RealtimeStatus represents server-side realtime transport health.

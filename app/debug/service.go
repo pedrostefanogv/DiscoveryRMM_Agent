@@ -184,8 +184,10 @@ func (s *Service) LoadConnectionConfigFromProduction() {
 	}
 
 	if strings.TrimSpace(inst.ApiScheme) == "" || strings.TrimSpace(inst.ApiServer) == "" {
-		s.logf("[config] config de producao sem apiScheme/apiServer: " + path)
-		return
+		if strings.TrimSpace(inst.NatsServer) == "" && strings.TrimSpace(inst.NatsWsServer) == "" {
+			s.logf("[config] config de producao sem apiScheme/apiServer e sem NATS: " + path)
+			return
+		}
 	}
 
 	if strings.TrimSpace(inst.AuthToken) == "" || strings.TrimSpace(inst.AgentID) == "" {
@@ -193,21 +195,26 @@ func (s *Service) LoadConnectionConfigFromProduction() {
 		return
 	}
 
-	s.ApplyRuntimeConnectionConfig(inst.ApiScheme, inst.ApiServer, inst.AuthToken, inst.AgentID)
+	s.ApplyRuntimeConnectionConfig(inst.ApiScheme, inst.ApiServer, inst.AuthToken, inst.AgentID, inst.NatsServer, inst.NatsWsServer)
 	s.logf("[config] credenciais carregadas do config de producao: " + path)
 }
 
 // ApplyRuntimeConnectionConfig updates runtime connection settings.
-func (s *Service) ApplyRuntimeConnectionConfig(apiScheme, apiServer, authToken, agentID string) {
+func (s *Service) ApplyRuntimeConnectionConfig(apiScheme, apiServer, authToken, agentID, natsServer, natsWsServer string) {
 	cfg := s.GetConfig()
 	cfg.ApiScheme = strings.TrimSpace(strings.ToLower(apiScheme))
 	cfg.ApiServer = strings.TrimSpace(apiServer)
 	cfg.AuthToken = strings.TrimSpace(authToken)
 	cfg.AgentID = strings.TrimSpace(agentID)
+	cfg.NatsServer = strings.TrimSpace(natsServer)
+	cfg.NatsWsServer = strings.TrimSpace(natsWsServer)
 
 	if cfg.NatsServer != "" {
 		cfg.Scheme = "nats"
 		cfg.Server = cfg.NatsServer
+	} else if cfg.NatsWsServer != "" {
+		cfg.Scheme = "nats"
+		cfg.Server = cfg.NatsWsServer
 	} else {
 		cfg.Scheme = cfg.ApiScheme
 		cfg.Server = cfg.ApiServer
@@ -273,7 +280,7 @@ func (s *Service) BootstrapAgentCredentialsFromInstallerConfig(ctx context.Conte
 	inst.ApiServer = server
 
 	if strings.TrimSpace(inst.AuthToken) != "" && strings.TrimSpace(inst.AgentID) != "" {
-		s.ApplyRuntimeConnectionConfig(scheme, server, inst.AuthToken, inst.AgentID)
+		s.ApplyRuntimeConnectionConfig(scheme, server, inst.AuthToken, inst.AgentID, inst.NatsServer, inst.NatsWsServer)
 		s.logf("[installer-bootstrap] credenciais presentes no config de producao (" + path + ")")
 		if s.agentConn != nil {
 			s.agentConn.Reload()
@@ -340,7 +347,7 @@ func (s *Service) BootstrapAgentCredentialsFromInstallerConfig(ctx context.Conte
 		}
 	}
 
-	s.ApplyRuntimeConnectionConfig(inst.ApiScheme, inst.ApiServer, inst.AuthToken, inst.AgentID)
+	s.ApplyRuntimeConnectionConfig(inst.ApiScheme, inst.ApiServer, inst.AuthToken, inst.AgentID, inst.NatsServer, inst.NatsWsServer)
 
 	s.logf("[installer-bootstrap] credenciais aplicadas com sucesso (leitura: " + path + ", persistencia: " + writePath + ", agentId=" + agentID + ")")
 	if s.agentConn != nil {
@@ -359,6 +366,7 @@ func (s *Service) GetAgentStatus() AgentStatus {
 		AgentID:   src.AgentID,
 		Server:    src.Server,
 		LastEvent: src.LastEvent,
+		Transport: src.Transport,
 	}
 }
 
@@ -367,6 +375,7 @@ func (s *Service) SetConfig(cfg Config) error {
 	cfg.ApiScheme = strings.TrimSpace(strings.ToLower(cfg.ApiScheme))
 	cfg.ApiServer = strings.TrimSpace(cfg.ApiServer)
 	cfg.NatsServer = strings.TrimSpace(cfg.NatsServer)
+	cfg.NatsWsServer = strings.TrimSpace(cfg.NatsWsServer)
 	cfg.AgentID = strings.TrimSpace(cfg.AgentID)
 	cfg.AuthToken = strings.TrimSpace(cfg.AuthToken)
 
@@ -376,26 +385,29 @@ func (s *Service) SetConfig(cfg Config) error {
 		}
 	}
 
-	if cfg.NatsServer != "" {
+	if cfg.NatsServer != "" || cfg.NatsWsServer != "" {
 		if !guidPattern.MatchString(cfg.AgentID) {
 			return fmt.Errorf("agentId invalido para NATS: informe um GUID valido")
 		}
 	}
 
-	if cfg.ApiServer == "" && cfg.NatsServer == "" {
+	if cfg.ApiServer == "" && cfg.NatsServer == "" && cfg.NatsWsServer == "" {
 		return fmt.Errorf("configure pelo menos um servidor (API ou NATS)")
 	}
 
 	if cfg.NatsServer != "" {
 		cfg.Scheme = "nats"
 		cfg.Server = cfg.NatsServer
+	} else if cfg.NatsWsServer != "" {
+		cfg.Scheme = "nats"
+		cfg.Server = cfg.NatsWsServer
 	} else if cfg.ApiServer != "" {
 		cfg.Scheme = cfg.ApiScheme
 		cfg.Server = cfg.ApiServer
 	}
 
-	s.logf(fmt.Sprintf("[debug] atualizando configuracao: api=%s://%s nats=%s agentId=%s",
-		cfg.ApiScheme, cfg.ApiServer, cfg.NatsServer, cfg.AgentID))
+	s.logf(fmt.Sprintf("[debug] atualizando configuracao: api=%s://%s nats=%s natsWs=%s agentId=%s",
+		cfg.ApiScheme, cfg.ApiServer, cfg.NatsServer, cfg.NatsWsServer, cfg.AgentID))
 
 	s.mu.Lock()
 	s.config = cfg
@@ -428,6 +440,7 @@ func (s *Service) TestConnection(cfg Config) (string, error) {
 	cfg.ApiScheme = strings.TrimSpace(strings.ToLower(cfg.ApiScheme))
 	cfg.ApiServer = strings.TrimSpace(cfg.ApiServer)
 	cfg.NatsServer = strings.TrimSpace(cfg.NatsServer)
+	cfg.NatsWsServer = strings.TrimSpace(cfg.NatsWsServer)
 	cfg.AgentID = strings.TrimSpace(cfg.AgentID)
 	cfg.AuthToken = strings.TrimSpace(cfg.AuthToken)
 
@@ -482,21 +495,36 @@ func (s *Service) TestConnection(cfg Config) (string, error) {
 		s.logf("[debug-test] teste API concluido com sucesso")
 	}
 
-	if cfg.NatsServer != "" {
+	if cfg.NatsServer != "" || cfg.NatsWsServer != "" {
 		if !guidPattern.MatchString(cfg.AgentID) {
 			err := fmt.Errorf("agentId invalido para NATS: informe um GUID valido")
 			s.logf("[debug-test] " + err.Error())
 			return "", err
 		}
-		s.logf(fmt.Sprintf("[debug-test] testando NATS: %s", cfg.NatsServer))
-		out, err := agentconn.FetchNATSInfo(cfg.NatsServer, 10*time.Second)
-		if err != nil {
-			wrapped := fmt.Errorf("falha ao conectar no NATS %s: %w", cfg.NatsServer, err)
-			s.logf("[debug-test] " + wrapped.Error())
-			return "", wrapped
+
+		if cfg.NatsServer != "" {
+			s.logf(fmt.Sprintf("[debug-test] testando NATS: %s", cfg.NatsServer))
+			out, err := agentconn.FetchNATSInfo(cfg.NatsServer, 10*time.Second, cfg.AuthToken)
+			if err != nil {
+				wrapped := fmt.Errorf("falha ao conectar no NATS %s: %w", cfg.NatsServer, err)
+				s.logf("[debug-test] " + wrapped.Error())
+				return "", wrapped
+			}
+			results = append(results, "=== Servidor NATS ===\n"+out)
+			s.logf("[debug-test] teste NATS concluido com sucesso")
 		}
-		results = append(results, "=== Servidor NATS ===\n"+out)
-		s.logf("[debug-test] teste NATS concluido com sucesso")
+
+		if cfg.NatsWsServer != "" {
+			s.logf(fmt.Sprintf("[debug-test] testando NATS WS: %s", cfg.NatsWsServer))
+			out, err := agentconn.FetchNATSInfo(cfg.NatsWsServer, 10*time.Second, cfg.AuthToken)
+			if err != nil {
+				wrapped := fmt.Errorf("falha ao conectar no NATS WS %s: %w", cfg.NatsWsServer, err)
+				s.logf("[debug-test] " + wrapped.Error())
+				return "", wrapped
+			}
+			results = append(results, "=== Servidor NATS WS ===\n"+out)
+			s.logf("[debug-test] teste NATS WS concluido com sucesso")
+		}
 	}
 
 	if len(results) == 0 {

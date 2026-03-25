@@ -89,6 +89,22 @@ func (s *p2pChunkScheduler) waitBandwidth(ctx context.Context, n int) {
 	}
 }
 
+// throttledReader aplica rate limiting durante a leitura de dados, garantindo
+// que a banda de rede seja limitada em tempo real (não após o download).
+type throttledReader struct {
+	r     io.Reader
+	ctx   context.Context
+	sched *p2pChunkScheduler
+}
+
+func (t *throttledReader) Read(p []byte) (int, error) {
+	n, err := t.r.Read(p)
+	if n > 0 {
+		t.sched.waitBandwidth(t.ctx, n)
+	}
+	return n, err
+}
+
 // P2PChunkManifest describes how an artifact is divided for swarm download.
 type P2PChunkManifest struct {
 	ArtifactID   string     `json:"artifactId"`
@@ -192,7 +208,16 @@ func downloadChunk(ctx context.Context, baseURL string, chunk P2PChunk, destFile
 
 	// Limit read to expected chunk size to prevent oversized responses.
 	reader := io.LimitReader(resp.Body, chunk.Size+1)
-	data, err := io.ReadAll(reader)
+
+	// Aplicar rate limiting durante a leitura, não após ela.
+	// O throttledReader insere espera proporcional ao volume lido em tempo real,
+	// limitando efetivamente a banda de rede consumida.
+	var src io.Reader = reader
+	if sched != nil {
+		src = &throttledReader{r: reader, ctx: ctx, sched: sched}
+	}
+
+	data, err := io.ReadAll(src)
 	if err != nil {
 		return err
 	}
@@ -201,11 +226,6 @@ func downloadChunk(ctx context.Context, baseURL string, chunk P2PChunk, destFile
 	got := sha256.Sum256(data)
 	if !strings.EqualFold(hex.EncodeToString(got[:]), chunk.SHA256) {
 		return fmt.Errorf("chunk %d: checksum divergente", chunk.Index)
-	}
-
-	// Throttle bandwidth: wait for rate-limiter tokens proportional to chunk size.
-	if sched != nil {
-		sched.waitBandwidth(ctx, len(data))
 	}
 
 	return os.WriteFile(destFile, data, 0o644)

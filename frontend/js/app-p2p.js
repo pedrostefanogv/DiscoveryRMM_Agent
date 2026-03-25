@@ -1,7 +1,48 @@
 "use strict";
 
 var p2pRefreshTimerId = null;
+// Intervalo base do polling e backoff em caso de erro consecutivo.
+var p2pPollBaseMs = 5000;
+var p2pPollCurrentMs = 5000;
+var p2pPollMaxMs = 60000;
+var p2pPollErrorCount = 0;
 var p2pPeerArtifactIndex = [];
+
+// startP2PPoller inicia o polling adaptativo com backoff em caso de falha.
+function startP2PPoller() {
+  if (p2pRefreshTimerId) return;
+  p2pScheduleNextPoll();
+}
+
+function stopP2PPoller() {
+  if (p2pRefreshTimerId) {
+    clearTimeout(p2pRefreshTimerId);
+    p2pRefreshTimerId = null;
+  }
+}
+
+function p2pScheduleNextPoll() {
+  p2pRefreshTimerId = setTimeout(function () {
+    p2pRefreshTimerId = null;
+    var p2pView = document.getElementById('p2pView');
+    if (!document.hidden && p2pView && !p2pView.classList.contains('hidden')) {
+      loadP2PView().then(function () {
+        // Sucesso: resetar backoff
+        p2pPollErrorCount = 0;
+        p2pPollCurrentMs = p2pPollBaseMs;
+        p2pScheduleNextPoll();
+      }).catch(function () {
+        // Falha: backoff exponencial com cap em p2pPollMaxMs
+        p2pPollErrorCount++;
+        p2pPollCurrentMs = Math.min(p2pPollCurrentMs * 2, p2pPollMaxMs);
+        p2pScheduleNextPoll();
+      });
+    } else {
+      // Aba oculta — reagendar sem fazer requisição
+      p2pScheduleNextPoll();
+    }
+  }, p2pPollCurrentMs);
+}
 
 function p2pApi() {
   return appApi();
@@ -18,12 +59,8 @@ function p2pSetStatus(message, type) {
   statusLine.style.color = type === 'error' ? '#9a031e' : (type === 'ok' ? '#0b6e4f' : '');
 }
 
-function p2pFormatDate(raw) {
-  if (!raw) return '-';
-  var d = new Date(raw);
-  if (isNaN(d.getTime())) return raw;
-  return d.toLocaleString('pt-BR');
-}
+// p2pFormatDate mantida como alias para compatibilidade; use formatDate diretamente.
+function p2pFormatDate(raw) { return formatDate(raw, '-'); }
 
 function p2pEscapeHtml(text) {
   return String(text || '')
@@ -227,30 +264,28 @@ async function loadP2PView() {
   var auditPeer = p2pEl('auditPeerFilter');
   var auditStatus = p2pEl('auditStatusFilter');
 
-  try {
-    var results = await Promise.all([
-      p2pApi().GetP2PDebugStatus(),
-      p2pApi().GetP2PPeers(),
-      p2pApi().GetP2PConfig(),
-      p2pApi().ListP2PArtifacts(),
-      p2pApi().GetP2PPeerArtifactIndex().catch(function () { return []; }),
-      p2pApi().ListP2PAuditEventsFiltered(
-        auditAction ? auditAction.value : 'all',
-        auditPeer ? auditPeer.value : 'all',
-        auditStatus ? auditStatus.value : 'all'
-      ).catch(function () { return p2pApi().ListP2PAuditEvents(); })
-    ]);
+  var results = await Promise.all([
+    p2pApi().GetP2PDebugStatus(),
+    p2pApi().GetP2PPeers(),
+    p2pApi().GetP2PConfig(),
+    p2pApi().ListP2PArtifacts(),
+    p2pApi().GetP2PPeerArtifactIndex().catch(function () { return []; }),
+    p2pApi().ListP2PAuditEventsFiltered(
+      auditAction ? auditAction.value : 'all',
+      auditPeer ? auditPeer.value : 'all',
+      auditStatus ? auditStatus.value : 'all'
+    ).catch(function () { return p2pApi().ListP2PAuditEvents(); })
+  ]);
 
-    p2pRenderStatus(results[0] || {});
-    p2pRenderPeers(results[1] || []);
-    p2pFillConfig(results[2] || {});
-    p2pRenderArtifacts(results[3] || []);
-    p2pPeerArtifactIndex = results[4] || [];
-    p2pRenderRemoteArtifactsForSelectedPeer();
-    p2pRenderAudit(results[5] || []);
-  } catch (err) {
-    p2pSetStatus('Falha ao atualizar: ' + (err && err.message ? err.message : String(err)), 'error');
-  }
+  p2pRenderStatus(results[0] || {});
+  p2pRenderPeers(results[1] || []);
+  p2pFillConfig(results[2] || {});
+  p2pRenderArtifacts(results[3] || []);
+  p2pPeerArtifactIndex = results[4] || [];
+  p2pRenderRemoteArtifactsForSelectedPeer();
+  p2pRenderAudit(results[5] || []);
+  // Limpar mensagem de erro anterior em caso de sucesso
+  p2pSetStatus('', '');
 }
 
 function initP2PPage() {
@@ -348,11 +383,6 @@ function initP2PPage() {
   });
 
   if (!p2pRefreshTimerId) {
-    p2pRefreshTimerId = setInterval(function () {
-      var p2pView = document.getElementById('p2pView');
-      if (!document.hidden && p2pView && !p2pView.classList.contains('hidden')) {
-        loadP2PView();
-      }
-    }, 5000);
+    startP2PPoller();
   }
 }

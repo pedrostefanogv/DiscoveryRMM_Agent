@@ -2,10 +2,50 @@ package app
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"discovery/internal/models"
 )
+
+// ─── Helpers de guard de serviço ────────────────────────────────────────────
+// Centralizam a verificação de nil para cada serviço, eliminando boilerplate
+// repetido nas bridges.
+
+func (a *App) requireInventorySvc() error {
+	if a == nil || a.inventorySvc == nil {
+		return fmt.Errorf("inventory service indisponivel")
+	}
+	return nil
+}
+
+func (a *App) requireSupportSvc() error {
+	if a == nil || a.supportSvc == nil {
+		return fmt.Errorf("support service indisponivel")
+	}
+	return nil
+}
+
+func (a *App) requireDebugSvc() error {
+	if a == nil || a.debugSvc == nil {
+		return fmt.Errorf("debug service indisponivel")
+	}
+	return nil
+}
+
+func (a *App) requireUpdatesSvc() error {
+	if a == nil || a.updatesSvc == nil {
+		return fmt.Errorf("updates service indisponivel")
+	}
+	return nil
+}
+
+func (a *App) requireExporter() error {
+	if a == nil || a.exporter == nil {
+		return fmt.Errorf("export service indisponivel")
+	}
+	return nil
+}
 
 // -----------------------------------------------------------------------
 // AppBridge implementation (used by MCP tool registry)

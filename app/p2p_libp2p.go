@@ -261,11 +261,23 @@ func (m *p2pMultiProvider) Start(
 	onPeer func(p2pDiscoveredPeer),
 	onTrace func(string),
 ) error {
+	started := make([]p2pDiscoveryProvider, 0, len(m.providers))
+	cancelCtx, cancel := context.WithCancel(ctx)
 	for _, p := range m.providers {
-		if err := p.Start(ctx, self, onPeer, onTrace); err != nil {
+		if err := p.Start(cancelCtx, self, onPeer, onTrace); err != nil {
+			// Cancelar o contexto dos providers já iniciados para liberar
+			// goroutines e sockets antes de retornar o erro.
+			cancel()
+			_ = started // já serão encerrados via cancelCtx
 			return fmt.Errorf("provider %s falhou: %w", p.Name(), err)
 		}
+		started = append(started, p)
 	}
+	// Todos iniciados com sucesso: propagar cancelamento do parent.
+	go func() {
+		<-ctx.Done()
+		cancel()
+	}()
 	return nil
 }
 

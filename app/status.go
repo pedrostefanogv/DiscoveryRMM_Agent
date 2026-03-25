@@ -45,6 +45,19 @@ func (a *App) GetStatusOverview() StatusOverview {
 		out.ConnectionType = "NATS"
 	}
 
+	if transport := strings.TrimSpace(agent.Transport); transport != "" {
+		switch strings.ToLower(transport) {
+		case "nats":
+			out.ConnectionType = "NATS"
+		case "nats-wss", "nats-ws":
+			out.ConnectionType = "NATS WS"
+		case "signalr":
+			out.ConnectionType = "SignalR"
+		default:
+			out.ConnectionType = transport
+		}
+	}
+
 	if host, err := os.Hostname(); err == nil {
 		host = strings.TrimSpace(host)
 		if host != "" {

@@ -400,6 +400,11 @@ function setActiveTab(tab) {
     stopStatusPoll();
   }
 
+  // Parar polling P2P ao sair da aba P2P
+  if (tab !== 'p2p' && typeof stopP2PPoller === 'function') {
+    stopP2PPoller();
+  }
+
   // Stop agent status poll when leaving debug tab
   if (tab !== 'debug') {
     stopAgentStatusPoll();

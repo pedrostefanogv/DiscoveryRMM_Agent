@@ -23,12 +23,8 @@ function statusSafe(value, fallback) {
   return String(value);
 }
 
-function formatStatusDate(value) {
-  if (!value) return '-';
-  var d = new Date(value);
-  if (isNaN(d.getTime())) return String(value);
-  return d.toLocaleString('pt-BR');
-}
+// formatStatusDate mantida como alias para compatibilidade; use formatDate diretamente.
+function formatStatusDate(value) { return formatDate(value, '-'); }
 
 function renderStatusOverview(data) {
   var connected = !!(data && data.connected);

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -43,6 +44,13 @@ const (
 
 var errP2PDuplicateReplication = errors.New("artifact ja distribuido recentemente para este peer")
 
+// artifactSHA256CacheEntry guarda o SHA256 de um arquivo local com a mtime
+// usada para calcular, permitindo invalidação barata.
+type artifactSHA256CacheEntry struct {
+	sum   string
+	mtime time.Time
+}
+
 type p2pCoordinator struct {
 	app *App
 
@@ -62,6 +70,11 @@ type p2pCoordinator struct {
 	discoveryProvider p2pDiscoveryProvider
 	transferServer    *p2pTransferServer
 	replicationQueue  chan p2pReplicationJob
+
+	// sha256Cache evita recalcular SHA256 de artifacts locais a cada gossip tick.
+	// A entrada é invalidada quando a mtime do arquivo muda.
+	sha256CacheMu sync.Mutex
+	sha256Cache   map[string]artifactSHA256CacheEntry
 }
 
 type p2pPeerState struct {
@@ -92,7 +105,23 @@ func newP2PCoordinator(app *App) *p2pCoordinator {
 		replicationDedup: make(map[string]time.Time),
 		transferServer:   newP2PTransferServer(app),
 		replicationQueue: make(chan p2pReplicationJob, p2pReplicationQueueSize),
+		sha256Cache:      make(map[string]artifactSHA256CacheEntry),
 	}
+}
+
+// cachedFileSHA256 retorna o SHA256 do arquivo, usando cache invalidado por mtime.
+func (c *p2pCoordinator) cachedFileSHA256(path string, mtime time.Time) (string, error) {
+	c.sha256CacheMu.Lock()
+	defer c.sha256CacheMu.Unlock()
+	if entry, ok := c.sha256Cache[path]; ok && entry.mtime.Equal(mtime) {
+		return entry.sum, nil
+	}
+	sum, err := computeFileSHA256(path)
+	if err != nil {
+		return "", err
+	}
+	c.sha256Cache[path] = artifactSHA256CacheEntry{sum: sum, mtime: mtime}
+	return sum, nil
 }
 
 func defaultP2PConfig() P2PConfig {
@@ -627,7 +656,7 @@ func (c *p2pCoordinator) DownloadArtifactFromPeer(ctx context.Context, artifactN
 		"artifactName": artifactName,
 		"requesterId":  requesterID,
 	})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(string(payload)))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
 	if err != nil {
 		return P2PArtifactView{}, err
 	}
@@ -724,7 +753,7 @@ func (c *p2pCoordinator) downloadArtifactSwarm(ctx context.Context, artifactName
 				"artifactName": artifactName,
 				"requesterId":  requesterID,
 			})
-			req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(string(payload)))
+			req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
 			if err != nil {
 				continue
 			}
@@ -862,7 +891,7 @@ func (c *p2pCoordinator) ListArtifacts() ([]P2PArtifactView, error) {
 		if err != nil {
 			continue
 		}
-		checksum, err := computeFileSHA256(path)
+		checksum, err := c.cachedFileSHA256(path, info.ModTime())
 		if err != nil {
 			continue
 		}
@@ -982,7 +1011,7 @@ func (c *p2pCoordinator) ReplicateArtifactToPeer(artifactName, targetPeerID stri
 	return "", fmt.Errorf("modo push desabilitado: use transferencia pull sob demanda")
 }
 
-func (c *p2pCoordinator) replicateArtifactToPeerNow(artifactName, targetPeerID string) error {
+func (c *p2pCoordinator) replicateArtifactToPeerNow(ctx context.Context, artifactName, targetPeerID string) error {
 	peer, err := c.findPeerByAgentID(targetPeerID)
 	if err != nil {
 		c.recordReplicationResult(false)
@@ -1028,7 +1057,7 @@ func (c *p2pCoordinator) replicateArtifactToPeerNow(artifactName, targetPeerID s
 		c.recordReplicationResult(false)
 		return err
 	}
-	req, err := http.NewRequest(http.MethodPost, endpoint, strings.NewReader(string(body)))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		c.recordReplicationResult(false)
 		return err
@@ -1283,7 +1312,7 @@ func (c *p2pCoordinator) replicationWorker(ctx context.Context) {
 			c.metrics.ActiveReplications++
 			c.mu.Unlock()
 
-			err := c.processReplicationJob(job)
+			err := c.processReplicationJob(ctx, job)
 			if job.Result != nil {
 				job.Result <- err
 			}
@@ -1291,7 +1320,7 @@ func (c *p2pCoordinator) replicationWorker(ctx context.Context) {
 	}
 }
 
-func (c *p2pCoordinator) processReplicationJob(job p2pReplicationJob) error {
+func (c *p2pCoordinator) processReplicationJob(ctx context.Context, job p2pReplicationJob) error {
 	peerKey := strings.ToLower(strings.TrimSpace(job.TargetPeerID))
 	now := time.Now().UTC()
 
@@ -1309,7 +1338,7 @@ func (c *p2pCoordinator) processReplicationJob(job p2pReplicationJob) error {
 	c.peerLastAttempt[peerKey] = now
 	c.mu.Unlock()
 
-	err := c.replicateArtifactToPeerNow(job.ArtifactName, job.TargetPeerID)
+	err := c.replicateArtifactToPeerNow(ctx, job.ArtifactName, job.TargetPeerID)
 	if err != nil {
 		c.appendAudit("replicate", job.ArtifactName, job.TargetPeerID, job.Source, false, err.Error())
 	} else {

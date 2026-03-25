@@ -10,6 +10,23 @@ function debounce(fn, delayMs) {
   };
 }
 
+/**
+ * formatDate — função canônica de formatação de data/hora para o locale pt-BR.
+ * Aceita string ISO 8601, Date, timestamp Unix (number) ou string legível.
+ * Retorna fallback quando o valor é inválido ou ausente.
+ *
+ * @param {string|number|Date} value - valor de data a formatar
+ * @param {string} [fallback='-'] - valor retornado para datas inválidas/ausentes
+ * @returns {string}
+ */
+function formatDate(value, fallback) {
+  if (fallback === undefined) fallback = '-';
+  if (!value && value !== 0) return fallback;
+  var d = value instanceof Date ? value : new Date(value);
+  if (isNaN(d.getTime())) return String(value);
+  return d.toLocaleString('pt-BR');
+}
+
 function getPaginationState(items, currentPage, pageSize) {
   var totalPages = Math.max(1, Math.ceil(items.length / pageSize));
   var validPage = Math.max(1, Math.min(currentPage, totalPages));

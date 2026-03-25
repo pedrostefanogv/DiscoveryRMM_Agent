@@ -87,6 +87,8 @@ func loadInstallerConfigFromCandidates(paths []string, normalizeP2P func(p2pmeta
 		cfg.ApiServer = strings.TrimSpace(cfg.ApiServer)
 		cfg.AuthToken = strings.TrimSpace(cfg.AuthToken)
 		cfg.AgentID = strings.TrimSpace(cfg.AgentID)
+		cfg.NatsServer = strings.TrimSpace(cfg.NatsServer)
+		cfg.NatsWsServer = strings.TrimSpace(cfg.NatsWsServer)
 		if normalizeP2P != nil {
 			cfg.P2P = normalizeP2P(cfg.P2P)
 		}
@@ -112,6 +114,12 @@ func mergeInstallerOverride(base, override InstallerConfig) InstallerConfig {
 	}
 	if override.DiscoveryEnabled != nil {
 		base.DiscoveryEnabled = override.DiscoveryEnabled
+	}
+	if strings.TrimSpace(override.NatsServer) != "" {
+		base.NatsServer = strings.TrimSpace(override.NatsServer)
+	}
+	if strings.TrimSpace(override.NatsWsServer) != "" {
+		base.NatsWsServer = strings.TrimSpace(override.NatsWsServer)
 	}
 	return base
 }

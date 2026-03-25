@@ -24,6 +24,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/libp2p/go-libp2p/core/host"
@@ -491,7 +492,10 @@ func verifySHA256(data []byte, expected string) bool {
 // libp2pPeerRegistry mantém mapeamento agentID → peer.ID libp2p para lookup
 // durante operações de transferência. Atualizado pelo notifee quando um peer é
 // conectado.
+// mu protege peers contra acesso concorrente de goroutines de stream handlers
+// (inbound/outbound) e leituras do coordinator.
 type libp2pPeerRegistry struct {
+	mu    sync.RWMutex
 	peers map[string]peer.ID
 }
 
@@ -499,19 +503,25 @@ func newLibp2pPeerRegistry() *libp2pPeerRegistry {
 	return &libp2pPeerRegistry{peers: make(map[string]peer.ID)}
 }
 
-// Register associa um agentID a um peer.ID libp2p.
+// Register associa um agentID a um peer.ID libp2p. Seguro para uso concorrente.
 func (r *libp2pPeerRegistry) Register(agentID string, id peer.ID) {
 	if r == nil {
 		return
 	}
-	r.peers[strings.ToLower(strings.TrimSpace(agentID))] = id
+	key := strings.ToLower(strings.TrimSpace(agentID))
+	r.mu.Lock()
+	r.peers[key] = id
+	r.mu.Unlock()
 }
 
-// Lookup retorna o peer.ID para um agentID, se registrado.
+// Lookup retorna o peer.ID para um agentID, se registrado. Seguro para uso concorrente.
 func (r *libp2pPeerRegistry) Lookup(agentID string) (peer.ID, bool) {
 	if r == nil {
 		return "", false
 	}
-	id, ok := r.peers[strings.ToLower(strings.TrimSpace(agentID))]
+	key := strings.ToLower(strings.TrimSpace(agentID))
+	r.mu.RLock()
+	id, ok := r.peers[key]
+	r.mu.RUnlock()
 	return id, ok
 }

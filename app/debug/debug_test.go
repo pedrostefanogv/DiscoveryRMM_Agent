@@ -78,7 +78,7 @@ func TestGetRealtimeStatus_SetsAgentAuthHeadersAndAgentID(t *testing.T) {
 	}
 
 	svc := NewService(Options{})
-	svc.ApplyRuntimeConnectionConfig("http", u.Host, token, agentID)
+	svc.ApplyRuntimeConnectionConfig("http", u.Host, token, agentID, "", "")
 
 	status, err := svc.GetRealtimeStatus()
 	if err != nil {

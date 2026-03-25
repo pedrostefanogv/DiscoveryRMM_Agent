@@ -12,10 +12,8 @@ var priorityClasses = { 1: 'p-baixa', 2: 'p-media', 3: 'p-alta', 4: 'p-critica' 
 function ticketPriorityLabel(p) { return priorityLabels[p] || 'N/A'; }
 function ticketPriorityClass(p) { return priorityClasses[p] || 'p-media'; }
 
-function formatDateTime(v) {
-  if (!v) return '';
-  return String(v).replace('T', ' ').substring(0, 16);
-}
+// formatDateTime mantida para compatibilidade com chamadas existentes.
+function formatDateTime(v) { return formatDate(v, ''); }
 
 function renderStars(rating) {
   if (rating === null || rating === undefined || rating === '') return 'Sem avaliacao';

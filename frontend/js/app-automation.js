@@ -6,11 +6,8 @@ function setAutomationStatus(message, type) {
   automationStatusEl.className = 'debug-status' + (type ? ' ' + type : '');
 }
 
-function formatAutomationDate(value) {
-  if (!value) return 'N/A';
-  if (typeof formatDateTime === 'function') return formatDateTime(value);
-  return String(value).replace('T', ' ').substring(0, 16);
-}
+// formatAutomationDate mantida como alias para compatibilidade; use formatDate diretamente.
+function formatAutomationDate(value) { return formatDate(value, 'N/A'); }
 
 function renderAutomationSummary(state) {
   if (!automationSummaryEl) return;

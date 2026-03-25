@@ -1,15 +1,11 @@
 package app
 
-import (
-	"fmt"
-
-	"discovery/internal/models"
-)
+import "discovery/internal/models"
 
 // GetPendingUpdates runs `winget upgrade` and parses the output into structured items.
 func (a *App) GetPendingUpdates() ([]models.UpgradeItem, error) {
-	if a == nil || a.updatesSvc == nil {
-		return nil, fmt.Errorf("updates service indisponivel")
+	if err := a.requireUpdatesSvc(); err != nil {
+		return nil, err
 	}
 	return a.updatesSvc.GetPendingUpdates()
 }
@@ -17,8 +13,8 @@ func (a *App) GetPendingUpdates() ([]models.UpgradeItem, error) {
 // GetPackageActions returns a contextual action map keyed by package id.
 // Values: install, uninstall, upgrade.
 func (a *App) GetPackageActions() (map[string]string, error) {
-	if a == nil || a.updatesSvc == nil {
-		return map[string]string{}, fmt.Errorf("updates service indisponivel")
+	if err := a.requireUpdatesSvc(); err != nil {
+		return map[string]string{}, err
 	}
 	return a.updatesSvc.GetPackageActions()
 }
@@ -33,16 +29,16 @@ func (a *App) SetExportRedaction(redact bool) {
 
 // ExportInventoryMarkdown exports inventory data in Markdown format.
 func (a *App) ExportInventoryMarkdown() (string, error) {
-	if a == nil || a.exporter == nil {
-		return "", fmt.Errorf("export service indisponivel")
+	if err := a.requireExporter(); err != nil {
+		return "", err
 	}
 	return a.exporter.ExportInventoryMarkdown()
 }
 
 // ExportInventoryPDF exports inventory data in PDF format.
 func (a *App) ExportInventoryPDF() (string, error) {
-	if a == nil || a.exporter == nil {
-		return "", fmt.Errorf("export service indisponivel")
+	if err := a.requireExporter(); err != nil {
+		return "", err
 	}
 	return a.exporter.ExportInventoryPDF()
 }

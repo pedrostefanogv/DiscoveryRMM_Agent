@@ -35,7 +35,7 @@ func TestLoadEffectiveAppStorePolicyMergesWingetAndChocolatey(t *testing.T) {
 
 	app := &App{ctx: context.Background()}
 	app.debugSvc = debug.NewService(debug.Options{})
-	app.debugSvc.ApplyRuntimeConnectionConfig("http", strings.TrimPrefix(server.URL, "http://"), token, "")
+	app.debugSvc.ApplyRuntimeConnectionConfig("http", strings.TrimPrefix(server.URL, "http://"), token, "", "", "")
 
 	policy, err := app.loadEffectiveAppStorePolicy(context.Background(), true)
 	if err != nil {

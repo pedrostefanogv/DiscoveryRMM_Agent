@@ -28,12 +28,12 @@ const (
 	handshakeTimeout = 10 * time.Second
 	maxOutputBytes   = 1 << 20
 
-	natsConnectTimeout = 10 * time.Second
-	natsCommandTpl     = "agent.%s.command"
-	natsHeartbeatTpl   = "agent.%s.heartbeat"
-	natsResultTpl      = "agent.%s.result"
-	natsSyncPingTpl    = "agent.%s.sync.ping"
-	natsDashboardTopic = "dashboard.events"
+	connectAttemptTimeout = 5 * time.Second
+	natsCommandTpl        = "agent.%s.command"
+	natsHeartbeatTpl      = "agent.%s.heartbeat"
+	natsResultTpl         = "agent.%s.result"
+	natsSyncPingTpl       = "agent.%s.sync.ping"
+	natsDashboardTopic    = "dashboard.events"
 )
 
 var guidPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
@@ -79,10 +79,12 @@ type SyncPing struct {
 
 // Config is the backend communication configuration sourced from Debug settings.
 type Config struct {
-	Scheme    string
-	Server    string
-	AuthToken string
-	AgentID   string
+	ApiScheme    string
+	ApiServer    string
+	NatsServer   string
+	NatsWsServer string
+	AuthToken    string
+	AgentID      string
 }
 
 // Options defines dependencies injected by the app layer.
@@ -98,6 +100,7 @@ type Status struct {
 	AgentID   string `json:"agentId"`
 	Server    string `json:"server"`
 	LastEvent string `json:"lastEvent"`
+	Transport string `json:"transport,omitempty"`
 }
 
 // Runtime manages the long-lived agent connection and command processing loop.
@@ -126,15 +129,19 @@ func (r *Runtime) setStatus(connected bool, event string) {
 	defer r.statMu.Unlock()
 	r.statSnap.Connected = connected
 	r.statSnap.LastEvent = event
+	if !connected {
+		r.statSnap.Transport = ""
+	}
 }
 
-func (r *Runtime) setStatusConnected(agentID, server string) {
+func (r *Runtime) setStatusConnected(agentID, server, transport string) {
 	r.statMu.Lock()
 	defer r.statMu.Unlock()
 	r.statSnap.Connected = true
 	r.statSnap.AgentID = agentID
 	r.statSnap.Server = server
 	r.statSnap.LastEvent = "conectado"
+	r.statSnap.Transport = transport
 }
 
 // Reload forces the active connection to close, causing a reconnect with updated config.
@@ -155,41 +162,29 @@ func (r *Runtime) Run(ctx context.Context) {
 		}
 
 		cfg := r.opts.LoadConfig()
-		cfg.Scheme = strings.TrimSpace(strings.ToLower(cfg.Scheme))
-		cfg.Server = strings.TrimSpace(cfg.Server)
+		cfg.ApiScheme = strings.TrimSpace(strings.ToLower(cfg.ApiScheme))
+		cfg.ApiServer = strings.TrimSpace(cfg.ApiServer)
+		cfg.NatsServer = strings.TrimSpace(cfg.NatsServer)
+		cfg.NatsWsServer = strings.TrimSpace(cfg.NatsWsServer)
+		cfg.AuthToken = strings.TrimSpace(cfg.AuthToken)
+		cfg.AgentID = strings.TrimSpace(cfg.AgentID)
 
-		if cfg.Scheme != "http" && cfg.Scheme != "https" && cfg.Scheme != "nats" {
-			r.logf("configuracao de agente ignorada: scheme invalido")
+		if cfg.ApiServer != "" && cfg.ApiScheme != "http" && cfg.ApiScheme != "https" {
+			r.logf("configuracao de agente ignorada: apiScheme invalido")
+			cfg.ApiServer = ""
+		}
+
+		if cfg.ApiServer == "" && cfg.NatsServer == "" && cfg.NatsWsServer == "" {
+			r.logf("configuracao de agente ausente: nenhum servidor configurado")
 			r.waitOrStop(ctx, reconnectBase)
 			continue
 		}
-		if cfg.Server == "" {
-			r.logf("configuracao de agente ausente: servidor vazio")
-			r.waitOrStop(ctx, reconnectBase)
-			continue
-		}
 
-		if cfg.Scheme == "nats" {
-			if strings.TrimSpace(cfg.AgentID) == "" {
-				r.setStatus(false, "credenciais ausentes: preencha agentId no Debug")
-				r.logf("configuracao de agente ausente: agentId nao informado")
-				r.waitOrStop(ctx, reconnectBase)
-				continue
-			}
-		} else {
-			if strings.TrimSpace(cfg.AuthToken) == "" || strings.TrimSpace(cfg.AgentID) == "" {
-				r.setStatus(false, "credenciais ausentes: preencha token e agentId no Debug")
-				r.logf("configuracao de agente ausente: token/agentId nao informados")
-				r.waitOrStop(ctx, reconnectBase)
-				continue
-			}
-		}
-
-		r.logf("tentando conexao (%s) no servidor %s com agentId=%s", cfg.Scheme, cfg.Server, cfg.AgentID)
+		r.logf("tentando conexao (fallback) com agentId=%s", cfg.AgentID)
 
 		err := r.runSession(ctx, cfg)
 		if err != nil && ctx.Err() == nil {
-			r.logf("sessao encerrada (%s): %v", cfg.Scheme, err)
+			r.logf("sessao encerrada: %v", err)
 			r.setStatus(false, "sessao encerrada: "+err.Error())
 		} else if ctx.Err() != nil {
 			r.setStatus(false, "contexto cancelado")
@@ -199,14 +194,64 @@ func (r *Runtime) Run(ctx context.Context) {
 }
 
 func (r *Runtime) runSession(ctx context.Context, cfg Config) error {
-	if cfg.Scheme == "nats" {
-		return r.runNATSSession(ctx, cfg)
+	var attempts []func() error
+	var labels []string
+
+	if cfg.NatsServer != "" {
+		labels = append(labels, "nats")
+		server := cfg.NatsServer
+		attempts = append(attempts, func() error {
+			if strings.TrimSpace(cfg.AgentID) == "" {
+				return fmt.Errorf("agentId ausente para NATS")
+			}
+			return r.runNATSSession(ctx, cfg, server, "nats", connectAttemptTimeout)
+		})
 	}
-	return r.runSignalRSession(ctx, cfg)
+
+	if cfg.NatsWsServer != "" {
+		labels = append(labels, "nats-wss")
+		server := cfg.NatsWsServer
+		attempts = append(attempts, func() error {
+			if strings.TrimSpace(cfg.AgentID) == "" {
+				return fmt.Errorf("agentId ausente para NATS WS")
+			}
+			return r.runNATSSession(ctx, cfg, server, "nats-wss", connectAttemptTimeout)
+		})
+	}
+
+	if cfg.ApiServer != "" && (cfg.ApiScheme == "http" || cfg.ApiScheme == "https") {
+		labels = append(labels, "signalr")
+		attempts = append(attempts, func() error {
+			if strings.TrimSpace(cfg.AuthToken) == "" || strings.TrimSpace(cfg.AgentID) == "" {
+				return fmt.Errorf("token/agentId ausentes para SignalR")
+			}
+			return r.runSignalRSession(ctx, cfg, connectAttemptTimeout)
+		})
+	}
+
+	if len(attempts) == 0 {
+		return fmt.Errorf("nenhum transporte configurado")
+	}
+
+	var lastErr error
+	for i, attempt := range attempts {
+		err := attempt()
+		if err == nil {
+			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		lastErr = err
+		r.logf("fallback: %s falhou: %v", labels[i], err)
+	}
+	return lastErr
 }
 
-func (r *Runtime) runSignalRSession(ctx context.Context, cfg Config) error {
-	conn, err := r.connectSignalR(ctx, cfg)
+func (r *Runtime) runSignalRSession(ctx context.Context, cfg Config, connectTimeout time.Duration) error {
+	connectCtx, cancel := context.WithTimeout(ctx, connectTimeout)
+	conn, err := r.connectSignalR(connectCtx, cfg, connectTimeout)
+	cancel()
 	if err != nil {
 		return err
 	}
@@ -226,7 +271,7 @@ func (r *Runtime) runSignalRSession(ctx context.Context, cfg Config) error {
 	if err := r.sendHandshake(conn); err != nil {
 		return err
 	}
-	if err := r.waitHandshakeAck(conn); err != nil {
+	if err := r.waitHandshakeAck(conn, connectTimeout); err != nil {
 		return err
 	}
 
@@ -235,7 +280,7 @@ func (r *Runtime) runSignalRSession(ctx context.Context, cfg Config) error {
 		r.setStatus(false, "RegisterAgent falhou: "+err.Error())
 		return fmt.Errorf("RegisterAgent falhou: %w", err)
 	}
-	r.setStatusConnected(cfg.AgentID, cfg.Server)
+	r.setStatusConnected(cfg.AgentID, cfg.ApiServer, "signalr")
 	r.logf("RegisterAgent enviado (agentId=%s, ip=%s)", cfg.AgentID, ipAddr)
 
 	// Goroutine dedicada de leitura: bloqueia em ReadMessage independentemente
@@ -285,19 +330,19 @@ func (r *Runtime) runSignalRSession(ctx context.Context, cfg Config) error {
 	}
 }
 
-func (r *Runtime) runNATSSession(ctx context.Context, cfg Config) error {
+func (r *Runtime) runNATSSession(ctx context.Context, cfg Config, server, transportLabel string, connectTimeout time.Duration) error {
 	if !guidPattern.MatchString(strings.TrimSpace(cfg.AgentID)) {
 		return fmt.Errorf("agentId invalido para NATS: esperado GUID")
 	}
 
-	natsURL, err := normalizeNATSURL(cfg.Server)
+	natsURL, err := normalizeNATSURL(server)
 	if err != nil {
 		return err
 	}
 
 	opts := []nats.Option{
 		nats.Name("discovery-agent-" + cfg.AgentID),
-		nats.Timeout(natsConnectTimeout),
+		nats.Timeout(connectTimeout),
 		nats.ReconnectWait(reconnectBase),
 		nats.MaxReconnects(-1),
 	}
@@ -324,13 +369,13 @@ func (r *Runtime) runNATSSession(ctx context.Context, cfg Config) error {
 		EventType: "agent_connected",
 		Data: map[string]any{
 			"agentId":   cfg.AgentID,
-			"transport": "nats",
+			"transport": transportLabel,
 			"server":    natsURL,
 		},
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 	})
 
-	r.setStatusConnected(cfg.AgentID, natsURL)
+	r.setStatusConnected(cfg.AgentID, natsURL, transportLabel)
 	r.logf("agente conectado ao NATS (subject=%s, syncSubject=%s)", cmdSubject, syncPingSubject)
 
 	_, err = nc.Subscribe(cmdSubject, func(msg *nats.Msg) {
@@ -401,7 +446,7 @@ func (r *Runtime) runNATSSession(ctx context.Context, cfg Config) error {
 				EventType: "agent_disconnected",
 				Data: map[string]any{
 					"agentId":   cfg.AgentID,
-					"transport": "nats",
+					"transport": transportLabel,
 				},
 				Timestamp: time.Now().UTC().Format(time.RFC3339),
 			})
@@ -427,20 +472,26 @@ func normalizeNATSURL(server string) (string, error) {
 	if server == "" {
 		return "", fmt.Errorf("servidor NATS vazio")
 	}
-	if strings.HasPrefix(strings.ToLower(server), "nats://") {
+	if strings.Contains(server, "://") {
 		u, err := url.Parse(server)
 		if err != nil {
 			return "", fmt.Errorf("url NATS invalida: %w", err)
 		}
-		if strings.TrimSpace(u.Host) == "" {
-			return "", fmt.Errorf("url NATS invalida: host ausente")
+		scheme := strings.ToLower(strings.TrimSpace(u.Scheme))
+		switch scheme {
+		case "nats", "ws", "wss":
+			if strings.TrimSpace(u.Host) == "" {
+				return "", fmt.Errorf("url NATS invalida: host ausente")
+			}
+			return u.String(), nil
+		default:
+			return "", fmt.Errorf("url NATS invalida: scheme %s nao suportado", scheme)
 		}
-		return u.String(), nil
 	}
 	return "nats://" + server, nil
 }
 
-func FetchNATSInfo(server string, timeout time.Duration) (string, error) {
+func FetchNATSInfo(server string, timeout time.Duration, authToken string) (string, error) {
 	natsURL, err := normalizeNATSURL(server)
 	if err != nil {
 		return "", err
@@ -449,6 +500,20 @@ func FetchNATSInfo(server string, timeout time.Duration) (string, error) {
 	u, err := url.Parse(natsURL)
 	if err != nil {
 		return "", err
+	}
+	if u.Scheme == "ws" || u.Scheme == "wss" {
+		opts := []nats.Option{
+			nats.Timeout(timeout),
+		}
+		if strings.TrimSpace(authToken) != "" {
+			opts = append(opts, nats.Token(strings.TrimSpace(authToken)))
+		}
+		nc, err := nats.Connect(natsURL, opts...)
+		if err != nil {
+			return "", fmt.Errorf("falha ao conectar no NATS WS: %w", err)
+		}
+		defer nc.Close()
+		return fmt.Sprintf("conectado via %s", nc.ConnectedUrl()), nil
 	}
 	host := u.Host
 	if !strings.Contains(host, ":") {
@@ -484,9 +549,9 @@ func FetchNATSInfo(server string, timeout time.Duration) (string, error) {
 	return line, nil
 }
 
-func (r *Runtime) connectSignalR(ctx context.Context, cfg Config) (*websocket.Conn, error) {
+func (r *Runtime) connectSignalR(ctx context.Context, cfg Config, connectTimeout time.Duration) (*websocket.Conn, error) {
 	wsScheme := "ws"
-	if cfg.Scheme == "https" {
+	if cfg.ApiScheme == "https" {
 		wsScheme = "wss"
 	}
 
@@ -495,7 +560,7 @@ func (r *Runtime) connectSignalR(ctx context.Context, cfg Config) (*websocket.Co
 
 	wsURL := url.URL{
 		Scheme:   wsScheme,
-		Host:     cfg.Server,
+		Host:     cfg.ApiServer,
 		Path:     hubPath,
 		RawQuery: values.Encode(),
 	}
@@ -504,7 +569,10 @@ func (r *Runtime) connectSignalR(ctx context.Context, cfg Config) (*websocket.Co
 	header.Set("Authorization", "Bearer "+cfg.AuthToken)
 	header.Set("X-Agent-ID", cfg.AgentID)
 
-	dialer := websocket.Dialer{HandshakeTimeout: handshakeTimeout}
+	if connectTimeout <= 0 {
+		connectTimeout = handshakeTimeout
+	}
+	dialer := websocket.Dialer{HandshakeTimeout: connectTimeout}
 	conn, resp, err := dialer.DialContext(ctx, wsURL.String(), header)
 	if err != nil {
 		if resp != nil {
@@ -520,8 +588,11 @@ func (r *Runtime) sendHandshake(conn *websocket.Conn) error {
 	return conn.WriteMessage(websocket.TextMessage, []byte("{\"protocol\":\"json\",\"version\":1}\x1e"))
 }
 
-func (r *Runtime) waitHandshakeAck(conn *websocket.Conn) error {
-	if err := conn.SetReadDeadline(time.Now().Add(handshakeTimeout)); err != nil {
+func (r *Runtime) waitHandshakeAck(conn *websocket.Conn, timeout time.Duration) error {
+	if timeout <= 0 {
+		timeout = handshakeTimeout
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(timeout)); err != nil {
 		return err
 	}
 	defer func() {

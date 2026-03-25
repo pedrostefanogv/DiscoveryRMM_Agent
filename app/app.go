@@ -178,10 +178,12 @@ func NewApp(opts AppStartupOptions) *App {
 		LoadConfig: func() agentconn.Config {
 			cfg := a.GetDebugConfig()
 			return agentconn.Config{
-				Scheme:    cfg.Scheme,
-				Server:    cfg.Server,
-				AuthToken: cfg.AuthToken,
-				AgentID:   cfg.AgentID,
+				ApiScheme:    cfg.ApiScheme,
+				ApiServer:    cfg.ApiServer,
+				NatsServer:   cfg.NatsServer,
+				NatsWsServer: cfg.NatsWsServer,
+				AuthToken:    cfg.AuthToken,
+				AgentID:      cfg.AgentID,
 			}
 		},
 		Logf: func(format string, args ...any) {
