@@ -1,14 +1,12 @@
 package app
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"math"
-	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -128,6 +126,7 @@ func defaultP2PConfig() P2PConfig {
 	return P2PConfig{
 		Enabled:                  true,
 		DiscoveryMode:            p2pDiscoveryMDNS,
+		P2PMode:                  P2PModeLibp2pOnly,
 		TempTTLHours:             defaultP2PTempTTLHours,
 		SeedPercent:              defaultP2PSeedPercent,
 		MinSeeds:                 defaultP2PMinSeeds,
@@ -201,7 +200,7 @@ func normalizeP2PConfig(cfg P2PConfig) P2PConfig {
 	case P2PModeLegacy, P2PModeHybrid, P2PModeLibp2pOnly:
 		out.P2PMode = strings.TrimSpace(strings.ToLower(out.P2PMode))
 	default:
-		out.P2PMode = P2PModeLegacy
+		out.P2PMode = P2PModeLibp2pOnly
 	}
 
 	return out
@@ -634,67 +633,31 @@ func (c *p2pCoordinator) DownloadArtifactFromPeer(ctx context.Context, artifactN
 		requesterID = "peer-local"
 	}
 
+	_ = peer
 	// Caminho libp2p: solicita acesso e faz download via streams.
 	if h, registry := c.libp2pHostAndRegistry(); h != nil && registry != nil {
-		if peerID, ok := registry.Lookup(sourcePeerID); ok {
-			access, err := libp2pRequestAccess(ctx, h, peerID, artifactName, requesterID)
-			if err == nil {
-				path, size, err := libp2pDownloadArtifact(ctx, h, peerID, access, c.app.p2pTempDir())
-				if err == nil {
-					c.recordBytesDownloaded(size)
-					c.appendAudit("pull", artifactName, sourcePeerID, "libp2p", true, "artifact baixado via libp2p")
-					return c.buildArtifactView(artifactName, access.ArtifactID, path)
-				}
-				c.app.logs.append(fmt.Sprintf("[p2p] libp2p download falhou, tentando HTTP: %v", err))
-			}
+		peerID, ok := registry.Lookup(sourcePeerID)
+		if !ok {
+			return P2PArtifactView{}, fmt.Errorf("peer nao registrado no libp2p")
 		}
+		access, err := libp2pRequestAccess(ctx, h, peerID, artifactName, requesterID)
+		if err != nil {
+			return P2PArtifactView{}, err
+		}
+		path, size, err := libp2pDownloadArtifact(ctx, h, peerID, access, c.app.p2pTempDir())
+		if err != nil {
+			return P2PArtifactView{}, err
+		}
+		c.recordBytesDownloaded(size)
+		c.appendAudit("pull", artifactName, sourcePeerID, "libp2p", true, "artifact baixado via libp2p")
+		return c.buildArtifactView(artifactName, access.ArtifactID, path)
 	}
 
-	// Fallback HTTP.
-	endpoint := fmt.Sprintf("http://%s:%d/p2p/artifact/access", strings.TrimSpace(peer.Address), peer.Port)
-	payload, _ := json.Marshal(map[string]string{
-		"artifactName": artifactName,
-		"requesterId":  requesterID,
-	})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
-	if err != nil {
-		return P2PArtifactView{}, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
-	if err != nil {
-		return P2PArtifactView{}, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(resp.Body)
-		return P2PArtifactView{}, fmt.Errorf("falha ao obter acesso remoto HTTP %s: %s", resp.Status, strings.TrimSpace(string(body)))
-	}
-
-	var access P2PArtifactAccess
-	if err := json.NewDecoder(resp.Body).Decode(&access); err != nil {
-		return P2PArtifactView{}, err
-	}
-	c.mu.RLock()
-	transfer := c.transferServer
-	c.mu.RUnlock()
-	if transfer == nil {
-		return P2PArtifactView{}, fmt.Errorf("servidor de transferencia indisponivel")
-	}
-
-	path, size, err := transfer.downloadArtifact(access)
-	if err != nil {
-		return P2PArtifactView{}, err
-	}
-	c.recordBytesDownloaded(size)
-	c.appendAudit("pull", artifactName, sourcePeerID, "http-fallback", true, "artifact baixado via HTTP")
-	return c.buildArtifactView(artifactName, access.ArtifactID, path)
+	return P2PArtifactView{}, fmt.Errorf("libp2p indisponivel para download do artifact")
 }
 
 // downloadArtifactSwarm encontra todos os peers que possuem o artifact e faz
-// download chunked quando ≥2 peers estão disponíveis.
-// Usa streams libp2p quando o provider ativo suporta; caso contrário usa HTTP.
+// download chunked quando ≥2 peers estão disponíveis, usando libp2p streams.
 func (c *p2pCoordinator) downloadArtifactSwarm(ctx context.Context, artifactName string) (P2PArtifactView, error) {
 	artifactName = sanitizeArtifactName(artifactName)
 	if artifactName == "" {
@@ -714,7 +677,7 @@ func (c *p2pCoordinator) downloadArtifactSwarm(ctx context.Context, artifactName
 	h, registry := c.libp2pHostAndRegistry()
 	cfg := c.app.GetP2PConfig()
 
-	// Coletar tokens de acesso de todos os peers via libp2p ou HTTP.
+	// Coletar tokens de acesso de todos os peers via libp2p.
 	var accesses []P2PArtifactAccess
 	type peerEntry struct {
 		peerID    string
@@ -724,79 +687,31 @@ func (c *p2pCoordinator) downloadArtifactSwarm(ctx context.Context, artifactName
 	var peerEntries []peerEntry
 
 	for _, pID := range avail.PeerAgentIDs {
-		peerView, err := c.findPeerByAgentID(pID)
+		if h == nil || registry == nil {
+			continue
+		}
+		lpID, ok := registry.Lookup(pID)
+		if !ok {
+			continue
+		}
+		acc, err := libp2pRequestAccess(ctx, h, lpID, artifactName, requesterID)
 		if err != nil {
 			continue
 		}
-
-		var acc P2PArtifactAccess
-		var gotAccess bool
-		var usedLibp2p bool
-
-		// Tentar libp2p primeiro.
-		if h != nil && registry != nil {
-			if lpID, ok := registry.Lookup(pID); ok {
-				if a, err := libp2pRequestAccess(ctx, h, lpID, artifactName, requesterID); err == nil {
-					acc = a
-					gotAccess = true
-					usedLibp2p = true
-					peerEntries = append(peerEntries, peerEntry{peerID: pID, libp2pID: lpID, useLibp2p: true})
-				}
-			}
-		}
-
-		// Fallback HTTP.
-		if !gotAccess {
-			endpoint := fmt.Sprintf("http://%s:%d/p2p/artifact/access",
-				strings.TrimSpace(peerView.Address), peerView.Port)
-			payload, _ := json.Marshal(map[string]string{
-				"artifactName": artifactName,
-				"requesterId":  requesterID,
-			})
-			req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
-			if err != nil {
-				continue
-			}
-			req.Header.Set("Content-Type", "application/json")
-			resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
-			if err != nil {
-				continue
-			}
-			decErr := json.NewDecoder(resp.Body).Decode(&acc)
-			resp.Body.Close()
-			if decErr == nil && strings.TrimSpace(acc.URL) != "" {
-				gotAccess = true
-				peerEntries = append(peerEntries, peerEntry{peerID: pID, useLibp2p: false})
-			}
-		}
-		_ = usedLibp2p
-		if gotAccess {
-			accesses = append(accesses, acc)
-		}
+		accesses = append(accesses, acc)
+		peerEntries = append(peerEntries, peerEntry{peerID: pID, libp2pID: lpID, useLibp2p: true})
 	}
 
 	if len(accesses) == 0 {
 		return P2PArtifactView{}, fmt.Errorf("nenhum peer retornou token de acesso para %q", artifactName)
 	}
 
-	c.mu.RLock()
-	transfer := c.transferServer
-	c.mu.RUnlock()
-
 	// Peer único: download simples (sem manifest).
 	if len(accesses) < 2 || cfg.ChunkSizeBytes == 0 {
-		// Tentar libp2p se o primeiro peer tiver libp2pID.
-		if len(peerEntries) > 0 && peerEntries[0].useLibp2p && h != nil {
-			path, size, err := libp2pDownloadArtifact(ctx, h, peerEntries[0].libp2pID, accesses[0], c.app.p2pTempDir())
-			if err == nil {
-				c.recordBytesDownloaded(size)
-				return c.buildArtifactView(artifactName, accesses[0].ArtifactID, path)
-			}
+		if len(peerEntries) == 0 || h == nil {
+			return P2PArtifactView{}, fmt.Errorf("libp2p indisponivel para download do artifact")
 		}
-		if transfer == nil {
-			return P2PArtifactView{}, fmt.Errorf("servidor de transferencia indisponivel")
-		}
-		path, size, err := transfer.downloadArtifact(accesses[0])
+		path, size, err := libp2pDownloadArtifact(ctx, h, peerEntries[0].libp2pID, accesses[0], c.app.p2pTempDir())
 		if err != nil {
 			return P2PArtifactView{}, err
 		}
@@ -804,31 +719,15 @@ func (c *p2pCoordinator) downloadArtifactSwarm(ctx context.Context, artifactName
 		return c.buildArtifactView(artifactName, accesses[0].ArtifactID, path)
 	}
 
-	// Multi-peer: buscar manifest e fazer download em chunks.
-	// Usar libp2p para o manifest se o primeiro peer suportar.
+	// Multi-peer: buscar manifest e fazer download em chunks via libp2p.
 	var manifest P2PChunkManifest
-	var manifestErr error
-	if len(peerEntries) > 0 && peerEntries[0].useLibp2p && h != nil {
-		manifest, manifestErr = libp2pFetchManifest(ctx, h, peerEntries[0].libp2pID, artifactName, requesterID)
+	if len(peerEntries) == 0 || h == nil {
+		return P2PArtifactView{}, fmt.Errorf("libp2p indisponivel para manifest do artifact")
 	}
+	var manifestErr error
+	manifest, manifestErr = libp2pFetchManifest(ctx, h, peerEntries[0].libp2pID, artifactName, requesterID)
 	if manifestErr != nil || manifest.TotalChunks == 0 {
-		// Fallback HTTP para manifest.
-		primaryURL := strings.Replace(accesses[0].URL,
-			"/p2p/artifact/"+strings.ReplaceAll(artifactName, " ", "%20"),
-			"/p2p/artifact/"+strings.ReplaceAll(artifactName, " ", "%20")+"/manifest", 1)
-		manifestReq, err := http.NewRequestWithContext(ctx, http.MethodGet, primaryURL, nil)
-		if err != nil {
-			return P2PArtifactView{}, err
-		}
-		manifestResp, err := (&http.Client{Timeout: 20 * time.Second}).Do(manifestReq)
-		if err != nil {
-			return P2PArtifactView{}, fmt.Errorf("manifest indisponivel: %w", err)
-		}
-		decErr := json.NewDecoder(manifestResp.Body).Decode(&manifest)
-		manifestResp.Body.Close()
-		if decErr != nil {
-			return P2PArtifactView{}, fmt.Errorf("manifest invalido: %w", decErr)
-		}
+		return P2PArtifactView{}, fmt.Errorf("manifest indisponivel: %w", manifestErr)
 	}
 
 	destDir := c.app.p2pTempDir()
@@ -1050,40 +949,9 @@ func (c *p2pCoordinator) replicateArtifactToPeerNow(ctx context.Context, artifac
 		}
 	}
 
-	// Fallback HTTP.
-	endpoint := fmt.Sprintf("http://%s:%d/p2p/replicate", peer.Address, peer.Port)
-	body, err := json.Marshal(access)
-	if err != nil {
-		c.recordReplicationResult(false)
-		return err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
-	if err != nil {
-		c.recordReplicationResult(false)
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	for key, value := range c.transferServer.BuildReplicationHeaders(strings.TrimSpace(c.app.GetDebugConfig().AgentID), access) {
-		if strings.TrimSpace(key) == "" || strings.TrimSpace(value) == "" {
-			continue
-		}
-		req.Header.Set(key, value)
-	}
-
-	resp, err := (&http.Client{Timeout: 45 * time.Second}).Do(req)
-	if err != nil {
-		c.recordReplicationResult(false)
-		return err
-	}
-	defer resp.Body.Close()
-
-	responseBody, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		c.recordReplicationResult(false)
-		return fmt.Errorf("replicacao falhou HTTP %s: %s", resp.Status, strings.TrimSpace(string(responseBody)))
-	}
-	c.recordReplicationResult(true)
-	return nil
+	_ = peer
+	c.recordReplicationResult(false)
+	return fmt.Errorf("replicacao requer libp2p ativo")
 }
 
 func (c *p2pCoordinator) currentAgentsEstimate() int {
@@ -1540,7 +1408,7 @@ func (c *p2pCoordinator) pullPeerGossip(ctx context.Context) {
 }
 
 // refreshSinglePeer faz um fetch imediato de gossip em um único peer recém-descoberto.
-// Usa libp2p stream quando disponível; caso contrário usa HTTP como fallback.
+// Requer libp2p stream para coletar o gossip.
 func (c *p2pCoordinator) refreshSinglePeer(ctx context.Context, peer p2pDiscoveredPeer) {
 	if strings.TrimSpace(peer.Address) == "" || peer.Port <= 0 {
 		return
@@ -1556,28 +1424,6 @@ func (c *p2pCoordinator) refreshSinglePeer(ctx context.Context, peer p2pDiscover
 		}
 	}
 
-	// Fallback HTTP (peers legacy/mDNS ou libp2p peer ainda não no registry).
-	url := fmt.Sprintf("http://%s:%d/p2p/peers", peer.Address, peer.Port)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return
-	}
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil || resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		if resp != nil {
-			resp.Body.Close()
-		}
-		return
-	}
-	var payload struct {
-		KnownPeers []P2PPeerView     `json:"knownPeers"`
-		Artifacts  []P2PArtifactView `json:"artifacts"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err == nil {
-		c.applyGossipResponse(peer.AgentID, payload.KnownPeers, payload.Artifacts, "gossip-immediate")
-	}
-	resp.Body.Close()
 }
 
 // applyGossipResponse processa uma resposta de gossip (peers + artifacts) e atualiza o estado do coordinator.
@@ -1635,38 +1481,6 @@ func (c *p2pCoordinator) RefreshPeerArtifactIndex(ctx context.Context, source st
 				}
 			}
 		}
-
-		// Fallback HTTP.
-		url := fmt.Sprintf("http://%s:%d/p2p/peers", peer.Address, peer.Port)
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-		if err != nil {
-			continue
-		}
-		resp, err := (&http.Client{Timeout: 3 * time.Second}).Do(req)
-		if err != nil {
-			continue
-		}
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			resp.Body.Close()
-			continue
-		}
-		var payload struct {
-			KnownPeers    []P2PPeerView     `json:"knownPeers"`
-			Artifacts     []P2PArtifactView `json:"artifacts"`
-			CatalogSource string            `json:"catalogSource"`
-		}
-		if err := json.NewDecoder(resp.Body).Decode(&payload); err == nil {
-			catalogSource := strings.TrimSpace(payload.CatalogSource)
-			if catalogSource == "" {
-				catalogSource = source
-			}
-			c.applyGossipResponse(peer.AgentID, payload.KnownPeers, payload.Artifacts, catalogSource)
-			if len(payload.Artifacts) > 0 {
-				c.app.logs.append(fmt.Sprintf("[p2p] catálogo via HTTP: peer=%s artifacts=%d source=%s",
-					strings.TrimSpace(peer.AgentID), len(payload.Artifacts), catalogSource))
-			}
-		}
-		resp.Body.Close()
 	}
 }
 
