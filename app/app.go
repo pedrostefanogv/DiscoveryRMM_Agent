@@ -205,7 +205,6 @@ func NewApp(opts AppStartupOptions) *App {
 		NormalizeP2PConfig: normalizeP2PConfig,
 		ApplyP2PConfig:     a.applyP2PConfig,
 		DefaultP2PConfig:   defaultP2PConfig,
-		P2PDiscoveryMDNS:   p2pDiscoveryMDNS,
 		Version:            Version,
 	})
 	a.syncCoord = newSyncCoordinator(a)

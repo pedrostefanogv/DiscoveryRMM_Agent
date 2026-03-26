@@ -190,12 +190,7 @@ func (a *App) applyAgentConfiguration(cfg AgentConfiguration) {
 
 	// Discovery onboarding toggle — governs whether this agent participates in P2P onboarding.
 	if cfg.DiscoveryEnabled != nil {
-		p2pCfg := a.GetP2PConfig()
-		if !*cfg.DiscoveryEnabled && strings.TrimSpace(p2pCfg.P2PMode) == "" {
-			p2pCfg.P2PMode = P2PModeLegacy
-		}
-		a.applyP2PConfig(p2pCfg)
-		a.logs.append(fmt.Sprintf("[config] discoveryEnabled=%t aplicado ao modo P2P", *cfg.DiscoveryEnabled))
+		a.logs.append(fmt.Sprintf("[config] discoveryEnabled=%t", *cfg.DiscoveryEnabled))
 	}
 
 	// Sync interval (if specified).

@@ -35,9 +35,6 @@ func TestP2PSeedCountRule(t *testing.T) {
 
 func TestNormalizeP2PConfigDefaults(t *testing.T) {
 	cfg := normalizeP2PConfig(P2PConfig{})
-	if cfg.DiscoveryMode != p2pDiscoveryMDNS {
-		t.Fatalf("discovery mode = %q, want %q", cfg.DiscoveryMode, p2pDiscoveryMDNS)
-	}
 	if cfg.TempTTLHours != defaultP2PTempTTLHours {
 		t.Fatalf("temp ttl = %d, want %d", cfg.TempTTLHours, defaultP2PTempTTLHours)
 	}
@@ -50,7 +47,7 @@ func TestNormalizeP2PConfigDefaults(t *testing.T) {
 }
 
 func TestBuildP2PSeedPlan(t *testing.T) {
-	cfg := P2PConfig{SeedPercent: 10, MinSeeds: 2, DiscoveryMode: p2pDiscoveryMDNS, TempTTLHours: 168}
+	cfg := P2PConfig{SeedPercent: 10, MinSeeds: 2, TempTTLHours: 168}
 	plan := buildP2PSeedPlan(25, cfg)
 	if plan.SelectedSeeds != 3 {
 		t.Fatalf("selected seeds = %d, want 3", plan.SelectedSeeds)
@@ -252,59 +249,13 @@ func TestApplyOnboardingOfferBadSignature(t *testing.T) {
 	}
 }
 
-// ── Epic 3: P2PMode normalization ─────────────────────────────────────────────
-
-func TestP2PModeNormalization(t *testing.T) {
-	tests := []struct{ in, want string }{
-		{"", P2PModeLegacy},
-		{"LEGACY", P2PModeLegacy},
-		{"libp2p_only", P2PModeLibp2pOnly},
-		{"hybrid", P2PModeHybrid},
-		{"unknown_mode", P2PModeLegacy},
-	}
-	for _, tc := range tests {
-		cfg := normalizeP2PConfig(P2PConfig{
-			DiscoveryMode: p2pDiscoveryMDNS,
-			TempTTLHours:  168,
-			P2PMode:       tc.in,
-		})
-		if cfg.P2PMode != tc.want {
-			t.Fatalf("P2PMode(%q) = %q, want %q", tc.in, cfg.P2PMode, tc.want)
-		}
-	}
-}
-
 // ── Epic 7: go-libp2p provider ────────────────────────────────────────────────
 
-func TestPickDiscoveryProviderLegacyMDNS(t *testing.T) {
-	cfg := normalizeP2PConfig(P2PConfig{DiscoveryMode: p2pDiscoveryMDNS, TempTTLHours: 168})
-	p := pickDiscoveryProvider(cfg, nil, nil)
-	if p.Name() != p2pDiscoveryMDNS {
-		t.Fatalf("expected mdns provider, got %s", p.Name())
-	}
-}
-
-func TestPickDiscoveryProviderLegacyUDP(t *testing.T) {
-	cfg := normalizeP2PConfig(P2PConfig{DiscoveryMode: p2pDiscoveryUDP, TempTTLHours: 168})
-	p := pickDiscoveryProvider(cfg, nil, nil)
-	if p.Name() != p2pDiscoveryUDP {
-		t.Fatalf("expected udp provider, got %s", p.Name())
-	}
-}
-
 func TestPickDiscoveryProviderLibP2POnly(t *testing.T) {
-	cfg := normalizeP2PConfig(P2PConfig{DiscoveryMode: p2pDiscoveryMDNS, TempTTLHours: 168, P2PMode: P2PModeLibp2pOnly})
+	cfg := normalizeP2PConfig(P2PConfig{TempTTLHours: 168})
 	p := pickDiscoveryProvider(cfg, nil, nil)
 	if p.Name() != p2pDiscoveryLibP2P {
 		t.Fatalf("expected libp2p provider, got %s", p.Name())
-	}
-}
-
-func TestPickDiscoveryProviderHybrid(t *testing.T) {
-	cfg := normalizeP2PConfig(P2PConfig{DiscoveryMode: p2pDiscoveryMDNS, TempTTLHours: 168, P2PMode: P2PModeHybrid})
-	p := pickDiscoveryProvider(cfg, nil, nil)
-	if p.Name() != "multi" {
-		t.Fatalf("expected multi provider in hybrid mode, got %s", p.Name())
 	}
 }
 
@@ -327,13 +278,6 @@ func TestLibP2PProviderName(t *testing.T) {
 	p := &p2pLibP2PProvider{}
 	if p.Name() != p2pDiscoveryLibP2P {
 		t.Fatalf("unexpected provider name: %s", p.Name())
-	}
-}
-
-func TestMultiProviderName(t *testing.T) {
-	m := &p2pMultiProvider{providers: []p2pDiscoveryProvider{&p2pMDNSProvider{}, &p2pLibP2PProvider{}}}
-	if m.Name() != "multi" {
-		t.Fatalf("unexpected multi provider name: %s", m.Name())
 	}
 }
 

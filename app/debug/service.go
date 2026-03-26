@@ -51,7 +51,6 @@ type Options struct {
 	NormalizeP2PConfig func(p2pmeta.Config) p2pmeta.Config
 	ApplyP2PConfig     func(p2pmeta.Config)
 	DefaultP2PConfig   func() p2pmeta.Config
-	P2PDiscoveryMDNS   string
 	Version            string
 }
 
@@ -67,7 +66,6 @@ type Service struct {
 	normalizeP2PConfig func(p2pmeta.Config) p2pmeta.Config
 	applyP2PConfig     func(p2pmeta.Config)
 	defaultP2PConfig   func() p2pmeta.Config
-	p2pDiscoveryMDNS   string
 	version            string
 }
 
@@ -85,7 +83,6 @@ func NewService(opts Options) *Service {
 		normalizeP2PConfig: opts.NormalizeP2PConfig,
 		applyP2PConfig:     opts.ApplyP2PConfig,
 		defaultP2PConfig:   opts.DefaultP2PConfig,
-		p2pDiscoveryMDNS:   strings.TrimSpace(opts.P2PDiscoveryMDNS),
 		version:            strings.TrimSpace(opts.Version),
 	}
 }
@@ -168,11 +165,8 @@ func (s *Service) LoadConnectionConfigFromProduction() {
 			p2pCfg = s.normalizeP2PConfig(p2pCfg)
 		}
 		p2pCfg.Enabled = true
-		if s.p2pDiscoveryMDNS != "" {
-			p2pCfg.DiscoveryMode = s.p2pDiscoveryMDNS
-		}
 		s.applyP2PConfig(p2pCfg)
-		s.logf("[config] P2P inicializado com enabled=true e discovery=mdns")
+		s.logf("[config] P2P inicializado com enabled=true")
 	}
 
 	if strings.TrimSpace(inst.ApiScheme) == "" || strings.TrimSpace(inst.ApiServer) == "" {

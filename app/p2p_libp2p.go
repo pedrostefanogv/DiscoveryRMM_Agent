@@ -6,13 +6,18 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	libp2p "github.com/libp2p/go-libp2p"
+	"github.com/libp2p/go-libp2p/core/control"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/p2p/discovery/mdns"
+	"github.com/libp2p/go-libp2p/p2p/net/connmgr"
+	noise "github.com/libp2p/go-libp2p/p2p/security/noise"
+	libp2ptls "github.com/libp2p/go-libp2p/p2p/security/tls"
 	"github.com/multiformats/go-multiaddr"
 )
 
@@ -50,6 +55,9 @@ type p2pLibP2PProvider struct {
 
 	// host is exported after Start so the coordinator can open outbound streams.
 	h host.Host
+
+	// gater allows blocking misbehaving peers at the connection level.
+	gater *p2pConnectionGater
 }
 
 func (p *p2pLibP2PProvider) Name() string { return p2pDiscoveryLibP2P }
@@ -60,8 +68,26 @@ func (p *p2pLibP2PProvider) Start(
 	onPeer func(peer p2pDiscoveredPeer),
 	onTrace func(string),
 ) error {
+	// ConnManager: mantém entre 20–60 conexões ativas; excedente é podado.
+	cm, err := connmgr.NewConnManager(20, 60, connmgr.WithGracePeriod(2*time.Minute))
+	if err != nil {
+		return fmt.Errorf("connmgr: %w", err)
+	}
+
+	gater := newP2PConnectionGater()
+	p.gater = gater
+
+	// TCP + QUIC/v1 sobre IPv4 apenas (IPv6 desativado).
+	// Segurança declarada explicitamente: Noise (preferido) e TLS 1.3.
 	h, err := libp2p.New(
-		libp2p.ListenAddrStrings("/ip4/0.0.0.0/tcp/0"),
+		libp2p.ListenAddrStrings(
+			"/ip4/0.0.0.0/tcp/0",
+			"/ip4/0.0.0.0/udp/0/quic-v1",
+		),
+		libp2p.Security(noise.ID, noise.New),
+		libp2p.Security(libp2ptls.ID, libp2ptls.New),
+		libp2p.ConnectionManager(cm),
+		libp2p.ConnectionGater(gater),
 	)
 	if err != nil {
 		return fmt.Errorf("libp2p host: %w", err)
@@ -246,72 +272,62 @@ func (n *libp2pMDNSNotifee) HandlePeerFound(pi peer.AddrInfo) {
 	})
 }
 
-// p2pMultiProvider runs two discovery providers concurrently (used for hybrid mode).
-// Peers emitted by either provider are forwarded to the coordinator with their
-// respective Source field set, so de-dup by agentID happens naturally in upsertPeer.
-type p2pMultiProvider struct {
-	providers []p2pDiscoveryProvider
-}
-
-func (m *p2pMultiProvider) Name() string { return "multi" }
-
-func (m *p2pMultiProvider) Start(
-	ctx context.Context,
-	self p2pSelfEndpoint,
-	onPeer func(p2pDiscoveredPeer),
-	onTrace func(string),
-) error {
-	started := make([]p2pDiscoveryProvider, 0, len(m.providers))
-	cancelCtx, cancel := context.WithCancel(ctx)
-	for _, p := range m.providers {
-		if err := p.Start(cancelCtx, self, onPeer, onTrace); err != nil {
-			// Cancelar o contexto dos providers já iniciados para liberar
-			// goroutines e sockets antes de retornar o erro.
-			cancel()
-			_ = started // já serão encerrados via cancelCtx
-			return fmt.Errorf("provider %s falhou: %w", p.Name(), err)
-		}
-		started = append(started, p)
-	}
-	// Todos iniciados com sucesso: propagar cancelamento do parent.
-	go func() {
-		<-ctx.Done()
-		cancel()
-	}()
-	return nil
-}
-
-// pickDiscoveryProvider returns the correct provider based on P2PConfig.
-// This is the single place where transport selection is resolved.
-// pickDiscoveryProvider returns the correct provider based on P2PConfig.
-// coord e transfer são injetados nos providers libp2p para que o host
-// registre os protocolos de transporte de artifacts.
+// pickDiscoveryProvider returns the libp2p provider, injecting coord e transfer
+// para que o host registre os protocolos de transporte de artifacts.
 func pickDiscoveryProvider(cfg P2PConfig, coord *p2pCoordinator, transfer *p2pTransferServer) p2pDiscoveryProvider {
 	registry := newLibp2pPeerRegistry()
-	switch cfg.P2PMode {
-	case P2PModeLibp2pOnly:
-		return &p2pLibP2PProvider{
-			bootstrapPeers: cfg.BootstrapConfig.BootstrapPeers,
-			coord:          coord,
-			transfer:       transfer,
-			registry:       registry,
-		}
-	case P2PModeHybrid:
-		return &p2pMultiProvider{providers: []p2pDiscoveryProvider{
-			&p2pMDNSProvider{},
-			&p2pLibP2PProvider{
-				bootstrapPeers: cfg.BootstrapConfig.BootstrapPeers,
-				coord:          coord,
-				transfer:       transfer,
-				registry:       registry,
-			},
-		}}
-	default: // legacy
-		if cfg.DiscoveryMode == p2pDiscoveryUDP {
-			return &p2pUDPProvider{}
-		}
-		return &p2pMDNSProvider{}
+	return &p2pLibP2PProvider{
+		bootstrapPeers: cfg.BootstrapConfig.BootstrapPeers,
+		coord:          coord,
+		transfer:       transfer,
+		registry:       registry,
 	}
+}
+
+// ── ConnectionGater ─────────────────────────────────────────────────────────
+
+// p2pConnectionGater implementa connmgr.ConnectionGater com uma blocklist de
+// peers marcados como maliciosos/defeituosos. Todos os métodos são thread-safe.
+type p2pConnectionGater struct {
+	mu        sync.RWMutex
+	blocklist map[peer.ID]struct{}
+}
+
+func newP2PConnectionGater() *p2pConnectionGater {
+	return &p2pConnectionGater{blocklist: make(map[peer.ID]struct{})}
+}
+
+// BlockPeer adiciona um peer à blocklist; futuras conexões dele serão recusadas.
+func (g *p2pConnectionGater) BlockPeer(id peer.ID) {
+	g.mu.Lock()
+	g.blocklist[id] = struct{}{}
+	g.mu.Unlock()
+}
+
+func (g *p2pConnectionGater) InterceptPeerDial(id peer.ID) bool {
+	g.mu.RLock()
+	_, blocked := g.blocklist[id]
+	g.mu.RUnlock()
+	return !blocked
+}
+
+func (g *p2pConnectionGater) InterceptAddrDial(_ peer.ID, _ multiaddr.Multiaddr) bool {
+	return true
+}
+
+func (g *p2pConnectionGater) InterceptAccept(_ network.ConnMultiaddrs) bool {
+	return true
+}
+
+func (g *p2pConnectionGater) InterceptSecured(_ network.Direction, id peer.ID, _ network.ConnMultiaddrs) bool {
+	g.mu.RLock()
+	_, blocked := g.blocklist[id]
+	g.mu.RUnlock()
+	return !blocked
+}
+
+func (g *p2pConnectionGater) InterceptUpgraded(_ network.Conn) (bool, control.DisconnectReason) {
+	return true, 0
 }
 
 // extractIPFromMultiaddr extracts the IP address from a libp2p multiaddr string.

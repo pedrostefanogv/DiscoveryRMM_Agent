@@ -8,14 +8,13 @@ import (
 )
 
 const (
-	ModeLegacy     = "legacy"
-	ModeHybrid     = "hybrid"
 	ModeLibp2pOnly = "libp2p_only"
 )
 
 type BootstrapConfig struct {
-	BootstrapPeers []string `json:"bootstrapPeers,omitempty"`
-	PreferLAN      bool     `json:"preferLan"`
+	BootstrapPeers        []string `json:"bootstrapPeers,omitempty"`
+	PreferLAN             bool     `json:"preferLan"`
+	CloudBootstrapEnabled bool     `json:"cloudBootstrapEnabled,omitempty"`
 }
 
 type Config struct {

@@ -35,8 +35,6 @@ type RuntimeFlags struct {
 }
 
 const (
-	P2PModeLegacy     = p2pmeta.ModeLegacy
-	P2PModeHybrid     = p2pmeta.ModeHybrid
 	P2PModeLibp2pOnly = p2pmeta.ModeLibp2pOnly
 )
 

@@ -22,10 +22,7 @@ import (
 )
 
 const (
-	p2pDiscoveryMDNS = "mdns"
-	p2pDiscoveryUDP  = "udp"
-
-	defaultP2PTempTTLHours             = 7 * 24
+	defaultP2PTempTTLHours             = 20 * 24
 	defaultP2PSeedPercent              = 10
 	defaultP2PMinSeeds                 = 2
 	defaultP2PPortRangeStart           = 41080
@@ -125,7 +122,6 @@ func (c *p2pCoordinator) cachedFileSHA256(path string, mtime time.Time) (string,
 func defaultP2PConfig() P2PConfig {
 	return P2PConfig{
 		Enabled:                  true,
-		DiscoveryMode:            p2pDiscoveryMDNS,
 		P2PMode:                  P2PModeLibp2pOnly,
 		TempTTLHours:             defaultP2PTempTTLHours,
 		SeedPercent:              defaultP2PSeedPercent,
@@ -140,10 +136,6 @@ func normalizeP2PConfig(cfg P2PConfig) P2PConfig {
 	out := cfg
 	defaults := defaultP2PConfig()
 
-	out.DiscoveryMode = strings.TrimSpace(strings.ToLower(out.DiscoveryMode))
-	if out.DiscoveryMode != p2pDiscoveryMDNS && out.DiscoveryMode != p2pDiscoveryUDP {
-		out.DiscoveryMode = defaults.DiscoveryMode
-	}
 	if out.TempTTLHours <= 0 {
 		out.TempTTLHours = defaults.TempTTLHours
 	}
@@ -195,13 +187,7 @@ func normalizeP2PConfig(cfg P2PConfig) P2PConfig {
 		out.MaxBandwidthBytesPerSec = minBandwidthBytesPerSec
 	}
 
-	// Validate P2PMode.
-	switch strings.TrimSpace(strings.ToLower(out.P2PMode)) {
-	case P2PModeLegacy, P2PModeHybrid, P2PModeLibp2pOnly:
-		out.P2PMode = strings.TrimSpace(strings.ToLower(out.P2PMode))
-	default:
-		out.P2PMode = P2PModeLibp2pOnly
-	}
+	out.P2PMode = P2PModeLibp2pOnly
 
 	return out
 }
@@ -439,9 +425,16 @@ func (c *p2pCoordinator) Run(ctx context.Context) {
 	discoveryTicker := time.NewTicker(p2pCoordinatorDiscoveryTickSeconds * time.Second)
 	cleanupTicker := time.NewTicker(p2pCoordinatorCleanupTickHours * time.Hour)
 	gossipTicker := time.NewTicker(45 * time.Second)
+	cloudBootstrapTicker := time.NewTicker(1 * time.Hour)
 	defer discoveryTicker.Stop()
 	defer cleanupTicker.Stop()
 	defer gossipTicker.Stop()
+	defer cloudBootstrapTicker.Stop()
+
+	// Disparar cloud bootstrap imediatamente no startup (carrega cache + chama API).
+	if cfg.BootstrapConfig.CloudBootstrapEnabled {
+		go c.runCloudBootstrap(ctx)
+	}
 
 	for {
 		select {
@@ -455,6 +448,10 @@ func (c *p2pCoordinator) Run(ctx context.Context) {
 		case <-cleanupTicker.C:
 			if _, err := c.app.cleanupExpiredP2PTempArtifacts(time.Now()); err != nil {
 				c.setLastError(err)
+			}
+		case <-cloudBootstrapTicker.C:
+			if c.app.GetP2PConfig().BootstrapConfig.CloudBootstrapEnabled {
+				go c.runCloudBootstrap(ctx)
 			}
 		}
 	}
@@ -731,8 +728,12 @@ func (c *p2pCoordinator) downloadArtifactSwarm(ctx context.Context, artifactName
 	}
 
 	destDir := c.app.p2pTempDir()
-	sched := newP2PChunkScheduler(cfg.MaxBandwidthBytesPerSec)
-	path, totalBytes, err := downloadChunked(ctx, accesses, manifest, destDir, sched)
+	sched := newP2PChunkScheduler()
+	lp2pPeers := make([]libp2pPeer, len(peerEntries))
+	for i, pe := range peerEntries {
+		lp2pPeers[i] = libp2pPeer{agentID: pe.peerID, peerID: pe.libp2pID}
+	}
+	path, totalBytes, err := downloadChunkedLibp2p(ctx, h, lp2pPeers, manifest, artifactName, requesterID, destDir, sched)
 	if err != nil {
 		c.appendAudit("swarm-pull", artifactName, "", "automation", false, err.Error())
 		return P2PArtifactView{}, err
@@ -929,9 +930,9 @@ func (c *p2pCoordinator) replicateArtifactToPeerNow(ctx context.Context, artifac
 	// Tentar libp2p primeiro.
 	if h, registry := c.libp2pHostAndRegistry(); h != nil && registry != nil {
 		if lpID, ok := registry.Lookup(targetPeerID); ok {
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			streamCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 			defer cancel()
-			stream, serr := h.NewStream(ctx, lpID, protoArtifactReplicate)
+			stream, serr := h.NewStream(streamCtx, lpID, protoArtifactReplicate)
 			if serr == nil {
 				req := libp2pReplicateRequest{
 					ArtifactName:   access.ArtifactName,
@@ -1392,13 +1393,6 @@ func (c *p2pCoordinator) libp2pHostAndRegistry() (host.Host, *libp2pPeerRegistry
 	}
 	if lp, ok := p.(*p2pLibP2PProvider); ok {
 		return lp.h, lp.registry
-	}
-	if mp, ok := p.(*p2pMultiProvider); ok {
-		for _, sub := range mp.providers {
-			if lp, ok := sub.(*p2pLibP2PProvider); ok {
-				return lp.h, lp.registry
-			}
-		}
 	}
 	return nil, nil
 }
