@@ -5,11 +5,42 @@ function initAppBindings() {
     var target = event.target;
     if (!(target instanceof HTMLButtonElement)) return;
 
+    // Detail modal button
+    if (target.dataset.detailId) {
+      var pkg = (state.allPackages || []).find(function (p) { return p.id === target.dataset.detailId; });
+      if (pkg && typeof openAppDetailModal === 'function') openAppDetailModal(pkg);
+      return;
+    }
+
     var action = target.dataset.action;
     var id = target.dataset.id;
     if (!action || !id) return;
 
     runAction(action, id);
+  });
+
+  // App detail modal close handlers
+  (function wireAppDetailModal() {
+    var closeBtn = document.getElementById('appDetailCloseBtn');
+    var actionBtn = document.getElementById('appDetailActionBtn');
+    var modal = document.getElementById('appDetailModal');
+
+    if (closeBtn) closeBtn.addEventListener('click', function () {
+      if (typeof closeAppDetailModal === 'function') closeAppDetailModal();
+    });
+    if (modal) modal.addEventListener('click', function (e) {
+      if (e.target === modal && typeof closeAppDetailModal === 'function') closeAppDetailModal();
+    });
+    if (actionBtn) actionBtn.addEventListener('click', function () {
+      var act = actionBtn.dataset.action;
+      var id = actionBtn.dataset.id;
+      if (act && id) runAction(act, id);
+      if (typeof closeAppDetailModal === 'function') closeAppDetailModal();
+    });
+  })();
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && typeof closeAppDetailModal === 'function') closeAppDetailModal();
   });
 
   if (searchEl) {

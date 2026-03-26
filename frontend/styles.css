@@ -950,6 +950,86 @@ body {
   margin-top: auto;
 }
 
+.store-detail-btn {
+  font-size: 1.1rem;
+  padding: 4px 10px;
+  line-height: 1;
+}
+
+/* ----- App Detail Modal ----- */
+.app-detail-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  background: rgba(0, 0, 0, .45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+}
+.app-detail-modal.hidden { display: none; }
+
+.app-detail-card {
+  width: min(740px, 96vw);
+  max-height: min(90vh, 820px);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  display: flex;
+  flex-direction: column;
+  padding: 20px;
+  gap: 14px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, .25);
+}
+
+.app-detail-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.app-detail-header-left {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.app-detail-icon-wrap img {
+  width: 64px;
+  height: 64px;
+  border-radius: 12px;
+  object-fit: contain;
+  background: var(--surface-2);
+  padding: 6px;
+  display: block;
+}
+
+.app-detail-title {
+  margin: 0 0 4px 0;
+  font-size: 1.15rem;
+}
+
+.app-detail-description {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  font-size: 0.95rem;
+  line-height: 1.6;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 16px;
+}
+
+.app-detail-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 4px;
+}
+/* ----- end App Detail Modal ----- */
+
 .app-icon {
   width: 48px;
   height: 48px;

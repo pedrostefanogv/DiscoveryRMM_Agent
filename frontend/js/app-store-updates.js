@@ -64,6 +64,7 @@ function renderCards() {
     var action = getContextAction(pkg.id);
     var actionClass = action.action === 'install' ? 'btn primary' : 'btn danger';
     var actionButton = '<button class="' + actionClass + '" data-action="' + escapeHtmlAttr(action.action) + '" data-id="' + escapeHtmlAttr(pkg.id) + '">' + escapeHtml(action.label) + '</button>';
+    var detailButton = '<button class="btn subtle store-detail-btn" data-detail-id="' + escapeHtmlAttr(pkg.id) + '" title="Ver detalhes" aria-label="Ver detalhes de ' + escapeHtmlAttr(pkg.name || pkg.id) + '">ⓘ</button>';
 
     return '<article class="card store-card">' +
       iconHtml +
@@ -73,6 +74,7 @@ function renderCards() {
       '<p class="desc">' + escapeHtml(description).slice(0, 180) + '</p>' +
       '<div class="card-actions">' +
         actionButton +
+        detailButton +
       '</div>' +
     '</article>';
   }).join('');
@@ -275,4 +277,52 @@ async function upgradeSelected() {
   }
   showToast('Atualizacao em lote concluida', 'success');
   checkPendingUpdates();
+}
+
+// ---------------------------------------------------------------------------
+// App detail modal
+// ---------------------------------------------------------------------------
+
+var _appDetailModal = null;
+function getAppDetailModal() {
+  if (!_appDetailModal) _appDetailModal = document.getElementById('appDetailModal');
+  return _appDetailModal;
+}
+
+function openAppDetailModal(pkg) {
+  var modal = getAppDetailModal();
+  if (!modal) return;
+
+  var titleEl = document.getElementById('appDetailModalTitle');
+  var metaEl  = document.getElementById('appDetailMeta');
+  var iconEl  = document.getElementById('appDetailIcon');
+  var descEl  = document.getElementById('appDetailDescription');
+  var actionBtn = document.getElementById('appDetailActionBtn');
+
+  if (titleEl) titleEl.textContent = pkg.name || pkg.id;
+  if (metaEl) metaEl.textContent = (pkg.publisher || 'Desconhecido') + ' | ' + (pkg.version || 'N/A') + '  |  ID: ' + pkg.id;
+  if (iconEl) iconEl.innerHTML = pkg.icon
+    ? '<img src="' + escapeHtmlAttr(pkg.icon) + '" alt="" class="app-icon" style="width:64px;height:64px;" />'
+    : '';
+  if (descEl) descEl.innerHTML = typeof renderMarkdown === 'function'
+    ? renderMarkdown(pkg.description || 'Sem descricao')
+    : escapeHtml(pkg.description || 'Sem descricao');
+
+  if (actionBtn) {
+    var action = getContextAction(pkg.id);
+    actionBtn.textContent = action.label;
+    actionBtn.className = action.action === 'install' ? 'btn primary' : 'btn danger';
+    actionBtn.dataset.action = action.action;
+    actionBtn.dataset.id = pkg.id;
+  }
+
+  modal.classList.remove('hidden');
+  modal.setAttribute('aria-hidden', 'false');
+}
+
+function closeAppDetailModal() {
+  var modal = getAppDetailModal();
+  if (!modal) return;
+  modal.classList.add('hidden');
+  modal.setAttribute('aria-hidden', 'true');
 }

@@ -23,4 +23,24 @@
       </footer>
     </section>
   </section>
+
+  <!-- App Detail Modal -->
+  <div id="appDetailModal" class="app-detail-modal hidden" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="appDetailModalTitle">
+    <div class="app-detail-card">
+      <div class="app-detail-header">
+        <div class="app-detail-header-left">
+          <div id="appDetailIcon" class="app-detail-icon-wrap"></div>
+          <div>
+            <h2 id="appDetailModalTitle" class="app-detail-title"></h2>
+            <div id="appDetailMeta" class="meta"></div>
+          </div>
+        </div>
+        <button class="app-detail-close btn subtle" id="appDetailCloseBtn" aria-label="Fechar">✕</button>
+      </div>
+      <div id="appDetailDescription" class="app-detail-description kb-reader-content"></div>
+      <div class="app-detail-footer">
+        <button id="appDetailActionBtn" class="btn primary">Instalar</button>
+      </div>
+    </div>
+  </div>
 </main>
