@@ -25,6 +25,7 @@ type p2pCloudBootstrapRequest struct {
 	AgentID string   `json:"agentId"`
 	PeerID  string   `json:"peerId"`
 	Addrs   []string `json:"addrs"`
+	Port    int      `json:"port"`
 }
 
 // p2pCloudBootstrapPeer é um peer retornado pelo servidor.
@@ -70,14 +71,21 @@ func (c *p2pCoordinator) runCloudBootstrap(ctx context.Context) {
 	cachedPeers, _ := loadP2PPeerCache()
 	cachedPeers = c.connectCachedPeers(ctx, h, cachedPeers)
 
-	// Coletar IPs IPv4 roteáveis do próprio host.
+	// Coletar IPs IPv4 roteáveis e porta do próprio host.
 	selfAddrs := extractRoutableIPv4Addrs(h)
 	selfPeerID := h.ID().String()
+	selfPort := 0
+	if c.transferServer != nil {
+		if p, err := parsePortFromURL(c.transferServer.BaseURL()); err == nil {
+			selfPort = p
+		}
+	}
 
 	payload := p2pCloudBootstrapRequest{
 		AgentID: agentID,
 		PeerID:  selfPeerID,
 		Addrs:   selfAddrs,
+		Port:    selfPort,
 	}
 
 	resp, err := c.callCloudBootstrapAPI(ctx, apiScheme, apiServer, authToken, payload)
