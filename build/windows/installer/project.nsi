@@ -64,6 +64,12 @@ Unicode true
 !else
 !define BUILD_DEFAULT_MINIMAL "0"
 !endif
+
+!ifdef ARG_GENERIC_INSTALL
+!define BUILD_GENERIC_INSTALL "1"
+!else
+!define BUILD_GENERIC_INSTALL "0"
+!endif
 ####
 ## !define REQUEST_EXECUTION_LEVEL "admin"            # Default "admin"  see also https://nsis.sourceforge.io/Docs/Chapter4.html
 ####
@@ -111,6 +117,7 @@ Var ServerUrl
 Var ServerKey
 Var DiscoveryEnabled
 Var MinimalMode
+Var GenericMode
 
 !insertmacro MUI_PAGE_WELCOME # Welcome to the installer page.
 # !insertmacro MUI_PAGE_LICENSE "resources\eula.txt" # Adds a EULA page to the installer
@@ -147,6 +154,7 @@ Function .onInit
    StrCpy $ServerKey "${BUILD_DEFAULT_KEY}"
    StrCpy $DiscoveryEnabled "${BUILD_DEFAULT_DISCOVERY}"
    StrCpy $MinimalMode "${BUILD_DEFAULT_MINIMAL}"
+   StrCpy $GenericMode "${BUILD_GENERIC_INSTALL}"
 
    # Normalizar defaults inválidos
    ${If} $DiscoveryEnabled != "0"
@@ -193,10 +201,21 @@ Function .onInit
          SetSilent normal  # Mostra só o progresso
       ${EndIf}
    ${EndIf}
+
+   # Modo genérico: sem URL/KEY — agente entra em auto-provisioning via P2P
+   ${GetOptions} $R0 "/GENERIC" $R1
+   ${IfNot} ${Errors}
+      StrCpy $GenericMode "1"
+   ${EndIf}
 FunctionEnd
 
 # Função para criar a página de configuração do agente
 Function AgentConfigPage
+   # Modo genérico: sem wizard, agente entra em auto-provisioning via P2P
+   ${If} $GenericMode == "1"
+      Abort
+   ${EndIf}
+
    # Pular a página se estiver em modo silencioso ou mínimo
    ${If} ${Silent}
    ${OrIf} $MinimalMode == "1"
@@ -287,10 +306,10 @@ Section "uninstall"
     !insertmacro wails.setShellContext
 
    # Encerrar/remover service antes de limpar binários
-   Call UnregisterWindowsService
+   Call un.UnregisterWindowsService
 
    # Remover task agendada de autostart da UI
-   Call UnregisterUIStartupTask
+   Call un.UnregisterUIStartupTask
 
     RMDir /r "$AppData\${PRODUCT_EXECUTABLE}" # Remove the WebView2 DataPath
 
@@ -339,20 +358,26 @@ Function SaveAgentConfig
    ${EndIf}
    
    FileWrite $0 "{$\r$\n"
-   # Formato canônico (service)
-   FileWrite $0 '  "server_url": "$ServerUrl",$\r$\n'
-   FileWrite $0 '  "api_scheme": "https",$\r$\n'
-   FileWrite $0 '  "api_server": "$ServerUrl",$\r$\n'
-   FileWrite $0 '  "inventory_sync_interval_minutes": 15,$\r$\n'
-   # Formato legado (compatibilidade)
-   FileWrite $0 '  "serverUrl": "$ServerUrl",$\r$\n'
-   FileWrite $0 '  "apiKey": "$ServerKey",$\r$\n'
-   ${If} $DiscoveryEnabled == "1"
+   ${If} $GenericMode == "1"
+      ; Modo genérico: sem URL/KEY, apenas habilita P2P para auto-provisioning
+      FileWrite $0 '  "inventory_sync_interval_minutes": 15,$\r$\n'
       FileWrite $0 '  "discoveryEnabled": true,$\r$\n'
       FileWrite $0 '  "p2p_enabled": true$\r$\n'
    ${Else}
-      FileWrite $0 '  "discoveryEnabled": false,$\r$\n'
-      FileWrite $0 '  "p2p_enabled": false$\r$\n'
+      ; Modo padrão: escreve URL, KEY e flags conforme configuração
+      FileWrite $0 '  "server_url": "$ServerUrl",$\r$\n'
+      FileWrite $0 '  "api_scheme": "https",$\r$\n'
+      FileWrite $0 '  "api_server": "$ServerUrl",$\r$\n'
+      FileWrite $0 '  "inventory_sync_interval_minutes": 15,$\r$\n'
+      FileWrite $0 '  "serverUrl": "$ServerUrl",$\r$\n'
+      FileWrite $0 '  "apiKey": "$ServerKey",$\r$\n'
+      ${If} $DiscoveryEnabled == "1"
+         FileWrite $0 '  "discoveryEnabled": true,$\r$\n'
+         FileWrite $0 '  "p2p_enabled": true$\r$\n'
+      ${Else}
+         FileWrite $0 '  "discoveryEnabled": false,$\r$\n'
+         FileWrite $0 '  "p2p_enabled": false$\r$\n'
+      ${EndIf}
    ${EndIf}
    FileWrite $0 "}$\r$\n"
    
@@ -397,10 +422,28 @@ FunctionEnd
 Function RegisterUIStartupTask
    DetailPrint "Registrando tarefa de autostart da UI (${DISCOVERY_UI_TASK_NAME})"
 
-   # Limpar atalho legado de startup (migração)
+   ; Limpar atalho legado de startup (migracao)
    Delete "$SMSTARTUP\${INFO_PRODUCTNAME}.lnk"
 
-   ExecWait '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -Command "try { $action = New-ScheduledTaskAction -Execute ''$INSTDIR\${PRODUCT_EXECUTABLE}'' -Argument ''--startup-minimized --startup-source=task-scheduler''; $trigger = New-ScheduledTaskTrigger -AtLogOn; $trigger.Delay = ''PT30S''; $principal = New-ScheduledTaskPrincipal -GroupId ''S-1-5-32-545'' -LogonType Interactive -RunLevel Limited; Register-ScheduledTask -TaskName ''${DISCOVERY_UI_TASK_NAME}'' -Action $action -Trigger $trigger -Principal $principal -Description ''Discovery UI autostart for any logged-on user'' -Force | Out-Null; exit 0 } catch { Write-Output $_.Exception.Message; exit 1 }"' $R0
+   ; Escreve script PS1 temporário para evitar problemas de escaping no NSIS
+   StrCpy $R9 "$TEMP\discovery_ui_task_reg.ps1"
+   FileOpen $R8 "$R9" w
+   FileWrite $R8 "try {$\r$\n"
+   FileWrite $R8 "  $$action = New-ScheduledTaskAction -Execute '$INSTDIR\${PRODUCT_EXECUTABLE}' -Argument '--startup-minimized --startup-source=task-scheduler'$\r$\n"
+   FileWrite $R8 "  $$trigger = New-ScheduledTaskTrigger -AtLogOn$\r$\n"
+   FileWrite $R8 "  $$trigger.Delay = 'PT30S'$\r$\n"
+   FileWrite $R8 "  $$principal = New-ScheduledTaskPrincipal -GroupId 'S-1-5-32-545' -LogonType Interactive -RunLevel Limited$\r$\n"
+   FileWrite $R8 "  Register-ScheduledTask -TaskName '${DISCOVERY_UI_TASK_NAME}' -Action $$action -Trigger $$trigger -Principal $$principal -Description 'Discovery UI autostart for any logged-on user' -Force | Out-Null$\r$\n"
+   FileWrite $R8 "  exit 0$\r$\n"
+   FileWrite $R8 "} catch {$\r$\n"
+   FileWrite $R8 "  Write-Output $$_.Exception.Message$\r$\n"
+   FileWrite $R8 "  exit 1$\r$\n"
+   FileWrite $R8 "}$\r$\n"
+   FileClose $R8
+
+   ExecWait '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$R9"' $R0
+   Delete "$R9"
+
    ${If} $R0 != 0
       MessageBox MB_ICONSTOP "Falha ao registrar tarefa de autostart da UI (${DISCOVERY_UI_TASK_NAME}). Codigo: $R0"
       Abort
@@ -416,6 +459,17 @@ FunctionEnd
 Function UnregisterUIStartupTask
    DetailPrint "Removendo tarefa de autostart da UI (${DISCOVERY_UI_TASK_NAME})"
    ExecWait '"$SYSDIR\schtasks.exe" /Delete /TN "${DISCOVERY_UI_TASK_NAME}" /F' $R0
-   # Manter limpeza de atalho legado para instalações antigas
+   Delete "$SMSTARTUP\${INFO_PRODUCTNAME}.lnk"
+FunctionEnd
+
+Function un.UnregisterWindowsService
+   DetailPrint "Removendo Windows Service ${DISCOVERY_SERVICE_NAME}"
+   ExecWait '"$SYSDIR\sc.exe" stop "${DISCOVERY_SERVICE_NAME}"' $R0
+   ExecWait '"$SYSDIR\sc.exe" delete "${DISCOVERY_SERVICE_NAME}"' $R0
+FunctionEnd
+
+Function un.UnregisterUIStartupTask
+   DetailPrint "Removendo tarefa de autostart da UI (${DISCOVERY_UI_TASK_NAME})"
+   ExecWait '"$SYSDIR\schtasks.exe" /Delete /TN "${DISCOVERY_UI_TASK_NAME}" /F' $R0
    Delete "$SMSTARTUP\${INFO_PRODUCTNAME}.lnk"
 FunctionEnd

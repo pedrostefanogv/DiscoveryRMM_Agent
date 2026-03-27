@@ -84,6 +84,10 @@ type P2POnboardingResult = p2pmeta.OnboardingResult
 
 type P2POnboardingAuditEvent = p2pmeta.OnboardingAuditEvent
 
+type P2PProvisioningTokenResponse = p2pmeta.ProvisioningTokenResponse
+
+type P2PAutoProvisioningStats = p2pmeta.AutoProvisioningStats
+
 func (c *inventoryCache) get() (models.InventoryReport, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()

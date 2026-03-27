@@ -171,6 +171,27 @@ type OnboardingAuditEvent struct {
 	Message       string `json:"message"`
 }
 
+// ProvisioningTokenResponse é o payload retornado pelo servidor em
+// POST /api/agent-auth/me/zero-touch/deploy-token.
+// O campo Token (prefixo mdz_zt_...) é o valor bruto single-use que o peer
+// usa como Bearer token no endpoint de registro — nunca é armazenado no banco,
+// apenas o seu hash SHA-256. TokenID é o GUID do registro na tabela
+// deploy_tokens, útil para rastreamento/revogação administrativa.
+type ProvisioningTokenResponse struct {
+	Token     string `json:"token"`
+	TokenID   string `json:"tokenId"`
+	ExpiresAt string `json:"expiresAt"` // RFC3339
+	MaxUses   int    `json:"maxUses"`
+}
+
+// AutoProvisioningStats agrega contadores e eventos de auditoria do lado do
+// agente que realizou provisionamentos (peer configurado que entregou ofertas).
+type AutoProvisioningStats struct {
+	Enabled          bool                   `json:"enabled"`
+	TotalProvisioned int64                  `json:"totalProvisioned"`
+	RecentEvents     []OnboardingAuditEvent `json:"recentEvents"`
+}
+
 type CachedSeedPlan struct {
 	Plan         SeedPlanRecommendation
 	FetchedAtUTC time.Time

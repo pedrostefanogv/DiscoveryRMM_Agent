@@ -94,6 +94,11 @@ func (c *syncCoordinator) Run(ctx context.Context) {
 }
 
 func (c *syncCoordinator) HandlePing(ping agentconn.SyncPing) {
+	eventType := strings.TrimSpace(ping.EventType)
+	if eventType != "" && !strings.EqualFold(eventType, "sync.invalidated") {
+		c.app.logs.append("[sync] ping ignorado: eventType=" + eventType)
+		return
+	}
 	if strings.TrimSpace(ping.Resource) == "" {
 		c.app.logs.append("[sync] ping ignorado: resource vazio")
 		return
@@ -185,9 +190,10 @@ func (c *syncCoordinator) processTrigger(ctx context.Context, trigger syncTrigge
 		_, err = c.app.RefreshAutomationPolicy(false)
 	case "configuration":
 		err = c.app.refreshAgentConfiguration(ctx)
+	case "zerotouchapproved":
+		err = c.fullResync(ctx, "zero-touch")
 	default:
-		c.app.logs.append("[sync] recurso ignorado: " + queued.Resource)
-		return
+		err = c.fullResync(ctx, "fallback")
 	}
 	if err != nil {
 		c.app.logs.append("[sync] falha ao sincronizar " + queued.Resource + ": " + err.Error())
@@ -211,6 +217,35 @@ func (c *syncCoordinator) processTrigger(ctx context.Context, trigger syncTrigge
 		c.app.p2pCoord.OnResourceSynced(queued.Resource, variant, revision)
 	}
 	c.app.logs.append("[sync] recurso sincronizado: " + queued.Resource + " variant=" + variant + " source=" + queued.Source)
+}
+
+func (c *syncCoordinator) fullResync(ctx context.Context, source string) error {
+	c.app.logs.append("[sync] full resync iniciado: source=" + source)
+
+	var firstErr error
+	if err := c.app.refreshAgentConfiguration(ctx); err != nil {
+		firstErr = err
+	}
+	if _, err := c.app.RefreshAutomationPolicy(false); err != nil && firstErr == nil {
+		firstErr = err
+	}
+	if _, err := c.app.loadEffectiveAppStorePolicy(ctx, true); err != nil && firstErr == nil {
+		firstErr = err
+	}
+	if c.app.supportSvc != nil && c.app.featureEnabled(c.app.GetAgentConfiguration().KnowledgeBaseEnabled) {
+		if err := c.app.supportSvc.RefreshKnowledgeBase(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+
+	if c.app.p2pCoord != nil {
+		c.app.p2pCoord.RefreshPeerArtifactIndex(ctx, "sync-full-resync")
+	}
+
+	if firstErr == nil {
+		c.app.logs.append("[sync] full resync concluído: source=" + source)
+	}
+	return firstErr
 }
 
 func (c *syncCoordinator) reconcileFromManifest(ctx context.Context, source string) error {

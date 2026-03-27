@@ -321,10 +321,7 @@ func (s *Service) fetchAgentContext() (AgentInfo, error) {
 		return AgentInfo{}, err
 	}
 
-	ctx := s.ctx()
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx := s.ctxOrBackground()
 	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/agent-auth/me"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
@@ -396,10 +393,7 @@ func (s *Service) GetSupportTickets() ([]APITicket, error) {
 	}
 
 	cfg := s.debugConfig()
-	ctx := s.ctx()
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx := s.ctxOrBackground()
 	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/agent-auth/me/tickets"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
@@ -463,10 +457,7 @@ func (s *Service) CreateSupportTicket(input CreateTicketInput) (APITicket, error
 	}
 
 	cfg := s.debugConfig()
-	ctx := s.ctx()
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx := s.ctxOrBackground()
 
 	type createReq struct {
 		DepartmentID      *string `json:"departmentId,omitempty"`
@@ -539,10 +530,7 @@ func (s *Service) GetSupportTicketDetails(ticketID string) (APITicket, error) {
 	}
 
 	cfg := s.debugConfig()
-	ctx := s.ctx()
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx := s.ctxOrBackground()
 
 	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/agent-auth/me/tickets/" + ticketID
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
@@ -618,10 +606,7 @@ func parseWorkflowStatesFromBody(body []byte) ([]APIWorkflowState, error) {
 // GetTicketWorkflowStates returns available workflow states for tickets.
 func (s *Service) GetTicketWorkflowStates() ([]APIWorkflowState, error) {
 	cfg := s.debugConfig()
-	ctx := s.ctx()
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx := s.ctxOrBackground()
 
 	base := strings.TrimSpace(cfg.ApiScheme) + "://" + strings.TrimSpace(cfg.ApiServer)
 	paths := []string{
@@ -692,10 +677,7 @@ func (s *Service) GetTicketComments(ticketID string) ([]TicketComment, error) {
 		return nil, fmt.Errorf("ticketId inválido")
 	}
 	cfg := s.debugConfig()
-	ctx := s.ctx()
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx := s.ctxOrBackground()
 
 	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/agent-auth/me/tickets/" + ticketID + "/comments"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
@@ -749,10 +731,7 @@ func (s *Service) AddTicketCommentWithOptions(ticketID, content string, isIntern
 	}
 
 	cfg := s.debugConfig()
-	ctx := s.ctx()
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx := s.ctxOrBackground()
 
 	payload := map[string]any{
 		"content":    content,
@@ -818,10 +797,7 @@ func (s *Service) CloseSupportTicket(ticketID string, input CloseTicketInput) (A
 	}
 
 	cfg := s.debugConfig()
-	ctx := s.ctx()
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx := s.ctxOrBackground()
 
 	payload := map[string]any{}
 	if input.Rating != nil {
@@ -953,6 +929,21 @@ func (s *Service) CreateAgentTicket(title, description string, priority int, cat
 	return json.Marshal(ticket)
 }
 
+func extractStr(raw map[string]any, key string) string {
+	s := strings.TrimSpace(fmt.Sprint(raw[key]))
+	if s == "<nil>" {
+		return ""
+	}
+	return s
+}
+
+func (s *Service) ctxOrBackground() context.Context {
+	if ctx := s.ctx(); ctx != nil {
+		return ctx
+	}
+	return context.Background()
+}
+
 func toStringSlice(value any) []string {
 	arr, ok := value.([]any)
 	if !ok {
@@ -976,14 +967,10 @@ func estimateReadTimeMin(markdown string) int {
 	if words <= 0 {
 		return 1
 	}
-	minutes := words / 180
-	if words%180 != 0 {
-		minutes++
+	if m := (words + 179) / 180; m > 0 {
+		return m
 	}
-	if minutes < 1 {
-		minutes = 1
-	}
-	return minutes
+	return 1
 }
 
 func buildSummary(content string) string {
@@ -1005,56 +992,24 @@ func buildSummary(content string) string {
 
 func parseKnowledgeArticle(raw map[string]any) KnowledgeArticle {
 	article := KnowledgeArticle{
-		ID:          strings.TrimSpace(fmt.Sprint(raw["id"])),
-		Title:       strings.TrimSpace(fmt.Sprint(raw["title"])),
-		Category:    strings.TrimSpace(fmt.Sprint(raw["category"])),
-		Summary:     strings.TrimSpace(fmt.Sprint(raw["summary"])),
-		Content:     strings.TrimSpace(fmt.Sprint(raw["content"])),
+		ID:          extractStr(raw, "id"),
+		Title:       extractStr(raw, "title"),
+		Category:    extractStr(raw, "category"),
+		Summary:     extractStr(raw, "summary"),
+		Content:     extractStr(raw, "content"),
 		Tags:        toStringSlice(raw["tags"]),
-		Author:      strings.TrimSpace(fmt.Sprint(raw["author"])),
-		Scope:       strings.TrimSpace(fmt.Sprint(raw["scope"])),
-		PublishedAt: strings.TrimSpace(fmt.Sprint(raw["publishedAt"])),
-		Difficulty:  strings.TrimSpace(fmt.Sprint(raw["difficulty"])),
-		UpdatedAt:   strings.TrimSpace(fmt.Sprint(raw["updatedAt"])),
-	}
-
-	if article.ID == "<nil>" {
-		article.ID = ""
-	}
-	if article.Title == "<nil>" {
-		article.Title = ""
-	}
-	if article.Category == "<nil>" {
-		article.Category = ""
-	}
-	if article.Summary == "<nil>" {
-		article.Summary = ""
-	}
-	if article.Content == "<nil>" {
-		article.Content = ""
-	}
-	if article.Author == "<nil>" {
-		article.Author = ""
-	}
-	if article.Scope == "<nil>" {
-		article.Scope = ""
-	}
-	if article.PublishedAt == "<nil>" {
-		article.PublishedAt = ""
-	}
-	if article.Difficulty == "<nil>" {
-		article.Difficulty = ""
-	}
-	if article.UpdatedAt == "<nil>" {
-		article.UpdatedAt = ""
+		Author:      extractStr(raw, "author"),
+		Scope:       extractStr(raw, "scope"),
+		PublishedAt: extractStr(raw, "publishedAt"),
+		Difficulty:  extractStr(raw, "difficulty"),
+		UpdatedAt:   extractStr(raw, "updatedAt"),
 	}
 
 	if article.Summary == "" {
 		article.Summary = buildSummary(article.Content)
 	}
 	if article.Difficulty == "" {
-		scope := strings.ToLower(strings.TrimSpace(article.Scope))
-		switch scope {
+		switch strings.ToLower(article.Scope) {
 		case "global":
 			article.Difficulty = "Global"
 		case "client":
@@ -1142,6 +1097,10 @@ func knowledgeCacheScope(cfg debug.Config, info AgentInfo) string {
 }
 
 func (s *Service) fetchKnowledgeList(info AgentInfo, category string) ([]KnowledgeArticle, error) {
+	return s.fetchKnowledgeListWithCache(info, category, true)
+}
+
+func (s *Service) fetchKnowledgeListWithCache(info AgentInfo, category string, useCache bool) ([]KnowledgeArticle, error) {
 	cfg := s.debugConfig()
 	base := strings.TrimSpace(strings.ToLower(cfg.ApiScheme)) + "://" + strings.TrimSpace(cfg.ApiServer)
 	if strings.TrimSpace(cfg.ApiServer) == "" || strings.TrimSpace(cfg.AuthToken) == "" {
@@ -1149,7 +1108,7 @@ func (s *Service) fetchKnowledgeList(info AgentInfo, category string) ([]Knowled
 	}
 	cacheKey := "knowledge:list:" + knowledgeCacheScope(cfg, info) + ":" + url.QueryEscape(strings.TrimSpace(strings.ToLower(category)))
 
-	if s.db != nil {
+	if useCache && s.db != nil {
 		var cached []KnowledgeArticle
 		if found, err := s.db.CacheGetJSON(cacheKey, &cached); err == nil && found {
 			if cached == nil {
@@ -1165,10 +1124,7 @@ func (s *Service) fetchKnowledgeList(info AgentInfo, category string) ([]Knowled
 	}
 	target := base + path
 
-	ctx := s.ctx()
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx := s.ctxOrBackground()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
@@ -1204,6 +1160,35 @@ func (s *Service) fetchKnowledgeList(info AgentInfo, category string) ([]Knowled
 	return articles, nil
 }
 
+func (s *Service) RefreshKnowledgeBase() error {
+	if !s.featureEnabled(s.knowledgeEnabled()) {
+		return nil
+	}
+
+	info, err := s.fetchAgentContext()
+	if err != nil {
+		s.supportLogf("falha ao resolver contexto para refresh da knowledge base: %v", err)
+		return err
+	}
+
+	cfg := s.debugConfig()
+	cacheKey := "knowledge:list:" + knowledgeCacheScope(cfg, info) + ":" + url.QueryEscape("")
+	if s.db != nil {
+		if err := s.db.CacheDelete(cacheKey); err != nil {
+			log.Printf("[support] aviso: falha ao limpar cache de knowledge list: %v", err)
+		}
+	}
+
+	articles, err := s.fetchKnowledgeListWithCache(info, "", false)
+	if err != nil {
+		s.supportLogf("falha ao recarregar base de conhecimento: %v", err)
+		return err
+	}
+
+	s.supportLogf("base de conhecimento recarregada: %d artigo(s)", len(articles))
+	return nil
+}
+
 func (s *Service) fetchKnowledgeDetail(info AgentInfo, articleID string) (KnowledgeArticle, error) {
 	articleID = strings.TrimSpace(articleID)
 	if articleID == "" {
@@ -1227,10 +1212,7 @@ func (s *Service) fetchKnowledgeDetail(info AgentInfo, articleID string) (Knowle
 
 	target := strings.TrimSpace(strings.ToLower(cfg.ApiScheme)) + "://" + strings.TrimSpace(cfg.ApiServer) + "/api/agent-auth/knowledge/" + url.PathEscape(articleID)
 
-	ctx := s.ctx()
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx := s.ctxOrBackground()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {

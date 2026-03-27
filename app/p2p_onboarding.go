@@ -288,7 +288,10 @@ func (s *p2pTransferServer) handleP2POnboard(w http.ResponseWriter, r *http.Requ
 	}
 }
 
-func (s *p2pTransferServer) handleOnboardOffer(w http.ResponseWriter, _ *http.Request) {
+// handleOnboardOffer responde ao GET /p2p/config/onboard com uma oferta de
+// provisionamento assinada. Requer que este agente esteja configurado e que a
+// feature DiscoveryEnabled esteja ativa na configuração do servidor.
+func (s *p2pTransferServer) handleOnboardOffer(w http.ResponseWriter, r *http.Request) {
 	if s.app == nil {
 		http.Error(w, "unavailable", http.StatusServiceUnavailable)
 		return
@@ -297,21 +300,62 @@ func (s *p2pTransferServer) handleOnboardOffer(w http.ResponseWriter, _ *http.Re
 		http.Error(w, "not configured", http.StatusNoContent)
 		return
 	}
-	inst, _, err := loadInstallerConfig()
-	if err != nil || strings.TrimSpace(inst.APIKey) == "" {
-		http.Error(w, "no deploy key available", http.StatusNoContent)
+
+	// Respeitar feature flag DiscoveryEnabled (controlada pelo servidor).
+	agentCfg := s.app.GetAgentConfiguration()
+	if agentCfg.DiscoveryEnabled != nil && !*agentCfg.DiscoveryEnabled {
+		http.Error(w, "auto-provisioning disabled", http.StatusForbidden)
 		return
 	}
+
 	s.mu.RLock()
 	agentID := s.agentID
 	s.mu.RUnlock()
-	offer, err := BuildOnboardingOffer(agentID, inst.ServerURL, inst.APIKey, onboardingDeployKeyTTL)
+
+	// Buscar token de provisionamento temporário na API.
+	deployKey, expiresAt, err := s.app.requestProvisioningToken(r.Context())
 	if err != nil {
-		http.Error(w, "failed to build offer", http.StatusInternalServerError)
+		s.app.logs.append("[onboarding] falha ao obter provisioning token: " + err.Error())
+		http.Error(w, "provisioning token unavailable", http.StatusServiceUnavailable)
+		recordAutoProvisioningEvent(s.app, agentID, "", false, "provisioning token error: "+err.Error())
 		return
 	}
+
+	// Construir URL canônica (evitar inst.ServerURL legado).
+	inst, _, loadErr := loadInstallerConfig()
+	var serverURL string
+	if loadErr == nil && strings.TrimSpace(inst.ApiScheme) != "" && strings.TrimSpace(inst.ApiServer) != "" {
+		serverURL = strings.TrimSpace(inst.ApiScheme) + "://" + strings.TrimSpace(inst.ApiServer)
+	} else if loadErr == nil && strings.TrimSpace(inst.ServerURL) != "" {
+		// fallback compatível com instalações legadas
+		serverURL = strings.TrimSpace(inst.ServerURL)
+	}
+	if serverURL == "" {
+		http.Error(w, "server url not configured", http.StatusInternalServerError)
+		recordAutoProvisioningEvent(s.app, agentID, "", false, "server url missing")
+		return
+	}
+
+	// Calcular TTL a partir do expiresAt retornado pela API (com fallback).
+	ttl := onboardingDeployKeyTTL
+	if parsed, parseErr := time.Parse(time.RFC3339, expiresAt); parseErr == nil {
+		if remaining := time.Until(parsed); remaining > 0 {
+			ttl = remaining
+		}
+	}
+
+	offer, err := BuildOnboardingOffer(agentID, serverURL, deployKey, ttl)
+	if err != nil {
+		http.Error(w, "failed to build offer", http.StatusInternalServerError)
+		recordAutoProvisioningEvent(s.app, agentID, serverURL, false, "build offer error: "+err.Error())
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(offer)
+
+	// Registrar evento de auditoria (lado provisionador).
+	recordAutoProvisioningEvent(s.app, agentID, serverURL, true, "offer emitida")
 }
 
 func (s *p2pTransferServer) handleOnboardReceive(w http.ResponseWriter, r *http.Request) {
@@ -351,4 +395,77 @@ func onboardingBackoff(attempt int) time.Duration {
 	}
 	jitter, _ := rand.Int(rand.Reader, big.NewInt(jitterMax))
 	return time.Duration(int64(base) + jitter.Int64())
+}
+
+// requestProvisioningToken solicita ao servidor um deploy key temporário para
+// uso no auto-provisioning P2P. Retorna o deployKey, o expiresAt (RFC3339) e
+// qualquer erro. Requer que o agente já esteja configurado com AuthToken válido.
+func (a *App) requestProvisioningToken(ctx context.Context) (deployKey, expiresAt string, err error) {
+	inst, _, err := loadInstallerConfig()
+	if err != nil {
+		return "", "", fmt.Errorf("config não disponível: %w", err)
+	}
+	if strings.TrimSpace(inst.AuthToken) == "" || strings.TrimSpace(inst.ApiServer) == "" {
+		return "", "", fmt.Errorf("agente sem credenciais válidas")
+	}
+
+	scheme := strings.TrimSpace(inst.ApiScheme)
+	if scheme == "" {
+		scheme = "https"
+	}
+	endpoint := scheme + "://" + strings.TrimSpace(inst.ApiServer) + "/api/agent-auth/me/zero-touch/deploy-token"
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
+	if err != nil {
+		return "", "", fmt.Errorf("erro ao construir request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(inst.AuthToken))
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", "", fmt.Errorf("falha na requisição: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", "", fmt.Errorf("servidor retornou HTTP %d", resp.StatusCode)
+	}
+
+	var tokenResp P2PProvisioningTokenResponse
+	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
+		return "", "", fmt.Errorf("resposta inválida do servidor: %w", err)
+	}
+	if strings.TrimSpace(tokenResp.Token) == "" {
+		return "", "", fmt.Errorf("servidor retornou token vazio")
+	}
+
+	return strings.TrimSpace(tokenResp.Token), strings.TrimSpace(tokenResp.ExpiresAt), nil
+}
+
+// recordAutoProvisioningEvent regista um evento de auditoria no coordinator
+// pelo lado do provisionador (agente configurado que entregou uma oferta).
+func recordAutoProvisioningEvent(a *App, sourceAgentID, serverURL string, success bool, msg string) {
+	if a == nil || a.p2pCoord == nil {
+		return
+	}
+	event := P2POnboardingAuditEvent{
+		TimestampUTC:  time.Now().UTC().Format(time.RFC3339),
+		SourceAgentID: sourceAgentID,
+		ServerURL:     serverURL,
+		Success:       success,
+		Message:       msg,
+	}
+	c := a.p2pCoord
+	c.autoProvisionedMu.Lock()
+	if success {
+		c.autoProvisionedCount++
+	}
+	c.autoProvisionedAudit = append(c.autoProvisionedAudit, event)
+	// Manter somente os 100 eventos mais recentes
+	if len(c.autoProvisionedAudit) > 100 {
+		c.autoProvisionedAudit = c.autoProvisionedAudit[len(c.autoProvisionedAudit)-100:]
+	}
+	c.autoProvisionedMu.Unlock()
 }

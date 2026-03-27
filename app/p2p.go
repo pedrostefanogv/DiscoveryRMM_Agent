@@ -59,6 +59,11 @@ type p2pCoordinator struct {
 	// A entrada é invalidada quando a mtime do arquivo muda.
 	sha256CacheMu sync.Mutex
 	sha256Cache   map[string]artifactSHA256CacheEntry
+
+	// autoProvisioning rastreia agentes que este peer provisionou como configurador.
+	autoProvisionedMu    sync.RWMutex
+	autoProvisionedCount int64
+	autoProvisionedAudit []P2POnboardingAuditEvent
 }
 
 type p2pPeerState struct {

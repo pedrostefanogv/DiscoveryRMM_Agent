@@ -215,9 +215,46 @@ function p2pRenderAudit(events) {
   }).join('');
 }
 
+function p2pRenderAutoProvisioning(stats) {
+  var statusEl = p2pEl('autoProvisioningStatus');
+  var eventsEl = p2pEl('autoProvisioningEvents');
+  if (!statusEl && !eventsEl) return;
+
+  var s = stats || { enabled: false, totalProvisioned: 0, recentEvents: [] };
+
+  if (statusEl) {
+    var rows = [
+      ['Ativo', s.enabled ? 'sim' : 'nao'],
+      ['Agentes provisionados', String(s.totalProvisioned || 0)],
+      ['Endpoint', '/p2p/config/onboard (GET)']
+    ];
+    statusEl.innerHTML = rows.map(function (r) {
+      return '<div class="fact"><div class="k">' + p2pEscapeHtml(r[0]) + '</div><div class="v mono">' + p2pEscapeHtml(r[1]) + '</div></div>';
+    }).join('');
+  }
+
+  if (eventsEl) {
+    var events = s.recentEvents || [];
+    if (!events.length) {
+      eventsEl.innerHTML = '<div class="automation-task-card"><div class="meta">Nenhum evento de auto-provisioning registrado.</div></div>';
+    } else {
+      eventsEl.innerHTML = events.map(function (ev) {
+        var badge = ev.success ? 'success' : 'error';
+        return '<article class="automation-task-card">' +
+          '<div class="automation-task-top">' +
+          '<h4 class="mono">' + p2pEscapeHtml(ev.sourceAgentId || '-') + '</h4>' +
+          '<span class="automation-execution-badge ' + badge + '">' + (ev.success ? 'ok' : 'erro') + '</span>' +
+          '</div>' +
+          '<div class="automation-task-meta">' + p2pEscapeHtml(p2pFormatDate(ev.timestampUtc)) + '</div>' +
+          (ev.serverUrl ? '<div class="automation-task-desc">Servidor: ' + p2pEscapeHtml(ev.serverUrl) + '</div>' : '') +
+          '<div class="meta">' + p2pEscapeHtml(ev.message || '-') + '</div>' +
+          '</article>';
+      }).join('');
+    }
+  }
+}
+
 function p2pFillConfig(cfg) {
-  if (!cfg) return;
-  var enabled = p2pEl('enabled');
   var mode = p2pEl('mode');
   var ttl = p2pEl('ttl');
   var seedPercent = p2pEl('seedPercent');
@@ -274,7 +311,8 @@ async function loadP2PView() {
       auditAction ? auditAction.value : 'all',
       auditPeer ? auditPeer.value : 'all',
       auditStatus ? auditStatus.value : 'all'
-    ).catch(function () { return p2pApi().ListP2PAuditEvents(); })
+    ).catch(function () { return p2pApi().ListP2PAuditEvents(); }),
+    p2pApi().GetAutoProvisioningStats().catch(function () { return null; })
   ]);
 
   p2pRenderStatus(results[0] || {});
@@ -284,6 +322,7 @@ async function loadP2PView() {
   p2pPeerArtifactIndex = results[4] || [];
   p2pRenderRemoteArtifactsForSelectedPeer();
   p2pRenderAudit(results[5] || []);
+  p2pRenderAutoProvisioning(results[6]);
   // Limpar mensagem de erro anterior em caso de sucesso
   p2pSetStatus('', '');
 }

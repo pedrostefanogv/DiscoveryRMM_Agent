@@ -177,3 +177,48 @@ func (a *App) ListP2PAuditEventsFiltered(action, peerAgentID, status string) []P
 	}
 	return a.p2pCoord.ListAuditEventsFiltered(action, peerAgentID, status)
 }
+
+// GetAutoProvisioningStats retorna estatísticas de auto-provisioning do lado
+// deste agente enquanto provisionador (agente configurado que entrega ofertas).
+// Útil para monitorar quantos agentes genéricos este peer já configurou.
+func (a *App) GetAutoProvisioningStats() P2PAutoProvisioningStats {
+	agentCfg := a.GetAgentConfiguration()
+	enabled := agentCfg.DiscoveryEnabled == nil || *agentCfg.DiscoveryEnabled
+
+	if a.p2pCoord == nil {
+		return P2PAutoProvisioningStats{Enabled: enabled, RecentEvents: []P2POnboardingAuditEvent{}}
+	}
+
+	c := a.p2pCoord
+	c.autoProvisionedMu.RLock()
+	total := c.autoProvisionedCount
+	events := make([]P2POnboardingAuditEvent, len(c.autoProvisionedAudit))
+	copy(events, c.autoProvisionedAudit)
+	c.autoProvisionedMu.RUnlock()
+
+	// Retornar os eventos mais recentes primeiro.
+	for i, j := 0, len(events)-1; i < j; i, j = i+1, j-1 {
+		events[i], events[j] = events[j], events[i]
+	}
+
+	return P2PAutoProvisioningStats{
+		Enabled:          enabled && isAgentConfigured(),
+		TotalProvisioned: total,
+		RecentEvents:     events,
+	}
+}
+
+// GetOnboardingStatus retorna o status do agente sob perspectiva de onboarding:
+// se está configurado ou aguardando provisionamento automático da rede P2P.
+func (a *App) GetOnboardingStatus() map[string]interface{} {
+	configured := isAgentConfigured()
+	result := map[string]interface{}{
+		"configured": configured,
+		"mode":       "normal",
+	}
+	if !configured {
+		result["mode"] = "awaiting-auto-provisioning"
+		result["message"] = "Agente genérico: aguardando auto-provisioning da rede P2P"
+	}
+	return result
+}
