@@ -10,28 +10,37 @@ import (
 
 // logBuffer stores command output lines for the embedded terminal view.
 type logBuffer struct {
-	mu    sync.RWMutex
-	lines []string
-	file  *os.File
+	mu          sync.RWMutex
+	lines       []string
+	file        *os.File
+	nextSubID   uint64
+	subscribers map[uint64]func(string)
 }
 
 func (l *logBuffer) append(line string) {
 	l.mu.Lock()
-	defer l.mu.Unlock()
+	var appended []string
 
 	if strings.TrimSpace(line) == "" {
-		l.appendLineLocked("")
-		return
+		appended = append(appended, l.appendLineLocked(""))
+	} else {
+		normalized := strings.ReplaceAll(line, "\r\n", "\n")
+		normalized = strings.ReplaceAll(normalized, "\r", "\n")
+		for _, part := range strings.Split(normalized, "\n") {
+			appended = append(appended, l.appendLineLocked(part))
+		}
 	}
+	subscribers := l.snapshotSubscribersLocked()
+	l.mu.Unlock()
 
-	normalized := strings.ReplaceAll(line, "\r\n", "\n")
-	normalized = strings.ReplaceAll(normalized, "\r", "\n")
-	for _, part := range strings.Split(normalized, "\n") {
-		l.appendLineLocked(part)
+	for _, item := range appended {
+		for _, sub := range subscribers {
+			sub(item)
+		}
 	}
 }
 
-func (l *logBuffer) appendLineLocked(line string) {
+func (l *logBuffer) appendLineLocked(line string) string {
 	const maxLineBytes = 8192
 	if len(line) > maxLineBytes {
 		line = line[:maxLineBytes] + "... (truncado)"
@@ -42,6 +51,39 @@ func (l *logBuffer) appendLineLocked(line string) {
 	}
 	if l.file != nil {
 		_, _ = l.file.WriteString(time.Now().Format(time.RFC3339) + " " + line + "\n")
+	}
+	return line
+}
+
+func (l *logBuffer) snapshotSubscribersLocked() []func(string) {
+	if len(l.subscribers) == 0 {
+		return nil
+	}
+	out := make([]func(string), 0, len(l.subscribers))
+	for _, fn := range l.subscribers {
+		out = append(out, fn)
+	}
+	return out
+}
+
+func (l *logBuffer) subscribe(fn func(string)) func() {
+	if fn == nil {
+		return func() {}
+	}
+
+	l.mu.Lock()
+	if l.subscribers == nil {
+		l.subscribers = make(map[uint64]func(string))
+	}
+	l.nextSubID++
+	id := l.nextSubID
+	l.subscribers[id] = fn
+	l.mu.Unlock()
+
+	return func() {
+		l.mu.Lock()
+		delete(l.subscribers, id)
+		l.mu.Unlock()
 	}
 }
 

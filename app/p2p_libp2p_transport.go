@@ -509,9 +509,37 @@ func (r *libp2pPeerRegistry) Register(agentID string, id peer.ID) {
 		return
 	}
 	key := strings.ToLower(strings.TrimSpace(agentID))
+	if key == "" {
+		return
+	}
 	r.mu.Lock()
 	r.peers[key] = id
 	r.mu.Unlock()
+}
+
+// RegisterStrict accepts the first mapping for an agentID and rejects
+// conflicting peer IDs for the same agentID.
+func (r *libp2pPeerRegistry) RegisterStrict(agentID string, id peer.ID) (accepted bool, existing peer.ID, conflict bool) {
+	if r == nil {
+		return false, "", false
+	}
+	key := strings.ToLower(strings.TrimSpace(agentID))
+	if key == "" {
+		return false, "", false
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if prev, ok := r.peers[key]; ok {
+		if prev != "" && id != "" && prev != id {
+			return false, prev, true
+		}
+		return true, prev, false
+	}
+
+	r.peers[key] = id
+	return true, "", false
 }
 
 // Lookup retorna o peer.ID para um agentID, se registrado. Seguro para uso concorrente.

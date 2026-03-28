@@ -97,6 +97,7 @@ type App struct {
 	chatSvc        *ai.Service
 	automationSvc  *automation.Service
 	agentConn      *agentconn.Runtime
+	remoteDebug    *remoteDebugManager
 	syncCoord      *syncCoordinator
 	p2pCoord       *p2pCoordinator
 	agentInfo      agentInfoCache
@@ -171,6 +172,7 @@ func NewApp(opts AppStartupOptions) *App {
 	a.automationSvc.SetPackageAuthorization(func(ctx context.Context, installationType automation.AppInstallationType, packageID, operation string) error {
 		return a.authorizeAutomationPackage(ctx, string(installationType), packageID, operation)
 	})
+	a.remoteDebug = newRemoteDebugManager(a.logs.append, a.GetDebugConfig, a.logs.subscribe)
 	inventoryProvider.SetProgressCallback(func() {
 		a.pulseInventoryHeartbeat()
 	})
@@ -178,12 +180,18 @@ func NewApp(opts AppStartupOptions) *App {
 		LoadConfig: func() agentconn.Config {
 			cfg := a.GetDebugConfig()
 			return agentconn.Config{
-				ApiScheme:    cfg.ApiScheme,
-				ApiServer:    cfg.ApiServer,
-				NatsServer:   cfg.NatsServer,
-				NatsWsServer: cfg.NatsWsServer,
-				AuthToken:    cfg.AuthToken,
-				AgentID:      cfg.AgentID,
+				ApiScheme:                cfg.ApiScheme,
+				ApiServer:                cfg.ApiServer,
+				NatsServer:               cfg.NatsServer,
+				NatsWsServer:             cfg.NatsWsServer,
+				NatsServerHost:           cfg.NatsServerHost,
+				NatsUseWssExternal:       cfg.NatsUseWssExternal,
+				EnforceTLSHashValidation: cfg.EnforceTlsHashValidation,
+				HandshakeEnabled:         cfg.HandshakeEnabled,
+				ApiTLSCertHash:           cfg.ApiTlsCertHash,
+				NatsTLSCertHash:          cfg.NatsTlsCertHash,
+				AuthToken:                cfg.AuthToken,
+				AgentID:                  cfg.AgentID,
 			}
 		},
 		Logf: func(format string, args ...any) {
@@ -194,6 +202,8 @@ func NewApp(opts AppStartupOptions) *App {
 				a.syncCoord.HandlePing(ping)
 			}
 		},
+		HandleCommand:   a.handleAgentRuntimeCommand,
+		OnCommandOutput: a.onAgentCommandOutput,
 	})
 	a.debugSvc = debug.NewService(debug.Options{
 		Logf: func(line string) {

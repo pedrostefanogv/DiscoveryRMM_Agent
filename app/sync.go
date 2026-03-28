@@ -357,6 +357,9 @@ func (a *App) fetchSyncManifest(ctx context.Context) (SyncManifestResponse, erro
 	}
 	req.Header.Set("Accept", "application/json")
 	netutil.SetAgentAuthHeaders(req, token)
+	if agentID := strings.TrimSpace(cfg.AgentID); agentID != "" {
+		req.Header.Set("X-Agent-ID", agentID)
+	}
 
 	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
 	if err != nil {
@@ -423,6 +426,21 @@ func (a *App) refreshAgentConfiguration(ctx context.Context) error {
 		return nil
 	}
 	a.setAgentConfiguration(cfgParsed)
+	if a.debugSvc != nil {
+		changed, applyErr := a.debugSvc.ApplyRemoteConnectionSecurity(
+			cfgParsed.NatsServerHost,
+			cfgParsed.NatsUseWssExternal,
+			cfgParsed.EnforceTlsHashValidation,
+			cfgParsed.HandshakeEnabled,
+			cfgParsed.ApiTlsCertHash,
+			cfgParsed.NatsTlsCertHash,
+		)
+		if applyErr != nil {
+			a.logs.append("[sync] falha ao aplicar seguranca remota de transporte: " + applyErr.Error())
+		} else if changed {
+			a.logs.append("[sync] seguranca de transporte aplicada e reconexao solicitada")
+		}
+	}
 	a.logs.append("[sync] configuração do agent atualizada")
 	return nil
 }

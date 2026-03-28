@@ -11,6 +11,12 @@ func TestParseAgentConfiguration_BasicFields(t *testing.T) {
 		"discoveryEnabled": false,
 		"p2pFilesEnabled": true,
 		"supportEnabled": true,
+		"natsServerHost": "nats.example.local",
+		"natsUseWssExternal": true,
+		"enforceTlsHashValidation": true,
+		"handshakeEnabled": true,
+		"apiTlsCertHash": "aa:bb:cc",
+		"natsTlsCertHash": "11 22 33",
 		"chatAIEnabled": false,
 		"inventoryIntervalHours": 12,
 		"agentHeartbeatIntervalSeconds": 60,
@@ -39,6 +45,24 @@ func TestParseAgentConfiguration_BasicFields(t *testing.T) {
 	}
 	if cfg.ChatAIEnabled == nil || *cfg.ChatAIEnabled {
 		t.Fatalf("expected chatAIEnabled=false")
+	}
+	if cfg.NatsServerHost != "nats.example.local" {
+		t.Fatalf("expected natsServerHost set")
+	}
+	if cfg.NatsUseWssExternal == nil || !*cfg.NatsUseWssExternal {
+		t.Fatalf("expected natsUseWssExternal=true")
+	}
+	if cfg.EnforceTlsHashValidation == nil || !*cfg.EnforceTlsHashValidation {
+		t.Fatalf("expected enforceTlsHashValidation=true")
+	}
+	if cfg.HandshakeEnabled == nil || !*cfg.HandshakeEnabled {
+		t.Fatalf("expected handshakeEnabled=true")
+	}
+	if cfg.ApiTlsCertHash != "AA:BB:CC" {
+		t.Fatalf("expected apiTlsCertHash normalized, got %q", cfg.ApiTlsCertHash)
+	}
+	if cfg.NatsTlsCertHash != "11 22 33" {
+		t.Fatalf("expected natsTlsCertHash preserved casing normalization")
 	}
 	if cfg.InventoryIntervalHours == nil || *cfg.InventoryIntervalHours != 12 {
 		t.Fatalf("expected inventoryIntervalHours=12")

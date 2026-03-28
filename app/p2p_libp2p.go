@@ -121,7 +121,19 @@ func (p *p2pLibP2PProvider) Start(
 		}
 		// Registrar mapeamento agentID → peer.ID para transfer streams.
 		if p.registry != nil {
-			p.registry.Register(remote.AgentID, s.Conn().RemotePeer())
+			if ok, existing, conflict := p.registry.RegisterStrict(remote.AgentID, s.Conn().RemotePeer()); conflict {
+				if onTrace != nil {
+					onTrace(fmt.Sprintf("libp2p peer rejeitado por conflito de identidade: agentId=%s peerAtual=%s peerRegistrado=%s",
+						strings.TrimSpace(remote.AgentID), s.Conn().RemotePeer(), existing))
+				}
+				if p.gater != nil {
+					p.gater.BlockPeer(s.Conn().RemotePeer())
+				}
+				_ = s.Reset()
+				return
+			} else if !ok {
+				return
+			}
 		}
 		onPeer(p2pDiscoveredPeer{
 			AgentID:      strings.TrimSpace(remote.AgentID),
@@ -260,7 +272,16 @@ func (n *libp2pMDNSNotifee) HandlePeerFound(pi peer.AddrInfo) {
 	}
 	// Registrar mapeamento agentID → peer.ID para uso em streams de transferência.
 	if n.registry != nil {
-		n.registry.Register(remote.AgentID, pi.ID)
+		if ok, existing, conflict := n.registry.RegisterStrict(remote.AgentID, pi.ID); conflict {
+			if n.onTrace != nil {
+				n.onTrace(fmt.Sprintf("libp2p peer rejeitado por conflito de identidade: agentId=%s peerAtual=%s peerRegistrado=%s",
+					strings.TrimSpace(remote.AgentID), pi.ID, existing))
+			}
+			_ = n.h.Network().ClosePeer(pi.ID)
+			return
+		} else if !ok {
+			return
+		}
 	}
 	n.onPeer(p2pDiscoveredPeer{
 		AgentID:      strings.TrimSpace(remote.AgentID),

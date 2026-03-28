@@ -105,6 +105,7 @@ func (s *Service) LoadPersistedConfig() {
 			s.logf("[debug] configuracao persistida ignorada: scheme invalido")
 			return
 		}
+		normalizeSecurityConfig(&cfg)
 
 		s.mu.Lock()
 		s.config = cfg
@@ -202,6 +203,7 @@ func (s *Service) ApplyRuntimeConnectionConfig(apiScheme, apiServer, authToken, 
 	cfg.AgentID = strings.TrimSpace(agentID)
 	cfg.NatsServer = strings.TrimSpace(natsServer)
 	cfg.NatsWsServer = strings.TrimSpace(natsWsServer)
+	normalizeSecurityConfig(&cfg)
 
 	if cfg.NatsServer != "" {
 		cfg.Scheme = "nats"
@@ -217,6 +219,65 @@ func (s *Service) ApplyRuntimeConnectionConfig(apiScheme, apiServer, authToken, 
 	s.mu.Lock()
 	s.config = cfg
 	s.mu.Unlock()
+}
+
+// ApplyRemoteConnectionSecurity updates TLS pinning and transport hardening values from /me/configuration.
+// It persists the updated runtime config and forces reconnect so new policies apply immediately.
+func (s *Service) ApplyRemoteConnectionSecurity(natsServerHost string, natsUseWssExternal, enforceTLSHashValidation, handshakeEnabled *bool, apiTLSCertHash, natsTLSCertHash string) (bool, error) {
+	s.mu.Lock()
+	cfg := s.config
+
+	nextNatsServerHost := strings.TrimSpace(natsServerHost)
+	nextApiTLSCertHash := strings.ToUpper(strings.TrimSpace(apiTLSCertHash))
+	nextNatsTLSCertHash := strings.ToUpper(strings.TrimSpace(natsTLSCertHash))
+
+	changed := false
+	if cfg.NatsServerHost != nextNatsServerHost {
+		cfg.NatsServerHost = nextNatsServerHost
+		changed = true
+	}
+	if natsUseWssExternal != nil && cfg.NatsUseWssExternal != *natsUseWssExternal {
+		cfg.NatsUseWssExternal = *natsUseWssExternal
+		changed = true
+	}
+	if cfg.ApiTlsCertHash != nextApiTLSCertHash {
+		cfg.ApiTlsCertHash = nextApiTLSCertHash
+		changed = true
+	}
+	if cfg.NatsTlsCertHash != nextNatsTLSCertHash {
+		cfg.NatsTlsCertHash = nextNatsTLSCertHash
+		changed = true
+	}
+	if enforceTLSHashValidation != nil && cfg.EnforceTlsHashValidation != *enforceTLSHashValidation {
+		cfg.EnforceTlsHashValidation = *enforceTLSHashValidation
+		changed = true
+	}
+	if handshakeEnabled != nil && cfg.HandshakeEnabled != *handshakeEnabled {
+		cfg.HandshakeEnabled = *handshakeEnabled
+		changed = true
+	}
+
+	normalizeSecurityConfig(&cfg)
+	s.config = cfg
+	s.mu.Unlock()
+
+	if !changed {
+		return false, nil
+	}
+
+	persistErr := s.PersistConfig(cfg)
+	if persistErr != nil {
+		s.logf("[debug] falha ao persistir atualizacao de seguranca remota: " + persistErr.Error())
+	}
+	if s.agentConn != nil {
+		s.logf("[debug] recarregando conexao apos atualizacao de seguranca remota")
+		s.agentConn.Reload()
+	}
+
+	if persistErr != nil {
+		return true, persistErr
+	}
+	return true, nil
 }
 
 func (s *Service) testAgentAPIConnectivity(ctx context.Context, apiScheme, apiServer, authToken, agentID string) error {
@@ -372,6 +433,7 @@ func (s *Service) SetConfig(cfg Config) error {
 	cfg.NatsWsServer = strings.TrimSpace(cfg.NatsWsServer)
 	cfg.AgentID = strings.TrimSpace(cfg.AgentID)
 	cfg.AuthToken = strings.TrimSpace(cfg.AuthToken)
+	normalizeSecurityConfig(&cfg)
 
 	if cfg.ApiServer != "" {
 		if cfg.ApiScheme != "http" && cfg.ApiScheme != "https" {
@@ -574,6 +636,19 @@ func (s *Service) GetRealtimeStatus() (RealtimeStatus, error) {
 func isValidDebugScheme(s string) bool {
 	s = strings.TrimSpace(strings.ToLower(s))
 	return s == "http" || s == "https" || s == "nats"
+}
+
+func normalizeSecurityConfig(cfg *Config) {
+	if cfg == nil {
+		return
+	}
+	cfg.NatsServerHost = strings.TrimSpace(cfg.NatsServerHost)
+	cfg.ApiTlsCertHash = strings.ToUpper(strings.TrimSpace(cfg.ApiTlsCertHash))
+	cfg.NatsTlsCertHash = strings.ToUpper(strings.TrimSpace(cfg.NatsTlsCertHash))
+	if !cfg.HandshakeEnabled {
+		// Mantemos handshake seguro ativo por padrao para evitar downgrade silencioso.
+		cfg.HandshakeEnabled = true
+	}
 }
 
 func debugConfigPathCandidates() []string {

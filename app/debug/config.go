@@ -16,6 +16,12 @@ type Config struct {
 	AuthToken                         string `json:"authToken"`
 	NatsServer                        string `json:"natsServer"`
 	NatsWsServer                      string `json:"natsWsServer"`
+	NatsServerHost                    string `json:"natsServerHost,omitempty"`
+	NatsUseWssExternal                bool   `json:"natsUseWssExternal,omitempty"`
+	EnforceTlsHashValidation          bool   `json:"enforceTlsHashValidation,omitempty"`
+	HandshakeEnabled                  bool   `json:"handshakeEnabled,omitempty"`
+	ApiTlsCertHash                    string `json:"apiTlsCertHash,omitempty"`
+	NatsTlsCertHash                   string `json:"natsTlsCertHash,omitempty"`
 	AgentID                           string `json:"agentId"`
 	Scheme                            string `json:"scheme,omitempty"`
 	Server                            string `json:"server,omitempty"`

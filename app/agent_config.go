@@ -29,6 +29,12 @@ type AgentConfiguration struct {
 	DiscoveryEnabled              *bool                 `json:"discoveryEnabled"`
 	P2PFilesEnabled               *bool                 `json:"p2pFilesEnabled"`
 	SupportEnabled                *bool                 `json:"supportEnabled"`
+	NatsServerHost                string                `json:"natsServerHost"`
+	NatsUseWssExternal            *bool                 `json:"natsUseWssExternal"`
+	EnforceTlsHashValidation      *bool                 `json:"enforceTlsHashValidation"`
+	HandshakeEnabled              *bool                 `json:"handshakeEnabled"`
+	ApiTlsCertHash                string                `json:"apiTlsCertHash"`
+	NatsTlsCertHash               string                `json:"natsTlsCertHash"`
 	MeshCentralEnabledEffective   *bool                 `json:"meshCentralEnabledEffective"`
 	MeshCentralGroupPolicyProfile string                `json:"meshCentralGroupPolicyProfile"`
 	ChatAIEnabled                 *bool                 `json:"chatAIEnabled"`
@@ -87,6 +93,12 @@ func parseAgentConfiguration(data []byte) (AgentConfiguration, error) {
 		DiscoveryEnabled:              getBoolPtr("discoveryEnabled"),
 		P2PFilesEnabled:               getBoolPtr("p2pFilesEnabled"),
 		SupportEnabled:                getBoolPtr("supportEnabled"),
+		NatsServerHost:                getString("natsServerHost"),
+		NatsUseWssExternal:            getBoolPtr("natsUseWssExternal"),
+		EnforceTlsHashValidation:      getBoolPtr("enforceTlsHashValidation"),
+		HandshakeEnabled:              getBoolPtr("handshakeEnabled"),
+		ApiTlsCertHash:                strings.ToUpper(getString("apiTlsCertHash")),
+		NatsTlsCertHash:               strings.ToUpper(getString("natsTlsCertHash")),
 		MeshCentralEnabledEffective:   getBoolPtr("meshCentralEnabledEffective"),
 		MeshCentralGroupPolicyProfile: getString("meshCentralGroupPolicyProfile"),
 		ChatAIEnabled:                 getBoolPtr("chatAIEnabled"),
@@ -186,6 +198,21 @@ func (a *App) applyAgentConfiguration(cfg AgentConfiguration) {
 		p2pCfg := a.GetP2PConfig()
 		p2pCfg.Enabled = *cfg.P2PFilesEnabled
 		a.applyP2PConfig(p2pCfg)
+	}
+
+	if a.debugSvc != nil {
+		changed, err := a.debugSvc.ApplyRemoteConnectionSecurity(
+			cfg.NatsServerHost,
+			cfg.NatsUseWssExternal,
+			cfg.EnforceTlsHashValidation,
+			cfg.HandshakeEnabled,
+			cfg.ApiTlsCertHash,
+			cfg.NatsTlsCertHash)
+		if err != nil {
+			a.logs.append("[config] falha ao aplicar seguranca remota: " + err.Error())
+		} else if changed {
+			a.logs.append("[config] seguranca remota aplicada; reconexao solicitada")
+		}
 	}
 
 	// Discovery onboarding toggle — governs whether this agent participates in P2P onboarding.
