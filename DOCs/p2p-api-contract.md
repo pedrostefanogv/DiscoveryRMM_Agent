@@ -1,17 +1,24 @@
 # P2P API Contract — Discovery Agent
 
-This document describes all HTTP endpoints exposed by the P2P transfer server
-(running locally on each agent) **and** the server-side REST endpoints that the
+This document describes the local P2P transport implemented in the agent
+(HTTP minimal + libp2p streams) **and** the server-side REST endpoints that the
 agent calls for fleet coordination. It is intended as the authoritative reference
-for backend developers implementing the server side.
+for backend developers implementing or integrating with the current transport.
+
+> Update (2026-03): artifact transfer and peer gossip are now primarily handled
+> by libp2p stream protocols. Local HTTP is kept for health and onboarding.
+> Legacy HTTP transfer endpoints remain documented below for compatibility
+> context and migration, but they are not the primary path in the current build.
 
 ---
 
 ## Table of Contents
 
-1. [Local Agent P2P HTTP Server](#1-local-agent-p2p-http-server)
+1. [Local Agent Transport (HTTP + libp2p)](#1-local-agent-transport-http--libp2p)
+  - [Current transport map](#current-transport-map)
    - [Authentication model](#authentication-model)
-   - [Endpoints](#local-endpoints)
+  - [HTTP local endpoints](#local-endpoints)
+  - [libp2p stream protocols (current)](#libp2p-stream-protocols-current)
 2. [Server API (agent → server)](#2-server-api-agent--server)
    - [Authentication](#server-authentication)
    - [GET  /api/agent-auth/me/p2p-seed-plan](#get-apagent-authmeseedd-plan)
@@ -23,11 +30,22 @@ for backend developers implementing the server side.
 
 ---
 
-## 1. Local Agent P2P HTTP Server
+## 1. Local Agent Transport (HTTP + libp2p)
 
 Each agent starts an HTTP server on a random port within the configured range
-(default `41080–41120`). Peers discover the address via mDNS, UDP broadcast,
-or libp2p, then use this server exclusively for pull-based artifact transfers.
+(default `41080–41120`) and a libp2p host for peer discovery/transfer.
+
+### Current transport map
+
+| Capability | Current path | Notes |
+|---|---|---|
+| Local health | `GET /p2p/health` | HTTP local endpoint |
+| Onboarding pull/push | `GET/PUT /p2p/config/onboard` | HTTP local endpoint |
+| Peer gossip | `/discovery/peers/1.0.0` | libp2p stream protocol |
+| Artifact access token | `/artifact/access/1.0.0` | libp2p stream protocol |
+| Artifact manifest | `/artifact/manifest/1.0.0` | libp2p stream protocol |
+| Artifact bytes/chunks | `/artifact/get/1.0.0` | libp2p stream protocol |
+| Push replication control | `/artifact/replicate/1.0.0` | Returns gone; pull-only mode |
 
 ### Authentication model
 
@@ -42,6 +60,11 @@ configured in `P2PConfig.SharedSecret`.
 ---
 
 ### Local Endpoints
+
+> Compatibility note: the HTTP endpoints below are kept as reference for
+> migration and legacy integrations. In the current implementation, peer gossip
+> and artifact transfer should use the libp2p stream protocols documented in
+> the next subsection.
 
 #### `GET /p2p/health`
 
@@ -252,6 +275,27 @@ the local configuration.
 | `405` | Non-PUT/GET method |
 | `409` | Agent already configured |
 | `503` | Internal error applying config |
+
+---
+
+### libp2p stream protocols (current)
+
+The following protocols are registered in the agent libp2p host and are the
+primary data-plane for gossip and artifact transfer:
+
+1. `/discovery/peers/1.0.0`
+2. `/artifact/access/1.0.0`
+3. `/artifact/manifest/1.0.0`
+4. `/artifact/get/1.0.0`
+5. `/artifact/replicate/1.0.0`
+
+Request/response payloads map directly to the current transport layer in:
+
+- `app/p2p_libp2p_transport.go`
+- `app/p2p_libp2p.go`
+
+`/artifact/replicate/1.0.0` returns a "gone/pull-only" response by design,
+as forced push replication is disabled in the current mode.
 
 ---
 

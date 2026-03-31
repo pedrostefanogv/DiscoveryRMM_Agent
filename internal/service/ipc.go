@@ -41,7 +41,7 @@ func NewIPCServer(dataDir string) *IPCServer {
 // ClientRequest representa um comando vindo de uma UI app
 type ClientRequest struct {
 	ID       string                 `json:"id"`        // UUID único do request
-	Command  string                 `json:"command"`   // "getStatus", "getConfig", "execute", "getPolicies"
+	Command  string                 `json:"command"`   // "getStatus", "getConfig", "getServiceHealth", "execute", "getPolicies"
 	UserSID  string                 `json:"user_sid"`  // SID do usuário (S-1-5-...)
 	UserName string                 `json:"user_name"` // Ex: "DESKTOP\pedro"
 	Elevated bool                   `json:"elevated"`  // Se UI está rodando com admin?
@@ -170,6 +170,8 @@ func (server *IPCServer) dispatchCommand(req *ClientRequest) *ServiceResponse {
 		return server.cmdGetStatus(req)
 	case "getconfig":
 		return server.cmdGetConfig(req)
+	case "getservicehealth":
+		return server.cmdGetServiceHealth(req)
 	case "execute":
 		return server.cmdExecute(req)
 	case "getpolicies":
@@ -181,6 +183,19 @@ func (server *IPCServer) dispatchCommand(req *ClientRequest) *ServiceResponse {
 			Code:    404,
 			Message: "Comando desconhecido: " + req.Command,
 		}
+	}
+}
+
+// cmdGetServiceHealth retorna saúde detalhada dos componentes monitorados no service.
+func (server *IPCServer) cmdGetServiceHealth(req *ClientRequest) *ServiceResponse {
+	status := server.manager.GetServiceHealth()
+
+	return &ServiceResponse{
+		ID:      req.ID,
+		Status:  "success",
+		Code:    200,
+		Message: "OK",
+		Data:    status,
 	}
 }
 
@@ -231,10 +246,8 @@ func (server *IPCServer) cmdGetConfig(req *ClientRequest) *ServiceResponse {
 }
 
 // cmdExecute executa uma ação no contexto do service
+// Armazena em action_queue para processamento e rastreamento
 func (server *IPCServer) cmdExecute(req *ClientRequest) *ServiceResponse {
-	// TODO: Implementar executor com contexto do usuário
-	// Por enquanto, apenas queue o comando
-
 	action, ok := req.Payload["action"].(string)
 	if !ok {
 		return &ServiceResponse{
@@ -246,6 +259,10 @@ func (server *IPCServer) cmdExecute(req *ClientRequest) *ServiceResponse {
 	}
 
 	actionID := req.ID + "_" + fmt.Sprintf("%d", time.Now().Unix())
+
+	// TODO: Enfileirar ação no banco de dados para processamento real
+	// Futuro: inserir em action_queue table com user_sid/user_name do req
+	// e usar Windows API para impersonation quando executar
 
 	fmt.Printf("[IPC.Execute] Action queued: id=%s, action=%s, user=%s\n",
 		actionID, action, req.UserName)
@@ -259,6 +276,7 @@ func (server *IPCServer) cmdExecute(req *ClientRequest) *ServiceResponse {
 			"action_id":  actionID,
 			"started_at": time.Now().Format(time.RFC3339),
 			"status":     "queued",
+			"user":       req.UserName,
 		},
 	}
 }

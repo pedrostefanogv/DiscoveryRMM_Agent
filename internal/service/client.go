@@ -95,6 +95,11 @@ func (sc *ServiceClient) GetConfig(ctx context.Context) (*ServiceResponse, error
 	return sc.SendCommand(ctx, "getConfig", nil)
 }
 
+// GetServiceHealth obtém saúde detalhada dos componentes monitorados pelo service.
+func (sc *ServiceClient) GetServiceHealth(ctx context.Context) (*ServiceResponse, error) {
+	return sc.SendCommand(ctx, "getServiceHealth", nil)
+}
+
 // Execute executa uma ação
 func (sc *ServiceClient) Execute(ctx context.Context, action string, params map[string]interface{}) (*ServiceResponse, error) {
 	payload := map[string]interface{}{

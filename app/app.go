@@ -29,6 +29,7 @@ import (
 	"discovery/internal/models"
 	"discovery/internal/printer"
 	"discovery/internal/processutil"
+	"discovery/internal/service"
 	"discovery/internal/services"
 	"discovery/internal/watchdog"
 	"discovery/internal/winget"
@@ -108,6 +109,7 @@ type App struct {
 	exporter       *updates.Exporter
 	inventorySvc   *appinventory.Service
 	supportSvc     *appsupport.Service
+	serviceClient  *service.ServiceClient
 
 	p2pMu            sync.RWMutex
 	p2pConfig        P2PConfig
@@ -142,6 +144,9 @@ func NewApp(opts AppStartupOptions) *App {
 	// Initialize watchdog with default config
 	watchdogSvc := watchdog.New(watchdog.DefaultConfig())
 
+	// Initialize service client for communicating with Windows Service
+	serviceClient := service.NewServiceClient()
+
 	a := &App{
 		runtimeFlags:  RuntimeFlags{DebugMode: opts.DebugMode},
 		trayIcon:      opts.TrayIcon,
@@ -153,6 +158,7 @@ func NewApp(opts AppStartupOptions) *App {
 		mcpRegistry:   reg,
 		chatSvc:       chatSvc,
 		watchdogSvc:   watchdogSvc,
+		serviceClient: serviceClient,
 	}
 	a.automationSvc = automation.NewService(func() automation.RuntimeConfig {
 		cfg := a.GetDebugConfig()
@@ -679,6 +685,46 @@ func (a *App) GetWatchdogHealth() []map[string]interface{} {
 	}
 
 	return result
+}
+
+// GetServiceHealth retorna o status de saúde do Windows Service (processo headless)
+// Conecta ao named pipe do serviço e recupera dados de saúde dos componentes
+func (a *App) GetServiceHealth() map[string]interface{} {
+	if a.serviceClient == nil {
+		return map[string]interface{}{
+			"error":   "service client not initialized",
+			"running": false,
+		}
+	}
+
+	// Tentar conectar ao serviço se não conectado
+	if !a.serviceClient.IsConnected() {
+		if err := a.serviceClient.Connect(a.ctx); err != nil {
+			return map[string]interface{}{
+				"error":   fmt.Sprintf("failed to connect to service: %v", err),
+				"running": false,
+			}
+		}
+	}
+
+	// Fazer requisição ao serviço
+	resp, err := a.serviceClient.GetServiceHealth(a.ctx)
+	if err != nil {
+		return map[string]interface{}{
+			"error":   fmt.Sprintf("failed to get service health: %v", err),
+			"running": false,
+		}
+	}
+
+	// Retornar resposta do serviço (já é um map)
+	if resp != nil && resp.Data != nil {
+		return resp.Data
+	}
+
+	return map[string]interface{}{
+		"error":   "empty response from service",
+		"running": false,
+	}
 }
 
 func (a *App) beginActivity(activity string) func() {

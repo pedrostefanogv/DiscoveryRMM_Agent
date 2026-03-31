@@ -12,6 +12,7 @@
   var cleanupBtn = document.getElementById("cleanupBtn");
   var saveConfigBtn = document.getElementById("saveConfigBtn");
   var statusGrid = document.getElementById("statusGrid");
+  var serviceHealthGrid = document.getElementById("serviceHealthGrid");
   var peersBody = document.getElementById("peersBody");
   var artifactsBody = document.getElementById("artifactsBody");
   var auditList = document.getElementById("auditList");
@@ -71,6 +72,40 @@
     rows.push(["Bytes P2P", String(metrics.bytesServed || 0) + " up / " + String(metrics.bytesDownloaded || 0) + " down"]);
 
     statusGrid.innerHTML = rows.map(function (entry) {
+      return '<div class="kv"><span class="k">' + escapeHtml(entry[0]) + '</span><span class="v mono">' + escapeHtml(entry[1]) + '</span></div>';
+    }).join("");
+  }
+
+  function renderServiceHealth(health) {
+    if (!serviceHealthGrid) return;
+    
+    if (!health || health.error) {
+      serviceHealthGrid.innerHTML = '<div class="kv"><span class="k">Status</span><span class="v" style="color: var(--danger);">Indisponível (' + escapeHtml(health && health.error ? health.error : "desconectado") + ')</span></div>';
+      return;
+    }
+
+    var rows = [
+      ["Rodando", String(!!health.running)],
+      ["Verificado em", formatDate(health.checked_at)],
+      ["Componentes", String(health.component_count || 0)],
+      ["Recuperáveis", String(health.recoverable_count || 0)],
+      ["Degradados", String(health.degraded_count || 0)],
+      ["Não saudáveis", String(health.unhealthy_count || 0)]
+    ];
+
+    if (health.components && Array.isArray(health.components) && health.components.length > 0) {
+      rows.push(["Detalhes de componentes:"]);
+      health.components.forEach(function (comp) {
+        var compStatus = (comp.status || "").toUpperCase();
+        var icon = comp.recoverable ? "⚠" : (compStatus === "HEALTHY" ? "✓" : "✗");
+        rows.push([
+          "  " + escapeHtml(String(comp.component || "-")),
+          icon + " " + escapeHtml(compStatus)
+        ]);
+      });
+    }
+
+    serviceHealthGrid.innerHTML = rows.map(function (entry) {
       return '<div class="kv"><span class="k">' + escapeHtml(entry[0]) + '</span><span class="v mono">' + escapeHtml(entry[1]) + '</span></div>';
     }).join("");
   }
@@ -189,6 +224,9 @@
       appApi().ListP2PArtifacts(),
       appApi().ListP2PAuditEventsFiltered(auditAction, auditPeer, auditStatus).catch(function () {
         return appApi().ListP2PAuditEvents();
+      }),
+      appApi().GetServiceHealth().catch(function () {
+        return { error: "Service desconectado" };
       })
     ]).then(function (results) {
       renderStatus(results[0] || {});
@@ -196,6 +234,7 @@
       fillConfig(results[2] || {});
       renderArtifacts(results[3] || []);
       renderAudit(results[4] || []);
+      renderServiceHealth(results[5] || { error: "resposta inválida" });
     }).catch(function (err) {
       setStatus("Falha ao atualizar: " + (err && err.message ? err.message : String(err)), "error");
     });

@@ -171,6 +171,53 @@ func (db *DB) initialize() error {
 			created_at INTEGER NOT NULL,
 			updated_at INTEGER NOT NULL
 		);
+
+		CREATE TABLE IF NOT EXISTS action_queue (
+			action_id TEXT PRIMARY KEY,
+			user_sid TEXT NOT NULL,
+			user_name TEXT NOT NULL,
+			command TEXT NOT NULL,
+			payload_json TEXT,
+			status TEXT NOT NULL DEFAULT 'queued',
+			queued_at INTEGER NOT NULL,
+			started_at INTEGER,
+			completed_at INTEGER,
+			result_json TEXT,
+			error_message TEXT
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_action_queue_user_status ON action_queue(user_sid, status, queued_at DESC);
+		CREATE INDEX IF NOT EXISTS idx_action_queue_status ON action_queue(status, queued_at DESC);
+
+		CREATE TABLE IF NOT EXISTS action_history (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			action_id TEXT NOT NULL,
+			user_sid TEXT NOT NULL,
+			user_name TEXT NOT NULL,
+			command TEXT NOT NULL,
+			status TEXT NOT NULL,
+			exit_code INTEGER,
+			output TEXT,
+			error_message TEXT,
+			completed_at INTEGER NOT NULL
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_action_history_user ON action_history(user_sid, completed_at DESC);
+		CREATE INDEX IF NOT EXISTS idx_action_history_action ON action_history(action_id);
+
+		CREATE TABLE IF NOT EXISTS security_events (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			timestamp INTEGER NOT NULL,
+			event_type TEXT NOT NULL,
+			severity TEXT NOT NULL,
+			source_peer TEXT,
+			description TEXT,
+			details_json TEXT,
+			remediation_taken TEXT
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_security_events_timestamp ON security_events(timestamp DESC);
+		CREATE INDEX IF NOT EXISTS idx_security_events_type ON security_events(event_type, timestamp DESC);
 	`
 
 	_, err := db.conn.Exec(schema)
