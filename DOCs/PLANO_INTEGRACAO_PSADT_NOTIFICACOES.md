@@ -19,6 +19,12 @@ Integrar o PSAppDeployToolkit 4.1.8 ao fluxo de automacao do agent e preparar um
 3. Personalizacao: identidade global (icone/banner/nome empresa) + override por tipo de evento (cor/layout/criticidade).
 4. Auto-instalacao do modulo: ligada por padrao, com controle por flag na API.
 
+Nota tecnica (Windows + PSADT nativo):
+
+- No canal `Show-ADTBalloonTip`, o nome de origem exibido pelo Windows pode permanecer `PSAppDeployToolkit`.
+- O icone e limitado aos valores nativos (`None`, `Info`, `Warning`, `Error`), sem suporte a icone custom.
+- Para identidade visual totalmente custom, usar renderer proprio do frontend (toast/banner/modal) em vez do balloon nativo do PSADT.
+
 ## 3. Arquitetura Atual Aproveitada
 
 Pontos existentes no projeto que serao reutilizados:

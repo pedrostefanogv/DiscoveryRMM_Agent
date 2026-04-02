@@ -21,7 +21,35 @@ const (
 	callbackRetryBase    = 15 * time.Second
 	callbackRetryMax     = 5 * time.Minute
 	recentExecutionLimit = 15
+	defaultDeferTimes    = 3
+	defaultDeferInterval = 30 * time.Minute
 )
+
+type deferState struct {
+	ExecutionID  string
+	Count        int
+	FirstDeferAt time.Time
+	LastDeferAt  time.Time
+	NextAttempt  time.Time
+	DeadlineAt   time.Time
+	Exhausted    bool
+}
+
+type psadtWelcomeOptions struct {
+	AllowDefer                     bool
+	AllowDeferCloseProcesses       bool
+	DeferTimes                     int
+	DeferDays                      float64
+	DeferDeadline                  time.Time
+	DeferRunInterval               time.Duration
+	ForceCountdownSeconds          int
+	CloseProcessesCountdownSeconds int
+	ForceCloseProcessesCountdown   int
+	CloseProcesses                 []string
+	BlockExecution                 bool
+	CheckDiskSpace                 bool
+	RequiredDiskSpaceMB            int
+}
 
 type Service struct {
 	mu               sync.RWMutex
@@ -31,6 +59,9 @@ type Service struct {
 	logger           func(string)
 	packageManager   PackageManager
 	packageAuthorize PackageAuthorizationFunc
+	psadtResolver    func() PSADTPolicy
+	notifyDispatcher func(AutomationNotificationRequest) AutomationNotificationResponse
+	deferByTask      map[string]deferState
 	state            State
 	currentAgent     string
 	cron             *cron.Cron
@@ -47,6 +78,7 @@ func NewService(getConfig func() RuntimeConfig, logger func(string)) *Service {
 		state:       State{},
 		cronEntries: make(map[string]cron.EntryID),
 		activeTasks: make(map[string]bool),
+		deferByTask: make(map[string]deferState),
 	}
 }
 
@@ -66,6 +98,18 @@ func (s *Service) SetPackageAuthorization(authorize PackageAuthorizationFunc) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.packageAuthorize = authorize
+}
+
+func (s *Service) SetPSADTPolicyResolver(resolver func() PSADTPolicy) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.psadtResolver = resolver
+}
+
+func (s *Service) SetNotificationDispatcher(dispatcher func(AutomationNotificationRequest) AutomationNotificationResponse) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.notifyDispatcher = dispatcher
 }
 
 func (s *Service) Run(ctx context.Context, onBeat func()) {
@@ -117,6 +161,7 @@ func (s *Service) refreshPolicy(ctx context.Context, includeScriptContent bool) 
 	}
 
 	s.loadPersistedForAgent(agentID)
+	s.loadDeferStateForAgent(agentID)
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	correlationID := uuid.NewString()
@@ -265,6 +310,9 @@ func (s *Service) executeTaskAsync(ctx context.Context, agentID string, task Aut
 	s.activeTasks[activeKey] = true
 	packages := s.packageManager
 	authorize := s.packageAuthorize
+	psadtPolicy := s.resolvePSADTPolicyLocked()
+	notifyDispatcher := s.notifyDispatcher
+	deferStateSnapshot := s.deferByTask[strings.TrimSpace(task.TaskID)]
 	s.mu.Unlock()
 
 	go func() {
@@ -273,6 +321,13 @@ func (s *Service) executeTaskAsync(ctx context.Context, agentID string, task Aut
 			delete(s.activeTasks, activeKey)
 			s.mu.Unlock()
 		}()
+
+		welcome := resolvePSADTWelcomeOptions(task)
+		nowUTC := time.Now().UTC()
+		if !deferStateSnapshot.NextAttempt.IsZero() && nowUTC.Before(deferStateSnapshot.NextAttempt) {
+			s.logf("automacao: task=%s aguardando proxima tentativa de deferimento em %s", strings.TrimSpace(task.TaskID), deferStateSnapshot.NextAttempt.UTC().Format(time.RFC3339))
+			return
+		}
 
 		startedAt := time.Now().UTC()
 		executionID := uuid.NewString()
@@ -292,19 +347,38 @@ func (s *Service) executeTaskAsync(ctx context.Context, agentID string, task Aut
 			StartedAt:        startedAt,
 			PackageID:        strings.TrimSpace(task.PackageID),
 			ScriptID:         strings.TrimSpace(task.ScriptID),
-			MetadataJSON:     buildExecutionMetadata(task, triggerType, "start", nil),
+			MetadataJSON:     buildExecutionMetadata(task, triggerType, "start", nil, &psadtPolicy),
 		}
 		if s.db != nil {
 			_ = s.db.UpsertAutomationExecution(entry)
 		}
 		s.refreshDerivedState(agentID)
 
+		startResp := s.dispatchExecutionNotification(notifyDispatcher, task, entry, nil, deferStateSnapshot, welcome)
+		if s.shouldDeferExecution(task, startResp) {
+			next := s.recordAndGetNextDefer(agentID, executionID, task, deferStateSnapshot, welcome)
+			if next.IsZero() {
+				s.logf("automacao: defer ignorado para task=%s por limite esgotado", strings.TrimSpace(task.TaskID))
+			} else {
+				s.logf("automacao: task=%s adiada; proxima tentativa em %s", strings.TrimSpace(task.TaskID), next.UTC().Format(time.RFC3339))
+				taskCopy := task
+				delay := time.Until(next)
+				if delay < 0 {
+					delay = 0
+				}
+				time.AfterFunc(delay, func() {
+					s.executeTaskAsync(context.Background(), agentID, taskCopy, sourceType, triggerType)
+				})
+				return
+			}
+		}
+
 		if entry.CommandID != "" {
 			ack := AckRequest{
 				TaskID:       entry.TaskID,
 				ScriptID:     entry.ScriptID,
 				SourceType:   sourceType,
-				MetadataJSON: buildExecutionMetadata(task, triggerType, "ack", nil),
+				MetadataJSON: buildExecutionMetadata(task, triggerType, "ack", nil, &psadtPolicy),
 			}
 			if err := s.sendOrQueueCallback(ctx, agentID, executionID, entry.CommandID, CallbackTypeAck, ack, correlationID); err == nil {
 				entry.Status = string(ExecutionStatusAcknowledged)
@@ -314,7 +388,7 @@ func (s *Service) executeTaskAsync(ctx context.Context, agentID string, task Aut
 			}
 		}
 
-		result := executeTask(ctx, packages, authorize, task)
+		result := executeTask(ctx, packages, authorize, task, psadtPolicy)
 		entry.FinishedAt = time.Now().UTC()
 		entry.Success = result.Success
 		entry.SuccessSet = true
@@ -322,7 +396,7 @@ func (s *Service) executeTaskAsync(ctx context.Context, agentID string, task Aut
 		entry.ExitCodeSet = result.ExitCodeSet
 		entry.Output = result.Output
 		entry.ErrorMessage = result.ErrorMessage
-		entry.MetadataJSON = buildExecutionMetadata(task, triggerType, "result", &result)
+		entry.MetadataJSON = buildExecutionMetadata(task, triggerType, "result", &result, &psadtPolicy)
 		if result.Success {
 			entry.Status = string(ExecutionStatusCompleted)
 		} else {
@@ -348,8 +422,406 @@ func (s *Service) executeTaskAsync(ctx context.Context, agentID string, task Aut
 			_ = s.sendOrQueueCallback(ctx, agentID, executionID, entry.CommandID, CallbackTypeResult, payload, correlationID)
 		}
 
+		s.dispatchExecutionNotification(notifyDispatcher, task, entry, &result, s.deferByTask[strings.TrimSpace(task.TaskID)], welcome)
+		s.clearDeferState(agentID, task.TaskID, entry.Status)
+
 		s.refreshDerivedState(agentID)
 	}()
+}
+
+func (s *Service) shouldDeferExecution(task AutomationTask, response AutomationNotificationResponse) bool {
+	if !isPackageAction(task.ActionType) {
+		return false
+	}
+	if !response.Accepted {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(response.Result), "deferred")
+}
+
+func (s *Service) recordAndGetNextDefer(agentID, executionID string, task AutomationTask, current deferState, welcome psadtWelcomeOptions) time.Time {
+	taskID := strings.TrimSpace(task.TaskID)
+	if taskID == "" {
+		return time.Time{}
+	}
+	agentID = strings.TrimSpace(agentID)
+	executionID = strings.TrimSpace(executionID)
+
+	if !welcome.AllowDefer {
+		current.Exhausted = true
+		s.mu.Lock()
+		s.deferByTask[taskID] = current
+		s.mu.Unlock()
+		s.persistDeferState(agentID, taskID, current, "deferred")
+		return time.Time{}
+	}
+
+	maxTimes := welcome.DeferTimes
+	if maxTimes <= 0 {
+		maxTimes = defaultDeferTimes
+	}
+	if current.Count >= maxTimes {
+		current.Exhausted = true
+		s.mu.Lock()
+		s.deferByTask[taskID] = current
+		s.mu.Unlock()
+		s.persistDeferState(agentID, taskID, current, "deferred")
+		return time.Time{}
+	}
+
+	now := time.Now().UTC()
+	current.ExecutionID = executionID
+	if current.FirstDeferAt.IsZero() {
+		current.FirstDeferAt = now
+	}
+
+	deadline := current.DeadlineAt
+	if !welcome.DeferDeadline.IsZero() {
+		if deadline.IsZero() || welcome.DeferDeadline.Before(deadline) {
+			deadline = welcome.DeferDeadline
+		}
+	}
+	if welcome.DeferDays > 0 {
+		windowDeadline := current.FirstDeferAt.Add(time.Duration(welcome.DeferDays * float64(24*time.Hour)))
+		if deadline.IsZero() || windowDeadline.Before(deadline) {
+			deadline = windowDeadline
+		}
+	}
+	if !deadline.IsZero() && (now.Equal(deadline) || now.After(deadline)) {
+		current.DeadlineAt = deadline
+		current.Exhausted = true
+		s.mu.Lock()
+		s.deferByTask[taskID] = current
+		s.mu.Unlock()
+		s.persistDeferState(agentID, taskID, current, "deferred")
+		return time.Time{}
+	}
+	current.DeadlineAt = deadline
+
+	current.Count++
+	current.LastDeferAt = now
+	interval := welcome.DeferRunInterval
+	if interval <= 0 {
+		interval = defaultDeferInterval
+	}
+	current.NextAttempt = now.Add(interval)
+	current.Exhausted = current.Count >= maxTimes
+
+	s.mu.Lock()
+	s.deferByTask[taskID] = current
+	s.mu.Unlock()
+	s.persistDeferState(agentID, taskID, current, "deferred")
+
+	if current.Count > maxTimes {
+		return time.Time{}
+	}
+	return current.NextAttempt
+}
+
+func resolvePSADTWelcomeOptions(task AutomationTask) psadtWelcomeOptions {
+	options := psadtWelcomeOptions{
+		AllowDefer:       true,
+		DeferTimes:       defaultDeferTimes,
+		DeferRunInterval: defaultDeferInterval,
+	}
+
+	applyPayload := func(raw string) {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			return
+		}
+		var m map[string]any
+		if err := json.Unmarshal([]byte(raw), &m); err != nil {
+			return
+		}
+		candidate := m
+		if nested, ok := m["psadtWelcome"].(map[string]any); ok {
+			candidate = nested
+		} else if nested, ok := m["welcome"].(map[string]any); ok {
+			candidate = nested
+		}
+
+		options.AllowDefer = getBoolFromAny(candidate, "allowDefer", options.AllowDefer)
+		options.AllowDeferCloseProcesses = getBoolFromAny(candidate, "allowDeferCloseProcesses", options.AllowDeferCloseProcesses)
+		options.DeferTimes = getIntFromAny(candidate, "deferTimes", options.DeferTimes)
+		options.DeferDays = getFloat64FromAny(candidate, "deferDays", options.DeferDays)
+		options.DeferRunInterval = getDurationFromAny(candidate, "deferRunIntervalSeconds", options.DeferRunInterval)
+		if deadline := getTimeFromAny(candidate, "deferDeadline"); !deadline.IsZero() {
+			options.DeferDeadline = deadline
+		}
+		options.ForceCountdownSeconds = getIntFromAny(candidate, "forceCountdownSeconds", options.ForceCountdownSeconds)
+		options.CloseProcessesCountdownSeconds = getIntFromAny(candidate, "closeProcessesCountdownSeconds", options.CloseProcessesCountdownSeconds)
+		options.ForceCloseProcessesCountdown = getIntFromAny(candidate, "forceCloseProcessesCountdown", options.ForceCloseProcessesCountdown)
+		options.BlockExecution = getBoolFromAny(candidate, "blockExecution", options.BlockExecution)
+		options.CheckDiskSpace = getBoolFromAny(candidate, "checkDiskSpace", options.CheckDiskSpace)
+		options.RequiredDiskSpaceMB = getIntFromAny(candidate, "requiredDiskSpaceMb", options.RequiredDiskSpaceMB)
+		if list := getStringSliceFromAny(candidate, "closeProcesses"); len(list) > 0 {
+			options.CloseProcesses = list
+		}
+	}
+
+	applyPayload(task.CommandPayload)
+	if task.Script != nil {
+		applyPayload(task.Script.MetadataJSON)
+	}
+
+	if options.DeferTimes <= 0 {
+		options.DeferTimes = defaultDeferTimes
+	}
+	if options.DeferRunInterval <= 0 {
+		options.DeferRunInterval = defaultDeferInterval
+	}
+
+	return options
+}
+
+func getBoolFromAny(m map[string]any, key string, fallback bool) bool {
+	v, ok := m[key]
+	if !ok {
+		return fallback
+	}
+	switch x := v.(type) {
+	case bool:
+		return x
+	case string:
+		t := strings.ToLower(strings.TrimSpace(x))
+		return t == "1" || t == "true" || t == "yes" || t == "sim"
+	case float64:
+		return x != 0
+	case int:
+		return x != 0
+	default:
+		return fallback
+	}
+}
+
+func getIntFromAny(m map[string]any, key string, fallback int) int {
+	v, ok := m[key]
+	if !ok {
+		return fallback
+	}
+	switch x := v.(type) {
+	case int:
+		return x
+	case int64:
+		return int(x)
+	case float64:
+		return int(x)
+	case string:
+		var n int
+		if _, err := fmt.Sscanf(strings.TrimSpace(x), "%d", &n); err == nil {
+			return n
+		}
+	}
+	return fallback
+}
+
+func getFloat64FromAny(m map[string]any, key string, fallback float64) float64 {
+	v, ok := m[key]
+	if !ok {
+		return fallback
+	}
+	switch x := v.(type) {
+	case float64:
+		return x
+	case int:
+		return float64(x)
+	case int64:
+		return float64(x)
+	case string:
+		var n float64
+		if _, err := fmt.Sscanf(strings.TrimSpace(x), "%f", &n); err == nil {
+			return n
+		}
+	}
+	return fallback
+}
+
+func getDurationFromAny(m map[string]any, key string, fallback time.Duration) time.Duration {
+	v, ok := m[key]
+	if !ok {
+		return fallback
+	}
+	switch x := v.(type) {
+	case float64:
+		if x <= 0 {
+			return fallback
+		}
+		return time.Duration(x) * time.Second
+	case int:
+		if x <= 0 {
+			return fallback
+		}
+		return time.Duration(x) * time.Second
+	case string:
+		t := strings.TrimSpace(x)
+		if t == "" {
+			return fallback
+		}
+		if d, err := time.ParseDuration(t); err == nil && d > 0 {
+			return d
+		}
+		var sec int
+		if _, err := fmt.Sscanf(t, "%d", &sec); err == nil && sec > 0 {
+			return time.Duration(sec) * time.Second
+		}
+	}
+	return fallback
+}
+
+func getTimeFromAny(m map[string]any, key string) time.Time {
+	v, ok := m[key]
+	if !ok {
+		return time.Time{}
+	}
+	t := strings.TrimSpace(fmt.Sprint(v))
+	if t == "" {
+		return time.Time{}
+	}
+	layouts := []string{time.RFC3339, "2006-01-02 15:04:05Z07:00", "2006-01-02"}
+	for _, layout := range layouts {
+		if parsed, err := time.Parse(layout, t); err == nil {
+			return parsed.UTC()
+		}
+	}
+	return time.Time{}
+}
+
+func getStringSliceFromAny(m map[string]any, key string) []string {
+	v, ok := m[key]
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0)
+	switch x := v.(type) {
+	case []any:
+		for _, item := range x {
+			t := strings.TrimSpace(fmt.Sprint(item))
+			if t != "" {
+				out = append(out, t)
+			}
+		}
+	case []string:
+		for _, item := range x {
+			t := strings.TrimSpace(item)
+			if t != "" {
+				out = append(out, t)
+			}
+		}
+	case string:
+		parts := strings.Split(x, ",")
+		for _, p := range parts {
+			t := strings.TrimSpace(p)
+			if t != "" {
+				out = append(out, t)
+			}
+		}
+	}
+	return out
+}
+
+func (s *Service) clearDeferState(agentID, taskID, finalStatus string) {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return
+	}
+	agentID = strings.TrimSpace(agentID)
+	finalStatus = strings.TrimSpace(finalStatus)
+	if finalStatus == "" {
+		finalStatus = "completed"
+	}
+
+	var existing deferState
+	s.mu.Lock()
+	existing = s.deferByTask[taskID]
+	delete(s.deferByTask, taskID)
+	s.mu.Unlock()
+
+	if existing.Count == 0 {
+		if s.db != nil && agentID != "" {
+			_ = s.db.UpsertAutomationDeferState(database.AutomationDeferStateEntry{
+				AgentID:        agentID,
+				TaskID:         taskID,
+				FinalStatus:    finalStatus,
+				DeferCount:     0,
+				DeferExhausted: false,
+			})
+		}
+		return
+	}
+	s.persistDeferState(agentID, taskID, existing, finalStatus)
+}
+
+func (s *Service) loadDeferStateForAgent(agentID string) {
+	agentID = strings.TrimSpace(agentID)
+	if s.db == nil || agentID == "" {
+		return
+	}
+
+	states, err := s.db.ListAutomationDeferStates(agentID, 200)
+	if err != nil {
+		s.logf("automacao: falha ao carregar estado de deferimento: %v", err)
+		return
+	}
+
+	loaded := make(map[string]deferState)
+	for _, item := range states {
+		if strings.TrimSpace(item.FinalStatus) != "" && !strings.EqualFold(strings.TrimSpace(item.FinalStatus), "deferred") {
+			continue
+		}
+		taskID := strings.TrimSpace(item.TaskID)
+		if taskID == "" {
+			continue
+		}
+		loaded[taskID] = deferState{
+			ExecutionID:  strings.TrimSpace(item.ExecutionID),
+			Count:        item.DeferCount,
+			FirstDeferAt: item.FirstDeferAt,
+			LastDeferAt:  item.LastDeferAt,
+			NextAttempt:  item.NextAttemptAt,
+			DeadlineAt:   item.DeadlineAt,
+			Exhausted:    item.DeferExhausted,
+		}
+	}
+
+	s.mu.Lock()
+	for taskID, state := range loaded {
+		s.deferByTask[taskID] = state
+	}
+	s.mu.Unlock()
+}
+
+func (s *Service) persistDeferState(agentID, taskID string, current deferState, finalStatus string) {
+	if s.db == nil {
+		return
+	}
+	agentID = strings.TrimSpace(agentID)
+	taskID = strings.TrimSpace(taskID)
+	if agentID == "" || taskID == "" {
+		return
+	}
+
+	if err := s.db.UpsertAutomationDeferState(database.AutomationDeferStateEntry{
+		AgentID:        agentID,
+		TaskID:         taskID,
+		ExecutionID:    strings.TrimSpace(current.ExecutionID),
+		DeferCount:     current.Count,
+		FirstDeferAt:   current.FirstDeferAt,
+		LastDeferAt:    current.LastDeferAt,
+		DeadlineAt:     current.DeadlineAt,
+		NextAttemptAt:  current.NextAttempt,
+		DeferExhausted: current.Exhausted,
+		FinalStatus:    strings.TrimSpace(finalStatus),
+	}); err != nil {
+		s.logf("automacao: falha ao persistir estado de deferimento task=%s: %v", taskID, err)
+	}
+}
+
+func (s *Service) resolvePSADTPolicyLocked() PSADTPolicy {
+	if s.psadtResolver == nil {
+		return normalizePSADTPolicy(PSADTPolicy{})
+	}
+	return normalizePSADTPolicy(s.psadtResolver())
 }
 
 func (s *Service) sendOrQueueCallback(ctx context.Context, agentID, executionID, commandID string, callbackType CallbackType, payload any, correlationID string) error {
@@ -680,7 +1152,7 @@ func sourceForTrigger(triggerType TriggerType) AutomationExecutionSourceType {
 	}
 }
 
-func buildExecutionMetadata(task AutomationTask, triggerType TriggerType, stage string, result *ExecutionResult) string {
+func buildExecutionMetadata(task AutomationTask, triggerType TriggerType, stage string, result *ExecutionResult, policy *PSADTPolicy) string {
 	payload := map[string]any{
 		"stage":            stage,
 		"triggerType":      string(triggerType),
@@ -696,11 +1168,132 @@ func buildExecutionMetadata(task AutomationTask, triggerType TriggerType, stage 
 			payload["exitCode"] = result.ExitCode
 		}
 	}
+	if policy != nil {
+		payload["psadtPolicy"] = map[string]any{
+			"executionTimeoutSeconds": policy.ExecutionTimeoutSeconds,
+			"fallbackPolicy":          policy.FallbackPolicy,
+			"timeoutAction":           policy.TimeoutAction,
+			"unknownExitCodePolicy":   policy.UnknownExitCodePolicy,
+			"successExitCodes":        append([]int(nil), policy.SuccessExitCodes...),
+			"rebootExitCodes":         append([]int(nil), policy.RebootExitCodes...),
+			"ignoreExitCodes":         append([]int(nil), policy.IgnoreExitCodes...),
+		}
+	}
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return ""
 	}
 	return string(data)
+}
+
+func (s *Service) dispatchExecutionNotification(dispatcher func(AutomationNotificationRequest) AutomationNotificationResponse, task AutomationTask, entry database.AutomationExecutionEntry, result *ExecutionResult, deferSnapshot deferState, welcome psadtWelcomeOptions) AutomationNotificationResponse {
+	if dispatcher == nil {
+		return AutomationNotificationResponse{}
+	}
+	if !isPackageAction(task.ActionType) {
+		return AutomationNotificationResponse{}
+	}
+
+	eventType := "install_start"
+	severity := "medium"
+	title := "Instalacao iniciada"
+	message := fmt.Sprintf("Tarefa %s iniciada.", strings.TrimSpace(task.Name))
+
+	if result != nil {
+		if result.Success {
+			if result.ExitCodeSet && (result.ExitCode == 3010 || result.ExitCode == 1641) {
+				eventType = "reboot_required"
+				severity = "medium"
+				title = "Reinicio necessario"
+				message = fmt.Sprintf("Tarefa %s concluida. Reinicie para aplicar as alteracoes.", strings.TrimSpace(task.Name))
+			} else {
+				eventType = "install_end"
+				severity = "low"
+				title = "Instalacao concluida"
+				message = fmt.Sprintf("Tarefa %s concluida com sucesso.", strings.TrimSpace(task.Name))
+			}
+		} else {
+			eventType = "install_failed"
+			severity = "high"
+			title = "Instalacao com falha"
+			message = fmt.Sprintf("Tarefa %s falhou.", strings.TrimSpace(task.Name))
+		}
+	}
+
+	if strings.TrimSpace(task.PackageID) != "" {
+		message = message + " Pacote: " + strings.TrimSpace(task.PackageID)
+	}
+
+	metadata := map[string]any{
+		"executionId":                    entry.ExecutionID,
+		"taskId":                         entry.TaskID,
+		"taskName":                       entry.TaskName,
+		"actionType":                     entry.ActionType,
+		"installationType":               entry.InstallationType,
+		"packageId":                      entry.PackageID,
+		"triggerType":                    entry.TriggerType,
+		"sourceType":                     entry.SourceType,
+		"status":                         entry.Status,
+		"correlationId":                  entry.CorrelationID,
+		"deferCount":                     deferSnapshot.Count,
+		"deferExhausted":                 deferSnapshot.Exhausted,
+		"allowDefer":                     welcome.AllowDefer,
+		"deferTimes":                     welcome.DeferTimes,
+		"deferRunIntervalSeconds":        int(welcome.DeferRunInterval.Seconds()),
+		"deferDays":                      welcome.DeferDays,
+		"allowDeferCloseProcesses":       welcome.AllowDeferCloseProcesses,
+		"closeProcesses":                 append([]string(nil), welcome.CloseProcesses...),
+		"blockExecution":                 welcome.BlockExecution,
+		"checkDiskSpace":                 welcome.CheckDiskSpace,
+		"requiredDiskSpaceMb":            welcome.RequiredDiskSpaceMB,
+		"forceCountdownSeconds":          welcome.ForceCountdownSeconds,
+		"closeProcessesCountdownSeconds": welcome.CloseProcessesCountdownSeconds,
+		"forceCloseProcessesCountdown":   welcome.ForceCloseProcessesCountdown,
+	}
+	if !deferSnapshot.NextAttempt.IsZero() {
+		metadata["nextAttemptAt"] = deferSnapshot.NextAttempt.UTC().Format(time.RFC3339)
+	}
+	if !deferSnapshot.DeadlineAt.IsZero() {
+		metadata["deferDeadlineAt"] = deferSnapshot.DeadlineAt.UTC().Format(time.RFC3339)
+	}
+	if welcome.DeferTimes > 0 {
+		metadata["deferRemaining"] = max(0, welcome.DeferTimes-deferSnapshot.Count)
+	}
+	if !welcome.DeferDeadline.IsZero() {
+		metadata["welcomeDeferDeadlineAt"] = welcome.DeferDeadline.UTC().Format(time.RFC3339)
+	}
+	if result != nil {
+		metadata["success"] = result.Success
+		if result.ExitCodeSet {
+			metadata["exitCode"] = result.ExitCode
+		}
+		if strings.TrimSpace(result.ErrorMessage) != "" {
+			metadata["error"] = result.ErrorMessage
+		}
+	}
+
+	notificationID := fmt.Sprintf("automation-%s-%s", strings.TrimSpace(entry.ExecutionID), eventType)
+	return dispatcher(AutomationNotificationRequest{
+		NotificationID: notificationID,
+		IdempotencyKey: notificationID,
+		Title:          title,
+		Message:        message,
+		Mode:           "require_confirmation",
+		Severity:       severity,
+		EventType:      eventType,
+		Layout:         "toast",
+		TimeoutSeconds: 45,
+		Metadata:       metadata,
+	})
+}
+
+func isPackageAction(actionType AutomationTaskActionType) bool {
+	switch actionType {
+	case ActionInstallPackage, ActionUpdatePackage, ActionRemovePackage, ActionUpdateOrInstallPackage:
+		return true
+	default:
+		return false
+	}
 }
 
 func callbackBackoff(attempt int) time.Duration {

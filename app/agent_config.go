@@ -584,7 +584,7 @@ func (a *App) bootstrapPSADTFromConfiguration(cfg AgentConfiguration) {
 		a.psadtBootstrapMu.Unlock()
 		return
 	}
-	if strings.EqualFold(strings.TrimSpace(a.psadtBootstrappedVer), requiredVersion) {
+	if isVersionAtLeast(strings.TrimSpace(a.psadtBootstrappedVer), requiredVersion) {
 		a.psadtBootstrapMu.Unlock()
 		return
 	}
@@ -598,18 +598,18 @@ func (a *App) bootstrapPSADTFromConfiguration(cfg AgentConfiguration) {
 	}()
 
 	moduleStatus := a.CheckPSADTModuleStatus()
-	if moduleStatus.Installed && strings.EqualFold(strings.TrimSpace(moduleStatus.Version), requiredVersion) {
+	if moduleStatus.Installed && isVersionAtLeast(strings.TrimSpace(moduleStatus.Version), requiredVersion) {
 		a.persistPSADTBootstrapEvent(database.PSADTBootstrapEntry{
 			RequiredVersion:  requiredVersion,
 			Installed:        true,
 			InstalledVersion: strings.TrimSpace(moduleStatus.Version),
 			Source:           strings.TrimSpace(cfg.PSADT.InstallSource),
-			Message:          "modulo ja instalado na versao requerida",
+			Message:          "modulo ja instalado na versao requerida ou superior",
 		})
 		a.psadtBootstrapMu.Lock()
 		a.psadtBootstrappedVer = requiredVersion
 		a.psadtBootstrapMu.Unlock()
-		a.logs.append("[psadt] modulo ja instalado na versao requerida " + requiredVersion)
+		a.logs.append("[psadt] modulo ja instalado na versao requerida ou superior " + requiredVersion)
 		return
 	}
 
@@ -662,4 +662,57 @@ func (a *App) persistPSADTBootstrapEvent(entry database.PSADTBootstrapEntry) {
 	if err := a.db.SavePSADTBootstrapStatus(entry); err != nil {
 		a.logs.append("[psadt] falha ao persistir historico de bootstrap: " + err.Error())
 	}
+}
+
+func isVersionAtLeast(installedVersion, requiredVersion string) bool {
+	installed := parseVersionParts(installedVersion)
+	required := parseVersionParts(requiredVersion)
+	if len(installed) == 0 || len(required) == 0 {
+		return strings.EqualFold(strings.TrimSpace(installedVersion), strings.TrimSpace(requiredVersion))
+	}
+
+	maxLen := len(installed)
+	if len(required) > maxLen {
+		maxLen = len(required)
+	}
+	for len(installed) < maxLen {
+		installed = append(installed, 0)
+	}
+	for len(required) < maxLen {
+		required = append(required, 0)
+	}
+
+	for i := 0; i < maxLen; i++ {
+		if installed[i] > required[i] {
+			return true
+		}
+		if installed[i] < required[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func parseVersionParts(value string) []int {
+	text := strings.TrimSpace(value)
+	if text == "" {
+		return nil
+	}
+
+	parts := make([]int, 0, 4)
+	current := strings.Builder{}
+	for _, r := range text {
+		if r >= '0' && r <= '9' {
+			current.WriteRune(r)
+			continue
+		}
+		if current.Len() > 0 {
+			parts = append(parts, toInt(current.String()))
+			current.Reset()
+		}
+	}
+	if current.Len() > 0 {
+		parts = append(parts, toInt(current.String()))
+	}
+	return parts
 }

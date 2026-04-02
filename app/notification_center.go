@@ -36,6 +36,7 @@ type NotificationDispatchResponse struct {
 func (a *App) DispatchNotification(req NotificationDispatchRequest) NotificationDispatchResponse {
 	if a != nil {
 		cfg := a.GetAgentConfiguration()
+		req = applyNotificationPolicyByEventType(req, cfg)
 		if !isNotificationEnabledForRollout(cfg.Rollout, req.EventType) {
 			a.logs.append("[notification] dispatch bloqueado por rollout")
 			a.persistNotificationEvent(database.NotificationEventEntry{
@@ -129,16 +130,17 @@ func (a *App) DispatchNotification(req NotificationDispatchRequest) Notification
 	}
 
 	payload := map[string]any{
-		"id":        req.NotificationID,
-		"source":    "api",
-		"eventType": req.EventType,
-		"title":     req.Title,
-		"message":   req.Message,
-		"mode":      req.Mode,
-		"severity":  req.Severity,
-		"layout":    req.Layout,
-		"metadata":  req.Metadata,
-		"createdAt": time.Now().UTC().Format(time.RFC3339),
+		"id":             req.NotificationID,
+		"source":         "api",
+		"eventType":      req.EventType,
+		"title":          req.Title,
+		"message":        req.Message,
+		"mode":           req.Mode,
+		"severity":       req.Severity,
+		"layout":         req.Layout,
+		"timeoutSeconds": req.TimeoutSeconds,
+		"metadata":       req.Metadata,
+		"createdAt":      time.Now().UTC().Format(time.RFC3339),
 	}
 
 	if a == nil || a.ctx == nil {
@@ -284,6 +286,8 @@ func normalizeNotificationResult(result string) string {
 		return "approved"
 	case "denied":
 		return "denied"
+	case "deferred", "adiado", "adiar", "postpone", "snooze":
+		return "deferred"
 	default:
 		return "timeout_policy_applied"
 	}
@@ -372,4 +376,58 @@ func containsNormalizedString(values []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func applyNotificationPolicyByEventType(req NotificationDispatchRequest, cfg AgentConfiguration) NotificationDispatchRequest {
+	eventType := strings.ToLower(strings.TrimSpace(req.EventType))
+	if eventType == "" {
+		return req
+	}
+
+	policy, ok := findNotificationPolicy(cfg.NotificationPolicies, eventType)
+	if !ok {
+		return req
+	}
+
+	if strings.TrimSpace(policy.Mode) != "" {
+		req.Mode = strings.TrimSpace(policy.Mode)
+	}
+	if strings.TrimSpace(policy.Severity) != "" {
+		req.Severity = strings.TrimSpace(policy.Severity)
+	}
+	if policy.TimeoutSeconds != nil && *policy.TimeoutSeconds > 0 {
+		req.TimeoutSeconds = *policy.TimeoutSeconds
+	}
+	if strings.TrimSpace(policy.StyleOverride.Layout) != "" {
+		req.Layout = strings.TrimSpace(policy.StyleOverride.Layout)
+	}
+	if req.Metadata == nil {
+		req.Metadata = map[string]any{}
+	}
+	if len(policy.Actions) > 0 {
+		req.Metadata["actions"] = policy.Actions
+	}
+	if strings.TrimSpace(policy.StyleOverride.Background) != "" || strings.TrimSpace(policy.StyleOverride.Text) != "" {
+		req.Metadata["styleOverride"] = map[string]any{
+			"background": strings.TrimSpace(policy.StyleOverride.Background),
+			"text":       strings.TrimSpace(policy.StyleOverride.Text),
+		}
+	}
+	if strings.TrimSpace(cfg.NotificationBranding.CompanyName) != "" || strings.TrimSpace(cfg.NotificationBranding.LogoURL) != "" || strings.TrimSpace(cfg.NotificationBranding.BannerURL) != "" {
+		req.Metadata["branding"] = cfg.NotificationBranding
+	}
+	return req
+}
+
+func findNotificationPolicy(policies []AgentNotificationPolicy, eventType string) (AgentNotificationPolicy, bool) {
+	normalizedEvent := strings.ToLower(strings.TrimSpace(eventType))
+	if normalizedEvent == "" {
+		return AgentNotificationPolicy{}, false
+	}
+	for _, policy := range policies {
+		if strings.ToLower(strings.TrimSpace(policy.EventType)) == normalizedEvent {
+			return policy, true
+		}
+	}
+	return AgentNotificationPolicy{}, false
 }

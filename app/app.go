@@ -188,6 +188,44 @@ func NewApp(opts AppStartupOptions) *App {
 	a.automationSvc.SetPackageAuthorization(func(ctx context.Context, installationType automation.AppInstallationType, packageID, operation string) error {
 		return a.authorizeAutomationPackage(ctx, string(installationType), packageID, operation)
 	})
+	a.automationSvc.SetPSADTPolicyResolver(func() automation.PSADTPolicy {
+		cfg := a.GetAgentConfiguration().PSADT
+		policy := automation.PSADTPolicy{
+			SuccessExitCodes:      append([]int(nil), cfg.SuccessExitCodes...),
+			RebootExitCodes:       append([]int(nil), cfg.RebootExitCodes...),
+			IgnoreExitCodes:       append([]int(nil), cfg.IgnoreExitCodes...),
+			FallbackPolicy:        strings.TrimSpace(cfg.FallbackPolicy),
+			TimeoutAction:         strings.TrimSpace(cfg.TimeoutAction),
+			UnknownExitCodePolicy: strings.TrimSpace(cfg.UnknownExitCodePolicy),
+		}
+		if cfg.ExecutionTimeoutSeconds != nil {
+			policy.ExecutionTimeoutSeconds = *cfg.ExecutionTimeoutSeconds
+		}
+		return policy
+	})
+	a.automationSvc.SetNotificationDispatcher(func(req automation.AutomationNotificationRequest) automation.AutomationNotificationResponse {
+		resp := a.DispatchNotification(NotificationDispatchRequest{
+			NotificationID: req.NotificationID,
+			IdempotencyKey: req.IdempotencyKey,
+			Title:          req.Title,
+			Message:        req.Message,
+			Mode:           req.Mode,
+			Severity:       req.Severity,
+			EventType:      req.EventType,
+			Layout:         req.Layout,
+			TimeoutSeconds: req.TimeoutSeconds,
+			Metadata:       req.Metadata,
+		})
+		if !resp.Accepted {
+			a.logs.append("[automation] notificacao nao aceita: " + strings.TrimSpace(resp.AgentAction))
+		}
+		return automation.AutomationNotificationResponse{
+			Accepted:    resp.Accepted,
+			Result:      resp.Result,
+			AgentAction: resp.AgentAction,
+			Message:     resp.Message,
+		}
+	})
 	a.remoteDebug = newRemoteDebugManager(a.logs.append, a.GetDebugConfig, a.logs.subscribe)
 	inventoryProvider.SetProgressCallback(func() {
 		a.pulseInventoryHeartbeat()

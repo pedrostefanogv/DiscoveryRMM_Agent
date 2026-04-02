@@ -157,3 +157,61 @@ func TestIsNotificationEnabledForRollout_AllowBlockList(t *testing.T) {
 		t.Fatalf("expected events outside allow list to be denied")
 	}
 }
+
+func TestApplyNotificationPolicyByEventType_OverridesPayload(t *testing.T) {
+	timeout := 120
+	req := NotificationDispatchRequest{
+		EventType:      "install_start",
+		Mode:           "notify_only",
+		Severity:       "low",
+		Layout:         "toast",
+		TimeoutSeconds: 30,
+	}
+	cfg := AgentConfiguration{
+		NotificationBranding: AgentNotificationBrandingConfig{CompanyName: "Meduza"},
+		NotificationPolicies: []AgentNotificationPolicy{
+			{
+				EventType:      "install_start",
+				Mode:           "require_confirmation",
+				Severity:       "critical",
+				TimeoutSeconds: &timeout,
+				StyleOverride:  AgentNotificationStyleOverride{Layout: "modal", Background: "#111", Text: "#eee"},
+				Actions:        []AgentNotificationAction{{ID: "approve", Label: "Aprovar", ActionType: "approve"}},
+			},
+		},
+	}
+
+	resolved := applyNotificationPolicyByEventType(req, cfg)
+	if resolved.Mode != "require_confirmation" {
+		t.Fatalf("expected mode overridden by policy, got %q", resolved.Mode)
+	}
+	if resolved.Severity != "critical" {
+		t.Fatalf("expected severity overridden by policy, got %q", resolved.Severity)
+	}
+	if resolved.Layout != "modal" {
+		t.Fatalf("expected layout overridden by policy, got %q", resolved.Layout)
+	}
+	if resolved.TimeoutSeconds != 120 {
+		t.Fatalf("expected timeout overridden by policy, got %d", resolved.TimeoutSeconds)
+	}
+	if resolved.Metadata == nil {
+		t.Fatalf("expected metadata enriched by policy")
+	}
+	if _, ok := resolved.Metadata["actions"]; !ok {
+		t.Fatalf("expected policy actions in metadata")
+	}
+	if _, ok := resolved.Metadata["branding"]; !ok {
+		t.Fatalf("expected branding in metadata")
+	}
+}
+
+func TestFindNotificationPolicy_ByEventType(t *testing.T) {
+	policies := []AgentNotificationPolicy{{EventType: "install_failed", Mode: "require_confirmation"}}
+	policy, ok := findNotificationPolicy(policies, "INSTALL_FAILED")
+	if !ok {
+		t.Fatalf("expected policy to be found")
+	}
+	if policy.Mode != "require_confirmation" {
+		t.Fatalf("expected mode require_confirmation")
+	}
+}

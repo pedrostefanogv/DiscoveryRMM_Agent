@@ -80,6 +80,20 @@ type NotificationEventEntry struct {
 	CreatedAt      time.Time
 }
 
+type AutomationDeferStateEntry struct {
+	AgentID        string
+	TaskID         string
+	ExecutionID    string
+	DeferCount     int
+	FirstDeferAt   time.Time
+	LastDeferAt    time.Time
+	DeadlineAt     time.Time
+	NextAttemptAt  time.Time
+	DeferExhausted bool
+	FinalStatus    string
+	UpdatedAt      time.Time
+}
+
 // Open abre/cria o banco de dados SQLite no diretório especificado
 func Open(dataDir string) (*DB, error) {
 	dbPath := filepath.Join(dataDir, "discovery.db")
@@ -267,8 +281,24 @@ func (db *DB) initialize() error {
 			created_at INTEGER NOT NULL
 		);
 
+		CREATE TABLE IF NOT EXISTS automation_defer_state (
+			agent_id TEXT NOT NULL,
+			task_id TEXT NOT NULL,
+			execution_id TEXT,
+			defer_count INTEGER NOT NULL DEFAULT 0,
+			first_defer_at INTEGER,
+			last_defer_at INTEGER,
+			deadline_at INTEGER,
+			next_attempt_at INTEGER,
+			defer_exhausted INTEGER NOT NULL DEFAULT 0,
+			final_status TEXT,
+			updated_at INTEGER NOT NULL,
+			PRIMARY KEY (agent_id, task_id)
+		);
+
 		CREATE INDEX IF NOT EXISTS idx_notification_history_notification ON notification_history(notification_id, created_at DESC);
 		CREATE INDEX IF NOT EXISTS idx_notification_history_created ON notification_history(created_at DESC);
+		CREATE INDEX IF NOT EXISTS idx_automation_defer_due ON automation_defer_state(agent_id, next_attempt_at);
 	`
 
 	_, err := db.conn.Exec(schema)
@@ -783,6 +813,131 @@ func (db *DB) CountPendingAutomationCallbacks(agentID string) (int, error) {
 	return count, err
 }
 
+func (db *DB) UpsertAutomationDeferState(entry AutomationDeferStateEntry) error {
+	agentID := strings.TrimSpace(entry.AgentID)
+	taskID := strings.TrimSpace(entry.TaskID)
+	if agentID == "" || taskID == "" {
+		return fmt.Errorf("agent_id e task_id obrigatorios")
+	}
+	updatedAt := time.Now()
+	if !entry.UpdatedAt.IsZero() {
+		updatedAt = entry.UpdatedAt
+	}
+	deferExhausted := 0
+	if entry.DeferExhausted {
+		deferExhausted = 1
+	}
+
+	_, err := db.conn.Exec(
+		`INSERT INTO automation_defer_state (agent_id, task_id, execution_id, defer_count, first_defer_at, last_defer_at, deadline_at, next_attempt_at, defer_exhausted, final_status, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(agent_id, task_id) DO UPDATE SET
+			execution_id=excluded.execution_id,
+			defer_count=excluded.defer_count,
+			first_defer_at=excluded.first_defer_at,
+			last_defer_at=excluded.last_defer_at,
+			deadline_at=excluded.deadline_at,
+			next_attempt_at=excluded.next_attempt_at,
+			defer_exhausted=excluded.defer_exhausted,
+			final_status=excluded.final_status,
+			updated_at=excluded.updated_at`,
+		agentID,
+		taskID,
+		nullIfEmpty(entry.ExecutionID),
+		entry.DeferCount,
+		nullUnix(entry.FirstDeferAt),
+		nullUnix(entry.LastDeferAt),
+		nullUnix(entry.DeadlineAt),
+		nullUnix(entry.NextAttemptAt),
+		deferExhausted,
+		nullIfEmpty(entry.FinalStatus),
+		updatedAt.Unix(),
+	)
+	return err
+}
+
+func (db *DB) GetAutomationDeferState(agentID, taskID string) (AutomationDeferStateEntry, bool, error) {
+	var entry AutomationDeferStateEntry
+	var executionID sql.NullString
+	var firstDeferAt sql.NullInt64
+	var lastDeferAt sql.NullInt64
+	var deadlineAt sql.NullInt64
+	var nextAttemptAt sql.NullInt64
+	var finalStatus sql.NullString
+	var deferExhausted int
+	var updatedAt int64
+
+	err := db.conn.QueryRow(
+		`SELECT agent_id, task_id, execution_id, defer_count, first_defer_at, last_defer_at, deadline_at, next_attempt_at, defer_exhausted, final_status, updated_at
+		 FROM automation_defer_state WHERE agent_id = ? AND task_id = ?`,
+		strings.TrimSpace(agentID), strings.TrimSpace(taskID),
+	).Scan(
+		&entry.AgentID,
+		&entry.TaskID,
+		&executionID,
+		&entry.DeferCount,
+		&firstDeferAt,
+		&lastDeferAt,
+		&deadlineAt,
+		&nextAttemptAt,
+		&deferExhausted,
+		&finalStatus,
+		&updatedAt,
+	)
+	if err == sql.ErrNoRows {
+		return AutomationDeferStateEntry{}, false, nil
+	}
+	if err != nil {
+		return AutomationDeferStateEntry{}, false, err
+	}
+	entry.ExecutionID = strings.TrimSpace(executionID.String)
+	entry.FinalStatus = strings.TrimSpace(finalStatus.String)
+	entry.DeferExhausted = deferExhausted == 1
+	entry.FirstDeferAt = timeFromNullUnix(firstDeferAt)
+	entry.LastDeferAt = timeFromNullUnix(lastDeferAt)
+	entry.DeadlineAt = timeFromNullUnix(deadlineAt)
+	entry.NextAttemptAt = timeFromNullUnix(nextAttemptAt)
+	entry.UpdatedAt = time.Unix(updatedAt, 0)
+	return entry, true, nil
+}
+
+func (db *DB) ListAutomationDeferStates(agentID string, limit int) ([]AutomationDeferStateEntry, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := db.conn.Query(
+		`SELECT agent_id, task_id, COALESCE(execution_id, ''), defer_count, first_defer_at, last_defer_at, deadline_at, next_attempt_at, defer_exhausted, COALESCE(final_status, ''), updated_at
+		 FROM automation_defer_state WHERE agent_id = ? ORDER BY updated_at DESC LIMIT ?`,
+		strings.TrimSpace(agentID), limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]AutomationDeferStateEntry, 0, limit)
+	for rows.Next() {
+		var entry AutomationDeferStateEntry
+		var firstDeferAt sql.NullInt64
+		var lastDeferAt sql.NullInt64
+		var deadlineAt sql.NullInt64
+		var nextAttemptAt sql.NullInt64
+		var deferExhausted int
+		var updatedAt int64
+		if err := rows.Scan(&entry.AgentID, &entry.TaskID, &entry.ExecutionID, &entry.DeferCount, &firstDeferAt, &lastDeferAt, &deadlineAt, &nextAttemptAt, &deferExhausted, &entry.FinalStatus, &updatedAt); err != nil {
+			return nil, err
+		}
+		entry.FirstDeferAt = timeFromNullUnix(firstDeferAt)
+		entry.LastDeferAt = timeFromNullUnix(lastDeferAt)
+		entry.DeadlineAt = timeFromNullUnix(deadlineAt)
+		entry.NextAttemptAt = timeFromNullUnix(nextAttemptAt)
+		entry.DeferExhausted = deferExhausted == 1
+		entry.UpdatedAt = time.Unix(updatedAt, 0)
+		out = append(out, entry)
+	}
+	return out, rows.Err()
+}
+
 func (db *DB) SetAutomationMarker(agentID, markerKey, markerValue string) error {
 	_, err := db.conn.Exec(
 		"INSERT OR REPLACE INTO automation_marker_state (agent_id, marker_key, marker_value, updated_at) VALUES (?, ?, ?, ?)",
@@ -811,6 +966,20 @@ func nullIfEmpty(value string) any {
 		return nil
 	}
 	return value
+}
+
+func nullUnix(value time.Time) any {
+	if value.IsZero() {
+		return nil
+	}
+	return value.Unix()
+}
+
+func timeFromNullUnix(value sql.NullInt64) time.Time {
+	if !value.Valid || value.Int64 <= 0 {
+		return time.Time{}
+	}
+	return time.Unix(value.Int64, 0)
 }
 
 func (db *DB) SavePSADTBootstrapStatus(entry PSADTBootstrapEntry) error {

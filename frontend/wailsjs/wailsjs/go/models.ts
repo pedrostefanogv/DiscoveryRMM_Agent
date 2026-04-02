@@ -494,6 +494,14 @@ export namespace app {
 	    message: string;
 	    appName: string;
 	    durationSeconds: number;
+	    dialogButtons: string;
+	    dialogDefault: string;
+	    dialogIcon: string;
+	    dialogTimeout: number;
+	    dialogNoWait: boolean;
+	    dialogExitOnTimeout: boolean;
+	    dialogNotTopMost: boolean;
+	    dialogForce: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new PSADTVisualNotificationRequest(source);
@@ -506,6 +514,14 @@ export namespace app {
 	        this.message = source["message"];
 	        this.appName = source["appName"];
 	        this.durationSeconds = source["durationSeconds"];
+	        this.dialogButtons = source["dialogButtons"];
+	        this.dialogDefault = source["dialogDefault"];
+	        this.dialogIcon = source["dialogIcon"];
+	        this.dialogTimeout = source["dialogTimeout"];
+	        this.dialogNoWait = source["dialogNoWait"];
+	        this.dialogExitOnTimeout = source["dialogExitOnTimeout"];
+	        this.dialogNotTopMost = source["dialogNotTopMost"];
+	        this.dialogForce = source["dialogForce"];
 	    }
 	}
 	export class RuntimeFlags {

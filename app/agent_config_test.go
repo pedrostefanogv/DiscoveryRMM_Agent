@@ -208,3 +208,24 @@ func TestAgentConfig_MarshalRoundtrip(t *testing.T) {
 
 func ptrBool(v bool) *bool { return &v }
 func ptrInt(v int) *int    { return &v }
+
+func TestIsVersionAtLeast(t *testing.T) {
+	cases := []struct {
+		installed string
+		required  string
+		want      bool
+	}{
+		{installed: "4.1.8", required: "4.1.8", want: true},
+		{installed: "4.1.9", required: "4.1.8", want: true},
+		{installed: "4.2", required: "4.1.8", want: true},
+		{installed: "4.1.7", required: "4.1.8", want: false},
+		{installed: "v4.1.8", required: "4.1.8", want: true},
+	}
+
+	for _, tc := range cases {
+		got := isVersionAtLeast(tc.installed, tc.required)
+		if got != tc.want {
+			t.Fatalf("installed=%q required=%q expected=%t got=%t", tc.installed, tc.required, tc.want, got)
+		}
+	}
+}

@@ -278,7 +278,7 @@
 
     <section class="panel">
       <h2>Notificacao Visual Nativa PSADT</h2>
-      <div class="meta" style="margin-bottom:10px;">Executa cmdlets PSADT reais: <code style="font-family:'IBM Plex Mono',monospace;font-size:0.82rem;">Show-ADTBalloonTip</code>, <code style="font-family:'IBM Plex Mono',monospace;font-size:0.82rem;">Show-ADTInstallationPrompt</code>, <code style="font-family:'IBM Plex Mono',monospace;font-size:0.82rem;">Show-ADTInstallationProgress</code>.</div>
+      <div class="meta" style="margin-bottom:10px;">Executa cmdlets PSADT reais: <code style="font-family:'IBM Plex Mono',monospace;font-size:0.82rem;">Show-ADTBalloonTip</code>, <code style="font-family:'IBM Plex Mono',monospace;font-size:0.82rem;">Show-ADTInstallationPrompt</code>, <code style="font-family:'IBM Plex Mono',monospace;font-size:0.82rem;">Show-ADTInstallationProgress</code> e <code style="font-family:'IBM Plex Mono',monospace;font-size:0.82rem;">Show-ADTDialogBox</code>.</div>
       <div class="form-grid">
         <div>
           <label for="visualNotifType">Tipo</label>
@@ -289,6 +289,7 @@
             <option value="prompt_ok">Prompt — OK</option>
             <option value="prompt_continue">Prompt — Continuar / Adiar</option>
             <option value="progress">Progress Bar</option>
+            <option value="dialog_box">Dialog Box</option>
           </select>
         </div>
         <div>
@@ -297,7 +298,7 @@
         </div>
         <div>
           <label for="visualNotifAppName">App Name (sessao PSADT)</label>
-          <input id="visualNotifAppName" type="text" value="OfficeApp" />
+          <input id="visualNotifAppName" type="text" value="Discovery Agent" />
         </div>
         <div>
           <label for="visualNotifDuration">Duracao Progress (seg)</label>
@@ -306,6 +307,46 @@
         <div style="grid-column: 1 / -1;">
           <label for="visualNotifMessage">Mensagem</label>
           <textarea id="visualNotifMessage">O pacote Office sera instalado. Aguarde.</textarea>
+        </div>
+        <div>
+          <label for="visualDialogButtons">Dialog Buttons</label>
+          <select id="visualDialogButtons">
+            <option value="OkCancel">OkCancel</option>
+            <option value="Ok">Ok</option>
+            <option value="YesNo">YesNo</option>
+            <option value="YesNoCancel">YesNoCancel</option>
+            <option value="RetryCancel">RetryCancel</option>
+            <option value="AbortRetryIgnore">AbortRetryIgnore</option>
+            <option value="CancelTryContinue">CancelTryContinue</option>
+          </select>
+        </div>
+        <div>
+          <label for="visualDialogDefault">Default Button</label>
+          <select id="visualDialogDefault">
+            <option value="First">First</option>
+            <option value="Second">Second</option>
+            <option value="Third">Third</option>
+          </select>
+        </div>
+        <div>
+          <label for="visualDialogIcon">Dialog Icon</label>
+          <select id="visualDialogIcon">
+            <option value="Information">Information</option>
+            <option value="None">None</option>
+            <option value="Exclamation">Exclamation</option>
+            <option value="Question">Question</option>
+            <option value="Stop">Stop</option>
+          </select>
+        </div>
+        <div>
+          <label for="visualDialogTimeout">Dialog Timeout (seg)</label>
+          <input id="visualDialogTimeout" type="number" value="0" min="0" max="3600" />
+        </div>
+        <div style="grid-column: 1 / -1; display:flex; gap:12px; flex-wrap:wrap; align-items:center;">
+          <label><input id="visualDialogNoWait" type="checkbox" /> NoWait</label>
+          <label><input id="visualDialogExitOnTimeout" type="checkbox" /> ExitOnTimeout</label>
+          <label><input id="visualDialogNotTopMost" type="checkbox" /> NotTopMost</label>
+          <label><input id="visualDialogForce" type="checkbox" /> Force</label>
         </div>
       </div>
       <div class="actions" style="margin-top:10px;">

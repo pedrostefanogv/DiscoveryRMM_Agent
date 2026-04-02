@@ -226,6 +226,38 @@ type ExecutionResult struct {
 	MetadataJSON string
 }
 
+// PSADTPolicy representa a policy efetiva usada em runtime no executor PSADT.
+// Os campos podem vir vazios; o executor aplica defaults seguros.
+type PSADTPolicy struct {
+	ExecutionTimeoutSeconds int
+	SuccessExitCodes        []int
+	RebootExitCodes         []int
+	IgnoreExitCodes         []int
+	FallbackPolicy          string
+	TimeoutAction           string
+	UnknownExitCodePolicy   string
+}
+
+type AutomationNotificationRequest struct {
+	NotificationID string
+	IdempotencyKey string
+	Title          string
+	Message        string
+	Mode           string
+	Severity       string
+	EventType      string
+	Layout         string
+	TimeoutSeconds int
+	Metadata       map[string]any
+}
+
+type AutomationNotificationResponse struct {
+	Accepted    bool
+	Result      string
+	AgentAction string
+	Message     string
+}
+
 type PackageManager interface {
 	Install(ctx context.Context, id string) (string, error)
 	Uninstall(ctx context.Context, id string) (string, error)

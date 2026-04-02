@@ -159,7 +159,33 @@ Erros comuns:
 - Divergencia entre `successExitCodes` da API e classificacao local.
 - Falta de permissao para instalacao do modulo PSADT.
 
-## 9. Exemplo Completo de Configuracao
+## 9. Notificacao Visual PSADT (estado atual implementado)
+
+### 9.1 Tipos suportados no debug runtime
+
+- `balloon_info`, `balloon_warning`, `balloon_error`
+- `prompt_ok`, `prompt_continue`
+- `progress`
+
+### 9.2 Regras de titulo e identidade visual
+
+- Campo `title`: usado como `BalloonTipTitle` e como `-Title` nos prompts.
+- Campo `appName`: usado em `Open-ADTSession -AppName` para sessao PSADT.
+- Default backend para `appName`: `Discovery Agent`.
+
+### 9.3 Limitacoes do canal nativo PSADT/Windows
+
+- Em `Show-ADTBalloonTip`, o nome de origem exibido pelo Windows pode aparecer como `PSAppDeployToolkit`.
+- Esse nome de origem e definido pelo canal/toolkit e nao e totalmente customizavel por parametro de cmdlet.
+- O icone do balloon segue enum do Windows Forms e aceita apenas: `None`, `Info`, `Warning`, `Error`.
+- Nao ha suporte a icone custom (ex.: PNG/ICO proprio) no fluxo nativo de balloon do PSADT.
+
+### 9.4 Encoding de logs PowerShell/PSADT
+
+- A captura de saida usa normalizacao com fallback para evitar caracteres corrompidos em acentuacao (`UTF-8`, `CP850`, `Windows-1252`).
+- O script visual tambem define `OutputEncoding` em UTF-8 para reduzir inconsistencias de console.
+
+## 10. Exemplo Completo de Configuracao
 
 ```json
 {

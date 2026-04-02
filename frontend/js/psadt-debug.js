@@ -236,6 +236,14 @@
     var messageEl = document.getElementById("visualNotifMessage");
     var appNameEl = document.getElementById("visualNotifAppName");
     var durEl     = document.getElementById("visualNotifDuration");
+    var dialogButtonsEl = document.getElementById("visualDialogButtons");
+    var dialogDefaultEl = document.getElementById("visualDialogDefault");
+    var dialogIconEl = document.getElementById("visualDialogIcon");
+    var dialogTimeoutEl = document.getElementById("visualDialogTimeout");
+    var dialogNoWaitEl = document.getElementById("visualDialogNoWait");
+    var dialogExitOnTimeoutEl = document.getElementById("visualDialogExitOnTimeout");
+    var dialogNotTopMostEl = document.getElementById("visualDialogNotTopMost");
+    var dialogForceEl = document.getElementById("visualDialogForce");
     var statusEl  = document.getElementById("visualNotifStatus");
     var outputEl  = document.getElementById("visualNotifOutput");
 
@@ -244,7 +252,15 @@
       title:           titleEl   ? titleEl.value                  : "Discovery Agent",
       message:         messageEl ? messageEl.value                : "Teste de notificacao PSADT",
       appName:         appNameEl ? appNameEl.value                : "TestApp",
-      durationSeconds: durEl     ? (parseInt(durEl.value) || 5)  : 5
+      durationSeconds: durEl     ? (parseInt(durEl.value, 10) || 5)  : 5,
+      dialogButtons: dialogButtonsEl ? dialogButtonsEl.value : "OkCancel",
+      dialogDefault: dialogDefaultEl ? dialogDefaultEl.value : "First",
+      dialogIcon: dialogIconEl ? dialogIconEl.value : "Information",
+      dialogTimeout: dialogTimeoutEl ? (parseInt(dialogTimeoutEl.value, 10) || 0) : 0,
+      dialogNoWait: dialogNoWaitEl ? !!dialogNoWaitEl.checked : false,
+      dialogExitOnTimeout: dialogExitOnTimeoutEl ? !!dialogExitOnTimeoutEl.checked : false,
+      dialogNotTopMost: dialogNotTopMostEl ? !!dialogNotTopMostEl.checked : false,
+      dialogForce: dialogForceEl ? !!dialogForceEl.checked : false
     };
 
     setStatus(statusEl, "Executando notificacao PSADT nativa...", "");

@@ -9,11 +9,30 @@ import (
 	"runtime"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"discovery/internal/processutil"
+
+	"golang.org/x/text/encoding/charmap"
 )
 
 var psadtVersionPattern = regexp.MustCompile(`^[0-9]+(\.[0-9]+){0,3}$`)
+
+func decodePowerShellOutput(raw []byte) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	if utf8.Valid(raw) {
+		return strings.TrimSpace(string(raw))
+	}
+	if decoded, err := charmap.CodePage850.NewDecoder().Bytes(raw); err == nil && utf8.Valid(decoded) {
+		return strings.TrimSpace(string(decoded))
+	}
+	if decoded, err := charmap.Windows1252.NewDecoder().Bytes(raw); err == nil && utf8.Valid(decoded) {
+		return strings.TrimSpace(string(decoded))
+	}
+	return strings.TrimSpace(string(raw))
+}
 
 type PSADTModuleStatus struct {
 	Installed    bool   `json:"installed"`
@@ -79,7 +98,7 @@ func (a *App) CheckPSADTModuleStatus() PSADTModuleStatus {
 		"$m = Get-Module -ListAvailable -Name PSAppDeployToolkit | Sort-Object Version -Descending | Select-Object -First 1; if ($m) { Write-Output $m.Version.ToString() }")
 	processutil.HideWindow(cmd)
 	out, err := cmd.CombinedOutput()
-	text := strings.TrimSpace(string(out))
+	text := decodePowerShellOutput(out)
 	if err != nil {
 		status.Message = strings.TrimSpace(err.Error())
 		if status.Message == "" {
@@ -119,17 +138,15 @@ func (a *App) InstallPSADTModule(version string) PSADTModuleStatus {
 		a.logs.append("[psadt] instalacao rejeitada: versao invalida '" + version + "'")
 		return status
 	}
-	a.logs.append("[psadt] iniciando instalacao do modulo versao " + version + " via PSGallery...")
 
-	script := fmt.Sprintf(`$ErrorActionPreference='Stop'
-try {
-  Install-Module -Name PSAppDeployToolkit -RequiredVersion %s -Scope AllUsers -Force -AllowClobber
-} catch {
-  Install-Module -Name PSAppDeployToolkit -RequiredVersion %s -Scope CurrentUser -Force -AllowClobber
-}
-$m = Get-Module -ListAvailable -Name PSAppDeployToolkit | Sort-Object Version -Descending | Select-Object -First 1
-if (-not $m) { throw 'PSADT nao encontrado apos instalacao' }
-Write-Output $m.Version.ToString()`, version, version)
+	installSource := "powershell_gallery"
+	if a != nil {
+		installSource = strings.TrimSpace(a.GetAgentConfiguration().PSADT.InstallSource)
+	}
+	sourceType, sourceValue := parsePSADTInstallSource(installSource)
+	a.logs.append("[psadt] iniciando instalacao do modulo versao " + version + " via source=" + sourceType)
+
+	script := buildPSADTInstallScript(version, sourceType, sourceValue)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -137,7 +154,7 @@ Write-Output $m.Version.ToString()`, version, version)
 	cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-Command", script)
 	processutil.HideWindow(cmd)
 	out, err := cmd.CombinedOutput()
-	text := strings.TrimSpace(string(out))
+	text := decodePowerShellOutput(out)
 	if err != nil {
 		status.Message = strings.TrimSpace(err.Error())
 		if text != "" {
@@ -146,15 +163,82 @@ Write-Output $m.Version.ToString()`, version, version)
 		if status.Message == "" {
 			status.Message = "falha ao instalar PSADT"
 		}
+		if sourceType != "powershell_gallery" {
+			a.logs.append("[psadt] source " + sourceType + " falhou; fallback para powershell_gallery")
+			fallbackScript := buildPSADTInstallScript(version, "powershell_gallery", "")
+			fallbackCmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-Command", fallbackScript)
+			processutil.HideWindow(fallbackCmd)
+			fallbackOut, fallbackErr := fallbackCmd.CombinedOutput()
+			fallbackText := decodePowerShellOutput(fallbackOut)
+			if fallbackErr == nil {
+				status.Installed = true
+				status.Version = fallbackText
+				status.Message = "instalacao concluida (fallback powershell_gallery)"
+				a.logs.append("[psadt] modulo instalado com fallback PSGallery: versao " + fallbackText)
+				return status
+			}
+		}
 		a.logs.append("[psadt] falha na instalacao do modulo: " + status.Message)
 		return status
 	}
 
 	status.Installed = true
 	status.Version = text
-	status.Message = "instalacao concluida"
+	status.Message = "instalacao concluida (source=" + sourceType + ")"
 	a.logs.append("[psadt] modulo instalado com sucesso: versao " + text)
 	return status
+}
+
+func parsePSADTInstallSource(raw string) (string, string) {
+	text := strings.TrimSpace(strings.ToLower(raw))
+	if text == "" || text == "powershell_gallery" || text == "psgallery" {
+		return "powershell_gallery", ""
+	}
+	if strings.HasPrefix(text, "internal:") {
+		return "internal", strings.TrimSpace(raw[len("internal:"):])
+	}
+	if strings.HasPrefix(text, "offline:") {
+		return "offline", strings.TrimSpace(raw[len("offline:"):])
+	}
+	return "powershell_gallery", ""
+}
+
+func buildPSADTInstallScript(version, sourceType, sourceValue string) string {
+	installCmd := ""
+	sourceValue = strings.TrimSpace(sourceValue)
+
+	switch sourceType {
+	case "internal":
+		repo := escapePowerShellSingleQuoted(sourceValue)
+		if repo == "" {
+			repo = "Internal"
+		}
+		installCmd = fmt.Sprintf("Install-Module -Name PSAppDeployToolkit -RequiredVersion %s -Repository '%s' -Scope AllUsers -Force -AllowClobber", version, repo)
+	case "offline":
+		path := escapePowerShellSingleQuoted(sourceValue)
+		installCmd = fmt.Sprintf("$offlinePath='%s'; if (-not (Test-Path $offlinePath)) { throw 'offline source nao encontrada' }; Copy-Item -Path $offlinePath -Destination (Join-Path $env:ProgramFiles 'WindowsPowerShell\\Modules\\PSAppDeployToolkit') -Recurse -Force", path)
+	default:
+		sourceType = "powershell_gallery"
+		installCmd = fmt.Sprintf("Install-Module -Name PSAppDeployToolkit -RequiredVersion %s -Scope AllUsers -Force -AllowClobber", version)
+	}
+
+	return fmt.Sprintf(`$ErrorActionPreference='Stop'
+try {
+  %s
+} catch {
+  if ('%s' -ne 'offline') {
+    Install-Module -Name PSAppDeployToolkit -RequiredVersion %s -Scope CurrentUser -Force -AllowClobber
+  } else {
+    throw
+  }
+}
+$m = Get-Module -ListAvailable -Name PSAppDeployToolkit | Sort-Object Version -Descending | Select-Object -First 1
+if (-not $m) { throw 'PSADT nao encontrado apos instalacao' }
+Write-Output $m.Version.ToString()`, installCmd, sourceType, version)
+}
+
+func escapePowerShellSingleQuoted(value string) string {
+	return strings.ReplaceAll(value, "'", "''")
 }
 
 func (a *App) EmitPSADTDebugNotification(req PSADTDebugNotificationRequest) error {
@@ -303,7 +387,7 @@ exit 0
 	elapsed := time.Since(start).Milliseconds()
 
 	result.DurationMS = elapsed
-	result.Output = strings.TrimSpace(string(output))
+	result.Output = decodePowerShellOutput(output)
 
 	if err != nil {
 		result.Success = false
@@ -419,7 +503,7 @@ func (a *App) ExecuteCustomPSADTScript(scriptContent string) PSADTScriptResult {
 	elapsed := time.Since(start).Milliseconds()
 
 	result.DurationMS = elapsed
-	result.Output = strings.TrimSpace(string(output))
+	result.Output = decodePowerShellOutput(output)
 
 	if err != nil {
 		result.Success = false
@@ -446,6 +530,14 @@ type PSADTVisualNotificationRequest struct {
 	Message         string `json:"message"`
 	AppName         string `json:"appName"`
 	DurationSeconds int    `json:"durationSeconds"` // utilizado apenas pelo tipo progress
+	DialogButtons   string `json:"dialogButtons"`   // Ok | OkCancel | AbortRetryIgnore | YesNoCancel | YesNo | RetryCancel | CancelTryContinue
+	DialogDefault   string `json:"dialogDefault"`   // First | Second | Third
+	DialogIcon      string `json:"dialogIcon"`      // None | Stop | Question | Exclamation | Information
+	DialogTimeout   int    `json:"dialogTimeout"`   // segundos, 0 = sem timeout
+	DialogNoWait    bool   `json:"dialogNoWait"`
+	DialogExitOnTimeout bool `json:"dialogExitOnTimeout"`
+	DialogNotTopMost bool `json:"dialogNotTopMost"`
+	DialogForce     bool   `json:"dialogForce"`
 }
 
 // ExecutePSADTVisualNotification executa uma notificacao visual nativa via cmdlets reais do PSAppDeployToolkit.
@@ -471,10 +563,16 @@ func (a *App) ExecutePSADTVisualNotification(req PSADTVisualNotificationRequest)
 		req.Message = "Teste de notificacao PSADT"
 	}
 	if strings.TrimSpace(req.AppName) == "" {
-		req.AppName = "TestApp"
+		req.AppName = "Discovery Agent"
 	}
 	if req.DurationSeconds <= 0 || req.DurationSeconds > 60 {
 		req.DurationSeconds = 5
+	}
+	req.DialogButtons = normalizeDialogButtons(req.DialogButtons)
+	req.DialogDefault = normalizeDialogDefault(req.DialogDefault)
+	req.DialogIcon = normalizeDialogIcon(req.DialogIcon)
+	if req.DialogTimeout < 0 {
+		req.DialogTimeout = 0
 	}
 	a.logs.append(fmt.Sprintf("[psadt] notificacao visual nativa: tipo=%s titulo=%q", req.NotifType, req.Title))
 
@@ -510,13 +608,21 @@ func (a *App) ExecutePSADTVisualNotification(req PSADTVisualNotificationRequest)
 		"PSADT_MESSAGE="+req.Message,
 		"PSADT_APPNAME="+req.AppName,
 		fmt.Sprintf("PSADT_DURATION=%d", req.DurationSeconds),
+		"PSADT_DIALOG_BUTTONS="+req.DialogButtons,
+		"PSADT_DIALOG_DEFAULT="+req.DialogDefault,
+		"PSADT_DIALOG_ICON="+req.DialogIcon,
+		fmt.Sprintf("PSADT_DIALOG_TIMEOUT=%d", req.DialogTimeout),
+		"PSADT_DIALOG_NOWAIT="+boolEnvValue(req.DialogNoWait),
+		"PSADT_DIALOG_EXIT_ON_TIMEOUT="+boolEnvValue(req.DialogExitOnTimeout),
+		"PSADT_DIALOG_NOT_TOPMOST="+boolEnvValue(req.DialogNotTopMost),
+		"PSADT_DIALOG_FORCE="+boolEnvValue(req.DialogForce),
 	)
 	processutil.HideWindow(cmd)
 
 	output, err := cmd.CombinedOutput()
 	elapsed := time.Since(start).Milliseconds()
 	result.DurationMS = elapsed
-	result.Output = strings.TrimSpace(string(output))
+	result.Output = decodePowerShellOutput(output)
 
 	if err != nil {
 		result.Success = false
@@ -538,7 +644,7 @@ func (a *App) ExecutePSADTVisualNotification(req PSADTVisualNotificationRequest)
 
 // buildPSADTVisualScript gera o script PowerShell para o tipo de notificacao solicitado.
 func buildPSADTVisualScript(req PSADTVisualNotificationRequest) (string, time.Duration) {
-	balloonIcon := "Information"
+	balloonIcon := "Info"
 	if strings.Contains(req.NotifType, "warning") {
 		balloonIcon = "Warning"
 	} else if strings.Contains(req.NotifType, "error") {
@@ -546,6 +652,8 @@ func buildPSADTVisualScript(req PSADTVisualNotificationRequest) (string, time.Du
 	}
 
 	header := "$ErrorActionPreference = 'Stop'\n" +
+		"[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)\n" +
+		"$OutputEncoding = [Console]::OutputEncoding\n" +
 		"try {\n" +
 		"    Import-Module -Name PSAppDeployToolkit -ErrorAction Stop\n" +
 		"} catch {\n" +
@@ -554,7 +662,15 @@ func buildPSADTVisualScript(req PSADTVisualNotificationRequest) (string, time.Du
 		"$psadtTitle    = $env:PSADT_TITLE\n" +
 		"$psadtMessage  = $env:PSADT_MESSAGE\n" +
 		"$psadtAppName  = $env:PSADT_APPNAME\n" +
-		"$psadtDuration = [int]$env:PSADT_DURATION\n\n"
+		"$psadtDuration = [int]$env:PSADT_DURATION\n" +
+		"$psadtDialogButtons = $env:PSADT_DIALOG_BUTTONS\n" +
+		"$psadtDialogDefault = $env:PSADT_DIALOG_DEFAULT\n" +
+		"$psadtDialogIcon = $env:PSADT_DIALOG_ICON\n" +
+		"$psadtDialogTimeout = [int]$env:PSADT_DIALOG_TIMEOUT\n" +
+		"$psadtDialogNoWait = ($env:PSADT_DIALOG_NOWAIT -eq '1')\n" +
+		"$psadtDialogExitOnTimeout = ($env:PSADT_DIALOG_EXIT_ON_TIMEOUT -eq '1')\n" +
+		"$psadtDialogNotTopMost = ($env:PSADT_DIALOG_NOT_TOPMOST -eq '1')\n" +
+		"$psadtDialogForce = ($env:PSADT_DIALOG_FORCE -eq '1')\n\n"
 
 	openInteractive := "try {\n" +
 		"    Open-ADTSession -SessionState $ExecutionContext.SessionState" +
@@ -584,14 +700,14 @@ func buildPSADTVisualScript(req PSADTVisualNotificationRequest) (string, time.Du
 
 	case "prompt_ok":
 		body := openInteractive +
-			"$adtResult = Show-ADTInstallationPrompt -Message $psadtMessage -Title $psadtTitle -ButtonRightText 'OK' -Icon 'Information'\n" +
+			"$adtResult = Show-ADTInstallationPrompt -Message $psadtMessage -Title $psadtTitle -ButtonRightText 'OK' -Icon 'Info'\n" +
 			"Write-Host \"Resultado: $adtResult\"\n" +
 			closeSession
 		return header + body, 3 * time.Minute
 
 	case "prompt_continue":
 		body := openInteractive +
-			"$adtResult = Show-ADTInstallationPrompt -Message $psadtMessage -Title $psadtTitle -ButtonLeftText 'Continuar' -ButtonRightText 'Adiar' -Icon 'Information'\n" +
+			"$adtResult = Show-ADTInstallationPrompt -Message $psadtMessage -Title $psadtTitle -ButtonLeftText 'Continuar' -ButtonRightText 'Adiar' -Icon 'Info'\n" +
 			"Write-Host \"Resultado: $adtResult\"\n" +
 			closeSession
 		return header + body, 3 * time.Minute
@@ -605,11 +721,93 @@ func buildPSADTVisualScript(req PSADTVisualNotificationRequest) (string, time.Du
 		timeout := time.Duration(req.DurationSeconds+30) * time.Second
 		return header + body, timeout
 
+	case "dialog", "dialog_box":
+		body := "$dialogParams = @{\n" +
+			"  Title = $psadtTitle\n" +
+			"  Text = $psadtMessage\n" +
+			"  Buttons = $psadtDialogButtons\n" +
+			"  DefaultButton = $psadtDialogDefault\n" +
+			"  Icon = $psadtDialogIcon\n" +
+			"}\n" +
+			"if ($psadtDialogTimeout -gt 0) { $dialogParams.Timeout = $psadtDialogTimeout }\n" +
+			"if ($psadtDialogNoWait) { $dialogParams.NoWait = $true }\n" +
+			"if ($psadtDialogExitOnTimeout) { $dialogParams.ExitOnTimeout = $true }\n" +
+			"if ($psadtDialogNotTopMost) { $dialogParams.NotTopMost = $true }\n" +
+			"if ($psadtDialogForce) { $dialogParams.Force = $true }\n" +
+			"$adtResult = Show-ADTDialogBox @dialogParams\n" +
+			"if ($null -ne $adtResult) { Write-Host \"Resultado: $adtResult\" } else { Write-Host 'Resultado: sem resposta (NoWait/Timeout)' }\n" +
+			"exit 0\n"
+		timeout := 3 * time.Minute
+		if req.DialogNoWait {
+			timeout = 30 * time.Second
+		} else if req.DialogTimeout > 0 {
+			timeout = time.Duration(req.DialogTimeout+30) * time.Second
+		}
+		return header + body, timeout
+
 	default:
 		body := openInteractive +
-			"Show-ADTBalloonTip -BalloonTipTitle $psadtTitle -BalloonTipText $psadtMessage -BalloonTipIcon 'Information'\n" +
+			"Show-ADTBalloonTip -BalloonTipTitle $psadtTitle -BalloonTipText $psadtMessage -BalloonTipIcon 'Info'\n" +
 			"Write-Host 'BalloonTip exibido com sucesso'\n" +
 			closeSession
 		return header + body, 30 * time.Second
+	}
+}
+
+func boolEnvValue(v bool) string {
+	if v {
+		return "1"
+	}
+	return "0"
+}
+
+func normalizeDialogButtons(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "ok":
+		return "Ok"
+	case "okcancel":
+		return "OkCancel"
+	case "abortretryignore":
+		return "AbortRetryIgnore"
+	case "yesnocancel":
+		return "YesNoCancel"
+	case "yesno":
+		return "YesNo"
+	case "retrycancel":
+		return "RetryCancel"
+	case "canceltrycontinue":
+		return "CancelTryContinue"
+	default:
+		return "Ok"
+	}
+}
+
+func normalizeDialogDefault(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "first":
+		return "First"
+	case "second":
+		return "Second"
+	case "third":
+		return "Third"
+	default:
+		return "First"
+	}
+}
+
+func normalizeDialogIcon(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "none":
+		return "None"
+	case "stop":
+		return "Stop"
+	case "question":
+		return "Question"
+	case "exclamation":
+		return "Exclamation"
+	case "information", "info":
+		return "Information"
+	default:
+		return "None"
 	}
 }

@@ -18,23 +18,23 @@ const (
 
 type PackageAuthorizationFunc func(ctx context.Context, installationType AppInstallationType, packageID, operation string) error
 
-func executeTask(ctx context.Context, packages PackageManager, authorize PackageAuthorizationFunc, task AutomationTask) ExecutionResult {
+func executeTask(ctx context.Context, packages PackageManager, authorize PackageAuthorizationFunc, task AutomationTask, psadtPolicy PSADTPolicy) ExecutionResult {
 	if task.RequiresApproval {
 		return ExecutionResult{Success: false, ExitCode: 10, ExitCodeSet: true, ErrorMessage: "tarefa exige aprovacao e nao pode ser executada automaticamente"}
 	}
 
 	switch task.ActionType {
 	case ActionInstallPackage:
-		return executePackageAction(ctx, packages, authorize, task, "install")
+		return executePackageAction(ctx, packages, authorize, task, "install", psadtPolicy)
 	case ActionUpdatePackage:
-		return executePackageAction(ctx, packages, authorize, task, "upgrade")
+		return executePackageAction(ctx, packages, authorize, task, "upgrade", psadtPolicy)
 	case ActionRemovePackage:
-		return executePackageAction(ctx, packages, authorize, task, "uninstall")
+		return executePackageAction(ctx, packages, authorize, task, "uninstall", psadtPolicy)
 	case ActionUpdateOrInstallPackage:
-		if result := executePackageAction(ctx, packages, authorize, task, "upgrade"); result.Success {
+		if result := executePackageAction(ctx, packages, authorize, task, "upgrade", psadtPolicy); result.Success {
 			return result
 		}
-		return executePackageAction(ctx, packages, authorize, task, "install")
+		return executePackageAction(ctx, packages, authorize, task, "install", psadtPolicy)
 	case ActionRunScript:
 		return executeScript(ctx, task)
 	case ActionCustomCommand:
@@ -44,7 +44,7 @@ func executeTask(ctx context.Context, packages PackageManager, authorize Package
 	}
 }
 
-func executePackageAction(ctx context.Context, packages PackageManager, authorize PackageAuthorizationFunc, task AutomationTask, operation string) ExecutionResult {
+func executePackageAction(ctx context.Context, packages PackageManager, authorize PackageAuthorizationFunc, task AutomationTask, operation string, psadtPolicy PSADTPolicy) ExecutionResult {
 	packageID := strings.TrimSpace(task.PackageID)
 	if packageID == "" {
 		return ExecutionResult{Success: false, ExitCode: 2, ExitCodeSet: true, ErrorMessage: "packageId obrigatorio para acao de pacote"}
@@ -82,7 +82,7 @@ func executePackageAction(ctx context.Context, packages PackageManager, authoriz
 	case InstallationChocolatey:
 		return executeChocolatey(ctx, packageID, operation)
 	case InstallationPSAppDeployToolkit:
-		return executePSAppDeployToolkit(ctx, packages, packageID, operation)
+		return executePSAppDeployToolkitWithPolicy(ctx, packages, packageID, operation, psadtPolicy)
 	default:
 		return ExecutionResult{Success: false, ExitCode: 2, ExitCodeSet: true, ErrorMessage: "installationType nao suportado"}
 	}

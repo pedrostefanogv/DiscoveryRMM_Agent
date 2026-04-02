@@ -2,6 +2,7 @@ package database
 
 import (
 	"testing"
+	"time"
 )
 
 func TestInventorySoftwareChanged_IgnoresOrdering(t *testing.T) {
@@ -73,5 +74,49 @@ func TestSaveAndListNotificationEvent(t *testing.T) {
 	}
 	if events[0].NotificationID != "notif-1" {
 		t.Fatalf("unexpected notification id: %q", events[0].NotificationID)
+	}
+}
+
+func TestUpsertAndListAutomationDeferState(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(dir)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	now := time.Now().UTC()
+	err = db.UpsertAutomationDeferState(AutomationDeferStateEntry{
+		AgentID:        "agent-1",
+		TaskID:         "task-1",
+		ExecutionID:    "exec-1",
+		DeferCount:     2,
+		FirstDeferAt:   now.Add(-2 * time.Hour),
+		LastDeferAt:    now.Add(-1 * time.Hour),
+		NextAttemptAt:  now.Add(30 * time.Minute),
+		DeferExhausted: false,
+		FinalStatus:    "deferred",
+	})
+	if err != nil {
+		t.Fatalf("upsert defer state: %v", err)
+	}
+
+	entry, found, err := db.GetAutomationDeferState("agent-1", "task-1")
+	if err != nil {
+		t.Fatalf("get defer state: %v", err)
+	}
+	if !found {
+		t.Fatalf("expected defer state to be found")
+	}
+	if entry.DeferCount != 2 {
+		t.Fatalf("expected deferCount=2, got %d", entry.DeferCount)
+	}
+
+	states, err := db.ListAutomationDeferStates("agent-1", 10)
+	if err != nil {
+		t.Fatalf("list defer states: %v", err)
+	}
+	if len(states) != 1 {
+		t.Fatalf("expected one defer state entry, got %d", len(states))
 	}
 }
