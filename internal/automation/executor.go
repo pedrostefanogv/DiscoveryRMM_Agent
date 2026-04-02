@@ -81,6 +81,8 @@ func executePackageAction(ctx context.Context, packages PackageManager, authoriz
 		return resultFromCommand(out, err)
 	case InstallationChocolatey:
 		return executeChocolatey(ctx, packageID, operation)
+	case InstallationPSAppDeployToolkit:
+		return executePSAppDeployToolkit(ctx, packages, packageID, operation)
 	default:
 		return ExecutionResult{Success: false, ExitCode: 2, ExitCodeSet: true, ErrorMessage: "installationType nao suportado"}
 	}

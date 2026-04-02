@@ -144,12 +144,19 @@ function updateDebugResponseLabel() {
 
 function initDebug() {
   var openP2PDebugWindowBtn = document.getElementById('openP2PDebugWindowBtn');
+  var openPSADTDebugWindowBtn = document.getElementById('openPSADTDebugWindowBtn');
   if (openP2PDebugWindowBtn) {
     openP2PDebugWindowBtn.addEventListener('click', function () {
       setActiveTab('p2p');
       if (typeof loadP2PView === 'function') {
         loadP2PView();
       }
+    });
+  }
+
+  if (openPSADTDebugWindowBtn) {
+    openPSADTDebugWindowBtn.addEventListener('click', function () {
+      setActiveTab('psadt');
     });
   }
 

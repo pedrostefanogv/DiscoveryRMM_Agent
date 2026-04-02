@@ -18,6 +18,10 @@ export function AddTicketCommentWithOptions(arg1, arg2, arg3) {
   return window['go']['app']['App']['AddTicketCommentWithOptions'](arg1, arg2, arg3);
 }
 
+export function CheckPSADTModuleStatus() {
+  return window['go']['app']['App']['CheckPSADTModuleStatus']();
+}
+
 export function CleanupP2PTempNow() {
   return window['go']['app']['App']['CleanupP2PTempNow']();
 }
@@ -70,8 +74,28 @@ export function DeleteLocalMemory(arg1) {
   return window['go']['app']['App']['DeleteLocalMemory'](arg1);
 }
 
+export function DispatchNotification(arg1) {
+  return window['go']['app']['App']['DispatchNotification'](arg1);
+}
+
 export function DownloadP2PArtifactSwarm(arg1) {
   return window['go']['app']['App']['DownloadP2PArtifactSwarm'](arg1);
+}
+
+export function EmitPSADTDebugNotification(arg1) {
+  return window['go']['app']['App']['EmitPSADTDebugNotification'](arg1);
+}
+
+export function ExecuteCustomPSADTScript(arg1) {
+  return window['go']['app']['App']['ExecuteCustomPSADTScript'](arg1);
+}
+
+export function ExecutePSADTTestScript(arg1, arg2) {
+  return window['go']['app']['App']['ExecutePSADTTestScript'](arg1, arg2);
+}
+
+export function ExecutePSADTVisualNotification(arg1) {
+  return window['go']['app']['App']['ExecutePSADTVisualNotification'](arg1);
 }
 
 export function ExportInventoryMarkdown() {
@@ -112,6 +136,10 @@ export function GetAgentStatus() {
 
 export function GetAgentTicketDetails(arg1) {
   return window['go']['app']['App']['GetAgentTicketDetails'](arg1);
+}
+
+export function GetAutoProvisioningStats() {
+  return window['go']['app']['App']['GetAutoProvisioningStats']();
 }
 
 export function GetAutomationState() {
@@ -170,6 +198,10 @@ export function GetMCPRegistry() {
   return window['go']['app']['App']['GetMCPRegistry']();
 }
 
+export function GetOnboardingStatus() {
+  return window['go']['app']['App']['GetOnboardingStatus']();
+}
+
 export function GetOsqueryStatus() {
   return window['go']['app']['App']['GetOsqueryStatus']();
 }
@@ -210,6 +242,14 @@ export function GetP2PTempDir() {
   return window['go']['app']['App']['GetP2PTempDir']();
 }
 
+export function GetPSADTDebugState() {
+  return window['go']['app']['App']['GetPSADTDebugState']();
+}
+
+export function GetPSADTScriptTemplate() {
+  return window['go']['app']['App']['GetPSADTScriptTemplate']();
+}
+
 export function GetPackageActions() {
   return window['go']['app']['App']['GetPackageActions']();
 }
@@ -240,6 +280,10 @@ export function GetRealtimeStatus() {
 
 export function GetRuntimeFlags() {
   return window['go']['app']['App']['GetRuntimeFlags']();
+}
+
+export function GetServiceHealth() {
+  return window['go']['app']['App']['GetServiceHealth']();
 }
 
 export function GetSpoolerStatus() {
@@ -284,6 +328,10 @@ export function Install(arg1) {
 
 export function InstallOsquery() {
   return window['go']['app']['App']['InstallOsquery']();
+}
+
+export function InstallPSADTModule(arg1) {
+  return window['go']['app']['App']['InstallPSADTModule'](arg1);
 }
 
 export function InstallPackage(arg1) {
@@ -400,6 +448,10 @@ export function ReplicateP2PArtifactToPeer(arg1, arg2) {
 
 export function RequestAppClose() {
   return window['go']['app']['App']['RequestAppClose']();
+}
+
+export function RespondToNotification(arg1, arg2) {
+  return window['go']['app']['App']['RespondToNotification'](arg1, arg2);
 }
 
 export function RestartSpooler() {

@@ -24,6 +24,9 @@ var assets embed.FS
 var Version = appkg.Version
 
 func main() {
+	// Prevenir que o Xbox Game Bar identifique este app como jogo
+	suppressGameBarOverlay()
+
 	startupDebugMode := detectStartupDebugMode()
 	startupMinimized := hasStartupArg("--startup-minimized")
 	startupSource := strings.TrimSpace(parseArgValue("--startup-source"))

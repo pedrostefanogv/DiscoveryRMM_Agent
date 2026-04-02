@@ -6,30 +6,9 @@ import (
 )
 
 func TestParseAgentConfiguration_BasicFields(t *testing.T) {
-	payload := `{
-		"recoveryEnabled": true,
-		"discoveryEnabled": false,
-		"p2pFilesEnabled": true,
-		"supportEnabled": true,
-		"natsServerHost": "nats.example.local",
-		"natsUseWssExternal": true,
-		"enforceTlsHashValidation": true,
-		"handshakeEnabled": true,
-		"apiTlsCertHash": "aa:bb:cc",
-		"natsTlsCertHash": "11 22 33",
-		"chatAIEnabled": false,
-		"inventoryIntervalHours": 12,
-		"agentHeartbeatIntervalSeconds": 60,
-		"siteId": "s1",
-		"clientId": "c1",
-		"resolvedAt": "2026-03-17T13:45:00.000Z",
-		"autoUpdate": {
-			"enabled": true,
-			"checkEveryHours": 4
-		}
-	}`
+	payloadData := []byte(`{"recoveryEnabled":true,"discoveryEnabled":false,"p2pFilesEnabled":true,"supportEnabled":true,"natsServerHost":"nats.example.local","natsUseWssExternal":true,"enforceTlsHashValidation":true,"handshakeEnabled":true,"apiTlsCertHash":"aa:bb:cc","natsTlsCertHash":"11 22 33","chatAIEnabled":false,"inventoryIntervalHours":12,"agentHeartbeatIntervalSeconds":60,"siteId":"s1","clientId":"c1","resolvedAt":"2026-03-17T13:45:00.000Z","autoUpdate":{"enabled":true,"checkEveryHours":4},"psadt":{"enabled":true,"requiredVersion":"4.1.8","autoInstallModule":true,"installSource":"powershell_gallery","executionTimeoutSeconds":1800,"fallbackPolicy":"winget_then_choco","installOnStartup":true,"installOnDemand":true},"notificationBranding":{"companyName":"Meduza","logoUrl":"https://example/logo.svg","bannerUrl":"https://example/banner.png","theme":{"surface":"#111827","text":"#f9fafb","accent":"#0ea5e9","success":"#0b6e4f","warning":"#8a4e12","danger":"#9a031e"}}}`)
 
-	cfg, err := parseAgentConfiguration([]byte(payload))
+	cfg, err := parseAgentConfiguration(payloadData)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -75,6 +54,115 @@ func TestParseAgentConfiguration_BasicFields(t *testing.T) {
 	}
 	if cfg.AutoUpdate.Enabled != true || cfg.AutoUpdate.CheckEveryHours != 4 {
 		t.Fatalf("expected autoUpdate enabled and checkEveryHours")
+	}
+	if cfg.PSADT.Enabled == nil || !*cfg.PSADT.Enabled {
+		t.Fatalf("expected psadt.enabled=true")
+	}
+	if cfg.PSADT.RequiredVersion != "4.1.8" {
+		t.Fatalf("expected psadt.requiredVersion=4.1.8")
+	}
+	if cfg.PSADT.ExecutionTimeoutSeconds == nil || *cfg.PSADT.ExecutionTimeoutSeconds != 1800 {
+		t.Fatalf("expected psadt.executionTimeoutSeconds=1800")
+	}
+	if len(cfg.PSADT.SuccessExitCodes) != 2 || cfg.PSADT.SuccessExitCodes[0] != 0 || cfg.PSADT.SuccessExitCodes[1] != 3010 {
+		t.Fatalf("expected default psadt.successExitCodes=[0,3010]")
+	}
+	if len(cfg.PSADT.RebootExitCodes) != 2 || cfg.PSADT.RebootExitCodes[0] != 1641 || cfg.PSADT.RebootExitCodes[1] != 3010 {
+		t.Fatalf("expected default psadt.rebootExitCodes=[1641,3010]")
+	}
+	if cfg.PSADT.TimeoutAction != "fail" {
+		t.Fatalf("expected default psadt.timeoutAction=fail")
+	}
+	if cfg.PSADT.UnknownExitCodePolicy != "recoverable_failure" {
+		t.Fatalf("expected default psadt.unknownExitCodePolicy=recoverable_failure")
+	}
+	if cfg.NotificationBranding.CompanyName != "Meduza" {
+		t.Fatalf("expected notificationBranding.companyName")
+	}
+	if cfg.NotificationBranding.Theme.Accent != "#0ea5e9" {
+		t.Fatalf("expected notificationBranding.theme.accent")
+	}
+	if len(cfg.NotificationPolicies) != 0 {
+		t.Fatalf("expected notification policies absent in this payload")
+	}
+}
+
+func TestParseAgentConfiguration_NotificationPolicies(t *testing.T) {
+	payloadData := []byte(`{"notificationPolicies":[{"eventType":"install_start","mode":"notify_only","severity":"medium","timeoutSeconds":8,"styleOverride":{"layout":"toast","background":"#1e293b","text":"#f8fafc"},"actions":[{"id":"details","label":"Ver detalhes","actionType":"open_logs"}]}]}`)
+	cfg, err := parseAgentConfiguration(payloadData)
+	if err != nil {
+		t.Fatalf("expected policy payload to parse, got %v", err)
+	}
+	if len(cfg.NotificationPolicies) != 1 {
+		t.Fatalf("expected one notification policy")
+	}
+	if cfg.NotificationPolicies[0].EventType != "install_start" {
+		t.Fatalf("expected policy eventType=install_start")
+	}
+	if len(cfg.NotificationPolicies[0].Actions) != 1 {
+		t.Fatalf("expected one policy action")
+	}
+}
+
+func TestParseAgentConfiguration_PSADTPolicyOverrides(t *testing.T) {
+	payloadData := []byte(`{"psadt":{"enabled":true,"successExitCodes":[0,2022],"rebootExitCodes":"3010,1641","ignoreExitCodes":[42],"timeoutAction":"RETRY","unknownExitCodePolicy":"FATAL"}}`)
+	cfg, err := parseAgentConfiguration(payloadData)
+	if err != nil {
+		t.Fatalf("expected psadt override payload to parse, got %v", err)
+	}
+	if len(cfg.PSADT.SuccessExitCodes) != 2 || cfg.PSADT.SuccessExitCodes[0] != 0 || cfg.PSADT.SuccessExitCodes[1] != 2022 {
+		t.Fatalf("expected custom successExitCodes to be preserved")
+	}
+	if len(cfg.PSADT.RebootExitCodes) != 2 || cfg.PSADT.RebootExitCodes[0] != 3010 || cfg.PSADT.RebootExitCodes[1] != 1641 {
+		t.Fatalf("expected rebootExitCodes string to parse as list")
+	}
+	if len(cfg.PSADT.IgnoreExitCodes) != 1 || cfg.PSADT.IgnoreExitCodes[0] != 42 {
+		t.Fatalf("expected ignoreExitCodes to parse")
+	}
+	if cfg.PSADT.TimeoutAction != "retry" {
+		t.Fatalf("expected timeoutAction normalized to lower-case")
+	}
+	if cfg.PSADT.UnknownExitCodePolicy != "fatal" {
+		t.Fatalf("expected unknownExitCodePolicy normalized to lower-case")
+	}
+}
+
+func TestParseAgentConfiguration_RolloutDefaults(t *testing.T) {
+	cfg, err := parseAgentConfiguration([]byte(`{"siteId":"s1"}`))
+	if err != nil {
+		t.Fatalf("expected parse without rollout, got %v", err)
+	}
+	if cfg.Rollout.EnableNotifications == nil || !*cfg.Rollout.EnableNotifications {
+		t.Fatalf("expected rollout.enableNotifications default=true")
+	}
+	if cfg.Rollout.EnableRequireConfirmation == nil || !*cfg.Rollout.EnableRequireConfirmation {
+		t.Fatalf("expected rollout.enableRequireConfirmation default=true")
+	}
+	if cfg.Rollout.EnablePSADTBootstrap == nil || !*cfg.Rollout.EnablePSADTBootstrap {
+		t.Fatalf("expected rollout.enablePsadtBootstrap default=true")
+	}
+}
+
+func TestParseAgentConfiguration_RolloutOverrides(t *testing.T) {
+	payload := []byte(`{"rollout":{"enableNotifications":false,"enableRequireConfirmation":false,"enablePsadtBootstrap":false,"allowedNotificationEventTypes":["install_start","install_end"],"blockedNotificationEventTypes":["critical_override"]}}`)
+	cfg, err := parseAgentConfiguration(payload)
+	if err != nil {
+		t.Fatalf("expected rollout payload to parse, got %v", err)
+	}
+	if cfg.Rollout.EnableNotifications == nil || *cfg.Rollout.EnableNotifications {
+		t.Fatalf("expected rollout.enableNotifications=false")
+	}
+	if cfg.Rollout.EnableRequireConfirmation == nil || *cfg.Rollout.EnableRequireConfirmation {
+		t.Fatalf("expected rollout.enableRequireConfirmation=false")
+	}
+	if cfg.Rollout.EnablePSADTBootstrap == nil || *cfg.Rollout.EnablePSADTBootstrap {
+		t.Fatalf("expected rollout.enablePsadtBootstrap=false")
+	}
+	if len(cfg.Rollout.AllowedNotificationEventTypes) != 2 {
+		t.Fatalf("expected two allowed event types")
+	}
+	if len(cfg.Rollout.BlockedNotificationEventTypes) != 1 || cfg.Rollout.BlockedNotificationEventTypes[0] != "critical_override" {
+		t.Fatalf("expected blockedNotificationEventTypes to parse")
 	}
 }
 

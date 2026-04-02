@@ -3,9 +3,9 @@
 import {json} from '../models';
 import {database} from '../models';
 import {supportmeta} from '../models';
+import {app} from '../models';
 import {p2pmeta} from '../models';
 import {context} from '../models';
-import {app} from '../models';
 import {debug} from '../models';
 import {automation} from '../models';
 import {models} from '../models';
@@ -18,6 +18,8 @@ export function AddLocalMemory(arg1:string):Promise<database.MemoryNote>;
 export function AddTicketComment(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function AddTicketCommentWithOptions(arg1:string,arg2:string,arg3:boolean):Promise<supportmeta.TicketComment>;
+
+export function CheckPSADTModuleStatus():Promise<app.PSADTModuleStatus>;
 
 export function CleanupP2PTempNow():Promise<string>;
 
@@ -45,7 +47,17 @@ export function Ctx():Promise<context.Context>;
 
 export function DeleteLocalMemory(arg1:number):Promise<void>;
 
+export function DispatchNotification(arg1:app.NotificationDispatchRequest):Promise<app.NotificationDispatchResponse>;
+
 export function DownloadP2PArtifactSwarm(arg1:string):Promise<p2pmeta.ArtifactView>;
+
+export function EmitPSADTDebugNotification(arg1:app.PSADTDebugNotificationRequest):Promise<void>;
+
+export function ExecuteCustomPSADTScript(arg1:string):Promise<app.PSADTScriptResult>;
+
+export function ExecutePSADTTestScript(arg1:string,arg2:string):Promise<app.PSADTScriptResult>;
+
+export function ExecutePSADTVisualNotification(arg1:app.PSADTVisualNotificationRequest):Promise<app.PSADTScriptResult>;
 
 export function ExportInventoryMarkdown():Promise<string>;
 
@@ -66,6 +78,8 @@ export function GetAgentInfoJSON():Promise<json.RawMessage>;
 export function GetAgentStatus():Promise<debug.AgentStatus>;
 
 export function GetAgentTicketDetails(arg1:string):Promise<json.RawMessage>;
+
+export function GetAutoProvisioningStats():Promise<p2pmeta.AutoProvisioningStats>;
 
 export function GetAutomationState():Promise<automation.StateView>;
 
@@ -95,6 +109,8 @@ export function GetLogsText():Promise<string>;
 
 export function GetMCPRegistry():Promise<mcp.Registry>;
 
+export function GetOnboardingStatus():Promise<Record<string, any>>;
+
 export function GetOsqueryStatus():Promise<models.OsqueryStatus>;
 
 export function GetOsqueryStatusJSON():Promise<json.RawMessage>;
@@ -115,6 +131,10 @@ export function GetP2PSeedPlanRecommendation(arg1:context.Context):Promise<p2pme
 
 export function GetP2PTempDir():Promise<string>;
 
+export function GetPSADTDebugState():Promise<app.PSADTDebugState>;
+
+export function GetPSADTScriptTemplate():Promise<string>;
+
 export function GetPackageActions():Promise<Record<string, string>>;
 
 export function GetPackageActionsJSON():Promise<json.RawMessage>;
@@ -130,6 +150,8 @@ export function GetPrinterConfigJSON(arg1:string):Promise<json.RawMessage>;
 export function GetRealtimeStatus():Promise<debug.RealtimeStatus>;
 
 export function GetRuntimeFlags():Promise<app.RuntimeFlags>;
+
+export function GetServiceHealth():Promise<Record<string, any>>;
 
 export function GetSpoolerStatus():Promise<json.RawMessage>;
 
@@ -152,6 +174,8 @@ export function GetWatchdogHealth():Promise<Array<Record<string, any>>>;
 export function Install(arg1:string):Promise<string>;
 
 export function InstallOsquery():Promise<string>;
+
+export function InstallPSADTModule(arg1:string):Promise<app.PSADTModuleStatus>;
 
 export function InstallPackage(arg1:string):Promise<string>;
 
@@ -210,6 +234,8 @@ export function RemovePrinterJSON(arg1:string):Promise<json.RawMessage>;
 export function ReplicateP2PArtifactToPeer(arg1:string,arg2:string):Promise<string>;
 
 export function RequestAppClose():Promise<void>;
+
+export function RespondToNotification(arg1:string,arg2:string):Promise<boolean>;
 
 export function RestartSpooler():Promise<json.RawMessage>;
 

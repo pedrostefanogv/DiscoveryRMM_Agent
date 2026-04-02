@@ -30,44 +30,78 @@ export namespace app {
 	        this.autoRollbackOnFailure = source["autoRollbackOnFailure"];
 	    }
 	}
-	export class AgentConfiguration {
-	    recoveryEnabled?: boolean;
-	    discoveryEnabled?: boolean;
-	    p2pFilesEnabled?: boolean;
-	    supportEnabled?: boolean;
-	    meshCentralEnabledEffective?: boolean;
-	    meshCentralGroupPolicyProfile: string;
-	    chatAIEnabled?: boolean;
-	    knowledgeBaseEnabled?: boolean;
-	    appStoreEnabled?: boolean;
-	    inventoryIntervalHours?: number;
-	    agentHeartbeatIntervalSeconds?: number;
-	    siteId: string;
-	    clientId: string;
-	    resolvedAt: string;
-	    autoUpdate: AgentAutoUpdateConfig;
+	export class AgentRolloutConfig {
+	    enableNotifications?: boolean;
+	    enableRequireConfirmation?: boolean;
+	    enablePsadtBootstrap?: boolean;
+	    allowedNotificationEventTypes: string[];
+	    blockedNotificationEventTypes: string[];
 	
 	    static createFrom(source: any = {}) {
-	        return new AgentConfiguration(source);
+	        return new AgentRolloutConfig(source);
 	    }
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.recoveryEnabled = source["recoveryEnabled"];
-	        this.discoveryEnabled = source["discoveryEnabled"];
-	        this.p2pFilesEnabled = source["p2pFilesEnabled"];
-	        this.supportEnabled = source["supportEnabled"];
-	        this.meshCentralEnabledEffective = source["meshCentralEnabledEffective"];
-	        this.meshCentralGroupPolicyProfile = source["meshCentralGroupPolicyProfile"];
-	        this.chatAIEnabled = source["chatAIEnabled"];
-	        this.knowledgeBaseEnabled = source["knowledgeBaseEnabled"];
-	        this.appStoreEnabled = source["appStoreEnabled"];
-	        this.inventoryIntervalHours = source["inventoryIntervalHours"];
-	        this.agentHeartbeatIntervalSeconds = source["agentHeartbeatIntervalSeconds"];
-	        this.siteId = source["siteId"];
-	        this.clientId = source["clientId"];
-	        this.resolvedAt = source["resolvedAt"];
-	        this.autoUpdate = this.convertValues(source["autoUpdate"], AgentAutoUpdateConfig);
+	        this.enableNotifications = source["enableNotifications"];
+	        this.enableRequireConfirmation = source["enableRequireConfirmation"];
+	        this.enablePsadtBootstrap = source["enablePsadtBootstrap"];
+	        this.allowedNotificationEventTypes = source["allowedNotificationEventTypes"];
+	        this.blockedNotificationEventTypes = source["blockedNotificationEventTypes"];
+	    }
+	}
+	export class AgentNotificationAction {
+	    id: string;
+	    label: string;
+	    actionType: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AgentNotificationAction(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.label = source["label"];
+	        this.actionType = source["actionType"];
+	    }
+	}
+	export class AgentNotificationStyleOverride {
+	    layout: string;
+	    background: string;
+	    text: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AgentNotificationStyleOverride(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.layout = source["layout"];
+	        this.background = source["background"];
+	        this.text = source["text"];
+	    }
+	}
+	export class AgentNotificationPolicy {
+	    eventType: string;
+	    mode: string;
+	    severity: string;
+	    timeoutSeconds?: number;
+	    styleOverride: AgentNotificationStyleOverride;
+	    actions: AgentNotificationAction[];
+	
+	    static createFrom(source: any = {}) {
+	        return new AgentNotificationPolicy(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.eventType = source["eventType"];
+	        this.mode = source["mode"];
+	        this.severity = source["severity"];
+	        this.timeoutSeconds = source["timeoutSeconds"];
+	        this.styleOverride = this.convertValues(source["styleOverride"], AgentNotificationStyleOverride);
+	        this.actions = this.convertValues(source["actions"], AgentNotificationAction);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -88,6 +122,184 @@ export namespace app {
 		    return a;
 		}
 	}
+	export class NotificationThemeConfig {
+	    surface: string;
+	    text: string;
+	    accent: string;
+	    success: string;
+	    warning: string;
+	    danger: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new NotificationThemeConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.surface = source["surface"];
+	        this.text = source["text"];
+	        this.accent = source["accent"];
+	        this.success = source["success"];
+	        this.warning = source["warning"];
+	        this.danger = source["danger"];
+	    }
+	}
+	export class AgentNotificationBrandingConfig {
+	    companyName: string;
+	    logoUrl: string;
+	    bannerUrl: string;
+	    theme: NotificationThemeConfig;
+	
+	    static createFrom(source: any = {}) {
+	        return new AgentNotificationBrandingConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.companyName = source["companyName"];
+	        this.logoUrl = source["logoUrl"];
+	        this.bannerUrl = source["bannerUrl"];
+	        this.theme = this.convertValues(source["theme"], NotificationThemeConfig);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class AgentPSADTConfig {
+	    enabled?: boolean;
+	    requiredVersion: string;
+	    autoInstallModule?: boolean;
+	    installSource: string;
+	    executionTimeoutSeconds?: number;
+	    fallbackPolicy: string;
+	    installOnStartup?: boolean;
+	    installOnDemand?: boolean;
+	    successExitCodes: number[];
+	    rebootExitCodes: number[];
+	    ignoreExitCodes: number[];
+	    timeoutAction: string;
+	    unknownExitCodePolicy: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AgentPSADTConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.requiredVersion = source["requiredVersion"];
+	        this.autoInstallModule = source["autoInstallModule"];
+	        this.installSource = source["installSource"];
+	        this.executionTimeoutSeconds = source["executionTimeoutSeconds"];
+	        this.fallbackPolicy = source["fallbackPolicy"];
+	        this.installOnStartup = source["installOnStartup"];
+	        this.installOnDemand = source["installOnDemand"];
+	        this.successExitCodes = source["successExitCodes"];
+	        this.rebootExitCodes = source["rebootExitCodes"];
+	        this.ignoreExitCodes = source["ignoreExitCodes"];
+	        this.timeoutAction = source["timeoutAction"];
+	        this.unknownExitCodePolicy = source["unknownExitCodePolicy"];
+	    }
+	}
+	export class AgentConfiguration {
+	    recoveryEnabled?: boolean;
+	    discoveryEnabled?: boolean;
+	    p2pFilesEnabled?: boolean;
+	    supportEnabled?: boolean;
+	    natsServerHost: string;
+	    natsUseWssExternal?: boolean;
+	    enforceTlsHashValidation?: boolean;
+	    handshakeEnabled?: boolean;
+	    apiTlsCertHash: string;
+	    natsTlsCertHash: string;
+	    meshCentralEnabledEffective?: boolean;
+	    meshCentralGroupPolicyProfile: string;
+	    chatAIEnabled?: boolean;
+	    knowledgeBaseEnabled?: boolean;
+	    appStoreEnabled?: boolean;
+	    inventoryIntervalHours?: number;
+	    agentHeartbeatIntervalSeconds?: number;
+	    siteId: string;
+	    clientId: string;
+	    resolvedAt: string;
+	    autoUpdate: AgentAutoUpdateConfig;
+	    psadt: AgentPSADTConfig;
+	    notificationBranding: AgentNotificationBrandingConfig;
+	    notificationPolicies: AgentNotificationPolicy[];
+	    rollout: AgentRolloutConfig;
+	
+	    static createFrom(source: any = {}) {
+	        return new AgentConfiguration(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.recoveryEnabled = source["recoveryEnabled"];
+	        this.discoveryEnabled = source["discoveryEnabled"];
+	        this.p2pFilesEnabled = source["p2pFilesEnabled"];
+	        this.supportEnabled = source["supportEnabled"];
+	        this.natsServerHost = source["natsServerHost"];
+	        this.natsUseWssExternal = source["natsUseWssExternal"];
+	        this.enforceTlsHashValidation = source["enforceTlsHashValidation"];
+	        this.handshakeEnabled = source["handshakeEnabled"];
+	        this.apiTlsCertHash = source["apiTlsCertHash"];
+	        this.natsTlsCertHash = source["natsTlsCertHash"];
+	        this.meshCentralEnabledEffective = source["meshCentralEnabledEffective"];
+	        this.meshCentralGroupPolicyProfile = source["meshCentralGroupPolicyProfile"];
+	        this.chatAIEnabled = source["chatAIEnabled"];
+	        this.knowledgeBaseEnabled = source["knowledgeBaseEnabled"];
+	        this.appStoreEnabled = source["appStoreEnabled"];
+	        this.inventoryIntervalHours = source["inventoryIntervalHours"];
+	        this.agentHeartbeatIntervalSeconds = source["agentHeartbeatIntervalSeconds"];
+	        this.siteId = source["siteId"];
+	        this.clientId = source["clientId"];
+	        this.resolvedAt = source["resolvedAt"];
+	        this.autoUpdate = this.convertValues(source["autoUpdate"], AgentAutoUpdateConfig);
+	        this.psadt = this.convertValues(source["psadt"], AgentPSADTConfig);
+	        this.notificationBranding = this.convertValues(source["notificationBranding"], AgentNotificationBrandingConfig);
+	        this.notificationPolicies = this.convertValues(source["notificationPolicies"], AgentNotificationPolicy);
+	        this.rollout = this.convertValues(source["rollout"], AgentRolloutConfig);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	
+	
+	
+	
+	
 	export class ChatConfig {
 	    endpoint: string;
 	    apiKey: string;
@@ -120,6 +332,180 @@ export namespace app {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.role = source["role"];
 	        this.content = source["content"];
+	    }
+	}
+	export class NotificationDispatchRequest {
+	    notificationId: string;
+	    idempotencyKey: string;
+	    title: string;
+	    message: string;
+	    mode: string;
+	    severity: string;
+	    eventType: string;
+	    layout: string;
+	    timeoutSeconds: number;
+	    metadata: Record<string, any>;
+	
+	    static createFrom(source: any = {}) {
+	        return new NotificationDispatchRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.notificationId = source["notificationId"];
+	        this.idempotencyKey = source["idempotencyKey"];
+	        this.title = source["title"];
+	        this.message = source["message"];
+	        this.mode = source["mode"];
+	        this.severity = source["severity"];
+	        this.eventType = source["eventType"];
+	        this.layout = source["layout"];
+	        this.timeoutSeconds = source["timeoutSeconds"];
+	        this.metadata = source["metadata"];
+	    }
+	}
+	export class NotificationDispatchResponse {
+	    accepted: boolean;
+	    notificationId: string;
+	    agentAction: string;
+	    result?: string;
+	    message?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new NotificationDispatchResponse(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.accepted = source["accepted"];
+	        this.notificationId = source["notificationId"];
+	        this.agentAction = source["agentAction"];
+	        this.result = source["result"];
+	        this.message = source["message"];
+	    }
+	}
+	
+	export class PSADTDebugNotificationRequest {
+	    title: string;
+	    message: string;
+	    mode: string;
+	    severity: string;
+	    layout: string;
+	    accent: string;
+	    requireAck: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new PSADTDebugNotificationRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.title = source["title"];
+	        this.message = source["message"];
+	        this.mode = source["mode"];
+	        this.severity = source["severity"];
+	        this.layout = source["layout"];
+	        this.accent = source["accent"];
+	        this.requireAck = source["requireAck"];
+	    }
+	}
+	export class PSADTModuleStatus {
+	    installed: boolean;
+	    version: string;
+	    message: string;
+	    checkedAtUtc: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new PSADTModuleStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.installed = source["installed"];
+	        this.version = source["version"];
+	        this.message = source["message"];
+	        this.checkedAtUtc = source["checkedAtUtc"];
+	    }
+	}
+	export class PSADTDebugState {
+	    runtimeDebugMode: boolean;
+	    configuration: AgentConfiguration;
+	    moduleStatus: PSADTModuleStatus;
+	    notificationBranding: AgentNotificationBrandingConfig;
+	    notificationPolicies: AgentNotificationPolicy[];
+	
+	    static createFrom(source: any = {}) {
+	        return new PSADTDebugState(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.runtimeDebugMode = source["runtimeDebugMode"];
+	        this.configuration = this.convertValues(source["configuration"], AgentConfiguration);
+	        this.moduleStatus = this.convertValues(source["moduleStatus"], PSADTModuleStatus);
+	        this.notificationBranding = this.convertValues(source["notificationBranding"], AgentNotificationBrandingConfig);
+	        this.notificationPolicies = this.convertValues(source["notificationPolicies"], AgentNotificationPolicy);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	export class PSADTScriptResult {
+	    success: boolean;
+	    exitCode: number;
+	    output: string;
+	    error: string;
+	    executedAtUtc: string;
+	    durationMs: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new PSADTScriptResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.exitCode = source["exitCode"];
+	        this.output = source["output"];
+	        this.error = source["error"];
+	        this.executedAtUtc = source["executedAtUtc"];
+	        this.durationMs = source["durationMs"];
+	    }
+	}
+	export class PSADTVisualNotificationRequest {
+	    notifType: string;
+	    title: string;
+	    message: string;
+	    appName: string;
+	    durationSeconds: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new PSADTVisualNotificationRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.notifType = source["notifType"];
+	        this.title = source["title"];
+	        this.message = source["message"];
+	        this.appName = source["appName"];
+	        this.durationSeconds = source["durationSeconds"];
 	    }
 	}
 	export class RuntimeFlags {
@@ -458,6 +844,12 @@ export namespace debug {
 	    authToken: string;
 	    natsServer: string;
 	    natsWsServer: string;
+	    natsServerHost?: string;
+	    natsUseWssExternal?: boolean;
+	    enforceTlsHashValidation?: boolean;
+	    handshakeEnabled?: boolean;
+	    apiTlsCertHash?: string;
+	    natsTlsCertHash?: string;
 	    agentId: string;
 	    scheme?: string;
 	    server?: string;
@@ -474,6 +866,12 @@ export namespace debug {
 	        this.authToken = source["authToken"];
 	        this.natsServer = source["natsServer"];
 	        this.natsWsServer = source["natsWsServer"];
+	        this.natsServerHost = source["natsServerHost"];
+	        this.natsUseWssExternal = source["natsUseWssExternal"];
+	        this.enforceTlsHashValidation = source["enforceTlsHashValidation"];
+	        this.handshakeEnabled = source["handshakeEnabled"];
+	        this.apiTlsCertHash = source["apiTlsCertHash"];
+	        this.natsTlsCertHash = source["natsTlsCertHash"];
 	        this.agentId = source["agentId"];
 	        this.scheme = source["scheme"];
 	        this.server = source["server"];
@@ -1296,9 +1694,66 @@ export namespace p2pmeta {
 	        this.message = source["message"];
 	    }
 	}
+	export class OnboardingAuditEvent {
+	    timestampUtc: string;
+	    sourceAgentId: string;
+	    targetAgentId?: string;
+	    serverUrl: string;
+	    success: boolean;
+	    message: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new OnboardingAuditEvent(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.timestampUtc = source["timestampUtc"];
+	        this.sourceAgentId = source["sourceAgentId"];
+	        this.targetAgentId = source["targetAgentId"];
+	        this.serverUrl = source["serverUrl"];
+	        this.success = source["success"];
+	        this.message = source["message"];
+	    }
+	}
+	export class AutoProvisioningStats {
+	    enabled: boolean;
+	    totalProvisioned: number;
+	    recentEvents: OnboardingAuditEvent[];
+	
+	    static createFrom(source: any = {}) {
+	        return new AutoProvisioningStats(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.totalProvisioned = source["totalProvisioned"];
+	        this.recentEvents = this.convertValues(source["recentEvents"], OnboardingAuditEvent);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class BootstrapConfig {
 	    bootstrapPeers?: string[];
 	    preferLan: boolean;
+	    cloudBootstrapEnabled?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new BootstrapConfig(source);
@@ -1308,6 +1763,7 @@ export namespace p2pmeta {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.bootstrapPeers = source["bootstrapPeers"];
 	        this.preferLan = source["preferLan"];
+	        this.cloudBootstrapEnabled = source["cloudBootstrapEnabled"];
 	    }
 	}
 	export class Config {
@@ -1486,6 +1942,7 @@ export namespace p2pmeta {
 	        this.lastUpdatedUtc = source["lastUpdatedUtc"];
 	    }
 	}
+	
 	
 	export class PeerArtifactIndexView {
 	    peerAgentId: string;

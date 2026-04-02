@@ -130,6 +130,14 @@ type App struct {
 	allowClose  bool
 	trayReady   atomic.Bool
 	trayIcon    []byte
+
+	psadtBootstrapMu      sync.Mutex
+	psadtBootstrapRunning bool
+	psadtBootstrappedVer  string
+
+	notificationMu      sync.Mutex
+	pendingNotifyResult map[string]chan string
+	notificationByKey   map[string]string
 }
 
 func NewApp(opts AppStartupOptions) *App {
@@ -148,17 +156,19 @@ func NewApp(opts AppStartupOptions) *App {
 	serviceClient := service.NewServiceClient()
 
 	a := &App{
-		runtimeFlags:  RuntimeFlags{DebugMode: opts.DebugMode},
-		trayIcon:      opts.TrayIcon,
-		catalogSvc:    services.NewCatalogService(catalogClient),
-		catalogClient: catalogClient,
-		appsSvc:       services.NewAppsService(wingetClient),
-		invSvc:        services.NewInventoryService(inventoryProvider),
-		printerSvc:    services.NewPrinterService(printerManager),
-		mcpRegistry:   reg,
-		chatSvc:       chatSvc,
-		watchdogSvc:   watchdogSvc,
-		serviceClient: serviceClient,
+		runtimeFlags:        RuntimeFlags{DebugMode: opts.DebugMode},
+		trayIcon:            opts.TrayIcon,
+		catalogSvc:          services.NewCatalogService(catalogClient),
+		catalogClient:       catalogClient,
+		appsSvc:             services.NewAppsService(wingetClient),
+		invSvc:              services.NewInventoryService(inventoryProvider),
+		printerSvc:          services.NewPrinterService(printerManager),
+		mcpRegistry:         reg,
+		chatSvc:             chatSvc,
+		watchdogSvc:         watchdogSvc,
+		serviceClient:       serviceClient,
+		pendingNotifyResult: make(map[string]chan string),
+		notificationByKey:   make(map[string]string),
 	}
 	a.automationSvc = automation.NewService(func() automation.RuntimeConfig {
 		cfg := a.GetDebugConfig()
@@ -298,6 +308,10 @@ func NewApp(opts AppStartupOptions) *App {
 	if opts.DebugMode {
 		a.logs.append("[startup] modo debug ativo por tecla de atalho (execucao atual)")
 	}
+
+	// Garantir defaults de configuração PSADT antes da primeira resposta da API.
+	normalizePSADTConfigDefaults(&a.agentConfig.PSADT)
+	normalizeRolloutDefaults(&a.agentConfig.Rollout)
 
 	return a
 }

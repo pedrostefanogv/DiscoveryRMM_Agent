@@ -193,7 +193,8 @@ body {
 #knowledgeViewMount,
 #automationViewMount,
 #p2pViewMount,
-#debugViewMount {
+#debugViewMount,
+#psadtViewMount {
   display: contents;
 }
 

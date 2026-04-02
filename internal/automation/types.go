@@ -14,9 +14,10 @@ const (
 type AppInstallationType string
 
 const (
-	InstallationWinget     AppInstallationType = "Winget"
-	InstallationChocolatey AppInstallationType = "Chocolatey"
-	InstallationCustom     AppInstallationType = "Custom"
+	InstallationWinget             AppInstallationType = "Winget"
+	InstallationChocolatey         AppInstallationType = "Chocolatey"
+	InstallationPSAppDeployToolkit AppInstallationType = "PSAppDeployToolkit"
+	InstallationCustom             AppInstallationType = "Custom"
 )
 
 type AutomationTaskActionType string

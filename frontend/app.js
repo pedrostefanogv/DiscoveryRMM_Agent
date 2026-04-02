@@ -162,8 +162,10 @@ const logsOriginFilterEl = document.getElementById('logsOriginFilter');
 const refreshLogsBtn = document.getElementById('refreshLogsBtn');
 const clearLogsBtn = document.getElementById('clearLogsBtn');
 const tabDebugBtn = document.getElementById('tabDebug');
+const tabPSADTBtn = document.getElementById('tabPSADT');
 const tabP2PBtn = document.getElementById('tabP2P');
 const debugViewEl = document.getElementById('debugView');
+const psadtViewEl = document.getElementById('psadtView');
 const p2pViewEl = document.getElementById('p2pView');
 const apiSchemeEl = document.getElementById('apiScheme');
 const apiServerEl = document.getElementById('apiServer');
@@ -240,7 +242,7 @@ function isRuntimeTabAllowed(tab) {
     return true;
   }
   // In normal mode we hide tabs/views that are only relevant for debugging.
-  return tab !== 'logs' && tab !== 'debug' && tab !== 'automation' && tab !== 'p2p' && tab !== 'inventory';
+  return tab !== 'logs' && tab !== 'debug' && tab !== 'psadt' && tab !== 'automation' && tab !== 'p2p' && tab !== 'inventory';
 }
 
 function applyRuntimeTabVisibility() {
@@ -249,6 +251,7 @@ function applyRuntimeTabVisibility() {
   if (tabInventoryBtn) tabInventoryBtn.classList.toggle('hidden', hiddenInNormal);
   if (tabLogsBtn) tabLogsBtn.classList.toggle('hidden', hiddenInNormal);
   if (tabDebugBtn) tabDebugBtn.classList.toggle('hidden', hiddenInNormal);
+  if (tabPSADTBtn) tabPSADTBtn.classList.toggle('hidden', hiddenInNormal);
   if (tabAutomationBtn) tabAutomationBtn.classList.toggle('hidden', hiddenInNormal);
   if (chatMemoriesBtn) chatMemoriesBtn.classList.toggle('hidden', hiddenInNormal);
   const openP2PDebugStatusBtnEl = document.getElementById('openP2PDebugStatusBtn');
@@ -259,6 +262,7 @@ function applyRuntimeTabVisibility() {
     if (inventoryViewEl) inventoryViewEl.classList.add('hidden');
     if (logsViewEl) logsViewEl.classList.add('hidden');
     if (debugViewEl) debugViewEl.classList.add('hidden');
+    if (psadtViewEl) psadtViewEl.classList.add('hidden');
     if (automationViewEl) automationViewEl.classList.add('hidden');
     if (p2pViewEl) p2pViewEl.classList.add('hidden');
   }
@@ -300,6 +304,43 @@ function showToast(message, type) {
     toast.classList.add('removing');
     toast.addEventListener('animationend', function () { toast.remove(); });
   }, 3500);
+}
+
+function handleNotificationEvent(payload) {
+  var notification = payload || {};
+  var id = String(notification.id || '').trim();
+  var modeRaw = String(notification.mode || 'notify_only').toLowerCase();
+  var severityRaw = String(notification.severity || 'medium').toLowerCase();
+  var mode = modeRaw === 'silent' || modeRaw === 'silencioso' ? 'silent' : (modeRaw === 'require_confirmation' || modeRaw === 'confirm' ? 'require_confirmation' : 'notify_only');
+  var severity = severityRaw;
+  if (severityRaw === 'informativo' || severityRaw === 'info' || severityRaw === 'baixo') severity = 'low';
+  if (severityRaw === 'alerta' || severityRaw === 'warn' || severityRaw === 'warning' || severityRaw === 'medio' || severityRaw === 'médio') severity = 'medium';
+  if (severityRaw === 'erro' || severityRaw === 'error' || severityRaw === 'alto') severity = 'high';
+  if (severityRaw === 'critico' || severityRaw === 'crítico') severity = 'critical';
+  var title = String(notification.title || 'Notificacao');
+  var message = String(notification.message || '');
+  var layout = String(notification.layout || 'toast').toLowerCase();
+
+  if (mode === 'silent') {
+    return;
+  }
+
+  var toastType = severity === 'high' || severity === 'critical' ? 'error' : (severity === 'medium' ? 'warning' : 'info');
+  showToast(title + (message ? ': ' + message : ''), toastType);
+
+  if (layout === 'modal' && mode !== 'require_confirmation') {
+    window.alert(title + '\n\n' + message);
+  }
+
+  if (mode !== 'require_confirmation' || !id) {
+    return;
+  }
+
+  var approved = window.confirm(title + '\n\n' + message + '\n\nDeseja aprovar esta acao?');
+  var result = approved ? 'approved' : 'denied';
+  appApi().RespondToNotification(id, result).catch(function (error) {
+    showToast('Falha ao enviar confirmacao: ' + String(error), 'error');
+  });
 }
 
 function setExportStatus(message, isError) {
@@ -345,8 +386,9 @@ function setActiveTab(tab) {
     support: supportViewEl,
     knowledge: knowledgeViewEl,
     automation: automationViewEl,
-    p2p: p2pViewEl,
     debug: debugViewEl,
+    psadt: psadtViewEl,
+    p2p: p2pViewEl,
   };
   var tabs = {
     status: tabStatusBtn,
@@ -358,8 +400,9 @@ function setActiveTab(tab) {
     support: tabSupportBtn,
     knowledge: tabKnowledgeBtn,
     automation: tabAutomationBtn,
-    p2p: tabP2PBtn,
     debug: tabDebugBtn,
+    psadt: tabPSADTBtn,
+    p2p: tabP2PBtn,
   };
 
   var titles = {

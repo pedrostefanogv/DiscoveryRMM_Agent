@@ -585,7 +585,65 @@ func isRemoteDebugCommandType(cmdType string) bool {
 	}
 }
 
+func isNotificationDispatchCommandType(cmdType string) bool {
+	switch strings.ToLower(strings.TrimSpace(cmdType)) {
+	case "9", "notification", "notify", "notification_dispatch", "notification-dispatch":
+		return true
+	default:
+		return false
+	}
+}
+
+func parseNotificationDispatchPayload(payload any) (NotificationDispatchRequest, error) {
+	if payload == nil {
+		return NotificationDispatchRequest{}, nil
+	}
+	switch typed := payload.(type) {
+	case string:
+		if strings.TrimSpace(typed) == "" {
+			return NotificationDispatchRequest{}, nil
+		}
+		var req NotificationDispatchRequest
+		if err := json.Unmarshal([]byte(typed), &req); err != nil {
+			return NotificationDispatchRequest{}, fmt.Errorf("payload de notificacao invalido: %w", err)
+		}
+		return req, nil
+	default:
+		raw, err := json.Marshal(typed)
+		if err != nil {
+			return NotificationDispatchRequest{}, fmt.Errorf("falha ao serializar payload de notificacao: %w", err)
+		}
+		var req NotificationDispatchRequest
+		if err := json.Unmarshal(raw, &req); err != nil {
+			return NotificationDispatchRequest{}, fmt.Errorf("payload de notificacao invalido: %w", err)
+		}
+		return req, nil
+	}
+}
+
 func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, payload any) (bool, int, string, string) {
+	if isNotificationDispatchCommandType(cmdType) {
+		req, err := parseNotificationDispatchPayload(payload)
+		if err != nil {
+			return true, 2, "", err.Error()
+		}
+		resp := a.DispatchNotification(req)
+		body, _ := json.Marshal(resp)
+		switch resp.Result {
+		case "approved":
+			return true, 0, string(body), ""
+		case "denied":
+			return true, 10, string(body), "usuario negou a notificacao"
+		case "timeout_policy_applied":
+			return true, 124, string(body), "timeout de confirmacao"
+		default:
+			if resp.Accepted {
+				return true, 0, string(body), ""
+			}
+			return true, 1, string(body), strings.TrimSpace(resp.Message)
+		}
+	}
+
 	if a == nil || a.remoteDebug == nil {
 		return false, 0, "", ""
 	}

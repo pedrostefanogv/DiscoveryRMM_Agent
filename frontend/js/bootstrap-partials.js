@@ -14,8 +14,9 @@
     { mountId: "supportViewMount", path: "partials/views/supportView.html" },
     { mountId: "knowledgeViewMount", path: "partials/views/knowledgeView.html" },
     { mountId: "automationViewMount", path: "partials/views/automationView.html" },
-    { mountId: "p2pViewMount", path: "partials/views/p2pView.html" },
     { mountId: "debugViewMount", path: "partials/views/debugView.html" },
+    { mountId: "psadtViewMount", path: "partials/views/psadtView.html" },
+    { mountId: "p2pViewMount", path: "partials/views/p2pView.html" },
   ];
 
   var APP_SCRIPTS = [
@@ -30,6 +31,7 @@
     "js/app-p2p.js",
     "js/app-status.js",
     "js/app-debug.js",
+    "js/psadt-debug.js",
     "app.js",
     "js/app-init.js",
   ];

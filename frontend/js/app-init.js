@@ -111,6 +111,15 @@ function initAppBindings() {
     });
   }
 
+  if (tabPSADTBtn) {
+    tabPSADTBtn.addEventListener('click', function () {
+      setActiveTab('psadt');
+      if (typeof loadPSADTDebugState === 'function') {
+        loadPSADTDebugState();
+      }
+    });
+  }
+
   if (tabP2PBtn) {
     tabP2PBtn.addEventListener('click', function () {
       setActiveTab('p2p');
@@ -303,6 +312,10 @@ async function bootstrapApp() {
   initDebug();
   if (typeof initP2PPage === 'function') {
     initP2PPage();
+  }
+
+  if (window.runtime && window.runtime.EventsOn && typeof handleNotificationEvent === 'function') {
+    window.runtime.EventsOn('notification:new', handleNotificationEvent);
   }
 }
 
