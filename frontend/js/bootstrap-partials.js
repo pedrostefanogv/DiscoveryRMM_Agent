@@ -21,6 +21,7 @@
 
   var APP_SCRIPTS = [
     "js/app-utils.js",
+    "js/app-core-globals.js",
     "js/app-window.js",
     "js/app-store-updates.js",
     "js/app-inventory.js",
