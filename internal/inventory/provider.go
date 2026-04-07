@@ -40,6 +40,53 @@ func (p *Provider) emitProgressHeartbeat() {
 	}
 }
 
+// runQueries selects the best available query strategy and executes all queries.
+//
+// Priority:
+//  1. Running osqueryd socket (fastest – reuses an existing daemon connection).
+//  2. osqueryi launched in socket mode (single init + Thrift calls per query).
+//  3. Per-query subprocess fallback (original behaviour; always available).
+func (p *Provider) runQueries(ctx context.Context, binary string, queries []osqueryQuery) map[string]osqueryResult {
+	// 1. Try a running osqueryd daemon socket.
+	if socketPath := findOsquerydSocket(); socketPath != "" {
+		log.Printf("[inventory] usando socket osqueryd em %s", socketPath)
+		results := runQueriesViaSocket(ctx, socketPath, queries, p.emitProgressHeartbeat)
+		if allRequiredSucceeded(results, queries) {
+			return results
+		}
+		log.Printf("[inventory] socket osqueryd falhou; tentando modo socket do osqueryi")
+	}
+
+	// 2. Start osqueryi in socket mode for a single-connection, multi-query session.
+	if proc, err := startOsqueryiSocket(ctx, binary); err == nil {
+		defer proc.stop()
+		log.Printf("[inventory] usando osqueryi em modo socket em %s", proc.socketPath)
+		results := runQueriesViaSocket(ctx, proc.socketPath, queries, p.emitProgressHeartbeat)
+		if allRequiredSucceeded(results, queries) {
+			return results
+		}
+		log.Printf("[inventory] modo socket do osqueryi falhou; usando subprocessos como fallback")
+	}
+
+	// 3. Original parallel-subprocess fallback.
+	return runParallelQueries(ctx, binary, queries, p.emitProgressHeartbeat)
+}
+
+// allRequiredSucceeded returns true when every required query in the results
+// map completed without error and returned at least one row.
+func allRequiredSucceeded(results map[string]osqueryResult, queries []osqueryQuery) bool {
+	for _, q := range queries {
+		if !q.required {
+			continue
+		}
+		r := results[q.name]
+		if r.err != nil || len(r.rows) == 0 {
+			return false
+		}
+	}
+	return true
+}
+
 // Collect gathers a full inventory report. It tries osquery first; if
 // osquery is unavailable or fails, it falls back to PowerShell/CIM.
 func (p *Provider) Collect(ctx context.Context) (models.InventoryReport, error) {
@@ -58,15 +105,22 @@ func (p *Provider) Collect(ctx context.Context) (models.InventoryReport, error) 
 	return report, nil
 }
 
-// collectWithOsquery runs all osquery queries in parallel under a single
-// shared timeout context, then assembles the report.
+// collectWithOsquery runs all osquery queries and assembles the report.
+//
+// Query execution strategy (tried in order):
+//  1. Running osqueryd socket – connect via osquery-go Thrift client; single
+//     connection handles all queries without per-query subprocess overhead.
+//  2. osqueryi in socket mode – launch osqueryi once with --extensions_socket,
+//     wait for it to be ready, then query via the same Thrift client.
+//  3. Per-query subprocess fallback – the original approach that spawns an
+//     osqueryi process for each query (parallel, semaphore-limited).
 func (p *Provider) collectWithOsquery(ctx context.Context) (models.InventoryReport, error) {
 	bin, err := FindOsqueryBinary()
 	if err != nil {
 		return models.InventoryReport{}, err
 	}
 
-	// Create one timeout context shared by all parallel queries.
+	// Create one timeout context shared by all queries.
 	runCtx, cancel := ctxutil.WithTimeout(ctx, p.timeout)
 	defer cancel()
 
@@ -92,7 +146,7 @@ func (p *Provider) collectWithOsquery(ctx context.Context) (models.InventoryRepo
 		{name: "routes", sql: "SELECT interface, gateway, destination FROM routes WHERE destination IN ('0.0.0.0', '::')"},
 	}
 
-	results := runParallelQueries(runCtx, bin, queries, p.emitProgressHeartbeat)
+	results := p.runQueries(runCtx, bin, queries)
 
 	// Check required queries.
 	for _, q := range queries {

@@ -103,7 +103,8 @@ discovery/
 │   │   └── redaction.go        # Redação de PII (senhas, tokens, MACs, seriais)
 │   ├── inventory/              # Coleta de inventário do sistema
 │   │   ├── provider.go         # Orquestra osquery (preferred) + PowerShell (fallback)
-│   │   ├── osquery.go          # Queries osquery: CPU, RAM, disk, software, etc.
+│   │   ├── osquery.go          # Subprocess-based query runner (fallback) + cache do binário
+│   │   ├── osquery_client.go   # osquery-go Thrift client: socket osqueryd / osqueryi socket mode
 │   │   ├── powershell.go       # Queries WMI/CIM via PowerShell (fallback Windows)
 │   │   ├── helpers.go          # Utilitários internos de parsing
 │   │   └── mappers.go          # Mapeia raw query results → models.InventoryReport
@@ -316,7 +317,8 @@ service_main.go ──► internal/service (ServiceManager headless)
 | `export` | `pdf.go` | Renderer PDF de `InventoryReport` via biblioteca fpdf. |
 | `export` | `redaction.go` | `RedactHardware()`: mascara seriais, MACs, passwords, tokens. |
 | `inventory` | `provider.go` | `Provider`: orquestra coleta — osquery preferred, PowerShell como fallback. Progress callback para UI. |
-| `inventory` | `osquery.go` | Queries osquery: CPU, RAM, discos, printers, software, rede, battery, BitLocker, etc. |
+| `inventory` | `osquery.go` | Subprocess-based query runner (fallback) + cache do binário osqueryi. |
+| `inventory` | `osquery_client.go` | osquery-go Thrift client: conecta ao socket do osqueryd (se disponível) ou inicia osqueryi em modo socket para executar todas as queries via uma única conexão, sem overhead de subprocesso por query. |
 | `inventory` | `powershell.go` | Queries WMI/CIM via `powershell.exe` (fallback quando osquery não disponível). |
 | `inventory` | `mappers.go` | Mapeia resultados brutos de queries → `models.InventoryReport`. |
 | `mcp` | `server.go` | `Server`: JSON-RPC 2.0 via stdio. Endpoints: `initialize`, `tools/list`, `tools/call`. |
