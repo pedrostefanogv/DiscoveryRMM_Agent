@@ -79,6 +79,19 @@ Exemplos:
 - `MINOR`: funcionalidade nova compatível.
 - `PATCH`: correção sem quebra de contrato.
 
+## Tags e Canais de Release
+
+- Release normal: `v1.2.3`
+- Beta: `v1.2.3-beta.1`
+- LTS: `v1.2.3-lts.1`
+
+Regras operacionais:
+
+- Tags `v*` disparam o pipeline automatizado de release no GitHub Actions.
+- Tags com `-beta.` publicam release como prerelease.
+- Tags com `-lts.` publicam release LTS sem marcar como latest.
+- Tags sem sufixo (`v1.2.3`) representam release estavel normal e podem virar latest.
+
 ## Política de PR
 
 - Mínimo 1 aprovação obrigatória.
