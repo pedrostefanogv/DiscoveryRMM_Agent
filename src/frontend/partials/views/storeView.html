@@ -1,0 +1,46 @@
+<main id="storeView" class="page-content" role="tabpanel" aria-labelledby="tabStore">
+  <section class="store-layout">
+    <div class="store-toolbar">
+      <input id="searchInput" type="search" placeholder="Pesquisar aplicativo por nome, id ou publisher" />
+      <div class="actions">
+        <button id="reloadBtn" class="btn subtle">Recarregar Catalogo</button>
+      </div>
+    </div>
+
+    <div class="statusbar page-bar">
+      <span id="catalogInfo">Carregando...</span>
+    </div>
+
+    <section class="store-main">
+      <div class="store-cards-wrap">
+        <div id="cards" class="cards"></div>
+      </div>
+
+      <footer class="catalog-pagination">
+        <button id="catalogPrevBtn" class="btn subtle" disabled>Anterior</button>
+        <span id="catalogPageInfo" class="meta">Pagina 1</span>
+        <button id="catalogNextBtn" class="btn subtle" disabled>Proxima</button>
+      </footer>
+    </section>
+  </section>
+
+  <!-- App Detail Modal -->
+  <div id="appDetailModal" class="app-detail-modal hidden" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="appDetailModalTitle">
+    <div class="app-detail-card">
+      <div class="app-detail-header">
+        <div class="app-detail-header-left">
+          <div id="appDetailIcon" class="app-detail-icon-wrap"></div>
+          <div>
+            <h2 id="appDetailModalTitle" class="app-detail-title"></h2>
+            <div id="appDetailMeta" class="meta"></div>
+          </div>
+        </div>
+        <button class="app-detail-close btn subtle" id="appDetailCloseBtn" aria-label="Fechar">✕</button>
+      </div>
+      <div id="appDetailDescription" class="app-detail-description kb-reader-content"></div>
+      <div class="app-detail-footer">
+        <button id="appDetailActionBtn" class="btn primary">Instalar</button>
+      </div>
+    </div>
+  </div>
+</main>

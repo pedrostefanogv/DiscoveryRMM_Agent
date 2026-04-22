@@ -1,0 +1,30 @@
+<main id="logsView" class="page-content hidden" role="tabpanel" aria-labelledby="tabLogs">
+    <section class="logs-panel">
+      <div class="statusbar page-bar">
+        <span class="meta">Terminal de logs - saida dos comandos winget</span>
+        <div class="actions">
+          <label class="logs-filter" for="logsOriginFilter">
+            <span>Origem</span>
+            <select id="logsOriginFilter" class="input logs-filter-select" aria-label="Filtrar logs por origem">
+              <option value="all">Todas</option>
+              <option value="agent">Agent</option>
+              <option value="sync">Sync</option>
+              <option value="automation">Automacao</option>
+              <option value="support">Support</option>
+              <option value="chat">Chat</option>
+              <option value="watchdog">Watchdog</option>
+              <option value="inventory">Inventory</option>
+              <option value="updates">Updates</option>
+              <option value="printer">Printer</option>
+              <option value="debug">Debug</option>
+              <option value="startup">Startup</option>
+              <option value="other">Outros</option>
+            </select>
+          </label>
+          <button id="refreshLogsBtn" class="btn subtle">Atualizar</button>
+          <button id="clearLogsBtn" class="btn danger">Limpar</button>
+        </div>
+      </div>
+      <pre id="logsOutput" class="terminal logs-terminal"></pre>
+    </section>
+  </main>

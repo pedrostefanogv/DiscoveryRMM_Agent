@@ -1,0 +1,46 @@
+# Build output
+/build/bin/
+/build/windows/installer/tmp/
+/build/windows/installer/wails_tools.nsh
+/build/windows/icon.backup.ico
+/dist/
+
+# Wails
+wails.exe
+
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+*.log
+*.tmp
+go.work
+go.work.sum
+
+# Coverage
+coverage.out
+coverage.txt
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Export output
+DiscoveryExports/
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini

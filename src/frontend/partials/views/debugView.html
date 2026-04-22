@@ -1,0 +1,78 @@
+<main id="debugView" class="page-content hidden" role="tabpanel" aria-labelledby="tabDebug">
+    <section class="debug-panel">
+      <div class="statusbar page-bar">
+        <span class="meta">Debug &mdash; configuracao de conexao com servidor remoto</span>
+      </div>
+
+      <div class="debug-agent-status-wrap">
+        <h2>Status do Agente</h2>
+        <div id="agentStatusCard" class="agent-status-card">
+          <div class="agent-status-indicator" id="agentStatusDot"></div>
+          <div class="agent-status-info">
+            <span id="agentStatusLabel" class="agent-status-label">Verificando...</span>
+            <span id="agentStatusDetail" class="agent-status-detail"></span>
+          </div>
+          <button id="agentStatusRefreshBtn" class="btn subtle" title="Atualizar status">Atualizar</button>
+        </div>
+      </div>
+
+      <div class="debug-watchdog-wrap">
+        <h2>Monitor de Saude (Watchdog)</h2>
+        <div class="watchdog-info">
+          <p class="meta">Monitoramento automatico de componentes criticos. Alertas e recuperacao automatica em caso de travamentos.</p>
+        </div>
+        <div id="watchdogHealthContainer" class="watchdog-health-container">
+          <div class="watchdog-loading">Carregando status...</div>
+        </div>
+        <div class="watchdog-actions">
+          <button id="watchdogRefreshBtn" class="btn subtle">Atualizar Status</button>
+        </div>
+      </div>
+
+      <div class="debug-config-wrap">
+        <h2>Configuracoes de Conexao</h2>
+        <div class="debug-config-form">
+          <div class="form-field">
+            <label for="apiServer">Servidor API (HTTP/HTTPS)</label>
+            <div class="debug-server-row">
+              <select id="apiScheme" class="debug-scheme-select">
+                <option value="https">https://</option>
+                <option value="http">http://</option>
+              </select>
+              <input id="apiServer" type="text" placeholder="api.exemplo.com:5288" autocomplete="off" spellcheck="false" />
+            </div>
+          </div>
+          <div class="form-field">
+            <label for="debugAuthToken">Token de Autenticacao (API)</label>
+            <input id="debugAuthToken" type="password" placeholder="Bearer token..." autocomplete="off" />
+          </div>
+          <div class="form-field">
+            <label for="natsServer">Servidor NATS (Comandos)</label>
+            <input id="natsServer" type="text" placeholder="nats.exemplo.com:4222" autocomplete="off" spellcheck="false" />
+          </div>
+          <div class="form-field">
+            <label for="debugAgentID">Agent ID (NATS)</label>
+            <input id="debugAgentID" type="text" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" autocomplete="off" spellcheck="false" />
+          </div>
+          <div class="form-field">
+            <label for="automationP2PWingetInstallEnabled">Automacao: instalar via P2P-first (teste)</label>
+            <select id="automationP2PWingetInstallEnabled">
+              <option value="false">false (usar Winget CLI)</option>
+              <option value="true">true (tentar P2P e fallback Winget)</option>
+            </select>
+          </div>
+          <div class="debug-actions">
+            <button id="debugTestBtn" class="btn subtle">Testar Conexao</button>
+            <button id="debugSaveBtn" class="btn primary">Salvar Configuracao</button>
+            <button id="openP2PDebugWindowBtn" class="btn subtle">Ir para P2P</button>
+            <button id="openPSADTDebugWindowBtn" class="btn subtle">Ir para PSADT</button>
+          </div>
+          <div id="debugStatus" class="debug-status" aria-live="polite"></div>
+          <div id="debugResponseWrap" class="debug-response-wrap hidden">
+            <label id="debugResponseLabel" class="debug-response-label">Resposta do teste de conexao</label>
+            <pre id="debugResponse" class="debug-response"></pre>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>

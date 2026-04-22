@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Discovery</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="window-chrome" id="windowChrome" style="--wails-draggable: drag;">
+    <div class="window-chrome-drag">
+      <div class="window-chrome-meta" id="windowChromeMeta">
+        <span id="windowMetaPC">PC: -</span>
+        <span id="windowMetaServer">Servidor: -</span>
+        <span id="windowMetaConn">Conexao: -</span>
+      </div>
+    </div>
+    <div class="window-chrome-actions">
+      <button id="windowMaxBtn" class="window-chrome-btn" title="Maximizar/Restaurar" aria-label="Maximizar ou restaurar" style="--wails-draggable: no-drag;">▢</button>
+      <button id="windowCloseBtn" class="window-chrome-btn close" title="Fechar para tray" aria-label="Fechar para tray" style="--wails-draggable: no-drag;">✕</button>
+    </div>
+  </div>
+
+  <div class="bg-shape bg-shape-a"></div>
+  <div class="bg-shape bg-shape-b"></div>
+
+  <!-- Toast container -->
+  <div id="toastContainer" class="toast-container" aria-live="polite"></div>
+
+    <div class="app-shell" id="appShell">
+    <div id="sidebarMount"></div>
+    <div id="mainMount"></div>
+  </div>
+
+  <script src="js/bootstrap-partials.js"></script>
+</body>
+</html>

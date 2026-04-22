@@ -1,0 +1,28 @@
+<main id="updatesView" class="page-content hidden" role="tabpanel" aria-labelledby="tabUpdates">
+    <section class="updates-panel">
+      <div class="statusbar page-bar">
+        <span id="updatesInfo">Atualizacoes nao verificadas</span>
+        <div class="actions">
+          <button id="checkUpdatesBtn" class="btn primary">Verificar Atualizacoes</button>
+          <button id="upgradeSelectedBtn" class="btn subtle" disabled>Atualizar Selecionados</button>
+        </div>
+      </div>
+      <span id="updatesProgress" class="loading hidden" aria-live="polite">Verificando atualizacoes pendentes...</span>
+      <div class="updates-table-wrap">
+        <table class="software-table updates-table">
+          <thead>
+            <tr>
+              <th class="update-check-col"><input id="updateSelectAll" type="checkbox" title="Selecionar todos" /></th>
+              <th>Nome</th>
+              <th>Versao Atual</th>
+              <th>Versao Disponivel</th>
+              <th>Acao</th>
+            </tr>
+          </thead>
+          <tbody id="updatesTableBody">
+            <tr><td colspan="5" class="meta">Clique em "Verificar Atualizacoes" para listar.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
