@@ -29,7 +29,18 @@ jobs:
 
       - name: Install NSIS
         shell: pwsh
-        run: choco install nsis -y --no-progress
+        run: |
+          choco install nsis -y --no-progress
+          $nsisDirs = @(
+            'C:\Program Files (x86)\NSIS',
+            'C:\Program Files\NSIS'
+          )
+
+          foreach ($dir in $nsisDirs) {
+            if (Test-Path $dir) {
+              $dir | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+            }
+          }
 
       - name: Derive release metadata from tag
         id: meta
