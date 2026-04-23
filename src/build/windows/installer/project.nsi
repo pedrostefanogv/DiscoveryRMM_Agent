@@ -187,8 +187,6 @@ ManifestDPIAware true
 !include "LogicLib.nsh"
 !include "FileFunc.nsh"
 
-Unicode true
-
 !define MUI_ICON "..\icon.ico"
 !define MUI_UNICON "..\icon.ico"
 # !define MUI_WELCOMEFINISHPAGE_BITMAP "resources\leftimage.bmp" #Include this to add a bitmap on the left side of the Welcome Page. Must be a size of 164x314
@@ -240,6 +238,7 @@ Page custom AgentConfigPage AgentConfigPageLeave
 Name "${INFO_PRODUCTNAME}"
 OutFile "..\..\bin\${BUILD_OUTFILE_NAME}" # Name of the installer's file.
 InstallDir "$PROGRAMFILES64\${INFO_PRODUCTNAME}" # Default installing folder ($PROGRAMFILES is Program Files folder).
+InstallDirRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${UNINST_KEY_NAME}" "InstallLocation"
 ShowInstDetails show # This will always show the installation details.
 
 Function .onInit
@@ -259,6 +258,12 @@ Function .onInit
    ${If} "${BUILD_UPDATE_INSTALL}" == "1"
       StrCpy $MinimalMode "1"
       SetSilent silent
+
+      # Em update, preservar pasta da instalacao existente para evitar migracao de path.
+      ReadRegStr $R2 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${UNINST_KEY_NAME}" "InstallLocation"
+      ${If} $R2 != ""
+         StrCpy $INSTDIR $R2
+      ${EndIf}
    ${EndIf}
 
    # Normalizar defaults inválidos
@@ -419,7 +424,7 @@ Section
          !insertmacro wails.associateCustomProtocols
 
          !insertmacro wails.writeUninstaller
-            WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${UNINST_KEY_NAME}" "DisplayIcon" "$INSTDIR\${PRODUCT_EXECUTABLE},0"
+         WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${UNINST_KEY_NAME}" "InstallLocation" "$INSTDIR"
       !endif
 SectionEnd
 
