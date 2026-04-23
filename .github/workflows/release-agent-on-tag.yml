@@ -127,7 +127,7 @@ jobs:
 
           .\build\scripts\build-bootstrap-installer.ps1 @params
 
-      - name: Create GitHub Release
+      - name: Create GitHub Release and upload installer asset
         uses: softprops/action-gh-release@v2
         with:
           name: ${{ steps.meta.outputs.release_name }}
@@ -135,18 +135,11 @@ jobs:
           prerelease: ${{ steps.meta.outputs.prerelease }}
           make_latest: ${{ steps.meta.outputs.make_latest }}
           generate_release_notes: true
-
-      - name: Upload release installer asset
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release upload "${{ steps.meta.outputs.tag }}" ".\src\build\bin\${{ steps.meta.outputs.install_asset_name }}" --clobber
+          files: src/build/bin/${{ steps.meta.outputs.install_asset_name }}
 
       - name: Upload release bootstrap asset
         if: ${{ env.DISCOVERY_BOOTSTRAP_PAYLOAD_URL != '' }}
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release upload "${{ steps.meta.outputs.tag }}" ".\src\build\bin\${{ steps.meta.outputs.bootstrap_asset_name }}" --clobber
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          files: src/build/bin/${{ steps.meta.outputs.bootstrap_asset_name }}
