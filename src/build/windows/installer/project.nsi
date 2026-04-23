@@ -395,8 +395,8 @@ Section
          !insertmacro wails.webview2runtime
          !insertmacro wails.files
 
-         CreateShortcut "$SMPROGRAMS\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
-         CreateShortCut "$DESKTOP\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
+         CreateShortcut "$SMPROGRAMS\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}" "" "$INSTDIR\${PRODUCT_EXECUTABLE}" 0
+         CreateShortCut "$DESKTOP\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}" "" "$INSTDIR\${PRODUCT_EXECUTABLE}" 0
 
          # Garantir estrutura compartilhada em ProgramData
          Call EnsureSharedDataDir
@@ -464,6 +464,9 @@ Function SaveAgentConfig
       Abort
    ${EndIf}
 
+   ; Garantir permissao de escrita para Administrators
+   ExecWait '"$SYSDIR\icacls.exe" "$R0\Discovery" /grant "Administrators:(OI)(CI)(F)" /Q' $R9
+
    Delete "$INSTDIR\config.json"
    ClearErrors
    IfFileExists "$R0\Discovery\config.json" 0 +3
@@ -471,33 +474,35 @@ Function SaveAgentConfig
    Goto +2
    StrCpy $R1 "$R0\Discovery\config.json"
    DetailPrint "Salvando config em $R1"
+   ClearErrors
    FileOpen $0 "$R1" w
    ${If} ${Errors}
-      DetailPrint "ERRO: nao foi possivel abrir $R0\Discovery\config.json para escrita"
-      MessageBox MB_ICONSTOP "Falha ao gravar o arquivo de configuracao em $R0\Discovery\config.json"
-      Abort
+      ; Fallback: tentar escrever no diretorio de instalacao
+      DetailPrint "Aviso: nao foi possivel abrir $R1 — tentando fallback em $INSTDIR\config.json"
+      ClearErrors
+      StrCpy $R1 "$INSTDIR\config.json"
+      FileOpen $0 "$R1" w
+      ${If} ${Errors}
+         MessageBox MB_ICONSTOP "Falha ao gravar a configuracao do agente. Verifique permissoes em $R0\Discovery e $INSTDIR."
+         Abort
+      ${EndIf}
    ${EndIf}
    
    FileWrite $0 "{$\r$\n"
    ${If} $GenericMode == "1"
       ; Modo genérico: sem URL/KEY, apenas habilita P2P para auto-provisioning
-      FileWrite $0 '  "inventory_sync_interval_minutes": 15,$\r$\n'
       FileWrite $0 '  "discoveryEnabled": true,$\r$\n'
-      FileWrite $0 '  "p2p_enabled": true$\r$\n'
+      FileWrite $0 '  "p2p": {"enabled": true}$\r$\n'
    ${Else}
       ; Modo padrão: escreve URL, KEY e flags conforme configuração
-      FileWrite $0 '  "server_url": "$ServerUrl",$\r$\n'
-      FileWrite $0 '  "api_scheme": "https",$\r$\n'
-      FileWrite $0 '  "api_server": "$ServerUrl",$\r$\n'
-      FileWrite $0 '  "inventory_sync_interval_minutes": 15,$\r$\n'
       FileWrite $0 '  "serverUrl": "$ServerUrl",$\r$\n'
       FileWrite $0 '  "apiKey": "$ServerKey",$\r$\n'
       ${If} $DiscoveryEnabled == "1"
          FileWrite $0 '  "discoveryEnabled": true,$\r$\n'
-         FileWrite $0 '  "p2p_enabled": true$\r$\n'
+         FileWrite $0 '  "p2p": {"enabled": true}$\r$\n'
       ${Else}
          FileWrite $0 '  "discoveryEnabled": false,$\r$\n'
-         FileWrite $0 '  "p2p_enabled": false$\r$\n'
+         FileWrite $0 '  "p2p": {"enabled": false}$\r$\n'
       ${EndIf}
    ${EndIf}
    FileWrite $0 "}$\r$\n"
