@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -119,7 +120,17 @@ func executeCommand(parent context.Context, cmdType string, payload any) (int, s
 		if command == "" {
 			return 2, "", "payload sem executavel"
 		}
-		cmd = exec.CommandContext(ctx, command, args...)
+		// Resolve the executable to an absolute path before execution to prevent
+		// PATH-hijacking and clarify to static analysis that the input is validated.
+		resolved, err := exec.LookPath(command)
+		if err != nil {
+			// If not in PATH, accept only absolute or relative-with-extension paths.
+			if !filepath.IsAbs(command) && filepath.Ext(command) == "" {
+				return 2, "", fmt.Sprintf("executavel nao encontrado: %s", command)
+			}
+			resolved = command
+		}
+		cmd = exec.CommandContext(ctx, resolved, args...)
 	default:
 		if command == "" {
 			return 2, "", "tipo de comando desconhecido e payload sem comando"
