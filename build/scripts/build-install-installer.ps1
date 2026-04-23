@@ -19,8 +19,28 @@ function Assert-Command([string]$Name) {
     }
 }
 
+function Resolve-MakensisPath() {
+    $command = Get-Command makensis -ErrorAction SilentlyContinue
+    if ($command) {
+        return $command.Source
+    }
+
+    $candidates = @(
+        "C:\Program Files (x86)\NSIS\makensis.exe",
+        "C:\Program Files\NSIS\makensis.exe"
+    )
+
+    foreach ($candidate in $candidates) {
+        if (Test-Path $candidate) {
+            return $candidate
+        }
+    }
+
+    throw "Comando 'makensis' nao encontrado no PATH nem nos locais padrao do NSIS."
+}
+
 Assert-Command go
-Assert-Command makensis
+$makensisExe = Resolve-MakensisPath
 
 $srcRoot = Join-Path $ProjectRoot "src"
 $binDir = Join-Path $srcRoot "build\bin"
@@ -88,7 +108,7 @@ if ($Version -ne "") {
 }
 
 $nsisArgs += $nsiFile
-& makensis @nsisArgs
+& $makensisExe @nsisArgs
 if ($LASTEXITCODE -ne 0) {
     throw "Falha no makensis (exit code: $LASTEXITCODE)"
 }
