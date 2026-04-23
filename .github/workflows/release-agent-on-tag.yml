@@ -1,0 +1,137 @@
+name: Release Agent On Tag
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      DISCOVERY_DEFAULT_SERVER_URL: ${{ vars.DISCOVERY_DEFAULT_SERVER_URL }}
+      DISCOVERY_DEFAULT_KEY: ${{ secrets.DISCOVERY_DEFAULT_KEY }}
+      DISCOVERY_BOOTSTRAP_PAYLOAD_URL: ${{ vars.DISCOVERY_BOOTSTRAP_PAYLOAD_URL }}
+      DISCOVERY_BOOTSTRAP_PAYLOAD_SHA256: ${{ vars.DISCOVERY_BOOTSTRAP_PAYLOAD_SHA256 }}
+      DISCOVERY_BOOTSTRAP_PAYLOAD_FILENAME: ${{ vars.DISCOVERY_BOOTSTRAP_PAYLOAD_FILENAME }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: src/go.mod
+
+      - name: Install NSIS
+        shell: pwsh
+        run: choco install nsis -y --no-progress
+
+      - name: Derive release metadata from tag
+        id: meta
+        shell: pwsh
+        run: |
+          $tag = "${env:GITHUB_REF_NAME}"
+          if (-not $tag.StartsWith('v')) {
+            throw "Tag invalida: $tag"
+          }
+
+          $version = $tag.Substring(1)
+          $channel = 'release'
+          $prerelease = 'false'
+          $makeLatest = 'true'
+          $releaseName = "Discovery Agent $tag"
+          $installAssetName = "Discovery-Agent-Setup-$version.exe"
+          $bootstrapAssetName = "Discovery-Agent-Bootstrap-$version.exe"
+
+          if ($version -match '(^|-)beta(\.|$)') {
+            $channel = 'beta'
+            $prerelease = 'true'
+            $makeLatest = 'false'
+            $releaseName = "Discovery Agent Beta $tag"
+            $installAssetName = "Discovery-Agent-Beta-Setup-$version.exe"
+            $bootstrapAssetName = "Discovery-Agent-Beta-Bootstrap-$version.exe"
+          }
+          elseif ($version -match '(^|-)lts(\.|$)') {
+            $channel = 'lts'
+            $prerelease = 'false'
+            $makeLatest = 'false'
+            $releaseName = "Discovery Agent LTS $tag"
+            $installAssetName = "Discovery-Agent-LTS-Setup-$version.exe"
+            $bootstrapAssetName = "Discovery-Agent-LTS-Bootstrap-$version.exe"
+          }
+
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "channel=$channel" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "prerelease=$prerelease" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "make_latest=$makeLatest" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "release_name=$releaseName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "install_asset_name=$installAssetName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "bootstrap_asset_name=$bootstrapAssetName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Build release installer
+        shell: pwsh
+        run: |
+          $params = @{
+            ProjectRoot = $PWD
+            Version = "${{ steps.meta.outputs.version }}"
+            OutputName = "${{ steps.meta.outputs.install_asset_name }}"
+            DiscoveryEnabled = '1'
+          }
+
+          if ($env:DISCOVERY_DEFAULT_SERVER_URL) {
+            $params.DefaultUrl = $env:DISCOVERY_DEFAULT_SERVER_URL
+          }
+
+          if ($env:DISCOVERY_DEFAULT_KEY) {
+            $params.DefaultKey = $env:DISCOVERY_DEFAULT_KEY
+          }
+
+          .\build\scripts\build-install-installer.ps1 @params
+
+      - name: Build release bootstrap installer
+        if: ${{ env.DISCOVERY_BOOTSTRAP_PAYLOAD_URL != '' }}
+        shell: pwsh
+        run: |
+          $params = @{
+            ProjectRoot = $PWD
+            PayloadUrl = $env:DISCOVERY_BOOTSTRAP_PAYLOAD_URL
+            Version = "${{ steps.meta.outputs.version }}"
+            OutputName = "${{ steps.meta.outputs.bootstrap_asset_name }}"
+            DiscoveryEnabled = '1'
+          }
+
+          if ($env:DISCOVERY_BOOTSTRAP_PAYLOAD_SHA256) {
+            $params.PayloadSha256 = $env:DISCOVERY_BOOTSTRAP_PAYLOAD_SHA256
+          }
+
+          if ($env:DISCOVERY_BOOTSTRAP_PAYLOAD_FILENAME) {
+            $params.PayloadFileName = $env:DISCOVERY_BOOTSTRAP_PAYLOAD_FILENAME
+          }
+
+          .\build\scripts\build-bootstrap-installer.ps1 @params
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ steps.meta.outputs.release_name }}
+          tag_name: ${{ steps.meta.outputs.tag }}
+          prerelease: ${{ steps.meta.outputs.prerelease }}
+          make_latest: ${{ steps.meta.outputs.make_latest }}
+          generate_release_notes: true
+
+      - name: Upload release installer asset
+        shell: pwsh
+        run: |
+          gh release upload "${{ steps.meta.outputs.tag }}" ".\src\build\bin\${{ steps.meta.outputs.install_asset_name }}" --clobber
+
+      - name: Upload release bootstrap asset
+        if: ${{ env.DISCOVERY_BOOTSTRAP_PAYLOAD_URL != '' }}
+        shell: pwsh
+        run: |
+          gh release upload "${{ steps.meta.outputs.tag }}" ".\src\build\bin\${{ steps.meta.outputs.bootstrap_asset_name }}" --clobber
