@@ -34,9 +34,10 @@ As branches críticas (`main`, `dev`, `beta`, `release`, `lts`) devem manter:
 
 - Merge somente por Pull Request.
 - Aprovação obrigatória.
+- Historico linear, sem merge commits.
+- Pull Requests devem ser integrados por estrategia compativel com historico linear, preferencialmente `squash merge` ou `rebase merge`.
 - Bloqueio de force push.
 - Bloqueio de deleção.
-- Histórico linear.
 - Regras válidas também para administradores.
 
 ## Dependências e Supply Chain
@@ -64,12 +65,12 @@ As branches críticas (`main`, `dev`, `beta`, `release`, `lts`) devem manter:
 Se você identificar uma falha de segurança:
 
 1. Não abra issue pública com exploit detalhado.
-2. Reporte de forma privada aos mantenedores.
+2. Reporte de forma privada pelo GitHub Security Advisories, usando a opcao `Report a vulnerability` deste repositorio.
 3. Inclua:
-- impacto
-- escopo
-- passo a passo de reprodução
-- sugestão de mitigação
+  - impacto
+  - escopo
+  - passo a passo de reproducao
+  - sugestao de mitigacao
 4. Aguarde orientação de divulgação responsável.
 
 ## Resposta a Incidente

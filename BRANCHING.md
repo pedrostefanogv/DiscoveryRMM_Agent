@@ -40,37 +40,37 @@ Exemplos:
 ## Fluxo de Promoção
 
 1. Feature/Bugfix -> `dev`
-- Base: `dev`
-- Destino: `dev`
-- Critério: revisão + CI verde.
+  - Base: `dev`
+  - Destino: `dev`
+  - Criterio: revisao + CI verde.
 
 2. `dev` -> `beta`
-- Quando houver conjunto de mudanças pronto para validação.
-- Critério: smoke tests e validação funcional do time.
+  - Quando houver conjunto de mudancas pronto para validacao.
+  - Criterio: smoke tests e validacao funcional do time.
 
 3. `beta` -> `release`
-- Somente quando não houver blocker.
-- Critério: regressão aprovada e changelog atualizado.
+  - Somente quando nao houver blocker.
+  - Criterio: regressao aprovada e changelog atualizado.
 
 4. `release` -> `main`
-- Publicação oficial da versão.
-- Criar tag SemVer após merge (ex.: `v1.4.0`).
+  - Publicacao oficial da versao.
+  - Criar tag SemVer apos merge (ex.: `v1.4.0`).
 
 5. `release` -> `lts`
-- Para versões que terão suporte estendido.
-- A decisão de suporte LTS deve ser explícita na release.
+  - Para versoes que terao suporte estendido.
+  - A decisao de suporte LTS deve ser explicita na release.
 
 ## Hotfix e Segurança
 
 1. Correções urgentes em produção
-- Criar `hotfix/*` a partir de `main` (ou `lts` quando aplicável).
-- PR para `release` e `main`.
-- Cherry-pick para `dev` e `beta` para evitar divergência.
+  - Criar `hotfix/*` a partir de `main` (ou `lts` quando aplicavel).
+  - PR para `release` e `main`.
+  - Cherry-pick para `dev` e `beta` para evitar divergencia.
 
 2. Correções urgentes em LTS
-- Criar `hotfix/*` a partir de `lts`.
-- PR para `lts`.
-- Avaliar backport para `main`/`release`/`dev` caso relevante.
+  - Criar `hotfix/*` a partir de `lts`.
+  - PR para `lts`.
+  - Avaliar backport para `main`/`release`/`dev` caso relevante.
 
 ## Versionamento
 
@@ -95,7 +95,7 @@ Regras operacionais:
 ## Política de PR
 
 - Mínimo 1 aprovação obrigatória.
-- Resolver toda conversation antes do merge.
+- Resolver toda conversa antes do merge.
 - Commits descritivos (preferência por Conventional Commits):
   - `feat:`
   - `fix:`
