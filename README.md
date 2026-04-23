@@ -77,21 +77,21 @@ Useful parameters / Parametros uteis:
 
 ```powershell
 .\build\scripts\build-install-installer.ps1 `
-    -ProjectRoot $PWD `
-    -OutputName discovery-agent-acme.exe `
-    -DefaultUrl api.example.com `
-    -DefaultKey <token> `
-    -DiscoveryEnabled 1 `
-    -MinimalDefault
+	-ProjectRoot $PWD `
+	-OutputName discovery-agent-acme.exe `
+	-DefaultUrl api.example.com `
+	-DefaultKey <token> `
+	-DiscoveryEnabled 1 `
+	-MinimalDefault
 ```
 
 ## Bootstrap Build / Build do Bootstrap
 
 ```powershell
 .\build\scripts\build-bootstrap-installer.ps1 `
-    -ProjectRoot $PWD `
-    -PayloadUrl "https://cdn.example.com/discovery-agent-install.exe" `
-    -PayloadSha256 "<optional-sha256>"
+	-ProjectRoot $PWD `
+	-PayloadUrl "https://cdn.example.com/discovery-agent-install.exe" `
+	-PayloadSha256 "<optional-sha256>"
 ```
 
 ## GitHub Actions / Automacao no GitHub Actions
