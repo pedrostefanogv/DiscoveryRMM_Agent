@@ -20,16 +20,11 @@ on:
         required: false
         default: ""
       discovery_enabled:
-        description: Habilitar discovery/p2p por padrao (0 ou 1)
+        description: "Habilitar P2P por padrao quando URL+Key ja conhecidos (0=off, 1=on)"
         required: false
         default: "1"
       generic_install:
-        description: Gerar instalador generico para auto provisioning P2P
-        required: false
-        type: boolean
-        default: false
-      minimal_default:
-        description: Gerar instalador com modo minimo por padrao
+        description: "Instalador generico sem URL/Key pre-configurados — agente usa P2P para auto-provisioning"
         required: false
         type: boolean
         default: false
@@ -67,10 +62,6 @@ jobs:
 
           if ('${{ github.event.inputs.generic_install }}' -eq 'true') {
             $params.GenericInstall = $true
-          }
-
-          if ('${{ github.event.inputs.minimal_default }}' -eq 'true') {
-            $params.MinimalDefault = $true
           }
 
           .\build\scripts\build-install-installer.ps1 @params

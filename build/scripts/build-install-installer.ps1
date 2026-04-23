@@ -7,8 +7,7 @@ param(
     [string]$DefaultKey = "",
     [ValidateSet("0", "1")]
     [string]$DiscoveryEnabled = "1",
-    [switch]$GenericInstall,
-    [switch]$MinimalDefault
+    [switch]$GenericInstall
 )
 
 $ErrorActionPreference = "Stop"
@@ -84,6 +83,19 @@ if (-not (Test-Path $agentExe)) {
 }
 
 Write-Output "[2/3] Build do instalador padrao (NSIS)..."
+
+# Garantir que o WebView2 bootstrapper existe na pasta tmp/ (necessario pelo macro wails.webview2runtime)
+$tmpDir = Join-Path $installerDir "tmp"
+$webview2Exe = Join-Path $tmpDir "MicrosoftEdgeWebview2Setup.exe"
+if (-not (Test-Path $webview2Exe)) {
+    Write-Output "  Baixando WebView2 bootstrapper da Microsoft..."
+    if (-not (Test-Path $tmpDir)) {
+        New-Item -ItemType Directory -Path $tmpDir | Out-Null
+    }
+    Invoke-WebRequest -Uri "https://go.microsoft.com/fwlink/p/?LinkId=2124703" -OutFile $webview2Exe -UseBasicParsing
+    Write-Output "  WebView2 bootstrapper baixado: $webview2Exe"
+}
+
 $nsisArgs = @(
     "/V3",
     "/DARG_WAILS_AMD64_BINARY=$agentExe",
@@ -99,9 +111,6 @@ if ($DefaultKey -ne "") {
 }
 if ($GenericInstall) {
     $nsisArgs += "/DARG_GENERIC_INSTALL=1"
-}
-if ($MinimalDefault) {
-    $nsisArgs += "/DARG_DEFAULT_MINIMAL=1"
 }
 if ($Version -ne "") {
     $nsisArgs += "/DINFO_PRODUCTVERSION=$Version"
