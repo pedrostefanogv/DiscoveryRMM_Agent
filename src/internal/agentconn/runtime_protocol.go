@@ -7,11 +7,31 @@ import (
 	"fmt"
 	"net"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
+
+var allowedExecCommands = map[string]struct{}{
+	"cmd":        {},
+	"msiexec":    {},
+	"powershell": {},
+	"pwsh":       {},
+	"winget":     {},
+}
+
+func normalizeExecutableCommand(command string) (string, bool) {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return "", false
+	}
+	base := strings.ToLower(strings.TrimSpace(filepath.Base(command)))
+	base = strings.TrimSuffix(base, strings.ToLower(filepath.Ext(base)))
+	_, ok := allowedExecCommands[base]
+	return base, ok
+}
 
 func parseHandshakeAck(raw any) (bool, string) {
 	arr, ok := raw.([]any)
@@ -119,7 +139,15 @@ func executeCommand(parent context.Context, cmdType string, payload any) (int, s
 		if command == "" {
 			return 2, "", "payload sem executavel"
 		}
-		cmd = exec.CommandContext(ctx, command, args...)
+		normalized, ok := normalizeExecutableCommand(command)
+		if !ok {
+			return 2, "", fmt.Sprintf("executavel nao permitido: %s", command)
+		}
+		resolved, err := exec.LookPath(normalized)
+		if err != nil {
+			return 2, "", fmt.Sprintf("executavel nao encontrado: %s", normalized)
+		}
+		cmd = exec.CommandContext(ctx, resolved, args...)
 	default:
 		if command == "" {
 			return 2, "", "tipo de comando desconhecido e payload sem comando"

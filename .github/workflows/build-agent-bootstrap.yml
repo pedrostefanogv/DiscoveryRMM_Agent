@@ -36,6 +36,8 @@ on:
 jobs:
   build-bootstrap:
     runs-on: windows-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout
@@ -45,32 +47,36 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: src/go.mod
+          cache-dependency-path: |
+            src/go.mod
+            src/go.sum
 
-      - name: Install NSIS
-        shell: pwsh
-        run: choco install nsis -y --no-progress
+      - name: Setup NSIS
+        uses: ./.github/actions/setup-nsis
 
-      - name: Build bootstrap installer
-        shell: pwsh
-        run: |
-          $params = @{
-            ProjectRoot = $PWD
-            PayloadUrl = "${{ github.event.inputs.payload_url }}"
-            Version = "${{ github.event.inputs.version }}"
-            PayloadSha256 = "${{ github.event.inputs.payload_sha256 }}"
-            PayloadFileName = "${{ github.event.inputs.payload_filename }}"
-            OutputName = "${{ github.event.inputs.output_name }}"
-            DiscoveryEnabled = "${{ github.event.inputs.discovery_enabled }}"
-          }
+      - name: Build agent binary
+        id: binary
+        uses: ./.github/actions/build-discovery-binary
+        with:
+          version: ${{ github.event.inputs.version }}
 
-          if ('${{ github.event.inputs.generic_install }}' -eq 'true') {
-            $params.GenericInstall = $true
-          }
-
-          .\build\scripts\build-bootstrap-installer.ps1 @params
+      - name: Package bootstrap installer
+        id: package
+        uses: ./.github/actions/package-discovery-nsis
+        with:
+          mode: bootstrap
+          binary_path: ${{ steps.binary.outputs.binary_path }}
+          version: ${{ github.event.inputs.version }}
+          output_name: ${{ github.event.inputs.output_name }}
+          discovery_enabled: ${{ github.event.inputs.discovery_enabled }}
+          generic_install: ${{ github.event.inputs.generic_install }}
+          payload_url: ${{ github.event.inputs.payload_url }}
+          payload_sha256: ${{ github.event.inputs.payload_sha256 }}
+          payload_filename: ${{ github.event.inputs.payload_filename }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: discovery-agent-bootstrap
-          path: src/build/bin/*.exe
+          path: ${{ steps.package.outputs.artifact_path }}
+          if-no-files-found: error
