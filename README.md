@@ -1,124 +1,138 @@
-# Discovery Agent (Wails + Go)
+# Discovery Agent
 
-Agente desktop/servico para inventario, automacao e distribuicao P2P em ambientes Windows, com UI local em Wails e modo headless via Windows Service.
+PT_BR: agente Windows para inventario, automacao, distribuicao P2P, atualizacao e operacao local/remota, com interface Wails e execucao headless como Windows Service.
 
-## Repositórios Relacionados
+EN: Windows agent for inventory, automation, P2P distribution, update delivery and local/remote operation, with a Wails desktop UI and headless Windows Service mode.
 
-- Agent (este repositório): https://github.com/pedrostefanogv/DiscoveryRMM_Agent
-- Servidor de API: https://github.com/pedrostefanogv/DiscoveryRMM_API
+## AI / VibeCode Notice
 
-## Capacidades Atuais
+PT_BR: este repositorio contem partes desenvolvidas com apoio de fluxos assistidos por IA, incluindo VibeCode e ferramentas similares. Ao usar, estudar, copiar, contribuir ou redistribuir este codigo, voce concorda que deve revisar, validar e testar tudo antes de uso produtivo. Se sua politica interna restringe codigo assistido por IA, nao utilize este repositorio sem aprovacao formal.
 
-- Execucao em dois modos:
-	- GUI desktop (Wails)
-	- Serviço Windows headless (`--service`)
-- Inventario de hardware/software com integracao osquery e fallback PowerShell.
-- App store e operações de pacote (install/remove/upgrade) com integração winget.
-- Automacao com politicas, execucao de tarefas e coleta de resultados.
-- P2P com descoberta local/libp2p, onboarding e distribuicao de artefatos.
-- Chat/IA integrado com ferramentas MCP internas.
-- Update do agente e fluxo de bootstrap via instalador NSIS.
+EN: this repository contains parts developed with AI-assisted workflows, including VibeCode and similar tooling. By using, reviewing, copying, contributing to, or redistributing this code, you agree that all changes must be manually reviewed, validated and tested before production use. If your internal policy restricts AI-assisted code, do not use this repository without formal approval.
 
-## Estrutura do Projeto
+## Related Repositories / Repositorios Relacionados
 
-- `src/main.go`: entrypoint (GUI, service e flags de startup).
-- `src/app`: domínio principal do agente (P2P, sync, bridges e runtime).
-- `src/internal`: serviços internos (automação, inventário, service, update, mcp).
-- `src/frontend`: UI HTML/CSS/JS do Wails.
-- `src/build/windows/installer`: arquivos NSIS do instalador.
-- `DOCs`: documentacao tecnica e operacional.
+- Agent: https://github.com/pedrostefanogv/DiscoveryRMM_Agent
+- API Server / Servidor de API: https://github.com/pedrostefanogv/DiscoveryRMM_API
 
-## Requisitos de Build Local
+## Downloads / Downloads
 
-- Windows 10+.
-- Go 1.23+.
-- NSIS (makensis) no PATH.
-- Opcional para build GUI: CLI do Wails.
+- Stable release / Release estavel: https://github.com/pedrostefanogv/DiscoveryRMM_Agent/releases/tag/v1.0.0
+- Beta release / Release beta: https://github.com/pedrostefanogv/DiscoveryRMM_Agent/releases/tag/v1.0.0-beta.1
+- LTS release / Release LTS: https://github.com/pedrostefanogv/DiscoveryRMM_Agent/releases/tag/v1.0.0-lts.1
+- All releases / Todas as releases: https://github.com/pedrostefanogv/DiscoveryRMM_Agent/releases
 
-## Build Local (Agente)
+## Current Scope / Escopo Atual
+
+- PT_BR: execucao em GUI desktop ou como servico Windows headless.
+- EN: runs either as a desktop GUI or as a headless Windows service.
+- PT_BR: inventario de hardware e software com integracao osquery e fallback PowerShell.
+- EN: hardware and software inventory with osquery integration and PowerShell fallback.
+- PT_BR: automacao operacional, execucao de tarefas e coleta de resultados.
+- EN: operational automation, task execution and result collection.
+- PT_BR: distribuicao P2P com descoberta local, onboarding e replicacao de artefatos.
+- EN: P2P distribution with local discovery, onboarding and artifact replication.
+- PT_BR: integracao com chat/IA e ferramentas MCP internas.
+- EN: integration with chat/AI flows and internal MCP tooling.
+- PT_BR: instalador NSIS, bootstrap online e versionamento por tag.
+- EN: NSIS installer, online bootstrap flow and tag-driven versioning.
+
+## Project Structure / Estrutura do Projeto
+
+- `src/main.go`: GUI and service entrypoint / entrypoint de GUI e servico.
+- `src/app`: main runtime domain / dominio principal do runtime.
+- `src/internal`: internal services and integrations / servicos e integracoes internas.
+- `src/frontend`: Wails front-end / interface Wails.
+- `src/build/windows/installer`: NSIS installer sources / fontes do instalador NSIS.
+- `DOCs`: technical and operational docs / documentacao tecnica e operacional.
+
+## Local Build Requirements / Requisitos de Build Local
+
+- Windows 10 or newer / Windows 10 ou superior.
+- Go 1.23 or newer / Go 1.23 ou superior.
+- NSIS (`makensis`) in `PATH`.
+- Optional for GUI development / opcional para GUI: Wails CLI.
+
+## Local Build / Build Local
 
 ```powershell
-# raiz do repositório
 Set-Location .\src
 go mod tidy
 go test ./...
 go build ./...
 ```
 
-## Build Automatizado do Instalador (Padrão)
-
-Script criado para gerar instalador padrao do agent (servico + discovery/p2p habilitado por padrao):
+## Standard Installer Build / Build do Instalador Padrao
 
 ```powershell
-# raiz do repositório
 .\build\scripts\build-install-installer.ps1 -ProjectRoot $PWD
 ```
 
-Saida esperada:
+Expected output / Saida esperada:
 
-- Binario do agent: `src/build/bin/discovery.exe`
-- Instalador: `src/build/bin/discovery-agent-install.exe`
+- `src/build/bin/discovery.exe`
+- `src/build/bin/discovery-agent-install.exe`
 
-Parâmetros úteis:
+Useful parameters / Parametros uteis:
 
 ```powershell
 .\build\scripts\build-install-installer.ps1 `
-	-ProjectRoot $PWD `
-	-OutputName discovery-agent-acme.exe `
-	-DefaultUrl api.exemplo.com `
-	-DefaultKey <token> `
-	-DiscoveryEnabled 1 `
-	-MinimalDefault
+    -ProjectRoot $PWD `
+    -OutputName discovery-agent-acme.exe `
+    -DefaultUrl api.example.com `
+    -DefaultKey <token> `
+    -DiscoveryEnabled 1 `
+    -MinimalDefault
 ```
 
-## Build Bootstrap (Online)
-
-Script para gerar bootstrapper (baixa segunda etapa e executa instalador completo):
+## Bootstrap Build / Build do Bootstrap
 
 ```powershell
 .\build\scripts\build-bootstrap-installer.ps1 `
-	-ProjectRoot $PWD `
-	-PayloadUrl "https://cdn.exemplo.com/discovery-agent-install.exe" `
-	-PayloadSha256 "<sha256-opcional>"
+    -ProjectRoot $PWD `
+    -PayloadUrl "https://cdn.example.com/discovery-agent-install.exe" `
+    -PayloadSha256 "<optional-sha256>"
 ```
 
-## Automacao de Build no GitHub Actions
+## GitHub Actions / Automacao no GitHub Actions
 
-Workflows adicionados:
+Workflows / Workflows:
 
 - `.github/workflows/build-agent-installer.yml`
 - `.github/workflows/build-agent-bootstrap.yml`
 - `.github/workflows/release-agent-on-tag.yml`
 
-Execucao:
+How to run manually / Como executar manualmente:
 
-1. Acesse Actions no GitHub.
-2. Selecione `Build Agent Installer` para o instalador padrao ou `Build Agent Bootstrap Installer` para o bootstrap.
-3. Execute via `Run workflow` preenchendo os parametros opcionais.
-4. Baixe o artefato gerado (`discovery-agent-installer` ou `discovery-agent-bootstrap`).
+1. Open GitHub Actions / Abra o GitHub Actions.
+2. Select `Build Agent Installer` or `Build Agent Bootstrap Installer` / Selecione `Build Agent Installer` ou `Build Agent Bootstrap Installer`.
+3. Use `Run workflow` and fill the inputs / Use `Run workflow` e preencha os parametros.
+4. Download the generated artifact / Baixe o artefato gerado.
 
-## Release Automatizado por Tag
+## Tag-Based Releases / Releases por Tag
 
-Quando uma tag Git no formato abaixo for enviada ao GitHub, o workflow `release-agent-on-tag.yml` faz o build do agent e publica os executaveis automaticamente em GitHub Releases:
+Supported channels / Canais suportados:
 
-- Release normal: `v1.2.3`
+- Stable: `v1.2.3`
 - Beta: `v1.2.3-beta.1`
 - LTS: `v1.2.3-lts.1`
 
-Comportamento:
+Behavior / Comportamento:
 
-- `v1.2.3`: release estavel normal.
-- `v1.2.3-beta.1`: release marcada como prerelease.
-- `v1.2.3-lts.1`: release LTS sem promover como latest.
+- `v1.2.3`: stable GitHub release / release estavel.
+- `v1.2.3-beta.1`: prerelease / prerelease.
+- `v1.2.3-lts.1`: LTS release without `latest` / release LTS sem `latest`.
 
-O workflow utiliza a propria tag como versao embutida no binario via ldflags e publica os artefatos em GitHub Releases.
+The workflow embeds the tag version into the binaries and publishes customer-facing assets automatically / O workflow embute a versao da tag no binario e publica os assets automaticamente.
 
-## Observacao sobre Operacao em Rede
+## Network Operation Note / Observacao sobre Operacao em Rede
 
-O instalador padrao ja registra e inicia o Windows Service do agent e mantem discovery/p2p habilitado para operacao em rede local. A comunicacao de entrada pode depender de regra de firewall da maquina/ambiente.
+PT_BR: o instalador padrao registra e inicia o Windows Service do agent com discovery/P2P habilitado por padrao para operacao em rede local. Regras de firewall e politicas do ambiente ainda podem ser necessarias.
 
-## Documentação
+EN: the standard installer registers and starts the Windows Service with discovery/P2P enabled by default for local network operation. Firewall rules and environment policies may still be required.
 
-- Mapa de documentacao: `DOCs/README.md`
-- Guia operacional de instalador (ponteiro atual): `DOCs/GUIA_INSTALADOR_OFFLINE_ONLINE_API.md`
-- Arquitetura detalhada: `ARCHITECTURE.md`
+## Documentation / Documentacao
+
+- `DOCs/README.md`
+- `DOCs/GUIA_INSTALADOR_OFFLINE_ONLINE_API.md`
+- `ARCHITECTURE.md`
