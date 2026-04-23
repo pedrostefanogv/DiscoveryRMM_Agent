@@ -138,11 +138,15 @@ jobs:
 
       - name: Upload release installer asset
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           gh release upload "${{ steps.meta.outputs.tag }}" ".\src\build\bin\${{ steps.meta.outputs.install_asset_name }}" --clobber
 
       - name: Upload release bootstrap asset
         if: ${{ env.DISCOVERY_BOOTSTRAP_PAYLOAD_URL != '' }}
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           gh release upload "${{ steps.meta.outputs.tag }}" ".\src\build\bin\${{ steps.meta.outputs.bootstrap_asset_name }}" --clobber
