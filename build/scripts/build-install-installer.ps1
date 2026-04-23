@@ -38,17 +38,45 @@ function Resolve-MakensisPath() {
     throw "Comando 'makensis' nao encontrado no PATH nem nos locais padrao do NSIS."
 }
 
+function Resolve-WindresPath() {
+    $command = Get-Command windres -ErrorAction SilentlyContinue
+    if ($command) {
+        return $command.Source
+    }
+
+    $candidates = @(
+        "C:\ProgramData\Chocolatey\lib\mingw\tools\install\mingw64\bin\windres.exe",
+        "C:\msys64\mingw64\bin\windres.exe",
+        "C:\msys64\usr\bin\windres.exe"
+    )
+
+    foreach ($candidate in $candidates) {
+        if (Test-Path $candidate) {
+            return $candidate
+        }
+    }
+
+    throw "Comando 'windres' nao encontrado no PATH nem nos locais padrao do MinGW/MSYS2."
+}
+
 Assert-Command go
 $makensisExe = Resolve-MakensisPath
+$windresExe = Resolve-WindresPath
 
 $srcRoot = Join-Path $ProjectRoot "src"
 $binDir = Join-Path $srcRoot "build\bin"
 $installerDir = Join-Path $srcRoot "build\windows\installer"
 $nsiFile = Join-Path $installerDir "project.nsi"
 $agentExe = Join-Path $binDir "discovery.exe"
+$iconPath = Join-Path $srcRoot "build\windows\icon.ico"
+$sysoPath = Join-Path $srcRoot "resource_windows_amd64.syso"
 
 if (-not (Test-Path $nsiFile)) {
     throw "Arquivo NSIS não encontrado: $nsiFile"
+}
+
+if (-not (Test-Path $iconPath)) {
+    throw "Icone nao encontrado: $iconPath"
 }
 
 if (-not (Test-Path $binDir)) {
@@ -58,6 +86,14 @@ if (-not (Test-Path $binDir)) {
 Write-Output "[1/3] Build do agente (Windows AMD64)..."
 Push-Location $srcRoot
 try {
+    Write-Output "  Gerando recurso de icone (.syso) para o executavel..."
+    $rcPath = Join-Path $env:TEMP "discovery_icon.rc"
+    Set-Content -Path $rcPath -Value "IDI_APP_ICON ICON `"$iconPath`"" -Encoding ASCII
+    & $windresExe --target=pe-x86-64 -i $rcPath -o $sysoPath
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $sysoPath)) {
+        throw "Falha ao gerar recurso de icone com windres"
+    }
+
     $env:CGO_ENABLED = "1"
     $env:GOOS = "windows"
     $env:GOARCH = "amd64"
@@ -70,6 +106,12 @@ try {
     go build -tags "desktop,production" -ldflags ($ldflags -join ' ') -o $agentExe .
 }
 finally {
+    if ($rcPath -and (Test-Path $rcPath)) {
+        Remove-Item $rcPath -Force -ErrorAction SilentlyContinue
+    }
+    if ($sysoPath -and (Test-Path $sysoPath)) {
+        Remove-Item $sysoPath -Force -ErrorAction SilentlyContinue
+    }
     Pop-Location
 }
 
@@ -93,6 +135,8 @@ if (-not (Test-Path $webview2Exe)) {
 
 $nsisArgs = @(
     "/V3",
+    "/INPUTCHARSET",
+    "UTF8",
     "/DARG_WAILS_AMD64_BINARY=$agentExe",
     "/DARG_OUTFILE_NAME=$OutputName",
     "/DARG_DEFAULT_DISCOVERY=$DiscoveryEnabled"
