@@ -10,17 +10,18 @@ Este documento define o fluxo oficial de branches para desenvolvimento, validaç
 
 ## Branches Oficiais
 
-- `main`: espelho estável do release atual (produção).
 - `dev`: integração contínua de features.
 - `beta`: candidata para validação funcional e regressão.
-- `release`: preparação final da versão a publicar.
+- `release`: branch padrão (default). Versão oficial publicada / espelho estável de produção.
 - `lts`: manutenção de longo prazo (somente correções críticas e segurança).
+
+> Não existe branch `main`. A branch padrão do repositório é `release`.
 
 ## Regras Gerais
 
 - Todo trabalho começa em branch de curta duração (`feature/*`, `bugfix/*`, `hotfix/*`, `chore/*`).
 - Merge sempre por Pull Request.
-- Proibido push direto em `main`, `dev`, `beta`, `release`, `lts`.
+- Proibido push direto em `dev`, `beta`, `release`, `lts`.
 - Rebase/squash permitido somente na branch de trabalho.
 - PR deve estar verde (build/testes) antes de merge.
 
@@ -39,6 +40,12 @@ Exemplos:
 
 ## Fluxo de Promoção
 
+```
+feature/* ──► dev ──► beta ──► release ──► lts
+                                  │
+                                  └─► tag vX.Y.Z (publica release)
+```
+
 1. Feature/Bugfix -> `dev`
   - Base: `dev`
   - Destino: `dev`
@@ -51,26 +58,23 @@ Exemplos:
 3. `beta` -> `release`
   - Somente quando nao houver blocker.
   - Criterio: regressao aprovada e changelog atualizado.
+  - Apos merge, criar tag SemVer (ex.: `v1.4.0`) para disparar publicacao oficial.
 
-4. `release` -> `main`
-  - Publicacao oficial da versao.
-  - Criar tag SemVer apos merge (ex.: `v1.4.0`).
-
-5. `release` -> `lts`
+4. `release` -> `lts`
   - Para versoes que terao suporte estendido.
   - A decisao de suporte LTS deve ser explicita na release.
 
 ## Hotfix e Segurança
 
 1. Correções urgentes em produção
-  - Criar `hotfix/*` a partir de `main` (ou `lts` quando aplicavel).
-  - PR para `release` e `main`.
+  - Criar `hotfix/*` a partir de `release` (ou `lts` quando aplicavel).
+  - PR para `release`.
   - Cherry-pick para `dev` e `beta` para evitar divergencia.
 
 2. Correções urgentes em LTS
   - Criar `hotfix/*` a partir de `lts`.
   - PR para `lts`.
-  - Avaliar backport para `main`/`release`/`dev` caso relevante.
+  - Avaliar backport para `release`/`beta`/`dev` caso relevante.
 
 ## Versionamento
 
@@ -109,7 +113,7 @@ Regras operacionais:
 1. CI verde na branch `release`.
 2. Changelog atualizado.
 3. Versão definida (SemVer).
-4. Tag criada após merge em `main`.
+4. Tag criada após merge em `release`.
 5. Comunicação de release e impactos.
 6. Se aplicável, backport para `lts`.
 
@@ -118,5 +122,5 @@ Regras operacionais:
 1. Merge de features em `dev` ao longo da sprint.
 2. Congelamento funcional e promoção para `beta`.
 3. Correções finais em `beta` e promoção para `release`.
-4. Publicação em `main` com tag.
-5. Correções críticas posteriores entram por `hotfix/*`.
+4. Tag `vX.Y.Z` aplicada em `release` dispara a publicação no GitHub.
+5. Correções críticas posteriores entram por `hotfix/*` direto em `release`/`lts`.
