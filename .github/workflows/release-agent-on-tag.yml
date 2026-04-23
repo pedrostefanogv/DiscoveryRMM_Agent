@@ -58,12 +58,11 @@ jobs:
             if ($inputVersion -eq "") {
               throw "Parametro 'version' obrigatorio para workflow_dispatch"
             }
-            if ($inputVersion.StartsWith('v')) {
-              $tag = $inputVersion
+            $normalizedVersion = $inputVersion
+            if ($normalizedVersion.Length -gt 0 -and $normalizedVersion[0].ToString().ToLowerInvariant() -eq 'v') {
+              $normalizedVersion = $normalizedVersion.Substring(1)
             }
-            else {
-              $tag = "v$inputVersion"
-            }
+            $tag = "v$normalizedVersion"
           }
           if (-not $tag.StartsWith('v')) {
             throw "Tag invalida: $tag"
