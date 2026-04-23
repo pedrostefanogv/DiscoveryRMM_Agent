@@ -517,7 +517,7 @@ function renderAssistantMarkdown(content) {
   }
 
   function isTableRow(s) {
-    return /^\|(.+\|)+\s*$/.test(s.trim());
+    return /^\|([^|\r\n]+\|)+\s*$/.test(s.trim());
   }
 
   function isSeparatorRow(s) {

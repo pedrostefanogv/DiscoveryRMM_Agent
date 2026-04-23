@@ -36,6 +36,8 @@ on:
 jobs:
   build-bootstrap:
     runs-on: windows-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout
