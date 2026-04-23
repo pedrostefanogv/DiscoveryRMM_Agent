@@ -29,18 +29,21 @@ var (
 // On failure, an error is returned; callers should fall back to the inherited
 // environment (service env) rather than propagating the error.
 func BuildUserEnvironment(tok syscall.Token) ([]string, error) {
-	var envPtr uintptr
+	// Use unsafe.Pointer (not uintptr) so that the block pointer returned by
+	// the OS API can be passed back to parseEnvBlock without triggering
+	// go vet's "possible misuse of unsafe.Pointer" rule (uintptr→unsafe.Pointer).
+	var block unsafe.Pointer
 	r, _, err := procCreateEnvironmentBlock.Call(
-		uintptr(unsafe.Pointer(&envPtr)),
+		uintptr(unsafe.Pointer(&block)),
 		uintptr(tok),
 		0, // bInherit = FALSE — do not merge the service's environment
 	)
 	if r == 0 {
 		return nil, fmt.Errorf("CreateEnvironmentBlock: %w", err)
 	}
-	defer procDestroyEnvironmentBlock.Call(envPtr) //nolint:errcheck
+	defer procDestroyEnvironmentBlock.Call(uintptr(block)) //nolint:errcheck
 
-	return parseEnvBlock((*uint16)(unsafe.Pointer(envPtr))), nil
+	return parseEnvBlock((*uint16)(block)), nil
 }
 
 // parseEnvBlock converts a Windows multi-string environment block (a contiguous
