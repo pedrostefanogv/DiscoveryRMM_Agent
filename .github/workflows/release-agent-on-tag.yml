@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Versao para publicar em release (ex. 1.0.3 ou v1.0.3)
+        required: true
+        default: ""
 
 permissions:
   contents: write
@@ -47,6 +53,18 @@ jobs:
         shell: pwsh
         run: |
           $tag = "${env:GITHUB_REF_NAME}"
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            $inputVersion = "${{ github.event.inputs.version }}".Trim()
+            if ($inputVersion -eq "") {
+              throw "Parametro 'version' obrigatorio para workflow_dispatch"
+            }
+            if ($inputVersion.StartsWith('v')) {
+              $tag = $inputVersion
+            }
+            else {
+              $tag = "v$inputVersion"
+            }
+          }
           if (-not $tag.StartsWith('v')) {
             throw "Tag invalida: $tag"
           }

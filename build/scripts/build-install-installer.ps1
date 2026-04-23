@@ -39,6 +39,38 @@ function Resolve-MakensisPath() {
     throw "Comando 'makensis' nao encontrado no PATH nem nos locais padrao do NSIS."
 }
 
+function Ensure-WebView2Bootstrapper([string]$InstallerDir) {
+    $tmpDir = Join-Path $InstallerDir "tmp"
+    $bootstrapperPath = Join-Path $tmpDir "MicrosoftEdgeWebview2Setup.exe"
+
+    if (Test-Path $bootstrapperPath) {
+        return
+    }
+
+    if (-not (Test-Path $tmpDir)) {
+        New-Item -ItemType Directory -Path $tmpDir | Out-Null
+    }
+
+    $downloadUrls = @(
+        "https://go.microsoft.com/fwlink/p/?LinkId=2124703"
+    )
+
+    foreach ($url in $downloadUrls) {
+        try {
+            Write-Output "Baixando WebView2 bootstrapper: $url"
+            Invoke-WebRequest -Uri $url -OutFile $bootstrapperPath
+            if (Test-Path $bootstrapperPath) {
+                return
+            }
+        }
+        catch {
+            Write-Warning "Falha ao baixar WebView2 bootstrapper de '$url': $($_.Exception.Message)"
+        }
+    }
+
+    throw "Nao foi possivel obter o arquivo exigido pelo NSIS: $bootstrapperPath"
+}
+
 Assert-Command go
 $makensisExe = Resolve-MakensisPath
 
@@ -84,6 +116,7 @@ if (-not (Test-Path $agentExe)) {
 }
 
 Write-Output "[2/3] Build do instalador padrao (NSIS)..."
+Ensure-WebView2Bootstrapper -InstallerDir $installerDir
 $nsisArgs = @(
     "/V3",
     "/DARG_WAILS_AMD64_BINARY=$agentExe",
