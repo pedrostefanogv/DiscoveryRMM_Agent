@@ -40,7 +40,7 @@ function Resolve-MakensisPath() {
 }
 
 Assert-Command go
-$makensisExe = Resolve-MakensisPath()
+$makensisExe = Resolve-MakensisPath
 
 $srcRoot = Join-Path $ProjectRoot "src"
 $binDir = Join-Path $srcRoot "build\bin"
