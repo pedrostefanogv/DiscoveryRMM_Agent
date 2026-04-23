@@ -90,7 +90,8 @@ Push-Location $srcRoot
 try {
     Write-Output "  Gerando recurso de icone (.syso) para o executavel..."
     $rcPath = Join-Path $env:TEMP "discovery_icon.rc"
-    Set-Content -Path $rcPath -Value "IDI_APP_ICON ICON `"$iconPath`"" -Encoding ASCII
+    $iconPathForRc = ($iconPath -replace '\\', '/')
+    Set-Content -Path $rcPath -Value "IDI_APP_ICON ICON `"$iconPathForRc`"" -Encoding ASCII
     & $windresExe --target=pe-x86-64 -i $rcPath -o $sysoPath
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path $sysoPath)) {
         throw "Falha ao gerar recurso de icone com windres"
