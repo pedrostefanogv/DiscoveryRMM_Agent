@@ -1,0 +1,63 @@
+name: PR Checks
+
+# Executa SOMENTE ao abrir/atualizar PRs direcionados a beta, release ou lts.
+# Nao roda em pushes diretos de branches de feature.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - beta
+      - release
+      - lts
+
+# Cancela execucoes anteriores do mesmo PR para evitar filas duplicadas.
+concurrency:
+  group: pr-checks-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  build-check:
+    name: Build & Vet
+    runs-on: windows-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: src/go.mod
+          cache: true
+          cache-dependency-path: src/go.sum
+
+      # O pacote main depende de Wails + CGO + frontend embedded — excluir da verificacao.
+      # Verifica apenas os subpacotes de logica de negocio.
+      - name: go vet
+        working-directory: src
+        shell: pwsh
+        run: go vet ./app/... ./internal/...
+
+  test:
+    name: Unit Tests
+    runs-on: windows-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: src/go.mod
+          cache: true
+          cache-dependency-path: src/go.sum
+
+      - name: go test
+        working-directory: src
+        shell: pwsh
+        run: go test ./app/... ./internal/... -timeout 120s
