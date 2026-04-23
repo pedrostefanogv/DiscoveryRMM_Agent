@@ -33,7 +33,9 @@ Unicode true
 !define INFO_PROJECTNAME    "discovery"
 !define INFO_COMPANYNAME    "Discovery"
 !define INFO_PRODUCTNAME    "Discovery"
+!ifndef INFO_PRODUCTVERSION
 !define INFO_PRODUCTVERSION "1.0.0"
+!endif
 !define INFO_COPYRIGHT      "Copyright (c) 2026 Discovery"
 !define PRODUCT_EXECUTABLE  "discovery.exe"
 !define UNINST_KEY_NAME     "Discovery.RMM"
