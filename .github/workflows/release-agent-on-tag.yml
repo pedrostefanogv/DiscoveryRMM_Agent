@@ -60,13 +60,52 @@ jobs:
       - name: Derive release metadata from tag
         id: meta
         shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
+          $repo = "${{ github.repository }}"
           $tag = "${env:GITHUB_REF_NAME}"
+          $sha = "${env:GITHUB_SHA}"
           if (-not $tag.StartsWith('v')) {
             throw "Tag invalida: $tag"
           }
 
           $version = $tag.Substring(1)
+
+          $headers = @{
+            Authorization = "Bearer $env:GITHUB_TOKEN"
+            Accept = "application/vnd.github+json"
+            "X-GitHub-Api-Version" = "2022-11-28"
+          }
+
+          $releases = Invoke-RestMethod -Method Get -Uri "https://api.github.com/repos/$repo/releases?per_page=100" -Headers $headers
+          $existingReleaseTags = @($releases | ForEach-Object { $_.tag_name })
+
+          if ($existingReleaseTags -contains $tag) {
+            if ($version -notmatch '^(?<base>\d+\.\d+\.\d+-(?:beta|lts)\.)(?<seq>\d+)$') {
+              throw "Tag duplicada sem sufixo incremental suportado: $tag. Use formato X.Y.Z-beta.N ou X.Y.Z-lts.N"
+            }
+
+            $base = $Matches['base']
+            $seq = [int]$Matches['seq']
+
+            do {
+              $seq++
+              $version = "$base$seq"
+              $tag = "v$version"
+            } while ($existingReleaseTags -contains $tag)
+
+            Write-Output "Tag duplicada detectada. Nova tag selecionada: $tag"
+
+            $payload = @{
+              ref = "refs/tags/$tag"
+              sha = $sha
+            } | ConvertTo-Json
+
+            Invoke-RestMethod -Method Post -Uri "https://api.github.com/repos/$repo/git/refs" -Headers $headers -Body $payload
+            Write-Output "Nova tag criada: $tag -> $sha"
+          }
+
           $channel = 'release'
           $prerelease = 'false'
           $makeLatest = 'true'
@@ -141,6 +180,33 @@ jobs:
           }
 
           .\build\scripts\build-bootstrap-installer.ps1 @params
+
+      - name: Cleanup duplicate draft releases for tag
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          $repo = "${{ github.repository }}"
+          $tag = "${{ steps.meta.outputs.tag }}"
+
+          $headers = @{
+            Authorization = "Bearer $env:GITHUB_TOKEN"
+            Accept = "application/vnd.github+json"
+            "X-GitHub-Api-Version" = "2022-11-28"
+          }
+
+          $releases = Invoke-RestMethod -Method Get -Uri "https://api.github.com/repos/$repo/releases?per_page=100" -Headers $headers
+          $draftsForTag = @($releases | Where-Object { $_.tag_name -eq $tag -and $_.draft -eq $true })
+
+          if ($draftsForTag.Count -eq 0) {
+            Write-Output "No draft release found for tag $tag"
+            exit 0
+          }
+
+          foreach ($draft in $draftsForTag) {
+            Write-Output "Deleting duplicate draft release id=$($draft.id) tag=$tag"
+            Invoke-RestMethod -Method Delete -Uri "https://api.github.com/repos/$repo/releases/$($draft.id)" -Headers $headers
+          }
 
       - name: Create GitHub Release and upload installer asset
         uses: softprops/action-gh-release@v2
