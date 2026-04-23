@@ -60,6 +60,44 @@ runs:
       name: Package NSIS installer
       shell: pwsh
       run: |
+        function Get-NsisNumericVersion([string]$RawVersion) {
+          $trimmed = $RawVersion.Trim()
+          if ($trimmed -eq '') {
+            return ''
+          }
+
+          $trimmed = $trimmed.TrimStart('v', 'V')
+          $match = [regex]::Match($trimmed, '^\d+\.\d+\.\d+(?:\.\d+)?')
+          if (-not $match.Success) {
+            throw "Versao invalida para metadata NSIS: $RawVersion"
+          }
+
+          return $match.Value
+        }
+
+        function Test-WebView2Bootstrapper([string]$Path, [int64]$MinimumBytes) {
+          if (-not (Test-Path $Path)) {
+            return $false
+          }
+
+          $item = Get-Item $Path -ErrorAction SilentlyContinue
+          if (-not $item -or $item.Length -lt $MinimumBytes) {
+            return $false
+          }
+
+          $signature = Get-AuthenticodeSignature -FilePath $Path
+          if ($signature.Status -ne 'Valid') {
+            return $false
+          }
+
+          $subject = ''
+          if ($signature.SignerCertificate) {
+            $subject = [string]$signature.SignerCertificate.Subject
+          }
+
+          return $subject -like '*Microsoft*'
+        }
+
         function Ensure-WebView2Bootstrapper([string]$InstallerDir) {
           $tmpDir = Join-Path $InstallerDir 'tmp'
           $bootstrapperPath = Join-Path $tmpDir 'MicrosoftEdgeWebview2Setup.exe'
@@ -69,32 +107,37 @@ runs:
             New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
           }
 
-          if (Test-Path $bootstrapperPath) {
-            $existing = Get-Item $bootstrapperPath -ErrorAction SilentlyContinue
-            if ($existing -and $existing.Length -ge $minimumBytes) {
-              return
-            }
+          if (Test-WebView2Bootstrapper -Path $bootstrapperPath -MinimumBytes $minimumBytes) {
+            return
+          }
 
+          if (Test-Path $bootstrapperPath) {
             Remove-Item $bootstrapperPath -Force -ErrorAction SilentlyContinue
           }
 
           Invoke-WebRequest -Uri 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile $bootstrapperPath -ErrorAction Stop
 
-          $downloaded = Get-Item $bootstrapperPath -ErrorAction Stop
-          if ($downloaded.Length -lt $minimumBytes) {
-            Remove-Item $bootstrapperPath -Force -ErrorAction SilentlyContinue
-            throw "Bootstrapper WebView2 invalido ou incompleto: $bootstrapperPath"
+          if (Test-WebView2Bootstrapper -Path $bootstrapperPath -MinimumBytes $minimumBytes) {
+            return
           }
+
+          Remove-Item $bootstrapperPath -Force -ErrorAction SilentlyContinue
+          throw "Bootstrapper WebView2 invalido, incompleto ou sem assinatura valida da Microsoft: $bootstrapperPath"
         }
 
         $mode = "${{ inputs.mode }}".Trim().ToLowerInvariant()
         $binaryPath = "${{ inputs.binary_path }}"
         $outputName = "${{ inputs.output_name }}"
         $version = "${{ inputs.version }}".Trim()
+        $nsisVersion = Get-NsisNumericVersion -RawVersion $version
         $installerDir = Join-Path $env:GITHUB_WORKSPACE 'src\build\windows\installer'
         $binDir = Join-Path $env:GITHUB_WORKSPACE 'src\build\bin'
         $nsiFile = Join-Path $installerDir 'project.nsi'
         $makensis = Get-Command makensis -ErrorAction SilentlyContinue
+
+        if (-not (Test-Path $binDir)) {
+          New-Item -ItemType Directory -Force -Path $binDir | Out-Null
+        }
 
         if (-not $makensis) {
           throw 'makensis nao encontrado. Execute a action de setup do NSIS antes do empacotamento.'
@@ -165,8 +208,8 @@ runs:
           }
         }
 
-        if ($version -ne '') {
-          $nsisArgs += "/DINFO_PRODUCTVERSION=$version"
+        if ($nsisVersion -ne '') {
+          $nsisArgs += "/DINFO_PRODUCTVERSION=$nsisVersion"
         }
 
         $nsisArgs += $nsiFile
