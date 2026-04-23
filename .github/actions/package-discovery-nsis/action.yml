@@ -1,0 +1,184 @@
+name: Package Discovery NSIS
+description: Package the Discovery agent as a standard or bootstrap NSIS installer directly in GitHub Actions.
+
+inputs:
+  mode:
+    description: "Installer mode. Allowed values: installer, bootstrap."
+    required: true
+  binary_path:
+    description: Absolute path to discovery.exe.
+    required: true
+  output_name:
+    description: Output file name for the generated installer.
+    required: true
+  version:
+    description: Optional version embedded into NSIS metadata.
+    required: false
+    default: ""
+  default_url:
+    description: Default API URL/host for standard installer builds.
+    required: false
+    default: ""
+  default_key:
+    description: Default API key for standard installer builds.
+    required: false
+    default: ""
+  discovery_enabled:
+    description: Default discovery flag used by the installer.
+    required: false
+    default: "1"
+  generic_install:
+    description: Build generic auto-provisioning flavor.
+    required: false
+    default: "false"
+  minimal_default:
+    description: Build standard installer with minimal mode enabled by default.
+    required: false
+    default: "false"
+  payload_url:
+    description: Stage 2 payload URL for bootstrap builds.
+    required: false
+    default: ""
+  payload_sha256:
+    description: Optional SHA256 for the bootstrap payload.
+    required: false
+    default: ""
+  payload_filename:
+    description: File name used by the bootstrapper for the downloaded payload.
+    required: false
+    default: discovery-stage2-installer.exe
+
+outputs:
+  artifact_path:
+    description: Absolute path to the generated installer artifact.
+    value: ${{ steps.package.outputs.artifact_path }}
+
+runs:
+  using: composite
+  steps:
+    - id: package
+      name: Package NSIS installer
+      shell: pwsh
+      run: |
+        function Ensure-WebView2Bootstrapper([string]$InstallerDir) {
+          $tmpDir = Join-Path $InstallerDir 'tmp'
+          $bootstrapperPath = Join-Path $tmpDir 'MicrosoftEdgeWebview2Setup.exe'
+          $minimumBytes = 100KB
+
+          if (-not (Test-Path $tmpDir)) {
+            New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
+          }
+
+          if (Test-Path $bootstrapperPath) {
+            $existing = Get-Item $bootstrapperPath -ErrorAction SilentlyContinue
+            if ($existing -and $existing.Length -ge $minimumBytes) {
+              return
+            }
+
+            Remove-Item $bootstrapperPath -Force -ErrorAction SilentlyContinue
+          }
+
+          Invoke-WebRequest -Uri 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile $bootstrapperPath -ErrorAction Stop
+
+          $downloaded = Get-Item $bootstrapperPath -ErrorAction Stop
+          if ($downloaded.Length -lt $minimumBytes) {
+            Remove-Item $bootstrapperPath -Force -ErrorAction SilentlyContinue
+            throw "Bootstrapper WebView2 invalido ou incompleto: $bootstrapperPath"
+          }
+        }
+
+        $mode = "${{ inputs.mode }}".Trim().ToLowerInvariant()
+        $binaryPath = "${{ inputs.binary_path }}"
+        $outputName = "${{ inputs.output_name }}"
+        $version = "${{ inputs.version }}".Trim()
+        $installerDir = Join-Path $env:GITHUB_WORKSPACE 'src\build\windows\installer'
+        $binDir = Join-Path $env:GITHUB_WORKSPACE 'src\build\bin'
+        $nsiFile = Join-Path $installerDir 'project.nsi'
+        $makensis = Get-Command makensis -ErrorAction SilentlyContinue
+
+        if (-not $makensis) {
+          throw 'makensis nao encontrado. Execute a action de setup do NSIS antes do empacotamento.'
+        }
+
+        if (-not (Test-Path $nsiFile)) {
+          throw "Arquivo NSIS nao encontrado: $nsiFile"
+        }
+
+        if (-not (Test-Path $binaryPath)) {
+          throw "Binario de entrada nao encontrado: $binaryPath"
+        }
+
+        if ($mode -ne 'installer' -and $mode -ne 'bootstrap') {
+          throw "Modo invalido para empacotamento: $mode"
+        }
+
+        if ($mode -eq 'installer') {
+          Ensure-WebView2Bootstrapper -InstallerDir $installerDir
+        }
+
+        $nsisArgs = @(
+          '/V3',
+          "/DARG_WAILS_AMD64_BINARY=$binaryPath",
+          "/DARG_OUTFILE_NAME=$outputName",
+          "/DARG_DEFAULT_DISCOVERY=${{ inputs.discovery_enabled }}"
+        )
+
+        if ($mode -eq 'installer') {
+          $defaultUrl = "${{ inputs.default_url }}"
+          $defaultKey = "${{ inputs.default_key }}"
+
+          if ($defaultUrl -ne '') {
+            $nsisArgs += "/DARG_DEFAULT_URL=$defaultUrl"
+          }
+
+          if ($defaultKey -ne '') {
+            $nsisArgs += "/DARG_DEFAULT_KEY=$defaultKey"
+          }
+
+          if ("${{ inputs.generic_install }}" -eq 'true') {
+            $nsisArgs += '/DARG_GENERIC_INSTALL=1'
+          }
+
+          if ("${{ inputs.minimal_default }}" -eq 'true') {
+            $nsisArgs += '/DARG_DEFAULT_MINIMAL=1'
+          }
+        }
+        else {
+          $payloadUrl = "${{ inputs.payload_url }}"
+          $payloadSha256 = "${{ inputs.payload_sha256 }}"
+          $payloadFilename = "${{ inputs.payload_filename }}"
+
+          if ($payloadUrl.Trim() -eq '') {
+            throw 'payload_url obrigatorio para builds bootstrap'
+          }
+
+          $nsisArgs += '/DARG_BOOTSTRAP_INSTALL=1'
+          $nsisArgs += "/DARG_PAYLOAD_URL=$payloadUrl"
+          $nsisArgs += "/DARG_PAYLOAD_FILENAME=$payloadFilename"
+
+          if ($payloadSha256.Trim() -ne '') {
+            $nsisArgs += "/DARG_PAYLOAD_SHA256=$payloadSha256"
+          }
+
+          if ("${{ inputs.generic_install }}" -eq 'true') {
+            $nsisArgs += '/DARG_GENERIC_INSTALL=1'
+          }
+        }
+
+        if ($version -ne '') {
+          $nsisArgs += "/DINFO_PRODUCTVERSION=$version"
+        }
+
+        $nsisArgs += $nsiFile
+        & $makensis.Source @nsisArgs
+
+        if ($LASTEXITCODE -ne 0) {
+          throw "Falha no makensis (exit code: $LASTEXITCODE)"
+        }
+
+        $artifactPath = Join-Path $binDir $outputName
+        if (-not (Test-Path $artifactPath)) {
+          throw "Artefato final nao encontrado: $artifactPath"
+        }
+
+        "artifact_path=$artifactPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8

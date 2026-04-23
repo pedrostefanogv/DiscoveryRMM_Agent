@@ -48,35 +48,36 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: src/go.mod
+          cache-dependency-path: |
+            src/go.mod
+            src/go.sum
 
-      - name: Install NSIS
-        shell: pwsh
-        run: choco install nsis -y --no-progress
+      - name: Setup NSIS
+        uses: ./.github/actions/setup-nsis
 
-      - name: Build installer
-        shell: pwsh
-        run: |
-          $params = @{
-            ProjectRoot = $PWD
-            Version = "${{ github.event.inputs.version }}"
-            OutputName = "${{ github.event.inputs.output_name }}"
-            DefaultUrl = "${{ github.event.inputs.default_url }}"
-            DefaultKey = "${{ github.event.inputs.default_key }}"
-            DiscoveryEnabled = "${{ github.event.inputs.discovery_enabled }}"
-          }
+      - name: Build agent binary
+        id: binary
+        uses: ./.github/actions/build-discovery-binary
+        with:
+          version: ${{ github.event.inputs.version }}
 
-          if ('${{ github.event.inputs.generic_install }}' -eq 'true') {
-            $params.GenericInstall = $true
-          }
-
-          if ('${{ github.event.inputs.minimal_default }}' -eq 'true') {
-            $params.MinimalDefault = $true
-          }
-
-          .\build\scripts\build-install-installer.ps1 @params
+      - name: Package installer
+        id: package
+        uses: ./.github/actions/package-discovery-nsis
+        with:
+          mode: installer
+          binary_path: ${{ steps.binary.outputs.binary_path }}
+          version: ${{ github.event.inputs.version }}
+          output_name: ${{ github.event.inputs.output_name }}
+          default_url: ${{ github.event.inputs.default_url }}
+          default_key: ${{ github.event.inputs.default_key }}
+          discovery_enabled: ${{ github.event.inputs.discovery_enabled }}
+          generic_install: ${{ github.event.inputs.generic_install }}
+          minimal_default: ${{ github.event.inputs.minimal_default }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: discovery-agent-installer
-          path: src/build/bin/*.exe
+          path: ${{ steps.package.outputs.artifact_path }}
+          if-no-files-found: error

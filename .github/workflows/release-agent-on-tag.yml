@@ -27,26 +27,19 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
           go-version-file: src/go.mod
+          cache-dependency-path: |
+            src/go.mod
+            src/go.sum
 
-      - name: Install NSIS
-        shell: pwsh
-        run: |
-          choco install nsis -y --no-progress
-          $nsisDirs = @(
-            'C:\Program Files (x86)\NSIS',
-            'C:\Program Files\NSIS'
-          )
-
-          foreach ($dir in $nsisDirs) {
-            if (Test-Path $dir) {
-              $dir | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
-            }
-          }
+      - name: Setup NSIS
+        uses: ./.github/actions/setup-nsis
 
       - name: Derive release metadata from tag
         id: meta
@@ -102,64 +95,61 @@ jobs:
           "install_asset_name=$installAssetName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "bootstrap_asset_name=$bootstrapAssetName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-      - name: Build release installer
-        shell: pwsh
-        run: |
-          $params = @{
-            ProjectRoot = $PWD
-            Version = "${{ steps.meta.outputs.version }}"
-            OutputName = "${{ steps.meta.outputs.install_asset_name }}"
-            DiscoveryEnabled = '1'
-          }
+      - name: Build agent binary
+        id: binary
+        uses: ./.github/actions/build-discovery-binary
+        with:
+          version: ${{ steps.meta.outputs.version }}
 
-          if ($env:DISCOVERY_DEFAULT_SERVER_URL) {
-            $params.DefaultUrl = $env:DISCOVERY_DEFAULT_SERVER_URL
-          }
+      - name: Package release installer
+        id: package_installer
+        uses: ./.github/actions/package-discovery-nsis
+        with:
+          mode: installer
+          binary_path: ${{ steps.binary.outputs.binary_path }}
+          version: ${{ steps.meta.outputs.version }}
+          output_name: ${{ steps.meta.outputs.install_asset_name }}
+          default_url: ${{ env.DISCOVERY_DEFAULT_SERVER_URL }}
+          default_key: ${{ env.DISCOVERY_DEFAULT_KEY }}
+          discovery_enabled: '1'
 
-          if ($env:DISCOVERY_DEFAULT_KEY) {
-            $params.DefaultKey = $env:DISCOVERY_DEFAULT_KEY
-          }
-
-          .\build\scripts\build-install-installer.ps1 @params
-
-      - name: Build release bootstrap installer
+      - name: Package release bootstrap installer
         if: ${{ env.DISCOVERY_BOOTSTRAP_PAYLOAD_URL != '' }}
+        id: package_bootstrap
+        uses: ./.github/actions/package-discovery-nsis
+        with:
+          mode: bootstrap
+          binary_path: ${{ steps.binary.outputs.binary_path }}
+          version: ${{ steps.meta.outputs.version }}
+          output_name: ${{ steps.meta.outputs.bootstrap_asset_name }}
+          discovery_enabled: '1'
+          payload_url: ${{ env.DISCOVERY_BOOTSTRAP_PAYLOAD_URL }}
+          payload_sha256: ${{ env.DISCOVERY_BOOTSTRAP_PAYLOAD_SHA256 }}
+          payload_filename: ${{ env.DISCOVERY_BOOTSTRAP_PAYLOAD_FILENAME }}
+
+      - name: Collect release assets
+        id: assets
         shell: pwsh
         run: |
-          $params = @{
-            ProjectRoot = $PWD
-            PayloadUrl = $env:DISCOVERY_BOOTSTRAP_PAYLOAD_URL
-            Version = "${{ steps.meta.outputs.version }}"
-            OutputName = "${{ steps.meta.outputs.bootstrap_asset_name }}"
-            DiscoveryEnabled = '1'
+          $files = @("${{ steps.package_installer.outputs.artifact_path }}")
+          $bootstrapPath = "${{ steps.package_bootstrap.outputs.artifact_path }}"
+
+          if ($bootstrapPath -ne '') {
+            $files += $bootstrapPath
           }
 
-          if ($env:DISCOVERY_BOOTSTRAP_PAYLOAD_SHA256) {
-            $params.PayloadSha256 = $env:DISCOVERY_BOOTSTRAP_PAYLOAD_SHA256
-          }
-
-          if ($env:DISCOVERY_BOOTSTRAP_PAYLOAD_FILENAME) {
-            $params.PayloadFileName = $env:DISCOVERY_BOOTSTRAP_PAYLOAD_FILENAME
-          }
-
-          .\build\scripts\build-bootstrap-installer.ps1 @params
+          "files<<EOF" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          $files | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "EOF" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           name: ${{ steps.meta.outputs.release_name }}
           tag_name: ${{ steps.meta.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           prerelease: ${{ steps.meta.outputs.prerelease }}
           make_latest: ${{ steps.meta.outputs.make_latest }}
           generate_release_notes: true
-
-      - name: Upload release installer asset
-        shell: pwsh
-        run: |
-          gh release upload "${{ steps.meta.outputs.tag }}" ".\src\build\bin\${{ steps.meta.outputs.install_asset_name }}" --clobber
-
-      - name: Upload release bootstrap asset
-        if: ${{ env.DISCOVERY_BOOTSTRAP_PAYLOAD_URL != '' }}
-        shell: pwsh
-        run: |
-          gh release upload "${{ steps.meta.outputs.tag }}" ".\src\build\bin\${{ steps.meta.outputs.bootstrap_asset_name }}" --clobber
+          files: ${{ steps.assets.outputs.files }}
+          fail_on_unmatched_files: true
