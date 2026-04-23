@@ -30,17 +30,33 @@ Unicode true
 ###
 ## !define PRODUCT_EXECUTABLE  "Application.exe"      # Default "${INFO_PROJECTNAME}.exe"
 ## !define UNINST_KEY_NAME     "UninstKeyInRegistry"  # Default "${INFO_COMPANYNAME}${INFO_PRODUCTNAME}"
+!ifndef INFO_PROJECTNAME
 !define INFO_PROJECTNAME    "discovery"
+!endif
+!ifndef INFO_COMPANYNAME
 !define INFO_COMPANYNAME    "Discovery"
+!endif
+!ifndef INFO_PRODUCTNAME
 !define INFO_PRODUCTNAME    "Discovery"
+!endif
 !ifndef INFO_PRODUCTVERSION
 !define INFO_PRODUCTVERSION "1.0.0"
 !endif
+!ifndef INFO_COPYRIGHT
 !define INFO_COPYRIGHT      "Copyright (c) 2026 Discovery"
+!endif
+!ifndef PRODUCT_EXECUTABLE
 !define PRODUCT_EXECUTABLE  "discovery.exe"
+!endif
+!ifndef UNINST_KEY_NAME
 !define UNINST_KEY_NAME     "Discovery.RMM"
+!endif
+!ifndef DISCOVERY_SERVICE_NAME
 !define DISCOVERY_SERVICE_NAME "DiscoveryAgent"
+!endif
+!ifndef DISCOVERY_UI_TASK_NAME
 !define DISCOVERY_UI_TASK_NAME "DiscoveryAgentUI"
+!endif
 
 !ifndef ARG_WAILS_AMD64_BINARY
 !ifdef WAILS_AMD64_BINARY

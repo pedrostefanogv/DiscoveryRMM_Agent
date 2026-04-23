@@ -1,0 +1,58 @@
+name: Build Discovery Binary
+description: Build discovery.exe for Windows directly inside GitHub Actions.
+
+inputs:
+  version:
+    description: Optional version embedded via ldflags.
+    required: false
+    default: ""
+
+outputs:
+  binary_path:
+    description: Absolute path to the generated discovery.exe binary.
+    value: ${{ steps.build.outputs.binary_path }}
+
+runs:
+  using: composite
+  steps:
+    - id: build
+      name: Build discovery.exe
+      shell: pwsh
+      run: |
+        $srcRoot = Join-Path $env:GITHUB_WORKSPACE 'src'
+        $binDir = Join-Path $srcRoot 'build\bin'
+        $binaryPath = Join-Path $binDir 'discovery.exe'
+        $version = "${{ inputs.version }}".Trim()
+
+        if (-not (Test-Path $binDir)) {
+          New-Item -ItemType Directory -Force -Path $binDir | Out-Null
+        }
+
+        Push-Location $srcRoot
+        try {
+          $env:CGO_ENABLED = '0'
+          $env:GOOS = 'windows'
+          $env:GOARCH = 'amd64'
+
+          $ldflags = @()
+          if ($version -ne '') {
+            $ldflags += "-X discovery/app.Version=$version"
+            $ldflags += "-X discovery/internal/buildinfo.Version=$version"
+          }
+
+          if ($ldflags.Count -gt 0) {
+            go build -ldflags ($ldflags -join ' ') -o $binaryPath .
+          }
+          else {
+            go build -o $binaryPath .
+          }
+        }
+        finally {
+          Pop-Location
+        }
+
+        if (-not (Test-Path $binaryPath)) {
+          throw "Binario do agente nao foi gerado: $binaryPath"
+        }
+
+        "binary_path=$binaryPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8

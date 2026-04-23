@@ -11,13 +11,22 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
+
+// safeHostnamePattern restricts hostnames to a conservative allowlist of
+// characters (RFC 1123 + IPv4 literals). Values that do not match cannot be
+// rebuilt into an onboarding URL, which lets static analyzers treat the
+// reconstructed URL as sanitized.
+var safeHostnamePattern = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$`)
 
 const (
 	onboardingDeployKeyTTL = 30 * time.Minute
@@ -194,27 +203,131 @@ func (a *App) applyOnboardingOffer(offer P2POnboardingRequest) (P2POnboardingRes
 	return a.registerWithDeployKey(offer.ServerURL, offer.DeployKey)
 }
 
-// validateServerURL ensures the URL uses http or https and has a non-empty host,
-// preventing SSRF via unexpected schemes (file://, data://, etc.).
-func validateServerURL(rawURL string) error {
-	u, err := url.Parse(rawURL)
+func isBlockedOnboardingHost(host string) bool {
+	h := strings.ToLower(strings.TrimSpace(host))
+	if h == "" || h == "localhost" || strings.HasSuffix(h, ".local") {
+		return true
+	}
+	ip := net.ParseIP(h)
+	if ip == nil {
+		return false
+	}
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified()
+}
+
+func hasBlockedResolvedIP(host string) bool {
+	ips, err := net.LookupIP(host)
 	if err != nil {
-		return fmt.Errorf("URL do servidor invalida: %w", err)
+		return true
 	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return fmt.Errorf("URL do servidor deve usar http ou https, obtido: %q", u.Scheme)
+	for _, ip := range ips {
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
+			return true
+		}
 	}
-	if u.Host == "" {
-		return fmt.Errorf("URL do servidor sem host")
+	return false
+}
+
+// normalizeServerURL validates and canonicalizes onboarding server URLs,
+// rejecting unsafe destinations such as local/private hosts. The returned URL
+// is rebuilt from validated components only — scheme and hostname are drawn
+// from a strict allowlist, the port (if any) is reparsed as an integer, and
+// user/query/fragment are stripped. This structural reconstruction is what
+// allows static taint analysis to treat the output as sanitized.
+func normalizeServerURL(rawURL string) (*url.URL, error) {
+	u, err := url.ParseRequestURI(strings.TrimSpace(rawURL))
+	if err != nil {
+		return nil, fmt.Errorf("URL do servidor invalida: %w", err)
 	}
-	return nil
+	// Scheme allowlist (fixed string selection, not taint-propagating).
+	var safeScheme string
+	switch u.Scheme {
+	case "http":
+		safeScheme = "http"
+	case "https":
+		safeScheme = "https"
+	default:
+		return nil, fmt.Errorf("URL do servidor deve usar http ou https, obtido: %q", u.Scheme)
+	}
+	hostname := strings.TrimSpace(u.Hostname())
+	if hostname == "" {
+		return nil, fmt.Errorf("URL do servidor sem host")
+	}
+	// Allowlist hostname characters: DNS labels or IPv4 literals only.
+	if net.ParseIP(hostname) == nil && !safeHostnamePattern.MatchString(hostname) {
+		return nil, fmt.Errorf("host do servidor nao permitido: %s", hostname)
+	}
+	if isBlockedOnboardingHost(hostname) {
+		return nil, fmt.Errorf("host do servidor nao permitido: %s", hostname)
+	}
+	if net.ParseIP(hostname) == nil && hasBlockedResolvedIP(hostname) {
+		return nil, fmt.Errorf("host do servidor resolve para endereco nao permitido: %s", hostname)
+	}
+	// Reparse port as integer so any extra characters are rejected.
+	safeHost := hostname
+	if portStr := u.Port(); portStr != "" {
+		port, err := strconv.Atoi(portStr)
+		if err != nil || port <= 0 || port > 65535 {
+			return nil, fmt.Errorf("porta do servidor invalida: %q", portStr)
+		}
+		safeHost = net.JoinHostPort(hostname, strconv.Itoa(port))
+	}
+	// Preserve path but run it through url.URL's own escaping so that only a
+	// canonical, non-tainted representation flows downstream.
+	safePath := u.EscapedPath()
+	// Rebuild from validated components only.
+	return &url.URL{
+		Scheme: safeScheme,
+		Host:   safeHost,
+		Path:   safePath,
+	}, nil
+}
+
+// buildOnboardingEndpoint constructs the final HTTP endpoint URL from scratch
+// using only values that have passed normalizeServerURL. The returned string is
+// assembled from individually validated parts (scheme, host, fixed path) which
+// short-circuits any taint flow from the original user-supplied URL.
+func buildOnboardingEndpoint(base *url.URL, fixedPath string) (string, error) {
+	if base == nil {
+		return "", fmt.Errorf("URL base ausente")
+	}
+	var scheme string
+	switch base.Scheme {
+	case "http":
+		scheme = "http"
+	case "https":
+		scheme = "https"
+	default:
+		return "", fmt.Errorf("scheme invalido: %q", base.Scheme)
+	}
+	hostname := base.Hostname()
+	if net.ParseIP(hostname) == nil && !safeHostnamePattern.MatchString(hostname) {
+		return "", fmt.Errorf("host invalido: %s", hostname)
+	}
+	host := hostname
+	if portStr := base.Port(); portStr != "" {
+		port, err := strconv.Atoi(portStr)
+		if err != nil || port <= 0 || port > 65535 {
+			return "", fmt.Errorf("porta invalida: %q", portStr)
+		}
+		host = net.JoinHostPort(hostname, strconv.Itoa(port))
+	}
+	if !strings.HasPrefix(fixedPath, "/") {
+		return "", fmt.Errorf("path deve comecar com '/': %q", fixedPath)
+	}
+	rebuilt := &url.URL{
+		Scheme: scheme,
+		Host:   host,
+		Path:   fixedPath,
+	}
+	return rebuilt.String(), nil
 }
 
 // registerWithDeployKey calls the server registration endpoint with the deploy key
 // and persists the returned credentials.
 func (a *App) registerWithDeployKey(serverURL, deployKey string) (P2POnboardingResult, error) {
-	serverURL = strings.TrimRight(strings.TrimSpace(serverURL), "/")
-	if err := validateServerURL(serverURL); err != nil {
+	baseURL, err := normalizeServerURL(serverURL)
+	if err != nil {
 		return P2POnboardingResult{}, err
 	}
 	hostname, _ := os.Hostname()
@@ -222,7 +335,10 @@ func (a *App) registerWithDeployKey(serverURL, deployKey string) (P2POnboardingR
 		"hostname":  hostname,
 		"deployKey": deployKey,
 	})
-	endpoint := serverURL + "/api/agent-install/register"
+	endpoint, err := buildOnboardingEndpoint(baseURL, "/api/agent-install/register")
+	if err != nil {
+		return P2POnboardingResult{}, err
+	}
 	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(payload))
 	if err != nil {
 		return P2POnboardingResult{}, err

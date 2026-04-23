@@ -30,7 +30,7 @@ Este documento define o baseline de segurança para desenvolvimento, revisão e 
 
 ## Proteções de Branch
 
-As branches críticas (`main`, `dev`, `beta`, `release`, `lts`) devem manter:
+As branches críticas (`dev`, `beta`, `release`, `lts`) devem manter:
 
 - Merge somente por Pull Request.
 - Aprovação obrigatória.
