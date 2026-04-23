@@ -1,62 +1,124 @@
-# Discovery (Wails + Go)
+# Discovery Agent (Wails + Go)
 
-Aplicativo desktop em Go com UI estilo loja para consumir o catalogo remoto e executar instalacao/remocao/atualizacao via winget.
+Agente desktop/servico para inventario, automacao e distribuicao P2P em ambientes Windows, com UI local em Wails e modo headless via Windows Service.
 
-## Etapa 1 (concluida): MVP funcional
+## Repositórios Relacionados
 
-- Leitura direta do catalogo JSON remoto.
-- Exibicao em cards com busca local por nome/id/publisher/categoria.
-- Acoes por app: instalar, remover, atualizar.
-- Acao global: atualizar tudo.
-- Consulta de apps instalados (`winget list`).
-- Aba de inventario (hardware + sistema + softwares).
-- Coleta por `osqueryi --json` quando disponivel, com fallback via PowerShell.
-- Deteccao de `osquery` e botao de instalacao via `winget` (`osquery.osquery`) quando nao encontrado.
-- Build desktop gerado em `build/bin/discovery.exe`.
+- Agent (este repositório): https://github.com/pedrostefanogv/DiscoveryRMM_Agent
+- Servidor de API: https://github.com/pedrostefanogv/DiscoveryRMM_API
 
-## Estrutura
+## Capacidades Atuais
 
-- `main.go`: bootstrap do Wails.
-- `app.go`: metodos expostos para a UI.
-- `internal/models`: structs do catalogo.
-- `internal/data`: client HTTP do catalogo.
-- `internal/winget`: wrapper dos comandos winget.
-- `internal/services`: servicos de dominio.
-- `frontend`: UI estatica (HTML/CSS/JS).
+- Execucao em dois modos:
+	- GUI desktop (Wails)
+	- Serviço Windows headless (`--service`)
+- Inventario de hardware/software com integracao osquery e fallback PowerShell.
+- App store e operações de pacote (install/remove/upgrade) com integração winget.
+- Automacao com politicas, execucao de tarefas e coleta de resultados.
+- P2P com descoberta local/libp2p, onboarding e distribuicao de artefatos.
+- Chat/IA integrado com ferramentas MCP internas.
+- Update do agente e fluxo de bootstrap via instalador NSIS.
 
-## Requisitos
+## Estrutura do Projeto
 
-- Windows com `winget` disponivel no PATH.
-- Go 1.23+ (testado com 1.26).
-- CLI Wails em `%USERPROFILE%\\go\\bin\\wails.exe`.
-- Opcional: osquery instalado (ex.: `C:\\Program Files\\osquery\\osqueryi.exe`).
+- `src/main.go`: entrypoint (GUI, service e flags de startup).
+- `src/app`: domínio principal do agente (P2P, sync, bridges e runtime).
+- `src/internal`: serviços internos (automação, inventário, service, update, mcp).
+- `src/frontend`: UI HTML/CSS/JS do Wails.
+- `src/build/windows/installer`: arquivos NSIS do instalador.
+- `DOCs`: documentacao tecnica e operacional.
 
-## Comandos
+## Requisitos de Build Local
+
+- Windows 10+.
+- Go 1.23+.
+- NSIS (makensis) no PATH.
+- Opcional para build GUI: CLI do Wails.
+
+## Build Local (Agente)
 
 ```powershell
-# no diretorio do projeto
-
+# raiz do repositório
+Set-Location .\src
 go mod tidy
+go test ./...
 go build ./...
-
-# build desktop (usa frontend estatico atual)
-& "$env:USERPROFILE\go\bin\wails.exe" build -s -nopackage
 ```
 
-## Etapa 2 (sugestao)
+## Build Automatizado do Instalador (Padrão)
 
-- Fila de tarefas com progresso por operacao (install/uninstall/upgrade).
-- Parse estruturado da saida do winget para status amigavel.
-- Mapa de apps instalados x catalogo para botao contextual (Instalar/Remover/Atualizar).
-- Exportar inventario em JSON e CSV.
+Script criado para gerar instalador padrao do agent (servico + discovery/p2p habilitado por padrao):
 
-## Etapa 3 (sugestao)
+```powershell
+# raiz do repositório
+.\build\scripts\build-install-installer.ps1 -ProjectRoot $PWD
+```
 
-- Persistencia local de preferencia/favoritos.
-- Filtros por categoria/licenca/tags.
-- Empacotamento NSIS e assinatura do binario.
+Saida esperada:
 
-## Documentacao do instalador
+- Binario do agent: `src/build/bin/discovery.exe`
+- Instalador: `src/build/bin/discovery-agent-install.exe`
 
-- Guia unico de payload e parametros: `DOCs/INSTALADOR_PAYLOAD_E_PARAMETROS.md`
-- Guia operacional offline/online + API: `DOCs/GUIA_INSTALADOR_OFFLINE_ONLINE_API.md`
+Parâmetros úteis:
+
+```powershell
+.\build\scripts\build-install-installer.ps1 `
+	-ProjectRoot $PWD `
+	-OutputName discovery-agent-acme.exe `
+	-DefaultUrl api.exemplo.com `
+	-DefaultKey <token> `
+	-DiscoveryEnabled 1 `
+	-MinimalDefault
+```
+
+## Build Bootstrap (Online)
+
+Script para gerar bootstrapper (baixa segunda etapa e executa instalador completo):
+
+```powershell
+.\build\scripts\build-bootstrap-installer.ps1 `
+	-ProjectRoot $PWD `
+	-PayloadUrl "https://cdn.exemplo.com/discovery-agent-install.exe" `
+	-PayloadSha256 "<sha256-opcional>"
+```
+
+## Automacao de Build no GitHub Actions
+
+Workflows adicionados:
+
+- `.github/workflows/build-agent-installer.yml`
+- `.github/workflows/build-agent-bootstrap.yml`
+- `.github/workflows/release-agent-on-tag.yml`
+
+Execucao:
+
+1. Acesse Actions no GitHub.
+2. Selecione `Build Agent Installer` para o instalador padrao ou `Build Agent Bootstrap Installer` para o bootstrap.
+3. Execute via `Run workflow` preenchendo os parametros opcionais.
+4. Baixe o artefato gerado (`discovery-agent-installer` ou `discovery-agent-bootstrap`).
+
+## Release Automatizado por Tag
+
+Quando uma tag Git no formato abaixo for enviada ao GitHub, o workflow `release-agent-on-tag.yml` faz o build do agent e publica os executaveis automaticamente em GitHub Releases:
+
+- Release normal: `v1.2.3`
+- Beta: `v1.2.3-beta.1`
+- LTS: `v1.2.3-lts.1`
+
+Comportamento:
+
+- `v1.2.3`: release estavel normal.
+- `v1.2.3-beta.1`: release marcada como prerelease.
+- `v1.2.3-lts.1`: release LTS sem promover como latest.
+
+O workflow utiliza a propria tag como versao embutida no binario via ldflags e publica os artefatos em GitHub Releases.
+
+## Observacao sobre Operacao em Rede
+
+O instalador padrao ja registra e inicia o Windows Service do agent e mantem discovery/p2p habilitado para operacao em rede local. A comunicacao de entrada pode depender de regra de firewall da maquina/ambiente.
+
+## Documentação
+
+- Mapa de documentacao: `DOCs/README.md`
+- Guia operacional de instalador (ponteiro atual): `DOCs/GUIA_INSTALADOR_OFFLINE_ONLINE_API.md`
+- Arquitetura detalhada: `ARCHITECTURE.md`
