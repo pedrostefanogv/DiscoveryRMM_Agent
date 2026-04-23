@@ -1,0 +1,76 @@
+name: Build Agent Bootstrap Installer
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Versao opcional para embed no binario/instalador (ex. 1.2.3)
+        required: false
+        default: ""
+      payload_url:
+        description: URL do instalador de segunda etapa
+        required: true
+        type: string
+      payload_sha256:
+        description: SHA256 do payload (opcional)
+        required: false
+        default: ""
+      payload_filename:
+        description: Nome do payload salvo localmente
+        required: false
+        default: discovery-stage2-installer.exe
+      output_name:
+        description: Nome do bootstrap de saida
+        required: false
+        default: discovery-agent-bootstrap.exe
+      discovery_enabled:
+        description: Habilitar discovery/p2p por padrao (0 ou 1)
+        required: false
+        default: "1"
+      generic_install:
+        description: Gerar bootstrap generico para auto provisioning P2P
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  build-bootstrap:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: src/go.mod
+
+      - name: Install NSIS
+        shell: pwsh
+        run: choco install nsis -y --no-progress
+
+      - name: Build bootstrap installer
+        shell: pwsh
+        run: |
+          $params = @{
+            ProjectRoot = $PWD
+            PayloadUrl = "${{ github.event.inputs.payload_url }}"
+            Version = "${{ github.event.inputs.version }}"
+            PayloadSha256 = "${{ github.event.inputs.payload_sha256 }}"
+            PayloadFileName = "${{ github.event.inputs.payload_filename }}"
+            OutputName = "${{ github.event.inputs.output_name }}"
+            DiscoveryEnabled = "${{ github.event.inputs.discovery_enabled }}"
+          }
+
+          if ('${{ github.event.inputs.generic_install }}' -eq 'true') {
+            $params.GenericInstall = $true
+          }
+
+          .\build\scripts\build-bootstrap-installer.ps1 @params
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: discovery-agent-bootstrap
+          path: src/build/bin/*.exe
