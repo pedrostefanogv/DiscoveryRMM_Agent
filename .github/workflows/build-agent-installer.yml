@@ -44,6 +44,21 @@ jobs:
         with:
           go-version-file: src/go.mod
 
+      - name: Setup MinGW (CGO for Wails)
+        shell: pwsh
+        run: |
+          $mingwDirs = @(
+            'C:\ProgramData\Chocolatey\lib\mingw\tools\install\mingw64\bin',
+            'C:\msys64\mingw64\bin',
+            'C:\msys64\usr\bin'
+          )
+          foreach ($dir in $mingwDirs) {
+            if (Test-Path $dir) {
+              $dir | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+              Write-Output "Added MinGW to PATH: $dir"
+            }
+          }
+
       - name: Install NSIS
         shell: pwsh
         run: choco install nsis -y --no-progress

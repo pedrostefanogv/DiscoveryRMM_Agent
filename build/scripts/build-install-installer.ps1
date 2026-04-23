@@ -58,21 +58,16 @@ if (-not (Test-Path $binDir)) {
 Write-Output "[1/3] Build do agente (Windows AMD64)..."
 Push-Location $srcRoot
 try {
-    $env:CGO_ENABLED = "0"
+    $env:CGO_ENABLED = "1"
     $env:GOOS = "windows"
     $env:GOARCH = "amd64"
-    $ldflags = @()
+    $ldflags = @("-H=windowsgui")
     if ($Version -ne "") {
         $ldflags += "-X discovery/app.Version=$Version"
         $ldflags += "-X discovery/internal/buildinfo.Version=$Version"
     }
 
-    if ($ldflags.Count -gt 0) {
-        go build -ldflags ($ldflags -join ' ') -o $agentExe .
-    }
-    else {
-        go build -o $agentExe .
-    }
+    go build -tags "desktop,production" -ldflags ($ldflags -join ' ') -o $agentExe .
 }
 finally {
     Pop-Location
