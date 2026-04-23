@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -194,27 +195,46 @@ func (a *App) applyOnboardingOffer(offer P2POnboardingRequest) (P2POnboardingRes
 	return a.registerWithDeployKey(offer.ServerURL, offer.DeployKey)
 }
 
-// validateServerURL ensures the URL uses http or https and has a non-empty host,
-// preventing SSRF via unexpected schemes (file://, data://, etc.).
-func validateServerURL(rawURL string) error {
-	u, err := url.Parse(rawURL)
+func isBlockedOnboardingHost(host string) bool {
+	h := strings.ToLower(strings.TrimSpace(host))
+	if h == "" || h == "localhost" || strings.HasSuffix(h, ".local") {
+		return true
+	}
+	ip := net.ParseIP(h)
+	if ip == nil {
+		return false
+	}
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified()
+}
+
+// normalizeServerURL validates and canonicalizes onboarding server URLs,
+// rejecting unsafe destinations such as local/private hosts.
+func normalizeServerURL(rawURL string) (*url.URL, error) {
+	u, err := url.ParseRequestURI(strings.TrimSpace(rawURL))
 	if err != nil {
-		return fmt.Errorf("URL do servidor invalida: %w", err)
+		return nil, fmt.Errorf("URL do servidor invalida: %w", err)
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
-		return fmt.Errorf("URL do servidor deve usar http ou https, obtido: %q", u.Scheme)
+		return nil, fmt.Errorf("URL do servidor deve usar http ou https, obtido: %q", u.Scheme)
 	}
-	if u.Host == "" {
-		return fmt.Errorf("URL do servidor sem host")
+	hostname := strings.TrimSpace(u.Hostname())
+	if hostname == "" {
+		return nil, fmt.Errorf("URL do servidor sem host")
 	}
-	return nil
+	if isBlockedOnboardingHost(hostname) {
+		return nil, fmt.Errorf("host do servidor nao permitido: %s", hostname)
+	}
+	u.User = nil
+	u.RawQuery = ""
+	u.Fragment = ""
+	return u, nil
 }
 
 // registerWithDeployKey calls the server registration endpoint with the deploy key
 // and persists the returned credentials.
 func (a *App) registerWithDeployKey(serverURL, deployKey string) (P2POnboardingResult, error) {
-	serverURL = strings.TrimRight(strings.TrimSpace(serverURL), "/")
-	if err := validateServerURL(serverURL); err != nil {
+	baseURL, err := normalizeServerURL(serverURL)
+	if err != nil {
 		return P2POnboardingResult{}, err
 	}
 	hostname, _ := os.Hostname()
@@ -222,8 +242,9 @@ func (a *App) registerWithDeployKey(serverURL, deployKey string) (P2POnboardingR
 		"hostname":  hostname,
 		"deployKey": deployKey,
 	})
-	endpoint := serverURL + "/api/agent-install/register"
-	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(payload))
+	endpointURL := *baseURL
+	endpointURL.Path = strings.TrimRight(endpointURL.Path, "/") + "/api/agent-install/register"
+	req, err := http.NewRequest(http.MethodPost, endpointURL.String(), bytes.NewReader(payload))
 	if err != nil {
 		return P2POnboardingResult{}, err
 	}
