@@ -14,6 +14,25 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+var allowedExecCommands = map[string]struct{}{
+	"cmd":        {},
+	"msiexec":    {},
+	"powershell": {},
+	"pwsh":       {},
+	"winget":     {},
+}
+
+func normalizeExecutableCommand(command string) (string, bool) {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return "", false
+	}
+	base := strings.ToLower(strings.TrimSpace(filepath.Base(command)))
+	base = strings.TrimSuffix(base, strings.ToLower(filepath.Ext(base)))
+	_, ok := allowedExecCommands[base]
+	return base, ok
+}
+
 func parseHandshakeAck(raw any) (bool, string) {
 	arr, ok := raw.([]any)
 	if !ok {
@@ -120,15 +139,13 @@ func executeCommand(parent context.Context, cmdType string, payload any) (int, s
 		if command == "" {
 			return 2, "", "payload sem executavel"
 		}
-		// Resolve the executable to an absolute path before execution to prevent
-		// PATH-hijacking and clarify to static analysis that the input is validated.
-		resolved, err := exec.LookPath(command)
+		normalized, ok := normalizeExecutableCommand(command)
+		if !ok {
+			return 2, "", fmt.Sprintf("executavel nao permitido: %s", command)
+		}
+		resolved, err := exec.LookPath(normalized)
 		if err != nil {
-			// If not in PATH, accept only absolute or relative-with-extension paths.
-			if !filepath.IsAbs(command) && filepath.Ext(command) == "" {
-				return 2, "", fmt.Sprintf("executavel nao encontrado: %s", command)
-			}
-			resolved = command
+			return 2, "", fmt.Sprintf("executavel nao encontrado: %s", normalized)
 		}
 		cmd = exec.CommandContext(ctx, resolved, args...)
 	default:
