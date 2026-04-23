@@ -207,6 +207,19 @@ func isBlockedOnboardingHost(host string) bool {
 	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified()
 }
 
+func hasBlockedResolvedIP(host string) bool {
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		return true
+	}
+	for _, ip := range ips {
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
+			return true
+		}
+	}
+	return false
+}
+
 // normalizeServerURL validates and canonicalizes onboarding server URLs,
 // rejecting unsafe destinations such as local/private hosts.
 func normalizeServerURL(rawURL string) (*url.URL, error) {
@@ -223,6 +236,9 @@ func normalizeServerURL(rawURL string) (*url.URL, error) {
 	}
 	if isBlockedOnboardingHost(hostname) {
 		return nil, fmt.Errorf("host do servidor nao permitido: %s", hostname)
+	}
+	if net.ParseIP(hostname) == nil && hasBlockedResolvedIP(hostname) {
+		return nil, fmt.Errorf("host do servidor resolve para endereco nao permitido: %s", hostname)
 	}
 	u.User = nil
 	u.RawQuery = ""
@@ -244,7 +260,11 @@ func (a *App) registerWithDeployKey(serverURL, deployKey string) (P2POnboardingR
 	})
 	endpointURL := *baseURL
 	endpointURL.Path = strings.TrimRight(endpointURL.Path, "/") + "/api/agent-install/register"
-	req, err := http.NewRequest(http.MethodPost, endpointURL.String(), bytes.NewReader(payload))
+	safeEndpointURL, err := normalizeServerURL(endpointURL.String())
+	if err != nil {
+		return P2POnboardingResult{}, err
+	}
+	req, err := http.NewRequest(http.MethodPost, safeEndpointURL.String(), bytes.NewReader(payload))
 	if err != nil {
 		return P2POnboardingResult{}, err
 	}
