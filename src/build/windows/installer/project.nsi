@@ -237,7 +237,8 @@ Page custom AgentConfigPage AgentConfigPageLeave
 
 Name "${INFO_PRODUCTNAME}"
 OutFile "..\..\bin\${BUILD_OUTFILE_NAME}" # Name of the installer's file.
-InstallDir "$PROGRAMFILES64\${INFO_COMPANYNAME}\${INFO_PRODUCTNAME}" # Default installing folder ($PROGRAMFILES is Program Files folder).
+InstallDir "$PROGRAMFILES64\${INFO_PRODUCTNAME}" # Default installing folder ($PROGRAMFILES is Program Files folder).
+InstallDirRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${UNINST_KEY_NAME}" "InstallLocation"
 ShowInstDetails show # This will always show the installation details.
 
 Function .onInit
@@ -257,6 +258,12 @@ Function .onInit
    ${If} "${BUILD_UPDATE_INSTALL}" == "1"
       StrCpy $MinimalMode "1"
       SetSilent silent
+
+      # Em update, preservar pasta da instalacao existente para evitar migracao de path.
+      ReadRegStr $R2 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${UNINST_KEY_NAME}" "InstallLocation"
+      ${If} $R2 != ""
+         StrCpy $INSTDIR $R2
+      ${EndIf}
    ${EndIf}
 
    # Normalizar defaults inválidos
@@ -392,6 +399,9 @@ Section
          Call SaveAgentConfig
          Call DownloadAndRunStage2
       !else
+         # Atualizacao in-place: parar instancias anteriores para evitar lock no executavel.
+         Call PrepareForInPlaceUpdate
+
          !insertmacro wails.webview2runtime
          !insertmacro wails.files
 
@@ -414,6 +424,7 @@ Section
          !insertmacro wails.associateCustomProtocols
 
          !insertmacro wails.writeUninstaller
+         WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${UNINST_KEY_NAME}" "InstallLocation" "$INSTDIR"
       !endif
 SectionEnd
 
@@ -591,6 +602,20 @@ Function EnsureSharedDataDir
    ${EndIf}
    CreateDirectory "$R0\Discovery"
    CreateDirectory "$R0\Discovery\logs"
+FunctionEnd
+
+Function PrepareForInPlaceUpdate
+   DetailPrint "Preparando atualizacao in-place (encerrando instancias em execucao)..."
+
+   # Tentar remover startup task antiga e service antes de atualizar binarios.
+   Call UnregisterUIStartupTask
+   Call UnregisterWindowsService
+
+   # Garantir que nenhuma instancia do app permaneceu em execucao.
+   ExecWait '"$SYSDIR\taskkill.exe" /IM "${PRODUCT_EXECUTABLE}" /F /T' $R0
+   ${If} $R0 != 0
+      DetailPrint "Aviso: taskkill retornou codigo $R0 (pode nao haver processo em execucao)."
+   ${EndIf}
 FunctionEnd
 
 Function RegisterWindowsService
