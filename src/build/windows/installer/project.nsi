@@ -623,7 +623,7 @@ Function RegisterUIStartupTask
    FileWrite $R8 "  $$action = New-ScheduledTaskAction -Execute '$INSTDIR\${PRODUCT_EXECUTABLE}' -Argument '--startup-minimized --startup-source=task-scheduler'$\r$\n"
    FileWrite $R8 "  $$trigger = New-ScheduledTaskTrigger -AtLogOn$\r$\n"
    FileWrite $R8 "  $$trigger.Delay = 'PT30S'$\r$\n"
-   FileWrite $R8 "  $$principal = New-ScheduledTaskPrincipal -GroupId 'S-1-5-32-545' -LogonType Interactive -RunLevel Limited$\r$\n"
+   FileWrite $R8 "  $$principal = New-ScheduledTaskPrincipal -GroupId 'S-1-5-32-545' -RunLevel Limited$\r$\n"
    FileWrite $R8 "  Register-ScheduledTask -TaskName '${DISCOVERY_UI_TASK_NAME}' -Action $$action -Trigger $$trigger -Principal $$principal -Description 'Discovery UI autostart for any logged-on user' -Force | Out-Null$\r$\n"
    FileWrite $R8 "  exit 0$\r$\n"
    FileWrite $R8 "} catch {$\r$\n"
