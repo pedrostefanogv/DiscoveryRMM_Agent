@@ -12,6 +12,7 @@ import (
 	"math"
 	"math/big"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -193,15 +194,35 @@ func (a *App) applyOnboardingOffer(offer P2POnboardingRequest) (P2POnboardingRes
 	return a.registerWithDeployKey(offer.ServerURL, offer.DeployKey)
 }
 
+// validateServerURL ensures the URL uses http or https and has a non-empty host,
+// preventing SSRF via unexpected schemes (file://, data://, etc.).
+func validateServerURL(rawURL string) error {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("URL do servidor invalida: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("URL do servidor deve usar http ou https, obtido: %q", u.Scheme)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("URL do servidor sem host")
+	}
+	return nil
+}
+
 // registerWithDeployKey calls the server registration endpoint with the deploy key
 // and persists the returned credentials.
 func (a *App) registerWithDeployKey(serverURL, deployKey string) (P2POnboardingResult, error) {
+	serverURL = strings.TrimRight(strings.TrimSpace(serverURL), "/")
+	if err := validateServerURL(serverURL); err != nil {
+		return P2POnboardingResult{}, err
+	}
 	hostname, _ := os.Hostname()
 	payload, _ := json.Marshal(map[string]string{
 		"hostname":  hostname,
 		"deployKey": deployKey,
 	})
-	endpoint := strings.TrimRight(strings.TrimSpace(serverURL), "/") + "/api/agent-install/register"
+	endpoint := serverURL + "/api/agent-install/register"
 	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(payload))
 	if err != nil {
 		return P2POnboardingResult{}, err
