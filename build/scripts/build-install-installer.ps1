@@ -114,6 +114,15 @@ if ($GenericInstall) {
 }
 if ($Version -ne "") {
     $nsisArgs += "/DINFO_PRODUCTVERSION=$Version"
+
+    # Calcular versao numerica X.X.X.X para VIFileVersion do NSIS (nao aceita pre-release semver)
+    # Ex: 1.0.5-beta.1 -> 1.0.5.1 | 1.0.5 -> 1.0.5.0
+    $nsisFileVersion = "1.0.0.0"
+    if ($Version -match '^(\d+)\.(\d+)\.(\d+)(?:[._-][a-zA-Z]*\.?(\d+))?') {
+        $build = if ($Matches[4]) { $Matches[4] } else { "0" }
+        $nsisFileVersion = "$($Matches[1]).$($Matches[2]).$($Matches[3]).$build"
+    }
+    $nsisArgs += "/DINFO_FILEVERSION=$nsisFileVersion"
 }
 
 $nsisArgs += $nsiFile

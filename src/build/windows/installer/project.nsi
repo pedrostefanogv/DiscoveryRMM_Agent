@@ -36,6 +36,9 @@ Unicode true
 !ifndef INFO_PRODUCTVERSION
 !define INFO_PRODUCTVERSION "1.0.0"
 !endif
+!ifndef INFO_FILEVERSION
+!define INFO_FILEVERSION "1.0.0.0"
+!endif
 !define INFO_COPYRIGHT      "Copyright (c) 2026 Discovery"
 !define PRODUCT_EXECUTABLE  "discovery.exe"
 !define UNINST_KEY_NAME     "Discovery.RMM"
@@ -166,8 +169,8 @@ Unicode true
 !include "wails_tools.nsh"
 
 # The version information for this two must consist of 4 parts
-VIProductVersion "${INFO_PRODUCTVERSION}.0"
-VIFileVersion    "${INFO_PRODUCTVERSION}.0"
+VIProductVersion "${INFO_FILEVERSION}"
+VIFileVersion    "${INFO_FILEVERSION}"
 
 VIAddVersionKey "CompanyName"     "${INFO_COMPANYNAME}"
 VIAddVersionKey "FileDescription" "${INFO_PRODUCTNAME} Installer"
