@@ -9,6 +9,7 @@ param(
     [string]$OutputName = "discovery-agent-bootstrap.exe",
     [ValidateSet("0", "1")]
     [string]$DiscoveryEnabled = "1",
+    [string]$ExpectedTag = "",
     [switch]$GenericInstall
 )
 
@@ -65,13 +66,37 @@ Assert-Command go
 $makensisExe = Resolve-MakensisPath
 $windresExe = Resolve-WindresPath
 
+$parsedPayloadUrl = $null
+if (-not [Uri]::TryCreate($PayloadUrl, [System.UriKind]::Absolute, [ref]$parsedPayloadUrl)) {
+    throw "PayloadUrl inválida: $PayloadUrl"
+}
+
+if ($parsedPayloadUrl.Scheme -ne "https") {
+    throw "PayloadUrl deve usar HTTPS: $PayloadUrl"
+}
+
+if ($ExpectedTag -ne "") {
+    $expectedSegment = "/releases/download/$ExpectedTag/"
+    if (-not $PayloadUrl.Contains($expectedSegment)) {
+        throw "PayloadUrl não corresponde à tag esperada '$ExpectedTag': $PayloadUrl"
+    }
+}
+
 $srcRoot = Join-Path $ProjectRoot "src"
+$syncIconsScript = Join-Path $ProjectRoot "build\scripts\sync-icons.ps1"
 $binDir = Join-Path $srcRoot "build\bin"
 $installerDir = Join-Path $srcRoot "build\windows\installer"
 $nsiFile = Join-Path $installerDir "project.nsi"
 $agentExe = Join-Path $binDir "discovery-agent.exe"
 $iconPath = Join-Path $srcRoot "build\windows\icon.ico"
 $sysoPath = Join-Path $srcRoot "resource_windows_amd64.syso"
+
+if (-not (Test-Path $syncIconsScript)) {
+    throw "Script de sincronizacao de icones nao encontrado: $syncIconsScript"
+}
+
+Write-Output "  Sincronizando icones a partir de build\\*.png..."
+& $syncIconsScript -ProjectRoot $ProjectRoot
 
 if (-not (Test-Path $nsiFile)) {
     throw "Arquivo NSIS não encontrado: $nsiFile"
@@ -128,6 +153,10 @@ if (-not (Test-Path $agentExe)) {
 }
 
 Write-Output "[2/3] Build do bootstrap installer (NSIS)..."
+Write-Output "  Payload URL: $PayloadUrl"
+if ($ExpectedTag -ne "") {
+    Write-Output "  Tag esperada para payload: $ExpectedTag"
+}
 $nsisArgs = @(
     "/V3",
     "/INPUTCHARSET",

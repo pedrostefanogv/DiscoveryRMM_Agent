@@ -64,12 +64,20 @@ $makensisExe = Resolve-MakensisPath
 $windresExe = Resolve-WindresPath
 
 $srcRoot = Join-Path $ProjectRoot "src"
+$syncIconsScript = Join-Path $ProjectRoot "build\scripts\sync-icons.ps1"
 $binDir = Join-Path $srcRoot "build\bin"
 $installerDir = Join-Path $srcRoot "build\windows\installer"
 $nsiFile = Join-Path $installerDir "project.nsi"
 $agentExe = Join-Path $binDir "discovery-agent.exe"
 $iconPath = Join-Path $srcRoot "build\windows\icon.ico"
 $sysoPath = Join-Path $srcRoot "resource_windows_amd64.syso"
+
+if (-not (Test-Path $syncIconsScript)) {
+    throw "Script de sincronizacao de icones nao encontrado: $syncIconsScript"
+}
+
+Write-Output "  Sincronizando icones a partir de build\\*.png..."
+& $syncIconsScript -ProjectRoot $ProjectRoot
 
 if (-not (Test-Path $nsiFile)) {
     throw "Arquivo NSIS não encontrado: $nsiFile"

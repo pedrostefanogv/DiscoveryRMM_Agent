@@ -64,7 +64,13 @@ func main() {
 	}
 	log.Printf("[startup][window] frame=%s frameless=%t width=%d height=%d startMinimized=%t", startupWindowFrame, startupFrameless, appkg.WindowWidth, appkg.WindowHeight, startupMinimized)
 
-	app := appkg.NewApp(appkg.AppStartupOptions{DebugMode: startupDebugMode, StartMinimized: startupMinimized, TrayIcon: trayIconICO})
+	app := appkg.NewApp(appkg.AppStartupOptions{
+		DebugMode:            startupDebugMode,
+		StartMinimized:       startupMinimized,
+		TrayIcon:             trayIconICO,
+		TrayProvisioningIcon: trayProvisioningICO,
+		TrayOfflineIcon:      trayOfflineICO,
+	})
 
 	singleInstance := &options.SingleInstanceLock{
 		UniqueId: "com.discovery.app",

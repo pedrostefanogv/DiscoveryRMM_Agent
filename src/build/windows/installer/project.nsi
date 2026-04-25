@@ -543,6 +543,8 @@ Function DownloadAndRunStage2
       Abort
    ${EndIf}
 
+   DetailPrint "Payload URL: $PayloadUrl"
+
    ${If} $PayloadFileName == ""
       StrCpy $PayloadFileName "discovery-stage2-installer.exe"
    ${EndIf}

@@ -14,9 +14,6 @@ jobs:
     env:
       DISCOVERY_DEFAULT_SERVER_URL: ${{ vars.DISCOVERY_DEFAULT_SERVER_URL }}
       DISCOVERY_DEFAULT_KEY: ${{ secrets.DISCOVERY_DEFAULT_KEY }}
-      DISCOVERY_BOOTSTRAP_PAYLOAD_URL: ${{ vars.DISCOVERY_BOOTSTRAP_PAYLOAD_URL }}
-      DISCOVERY_BOOTSTRAP_PAYLOAD_SHA256: ${{ vars.DISCOVERY_BOOTSTRAP_PAYLOAD_SHA256 }}
-      DISCOVERY_BOOTSTRAP_PAYLOAD_FILENAME: ${{ vars.DISCOVERY_BOOTSTRAP_PAYLOAD_FILENAME }}
 
     steps:
       - name: Checkout
@@ -112,6 +109,8 @@ jobs:
           $releaseName = "Discovery Agent $tag"
           $installAssetName = "Discovery-Agent-Setup-$version.exe"
           $bootstrapAssetName = "Discovery-Agent-Bootstrap-$version.exe"
+          $agentAssetName = "Discovery-Agent-$version.exe"
+          $manifestAssetName = "Discovery-Agent-Manifest-$version.json"
 
           if ($version -match '(^|-)beta(\.|$)') {
             $channel = 'beta'
@@ -120,6 +119,8 @@ jobs:
             $releaseName = "Discovery Agent Beta $tag"
             $installAssetName = "Discovery-Agent-Beta-Setup-$version.exe"
             $bootstrapAssetName = "Discovery-Agent-Beta-Bootstrap-$version.exe"
+            $agentAssetName = "Discovery-Agent-Beta-$version.exe"
+            $manifestAssetName = "Discovery-Agent-Beta-Manifest-$version.json"
           }
           elseif ($version -match '(^|-)lts(\.|$)') {
             $channel = 'lts'
@@ -128,6 +129,8 @@ jobs:
             $releaseName = "Discovery Agent LTS $tag"
             $installAssetName = "Discovery-Agent-LTS-Setup-$version.exe"
             $bootstrapAssetName = "Discovery-Agent-LTS-Bootstrap-$version.exe"
+            $agentAssetName = "Discovery-Agent-LTS-$version.exe"
+            $manifestAssetName = "Discovery-Agent-LTS-Manifest-$version.json"
           }
 
           "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
@@ -138,48 +141,8 @@ jobs:
           "release_name=$releaseName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "install_asset_name=$installAssetName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "bootstrap_asset_name=$bootstrapAssetName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-
-      - name: Build release installer
-        shell: pwsh
-        run: |
-          $params = @{
-            ProjectRoot = $PWD
-            Version = "${{ steps.meta.outputs.version }}"
-            OutputName = "${{ steps.meta.outputs.install_asset_name }}"
-            DiscoveryEnabled = '1'
-          }
-
-          if ($env:DISCOVERY_DEFAULT_SERVER_URL) {
-            $params.DefaultUrl = $env:DISCOVERY_DEFAULT_SERVER_URL
-          }
-
-          if ($env:DISCOVERY_DEFAULT_KEY) {
-            $params.DefaultKey = $env:DISCOVERY_DEFAULT_KEY
-          }
-
-          .\build\scripts\build-install-installer.ps1 @params
-
-      - name: Build release bootstrap installer
-        if: ${{ env.DISCOVERY_BOOTSTRAP_PAYLOAD_URL != '' }}
-        shell: pwsh
-        run: |
-          $params = @{
-            ProjectRoot = $PWD
-            PayloadUrl = $env:DISCOVERY_BOOTSTRAP_PAYLOAD_URL
-            Version = "${{ steps.meta.outputs.version }}"
-            OutputName = "${{ steps.meta.outputs.bootstrap_asset_name }}"
-            DiscoveryEnabled = '1'
-          }
-
-          if ($env:DISCOVERY_BOOTSTRAP_PAYLOAD_SHA256) {
-            $params.PayloadSha256 = $env:DISCOVERY_BOOTSTRAP_PAYLOAD_SHA256
-          }
-
-          if ($env:DISCOVERY_BOOTSTRAP_PAYLOAD_FILENAME) {
-            $params.PayloadFileName = $env:DISCOVERY_BOOTSTRAP_PAYLOAD_FILENAME
-          }
-
-          .\build\scripts\build-bootstrap-installer.ps1 @params
+          "agent_asset_name=$agentAssetName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "manifest_asset_name=$manifestAssetName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Cleanup duplicate draft releases for tag
         shell: pwsh
@@ -208,7 +171,37 @@ jobs:
             Invoke-RestMethod -Method Delete -Uri "https://api.github.com/repos/$repo/releases/$($draft.id)" -Headers $headers
           }
 
-      - name: Create GitHub Release and upload installer asset
+      - name: Build release installer
+        shell: pwsh
+        run: |
+          $params = @{
+            ProjectRoot = $PWD
+            Version = "${{ steps.meta.outputs.version }}"
+            OutputName = "${{ steps.meta.outputs.install_asset_name }}"
+            DiscoveryEnabled = '1'
+          }
+
+          if ($env:DISCOVERY_DEFAULT_SERVER_URL) {
+            $params.DefaultUrl = $env:DISCOVERY_DEFAULT_SERVER_URL
+          }
+
+          if ($env:DISCOVERY_DEFAULT_KEY) {
+            $params.DefaultKey = $env:DISCOVERY_DEFAULT_KEY
+          }
+
+          .\build\scripts\build-install-installer.ps1 @params
+
+      - name: Prepare standalone agent asset
+        shell: pwsh
+        run: |
+          $source = Join-Path $PWD "src/build/bin/discovery-agent.exe"
+          $target = Join-Path $PWD "src/build/bin/${{ steps.meta.outputs.agent_asset_name }}"
+          if (-not (Test-Path $source)) {
+            throw "Binario standalone nao encontrado: $source"
+          }
+          Copy-Item -Path $source -Destination $target -Force
+
+      - name: Create GitHub Release and upload installer + standalone agent
         uses: softprops/action-gh-release@v2
         with:
           name: ${{ steps.meta.outputs.release_name }}
@@ -216,11 +209,116 @@ jobs:
           prerelease: ${{ steps.meta.outputs.prerelease }}
           make_latest: ${{ steps.meta.outputs.make_latest }}
           generate_release_notes: true
-          files: src/build/bin/${{ steps.meta.outputs.install_asset_name }}
+          files: |
+            src/build/bin/${{ steps.meta.outputs.install_asset_name }}
+            src/build/bin/${{ steps.meta.outputs.agent_asset_name }}
 
-      - name: Upload release bootstrap asset
-        if: ${{ env.DISCOVERY_BOOTSTRAP_PAYLOAD_URL != '' }}
+      - name: Compute bootstrap payload metadata
+        id: payload
+        shell: pwsh
+        run: |
+          $installAssetPath = Join-Path $PWD "src/build/bin/${{ steps.meta.outputs.install_asset_name }}"
+          if (-not (Test-Path $installAssetPath)) {
+            throw "Installer asset nao encontrado: $installAssetPath"
+          }
+
+          $sha = (Get-FileHash -Algorithm SHA256 -Path $installAssetPath).Hash.ToLowerInvariant()
+          $payloadUrl = "${{ github.server_url }}/${{ github.repository }}/releases/download/${{ steps.meta.outputs.tag }}/${{ steps.meta.outputs.install_asset_name }}"
+
+          "payload_url=$payloadUrl" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "payload_sha256=$sha" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Build release bootstrap installer
+        shell: pwsh
+        run: |
+          $params = @{
+            ProjectRoot = $PWD
+            PayloadUrl = "${{ steps.payload.outputs.payload_url }}"
+            Version = "${{ steps.meta.outputs.version }}"
+            OutputName = "${{ steps.meta.outputs.bootstrap_asset_name }}"
+            PayloadSha256 = "${{ steps.payload.outputs.payload_sha256 }}"
+            PayloadFileName = "${{ steps.meta.outputs.install_asset_name }}"
+            ExpectedTag = "${{ steps.meta.outputs.tag }}"
+            DiscoveryEnabled = '1'
+          }
+
+          .\build\scripts\build-bootstrap-installer.ps1 @params
+
+      - name: Generate release manifest
+        shell: pwsh
+        run: |
+          $tag = "${{ steps.meta.outputs.tag }}"
+          $version = "${{ steps.meta.outputs.version }}"
+          $channel = "${{ steps.meta.outputs.channel }}"
+          $baseUrl = "${{ github.server_url }}/${{ github.repository }}/releases/download/$tag"
+
+          $assetFiles = @(
+            @{ Name = "${{ steps.meta.outputs.install_asset_name }}"; Type = "offline-installer" },
+            @{ Name = "${{ steps.meta.outputs.agent_asset_name }}"; Type = "agent-standalone" },
+            @{ Name = "${{ steps.meta.outputs.bootstrap_asset_name }}"; Type = "online-bootstrap" }
+          )
+
+          $assets = @()
+          foreach ($asset in $assetFiles) {
+            $path = Join-Path $PWD "src/build/bin/$($asset.Name)"
+            if (-not (Test-Path $path)) {
+              throw "Asset esperado nao encontrado para manifest: $path"
+            }
+
+            $hash = (Get-FileHash -Algorithm SHA256 -Path $path).Hash.ToLowerInvariant()
+            $size = (Get-Item $path).Length
+            $assets += @{
+              name = $asset.Name
+              type = $asset.Type
+              sizeBytes = $size
+              sha256 = $hash
+              url = "$baseUrl/$($asset.Name)"
+            }
+          }
+
+          $manifest = @{
+            version = $version
+            tag = $tag
+            channel = $channel
+            generatedAtUtc = (Get-Date).ToUniversalTime().ToString("o")
+            assets = $assets
+          }
+
+          $manifestPath = Join-Path $PWD "src/build/bin/${{ steps.meta.outputs.manifest_asset_name }}"
+          $manifest | ConvertTo-Json -Depth 8 | Set-Content -Path $manifestPath -Encoding UTF8
+
+      - name: Upload bootstrap + manifest assets
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
-          files: src/build/bin/${{ steps.meta.outputs.bootstrap_asset_name }}
+          files: |
+            src/build/bin/${{ steps.meta.outputs.bootstrap_asset_name }}
+            src/build/bin/${{ steps.meta.outputs.manifest_asset_name }}
+
+      - name: Verify required release assets
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          $repo = "${{ github.repository }}"
+          $tag = "${{ steps.meta.outputs.tag }}"
+          $expected = @(
+            "${{ steps.meta.outputs.install_asset_name }}",
+            "${{ steps.meta.outputs.agent_asset_name }}",
+            "${{ steps.meta.outputs.bootstrap_asset_name }}"
+          )
+
+          $headers = @{
+            Authorization = "Bearer $env:GITHUB_TOKEN"
+            Accept = "application/vnd.github+json"
+            "X-GitHub-Api-Version" = "2022-11-28"
+          }
+
+          $release = Invoke-RestMethod -Method Get -Uri "https://api.github.com/repos/$repo/releases/tags/$tag" -Headers $headers
+          $uploaded = @($release.assets | ForEach-Object { $_.name })
+          $missing = $expected | Where-Object { $uploaded -notcontains $_ }
+
+          if ($missing.Count -gt 0) {
+            throw ("Release incompleta. Assets obrigatorios ausentes: " + ($missing -join ", "))
+          }
+
