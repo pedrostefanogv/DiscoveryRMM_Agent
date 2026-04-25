@@ -1,26 +1,26 @@
 <main id="updatesView" class="page-content hidden" role="tabpanel" aria-labelledby="tabUpdates">
     <section class="updates-panel">
       <div class="statusbar page-bar">
-        <span id="updatesInfo">Atualizacoes nao verificadas</span>
+        <span id="updatesInfo" data-i18n="updates.unchecked">Atualizacoes nao verificadas</span>
         <div class="actions">
-          <button id="checkUpdatesBtn" class="btn primary">Verificar Atualizacoes</button>
-          <button id="upgradeSelectedBtn" class="btn subtle" disabled>Atualizar Selecionados</button>
+          <button id="checkUpdatesBtn" class="btn primary" data-i18n="action.checkUpdates">Verificar Atualizacoes</button>
+          <button id="upgradeSelectedBtn" class="btn subtle" disabled data-i18n="action.upgradeSelected">Atualizar Selecionados</button>
         </div>
       </div>
-      <span id="updatesProgress" class="loading hidden" aria-live="polite">Verificando atualizacoes pendentes...</span>
+      <span id="updatesProgress" class="loading hidden" aria-live="polite" data-i18n="updates.checking">Verificando atualizacoes pendentes...</span>
       <div class="updates-table-wrap">
         <table class="software-table updates-table">
           <thead>
             <tr>
-              <th class="update-check-col"><input id="updateSelectAll" type="checkbox" title="Selecionar todos" /></th>
-              <th>Nome</th>
-              <th>Versao Atual</th>
-              <th>Versao Disponivel</th>
-              <th>Acao</th>
+              <th class="update-check-col"><input id="updateSelectAll" type="checkbox" title="Selecionar todos" data-i18n-title="action.selectAll" /></th>
+              <th data-i18n="field.name">Nome</th>
+              <th data-i18n="field.currentVersion">Versao Atual</th>
+              <th data-i18n="field.availableVersion">Versao Disponivel</th>
+              <th data-i18n="field.action">Acao</th>
             </tr>
           </thead>
           <tbody id="updatesTableBody">
-            <tr><td colspan="5" class="meta">Clique em "Verificar Atualizacoes" para listar.</td></tr>
+            <tr><td colspan="5" class="meta" data-i18n="updates.clickCheckToList">Clique em "Verificar Atualizacoes" para listar.</td></tr>
           </tbody>
         </table>
       </div>

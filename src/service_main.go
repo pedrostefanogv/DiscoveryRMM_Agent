@@ -18,7 +18,7 @@ var ServiceMode = false
 var serviceLogWriter io.Closer
 
 // runAsService inicia a aplicação no modo Windows Service (headless, sem UI Wails)
-// Argumentos esperados: discovery.exe --service [--log-file=path]
+// Argumentos esperados: discovery-agent.exe --service [--log-file=path]
 func runAsService(logFile string) error {
 	ServiceMode = true
 	if handled, err := tryRunWindowsService(logFile); handled {

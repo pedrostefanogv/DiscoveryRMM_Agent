@@ -198,26 +198,26 @@ function initSupport() {
     var description = document.getElementById('ticketDescription') ? document.getElementById('ticketDescription').value.trim() : '';
 
     if (!title || !description) {
-      showToast('Preencha titulo e descricao', 'error');
+      showToast(translate('support.fillTitleDescription'), 'error');
       return;
     }
 
     var btn = document.getElementById('submitTicketBtn');
-    if (btn) { btn.disabled = true; btn.textContent = 'Enviando...'; }
-    showTicketFormStatus('Enviando chamado...', false);
+    if (btn) { btn.disabled = true; btn.textContent = translate('support.sending'); }
+    showTicketFormStatus(translate('support.submittingTicket'), false);
 
     try {
       var ticket = await appApi().CreateSupportTicket({ title: title, description: description, priority: priority, category: category });
-      showToast('Chamado criado com sucesso!', 'success');
+      showToast(translate('support.ticketCreatedSuccess'), 'success');
       supportFormEl.reset();
       hideTicketFormStatus();
       closeNewTicketModal();
       loadSupportTickets();
     } catch (err) {
-      showTicketFormStatus('Erro ao criar chamado: ' + String(err), true);
-      showToast('Erro ao criar chamado: ' + String(err), 'error');
+      showTicketFormStatus(translate('support.ticketCreateError', { error: String(err) }), true);
+      showToast(translate('support.ticketCreateError', { error: String(err) }), 'error');
     } finally {
-      if (btn) { btn.disabled = false; btn.textContent = 'Enviar Chamado'; }
+      if (btn) { btn.disabled = false; btn.textContent = translate('action.sendTicket'); }
     }
   });
 
@@ -240,15 +240,15 @@ function initSupport() {
     submitCommentBtnEl.addEventListener('click', async function () {
       if (!currentTicketId || !commentInputEl) return;
       var content = commentInputEl.value.trim();
-      if (!content) { showToast('Digite um comentario', 'error'); return; }
+      if (!content) { showToast(translate('support.enterComment'), 'error'); return; }
       submitCommentBtnEl.disabled = true;
       try {
         await appApi().AddTicketComment(currentTicketId, '', content);
         commentInputEl.value = '';
-        showToast('Comentario enviado', 'success');
+        showToast(translate('support.commentSent'), 'success');
         loadTicketComments(currentTicketId);
       } catch (err) {
-        showToast('Erro ao enviar comentario: ' + String(err), 'error');
+        showToast(translate('support.commentSendError', { error: String(err) }), 'error');
       } finally {
         submitCommentBtnEl.disabled = false;
       }
@@ -263,7 +263,7 @@ function initSupport() {
       if (closeTicketRatingEl && closeTicketRatingEl.value !== '') {
         rating = parseInt(closeTicketRatingEl.value, 10);
         if (Number.isNaN(rating) || rating < 0 || rating > 5) {
-          showToast('Avaliacao invalida. Informe de 0 a 5.', 'error');
+          showToast(translate('support.invalidRating'), 'error');
           return;
         }
       }
@@ -279,13 +279,13 @@ function initSupport() {
       }
 
       closeTicketBtnEl.disabled = true;
-      closeTicketBtnEl.textContent = 'Fechando...';
+      closeTicketBtnEl.textContent = translate('support.closing');
 
       try {
         var payload = { comment: comment, workflowStateId: workflowStateId };
         if (rating !== null) payload.rating = rating;
         var ticket = await appApi().CloseSupportTicket(currentTicketId, payload);
-        showToast('Chamado fechado com sucesso', 'success');
+        showToast(translate('support.ticketClosedSuccess'), 'success');
         currentTicket = ticket;
         renderTicketDetail(ticket);
         if (closeTicketCommentEl) closeTicketCommentEl.value = '';
@@ -294,10 +294,10 @@ function initSupport() {
         if (closeTicketWorkflowStateSelectEl) closeTicketWorkflowStateSelectEl.value = '';
         await loadSupportTickets();
       } catch (err) {
-        showToast('Erro ao fechar chamado: ' + String(err), 'error');
+        showToast(translate('support.ticketCloseError', { error: String(err) }), 'error');
       } finally {
         closeTicketBtnEl.disabled = false;
-        closeTicketBtnEl.textContent = 'Fechar Chamado';
+        closeTicketBtnEl.textContent = translate('action.closeTicket');
       }
     });
   }
@@ -326,9 +326,9 @@ async function loadSupportTickets() {
     if (agentContextBannerEl && agentContextTextEl) {
       var computerName = (agent && agent.hostname) ? String(agent.hostname).trim() : '';
       if (!computerName) {
-        computerName = 'Computador local';
+        computerName = translate('status.localComputer');
       }
-      agentContextTextEl.textContent = 'Agente: ' + computerName;
+      agentContextTextEl.textContent = translate('support.agentLabel', { name: computerName });
       agentContextBannerEl.classList.remove('hidden');
     }
     if (agentContextErrorEl) agentContextErrorEl.classList.add('hidden');
@@ -339,7 +339,7 @@ async function loadSupportTickets() {
     }
     if (agentContextBannerEl) agentContextBannerEl.classList.add('hidden');
     if (ticketsLoadingEl) ticketsLoadingEl.classList.add('hidden');
-    supportTicketsListEl.innerHTML = '<div class="meta">Servidor nao configurado. Configure em Debug.</div>';
+    supportTicketsListEl.innerHTML = '<div class="meta">' + escapeHtml(translate('support.serverNotConfigured')) + '</div>';
     if (supportSidePanelEl) supportSidePanelEl.classList.add('hidden');
     if (supportTicketDetailEl) supportTicketDetailEl.classList.add('hidden');
     return;
@@ -349,7 +349,7 @@ async function loadSupportTickets() {
     var tickets = await appApi().GetSupportTickets();
     if (ticketsLoadingEl) ticketsLoadingEl.classList.add('hidden');
     if (!tickets || !tickets.length) {
-      supportTicketsListEl.innerHTML = '<div class="meta">Nenhum chamado no momento. Clique em "Novo Chamado" para abrir um.</div>';
+      supportTicketsListEl.innerHTML = '<div class="meta">' + escapeHtml(translate('support.noTicketsPrompt')) + '</div>';
       if (supportSidePanelEl) supportSidePanelEl.classList.add('hidden');
       if (supportTicketDetailEl) supportTicketDetailEl.classList.add('hidden');
       return;
@@ -357,7 +357,7 @@ async function loadSupportTickets() {
     if (supportSidePanelEl) supportSidePanelEl.classList.add('hidden');
     if (supportTicketDetailEl) supportTicketDetailEl.classList.add('hidden');
     supportTicketsListEl.innerHTML = tickets.map(function (t) {
-      var statusName = (t.workflowState && t.workflowState.name) ? t.workflowState.name : 'Aberto';
+      var statusName = (t.workflowState && t.workflowState.name) ? t.workflowState.name : translate('support.defaultOpenStatus');
       var statusColor = (t.workflowState && t.workflowState.color) ? t.workflowState.color : '#0b6e4f';
       var statusMeta = workflowMetaText(t.workflowState);
       var priLabel = ticketPriorityLabel(t.priority);
@@ -392,7 +392,7 @@ async function loadSupportTickets() {
     });
   } catch (err) {
     if (ticketsLoadingEl) ticketsLoadingEl.classList.add('hidden');
-    supportTicketsListEl.innerHTML = '<div class="meta">Erro ao carregar chamados: ' + escapeHtml(String(err)) + '</div>';
+    supportTicketsListEl.innerHTML = '<div class="meta">' + escapeHtml(translate('support.ticketListLoadError', { error: String(err) })) + '</div>';
   }
 }
 
@@ -422,7 +422,7 @@ function showTicketDetail(t) {
 }
 
 function renderTicketDetail(t) {
-  var statusName = (t.workflowState && t.workflowState.name) ? t.workflowState.name : 'Aberto';
+  var statusName = (t.workflowState && t.workflowState.name) ? t.workflowState.name : translate('support.defaultOpenStatus');
   var statusColor = (t.workflowState && t.workflowState.color) ? t.workflowState.color : '#0b6e4f';
   var statusMeta = workflowMetaText(t.workflowState);
   var priLabel = ticketPriorityLabel(t.priority);
@@ -447,11 +447,11 @@ function renderTicketDetail(t) {
   if (ticketDetailMetaEl) {
     ticketDetailMetaEl.innerHTML =
       (cat ? '<span>' + escapeHtml(cat) + '</span>' : '') +
-      (date ? '<span>Aberto em: ' + escapeHtml(date) + '</span>' : '') +
+      (date ? '<span>' + escapeHtml(translate('support.ticketOpenedAt', { date: date })) + '</span>' : '') +
       (statusMeta ? '<span>' + escapeHtml(statusMeta) + '</span>' : '') +
-      '<span>Avaliacao: ' + escapeHtml(renderStars(t.rating)) + '</span>' +
-      (ratedAt ? '<span>Avaliado em: ' + escapeHtml(ratedAt) + '</span>' : '') +
-      (ratedBy ? '<span>Avaliado por: ' + escapeHtml(ratedBy) + '</span>' : '');
+      '<span>' + escapeHtml(translate('support.ratingDisplay', { rating: renderStars(t.rating) })) + '</span>' +
+      (ratedAt ? '<span>' + escapeHtml(translate('support.ratedAt', { date: ratedAt })) + '</span>' : '') +
+      (ratedBy ? '<span>' + escapeHtml(translate('support.ratedBy', { name: ratedBy })) + '</span>' : '');
   }
   if (ticketDetailDescEl) ticketDetailDescEl.textContent = t.description || '';
 
@@ -474,25 +474,25 @@ function closeTicketDetail() {
 
 async function loadTicketComments(ticketId) {
   if (!commentsListEl) return;
-  commentsListEl.innerHTML = '<div class="meta">Carregando comentarios...</div>';
+  commentsListEl.innerHTML = '<div class="meta">' + escapeHtml(translate('support.loadingComments')) + '</div>';
   try {
     var comments = await appApi().GetTicketComments(ticketId);
     if (!comments || !comments.length) {
-      commentsListEl.innerHTML = '<div class="meta">Nenhum comentario.</div>';
+      commentsListEl.innerHTML = '<div class="meta">' + escapeHtml(translate('support.noComments')) + '</div>';
       return;
     }
     commentsListEl.innerHTML = comments.map(function (c) {
-      var date = c.createdAt ? c.createdAt.replace('T', ' ').substring(0, 16) : '';
+      var date = c.createdAt ? formatDate(c.createdAt, '') : '';
       return '<div class="comment-card' + (c.isInternal ? ' comment-internal' : '') + '">' +
         '<div class="comment-header">' +
-          '<span class="comment-author">' + escapeHtml(c.author || 'Usuario') + '</span>' +
+          '<span class="comment-author">' + escapeHtml(c.author || translate('support.user')) + '</span>' +
           (date ? '<span class="comment-date">' + escapeHtml(date) + '</span>' : '') +
-          (c.isInternal ? '<span class="comment-internal-badge">Interno</span>' : '') +
+          (c.isInternal ? '<span class="comment-internal-badge">' + escapeHtml(translate('support.internal')) + '</span>' : '') +
         '</div>' +
         '<div class="comment-content">' + escapeHtml(c.content) + '</div>' +
       '</div>';
     }).join('');
   } catch (err) {
-    commentsListEl.innerHTML = '<div class="meta">Erro ao carregar comentarios: ' + escapeHtml(String(err)) + '</div>';
+    commentsListEl.innerHTML = '<div class="meta">' + escapeHtml(translate('support.commentLoadError', { error: String(err) })) + '</div>';
   }
 }

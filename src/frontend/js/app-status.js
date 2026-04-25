@@ -40,12 +40,12 @@ function renderStatusOverview(data) {
     statusConnectionDotEl.className = 'agent-status-indicator ' + (connected ? 'online' : 'offline');
   }
   if (statusConnectionLabelEl) {
-    statusConnectionLabelEl.textContent = connected ? 'Online' : 'Offline';
+    statusConnectionLabelEl.textContent = connected ? translate('common.online') : translate('common.offline');
   }
 
-  var line1 = 'PC: ' + statusSafe(data && data.hostname, 'Computador local');
-  var serverPart = 'Servidor: ' + statusSafe(data && data.server, '-');
-  var connPart = 'Conexao: ' + statusSafe(data && data.connectionType, '-');
+  var line1 = translate('window.meta.pc') + ': ' + statusSafe(data && data.hostname, translate('status.localComputer'));
+  var serverPart = translate('window.meta.server') + ': ' + statusSafe(data && data.server, '-');
+  var connPart = translate('window.meta.connection') + ': ' + statusSafe(data && data.connectionType, '-');
   var line2 = serverPart + ' / ' + connPart;
 
   if (statusConnectionDetailEl) {
@@ -59,9 +59,9 @@ function renderStatusOverview(data) {
 
   if (statusRealtimeEl) {
     if (data && data.realtimeAvailable) {
-      statusRealtimeEl.textContent = data.realtimeNatsConnected ? 'Online' : 'Degradado';
+      statusRealtimeEl.textContent = data.realtimeNatsConnected ? translate('common.online') : translate('common.degraded');
     } else {
-      statusRealtimeEl.textContent = 'Indisponivel';
+      statusRealtimeEl.textContent = translate('common.unavailable');
     }
   }
 
@@ -74,7 +74,7 @@ function renderStatusOverview(data) {
   }
 
   if (statusMessageEl) {
-    statusMessageEl.textContent = statusSafe(data && data.realtimeMessage, 'Sem informacoes adicionais.');
+    statusMessageEl.textContent = statusSafe(data && data.realtimeMessage, translate('common.noAdditionalInfo'));
   }
 }
 
@@ -83,19 +83,19 @@ function renderStatusError(message) {
     statusConnectionDotEl.className = 'agent-status-indicator offline';
   }
   if (statusConnectionLabelEl) {
-    statusConnectionLabelEl.textContent = 'Falha na leitura de status';
+    statusConnectionLabelEl.textContent = translate('status.failedRead');
   }
   if (statusConnectionDetailEl) {
-    statusConnectionDetailEl.textContent = statusSafe(message, 'Nao foi possivel carregar o status do agente.');
+    statusConnectionDetailEl.textContent = statusSafe(message, translate('status.couldNotLoadAgentStatus'));
   }
 }
 
 function renderServiceHealth(health) {
   if (!health) {
     if (serviceHealthDotEl) serviceHealthDotEl.className = 'agent-status-indicator offline';
-    if (serviceHealthLabelEl) serviceHealthLabelEl.textContent = 'Service indisponivel';
+    if (serviceHealthLabelEl) serviceHealthLabelEl.textContent = translate('status.serviceUnavailable');
     if (serviceHealthDetailEl) {
-      serviceHealthDetailEl.textContent = 'Nao foi possivel comunicar com o servico Discovery. Reinicie o computador e tente novamente. Se o problema persistir, contate o suporte.';
+      serviceHealthDetailEl.textContent = translate('status.serviceUnavailableDetail');
     }
     updateTopbarServiceIndicator('offline', '');
     return;
@@ -103,10 +103,10 @@ function renderServiceHealth(health) {
 
   if (health.error) {
     if (serviceHealthDotEl) serviceHealthDotEl.className = 'agent-status-indicator offline';
-    if (serviceHealthLabelEl) serviceHealthLabelEl.textContent = 'Service indisponivel';
+    if (serviceHealthLabelEl) serviceHealthLabelEl.textContent = translate('status.serviceUnavailable');
     var userMessage = statusSafe(
       health.user_message,
-      'Nao foi possivel comunicar com o servico Discovery. Reinicie o computador e tente novamente. Se o problema persistir, contate o suporte.'
+      translate('status.serviceUnavailableDetail')
     );
     if (serviceHealthDetailEl) serviceHealthDetailEl.textContent = userMessage;
     updateTopbarServiceIndicator('offline', userMessage);
@@ -120,19 +120,19 @@ function renderServiceHealth(health) {
 
   // Determinar status visual
   var statusClass = 'offline';
-  var statusLabel = 'Offline';
+  var statusLabel = translate('common.offline');
   if (!running) {
     statusClass = 'offline';
-    statusLabel = 'Não está rodando';
+    statusLabel = translate('status.notRunning');
   } else if (unhealthyCount > 0) {
     statusClass = 'error';
-    statusLabel = 'Problema detectado';
+    statusLabel = translate('status.problemDetected');
   } else if (degradedCount > 0) {
     statusClass = 'warning';
-    statusLabel = 'Degradado';
+    statusLabel = translate('common.degraded');
   } else {
     statusClass = 'online';
-    statusLabel = 'Saudável';
+    statusLabel = translate('common.healthy');
   }
 
   if (serviceHealthDotEl) serviceHealthDotEl.className = 'agent-status-indicator ' + statusClass;
@@ -146,14 +146,14 @@ function renderServiceHealth(health) {
       return String(c.status || '').toLowerCase() !== 'healthy'; 
     });
     if (problemComps.length > 0) {
-      detail = 'Problemas em: ' + problemComps.map(function(c) { 
+      detail = translate('status.problemsIn', { components: problemComps.map(function(c) { 
         return String(c.component || c.Component || 'desconhecido'); 
-      }).join(', ');
+      }).join(', ') });
     } else {
-      detail = 'Todos os componentes estão saudáveis';
+      detail = translate('status.allComponentsHealthy');
     }
   }
-  if (serviceHealthDetailEl) serviceHealthDetailEl.textContent = detail || 'Aguardando...';
+  if (serviceHealthDetailEl) serviceHealthDetailEl.textContent = detail || translate('common.awaiting');
   
   updateTopbarServiceIndicator(statusClass, statusLabel);
 }
@@ -167,7 +167,7 @@ function updateTopbarServiceIndicator(statusClass, label) {
   // Mostrar indicador se há conteúdo relevante
   if (statusClass !== 'online' || label) {
     serviceHealthIndicatorEl.style.display = 'inline-flex';
-    serviceHealthIndicatorEl.title = 'Service: ' + (label || statusClass);
+    serviceHealthIndicatorEl.title = translate('status.serviceIndicator', { label: label || statusClass });
   }
 }
 

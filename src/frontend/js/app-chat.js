@@ -35,7 +35,7 @@ function setChatBusy(isBusy) {
   if (chatStopBtn) {
     chatStopBtn.classList.toggle('hidden', !isBusy);
     chatStopBtn.disabled = !isBusy;
-    chatStopBtn.textContent = 'Stop';
+    chatStopBtn.textContent = translate('action.stop');
   }
 }
 
@@ -44,7 +44,7 @@ function requestStopChatStream() {
   chatStopRequested = true;
   if (chatStopBtn) {
     chatStopBtn.disabled = true;
-    chatStopBtn.textContent = 'Parando...';
+    chatStopBtn.textContent = translate('chat.stopping');
   }
   try {
     appApi().StopChatStream().catch(function () {
@@ -73,7 +73,7 @@ function onStreamThinking(status) {
   if (!thinkingEl) return;
   if (!streamingRawContent) {
     thinkingEl.style.display = '';
-    thinkingEl.textContent = status || 'Pensando...';
+    thinkingEl.textContent = status || translate('chat.thinking');
     scheduleChatScrollToBottom();
   }
 }
@@ -118,7 +118,7 @@ function onStreamError(errMsg) {
 
   if (chatStopRequested) {
     if (streamingBubble && !streamingRawContent) {
-      streamingRawContent = '_Resposta interrompida pelo usuario._';
+      streamingRawContent = translate('chat.responseInterrupted');
     }
     finaliseStreamingBubble();
     chatStopRequested = false;
@@ -130,11 +130,11 @@ function onStreamError(errMsg) {
   if (streamingBubble) {
     // Show whatever content arrived; fallback to error text if nothing came.
     if (!streamingRawContent) {
-      streamingRawContent = 'Erro: ' + String(errMsg || 'falha desconhecida');
+      streamingRawContent = translate('chat.errorUnknown', { error: String(errMsg || translate('common.unknown')) });
     }
     finaliseStreamingBubble();
   } else {
-    addChatMessage('assistant', 'Erro: ' + String(errMsg || 'falha desconhecida'));
+    addChatMessage('assistant', translate('chat.errorUnknown', { error: String(errMsg || translate('common.unknown')) }));
   }
   setChatBusy(false);
   if (chatInputEl) chatInputEl.focus();
@@ -143,7 +143,7 @@ function onStreamError(errMsg) {
 function onStreamStopped() {
   stopThinkingStatusUpdates();
   if (streamingBubble && !streamingRawContent) {
-    streamingRawContent = '_Resposta interrompida pelo usuario._';
+    streamingRawContent = translate('chat.responseInterrupted');
   }
   finaliseStreamingBubble();
   chatStopRequested = false;
@@ -173,7 +173,11 @@ function onStreamStopped() {
 
 function onWatchdogUnhealthy(data) {
   var componentName = formatComponentName(data.component || 'unknown');
-  var message = 'Watchdog: ' + componentName + ' esta ' + (data.status || 'unhealthy') + ' - ' + (data.message || 'sem detalhes');
+  var message = translate('chat.watchdogMessage', {
+    component: componentName,
+    status: (data.status || 'unhealthy'),
+    message: (data.message || translate('common.noAdditionalInfo')),
+  });
   if (shouldShowWatchdogToast(data)) {
     showToast(message, 'warning');
   }
@@ -455,7 +459,7 @@ function parseInternalAppRoute(url) {
 async function navigateInternalAppRoute(url) {
   var route = parseInternalAppRoute(url);
   if (!route) {
-    showToast('Link interno invalido: ' + String(url || ''), 'error');
+    showToast(translate('chat.invalidInternalLink', { url: String(url || '') }), 'error');
     return;
   }
 
@@ -468,7 +472,7 @@ async function navigateInternalAppRoute(url) {
         var ticket = await appApi().GetSupportTicketDetails(route.ticketId);
         showTicketDetail(ticket);
       } catch (err) {
-        showToast('Nao foi possivel abrir o chamado: ' + String(err), 'error');
+        showToast(translate('chat.openTicketError', { error: String(err) }), 'error');
       }
     }
   }
@@ -699,7 +703,7 @@ async function sendChatMessage() {
 
   var thinkingEl = document.createElement('div');
   thinkingEl.className = 'stream-thinking';
-  thinkingEl.textContent = 'Pensando...';
+  thinkingEl.textContent = translate('chat.thinking');
   streamingBubble.appendChild(thinkingEl);
 
   var cursorEl = document.createElement('span');
@@ -744,7 +748,7 @@ async function saveChatConfig() {
   if (maxTokensRaw) {
     maxTokens = Number(maxTokensRaw);
     if (!Number.isFinite(maxTokens) || maxTokens < 0) {
-      showFeedback('Max Tokens deve ser 0 ou maior', true);
+      showFeedback(translate('chat.maxTokensValidation'), true);
       return;
     }
     maxTokens = Math.floor(maxTokens);
@@ -752,10 +756,10 @@ async function saveChatConfig() {
 
   try {
     await appApi().SetChatConfig({ endpoint: endpoint, apiKey: apiKey, model: model, systemPrompt: systemPrompt, maxTokens: maxTokens });
-    showFeedback('Configuracao de IA salva com sucesso');
+    showFeedback(translate('chat.configSavedSuccess'));
     if (chatConfigPanel) chatConfigPanel.classList.add('hidden');
   } catch (err) {
-    showFeedback('Erro ao salvar configuracao: ' + String(err), true);
+    showFeedback(translate('chat.configSaveError', { error: String(err) }), true);
   }
 }
 
@@ -770,7 +774,7 @@ async function testChatConfig() {
   if (maxTokensRaw) {
     maxTokens = Number(maxTokensRaw);
     if (!Number.isFinite(maxTokens) || maxTokens < 0) {
-      showFeedback('Max Tokens deve ser 0 ou maior', true);
+      showFeedback(translate('chat.maxTokensValidation'), true);
       return;
     }
     maxTokens = Math.floor(maxTokens);
@@ -778,12 +782,12 @@ async function testChatConfig() {
 
   if (chatTestConfigBtn) chatTestConfigBtn.disabled = true;
   try {
-    showFeedback('Testando configuracao de IA...');
+    showFeedback(translate('chat.configTesting'));
     var reply = await appApi().TestChatConfig({ endpoint: endpoint, apiKey: apiKey, model: model, systemPrompt: systemPrompt, maxTokens: maxTokens });
     var normalized = String(reply || '').trim();
-    showFeedback('Teste concluido com sucesso' + (normalized ? ': ' + normalized : ''));
+    showFeedback(translate('chat.configTestSuccess', { suffix: normalized ? ': ' + normalized : '' }));
   } catch (err) {
-    showFeedback('Falha no teste da configuracao: ' + String(err), true);
+    showFeedback(translate('chat.configTestFailure', { error: String(err) }), true);
   } finally {
     if (chatTestConfigBtn) chatTestConfigBtn.disabled = false;
   }
@@ -799,7 +803,7 @@ async function loadChatTools() {
       '</span>';
     }).join('');
   } catch (_) {
-    chatToolsList.innerHTML = '<span class="meta">Erro ao carregar ferramentas</span>';
+    chatToolsList.innerHTML = '<span class="meta">' + escapeHtml(translate('chat.toolsLoadError')) + '</span>';
   }
 }
 
@@ -810,10 +814,10 @@ async function loadChatDebugLogs() {
     var chatLines = (lines || []).filter(function (line) {
       return String(line).startsWith('[chat]');
     });
-    chatLogsOutput.textContent = chatLines.length ? chatLines.join('\n') : '(sem logs de chat ainda)';
+    chatLogsOutput.textContent = chatLines.length ? chatLines.join('\n') : translate('chat.noLogsYet');
     chatLogsOutput.scrollTop = chatLogsOutput.scrollHeight;
   } catch (err) {
-    chatLogsOutput.textContent = 'Erro ao carregar logs: ' + String(err);
+    chatLogsOutput.textContent = translate('chat.logsLoadError', { error: String(err) });
   }
 }
 
@@ -822,20 +826,20 @@ async function loadChatMemories() {
   try {
     var notes = await appApi().GetLocalMemories();
     if (!notes || !notes.length) {
-      chatMemoriesList.innerHTML = '<div class="meta">Nenhuma memoria encontrada.</div>';
+      chatMemoriesList.innerHTML = '<div class="meta">' + escapeHtml(translate('chat.noMemoryFound')) + '</div>';
       return;
     }
 
     var html = notes.map(function (n) {
-      var created = n.createdAt ? new Date(n.createdAt).toLocaleString() : '';
-      var updated = n.updatedAt ? new Date(n.updatedAt).toLocaleString() : '';
+      var created = n.createdAt ? formatDate(n.createdAt, '') : '';
+      var updated = n.updatedAt ? formatDate(n.updatedAt, '') : '';
       return '<div class="chat-memory-item">' +
         '<div class="chat-memory-meta"><span>' + escapeHtml(created) + '</span>' +
-        (updated && updated !== created ? ' <span>(atualizado: ' + escapeHtml(updated) + ')</span>' : '') +
+        (updated && updated !== created ? ' <span>' + escapeHtml(translate('chat.updatedAt', { date: updated })) + '</span>' : '') +
         '</div>' +
         '<div class="chat-memory-content">' + escapeHtml(n.content) + '</div>' +
         '<div class="chat-memory-actions">' +
-        '<button class="btn danger chat-memory-delete-btn" data-id="' + escapeHtml(String(n.id)) + '">Excluir</button>' +
+        '<button class="btn danger chat-memory-delete-btn" data-id="' + escapeHtml(String(n.id)) + '">' + escapeHtml(translate('action.delete')) + '</button>' +
         '</div>' +
       '</div>';
     }).join('');
@@ -852,7 +856,7 @@ async function loadChatMemories() {
       });
     });
   } catch (err) {
-    chatMemoriesList.innerHTML = '<div class="meta">Erro ao carregar memorias: ' + escapeHtml(String(err)) + '</div>';
+    chatMemoriesList.innerHTML = '<div class="meta">' + escapeHtml(translate('chat.memoriesLoadError', { error: String(err) })) + '</div>';
   }
 }
 
@@ -874,7 +878,7 @@ function deleteChatMemory(id) {
   appApi().DeleteLocalMemory(id).then(function () {
     loadChatMemories();
   }).catch(function (err) {
-    showFeedback('Erro ao excluir memorias: ' + String(err), true);
+    showFeedback(translate('chat.memoryDeleteError', { error: String(err) }), true);
   });
 }
 
@@ -956,9 +960,9 @@ function initChat() {
       try {
         await appApi().ClearChatHistory();
         if (chatMessagesEl) chatMessagesEl.innerHTML = '';
-        showFeedback('Chat limpo');
+        showFeedback(translate('chat.cleared'));
       } catch (err) {
-        showFeedback('Erro: ' + String(err), true);
+        showFeedback(translate('chat.clearError', { error: String(err) }), true);
       }
     });
   }

@@ -2,16 +2,16 @@
     <section class="knowledge-panel">
       <div class="statusbar page-bar">
         <div>
-          <strong>Base de Conhecimento</strong>
-          <div class="meta">Artigos de manutencao e troubleshooting de PCs</div>
+          <strong data-i18n="knowledge.title">Base de Conhecimento</strong>
+          <div class="meta" data-i18n="knowledge.subtitle">Artigos de manutencao e troubleshooting de PCs</div>
         </div>
-        <input id="kbSearchInput" type="search" class="kb-search-input" placeholder="Buscar por titulo, categoria, tag ou conteudo" />
+        <input id="kbSearchInput" type="search" class="kb-search-input" placeholder="Buscar por titulo, categoria, tag ou conteudo" data-i18n-placeholder="knowledge.searchPlaceholder" />
       </div>
 
       <div class="knowledge-layout">
         <aside>
           <div id="kbArticlesList" class="kb-articles-list">
-            <div class="meta">Carregando artigos...</div>
+            <div class="meta" data-i18n="knowledge.loadingArticles">Carregando artigos...</div>
           </div>
         </aside>
 
@@ -20,7 +20,7 @@
           <div id="kbDetailMeta" class="kb-detail-meta"></div>
           <div id="kbDetailContent" class="kb-detail-content"></div>
           <div class="kb-detail-actions">
-            <button id="kbOpenFullBtn" class="btn primary">Abrir em tela cheia</button>
+            <button id="kbOpenFullBtn" class="btn primary" data-i18n="action.openFullscreen">Abrir em tela cheia</button>
           </div>
         </article>
       </div>
@@ -28,8 +28,8 @@
       <div id="kbReaderModal" class="kb-reader-modal hidden" aria-hidden="true">
         <div class="kb-reader-card">
           <div class="kb-reader-head section-bar">
-            <strong id="kbReaderTitle">Artigo</strong>
-            <button id="kbReaderCloseBtn" class="btn danger">Fechar</button>
+            <strong id="kbReaderTitle" data-i18n="knowledge.article">Artigo</strong>
+            <button id="kbReaderCloseBtn" class="btn danger" data-i18n="action.close">Fechar</button>
           </div>
           <div id="kbReaderMeta" class="kb-detail-meta"></div>
           <div id="kbReaderContent" class="kb-reader-content"></div>

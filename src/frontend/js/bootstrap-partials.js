@@ -84,6 +84,9 @@
 
     for (var j = 0; j < APP_SCRIPTS.length; j += 1) {
       await loadScript(APP_SCRIPTS[j]);
+      if (APP_SCRIPTS[j] === "js/app-utils.js" && typeof initApplicationLocale === "function") {
+        await initApplicationLocale();
+      }
     }
   }
 

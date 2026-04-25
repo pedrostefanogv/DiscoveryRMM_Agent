@@ -20,12 +20,14 @@ import (
 var assets embed.FS
 
 func main() {
-	// Prevenir que o Xbox Game Bar identifique este app como jogo
-	suppressGameBarOverlay()
+	if note := strings.TrimSpace(suppressGameBarOverlay()); note != "" {
+		log.Printf("[startup][gamebar] %s", note)
+	}
 
 	startupDebugMode := detectStartupDebugMode()
 	startupMinimized := hasStartupArg("--startup-minimized")
 	startupSource := strings.TrimSpace(parseArgValue("--startup-source"))
+	startupWindowFrame, startupFrameless := resolveStartupWindowFrame()
 	cleanupDeleteOnExit := hasStartupArg("--agent-delete-cleanup")
 
 	if cleanupDeleteOnExit {
@@ -60,6 +62,7 @@ func main() {
 	if startupMinimized {
 		log.Println("[startup] execucao automatica detectada: iniciar minimizado no tray")
 	}
+	log.Printf("[startup][window] frame=%s frameless=%t width=%d height=%d startMinimized=%t", startupWindowFrame, startupFrameless, appkg.WindowWidth, appkg.WindowHeight, startupMinimized)
 
 	app := appkg.NewApp(appkg.AppStartupOptions{DebugMode: startupDebugMode, StartMinimized: startupMinimized, TrayIcon: trayIconICO})
 
@@ -83,7 +86,7 @@ func main() {
 		Title:     "Discovery",
 		Width:     appkg.WindowWidth,
 		Height:    appkg.WindowHeight,
-		Frameless: true,
+		Frameless: startupFrameless,
 		// Keep right-click context menu enabled in production so users can use
 		// built-in spellcheck suggestions/corrections in text fields.
 		EnableDefaultContextMenu: true,
@@ -132,4 +135,25 @@ func parseArgValue(argName string) string {
 		}
 	}
 	return ""
+}
+
+func resolveStartupWindowFrame() (string, bool) {
+	if hasStartupArg("--windowed-frame") {
+		return "standard", false
+	}
+
+	frame := strings.TrimSpace(parseArgValue("--window-frame"))
+	if frame == "" {
+		frame = strings.TrimSpace(os.Getenv("DISCOVERY_WINDOW_FRAME"))
+	}
+
+	switch strings.ToLower(frame) {
+	case "", "frameless":
+		return "frameless", true
+	case "standard", "framed", "windowed":
+		return "standard", false
+	default:
+		log.Printf("[startup][window] valor invalido para frame %q; usando frameless", frame)
+		return "frameless", true
+	}
 }

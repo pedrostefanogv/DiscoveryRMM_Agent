@@ -225,6 +225,7 @@ let watchdogPollId = null;
 
 const WATCHDOG_TOAST_DEDUPE_MS = 60 * 1000;
 const WATCHDOG_TOAST_MAX_PER_MINUTE = 3;
+const PROVISIONING_CHECK_INTERVAL_MS = 10 * 1000;
 const watchdogToastState = {
   lastToastAtByComponentStatus: {},
   windowStartMs: 0,
@@ -248,6 +249,11 @@ const notificationUXState = {
   rebootDeadlineAt: 0,
   activeProgressGroup: '',
   progressByGroup: {},
+};
+
+const provisioningOverlayState = {
+  refs: null,
+  pollId: null,
 };
 
 let inventorySoftware = [];
@@ -363,6 +369,116 @@ function showToast(message, type) {
   }, 3500);
 }
 
+function computeProvisioningState(debugCfg) {
+  var cfg = debugCfg || {};
+  var scheme = String(cfg.apiScheme || cfg.scheme || '').trim().toLowerCase();
+  var server = String(cfg.apiServer || cfg.server || '').trim();
+  var authToken = String(cfg.authToken || '').trim();
+  var agentId = String(cfg.agentId || '').trim();
+  var missing = [];
+
+  if (!scheme || !server) missing.push('URL do servidor');
+  if (!agentId) missing.push('Agent ID');
+  if (!authToken) missing.push('Chave/token de comunicacao');
+
+  return {
+    isProvisioned: missing.length === 0,
+    scheme: scheme,
+    server: server,
+    agentId: agentId,
+    tokenPresent: authToken !== '',
+    missing: missing,
+  };
+}
+
+function ensureProvisioningOverlay() {
+  if (provisioningOverlayState.refs) return provisioningOverlayState.refs;
+
+  var overlay = document.createElement('div');
+  overlay.id = 'provisioningOverlay';
+  overlay.className = 'provisioning-overlay hidden';
+  overlay.setAttribute('aria-hidden', 'true');
+  overlay.innerHTML = '' +
+    '<section class="provisioning-panel" role="status" aria-live="polite" aria-label="Provisionamento do agente">' +
+      '<div class="provisioning-badge">Discovery Agent</div>' +
+      '<div class="provisioning-hero">' +
+        '<div class="provisioning-icon" aria-hidden="true">' +
+          '<svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+            '<circle cx="32" cy="32" r="10" stroke="currentColor" stroke-width="4"/>' +
+            '<path d="M32 8V16M32 48V56M8 32H16M48 32H56M15.5 15.5L21.2 21.2M42.8 42.8L48.5 48.5M48.5 15.5L42.8 21.2M21.2 42.8L15.5 48.5" stroke="currentColor" stroke-width="4" stroke-linecap="round"/>' +
+          '</svg>' +
+        '</div>' +
+        '<div class="provisioning-copy">' +
+          '<h2>' + translate('provisioning.title') + '</h2>' +
+          '<p>' + translate('provisioning.message') + '</p>' +
+        '</div>' +
+      '</div>' +
+      '<div class="provisioning-footnote" id="provisioningFootnote">' + translate('provisioning.footnote') + '</div>' +
+      '<div class="provisioning-actions">' +
+        '<button type="button" class="btn primary" id="provisioningRefreshBtn">' + translate('provisioning.refresh') + '</button>' +
+      '</div>' +
+    '</section>';
+  document.body.appendChild(overlay);
+
+  var refs = {
+    overlay: overlay,
+    footnote: document.getElementById('provisioningFootnote'),
+    refreshBtn: document.getElementById('provisioningRefreshBtn'),
+  };
+
+  refs.refreshBtn.addEventListener('click', function () {
+    syncProvisioningOverlayFromRuntime();
+  });
+
+  provisioningOverlayState.refs = refs;
+  return refs;
+}
+
+function stopProvisioningOverlayPolling() {
+  if (!provisioningOverlayState.pollId) return;
+  clearInterval(provisioningOverlayState.pollId);
+  provisioningOverlayState.pollId = null;
+}
+
+function startProvisioningOverlayPolling() {
+  if (provisioningOverlayState.pollId) return;
+  provisioningOverlayState.pollId = setInterval(function () {
+    if (document.hidden) return;
+    syncProvisioningOverlayFromRuntime();
+  }, PROVISIONING_CHECK_INTERVAL_MS);
+}
+
+function syncProvisioningOverlayFromConfig(debugCfg) {
+  var refs = ensureProvisioningOverlay();
+  var status = computeProvisioningState(debugCfg);
+
+  if (status.isProvisioned) {
+    refs.overlay.classList.add('hidden');
+    refs.overlay.setAttribute('aria-hidden', 'true');
+    refs.footnote.textContent = translate('provisioning.completed');
+    stopProvisioningOverlayPolling();
+  } else {
+    refs.overlay.classList.remove('hidden');
+    refs.overlay.setAttribute('aria-hidden', 'false');
+    refs.footnote.textContent = translate('provisioning.footnote');
+    startProvisioningOverlayPolling();
+  }
+
+  return status;
+}
+
+function syncProvisioningOverlayFromRuntime() {
+  try {
+    return appApi().GetDebugConfig().then(function (cfg) {
+      return syncProvisioningOverlayFromConfig(cfg);
+    }).catch(function () {
+      return null;
+    });
+  } catch (_) {
+    return Promise.resolve(null);
+  }
+}
+
 function sanitizeThemeColor(input, fallback) {
   var value = String(input || '').trim();
   if (!value) return fallback;
@@ -388,6 +504,9 @@ function normalizeNotificationSeverityValue(severityRaw) {
 }
 
 function getDocumentLocale() {
+  if (typeof getAppLocale === 'function') {
+    return getAppLocale();
+  }
   var root = document && document.documentElement;
   var lang = root && root.lang ? String(root.lang).toLowerCase() : 'pt-br';
   return lang || 'pt-br';

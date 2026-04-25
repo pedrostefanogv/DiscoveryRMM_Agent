@@ -1,14 +1,14 @@
 <main id="storeView" class="page-content" role="tabpanel" aria-labelledby="tabStore">
   <section class="store-layout">
     <div class="store-toolbar">
-      <input id="searchInput" type="search" placeholder="Pesquisar aplicativo por nome, id ou publisher" />
+      <input id="searchInput" type="search" placeholder="Pesquisar aplicativo por nome, id ou publisher" data-i18n-placeholder="store.searchPlaceholder" />
       <div class="actions">
-        <button id="reloadBtn" class="btn subtle">Recarregar Catalogo</button>
+        <button id="reloadBtn" class="btn subtle" data-i18n="action.reloadCatalog">Recarregar Catalogo</button>
       </div>
     </div>
 
     <div class="statusbar page-bar">
-      <span id="catalogInfo">Carregando...</span>
+      <span id="catalogInfo" data-i18n="common.loading">Carregando...</span>
     </div>
 
     <section class="store-main">
@@ -17,9 +17,9 @@
       </div>
 
       <footer class="catalog-pagination">
-        <button id="catalogPrevBtn" class="btn subtle" disabled>Anterior</button>
-        <span id="catalogPageInfo" class="meta">Pagina 1</span>
-        <button id="catalogNextBtn" class="btn subtle" disabled>Proxima</button>
+        <button id="catalogPrevBtn" class="btn subtle" disabled data-i18n="action.previous">Anterior</button>
+        <span id="catalogPageInfo" class="meta" data-i18n="pagination.pageOne">Pagina 1</span>
+        <button id="catalogNextBtn" class="btn subtle" disabled data-i18n="action.next">Proxima</button>
       </footer>
     </section>
   </section>
@@ -35,11 +35,11 @@
             <div id="appDetailMeta" class="meta"></div>
           </div>
         </div>
-        <button class="app-detail-close btn subtle" id="appDetailCloseBtn" aria-label="Fechar">✕</button>
+        <button class="app-detail-close btn subtle" id="appDetailCloseBtn" aria-label="Fechar" data-i18n-aria-label="action.close" data-i18n-title="action.close">✕</button>
       </div>
       <div id="appDetailDescription" class="app-detail-description kb-reader-content"></div>
       <div class="app-detail-footer">
-        <button id="appDetailActionBtn" class="btn primary">Instalar</button>
+        <button id="appDetailActionBtn" class="btn primary" data-i18n="action.install">Instalar</button>
       </div>
     </div>
   </div>

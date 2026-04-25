@@ -69,7 +69,7 @@ $srcRoot = Join-Path $ProjectRoot "src"
 $binDir = Join-Path $srcRoot "build\bin"
 $installerDir = Join-Path $srcRoot "build\windows\installer"
 $nsiFile = Join-Path $installerDir "project.nsi"
-$agentExe = Join-Path $binDir "discovery.exe"
+$agentExe = Join-Path $binDir "discovery-agent.exe"
 $iconPath = Join-Path $srcRoot "build\windows\icon.ico"
 $sysoPath = Join-Path $srcRoot "resource_windows_amd64.syso"
 

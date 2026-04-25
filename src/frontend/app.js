@@ -61,17 +61,17 @@ function setActiveTab(tab) {
   };
 
   var titles = {
-    status: 'Status',
-    store: 'Loja',
-    updates: 'Atualizacoes',
-    inventory: 'Inventario',
-    logs: 'Logs',
-    chat: 'Chat IA',
-    support: 'Suporte',
-    knowledge: 'Base de Conhecimento',
-    automation: 'Automacao',
-    p2p: 'P2P',
-    debug: 'Debug',
+    status: translate('tab.status'),
+    store: translate('tab.store'),
+    updates: translate('tab.updates'),
+    inventory: translate('tab.inventory'),
+    logs: translate('tab.logs'),
+    chat: translate('tab.chat'),
+    support: translate('tab.support'),
+    knowledge: translate('tab.knowledge'),
+    automation: translate('tab.automation'),
+    p2p: translate('tab.p2p'),
+    debug: translate('tab.debug'),
   };
 
   Object.keys(views).forEach(function (key) {
@@ -82,7 +82,7 @@ function setActiveTab(tab) {
     }
   });
 
-  if (pageTitleEl) pageTitleEl.textContent = titles[tab] || 'Discovery';
+  if (pageTitleEl) pageTitleEl.textContent = titles[tab] || translate('app.name');
 
   if (tab === 'chat') {
     scheduleChatScrollToBottom();
@@ -297,7 +297,7 @@ function renderLogsOutput() {
     });
   }
 
-  logsOutputEl.textContent = lines.join('\n') || (selectedOrigin === 'all' ? '(sem logs)' : '(sem logs para a origem selecionada)');
+  logsOutputEl.textContent = lines.join('\n') || (selectedOrigin === 'all' ? translate('logs.empty') : translate('logs.emptyOrigin'));
   logsOutputEl.scrollTop = logsOutputEl.scrollHeight;
 }
 
@@ -306,9 +306,9 @@ async function clearLogs() {
     await appApi().ClearLogs();
     logsLastLines = [];
     renderLogsOutput();
-    showToast('Logs limpos', 'info');
+    showToast(translate('logs.cleared'), 'info');
   } catch (error) {
-    showToast('Erro ao limpar logs: ' + String(error), 'error');
+    showToast(translate('logs.clearError', { error: String(error) }), 'error');
   }
 }
 
@@ -346,7 +346,7 @@ function updateThemeIcon(isDark) {
       themeIcon.innerHTML = '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>';
     }
   }
-  if (label) label.textContent = isDark ? 'Tema Claro' : 'Tema Escuro';
+  if (label) label.textContent = isDark ? translate('theme.light') : translate('theme.dark');
 }
 
 function syncWindowChromeSidebarWidth() {

@@ -325,6 +325,9 @@ function initAppBindings() {
 }
 
 async function bootstrapApp() {
+  if (typeof initApplicationLocale === 'function') {
+    await initApplicationLocale();
+  }
   initAppBindings();
   updateSortIndicators();
   initTheme();
@@ -337,6 +340,10 @@ async function bootstrapApp() {
     setRuntimeFlags(flags || { debugMode: false });
   } catch (_) {
     setRuntimeFlags({ debugMode: false });
+  }
+
+  if (typeof syncProvisioningOverlayFromRuntime === 'function') {
+    await syncProvisioningOverlayFromRuntime();
   }
 
   if (isDebugRuntimeMode()) {

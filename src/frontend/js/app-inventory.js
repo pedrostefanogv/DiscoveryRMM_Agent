@@ -114,7 +114,7 @@ function renderLoggedUsers(items) {
   renderCardList(loggedUsersOutputEl, items, 'Nenhum usuario logado encontrado.', function (u) {
     var timeStr = '-';
     if (u.time && u.time > 0) {
-      try { timeStr = new Date(u.time * 1000).toLocaleString(); } catch (e) { timeStr = String(u.time); }
+      try { timeStr = formatDate(u.time * 1000, '-'); } catch (e) { timeStr = String(u.time); }
     }
     return '<div class="network-card">' +
       '<strong>' + escapeHtml(u.user || '-') + '</strong>' +
@@ -231,7 +231,7 @@ function setInventoryLoading(isLoading) {
 function setInventoryInitialLoadingState(isLoading, message, isError) {
   if (!inventoryInitialLoadingEl || !inventoryContentEl) return;
 
-  var infoMessage = message || 'Coletando dados de inventario...';
+  var infoMessage = message || translate('inventory.collecting');
   if (inventoryInitialLoadingTextEl) {
     inventoryInitialLoadingTextEl.textContent = infoMessage;
   }
@@ -247,9 +247,9 @@ function setInventoryInitialLoadingState(isLoading, message, isError) {
 
 function renderSoftwareTable() {
   if (!inventorySoftwareFiltered.length) {
-    softwareTableBodyEl.innerHTML = '<tr><td colspan="6">Nenhum software encontrado.</td></tr>';
-    softwareCountEl.textContent = 'Total visivel: 0';
-    softwarePageInfoEl.textContent = 'Pagina 1 de 1';
+    softwareTableBodyEl.innerHTML = '<tr><td colspan="6">' + escapeHtml(translate('inventory.noneSoftwareFound')) + '</td></tr>';
+    softwareCountEl.textContent = translate('inventory.visibleTotal', { visible: 0 });
+    softwarePageInfoEl.textContent = translate('pagination.page', { page: 1, total: 1 });
     softwarePrevBtn.disabled = true;
     softwareNextBtn.disabled = true;
     return;
@@ -272,17 +272,17 @@ function renderSoftwareTable() {
     '</tr>';
   }).join('');
 
-  softwareCountEl.textContent = 'Total visivel: ' + inventorySoftwareFiltered.length + ' | Total inventario: ' + inventorySoftware.length;
-  softwarePageInfoEl.textContent = 'Pagina ' + softwarePage + ' de ' + pg.totalPages;
+  softwareCountEl.textContent = translate('inventory.visibleInventoryTotal', { visible: inventorySoftwareFiltered.length, total: inventorySoftware.length });
+  softwarePageInfoEl.textContent = translate('pagination.page', { page: softwarePage, total: pg.totalPages });
   softwarePrevBtn.disabled = softwarePage <= 1;
   softwareNextBtn.disabled = softwarePage >= pg.totalPages;
 }
 
 function renderStartupTable() {
   if (!inventoryStartupItemsFiltered.length) {
-    startupTableBodyEl.innerHTML = '<tr><td colspan="5">Nenhum startup item encontrado.</td></tr>';
-    startupCountEl.textContent = 'Total visivel: 0';
-    startupPageInfoEl.textContent = 'Pagina 1 de 1';
+    startupTableBodyEl.innerHTML = '<tr><td colspan="5">' + escapeHtml(translate('inventory.noneStartupFound')) + '</td></tr>';
+    startupCountEl.textContent = translate('inventory.visibleTotal', { visible: 0 });
+    startupPageInfoEl.textContent = translate('pagination.page', { page: 1, total: 1 });
     startupPrevBtn.disabled = true;
     startupNextBtn.disabled = true;
     return;
@@ -300,8 +300,8 @@ function renderStartupTable() {
         '<details>' +
           '<summary>' + escapeHtml(item.name || '-') + '</summary>' +
           '<div>' +
-            '<span><strong>Path:</strong> ' + escapeHtml(item.path || '-') + '</span>' +
-            '<span><strong>Args:</strong> ' + escapeHtml(item.args || '-') + '</span>' +
+            '<span><strong>' + escapeHtml(translate('field.path')) + ':</strong> ' + escapeHtml(item.path || '-') + '</span>' +
+            '<span><strong>' + escapeHtml(translate('field.args')) + ':</strong> ' + escapeHtml(item.args || '-') + '</span>' +
           '</div>' +
         '</details>' +
       '</td>' +
@@ -312,8 +312,8 @@ function renderStartupTable() {
     '</tr>';
   }).join('');
 
-  startupCountEl.textContent = 'Total visivel: ' + inventoryStartupItemsFiltered.length + ' | Total inventario: ' + inventoryStartupItems.length;
-  startupPageInfoEl.textContent = 'Pagina ' + startupPage + ' de ' + pg.totalPages;
+  startupCountEl.textContent = translate('inventory.visibleInventoryTotal', { visible: inventoryStartupItemsFiltered.length, total: inventoryStartupItems.length });
+  startupPageInfoEl.textContent = translate('pagination.page', { page: startupPage, total: pg.totalPages });
   startupPrevBtn.disabled = startupPage <= 1;
   startupNextBtn.disabled = startupPage >= pg.totalPages;
 }
@@ -689,11 +689,14 @@ function updateConnectionsSortIndicators() {
 
 function renderConnectionsTable() {
   if (!connectionsFiltered.length) {
-    var emptyMsg = '<tr><td colspan="4">Nenhuma ' + (connectionsType === 'listening' ? 'porta' : 'conexão') + ' encontrada.</td></tr>';
+    var emptyText = connectionsType === 'listening'
+      ? translate('inventory.noneListeningPortFound')
+      : translate('inventory.noneOpenConnectionFound');
+    var emptyMsg = '<tr><td colspan="4">' + escapeHtml(emptyText) + '</td></tr>';
     listeningPortsTableBodyEl.innerHTML = connectionsType === 'listening' ? emptyMsg : '';
     openSocketsTableBodyEl.innerHTML = connectionsType === 'open' ? emptyMsg : '';
-    connectionsCountEl.textContent = 'Total: 0';
-    connectionsPageInfoEl.textContent = 'Pagina 1 de 1';
+    connectionsCountEl.textContent = translate('inventory.visibleTotal', { visible: 0 });
+    connectionsPageInfoEl.textContent = translate('pagination.page', { page: 1, total: 1 });
     connectionsPrevBtn.disabled = true;
     connectionsNextBtn.disabled = true;
     return;
@@ -711,8 +714,8 @@ function renderConnectionsTable() {
     openSocketsTableBodyEl.innerHTML = pageItems.map(buildOpenSocketRow).join('');
   }
 
-  connectionsCountEl.textContent = 'Total visivel: ' + connectionsFiltered.length + ' | Total inventario: ' + (connectionsData[connectionsType] || []).length;
-  connectionsPageInfoEl.textContent = 'Pagina ' + connectionsPage + ' de ' + pg.totalPages;
+  connectionsCountEl.textContent = translate('inventory.visibleInventoryTotal', { visible: connectionsFiltered.length, total: (connectionsData[connectionsType] || []).length });
+  connectionsPageInfoEl.textContent = translate('pagination.page', { page: connectionsPage, total: pg.totalPages });
   connectionsPrevBtn.disabled = connectionsPage <= 1;
   connectionsNextBtn.disabled = connectionsPage >= pg.totalPages;
   
@@ -728,8 +731,8 @@ function buildListeningPortRow(item) {
       '<details>' +
         '<summary>' + escapeHtml(item.processName || '-') + '</summary>' +
         '<div>' +
-          '<span><strong>ID:</strong> ' + escapeHtml(String(processId)) + '</span>' +
-          '<span><strong>Path:</strong> ' + escapeHtml(processPath) + '</span>' +
+          '<span><strong>' + escapeHtml(translate('field.id')) + ':</strong> ' + escapeHtml(String(processId)) + '</span>' +
+          '<span><strong>' + escapeHtml(translate('field.path')) + ':</strong> ' + escapeHtml(processPath) + '</span>' +
         '</div>' +
       '</details>' +
     '</td>' +
@@ -752,9 +755,9 @@ function buildOpenSocketRow(item) {
       '<details>' +
         '<summary>' + escapeHtml(item.processName || '-') + '</summary>' +
         '<div>' +
-          '<span><strong>ID:</strong> ' + escapeHtml(String(processId)) + '</span>' +
-          '<span><strong>Path:</strong> ' + escapeHtml(processPath) + '</span>' +
-          '<span><strong>Family:</strong> ' + escapeHtml(family) + '</span>' +
+          '<span><strong>' + escapeHtml(translate('field.id')) + ':</strong> ' + escapeHtml(String(processId)) + '</span>' +
+          '<span><strong>' + escapeHtml(translate('field.path')) + ':</strong> ' + escapeHtml(processPath) + '</span>' +
+          '<span><strong>' + escapeHtml(translate('field.family')) + ':</strong> ' + escapeHtml(family) + '</span>' +
         '</div>' +
       '</details>' +
     '</td>' +
@@ -784,16 +787,16 @@ async function loadInventory(forceRefresh) {
 
   try {
     setInventoryLoading(true);
-    inventoryInfoEl.textContent = 'Coletando inventario...';
-    showFeedback('Coletando inventario...');
+    inventoryInfoEl.textContent = translate('inventory.collectingNow');
+    showFeedback(translate('inventory.collectingNow'));
 
     if (isInitialLoad) {
-      setInventoryInitialLoadingState(true, 'Buscando cache local e preparando os dados para exibicao.', false);
+      setInventoryInitialLoadingState(true, translate('inventory.initialLoadingText'), false);
     }
 
     var report = forceRefresh ? await appApi().RefreshInventory() : await appApi().GetInventory();
 
-    inventoryInfoEl.textContent = 'Coletado em ' + (report.collectedAt || '-');
+    inventoryInfoEl.textContent = translate('inventory.collectedAt', { date: formatDate(report.collectedAt, '-') });
     renderFacts(hardwareOutputEl, report.hardware);
     renderFacts(osOutputEl, report.os);
     renderLoggedUsers(report.loggedInUsers || []);
@@ -818,7 +821,7 @@ async function loadInventory(forceRefresh) {
     renderSoftwareTable();
     inventoryLoadedOnce = true;
 
-    showFeedback('Inventario atualizado.');
+    showFeedback(translate('inventory.updated'));
     loadSidebarUser();
 
     if (isInitialLoad) {
@@ -826,11 +829,11 @@ async function loadInventory(forceRefresh) {
     }
   } catch (error) {
     showFeedback(String(error), true);
-    inventoryInfoEl.textContent = 'Falha ao coletar inventario';
+    inventoryInfoEl.textContent = translate('inventory.collectFailed');
 
     if (isInitialLoad) {
       keepInitialState = true;
-      setInventoryInitialLoadingState(true, 'Falha ao coletar os dados iniciais. Clique em Coletar Inventario para tentar novamente.', true);
+      setInventoryInitialLoadingState(true, translate('inventory.initialCollectFailed'), true);
     }
   } finally {
     setInventoryLoading(false);
@@ -897,21 +900,21 @@ async function exportInventory() {
 async function exportInventoryPdf() {
   if (!exportInventoryPdfBtn) return;
   try {
-    showFeedback('Exportando inventario em PDF...');
-    setExportStatus('Exportacao PDF em andamento...');
+    showFeedback(translate('inventory.exportPdfRunningFeedback'));
+    setExportStatus(translate('inventory.exportPdfRunningStatus'));
     exportInventoryPdfBtn.disabled = true;
     var path = await appApi().ExportInventoryPDF();
     path = String(path || '').trim();
     if (!path) {
-      showFeedback('Nenhum arquivo retornado do servidor', true);
-      setExportStatus('Falha: nenhum caminho retornado', true);
+      showFeedback(translate('inventory.exportNoFile'), true);
+      setExportStatus(translate('inventory.exportNoPath'), true);
       return;
     }
-    showFeedback('PDF exportado: ' + path);
-    setExportStatus('PDF criado com sucesso em: ' + path);
+    showFeedback(translate('inventory.exportPdfSuccessFeedback', { path: path }));
+    setExportStatus(translate('inventory.exportPdfSuccessStatus', { path: path }));
   } catch (error) {
     showFeedback(String(error), true);
-    setExportStatus('Falha ao exportar PDF: ' + String(error), true);
+    setExportStatus(translate('inventory.exportPdfError', { error: String(error) }), true);
   } finally {
     exportInventoryPdfBtn.disabled = false;
   }
@@ -922,15 +925,15 @@ async function refreshOsqueryStatus() {
   try {
     var status = await appApi().GetOsqueryStatus();
     if (status.installed) {
-      osqueryStatusEl.textContent = 'osquery: instalado (' + (status.path || 'path desconhecido') + ')';
+      osqueryStatusEl.textContent = translate('inventory.osqueryInstalled', { path: (status.path || translate('common.unknown')) });
       installOsqueryBtn.classList.add('hidden');
       return;
     }
 
-    osqueryStatusEl.textContent = 'osquery: nao detectado (pacote: ' + (status.suggestedPackageID || 'osquery.osquery') + ')';
+    osqueryStatusEl.textContent = translate('inventory.osqueryNotDetected', { packageId: (status.suggestedPackageID || 'osquery.osquery') });
     installOsqueryBtn.classList.remove('hidden');
   } catch (error) {
-    osqueryStatusEl.textContent = 'osquery: erro ao verificar (' + String(error) + ')';
+    osqueryStatusEl.textContent = translate('inventory.osqueryCheckError', { error: String(error) });
     installOsqueryBtn.classList.remove('hidden');
   }
 }
@@ -938,11 +941,11 @@ async function refreshOsqueryStatus() {
 async function installOsquery() {
   if (!installOsqueryBtn) return;
   try {
-    showFeedback('Instalando osquery via winget...');
+    showFeedback(translate('inventory.installingOsquery'));
     installOsqueryBtn.disabled = true;
     var output = await appApi().InstallOsquery();
-    installedOutputEl.textContent = output || '(sem saida)';
-    showFeedback('Instalacao do osquery concluida.');
+    installedOutputEl.textContent = output || translate('common.noOutput');
+    showFeedback(translate('inventory.osqueryInstalledFeedback'));
     await refreshOsqueryStatus();
   } catch (error) {
     showFeedback(String(error), true);

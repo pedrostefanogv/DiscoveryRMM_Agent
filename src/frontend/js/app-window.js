@@ -28,13 +28,13 @@
     }
 
     window.go.app.App.GetStatusOverview().then(function (status) {
-      if (metaPC) metaPC.textContent = 'PC: ' + ((status && status.hostname) ? status.hostname : '-');
-      if (metaServer) metaServer.textContent = 'Servidor: ' + ((status && status.server) ? status.server : '-');
-      if (metaConn) metaConn.textContent = 'Conexao: ' + ((status && status.connectionType) ? status.connectionType : '-');
+      if (metaPC) metaPC.textContent = translate('window.meta.pc') + ': ' + ((status && status.hostname) ? status.hostname : '-');
+      if (metaServer) metaServer.textContent = translate('window.meta.server') + ': ' + ((status && status.server) ? status.server : '-');
+      if (metaConn) metaConn.textContent = translate('window.meta.connection') + ': ' + ((status && status.connectionType) ? status.connectionType : '-');
     }).catch(function () {
-      if (metaPC) metaPC.textContent = 'PC: -';
-      if (metaServer) metaServer.textContent = 'Servidor: -';
-      if (metaConn) metaConn.textContent = 'Conexao: -';
+      if (metaPC) metaPC.textContent = translate('window.meta.pc') + ': -';
+      if (metaServer) metaServer.textContent = translate('window.meta.server') + ': -';
+      if (metaConn) metaConn.textContent = translate('window.meta.connection') + ': -';
     });
   }
 
