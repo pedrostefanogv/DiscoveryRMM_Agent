@@ -11,9 +11,6 @@ permissions:
 jobs:
   release:
     runs-on: windows-latest
-    env:
-      DISCOVERY_DEFAULT_SERVER_URL: ${{ vars.DISCOVERY_DEFAULT_SERVER_URL }}
-      DISCOVERY_DEFAULT_KEY: ${{ secrets.DISCOVERY_DEFAULT_KEY }}
 
     steps:
       - name: Checkout
@@ -179,14 +176,6 @@ jobs:
             Version = "${{ steps.meta.outputs.version }}"
             OutputName = "${{ steps.meta.outputs.install_asset_name }}"
             DiscoveryEnabled = '1'
-          }
-
-          if ($env:DISCOVERY_DEFAULT_SERVER_URL) {
-            $params.DefaultUrl = $env:DISCOVERY_DEFAULT_SERVER_URL
-          }
-
-          if ($env:DISCOVERY_DEFAULT_KEY) {
-            $params.DefaultKey = $env:DISCOVERY_DEFAULT_KEY
           }
 
           .\build\scripts\build-install-installer.ps1 @params
