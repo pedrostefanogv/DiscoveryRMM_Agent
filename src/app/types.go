@@ -26,6 +26,10 @@ type AppStartupOptions struct {
 	// TrayIcon holds the embedded ICO bytes for the system tray icon.
 	// Pass the icon from the root package where //go:embed is allowed.
 	TrayIcon []byte
+	// TrayProvisioningIcon is shown while the agent is waiting for provisioning.
+	TrayProvisioningIcon []byte
+	// TrayOfflineIcon is shown when the provisioned agent is offline.
+	TrayOfflineIcon []byte
 }
 
 // RuntimeFlags are exposed to the frontend to control runtime-only UI behavior.
