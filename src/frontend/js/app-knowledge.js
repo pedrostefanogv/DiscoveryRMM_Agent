@@ -36,7 +36,7 @@ function renderKnowledgeArticles(items) {
   if (!kbArticlesListEl) return;
   var list = items || [];
   if (!list.length) {
-    kbArticlesListEl.innerHTML = '<div class="meta">Nenhum artigo encontrado.</div>';
+    kbArticlesListEl.innerHTML = '<div class="meta">' + escapeHtml(translate('knowledge.noArticlesFound')) + '</div>';
     renderKnowledgeArticleDetail(null);
     return;
   }
@@ -95,7 +95,7 @@ function filterKnowledgeArticles(query) {
 async function loadKnowledgeBase() {
   if (!kbArticlesListEl) return;
   try {
-    kbArticlesListEl.innerHTML = '<div class="meta">Carregando artigos...</div>';
+    kbArticlesListEl.innerHTML = '<div class="meta">' + escapeHtml(translate('knowledge.loadingArticles')) + '</div>';
     knowledgeArticles = await appApi().GetKnowledgeBaseArticles();
     knowledgeArticles = Array.isArray(knowledgeArticles) ? knowledgeArticles : [];
     if (knowledgeArticles.length && !selectedKnowledgeArticleID) {
@@ -103,7 +103,7 @@ async function loadKnowledgeBase() {
     }
     filterKnowledgeArticles(kbSearchInputEl ? kbSearchInputEl.value : '');
   } catch (err) {
-    kbArticlesListEl.innerHTML = '<div class="meta">Erro ao carregar base de conhecimento.</div>';
+    kbArticlesListEl.innerHTML = '<div class="meta">' + escapeHtml(translate('knowledge.loadError')) + '</div>';
     renderKnowledgeArticleDetail(null);
   }
 }

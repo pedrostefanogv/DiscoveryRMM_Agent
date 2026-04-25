@@ -2,15 +2,15 @@
     <section class="automation-panel">
       <div class="statusbar page-bar">
         <div>
-          <strong>Automacao</strong>
-          <div class="meta">Policy sync local e tarefas aplicadas ao agent</div>
+          <strong data-i18n="automation.title">Automacao</strong>
+          <div class="meta" data-i18n="automation.subtitle">Policy sync local e tarefas aplicadas ao agent</div>
         </div>
         <div class="actions automation-actions">
           <label class="redact-label automation-inline-option">
             <input id="automationIncludeScriptContent" type="checkbox" />
-            Incluir conteudo de script no sync manual
+            <span data-i18n="automation.includeScriptContent">Incluir conteudo de script no sync manual</span>
           </label>
-          <button id="automationRefreshBtn" class="btn primary">Atualizar Policy</button>
+          <button id="automationRefreshBtn" class="btn primary" data-i18n="action.refreshPolicy">Atualizar Policy</button>
         </div>
       </div>
 
@@ -18,40 +18,40 @@
 
       <div class="automation-summary-grid">
         <article class="card automation-summary-card">
-          <h3>Status</h3>
+          <h3 data-i18n="field.status">Status</h3>
           <div id="automationSummary" class="facts-grid"></div>
         </article>
         <article class="card automation-summary-card">
-          <h3>Observacoes</h3>
-          <div id="automationNotes" class="automation-notes meta">Nenhum sync executado ainda.</div>
+          <h3 data-i18n="automation.notes">Observacoes</h3>
+          <div id="automationNotes" class="automation-notes meta" data-i18n="automation.noSyncYet">Nenhum sync executado ainda.</div>
         </article>
       </div>
 
       <article class="card automation-summary-card">
         <div class="automation-task-head section-bar">
-          <h3>Execucao Local</h3>
+          <h3 data-i18n="automation.localExecution">Execucao Local</h3>
           <span id="automationPendingCallbacks" class="meta">0 callbacks pendentes</span>
         </div>
-        <div class="meta">ACK e RESULT sao enviados imediatamente quando possivel e entram em fila persistente quando o backend estiver indisponivel.</div>
+        <div class="meta" data-i18n="automation.ackResultMessage">ACK e RESULT sao enviados imediatamente quando possivel e entram em fila persistente quando o backend estiver indisponivel.</div>
       </article>
 
       <article class="card automation-tasks-card">
         <div class="automation-task-head section-bar">
-          <h3>Tarefas Resolvidas</h3>
+          <h3 data-i18n="automation.resolvedTasks">Tarefas Resolvidas</h3>
           <span id="automationTaskCount" class="meta">0 tarefas</span>
         </div>
         <div id="automationTasks" class="automation-task-list">
-          <div class="meta">Nenhuma policy carregada.</div>
+          <div class="meta" data-i18n="automation.noPolicyLoaded">Nenhuma policy carregada.</div>
         </div>
       </article>
 
       <article class="card automation-tasks-card">
         <div class="automation-task-head section-bar">
-          <h3>Execucoes Recentes</h3>
+          <h3 data-i18n="automation.recentExecutions">Execucoes Recentes</h3>
           <span id="automationExecutionCount" class="meta">0 execucoes</span>
         </div>
         <div id="automationExecutions" class="automation-execution-list">
-          <div class="meta">Nenhuma execucao registrada.</div>
+          <div class="meta" data-i18n="automation.noExecutions">Nenhuma execucao registrada.</div>
         </div>
       </article>
     </section>

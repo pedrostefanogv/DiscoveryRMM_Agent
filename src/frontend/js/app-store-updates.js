@@ -14,11 +14,11 @@ function onStoreCatalogUpdated(data) {
   if (activeTab === 'store' && !window.__discoveryUISuspended && !document.hidden) {
     storeCatalogDirty = false;
     loadCatalog();
-    showToast('Loja atualizada por sync' + (data && data.variant ? ' (' + data.variant + ')' : ''), 'info');
+    showToast(translate('store.synced', { variant: data && data.variant ? ' (' + data.variant + ')' : '' }), 'info');
     return;
   }
 
-  showToast('Novos dados da loja recebidos via sync', 'info');
+  showToast(translate('store.newDataSync'), 'info');
 }
 
 (function registerStoreSyncEvents() {
@@ -40,7 +40,7 @@ function onStoreCatalogUpdated(data) {
 // ---------------------------------------------------------------------------
 function renderCards() {
   if (!state.filtered.length) {
-    cardsEl.innerHTML = '<div class="card"><h3>Nenhum pacote encontrado</h3><p class="meta">Ajuste o filtro de busca.</p></div>';
+    cardsEl.innerHTML = '<div class="card"><h3>' + escapeHtml(translate('store.noPackagesFound')) + '</h3><p class="meta">' + escapeHtml(translate('store.adjustSearchFilter')) + '</p></div>';
     updateCatalogPagination();
     return;
   }
@@ -53,9 +53,9 @@ function renderCards() {
   var pageItems = state.filtered.slice(start, end);
 
   cardsEl.innerHTML = pageItems.map(function (pkg) {
-    var description = pkg.description || 'Sem descricao';
-    var publisher = pkg.publisher || 'Desconhecido';
-    var version = pkg.version || 'N/A';
+    var description = pkg.description || translate('store.noDescription');
+    var publisher = pkg.publisher || translate('common.unknown');
+    var version = pkg.version || translate('common.notAvailable');
     var iconHtml = '';
     if (pkg.icon) {
       iconHtml = '<div class="app-icon-container"><img src="' + escapeHtmlAttr(pkg.icon) + '" alt="' + escapeHtmlAttr(pkg.name || pkg.id) + '" class="app-icon" /></div>';
@@ -64,13 +64,13 @@ function renderCards() {
     var action = getContextAction(pkg.id);
     var actionClass = action.action === 'install' ? 'btn primary' : 'btn danger';
     var actionButton = '<button class="' + actionClass + '" data-action="' + escapeHtmlAttr(action.action) + '" data-id="' + escapeHtmlAttr(pkg.id) + '">' + escapeHtml(action.label) + '</button>';
-    var detailButton = '<button class="btn subtle store-detail-btn" data-detail-id="' + escapeHtmlAttr(pkg.id) + '" title="Ver detalhes" aria-label="Ver detalhes de ' + escapeHtmlAttr(pkg.name || pkg.id) + '">ⓘ</button>';
+    var detailButton = '<button class="btn subtle store-detail-btn" data-detail-id="' + escapeHtmlAttr(pkg.id) + '" title="' + escapeHtmlAttr(translate('store.viewDetails')) + '" aria-label="' + escapeHtmlAttr(translate('store.viewDetailsOf', { name: pkg.name || pkg.id })) + '">ⓘ</button>';
 
     return '<article class="card store-card">' +
       iconHtml +
       '<h3>' + escapeHtml(pkg.name || pkg.id) + '</h3>' +
       '<div class="meta">' + escapeHtml(publisher) + ' | ' + escapeHtml(version) + '</div>' +
-      '<div class="meta">ID: ' + escapeHtml(pkg.id) + '</div>' +
+      '<div class="meta">' + escapeHtml(translate('store.packageId', { id: pkg.id })) + '</div>' +
       '<p class="desc">' + escapeHtml(description).slice(0, 180) + '</p>' +
       '<div class="card-actions">' +
         actionButton +
@@ -84,7 +84,7 @@ function renderCards() {
 
 function updateCatalogPagination() {
   var pg = getPaginationState(state.filtered, catalogPage, catalogPageSize);
-  if (catalogPageInfoEl) catalogPageInfoEl.textContent = 'Pagina ' + catalogPage + ' de ' + pg.totalPages;
+  if (catalogPageInfoEl) catalogPageInfoEl.textContent = translate('pagination.page', { page: catalogPage, total: pg.totalPages });
   if (catalogPrevBtn) catalogPrevBtn.disabled = catalogPage <= 1;
   if (catalogNextBtn) catalogNextBtn.disabled = catalogPage >= pg.totalPages;
 }
@@ -104,19 +104,19 @@ function applyFilter() {
 
 async function loadCatalog() {
   try {
-    showFeedback('Carregando catalogo...');
+    showFeedback(translate('store.catalogLoading'));
     var api = appApi();
     var catalog = await api.GetCatalog();
     state.allPackages = catalog.packages || [];
     await loadPackageActions(api);
     state.filtered = state.allPackages;
     catalogPage = 1;
-    infoEl.textContent = 'Apps permitidos: ' + (catalog.count || state.allPackages.length) + ' | Com icone: ' + (catalog.packagesWithIcon || 0);
+    infoEl.textContent = translate('store.appsAllowed', { count: (catalog.count || state.allPackages.length), icons: (catalog.packagesWithIcon || 0) });
     applyFilter();
-    showFeedback('Catalogo carregado.');
+    showFeedback(translate('store.catalogLoaded'));
   } catch (error) {
     showFeedback(String(error), true);
-    infoEl.textContent = 'Falha ao carregar apps permitidos';
+    infoEl.textContent = translate('store.catalogLoadFailure');
   }
 }
 
@@ -135,8 +135,8 @@ async function loadPackageActions(api) {
 function getContextAction(packageId) {
   var key = String(packageId || '').toLowerCase();
   var action = state.packageActions[key];
-  if (action === 'upgrade' || action === 'uninstall') return { action: 'uninstall', label: 'Remover' };
-  return { action: 'install', label: 'Instalar' };
+  if (action === 'upgrade' || action === 'uninstall') return { action: 'uninstall', label: translate('action.remove') };
+  return { action: 'install', label: translate('action.install') };
 }
 
 function populateCategories() {
@@ -178,7 +178,7 @@ async function runAction(action, id) {
 
     showFeedback(action + ' concluido para ' + id);
     if (installedOutputEl) {
-      installedOutputEl.textContent = output || '(sem saida)';
+      installedOutputEl.textContent = output || translate('common.noOutput');
     }
   } catch (error) {
     showFeedback(String(error), true);
@@ -191,7 +191,7 @@ async function runUpgradeAll() {
     var output = await appApi().UpgradeAll();
     showFeedback('Atualizacao geral concluida.');
     if (installedOutputEl) {
-      installedOutputEl.textContent = output || '(sem saida)';
+      installedOutputEl.textContent = output || translate('common.noOutput');
     }
   } catch (error) {
     showFeedback(String(error), true);
@@ -203,7 +203,7 @@ async function listInstalled() {
     showFeedback('Consultando apps instalados...');
     var output = await appApi().ListInstalled();
     if (installedOutputEl) {
-      installedOutputEl.textContent = output || '(sem saida)';
+      installedOutputEl.textContent = output || translate('common.noOutput');
     }
     showFeedback('Lista de instalados atualizada.');
   } catch (error) {
@@ -218,19 +218,19 @@ async function listInstalled() {
 async function checkPendingUpdates() {
   try {
     updatesProgressEl.classList.remove('hidden');
-    updatesInfoEl.textContent = 'Verificando...';
+    updatesInfoEl.textContent = translate('common.loading');
     checkUpdatesBtn.disabled = true;
     pendingUpdates = (await appApi().GetPendingUpdates()) || [];
-    updatesInfoEl.textContent = pendingUpdates.length + ' atualizacao(oes) disponivel(is)';
+    updatesInfoEl.textContent = translate('updates.availableCount', { count: pendingUpdates.length });
     renderUpdatesTable();
     if (pendingUpdates.length > 0) {
-      showToast(pendingUpdates.length + ' atualizacao(oes) encontrada(s)', 'success');
+      showToast(translate('updates.foundCount', { count: pendingUpdates.length }), 'success');
     } else {
-      showToast('Nenhuma atualizacao pendente', 'info');
+      showToast(translate('updates.nonePending'), 'info');
     }
   } catch (error) {
     showFeedback(String(error), true);
-    updatesInfoEl.textContent = 'Erro ao verificar atualizacoes';
+    updatesInfoEl.textContent = translate('updates.checkError');
   } finally {
     updatesProgressEl.classList.add('hidden');
     checkUpdatesBtn.disabled = false;
@@ -239,7 +239,7 @@ async function checkPendingUpdates() {
 
 function renderUpdatesTable() {
   if (!pendingUpdates.length) {
-    updatesTableBodyEl.innerHTML = '<tr><td colspan="5" class="meta">Nenhuma atualizacao pendente.</td></tr>';
+    updatesTableBodyEl.innerHTML = '<tr><td colspan="5" class="meta">' + escapeHtml(translate('updates.nonePending')) + '</td></tr>';
     upgradeSelectedBtn.disabled = true;
     if (updateSelectAllEl) updateSelectAllEl.checked = false;
     return;
@@ -250,7 +250,7 @@ function renderUpdatesTable() {
       '<td>' + escapeHtml(u.name || '-') + '</td>' +
       '<td>' + escapeHtml(u.currentVersion || '-') + '</td>' +
       '<td>' + escapeHtml(u.availableVersion || '-') + '</td>' +
-      '<td><button class="btn primary" data-action="upgrade" data-id="' + escapeHtmlAttr(u.id) + '">Atualizar</button></td>' +
+      '<td><button class="btn primary" data-action="upgrade" data-id="' + escapeHtmlAttr(u.id) + '">' + escapeHtml(translate('updates.upgrade')) + '</button></td>' +
     '</tr>';
   }).join('');
   updateUpgradeSelectedState();
@@ -268,14 +268,14 @@ async function upgradeSelected() {
   upgradeSelectedBtn.disabled = true;
   for (var i = 0; i < ids.length; i++) {
     try {
-      showToast('Atualizando ' + ids[i] + '...', 'info');
+      showToast(translate('updates.upgradingItem', { id: ids[i] }), 'info');
       await appApi().Upgrade(ids[i]);
-      showToast(ids[i] + ' atualizado com sucesso', 'success');
+      showToast(translate('updates.upgradeSuccess', { id: ids[i] }), 'success');
     } catch (error) {
-      showToast('Erro ao atualizar ' + ids[i] + ': ' + String(error), 'error');
+      showToast(translate('updates.upgradeError', { id: ids[i], error: String(error) }), 'error');
     }
   }
-  showToast('Atualizacao em lote concluida', 'success');
+  showToast(translate('updates.batchComplete'), 'success');
   checkPendingUpdates();
 }
 
@@ -300,13 +300,13 @@ function openAppDetailModal(pkg) {
   var actionBtn = document.getElementById('appDetailActionBtn');
 
   if (titleEl) titleEl.textContent = pkg.name || pkg.id;
-  if (metaEl) metaEl.textContent = (pkg.publisher || 'Desconhecido') + ' | ' + (pkg.version || 'N/A') + '  |  ID: ' + pkg.id;
+  if (metaEl) metaEl.textContent = translate('store.appMeta', { publisher: (pkg.publisher || translate('common.unknown')), version: (pkg.version || translate('common.notAvailable')), id: pkg.id });
   if (iconEl) iconEl.innerHTML = pkg.icon
     ? '<img src="' + escapeHtmlAttr(pkg.icon) + '" alt="" class="app-icon" style="width:64px;height:64px;" />'
     : '';
   if (descEl) descEl.innerHTML = typeof renderMarkdown === 'function'
-    ? renderMarkdown(pkg.description || 'Sem descricao')
-    : escapeHtml(pkg.description || 'Sem descricao');
+    ? renderMarkdown(pkg.description || translate('store.noDescription'))
+    : escapeHtml(pkg.description || translate('store.noDescription'));
 
   if (actionBtn) {
     var action = getContextAction(pkg.id);

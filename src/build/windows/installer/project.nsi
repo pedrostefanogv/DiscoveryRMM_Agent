@@ -40,7 +40,8 @@ Unicode true
 !define INFO_FILEVERSION "1.0.0.0"
 !endif
 !define INFO_COPYRIGHT      "Copyright (c) 2026 Discovery"
-!define PRODUCT_EXECUTABLE  "discovery.exe"
+!define PRODUCT_EXECUTABLE  "discovery-agent.exe"
+!define LEGACY_PRODUCT_EXECUTABLE "discovery.exe"
 !define UNINST_KEY_NAME     "Discovery.RMM"
 !define DISCOVERY_SERVICE_NAME "DiscoveryAgent"
 !define DISCOVERY_UI_TASK_NAME "DiscoveryAgentUI"
@@ -405,6 +406,10 @@ Section
          !insertmacro wails.webview2runtime
          !insertmacro wails.files
 
+         ${If} "${LEGACY_PRODUCT_EXECUTABLE}" != "${PRODUCT_EXECUTABLE}"
+            Delete "$INSTDIR\${LEGACY_PRODUCT_EXECUTABLE}"
+         ${EndIf}
+
          CreateShortcut "$SMPROGRAMS\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}" "" "$INSTDIR\${PRODUCT_EXECUTABLE}" 0
          CreateShortCut "$DESKTOP\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}" "" "$INSTDIR\${PRODUCT_EXECUTABLE}" 0
 
@@ -434,10 +439,31 @@ Section "uninstall"
    # Encerrar/remover service antes de limpar binários
    Call un.UnregisterWindowsService
 
+   # Garantir encerramento de qualquer instancia em modo UI/headless.
+   ExecWait '"$SYSDIR\taskkill.exe" /IM "${PRODUCT_EXECUTABLE}" /F /T' $R0
+   ${If} $R0 != 0
+      DetailPrint "Aviso: taskkill retornou codigo $R0 (pode nao haver processo em execucao)."
+   ${EndIf}
+
+   ${If} "${LEGACY_PRODUCT_EXECUTABLE}" != "${PRODUCT_EXECUTABLE}"
+      ExecWait '"$SYSDIR\taskkill.exe" /IM "${LEGACY_PRODUCT_EXECUTABLE}" /F /T' $R1
+      ${If} $R1 != 0
+         DetailPrint "Aviso: taskkill legado retornou codigo $R1 (pode nao haver processo legado em execucao)."
+      ${EndIf}
+   ${EndIf}
+
    # Remover task agendada de autostart da UI
    Call un.UnregisterUIStartupTask
 
     RMDir /r "$AppData\${PRODUCT_EXECUTABLE}" # Remove the WebView2 DataPath
+   ${If} "${LEGACY_PRODUCT_EXECUTABLE}" != "${PRODUCT_EXECUTABLE}"
+      RMDir /r "$AppData\${LEGACY_PRODUCT_EXECUTABLE}"
+   ${EndIf}
+
+   ReadEnvStr $R2 "ProgramData"
+   ${If} $R2 != ""
+      RMDir /r "$R2\Discovery"
+   ${EndIf}
 
     RMDir /r $INSTDIR
 
@@ -447,6 +473,8 @@ Section "uninstall"
 
     !insertmacro wails.unassociateFiles
     !insertmacro wails.unassociateCustomProtocols
+
+   DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${UNINST_KEY_NAME}"
 
     !insertmacro wails.deleteUninstaller
 SectionEnd
@@ -535,6 +563,8 @@ Function DownloadAndRunStage2
       Abort
    ${EndIf}
 
+   DetailPrint "Payload URL: $PayloadUrl"
+
    ${If} $PayloadFileName == ""
       StrCpy $PayloadFileName "discovery-stage2-installer.exe"
    ${EndIf}
@@ -615,6 +645,13 @@ Function PrepareForInPlaceUpdate
    ExecWait '"$SYSDIR\taskkill.exe" /IM "${PRODUCT_EXECUTABLE}" /F /T' $R0
    ${If} $R0 != 0
       DetailPrint "Aviso: taskkill retornou codigo $R0 (pode nao haver processo em execucao)."
+   ${EndIf}
+
+   ${If} "${LEGACY_PRODUCT_EXECUTABLE}" != "${PRODUCT_EXECUTABLE}"
+      ExecWait '"$SYSDIR\taskkill.exe" /IM "${LEGACY_PRODUCT_EXECUTABLE}" /F /T' $R1
+      ${If} $R1 != 0
+         DetailPrint "Aviso: taskkill legado retornou codigo $R1 (pode nao haver processo legado em execucao)."
+      ${EndIf}
    ${EndIf}
 FunctionEnd
 

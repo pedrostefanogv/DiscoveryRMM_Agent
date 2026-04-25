@@ -13,11 +13,11 @@ function setDebugStatus(message, type) {
 function renderAgentStatus(s) {
   if (!agentStatusDotEl || !agentStatusLabelEl) return;
   agentStatusDotEl.className = 'agent-status-indicator ' + (s && s.connected ? 'online' : 'offline');
-  agentStatusLabelEl.textContent = s && s.connected ? 'Online' : 'Offline / Desconectado';
+  agentStatusLabelEl.textContent = s && s.connected ? translate('common.online') : translate('debug.offlineDisconnected');
   if (agentStatusDetailEl) {
     var parts = [];
-    if (s && s.agentId) parts.push('ID: ' + s.agentId);
-    if (s && s.server) parts.push('servidor: ' + s.server);
+    if (s && s.agentId) parts.push(translate('field.id') + ': ' + s.agentId);
+    if (s && s.server) parts.push(translate('debug.serverLabel', { server: s.server }));
     if (s && s.lastEvent) parts.push(s.lastEvent);
     agentStatusDetailEl.textContent = parts.join('  |  ');
   }
@@ -60,10 +60,10 @@ function refreshWatchdogHealth() {
     appApi().GetWatchdogHealth().then(function (checks) {
       renderWatchdogHealth(checks);
     }).catch(function (err) {
-      watchdogHealthContainer.innerHTML = '<div class="watchdog-loading">Erro ao carregar status: ' + err + '</div>';
+      watchdogHealthContainer.innerHTML = '<div class="watchdog-loading">' + escapeHtml(translate('debug.statusLoadError', { error: String(err) })) + '</div>';
     });
   } catch (e) {
-    watchdogHealthContainer.innerHTML = '<div class="watchdog-loading">Watchdog nao disponivel</div>';
+    watchdogHealthContainer.innerHTML = '<div class="watchdog-loading">' + escapeHtml(translate('debug.watchdogUnavailable')) + '</div>';
   }
 }
 
@@ -71,7 +71,7 @@ function renderWatchdogHealth(checks) {
   if (!watchdogHealthContainer) return;
 
   if (!checks || checks.length === 0) {
-    watchdogHealthContainer.innerHTML = '<div class="watchdog-loading">Nenhum componente monitorado</div>';
+    watchdogHealthContainer.innerHTML = '<div class="watchdog-loading">' + escapeHtml(translate('debug.noMonitoredComponents')) + '</div>';
     return;
   }
 
@@ -81,13 +81,13 @@ function renderWatchdogHealth(checks) {
     var statusClass = (check.status || 'unknown').toLowerCase();
     var componentName = formatComponentName(check.component);
     var badgeClass = check.recoverable ? 'recoverable' : 'not-recoverable';
-    var badgeText = check.recoverable ? 'Auto-recuperavel' : 'Manual';
+    var badgeText = check.recoverable ? translate('debug.autoRecoverable') : translate('debug.manualRecovery');
     
     html += '<div class="watchdog-component-card ' + statusClass + '">';
     html += '  <div class="watchdog-status-dot ' + statusClass + '"></div>';
     html += '  <div class="watchdog-component-info">';
     html += '    <div class="watchdog-component-name">' + componentName + '</div>';
-    html += '    <div class="watchdog-component-message">' + (check.message || 'Sem informacoes') + '</div>';
+    html += '    <div class="watchdog-component-message">' + escapeHtml(check.message || translate('debug.noInformation')) + '</div>';
     html += '  </div>';
     html += '  <div class="watchdog-component-badge ' + badgeClass + '">' + badgeText + '</div>';
     html += '</div>';
@@ -131,6 +131,9 @@ function loadDebugConfig() {
       if (debugAgentIDEl) debugAgentIDEl.value = cfg.agentId || '';
       if (automationP2PWingetInstallEnabledEl) automationP2PWingetInstallEnabledEl.value = String(!!cfg.automationP2pWingetInstallEnabled);
       updateDebugResponseLabel();
+      if (typeof syncProvisioningOverlayFromConfig === 'function') {
+        syncProvisioningOverlayFromConfig(cfg);
+      }
     }).catch(function () {});
   } catch (e) {}
   startAgentStatusPoll();
@@ -139,7 +142,7 @@ function loadDebugConfig() {
 
 function updateDebugResponseLabel() {
   if (!debugResponseLabelEl) return;
-  debugResponseLabelEl.innerHTML = 'Resposta do teste de conexao';
+  debugResponseLabelEl.textContent = translate('debug.testResponse');
 }
 
 function initDebug() {
@@ -170,7 +173,7 @@ function initDebug() {
 
   if (debugSaveBtn) {
     debugSaveBtn.addEventListener('click', function () {
-      setDebugStatus('Salvando...', '');
+      setDebugStatus(translate('debug.saving'), '');
       appApi().SetDebugConfig({
         apiScheme: apiSchemeEl ? apiSchemeEl.value : 'https',
         apiServer: apiServerEl ? apiServerEl.value.trim() : '',
@@ -181,17 +184,20 @@ function initDebug() {
       }).then(function () {
         workflowStatesCache = null;
         workflowStatesCacheKey = '';
-        setDebugStatus('Configuracao salva com sucesso.', 'success');
+        setDebugStatus(translate('debug.savedSuccess'), 'success');
+        if (typeof syncProvisioningOverlayFromRuntime === 'function') {
+          syncProvisioningOverlayFromRuntime();
+        }
         setTimeout(refreshAgentStatus, 1500);
       }).catch(function (err) {
-        setDebugStatus('Erro ao salvar: ' + (err.message || String(err)), 'error');
+        setDebugStatus(translate('debug.saveError', { error: (err.message || String(err)) }), 'error');
       });
     });
   }
 
   if (debugTestBtn) {
     debugTestBtn.addEventListener('click', function () {
-      setDebugStatus('Testando conexao...', '');
+      setDebugStatus(translate('debug.testingConnection'), '');
       updateDebugResponseLabel();
       if (debugResponseWrapEl) debugResponseWrapEl.classList.add('hidden');
       if (debugResponseEl) debugResponseEl.textContent = '';
@@ -202,11 +208,11 @@ function initDebug() {
         authToken: debugAuthTokenEl ? debugAuthTokenEl.value : '',
         agentId: debugAgentIDEl ? debugAgentIDEl.value.trim() : '',
       }).then(function (body) {
-        setDebugStatus('Conectado com sucesso.', 'success');
+        setDebugStatus(translate('debug.connectedSuccess'), 'success');
         if (debugResponseEl) debugResponseEl.textContent = body;
         if (debugResponseWrapEl) debugResponseWrapEl.classList.remove('hidden');
       }).catch(function (err) {
-        setDebugStatus('Falha na conexao: ' + (err.message || String(err)), 'error');
+        setDebugStatus(translate('debug.connectionFailure', { error: (err.message || String(err)) }), 'error');
         if (debugResponseWrapEl) debugResponseWrapEl.classList.add('hidden');
       });
     });

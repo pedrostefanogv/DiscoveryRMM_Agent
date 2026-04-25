@@ -110,6 +110,7 @@ func waitForSocket(ctx context.Context, socketPath string) error {
 type osqueryiSocketProcess struct {
 	socketPath string
 	cmd        *exec.Cmd
+	done       chan struct{}
 	mu         sync.Mutex
 	stopped    bool
 }
@@ -121,6 +122,9 @@ func (p *osqueryiSocketProcess) stop() {
 		return
 	}
 	p.stopped = true
+	if p.done != nil {
+		close(p.done)
+	}
 	if p.cmd != nil && p.cmd.Process != nil {
 		_ = p.cmd.Process.Kill()
 		_ = p.cmd.Wait()
@@ -149,7 +153,14 @@ func startOsqueryiSocket(ctx context.Context, binary string) (*osqueryiSocketPro
 		return nil, fmt.Errorf("erro ao iniciar osqueryi em modo socket: %w", err)
 	}
 
-	proc := &osqueryiSocketProcess{socketPath: socketPath, cmd: cmd}
+	proc := &osqueryiSocketProcess{socketPath: socketPath, cmd: cmd, done: make(chan struct{})}
+	go func() {
+		select {
+		case <-ctx.Done():
+			proc.stop()
+		case <-proc.done:
+		}
+	}()
 	if err := waitForSocket(ctx, socketPath); err != nil {
 		proc.stop()
 		return nil, err

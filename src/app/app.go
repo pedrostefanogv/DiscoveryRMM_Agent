@@ -133,7 +133,10 @@ type App struct {
 	closeMu           sync.RWMutex
 	allowClose        bool
 	trayReady         atomic.Bool
+	trayIconState     atomic.Int32
 	trayIcon          []byte
+	trayProvisioning  []byte
+	trayOffline       []byte
 	meshEnsureRunning atomic.Bool
 
 	// serviceConnectedMode é true quando o Windows Service foi detectado no startup.
@@ -164,6 +167,8 @@ func NewApp(opts AppStartupOptions) *App {
 	a := &App{
 		runtimeFlags:        RuntimeFlags{DebugMode: opts.DebugMode},
 		trayIcon:            opts.TrayIcon,
+		trayProvisioning:    opts.TrayProvisioningIcon,
+		trayOffline:         opts.TrayOfflineIcon,
 		updateTrigger:       make(chan struct{}, 1),
 		catalogSvc:          services.NewCatalogService(catalogClient),
 		catalogClient:       catalogClient,
@@ -494,6 +499,10 @@ func (a *App) startup(ctx context.Context) {
 		// Quando o service está disponível, ele já gerencia inventário; pular coleta local.
 		if a.serviceConnectedMode.Load() {
 			log.Println("[startup] inventory-startup: ignorado (service disponível)")
+			return
+		}
+		if !isAgentConfigured() {
+			log.Println("[startup] inventory-startup: ignorado (agente sem provisionamento)")
 			return
 		}
 

@@ -1,60 +1,60 @@
 <main id="statusView" class="page-content" role="tabpanel" aria-labelledby="tabStatus">
     <section class="status-panel">
       <div class="statusbar page-bar">
-        <span class="meta">Resumo rapido de saude do agente</span>
+        <span class="meta" data-i18n="status.summary">Resumo rapido de saude do agente</span>
         <div class="actions">
-          <button id="openP2PDebugStatusBtn" class="btn subtle hidden">Abrir P2P Debug</button>
-          <button id="statusRefreshBtn" class="btn primary">Atualizar Status</button>
+          <button id="openP2PDebugStatusBtn" class="btn subtle hidden" data-i18n="action.openP2PDebug">Abrir P2P Debug</button>
+          <button id="statusRefreshBtn" class="btn primary" data-i18n="action.refreshStatus">Atualizar Status</button>
         </div>
       </div>
 
       <div class="status-grid">
         <article class="card status-kpi-card">
-          <h3>Conexao do Agente</h3>
+          <h3 data-i18n="status.connectionTitle">Conexao do Agente</h3>
           <div class="status-kpi-line">
             <span id="statusConnectionDot" class="agent-status-indicator"></span>
-            <strong id="statusConnectionLabel">Verificando...</strong>
+            <strong id="statusConnectionLabel" data-i18n="common.verifying">Verificando...</strong>
           </div>
-          <div id="statusConnectionDetail" class="meta">Aguardando leitura do status.</div>
+          <div id="statusConnectionDetail" class="meta" data-i18n="status.awaitingRead">Aguardando leitura do status.</div>
         </article>
 
         <article class="card status-kpi-card">
-          <h3>Aplicacao</h3>
+          <h3 data-i18n="status.applicationTitle">Aplicacao</h3>
           <div class="status-facts">
-            <div class="fact"><div class="k">Versao</div><div id="statusAppVersion" class="v">-</div></div>
-            <div class="fact"><div class="k">Ultima verificacao</div><div id="statusCheckedAt" class="v">-</div></div>
+            <div class="fact"><div class="k" data-i18n="field.version">Versao</div><div id="statusAppVersion" class="v">-</div></div>
+            <div class="fact"><div class="k" data-i18n="field.lastCheck">Ultima verificacao</div><div id="statusCheckedAt" class="v">-</div></div>
           </div>
         </article>
 
         <article class="card status-kpi-card">
-          <h3>Sistema</h3>
+          <h3 data-i18n="status.systemTitle">Sistema</h3>
           <div class="status-facts">
-            <div class="fact"><div class="k">SO</div><div id="statusOSName" class="v">-</div></div>
-            <div class="fact"><div class="k">Versao do SO</div><div id="statusOSVersion" class="v">-</div></div>
+            <div class="fact"><div class="k" data-i18n="field.os">SO</div><div id="statusOSName" class="v">-</div></div>
+            <div class="fact"><div class="k" data-i18n="field.osVersion">Versao do SO</div><div id="statusOSVersion" class="v">-</div></div>
           </div>
         </article>
 
         <article class="card status-kpi-card">
-          <h3>Service (Processo Headless)</h3>
+          <h3 data-i18n="status.serviceTitle">Service (Processo Headless)</h3>
           <div class="status-kpi-line">
             <span id="serviceHealthDot" class="agent-status-indicator"></span>
-            <strong id="serviceHealthLabel">Verificando...</strong>
+            <strong id="serviceHealthLabel" data-i18n="common.verifying">Verificando...</strong>
           </div>
           <div class="status-facts">
-            <div class="fact"><div class="k">Componentes</div><div id="serviceHealthCount" class="v">-</div></div>
-            <div class="fact"><div class="k">Problemas</div><div id="serviceHealthProblems" class="v">-</div></div>
+            <div class="fact"><div class="k" data-i18n="field.components">Componentes</div><div id="serviceHealthCount" class="v">-</div></div>
+            <div class="fact"><div class="k" data-i18n="field.problems">Problemas</div><div id="serviceHealthProblems" class="v">-</div></div>
           </div>
-          <div id="serviceHealthDetail" class="meta">Aguardando leitura...</div>
+          <div id="serviceHealthDetail" class="meta" data-i18n="common.awaiting">Aguardando...</div>
         </article>
 
         <article class="card status-kpi-card wide">
-          <h3>Realtime e Integracao</h3>
+          <h3 data-i18n="status.realtimeTitle">Realtime e Integracao</h3>
           <div class="status-facts">
-            <div class="fact"><div class="k">Realtime</div><div id="statusRealtime" class="v">-</div></div>
-            <div class="fact"><div class="k">Agentes conectados</div><div id="statusRealtimeAgents" class="v">-</div></div>
-            <div class="fact"><div class="k">Ultimo inventario</div><div id="statusInventoryAt" class="v">-</div></div>
+            <div class="fact"><div class="k" data-i18n="field.realtime">Realtime</div><div id="statusRealtime" class="v">-</div></div>
+            <div class="fact"><div class="k" data-i18n="field.connectedAgents">Agentes conectados</div><div id="statusRealtimeAgents" class="v">-</div></div>
+            <div class="fact"><div class="k" data-i18n="field.lastInventory">Ultimo inventario</div><div id="statusInventoryAt" class="v">-</div></div>
           </div>
-          <div id="statusMessage" class="meta">Sem informacoes adicionais.</div>
+          <div id="statusMessage" class="meta" data-i18n="common.noAdditionalInfo">Sem informacoes adicionais.</div>
         </article>
       </div>
     </section>

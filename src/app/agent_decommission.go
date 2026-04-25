@@ -177,11 +177,13 @@ func drainAgentDecommissionOutbox(db *database.DB, ctx context.Context) (bool, e
 		return false, nil
 	}
 
-	if err := performAgentDecommissionDelete(ctx, entry.Target); err == nil {
+	if opErr := performAgentDecommissionDelete(ctx, entry.Target); opErr == nil {
 		if delErr := db.CacheDelete(agentDecommissionOutboxCacheKey); delErr != nil {
 			return false, delErr
 		}
 		return true, nil
+	} else {
+		err = opErr
 	}
 
 	entry.Attempts++

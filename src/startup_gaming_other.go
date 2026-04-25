@@ -3,4 +3,4 @@
 package main
 
 // suppressGameBarOverlay é no-op em plataformas não-Windows.
-func suppressGameBarOverlay() {}
+func suppressGameBarOverlay() string { return "" }

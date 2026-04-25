@@ -290,6 +290,7 @@ export namespace app {
 	    clientId: string;
 	    resolvedAt: string;
 	    autoUpdate: AgentAutoUpdateConfig;
+	    agentUpdate: selfupdate.Policy;
 	    psadt: AgentPSADTConfig;
 	    notificationBranding: AgentNotificationBrandingConfig;
 	    notificationPolicies: AgentNotificationPolicy[];
@@ -323,6 +324,7 @@ export namespace app {
 	        this.clientId = source["clientId"];
 	        this.resolvedAt = source["resolvedAt"];
 	        this.autoUpdate = this.convertValues(source["autoUpdate"], AgentAutoUpdateConfig);
+	        this.agentUpdate = this.convertValues(source["agentUpdate"], selfupdate.Policy);
 	        this.psadt = this.convertValues(source["psadt"], AgentPSADTConfig);
 	        this.notificationBranding = this.convertValues(source["notificationBranding"], AgentNotificationBrandingConfig);
 	        this.notificationPolicies = this.convertValues(source["notificationPolicies"], AgentNotificationPolicy);
@@ -2224,6 +2226,35 @@ export namespace p2pmeta {
 		    }
 		    return a;
 		}
+	}
+
+}
+
+export namespace selfupdate {
+	
+	export class Policy {
+	    enabled: boolean;
+	    checkOnStartup: boolean;
+	    checkPeriodically: boolean;
+	    checkOnSyncManifest: boolean;
+	    checkEveryHours: number;
+	    preferredArtifactType?: string;
+	    requireSignatureValidation: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new Policy(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.checkOnStartup = source["checkOnStartup"];
+	        this.checkPeriodically = source["checkPeriodically"];
+	        this.checkOnSyncManifest = source["checkOnSyncManifest"];
+	        this.checkEveryHours = source["checkEveryHours"];
+	        this.preferredArtifactType = source["preferredArtifactType"];
+	        this.requireSignatureValidation = source["requireSignatureValidation"];
+	    }
 	}
 
 }
