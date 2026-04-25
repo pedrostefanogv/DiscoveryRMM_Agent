@@ -501,6 +501,10 @@ func (a *App) startup(ctx context.Context) {
 			log.Println("[startup] inventory-startup: ignorado (service disponível)")
 			return
 		}
+		if !isAgentConfigured() {
+			log.Println("[startup] inventory-startup: ignorado (agente sem provisionamento)")
+			return
+		}
 
 		done := a.beginActivity("inventario inicial")
 		defer done()
