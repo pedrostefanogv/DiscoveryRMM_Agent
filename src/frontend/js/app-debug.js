@@ -142,7 +142,7 @@ function loadDebugConfig() {
 
 function updateDebugResponseLabel() {
   if (!debugResponseLabelEl) return;
-  debugResponseLabelEl.innerHTML = translate('debug.testResponse');
+  debugResponseLabelEl.textContent = translate('debug.testResponse');
 }
 
 function initDebug() {

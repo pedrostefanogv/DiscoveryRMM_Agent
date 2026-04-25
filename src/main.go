@@ -144,10 +144,6 @@ func parseArgValue(argName string) string {
 }
 
 func resolveStartupWindowFrame() (string, bool) {
-	if hasStartupArg("--windowed-frame") {
-		return "standard", false
-	}
-
 	frame := strings.TrimSpace(parseArgValue("--window-frame"))
 	if frame == "" {
 		frame = strings.TrimSpace(os.Getenv("DISCOVERY_WINDOW_FRAME"))

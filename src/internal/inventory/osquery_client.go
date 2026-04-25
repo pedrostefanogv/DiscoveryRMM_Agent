@@ -124,7 +124,6 @@ func (p *osqueryiSocketProcess) stop() {
 	p.stopped = true
 	if p.done != nil {
 		close(p.done)
-		p.done = nil
 	}
 	if p.cmd != nil && p.cmd.Process != nil {
 		_ = p.cmd.Process.Kill()

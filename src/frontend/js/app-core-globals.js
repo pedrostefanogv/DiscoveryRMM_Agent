@@ -394,13 +394,15 @@ function computeProvisioningState(debugCfg) {
 function ensureProvisioningOverlay() {
   if (provisioningOverlayState.refs) return provisioningOverlayState.refs;
 
+  var provisioningAriaLabel = translate('provisioning.ariaLabel');
+  var provisioningBadgeLabel = translate('provisioning.badge');
   var overlay = document.createElement('div');
   overlay.id = 'provisioningOverlay';
   overlay.className = 'provisioning-overlay hidden';
   overlay.setAttribute('aria-hidden', 'true');
   overlay.innerHTML = '' +
-    '<section class="provisioning-panel" role="status" aria-live="polite" aria-label="Provisionamento do agente">' +
-      '<div class="provisioning-badge">Discovery Agent</div>' +
+    '<section class="provisioning-panel" role="status" aria-live="polite" aria-label="' + escapeHtmlAttr(provisioningAriaLabel) + '">' +
+      '<div class="provisioning-badge">' + escapeHtml(provisioningBadgeLabel) + '</div>' +
       '<div class="provisioning-hero">' +
         '<div class="provisioning-icon" aria-hidden="true">' +
           '<svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">' +

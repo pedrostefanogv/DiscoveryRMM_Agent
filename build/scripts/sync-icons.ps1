@@ -110,7 +110,7 @@ $iconSizes = @(256, 128, 64, 48, 32, 24, 16)
 
 $iconSpecs = @(
     @{ Source = (Join-Path $buildDir "appicon.png"); Target = (Join-Path $windowsIconDir "icon.ico"); Label = "normal" },
-    @{ Source = (Join-Path $buildDir "provisionig.png"); Target = (Join-Path $windowsIconDir "provisionig.ico"); Label = "provisioning" },
+    @{ Source = (Join-Path $buildDir "provisioning.png"); Target = (Join-Path $windowsIconDir "provisioning.ico"); Label = "provisioning" },
     @{ Source = (Join-Path $buildDir "offline.png"); Target = (Join-Path $windowsIconDir "offline.ico"); Label = "offline" }
 )
 
