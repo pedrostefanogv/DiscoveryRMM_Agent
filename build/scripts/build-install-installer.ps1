@@ -7,8 +7,7 @@ param(
     [string]$DefaultKey = "",
     [ValidateSet("0", "1")]
     [string]$DiscoveryEnabled = "1",
-    [switch]$GenericInstall,
-    [switch]$MinimalDefault
+    [switch]$GenericInstall
 )
 
 $ErrorActionPreference = "Stop"
@@ -39,17 +38,45 @@ function Resolve-MakensisPath() {
     throw "Comando 'makensis' nao encontrado no PATH nem nos locais padrao do NSIS."
 }
 
+function Resolve-WindresPath() {
+    $command = Get-Command windres -ErrorAction SilentlyContinue
+    if ($command) {
+        return $command.Source
+    }
+
+    $candidates = @(
+        "C:\ProgramData\Chocolatey\lib\mingw\tools\install\mingw64\bin\windres.exe",
+        "C:\msys64\mingw64\bin\windres.exe",
+        "C:\msys64\usr\bin\windres.exe"
+    )
+
+    foreach ($candidate in $candidates) {
+        if (Test-Path $candidate) {
+            return $candidate
+        }
+    }
+
+    throw "Comando 'windres' nao encontrado no PATH nem nos locais padrao do MinGW/MSYS2."
+}
+
 Assert-Command go
 $makensisExe = Resolve-MakensisPath
+$windresExe = Resolve-WindresPath
 
 $srcRoot = Join-Path $ProjectRoot "src"
 $binDir = Join-Path $srcRoot "build\bin"
 $installerDir = Join-Path $srcRoot "build\windows\installer"
 $nsiFile = Join-Path $installerDir "project.nsi"
 $agentExe = Join-Path $binDir "discovery.exe"
+$iconPath = Join-Path $srcRoot "build\windows\icon.ico"
+$sysoPath = Join-Path $srcRoot "resource_windows_amd64.syso"
 
 if (-not (Test-Path $nsiFile)) {
     throw "Arquivo NSIS não encontrado: $nsiFile"
+}
+
+if (-not (Test-Path $iconPath)) {
+    throw "Icone nao encontrado: $iconPath"
 }
 
 if (-not (Test-Path $binDir)) {
@@ -59,23 +86,33 @@ if (-not (Test-Path $binDir)) {
 Write-Output "[1/3] Build do agente (Windows AMD64)..."
 Push-Location $srcRoot
 try {
-    $env:CGO_ENABLED = "0"
+    Write-Output "  Gerando recurso de icone (.syso) para o executavel..."
+    $rcPath = Join-Path $env:TEMP "discovery_icon.rc"
+    $iconPathForRc = ($iconPath -replace '\\', '/')
+    Set-Content -Path $rcPath -Value "IDI_APP_ICON ICON `"$iconPathForRc`"" -Encoding ASCII
+    & $windresExe --target=pe-x86-64 -i $rcPath -o $sysoPath
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $sysoPath)) {
+        throw "Falha ao gerar recurso de icone com windres"
+    }
+
+    $env:CGO_ENABLED = "1"
     $env:GOOS = "windows"
     $env:GOARCH = "amd64"
-    $ldflags = @()
+    $ldflags = @("-H=windowsgui")
     if ($Version -ne "") {
         $ldflags += "-X discovery/app.Version=$Version"
         $ldflags += "-X discovery/internal/buildinfo.Version=$Version"
     }
 
-    if ($ldflags.Count -gt 0) {
-        go build -ldflags ($ldflags -join ' ') -o $agentExe .
-    }
-    else {
-        go build -o $agentExe .
-    }
+    go build -tags "desktop,production" -ldflags ($ldflags -join ' ') -o $agentExe .
 }
 finally {
+    if ($rcPath -and (Test-Path $rcPath)) {
+        Remove-Item $rcPath -Force -ErrorAction SilentlyContinue
+    }
+    if ($sysoPath -and (Test-Path $sysoPath)) {
+        Remove-Item $sysoPath -Force -ErrorAction SilentlyContinue
+    }
     Pop-Location
 }
 
@@ -84,8 +121,23 @@ if (-not (Test-Path $agentExe)) {
 }
 
 Write-Output "[2/3] Build do instalador padrao (NSIS)..."
+
+# Garantir que o WebView2 bootstrapper existe na pasta tmp/ (necessario pelo macro wails.webview2runtime)
+$tmpDir = Join-Path $installerDir "tmp"
+$webview2Exe = Join-Path $tmpDir "MicrosoftEdgeWebview2Setup.exe"
+if (-not (Test-Path $webview2Exe)) {
+    Write-Output "  Baixando WebView2 bootstrapper da Microsoft..."
+    if (-not (Test-Path $tmpDir)) {
+        New-Item -ItemType Directory -Path $tmpDir | Out-Null
+    }
+    Invoke-WebRequest -Uri "https://go.microsoft.com/fwlink/p/?LinkId=2124703" -OutFile $webview2Exe -UseBasicParsing
+    Write-Output "  WebView2 bootstrapper baixado: $webview2Exe"
+}
+
 $nsisArgs = @(
     "/V3",
+    "/INPUTCHARSET",
+    "UTF8",
     "/DARG_WAILS_AMD64_BINARY=$agentExe",
     "/DARG_OUTFILE_NAME=$OutputName",
     "/DARG_DEFAULT_DISCOVERY=$DiscoveryEnabled"
@@ -100,11 +152,17 @@ if ($DefaultKey -ne "") {
 if ($GenericInstall) {
     $nsisArgs += "/DARG_GENERIC_INSTALL=1"
 }
-if ($MinimalDefault) {
-    $nsisArgs += "/DARG_DEFAULT_MINIMAL=1"
-}
 if ($Version -ne "") {
     $nsisArgs += "/DINFO_PRODUCTVERSION=$Version"
+
+    # Calcular versao numerica X.X.X.X para VIFileVersion do NSIS (nao aceita pre-release semver)
+    # Ex: 1.0.5-beta.1 -> 1.0.5.1 | 1.0.5 -> 1.0.5.0
+    $nsisFileVersion = "1.0.0.0"
+    if ($Version -match '^(\d+)\.(\d+)\.(\d+)(?:[._-][a-zA-Z]*\.?(\d+))?') {
+        $build = if ($Matches[4]) { $Matches[4] } else { "0" }
+        $nsisFileVersion = "$($Matches[1]).$($Matches[2]).$($Matches[3]).$build"
+    }
+    $nsisArgs += "/DINFO_FILEVERSION=$nsisFileVersion"
 }
 
 $nsisArgs += $nsiFile

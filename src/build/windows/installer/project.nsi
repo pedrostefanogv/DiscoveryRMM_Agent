@@ -36,6 +36,9 @@ Unicode true
 !ifndef INFO_PRODUCTVERSION
 !define INFO_PRODUCTVERSION "1.0.0"
 !endif
+!ifndef INFO_FILEVERSION
+!define INFO_FILEVERSION "1.0.0.0"
+!endif
 !define INFO_COPYRIGHT      "Copyright (c) 2026 Discovery"
 !define PRODUCT_EXECUTABLE  "discovery.exe"
 !define UNINST_KEY_NAME     "Discovery.RMM"
@@ -166,8 +169,8 @@ Unicode true
 !include "wails_tools.nsh"
 
 # The version information for this two must consist of 4 parts
-VIProductVersion "${INFO_PRODUCTVERSION}.0"
-VIFileVersion    "${INFO_PRODUCTVERSION}.0"
+VIProductVersion "${INFO_FILEVERSION}"
+VIFileVersion    "${INFO_FILEVERSION}"
 
 VIAddVersionKey "CompanyName"     "${INFO_COMPANYNAME}"
 VIAddVersionKey "FileDescription" "${INFO_PRODUCTNAME} Installer"
@@ -234,7 +237,8 @@ Page custom AgentConfigPage AgentConfigPageLeave
 
 Name "${INFO_PRODUCTNAME}"
 OutFile "..\..\bin\${BUILD_OUTFILE_NAME}" # Name of the installer's file.
-InstallDir "$PROGRAMFILES64\${INFO_COMPANYNAME}\${INFO_PRODUCTNAME}" # Default installing folder ($PROGRAMFILES is Program Files folder).
+InstallDir "$PROGRAMFILES64\${INFO_PRODUCTNAME}" # Default installing folder ($PROGRAMFILES is Program Files folder).
+InstallDirRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${UNINST_KEY_NAME}" "InstallLocation"
 ShowInstDetails show # This will always show the installation details.
 
 Function .onInit
@@ -254,6 +258,12 @@ Function .onInit
    ${If} "${BUILD_UPDATE_INSTALL}" == "1"
       StrCpy $MinimalMode "1"
       SetSilent silent
+
+      # Em update, preservar pasta da instalacao existente para evitar migracao de path.
+      ReadRegStr $R2 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${UNINST_KEY_NAME}" "InstallLocation"
+      ${If} $R2 != ""
+         StrCpy $INSTDIR $R2
+      ${EndIf}
    ${EndIf}
 
    # Normalizar defaults inválidos
@@ -389,11 +399,14 @@ Section
          Call SaveAgentConfig
          Call DownloadAndRunStage2
       !else
+         # Atualizacao in-place: parar instancias anteriores para evitar lock no executavel.
+         Call PrepareForInPlaceUpdate
+
          !insertmacro wails.webview2runtime
          !insertmacro wails.files
 
-         CreateShortcut "$SMPROGRAMS\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
-         CreateShortCut "$DESKTOP\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
+         CreateShortcut "$SMPROGRAMS\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}" "" "$INSTDIR\${PRODUCT_EXECUTABLE}" 0
+         CreateShortCut "$DESKTOP\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}" "" "$INSTDIR\${PRODUCT_EXECUTABLE}" 0
 
          # Garantir estrutura compartilhada em ProgramData
          Call EnsureSharedDataDir
@@ -411,6 +424,7 @@ Section
          !insertmacro wails.associateCustomProtocols
 
          !insertmacro wails.writeUninstaller
+         WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${UNINST_KEY_NAME}" "InstallLocation" "$INSTDIR"
       !endif
 SectionEnd
 
@@ -461,6 +475,9 @@ Function SaveAgentConfig
       Abort
    ${EndIf}
 
+   ; Garantir permissao de escrita para Administrators
+   ExecWait '"$SYSDIR\icacls.exe" "$R0\Discovery" /grant "Administrators:(OI)(CI)(F)" /Q' $R9
+
    Delete "$INSTDIR\config.json"
    ClearErrors
    IfFileExists "$R0\Discovery\config.json" 0 +3
@@ -468,33 +485,35 @@ Function SaveAgentConfig
    Goto +2
    StrCpy $R1 "$R0\Discovery\config.json"
    DetailPrint "Salvando config em $R1"
+   ClearErrors
    FileOpen $0 "$R1" w
    ${If} ${Errors}
-      DetailPrint "ERRO: nao foi possivel abrir $R0\Discovery\config.json para escrita"
-      MessageBox MB_ICONSTOP "Falha ao gravar o arquivo de configuracao em $R0\Discovery\config.json"
-      Abort
+      ; Fallback: tentar escrever no diretorio de instalacao
+      DetailPrint "Aviso: nao foi possivel abrir $R1 — tentando fallback em $INSTDIR\config.json"
+      ClearErrors
+      StrCpy $R1 "$INSTDIR\config.json"
+      FileOpen $0 "$R1" w
+      ${If} ${Errors}
+         MessageBox MB_ICONSTOP "Falha ao gravar a configuracao do agente. Verifique permissoes em $R0\Discovery e $INSTDIR."
+         Abort
+      ${EndIf}
    ${EndIf}
    
    FileWrite $0 "{$\r$\n"
    ${If} $GenericMode == "1"
       ; Modo genérico: sem URL/KEY, apenas habilita P2P para auto-provisioning
-      FileWrite $0 '  "inventory_sync_interval_minutes": 15,$\r$\n'
       FileWrite $0 '  "discoveryEnabled": true,$\r$\n'
-      FileWrite $0 '  "p2p_enabled": true$\r$\n'
+      FileWrite $0 '  "p2p": {"enabled": true}$\r$\n'
    ${Else}
       ; Modo padrão: escreve URL, KEY e flags conforme configuração
-      FileWrite $0 '  "server_url": "$ServerUrl",$\r$\n'
-      FileWrite $0 '  "api_scheme": "https",$\r$\n'
-      FileWrite $0 '  "api_server": "$ServerUrl",$\r$\n'
-      FileWrite $0 '  "inventory_sync_interval_minutes": 15,$\r$\n'
       FileWrite $0 '  "serverUrl": "$ServerUrl",$\r$\n'
       FileWrite $0 '  "apiKey": "$ServerKey",$\r$\n'
       ${If} $DiscoveryEnabled == "1"
          FileWrite $0 '  "discoveryEnabled": true,$\r$\n'
-         FileWrite $0 '  "p2p_enabled": true$\r$\n'
+         FileWrite $0 '  "p2p": {"enabled": true}$\r$\n'
       ${Else}
          FileWrite $0 '  "discoveryEnabled": false,$\r$\n'
-         FileWrite $0 '  "p2p_enabled": false$\r$\n'
+         FileWrite $0 '  "p2p": {"enabled": false}$\r$\n'
       ${EndIf}
    ${EndIf}
    FileWrite $0 "}$\r$\n"
@@ -585,6 +604,20 @@ Function EnsureSharedDataDir
    CreateDirectory "$R0\Discovery\logs"
 FunctionEnd
 
+Function PrepareForInPlaceUpdate
+   DetailPrint "Preparando atualizacao in-place (encerrando instancias em execucao)..."
+
+   # Tentar remover startup task antiga e service antes de atualizar binarios.
+   Call UnregisterUIStartupTask
+   Call UnregisterWindowsService
+
+   # Garantir que nenhuma instancia do app permaneceu em execucao.
+   ExecWait '"$SYSDIR\taskkill.exe" /IM "${PRODUCT_EXECUTABLE}" /F /T' $R0
+   ${If} $R0 != 0
+      DetailPrint "Aviso: taskkill retornou codigo $R0 (pode nao haver processo em execucao)."
+   ${EndIf}
+FunctionEnd
+
 Function RegisterWindowsService
    DetailPrint "Registrando Windows Service ${DISCOVERY_SERVICE_NAME}"
 
@@ -623,7 +656,7 @@ Function RegisterUIStartupTask
    FileWrite $R8 "  $$action = New-ScheduledTaskAction -Execute '$INSTDIR\${PRODUCT_EXECUTABLE}' -Argument '--startup-minimized --startup-source=task-scheduler'$\r$\n"
    FileWrite $R8 "  $$trigger = New-ScheduledTaskTrigger -AtLogOn$\r$\n"
    FileWrite $R8 "  $$trigger.Delay = 'PT30S'$\r$\n"
-   FileWrite $R8 "  $$principal = New-ScheduledTaskPrincipal -GroupId 'S-1-5-32-545' -LogonType Interactive -RunLevel Limited$\r$\n"
+   FileWrite $R8 "  $$principal = New-ScheduledTaskPrincipal -GroupId 'S-1-5-32-545' -RunLevel Limited$\r$\n"
    FileWrite $R8 "  Register-ScheduledTask -TaskName '${DISCOVERY_UI_TASK_NAME}' -Action $$action -Trigger $$trigger -Principal $$principal -Description 'Discovery UI autostart for any logged-on user' -Force | Out-Null$\r$\n"
    FileWrite $R8 "  exit 0$\r$\n"
    FileWrite $R8 "} catch {$\r$\n"

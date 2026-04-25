@@ -5,7 +5,9 @@
 **PT_BR:** Agente Windows para inventário, automação, distribuição P2P e operação local/remota.
 **EN:** Windows agent for inventory, automation, P2P distribution and local/remote operation.
 
-[![Latest Release](https://img.shields.io/github/v/release/pedrostefanogv/DiscoveryRMM_Agent?style=flat-square&logo=github&label=latest)](https://github.com/pedrostefanogv/DiscoveryRMM_Agent/releases/latest)
+[![Stable](https://img.shields.io/github/v/release/pedrostefanogv/DiscoveryRMM_Agent?style=flat-square&logo=github&label=stable&color=2ea44f)](https://github.com/pedrostefanogv/DiscoveryRMM_Agent/releases/latest)
+[![Beta](https://img.shields.io/github/v/release/pedrostefanogv/DiscoveryRMM_Agent?include_prereleases&filter=*-beta*&style=flat-square&logo=github&label=beta&color=0075ca)](https://github.com/pedrostefanogv/DiscoveryRMM_Agent/releases?q=beta&expanded=true)
+[![LTS](https://img.shields.io/github/v/release/pedrostefanogv/DiscoveryRMM_Agent?include_prereleases&filter=*-lts*&style=flat-square&logo=github&label=lts&color=e4a600)](https://github.com/pedrostefanogv/DiscoveryRMM_Agent/releases?q=lts&expanded=true)
 [![Downloads](https://img.shields.io/github/downloads/pedrostefanogv/DiscoveryRMM_Agent/total?style=flat-square&logo=github)](https://github.com/pedrostefanogv/DiscoveryRMM_Agent/releases)
 [![Release Workflow](https://img.shields.io/github/actions/workflow/status/pedrostefanogv/DiscoveryRMM_Agent/release-agent-on-tag.yml?style=flat-square&logo=githubactions&label=release%20build)](https://github.com/pedrostefanogv/DiscoveryRMM_Agent/actions/workflows/release-agent-on-tag.yml)
 [![License](https://img.shields.io/github/license/pedrostefanogv/DiscoveryRMM_Agent?style=flat-square)](LICENSE)
@@ -82,7 +84,23 @@ Detalhes em [BRANCHING.md](BRANCHING.md).
 
 ---
 
-## 📚 Documentation / Documentação
+## Debug Mode / Modo Debug
+
+**PT_BR:** Para abrir a interface do agente em modo debug:
+1. Feche o agente pelo ícone na bandeja do sistema (clique com botão direito → **Sair / Exit**).
+2. Abra o agente novamente **segurando `Shift` ou `Ctrl`** ao clicar no ícone/atalho (**qualquer uma das duas teclas funciona**).
+
+> O modo debug exibe logs detalhados na interface e habilita painéis de diagnóstico internos.
+
+**EN:** To open the agent UI in debug mode:
+1. Close the agent from the system tray icon (right-click → **Exit**).
+2. Reopen the agent **while holding `Shift` or `Ctrl`** when clicking the icon/shortcut (**either key works**).
+
+> Debug mode shows detailed logs in the UI and enables internal diagnostics panels.
+
+---
+
+## Documentation / Documentação
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) — visão arquitetural / architecture overview
 - [SECURITY.md](SECURITY.md) — política de segurança / security policy
