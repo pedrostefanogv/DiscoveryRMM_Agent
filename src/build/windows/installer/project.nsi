@@ -486,47 +486,79 @@ Function SaveAgentConfig
    ; Garantir permissao de escrita para Administrators
    ExecWait '"$SYSDIR\icacls.exe" "$R0\Discovery" /grant "Administrators:(OI)(CI)(F)" /Q' $R9
 
-   Delete "$INSTDIR\config.json"
-   ClearErrors
-   IfFileExists "$R0\Discovery\config.json" 0 +3
-   StrCpy $R1 "$R0\Discovery\installer.json"
-   Goto +2
    StrCpy $R1 "$R0\Discovery\config.json"
-   DetailPrint "Salvando config em $R1"
+   StrCpy $R2 "$INSTDIR\config.json"
+   StrCpy $R3 "$TEMP\discovery_merge_config.ps1"
+   DetailPrint "Mesclando configuracao em $R1"
+
    ClearErrors
-   FileOpen $0 "$R1" w
+   FileOpen $0 "$R3" w
    ${If} ${Errors}
-      ; Fallback: tentar escrever no diretorio de instalacao
-      DetailPrint "Aviso: nao foi possivel abrir $R1 — tentando fallback em $INSTDIR\config.json"
-      ClearErrors
-      StrCpy $R1 "$INSTDIR\config.json"
-      FileOpen $0 "$R1" w
-      ${If} ${Errors}
-         MessageBox MB_ICONSTOP "Falha ao gravar a configuracao do agente. Verifique permissoes em $R0\Discovery e $INSTDIR."
-         Abort
-      ${EndIf}
+      MessageBox MB_ICONSTOP "Falha ao criar script temporario para gravar a configuracao do agente."
+      Abort
    ${EndIf}
-   
-   FileWrite $0 "{$\r$\n"
-   ${If} $GenericMode == "1"
-      ; Modo genérico: sem URL/KEY, apenas habilita P2P para auto-provisioning
-      FileWrite $0 '  "discoveryEnabled": true,$\r$\n'
-      FileWrite $0 '  "p2p": {"enabled": true}$\r$\n'
-   ${Else}
-      ; Modo padrão: escreve URL, KEY e flags conforme configuração
-      FileWrite $0 '  "serverUrl": "$ServerUrl",$\r$\n'
-      FileWrite $0 '  "apiKey": "$ServerKey",$\r$\n'
-      ${If} $DiscoveryEnabled == "1"
-         FileWrite $0 '  "discoveryEnabled": true,$\r$\n'
-         FileWrite $0 '  "p2p": {"enabled": true}$\r$\n'
-      ${Else}
-         FileWrite $0 '  "discoveryEnabled": false,$\r$\n'
-         FileWrite $0 '  "p2p": {"enabled": false}$\r$\n'
-      ${EndIf}
-   ${EndIf}
+
+   FileWrite $0 "param([string]$$ConfigPath,[string]$$FallbackPath,[string]$$ServerUrl,[string]$$ServerKey,[string]$$DiscoveryEnabled,[string]$$GenericMode)$\r$\n"
+   FileWrite $0 "$$ErrorActionPreference = 'Stop'$\r$\n"
+   FileWrite $0 "function Convert-ToHashtable([object]$$Value) {$\r$\n"
+   FileWrite $0 "  if ($$null -eq $$Value) { return $$null }$\r$\n"
+   FileWrite $0 "  if ($$Value -is [System.Collections.IDictionary]) {$\r$\n"
+   FileWrite $0 "    $$result = [ordered]@{}$\r$\n"
+   FileWrite $0 "    foreach ($$key in $$Value.Keys) { $$result[$$key] = Convert-ToHashtable $$Value[$$key] }$\r$\n"
+   FileWrite $0 "    return $$result$\r$\n"
+   FileWrite $0 "  }$\r$\n"
+   FileWrite $0 "  if ($$Value -is [System.Management.Automation.PSCustomObject]) {$\r$\n"
+   FileWrite $0 "    $$result = [ordered]@{}$\r$\n"
+   FileWrite $0 "    foreach ($$prop in $$Value.PSObject.Properties) { $$result[$$prop.Name] = Convert-ToHashtable $$prop.Value }$\r$\n"
+   FileWrite $0 "    return $$result$\r$\n"
+   FileWrite $0 "  }$\r$\n"
+   FileWrite $0 "  if ($$Value -is [System.Collections.IEnumerable] -and -not ($$Value -is [string])) {$\r$\n"
+   FileWrite $0 "    $$items = @()$\r$\n"
+   FileWrite $0 "    foreach ($$item in $$Value) { $$items += ,(Convert-ToHashtable $$item) }$\r$\n"
+   FileWrite $0 "    return $$items$\r$\n"
+   FileWrite $0 "  }$\r$\n"
+   FileWrite $0 "  return $$Value$\r$\n"
    FileWrite $0 "}$\r$\n"
-   
+   FileWrite $0 "$$config = [ordered]@{}$\r$\n"
+   FileWrite $0 "if (Test-Path $$ConfigPath) {$\r$\n"
+   FileWrite $0 "  $$raw = Get-Content -Raw -Path $$ConfigPath$\r$\n"
+   FileWrite $0 "  if (-not [string]::IsNullOrWhiteSpace($$raw)) { $$config = Convert-ToHashtable (ConvertFrom-Json -InputObject $$raw) }$\r$\n"
+   FileWrite $0 "}$\r$\n"
+   FileWrite $0 "if ($$null -eq $$config) { $$config = [ordered]@{} }$\r$\n"
+   FileWrite $0 "$$enabled = $$true$\r$\n"
+   FileWrite $0 "if ($$GenericMode -ne '1') {$\r$\n"
+   FileWrite $0 "  if (-not [string]::IsNullOrWhiteSpace($$ServerUrl)) { $$config['serverUrl'] = $$ServerUrl }$\r$\n"
+   FileWrite $0 "  if (-not [string]::IsNullOrWhiteSpace($$ServerKey)) { $$config['apiKey'] = $$ServerKey }$\r$\n"
+   FileWrite $0 "  $$enabled = ($$DiscoveryEnabled -eq '1')$\r$\n"
+   FileWrite $0 "}$\r$\n"
+   FileWrite $0 "$$config['discoveryEnabled'] = $$enabled$\r$\n"
+   FileWrite $0 "$$p2p = [ordered]@{}$\r$\n"
+   FileWrite $0 "if ($$config.Contains('p2p') -and $$null -ne $$config['p2p']) {$\r$\n"
+   FileWrite $0 "  $$existingP2P = Convert-ToHashtable $$config['p2p']$\r$\n"
+   FileWrite $0 "  if ($$existingP2P -is [System.Collections.IDictionary]) { $$p2p = $$existingP2P }$\r$\n"
+   FileWrite $0 "}$\r$\n"
+   FileWrite $0 "$$p2p['enabled'] = $$enabled$\r$\n"
+   FileWrite $0 "$$config['p2p'] = $$p2p$\r$\n"
+   FileWrite $0 "$$targetPath = $$ConfigPath$\r$\n"
+   FileWrite $0 "try {$\r$\n"
+   FileWrite $0 "  New-Item -ItemType Directory -Path (Split-Path -Parent $$targetPath) -Force | Out-Null$\r$\n"
+   FileWrite $0 "  $$config | ConvertTo-Json -Depth 10 | Set-Content -Path $$targetPath -Encoding UTF8$\r$\n"
+   FileWrite $0 "} catch {$\r$\n"
+   FileWrite $0 "  $$targetPath = $$FallbackPath$\r$\n"
+   FileWrite $0 "  New-Item -ItemType Directory -Path (Split-Path -Parent $$targetPath) -Force | Out-Null$\r$\n"
+   FileWrite $0 "  $$config | ConvertTo-Json -Depth 10 | Set-Content -Path $$targetPath -Encoding UTF8$\r$\n"
+   FileWrite $0 "}$\r$\n"
+   FileWrite $0 "Remove-Item (Join-Path (Split-Path -Parent $$ConfigPath) 'installer.json') -Force -ErrorAction SilentlyContinue$\r$\n"
+   FileWrite $0 "if (-not [string]::IsNullOrWhiteSpace($$FallbackPath)) { Remove-Item (Join-Path (Split-Path -Parent $$FallbackPath) 'installer.json') -Force -ErrorAction SilentlyContinue }$\r$\n"
    FileClose $0
+
+   ExecWait '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$R3" -ConfigPath "$R1" -FallbackPath "$R2" -ServerUrl "$ServerUrl" -ServerKey "$ServerKey" -DiscoveryEnabled "$DiscoveryEnabled" -GenericMode "$GenericMode"' $R9
+   Delete "$R3"
+   ${If} $R9 != 0
+      MessageBox MB_ICONSTOP "Falha ao gravar a configuracao do agente (codigo: $R9). Verifique permissoes em $R0\Discovery e $INSTDIR."
+      Abort
+   ${EndIf}
+
    DetailPrint "Config salvo com sucesso em $R0\Discovery\config.json"
 FunctionEnd
 

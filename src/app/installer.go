@@ -115,6 +115,14 @@ func findInstallerOverridePath() string {
 	return ""
 }
 
+func cleanupLegacyInstallerOverrideFiles() {
+	for _, path := range installerOverridePathCandidates() {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			continue
+		}
+	}
+}
+
 func installerConfigWriteCandidates(sourcePath string) []string {
 	paths := make([]string, 0, 5)
 
@@ -156,19 +164,29 @@ func loadInstallerConfig() (InstallerConfig, string, error) {
 		return InstallerConfig{}, "", fmt.Errorf("config.json de producao nao encontrado")
 	}
 
+	resolved := baseCfg
+	resolvedPath := basePath
+
 	if !baseFound {
 		if overrideCfg.ServerURL == "" && (overrideCfg.ApiScheme == "" || overrideCfg.ApiServer == "") {
 			return InstallerConfig{}, "", fmt.Errorf("config.json de producao nao encontrado")
 		}
-		return overrideCfg, "", nil
+		resolved = overrideCfg
+		resolvedPath = ""
+	} else {
+		resolved = mergeInstallerOverride(baseCfg, overrideCfg)
+		if resolved.ServerURL == "" && (resolved.ApiScheme == "" || resolved.ApiServer == "") {
+			return InstallerConfig{}, "", fmt.Errorf("config.json de producao nao encontrado")
+		}
 	}
 
-	merged := mergeInstallerOverride(baseCfg, overrideCfg)
-	if merged.ServerURL == "" && (merged.ApiScheme == "" || merged.ApiServer == "") {
-		return InstallerConfig{}, "", fmt.Errorf("config.json de producao nao encontrado")
+	if overrideFound {
+		if writePath, err := persistInstallerConfig(resolvedPath, resolved); err == nil {
+			return resolved, writePath, nil
+		}
 	}
 
-	return merged, basePath, nil
+	return resolved, resolvedPath, nil
 }
 
 func persistInstallerConfig(sourcePath string, cfg InstallerConfig) (string, error) {
@@ -193,6 +211,7 @@ func persistInstallerConfig(sourcePath string, cfg InstallerConfig) (string, err
 			errs = append(errs, path+": "+err.Error())
 			continue
 		}
+		cleanupLegacyInstallerOverrideFiles()
 		return path, nil
 	}
 

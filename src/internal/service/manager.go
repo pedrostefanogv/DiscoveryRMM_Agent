@@ -101,6 +101,9 @@ func (c *SharedConfig) UnmarshalJSON(data []byte) error {
 		APIKey                   string             `json:"apiKey"`
 		ClientID                 string             `json:"clientId"`
 		P2PEnabled               *bool              `json:"p2pEnabled"`
+		P2P                      *struct {
+			Enabled *bool `json:"enabled"`
+		} `json:"p2p"`
 		InventorySyncIntervalMin int                `json:"inventorySyncIntervalMinutes"`
 		InventoryIntervalMin     int                `json:"inventoryIntervalMinutes"`
 		LastSync                 string             `json:"lastSync"`
@@ -137,6 +140,9 @@ func (c *SharedConfig) UnmarshalJSON(data []byte) error {
 	if !result.P2PEnabled && old.P2PEnabled != nil {
 		result.P2PEnabled = *old.P2PEnabled
 	}
+	if !result.P2PEnabled && old.P2P != nil && old.P2P.Enabled != nil {
+		result.P2PEnabled = *old.P2P.Enabled
+	}
 	if result.InventorySync <= 0 {
 		result.InventorySync = old.InventorySyncIntervalMin
 	}
@@ -156,6 +162,75 @@ func (c *SharedConfig) UnmarshalJSON(data []byte) error {
 	}
 
 	*c = result
+	return nil
+}
+
+func mergeLegacyInstallerConfigData(baseData, overrideData []byte) ([]byte, error) {
+	base := map[string]any{}
+	if trimmed := strings.TrimSpace(string(baseData)); trimmed != "" {
+		if err := json.Unmarshal(baseData, &base); err != nil {
+			return nil, fmt.Errorf("config.json invalido: %w", err)
+		}
+	}
+
+	override := map[string]any{}
+	if err := json.Unmarshal(overrideData, &override); err != nil {
+		return nil, fmt.Errorf("installer.json invalido: %w", err)
+	}
+
+	for _, key := range []string{
+		"serverUrl",
+		"apiKey",
+		"discoveryEnabled",
+		"apiScheme",
+		"apiServer",
+		"authToken",
+		"agentId",
+		"clientId",
+		"natsServer",
+		"natsWsServer",
+		"agentUpdate",
+		"p2p",
+		"meshCentralInstalled",
+	} {
+		if value, ok := override[key]; ok {
+			base[key] = value
+		}
+	}
+
+	return json.MarshalIndent(base, "", "  ")
+}
+
+func (sm *ServiceManager) migrateLegacyInstallerConfig(configPath string) error {
+	installerPath := filepath.Join(sm.dataDir, "installer.json")
+	installerData, err := os.ReadFile(installerPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("não conseguiu ler %s: %w", installerPath, err)
+	}
+
+	var baseData []byte
+	if currentData, err := os.ReadFile(configPath); err == nil {
+		baseData = currentData
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("não conseguiu ler %s: %w", configPath, err)
+	}
+
+	mergedData, err := mergeLegacyInstallerConfigData(baseData, installerData)
+	if err != nil {
+		return err
+	}
+
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(configPath, mergedData, 0o600); err != nil {
+		return err
+	}
+
+	_ = os.Remove(installerPath)
 	return nil
 }
 
@@ -306,8 +381,12 @@ func (sm *ServiceManager) Start(ctx context.Context) error {
 }
 
 // loadConfig lê a configuração de C:\ProgramData\Discovery\config.json
+// e migra automaticamente installer.json legado quando necessário.
 func (sm *ServiceManager) loadConfig() error {
 	configPath := sm.dataDir + "\\config.json"
+	if err := sm.migrateLegacyInstallerConfig(configPath); err != nil {
+		return fmt.Errorf("falha ao migrar installer.json legado: %w", err)
+	}
 
 	data, err := os.ReadFile(configPath)
 	if err != nil {
