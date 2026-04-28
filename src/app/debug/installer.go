@@ -19,6 +19,12 @@ import (
 	"github.com/samber/lo"
 )
 
+var utf8Bom = []byte{0xEF, 0xBB, 0xBF}
+
+func trimJSONBOM(data []byte) []byte {
+	return bytes.TrimPrefix(data, utf8Bom)
+}
+
 func installerConfigPathCandidates() []string {
 	paths := make([]string, 0, 5)
 
@@ -75,6 +81,7 @@ func loadInstallerConfigFromCandidates(paths []string, normalizeP2P func(p2pmeta
 		if err != nil {
 			continue
 		}
+		data = trimJSONBOM(data)
 
 		var cfg InstallerConfig
 		if err := json.Unmarshal(data, &cfg); err != nil {

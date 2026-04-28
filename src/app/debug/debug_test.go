@@ -106,6 +106,60 @@ func TestInstallerConfigMarshalUsesDeployTokenField(t *testing.T) {
 	}
 }
 
+func TestLoadInstallerConfigFromCandidates_StripsUTF8BOM(t *testing.T) {
+	tempDir := t.TempDir()
+	path := tempDir + string(os.PathSeparator) + "config.json"
+	content := append([]byte{0xEF, 0xBB, 0xBF}, []byte(`{"serverUrl":"https://srv/api/","deployToken":"token-bom"}`)...)
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	cfg, resolvedPath, found, err := loadInstallerConfigFromCandidates([]string{path}, nil)
+	if err != nil {
+		t.Fatalf("loadInstallerConfigFromCandidates: %v", err)
+	}
+	if !found {
+		t.Fatal("esperava found=true")
+	}
+	if resolvedPath != path {
+		t.Fatalf("resolvedPath = %q, want %q", resolvedPath, path)
+	}
+	if cfg.ServerURL != "https://srv/api/" {
+		t.Fatalf("ServerURL = %q", cfg.ServerURL)
+	}
+	if cfg.APIKey != "token-bom" {
+		t.Fatalf("APIKey = %q, want %q", cfg.APIKey, "token-bom")
+	}
+}
+
+func TestLoadPersistedConfig_StripsUTF8BOM(t *testing.T) {
+	oldReadFile := osReadFile
+	oldExecutable := osExecutable
+	oldUserHomeDir := osUserHomeDir
+	defer func() {
+		osReadFile = oldReadFile
+		osExecutable = oldExecutable
+		osUserHomeDir = oldUserHomeDir
+	}()
+
+	osReadFile = func(string) ([]byte, error) {
+		return append([]byte{0xEF, 0xBB, 0xBF}, []byte(`{"scheme":"https","server":"api.example.local"}`)...), nil
+	}
+	osExecutable = func() (string, error) { return "", errors.New("sem executavel") }
+	osUserHomeDir = func() (string, error) { return "", errors.New("sem home") }
+
+	svc := NewService(Options{})
+	svc.LoadPersistedConfig()
+
+	cfg := svc.GetConfig()
+	if cfg.Scheme != "https" {
+		t.Fatalf("Scheme = %q", cfg.Scheme)
+	}
+	if cfg.Server != "api.example.local" {
+		t.Fatalf("Server = %q", cfg.Server)
+	}
+}
+
 func TestGetRealtimeStatus_SetsAgentAuthHeadersAndAgentID(t *testing.T) {
 	const (
 		token   = "token-123"

@@ -94,6 +94,7 @@ func (s *Service) LoadPersistedConfig() {
 		if err != nil {
 			continue
 		}
+		data = trimJSONBOM(data)
 
 		var cfg Config
 		if err := json.Unmarshal(data, &cfg); err != nil {
