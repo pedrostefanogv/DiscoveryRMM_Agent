@@ -17,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"discovery/internal/tlsutil"
 )
 
 const (
@@ -230,7 +232,7 @@ func (a *App) registerWithDeployKey(serverURL, deployKey string) (P2POnboardingR
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+deployKey)
 
-	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
+	resp, err := tlsutil.NewHTTPClient(20 * time.Second).Do(req)
 	if err != nil {
 		return P2POnboardingResult{}, err
 	}
@@ -443,7 +445,7 @@ func (a *App) requestProvisioningToken(ctx context.Context) (deployKey, expiresA
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(inst.AuthToken))
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: 15 * time.Second}
+	client := tlsutil.NewHTTPClient(15 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", "", fmt.Errorf("falha na requisição: %w", err)

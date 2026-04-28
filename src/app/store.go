@@ -13,6 +13,7 @@ import (
 
 	"discovery/app/netutil"
 	"discovery/internal/models"
+	"discovery/internal/tlsutil"
 )
 
 const (
@@ -64,7 +65,7 @@ func (a *App) fetchAppStoreByInstallationType(ctx context.Context, installationT
 	req.Header.Set("Accept", "application/json")
 	netutil.SetAgentAuthHeaders(req, token)
 
-	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+	resp, err := tlsutil.NewHTTPClient(15 * time.Second).Do(req)
 	if err != nil {
 		return AppStoreResponse{}, fmt.Errorf("falha ao chamar app-store (%s): %w", installationType, err)
 	}

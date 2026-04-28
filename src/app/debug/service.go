@@ -20,6 +20,7 @@ import (
 	"discovery/app/netutil"
 	"discovery/app/p2pmeta"
 	"discovery/internal/agentconn"
+	"discovery/internal/tlsutil"
 )
 
 const debugConfigFile = "debug_config.json"
@@ -75,6 +76,7 @@ func NewService(opts Options) *Service {
 	if logf == nil {
 		logf = func(string) {}
 	}
+	tlsutil.SetConfigAllowInsecureTLS(false)
 	return &Service{
 		logf:               logf,
 		agentConn:          opts.AgentConn,
@@ -85,6 +87,19 @@ func NewService(opts Options) *Service {
 		defaultP2PConfig:   opts.DefaultP2PConfig,
 		version:            strings.TrimSpace(opts.Version),
 	}
+}
+
+func installerConfigAllowInsecureTLS(cfg InstallerConfig) bool {
+	return cfg.AllowInsecureTLS != nil && *cfg.AllowInsecureTLS
+}
+
+func (s *Service) applyAllowInsecureTLS(allow bool) {
+	s.mu.Lock()
+	cfg := s.config
+	cfg.AllowInsecureTLS = allow
+	s.config = cfg
+	s.mu.Unlock()
+	tlsutil.SetConfigAllowInsecureTLS(allow)
 }
 
 // LoadPersistedConfig loads debug configuration from disk if available.
@@ -111,6 +126,7 @@ func (s *Service) LoadPersistedConfig() {
 		s.mu.Lock()
 		s.config = cfg
 		s.mu.Unlock()
+		tlsutil.SetConfigAllowInsecureTLS(cfg.AllowInsecureTLS)
 		s.logf("[debug] configuracao carregada de " + path)
 		return
 	}
@@ -155,12 +171,14 @@ func (s *Service) GetConfig() Config {
 func (s *Service) LoadConnectionConfigFromProduction() {
 	inst, path, err := s.loadInstallerConfig()
 	if err != nil {
+		s.applyAllowInsecureTLS(false)
 		s.logf("[config] config de producao nao encontrado: " + err.Error())
 		if s.defaultP2PConfig != nil && s.applyP2PConfig != nil {
 			s.applyP2PConfig(s.defaultP2PConfig())
 		}
 		return
 	}
+	s.applyAllowInsecureTLS(installerConfigAllowInsecureTLS(inst))
 	if s.applyP2PConfig != nil {
 		p2pCfg := inst.P2P
 		if s.normalizeP2PConfig != nil {
@@ -220,6 +238,7 @@ func (s *Service) ApplyRuntimeConnectionConfig(apiScheme, apiServer, authToken, 
 	s.mu.Lock()
 	s.config = cfg
 	s.mu.Unlock()
+	tlsutil.SetConfigAllowInsecureTLS(cfg.AllowInsecureTLS)
 }
 
 // ApplyRemoteConnectionSecurity updates TLS pinning and transport hardening values from /me/configuration.
@@ -261,6 +280,7 @@ func (s *Service) ApplyRemoteConnectionSecurity(natsServerHost string, natsUseWs
 	normalizeSecurityConfig(&cfg)
 	s.config = cfg
 	s.mu.Unlock()
+	tlsutil.SetConfigAllowInsecureTLS(cfg.AllowInsecureTLS)
 
 	if !changed {
 		return false, nil
@@ -303,7 +323,7 @@ func (s *Service) testAgentAPIConnectivity(ctx context.Context, apiScheme, apiSe
 		req.Header.Set("X-Agent-ID", agentID)
 	}
 
-	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	resp, err := tlsutil.NewHTTPClient(10 * time.Second).Do(req)
 	if err != nil {
 		return fmt.Errorf("falha ao conectar na API %s: %w", target, err)
 	}
@@ -325,6 +345,7 @@ func (s *Service) BootstrapAgentCredentialsFromInstallerConfig(ctx context.Conte
 		s.logf("[installer-bootstrap] sem bootstrap de instalador: " + err.Error())
 		return
 	}
+	s.applyAllowInsecureTLS(installerConfigAllowInsecureTLS(inst))
 
 	scheme, server, err := parseInstallerServerURL(inst.ServerURL)
 	if err != nil {
@@ -469,6 +490,7 @@ func (s *Service) SetConfig(cfg Config) error {
 	s.mu.Lock()
 	s.config = cfg
 	s.mu.Unlock()
+	tlsutil.SetConfigAllowInsecureTLS(cfg.AllowInsecureTLS)
 
 	if s.agentInfo != nil {
 		s.agentInfo.Invalidate()
@@ -500,13 +522,16 @@ func (s *Service) TestConnection(cfg Config) (string, error) {
 	cfg.NatsWsServer = strings.TrimSpace(cfg.NatsWsServer)
 	cfg.AgentID = strings.TrimSpace(cfg.AgentID)
 	cfg.AuthToken = strings.TrimSpace(cfg.AuthToken)
+	previousAllowInsecureTLS := tlsutil.ConfigAllowInsecureTLS()
+	tlsutil.SetConfigAllowInsecureTLS(cfg.AllowInsecureTLS)
+	defer tlsutil.SetConfigAllowInsecureTLS(previousAllowInsecureTLS)
 
 	var results []string
 
 	if cfg.ApiServer != "" {
 		s.logf(fmt.Sprintf("[debug-test] testando API: %s://%s", cfg.ApiScheme, cfg.ApiServer))
 		target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/agent-auth/me"
-		client := &http.Client{Timeout: 10 * time.Second}
+		client := tlsutil.NewHTTPClient(10 * time.Second)
 		req, err := http.NewRequest(http.MethodGet, target, nil)
 		if err != nil {
 			return "", fmt.Errorf("URL invalida para API: %w", err)
@@ -613,7 +638,7 @@ func (s *Service) GetRealtimeStatus() (RealtimeStatus, error) {
 		req.Header.Set("X-Agent-ID", cfg.AgentID)
 	}
 
-	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	resp, err := tlsutil.NewHTTPClient(10 * time.Second).Do(req)
 	if err != nil {
 		return RealtimeStatus{}, fmt.Errorf("falha ao conectar em %s: %w", target, err)
 	}

@@ -103,6 +103,9 @@ func mergeInstallerOverride(base, override InstallerConfig) InstallerConfig {
 	if override.DiscoveryEnabled != nil {
 		base.DiscoveryEnabled = override.DiscoveryEnabled
 	}
+	if override.AllowInsecureTLS != nil {
+		base.AllowInsecureTLS = override.AllowInsecureTLS
+	}
 	return base
 }
 

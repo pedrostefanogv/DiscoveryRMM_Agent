@@ -6,6 +6,7 @@ Este arquivo organiza a documentacao por tema e define a fonte canonica para red
 
 | Documento | Categoria | Estado | Acao recomendada | Fonte canonica |
 |---|---|---|---|---|
+| CONFIG_AGENTE.md | Configuracao local do agent | Ativo | Manter e evoluir | Este documento |
 | GUIA_INSTALADOR_OFFLINE_ONLINE_API.md | Instalador | Duplicado parcial | Manter apenas como ponteiro | INSTALADOR_PAYLOAD_E_PARAMETROS.md |
 | INSTALADOR_PAYLOAD_E_PARAMETROS.md | Instalador | Ativo | Manter e evoluir | Este documento |
 | HISTORICO/PLANO_INSTALADOR_OFFLINE_ONLINE.md | Instalador | Historico | Arquivado como referencia | INSTALADOR_PAYLOAD_E_PARAMETROS.md |

@@ -16,6 +16,7 @@ import (
 	"discovery/app/debug"
 	"discovery/app/netutil"
 	"discovery/app/supportmeta"
+	"discovery/internal/tlsutil"
 )
 
 var guidPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
@@ -330,7 +331,7 @@ func (s *Service) fetchAgentContext() (AgentInfo, error) {
 	}
 	netutil.SetAgentAuthHeaders(req, cfg.AuthToken)
 
-	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	resp, err := tlsutil.NewHTTPClient(10 * time.Second).Do(req)
 	if err != nil {
 		wrapped := fmt.Errorf("falha ao conectar em %s: %w", target, err)
 		s.supportLogf("erro HTTP ao resolver contexto do agente: %v", wrapped)
@@ -402,7 +403,7 @@ func (s *Service) GetSupportTickets() ([]APITicket, error) {
 	}
 	netutil.SetAgentAuthHeaders(req, cfg.AuthToken)
 
-	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+	resp, err := tlsutil.NewHTTPClient(15 * time.Second).Do(req)
 	if err != nil {
 		wrapped := fmt.Errorf("falha ao buscar chamados: %w", err)
 		s.supportLogf("erro HTTP ao listar chamados: %v", wrapped)
@@ -496,7 +497,7 @@ func (s *Service) CreateSupportTicket(input CreateTicketInput) (APITicket, error
 	req.Header.Set("Content-Type", "application/json")
 	netutil.SetAgentAuthHeaders(req, cfg.AuthToken)
 
-	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+	resp, err := tlsutil.NewHTTPClient(15 * time.Second).Do(req)
 	if err != nil {
 		wrapped := fmt.Errorf("falha ao criar chamado: %w", err)
 		s.supportLogf("erro HTTP ao criar chamado: %v", wrapped)
@@ -538,7 +539,7 @@ func (s *Service) GetSupportTicketDetails(ticketID string) (APITicket, error) {
 	}
 	netutil.SetAgentAuthHeaders(req, cfg.AuthToken)
 
-	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	resp, err := tlsutil.NewHTTPClient(10 * time.Second).Do(req)
 	if err != nil {
 		return APITicket{}, fmt.Errorf("falha ao buscar ticket: %w", err)
 	}
@@ -624,7 +625,7 @@ func (s *Service) GetTicketWorkflowStates() ([]APIWorkflowState, error) {
 		}
 		netutil.SetAgentAuthHeaders(req, cfg.AuthToken)
 
-		resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+		resp, err := tlsutil.NewHTTPClient(10 * time.Second).Do(req)
 		if err != nil {
 			lastErr = fmt.Errorf("falha ao buscar estados de workflow: %w", err)
 			continue
@@ -685,7 +686,7 @@ func (s *Service) GetTicketComments(ticketID string) ([]TicketComment, error) {
 	}
 	netutil.SetAgentAuthHeaders(req, cfg.AuthToken)
 
-	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	resp, err := tlsutil.NewHTTPClient(10 * time.Second).Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("falha ao buscar comentários: %w", err)
 	}
@@ -746,7 +747,7 @@ func (s *Service) AddTicketCommentWithOptions(ticketID, content string, isIntern
 	req.Header.Set("Content-Type", "application/json")
 	netutil.SetAgentAuthHeaders(req, cfg.AuthToken)
 
-	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	resp, err := tlsutil.NewHTTPClient(10 * time.Second).Do(req)
 	if err != nil {
 		return TicketComment{}, fmt.Errorf("falha ao enviar comentário: %w", err)
 	}
@@ -823,7 +824,7 @@ func (s *Service) CloseSupportTicket(ticketID string, input CloseTicketInput) (A
 	netutil.SetAgentAuthHeaders(req, cfg.AuthToken)
 
 	s.supportLogf("fechando chamado %s", ticketID)
-	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+	resp, err := tlsutil.NewHTTPClient(15 * time.Second).Do(req)
 	if err != nil {
 		return APITicket{}, fmt.Errorf("falha ao fechar chamado: %w", err)
 	}

@@ -15,6 +15,7 @@ import (
 	"discovery/app/netutil"
 	"discovery/internal/agentconn"
 	"discovery/internal/selfupdate"
+	"discovery/internal/tlsutil"
 )
 
 const (
@@ -372,7 +373,7 @@ func (a *App) fetchSyncManifest(ctx context.Context) (SyncManifestResponse, erro
 		req.Header.Set("X-Agent-ID", agentID)
 	}
 
-	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+	resp, err := tlsutil.NewHTTPClient(15 * time.Second).Do(req)
 	if err != nil {
 		return SyncManifestResponse{}, err
 	}
@@ -413,7 +414,7 @@ func (a *App) refreshAgentConfiguration(ctx context.Context) error {
 	req.Header.Set("Accept", "application/json")
 	netutil.SetAgentAuthHeaders(req, token)
 
-	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+	resp, err := tlsutil.NewHTTPClient(15 * time.Second).Do(req)
 	if err != nil {
 		// fallback to cached config when request fails
 		_ = a.loadCachedAgentConfiguration()

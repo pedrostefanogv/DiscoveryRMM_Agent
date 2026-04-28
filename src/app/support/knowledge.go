@@ -12,6 +12,7 @@ import (
 
 	"discovery/app/debug"
 	"discovery/app/netutil"
+	"discovery/internal/tlsutil"
 )
 
 const (
@@ -202,7 +203,7 @@ func (s *Service) fetchKnowledgeListWithCache(info AgentInfo, category string, u
 	}
 	netutil.SetAgentAuthHeaders(req, cfg.AuthToken)
 
-	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+	resp, err := tlsutil.NewHTTPClient(15 * time.Second).Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("falha ao buscar artigos da base de conhecimento: %w", err)
 	}
@@ -290,7 +291,7 @@ func (s *Service) fetchKnowledgeDetail(info AgentInfo, articleID string) (Knowle
 	}
 	netutil.SetAgentAuthHeaders(req, cfg.AuthToken)
 
-	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+	resp, err := tlsutil.NewHTTPClient(15 * time.Second).Do(req)
 	if err != nil {
 		return KnowledgeArticle{}, fmt.Errorf("falha ao buscar detalhe do artigo: %w", err)
 	}

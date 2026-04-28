@@ -18,6 +18,8 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/nats-io/nats.go"
+
+	"discovery/internal/tlsutil"
 )
 
 const (
@@ -463,6 +465,11 @@ func (r *Runtime) runNATSSession(ctx context.Context, cfg Config, server, transp
 		nats.ReconnectWait(reconnectBase),
 		nats.MaxReconnects(-1),
 	}
+	if strings.EqualFold(strings.TrimSpace(parsedNATSURL.Scheme), "wss") {
+		if tlsCfg := tlsutil.InsecureTLSConfig(); tlsCfg != nil {
+			opts = append(opts, nats.Secure(tlsCfg))
+		}
+	}
 	if strings.TrimSpace(cfg.AuthToken) != "" {
 		opts = append(opts, nats.Token(strings.TrimSpace(cfg.AuthToken)))
 	}
@@ -683,7 +690,7 @@ func (r *Runtime) reportTLSMismatch(cfg Config, target, observedHash string) {
 	req = req.WithContext(ctx)
 
 	r.logf("[security][%s] enviando tls-mismatch para %s", strings.TrimSpace(target), endpoint)
-	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	resp, err := tlsutil.NewHTTPClient(5 * time.Second).Do(req)
 	if err != nil {
 		r.logf("[security][%s] falha ao enviar tls-mismatch: %v", strings.TrimSpace(target), err)
 		return
@@ -709,6 +716,11 @@ func FetchNATSInfo(server string, timeout time.Duration, authToken string) (stri
 	if u.Scheme == "ws" || u.Scheme == "wss" {
 		opts := []nats.Option{
 			nats.Timeout(timeout),
+		}
+		if strings.EqualFold(strings.TrimSpace(u.Scheme), "wss") {
+			if tlsCfg := tlsutil.InsecureTLSConfig(); tlsCfg != nil {
+				opts = append(opts, nats.Secure(tlsCfg))
+			}
 		}
 		if strings.TrimSpace(authToken) != "" {
 			opts = append(opts, nats.Token(strings.TrimSpace(authToken)))
@@ -802,7 +814,7 @@ func (r *Runtime) connectSignalR(ctx context.Context, cfg Config, connectTimeout
 		}
 	}
 
-	dialer := websocket.Dialer{HandshakeTimeout: connectTimeout}
+	dialer := tlsutil.NewWebSocketDialer(connectTimeout)
 	conn, resp, err := dialer.DialContext(ctx, wsURL.String(), header)
 	if err != nil {
 		if resp != nil {

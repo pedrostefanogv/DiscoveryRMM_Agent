@@ -17,6 +17,7 @@ type Config struct {
 	AuthToken                         string `json:"authToken"`
 	NatsServer                        string `json:"natsServer"`
 	NatsWsServer                      string `json:"natsWsServer"`
+	AllowInsecureTLS                  bool   `json:"allowInsecureTls,omitempty"`
 	NatsServerHost                    string `json:"natsServerHost,omitempty"`
 	NatsUseWssExternal                bool   `json:"natsUseWssExternal,omitempty"`
 	EnforceTlsHashValidation          bool   `json:"enforceTlsHashValidation,omitempty"`
@@ -50,6 +51,7 @@ type InstallerConfig struct {
 	AgentID              string             `json:"agentId,omitempty"`
 	NatsServer           string             `json:"natsServer,omitempty"`
 	NatsWsServer         string             `json:"natsWsServer,omitempty"`
+	AllowInsecureTLS     *bool              `json:"allowInsecureTls,omitempty"`
 	AgentUpdate          *selfupdate.Policy `json:"agentUpdate,omitempty"`
 	P2P                  p2pmeta.Config     `json:"p2p,omitempty"`
 	MeshCentralInstalled bool               `json:"meshCentralInstalled,omitempty"`
@@ -67,6 +69,7 @@ func (c *InstallerConfig) UnmarshalJSON(data []byte) error {
 		AgentID              string             `json:"agentId,omitempty"`
 		NatsServer           string             `json:"natsServer,omitempty"`
 		NatsWsServer         string             `json:"natsWsServer,omitempty"`
+		AllowInsecureTLS     json.RawMessage    `json:"allowInsecureTls,omitempty"`
 		AgentUpdate          *selfupdate.Policy `json:"agentUpdate,omitempty"`
 		P2P                  p2pmeta.Config     `json:"p2p,omitempty"`
 		MeshCentralInstalled bool               `json:"meshCentralInstalled,omitempty"`
@@ -87,6 +90,11 @@ func (c *InstallerConfig) UnmarshalJSON(data []byte) error {
 		return fmt.Errorf("discoveryEnabled invalido: %w", err)
 	}
 
+	allowInsecureTLS, err := parseInstallerBool(raw.AllowInsecureTLS)
+	if err != nil {
+		return fmt.Errorf("allowInsecureTls invalido: %w", err)
+	}
+
 	*c = InstallerConfig{
 		ServerURL:            raw.ServerURL,
 		APIKey:               deployToken,
@@ -97,6 +105,7 @@ func (c *InstallerConfig) UnmarshalJSON(data []byte) error {
 		AgentID:              raw.AgentID,
 		NatsServer:           raw.NatsServer,
 		NatsWsServer:         raw.NatsWsServer,
+		AllowInsecureTLS:     allowInsecureTLS,
 		AgentUpdate:          raw.AgentUpdate,
 		P2P:                  raw.P2P,
 		MeshCentralInstalled: raw.MeshCentralInstalled,

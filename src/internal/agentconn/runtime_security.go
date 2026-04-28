@@ -11,6 +11,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"discovery/internal/tlsutil"
 )
 
 func normalizeNATSURL(server string) (string, error) {
@@ -138,12 +140,17 @@ func observeTLSPeerCertHash(ctx context.Context, apiServer string, timeout time.
 		return "", err
 	}
 
+	tlsConfig := &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		ServerName: serverName,
+	}
+	if tlsutil.AllowInsecureTLS() {
+		tlsConfig.InsecureSkipVerify = true
+	}
+
 	tlsDialer := &tls.Dialer{
 		NetDialer: &net.Dialer{Timeout: timeout},
-		Config: &tls.Config{
-			MinVersion: tls.VersionTLS12,
-			ServerName: serverName,
-		},
+		Config:    tlsConfig,
 	}
 
 	conn, err := tlsDialer.DialContext(ctx, "tcp", address)

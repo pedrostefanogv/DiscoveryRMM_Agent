@@ -11,6 +11,7 @@ import (
 
 	"discovery/app/netutil"
 	"discovery/internal/database"
+	"discovery/internal/tlsutil"
 )
 
 const agentDecommissionOutboxCacheKey = "agent_decommission_outbox"
@@ -124,7 +125,7 @@ func performAgentDecommissionDelete(ctx context.Context, target agentDecommissio
 	req.Header.Set("X-Agent-ID", target.AgentID)
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
+	resp, err := tlsutil.NewHTTPClient(20 * time.Second).Do(req)
 	if err != nil {
 		return err
 	}

@@ -10,6 +10,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"discovery/internal/tlsutil"
 )
 
 type Client struct {
@@ -20,7 +22,7 @@ func NewClient(timeout time.Duration) *Client {
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
-	return &Client{httpClient: &http.Client{Timeout: timeout}}
+	return &Client{httpClient: tlsutil.NewHTTPClient(timeout)}
 }
 
 // setAutomationHeaders aplica os headers obrigatórios em requests de automação:

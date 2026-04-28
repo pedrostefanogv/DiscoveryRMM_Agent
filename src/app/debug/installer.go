@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"discovery/app/p2pmeta"
+	"discovery/internal/tlsutil"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -121,6 +122,9 @@ func mergeInstallerOverride(base, override InstallerConfig) InstallerConfig {
 	}
 	if override.DiscoveryEnabled != nil {
 		base.DiscoveryEnabled = override.DiscoveryEnabled
+	}
+	if override.AllowInsecureTLS != nil {
+		base.AllowInsecureTLS = override.AllowInsecureTLS
 	}
 	if strings.TrimSpace(override.NatsServer) != "" {
 		base.NatsServer = strings.TrimSpace(override.NatsServer)
@@ -346,7 +350,7 @@ func (s *Service) registerAgentFromDeployToken(ctx context.Context, scheme, serv
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(deployToken))
 
-		resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+		resp, err := tlsutil.NewHTTPClient(30 * time.Second).Do(req)
 		if err != nil {
 			errs = append(errs, endpoint+": "+err.Error())
 			continue

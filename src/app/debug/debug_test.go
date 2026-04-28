@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"discovery/internal/agentconn"
+	"discovery/internal/tlsutil"
 )
 
 type fakeAgentConn struct {
@@ -64,6 +65,36 @@ func TestInstallerConfigUnmarshalDiscoveryEnabledInvalid(t *testing.T) {
 	err := json.Unmarshal([]byte(`{"discoveryEnabled":2}`), &cfg)
 	if err == nil {
 		t.Fatal("esperava erro para discoveryEnabled invalido")
+	}
+}
+
+func TestInstallerConfigUnmarshalAllowInsecureTLSCompat(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want bool
+	}{
+		{name: "bool true", raw: `{"allowInsecureTls":true}`, want: true},
+		{name: "bool false", raw: `{"allowInsecureTls":false}`, want: false},
+		{name: "number 1", raw: `{"allowInsecureTls":1}`, want: true},
+		{name: "number 0", raw: `{"allowInsecureTls":0}`, want: false},
+		{name: "string yes", raw: `{"allowInsecureTls":"yes"}`, want: true},
+		{name: "string no", raw: `{"allowInsecureTls":"no"}`, want: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var cfg InstallerConfig
+			if err := json.Unmarshal([]byte(tc.raw), &cfg); err != nil {
+				t.Fatalf("unmarshal compat: %v", err)
+			}
+			if cfg.AllowInsecureTLS == nil {
+				t.Fatal("allowInsecureTls nao deveria ser nil")
+			}
+			if *cfg.AllowInsecureTLS != tc.want {
+				t.Fatalf("allowInsecureTls = %v, want %v", *cfg.AllowInsecureTLS, tc.want)
+			}
+		})
 	}
 }
 
@@ -136,14 +167,16 @@ func TestLoadPersistedConfig_StripsUTF8BOM(t *testing.T) {
 	oldReadFile := osReadFile
 	oldExecutable := osExecutable
 	oldUserHomeDir := osUserHomeDir
+	oldAllowInsecureTLS := tlsutil.ConfigAllowInsecureTLS()
 	defer func() {
 		osReadFile = oldReadFile
 		osExecutable = oldExecutable
 		osUserHomeDir = oldUserHomeDir
+		tlsutil.SetConfigAllowInsecureTLS(oldAllowInsecureTLS)
 	}()
 
 	osReadFile = func(string) ([]byte, error) {
-		return append([]byte{0xEF, 0xBB, 0xBF}, []byte(`{"scheme":"https","server":"api.example.local"}`)...), nil
+		return append([]byte{0xEF, 0xBB, 0xBF}, []byte(`{"scheme":"https","server":"api.example.local","allowInsecureTls":true}`)...), nil
 	}
 	osExecutable = func() (string, error) { return "", errors.New("sem executavel") }
 	osUserHomeDir = func() (string, error) { return "", errors.New("sem home") }
@@ -157,6 +190,12 @@ func TestLoadPersistedConfig_StripsUTF8BOM(t *testing.T) {
 	}
 	if cfg.Server != "api.example.local" {
 		t.Fatalf("Server = %q", cfg.Server)
+	}
+	if !cfg.AllowInsecureTLS {
+		t.Fatal("AllowInsecureTLS deveria ser true")
+	}
+	if !tlsutil.AllowInsecureTLS() {
+		t.Fatal("AllowInsecureTLS global deveria ser true")
 	}
 }
 
