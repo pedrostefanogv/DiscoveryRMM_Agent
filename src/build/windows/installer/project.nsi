@@ -548,7 +548,7 @@ Function SaveAgentConfig
    FileWrite $0 "$$enabled = $$true$\r$\n"
    FileWrite $0 "if ($$GenericMode -ne '1') {$\r$\n"
    FileWrite $0 "  if (-not [string]::IsNullOrWhiteSpace($$ServerUrl)) { $$config['serverUrl'] = $$ServerUrl }$\r$\n"
-   FileWrite $0 "  if (-not [string]::IsNullOrWhiteSpace($$ServerKey)) { $$config['apiKey'] = $$ServerKey }$\r$\n"
+   FileWrite $0 "  if (-not [string]::IsNullOrWhiteSpace($$ServerKey)) { $$config['deployToken'] = $$ServerKey }$\r$\n"
    FileWrite $0 "  $$enabled = ($$DiscoveryEnabled -eq '1')$\r$\n"
    FileWrite $0 "}$\r$\n"
    FileWrite $0 "$$config['discoveryEnabled'] = $$enabled$\r$\n"

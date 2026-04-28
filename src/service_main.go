@@ -82,7 +82,7 @@ func newRuntimeServiceManager(dataDir string) *service.ServiceManager {
 	svcMgr.SetAutomationService(service.NewAutomationRuntimeService(svcMgr.GetConfig, func(line string) {
 		log.Printf("[SERVICE.Automation] %s", line)
 	}))
-	svcMgr.SetInventoryService(service.NewInventoryRuntimeService(45 * time.Second))
+	svcMgr.SetInventoryService(service.NewInventoryRuntimeService(45*time.Second, svcMgr.GetConfig))
 	svcMgr.SetAppsService(service.NewAppsRuntimeService(10 * time.Minute))
 	svcMgr.SetP2PService(appkg.NewHeadlessP2PService(func(line string) {
 		log.Printf("[SERVICE.P2P] %s", line)

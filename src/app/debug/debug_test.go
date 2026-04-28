@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"strings"
 	"testing"
 
 	"discovery/internal/agentconn"
@@ -63,6 +64,45 @@ func TestInstallerConfigUnmarshalDiscoveryEnabledInvalid(t *testing.T) {
 	err := json.Unmarshal([]byte(`{"discoveryEnabled":2}`), &cfg)
 	if err == nil {
 		t.Fatal("esperava erro para discoveryEnabled invalido")
+	}
+}
+
+func TestInstallerConfigUnmarshalDeployTokenCompat(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{name: "deployToken atual", raw: `{"deployToken":"token-atual"}`, want: "token-atual"},
+		{name: "apiKey legado", raw: `{"apiKey":"token-legado"}`, want: "token-legado"},
+		{name: "deployToken prevalece", raw: `{"deployToken":"token-atual","apiKey":"token-legado"}`, want: "token-atual"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var cfg InstallerConfig
+			if err := json.Unmarshal([]byte(tc.raw), &cfg); err != nil {
+				t.Fatalf("unmarshal compat: %v", err)
+			}
+			if cfg.APIKey != tc.want {
+				t.Fatalf("APIKey = %q, want %q", cfg.APIKey, tc.want)
+			}
+		})
+	}
+}
+
+func TestInstallerConfigMarshalUsesDeployTokenField(t *testing.T) {
+	data, err := json.Marshal(InstallerConfig{ServerURL: "https://srv/api/", APIKey: "deploy-token"})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	jsonText := string(data)
+	if !strings.Contains(jsonText, `"deployToken":"deploy-token"`) {
+		t.Fatalf("json deveria conter deployToken: %s", jsonText)
+	}
+	if strings.Contains(jsonText, `"apiKey"`) {
+		t.Fatalf("json nao deveria conter apiKey legado: %s", jsonText)
 	}
 }
 

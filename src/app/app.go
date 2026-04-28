@@ -502,6 +502,11 @@ func (a *App) startup(ctx context.Context) {
 			return
 		}
 
+		if !a.isInventoryProvisioned() {
+			log.Println("[startup] inventory-startup: ignorado (agente nao provisionado)")
+			return
+		}
+
 		done := a.beginActivity("inventario inicial")
 		defer done()
 
@@ -634,8 +639,19 @@ func (a *App) startupLogf(format string, args ...any) {
 	a.logs.append(line)
 }
 
+func (a *App) isInventoryProvisioned() bool {
+	if a == nil {
+		return false
+	}
+	return a.GetDebugConfig().IsProvisioned()
+}
+
 func (a *App) ensureOsqueryInstalled(ctx context.Context) {
 	if runtime.GOOS != "windows" {
+		return
+	}
+	if !a.isInventoryProvisioned() {
+		a.startupLogf("[startup] osquery: verificacao ignorada (agente nao provisionado)")
 		return
 	}
 	if a.appsSvc == nil {

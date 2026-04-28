@@ -15,6 +15,8 @@ import (
 	"discovery/internal/watchdog"
 )
 
+const inventoryProvisioningRequiredMessage = "inventario indisponivel enquanto o agente nao estiver provisionado"
+
 // AppsService defines the package manager surface used by inventory operations.
 type AppsService interface {
 	Install(ctx context.Context, id string) (string, error)
@@ -268,6 +270,20 @@ func (s *Service) pulseInventoryHeartbeat() {
 	}
 }
 
+func (s *Service) inventoryProvisioned() bool {
+	if s == nil || s.debugConfig == nil {
+		return false
+	}
+	return s.debugConfig().IsProvisioned()
+}
+
+func (s *Service) requireProvisionedInventory() error {
+	if s.inventoryProvisioned() {
+		return nil
+	}
+	return fmt.Errorf(inventoryProvisioningRequiredMessage)
+}
+
 func (s *Service) collectInventoryWithHeartbeat(ctx context.Context) (models.InventoryReport, error) {
 	if s.watchdog == nil {
 		return s.inventory.GetInventory(ctx)
@@ -303,6 +319,9 @@ func (s *Service) GetInventory() (models.InventoryReport, error) {
 			return cached, nil
 		}
 	}
+	if err := s.requireProvisionedInventory(); err != nil {
+		return models.InventoryReport{}, err
+	}
 
 	report, err := s.collectInventoryWithHeartbeat(s.ctx())
 	if err != nil {
@@ -320,6 +339,9 @@ func (s *Service) RefreshInventory() (models.InventoryReport, error) {
 	if done != nil {
 		defer done()
 	}
+	if err := s.requireProvisionedInventory(); err != nil {
+		return models.InventoryReport{}, err
+	}
 	report, err := s.collectInventoryWithHeartbeat(s.ctx())
 	if err != nil {
 		return models.InventoryReport{}, err
@@ -335,6 +357,9 @@ func (s *Service) RefreshNetworkConnections() (models.NetworkConnectionsReport, 
 	done := s.beginActivity("atualizacao de conexoes de rede")
 	if done != nil {
 		defer done()
+	}
+	if err := s.requireProvisionedInventory(); err != nil {
+		return models.NetworkConnectionsReport{}, err
 	}
 	report, err := s.collectNetworkConnectionsWithHeartbeat(s.ctx())
 	if err != nil {
@@ -356,6 +381,9 @@ func (s *Service) RefreshSoftware() ([]models.SoftwareItem, error) {
 	if done != nil {
 		defer done()
 	}
+	if err := s.requireProvisionedInventory(); err != nil {
+		return []models.SoftwareItem{}, err
+	}
 	software, err := s.inventory.CollectSoftware(s.ctx())
 	if err != nil {
 		return []models.SoftwareItem{}, err
@@ -375,6 +403,9 @@ func (s *Service) RefreshStartupItems() ([]models.StartupItem, error) {
 	if done != nil {
 		defer done()
 	}
+	if err := s.requireProvisionedInventory(); err != nil {
+		return []models.StartupItem{}, err
+	}
 	startupItems, err := s.inventory.CollectStartupItems(s.ctx())
 	if err != nil {
 		return []models.StartupItem{}, err
@@ -393,6 +424,9 @@ func (s *Service) RefreshListeningPorts() ([]models.ListeningPortInfo, error) {
 	done := s.beginActivity("atualizacao de portas em escuta")
 	if done != nil {
 		defer done()
+	}
+	if err := s.requireProvisionedInventory(); err != nil {
+		return []models.ListeningPortInfo{}, err
 	}
 	ports, err := s.inventory.CollectListeningPorts(s.ctx())
 	if err != nil {
@@ -414,6 +448,9 @@ func (s *Service) GetOsqueryStatus() (models.OsqueryStatus, error) {
 
 // InstallOsquery installs osquery if needed.
 func (s *Service) InstallOsquery() (string, error) {
+	if err := s.requireProvisionedInventory(); err != nil {
+		return "", err
+	}
 	status := inventory.GetOsqueryStatus()
 	if status.Installed {
 		if status.Path != "" {

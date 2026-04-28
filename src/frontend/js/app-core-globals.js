@@ -451,8 +451,9 @@ function startProvisioningOverlayPolling() {
 function syncProvisioningOverlayFromConfig(debugCfg) {
   var refs = ensureProvisioningOverlay();
   var status = computeProvisioningState(debugCfg);
+  var suppressOverlay = isDebugRuntimeMode();
 
-  if (status.isProvisioned) {
+  if (status.isProvisioned || suppressOverlay) {
     refs.overlay.classList.add('hidden');
     refs.overlay.setAttribute('aria-hidden', 'true');
     refs.footnote.textContent = translate('provisioning.completed');

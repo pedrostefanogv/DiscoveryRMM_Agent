@@ -83,6 +83,19 @@ type SharedConfig struct {
 	AgentUpdate   *selfupdate.Policy `json:"agentUpdate,omitempty"`
 }
 
+func (c *SharedConfig) IsProvisioned() bool {
+	if c == nil {
+		return false
+	}
+	serverURL := strings.TrimSpace(c.ServerURL)
+	scheme := strings.TrimSpace(strings.ToLower(c.ApiScheme))
+	server := strings.TrimSpace(c.ApiServer)
+	token := strings.TrimSpace(c.AuthToken)
+	agentID := strings.TrimSpace(c.AgentID)
+	hasEndpoint := serverURL != "" || (scheme != "" && server != "")
+	return hasEndpoint && token != "" && agentID != ""
+}
+
 // UnmarshalJSON suporta schema canônico (snake_case) e legado (camelCase)
 // para manter compatibilidade com config escrita pelo instalador/UI.
 func (c *SharedConfig) UnmarshalJSON(data []byte) error {
@@ -93,15 +106,15 @@ func (c *SharedConfig) UnmarshalJSON(data []byte) error {
 	}
 
 	type legacy struct {
-		AgentID                  string             `json:"agentId"`
-		ServerURL                string             `json:"serverUrl"`
-		ApiScheme                string             `json:"apiScheme"`
-		ApiServer                string             `json:"apiServer"`
-		AuthToken                string             `json:"authToken"`
-		APIKey                   string             `json:"apiKey"`
-		ClientID                 string             `json:"clientId"`
-		P2PEnabled               *bool              `json:"p2pEnabled"`
-		P2P                      *struct {
+		AgentID    string `json:"agentId"`
+		ServerURL  string `json:"serverUrl"`
+		ApiScheme  string `json:"apiScheme"`
+		ApiServer  string `json:"apiServer"`
+		AuthToken  string `json:"authToken"`
+		APIKey     string `json:"apiKey"`
+		ClientID   string `json:"clientId"`
+		P2PEnabled *bool  `json:"p2pEnabled"`
+		P2P        *struct {
 			Enabled *bool `json:"enabled"`
 		} `json:"p2p"`
 		InventorySyncIntervalMin int                `json:"inventorySyncIntervalMinutes"`
@@ -967,6 +980,11 @@ func (sm *ServiceManager) inventoryWorker(ctx context.Context) {
 			fmt.Println("[SERVICE.InventoryWorker] Encerrando")
 			return
 		case <-ticker.C:
+			if !sm.isInventoryProvisioned() {
+				fmt.Println("[SERVICE.InventoryWorker] Ignorado: agente nao provisionado")
+				continue
+			}
+
 			sm.mu.RLock()
 			inventorySvc := sm.inventorySvc
 			sm.mu.RUnlock()
@@ -976,12 +994,12 @@ func (sm *ServiceManager) inventoryWorker(ctx context.Context) {
 				_, err := inventorySvc.Collect(ctx)
 				if err != nil {
 					sm.logError("falha ao coletar inventário: %v", err)
+				} else {
+					sm.setLastSync(time.Now().UTC().Format(time.RFC3339))
 				}
 			} else {
 				fmt.Println("[SERVICE.InventoryWorker] Serviço de inventário não registrado")
 			}
-
-			sm.setLastSync(time.Now().UTC().Format(time.RFC3339))
 			if sm.watchdog != nil {
 				sm.watchdog.Heartbeat(watchdog.ComponentInventory)
 			}
@@ -1127,6 +1145,10 @@ func (sm *ServiceManager) registerWatchdogRecovery() {
 	// Inventory recovery: força nova coleta de inventário.
 	sm.watchdog.RegisterRecovery(watchdog.ComponentInventory, func(component watchdog.Component) error {
 		sm.logError("watchdog recovery: forçando coleta de inventário para %s", component)
+		if !sm.isInventoryProvisioned() {
+			fmt.Println("[SERVICE.Manager] watchdog recovery inventory ignorado: agente nao provisionado")
+			return nil
+		}
 		sm.mu.RLock()
 		svc := sm.inventorySvc
 		sm.mu.RUnlock()
@@ -1157,6 +1179,12 @@ func (sm *ServiceManager) getInventorySyncMinutes() int {
 		return 15
 	}
 	return sm.config.InventorySync
+}
+
+func (sm *ServiceManager) isInventoryProvisioned() bool {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	return sm.config != nil && sm.config.IsProvisioned()
 }
 
 func (sm *ServiceManager) isP2PEnabled() bool {

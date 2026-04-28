@@ -29,10 +29,20 @@ type Config struct {
 	AutomationP2PWingetInstallEnabled bool   `json:"automationP2pWingetInstallEnabled,omitempty"`
 }
 
+func (c Config) IsProvisioned() bool {
+	scheme := strings.TrimSpace(strings.ToLower(c.ApiScheme))
+	server := strings.TrimSpace(c.ApiServer)
+	token := strings.TrimSpace(c.AuthToken)
+	agentID := strings.TrimSpace(c.AgentID)
+	return scheme != "" && server != "" && token != "" && agentID != ""
+}
+
 // InstallerConfig is the bootstrap config saved by the NSIS installer.
+// The JSON contract now persists deployToken, while apiKey remains accepted
+// on read for backward compatibility with older installers.
 type InstallerConfig struct {
 	ServerURL            string             `json:"serverUrl"`
-	APIKey               string             `json:"apiKey"`
+	APIKey               string             `json:"deployToken,omitempty"`
 	DiscoveryEnabled     *bool              `json:"discoveryEnabled,omitempty"`
 	ApiScheme            string             `json:"apiScheme,omitempty"`
 	ApiServer            string             `json:"apiServer,omitempty"`
@@ -48,6 +58,7 @@ type InstallerConfig struct {
 func (c *InstallerConfig) UnmarshalJSON(data []byte) error {
 	type rawInstallerConfig struct {
 		ServerURL            string             `json:"serverUrl"`
+		DeployToken          string             `json:"deployToken,omitempty"`
 		APIKey               string             `json:"apiKey"`
 		DiscoveryEnabled     json.RawMessage    `json:"discoveryEnabled,omitempty"`
 		ApiScheme            string             `json:"apiScheme,omitempty"`
@@ -66,6 +77,11 @@ func (c *InstallerConfig) UnmarshalJSON(data []byte) error {
 		return err
 	}
 
+	deployToken := strings.TrimSpace(raw.DeployToken)
+	if deployToken == "" {
+		deployToken = strings.TrimSpace(raw.APIKey)
+	}
+
 	discoveryEnabled, err := parseInstallerBool(raw.DiscoveryEnabled)
 	if err != nil {
 		return fmt.Errorf("discoveryEnabled invalido: %w", err)
@@ -73,7 +89,7 @@ func (c *InstallerConfig) UnmarshalJSON(data []byte) error {
 
 	*c = InstallerConfig{
 		ServerURL:            raw.ServerURL,
-		APIKey:               raw.APIKey,
+		APIKey:               deployToken,
 		DiscoveryEnabled:     discoveryEnabled,
 		ApiScheme:            raw.ApiScheme,
 		ApiServer:            raw.ApiServer,

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -60,14 +61,21 @@ func (s *automationRuntimeService) SetDB(db *database.DB) {
 }
 
 type inventoryRuntimeService struct {
-	provider *inventory.Provider
+	provider   *inventory.Provider
+	loadConfig func() *SharedConfig
 }
 
-func NewInventoryRuntimeService(timeout time.Duration) InventoryService {
-	return &inventoryRuntimeService{provider: inventory.NewProvider(timeout)}
+func NewInventoryRuntimeService(timeout time.Duration, loadConfig func() *SharedConfig) InventoryService {
+	return &inventoryRuntimeService{provider: inventory.NewProvider(timeout), loadConfig: loadConfig}
 }
 
 func (s *inventoryRuntimeService) Collect(ctx context.Context) (interface{}, error) {
+	if s != nil && s.loadConfig != nil {
+		cfg := s.loadConfig()
+		if cfg == nil || !cfg.IsProvisioned() {
+			return nil, fmt.Errorf("inventario indisponivel enquanto o agente nao estiver provisionado")
+		}
+	}
 	return s.provider.Collect(ctx)
 }
 
