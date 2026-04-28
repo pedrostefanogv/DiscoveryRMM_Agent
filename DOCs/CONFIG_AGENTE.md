@@ -33,7 +33,7 @@ Este documento descreve os arquivos locais de configuração usados pelo agent D
 | `serverUrl` | string | não | URL base legada/canônica do servidor. Se `apiScheme`/`apiServer` não vierem preenchidos, o agent tenta derivá-los daqui. |
 | `deployToken` | string | não | Token de bootstrap usado em `/api/agent-install/register`. Depois que o agent recebe `authToken` e `agentId`, esse campo tende a ser removido do arquivo. |
 | `apiKey` | string | não | Alias legado de leitura para `deployToken`. Não deve ser usado em novas instalações. |
-| `discoveryEnabled` | bool | não | Habilita o onboarding/discovery P2P quando a instalação ainda depende desse fluxo local. |
+| `autoProvisioning` | bool | não | Habilita a participação local no fluxo de **zero-touch auto-provisioning** via P2P. Quando `false`, o agente não inicia o loop de onboarding mesmo estando não configurado. Quando ausente, o agente segue a feature flag do servidor. **Substitui o legado `discoveryEnabled`**, que ainda é aceito em leitura para retrocompat. |
 | `apiScheme` | string | não | Esquema da API. Valores esperados: `http` ou `https`. Em ambiente remoto, o padrão operacional é `https`. |
 | `apiServer` | string | não | Host da API sem path, por exemplo `192-168-1-131.nip.io` ou `api.exemplo.local:8443`. |
 | `authToken` | string | não | Token definitivo do agent após bootstrap. É usado nas chamadas autenticadas para API e sync. |
@@ -91,7 +91,7 @@ O arquivo `installer.json` não substitui todo o `config.json`. Hoje ele é trat
 2. `deployToken` ou `apiKey`
 3. `apiScheme`
 4. `apiServer`
-5. `discoveryEnabled`
+5. `autoProvisioning` (legado: `discoveryEnabled`)
 6. `natsServer`
 7. `natsWsServer`
 8. `allowInsecureTls`
@@ -110,6 +110,10 @@ Para API com certificado autoassinado, configure:
 ```
 
 Com `allowInsecureTls=true`, o agent passa a aceitar a conexão TLS mesmo quando o certificado não está ancorado na trust store do Windows. Isso resolve o cenário de laboratório com CA própria ou certificado self-signed, mas reduz a proteção contra MITM. Em produção, o recomendado continua sendo instalar a CA raiz correta no sistema e manter `allowInsecureTls=false`.
+
+O instalador Windows também aceita o parâmetro silencioso `/ALLOW_INSECURE_TLS=`. Quando ele recebe um valor verdadeiro (`1`, `true`, `yes` ou `on`), o instalador persiste `"allowInsecureTls": true` no `config.json` durante a instalação. Se o parâmetro não for informado, o instalador não cria esse campo por padrão.
+
+O instalador também aceita `/AUTO_PROVISIONING=0|1` (alias legado: `/DISCOVERY=0|1`) para definir o valor inicial de `autoProvisioning` no `config.json`. O default do build é `1` (auto-provisioning habilitado).
 
 ## Observações operacionais
 

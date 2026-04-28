@@ -6,7 +6,8 @@ param(
     [string]$DefaultUrl = "",
     [string]$DefaultKey = "",
     [ValidateSet("0", "1")]
-    [string]$DiscoveryEnabled = "1",
+    [Alias("DiscoveryEnabled")]
+    [string]$AutoProvisioning = "1",
     [switch]$GenericInstall
 )
 
@@ -148,7 +149,7 @@ $nsisArgs = @(
     "UTF8",
     "/DARG_WAILS_AMD64_BINARY=$agentExe",
     "/DARG_OUTFILE_NAME=$OutputName",
-    "/DARG_DEFAULT_DISCOVERY=$DiscoveryEnabled"
+    "/DARG_DEFAULT_DISCOVERY=$AutoProvisioning"
 )
 
 if ($DefaultUrl -ne "") {

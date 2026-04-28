@@ -26,22 +26,27 @@ func (f *fakeAgentConn) GetStatus() agentconn.Status {
 	return agentconn.Status{}
 }
 
-func TestInstallerConfigUnmarshalDiscoveryEnabledCompat(t *testing.T) {
+func TestInstallerConfigUnmarshalAutoProvisioningCompat(t *testing.T) {
 	tests := []struct {
 		name string
 		raw  string
 		want bool
 	}{
-		{name: "bool true", raw: `{"discoveryEnabled":true}`, want: true},
-		{name: "bool false", raw: `{"discoveryEnabled":false}`, want: false},
-		{name: "number 1", raw: `{"discoveryEnabled":1}`, want: true},
-		{name: "number 0", raw: `{"discoveryEnabled":0}`, want: false},
-		{name: "string true", raw: `{"discoveryEnabled":"true"}`, want: true},
-		{name: "string false", raw: `{"discoveryEnabled":"false"}`, want: false},
-		{name: "string yes", raw: `{"discoveryEnabled":"yes"}`, want: true},
-		{name: "string no", raw: `{"discoveryEnabled":"no"}`, want: false},
-		{name: "string 1", raw: `{"discoveryEnabled":"1"}`, want: true},
-		{name: "string 0", raw: `{"discoveryEnabled":"0"}`, want: false},
+		{name: "canonical bool true", raw: `{"autoProvisioning":true}`, want: true},
+		{name: "canonical bool false", raw: `{"autoProvisioning":false}`, want: false},
+		{name: "canonical number 1", raw: `{"autoProvisioning":1}`, want: true},
+		{name: "canonical string yes", raw: `{"autoProvisioning":"yes"}`, want: true},
+		{name: "legacy bool true", raw: `{"discoveryEnabled":true}`, want: true},
+		{name: "legacy bool false", raw: `{"discoveryEnabled":false}`, want: false},
+		{name: "legacy number 1", raw: `{"discoveryEnabled":1}`, want: true},
+		{name: "legacy number 0", raw: `{"discoveryEnabled":0}`, want: false},
+		{name: "legacy string true", raw: `{"discoveryEnabled":"true"}`, want: true},
+		{name: "legacy string false", raw: `{"discoveryEnabled":"false"}`, want: false},
+		{name: "legacy string yes", raw: `{"discoveryEnabled":"yes"}`, want: true},
+		{name: "legacy string no", raw: `{"discoveryEnabled":"no"}`, want: false},
+		{name: "legacy string 1", raw: `{"discoveryEnabled":"1"}`, want: true},
+		{name: "legacy string 0", raw: `{"discoveryEnabled":"0"}`, want: false},
+		{name: "canonical wins over legacy", raw: `{"autoProvisioning":false,"discoveryEnabled":true}`, want: false},
 	}
 
 	for _, tc := range tests {
@@ -50,20 +55,22 @@ func TestInstallerConfigUnmarshalDiscoveryEnabledCompat(t *testing.T) {
 			if err := json.Unmarshal([]byte(tc.raw), &cfg); err != nil {
 				t.Fatalf("unmarshal compat: %v", err)
 			}
-			if cfg.DiscoveryEnabled == nil {
-				t.Fatal("discoveryEnabled nao deveria ser nil")
+			if cfg.AutoProvisioning == nil {
+				t.Fatal("autoProvisioning nao deveria ser nil")
 			}
-			if *cfg.DiscoveryEnabled != tc.want {
-				t.Fatalf("discoveryEnabled = %v, want %v", *cfg.DiscoveryEnabled, tc.want)
+			if *cfg.AutoProvisioning != tc.want {
+				t.Fatalf("autoProvisioning = %v, want %v", *cfg.AutoProvisioning, tc.want)
 			}
 		})
 	}
 }
 
-func TestInstallerConfigUnmarshalDiscoveryEnabledInvalid(t *testing.T) {
+func TestInstallerConfigUnmarshalAutoProvisioningInvalid(t *testing.T) {
 	var cfg InstallerConfig
-	err := json.Unmarshal([]byte(`{"discoveryEnabled":2}`), &cfg)
-	if err == nil {
+	if err := json.Unmarshal([]byte(`{"autoProvisioning":2}`), &cfg); err == nil {
+		t.Fatal("esperava erro para autoProvisioning invalido")
+	}
+	if err := json.Unmarshal([]byte(`{"discoveryEnabled":2}`), &cfg); err == nil {
 		t.Fatal("esperava erro para discoveryEnabled invalido")
 	}
 }

@@ -27,7 +27,7 @@ Opcoes:
   --version <semver>             Injeta versao em ldflags (ex: 1.2.3)
   --server-url <url>             Server URL para gerar installer.json
   --api-key <token>              API key para gerar installer.json
-  --discovery-enabled <0|1>      discoveryEnabled no installer.json (default: 1)
+  --auto-provisioning <0|1>      autoProvisioning no installer.json (default: 1) (alias: --discovery-enabled)
   --write-installer-json <0|1>   Gera installer.json (default: 1)
   --help                         Mostra esta ajuda
 
@@ -71,7 +71,7 @@ while [[ $# -gt 0 ]]; do
       API_KEY="$2"
       shift 2
       ;;
-    --discovery-enabled)
+    --auto-provisioning|--discovery-enabled)
       DISCOVERY_ENABLED="$2"
       shift 2
       ;;
@@ -92,7 +92,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ "$DISCOVERY_ENABLED" != "0" && "$DISCOVERY_ENABLED" != "1" ]]; then
-  echo "[erro] --discovery-enabled deve ser 0 ou 1" >&2
+  echo "[erro] --auto-provisioning deve ser 0 ou 1" >&2
   exit 1
 fi
 
@@ -167,7 +167,7 @@ if [[ "$WRITE_INSTALLER_JSON" == "1" ]]; then
 {
   "serverUrl": "${SERVER_URL}",
   "apiKey": "${API_KEY}",
-  "discoveryEnabled": $([[ "$DISCOVERY_ENABLED" == "1" ]] && echo true || echo false),
+  "autoProvisioning": $([[ "$DISCOVERY_ENABLED" == "1" ]] && echo true || echo false),
   "p2p": {
     "enabled": $([[ "$DISCOVERY_ENABLED" == "1" ]] && echo true || echo false)
   }

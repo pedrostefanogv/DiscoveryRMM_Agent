@@ -100,8 +100,8 @@ func mergeInstallerOverride(base, override InstallerConfig) InstallerConfig {
 	if strings.TrimSpace(override.ApiServer) != "" {
 		base.ApiServer = strings.TrimSpace(override.ApiServer)
 	}
-	if override.DiscoveryEnabled != nil {
-		base.DiscoveryEnabled = override.DiscoveryEnabled
+	if override.AutoProvisioning != nil {
+		base.AutoProvisioning = override.AutoProvisioning
 	}
 	if override.AllowInsecureTLS != nil {
 		base.AllowInsecureTLS = override.AllowInsecureTLS

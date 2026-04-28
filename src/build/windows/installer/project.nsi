@@ -207,7 +207,8 @@ Var DiscoveryCheck
 
 Var ServerUrl
 Var ServerKey
-Var DiscoveryEnabled
+Var AutoProvisioning
+Var AllowInsecureTls
 Var MinimalMode
 Var GenericMode
 Var PayloadUrl
@@ -248,7 +249,8 @@ Function .onInit
    # Definir valores padrão vindos do build
    StrCpy $ServerUrl "${BUILD_DEFAULT_URL}"
    StrCpy $ServerKey "${BUILD_DEFAULT_KEY}"
-   StrCpy $DiscoveryEnabled "${BUILD_DEFAULT_DISCOVERY}"
+   StrCpy $AutoProvisioning "${BUILD_DEFAULT_DISCOVERY}"
+   StrCpy $AllowInsecureTls ""
    StrCpy $MinimalMode "${BUILD_DEFAULT_MINIMAL}"
    StrCpy $GenericMode "${BUILD_GENERIC_INSTALL}"
    StrCpy $PayloadUrl "${BUILD_PAYLOAD_URL}"
@@ -268,9 +270,9 @@ Function .onInit
    ${EndIf}
 
    # Normalizar defaults inválidos
-   ${If} $DiscoveryEnabled != "0"
-   ${AndIf} $DiscoveryEnabled != "1"
-      StrCpy $DiscoveryEnabled "1"
+   ${If} $AutoProvisioning != "0"
+   ${AndIf} $AutoProvisioning != "1"
+      StrCpy $AutoProvisioning "1"
    ${EndIf}
 
    ${If} $MinimalMode != "0"
@@ -299,12 +301,34 @@ Function .onInit
       StrCpy $PayloadUrl $R1
    ${EndIf}
    
-   # Parse DISCOVERY (0 ou 1)
+   # Parse AUTO_PROVISIONING (0 ou 1) - chave canônica para zero-touch provisioning.
+   # Aceita /DISCOVERY= como alias legado para compatibilidade com automações antigas.
+   ${GetOptions} $R0 "/AUTO_PROVISIONING=" $R1
+   ${If} $R1 != ""
+      ${If} $R1 == "0"
+      ${OrIf} $R1 == "1"
+         StrCpy $AutoProvisioning $R1
+      ${EndIf}
+   ${EndIf}
    ${GetOptions} $R0 "/DISCOVERY=" $R1
    ${If} $R1 != ""
       ${If} $R1 == "0"
       ${OrIf} $R1 == "1"
-         StrCpy $DiscoveryEnabled $R1
+         StrCpy $AutoProvisioning $R1
+      ${EndIf}
+   ${EndIf}
+
+   # Parse ALLOW_INSECURE_TLS (1/true/yes/on habilita persistencia no config)
+   ${GetOptions} $R0 "/ALLOW_INSECURE_TLS=" $R1
+   ${If} $R1 != ""
+      ${If} $R1 == "1"
+      ${OrIf} $R1 == "true"
+      ${OrIf} $R1 == "TRUE"
+      ${OrIf} $R1 == "yes"
+      ${OrIf} $R1 == "YES"
+      ${OrIf} $R1 == "on"
+      ${OrIf} $R1 == "ON"
+         StrCpy $AllowInsecureTls "1"
       ${EndIf}
    ${EndIf}
    
@@ -366,10 +390,10 @@ Function AgentConfigPage
    ${NSD_CreateText} 0 65u 100% 12u $ServerKey
    Pop $KeyText
    
-   # Checkbox para habilitar/desabilitar Discovery
-   ${NSD_CreateCheckbox} 0 90u 100% 12u "Habilitar Discovery (monitoramento automático)"
+   # Checkbox para habilitar/desabilitar Auto-Provisioning (zero-touch)
+   ${NSD_CreateCheckbox} 0 90u 100% 12u "Habilitar Auto-Provisioning (zero-touch via P2P)"
    Pop $DiscoveryCheck
-   ${If} $DiscoveryEnabled == "1"
+   ${If} $AutoProvisioning == "1"
       ${NSD_Check} $DiscoveryCheck
    ${EndIf}
    
@@ -383,9 +407,9 @@ Function AgentConfigPageLeave
    
    ${NSD_GetState} $DiscoveryCheck $R0
    ${If} $R0 == ${BST_CHECKED}
-      StrCpy $DiscoveryEnabled "1"
+      StrCpy $AutoProvisioning "1"
    ${Else}
-      StrCpy $DiscoveryEnabled "0"
+      StrCpy $AutoProvisioning "0"
    ${EndIf}
 FunctionEnd
 
@@ -518,7 +542,7 @@ Function SaveAgentConfig
       Abort
    ${EndIf}
 
-   FileWrite $0 "param([string]$$ConfigPath,[string]$$FallbackPath,[string]$$ServerUrl,[string]$$ServerKey,[string]$$DiscoveryEnabled,[string]$$GenericMode)$\r$\n"
+   FileWrite $0 "param([string]$$ConfigPath,[string]$$FallbackPath,[string]$$ServerUrl,[string]$$ServerKey,[string]$$AutoProvisioning,[string]$$GenericMode,[string]$$AllowInsecureTls)$\r$\n"
    FileWrite $0 "$$ErrorActionPreference = 'Stop'$\r$\n"
    FileWrite $0 "function Convert-ToHashtable([object]$$Value) {$\r$\n"
    FileWrite $0 "  if ($$null -eq $$Value) { return $$null }$\r$\n"
@@ -549,9 +573,11 @@ Function SaveAgentConfig
    FileWrite $0 "if ($$GenericMode -ne '1') {$\r$\n"
    FileWrite $0 "  if (-not [string]::IsNullOrWhiteSpace($$ServerUrl)) { $$config['serverUrl'] = $$ServerUrl }$\r$\n"
    FileWrite $0 "  if (-not [string]::IsNullOrWhiteSpace($$ServerKey)) { $$config['deployToken'] = $$ServerKey }$\r$\n"
-   FileWrite $0 "  $$enabled = ($$DiscoveryEnabled -eq '1')$\r$\n"
+   FileWrite $0 "  $$enabled = ($$AutoProvisioning -eq '1')$\r$\n"
    FileWrite $0 "}$\r$\n"
-   FileWrite $0 "$$config['discoveryEnabled'] = $$enabled$\r$\n"
+   FileWrite $0 "$$config['autoProvisioning'] = $$enabled$\r$\n"
+   FileWrite $0 "if ($$config.Contains('discoveryEnabled')) { $$config.Remove('discoveryEnabled') }$\r$\n"
+   FileWrite $0 "if ($$AllowInsecureTls -eq '1') { $$config['allowInsecureTls'] = $$true }$\r$\n"
    FileWrite $0 "$$p2p = [ordered]@{}$\r$\n"
    FileWrite $0 "if ($$config.Contains('p2p') -and $$null -ne $$config['p2p']) {$\r$\n"
    FileWrite $0 "  $$existingP2P = Convert-ToHashtable $$config['p2p']$\r$\n"
@@ -572,7 +598,7 @@ Function SaveAgentConfig
    FileWrite $0 "if (-not [string]::IsNullOrWhiteSpace($$FallbackPath)) { Remove-Item (Join-Path (Split-Path -Parent $$FallbackPath) 'installer.json') -Force -ErrorAction SilentlyContinue }$\r$\n"
    FileClose $0
 
-   ExecWait '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$R3" -ConfigPath "$R1" -FallbackPath "$R2" -ServerUrl "$ServerUrl" -ServerKey "$ServerKey" -DiscoveryEnabled "$DiscoveryEnabled" -GenericMode "$GenericMode"' $R9
+   ExecWait '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$R3" -ConfigPath "$R1" -FallbackPath "$R2" -ServerUrl "$ServerUrl" -ServerKey "$ServerKey" -AutoProvisioning "$AutoProvisioning" -GenericMode "$GenericMode" -AllowInsecureTls "$AllowInsecureTls"' $R9
    Delete "$R3"
    ${If} $R9 != 0
       MessageBox MB_ICONSTOP "Falha ao gravar a configuracao do agente (codigo: $R9). Verifique permissoes em $R0\Discovery e $INSTDIR."
@@ -644,9 +670,9 @@ Function DownloadAndRunStage2
 
    DetailPrint "Executando instalador completo de segunda etapa..."
    ${If} $GenericMode == "1"
-      ExecWait '"$R7" /S /GENERIC /DISCOVERY=$DiscoveryEnabled /MINIMAL' $R0
+      ExecWait '"$R7" /S /GENERIC /AUTO_PROVISIONING=$AutoProvisioning /ALLOW_INSECURE_TLS=$AllowInsecureTls /MINIMAL' $R0
    ${Else}
-      ExecWait '"$R7" /S /URL="$ServerUrl" /KEY="$ServerKey" /DISCOVERY=$DiscoveryEnabled /MINIMAL' $R0
+      ExecWait '"$R7" /S /URL="$ServerUrl" /KEY="$ServerKey" /AUTO_PROVISIONING=$AutoProvisioning /ALLOW_INSECURE_TLS=$AllowInsecureTls /MINIMAL' $R0
    ${EndIf}
 
    ${If} $R0 != 0

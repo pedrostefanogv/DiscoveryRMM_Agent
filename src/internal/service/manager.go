@@ -194,6 +194,7 @@ func mergeLegacyInstallerConfigData(baseData, overrideData []byte) ([]byte, erro
 	for _, key := range []string{
 		"serverUrl",
 		"apiKey",
+		"autoProvisioning",
 		"discoveryEnabled",
 		"apiScheme",
 		"apiServer",

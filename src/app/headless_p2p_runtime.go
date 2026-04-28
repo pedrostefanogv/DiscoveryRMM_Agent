@@ -68,7 +68,7 @@ func (s *HeadlessP2PService) Run(ctx context.Context) error {
 	if !s.started {
 		s.started = true
 		go s.app.StartP2PTelemetryLoop(ctx)
-		if !isAgentConfigured() {
+		if !isAgentConfigured() && s.localAutoProvisioningAllowed() {
 			go s.app.RunOnboardingLoop(ctx)
 		}
 	}
@@ -88,4 +88,27 @@ func (s *HeadlessP2PService) Close() {
 		s.unregister()
 		s.unregister = nil
 	}
+}
+
+// localAutoProvisioningAllowed verifica o flag autoProvisioning persistido em
+// config.json. Quando ausente, o padrão é permitir (true) — assim a decisão
+// final fica com a feature flag do servidor (AgentConfiguration.DiscoveryEnabled).
+// Quando explicitamente false, o agente não inicia o loop de onboarding local
+// mesmo estando não configurado, atuando como kill-switch local de zero-touch.
+func (s *HeadlessP2PService) localAutoProvisioningAllowed() bool {
+	if s == nil || s.app == nil {
+		return true
+	}
+	cfg, _, err := loadInstallerConfig()
+	if err != nil {
+		return true
+	}
+	if cfg.AutoProvisioning == nil {
+		return true
+	}
+	allowed := *cfg.AutoProvisioning
+	if !allowed {
+		s.app.logs.append("[onboarding] autoProvisioning=false em config.json: loop de zero-touch desabilitado localmente")
+	}
+	return allowed
 }

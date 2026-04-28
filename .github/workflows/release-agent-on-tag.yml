@@ -175,7 +175,7 @@ jobs:
             ProjectRoot = $PWD
             Version = "${{ steps.meta.outputs.version }}"
             OutputName = "${{ steps.meta.outputs.install_asset_name }}"
-            DiscoveryEnabled = '1'
+            AutoProvisioning = '1'
           }
 
           .\build\scripts\build-install-installer.ps1 @params
@@ -228,7 +228,7 @@ jobs:
             PayloadSha256 = "${{ steps.payload.outputs.payload_sha256 }}"
             PayloadFileName = "${{ steps.meta.outputs.install_asset_name }}"
             ExpectedTag = "${{ steps.meta.outputs.tag }}"
-            DiscoveryEnabled = '1'
+            AutoProvisioning = '1'
           }
 
           .\build\scripts\build-bootstrap-installer.ps1 @params

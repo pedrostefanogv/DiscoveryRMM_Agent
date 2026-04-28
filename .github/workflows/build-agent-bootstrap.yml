@@ -23,8 +23,8 @@ on:
         description: Nome do bootstrap de saida
         required: false
         default: discovery-agent-bootstrap.exe
-      discovery_enabled:
-        description: Habilitar discovery/p2p por padrao (0 ou 1)
+      auto_provisioning:
+        description: Habilitar auto-provisioning (zero-touch via P2P) por padrao (0 ou 1)
         required: false
         default: "1"
       generic_install:
@@ -62,7 +62,7 @@ jobs:
             PayloadSha256 = "${{ github.event.inputs.payload_sha256 }}"
             PayloadFileName = "${{ github.event.inputs.payload_filename }}"
             OutputName = "${{ github.event.inputs.output_name }}"
-            DiscoveryEnabled = "${{ github.event.inputs.discovery_enabled }}"
+            AutoProvisioning = "${{ github.event.inputs.auto_provisioning }}"
           }
 
           if ('${{ github.event.inputs.generic_install }}' -eq 'true') {

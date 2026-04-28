@@ -8,7 +8,8 @@ param(
     [string]$PayloadFileName = "discovery-stage2-installer.exe",
     [string]$OutputName = "discovery-agent-bootstrap.exe",
     [ValidateSet("0", "1")]
-    [string]$DiscoveryEnabled = "1",
+    [Alias("DiscoveryEnabled")]
+    [string]$AutoProvisioning = "1",
     [string]$ExpectedTag = "",
     [switch]$GenericInstall
 )
@@ -166,7 +167,7 @@ $nsisArgs = @(
     "/DARG_PAYLOAD_URL=$PayloadUrl",
     "/DARG_PAYLOAD_FILENAME=$PayloadFileName",
     "/DARG_OUTFILE_NAME=$OutputName",
-    "/DARG_DEFAULT_DISCOVERY=$DiscoveryEnabled"
+    "/DARG_DEFAULT_DISCOVERY=$AutoProvisioning"
 )
 
 if ($PayloadSha256 -ne "") {

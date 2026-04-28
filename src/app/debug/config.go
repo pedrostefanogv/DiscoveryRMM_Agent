@@ -42,9 +42,14 @@ func (c Config) IsProvisioned() bool {
 // The JSON contract now persists deployToken, while apiKey remains accepted
 // on read for backward compatibility with older installers.
 type InstallerConfig struct {
-	ServerURL            string             `json:"serverUrl"`
-	APIKey               string             `json:"deployToken,omitempty"`
-	DiscoveryEnabled     *bool              `json:"discoveryEnabled,omitempty"`
+	ServerURL string `json:"serverUrl"`
+	APIKey    string `json:"deployToken,omitempty"`
+	// AutoProvisioning controla a participação local no fluxo de zero-touch
+	// auto-provisioning via P2P (endpoint /p2p/config/onboard). Quando ausente,
+	// o agente assume o comportamento padrão definido pela configuração do
+	// servidor. O JSON canônico é "autoProvisioning"; o campo legado
+	// "discoveryEnabled" continua sendo aceito em leitura para retrocompat.
+	AutoProvisioning     *bool              `json:"autoProvisioning,omitempty"`
 	ApiScheme            string             `json:"apiScheme,omitempty"`
 	ApiServer            string             `json:"apiServer,omitempty"`
 	AuthToken            string             `json:"authToken,omitempty"`
@@ -62,6 +67,7 @@ func (c *InstallerConfig) UnmarshalJSON(data []byte) error {
 		ServerURL            string             `json:"serverUrl"`
 		DeployToken          string             `json:"deployToken,omitempty"`
 		APIKey               string             `json:"apiKey"`
+		AutoProvisioning     json.RawMessage    `json:"autoProvisioning,omitempty"`
 		DiscoveryEnabled     json.RawMessage    `json:"discoveryEnabled,omitempty"`
 		ApiScheme            string             `json:"apiScheme,omitempty"`
 		ApiServer            string             `json:"apiServer,omitempty"`
@@ -85,9 +91,18 @@ func (c *InstallerConfig) UnmarshalJSON(data []byte) error {
 		deployToken = strings.TrimSpace(raw.APIKey)
 	}
 
-	discoveryEnabled, err := parseInstallerBool(raw.DiscoveryEnabled)
+	// Aceita o nome canônico autoProvisioning e o legado discoveryEnabled. O
+	// canônico tem precedência quando ambos estão presentes.
+	autoProvisioning, err := parseInstallerBool(raw.AutoProvisioning)
 	if err != nil {
-		return fmt.Errorf("discoveryEnabled invalido: %w", err)
+		return fmt.Errorf("autoProvisioning invalido: %w", err)
+	}
+	if autoProvisioning == nil {
+		legacy, err := parseInstallerBool(raw.DiscoveryEnabled)
+		if err != nil {
+			return fmt.Errorf("discoveryEnabled invalido: %w", err)
+		}
+		autoProvisioning = legacy
 	}
 
 	allowInsecureTLS, err := parseInstallerBool(raw.AllowInsecureTLS)
@@ -98,7 +113,7 @@ func (c *InstallerConfig) UnmarshalJSON(data []byte) error {
 	*c = InstallerConfig{
 		ServerURL:            raw.ServerURL,
 		APIKey:               deployToken,
-		DiscoveryEnabled:     discoveryEnabled,
+		AutoProvisioning:     autoProvisioning,
 		ApiScheme:            raw.ApiScheme,
 		ApiServer:            raw.ApiServer,
 		AuthToken:            raw.AuthToken,
