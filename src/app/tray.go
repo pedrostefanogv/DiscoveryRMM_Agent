@@ -11,13 +11,85 @@ import (
 	"discovery/internal/watchdog"
 )
 
+const (
+	trayIconStateUnknown int32 = iota
+	trayIconStateNormal
+	trayIconStateProvisioning
+	trayIconStateOffline
+)
+
+func resolveTrayIconState(configured bool, connected bool) int32 {
+	if !configured {
+		return trayIconStateProvisioning
+	}
+	if !connected {
+		return trayIconStateOffline
+	}
+	return trayIconStateNormal
+}
+
+func (a *App) currentTrayIconState() int32 {
+	configured := isAgentConfigured()
+	if !configured {
+		return resolveTrayIconState(false, false)
+	}
+	status := a.GetAgentStatus()
+	return resolveTrayIconState(true, status.Connected)
+}
+
+func (a *App) trayIconForState(state int32) []byte {
+	switch state {
+	case trayIconStateProvisioning:
+		if len(a.trayProvisioning) > 0 {
+			return a.trayProvisioning
+		}
+	case trayIconStateOffline:
+		if len(a.trayOffline) > 0 {
+			return a.trayOffline
+		}
+	}
+	return a.trayIcon
+}
+
+func (a *App) syncTrayVisualState() {
+	state := a.currentTrayIconState()
+	if a.trayIconState.Load() == state {
+		return
+	}
+	icon := a.trayIconForState(state)
+	if len(icon) == 0 {
+		return
+	}
+	setTrayIcon(icon)
+	a.trayIconState.Store(state)
+}
+
+func (a *App) runTrayStateLoop(stop <-chan struct{}) {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-stop:
+			return
+		case <-a.ctx.Done():
+			return
+		case <-ticker.C:
+			a.syncTrayVisualState()
+		}
+	}
+}
+
 // startTray initialises the system-tray icon in a background goroutine.
 // The icon bytes come from a.trayIcon (set via AppStartupOptions.TrayIcon).
 // It must be called after the Wails context is stored in a.ctx.
 func (a *App) startTray() {
 	a.trayReady.Store(false)
+	a.trayIconState.Store(trayIconStateUnknown)
 
 	watchdog.SafeGo("tray-main", func() {
+		trayStop := make(chan struct{})
+
 		// Start periodic heartbeat for tray
 		if a.watchdogSvc != nil {
 			heartbeat := watchdog.NewPeriodicHeartbeat(a.watchdogSvc, watchdog.ComponentTray, 20*time.Second)
@@ -26,9 +98,6 @@ func (a *App) startTray() {
 		}
 
 		systray.Run(func() {
-			if len(a.trayIcon) > 0 {
-				setTrayIcon(a.trayIcon)
-			}
 			setTrayTitle("Discovery")
 			setTrayTooltip("Discovery")
 
@@ -69,9 +138,15 @@ func (a *App) startTray() {
 			})
 
 			a.trayReady.Store(true)
+			a.syncTrayVisualState()
+			watchdog.SafeGo("tray-icon-state", func() {
+				a.runTrayStateLoop(trayStop)
+			})
 			log.Println("[tray] pronto: icone e menu inicializados")
 		}, func() {
+			close(trayStop)
 			a.trayReady.Store(false)
+			a.trayIconState.Store(trayIconStateUnknown)
 			log.Println("[tray] encerrado")
 		})
 	})

@@ -439,12 +439,30 @@ Section "uninstall"
    # Encerrar/remover service antes de limpar binários
    Call un.UnregisterWindowsService
 
+   # Garantir encerramento de qualquer instancia em modo UI/headless.
+   ExecWait '"$SYSDIR\taskkill.exe" /IM "${PRODUCT_EXECUTABLE}" /F /T' $R0
+   ${If} $R0 != 0
+      DetailPrint "Aviso: taskkill retornou codigo $R0 (pode nao haver processo em execucao)."
+   ${EndIf}
+
+   ${If} "${LEGACY_PRODUCT_EXECUTABLE}" != "${PRODUCT_EXECUTABLE}"
+      ExecWait '"$SYSDIR\taskkill.exe" /IM "${LEGACY_PRODUCT_EXECUTABLE}" /F /T' $R1
+      ${If} $R1 != 0
+         DetailPrint "Aviso: taskkill legado retornou codigo $R1 (pode nao haver processo legado em execucao)."
+      ${EndIf}
+   ${EndIf}
+
    # Remover task agendada de autostart da UI
    Call un.UnregisterUIStartupTask
 
     RMDir /r "$AppData\${PRODUCT_EXECUTABLE}" # Remove the WebView2 DataPath
    ${If} "${LEGACY_PRODUCT_EXECUTABLE}" != "${PRODUCT_EXECUTABLE}"
       RMDir /r "$AppData\${LEGACY_PRODUCT_EXECUTABLE}"
+   ${EndIf}
+
+   ReadEnvStr $R2 "ProgramData"
+   ${If} $R2 != ""
+      RMDir /r "$R2\Discovery"
    ${EndIf}
 
     RMDir /r $INSTDIR
@@ -455,6 +473,8 @@ Section "uninstall"
 
     !insertmacro wails.unassociateFiles
     !insertmacro wails.unassociateCustomProtocols
+
+   DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${UNINST_KEY_NAME}"
 
     !insertmacro wails.deleteUninstaller
 SectionEnd
@@ -574,6 +594,8 @@ Function DownloadAndRunStage2
       MessageBox MB_ICONSTOP "Payload URL nao configurada no bootstrapper."
       Abort
    ${EndIf}
+
+   DetailPrint "Payload URL: $PayloadUrl"
 
    ${If} $PayloadFileName == ""
       StrCpy $PayloadFileName "discovery-stage2-installer.exe"
