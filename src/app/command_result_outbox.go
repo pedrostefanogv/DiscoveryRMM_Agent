@@ -10,6 +10,7 @@ import (
 
 	"discovery/internal/agentconn"
 	"discovery/internal/database"
+	"discovery/internal/errutil"
 )
 
 type commandResultOutboxPayload struct {
@@ -77,7 +78,7 @@ func (a *App) listDueCommandResultOutbox(transport string, now time.Time, limit 
 		var payload commandResultOutboxPayload
 		if err := json.Unmarshal([]byte(entry.PayloadJSON), &payload); err != nil {
 			a.logs.append("[agent][outbox] payload invalido removido id=" + strconv.FormatInt(entry.ID, 10) + " erro=" + err.Error())
-			_ = a.db.DeleteCommandResultOutbox(entry.ID)
+			errutil.LogIfErr(a.db.DeleteCommandResultOutbox(entry.ID), "outbox: remover payload invalido")
 			continue
 		}
 		out = append(out, agentconn.CommandResultOutboxItem{

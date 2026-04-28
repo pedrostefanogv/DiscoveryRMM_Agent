@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"discovery/internal/database"
+	"discovery/internal/errutil"
 )
 
 func (s *Service) clearDeferState(agentID, taskID, finalStatus string) {
@@ -26,13 +27,13 @@ func (s *Service) clearDeferState(agentID, taskID, finalStatus string) {
 
 	if existing.Count == 0 {
 		if s.db != nil && agentID != "" {
-			_ = s.db.UpsertAutomationDeferState(database.AutomationDeferStateEntry{
+			errutil.LogIfErr(s.db.UpsertAutomationDeferState(database.AutomationDeferStateEntry{
 				AgentID:        agentID,
 				TaskID:         taskID,
 				FinalStatus:    finalStatus,
 				DeferCount:     0,
 				DeferExhausted: false,
-			})
+			}), "automation: persistir defer state")
 		}
 		return
 	}

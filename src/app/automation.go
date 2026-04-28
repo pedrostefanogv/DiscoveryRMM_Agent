@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -21,9 +20,6 @@ func (a *App) RefreshAutomationPolicy(includeScriptContent bool) (AutomationStat
 		return AutomationStateView{}, nil
 	}
 	ctx := a.ctx
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	state, err := a.automationSvc.RefreshPolicy(ctx, includeScriptContent)
 	return mapAutomationState(state), err
 }

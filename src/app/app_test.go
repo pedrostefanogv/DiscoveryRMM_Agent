@@ -63,15 +63,18 @@ func TestParseUpgradeOutput_Empty(t *testing.T) {
 
 func TestServiceOnlyUnavailablePayload_HasUserGuidance(t *testing.T) {
 	payload := serviceOnlyUnavailablePayload("failed to connect")
-	if payload["running"] != false {
-		t.Fatalf("expected running=false, got %v", payload["running"])
+	if payload.Running != false {
+		t.Fatalf("expected running=false, got %v", payload.Running)
 	}
-	if payload["service_only"] != true {
-		t.Fatalf("expected service_only=true, got %v", payload["service_only"])
+	if payload.ServiceOnly != true {
+		t.Fatalf("expected service_only=true, got %v", payload.ServiceOnly)
 	}
-	msg, ok := payload["user_message"].(string)
-	if !ok || strings.TrimSpace(msg) == "" {
-		t.Fatalf("expected non-empty user_message, got %v", payload["user_message"])
+	if payload.Error == nil || strings.TrimSpace(*payload.Error) == "" {
+		t.Fatalf("expected non-empty error, got %v", payload.Error)
+	}
+	msg := payload.UserMessage
+	if strings.TrimSpace(msg) == "" {
+		t.Fatalf("expected non-empty user_message, got %q", msg)
 	}
 	if !strings.Contains(strings.ToLower(msg), "reinicie") {
 		t.Fatalf("expected restart guidance, got %q", msg)

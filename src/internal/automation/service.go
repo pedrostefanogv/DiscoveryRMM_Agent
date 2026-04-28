@@ -12,6 +12,7 @@ import (
 	"github.com/robfig/cron/v3"
 
 	"discovery/internal/database"
+	"discovery/internal/errutil"
 )
 
 const (
@@ -295,7 +296,7 @@ func (s *Service) triggerImmediate(ctx context.Context, agentID, fingerprint str
 	if _, found, err := s.db.GetAutomationMarker(agentID, markerKey); err == nil && found {
 		return
 	}
-	_ = s.db.SetAutomationMarker(agentID, markerKey, time.Now().UTC().Format(time.RFC3339))
+	errutil.LogIfErr(s.db.SetAutomationMarker(agentID, markerKey, time.Now().UTC().Format(time.RFC3339)), "automation: definir marker imediato")
 	s.executeTaskAsync(ctx, agentID, task, sourceForTrigger(TriggerTypeImmediate), TriggerTypeImmediate)
 }
 
@@ -353,7 +354,7 @@ func (s *Service) executeTaskAsync(ctx context.Context, agentID string, task Aut
 			MetadataJSON:     buildExecutionMetadata(task, triggerType, "start", nil, &psadtPolicy),
 		}
 		if s.db != nil {
-			_ = s.db.UpsertAutomationExecution(entry)
+			errutil.LogIfErr(s.db.UpsertAutomationExecution(entry), "automation: persistir execucao iniciada")
 		}
 		s.refreshDerivedState(agentID)
 
@@ -386,7 +387,7 @@ func (s *Service) executeTaskAsync(ctx context.Context, agentID string, task Aut
 			if err := s.sendOrQueueCallback(ctx, agentID, executionID, entry.CommandID, CallbackTypeAck, ack, correlationID); err == nil {
 				entry.Status = string(ExecutionStatusAcknowledged)
 				if s.db != nil {
-					_ = s.db.UpsertAutomationExecution(entry)
+					errutil.LogIfErr(s.db.UpsertAutomationExecution(entry), "automation: persistir ack")
 				}
 			}
 		}
@@ -417,7 +418,7 @@ func (s *Service) executeTaskAsync(ctx context.Context, agentID string, task Aut
 			entry.Status = string(ExecutionStatusFailed)
 		}
 		if s.db != nil {
-			_ = s.db.UpsertAutomationExecution(entry)
+			errutil.LogIfErr(s.db.UpsertAutomationExecution(entry), "automation: persistir resultado da execucao")
 		}
 
 		if entry.CommandID != "" {
@@ -735,12 +736,12 @@ func (s *Service) processCallbackQueue(ctx context.Context) {
 		}
 
 		if callbackErr == nil {
-			_ = s.db.DeleteAutomationCallback(entry.ID)
+			errutil.LogIfErr(s.db.DeleteAutomationCallback(entry.ID), "automation: remover callback processado")
 			continue
 		}
 
 		attempts := entry.Attempts + 1
-		_ = s.db.RescheduleAutomationCallback(entry.ID, attempts, time.Now().Add(callbackBackoff(attempts)), callbackErr.Error())
+		errutil.LogIfErr(s.db.RescheduleAutomationCallback(entry.ID, attempts, time.Now().Add(callbackBackoff(attempts)), callbackErr.Error()), "automation: reagendar callback")
 		if strings.Contains(strings.ToLower(callbackErr.Error()), "404") {
 			s.logf("automacao: callback %s rejeitado por 404 para commandId=%s", entry.CallbackType, entry.CommandID)
 		}

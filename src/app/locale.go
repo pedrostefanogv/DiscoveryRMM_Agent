@@ -1,8 +1,9 @@
 package app
 
 import (
-	"os"
 	"strings"
+
+	"discovery/internal/platform"
 
 	"golang.org/x/text/language"
 )
@@ -40,13 +41,9 @@ func normalizeSupportedLocale(raw string) string {
 }
 
 func detectLocaleFromEnv() string {
-	keys := []string{"DISCOVERY_LOCALE", "LC_ALL", "LANG", "LANGUAGE"}
-	for _, key := range keys {
-		value := strings.TrimSpace(os.Getenv(key))
-		if value == "" {
-			continue
-		}
-		return normalizeSupportedLocale(value)
+	locale := platform.Locale()
+	if locale == "" {
+		return ""
 	}
-	return ""
+	return normalizeSupportedLocale(locale)
 }

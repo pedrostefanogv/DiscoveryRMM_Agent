@@ -136,7 +136,7 @@ func TestResolveP2PTempDir(t *testing.T) {
 	}
 
 	linuxPath := resolveP2PTempDir("linux")
-	wantLinux := filepath.Join(getDataDir(), "TempP2P")
+	wantLinux := filepath.Join(GetDataDir(), "TempP2P")
 	if linuxPath != wantLinux {
 		t.Fatalf("linux path = %q, want %q", linuxPath, wantLinux)
 	}

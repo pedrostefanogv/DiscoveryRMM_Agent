@@ -14,6 +14,7 @@ import (
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
 	appkg "discovery/app"
+	"discovery/internal/platform"
 )
 
 //go:embed all:frontend
@@ -150,7 +151,7 @@ func resolveStartupWindowFrame() (string, bool) {
 
 	frame := strings.TrimSpace(parseArgValue("--window-frame"))
 	if frame == "" {
-		frame = strings.TrimSpace(os.Getenv("DISCOVERY_WINDOW_FRAME"))
+		frame = platform.WindowFrame()
 	}
 
 	switch strings.ToLower(frame) {

@@ -59,8 +59,6 @@ type ServiceManager struct {
 	inventorySvc  InventoryService
 	appsSvc       AppsService
 	p2pSvc        P2PService
-	policyMgr     interface{} // TODO: PolicyManager
-	invMgr        interface{} // TODO: InventoryManager
 	actionTrigger chan struct{}
 	mu            sync.RWMutex
 	startTime     time.Time

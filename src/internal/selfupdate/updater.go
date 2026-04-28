@@ -20,6 +20,8 @@ import (
 	"syscall"
 	"time"
 
+	"discovery/internal/errutil"
+
 	"github.com/google/uuid"
 
 	"discovery/app/netutil"
@@ -363,7 +365,7 @@ func (u *Updater) CheckAndUpdate(ctx context.Context) error {
 		CorrelationID:  correlationID,
 		RecordedAtUTC:  time.Now().UTC().Format(time.RFC3339),
 	}); err != nil {
-		_ = os.Remove(tempPath)
+		errutil.LogIfErr(os.Remove(tempPath), "selfupdate: limpar temp apos falha de persistencia")
 		u.reportEvent(ctx, "InstallFailed", reportOpts{
 			ReleaseID:      manifest.ReleaseID,
 			CurrentVersion: currentVersion,
@@ -376,7 +378,7 @@ func (u *Updater) CheckAndUpdate(ctx context.Context) error {
 
 	if err := u.launchInstaller(tempPath); err != nil {
 		u.clearPendingInstallState()
-		_ = os.Remove(tempPath)
+		errutil.LogIfErr(os.Remove(tempPath), "selfupdate: limpar temp apos falha de launch")
 		u.reportEvent(ctx, "InstallFailed", reportOpts{
 			ReleaseID:      manifest.ReleaseID,
 			CurrentVersion: currentVersion,
@@ -490,7 +492,7 @@ func (u *Updater) downloadToTemp(ctx context.Context, m *UpdateManifest) (string
 		return "", err
 	}
 	defer func() {
-		_ = f.Close()
+		errutil.LogIfErr(f.Close(), "selfupdate: fechar arquivo de download")
 	}()
 
 	endpoint := strings.TrimSpace(u.ApiScheme) + "://" + strings.TrimSpace(u.ApiServer) + "/api/agent-auth/me/update/download"
@@ -517,7 +519,7 @@ func (u *Updater) downloadToTemp(ctx context.Context, m *UpdateManifest) (string
 
 	req, err := http.NewRequestWithContext(ctxDownload, http.MethodGet, endpoint, nil)
 	if err != nil {
-		_ = os.Remove(path)
+		errutil.LogIfErr(os.Remove(path), "selfupdate: limpar download temp")
 		return "", err
 	}
 	netutil.SetAgentAuthHeaders(req, token)
@@ -526,44 +528,44 @@ func (u *Updater) downloadToTemp(ctx context.Context, m *UpdateManifest) (string
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		_ = os.Remove(path)
+		errutil.LogIfErr(os.Remove(path), "selfupdate: limpar download apos falha HTTP")
 		return "", err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8*1024))
-		_ = os.Remove(path)
+		errutil.LogIfErr(os.Remove(path), "selfupdate: limpar download status != 200")
 		return "", fmt.Errorf("download status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
 	buf := make([]byte, 128*1024)
 	if _, err := io.CopyBuffer(f, resp.Body, buf); err != nil {
-		_ = os.Remove(path)
+		errutil.LogIfErr(os.Remove(path), "selfupdate: limpar download apos falha de copy")
 		return "", err
 	}
 	if err := f.Sync(); err != nil {
-		_ = os.Remove(path)
+		errutil.LogIfErr(os.Remove(path), "selfupdate: limpar download apos falha de sync")
 		return "", err
 	}
 	if err := f.Close(); err != nil {
-		_ = os.Remove(path)
+		errutil.LogIfErr(os.Remove(path), "selfupdate: limpar download apos falha de close")
 		return "", err
 	}
 
 	actual, err := fileSHA256(path)
 	if err != nil {
-		_ = os.Remove(path)
+		errutil.LogIfErr(os.Remove(path), "selfupdate: limpar download apos falha sha256")
 		return "", err
 	}
 	expected := strings.ToLower(strings.TrimSpace(*m.Sha256))
 	if expected != "" && actual != expected {
-		_ = os.Remove(path)
+		errutil.LogIfErr(os.Remove(path), "selfupdate: limpar download sha256 mismatch")
 		return "", fmt.Errorf("sha256 mismatch: expected=%s got=%s", expected, actual)
 	}
 	if policy.RequireSignatureValidation {
 		if err := validateAuthenticodeSignature(ctx, path); err != nil {
-			_ = os.Remove(path)
+			errutil.LogIfErr(os.Remove(path), "selfupdate: limpar download assinatura invalida")
 			return "", err
 		}
 	}
@@ -701,7 +703,7 @@ func (u *Updater) clearPendingInstallState() {
 	if path == "" {
 		return
 	}
-	_ = os.Remove(path)
+	errutil.LogIfErr(os.Remove(path), "selfupdate: limpar estado de instalacao pendente")
 }
 
 func compareVersions(a, b string) int {

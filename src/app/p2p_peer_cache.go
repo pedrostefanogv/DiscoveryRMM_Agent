@@ -20,7 +20,7 @@ type p2pCachedPeer struct {
 }
 
 func p2pPeerCachePath() string {
-	return filepath.Join(getDataDir(), "p2p_peer_cache.json")
+	return filepath.Join(GetDataDir(), "p2p_peer_cache.json")
 }
 
 // loadP2PPeerCache lê o cache do disco. Retorna slice vazio se o arquivo não existir.

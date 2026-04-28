@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -24,9 +22,11 @@ import (
 	"discovery/internal/automation"
 	"discovery/internal/data"
 	"discovery/internal/database"
+	"discovery/internal/dto"
 	"discovery/internal/inventory"
 	"discovery/internal/mcp"
 	"discovery/internal/models"
+	"discovery/internal/platform"
 	"discovery/internal/printer"
 	"discovery/internal/processutil"
 	"discovery/internal/service"
@@ -57,26 +57,9 @@ const (
 )
 
 // GetDataDir retorna o diretório de dados da aplicação (exportado para uso em outros pacotes).
-// Prioridade (Windows): C:\ProgramData\Discovery -> LOCALAPPDATA\Discovery -> home/.discovery
+// Delega para internal/platform.
 func GetDataDir() string {
-	return getDataDir()
-}
-
-func getDataDir() string {
-	if runtime.GOOS == "windows" {
-		// 1º: Usar C:\ProgramData\Discovery (compartilhado entre usuários)
-		if programData := strings.TrimSpace(os.Getenv("ProgramData")); programData != "" {
-			return filepath.Join(programData, "Discovery")
-		}
-		// 2º: Fallback para LOCALAPPDATA\Discovery (compatibilidade)
-		if localAppData := strings.TrimSpace(os.Getenv("LOCALAPPDATA")); localAppData != "" {
-			return filepath.Join(localAppData, "Discovery")
-		}
-	}
-	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
-		return filepath.Join(home, ".discovery")
-	}
-	return "."
+	return platform.DataDir()
 }
 
 type App struct {
@@ -165,6 +148,7 @@ func NewApp(opts AppStartupOptions) *App {
 	serviceClient := service.NewServiceClient()
 
 	a := &App{
+		ctx:                 context.Background(), // inicializado para evitar nil; sobrescrito por SetContext()
 		runtimeFlags:        RuntimeFlags{DebugMode: opts.DebugMode},
 		trayIcon:            opts.TrayIcon,
 		trayProvisioning:    opts.TrayProvisioningIcon,
@@ -369,7 +353,7 @@ func NewApp(opts AppStartupOptions) *App {
 		GetRedact: a.getRedact,
 		SetRedact: a.exportCfg.set,
 	})
-	if logPath := strings.TrimSpace(os.Getenv("DISCOVERY_LOG_FILE")); logPath != "" {
+	if logPath := platform.LogFilePath(); logPath != "" {
 		if err := a.logs.enableFilePersistence(logPath); err != nil {
 			log.Printf("[startup] aviso: falha ao habilitar persistencia de logs em arquivo: %v", err)
 		} else {
@@ -458,7 +442,7 @@ func (a *App) startup(ctx context.Context) {
 	a.applyIdleMode(true)
 
 	// Inicializar database SQLite
-	dataDir := getDataDir()
+	dataDir := GetDataDir()
 	db, err := database.Open(dataDir)
 	if err != nil {
 		log.Printf("[startup] AVISO: falha ao abrir database: %v", err)
@@ -834,9 +818,6 @@ func (a *App) registerWatchdogRecovery() {
 			return nil
 		}
 		ctx := a.ctx
-		if ctx == nil {
-			ctx = context.Background()
-		}
 		_, err := a.automationSvc.RefreshPolicy(ctx, false)
 		return err
 	})
@@ -857,14 +838,14 @@ func (a *App) registerWatchdogRecovery() {
 			wailsRuntime.WindowShow(a.ctx)
 			wailsRuntime.WindowSetAlwaysOnTop(a.ctx, true)
 			wailsRuntime.WindowSetAlwaysOnTop(a.ctx, false)
-			wailsRuntime.EventsEmit(a.ctx, "watchdog:ui-recover", map[string]interface{}{
-				"component":       string(component),
-				"nativeSupported": probe.Supported,
-				"windowFound":     probe.WindowFound,
-				"visible":         probe.Visible,
-				"hung":            probe.Hung,
-				"title":           probe.Title,
-				"reloadRequested": !probe.Supported || (probe.WindowFound && !probe.Hung),
+			wailsRuntime.EventsEmit(a.ctx, "watchdog:ui-recover", dto.WatchdogUIRecover{
+				Component:       string(component),
+				NativeSupported: probe.Supported,
+				WindowFound:     probe.WindowFound,
+				Visible:         probe.Visible,
+				Hung:            probe.Hung,
+				Title:           probe.Title,
+				ReloadRequested: !probe.Supported || (probe.WindowFound && !probe.Hung),
 			})
 		}
 
@@ -880,33 +861,33 @@ func (a *App) registerWatchdogRecovery() {
 	// On unhealthy callback: emit event to frontend
 	a.watchdogSvc.OnUnhealthy(func(check watchdog.HealthCheck) {
 		if a.ctx != nil {
-			wailsRuntime.EventsEmit(a.ctx, "watchdog:unhealthy", map[string]interface{}{
-				"component":   string(check.Component),
-				"status":      string(check.Status),
-				"message":     check.Message,
-				"recoverable": check.Recoverable,
+			wailsRuntime.EventsEmit(a.ctx, "watchdog:unhealthy", dto.WatchdogUnhealthy{
+				Component:   string(check.Component),
+				Status:      string(check.Status),
+				Message:     check.Message,
+				Recoverable: check.Recoverable,
 			})
 		}
 	})
 }
 
 // GetWatchdogHealth returns the current health status of all monitored components.
-func (a *App) GetWatchdogHealth() []map[string]interface{} {
+func (a *App) GetWatchdogHealth() []dto.HealthCheckItem {
 	if a.watchdogSvc == nil {
-		return []map[string]interface{}{}
+		return []dto.HealthCheckItem{}
 	}
 
 	checks := a.watchdogSvc.GetHealth()
-	result := make([]map[string]interface{}, len(checks))
+	result := make([]dto.HealthCheckItem, len(checks))
 
 	for i, check := range checks {
-		result[i] = map[string]interface{}{
-			"component":   string(check.Component),
-			"status":      string(check.Status),
-			"message":     check.Message,
-			"lastBeat":    check.LastBeat.Format(time.RFC3339),
-			"checkedAt":   check.CheckedAt.Format(time.RFC3339),
-			"recoverable": check.Recoverable,
+		result[i] = dto.HealthCheckItem{
+			Component:   string(check.Component),
+			Status:      string(check.Status),
+			Message:     check.Message,
+			LastBeat:    check.LastBeat.Format(time.RFC3339),
+			CheckedAt:   check.CheckedAt.Format(time.RFC3339),
+			Recoverable: check.Recoverable,
 		}
 	}
 
@@ -915,89 +896,136 @@ func (a *App) GetWatchdogHealth() []map[string]interface{} {
 
 // GetServiceHealth retorna o status de saúde do Windows Service (processo headless)
 // Conecta ao named pipe do serviço e recupera dados de saúde dos componentes
-func normalizeServiceHealthPayload(data map[string]interface{}) map[string]interface{} {
+func normalizeServiceHealthPayload(data map[string]interface{}) dto.ServiceHealthPayload {
 	if data == nil {
-		return map[string]interface{}{}
+		return dto.ServiceHealthPayload{}
 	}
 
-	normalized := make(map[string]interface{}, len(data))
-	for key, value := range data {
-		normalized[key] = value
+	payload := dto.ServiceHealthPayload{
+		Running:     true,
+		ServiceOnly: true,
+	}
+	if v, ok := data["uptime"].(string); ok {
+		payload.Uptime = v
+	}
+	if v, ok := data["version"].(string); ok {
+		payload.Version = v
 	}
 
-	rawComponents, ok := normalized["components"].([]interface{})
+	rawComponents, ok := data["components"].([]interface{})
 	if !ok {
-		return normalized
+		return payload
 	}
 
-	components := make([]map[string]interface{}, 0, len(rawComponents))
+	components := make([]dto.HealthCheckItem, 0, len(rawComponents))
 	for _, raw := range rawComponents {
 		componentMap, ok := raw.(map[string]interface{})
 		if !ok {
 			continue
 		}
 
-		item := make(map[string]interface{}, len(componentMap))
-		for key, value := range componentMap {
-			switch key {
-			case "Component":
-				item["component"] = value
-			case "Status":
-				item["status"] = value
-			case "LastBeat":
-				item["lastBeat"] = value
-			case "Message":
-				item["message"] = value
-			case "CheckedAt":
-				item["checkedAt"] = value
-			case "Recoverable":
-				item["recoverable"] = value
-			default:
-				item[key] = value
-			}
+		item := dto.HealthCheckItem{}
+		if v, ok := componentMap["Component"].(string); ok {
+			item.Component = v
+		}
+		if v, ok := componentMap["Status"].(string); ok {
+			item.Status = v
+		}
+		if v, ok := componentMap["LastBeat"].(string); ok {
+			item.LastBeat = v
+		}
+		if v, ok := componentMap["Message"].(string); ok {
+			item.Message = v
+		}
+		if v, ok := componentMap["CheckedAt"].(string); ok {
+			item.CheckedAt = v
+		}
+		if v, ok := componentMap["Recoverable"].(bool); ok {
+			item.Recoverable = v
 		}
 		components = append(components, item)
 	}
 
-	normalized["components"] = components
-	return normalized
+	payload.Components = components
+	return payload
 }
 
-func serviceOnlyUnavailablePayload(detail string) map[string]interface{} {
-	guidance := "Nao foi possivel comunicar com o servico Discovery. Reinicie o computador e tente novamente. Se o problema persistir, contate o suporte."
-
-	return map[string]interface{}{
-		"error":        detail,
-		"running":      false,
-		"service_only": true,
-		"user_message": guidance,
+func serviceOnlyUnavailablePayload(detail string) dto.ServiceHealthPayload {
+	return dto.ServiceHealthPayload{
+		Error:       &detail,
+		Running:     false,
+		ServiceOnly: true,
+		UserMessage: "Nao foi possivel comunicar com o servico Discovery. Reinicie o computador e tente novamente. Se o problema persistir, contate o suporte.",
 	}
 }
 
+// GetServiceHealth returns the health of the headless Windows Service.
+// Retained as map[string]interface{} for Wails frontend compatibility.
 func (a *App) GetServiceHealth() map[string]interface{} {
+	var payload dto.ServiceHealthPayload
+
 	if a.serviceClient == nil {
-		return serviceOnlyUnavailablePayload("service client not initialized")
+		payload = serviceOnlyUnavailablePayload("service client not initialized")
+		return toMap(payload)
 	}
 
 	// Tentar conectar ao serviço se não conectado
 	if !a.serviceClient.IsConnected() {
 		if err := a.serviceClient.Connect(a.ctx); err != nil {
-			return serviceOnlyUnavailablePayload(fmt.Sprintf("failed to connect to service: %v", err))
+			payload = serviceOnlyUnavailablePayload(fmt.Sprintf("failed to connect to service: %v", err))
+			return toMap(payload)
 		}
 	}
 
 	// Fazer requisição ao serviço
 	resp, err := a.serviceClient.GetServiceHealth(a.ctx)
 	if err != nil {
-		return serviceOnlyUnavailablePayload(fmt.Sprintf("failed to get service health: %v", err))
+		payload = serviceOnlyUnavailablePayload(fmt.Sprintf("failed to get service health: %v", err))
+		return toMap(payload)
 	}
 
-	// Retornar resposta do serviço (já é um map)
 	if resp != nil && resp.Data != nil {
-		return normalizeServiceHealthPayload(resp.Data)
+		payload = normalizeServiceHealthPayload(resp.Data)
+	} else {
+		payload = serviceOnlyUnavailablePayload("empty response from service")
 	}
+	return toMap(payload)
+}
 
-	return serviceOnlyUnavailablePayload("empty response from service")
+// toMap converte um dto.ServiceHealthPayload para map[string]interface{} para
+// compatibilidade com o frontend Wails.
+func toMap(p dto.ServiceHealthPayload) map[string]interface{} {
+	m := map[string]interface{}{
+		"running":      p.Running,
+		"service_only": p.ServiceOnly,
+	}
+	if p.Error != nil {
+		m["error"] = *p.Error
+	}
+	if p.UserMessage != "" {
+		m["user_message"] = p.UserMessage
+	}
+	if p.Uptime != "" {
+		m["uptime"] = p.Uptime
+	}
+	if p.Version != "" {
+		m["version"] = p.Version
+	}
+	if len(p.Components) > 0 {
+		components := make([]map[string]interface{}, len(p.Components))
+		for i, c := range p.Components {
+			components[i] = map[string]interface{}{
+				"component":   c.Component,
+				"status":      c.Status,
+				"message":     c.Message,
+				"lastBeat":    c.LastBeat,
+				"checkedAt":   c.CheckedAt,
+				"recoverable": c.Recoverable,
+			}
+		}
+		m["components"] = components
+	}
+	return m
 }
 
 func (a *App) beginActivity(activity string) func() {

@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -677,7 +676,7 @@ func (a *App) applyAgentConfiguration(cfg AgentConfiguration) {
 
 	// MeshCentral bootstrap idempotente (instalacao/repair/report) apos refresh de configuracao.
 	if cfg.MeshCentralEnabledEffective != nil && *cfg.MeshCentralEnabledEffective {
-		go a.ensureMeshCentralInstalled(context.Background(), "configuration-refresh", true)
+		go a.ensureMeshCentralInstalled(a.ctx, "configuration-refresh", true)
 	}
 
 	// Consolidation engine: propagar políticas de janela quando disponíveis.

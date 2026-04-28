@@ -7,42 +7,19 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
-	"github.com/samber/lo"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"discovery/internal/ai"
 	"discovery/internal/mcp"
+	"discovery/internal/platform"
 	"discovery/internal/watchdog"
 )
 
 func chatConfigPathCandidates() []string {
-	paths := make([]string, 0, 5)
-
-	if runtime.GOOS == "windows" {
-		// 1º: C:\ProgramData\Discovery (compartilhado entre usuários)
-		if programData := strings.TrimSpace(os.Getenv("ProgramData")); programData != "" {
-			paths = append(paths, filepath.Join(programData, "Discovery", chatConfigFile))
-		}
-		// 2º: LOCALAPPDATA\Discovery (fallback compatibilidade)
-		if localAppData := strings.TrimSpace(os.Getenv("LOCALAPPDATA")); localAppData != "" {
-			paths = append(paths, filepath.Join(localAppData, "Discovery", chatConfigFile))
-		}
-	}
-
-	if exe, err := os.Executable(); err == nil && strings.TrimSpace(exe) != "" {
-		paths = append(paths, filepath.Join(filepath.Dir(exe), chatConfigFile))
-	}
-
-	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
-		paths = append(paths, filepath.Join(home, ".discovery", chatConfigFile))
-	}
-
-	paths = append(paths, filepath.Join(".", chatConfigFile))
-	return lo.Uniq(paths)
+	return platform.ChatConfigPathCandidates(chatConfigFile)
 }
 
 func (a *App) loadPersistedChatConfig() {
@@ -174,9 +151,6 @@ func (a *App) SetChatConfig(cfg ChatConfig) error {
 // TestChatConfig checks whether the informed LLM settings are valid without saving them.
 func (a *App) TestChatConfig(cfg ChatConfig) (string, error) {
 	ctx := a.ctx
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	runtimeCfg, err := a.resolveAgentChatRuntimeConfig(cfg)
 	if err != nil {
 		return "", err

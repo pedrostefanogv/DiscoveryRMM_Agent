@@ -3,8 +3,6 @@ package debug
 import (
 	"bytes"
 	"context"
-	"discovery/app/p2pmeta"
-	"discovery/internal/tlsutil"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,6 +15,10 @@ import (
 	"strings"
 	"time"
 
+	"discovery/app/p2pmeta"
+	"discovery/internal/platform"
+	"discovery/internal/tlsutil"
+
 	"github.com/samber/lo"
 )
 
@@ -27,53 +29,11 @@ func trimJSONBOM(data []byte) []byte {
 }
 
 func installerConfigPathCandidates() []string {
-	paths := make([]string, 0, 5)
-
-	if runtime.GOOS == "windows" {
-		// 1o: C:\ProgramData\Discovery (compartilhado entre usuarios)
-		if programData := strings.TrimSpace(os.Getenv("ProgramData")); programData != "" {
-			paths = append(paths, filepath.Join(programData, "Discovery", "config.json"))
-		}
-		// 2o: LOCALAPPDATA\Discovery (fallback compatibilidade)
-		if localAppData := strings.TrimSpace(os.Getenv("LOCALAPPDATA")); localAppData != "" {
-			paths = append(paths, filepath.Join(localAppData, "Discovery", "config.json"))
-		}
-	}
-
-	if exe, err := os.Executable(); err == nil && strings.TrimSpace(exe) != "" {
-		paths = append(paths, filepath.Join(filepath.Dir(exe), "config.json"))
-	}
-
-	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
-		paths = append(paths, filepath.Join(home, ".discovery", "config.json"))
-	}
-
-	paths = append(paths, filepath.Join(".", "config.json"))
-	return lo.Uniq(paths)
+	return platform.ConfigPathCandidates()
 }
 
 func installerOverridePathCandidates() []string {
-	paths := make([]string, 0, 3)
-
-	if runtime.GOOS == "windows" {
-		if programData := strings.TrimSpace(os.Getenv("ProgramData")); programData != "" {
-			paths = append(paths, filepath.Join(programData, "Discovery", "installer.json"))
-		}
-		if localAppData := strings.TrimSpace(os.Getenv("LOCALAPPDATA")); localAppData != "" {
-			paths = append(paths, filepath.Join(localAppData, "Discovery", "installer.json"))
-		}
-	}
-
-	if exe, err := os.Executable(); err == nil && strings.TrimSpace(exe) != "" {
-		paths = append(paths, filepath.Join(filepath.Dir(exe), "installer.json"))
-	}
-
-	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
-		paths = append(paths, filepath.Join(home, ".discovery", "installer.json"))
-	}
-
-	paths = append(paths, filepath.Join(".", "installer.json"))
-	return lo.Uniq(paths)
+	return platform.InstallerOverridePathCandidates()
 }
 
 func loadInstallerConfigFromCandidates(paths []string, normalizeP2P func(p2pmeta.Config) p2pmeta.Config) (InstallerConfig, string, bool, error) {
@@ -153,28 +113,11 @@ func cleanupLegacyInstallerOverrideFiles() {
 }
 
 func installerConfigWriteCandidates(sourcePath string) []string {
-	paths := make([]string, 0, 5)
-
-	if runtime.GOOS == "windows" {
-		// 1o: C:\ProgramData\Discovery (preferencia - compartilhado entre usuarios)
-		if programData := strings.TrimSpace(os.Getenv("ProgramData")); programData != "" {
-			paths = append(paths, filepath.Join(programData, "Discovery", "config.json"))
-		}
-		// 2o: LOCALAPPDATA\Discovery (fallback compatibilidade)
-		if localAppData := strings.TrimSpace(os.Getenv("LOCALAPPDATA")); localAppData != "" {
-			paths = append(paths, filepath.Join(localAppData, "Discovery", "config.json"))
-		}
-	}
-
-	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
-		paths = append(paths, filepath.Join(home, ".discovery", "config.json"))
-	}
-
-	paths = append(paths, filepath.Join(".", "config.json"))
+	paths := make([]string, 0, len(platform.ConfigPathCandidates())+1)
+	paths = append(paths, platform.ConfigPathCandidates()...)
 	if strings.TrimSpace(sourcePath) != "" {
 		paths = append(paths, sourcePath)
 	}
-
 	return lo.Uniq(paths)
 }
 

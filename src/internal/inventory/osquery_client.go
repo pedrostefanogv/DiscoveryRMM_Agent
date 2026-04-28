@@ -13,6 +13,7 @@ import (
 
 	osquery "github.com/osquery/osquery-go"
 
+	"discovery/internal/errutil"
 	"discovery/internal/processutil"
 )
 
@@ -122,11 +123,12 @@ func (p *osqueryiSocketProcess) stop() {
 	}
 	p.stopped = true
 	if p.cmd != nil && p.cmd.Process != nil {
-		_ = p.cmd.Process.Kill()
-		_ = p.cmd.Wait()
+		errutil.LogIfErr(p.cmd.Process.Kill(), "osquery: kill processo")
+		_, waitErr := p.cmd.Process.Wait()
+		errutil.LogIfErr(waitErr, "osquery: wait processo")
 	}
 	if runtime.GOOS != "windows" {
-		_ = os.Remove(p.socketPath)
+		errutil.LogIfErr(os.Remove(p.socketPath), "osquery: remover socket")
 	}
 }
 

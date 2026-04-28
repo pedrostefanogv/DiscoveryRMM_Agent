@@ -10,13 +10,13 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
 	"runtime"
 	"strings"
 	"time"
 
 	"discovery/app/netutil"
+	"discovery/internal/platform"
 	"discovery/internal/processutil"
 )
 
@@ -459,7 +459,7 @@ func (a *App) isMeshAgentInstalledLocal() bool {
 	if runtime.GOOS != "windows" {
 		return false
 	}
-	present, _ := a.meshServiceStatus(context.Background())
+	present, _ := a.meshServiceStatus(a.ctx)
 	if present {
 		return true
 	}
@@ -472,18 +472,7 @@ func (a *App) isMeshAgentInstalledLocal() bool {
 }
 
 func meshInstallPathCandidates() []string {
-	paths := []string{
-		`C:\Program Files\Mesh Agent\MeshAgent.exe`,
-		`C:\Program Files (x86)\Mesh Agent\MeshAgent.exe`,
-		`C:\ProgramData\Mesh Agent\MeshAgent.exe`,
-	}
-	if programData := strings.TrimSpace(os.Getenv("ProgramData")); programData != "" {
-		paths = append(paths,
-			filepath.Join(programData, "Mesh Agent", "MeshAgent.exe"),
-			filepath.Join(programData, "Mesh Agent", "MeshAgent.msh"),
-		)
-	}
-	return paths
+	return platform.MeshAgentPathCandidates()
 }
 
 func (a *App) resolveMeshCentralNodeIDLocal() string {
@@ -507,15 +496,7 @@ func (a *App) resolveMeshCentralNodeIDLocal() string {
 }
 
 func meshNodeIDPathCandidates() []string {
-	paths := []string{
-		`C:\Program Files\Mesh Agent\MeshAgent.msh`,
-		`C:\Program Files (x86)\Mesh Agent\MeshAgent.msh`,
-		`C:\ProgramData\Mesh Agent\MeshAgent.msh`,
-	}
-	if programData := strings.TrimSpace(os.Getenv("ProgramData")); programData != "" {
-		paths = append(paths, filepath.Join(programData, "Mesh Agent", "MeshAgent.msh"))
-	}
-	return paths
+	return platform.MeshNodeIDPathCandidates()
 }
 
 func normalizeMeshCentralNodeID(raw string) string {

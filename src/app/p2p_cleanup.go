@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"discovery/internal/platform"
 )
 
 func parsePortFromURL(raw string) (int, error) {
@@ -25,14 +27,9 @@ func parsePortFromURL(raw string) (int, error) {
 
 func resolveP2PTempDir(goos string) string {
 	if strings.EqualFold(strings.TrimSpace(goos), "windows") {
-		// Usar pasta temporária do Windows para permitir limpeza automática pelo sistema.
-		windowsDir := strings.TrimSpace(os.Getenv("WINDIR"))
-		if windowsDir == "" {
-			windowsDir = filepath.Join("C:\\", "Windows")
-		}
-		return filepath.Join(windowsDir, "Temp", "Discovery", "P2P_Temp")
+		return platform.P2PTempDir()
 	}
-	return filepath.Join(getDataDir(), "TempP2P")
+	return filepath.Join(GetDataDir(), "TempP2P")
 }
 
 func (a *App) p2pTempDir() string {
