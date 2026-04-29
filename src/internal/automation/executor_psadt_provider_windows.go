@@ -24,6 +24,9 @@ func executePSADTWithLibrary(ctx context.Context, packageID, operation string, p
 		timeout = defaultExecutionTimeout
 	}
 
+	runCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
 	client, err := psadt.NewClient(
 		psadt.WithTimeout(timeout),
 		psadt.WithMinModuleVersion(strings.TrimSpace(policy.RequiredVersion)),
@@ -34,7 +37,7 @@ func executePSADTWithLibrary(ctx context.Context, packageID, operation string, p
 	}
 	defer client.Close()
 
-	session, err := client.OpenSession(pstypes.SessionConfig{
+	session, err := client.OpenSessionWithContext(runCtx, pstypes.SessionConfig{
 		AppVendor:           "Meduza",
 		AppName:             "Discovery Agent",
 		AppVersion:          "1.0.0",
@@ -46,7 +49,13 @@ func executePSADTWithLibrary(ctx context.Context, packageID, operation string, p
 	if err != nil {
 		return psadtExecutionErrorResult(err)
 	}
-	defer session.Close(0)
+	defer func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer closeCancel()
+		_ = session.CloseWithContext(closeCtx, 0)
+	}()
+
+	session = session.WithContext(runCtx)
 
 	if isMSIPackageID(id) {
 		result, runErr := session.StartMsiProcess(pstypes.MsiProcessOptions{
