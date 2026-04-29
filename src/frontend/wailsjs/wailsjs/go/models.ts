@@ -938,6 +938,7 @@ export namespace debug {
 	    authToken: string;
 	    natsServer: string;
 	    natsWsServer: string;
+	    allowInsecureTls?: boolean;
 	    natsServerHost?: string;
 	    natsUseWssExternal?: boolean;
 	    enforceTlsHashValidation?: boolean;
@@ -960,6 +961,7 @@ export namespace debug {
 	        this.authToken = source["authToken"];
 	        this.natsServer = source["natsServer"];
 	        this.natsWsServer = source["natsWsServer"];
+	        this.allowInsecureTls = source["allowInsecureTls"];
 	        this.natsServerHost = source["natsServerHost"];
 	        this.natsUseWssExternal = source["natsUseWssExternal"];
 	        this.enforceTlsHashValidation = source["enforceTlsHashValidation"];
@@ -1006,6 +1008,33 @@ export namespace debug {
 		    }
 		    return a;
 		}
+	}
+
+}
+
+export namespace dto {
+	
+	export class HealthCheckItem {
+	    component: string;
+	    status: string;
+	    message: string;
+	    lastBeat: string;
+	    checkedAt: string;
+	    recoverable: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new HealthCheckItem(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.component = source["component"];
+	        this.status = source["status"];
+	        this.message = source["message"];
+	        this.lastBeat = source["lastBeat"];
+	        this.checkedAt = source["checkedAt"];
+	        this.recoverable = source["recoverable"];
+	    }
 	}
 
 }

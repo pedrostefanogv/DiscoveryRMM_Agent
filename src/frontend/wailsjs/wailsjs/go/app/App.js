@@ -106,6 +106,10 @@ export function ExportInventoryPDF() {
   return window['go']['app']['App']['ExportInventoryPDF']();
 }
 
+export function ExportLogs(arg1) {
+  return window['go']['app']['App']['ExportLogs'](arg1);
+}
+
 export function ExportMarkdown() {
   return window['go']['app']['App']['ExportMarkdown']();
 }
@@ -184,6 +188,10 @@ export function GetKnowledgeArticles(arg1) {
 
 export function GetLocalMemories() {
   return window['go']['app']['App']['GetLocalMemories']();
+}
+
+export function GetLogCount() {
+  return window['go']['app']['App']['GetLogCount']();
 }
 
 export function GetLogs() {
@@ -268,6 +276,10 @@ export function GetPendingUpdates() {
 
 export function GetPendingUpdatesJSON() {
   return window['go']['app']['App']['GetPendingUpdatesJSON']();
+}
+
+export function GetPreferredLocale() {
+  return window['go']['app']['App']['GetPreferredLocale']();
 }
 
 export function GetPrinterConfig(arg1) {

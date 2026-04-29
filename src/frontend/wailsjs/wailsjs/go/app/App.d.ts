@@ -10,6 +10,7 @@ import {debug} from '../models';
 import {automation} from '../models';
 import {models} from '../models';
 import {mcp} from '../models';
+import {dto} from '../models';
 
 export function AddAgentTicketComment(arg1:string,arg2:string,arg3:boolean):Promise<json.RawMessage>;
 
@@ -63,6 +64,8 @@ export function ExportInventoryMarkdown():Promise<string>;
 
 export function ExportInventoryPDF():Promise<string>;
 
+export function ExportLogs(arg1:string):Promise<string>;
+
 export function ExportMarkdown():Promise<string>;
 
 export function ExportPDF():Promise<string>;
@@ -102,6 +105,8 @@ export function GetKnowledgeArticleDetails(arg1:string):Promise<supportmeta.Know
 export function GetKnowledgeArticles(arg1:string):Promise<Array<supportmeta.KnowledgeArticle>>;
 
 export function GetLocalMemories():Promise<Array<database.MemoryNote>>;
+
+export function GetLogCount():Promise<number>;
 
 export function GetLogs():Promise<Array<string>>;
 
@@ -145,6 +150,8 @@ export function GetPendingUpdates():Promise<Array<models.UpgradeItem>>;
 
 export function GetPendingUpdatesJSON():Promise<json.RawMessage>;
 
+export function GetPreferredLocale():Promise<string>;
+
 export function GetPrinterConfig(arg1:string):Promise<json.RawMessage>;
 
 export function GetPrinterConfigJSON(arg1:string):Promise<json.RawMessage>;
@@ -171,7 +178,7 @@ export function GetTicketComments(arg1:string):Promise<Array<supportmeta.TicketC
 
 export function GetTicketWorkflowStates():Promise<Array<supportmeta.APIWorkflowState>>;
 
-export function GetWatchdogHealth():Promise<Array<Record<string, any>>>;
+export function GetWatchdogHealth():Promise<Array<dto.HealthCheckItem>>;
 
 export function Install(arg1:string):Promise<string>;
 
