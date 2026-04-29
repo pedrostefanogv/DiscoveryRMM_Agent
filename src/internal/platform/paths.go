@@ -13,15 +13,14 @@ import (
 // ─── Diretórios Base ───────────────────────────────────────────────
 
 // DataDir retorna o diretório de dados principal.
-// Prioridade (Windows): ProgramData\Discovery → LOCALAPPDATA\Discovery → ~/.discovery
+// No Windows, usa exclusivamente ProgramData\Discovery.
 func DataDir() string {
 	if runtime.GOOS == "windows" {
-		if pd := envutil.ProgramData(); pd != "" {
-			return filepath.Join(pd, "Discovery")
+		pd := envutil.ProgramData()
+		if pd == "" {
+			pd = `C:\ProgramData`
 		}
-		if lad := envutil.LocalAppData(); lad != "" {
-			return filepath.Join(lad, "Discovery")
-		}
+		return filepath.Join(pd, "Discovery")
 	}
 	if home := envutil.HomeDir(); home != "" {
 		return filepath.Join(home, ".discovery")
@@ -54,7 +53,7 @@ func P2PTempDir() string {
 // ─── Caminhos de Arquivos de Configuração ──────────────────────────
 
 // ConfigPathCandidates retorna caminhos candidatos para config.json.
-// Ordem: ProgramData → LOCALAPPDATA → dir do exe → ~/.discovery → .
+// Ordem: ProgramData → dir do exe → ~/.discovery → .
 func ConfigPathCandidates() []string {
 	return collectPathCandidates("config.json")
 }
@@ -166,17 +165,17 @@ func AllowInsecureTransport() bool {
 // ─── Helpers Internos ────────────────────────────────────────────────
 
 // collectPathCandidates constrói a lista canônica de candidatos de path para um arquivo.
-// Ordem: ProgramData\Discovery\<file> → LOCALAPPDATA\Discovery\<file> → exeDir\<file> → ~/.discovery/<file> → ./<file>
+// Windows: ProgramData\Discovery\<file> (exclusivo).
+// Outros: exeDir\<file> → ~/.discovery/<file> → ./<file>
 func collectPathCandidates(filename string) []string {
-	paths := make([]string, 0, 5)
+	paths := make([]string, 0, 4)
 
 	if runtime.GOOS == "windows" {
-		if pd := envutil.ProgramData(); pd != "" {
-			paths = append(paths, filepath.Join(pd, "Discovery", filename))
+		pd := envutil.ProgramData()
+		if pd == "" {
+			pd = `C:\ProgramData`
 		}
-		if lad := envutil.LocalAppData(); lad != "" {
-			paths = append(paths, filepath.Join(lad, "Discovery", filename))
-		}
+		return []string{filepath.Join(pd, "Discovery", filename)}
 	}
 
 	if exeDir := envutil.ExeDir(); exeDir != "" {

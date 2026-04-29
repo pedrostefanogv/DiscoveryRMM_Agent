@@ -14,6 +14,11 @@
   --border: #ddd6c4;
   --danger: #c1121f;
   --success: #2d7a44;
+  --fg: var(--text);
+  --bg2: var(--surface-2);
+  --gap: 12px;
+  --card-bg: rgba(255,255,255,.78);
+  --text-muted: var(--muted);
 
   --shadow-sm: 0 1px 2px rgba(0,0,0,.04);
   --shadow-md: 0 4px 12px rgba(0,0,0,.06);
@@ -24,10 +29,18 @@
   --transition: 0.18s ease;
 
   --sidebar-width: 232px;
-  --sidebar-bg: #0f0d0a;
-  --sidebar-text: #e4ddcc;
-  --sidebar-hover: rgba(255,255,255,.06);
-  --sidebar-active: rgba(240,160,75,.15);
+  --sidebar-bg: #fbf9f3;
+  --sidebar-text: #2c2820;
+  --sidebar-hover: rgba(10,23,18,.05);
+  --sidebar-active: rgba(10,122,86,.12);
+  --sidebar-active-text: var(--accent);
+  --sidebar-border: rgba(0,0,0,.08);
+  --sidebar-btn-bg: rgba(0,0,0,.03);
+  --sidebar-btn-border: rgba(0,0,0,.08);
+  --sidebar-btn-hover-bg: rgba(0,0,0,.06);
+  --sidebar-btn-hover-border: rgba(0,0,0,.16);
+  --sidebar-user-type: rgba(44,40,32,.55);
+  --sidebar-version: rgba(44,40,32,.4);
   --sidebar-current-width: 232px;
 
   --window-chrome-height: 32px;
@@ -49,9 +62,27 @@
   --border: #4a4740;
   --danger: #e63946;
   --success: #5cbf7a;
+  --fg: var(--text);
+  --bg2: #242428;
+  --gap: 12px;
+  --card-bg: rgba(44,44,50,.84);
+  --text-muted: #a8a192;
   --shadow-sm: 0 1px 2px rgba(0,0,0,.3);
   --shadow-md: 0 4px 12px rgba(0,0,0,.4);
   --shadow-lg: 0 8px 24px rgba(0,0,0,.5);
+
+  --sidebar-bg: #0f0d0a;
+  --sidebar-text: #e4ddcc;
+  --sidebar-hover: rgba(255,255,255,.06);
+  --sidebar-active: rgba(240,160,75,.15);
+  --sidebar-active-text: var(--accent-2);
+  --sidebar-border: rgba(255,255,255,.07);
+  --sidebar-btn-bg: rgba(255,255,255,.04);
+  --sidebar-btn-border: rgba(255,255,255,.1);
+  --sidebar-btn-hover-bg: rgba(255,255,255,.1);
+  --sidebar-btn-hover-border: rgba(255,255,255,.18);
+  --sidebar-user-type: rgba(228,221,204,.5);
+  --sidebar-version: rgba(228,221,204,.3);
 }
 
 /* ================================================================
@@ -189,7 +220,8 @@ a:hover { text-decoration: underline; }
   background: var(--sidebar-bg); color: var(--sidebar-text);
   display: flex; flex-direction: column;
   padding: 0;
-  transition: width 0.25s ease, min-width 0.25s ease;
+  border-right: 1px solid var(--sidebar-border);
+  transition: width 0.25s ease, min-width 0.25s ease, background var(--transition), color var(--transition), border-color var(--transition);
   z-index: 20; overflow: hidden;
 }
 
@@ -207,20 +239,20 @@ a:hover { text-decoration: underline; }
   display: flex; align-items: center; gap: 10px;
   min-height: var(--page-bar-height);
   padding: var(--page-bar-padding-y) var(--page-bar-padding-x);
-  border-bottom: 1px solid rgba(255,255,255,.07);
+  border-bottom: 1px solid var(--sidebar-border);
 }
 
 .sidebar-collapse-btn {
   width: 28px; height: 28px;
-  border: 1px solid rgba(255,255,255,.1);
+  border: 1px solid var(--sidebar-btn-border);
   border-radius: var(--radius-sm);
-  background: rgba(255,255,255,.04);
-  color: var(--accent-2);
+  background: var(--sidebar-btn-bg);
+  color: var(--accent);
   display: inline-flex; align-items: center; justify-content: center;
   cursor: pointer;
   transition: background var(--transition), border-color var(--transition);
 }
-.sidebar-collapse-btn:hover { background: rgba(255,255,255,.1); border-color: rgba(255,255,255,.18); }
+.sidebar-collapse-btn:hover { background: var(--sidebar-btn-hover-bg); border-color: var(--sidebar-btn-hover-border); }
 .sidebar-logo { flex-shrink: 0; }
 
 .sidebar-title {
@@ -247,13 +279,13 @@ a:hover { text-decoration: underline; }
 .sidebar-link:hover { background: var(--sidebar-hover); }
 
 .sidebar-link.active {
-  background: var(--sidebar-active); color: var(--accent-2);
+  background: var(--sidebar-active); color: var(--sidebar-active-text);
 }
 .sidebar-link.active::before {
   content: ''; position: absolute;
   left: 0; top: 50%; transform: translateY(-50%);
   width: 3px; height: 60%;
-  background: var(--accent-2);
+  background: var(--sidebar-active-text);
   border-radius: 0 3px 3px 0;
 }
 
@@ -262,7 +294,7 @@ a:hover { text-decoration: underline; }
 
 .sidebar-footer {
   padding: 10px 14px;
-  border-top: 1px solid rgba(255,255,255,.07);
+  border-top: 1px solid var(--sidebar-border);
   display: flex; flex-direction: column; gap: 6px;
 }
 
@@ -270,10 +302,10 @@ a:hover { text-decoration: underline; }
 .sidebar-user svg { flex-shrink: 0; opacity: 0.7; }
 .sidebar-user-info { display: flex; flex-direction: column; }
 .sidebar-user-name { font-size: 0.82rem; font-weight: 600; }
-.sidebar-user-type { font-size: 0.7rem; color: rgba(228,221,204,.5); }
+.sidebar-user-type { font-size: 0.7rem; color: var(--sidebar-user-type); }
 
 .sidebar-version {
-  font-size: 0.7rem; color: rgba(228,221,204,.3);
+  font-size: 0.7rem; color: var(--sidebar-version);
   text-align: center;
 }
 
@@ -285,13 +317,74 @@ a:hover { text-decoration: underline; }
   overflow: hidden; background: transparent;
 }
 
+#topbarMount {
+  flex-shrink: 0;
+  padding: 10px 20px 4px;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  min-height: 30px;
+}
+
+.topbar-indicators {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.topbar-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 600;
+}
+
+.topbar-indicator .indicator-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.9;
+}
+
+.topbar-indicator.online {
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 30%, var(--border) 70%);
+}
+
+.topbar-indicator.offline {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 30%, var(--border) 70%);
+}
+
+.topbar-feedback {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
 /* ================================================================
    VIEW CONTAINER (scrollable page content)
    ================================================================ */
 .page-content {
   flex: 1; overflow-y: auto; overflow-x: hidden;
-  padding: 18px 20px 24px;
+  padding: 20px 22px 28px;
   scroll-behavior: smooth;
+}
+
+.page-content > section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
 
 .page-content::-webkit-scrollbar { width: 6px; }

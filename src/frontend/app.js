@@ -441,13 +441,14 @@ function updateThemeIcon(isDark) {
 function syncWindowChromeSidebarWidth() {
   if (!sidebarEl) return;
   var mobile = window.matchMedia && window.matchMedia('(max-width: 960px)').matches;
-  var widthPx = 220;
-
-  if (mobile && sidebarEl.classList.contains('collapsed')) {
-    widthPx = 0;
-  } else if (sidebarEl.classList.contains('collapsed')) {
-    widthPx = 68;
+  var rootStyles = getComputedStyle(document.documentElement);
+  var expandedWidth = parseFloat(rootStyles.getPropertyValue('--sidebar-width'));
+  if (!Number.isFinite(expandedWidth) || expandedWidth <= 0) {
+    expandedWidth = 232;
   }
+
+  var collapsedWidth = mobile ? 0 : 64;
+  var widthPx = sidebarEl.classList.contains('collapsed') ? collapsedWidth : Math.round(expandedWidth);
 
   document.documentElement.style.setProperty('--sidebar-current-width', widthPx + 'px');
 }

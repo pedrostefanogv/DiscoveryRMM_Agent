@@ -13,6 +13,19 @@
       --success: #0b6e4f;
     }
 
+    [data-theme="dark"] #psadtView {
+      --bg: #1f1f24;
+      --surface: #2a2b31;
+      --surface-2: #33343c;
+      --text: #ebe6dc;
+      --muted: #b9b1a3;
+      --accent: #3cc08a;
+      --border: #4a4b54;
+      --danger: #e35b66;
+      --warning: #e0a75f;
+      --success: #61c789;
+    }
+
     #psadtView .shell { display: grid; gap: 14px; padding: 18px; }
     #psadtView .panel {
       background: var(--surface);
@@ -64,7 +77,7 @@
       border-radius: 8px;
       padding: 8px 10px;
       font-family: inherit;
-      background: #fff;
+      background: var(--surface);
       color: var(--text);
     }
     #psadtView textarea { min-height: 74px; resize: vertical; }
@@ -76,7 +89,7 @@
     #psadtView .status.error { color: var(--danger); }
     #psadtView .status.ok { color: var(--success); }
     #psadtView .kvs { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
-    #psadtView .kv { border: 1px solid var(--border); border-radius: 10px; padding: 10px; background: rgba(255,255,255,0.6); }
+    #psadtView .kv { border: 1px solid var(--border); border-radius: 10px; padding: 10px; background: color-mix(in srgb, var(--surface-2) 90%, var(--surface) 10%); }
     #psadtView .kv .k { display: block; font-size: 0.78rem; color: var(--muted); }
     #psadtView .kv .v { display: block; margin-top: 2px; font-weight: 600; }
     #psadtView .mono { font-family: 'IBM Plex Mono', monospace; }
@@ -85,7 +98,7 @@
       border: 1px solid var(--border);
       border-radius: 10px;
       padding: 10px;
-      background: #ffffffcc;
+      background: color-mix(in srgb, var(--surface) 90%, var(--surface-2) 10%);
     }
     #psadtView .preview-title { font-weight: 700; margin-bottom: 4px; }
     #psadtView .preview-badge { font-size: 0.75rem; color: var(--muted); }
@@ -111,6 +124,27 @@
       padding: 14px;
     }
     #psadtView .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+    #psadtView .output-wrap {
+      margin-top: 10px;
+      background: color-mix(in srgb, var(--surface-2) 88%, var(--surface) 12%);
+      padding: 10px;
+      border-radius: 8px;
+      border-left: 3px solid var(--muted);
+    }
+    #psadtView .output-wrap.large {
+      max-height: 400px;
+      overflow-y: auto;
+      overflow-x: auto;
+      word-break: break-word;
+    }
+    #psadtView .output-wrap.small {
+      max-height: 200px;
+      overflow: auto;
+    }
+    #psadtView .code-inline {
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.82rem;
+    }
     @media (max-width: 980px) {
       #psadtView .grid { grid-template-columns: 1fr; }
     }
@@ -256,7 +290,7 @@
           <button id="executeTestBtn" class="btn primary">Executar Teste PSADT</button>
         </div>
         <div id="executeStatus" class="status"></div>
-        <div style="margin-top:10px; background:rgba(0,0,0,0.05); padding:10px; border-radius:8px; max-height:400px; overflow-y: auto; overflow-x: auto; border-left:3px solid var(--muted); word-break: break-word;">
+        <div class="output-wrap large">
           <pre id="executeOutput" style="margin:0; white-space:pre-wrap; font-size:0.85rem; font-family:'IBM Plex Mono',monospace;"></pre>
         </div>
       </article>
@@ -270,7 +304,7 @@
         <label for="customScript">Conteudo do Script</label>
         <textarea id="customScript" style="min-height:120px; width:100%; border:1px solid var(--border); border-radius:8px; padding:8px 10px; font-family:'IBM Plex Mono',monospace; font-size:0.9rem;"></textarea>
         <div id="customStatus" class="status" style="margin-top:10px;"></div>
-        <div style="margin-top:10px; background:rgba(0,0,0,0.05); padding:10px; border-radius:8px; max-height:200px; overflow:auto; border-left:3px solid var(--muted);">
+        <div class="output-wrap small">
           <pre id="customOutput" style="margin:0; white-space:pre-wrap; font-size:0.85rem; font-family:'IBM Plex Mono',monospace;"></pre>
         </div>
       </article>
@@ -278,7 +312,7 @@
 
     <section class="panel">
       <h2>Notificacao Visual Nativa PSADT</h2>
-      <div class="meta" style="margin-bottom:10px;">Executa cmdlets PSADT reais: <code style="font-family:'IBM Plex Mono',monospace;font-size:0.82rem;">Show-ADTBalloonTip</code>, <code style="font-family:'IBM Plex Mono',monospace;font-size:0.82rem;">Show-ADTInstallationPrompt</code>, <code style="font-family:'IBM Plex Mono',monospace;font-size:0.82rem;">Show-ADTInstallationProgress</code> e <code style="font-family:'IBM Plex Mono',monospace;font-size:0.82rem;">Show-ADTDialogBox</code>.</div>
+      <div class="meta" style="margin-bottom:10px;">Executa cmdlets PSADT reais: <code class="code-inline">Show-ADTBalloonTip</code>, <code class="code-inline">Show-ADTInstallationPrompt</code>, <code class="code-inline">Show-ADTInstallationProgress</code> e <code class="code-inline">Show-ADTDialogBox</code>.</div>
       <div class="form-grid">
         <div>
           <label for="visualNotifType">Tipo</label>
@@ -353,7 +387,7 @@
         <button id="visualNotifBtn" class="btn primary">Executar Notificacao PSADT</button>
       </div>
       <div id="visualNotifStatus" class="status"></div>
-      <div style="margin-top:10px;background:rgba(0,0,0,0.05);padding:10px;border-radius:8px;max-height:200px;overflow:auto;border-left:3px solid var(--muted);">
+      <div class="output-wrap small">
         <pre id="visualNotifOutput" style="margin:0;white-space:pre-wrap;font-size:0.85rem;font-family:'IBM Plex Mono',monospace;"></pre>
       </div>
     </section>

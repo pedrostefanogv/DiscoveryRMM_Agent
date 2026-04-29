@@ -678,17 +678,15 @@ func normalizeSecurityConfig(cfg *Config) {
 }
 
 func debugConfigPathCandidates() []string {
-	paths := make([]string, 0, 5)
+	paths := make([]string, 0, 4)
 
 	if runtime.GOOS == "windows" {
 		// 1o: C:\ProgramData\Discovery (compartilhado entre usuarios)
-		if programData := strings.TrimSpace(osGetenv("ProgramData")); programData != "" {
-			paths = append(paths, filepath.Join(programData, "Discovery", debugConfigFile))
+		programData := strings.TrimSpace(osGetenv("ProgramData"))
+		if programData == "" {
+			programData = `C:\ProgramData`
 		}
-		// 2o: LOCALAPPDATA\Discovery (fallback compatibilidade)
-		if localAppData := strings.TrimSpace(osGetenv("LOCALAPPDATA")); localAppData != "" {
-			paths = append(paths, filepath.Join(localAppData, "Discovery", debugConfigFile))
-		}
+		return []string{filepath.Join(programData, "Discovery", debugConfigFile)}
 	}
 
 	if exe, err := osExecutable(); err == nil && strings.TrimSpace(exe) != "" {

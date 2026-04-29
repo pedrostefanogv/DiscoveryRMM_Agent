@@ -11,7 +11,7 @@ func TestDataDir_NotEmpty(t *testing.T) {
 		t.Fatal("DataDir retornou vazio")
 	}
 	if result == "." && runtime.GOOS == "windows" {
-		t.Fatal("DataDir retornou '.' em Windows — deveria retornar ProgramData ou LOCALAPPDATA")
+		t.Fatal("DataDir retornou '.' em Windows — deveria retornar ProgramData")
 	}
 }
 
