@@ -130,6 +130,15 @@ function loadDebugConfig() {
       if (debugAuthTokenEl) debugAuthTokenEl.value = cfg.authToken || '';
       if (debugAgentIDEl) debugAgentIDEl.value = cfg.agentId || '';
       if (automationP2PWingetInstallEnabledEl) automationP2PWingetInstallEnabledEl.value = String(!!cfg.automationP2pWingetInstallEnabled);
+      // Avancado
+      if (natsWsServerEl) natsWsServerEl.value = cfg.natsWsServer || '';
+      if (natsServerHostEl) natsServerHostEl.value = cfg.natsServerHost || '';
+      if (natsUseWssExternalEl) natsUseWssExternalEl.value = String(!!cfg.natsUseWssExternal);
+      if (allowInsecureTlsEl) allowInsecureTlsEl.checked = !!cfg.allowInsecureTls;
+      if (enforceTlsHashValidationEl) enforceTlsHashValidationEl.checked = !!cfg.enforceTlsHashValidation;
+      if (handshakeEnabledEl) handshakeEnabledEl.checked = cfg.handshakeEnabled !== false;
+      if (apiTlsCertHashEl) apiTlsCertHashEl.value = cfg.apiTlsCertHash || '';
+      if (natsTlsCertHashEl) natsTlsCertHashEl.value = cfg.natsTlsCertHash || '';
       updateDebugResponseLabel();
       if (typeof syncProvisioningOverlayFromConfig === 'function') {
         syncProvisioningOverlayFromConfig(cfg);
@@ -178,8 +187,16 @@ function initDebug() {
         apiScheme: apiSchemeEl ? apiSchemeEl.value : 'https',
         apiServer: apiServerEl ? apiServerEl.value.trim() : '',
         natsServer: natsServerEl ? natsServerEl.value.trim() : '',
+        natsWsServer: natsWsServerEl ? natsWsServerEl.value.trim() : '',
+        natsServerHost: natsServerHostEl ? natsServerHostEl.value.trim() : '',
+        natsUseWssExternal: natsUseWssExternalEl ? natsUseWssExternalEl.value === 'true' : false,
         authToken: debugAuthTokenEl ? debugAuthTokenEl.value : '',
         agentId: debugAgentIDEl ? debugAgentIDEl.value.trim() : '',
+        allowInsecureTls: allowInsecureTlsEl ? allowInsecureTlsEl.checked : false,
+        enforceTlsHashValidation: enforceTlsHashValidationEl ? enforceTlsHashValidationEl.checked : false,
+        handshakeEnabled: handshakeEnabledEl ? handshakeEnabledEl.checked : true,
+        apiTlsCertHash: apiTlsCertHashEl ? apiTlsCertHashEl.value.trim() : '',
+        natsTlsCertHash: natsTlsCertHashEl ? natsTlsCertHashEl.value.trim() : '',
         automationP2pWingetInstallEnabled: automationP2PWingetInstallEnabledEl ? automationP2PWingetInstallEnabledEl.value === 'true' : false,
       }).then(function () {
         workflowStatesCache = null;
@@ -205,8 +222,10 @@ function initDebug() {
         apiScheme: apiSchemeEl ? apiSchemeEl.value : 'https',
         apiServer: apiServerEl ? apiServerEl.value.trim() : '',
         natsServer: natsServerEl ? natsServerEl.value.trim() : '',
+        natsWsServer: natsWsServerEl ? natsWsServerEl.value.trim() : '',
         authToken: debugAuthTokenEl ? debugAuthTokenEl.value : '',
         agentId: debugAgentIDEl ? debugAgentIDEl.value.trim() : '',
+        allowInsecureTls: allowInsecureTlsEl ? allowInsecureTlsEl.checked : false,
       }).then(function (body) {
         setDebugStatus(translate('debug.connectedSuccess'), 'success');
         if (debugResponseEl) debugResponseEl.textContent = body;

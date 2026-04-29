@@ -3,131 +3,71 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Discovery - PSADT Debug</title>
+  <meta name="color-scheme" content="light dark" />
+  <title>Discovery · PSADT Debug</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
     :root {
-      --bg: #f8f1e7;
-      --surface: #fff8ef;
-      --surface-2: #f1e6d5;
-      --text: #2a1f16;
-      --muted: #665a4c;
-      --accent: #0b6e4f;
-      --border: #d9cfba;
-      --danger: #9a031e;
-      --warning: #8a4e12;
-      --success: #0b6e4f;
+      --bg: #f8f6f0; --surface: #fffefa; --surface-2: #f3efe2;
+      --text: #1a1712; --muted: #6b6254; --accent: #0a7a56;
+      --accent-2: #f0a04b; --border: #ddd6c4; --danger: #c1121f;
+      --warning: #b06e1e; --success: #2d7a44;
+      --radius: 10px; --radius-lg: 14px; --shadow-sm: 0 1px 2px rgba(0,0,0,.04);
+      --transition: 0.16s ease;
     }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      padding: 18px;
-      font-family: 'Space Grotesk', sans-serif;
-      color: var(--text);
-      background: radial-gradient(circle at 18% 0%, #fffdf7 0%, #f7eddd 50%, #efe2ca 100%);
-      min-height: 100vh;
+    @media (prefers-color-scheme: dark) {
+      :root { --bg: #1a1a1c; --surface: #242426; --surface-2: #2d2d30; --text: #e8e4db; --muted: #9d9584; --accent: #2ea87a; --border: #3d3a33; --danger: #e63946; --warning: #d68c3c; --shadow-sm: 0 1px 2px rgba(0,0,0,.3); }
     }
-    .shell { display: grid; gap: 14px; }
-    .panel {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 14px;
-      padding: 14px;
-    }
-    .head {
-      display: flex;
-      justify-content: space-between;
-      gap: 12px;
-      align-items: center;
-      flex-wrap: wrap;
-    }
-    h1, h2 { margin: 0; }
-    h1 { font-size: 1.15rem; }
-    h2 { font-size: 1rem; margin-bottom: 10px; }
-    .meta { color: var(--muted); font-size: 0.88rem; }
-    .actions { display: flex; flex-wrap: wrap; gap: 8px; }
-    .btn {
-      border: 1px solid var(--border);
-      background: var(--surface-2);
-      color: var(--text);
-      border-radius: 10px;
-      padding: 8px 12px;
-      font-family: inherit;
-      font-weight: 600;
-      cursor: pointer;
-    }
-    .btn.primary {
-      background: var(--accent);
-      border-color: var(--accent);
-      color: #fff;
-    }
-    .grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 14px;
-    }
-    .form-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-      gap: 10px;
-    }
-    label { display: block; font-size: 0.82rem; color: var(--muted); margin-bottom: 4px; }
-    input, select, textarea {
-      width: 100%;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 8px 10px;
-      font-family: inherit;
-      background: #fff;
-      color: var(--text);
-    }
-    textarea { min-height: 74px; resize: vertical; }
-    .status {
-      margin-top: 10px;
-      min-height: 20px;
-      font-size: 0.86rem;
-    }
-    .status.error { color: var(--danger); }
-    .status.ok { color: var(--success); }
-    .kvs { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
-    .kv { border: 1px solid var(--border); border-radius: 10px; padding: 10px; background: rgba(255,255,255,0.6); }
-    .kv .k { display: block; font-size: 0.78rem; color: var(--muted); }
-    .kv .v { display: block; margin-top: 2px; font-weight: 600; }
-    .mono { font-family: 'IBM Plex Mono', monospace; }
-    .preview-wrap { display: grid; gap: 10px; }
-    .preview-item {
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 10px;
-      background: #ffffffcc;
-    }
-    .preview-title { font-weight: 700; margin-bottom: 4px; }
-    .preview-badge { font-size: 0.75rem; color: var(--muted); }
-    .preview-item.warning { border-left: 4px solid var(--warning); }
-    .preview-item.error { border-left: 4px solid var(--danger); }
-    .preview-item.success { border-left: 4px solid var(--success); }
-    .modal {
-      position: fixed;
-      inset: 0;
-      background: rgba(0, 0, 0, 0.45);
-      display: none;
-      align-items: center;
-      justify-content: center;
-      z-index: 9999;
-      padding: 12px;
-    }
-    .modal.open { display: flex; }
-    .modal-card {
-      width: min(540px, 100%);
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 14px;
-    }
-    .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
-    @media (max-width: 980px) {
-      .grid { grid-template-columns: 1fr; }
-    }
+    *,*::before,*::after{box-sizing:border-box}
+    html{-webkit-font-smoothing:antialiased}
+    body{margin:0;padding:20px;font-family:'Inter',-apple-system,sans-serif;font-size:.88rem;line-height:1.55;color:var(--text);background:var(--bg);min-height:100vh;transition:color var(--transition),background var(--transition)}
+    .shell{display:grid;gap:16px;max-width:1100px;margin:0 auto}
+
+    .head{display:flex;justify-content:space-between;gap:14px;align-items:center;flex-wrap:wrap}
+    h1,h2{margin:0}h1{font-size:1.15rem;font-weight:600}h2{font-size:1rem;font-weight:600;margin-bottom:10px}
+    .meta{color:var(--muted);font-size:.82rem}
+    .actions{display:flex;flex-wrap:wrap;gap:8px}
+
+    .btn{display:inline-flex;align-items:center;gap:5px;padding:7px 14px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);color:var(--text);font-family:inherit;font-size:.82rem;font-weight:500;cursor:pointer;transition:all var(--transition)}
+    .btn:hover{background:var(--surface-2);box-shadow:var(--shadow-sm)}.btn:active{transform:scale(.98)}
+    .btn-primary{background:var(--accent);border-color:var(--accent);color:#fff}.btn-primary:hover{opacity:.92}
+
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+    .panel{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:16px 18px;box-shadow:var(--shadow-sm)}
+
+    .form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}
+    label{display:block;font-size:.78rem;color:var(--muted);margin-bottom:4px;font-weight:500}
+    input,select,textarea{width:100%;border:1px solid var(--border);border-radius:var(--radius);padding:8px 10px;font-family:inherit;font-size:.84rem;background:var(--bg);color:var(--text);transition:border-color var(--transition)}
+    input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(10,122,86,.1)}
+    textarea{min-height:70px;resize:vertical}
+
+    .status{margin-top:10px;min-height:20px;font-size:.84rem}.status.error{color:var(--danger)}.status.ok{color:var(--accent)}
+    .kvs{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}
+    .kv{border:1px solid var(--border);background:var(--bg);border-radius:var(--radius);padding:10px 12px}
+    .kv .k{display:block;font-size:.73rem;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px}
+    .kv .v{display:block;font-weight:600;font-size:.9rem}
+    .mono{font-family:'JetBrains Mono','Consolas',monospace;font-size:.82rem}
+
+    .preview-wrap{display:grid;gap:8px}
+    .preview-item{border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;background:var(--bg)}
+    .preview-title{font-weight:600;margin-bottom:3px;font-size:.84rem}
+    .preview-badge{font-size:.73rem;color:var(--muted)}
+    .preview-item.warning{border-left:4px solid var(--warning)}
+    .preview-item.error{border-left:4px solid var(--danger)}
+    .preview-item.success{border-left:4px solid var(--success)}
+
+    .output-block{margin-top:10px;background:var(--bg);padding:10px 12px;border-radius:var(--radius);border-left:3px solid var(--muted);max-height:200px;overflow:auto}
+    .output-block pre{margin:0;white-space:pre-wrap;font-size:.82rem;font-family:'JetBrains Mono',monospace}
+
+    .modal{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;align-items:center;justify-content:center;z-index:9999;padding:12px}.modal.open{display:flex}
+    .modal-card{width:min(480px,100%);background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:18px;box-shadow:0 8px 32px rgba(0,0,0,.25)}
+    .modal-card h2{margin:0 0 8px}
+    .modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
+
+    @media(max-width:980px){.grid{grid-template-columns:1fr}body{padding:12px}}
+    ::-webkit-scrollbar{width:5px}::-webkit-scrollbar-thumb{background:var(--border);border-radius:10px}
   </style>
 </head>
 <body>
@@ -136,11 +76,11 @@
       <div class="head">
         <div>
           <h1>PSADT Debug Window</h1>
-          <div class="meta">Teste de alertas, modos de notificacao, cores e bootstrap de modulo PSAppDeployToolkit.</div>
+          <div class="meta">Teste de alertas, modos de notificação, cores e bootstrap do PSAppDeployToolkit.</div>
         </div>
         <div class="actions">
-          <button id="refreshStateBtn" class="btn">Atualizar Estado</button>
-          <button id="closeBtn" class="btn">Fechar</button>
+          <button id="refreshStateBtn" class="btn">↻ Atualizar Estado</button>
+          <button id="closeBtn" class="btn">✕ Fechar</button>
         </div>
       </div>
     </section>
@@ -153,22 +93,14 @@
 
     <section class="grid">
       <article class="panel">
-        <h2>Modulo PSADT</h2>
+        <h2>Módulo PSADT</h2>
         <div class="form-grid">
-          <div>
-            <label for="moduleVersion">Versao desejada</label>
-            <input id="moduleVersion" type="text" value="4.1.8" />
-          </div>
-          <div>
-            <label for="installSource">Fonte</label>
-            <select id="installSource">
-              <option value="powershell_gallery">powershell_gallery</option>
-            </select>
-          </div>
+          <div><label for="moduleVersion">Versão desejada</label><input id="moduleVersion" type="text" value="4.1.8"></div>
+          <div><label for="installSource">Fonte</label><select id="installSource"><option value="powershell_gallery">PowerShell Gallery</option></select></div>
         </div>
-        <div class="actions" style="margin-top:10px;">
-          <button id="checkModuleBtn" class="btn">Verificar Modulo</button>
-          <button id="installModuleBtn" class="btn primary">Instalar Modulo</button>
+        <div class="actions" style="margin-top:10px">
+          <button id="checkModuleBtn" class="btn">Verificar Módulo</button>
+          <button id="installModuleBtn" class="btn btn-primary">Instalar Módulo</button>
         </div>
         <div id="moduleStatus" class="status"></div>
       </article>
@@ -176,29 +108,14 @@
       <article class="panel">
         <h2>Tema de Preview</h2>
         <div class="form-grid">
-          <div>
-            <label for="colorSurface">Surface</label>
-            <input id="colorSurface" type="color" value="#fff8ef" />
-          </div>
-          <div>
-            <label for="colorText">Texto</label>
-            <input id="colorText" type="color" value="#2a1f16" />
-          </div>
-          <div>
-            <label for="colorAccent">Accent</label>
-            <input id="colorAccent" type="color" value="#0b6e4f" />
-          </div>
-          <div>
-            <label for="colorWarning">Warning</label>
-            <input id="colorWarning" type="color" value="#8a4e12" />
-          </div>
-          <div>
-            <label for="colorDanger">Danger</label>
-            <input id="colorDanger" type="color" value="#9a031e" />
-          </div>
+          <div><label for="colorSurface">Surface</label><input id="colorSurface" type="color" value="#fffefa"></div>
+          <div><label for="colorText">Texto</label><input id="colorText" type="color" value="#1a1712"></div>
+          <div><label for="colorAccent">Accent</label><input id="colorAccent" type="color" value="#0a7a56"></div>
+          <div><label for="colorWarning">Warning</label><input id="colorWarning" type="color" value="#b06e1e"></div>
+          <div><label for="colorDanger">Danger</label><input id="colorDanger" type="color" value="#c1121f"></div>
         </div>
-        <div class="actions" style="margin-top:10px;">
-          <button id="applyThemeBtn" class="btn primary">Aplicar Tema Preview</button>
+        <div class="actions" style="margin-top:10px">
+          <button id="applyThemeBtn" class="btn btn-primary">Aplicar Tema Preview</button>
           <button id="resetThemeBtn" class="btn">Resetar</button>
         </div>
       </article>
@@ -206,46 +123,16 @@
 
     <section class="grid">
       <article class="panel">
-        <h2>Notificacao Discovery <span style="font-weight:400;font-size:0.8rem;color:var(--muted);">(pipeline interno do app)</span></h2>
-        <div class="meta" style="margin-bottom:8px;">Emite eventos via pipeline interno do Discovery. Nao usa cmdlets PSADT nativos.</div>
+        <h2>Notificação Discovery <span style="font-weight:400;font-size:.78rem;color:var(--muted)">(pipeline interno do app)</span></h2>
+        <div class="meta" style="margin-bottom:8px">Emite eventos via pipeline interno do Discovery. Não usa cmdlets PSADT nativos.</div>
         <div class="form-grid">
-          <div>
-            <label for="notifTitle">Titulo</label>
-            <input id="notifTitle" type="text" value="Instalacao programada" />
-          </div>
-          <div>
-            <label for="notifSeverity">Severidade</label>
-            <select id="notifSeverity">
-              <option value="low">low</option>
-              <option value="medium" selected>medium</option>
-              <option value="high">high</option>
-              <option value="critical">critical</option>
-            </select>
-          </div>
-          <div>
-            <label for="notifMode">Modo</label>
-            <select id="notifMode">
-              <option value="notify_only" selected>notify_only</option>
-              <option value="require_confirmation">require_confirmation</option>
-              <option value="silent">silent</option>
-            </select>
-          </div>
-          <div>
-            <label for="notifLayout">Layout</label>
-            <select id="notifLayout">
-              <option value="toast" selected>toast</option>
-              <option value="banner">banner</option>
-              <option value="modal">modal</option>
-            </select>
-          </div>
-          <div style="grid-column: 1 / -1;">
-            <label for="notifMessage">Mensagem</label>
-            <textarea id="notifMessage">O pacote Office sera instalado em modo silencioso.</textarea>
-          </div>
+          <div><label for="notifTitle">Título</label><input id="notifTitle" type="text" value="Instalação programada"></div>
+          <div><label for="notifSeverity">Severidade</label><select id="notifSeverity"><option value="low">Low</option><option value="medium" selected>Medium</option><option value="high">High</option><option value="critical">Critical</option></select></div>
+          <div><label for="notifMode">Modo</label><select id="notifMode"><option value="notify_only" selected>Notify only</option><option value="require_confirmation">Require confirmation</option><option value="silent">Silent</option></select></div>
+          <div><label for="notifLayout">Layout</label><select id="notifLayout"><option value="toast" selected>Toast</option><option value="banner">Banner</option><option value="modal">Modal</option></select></div>
+          <div style="grid-column:1/-1"><label for="notifMessage">Mensagem</label><textarea id="notifMessage">O pacote Office será instalado em modo silencioso.</textarea></div>
         </div>
-        <div class="actions" style="margin-top:10px;">
-          <button id="emitNotifBtn" class="btn primary">Emitir no Runtime</button>
-        </div>
+        <div class="actions" style="margin-top:10px"><button id="emitNotifBtn" class="btn btn-primary">Emitir no Runtime</button></div>
         <div id="notifStatus" class="status"></div>
       </article>
 
@@ -256,95 +143,38 @@
     </section>
 
     <section class="panel">
-      <h2>Notificacao Visual Nativa PSADT</h2>
-      <div class="meta" style="margin-bottom:10px;">Executa cmdlets PSADT reais: <code style="font-family:'IBM Plex Mono',monospace;font-size:0.82rem;">Show-ADTBalloonTip</code>, <code style="font-family:'IBM Plex Mono',monospace;font-size:0.82rem;">Show-ADTInstallationPrompt</code>, <code style="font-family:'IBM Plex Mono',monospace;font-size:0.82rem;">Show-ADTInstallationProgress</code> e <code style="font-family:'IBM Plex Mono',monospace;font-size:0.82rem;">Show-ADTDialogBox</code>.</div>
+      <h2>Notificação Visual Nativa PSADT</h2>
+      <div class="meta" style="margin-bottom:10px">Executa cmdlets PSADT reais: <code class="mono" style="font-size:.78rem">Show-ADTBalloonTip</code>, <code class="mono" style="font-size:.78rem">Show-ADTInstallationPrompt</code>, <code class="mono" style="font-size:.78rem">Show-ADTInstallationProgress</code> e <code class="mono" style="font-size:.78rem">Show-ADTDialogBox</code>.</div>
       <div class="form-grid">
-        <div>
-          <label for="visualNotifType">Tipo</label>
-          <select id="visualNotifType">
-            <option value="balloon_info">Balloon — Info</option>
-            <option value="balloon_warning">Balloon — Warning</option>
-            <option value="balloon_error">Balloon — Error</option>
-            <option value="prompt_ok">Prompt — OK</option>
-            <option value="prompt_continue">Prompt — Continuar / Adiar</option>
-            <option value="progress">Progress Bar</option>
-            <option value="dialog_box">Dialog Box</option>
-          </select>
-        </div>
-        <div>
-          <label for="visualNotifTitle">Titulo</label>
-          <input id="visualNotifTitle" type="text" value="Discovery Agent" />
-        </div>
-        <div>
-          <label for="visualNotifAppName">App Name (sessao PSADT)</label>
-          <input id="visualNotifAppName" type="text" value="OfficeApp" />
-        </div>
-        <div>
-          <label for="visualNotifDuration">Duracao Progress (seg)</label>
-          <input id="visualNotifDuration" type="number" value="5" min="1" max="60" />
-        </div>
-        <div style="grid-column: 1 / -1;">
-          <label for="visualNotifMessage">Mensagem</label>
-          <textarea id="visualNotifMessage">O pacote Office sera instalado. Aguarde.</textarea>
-        </div>
-        <div>
-          <label for="visualDialogButtons">Dialog Buttons</label>
-          <select id="visualDialogButtons">
-            <option value="OkCancel">OkCancel</option>
-            <option value="Ok">Ok</option>
-            <option value="YesNo">YesNo</option>
-            <option value="YesNoCancel">YesNoCancel</option>
-            <option value="RetryCancel">RetryCancel</option>
-            <option value="AbortRetryIgnore">AbortRetryIgnore</option>
-            <option value="CancelTryContinue">CancelTryContinue</option>
-          </select>
-        </div>
-        <div>
-          <label for="visualDialogDefault">Default Button</label>
-          <select id="visualDialogDefault">
-            <option value="First">First</option>
-            <option value="Second">Second</option>
-            <option value="Third">Third</option>
-          </select>
-        </div>
-        <div>
-          <label for="visualDialogIcon">Dialog Icon</label>
-          <select id="visualDialogIcon">
-            <option value="Information">Information</option>
-            <option value="None">None</option>
-            <option value="Exclamation">Exclamation</option>
-            <option value="Question">Question</option>
-            <option value="Stop">Stop</option>
-          </select>
-        </div>
-        <div>
-          <label for="visualDialogTimeout">Dialog Timeout (seg)</label>
-          <input id="visualDialogTimeout" type="number" value="0" min="0" max="3600" />
-        </div>
-        <div style="grid-column: 1 / -1; display:flex; gap:12px; flex-wrap:wrap; align-items:center;">
-          <label><input id="visualDialogNoWait" type="checkbox" /> NoWait</label>
-          <label><input id="visualDialogExitOnTimeout" type="checkbox" /> ExitOnTimeout</label>
-          <label><input id="visualDialogNotTopMost" type="checkbox" /> NotTopMost</label>
-          <label><input id="visualDialogForce" type="checkbox" /> Force</label>
+        <div><label for="visualNotifType">Tipo</label><select id="visualNotifType"><option value="balloon_info">Balloon — Info</option><option value="balloon_warning">Balloon — Warning</option><option value="balloon_error">Balloon — Error</option><option value="prompt_ok">Prompt — OK</option><option value="prompt_continue">Prompt — Continuar / Adiar</option><option value="progress">Progress Bar</option><option value="dialog_box">Dialog Box</option></select></div>
+        <div><label for="visualNotifTitle">Título</label><input id="visualNotifTitle" type="text" value="Discovery Agent"></div>
+        <div><label for="visualNotifAppName">App Name (sessão PSADT)</label><input id="visualNotifAppName" type="text" value="OfficeApp"></div>
+        <div><label for="visualNotifDuration">Duração Progress (seg)</label><input id="visualNotifDuration" type="number" value="5" min="1" max="60"></div>
+        <div style="grid-column:1/-1"><label for="visualNotifMessage">Mensagem</label><textarea id="visualNotifMessage">O pacote Office será instalado. Aguarde.</textarea></div>
+        <div><label for="visualDialogButtons">Dialog Buttons</label><select id="visualDialogButtons"><option value="OkCancel">OkCancel</option><option value="Ok">Ok</option><option value="YesNo">YesNo</option><option value="YesNoCancel">YesNoCancel</option><option value="RetryCancel">RetryCancel</option><option value="AbortRetryIgnore">AbortRetryIgnore</option><option value="CancelTryContinue">CancelTryContinue</option></select></div>
+        <div><label for="visualDialogDefault">Default Button</label><select id="visualDialogDefault"><option value="First">First</option><option value="Second">Second</option><option value="Third">Third</option></select></div>
+        <div><label for="visualDialogIcon">Dialog Icon</label><select id="visualDialogIcon"><option value="Information">Information</option><option value="None">None</option><option value="Exclamation">Exclamation</option><option value="Question">Question</option><option value="Stop">Stop</option></select></div>
+        <div><label for="visualDialogTimeout">Dialog Timeout (seg)</label><input id="visualDialogTimeout" type="number" value="0" min="0" max="3600"></div>
+        <div style="grid-column:1/-1;display:flex;gap:14px;flex-wrap:wrap;align-items:center">
+          <label style="display:flex;align-items:center;gap:5px;font-size:.82rem;color:var(--text);cursor:pointer"><input id="visualDialogNoWait" type="checkbox"> NoWait</label>
+          <label style="display:flex;align-items:center;gap:5px;font-size:.82rem;color:var(--text);cursor:pointer"><input id="visualDialogExitOnTimeout" type="checkbox"> ExitOnTimeout</label>
+          <label style="display:flex;align-items:center;gap:5px;font-size:.82rem;color:var(--text);cursor:pointer"><input id="visualDialogNotTopMost" type="checkbox"> NotTopMost</label>
+          <label style="display:flex;align-items:center;gap:5px;font-size:.82rem;color:var(--text);cursor:pointer"><input id="visualDialogForce" type="checkbox"> Force</label>
         </div>
       </div>
-      <div class="actions" style="margin-top:10px;">
-        <button id="visualNotifBtn" class="btn primary">Executar Notificacao PSADT</button>
-      </div>
+      <div class="actions" style="margin-top:10px"><button id="visualNotifBtn" class="btn btn-primary">Executar Notificação PSADT</button></div>
       <div id="visualNotifStatus" class="status"></div>
-      <div style="margin-top:10px;background:rgba(0,0,0,0.05);padding:10px;border-radius:8px;max-height:200px;overflow:auto;border-left:3px solid var(--muted);">
-        <pre id="visualNotifOutput" style="margin:0;white-space:pre-wrap;font-size:0.85rem;font-family:'IBM Plex Mono',monospace;"></pre>
-      </div>
+      <div class="output-block"><pre id="visualNotifOutput"></pre></div>
     </section>
   </div>
 
   <div id="confirmModal" class="modal" aria-hidden="true">
     <div class="modal-card">
-      <h2>Confirmacao obrigatoria (simulada)</h2>
-      <div id="confirmText" class="meta">Aguardando acao do usuario.</div>
+      <h2>Confirmação Obrigatória (simulada)</h2>
+      <div id="confirmText" class="meta">Aguardando ação do usuário.</div>
       <div class="modal-actions">
         <button id="denyBtn" class="btn">Negar</button>
-        <button id="approveBtn" class="btn primary">Aprovar</button>
+        <button id="approveBtn" class="btn btn-primary">Aprovar</button>
       </div>
     </div>
   </div>

@@ -61,6 +61,47 @@
               <option value="true" data-i18n="debug.p2pTrueOption">true (tentar P2P e fallback Winget)</option>
             </select>
           </div>
+
+          <!-- Avançado (colapsável) -->
+          <details class="debug-advanced-toggle" id="debugAdvancedToggle">
+            <summary>⚙️ Configurações Avançadas (TLS, NATS, Segurança)</summary>
+            <div class="debug-advanced-grid">
+              <div class="form-field">
+                <label for="natsWsServer">NATS WebSocket (wss://)</label>
+                <input id="natsWsServer" type="text" placeholder="wss://nats.exemplo.com" autocomplete="off" spellcheck="false" />
+              </div>
+              <div class="form-field">
+                <label for="natsServerHost">NATS Server Host (override)</label>
+                <input id="natsServerHost" type="text" placeholder="host override para NATS" autocomplete="off" spellcheck="false" />
+              </div>
+              <div class="form-field">
+                <label for="natsUseWssExternal">NATS WSS External</label>
+                <select id="natsUseWssExternal"><option value="false">Não (padrão)</option><option value="true">Sim</option></select>
+              </div>
+
+              <div class="form-field">
+                <label for="apiTlsCertHash">API TLS Cert Hash (sha256:...)</label>
+                <input id="apiTlsCertHash" type="text" placeholder="sha256:..." autocomplete="off" spellcheck="false" />
+              </div>
+              <div class="form-field">
+                <label for="natsTlsCertHash">NATS TLS Cert Hash (sha256:...)</label>
+                <input id="natsTlsCertHash" type="text" placeholder="sha256:..." autocomplete="off" spellcheck="false" />
+              </div>
+
+              <div class="form-field debug-checkbox-group">
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+                  <input id="allowInsecureTls" type="checkbox" /> Permitir TLS inseguro
+                </label>
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+                  <input id="enforceTlsHashValidation" type="checkbox" /> Validar hash do certificado TLS
+                </label>
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+                  <input id="handshakeEnabled" type="checkbox" checked /> Secure Handshake ativo
+                </label>
+              </div>
+            </div>
+          </details>
+
           <div class="debug-actions">
             <button id="debugTestBtn" class="btn subtle" data-i18n="action.testConnection">Testar Conexao</button>
             <button id="debugSaveBtn" class="btn primary" data-i18n="action.saveConfiguration">Salvar Configuracao</button>

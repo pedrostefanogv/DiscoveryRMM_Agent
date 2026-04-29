@@ -1,30 +1,34 @@
 <main id="logsView" class="page-content hidden" role="tabpanel" aria-labelledby="tabLogs">
     <section class="logs-panel">
       <div class="statusbar page-bar">
-        <span class="meta" data-i18n="logs.subtitle">Terminal de logs - saida dos comandos winget</span>
-        <div class="actions">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span class="meta" data-i18n="logs.subtitle">Terminal de logs</span>
+          <span id="logsLineCount" class="logs-line-count" style="font-size:.72rem;color:var(--muted);opacity:0.7"></span>
+        </div>
+        <div class="actions" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <label class="logs-filter" for="logsOriginFilter">
             <span data-i18n="field.origin">Origem</span>
-            <select id="logsOriginFilter" class="input logs-filter-select" aria-label="Filtrar logs por origem" data-i18n-aria-label="logs.filterByOrigin">
+            <select id="logsOriginFilter" class="input logs-filter-select" aria-label="Filtrar logs por origem">
               <option value="all" data-i18n="logs.origin.all">Todas</option>
-              <option value="agent">Agent</option>
-              <option value="sync">Sync</option>
-              <option value="automation">Automacao</option>
-              <option value="support">Support</option>
-              <option value="chat">Chat</option>
-              <option value="watchdog">Watchdog</option>
-              <option value="inventory">Inventory</option>
-              <option value="updates">Updates</option>
-              <option value="printer">Printer</option>
-              <option value="debug">Debug</option>
+              <option value="agent">Agent</option><option value="sync">Sync</option>
+              <option value="automation">Automacao</option><option value="support">Support</option>
+              <option value="chat">Chat</option><option value="watchdog">Watchdog</option>
+              <option value="inventory">Inventory</option><option value="updates">Updates</option>
+              <option value="printer">Printer</option><option value="debug">Debug</option>
               <option value="startup">Startup</option>
               <option value="other" data-i18n="logs.origin.other">Outros</option>
             </select>
           </label>
-          <button id="refreshLogsBtn" class="btn subtle" data-i18n="action.refresh">Atualizar</button>
-          <button id="clearLogsBtn" class="btn danger" data-i18n="action.clear">Limpar</button>
+          <label class="logs-filter" for="logsSearchInput" style="display:flex;align-items:center;gap:4px">
+            <span>Buscar</span>
+            <input id="logsSearchInput" type="search" placeholder="Filtrar linhas..." style="width:140px;font-size:.78rem;padding:5px 8px" autocomplete="off" spellcheck="false">
+          </label>
+          <button id="copyLogsBtn" class="btn btn-sm" title="Copiar logs visiveis">&boxbox; Copiar</button>
+          <button id="exportLogsBtn" class="btn btn-sm" title="Baixar logs visiveis como .txt">&dtrif; Exportar</button>
+          <button id="refreshLogsBtn" class="btn btn-sm subtle" data-i18n="action.refresh">Atualizar</button>
+          <button id="clearLogsBtn" class="btn btn-sm danger" data-i18n="action.clear">Limpar</button>
         </div>
       </div>
-      <pre id="logsOutput" class="terminal logs-terminal"></pre>
+      <div id="logsOutput" class="terminal logs-terminal" tabindex="0"></div>
     </section>
   </main>

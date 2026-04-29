@@ -289,6 +289,7 @@ function detectLogOrigin(line) {
 
 function renderLogsOutput() {
   var selectedOrigin = logsOriginFilterEl ? String(logsOriginFilterEl.value || 'all') : 'all';
+  var searchTerm = logsSearchInputEl ? String(logsSearchInputEl.value || '').toLowerCase().trim() : '';
   var lines = logsLastLines || [];
 
   if (selectedOrigin !== 'all') {
@@ -297,8 +298,96 @@ function renderLogsOutput() {
     });
   }
 
-  logsOutputEl.textContent = lines.join('\n') || (selectedOrigin === 'all' ? translate('logs.empty') : translate('logs.emptyOrigin'));
-  logsOutputEl.scrollTop = logsOutputEl.scrollHeight;
+  if (searchTerm) {
+    lines = lines.filter(function (line) {
+      return line.toLowerCase().indexOf(searchTerm) !== -1;
+    });
+  }
+
+  var visibleLines = lines;
+  var total = (logsLastLines || []).length;
+
+  // Atualizar contador
+  if (logsLineCountEl) {
+    if (selectedOrigin === 'all' && !searchTerm) {
+      logsLineCountEl.textContent = '(' + total + ' linhas, max. 5000)';
+    } else {
+      logsLineCountEl.textContent = '(filtro: ' + lines.length + ' de ' + total + ' linhas)';
+    }
+  }
+
+  // Renderizar com <span> por linha para scroll não quebrar seleção
+  if (lines.length > 2000) {
+    // Modo otimizado: textContent para volumes grandes
+    logsOutputEl.textContent = lines.join('\n') || '(sem logs)';
+  } else {
+    // Modo DOM: cada linha em span com textContent (seguro contra XSS)
+    logsOutputEl.innerHTML = '';
+    for (var i = 0; i < lines.length; i++) {
+      var span = document.createElement('span');
+      span.textContent = lines[i];
+      logsOutputEl.appendChild(span);
+      if (i < lines.length - 1) logsOutputEl.appendChild(document.createTextNode('\n'));
+    }
+    if (lines.length === 0) {
+      logsOutputEl.textContent = '(sem logs)';
+    }
+  }
+
+  if (!logsOutputEl.dataset.pinned || logsOutputEl.dataset.pinned === 'true') {
+    logsOutputEl.scrollTop = logsOutputEl.scrollHeight;
+  }
+}
+
+async function copyLogs() {
+  var lines = getVisibleLogLines();
+  if (!lines || lines.length === 0) {
+    showToast('Nenhum log para copiar', 'warning');
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(lines.join('\n'));
+    showToast(lines.length + ' linhas copiadas', 'success');
+  } catch (e) {
+    showToast('Falha ao copiar: ' + String(e), 'error');
+  }
+}
+
+function exportLogs() {
+  var lines = getVisibleLogLines();
+  if (!lines || lines.length === 0) {
+    showToast('Nenhum log para exportar', 'warning');
+    return;
+  }
+  var blob = new Blob([lines.join('\n')], { type: 'text/plain' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = 'discovery-logs-' + new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-') + '.txt';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  showToast(lines.length + ' linhas exportadas', 'success');
+}
+
+function getVisibleLogLines() {
+  if (!logsOutputEl) return [];
+  // Se renderizado com DOM spans, pegar texto de cada span
+  if (logsOutputEl.children && logsOutputEl.children.length > 0) {
+    var lines = [];
+    for (var i = 0; i < logsOutputEl.children.length; i++) {
+      var child = logsOutputEl.children[i];
+      if (child.tagName === 'SPAN') {
+        var txt = child.textContent || '';
+        lines.push(txt);
+      }
+    }
+    return lines;
+  }
+  // Fallback: textContent
+  var text = logsOutputEl.textContent || '';
+  return text.split('\n').filter(function (l) { return l !== '(sem logs)'; });
 }
 
 async function clearLogs() {

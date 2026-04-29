@@ -3,31 +3,37 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="light dark" />
   <title>Discovery</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <div class="window-chrome" id="windowChrome" style="--wails-draggable: drag;">
+  <div class="window-chrome" id="windowChrome">
     <div class="window-chrome-drag">
       <div class="window-chrome-meta" id="windowChromeMeta">
-        <span id="windowMetaPC">PC: -</span>
-        <span id="windowMetaServer">Servidor: -</span>
-        <span id="windowMetaConn">Conexao: -</span>
+        <span id="windowMetaPC">PC: —</span>
+        <span id="windowMetaServer">Servidor: —</span>
+        <span id="windowMetaConn">Conexao: —</span>
       </div>
     </div>
     <div class="window-chrome-actions">
-      <button id="windowMaxBtn" class="window-chrome-btn" title="Maximizar/Restaurar" aria-label="Maximizar ou restaurar" data-i18n-title="action.maximizeRestore" data-i18n-aria-label="action.maximizeRestore" style="--wails-draggable: no-drag;">▢</button>
-      <button id="windowCloseBtn" class="window-chrome-btn close" title="Fechar para tray" aria-label="Fechar para tray" data-i18n-title="action.closeToTray" data-i18n-aria-label="action.closeToTray" style="--wails-draggable: no-drag;">✕</button>
+      <button id="windowMaxBtn" class="window-chrome-btn" title="Maximizar/Restaurar" aria-label="Maximizar ou restaurar" data-i18n-title="action.maximizeRestore">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><rect x="4" y="4" width="16" height="16" rx="1"/></svg>
+      </button>
+      <button id="windowCloseBtn" class="window-chrome-btn close" title="Fechar para tray" aria-label="Fechar para tray" data-i18n-title="action.closeToTray">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
+      </button>
     </div>
   </div>
 
   <div class="bg-shape bg-shape-a"></div>
   <div class="bg-shape bg-shape-b"></div>
 
-  <!-- Toast container -->
   <div id="toastContainer" class="toast-container" aria-live="polite"></div>
 
-    <div class="app-shell" id="appShell">
+  <div class="app-shell" id="appShell">
     <div id="sidebarMount"></div>
     <div id="mainMount"></div>
   </div>

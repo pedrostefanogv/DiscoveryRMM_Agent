@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -93,6 +94,30 @@ func (l *logBuffer) getAll() []string {
 	out := make([]string, len(l.lines))
 	copy(out, l.lines)
 	return out
+}
+
+func (l *logBuffer) count() int {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return len(l.lines)
+}
+
+func (l *logBuffer) exportFormatted(filterOrigin string) string {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
+	var buf strings.Builder
+	buf.WriteString("=== Discovery Agent Logs ===\n")
+	buf.WriteString(fmt.Sprintf("Exportado em: %s\n", time.Now().Format(time.RFC3339)))
+	buf.WriteString(fmt.Sprintf("Total de linhas: %d\n\n", len(l.lines)))
+
+	for _, line := range l.lines {
+		if filterOrigin != "" && !strings.Contains(strings.ToLower(line), strings.ToLower(filterOrigin)) {
+			continue
+		}
+		buf.WriteString(line + "\n")
+	}
+	return buf.String()
 }
 
 func (l *logBuffer) clear() {

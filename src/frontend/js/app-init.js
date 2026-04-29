@@ -190,8 +190,25 @@ function initAppBindings() {
   if (logsOriginFilterEl) {
     logsOriginFilterEl.addEventListener('change', renderLogsOutput);
   }
+  if (logsSearchInputEl) {
+    logsSearchInputEl.addEventListener('input', renderLogsOutput);
+  }
   if (clearLogsBtn) {
     clearLogsBtn.addEventListener('click', clearLogs);
+  }
+  if (copyLogsBtn) {
+    copyLogsBtn.addEventListener('click', copyLogs);
+  }
+  if (exportLogsBtn) {
+    exportLogsBtn.addEventListener('click', exportLogs);
+  }
+
+  // Auto-scroll toggle: pausa scroll quando usuario faz scroll manual
+  if (logsOutputEl) {
+    logsOutputEl.addEventListener('scroll', function () {
+      var atBottom = logsOutputEl.scrollHeight - logsOutputEl.scrollTop - logsOutputEl.clientHeight < 40;
+      logsOutputEl.dataset.pinned = atBottom ? 'true' : 'false';
+    });
   }
 
   if (sidebarToggleBtn && sidebarEl) {
