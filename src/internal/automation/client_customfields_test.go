@@ -20,7 +20,7 @@ func TestGetRuntimeCustomFields_Success(t *testing.T) {
 		if r.Method != http.MethodGet {
 			t.Errorf("expected GET, got %s", r.Method)
 		}
-		if !strings.Contains(r.URL.Path, "/api/agent-auth/me/custom-fields/runtime") {
+		if !strings.Contains(r.URL.Path, "/api/v1/agent-auth/me/custom-fields/runtime") {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
 		// Valida headers obrigatórios

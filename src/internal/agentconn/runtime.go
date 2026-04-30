@@ -443,7 +443,7 @@ func (r *Runtime) reportTLSMismatch(cfg Config, target, observedHash string) {
 		"target":       strings.TrimSpace(target),
 		"observedHash": normalizeTLSCertHash(observedHash),
 	})
-	endpoint := apiScheme + "://" + apiServer + "/api/agent-auth/me/tls-mismatch"
+	endpoint := apiScheme + "://" + apiServer + "/api/v1/agent-auth/me/tls-mismatch"
 	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		r.logf("[security][%s] falha ao montar tls-mismatch: %v", strings.TrimSpace(target), err)
@@ -545,9 +545,11 @@ func (r *Runtime) connectSignalR(ctx context.Context, cfg Config, connectTimeout
 		Host:   cfg.ApiServer,
 		Path:   hubPath,
 	}
+	query := wsURL.Query()
+	query.Set("access_token", strings.TrimSpace(cfg.AuthToken))
+	wsURL.RawQuery = query.Encode()
 
 	header := http.Header{}
-	header.Set("Authorization", "Bearer "+cfg.AuthToken)
 	header.Set("X-Agent-ID", cfg.AgentID)
 
 	if connectTimeout <= 0 {

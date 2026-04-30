@@ -311,7 +311,7 @@ func (s *Service) testAgentAPIConnectivity(ctx context.Context, apiScheme, apiSe
 		return fmt.Errorf("apiScheme/apiServer ausente")
 	}
 
-	target := apiScheme + "://" + apiServer + "/api/agent-auth/me"
+	target := apiScheme + "://" + apiServer + "/api/v1/agent-auth/me"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return fmt.Errorf("falha ao criar requisicao: %w", err)
@@ -396,7 +396,7 @@ func (s *Service) BootstrapAgentCredentialsFromInstallerConfig(ctx context.Conte
 		return
 	}
 
-	s.logf("[installer-bootstrap] registrando agente em " + scheme + "://" + server + "/api/agent-install/register")
+	s.logf("[installer-bootstrap] registrando agente em " + scheme + "://" + server + "/api/v1/agent-install/register")
 	token, agentID, resolvedScheme, err := s.registerAgentFromDeployToken(ctx, scheme, server, inst.APIKey)
 	if err != nil {
 		s.logf("[installer-bootstrap] falha ao obter credenciais: " + err.Error())
@@ -530,7 +530,7 @@ func (s *Service) TestConnection(cfg Config) (string, error) {
 
 	if cfg.ApiServer != "" {
 		s.logf(fmt.Sprintf("[debug-test] testando API: %s://%s", cfg.ApiScheme, cfg.ApiServer))
-		target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/agent-auth/me"
+		target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/v1/agent-auth/me"
 		client := tlsutil.NewHTTPClient(10 * time.Second)
 		req, err := http.NewRequest(http.MethodGet, target, nil)
 		if err != nil {

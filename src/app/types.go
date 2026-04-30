@@ -174,7 +174,7 @@ type AutomationExecutionView = appautomation.ExecutionView
 // AutomationStateView represents the current automation policy state in the UI.
 type AutomationStateView = appautomation.StateView
 
-// agentInfoCache caches the agent identifiers resolved from /api/agent-auth/me.
+// agentInfoCache caches the agent identifiers resolved from /api/v1/agent-auth/me.
 type agentInfoCache struct {
 	inner supportmeta.AgentInfoCache
 }

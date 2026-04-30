@@ -37,7 +37,7 @@ func TestDownloadToTemp_FollowsSignedRedirectAndValidatesManifestSHA(t *testing.
 	defer signedServer.Close()
 
 	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/agent-auth/me/update/download" {
+		if r.URL.Path != "/api/v1/agent-auth/me/update/download" {
 			http.NotFound(w, r)
 			return
 		}
@@ -105,7 +105,7 @@ func TestDownloadToTemp_UsesPreferredArtifactTypeFromPolicy(t *testing.T) {
 
 	artifactType := ""
 	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/agent-auth/me/update/download" {
+		if r.URL.Path != "/api/v1/agent-auth/me/update/download" {
 			http.NotFound(w, r)
 			return
 		}
@@ -152,7 +152,7 @@ func TestDownloadToTemp_UsesPreferredArtifactTypeFromPolicy(t *testing.T) {
 func TestResumePendingInstallReport_ReportsSuccessAndClearsState(t *testing.T) {
 	events := make([]reportPayload, 0, 1)
 	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/agent-auth/me/update/report" {
+		if r.URL.Path != "/api/v1/agent-auth/me/update/report" {
 			http.NotFound(w, r)
 			return
 		}

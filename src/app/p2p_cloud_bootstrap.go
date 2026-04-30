@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	p2pCloudBootstrapEndpoint  = "/api/agent-auth/me/p2p/bootstrap"
+	p2pCloudBootstrapEndpoint  = "/api/v1/agent-auth/me/p2p/bootstrap"
 	p2pCloudBootstrapTimeout   = 15 * time.Second
 	p2pCloudBootstrapConnectTO = 10 * time.Second
 )
@@ -88,7 +88,7 @@ func (c *p2pCoordinator) runCloudBootstrap(ctx context.Context) {
 		Port:    selfPort,
 	}
 
-	resp, err := c.callCloudBootstrapAPI(ctx, apiScheme, apiServer, authToken, payload)
+	resp, err := c.callCloudBootstrapAPI(ctx, apiScheme, apiServer, authToken, agentID, payload)
 	if err != nil {
 		c.app.logs.append("[p2p][cloud-bootstrap] erro ao chamar API: " + err.Error())
 		// Mesmo com falha na API, persistir o estado atual do cache (conexões locais já limpas).
@@ -168,7 +168,7 @@ func (c *p2pCoordinator) connectCachedPeers(ctx context.Context, h interface {
 }
 
 // callCloudBootstrapAPI faz POST no endpoint de bootstrap e retorna a resposta parseada.
-func (c *p2pCoordinator) callCloudBootstrapAPI(ctx context.Context, scheme, server, token string, payload p2pCloudBootstrapRequest) (*p2pCloudBootstrapResponse, error) {
+func (c *p2pCoordinator) callCloudBootstrapAPI(ctx context.Context, scheme, server, token, agentID string, payload p2pCloudBootstrapRequest) (*p2pCloudBootstrapResponse, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("marshal payload: %w", err)
@@ -181,6 +181,7 @@ func (c *p2pCoordinator) callCloudBootstrapAPI(ctx context.Context, scheme, serv
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("X-Agent-ID", strings.TrimSpace(agentID))
 
 	client := &http.Client{Timeout: p2pCloudBootstrapTimeout}
 	httpResp, err := client.Do(req)

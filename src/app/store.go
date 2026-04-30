@@ -49,7 +49,7 @@ func (a *App) fetchAppStoreByInstallationType(ctx context.Context, installationT
 		return AppStoreResponse{}, fmt.Errorf("apiScheme inválido: use http ou https")
 	}
 
-	target := apiScheme + "://" + apiServer + "/api/agent-auth/me/app-store"
+	target := apiScheme + "://" + apiServer + "/api/v1/agent-auth/me/app-store"
 	parsed, err := url.Parse(target)
 	if err != nil {
 		return AppStoreResponse{}, fmt.Errorf("URL inválida: %w", err)
@@ -63,7 +63,7 @@ func (a *App) fetchAppStoreByInstallationType(ctx context.Context, installationT
 		return AppStoreResponse{}, fmt.Errorf("falha ao criar request da app-store: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
-	netutil.SetAgentAuthHeaders(req, token)
+	netutil.SetAgentAuthHeadersWithAgentID(req, token, cfg.AgentID)
 
 	resp, err := tlsutil.NewHTTPClient(15 * time.Second).Do(req)
 	if err != nil {

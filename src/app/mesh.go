@@ -46,7 +46,7 @@ type meshCentralState struct {
 }
 
 const (
-	meshInstallEndpointPath = "/api/agent-auth/me/support/meshcentral/install"
+	meshInstallEndpointPath = "/api/v1/agent-auth/me/support/meshcentral/install"
 	meshStateCachePrefix    = "meshcentral_state:"
 	meshInstallAttempts     = 4
 )
@@ -180,7 +180,7 @@ func (a *App) markMeshCentralInstalled() {
 	a.meshLogf("instalacao marcada como concluida no config.json")
 }
 
-// fetchMeshInstallInfo calls GET /api/agent-auth/me/support/meshcentral/install
+// fetchMeshInstallInfo calls GET /api/v1/agent-auth/me/support/meshcentral/install
 // and returns the install parameters from the server.
 func (a *App) fetchMeshInstallInfo(ctx context.Context) (MeshCentralInstallInfo, int, error) {
 	cfg := a.GetDebugConfig()

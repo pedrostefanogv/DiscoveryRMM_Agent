@@ -42,6 +42,7 @@ func (a *App) loadPersistedChatConfig() {
 		a.chatSvc.SetConfig(ai.Config{
 			Endpoint:     cfg.Endpoint,
 			APIKey:       cfg.APIKey,
+			AgentID:      a.GetDebugConfig().AgentID,
 			Model:        cfg.Model,
 			SystemPrompt: cfg.SystemPrompt,
 			MaxTokens:    cfg.MaxTokens,
@@ -116,6 +117,7 @@ func (a *App) resolveAgentChatRuntimeConfig(input ChatConfig) (ai.Config, error)
 	return ai.Config{
 		Endpoint:     endpoint,
 		APIKey:       token,
+		AgentID:      strings.TrimSpace(dbg.AgentID),
 		Model:        model,
 		SystemPrompt: systemPrompt,
 		MaxTokens:    maxTokens,
@@ -137,6 +139,7 @@ func (a *App) SetChatConfig(cfg ChatConfig) error {
 	a.chatSvc.SetConfig(ai.Config{
 		Endpoint:     cfg.Endpoint,
 		APIKey:       cfg.APIKey,
+		AgentID:      a.GetDebugConfig().AgentID,
 		Model:        cfg.Model,
 		SystemPrompt: cfg.SystemPrompt,
 		MaxTokens:    cfg.MaxTokens,

@@ -189,7 +189,7 @@ func (s *Service) fetchKnowledgeListWithCache(info AgentInfo, category string, u
 		}
 	}
 
-	path := "/api/agent-auth/knowledge"
+	path := "/api/v1/agent-auth/knowledge"
 	if c := strings.TrimSpace(category); c != "" {
 		path += "?category=" + url.QueryEscape(c)
 	}
@@ -201,7 +201,7 @@ func (s *Service) fetchKnowledgeListWithCache(info AgentInfo, category string, u
 	if err != nil {
 		return nil, fmt.Errorf("URL invalida: %w", err)
 	}
-	netutil.SetAgentAuthHeaders(req, cfg.AuthToken)
+	netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, info.AgentID)
 
 	resp, err := tlsutil.NewHTTPClient(15 * time.Second).Do(req)
 	if err != nil {
@@ -281,7 +281,7 @@ func (s *Service) fetchKnowledgeDetail(info AgentInfo, articleID string) (Knowle
 		}
 	}
 
-	target := strings.TrimSpace(strings.ToLower(cfg.ApiScheme)) + "://" + strings.TrimSpace(cfg.ApiServer) + "/api/agent-auth/knowledge/" + url.PathEscape(articleID)
+	target := strings.TrimSpace(strings.ToLower(cfg.ApiScheme)) + "://" + strings.TrimSpace(cfg.ApiServer) + "/api/v1/agent-auth/knowledge/" + url.PathEscape(articleID)
 
 	ctx := s.ctxOrBackground()
 
@@ -289,7 +289,7 @@ func (s *Service) fetchKnowledgeDetail(info AgentInfo, articleID string) (Knowle
 	if err != nil {
 		return KnowledgeArticle{}, fmt.Errorf("URL invalida: %w", err)
 	}
-	netutil.SetAgentAuthHeaders(req, cfg.AuthToken)
+	netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, info.AgentID)
 
 	resp, err := tlsutil.NewHTTPClient(15 * time.Second).Do(req)
 	if err != nil {

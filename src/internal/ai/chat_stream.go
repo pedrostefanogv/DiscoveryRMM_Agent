@@ -46,7 +46,7 @@ func (s *Service) callAgentChatStream(
 	reqCtx, cancel := context.WithTimeout(ctx, 130*time.Second)
 	defer cancel()
 
-	endpoint := baseURL + "/api/agent-auth/me/ai-chat/stream"
+	endpoint := baseURL + "/api/v1/agent-auth/me/ai-chat/stream"
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, endpoint, bytes.NewReader(payload))
 	if err != nil {
 		return "", "", false, fmt.Errorf("falha ao criar request de stream: %w", err)
@@ -54,6 +54,9 @@ func (s *Service) callAgentChatStream(
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(cfg.APIKey))
+	if agentID := strings.TrimSpace(cfg.AgentID); agentID != "" {
+		req.Header.Set("X-Agent-ID", agentID)
+	}
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

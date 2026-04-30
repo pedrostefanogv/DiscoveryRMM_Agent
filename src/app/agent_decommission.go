@@ -113,7 +113,7 @@ func parseInstallerServerURLLite(raw string) (string, string) {
 }
 
 func performAgentDecommissionDelete(ctx context.Context, target agentDecommissionTarget) error {
-	endpoint := strings.TrimSpace(target.Scheme) + "://" + strings.TrimSpace(target.Server) + "/api/agent-auth/me"
+	endpoint := strings.TrimSpace(target.Scheme) + "://" + strings.TrimSpace(target.Server) + "/api/v1/agent-auth/me"
 	reqCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 

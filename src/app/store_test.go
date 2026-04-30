@@ -17,7 +17,7 @@ func TestLoadEffectiveAppStorePolicyMergesWingetAndChocolatey(t *testing.T) {
 		if got := r.Header.Get("Authorization"); got != "Bearer "+token {
 			t.Fatalf("Authorization inválido: %q", got)
 		}
-		if r.URL.Path != "/api/agent-auth/me/app-store" {
+		if r.URL.Path != "/api/v1/agent-auth/me/app-store" {
 			t.Fatalf("path inesperado: %s", r.URL.Path)
 		}
 

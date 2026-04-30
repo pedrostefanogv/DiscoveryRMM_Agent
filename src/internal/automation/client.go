@@ -56,7 +56,7 @@ func normalizeBaseURL(endpoint string) (string, error) {
 		u.Fragment = ""
 		return strings.TrimRight(u.String(), "/"), nil
 	}
-	idx := strings.Index(path, "/api/agent-auth")
+	idx := strings.Index(path, "/api/v1/agent-auth")
 	if idx >= 0 {
 		u.Path = path[:idx]
 		u.RawQuery = ""
@@ -64,7 +64,7 @@ func normalizeBaseURL(endpoint string) (string, error) {
 		return strings.TrimRight(u.String(), "/"), nil
 	}
 	if strings.Contains(path, "/api/") {
-		return "", fmt.Errorf("endpoint deve apontar para a base do servidor ou /api/agent-auth")
+		return "", fmt.Errorf("endpoint deve apontar para a base do servidor ou /api/v1/agent-auth")
 	}
 	u.RawQuery = ""
 	u.Fragment = ""
@@ -85,7 +85,7 @@ func (c *Client) SyncPolicy(ctx context.Context, cfg RuntimeConfig, reqBody Poli
 	reqCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
 
-	endpoint := baseURL + "/api/agent-auth/me/automation/policy-sync"
+	endpoint := baseURL + "/api/v1/agent-auth/me/automation/policy-sync"
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, endpoint, bytes.NewReader(payload))
 	if err != nil {
 		return nil, fmt.Errorf("falha ao criar request de policy sync: %w", err)
@@ -146,7 +146,7 @@ func (c *Client) postExecutionCallback(ctx context.Context, cfg RuntimeConfig, c
 	reqCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	endpoint := baseURL + "/api/agent-auth/me/automation/executions/" + url.PathEscape(commandID) + "/" + suffix
+	endpoint := baseURL + "/api/v1/agent-auth/me/automation/executions/" + url.PathEscape(commandID) + "/" + suffix
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("falha ao criar callback %s: %w", suffix, err)
@@ -174,7 +174,7 @@ func (c *Client) GetRuntimeCustomFields(ctx context.Context, cfg RuntimeConfig, 
 		return nil, err
 	}
 
-	endpoint := baseURL + "/api/agent-auth/me/custom-fields/runtime"
+	endpoint := baseURL + "/api/v1/agent-auth/me/custom-fields/runtime"
 	if taskID != "" || scriptID != "" {
 		q := url.Values{}
 		if taskID != "" {
@@ -235,7 +235,7 @@ func (c *Client) CollectCustomFieldValue(ctx context.Context, cfg RuntimeConfig,
 	reqCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	endpoint := baseURL + "/api/agent-auth/me/custom-fields/collected"
+	endpoint := baseURL + "/api/v1/agent-auth/me/custom-fields/collected"
 	httpReq, err := http.NewRequestWithContext(reqCtx, http.MethodPost, endpoint, bytes.NewReader(payload))
 	if err != nil {
 		return nil, fmt.Errorf("falha ao criar request de collected value: %w", err)

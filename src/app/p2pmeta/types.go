@@ -222,7 +222,7 @@ type OnboardingAuditEvent struct {
 }
 
 // ProvisioningTokenResponse é o payload retornado pelo servidor em
-// POST /api/agent-auth/me/zero-touch/deploy-token.
+// POST /api/v1/agent-auth/me/zero-touch/deploy-token.
 // O campo Token (prefixo mdz_zt_...) é o valor bruto single-use que o peer
 // usa como Bearer token no endpoint de registro — nunca é armazenado no banco,
 // apenas o seu hash SHA-256. TokenID é o GUID do registro na tabela

@@ -23,7 +23,8 @@ import (
 type Config struct {
 	Endpoint     string `json:"endpoint"` // Agent base URL (e.g. "https://server") or explicit chat endpoint
 	APIKey       string `json:"apiKey"`   // agent bearer token (mdz_...)
-	Model        string `json:"model"`    // kept for compatibility; not used by AgentAuth backend
+	AgentID      string `json:"agentId"`
+	Model        string `json:"model"` // kept for compatibility; not used by AgentAuth backend
 	SystemPrompt string `json:"systemPrompt"`
 	MaxTokens    int    `json:"maxTokens"`
 }
@@ -283,7 +284,7 @@ func normalizeAgentChatBaseURL(endpoint string) (string, error) {
 		u.Fragment = ""
 		return strings.TrimRight(u.String(), "/"), nil
 	}
-	idx := strings.Index(path, "/api/agent-auth")
+	idx := strings.Index(path, "/api/v1/agent-auth")
 	if idx >= 0 {
 		u.Path = path[:idx]
 		u.RawQuery = ""
@@ -291,7 +292,7 @@ func normalizeAgentChatBaseURL(endpoint string) (string, error) {
 		return strings.TrimRight(u.String(), "/"), nil
 	}
 	if strings.Contains(path, "/api/") {
-		return "", fmt.Errorf("endpoint deve apontar para a base do servidor ou /api/agent-auth")
+		return "", fmt.Errorf("endpoint deve apontar para a base do servidor ou /api/v1/agent-auth")
 	}
 	u.RawQuery = ""
 	u.Fragment = ""
@@ -313,13 +314,16 @@ func (s *Service) callAgentChatSync(ctx context.Context, cfg Config, message, se
 	reqCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
 
-	endpoint := baseURL + "/api/agent-auth/me/ai-chat"
+	endpoint := baseURL + "/api/v1/agent-auth/me/ai-chat"
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, endpoint, bytes.NewReader(payload))
 	if err != nil {
 		return nil, fmt.Errorf("falha ao criar request de chat: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(cfg.APIKey))
+	if agentID := strings.TrimSpace(cfg.AgentID); agentID != "" {
+		req.Header.Set("X-Agent-ID", agentID)
+	}
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

@@ -214,7 +214,7 @@ func toBool(values ...any) bool {
 func extractAgentInfoFromJSON(body []byte, cfg debug.Config) (AgentInfo, error) {
 	var raw map[string]any
 	if err := json.Unmarshal(body, &raw); err != nil {
-		return AgentInfo{}, fmt.Errorf("resposta inválida de /api/agent-auth/me: %w", err)
+		return AgentInfo{}, fmt.Errorf("resposta inválida de /api/v1/agent-auth/me: %w", err)
 	}
 
 	asMap := func(v any) map[string]any {
@@ -282,7 +282,7 @@ func extractAgentInfoFromJSON(body []byte, cfg debug.Config) (AgentInfo, error) 
 	return info, nil
 }
 
-// fetchAgentContext resolves clientId/siteId from /api/agent-auth/me (cached).
+// fetchAgentContext resolves clientId/siteId from /api/v1/agent-auth/me (cached).
 func (s *Service) fetchAgentContext() (AgentInfo, error) {
 	if info, ok := s.agentInfo.Get(); ok {
 		if strings.TrimSpace(info.ClientID) != "" {
@@ -322,14 +322,14 @@ func (s *Service) fetchAgentContext() (AgentInfo, error) {
 	}
 
 	ctx := s.ctxOrBackground()
-	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/agent-auth/me"
+	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/v1/agent-auth/me"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		wrapped := fmt.Errorf("URL inválida: %w", err)
 		s.supportLogf("falha ao montar request de contexto do agente: %v", wrapped)
 		return AgentInfo{}, wrapped
 	}
-	netutil.SetAgentAuthHeaders(req, cfg.AuthToken)
+	netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, cfg.AgentID)
 
 	resp, err := tlsutil.NewHTTPClient(10 * time.Second).Do(req)
 	if err != nil {
@@ -342,17 +342,17 @@ func (s *Service) fetchAgentContext() (AgentInfo, error) {
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		wrapped := fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(body)))
-		s.supportLogf("/api/agent-auth/me retornou erro: %v", wrapped)
+		s.supportLogf("/api/v1/agent-auth/me retornou erro: %v", wrapped)
 		return AgentInfo{}, wrapped
 	}
 
 	info, err := extractAgentInfoFromJSON(body, cfg)
 	if err != nil {
-		s.supportLogf("falha ao decodificar /api/agent-auth/me: %v", err)
+		s.supportLogf("falha ao decodificar /api/v1/agent-auth/me: %v", err)
 		return AgentInfo{}, err
 	}
 	if info.ClientID == "" {
-		err := fmt.Errorf("clientId não retornado por /api/agent-auth/me: verifique token/escopo do agente")
+		err := fmt.Errorf("clientId não retornado por /api/v1/agent-auth/me: verifique token/escopo do agente")
 		s.supportLogf("%v | resposta=%s", err, shortBodyForLog(body))
 		return AgentInfo{}, err
 	}
@@ -394,14 +394,14 @@ func (s *Service) GetSupportTickets() ([]APITicket, error) {
 
 	cfg := s.debugConfig()
 	ctx := s.ctxOrBackground()
-	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/agent-auth/me/tickets"
+	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/tickets"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		wrapped := fmt.Errorf("URL inválida: %w", err)
 		s.supportLogf("falha ao montar request de listagem: %v", wrapped)
 		return nil, wrapped
 	}
-	netutil.SetAgentAuthHeaders(req, cfg.AuthToken)
+	netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, cfg.AgentID)
 
 	resp, err := tlsutil.NewHTTPClient(15 * time.Second).Do(req)
 	if err != nil {
@@ -487,7 +487,7 @@ func (s *Service) CreateSupportTicket(input CreateTicketInput) (APITicket, error
 		return APITicket{}, wrapped
 	}
 
-	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/agent-auth/me/tickets"
+	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/tickets"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(reqBody))
 	if err != nil {
 		wrapped := fmt.Errorf("URL inválida: %w", err)
@@ -495,7 +495,7 @@ func (s *Service) CreateSupportTicket(input CreateTicketInput) (APITicket, error
 		return APITicket{}, wrapped
 	}
 	req.Header.Set("Content-Type", "application/json")
-	netutil.SetAgentAuthHeaders(req, cfg.AuthToken)
+	netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, cfg.AgentID)
 
 	resp, err := tlsutil.NewHTTPClient(15 * time.Second).Do(req)
 	if err != nil {
@@ -532,12 +532,12 @@ func (s *Service) GetSupportTicketDetails(ticketID string) (APITicket, error) {
 	cfg := s.debugConfig()
 	ctx := s.ctxOrBackground()
 
-	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/agent-auth/me/tickets/" + ticketID
+	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/tickets/" + ticketID
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return APITicket{}, err
 	}
-	netutil.SetAgentAuthHeaders(req, cfg.AuthToken)
+	netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, cfg.AgentID)
 
 	resp, err := tlsutil.NewHTTPClient(10 * time.Second).Do(req)
 	if err != nil {
@@ -610,9 +610,9 @@ func (s *Service) GetTicketWorkflowStates() ([]APIWorkflowState, error) {
 
 	base := strings.TrimSpace(cfg.ApiScheme) + "://" + strings.TrimSpace(cfg.ApiServer)
 	paths := []string{
-		"/api/agent-auth/me/tickets/workflow-states",
-		"/api/agent-auth/me/workflow-states",
-		"/api/agent-auth/workflow-states",
+		"/api/v1/agent-auth/me/tickets/workflow-states",
+		"/api/v1/agent-auth/me/workflow-states",
+		"/api/v1/agent-auth/workflow-states",
 	}
 
 	var lastErr error
@@ -623,7 +623,7 @@ func (s *Service) GetTicketWorkflowStates() ([]APIWorkflowState, error) {
 			lastErr = fmt.Errorf("URL inválida: %w", err)
 			continue
 		}
-		netutil.SetAgentAuthHeaders(req, cfg.AuthToken)
+		netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, cfg.AgentID)
 
 		resp, err := tlsutil.NewHTTPClient(10 * time.Second).Do(req)
 		if err != nil {
@@ -679,12 +679,12 @@ func (s *Service) GetTicketComments(ticketID string) ([]TicketComment, error) {
 	cfg := s.debugConfig()
 	ctx := s.ctxOrBackground()
 
-	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/agent-auth/me/tickets/" + ticketID + "/comments"
+	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/tickets/" + ticketID + "/comments"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return nil, err
 	}
-	netutil.SetAgentAuthHeaders(req, cfg.AuthToken)
+	netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, cfg.AgentID)
 
 	resp, err := tlsutil.NewHTTPClient(10 * time.Second).Do(req)
 	if err != nil {
@@ -739,13 +739,13 @@ func (s *Service) AddTicketCommentWithOptions(ticketID, content string, isIntern
 	}
 	body, _ := json.Marshal(payload)
 
-	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/agent-auth/me/tickets/" + ticketID + "/comments"
+	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/tickets/" + ticketID + "/comments"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
 	if err != nil {
 		return TicketComment{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	netutil.SetAgentAuthHeaders(req, cfg.AuthToken)
+	netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, cfg.AgentID)
 
 	resp, err := tlsutil.NewHTTPClient(10 * time.Second).Do(req)
 	if err != nil {
@@ -815,13 +815,13 @@ func (s *Service) CloseSupportTicket(ticketID string, input CloseTicketInput) (A
 		return APITicket{}, fmt.Errorf("erro ao serializar payload de fechamento: %w", err)
 	}
 
-	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/agent-auth/me/tickets/" + ticketID + "/close"
+	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/tickets/" + ticketID + "/close"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
 	if err != nil {
 		return APITicket{}, fmt.Errorf("URL inválida: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	netutil.SetAgentAuthHeaders(req, cfg.AuthToken)
+	netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, cfg.AgentID)
 
 	s.supportLogf("fechando chamado %s", ticketID)
 	resp, err := tlsutil.NewHTTPClient(15 * time.Second).Do(req)

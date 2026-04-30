@@ -16,7 +16,7 @@ func newP2PAPIContractTestApp(t *testing.T, serverURL, token string) *App {
 	t.Helper()
 	a := &App{ctx: context.Background()}
 	a.debugSvc = debugsvc.NewService(debugsvc.Options{})
-	a.debugSvc.ApplyRuntimeConnectionConfig("http", strings.TrimPrefix(serverURL, "http://"), token, "", "", "")
+	a.debugSvc.ApplyRuntimeConnectionConfig("http", strings.TrimPrefix(serverURL, "http://"), token, "agent-test-1", "", "")
 	return a
 }
 
@@ -25,6 +25,9 @@ func TestPostP2PTelemetry_Accepts202(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Authorization"); got != "Bearer "+token {
 			t.Fatalf("Authorization invalido: %q", got)
+		}
+		if got := r.Header.Get("X-Agent-ID"); got != "agent-test-1" {
+			t.Fatalf("X-Agent-ID invalido: %q", got)
 		}
 		if r.URL.Path != p2pTelemetryEndpointPath {
 			t.Fatalf("path inesperado: %s", r.URL.Path)
@@ -46,6 +49,9 @@ func TestPostP2PTelemetry_Handles429RetryAfter(t *testing.T) {
 	const token = "mdz_test_token"
 	var requests int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("X-Agent-ID"); got != "agent-test-1" {
+			t.Fatalf("X-Agent-ID invalido: %q", got)
+		}
 		atomic.AddInt32(&requests, 1)
 		w.Header().Set("Retry-After", "120")
 		w.WriteHeader(http.StatusTooManyRequests)
@@ -79,6 +85,9 @@ func TestPostP2PTelemetry_Handles429RetryAfter(t *testing.T) {
 func TestPostP2PTelemetry_ParsesJSONErrorEnvelope(t *testing.T) {
 	const token = "mdz_test_token"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("X-Agent-ID"); got != "agent-test-1" {
+			t.Fatalf("X-Agent-ID invalido: %q", got)
+		}
 		w.WriteHeader(http.StatusBadRequest)
 		_, _ = w.Write([]byte(`{"error":"payload invalido","field":"metrics","code":"METRIC_NEGATIVE"}`))
 	}))
@@ -104,6 +113,9 @@ func TestGetP2PDistributionStatusWithOptions_SendsQueryParams(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Authorization"); got != "Bearer "+token {
 			t.Fatalf("Authorization invalido: %q", got)
+		}
+		if got := r.Header.Get("X-Agent-ID"); got != "agent-test-1" {
+			t.Fatalf("X-Agent-ID invalido: %q", got)
 		}
 		if r.URL.Path != p2pDistributionStatusPath {
 			t.Fatalf("path inesperado: %s", r.URL.Path)

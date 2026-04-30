@@ -106,7 +106,7 @@ type AgentConsolidationConfig struct {
 	Policies []AgentConsolidationPolicy `json:"policies"`
 }
 
-// AgentConfiguration defines the configuration schema returned by /api/agent-auth/me/configuration.
+// AgentConfiguration defines the configuration schema returned by /api/v1/agent-auth/me/configuration.
 // It is used to control what features should be enabled on the agent.
 type AgentConfiguration struct {
 	RecoveryEnabled               *bool                           `json:"recoveryEnabled"`

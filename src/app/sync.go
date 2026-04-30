@@ -362,7 +362,7 @@ func (a *App) fetchSyncManifest(ctx context.Context) (SyncManifestResponse, erro
 		return SyncManifestResponse{}, fmt.Errorf("apiScheme inválido")
 	}
 
-	target := apiScheme + "://" + apiServer + "/api/agent-auth/me/sync-manifest"
+	target := apiScheme + "://" + apiServer + "/api/v1/agent-auth/me/sync-manifest"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return SyncManifestResponse{}, err
@@ -406,13 +406,13 @@ func (a *App) refreshAgentConfiguration(ctx context.Context) error {
 		return fmt.Errorf("apiScheme inválido")
 	}
 
-	target := apiScheme + "://" + apiServer + "/api/agent-auth/me/configuration"
+	target := apiScheme + "://" + apiServer + "/api/v1/agent-auth/me/configuration"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Accept", "application/json")
-	netutil.SetAgentAuthHeaders(req, token)
+	netutil.SetAgentAuthHeadersWithAgentID(req, token, cfg.AgentID)
 
 	resp, err := tlsutil.NewHTTPClient(15 * time.Second).Do(req)
 	if err != nil {

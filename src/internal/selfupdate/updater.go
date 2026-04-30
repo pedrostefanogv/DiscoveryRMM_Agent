@@ -430,7 +430,7 @@ func (u *Updater) fetchManifest(ctx context.Context) (*UpdateManifest, error) {
 		return nil, errors.New("agentId vazio")
 	}
 
-	endpoint := strings.TrimSpace(u.ApiScheme) + "://" + strings.TrimSpace(u.ApiServer) + "/api/agent-auth/me/update/manifest"
+	endpoint := strings.TrimSpace(u.ApiScheme) + "://" + strings.TrimSpace(u.ApiServer) + "/api/v1/agent-auth/me/update/manifest"
 	q := url.Values{}
 	q.Set("currentVersion", strings.TrimSpace(buildinfo.Version))
 	q.Set("platform", platformWindows)
@@ -495,7 +495,7 @@ func (u *Updater) downloadToTemp(ctx context.Context, m *UpdateManifest) (string
 		errutil.LogIfErr(f.Close(), "selfupdate: fechar arquivo de download")
 	}()
 
-	endpoint := strings.TrimSpace(u.ApiScheme) + "://" + strings.TrimSpace(u.ApiServer) + "/api/agent-auth/me/update/download"
+	endpoint := strings.TrimSpace(u.ApiScheme) + "://" + strings.TrimSpace(u.ApiServer) + "/api/v1/agent-auth/me/update/download"
 	q := url.Values{}
 	if m.ReleaseID != nil && strings.TrimSpace(*m.ReleaseID) != "" {
 		q.Set("releaseId", strings.TrimSpace(*m.ReleaseID))
@@ -591,7 +591,7 @@ func (u *Updater) reportEvent(ctx context.Context, eventType string, opts report
 	if token == "" || agentID == "" {
 		return
 	}
-	endpoint := strings.TrimSpace(u.ApiScheme) + "://" + strings.TrimSpace(u.ApiServer) + "/api/agent-auth/me/update/report"
+	endpoint := strings.TrimSpace(u.ApiScheme) + "://" + strings.TrimSpace(u.ApiServer) + "/api/v1/agent-auth/me/update/report"
 
 	payload := reportPayload{
 		ReleaseID:      opts.ReleaseID,

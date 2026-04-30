@@ -292,7 +292,7 @@ type RuntimeCustomField struct {
 	IsSecret     bool            `json:"isSecret"`
 }
 
-// CollectedValueRequest é o payload para POST /api/agent-auth/me/custom-fields/collected.
+// CollectedValueRequest é o payload para POST /api/v1/agent-auth/me/custom-fields/collected.
 type CollectedValueRequest struct {
 	DefinitionID *string         `json:"definitionId,omitempty"`
 	Name         *string         `json:"name,omitempty"`

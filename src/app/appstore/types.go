@@ -13,7 +13,7 @@ const (
 	InstallationChocolatey InstallationType = "Chocolatey"
 )
 
-// Item representa um item permitido retornado por /api/agent-auth/me/app-store.
+// Item representa um item permitido retornado por /api/v1/agent-auth/me/app-store.
 type Item struct {
 	InstallationType    string            `json:"installationType"`
 	PackageID           string            `json:"packageId"`
@@ -28,7 +28,7 @@ type Item struct {
 	SourceScope         string            `json:"sourceScope"`
 }
 
-// Response representa o envelope do endpoint /api/agent-auth/me/app-store.
+// Response representa o envelope do endpoint /api/v1/agent-auth/me/app-store.
 type Response struct {
 	InstallationType string `json:"installationType"`
 	Count            int    `json:"count"`

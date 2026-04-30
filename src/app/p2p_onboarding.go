@@ -224,7 +224,7 @@ func (a *App) registerWithDeployKey(serverURL, deployKey string) (P2POnboardingR
 		"hostname":  hostname,
 		"deployKey": deployKey,
 	})
-	endpoint := serverURL + "/api/agent-install/register"
+	endpoint := serverURL + "/api/v1/agent-install/register"
 	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(payload))
 	if err != nil {
 		return P2POnboardingResult{}, err
@@ -436,13 +436,14 @@ func (a *App) requestProvisioningToken(ctx context.Context) (deployKey, expiresA
 	if scheme == "" {
 		scheme = "https"
 	}
-	endpoint := scheme + "://" + strings.TrimSpace(inst.ApiServer) + "/api/agent-auth/me/zero-touch/deploy-token"
+	endpoint := scheme + "://" + strings.TrimSpace(inst.ApiServer) + "/api/v1/agent-auth/me/zero-touch/deploy-token"
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
 	if err != nil {
 		return "", "", fmt.Errorf("erro ao construir request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(inst.AuthToken))
+	req.Header.Set("X-Agent-ID", strings.TrimSpace(inst.AgentID))
 	req.Header.Set("Content-Type", "application/json")
 
 	client := tlsutil.NewHTTPClient(15 * time.Second)

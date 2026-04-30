@@ -198,7 +198,7 @@ func (s *Service) SyncInventoryOnStartup(ctx context.Context, report models.Inve
 		hardwarePayload.Hostname,
 	))
 
-	hardwareEndpoint := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/agent-auth/me/hardware"
+	hardwareEndpoint := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/hardware"
 	hardwareSuccess := false
 	s.pulseInventoryHeartbeat()
 	if err := s.sendAgentInventoryRequest(ctx, hardwareEndpoint, cfg, http.MethodPost, hardwareBody); err != nil {
@@ -221,7 +221,7 @@ func (s *Service) SyncInventoryOnStartup(ctx context.Context, report models.Inve
 		len(softwarePayload.Software),
 	))
 
-	softwareEndpoint := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/agent-auth/me/software"
+	softwareEndpoint := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/software"
 	s.logf("[agent-sync] endpoint software: " + softwareEndpoint)
 	softwareSuccess := false
 	s.pulseInventoryHeartbeat()

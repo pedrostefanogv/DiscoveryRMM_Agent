@@ -16,9 +16,9 @@ import (
 )
 
 const (
-	p2pSeedPlanEndpointPath    = "/api/agent-auth/me/p2p-seed-plan"
-	p2pTelemetryEndpointPath   = "/api/agent-auth/me/p2p-telemetry"
-	p2pDistributionStatusPath  = "/api/agent-auth/me/p2p-distribution-status"
+	p2pSeedPlanEndpointPath    = "/api/v1/agent-auth/me/p2p-seed-plan"
+	p2pTelemetryEndpointPath   = "/api/v1/agent-auth/me/p2p-telemetry"
+	p2pDistributionStatusPath  = "/api/v1/agent-auth/me/p2p-distribution-status"
 	p2pSeedPlanRefreshInterval = 5 * time.Minute
 )
 
@@ -26,7 +26,7 @@ const (
 type cachedP2PSeedPlan = p2pmeta.CachedSeedPlan
 
 // P2PDistributionStatusQueryOptions defines optional filters used by
-// GET /api/agent-auth/me/p2p-distribution-status.
+// GET /api/v1/agent-auth/me/p2p-distribution-status.
 type P2PDistributionStatusQueryOptions struct {
 	ArtifactID string
 	Limit      int
@@ -58,7 +58,7 @@ func (a *App) GetP2PSeedPlanRecommendation(ctx context.Context) (P2PSeedPlanReco
 }
 
 func (a *App) fetchP2PSeedPlanRecommendation(ctx context.Context) (P2PSeedPlanRecommendation, error) {
-	endpoint, token, err := a.p2pAPIAuthEndpoint(p2pSeedPlanEndpointPath)
+	endpoint, token, agentID, err := a.p2pAPIAuthEndpoint(p2pSeedPlanEndpointPath)
 	if err != nil {
 		return P2PSeedPlanRecommendation{}, err
 	}
@@ -67,6 +67,7 @@ func (a *App) fetchP2PSeedPlanRecommendation(ctx context.Context) (P2PSeedPlanRe
 		return P2PSeedPlanRecommendation{}, err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("X-Agent-ID", agentID)
 
 	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
 	if err != nil {
@@ -120,7 +121,7 @@ func (a *App) postP2PTelemetryPayload(ctx context.Context, payload P2PTelemetryP
 	if until, blocked := a.getP2PTelemetryRateLimitUntil(); blocked {
 		return fmt.Errorf("telemetry API temporariamente bloqueada por rate limit ate %s", until.UTC().Format(time.RFC3339))
 	}
-	endpoint, token, err := a.p2pAPIAuthEndpoint(p2pTelemetryEndpointPath)
+	endpoint, token, agentID, err := a.p2pAPIAuthEndpoint(p2pTelemetryEndpointPath)
 	if err != nil {
 		return err
 	}
@@ -133,6 +134,7 @@ func (a *App) postP2PTelemetryPayload(ctx context.Context, payload P2PTelemetryP
 		return err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("X-Agent-ID", agentID)
 	req.Header.Set("Content-Type", "application/json")
 	if k := strings.TrimSpace(idempotencyKey); k != "" {
 		req.Header.Set("Idempotency-Key", k)
@@ -171,7 +173,7 @@ func (a *App) GetP2PDistributionStatusWithOptions(ctx context.Context, opts P2PD
 	if opts.Offset < 0 {
 		return nil, fmt.Errorf("offset invalido: esperado valor >= 0")
 	}
-	endpoint, token, err := a.p2pAPIAuthEndpoint(p2pDistributionStatusPath)
+	endpoint, token, agentID, err := a.p2pAPIAuthEndpoint(p2pDistributionStatusPath)
 	if err != nil {
 		return nil, err
 	}
@@ -184,6 +186,7 @@ func (a *App) GetP2PDistributionStatusWithOptions(ctx context.Context, opts P2PD
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("X-Agent-ID", agentID)
 
 	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
 	if err != nil {
@@ -325,19 +328,23 @@ func (a *App) StartP2PTelemetryLoop(ctx context.Context) {
 	}
 }
 
-func (a *App) p2pAPIAuthEndpoint(path string) (string, string, error) {
+func (a *App) p2pAPIAuthEndpoint(path string) (string, string, string, error) {
 	cfg := a.GetDebugConfig()
 	scheme := strings.TrimSpace(cfg.ApiScheme)
 	server := strings.TrimSpace(cfg.ApiServer)
 	token := strings.TrimSpace(cfg.AuthToken)
+	agentID := strings.TrimSpace(cfg.AgentID)
 	if scheme == "" || server == "" {
-		return "", "", fmt.Errorf("apiScheme/apiServer ausentes")
+		return "", "", "", fmt.Errorf("apiScheme/apiServer ausentes")
 	}
 	if token == "" {
-		return "", "", fmt.Errorf("authToken ausente")
+		return "", "", "", fmt.Errorf("authToken ausente")
+	}
+	if agentID == "" {
+		return "", "", "", fmt.Errorf("agentId ausente")
 	}
 	endpoint := strings.TrimRight(scheme+"://"+server, "/") + path
-	return endpoint, token, nil
+	return endpoint, token, agentID, nil
 }
 
 func (a *App) getCachedSeedPlan() (P2PSeedPlanRecommendation, bool) {

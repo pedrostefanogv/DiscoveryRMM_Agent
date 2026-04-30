@@ -52,7 +52,7 @@ func TestRefreshAgentConfiguration_AppliesRemoteSecurityAndReloads(t *testing.T)
 	}
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/agent-auth/me/configuration" {
+		if r.URL.Path != "/api/v1/agent-auth/me/configuration" {
 			http.NotFound(w, r)
 			return
 		}
