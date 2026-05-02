@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	osquery "github.com/osquery/osquery-go"
@@ -16,6 +17,8 @@ import (
 	"discovery/internal/errutil"
 	"discovery/internal/processutil"
 )
+
+var osquerySocketSeq uint64
 
 const (
 	// socketConnectTimeout is the maximum time to wait when trying to connect
@@ -80,11 +83,12 @@ func findOsquerydSocket() string {
 // osqueryi instance started by this process.
 func buildSocketPath() string {
 	pid := strconv.Itoa(os.Getpid())
+	seq := strconv.FormatUint(atomic.AddUint64(&osquerySocketSeq, 1), 10)
 	switch runtime.GOOS {
 	case "windows":
-		return `\\.\pipe\discovery_osquery_` + pid
+		return `\\.\pipe\discovery_osquery_` + pid + `_` + seq
 	default:
-		return filepath.Join(os.TempDir(), "discovery_osquery_"+pid+".em")
+		return filepath.Join(os.TempDir(), "discovery_osquery_"+pid+"_"+seq+".em")
 	}
 }
 
@@ -123,13 +127,39 @@ func (p *osqueryiSocketProcess) stop() {
 	}
 	p.stopped = true
 	if p.cmd != nil && p.cmd.Process != nil {
-		errutil.LogIfErr(p.cmd.Process.Kill(), "osquery: kill processo")
-		_, waitErr := p.cmd.Process.Wait()
-		errutil.LogIfErr(waitErr, "osquery: wait processo")
+		if runtime.GOOS == "windows" {
+			errutil.LogIfErr(killProcessTreeWindows(p.cmd.Process.Pid), "osquery: kill arvore de processos")
+		} else {
+			errutil.LogIfErr(p.cmd.Process.Kill(), "osquery: kill processo")
+		}
+		errutil.LogIfErr(waitCmdWithTimeout(p.cmd, 2*time.Second), "osquery: wait processo")
 	}
 	if runtime.GOOS != "windows" {
 		errutil.LogIfErr(os.Remove(p.socketPath), "osquery: remover socket")
 	}
+}
+
+func waitCmdWithTimeout(cmd *exec.Cmd, timeout time.Duration) error {
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+	}()
+
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(timeout):
+		return fmt.Errorf("timeout aguardando encerramento do processo osquery")
+	}
+}
+
+func killProcessTreeWindows(pid int) error {
+	cmd := exec.Command("taskkill", "/PID", strconv.Itoa(pid), "/T", "/F")
+	processutil.HideWindow(cmd)
+	cmd.Stdin = nil
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	return cmd.Run()
 }
 
 // startOsqueryiSocket launches osqueryi with --extensions_socket and waits

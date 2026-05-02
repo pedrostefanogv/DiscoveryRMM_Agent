@@ -238,21 +238,12 @@ func (r *Runtime) Run(ctx context.Context) {
 			}
 		}
 
-		// Auto-derivar endpoints NATS a partir de NatsServerHost quando configurado.
-		// NATS nativo: nats://<host>:4222 (porta padrao)
-		// NATS WSS:    wss://<host>/nats/ (via Nginx proxy)
-		if cfg.NatsServerHost != "" {
-			if cfg.NatsServer == "" {
-				derived := "nats://" + cfg.NatsServerHost + ":4222"
-				cfg.NatsServer = derived
-				r.logf("[transport][nats] auto-derivado: %s", cfg.NatsServer)
-			}
-			if cfg.NatsWsServer == "" {
-				if externalWSS, err := buildExternalNATSWSSURL(cfg.NatsServerHost); err == nil {
-					cfg.NatsWsServer = externalWSS
-					r.logf("[transport][nats-wss] auto-derivado: %s", cfg.NatsWsServer)
-				}
-			}
+		derivedNATS, derivedWSS := autoDeriveNATSEndpoints(&cfg)
+		if derivedNATS {
+			r.logf("[transport][nats] auto-derivado: %s", cfg.NatsServer)
+		}
+		if derivedWSS {
+			r.logf("[transport][nats-wss] auto-derivado: %s", cfg.NatsWsServer)
 		}
 
 		if cfg.ApiServer != "" && cfg.ApiScheme != "http" && cfg.ApiScheme != "https" {
@@ -393,10 +384,40 @@ func extractHostFromServer(server string) string {
 	return strings.Trim(strings.TrimSpace(server), "[]")
 }
 
+// autoDeriveNATSEndpoints derives endpoints from NatsServerHost.
+// For remote hosts, prefer WSS only and avoid deriving insecure nats://.
+func autoDeriveNATSEndpoints(cfg *Config) (derivedNATS bool, derivedWSS bool) {
+	if cfg == nil {
+		return false, false
+	}
+	host := strings.TrimSpace(cfg.NatsServerHost)
+	if host == "" {
+		return false, false
+	}
+
+	if cfg.NatsWsServer == "" {
+		if externalWSS, err := buildExternalNATSWSSURL(host); err == nil {
+			cfg.NatsWsServer = externalWSS
+			derivedWSS = true
+		}
+	}
+
+	if cfg.NatsServer != "" {
+		return derivedNATS, derivedWSS
+	}
+	if cfg.NatsUseWssExternal {
+		return derivedNATS, derivedWSS
+	}
+	if !isLocalTarget(host) {
+		return derivedNATS, derivedWSS
+	}
+
+	cfg.NatsServer = "nats://" + host + ":4222"
+	return true, derivedWSS
+}
+
 func (r *Runtime) runSignalRSession(ctx context.Context, cfg Config, connectTimeout time.Duration) error {
-	connectCtx, cancel := context.WithTimeout(ctx, connectTimeout)
-	conn, observedTLSHash, err := r.connectSignalR(connectCtx, cfg, connectTimeout)
-	cancel()
+	conn, observedTLSHash, err := r.connectSignalR(ctx, cfg, connectTimeout)
 	if err != nil {
 		return err
 	}

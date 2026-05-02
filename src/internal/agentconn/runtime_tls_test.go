@@ -59,3 +59,54 @@ func TestBuildExternalNATSWSSURL(t *testing.T) {
 		t.Fatalf("buildExternalNATSWSSURL = %q", got)
 	}
 }
+
+func TestAutoDeriveNATSEndpoints_RemoteHostPrefersWSS(t *testing.T) {
+	cfg := &Config{NatsServerHost: "tngplacas.com.br"}
+	derivedNATS, derivedWSS := autoDeriveNATSEndpoints(cfg)
+
+	if derivedNATS {
+		t.Fatal("nao deveria derivar nats:// para host remoto")
+	}
+	if !derivedWSS {
+		t.Fatal("deveria derivar endpoint wss para host remoto")
+	}
+	if cfg.NatsServer != "" {
+		t.Fatalf("NatsServer = %q, esperado vazio", cfg.NatsServer)
+	}
+	if cfg.NatsWsServer != "wss://tngplacas.com.br/nats/" {
+		t.Fatalf("NatsWsServer = %q", cfg.NatsWsServer)
+	}
+}
+
+func TestAutoDeriveNATSEndpoints_LocalHostDerivesNATSAndWSS(t *testing.T) {
+	cfg := &Config{NatsServerHost: "192.168.1.10"}
+	derivedNATS, derivedWSS := autoDeriveNATSEndpoints(cfg)
+
+	if !derivedNATS {
+		t.Fatal("deveria derivar nats:// para host local")
+	}
+	if !derivedWSS {
+		t.Fatal("deveria derivar wss:// para host local")
+	}
+	if cfg.NatsServer != "nats://192.168.1.10:4222" {
+		t.Fatalf("NatsServer = %q", cfg.NatsServer)
+	}
+	if cfg.NatsWsServer != "wss://192.168.1.10/nats/" {
+		t.Fatalf("NatsWsServer = %q", cfg.NatsWsServer)
+	}
+}
+
+func TestAutoDeriveNATSEndpoints_WSSExternalSkipsNATS(t *testing.T) {
+	cfg := &Config{NatsServerHost: "nats.example.com", NatsUseWssExternal: true}
+	derivedNATS, derivedWSS := autoDeriveNATSEndpoints(cfg)
+
+	if derivedNATS {
+		t.Fatal("nao deveria derivar nats:// quando NatsUseWssExternal=true")
+	}
+	if !derivedWSS {
+		t.Fatal("deveria derivar endpoint wss quando host estiver presente")
+	}
+	if cfg.NatsServer != "" {
+		t.Fatalf("NatsServer = %q, esperado vazio", cfg.NatsServer)
+	}
+}
