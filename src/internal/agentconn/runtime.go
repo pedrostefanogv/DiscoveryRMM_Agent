@@ -446,6 +446,10 @@ func (r *Runtime) runSignalRSession(ctx context.Context, cfg Config, connectTime
 		r.logf("[security][signalr] falha de handshake seguro: %v", err)
 		return err
 	}
+	// Defesa adicional: garante que nenhum deadline residual encerre a sessao ativa.
+	if err := conn.SetReadDeadline(time.Time{}); err != nil {
+		r.logf("[transport][signalr] aviso: falha ao limpar read deadline apos handshake: %v", err)
+	}
 
 	ipAddr := detectLocalIP()
 	if err := r.invoke(conn, "RegisterAgent", cfg.AgentID, ipAddr); err != nil {
@@ -469,6 +473,9 @@ func (r *Runtime) runSignalRSession(ctx context.Context, cfg Config, connectTime
 	go func() {
 		for {
 			_, msg, err := conn.ReadMessage()
+			if ne, ok := err.(net.Error); ok && ne.Timeout() {
+				r.logf("[transport][signalr] timeout de leitura websocket; reconectando")
+			}
 			select {
 			case msgCh <- wsMsg{msg, err}:
 			case <-readerDone:
