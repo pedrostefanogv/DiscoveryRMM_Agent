@@ -286,37 +286,63 @@ func (r *Runtime) Run(ctx context.Context) {
 }
 
 func (r *Runtime) runSession(ctx context.Context, cfg Config) error {
-	// Ordem de fallback: NATS nativo (mais rapido) -> NATS WSS -> SignalR.
+	// Ordem de fallback:
+	//   1. NATS nativo (natsServerHost → apiServer fallback)
+	//   2. NATS WSS    (natsServerHost → apiServer fallback)
+	//   3. SignalR     (ultimo recurso)
 	var attempts []func() error
 	var labels []string
 
-	// NATS nativo: so tenta se tiver clientId/siteId canônicos.
-	if cfg.NatsServer != "" {
-		if natsCtxErr := validateCanonicalNATSContext(cfg); natsCtxErr != nil {
-			r.logf("[transport][nats] pulando tentativa NATS nativo: %v", natsCtxErr)
-		} else {
+	// Extrai host da API para usar como fallback nos endpoints NATS.
+	apiHost := extractHostFromServer(cfg.ApiServer)
+	canonical := validateCanonicalNATSContext(cfg) == nil
+
+	// ── NATS nativo ──
+	if canonical {
+		if cfg.NatsServer != "" {
 			labels = append(labels, "nats")
 			server := cfg.NatsServer
 			attempts = append(attempts, func() error {
 				return r.runNATSSession(ctx, cfg, server, "nats", connectAttemptTimeout)
 			})
 		}
+		// Fallback: usa host da API + porta 4222
+		if apiHost != "" && (cfg.NatsServer == "" || cfg.NatsServerHost == "" || cfg.NatsServerHost != apiHost) {
+			fallbackNats := "nats://" + apiHost + ":4222"
+			if fallbackNats != cfg.NatsServer {
+				labels = append(labels, "nats (api-fallback)")
+				server := fallbackNats
+				attempts = append(attempts, func() error {
+					return r.runNATSSession(ctx, cfg, server, "nats", connectAttemptTimeout)
+				})
+				r.logf("[transport][nats] fallback via apiServer: %s", fallbackNats)
+			}
+		}
 	}
 
-	// NATS WSS: so tenta se tiver clientId/siteId canônicos.
-	if cfg.NatsWsServer != "" {
-		if natsCtxErr := validateCanonicalNATSContext(cfg); natsCtxErr != nil {
-			r.logf("[transport][nats-wss] pulando tentativa NATS WSS: %v", natsCtxErr)
-		} else {
+	// ── NATS WSS ──
+	if canonical {
+		if cfg.NatsWsServer != "" {
 			labels = append(labels, "nats-wss")
 			server := cfg.NatsWsServer
 			attempts = append(attempts, func() error {
 				return r.runNATSSession(ctx, cfg, server, "nats-wss", connectAttemptTimeout)
 			})
 		}
+		// Fallback: usa host da API + path /nats/
+		if apiHost != "" {
+			if fallbackWSS, err := buildExternalNATSWSSURL(apiHost); err == nil && fallbackWSS != cfg.NatsWsServer {
+				labels = append(labels, "nats-wss (api-fallback)")
+				server := fallbackWSS
+				attempts = append(attempts, func() error {
+					return r.runNATSSession(ctx, cfg, server, "nats-wss", connectAttemptTimeout)
+				})
+				r.logf("[transport][nats-wss] fallback via apiServer: %s", fallbackWSS)
+			}
+		}
 	}
 
-	// SignalR: sempre tenta, usa token Bearer via query param access_token.
+	// ── SignalR ──
 	if cfg.ApiServer != "" && (cfg.ApiScheme == "http" || cfg.ApiScheme == "https") {
 		labels = append(labels, "signalr")
 		attempts = append(attempts, func() error {
@@ -344,6 +370,27 @@ func (r *Runtime) runSession(ctx context.Context, cfg Config) error {
 		r.logf("[transport][fallback] %s falhou: %v", labels[i], err)
 	}
 	return lastErr
+}
+
+// extractHostFromServer extrai apenas o host (sem porta) de um endereco de servidor.
+// Ex: "192.168.1.142" → "192.168.1.142"
+// Ex: "192-168-1-142.nip.io:443" → "192-168-1-142.nip.io"
+func extractHostFromServer(server string) string {
+	server = strings.TrimSpace(server)
+	if server == "" {
+		return ""
+	}
+	// Remove scheme se presente
+	if strings.Contains(server, "://") {
+		if u, err := url.Parse(server); err == nil {
+			server = strings.TrimSpace(u.Host)
+		}
+	}
+	// Remove porta se presente
+	if h, _, err := net.SplitHostPort(server); err == nil {
+		return strings.TrimSpace(h)
+	}
+	return strings.Trim(strings.TrimSpace(server), "[]")
 }
 
 func (r *Runtime) runSignalRSession(ctx context.Context, cfg Config, connectTimeout time.Duration) error {

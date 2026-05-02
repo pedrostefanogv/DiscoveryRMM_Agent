@@ -93,6 +93,7 @@
 html {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  overflow: hidden;
 }
 
 body {
@@ -149,6 +150,7 @@ a:hover { text-decoration: underline; }
   display: flex; align-items: center; justify-content: center;
   position: relative; z-index: 1;
   -webkit-app-region: drag;
+  user-select: none;
 }
 
 .window-chrome-meta {
@@ -157,6 +159,8 @@ a:hover { text-decoration: underline; }
   color: var(--muted);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   max-width: min(900px, calc(100vw - 240px));
+  -webkit-app-region: no-drag;
+  user-select: none;
 }
 
 .window-chrome-meta span {
@@ -172,6 +176,7 @@ a:hover { text-decoration: underline; }
 .window-chrome-actions {
   display: flex; align-items: center; gap: 2px;
   position: relative; z-index: 1;
+  -webkit-app-region: no-drag;
 }
 
 .window-chrome-btn {
@@ -181,6 +186,7 @@ a:hover { text-decoration: underline; }
   cursor: pointer; font-size: 0.8rem; line-height: 1;
   display: inline-flex; align-items: center; justify-content: center;
   transition: background var(--transition), color var(--transition);
+  -webkit-app-region: no-drag;
 }
 .window-chrome-btn:hover { background: rgba(0,0,0,.07); color: var(--text); }
 .window-chrome-btn.close:hover { background: var(--danger); color: #fff; }
