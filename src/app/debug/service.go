@@ -311,7 +311,7 @@ func (s *Service) testAgentAPIConnectivity(ctx context.Context, apiScheme, apiSe
 		return fmt.Errorf("apiScheme/apiServer ausente")
 	}
 
-	target := apiScheme + "://" + apiServer + "/api/v1/agent-auth/me"
+	target := apiScheme + "://" + apiServer + "/api/v1/agent-auth/me/configuration"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return fmt.Errorf("falha ao criar requisicao: %w", err)
@@ -530,7 +530,7 @@ func (s *Service) TestConnection(cfg Config) (string, error) {
 
 	if cfg.ApiServer != "" {
 		s.logf(fmt.Sprintf("[debug-test] testando API: %s://%s", cfg.ApiScheme, cfg.ApiServer))
-		target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/v1/agent-auth/me"
+		target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/configuration"
 		client := tlsutil.NewHTTPClient(10 * time.Second)
 		req, err := http.NewRequest(http.MethodGet, target, nil)
 		if err != nil {

@@ -115,7 +115,8 @@ func (l *logBuffer) exportFormatted(filterOrigin string) string {
 		if filterOrigin != "" && !strings.Contains(strings.ToLower(line), strings.ToLower(filterOrigin)) {
 			continue
 		}
-		buf.WriteString(line + "\n")
+		buf.WriteString(line)
+		buf.WriteByte('\n')
 	}
 	return buf.String()
 }

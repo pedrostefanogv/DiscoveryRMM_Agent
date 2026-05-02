@@ -127,7 +127,7 @@ func buildExternalNATSWSSURL(host string) (string, error) {
 	if host == "" {
 		return "", fmt.Errorf("natsServerHost invalido")
 	}
-	return "wss://" + host, nil
+	return "wss://" + host + "/nats/", nil
 }
 
 func observeTLSPeerCertHash(ctx context.Context, apiServer string, timeout time.Duration) (string, error) {

@@ -208,10 +208,8 @@ func (r *Runtime) Run(ctx context.Context) {
 		cfg.AgentID = strings.TrimSpace(cfg.AgentID)
 		cfg.ClientID = strings.TrimSpace(cfg.ClientID)
 		cfg.SiteID = strings.TrimSpace(cfg.SiteID)
-		if !cfg.HandshakeEnabled {
-			// Mantemos o secure handshake habilitado por padrao para evitar downgrade.
-			cfg.HandshakeEnabled = true
-		}
+		// Respeita handshakeEnabled vindo do servidor (antes era forcado true).
+		// O secure handshake so e executado se o backend enviar HandshakeChallenge.
 
 		if cfg.NatsUseWssExternal {
 			if cfg.NatsServerHost == "" {
@@ -237,6 +235,23 @@ func (r *Runtime) Run(ctx context.Context) {
 			} else if overridden != "" && overridden != cfg.NatsWsServer {
 				r.logf("[security][nats-wss] host override aplicado para wss://")
 				cfg.NatsWsServer = overridden
+			}
+		}
+
+		// Auto-derivar endpoints NATS a partir de NatsServerHost quando configurado.
+		// NATS nativo: nats://<host>:4222 (porta padrao)
+		// NATS WSS:    wss://<host>/nats/ (via Nginx proxy)
+		if cfg.NatsServerHost != "" {
+			if cfg.NatsServer == "" {
+				derived := "nats://" + cfg.NatsServerHost + ":4222"
+				cfg.NatsServer = derived
+				r.logf("[transport][nats] auto-derivado: %s", cfg.NatsServer)
+			}
+			if cfg.NatsWsServer == "" {
+				if externalWSS, err := buildExternalNATSWSSURL(cfg.NatsServerHost); err == nil {
+					cfg.NatsWsServer = externalWSS
+					r.logf("[transport][nats-wss] auto-derivado: %s", cfg.NatsWsServer)
+				}
 			}
 		}
 
@@ -271,13 +286,14 @@ func (r *Runtime) Run(ctx context.Context) {
 }
 
 func (r *Runtime) runSession(ctx context.Context, cfg Config) error {
+	// Ordem de fallback: NATS nativo (mais rapido) -> NATS WSS -> SignalR.
 	var attempts []func() error
 	var labels []string
-	natsContextErr := validateCanonicalNATSContext(cfg)
 
+	// NATS nativo: so tenta se tiver clientId/siteId canônicos.
 	if cfg.NatsServer != "" {
-		if natsContextErr != nil {
-			r.logf("[transport][nats] pulando tentativa NATS canônica: %v", natsContextErr)
+		if natsCtxErr := validateCanonicalNATSContext(cfg); natsCtxErr != nil {
+			r.logf("[transport][nats] pulando tentativa NATS nativo: %v", natsCtxErr)
 		} else {
 			labels = append(labels, "nats")
 			server := cfg.NatsServer
@@ -287,9 +303,10 @@ func (r *Runtime) runSession(ctx context.Context, cfg Config) error {
 		}
 	}
 
+	// NATS WSS: so tenta se tiver clientId/siteId canônicos.
 	if cfg.NatsWsServer != "" {
-		if natsContextErr != nil {
-			r.logf("[transport][nats-wss] pulando tentativa NATS canônica: %v", natsContextErr)
+		if natsCtxErr := validateCanonicalNATSContext(cfg); natsCtxErr != nil {
+			r.logf("[transport][nats-wss] pulando tentativa NATS WSS: %v", natsCtxErr)
 		} else {
 			labels = append(labels, "nats-wss")
 			server := cfg.NatsWsServer
@@ -299,6 +316,7 @@ func (r *Runtime) runSession(ctx context.Context, cfg Config) error {
 		}
 	}
 
+	// SignalR: sempre tenta, usa token Bearer via query param access_token.
 	if cfg.ApiServer != "" && (cfg.ApiScheme == "http" || cfg.ApiScheme == "https") {
 		labels = append(labels, "signalr")
 		attempts = append(attempts, func() error {

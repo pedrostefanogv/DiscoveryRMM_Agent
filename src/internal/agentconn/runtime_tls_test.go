@@ -55,7 +55,7 @@ func TestBuildExternalNATSWSSURL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildExternalNATSWSSURL retornou erro: %v", err)
 	}
-	if got != "wss://broker.external.local:443" {
+	if got != "wss://broker.external.local:443/nats/" {
 		t.Fatalf("buildExternalNATSWSSURL = %q", got)
 	}
 }

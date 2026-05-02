@@ -214,7 +214,7 @@ func toBool(values ...any) bool {
 func extractAgentInfoFromJSON(body []byte, cfg debug.Config) (AgentInfo, error) {
 	var raw map[string]any
 	if err := json.Unmarshal(body, &raw); err != nil {
-		return AgentInfo{}, fmt.Errorf("resposta inválida de /api/v1/agent-auth/me: %w", err)
+		return AgentInfo{}, fmt.Errorf("resposta inválida de /api/v1/agent-auth/me/configuration: %w", err)
 	}
 
 	asMap := func(v any) map[string]any {
@@ -322,7 +322,7 @@ func (s *Service) fetchAgentContext() (AgentInfo, error) {
 	}
 
 	ctx := s.ctxOrBackground()
-	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/v1/agent-auth/me"
+	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/configuration"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		wrapped := fmt.Errorf("URL inválida: %w", err)
@@ -342,17 +342,17 @@ func (s *Service) fetchAgentContext() (AgentInfo, error) {
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		wrapped := fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(body)))
-		s.supportLogf("/api/v1/agent-auth/me retornou erro: %v", wrapped)
+		s.supportLogf("/api/v1/agent-auth/me/configuration retornou erro: %v", wrapped)
 		return AgentInfo{}, wrapped
 	}
 
 	info, err := extractAgentInfoFromJSON(body, cfg)
 	if err != nil {
-		s.supportLogf("falha ao decodificar /api/v1/agent-auth/me: %v", err)
+		s.supportLogf("falha ao decodificar /api/v1/agent-auth/me/configuration: %v", err)
 		return AgentInfo{}, err
 	}
 	if info.ClientID == "" {
-		err := fmt.Errorf("clientId não retornado por /api/v1/agent-auth/me: verifique token/escopo do agente")
+		err := fmt.Errorf("clientId não retornado por /api/v1/agent-auth/me/configuration: verifique token/escopo do agente")
 		s.supportLogf("%v | resposta=%s", err, shortBodyForLog(body))
 		return AgentInfo{}, err
 	}

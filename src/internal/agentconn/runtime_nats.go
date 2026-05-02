@@ -1,9 +1,12 @@
 package agentconn
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -12,6 +15,57 @@ import (
 
 	"discovery/internal/tlsutil"
 )
+
+// NATSCredentials representa a resposta de POST /api/v1/agent-auth/me/nats-credentials.
+type NATSCredentials struct {
+	NKey string `json:"nkey"`
+	JWT  string `json:"jwt"`
+}
+
+// fetchNATSCredentials obtém credenciais NATS (JWT/NKey) do servidor.
+// Usa o token Bearer padrão para autenticar no endpoint REST.
+func (r *Runtime) fetchNATSCredentials(ctx context.Context, cfg Config) (*NATSCredentials, error) {
+	apiScheme := strings.TrimSpace(strings.ToLower(cfg.ApiScheme))
+	apiServer := strings.TrimSpace(cfg.ApiServer)
+	token := strings.TrimSpace(cfg.AuthToken)
+	if apiServer == "" || token == "" {
+		return nil, fmt.Errorf("configuracao API incompleta para nats-credentials")
+	}
+	if apiScheme != "http" && apiScheme != "https" {
+		return nil, fmt.Errorf("apiScheme invalido para nats-credentials")
+	}
+
+	endpoint := apiScheme + "://" + apiServer + "/api/v1/agent-auth/me/nats-credentials"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader([]byte("{}")))
+	if err != nil {
+		return nil, fmt.Errorf("falha ao montar request nats-credentials: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	if agentID := strings.TrimSpace(cfg.AgentID); agentID != "" {
+		req.Header.Set("X-Agent-ID", agentID)
+	}
+
+	resp, err := tlsutil.NewHTTPClient(10 * time.Second).Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("falha ao chamar nats-credentials: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("nats-credentials retornou HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var creds NATSCredentials
+	if err := json.Unmarshal(body, &creds); err != nil {
+		return nil, fmt.Errorf("resposta invalida de nats-credentials: %w", err)
+	}
+	if strings.TrimSpace(creds.NKey) == "" && strings.TrimSpace(creds.JWT) == "" {
+		return nil, fmt.Errorf("nats-credentials retornou credenciais vazias")
+	}
+	return &creds, nil
+}
 
 // ─── NATS Session ──────────────────────────────────────────────────
 
@@ -69,7 +123,33 @@ func (r *Runtime) runNATSSession(ctx context.Context, cfg Config, server, transp
 
 	nc, err := nats.Connect(natsURL, opts...)
 	if err != nil {
-		return fmt.Errorf("falha ao conectar NATS: %w", err)
+		// Se falhou com token raw, tenta credenciais JWT/NKey via nats-credentials.
+		creds, credsErr := r.fetchNATSCredentials(ctx, cfg)
+		if credsErr != nil {
+			r.logf("[transport][%s] nats-credentials indisponivel: %v", transportLabel, credsErr)
+			return fmt.Errorf("falha ao conectar NATS: %w", err)
+		}
+
+		// Reconecta com credenciais JWT/NKey.
+		optsWithCreds := make([]nats.Option, 0, len(opts)+1)
+		for _, o := range opts {
+			optsWithCreds = append(optsWithCreds, o)
+		}
+		if creds.NKey != "" && creds.JWT != "" {
+			optsWithCreds = append(optsWithCreds, nats.UserJWT(func() (string, error) {
+				return creds.JWT, nil
+			}, func(nonce []byte) ([]byte, error) {
+				return []byte(creds.NKey), nil
+			}))
+			r.logf("[transport][%s] autenticando com credenciais JWT/NKey do servidor", transportLabel)
+		} else if creds.JWT != "" {
+			optsWithCreds = append(optsWithCreds, nats.Token(creds.JWT))
+		}
+
+		nc, err = nats.Connect(natsURL, optsWithCreds...)
+		if err != nil {
+			return fmt.Errorf("falha ao conectar NATS (com credenciais): %w", err)
+		}
 	}
 	defer nc.Close()
 
