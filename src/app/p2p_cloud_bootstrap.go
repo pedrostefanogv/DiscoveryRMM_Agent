@@ -44,10 +44,12 @@ type p2pCloudBootstrapResponse struct {
 //  1. Carrega peers cacheados e tenta conectar imediatamente
 //  2. Registra o próprio peer no servidor e obtém até 3 peers remotos
 //  3. Tenta conectar nos peers retornados, atualiza o cache (sucesso=upsert, falha=remove)
-func (c *p2pCoordinator) runCloudBootstrap(ctx context.Context) {
+//
+// Retorna a quantidade de peers retornada pela API.
+func (c *p2pCoordinator) runCloudBootstrap(ctx context.Context) (int, error) {
 	cfg := c.app.GetP2PConfig()
 	if !cfg.BootstrapConfig.CloudBootstrapEnabled {
-		return
+		return 0, fmt.Errorf("cloud bootstrap P2P desabilitado")
 	}
 
 	debugCfg := c.app.GetDebugConfig()
@@ -57,14 +59,16 @@ func (c *p2pCoordinator) runCloudBootstrap(ctx context.Context) {
 	apiServer := strings.TrimSpace(debugCfg.ApiServer)
 
 	if agentID == "" || authToken == "" || apiScheme == "" || apiServer == "" {
-		c.app.logs.append("[p2p][cloud-bootstrap] configuracao incompleta: agentId, authToken, apiScheme ou apiServer ausentes")
-		return
+		err := fmt.Errorf("configuracao incompleta: agentId, authToken, apiScheme ou apiServer ausentes")
+		c.app.logs.append("[p2p][cloud-bootstrap] " + err.Error())
+		return 0, err
 	}
 
 	h, _ := c.libp2pHostAndRegistry()
 	if h == nil {
-		c.app.logs.append("[p2p][cloud-bootstrap] host libp2p nao disponivel")
-		return
+		err := fmt.Errorf("host libp2p nao disponivel")
+		c.app.logs.append("[p2p][cloud-bootstrap] " + err.Error())
+		return 0, err
 	}
 
 	// Carregar cache local e tentar conexões imediatas (antes de chamar a API).
@@ -93,10 +97,11 @@ func (c *p2pCoordinator) runCloudBootstrap(ctx context.Context) {
 		c.app.logs.append("[p2p][cloud-bootstrap] erro ao chamar API: " + err.Error())
 		// Mesmo com falha na API, persistir o estado atual do cache (conexões locais já limpas).
 		_ = saveP2PPeerCache(cachedPeers)
-		return
+		return 0, err
 	}
 
 	c.app.logs.append(fmt.Sprintf("[p2p][cloud-bootstrap] API retornou %d peer(s)", len(resp.Peers)))
+	peerCount := len(resp.Peers)
 
 	// Conectar nos peers retornados pela API e atualizar cache.
 	for _, rp := range resp.Peers {
@@ -132,7 +137,9 @@ func (c *p2pCoordinator) runCloudBootstrap(ctx context.Context) {
 
 	if err := saveP2PPeerCache(cachedPeers); err != nil {
 		c.app.logs.append("[p2p][cloud-bootstrap] erro ao salvar cache: " + err.Error())
+		return peerCount, err
 	}
+	return peerCount, nil
 }
 
 // connectCachedPeers tenta conectar nos peers do cache local.

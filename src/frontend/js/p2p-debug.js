@@ -9,6 +9,7 @@
   }
 
   var refreshBtn = document.getElementById("refreshBtn");
+  var bootstrapSyncBtn = document.getElementById("bootstrapSyncBtn");
   var cleanupBtn = document.getElementById("cleanupBtn");
   var saveConfigBtn = document.getElementById("saveConfigBtn");
   var statusGrid = document.getElementById("statusGrid");
@@ -74,6 +75,11 @@
     statusGrid.innerHTML = rows.map(function (entry) {
       return '<div class="kv"><span class="k">' + escapeHtml(entry[0]) + '</span><span class="v mono">' + escapeHtml(entry[1]) + '</span></div>';
     }).join("");
+
+	if (bootstrapSyncBtn) {
+	  bootstrapSyncBtn.disabled = !status.active;
+	  bootstrapSyncBtn.title = status.active ? "" : "P2P local inativo nesta execução";
+	}
   }
 
   function renderServiceHealth(health) {
@@ -254,6 +260,21 @@
       refreshAll();
       setStatus("Status atualizado.", "ok");
     });
+  }
+
+  if (bootstrapSyncBtn) {
+	bootstrapSyncBtn.addEventListener("click", function () {
+	  bootstrapSyncBtn.disabled = true;
+	  setStatus("Sincronizando bootstrap P2P...", "");
+	  appApi().SyncP2PBootstrapNow().then(function (msg) {
+		setStatus(msg || "Sincronizacao de bootstrap P2P concluida.", "ok");
+		refreshAll();
+	  }).catch(function (err) {
+		setStatus("Falha ao sincronizar bootstrap P2P: " + (err && err.message ? err.message : String(err)), "error");
+	  }).finally(function () {
+		bootstrapSyncBtn.disabled = false;
+	  });
+	});
   }
 
   if (cleanupBtn) {

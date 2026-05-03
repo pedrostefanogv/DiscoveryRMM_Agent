@@ -145,6 +145,29 @@ func TestAgentStatusFromServiceStatusData(t *testing.T) {
 	}
 }
 
+func TestShouldRunLocalP2P_NoServiceConnected(t *testing.T) {
+	a := &App{}
+	if !a.shouldRunLocalP2P() {
+		t.Fatal("expected local P2P to run when service is not connected")
+	}
+}
+
+func TestShouldRunLocalP2P_ServiceConnectedNormalModeSkips(t *testing.T) {
+	a := &App{}
+	a.serviceConnectedMode.Store(true)
+	if a.shouldRunLocalP2P() {
+		t.Fatal("expected local P2P to be skipped when service is connected in normal mode")
+	}
+}
+
+func TestShouldRunLocalP2P_ServiceConnectedDebugModeRuns(t *testing.T) {
+	a := &App{runtimeFlags: RuntimeFlags{DebugMode: true}}
+	a.serviceConnectedMode.Store(true)
+	if !a.shouldRunLocalP2P() {
+		t.Fatal("expected local P2P to run in debug mode even when service is connected")
+	}
+}
+
 func TestApplyRealtimeFallbackFromAgentStatus_UsesLocalConnectionOnUnauthorized(t *testing.T) {
 	out := StatusOverview{}
 	applyRealtimeFallbackFromAgentStatus(&out, AgentStatus{

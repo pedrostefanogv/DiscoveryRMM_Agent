@@ -414,6 +414,16 @@ func (a *App) featureEnabled(flag *bool) bool {
 	return *flag
 }
 
+func (a *App) shouldRunLocalP2P() bool {
+	if a == nil {
+		return false
+	}
+	if a.serviceConnectedMode.Load() && !a.runtimeFlags.DebugMode {
+		return false
+	}
+	return true
+}
+
 func (a *App) startup(ctx context.Context) {
 	ctx, cancel := context.WithCancel(ctx)
 	a.ctx = ctx
@@ -567,6 +577,13 @@ func (a *App) startup(ctx context.Context) {
 		defer a.startupWg.Done()
 		if a.p2pCoord == nil {
 			return
+		}
+		if !a.shouldRunLocalP2P() {
+			log.Println("[startup] p2p local: ignorado (service disponível)")
+			return
+		}
+		if a.serviceConnectedMode.Load() && a.runtimeFlags.DebugMode {
+			log.Println("[startup] p2p local: iniciado em modo debug mesmo com service disponível")
 		}
 		a.p2pCoord.Run(ctx)
 	})

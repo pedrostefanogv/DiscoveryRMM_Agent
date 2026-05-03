@@ -117,10 +117,6 @@ func (c *p2pCoordinator) Run(ctx context.Context) {
 	if c.app == nil {
 		return
 	}
-	if !c.app.runtimeFlags.DebugMode {
-		c.app.logs.append("[p2p] coordinator inativo: modo debug desabilitado")
-		return
-	}
 
 	cfg := c.app.GetP2PConfig()
 	if !cfg.Enabled {
@@ -128,7 +124,7 @@ func (c *p2pCoordinator) Run(ctx context.Context) {
 		return
 	}
 
-	c.app.logs.append("[p2p] coordinator iniciado em modo debug")
+	c.app.logs.append("[p2p] coordinator iniciado")
 	_ = c.touchP2PTempDir()
 	if err := c.startTransferServer(ctx); err != nil {
 		c.setLastError(err)
@@ -154,7 +150,9 @@ func (c *p2pCoordinator) Run(ctx context.Context) {
 
 	// Disparar cloud bootstrap imediatamente no startup (carrega cache + chama API).
 	if cfg.BootstrapConfig.CloudBootstrapEnabled {
-		go c.runCloudBootstrap(ctx)
+		go func() {
+			_, _ = c.runCloudBootstrap(ctx)
+		}()
 	}
 
 	for {
@@ -172,7 +170,9 @@ func (c *p2pCoordinator) Run(ctx context.Context) {
 			}
 		case <-cloudBootstrapTicker.C:
 			if c.app.GetP2PConfig().BootstrapConfig.CloudBootstrapEnabled {
-				go c.runCloudBootstrap(ctx)
+				go func() {
+					_, _ = c.runCloudBootstrap(ctx)
+				}()
 			}
 		}
 	}

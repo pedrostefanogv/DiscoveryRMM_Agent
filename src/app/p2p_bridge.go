@@ -63,6 +63,23 @@ func (a *App) RefreshP2PPeerCatalog() {
 	a.p2pCoord.RefreshPeerArtifactIndex(context.Background(), "manual")
 }
 
+func (a *App) SyncP2PBootstrapNow() (string, error) {
+	if a.p2pCoord == nil {
+		return "", fmt.Errorf("coordinator P2P indisponivel")
+	}
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	bootstrapCtx, cancel := context.WithTimeout(ctx, p2pCloudBootstrapTimeout+5*time.Second)
+	defer cancel()
+	peerCount, err := a.p2pCoord.runCloudBootstrap(bootstrapCtx)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("sincronizacao de bootstrap P2P concluida: %d peer(s) retornado(s)", peerCount), nil
+}
+
 func (a *App) GetP2PPeerArtifactIndex() []P2PPeerArtifactIndexView {
 	if a.p2pCoord == nil {
 		return []P2PPeerArtifactIndexView{}
