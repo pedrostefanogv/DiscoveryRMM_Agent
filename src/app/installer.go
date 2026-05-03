@@ -3,6 +3,7 @@ package app
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,6 +25,7 @@ func loadInstallerConfigFromCandidates(paths []string) (InstallerConfig, string,
 	for _, path := range paths {
 		data, err := os.ReadFile(path)
 		if err != nil {
+			log.Printf("[config] aviso: nao foi possivel ler config candidate %s: %v", path, err)
 			continue
 		}
 

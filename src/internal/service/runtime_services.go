@@ -431,12 +431,19 @@ func sharedConfigToAgentConnConfig(loadConfig func() *SharedConfig) agentconn.Co
 	}
 
 	return agentconn.Config{
-		ApiScheme: apiScheme,
-		ApiServer: apiServer,
-		AuthToken: strings.TrimSpace(cfg.AuthToken),
-		AgentID:   strings.TrimSpace(cfg.AgentID),
-		ClientID:  strings.TrimSpace(cfg.ClientID),
-		SiteID:    strings.TrimSpace(cfg.SiteID),
+		ApiScheme:                apiScheme,
+		ApiServer:                apiServer,
+		AuthToken:                strings.TrimSpace(cfg.AuthToken),
+		AgentID:                  strings.TrimSpace(cfg.AgentID),
+		ClientID:                 strings.TrimSpace(cfg.ClientID),
+		SiteID:                   strings.TrimSpace(cfg.SiteID),
+		NatsServerHost:           strings.TrimSpace(cfg.NatsServerHost),
+		NatsUseWssExternal:       cfg.NatsUseWssExternal,
+		EnforceTLSHashValidation: cfg.EnforceTlsHashValidation,
+		HandshakeEnabled:         cfg.HandshakeEnabled,
+		ApiTLSCertHash:           strings.TrimSpace(cfg.ApiTlsCertHash),
+		NatsTLSCertHash:          strings.TrimSpace(cfg.NatsTlsCertHash),
+		HeartbeatInterval:        cfg.HeartbeatIntervalSeconds,
 	}
 }
 

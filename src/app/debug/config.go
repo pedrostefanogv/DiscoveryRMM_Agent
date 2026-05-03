@@ -65,6 +65,7 @@ type InstallerConfig struct {
 }
 
 func (c *InstallerConfig) UnmarshalJSON(data []byte) error {
+	// Schema canônico (camelCase) — usado pelo instalador NSIS.
 	type rawInstallerConfig struct {
 		ServerURL            string             `json:"serverUrl"`
 		DeployToken          string             `json:"deployToken,omitempty"`
@@ -85,9 +86,58 @@ func (c *InstallerConfig) UnmarshalJSON(data []byte) error {
 		MeshCentralInstalled bool               `json:"meshCentralInstalled,omitempty"`
 	}
 
+	// Schema alternativo (snake_case) — usado pelo ServiceManager (SharedConfig)
+	// quando persiste o config.json em C:\ProgramData\Discovery\config.json.
+	type snakeCaseInstallerConfig struct {
+		ServerURL            string             `json:"server_url"`
+		DeployToken          string             `json:"deploy_token,omitempty"`
+		APIKey               string             `json:"api_key"`
+		AutoProvisioning     json.RawMessage    `json:"auto_provisioning,omitempty"`
+		ApiScheme            string             `json:"api_scheme,omitempty"`
+		ApiServer            string             `json:"api_server,omitempty"`
+		AuthToken            string             `json:"auth_token,omitempty"`
+		AgentID              string             `json:"agent_id,omitempty"`
+		ClientID             string             `json:"client_id,omitempty"`
+		SiteID               string             `json:"site_id,omitempty"`
+		NatsServer           string             `json:"nats_server,omitempty"`
+		NatsWsServer         string             `json:"nats_ws_server,omitempty"`
+		AllowInsecureTLS     json.RawMessage    `json:"allow_insecure_tls,omitempty"`
+		AgentUpdate          *selfupdate.Policy `json:"agent_update,omitempty"`
+		P2P                  p2pmeta.Config     `json:"p2p,omitempty"`
+		MeshCentralInstalled bool               `json:"mesh_central_installed,omitempty"`
+	}
+
 	var raw rawInstallerConfig
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
+	}
+
+	// Se o parse camelCase não preencheu campos críticos, tenta snake_case.
+	if strings.TrimSpace(raw.ServerURL) == "" && strings.TrimSpace(raw.AuthToken) == "" && strings.TrimSpace(raw.AgentID) == "" {
+		var snake snakeCaseInstallerConfig
+		if err := json.Unmarshal(data, &snake); err == nil {
+			raw.ServerURL = coalesceStr(raw.ServerURL, snake.ServerURL)
+			raw.DeployToken = coalesceStr(raw.DeployToken, snake.DeployToken)
+			raw.APIKey = coalesceStr(raw.APIKey, snake.APIKey)
+			raw.ApiScheme = coalesceStr(raw.ApiScheme, snake.ApiScheme)
+			raw.ApiServer = coalesceStr(raw.ApiServer, snake.ApiServer)
+			raw.AuthToken = coalesceStr(raw.AuthToken, snake.AuthToken)
+			raw.AgentID = coalesceStr(raw.AgentID, snake.AgentID)
+			raw.ClientID = coalesceStr(raw.ClientID, snake.ClientID)
+			raw.SiteID = coalesceStr(raw.SiteID, snake.SiteID)
+			raw.NatsServer = coalesceStr(raw.NatsServer, snake.NatsServer)
+			raw.NatsWsServer = coalesceStr(raw.NatsWsServer, snake.NatsWsServer)
+			raw.MeshCentralInstalled = snake.MeshCentralInstalled
+			if raw.AutoProvisioning == nil {
+				raw.AutoProvisioning = snake.AutoProvisioning
+			}
+			if raw.AllowInsecureTLS == nil {
+				raw.AllowInsecureTLS = snake.AllowInsecureTLS
+			}
+			if raw.AgentUpdate == nil {
+				raw.AgentUpdate = snake.AgentUpdate
+			}
+		}
 	}
 
 	deployToken := strings.TrimSpace(raw.DeployToken)
@@ -132,6 +182,16 @@ func (c *InstallerConfig) UnmarshalJSON(data []byte) error {
 		MeshCentralInstalled: raw.MeshCentralInstalled,
 	}
 	return nil
+}
+
+// coalesceStr retorna a primeira string não vazia.
+func coalesceStr(vals ...string) string {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func parseInstallerBool(raw json.RawMessage) (*bool, error) {

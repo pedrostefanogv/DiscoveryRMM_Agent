@@ -5,6 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +18,7 @@ import (
 	"discovery/internal/automation"
 	"discovery/internal/database"
 	"discovery/internal/selfupdate"
+	"discovery/internal/tlsutil"
 )
 
 // ServiceManager gerencia o Windows Service (headless)
@@ -88,17 +92,24 @@ type ServiceManager struct {
 // SharedConfig representa a configuração compartilhada entre service e UI
 // Localizada em C:\ProgramData\Discovery\config.json
 type SharedConfig struct {
-	AgentID       string             `json:"agent_id"`
-	ServerURL     string             `json:"server_url"`
-	ApiScheme     string             `json:"api_scheme"` // "http" ou "https"
-	ApiServer     string             `json:"api_server"` // hostname:port
-	AuthToken     string             `json:"auth_token"` // Bearer token
-	ClientID      string             `json:"client_id"`  // Identificador único da instalação
-	SiteID        string             `json:"site_id"`
-	P2PEnabled    bool               `json:"p2p_enabled"`
-	InventorySync int                `json:"inventory_sync_interval_minutes"` // minutos
-	LastSync      string             `json:"last_inventory_sync"`             // ISO 8601
-	AgentUpdate   *selfupdate.Policy `json:"agentUpdate,omitempty"`
+	AgentID                  string             `json:"agent_id"`
+	ServerURL                string             `json:"server_url"`
+	ApiScheme                string             `json:"api_scheme"` // "http" ou "https"
+	ApiServer                string             `json:"api_server"` // hostname:port
+	AuthToken                string             `json:"auth_token"` // Bearer token
+	ClientID                 string             `json:"client_id"`  // Identificador único da instalação
+	SiteID                   string             `json:"site_id"`
+	P2PEnabled               bool               `json:"p2p_enabled"`
+	InventorySync            int                `json:"inventory_sync_interval_minutes"` // minutos
+	LastSync                 string             `json:"last_inventory_sync"`             // ISO 8601
+	AgentUpdate              *selfupdate.Policy `json:"agentUpdate,omitempty"`
+	NatsServerHost           string             `json:"nats_server_host,omitempty"`
+	NatsUseWssExternal       bool               `json:"nats_use_wss_external,omitempty"`
+	EnforceTlsHashValidation bool               `json:"enforce_tls_hash_validation,omitempty"`
+	HandshakeEnabled         bool               `json:"handshake_enabled,omitempty"`
+	ApiTlsCertHash           string             `json:"api_tls_cert_hash,omitempty"`
+	NatsTlsCertHash          string             `json:"nats_tls_cert_hash,omitempty"`
+	HeartbeatIntervalSeconds int                `json:"heartbeat_interval_seconds,omitempty"`
 }
 
 func (c *SharedConfig) IsProvisioned() bool {
@@ -416,6 +427,16 @@ func (sm *ServiceManager) Start(ctx context.Context) error {
 	}
 	sm.logInfo("Diretorio de updates criado: %s", filepath.Join(sm.dataDir, "updates"))
 
+	// 3.1 Refresh remoto da config de segurança (TLS, handshake, NATS) no startup.
+	refreshCtx, refreshCancel := context.WithTimeout(ctx, 15*time.Second)
+	changed, refreshErr := sm.refreshRemoteConfiguration(refreshCtx)
+	refreshCancel()
+	if refreshErr != nil {
+		sm.logError("[startup] refresh remoto de config falhou: %v", refreshErr)
+	} else if changed {
+		sm.logInfo("[startup] config de seguranca remota aplicada no startup")
+	}
+
 	// 4. Iniciar worker threads para automação, inventário, conexão remota, P2P
 	sm.logInfo("Iniciando workers: automation, inventory, agentRuntime, actionQueue, p2p, selfUpdate...")
 	go sm.automationWorker(ctx)
@@ -470,10 +491,195 @@ func (sm *ServiceManager) loadConfig() error {
 	return nil
 }
 
-// ReloadConfig recarrega config.json sem reiniciar o service e reaplica o agent runtime.
+// refreshRemoteConfiguration faz GET /api/v1/agent-auth/me/configuration
+// e persiste campos de segurança de transporte (TLS hash, NATS host, etc.)
+// no SharedConfig. Retorna true se algo mudou.
+func (sm *ServiceManager) refreshRemoteConfiguration(ctx context.Context) (bool, error) {
+	sm.mu.RLock()
+	cfg := sm.config
+	sm.mu.RUnlock()
+	if cfg == nil || !cfg.IsProvisioned() {
+		return false, fmt.Errorf("service nao provisionado")
+	}
+
+	scheme := strings.TrimSpace(strings.ToLower(cfg.ApiScheme))
+	server := strings.TrimSpace(cfg.ApiServer)
+	if scheme == "" || server == "" {
+		baseURL := strings.TrimSpace(cfg.ServerURL)
+		if baseURL == "" {
+			return false, fmt.Errorf("nenhum endpoint configurado para refresh remoto")
+		}
+		if parsed, err := url.Parse(baseURL); err == nil {
+			if scheme == "" {
+				scheme = strings.TrimSpace(strings.ToLower(parsed.Scheme))
+			}
+			if server == "" {
+				server = strings.TrimSpace(parsed.Host)
+			}
+		}
+	}
+	if scheme == "" || server == "" {
+		return false, fmt.Errorf("apiScheme/apiServer nao resolvido")
+	}
+
+	target := scheme + "://" + server + "/api/v1/agent-auth/me/configuration"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return false, fmt.Errorf("falha ao montar request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(cfg.AuthToken))
+	req.Header.Set("X-Agent-ID", strings.TrimSpace(cfg.AgentID))
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := tlsutil.NewHTTPClient(15 * time.Second).Do(req)
+	if err != nil {
+		return false, fmt.Errorf("falha ao chamar /me/configuration: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return false, fmt.Errorf("/me/configuration retornou HTTP %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return false, fmt.Errorf("resposta invalida de /me/configuration: %w", err)
+	}
+
+	getString := func(keys ...string) string {
+		for _, k := range keys {
+			if v, ok := raw[k]; ok {
+				if s, ok := v.(string); ok {
+					return strings.TrimSpace(s)
+				}
+			}
+		}
+		return ""
+	}
+	getBool := func(keys ...string) bool {
+		for _, k := range keys {
+			if v, ok := raw[k]; ok {
+				switch b := v.(type) {
+				case bool:
+					return b
+				case string:
+					return strings.EqualFold(b, "true")
+				}
+			}
+		}
+		return false
+	}
+
+	nextNatsServerHost := getString("natsServerHost")
+	nextApiTlsCertHash := strings.ToUpper(getString("apiTlsCertHash"))
+	nextNatsTlsCertHash := strings.ToUpper(getString("natsTlsCertHash"))
+	nextEnforce := getBool("enforceTlsHashValidation")
+	nextHandshake := getBool("handshakeEnabled")
+	nextNatsUseWss := getBool("natsUseWssExternal")
+	nextClientID := getString("clientId")
+	nextSiteID := getString("siteId")
+	nextHeartbeat := 0
+	if hbRaw, ok := raw["agentHeartbeatIntervalSeconds"]; ok {
+		switch v := hbRaw.(type) {
+		case float64:
+			nextHeartbeat = int(v)
+		case int:
+			nextHeartbeat = v
+		}
+	}
+
+	sm.mu.Lock()
+	changed := false
+	if cfg.NatsServerHost != nextNatsServerHost {
+		cfg.NatsServerHost = nextNatsServerHost
+		changed = true
+	}
+	if cfg.NatsUseWssExternal != nextNatsUseWss {
+		cfg.NatsUseWssExternal = nextNatsUseWss
+		changed = true
+	}
+	if cfg.EnforceTlsHashValidation != nextEnforce {
+		cfg.EnforceTlsHashValidation = nextEnforce
+		changed = true
+	}
+	if cfg.HandshakeEnabled != nextHandshake {
+		cfg.HandshakeEnabled = nextHandshake
+		changed = true
+	}
+	if cfg.ApiTlsCertHash != nextApiTlsCertHash {
+		cfg.ApiTlsCertHash = nextApiTlsCertHash
+		changed = true
+	}
+	if cfg.NatsTlsCertHash != nextNatsTlsCertHash {
+		cfg.NatsTlsCertHash = nextNatsTlsCertHash
+		changed = true
+	}
+	if strings.TrimSpace(cfg.ClientID) == "" && nextClientID != "" {
+		cfg.ClientID = nextClientID
+		changed = true
+	}
+	if strings.TrimSpace(cfg.SiteID) == "" && nextSiteID != "" {
+		cfg.SiteID = nextSiteID
+		changed = true
+	}
+	if nextHeartbeat > 0 && cfg.HeartbeatIntervalSeconds != nextHeartbeat {
+		cfg.HeartbeatIntervalSeconds = nextHeartbeat
+		changed = true
+	}
+	sm.config = cfg
+	sm.mu.Unlock()
+
+	if changed {
+		sm.logInfo("[config] seguranca remota atualizada de /me/configuration: natsHost=%s enforce=%v handshake=%v heartbeat=%d",
+			nextNatsServerHost, nextEnforce, nextHandshake, nextHeartbeat)
+		if err := sm.persistConfig(); err != nil {
+			sm.logError("[config] falha ao persistir config apos refresh remoto: %v", err)
+		}
+	}
+	return changed, nil
+}
+
+// persistConfig salva o SharedConfig atual em C:\ProgramData\Discovery\config.json.
+func (sm *ServiceManager) persistConfig() error {
+	sm.mu.RLock()
+	cfg := sm.config
+	dataDir := sm.dataDir
+	sm.mu.RUnlock()
+
+	if cfg == nil {
+		return nil
+	}
+
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return fmt.Errorf("falha ao serializar config: %w", err)
+	}
+
+	configPath := dataDir + "\\config.json"
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		return fmt.Errorf("falha ao criar diretorio %s: %w", dataDir, err)
+	}
+	if err := os.WriteFile(configPath, data, 0o600); err != nil {
+		return fmt.Errorf("falha ao escrever %s: %w", configPath, err)
+	}
+	return nil
+}
+
+// ReloadConfig recarrega config.json, faz refresh remoto e reaplica o agent runtime.
 func (sm *ServiceManager) ReloadConfig() error {
 	if err := sm.loadConfig(); err != nil {
 		return err
+	}
+
+	// Tenta refresh remoto com timeout curto; falha não bloqueia reload local.
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	changed, refreshErr := sm.refreshRemoteConfiguration(ctx)
+	if refreshErr != nil {
+		sm.logError("[config] refresh remoto falhou no reload: %v", refreshErr)
+	} else if changed {
+		sm.logInfo("[config] refresh remoto aplicou alteracoes de seguranca")
 	}
 
 	sm.mu.RLock()

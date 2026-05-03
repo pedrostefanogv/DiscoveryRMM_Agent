@@ -109,6 +109,7 @@ type Config struct {
 	AgentID                  string
 	ClientID                 string
 	SiteID                   string
+	HeartbeatInterval        int // segundos; 0 = usar padrão (30s)
 }
 
 type natsSubjects struct {
@@ -446,7 +447,11 @@ func (r *Runtime) runSignalRSession(ctx context.Context, cfg Config, connectTime
 		}
 	}()
 
-	heartbeatTicker := time.NewTicker(heartbeatEvery)
+	heartbeatInterval := heartbeatEvery
+	if cfg.HeartbeatInterval > 0 {
+		heartbeatInterval = time.Duration(cfg.HeartbeatInterval) * time.Second
+	}
+	heartbeatTicker := time.NewTicker(heartbeatInterval)
 	defer heartbeatTicker.Stop()
 	drainTicker := time.NewTicker(commandResultDrainEvery)
 	defer drainTicker.Stop()

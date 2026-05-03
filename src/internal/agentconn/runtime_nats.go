@@ -258,7 +258,11 @@ func (r *Runtime) natsP2PDiscoveryHandler() func(msg *nats.Msg) {
 // ─── NATS Event Loop ───────────────────────────────────────────────
 
 func (r *Runtime) runNATSEventLoop(ctx context.Context, nc *nats.Conn, cfg Config, transportLabel string, subjects natsSubjects, ipAddr string) error {
-	heartbeatTicker := time.NewTicker(heartbeatEvery)
+	heartbeatInterval := heartbeatEvery
+	if cfg.HeartbeatInterval > 0 {
+		heartbeatInterval = time.Duration(cfg.HeartbeatInterval) * time.Second
+	}
+	heartbeatTicker := time.NewTicker(heartbeatInterval)
 	defer heartbeatTicker.Stop()
 	drainTicker := time.NewTicker(commandResultDrainEvery)
 	defer drainTicker.Stop()

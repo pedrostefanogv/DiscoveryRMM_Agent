@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -40,6 +41,7 @@ func loadInstallerConfigFromCandidates(paths []string, normalizeP2P func(p2pmeta
 	for _, path := range paths {
 		data, err := os.ReadFile(path)
 		if err != nil {
+			log.Printf("[config] aviso: nao foi possivel ler config candidate %s: %v", path, err)
 			continue
 		}
 		data = trimJSONBOM(data)

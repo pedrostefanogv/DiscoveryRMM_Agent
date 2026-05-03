@@ -241,6 +241,7 @@ func NewApp(opts AppStartupOptions) *App {
 				AgentID:                  cfg.AgentID,
 				ClientID:                 agentCfg.ClientID,
 				SiteID:                   agentCfg.SiteID,
+				HeartbeatInterval:        heartbeatIntervalFromAgentConfig(agentCfg),
 			}
 		},
 		Logf: func(format string, args ...any) {
@@ -413,6 +414,15 @@ func (a *App) featureEnabled(flag *bool) bool {
 		return true
 	}
 	return *flag
+}
+
+// heartbeatIntervalFromAgentConfig retorna o intervalo de heartbeat em segundos
+// definido pela config remota do servidor, ou 0 (padrão 30s) se não especificado.
+func heartbeatIntervalFromAgentConfig(cfg AgentConfiguration) int {
+	if cfg.AgentHeartbeatIntervalSeconds != nil && *cfg.AgentHeartbeatIntervalSeconds > 0 {
+		return *cfg.AgentHeartbeatIntervalSeconds
+	}
+	return 0
 }
 
 func (a *App) shouldRunLocalP2P() bool {
