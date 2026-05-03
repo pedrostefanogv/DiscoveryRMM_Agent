@@ -6,9 +6,12 @@ import (
 	"strings"
 	"time"
 
+	appdebug "discovery/app/debug"
+	appinventory "discovery/app/inventory"
 	"discovery/internal/automation"
 	"discovery/internal/database"
 	"discovery/internal/inventory"
+	"discovery/internal/models"
 	"discovery/internal/services"
 	"discovery/internal/winget"
 )
@@ -63,10 +66,22 @@ func (s *automationRuntimeService) SetDB(db *database.DB) {
 type inventoryRuntimeService struct {
 	provider   *inventory.Provider
 	loadConfig func() *SharedConfig
+	collect    func(context.Context) (models.InventoryReport, error)
+	db         *database.DB
+	logf       func(string)
+	version    string
 }
 
-func NewInventoryRuntimeService(timeout time.Duration, loadConfig func() *SharedConfig) InventoryService {
-	return &inventoryRuntimeService{provider: inventory.NewProvider(timeout), loadConfig: loadConfig}
+func NewInventoryRuntimeService(timeout time.Duration, loadConfig func() *SharedConfig, logf func(string), version string) InventoryService {
+	if logf == nil {
+		logf = func(string) {}
+	}
+	return &inventoryRuntimeService{
+		provider:   inventory.NewProvider(timeout),
+		loadConfig: loadConfig,
+		logf:       logf,
+		version:    strings.TrimSpace(version),
+	}
 }
 
 func (s *inventoryRuntimeService) Collect(ctx context.Context) (interface{}, error) {
@@ -76,7 +91,61 @@ func (s *inventoryRuntimeService) Collect(ctx context.Context) (interface{}, err
 			return nil, fmt.Errorf("inventario indisponivel enquanto o agente nao estiver provisionado")
 		}
 	}
-	return s.provider.Collect(ctx)
+
+	var (
+		report models.InventoryReport
+		err    error
+	)
+	if s.collect != nil {
+		report, err = s.collect(ctx)
+	} else if s.provider != nil {
+		report, err = s.provider.Collect(ctx)
+	} else {
+		return nil, fmt.Errorf("inventory provider nao configurado")
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	s.syncCollectedInventory(ctx, report)
+	return report, nil
+}
+
+func (s *inventoryRuntimeService) SetDB(db *database.DB) {
+	if s == nil {
+		return
+	}
+	s.db = db
+}
+
+func (s *inventoryRuntimeService) syncCollectedInventory(ctx context.Context, report models.InventoryReport) {
+	syncSvc := appinventory.NewService(appinventory.Options{
+		DB: s.db,
+		DebugConfig: func() appdebug.Config {
+			return sharedConfigToDebugConfig(s.loadConfig)
+		},
+		Logf:    s.logf,
+		Version: s.version,
+	})
+	syncSvc.SyncInventoryOnStartup(ctx, report)
+}
+
+func sharedConfigToDebugConfig(loadConfig func() *SharedConfig) appdebug.Config {
+	if loadConfig == nil {
+		return appdebug.Config{}
+	}
+
+	cfg := loadConfig()
+	if cfg == nil {
+		return appdebug.Config{}
+	}
+
+	return appdebug.Config{
+		ApiScheme: strings.TrimSpace(strings.ToLower(cfg.ApiScheme)),
+		ApiServer: strings.TrimSpace(cfg.ApiServer),
+		AuthToken: strings.TrimSpace(cfg.AuthToken),
+		AgentID:   strings.TrimSpace(cfg.AgentID),
+	}
 }
 
 type appsRuntimeService struct {

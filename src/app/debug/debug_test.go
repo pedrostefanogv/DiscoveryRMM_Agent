@@ -248,6 +248,24 @@ func TestGetRealtimeStatus_SetsAgentAuthHeadersAndAgentID(t *testing.T) {
 	}
 }
 
+func TestApplyRuntimeConnectionConfig_DerivesNativeNATSServerFromAPIServer(t *testing.T) {
+	const agentID = "8f6d6d72-4a8a-4c87-bffa-34ba29dc0bb7"
+
+	svc := NewService(Options{})
+	svc.ApplyRuntimeConnectionConfig("https", "tngplacas.com.br", "token-123", agentID, "", "")
+
+	cfg := svc.GetConfig()
+	if cfg.NatsServer != "nats://tngplacas.com.br:4222" {
+		t.Fatalf("NatsServer = %q", cfg.NatsServer)
+	}
+	if cfg.Scheme != "nats" {
+		t.Fatalf("Scheme = %q", cfg.Scheme)
+	}
+	if cfg.Server != "nats://tngplacas.com.br:4222" {
+		t.Fatalf("Server = %q", cfg.Server)
+	}
+}
+
 func TestApplyRemoteConnectionSecurity_UpdatesConfigAndReloads(t *testing.T) {
 	oldWriteFile := osWriteFile
 	oldMkdirAll := osMkdirAll

@@ -111,7 +111,7 @@ async function loadCatalog() {
     await loadPackageActions(api);
     state.filtered = state.allPackages;
     catalogPage = 1;
-    infoEl.textContent = translate('store.appsAllowed', { count: (catalog.count || state.allPackages.length), icons: (catalog.packagesWithIcon || 0) });
+    infoEl.textContent = translate('store.appsAllowed', { count: (catalog.count || state.allPackages.length) });
     applyFilter();
     showFeedback(translate('store.catalogLoaded'));
   } catch (error) {

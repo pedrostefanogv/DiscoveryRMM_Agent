@@ -340,6 +340,10 @@ func (sm *ServiceManager) Start(ctx context.Context) error {
 		aware.SetDB(db)
 		sm.logInfo("Database injetada no automationSvc")
 	}
+	if aware, ok := sm.inventorySvc.(databaseAwareService); ok {
+		aware.SetDB(db)
+		sm.logInfo("Database injetada no inventorySvc")
+	}
 	if aware, ok := sm.p2pSvc.(databaseAwareService); ok {
 		aware.SetDB(db)
 		sm.logInfo("Database injetada no p2pSvc")

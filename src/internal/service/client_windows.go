@@ -4,12 +4,19 @@ package service
 
 import (
 	"context"
-	"net"
 	"time"
+
+	"github.com/Microsoft/go-winio"
 )
 
 func connectServicePipe(ctx context.Context, pipeName string, timeout time.Duration) (serviceConn, error) {
-	var d net.Dialer
-	d.Timeout = timeout
-	return d.DialContext(ctx, "pipe", pipeName)
+	if timeout > 0 {
+		if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, timeout)
+			defer cancel()
+		}
+	}
+
+	return winio.DialPipeContext(ctx, pipeName)
 }

@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -222,6 +224,9 @@ func (s *Service) ApplyRuntimeConnectionConfig(apiScheme, apiServer, authToken, 
 	cfg.AgentID = strings.TrimSpace(agentID)
 	cfg.NatsServer = strings.TrimSpace(natsServer)
 	cfg.NatsWsServer = strings.TrimSpace(natsWsServer)
+	if cfg.NatsServer == "" {
+		cfg.NatsServer = deriveNativeNATSServerFromAPI(cfg.ApiServer)
+	}
 	normalizeSecurityConfig(&cfg)
 
 	if cfg.NatsServer != "" {
@@ -453,6 +458,9 @@ func (s *Service) SetConfig(cfg Config) error {
 	cfg.ApiServer = strings.TrimSpace(cfg.ApiServer)
 	cfg.NatsServer = strings.TrimSpace(cfg.NatsServer)
 	cfg.NatsWsServer = strings.TrimSpace(cfg.NatsWsServer)
+	if cfg.NatsServer == "" {
+		cfg.NatsServer = deriveNativeNATSServerFromAPI(cfg.ApiServer)
+	}
 	cfg.AgentID = strings.TrimSpace(cfg.AgentID)
 	cfg.AuthToken = strings.TrimSpace(cfg.AuthToken)
 	normalizeSecurityConfig(&cfg)
@@ -520,6 +528,9 @@ func (s *Service) TestConnection(cfg Config) (string, error) {
 	cfg.ApiServer = strings.TrimSpace(cfg.ApiServer)
 	cfg.NatsServer = strings.TrimSpace(cfg.NatsServer)
 	cfg.NatsWsServer = strings.TrimSpace(cfg.NatsWsServer)
+	if cfg.NatsServer == "" {
+		cfg.NatsServer = deriveNativeNATSServerFromAPI(cfg.ApiServer)
+	}
 	cfg.AgentID = strings.TrimSpace(cfg.AgentID)
 	cfg.AuthToken = strings.TrimSpace(cfg.AuthToken)
 	previousAllowInsecureTLS := tlsutil.ConfigAllowInsecureTLS()
@@ -662,6 +673,30 @@ func (s *Service) GetRealtimeStatus() (RealtimeStatus, error) {
 func isValidDebugScheme(s string) bool {
 	s = strings.TrimSpace(strings.ToLower(s))
 	return s == "http" || s == "https" || s == "nats"
+}
+
+func deriveNativeNATSServerFromAPI(apiServer string) string {
+	server := strings.TrimSpace(apiServer)
+	if server == "" {
+		return ""
+	}
+
+	if strings.Contains(server, "://") {
+		if parsed, err := url.Parse(server); err == nil && strings.TrimSpace(parsed.Host) != "" {
+			server = strings.TrimSpace(parsed.Host)
+		}
+	}
+
+	if host, _, err := net.SplitHostPort(server); err == nil {
+		server = host
+	}
+
+	server = strings.TrimSpace(strings.Trim(server, "[]"))
+	if server == "" {
+		return ""
+	}
+
+	return "nats://" + net.JoinHostPort(server, "4222")
 }
 
 func normalizeSecurityConfig(cfg *Config) {
