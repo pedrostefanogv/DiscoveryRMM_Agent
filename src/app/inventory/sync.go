@@ -39,7 +39,7 @@ type agentHardwareComponents struct {
 }
 
 type agentHardwareInfo struct {
-	InventoryRaw            json.RawMessage `json:"inventoryRaw"`
+	InventoryRaw            string          `json:"inventoryRaw"`
 	InventorySchemaVersion  string          `json:"inventorySchemaVersion"`
 	InventoryCollectedAt    string          `json:"inventoryCollectedAt"`
 	Manufacturer            string          `json:"manufacturer"`
@@ -442,7 +442,7 @@ func buildAgentHardwareEnvelope(report models.InventoryReport, version string) a
 		LastIPAddress:   lastIP,
 		MACAddress:      primaryMAC,
 		Hardware: agentHardwareInfo{
-			InventoryRaw:            rawJSON,
+			InventoryRaw:            string(rawJSON),
 			InventorySchemaVersion:  "",
 			InventoryCollectedAt:    collected,
 			Manufacturer:            trimToMaxLen(strings.TrimSpace(report.Hardware.Manufacturer), 100),

@@ -8,7 +8,7 @@ import (
 	"discovery/internal/models"
 )
 
-func TestBuildAgentHardwareEnvelope_UsesStringStatusAndRawInventoryObject(t *testing.T) {
+func TestBuildAgentHardwareEnvelope_UsesStringStatusAndStringHardwareRawInventory(t *testing.T) {
 	report := models.InventoryReport{
 		CollectedAt: "2026-03-12T19:31:36Z",
 		Source:      "osquery",
@@ -41,15 +41,20 @@ func TestBuildAgentHardwareEnvelope_UsesStringStatusAndRawInventoryObject(t *tes
 	}
 
 	if _, ok := payload["inventoryRaw"].(map[string]any); !ok {
-		t.Fatalf("inventoryRaw deve ser objeto JSON no payload, veio %T", payload["inventoryRaw"])
+		t.Fatalf("inventoryRaw deve ser objeto JSON no payload (raiz), veio %T", payload["inventoryRaw"])
 	}
 
 	hw, ok := payload["hardware"].(map[string]any)
 	if !ok {
 		t.Fatalf("hardware deve ser objeto JSON")
 	}
-	if _, ok := hw["inventoryRaw"].(map[string]any); !ok {
-		t.Fatalf("hardware.inventoryRaw deve ser objeto JSON no payload, veio %T", hw["inventoryRaw"])
+	hwRaw, ok := hw["inventoryRaw"].(string)
+	if !ok {
+		t.Fatalf("hardware.inventoryRaw deve ser string no payload (contrato da API), veio %T", hw["inventoryRaw"])
+	}
+	var hwRawObj map[string]any
+	if err := json.Unmarshal([]byte(hwRaw), &hwRawObj); err != nil {
+		t.Fatalf("hardware.inventoryRaw string deve conter JSON válido: %v", err)
 	}
 }
 
