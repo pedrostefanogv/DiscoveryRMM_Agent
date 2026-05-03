@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -254,10 +255,10 @@ func (sm *ServiceManager) RequestSelfUpdateCheck(source string) bool {
 	}
 	select {
 	case sm.updateTrigger <- struct{}{}:
-		fmt.Printf("[SERVICE.SelfUpdate] force-check solicitado: source=%s\n", source)
+		sm.logInfo("SelfUpdate force-check solicitado: source=%s", source)
 		return true
 	default:
-		fmt.Printf("[SERVICE.SelfUpdate] force-check ja pendente: source=%s\n", source)
+		sm.logInfo("SelfUpdate force-check ja pendente: source=%s", source)
 		return false
 	}
 }
@@ -312,15 +313,20 @@ func (sm *ServiceManager) Start(ctx context.Context) error {
 	sm.isRunning = true
 	sm.mu.Unlock()
 
-	fmt.Println("[SERVICE.Manager] Iniciando...")
+	sm.logInfo("ServiceManager iniciando... dataDir=%s errLogPath=%s", sm.dataDir, sm.errLogPath)
 
 	// 1. Carregar configuração de C:\ProgramData\Discovery\config.json
+	sm.logInfo("Carregando config de %s\\config.json...", sm.dataDir)
 	if err := sm.loadConfig(); err != nil {
 		sm.logError("falha ao carregar config: %v", err)
 		return err
 	}
+	sm.logInfo("Config carregada: agentId=%s server=%s apiScheme=%s apiServer=%s provisioning=%v p2p=%v",
+		sm.config.AgentID, sm.config.ServerURL, sm.config.ApiScheme, sm.config.ApiServer,
+		sm.config.IsProvisioned(), sm.config.P2PEnabled)
 
 	// 2. Inicializar banco de dados
+	sm.logInfo("Inicializando database em %s...", sm.dataDir)
 	db, err := database.Open(sm.dataDir)
 	if err != nil {
 		sm.logError("falha ao inicializar database: %v", err)
@@ -329,46 +335,58 @@ func (sm *ServiceManager) Start(ctx context.Context) error {
 	sm.mu.Lock()
 	sm.db = db
 	sm.mu.Unlock()
+	sm.logInfo("Database inicializada com sucesso")
 	if aware, ok := sm.automationSvc.(databaseAwareService); ok {
 		aware.SetDB(db)
+		sm.logInfo("Database injetada no automationSvc")
 	}
 	if aware, ok := sm.p2pSvc.(databaseAwareService); ok {
 		aware.SetDB(db)
+		sm.logInfo("Database injetada no p2pSvc")
 	}
 	defer func() {
+		sm.logInfo("Fechando database...")
 		if closeErr := db.Close(); closeErr != nil {
 			sm.logError("falha ao fechar database: %v", closeErr)
+		} else {
+			sm.logInfo("Database fechada com sucesso")
 		}
 	}()
 	// 2.1 Watchdog removed.
 
 	// 3. Iniciar servidor IPC (Named Pipes)
+	sm.logInfo("Iniciando IPC server (Named Pipe)...")
 	if err := sm.ipcServer.Start(sm); err != nil {
 		sm.logError("falha ao iniciar IPC server: %v", err)
 		return err
 	}
-	fmt.Println("[SERVICE.Manager] IPC server iniciado em \\\\?\\pipe\\Discovery_Service")
+	sm.logInfo("IPC server iniciado em \\\\?\\pipe\\Discovery_Service")
 
 	if err := os.MkdirAll(filepath.Join(sm.dataDir, "updates"), 0o755); err != nil {
 		sm.logError("falha ao criar diretorio de updates: %v", err)
 		return err
 	}
+	sm.logInfo("Diretorio de updates criado: %s", filepath.Join(sm.dataDir, "updates"))
 
 	// 4. Iniciar worker threads para automação, inventário, P2P
+	sm.logInfo("Iniciando workers: automation, inventory, actionQueue, p2p, selfUpdate...")
 	go sm.automationWorker(ctx)
 	go sm.inventoryWorker(ctx)
 	go sm.actionQueueWorker(ctx)
 	go sm.p2pWorker(ctx)
 	go sm.selfUpdateWorker(ctx)
+	sm.logInfo("Todos os workers iniciados, aguardando shutdown signal...")
 
 	// 5. Aguardar contexto de cancelamento (shutdown)
 	<-ctx.Done()
 
-	fmt.Println("[SERVICE.Manager] Encerrando...")
+	sm.logInfo("Shutdown signal recebido, encerrando...")
 	sm.ipcServer.Stop()
+	sm.logInfo("IPC server parado")
 	sm.mu.Lock()
 	sm.isRunning = false
 	sm.mu.Unlock()
+	sm.logInfo("ServiceManager encerrado")
 
 	return nil
 }
@@ -386,13 +404,16 @@ func (sm *ServiceManager) loadConfig() error {
 		return fmt.Errorf("não conseguiu ler %s: %w", configPath, err)
 	}
 
+	// Strip UTF-8 BOM (EF BB BF) defensivamente.
+	// O instalador NSIS escreve via PowerShell 5.1 que adiciona BOM no Set-Content -Encoding UTF8.
+	data = bytes.TrimPrefix(data, []byte{0xEF, 0xBB, 0xBF})
+
 	sm.config = &SharedConfig{}
 	if err := json.Unmarshal(data, sm.config); err != nil {
 		return fmt.Errorf("JSON inválido em %s: %w", configPath, err)
 	}
 
-	fmt.Printf("[SERVICE.Manager] Config carregada: agentId=%s, server=%s\n",
-		sm.config.AgentID, sm.config.ServerURL)
+	sm.logInfo("Config carregada: agentId=%s, server=%s", sm.config.AgentID, sm.config.ServerURL)
 	return nil
 }
 
@@ -618,12 +639,12 @@ func (sm *ServiceManager) actionQueueWorker(ctx context.Context) {
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 
-	fmt.Println("[SERVICE.ActionQueueWorker] Iniciado")
+	sm.logInfo("ActionQueueWorker iniciado")
 
 	for {
 		select {
 		case <-ctx.Done():
-			fmt.Println("[SERVICE.ActionQueueWorker] Encerrando")
+			sm.logInfo("ActionQueueWorker encerrando")
 			return
 		case <-sm.actionTrigger:
 		case <-ticker.C:
@@ -693,7 +714,7 @@ func (sm *ServiceManager) processNextQueuedAction(ctx context.Context) (bool, er
 	if execErr != nil {
 		sm.logError("action %s falhou: %v", entry.ActionID, execErr)
 	} else {
-		fmt.Printf("[SERVICE.ActionQueueWorker] Action completed: id=%s, command=%s\n", entry.ActionID, entry.Command)
+		sm.logInfo("Action completed: id=%s, command=%s", entry.ActionID, entry.Command)
 	}
 
 	return true, nil
@@ -870,12 +891,12 @@ func (sm *ServiceManager) automationWorker(ctx context.Context) {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
 
-	fmt.Println("[SERVICE.AutomationWorker] Iniciado")
+	sm.logInfo("AutomationWorker iniciado")
 
 	for {
 		select {
 		case <-ctx.Done():
-			fmt.Println("[SERVICE.AutomationWorker] Encerrando")
+			sm.logInfo("AutomationWorker encerrando")
 			return
 		case <-ticker.C:
 			sm.mu.RLock()
@@ -883,13 +904,13 @@ func (sm *ServiceManager) automationWorker(ctx context.Context) {
 			sm.mu.RUnlock()
 
 			if automationSvc != nil {
-				fmt.Println("[SERVICE.AutomationWorker] Atualizando políticas de automação...")
+				sm.logInfo("Atualizando políticas de automação...")
 				_, err := automationSvc.RefreshPolicy(ctx, false)
 				if err != nil {
 					sm.logError("falha ao atualizar políticas de automação: %v", err)
 				}
 			} else {
-				fmt.Println("[SERVICE.AutomationWorker] Serviço de automação não registrado")
+				sm.logInfo("Serviço de automação não registrado")
 			}
 		}
 	}
@@ -906,16 +927,16 @@ func (sm *ServiceManager) inventoryWorker(ctx context.Context) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	fmt.Println("[SERVICE.InventoryWorker] Iniciado, intervalo:", interval)
+	sm.logInfo("InventoryWorker iniciado, intervalo: %v", interval)
 
 	for {
 		select {
 		case <-ctx.Done():
-			fmt.Println("[SERVICE.InventoryWorker] Encerrando")
+			sm.logInfo("InventoryWorker encerrando")
 			return
 		case <-ticker.C:
 			if !sm.isInventoryProvisioned() {
-				fmt.Println("[SERVICE.InventoryWorker] Ignorado: agente nao provisionado")
+				sm.logInfo("InventoryWorker: agente nao provisionado, ignorando ciclo")
 				continue
 			}
 
@@ -924,7 +945,7 @@ func (sm *ServiceManager) inventoryWorker(ctx context.Context) {
 			sm.mu.RUnlock()
 
 			if inventorySvc != nil {
-				fmt.Println("[SERVICE.InventoryWorker] Coletando inventário do sistema...")
+				sm.logInfo("Coletando inventário do sistema...")
 				_, err := inventorySvc.Collect(ctx)
 				if err != nil {
 					sm.logError("falha ao coletar inventário: %v", err)
@@ -932,7 +953,7 @@ func (sm *ServiceManager) inventoryWorker(ctx context.Context) {
 					sm.setLastSync(time.Now().UTC().Format(time.RFC3339))
 				}
 			} else {
-				fmt.Println("[SERVICE.InventoryWorker] Serviço de inventário não registrado")
+				sm.logInfo("Serviço de inventário não registrado")
 			}
 		}
 	}
@@ -941,7 +962,7 @@ func (sm *ServiceManager) inventoryWorker(ctx context.Context) {
 // p2pWorker mantém descoberta P2P ativa
 func (sm *ServiceManager) p2pWorker(ctx context.Context) {
 	if !sm.isP2PEnabled() {
-		fmt.Println("[SERVICE.P2PWorker] P2P desabilitado, pulando")
+		sm.logInfo("P2P desabilitado, pulando worker")
 		return
 	}
 
@@ -949,27 +970,27 @@ func (sm *ServiceManager) p2pWorker(ctx context.Context) {
 	p2pSvc := sm.p2pSvc
 	sm.mu.RUnlock()
 	if p2pSvc == nil {
-		fmt.Println("[SERVICE.P2PWorker] Serviço P2P não registrado")
+		sm.logInfo("Serviço P2P não registrado")
 		return
 	}
 
-	fmt.Println("[SERVICE.P2PWorker] Iniciado")
+	sm.logInfo("P2PWorker iniciado")
 	for {
 		err := p2pSvc.Run(ctx)
 		if ctx.Err() != nil {
-			fmt.Println("[SERVICE.P2PWorker] Encerrando")
+			sm.logInfo("P2PWorker encerrando por cancelamento de contexto")
 			return
 		}
 		if err != nil {
 			sm.logError("runtime P2P finalizado com erro: %v", err)
 		} else {
-			sm.logError("runtime P2P finalizado sem erro e sem cancelamento; reiniciando")
+			sm.logInfo("runtime P2P finalizado sem erro; reiniciando em 10s")
 		}
 
 		restartDelay := 10 * time.Second
 		select {
 		case <-ctx.Done():
-			fmt.Println("[SERVICE.P2PWorker] Encerrando")
+			sm.logInfo("P2PWorker encerrando apos delay de restart")
 			return
 		case <-time.After(restartDelay):
 		}
@@ -1019,7 +1040,7 @@ func (sm *ServiceManager) selfUpdateWorker(ctx context.Context) {
 		},
 		TempDir: filepath.Join(sm.dataDir, "updates"),
 		Logf: func(format string, args ...any) {
-			fmt.Printf("[SERVICE.SelfUpdate] "+format+"\n", args...)
+			sm.logInfo("SelfUpdate: "+format, args...)
 		},
 		InvalidateCh: sm.updateTrigger,
 	}
@@ -1031,7 +1052,18 @@ func (sm *ServiceManager) selfUpdateWorker(ctx context.Context) {
 // logError registra erros em arquivo de log
 func (sm *ServiceManager) logError(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
-	fmt.Fprintf(os.Stderr, "[SERVICE.ERROR] %s\n", msg)
+	sm.writeLog("ERROR", msg)
+}
+
+// logInfo registra informacoes de debug no log do servico
+func (sm *ServiceManager) logInfo(format string, args ...interface{}) {
+	msg := fmt.Sprintf(format, args...)
+	sm.writeLog("INFO", msg)
+}
+
+// writeLog escreve no stderr e no arquivo de log de erros
+func (sm *ServiceManager) writeLog(level string, msg string) {
+	fmt.Fprintf(os.Stderr, "[SERVICE.%s] %s\n", level, msg)
 
 	if strings.TrimSpace(sm.errLogPath) == "" {
 		return
@@ -1044,7 +1076,8 @@ func (sm *ServiceManager) logError(format string, args ...interface{}) {
 		return
 	}
 	defer f.Close()
-	_, _ = f.WriteString(time.Now().UTC().Format(time.RFC3339) + " [SERVICE.ERROR] " + msg + "\n")
+	entry := time.Now().UTC().Format(time.RFC3339)
+	_, _ = f.WriteString(entry + " [SERVICE." + level + "] " + msg + "\n")
 }
 
 func (sm *ServiceManager) getInventorySyncMinutes() int {

@@ -57,14 +57,15 @@ func runServiceConsole(logFile string) error {
 }
 
 func runServiceRuntime(ctx context.Context, logFile string) error {
-	fmt.Println("[SERVICE] Iniciando Discovery Agent como Windows Service")
+	log.Printf("[SERVICE] Iniciando Discovery Agent como Windows Service")
 
 	// Criar diretório de dados (C:\ProgramData\Discovery)
 	dataDir := appkg.GetDataDir()
 	if err := ensureDataDir(dataDir); err != nil {
-		fmt.Fprintf(os.Stderr, "[SERVICE] Erro ao criar diretório de dados: %v\n", err)
+		log.Printf("[SERVICE] Erro ao criar diretório de dados: %v", err)
 		return err
 	}
+	log.Printf("[SERVICE] Diretório de dados: %s", dataDir)
 
 	// Inicializar logger para arquivo de log
 	if logFile == "" {
@@ -72,8 +73,9 @@ func runServiceRuntime(ctx context.Context, logFile string) error {
 	}
 	initServiceLogger(logFile)
 
+	log.Printf("[SERVICE] Criando ServiceManager...")
 	svcMgr := newRuntimeServiceManager(dataDir)
-	fmt.Println("[SERVICE] Service iniciado com sucesso")
+	log.Printf("[SERVICE] ServiceManager criado, iniciando runtime...")
 	return svcMgr.Start(ctx)
 }
 
