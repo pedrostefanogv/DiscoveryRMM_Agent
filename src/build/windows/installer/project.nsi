@@ -212,6 +212,7 @@ Var AutoProvisioning
 Var AllowInsecureTls
 Var MinimalMode
 Var GenericMode
+Var UpdateMode
 Var PayloadUrl
 Var PayloadSha256
 Var PayloadFileName
@@ -254,12 +255,14 @@ Function .onInit
    StrCpy $AllowInsecureTls ""
    StrCpy $MinimalMode "${BUILD_DEFAULT_MINIMAL}"
    StrCpy $GenericMode "${BUILD_GENERIC_INSTALL}"
+   StrCpy $UpdateMode "0"
    StrCpy $PayloadUrl "${BUILD_PAYLOAD_URL}"
    StrCpy $PayloadSha256 "${BUILD_PAYLOAD_SHA256}"
    StrCpy $PayloadFileName "${BUILD_PAYLOAD_FILENAME}"
 
    # Build de update: modo silencioso por padrão e sem wizard.
    ${If} "${BUILD_UPDATE_INSTALL}" == "1"
+      StrCpy $UpdateMode "1"
       StrCpy $MinimalMode "1"
       SetSilent silent
 
@@ -283,6 +286,18 @@ Function .onInit
    
    # Obter parâmetros da linha de comando
    ${GetParameters} $R0
+
+   # Parse UPDATE (atualizacao in-place): silencioso, sem wizard e sem sobrescrever config.
+   ${GetOptions} $R0 "/UPDATE" $R1
+   ${IfNot} ${Errors}
+      StrCpy $UpdateMode "1"
+      StrCpy $MinimalMode "1"
+      SetSilent silent
+      ReadRegStr $R2 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${UNINST_KEY_NAME}" "InstallLocation"
+      ${If} $R2 != ""
+         StrCpy $INSTDIR $R2
+      ${EndIf}
+   ${EndIf}
    
    # Parse URL
    ${GetOptions} $R0 "/URL=" $R1
@@ -513,6 +528,12 @@ Function SaveAgentConfig
       Return
    ${EndIf}
 
+   # Runtime update (/UPDATE) também não altera configuração local existente.
+   ${If} $UpdateMode == "1"
+      DetailPrint "Update mode (/UPDATE): mantendo configuração existente sem sobrescrita"
+      Return
+   ${EndIf}
+
    # Config compartilhada em ProgramData para suportar múltiplos usuários.
    ReadEnvStr $R0 "ProgramData"
    ${If} $R0 == ""
@@ -676,9 +697,17 @@ Function DownloadAndRunStage2
 
    DetailPrint "Executando instalador completo de segunda etapa..."
    ${If} $GenericMode == "1"
-      ExecWait '"$R7" /S /GENERIC /AUTO_PROVISIONING=$AutoProvisioning /ALLOW_INSECURE_TLS=$AllowInsecureTls /MINIMAL' $R0
+      ${If} $UpdateMode == "1"
+         ExecWait '"$R7" /S /UPDATE /GENERIC /AUTO_PROVISIONING=$AutoProvisioning /ALLOW_INSECURE_TLS=$AllowInsecureTls /MINIMAL' $R0
+      ${Else}
+         ExecWait '"$R7" /S /GENERIC /AUTO_PROVISIONING=$AutoProvisioning /ALLOW_INSECURE_TLS=$AllowInsecureTls /MINIMAL' $R0
+      ${EndIf}
    ${Else}
-      ExecWait '"$R7" /S /URL="$ServerUrl" /KEY="$ServerKey" /AUTO_PROVISIONING=$AutoProvisioning /ALLOW_INSECURE_TLS=$AllowInsecureTls /MINIMAL' $R0
+      ${If} $UpdateMode == "1"
+         ExecWait '"$R7" /S /UPDATE /URL="$ServerUrl" /KEY="$ServerKey" /AUTO_PROVISIONING=$AutoProvisioning /ALLOW_INSECURE_TLS=$AllowInsecureTls /MINIMAL' $R0
+      ${Else}
+         ExecWait '"$R7" /S /URL="$ServerUrl" /KEY="$ServerKey" /AUTO_PROVISIONING=$AutoProvisioning /ALLOW_INSECURE_TLS=$AllowInsecureTls /MINIMAL' $R0
+      ${EndIf}
    ${EndIf}
 
    ${If} $R0 != 0

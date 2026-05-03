@@ -225,7 +225,7 @@ func TestDispatchCommand_UnknownCommand(t *testing.T) {
 }
 
 func TestDispatchCommand_TriggerUpdateCheck(t *testing.T) {
-	manager := &ServiceManager{updateTrigger: make(chan struct{}, 1)}
+	manager := &ServiceManager{updateTrigger: make(chan bool, 1)}
 	server := &IPCServer{manager: manager}
 
 	resp := server.dispatchCommand(&ClientRequest{
@@ -240,7 +240,10 @@ func TestDispatchCommand_TriggerUpdateCheck(t *testing.T) {
 		t.Fatalf("expected queued=true, got %+v", resp.Data)
 	}
 	select {
-	case <-manager.updateTrigger:
+	case force := <-manager.updateTrigger:
+		if !force {
+			t.Fatalf("expected forced update signal=true for command source")
+		}
 	default:
 		t.Fatalf("expected update trigger signal to be enqueued")
 	}

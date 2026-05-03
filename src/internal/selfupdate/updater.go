@@ -592,7 +592,7 @@ func (u *Updater) launchInstaller(exePath string) error {
 	if exePath == "" {
 		return errors.New("installer path vazio")
 	}
-	cmd := exec.Command(exePath, "/S")
+	cmd := exec.Command(exePath, "/S", "/UPDATE")
 	attr := &syscall.SysProcAttr{}
 	setSysProcCreationFlags(attr, detachedProcessFlag)
 	cmd.SysProcAttr = attr
