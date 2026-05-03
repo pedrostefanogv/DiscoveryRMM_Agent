@@ -616,7 +616,7 @@ func (s *Service) TestConnection(cfg Config) (string, error) {
 	return strings.Join(results, "\n\n"), nil
 }
 
-// GetRealtimeStatus queries /api/realtime/status from the configured HTTP server.
+// GetRealtimeStatus queries /api/v1/realtime/status from the configured HTTP server.
 func (s *Service) GetRealtimeStatus() (RealtimeStatus, error) {
 	cfg := s.GetConfig()
 	cfg.ApiScheme = strings.TrimSpace(strings.ToLower(cfg.ApiScheme))
@@ -628,7 +628,7 @@ func (s *Service) GetRealtimeStatus() (RealtimeStatus, error) {
 		return RealtimeStatus{}, fmt.Errorf("apiScheme invalido: use http ou https")
 	}
 
-	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/realtime/status"
+	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/v1/realtime/status"
 	req, err := http.NewRequest(http.MethodGet, target, nil)
 	if err != nil {
 		return RealtimeStatus{}, fmt.Errorf("URL invalida: %w", err)
@@ -654,7 +654,7 @@ func (s *Service) GetRealtimeStatus() (RealtimeStatus, error) {
 
 	var out RealtimeStatus
 	if err := json.Unmarshal(body, &out); err != nil {
-		return RealtimeStatus{}, fmt.Errorf("resposta invalida de /api/realtime/status: %w", err)
+		return RealtimeStatus{}, fmt.Errorf("resposta invalida de /api/v1/realtime/status: %w", err)
 	}
 	return out, nil
 }

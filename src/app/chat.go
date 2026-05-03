@@ -8,14 +8,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"discovery/internal/ai"
 	"discovery/internal/mcp"
 	"discovery/internal/platform"
-	"discovery/internal/watchdog"
 )
 
 func chatConfigPathCandidates() []string {
@@ -208,17 +206,6 @@ func (a *App) StartChatStream(message string) {
 		return
 	}
 
-	streamMonitor := watchdog.NewStreamMonitor(
-		"ai-chat-stream",
-		90*time.Second,
-		func() {
-			a.chatSvc.StopStream()
-			if a.ctx != nil {
-				wailsRuntime.EventsEmit(a.ctx, "chat:error", "Stream interrompido automaticamente por inatividade")
-			}
-		},
-	)
-
 	go func() {
 		defer done()
 
@@ -235,28 +222,13 @@ func (a *App) StartChatStream(message string) {
 		}
 		a.chatSvc.SetConfig(runtimeCfg)
 
-		streamMonitor.Start(a.ctx)
-		defer streamMonitor.Stop()
-
-		if a.watchdogSvc != nil {
-			a.watchdogSvc.Heartbeat(watchdog.ComponentAI)
-		}
-
 		_, err := a.chatSvc.SendStream(
 			a.ctx,
 			message,
 			func(token string) {
-				streamMonitor.Activity()
-				if a.watchdogSvc != nil {
-					a.watchdogSvc.Heartbeat(watchdog.ComponentAI)
-				}
 				wailsRuntime.EventsEmit(a.ctx, "chat:token", token)
 			},
 			func(status string) {
-				streamMonitor.Activity()
-				if a.watchdogSvc != nil {
-					a.watchdogSvc.Heartbeat(watchdog.ComponentAI)
-				}
 				wailsRuntime.EventsEmit(a.ctx, "chat:thinking", status)
 			},
 		)

@@ -31,12 +31,29 @@ func normalizeNATSURL(server string) (string, error) {
 			if strings.TrimSpace(u.Host) == "" {
 				return "", fmt.Errorf("url NATS invalida: host ausente")
 			}
+			// Garante porta explicita para evitar dial :0 quando o host nao tem porta.
+			ensureDefaultPort(u, scheme)
 			return u.String(), nil
 		default:
 			return "", fmt.Errorf("url NATS invalida: scheme %s nao suportado", scheme)
 		}
 	}
 	return "nats://" + server, nil
+}
+
+// ensureDefaultPort adiciona a porta padrao ao Host da URL quando ausente.
+func ensureDefaultPort(u *url.URL, scheme string) {
+	if strings.Contains(u.Host, ":") {
+		return
+	}
+	switch strings.ToLower(scheme) {
+	case "nats":
+		u.Host += ":4222"
+	case "wss":
+		u.Host += ":443"
+	case "ws":
+		u.Host += ":80"
+	}
 }
 
 func normalizeTLSCertHash(raw string) string {
@@ -126,6 +143,10 @@ func buildExternalNATSWSSURL(host string) (string, error) {
 	host = strings.Trim(strings.TrimSpace(host), "/")
 	if host == "" {
 		return "", fmt.Errorf("natsServerHost invalido")
+	}
+	// Garante porta 443 explicita para evitar dial :0.
+	if !strings.Contains(host, ":") {
+		host += ":443"
 	}
 	return "wss://" + host + "/nats/", nil
 }

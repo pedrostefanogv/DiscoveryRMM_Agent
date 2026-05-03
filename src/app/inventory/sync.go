@@ -126,7 +126,6 @@ type agentSoftwareItem struct {
 
 // SyncInventoryOnStartup sends inventory payloads when credentials are available.
 func (s *Service) SyncInventoryOnStartup(ctx context.Context, report models.InventoryReport) {
-	s.pulseInventoryHeartbeat()
 	cfg := s.debugConfig()
 	cfg.ApiServer = strings.TrimSpace(cfg.ApiServer)
 	cfg.ApiScheme = strings.TrimSpace(strings.ToLower(cfg.ApiScheme))
@@ -200,10 +199,8 @@ func (s *Service) SyncInventoryOnStartup(ctx context.Context, report models.Inve
 
 	hardwareEndpoint := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/hardware"
 	hardwareSuccess := false
-	s.pulseInventoryHeartbeat()
 	if err := s.sendAgentInventoryRequest(ctx, hardwareEndpoint, cfg, http.MethodPost, hardwareBody); err != nil {
 		s.logf("[agent-sync] POST hardware falhou: " + err.Error())
-		s.pulseInventoryHeartbeat()
 		if err := s.sendAgentInventoryRequest(ctx, hardwareEndpoint, cfg, http.MethodPut, hardwareBody); err != nil {
 			s.logf("[agent-sync] PUT hardware falhou: " + err.Error())
 		} else {
@@ -224,10 +221,8 @@ func (s *Service) SyncInventoryOnStartup(ctx context.Context, report models.Inve
 	softwareEndpoint := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/software"
 	s.logf("[agent-sync] endpoint software: " + softwareEndpoint)
 	softwareSuccess := false
-	s.pulseInventoryHeartbeat()
 	if err := s.sendAgentInventoryRequest(ctx, softwareEndpoint, cfg, http.MethodPost, softwareBody); err != nil {
 		s.logf("[agent-sync] POST software falhou: " + err.Error())
-		s.pulseInventoryHeartbeat()
 		if err := s.sendAgentInventoryRequest(ctx, softwareEndpoint, cfg, http.MethodPut, softwareBody); err != nil {
 			s.logf("[agent-sync] PUT software falhou: " + err.Error())
 		} else {
@@ -256,7 +251,6 @@ func (s *Service) SyncInventoryOnStartup(ctx context.Context, report models.Inve
 }
 
 func (s *Service) sendAgentInventoryRequest(parent context.Context, endpoint string, cfg debug.Config, method string, body []byte) error {
-	s.pulseInventoryHeartbeat()
 	ctx, cancel := context.WithTimeout(parent, 20*time.Second)
 	defer cancel()
 
@@ -274,17 +268,14 @@ func (s *Service) sendAgentInventoryRequest(parent context.Context, endpoint str
 
 	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
 	if err != nil {
-		s.pulseInventoryHeartbeat()
 		return err
 	}
 	defer resp.Body.Close()
 
 	respBody, _ := io.ReadAll(resp.Body)
-	s.pulseInventoryHeartbeat()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(respBody)))
 	}
-	s.pulseInventoryHeartbeat()
 	return nil
 }
 

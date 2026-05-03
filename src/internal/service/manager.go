@@ -13,7 +13,6 @@ import (
 	"discovery/internal/automation"
 	"discovery/internal/database"
 	"discovery/internal/selfupdate"
-	"discovery/internal/watchdog"
 )
 
 // ServiceManager gerencia o Windows Service (headless)
@@ -54,7 +53,6 @@ type ServiceManager struct {
 	updateTrigger chan struct{}
 	db            *database.DB
 	ipcServer     *IPCServer
-	watchdog      *watchdog.Watchdog
 	automationSvc AutomationService
 	inventorySvc  InventoryService
 	appsSvc       AppsService
@@ -266,15 +264,9 @@ func (sm *ServiceManager) RequestSelfUpdateCheck(source string) bool {
 
 // NewServiceManager cria um novo gerenciador de serviço
 func NewServiceManager(dataDir string) *ServiceManager {
-	wdCfg := watchdog.DefaultConfig()
-	wdCfg.CheckInterval = 10 * time.Second
-	wdCfg.DegradedThreshold = 45 * time.Second
-	wdCfg.UnhealthyThreshold = 90 * time.Second
-
 	return &ServiceManager{
 		dataDir:       dataDir,
 		ipcServer:     NewIPCServer(dataDir),
-		watchdog:      watchdog.New(wdCfg),
 		startTime:     time.Now(),
 		errLogPath:    dataDir + "\\logs\\service-errors.log",
 		actionTrigger: make(chan struct{}, 1),
@@ -348,15 +340,7 @@ func (sm *ServiceManager) Start(ctx context.Context) error {
 			sm.logError("falha ao fechar database: %v", closeErr)
 		}
 	}()
-
-	// 2.1 Inicializar watchdog do service
-	if sm.watchdog != nil {
-		sm.registerWatchdogRecovery()
-		sm.watchdog.Start(ctx)
-		sm.watchdog.Heartbeat(watchdog.ComponentAgent)
-		sm.watchdog.Heartbeat(watchdog.ComponentAutomation)
-		sm.watchdog.Heartbeat(watchdog.ComponentInventory)
-	}
+	// 2.1 Watchdog removed.
 
 	// 3. Iniciar servidor IPC (Named Pipes)
 	if err := sm.ipcServer.Start(sm); err != nil {
@@ -382,9 +366,6 @@ func (sm *ServiceManager) Start(ctx context.Context) error {
 
 	fmt.Println("[SERVICE.Manager] Encerrando...")
 	sm.ipcServer.Stop()
-	if sm.watchdog != nil {
-		sm.watchdog.Stop()
-	}
 	sm.mu.Lock()
 	sm.isRunning = false
 	sm.mu.Unlock()
@@ -422,37 +403,11 @@ func (sm *ServiceManager) GetConfig() *SharedConfig {
 	return sm.config
 }
 
-// GetServiceHealth retorna status detalhado de saúde dos componentes do service.
+// GetServiceHealth retorna status do service.
 func (sm *ServiceManager) GetServiceHealth() map[string]interface{} {
-	checks := []watchdog.HealthCheck{}
-	if sm.watchdog != nil {
-		checks = sm.watchdog.GetHealth()
-	}
-
-	recoverable := 0
-	unhealthy := 0
-	degraded := 0
-	for _, check := range checks {
-		if check.Recoverable {
-			recoverable++
-		}
-		switch check.Status {
-		case watchdog.StatusUnhealthy:
-			unhealthy++
-		case watchdog.StatusDegraded:
-			degraded++
-		}
-	}
-
 	return map[string]interface{}{
-		"running":               sm.isServiceRunning(),
-		"checked_at":            time.Now().UTC().Format(time.RFC3339),
-		"components":            checks,
-		"component_count":       len(checks),
-		"recoverable_count":     recoverable,
-		"degraded_count":        degraded,
-		"unhealthy_count":       unhealthy,
-		"has_critical_unhealth": unhealthy > 0,
+		"running":    sm.isServiceRunning(),
+		"checked_at": time.Now().UTC().Format(time.RFC3339),
 	}
 }
 
@@ -912,14 +867,6 @@ func formatServiceTime(value time.Time) interface{} {
 
 // automationWorker executa políticas de automação periodicamente
 func (sm *ServiceManager) automationWorker(ctx context.Context) {
-	// PeriodicHeartbeat garante que o watchdog não marque este componente como
-	// unhealthy entre os ticks de trabalho (que ocorrem a cada 5 minutos).
-	if sm.watchdog != nil {
-		hb := watchdog.NewPeriodicHeartbeat(sm.watchdog, watchdog.ComponentAutomation, 30*time.Second)
-		hb.Start(ctx)
-		defer hb.Stop()
-	}
-
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
 
@@ -944,24 +891,12 @@ func (sm *ServiceManager) automationWorker(ctx context.Context) {
 			} else {
 				fmt.Println("[SERVICE.AutomationWorker] Serviço de automação não registrado")
 			}
-
-			if sm.watchdog != nil {
-				sm.watchdog.Heartbeat(watchdog.ComponentAutomation)
-			}
 		}
 	}
 }
 
 // inventoryWorker sincroniza inventário com servidor periodicamente
 func (sm *ServiceManager) inventoryWorker(ctx context.Context) {
-	// PeriodicHeartbeat garante que o watchdog não marque este componente como
-	// unhealthy entre os ticks de trabalho (que ocorrem a cada 5-60 minutos).
-	if sm.watchdog != nil {
-		hb := watchdog.NewPeriodicHeartbeat(sm.watchdog, watchdog.ComponentInventory, 30*time.Second)
-		hb.Start(ctx)
-		defer hb.Stop()
-	}
-
 	// Intervalo configurável em sm.config.InventorySync (minutos)
 	interval := time.Duration(sm.getInventorySyncMinutes()) * time.Minute
 	if interval < 5*time.Minute {
@@ -999,9 +934,6 @@ func (sm *ServiceManager) inventoryWorker(ctx context.Context) {
 			} else {
 				fmt.Println("[SERVICE.InventoryWorker] Serviço de inventário não registrado")
 			}
-			if sm.watchdog != nil {
-				sm.watchdog.Heartbeat(watchdog.ComponentInventory)
-			}
 		}
 	}
 }
@@ -1019,12 +951,6 @@ func (sm *ServiceManager) p2pWorker(ctx context.Context) {
 	if p2pSvc == nil {
 		fmt.Println("[SERVICE.P2PWorker] Serviço P2P não registrado")
 		return
-	}
-
-	if sm.watchdog != nil {
-		hb := watchdog.NewPeriodicHeartbeat(sm.watchdog, watchdog.ComponentAgent, 30*time.Second)
-		hb.Start(ctx)
-		defer hb.Stop()
 	}
 
 	fmt.Println("[SERVICE.P2PWorker] Iniciado")
@@ -1119,56 +1045,6 @@ func (sm *ServiceManager) logError(format string, args ...interface{}) {
 	}
 	defer f.Close()
 	_, _ = f.WriteString(time.Now().UTC().Format(time.RFC3339) + " [SERVICE.ERROR] " + msg + "\n")
-}
-
-func (sm *ServiceManager) registerWatchdogRecovery() {
-	if sm.watchdog == nil {
-		return
-	}
-	// Automation recovery: aciona RefreshPolicy para re-sincronizar com servidor.
-	sm.watchdog.RegisterRecovery(watchdog.ComponentAutomation, func(component watchdog.Component) error {
-		sm.logError("watchdog recovery: tentando RefreshPolicy para %s", component)
-		sm.mu.RLock()
-		svc := sm.automationSvc
-		sm.mu.RUnlock()
-		if svc == nil {
-			return nil
-		}
-		ctx := context.Background()
-		_, err := svc.RefreshPolicy(ctx, false)
-		if err != nil {
-			sm.logError("watchdog recovery RefreshPolicy falhou: %v", err)
-		}
-		return err
-	})
-	// Inventory recovery: força nova coleta de inventário.
-	sm.watchdog.RegisterRecovery(watchdog.ComponentInventory, func(component watchdog.Component) error {
-		sm.logError("watchdog recovery: forçando coleta de inventário para %s", component)
-		if !sm.isInventoryProvisioned() {
-			fmt.Println("[SERVICE.Manager] watchdog recovery inventory ignorado: agente nao provisionado")
-			return nil
-		}
-		sm.mu.RLock()
-		svc := sm.inventorySvc
-		sm.mu.RUnlock()
-		if svc == nil {
-			return nil
-		}
-		ctx := context.Background()
-		_, err := svc.Collect(ctx)
-		if err != nil {
-			sm.logError("watchdog recovery Collect falhou: %v", err)
-		}
-		return err
-	})
-	// Agent/P2P recovery: apenas loga — sem ação automática segura disponível.
-	sm.watchdog.RegisterRecovery(watchdog.ComponentAgent, func(component watchdog.Component) error {
-		sm.logError("watchdog recovery acionado para %s — aguardando reconexão automática", component)
-		return nil
-	})
-	sm.watchdog.OnUnhealthy(func(check watchdog.HealthCheck) {
-		sm.logError("watchdog unhealthy: component=%s status=%s message=%s", check.Component, check.Status, check.Message)
-	})
 }
 
 func (sm *ServiceManager) getInventorySyncMinutes() int {

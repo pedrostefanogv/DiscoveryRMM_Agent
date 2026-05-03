@@ -12,7 +12,6 @@ import (
 	"discovery/internal/inventory"
 	"discovery/internal/models"
 	"discovery/internal/processutil"
-	"discovery/internal/watchdog"
 )
 
 const inventoryProvisioningRequiredMessage = "inventario indisponivel enquanto o agente nao estiver provisionado"
@@ -81,7 +80,6 @@ type Options struct {
 	Apps                     AppsService
 	Inventory                InventoryService
 	Cache                    InventoryCache
-	Watchdog                 *watchdog.Watchdog
 	ResolveAllowed           func(context.Context, string) (appstore.Item, error)
 	GetCatalog               func(context.Context) (models.Catalog, error)
 	BeginActivity            ActivityFunc
@@ -100,7 +98,6 @@ type Service struct {
 	apps                     AppsService
 	inventory                InventoryService
 	cache                    InventoryCache
-	watchdog                 *watchdog.Watchdog
 	resolveAllowed           func(context.Context, string) (appstore.Item, error)
 	getCatalog               func(context.Context) (models.Catalog, error)
 	beginActivity            ActivityFunc
@@ -124,7 +121,6 @@ func NewService(opts Options) *Service {
 		apps:                     opts.Apps,
 		inventory:                opts.Inventory,
 		cache:                    opts.Cache,
-		watchdog:                 opts.Watchdog,
 		resolveAllowed:           opts.ResolveAllowed,
 		getCatalog:               opts.GetCatalog,
 		beginActivity:            opts.BeginActivity,
@@ -264,12 +260,6 @@ func (s *Service) ListInstalled() (string, error) {
 	return out, err
 }
 
-func (s *Service) pulseInventoryHeartbeat() {
-	if s.watchdog != nil {
-		s.watchdog.Heartbeat(watchdog.ComponentInventory)
-	}
-}
-
 func (s *Service) inventoryProvisioned() bool {
 	if s == nil || s.debugConfig == nil {
 		return false
@@ -285,26 +275,10 @@ func (s *Service) requireProvisionedInventory() error {
 }
 
 func (s *Service) collectInventoryWithHeartbeat(ctx context.Context) (models.InventoryReport, error) {
-	if s.watchdog == nil {
-		return s.inventory.GetInventory(ctx)
-	}
-
-	heartbeat := watchdog.NewPeriodicHeartbeat(s.watchdog, watchdog.ComponentInventory, 20*time.Second)
-	heartbeat.Start(ctx)
-	defer heartbeat.Stop()
-
 	return s.inventory.GetInventory(ctx)
 }
 
 func (s *Service) collectNetworkConnectionsWithHeartbeat(ctx context.Context) (models.NetworkConnectionsReport, error) {
-	if s.watchdog == nil {
-		return s.inventory.GetNetworkConnections(ctx)
-	}
-
-	heartbeat := watchdog.NewPeriodicHeartbeat(s.watchdog, watchdog.ComponentInventory, 20*time.Second)
-	heartbeat.Start(ctx)
-	defer heartbeat.Stop()
-
 	return s.inventory.GetNetworkConnections(ctx)
 }
 

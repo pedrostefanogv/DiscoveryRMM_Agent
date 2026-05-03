@@ -114,8 +114,5 @@ func (a *App) collectInventoryWithHeartbeat(ctx context.Context) (models.Invento
 }
 
 func (a *App) pulseInventoryHeartbeat() {
-	if a == nil || a.inventorySvc == nil {
-		return
-	}
-	// no-op: retained for compatibility, inventory service now owns heartbeats.
+	// no-op: watchdog system removed.
 }

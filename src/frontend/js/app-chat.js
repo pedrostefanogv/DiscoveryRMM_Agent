@@ -160,7 +160,6 @@ function onStreamStopped() {
       window.runtime.EventsOn('chat:done', onStreamDone);
       window.runtime.EventsOn('chat:error', onStreamError);
       window.runtime.EventsOn('chat:stopped', onStreamStopped);
-      window.runtime.EventsOn('watchdog:unhealthy', onWatchdogUnhealthy);
     }
   }
   if (document.readyState === 'loading') {
@@ -170,48 +169,6 @@ function onStreamStopped() {
     setTimeout(doRegister, 200);
   }
 })();
-
-function onWatchdogUnhealthy(data) {
-  var componentName = formatComponentName(data.component || 'unknown');
-  var message = translate('chat.watchdogMessage', {
-    component: componentName,
-    status: (data.status || 'unhealthy'),
-    message: (data.message || translate('common.noAdditionalInfo')),
-  });
-  if (shouldShowWatchdogToast(data)) {
-    showToast(message, 'warning');
-  }
-  
-  // Refresh watchdog display if on debug tab
-  if (activeTab === 'debug') {
-    refreshWatchdogHealth();
-  }
-}
-
-function shouldShowWatchdogToast(data) {
-  var component = String((data && data.component) || 'unknown');
-  var status = String((data && data.status) || 'unhealthy');
-  var now = Date.now();
-
-  if (!watchdogToastState.windowStartMs || now - watchdogToastState.windowStartMs >= 60 * 1000) {
-    watchdogToastState.windowStartMs = now;
-    watchdogToastState.sentInCurrentWindow = 0;
-  }
-
-  var key = component + '|' + status;
-  var lastSent = watchdogToastState.lastToastAtByComponentStatus[key] || 0;
-  if (now - lastSent < WATCHDOG_TOAST_DEDUPE_MS) {
-    return false;
-  }
-
-  if (watchdogToastState.sentInCurrentWindow >= WATCHDOG_TOAST_MAX_PER_MINUTE) {
-    return false;
-  }
-
-  watchdogToastState.lastToastAtByComponentStatus[key] = now;
-  watchdogToastState.sentInCurrentWindow += 1;
-  return true;
-}
 
 function scrollChatToBottom() {
   if (chatMessagesEl) chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;

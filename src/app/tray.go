@@ -7,8 +7,6 @@ import (
 
 	"github.com/energye/systray"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
-
-	"discovery/internal/watchdog"
 )
 
 const (
@@ -87,24 +85,12 @@ func (a *App) startTray() {
 	a.trayReady.Store(false)
 	a.trayIconState.Store(trayIconStateUnknown)
 
-	watchdog.SafeGo("tray-main", func() {
+	go func() {
 		trayStop := make(chan struct{})
-
-		// Start periodic heartbeat for tray
-		if a.watchdogSvc != nil {
-			heartbeat := watchdog.NewPeriodicHeartbeat(a.watchdogSvc, watchdog.ComponentTray, 20*time.Second)
-			heartbeat.Start(a.ctx)
-			defer heartbeat.Stop()
-		}
 
 		systray.Run(func() {
 			setTrayTitle("Discovery")
 			setTrayTooltip("Discovery")
-
-			// Send immediate heartbeat on tray ready
-			if a.watchdogSvc != nil {
-				a.watchdogSvc.Heartbeat(watchdog.ComponentTray)
-			}
 
 			systray.SetOnClick(func(menu systray.IMenu) {
 				a.safeTrayAction("tray-click", func() {
@@ -139,9 +125,7 @@ func (a *App) startTray() {
 
 			a.trayReady.Store(true)
 			a.syncTrayVisualState()
-			watchdog.SafeGo("tray-icon-state", func() {
-				a.runTrayStateLoop(trayStop)
-			})
+			go a.runTrayStateLoop(trayStop)
 			log.Println("[tray] pronto: icone e menu inicializados")
 		}, func() {
 			close(trayStop)
@@ -149,7 +133,7 @@ func (a *App) startTray() {
 			a.trayIconState.Store(trayIconStateUnknown)
 			log.Println("[tray] encerrado")
 		})
-	})
+	}()
 }
 
 func (a *App) safeTrayAction(name string, fn func()) {

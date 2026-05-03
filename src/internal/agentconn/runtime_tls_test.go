@@ -73,7 +73,7 @@ func TestAutoDeriveNATSEndpoints_RemoteHostPrefersWSS(t *testing.T) {
 	if cfg.NatsServer != "" {
 		t.Fatalf("NatsServer = %q, esperado vazio", cfg.NatsServer)
 	}
-	if cfg.NatsWsServer != "wss://tngplacas.com.br/nats/" {
+	if cfg.NatsWsServer != "wss://tngplacas.com.br:443/nats/" {
 		t.Fatalf("NatsWsServer = %q", cfg.NatsWsServer)
 	}
 }
@@ -91,7 +91,7 @@ func TestAutoDeriveNATSEndpoints_LocalHostDerivesNATSAndWSS(t *testing.T) {
 	if cfg.NatsServer != "nats://192.168.1.10:4222" {
 		t.Fatalf("NatsServer = %q", cfg.NatsServer)
 	}
-	if cfg.NatsWsServer != "wss://192.168.1.10/nats/" {
+	if cfg.NatsWsServer != "wss://192.168.1.10:443/nats/" {
 		t.Fatalf("NatsWsServer = %q", cfg.NatsWsServer)
 	}
 }

@@ -219,8 +219,6 @@ const agentStatusDotEl = document.getElementById('agentStatusDot');
 const agentStatusLabelEl = document.getElementById('agentStatusLabel');
 const agentStatusDetailEl = document.getElementById('agentStatusDetail');
 const agentStatusRefreshBtn = document.getElementById('agentStatusRefreshBtn');
-const watchdogHealthContainer = document.getElementById('watchdogHealthContainer');
-const watchdogRefreshBtn = document.getElementById('watchdogRefreshBtn');
 const automationRefreshBtn = document.getElementById('automationRefreshBtn');
 const automationIncludeScriptContentEl = document.getElementById('automationIncludeScriptContent');
 const automationStatusEl = document.getElementById('automationStatus');
@@ -233,16 +231,6 @@ const automationExecutionsEl = document.getElementById('automationExecutions');
 const automationExecutionCountEl = document.getElementById('automationExecutionCount');
 
 let agentStatusPollId = null;
-let watchdogPollId = null;
-
-const WATCHDOG_TOAST_DEDUPE_MS = 60 * 1000;
-const WATCHDOG_TOAST_MAX_PER_MINUTE = 3;
-const PROVISIONING_CHECK_INTERVAL_MS = 10 * 1000;
-const watchdogToastState = {
-  lastToastAtByComponentStatus: {},
-  windowStartMs: 0,
-  sentInCurrentWindow: 0,
-};
 
 const DEFAULT_NOTIFICATION_THEME = {
   surface: '#1f1a14',

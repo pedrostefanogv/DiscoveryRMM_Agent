@@ -31,7 +31,6 @@ import (
 	"discovery/internal/processutil"
 	"discovery/internal/service"
 	"discovery/internal/services"
-	"discovery/internal/watchdog"
 	"discovery/internal/winget"
 )
 
@@ -87,7 +86,6 @@ type App struct {
 	updateTrigger  chan struct{}
 	agentInfo      agentInfoCache
 	appStorePolicy appStorePolicyCache
-	watchdogSvc    *watchdog.Watchdog
 	debugSvc       *debug.Service
 	updatesSvc     *updates.Service
 	exporter       *updates.Exporter
@@ -141,9 +139,6 @@ func NewApp(opts AppStartupOptions) *App {
 	reg := mcp.NewRegistry()
 	chatSvc := ai.NewService(reg)
 
-	// Initialize watchdog with default config
-	watchdogSvc := watchdog.New(watchdog.DefaultConfig())
-
 	// Initialize service client for communicating with Windows Service
 	serviceClient := service.NewServiceClient()
 
@@ -161,7 +156,6 @@ func NewApp(opts AppStartupOptions) *App {
 		printerSvc:          services.NewPrinterService(printerManager),
 		mcpRegistry:         reg,
 		chatSvc:             chatSvc,
-		watchdogSvc:         watchdogSvc,
 		serviceClient:       serviceClient,
 		pendingNotifyResult: make(map[string]chan string),
 		notificationByKey:   make(map[string]string),
@@ -285,7 +279,6 @@ func NewApp(opts AppStartupOptions) *App {
 		Apps:           a.appsSvc,
 		Inventory:      a.invSvc,
 		Cache:          &a.invCache,
-		Watchdog:       a.watchdogSvc,
 		ResolveAllowed: a.resolveAllowedPackage,
 		GetCatalog:     a.getCatalogFromAppStore,
 		BeginActivity:  a.beginActivity,
@@ -366,9 +359,6 @@ func NewApp(opts AppStartupOptions) *App {
 	// Register all Discovery tools in the MCP registry.
 	mcp.RegisterDiscoveryTools(reg, a)
 
-	// Register watchdog recovery actions for critical components
-	a.registerWatchdogRecovery()
-
 	if opts.DebugMode {
 		a.logs.append("[startup] modo debug ativo por tecla de atalho (execucao atual)")
 	}
@@ -428,11 +418,6 @@ func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	a.cancel = cancel
 
-	// Start watchdog monitoring
-	a.watchdogSvc.Start(ctx)
-	a.watchdogSvc.Suspend(watchdog.ComponentUI, uiRuntimeAwaitingBootstrapReason)
-	log.Println("[startup] watchdog iniciado")
-
 	go a.StartP2PTelemetryLoop(ctx)
 
 	a.startTray()
@@ -477,7 +462,7 @@ func (a *App) startup(ctx context.Context) {
 	}
 
 	a.startupWg.Add(1)
-	watchdog.SafeGoWithContext(ctx, "inventory-startup", a.watchdogSvc, watchdog.ComponentInventory, func(ctx context.Context) {
+	go func() {
 		defer a.startupWg.Done()
 
 		// Quando o service está disponível, ele já gerencia inventário; pular coleta local.
@@ -508,10 +493,10 @@ func (a *App) startup(ctx context.Context) {
 		if a.inventorySvc != nil {
 			a.inventorySvc.SyncInventoryOnStartup(ctx, report)
 		}
-	})
+	}()
 
 	a.startupWg.Add(1)
-	watchdog.SafeGoWithContext(ctx, "agent-connection", a.watchdogSvc, watchdog.ComponentAgent, func(ctx context.Context) {
+	go func() {
 		defer a.startupWg.Done()
 
 		// Bootstrap pós-instalação: se houver URL/KEY do instalador, resolver token/agentId.
@@ -522,16 +507,11 @@ func (a *App) startup(ctx context.Context) {
 		// MeshCentral deve iniciar somente apos autenticar e carregar credenciais do agente.
 		go a.ensureMeshCentralInstalled(ctx, "startup-auth", false)
 
-		// Periodic heartbeat for agent connection
-		heartbeat := watchdog.NewPeriodicHeartbeat(a.watchdogSvc, watchdog.ComponentAgent, 25*time.Second)
-		heartbeat.Start(ctx)
-		defer heartbeat.Stop()
-
 		a.agentConn.Run(ctx)
-	})
+	}()
 
 	a.startupWg.Add(1)
-	watchdog.SafeGoWithContext(ctx, "agent-decommission-outbox", a.watchdogSvc, watchdog.ComponentAgent, func(ctx context.Context) {
+	go func() {
 		defer a.startupWg.Done()
 		a.drainAgentDecommissionOutbox(ctx, "startup")
 		ticker := time.NewTicker(15 * time.Minute)
@@ -544,10 +524,10 @@ func (a *App) startup(ctx context.Context) {
 				a.drainAgentDecommissionOutbox(ctx, "periodic")
 			}
 		}
-	})
+	}()
 
 	a.startupWg.Add(1)
-	watchdog.SafeGoWithContext(ctx, "automation-service", a.watchdogSvc, watchdog.ComponentAutomation, func(ctx context.Context) {
+	go func() {
 		defer a.startupWg.Done()
 		if a.automationSvc == nil {
 			return
@@ -559,35 +539,29 @@ func (a *App) startup(ctx context.Context) {
 			return
 		}
 
-		heartbeat := watchdog.NewPeriodicHeartbeat(a.watchdogSvc, watchdog.ComponentAutomation, 25*time.Second)
-		heartbeat.Start(ctx)
-		defer heartbeat.Stop()
-
-		a.automationSvc.Run(ctx, func() {
-			a.watchdogSvc.Heartbeat(watchdog.ComponentAutomation)
-		})
-	})
+		a.automationSvc.Run(ctx, func() {})
+	}()
 
 	a.startupWg.Add(1)
-	watchdog.SafeGoWithContext(ctx, "sync-coordinator", a.watchdogSvc, watchdog.ComponentAgent, func(ctx context.Context) {
+	go func() {
 		defer a.startupWg.Done()
 		if a.syncCoord == nil {
 			return
 		}
 		a.syncCoord.Run(ctx)
-	})
+	}()
 
 	a.startupWg.Add(1)
-	watchdog.SafeGoWithContext(ctx, "p2p-coordinator", a.watchdogSvc, watchdog.ComponentAgent, func(ctx context.Context) {
+	go func() {
 		defer a.startupWg.Done()
 		if a.p2pCoord == nil {
 			return
 		}
 		a.p2pCoord.Run(ctx)
-	})
+	}()
 
 	a.startupWg.Add(1)
-	watchdog.SafeGoWithContext(ctx, "outbox-ttl-cleanup", a.watchdogSvc, watchdog.ComponentAgent, func(ctx context.Context) {
+	go func() {
 		defer a.startupWg.Done()
 		const cleanupInterval = 6 * time.Hour
 		const cleanupBatchSize = 500
@@ -614,7 +588,7 @@ func (a *App) startup(ctx context.Context) {
 				}
 			}
 		}
-	})
+	}()
 }
 
 func (a *App) startupLogf(format string, args ...any) {
@@ -669,7 +643,7 @@ func (a *App) ensureOsqueryInstalled(ctx context.Context) {
 
 // hideWindowOnStartup keeps the app running in tray when launched by Windows startup.
 func (a *App) hideWindowOnStartup() {
-	watchdog.SafeGoWithContext(a.ctx, "startup-hide-window", a.watchdogSvc, watchdog.ComponentTray, func(ctx context.Context) {
+	go func() {
 		ticker := time.NewTicker(200 * time.Millisecond)
 		defer ticker.Stop()
 
@@ -678,7 +652,7 @@ func (a *App) hideWindowOnStartup() {
 
 		for {
 			select {
-			case <-ctx.Done():
+			case <-a.ctx.Done():
 				return
 			case <-timeout.C:
 				log.Println("[startup] aviso: timeout aguardando tray para iniciar minimizado")
@@ -693,7 +667,7 @@ func (a *App) hideWindowOnStartup() {
 				return
 			}
 		}
-	})
+	}()
 }
 
 // shutdown is called when the application is closing; it cancels background
@@ -701,12 +675,6 @@ func (a *App) hideWindowOnStartup() {
 func (a *App) shutdown(ctx context.Context) {
 	systray.Quit()
 	a.applyIdleMode(false)
-
-	// Stop watchdog
-	if a.watchdogSvc != nil {
-		a.watchdogSvc.Stop()
-		log.Println("[shutdown] watchdog parado")
-	}
 
 	if a.cancel != nil {
 		a.cancel()
@@ -767,131 +735,6 @@ func (a *App) GetStartupError() string {
 		return a.startupErr.Error()
 	}
 	return ""
-}
-
-// registerWatchdogRecovery defines recovery actions for critical components.
-func (a *App) registerWatchdogRecovery() {
-	// Tray recovery: attempt to restart systray (limited effectiveness)
-	a.watchdogSvc.RegisterRecovery(watchdog.ComponentTray, func(component watchdog.Component) error {
-		log.Println("[watchdog] tentando recuperar tray (limitado - systray nao suporta restart)")
-		// Systray doesn't support restart, but we can update state
-		a.updateTrayIdleState(false, true)
-		time.Sleep(2 * time.Second)
-		a.updateTrayIdleState(true, true)
-		return nil
-	})
-
-	// Agent connection recovery: signal reconnection attempt
-	a.watchdogSvc.RegisterRecovery(watchdog.ComponentAgent, func(component watchdog.Component) error {
-		log.Println("[watchdog] agente connection parece travado - verificando status")
-		status := a.agentConn.GetStatus()
-		if !status.Connected {
-			log.Println("[watchdog] agente desconectado - aguardando reconexao automatica")
-		}
-		return nil
-	})
-
-	// AI service recovery: stop any stuck stream
-	a.watchdogSvc.RegisterRecovery(watchdog.ComponentAI, func(component watchdog.Component) error {
-		log.Println("[watchdog] AI service travado - cancelando stream ativo")
-		stopped := a.chatSvc.StopStream()
-		if stopped {
-			log.Println("[watchdog] stream AI cancelado com sucesso")
-			wailsRuntime.EventsEmit(a.ctx, "chat:error", "Stream interrompido automaticamente por travamento")
-		}
-		return nil
-	})
-
-	// Inventory recovery: clear cache to force refresh
-	a.watchdogSvc.RegisterRecovery(watchdog.ComponentInventory, func(component watchdog.Component) error {
-		log.Println("[watchdog] inventario travado - limpando cache")
-		a.invCache.mu.Lock()
-		a.invCache.loaded = false
-		a.invCache.mu.Unlock()
-		return nil
-	})
-
-	// Automation recovery: tentar um novo refresh de policy.
-	a.watchdogSvc.RegisterRecovery(watchdog.ComponentAutomation, func(component watchdog.Component) error {
-		log.Println("[watchdog] automacao degradada - tentando refresh de policy")
-		if a.automationSvc == nil {
-			return nil
-		}
-		ctx := a.ctx
-		_, err := a.automationSvc.RefreshPolicy(ctx, false)
-		return err
-	})
-
-	// UI runtime recovery: use a native Windows probe when available and try to
-	// re-surface the window while asking the frontend to self-recover.
-	a.watchdogSvc.RegisterRecovery(watchdog.ComponentUI, func(component watchdog.Component) error {
-		probe := probeUIRuntimeNative()
-		if probe.Supported {
-			log.Printf("[watchdog] UI runtime unhealthy - native probe: found=%t visible=%t hung=%t title=%q",
-				probe.WindowFound, probe.Visible, probe.Hung, probe.Title)
-		} else {
-			log.Println("[watchdog] UI runtime unhealthy - probe nativo indisponivel")
-		}
-
-		if a.ctx != nil {
-			wailsRuntime.WindowUnminimise(a.ctx)
-			wailsRuntime.WindowShow(a.ctx)
-			wailsRuntime.WindowSetAlwaysOnTop(a.ctx, true)
-			wailsRuntime.WindowSetAlwaysOnTop(a.ctx, false)
-			wailsRuntime.EventsEmit(a.ctx, "watchdog:ui-recover", dto.WatchdogUIRecover{
-				Component:       string(component),
-				NativeSupported: probe.Supported,
-				WindowFound:     probe.WindowFound,
-				Visible:         probe.Visible,
-				Hung:            probe.Hung,
-				Title:           probe.Title,
-				ReloadRequested: !probe.Supported || (probe.WindowFound && !probe.Hung),
-			})
-		}
-
-		if probe.Supported && (!probe.WindowFound || probe.Hung) {
-			if !probe.WindowFound {
-				return fmt.Errorf("janela principal do processo nao encontrada")
-			}
-			return fmt.Errorf("janela principal marcada como hung pelo Windows")
-		}
-		return nil
-	})
-
-	// On unhealthy callback: emit event to frontend
-	a.watchdogSvc.OnUnhealthy(func(check watchdog.HealthCheck) {
-		if a.ctx != nil {
-			wailsRuntime.EventsEmit(a.ctx, "watchdog:unhealthy", dto.WatchdogUnhealthy{
-				Component:   string(check.Component),
-				Status:      string(check.Status),
-				Message:     check.Message,
-				Recoverable: check.Recoverable,
-			})
-		}
-	})
-}
-
-// GetWatchdogHealth returns the current health status of all monitored components.
-func (a *App) GetWatchdogHealth() []dto.HealthCheckItem {
-	if a.watchdogSvc == nil {
-		return []dto.HealthCheckItem{}
-	}
-
-	checks := a.watchdogSvc.GetHealth()
-	result := make([]dto.HealthCheckItem, len(checks))
-
-	for i, check := range checks {
-		result[i] = dto.HealthCheckItem{
-			Component:   string(check.Component),
-			Status:      string(check.Status),
-			Message:     check.Message,
-			LastBeat:    check.LastBeat.Format(time.RFC3339),
-			CheckedAt:   check.CheckedAt.Format(time.RFC3339),
-			Recoverable: check.Recoverable,
-		}
-	}
-
-	return result
 }
 
 // GetServiceHealth retorna o status de saúde do Windows Service (processo headless)

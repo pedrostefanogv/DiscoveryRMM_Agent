@@ -404,9 +404,6 @@ async function bootstrapApp() {
   if (window.runtime && window.runtime.EventsOn && typeof handleNotificationEvent === 'function') {
     window.runtime.EventsOn('notification:new', handleNotificationEvent);
   }
-  if (window.runtime && window.runtime.EventsOn && typeof handleUIRuntimeRecoverEvent === 'function') {
-    window.runtime.EventsOn('watchdog:ui-recover', handleUIRuntimeRecoverEvent);
-  }
   if (typeof startUIRuntimeMonitor === 'function') {
     startUIRuntimeMonitor('bootstrap');
   }

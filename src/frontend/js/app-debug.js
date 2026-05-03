@@ -50,77 +50,6 @@ function stopAgentStatusPoll() {
   }
 }
 
-// ========== Watchdog Health Monitor ==========
-
-function refreshWatchdogHealth() {
-  if (document.hidden) return;
-  if (!watchdogHealthContainer) return;
-
-  try {
-    appApi().GetWatchdogHealth().then(function (checks) {
-      renderWatchdogHealth(checks);
-    }).catch(function (err) {
-      watchdogHealthContainer.innerHTML = '<div class="watchdog-loading">' + escapeHtml(translate('debug.statusLoadError', { error: String(err) })) + '</div>';
-    });
-  } catch (e) {
-    watchdogHealthContainer.innerHTML = '<div class="watchdog-loading">' + escapeHtml(translate('debug.watchdogUnavailable')) + '</div>';
-  }
-}
-
-function renderWatchdogHealth(checks) {
-  if (!watchdogHealthContainer) return;
-
-  if (!checks || checks.length === 0) {
-    watchdogHealthContainer.innerHTML = '<div class="watchdog-loading">' + escapeHtml(translate('debug.noMonitoredComponents')) + '</div>';
-    return;
-  }
-
-  var html = '';
-  for (var i = 0; i < checks.length; i++) {
-    var check = checks[i];
-    var statusClass = (check.status || 'unknown').toLowerCase();
-    var componentName = formatComponentName(check.component);
-    var badgeClass = check.recoverable ? 'recoverable' : 'not-recoverable';
-    var badgeText = check.recoverable ? translate('debug.autoRecoverable') : translate('debug.manualRecovery');
-    
-    html += '<div class="watchdog-component-card ' + statusClass + '">';
-    html += '  <div class="watchdog-status-dot ' + statusClass + '"></div>';
-    html += '  <div class="watchdog-component-info">';
-    html += '    <div class="watchdog-component-name">' + componentName + '</div>';
-    html += '    <div class="watchdog-component-message">' + escapeHtml(check.message || translate('debug.noInformation')) + '</div>';
-    html += '  </div>';
-    html += '  <div class="watchdog-component-badge ' + badgeClass + '">' + badgeText + '</div>';
-    html += '</div>';
-  }
-
-  watchdogHealthContainer.innerHTML = html;
-}
-
-function formatComponentName(component) {
-  var names = {
-    'tray': 'System Tray',
-    'ai_service': 'Servico de IA',
-    'agent_connection': 'Conexao do Agente',
-    'automation_service': 'Automacao',
-    'inventory': 'Inventario',
-    'ui_runtime': 'Runtime UI'
-  };
-  return names[component] || component;
-}
-
-function startWatchdogPoll() {
-  stopWatchdogPoll();
-  refreshWatchdogHealth();
-  watchdogPollId = setInterval(refreshWatchdogHealth, 15000); // Update every 15s
-}
-
-function stopWatchdogPoll() {
-  if (watchdogPollId) {
-    clearInterval(watchdogPollId);
-    watchdogPollId = null;
-  }
-}
-
 function loadDebugConfig() {
   try {
     appApi().GetDebugConfig().then(function (cfg) {
@@ -146,7 +75,6 @@ function loadDebugConfig() {
     }).catch(function () {});
   } catch (e) {}
   startAgentStatusPoll();
-  startWatchdogPoll();
 }
 
 function updateDebugResponseLabel() {
@@ -174,10 +102,6 @@ function initDebug() {
 
   if (agentStatusRefreshBtn) {
     agentStatusRefreshBtn.addEventListener('click', refreshAgentStatus);
-  }
-
-  if (watchdogRefreshBtn) {
-    watchdogRefreshBtn.addEventListener('click', refreshWatchdogHealth);
   }
 
   if (debugSaveBtn) {

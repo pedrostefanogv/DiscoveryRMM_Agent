@@ -106,7 +106,6 @@ function setActiveTab(tab) {
   // Stop agent status poll when leaving debug tab
   if (tab !== 'debug') {
     stopAgentStatusPoll();
-    stopWatchdogPoll();
   }
 
   if (tab === 'status' && typeof startStatusPoll === 'function') {
@@ -123,75 +122,17 @@ function setActiveTab(tab) {
 }
 
 var uiRuntimeHeartbeatId = null;
-var uiRuntimeRecoveryReloadAt = 0;
-const UI_RUNTIME_HEARTBEAT_MS = 15000;
-const UI_RUNTIME_RECOVERY_RELOAD_DEDUPE_MS = 5 * 60 * 1000;
-
-function canReportUIRuntime() {
-  try {
-    var api = appApi();
-    return !!(api && typeof api.ReportUIRuntimeState === 'function' && typeof api.SetUIRuntimeSuspended === 'function');
-  } catch (_) {
-    return false;
-  }
-}
 
 function reportUIRuntimeState(source) {
-  if (!canReportUIRuntime()) return;
-
-  var visible = isAppWindowVisible() && !window.__discoveryUISuspended;
-  var focused = typeof document.hasFocus === 'function' ? document.hasFocus() : visible;
-  var api = appApi();
-
-  if (!visible) {
-    api.SetUIRuntimeSuspended(true, 'janela oculta: ' + String(source || 'frontend')).catch(function () {});
-    return;
-  }
-
-  api.ReportUIRuntimeState(true, focused, String(source || 'frontend')).catch(function () {});
+  // no-op: watchdog system removed
 }
 
 function startUIRuntimeMonitor(source) {
-  stopUIRuntimeMonitor(false, source);
-  reportUIRuntimeState(source || 'bootstrap');
-
-  if (!isAppWindowVisible()) {
-    return;
-  }
-
-  uiRuntimeHeartbeatId = setInterval(function () {
-    if (document.hidden || window.__discoveryUISuspended) return;
-    reportUIRuntimeState('interval');
-  }, UI_RUNTIME_HEARTBEAT_MS);
+  // no-op: watchdog system removed
 }
 
 function stopUIRuntimeMonitor(announceSuspend, source) {
-  if (uiRuntimeHeartbeatId) {
-    clearInterval(uiRuntimeHeartbeatId);
-    uiRuntimeHeartbeatId = null;
-  }
-  if (announceSuspend === false) {
-    return;
-  }
-  reportUIRuntimeState(source || 'suspend');
-}
-
-function handleUIRuntimeRecoverEvent(data) {
-  if (document.hidden || window.__discoveryUISuspended) {
-    return;
-  }
-
-  var reloadRequested = !!(data && data.reloadRequested);
-  if (reloadRequested) {
-    var now = Date.now();
-    if (now - uiRuntimeRecoveryReloadAt >= UI_RUNTIME_RECOVERY_RELOAD_DEDUPE_MS) {
-      uiRuntimeRecoveryReloadAt = now;
-      window.location.reload();
-      return;
-    }
-  }
-
-  reportUIRuntimeState('recovery-event');
+  // no-op: watchdog system removed
 }
 
 function handleWindowVisibilityChange() {
@@ -204,7 +145,6 @@ function handleWindowVisibilityChange() {
     }
     if (typeof stopStatusPoll === 'function') stopStatusPoll();
     if (typeof stopAgentStatusPoll === 'function') stopAgentStatusPoll();
-    if (typeof stopWatchdogPoll === 'function') stopWatchdogPoll();
     return;
   }
 
@@ -216,7 +156,6 @@ function handleWindowVisibilityChange() {
   }
   if (activeTab === 'debug') {
     if (typeof startAgentStatusPoll === 'function') startAgentStatusPoll();
-    if (typeof startWatchdogPoll === 'function') startWatchdogPoll();
   }
   if (activeTab === 'logs' && !logsAutoRefreshId) {
     logsAutoRefreshId = setInterval(loadLogs, 3000);
@@ -267,7 +206,6 @@ function normalizeLogSource(rawSource) {
   if (source.indexOf('printer') === 0) return 'printer';
   if (source.indexOf('debug') === 0 || source.indexOf('config') === 0 || source.indexOf('installer-bootstrap') === 0) return 'debug';
   if (source.indexOf('startup') === 0 || source.indexOf('shutdown') === 0 || source.indexOf('tray') === 0) return 'startup';
-  if (source.indexOf('watchdog') === 0 || source.indexOf('stream-monitor') === 0 || source.indexOf('operation-monitor') === 0) return 'watchdog';
   if (source.indexOf('agent') === 0) return 'agent';
   if (source.indexOf('automation') === 0) return 'automation';
   if (source.indexOf('support') === 0) return 'support';

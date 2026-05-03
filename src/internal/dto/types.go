@@ -4,28 +4,7 @@ package dto
 
 import "time"
 
-// ─── Watchdog / Health ─────────────────────────────────────────────
-
-// WatchdogUIRecover é emitido via evento "watchdog:ui-recover".
-type WatchdogUIRecover struct {
-	Component       string `json:"component"`
-	NativeSupported bool   `json:"nativeSupported"`
-	WindowFound     bool   `json:"windowFound"`
-	Visible         bool   `json:"visible"`
-	Hung            bool   `json:"hung"`
-	Title           string `json:"title"`
-	ReloadRequested bool   `json:"reloadRequested"`
-}
-
-// WatchdogUnhealthy é emitido via evento "watchdog:unhealthy".
-type WatchdogUnhealthy struct {
-	Component   string `json:"component"`
-	Status      string `json:"status"`
-	Message     string `json:"message"`
-	Recoverable bool   `json:"recoverable"`
-}
-
-// HealthCheckItem representa um componente no payload GetWatchdogHealth.
+// HealthCheckItem representa um componente no payload de saúde.
 type HealthCheckItem struct {
 	Component   string `json:"component"`
 	Status      string `json:"status"`

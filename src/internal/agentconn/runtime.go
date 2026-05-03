@@ -289,7 +289,9 @@ func (r *Runtime) runSession(ctx context.Context, cfg Config) error {
 	canonical := validateCanonicalNATSContext(cfg) == nil
 
 	// ── NATS nativo ──
-	if canonical {
+	// So tenta nats:// puro para hosts locais; remotos sempre falham com Authorization Violation
+	// pois o NATS raw nao fica exposto diretamente na internet.
+	if canonical && isLocalTarget(apiHost) {
 		if cfg.NatsServer != "" {
 			labels = append(labels, "nats")
 			server := cfg.NatsServer
@@ -470,8 +472,14 @@ func (r *Runtime) runSignalRSession(ctx context.Context, cfg Config, connectTime
 	readerDone := make(chan struct{})
 	defer close(readerDone)
 
+	// Deadline de leitura: se o servidor ficar silencioso por 2x o heartbeat,
+	// o ReadMessage retorna timeout e o loop reconecta. Evita que a sessao
+	// fique presa em i/o timeout do SO por tempo indeterminado.
+	readDeadline := heartbeatEvery * 2
+
 	go func() {
 		for {
+			_ = conn.SetReadDeadline(time.Now().Add(readDeadline))
 			_, msg, err := conn.ReadMessage()
 			if ne, ok := err.(net.Error); ok && ne.Timeout() {
 				r.logf("[transport][signalr] timeout de leitura websocket; reconectando")
