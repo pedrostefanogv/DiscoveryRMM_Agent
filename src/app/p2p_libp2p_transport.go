@@ -361,9 +361,58 @@ func libp2pFetchManifest(ctx context.Context, h host.Host, peerID peer.ID, artif
 	return manifest, nil
 }
 
+func decodeLibp2pGetHeaderAndPayload(stream io.Reader) (libp2pGetResponse, io.Reader, error) {
+	dec := json.NewDecoder(stream)
+	var hdr libp2pGetResponse
+	if err := dec.Decode(&hdr); err != nil {
+		return libp2pGetResponse{}, nil, fmt.Errorf("decode get hdr: %w", err)
+	}
+	if strings.TrimSpace(hdr.ArtifactName) == "" {
+		return libp2pGetResponse{}, nil, fmt.Errorf("resposta de get invalida")
+	}
+	if hdr.RangeEnd < hdr.RangeStart {
+		return libp2pGetResponse{}, nil, fmt.Errorf("range retornado invalido")
+	}
+	if payloadLen := hdr.RangeEnd - hdr.RangeStart + 1; payloadLen <= 0 {
+		return libp2pGetResponse{}, nil, fmt.Errorf("payload vazio")
+	}
+
+	// Mantem uma trilha unica de leitura: bytes que ja estao no buffer do decoder
+	// + bytes restantes no mesmo reader subjacente.
+	payloadReader := bufio.NewReader(io.MultiReader(dec.Buffered(), stream))
+	// /artifact/get envia o header via json.Encoder.Encode, que adiciona um '\n'
+	// antes dos bytes binarios do payload.
+	if first, err := payloadReader.Peek(1); err == nil && len(first) == 1 && first[0] == '\n' {
+		_, _ = payloadReader.ReadByte()
+	}
+	return hdr, payloadReader, nil
+}
+
+func readPayloadExact(reader io.Reader, expected int64) ([]byte, error) {
+	if expected < 0 {
+		return nil, fmt.Errorf("tamanho de payload invalido")
+	}
+	if expected > int64(^uint(0)>>1) {
+		return nil, fmt.Errorf("payload grande demais")
+	}
+	data := make([]byte, int(expected))
+	n, err := io.ReadFull(reader, data)
+	if err != nil {
+		return nil, fmt.Errorf("leitura incompleta: esperado=%d recebido=%d: %w", expected, n, err)
+	}
+	return data, nil
+}
+
 // libp2pDownloadChunk abre um stream /artifact/get/1.0.0, solicita um range e
 // salva os bytes no destFile. Verifica SHA256 do chunk após receber.
 func libp2pDownloadChunk(ctx context.Context, h host.Host, peerID peer.ID, artifactName, requesterID string, chunk P2PChunk, destFile string) error {
+	if chunk.Size <= 0 {
+		return fmt.Errorf("chunk %d: tamanho invalido", chunk.Index)
+	}
+	if chunk.Offset < 0 {
+		return fmt.Errorf("chunk %d: offset invalido", chunk.Index)
+	}
+
 	s, err := h.NewStream(ctx, peerID, protoArtifactGet)
 	if err != nil {
 		return fmt.Errorf("stream get: %w", err)
@@ -381,28 +430,27 @@ func libp2pDownloadChunk(ctx context.Context, h host.Host, peerID peer.ID, artif
 		return fmt.Errorf("encode get req: %w", err)
 	}
 
-	// Ler header JSON (até newline que json.Encoder/Decoder inserem).
-	var hdr libp2pGetResponse
-	dec := json.NewDecoder(bufio.NewReader(s))
-	if err := dec.Decode(&hdr); err != nil {
-		return fmt.Errorf("decode get hdr: %w", err)
+	hdr, payloadReader, err := decodeLibp2pGetHeaderAndPayload(s)
+	if err != nil {
+		return err
 	}
-	// Verificar se é erro.
-	if hdr.ArtifactName == "" {
-		return fmt.Errorf("resposta de get invalida")
+	if !strings.EqualFold(strings.TrimSpace(hdr.ArtifactName), strings.TrimSpace(artifactName)) {
+		return fmt.Errorf("chunk %d: artifact inesperado no payload", chunk.Index)
+	}
+	expectedStart := chunk.Offset
+	expectedEnd := chunk.Offset + chunk.Size - 1
+	if hdr.RangeStart != expectedStart || hdr.RangeEnd != expectedEnd {
+		return fmt.Errorf("chunk %d: range inesperado no payload (esperado=%d-%d recebido=%d-%d)",
+			chunk.Index, expectedStart, expectedEnd, hdr.RangeStart, hdr.RangeEnd)
 	}
 
-	// Ler bytes do chunk do reader restante (após o JSON decoder ter consumido o header).
 	chunkLen := hdr.RangeEnd - hdr.RangeStart + 1
-	data, err := io.ReadAll(io.LimitReader(dec.Buffered(), chunkLen))
-	if err != nil || int64(len(data)) < chunkLen {
-		// Tentar ler do stream diretamente se o buffered não foi suficiente.
-		remaining := chunkLen - int64(len(data))
-		extra, rerr := io.ReadAll(io.LimitReader(s, remaining))
-		if rerr != nil {
-			return fmt.Errorf("leitura do chunk: %w", rerr)
-		}
-		data = append(data, extra...)
+	if chunkLen != chunk.Size {
+		return fmt.Errorf("chunk %d: tamanho divergente (esperado=%d recebido=%d)", chunk.Index, chunk.Size, chunkLen)
+	}
+	data, err := readPayloadExact(payloadReader, chunkLen)
+	if err != nil {
+		return fmt.Errorf("leitura do chunk: %w", err)
 	}
 
 	// Verificar hash do chunk.
@@ -432,14 +480,17 @@ func libp2pDownloadArtifact(ctx context.Context, h host.Host, peerID peer.ID, ac
 		return "", 0, fmt.Errorf("encode get req: %w", err)
 	}
 
-	dec := json.NewDecoder(bufio.NewReader(s))
-	var hdr libp2pGetResponse
-	if err := dec.Decode(&hdr); err != nil {
-		return "", 0, fmt.Errorf("decode get hdr: %w", err)
+	hdr, payloadReader, err := decodeLibp2pGetHeaderAndPayload(s)
+	if err != nil {
+		return "", 0, err
 	}
-	if hdr.ArtifactName == "" {
-		return "", 0, fmt.Errorf("resposta de get invalida")
+	if !strings.EqualFold(strings.TrimSpace(hdr.ArtifactName), strings.TrimSpace(access.ArtifactName)) {
+		return "", 0, fmt.Errorf("artifact inesperado no payload")
 	}
+	if hdr.RangeStart != 0 {
+		return "", 0, fmt.Errorf("range inicial inesperado no payload")
+	}
+	expectedBytes := hdr.RangeEnd - hdr.RangeStart + 1
 
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
 		return "", 0, err
@@ -451,17 +502,19 @@ func libp2pDownloadArtifact(ctx context.Context, h host.Host, peerID peer.ID, ac
 		return "", 0, err
 	}
 
-	// Drenar buffered + stream.
-	reader := io.MultiReader(dec.Buffered(), s)
-	size, copyErr := io.Copy(f, reader)
+	size, copyErr := io.CopyN(f, payloadReader, expectedBytes)
 	closeErr := f.Close()
 	if copyErr != nil {
 		_ = os.Remove(tmpPath)
-		return "", 0, copyErr
+		return "", 0, fmt.Errorf("leitura incompleta do artifact: esperado=%d recebido=%d: %w", expectedBytes, size, copyErr)
 	}
 	if closeErr != nil {
 		_ = os.Remove(tmpPath)
 		return "", 0, closeErr
+	}
+	if size != expectedBytes {
+		_ = os.Remove(tmpPath)
+		return "", 0, fmt.Errorf("tamanho recebido divergente: esperado=%d recebido=%d", expectedBytes, size)
 	}
 
 	checksum, err := computeFileSHA256(tmpPath)
