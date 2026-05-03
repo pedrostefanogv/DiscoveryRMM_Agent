@@ -504,11 +504,19 @@ func (a *App) startup(ctx context.Context) {
 		if a.debugSvc != nil {
 			a.debugSvc.BootstrapAgentCredentialsFromInstallerConfig(ctx)
 		}
+		if a.serviceConnectedMode.Load() {
+			a.requestServiceConfigReload(ctx, "startup-bootstrap")
+		}
 
 		// MeshCentral deve iniciar somente apos autenticar e carregar credenciais do agente.
 		a.safeGo(func() {
 			a.ensureMeshCentralInstalled(ctx, "startup-auth", false)
 		})
+
+		if a.serviceConnectedMode.Load() {
+			log.Println("[startup] agent-runtime local: ignorado (service disponível)")
+			return
+		}
 
 		a.agentConn.Run(ctx)
 	})

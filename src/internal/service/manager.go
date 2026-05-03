@@ -40,6 +40,20 @@ type AppsService interface {
 	UpgradeAll(ctx context.Context) (string, error)
 }
 
+type AgentConnectionStatus struct {
+	Connected bool
+	AgentID   string
+	Server    string
+	LastEvent string
+	Transport string
+}
+
+type AgentRuntime interface {
+	Run(ctx context.Context)
+	Reload()
+	GetStatus() AgentConnectionStatus
+}
+
 type P2PService interface {
 	Run(ctx context.Context) error
 }
@@ -54,6 +68,7 @@ type ServiceManager struct {
 	updateTrigger chan struct{}
 	db            *database.DB
 	ipcServer     *IPCServer
+	agentRuntime  AgentRuntime
 	automationSvc AutomationService
 	inventorySvc  InventoryService
 	appsSvc       AppsService
@@ -289,6 +304,13 @@ func (sm *ServiceManager) SetInventoryService(svc InventoryService) {
 	sm.inventorySvc = svc
 }
 
+// SetAgentRuntime registra o runtime de conexão remota usado pelo modo service.
+func (sm *ServiceManager) SetAgentRuntime(runtime AgentRuntime) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	sm.agentRuntime = runtime
+}
+
 // SetAppsService registra o serviço de apps/pacotes real.
 func (sm *ServiceManager) SetAppsService(svc AppsService) {
 	sm.mu.Lock()
@@ -344,6 +366,10 @@ func (sm *ServiceManager) Start(ctx context.Context) error {
 		aware.SetDB(db)
 		sm.logInfo("Database injetada no inventorySvc")
 	}
+	if aware, ok := sm.agentRuntime.(databaseAwareService); ok {
+		aware.SetDB(db)
+		sm.logInfo("Database injetada no agentRuntime")
+	}
 	if aware, ok := sm.p2pSvc.(databaseAwareService); ok {
 		aware.SetDB(db)
 		sm.logInfo("Database injetada no p2pSvc")
@@ -372,10 +398,11 @@ func (sm *ServiceManager) Start(ctx context.Context) error {
 	}
 	sm.logInfo("Diretorio de updates criado: %s", filepath.Join(sm.dataDir, "updates"))
 
-	// 4. Iniciar worker threads para automação, inventário, P2P
-	sm.logInfo("Iniciando workers: automation, inventory, actionQueue, p2p, selfUpdate...")
+	// 4. Iniciar worker threads para automação, inventário, conexão remota, P2P
+	sm.logInfo("Iniciando workers: automation, inventory, agentRuntime, actionQueue, p2p, selfUpdate...")
 	go sm.automationWorker(ctx)
 	go sm.inventoryWorker(ctx)
+	go sm.agentConnectionWorker(ctx)
 	go sm.actionQueueWorker(ctx)
 	go sm.p2pWorker(ctx)
 	go sm.selfUpdateWorker(ctx)
@@ -412,13 +439,47 @@ func (sm *ServiceManager) loadConfig() error {
 	// O instalador NSIS escreve via PowerShell 5.1 que adiciona BOM no Set-Content -Encoding UTF8.
 	data = bytes.TrimPrefix(data, []byte{0xEF, 0xBB, 0xBF})
 
-	sm.config = &SharedConfig{}
-	if err := json.Unmarshal(data, sm.config); err != nil {
+	parsed := &SharedConfig{}
+	if err := json.Unmarshal(data, parsed); err != nil {
 		return fmt.Errorf("JSON inválido em %s: %w", configPath, err)
 	}
 
-	sm.logInfo("Config carregada: agentId=%s, server=%s", sm.config.AgentID, sm.config.ServerURL)
+	sm.mu.Lock()
+	sm.config = parsed
+	sm.mu.Unlock()
+
+	sm.logInfo("Config carregada: agentId=%s, server=%s", parsed.AgentID, parsed.ServerURL)
 	return nil
+}
+
+// ReloadConfig recarrega config.json sem reiniciar o service e reaplica o agent runtime.
+func (sm *ServiceManager) ReloadConfig() error {
+	if err := sm.loadConfig(); err != nil {
+		return err
+	}
+
+	sm.mu.RLock()
+	runtime := sm.agentRuntime
+	sm.mu.RUnlock()
+	if runtime != nil {
+		runtime.Reload()
+	}
+	return nil
+}
+
+// RefreshAutomationPolicy força uma atualização imediata da política de automação.
+func (sm *ServiceManager) RefreshAutomationPolicy(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	sm.mu.RLock()
+	automationSvc := sm.automationSvc
+	sm.mu.RUnlock()
+	if automationSvc == nil {
+		return fmt.Errorf("serviço de automação não registrado")
+	}
+	_, err := automationSvc.RefreshPolicy(ctx, false)
+	return err
 }
 
 // GetConfig retorna a configuração compartilhada (thread-safe)
@@ -451,20 +512,28 @@ func (sm *ServiceManager) GetStatus() map[string]interface{} {
 	serverURL := ""
 	p2pEnabled := false
 	lastSync := ""
+	agentStatus := AgentConnectionStatus{}
 	if sm.config != nil {
 		agentID = sm.config.AgentID
 		serverURL = sm.config.ServerURL
 		p2pEnabled = sm.config.P2PEnabled
 		lastSync = sm.config.LastSync
 	}
+	if sm.agentRuntime != nil {
+		agentStatus = sm.agentRuntime.GetStatus()
+	}
 
 	return map[string]interface{}{
-		"running":        sm.isRunning,
-		"uptime_seconds": time.Since(sm.startTime).Seconds(),
-		"agent_id":       agentID,
-		"server_url":     serverURL,
-		"p2p_enabled":    p2pEnabled,
-		"last_sync":      lastSync,
+		"running":          sm.isRunning,
+		"uptime_seconds":   time.Since(sm.startTime).Seconds(),
+		"agent_id":         agentID,
+		"server_url":       serverURL,
+		"p2p_enabled":      p2pEnabled,
+		"last_sync":        lastSync,
+		"agent_connected":  agentStatus.Connected,
+		"agent_server":     agentStatus.Server,
+		"agent_last_event": agentStatus.LastEvent,
+		"agent_transport":  agentStatus.Transport,
 	}
 }
 
@@ -667,6 +736,20 @@ func (sm *ServiceManager) actionQueueWorker(ctx context.Context) {
 	}
 }
 
+func (sm *ServiceManager) agentConnectionWorker(ctx context.Context) {
+	sm.mu.RLock()
+	runtime := sm.agentRuntime
+	sm.mu.RUnlock()
+	if runtime == nil {
+		sm.logInfo("AgentConnectionWorker ignorado: runtime nao registrado")
+		return
+	}
+
+	sm.logInfo("AgentConnectionWorker iniciado")
+	runtime.Run(ctx)
+	sm.logInfo("AgentConnectionWorker encerrado")
+}
+
 func (sm *ServiceManager) processNextQueuedAction(ctx context.Context) (bool, error) {
 	sm.mu.RLock()
 	db := sm.db
@@ -830,7 +913,7 @@ func (sm *ServiceManager) executeQueuedAction(ctx context.Context, entry databas
 		return actionExecutionResult{status: "completed", output: "inventário coletado", resultJSON: string(resultJSON)}, nil
 	case "reload_config":
 		// Recarrega configuração do arquivo config.json em disco sem reiniciar o service.
-		if err := sm.loadConfig(); err != nil {
+		if err := sm.ReloadConfig(); err != nil {
 			return actionExecutionResult{status: "failed", errMessage: err.Error()}, err
 		}
 		return actionExecutionResult{status: "completed", output: "configuração recarregada", resultJSON: `{"command":"reload_config"}`}, nil

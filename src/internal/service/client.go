@@ -42,7 +42,9 @@ func (sc *ServiceClient) Close() error {
 	if sc.conn == nil {
 		return nil
 	}
-	return sc.conn.Close()
+	err := sc.conn.Close()
+	sc.conn = nil
+	return err
 }
 
 // IsConnected verifica se está conectado

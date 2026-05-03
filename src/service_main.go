@@ -81,6 +81,13 @@ func runServiceRuntime(ctx context.Context, logFile string) error {
 
 func newRuntimeServiceManager(dataDir string) *service.ServiceManager {
 	svcMgr := service.NewServiceManager(dataDir)
+	svcMgr.SetAgentRuntime(service.NewAgentRuntimeService(svcMgr.GetConfig, func(line string) {
+		log.Printf("[SERVICE.Agent] %s", line)
+	}, service.AgentRuntimeHooks{
+		ReloadConfig:            svcMgr.ReloadConfig,
+		RefreshAutomationPolicy: svcMgr.RefreshAutomationPolicy,
+		RequestSelfUpdateCheck:  svcMgr.RequestSelfUpdateCheck,
+	}))
 	svcMgr.SetAutomationService(service.NewAutomationRuntimeService(svcMgr.GetConfig, func(line string) {
 		log.Printf("[SERVICE.Automation] %s", line)
 	}))

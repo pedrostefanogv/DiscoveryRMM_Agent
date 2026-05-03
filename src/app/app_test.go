@@ -117,3 +117,29 @@ func TestServiceConnectedMode_CanBeSetTrue(t *testing.T) {
 		t.Fatal("esperado serviceConnectedMode=true após Store(true)")
 	}
 }
+
+func TestAgentStatusFromServiceStatusData(t *testing.T) {
+	got := agentStatusFromServiceStatusData(map[string]interface{}{
+		"agent_connected":  true,
+		"agent_id":         "agent-123",
+		"agent_server":     "server.example:443",
+		"agent_last_event": "conectado",
+		"agent_transport":  "signalr",
+	})
+
+	if !got.Connected {
+		t.Fatal("expected connected=true")
+	}
+	if got.AgentID != "agent-123" {
+		t.Fatalf("AgentID = %q", got.AgentID)
+	}
+	if got.Server != "server.example:443" {
+		t.Fatalf("Server = %q", got.Server)
+	}
+	if got.Transport != "signalr" {
+		t.Fatalf("Transport = %q", got.Transport)
+	}
+	if got.LastEvent != "conectado" {
+		t.Fatalf("LastEvent = %q", got.LastEvent)
+	}
+}
