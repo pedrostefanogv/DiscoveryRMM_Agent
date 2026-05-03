@@ -243,37 +243,6 @@ func validateTransportSecurity(cfg Config) error {
 		return fmt.Errorf("apiScheme deve ser https para endpoints remotos")
 	}
 
-	if strings.TrimSpace(cfg.NatsWsServer) != "" {
-		natsURL, err := normalizeNATSURL(cfg.NatsWsServer)
-		if err != nil {
-			return err
-		}
-		u, err := url.Parse(natsURL)
-		if err != nil {
-			return fmt.Errorf("url NATS WS invalida: %w", err)
-		}
-		if !isLocalTarget(u.Host) && strings.ToLower(strings.TrimSpace(u.Scheme)) != "wss" {
-			return fmt.Errorf("natsWsServer remoto deve usar wss")
-		}
-	}
-
-	if strings.TrimSpace(cfg.NatsServer) != "" {
-		natsURL, err := normalizeNATSURL(cfg.NatsServer)
-		if err != nil {
-			return err
-		}
-		u, err := url.Parse(natsURL)
-		if err != nil {
-			return fmt.Errorf("url NATS invalida: %w", err)
-		}
-		scheme := strings.ToLower(strings.TrimSpace(u.Scheme))
-		if !isLocalTarget(u.Host) {
-			if scheme != "wss" {
-				return fmt.Errorf("natsServer remoto deve usar transporte seguro (wss)")
-			}
-		}
-	}
-
 	return nil
 }
 

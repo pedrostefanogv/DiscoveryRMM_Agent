@@ -208,42 +208,19 @@ func (r *Runtime) Run(ctx context.Context) {
 		cfg.AgentID = strings.TrimSpace(cfg.AgentID)
 		cfg.ClientID = strings.TrimSpace(cfg.ClientID)
 		cfg.SiteID = strings.TrimSpace(cfg.SiteID)
-		// Respeita handshakeEnabled vindo do servidor (antes era forcado true).
-		// O secure handshake so e executado se o backend enviar HandshakeChallenge.
 
-		if cfg.NatsUseWssExternal {
-			if cfg.NatsServerHost == "" {
-				r.logf("[security][nats-wss] natsUseWssExternal=true sem natsServerHost")
-			} else if externalWSS, err := buildExternalNATSWSSURL(cfg.NatsServerHost); err != nil {
-				r.logf("[security][nats-wss] host externo invalido (natsServerHost=%s): %v", cfg.NatsServerHost, err)
-			} else {
-				cfg.NatsWsServer = externalWSS
-				cfg.NatsServer = ""
-				r.logf("[security][nats-wss] endpoint externo aplicado: %s", cfg.NatsWsServer)
-			}
-		}
-
+		// Aplica NatsServerHost como override no host do endpoint NATS nativo.
 		if cfg.NatsServerHost != "" {
 			if overridden, err := rewriteNATSHost(cfg.NatsServer, cfg.NatsServerHost); err != nil {
-				r.logf("[security][nats] host override invalido (natsServerHost=%s): %v", cfg.NatsServerHost, err)
+				r.logf("[transport][nats] host override invalido (natsServerHost=%s): %v", cfg.NatsServerHost, err)
 			} else if overridden != "" && overridden != cfg.NatsServer {
-				r.logf("[security][nats] host override aplicado para nats://")
+				r.logf("[transport][nats] host override aplicado para nats://")
 				cfg.NatsServer = overridden
-			}
-			if overridden, err := rewriteNATSHost(cfg.NatsWsServer, cfg.NatsServerHost); err != nil {
-				r.logf("[security][nats-wss] host override invalido (natsServerHost=%s): %v", cfg.NatsServerHost, err)
-			} else if overridden != "" && overridden != cfg.NatsWsServer {
-				r.logf("[security][nats-wss] host override aplicado para wss://")
-				cfg.NatsWsServer = overridden
 			}
 		}
 
-		derivedNATS, derivedWSS := autoDeriveNATSEndpoints(&cfg)
-		if derivedNATS {
+		if derivedNATS, _ := autoDeriveNATSEndpoints(&cfg); derivedNATS {
 			r.logf("[transport][nats] auto-derivado: %s", cfg.NatsServer)
-		}
-		if derivedWSS {
-			r.logf("[transport][nats-wss] auto-derivado: %s", cfg.NatsWsServer)
 		}
 
 		if cfg.ApiServer != "" && cfg.ApiScheme != "http" && cfg.ApiScheme != "https" {
@@ -257,7 +234,7 @@ func (r *Runtime) Run(ctx context.Context) {
 			continue
 		}
 
-		if cfg.ApiServer == "" && cfg.NatsServer == "" && cfg.NatsWsServer == "" {
+		if cfg.ApiServer == "" && cfg.NatsServer == "" {
 			r.logf("configuracao de agente ausente: nenhum servidor configurado")
 			r.waitOrStop(ctx, reconnectBase)
 			continue
@@ -278,64 +255,39 @@ func (r *Runtime) Run(ctx context.Context) {
 
 func (r *Runtime) runSession(ctx context.Context, cfg Config) error {
 	// Ordem de fallback:
-	//   1. NATS nativo (natsServerHost → apiServer fallback)
-	//   2. NATS WSS    (natsServerHost → apiServer fallback)
-	//   3. SignalR     (ultimo recurso)
+	//   1. NATS nativo (porta 4222)
+	//   2. SignalR (WebSocket)
 	var attempts []func() error
 	var labels []string
 
 	// Extrai host da API para usar como fallback nos endpoints NATS.
 	apiHost := extractHostFromServer(cfg.ApiServer)
-	canonical := validateCanonicalNATSContext(cfg) == nil
 
 	// ── NATS nativo ──
-	// So tenta nats:// puro para hosts locais; remotos sempre falham com Authorization Violation
-	// pois o NATS raw nao fica exposto diretamente na internet.
-	if canonical && isLocalTarget(apiHost) {
-		if cfg.NatsServer != "" {
-			labels = append(labels, "nats")
-			server := cfg.NatsServer
+	// Tenta nats:// nativo sempre em primeiro lugar,
+	// seja local ou remoto.
+	if cfg.NatsServer != "" {
+		labels = append(labels, "nats")
+		server := cfg.NatsServer
+		attempts = append(attempts, func() error {
+			return r.runNATSSession(ctx, cfg, server, "nats", connectAttemptTimeout)
+		})
+	}
+	// Fallback: usa host da API + porta 4222
+	if apiHost != "" {
+		fallbackNats := "nats://" + apiHost + ":4222"
+		if fallbackNats != cfg.NatsServer {
+			labels = append(labels, "nats (api-fallback)")
+			server := fallbackNats
 			attempts = append(attempts, func() error {
 				return r.runNATSSession(ctx, cfg, server, "nats", connectAttemptTimeout)
 			})
-		}
-		// Fallback: usa host da API + porta 4222
-		if apiHost != "" && (cfg.NatsServer == "" || cfg.NatsServerHost == "" || cfg.NatsServerHost != apiHost) {
-			fallbackNats := "nats://" + apiHost + ":4222"
-			if fallbackNats != cfg.NatsServer {
-				labels = append(labels, "nats (api-fallback)")
-				server := fallbackNats
-				attempts = append(attempts, func() error {
-					return r.runNATSSession(ctx, cfg, server, "nats", connectAttemptTimeout)
-				})
-				r.logf("[transport][nats] fallback via apiServer: %s", fallbackNats)
-			}
-		}
-	}
-
-	// ── NATS WSS ──
-	if canonical {
-		if cfg.NatsWsServer != "" {
-			labels = append(labels, "nats-wss")
-			server := cfg.NatsWsServer
-			attempts = append(attempts, func() error {
-				return r.runNATSSession(ctx, cfg, server, "nats-wss", connectAttemptTimeout)
-			})
-		}
-		// Fallback: usa host da API + path /nats/
-		if apiHost != "" {
-			if fallbackWSS, err := buildExternalNATSWSSURL(apiHost); err == nil && fallbackWSS != cfg.NatsWsServer {
-				labels = append(labels, "nats-wss (api-fallback)")
-				server := fallbackWSS
-				attempts = append(attempts, func() error {
-					return r.runNATSSession(ctx, cfg, server, "nats-wss", connectAttemptTimeout)
-				})
-				r.logf("[transport][nats-wss] fallback via apiServer: %s", fallbackWSS)
-			}
+			r.logf("[transport][nats] fallback via apiServer: %s", fallbackNats)
 		}
 	}
 
 	// ── SignalR ──
+	// Último recurso: conexão WebSocket com handshake SignalR.
 	if cfg.ApiServer != "" && (cfg.ApiScheme == "http" || cfg.ApiScheme == "https") {
 		labels = append(labels, "signalr")
 		attempts = append(attempts, func() error {
@@ -386,8 +338,7 @@ func extractHostFromServer(server string) string {
 	return strings.Trim(strings.TrimSpace(server), "[]")
 }
 
-// autoDeriveNATSEndpoints derives endpoints from NatsServerHost.
-// For remote hosts, prefer WSS only and avoid deriving insecure nats://.
+// autoDeriveNATSEndpoints derives the NATS nativo endpoint from NatsServerHost.
 func autoDeriveNATSEndpoints(cfg *Config) (derivedNATS bool, derivedWSS bool) {
 	if cfg == nil {
 		return false, false
@@ -397,25 +348,12 @@ func autoDeriveNATSEndpoints(cfg *Config) (derivedNATS bool, derivedWSS bool) {
 		return false, false
 	}
 
-	if cfg.NatsWsServer == "" {
-		if externalWSS, err := buildExternalNATSWSSURL(host); err == nil {
-			cfg.NatsWsServer = externalWSS
-			derivedWSS = true
-		}
-	}
-
 	if cfg.NatsServer != "" {
-		return derivedNATS, derivedWSS
-	}
-	if cfg.NatsUseWssExternal {
-		return derivedNATS, derivedWSS
-	}
-	if !isLocalTarget(host) {
-		return derivedNATS, derivedWSS
+		return false, false
 	}
 
 	cfg.NatsServer = "nats://" + host + ":4222"
-	return true, derivedWSS
+	return true, false
 }
 
 func (r *Runtime) runSignalRSession(ctx context.Context, cfg Config, connectTimeout time.Duration) error {

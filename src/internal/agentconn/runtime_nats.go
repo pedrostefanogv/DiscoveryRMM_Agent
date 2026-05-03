@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -79,43 +78,11 @@ func (r *Runtime) runNATSSession(ctx context.Context, cfg Config, server, transp
 		return err
 	}
 
-	parsedNATSURL, err := url.Parse(natsURL)
-	if err != nil {
-		return fmt.Errorf("url NATS invalida: %w", err)
-	}
-	if strings.EqualFold(strings.TrimSpace(parsedNATSURL.Scheme), "wss") {
-		observedTLSHash, observeErr := observeTLSPeerCertHash(ctx, parsedNATSURL.Host, connectTimeout)
-		if observeErr != nil {
-			r.logf("[security][nats-wss] falha ao observar hash TLS: %v", observeErr)
-		} else {
-			observedTLSHash = normalizeTLSCertHash(observedTLSHash)
-		}
-		r.logf("[security][nats-wss] hash TLS observado=%s esperado=%s", observedTLSHash, normalizeTLSCertHash(cfg.NatsTLSCertHash))
-		if cfg.EnforceTLSHashValidation && observedTLSHash != "" && normalizeTLSCertHash(cfg.NatsTLSCertHash) != "" && observedTLSHash != normalizeTLSCertHash(cfg.NatsTLSCertHash) {
-			r.logf("[security][nats-wss] mismatch detectado; enviando tls-mismatch")
-			r.reportTLSMismatch(cfg, "nats", observedTLSHash)
-		}
-		if err := evaluateTLSPinPolicy("nats-wss", observedTLSHash, cfg.NatsTLSCertHash, cfg.EnforceTLSHashValidation); err != nil {
-			r.logf("[security][nats-wss] bloqueado: %v", err)
-			return err
-		}
-		if cfg.EnforceTLSHashValidation {
-			r.logf("[security][nats-wss] validacao TLS hash OK")
-		} else {
-			r.logf("[security][nats-wss] validacao TLS hash em modo compativel (enforce=false)")
-		}
-	}
-
 	opts := []nats.Option{
 		nats.Name("discovery-agent-" + cfg.AgentID),
 		nats.Timeout(connectTimeout),
 		nats.ReconnectWait(reconnectBase),
 		nats.MaxReconnects(-1),
-	}
-	if strings.EqualFold(strings.TrimSpace(parsedNATSURL.Scheme), "wss") {
-		if tlsCfg := tlsutil.InsecureTLSConfig(); tlsCfg != nil {
-			opts = append(opts, nats.Secure(tlsCfg))
-		}
 	}
 	if strings.TrimSpace(cfg.AuthToken) != "" {
 		opts = append(opts, nats.Token(strings.TrimSpace(cfg.AuthToken)))
