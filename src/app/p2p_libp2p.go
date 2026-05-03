@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"strings"
 	"sync"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/core/peerstore"
 	"github.com/libp2p/go-libp2p/p2p/discovery/mdns"
 	"github.com/libp2p/go-libp2p/p2p/net/connmgr"
 	noise "github.com/libp2p/go-libp2p/p2p/security/noise"
@@ -213,6 +215,32 @@ func (n *libp2pMDNSNotifee) HandlePeerFound(pi peer.AddrInfo) {
 		return // ignore self
 	}
 
+	// Filtra endereços link-local (APIPA 169.254.x.x) e loopback para evitar
+	// timeouts durante dial — esses endereços não são roteáveis entre máquinas
+	// diferentes e só causam tentativas de conexão fracassadas.
+	filteredAddrs := make([]multiaddr.Multiaddr, 0, len(pi.Addrs))
+	for _, addr := range pi.Addrs {
+		ipStr := extractIPFromMultiaddr(addr.String())
+		if ipStr == "" {
+			continue
+		}
+		ip := net.ParseIP(ipStr)
+		if ip == nil || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+			if n.onTrace != nil {
+				n.onTrace(fmt.Sprintf("libp2p filtrado endereco link-local: %s (peer=%s)", addr.String(), pi.ID))
+			}
+			continue
+		}
+		filteredAddrs = append(filteredAddrs, addr)
+	}
+	if len(filteredAddrs) == 0 {
+		if n.onTrace != nil {
+			n.onTrace(fmt.Sprintf("libp2p peer ignorado (apenas enderecos link-local): peerID=%s", pi.ID))
+		}
+		return
+	}
+	pi.Addrs = filteredAddrs
+
 	ctx, cancel := context.WithTimeout(context.Background(), p2pLibP2PHandshakeTimeout)
 	defer cancel()
 
@@ -222,6 +250,10 @@ func (n *libp2pMDNSNotifee) HandlePeerFound(pi peer.AddrInfo) {
 		}
 		return
 	}
+
+	// Remove do peerstore quaisquer endereços link-local que ainda estejam
+	// armazenados de descobertas anteriores — eles não são roteáveis.
+	cleanPeerstoreAddrs(n.h, pi.ID)
 
 	s, err := n.h.NewStream(ctx, pi.ID, p2pLibP2PProtocolID)
 	if err != nil {
@@ -332,7 +364,17 @@ func (g *p2pConnectionGater) InterceptPeerDial(id peer.ID) bool {
 	return !blocked
 }
 
-func (g *p2pConnectionGater) InterceptAddrDial(_ peer.ID, _ multiaddr.Multiaddr) bool {
+func (g *p2pConnectionGater) InterceptAddrDial(_ peer.ID, addr multiaddr.Multiaddr) bool {
+	// Bloqueia dial para endereços link-local (APIPA 169.254.x.x) como
+	// defesa em profundidade — esses endereços não são roteáveis entre
+	// máquinas e causariam timeouts.
+	ipStr := extractIPFromMultiaddr(addr.String())
+	if ipStr != "" {
+		ip := net.ParseIP(ipStr)
+		if ip != nil && (ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast()) {
+			return false
+		}
+	}
 	return true
 }
 
@@ -361,4 +403,31 @@ func extractIPFromMultiaddr(ma string) string {
 		}
 	}
 	return ""
+}
+
+// cleanPeerstoreAddrs remove do peerstore do host todos os endereços
+// link-local (APIPA) para o peer informado, evitando que tentativas de
+// dial futuras percam tempo com endereços não roteáveis.
+func cleanPeerstoreAddrs(h host.Host, pid peer.ID) {
+	ps := h.Peerstore()
+	addrs := ps.Addrs(pid)
+	var keep []multiaddr.Multiaddr
+	for _, addr := range addrs {
+		ipStr := extractIPFromMultiaddr(addr.String())
+		if ipStr == "" {
+			keep = append(keep, addr)
+			continue
+		}
+		ip := net.ParseIP(ipStr)
+		if ip != nil && (ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast()) {
+			continue
+		}
+		keep = append(keep, addr)
+	}
+	if len(keep) < len(addrs) {
+		ps.ClearAddrs(pid)
+		for _, addr := range keep {
+			ps.AddAddr(pid, addr, peerstore.PermanentAddrTTL)
+		}
+	}
 }

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"discovery/internal/platform"
 )
 
 const (
@@ -260,6 +262,11 @@ func (c *p2pCoordinator) touchP2PTempDir() error {
 		c.setLastError(err)
 		return err
 	}
+	// Garante que os diretórios temporários tenham acesso irrestrito a todos
+	// os usuários da máquina, pois arquivos podem ser escritos pelo serviço
+	// (SYSTEM) e lidos pelo agente (usuário comum).
+	_ = platform.EnsureWorldAccess(platform.TempDir())
+	_ = platform.EnsureWorldAccess(dir)
 	return nil
 }
 
