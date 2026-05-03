@@ -16,6 +16,7 @@ type p2pDiscoveredPeer struct {
 	Source       string
 	KnownPeers   int
 	ConnectedVia string
+	TTLSeconds   int
 }
 
 type p2pDiscoveryProvider interface {

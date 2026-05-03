@@ -64,6 +64,20 @@ type natsDashboardEvent struct {
 	Timestamp string `json:"timestamp"`
 }
 
+type P2PDiscoveryPeer struct {
+	AgentID string   `json:"agentId"`
+	PeerID  string   `json:"peerId"`
+	Addrs   []string `json:"addrs"`
+	Port    int      `json:"port"`
+}
+
+type P2PDiscoverySnapshot struct {
+	Sequence   uint64             `json:"sequence"`
+	TTLSeconds int                `json:"ttlSeconds"`
+	Peers      []P2PDiscoveryPeer `json:"peers"`
+	ReceivedAt time.Time          `json:"-"`
+}
+
 // SyncPing representa um evento de invalidação de sync recebido pelo agent.
 type SyncPing struct {
 	EventID          string `json:"eventId"`
@@ -98,21 +112,23 @@ type Config struct {
 }
 
 type natsSubjects struct {
-	Command   string
-	Heartbeat string
-	Result    string
-	Hardware  string
-	SyncPing  string
-	Dashboard string
+	Command      string
+	Heartbeat    string
+	Result       string
+	Hardware     string
+	SyncPing     string
+	P2PDiscovery string
+	Dashboard    string
 }
 
 // Options defines dependencies injected by the app layer.
 type Options struct {
-	LoadConfig      func() Config
-	Logf            func(format string, args ...any)
-	OnSyncPing      func(SyncPing)
-	HandleCommand   func(parent context.Context, cmdType string, payload any) (handled bool, exitCode int, output string, errText string)
-	OnCommandOutput func(cmdType string, output string, errText string)
+	LoadConfig             func() Config
+	Logf                   func(format string, args ...any)
+	OnSyncPing             func(SyncPing)
+	OnP2PDiscoverySnapshot func(P2PDiscoverySnapshot)
+	HandleCommand          func(parent context.Context, cmdType string, payload any) (handled bool, exitCode int, output string, errText string)
+	OnCommandOutput        func(cmdType string, output string, errText string)
 
 	EnqueueCommandResultOutbox    func(transport, commandID string, exitCode int, output, errText, sendError string) error
 	ListDueCommandResultOutbox    func(transport string, now time.Time, limit int) ([]CommandResultOutboxItem, error)

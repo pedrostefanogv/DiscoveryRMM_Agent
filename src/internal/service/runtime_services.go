@@ -26,9 +26,10 @@ type automationRuntimeService struct {
 }
 
 type AgentRuntimeHooks struct {
-	ReloadConfig            func() error
-	RefreshAutomationPolicy func(context.Context) error
-	RequestSelfUpdateCheck  func(string) bool
+	ReloadConfig              func() error
+	RefreshAutomationPolicy   func(context.Context) error
+	RequestSelfUpdateCheck    func(string) bool
+	ApplyP2PDiscoverySnapshot func(agentconn.P2PDiscoverySnapshot)
 }
 
 type commandResultOutboxPayload struct {
@@ -103,7 +104,8 @@ func NewAgentRuntimeService(loadConfig func() *SharedConfig, logf func(string), 
 		Logf: func(format string, args ...any) {
 			logf(fmt.Sprintf(format, args...))
 		},
-		OnSyncPing: s.handleSyncPing,
+		OnSyncPing:             s.handleSyncPing,
+		OnP2PDiscoverySnapshot: s.handleP2PDiscoverySnapshot,
 		HandleCommand: func(parent context.Context, cmdType string, payload any) (bool, int, string, string) {
 			return s.handleCommand(parent, cmdType, payload)
 		},
@@ -198,6 +200,13 @@ func (s *agentRuntimeService) handleSyncPing(ping agentconn.SyncPing) {
 	default:
 		return
 	}
+}
+
+func (s *agentRuntimeService) handleP2PDiscoverySnapshot(snapshot agentconn.P2PDiscoverySnapshot) {
+	if s == nil || s.hooks.ApplyP2PDiscoverySnapshot == nil {
+		return
+	}
+	s.hooks.ApplyP2PDiscoverySnapshot(snapshot)
 }
 
 func (s *agentRuntimeService) handleCommand(_ context.Context, cmdType string, payload any) (bool, int, string, string) {
@@ -427,6 +436,7 @@ func sharedConfigToAgentConnConfig(loadConfig func() *SharedConfig) agentconn.Co
 		AuthToken: strings.TrimSpace(cfg.AuthToken),
 		AgentID:   strings.TrimSpace(cfg.AgentID),
 		ClientID:  strings.TrimSpace(cfg.ClientID),
+		SiteID:    strings.TrimSpace(cfg.SiteID),
 	}
 }
 

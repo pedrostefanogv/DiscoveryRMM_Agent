@@ -140,13 +140,16 @@ func (r *Runtime) runNATSSession(ctx context.Context, cfg Config, server, transp
 	})
 
 	r.setStatusConnected(cfg.AgentID, natsURL, transportLabel)
-	r.logf("agente conectado ao NATS (command=%s, syncSubject=%s)", subjects.Command, subjects.SyncPing)
+	r.logf("agente conectado ao NATS (command=%s, syncSubject=%s, p2pDiscovery=%s)", subjects.Command, subjects.SyncPing, subjects.P2PDiscovery)
 
 	if _, err = nc.Subscribe(subjects.Command, r.natsCommandHandler(ctx, nc, cfg, subjects)); err != nil {
 		return fmt.Errorf("falha ao inscrever no subject de comando: %w", err)
 	}
 	if _, err = nc.Subscribe(subjects.SyncPing, r.natsSyncPingHandler()); err != nil {
 		return fmt.Errorf("falha ao inscrever no subject de sync ping: %w", err)
+	}
+	if _, err = nc.Subscribe(subjects.P2PDiscovery, r.natsP2PDiscoveryHandler()); err != nil {
+		return fmt.Errorf("falha ao inscrever no subject de discovery P2P: %w", err)
 	}
 
 	return r.runNATSEventLoop(ctx, nc, cfg, transportLabel, subjects, ipAddr)
@@ -238,6 +241,20 @@ func (r *Runtime) natsSyncPingHandler() func(msg *nats.Msg) {
 	}
 }
 
+func (r *Runtime) natsP2PDiscoveryHandler() func(msg *nats.Msg) {
+	return func(msg *nats.Msg) {
+		snapshot, err := parseP2PDiscoverySnapshot(msg.Data)
+		if err != nil {
+			r.logf("mensagem de discovery P2P NATS invalida: %v", err)
+			return
+		}
+		snapshot.ReceivedAt = time.Now().UTC()
+		if r.opts.OnP2PDiscoverySnapshot != nil {
+			r.opts.OnP2PDiscoverySnapshot(snapshot)
+		}
+	}
+}
+
 // ─── NATS Event Loop ───────────────────────────────────────────────
 
 func (r *Runtime) runNATSEventLoop(ctx context.Context, nc *nats.Conn, cfg Config, transportLabel string, subjects natsSubjects, ipAddr string) error {
@@ -295,12 +312,13 @@ func resolveNATSSubjects(cfg Config) (natsSubjects, error) {
 	}
 	prefix := fmt.Sprintf("tenant.%s.site.%s.agent.%s", clientID, siteID, agentID)
 	return natsSubjects{
-		Command:   prefix + ".command",
-		Heartbeat: prefix + ".heartbeat",
-		Result:    prefix + ".result",
-		Hardware:  prefix + ".hardware",
-		SyncPing:  prefix + ".sync.ping",
-		Dashboard: fmt.Sprintf("tenant.%s.site.%s.dashboard.events", clientID, siteID),
+		Command:      prefix + ".command",
+		Heartbeat:    prefix + ".heartbeat",
+		Result:       prefix + ".result",
+		Hardware:     prefix + ".hardware",
+		SyncPing:     prefix + ".sync.ping",
+		P2PDiscovery: fmt.Sprintf("tenant.%s.site.%s.p2p.discovery", clientID, siteID),
+		Dashboard:    fmt.Sprintf("tenant.%s.site.%s.dashboard.events", clientID, siteID),
 	}, nil
 }
 
@@ -334,4 +352,71 @@ func publishJSON(nc *nats.Conn, subject string, payload any) error {
 		return err
 	}
 	return nc.Publish(subject, b)
+}
+
+func parseP2PDiscoverySnapshot(data []byte) (P2PDiscoverySnapshot, error) {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return P2PDiscoverySnapshot{}, err
+	}
+
+	var snapshot P2PDiscoverySnapshot
+	if err := decodeP2PDiscoveryField(raw, &snapshot.Sequence, "sequence", "Sequence"); err != nil {
+		return P2PDiscoverySnapshot{}, fmt.Errorf("sequence invalido: %w", err)
+	}
+	if err := decodeP2PDiscoveryField(raw, &snapshot.TTLSeconds, "ttlSeconds", "TTLSeconds"); err != nil {
+		return P2PDiscoverySnapshot{}, fmt.Errorf("ttlSeconds invalido: %w", err)
+	}
+	var peersRaw []map[string]json.RawMessage
+	if err := decodeP2PDiscoveryField(raw, &peersRaw, "peers", "Peers"); err != nil {
+		return P2PDiscoverySnapshot{}, fmt.Errorf("peers invalido: %w", err)
+	}
+	if len(peersRaw) == 0 {
+		return P2PDiscoverySnapshot{}, fmt.Errorf("snapshot sem peers")
+	}
+
+	snapshot.Peers = make([]P2PDiscoveryPeer, 0, len(peersRaw))
+	for _, item := range peersRaw {
+		var peer P2PDiscoveryPeer
+		if err := decodeP2PDiscoveryField(item, &peer.AgentID, "agentId", "AgentID", "AgentId"); err != nil {
+			return P2PDiscoverySnapshot{}, fmt.Errorf("agentId invalido: %w", err)
+		}
+		if err := decodeP2PDiscoveryField(item, &peer.PeerID, "peerId", "PeerID", "PeerId"); err != nil {
+			return P2PDiscoverySnapshot{}, fmt.Errorf("peerId invalido: %w", err)
+		}
+		if err := decodeP2PDiscoveryField(item, &peer.Addrs, "addrs", "Addrs"); err != nil {
+			return P2PDiscoverySnapshot{}, fmt.Errorf("addrs invalido: %w", err)
+		}
+		if err := decodeP2PDiscoveryField(item, &peer.Port, "port", "Port"); err != nil {
+			return P2PDiscoverySnapshot{}, fmt.Errorf("port invalido: %w", err)
+		}
+		peer.AgentID = strings.TrimSpace(peer.AgentID)
+		peer.PeerID = strings.TrimSpace(peer.PeerID)
+		cleanAddrs := make([]string, 0, len(peer.Addrs))
+		for _, addr := range peer.Addrs {
+			if trimmed := strings.TrimSpace(addr); trimmed != "" {
+				cleanAddrs = append(cleanAddrs, trimmed)
+			}
+		}
+		peer.Addrs = cleanAddrs
+		snapshot.Peers = append(snapshot.Peers, peer)
+	}
+	if snapshot.TTLSeconds <= 0 {
+		snapshot.TTLSeconds = 120
+	}
+	return snapshot, nil
+}
+
+func decodeP2PDiscoveryField(raw map[string]json.RawMessage, dest any, keys ...string) error {
+	for _, key := range keys {
+		value, ok := raw[key]
+		if !ok {
+			continue
+		}
+		if len(bytes.TrimSpace(value)) == 0 || string(bytes.TrimSpace(value)) == "null" {
+			return nil
+		}
+		return json.Unmarshal(value, dest)
+	}
+	return nil
 }

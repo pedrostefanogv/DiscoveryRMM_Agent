@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"discovery/internal/agentconn"
 )
 
 func TestP2PSeedCountRule(t *testing.T) {
@@ -179,6 +181,50 @@ func TestBuildLANProbePorts_PrioritizesSelfAndRangeStart(t *testing.T) {
 	}
 	if ports[2] != 41081 || ports[3] != 41082 || ports[4] != 41083 {
 		t.Fatalf("unexpected probe ports ordering: %v", ports)
+	}
+}
+
+func TestApplyP2PDiscoverySnapshot_UsesTTLAndSequence(t *testing.T) {
+	c := &p2pCoordinator{
+		app:   &App{},
+		peers: make(map[string]p2pPeerState),
+	}
+	c.ApplyP2PDiscoverySnapshot(agentconn.P2PDiscoverySnapshot{
+		Sequence:   7,
+		TTLSeconds: 90,
+		Peers: []agentconn.P2PDiscoveryPeer{{
+			AgentID: "agent-a",
+			PeerID:  "12D3KooWabc",
+			Addrs:   []string{"192.168.1.15"},
+			Port:    41080,
+		}},
+	})
+
+	peer, ok := c.peers["agent-a"]
+	if !ok {
+		t.Fatal("expected peer from snapshot to be stored")
+	}
+	if peer.Peer.Source != "nats-discovery" {
+		t.Fatalf("Source = %q", peer.Peer.Source)
+	}
+	if peer.Peer.TTLSeconds != 90 {
+		t.Fatalf("TTLSeconds = %d", peer.Peer.TTLSeconds)
+	}
+	if c.lastP2PDiscoverySeq != 7 {
+		t.Fatalf("lastP2PDiscoverySeq = %d", c.lastP2PDiscoverySeq)
+	}
+
+	c.ApplyP2PDiscoverySnapshot(agentconn.P2PDiscoverySnapshot{
+		Sequence:   3,
+		TTLSeconds: 30,
+		Peers: []agentconn.P2PDiscoveryPeer{{
+			AgentID: "agent-b",
+			Addrs:   []string{"192.168.1.16"},
+			Port:    41081,
+		}},
+	})
+	if _, ok := c.peers["agent-b"]; ok {
+		t.Fatal("expected older snapshot to be ignored")
 	}
 }
 

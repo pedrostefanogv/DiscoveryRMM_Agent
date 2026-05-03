@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -107,5 +108,18 @@ func TestInventoryRuntimeServiceCollect_SyncsHardwareAndSoftwareWhenProvisioned(
 	}
 	if svc.db == nil {
 		t.Fatal("expected db to remain attached for snapshot persistence")
+	}
+}
+
+func TestSharedConfigUnmarshalJSON_LoadsSiteIDFromLegacyCamelCase(t *testing.T) {
+	var cfg SharedConfig
+	if err := json.Unmarshal([]byte(`{"agentId":"a1","clientId":"client-1","siteId":"site-1","apiScheme":"https","apiServer":"example.com","authToken":"mdz_x"}`), &cfg); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	if cfg.ClientID != "client-1" {
+		t.Fatalf("ClientID = %q", cfg.ClientID)
+	}
+	if cfg.SiteID != "site-1" {
+		t.Fatalf("SiteID = %q", cfg.SiteID)
 	}
 }

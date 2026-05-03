@@ -66,6 +66,7 @@ type p2pCoordinator struct {
 	autoProvisionedMu    sync.RWMutex
 	autoProvisionedCount int64
 	autoProvisionedAudit []P2POnboardingAuditEvent
+	lastP2PDiscoverySeq  uint64
 }
 
 type p2pPeerState struct {
@@ -224,7 +225,11 @@ func (c *p2pCoordinator) discoveryTick(now time.Time) error {
 	}
 	c.mu.Lock()
 	for key, peer := range c.peers {
-		if now.Sub(peer.LastSeenUTC) > 2*time.Minute {
+		expireAfter := 2 * time.Minute
+		if peer.Peer.TTLSeconds > 0 {
+			expireAfter = time.Duration(peer.Peer.TTLSeconds) * time.Second
+		}
+		if now.Sub(peer.LastSeenUTC) > expireAfter {
 			delete(c.peers, key)
 			delete(c.peerArtifacts, key)
 		}

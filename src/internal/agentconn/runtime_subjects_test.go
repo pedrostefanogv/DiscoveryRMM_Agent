@@ -28,8 +28,30 @@ func TestResolveNATSSubjects_CanonicalLayout(t *testing.T) {
 	if subjects.SyncPing != prefix+".sync.ping" {
 		t.Fatalf("SyncPing = %q", subjects.SyncPing)
 	}
+	if subjects.P2PDiscovery != "tenant.client-1.site.site-1.p2p.discovery" {
+		t.Fatalf("P2PDiscovery = %q", subjects.P2PDiscovery)
+	}
 	if subjects.Dashboard != "tenant.client-1.site.site-1.dashboard.events" {
 		t.Fatalf("Dashboard = %q", subjects.Dashboard)
+	}
+}
+
+func TestParseP2PDiscoverySnapshot_Basic(t *testing.T) {
+	snapshot, err := parseP2PDiscoverySnapshot([]byte(`{"sequence":12,"ttlSeconds":90,"peers":[{"agentId":"agent-a","peerId":"12D3KooWabc","addrs":["192.168.1.10"],"port":41080}]}`))
+	if err != nil {
+		t.Fatalf("parseP2PDiscoverySnapshot: %v", err)
+	}
+	if snapshot.Sequence != 12 {
+		t.Fatalf("Sequence = %d", snapshot.Sequence)
+	}
+	if snapshot.TTLSeconds != 90 {
+		t.Fatalf("TTLSeconds = %d", snapshot.TTLSeconds)
+	}
+	if len(snapshot.Peers) != 1 {
+		t.Fatalf("Peers = %d", len(snapshot.Peers))
+	}
+	if snapshot.Peers[0].AgentID != "agent-a" {
+		t.Fatalf("AgentID = %q", snapshot.Peers[0].AgentID)
 	}
 }
 

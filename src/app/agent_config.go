@@ -624,6 +624,7 @@ func (a *App) setAgentConfiguration(cfg AgentConfiguration) {
 	a.agentConfig = cfg
 	a.agentConfigMu.Unlock()
 
+	a.persistAgentRoutingContext(cfg)
 	a.applyAgentConfiguration(cfg)
 
 	if a.agentConn != nil {
@@ -631,9 +632,35 @@ func (a *App) setAgentConfiguration(cfg AgentConfiguration) {
 		siteChanged := strings.TrimSpace(previous.SiteID) != strings.TrimSpace(cfg.SiteID)
 		if clientChanged || siteChanged {
 			a.logs.append("[config] contexto NATS canônico atualizado; reconexao solicitada")
+			if a.serviceConnectedMode.Load() {
+				a.requestServiceConfigReload(a.ctx, "agent-config-context")
+			}
 			a.agentConn.Reload()
 		}
 	}
+}
+
+func (a *App) persistAgentRoutingContext(cfg AgentConfiguration) {
+	clientID := strings.TrimSpace(cfg.ClientID)
+	siteID := strings.TrimSpace(cfg.SiteID)
+	if clientID == "" && siteID == "" {
+		return
+	}
+	inst, path, err := loadInstallerConfig()
+	if err != nil {
+		a.logs.append("[config] falha ao carregar config compartilhada para clientId/siteId: " + err.Error())
+		return
+	}
+	if strings.TrimSpace(inst.ClientID) == clientID && strings.TrimSpace(inst.SiteID) == siteID {
+		return
+	}
+	inst.ClientID = clientID
+	inst.SiteID = siteID
+	if _, err := persistInstallerConfig(path, inst); err != nil {
+		a.logs.append("[config] falha ao persistir clientId/siteId: " + err.Error())
+		return
+	}
+	a.logs.append(fmt.Sprintf("[config] contexto canônico persistido: clientId=%s siteId=%s", clientID, siteID))
 }
 
 // applyAgentConfiguration adjusts runtime behavior based on the agent configuration.

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"discovery/internal/agentconn"
 	"discovery/internal/database"
 )
 
@@ -88,6 +89,13 @@ func (s *HeadlessP2PService) Close() {
 		s.unregister()
 		s.unregister = nil
 	}
+}
+
+func (s *HeadlessP2PService) ApplyP2PDiscoverySnapshot(snapshot agentconn.P2PDiscoverySnapshot) {
+	if s == nil || s.app == nil {
+		return
+	}
+	s.app.handleP2PDiscoverySnapshot(snapshot)
 }
 
 // localAutoProvisioningAllowed verifica o flag autoProvisioning persistido em

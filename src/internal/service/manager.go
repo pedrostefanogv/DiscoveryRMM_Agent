@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"discovery/internal/agentconn"
 	"discovery/internal/automation"
 	"discovery/internal/database"
 	"discovery/internal/selfupdate"
@@ -58,6 +59,10 @@ type P2PService interface {
 	Run(ctx context.Context) error
 }
 
+type p2pDiscoverySnapshotAware interface {
+	ApplyP2PDiscoverySnapshot(snapshot agentconn.P2PDiscoverySnapshot)
+}
+
 type databaseAwareService interface {
 	SetDB(db *database.DB)
 }
@@ -89,6 +94,7 @@ type SharedConfig struct {
 	ApiServer     string             `json:"api_server"` // hostname:port
 	AuthToken     string             `json:"auth_token"` // Bearer token
 	ClientID      string             `json:"client_id"`  // Identificador único da instalação
+	SiteID        string             `json:"site_id"`
 	P2PEnabled    bool               `json:"p2p_enabled"`
 	InventorySync int                `json:"inventory_sync_interval_minutes"` // minutos
 	LastSync      string             `json:"last_inventory_sync"`             // ISO 8601
@@ -125,6 +131,7 @@ func (c *SharedConfig) UnmarshalJSON(data []byte) error {
 		AuthToken  string `json:"authToken"`
 		APIKey     string `json:"apiKey"`
 		ClientID   string `json:"clientId"`
+		SiteID     string `json:"siteId"`
 		P2PEnabled *bool  `json:"p2pEnabled"`
 		P2P        *struct {
 			Enabled *bool `json:"enabled"`
@@ -161,6 +168,9 @@ func (c *SharedConfig) UnmarshalJSON(data []byte) error {
 	}
 	if strings.TrimSpace(result.ClientID) == "" {
 		result.ClientID = strings.TrimSpace(old.ClientID)
+	}
+	if strings.TrimSpace(result.SiteID) == "" {
+		result.SiteID = strings.TrimSpace(old.SiteID)
 	}
 	if !result.P2PEnabled && old.P2PEnabled != nil {
 		result.P2PEnabled = *old.P2PEnabled
@@ -213,6 +223,7 @@ func mergeLegacyInstallerConfigData(baseData, overrideData []byte) ([]byte, erro
 		"authToken",
 		"agentId",
 		"clientId",
+		"siteId",
 		"natsServer",
 		"natsWsServer",
 		"agentUpdate",

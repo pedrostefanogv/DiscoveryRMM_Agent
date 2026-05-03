@@ -251,6 +251,7 @@ func NewApp(opts AppStartupOptions) *App {
 				a.syncCoord.HandlePing(ping)
 			}
 		},
+		OnP2PDiscoverySnapshot:        a.handleP2PDiscoverySnapshot,
 		HandleCommand:                 a.handleAgentRuntimeCommand,
 		OnCommandOutput:               a.onAgentCommandOutput,
 		EnqueueCommandResultOutbox:    a.enqueueCommandResultOutbox,

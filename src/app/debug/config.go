@@ -54,6 +54,8 @@ type InstallerConfig struct {
 	ApiServer            string             `json:"apiServer,omitempty"`
 	AuthToken            string             `json:"authToken,omitempty"`
 	AgentID              string             `json:"agentId,omitempty"`
+	ClientID             string             `json:"clientId,omitempty"`
+	SiteID               string             `json:"siteId,omitempty"`
 	NatsServer           string             `json:"natsServer,omitempty"`
 	NatsWsServer         string             `json:"natsWsServer,omitempty"`
 	AllowInsecureTLS     *bool              `json:"allowInsecureTls,omitempty"`
@@ -73,6 +75,8 @@ func (c *InstallerConfig) UnmarshalJSON(data []byte) error {
 		ApiServer            string             `json:"apiServer,omitempty"`
 		AuthToken            string             `json:"authToken,omitempty"`
 		AgentID              string             `json:"agentId,omitempty"`
+		ClientID             string             `json:"clientId,omitempty"`
+		SiteID               string             `json:"siteId,omitempty"`
 		NatsServer           string             `json:"natsServer,omitempty"`
 		NatsWsServer         string             `json:"natsWsServer,omitempty"`
 		AllowInsecureTLS     json.RawMessage    `json:"allowInsecureTls,omitempty"`
@@ -118,6 +122,8 @@ func (c *InstallerConfig) UnmarshalJSON(data []byte) error {
 		ApiServer:            raw.ApiServer,
 		AuthToken:            raw.AuthToken,
 		AgentID:              raw.AgentID,
+		ClientID:             raw.ClientID,
+		SiteID:               raw.SiteID,
 		NatsServer:           raw.NatsServer,
 		NatsWsServer:         raw.NatsWsServer,
 		AllowInsecureTLS:     allowInsecureTLS,

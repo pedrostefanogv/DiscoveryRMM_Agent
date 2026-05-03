@@ -81,12 +81,16 @@ func runServiceRuntime(ctx context.Context, logFile string) error {
 
 func newRuntimeServiceManager(dataDir string) *service.ServiceManager {
 	svcMgr := service.NewServiceManager(dataDir)
+	p2pSvc := appkg.NewHeadlessP2PService(func(line string) {
+		log.Printf("[SERVICE.P2P] %s", line)
+	})
 	svcMgr.SetAgentRuntime(service.NewAgentRuntimeService(svcMgr.GetConfig, func(line string) {
 		log.Printf("[SERVICE.Agent] %s", line)
 	}, service.AgentRuntimeHooks{
-		ReloadConfig:            svcMgr.ReloadConfig,
-		RefreshAutomationPolicy: svcMgr.RefreshAutomationPolicy,
-		RequestSelfUpdateCheck:  svcMgr.RequestSelfUpdateCheck,
+		ReloadConfig:              svcMgr.ReloadConfig,
+		RefreshAutomationPolicy:   svcMgr.RefreshAutomationPolicy,
+		RequestSelfUpdateCheck:    svcMgr.RequestSelfUpdateCheck,
+		ApplyP2PDiscoverySnapshot: p2pSvc.ApplyP2PDiscoverySnapshot,
 	}))
 	svcMgr.SetAutomationService(service.NewAutomationRuntimeService(svcMgr.GetConfig, func(line string) {
 		log.Printf("[SERVICE.Automation] %s", line)
@@ -95,9 +99,7 @@ func newRuntimeServiceManager(dataDir string) *service.ServiceManager {
 		log.Printf("[SERVICE.Inventory] %s", line)
 	}, appkg.Version))
 	svcMgr.SetAppsService(service.NewAppsRuntimeService(10 * time.Minute))
-	svcMgr.SetP2PService(appkg.NewHeadlessP2PService(func(line string) {
-		log.Printf("[SERVICE.P2P] %s", line)
-	}))
+	svcMgr.SetP2PService(p2pSvc)
 	return svcMgr
 }
 

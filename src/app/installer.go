@@ -38,6 +38,8 @@ func loadInstallerConfigFromCandidates(paths []string) (InstallerConfig, string,
 		cfg.ApiServer = strings.TrimSpace(cfg.ApiServer)
 		cfg.AuthToken = strings.TrimSpace(cfg.AuthToken)
 		cfg.AgentID = strings.TrimSpace(cfg.AgentID)
+		cfg.ClientID = strings.TrimSpace(cfg.ClientID)
+		cfg.SiteID = strings.TrimSpace(cfg.SiteID)
 		cfg.P2P = normalizeP2PConfig(cfg.P2P)
 
 		return cfg, path, true, nil
@@ -64,6 +66,12 @@ func mergeInstallerOverride(base, override InstallerConfig) InstallerConfig {
 	}
 	if override.AllowInsecureTLS != nil {
 		base.AllowInsecureTLS = override.AllowInsecureTLS
+	}
+	if strings.TrimSpace(override.ClientID) != "" {
+		base.ClientID = strings.TrimSpace(override.ClientID)
+	}
+	if strings.TrimSpace(override.SiteID) != "" {
+		base.SiteID = strings.TrimSpace(override.SiteID)
 	}
 	return base
 }
