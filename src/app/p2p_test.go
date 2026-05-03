@@ -144,6 +144,41 @@ func TestResolveP2PTempDir(t *testing.T) {
 	}
 }
 
+func TestClearAllP2PArtifacts(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("HOME", root)
+	t.Setenv("PROGRAMDATA", root)
+	t.Setenv("WINDIR", root)
+
+	a := &App{}
+	dir := a.p2pTempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "nested"), 0o755); err != nil {
+		t.Fatalf("mkdir failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "artifact-a.bin"), []byte("a"), 0o600); err != nil {
+		t.Fatalf("write file failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "nested", "artifact-b.bin"), []byte("b"), 0o600); err != nil {
+		t.Fatalf("write nested file failed: %v", err)
+	}
+
+	msg, err := a.ClearAllP2PArtifacts()
+	if err != nil {
+		t.Fatalf("ClearAllP2PArtifacts() returned error: %v", err)
+	}
+	if !strings.Contains(msg, "limpeza total concluida") {
+		t.Fatalf("unexpected message: %q", msg)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read dir failed: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("expected empty temp dir after clear-all, got %d entries", len(entries))
+	}
+}
+
 func TestBuildLANProbeHostsFromIPs_ExpandsSlash24AndSkipsSelf(t *testing.T) {
 	hosts := buildLANProbeHostsFromIPs([]string{"192.168.10.8"})
 	if len(hosts) != 253 {

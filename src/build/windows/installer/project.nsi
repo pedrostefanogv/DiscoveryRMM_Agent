@@ -493,6 +493,15 @@ Section "uninstall"
       ${EndIf}
    ${EndIf}
 
+   # Executar decommission (DELETE remoto + limpeza local) antes de remover os binarios.
+   IfFileExists "$INSTDIR\${PRODUCT_EXECUTABLE}" 0 decommission_done
+      DetailPrint "Executando decommission do agente..."
+      ExecWait '"$INSTDIR\${PRODUCT_EXECUTABLE}" --agent-delete-cleanup' $R3
+      ${If} $R3 != 0
+         DetailPrint "Aviso: decommission retornou codigo $R3."
+      ${EndIf}
+decommission_done:
+
    # Remover task agendada de autostart da UI
    Call un.UnregisterUIStartupTask
 
@@ -505,6 +514,9 @@ Section "uninstall"
    ${If} $R2 != ""
       RMDir /r "$R2\Discovery"
    ${EndIf}
+
+   # Fallback adicional para limpeza do temp local do agente.
+   RMDir /r "$WINDIR\Temp\Discovery"
 
     RMDir /r $INSTDIR
 

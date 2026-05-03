@@ -95,6 +95,14 @@ func (c *p2pCoordinator) PublishFile(sourcePath string) (P2PArtifactView, error)
 	if artifactName == "" {
 		return P2PArtifactView{}, fmt.Errorf("nome de artifact invalido")
 	}
+	sourceInfo, err := os.Stat(sourcePath)
+	if err != nil {
+		return P2PArtifactView{}, err
+	}
+	sourceChecksum, err := computeFileSHA256(sourcePath)
+	if err != nil {
+		return P2PArtifactView{}, fmt.Errorf("falha ao calcular checksum de origem: %w", err)
+	}
 	sourceFile, err := os.Open(sourcePath)
 	if err != nil {
 		return P2PArtifactView{}, err
@@ -132,6 +140,14 @@ func (c *p2pCoordinator) PublishFile(sourcePath string) (P2PArtifactView, error)
 	checksum, err := computeFileSHA256(targetPath)
 	if err != nil {
 		return P2PArtifactView{}, err
+	}
+	if sourceInfo.Size() != info.Size() {
+		_ = os.Remove(targetPath)
+		return P2PArtifactView{}, fmt.Errorf("arquivo importado com tamanho divergente")
+	}
+	if !strings.EqualFold(sourceChecksum, checksum) {
+		_ = os.Remove(targetPath)
+		return P2PArtifactView{}, fmt.Errorf("checksum divergente apos mover arquivo para temp")
 	}
 	c.mu.Lock()
 	c.metrics.PublishedArtifacts++

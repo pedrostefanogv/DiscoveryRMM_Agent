@@ -99,6 +99,44 @@ func (a *App) cleanupExpiredP2PTempArtifacts(now time.Time) (int, error) {
 	return removed, nil
 }
 
+func (a *App) clearAllP2PTempArtifacts(now time.Time) (int, error) {
+	dir := a.p2pTempDir()
+
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return 0, err
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0, err
+	}
+
+	removed := 0
+	for _, entry := range entries {
+		path := filepath.Join(dir, entry.Name())
+		if err := os.RemoveAll(path); err != nil {
+			return removed, err
+		}
+		removed++
+	}
+
+	if a.p2pCoord != nil {
+		a.p2pCoord.mu.Lock()
+		a.p2pCoord.lastCleanupUTC = now.UTC()
+		a.p2pCoord.mu.Unlock()
+
+		a.p2pCoord.sha256CacheMu.Lock()
+		a.p2pCoord.sha256Cache = make(map[string]artifactSHA256CacheEntry)
+		a.p2pCoord.sha256CacheMu.Unlock()
+	}
+
+	if removed > 0 {
+		a.logs.append(fmt.Sprintf("[p2p] limpeza total de artifacts locais: %d item(ns) removido(s)", removed))
+	}
+
+	return removed, nil
+}
+
 func formatTimeRFC3339(v time.Time) string {
 	if v.IsZero() {
 		return ""

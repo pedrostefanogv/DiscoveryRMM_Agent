@@ -11,6 +11,7 @@
   var refreshBtn = document.getElementById("refreshBtn");
   var bootstrapSyncBtn = document.getElementById("bootstrapSyncBtn");
   var cleanupBtn = document.getElementById("cleanupBtn");
+  var clearAllArtifactsBtn = document.getElementById("clearAllArtifactsBtn");
   var saveConfigBtn = document.getElementById("saveConfigBtn");
   var statusGrid = document.getElementById("statusGrid");
   var serviceHealthGrid = document.getElementById("serviceHealthGrid");
@@ -284,6 +285,20 @@
         refreshAll();
       }).catch(function (err) {
         setStatus("Falha ao limpar cache: " + (err && err.message ? err.message : String(err)), "error");
+      });
+    });
+  }
+
+  if (clearAllArtifactsBtn) {
+    clearAllArtifactsBtn.addEventListener("click", function () {
+      if (!window.confirm("Tem certeza que deseja apagar todos os artifacts locais? Esta acao nao pode ser desfeita.")) {
+        return;
+      }
+      appApi().ClearAllP2PArtifacts().then(function (msg) {
+        setStatus(msg || "Todos os artifacts locais foram apagados.", "ok");
+        refreshAll();
+      }).catch(function (err) {
+        setStatus("Falha ao apagar artifacts: " + (err && err.message ? err.message : String(err)), "error");
       });
     });
   }

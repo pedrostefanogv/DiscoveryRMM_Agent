@@ -6,11 +6,13 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
 	"discovery/app/netutil"
 	"discovery/internal/database"
+	"discovery/internal/platform"
 	"discovery/internal/tlsutil"
 )
 
@@ -35,6 +37,22 @@ type agentDecommissionOutboxEntry struct {
 // RunAgentDecommissionCleanup executa o DELETE do agente no backend.
 // Em falha transitória, persiste um outbox local para retry no próximo startup.
 func RunAgentDecommissionCleanup(ctx context.Context) error {
+	remoteErr := runAgentDecommissionRemoteCleanup(ctx)
+	localErr := cleanupAgentDecommissionLocalTempDirs()
+
+	if remoteErr != nil && localErr != nil {
+		return fmt.Errorf("falha no decommission remoto e na limpeza local: remoto=%v local=%w", remoteErr, localErr)
+	}
+	if remoteErr != nil {
+		return remoteErr
+	}
+	if localErr != nil {
+		return localErr
+	}
+	return nil
+}
+
+func runAgentDecommissionRemoteCleanup(ctx context.Context) error {
 	target, err := resolveAgentDecommissionTargetFromInstaller()
 	if err != nil {
 		return err
@@ -52,6 +70,32 @@ func RunAgentDecommissionCleanup(ctx context.Context) error {
 
 	if queueErr := enqueueAgentDecommissionOutbox(db, target, err); queueErr != nil {
 		return fmt.Errorf("falha no delete remoto e no enqueue de outbox: %v | %w", err, queueErr)
+	}
+	return nil
+}
+
+func cleanupAgentDecommissionLocalTempDirs() error {
+	return cleanupAgentDecommissionPaths([]string{
+		platform.P2PTempDir(),
+		platform.TempDir(),
+	})
+}
+
+func cleanupAgentDecommissionPaths(paths []string) error {
+	seen := make(map[string]struct{}, len(paths))
+	for _, rawPath := range paths {
+		path := strings.TrimSpace(rawPath)
+		if path == "" {
+			continue
+		}
+		key := strings.ToLower(path)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		if err := os.RemoveAll(path); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("falha ao remover diretorio local %s: %w", path, err)
+		}
 	}
 	return nil
 }

@@ -330,6 +330,7 @@ async function loadP2PView() {
 function initP2PPage() {
   var refreshBtn = p2pEl('refreshBtn');
   var cleanupBtn = p2pEl('cleanupBtn');
+  var clearAllArtifactsBtn = p2pEl('clearAllArtifactsBtn');
   var saveConfigBtn = p2pEl('saveConfigBtn');
   var publishArtifactBtn = p2pEl('publishArtifactBtn');
   var publishRealArtifactBtn = p2pEl('publishRealArtifactBtn');
@@ -353,6 +354,20 @@ function initP2PPage() {
         loadP2PView();
       }).catch(function (err) {
         p2pSetStatus('Falha ao limpar cache: ' + (err && err.message ? err.message : String(err)), 'error');
+      });
+    });
+  }
+
+  if (clearAllArtifactsBtn) {
+    clearAllArtifactsBtn.addEventListener('click', function () {
+      if (!window.confirm('Tem certeza que deseja apagar todos os artifacts locais? Esta acao nao pode ser desfeita.')) {
+        return;
+      }
+      p2pApi().ClearAllP2PArtifacts().then(function (msg) {
+        p2pSetStatus(msg || 'Todos os artifacts locais foram apagados.', 'ok');
+        loadP2PView();
+      }).catch(function (err) {
+        p2pSetStatus('Falha ao apagar artifacts: ' + (err && err.message ? err.message : String(err)), 'error');
       });
     });
   }

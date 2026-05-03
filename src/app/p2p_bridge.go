@@ -136,6 +136,14 @@ func (a *App) CleanupP2PTempNow() (string, error) {
 	return fmt.Sprintf("limpeza concluida: %d item(ns) removido(s)", removed), nil
 }
 
+func (a *App) ClearAllP2PArtifacts() (string, error) {
+	removed, err := a.clearAllP2PTempArtifacts(time.Now())
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("limpeza total concluida: %d item(ns) removido(s)", removed), nil
+}
+
 func (a *App) ComputeP2PSeedPlan(totalAgents int) P2PSeedPlan {
 	cfg := a.GetP2PConfig()
 	return buildP2PSeedPlan(totalAgents, cfg)
