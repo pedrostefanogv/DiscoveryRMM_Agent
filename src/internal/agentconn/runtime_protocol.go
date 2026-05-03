@@ -47,7 +47,7 @@ func parseHandshakeAck(raw any) (bool, string) {
 
 func (r *Runtime) sendHandshake(conn *websocket.Conn) error {
 	// SignalR JSON protocol handshake frame.
-	return conn.WriteMessage(websocket.TextMessage, []byte("{\"protocol\":\"json\",\"version\":1}\x1e"))
+	return r.writeSignalRText(conn, []byte("{\"protocol\":\"json\",\"version\":1}\x1e"), handshakeTimeout)
 }
 
 func (r *Runtime) waitHandshakeAck(conn *websocket.Conn, timeout time.Duration) error {
@@ -90,6 +90,21 @@ func (r *Runtime) invoke(conn *websocket.Conn, target string, args ...any) error
 		return err
 	}
 	payload = append(payload, 0x1e)
+	return r.writeSignalRText(conn, payload, handshakeTimeout)
+}
+
+func (r *Runtime) writeSignalRText(conn *websocket.Conn, payload []byte, timeout time.Duration) error {
+	if timeout <= 0 {
+		timeout = handshakeTimeout
+	}
+	r.writeMu.Lock()
+	defer r.writeMu.Unlock()
+	if err := conn.SetWriteDeadline(time.Now().Add(timeout)); err != nil {
+		return err
+	}
+	defer func() {
+		_ = conn.SetWriteDeadline(time.Time{})
+	}()
 	return conn.WriteMessage(websocket.TextMessage, payload)
 }
 

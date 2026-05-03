@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nkeys"
 
 	"discovery/internal/tlsutil"
 )
@@ -84,11 +85,12 @@ func (r *Runtime) runNATSSession(ctx context.Context, cfg Config, server, transp
 		nats.ReconnectWait(reconnectBase),
 		nats.MaxReconnects(-1),
 	}
+	tokenOpts := append([]nats.Option{}, opts...)
 	if strings.TrimSpace(cfg.AuthToken) != "" {
-		opts = append(opts, nats.Token(strings.TrimSpace(cfg.AuthToken)))
+		tokenOpts = append(tokenOpts, nats.Token(strings.TrimSpace(cfg.AuthToken)))
 	}
 
-	nc, err := nats.Connect(natsURL, opts...)
+	nc, err := nats.Connect(natsURL, tokenOpts...)
 	if err != nil {
 		// Se falhou com token raw, tenta credenciais JWT/NKey via nats-credentials.
 		creds, credsErr := r.fetchNATSCredentials(ctx, cfg)
@@ -97,21 +99,17 @@ func (r *Runtime) runNATSSession(ctx context.Context, cfg Config, server, transp
 			return fmt.Errorf("falha ao conectar NATS: %w", err)
 		}
 
-		// Reconecta com credenciais JWT/NKey.
-		optsWithCreds := make([]nats.Option, 0, len(opts)+1)
-		for _, o := range opts {
-			optsWithCreds = append(optsWithCreds, o)
+		// Reconecta com credenciais JWT/NKey sem manter o token raw do agent.
+		optsWithCreds := append([]nats.Option{}, opts...)
+		jwtOption, cleanup, jwtErr := natsAuthOptionFromCredentials(creds)
+		if jwtErr != nil {
+			return fmt.Errorf("falha ao preparar credenciais NATS: %w", jwtErr)
 		}
-		if creds.NKey != "" && creds.JWT != "" {
-			optsWithCreds = append(optsWithCreds, nats.UserJWT(func() (string, error) {
-				return creds.JWT, nil
-			}, func(nonce []byte) ([]byte, error) {
-				return []byte(creds.NKey), nil
-			}))
-			r.logf("[transport][%s] autenticando com credenciais JWT/NKey do servidor", transportLabel)
-		} else if creds.JWT != "" {
-			optsWithCreds = append(optsWithCreds, nats.Token(creds.JWT))
+		if cleanup != nil {
+			defer cleanup()
 		}
+		optsWithCreds = append(optsWithCreds, jwtOption)
+		r.logf("[transport][%s] autenticando com credenciais JWT/NKey do servidor", transportLabel)
 
 		nc, err = nats.Connect(natsURL, optsWithCreds...)
 		if err != nil {
@@ -152,6 +150,32 @@ func (r *Runtime) runNATSSession(ctx context.Context, cfg Config, server, transp
 	}
 
 	return r.runNATSEventLoop(ctx, nc, cfg, transportLabel, subjects, ipAddr)
+}
+
+func natsAuthOptionFromCredentials(creds *NATSCredentials) (nats.Option, func(), error) {
+	if creds == nil {
+		return nil, nil, fmt.Errorf("credenciais NATS ausentes")
+	}
+	jwt := strings.TrimSpace(creds.JWT)
+	seed := strings.TrimSpace(creds.NKey)
+	if jwt == "" && seed == "" {
+		return nil, nil, fmt.Errorf("credenciais NATS vazias")
+	}
+	if jwt != "" && seed != "" {
+		kp, err := nkeys.FromSeed([]byte(seed))
+		if err != nil {
+			return nil, nil, fmt.Errorf("seed NKey invalida: %w", err)
+		}
+		return nats.UserJWT(func() (string, error) {
+				return jwt, nil
+			}, kp.Sign), func() {
+				kp.Wipe()
+			}, nil
+	}
+	if jwt != "" {
+		return nats.Token(jwt), nil, nil
+	}
+	return nil, nil, fmt.Errorf("JWT ausente para autenticacao NATS")
 }
 
 // ─── NATS Handlers ─────────────────────────────────────────────────

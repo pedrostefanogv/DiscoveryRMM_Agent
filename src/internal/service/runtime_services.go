@@ -200,7 +200,7 @@ func (s *agentRuntimeService) handleSyncPing(ping agentconn.SyncPing) {
 	}
 }
 
-func (s *agentRuntimeService) handleCommand(parent context.Context, cmdType string, payload any) (bool, int, string, string) {
+func (s *agentRuntimeService) handleCommand(_ context.Context, cmdType string, payload any) (bool, int, string, string) {
 	if isServiceUIOnlyCommandType(cmdType) {
 		return true, 2, "", "comando indisponivel no modo service sem interface interativa"
 	}

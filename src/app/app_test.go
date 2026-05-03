@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -141,5 +142,26 @@ func TestAgentStatusFromServiceStatusData(t *testing.T) {
 	}
 	if got.LastEvent != "conectado" {
 		t.Fatalf("LastEvent = %q", got.LastEvent)
+	}
+}
+
+func TestApplyRealtimeFallbackFromAgentStatus_UsesLocalConnectionOnUnauthorized(t *testing.T) {
+	out := StatusOverview{}
+	applyRealtimeFallbackFromAgentStatus(&out, AgentStatus{
+		Connected: true,
+		Transport: "nats",
+	}, fmt.Errorf("HTTP 401 Unauthorized: {\"message\":\"Autenticação necessária.\"}"))
+
+	if !out.RealtimeAvailable {
+		t.Fatal("expected realtimeAvailable=true")
+	}
+	if !out.RealtimeNATSConnected {
+		t.Fatal("expected realtimeNatsConnected=true")
+	}
+	if out.RealtimeConnectedAgents != 1 {
+		t.Fatalf("RealtimeConnectedAgents = %d", out.RealtimeConnectedAgents)
+	}
+	if !strings.Contains(strings.ToLower(out.RealtimeMessage), "nats") {
+		t.Fatalf("unexpected RealtimeMessage = %q", out.RealtimeMessage)
 	}
 }

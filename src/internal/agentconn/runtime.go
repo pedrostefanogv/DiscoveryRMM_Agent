@@ -144,6 +144,7 @@ type Runtime struct {
 
 	mu       sync.Mutex
 	conn     *websocket.Conn
+	writeMu  sync.Mutex
 	statMu   sync.RWMutex
 	statSnap Status
 }
@@ -402,6 +403,11 @@ func (r *Runtime) runSignalRSession(ctx context.Context, cfg Config, connectTime
 	// Goroutine dedicada de leitura: bloqueia em ReadMessage independentemente
 	// do ticker, garantindo que o heartbeat dispare no tempo certo mesmo com
 	// EcoQoS / IDLE_PRIORITY_CLASS ativo no background.
+	//
+	// O servidor pode ficar silencioso por longos períodos entre comandos;
+	// portanto, nao usamos read deadline na sessao ativa. A liveness da conexao
+	// passa a ser detectada pelos heartbeats de escrita e por closes reais do
+	// websocket, evitando reconnects falsos apos RegisterAgent.
 	type wsMsg struct {
 		data []byte
 		err  error
@@ -410,18 +416,9 @@ func (r *Runtime) runSignalRSession(ctx context.Context, cfg Config, connectTime
 	readerDone := make(chan struct{})
 	defer close(readerDone)
 
-	// Deadline de leitura: se o servidor ficar silencioso por 2x o heartbeat,
-	// o ReadMessage retorna timeout e o loop reconecta. Evita que a sessao
-	// fique presa em i/o timeout do SO por tempo indeterminado.
-	readDeadline := heartbeatEvery * 2
-
 	go func() {
 		for {
-			_ = conn.SetReadDeadline(time.Now().Add(readDeadline))
 			_, msg, err := conn.ReadMessage()
-			if ne, ok := err.(net.Error); ok && ne.Timeout() {
-				r.logf("[transport][signalr] timeout de leitura websocket; reconectando")
-			}
 			select {
 			case msgCh <- wsMsg{msg, err}:
 			case <-readerDone:
