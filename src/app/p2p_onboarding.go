@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"math/big"
 	"net/http"
@@ -39,6 +40,13 @@ type p2pOnboardingState struct {
 	lastAttemptAt time.Time
 	configured    bool
 	audit         []P2POnboardingAuditEvent
+}
+
+type zeroTouchRegisterCredentials struct {
+	AuthToken string
+	AgentID   string
+	ApiScheme string
+	ApiServer string
 }
 
 // isAgentConfigured returns true when this agent already has server credentials persisted.
@@ -253,10 +261,12 @@ func (a *App) requestOnboardingFromPeers(ctx context.Context, state *p2pOnboardi
 			event.TargetAgentID = result.AgentID
 			a.logs.append("[zero-touch] configurado via peer=" + peer.AgentID + " agentId=" + result.AgentID)
 		}
-		state.mu.Lock()
-		state.audit = append(state.audit, event)
-		state.configured = applyErr == nil
-		state.mu.Unlock()
+		if state != nil {
+			state.mu.Lock()
+			state.audit = append(state.audit, event)
+			state.configured = applyErr == nil
+			state.mu.Unlock()
+		}
 		if applyErr == nil {
 			return nil
 		}
@@ -342,35 +352,231 @@ func (a *App) registerWithDeployKey(serverURL, deployKey string) (P2POnboardingR
 		return P2POnboardingResult{}, err
 	}
 	defer resp.Body.Close()
+	body, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		return P2POnboardingResult{}, fmt.Errorf("falha ao ler resposta de registro: %w", readErr)
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return P2POnboardingResult{}, fmt.Errorf("registro falhou HTTP %d", resp.StatusCode)
+		preview := strings.TrimSpace(string(body))
+		if len(preview) > 240 {
+			preview = preview[:240] + "..."
+		}
+		return P2POnboardingResult{}, fmt.Errorf("registro falhou HTTP %d: %s", resp.StatusCode, preview)
 	}
-	var body struct {
-		AgentID   string `json:"agentId"`
-		AuthToken string `json:"authToken"`
-		ApiScheme string `json:"apiScheme"`
-		ApiServer string `json:"apiServer"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+
+	credentials, err := parseZeroTouchRegisterResponse(body, serverURL)
+	if err != nil {
 		return P2POnboardingResult{}, err
 	}
 
-	// Persist received credentials atomically.
-	inst, path, _ := loadInstallerConfig()
-	inst.ApiScheme = strings.TrimSpace(body.ApiScheme)
-	inst.ApiServer = strings.TrimSpace(body.ApiServer)
-	inst.AuthToken = strings.TrimSpace(body.AuthToken)
-	inst.AgentID = strings.TrimSpace(body.AgentID)
-	inst.APIKey = "" // scrub deploy key after use
-	if _, err := persistInstallerConfig(path, inst); err != nil {
+	inst, path, err := loadInstallerConfigForZeroTouchPersist()
+	if err != nil {
+		return P2POnboardingResult{}, fmt.Errorf("falha ao carregar config para persistencia zero-touch: %w", err)
+	}
+	inst.ServerURL = buildZeroTouchServerURL(credentials.ApiScheme, credentials.ApiServer)
+	inst.ApiScheme = strings.TrimSpace(credentials.ApiScheme)
+	inst.ApiServer = strings.TrimSpace(credentials.ApiServer)
+	inst.AuthToken = strings.TrimSpace(credentials.AuthToken)
+	inst.AgentID = strings.TrimSpace(credentials.AgentID)
+	// Mantem o deploy token para resiliencia de bootstrap (fallback de re-registro).
+	inst.APIKey = strings.TrimSpace(deployKey)
+
+	if strings.TrimSpace(inst.ApiScheme) == "" || strings.TrimSpace(inst.ApiServer) == "" ||
+		strings.TrimSpace(inst.AuthToken) == "" || strings.TrimSpace(inst.AgentID) == "" {
+		return P2POnboardingResult{}, fmt.Errorf("credenciais incompletas apos registro zero-touch")
+	}
+
+	writePath, err := persistInstallerConfig(path, inst)
+	if err != nil {
 		return P2POnboardingResult{}, fmt.Errorf("falha ao persistir credenciais: %w", err)
 	}
-	a.logs.append("[zero-touch] credenciais persistidas agentId=" + inst.AgentID)
+
+	a.applyZeroTouchRuntimeConnection(inst)
+	if !isAgentConfigured() {
+		return P2POnboardingResult{}, fmt.Errorf("credenciais persistidas, mas agente ainda nao aparece provisionado")
+	}
+
+	a.logs.append("[zero-touch] credenciais persistidas em " + strings.TrimSpace(writePath) + " agentId=" + inst.AgentID)
 	return P2POnboardingResult{
 		AgentID:    inst.AgentID,
 		Registered: true,
 		Message:    "configurado via zero-touch config registration",
 	}, nil
+}
+
+func loadInstallerConfigForZeroTouchPersist() (InstallerConfig, string, error) {
+	baseCfg, basePath, baseFound, baseErr := loadInstallerConfigFromCandidates(installerConfigPathCandidates())
+	if baseErr != nil {
+		return InstallerConfig{}, "", baseErr
+	}
+	overrideCfg, _, overrideFound, overrideErr := loadInstallerConfigFromCandidates(installerOverridePathCandidates())
+	if overrideErr != nil {
+		return InstallerConfig{}, "", overrideErr
+	}
+	if baseFound {
+		resolved := baseCfg
+		if overrideFound {
+			resolved = mergeInstallerOverride(baseCfg, overrideCfg)
+		}
+		return resolved, basePath, nil
+	}
+	if overrideFound {
+		return overrideCfg, "", nil
+	}
+	return InstallerConfig{}, "", nil
+}
+
+func buildZeroTouchServerURL(scheme, server string) string {
+	scheme = strings.TrimSpace(strings.ToLower(scheme))
+	if scheme == "" {
+		scheme = "https"
+	}
+	server = strings.TrimSpace(server)
+	if server == "" {
+		return ""
+	}
+	return scheme + "://" + server
+}
+
+func parseZeroTouchServerURL(raw string) (string, string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", "", fmt.Errorf("server url vazio")
+	}
+	input := raw
+	if !strings.Contains(input, "://") {
+		input = "https://" + input
+	}
+	u, err := url.Parse(input)
+	if err != nil {
+		return "", "", err
+	}
+	scheme := strings.TrimSpace(strings.ToLower(u.Scheme))
+	if scheme == "" {
+		scheme = "https"
+	}
+	if scheme != "http" && scheme != "https" {
+		return "", "", fmt.Errorf("scheme invalido: %s", scheme)
+	}
+	host := strings.TrimSpace(u.Host)
+	if host == "" {
+		host = strings.Trim(strings.TrimSpace(u.Path), "/")
+	}
+	if host == "" {
+		return "", "", fmt.Errorf("host ausente em server url")
+	}
+	return scheme, host, nil
+}
+
+func firstNonEmptyAnyString(values ...any) string {
+	for _, value := range values {
+		s := strings.TrimSpace(fmt.Sprint(value))
+		if s != "" && s != "<nil>" {
+			return s
+		}
+	}
+	return ""
+}
+
+func parseZeroTouchRegisterResponse(body []byte, fallbackServerURL string) (zeroTouchRegisterCredentials, error) {
+	var raw map[string]any
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return zeroTouchRegisterCredentials{}, fmt.Errorf("resposta JSON invalida no registro zero-touch: %w", err)
+	}
+
+	extract := func(m map[string]any) zeroTouchRegisterCredentials {
+		credentials := zeroTouchRegisterCredentials{
+			AuthToken: firstNonEmptyAnyString(m["token"], m["authToken"], m["auth_token"], m["accessToken"], m["access_token"]),
+			AgentID:   firstNonEmptyAnyString(m["agentId"], m["agentID"], m["agent_id"], m["id"]),
+			ApiScheme: strings.ToLower(strings.TrimSpace(firstNonEmptyAnyString(m["apiScheme"], m["api_scheme"], m["scheme"]))),
+			ApiServer: strings.TrimSpace(firstNonEmptyAnyString(m["apiServer"], m["api_server"], m["server"], m["serverHost"], m["server_host"])),
+		}
+
+		serverURL := strings.TrimSpace(firstNonEmptyAnyString(m["serverUrl"], m["server_url"], m["baseUrl"], m["base_url"]))
+		if credentials.ApiScheme == "" || credentials.ApiServer == "" {
+			if parsedScheme, parsedServer, err := parseZeroTouchServerURL(serverURL); err == nil {
+				if credentials.ApiScheme == "" {
+					credentials.ApiScheme = parsedScheme
+				}
+				if credentials.ApiServer == "" {
+					credentials.ApiServer = parsedServer
+				}
+			}
+		}
+
+		return credentials
+	}
+
+	mergeMissing := func(dst *zeroTouchRegisterCredentials, src zeroTouchRegisterCredentials) {
+		if strings.TrimSpace(dst.AuthToken) == "" {
+			dst.AuthToken = strings.TrimSpace(src.AuthToken)
+		}
+		if strings.TrimSpace(dst.AgentID) == "" {
+			dst.AgentID = strings.TrimSpace(src.AgentID)
+		}
+		if strings.TrimSpace(dst.ApiScheme) == "" {
+			dst.ApiScheme = strings.TrimSpace(src.ApiScheme)
+		}
+		if strings.TrimSpace(dst.ApiServer) == "" {
+			dst.ApiServer = strings.TrimSpace(src.ApiServer)
+		}
+	}
+
+	credentials := extract(raw)
+	for _, key := range []string{"data", "result", "payload"} {
+		nested, ok := raw[key].(map[string]any)
+		if !ok {
+			continue
+		}
+		mergeMissing(&credentials, extract(nested))
+	}
+
+	credentials.AuthToken = strings.TrimSpace(credentials.AuthToken)
+	credentials.AgentID = strings.TrimSpace(credentials.AgentID)
+	credentials.ApiScheme = strings.TrimSpace(strings.ToLower(credentials.ApiScheme))
+	credentials.ApiServer = strings.TrimSpace(credentials.ApiServer)
+
+	if credentials.AuthToken == "" || credentials.AgentID == "" {
+		return zeroTouchRegisterCredentials{}, fmt.Errorf("resposta sem auth token/agent id no registro zero-touch")
+	}
+
+	if credentials.ApiScheme == "" || credentials.ApiServer == "" {
+		parsedScheme, parsedServer, err := parseZeroTouchServerURL(fallbackServerURL)
+		if err != nil {
+			return zeroTouchRegisterCredentials{}, fmt.Errorf("resposta sem apiScheme/apiServer e fallback invalido: %w", err)
+		}
+		if credentials.ApiScheme == "" {
+			credentials.ApiScheme = parsedScheme
+		}
+		if credentials.ApiServer == "" {
+			credentials.ApiServer = parsedServer
+		}
+	}
+
+	if credentials.ApiScheme != "http" && credentials.ApiScheme != "https" {
+		return zeroTouchRegisterCredentials{}, fmt.Errorf("apiScheme invalido na resposta do registro zero-touch")
+	}
+
+	if strings.TrimSpace(credentials.ApiServer) == "" {
+		return zeroTouchRegisterCredentials{}, fmt.Errorf("apiServer vazio na resposta do registro zero-touch")
+	}
+
+	return credentials, nil
+}
+
+func (a *App) applyZeroTouchRuntimeConnection(inst InstallerConfig) {
+	if a == nil {
+		return
+	}
+	if a.debugSvc != nil {
+		a.debugSvc.ApplyRuntimeConnectionConfig(inst.ApiScheme, inst.ApiServer, inst.AuthToken, inst.AgentID, inst.NatsServer, inst.NatsWsServer)
+	}
+	if a.serviceConnectedMode.Load() {
+		a.requestServiceConfigReload(a.ctx, "zero-touch-registration")
+	}
+	if a.agentConn != nil {
+		a.agentConn.Reload()
+	}
 }
 
 // computeOnboardingSignature builds the HMAC-SHA256 for an onboarding offer.

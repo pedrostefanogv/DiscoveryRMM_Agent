@@ -2,8 +2,14 @@ package app
 
 import (
 	"context"
+	"encoding/json"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -404,6 +410,98 @@ func TestApplyOnboardingOfferBadSignature(t *testing.T) {
 	_, err := a.applyOnboardingOffer(offer)
 	if err == nil {
 		t.Fatal("expected error for invalid signature")
+	}
+}
+
+func TestParseZeroTouchRegisterResponseSupportsNestedSnakeCase(t *testing.T) {
+	body := []byte(`{"result":{"auth_token":"token-1","agent_id":"agent-1"}}`)
+
+	credentials, err := parseZeroTouchRegisterResponse(body, "https://tngplacas.com.br")
+	if err != nil {
+		t.Fatalf("parseZeroTouchRegisterResponse() error = %v", err)
+	}
+	if credentials.AuthToken != "token-1" {
+		t.Fatalf("AuthToken = %q", credentials.AuthToken)
+	}
+	if credentials.AgentID != "agent-1" {
+		t.Fatalf("AgentID = %q", credentials.AgentID)
+	}
+	if credentials.ApiScheme != "https" {
+		t.Fatalf("ApiScheme = %q", credentials.ApiScheme)
+	}
+	if credentials.ApiServer != "tngplacas.com.br" {
+		t.Fatalf("ApiServer = %q", credentials.ApiServer)
+	}
+}
+
+func TestParseZeroTouchRegisterResponseUsesServerURLFromPayload(t *testing.T) {
+	body := []byte(`{"authToken":"token-2","agentId":"agent-2","serverUrl":"https://srv.example/api/"}`)
+
+	credentials, err := parseZeroTouchRegisterResponse(body, "")
+	if err != nil {
+		t.Fatalf("parseZeroTouchRegisterResponse() error = %v", err)
+	}
+	if credentials.ApiScheme != "https" {
+		t.Fatalf("ApiScheme = %q", credentials.ApiScheme)
+	}
+	if credentials.ApiServer != "srv.example" {
+		t.Fatalf("ApiServer = %q", credentials.ApiServer)
+	}
+}
+
+func TestRequestOnboardingFromPeersNilStateDoesNotPanic(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		offer := P2POnboardingRequest{
+			ServerURL:    "https://srv.local",
+			DeployKey:    "deploy-key",
+			ExpiresAtUTC: time.Now().UTC().Add(5 * time.Minute).Format(time.RFC3339),
+			SourceAgent:  "peer-a",
+			Nonce:        "nonce",
+			Signature:    "invalid-signature",
+		}
+		_ = json.NewEncoder(w).Encode(offer)
+	}))
+	defer server.Close()
+
+	parsed, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("url parse: %v", err)
+	}
+	host, portRaw, err := net.SplitHostPort(parsed.Host)
+	if err != nil {
+		t.Fatalf("split host/port: %v", err)
+	}
+	port, err := strconv.Atoi(portRaw)
+	if err != nil {
+		t.Fatalf("atoi port: %v", err)
+	}
+
+	a := &App{}
+	a.p2pCoord = &p2pCoordinator{
+		app: a,
+		peers: map[string]p2pPeerState{
+			"peer-a": {
+				Peer:        p2pDiscoveredPeer{AgentID: "peer-a", Address: host, Port: port},
+				LastSeenUTC: time.Now().UTC(),
+			},
+		},
+	}
+
+	panicObserved := false
+	func() {
+		defer func() {
+			if recover() != nil {
+				panicObserved = true
+			}
+		}()
+		err = a.requestOnboardingFromPeers(context.Background(), nil)
+	}()
+
+	if panicObserved {
+		t.Fatal("requestOnboardingFromPeers(nil) nao deveria panicar")
+	}
+	if err == nil {
+		t.Fatal("esperava erro com oferta invalida")
 	}
 }
 
