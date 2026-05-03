@@ -449,6 +449,7 @@ func (u *Updater) fetchManifest(ctx context.Context) (*UpdateManifest, error) {
 	q.Set("currentVersion", strings.TrimSpace(buildinfo.Version))
 	q.Set("platform", platformWindows)
 	q.Set("architecture", architectureAMD64)
+	q.Set("artifactType", normalizeArtifactType(u.policy().PreferredArtifactType))
 	endpoint += "?" + q.Encode()
 
 	ctxReq, cancel := context.WithTimeout(ctx, manifestTimeout)

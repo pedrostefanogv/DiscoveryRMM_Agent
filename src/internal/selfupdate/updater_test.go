@@ -235,3 +235,56 @@ func TestNormalizeArtifactType_ToleratesInstallerCasing(t *testing.T) {
 		t.Fatalf("normalizeArtifactType(custom) = %q", got)
 	}
 }
+
+func TestFetchManifest_SendsArtifactTypeQuery(t *testing.T) {
+	received := struct {
+		authorization string
+		agentID       string
+		artifactType  string
+	}{
+		artifactType: "",
+	}
+
+	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/agent-auth/me/update/manifest" {
+			http.NotFound(w, r)
+			return
+		}
+		received.authorization = r.Header.Get("Authorization")
+		received.agentID = r.Header.Get("X-Agent-ID")
+		received.artifactType = r.URL.Query().Get("artifactType")
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"enabled":true,"updateAvailable":false,"rolloutEligible":true,"directUpdateSupported":true,"platform":"windows","architecture":"amd64","artifactType":"Installer"}`))
+	}))
+	defer apiServer.Close()
+
+	apiURL, err := url.Parse(apiServer.URL)
+	if err != nil {
+		t.Fatalf("url.Parse(apiServer): %v", err)
+	}
+
+	updater := &Updater{
+		ApiScheme:  apiURL.Scheme,
+		ApiServer:  apiURL.Host,
+		GetToken:   func() string { return "token-123" },
+		GetAgentID: func() string { return "agent-123" },
+		GetPolicy: func() Policy {
+			return Policy{PreferredArtifactType: "installer"}
+		},
+	}
+
+	if _, err := updater.fetchManifest(context.Background()); err != nil {
+		t.Fatalf("fetchManifest: %v", err)
+	}
+
+	if received.authorization != "Bearer token-123" {
+		t.Fatalf("Authorization = %q", received.authorization)
+	}
+	if received.agentID != "agent-123" {
+		t.Fatalf("X-Agent-ID = %q", received.agentID)
+	}
+	if received.artifactType != "Installer" {
+		t.Fatalf("artifactType = %q, want Installer", received.artifactType)
+	}
+}
