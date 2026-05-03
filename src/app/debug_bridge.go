@@ -30,7 +30,7 @@ func (a *App) TestDebugConnection(cfg DebugConfig) (string, error) {
 	return a.debugSvc.TestConnection(cfg)
 }
 
-// GetRealtimeStatus queries /api/v1/realtime/status from the configured HTTP server.
+// GetRealtimeStatus queries /api/v1/agent-auth/me/realtime/status from the configured HTTP server.
 func (a *App) GetRealtimeStatus() (RealtimeStatus, error) {
 	if err := a.requireDebugSvc(); err != nil {
 		return RealtimeStatus{}, err

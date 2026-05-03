@@ -170,6 +170,19 @@ func TestLoadInstallerConfigFromCandidates_StripsUTF8BOM(t *testing.T) {
 	}
 }
 
+func TestParseInstallerServerURL_PreservesExplicitPort(t *testing.T) {
+	scheme, server, err := parseInstallerServerURL("https://api.example.local:5001/base/")
+	if err != nil {
+		t.Fatalf("parseInstallerServerURL: %v", err)
+	}
+	if scheme != "https" {
+		t.Fatalf("scheme = %q, want https", scheme)
+	}
+	if server != "api.example.local:5001" {
+		t.Fatalf("server = %q, want api.example.local:5001", server)
+	}
+}
+
 func TestLoadPersistedConfig_StripsUTF8BOM(t *testing.T) {
 	oldReadFile := osReadFile
 	oldExecutable := osExecutable
@@ -213,6 +226,9 @@ func TestGetRealtimeStatus_SetsAgentAuthHeadersAndAgentID(t *testing.T) {
 	)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Path; got != "/api/v1/agent-auth/me/realtime/status" {
+			t.Fatalf("path = %q, want %q", got, "/api/v1/agent-auth/me/realtime/status")
+		}
 		if got := r.Header.Get("Authorization"); got != "Bearer "+token {
 			t.Fatalf("Authorization = %q, want %q", got, "Bearer "+token)
 		}

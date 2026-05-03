@@ -187,4 +187,4 @@ if (-not (Test-Path $installerPath)) {
 
 Write-Output "[3/3] Concluido."
 Write-Output "Instalador gerado em: $installerPath"
-Write-Output "Observacao: o instalador ja registra o servico Windows e inicia o Discovery com discovery/p2p habilitado para operacao em rede local (sujeito ao firewall)."
+Write-Output "Observacao: o instalador registra o servico Windows, inicia o Discovery e cria a regra de Windows Firewall para permitir a comunicacao do discovery-agent.exe na rede."

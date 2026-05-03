@@ -45,6 +45,7 @@ Unicode true
 !define UNINST_KEY_NAME     "Discovery.RMM"
 !define DISCOVERY_SERVICE_NAME "DiscoveryAgent"
 !define DISCOVERY_UI_TASK_NAME "DiscoveryAgentUI"
+!define DISCOVERY_FIREWALL_RULE_NAME "Discovery Agent Network Access"
 
 !ifndef ARG_WAILS_AMD64_BINARY
 !ifdef WAILS_AMD64_BINARY
@@ -462,6 +463,7 @@ Section "uninstall"
 
    # Encerrar/remover service antes de limpar binários
    Call un.UnregisterWindowsService
+   Call un.UnregisterWindowsFirewallRule
 
    # Garantir encerramento de qualquer instancia em modo UI/headless.
    ExecWait '"$SYSDIR\taskkill.exe" /IM "${PRODUCT_EXECUTABLE}" /F /T' $R0
@@ -735,10 +737,32 @@ Function RegisterWindowsService
    ExecWait '"$SYSDIR\sc.exe" failure "${DISCOVERY_SERVICE_NAME}" reset= 86400 actions= restart/5000/restart/5000/restart/5000' $R1
    ExecWait '"$SYSDIR\sc.exe" description "${DISCOVERY_SERVICE_NAME}" "Discovery background service (multi-user)"' $R1
 
+   # Garantir acesso de rede ao executável antes do primeiro start do serviço.
+   Call RegisterWindowsFirewallRule
+
    # Iniciar serviço após instalação
    ExecWait '"$SYSDIR\sc.exe" start "${DISCOVERY_SERVICE_NAME}"' $R1
    ${If} $R1 != 0
       DetailPrint "Aviso: service instalado, mas falhou ao iniciar automaticamente. Codigo: $R1"
+   ${EndIf}
+FunctionEnd
+
+Function RegisterWindowsFirewallRule
+   DetailPrint "Registrando regra de Windows Firewall para ${PRODUCT_EXECUTABLE}"
+
+   StrCpy $R9 "$TEMP\discovery_firewall_reg.ps1"
+   FileOpen $R8 "$R9" w
+   FileWrite $R8 "param([string]$$RuleName,[string]$$ProgramPath)$\r$\n"
+   FileWrite $R8 "$$ErrorActionPreference = 'Stop'$\r$\n"
+   FileWrite $R8 "Get-NetFirewallRule -DisplayName $$RuleName -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue | Out-Null$\r$\n"
+   FileWrite $R8 "New-NetFirewallRule -DisplayName $$RuleName -Direction Inbound -Action Allow -Program $$ProgramPath -Profile Any -Protocol Any -Enabled True -Description 'Permite trafego de rede para o Discovery Agent' | Out-Null$\r$\n"
+   FileClose $R8
+
+   ExecWait '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$R9" -RuleName "${DISCOVERY_FIREWALL_RULE_NAME}" -ProgramPath "$INSTDIR\${PRODUCT_EXECUTABLE}"' $R0
+   Delete "$R9"
+
+   ${If} $R0 != 0
+      DetailPrint "Aviso: falha ao registrar regra de Windows Firewall para ${PRODUCT_EXECUTABLE}. Codigo: $R0"
    ${EndIf}
 FunctionEnd
 
@@ -777,6 +801,23 @@ Function UnregisterWindowsService
    DetailPrint "Removendo Windows Service ${DISCOVERY_SERVICE_NAME}"
    ExecWait '"$SYSDIR\sc.exe" stop "${DISCOVERY_SERVICE_NAME}"' $R0
    ExecWait '"$SYSDIR\sc.exe" delete "${DISCOVERY_SERVICE_NAME}"' $R0
+FunctionEnd
+
+Function un.UnregisterWindowsFirewallRule
+   DetailPrint "Removendo regra de Windows Firewall de ${PRODUCT_EXECUTABLE}"
+
+   StrCpy $R9 "$TEMP\discovery_firewall_unreg.ps1"
+   FileOpen $R8 "$R9" w
+   FileWrite $R8 "param([string]$$RuleName)$\r$\n"
+   FileWrite $R8 "Get-NetFirewallRule -DisplayName $$RuleName -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue | Out-Null$\r$\n"
+   FileClose $R8
+
+   ExecWait '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$R9" -RuleName "${DISCOVERY_FIREWALL_RULE_NAME}"' $R0
+   Delete "$R9"
+
+   ${If} $R0 != 0
+      DetailPrint "Aviso: falha ao remover regra de Windows Firewall de ${PRODUCT_EXECUTABLE}. Codigo: $R0"
+   ${EndIf}
 FunctionEnd
 
 Function UnregisterUIStartupTask
