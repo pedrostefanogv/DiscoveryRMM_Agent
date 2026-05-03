@@ -73,11 +73,39 @@ func (a *App) SyncP2PBootstrapNow() (string, error) {
 	}
 	bootstrapCtx, cancel := context.WithTimeout(ctx, p2pCloudBootstrapTimeout+5*time.Second)
 	defer cancel()
-	peerCount, err := a.p2pCoord.runCloudBootstrap(bootstrapCtx)
-	if err != nil {
-		return "", err
+	localPeers, localErr := a.p2pCoord.runLANDiscoveryProbe(bootstrapCtx, "manual")
+	cloudEnabled := a.GetP2PConfig().BootstrapConfig.CloudBootstrapEnabled
+
+	parts := make([]string, 0, 2)
+	if localErr == nil {
+		parts = append(parts, fmt.Sprintf("LAN: %d peer(s)", localPeers))
 	}
-	return fmt.Sprintf("sincronizacao de bootstrap P2P concluida: %d peer(s) retornado(s)", peerCount), nil
+
+	cloudPeers := 0
+	cloudErr := error(nil)
+	if cloudEnabled {
+		cloudPeers, cloudErr = a.p2pCoord.runCloudBootstrap(bootstrapCtx)
+		if cloudErr == nil {
+			parts = append(parts, fmt.Sprintf("cloud: %d peer(s)", cloudPeers))
+		}
+	}
+
+	if localErr != nil && !cloudEnabled {
+		return "", localErr
+	}
+	if localErr != nil && cloudErr != nil {
+		return "", fmt.Errorf("descoberta LAN: %v; cloud bootstrap: %v", localErr, cloudErr)
+	}
+	if localErr != nil && cloudErr == nil {
+		return "sincronizacao concluida: " + strings.Join(parts, " | ") + " (descoberta LAN com aviso)", nil
+	}
+	if localErr == nil && cloudErr != nil && cloudEnabled {
+		return "sincronizacao concluida: " + strings.Join(parts, " | ") + " (cloud bootstrap com aviso)", nil
+	}
+	if len(parts) == 0 {
+		return "sincronizacao concluida sem peers novos", nil
+	}
+	return "sincronizacao concluida: " + strings.Join(parts, " | "), nil
 }
 
 func (a *App) GetP2PPeerArtifactIndex() []P2PPeerArtifactIndexView {

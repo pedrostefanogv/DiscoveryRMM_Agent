@@ -80,13 +80,7 @@ func (s *p2pTransferServer) Start(ctx context.Context, cfg P2PConfig, agentID, t
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/p2p/config/onboard", s.handleP2POnboard)
-	mux.HandleFunc("/p2p/health", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"ok":      true,
-			"agentId": s.agentID,
-		})
-	})
+	mux.HandleFunc("/p2p/health", s.handleP2PHealth)
 
 	httpServer := &http.Server{
 		Handler:           mux,
@@ -127,6 +121,11 @@ func (s *p2pTransferServer) BaseURL() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.baseURL
+}
+
+func (s *p2pTransferServer) handleP2PHealth(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(s.buildHealthResponse())
 }
 
 func (s *p2pTransferServer) BuildArtifactAccess(artifactName, targetPeerID string) (P2PArtifactAccess, error) {

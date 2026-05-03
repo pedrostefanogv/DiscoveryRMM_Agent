@@ -24,6 +24,8 @@ const (
 	p2pPeerReplicationCooldown         = 20 * time.Second
 	p2pAuditLimit                      = 100
 	p2pReplicationDedupTTL             = 24 * time.Hour
+	p2pLANProbeWarmupDelay             = 12 * time.Second
+	p2pLANProbeInterval                = 2 * time.Minute
 )
 
 var errP2PDuplicateReplication = errors.New("artifact ja distribuido recentemente para este peer")
@@ -143,10 +145,18 @@ func (c *p2pCoordinator) Run(ctx context.Context) {
 	cleanupTicker := time.NewTicker(p2pCoordinatorCleanupTickHours * time.Hour)
 	gossipTicker := time.NewTicker(45 * time.Second)
 	cloudBootstrapTicker := time.NewTicker(1 * time.Hour)
+	lanProbeWarmupTimer := time.NewTimer(p2pLANProbeWarmupDelay)
+	lanProbeTicker := time.NewTicker(p2pLANProbeInterval)
 	defer discoveryTicker.Stop()
 	defer cleanupTicker.Stop()
 	defer gossipTicker.Stop()
 	defer cloudBootstrapTicker.Stop()
+	defer lanProbeWarmupTimer.Stop()
+	defer lanProbeTicker.Stop()
+
+	go func() {
+		_, _ = c.runLANDiscoveryProbe(ctx, "startup")
+	}()
 
 	// Disparar cloud bootstrap imediatamente no startup (carrega cache + chama API).
 	if cfg.BootstrapConfig.CloudBootstrapEnabled {
@@ -168,6 +178,14 @@ func (c *p2pCoordinator) Run(ctx context.Context) {
 			if _, err := c.app.cleanupExpiredP2PTempArtifacts(time.Now()); err != nil {
 				c.setLastError(err)
 			}
+		case <-lanProbeWarmupTimer.C:
+			go func() {
+				_, _ = c.runLANDiscoveryProbe(ctx, "warmup")
+			}()
+		case <-lanProbeTicker.C:
+			go func() {
+				_, _ = c.runLANDiscoveryProbe(ctx, "periodic")
+			}()
 		case <-cloudBootstrapTicker.C:
 			if c.app.GetP2PConfig().BootstrapConfig.CloudBootstrapEnabled {
 				go func() {

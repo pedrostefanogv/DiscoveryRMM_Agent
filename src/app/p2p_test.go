@@ -142,6 +142,46 @@ func TestResolveP2PTempDir(t *testing.T) {
 	}
 }
 
+func TestBuildLANProbeHostsFromIPs_ExpandsSlash24AndSkipsSelf(t *testing.T) {
+	hosts := buildLANProbeHostsFromIPs([]string{"192.168.10.8"})
+	if len(hosts) != 253 {
+		t.Fatalf("expected 253 probe hosts, got %d", len(hosts))
+	}
+	seen := make(map[string]struct{}, len(hosts))
+	for _, host := range hosts {
+		seen[host] = struct{}{}
+		if host == "192.168.10.8" {
+			t.Fatal("self IP should not be probed")
+		}
+	}
+	if _, ok := seen["192.168.10.1"]; !ok {
+		t.Fatal("expected subnet first usable IP to be included")
+	}
+	if _, ok := seen["192.168.10.254"]; !ok {
+		t.Fatal("expected subnet last usable IP to be included")
+	}
+}
+
+func TestBuildLANProbePorts_PrioritizesSelfAndRangeStart(t *testing.T) {
+	ports := buildLANProbePorts(P2PConfig{
+		HTTPListenPortRangeStart: 41080,
+		HTTPListenPortRangeEnd:   41120,
+	}, 41085)
+
+	if len(ports) != p2pLANProbePreferredPorts+1 {
+		t.Fatalf("unexpected port count: %d", len(ports))
+	}
+	if ports[0] != 41085 {
+		t.Fatalf("expected self port first, got %d", ports[0])
+	}
+	if ports[1] != 41080 {
+		t.Fatalf("expected range start second, got %d", ports[1])
+	}
+	if ports[2] != 41081 || ports[3] != 41082 || ports[4] != 41083 {
+		t.Fatalf("unexpected probe ports ordering: %v", ports)
+	}
+}
+
 // ── Epic 1: ArtifactID canonicalization ──────────────────────────────────────
 
 func TestCanonicalArtifactIDExplicit(t *testing.T) {
