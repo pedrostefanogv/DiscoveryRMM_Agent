@@ -198,6 +198,39 @@ func (c *p2pCoordinator) appendAudit(action, artifactName, peerAgentID, source s
 		c.audit = c.audit[:p2pAuditLimit]
 	}
 	c.mu.Unlock()
+
+	if c.app != nil {
+		c.app.logs.append(formatP2PAuditLogLine(event))
+	}
+}
+
+func formatP2PAuditLogLine(event P2PAuditEvent) string {
+	status := "ok"
+	if !event.Success {
+		status = "erro"
+	}
+	action := strings.TrimSpace(event.Action)
+	if action == "" {
+		action = "unknown"
+	}
+	artifact := strings.TrimSpace(event.ArtifactName)
+	if artifact == "" {
+		artifact = "-"
+	}
+	peer := strings.TrimSpace(event.PeerAgentID)
+	if peer == "" {
+		peer = "-"
+	}
+	source := strings.TrimSpace(event.Source)
+	if source == "" {
+		source = "-"
+	}
+	message := strings.TrimSpace(event.Message)
+	if message == "" {
+		message = "-"
+	}
+	return fmt.Sprintf("[p2p][audit] status=%s action=%s artifact=%s peer=%s source=%s msg=%s",
+		status, action, artifact, peer, source, message)
 }
 
 func (c *p2pCoordinator) autoDistributeLocalArtifacts(resource, variant, revision string) {

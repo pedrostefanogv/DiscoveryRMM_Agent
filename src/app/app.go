@@ -104,22 +104,23 @@ type App struct {
 	agentConfigMu sync.RWMutex
 	agentConfig   AgentConfiguration
 
-	startupMu         sync.RWMutex
-	startupErr        error
-	startupWg         sync.WaitGroup
-	activityMu        sync.Mutex
-	activeOps         int
-	lastIdle          bool
-	idleKnown         bool
-	idleCapable       bool
-	closeMu           sync.RWMutex
-	allowClose        bool
-	trayReady         atomic.Bool
-	trayIconState     atomic.Int32
-	trayIcon          []byte
-	trayProvisioning  []byte
-	trayOffline       []byte
-	meshEnsureRunning atomic.Bool
+	startupMu                sync.RWMutex
+	startupErr               error
+	startupWg                sync.WaitGroup
+	activityMu               sync.Mutex
+	activeOps                int
+	lastIdle                 bool
+	idleKnown                bool
+	idleCapable              bool
+	closeMu                  sync.RWMutex
+	allowClose               bool
+	trayReady                atomic.Bool
+	trayIconState            atomic.Int32
+	trayIcon                 []byte
+	trayProvisioning         []byte
+	trayOffline              []byte
+	meshEnsureRunning        atomic.Bool
+	zeroTouchAttemptInFlight atomic.Bool
 
 	// serviceConnectedMode é true quando o Windows Service foi detectado no startup.
 	// Quando ativo, workers locais de automação e inventário são omitidos para
@@ -595,6 +596,11 @@ func (a *App) startup(ctx context.Context) {
 		}
 		if a.serviceConnectedMode.Load() && a.runtimeFlags.DebugMode {
 			log.Println("[startup] p2p local: iniciado em modo debug mesmo com service disponível")
+		}
+		if !isAgentConfigured() && a.zeroTouchConfigRegistrationAllowed() {
+			a.safeGo(func() {
+				a.RunOnboardingLoop(ctx)
+			})
 		}
 		a.p2pCoord.Run(ctx)
 	})

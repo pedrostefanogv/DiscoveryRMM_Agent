@@ -11,12 +11,15 @@ import (
 )
 
 func (c *p2pCoordinator) DownloadArtifactFromPeer(ctx context.Context, artifactName, sourcePeerID string) (P2PArtifactView, error) {
+	rawArtifactName := strings.TrimSpace(artifactName)
 	artifactName = sanitizeArtifactName(artifactName)
 	if artifactName == "" {
-		return P2PArtifactView{}, fmt.Errorf("artifact invalido")
+		err := fmt.Errorf("artifact invalido")
+		c.appendAudit("pull", rawArtifactName, sourcePeerID, "libp2p", false, err.Error())
+		return P2PArtifactView{}, err
 	}
-	p, err := c.findPeerByAgentID(sourcePeerID)
-	if err != nil {
+	if _, err := c.findPeerByAgentID(sourcePeerID); err != nil {
+		c.appendAudit("pull", artifactName, sourcePeerID, "libp2p", false, err.Error())
 		return P2PArtifactView{}, err
 	}
 
@@ -25,19 +28,22 @@ func (c *p2pCoordinator) DownloadArtifactFromPeer(ctx context.Context, artifactN
 		requesterID = "peer-local"
 	}
 
-	_ = p
 	// Caminho libp2p: solicita acesso e faz download via streams.
 	if h, registry := c.libp2pHostAndRegistry(); h != nil && registry != nil {
 		peerID, ok := registry.Lookup(sourcePeerID)
 		if !ok {
-			return P2PArtifactView{}, fmt.Errorf("peer nao registrado no libp2p")
+			err := fmt.Errorf("peer nao registrado no libp2p")
+			c.appendAudit("pull", artifactName, sourcePeerID, "libp2p", false, err.Error())
+			return P2PArtifactView{}, err
 		}
 		access, err := libp2pRequestAccess(ctx, h, peerID, artifactName, requesterID)
 		if err != nil {
+			c.appendAudit("pull", artifactName, sourcePeerID, "libp2p", false, err.Error())
 			return P2PArtifactView{}, err
 		}
 		path, size, err := libp2pDownloadArtifact(ctx, h, peerID, access, c.app.p2pTempDir())
 		if err != nil {
+			c.appendAudit("pull", artifactName, sourcePeerID, "libp2p", false, err.Error())
 			return P2PArtifactView{}, err
 		}
 		c.recordBytesDownloaded(size)
@@ -45,20 +51,27 @@ func (c *p2pCoordinator) DownloadArtifactFromPeer(ctx context.Context, artifactN
 		return c.buildArtifactView(artifactName, access.ArtifactID, path)
 	}
 
-	return P2PArtifactView{}, fmt.Errorf("libp2p indisponivel para download do artifact")
+	err := fmt.Errorf("libp2p indisponivel para download do artifact")
+	c.appendAudit("pull", artifactName, sourcePeerID, "libp2p", false, err.Error())
+	return P2PArtifactView{}, err
 }
 
 // downloadArtifactSwarm encontra todos os peers que possuem o artifact e faz
 // download chunked quando ≥2 peers estão disponíveis, usando libp2p streams.
 func (c *p2pCoordinator) downloadArtifactSwarm(ctx context.Context, artifactName string) (P2PArtifactView, error) {
+	rawArtifactName := strings.TrimSpace(artifactName)
 	artifactName = sanitizeArtifactName(artifactName)
 	if artifactName == "" {
-		return P2PArtifactView{}, fmt.Errorf("artifact invalido")
+		err := fmt.Errorf("artifact invalido")
+		c.appendAudit("swarm-pull", rawArtifactName, "", "automation", false, err.Error())
+		return P2PArtifactView{}, err
 	}
 
 	avail := c.FindArtifactPeers(artifactName)
 	if !avail.Found || len(avail.PeerAgentIDs) == 0 {
-		return P2PArtifactView{}, fmt.Errorf("nenhum peer possui o artifact %q", artifactName)
+		err := fmt.Errorf("nenhum peer possui o artifact %q", artifactName)
+		c.appendAudit("swarm-pull", artifactName, "", "automation", false, err.Error())
+		return P2PArtifactView{}, err
 	}
 
 	requesterID := strings.TrimSpace(c.app.GetDebugConfig().AgentID)
@@ -95,31 +108,41 @@ func (c *p2pCoordinator) downloadArtifactSwarm(ctx context.Context, artifactName
 	}
 
 	if len(accesses) == 0 {
-		return P2PArtifactView{}, fmt.Errorf("nenhum peer retornou token de acesso para %q", artifactName)
+		err := fmt.Errorf("nenhum peer retornou token de acesso para %q", artifactName)
+		c.appendAudit("swarm-pull", artifactName, "", "automation", false, err.Error())
+		return P2PArtifactView{}, err
 	}
 
 	// Peer único: download simples (sem manifest).
 	if len(accesses) < 2 || cfg.ChunkSizeBytes == 0 {
 		if len(peerEntries) == 0 || h == nil {
-			return P2PArtifactView{}, fmt.Errorf("libp2p indisponivel para download do artifact")
+			err := fmt.Errorf("libp2p indisponivel para download do artifact")
+			c.appendAudit("swarm-pull", artifactName, "", "automation", false, err.Error())
+			return P2PArtifactView{}, err
 		}
 		path, size, err := libp2pDownloadArtifact(ctx, h, peerEntries[0].libp2pID, accesses[0], c.app.p2pTempDir())
 		if err != nil {
+			c.appendAudit("swarm-pull", artifactName, peerEntries[0].peerID, "automation", false, err.Error())
 			return P2PArtifactView{}, err
 		}
 		c.recordBytesDownloaded(size)
+		c.appendAudit("swarm-pull", artifactName, peerEntries[0].peerID, "automation", true, "download simples via libp2p")
 		return c.buildArtifactView(artifactName, accesses[0].ArtifactID, path)
 	}
 
 	// Multi-peer: buscar manifest e fazer download em chunks via libp2p.
 	var manifest P2PChunkManifest
 	if len(peerEntries) == 0 || h == nil {
-		return P2PArtifactView{}, fmt.Errorf("libp2p indisponivel para manifest do artifact")
+		err := fmt.Errorf("libp2p indisponivel para manifest do artifact")
+		c.appendAudit("swarm-pull", artifactName, "", "automation", false, err.Error())
+		return P2PArtifactView{}, err
 	}
 	var manifestErr error
 	manifest, manifestErr = libp2pFetchManifest(ctx, h, peerEntries[0].libp2pID, artifactName, requesterID)
 	if manifestErr != nil || manifest.TotalChunks == 0 {
-		return P2PArtifactView{}, fmt.Errorf("manifest indisponivel: %w", manifestErr)
+		err := fmt.Errorf("manifest indisponivel: %w", manifestErr)
+		c.appendAudit("swarm-pull", artifactName, peerEntries[0].peerID, "automation", false, err.Error())
+		return P2PArtifactView{}, err
 	}
 
 	destDir := c.app.p2pTempDir()

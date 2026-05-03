@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -73,6 +74,42 @@ func TestListAuditEventsFiltered(t *testing.T) {
 	}
 	if failedReplicate[0].Success {
 		t.Fatalf("expected filtered event to be failure")
+	}
+}
+
+func TestAppendAuditWritesAgentLogLine(t *testing.T) {
+	a := &App{}
+	c := &p2pCoordinator{app: a}
+
+	c.appendAudit("pull", "agent.bin", "peer-a", "libp2p", false, "falha simulada")
+
+	if len(c.audit) != 1 {
+		t.Fatalf("expected 1 audit event, got %d", len(c.audit))
+	}
+	lines := a.logs.getAll()
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 log line, got %d", len(lines))
+	}
+	if !strings.Contains(lines[0], "[p2p][audit]") || !strings.Contains(lines[0], "status=erro") {
+		t.Fatalf("unexpected log line: %q", lines[0])
+	}
+}
+
+func TestDownloadArtifactFromPeerAuditsFailureWhenPeerNotFound(t *testing.T) {
+	a := &App{}
+	c := &p2pCoordinator{app: a, peers: map[string]p2pPeerState{}, peerArtifacts: map[string]p2pPeerArtifactState{}}
+
+	_, err := c.DownloadArtifactFromPeer(context.Background(), "agent.bin", "peer-missing")
+	if err == nil {
+		t.Fatal("expected error when peer is missing")
+	}
+
+	events := c.ListAuditEventsFiltered("pull", "peer-missing", "error")
+	if len(events) == 0 {
+		t.Fatal("expected pull failure to be written to audit")
+	}
+	if strings.TrimSpace(events[0].Message) == "" {
+		t.Fatal("expected audit message to include failure reason")
 	}
 }
 

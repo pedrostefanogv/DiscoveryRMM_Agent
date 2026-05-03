@@ -98,25 +98,11 @@ func (s *HeadlessP2PService) ApplyP2PDiscoverySnapshot(snapshot agentconn.P2PDis
 	s.app.handleP2PDiscoverySnapshot(snapshot)
 }
 
-// localAutoProvisioningAllowed verifica o flag autoProvisioning persistido em
-// config.json. Quando ausente, o padrão é permitir (true) — assim a decisão
-// final fica com a feature flag do servidor (AgentConfiguration.DiscoveryEnabled).
-// Quando explicitamente false, o agente não inicia o loop de onboarding local
-// mesmo estando não configurado, atuando como kill-switch local de zero-touch.
+// localAutoProvisioningAllowed delega para a regra de zero-touch config
+// registration da aplicação, respeitando o kill-switch local autoProvisioning.
 func (s *HeadlessP2PService) localAutoProvisioningAllowed() bool {
 	if s == nil || s.app == nil {
 		return true
 	}
-	cfg, _, err := loadInstallerConfig()
-	if err != nil {
-		return true
-	}
-	if cfg.AutoProvisioning == nil {
-		return true
-	}
-	allowed := *cfg.AutoProvisioning
-	if !allowed {
-		s.app.logs.append("[onboarding] autoProvisioning=false em config.json: loop de zero-touch desabilitado localmente")
-	}
-	return allowed
+	return s.app.zeroTouchConfigRegistrationAllowed()
 }

@@ -302,6 +302,9 @@ func (c *p2pCoordinator) startDiscovery(ctx context.Context) error {
 			// Novo peer descoberto: busca imediata do catálogo e peers dele,
 			// sem esperar o próximo tick do coordinador (propagação gossip).
 			go c.refreshSinglePeer(ctx, peer)
+			if c.app != nil {
+				go c.app.triggerZeroTouchConfigRegistrationOnPeerDiscovery(ctx, peer)
+			}
 		}
 	}, func(message string) {
 		if strings.TrimSpace(message) == "" {
