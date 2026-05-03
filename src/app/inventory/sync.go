@@ -39,28 +39,28 @@ type agentHardwareComponents struct {
 }
 
 type agentHardwareInfo struct {
-	InventoryRaw            string          `json:"inventoryRaw"`
-	InventorySchemaVersion  string          `json:"inventorySchemaVersion"`
-	InventoryCollectedAt    string          `json:"inventoryCollectedAt"`
-	Manufacturer            string          `json:"manufacturer"`
-	Model                   string          `json:"model"`
-	SerialNumber            string          `json:"serialNumber"`
-	MotherboardManufacturer string          `json:"motherboardManufacturer"`
-	MotherboardModel        string          `json:"motherboardModel"`
-	MotherboardSerialNumber string          `json:"motherboardSerialNumber"`
-	Processor               string          `json:"processor"`
-	ProcessorCores          int             `json:"processorCores"`
-	ProcessorThreads        int             `json:"processorThreads"`
-	ProcessorArchitecture   string          `json:"processorArchitecture"`
-	TotalMemoryBytes        int64           `json:"totalMemoryBytes"`
-	BIOSVersion             string          `json:"biosVersion"`
-	BIOSManufacturer        string          `json:"biosManufacturer"`
-	OSName                  string          `json:"osName"`
-	OSVersion               string          `json:"osVersion"`
-	OSBuild                 string          `json:"osBuild"`
-	OSArchitecture          string          `json:"osArchitecture"`
-	CollectedAt             string          `json:"collectedAt"`
-	UpdatedAt               string          `json:"updatedAt"`
+	InventoryRaw            string `json:"inventoryRaw"`
+	InventorySchemaVersion  string `json:"inventorySchemaVersion"`
+	InventoryCollectedAt    string `json:"inventoryCollectedAt"`
+	Manufacturer            string `json:"manufacturer"`
+	Model                   string `json:"model"`
+	SerialNumber            string `json:"serialNumber"`
+	MotherboardManufacturer string `json:"motherboardManufacturer"`
+	MotherboardModel        string `json:"motherboardModel"`
+	MotherboardSerialNumber string `json:"motherboardSerialNumber"`
+	Processor               string `json:"processor"`
+	ProcessorCores          int    `json:"processorCores"`
+	ProcessorThreads        int    `json:"processorThreads"`
+	ProcessorArchitecture   string `json:"processorArchitecture"`
+	TotalMemoryBytes        int64  `json:"totalMemoryBytes"`
+	BIOSVersion             string `json:"biosVersion"`
+	BIOSManufacturer        string `json:"biosManufacturer"`
+	OSName                  string `json:"osName"`
+	OSVersion               string `json:"osVersion"`
+	OSBuild                 string `json:"osBuild"`
+	OSArchitecture          string `json:"osArchitecture"`
+	CollectedAt             string `json:"collectedAt"`
+	UpdatedAt               string `json:"updatedAt"`
 }
 
 type agentDiskInfo struct {

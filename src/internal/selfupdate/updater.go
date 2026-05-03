@@ -29,7 +29,7 @@ import (
 )
 
 const (
-	defaultCheckInterval  = 6 * time.Hour
+	defaultCheckInterval  = 12 * time.Hour
 	initialStartupDelay   = 30 * time.Second
 	inactivePolicyRefresh = 30 * time.Minute
 	backoffFirstFailure   = 5 * time.Minute
@@ -84,7 +84,7 @@ type Updater struct {
 	GetPolicy    func() Policy
 	TempDir      string
 	Logf         func(string, ...any)
-	InvalidateCh <-chan struct{}
+	InvalidateCh <-chan bool
 }
 
 type UpdateManifest struct {
@@ -160,10 +160,10 @@ func (u *Updater) Run(ctx context.Context, checkInterval time.Duration) {
 				u.logf("self-update agendado ignorado: policy disabled")
 			} else if startupPending {
 				ran = true
-				err = u.CheckAndUpdate(ctx)
+				err = u.CheckAndUpdate(ctx, false)
 			} else if policy.CheckPeriodically {
 				ran = true
-				err = u.CheckAndUpdate(ctx)
+				err = u.CheckAndUpdate(ctx, false)
 			} else {
 				u.logf("self-update agendado ignorado: periodic check disabled")
 			}
@@ -177,17 +177,21 @@ func (u *Updater) Run(ctx context.Context, checkInterval time.Duration) {
 				delay = u.nextDelay(checkInterval, false)
 			}
 			timer.Reset(delay)
-		case <-u.InvalidateCh:
+		case force := <-u.InvalidateCh:
 			policy := u.policy()
 			if !policy.Enabled {
 				u.logf("self-update invalidado ignorado: policy disabled")
 				delay = u.nextDelay(checkInterval, startupPending)
-			} else if !policy.CheckOnSyncManifest {
+			} else if !force && !policy.CheckOnSyncManifest {
 				u.logf("self-update invalidado ignorado: sync-manifest trigger disabled")
 				delay = u.nextDelay(checkInterval, startupPending)
 			} else {
-				u.logf("self-update invalidado externamente; antecipando check")
-				err := u.CheckAndUpdate(ctx)
+				if force {
+					u.logf("self-update forcado externamente; ignorando guards de versao e elegibilidade")
+				} else {
+					u.logf("self-update invalidado externamente; antecipando check")
+				}
+				err := u.CheckAndUpdate(ctx, force)
 				startupPending = false
 				if err != nil {
 					failures++
@@ -230,7 +234,7 @@ func (u *Updater) nextDelay(fallback time.Duration, startupPending bool) time.Du
 	return interval
 }
 
-func (u *Updater) CheckAndUpdate(ctx context.Context) error {
+func (u *Updater) CheckAndUpdate(ctx context.Context, force bool) error {
 	policy := u.policy()
 	if !policy.Enabled {
 		u.logf("self-update ignorado: policy disabled")
@@ -269,7 +273,17 @@ func (u *Updater) CheckAndUpdate(ctx context.Context) error {
 		return err
 	}
 
-	if !manifest.Enabled || !manifest.UpdateAvailable || !manifest.RolloutEligible || !manifest.DirectUpdateSupported {
+	// Em modo forçado (comando do servidor), ignora guards de elegibilidade mas respeita o kill-switch global (Enabled).
+	if !manifest.Enabled {
+		u.reportEvent(ctx, "CheckCompleted", reportOpts{
+			ReleaseID:      manifest.ReleaseID,
+			CurrentVersion: currentVersion,
+			CorrelationID:  correlationID,
+			Message:        "no eligible direct update",
+		})
+		return nil
+	}
+	if !force && (!manifest.UpdateAvailable || !manifest.RolloutEligible || !manifest.DirectUpdateSupported) {
 		u.reportEvent(ctx, "CheckCompleted", reportOpts{
 			ReleaseID:      manifest.ReleaseID,
 			CurrentVersion: currentVersion,
@@ -289,7 +303,7 @@ func (u *Updater) CheckAndUpdate(ctx context.Context) error {
 		return nil
 	}
 	targetVersion := strings.TrimSpace(*manifest.LatestVersion)
-	if compareVersions(targetVersion, currentVersion) <= 0 {
+	if !force && compareVersions(targetVersion, currentVersion) <= 0 {
 		u.reportEvent(ctx, "CheckCompleted", reportOpts{
 			ReleaseID:      manifest.ReleaseID,
 			CurrentVersion: currentVersion,

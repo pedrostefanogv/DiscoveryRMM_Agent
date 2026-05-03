@@ -70,7 +70,7 @@ type databaseAwareService interface {
 type ServiceManager struct {
 	dataDir       string
 	config        *SharedConfig
-	updateTrigger chan struct{}
+	updateTrigger chan bool
 	db            *database.DB
 	ipcServer     *IPCServer
 	agentRuntime  AgentRuntime
@@ -279,12 +279,19 @@ func (sm *ServiceManager) RequestSelfUpdateCheck(source string) bool {
 	if source == "" {
 		source = "manual"
 	}
+	// Comandos explícitos do servidor (via NATS/SignalR command handler) forçam instalação
+	// mesmo que a versão no manifest seja igual ou inferior à atual.
+	force := strings.HasPrefix(source, "command:")
 	select {
-	case sm.updateTrigger <- struct{}{}:
-		sm.logInfo("SelfUpdate force-check solicitado: source=%s", source)
+	case sm.updateTrigger <- force:
+		if force {
+			sm.logInfo("SelfUpdate force-install solicitado: source=%s", source)
+		} else {
+			sm.logInfo("SelfUpdate check solicitado: source=%s", source)
+		}
 		return true
 	default:
-		sm.logInfo("SelfUpdate force-check ja pendente: source=%s", source)
+		sm.logInfo("SelfUpdate check ja pendente: source=%s", source)
 		return false
 	}
 }
@@ -297,7 +304,7 @@ func NewServiceManager(dataDir string) *ServiceManager {
 		startTime:     time.Now(),
 		errLogPath:    dataDir + "\\logs\\service-errors.log",
 		actionTrigger: make(chan struct{}, 1),
-		updateTrigger: make(chan struct{}, 1),
+		updateTrigger: make(chan bool, 1),
 	}
 }
 
@@ -1027,33 +1034,40 @@ func (sm *ServiceManager) inventoryWorker(ctx context.Context) {
 
 	sm.logInfo("InventoryWorker iniciado, intervalo: %v", interval)
 
+	// Envio imediato no startup (não aguarda o primeiro tick do ticker)
+	sm.runInventoryCycle(ctx)
+
 	for {
 		select {
 		case <-ctx.Done():
 			sm.logInfo("InventoryWorker encerrando")
 			return
 		case <-ticker.C:
-			if !sm.isInventoryProvisioned() {
-				sm.logInfo("InventoryWorker: agente nao provisionado, ignorando ciclo")
-				continue
-			}
-
-			sm.mu.RLock()
-			inventorySvc := sm.inventorySvc
-			sm.mu.RUnlock()
-
-			if inventorySvc != nil {
-				sm.logInfo("Coletando inventário do sistema...")
-				_, err := inventorySvc.Collect(ctx)
-				if err != nil {
-					sm.logError("falha ao coletar inventário: %v", err)
-				} else {
-					sm.setLastSync(time.Now().UTC().Format(time.RFC3339))
-				}
-			} else {
-				sm.logInfo("Serviço de inventário não registrado")
-			}
+			sm.runInventoryCycle(ctx)
 		}
+	}
+}
+
+func (sm *ServiceManager) runInventoryCycle(ctx context.Context) {
+	if !sm.isInventoryProvisioned() {
+		sm.logInfo("InventoryWorker: agente nao provisionado, ignorando ciclo")
+		return
+	}
+
+	sm.mu.RLock()
+	inventorySvc := sm.inventorySvc
+	sm.mu.RUnlock()
+
+	if inventorySvc != nil {
+		sm.logInfo("Coletando inventário do sistema...")
+		_, err := inventorySvc.Collect(ctx)
+		if err != nil {
+			sm.logError("falha ao coletar inventário: %v", err)
+		} else {
+			sm.setLastSync(time.Now().UTC().Format(time.RFC3339))
+		}
+	} else {
+		sm.logInfo("Serviço de inventário não registrado")
 	}
 }
 
@@ -1144,7 +1158,7 @@ func (sm *ServiceManager) selfUpdateWorker(ctx context.Context) {
 	}
 
 	updater.ResumePendingInstallReport(ctx)
-	updater.Run(ctx, 6*time.Hour)
+	updater.Run(ctx, 12*time.Hour)
 }
 
 // logError registra erros em arquivo de log
