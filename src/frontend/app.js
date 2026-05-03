@@ -210,6 +210,7 @@ function normalizeLogSource(rawSource) {
   if (source.indexOf('automation') === 0) return 'automation';
   if (source.indexOf('support') === 0) return 'support';
   if (source.indexOf('chat') === 0) return 'chat';
+  if (source.indexOf('p2p') === 0) return 'p2p';
 
   return 'other';
 }
