@@ -206,7 +206,7 @@ func (a *App) StartChatStream(message string) {
 		return
 	}
 
-	go func() {
+	a.safeGo(func() {
 		defer done()
 
 		current := a.chatSvc.GetConfig()
@@ -241,7 +241,7 @@ func (a *App) StartChatStream(message string) {
 		} else {
 			wailsRuntime.EventsEmit(a.ctx, "chat:done")
 		}
-	}()
+	})
 }
 
 // StopChatStream interrupts the active streamed AI response, if running.

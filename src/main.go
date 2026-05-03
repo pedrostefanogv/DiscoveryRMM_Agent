@@ -90,10 +90,12 @@ func main() {
 	}
 
 	err := wails.Run(&options.App{
-		Title:     "Discovery",
-		Width:     appkg.WindowWidth,
-		Height:    appkg.WindowHeight,
-		Frameless: startupFrameless,
+		Title:           "Discovery",
+		Width:           appkg.WindowWidth,
+		Height:          appkg.WindowHeight,
+		Frameless:       startupFrameless,
+		CSSDragProperty: "--wails-draggable",
+		CSSDragValue:    "drag",
 		// Keep right-click context menu enabled in production so users can use
 		// built-in spellcheck suggestions/corrections in text fields.
 		EnableDefaultContextMenu: true,

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"runtime"
+	runtimeDebug "runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -418,7 +419,7 @@ func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	a.cancel = cancel
 
-	go a.StartP2PTelemetryLoop(ctx)
+	a.safeGo(func() { a.StartP2PTelemetryLoop(ctx) })
 
 	a.startTray()
 	if a.runtimeFlags.StartMinimized {
@@ -462,7 +463,7 @@ func (a *App) startup(ctx context.Context) {
 	}
 
 	a.startupWg.Add(1)
-	go func() {
+	a.safeGo(func() {
 		defer a.startupWg.Done()
 
 		// Quando o service está disponível, ele já gerencia inventário; pular coleta local.
@@ -493,10 +494,10 @@ func (a *App) startup(ctx context.Context) {
 		if a.inventorySvc != nil {
 			a.inventorySvc.SyncInventoryOnStartup(ctx, report)
 		}
-	}()
+	})
 
 	a.startupWg.Add(1)
-	go func() {
+	a.safeGo(func() {
 		defer a.startupWg.Done()
 
 		// Bootstrap pós-instalação: se houver URL/KEY do instalador, resolver token/agentId.
@@ -505,13 +506,15 @@ func (a *App) startup(ctx context.Context) {
 		}
 
 		// MeshCentral deve iniciar somente apos autenticar e carregar credenciais do agente.
-		go a.ensureMeshCentralInstalled(ctx, "startup-auth", false)
+		a.safeGo(func() {
+			a.ensureMeshCentralInstalled(ctx, "startup-auth", false)
+		})
 
 		a.agentConn.Run(ctx)
-	}()
+	})
 
 	a.startupWg.Add(1)
-	go func() {
+	a.safeGo(func() {
 		defer a.startupWg.Done()
 		a.drainAgentDecommissionOutbox(ctx, "startup")
 		ticker := time.NewTicker(15 * time.Minute)
@@ -524,10 +527,10 @@ func (a *App) startup(ctx context.Context) {
 				a.drainAgentDecommissionOutbox(ctx, "periodic")
 			}
 		}
-	}()
+	})
 
 	a.startupWg.Add(1)
-	go func() {
+	a.safeGo(func() {
 		defer a.startupWg.Done()
 		if a.automationSvc == nil {
 			return
@@ -540,28 +543,28 @@ func (a *App) startup(ctx context.Context) {
 		}
 
 		a.automationSvc.Run(ctx, func() {})
-	}()
+	})
 
 	a.startupWg.Add(1)
-	go func() {
+	a.safeGo(func() {
 		defer a.startupWg.Done()
 		if a.syncCoord == nil {
 			return
 		}
 		a.syncCoord.Run(ctx)
-	}()
+	})
 
 	a.startupWg.Add(1)
-	go func() {
+	a.safeGo(func() {
 		defer a.startupWg.Done()
 		if a.p2pCoord == nil {
 			return
 		}
 		a.p2pCoord.Run(ctx)
-	}()
+	})
 
 	a.startupWg.Add(1)
-	go func() {
+	a.safeGo(func() {
 		defer a.startupWg.Done()
 		const cleanupInterval = 6 * time.Hour
 		const cleanupBatchSize = 500
@@ -588,13 +591,28 @@ func (a *App) startup(ctx context.Context) {
 				}
 			}
 		}
-	}()
+	})
 }
 
 func (a *App) startupLogf(format string, args ...any) {
 	line := fmt.Sprintf(format, args...)
 	log.Print(line)
 	a.logs.append(line)
+}
+
+// safeGo executa fn em uma goroutine com recovery de panic.
+// Se a goroutine panica, o stack trace é logado e o app não é derrubado.
+// Substitui o watchdog.SafeGoWithContext removido no refactor.
+func (a *App) safeGo(fn func()) {
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[PANIC] goroutine panicou: %v\n%s", r, runtimeDebug.Stack())
+				a.logs.append(fmt.Sprintf("[PANIC] goroutine panicou: %v", r))
+			}
+		}()
+		fn()
+	}()
 }
 
 func (a *App) isInventoryProvisioned() bool {
