@@ -391,6 +391,35 @@ function computeProvisioningState(debugCfg) {
   };
 }
 
+function resolveProvisioningOverlayMode(status, onboardingStatus) {
+  if (!status || !status.isProvisioned) {
+    return 'awaiting-auto-provisioning';
+  }
+
+  var onboardingMode = String(onboardingStatus && onboardingStatus.mode || '').trim().toLowerCase();
+  if (onboardingMode === 'awaiting-approval') {
+    return 'awaiting-approval';
+  }
+
+  return 'normal';
+}
+
+function provisioningCopyKeysForMode(mode) {
+  if (mode === 'awaiting-approval') {
+    return {
+      title: 'provisioning.approval.title',
+      message: 'provisioning.approval.message',
+      footnote: 'provisioning.approval.footnote',
+    };
+  }
+
+  return {
+    title: 'provisioning.title',
+    message: 'provisioning.message',
+    footnote: 'provisioning.footnote',
+  };
+}
+
 function ensureProvisioningOverlay() {
   if (provisioningOverlayState.refs) return provisioningOverlayState.refs;
 
@@ -409,8 +438,8 @@ function ensureProvisioningOverlay() {
           '</svg>' +
         '</div>' +
         '<div class="provisioning-copy">' +
-          '<h2>' + translate('provisioning.title') + '</h2>' +
-          '<p>' + translate('provisioning.message') + '</p>' +
+          '<h2 id="provisioningTitle">' + translate('provisioning.title') + '</h2>' +
+          '<p id="provisioningMessage">' + translate('provisioning.message') + '</p>' +
         '</div>' +
       '</div>' +
       '<div class="provisioning-footnote" id="provisioningFootnote">' + translate('provisioning.footnote') + '</div>' +
@@ -422,6 +451,8 @@ function ensureProvisioningOverlay() {
 
   var refs = {
     overlay: overlay,
+    title: document.getElementById('provisioningTitle'),
+    message: document.getElementById('provisioningMessage'),
     footnote: document.getElementById('provisioningFootnote'),
     refreshBtn: document.getElementById('provisioningRefreshBtn'),
   };
@@ -448,30 +479,39 @@ function startProvisioningOverlayPolling() {
   }, PROVISIONING_CHECK_INTERVAL_MS);
 }
 
-function syncProvisioningOverlayFromConfig(debugCfg) {
+function syncProvisioningOverlayFromConfig(debugCfg, onboardingStatus) {
   var refs = ensureProvisioningOverlay();
   var status = computeProvisioningState(debugCfg);
+  var mode = resolveProvisioningOverlayMode(status, onboardingStatus);
+  var copyKeys = provisioningCopyKeysForMode(mode);
   var suppressOverlay = isDebugRuntimeMode();
 
-  if (status.isProvisioned || suppressOverlay) {
+  if (mode === 'normal' || suppressOverlay) {
     refs.overlay.classList.add('hidden');
     refs.overlay.setAttribute('aria-hidden', 'true');
     refs.footnote.textContent = translate('provisioning.completed');
     stopProvisioningOverlayPolling();
   } else {
+    refs.title.textContent = translate(copyKeys.title);
+    refs.message.textContent = translate(copyKeys.message);
     refs.overlay.classList.remove('hidden');
     refs.overlay.setAttribute('aria-hidden', 'false');
-    refs.footnote.textContent = translate('provisioning.footnote');
+    refs.footnote.textContent = translate(copyKeys.footnote);
     startProvisioningOverlayPolling();
   }
 
+  status.mode = mode;
   return status;
 }
 
 function syncProvisioningOverlayFromRuntime() {
   try {
     return appApi().GetDebugConfig().then(function (cfg) {
-      return syncProvisioningOverlayFromConfig(cfg);
+      return appApi().GetOnboardingStatus().then(function (onboardingStatus) {
+        return syncProvisioningOverlayFromConfig(cfg, onboardingStatus);
+      }).catch(function () {
+        return syncProvisioningOverlayFromConfig(cfg, null);
+      });
     }).catch(function () {
       return null;
     });

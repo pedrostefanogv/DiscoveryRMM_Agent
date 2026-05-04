@@ -571,6 +571,11 @@ func (sm *ServiceManager) refreshRemoteConfiguration(ctx context.Context) (bool,
 		return false
 	}
 
+	if getBool("zeroTouchPending") {
+		sm.logInfo("[config] aguardando aprovacao zero-touch; mantendo configuracao atual")
+		return false, nil
+	}
+
 	nextNatsServerHost := getString("natsServerHost")
 	nextApiTlsCertHash := strings.ToUpper(getString("apiTlsCertHash"))
 	nextNatsTlsCertHash := strings.ToUpper(getString("natsTlsCertHash"))

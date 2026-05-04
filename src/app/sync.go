@@ -428,6 +428,17 @@ func (a *App) refreshAgentConfiguration(ctx context.Context) error {
 		return fmt.Errorf("configuration retornou HTTP %s: %s", resp.Status, strings.TrimSpace(string(body)))
 	}
 
+	if pending, hasPendingFlag := parseZeroTouchPendingConfiguration(body); hasPendingFlag && pending {
+		if a.setZeroTouchApprovalPending(true) {
+			a.logs.append("[sync] dispositivo provisionado e aguardando aprovacao da equipe de TI para integracao com o servidor")
+		}
+		return nil
+	}
+
+	if a.setZeroTouchApprovalPending(false) {
+		a.logs.append("[sync] aprovacao recebida; integracao com o servidor liberada")
+	}
+
 	if a.db != nil {
 		_ = a.db.CacheSet("agent_configuration_raw", body, 30*24*time.Hour)
 	}
@@ -455,4 +466,16 @@ func (a *App) refreshAgentConfiguration(ctx context.Context) error {
 	}
 	a.logs.append("[sync] configuração do agent atualizada")
 	return nil
+}
+
+func parseZeroTouchPendingConfiguration(body []byte) (bool, bool) {
+	var raw map[string]any
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return false, false
+	}
+	v, ok := raw["zeroTouchPending"]
+	if !ok {
+		return false, false
+	}
+	return toBool(v), true
 }

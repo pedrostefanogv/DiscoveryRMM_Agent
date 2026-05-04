@@ -272,6 +272,12 @@ func (a *App) GetOnboardingStatus() map[string]interface{} {
 	if !configured {
 		result["mode"] = "awaiting-auto-provisioning"
 		result["message"] = "Agente genérico: aguardando auto-provisioning da rede P2P"
+		return result
+	}
+
+	if a.isZeroTouchApprovalPending() {
+		result["mode"] = "awaiting-approval"
+		result["message"] = "Dispositivo provisionado, aguardando aprovacao da equipe de TI para integracao com o servidor."
 	}
 	return result
 }

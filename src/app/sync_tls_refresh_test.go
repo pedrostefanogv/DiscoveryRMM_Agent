@@ -95,3 +95,108 @@ func TestRefreshAgentConfiguration_AppliesRemoteSecurityAndReloads(t *testing.T)
 		t.Fatalf("reloadCount = %d, want 1", fakeConn.reloadCount)
 	}
 }
+
+func TestRefreshAgentConfiguration_ZeroTouchPendingSkipsRemoteApply(t *testing.T) {
+	tempBase := t.TempDir()
+	oldProgramData := os.Getenv("ProgramData")
+	oldLocalAppData := os.Getenv("LOCALAPPDATA")
+	oldHome := os.Getenv("HOME")
+	oldUserProfile := os.Getenv("USERPROFILE")
+	defer func() {
+		_ = os.Setenv("ProgramData", oldProgramData)
+		_ = os.Setenv("LOCALAPPDATA", oldLocalAppData)
+		_ = os.Setenv("HOME", oldHome)
+		_ = os.Setenv("USERPROFILE", oldUserProfile)
+	}()
+	_ = os.Setenv("ProgramData", tempBase)
+	_ = os.Setenv("LOCALAPPDATA", tempBase)
+	_ = os.Setenv("HOME", tempBase)
+	_ = os.Setenv("USERPROFILE", tempBase)
+
+	payload := map[string]any{
+		"zeroTouchPending": true,
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/agent-auth/me/configuration" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(payload)
+	}))
+	defer srv.Close()
+
+	u, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatalf("url.Parse: %v", err)
+	}
+
+	fakeConn := &syncTestAgentConn{}
+	debugSvc := debug.NewService(debug.Options{AgentConn: fakeConn})
+	debugSvc.ApplyRuntimeConnectionConfig("http", u.Host, "token-123", "8f6d6d72-4a8a-4c87-bffa-34ba29dc0bb7", "", "")
+
+	a := &App{debugSvc: debugSvc}
+	if err := a.refreshAgentConfiguration(context.Background()); err != nil {
+		t.Fatalf("refreshAgentConfiguration: %v", err)
+	}
+
+	if !a.isZeroTouchApprovalPending() {
+		t.Fatal("zeroTouchApprovalPending deveria estar ativo")
+	}
+	if fakeConn.reloadCount != 0 {
+		t.Fatalf("reloadCount = %d, want 0", fakeConn.reloadCount)
+	}
+}
+
+func TestRefreshAgentConfiguration_ClearsZeroTouchPendingAfterApproval(t *testing.T) {
+	tempBase := t.TempDir()
+	oldProgramData := os.Getenv("ProgramData")
+	oldLocalAppData := os.Getenv("LOCALAPPDATA")
+	oldHome := os.Getenv("HOME")
+	oldUserProfile := os.Getenv("USERPROFILE")
+	defer func() {
+		_ = os.Setenv("ProgramData", oldProgramData)
+		_ = os.Setenv("LOCALAPPDATA", oldLocalAppData)
+		_ = os.Setenv("HOME", oldHome)
+		_ = os.Setenv("USERPROFILE", oldUserProfile)
+	}()
+	_ = os.Setenv("ProgramData", tempBase)
+	_ = os.Setenv("LOCALAPPDATA", tempBase)
+	_ = os.Setenv("HOME", tempBase)
+	_ = os.Setenv("USERPROFILE", tempBase)
+
+	payload := map[string]any{
+		"natsServerHost": "nats.example.local",
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/agent-auth/me/configuration" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(payload)
+	}))
+	defer srv.Close()
+
+	u, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatalf("url.Parse: %v", err)
+	}
+
+	fakeConn := &syncTestAgentConn{}
+	debugSvc := debug.NewService(debug.Options{AgentConn: fakeConn})
+	debugSvc.ApplyRuntimeConnectionConfig("http", u.Host, "token-123", "8f6d6d72-4a8a-4c87-bffa-34ba29dc0bb7", "", "")
+
+	a := &App{debugSvc: debugSvc}
+	a.setZeroTouchApprovalPending(true)
+
+	if err := a.refreshAgentConfiguration(context.Background()); err != nil {
+		t.Fatalf("refreshAgentConfiguration: %v", err)
+	}
+
+	if a.isZeroTouchApprovalPending() {
+		t.Fatal("zeroTouchApprovalPending deveria estar desativado apos payload aprovado")
+	}
+}

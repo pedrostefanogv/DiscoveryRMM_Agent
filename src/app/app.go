@@ -121,6 +121,7 @@ type App struct {
 	trayOffline              []byte
 	meshEnsureRunning        atomic.Bool
 	zeroTouchAttemptInFlight atomic.Bool
+	zeroTouchApprovalPending atomic.Bool
 
 	// serviceConnectedMode é true quando o Windows Service foi detectado no startup.
 	// Quando ativo, workers locais de automação e inventário são omitidos para
@@ -408,6 +409,25 @@ func (a *App) GetAgentConfiguration() AgentConfiguration {
 	cfg := a.agentConfig
 	a.agentConfigMu.RUnlock()
 	return cfg
+}
+
+func (a *App) isZeroTouchApprovalPending() bool {
+	if a == nil {
+		return false
+	}
+	return a.zeroTouchApprovalPending.Load()
+}
+
+func (a *App) setZeroTouchApprovalPending(pending bool) bool {
+	if a == nil {
+		return false
+	}
+	previous := a.zeroTouchApprovalPending.Load()
+	if previous == pending {
+		return false
+	}
+	a.zeroTouchApprovalPending.Store(pending)
+	return true
 }
 
 func (a *App) featureEnabled(flag *bool) bool {
