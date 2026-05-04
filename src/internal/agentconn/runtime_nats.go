@@ -125,8 +125,11 @@ func (r *Runtime) runNATSSession(ctx context.Context, cfg Config, server, transp
 	}
 
 	hb := r.collectHeartbeat(cfg, ipAddr)
+	hbLog := heartbeatLogPayload(hb)
 	if err := publishJSON(nc, subjects.Heartbeat, hb); err != nil {
-		r.logf("falha ao publicar heartbeat inicial: %v", err)
+		r.logf("[heartbeat][nats] falha ao publicar heartbeat inicial (subject=%s): %v payload=%s", subjects.Heartbeat, err, hbLog)
+	} else {
+		r.logf("[heartbeat][nats] heartbeat inicial publicado com sucesso (subject=%s) payload=%s", subjects.Heartbeat, hbLog)
 	}
 	_ = publishJSON(nc, subjects.Dashboard, natsDashboardEvent{
 		EventType: "agent_connected",
@@ -284,9 +287,12 @@ func (r *Runtime) runNATSEventLoop(ctx context.Context, nc *nats.Conn, cfg Confi
 			return nil
 		case <-heartbeatTicker.C:
 			hb := r.collectHeartbeat(cfg, ipAddr)
+			hbLog := heartbeatLogPayload(hb)
 			if err := publishJSON(nc, subjects.Heartbeat, hb); err != nil {
+				r.logf("[heartbeat][nats] falha ao publicar heartbeat (subject=%s): %v payload=%s", subjects.Heartbeat, err, hbLog)
 				return fmt.Errorf("heartbeat NATS falhou: %w", err)
 			}
+			r.logf("[heartbeat][nats] heartbeat publicado com sucesso (subject=%s) payload=%s", subjects.Heartbeat, hbLog)
 		case <-drainTicker.C:
 			r.drainCommandResultOutbox(ctx, "nats", func(item CommandResultOutboxItem) error {
 				res := natsResultEnvelope{

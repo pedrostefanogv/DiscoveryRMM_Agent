@@ -258,6 +258,15 @@ func (r *Runtime) collectHeartbeat(cfg Config, ipAddr string) AgentHeartbeat {
 	return hb
 }
 
+// heartbeatLogPayload serializa o payload para facilitar auditoria no log.
+func heartbeatLogPayload(hb AgentHeartbeat) string {
+	b, err := json.Marshal(hb)
+	if err != nil {
+		return fmt.Sprintf("{\"marshalError\":%q}", err.Error())
+	}
+	return string(b)
+}
+
 // nonNegFloatPtr retorna ponteiro para v se v >= 0; nil (omitir do JSON)
 // se v < 0 (sentinel usado para indicar métrica não coletada).
 func nonNegFloatPtr(v float64) *float64 {
@@ -540,9 +549,12 @@ func (r *Runtime) runSignalRSession(ctx context.Context, cfg Config, connectTime
 			return nil
 		case <-heartbeatTicker.C:
 			hb := r.collectHeartbeat(cfg, ipAddr)
+			hbLog := heartbeatLogPayload(hb)
 			if err := r.invoke(conn, "HeartbeatV2", hb); err != nil {
+				r.logf("[heartbeat][signalr] falha ao enviar HeartbeatV2: %v payload=%s", err, hbLog)
 				return fmt.Errorf("heartbeat falhou: %w", err)
 			}
+			r.logf("[heartbeat][signalr] HeartbeatV2 enviado com sucesso payload=%s", hbLog)
 		case m := <-msgCh:
 			if m.err != nil {
 				return m.err
