@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"runtime"
 	runtimeDebug "runtime/debug"
 	"strings"
@@ -21,6 +22,7 @@ import (
 	"discovery/internal/agentconn"
 	"discovery/internal/ai"
 	"discovery/internal/automation"
+	"discovery/internal/buildinfo"
 	"discovery/internal/data"
 	"discovery/internal/database"
 	"discovery/internal/dto"
@@ -128,6 +130,10 @@ type App struct {
 	// evitar duplicação com os workers do service (arquitetura service-first).
 	serviceConnectedMode atomic.Bool
 
+	// startupTime registra quando a aplicação iniciou, usado para calcular
+	// uptimeSeconds nos heartbeats.
+	startupTime time.Time
+
 	notificationMu      sync.Mutex
 	pendingNotifyResult map[string]chan string
 	notificationByKey   map[string]string
@@ -162,6 +168,7 @@ func NewApp(opts AppStartupOptions) *App {
 		serviceClient:       serviceClient,
 		pendingNotifyResult: make(map[string]chan string),
 		notificationByKey:   make(map[string]string),
+		startupTime:         time.Now(),
 	}
 	a.automationSvc = automation.NewService(func() automation.RuntimeConfig {
 		cfg := a.GetDebugConfig()
@@ -241,6 +248,7 @@ func NewApp(opts AppStartupOptions) *App {
 				NatsTLSCertHash:          cfg.NatsTlsCertHash,
 				AuthToken:                cfg.AuthToken,
 				AgentID:                  cfg.AgentID,
+				AgentVersion:             buildinfo.Version,
 				ClientID:                 agentCfg.ClientID,
 				SiteID:                   agentCfg.SiteID,
 				HeartbeatInterval:        heartbeatIntervalFromAgentConfig(agentCfg),
@@ -254,6 +262,7 @@ func NewApp(opts AppStartupOptions) *App {
 				a.syncCoord.HandlePing(ping)
 			}
 		},
+		GetHeartbeatMetrics:           a.getHeartbeatMetrics,
 		OnP2PDiscoverySnapshot:        a.handleP2PDiscoverySnapshot,
 		HandleCommand:                 a.handleAgentRuntimeCommand,
 		OnCommandOutput:               a.onAgentCommandOutput,
@@ -444,6 +453,44 @@ func heartbeatIntervalFromAgentConfig(cfg AgentConfiguration) int {
 		return *cfg.AgentHeartbeatIntervalSeconds
 	}
 	return 0
+}
+
+// getHeartbeatMetrics coleta métricas do sistema para incluir no heartbeat
+// padronizado (HeartbeatV2 / NATS). Usa uma única query osquery otimizada
+// para coletar CPU, memória, disco, hostname, uptime e processos.
+//
+// Se o osquery não estiver disponível ou falhar, retorna métricas básicas
+// (hostname + uptime) sem os campos percentuais — o payload JSON os omitirá.
+func (a *App) getHeartbeatMetrics() agentconn.AgentHeartbeatMetrics {
+	hostname, _ := os.Hostname()
+	metrics := agentconn.AgentHeartbeatMetrics{
+		Hostname:      hostname,
+		UptimeSeconds: int64(time.Since(a.startupTime).Seconds()),
+		P2pPeers:      a.getKnownP2PPeers(),
+	}
+
+	// Tenta coleta completa via osquery (CPU, memória, disco, processos).
+	if runtime.GOOS == "windows" {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if m := inventory.CollectHeartbeatMetrics(ctx); m != nil {
+			metrics = *m
+			// Sobrescreve P2P com o contador local que usa lock correto.
+			metrics.P2pPeers = a.getKnownP2PPeers()
+		}
+	}
+
+	return metrics
+}
+
+// getKnownP2PPeers retorna o número de peers P2P conhecidos, ou 0 se o
+// coordenador P2P não estiver inicializado. Usa GetPeers() que já adquire
+// o RLock internamente, garantindo thread-safety.
+func (a *App) getKnownP2PPeers() int {
+	if a.p2pCoord == nil {
+		return 0
+	}
+	return len(a.p2pCoord.GetPeers())
 }
 
 func (a *App) shouldRunLocalP2P() bool {

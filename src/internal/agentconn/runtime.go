@@ -46,9 +46,40 @@ type natsCommandEnvelope struct {
 	Payload     any    `json:"payload"`
 }
 
-type natsHeartbeatEnvelope struct {
-	IPAddress    string `json:"ipAddress,omitempty"`
-	AgentVersion string `json:"agentVersion,omitempty"`
+// AgentHeartbeat is the standardized payload for heartbeats
+// sent via both SignalR (HeartbeatV2) and NATS.
+type AgentHeartbeat struct {
+	AgentId       string   `json:"agentId"`
+	IpAddress     string   `json:"ipAddress,omitempty"`
+	Hostname      string   `json:"hostname,omitempty"`
+	AgentVersion  string   `json:"agentVersion,omitempty"`
+	TimestampUtc  string   `json:"timestampUtc,omitempty"` // RFC3339
+	CpuPercent    *float64 `json:"cpuPercent,omitempty"`
+	MemoryPercent *float64 `json:"memoryPercent,omitempty"`
+	MemoryTotalGb *float64 `json:"memoryTotalGb,omitempty"`
+	MemoryUsedGb  *float64 `json:"memoryUsedGb,omitempty"`
+	DiskPercent   *float64 `json:"diskPercent,omitempty"`
+	DiskTotalGb   *float64 `json:"diskTotalGb,omitempty"`
+	DiskUsedGb    *float64 `json:"diskUsedGb,omitempty"`
+	P2pPeers      *int     `json:"p2pPeers,omitempty"`
+	UptimeSeconds *int64   `json:"uptimeSeconds,omitempty"`
+	ProcessCount  *int     `json:"processCount,omitempty"`
+}
+
+// AgentHeartbeatMetrics is a lightweight struct for collecting
+// system metrics to include in heartbeats.
+type AgentHeartbeatMetrics struct {
+	Hostname      string
+	CpuPercent    float64
+	MemoryPercent float64
+	MemoryTotalGb float64
+	MemoryUsedGb  float64
+	DiskPercent   float64
+	DiskTotalGb   float64
+	DiskUsedGb    float64
+	P2pPeers      int
+	UptimeSeconds int64
+	ProcessCount  int
 }
 
 type natsResultEnvelope struct {
@@ -107,6 +138,7 @@ type Config struct {
 	NatsTLSCertHash          string
 	AuthToken                string
 	AgentID                  string
+	AgentVersion             string
 	ClientID                 string
 	SiteID                   string
 	HeartbeatInterval        int // segundos; 0 = usar padrão (30s)
@@ -131,6 +163,7 @@ type Options struct {
 	HandleCommand          func(parent context.Context, cmdType string, payload any) (handled bool, exitCode int, output string, errText string)
 	OnCommandOutput        func(cmdType string, output string, errText string)
 
+	GetHeartbeatMetrics           func() AgentHeartbeatMetrics
 	EnqueueCommandResultOutbox    func(transport, commandID string, exitCode int, output, errText, sendError string) error
 	ListDueCommandResultOutbox    func(transport string, now time.Time, limit int) ([]CommandResultOutboxItem, error)
 	MarkSentCommandResultOutbox   func(id int64) error
@@ -195,6 +228,51 @@ func (r *Runtime) setStatusConnected(agentID, server, transport string) {
 	r.statSnap.Server = server
 	r.statSnap.LastEvent = "conectado"
 	r.statSnap.Transport = transport
+}
+
+// collectHeartbeat assembles a standardized AgentHeartbeat payload using
+// the current config, IP address, and optional system metrics callback.
+func (r *Runtime) collectHeartbeat(cfg Config, ipAddr string) AgentHeartbeat {
+	hb := AgentHeartbeat{
+		AgentId:      cfg.AgentID,
+		IpAddress:    ipAddr,
+		AgentVersion: cfg.AgentVersion,
+		TimestampUtc: time.Now().UTC().Format(time.RFC3339),
+	}
+	if r.opts.GetHeartbeatMetrics != nil {
+		m := r.opts.GetHeartbeatMetrics()
+		if m.Hostname != "" {
+			hb.Hostname = m.Hostname
+		}
+		hb.CpuPercent = nonNegFloatPtr(m.CpuPercent)
+		hb.MemoryPercent = nonNegFloatPtr(m.MemoryPercent)
+		hb.MemoryTotalGb = positiveFloatPtr(m.MemoryTotalGb)
+		hb.MemoryUsedGb = positiveFloatPtr(m.MemoryUsedGb)
+		hb.DiskPercent = nonNegFloatPtr(m.DiskPercent)
+		hb.DiskTotalGb = positiveFloatPtr(m.DiskTotalGb)
+		hb.DiskUsedGb = positiveFloatPtr(m.DiskUsedGb)
+		hb.P2pPeers = &m.P2pPeers
+		hb.UptimeSeconds = &m.UptimeSeconds
+		hb.ProcessCount = &m.ProcessCount
+	}
+	return hb
+}
+
+// nonNegFloatPtr retorna ponteiro para v se v >= 0; nil (omitir do JSON)
+// se v < 0 (sentinel usado para indicar métrica não coletada).
+func nonNegFloatPtr(v float64) *float64 {
+	if v >= 0 {
+		return &v
+	}
+	return nil
+}
+
+// positiveFloatPtr retorna um ponteiro para v se v > 0; nil caso contrário.
+func positiveFloatPtr(v float64) *float64 {
+	if v > 0 {
+		return &v
+	}
+	return nil
 }
 
 // Reload forces the active connection to close, causing a reconnect with updated config.
@@ -461,7 +539,8 @@ func (r *Runtime) runSignalRSession(ctx context.Context, cfg Config, connectTime
 		case <-ctx.Done():
 			return nil
 		case <-heartbeatTicker.C:
-			if err := r.invoke(conn, "Heartbeat", cfg.AgentID, ipAddr); err != nil {
+			hb := r.collectHeartbeat(cfg, ipAddr)
+			if err := r.invoke(conn, "HeartbeatV2", hb); err != nil {
 				return fmt.Errorf("heartbeat falhou: %w", err)
 			}
 		case m := <-msgCh:

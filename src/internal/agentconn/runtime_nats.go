@@ -124,7 +124,8 @@ func (r *Runtime) runNATSSession(ctx context.Context, cfg Config, server, transp
 		return err
 	}
 
-	if err := publishJSON(nc, subjects.Heartbeat, natsHeartbeatEnvelope{IPAddress: ipAddr, AgentVersion: "discovery"}); err != nil {
+	hb := r.collectHeartbeat(cfg, ipAddr)
+	if err := publishJSON(nc, subjects.Heartbeat, hb); err != nil {
 		r.logf("falha ao publicar heartbeat inicial: %v", err)
 	}
 	_ = publishJSON(nc, subjects.Dashboard, natsDashboardEvent{
@@ -282,7 +283,8 @@ func (r *Runtime) runNATSEventLoop(ctx context.Context, nc *nats.Conn, cfg Confi
 			})
 			return nil
 		case <-heartbeatTicker.C:
-			if err := publishJSON(nc, subjects.Heartbeat, natsHeartbeatEnvelope{IPAddress: ipAddr, AgentVersion: "discovery"}); err != nil {
+			hb := r.collectHeartbeat(cfg, ipAddr)
+			if err := publishJSON(nc, subjects.Heartbeat, hb); err != nil {
 				return fmt.Errorf("heartbeat NATS falhou: %w", err)
 			}
 		case <-drainTicker.C:
