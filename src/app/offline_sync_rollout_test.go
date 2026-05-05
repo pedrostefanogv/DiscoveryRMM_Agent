@@ -35,7 +35,7 @@ func newOfflineSyncTestApp(t *testing.T, rollout AgentRolloutConfig) *App {
 func TestCommandResultOutboxLoggingOnlySkipsEnqueue(t *testing.T) {
 	a := newOfflineSyncTestApp(t, AgentRolloutConfig{CommandResultOfflineMode: OfflineQueueModeLoggingOnly})
 
-	if err := a.enqueueCommandResultOutbox("signalr", "cmd-1", 0, "ok", "", "network error"); err != nil {
+	if err := a.enqueueCommandResultOutbox("nats-wss", "cmd-1", 0, "ok", "", "network error"); err != nil {
 		t.Fatalf("enqueue command result outbox: %v", err)
 	}
 	pending, err := a.db.CountPendingCommandResultOutbox("agent-1")
@@ -50,7 +50,7 @@ func TestCommandResultOutboxLoggingOnlySkipsEnqueue(t *testing.T) {
 func TestCommandResultOutboxEnqueueOnlySkipsDrain(t *testing.T) {
 	a := newOfflineSyncTestApp(t, AgentRolloutConfig{CommandResultOfflineMode: OfflineQueueModeEnqueueOnly})
 
-	if err := a.enqueueCommandResultOutbox("signalr", "cmd-1", 0, "ok", "", "network error"); err != nil {
+	if err := a.enqueueCommandResultOutbox("nats-wss", "cmd-1", 0, "ok", "", "network error"); err != nil {
 		t.Fatalf("enqueue command result outbox: %v", err)
 	}
 	pending, err := a.db.CountPendingCommandResultOutbox("agent-1")
@@ -60,7 +60,7 @@ func TestCommandResultOutboxEnqueueOnlySkipsDrain(t *testing.T) {
 	if pending != 1 {
 		t.Fatalf("expected 1 pending command result, got %d", pending)
 	}
-	due, err := a.listDueCommandResultOutbox("signalr", time.Now().Add(time.Second), 10)
+	due, err := a.listDueCommandResultOutbox("nats-wss", time.Now().Add(time.Second), 10)
 	if err != nil {
 		t.Fatalf("list due command results: %v", err)
 	}

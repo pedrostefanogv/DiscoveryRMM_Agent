@@ -52,8 +52,8 @@ Escopo: seguranca de transporte, identidade criptografica entre peers e execucao
 ## Fase 2 - Transporte estrito agent-servidor
 
 ### Features
-1. Remover access_token em query string no SignalR.
-2. Manter credenciais apenas em Authorization header.
+1. Proibir credenciais sensiveis em query string nos transportes do agent.
+2. Manter credenciais apenas em Authorization header/token NATS.
 3. Em modo estrito, rejeitar em producao:
    - apiScheme diferente de https;
    - nats/ws sem transporte seguro.
@@ -183,7 +183,7 @@ Com dominio proxied, o TLS termina no edge. mTLS fim a fim puro exige caminho de
 
 ## 5. Backlog de implementacao por atividade
 
-1. [TLS-001] Remover token de query no SignalR e manter Authorization header.
+1. [TLS-001] Remover token de query nos transportes do agent e manter Authorization header.
 2. [TLS-002] Rejeitar transporte inseguro remoto no runtime (prod).
 3. [TLS-003] Validar cadeia/certificado no cliente para HTTP/WS/NATS TLS.
 4. [P2P-001] Persistir binding AgentID <-> PeerID confiavel.

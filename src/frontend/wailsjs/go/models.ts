@@ -100,7 +100,7 @@ export namespace app {
 	}
 	export class RealtimeStatus {
 	    natsConnected: boolean;
-	    signalrConnectedAgents: number;
+	    realtimeConnectedAgents: number;
 	    // Go type: time
 	    checkedAtUtc: any;
 	
@@ -111,7 +111,7 @@ export namespace app {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.natsConnected = source["natsConnected"];
-	        this.signalrConnectedAgents = source["signalrConnectedAgents"];
+	        this.realtimeConnectedAgents = source["realtimeConnectedAgents"];
 	        this.checkedAtUtc = this.convertValues(source["checkedAtUtc"], null);
 	    }
 	

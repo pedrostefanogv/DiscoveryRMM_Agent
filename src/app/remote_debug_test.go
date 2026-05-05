@@ -79,23 +79,6 @@ func TestBuildRemoteDebugPublishers_RequiresCanonicalNATSSubject(t *testing.T) {
 	}
 }
 
-func TestParseRemoteDebugCommand_PreservesSignalRMethod(t *testing.T) {
-	cmd, err := parseRemoteDebugCommand(map[string]any{
-		"action":    "start",
-		"sessionId": "sess-1",
-		"stream": map[string]any{
-			"natsSubject":   "tenant.client-1.site.site-1.agent.agent-1.remote.debug",
-			"signalRMethod": "PushRemoteDebugLog",
-		},
-	})
-	if err != nil {
-		t.Fatalf("parseRemoteDebugCommand: %v", err)
-	}
-	if got := strings.TrimSpace(cmd.Stream.SignalRMethod); got != "PushRemoteDebugLog" {
-		t.Fatalf("SignalRMethod = %q", got)
-	}
-}
-
 func TestHandleAgentRuntimeCommand_UpdateRequiresService(t *testing.T) {
 	a := &App{}
 	handled, code, output, errText := a.handleAgentRuntimeCommand(context.Background(), "update", map[string]any{"action": "check-update"})

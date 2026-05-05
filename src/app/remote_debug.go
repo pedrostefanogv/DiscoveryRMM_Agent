@@ -1,17 +1,13 @@
 package app
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
-	"net/url"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/gorilla/websocket"
 	"github.com/nats-io/nats.go"
 )
 
@@ -31,10 +27,8 @@ type remoteDebugCommand struct {
 }
 
 type remoteDebugStreamConfig struct {
-	SignalRHub    string `json:"signalRHub"`
-	SignalRMethod string `json:"signalRMethod"`
-	NatsSubject   string `json:"natsSubject"`
-	NatsWssURL    string `json:"natsWssUrl"`
+	NatsSubject string `json:"natsSubject"`
+	NatsWssURL  string `json:"natsWssUrl"`
 }
 
 type remoteDebugLogMessage struct {
@@ -80,42 +74,6 @@ func (p *natsRemoteDebugPublisher) Publish(_ context.Context, msg remoteDebugLog
 func (p *natsRemoteDebugPublisher) Close() error {
 	if p.conn != nil {
 		p.conn.Close()
-	}
-	return nil
-}
-
-type signalRRemoteDebugPublisher struct {
-	conn   *websocket.Conn
-	target string
-	mu     sync.Mutex
-}
-
-func (p *signalRRemoteDebugPublisher) Name() string { return "signalr" }
-
-func (p *signalRRemoteDebugPublisher) Publish(_ context.Context, msg remoteDebugLogMessage) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	frame := map[string]any{
-		"type":      1,
-		"target":    p.target,
-		"arguments": []any{msg.SessionID, msg.Message, msg.Level},
-	}
-	b, err := json.Marshal(frame)
-	if err != nil {
-		return err
-	}
-	b = append(b, 0x1e)
-	if err := p.conn.SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil {
-		return err
-	}
-	return p.conn.WriteMessage(websocket.TextMessage, b)
-}
-
-func (p *signalRRemoteDebugPublisher) Close() error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.conn != nil {
-		return p.conn.Close()
 	}
 	return nil
 }
@@ -425,10 +383,6 @@ func buildRemoteDebugPublishers(cfg DebugConfig, stream remoteDebugStreamConfig,
 		publishers = append(publishers, p)
 	}
 
-	if p, err := newSignalRRemoteDebugPublisher(cfg, strings.TrimSpace(stream.SignalRHub), strings.TrimSpace(stream.SignalRMethod)); err == nil {
-		publishers = append(publishers, p)
-	}
-
 	if len(publishers) == 0 {
 		return nil, fmt.Errorf("nenhum transporte remoto disponivel")
 	}
@@ -454,65 +408,6 @@ func newNATSRemoteDebugPublisher(server, token, subject, name string) (remoteDeb
 		return nil, err
 	}
 	return &natsRemoteDebugPublisher{name: name, subject: subject, conn: nc}, nil
-}
-
-func newSignalRRemoteDebugPublisher(cfg DebugConfig, hubPath, method string) (remoteDebugPublisher, error) {
-	token := strings.TrimSpace(cfg.AuthToken)
-	agentID := strings.TrimSpace(cfg.AgentID)
-	apiServer := strings.TrimSpace(cfg.ApiServer)
-	apiScheme := strings.TrimSpace(strings.ToLower(cfg.ApiScheme))
-	if token == "" || agentID == "" || apiServer == "" {
-		return nil, fmt.Errorf("config SignalR incompleta")
-	}
-	if hubPath == "" {
-		hubPath = "/hubs/remote-debug"
-	}
-	if method == "" {
-		method = "PushRemoteDebugLog"
-	}
-	wsScheme := "ws"
-	if apiScheme == "https" {
-		wsScheme = "wss"
-	}
-	u := url.URL{Scheme: wsScheme, Host: apiServer, Path: hubPath}
-
-	headers := http.Header{}
-	headers.Set("Authorization", "Bearer "+token)
-	headers.Set("X-Agent-ID", agentID)
-
-	dialer := websocket.Dialer{HandshakeTimeout: 5 * time.Second}
-	conn, _, err := dialer.Dial(u.String(), headers)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := signalRSendHandshake(conn); err != nil {
-		_ = conn.Close()
-		return nil, err
-	}
-
-	return &signalRRemoteDebugPublisher{conn: conn, target: method}, nil
-}
-
-func signalRSendHandshake(conn *websocket.Conn) error {
-	if err := conn.SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil {
-		return err
-	}
-	handshake := []byte(`{"protocol":"json","version":1}`)
-	handshake = append(handshake, 0x1e)
-	if err := conn.WriteMessage(websocket.TextMessage, handshake); err != nil {
-		return err
-	}
-	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	_, data, err := conn.ReadMessage()
-	if err != nil {
-		// Alguns servidores aceitam handshake sem frame de resposta imediata.
-		return nil
-	}
-	if bytes.Contains(data, []byte(`"error"`)) {
-		return fmt.Errorf("handshake SignalR rejeitado")
-	}
-	return nil
 }
 
 func splitLines(raw string) []string {

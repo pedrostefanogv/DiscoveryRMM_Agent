@@ -125,7 +125,7 @@ func TestAgentStatusFromServiceStatusData(t *testing.T) {
 		"agent_id":         "agent-123",
 		"agent_server":     "server.example:443",
 		"agent_last_event": "conectado",
-		"agent_transport":  "signalr",
+		"agent_transport":  "nats-wss",
 	})
 
 	if !got.Connected {
@@ -137,7 +137,7 @@ func TestAgentStatusFromServiceStatusData(t *testing.T) {
 	if got.Server != "server.example:443" {
 		t.Fatalf("Server = %q", got.Server)
 	}
-	if got.Transport != "signalr" {
+	if got.Transport != "nats-wss" {
 		t.Fatalf("Transport = %q", got.Transport)
 	}
 	if got.LastEvent != "conectado" {

@@ -37,7 +37,7 @@ func (a *App) GetStatusOverview() StatusOverview {
 		ConnectionLabel: "Offline",
 		Hostname:        "Computador local",
 		Server:          strings.TrimSpace(agent.Server),
-		ConnectionType:  "SignalR",
+		ConnectionType:  "NATS",
 		AppVersion:      strings.TrimSpace(Version),
 		OSName:          runtime.GOOS,
 		OSVersion:       runtime.GOARCH,
@@ -54,8 +54,6 @@ func (a *App) GetStatusOverview() StatusOverview {
 			out.ConnectionType = "NATS"
 		case "nats-wss", "nats-ws":
 			out.ConnectionType = "NATS WS"
-		case "signalr":
-			out.ConnectionType = "SignalR"
 		default:
 			out.ConnectionType = transport
 		}
@@ -126,7 +124,7 @@ func applyRealtimeStatus(out *StatusOverview, rt RealtimeStatus) {
 	}
 	out.RealtimeAvailable = true
 	out.RealtimeNATSConnected = rt.NATSConnected
-	out.RealtimeConnectedAgents = rt.SignalRConnectedAgents
+	out.RealtimeConnectedAgents = rt.RealtimeConnectedAgents
 	if rt.NATSConnected {
 		out.RealtimeMessage = "Realtime operacional"
 	} else {
@@ -154,8 +152,6 @@ func applyRealtimeFallbackFromAgentStatus(out *StatusOverview, agent AgentStatus
 	case "nats", "nats-ws", "nats-wss":
 		out.RealtimeNATSConnected = true
 		out.RealtimeMessage = "sessao remota ativa via NATS; endpoint /api/v1/agent-auth/me/realtime/status indisponivel ou token rejeitado"
-	case "signalr":
-		out.RealtimeMessage = "sessao remota ativa via SignalR; endpoint /api/v1/agent-auth/me/realtime/status indisponivel ou token rejeitado"
 	default:
 		out.RealtimeMessage = "sessao remota ativa; endpoint /api/v1/agent-auth/me/realtime/status indisponivel ou token rejeitado"
 	}

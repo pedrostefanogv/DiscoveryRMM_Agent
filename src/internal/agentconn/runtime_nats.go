@@ -274,6 +274,14 @@ func (r *Runtime) runNATSEventLoop(ctx context.Context, nc *nats.Conn, cfg Confi
 				"transport": transportLabel,
 			})
 			return nil
+		case <-r.reloadCh:
+			r.publishDashboardEventNATS(nc, subjects.Dashboard, cfg, "AgentDisconnected", map[string]any{
+				"agentId":   cfg.AgentID,
+				"clientId":  cfg.ClientID,
+				"siteId":    cfg.SiteID,
+				"transport": transportLabel,
+			})
+			return fmt.Errorf("reload solicitado")
 		case <-heartbeatTicker.C:
 			r.sendHeartbeatNATS(nc, subjects.Heartbeat, cfg, ipAddr)
 		case forceDone := <-r.forceHeartbeatCh:

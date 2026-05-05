@@ -247,7 +247,7 @@ type AgentStatus struct {
 
 // RealtimeStatus represents server-side realtime transport health.
 type RealtimeStatus struct {
-	NATSConnected          bool      `json:"natsConnected"`
-	SignalRConnectedAgents int       `json:"signalrConnectedAgents"`
-	CheckedAtUTC           time.Time `json:"checkedAtUtc"`
+	NATSConnected           bool      `json:"natsConnected"`
+	RealtimeConnectedAgents int       `json:"realtimeConnectedAgents"`
+	CheckedAtUTC            time.Time `json:"checkedAtUtc"`
 }

@@ -290,7 +290,7 @@ func (sm *ServiceManager) RequestSelfUpdateCheck(source string) bool {
 	if source == "" {
 		source = "manual"
 	}
-	// Comandos explícitos do servidor (via NATS/SignalR command handler) forçam instalação
+	// Comandos explícitos do servidor (via command handler NATS) forçam instalação
 	// mesmo que a versão no manifest seja igual ou inferior à atual.
 	force := strings.HasPrefix(source, "command:")
 	select {

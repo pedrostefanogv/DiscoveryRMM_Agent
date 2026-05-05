@@ -240,7 +240,7 @@ func TestGetRealtimeStatus_SetsAgentAuthHeadersAndAgentID(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"natsConnected":true,"signalrConnectedAgents":7,"checkedAtUtc":"2026-03-23T12:00:00Z"}`))
+		_, _ = w.Write([]byte(`{"natsConnected":true,"realtimeConnectedAgents":7,"checkedAtUtc":"2026-03-23T12:00:00Z"}`))
 	}))
 	defer server.Close()
 
@@ -259,8 +259,8 @@ func TestGetRealtimeStatus_SetsAgentAuthHeadersAndAgentID(t *testing.T) {
 	if !status.NATSConnected {
 		t.Fatal("NATSConnected deveria ser true")
 	}
-	if status.SignalRConnectedAgents != 7 {
-		t.Fatalf("SignalRConnectedAgents = %d, want 7", status.SignalRConnectedAgents)
+	if status.RealtimeConnectedAgents != 7 {
+		t.Fatalf("RealtimeConnectedAgents = %d, want 7", status.RealtimeConnectedAgents)
 	}
 }
 

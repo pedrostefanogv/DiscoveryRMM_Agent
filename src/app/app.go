@@ -708,7 +708,7 @@ func (a *App) startup(ctx context.Context) {
 }
 
 // SendTestHeartbeat triggers an immediate heartbeat send on the active
-// connection (SignalR or NATS) and returns diagnostic info.
+// NATS connection and returns diagnostic info.
 // This is exposed as a Wails binding for the debug page.
 func (a *App) SendTestHeartbeat() string {
 	if a.agentConn == nil {

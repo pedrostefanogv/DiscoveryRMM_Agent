@@ -17,7 +17,7 @@ func TestCommandResultOutboxLifecycle(t *testing.T) {
 
 	err = db.EnqueueCommandResultOutbox(CommandResultOutboxEntry{
 		AgentID:        agentID,
-		Transport:      "signalr",
+		Transport:      "nats-wss",
 		CommandID:      "cmd-1",
 		IdempotencyKey: "idem-1",
 		PayloadJSON:    `{"commandId":"cmd-1"}`,
@@ -149,10 +149,10 @@ func TestCommandResultOutboxListDueFiltersByTransport(t *testing.T) {
 	entries := []CommandResultOutboxEntry{
 		{
 			AgentID:        agentID,
-			Transport:      "signalr",
-			CommandID:      "cmd-signalr",
-			IdempotencyKey: "signalr:cmd-signalr",
-			PayloadJSON:    `{"commandId":"cmd-signalr"}`,
+			Transport:      "nats-wss",
+			CommandID:      "cmd-nats-wss",
+			IdempotencyKey: "nats-wss:cmd-nats-wss",
+			PayloadJSON:    `{"commandId":"cmd-nats-wss"}`,
 			NextAttemptAt:  now,
 			ExpiresAt:      now.Add(24 * time.Hour),
 		},
@@ -172,12 +172,12 @@ func TestCommandResultOutboxListDueFiltersByTransport(t *testing.T) {
 		}
 	}
 
-	signalrDue, err := db.ListDueCommandResultOutbox(agentID, "signalr", now.Add(time.Second), 10)
+	natsWSSDue, err := db.ListDueCommandResultOutbox(agentID, "nats-wss", now.Add(time.Second), 10)
 	if err != nil {
-		t.Fatalf("list signalr due: %v", err)
+		t.Fatalf("list nats-wss due: %v", err)
 	}
-	if len(signalrDue) != 1 || signalrDue[0].Transport != "signalr" {
-		t.Fatalf("expected only signalr due entry, got %+v", signalrDue)
+	if len(natsWSSDue) != 1 || natsWSSDue[0].Transport != "nats-wss" {
+		t.Fatalf("expected only nats-wss due entry, got %+v", natsWSSDue)
 	}
 
 	natsDue, err := db.ListDueCommandResultOutbox(agentID, "nats", now.Add(time.Second), 10)

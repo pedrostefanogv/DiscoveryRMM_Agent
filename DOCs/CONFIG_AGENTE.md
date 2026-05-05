@@ -37,10 +37,10 @@ Este documento descreve os arquivos locais de configuração usados pelo agent D
 | `apiScheme` | string | não | Esquema da API. Valores esperados: `http` ou `https`. Em ambiente remoto, o padrão operacional é `https`. |
 | `apiServer` | string | não | Host da API sem path, por exemplo `192-168-1-131.nip.io` ou `api.exemplo.local:8443`. |
 | `authToken` | string | não | Token definitivo do agent após bootstrap. É usado nas chamadas autenticadas para API e sync. |
-| `agentId` | string | não | Identificador definitivo do agent após bootstrap. Também é usado em SignalR e NATS. |
+| `agentId` | string | não | Identificador definitivo do agent após bootstrap. Também é usado nos fluxos autenticados de API e NATS. |
 | `natsServer` | string | não | Endpoint NATS canônico. Pode ser `nats://host:4222`, `ws://...` ou `wss://...`, respeitando as políticas de segurança do runtime. |
 | `natsWsServer` | string | não | Endpoint alternativo dedicado para NATS sobre WebSocket, normalmente `wss://...`. |
-| `allowInsecureTls` | bool | não | Quando `true`, o agent aceita certificado autoassinado ou cadeia não confiável do servidor. Afeta bootstrap, chamadas HTTP autenticadas, automação, SignalR e NATS WSS. Deve ser usado apenas em laboratório ou ambientes controlados. |
+| `allowInsecureTls` | bool | não | Quando `true`, o agent aceita certificado autoassinado ou cadeia não confiável do servidor. Afeta bootstrap, chamadas HTTP autenticadas, automação e NATS WSS. Deve ser usado apenas em laboratório ou ambientes controlados. |
 | `agentUpdate` | objeto | não | Política de self-update do agent. Campos descritos abaixo. |
 | `p2p` | objeto | não | Configuração local do subsistema P2P. Campos descritos abaixo. |
 | `meshCentralInstalled` | bool | não | Estado persistido do bootstrap do MeshCentral. Campo interno do agent; normalmente não precisa edição manual. |

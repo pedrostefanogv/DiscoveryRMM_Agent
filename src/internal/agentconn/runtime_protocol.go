@@ -3,114 +3,13 @@ package agentconn
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
-
-	"github.com/gorilla/websocket"
 )
-
-func parseHandshakeAck(raw any) (bool, string) {
-	arr, ok := raw.([]any)
-	if !ok {
-		return true, ""
-	}
-	if len(arr) == 0 {
-		return true, ""
-	}
-
-	success := true
-	message := ""
-
-	if b, ok := arr[0].(bool); ok {
-		success = b
-	}
-	if len(arr) >= 2 {
-		message = strings.TrimSpace(toString(arr[1]))
-	}
-
-	if m, ok := arr[0].(map[string]any); ok {
-		if b, ok := m["success"].(bool); ok {
-			success = b
-		}
-		if strings.TrimSpace(message) == "" {
-			message = strings.TrimSpace(toString(m["message"]))
-		}
-	}
-
-	return success, message
-}
-
-func (r *Runtime) sendHandshake(conn *websocket.Conn) error {
-	// SignalR JSON protocol handshake frame.
-	return r.writeSignalRText(conn, []byte("{\"protocol\":\"json\",\"version\":1}\x1e"), handshakeTimeout)
-}
-
-func (r *Runtime) waitHandshakeAck(conn *websocket.Conn, timeout time.Duration) error {
-	if timeout <= 0 {
-		timeout = handshakeTimeout
-	}
-	if err := conn.SetReadDeadline(time.Now().Add(timeout)); err != nil {
-		return err
-	}
-	defer func() {
-		_ = conn.SetReadDeadline(time.Time{})
-	}()
-	_, message, err := conn.ReadMessage()
-	if err != nil {
-		return err
-	}
-	records := splitSignalRRecords(message)
-	for _, rec := range records {
-		if strings.TrimSpace(rec) == "{}" || strings.TrimSpace(rec) == "" {
-			return nil
-		}
-		var hs map[string]any
-		if json.Unmarshal([]byte(rec), &hs) == nil {
-			if e, ok := hs["error"].(string); ok && strings.TrimSpace(e) != "" {
-				return fmt.Errorf("handshake rejeitado: %s", e)
-			}
-		}
-	}
-	return nil
-}
-
-func (r *Runtime) invoke(conn *websocket.Conn, target string, args ...any) error {
-	frame := map[string]any{
-		"type":      1,
-		"target":    target,
-		"arguments": args,
-	}
-	payload, err := json.Marshal(frame)
-	if err != nil {
-		return err
-	}
-	payload = append(payload, 0x1e)
-	return r.writeSignalRText(conn, payload, handshakeTimeout)
-}
-
-func (r *Runtime) writeSignalRText(conn *websocket.Conn, payload []byte, timeout time.Duration) error {
-	if timeout <= 0 {
-		timeout = handshakeTimeout
-	}
-	r.writeMu.Lock()
-	defer r.writeMu.Unlock()
-	if err := conn.SetWriteDeadline(time.Now().Add(timeout)); err != nil {
-		return err
-	}
-	defer func() {
-		_ = conn.SetWriteDeadline(time.Time{})
-	}()
-	if err := conn.WriteMessage(websocket.TextMessage, payload); err != nil {
-		r.logf("[transport][signalr] falha ao escrever mensagem (writeMu bloqueado?): %v", err)
-		return err
-	}
-	return nil
-}
 
 func executeCommand(parent context.Context, cmdType string, payload any) (int, string, string) {
 	timeout := 2 * time.Minute
@@ -251,19 +150,6 @@ func parseSyncPingArgs(raw any) (SyncPing, bool) {
 	return ping, true
 }
 
-func splitSignalRRecords(data []byte) []string {
-	parts := strings.Split(string(data), string([]byte{0x1e}))
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p == "" {
-			continue
-		}
-		out = append(out, p)
-	}
-	return out
-}
-
 func toString(v any) string {
 	switch t := v.(type) {
 	case string:
@@ -327,50 +213,4 @@ func detectLocalIP() string {
 		return addr.IP.String()
 	}
 	return "127.0.0.1"
-}
-
-func (r *Runtime) handleSignalRPayload(ctx context.Context, conn *websocket.Conn, payload []byte) error {
-	for _, rec := range splitSignalRRecords(payload) {
-		if strings.TrimSpace(rec) == "" || strings.TrimSpace(rec) == "{}" {
-			continue
-		}
-
-		msg := map[string]any{}
-		if err := json.Unmarshal([]byte(rec), &msg); err != nil {
-			continue
-		}
-
-		t, _ := toInt(msg["type"])
-		switch t {
-		case 1:
-			target, _ := msg["target"].(string)
-			if strings.EqualFold(target, "ExecuteCommand") {
-				cmdID, cmdType, cmdPayload := parseExecuteArgs(msg["arguments"])
-				if cmdID == "" {
-					r.logf("ExecuteCommand ignorado: cmdId vazio")
-					continue
-				}
-				go r.executeAndRespond(ctx, conn, cmdID, cmdType, cmdPayload)
-				continue
-			}
-			if strings.EqualFold(target, "SyncPing") {
-				ping, ok := parseSyncPingArgs(msg["arguments"])
-				if !ok {
-					r.logf("SyncPing ignorado: payload invalido")
-					continue
-				}
-				r.emitSyncPing(ping)
-				continue
-			}
-		case 6:
-			continue
-		case 7:
-			reason, _ := msg["error"].(string)
-			if strings.TrimSpace(reason) == "" {
-				reason = "servidor encerrou a conexao"
-			}
-			return errors.New(reason)
-		}
-	}
-	return nil
 }

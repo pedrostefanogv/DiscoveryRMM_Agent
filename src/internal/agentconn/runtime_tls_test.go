@@ -2,7 +2,7 @@ package agentconn
 
 import "testing"
 
-func TestEvaluateTLSPinPolicy_SignalR(t *testing.T) {
+func TestEvaluateTLSPinPolicy_NATSTransport(t *testing.T) {
 	tests := []struct {
 		name      string
 		observed  string
@@ -19,7 +19,7 @@ func TestEvaluateTLSPinPolicy_SignalR(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			err := evaluateTLSPinPolicy("signalr", tc.observed, tc.expected, tc.enforce)
+			err := evaluateTLSPinPolicy("nats-wss", tc.observed, tc.expected, tc.enforce)
 			if tc.wantError && err == nil {
 				t.Fatal("esperava erro")
 			}
