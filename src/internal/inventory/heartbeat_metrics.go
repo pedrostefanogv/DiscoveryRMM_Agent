@@ -14,21 +14,21 @@ import (
 // processos) em uma única chamada via socket Thrift. Isso elimina o
 // overhead de múltiplas queries e minimiza o tempo de execução.
 //
-// A query usa subqueries que podem retornar NULL (ex: disco C: ausente)
-// para evitar que a query inteira quebre com CROSS JOIN vazio.
-// Os valores NULL são tratados como fallback no mapHeartbeatRow.
+// A query é compatível com Windows, onde as tabelas system_info.physical_memory
+// e processes.resident_size substituem a tabela memory_info (inexistente no
+// osqueryi padrão sem a extension inc/win). No Windows a coluna load_percentage
+// de cpu_info não existe; nesse caso cpu_percent vem como NULL e é tratado
+// no fallback do caller.
+//
+// Valores NULL são tratados como fallback no mapHeartbeatRow.
 const heartbeatMetricsSQL = `
 SELECT
   si.hostname,
-  COALESCE(
-    (SELECT ROUND(AVG(CAST(c.load_percentage AS REAL)), 1)
-     FROM cpu_info c WHERE c.load_percentage IS NOT NULL),
-    NULL
-  ) AS cpu_percent,
-  ROUND(mem.memory_total / 1073741824.0, 2) AS memory_total_gb,
-  ROUND((mem.memory_total - mem.memory_free) / 1073741824.0, 2) AS memory_used_gb,
-  CASE WHEN mem.memory_total > 0
-    THEN ROUND((mem.memory_total - mem.memory_free) * CAST(100.0 AS REAL) / mem.memory_total, 1)
+  NULL AS cpu_percent,
+  ROUND(CAST(si.physical_memory AS REAL) / 1073741824.0, 2) AS memory_total_gb,
+  ROUND(CAST(COALESCE(mem_agg.resident_bytes, 0) AS REAL) / 1073741824.0, 2) AS memory_used_gb,
+  CASE WHEN si.physical_memory > 0
+    THEN ROUND(COALESCE(mem_agg.resident_bytes, 0) * 100.0 / CAST(si.physical_memory AS REAL), 1)
     ELSE NULL
   END AS memory_percent,
   ROUND(d.disk_total_gb, 2)      AS disk_total_gb,
@@ -37,8 +37,10 @@ SELECT
   CAST(up.total_seconds AS INTEGER) AS uptime_seconds,
   CAST((SELECT COUNT(*) FROM processes) AS INTEGER) AS process_count
 FROM system_info si
-CROSS JOIN memory_info mem
 CROSS JOIN (SELECT total_seconds FROM uptime LIMIT 1) up
+LEFT JOIN (
+  SELECT SUM(COALESCE(resident_size, 0)) AS resident_bytes FROM processes
+) mem_agg
 LEFT JOIN (
   SELECT
     MAX(size) / 1073741824.0          AS disk_total_gb,
