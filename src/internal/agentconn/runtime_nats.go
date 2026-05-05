@@ -151,7 +151,7 @@ func (r *Runtime) runNATSSession(ctx context.Context, cfg Config, server, transp
 	r.setStatusConnected(cfg.AgentID, natsURL, transportLabel)
 	r.logf("agente conectado ao NATS (command=%s, syncSubject=%s, p2pDiscovery=%s)", subjects.Command, subjects.SyncPing, subjects.P2PDiscovery)
 
-	if _, err = nc.Subscribe(subjects.Command, r.natsCommandHandler(ctx, nc, cfg, subjects)); err != nil {
+	if _, err = nc.Subscribe(subjects.Command, r.natsCommandHandler(ctx, nc, subjects)); err != nil {
 		return fmt.Errorf("falha ao inscrever no subject de comando: %w", err)
 	}
 	if _, err = nc.Subscribe(subjects.SyncPing, r.natsSyncPingHandler()); err != nil {
@@ -192,7 +192,7 @@ func natsAuthOptionFromCredentials(creds *NATSCredentials) (nats.Option, func(),
 
 // ─── NATS Handlers ─────────────────────────────────────────────────
 
-func (r *Runtime) natsCommandHandler(ctx context.Context, nc *nats.Conn, cfg Config, subjects natsSubjects) func(msg *nats.Msg) {
+func (r *Runtime) natsCommandHandler(ctx context.Context, nc *nats.Conn, subjects natsSubjects) func(msg *nats.Msg) {
 	return func(msg *nats.Msg) {
 		var env natsCommandEnvelope
 		if err := json.Unmarshal(msg.Data, &env); err != nil {

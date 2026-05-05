@@ -668,7 +668,7 @@ func TestNATSCommandHandler_PublishesResultWithoutDashboardLegacyEvent(t *testin
 			return true, 0, "ok-from-test", ""
 		},
 	})
-	handler := runtime.natsCommandHandler(context.Background(), nc, cfg, subjects)
+	handler := runtime.natsCommandHandler(context.Background(), nc, subjects)
 
 	commandPayload, err := json.Marshal(natsCommandEnvelope{
 		CommandID:   "cmd-123",
