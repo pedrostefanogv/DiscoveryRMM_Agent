@@ -3,6 +3,7 @@ package agentconn
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -234,6 +235,28 @@ func nextSignalRFrame(t *testing.T, frames <-chan []byte) []byte {
 	}
 }
 
+func decodeDashboardEventFromNATS(t *testing.T, payload []byte) struct {
+	EventType    string         `json:"eventType"`
+	Data         map[string]any `json:"data"`
+	TimestampUtc string         `json:"timestampUtc"`
+	ClientId     string         `json:"clientId"`
+	SiteId       string         `json:"siteId"`
+} {
+	t.Helper()
+
+	var envelope struct {
+		EventType    string         `json:"eventType"`
+		Data         map[string]any `json:"data"`
+		TimestampUtc string         `json:"timestampUtc"`
+		ClientId     string         `json:"clientId"`
+		SiteId       string         `json:"siteId"`
+	}
+	if err := json.Unmarshal(payload, &envelope); err != nil {
+		t.Fatalf("dashboard event NATS invalido: %v", err)
+	}
+	return envelope
+}
+
 func decodeSignalRInvocationFrame(t *testing.T, frame []byte) struct {
 	Type      int               `json:"type"`
 	Target    string            `json:"target"`
@@ -462,5 +485,222 @@ func TestSignalRFlow_ExecuteCommandReturnsCommandResult(t *testing.T) {
 	}
 	if output != "ok-from-test" {
 		t.Fatalf("output retornado = %q, esperado ok-from-test", output)
+	}
+}
+
+func TestPublishDashboardEventNATS_CanonicalEnvelope(t *testing.T) {
+	server := startEmbeddedNATSServer(t)
+	nc, err := nats.Connect(server.ClientURL(), nats.Timeout(2*time.Second))
+	if err != nil {
+		t.Fatalf("falha ao conectar no NATS de teste: %v", err)
+	}
+	t.Cleanup(nc.Close)
+
+	cfg := Config{
+		AgentID:  testHomologAgentID,
+		ClientID: testHomologClientID,
+		SiteID:   testHomologSiteID,
+	}
+	subjects, err := resolveNATSSubjects(cfg)
+	if err != nil {
+		t.Fatalf("resolveNATSSubjects: %v", err)
+	}
+
+	sub, err := nc.SubscribeSync(subjects.Dashboard)
+	if err != nil {
+		t.Fatalf("falha ao criar subscribe dashboard de teste: %v", err)
+	}
+	if err := nc.Flush(); err != nil {
+		t.Fatalf("falha ao flush do subscribe dashboard: %v", err)
+	}
+
+	runtime := NewRuntime(Options{})
+	ok := runtime.publishDashboardEventNATS(nc, subjects.Dashboard, cfg, "AgentConnected", map[string]any{
+		"agentId":   cfg.AgentID,
+		"clientId":  cfg.ClientID,
+		"siteId":    cfg.SiteID,
+		"transport": "nats",
+		"server":    server.ClientURL(),
+	})
+	if !ok {
+		t.Fatal("publishDashboardEventNATS deveria publicar evento canonico")
+	}
+	if err := nc.Flush(); err != nil {
+		t.Fatalf("falha ao flush do publish dashboard: %v", err)
+	}
+
+	msg, err := sub.NextMsg(2 * time.Second)
+	if err != nil {
+		t.Fatalf("nao recebeu dashboard event no NATS: %v", err)
+	}
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(msg.Data, &raw); err != nil {
+		t.Fatalf("payload bruto dashboard invalido: %v", err)
+	}
+	if _, ok := raw["timestamp"]; ok {
+		t.Fatal("evento dashboard nao deveria conter campo legado timestamp")
+	}
+	if _, ok := raw["timestampUtc"]; !ok {
+		t.Fatal("evento dashboard deveria conter timestampUtc")
+	}
+
+	envelope := decodeDashboardEventFromNATS(t, msg.Data)
+	if envelope.EventType != "AgentConnected" {
+		t.Fatalf("eventType = %q, esperado AgentConnected", envelope.EventType)
+	}
+	if envelope.ClientId != cfg.ClientID {
+		t.Fatalf("clientId raiz = %q, esperado %q", envelope.ClientId, cfg.ClientID)
+	}
+	if envelope.SiteId != cfg.SiteID {
+		t.Fatalf("siteId raiz = %q, esperado %q", envelope.SiteId, cfg.SiteID)
+	}
+	if _, err := time.Parse(time.RFC3339, envelope.TimestampUtc); err != nil {
+		t.Fatalf("timestampUtc invalido: %v", err)
+	}
+	if got := fmt.Sprint(envelope.Data["agentId"]); got != cfg.AgentID {
+		t.Fatalf("data.agentId = %q, esperado %q", got, cfg.AgentID)
+	}
+	if got := fmt.Sprint(envelope.Data["clientId"]); got != cfg.ClientID {
+		t.Fatalf("data.clientId = %q, esperado %q", got, cfg.ClientID)
+	}
+	if got := fmt.Sprint(envelope.Data["siteId"]); got != cfg.SiteID {
+		t.Fatalf("data.siteId = %q, esperado %q", got, cfg.SiteID)
+	}
+	if got := fmt.Sprint(envelope.Data["transport"]); got != "nats" {
+		t.Fatalf("data.transport = %q, esperado nats", got)
+	}
+	if got := fmt.Sprint(envelope.Data["server"]); got != server.ClientURL() {
+		t.Fatalf("data.server = %q, esperado %q", got, server.ClientURL())
+	}
+}
+
+func TestPublishDashboardEventNATS_RejectsLegacyEventType(t *testing.T) {
+	server := startEmbeddedNATSServer(t)
+	nc, err := nats.Connect(server.ClientURL(), nats.Timeout(2*time.Second))
+	if err != nil {
+		t.Fatalf("falha ao conectar no NATS de teste: %v", err)
+	}
+	t.Cleanup(nc.Close)
+
+	cfg := Config{
+		AgentID:  testHomologAgentID,
+		ClientID: testHomologClientID,
+		SiteID:   testHomologSiteID,
+	}
+	subjects, err := resolveNATSSubjects(cfg)
+	if err != nil {
+		t.Fatalf("resolveNATSSubjects: %v", err)
+	}
+
+	sub, err := nc.SubscribeSync(subjects.Dashboard)
+	if err != nil {
+		t.Fatalf("falha ao criar subscribe dashboard de teste: %v", err)
+	}
+	if err := nc.Flush(); err != nil {
+		t.Fatalf("falha ao flush do subscribe dashboard: %v", err)
+	}
+
+	var logs []string
+	runtime := NewRuntime(Options{
+		Logf: func(format string, args ...any) {
+			logs = append(logs, fmt.Sprintf(format, args...))
+		},
+	})
+	ok := runtime.publishDashboardEventNATS(nc, subjects.Dashboard, cfg, "agent_connected", map[string]any{
+		"agentId":   cfg.AgentID,
+		"clientId":  cfg.ClientID,
+		"siteId":    cfg.SiteID,
+		"transport": "nats",
+	})
+	if ok {
+		t.Fatal("publishDashboardEventNATS nao deveria aceitar eventType legado")
+	}
+	if err := nc.Flush(); err != nil {
+		t.Fatalf("falha ao flush apos rejeicao de dashboard event: %v", err)
+	}
+	if _, err := sub.NextMsg(250 * time.Millisecond); err == nil {
+		t.Fatal("evento legado nao deveria ser publicado em dashboard.events")
+	}
+	if len(logs) == 0 {
+		t.Fatal("esperava log de CONTRACT_VIOLATION para eventType legado")
+	}
+	if !strings.Contains(logs[0], "[CONTRACT_VIOLATION]") || !strings.Contains(logs[0], "agent_connected") {
+		t.Fatalf("log inesperado para eventType legado: %q", logs[0])
+	}
+}
+
+func TestNATSCommandHandler_PublishesResultWithoutDashboardLegacyEvent(t *testing.T) {
+	server := startEmbeddedNATSServer(t)
+	nc, err := nats.Connect(server.ClientURL(), nats.Timeout(2*time.Second))
+	if err != nil {
+		t.Fatalf("falha ao conectar no NATS de teste: %v", err)
+	}
+	t.Cleanup(nc.Close)
+
+	cfg := Config{
+		AgentID:  testHomologAgentID,
+		ClientID: testHomologClientID,
+		SiteID:   testHomologSiteID,
+	}
+	subjects, err := resolveNATSSubjects(cfg)
+	if err != nil {
+		t.Fatalf("resolveNATSSubjects: %v", err)
+	}
+
+	resultSub, err := nc.SubscribeSync(subjects.Result)
+	if err != nil {
+		t.Fatalf("falha ao criar subscribe result de teste: %v", err)
+	}
+	dashboardSub, err := nc.SubscribeSync(subjects.Dashboard)
+	if err != nil {
+		t.Fatalf("falha ao criar subscribe dashboard de teste: %v", err)
+	}
+	if err := nc.Flush(); err != nil {
+		t.Fatalf("falha ao flush dos subscribes: %v", err)
+	}
+
+	runtime := NewRuntime(Options{
+		HandleCommand: func(parent context.Context, cmdType string, payload any) (bool, int, string, string) {
+			if strings.TrimSpace(strings.ToLower(cmdType)) != "powershell" {
+				return true, 1, "", "tipo de comando inesperado"
+			}
+			return true, 0, "ok-from-test", ""
+		},
+	})
+	handler := runtime.natsCommandHandler(context.Background(), nc, cfg, subjects)
+
+	commandPayload, err := json.Marshal(natsCommandEnvelope{
+		CommandID:   "cmd-123",
+		CommandType: "powershell",
+		Payload:     map[string]any{"command": "Get-Date"},
+	})
+	if err != nil {
+		t.Fatalf("falha ao serializar comando NATS de teste: %v", err)
+	}
+	handler(&nats.Msg{Data: commandPayload})
+
+	msg, err := resultSub.NextMsg(2 * time.Second)
+	if err != nil {
+		t.Fatalf("nao recebeu result NATS: %v", err)
+	}
+	var result natsResultEnvelope
+	if err := json.Unmarshal(msg.Data, &result); err != nil {
+		t.Fatalf("result NATS invalido: %v", err)
+	}
+	if result.CommandID != "cmd-123" {
+		t.Fatalf("commandId = %q, esperado cmd-123", result.CommandID)
+	}
+	if result.ExitCode != 0 {
+		t.Fatalf("exitCode = %d, esperado 0", result.ExitCode)
+	}
+	if result.Output != "ok-from-test" {
+		t.Fatalf("output = %q, esperado ok-from-test", result.Output)
+	}
+	if err := nc.Flush(); err != nil {
+		t.Fatalf("falha ao flush apos result: %v", err)
+	}
+	if _, err := dashboardSub.NextMsg(250 * time.Millisecond); err == nil {
+		t.Fatal("command_result nao deveria mais ser publicado em dashboard.events")
 	}
 }

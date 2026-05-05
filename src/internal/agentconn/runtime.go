@@ -92,9 +92,11 @@ type natsResultEnvelope struct {
 }
 
 type natsDashboardEvent struct {
-	EventType string `json:"eventType"`
-	Data      any    `json:"data"`
-	Timestamp string `json:"timestamp"`
+	EventType    string         `json:"eventType"`
+	Data         map[string]any `json:"data,omitempty"`
+	TimestampUtc string         `json:"timestampUtc"`
+	ClientId     string         `json:"clientId,omitempty"`
+	SiteId       string         `json:"siteId,omitempty"`
 }
 
 type P2PDiscoveryPeer struct {
@@ -317,6 +319,82 @@ func positiveFloatPtr(v float64) *float64 {
 		return &v
 	}
 	return nil
+}
+
+func isCanonicalDashboardEventType(eventType string) bool {
+	switch strings.TrimSpace(eventType) {
+	case "AgentHeartbeat", "AgentStatusChanged", "CommandCompleted", "AgentHardwareReported", "AgentConnected", "AgentDisconnected":
+		return true
+	default:
+		return false
+	}
+}
+
+func dashboardFieldString(data map[string]any, key string) string {
+	if data == nil {
+		return ""
+	}
+	value, ok := data[key]
+	if !ok || value == nil {
+		return ""
+	}
+	if text, ok := value.(string); ok {
+		return strings.TrimSpace(text)
+	}
+	return strings.TrimSpace(fmt.Sprint(value))
+}
+
+func (r *Runtime) logContractViolation(field, expected, received, source string) {
+	r.logf("[CONTRACT_VIOLATION] component=Agent field=%s expected='%s' received='%s' source=%s", strings.TrimSpace(field), strings.TrimSpace(expected), strings.TrimSpace(received), strings.TrimSpace(source))
+}
+
+func (r *Runtime) newNATSDashboardEvent(cfg Config, eventType string, data map[string]any) (natsDashboardEvent, bool) {
+	eventType = strings.TrimSpace(eventType)
+	if !isCanonicalDashboardEventType(eventType) {
+		r.logContractViolation("eventType", "enum(6)", eventType, "nats")
+		return natsDashboardEvent{}, false
+	}
+
+	clientID := strings.TrimSpace(cfg.ClientID)
+	if clientID == "" {
+		r.logContractViolation("clientId", "present", "missing", "nats")
+		return natsDashboardEvent{}, false
+	}
+
+	siteID := strings.TrimSpace(cfg.SiteID)
+	if siteID == "" {
+		r.logContractViolation("siteId", "present", "missing", "nats")
+		return natsDashboardEvent{}, false
+	}
+
+	if strings.TrimSpace(dashboardFieldString(data, "agentId")) == "" {
+		r.logContractViolation("data.agentId", "Guid", "missing", "nats")
+		return natsDashboardEvent{}, false
+	}
+
+	if (eventType == "AgentConnected" || eventType == "AgentDisconnected") && strings.TrimSpace(dashboardFieldString(data, "transport")) == "" {
+		r.logContractViolation("data.transport", "nats|signalr", "missing", "nats")
+	}
+
+	return natsDashboardEvent{
+		EventType:    eventType,
+		Data:         data,
+		TimestampUtc: time.Now().UTC().Format(time.RFC3339),
+		ClientId:     clientID,
+		SiteId:       siteID,
+	}, true
+}
+
+func (r *Runtime) publishDashboardEventNATS(nc *nats.Conn, subject string, cfg Config, eventType string, data map[string]any) bool {
+	event, ok := r.newNATSDashboardEvent(cfg, eventType, data)
+	if !ok {
+		return false
+	}
+	if err := publishJSON(nc, subject, event); err != nil {
+		r.logf("falha ao publicar dashboard event NATS (subject=%s eventType=%s): %v", subject, strings.TrimSpace(eventType), err)
+		return false
+	}
+	return true
 }
 
 // Reload forces the active connection to close, causing a reconnect with updated config.

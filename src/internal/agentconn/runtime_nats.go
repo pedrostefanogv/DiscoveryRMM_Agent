@@ -140,16 +140,12 @@ func (r *Runtime) runNATSSession(ctx context.Context, cfg Config, server, transp
 	} else {
 		r.logf("[heartbeat][nats] heartbeat inicial publicado com sucesso (subject=%s) payload=%s", subjects.Heartbeat, hbLog)
 	}
-	_ = publishJSON(nc, subjects.Dashboard, natsDashboardEvent{
-		EventType: "agent_connected",
-		Data: map[string]any{
-			"agentId":   cfg.AgentID,
-			"clientId":  cfg.ClientID,
-			"siteId":    cfg.SiteID,
-			"transport": transportLabel,
-			"server":    natsURL,
-		},
-		Timestamp: time.Now().UTC().Format(time.RFC3339),
+	r.publishDashboardEventNATS(nc, subjects.Dashboard, cfg, "AgentConnected", map[string]any{
+		"agentId":   cfg.AgentID,
+		"clientId":  cfg.ClientID,
+		"siteId":    cfg.SiteID,
+		"transport": transportLabel,
+		"server":    natsURL,
 	})
 
 	r.setStatusConnected(cfg.AgentID, natsURL, transportLabel)
@@ -226,18 +222,6 @@ func (r *Runtime) natsCommandHandler(ctx context.Context, nc *nats.Conn, cfg Con
 				r.enqueueCommandResultOutbox("nats", c.CommandID, exitCode, output, errText, err)
 				return
 			}
-
-			_ = publishJSON(nc, subjects.Dashboard, natsDashboardEvent{
-				EventType: "command_result",
-				Data: map[string]any{
-					"agentId":   cfg.AgentID,
-					"clientId":  cfg.ClientID,
-					"siteId":    cfg.SiteID,
-					"commandId": c.CommandID,
-					"exitCode":  exitCode,
-				},
-				Timestamp: time.Now().UTC().Format(time.RFC3339),
-			})
 			r.logf("result NATS publicado cmdId=%s exitCode=%d", c.CommandID, exitCode)
 		}(env)
 	}
@@ -283,15 +267,11 @@ func (r *Runtime) runNATSEventLoop(ctx context.Context, nc *nats.Conn, cfg Confi
 	for {
 		select {
 		case <-ctx.Done():
-			_ = publishJSON(nc, subjects.Dashboard, natsDashboardEvent{
-				EventType: "agent_disconnected",
-				Data: map[string]any{
-					"agentId":   cfg.AgentID,
-					"clientId":  cfg.ClientID,
-					"siteId":    cfg.SiteID,
-					"transport": transportLabel,
-				},
-				Timestamp: time.Now().UTC().Format(time.RFC3339),
+			r.publishDashboardEventNATS(nc, subjects.Dashboard, cfg, "AgentDisconnected", map[string]any{
+				"agentId":   cfg.AgentID,
+				"clientId":  cfg.ClientID,
+				"siteId":    cfg.SiteID,
+				"transport": transportLabel,
 			})
 			return nil
 		case <-heartbeatTicker.C:
