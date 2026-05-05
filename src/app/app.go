@@ -446,13 +446,13 @@ func (a *App) featureEnabled(flag *bool) bool {
 	return *flag
 }
 
-// heartbeatIntervalFromAgentConfig retorna o intervalo de heartbeat em segundos
-// definido pela config remota do servidor, ou 0 (padrão 30s) se não especificado.
-func heartbeatIntervalFromAgentConfig(cfg AgentConfiguration) int {
-	if cfg.AgentHeartbeatIntervalSeconds != nil && *cfg.AgentHeartbeatIntervalSeconds > 0 {
-		return *cfg.AgentHeartbeatIntervalSeconds
-	}
-	return 0
+const debugForcedHeartbeatIntervalSeconds = 10
+
+// heartbeatIntervalFromAgentConfig retorna, temporariamente, um intervalo fixo
+// de 10 segundos para facilitar debug de eventos de heartbeat.
+// TODO: restaurar comportamento padrão (config remota / fallback de runtime) após o debug.
+func heartbeatIntervalFromAgentConfig(_ AgentConfiguration) int {
+	return debugForcedHeartbeatIntervalSeconds
 }
 
 // getHeartbeatMetrics coleta métricas do sistema para incluir no heartbeat

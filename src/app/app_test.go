@@ -168,6 +168,21 @@ func TestShouldRunLocalP2P_ServiceConnectedDebugModeRuns(t *testing.T) {
 	}
 }
 
+func TestHeartbeatIntervalFromAgentConfig_DebugForcedInterval(t *testing.T) {
+	configured := 45
+	got := heartbeatIntervalFromAgentConfig(AgentConfiguration{
+		AgentHeartbeatIntervalSeconds: &configured,
+	})
+	if got != debugForcedHeartbeatIntervalSeconds {
+		t.Fatalf("HeartbeatInterval = %d, want %d", got, debugForcedHeartbeatIntervalSeconds)
+	}
+
+	got = heartbeatIntervalFromAgentConfig(AgentConfiguration{})
+	if got != debugForcedHeartbeatIntervalSeconds {
+		t.Fatalf("HeartbeatInterval (fallback) = %d, want %d", got, debugForcedHeartbeatIntervalSeconds)
+	}
+}
+
 func TestApplyRealtimeFallbackFromAgentStatus_UsesLocalConnectionOnUnauthorized(t *testing.T) {
 	out := StatusOverview{}
 	applyRealtimeFallbackFromAgentStatus(&out, AgentStatus{
