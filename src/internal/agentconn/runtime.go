@@ -50,6 +50,8 @@ type natsCommandEnvelope struct {
 // sent via both SignalR (HeartbeatV2) and NATS.
 type AgentHeartbeat struct {
 	AgentId       string   `json:"agentId"`
+	ClientId      string   `json:"clientId,omitempty"`
+	SiteId        string   `json:"siteId,omitempty"`
 	IpAddress     string   `json:"ipAddress,omitempty"`
 	Hostname      string   `json:"hostname,omitempty"`
 	AgentVersion  string   `json:"agentVersion,omitempty"`
@@ -235,6 +237,8 @@ func (r *Runtime) setStatusConnected(agentID, server, transport string) {
 func (r *Runtime) collectHeartbeat(cfg Config, ipAddr string) AgentHeartbeat {
 	hb := AgentHeartbeat{
 		AgentId:      cfg.AgentID,
+		ClientId:     cfg.ClientID,
+		SiteId:       cfg.SiteID,
 		IpAddress:    ipAddr,
 		AgentVersion: cfg.AgentVersion,
 		TimestampUtc: time.Now().UTC().Format(time.RFC3339),

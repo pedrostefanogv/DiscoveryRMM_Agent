@@ -199,6 +199,7 @@ function normalizeLogSource(rawSource) {
   var source = String(rawSource || '').toLowerCase().trim();
   if (!source) return 'other';
 
+  if (source.indexOf('heartbeat') === 0) return 'heartbeat';
   if (source === 'agent-sync') return 'sync';
   if (source.indexOf('sync') === 0) return 'sync';
   if (source.indexOf('winget') === 0 || source.indexOf('install') === 0 || source.indexOf('upgrade') === 0 || source.indexOf('list') === 0) return 'updates';
@@ -226,6 +227,11 @@ function detectLogOrigin(line) {
   return normalizeLogSource(token);
 }
 
+function isHeartbeatLogLine(line) {
+  var text = String(line || '').toLowerCase();
+  return text.indexOf('[heartbeat]') >= 0 || text.indexOf('heartbeatv2') >= 0;
+}
+
 function renderLogsOutput() {
   var selectedOrigin = logsOriginFilterEl ? String(logsOriginFilterEl.value || 'all') : 'all';
   var searchTerm = logsSearchInputEl ? String(logsSearchInputEl.value || '').toLowerCase().trim() : '';
@@ -233,6 +239,9 @@ function renderLogsOutput() {
 
   if (selectedOrigin !== 'all') {
     lines = lines.filter(function (line) {
+      if (selectedOrigin === 'heartbeat') {
+        return isHeartbeatLogLine(line);
+      }
       return detectLogOrigin(line) === selectedOrigin;
     });
   }
