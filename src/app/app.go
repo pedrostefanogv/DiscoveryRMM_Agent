@@ -137,6 +137,8 @@ type App struct {
 	notificationMu      sync.Mutex
 	pendingNotifyResult map[string]chan string
 	notificationByKey   map[string]string
+
+	queuedForceHeartbeat atomic.Bool
 }
 
 func NewApp(opts AppStartupOptions) *App {
@@ -372,6 +374,8 @@ func NewApp(opts AppStartupOptions) *App {
 
 	// Register all Discovery tools in the MCP registry.
 	mcp.RegisterDiscoveryTools(reg, a)
+
+	a.queuedForceHeartbeat.Store(false)
 
 	if opts.DebugMode {
 		a.logs.append("[startup] modo debug ativo por tecla de atalho (execucao atual)")
@@ -703,6 +707,27 @@ func (a *App) startup(ctx context.Context) {
 	})
 }
 
+// SendTestHeartbeat triggers an immediate heartbeat send on the active
+// connection (SignalR or NATS) and returns diagnostic info.
+// This is exposed as a Wails binding for the debug page.
+func (a *App) SendTestHeartbeat() string {
+	if a.agentConn == nil {
+		return "erro: agent runtime nao inicializado"
+	}
+	if !a.queuedForceHeartbeat.CompareAndSwap(false, true) {
+		return "erro: heartbeat manual ja em andamento"
+	}
+	defer a.queuedForceHeartbeat.Store(false)
+
+	a.logs.append("[heartbeat][manual] enviando heartbeat manual...")
+	if a.agentConn.ForceHeartbeat() {
+		a.logs.append("[heartbeat][manual] heartbeat manual enviado com sucesso")
+		return "heartbeat manual enviado com sucesso"
+	}
+	a.logs.append("[heartbeat][manual] falha ao enviar heartbeat manual: timeout ou nenhuma conexao ativa")
+	return "falha ao enviar heartbeat manual: timeout ou nenhuma conexao ativa"
+}
+
 func (a *App) startupLogf(format string, args ...any) {
 	line := fmt.Sprintf(format, args...)
 	log.Print(line)
@@ -716,8 +741,13 @@ func (a *App) safeGo(fn func()) {
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				log.Printf("[PANIC] goroutine panicou: %v\n%s", r, runtimeDebug.Stack())
-				a.logs.append(fmt.Sprintf("[PANIC] goroutine panicou: %v", r))
+				stack := string(runtimeDebug.Stack())
+				log.Printf("[PANIC] goroutine panicou: %v\n%s", r, stack)
+				if a != nil {
+					a.logs.append(fmt.Sprintf("[PANIC] goroutine panicou: %v", r))
+					a.logs.append("[PANIC] stack trace:")
+					a.logs.append(stack)
+				}
 			}
 		}()
 		fn()

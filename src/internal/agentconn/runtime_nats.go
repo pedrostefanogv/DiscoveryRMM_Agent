@@ -84,6 +84,15 @@ func (r *Runtime) runNATSSession(ctx context.Context, cfg Config, server, transp
 		nats.Timeout(connectTimeout),
 		nats.ReconnectWait(reconnectBase),
 		nats.MaxReconnects(-1),
+		nats.DisconnectErrHandler(func(_ *nats.Conn, err error) {
+			r.logf("[heartbeat][nats] NATS desconectado: %v — heartbeats suspensos ate reconexao", err)
+		}),
+		nats.ReconnectHandler(func(_ *nats.Conn) {
+			r.logf("[heartbeat][nats] NATS reconectado — heartbeats retomados")
+		}),
+		nats.ClosedHandler(func(_ *nats.Conn) {
+			r.logf("[heartbeat][nats] conexao NATS encerrada permanentemente — heartbeats nao serao mais enviados")
+		}),
 	}
 	tokenOpts := append([]nats.Option{}, opts...)
 	if strings.TrimSpace(cfg.AuthToken) != "" {
@@ -286,13 +295,10 @@ func (r *Runtime) runNATSEventLoop(ctx context.Context, nc *nats.Conn, cfg Confi
 			})
 			return nil
 		case <-heartbeatTicker.C:
-			hb := r.collectHeartbeat(cfg, ipAddr)
-			hbLog := heartbeatLogPayload(hb)
-			if err := publishJSON(nc, subjects.Heartbeat, hb); err != nil {
-				r.logf("[heartbeat][nats] falha ao publicar heartbeat (subject=%s): %v payload=%s", subjects.Heartbeat, err, hbLog)
-				return fmt.Errorf("heartbeat NATS falhou: %w", err)
-			}
-			r.logf("[heartbeat][nats] heartbeat publicado com sucesso (subject=%s) payload=%s", subjects.Heartbeat, hbLog)
+			r.sendHeartbeatNATS(nc, subjects.Heartbeat, cfg, ipAddr)
+		case forceDone := <-r.forceHeartbeatCh:
+			r.sendHeartbeatNATS(nc, subjects.Heartbeat, cfg, ipAddr)
+			forceDone <- struct{}{}
 		case <-drainTicker.C:
 			r.drainCommandResultOutbox(ctx, "nats", func(item CommandResultOutboxItem) error {
 				res := natsResultEnvelope{

@@ -105,7 +105,11 @@ func (r *Runtime) writeSignalRText(conn *websocket.Conn, payload []byte, timeout
 	defer func() {
 		_ = conn.SetWriteDeadline(time.Time{})
 	}()
-	return conn.WriteMessage(websocket.TextMessage, payload)
+	if err := conn.WriteMessage(websocket.TextMessage, payload); err != nil {
+		r.logf("[transport][signalr] falha ao escrever mensagem (writeMu bloqueado?): %v", err)
+		return err
+	}
+	return nil
 }
 
 func executeCommand(parent context.Context, cmdType string, payload any) (int, string, string) {

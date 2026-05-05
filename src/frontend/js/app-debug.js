@@ -104,6 +104,24 @@ function initDebug() {
     agentStatusRefreshBtn.addEventListener('click', refreshAgentStatus);
   }
 
+  var sendTestHeartbeatBtn = document.getElementById('sendTestHeartbeatBtn');
+  if (sendTestHeartbeatBtn) {
+    sendTestHeartbeatBtn.addEventListener('click', function () {
+      sendTestHeartbeatBtn.disabled = true;
+      sendTestHeartbeatBtn.textContent = 'Enviando...';
+      setDebugStatus('Enviando heartbeat manual...', 'info');
+      appApi().SendTestHeartbeat().then(function (result) {
+        setDebugStatus('Heartbeat: ' + result, result.indexOf('sucesso') >= 0 ? 'success' : 'error');
+        sendTestHeartbeatBtn.disabled = false;
+        sendTestHeartbeatBtn.textContent = 'Enviar Heartbeat';
+      }).catch(function (err) {
+        setDebugStatus('Heartbeat erro: ' + String(err), 'error');
+        sendTestHeartbeatBtn.disabled = false;
+        sendTestHeartbeatBtn.textContent = 'Enviar Heartbeat';
+      });
+    });
+  }
+
   if (debugSaveBtn) {
     debugSaveBtn.addEventListener('click', function () {
       setDebugStatus(translate('debug.saving'), '');

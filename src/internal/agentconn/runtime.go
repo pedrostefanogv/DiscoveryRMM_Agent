@@ -199,10 +199,37 @@ type Runtime struct {
 	writeMu  sync.Mutex
 	statMu   sync.RWMutex
 	statSnap Status
+
+	// forceHeartbeatCh is a channel used by ForceHeartbeat() to trigger
+	// an immediate heartbeat send in the active connection event loop.
+	forceHeartbeatCh chan chan struct{}
 }
 
 func NewRuntime(opts Options) *Runtime {
-	return &Runtime{opts: opts}
+	return &Runtime{
+		opts:             opts,
+		forceHeartbeatCh: make(chan chan struct{}, 4),
+	}
+}
+
+// ForceHeartbeat triggers an immediate heartbeat send in the active
+// connection event loop. It waits for the send to complete (or timeout).
+// Returns true if the heartbeat was sent, false if no connection is active.
+func (r *Runtime) ForceHeartbeat() bool {
+	done := make(chan struct{}, 1)
+	select {
+	case r.forceHeartbeatCh <- done:
+		select {
+		case <-done:
+			return true
+		case <-time.After(10 * time.Second):
+			r.logf("[heartbeat][force] timeout aguardando envio do heartbeat forçado (10s)")
+			return false
+		}
+	default:
+		r.logf("[heartbeat][force] sessao inativa: nenhuma conexao consumindo heartbeats — agent desconectado")
+		return false
+	}
 }
 
 // GetStatus returns a snapshot of the current connection state.
@@ -215,10 +242,14 @@ func (r *Runtime) GetStatus() Status {
 func (r *Runtime) setStatus(connected bool, event string) {
 	r.statMu.Lock()
 	defer r.statMu.Unlock()
+	wasConnected := r.statSnap.Connected
 	r.statSnap.Connected = connected
 	r.statSnap.LastEvent = event
 	if !connected {
 		r.statSnap.Transport = ""
+		if wasConnected {
+			r.logf("[heartbeat][status] conexao perdida: %s — heartbeats serao suspensos ate reconexao", event)
+		}
 	}
 }
 
@@ -333,18 +364,18 @@ func (r *Runtime) Run(ctx context.Context) {
 		}
 
 		if cfg.ApiServer != "" && cfg.ApiScheme != "http" && cfg.ApiScheme != "https" {
-			r.logf("configuracao de agente ignorada: apiScheme invalido")
+			r.logf("configuracao de agente ignorada: apiScheme invalido — heartbeats suspensos")
 			cfg.ApiServer = ""
 		}
 
 		if err := validateTransportSecurity(cfg); err != nil {
-			r.logf("configuracao de agente insegura: %v", err)
+			r.logf("configuracao de agente insegura: %v — heartbeats suspensos ate nova tentativa", err)
 			r.waitOrStop(ctx, reconnectBase)
 			continue
 		}
 
 		if cfg.ApiServer == "" && cfg.NatsServer == "" {
-			r.logf("configuracao de agente ausente: nenhum servidor configurado")
+			r.logf("configuracao de agente ausente: nenhum servidor configurado — heartbeats suspensos ate nova tentativa")
 			r.waitOrStop(ctx, reconnectBase)
 			continue
 		}
@@ -408,6 +439,7 @@ func (r *Runtime) runSession(ctx context.Context, cfg Config) error {
 	}
 
 	if len(attempts) == 0 {
+		r.logf("[heartbeat][session] nenhum transporte configurado — heartbeats nao serao enviados ate que uma configuracao valida seja recebida")
 		return fmt.Errorf("nenhum transporte configurado")
 	}
 
@@ -552,15 +584,13 @@ func (r *Runtime) runSignalRSession(ctx context.Context, cfg Config, connectTime
 		case <-ctx.Done():
 			return nil
 		case <-heartbeatTicker.C:
-			hb := r.collectHeartbeat(cfg, ipAddr)
-			hbLog := heartbeatLogPayload(hb)
-			if err := r.invoke(conn, "HeartbeatV2", hb); err != nil {
-				r.logf("[heartbeat][signalr] falha ao enviar HeartbeatV2: %v payload=%s", err, hbLog)
-				return fmt.Errorf("heartbeat falhou: %w", err)
-			}
-			r.logf("[heartbeat][signalr] HeartbeatV2 enviado com sucesso payload=%s", hbLog)
+			r.sendHeartbeatSignalR(conn, cfg, ipAddr)
+		case forceDone := <-r.forceHeartbeatCh:
+			r.sendHeartbeatSignalR(conn, cfg, ipAddr)
+			forceDone <- struct{}{}
 		case m := <-msgCh:
 			if m.err != nil {
+				r.logf("[heartbeat][signalr] conexao perdida — heartbeats suspensos: %v", m.err)
 				return m.err
 			}
 			if err := r.handleSignalRPayload(ctx, conn, m.data); err != nil {
@@ -572,6 +602,28 @@ func (r *Runtime) runSignalRSession(ctx context.Context, cfg Config, connectTime
 			})
 		}
 	}
+}
+
+// sendHeartbeatSignalR sends a single heartbeat on the SignalR connection.
+func (r *Runtime) sendHeartbeatSignalR(conn *websocket.Conn, cfg Config, ipAddr string) {
+	hb := r.collectHeartbeat(cfg, ipAddr)
+	hbLog := heartbeatLogPayload(hb)
+	if err := r.invoke(conn, "HeartbeatV2", hb); err != nil {
+		r.logf("[heartbeat][signalr] falha ao enviar HeartbeatV2: %v payload=%s", err, hbLog)
+		return
+	}
+	r.logf("[heartbeat][signalr] HeartbeatV2 enviado com sucesso payload=%s", hbLog)
+}
+
+// sendHeartbeatNATS sends a single heartbeat on the NATS connection.
+func (r *Runtime) sendHeartbeatNATS(nc *nats.Conn, subject string, cfg Config, ipAddr string) {
+	hb := r.collectHeartbeat(cfg, ipAddr)
+	hbLog := heartbeatLogPayload(hb)
+	if err := publishJSON(nc, subject, hb); err != nil {
+		r.logf("[heartbeat][nats] falha ao publicar heartbeat (subject=%s): %v payload=%s", subject, err, hbLog)
+		return
+	}
+	r.logf("[heartbeat][nats] heartbeat publicado com sucesso (subject=%s) payload=%s", subject, hbLog)
 }
 
 // runNATSSession está definida em runtime_nats.go

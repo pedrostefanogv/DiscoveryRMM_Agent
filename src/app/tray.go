@@ -146,24 +146,30 @@ func (a *App) safeTrayAction(name string, fn func()) {
 }
 
 func (a *App) updateTrayIdleState(idle bool, supported bool) {
-	if !efficiencyModeEnabled {
+	if a == nil || !a.trayReady.Load() {
+		return
+	}
+
+	a.safeTrayAction("tray-idle-state", func() {
+		if !efficiencyModeEnabled {
+			setTrayTitle("Discovery")
+			setTrayTooltip("Discovery")
+			return
+		}
+
+		if !supported {
+			setTrayTitle("Discovery")
+			setTrayTooltip("Discovery")
+			return
+		}
+
+		if idle {
+			setTrayTitle("Discovery Eco")
+			setTrayTooltip("Discovery - Modo de eficiencia ativo (aguardo)")
+			return
+		}
+
 		setTrayTitle("Discovery")
-		setTrayTooltip("Discovery")
-		return
-	}
-
-	if !supported {
-		setTrayTitle("Discovery")
-		setTrayTooltip("Discovery")
-		return
-	}
-
-	if idle {
-		setTrayTitle("Discovery Eco")
-		setTrayTooltip("Discovery - Modo de eficiencia ativo (aguardo)")
-		return
-	}
-
-	setTrayTitle("Discovery")
-	setTrayTooltip("Discovery - Processando")
+		setTrayTooltip("Discovery - Processando")
+	})
 }
