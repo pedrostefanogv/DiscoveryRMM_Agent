@@ -302,6 +302,14 @@ func (a *App) StartP2PTelemetryLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			if remaining, deferred, reason := a.nonCriticalBackoffWindow(); deferred {
+				if reason != "" {
+					a.logs.append(fmt.Sprintf("[p2p][api] envio adiado por sobrecarga do servidor: restante=%s motivo=%s", remaining.Round(time.Second), reason))
+				} else {
+					a.logs.append(fmt.Sprintf("[p2p][api] envio adiado por sobrecarga do servidor: restante=%s", remaining.Round(time.Second)))
+				}
+				continue
+			}
 			if _, err := a.GetP2PSeedPlanRecommendation(ctx); err != nil {
 				a.logs.append("[p2p][api] falha ao atualizar seed-plan: " + err.Error())
 			}

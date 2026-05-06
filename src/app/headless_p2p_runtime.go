@@ -98,6 +98,13 @@ func (s *HeadlessP2PService) ApplyP2PDiscoverySnapshot(snapshot agentconn.P2PDis
 	s.app.handleP2PDiscoverySnapshot(snapshot)
 }
 
+func (s *HeadlessP2PService) ApplyGlobalPong(pong agentconn.GlobalPongMessage) {
+	if s == nil || s.app == nil {
+		return
+	}
+	s.app.handleGlobalPong(pong)
+}
+
 // localAutoProvisioningAllowed delega para a regra de zero-touch config
 // registration da aplicação, respeitando o kill-switch local autoProvisioning.
 func (s *HeadlessP2PService) localAutoProvisioningAllowed() bool {

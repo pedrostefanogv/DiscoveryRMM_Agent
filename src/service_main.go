@@ -7,9 +7,11 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	appkg "discovery/app"
+	"discovery/internal/agentconn"
 	"discovery/internal/service"
 )
 
@@ -81,8 +83,18 @@ func runServiceRuntime(ctx context.Context, logFile string) error {
 
 func newRuntimeServiceManager(dataDir string) *service.ServiceManager {
 	svcMgr := service.NewServiceManager(dataDir)
+	forwardComponentLog := func(component, line string) {
+		component = strings.TrimSpace(component)
+		line = strings.TrimSpace(line)
+		if component == "" || line == "" {
+			return
+		}
+		log.Printf("[SERVICE.%s] %s", component, line)
+		svcMgr.EmitRemoteDebugLog("[" + strings.ToLower(component) + "] " + line)
+	}
+
 	p2pSvc := appkg.NewHeadlessP2PService(func(line string) {
-		log.Printf("[SERVICE.P2P] %s", line)
+		forwardComponentLog("P2P", line)
 	})
 	svcMgr.SetAgentRuntime(service.NewAgentRuntimeService(svcMgr.GetConfig, func(line string) {
 		log.Printf("[SERVICE.Agent] %s", line)
@@ -91,13 +103,17 @@ func newRuntimeServiceManager(dataDir string) *service.ServiceManager {
 		RefreshAutomationPolicy:   svcMgr.RefreshAutomationPolicy,
 		RequestSelfUpdateCheck:    svcMgr.RequestSelfUpdateCheck,
 		ApplyP2PDiscoverySnapshot: p2pSvc.ApplyP2PDiscoverySnapshot,
+		OnGlobalPong: func(pong agentconn.GlobalPongMessage) {
+			svcMgr.ApplyGlobalPong(pong)
+			p2pSvc.ApplyGlobalPong(pong)
+		},
 	}))
 	svcMgr.SetAutomationService(service.NewAutomationRuntimeService(svcMgr.GetConfig, func(line string) {
-		log.Printf("[SERVICE.Automation] %s", line)
+		forwardComponentLog("Automation", line)
 	}))
 	svcMgr.SetInventoryService(service.NewInventoryRuntimeService(45*time.Second, svcMgr.GetConfig, func(line string) {
-		log.Printf("[SERVICE.Inventory] %s", line)
-	}, appkg.Version))
+		forwardComponentLog("Inventory", line)
+	}, appkg.Version, svcMgr.NonCriticalBackoffWindow))
 	svcMgr.SetAppsService(service.NewAppsRuntimeService(10 * time.Minute))
 	svcMgr.SetP2PService(p2pSvc)
 	return svcMgr

@@ -14,6 +14,9 @@ const statusOSVersionEl = document.getElementById('statusOSVersion');
 const statusRealtimeEl = document.getElementById('statusRealtime');
 const statusRealtimeAgentsEl = document.getElementById('statusRealtimeAgents');
 const statusInventoryAtEl = document.getElementById('statusInventoryAt');
+const statusServerPongAtEl = document.getElementById('statusServerPongAt');
+const statusNonCriticalTrafficEl = document.getElementById('statusNonCriticalTraffic');
+const statusNonCriticalUntilEl = document.getElementById('statusNonCriticalUntil');
 const statusMessageEl = document.getElementById('statusMessage');
 const openP2PDebugStatusBtnEl = document.getElementById('openP2PDebugStatusBtn');
 const serviceHealthDotEl = document.getElementById('serviceHealthDot');
@@ -46,10 +49,15 @@ function renderStatusOverview(data) {
   var line1 = translate('window.meta.pc') + ': ' + statusSafe(data && data.hostname, translate('status.localComputer'));
   var serverPart = translate('window.meta.server') + ': ' + statusSafe(data && data.server, '-');
   var connPart = translate('window.meta.connection') + ': ' + statusSafe(data && data.connectionType, '-');
-  var line2 = serverPart + ' / ' + connPart;
+  var transportPart = translate('status.transportState') + ': ' + (data && data.transportConnected ? translate('common.online') : translate('common.offline'));
+  var line2 = serverPart + ' / ' + connPart + ' / ' + transportPart;
+  var line3 = '';
+  if (data && data.onlineReason) {
+    line3 = translate('status.onlineSignal') + ': ' + statusSafe(data.onlineReason, '-');
+  }
 
   if (statusConnectionDetailEl) {
-    statusConnectionDetailEl.textContent = line1 + '\n' + line2;
+    statusConnectionDetailEl.textContent = line3 ? (line1 + '\n' + line2 + '\n' + line3) : (line1 + '\n' + line2);
   }
 
   if (statusAppVersionEl) statusAppVersionEl.textContent = statusSafe(data && data.appVersion, 'dev');
@@ -73,8 +81,24 @@ function renderStatusOverview(data) {
     statusInventoryAtEl.textContent = formatStatusDate(data && data.lastInventoryCollected);
   }
 
+  if (statusServerPongAtEl) {
+    statusServerPongAtEl.textContent = formatStatusDate(data && data.lastGlobalPongAtUtc);
+  }
+
+  if (statusNonCriticalTrafficEl) {
+    statusNonCriticalTrafficEl.textContent = data && data.nonCriticalDeferred ? translate('status.nonCriticalDeferred') : translate('status.nonCriticalNormal');
+  }
+
+  if (statusNonCriticalUntilEl) {
+    statusNonCriticalUntilEl.textContent = data && data.nonCriticalDeferred ? formatStatusDate(data.nonCriticalDeferredUntilUtc) : '-';
+  }
+
   if (statusMessageEl) {
-    statusMessageEl.textContent = statusSafe(data && data.realtimeMessage, translate('common.noAdditionalInfo'));
+    var message = statusSafe(data && data.realtimeMessage, translate('common.noAdditionalInfo'));
+    if (data && data.nonCriticalDeferred && data.nonCriticalDeferredReason) {
+      message += ' | ' + translate('status.nonCriticalReason') + ': ' + data.nonCriticalDeferredReason;
+    }
+    statusMessageEl.textContent = message;
   }
 }
 

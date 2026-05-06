@@ -123,3 +123,24 @@ func TestSharedConfigUnmarshalJSON_LoadsSiteIDFromLegacyCamelCase(t *testing.T) 
 		t.Fatalf("SiteID = %q", cfg.SiteID)
 	}
 }
+
+func TestIsServiceUIOnlyCommandType_RemoteDebugAllowed(t *testing.T) {
+	if isServiceUIOnlyCommandType("remotedebug") {
+		t.Fatalf("remotedebug nao deve ser tratado como UI-only no modo service")
+	}
+	if isServiceUIOnlyCommandType("8") {
+		t.Fatalf("commandType 8 nao deve ser tratado como UI-only no modo service")
+	}
+	if !isServiceUIOnlyCommandType("notification") {
+		t.Fatalf("notification deve permanecer UI-only no modo service")
+	}
+}
+
+func TestServiceRemoteDebugFormatMessageWithOrigin(t *testing.T) {
+	if got := serviceRemoteDebugFormatMessageWithOrigin("service", "[p2p] restart"); got != "[service] [p2p] restart" {
+		t.Fatalf("serviceRemoteDebugFormatMessageWithOrigin = %q", got)
+	}
+	if got := serviceRemoteDebugFormatMessageWithOrigin("service", "[service] erro xyz"); got != "[service] erro xyz" {
+		t.Fatalf("serviceRemoteDebugFormatMessageWithOrigin should keep existing prefix, got %q", got)
+	}
+}

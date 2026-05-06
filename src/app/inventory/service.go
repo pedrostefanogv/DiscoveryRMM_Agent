@@ -91,6 +91,7 @@ type Options struct {
 	Version                  string
 	ResolveMeshCentralNodeID func() string
 	OnHardwareReportSuccess  func(string)
+	ShouldDeferNonCritical   func() (time.Duration, bool, string)
 }
 
 // Service handles inventory, installs and sync operations.
@@ -109,6 +110,7 @@ type Service struct {
 	version                  string
 	resolveMeshCentralNodeID func() string
 	onHardwareReportSuccess  func(string)
+	shouldDeferNonCritical   func() (time.Duration, bool, string)
 }
 
 // NewService builds an inventory service.
@@ -132,6 +134,7 @@ func NewService(opts Options) *Service {
 		version:                  opts.Version,
 		resolveMeshCentralNodeID: opts.ResolveMeshCentralNodeID,
 		onHardwareReportSuccess:  opts.OnHardwareReportSuccess,
+		shouldDeferNonCritical:   opts.ShouldDeferNonCritical,
 	}
 }
 

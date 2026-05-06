@@ -58,13 +58,13 @@ func TestParseRemoteDebugCommand_UsesCanonicalNATSSubject(t *testing.T) {
 		"action":    "start",
 		"sessionId": "sess-1",
 		"stream": map[string]any{
-			"natsSubject": "tenant.client-1.site.site-1.agent.agent-1.remote.debug",
+			"natsSubject": "tenant.client-1.site.site-1.agent.agent-1.remote-debug.log",
 		},
 	})
 	if err != nil {
 		t.Fatalf("parseRemoteDebugCommand: %v", err)
 	}
-	if got := strings.TrimSpace(cmd.Stream.NatsSubject); got != "tenant.client-1.site.site-1.agent.agent-1.remote.debug" {
+	if got := strings.TrimSpace(cmd.Stream.NatsSubject); got != "tenant.client-1.site.site-1.agent.agent-1.remote-debug.log" {
 		t.Fatalf("NatsSubject = %q", got)
 	}
 }
@@ -76,6 +76,27 @@ func TestBuildRemoteDebugPublishers_RequiresCanonicalNATSSubject(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "subject NATS ausente") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestBuildRemoteDebugPublishers_RejectsNonCanonicalNATSSubject(t *testing.T) {
+	_, err := buildRemoteDebugPublishers(DebugConfig{}, remoteDebugStreamConfig{
+		NatsSubject: "tenant.client-1.site.site-1.agent.agent-1.remote.debug",
+	}, "token")
+	if err == nil {
+		t.Fatalf("expected error for non-canonical remote debug subject")
+	}
+	if !strings.Contains(err.Error(), ".remote-debug.log") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestFormatRemoteDebugMessageWithOrigin_UI(t *testing.T) {
+	if got := formatRemoteDebugMessageWithOrigin("ui", "erro xyz"); got != "[ui] erro xyz" {
+		t.Fatalf("formatRemoteDebugMessageWithOrigin = %q", got)
+	}
+	if got := formatRemoteDebugMessageWithOrigin("ui", "[ui] erro xyz"); got != "[ui] erro xyz" {
+		t.Fatalf("formatRemoteDebugMessageWithOrigin should keep existing prefix, got %q", got)
 	}
 }
 

@@ -34,14 +34,25 @@ const (
 	commandResultRetryMax   = 5 * time.Minute
 
 	connectAttemptTimeout = 5 * time.Second
+
+	commandFanoutDedupeDefaultTTL = 30 * time.Minute
+	commandFanoutDedupeMaxTTL     = 24 * time.Hour
+	commandFanoutDedupeMinTTL     = 1 * time.Minute
 )
 
 var guidPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 type natsCommandEnvelope struct {
-	CommandID   string `json:"commandId"`
-	CommandType any    `json:"commandType"`
-	Payload     any    `json:"payload"`
+	DispatchID     string `json:"dispatchId"`
+	CommandID      string `json:"commandId"`
+	CommandType    any    `json:"commandType"`
+	TargetScope    string `json:"targetScope"`
+	TargetClientID string `json:"targetClientId"`
+	TargetSiteID   string `json:"targetSiteId"`
+	IssuedAtUTC    string `json:"issuedAtUtc"`
+	ExpiresAtUTC   string `json:"expiresAtUtc"`
+	IdempotencyKey string `json:"idempotencyKey"`
+	Payload        any    `json:"payload"`
 }
 
 // AgentHeartbeat is the standardized payload for heartbeats
@@ -83,7 +94,9 @@ type AgentHeartbeatMetrics struct {
 }
 
 type natsResultEnvelope struct {
-	CommandID    string `json:"commandId"`
+	DispatchID   string `json:"dispatchId,omitempty"`
+	CommandID    string `json:"commandId,omitempty"`
+	AgentID      string `json:"agentId,omitempty"`
 	ExitCode     int    `json:"exitCode"`
 	Output       string `json:"output,omitempty"`
 	ErrorMessage string `json:"errorMessage,omitempty"`
@@ -126,6 +139,14 @@ type SyncPing struct {
 	CorrelationID    string `json:"correlationId"`
 }
 
+// GlobalPongMessage representa sinalizacao global de liveness do servidor.
+type GlobalPongMessage struct {
+	EventType        string `json:"eventType"`
+	ServerTimeUTC    string `json:"serverTimeUtc"`
+	ServerOverloaded *bool  `json:"serverOverloaded"`
+	ReceivedAt       time.Time
+}
+
 // Config is the backend communication configuration sourced from Debug settings.
 type Config struct {
 	ApiScheme                string
@@ -147,13 +168,18 @@ type Config struct {
 }
 
 type natsSubjects struct {
-	Command      string
-	Heartbeat    string
-	Result       string
-	Hardware     string
-	SyncPing     string
-	P2PDiscovery string
-	Dashboard    string
+	CommandAgent        string
+	CommandSiteFanout   string
+	CommandClientFanout string
+	CommandGlobalFanout string
+	GlobalPong          string
+	Heartbeat           string
+	Result              string
+	Hardware            string
+	RemoteDebugLog      string
+	SyncPing            string
+	P2PDiscovery        string
+	Dashboard           string
 }
 
 // Options defines dependencies injected by the app layer.
@@ -161,12 +187,13 @@ type Options struct {
 	LoadConfig             func() Config
 	Logf                   func(format string, args ...any)
 	OnSyncPing             func(SyncPing)
+	OnGlobalPong           func(GlobalPongMessage)
 	OnP2PDiscoverySnapshot func(P2PDiscoverySnapshot)
 	HandleCommand          func(parent context.Context, cmdType string, payload any) (handled bool, exitCode int, output string, errText string)
 	OnCommandOutput        func(cmdType string, output string, errText string)
 
 	GetHeartbeatMetrics           func() AgentHeartbeatMetrics
-	EnqueueCommandResultOutbox    func(transport, commandID string, exitCode int, output, errText, sendError string) error
+	EnqueueCommandResultOutbox    func(transport, dispatchID, commandID string, exitCode int, output, errText, sendError string) error
 	ListDueCommandResultOutbox    func(transport string, now time.Time, limit int) ([]CommandResultOutboxItem, error)
 	MarkSentCommandResultOutbox   func(id int64) error
 	RescheduleCommandResultOutbox func(id int64, attempts int, nextAttemptAt time.Time, lastError string) error
@@ -174,6 +201,7 @@ type Options struct {
 
 type CommandResultOutboxItem struct {
 	ID           int64
+	DispatchID   string
 	CommandID    string
 	ExitCode     int
 	Output       string
@@ -190,12 +218,20 @@ type Status struct {
 	Transport string `json:"transport,omitempty"`
 }
 
+type fanoutDedupeRecord struct {
+	ExpiresAt time.Time
+	Result    *natsResultEnvelope
+}
+
 // Runtime manages the long-lived agent connection and command processing loop.
 type Runtime struct {
 	opts Options
 
 	statMu   sync.RWMutex
 	statSnap Status
+
+	dedupeMu     sync.Mutex
+	fanoutDedupe map[string]fanoutDedupeRecord
 
 	// forceHeartbeatCh is a channel used by ForceHeartbeat() to trigger
 	// an immediate heartbeat send in the active connection event loop.
@@ -209,6 +245,7 @@ func NewRuntime(opts Options) *Runtime {
 		opts:             opts,
 		forceHeartbeatCh: make(chan chan struct{}, 4),
 		reloadCh:         make(chan struct{}, 1),
+		fanoutDedupe:     make(map[string]fanoutDedupeRecord),
 	}
 }
 
@@ -771,7 +808,7 @@ func (r *Runtime) emitCommandOutput(cmdType, output, errText string) {
 	r.opts.OnCommandOutput(normalizeCommandType(cmdType), output, errText)
 }
 
-func (r *Runtime) enqueueCommandResultOutbox(transport, cmdID string, exitCode int, output, errText string, sendErr error) {
+func (r *Runtime) enqueueCommandResultOutbox(transport, dispatchID, cmdID string, exitCode int, output, errText string, sendErr error) {
 	if r.opts.EnqueueCommandResultOutbox == nil {
 		return
 	}
@@ -779,11 +816,11 @@ func (r *Runtime) enqueueCommandResultOutbox(transport, cmdID string, exitCode i
 	if sendErr != nil {
 		errMsg = sendErr.Error()
 	}
-	if err := r.opts.EnqueueCommandResultOutbox(strings.TrimSpace(transport), strings.TrimSpace(cmdID), exitCode, output, errText, errMsg); err != nil {
-		r.logf("falha ao enfileirar CommandResult offline transport=%s cmdId=%s: %v", strings.TrimSpace(transport), strings.TrimSpace(cmdID), err)
+	if err := r.opts.EnqueueCommandResultOutbox(strings.TrimSpace(transport), strings.TrimSpace(dispatchID), strings.TrimSpace(cmdID), exitCode, output, errText, errMsg); err != nil {
+		r.logf("falha ao enfileirar CommandResult offline transport=%s dispatchId=%s cmdId=%s: %v", strings.TrimSpace(transport), strings.TrimSpace(dispatchID), strings.TrimSpace(cmdID), err)
 		return
 	}
-	r.logf("CommandResult enfileirado para retry offline transport=%s cmdId=%s", strings.TrimSpace(transport), strings.TrimSpace(cmdID))
+	r.logf("CommandResult enfileirado para retry offline transport=%s dispatchId=%s cmdId=%s", strings.TrimSpace(transport), strings.TrimSpace(dispatchID), strings.TrimSpace(cmdID))
 }
 
 func (r *Runtime) drainCommandResultOutbox(ctx context.Context, transport string, sendFn func(item CommandResultOutboxItem) error) {
@@ -865,6 +902,21 @@ func (r *Runtime) emitSyncPing(ping SyncPing) {
 	r.logf("sync ping recebido: resource=%s installationType=%s revision=%s eventId=%s", ping.Resource, ping.InstallationType, ping.Revision, ping.EventID)
 	if r.opts.OnSyncPing != nil {
 		r.opts.OnSyncPing(ping)
+	}
+}
+
+func (r *Runtime) emitGlobalPong(pong GlobalPongMessage) {
+	state := "null"
+	if pong.ServerOverloaded != nil {
+		if *pong.ServerOverloaded {
+			state = "true"
+		} else {
+			state = "false"
+		}
+	}
+	r.logf("global pong recebido: eventType=%s serverOverloaded=%s serverTimeUtc=%s", strings.TrimSpace(pong.EventType), state, strings.TrimSpace(pong.ServerTimeUTC))
+	if r.opts.OnGlobalPong != nil {
+		r.opts.OnGlobalPong(pong)
 	}
 }
 

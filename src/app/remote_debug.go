@@ -229,7 +229,7 @@ func (m *remoteDebugManager) publishLoop(ctx context.Context, session *remoteDeb
 			msg := remoteDebugLogMessage{
 				SessionID:    session.sessionID,
 				AgentID:      session.agentID,
-				Message:      truncateRemoteDebugMessage(item.message),
+				Message:      formatRemoteDebugMessageWithOrigin("ui", truncateRemoteDebugMessage(item.message)),
 				Level:        normalizeRemoteDebugLevel(item.level),
 				TimestampUTC: time.Now().UTC().Format(time.RFC3339),
 				Sequence:     seq,
@@ -370,6 +370,9 @@ func buildRemoteDebugPublishers(cfg DebugConfig, stream remoteDebugStreamConfig,
 	if subject == "" {
 		return nil, fmt.Errorf("subject NATS ausente no comando de remote debug")
 	}
+	if !isCanonicalRemoteDebugSubject(subject) {
+		return nil, fmt.Errorf("subject NATS invalido para remote debug: esperado sufixo .remote-debug.log")
+	}
 
 	if p, err := newNATSRemoteDebugPublisher(strings.TrimSpace(cfg.NatsServer), token, subject, "nats"); err == nil {
 		publishers = append(publishers, p)
@@ -387,6 +390,17 @@ func buildRemoteDebugPublishers(cfg DebugConfig, stream remoteDebugStreamConfig,
 		return nil, fmt.Errorf("nenhum transporte remoto disponivel")
 	}
 	return publishers, nil
+}
+
+func isCanonicalRemoteDebugSubject(subject string) bool {
+	subject = strings.TrimSpace(strings.ToLower(subject))
+	if subject == "" {
+		return false
+	}
+	if strings.ContainsAny(subject, " *>\t\r\n") {
+		return false
+	}
+	return strings.HasSuffix(subject, ".remote-debug.log")
 }
 
 func newNATSRemoteDebugPublisher(server, token, subject, name string) (remoteDebugPublisher, error) {
@@ -432,6 +446,23 @@ func truncateRemoteDebugMessage(s string) string {
 		return s
 	}
 	return s[:maxLen]
+}
+
+func formatRemoteDebugMessageWithOrigin(origin, message string) string {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return ""
+	}
+	origin = strings.ToLower(strings.TrimSpace(origin))
+	if origin == "" {
+		return message
+	}
+	prefix := "[" + origin + "]"
+	lowerMsg := strings.ToLower(message)
+	if lowerMsg == prefix || strings.HasPrefix(lowerMsg, prefix+" ") {
+		return message
+	}
+	return prefix + " " + message
 }
 
 func normalizeRemoteDebugLevel(level string) string {

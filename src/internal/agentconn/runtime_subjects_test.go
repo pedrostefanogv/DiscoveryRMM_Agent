@@ -1,6 +1,10 @@
 package agentconn
 
-import "testing"
+import (
+	"encoding/base64"
+	"encoding/json"
+	"testing"
+)
 
 func TestResolveNATSSubjects_CanonicalLayout(t *testing.T) {
 	subjects, err := resolveNATSSubjects(Config{
@@ -13,8 +17,20 @@ func TestResolveNATSSubjects_CanonicalLayout(t *testing.T) {
 	}
 
 	prefix := "tenant.client-1.site.site-1.agent.agent-1"
-	if subjects.Command != prefix+".command" {
-		t.Fatalf("Command = %q", subjects.Command)
+	if subjects.CommandAgent != prefix+".command" {
+		t.Fatalf("CommandAgent = %q", subjects.CommandAgent)
+	}
+	if subjects.CommandSiteFanout != "tenant.client-1.site.site-1.agents.command" {
+		t.Fatalf("CommandSiteFanout = %q", subjects.CommandSiteFanout)
+	}
+	if subjects.CommandClientFanout != "tenant.client-1.agents.command" {
+		t.Fatalf("CommandClientFanout = %q", subjects.CommandClientFanout)
+	}
+	if subjects.CommandGlobalFanout != "tenant.global.agents.command" {
+		t.Fatalf("CommandGlobalFanout = %q", subjects.CommandGlobalFanout)
+	}
+	if subjects.GlobalPong != "tenant.global.pong" {
+		t.Fatalf("GlobalPong = %q", subjects.GlobalPong)
 	}
 	if subjects.Heartbeat != prefix+".heartbeat" {
 		t.Fatalf("Heartbeat = %q", subjects.Heartbeat)
@@ -24,6 +40,9 @@ func TestResolveNATSSubjects_CanonicalLayout(t *testing.T) {
 	}
 	if subjects.Hardware != prefix+".hardware" {
 		t.Fatalf("Hardware = %q", subjects.Hardware)
+	}
+	if subjects.RemoteDebugLog != prefix+".remote-debug.log" {
+		t.Fatalf("RemoteDebugLog = %q", subjects.RemoteDebugLog)
 	}
 	if subjects.SyncPing != prefix+".sync.ping" {
 		t.Fatalf("SyncPing = %q", subjects.SyncPing)
@@ -86,4 +105,86 @@ func TestValidateCanonicalNATSContext_RequiresAgentClientAndSite(t *testing.T) {
 	if err := validateCanonicalNATSContext(Config{AgentID: "d2719a7d-43bb-4e7e-bbe6-18dce7bf1db7", ClientID: "client-1", SiteID: "site-1"}); err != nil {
 		t.Fatalf("expected valid canonical context, got %v", err)
 	}
+}
+
+func TestValidateAgentIdentityJWTClaims_ExactSubjects(t *testing.T) {
+	subjects, err := resolveNATSSubjects(Config{ClientID: "client-1", SiteID: "site-1", AgentID: "agent-1"})
+	if err != nil {
+		t.Fatalf("resolveNATSSubjects: %v", err)
+	}
+
+	jwt := buildTestJWT(t, map[string]any{
+		"nats": map[string]any{
+			"sub": map[string]any{
+				"allow": []string{
+					subjects.CommandAgent,
+					subjects.CommandSiteFanout,
+					subjects.CommandClientFanout,
+					subjects.CommandGlobalFanout,
+					subjects.GlobalPong,
+					subjects.SyncPing,
+					subjects.P2PDiscovery,
+				},
+			},
+			"pub": map[string]any{
+				"allow": []string{
+					subjects.Heartbeat,
+					subjects.Result,
+					subjects.Hardware,
+					subjects.RemoteDebugLog,
+				},
+			},
+		},
+	})
+
+	if err := validateAgentIdentityJWTClaims(jwt, subjects); err != nil {
+		t.Fatalf("validateAgentIdentityJWTClaims: %v", err)
+	}
+}
+
+func TestValidateAgentIdentityJWTClaims_RejectsExtraSubject(t *testing.T) {
+	subjects, err := resolveNATSSubjects(Config{ClientID: "client-1", SiteID: "site-1", AgentID: "agent-1"})
+	if err != nil {
+		t.Fatalf("resolveNATSSubjects: %v", err)
+	}
+
+	jwt := buildTestJWT(t, map[string]any{
+		"nats": map[string]any{
+			"sub": map[string]any{
+				"allow": []string{
+					subjects.CommandAgent,
+					subjects.CommandSiteFanout,
+					subjects.CommandClientFanout,
+					subjects.CommandGlobalFanout,
+					subjects.GlobalPong,
+					subjects.SyncPing,
+					subjects.P2PDiscovery,
+					"tenant.extra.agents.command",
+				},
+			},
+			"pub": map[string]any{
+				"allow": []string{
+					subjects.Heartbeat,
+					subjects.Result,
+					subjects.Hardware,
+					subjects.RemoteDebugLog,
+				},
+			},
+		},
+	})
+
+	if err := validateAgentIdentityJWTClaims(jwt, subjects); err == nil {
+		t.Fatalf("expected ACL validation to fail when JWT contains extra subscribe subject")
+	}
+}
+
+func buildTestJWT(t *testing.T, claims map[string]any) string {
+	t.Helper()
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none","typ":"JWT"}`))
+	payloadBytes, err := json.Marshal(claims)
+	if err != nil {
+		t.Fatalf("json.Marshal claims: %v", err)
+	}
+	payload := base64.RawURLEncoding.EncodeToString(payloadBytes)
+	return header + "." + payload + ".signature"
 }

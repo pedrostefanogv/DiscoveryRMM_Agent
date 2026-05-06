@@ -3,9 +3,11 @@ package service
 import (
 	"bytes"
 	"context"
+	cryptorand "crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/big"
 	"net/http"
 	"net/url"
 	"os"
@@ -57,6 +59,7 @@ type AgentRuntime interface {
 	Run(ctx context.Context)
 	Reload()
 	GetStatus() AgentConnectionStatus
+	IngestRemoteDebugLog(line string)
 }
 
 type P2PService interface {
@@ -72,21 +75,28 @@ type databaseAwareService interface {
 }
 
 type ServiceManager struct {
-	dataDir       string
-	config        *SharedConfig
-	updateTrigger chan bool
-	db            *database.DB
-	ipcServer     *IPCServer
-	agentRuntime  AgentRuntime
-	automationSvc AutomationService
-	inventorySvc  InventoryService
-	appsSvc       AppsService
-	p2pSvc        P2PService
-	actionTrigger chan struct{}
-	mu            sync.RWMutex
-	startTime     time.Time
-	isRunning     bool
-	errLogPath    string
+	dataDir                  string
+	config                   *SharedConfig
+	updateTrigger            chan bool
+	db                       *database.DB
+	ipcServer                *IPCServer
+	agentRuntime             AgentRuntime
+	automationSvc            AutomationService
+	inventorySvc             InventoryService
+	appsSvc                  AppsService
+	p2pSvc                   P2PService
+	actionTrigger            chan struct{}
+	mu                       sync.RWMutex
+	startTime                time.Time
+	isRunning                bool
+	errLogPath               string
+	nonCriticalMu            sync.RWMutex
+	nonCriticalBackoffUntil  time.Time
+	nonCriticalBackoffReason string
+	lastGlobalPongAt         time.Time
+	lastGlobalPongServerTime string
+	lastGlobalPongKnown      bool
+	lastGlobalPongOverloaded bool
 }
 
 // SharedConfig representa a configuração compartilhada entre service e UI
@@ -338,6 +348,21 @@ func (sm *ServiceManager) SetAgentRuntime(runtime AgentRuntime) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	sm.agentRuntime = runtime
+}
+
+func (sm *ServiceManager) EmitRemoteDebugLog(line string) {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return
+	}
+
+	sm.mu.RLock()
+	runtime := sm.agentRuntime
+	sm.mu.RUnlock()
+	if runtime == nil {
+		return
+	}
+	runtime.IngestRemoteDebugLog(line)
 }
 
 // SetAppsService registra o serviço de apps/pacotes real.
@@ -752,17 +777,38 @@ func (sm *ServiceManager) GetStatus() map[string]interface{} {
 		agentStatus = sm.agentRuntime.GetStatus()
 	}
 
+	transportConnected := agentStatus.Connected
+	lastPongAt, _, _, _ := sm.globalPongStatus()
+	onlineConnected, onlineReason, pongStale := evaluateServiceAgentOnlineSignal(transportConnected, lastPongAt)
+
+	backoffUntil, backoffDeferred, backoffReason := sm.NonCriticalBackoffWindow()
+	backoffUntilUTC := ""
+	if backoffDeferred {
+		backoffUntilUTC = time.Now().UTC().Add(backoffUntil).Format(time.RFC3339)
+	}
+
+	lastPongAtUTC := ""
+	if !lastPongAt.IsZero() {
+		lastPongAtUTC = lastPongAt.UTC().Format(time.RFC3339)
+	}
+
 	return map[string]interface{}{
-		"running":          sm.isRunning,
-		"uptime_seconds":   time.Since(sm.startTime).Seconds(),
-		"agent_id":         agentID,
-		"server_url":       serverURL,
-		"p2p_enabled":      p2pEnabled,
-		"last_sync":        lastSync,
-		"agent_connected":  agentStatus.Connected,
-		"agent_server":     agentStatus.Server,
-		"agent_last_event": agentStatus.LastEvent,
-		"agent_transport":  agentStatus.Transport,
+		"running":                           sm.isRunning,
+		"uptime_seconds":                    time.Since(sm.startTime).Seconds(),
+		"agent_id":                          agentID,
+		"server_url":                        serverURL,
+		"p2p_enabled":                       p2pEnabled,
+		"last_sync":                         lastSync,
+		"agent_connected":                   onlineConnected,
+		"agent_transport_connected":         transportConnected,
+		"agent_online_reason":               onlineReason,
+		"agent_global_pong_stale":           pongStale,
+		"agent_last_global_pong_at":         lastPongAtUTC,
+		"agent_non_critical_backoff_until":  backoffUntilUTC,
+		"agent_non_critical_backoff_reason": backoffReason,
+		"agent_server":                      agentStatus.Server,
+		"agent_last_event":                  agentStatus.LastEvent,
+		"agent_transport":                   agentStatus.Transport,
 	}
 }
 
@@ -1387,6 +1433,7 @@ func (sm *ServiceManager) logInfo(format string, args ...interface{}) {
 // writeLog escreve no stderr e no arquivo de log de erros
 func (sm *ServiceManager) writeLog(level string, msg string) {
 	fmt.Fprintf(os.Stderr, "[SERVICE.%s] %s\n", level, msg)
+	sm.EmitRemoteDebugLog("[" + strings.ToLower(strings.TrimSpace(level)) + "] " + strings.TrimSpace(msg))
 
 	if strings.TrimSpace(sm.errLogPath) == "" {
 		return
@@ -1433,6 +1480,127 @@ func (sm *ServiceManager) setLastSync(lastSync string) {
 	if err := sm.saveConfig(); err != nil {
 		sm.logError("falha ao persistir last_sync: %v", err)
 	}
+}
+
+func (sm *ServiceManager) ApplyGlobalPong(pong agentconn.GlobalPongMessage) {
+	if sm == nil {
+		return
+	}
+
+	receivedAt := pong.ReceivedAt
+	if receivedAt.IsZero() {
+		receivedAt = time.Now().UTC()
+	}
+
+	sm.nonCriticalMu.Lock()
+	sm.lastGlobalPongAt = receivedAt.UTC()
+	sm.lastGlobalPongServerTime = strings.TrimSpace(pong.ServerTimeUTC)
+	if pong.ServerOverloaded != nil {
+		sm.lastGlobalPongKnown = true
+		sm.lastGlobalPongOverloaded = *pong.ServerOverloaded
+	} else {
+		sm.lastGlobalPongKnown = false
+		sm.lastGlobalPongOverloaded = false
+	}
+	sm.nonCriticalMu.Unlock()
+
+	if pong.ServerOverloaded == nil {
+		return
+	}
+
+	if *pong.ServerOverloaded {
+		delay := randomServiceNonCriticalBackoffDuration()
+		until := time.Now().UTC().Add(delay)
+		sm.nonCriticalMu.Lock()
+		if until.After(sm.nonCriticalBackoffUntil) {
+			sm.nonCriticalBackoffUntil = until
+			sm.nonCriticalBackoffReason = "tenant.global.pong:serverOverloaded=true"
+		}
+		currentUntil := sm.nonCriticalBackoffUntil
+		sm.nonCriticalMu.Unlock()
+		sm.logInfo("GlobalPong: trafego nao-critico adiado ate %s", currentUntil.Format(time.RFC3339))
+		return
+	}
+
+	sm.nonCriticalMu.Lock()
+	hadDefer := !sm.nonCriticalBackoffUntil.IsZero() && sm.nonCriticalBackoffUntil.After(time.Now().UTC())
+	sm.nonCriticalBackoffUntil = time.Time{}
+	sm.nonCriticalBackoffReason = ""
+	sm.nonCriticalMu.Unlock()
+	if hadDefer {
+		sm.logInfo("GlobalPong: servidor normalizado, trafego nao-critico liberado")
+	}
+}
+
+func (sm *ServiceManager) NonCriticalBackoffWindow() (time.Duration, bool, string) {
+	if sm == nil {
+		return 0, false, ""
+	}
+
+	now := time.Now().UTC()
+	sm.nonCriticalMu.RLock()
+	until := sm.nonCriticalBackoffUntil
+	reason := strings.TrimSpace(sm.nonCriticalBackoffReason)
+	sm.nonCriticalMu.RUnlock()
+
+	if until.IsZero() || !until.After(now) {
+		if !until.IsZero() {
+			sm.nonCriticalMu.Lock()
+			if !sm.nonCriticalBackoffUntil.IsZero() && !sm.nonCriticalBackoffUntil.After(time.Now().UTC()) {
+				sm.nonCriticalBackoffUntil = time.Time{}
+				sm.nonCriticalBackoffReason = ""
+			}
+			sm.nonCriticalMu.Unlock()
+		}
+		return 0, false, ""
+	}
+
+	return until.Sub(now), true, reason
+}
+
+func (sm *ServiceManager) globalPongStatus() (time.Time, string, bool, bool) {
+	if sm == nil {
+		return time.Time{}, "", false, false
+	}
+	sm.nonCriticalMu.RLock()
+	lastPongAt := sm.lastGlobalPongAt
+	serverTime := strings.TrimSpace(sm.lastGlobalPongServerTime)
+	overloadedKnown := sm.lastGlobalPongKnown
+	overloaded := sm.lastGlobalPongOverloaded
+	sm.nonCriticalMu.RUnlock()
+	return lastPongAt, serverTime, overloadedKnown, overloaded
+}
+
+func evaluateServiceAgentOnlineSignal(transportConnected bool, lastGlobalPongAt time.Time) (bool, string, bool) {
+	const serviceGlobalPongStaleAfter = 3 * time.Minute
+
+	if !transportConnected {
+		return false, "transporte desconectado", false
+	}
+	if lastGlobalPongAt.IsZero() {
+		return true, "transporte conectado; aguardando primeiro tenant.global.pong", false
+	}
+	age := time.Since(lastGlobalPongAt)
+	if age <= serviceGlobalPongStaleAfter {
+		return true, fmt.Sprintf("pong global recebido ha %s", age.Round(time.Second)), false
+	}
+	return false, fmt.Sprintf("sem pong global recente (ultimo ha %s)", age.Round(time.Second)), true
+}
+
+func randomServiceNonCriticalBackoffDuration() time.Duration {
+	const (
+		minDelay = 10 * time.Minute
+		maxDelay = 15 * time.Minute
+	)
+	rangeMinutes := int64((maxDelay - minDelay) / time.Minute)
+	if rangeMinutes <= 0 {
+		return minDelay
+	}
+	n, err := cryptorand.Int(cryptorand.Reader, big.NewInt(rangeMinutes+1))
+	if err != nil {
+		return minDelay
+	}
+	return minDelay + time.Duration(n.Int64())*time.Minute
 }
 
 func (sm *ServiceManager) saveConfig() error {

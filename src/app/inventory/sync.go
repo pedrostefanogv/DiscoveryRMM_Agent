@@ -126,6 +126,10 @@ type agentSoftwareItem struct {
 
 // SyncInventoryOnStartup sends inventory payloads when credentials are available.
 func (s *Service) SyncInventoryOnStartup(ctx context.Context, report models.InventoryReport) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	cfg := s.debugConfig()
 	cfg.ApiServer = strings.TrimSpace(cfg.ApiServer)
 	cfg.ApiScheme = strings.TrimSpace(strings.ToLower(cfg.ApiScheme))
@@ -170,6 +174,27 @@ func (s *Service) SyncInventoryOnStartup(ctx context.Context, report models.Inve
 		}
 		s.logf("[agent-sync] ignorado: apiScheme invalido (use http ou https)")
 		return
+	}
+
+	if s.shouldDeferNonCritical != nil {
+		if delay, deferred, reason := s.shouldDeferNonCritical(); deferred {
+			if delay <= 0 {
+				delay = time.Second
+			}
+			if reason != "" {
+				s.logf(fmt.Sprintf("[agent-sync] envio remoto adiado por sobrecarga do servidor por %s (motivo=%s)", delay.Round(time.Second), reason))
+			} else {
+				s.logf(fmt.Sprintf("[agent-sync] envio remoto adiado por sobrecarga do servidor por %s", delay.Round(time.Second)))
+			}
+			timer := time.NewTimer(delay)
+			defer timer.Stop()
+			select {
+			case <-ctx.Done():
+				s.logf("[agent-sync] envio remoto cancelado durante janela de adiamento")
+				return
+			case <-timer.C:
+			}
+		}
 	}
 
 	if s.db != nil {

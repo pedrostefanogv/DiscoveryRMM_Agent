@@ -328,7 +328,7 @@ func TestNATSCommandHandler_PublishesResultWithoutDashboardLegacyEvent(t *testin
 			return true, 0, "ok-from-test", ""
 		},
 	})
-	handler := runtime.natsCommandHandler(context.Background(), nc, subjects)
+	handler := runtime.natsCommandHandler(context.Background(), nc, cfg, subjects, natsCommandRouteAgent, false)
 
 	commandPayload, err := json.Marshal(natsCommandEnvelope{
 		CommandID:   "cmd-123",
@@ -362,5 +362,204 @@ func TestNATSCommandHandler_PublishesResultWithoutDashboardLegacyEvent(t *testin
 	}
 	if _, err := dashboardSub.NextMsg(250 * time.Millisecond); err == nil {
 		t.Fatal("command_result nao deveria mais ser publicado em dashboard.events")
+	}
+}
+
+func TestNATSFanoutCommandHandler_DedupesByDispatchAndIdempotency(t *testing.T) {
+	server := startEmbeddedNATSServer(t)
+	nc, err := nats.Connect(server.ClientURL(), nats.Timeout(2*time.Second))
+	if err != nil {
+		t.Fatalf("falha ao conectar no NATS de teste: %v", err)
+	}
+	t.Cleanup(nc.Close)
+
+	cfg := Config{
+		AgentID:  testHomologAgentID,
+		ClientID: testHomologClientID,
+		SiteID:   testHomologSiteID,
+	}
+	subjects, err := resolveNATSSubjects(cfg)
+	if err != nil {
+		t.Fatalf("resolveNATSSubjects: %v", err)
+	}
+
+	resultSub, err := nc.SubscribeSync(subjects.Result)
+	if err != nil {
+		t.Fatalf("falha ao criar subscribe result de teste: %v", err)
+	}
+	if err := nc.Flush(); err != nil {
+		t.Fatalf("falha ao flush do subscribe result: %v", err)
+	}
+
+	execCount := 0
+	runtime := NewRuntime(Options{
+		HandleCommand: func(parent context.Context, cmdType string, payload any) (bool, int, string, string) {
+			execCount++
+			return true, 0, "fanout-ok", ""
+		},
+	})
+	handler := runtime.natsCommandHandler(context.Background(), nc, cfg, subjects, natsCommandRouteSite, false)
+
+	env := natsCommandEnvelope{
+		DispatchID:     "dispatch-1",
+		CommandID:      "cmd-fanout-1",
+		CommandType:    "powershell",
+		TargetScope:    "site",
+		TargetClientID: cfg.ClientID,
+		TargetSiteID:   cfg.SiteID,
+		IssuedAtUTC:    time.Now().UTC().Format(time.RFC3339),
+		ExpiresAtUTC:   time.Now().UTC().Add(10 * time.Minute).Format(time.RFC3339),
+		IdempotencyKey: "idem-1",
+		Payload:        map[string]any{"command": "Get-Date"},
+	}
+	payload, err := json.Marshal(env)
+	if err != nil {
+		t.Fatalf("falha ao serializar envelope fan-out: %v", err)
+	}
+
+	handler(&nats.Msg{Subject: subjects.CommandSiteFanout, Data: payload})
+	handler(&nats.Msg{Subject: subjects.CommandSiteFanout, Data: payload})
+
+	msg, err := resultSub.NextMsg(2 * time.Second)
+	if err != nil {
+		t.Fatalf("nao recebeu result fan-out: %v", err)
+	}
+	var result natsResultEnvelope
+	if err := json.Unmarshal(msg.Data, &result); err != nil {
+		t.Fatalf("result fan-out invalido: %v", err)
+	}
+	if result.DispatchID != "dispatch-1" {
+		t.Fatalf("dispatchId = %q, esperado dispatch-1", result.DispatchID)
+	}
+	if result.CommandID != "cmd-fanout-1" {
+		t.Fatalf("commandId = %q, esperado cmd-fanout-1", result.CommandID)
+	}
+	if result.Output != "fanout-ok" {
+		t.Fatalf("output = %q, esperado fanout-ok", result.Output)
+	}
+
+	if _, err := resultSub.NextMsg(250 * time.Millisecond); err == nil {
+		t.Fatal("nao deveria receber segundo result para comando fan-out duplicado")
+	}
+	if execCount != 1 {
+		t.Fatalf("execucoes = %d, esperado 1", execCount)
+	}
+}
+
+func TestNATSFanoutCommandHandler_DropsExpiredCommand(t *testing.T) {
+	server := startEmbeddedNATSServer(t)
+	nc, err := nats.Connect(server.ClientURL(), nats.Timeout(2*time.Second))
+	if err != nil {
+		t.Fatalf("falha ao conectar no NATS de teste: %v", err)
+	}
+	t.Cleanup(nc.Close)
+
+	cfg := Config{
+		AgentID:  testHomologAgentID,
+		ClientID: testHomologClientID,
+		SiteID:   testHomologSiteID,
+	}
+	subjects, err := resolveNATSSubjects(cfg)
+	if err != nil {
+		t.Fatalf("resolveNATSSubjects: %v", err)
+	}
+
+	resultSub, err := nc.SubscribeSync(subjects.Result)
+	if err != nil {
+		t.Fatalf("falha ao criar subscribe result de teste: %v", err)
+	}
+	if err := nc.Flush(); err != nil {
+		t.Fatalf("falha ao flush do subscribe result: %v", err)
+	}
+
+	execCount := 0
+	runtime := NewRuntime(Options{
+		HandleCommand: func(parent context.Context, cmdType string, payload any) (bool, int, string, string) {
+			execCount++
+			return true, 0, "expired-should-not-run", ""
+		},
+	})
+	handler := runtime.natsCommandHandler(context.Background(), nc, cfg, subjects, natsCommandRouteSite, false)
+
+	payload, err := json.Marshal(natsCommandEnvelope{
+		DispatchID:     "dispatch-expired",
+		CommandID:      "cmd-expired",
+		CommandType:    "powershell",
+		TargetScope:    "site",
+		TargetClientID: cfg.ClientID,
+		TargetSiteID:   cfg.SiteID,
+		IssuedAtUTC:    time.Now().UTC().Add(-20 * time.Minute).Format(time.RFC3339),
+		ExpiresAtUTC:   time.Now().UTC().Add(-5 * time.Minute).Format(time.RFC3339),
+		IdempotencyKey: "idem-expired",
+		Payload:        map[string]any{"command": "Get-Date"},
+	})
+	if err != nil {
+		t.Fatalf("falha ao serializar envelope expirado: %v", err)
+	}
+	handler(&nats.Msg{Subject: subjects.CommandSiteFanout, Data: payload})
+
+	if _, err := resultSub.NextMsg(250 * time.Millisecond); err == nil {
+		t.Fatal("comando expirado nao deveria publicar result")
+	}
+	if execCount != 0 {
+		t.Fatalf("execucoes = %d, esperado 0 para comando expirado", execCount)
+	}
+}
+
+func TestNATSFanoutCommandHandler_RejectsSubjectScopeMismatch(t *testing.T) {
+	server := startEmbeddedNATSServer(t)
+	nc, err := nats.Connect(server.ClientURL(), nats.Timeout(2*time.Second))
+	if err != nil {
+		t.Fatalf("falha ao conectar no NATS de teste: %v", err)
+	}
+	t.Cleanup(nc.Close)
+
+	cfg := Config{
+		AgentID:  testHomologAgentID,
+		ClientID: testHomologClientID,
+		SiteID:   testHomologSiteID,
+	}
+	subjects, err := resolveNATSSubjects(cfg)
+	if err != nil {
+		t.Fatalf("resolveNATSSubjects: %v", err)
+	}
+
+	resultSub, err := nc.SubscribeSync(subjects.Result)
+	if err != nil {
+		t.Fatalf("falha ao criar subscribe result de teste: %v", err)
+	}
+	if err := nc.Flush(); err != nil {
+		t.Fatalf("falha ao flush do subscribe result: %v", err)
+	}
+
+	execCount := 0
+	runtime := NewRuntime(Options{
+		HandleCommand: func(parent context.Context, cmdType string, payload any) (bool, int, string, string) {
+			execCount++
+			return true, 0, "scope-mismatch-should-not-run", ""
+		},
+	})
+	handler := runtime.natsCommandHandler(context.Background(), nc, cfg, subjects, natsCommandRouteSite, false)
+
+	payload, err := json.Marshal(natsCommandEnvelope{
+		DispatchID:     "dispatch-mismatch",
+		CommandID:      "cmd-mismatch",
+		CommandType:    "powershell",
+		TargetScope:    "client",
+		TargetClientID: cfg.ClientID,
+		IssuedAtUTC:    time.Now().UTC().Format(time.RFC3339),
+		IdempotencyKey: "idem-mismatch",
+		Payload:        map[string]any{"command": "Get-Date"},
+	})
+	if err != nil {
+		t.Fatalf("falha ao serializar envelope incoerente: %v", err)
+	}
+	handler(&nats.Msg{Subject: subjects.CommandSiteFanout, Data: payload})
+
+	if _, err := resultSub.NextMsg(250 * time.Millisecond); err == nil {
+		t.Fatal("comando com subject/targetScope incoerente nao deveria publicar result")
+	}
+	if execCount != 0 {
+		t.Fatalf("execucoes = %d, esperado 0 para comando incoerente", execCount)
 	}
 }

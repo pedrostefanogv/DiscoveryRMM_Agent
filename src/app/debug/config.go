@@ -238,11 +238,17 @@ func parseInstallerBool(raw json.RawMessage) (*bool, error) {
 
 // AgentStatus is the frontend-facing agent connection snapshot.
 type AgentStatus struct {
-	Connected bool   `json:"connected"`
-	AgentID   string `json:"agentId"`
-	Server    string `json:"server"`
-	LastEvent string `json:"lastEvent"`
-	Transport string `json:"transport,omitempty"`
+	Connected                  bool   `json:"connected"`
+	TransportConnected         bool   `json:"transportConnected,omitempty"`
+	AgentID                    string `json:"agentId"`
+	Server                     string `json:"server"`
+	LastEvent                  string `json:"lastEvent"`
+	Transport                  string `json:"transport,omitempty"`
+	OnlineReason               string `json:"onlineReason,omitempty"`
+	LastGlobalPongAtUTC        string `json:"lastGlobalPongAtUtc,omitempty"`
+	GlobalPongStale            bool   `json:"globalPongStale,omitempty"`
+	NonCriticalBackoffUntilUTC string `json:"nonCriticalBackoffUntilUtc,omitempty"`
+	NonCriticalBackoffReason   string `json:"nonCriticalBackoffReason,omitempty"`
 }
 
 // RealtimeStatus represents server-side realtime transport health.

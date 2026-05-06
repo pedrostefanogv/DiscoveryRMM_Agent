@@ -14,13 +14,14 @@ import (
 )
 
 type commandResultOutboxPayload struct {
+	DispatchID   string `json:"dispatchId,omitempty"`
 	CommandID    string `json:"commandId"`
 	ExitCode     int    `json:"exitCode"`
 	Output       string `json:"output,omitempty"`
 	ErrorMessage string `json:"errorMessage,omitempty"`
 }
 
-func (a *App) enqueueCommandResultOutbox(transport, commandID string, exitCode int, output, errText, sendError string) error {
+func (a *App) enqueueCommandResultOutbox(transport, dispatchID, commandID string, exitCode int, output, errText, sendError string) error {
 	if !a.shouldEnqueueCommandResultOutbox() {
 		return nil
 	}
@@ -32,6 +33,7 @@ func (a *App) enqueueCommandResultOutbox(transport, commandID string, exitCode i
 		return nil
 	}
 	payload := commandResultOutboxPayload{
+		DispatchID:   strings.TrimSpace(dispatchID),
 		CommandID:    strings.TrimSpace(commandID),
 		ExitCode:     exitCode,
 		Output:       output,
@@ -42,7 +44,11 @@ func (a *App) enqueueCommandResultOutbox(transport, commandID string, exitCode i
 		return err
 	}
 	payloadHash := sha256.Sum256(payloadJSON)
-	idempotencyKey := strings.TrimSpace(transport) + ":" + payload.CommandID
+	idempotencySuffix := payload.CommandID
+	if strings.TrimSpace(payload.DispatchID) != "" {
+		idempotencySuffix = payload.DispatchID
+	}
+	idempotencyKey := strings.TrimSpace(transport) + ":" + idempotencySuffix
 	return a.db.EnqueueCommandResultOutbox(database.CommandResultOutboxEntry{
 		AgentID:        agentID,
 		Transport:      strings.TrimSpace(transport),
@@ -83,6 +89,7 @@ func (a *App) listDueCommandResultOutbox(transport string, now time.Time, limit 
 		}
 		out = append(out, agentconn.CommandResultOutboxItem{
 			ID:           entry.ID,
+			DispatchID:   strings.TrimSpace(payload.DispatchID),
 			CommandID:    strings.TrimSpace(payload.CommandID),
 			ExitCode:     payload.ExitCode,
 			Output:       payload.Output,

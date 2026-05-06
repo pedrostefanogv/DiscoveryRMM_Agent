@@ -30,9 +30,11 @@ type AgentRuntimeHooks struct {
 	RefreshAutomationPolicy   func(context.Context) error
 	RequestSelfUpdateCheck    func(string) bool
 	ApplyP2PDiscoverySnapshot func(agentconn.P2PDiscoverySnapshot)
+	OnGlobalPong              func(agentconn.GlobalPongMessage)
 }
 
 type commandResultOutboxPayload struct {
+	DispatchID   string `json:"dispatchId,omitempty"`
 	CommandID    string `json:"commandId"`
 	ExitCode     int    `json:"exitCode"`
 	Output       string `json:"output,omitempty"`
@@ -83,11 +85,12 @@ func (s *automationRuntimeService) SetDB(db *database.DB) {
 }
 
 type agentRuntimeService struct {
-	runtime    *agentconn.Runtime
-	loadConfig func() *SharedConfig
-	db         *database.DB
-	logf       func(string)
-	hooks      AgentRuntimeHooks
+	runtime     *agentconn.Runtime
+	loadConfig  func() *SharedConfig
+	db          *database.DB
+	logf        func(string)
+	hooks       AgentRuntimeHooks
+	remoteDebug *serviceRemoteDebugManager
 }
 
 func NewAgentRuntimeService(loadConfig func() *SharedConfig, logf func(string), hooks AgentRuntimeHooks) AgentRuntime {
@@ -99,19 +102,21 @@ func NewAgentRuntimeService(loadConfig func() *SharedConfig, logf func(string), 
 		logf:       logf,
 		hooks:      hooks,
 	}
+	s.remoteDebug = newServiceRemoteDebugManager(logf, s.runtimeConfig)
 	s.runtime = agentconn.NewRuntime(agentconn.Options{
 		LoadConfig: s.runtimeConfig,
 		Logf: func(format string, args ...any) {
-			logf(fmt.Sprintf(format, args...))
+			s.emitRuntimeLog(fmt.Sprintf(format, args...))
 		},
 		OnSyncPing:             s.handleSyncPing,
+		OnGlobalPong:           s.handleGlobalPong,
 		OnP2PDiscoverySnapshot: s.handleP2PDiscoverySnapshot,
 		HandleCommand: func(parent context.Context, cmdType string, payload any) (bool, int, string, string) {
 			return s.handleCommand(parent, cmdType, payload)
 		},
 		OnCommandOutput: s.onCommandOutput,
-		EnqueueCommandResultOutbox: func(transport, commandID string, exitCode int, output, errText, sendError string) error {
-			return s.enqueueCommandResultOutbox(transport, commandID, exitCode, output, errText, sendError)
+		EnqueueCommandResultOutbox: func(transport, dispatchID, commandID string, exitCode int, output, errText, sendError string) error {
+			return s.enqueueCommandResultOutbox(transport, dispatchID, commandID, exitCode, output, errText, sendError)
 		},
 		ListDueCommandResultOutbox: func(transport string, now time.Time, limit int) ([]agentconn.CommandResultOutboxItem, error) {
 			return s.listDueCommandResultOutbox(transport, now, limit)
@@ -209,7 +214,31 @@ func (s *agentRuntimeService) handleP2PDiscoverySnapshot(snapshot agentconn.P2PD
 	s.hooks.ApplyP2PDiscoverySnapshot(snapshot)
 }
 
-func (s *agentRuntimeService) handleCommand(_ context.Context, cmdType string, payload any) (bool, int, string, string) {
+func (s *agentRuntimeService) handleGlobalPong(pong agentconn.GlobalPongMessage) {
+	if s == nil {
+		return
+	}
+	state := "null"
+	if pong.ServerOverloaded != nil {
+		if *pong.ServerOverloaded {
+			state = "true"
+		} else {
+			state = "false"
+		}
+	}
+	s.logf(fmt.Sprintf("[agent-sync] global pong recebido: serverOverloaded=%s serverTimeUtc=%s", state, strings.TrimSpace(pong.ServerTimeUTC)))
+	if s.hooks.OnGlobalPong != nil {
+		s.hooks.OnGlobalPong(pong)
+	}
+}
+
+func (s *agentRuntimeService) handleCommand(parent context.Context, cmdType string, payload any) (bool, int, string, string) {
+	if isRemoteDebugCommandType(cmdType) {
+		if s == nil || s.remoteDebug == nil {
+			return true, 1, "", "remote debug indisponivel no service"
+		}
+		return s.remoteDebug.HandleCommand(parent, cmdType, payload)
+	}
 	if isServiceUIOnlyCommandType(cmdType) {
 		return true, 2, "", "comando indisponivel no modo service sem interface interativa"
 	}
@@ -238,10 +267,33 @@ func (s *agentRuntimeService) onCommandOutput(cmdType, output, errText string) {
 	if strings.TrimSpace(errText) != "" {
 		parts = append(parts, "error="+strings.TrimSpace(errText))
 	}
-	s.logf(strings.Join(parts, " "))
+	s.emitRuntimeLog(strings.Join(parts, " "))
+	if s != nil && s.remoteDebug != nil {
+		s.remoteDebug.OnCommandOutput(cmdType, output, errText)
+	}
 }
 
-func (s *agentRuntimeService) enqueueCommandResultOutbox(transport, commandID string, exitCode int, output, errText, sendError string) error {
+func (s *agentRuntimeService) emitRuntimeLog(line string) {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return
+	}
+	if s != nil && s.logf != nil {
+		s.logf(line)
+	}
+	if s != nil && s.remoteDebug != nil {
+		s.remoteDebug.EnqueueRawLog(line, serviceRemoteDebugDetectLevel(line))
+	}
+}
+
+func (s *agentRuntimeService) IngestRemoteDebugLog(line string) {
+	if s == nil || s.remoteDebug == nil {
+		return
+	}
+	s.remoteDebug.EnqueueRawLog(strings.TrimSpace(line), serviceRemoteDebugDetectLevel(line))
+}
+
+func (s *agentRuntimeService) enqueueCommandResultOutbox(transport, dispatchID, commandID string, exitCode int, output, errText, sendError string) error {
 	if s == nil || s.db == nil {
 		return nil
 	}
@@ -251,6 +303,7 @@ func (s *agentRuntimeService) enqueueCommandResultOutbox(transport, commandID st
 		return nil
 	}
 	payload := commandResultOutboxPayload{
+		DispatchID:   strings.TrimSpace(dispatchID),
 		CommandID:    strings.TrimSpace(commandID),
 		ExitCode:     exitCode,
 		Output:       output,
@@ -261,11 +314,15 @@ func (s *agentRuntimeService) enqueueCommandResultOutbox(transport, commandID st
 		return err
 	}
 	payloadHash := sha256.Sum256(payloadJSON)
+	idempotencySuffix := payload.CommandID
+	if strings.TrimSpace(payload.DispatchID) != "" {
+		idempotencySuffix = payload.DispatchID
+	}
 	return s.db.EnqueueCommandResultOutbox(database.CommandResultOutboxEntry{
 		AgentID:        agentID,
 		Transport:      strings.TrimSpace(transport),
 		CommandID:      payload.CommandID,
-		IdempotencyKey: strings.TrimSpace(transport) + ":" + payload.CommandID,
+		IdempotencyKey: strings.TrimSpace(transport) + ":" + idempotencySuffix,
 		PayloadJSON:    string(payloadJSON),
 		PayloadHash:    hex.EncodeToString(payloadHash[:]),
 		Attempts:       0,
@@ -298,6 +355,7 @@ func (s *agentRuntimeService) listDueCommandResultOutbox(transport string, now t
 		}
 		out = append(out, agentconn.CommandResultOutboxItem{
 			ID:           entry.ID,
+			DispatchID:   strings.TrimSpace(payload.DispatchID),
 			CommandID:    strings.TrimSpace(payload.CommandID),
 			ExitCode:     payload.ExitCode,
 			Output:       payload.Output,
@@ -323,23 +381,25 @@ func (s *agentRuntimeService) rescheduleCommandResultOutbox(id int64, attempts i
 }
 
 type inventoryRuntimeService struct {
-	provider   *inventory.Provider
-	loadConfig func() *SharedConfig
-	collect    func(context.Context) (models.InventoryReport, error)
-	db         *database.DB
-	logf       func(string)
-	version    string
+	provider               *inventory.Provider
+	loadConfig             func() *SharedConfig
+	collect                func(context.Context) (models.InventoryReport, error)
+	db                     *database.DB
+	logf                   func(string)
+	version                string
+	shouldDeferNonCritical func() (time.Duration, bool, string)
 }
 
-func NewInventoryRuntimeService(timeout time.Duration, loadConfig func() *SharedConfig, logf func(string), version string) InventoryService {
+func NewInventoryRuntimeService(timeout time.Duration, loadConfig func() *SharedConfig, logf func(string), version string, shouldDeferNonCritical func() (time.Duration, bool, string)) InventoryService {
 	if logf == nil {
 		logf = func(string) {}
 	}
 	return &inventoryRuntimeService{
-		provider:   inventory.NewProvider(timeout),
-		loadConfig: loadConfig,
-		logf:       logf,
-		version:    strings.TrimSpace(version),
+		provider:               inventory.NewProvider(timeout),
+		loadConfig:             loadConfig,
+		logf:                   logf,
+		version:                strings.TrimSpace(version),
+		shouldDeferNonCritical: shouldDeferNonCritical,
 	}
 }
 
@@ -383,8 +443,9 @@ func (s *inventoryRuntimeService) syncCollectedInventory(ctx context.Context, re
 		DebugConfig: func() appdebug.Config {
 			return sharedConfigToDebugConfig(s.loadConfig)
 		},
-		Logf:    s.logf,
-		Version: s.version,
+		Logf:                   s.logf,
+		Version:                s.version,
+		ShouldDeferNonCritical: s.shouldDeferNonCritical,
 	})
 	syncSvc.SyncInventoryOnStartup(ctx, report)
 }
@@ -458,7 +519,7 @@ func isAgentUpdateCommandType(cmdType string) bool {
 
 func isServiceUIOnlyCommandType(cmdType string) bool {
 	switch strings.ToLower(strings.TrimSpace(cmdType)) {
-	case "8", "remotedebug", "remote-debug", "notification", "notify", "notification_dispatch", "notification-dispatch":
+	case "notification", "notify", "notification_dispatch", "notification-dispatch":
 		return true
 	default:
 		return false

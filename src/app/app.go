@@ -102,6 +102,13 @@ type App struct {
 	p2pConfig                  P2PConfig
 	p2pSeedPlanCache           cachedP2PSeedPlan
 	p2pTelemetryRateLimitUntil time.Time
+	nonCriticalMu              sync.RWMutex
+	nonCriticalBackoffUntil    time.Time
+	nonCriticalBackoffReason   string
+	lastGlobalPongAt           time.Time
+	lastGlobalPongServerTime   string
+	lastGlobalPongKnown        bool
+	lastGlobalPongOverloaded   bool
 
 	agentConfigMu sync.RWMutex
 	agentConfig   AgentConfiguration
@@ -264,6 +271,7 @@ func NewApp(opts AppStartupOptions) *App {
 				a.syncCoord.HandlePing(ping)
 			}
 		},
+		OnGlobalPong:                  a.handleGlobalPong,
 		GetHeartbeatMetrics:           a.getHeartbeatMetrics,
 		OnP2PDiscoverySnapshot:        a.handleP2PDiscoverySnapshot,
 		HandleCommand:                 a.handleAgentRuntimeCommand,
@@ -327,6 +335,7 @@ func NewApp(opts AppStartupOptions) *App {
 		Version:                  Version,
 		ResolveMeshCentralNodeID: a.getMeshCentralNodeIDForReport,
 		OnHardwareReportSuccess:  a.markMeshCentralReportSuccess,
+		ShouldDeferNonCritical:   a.nonCriticalBackoffWindow,
 	})
 	a.supportSvc = appsupport.NewService(appsupport.Options{
 		Logf:        a.logs.append,

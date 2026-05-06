@@ -121,11 +121,17 @@ func TestServiceConnectedMode_CanBeSetTrue(t *testing.T) {
 
 func TestAgentStatusFromServiceStatusData(t *testing.T) {
 	got := agentStatusFromServiceStatusData(map[string]interface{}{
-		"agent_connected":  true,
-		"agent_id":         "agent-123",
-		"agent_server":     "server.example:443",
-		"agent_last_event": "conectado",
-		"agent_transport":  "nats-wss",
+		"agent_connected":                   true,
+		"agent_transport_connected":         true,
+		"agent_online_reason":               "pong global recebido ha 3s",
+		"agent_global_pong_stale":           false,
+		"agent_last_global_pong_at":         "2026-05-05T10:00:00Z",
+		"agent_non_critical_backoff_until":  "2026-05-05T10:10:00Z",
+		"agent_non_critical_backoff_reason": "tenant.global.pong:serverOverloaded=true",
+		"agent_id":                          "agent-123",
+		"agent_server":                      "server.example:443",
+		"agent_last_event":                  "conectado",
+		"agent_transport":                   "nats-wss",
 	})
 
 	if !got.Connected {
@@ -142,6 +148,18 @@ func TestAgentStatusFromServiceStatusData(t *testing.T) {
 	}
 	if got.LastEvent != "conectado" {
 		t.Fatalf("LastEvent = %q", got.LastEvent)
+	}
+	if !got.TransportConnected {
+		t.Fatal("expected transportConnected=true")
+	}
+	if got.OnlineReason == "" {
+		t.Fatal("expected onlineReason to be populated")
+	}
+	if got.LastGlobalPongAtUTC != "2026-05-05T10:00:00Z" {
+		t.Fatalf("LastGlobalPongAtUTC = %q", got.LastGlobalPongAtUTC)
+	}
+	if got.NonCriticalBackoffUntilUTC != "2026-05-05T10:10:00Z" {
+		t.Fatalf("NonCriticalBackoffUntilUTC = %q", got.NonCriticalBackoffUntilUTC)
 	}
 }
 

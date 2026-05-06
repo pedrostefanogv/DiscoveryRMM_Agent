@@ -9,20 +9,27 @@ import (
 
 // StatusOverview provides a simplified health snapshot for the default status page.
 type StatusOverview struct {
-	Connected               bool      `json:"connected"`
-	ConnectionLabel         string    `json:"connectionLabel"`
-	Hostname                string    `json:"hostname"`
-	Server                  string    `json:"server"`
-	ConnectionType          string    `json:"connectionType"`
-	AppVersion              string    `json:"appVersion"`
-	OSName                  string    `json:"osName"`
-	OSVersion               string    `json:"osVersion"`
-	LastInventoryCollected  string    `json:"lastInventoryCollected"`
-	RealtimeAvailable       bool      `json:"realtimeAvailable"`
-	RealtimeNATSConnected   bool      `json:"realtimeNatsConnected"`
-	RealtimeConnectedAgents int       `json:"realtimeConnectedAgents"`
-	RealtimeMessage         string    `json:"realtimeMessage"`
-	CheckedAtUTC            time.Time `json:"checkedAtUtc"`
+	Connected                 bool      `json:"connected"`
+	TransportConnected        bool      `json:"transportConnected"`
+	ConnectionLabel           string    `json:"connectionLabel"`
+	OnlineReason              string    `json:"onlineReason,omitempty"`
+	Hostname                  string    `json:"hostname"`
+	Server                    string    `json:"server"`
+	ConnectionType            string    `json:"connectionType"`
+	LastGlobalPongAtUTC       string    `json:"lastGlobalPongAtUtc,omitempty"`
+	GlobalPongStale           bool      `json:"globalPongStale"`
+	NonCriticalDeferred       bool      `json:"nonCriticalDeferred"`
+	NonCriticalDeferredUntil  string    `json:"nonCriticalDeferredUntilUtc,omitempty"`
+	NonCriticalDeferredReason string    `json:"nonCriticalDeferredReason,omitempty"`
+	AppVersion                string    `json:"appVersion"`
+	OSName                    string    `json:"osName"`
+	OSVersion                 string    `json:"osVersion"`
+	LastInventoryCollected    string    `json:"lastInventoryCollected"`
+	RealtimeAvailable         bool      `json:"realtimeAvailable"`
+	RealtimeNATSConnected     bool      `json:"realtimeNatsConnected"`
+	RealtimeConnectedAgents   int       `json:"realtimeConnectedAgents"`
+	RealtimeMessage           string    `json:"realtimeMessage"`
+	CheckedAtUTC              time.Time `json:"checkedAtUtc"`
 	// Outbox offline queue backlog counts
 	PendingCommandResults int `json:"pendingCommandResults"`
 	PendingP2PTelemetry   int `json:"pendingP2pTelemetry"`
@@ -33,15 +40,19 @@ func (a *App) GetStatusOverview() StatusOverview {
 	agent := a.GetAgentStatus()
 	cfg := a.GetDebugConfig()
 	out := StatusOverview{
-		Connected:       agent.Connected,
-		ConnectionLabel: "Offline",
-		Hostname:        "Computador local",
-		Server:          strings.TrimSpace(agent.Server),
-		ConnectionType:  "NATS",
-		AppVersion:      strings.TrimSpace(Version),
-		OSName:          runtime.GOOS,
-		OSVersion:       runtime.GOARCH,
-		CheckedAtUTC:    time.Now().UTC(),
+		Connected:           agent.Connected,
+		TransportConnected:  agent.TransportConnected,
+		ConnectionLabel:     "Offline",
+		OnlineReason:        strings.TrimSpace(agent.OnlineReason),
+		Hostname:            "Computador local",
+		Server:              strings.TrimSpace(agent.Server),
+		ConnectionType:      "NATS",
+		LastGlobalPongAtUTC: strings.TrimSpace(agent.LastGlobalPongAtUTC),
+		GlobalPongStale:     agent.GlobalPongStale,
+		AppVersion:          strings.TrimSpace(Version),
+		OSName:              runtime.GOOS,
+		OSVersion:           runtime.GOARCH,
+		CheckedAtUTC:        time.Now().UTC(),
 	}
 
 	if strings.EqualFold(strings.TrimSpace(cfg.Scheme), "nats") {
@@ -68,6 +79,19 @@ func (a *App) GetStatusOverview() StatusOverview {
 
 	if out.Connected {
 		out.ConnectionLabel = "Online"
+	}
+
+	if until := parseRFC3339Time(strings.TrimSpace(agent.NonCriticalBackoffUntilUTC)); !until.IsZero() && until.After(time.Now().UTC()) {
+		out.NonCriticalDeferred = true
+		out.NonCriticalDeferredUntil = until.UTC().Format(time.RFC3339)
+		out.NonCriticalDeferredReason = strings.TrimSpace(agent.NonCriticalBackoffReason)
+	}
+	if !out.NonCriticalDeferred {
+		if until, deferred, reason := a.nonCriticalBackoffStatus(); deferred {
+			out.NonCriticalDeferred = true
+			out.NonCriticalDeferredUntil = until.UTC().Format(time.RFC3339)
+			out.NonCriticalDeferredReason = reason
+		}
 	}
 	if out.AppVersion == "" {
 		out.AppVersion = "dev"
@@ -140,7 +164,8 @@ func applyRealtimeFallbackFromAgentStatus(out *StatusOverview, agent AgentStatus
 	if !isRealtimeUnauthorizedError(err) {
 		return
 	}
-	if !agent.Connected {
+	transportConnected := agent.TransportConnected || agent.Connected
+	if !transportConnected {
 		out.RealtimeMessage = "endpoint /api/v1/agent-auth/me/realtime/status nao autorizado para o token do agent"
 		return
 	}

@@ -44,12 +44,12 @@ func (a *App) GetAgentStatus() AgentStatus {
 		return AgentStatus{}
 	}
 	if status, ok := a.getServiceAgentStatus(); ok {
-		return status
+		return a.resolveAgentConnectivity(status)
 	}
 	if a.debugSvc == nil {
 		return AgentStatus{}
 	}
-	return a.debugSvc.GetAgentStatus()
+	return a.resolveAgentConnectivity(a.debugSvc.GetAgentStatus())
 }
 
 func (a *App) getServiceAgentStatus() (AgentStatus, bool) {
@@ -89,11 +89,20 @@ func agentStatusFromServiceStatusData(data map[string]interface{}) AgentStatus {
 		return AgentStatus{}
 	}
 	status := AgentStatus{
-		Connected: boolFromServiceStatusValue(data["agent_connected"]),
-		AgentID:   strings.TrimSpace(stringFromServiceStatusValue(data["agent_id"])),
-		Server:    strings.TrimSpace(stringFromServiceStatusValue(data["agent_server"])),
-		LastEvent: strings.TrimSpace(stringFromServiceStatusValue(data["agent_last_event"])),
-		Transport: strings.TrimSpace(stringFromServiceStatusValue(data["agent_transport"])),
+		Connected:                  boolFromServiceStatusValue(data["agent_connected"]),
+		TransportConnected:         boolFromServiceStatusValue(data["agent_transport_connected"]),
+		AgentID:                    strings.TrimSpace(stringFromServiceStatusValue(data["agent_id"])),
+		Server:                     strings.TrimSpace(stringFromServiceStatusValue(data["agent_server"])),
+		LastEvent:                  strings.TrimSpace(stringFromServiceStatusValue(data["agent_last_event"])),
+		Transport:                  strings.TrimSpace(stringFromServiceStatusValue(data["agent_transport"])),
+		OnlineReason:               strings.TrimSpace(stringFromServiceStatusValue(data["agent_online_reason"])),
+		LastGlobalPongAtUTC:        strings.TrimSpace(stringFromServiceStatusValue(data["agent_last_global_pong_at"])),
+		GlobalPongStale:            boolFromServiceStatusValue(data["agent_global_pong_stale"]),
+		NonCriticalBackoffUntilUTC: strings.TrimSpace(stringFromServiceStatusValue(data["agent_non_critical_backoff_until"])),
+		NonCriticalBackoffReason:   strings.TrimSpace(stringFromServiceStatusValue(data["agent_non_critical_backoff_reason"])),
+	}
+	if !status.TransportConnected {
+		status.TransportConnected = status.Connected
 	}
 	if status.Server == "" {
 		status.Server = strings.TrimSpace(stringFromServiceStatusValue(data["server_url"]))
