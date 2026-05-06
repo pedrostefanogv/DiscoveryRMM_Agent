@@ -114,7 +114,7 @@ var APP_I18N_DICTIONARY = {
     'field.realtime': 'Realtime',
     'field.connectedAgents': 'Agentes conectados',
     'field.lastInventory': 'Ultimo inventario',
-    'field.serverPong': 'Ultimo pong do servidor',
+    'field.serverPong': 'Ultimo ping do servidor',
     'field.nonCriticalTraffic': 'Trafego nao critico',
     'field.nonCriticalUntil': 'Adiado ate',
     'field.lastCheck': 'Ultima verificacao',

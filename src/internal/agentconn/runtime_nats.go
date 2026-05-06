@@ -16,7 +16,11 @@ import (
 	"discovery/app/netutil"
 )
 
-const natsFanoutAckWait = 30 * time.Minute
+const (
+	natsFanoutAckWait        = 30 * time.Minute
+	globalPongWatchdogEvery  = 30 * time.Second
+	globalPongReconnectAfter = 6 * time.Minute
+)
 
 type natsCommandRouteScope string
 
@@ -116,11 +120,12 @@ func (r *Runtime) runNATSSession(ctx context.Context, cfg Config, server, transp
 	if _, err = nc.Subscribe(subjects.P2PDiscovery, r.natsP2PDiscoveryHandler()); err != nil {
 		return fmt.Errorf("falha ao inscrever no subject de discovery P2P: %w", err)
 	}
-	if _, err = nc.Subscribe(subjects.GlobalPong, r.natsGlobalPongHandler()); err != nil {
+	globalPongReceived := make(chan time.Time, 1)
+	if _, err = nc.Subscribe(subjects.GlobalPong, r.natsGlobalPongHandler(globalPongReceived)); err != nil {
 		return fmt.Errorf("falha ao inscrever no subject de global pong: %w", err)
 	}
 
-	return r.runNATSEventLoop(ctx, nc, cfg, subjects, ipAddr)
+	return r.runNATSEventLoop(ctx, nc, cfg, subjects, ipAddr, globalPongReceived)
 }
 
 func natsWebSocketProxyPath(natsURL string) string {
@@ -439,14 +444,21 @@ func (r *Runtime) natsSyncPingHandler() func(msg *nats.Msg) {
 	}
 }
 
-func (r *Runtime) natsGlobalPongHandler() func(msg *nats.Msg) {
+func (r *Runtime) natsGlobalPongHandler(globalPongReceived chan<- time.Time) func(msg *nats.Msg) {
 	return func(msg *nats.Msg) {
 		pong, err := parseGlobalPongMessage(msg.Data)
 		if err != nil {
 			r.logf("mensagem de global pong NATS invalida: %v", err)
 			return
 		}
-		pong.ReceivedAt = time.Now().UTC()
+		receivedAt := time.Now().UTC()
+		pong.ReceivedAt = receivedAt
+		if globalPongReceived != nil {
+			select {
+			case globalPongReceived <- receivedAt:
+			default:
+			}
+		}
 		r.emitGlobalPong(pong)
 	}
 }
@@ -467,7 +479,7 @@ func (r *Runtime) natsP2PDiscoveryHandler() func(msg *nats.Msg) {
 
 // ─── NATS Event Loop ───────────────────────────────────────────────
 
-func (r *Runtime) runNATSEventLoop(ctx context.Context, nc *nats.Conn, cfg Config, subjects natsSubjects, ipAddr string) error {
+func (r *Runtime) runNATSEventLoop(ctx context.Context, nc *nats.Conn, cfg Config, subjects natsSubjects, ipAddr string, globalPongReceived <-chan time.Time) error {
 	heartbeatInterval := heartbeatEvery
 	if cfg.HeartbeatInterval > 0 {
 		heartbeatInterval = time.Duration(cfg.HeartbeatInterval) * time.Second
@@ -476,6 +488,11 @@ func (r *Runtime) runNATSEventLoop(ctx context.Context, nc *nats.Conn, cfg Confi
 	defer heartbeatTicker.Stop()
 	drainTicker := time.NewTicker(commandResultDrainEvery)
 	defer drainTicker.Stop()
+	globalPongWatchdogTicker := time.NewTicker(globalPongWatchdogEvery)
+	defer globalPongWatchdogTicker.Stop()
+
+	connectedAt := time.Now().UTC()
+	var lastGlobalPongAt time.Time
 
 	for {
 		select {
@@ -483,6 +500,11 @@ func (r *Runtime) runNATSEventLoop(ctx context.Context, nc *nats.Conn, cfg Confi
 			return nil
 		case <-r.reloadCh:
 			return fmt.Errorf("reload solicitado")
+		case receivedAt := <-globalPongReceived:
+			if receivedAt.IsZero() {
+				receivedAt = time.Now().UTC()
+			}
+			lastGlobalPongAt = receivedAt.UTC()
 		case <-heartbeatTicker.C:
 			r.sendHeartbeatNATS(nc, subjects.Heartbeat, cfg, ipAddr)
 		case forceDone := <-r.forceHeartbeatCh:
@@ -500,8 +522,39 @@ func (r *Runtime) runNATSEventLoop(ctx context.Context, nc *nats.Conn, cfg Confi
 				}
 				return publishJSON(nc, subjects.Result, res)
 			})
+		case <-globalPongWatchdogTicker.C:
+			status := nc.Status()
+			if status == nats.CONNECTING || status == nats.RECONNECTING {
+				continue
+			}
+			if status == nats.CLOSED {
+				return fmt.Errorf("conexao NATS encerrada")
+			}
+
+			now := time.Now().UTC()
+			if reconnect, age := shouldReconnectForMissingGlobalPong(now, connectedAt, lastGlobalPongAt); reconnect {
+				roundedAge := age.Round(time.Second)
+				if lastGlobalPongAt.IsZero() {
+					r.logf("[heartbeat][nats] watchdog de global pong: sem tenant.global.pong desde conexao (%s) — forçando reconexao", roundedAge)
+				} else {
+					r.logf("[heartbeat][nats] watchdog de global pong: sem tenant.global.pong ha %s — forçando reconexao", roundedAge)
+				}
+				return fmt.Errorf("watchdog global pong: sem sinal recente (%s)", roundedAge)
+			}
 		}
 	}
+}
+
+func shouldReconnectForMissingGlobalPong(now, connectedAt, lastGlobalPongAt time.Time) (bool, time.Duration) {
+	reference := connectedAt
+	if !lastGlobalPongAt.IsZero() {
+		reference = lastGlobalPongAt
+	}
+	if reference.IsZero() || now.Before(reference) {
+		return false, 0
+	}
+	age := now.Sub(reference)
+	return age > globalPongReconnectAfter, age
 }
 
 // ─── NATS Subjects ─────────────────────────────────────────────────
