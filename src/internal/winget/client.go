@@ -58,7 +58,6 @@ func (c *Client) Upgrade(ctx context.Context, id string) (string, error) {
 		"upgrade",
 		"--id", id,
 		"--silent",
-		"--scope", "machine",
 		"--accept-source-agreements",
 		"--accept-package-agreements",
 	)

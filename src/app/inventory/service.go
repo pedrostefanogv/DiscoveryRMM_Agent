@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"discovery/app/appstore"
@@ -14,7 +15,10 @@ import (
 	"discovery/internal/processutil"
 )
 
-const inventoryProvisioningRequiredMessage = "inventario indisponivel enquanto o agente nao estiver provisionado"
+const (
+	inventoryProvisioningRequiredMessage    = "inventario indisponivel enquanto o agente nao estiver provisionado"
+	postInstallInventoryRefreshDelayDefault = 2 * time.Minute
+)
 
 // AppsService defines the package manager surface used by inventory operations.
 type AppsService interface {
@@ -96,21 +100,24 @@ type Options struct {
 
 // Service handles inventory, installs and sync operations.
 type Service struct {
-	apps                     AppsService
-	inventory                InventoryService
-	cache                    InventoryCache
-	resolveAllowed           func(context.Context, string) (appstore.Item, error)
-	getCatalog               func(context.Context) (models.Catalog, error)
-	beginActivity            ActivityFunc
-	dispatchNotification     InventoryNotificationDispatcher
-	logf                     func(string)
-	ctx                      func() context.Context
-	db                       DB
-	debugConfig              func() debug.Config
-	version                  string
-	resolveMeshCentralNodeID func() string
-	onHardwareReportSuccess  func(string)
-	shouldDeferNonCritical   func() (time.Duration, bool, string)
+	apps                             AppsService
+	inventory                        InventoryService
+	cache                            InventoryCache
+	resolveAllowed                   func(context.Context, string) (appstore.Item, error)
+	getCatalog                       func(context.Context) (models.Catalog, error)
+	beginActivity                    ActivityFunc
+	dispatchNotification             InventoryNotificationDispatcher
+	logf                             func(string)
+	ctx                              func() context.Context
+	db                               DB
+	debugConfig                      func() debug.Config
+	version                          string
+	resolveMeshCentralNodeID         func() string
+	onHardwareReportSuccess          func(string)
+	shouldDeferNonCritical           func() (time.Duration, bool, string)
+	postInstallInventoryRefreshDelay time.Duration
+	postInstallInventoryRefreshMu    sync.Mutex
+	postInstallInventoryRefreshTimer *time.Timer
 }
 
 // NewService builds an inventory service.
@@ -120,21 +127,22 @@ func NewService(opts Options) *Service {
 		logf = func(string) {}
 	}
 	return &Service{
-		apps:                     opts.Apps,
-		inventory:                opts.Inventory,
-		cache:                    opts.Cache,
-		resolveAllowed:           opts.ResolveAllowed,
-		getCatalog:               opts.GetCatalog,
-		beginActivity:            opts.BeginActivity,
-		dispatchNotification:     opts.DispatchNotification,
-		logf:                     logf,
-		ctx:                      opts.Ctx,
-		db:                       opts.DB,
-		debugConfig:              opts.DebugConfig,
-		version:                  opts.Version,
-		resolveMeshCentralNodeID: opts.ResolveMeshCentralNodeID,
-		onHardwareReportSuccess:  opts.OnHardwareReportSuccess,
-		shouldDeferNonCritical:   opts.ShouldDeferNonCritical,
+		apps:                             opts.Apps,
+		inventory:                        opts.Inventory,
+		cache:                            opts.Cache,
+		resolveAllowed:                   opts.ResolveAllowed,
+		getCatalog:                       opts.GetCatalog,
+		beginActivity:                    opts.BeginActivity,
+		dispatchNotification:             opts.DispatchNotification,
+		logf:                             logf,
+		ctx:                              opts.Ctx,
+		db:                               opts.DB,
+		debugConfig:                      opts.DebugConfig,
+		version:                          opts.Version,
+		resolveMeshCentralNodeID:         opts.ResolveMeshCentralNodeID,
+		onHardwareReportSuccess:          opts.OnHardwareReportSuccess,
+		shouldDeferNonCritical:           opts.ShouldDeferNonCritical,
+		postInstallInventoryRefreshDelay: postInstallInventoryRefreshDelayDefault,
 	}
 }
 
@@ -197,6 +205,7 @@ func (s *Service) Install(id string) (string, error) {
 	if hasRebootSignal(out) {
 		s.emitInstallNotification(correlationID, packageID, "reboot_required", "reinicio", "completed", "Reinicio necessario", "Reinicie o computador para concluir a instalacao.", nil)
 	}
+	s.scheduleInventoryRefreshAfterPackageChange("install", packageID)
 
 	return out, nil
 }
@@ -236,6 +245,9 @@ func (s *Service) Upgrade(id string) (string, error) {
 		err = fmt.Errorf("installationType %q nao suportado", allowed.InstallationType)
 	}
 	s.logf(out)
+	if err == nil {
+		s.scheduleInventoryRefreshAfterPackageChange("upgrade", id)
+	}
 	return out, err
 }
 
@@ -248,6 +260,9 @@ func (s *Service) UpgradeAll() (string, error) {
 	s.logf("[upgrade --all] " + time.Now().Format("15:04:05"))
 	out, err := s.apps.UpgradeAll(s.ctx())
 	s.logf(out)
+	if err == nil {
+		s.scheduleInventoryRefreshAfterPackageChange("upgrade-all", "")
+	}
 	return out, err
 }
 
@@ -261,6 +276,58 @@ func (s *Service) ListInstalled() (string, error) {
 	s.logf("[list] " + time.Now().Format("15:04:05"))
 	s.logf(out)
 	return out, err
+}
+
+func (s *Service) scheduleInventoryRefreshAfterPackageChange(action, packageID string) {
+	delay := s.postInstallInventoryRefreshDelay
+	if delay <= 0 {
+		return
+	}
+
+	s.postInstallInventoryRefreshMu.Lock()
+	if s.postInstallInventoryRefreshTimer != nil {
+		s.postInstallInventoryRefreshTimer.Stop()
+	}
+	s.postInstallInventoryRefreshTimer = time.AfterFunc(delay, s.runDelayedInventoryRefreshAfterPackageChange)
+	s.postInstallInventoryRefreshMu.Unlock()
+
+	action = strings.TrimSpace(strings.ToLower(action))
+	packageID = strings.TrimSpace(packageID)
+	if packageID == "" {
+		s.logf(fmt.Sprintf("[inventory-refresh] refresh agendado em %s apos %s", delay.Round(time.Second), action))
+		return
+	}
+	s.logf(fmt.Sprintf("[inventory-refresh] refresh agendado em %s apos %s %s", delay.Round(time.Second), action, packageID))
+}
+
+func (s *Service) runDelayedInventoryRefreshAfterPackageChange() {
+	s.postInstallInventoryRefreshMu.Lock()
+	s.postInstallInventoryRefreshTimer = nil
+	s.postInstallInventoryRefreshMu.Unlock()
+
+	if err := s.requireProvisionedInventory(); err != nil {
+		s.logf("[inventory-refresh] ignorado: " + err.Error())
+		return
+	}
+	if s.inventory == nil {
+		s.logf("[inventory-refresh] ignorado: provider de inventario indisponivel")
+		return
+	}
+
+	ctx := context.Background()
+	if s.ctx != nil {
+		ctx = s.ctx()
+	}
+
+	report, err := s.collectInventoryWithHeartbeat(ctx)
+	if err != nil {
+		s.logf("[inventory-refresh] falha ao atualizar inventario: " + err.Error())
+		return
+	}
+	if s.cache != nil {
+		s.cache.Set(report)
+	}
+	s.logf("[inventory-refresh] inventario atualizado apos alteracoes de software")
 }
 
 func (s *Service) inventoryProvisioned() bool {

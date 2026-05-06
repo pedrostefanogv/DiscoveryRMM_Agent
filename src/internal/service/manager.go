@@ -212,7 +212,7 @@ func (c *SharedConfig) UnmarshalJSON(data []byte) error {
 
 	// Default seguro para evitar ticker inválido.
 	if result.InventorySync <= 0 {
-		result.InventorySync = 15
+		result.InventorySync = 30
 	}
 
 	*c = result
@@ -1453,7 +1453,7 @@ func (sm *ServiceManager) getInventorySyncMinutes() int {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 	if sm.config == nil || sm.config.InventorySync <= 0 {
-		return 15
+		return 30
 	}
 	return sm.config.InventorySync
 }
