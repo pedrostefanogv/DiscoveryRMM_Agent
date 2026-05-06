@@ -614,10 +614,17 @@ export namespace app {
 	}
 	export class StatusOverview {
 	    connected: boolean;
+	    transportConnected: boolean;
 	    connectionLabel: string;
+	    onlineReason?: string;
 	    hostname: string;
 	    server: string;
 	    connectionType: string;
+	    lastGlobalPongAtUtc?: string;
+	    globalPongStale: boolean;
+	    nonCriticalDeferred: boolean;
+	    nonCriticalDeferredUntilUtc?: string;
+	    nonCriticalDeferredReason?: string;
 	    appVersion: string;
 	    osName: string;
 	    osVersion: string;
@@ -638,10 +645,17 @@ export namespace app {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.connected = source["connected"];
+	        this.transportConnected = source["transportConnected"];
 	        this.connectionLabel = source["connectionLabel"];
+	        this.onlineReason = source["onlineReason"];
 	        this.hostname = source["hostname"];
 	        this.server = source["server"];
 	        this.connectionType = source["connectionType"];
+	        this.lastGlobalPongAtUtc = source["lastGlobalPongAtUtc"];
+	        this.globalPongStale = source["globalPongStale"];
+	        this.nonCriticalDeferred = source["nonCriticalDeferred"];
+	        this.nonCriticalDeferredUntilUtc = source["nonCriticalDeferredUntilUtc"];
+	        this.nonCriticalDeferredReason = source["nonCriticalDeferredReason"];
 	        this.appVersion = source["appVersion"];
 	        this.osName = source["osName"];
 	        this.osVersion = source["osVersion"];
@@ -914,10 +928,16 @@ export namespace debug {
 	
 	export class AgentStatus {
 	    connected: boolean;
+	    transportConnected?: boolean;
 	    agentId: string;
 	    server: string;
 	    lastEvent: string;
 	    transport?: string;
+	    onlineReason?: string;
+	    lastGlobalPongAtUtc?: string;
+	    globalPongStale?: boolean;
+	    nonCriticalBackoffUntilUtc?: string;
+	    nonCriticalBackoffReason?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new AgentStatus(source);
@@ -926,10 +946,16 @@ export namespace debug {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.connected = source["connected"];
+	        this.transportConnected = source["transportConnected"];
 	        this.agentId = source["agentId"];
 	        this.server = source["server"];
 	        this.lastEvent = source["lastEvent"];
 	        this.transport = source["transport"];
+	        this.onlineReason = source["onlineReason"];
+	        this.lastGlobalPongAtUtc = source["lastGlobalPongAtUtc"];
+	        this.globalPongStale = source["globalPongStale"];
+	        this.nonCriticalBackoffUntilUtc = source["nonCriticalBackoffUntilUtc"];
+	        this.nonCriticalBackoffReason = source["nonCriticalBackoffReason"];
 	    }
 	}
 	export class Config {
@@ -1008,33 +1034,6 @@ export namespace debug {
 		    }
 		    return a;
 		}
-	}
-
-}
-
-export namespace dto {
-	
-	export class HealthCheckItem {
-	    component: string;
-	    status: string;
-	    message: string;
-	    lastBeat: string;
-	    checkedAt: string;
-	    recoverable: boolean;
-	
-	    static createFrom(source: any = {}) {
-	        return new HealthCheckItem(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.component = source["component"];
-	        this.status = source["status"];
-	        this.message = source["message"];
-	        this.lastBeat = source["lastBeat"];
-	        this.checkedAt = source["checkedAt"];
-	        this.recoverable = source["recoverable"];
-	    }
 	}
 
 }

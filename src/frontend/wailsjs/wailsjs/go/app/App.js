@@ -26,6 +26,10 @@ export function CleanupP2PTempNow() {
   return window['go']['app']['App']['CleanupP2PTempNow']();
 }
 
+export function ClearAllP2PArtifacts() {
+  return window['go']['app']['App']['ClearAllP2PArtifacts']();
+}
+
 export function ClearChatHistory() {
   return window['go']['app']['App']['ClearChatHistory']();
 }
@@ -334,10 +338,6 @@ export function GetTicketWorkflowStates() {
   return window['go']['app']['App']['GetTicketWorkflowStates']();
 }
 
-export function GetWatchdogHealth() {
-  return window['go']['app']['App']['GetWatchdogHealth']();
-}
-
 export function Install(arg1) {
   return window['go']['app']['App']['Install'](arg1);
 }
@@ -514,6 +514,10 @@ export function SendChatMessage(arg1) {
   return window['go']['app']['App']['SendChatMessage'](arg1);
 }
 
+export function SendTestHeartbeat() {
+  return window['go']['app']['App']['SendTestHeartbeat']();
+}
+
 export function SetChatConfig(arg1) {
   return window['go']['app']['App']['SetChatConfig'](arg1);
 }
@@ -552,6 +556,10 @@ export function StartP2PTelemetryLoop(arg1) {
 
 export function StopChatStream() {
   return window['go']['app']['App']['StopChatStream']();
+}
+
+export function SyncP2PBootstrapNow() {
+  return window['go']['app']['App']['SyncP2PBootstrapNow']();
 }
 
 export function TestChatConfig(arg1) {

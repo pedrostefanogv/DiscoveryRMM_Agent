@@ -40,6 +40,7 @@ function onStoreCatalogUpdated(data) {
 // ---------------------------------------------------------------------------
 function renderCards() {
   if (!state.filtered.length) {
+    cardsEl.classList.remove('cards-compact');
     cardsEl.innerHTML = '<div class="card"><h3>' + escapeHtml(translate('store.noPackagesFound')) + '</h3><p class="meta">' + escapeHtml(translate('store.adjustSearchFilter')) + '</p></div>';
     updateCatalogPagination();
     return;
@@ -51,6 +52,9 @@ function renderCards() {
   var start = pg.start;
   var end = start + catalogPageSize;
   var pageItems = state.filtered.slice(start, end);
+
+  // Keep card widths balanced when only a few results are shown.
+  cardsEl.classList.toggle('cards-compact', pageItems.length > 0 && pageItems.length <= 3);
 
   cardsEl.innerHTML = pageItems.map(function (pkg) {
     var description = pkg.description || translate('store.noDescription');

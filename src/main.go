@@ -93,6 +93,8 @@ func main() {
 		Title:           "Discovery",
 		Width:           appkg.WindowWidth,
 		Height:          appkg.WindowHeight,
+		MinWidth:        appkg.WindowMinWidth,
+		MinHeight:       appkg.WindowMinHeight,
 		Frameless:       startupFrameless,
 		CSSDragProperty: "--wails-draggable",
 		CSSDragValue:    "drag",

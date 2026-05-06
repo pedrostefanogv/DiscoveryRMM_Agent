@@ -429,9 +429,13 @@
 
 .cards {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 280px));
-  justify-content: start;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 12px;
+}
+
+.cards.cards-compact {
+  grid-template-columns: repeat(auto-fit, minmax(280px, 360px));
+  justify-content: center;
 }
 
 .store-card {
@@ -691,6 +695,11 @@ input[type="search"] {
 
   .cards {
     grid-template-columns: 1fr;
+  }
+
+  .cards.cards-compact {
+    grid-template-columns: 1fr;
+    justify-content: stretch;
   }
 
   .store-card {

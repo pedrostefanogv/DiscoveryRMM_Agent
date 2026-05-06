@@ -56,8 +56,10 @@ const (
 	// Temporarily disable efficiency mode until we revisit this behavior.
 	efficiencyModeEnabled = false
 
-	WindowWidth  = 1280
-	WindowHeight = 860
+	WindowWidth     = 1280
+	WindowHeight    = 860
+	WindowMinWidth  = 980
+	WindowMinHeight = 700
 )
 
 // GetDataDir retorna o diretório de dados da aplicação (exportado para uso em outros pacotes).

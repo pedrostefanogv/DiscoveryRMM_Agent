@@ -10,7 +10,6 @@ import {debug} from '../models';
 import {automation} from '../models';
 import {models} from '../models';
 import {mcp} from '../models';
-import {dto} from '../models';
 
 export function AddAgentTicketComment(arg1:string,arg2:string,arg3:boolean):Promise<json.RawMessage>;
 
@@ -23,6 +22,8 @@ export function AddTicketCommentWithOptions(arg1:string,arg2:string,arg3:boolean
 export function CheckPSADTModuleStatus():Promise<app.PSADTModuleStatus>;
 
 export function CleanupP2PTempNow():Promise<string>;
+
+export function ClearAllP2PArtifacts():Promise<string>;
 
 export function ClearChatHistory():Promise<void>;
 
@@ -178,8 +179,6 @@ export function GetTicketComments(arg1:string):Promise<Array<supportmeta.TicketC
 
 export function GetTicketWorkflowStates():Promise<Array<supportmeta.APIWorkflowState>>;
 
-export function GetWatchdogHealth():Promise<Array<dto.HealthCheckItem>>;
-
 export function Install(arg1:string):Promise<string>;
 
 export function InstallOsquery():Promise<string>;
@@ -268,6 +267,8 @@ export function SelectAndPublishP2PArtifact():Promise<p2pmeta.ArtifactView>;
 
 export function SendChatMessage(arg1:string):Promise<string>;
 
+export function SendTestHeartbeat():Promise<string>;
+
 export function SetChatConfig(arg1:app.ChatConfig):Promise<void>;
 
 export function SetContext(arg1:context.Context):Promise<void>;
@@ -287,6 +288,8 @@ export function StartChatStream(arg1:string):Promise<void>;
 export function StartP2PTelemetryLoop(arg1:context.Context):Promise<void>;
 
 export function StopChatStream():Promise<boolean>;
+
+export function SyncP2PBootstrapNow():Promise<string>;
 
 export function TestChatConfig(arg1:app.ChatConfig):Promise<string>;
 
