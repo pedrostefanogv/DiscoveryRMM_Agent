@@ -633,7 +633,7 @@ func autoDeriveNATSEndpoints(cfg *Config) (derivedNATS bool, derivedWSS bool) {
 		}
 	}
 
-	if cfg.NatsServer == "" && !cfg.NatsUseWssExternal && isLocalTarget(host) {
+	if cfg.NatsServer == "" {
 		if nativeURL := deriveNativeNATSServerFromHost(host); nativeURL != "" {
 			cfg.NatsServer = nativeURL
 			derivedNATS = true
