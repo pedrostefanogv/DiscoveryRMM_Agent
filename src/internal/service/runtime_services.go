@@ -14,6 +14,7 @@ import (
 	appinventory "discovery/app/inventory"
 	"discovery/internal/agentconn"
 	"discovery/internal/automation"
+	"discovery/internal/chocolatey"
 	"discovery/internal/database"
 	"discovery/internal/inventory"
 	"discovery/internal/models"
@@ -560,7 +561,7 @@ type appsRuntimeService struct {
 }
 
 func NewAppsRuntimeService(timeout time.Duration) AppsService {
-	return &appsRuntimeService{svc: services.NewAppsService(winget.NewClient(timeout))}
+	return &appsRuntimeService{svc: services.NewAppsService(winget.NewClient(timeout), chocolatey.NewClient(timeout))}
 }
 
 func (s *appsRuntimeService) Install(ctx context.Context, id string) (string, error) {

@@ -18,6 +18,7 @@ import (
 const (
 	inventoryProvisioningRequiredMessage    = "inventario indisponivel enquanto o agente nao estiver provisionado"
 	postInstallInventoryRefreshDelayDefault = 2 * time.Minute
+	packageManagerTargetSeparator           = "::"
 )
 
 // AppsService defines the package manager surface used by inventory operations.
@@ -85,6 +86,7 @@ type Options struct {
 	Inventory                InventoryService
 	Cache                    InventoryCache
 	ResolveAllowed           func(context.Context, string) (appstore.Item, error)
+	ResolveAllowedByType     func(context.Context, string, string) (appstore.Item, error)
 	GetCatalog               func(context.Context) (models.Catalog, error)
 	BeginActivity            ActivityFunc
 	DispatchNotification     InventoryNotificationDispatcher
@@ -104,6 +106,7 @@ type Service struct {
 	inventory                        InventoryService
 	cache                            InventoryCache
 	resolveAllowed                   func(context.Context, string) (appstore.Item, error)
+	resolveAllowedByType             func(context.Context, string, string) (appstore.Item, error)
 	getCatalog                       func(context.Context) (models.Catalog, error)
 	beginActivity                    ActivityFunc
 	dispatchNotification             InventoryNotificationDispatcher
@@ -131,6 +134,7 @@ func NewService(opts Options) *Service {
 		inventory:                        opts.Inventory,
 		cache:                            opts.Cache,
 		resolveAllowed:                   opts.ResolveAllowed,
+		resolveAllowedByType:             opts.ResolveAllowedByType,
 		getCatalog:                       opts.GetCatalog,
 		beginActivity:                    opts.BeginActivity,
 		dispatchNotification:             opts.DispatchNotification,
@@ -228,8 +232,18 @@ func (s *Service) Upgrade(id string) (string, error) {
 	if done != nil {
 		defer done()
 	}
-	s.logf("[upgrade " + id + "] " + time.Now().Format("15:04:05"))
-	allowed, err := s.resolveAllowed(s.ctx(), id)
+	sourceHint, packageID := splitPackageManagerTarget(id)
+	if packageID == "" {
+		return "", fmt.Errorf("id do pacote e obrigatorio")
+	}
+
+	logTarget := packageID
+	if sourceHint != "" {
+		logTarget = sourceHint + packageManagerTargetSeparator + packageID
+	}
+	s.logf("[upgrade " + logTarget + "] " + time.Now().Format("15:04:05"))
+
+	allowed, err := s.resolveAllowedPackage(s.ctx(), sourceHint, packageID)
 	if err != nil {
 		s.logf("[upgrade blocked] " + err.Error())
 		return "", err
@@ -238,15 +252,15 @@ func (s *Service) Upgrade(id string) (string, error) {
 	var out string
 	switch normalizeAppStoreInstallationType(allowed.InstallationType) {
 	case string(appstore.InstallationWinget):
-		out, err = s.apps.Upgrade(s.ctx(), id)
+		out, err = s.apps.Upgrade(s.ctx(), packageID)
 	case string(appstore.InstallationChocolatey):
-		out, err = s.runChocolatey(s.ctx(), "upgrade", id)
+		out, err = s.runChocolatey(s.ctx(), "upgrade", packageID)
 	default:
 		err = fmt.Errorf("installationType %q nao suportado", allowed.InstallationType)
 	}
 	s.logf(out)
 	if err == nil {
-		s.scheduleInventoryRefreshAfterPackageChange("upgrade", id)
+		s.scheduleInventoryRefreshAfterPackageChange("upgrade", packageID)
 	}
 	return out, err
 }
@@ -276,6 +290,16 @@ func (s *Service) ListInstalled() (string, error) {
 	s.logf("[list] " + time.Now().Format("15:04:05"))
 	s.logf(out)
 	return out, err
+}
+
+func (s *Service) resolveAllowedPackage(ctx context.Context, sourceHint, packageID string) (appstore.Item, error) {
+	if sourceHint != "" && s.resolveAllowedByType != nil {
+		return s.resolveAllowedByType(ctx, sourceHint, packageID)
+	}
+	if s.resolveAllowed == nil {
+		return appstore.Item{}, fmt.Errorf("resolucao de pacote indisponivel")
+	}
+	return s.resolveAllowed(ctx, packageID)
 }
 
 func (s *Service) scheduleInventoryRefreshAfterPackageChange(action, packageID string) {
@@ -566,6 +590,32 @@ func normalizeAppStoreInstallationType(value string) string {
 		return string(appstore.InstallationChocolatey)
 	default:
 		return strings.TrimSpace(value)
+	}
+}
+
+func splitPackageManagerTarget(raw string) (string, string) {
+	target := strings.TrimSpace(raw)
+	parts := strings.SplitN(target, packageManagerTargetSeparator, 2)
+	if len(parts) != 2 {
+		return "", target
+	}
+	sourceHint := normalizePackageManagerSourceHint(parts[0])
+	packageID := strings.TrimSpace(parts[1])
+	if sourceHint == "" || packageID == "" {
+		return "", target
+	}
+	return sourceHint, packageID
+}
+
+func normalizePackageManagerSourceHint(raw string) string {
+	source := strings.ToLower(strings.TrimSpace(raw))
+	switch source {
+	case "winget":
+		return string(appstore.InstallationWinget)
+	case "chocolatey", "choco":
+		return string(appstore.InstallationChocolatey)
+	default:
+		return ""
 	}
 }
 

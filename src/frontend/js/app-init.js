@@ -179,7 +179,7 @@ function initAppBindings() {
     updatesTableBodyEl.addEventListener('click', function (e) {
       var btn = e.target;
       if (btn instanceof HTMLButtonElement && btn.dataset.action === 'upgrade' && btn.dataset.id) {
-        runAction('upgrade', btn.dataset.id);
+        runAction('upgrade', btn.dataset.id, btn.dataset.packageLabel || btn.dataset.id);
       }
     });
   }

@@ -15,6 +15,7 @@ import (
 	"github.com/energye/systray"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
+	"discovery/app/appstore"
 	"discovery/app/debug"
 	appinventory "discovery/app/inventory"
 	appsupport "discovery/app/support"
@@ -23,6 +24,7 @@ import (
 	"discovery/internal/ai"
 	"discovery/internal/automation"
 	"discovery/internal/buildinfo"
+	"discovery/internal/chocolatey"
 	"discovery/internal/data"
 	"discovery/internal/database"
 	"discovery/internal/dto"
@@ -151,6 +153,7 @@ type App struct {
 func NewApp(opts AppStartupOptions) *App {
 	catalogClient := data.NewHTTPClient(catalogURL, catalogTimeout)
 	wingetClient := winget.NewClient(wingetTimeout)
+	chocolateyClient := chocolatey.NewClient(wingetTimeout)
 	inventoryProvider := inventory.NewProvider(inventoryTimeout)
 	printerManager := printer.NewManager(printerTimeout)
 
@@ -169,7 +172,7 @@ func NewApp(opts AppStartupOptions) *App {
 		updateTrigger:       make(chan struct{}, 1),
 		catalogSvc:          services.NewCatalogService(catalogClient),
 		catalogClient:       catalogClient,
-		appsSvc:             services.NewAppsService(wingetClient),
+		appsSvc:             services.NewAppsService(wingetClient, chocolateyClient),
 		invSvc:              services.NewInventoryService(inventoryProvider),
 		printerSvc:          services.NewPrinterService(printerManager),
 		mcpRegistry:         reg,
@@ -304,8 +307,11 @@ func NewApp(opts AppStartupOptions) *App {
 		Inventory:      a.invSvc,
 		Cache:          &a.invCache,
 		ResolveAllowed: a.resolveAllowedPackage,
-		GetCatalog:     a.getCatalogFromAppStore,
-		BeginActivity:  a.beginActivity,
+		ResolveAllowedByType: func(ctx context.Context, installationType, packageID string) (appstore.Item, error) {
+			return a.findAllowedPackage(ctx, installationType, packageID)
+		},
+		GetCatalog:    a.getCatalogFromAppStore,
+		BeginActivity: a.beginActivity,
 		DispatchNotification: func(req appinventory.InventoryNotification) appinventory.InventoryNotificationResponse {
 			resp := a.DispatchNotification(NotificationDispatchRequest{
 				NotificationID: req.NotificationID,

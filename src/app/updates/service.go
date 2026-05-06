@@ -11,6 +11,7 @@ import (
 // AppsService defines the package manager surface used by updates.
 type AppsService interface {
 	ListUpgradable(ctx context.Context) (string, error)
+	ListUpgradableChocolatey(ctx context.Context) (string, error)
 	ListInstalled(ctx context.Context) (string, error)
 }
 
@@ -47,13 +48,17 @@ func NewService(opts Options) *Service {
 	if logf == nil {
 		logf = func(string) {}
 	}
+	beginActivity := opts.BeginActivity
+	if beginActivity == nil {
+		beginActivity = func(string) func() { return nil }
+	}
 	now := opts.Now
 	if now == nil {
 		now = time.Now
 	}
 	return &Service{
 		apps:          opts.Apps,
-		beginActivity: opts.BeginActivity,
+		beginActivity: beginActivity,
 		logf:          logf,
 		now:           now,
 		ctx:           opts.Ctx,
@@ -77,6 +82,19 @@ func (s *Service) GetPendingUpdates() ([]models.UpgradeItem, error) {
 		return nil, err
 	}
 	items := parseUpgradeOutput(raw)
+
+	rawChocolatey, chocolateyErr := s.apps.ListUpgradableChocolatey(ctx)
+	s.logf("[choco outdated] " + s.now().Format("15:04:05"))
+	if strings.TrimSpace(rawChocolatey) != "" {
+		s.logf(rawChocolatey)
+	}
+	if chocolateyErr != nil {
+		s.logf("[choco outdated] erro: " + chocolateyErr.Error())
+	} else {
+		items = append(items, parseChocolateyOutdatedOutput(rawChocolatey)...)
+	}
+
+	items = dedupeUpgradeItems(items)
 	return items, nil
 }
 
@@ -229,6 +247,79 @@ func parseUpgradeOutput(raw string) []models.UpgradeItem {
 		}
 	}
 	return items
+}
+
+func parseChocolateyOutdatedOutput(raw string) []models.UpgradeItem {
+	lines := strings.Split(raw, "\n")
+	items := make([]models.UpgradeItem, 0, len(lines))
+
+	for _, line := range lines {
+		line = strings.TrimSpace(strings.TrimRight(line, "\r"))
+		if line == "" || !strings.Contains(line, "|") {
+			continue
+		}
+		parts := strings.Split(line, "|")
+		if len(parts) < 3 {
+			continue
+		}
+
+		id := strings.TrimSpace(parts[0])
+		currentVersion := strings.TrimSpace(parts[1])
+		availableVersion := strings.TrimSpace(parts[2])
+		if id == "" || availableVersion == "" {
+			continue
+		}
+
+		item := models.UpgradeItem{
+			Name:             id,
+			ID:               id,
+			CurrentVersion:   currentVersion,
+			AvailableVersion: availableVersion,
+			Source:           "chocolatey",
+		}
+		items = append(items, item)
+	}
+
+	return items
+}
+
+func dedupeUpgradeItems(items []models.UpgradeItem) []models.UpgradeItem {
+	if len(items) == 0 {
+		return items
+	}
+
+	seen := make(map[string]struct{}, len(items))
+	filtered := make([]models.UpgradeItem, 0, len(items))
+	for _, item := range items {
+		source := normalizeUpgradeSource(item.Source)
+		if source == "" {
+			source = "winget"
+		}
+		id := strings.TrimSpace(item.ID)
+		if id == "" {
+			continue
+		}
+		key := strings.ToLower(source + "|" + id)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		item.Source = source
+		filtered = append(filtered, item)
+	}
+	return filtered
+}
+
+func normalizeUpgradeSource(raw string) string {
+	source := strings.ToLower(strings.TrimSpace(raw))
+	switch source {
+	case "choco", "chocolatey":
+		return "chocolatey"
+	case "winget":
+		return "winget"
+	default:
+		return source
+	}
 }
 
 func findColumnStart(header, keyword string) int {

@@ -165,18 +165,19 @@ function renderCategoryList(query) {
   categoryListEl.innerHTML = html;
 }
 
-async function runAction(action, id) {
+async function runAction(action, id, displayID) {
   if (!id) return;
   if (!VALID_ACTIONS.has(action)) return;
   try {
-    showFeedback(action + ' ' + id + '...');
+    var itemLabel = displayID || id;
+    showFeedback(action + ' ' + itemLabel + '...');
     var output = '';
 
     if (action === 'install') output = await appApi().Install(id);
     else if (action === 'uninstall') output = await appApi().Uninstall(id);
     else if (action === 'upgrade') output = await appApi().Upgrade(id);
 
-    showFeedback(action + ' concluido para ' + id);
+    showFeedback(action + ' concluido para ' + itemLabel);
     if (installedOutputEl) {
       installedOutputEl.textContent = output || translate('common.noOutput');
     }
@@ -237,20 +238,37 @@ async function checkPendingUpdates() {
   }
 }
 
+function normalizeUpdateSource(source) {
+  var normalized = String(source || '').trim().toLowerCase();
+  if (normalized === 'choco' || normalized === 'chocolatey') return 'chocolatey';
+  if (normalized === 'winget') return 'winget';
+  return normalized || 'winget';
+}
+
+function buildUpdateUpgradeTarget(item) {
+  var id = String(item && item.id ? item.id : '').trim();
+  if (!id) return '';
+  return normalizeUpdateSource(item && item.source) + '::' + id;
+}
+
 function renderUpdatesTable() {
   if (!pendingUpdates.length) {
-    updatesTableBodyEl.innerHTML = '<tr><td colspan="5" class="meta">' + escapeHtml(translate('updates.nonePending')) + '</td></tr>';
+    updatesTableBodyEl.innerHTML = '<tr><td colspan="6" class="meta">' + escapeHtml(translate('updates.nonePending')) + '</td></tr>';
     upgradeSelectedBtn.disabled = true;
     if (updateSelectAllEl) updateSelectAllEl.checked = false;
     return;
   }
   updatesTableBodyEl.innerHTML = pendingUpdates.map(function (u, i) {
+    var target = buildUpdateUpgradeTarget(u);
+    var packageLabel = String(u.id || '').trim();
+    var source = normalizeUpdateSource(u.source);
     return '<tr>' +
-      '<td class="update-check-col"><input type="checkbox" class="update-check" data-idx="' + i + '" data-id="' + escapeHtmlAttr(u.id) + '" /></td>' +
+      '<td class="update-check-col"><input type="checkbox" class="update-check" data-idx="' + i + '" data-id="' + escapeHtmlAttr(target) + '" data-package-label="' + escapeHtmlAttr(packageLabel) + '" /></td>' +
       '<td>' + escapeHtml(u.name || '-') + '</td>' +
       '<td>' + escapeHtml(u.currentVersion || '-') + '</td>' +
       '<td>' + escapeHtml(u.availableVersion || '-') + '</td>' +
-      '<td><button class="btn primary" data-action="upgrade" data-id="' + escapeHtmlAttr(u.id) + '">' + escapeHtml(translate('updates.upgrade')) + '</button></td>' +
+      '<td>' + escapeHtml(source) + '</td>' +
+      '<td><button class="btn primary" data-action="upgrade" data-id="' + escapeHtmlAttr(target) + '" data-package-label="' + escapeHtmlAttr(packageLabel) + '">' + escapeHtml(translate('updates.upgrade')) + '</button></td>' +
     '</tr>';
   }).join('');
   updateUpgradeSelectedState();
@@ -264,15 +282,20 @@ function updateUpgradeSelectedState() {
 async function upgradeSelected() {
   var checked = document.querySelectorAll('.update-check:checked');
   if (!checked.length) return;
-  var ids = Array.from(checked).map(function (cb) { return cb.dataset.id; });
+  var items = Array.from(checked).map(function (cb) {
+    return {
+      target: cb.dataset.id,
+      label: cb.dataset.packageLabel || cb.dataset.id,
+    };
+  });
   upgradeSelectedBtn.disabled = true;
-  for (var i = 0; i < ids.length; i++) {
+  for (var i = 0; i < items.length; i++) {
     try {
-      showToast(translate('updates.upgradingItem', { id: ids[i] }), 'info');
-      await appApi().Upgrade(ids[i]);
-      showToast(translate('updates.upgradeSuccess', { id: ids[i] }), 'success');
+      showToast(translate('updates.upgradingItem', { id: items[i].label }), 'info');
+      await appApi().Upgrade(items[i].target);
+      showToast(translate('updates.upgradeSuccess', { id: items[i].label }), 'success');
     } catch (error) {
-      showToast(translate('updates.upgradeError', { id: ids[i], error: String(error) }), 'error');
+      showToast(translate('updates.upgradeError', { id: items[i].label, error: String(error) }), 'error');
     }
   }
   showToast(translate('updates.batchComplete'), 'success');
