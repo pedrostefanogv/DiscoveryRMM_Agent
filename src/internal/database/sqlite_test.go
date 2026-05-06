@@ -1,9 +1,26 @@
 package database
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestCacheGetJSON_NilDBReturnsError(t *testing.T) {
+	var db *DB
+	var target map[string]any
+
+	found, err := db.CacheGetJSON("agent_info", &target)
+	if err == nil {
+		t.Fatalf("expected error when DB is nil")
+	}
+	if found {
+		t.Fatalf("expected found=false when DB is nil")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "database indisponivel") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
 
 func TestInventorySoftwareChanged_IgnoresOrdering(t *testing.T) {
 	oldJSON := []byte(`{"software":[{"name":"B","version":"1","publisher":"P","installId":"2","source":"registry"},{"name":"A","version":"1","publisher":"P","installId":"1","source":"registry"}],"collectedAt":"2026-01-01T10:00:00Z"}`)

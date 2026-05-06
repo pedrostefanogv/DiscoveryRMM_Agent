@@ -110,3 +110,25 @@ func TestAutoDeriveNATSEndpoints_WSSExternalSkipsNATS(t *testing.T) {
 		t.Fatalf("NatsServer = %q, esperado vazio", cfg.NatsServer)
 	}
 }
+
+func TestNATSWebSocketProxyPath(t *testing.T) {
+	tests := []struct {
+		name   string
+		url    string
+		expect string
+	}{
+		{name: "wss with nats path", url: "wss://tngplacas.com.br:443/nats/", expect: "/nats/"},
+		{name: "ws with path", url: "ws://localhost:8080/socket", expect: "/socket"},
+		{name: "wss root", url: "wss://tngplacas.com.br:443/", expect: ""},
+		{name: "wss no path", url: "wss://tngplacas.com.br:443", expect: ""},
+		{name: "nats tcp", url: "nats://tngplacas.com.br:4222", expect: ""},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := natsWebSocketProxyPath(tc.url); got != tc.expect {
+				t.Fatalf("natsWebSocketProxyPath(%q) = %q, esperado %q", tc.url, got, tc.expect)
+			}
+		})
+	}
+}

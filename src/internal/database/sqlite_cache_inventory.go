@@ -3,12 +3,17 @@ package database
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
 )
 
 func (db *DB) CacheGet(key string) ([]byte, error) {
+	if db == nil || db.conn == nil {
+		return nil, fmt.Errorf("database indisponivel")
+	}
+
 	var value string
 	var expiresAt sql.NullInt64
 
@@ -35,6 +40,10 @@ func (db *DB) CacheGet(key string) ([]byte, error) {
 
 // CacheSet armazena um valor no cache com TTL opcional (0 = sem expiração)
 func (db *DB) CacheSet(key string, value []byte, ttl time.Duration) error {
+	if db == nil || db.conn == nil {
+		return fmt.Errorf("database indisponivel")
+	}
+
 	var expiresAt sql.NullInt64
 	if ttl > 0 {
 		expiresAt.Valid = true
@@ -50,6 +59,10 @@ func (db *DB) CacheSet(key string, value []byte, ttl time.Duration) error {
 
 // CacheDelete remove um valor do cache
 func (db *DB) CacheDelete(key string) error {
+	if db == nil || db.conn == nil {
+		return fmt.Errorf("database indisponivel")
+	}
+
 	_, err := db.conn.Exec("DELETE FROM cache WHERE key = ?", key)
 	return err
 }
