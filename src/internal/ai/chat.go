@@ -16,6 +16,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"discovery/app/netutil"
 	"discovery/internal/mcp"
 )
 
@@ -320,9 +321,8 @@ func (s *Service) callAgentChatSync(ctx context.Context, cfg Config, message, se
 		return nil, fmt.Errorf("falha ao criar request de chat: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(cfg.APIKey))
-	if agentID := strings.TrimSpace(cfg.AgentID); agentID != "" {
-		req.Header.Set("X-Agent-ID", agentID)
+	if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.APIKey, cfg.AgentID); err != nil {
+		return nil, err
 	}
 
 	resp, err := http.DefaultClient.Do(req)
@@ -486,7 +486,9 @@ func Heading(level int, text string) string {
 func List(items ...string) string {
 	var buf strings.Builder
 	for _, item := range items {
-		buf.WriteString("- " + item + "\n")
+		buf.WriteString("- ")
+		buf.WriteString(item)
+		buf.WriteByte('\n')
 	}
 	return strings.TrimSuffix(buf.String(), "\n")
 }

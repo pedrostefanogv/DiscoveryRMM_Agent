@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"discovery/app/debug"
+	"discovery/app/netutil"
 	"discovery/internal/models"
 )
 
@@ -288,8 +289,9 @@ func (s *Service) sendAgentInventoryRequest(parent context.Context, endpoint str
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+cfg.AuthToken)
-	req.Header.Set("X-Agent-ID", cfg.AgentID)
+	if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, cfg.AgentID); err != nil {
+		return err
+	}
 
 	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
 	if err != nil {

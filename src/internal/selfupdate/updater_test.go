@@ -60,8 +60,8 @@ func TestDownloadToTemp_FollowsSignedRedirectAndValidatesManifestSHA(t *testing.
 	updater := &Updater{
 		ApiScheme:  apiURL.Scheme,
 		ApiServer:  apiURL.Host,
-		GetToken:   func() string { return "token-123" },
-		GetAgentID: func() string { return "agent-123" },
+		GetToken:   func() string { return "mdz_token_123" },
+		GetAgentID: func() string { return "8f6d6d72-4a8a-4c87-bffa-34ba29dc0bb7" },
 		TempDir:    t.TempDir(),
 	}
 
@@ -76,10 +76,10 @@ func TestDownloadToTemp_FollowsSignedRedirectAndValidatesManifestSHA(t *testing.
 	}
 	defer os.Remove(path)
 
-	if redirectHeaders.authorization != "Bearer token-123" {
+	if redirectHeaders.authorization != "Bearer mdz_token_123" {
 		t.Fatalf("Authorization = %q", redirectHeaders.authorization)
 	}
-	if redirectHeaders.agentID != "agent-123" {
+	if redirectHeaders.agentID != "8f6d6d72-4a8a-4c87-bffa-34ba29dc0bb7" {
 		t.Fatalf("X-Agent-ID = %q", redirectHeaders.agentID)
 	}
 	if redirectHeaders.artifactType != "Installer" {
@@ -125,8 +125,8 @@ func TestDownloadToTemp_UsesPreferredArtifactTypeFromPolicy(t *testing.T) {
 	updater := &Updater{
 		ApiScheme:  apiURL.Scheme,
 		ApiServer:  apiURL.Host,
-		GetToken:   func() string { return "token-123" },
-		GetAgentID: func() string { return "agent-123" },
+		GetToken:   func() string { return "mdz_token_123" },
+		GetAgentID: func() string { return "8f6d6d72-4a8a-4c87-bffa-34ba29dc0bb7" },
 		GetPolicy: func() Policy {
 			return Policy{CheckEveryHours: 6, PreferredArtifactType: "PortableZip"}
 		},
@@ -182,8 +182,8 @@ func TestResumePendingInstallReport_ReportsSuccessAndClearsState(t *testing.T) {
 	updater := &Updater{
 		ApiScheme:  apiURL.Scheme,
 		ApiServer:  apiURL.Host,
-		GetToken:   func() string { return "token-123" },
-		GetAgentID: func() string { return "agent-123" },
+		GetToken:   func() string { return "mdz_token_123" },
+		GetAgentID: func() string { return "8f6d6d72-4a8a-4c87-bffa-34ba29dc0bb7" },
 		TempDir:    tempDir,
 	}
 	if err := updater.persistPendingInstallState(pendingInstallState{
@@ -267,8 +267,8 @@ func TestFetchManifest_SendsArtifactTypeQuery(t *testing.T) {
 	updater := &Updater{
 		ApiScheme:  apiURL.Scheme,
 		ApiServer:  apiURL.Host,
-		GetToken:   func() string { return "token-123" },
-		GetAgentID: func() string { return "agent-123" },
+		GetToken:   func() string { return "mdz_token_123" },
+		GetAgentID: func() string { return "8f6d6d72-4a8a-4c87-bffa-34ba29dc0bb7" },
 		GetPolicy: func() Policy {
 			return Policy{PreferredArtifactType: "installer"}
 		},
@@ -278,10 +278,10 @@ func TestFetchManifest_SendsArtifactTypeQuery(t *testing.T) {
 		t.Fatalf("fetchManifest: %v", err)
 	}
 
-	if received.authorization != "Bearer token-123" {
+	if received.authorization != "Bearer mdz_token_123" {
 		t.Fatalf("Authorization = %q", received.authorization)
 	}
-	if received.agentID != "agent-123" {
+	if received.agentID != "8f6d6d72-4a8a-4c87-bffa-34ba29dc0bb7" {
 		t.Fatalf("X-Agent-ID = %q", received.agentID)
 	}
 	if received.artifactType != "Installer" {

@@ -221,7 +221,7 @@ func TestLoadCustomFieldsForExecution_Integration(t *testing.T) {
 	defer srv.Close()
 
 	svc := NewService(func() RuntimeConfig {
-		return RuntimeConfig{BaseURL: srv.URL, Token: "tok", AgentID: "ag-1"}
+		return RuntimeConfig{BaseURL: srv.URL, Token: "mdz_tok", AgentID: "8f6d6d72-4a8a-4c87-bffa-34ba29dc0bb7"}
 	}, func(s string) {})
 
 	cfg := svc.getConfig()
@@ -259,7 +259,7 @@ func TestLoadCustomFieldsForExecution_FallsBackOnError(t *testing.T) {
 	defer srv.Close()
 
 	svc := NewService(func() RuntimeConfig {
-		return RuntimeConfig{BaseURL: srv.URL, Token: "tok", AgentID: "ag-1"}
+		return RuntimeConfig{BaseURL: srv.URL, Token: "mdz_tok", AgentID: "8f6d6d72-4a8a-4c87-bffa-34ba29dc0bb7"}
 	}, func(s string) {})
 
 	cfg := svc.getConfig()

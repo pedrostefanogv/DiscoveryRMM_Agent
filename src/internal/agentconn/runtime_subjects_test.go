@@ -50,9 +50,6 @@ func TestResolveNATSSubjects_CanonicalLayout(t *testing.T) {
 	if subjects.P2PDiscovery != "tenant.client-1.site.site-1.p2p.discovery" {
 		t.Fatalf("P2PDiscovery = %q", subjects.P2PDiscovery)
 	}
-	if subjects.Dashboard != "tenant.client-1.site.site-1.dashboard.events" {
-		t.Fatalf("Dashboard = %q", subjects.Dashboard)
-	}
 }
 
 func TestParseP2PDiscoverySnapshot_Basic(t *testing.T) {

@@ -63,7 +63,9 @@ func (a *App) fetchAppStoreByInstallationType(ctx context.Context, installationT
 		return AppStoreResponse{}, fmt.Errorf("falha ao criar request da app-store: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
-	netutil.SetAgentAuthHeadersWithAgentID(req, token, cfg.AgentID)
+	if err := netutil.SetAgentAuthHeadersWithAgentID(req, token, cfg.AgentID); err != nil {
+		return AppStoreResponse{}, err
+	}
 
 	resp, err := tlsutil.NewHTTPClient(15 * time.Second).Do(req)
 	if err != nil {

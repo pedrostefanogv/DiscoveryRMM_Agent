@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
+
+	"discovery/app/netutil"
 )
 
 const natsFanoutAckWait = 30 * time.Minute
@@ -62,11 +64,13 @@ func (r *Runtime) runNATSSession(ctx context.Context, cfg Config, server, transp
 		opts = append(opts, nats.ProxyPath(wsProxyPath))
 		r.logf("[transport][%s] websocket proxyPath aplicado: %s", transportLabel, wsProxyPath)
 	}
-	tokenOpts := append([]nats.Option{}, opts...)
-	if strings.TrimSpace(cfg.AuthToken) != "" {
-		tokenOpts = append(tokenOpts, nats.Token(strings.TrimSpace(cfg.AuthToken)))
+	authToken, err := netutil.NormalizeAgentToken(cfg.AuthToken)
+	if err != nil {
+		return fmt.Errorf("authToken invalido para NATS: %w", err)
 	}
-	aclJWT := extractJWTToken(cfg.AuthToken)
+	tokenOpts := append([]nats.Option{}, opts...)
+	tokenOpts = append(tokenOpts, nats.Token(authToken))
+	aclJWT := extractJWTToken(authToken)
 
 	nc, err := nats.Connect(natsURL, tokenOpts...)
 	if err != nil {
@@ -90,13 +94,6 @@ func (r *Runtime) runNATSSession(ctx context.Context, cfg Config, server, transp
 	} else {
 		r.logf("[heartbeat][nats] heartbeat inicial publicado com sucesso (subject=%s) payload=%s", subjects.Heartbeat, hbLog)
 	}
-	r.publishDashboardEventNATS(nc, subjects.Dashboard, cfg, "AgentConnected", map[string]any{
-		"agentId":   cfg.AgentID,
-		"clientId":  cfg.ClientID,
-		"siteId":    cfg.SiteID,
-		"transport": transportLabel,
-		"server":    natsURL,
-	})
 
 	r.setStatusConnected(cfg.AgentID, natsURL, transportLabel)
 	r.logf("agente conectado ao NATS (commandUnicast=%s, commandSite=%s, commandClient=%s, commandGlobal=%s, globalPong=%s, syncSubject=%s, p2pDiscovery=%s)", subjects.CommandAgent, subjects.CommandSiteFanout, subjects.CommandClientFanout, subjects.CommandGlobalFanout, subjects.GlobalPong, subjects.SyncPing, subjects.P2PDiscovery)
@@ -123,7 +120,7 @@ func (r *Runtime) runNATSSession(ctx context.Context, cfg Config, server, transp
 		return fmt.Errorf("falha ao inscrever no subject de global pong: %w", err)
 	}
 
-	return r.runNATSEventLoop(ctx, nc, cfg, transportLabel, subjects, ipAddr)
+	return r.runNATSEventLoop(ctx, nc, cfg, subjects, ipAddr)
 }
 
 func natsWebSocketProxyPath(natsURL string) string {
@@ -470,7 +467,7 @@ func (r *Runtime) natsP2PDiscoveryHandler() func(msg *nats.Msg) {
 
 // ─── NATS Event Loop ───────────────────────────────────────────────
 
-func (r *Runtime) runNATSEventLoop(ctx context.Context, nc *nats.Conn, cfg Config, transportLabel string, subjects natsSubjects, ipAddr string) error {
+func (r *Runtime) runNATSEventLoop(ctx context.Context, nc *nats.Conn, cfg Config, subjects natsSubjects, ipAddr string) error {
 	heartbeatInterval := heartbeatEvery
 	if cfg.HeartbeatInterval > 0 {
 		heartbeatInterval = time.Duration(cfg.HeartbeatInterval) * time.Second
@@ -483,20 +480,8 @@ func (r *Runtime) runNATSEventLoop(ctx context.Context, nc *nats.Conn, cfg Confi
 	for {
 		select {
 		case <-ctx.Done():
-			r.publishDashboardEventNATS(nc, subjects.Dashboard, cfg, "AgentDisconnected", map[string]any{
-				"agentId":   cfg.AgentID,
-				"clientId":  cfg.ClientID,
-				"siteId":    cfg.SiteID,
-				"transport": transportLabel,
-			})
 			return nil
 		case <-r.reloadCh:
-			r.publishDashboardEventNATS(nc, subjects.Dashboard, cfg, "AgentDisconnected", map[string]any{
-				"agentId":   cfg.AgentID,
-				"clientId":  cfg.ClientID,
-				"siteId":    cfg.SiteID,
-				"transport": transportLabel,
-			})
 			return fmt.Errorf("reload solicitado")
 		case <-heartbeatTicker.C:
 			r.sendHeartbeatNATS(nc, subjects.Heartbeat, cfg, ipAddr)
@@ -547,7 +532,6 @@ func resolveNATSSubjects(cfg Config) (natsSubjects, error) {
 		RemoteDebugLog:      prefix + ".remote-debug.log",
 		SyncPing:            prefix + ".sync.ping",
 		P2PDiscovery:        fmt.Sprintf("tenant.%s.site.%s.p2p.discovery", clientID, siteID),
-		Dashboard:           fmt.Sprintf("tenant.%s.site.%s.dashboard.events", clientID, siteID),
 	}, nil
 }
 

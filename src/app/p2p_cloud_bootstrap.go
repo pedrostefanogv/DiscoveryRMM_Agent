@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"discovery/app/netutil"
+
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/multiformats/go-multiaddr"
 )
@@ -187,8 +189,9 @@ func (c *p2pCoordinator) callCloudBootstrapAPI(ctx context.Context, scheme, serv
 		return nil, fmt.Errorf("criar request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("X-Agent-ID", strings.TrimSpace(agentID))
+	if err := netutil.SetAgentAuthHeadersWithAgentID(req, token, agentID); err != nil {
+		return nil, err
+	}
 
 	client := &http.Client{Timeout: p2pCloudBootstrapTimeout}
 	httpResp, err := client.Do(req)

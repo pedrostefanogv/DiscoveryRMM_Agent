@@ -315,17 +315,17 @@ func (s *Service) testAgentAPIConnectivity(ctx context.Context, apiScheme, apiSe
 	if apiScheme == "" || apiServer == "" {
 		return fmt.Errorf("apiScheme/apiServer ausente")
 	}
+	if authToken == "" || agentID == "" {
+		return fmt.Errorf("authToken/agentId ausentes")
+	}
 
 	target := apiScheme + "://" + apiServer + "/api/v1/agent-auth/me/configuration"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return fmt.Errorf("falha ao criar requisicao: %w", err)
 	}
-	if authToken != "" {
-		req.Header.Set("Authorization", "Bearer "+authToken)
-	}
-	if agentID != "" {
-		req.Header.Set("X-Agent-ID", agentID)
+	if err := netutil.SetAgentAuthHeadersWithAgentID(req, authToken, agentID); err != nil {
+		return err
 	}
 
 	resp, err := tlsutil.NewHTTPClient(10 * time.Second).Do(req)
@@ -541,17 +541,17 @@ func (s *Service) TestConnection(cfg Config) (string, error) {
 
 	if cfg.ApiServer != "" {
 		s.logf(fmt.Sprintf("[debug-test] testando API: %s://%s", cfg.ApiScheme, cfg.ApiServer))
+		if cfg.AuthToken == "" || cfg.AgentID == "" {
+			return "", fmt.Errorf("authToken/agentId obrigatorios para testar endpoint /api/v1/agent-auth")
+		}
 		target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/configuration"
 		client := tlsutil.NewHTTPClient(10 * time.Second)
 		req, err := http.NewRequest(http.MethodGet, target, nil)
 		if err != nil {
 			return "", fmt.Errorf("URL invalida para API: %w", err)
 		}
-		if cfg.AuthToken != "" {
-			req.Header.Set("Authorization", "Bearer "+cfg.AuthToken)
-		}
-		if cfg.AgentID != "" {
-			req.Header.Set("X-Agent-ID", cfg.AgentID)
+		if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, cfg.AgentID); err != nil {
+			return "", err
 		}
 
 		resp, err := client.Do(req)
@@ -644,9 +644,8 @@ func (s *Service) GetRealtimeStatus() (RealtimeStatus, error) {
 	if err != nil {
 		return RealtimeStatus{}, fmt.Errorf("URL invalida: %w", err)
 	}
-	netutil.SetAgentAuthHeaders(req, cfg.AuthToken)
-	if strings.TrimSpace(cfg.AgentID) != "" {
-		req.Header.Set("X-Agent-ID", cfg.AgentID)
+	if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, cfg.AgentID); err != nil {
+		return RealtimeStatus{}, err
 	}
 
 	resp, err := tlsutil.NewHTTPClient(10 * time.Second).Do(req)

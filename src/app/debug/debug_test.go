@@ -221,7 +221,7 @@ func TestLoadPersistedConfig_StripsUTF8BOM(t *testing.T) {
 
 func TestGetRealtimeStatus_SetsAgentAuthHeadersAndAgentID(t *testing.T) {
 	const (
-		token   = "token-123"
+		token   = "mdz_test_token_123"
 		agentID = "8f6d6d72-4a8a-4c87-bffa-34ba29dc0bb7"
 	)
 
@@ -231,9 +231,6 @@ func TestGetRealtimeStatus_SetsAgentAuthHeadersAndAgentID(t *testing.T) {
 		}
 		if got := r.Header.Get("Authorization"); got != "Bearer "+token {
 			t.Fatalf("Authorization = %q, want %q", got, "Bearer "+token)
-		}
-		if got := r.Header.Get("X-Agent-Token"); got != token {
-			t.Fatalf("X-Agent-Token = %q, want %q", got, token)
 		}
 		if got := r.Header.Get("X-Agent-ID"); got != agentID {
 			t.Fatalf("X-Agent-ID = %q, want %q", got, agentID)

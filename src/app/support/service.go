@@ -329,7 +329,10 @@ func (s *Service) fetchAgentContext() (AgentInfo, error) {
 		s.supportLogf("falha ao montar request de contexto do agente: %v", wrapped)
 		return AgentInfo{}, wrapped
 	}
-	netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, cfg.AgentID)
+	if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, cfg.AgentID); err != nil {
+		s.supportLogf("credenciais invalidas para contexto do agente: %v", err)
+		return AgentInfo{}, err
+	}
 
 	resp, err := tlsutil.NewHTTPClient(10 * time.Second).Do(req)
 	if err != nil {
@@ -401,7 +404,9 @@ func (s *Service) GetSupportTickets() ([]APITicket, error) {
 		s.supportLogf("falha ao montar request de listagem: %v", wrapped)
 		return nil, wrapped
 	}
-	netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, cfg.AgentID)
+	if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, cfg.AgentID); err != nil {
+		return nil, err
+	}
 
 	resp, err := tlsutil.NewHTTPClient(15 * time.Second).Do(req)
 	if err != nil {
@@ -495,7 +500,9 @@ func (s *Service) CreateSupportTicket(input CreateTicketInput) (APITicket, error
 		return APITicket{}, wrapped
 	}
 	req.Header.Set("Content-Type", "application/json")
-	netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, cfg.AgentID)
+	if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, cfg.AgentID); err != nil {
+		return APITicket{}, err
+	}
 
 	resp, err := tlsutil.NewHTTPClient(15 * time.Second).Do(req)
 	if err != nil {
@@ -537,7 +544,9 @@ func (s *Service) GetSupportTicketDetails(ticketID string) (APITicket, error) {
 	if err != nil {
 		return APITicket{}, err
 	}
-	netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, cfg.AgentID)
+	if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, cfg.AgentID); err != nil {
+		return APITicket{}, err
+	}
 
 	resp, err := tlsutil.NewHTTPClient(10 * time.Second).Do(req)
 	if err != nil {
@@ -623,7 +632,10 @@ func (s *Service) GetTicketWorkflowStates() ([]APIWorkflowState, error) {
 			lastErr = fmt.Errorf("URL inválida: %w", err)
 			continue
 		}
-		netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, cfg.AgentID)
+		if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, cfg.AgentID); err != nil {
+			lastErr = err
+			continue
+		}
 
 		resp, err := tlsutil.NewHTTPClient(10 * time.Second).Do(req)
 		if err != nil {
@@ -684,7 +696,9 @@ func (s *Service) GetTicketComments(ticketID string) ([]TicketComment, error) {
 	if err != nil {
 		return nil, err
 	}
-	netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, cfg.AgentID)
+	if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, cfg.AgentID); err != nil {
+		return nil, err
+	}
 
 	resp, err := tlsutil.NewHTTPClient(10 * time.Second).Do(req)
 	if err != nil {
@@ -745,7 +759,9 @@ func (s *Service) AddTicketCommentWithOptions(ticketID, content string, isIntern
 		return TicketComment{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, cfg.AgentID)
+	if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, cfg.AgentID); err != nil {
+		return TicketComment{}, err
+	}
 
 	resp, err := tlsutil.NewHTTPClient(10 * time.Second).Do(req)
 	if err != nil {
@@ -821,7 +837,9 @@ func (s *Service) CloseSupportTicket(ticketID string, input CloseTicketInput) (A
 		return APITicket{}, fmt.Errorf("URL inválida: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, cfg.AgentID)
+	if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, cfg.AgentID); err != nil {
+		return APITicket{}, err
+	}
 
 	s.supportLogf("fechando chamado %s", ticketID)
 	resp, err := tlsutil.NewHTTPClient(15 * time.Second).Do(req)

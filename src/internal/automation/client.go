@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"discovery/app/netutil"
 	"discovery/internal/tlsutil"
 )
 
@@ -25,19 +26,16 @@ func NewClient(timeout time.Duration) *Client {
 	return &Client{httpClient: tlsutil.NewHTTPClient(timeout)}
 }
 
-// setAutomationHeaders aplica os headers obrigatórios em requests de automação:
-// Authorization Bearer, X-Agent-ID e, quando disponível, X-Correlation-Id.
-// Mantém X-Agent-Token por compatibilidade com versões antigas do backend.
-func setAutomationHeaders(req *http.Request, cfg RuntimeConfig, correlationID string) {
+// setAutomationHeaders aplica os headers obrigatórios canônicos para requests /agent-auth.
+func setAutomationHeaders(req *http.Request, cfg RuntimeConfig, correlationID string) error {
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(cfg.Token))
-	req.Header.Set("X-Agent-Token", strings.TrimSpace(cfg.Token))
-	if id := strings.TrimSpace(cfg.AgentID); id != "" {
-		req.Header.Set("X-Agent-ID", id)
+	if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.Token, cfg.AgentID); err != nil {
+		return err
 	}
 	if cid := strings.TrimSpace(correlationID); cid != "" {
 		req.Header.Set("X-Correlation-Id", cid)
 	}
+	return nil
 }
 
 func normalizeBaseURL(endpoint string) (string, error) {
@@ -90,7 +88,9 @@ func (c *Client) SyncPolicy(ctx context.Context, cfg RuntimeConfig, reqBody Poli
 	if err != nil {
 		return nil, fmt.Errorf("falha ao criar request de policy sync: %w", err)
 	}
-	setAutomationHeaders(req, cfg, correlationID)
+	if err := setAutomationHeaders(req, cfg, correlationID); err != nil {
+		return nil, err
+	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -151,7 +151,9 @@ func (c *Client) postExecutionCallback(ctx context.Context, cfg RuntimeConfig, c
 	if err != nil {
 		return fmt.Errorf("falha ao criar callback %s: %w", suffix, err)
 	}
-	setAutomationHeaders(req, cfg, correlationID)
+	if err := setAutomationHeaders(req, cfg, correlationID); err != nil {
+		return err
+	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -193,7 +195,9 @@ func (c *Client) GetRuntimeCustomFields(ctx context.Context, cfg RuntimeConfig, 
 	if err != nil {
 		return nil, fmt.Errorf("falha ao criar request de runtime custom fields: %w", err)
 	}
-	setAutomationHeaders(req, cfg, correlationID)
+	if err := setAutomationHeaders(req, cfg, correlationID); err != nil {
+		return nil, err
+	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -240,7 +244,9 @@ func (c *Client) CollectCustomFieldValue(ctx context.Context, cfg RuntimeConfig,
 	if err != nil {
 		return nil, fmt.Errorf("falha ao criar request de collected value: %w", err)
 	}
-	setAutomationHeaders(httpReq, cfg, correlationID)
+	if err := setAutomationHeaders(httpReq, cfg, correlationID); err != nil {
+		return nil, err
+	}
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {

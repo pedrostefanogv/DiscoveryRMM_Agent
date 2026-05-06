@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"discovery/app/netutil"
 	"discovery/internal/agentconn"
 	"discovery/internal/automation"
 	"discovery/internal/database"
@@ -183,9 +184,6 @@ func (c *SharedConfig) UnmarshalJSON(data []byte) error {
 	}
 	if strings.TrimSpace(result.AuthToken) == "" {
 		result.AuthToken = strings.TrimSpace(old.AuthToken)
-	}
-	if strings.TrimSpace(result.AuthToken) == "" {
-		result.AuthToken = strings.TrimSpace(old.APIKey)
 	}
 	if strings.TrimSpace(result.ClientID) == "" {
 		result.ClientID = strings.TrimSpace(old.ClientID)
@@ -552,8 +550,9 @@ func (sm *ServiceManager) refreshRemoteConfiguration(ctx context.Context) (bool,
 	if err != nil {
 		return false, fmt.Errorf("falha ao montar request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(cfg.AuthToken))
-	req.Header.Set("X-Agent-ID", strings.TrimSpace(cfg.AgentID))
+	if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, cfg.AgentID); err != nil {
+		return false, err
+	}
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := tlsutil.NewHTTPClient(15 * time.Second).Do(req)

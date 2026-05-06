@@ -161,12 +161,9 @@ func TestPublishDashboardEventNATS_CanonicalEnvelope(t *testing.T) {
 		ClientID: testHomologClientID,
 		SiteID:   testHomologSiteID,
 	}
-	subjects, err := resolveNATSSubjects(cfg)
-	if err != nil {
-		t.Fatalf("resolveNATSSubjects: %v", err)
-	}
+	dashboardSubject := fmt.Sprintf("tenant.%s.site.%s.dashboard.events", cfg.ClientID, cfg.SiteID)
 
-	sub, err := nc.SubscribeSync(subjects.Dashboard)
+	sub, err := nc.SubscribeSync(dashboardSubject)
 	if err != nil {
 		t.Fatalf("falha ao criar subscribe dashboard de teste: %v", err)
 	}
@@ -175,7 +172,7 @@ func TestPublishDashboardEventNATS_CanonicalEnvelope(t *testing.T) {
 	}
 
 	runtime := NewRuntime(Options{})
-	ok := runtime.publishDashboardEventNATS(nc, subjects.Dashboard, cfg, "AgentConnected", map[string]any{
+	ok := runtime.publishDashboardEventNATS(nc, dashboardSubject, cfg, "AgentConnected", map[string]any{
 		"agentId":   cfg.AgentID,
 		"clientId":  cfg.ClientID,
 		"siteId":    cfg.SiteID,
@@ -235,62 +232,7 @@ func TestPublishDashboardEventNATS_CanonicalEnvelope(t *testing.T) {
 	}
 }
 
-func TestPublishDashboardEventNATS_RejectsLegacyEventType(t *testing.T) {
-	server := startEmbeddedNATSServer(t)
-	nc, err := nats.Connect(server.ClientURL(), nats.Timeout(2*time.Second))
-	if err != nil {
-		t.Fatalf("falha ao conectar no NATS de teste: %v", err)
-	}
-	t.Cleanup(nc.Close)
-
-	cfg := Config{
-		AgentID:  testHomologAgentID,
-		ClientID: testHomologClientID,
-		SiteID:   testHomologSiteID,
-	}
-	subjects, err := resolveNATSSubjects(cfg)
-	if err != nil {
-		t.Fatalf("resolveNATSSubjects: %v", err)
-	}
-
-	sub, err := nc.SubscribeSync(subjects.Dashboard)
-	if err != nil {
-		t.Fatalf("falha ao criar subscribe dashboard de teste: %v", err)
-	}
-	if err := nc.Flush(); err != nil {
-		t.Fatalf("falha ao flush do subscribe dashboard: %v", err)
-	}
-
-	var logs []string
-	runtime := NewRuntime(Options{
-		Logf: func(format string, args ...any) {
-			logs = append(logs, fmt.Sprintf(format, args...))
-		},
-	})
-	ok := runtime.publishDashboardEventNATS(nc, subjects.Dashboard, cfg, "agent_connected", map[string]any{
-		"agentId":   cfg.AgentID,
-		"clientId":  cfg.ClientID,
-		"siteId":    cfg.SiteID,
-		"transport": "nats",
-	})
-	if ok {
-		t.Fatal("publishDashboardEventNATS nao deveria aceitar eventType legado")
-	}
-	if err := nc.Flush(); err != nil {
-		t.Fatalf("falha ao flush apos rejeicao de dashboard event: %v", err)
-	}
-	if _, err := sub.NextMsg(250 * time.Millisecond); err == nil {
-		t.Fatal("evento legado nao deveria ser publicado em dashboard.events")
-	}
-	if len(logs) == 0 {
-		t.Fatal("esperava log de CONTRACT_VIOLATION para eventType legado")
-	}
-	if !strings.Contains(logs[0], "[CONTRACT_VIOLATION]") || !strings.Contains(logs[0], "agent_connected") {
-		t.Fatalf("log inesperado para eventType legado: %q", logs[0])
-	}
-}
-
-func TestNATSCommandHandler_PublishesResultWithoutDashboardLegacyEvent(t *testing.T) {
+func TestNATSCommandHandler_PublishesResult(t *testing.T) {
 	server := startEmbeddedNATSServer(t)
 	nc, err := nats.Connect(server.ClientURL(), nats.Timeout(2*time.Second))
 	if err != nil {
@@ -311,10 +253,6 @@ func TestNATSCommandHandler_PublishesResultWithoutDashboardLegacyEvent(t *testin
 	resultSub, err := nc.SubscribeSync(subjects.Result)
 	if err != nil {
 		t.Fatalf("falha ao criar subscribe result de teste: %v", err)
-	}
-	dashboardSub, err := nc.SubscribeSync(subjects.Dashboard)
-	if err != nil {
-		t.Fatalf("falha ao criar subscribe dashboard de teste: %v", err)
 	}
 	if err := nc.Flush(); err != nil {
 		t.Fatalf("falha ao flush dos subscribes: %v", err)
@@ -356,12 +294,6 @@ func TestNATSCommandHandler_PublishesResultWithoutDashboardLegacyEvent(t *testin
 	}
 	if result.Output != "ok-from-test" {
 		t.Fatalf("output = %q, esperado ok-from-test", result.Output)
-	}
-	if err := nc.Flush(); err != nil {
-		t.Fatalf("falha ao flush apos result: %v", err)
-	}
-	if _, err := dashboardSub.NextMsg(250 * time.Millisecond); err == nil {
-		t.Fatal("command_result nao deveria mais ser publicado em dashboard.events")
 	}
 }
 

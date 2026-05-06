@@ -17,6 +17,9 @@ func TestLoadEffectiveAppStorePolicyMergesWingetAndChocolatey(t *testing.T) {
 		if got := r.Header.Get("Authorization"); got != "Bearer "+token {
 			t.Fatalf("Authorization inválido: %q", got)
 		}
+		if got := r.Header.Get("X-Agent-ID"); got != "8f6d6d72-4a8a-4c87-bffa-34ba29dc0bb7" {
+			t.Fatalf("X-Agent-ID inválido: %q", got)
+		}
 		if r.URL.Path != "/api/v1/agent-auth/me/app-store" {
 			t.Fatalf("path inesperado: %s", r.URL.Path)
 		}
@@ -35,7 +38,7 @@ func TestLoadEffectiveAppStorePolicyMergesWingetAndChocolatey(t *testing.T) {
 
 	app := &App{ctx: context.Background()}
 	app.debugSvc = debug.NewService(debug.Options{})
-	app.debugSvc.ApplyRuntimeConnectionConfig("http", strings.TrimPrefix(server.URL, "http://"), token, "", "", "")
+	app.debugSvc.ApplyRuntimeConnectionConfig("http", strings.TrimPrefix(server.URL, "http://"), token, "8f6d6d72-4a8a-4c87-bffa-34ba29dc0bb7", "", "")
 
 	policy, err := app.loadEffectiveAppStorePolicy(context.Background(), true)
 	if err != nil {

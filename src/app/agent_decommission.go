@@ -165,8 +165,9 @@ func performAgentDecommissionDelete(ctx context.Context, target agentDecommissio
 	if err != nil {
 		return err
 	}
-	netutil.SetAgentAuthHeaders(req, target.Token)
-	req.Header.Set("X-Agent-ID", target.AgentID)
+	if err := netutil.SetAgentAuthHeadersWithAgentID(req, target.Token, target.AgentID); err != nil {
+		return err
+	}
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := tlsutil.NewHTTPClient(20 * time.Second).Do(req)

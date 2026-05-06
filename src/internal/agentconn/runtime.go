@@ -18,6 +18,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 
+	"discovery/app/netutil"
 	"discovery/internal/tlsutil"
 )
 
@@ -179,7 +180,6 @@ type natsSubjects struct {
 	RemoteDebugLog      string
 	SyncPing            string
 	P2PDiscovery        string
-	Dashboard           string
 }
 
 // Options defines dependencies injected by the app layer.
@@ -701,8 +701,10 @@ func (r *Runtime) reportTLSMismatch(cfg Config, target, observedHash string) {
 		r.logf("[security][%s] falha ao montar tls-mismatch: %v", strings.TrimSpace(target), err)
 		return
 	}
-	req.Header.Set("Authorization", "Bearer "+authToken)
-	req.Header.Set("X-Agent-ID", agentID)
+	if err := netutil.SetAgentAuthHeadersWithAgentID(req, authToken, agentID); err != nil {
+		r.logf("[security][%s] tls-mismatch nao enviado: %v", strings.TrimSpace(target), err)
+		return
+	}
 	req.Header.Set("Content-Type", "application/json")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"discovery/app/netutil"
 	"discovery/internal/tlsutil"
 )
 
@@ -753,8 +754,9 @@ func (a *App) requestProvisioningToken(ctx context.Context) (deployKey, expiresA
 	if err != nil {
 		return "", "", fmt.Errorf("erro ao construir request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(inst.AuthToken))
-	req.Header.Set("X-Agent-ID", strings.TrimSpace(inst.AgentID))
+	if err := netutil.SetAgentAuthHeadersWithAgentID(req, inst.AuthToken, inst.AgentID); err != nil {
+		return "", "", err
+	}
 	req.Header.Set("Content-Type", "application/json")
 
 	client := tlsutil.NewHTTPClient(15 * time.Second)

@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"discovery/app/netutil"
 )
 
 // ─── Stream Types ──────────────────────────────────────────────────
@@ -53,9 +55,8 @@ func (s *Service) callAgentChatStream(
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
-	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(cfg.APIKey))
-	if agentID := strings.TrimSpace(cfg.AgentID); agentID != "" {
-		req.Header.Set("X-Agent-ID", agentID)
+	if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.APIKey, cfg.AgentID); err != nil {
+		return "", "", false, err
 	}
 
 	resp, err := http.DefaultClient.Do(req)

@@ -16,7 +16,7 @@ func newP2PAPIContractTestApp(t *testing.T, serverURL, token string) *App {
 	t.Helper()
 	a := &App{ctx: context.Background()}
 	a.debugSvc = debugsvc.NewService(debugsvc.Options{})
-	a.debugSvc.ApplyRuntimeConnectionConfig("http", strings.TrimPrefix(serverURL, "http://"), token, "agent-test-1", "", "")
+	a.debugSvc.ApplyRuntimeConnectionConfig("http", strings.TrimPrefix(serverURL, "http://"), token, "8f6d6d72-4a8a-4c87-bffa-34ba29dc0bb7", "", "")
 	return a
 }
 
@@ -26,7 +26,7 @@ func TestPostP2PTelemetry_Accepts202(t *testing.T) {
 		if got := r.Header.Get("Authorization"); got != "Bearer "+token {
 			t.Fatalf("Authorization invalido: %q", got)
 		}
-		if got := r.Header.Get("X-Agent-ID"); got != "agent-test-1" {
+		if got := r.Header.Get("X-Agent-ID"); got != "8f6d6d72-4a8a-4c87-bffa-34ba29dc0bb7" {
 			t.Fatalf("X-Agent-ID invalido: %q", got)
 		}
 		if r.URL.Path != p2pTelemetryEndpointPath {
@@ -49,7 +49,7 @@ func TestPostP2PTelemetry_Handles429RetryAfter(t *testing.T) {
 	const token = "mdz_test_token"
 	var requests int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get("X-Agent-ID"); got != "agent-test-1" {
+		if got := r.Header.Get("X-Agent-ID"); got != "8f6d6d72-4a8a-4c87-bffa-34ba29dc0bb7" {
 			t.Fatalf("X-Agent-ID invalido: %q", got)
 		}
 		atomic.AddInt32(&requests, 1)
@@ -85,7 +85,7 @@ func TestPostP2PTelemetry_Handles429RetryAfter(t *testing.T) {
 func TestPostP2PTelemetry_ParsesJSONErrorEnvelope(t *testing.T) {
 	const token = "mdz_test_token"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get("X-Agent-ID"); got != "agent-test-1" {
+		if got := r.Header.Get("X-Agent-ID"); got != "8f6d6d72-4a8a-4c87-bffa-34ba29dc0bb7" {
 			t.Fatalf("X-Agent-ID invalido: %q", got)
 		}
 		w.WriteHeader(http.StatusBadRequest)
@@ -114,7 +114,7 @@ func TestGetP2PDistributionStatusWithOptions_SendsQueryParams(t *testing.T) {
 		if got := r.Header.Get("Authorization"); got != "Bearer "+token {
 			t.Fatalf("Authorization invalido: %q", got)
 		}
-		if got := r.Header.Get("X-Agent-ID"); got != "agent-test-1" {
+		if got := r.Header.Get("X-Agent-ID"); got != "8f6d6d72-4a8a-4c87-bffa-34ba29dc0bb7" {
 			t.Fatalf("X-Agent-ID invalido: %q", got)
 		}
 		if r.URL.Path != p2pDistributionStatusPath {

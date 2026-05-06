@@ -368,9 +368,8 @@ func (a *App) fetchSyncManifest(ctx context.Context) (SyncManifestResponse, erro
 		return SyncManifestResponse{}, err
 	}
 	req.Header.Set("Accept", "application/json")
-	netutil.SetAgentAuthHeaders(req, token)
-	if agentID := strings.TrimSpace(cfg.AgentID); agentID != "" {
-		req.Header.Set("X-Agent-ID", agentID)
+	if err := netutil.SetAgentAuthHeadersWithAgentID(req, token, cfg.AgentID); err != nil {
+		return SyncManifestResponse{}, err
 	}
 
 	resp, err := tlsutil.NewHTTPClient(15 * time.Second).Do(req)
@@ -412,7 +411,9 @@ func (a *App) refreshAgentConfiguration(ctx context.Context) error {
 		return err
 	}
 	req.Header.Set("Accept", "application/json")
-	netutil.SetAgentAuthHeadersWithAgentID(req, token, cfg.AgentID)
+	if err := netutil.SetAgentAuthHeadersWithAgentID(req, token, cfg.AgentID); err != nil {
+		return err
+	}
 
 	resp, err := tlsutil.NewHTTPClient(15 * time.Second).Do(req)
 	if err != nil {

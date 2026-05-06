@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"discovery/app/netutil"
 	p2pmeta "discovery/app/p2pmeta"
 )
 
@@ -66,8 +67,9 @@ func (a *App) fetchP2PSeedPlanRecommendation(ctx context.Context) (P2PSeedPlanRe
 	if err != nil {
 		return P2PSeedPlanRecommendation{}, err
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("X-Agent-ID", agentID)
+	if err := netutil.SetAgentAuthHeadersWithAgentID(req, token, agentID); err != nil {
+		return P2PSeedPlanRecommendation{}, err
+	}
 
 	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
 	if err != nil {
@@ -133,8 +135,9 @@ func (a *App) postP2PTelemetryPayload(ctx context.Context, payload P2PTelemetryP
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("X-Agent-ID", agentID)
+	if err := netutil.SetAgentAuthHeadersWithAgentID(req, token, agentID); err != nil {
+		return err
+	}
 	req.Header.Set("Content-Type", "application/json")
 	if k := strings.TrimSpace(idempotencyKey); k != "" {
 		req.Header.Set("Idempotency-Key", k)
@@ -185,8 +188,9 @@ func (a *App) GetP2PDistributionStatusWithOptions(ctx context.Context, opts P2PD
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("X-Agent-ID", agentID)
+	if err := netutil.SetAgentAuthHeadersWithAgentID(req, token, agentID); err != nil {
+		return nil, err
+	}
 
 	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
 	if err != nil {
@@ -351,8 +355,16 @@ func (a *App) p2pAPIAuthEndpoint(path string) (string, string, string, error) {
 	if agentID == "" {
 		return "", "", "", fmt.Errorf("agentId ausente")
 	}
+	normalizedToken, err := netutil.NormalizeAgentToken(token)
+	if err != nil {
+		return "", "", "", err
+	}
+	normalizedAgentID, err := netutil.NormalizeAgentID(agentID)
+	if err != nil {
+		return "", "", "", err
+	}
 	endpoint := strings.TrimRight(scheme+"://"+server, "/") + path
-	return endpoint, token, agentID, nil
+	return endpoint, normalizedToken, normalizedAgentID, nil
 }
 
 func (a *App) getCachedSeedPlan() (P2PSeedPlanRecommendation, bool) {

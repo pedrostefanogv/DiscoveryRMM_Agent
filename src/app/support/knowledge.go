@@ -201,7 +201,9 @@ func (s *Service) fetchKnowledgeListWithCache(info AgentInfo, category string, u
 	if err != nil {
 		return nil, fmt.Errorf("URL invalida: %w", err)
 	}
-	netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, info.AgentID)
+	if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, info.AgentID); err != nil {
+		return nil, err
+	}
 
 	resp, err := tlsutil.NewHTTPClient(15 * time.Second).Do(req)
 	if err != nil {
@@ -289,7 +291,9 @@ func (s *Service) fetchKnowledgeDetail(info AgentInfo, articleID string) (Knowle
 	if err != nil {
 		return KnowledgeArticle{}, fmt.Errorf("URL invalida: %w", err)
 	}
-	netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, info.AgentID)
+	if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, info.AgentID); err != nil {
+		return KnowledgeArticle{}, err
+	}
 
 	resp, err := tlsutil.NewHTTPClient(15 * time.Second).Do(req)
 	if err != nil {

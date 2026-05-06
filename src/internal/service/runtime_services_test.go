@@ -35,7 +35,7 @@ func TestInventoryRuntimeServiceCollect_SyncsHardwareAndSoftwareWhenProvisioned(
 	hardwareCalls := 0
 	softwareCalls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get("Authorization"); got != "Bearer token-123" {
+		if got := r.Header.Get("Authorization"); got != "Bearer mdz_token_123" {
 			t.Fatalf("Authorization = %q", got)
 		}
 		if got := r.Header.Get("X-Agent-ID"); got != agentID {
@@ -72,7 +72,7 @@ func TestInventoryRuntimeServiceCollect_SyncsHardwareAndSoftwareWhenProvisioned(
 				AgentID:   agentID,
 				ApiScheme: parsed.Scheme,
 				ApiServer: parsed.Host,
-				AuthToken: "token-123",
+				AuthToken: "mdz_token_123",
 			}
 		},
 		collect: func(context.Context) (models.InventoryReport, error) {

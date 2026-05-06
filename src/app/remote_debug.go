@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"discovery/app/netutil"
+
 	"github.com/nats-io/nats.go"
 )
 
@@ -410,10 +412,14 @@ func newNATSRemoteDebugPublisher(server, token, subject, name string) (remoteDeb
 	if server == "" || token == "" || subject == "" {
 		return nil, fmt.Errorf("config NATS incompleta")
 	}
+	normalizedToken, err := netutil.NormalizeAgentToken(token)
+	if err != nil {
+		return nil, err
+	}
 
 	nc, err := nats.Connect(server,
 		nats.Name("discovery-remote-debug"),
-		nats.Token(token),
+		nats.Token(normalizedToken),
 		nats.Timeout(5*time.Second),
 		nats.ReconnectWait(2*time.Second),
 		nats.MaxReconnects(1),

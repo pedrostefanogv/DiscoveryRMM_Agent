@@ -459,8 +459,9 @@ func (u *Updater) fetchManifest(ctx context.Context) (*UpdateManifest, error) {
 	if err != nil {
 		return nil, err
 	}
-	netutil.SetAgentAuthHeaders(req, token)
-	req.Header.Set("X-Agent-ID", agentID)
+	if err := netutil.SetAgentAuthHeadersWithAgentID(req, token, agentID); err != nil {
+		return nil, err
+	}
 
 	client := &http.Client{Timeout: manifestTimeout}
 	resp, err := client.Do(req)
@@ -537,8 +538,10 @@ func (u *Updater) downloadToTemp(ctx context.Context, m *UpdateManifest) (string
 		errutil.LogIfErr(os.Remove(path), "selfupdate: limpar download temp")
 		return "", err
 	}
-	netutil.SetAgentAuthHeaders(req, token)
-	req.Header.Set("X-Agent-ID", agentID)
+	if err := netutil.SetAgentAuthHeadersWithAgentID(req, token, agentID); err != nil {
+		errutil.LogIfErr(os.Remove(path), "selfupdate: limpar download credenciais invalidas")
+		return "", err
+	}
 
 	client := &http.Client{}
 	resp, err := client.Do(req)
@@ -630,8 +633,10 @@ func (u *Updater) reportEvent(ctx context.Context, eventType string, opts report
 		u.logf("reportEvent request falhou (%s): %v", eventType, err)
 		return
 	}
-	netutil.SetAgentAuthHeaders(req, token)
-	req.Header.Set("X-Agent-ID", agentID)
+	if err := netutil.SetAgentAuthHeadersWithAgentID(req, token, agentID); err != nil {
+		u.logf("reportEvent credenciais invalidas (%s): %v", eventType, err)
+		return
+	}
 	req.Header.Set("Content-Type", "application/json")
 
 	client := &http.Client{Timeout: reportTimeout}

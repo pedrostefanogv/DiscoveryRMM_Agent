@@ -45,7 +45,7 @@ func TestGetRuntimeCustomFields_Success(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(0)
-	cfg := RuntimeConfig{BaseURL: srv.URL, Token: "tok", AgentID: "agent-uuid"}
+	cfg := RuntimeConfig{BaseURL: srv.URL, Token: "mdz_tok", AgentID: "8f6d6d72-4a8a-4c87-bffa-34ba29dc0bb7"}
 	result, err := c.GetRuntimeCustomFields(context.Background(), cfg, "task-1", "script-1", "corr-1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -73,7 +73,7 @@ func TestGetRuntimeCustomFields_NoQueryParams(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(0)
-	cfg := RuntimeConfig{BaseURL: srv.URL, Token: "tok", AgentID: "agent-uuid"}
+	cfg := RuntimeConfig{BaseURL: srv.URL, Token: "mdz_tok", AgentID: "8f6d6d72-4a8a-4c87-bffa-34ba29dc0bb7"}
 	result, err := c.GetRuntimeCustomFields(context.Background(), cfg, "", "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -90,7 +90,7 @@ func TestGetRuntimeCustomFields_Unauthorized(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(0)
-	cfg := RuntimeConfig{BaseURL: srv.URL, Token: "bad", AgentID: "agent-uuid"}
+	cfg := RuntimeConfig{BaseURL: srv.URL, Token: "mdz_bad", AgentID: "8f6d6d72-4a8a-4c87-bffa-34ba29dc0bb7"}
 	_, err := c.GetRuntimeCustomFields(context.Background(), cfg, "", "", "")
 	if err == nil || !strings.Contains(err.Error(), "401") {
 		t.Fatalf("expected 401 error, got: %v", err)
@@ -128,7 +128,7 @@ func TestCollectCustomFieldValue_Success(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(0)
-	cfg := RuntimeConfig{BaseURL: srv.URL, Token: "tok", AgentID: "agent-uuid"}
+	cfg := RuntimeConfig{BaseURL: srv.URL, Token: "mdz_tok", AgentID: "8f6d6d72-4a8a-4c87-bffa-34ba29dc0bb7"}
 	req := CollectedValueRequest{
 		Name:   &name,
 		Value:  json.RawMessage(`"TV999"`),
@@ -152,7 +152,7 @@ func TestCollectCustomFieldValue_BusinessError(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(0)
-	cfg := RuntimeConfig{BaseURL: srv.URL, Token: "tok", AgentID: "agent-uuid"}
+	cfg := RuntimeConfig{BaseURL: srv.URL, Token: "mdz_tok", AgentID: "8f6d6d72-4a8a-4c87-bffa-34ba29dc0bb7"}
 	name := "some_field"
 	req := CollectedValueRequest{Name: &name, Value: json.RawMessage(`"val"`)}
 	_, err := c.CollectCustomFieldValue(context.Background(), cfg, req, "")
@@ -199,10 +199,10 @@ func TestSetAutomationHeaders_AgentID(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(0)
-	cfg := RuntimeConfig{BaseURL: srv.URL, Token: "tok", AgentID: "my-agent-id"}
+	cfg := RuntimeConfig{BaseURL: srv.URL, Token: "mdz_tok", AgentID: "8f6d6d72-4a8a-4c87-bffa-34ba29dc0bb7"}
 	// SyncPolicy deve enviar X-Agent-ID
 	_, _ = c.SyncPolicy(context.Background(), cfg, PolicySyncRequest{}, "corr")
-	if capturedAgentID != "my-agent-id" {
-		t.Errorf("SyncPolicy: X-Agent-ID esperado 'my-agent-id', got %q", capturedAgentID)
+	if capturedAgentID != "8f6d6d72-4a8a-4c87-bffa-34ba29dc0bb7" {
+		t.Errorf("SyncPolicy: X-Agent-ID esperado GUID canônico, got %q", capturedAgentID)
 	}
 }
