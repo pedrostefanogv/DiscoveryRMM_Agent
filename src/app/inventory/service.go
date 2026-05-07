@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -140,7 +141,7 @@ func NewService(opts Options) *Service {
 		dispatchNotification:             opts.DispatchNotification,
 		logf:                             logf,
 		ctx:                              opts.Ctx,
-		db:                               opts.DB,
+		db:                               normalizeInventoryDB(opts.DB),
 		debugConfig:                      opts.DebugConfig,
 		version:                          opts.Version,
 		resolveMeshCentralNodeID:         opts.ResolveMeshCentralNodeID,
@@ -148,6 +149,25 @@ func NewService(opts Options) *Service {
 		shouldDeferNonCritical:           opts.ShouldDeferNonCritical,
 		postInstallInventoryRefreshDelay: postInstallInventoryRefreshDelayDefault,
 	}
+}
+
+// SetDB updates the persistence backend used by inventory sync routines.
+func (s *Service) SetDB(db DB) {
+	if s == nil {
+		return
+	}
+	s.db = normalizeInventoryDB(db)
+}
+
+func normalizeInventoryDB(db DB) DB {
+	if db == nil {
+		return nil
+	}
+	v := reflect.ValueOf(db)
+	if v.Kind() == reflect.Pointer && v.IsNil() {
+		return nil
+	}
+	return db
 }
 
 // GetCatalog resolves the package catalog.

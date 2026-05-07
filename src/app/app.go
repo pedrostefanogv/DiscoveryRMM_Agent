@@ -345,7 +345,7 @@ func NewApp(opts AppStartupOptions) *App {
 		Ctx: func() context.Context {
 			return a.ctx
 		},
-		DB:                       a.db,
+		DB:                       nil,
 		DebugConfig:              a.GetDebugConfig,
 		Version:                  Version,
 		ResolveMeshCentralNodeID: a.getMeshCentralNodeIDForReport,
@@ -577,6 +577,9 @@ func (a *App) startup(ctx context.Context) {
 		}
 		if a.automationSvc != nil {
 			a.automationSvc.SetDB(db)
+		}
+		if a.inventorySvc != nil {
+			a.inventorySvc.SetDB(db)
 		}
 		// Inicializar ConsolidationEngine (feature-flagged, desabilitado por padrão)
 		agentIDForEngine := strings.TrimSpace(a.GetDebugConfig().AgentID)

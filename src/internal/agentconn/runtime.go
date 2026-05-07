@@ -548,6 +548,12 @@ func (r *Runtime) Run(ctx context.Context) {
 			continue
 		}
 
+		if !hasCanonicalNATSContext(cfg) {
+			r.logf("[transport][nats] contexto canônico incompleto: clientId/siteId ausentes — aguardando sincronizacao de configuracao")
+			r.waitOrStop(ctx, reconnectBase)
+			continue
+		}
+
 		r.logf("tentando conexao (fallback) com agentId=%s", cfg.AgentID)
 
 		err := r.runSession(ctx, cfg)
@@ -559,6 +565,10 @@ func (r *Runtime) Run(ctx context.Context) {
 		}
 		r.waitReconnectWithJitter(ctx)
 	}
+}
+
+func hasCanonicalNATSContext(cfg Config) bool {
+	return strings.TrimSpace(cfg.ClientID) != "" && strings.TrimSpace(cfg.SiteID) != ""
 }
 
 func (r *Runtime) runSession(ctx context.Context, cfg Config) error {

@@ -9,9 +9,16 @@ import (
 	"time"
 )
 
-func (db *DB) CacheGet(key string) ([]byte, error) {
+func (db *DB) ensureAvailable() error {
 	if db == nil || db.conn == nil {
-		return nil, fmt.Errorf("database indisponivel")
+		return fmt.Errorf("database indisponivel")
+	}
+	return nil
+}
+
+func (db *DB) CacheGet(key string) ([]byte, error) {
+	if err := db.ensureAvailable(); err != nil {
+		return nil, err
 	}
 
 	var value string
@@ -40,8 +47,8 @@ func (db *DB) CacheGet(key string) ([]byte, error) {
 
 // CacheSet armazena um valor no cache com TTL opcional (0 = sem expiração)
 func (db *DB) CacheSet(key string, value []byte, ttl time.Duration) error {
-	if db == nil || db.conn == nil {
-		return fmt.Errorf("database indisponivel")
+	if err := db.ensureAvailable(); err != nil {
+		return err
 	}
 
 	var expiresAt sql.NullInt64
@@ -59,8 +66,8 @@ func (db *DB) CacheSet(key string, value []byte, ttl time.Duration) error {
 
 // CacheDelete remove um valor do cache
 func (db *DB) CacheDelete(key string) error {
-	if db == nil || db.conn == nil {
-		return fmt.Errorf("database indisponivel")
+	if err := db.ensureAvailable(); err != nil {
+		return err
 	}
 
 	_, err := db.conn.Exec("DELETE FROM cache WHERE key = ?", key)
@@ -98,6 +105,10 @@ type MemoryNote struct {
 
 // ListMemoryNotes retorna todas as notas ordenadas pela mais recente.
 func (db *DB) ListMemoryNotes() ([]MemoryNote, error) {
+	if err := db.ensureAvailable(); err != nil {
+		return nil, err
+	}
+
 	rows, err := db.conn.Query("SELECT id, content, created_at, updated_at FROM memory_notes ORDER BY created_at DESC")
 	if err != nil {
 		return nil, err
@@ -120,6 +131,10 @@ func (db *DB) ListMemoryNotes() ([]MemoryNote, error) {
 
 // CreateMemoryNote insere uma nova anotação e retorna o registro criado.
 func (db *DB) CreateMemoryNote(content string) (MemoryNote, error) {
+	if err := db.ensureAvailable(); err != nil {
+		return MemoryNote{}, err
+	}
+
 	now := time.Now().Unix()
 	res, err := db.conn.Exec(
 		"INSERT INTO memory_notes (content, created_at, updated_at) VALUES (?, ?, ?)",
@@ -142,12 +157,20 @@ func (db *DB) CreateMemoryNote(content string) (MemoryNote, error) {
 
 // DeleteMemoryNote remove uma anotação pelo ID.
 func (db *DB) DeleteMemoryNote(id int64) error {
+	if err := db.ensureAvailable(); err != nil {
+		return err
+	}
+
 	_, err := db.conn.Exec("DELETE FROM memory_notes WHERE id = ?", id)
 	return err
 }
 
 // SaveInventorySnapshot salva um snapshot de inventário para histórico
 func (db *DB) SaveInventorySnapshot(agentID string, hardwareJSON, softwareJSON []byte) error {
+	if err := db.ensureAvailable(); err != nil {
+		return err
+	}
+
 	_, err := db.conn.Exec(
 		"INSERT INTO inventory_history (agent_id, collected_at, hardware_json, software_json) VALUES (?, ?, ?, ?)",
 		agentID, time.Now().Unix(), string(hardwareJSON), string(softwareJSON),
@@ -157,6 +180,10 @@ func (db *DB) SaveInventorySnapshot(agentID string, hardwareJSON, softwareJSON [
 
 // GetLatestInventory recupera o último snapshot de inventário para um agente
 func (db *DB) GetLatestInventory(agentID string) (hardwareJSON, softwareJSON []byte, collectedAt time.Time, err error) {
+	if err := db.ensureAvailable(); err != nil {
+		return nil, nil, time.Time{}, err
+	}
+
 	var hw, sw string
 	var ts int64
 
@@ -177,6 +204,10 @@ func (db *DB) GetLatestInventory(agentID string) (hardwareJSON, softwareJSON []b
 
 // CleanOldInventory remove snapshots de inventário mais antigos que X dias
 func (db *DB) CleanOldInventory(days int) error {
+	if err := db.ensureAvailable(); err != nil {
+		return err
+	}
+
 	cutoff := time.Now().AddDate(0, 0, -days).Unix()
 	_, err := db.conn.Exec("DELETE FROM inventory_history WHERE collected_at < ?", cutoff)
 	return err
@@ -184,6 +215,10 @@ func (db *DB) CleanOldInventory(days int) error {
 
 // GetLastSyncTime retorna quando foi o último sync bem-sucedido para uma chave
 func (db *DB) GetLastSyncTime(key string) (time.Time, error) {
+	if err := db.ensureAvailable(); err != nil {
+		return time.Time{}, err
+	}
+
 	var ts int64
 	err := db.conn.QueryRow(
 		"SELECT last_sync_at FROM sync_control WHERE key = ?",
@@ -202,6 +237,10 @@ func (db *DB) GetLastSyncTime(key string) (time.Time, error) {
 
 // UpdateLastSyncTime atualiza o timestamp do último sync bem-sucedido
 func (db *DB) UpdateLastSyncTime(key string, metadata string) error {
+	if err := db.ensureAvailable(); err != nil {
+		return err
+	}
+
 	_, err := db.conn.Exec(
 		"INSERT OR REPLACE INTO sync_control (key, last_sync_at, metadata) VALUES (?, ?, ?)",
 		key, time.Now().Unix(), metadata,
@@ -213,6 +252,10 @@ func (db *DB) UpdateLastSyncTime(key string, metadata string) error {
 // - Foi modificado desde último sync OU
 // - Passou mais de 24h desde último sync
 func (db *DB) ShouldSyncInventory(agentID string, currentHardware, currentSoftware []byte) (bool, string, error) {
+	if err := db.ensureAvailable(); err != nil {
+		return false, "", err
+	}
+
 	// 1. Verificar quando foi o último sync
 	lastSync, err := db.GetLastSyncTime("inventory_sync:" + agentID)
 	if err != nil {
