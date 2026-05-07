@@ -40,6 +40,24 @@ func TestInventorySoftwareChanged_DetectsVersionChange(t *testing.T) {
 	}
 }
 
+func TestInventorySoftwareChanged_IgnoresInstallDateChange(t *testing.T) {
+	oldJSON := []byte(`{"software":[{"name":"App","version":"1.0","publisher":"P","installId":"1","source":"registry","installDate":"2026-01-01"}]}`)
+	newJSON := []byte(`{"software":[{"name":"App","version":"1.0","publisher":"P","installId":"1","source":"registry","installDate":"2026-02-01"}]}`)
+
+	if inventorySoftwareChanged(oldJSON, newJSON) {
+		t.Fatalf("expected no significant change when only installDate changes")
+	}
+}
+
+func TestInventorySoftwareChanged_DetectsInstallSourceChange(t *testing.T) {
+	oldJSON := []byte(`{"software":[{"name":"App","version":"1.0","publisher":"P","installId":"1","source":"registry","installSource":"C:/Apps/App"}]}`)
+	newJSON := []byte(`{"software":[{"name":"App","version":"1.0","publisher":"P","installId":"1","source":"registry","installSource":"D:/Apps/App"}]}`)
+
+	if !inventorySoftwareChanged(oldJSON, newJSON) {
+		t.Fatalf("expected significant change when installSource changes")
+	}
+}
+
 func TestSavePSADTBootstrapStatus(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(dir)

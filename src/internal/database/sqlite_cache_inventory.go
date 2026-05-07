@@ -287,11 +287,13 @@ func inventorySoftwareChanged(oldJSON, newJSON []byte) bool {
 func normalizeInventorySoftwareJSON(raw []byte) ([]string, error) {
 	var payload struct {
 		Software []struct {
-			Name      string `json:"name"`
-			Version   string `json:"version"`
-			Publisher string `json:"publisher"`
-			InstallID string `json:"installId"`
-			Source    string `json:"source"`
+			Name          string `json:"name"`
+			Version       string `json:"version"`
+			Publisher     string `json:"publisher"`
+			InstallID     string `json:"installId"`
+			Source        string `json:"source"`
+			InstallDate   string `json:"installDate"`
+			InstallSource string `json:"installSource"`
 		} `json:"software"`
 	}
 
@@ -305,8 +307,9 @@ func normalizeInventorySoftwareJSON(raw []byte) ([]string, error) {
 			strings.TrimSpace(s.Version) + "|" +
 			strings.ToLower(strings.TrimSpace(s.Publisher)) + "|" +
 			strings.TrimSpace(s.InstallID) + "|" +
-			strings.ToLower(strings.TrimSpace(s.Source))
-		if strings.TrimSpace(key) == "||||" {
+			strings.ToLower(strings.TrimSpace(s.Source)) + "|" +
+			strings.ToLower(strings.TrimSpace(s.InstallSource))
+		if strings.TrimSpace(key) == "|||||" {
 			continue
 		}
 		items = append(items, key)

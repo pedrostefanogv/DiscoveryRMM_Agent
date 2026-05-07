@@ -1,8 +1,11 @@
 package app
 
 import (
+	"net"
+	"net/url"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -45,29 +48,14 @@ func (a *App) GetStatusOverview() StatusOverview {
 		ConnectionLabel:     "Offline",
 		OnlineReason:        strings.TrimSpace(agent.OnlineReason),
 		Hostname:            "Computador local",
-		Server:              strings.TrimSpace(agent.Server),
-		ConnectionType:      "NATS",
+		Server:              normalizeStatusServer(firstStatusServerCandidate(agent.Server, cfg)),
+		ConnectionType:      resolveStatusConnectionType(agent.Transport, cfg),
 		LastGlobalPongAtUTC: strings.TrimSpace(agent.LastGlobalPongAtUTC),
 		GlobalPongStale:     agent.GlobalPongStale,
 		AppVersion:          strings.TrimSpace(Version),
 		OSName:              runtime.GOOS,
 		OSVersion:           runtime.GOARCH,
 		CheckedAtUTC:        time.Now().UTC(),
-	}
-
-	if strings.EqualFold(strings.TrimSpace(cfg.Scheme), "nats") {
-		out.ConnectionType = "NATS"
-	}
-
-	if transport := strings.TrimSpace(agent.Transport); transport != "" {
-		switch strings.ToLower(transport) {
-		case "nats":
-			out.ConnectionType = "NATS"
-		case "nats-wss", "nats-ws":
-			out.ConnectionType = "NATS WS"
-		default:
-			out.ConnectionType = transport
-		}
 	}
 
 	if host, err := os.Hostname(); err == nil {
@@ -140,6 +128,107 @@ func (a *App) GetStatusOverview() StatusOverview {
 	}
 
 	return out
+}
+
+func firstStatusServerCandidate(agentServer string, cfg DebugConfig) string {
+	if server := strings.TrimSpace(agentServer); server != "" {
+		return server
+	}
+	for _, candidate := range []string{cfg.Server, cfg.NatsWsServer, cfg.NatsServer, cfg.ApiServer} {
+		if server := strings.TrimSpace(candidate); server != "" {
+			return server
+		}
+	}
+	return ""
+}
+
+func resolveStatusConnectionType(transport string, cfg DebugConfig) string {
+	if mapped := mapStatusTransportConnectionType(transport); mapped != "" {
+		return mapped
+	}
+
+	if strings.TrimSpace(cfg.NatsWsServer) != "" && strings.TrimSpace(cfg.NatsServer) == "" {
+		return "wss"
+	}
+	if strings.EqualFold(strings.TrimSpace(cfg.Scheme), "nats") || strings.TrimSpace(cfg.NatsServer) != "" {
+		return "nats"
+	}
+	if strings.TrimSpace(cfg.NatsWsServer) != "" {
+		return "wss"
+	}
+
+	return "-"
+}
+
+func mapStatusTransportConnectionType(transport string) string {
+	normalized := strings.ToLower(strings.TrimSpace(transport))
+	switch normalized {
+	case "":
+		return ""
+	case "nats":
+		return "nats"
+	case "nats-ws", "nats-wss", "ws", "wss":
+		return "wss"
+	default:
+		if strings.Contains(normalized, "ws") {
+			return "wss"
+		}
+		if strings.Contains(normalized, "nats") {
+			return "nats"
+		}
+		return normalized
+	}
+}
+
+func normalizeStatusServer(raw string) string {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return ""
+	}
+
+	if strings.Contains(value, "://") {
+		if parsed, err := url.Parse(value); err == nil && strings.TrimSpace(parsed.Host) != "" {
+			value = strings.TrimSpace(parsed.Host)
+		}
+	} else if strings.ContainsAny(value, "/?") {
+		if parsed, err := url.Parse("//" + value); err == nil && strings.TrimSpace(parsed.Host) != "" {
+			value = strings.TrimSpace(parsed.Host)
+		}
+	}
+
+	if host, _, err := net.SplitHostPort(value); err == nil {
+		value = host
+	} else if host, ok := splitHostAndNumericPort(value); ok {
+		value = host
+	}
+
+	value = strings.TrimSpace(strings.Trim(value, "[]"))
+	if value == "" {
+		return strings.TrimSpace(raw)
+	}
+	return value
+}
+
+func splitHostAndNumericPort(value string) (string, bool) {
+	trimmed := strings.TrimSpace(value)
+	idx := strings.LastIndex(trimmed, ":")
+	if idx <= 0 || idx >= len(trimmed)-1 {
+		return "", false
+	}
+
+	hostPart := strings.TrimSpace(trimmed[:idx])
+	portPart := strings.TrimSpace(trimmed[idx+1:])
+	if hostPart == "" || portPart == "" {
+		return "", false
+	}
+	if strings.Contains(hostPart, ":") {
+		return "", false
+	}
+	if _, err := strconv.Atoi(portPart); err != nil {
+		return "", false
+	}
+
+	return hostPart, true
 }
 
 func applyRealtimeStatus(out *StatusOverview, rt RealtimeStatus) {

@@ -170,12 +170,14 @@ type OperatingSystem struct {
 }
 
 type SoftwareItem struct {
-	Name      string `json:"name"`
-	Version   string `json:"version"`
-	Publisher string `json:"publisher"`
-	InstallID string `json:"installId"`
-	Serial    string `json:"serial"`
-	Source    string `json:"source"`
+	Name          string `json:"name"`
+	Version       string `json:"version"`
+	Publisher     string `json:"publisher"`
+	InstallID     string `json:"installId"`
+	Serial        string `json:"serial"`
+	Source        string `json:"source"`
+	InstallDate   string `json:"installDate"`
+	InstallSource string `json:"installSource"`
 }
 
 type StartupItem struct {

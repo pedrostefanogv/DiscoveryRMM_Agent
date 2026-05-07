@@ -1406,6 +1406,8 @@ export namespace models {
 	    installId: string;
 	    serial: string;
 	    source: string;
+	    installDate: string;
+	    installSource: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new SoftwareItem(source);
@@ -1419,6 +1421,8 @@ export namespace models {
 	        this.installId = source["installId"];
 	        this.serial = source["serial"];
 	        this.source = source["source"];
+	        this.installDate = source["installDate"];
+	        this.installSource = source["installSource"];
 	    }
 	}
 	export class PrinterInfo {

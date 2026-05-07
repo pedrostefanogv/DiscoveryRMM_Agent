@@ -107,7 +107,7 @@
           <button id="refreshSoftwareBtn" class="btn subtle icon-btn software-refresh-btn" type="button" title="Atualizar softwares" aria-label="Atualizar softwares" data-i18n-title="inventory.refreshSoftware" data-i18n-aria-label="inventory.refreshSoftware">
             <span aria-hidden="true">&#x21bb;</span>
           </button>
-          <input id="softwareSearchInput" type="search" placeholder="Pesquisar software por nome, versao ou publisher" data-i18n-placeholder="inventory.searchSoftwarePlaceholder" />
+          <input id="softwareSearchInput" type="search" placeholder="Pesquisar software por nome, versao, publisher, origem ou data" data-i18n-placeholder="inventory.searchSoftwarePlaceholder" />
         </div>
         <div class="software-table-wrap">
           <table class="software-table">
@@ -119,6 +119,8 @@
                 <th data-sort-key="installId" class="sortable" data-i18n="field.installId">ID Instalacao</th>
                 <th data-sort-key="serial" class="sortable" data-i18n="field.serial">Serial</th>
                 <th data-sort-key="source" class="sortable" data-i18n="field.source">Origem</th>
+                <th data-sort-key="installSource" class="sortable" data-i18n="field.installSource">Origem Instalacao</th>
+                <th data-sort-key="installDate" class="sortable" data-i18n="field.installDate">Data Instalacao</th>
               </tr>
             </thead>
             <tbody id="softwareTableBody"></tbody>

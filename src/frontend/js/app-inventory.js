@@ -247,7 +247,7 @@ function setInventoryInitialLoadingState(isLoading, message, isError) {
 
 function renderSoftwareTable() {
   if (!inventorySoftwareFiltered.length) {
-    softwareTableBodyEl.innerHTML = '<tr><td colspan="6">' + escapeHtml(translate('inventory.noneSoftwareFound')) + '</td></tr>';
+    softwareTableBodyEl.innerHTML = '<tr><td colspan="8">' + escapeHtml(translate('inventory.noneSoftwareFound')) + '</td></tr>';
     softwareCountEl.textContent = translate('inventory.visibleTotal', { visible: 0 });
     softwarePageInfoEl.textContent = translate('pagination.page', { page: 1, total: 1 });
     softwarePrevBtn.disabled = true;
@@ -269,6 +269,8 @@ function renderSoftwareTable() {
       '<td>' + escapeHtml(s.installId || '-') + '</td>' +
       '<td>' + escapeHtml(s.serial || '-') + '</td>' +
       '<td>' + escapeHtml(s.source || '-') + '</td>' +
+      '<td>' + escapeHtml(s.installSource || '-') + '</td>' +
+      '<td>' + escapeHtml(s.installDate || '-') + '</td>' +
     '</tr>';
   }).join('');
 
@@ -329,7 +331,9 @@ function applySoftwareFilter() {
              (s.publisher && String(s.publisher).toLowerCase().includes(q)) ||
              (s.installId && String(s.installId).toLowerCase().includes(q)) ||
              (s.serial && String(s.serial).toLowerCase().includes(q)) ||
-             (s.source && String(s.source).toLowerCase().includes(q));
+             (s.source && String(s.source).toLowerCase().includes(q)) ||
+             (s.installSource && String(s.installSource).toLowerCase().includes(q)) ||
+             (s.installDate && String(s.installDate).toLowerCase().includes(q));
     });
   }
   softwarePage = 1;

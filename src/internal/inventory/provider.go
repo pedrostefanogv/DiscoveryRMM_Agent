@@ -187,6 +187,45 @@ func (p *Provider) collectNetworkConnectionsWithOsquery(ctx context.Context) (mo
 	}, nil
 }
 
+func softwareInventoryQueries(programsRequired bool) []osqueryQuery {
+	return []osqueryQuery{
+		{
+			name:     "programs",
+			sql:      "SELECT name, version, publisher, identifying_number AS install_id, uninstall_string, install_date, install_source FROM programs WHERE name <> ''",
+			required: programsRequired,
+		},
+		{
+			name: "chocolatey_packages",
+			sql:  "SELECT name, version, author AS publisher, package_id AS install_id, '' AS uninstall_string, '' AS install_date, '' AS install_source FROM chocolatey_packages WHERE name <> ''",
+		},
+		{
+			name: "npm_packages",
+			sql:  "SELECT name, version, author AS publisher, path AS install_id, '' AS uninstall_string, '' AS install_date, path AS install_source FROM npm_packages WHERE name <> ''",
+		},
+		{
+			name: "python_packages",
+			sql:  "SELECT name, version, summary AS publisher, directory AS install_id, '' AS uninstall_string, '' AS install_date, directory AS install_source FROM python_packages WHERE name <> ''",
+		},
+	}
+}
+
+func buildSoftwareInventoryFromResults(results map[string]osqueryResult) []models.SoftwareItem {
+	rowsFor := func(name string) []map[string]any {
+		r := results[name]
+		if r.err != nil || len(r.rows) == 0 {
+			return nil
+		}
+		return r.rows
+	}
+
+	return mergeSoftwareInventories(
+		mapPrograms(rowsFor("programs"), "osquery/programs"),
+		mapPrograms(rowsFor("chocolatey_packages"), "osquery/chocolatey_packages"),
+		mapPrograms(rowsFor("npm_packages"), "osquery/npm_packages"),
+		mapPrograms(rowsFor("python_packages"), "osquery/python_packages"),
+	)
+}
+
 // collectWithOsquery runs all osquery queries and assembles the report.
 //
 // Query execution strategy (tried in order):
@@ -215,7 +254,10 @@ func (p *Provider) collectWithOsquery(ctx context.Context) (models.InventoryRepo
 		{name: "bitlocker_info", sql: "SELECT device_id, drive_letter, persistent_volume_id, conversion_status, protection_status, encryption_method, version, percentage_encrypted, lock_status FROM bitlocker_info"},
 		{name: "cpu_info", sql: "SELECT device_id, model, manufacturer, processor_type, cpu_status, number_of_cores, logical_processors, address_width, current_clock_speed, max_clock_speed, socket_designation, availability, load_percentage, number_of_efficiency_cores, number_of_performance_cores FROM cpu_info"},
 		{name: "cpuid", sql: "SELECT feature, value, output_register, output_bit, input_eax FROM cpuid"},
-		{name: "programs", sql: "SELECT name, version, publisher, identifying_number, uninstall_string FROM programs WHERE name <> ''", required: true},
+		{name: "programs", sql: "SELECT name, version, publisher, identifying_number AS install_id, uninstall_string, install_date, install_source FROM programs WHERE name <> ''", required: true},
+		{name: "chocolatey_packages", sql: "SELECT name, version, author AS publisher, package_id AS install_id, '' AS uninstall_string, '' AS install_date, '' AS install_source FROM chocolatey_packages WHERE name <> ''"},
+		{name: "npm_packages", sql: "SELECT name, version, author AS publisher, path AS install_id, '' AS uninstall_string, '' AS install_date, path AS install_source FROM npm_packages WHERE name <> ''"},
+		{name: "python_packages", sql: "SELECT name, version, summary AS publisher, directory AS install_id, '' AS uninstall_string, '' AS install_date, directory AS install_source FROM python_packages WHERE name <> ''"},
 		{name: "startup_items", sql: "SELECT name, path, args, type, source, status, username FROM startup_items"},
 		{name: "autoexec", sql: "SELECT path, name, source FROM autoexec"},
 		{name: "logged_in_users", sql: "SELECT user, type, tty, host, pid, sid, registry_hive, time FROM logged_in_users"},
@@ -295,7 +337,7 @@ func (p *Provider) collectWithOsquery(ctx context.Context) (models.InventoryRepo
 		Networks:       mapNetworkRows(get("interface_details"), get("interface_addresses"), get("routes")),
 		ListeningPorts: mapListeningPorts(get("listening_ports")),
 		OpenSockets:    mapOpenSockets(get("open_sockets")),
-		Software:       mapPrograms(results["programs"].rows, "osquery/programs"),
+		Software:       buildSoftwareInventoryFromResults(results),
 		StartupItems:   mapStartupItems(get("startup_items")),
 		Autoexec:       mapAutoexecItems(get("autoexec")),
 		LoggedInUsers:  mapLoggedInUsers(get("logged_in_users")),
@@ -325,9 +367,7 @@ func (p *Provider) CollectSoftware(ctx context.Context) ([]models.SoftwareItem, 
 	runCtx, cancel := ctxutil.WithTimeout(ctx, p.timeout)
 	defer cancel()
 
-	queries := []osqueryQuery{
-		{name: "programs", sql: "SELECT name, version, publisher, identifying_number, uninstall_string FROM programs WHERE name <> ''", required: true},
-	}
+	queries := softwareInventoryQueries(true)
 
 	results := p.runQueries(runCtx, bin, queries)
 	r := results["programs"]
@@ -336,7 +376,7 @@ func (p *Provider) CollectSoftware(ctx context.Context) ([]models.SoftwareItem, 
 	}
 
 	p.emitProgressHeartbeat()
-	return mapPrograms(r.rows, "osquery/programs"), nil
+	return buildSoftwareInventoryFromResults(results), nil
 }
 
 // CollectStartupItems collects only startup items.

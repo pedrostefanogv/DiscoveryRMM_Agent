@@ -117,12 +117,14 @@ type agentSoftwareEnvelope struct {
 }
 
 type agentSoftwareItem struct {
-	Name      string `json:"name"`
-	Version   string `json:"version"`
-	Publisher string `json:"publisher"`
-	InstallID string `json:"installId"`
-	Serial    string `json:"serial"`
-	Source    string `json:"source"`
+	Name          string `json:"name"`
+	Version       string `json:"version"`
+	Publisher     string `json:"publisher"`
+	InstallID     string `json:"installId"`
+	Serial        string `json:"serial"`
+	Source        string `json:"source"`
+	InstallDate   string `json:"installDate"`
+	InstallSource string `json:"installSource"`
 }
 
 // SyncInventoryOnStartup sends inventory payloads when credentials are available.
@@ -323,12 +325,14 @@ func buildAgentSoftwareEnvelope(report models.InventoryReport) agentSoftwareEnve
 			source = "osquery/programs"
 		}
 		software = append(software, agentSoftwareItem{
-			Name:      name,
-			Version:   trimToMaxLen(strings.TrimSpace(s.Version), 120),
-			Publisher: trimToMaxLen(strings.TrimSpace(s.Publisher), 300),
-			InstallID: trimToMaxLen(strings.TrimSpace(s.InstallID), 1000),
-			Serial:    trimToMaxLen(strings.TrimSpace(s.Serial), 1000),
-			Source:    source,
+			Name:          name,
+			Version:       trimToMaxLen(strings.TrimSpace(s.Version), 120),
+			Publisher:     trimToMaxLen(strings.TrimSpace(s.Publisher), 300),
+			InstallID:     trimToMaxLen(strings.TrimSpace(s.InstallID), 1000),
+			Serial:        trimToMaxLen(strings.TrimSpace(s.Serial), 1000),
+			Source:        source,
+			InstallDate:   trimToMaxLen(strings.TrimSpace(s.InstallDate), 64),
+			InstallSource: trimToMaxLen(strings.TrimSpace(s.InstallSource), 1000),
 		})
 	}
 

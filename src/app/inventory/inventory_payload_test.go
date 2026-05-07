@@ -99,12 +99,14 @@ func TestBuildAgentSoftwareEnvelope_AppliesContractLimits(t *testing.T) {
 	report := models.InventoryReport{
 		Software: []models.SoftwareItem{
 			{
-				Name:      veryLong,
-				Version:   veryLong,
-				Publisher: veryLong,
-				InstallID: veryLong,
-				Serial:    veryLong,
-				Source:    "",
+				Name:          veryLong,
+				Version:       veryLong,
+				Publisher:     veryLong,
+				InstallID:     veryLong,
+				Serial:        veryLong,
+				Source:        "",
+				InstallDate:   veryLong,
+				InstallSource: veryLong,
 			},
 			{Name: ""},
 		},
@@ -129,6 +131,12 @@ func TestBuildAgentSoftwareEnvelope_AppliesContractLimits(t *testing.T) {
 	}
 	if len(item.Serial) > 1000 {
 		t.Fatalf("serial excedeu limite: %d", len(item.Serial))
+	}
+	if len(item.InstallDate) > 64 {
+		t.Fatalf("installDate excedeu limite: %d", len(item.InstallDate))
+	}
+	if len(item.InstallSource) > 1000 {
+		t.Fatalf("installSource excedeu limite: %d", len(item.InstallSource))
 	}
 	if item.Source != "osquery/programs" {
 		t.Fatalf("source = %q, esperado fallback %q", item.Source, "osquery/programs")

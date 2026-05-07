@@ -1,6 +1,7 @@
 package inventory
 
 import (
+	"sort"
 	"strings"
 
 	"discovery/internal/models"
@@ -20,16 +21,114 @@ func mapPrograms(rows []map[string]any, source string) []models.SoftwareItem {
 		if strings.TrimSpace(name) == "" {
 			continue
 		}
+		installID := firstNonEmpty(
+			getString(row, "install_id"),
+			getString(row, "identifying_number"),
+			getString(row, "package_id"),
+			getString(row, "path"),
+			getString(row, "directory"),
+			getString(row, "uninstall_string"),
+		)
+		installSource := firstNonEmpty(
+			getString(row, "install_source"),
+			getString(row, "path"),
+			getString(row, "directory"),
+		)
 		items = append(items, models.SoftwareItem{
-			Name:      name,
-			Version:   getString(row, "version"),
-			Publisher: getString(row, "publisher"),
-			InstallID: firstNonEmpty(getString(row, "identifying_number"), getString(row, "uninstall_string")),
-			Serial:    firstNonEmpty(getString(row, "identifying_number"), getString(row, "guid"), getString(row, "install_source")),
-			Source:    source,
+			Name:          name,
+			Version:       getString(row, "version"),
+			Publisher:     firstNonEmpty(getString(row, "publisher"), getString(row, "summary"), getString(row, "author")),
+			InstallID:     installID,
+			Serial:        firstNonEmpty(getString(row, "serial"), getString(row, "identifying_number"), installID, getString(row, "guid"), installSource, getString(row, "uninstall_string")),
+			Source:        source,
+			InstallDate:   getString(row, "install_date"),
+			InstallSource: installSource,
 		})
 	}
 	return items
+}
+
+func mergeSoftwareInventories(groups ...[]models.SoftwareItem) []models.SoftwareItem {
+	total := 0
+	for _, group := range groups {
+		total += len(group)
+	}
+	if total == 0 {
+		return nil
+	}
+
+	items := make([]models.SoftwareItem, 0, total)
+	byKey := make(map[string]int, total)
+
+	for _, group := range groups {
+		for _, item := range group {
+			key := softwareIdentityKey(item)
+			if key == "" {
+				continue
+			}
+			if idx, ok := byKey[key]; ok {
+				items[idx] = mergeSoftwareItemValues(items[idx], item)
+				continue
+			}
+			byKey[key] = len(items)
+			items = append(items, item)
+		}
+	}
+
+	if len(items) == 0 {
+		return nil
+	}
+
+	sort.Slice(items, func(i, j int) bool {
+		return softwareSortKey(items[i]) < softwareSortKey(items[j])
+	})
+
+	return items
+}
+
+func softwareIdentityKey(item models.SoftwareItem) string {
+	name := strings.ToLower(strings.TrimSpace(item.Name))
+	if name == "" {
+		return ""
+	}
+	return name + "|" +
+		strings.TrimSpace(item.Version) + "|" +
+		strings.ToLower(strings.TrimSpace(item.Publisher)) + "|" +
+		strings.TrimSpace(item.InstallID) + "|" +
+		strings.ToLower(strings.TrimSpace(item.Source))
+}
+
+func softwareSortKey(item models.SoftwareItem) string {
+	return strings.ToLower(strings.TrimSpace(item.Name)) + "|" +
+		strings.TrimSpace(item.Version) + "|" +
+		strings.ToLower(strings.TrimSpace(item.Publisher)) + "|" +
+		strings.ToLower(strings.TrimSpace(item.Source)) + "|" +
+		strings.TrimSpace(item.InstallID)
+}
+
+func mergeSoftwareItemValues(current, incoming models.SoftwareItem) models.SoftwareItem {
+	if strings.TrimSpace(current.Version) == "" {
+		current.Version = incoming.Version
+	}
+	if strings.TrimSpace(current.Publisher) == "" {
+		current.Publisher = incoming.Publisher
+	}
+	if strings.TrimSpace(current.InstallID) == "" {
+		current.InstallID = incoming.InstallID
+	}
+	if strings.TrimSpace(current.Serial) == "" {
+		current.Serial = incoming.Serial
+	}
+	if strings.TrimSpace(current.Source) == "" {
+		current.Source = incoming.Source
+	}
+	if strings.TrimSpace(current.InstallDate) == "" {
+		current.InstallDate = incoming.InstallDate
+	}
+	if strings.TrimSpace(current.InstallSource) == "" {
+		current.InstallSource = incoming.InstallSource
+	}
+	return current
 }
 
 // -----------------------------------------------------------------------

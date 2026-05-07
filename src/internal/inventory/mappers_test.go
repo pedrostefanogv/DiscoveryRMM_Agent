@@ -2,6 +2,8 @@ package inventory
 
 import (
 	"testing"
+
+	"discovery/internal/models"
 )
 
 func TestMapPrograms_NilInput(t *testing.T) {
@@ -32,11 +34,13 @@ func TestMapPrograms_SkipsEmptyName(t *testing.T) {
 func TestMapPrograms_MapsFields(t *testing.T) {
 	rows := []map[string]any{
 		{
-			"name":               "Visual Studio Code",
-			"version":            "1.85.0",
-			"publisher":          "Microsoft",
-			"identifying_number": "{ABC-123}",
-			"uninstall_string":   "C:\\uninstall.exe",
+			"name":             "Visual Studio Code",
+			"version":          "1.85.0",
+			"publisher":        "Microsoft",
+			"install_id":       "{ABC-123}",
+			"uninstall_string": "C:\\uninstall.exe",
+			"install_date":     "2026-05-06",
+			"install_source":   "C:\\Program Files\\Microsoft VS Code",
 		},
 	}
 	result := mapPrograms(rows, "osquery/programs")
@@ -58,6 +62,67 @@ func TestMapPrograms_MapsFields(t *testing.T) {
 	}
 	if item.InstallID != "{ABC-123}" {
 		t.Errorf("InstallID = %q, want %q", item.InstallID, "{ABC-123}")
+	}
+	if item.InstallDate != "2026-05-06" {
+		t.Errorf("InstallDate = %q, want %q", item.InstallDate, "2026-05-06")
+	}
+	if item.InstallSource != "C:\\Program Files\\Microsoft VS Code" {
+		t.Errorf("InstallSource = %q, want %q", item.InstallSource, "C:\\Program Files\\Microsoft VS Code")
+	}
+}
+
+func TestMergeSoftwareInventories_DeduplicatesAndMerges(t *testing.T) {
+	items := mergeSoftwareInventories(
+		[]models.SoftwareItem{
+			{
+				Name:      "My App",
+				Version:   "1.0.0",
+				Publisher: "Acme",
+				InstallID: "abc",
+				Source:    "osquery/programs",
+			},
+			{
+				Name:      "Another App",
+				Version:   "2.0.0",
+				Publisher: "Acme",
+				InstallID: "def",
+				Source:    "osquery/npm_packages",
+			},
+		},
+		[]models.SoftwareItem{
+			{
+				Name:          "My App",
+				Version:       "1.0.0",
+				Publisher:     "Acme",
+				InstallID:     "abc",
+				Source:        "osquery/programs",
+				InstallDate:   "2026-05-06",
+				InstallSource: "C:/Programs/MyApp",
+				Serial:        "SER-001",
+			},
+		},
+	)
+
+	if len(items) != 2 {
+		t.Fatalf("expected 2 software items, got %d", len(items))
+	}
+
+	if items[0].Name != "Another App" {
+		t.Fatalf("expected sorted order by name, first item = %q", items[0].Name)
+	}
+
+	myApp := items[1]
+	if myApp.Name != "My App" {
+		t.Fatalf("expected merged My App item, got %q", myApp.Name)
+	}
+	if myApp.InstallDate != "2026-05-06" {
+		t.Fatalf("InstallDate = %q, want 2026-05-06", myApp.InstallDate)
+	}
+	if myApp.InstallSource != "C:/Programs/MyApp" {
+		t.Fatalf("InstallSource = %q, want C:/Programs/MyApp", myApp.InstallSource)
+	}
+	if myApp.Serial != "SER-001" {
+		t.Fatalf("Serial = %q, want SER-001", myApp.Serial)
 	}
 }
 
