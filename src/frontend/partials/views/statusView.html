@@ -3,17 +3,20 @@
       <div class="statusbar page-bar">
         <span class="meta" data-i18n="status.summary">Resumo rapido de saude do agente</span>
         <div class="actions">
-          <button id="openP2PDebugStatusBtn" class="btn subtle hidden" data-i18n="action.openP2PDebug">Abrir P2P Debug</button>
           <button id="statusRefreshBtn" class="btn primary" data-i18n="action.refreshStatus">Atualizar Status</button>
         </div>
       </div>
 
       <div class="status-grid">
         <article class="card status-kpi-card">
-          <h3 data-i18n="status.connectionTitle">Conexao do Agente</h3>
+          <h3 data-i18n="status.connectionTitle">Status do Agente</h3>
           <div class="status-kpi-line">
             <span id="statusConnectionDot" class="agent-status-indicator"></span>
             <strong id="statusConnectionLabel" data-i18n="common.verifying">Verificando...</strong>
+          </div>
+          <div class="status-kpi-line">
+            <span id="serviceHealthDot" class="agent-status-indicator"></span>
+            <strong id="serviceHealthLabel" data-i18n="common.verifying">Verificando...</strong>
           </div>
           <div id="statusConnectionDetail" class="meta" data-i18n="status.awaitingRead">Aguardando leitura do status.</div>
         </article>
@@ -34,28 +37,13 @@
           </div>
         </article>
 
-        <article class="card status-kpi-card">
-          <h3 data-i18n="status.serviceTitle">Service (Processo Headless)</h3>
-          <div class="status-kpi-line">
-            <span id="serviceHealthDot" class="agent-status-indicator"></span>
-            <strong id="serviceHealthLabel" data-i18n="common.verifying">Verificando...</strong>
-          </div>
-          <div class="status-facts">
-            <div class="fact"><div class="k" data-i18n="field.components">Componentes</div><div id="serviceHealthCount" class="v">-</div></div>
-            <div class="fact"><div class="k" data-i18n="field.problems">Problemas</div><div id="serviceHealthProblems" class="v">-</div></div>
-          </div>
-          <div id="serviceHealthDetail" class="meta" data-i18n="common.awaiting">Aguardando...</div>
-        </article>
-
         <article class="card status-kpi-card wide">
           <h3 data-i18n="status.realtimeTitle">Realtime e Integracao</h3>
           <div class="status-facts">
             <div class="fact"><div class="k" data-i18n="field.realtime">Realtime</div><div id="statusRealtime" class="v">-</div></div>
-            <div class="fact"><div class="k" data-i18n="field.connectedAgents">Agentes conectados</div><div id="statusRealtimeAgents" class="v">-</div></div>
-            <div class="fact"><div class="k" data-i18n="field.lastInventory">Ultimo inventario</div><div id="statusInventoryAt" class="v">-</div></div>
+            <div class="fact"><div class="k" data-i18n="field.connectedAgents">Agentes P2P conectados</div><div id="statusRealtimeAgents" class="v">-</div></div>
             <div class="fact"><div class="k" data-i18n="field.serverPong">Ultimo ping do servidor</div><div id="statusServerPongAt" class="v">-</div></div>
             <div class="fact"><div class="k" data-i18n="field.nonCriticalTraffic">Trafego nao critico</div><div id="statusNonCriticalTraffic" class="v">-</div></div>
-            <div class="fact"><div class="k" data-i18n="field.nonCriticalUntil">Adiado ate</div><div id="statusNonCriticalUntil" class="v">-</div></div>
           </div>
           <div id="statusMessage" class="meta" data-i18n="common.noAdditionalInfo">Sem informacoes adicionais.</div>
         </article>

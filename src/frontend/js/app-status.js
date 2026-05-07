@@ -13,17 +13,11 @@ const statusOSNameEl = document.getElementById('statusOSName');
 const statusOSVersionEl = document.getElementById('statusOSVersion');
 const statusRealtimeEl = document.getElementById('statusRealtime');
 const statusRealtimeAgentsEl = document.getElementById('statusRealtimeAgents');
-const statusInventoryAtEl = document.getElementById('statusInventoryAt');
 const statusServerPongAtEl = document.getElementById('statusServerPongAt');
 const statusNonCriticalTrafficEl = document.getElementById('statusNonCriticalTraffic');
-const statusNonCriticalUntilEl = document.getElementById('statusNonCriticalUntil');
 const statusMessageEl = document.getElementById('statusMessage');
-const openP2PDebugStatusBtnEl = document.getElementById('openP2PDebugStatusBtn');
 const serviceHealthDotEl = document.getElementById('serviceHealthDot');
 const serviceHealthLabelEl = document.getElementById('serviceHealthLabel');
-const serviceHealthCountEl = document.getElementById('serviceHealthCount');
-const serviceHealthProblemsEl = document.getElementById('serviceHealthProblems');
-const serviceHealthDetailEl = document.getElementById('serviceHealthDetail');
 const serviceHealthIndicatorEl = document.getElementById('serviceHealthIndicator');
 
 function statusSafe(value, fallback) {
@@ -35,6 +29,91 @@ function statusSafe(value, fallback) {
 
 // formatStatusDate mantida como alias para compatibilidade; use formatDate diretamente.
 function formatStatusDate(value) { return formatDate(value, '-'); }
+
+function formatConnectionTypeLabel(value) {
+  var normalized = String(value || '').trim().toLowerCase();
+  if (!normalized || normalized === '-') {
+    return '-';
+  }
+  if (normalized === 'nats') {
+    return 'NATS';
+  }
+  if (normalized === 'wss' || normalized === 'ws' || normalized === 'nats-ws' || normalized === 'nats-wss') {
+    return 'NATS WS';
+  }
+  if (normalized.includes('nats') && normalized.includes('ws')) {
+    return 'NATS WS';
+  }
+  return normalized.toUpperCase();
+}
+
+function formatStatusRelativeDate(value) {
+  if (!value && value !== 0) return '-';
+  var d = value instanceof Date ? value : new Date(value);
+  if (isNaN(d.getTime())) return statusSafe(value, '-');
+
+  var diffSeconds = Math.round((d.getTime() - Date.now()) / 1000);
+  var absSeconds = Math.abs(diffSeconds);
+  if (absSeconds >= 24 * 60 * 60) {
+    return formatStatusDate(d);
+  }
+
+  var localeTag = 'pt-BR';
+  try {
+    localeTag = getAppLocaleTag(getAppLocale());
+  } catch (_e) {
+    // Fallback para locale padrao quando i18n ainda nao estiver pronto.
+  }
+
+  if (typeof Intl !== 'undefined' && typeof Intl.RelativeTimeFormat === 'function') {
+    var rtf = new Intl.RelativeTimeFormat(localeTag, { numeric: 'auto' });
+    if (absSeconds < 60) return rtf.format(diffSeconds, 'second');
+    if (absSeconds < 60 * 60) return rtf.format(Math.round(diffSeconds / 60), 'minute');
+    return rtf.format(Math.round(diffSeconds / 3600), 'hour');
+  }
+
+  if (absSeconds < 60) return diffSeconds < 0 ? ('ha ' + absSeconds + 's') : ('em ' + absSeconds + 's');
+  var absMinutes = Math.round(absSeconds / 60);
+  if (absSeconds < 60 * 60) return diffSeconds < 0 ? ('ha ' + absMinutes + ' min') : ('em ' + absMinutes + ' min');
+  var absHours = Math.round(absSeconds / 3600);
+  return diffSeconds < 0 ? ('ha ' + absHours + ' h') : ('em ' + absHours + ' h');
+}
+
+function resolveConnectedP2PAgents(data) {
+  var p2pConnectedAgents = Number(data && data.p2pConnectedAgents);
+  if (Number.isFinite(p2pConnectedAgents) && p2pConnectedAgents >= 0) {
+    return String(p2pConnectedAgents);
+  }
+  return statusSafe(data && data.realtimeConnectedAgents, '0');
+}
+
+function formatNonCriticalTrafficStatus(data) {
+  if (!(data && data.nonCriticalDeferred)) {
+    return translate('status.nonCriticalNormal');
+  }
+
+  var untilLabel = formatStatusRelativeDate(data.nonCriticalDeferredUntilUtc);
+  if (untilLabel === '-') {
+    return translate('status.nonCriticalDeferred');
+  }
+  return translate('status.nonCriticalDeferredUntil', { until: untilLabel });
+}
+
+async function fetchConnectedP2PAgents() {
+  try {
+    var api = appApi();
+    if (!api || typeof api.GetP2PPeers !== 'function') {
+      return null;
+    }
+    var peers = await api.GetP2PPeers();
+    if (!Array.isArray(peers)) {
+      return null;
+    }
+    return peers.length;
+  } catch (_error) {
+    return null;
+  }
+}
 
 function renderStatusOverview(data) {
   var connected = !!(data && data.connected);
@@ -48,7 +127,7 @@ function renderStatusOverview(data) {
 
   var line1 = translate('window.meta.pc') + ': ' + statusSafe(data && data.hostname, translate('status.localComputer'));
   var serverPart = translate('window.meta.server') + ': ' + statusSafe(data && data.server, '-');
-  var connPart = translate('window.meta.connection') + ': ' + statusSafe(data && data.connectionType, '-');
+  var connPart = translate('window.meta.connection') + ': ' + formatConnectionTypeLabel(data && data.connectionType);
   var transportPart = translate('status.transportState') + ': ' + (data && data.transportConnected ? translate('common.online') : translate('common.offline'));
   var line2 = serverPart + ' / ' + connPart + ' / ' + transportPart;
   var line3 = '';
@@ -74,23 +153,15 @@ function renderStatusOverview(data) {
   }
 
   if (statusRealtimeAgentsEl) {
-    statusRealtimeAgentsEl.textContent = statusSafe(data && data.realtimeConnectedAgents, '0');
-  }
-
-  if (statusInventoryAtEl) {
-    statusInventoryAtEl.textContent = formatStatusDate(data && data.lastInventoryCollected);
+    statusRealtimeAgentsEl.textContent = resolveConnectedP2PAgents(data);
   }
 
   if (statusServerPongAtEl) {
-    statusServerPongAtEl.textContent = formatStatusDate(data && data.lastGlobalPongAtUtc);
+    statusServerPongAtEl.textContent = formatStatusRelativeDate(data && data.lastGlobalPongAtUtc);
   }
 
   if (statusNonCriticalTrafficEl) {
-    statusNonCriticalTrafficEl.textContent = data && data.nonCriticalDeferred ? translate('status.nonCriticalDeferred') : translate('status.nonCriticalNormal');
-  }
-
-  if (statusNonCriticalUntilEl) {
-    statusNonCriticalUntilEl.textContent = data && data.nonCriticalDeferred ? formatStatusDate(data.nonCriticalDeferredUntilUtc) : '-';
+    statusNonCriticalTrafficEl.textContent = formatNonCriticalTrafficStatus(data);
   }
 
   if (statusMessageEl) {
@@ -118,67 +189,35 @@ function renderServiceHealth(health) {
   if (!health) {
     if (serviceHealthDotEl) serviceHealthDotEl.className = 'agent-status-indicator offline';
     if (serviceHealthLabelEl) serviceHealthLabelEl.textContent = translate('status.serviceUnavailable');
-    if (serviceHealthDetailEl) {
-      serviceHealthDetailEl.textContent = translate('status.serviceUnavailableDetail');
-    }
-    updateTopbarServiceIndicator('offline', '');
+    updateTopbarServiceIndicator('offline', translate('status.serviceUnavailable'));
     return;
   }
 
   if (health.error) {
     if (serviceHealthDotEl) serviceHealthDotEl.className = 'agent-status-indicator offline';
     if (serviceHealthLabelEl) serviceHealthLabelEl.textContent = translate('status.serviceUnavailable');
-    var userMessage = statusSafe(
-      health.user_message,
-      translate('status.serviceUnavailableDetail')
-    );
-    if (serviceHealthDetailEl) serviceHealthDetailEl.textContent = userMessage;
-    updateTopbarServiceIndicator('offline', userMessage);
+    updateTopbarServiceIndicator('offline', translate('status.serviceUnavailable'));
     return;
   }
 
   var running = !!health.running;
   var unhealthyCount = health.unhealthy_count || 0;
-  var componentCount = health.component_count || 0;
   var degradedCount = health.degraded_count || 0;
+  var hasProblems = unhealthyCount > 0 || degradedCount > 0;
 
-  // Determinar status visual
-  var statusClass = 'offline';
-  var statusLabel = translate('common.offline');
+  var statusClass = 'online';
+  var statusLabel = translate('status.serviceOk');
   if (!running) {
     statusClass = 'offline';
-    statusLabel = translate('status.notRunning');
-  } else if (unhealthyCount > 0) {
-    statusClass = 'error';
-    statusLabel = translate('status.problemDetected');
-  } else if (degradedCount > 0) {
+    statusLabel = translate('status.serviceUnavailable');
+  } else if (hasProblems) {
     statusClass = 'warning';
-    statusLabel = translate('common.degraded');
-  } else {
-    statusClass = 'online';
-    statusLabel = translate('common.healthy');
+    statusLabel = translate('status.serviceUnavailable');
   }
 
   if (serviceHealthDotEl) serviceHealthDotEl.className = 'agent-status-indicator ' + statusClass;
   if (serviceHealthLabelEl) serviceHealthLabelEl.textContent = statusLabel;
-  if (serviceHealthCountEl) serviceHealthCountEl.textContent = String(componentCount);
-  if (serviceHealthProblemsEl) serviceHealthProblemsEl.textContent = String(unhealthyCount + degradedCount);
-  
-  var detail = '';
-  if (health.components && health.components.length > 0) {
-    var problemComps = health.components.filter(function(c) { 
-      return String(c.status || '').toLowerCase() !== 'healthy'; 
-    });
-    if (problemComps.length > 0) {
-      detail = translate('status.problemsIn', { components: problemComps.map(function(c) { 
-        return String(c.component || c.Component || 'desconhecido'); 
-      }).join(', ') });
-    } else {
-      detail = translate('status.allComponentsHealthy');
-    }
-  }
-  if (serviceHealthDetailEl) serviceHealthDetailEl.textContent = detail || translate('common.awaiting');
-  
+
   updateTopbarServiceIndicator(statusClass, statusLabel);
 }
 
@@ -212,8 +251,16 @@ async function loadStatusOverview() {
     return;
   }
   try {
-    var data = await appApi().GetStatusOverview();
-    renderStatusOverview(data || {});
+    var api = appApi();
+    var result = await Promise.all([
+      api.GetStatusOverview(),
+      fetchConnectedP2PAgents(),
+    ]);
+    var data = result[0] || {};
+    if (result[1] !== null) {
+      data.p2pConnectedAgents = result[1];
+    }
+    renderStatusOverview(data);
   } catch (error) {
     renderStatusError(error && error.message ? error.message : String(error));
   }
@@ -243,14 +290,6 @@ function stopStatusPoll() {
 function initStatusPage() {
   if (statusRefreshBtnEl) {
     statusRefreshBtnEl.addEventListener('click', loadStatusOverview);
-  }
-  if (openP2PDebugStatusBtnEl) {
-    openP2PDebugStatusBtnEl.addEventListener('click', function () {
-      setActiveTab('p2p');
-      if (typeof loadP2PView === 'function') {
-        loadP2PView();
-      }
-    });
   }
 }
 
