@@ -492,12 +492,14 @@ func heartbeatIntervalFromAgentConfig(_ AgentConfiguration) int {
 func (a *App) getHeartbeatMetrics() agentconn.AgentHeartbeatMetrics {
 	hostname, _ := os.Hostname()
 	metrics := agentconn.AgentHeartbeatMetrics{
-		Hostname:      hostname,
-		CpuPercent:    -1,
-		MemoryPercent: -1,
-		DiskPercent:   -1,
-		UptimeSeconds: int64(time.Since(a.startupTime).Seconds()),
-		P2pPeers:      a.getKnownP2PPeers(),
+		Hostname:         hostname,
+		CpuPercent:       -1,
+		MemoryPercent:    -1,
+		DiskPercent:      -1,
+		DiskReadPercent:  -1,
+		DiskWritePercent: -1,
+		UptimeSeconds:    int64(time.Since(a.startupTime).Seconds()),
+		P2pPeers:         a.getKnownP2PPeers(),
 	}
 
 	// Tenta coleta completa via osquery (CPU, memória, disco, processos).

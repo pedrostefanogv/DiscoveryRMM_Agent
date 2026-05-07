@@ -187,11 +187,13 @@ func (s *agentRuntimeService) getHeartbeatMetrics() agentconn.AgentHeartbeatMetr
 	}
 
 	metrics := agentconn.AgentHeartbeatMetrics{
-		Hostname:      hostname,
-		CpuPercent:    -1,
-		MemoryPercent: -1,
-		DiskPercent:   -1,
-		UptimeSeconds: int64(time.Since(startedAt).Seconds()),
+		Hostname:         hostname,
+		CpuPercent:       -1,
+		MemoryPercent:    -1,
+		DiskPercent:      -1,
+		DiskReadPercent:  -1,
+		DiskWritePercent: -1,
+		UptimeSeconds:    int64(time.Since(startedAt).Seconds()),
 	}
 
 	if runtime.GOOS != "windows" {
