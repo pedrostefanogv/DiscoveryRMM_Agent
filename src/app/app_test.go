@@ -85,18 +85,18 @@ func TestServiceOnlyUnavailablePayload_HasUserGuidance(t *testing.T) {
 	}
 }
 
-func TestGetServiceHealth_ServiceClientNil_ReturnsServiceOnlyGuidance(t *testing.T) {
+func TestGetServiceHealth_ServiceModeDisabled_ReturnsLocalRuntimeStatus(t *testing.T) {
 	a := &App{}
 	health := a.GetServiceHealth()
-	if health["running"] != false {
-		t.Fatalf("expected running=false, got %v", health["running"])
+	if health["running"] != true {
+		t.Fatalf("expected running=true, got %v", health["running"])
 	}
-	if health["service_only"] != true {
-		t.Fatalf("expected service_only=true, got %v", health["service_only"])
+	if health["service_only"] != false {
+		t.Fatalf("expected service_only=false, got %v", health["service_only"])
 	}
 	msg, _ := health["user_message"].(string)
-	if !strings.Contains(strings.ToLower(msg), "contate o suporte") {
-		t.Fatalf("expected support guidance in user_message, got %q", msg)
+	if !strings.Contains(strings.ToLower(msg), "tray") {
+		t.Fatalf("expected local runtime guidance in user_message, got %q", msg)
 	}
 }
 
@@ -170,11 +170,11 @@ func TestShouldRunLocalP2P_NoServiceConnected(t *testing.T) {
 	}
 }
 
-func TestShouldRunLocalP2P_ServiceConnectedNormalModeSkips(t *testing.T) {
+func TestShouldRunLocalP2P_ServiceConnectedNormalModeRunsWhenServiceModeDisabled(t *testing.T) {
 	a := &App{}
 	a.serviceConnectedMode.Store(true)
-	if a.shouldRunLocalP2P() {
-		t.Fatal("expected local P2P to be skipped when service is connected in normal mode")
+	if !a.shouldRunLocalP2P() {
+		t.Fatal("expected local P2P to run when service mode is globally disabled")
 	}
 }
 
@@ -183,6 +183,14 @@ func TestShouldRunLocalP2P_ServiceConnectedDebugModeRuns(t *testing.T) {
 	a.serviceConnectedMode.Store(true)
 	if !a.shouldRunLocalP2P() {
 		t.Fatal("expected local P2P to run in debug mode even when service is connected")
+	}
+}
+
+func TestShouldUseServiceRuntime_DisabledByGlobalFlag(t *testing.T) {
+	a := &App{}
+	a.serviceConnectedMode.Store(true)
+	if a.shouldUseServiceRuntime() {
+		t.Fatal("expected shouldUseServiceRuntime=false when windowsServiceModeEnabled=false")
 	}
 }
 

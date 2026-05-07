@@ -124,6 +124,16 @@ Unicode true
 !endif
 !endif
 
+!ifdef ARG_ENABLE_WINDOWS_SERVICE
+!define BUILD_ENABLE_WINDOWS_SERVICE "${ARG_ENABLE_WINDOWS_SERVICE}"
+!else
+!ifdef ENABLE_WINDOWS_SERVICE
+!define BUILD_ENABLE_WINDOWS_SERVICE "1"
+!else
+!define BUILD_ENABLE_WINDOWS_SERVICE "0"
+!endif
+!endif
+
 !ifdef ARG_PAYLOAD_URL
 !define BUILD_PAYLOAD_URL "${ARG_PAYLOAD_URL}"
 !else
@@ -459,8 +469,16 @@ Section
          # Salvar configurações do agente
          Call SaveAgentConfig
 
-         # Registrar e iniciar serviço Windows (modo headless 24/7)
-         Call RegisterWindowsService
+         # Registrar regra de firewall para runtime local/P2P.
+         Call RegisterWindowsFirewallRule
+
+         # Opcional: registrar serviço Windows somente quando habilitado em build.
+         ${If} "${BUILD_ENABLE_WINDOWS_SERVICE}" == "1"
+            Call RegisterWindowsService
+         ${Else}
+            # Garantir migração limpa removendo serviço legado, se existir.
+            Call UnregisterWindowsService
+         ${EndIf}
 
          # Registrar autostart da UI via Task Scheduler (At log on of any user)
          Call RegisterUIStartupTask
@@ -778,9 +796,6 @@ Function RegisterWindowsService
    ExecWait '"$SYSDIR\sc.exe" failure "${DISCOVERY_SERVICE_NAME}" reset= 86400 actions= restart/5000/restart/5000/restart/5000' $R1
    ExecWait '"$SYSDIR\sc.exe" description "${DISCOVERY_SERVICE_NAME}" "Discovery background service (multi-user)"' $R1
 
-   # Garantir acesso de rede ao executável antes do primeiro start do serviço.
-   Call RegisterWindowsFirewallRule
-
    # Iniciar serviço após instalação
    ExecWait '"$SYSDIR\sc.exe" start "${DISCOVERY_SERVICE_NAME}"' $R1
    ${If} $R1 != 0
@@ -841,7 +856,13 @@ FunctionEnd
 Function UnregisterWindowsService
    DetailPrint "Removendo Windows Service ${DISCOVERY_SERVICE_NAME}"
    ExecWait '"$SYSDIR\sc.exe" stop "${DISCOVERY_SERVICE_NAME}"' $R0
+   ${If} $R0 != 0
+      DetailPrint "Aviso: falha (ou service inexistente) ao parar ${DISCOVERY_SERVICE_NAME}. Codigo: $R0"
+   ${EndIf}
    ExecWait '"$SYSDIR\sc.exe" delete "${DISCOVERY_SERVICE_NAME}"' $R0
+   ${If} $R0 != 0
+      DetailPrint "Aviso: falha (ou service inexistente) ao remover ${DISCOVERY_SERVICE_NAME}. Codigo: $R0"
+   ${EndIf}
 FunctionEnd
 
 Function un.UnregisterWindowsFirewallRule
@@ -870,7 +891,13 @@ FunctionEnd
 Function un.UnregisterWindowsService
    DetailPrint "Removendo Windows Service ${DISCOVERY_SERVICE_NAME}"
    ExecWait '"$SYSDIR\sc.exe" stop "${DISCOVERY_SERVICE_NAME}"' $R0
+   ${If} $R0 != 0
+      DetailPrint "Aviso: falha (ou service inexistente) ao parar ${DISCOVERY_SERVICE_NAME}. Codigo: $R0"
+   ${EndIf}
    ExecWait '"$SYSDIR\sc.exe" delete "${DISCOVERY_SERVICE_NAME}"' $R0
+   ${If} $R0 != 0
+      DetailPrint "Aviso: falha (ou service inexistente) ao remover ${DISCOVERY_SERVICE_NAME}. Codigo: $R0"
+   ${EndIf}
 FunctionEnd
 
 Function un.UnregisterUIStartupTask

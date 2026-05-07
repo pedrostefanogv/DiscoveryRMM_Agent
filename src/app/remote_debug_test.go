@@ -112,7 +112,7 @@ func TestHandleAgentRuntimeCommand_UpdateRequiresService(t *testing.T) {
 	if strings.TrimSpace(output) != "" {
 		t.Fatalf("expected no output on failure, got %q", output)
 	}
-	if !strings.Contains(errText, "Windows Service") {
-		t.Fatalf("expected service-first error, got %q", errText)
+	if !strings.Contains(strings.ToLower(errText), "desativado") {
+		t.Fatalf("expected service-disabled error, got %q", errText)
 	}
 }

@@ -567,7 +567,10 @@ func (a *App) requestAgentUpdateCheck(ctx context.Context, source string) error 
 	if source == "" {
 		source = "manual"
 	}
-	if a.serviceConnectedMode.Load() && a.serviceClient != nil {
+	if !windowsServiceModeEnabled {
+		return fmt.Errorf("self-update remoto indisponivel: modo Windows Service desativado")
+	}
+	if a.shouldUseServiceRuntime() {
 		if !a.serviceClient.IsConnected() {
 			if err := a.serviceClient.Connect(ctx); err != nil {
 				return err

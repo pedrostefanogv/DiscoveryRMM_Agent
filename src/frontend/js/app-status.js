@@ -186,6 +186,14 @@ function renderStatusError(message) {
 }
 
 function renderServiceHealth(health) {
+  if (health && health.service_only === false) {
+    var localRuntimeLabel = translate('status.localRuntimeMode');
+    if (serviceHealthDotEl) serviceHealthDotEl.className = 'agent-status-indicator online';
+    if (serviceHealthLabelEl) serviceHealthLabelEl.textContent = localRuntimeLabel;
+    updateTopbarServiceIndicator('online', localRuntimeLabel);
+    return;
+  }
+
   if (!health) {
     if (serviceHealthDotEl) serviceHealthDotEl.className = 'agent-status-indicator offline';
     if (serviceHealthLabelEl) serviceHealthLabelEl.textContent = translate('status.serviceUnavailable');

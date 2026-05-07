@@ -56,6 +56,10 @@ const (
 	// Temporarily disable efficiency mode until we revisit this behavior.
 	efficiencyModeEnabled = false
 
+	// windowsServiceModeEnabled controla o modo service-first.
+	// Enquanto false, o runtime opera sempre em modo local (tray icon no logon).
+	windowsServiceModeEnabled = false
+
 	WindowWidth     = 1280
 	WindowHeight    = 860
 	WindowMinWidth  = 980
@@ -136,9 +140,9 @@ type App struct {
 	zeroTouchAttemptInFlight atomic.Bool
 	zeroTouchApprovalPending atomic.Bool
 
-	// serviceConnectedMode é true quando o Windows Service foi detectado no startup.
-	// Quando ativo, workers locais de automação e inventário são omitidos para
-	// evitar duplicação com os workers do service (arquitetura service-first).
+	// serviceConnectedMode é true quando o Windows Service foi detectado no startup
+	// E o modo service-first está habilitado. Enquanto o modo estiver desativado,
+	// essa flag permanece false e o runtime fica sempre local.
 	serviceConnectedMode atomic.Bool
 
 	// startupTime registra quando a aplicação iniciou, usado para calcular
@@ -162,8 +166,11 @@ func NewApp(opts AppStartupOptions) *App {
 	reg := mcp.NewRegistry()
 	chatSvc := ai.NewService(reg)
 
-	// Initialize service client for communicating with Windows Service
-	serviceClient := service.NewServiceClient()
+	var serviceClient *service.ServiceClient
+	if windowsServiceModeEnabled {
+		// Initialize service client for communicating with Windows Service.
+		serviceClient = service.NewServiceClient()
+	}
 
 	a := &App{
 		ctx:                 context.Background(), // inicializado para evitar nil; sobrescrito por SetContext()
@@ -526,10 +533,20 @@ func (a *App) shouldRunLocalP2P() bool {
 	if a == nil {
 		return false
 	}
-	if a.serviceConnectedMode.Load() && !a.runtimeFlags.DebugMode {
+	if a.shouldUseServiceRuntime() && !a.runtimeFlags.DebugMode {
 		return false
 	}
 	return true
+}
+
+func (a *App) shouldUseServiceRuntime() bool {
+	if a == nil || !windowsServiceModeEnabled {
+		return false
+	}
+	if a.serviceClient == nil {
+		return false
+	}
+	return a.serviceConnectedMode.Load()
 }
 
 func (a *App) startup(ctx context.Context) {
@@ -566,10 +583,11 @@ func (a *App) startup(ctx context.Context) {
 		a.consolEngine = newConsolidationEngine(db, agentIDForEngine)
 	}
 
-	// Verificar conectividade com o Windows Service antes de iniciar workers locais.
-	// Quando o service está disponível, workers de automação e inventário são omitidos
-	// para evitar duplicação (arquitetura service-first: service executa, UI consome).
-	if a.serviceClient != nil {
+	// Modo padrão: runtime local (tray icon no logon), sem service-first.
+	if !windowsServiceModeEnabled {
+		a.serviceConnectedMode.Store(false)
+		log.Println("[startup] modo Windows Service desativado — runtime local (tray) ativo")
+	} else if a.serviceClient != nil {
 		probeCtx, probeCancel := context.WithTimeout(ctx, 2*time.Second)
 		if a.serviceClient.Ping(probeCtx) {
 			a.serviceConnectedMode.Store(true)
@@ -585,7 +603,7 @@ func (a *App) startup(ctx context.Context) {
 		defer a.startupWg.Done()
 
 		// Quando o service está disponível, ele já gerencia inventário; pular coleta local.
-		if a.serviceConnectedMode.Load() {
+		if a.shouldUseServiceRuntime() {
 			log.Println("[startup] inventory-startup: ignorado (service disponível)")
 			return
 		}
@@ -622,7 +640,7 @@ func (a *App) startup(ctx context.Context) {
 		if a.debugSvc != nil {
 			a.debugSvc.BootstrapAgentCredentialsFromInstallerConfig(ctx)
 		}
-		if a.serviceConnectedMode.Load() {
+		if a.shouldUseServiceRuntime() {
 			a.requestServiceConfigReload(ctx, "startup-bootstrap")
 		}
 
@@ -631,7 +649,7 @@ func (a *App) startup(ctx context.Context) {
 			a.ensureMeshCentralInstalled(ctx, "startup-auth", false)
 		})
 
-		if a.serviceConnectedMode.Load() {
+		if a.shouldUseServiceRuntime() {
 			log.Println("[startup] agent-runtime local: ignorado (service disponível)")
 			return
 		}
@@ -663,7 +681,7 @@ func (a *App) startup(ctx context.Context) {
 		}
 
 		// Quando o service está disponível, ele gerencia automação; pular worker local.
-		if a.serviceConnectedMode.Load() {
+		if a.shouldUseServiceRuntime() {
 			log.Println("[startup] automation-service: ignorado (service disponível)")
 			return
 		}
@@ -690,7 +708,7 @@ func (a *App) startup(ctx context.Context) {
 			log.Println("[startup] p2p local: ignorado (service disponível)")
 			return
 		}
-		if a.serviceConnectedMode.Load() && a.runtimeFlags.DebugMode {
+		if a.shouldUseServiceRuntime() && a.runtimeFlags.DebugMode {
 			log.Println("[startup] p2p local: iniciado em modo debug mesmo com service disponível")
 		}
 		if !isAgentConfigured() && a.zeroTouchConfigRegistrationAllowed() {
@@ -742,7 +760,7 @@ func (a *App) SendTestHeartbeat() string {
 	defer a.queuedForceHeartbeat.Store(false)
 
 	a.logs.append("[heartbeat][manual] enviando heartbeat manual...")
-	if a.serviceConnectedMode.Load() && a.serviceClient != nil {
+	if a.shouldUseServiceRuntime() {
 		message, err := a.requestServiceForceHeartbeat(a.ctx, "debug-manual-heartbeat")
 		if err != nil {
 			a.logs.append("[heartbeat][manual] falha ao enviar heartbeat manual via service: " + err.Error())
@@ -997,10 +1015,23 @@ func serviceOnlyUnavailablePayload(detail string) dto.ServiceHealthPayload {
 	}
 }
 
+func localRuntimeHealthPayload() dto.ServiceHealthPayload {
+	return dto.ServiceHealthPayload{
+		Running:     true,
+		ServiceOnly: false,
+		UserMessage: "Runtime local ativo (tray icon no logon).",
+	}
+}
+
 // GetServiceHealth returns the health of the headless Windows Service.
 // Retained as map[string]interface{} for Wails frontend compatibility.
 func (a *App) GetServiceHealth() map[string]interface{} {
 	var payload dto.ServiceHealthPayload
+
+	if !windowsServiceModeEnabled {
+		payload = localRuntimeHealthPayload()
+		return toMap(payload)
+	}
 
 	if a.serviceClient == nil {
 		payload = serviceOnlyUnavailablePayload("service client not initialized")
