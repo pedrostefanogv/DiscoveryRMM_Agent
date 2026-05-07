@@ -728,15 +728,28 @@ func (a *App) startup(ctx context.Context) {
 // NATS connection and returns diagnostic info.
 // This is exposed as a Wails binding for the debug page.
 func (a *App) SendTestHeartbeat() string {
-	if a.agentConn == nil {
-		return "erro: agent runtime nao inicializado"
-	}
 	if !a.queuedForceHeartbeat.CompareAndSwap(false, true) {
 		return "erro: heartbeat manual ja em andamento"
 	}
 	defer a.queuedForceHeartbeat.Store(false)
 
 	a.logs.append("[heartbeat][manual] enviando heartbeat manual...")
+	if a.serviceConnectedMode.Load() && a.serviceClient != nil {
+		message, err := a.requestServiceForceHeartbeat(a.ctx, "debug-manual-heartbeat")
+		if err != nil {
+			a.logs.append("[heartbeat][manual] falha ao enviar heartbeat manual via service: " + err.Error())
+			return "falha ao enviar heartbeat manual via service: " + err.Error()
+		}
+		if strings.TrimSpace(message) == "" {
+			message = "heartbeat manual enviado com sucesso via Windows Service"
+		}
+		a.logs.append("[heartbeat][manual] " + message)
+		return message
+	}
+	if a.agentConn == nil {
+		a.logs.append("[heartbeat][manual] falha ao enviar heartbeat manual: agent runtime nao inicializado")
+		return "erro: agent runtime nao inicializado"
+	}
 	if a.agentConn.ForceHeartbeat() {
 		a.logs.append("[heartbeat][manual] heartbeat manual enviado com sucesso")
 		return "heartbeat manual enviado com sucesso"

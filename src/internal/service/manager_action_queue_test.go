@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -42,6 +43,26 @@ type fakeAppsService struct {
 	installCalls  int
 	lastPackageID string
 }
+
+type fakeAgentRuntime struct {
+	forceHeartbeatResult bool
+	forceHeartbeatCalls  int
+}
+
+func (f *fakeAgentRuntime) Run(ctx context.Context) {}
+
+func (f *fakeAgentRuntime) Reload() {}
+
+func (f *fakeAgentRuntime) ForceHeartbeat() bool {
+	f.forceHeartbeatCalls++
+	return f.forceHeartbeatResult
+}
+
+func (f *fakeAgentRuntime) GetStatus() AgentConnectionStatus {
+	return AgentConnectionStatus{}
+}
+
+func (f *fakeAgentRuntime) IngestRemoteDebugLog(line string) {}
 
 func (f *fakeAppsService) Install(ctx context.Context, id string) (string, error) {
 	f.installCalls++
@@ -264,5 +285,102 @@ func TestGetActionStatusAndHistory(t *testing.T) {
 	}
 	if found {
 		t.Fatalf("expected missing action to return found=false")
+	}
+}
+
+func TestProcessNextQueuedAction_ForceHeartbeat(t *testing.T) {
+	dir := t.TempDir()
+	db, err := database.Open(dir)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	agentRuntime := &fakeAgentRuntime{forceHeartbeatResult: true}
+	sm := &ServiceManager{
+		db:            db,
+		agentRuntime:  agentRuntime,
+		actionTrigger: make(chan struct{}, 1),
+	}
+
+	err = db.EnqueueAction(database.ActionQueueEntry{
+		ActionID:    "action-force-heartbeat",
+		UserSID:     "S-1-5-21-444",
+		UserName:    "DESKTOP\\user",
+		Command:     "force_heartbeat",
+		PayloadJSON: `{"action":"force_heartbeat","source":"debug-manual-heartbeat"}`,
+		QueuedAt:    time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("enqueue action: %v", err)
+	}
+
+	processed, err := sm.processNextQueuedAction(context.Background())
+	if err != nil {
+		t.Fatalf("process action: %v", err)
+	}
+	if !processed {
+		t.Fatalf("expected one action to be processed")
+	}
+	if agentRuntime.forceHeartbeatCalls != 1 {
+		t.Fatalf("expected ForceHeartbeat to be called once, got %d", agentRuntime.forceHeartbeatCalls)
+	}
+
+	stored, found, err := db.GetAction("action-force-heartbeat")
+	if err != nil {
+		t.Fatalf("get action: %v", err)
+	}
+	if !found || stored.Status != "completed" {
+		t.Fatalf("expected completed action, found=%v status=%q", found, stored.Status)
+	}
+}
+
+func TestProcessNextQueuedAction_ForceHeartbeatFailure(t *testing.T) {
+	dir := t.TempDir()
+	db, err := database.Open(dir)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	agentRuntime := &fakeAgentRuntime{forceHeartbeatResult: false}
+	sm := &ServiceManager{
+		db:            db,
+		agentRuntime:  agentRuntime,
+		actionTrigger: make(chan struct{}, 1),
+	}
+
+	err = db.EnqueueAction(database.ActionQueueEntry{
+		ActionID:    "action-force-heartbeat-failure",
+		UserSID:     "S-1-5-21-445",
+		UserName:    "DESKTOP\\user",
+		Command:     "force_heartbeat",
+		PayloadJSON: `{"action":"force_heartbeat"}`,
+		QueuedAt:    time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("enqueue action: %v", err)
+	}
+
+	processed, err := sm.processNextQueuedAction(context.Background())
+	if err != nil {
+		t.Fatalf("process action: %v", err)
+	}
+	if !processed {
+		t.Fatalf("expected one action to be processed")
+	}
+	if agentRuntime.forceHeartbeatCalls != 1 {
+		t.Fatalf("expected ForceHeartbeat to be called once, got %d", agentRuntime.forceHeartbeatCalls)
+	}
+
+	stored, found, err := db.GetAction("action-force-heartbeat-failure")
+	if err != nil {
+		t.Fatalf("get action: %v", err)
+	}
+	if !found || stored.Status != "failed" {
+		t.Fatalf("expected failed action, found=%v status=%q", found, stored.Status)
+	}
+	if !strings.Contains(strings.ToLower(stored.ErrorMessage), "timeout") {
+		t.Fatalf("unexpected error message: %q", stored.ErrorMessage)
 	}
 }

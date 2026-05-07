@@ -59,6 +59,7 @@ type AgentConnectionStatus struct {
 type AgentRuntime interface {
 	Run(ctx context.Context)
 	Reload()
+	ForceHeartbeat() bool
 	GetStatus() AgentConnectionStatus
 	IngestRemoteDebugLog(line string)
 }
@@ -1191,6 +1192,17 @@ func (sm *ServiceManager) executeQueuedAction(ctx context.Context, entry databas
 			return actionExecutionResult{status: "failed", errMessage: err.Error()}, err
 		}
 		return actionExecutionResult{status: "completed", output: "configuração recarregada", resultJSON: `{"command":"reload_config"}`}, nil
+	case "force_heartbeat":
+		sm.mu.RLock()
+		runtime := sm.agentRuntime
+		sm.mu.RUnlock()
+		if runtime == nil {
+			return actionExecutionResult{status: "failed", errMessage: "runtime do agente não registrado"}, fmt.Errorf("runtime do agente não registrado")
+		}
+		if !runtime.ForceHeartbeat() {
+			return actionExecutionResult{status: "failed", errMessage: "timeout ou nenhuma conexão ativa para enviar heartbeat forçado"}, fmt.Errorf("timeout ou nenhuma conexão ativa para enviar heartbeat forçado")
+		}
+		return actionExecutionResult{status: "completed", output: "heartbeat forçado enviado", resultJSON: `{"command":"force_heartbeat"}`}, nil
 	default:
 		return actionExecutionResult{status: "failed", errMessage: "ação não suportada pelo worker atual"}, fmt.Errorf("ação não suportada pelo worker atual: %s", entry.Command)
 	}

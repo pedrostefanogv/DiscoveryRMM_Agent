@@ -4,7 +4,10 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 )
+
+const serviceForceHeartbeatTimeout = 12 * time.Second
 
 // GetDebugConfig returns the current debug configuration.
 func (a *App) GetDebugConfig() DebugConfig {
@@ -139,6 +142,65 @@ func (a *App) requestServiceConfigReload(ctx context.Context, source string) {
 		}
 	}
 	a.logs.append("[service] reload_config enfileirado: source=" + strings.TrimSpace(source))
+}
+
+func (a *App) requestServiceForceHeartbeat(ctx context.Context, source string) (string, error) {
+	if a == nil || !a.serviceConnectedMode.Load() || a.serviceClient == nil {
+		return "", fmt.Errorf("Windows Service indisponivel para heartbeat manual")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if !a.serviceClient.IsConnected() {
+		if err := a.serviceClient.Connect(ctx); err != nil {
+			return "", fmt.Errorf("falha ao conectar no Windows Service: %w", err)
+		}
+	}
+
+	payload := map[string]interface{}{}
+	if source = strings.TrimSpace(source); source != "" {
+		payload["source"] = source
+	}
+
+	resp, err := a.serviceClient.Execute(ctx, "force_heartbeat", payload)
+	if err != nil {
+		_ = a.serviceClient.Close()
+		if reconnectErr := a.serviceClient.Connect(ctx); reconnectErr != nil {
+			return "", fmt.Errorf("falha ao reconectar no Windows Service: %w", reconnectErr)
+		}
+		resp, err = a.serviceClient.Execute(ctx, "force_heartbeat", payload)
+		if err != nil {
+			return "", fmt.Errorf("falha ao enfileirar force_heartbeat no Windows Service: %w", err)
+		}
+	}
+
+	if resp == nil {
+		return "", fmt.Errorf("resposta vazia do Windows Service")
+	}
+	if resp.Code >= 400 {
+		message := strings.TrimSpace(resp.Message)
+		if message == "" {
+			message = "force_heartbeat falhou no Windows Service"
+		}
+		return "", fmt.Errorf("%s", message)
+	}
+
+	actionID := serviceActionIDFromResponse(resp.Data)
+	if actionID == "" {
+		message := strings.TrimSpace(resp.Message)
+		if message == "" {
+			message = "heartbeat manual enfileirado via Windows Service"
+		}
+		return message, nil
+	}
+
+	waitCtx, cancel := context.WithTimeout(ctx, serviceForceHeartbeatTimeout)
+	defer cancel()
+	if _, err := a.waitForServiceActionCompletion(waitCtx, actionID); err != nil {
+		return "", err
+	}
+
+	return "heartbeat manual enviado com sucesso via Windows Service", nil
 }
 
 func stringFromServiceStatusValue(raw interface{}) string {

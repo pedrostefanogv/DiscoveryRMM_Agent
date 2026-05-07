@@ -142,6 +142,13 @@ func (s *agentRuntimeService) Reload() {
 	s.runtime.Reload()
 }
 
+func (s *agentRuntimeService) ForceHeartbeat() bool {
+	if s == nil || s.runtime == nil {
+		return false
+	}
+	return s.runtime.ForceHeartbeat()
+}
+
 func (s *agentRuntimeService) GetStatus() AgentConnectionStatus {
 	if s == nil || s.runtime == nil {
 		return AgentConnectionStatus{}
