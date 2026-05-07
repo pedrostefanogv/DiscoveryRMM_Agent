@@ -193,6 +193,7 @@ func (s *agentRuntimeService) getHeartbeatMetrics() agentconn.AgentHeartbeatMetr
 		DiskPercent:      -1,
 		DiskReadPercent:  -1,
 		DiskWritePercent: -1,
+		DiskResponseMs:   -1,
 		UptimeSeconds:    int64(time.Since(startedAt).Seconds()),
 	}
 

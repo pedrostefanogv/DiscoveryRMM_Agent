@@ -75,6 +75,7 @@ type AgentHeartbeat struct {
 	DiskUsedGb       *float64 `json:"diskUsedGb,omitempty"`
 	DiskReadPercent  *float64 `json:"diskReadPercent,omitempty"`
 	DiskWritePercent *float64 `json:"diskWritePercent,omitempty"`
+	DiskResponseMs   *float64 `json:"diskResponseMs,omitempty"`
 	P2pPeers         *int     `json:"p2pPeers,omitempty"`
 	UptimeSeconds    *int64   `json:"uptimeSeconds,omitempty"`
 	ProcessCount     *int     `json:"processCount,omitempty"`
@@ -93,6 +94,7 @@ type AgentHeartbeatMetrics struct {
 	DiskUsedGb       float64
 	DiskReadPercent  float64
 	DiskWritePercent float64
+	DiskResponseMs   float64
 	P2pPeers         int
 	UptimeSeconds    int64
 	ProcessCount     int
@@ -329,6 +331,7 @@ func (r *Runtime) collectHeartbeat(cfg Config, ipAddr string) AgentHeartbeat {
 		hb.DiskUsedGb = positiveFloatPtr(m.DiskUsedGb)
 		hb.DiskReadPercent = nonNegFloatPtr(m.DiskReadPercent)
 		hb.DiskWritePercent = nonNegFloatPtr(m.DiskWritePercent)
+		hb.DiskResponseMs = nonNegFloatPtr(m.DiskResponseMs)
 		hb.P2pPeers = &m.P2pPeers
 		hb.UptimeSeconds = &m.UptimeSeconds
 		hb.ProcessCount = &m.ProcessCount
@@ -348,7 +351,7 @@ func heartbeatLogPayload(hb AgentHeartbeat) string {
 // heartbeatLogFields detalha todos os campos do heartbeat para auditoria.
 func heartbeatLogFields(hb AgentHeartbeat) string {
 	return fmt.Sprintf(
-		"agentId=%q clientId=%s siteId=%s ipAddress=%s hostname=%s agentVersion=%s timestampUtc=%s cpuPercent=%s memoryPercent=%s memoryTotalGb=%s memoryUsedGb=%s diskPercent=%s diskTotalGb=%s diskUsedGb=%s diskReadPercent=%s diskWritePercent=%s p2pPeers=%s uptimeSeconds=%s processCount=%s",
+		"agentId=%q clientId=%s siteId=%s ipAddress=%s hostname=%s agentVersion=%s timestampUtc=%s cpuPercent=%s memoryPercent=%s memoryTotalGb=%s memoryUsedGb=%s diskPercent=%s diskTotalGb=%s diskUsedGb=%s diskReadPercent=%s diskWritePercent=%s diskResponseMs=%s p2pPeers=%s uptimeSeconds=%s processCount=%s",
 		hb.AgentId,
 		heartbeatOptionalQuotedString(hb.ClientId),
 		heartbeatOptionalQuotedString(hb.SiteId),
@@ -365,6 +368,7 @@ func heartbeatLogFields(hb AgentHeartbeat) string {
 		heartbeatOptionalFloatValue(hb.DiskUsedGb),
 		heartbeatOptionalFloatValue(hb.DiskReadPercent),
 		heartbeatOptionalFloatValue(hb.DiskWritePercent),
+		heartbeatOptionalFloatValue(hb.DiskResponseMs),
 		heartbeatOptionalIntValue(hb.P2pPeers),
 		heartbeatOptionalInt64Value(hb.UptimeSeconds),
 		heartbeatOptionalIntValue(hb.ProcessCount),

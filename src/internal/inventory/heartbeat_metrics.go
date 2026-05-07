@@ -38,7 +38,10 @@ SELECT
   END AS memory_percent,
   ROUND(d.disk_total_gb, 2)      AS disk_total_gb,
   ROUND(d.disk_used_gb, 2)       AS disk_used_gb,
-	NULL                           AS disk_percent,
+	ROUND(p.disk_percent, 1)       AS disk_percent,
+	ROUND(p.disk_read_percent, 1)  AS disk_read_percent,
+	ROUND(p.disk_write_percent, 1) AS disk_write_percent,
+	NULL                           AS disk_response_ms,
   CAST(up.total_seconds AS INTEGER) AS uptime_seconds,
   CAST((SELECT COUNT(*) FROM processes) AS INTEGER) AS process_count
 FROM system_info si
@@ -49,10 +52,18 @@ LEFT JOIN (
 LEFT JOIN (
   SELECT
     MAX(size) / 1073741824.0          AS disk_total_gb,
-		MAX(size - free_space) / 1073741824.0 AS disk_used_gb
+    MAX(size - free_space) / 1073741824.0 AS disk_used_gb
   FROM logical_drives
   WHERE device_id = 'C:' AND size > 0
 ) d
+LEFT JOIN (
+	SELECT
+		MAX(CAST(percent_disk_time AS REAL))       AS disk_percent,
+		MAX(CAST(percent_disk_read_time AS REAL))  AS disk_read_percent,
+		MAX(CAST(percent_disk_write_time AS REAL)) AS disk_write_percent
+	FROM physical_disk_performance
+	WHERE name LIKE '% C:'
+) p
 LIMIT 1
 `
 
@@ -129,6 +140,7 @@ func mapHeartbeatRow(row map[string]any) *agentconn.AgentHeartbeatMetrics {
 		DiskUsedGb:       parseHeartbeatFloat(row, "disk_used_gb", 0),
 		DiskReadPercent:  parseHeartbeatFloat(row, "disk_read_percent", -1),
 		DiskWritePercent: parseHeartbeatFloat(row, "disk_write_percent", -1),
+		DiskResponseMs:   parseHeartbeatFloat(row, "disk_response_ms", -1),
 		UptimeSeconds:    int64(parseHeartbeatFloat(row, "uptime_seconds", 0)),
 		ProcessCount:     int(parseHeartbeatFloat(row, "process_count", 0)),
 	}
@@ -166,7 +178,7 @@ func parseHeartbeatFloat(row map[string]any, key string, def float64) float64 {
 }
 
 var collectWindowsCPUPercentFunc = CollectWindowsCPUPercent
-var collectWindowsDiskReadWriteUtilizationFunc = CollectWindowsDiskReadWriteUtilization
+var collectWindowsDiskIOMetricsFunc = CollectWindowsDiskIOMetrics
 
 func applyHeartbeatCPUFallback(ctx context.Context, metrics *agentconn.AgentHeartbeatMetrics) {
 	if metrics == nil || metrics.CpuPercent >= 0 {
@@ -182,37 +194,55 @@ func applyHeartbeatDiskIOFallback(ctx context.Context, metrics *agentconn.AgentH
 		return
 	}
 
+	diskPercent := metrics.DiskPercent
 	readPercent := metrics.DiskReadPercent
 	writePercent := metrics.DiskWritePercent
+	responseMs := metrics.DiskResponseMs
 
+	diskMissing := diskPercent < 0
 	readMissing := readPercent < 0
 	writeMissing := writePercent < 0
-	if readMissing || writeMissing {
-		collectedRead, collectedWrite, ok := collectWindowsDiskReadWriteUtilizationFunc(ctx)
+	responseMissing := responseMs < 0
+	if diskMissing || readMissing || writeMissing || responseMissing {
+		collectedDiskPercent, collectedRead, collectedWrite, collectedResponseMs, ok := collectWindowsDiskIOMetricsFunc(ctx)
 		if ok {
+			if diskMissing {
+				diskPercent = collectedDiskPercent
+			}
 			if readMissing {
 				readPercent = collectedRead
-				metrics.DiskReadPercent = collectedRead
 			}
 			if writeMissing {
 				writePercent = collectedWrite
-				metrics.DiskWritePercent = collectedWrite
+			}
+			if responseMissing && collectedResponseMs >= 0 {
+				responseMs = collectedResponseMs
 			}
 		}
 	}
 
-	// diskPercent agora representa tempo de atividade do disco,
-	// calculado como media entre leitura e escrita.
-	if readPercent >= 0 && writePercent >= 0 {
-		metrics.DiskPercent = normalizeHeartbeatPercent((readPercent + writePercent) / 2)
-		return
+	if diskPercent >= 0 {
+		metrics.DiskPercent = normalizeHeartbeatPercent(diskPercent)
+	} else {
+		metrics.DiskPercent = -1
 	}
+
 	if readPercent >= 0 {
-		metrics.DiskPercent = normalizeHeartbeatPercent(readPercent)
-		return
+		metrics.DiskReadPercent = normalizeHeartbeatPercent(readPercent)
+	} else {
+		metrics.DiskReadPercent = -1
 	}
+
 	if writePercent >= 0 {
-		metrics.DiskPercent = normalizeHeartbeatPercent(writePercent)
+		metrics.DiskWritePercent = normalizeHeartbeatPercent(writePercent)
+	} else {
+		metrics.DiskWritePercent = -1
+	}
+
+	if responseMs >= 0 {
+		metrics.DiskResponseMs = normalizeHeartbeatLatencyMs(responseMs)
+	} else {
+		metrics.DiskResponseMs = -1
 	}
 }
 
@@ -220,35 +250,53 @@ func normalizeHeartbeatPercent(value float64) float64 {
 	if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
 		return -1
 	}
-	if value > 100 {
-		value = 100
-	}
 	return math.Round(value*10) / 10
 }
 
-// CollectWindowsDiskReadWriteUtilization coleta a utilizacao percentual de
-// leitura e escrita do disco fisico total via performance counters.
-// Retorna (readPercent, writePercent, true) quando os valores sao validos.
-func CollectWindowsDiskReadWriteUtilization(ctx context.Context) (float64, float64, bool) {
+func normalizeHeartbeatLatencyMs(value float64) float64 {
+	if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
+		return -1
+	}
+	return math.Round(value*1000) / 1000
+}
+
+// CollectWindowsDiskIOMetrics coleta utilizacao de leitura/escrita (%) e
+// tempo medio de resposta (ms) do disco C via CIM.
+// Retorna (diskPercent, readPercent, writePercent, responseMs, true) quando os percentuais forem validos.
+// responseMs pode retornar -1 quando indisponivel no host.
+func CollectWindowsDiskIOMetrics(ctx context.Context) (float64, float64, float64, float64, bool) {
 	if runtime.GOOS != "windows" {
-		return -1, -1, false
+		return -1, -1, -1, -1, false
 	}
 
 	runCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
 	script := `$ErrorActionPreference = 'Stop'
-$sample = Get-Counter -Counter @('\\PhysicalDisk(_Total)\\% Disk Read Time','\\PhysicalDisk(_Total)\\% Disk Write Time')
-$read = ($sample.CounterSamples | Where-Object { $_.Path -like '*% Disk Read Time' } | Select-Object -First 1 -ExpandProperty CookedValue)
-$write = ($sample.CounterSamples | Where-Object { $_.Path -like '*% Disk Write Time' } | Select-Object -First 1 -ExpandProperty CookedValue)
-if ($null -eq $read -or $null -eq $write) {
-  ''
+$sample = Get-CimInstance -ClassName Win32_PerfFormattedData_PerfDisk_PhysicalDisk -Filter "Name LIKE '% C:'" | Select-Object -First 1
+if ($null -eq $sample) {
+	''
 } else {
-  $ci = [System.Globalization.CultureInfo]::InvariantCulture
-  $readText = ([math]::Round([double]$read, 1)).ToString($ci)
-  $writeText = ([math]::Round([double]$write, 1)).ToString($ci)
-  "$readText,$writeText"
-}`
+	$busy = [double]$sample.PercentDiskTime
+	$read = [double]$sample.PercentDiskReadTime
+	$write = [double]$sample.PercentDiskWriteTime
+	$responseMs = -1
+	if ($sample.PSObject.Properties['AvgDisksecPerTransfer']) {
+		$responseSec = [double]$sample.AvgDisksecPerTransfer
+		$responseMs = [math]::Round($responseSec * 1000.0, 3)
+	}
+	if ($null -eq $busy -or $null -eq $read -or $null -eq $write) {
+		''
+	} else {
+		$ci = [System.Globalization.CultureInfo]::InvariantCulture
+		$busyText = ([math]::Round([double]$busy, 1)).ToString($ci)
+		$readText = ([math]::Round([double]$read, 1)).ToString($ci)
+		$writeText = ([math]::Round([double]$write, 1)).ToString($ci)
+		$responseText = ([double]$responseMs).ToString($ci)
+		"$busyText,$readText,$writeText,$responseText"
+	}
+}
+`
 
 	cmd := exec.CommandContext(runCtx, "powershell",
 		"-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
@@ -257,36 +305,37 @@ if ($null -eq $read -or $null -eq $write) {
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return -1, -1, false
+		return -1, -1, -1, -1, false
 	}
 
 	raw := strings.TrimSpace(string(output))
 	if raw == "" || strings.EqualFold(raw, "null") {
-		return -1, -1, false
+		return -1, -1, -1, -1, false
 	}
 
 	parts := strings.Split(raw, ",")
-	if len(parts) != 2 {
-		return -1, -1, false
+	if len(parts) != 4 {
+		return -1, -1, -1, -1, false
 	}
 
-	readPercent, err := strconv.ParseFloat(strings.TrimSpace(parts[0]), 64)
+	diskPercent, err := strconv.ParseFloat(strings.TrimSpace(parts[0]), 64)
+	if err != nil || math.IsNaN(diskPercent) || math.IsInf(diskPercent, 0) || diskPercent < 0 {
+		return -1, -1, -1, -1, false
+	}
+	readPercent, err := strconv.ParseFloat(strings.TrimSpace(parts[1]), 64)
 	if err != nil || math.IsNaN(readPercent) || math.IsInf(readPercent, 0) || readPercent < 0 {
-		return -1, -1, false
+		return -1, -1, -1, -1, false
 	}
-	writePercent, err := strconv.ParseFloat(strings.TrimSpace(parts[1]), 64)
+	writePercent, err := strconv.ParseFloat(strings.TrimSpace(parts[2]), 64)
 	if err != nil || math.IsNaN(writePercent) || math.IsInf(writePercent, 0) || writePercent < 0 {
-		return -1, -1, false
+		return -1, -1, -1, -1, false
+	}
+	responseMs := -1.0
+	if parsedResponse, err := strconv.ParseFloat(strings.TrimSpace(parts[3]), 64); err == nil {
+		responseMs = normalizeHeartbeatLatencyMs(parsedResponse)
 	}
 
-	if readPercent > 100 {
-		readPercent = 100
-	}
-	if writePercent > 100 {
-		writePercent = 100
-	}
-
-	return readPercent, writePercent, true
+	return normalizeHeartbeatPercent(diskPercent), normalizeHeartbeatPercent(readPercent), normalizeHeartbeatPercent(writePercent), responseMs, true
 }
 
 // CollectWindowsCPUPercent coleta o uso medio de CPU via Win32_Processor.

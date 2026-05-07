@@ -498,6 +498,7 @@ func (a *App) getHeartbeatMetrics() agentconn.AgentHeartbeatMetrics {
 		DiskPercent:      -1,
 		DiskReadPercent:  -1,
 		DiskWritePercent: -1,
+		DiskResponseMs:   -1,
 		UptimeSeconds:    int64(time.Since(a.startupTime).Seconds()),
 		P2pPeers:         a.getKnownP2PPeers(),
 	}
