@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"os"
+	"runtime"
 	"strings"
 	"time"
 
@@ -92,6 +94,7 @@ type agentRuntimeService struct {
 	logf        func(string)
 	hooks       AgentRuntimeHooks
 	remoteDebug *serviceRemoteDebugManager
+	startedAt   time.Time
 }
 
 func NewAgentRuntimeService(loadConfig func() *SharedConfig, logf func(string), hooks AgentRuntimeHooks) AgentRuntime {
@@ -102,6 +105,7 @@ func NewAgentRuntimeService(loadConfig func() *SharedConfig, logf func(string), 
 		loadConfig: loadConfig,
 		logf:       logf,
 		hooks:      hooks,
+		startedAt:  time.Now(),
 	}
 	s.remoteDebug = newServiceRemoteDebugManager(logf, s.runtimeConfig)
 	s.runtime = agentconn.NewRuntime(agentconn.Options{
@@ -112,6 +116,7 @@ func NewAgentRuntimeService(loadConfig func() *SharedConfig, logf func(string), 
 		OnSyncPing:             s.handleSyncPing,
 		OnGlobalPong:           s.handleGlobalPong,
 		OnP2PDiscoverySnapshot: s.handleP2PDiscoverySnapshot,
+		GetHeartbeatMetrics:    s.getHeartbeatMetrics,
 		HandleCommand: func(parent context.Context, cmdType string, payload any) (bool, int, string, string) {
 			return s.handleCommand(parent, cmdType, payload)
 		},
@@ -172,6 +177,43 @@ func (s *agentRuntimeService) SetDB(db *database.DB) {
 
 func (s *agentRuntimeService) runtimeConfig() agentconn.Config {
 	return sharedConfigToAgentConnConfig(s.loadConfig)
+}
+
+func (s *agentRuntimeService) getHeartbeatMetrics() agentconn.AgentHeartbeatMetrics {
+	hostname, _ := os.Hostname()
+	startedAt := s.startedAt
+	if startedAt.IsZero() {
+		startedAt = time.Now()
+	}
+
+	metrics := agentconn.AgentHeartbeatMetrics{
+		Hostname:      hostname,
+		CpuPercent:    -1,
+		MemoryPercent: -1,
+		DiskPercent:   -1,
+		UptimeSeconds: int64(time.Since(startedAt).Seconds()),
+	}
+
+	if runtime.GOOS != "windows" {
+		return metrics
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if m := inventory.CollectHeartbeatMetrics(ctx); m != nil {
+		metrics = *m
+		if metrics.UptimeSeconds <= 0 {
+			metrics.UptimeSeconds = int64(time.Since(startedAt).Seconds())
+		}
+	}
+
+	if metrics.CpuPercent < 0 {
+		if cpuPercent, ok := inventory.CollectWindowsCPUPercent(ctx); ok {
+			metrics.CpuPercent = cpuPercent
+		}
+	}
+
+	return metrics
 }
 
 func (s *agentRuntimeService) handleSyncPing(ping agentconn.SyncPing) {

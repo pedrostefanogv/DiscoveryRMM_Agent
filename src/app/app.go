@@ -486,6 +486,9 @@ func (a *App) getHeartbeatMetrics() agentconn.AgentHeartbeatMetrics {
 	hostname, _ := os.Hostname()
 	metrics := agentconn.AgentHeartbeatMetrics{
 		Hostname:      hostname,
+		CpuPercent:    -1,
+		MemoryPercent: -1,
+		DiskPercent:   -1,
 		UptimeSeconds: int64(time.Since(a.startupTime).Seconds()),
 		P2pPeers:      a.getKnownP2PPeers(),
 	}
@@ -498,6 +501,11 @@ func (a *App) getHeartbeatMetrics() agentconn.AgentHeartbeatMetrics {
 			metrics = *m
 			// Sobrescreve P2P com o contador local que usa lock correto.
 			metrics.P2pPeers = a.getKnownP2PPeers()
+		}
+		if metrics.CpuPercent < 0 {
+			if cpuPercent, ok := inventory.CollectWindowsCPUPercent(ctx); ok {
+				metrics.CpuPercent = cpuPercent
+			}
 		}
 	}
 

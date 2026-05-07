@@ -339,6 +339,58 @@ func heartbeatLogPayload(hb AgentHeartbeat) string {
 	return string(b)
 }
 
+// heartbeatLogFields detalha todos os campos do heartbeat para auditoria.
+func heartbeatLogFields(hb AgentHeartbeat) string {
+	return fmt.Sprintf(
+		"agentId=%q clientId=%s siteId=%s ipAddress=%s hostname=%s agentVersion=%s timestampUtc=%s cpuPercent=%s memoryPercent=%s memoryTotalGb=%s memoryUsedGb=%s diskPercent=%s diskTotalGb=%s diskUsedGb=%s p2pPeers=%s uptimeSeconds=%s processCount=%s",
+		hb.AgentId,
+		heartbeatOptionalQuotedString(hb.ClientId),
+		heartbeatOptionalQuotedString(hb.SiteId),
+		heartbeatOptionalQuotedString(hb.IpAddress),
+		heartbeatOptionalQuotedString(hb.Hostname),
+		heartbeatOptionalQuotedString(hb.AgentVersion),
+		heartbeatOptionalQuotedString(hb.TimestampUtc),
+		heartbeatOptionalFloatValue(hb.CpuPercent),
+		heartbeatOptionalFloatValue(hb.MemoryPercent),
+		heartbeatOptionalFloatValue(hb.MemoryTotalGb),
+		heartbeatOptionalFloatValue(hb.MemoryUsedGb),
+		heartbeatOptionalFloatValue(hb.DiskPercent),
+		heartbeatOptionalFloatValue(hb.DiskTotalGb),
+		heartbeatOptionalFloatValue(hb.DiskUsedGb),
+		heartbeatOptionalIntValue(hb.P2pPeers),
+		heartbeatOptionalInt64Value(hb.UptimeSeconds),
+		heartbeatOptionalIntValue(hb.ProcessCount),
+	)
+}
+
+func heartbeatOptionalQuotedString(v string) string {
+	if strings.TrimSpace(v) == "" {
+		return "<omitido>"
+	}
+	return fmt.Sprintf("%q", v)
+}
+
+func heartbeatOptionalFloatValue(v *float64) string {
+	if v == nil {
+		return "<omitido>"
+	}
+	return fmt.Sprintf("%v", *v)
+}
+
+func heartbeatOptionalIntValue(v *int) string {
+	if v == nil {
+		return "<omitido>"
+	}
+	return fmt.Sprintf("%d", *v)
+}
+
+func heartbeatOptionalInt64Value(v *int64) string {
+	if v == nil {
+		return "<omitido>"
+	}
+	return fmt.Sprintf("%d", *v)
+}
+
 // nonNegFloatPtr retorna ponteiro para v se v >= 0; nil (omitir do JSON)
 // se v < 0 (sentinel usado para indicar métrica não coletada).
 func nonNegFloatPtr(v float64) *float64 {
@@ -667,11 +719,12 @@ func deriveNativeNATSServerFromHost(rawHost string) string {
 func (r *Runtime) sendHeartbeatNATS(nc *nats.Conn, subject string, cfg Config, ipAddr string) {
 	hb := r.collectHeartbeat(cfg, ipAddr)
 	hbLog := heartbeatLogPayload(hb)
+	hbFields := heartbeatLogFields(hb)
 	if err := publishJSON(nc, subject, hb); err != nil {
-		r.logf("[heartbeat][nats] falha ao publicar heartbeat (subject=%s): %v payload=%s", subject, err, hbLog)
+		r.logf("[heartbeat][nats] falha ao publicar heartbeat (subject=%s): %v payload=%s fields=%s", subject, err, hbLog, hbFields)
 		return
 	}
-	r.logf("[heartbeat][nats] heartbeat publicado com sucesso (subject=%s) payload=%s", subject, hbLog)
+	r.logf("[heartbeat][nats] heartbeat publicado com sucesso (subject=%s) payload=%s fields=%s", subject, hbLog, hbFields)
 }
 
 // runNATSSession está definida em runtime_nats.go

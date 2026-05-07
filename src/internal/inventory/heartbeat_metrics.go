@@ -4,9 +4,14 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"os/exec"
+	"runtime"
+	"strconv"
+	"strings"
 	"time"
 
 	"discovery/internal/agentconn"
+	"discovery/internal/processutil"
 )
 
 // heartbeatMetricsSQL é uma única query osquery que coleta todas as métricas
@@ -59,8 +64,9 @@ LIMIT 1
 // usando uma única query osquery otimizada. A estratégia de execução segue
 // a mesma prioridade do Provider: (1) socket osqueryd, (2) osqueryi socket.
 //
-// Retorna um AgentHeartbeatMetrics preenchido ou nil em caso de erro,
-// permitindo que o caller use fallback (PowerShell WMI).
+// Retorna um AgentHeartbeatMetrics preenchido ou nil em caso de erro.
+// Quando cpu_percent vier ausente/invalidado no osquery, aplica fallback
+// local via PowerShell/WMI para evitar omissao de CPU no heartbeat.
 func CollectHeartbeatMetrics(ctx context.Context) *agentconn.AgentHeartbeatMetrics {
 	bin, err := FindOsqueryBinary()
 	if err != nil {
@@ -82,6 +88,7 @@ func CollectHeartbeatMetrics(ctx context.Context) *agentconn.AgentHeartbeatMetri
 		if results != nil {
 			if r, ok := results["heartbeat_metrics"]; ok && r.err == nil && len(r.rows) > 0 {
 				if m := mapHeartbeatRow(r.rows[0]); m != nil {
+					applyHeartbeatCPUFallback(runCtx, m)
 					return m
 				}
 			}
@@ -98,7 +105,9 @@ func CollectHeartbeatMetrics(ctx context.Context) *agentconn.AgentHeartbeatMetri
 	results = runQueriesViaSocket(runCtx, proc.socketPath, queries, nil)
 	if results != nil {
 		if r, ok := results["heartbeat_metrics"]; ok && r.err == nil && len(r.rows) > 0 {
-			return mapHeartbeatRow(r.rows[0])
+			m := mapHeartbeatRow(r.rows[0])
+			applyHeartbeatCPUFallback(runCtx, m)
+			return m
 		}
 	}
 
@@ -154,4 +163,58 @@ func parseHeartbeatFloat(row map[string]any, key string, def float64) float64 {
 	default:
 		return def
 	}
+}
+
+var collectWindowsCPUPercentFunc = CollectWindowsCPUPercent
+
+func applyHeartbeatCPUFallback(ctx context.Context, metrics *agentconn.AgentHeartbeatMetrics) {
+	if metrics == nil || metrics.CpuPercent >= 0 {
+		return
+	}
+	if cpuPercent, ok := collectWindowsCPUPercentFunc(ctx); ok {
+		metrics.CpuPercent = cpuPercent
+	}
+}
+
+// CollectWindowsCPUPercent coleta o uso medio de CPU via Win32_Processor.
+// Retorna (valor, true) quando a coleta for valida; caso contrario (-1, false).
+func CollectWindowsCPUPercent(ctx context.Context) (float64, bool) {
+	if runtime.GOOS != "windows" {
+		return -1, false
+	}
+
+	runCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	script := `$ErrorActionPreference = 'Stop'
+$cpu = Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average
+if ($null -eq $cpu -or $null -eq $cpu.Average) {
+  ''
+} else {
+  [math]::Round([double]$cpu.Average, 1).ToString([System.Globalization.CultureInfo]::InvariantCulture)
+}`
+
+	cmd := exec.CommandContext(runCtx, "powershell",
+		"-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
+		"-Command", script)
+	processutil.HideWindow(cmd)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return -1, false
+	}
+
+	raw := strings.TrimSpace(string(output))
+	if raw == "" || strings.EqualFold(raw, "null") {
+		return -1, false
+	}
+
+	v, err := strconv.ParseFloat(raw, 64)
+	if err != nil || math.IsNaN(v) || math.IsInf(v, 0) || v < 0 {
+		return -1, false
+	}
+	if v > 100 {
+		v = 100
+	}
+	return v, true
 }
