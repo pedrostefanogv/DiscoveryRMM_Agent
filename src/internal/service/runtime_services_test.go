@@ -135,12 +135,3 @@ func TestIsServiceUIOnlyCommandType_RemoteDebugAllowed(t *testing.T) {
 		t.Fatalf("notification deve permanecer UI-only no modo service")
 	}
 }
-
-func TestServiceRemoteDebugFormatMessageWithOrigin(t *testing.T) {
-	if got := serviceRemoteDebugFormatMessageWithOrigin("service", "[p2p] restart"); got != "[service] [p2p] restart" {
-		t.Fatalf("serviceRemoteDebugFormatMessageWithOrigin = %q", got)
-	}
-	if got := serviceRemoteDebugFormatMessageWithOrigin("service", "[service] erro xyz"); got != "[service] erro xyz" {
-		t.Fatalf("serviceRemoteDebugFormatMessageWithOrigin should keep existing prefix, got %q", got)
-	}
-}

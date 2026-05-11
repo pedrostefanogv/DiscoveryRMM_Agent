@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"os"
 	"runtime"
@@ -19,6 +20,7 @@ import (
 	"discovery/internal/chocolatey"
 	"discovery/internal/database"
 	"discovery/internal/inventory"
+	"discovery/internal/logger"
 	"discovery/internal/models"
 	"discovery/internal/services"
 	"discovery/internal/winget"
@@ -95,6 +97,8 @@ type agentRuntimeService struct {
 	hooks       AgentRuntimeHooks
 	remoteDebug *serviceRemoteDebugManager
 	startedAt   time.Time
+
+	loggerHooked bool
 }
 
 func NewAgentRuntimeService(loadConfig func() *SharedConfig, logf func(string), hooks AgentRuntimeHooks) AgentRuntime {
@@ -107,7 +111,13 @@ func NewAgentRuntimeService(loadConfig func() *SharedConfig, logf func(string), 
 		hooks:      hooks,
 		startedAt:  time.Now(),
 	}
-	s.remoteDebug = newServiceRemoteDebugManager(logf, s.runtimeConfig)
+	s.remoteDebug = newServiceRemoteDebugManager(logf, s.runtimeConfig, func(active bool, sessionID string) {
+		if active {
+			s.hookLogger()
+		} else {
+			s.unhookLogger()
+		}
+	})
 	s.runtime = agentconn.NewRuntime(agentconn.Options{
 		LoadConfig: s.runtimeConfig,
 		Logf: func(format string, args ...any) {
@@ -335,7 +345,7 @@ func (s *agentRuntimeService) emitRuntimeLog(line string) {
 		s.logf(line)
 	}
 	if s != nil && s.remoteDebug != nil {
-		s.remoteDebug.EnqueueRawLog(line, serviceRemoteDebugDetectLevel(line))
+		s.remoteDebug.EnqueueRawLog(line, serviceRemoteDebugDetectLevel(line), "", "")
 	}
 }
 
@@ -343,7 +353,55 @@ func (s *agentRuntimeService) IngestRemoteDebugLog(line string) {
 	if s == nil || s.remoteDebug == nil {
 		return
 	}
-	s.remoteDebug.EnqueueRawLog(strings.TrimSpace(line), serviceRemoteDebugDetectLevel(line))
+	s.remoteDebug.EnqueueRawLog(strings.TrimSpace(line), serviceRemoteDebugDetectLevel(line), "", "")
+}
+
+func (s *agentRuntimeService) hookLogger() {
+	if s == nil || s.loggerHooked {
+		return
+	}
+	logger.SetSink(func(level slog.Level, msg string, args ...any) {
+		if s == nil || s.remoteDebug == nil {
+			return
+		}
+		levelStr := slogLevelToString(level)
+		loggerName := ""
+		for i := 0; i < len(args); i++ {
+			if attr, ok := args[i].(slog.Attr); ok && attr.Key == "logger" {
+				loggerName = attr.Value.String()
+				break
+			}
+		}
+		s.remoteDebug.EnqueueRawLog(msg, levelStr, loggerName, "")
+	})
+	logger.SetLevel(logger.LevelTrace)
+	s.loggerHooked = true
+	s.logf("[remote-debug] logger hook ativado: todos os logs serao capturados")
+}
+
+func (s *agentRuntimeService) unhookLogger() {
+	if s == nil || !s.loggerHooked {
+		return
+	}
+	logger.SetSink(nil)
+	logger.SetLevel(logger.LevelInfo)
+	s.loggerHooked = false
+	s.logf("[remote-debug] logger hook desativado")
+}
+
+func slogLevelToString(level slog.Level) string {
+	switch {
+	case level < slog.LevelDebug:
+		return "trace"
+	case level < slog.LevelInfo:
+		return "debug"
+	case level < slog.LevelWarn:
+		return "info"
+	case level < slog.LevelError:
+		return "warn"
+	default:
+		return "error"
+	}
 }
 
 func (s *agentRuntimeService) enqueueCommandResultOutbox(transport, dispatchID, commandID string, exitCode int, output, errText, sendError string) error {
@@ -630,4 +688,18 @@ func (s *appsRuntimeService) Upgrade(ctx context.Context, id string) (string, er
 
 func (s *appsRuntimeService) UpgradeAll(ctx context.Context) (string, error) {
 	return s.svc.UpgradeAll(ctx)
+}
+
+func serviceRemoteDebugDetectLevel(line string) string {
+	l := strings.ToLower(strings.TrimSpace(line))
+	switch {
+	case strings.Contains(l, "[error]") || strings.Contains(l, " error"):
+		return "error"
+	case strings.Contains(l, "[warn]") || strings.Contains(l, " warning"):
+		return "warn"
+	case strings.Contains(l, "[debug]"):
+		return "debug"
+	default:
+		return "info"
+	}
 }

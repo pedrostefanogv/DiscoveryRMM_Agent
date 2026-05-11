@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -37,21 +38,31 @@ type serviceRemoteDebugStreamConfig struct {
 
 type serviceRemoteDebugLogMessage struct {
 	SessionID    string `json:"sessionId"`
-	AgentID      string `json:"agentId"`
-	Message      string `json:"message"`
-	Level        string `json:"level"`
-	TimestampUTC string `json:"timestampUtc"`
 	Sequence     uint64 `json:"sequence"`
+	TimestampUTC string `json:"timestampUtc"`
+	Level        string `json:"level"`
+	Message      string `json:"message"`
+	Logger       string `json:"logger,omitempty"`
+	Category     string `json:"category,omitempty"`
+}
+
+type serviceRemoteDebugResultPayload struct {
+	ExitCode     int    `json:"exitCode"`
+	Output       string `json:"output"`
+	ErrorMessage string `json:"errorMessage,omitempty"`
 }
 
 type serviceQueuedRemoteDebugLine struct {
-	message string
-	level   string
+	message  string
+	level    string
+	logger   string
+	category string
 }
 
 type serviceRemoteDebugPublisher interface {
 	Name() string
 	Publish(ctx context.Context, msg serviceRemoteDebugLogMessage) error
+	PublishRaw(subject string, data []byte) error
 	Close() error
 }
 
@@ -75,6 +86,14 @@ func (p *serviceNATSRemoteDebugPublisher) Publish(_ context.Context, msg service
 	return p.conn.LastError()
 }
 
+func (p *serviceNATSRemoteDebugPublisher) PublishRaw(subject string, data []byte) error {
+	if err := p.conn.Publish(subject, data); err != nil {
+		return err
+	}
+	p.conn.Flush()
+	return p.conn.LastError()
+}
+
 func (p *serviceNATSRemoteDebugPublisher) Close() error {
 	if p.conn != nil {
 		p.conn.Close()
@@ -83,33 +102,38 @@ func (p *serviceNATSRemoteDebugPublisher) Close() error {
 }
 
 type serviceRemoteDebugSession struct {
-	sessionID   string
-	agentID     string
-	minLevel    int
-	deadline    time.Time
-	logQueue    chan serviceQueuedRemoteDebugLine
-	cancel      context.CancelFunc
-	publishers  []serviceRemoteDebugPublisher
-	activeIndex int
+	sessionID     string
+	minLevel      int
+	deadline      time.Time
+	resultSubject string
+	logQueue      chan serviceQueuedRemoteDebugLine
+	cancel        context.CancelFunc
+	publishers    []serviceRemoteDebugPublisher
+	activeIndex   int
 }
 
 type serviceRemoteDebugManager struct {
-	mu            sync.Mutex
-	activeSession *serviceRemoteDebugSession
-	logf          func(string)
-	getConfig     func() agentconn.Config
+	mu              sync.Mutex
+	activeSession   *serviceRemoteDebugSession
+	logf            func(string)
+	getConfig       func() agentconn.Config
+	onSessionChange func(active bool, sessionID string)
 }
 
-func newServiceRemoteDebugManager(logf func(string), getConfig func() agentconn.Config) *serviceRemoteDebugManager {
+func newServiceRemoteDebugManager(logf func(string), getConfig func() agentconn.Config, onSessionChange func(active bool, sessionID string)) *serviceRemoteDebugManager {
 	if logf == nil {
 		logf = func(string) {}
 	}
 	if getConfig == nil {
 		getConfig = func() agentconn.Config { return agentconn.Config{} }
 	}
+	if onSessionChange == nil {
+		onSessionChange = func(bool, string) {}
+	}
 	return &serviceRemoteDebugManager{
-		logf:      logf,
-		getConfig: getConfig,
+		logf:            logf,
+		getConfig:       getConfig,
+		onSessionChange: onSessionChange,
 	}
 }
 
@@ -128,13 +152,13 @@ func (m *serviceRemoteDebugManager) HandleCommand(parent context.Context, cmdTyp
 		if err := m.startSession(parent, cmd); err != nil {
 			return true, 1, "", err.Error()
 		}
-		return true, 0, fmt.Sprintf("remote debug (service) iniciado sessionId=%s", strings.TrimSpace(cmd.SessionID)), ""
+		return true, 0, "started", ""
 	case "stop":
 		stopped := m.stopSession(strings.TrimSpace(cmd.SessionID), "stop")
 		if !stopped {
-			return true, 0, "remote debug (service) sem sessao ativa para encerrar", ""
+			return true, 0, "stopped", ""
 		}
-		return true, 0, fmt.Sprintf("remote debug (service) encerrado sessionId=%s", strings.TrimSpace(cmd.SessionID)), ""
+		return true, 0, "stopped", ""
 	default:
 		return true, 2, "", "acao remota invalida"
 	}
@@ -145,34 +169,31 @@ func (m *serviceRemoteDebugManager) OnCommandOutput(cmdType, output, errText str
 		return
 	}
 	for _, line := range serviceRemoteDebugSplitLines(output) {
-		m.EnqueueRawLog(line, "info")
+		m.EnqueueRawLog(line, "info", "", "")
 	}
 	for _, line := range serviceRemoteDebugSplitLines(errText) {
-		m.EnqueueRawLog(line, "error")
+		m.EnqueueRawLog(line, "error", "", "")
 	}
 }
 
-func (m *serviceRemoteDebugManager) EnqueueRawLog(message, level string) {
+func (m *serviceRemoteDebugManager) EnqueueRawLog(message, level string, loggerName string, category string) {
 	m.mu.Lock()
 	session := m.activeSession
 	m.mu.Unlock()
 	if session == nil {
 		return
 	}
-	m.enqueueToSession(session, message, level)
+	m.enqueueToSession(session, message, level, loggerName, category)
 }
 
-func (m *serviceRemoteDebugManager) enqueueToSession(session *serviceRemoteDebugSession, message, level string) {
+func (m *serviceRemoteDebugManager) enqueueToSession(session *serviceRemoteDebugSession, message, level string, loggerName string, category string) {
 	message = strings.TrimSpace(message)
 	if message == "" {
 		return
 	}
 	level = serviceRemoteDebugNormalizeLevel(level)
-	if serviceRemoteDebugLevelValue(level) < session.minLevel {
-		return
-	}
 	select {
-	case session.logQueue <- serviceQueuedRemoteDebugLine{message: message, level: level}:
+	case session.logQueue <- serviceQueuedRemoteDebugLine{message: message, level: level, logger: loggerName, category: category}:
 	default:
 		m.logf("[remote-debug][service] fila cheia: log descartado")
 	}
@@ -202,14 +223,17 @@ func (m *serviceRemoteDebugManager) startSession(parent context.Context, cmd ser
 		baseCtx = context.Background()
 	}
 	ctx, cancel := context.WithCancel(baseCtx)
+
+	resultSubject := deriveResultSubject(strings.TrimSpace(cmd.Stream.NatsSubject))
+
 	session := &serviceRemoteDebugSession{
-		sessionID:  sessionID,
-		agentID:    agentID,
-		minLevel:   serviceRemoteDebugLevelValue(cmd.LogLevel),
-		deadline:   deadline,
-		logQueue:   make(chan serviceQueuedRemoteDebugLine, serviceRemoteDebugQueueSize),
-		cancel:     cancel,
-		publishers: publishers,
+		sessionID:     sessionID,
+		minLevel:      0,
+		deadline:      deadline,
+		resultSubject: resultSubject,
+		logQueue:      make(chan serviceQueuedRemoteDebugLine, serviceRemoteDebugQueueSize),
+		cancel:        cancel,
+		publishers:    publishers,
 	}
 
 	m.mu.Lock()
@@ -221,21 +245,72 @@ func (m *serviceRemoteDebugManager) startSession(parent context.Context, cmd ser
 		m.stopGivenSession(previous, "replaced")
 	}
 
+	m.onSessionChange(true, sessionID)
+
 	m.logf(fmt.Sprintf("[remote-debug][service] sessao iniciada: sessionId=%s deadline=%s transport=%s", sessionID, deadline.Format(time.RFC3339), session.publishers[0].Name()))
 	go m.publishLoop(ctx, session)
-	go m.autoStopAtDeadline(sessionID, deadline)
+	go m.autoStopAtDeadline(session)
 	return nil
 }
 
-func (m *serviceRemoteDebugManager) autoStopAtDeadline(sessionID string, deadline time.Time) {
-	wait := time.Until(deadline)
+func deriveResultSubject(logSubject string) string {
+	logSubject = strings.TrimSpace(logSubject)
+	if logSubject == "" {
+		return ""
+	}
+	suffix := ".remote-debug.log"
+	if strings.HasSuffix(logSubject, suffix) {
+		return logSubject[:len(logSubject)-len(suffix)] + ".result"
+	}
+	return ""
+}
+
+func (m *serviceRemoteDebugManager) autoStopAtDeadline(session *serviceRemoteDebugSession) {
+	if session == nil {
+		return
+	}
+	wait := time.Until(session.deadline)
 	if wait < 0 {
 		wait = 0
 	}
 	timer := time.NewTimer(wait)
 	defer timer.Stop()
 	<-timer.C
-	m.stopSession(sessionID, "timeout")
+
+	m.mu.Lock()
+	current := m.activeSession
+	if current != nil && current.sessionID == session.sessionID {
+		m.activeSession = nil
+	}
+	m.mu.Unlock()
+
+	m.stopGivenSession(session, "timeout")
+
+	m.publishExpiredResult(session)
+	m.onSessionChange(false, session.sessionID)
+}
+
+func (m *serviceRemoteDebugManager) publishExpiredResult(session *serviceRemoteDebugSession) {
+	if session == nil || session.resultSubject == "" || len(session.publishers) == 0 {
+		return
+	}
+	payload, err := json.Marshal(serviceRemoteDebugResultPayload{
+		ExitCode: 0,
+		Output:   "expired",
+	})
+	if err != nil {
+		m.logf("[remote-debug][service] falha ao serializar resultado expired: " + err.Error())
+		return
+	}
+	for idx := session.activeIndex; idx < len(session.publishers); idx++ {
+		pub := session.publishers[idx]
+		if err := pub.PublishRaw(session.resultSubject, payload); err != nil {
+			m.logf(fmt.Sprintf("[remote-debug][service] falha ao publicar resultado expired em %s: %v", pub.Name(), err))
+			continue
+		}
+		m.logf(fmt.Sprintf("[remote-debug][service] resultado expired publicado em %s", session.resultSubject))
+		return
+	}
 }
 
 func (m *serviceRemoteDebugManager) publishLoop(ctx context.Context, session *serviceRemoteDebugSession) {
@@ -251,11 +326,12 @@ func (m *serviceRemoteDebugManager) publishLoop(ctx context.Context, session *se
 			seq++
 			msg := serviceRemoteDebugLogMessage{
 				SessionID:    session.sessionID,
-				AgentID:      session.agentID,
-				Message:      serviceRemoteDebugFormatMessageWithOrigin("service", serviceRemoteDebugTruncateMessage(item.message)),
-				Level:        serviceRemoteDebugNormalizeLevel(item.level),
-				TimestampUTC: time.Now().UTC().Format(time.RFC3339),
 				Sequence:     seq,
+				Message:      serviceRemoteDebugTruncateMessage(item.message),
+				Level:        serviceRemoteDebugNormalizeLevel(item.level),
+				TimestampUTC: time.Now().UTC().Format(time.RFC3339Nano),
+				Logger:       item.logger,
+				Category:     item.category,
 			}
 			if err := m.publishWithFallback(ctx, session, msg); err != nil {
 				m.logf("[remote-debug][service] falha ao publicar log remoto: " + err.Error())
@@ -299,6 +375,7 @@ func (m *serviceRemoteDebugManager) stopSession(sessionID, reason string) bool {
 	m.mu.Unlock()
 
 	m.stopGivenSession(session, reason)
+	m.onSessionChange(false, session.sessionID)
 	return true
 }
 
@@ -315,17 +392,36 @@ func (m *serviceRemoteDebugManager) stopGivenSession(session *serviceRemoteDebug
 	m.logf(fmt.Sprintf("[remote-debug][service] sessao encerrada: sessionId=%s reason=%s", session.sessionID, strings.TrimSpace(reason)))
 }
 
+func (m *serviceRemoteDebugManager) HasActiveSession() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.activeSession != nil
+}
+
 func parseServiceRemoteDebugCommand(payload any) (serviceRemoteDebugCommand, error) {
 	if payload == nil {
 		return serviceRemoteDebugCommand{}, fmt.Errorf("payload ausente")
 	}
-	b, err := json.Marshal(payload)
-	if err != nil {
-		return serviceRemoteDebugCommand{}, err
+
+	var raw []byte
+	switch v := payload.(type) {
+	case string:
+		raw = []byte(v)
+	case []byte:
+		raw = v
+	default:
+		var err error
+		raw, err = json.Marshal(payload)
+		if err != nil {
+			return serviceRemoteDebugCommand{}, err
+		}
 	}
+
 	var cmd serviceRemoteDebugCommand
-	if err := json.Unmarshal(b, &cmd); err != nil {
-		return serviceRemoteDebugCommand{}, err
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&cmd); err != nil {
+		return serviceRemoteDebugCommand{}, fmt.Errorf("payload remoto invalido: %w", err)
 	}
 	cmd.Action = strings.TrimSpace(cmd.Action)
 	cmd.SessionID = strings.TrimSpace(cmd.SessionID)
@@ -585,57 +681,11 @@ func serviceRemoteDebugTruncateMessage(s string) string {
 
 func serviceRemoteDebugNormalizeLevel(level string) string {
 	switch strings.ToLower(strings.TrimSpace(level)) {
-	case "debug", "info", "warn", "error":
+	case "trace", "debug", "info", "warn", "error":
 		return strings.ToLower(strings.TrimSpace(level))
 	default:
 		return "info"
 	}
-}
-
-func serviceRemoteDebugLevelValue(level string) int {
-	switch serviceRemoteDebugNormalizeLevel(level) {
-	case "debug":
-		return 0
-	case "info":
-		return 1
-	case "warn":
-		return 2
-	case "error":
-		return 3
-	default:
-		return 1
-	}
-}
-
-func serviceRemoteDebugDetectLevel(line string) string {
-	l := strings.ToLower(strings.TrimSpace(line))
-	switch {
-	case strings.Contains(l, "[error]") || strings.Contains(l, " error"):
-		return "error"
-	case strings.Contains(l, "[warn]") || strings.Contains(l, " warning"):
-		return "warn"
-	case strings.Contains(l, "[debug]"):
-		return "debug"
-	default:
-		return "info"
-	}
-}
-
-func serviceRemoteDebugFormatMessageWithOrigin(origin, message string) string {
-	message = strings.TrimSpace(message)
-	if message == "" {
-		return ""
-	}
-	origin = strings.ToLower(strings.TrimSpace(origin))
-	if origin == "" {
-		return message
-	}
-	prefix := "[" + origin + "]"
-	lowerMsg := strings.ToLower(message)
-	if lowerMsg == prefix || strings.HasPrefix(lowerMsg, prefix+" ") {
-		return message
-	}
-	return prefix + " " + message
 }
 
 func isRemoteDebugCommandType(cmdType string) bool {
