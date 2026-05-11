@@ -27,6 +27,7 @@ type IPCServer struct {
 	manager   *ServiceManager
 	mu        sync.RWMutex
 	isRunning bool
+	cond      *sync.Cond
 }
 
 // NewIPCServer cria um novo servidor IPC
@@ -34,6 +35,7 @@ func NewIPCServer(dataDir string) *IPCServer {
 	return &IPCServer{
 		pipeName: PipeName,
 		done:     make(chan bool, 1),
+		cond:     sync.NewCond(&sync.Mutex{}),
 	}
 }
 
@@ -115,12 +117,13 @@ func (server *IPCServer) acceptConnections() {
 
 		conn, err := server.listener.Accept()
 		if err != nil {
-			// Se encerrou, sair
 			if strings.Contains(err.Error(), "closed") {
 				return
 			}
 			fmt.Fprintf(os.Stderr, "[IPC.AcceptConnections] Accept error: %v\n", err)
-			time.Sleep(100 * time.Millisecond)
+			server.cond.L.Lock()
+			server.cond.Wait()
+			server.cond.L.Unlock()
 			continue
 		}
 

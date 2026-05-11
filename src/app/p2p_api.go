@@ -18,10 +18,13 @@ import (
 
 const (
 	p2pSeedPlanEndpointPath    = "/api/v1/agent-auth/me/p2p-seed-plan"
-	p2pTelemetryEndpointPath   = "/api/v1/agent-auth/me/p2p-telemetry"
-	p2pDistributionStatusPath  = "/api/v1/agent-auth/me/p2p-distribution-status"
+	p2pTelemetryEndpointPath   = "/api/v1/agent-auth/me/p2p/telemetry"
+	p2pDistributionStatusPath  = "/api/v1/agent-auth/me/p2p/distribution"
+	p2pAPITimeout              = 20 * time.Second
 	p2pSeedPlanRefreshInterval = 5 * time.Minute
 )
+
+var p2pAPIHTTPClient = &http.Client{Timeout: p2pAPITimeout}
 
 // cachedP2PSeedPlan stores the last server recommendation for local reuse.
 type cachedP2PSeedPlan = p2pmeta.CachedSeedPlan
@@ -71,7 +74,7 @@ func (a *App) fetchP2PSeedPlanRecommendation(ctx context.Context) (P2PSeedPlanRe
 		return P2PSeedPlanRecommendation{}, err
 	}
 
-	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
+	resp, err := p2pAPIHTTPClient.Do(req)
 	if err != nil {
 		return P2PSeedPlanRecommendation{}, err
 	}
@@ -143,7 +146,7 @@ func (a *App) postP2PTelemetryPayload(ctx context.Context, payload P2PTelemetryP
 		req.Header.Set("Idempotency-Key", k)
 	}
 
-	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
+	resp, err := p2pAPIHTTPClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -192,7 +195,7 @@ func (a *App) GetP2PDistributionStatusWithOptions(ctx context.Context, opts P2PD
 		return nil, err
 	}
 
-	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
+	resp, err := p2pAPIHTTPClient.Do(req)
 	if err != nil {
 		return nil, err
 	}

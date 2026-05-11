@@ -11,7 +11,7 @@ import (
 )
 
 func (c *p2pCoordinator) replicateArtifactToPeerNow(ctx context.Context, artifactName, targetPeerID string) error {
-	peer, err := c.findPeerByAgentID(targetPeerID)
+	_, err := c.findPeerByAgentID(targetPeerID)
 	if err != nil {
 		c.recordReplicationResult(false)
 		return err
@@ -26,7 +26,6 @@ func (c *p2pCoordinator) replicateArtifactToPeerNow(ctx context.Context, artifac
 	c.metrics.ReplicationsStarted++
 	c.mu.Unlock()
 
-	// Tentar libp2p primeiro.
 	if h, registry := c.libp2pHostAndRegistry(); h != nil && registry != nil {
 		if lpID, ok := registry.Lookup(targetPeerID); ok {
 			streamCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -38,20 +37,28 @@ func (c *p2pCoordinator) replicateArtifactToPeerNow(ctx context.Context, artifac
 					ChecksumSHA256: access.ChecksumSHA256,
 					SourceAgentID:  strings.TrimSpace(c.app.GetDebugConfig().AgentID),
 				}
-				_ = json.NewEncoder(stream).Encode(req)
+				if err := json.NewEncoder(stream).Encode(req); err != nil {
+					stream.Close()
+					c.recordReplicationResult(false)
+					return fmt.Errorf("falha ao codificar request de replicacao: %w", err)
+				}
 				var resp libp2pReplicateResponse
-				_ = json.NewDecoder(stream).Decode(&resp)
-				stream.Close()
-				// /artifact/replicate retorna Gone (push desativ.); isso é esperado.
+				if err := json.NewDecoder(stream).Decode(&resp); err != nil {
+					stream.Close()
+					c.recordReplicationResult(false)
+					return fmt.Errorf("falha ao decodificar resposta de replicacao: %w", err)
+				}
+				if closeErr := stream.Close(); closeErr != nil {
+					c.app.logs.append("[p2p] aviso ao fechar stream de replicacao: " + closeErr.Error())
+				}
 				c.recordReplicationResult(true)
 				return nil
 			}
 		}
 	}
 
-	_ = peer
 	c.recordReplicationResult(false)
-	return fmt.Errorf("replicacao requer libp2p ativo")
+	return fmt.Errorf("replicacao: peer %s nao alcancavel via libp2p", targetPeerID)
 }
 
 func (c *p2pCoordinator) recordReplicationResult(success bool) {

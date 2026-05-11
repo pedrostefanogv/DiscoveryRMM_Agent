@@ -18,6 +18,7 @@ import (
 	"discovery/app/netutil"
 	"discovery/internal/platform"
 	"discovery/internal/processutil"
+	"discovery/internal/tlsutil"
 )
 
 // MeshCentralInstallInfo holds the install parameters returned by the server.
@@ -211,7 +212,7 @@ func (a *App) fetchMeshInstallInfo(ctx context.Context) (MeshCentralInstallInfo,
 	}
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := tlsutil.NewHTTPClient(30 * time.Second).Do(req)
 	if err != nil {
 		return MeshCentralInstallInfo{}, 0, fmt.Errorf("falha na requisicao ao servidor: %w", err)
 	}
@@ -354,7 +355,7 @@ func (a *App) runMeshCentralInstallURL(ctx context.Context, installURL string) e
 	if err != nil {
 		return fmt.Errorf("falha ao criar download do installUrl: %w", err)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := tlsutil.NewHTTPClient(90 * time.Second).Do(req)
 	if err != nil {
 		return fmt.Errorf("falha ao baixar installUrl: %w", err)
 	}

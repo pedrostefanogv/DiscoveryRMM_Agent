@@ -82,7 +82,9 @@ func (c *syncCoordinator) Run(ctx context.Context) {
 	_ = c.reconcileFromManifest(ctx, "startup")
 
 	ticker := time.NewTicker(c.getPollEvery())
+	cleanupTicker := time.NewTicker(10 * time.Minute)
 	defer ticker.Stop()
+	defer cleanupTicker.Stop()
 
 	for {
 		select {
@@ -92,31 +94,48 @@ func (c *syncCoordinator) Run(ctx context.Context) {
 		case <-ticker.C:
 			_ = c.reconcileFromManifest(ctx, "poll")
 			ticker.Reset(c.getPollEvery())
+		case <-cleanupTicker.C:
+			c.pruneProcessedEvents(time.Now())
 		case trigger := <-c.queue:
 			c.processTrigger(ctx, trigger)
 		}
 	}
 }
 
+func (c *syncCoordinator) pruneProcessedEvents(now time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for k, ts := range c.processedEvents {
+		if now.Sub(ts) > processedEventTTL {
+			delete(c.processedEvents, k)
+		}
+	}
+}
+
 func (c *syncCoordinator) HandlePing(ping agentconn.SyncPing) {
 	eventType := strings.TrimSpace(ping.EventType)
+	resource := strings.TrimSpace(ping.Resource)
+	eventID := strings.TrimSpace(ping.EventID)
+	variant := strings.TrimSpace(ping.InstallationType)
+	revision := strings.TrimSpace(ping.Revision)
+
 	if eventType != "" && !strings.EqualFold(eventType, "sync.invalidated") {
 		c.app.logs.append("[sync] ping ignorado: eventType=" + eventType)
 		return
 	}
-	if strings.TrimSpace(ping.Resource) == "" {
+	if resource == "" {
 		c.app.logs.append("[sync] ping ignorado: resource vazio")
 		return
 	}
-	c.app.logs.append(fmt.Sprintf("[sync] ping recebido: eventId=%s resource=%s variant=%s revision=%s", strings.TrimSpace(ping.EventID), strings.TrimSpace(ping.Resource), strings.TrimSpace(ping.InstallationType), strings.TrimSpace(ping.Revision)))
-	if c.isProcessedEvent(ping.EventID) {
-		c.app.logs.append("[sync] ping ignorado: eventId duplicado=" + strings.TrimSpace(ping.EventID))
+	c.app.logs.append(fmt.Sprintf("[sync] ping recebido: eventId=%s resource=%s variant=%s revision=%s", eventID, resource, variant, revision))
+	if c.isProcessedEvent(eventID) {
+		c.app.logs.append("[sync] ping ignorado: eventId duplicado=" + eventID)
 		return
 	}
 	trigger := syncTrigger{
-		Resource: strings.TrimSpace(ping.Resource),
-		Variant:  strings.TrimSpace(ping.InstallationType),
-		Revision: strings.TrimSpace(ping.Revision),
+		Resource: resource,
+		Variant:  variant,
+		Revision: revision,
 		Source:   "ping",
 	}
 	c.enqueue(trigger)
@@ -130,16 +149,12 @@ func (c *syncCoordinator) isProcessedEvent(eventID string) bool {
 
 	now := time.Now()
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	for k, ts := range c.processedEvents {
-		if now.Sub(ts) > processedEventTTL {
-			delete(c.processedEvents, k)
-		}
-	}
 	if _, ok := c.processedEvents[eventID]; ok {
+		c.mu.Unlock()
 		return true
 	}
 	c.processedEvents[eventID] = now
+	c.mu.Unlock()
 	return false
 }
 
@@ -164,8 +179,16 @@ func (c *syncCoordinator) enqueue(trigger syncTrigger) {
 
 	select {
 	case c.queue <- trigger:
+		if c.app != nil {
+			c.app.logs.append("[sync] enfileirado: " + key)
+		}
 	default:
-		go func() { c.queue <- trigger }()
+		c.mu.Lock()
+		delete(c.queuedByKey, key)
+		c.mu.Unlock()
+		if c.app != nil {
+			c.app.logs.append("[sync] fila cheia, descartando: " + key)
+		}
 	}
 }
 

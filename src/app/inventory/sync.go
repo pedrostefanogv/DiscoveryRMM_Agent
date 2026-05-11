@@ -278,6 +278,8 @@ func (s *Service) SyncInventoryOnStartup(ctx context.Context, report models.Inve
 	}
 }
 
+var inventoryHTTPClient = &http.Client{Timeout: 20 * time.Second}
+
 func (s *Service) sendAgentInventoryRequest(parent context.Context, endpoint string, cfg debug.Config, method string, body []byte) error {
 	ctx, cancel := context.WithTimeout(parent, 20*time.Second)
 	defer cancel()
@@ -295,7 +297,7 @@ func (s *Service) sendAgentInventoryRequest(parent context.Context, endpoint str
 		return err
 	}
 
-	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
+	resp, err := inventoryHTTPClient.Do(req)
 	if err != nil {
 		return err
 	}

@@ -161,12 +161,13 @@ func (c *p2pCoordinator) Run(ctx context.Context) {
 		_, _ = c.runLANDiscoveryProbe(ctx, "startup")
 	}()
 
-	// Disparar cloud bootstrap imediatamente no startup (carrega cache + chama API).
 	if cfg.BootstrapConfig.CloudBootstrapEnabled {
 		go func() {
 			_, _ = c.runCloudBootstrap(ctx)
 		}()
 	}
+
+	lanProbeSem := make(chan struct{}, 2)
 
 	for {
 		select {
@@ -182,13 +183,20 @@ func (c *p2pCoordinator) Run(ctx context.Context) {
 				c.setLastError(err)
 			}
 		case <-lanProbeWarmupTimer.C:
+			lanProbeSem <- struct{}{}
 			go func() {
+				defer func() { <-lanProbeSem }()
 				_, _ = c.runLANDiscoveryProbe(ctx, "warmup")
 			}()
 		case <-lanProbeTicker.C:
-			go func() {
-				_, _ = c.runLANDiscoveryProbe(ctx, "periodic")
-			}()
+			select {
+			case lanProbeSem <- struct{}{}:
+				go func() {
+					defer func() { <-lanProbeSem }()
+					_, _ = c.runLANDiscoveryProbe(ctx, "periodic")
+				}()
+			default:
+			}
 		case <-cloudBootstrapTicker.C:
 			if c.app.GetP2PConfig().BootstrapConfig.CloudBootstrapEnabled {
 				go func() {

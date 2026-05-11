@@ -46,11 +46,16 @@ func (a *App) cleanupExpiredP2PTempArtifacts(now time.Time) (int, error) {
 	}
 
 	removed := 0
+	emptyDirs := make(map[string]struct{})
 	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, walkErr error) error {
 		if walkErr != nil {
-			return walkErr
+			return nil
+		}
+		if path == dir {
+			return nil
 		}
 		if d.IsDir() {
+			emptyDirs[path] = struct{}{}
 			return nil
 		}
 		info, err := d.Info()
@@ -70,22 +75,15 @@ func (a *App) cleanupExpiredP2PTempArtifacts(now time.Time) (int, error) {
 		return removed, err
 	}
 
-	_ = filepath.WalkDir(dir, func(path string, d os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return nil
-		}
-		if !d.IsDir() || path == dir {
-			return nil
-		}
-		entries, err := os.ReadDir(path)
+	for dirPath := range emptyDirs {
+		entries, err := os.ReadDir(dirPath)
 		if err != nil {
-			return nil
+			continue
 		}
 		if len(entries) == 0 {
-			_ = os.Remove(path)
+			_ = os.Remove(dirPath)
 		}
-		return nil
-	})
+	}
 
 	if a.p2pCoord != nil {
 		a.p2pCoord.mu.Lock()

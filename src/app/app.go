@@ -420,6 +420,9 @@ func (a *App) GetRuntimeFlags() RuntimeFlags {
 // SetContext sets the application context and cancel func from an external caller
 // (e.g. the MCP server mode in main.go that doesn't go through Wails startup).
 func (a *App) SetContext(ctx context.Context) {
+	if a.cancel != nil {
+		a.cancel()
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	a.ctx = ctx
 	a.cancel = cancel
@@ -1145,7 +1148,8 @@ func (a *App) applyIdleMode(idle bool) bool {
 	}
 
 	a.activityMu.Lock()
-	if a.lastIdle == idle && a.idleKnown {
+	sameState := a.lastIdle == idle && a.idleKnown
+	if sameState {
 		supported := a.idleCapable
 		a.activityMu.Unlock()
 		return supported

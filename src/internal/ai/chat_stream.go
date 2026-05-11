@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"discovery/app/netutil"
+	"discovery/internal/tlsutil"
 )
 
 // ─── Stream Types ──────────────────────────────────────────────────
@@ -59,7 +60,7 @@ func (s *Service) callAgentChatStream(
 		return "", "", false, err
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := tlsutil.NewHTTPClient(130 * time.Second).Do(req)
 	if err != nil {
 		return "", "", false, fmt.Errorf("falha ao chamar stream: %w", err)
 	}

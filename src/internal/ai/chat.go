@@ -18,6 +18,7 @@ import (
 
 	"discovery/app/netutil"
 	"discovery/internal/mcp"
+	"discovery/internal/tlsutil"
 )
 
 // Config holds the LLM API settings.
@@ -325,7 +326,7 @@ func (s *Service) callAgentChatSync(ctx context.Context, cfg Config, message, se
 		return nil, err
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := tlsutil.NewHTTPClient(120 * time.Second).Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("falha ao chamar chat: %w", err)
 	}

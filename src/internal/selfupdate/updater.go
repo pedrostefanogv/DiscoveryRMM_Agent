@@ -543,7 +543,7 @@ func (u *Updater) downloadToTemp(ctx context.Context, m *UpdateManifest) (string
 		return "", err
 	}
 
-	client := &http.Client{}
+	client := &http.Client{Timeout: downloadDeadline}
 	resp, err := client.Do(req)
 	if err != nil {
 		errutil.LogIfErr(os.Remove(path), "selfupdate: limpar download apos falha HTTP")
