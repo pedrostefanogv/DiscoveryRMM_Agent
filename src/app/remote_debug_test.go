@@ -1,4 +1,4 @@
-package app
+﻿package app
 
 import (
 	"context"
@@ -100,19 +100,17 @@ func TestFormatRemoteDebugMessageWithOrigin_UI(t *testing.T) {
 	}
 }
 
-func TestHandleAgentRuntimeCommand_UpdateRequiresService(t *testing.T) {
-	a := &App{}
+func TestHandleAgentRuntimeCommand_UpdatePending(t *testing.T) {
+	a := &App{updateTrigger: make(chan struct{}, 1)}
 	handled, code, output, errText := a.handleAgentRuntimeCommand(context.Background(), "update", map[string]any{"action": "check-update"})
 	if !handled {
 		t.Fatalf("expected update command to be handled")
 	}
-	if code != 1 {
-		t.Fatalf("expected update command to fail without service, got code=%d err=%q", code, errText)
+	if code != 0 {
+		t.Fatalf("expected update command code=0, got code=%d err=%q", code, errText)
 	}
-	if strings.TrimSpace(output) != "" {
-		t.Fatalf("expected no output on failure, got %q", output)
-	}
-	if !strings.Contains(strings.ToLower(errText), "desativado") {
-		t.Fatalf("expected service-disabled error, got %q", errText)
+	if strings.TrimSpace(output) == "" {
+		t.Fatalf("expected non-empty output on success, got output=%q err=%q", output, errText)
 	}
 }
+

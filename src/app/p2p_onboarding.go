@@ -1,4 +1,4 @@
-package app
+﻿package app
 
 import (
 	"bytes"
@@ -572,9 +572,8 @@ func (a *App) applyZeroTouchRuntimeConnection(inst InstallerConfig) {
 	if a.debugSvc != nil {
 		a.debugSvc.ApplyRuntimeConnectionConfig(inst.ApiScheme, inst.ApiServer, inst.AuthToken, inst.AgentID, inst.NatsServer, inst.NatsWsServer)
 	}
-	if a.serviceConnectedMode.Load() {
-		a.requestServiceConfigReload(a.ctx, "zero-touch-registration")
-	}
+
+
 	if a.agentConn != nil {
 		a.agentConn.Reload()
 	}

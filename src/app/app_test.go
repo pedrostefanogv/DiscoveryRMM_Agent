@@ -1,4 +1,4 @@
-package app
+﻿package app
 
 import (
 	"fmt"
@@ -62,137 +62,18 @@ func TestParseUpgradeOutput_Empty(t *testing.T) {
 	}
 }
 
-func TestServiceOnlyUnavailablePayload_HasUserGuidance(t *testing.T) {
-	payload := serviceOnlyUnavailablePayload("failed to connect")
-	if payload.Running != false {
-		t.Fatalf("expected running=false, got %v", payload.Running)
-	}
-	if payload.ServiceOnly != true {
-		t.Fatalf("expected service_only=true, got %v", payload.ServiceOnly)
-	}
-	if payload.Error == nil || strings.TrimSpace(*payload.Error) == "" {
-		t.Fatalf("expected non-empty error, got %v", payload.Error)
-	}
-	msg := payload.UserMessage
-	if strings.TrimSpace(msg) == "" {
-		t.Fatalf("expected non-empty user_message, got %q", msg)
-	}
-	if !strings.Contains(strings.ToLower(msg), "reinicie") {
-		t.Fatalf("expected restart guidance, got %q", msg)
-	}
-	if !strings.Contains(strings.ToLower(msg), "suporte") {
-		t.Fatalf("expected support guidance, got %q", msg)
-	}
-}
 
-func TestGetServiceHealth_ServiceModeDisabled_ReturnsLocalRuntimeStatus(t *testing.T) {
-	a := &App{}
-	health := a.GetServiceHealth()
-	if health["running"] != true {
-		t.Fatalf("expected running=true, got %v", health["running"])
-	}
-	if health["service_only"] != false {
-		t.Fatalf("expected service_only=false, got %v", health["service_only"])
-	}
-	msg, _ := health["user_message"].(string)
-	if !strings.Contains(strings.ToLower(msg), "tray") {
-		t.Fatalf("expected local runtime guidance in user_message, got %q", msg)
-	}
-}
 
 // TestServiceConnectedMode_DefaultFalse verifica que o modo service-connected
 // começa como false (sem service detectado por padrão).
-func TestServiceConnectedMode_DefaultFalse(t *testing.T) {
-	a := &App{}
-	if a.serviceConnectedMode.Load() {
-		t.Fatal("esperado serviceConnectedMode=false no estado inicial")
-	}
-}
 
 // TestServiceConnectedMode_CanBeSetTrue verifica que o modo pode ser ativado
 // (simulando a deteção bem-sucedida do service no startup).
-func TestServiceConnectedMode_CanBeSetTrue(t *testing.T) {
-	a := &App{}
-	a.serviceConnectedMode.Store(true)
-	if !a.serviceConnectedMode.Load() {
-		t.Fatal("esperado serviceConnectedMode=true após Store(true)")
-	}
-}
 
-func TestAgentStatusFromServiceStatusData(t *testing.T) {
-	got := agentStatusFromServiceStatusData(map[string]interface{}{
-		"agent_connected":                   true,
-		"agent_transport_connected":         true,
-		"agent_online_reason":               "pong global recebido ha 3s",
-		"agent_global_pong_stale":           false,
-		"agent_last_global_pong_at":         "2026-05-05T10:00:00Z",
-		"agent_non_critical_backoff_until":  "2026-05-05T10:10:00Z",
-		"agent_non_critical_backoff_reason": "tenant.global.pong:serverOverloaded=true",
-		"agent_id":                          "agent-123",
-		"agent_server":                      "server.example:443",
-		"agent_last_event":                  "conectado",
-		"agent_transport":                   "nats-wss",
-	})
 
-	if !got.Connected {
-		t.Fatal("expected connected=true")
-	}
-	if got.AgentID != "agent-123" {
-		t.Fatalf("AgentID = %q", got.AgentID)
-	}
-	if got.Server != "server.example:443" {
-		t.Fatalf("Server = %q", got.Server)
-	}
-	if got.Transport != "nats-wss" {
-		t.Fatalf("Transport = %q", got.Transport)
-	}
-	if got.LastEvent != "conectado" {
-		t.Fatalf("LastEvent = %q", got.LastEvent)
-	}
-	if !got.TransportConnected {
-		t.Fatal("expected transportConnected=true")
-	}
-	if got.OnlineReason == "" {
-		t.Fatal("expected onlineReason to be populated")
-	}
-	if got.LastGlobalPongAtUTC != "2026-05-05T10:00:00Z" {
-		t.Fatalf("LastGlobalPongAtUTC = %q", got.LastGlobalPongAtUTC)
-	}
-	if got.NonCriticalBackoffUntilUTC != "2026-05-05T10:10:00Z" {
-		t.Fatalf("NonCriticalBackoffUntilUTC = %q", got.NonCriticalBackoffUntilUTC)
-	}
-}
 
-func TestShouldRunLocalP2P_NoServiceConnected(t *testing.T) {
-	a := &App{}
-	if !a.shouldRunLocalP2P() {
-		t.Fatal("expected local P2P to run when service is not connected")
-	}
-}
 
-func TestShouldRunLocalP2P_ServiceConnectedNormalModeRunsWhenServiceModeDisabled(t *testing.T) {
-	a := &App{}
-	a.serviceConnectedMode.Store(true)
-	if !a.shouldRunLocalP2P() {
-		t.Fatal("expected local P2P to run when service mode is globally disabled")
-	}
-}
 
-func TestShouldRunLocalP2P_ServiceConnectedDebugModeRuns(t *testing.T) {
-	a := &App{runtimeFlags: RuntimeFlags{DebugMode: true}}
-	a.serviceConnectedMode.Store(true)
-	if !a.shouldRunLocalP2P() {
-		t.Fatal("expected local P2P to run in debug mode even when service is connected")
-	}
-}
-
-func TestShouldUseServiceRuntime_DisabledByGlobalFlag(t *testing.T) {
-	a := &App{}
-	a.serviceConnectedMode.Store(true)
-	if a.shouldUseServiceRuntime() {
-		t.Fatal("expected shouldUseServiceRuntime=false when windowsServiceModeEnabled=false")
-	}
-}
 
 func TestHeartbeatIntervalFromAgentConfig_DebugForcedInterval(t *testing.T) {
 	configured := 45

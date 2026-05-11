@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path,
     [string]$OutputName = "discovery-agent-install.exe",
@@ -83,7 +83,7 @@ Write-Output "  Sincronizando icones a partir de build\\*.png..."
 & $syncIconsScript -ProjectRoot $ProjectRoot
 
 if (-not (Test-Path $nsiFile)) {
-    throw "Arquivo NSIS não encontrado: $nsiFile"
+    throw "Arquivo NSIS nÃ£o encontrado: $nsiFile"
 }
 
 if (-not (Test-Path $iconPath)) {
@@ -128,7 +128,7 @@ finally {
 }
 
 if (-not (Test-Path $agentExe)) {
-    throw "Binário do agente não foi gerado: $agentExe"
+    throw "BinÃ¡rio do agente nÃ£o foi gerado: $agentExe"
 }
 
 Write-Output "[2/3] Build do instalador padrao (NSIS)..."
@@ -185,7 +185,7 @@ if ($LASTEXITCODE -ne 0) {
 
 $installerPath = Join-Path $binDir $OutputName
 if (-not (Test-Path $installerPath)) {
-    throw "Instalador não encontrado após build: $installerPath"
+    throw "Instalador nÃ£o encontrado apÃ³s build: $installerPath"
 }
 
 Write-Output "[3/3] Concluido."
@@ -196,3 +196,4 @@ if ($EnableWindowsService -eq "1") {
 else {
     Write-Output "Observacao: modo padrao sem servico Windows. O agente inicia via Task Scheduler no logon (tray icon) e a regra de Windows Firewall e mantida para rede/P2P."
 }
+

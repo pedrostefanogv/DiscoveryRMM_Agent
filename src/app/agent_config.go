@@ -1,14 +1,11 @@
-package app
-
+﻿package app
 import (
 	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
-
 	"discovery/internal/selfupdate"
 )
-
 // AgentAutoUpdateConfig represents the agent-side auto-update policy.
 type AgentAutoUpdateConfig struct {
 	Enabled               bool     `json:"enabled"`
@@ -22,7 +19,6 @@ type AgentAutoUpdateConfig struct {
 	SilentInstall         bool     `json:"silentInstall"`
 	AutoRollbackOnFailure bool     `json:"autoRollbackOnFailure"`
 }
-
 // AgentPSADTConfig defines PSAppDeployToolkit integration settings from the API.
 type AgentPSADTConfig struct {
 	Enabled                 *bool  `json:"enabled"`
@@ -39,7 +35,6 @@ type AgentPSADTConfig struct {
 	TimeoutAction           string `json:"timeoutAction"`
 	UnknownExitCodePolicy   string `json:"unknownExitCodePolicy"`
 }
-
 // NotificationThemeConfig defines base colors used by notification UI.
 type NotificationThemeConfig struct {
 	Surface string `json:"surface"`
@@ -49,7 +44,6 @@ type NotificationThemeConfig struct {
 	Warning string `json:"warning"`
 	Danger  string `json:"danger"`
 }
-
 // AgentNotificationBrandingConfig defines tenant-level notification branding.
 type AgentNotificationBrandingConfig struct {
 	CompanyName string                  `json:"companyName"`
@@ -57,21 +51,18 @@ type AgentNotificationBrandingConfig struct {
 	BannerURL   string                  `json:"bannerUrl"`
 	Theme       NotificationThemeConfig `json:"theme"`
 }
-
 // AgentNotificationStyleOverride defines per-event visual customizations.
 type AgentNotificationStyleOverride struct {
 	Layout     string `json:"layout"`
 	Background string `json:"background"`
 	Text       string `json:"text"`
 }
-
 // AgentNotificationAction defines actions available in an interactive notification.
 type AgentNotificationAction struct {
 	ID         string `json:"id"`
 	Label      string `json:"label"`
 	ActionType string `json:"actionType"`
 }
-
 // AgentNotificationPolicy defines behavior and style for a notification event type.
 type AgentNotificationPolicy struct {
 	EventType      string                         `json:"eventType"`
@@ -81,7 +72,6 @@ type AgentNotificationPolicy struct {
 	StyleOverride  AgentNotificationStyleOverride `json:"styleOverride"`
 	Actions        []AgentNotificationAction      `json:"actions"`
 }
-
 // AgentRolloutConfig defines kill switches and phased rollout gates.
 type AgentRolloutConfig struct {
 	EnableNotifications           *bool    `json:"enableNotifications"`
@@ -93,19 +83,16 @@ type AgentRolloutConfig struct {
 	AllowedNotificationEventTypes []string `json:"allowedNotificationEventTypes"`
 	BlockedNotificationEventTypes []string `json:"blockedNotificationEventTypes"`
 }
-
 // AgentConsolidationPolicy defines the window mode for a specific data type.
 type AgentConsolidationPolicy struct {
 	DataType   string `json:"dataType"`
 	WindowMode string `json:"windowMode"`
 }
-
 // AgentConsolidationConfig groups feature flags and policies for send windows.
 type AgentConsolidationConfig struct {
 	Enabled  *bool                      `json:"enabled"`
 	Policies []AgentConsolidationPolicy `json:"policies"`
 }
-
 // AgentConfiguration defines the configuration schema returned by /api/v1/agent-auth/me/configuration.
 // It is used to control what features should be enabled on the agent.
 type AgentConfiguration struct {
@@ -137,20 +124,18 @@ type AgentConfiguration struct {
 	Consolidation                 AgentConsolidationConfig        `json:"consolidation"`
 	Rollout                       AgentRolloutConfig              `json:"rollout"`
 }
-
 // parseAgentConfiguration parses a configuration blob into a normalized AgentConfiguration.
 func parseAgentConfiguration(data []byte) (AgentConfiguration, error) {
 	var raw map[string]any
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return AgentConfiguration{}, fmt.Errorf("falha ao decodificar configuracao do agent: %w", err)
 	}
-
 	// Helpers
 	getAny := func(keys ...string) any {
 		for _, k := range keys {
 			if v, ok := raw[k]; ok {
 				return v
-			}
+		}
 		}
 		return nil
 	}
@@ -177,7 +162,6 @@ func parseAgentConfiguration(data []byte) (AgentConfiguration, error) {
 		}
 		return strings.TrimSpace(fmt.Sprint(v))
 	}
-
 	cfg := AgentConfiguration{
 		RecoveryEnabled:               getBoolPtr("recoveryEnabled"),
 		DiscoveryEnabled:              getBoolPtr("discoveryEnabled"),
@@ -201,7 +185,6 @@ func parseAgentConfiguration(data []byte) (AgentConfiguration, error) {
 		ResolvedAt:                    getString("resolvedAt"),
 		AgentUpdate:                   selfupdate.DefaultPolicy(),
 	}
-
 	// Parse nested autoUpdate object if present.
 	hasAutoUpdate := false
 	if auRaw, ok := raw["autoUpdate"]; ok {
@@ -219,7 +202,6 @@ func parseAgentConfiguration(data []byte) (AgentConfiguration, error) {
 			cfg.AutoUpdate.AutoRollbackOnFailure = getBoolFromMap(auMap, "autoRollbackOnFailure")
 		}
 	}
-
 	if agentUpdateRaw, ok := raw["agentUpdate"]; ok {
 		if agentUpdateMap, ok := agentUpdateRaw.(map[string]any); ok {
 			cfg.AgentUpdate = parseAgentUpdatePolicy(agentUpdateMap)
@@ -229,7 +211,6 @@ func parseAgentConfiguration(data []byte) (AgentConfiguration, error) {
 	} else if hasAutoUpdate {
 		cfg.AgentUpdate = deriveAgentUpdatePolicyFromLegacy(cfg.AutoUpdate)
 	}
-
 	// Parse nested psadt object if present.
 	if psadtRaw, ok := raw["psadt"]; ok {
 		if psadtMap, ok := psadtRaw.(map[string]any); ok {
@@ -249,7 +230,6 @@ func parseAgentConfiguration(data []byte) (AgentConfiguration, error) {
 			normalizePSADTConfigDefaults(&cfg.PSADT)
 		}
 	}
-
 	// Parse nested notificationBranding object if present.
 	if brandingRaw, ok := raw["notificationBranding"]; ok {
 		if brandingMap, ok := brandingRaw.(map[string]any); ok {
@@ -268,7 +248,6 @@ func parseAgentConfiguration(data []byte) (AgentConfiguration, error) {
 			}
 		}
 	}
-
 	// Parse notificationPolicies list if present.
 	if policiesRaw, ok := raw["notificationPolicies"]; ok {
 		if policyItems, ok := policiesRaw.([]any); ok {
@@ -313,7 +292,6 @@ func parseAgentConfiguration(data []byte) (AgentConfiguration, error) {
 			cfg.NotificationPolicies = policies
 		}
 	}
-
 	// Parse consolidation policies when present.
 	if consolidationRaw, ok := raw["consolidation"]; ok {
 		if consolidationMap, ok := consolidationRaw.(map[string]any); ok {
@@ -336,7 +314,6 @@ func parseAgentConfiguration(data []byte) (AgentConfiguration, error) {
 			}
 		}
 	}
-
 	// Parse rollout gates/kill-switches when present.
 	if rolloutRaw, ok := raw["rollout"]; ok {
 		if rolloutMap, ok := rolloutRaw.(map[string]any); ok {
@@ -353,17 +330,14 @@ func parseAgentConfiguration(data []byte) (AgentConfiguration, error) {
 	normalizePSADTConfigDefaults(&cfg.PSADT)
 	normalizeConsolidationConfigDefaults(&cfg.Consolidation)
 	normalizeRolloutDefaults(&cfg.Rollout)
-
 	// Normalize ResolvedAt to RFC3339 when possible (keeps original otherwise)
 	if cfg.ResolvedAt != "" {
 		if t, err := time.Parse(time.RFC3339, cfg.ResolvedAt); err == nil {
 			cfg.ResolvedAt = t.UTC().Format(time.RFC3339)
 		}
 	}
-
 	return cfg, nil
 }
-
 func getBoolFromMap(m map[string]any, keys ...string) bool {
 	for _, k := range keys {
 		if v, ok := m[k]; ok {
@@ -372,7 +346,6 @@ func getBoolFromMap(m map[string]any, keys ...string) bool {
 	}
 	return false
 }
-
 func getIntFromMap(m map[string]any, keys ...string) int {
 	for _, k := range keys {
 		if v, ok := m[k]; ok {
@@ -381,7 +354,6 @@ func getIntFromMap(m map[string]any, keys ...string) int {
 	}
 	return 0
 }
-
 func getStringSliceFromMap(m map[string]any, key string) []string {
 	raw, ok := m[key]
 	if !ok {
@@ -408,7 +380,6 @@ func getStringSliceFromMap(m map[string]any, key string) []string {
 		return nil
 	}
 }
-
 func getBoolPtrFromMap(m map[string]any, keys ...string) *bool {
 	for _, k := range keys {
 		if v, ok := m[k]; ok {
@@ -418,7 +389,6 @@ func getBoolPtrFromMap(m map[string]any, keys ...string) *bool {
 	}
 	return nil
 }
-
 func getIntPtrFromMap(m map[string]any, keys ...string) *int {
 	for _, k := range keys {
 		if v, ok := m[k]; ok {
@@ -428,7 +398,6 @@ func getIntPtrFromMap(m map[string]any, keys ...string) *int {
 	}
 	return nil
 }
-
 func getStringFromMap(m map[string]any, keys ...string) string {
 	for _, k := range keys {
 		if v, ok := m[k]; ok {
@@ -437,7 +406,6 @@ func getStringFromMap(m map[string]any, keys ...string) string {
 	}
 	return ""
 }
-
 func getIntSliceFromMap(m map[string]any, keys ...string) []int {
 	for _, key := range keys {
 		raw, ok := m[key]
@@ -474,7 +442,6 @@ func getIntSliceFromMap(m map[string]any, keys ...string) []int {
 	}
 	return nil
 }
-
 func normalizePSADTConfigDefaults(cfg *AgentPSADTConfig) {
 	if cfg == nil {
 		return
@@ -516,7 +483,6 @@ func normalizePSADTConfigDefaults(cfg *AgentPSADTConfig) {
 		cfg.UnknownExitCodePolicy = "recoverable_failure"
 	}
 }
-
 func normalizeRolloutDefaults(cfg *AgentRolloutConfig) {
 	if cfg == nil {
 		return
@@ -536,7 +502,6 @@ func normalizeRolloutDefaults(cfg *AgentRolloutConfig) {
 	cfg.CommandResultOfflineMode = normalizeOfflineQueueMode(cfg.CommandResultOfflineMode)
 	cfg.P2PTelemetryOfflineMode = normalizeOfflineQueueMode(cfg.P2PTelemetryOfflineMode)
 }
-
 func normalizeConsolidationConfigDefaults(cfg *AgentConsolidationConfig) {
 	if cfg == nil {
 		return
@@ -557,7 +522,6 @@ func normalizeConsolidationConfigDefaults(cfg *AgentConsolidationConfig) {
 	}
 	cfg.Policies = normalized
 }
-
 func normalizeOfflineQueueMode(mode string) string {
 	switch strings.TrimSpace(strings.ToLower(mode)) {
 	case "", "enqueue_and_drain", "active", "enabled", "full":
@@ -570,7 +534,6 @@ func normalizeOfflineQueueMode(mode string) string {
 		return OfflineQueueModeEnqueueAndDrain
 	}
 }
-
 func normalizeConsolidationWindowMode(mode string) string {
 	switch strings.TrimSpace(strings.ToLower(mode)) {
 	case "1min", "batch_1min", "batch-1min":
@@ -583,15 +546,12 @@ func normalizeConsolidationWindowMode(mode string) string {
 		return ConsolidationModeRealtime
 	}
 }
-
 func ptrBoolConfig(v bool) *bool {
 	return &v
 }
-
 func ptrIntConfig(v int) *int {
 	return &v
 }
-
 func parseAgentUpdatePolicy(raw map[string]any) selfupdate.Policy {
 	policy := selfupdate.Policy{
 		Enabled:                    getBoolFromMap(raw, "enabled", "isEnabled"),
@@ -604,7 +564,6 @@ func parseAgentUpdatePolicy(raw map[string]any) selfupdate.Policy {
 	}
 	return selfupdate.NormalizePolicy(policy)
 }
-
 func deriveAgentUpdatePolicyFromLegacy(legacy AgentAutoUpdateConfig) selfupdate.Policy {
 	policy := selfupdate.DefaultPolicy()
 	policy.Enabled = legacy.Enabled
@@ -613,33 +572,25 @@ func deriveAgentUpdatePolicyFromLegacy(legacy AgentAutoUpdateConfig) selfupdate.
 	}
 	return selfupdate.NormalizePolicy(policy)
 }
-
 // setAgentConfiguration stores the parsed configuration and applies relevant settings.
 func (a *App) setAgentConfiguration(cfg AgentConfiguration) {
 	a.agentConfigMu.RLock()
 	previous := a.agentConfig
 	a.agentConfigMu.RUnlock()
-
 	a.agentConfigMu.Lock()
 	a.agentConfig = cfg
 	a.agentConfigMu.Unlock()
-
 	a.persistAgentRoutingContext(cfg)
 	a.applyAgentConfiguration(cfg)
-
 	if a.agentConn != nil {
 		clientChanged := strings.TrimSpace(previous.ClientID) != strings.TrimSpace(cfg.ClientID)
 		siteChanged := strings.TrimSpace(previous.SiteID) != strings.TrimSpace(cfg.SiteID)
 		if clientChanged || siteChanged {
-			a.logs.append("[config] contexto NATS canônico atualizado; reconexao solicitada")
-			if a.serviceConnectedMode.Load() {
-				a.requestServiceConfigReload(a.ctx, "agent-config-context")
-			}
+			a.logs.append("[config] contexto NATS canÃ´nico atualizado; reconexao solicitada")
 			a.agentConn.Reload()
 		}
 	}
 }
-
 func (a *App) persistAgentRoutingContext(cfg AgentConfiguration) {
 	clientID := strings.TrimSpace(cfg.ClientID)
 	siteID := strings.TrimSpace(cfg.SiteID)
@@ -660,9 +611,8 @@ func (a *App) persistAgentRoutingContext(cfg AgentConfiguration) {
 		a.logs.append("[config] falha ao persistir clientId/siteId: " + err.Error())
 		return
 	}
-	a.logs.append(fmt.Sprintf("[config] contexto canônico persistido: clientId=%s siteId=%s", clientID, siteID))
+	a.logs.append(fmt.Sprintf("[config] contexto canÃ´nico persistido: clientId=%s siteId=%s", clientID, siteID))
 }
-
 // applyAgentConfiguration adjusts runtime behavior based on the agent configuration.
 func (a *App) applyAgentConfiguration(cfg AgentConfiguration) {
 	// P2P files toggle.
@@ -671,7 +621,6 @@ func (a *App) applyAgentConfiguration(cfg AgentConfiguration) {
 		p2pCfg.Enabled = *cfg.P2PFilesEnabled
 		a.applyP2PConfig(p2pCfg)
 	}
-
 	if a.debugSvc != nil {
 		changed, err := a.debugSvc.ApplyRemoteConnectionSecurity(
 			cfg.NatsServerHost,
@@ -686,33 +635,27 @@ func (a *App) applyAgentConfiguration(cfg AgentConfiguration) {
 			a.logs.append("[config] seguranca remota aplicada; reconexao solicitada")
 		}
 	}
-
 	a.persistAgentUpdatePolicy(cfg.AgentUpdate)
-
-	// Discovery onboarding toggle — governs whether this agent participates in P2P onboarding.
+	// Discovery onboarding toggle â€” governs whether this agent participates in P2P onboarding.
 	if cfg.DiscoveryEnabled != nil {
 		a.logs.append(fmt.Sprintf("[config] discoveryEnabled=%t", *cfg.DiscoveryEnabled))
 	}
-
 	// Sync interval (if specified).
 	if cfg.InventoryIntervalHours != nil && a.syncCoord != nil {
 		if *cfg.InventoryIntervalHours > 0 {
 			a.syncCoord.setPollEvery(time.Duration(*cfg.InventoryIntervalHours) * time.Hour)
 		}
 	}
-
 	// MeshCentral bootstrap idempotente (instalacao/repair/report) apos refresh de configuracao.
 	if cfg.MeshCentralEnabledEffective != nil && *cfg.MeshCentralEnabledEffective {
 		go a.ensureMeshCentralInstalled(a.ctx, "configuration-refresh", true)
 	}
-
-	// Consolidation engine: propagar políticas de janela quando disponíveis.
+	// Consolidation engine: propagar polÃ­ticas de janela quando disponÃ­veis.
 	if a.consolEngine != nil {
 		a.consolEngine.SetAgentID(strings.TrimSpace(a.GetDebugConfig().AgentID))
 		a.consolEngine.ApplyAgentConfig(cfg)
 	}
 }
-
 func (a *App) persistAgentUpdatePolicy(policy selfupdate.Policy) {
 	policy = selfupdate.NormalizePolicy(policy)
 	inst, path, err := loadInstallerConfig()
@@ -724,19 +667,16 @@ func (a *App) persistAgentUpdatePolicy(policy selfupdate.Policy) {
 		return
 	}
 	inst.AgentUpdate = &policy
-
 	if _, err := persistInstallerConfig(path, inst); err != nil {
 		a.logs.append("[config] falha ao persistir agentUpdate em config compartilhada: " + err.Error())
 		return
 	}
 	a.logs.append("[config] policy de agentUpdate persistida em config compartilhada")
 }
-
 func (a *App) loadCachedAgentConfiguration() error {
 	if a.db == nil {
 		return fmt.Errorf("cache nao disponivel")
 	}
-
 	raw, err := a.db.CacheGet("agent_configuration_raw")
 	if err != nil {
 		return err
@@ -744,12 +684,12 @@ func (a *App) loadCachedAgentConfiguration() error {
 	if raw == nil {
 		return fmt.Errorf("cache de configuracao nao encontrada")
 	}
-
 	cfg, err := parseAgentConfiguration(raw)
 	if err != nil {
 		return err
 	}
 	a.setAgentConfiguration(cfg)
-	a.logs.append("[sync] configuração do agent carregada do cache")
+	a.logs.append("[sync] configuraÃ§Ã£o do agent carregada do cache")
 	return nil
 }
+

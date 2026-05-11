@@ -1,4 +1,4 @@
-package app
+﻿package app
 
 import (
 	"context"
@@ -27,24 +27,18 @@ import (
 	"discovery/internal/chocolatey"
 	"discovery/internal/data"
 	"discovery/internal/database"
-	"discovery/internal/dto"
 	"discovery/internal/inventory"
 	"discovery/internal/mcp"
 	"discovery/internal/models"
 	"discovery/internal/platform"
 	"discovery/internal/printer"
 	"discovery/internal/processutil"
-	"discovery/internal/service"
 	"discovery/internal/services"
 	"discovery/internal/winget"
 )
 
-// Version is the application version, set at build time via ldflags:
-//
-//	go build -ldflags "-X discovery/app.Version=1.2.3"
 var Version = "dev"
 
-// Application-level constants for timeouts, URLs and window dimensions.
 const (
 	catalogURL       = "https://raw.githubusercontent.com/pedrostefanogv/winget-package-explo/refs/heads/main/public/data/packages.json"
 	catalogTimeout   = 10 * time.Minute
@@ -53,12 +47,7 @@ const (
 	printerTimeout   = 30 * time.Second
 	chatConfigFile   = "chat_config.json"
 
-	// Temporarily disable efficiency mode until we revisit this behavior.
 	efficiencyModeEnabled = false
-
-	// windowsServiceModeEnabled controla o modo service-first.
-	// Enquanto false, o runtime opera sempre em modo local (tray icon no logon).
-	windowsServiceModeEnabled = false
 
 	WindowWidth     = 1280
 	WindowHeight    = 860
@@ -66,8 +55,6 @@ const (
 	WindowMinHeight = 700
 )
 
-// GetDataDir retorna o diretório de dados da aplicação (exportado para uso em outros pacotes).
-// Delega para internal/platform.
 func GetDataDir() string {
 	return platform.DataDir()
 }
@@ -102,7 +89,6 @@ type App struct {
 	exporter       *updates.Exporter
 	inventorySvc   *appinventory.Service
 	supportSvc     *appsupport.Service
-	serviceClient  *service.ServiceClient
 
 	consolEngine *ConsolidationEngine
 
@@ -140,13 +126,6 @@ type App struct {
 	zeroTouchAttemptInFlight atomic.Bool
 	zeroTouchApprovalPending atomic.Bool
 
-	// serviceConnectedMode é true quando o Windows Service foi detectado no startup
-	// E o modo service-first está habilitado. Enquanto o modo estiver desativado,
-	// essa flag permanece false e o runtime fica sempre local.
-	serviceConnectedMode atomic.Bool
-
-	// startupTime registra quando a aplicação iniciou, usado para calcular
-	// uptimeSeconds nos heartbeats.
 	startupTime time.Time
 
 	notificationMu      sync.Mutex
@@ -166,14 +145,8 @@ func NewApp(opts AppStartupOptions) *App {
 	reg := mcp.NewRegistry()
 	chatSvc := ai.NewService(reg)
 
-	var serviceClient *service.ServiceClient
-	if windowsServiceModeEnabled {
-		// Initialize service client for communicating with Windows Service.
-		serviceClient = service.NewServiceClient()
-	}
-
 	a := &App{
-		ctx:                 context.Background(), // inicializado para evitar nil; sobrescrito por SetContext()
+		ctx:                 context.Background(),
 		runtimeFlags:        RuntimeFlags{DebugMode: opts.DebugMode},
 		trayIcon:            opts.TrayIcon,
 		trayProvisioning:    opts.TrayProvisioningIcon,
@@ -186,7 +159,6 @@ func NewApp(opts AppStartupOptions) *App {
 		printerSvc:          services.NewPrinterService(printerManager),
 		mcpRegistry:         reg,
 		chatSvc:             chatSvc,
-		serviceClient:       serviceClient,
 		pendingNotifyResult: make(map[string]chan string),
 		notificationByKey:   make(map[string]string),
 		startupTime:         time.Now(),
@@ -396,7 +368,6 @@ func NewApp(opts AppStartupOptions) *App {
 	a.loadPersistedChatConfig()
 	a.debugSvc.LoadConnectionConfigFromProduction()
 
-	// Register all Discovery tools in the MCP registry.
 	mcp.RegisterDiscoveryTools(reg, a)
 
 	a.queuedForceHeartbeat.Store(false)
@@ -405,20 +376,16 @@ func NewApp(opts AppStartupOptions) *App {
 		a.logs.append("[startup] modo debug ativo por tecla de atalho (execucao atual)")
 	}
 
-	// Garantir defaults de configuração PSADT antes da primeira resposta da API.
 	normalizePSADTConfigDefaults(&a.agentConfig.PSADT)
 	normalizeRolloutDefaults(&a.agentConfig.Rollout)
 
 	return a
 }
 
-// GetRuntimeFlags returns runtime-only startup flags for the current execution.
 func (a *App) GetRuntimeFlags() RuntimeFlags {
 	return a.runtimeFlags
 }
 
-// SetContext sets the application context and cancel func from an external caller
-// (e.g. the MCP server mode in main.go that doesn't go through Wails startup).
 func (a *App) SetContext(ctx context.Context) {
 	if a.cancel != nil {
 		a.cancel()
@@ -428,22 +395,14 @@ func (a *App) SetContext(ctx context.Context) {
 	a.cancel = cancel
 }
 
-// Ctx returns the current Wails context (may be nil before startup).
-// Used by the root package for secondary-instance window focus.
 func (a *App) Ctx() context.Context { return a.ctx }
 
-// ClearMemoryCaches clears in-memory caches (inventory, etc).
-// Exposed so main.go can call it from the OnBeforeClose Wails hook.
 func (a *App) ClearMemoryCaches() { a.clearMemoryCaches() }
 
-// AppStartup returns the Wails OnStartup callback for the given App.
-// Using a package-level function avoids exposing startup as a bound Wails method.
 func AppStartup(a *App) func(context.Context) { return a.startup }
 
-// AppShutdown returns the Wails OnShutdown callback for the given App.
 func AppShutdown(a *App) func(context.Context) { return a.shutdown }
 
-// GetAgentConfiguration returns the last-known configuration retrieved from the server.
 func (a *App) GetAgentConfiguration() AgentConfiguration {
 	a.agentConfigMu.RLock()
 	cfg := a.agentConfig
@@ -479,19 +438,10 @@ func (a *App) featureEnabled(flag *bool) bool {
 
 const debugForcedHeartbeatIntervalSeconds = 10
 
-// heartbeatIntervalFromAgentConfig retorna, temporariamente, um intervalo fixo
-// de 10 segundos para facilitar debug de eventos de heartbeat.
-// TODO: restaurar comportamento padrão (config remota / fallback de runtime) após o debug.
 func heartbeatIntervalFromAgentConfig(_ AgentConfiguration) int {
 	return debugForcedHeartbeatIntervalSeconds
 }
 
-// getHeartbeatMetrics coleta métricas do sistema para incluir no heartbeat
-// padronizado (HeartbeatV2 / NATS). Usa uma única query osquery otimizada
-// para coletar CPU, memória, disco, hostname, uptime e processos.
-//
-// Se o osquery não estiver disponível ou falhar, retorna métricas básicas
-// (hostname + uptime) sem os campos percentuais — o payload JSON os omitirá.
 func (a *App) getHeartbeatMetrics() agentconn.AgentHeartbeatMetrics {
 	hostname, _ := os.Hostname()
 	metrics := agentconn.AgentHeartbeatMetrics{
@@ -506,13 +456,11 @@ func (a *App) getHeartbeatMetrics() agentconn.AgentHeartbeatMetrics {
 		P2pPeers:         a.getKnownP2PPeers(),
 	}
 
-	// Tenta coleta completa via osquery (CPU, memória, disco, processos).
 	if runtime.GOOS == "windows" {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if m := inventory.CollectHeartbeatMetrics(ctx); m != nil {
 			metrics = *m
-			// Sobrescreve P2P com o contador local que usa lock correto.
 			metrics.P2pPeers = a.getKnownP2PPeers()
 		}
 		if metrics.CpuPercent < 0 {
@@ -525,34 +473,11 @@ func (a *App) getHeartbeatMetrics() agentconn.AgentHeartbeatMetrics {
 	return metrics
 }
 
-// getKnownP2PPeers retorna o número de peers P2P conhecidos, ou 0 se o
-// coordenador P2P não estiver inicializado. Usa GetPeers() que já adquire
-// o RLock internamente, garantindo thread-safety.
 func (a *App) getKnownP2PPeers() int {
 	if a.p2pCoord == nil {
 		return 0
 	}
 	return len(a.p2pCoord.GetPeers())
-}
-
-func (a *App) shouldRunLocalP2P() bool {
-	if a == nil {
-		return false
-	}
-	if a.shouldUseServiceRuntime() && !a.runtimeFlags.DebugMode {
-		return false
-	}
-	return true
-}
-
-func (a *App) shouldUseServiceRuntime() bool {
-	if a == nil || !windowsServiceModeEnabled {
-		return false
-	}
-	if a.serviceClient == nil {
-		return false
-	}
-	return a.serviceConnectedMode.Load()
 }
 
 func (a *App) startup(ctx context.Context) {
@@ -568,7 +493,6 @@ func (a *App) startup(ctx context.Context) {
 	}
 	a.applyIdleMode(true)
 
-	// Inicializar database SQLite
 	dataDir := GetDataDir()
 	db, err := database.Open(dataDir)
 	if err != nil {
@@ -577,7 +501,6 @@ func (a *App) startup(ctx context.Context) {
 		a.db = db
 		log.Printf("[startup] database SQLite inicializado em %s", dataDir)
 
-		// Configurar cache persistente no catalogClient
 		if a.catalogClient != nil {
 			a.catalogClient.SetDatabase(db)
 		}
@@ -587,35 +510,15 @@ func (a *App) startup(ctx context.Context) {
 		if a.inventorySvc != nil {
 			a.inventorySvc.SetDB(db)
 		}
-		// Inicializar ConsolidationEngine (feature-flagged, desabilitado por padrão)
 		agentIDForEngine := strings.TrimSpace(a.GetDebugConfig().AgentID)
 		a.consolEngine = newConsolidationEngine(db, agentIDForEngine)
 	}
 
-	// Modo padrão: runtime local (tray icon no logon), sem service-first.
-	if !windowsServiceModeEnabled {
-		a.serviceConnectedMode.Store(false)
-		log.Println("[startup] modo Windows Service desativado — runtime local (tray) ativo")
-	} else if a.serviceClient != nil {
-		probeCtx, probeCancel := context.WithTimeout(ctx, 2*time.Second)
-		if a.serviceClient.Ping(probeCtx) {
-			a.serviceConnectedMode.Store(true)
-			log.Println("[startup] Windows Service detectado — modo cliente IPC ativo; workers locais de automação e inventário não iniciados")
-		} else {
-			log.Println("[startup] Windows Service não detectado — modo autônomo local; todos os workers locais iniciados")
-		}
-		probeCancel()
-	}
+	log.Println("[startup] runtime local (tray) ativo — todos os workers locais iniciados")
 
 	a.startupWg.Add(1)
 	a.safeGo(func() {
 		defer a.startupWg.Done()
-
-		// Quando o service está disponível, ele já gerencia inventário; pular coleta local.
-		if a.shouldUseServiceRuntime() {
-			log.Println("[startup] inventory-startup: ignorado (service disponível)")
-			return
-		}
 
 		if !a.isInventoryProvisioned() {
 			log.Println("[startup] inventory-startup: ignorado (agente nao provisionado)")
@@ -645,23 +548,13 @@ func (a *App) startup(ctx context.Context) {
 	a.safeGo(func() {
 		defer a.startupWg.Done()
 
-		// Bootstrap pós-instalação: se houver URL/KEY do instalador, resolver token/agentId.
 		if a.debugSvc != nil {
 			a.debugSvc.BootstrapAgentCredentialsFromInstallerConfig(ctx)
 		}
-		if a.shouldUseServiceRuntime() {
-			a.requestServiceConfigReload(ctx, "startup-bootstrap")
-		}
 
-		// MeshCentral deve iniciar somente apos autenticar e carregar credenciais do agente.
 		a.safeGo(func() {
 			a.ensureMeshCentralInstalled(ctx, "startup-auth", false)
 		})
-
-		if a.shouldUseServiceRuntime() {
-			log.Println("[startup] agent-runtime local: ignorado (service disponível)")
-			return
-		}
 
 		a.agentConn.Run(ctx)
 	})
@@ -688,13 +581,6 @@ func (a *App) startup(ctx context.Context) {
 		if a.automationSvc == nil {
 			return
 		}
-
-		// Quando o service está disponível, ele gerencia automação; pular worker local.
-		if a.shouldUseServiceRuntime() {
-			log.Println("[startup] automation-service: ignorado (service disponível)")
-			return
-		}
-
 		a.automationSvc.Run(ctx, func() {})
 	})
 
@@ -712,13 +598,6 @@ func (a *App) startup(ctx context.Context) {
 		defer a.startupWg.Done()
 		if a.p2pCoord == nil {
 			return
-		}
-		if !a.shouldRunLocalP2P() {
-			log.Println("[startup] p2p local: ignorado (service disponível)")
-			return
-		}
-		if a.shouldUseServiceRuntime() && a.runtimeFlags.DebugMode {
-			log.Println("[startup] p2p local: iniciado em modo debug mesmo com service disponível")
 		}
 		if !isAgentConfigured() && a.zeroTouchConfigRegistrationAllowed() {
 			a.safeGo(func() {
@@ -759,9 +638,6 @@ func (a *App) startup(ctx context.Context) {
 	})
 }
 
-// SendTestHeartbeat triggers an immediate heartbeat send on the active
-// NATS connection and returns diagnostic info.
-// This is exposed as a Wails binding for the debug page.
 func (a *App) SendTestHeartbeat() string {
 	if !a.queuedForceHeartbeat.CompareAndSwap(false, true) {
 		return "erro: heartbeat manual ja em andamento"
@@ -769,18 +645,6 @@ func (a *App) SendTestHeartbeat() string {
 	defer a.queuedForceHeartbeat.Store(false)
 
 	a.logs.append("[heartbeat][manual] enviando heartbeat manual...")
-	if a.shouldUseServiceRuntime() {
-		message, err := a.requestServiceForceHeartbeat(a.ctx, "debug-manual-heartbeat")
-		if err != nil {
-			a.logs.append("[heartbeat][manual] falha ao enviar heartbeat manual via service: " + err.Error())
-			return "falha ao enviar heartbeat manual via service: " + err.Error()
-		}
-		if strings.TrimSpace(message) == "" {
-			message = "heartbeat manual enviado com sucesso via Windows Service"
-		}
-		a.logs.append("[heartbeat][manual] " + message)
-		return message
-	}
 	if a.agentConn == nil {
 		a.logs.append("[heartbeat][manual] falha ao enviar heartbeat manual: agent runtime nao inicializado")
 		return "erro: agent runtime nao inicializado"
@@ -799,9 +663,6 @@ func (a *App) startupLogf(format string, args ...any) {
 	a.logs.append(line)
 }
 
-// safeGo executa fn em uma goroutine com recovery de panic.
-// Se a goroutine panica, o stack trace é logado e o app não é derrubado.
-// Substitui o watchdog.SafeGoWithContext removido no refactor.
 func (a *App) safeGo(fn func()) {
 	go func() {
 		defer func() {
@@ -863,7 +724,6 @@ func (a *App) ensureOsqueryInstalled(ctx context.Context) {
 	a.startupLogf("[startup] osquery instalado com sucesso")
 }
 
-// hideWindowOnStartup keeps the app running in tray when launched by Windows startup.
 func (a *App) hideWindowOnStartup() {
 	go func() {
 		ticker := time.NewTicker(200 * time.Millisecond)
@@ -892,8 +752,6 @@ func (a *App) hideWindowOnStartup() {
 	}()
 }
 
-// shutdown is called when the application is closing; it cancels background
-// work and waits for goroutines to finish.
 func (a *App) shutdown(ctx context.Context) {
 	systray.Quit()
 	a.applyIdleMode(false)
@@ -903,7 +761,6 @@ func (a *App) shutdown(ctx context.Context) {
 	}
 	a.startupWg.Wait()
 
-	// Fechar database
 	if a.db != nil {
 		if err := a.db.Close(); err != nil {
 			log.Printf("[shutdown] erro ao fechar database: %v", err)
@@ -912,34 +769,26 @@ func (a *App) shutdown(ctx context.Context) {
 	a.logs.closeFile()
 }
 
-// RequestAppClose allows the next window-close cycle to terminate the process.
 func (a *App) RequestAppClose() {
 	a.closeMu.Lock()
 	a.allowClose = true
 	a.closeMu.Unlock()
 }
 
-// ShouldHideOnClose reports whether close events should hide to tray.
 func (a *App) ShouldHideOnClose() bool {
 	a.closeMu.RLock()
 	defer a.closeMu.RUnlock()
 	return !a.allowClose
 }
 
-// IsTrayReady reports whether tray menu/actions are fully initialized.
 func (a *App) IsTrayReady() bool {
 	return a.trayReady.Load()
 }
 
-// clearMemoryCaches limpa caches em memória para economizar recursos quando
-// o app está minimizado no tray. Os dados persistem no SQLite e serão
-// recarregados quando necessário.
 func (a *App) clearMemoryCaches() {
-	// Limpar cache de AgentInfo em memória (mantém no SQLite)
 	a.agentInfo.invalidate()
 	a.appStorePolicy.Invalidate()
 
-	// Limpar cache de inventário em memória
 	a.invCache.mu.Lock()
 	a.invCache.loaded = false
 	a.invCache.report = models.InventoryReport{}
@@ -948,8 +797,6 @@ func (a *App) clearMemoryCaches() {
 	log.Println("[tray] caches em memória limpos para economizar recursos")
 }
 
-// GetStartupError returns the error (if any) from the background startup
-// inventory collection, so the frontend can display a meaningful message.
 func (a *App) GetStartupError() string {
 	a.startupMu.RLock()
 	defer a.startupMu.RUnlock()
@@ -957,153 +804,6 @@ func (a *App) GetStartupError() string {
 		return a.startupErr.Error()
 	}
 	return ""
-}
-
-// GetServiceHealth retorna o status de saúde do Windows Service (processo headless)
-// Conecta ao named pipe do serviço e recupera dados de saúde dos componentes
-func normalizeServiceHealthPayload(data map[string]interface{}) dto.ServiceHealthPayload {
-	if data == nil {
-		return dto.ServiceHealthPayload{}
-	}
-
-	payload := dto.ServiceHealthPayload{
-		Running:     true,
-		ServiceOnly: true,
-	}
-	if v, ok := data["uptime"].(string); ok {
-		payload.Uptime = v
-	}
-	if v, ok := data["version"].(string); ok {
-		payload.Version = v
-	}
-
-	rawComponents, ok := data["components"].([]interface{})
-	if !ok {
-		return payload
-	}
-
-	components := make([]dto.HealthCheckItem, 0, len(rawComponents))
-	for _, raw := range rawComponents {
-		componentMap, ok := raw.(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		item := dto.HealthCheckItem{}
-		if v, ok := componentMap["Component"].(string); ok {
-			item.Component = v
-		}
-		if v, ok := componentMap["Status"].(string); ok {
-			item.Status = v
-		}
-		if v, ok := componentMap["LastBeat"].(string); ok {
-			item.LastBeat = v
-		}
-		if v, ok := componentMap["Message"].(string); ok {
-			item.Message = v
-		}
-		if v, ok := componentMap["CheckedAt"].(string); ok {
-			item.CheckedAt = v
-		}
-		if v, ok := componentMap["Recoverable"].(bool); ok {
-			item.Recoverable = v
-		}
-		components = append(components, item)
-	}
-
-	payload.Components = components
-	return payload
-}
-
-func serviceOnlyUnavailablePayload(detail string) dto.ServiceHealthPayload {
-	return dto.ServiceHealthPayload{
-		Error:       &detail,
-		Running:     false,
-		ServiceOnly: true,
-		UserMessage: "Nao foi possivel comunicar com o servico Discovery. Reinicie o computador e tente novamente. Se o problema persistir, contate o suporte.",
-	}
-}
-
-func localRuntimeHealthPayload() dto.ServiceHealthPayload {
-	return dto.ServiceHealthPayload{
-		Running:     true,
-		ServiceOnly: false,
-		UserMessage: "Runtime local ativo (tray icon no logon).",
-	}
-}
-
-// GetServiceHealth returns the health of the headless Windows Service.
-// Retained as map[string]interface{} for Wails frontend compatibility.
-func (a *App) GetServiceHealth() map[string]interface{} {
-	var payload dto.ServiceHealthPayload
-
-	if !windowsServiceModeEnabled {
-		payload = localRuntimeHealthPayload()
-		return toMap(payload)
-	}
-
-	if a.serviceClient == nil {
-		payload = serviceOnlyUnavailablePayload("service client not initialized")
-		return toMap(payload)
-	}
-
-	// Tentar conectar ao serviço se não conectado
-	if !a.serviceClient.IsConnected() {
-		if err := a.serviceClient.Connect(a.ctx); err != nil {
-			payload = serviceOnlyUnavailablePayload(fmt.Sprintf("failed to connect to service: %v", err))
-			return toMap(payload)
-		}
-	}
-
-	// Fazer requisição ao serviço
-	resp, err := a.serviceClient.GetServiceHealth(a.ctx)
-	if err != nil {
-		payload = serviceOnlyUnavailablePayload(fmt.Sprintf("failed to get service health: %v", err))
-		return toMap(payload)
-	}
-
-	if resp != nil && resp.Data != nil {
-		payload = normalizeServiceHealthPayload(resp.Data)
-	} else {
-		payload = serviceOnlyUnavailablePayload("empty response from service")
-	}
-	return toMap(payload)
-}
-
-// toMap converte um dto.ServiceHealthPayload para map[string]interface{} para
-// compatibilidade com o frontend Wails.
-func toMap(p dto.ServiceHealthPayload) map[string]interface{} {
-	m := map[string]interface{}{
-		"running":      p.Running,
-		"service_only": p.ServiceOnly,
-	}
-	if p.Error != nil {
-		m["error"] = *p.Error
-	}
-	if p.UserMessage != "" {
-		m["user_message"] = p.UserMessage
-	}
-	if p.Uptime != "" {
-		m["uptime"] = p.Uptime
-	}
-	if p.Version != "" {
-		m["version"] = p.Version
-	}
-	if len(p.Components) > 0 {
-		components := make([]map[string]interface{}, len(p.Components))
-		for i, c := range p.Components {
-			components[i] = map[string]interface{}{
-				"component":   c.Component,
-				"status":      c.Status,
-				"message":     c.Message,
-				"lastBeat":    c.LastBeat,
-				"checkedAt":   c.CheckedAt,
-				"recoverable": c.Recoverable,
-			}
-		}
-		m["components"] = components
-	}
-	return m
 }
 
 func (a *App) beginActivity(activity string) func() {
@@ -1175,4 +875,12 @@ func (a *App) applyIdleMode(idle bool) bool {
 
 	a.updateTrayIdleState(idle, supported)
 	return supported
+}
+
+func (a *App) GetServiceHealth() map[string]interface{} {
+	return map[string]interface{}{
+		"running":      true,
+		"service_only": false,
+		"user_message": "Runtime local ativo (tray icon no logon).",
+	}
 }

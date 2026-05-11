@@ -1,4 +1,4 @@
-package main
+﻿package main
 
 import (
 	"context"
@@ -40,15 +40,6 @@ func main() {
 		return
 	}
 
-	// If started with --service, run as Windows Service (headless, no UI).
-	if hasStartupArg("--service") {
-		logFile := parseArgValue("--log-file")
-		if err := runAsService(logFile); err != nil {
-			log.Fatalf("[SERVICE] erro fatal: %v", err)
-		}
-		return
-	}
-
 	if startupDebugMode {
 		log.Println("[startup] Shift/Ctrl detectado: inicializando em modo debug (transitorio)")
 	}
@@ -83,7 +74,6 @@ func main() {
 			}
 			wailsRuntime.WindowUnminimise(ctx)
 			wailsRuntime.WindowShow(ctx)
-			// Brief always-on-top toggle helps bring the existing window to foreground.
 			wailsRuntime.WindowSetAlwaysOnTop(ctx, true)
 			wailsRuntime.WindowSetAlwaysOnTop(ctx, false)
 		},
@@ -98,8 +88,6 @@ func main() {
 		Frameless:       startupFrameless,
 		CSSDragProperty: "--wails-draggable",
 		CSSDragValue:    "drag",
-		// Keep right-click context menu enabled in production so users can use
-		// built-in spellcheck suggestions/corrections in text fields.
 		EnableDefaultContextMenu: true,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
@@ -114,10 +102,9 @@ func main() {
 				log.Println("[tray] close solicitado antes do tray ficar pronto; encerrando app para evitar estado sem menu")
 				return false
 			}
-			// Limpar caches em memória antes de ir para o tray
 			app.ClearMemoryCaches()
 			wailsRuntime.WindowHide(ctx)
-			return true // hide to tray instead of quitting
+			return true
 		},
 		SingleInstanceLock: singleInstance,
 		Bind: []interface{}{
@@ -138,7 +125,6 @@ func hasStartupArg(arg string) bool {
 	return false
 }
 
-// parseArgValue extrai o valor de um argumento no formato --key=value
 func parseArgValue(argName string) string {
 	for _, arg := range os.Args[1:] {
 		if strings.HasPrefix(strings.ToLower(arg), strings.ToLower(argName)+"=") {

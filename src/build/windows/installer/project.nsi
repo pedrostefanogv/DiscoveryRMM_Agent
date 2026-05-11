@@ -1,4 +1,4 @@
-Unicode true
+﻿Unicode true
 
 ####
 ## Please note: Template replacements don't work in this file. They are provided with default defines like
@@ -208,7 +208,7 @@ ManifestDPIAware true
 !define MUI_FINISHPAGE_RUN_FUNCTION LaunchInstalledApp
 !define MUI_ABORTWARNING # This will warn the user if they exit from the installer.
 
-# Variáveis para armazenar as configurações
+# VariÃ¡veis para armazenar as configuraÃ§Ãµes
 Var Dialog
 Var UrlLabel
 Var UrlText
@@ -231,7 +231,7 @@ Var PayloadFileName
 # !insertmacro MUI_PAGE_LICENSE "resources\eula.txt" # Adds a EULA page to the installer
 !insertmacro MUI_PAGE_DIRECTORY # In which folder install page.
 
-# Página customizada para configurações do agente
+# PÃ¡gina customizada para configuraÃ§Ãµes do agente
 Page custom AgentConfigPage AgentConfigPageLeave
 
 !insertmacro MUI_PAGE_INSTFILES # Installing page.
@@ -258,7 +258,7 @@ ShowInstDetails show # This will always show the installation details.
 Function .onInit
    !insertmacro wails.checkArchitecture
    
-   # Definir valores padrão vindos do build
+   # Definir valores padrÃ£o vindos do build
    StrCpy $ServerUrl "${BUILD_DEFAULT_URL}"
    StrCpy $ServerKey "${BUILD_DEFAULT_KEY}"
    StrCpy $AutoProvisioning "${BUILD_DEFAULT_DISCOVERY}"
@@ -270,7 +270,7 @@ Function .onInit
    StrCpy $PayloadSha256 "${BUILD_PAYLOAD_SHA256}"
    StrCpy $PayloadFileName "${BUILD_PAYLOAD_FILENAME}"
 
-   # Build de update: modo silencioso por padrão e sem wizard.
+   # Build de update: modo silencioso por padrÃ£o e sem wizard.
    ${If} "${BUILD_UPDATE_INSTALL}" == "1"
       StrCpy $UpdateMode "1"
       StrCpy $MinimalMode "1"
@@ -283,7 +283,7 @@ Function .onInit
       ${EndIf}
    ${EndIf}
 
-   # Normalizar defaults inválidos
+   # Normalizar defaults invÃ¡lidos
    ${If} $AutoProvisioning != "0"
    ${AndIf} $AutoProvisioning != "1"
       StrCpy $AutoProvisioning "1"
@@ -294,7 +294,7 @@ Function .onInit
       StrCpy $MinimalMode "0"
    ${EndIf}
    
-   # Obter parâmetros da linha de comando
+   # Obter parÃ¢metros da linha de comando
    ${GetParameters} $R0
 
    # Parse UPDATE (atualizacao in-place): silencioso, sem wizard e sem sobrescrever config.
@@ -327,8 +327,8 @@ Function .onInit
       StrCpy $PayloadUrl $R1
    ${EndIf}
    
-   # Parse AUTO_PROVISIONING (0 ou 1) - chave canônica para zero-touch provisioning.
-   # Aceita /DISCOVERY= como alias legado para compatibilidade com automações antigas.
+   # Parse AUTO_PROVISIONING (0 ou 1) - chave canÃ´nica para zero-touch provisioning.
+   # Aceita /DISCOVERY= como alias legado para compatibilidade com automaÃ§Ãµes antigas.
    ${GetOptions} $R0 "/AUTO_PROVISIONING=" $R1
    ${If} $R1 != ""
       ${If} $R1 == "0"
@@ -358,38 +358,38 @@ Function .onInit
       ${EndIf}
    ${EndIf}
    
-   # Verificar modo mínimo
+   # Verificar modo mÃ­nimo
    ${GetOptions} $R0 "/MINIMAL" $R1
    ${IfNot} ${Errors}
       StrCpy $MinimalMode "1"
-      # Em modo mínimo, pular wizard se tiver parâmetros
+      # Em modo mÃ­nimo, pular wizard se tiver parÃ¢metros
       ${If} $ServerUrl != ""
       ${AndIf} $ServerKey != ""
-         SetSilent normal  # Mostra só o progresso
+         SetSilent normal  # Mostra sÃ³ o progresso
       ${EndIf}
    ${EndIf}
 
-   # Modo genérico: sem URL/KEY — agente entra em auto-provisioning via P2P
+   # Modo genÃ©rico: sem URL/KEY â€” agente entra em auto-provisioning via P2P
    ${GetOptions} $R0 "/GENERIC" $R1
    ${IfNot} ${Errors}
       StrCpy $GenericMode "1"
    ${EndIf}
 FunctionEnd
 
-# Função para criar a página de configuração do agente
+# FunÃ§Ã£o para criar a pÃ¡gina de configuraÃ§Ã£o do agente
 Function AgentConfigPage
-   # Modo genérico: sem wizard, agente entra em auto-provisioning via P2P
+   # Modo genÃ©rico: sem wizard, agente entra em auto-provisioning via P2P
    ${If} $GenericMode == "1"
       Abort
    ${EndIf}
 
-   # Pular a página se estiver em modo silencioso ou mínimo
+   # Pular a pÃ¡gina se estiver em modo silencioso ou mÃ­nimo
    ${If} ${Silent}
    ${OrIf} $MinimalMode == "1"
       Abort
    ${EndIf}
    
-   # Se já temos URL e KEY via CLI, pular o wizard
+   # Se jÃ¡ temos URL e KEY via CLI, pular o wizard
    ${If} $ServerUrl != ""
    ${AndIf} $ServerKey != ""
       Abort
@@ -401,8 +401,8 @@ Function AgentConfigPage
       Abort
    ${EndIf}
    
-   # Título da página
-   !insertmacro MUI_HEADER_TEXT "Configuração do Agente Discovery" "Configure a conexão com o servidor"
+   # TÃ­tulo da pÃ¡gina
+   !insertmacro MUI_HEADER_TEXT "ConfiguraÃ§Ã£o do Agente Discovery" "Configure a conexÃ£o com o servidor"
    
    # Label e campo de texto para URL
    ${NSD_CreateLabel} 0 10u 100% 12u "URL do Servidor:"
@@ -426,7 +426,7 @@ Function AgentConfigPage
    nsDialogs::Show
 FunctionEnd
 
-# Função para capturar os valores da página customizada
+# FunÃ§Ã£o para capturar os valores da pÃ¡gina customizada
 Function AgentConfigPageLeave
    ${NSD_GetText} $UrlText $ServerUrl
    ${NSD_GetText} $KeyText $ServerKey
@@ -466,17 +466,17 @@ Section
          # Garantir estrutura compartilhada em ProgramData
          Call EnsureSharedDataDir
 
-         # Salvar configurações do agente
+         # Salvar configuraÃ§Ãµes do agente
          Call SaveAgentConfig
 
          # Registrar regra de firewall para runtime local/P2P.
          Call RegisterWindowsFirewallRule
 
-         # Opcional: registrar serviço Windows somente quando habilitado em build.
+         # Opcional: registrar serviÃ§o Windows somente quando habilitado em build.
          ${If} "${BUILD_ENABLE_WINDOWS_SERVICE}" == "1"
             Call RegisterWindowsService
          ${Else}
-            # Garantir migração limpa removendo serviço legado, se existir.
+            # Garantir migraÃ§Ã£o limpa removendo serviÃ§o legado, se existir.
             Call UnregisterWindowsService
          ${EndIf}
 
@@ -494,7 +494,7 @@ SectionEnd
 Section "uninstall"
     !insertmacro wails.setShellContext
 
-   # Encerrar/remover service antes de limpar binários
+   # Encerrar/remover service antes de limpar binÃ¡rios
    Call un.UnregisterWindowsService
    Call un.UnregisterWindowsFirewallRule
 
@@ -550,21 +550,21 @@ decommission_done:
     !insertmacro wails.deleteUninstaller
 SectionEnd
 
-# Função para salvar as configurações do agente
+# FunÃ§Ã£o para salvar as configuraÃ§Ãµes do agente
 Function SaveAgentConfig
-   # Build de update não altera configuração local existente.
+   # Build de update nÃ£o altera configuraÃ§Ã£o local existente.
    ${If} "${BUILD_UPDATE_INSTALL}" == "1"
-      DetailPrint "Update build: mantendo configuração existente sem sobrescrita"
+      DetailPrint "Update build: mantendo configuraÃ§Ã£o existente sem sobrescrita"
       Return
    ${EndIf}
 
-   # Runtime update (/UPDATE) também não altera configuração local existente.
+   # Runtime update (/UPDATE) tambÃ©m nÃ£o altera configuraÃ§Ã£o local existente.
    ${If} $UpdateMode == "1"
-      DetailPrint "Update mode (/UPDATE): mantendo configuração existente sem sobrescrita"
+      DetailPrint "Update mode (/UPDATE): mantendo configuraÃ§Ã£o existente sem sobrescrita"
       Return
    ${EndIf}
 
-   # Config compartilhada em ProgramData para suportar múltiplos usuários.
+   # Config compartilhada em ProgramData para suportar mÃºltiplos usuÃ¡rios.
    ReadEnvStr $R0 "ProgramData"
    ${If} $R0 == ""
       MessageBox MB_ICONSTOP "Pasta ProgramData nao encontrada. Nao foi possivel gravar a configuracao do agente."
@@ -781,22 +781,22 @@ FunctionEnd
 Function RegisterWindowsService
    DetailPrint "Registrando Windows Service ${DISCOVERY_SERVICE_NAME}"
 
-   # Remover versão anterior (idempotente)
+   # Remover versÃ£o anterior (idempotente)
    ExecWait '"$SYSDIR\sc.exe" stop "${DISCOVERY_SERVICE_NAME}"' $R0
    ExecWait '"$SYSDIR\sc.exe" delete "${DISCOVERY_SERVICE_NAME}"' $R0
 
-   # Registrar serviço com inicialização automática
+   # Registrar serviÃ§o com inicializaÃ§Ã£o automÃ¡tica
    ExecWait '"$SYSDIR\sc.exe" create "${DISCOVERY_SERVICE_NAME}" binPath= "\"$INSTDIR\${PRODUCT_EXECUTABLE}\" --service" start= auto DisplayName= "Discovery Agent Service"' $R0
    ${If} $R0 != 0
       MessageBox MB_ICONSTOP "Falha ao registrar o Windows Service (${DISCOVERY_SERVICE_NAME}). Codigo: $R0"
       Abort
    ${EndIf}
 
-   # Configurar recuperação automática
+   # Configurar recuperaÃ§Ã£o automÃ¡tica
    ExecWait '"$SYSDIR\sc.exe" failure "${DISCOVERY_SERVICE_NAME}" reset= 86400 actions= restart/5000/restart/5000/restart/5000' $R1
    ExecWait '"$SYSDIR\sc.exe" description "${DISCOVERY_SERVICE_NAME}" "Discovery background service (multi-user)"' $R1
 
-   # Iniciar serviço após instalação
+   # Iniciar serviÃ§o apÃ³s instalaÃ§Ã£o
    ExecWait '"$SYSDIR\sc.exe" start "${DISCOVERY_SERVICE_NAME}"' $R1
    ${If} $R1 != 0
       DetailPrint "Aviso: service instalado, mas falhou ao iniciar automaticamente. Codigo: $R1"
@@ -828,7 +828,7 @@ Function RegisterUIStartupTask
    ; Limpar atalho legado de startup (migracao)
    Delete "$SMSTARTUP\${INFO_PRODUCTNAME}.lnk"
 
-   ; Escreve script PS1 temporário para evitar problemas de escaping no NSIS
+   ; Escreve script PS1 temporÃ¡rio para evitar problemas de escaping no NSIS
    StrCpy $R9 "$TEMP\discovery_ui_task_reg.ps1"
    FileOpen $R8 "$R9" w
    FileWrite $R8 "try {$\r$\n"
@@ -905,3 +905,5 @@ Function un.UnregisterUIStartupTask
    ExecWait '"$SYSDIR\schtasks.exe" /Delete /TN "${DISCOVERY_UI_TASK_NAME}" /F' $R0
    Delete "$SMSTARTUP\${INFO_PRODUCTNAME}.lnk"
 FunctionEnd
+
+

@@ -1,4 +1,4 @@
-package app
+﻿package app
 
 import (
 	"context"
@@ -567,22 +567,13 @@ func (a *App) requestAgentUpdateCheck(ctx context.Context, source string) error 
 	if source == "" {
 		source = "manual"
 	}
-	if !windowsServiceModeEnabled {
-		return fmt.Errorf("self-update remoto indisponivel: modo Windows Service desativado")
-	}
-	if a.shouldUseServiceRuntime() {
-		if !a.serviceClient.IsConnected() {
-			if err := a.serviceClient.Connect(ctx); err != nil {
-				return err
-			}
-		}
-		if _, err := a.serviceClient.TriggerUpdateCheck(ctx, source); err != nil {
-			return err
-		}
-		a.logs.append("[update] force-check enviado ao service: source=" + source)
+	select {
+	case a.updateTrigger <- struct{}{}:
+		a.logs.append("[update] force-check de update disparado localmente: source=" + source)
 		return nil
+	default:
+		return fmt.Errorf("update check ja pendente")
 	}
-	return fmt.Errorf("self-update requer Windows Service conectado")
 }
 
 func isNotificationDispatchCommandType(cmdType string) bool {

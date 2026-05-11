@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path,
     [Parameter(Mandatory = $true)]
@@ -71,7 +71,7 @@ $windresExe = Resolve-WindresPath
 
 $parsedPayloadUrl = $null
 if (-not [Uri]::TryCreate($PayloadUrl, [System.UriKind]::Absolute, [ref]$parsedPayloadUrl)) {
-    throw "PayloadUrl inválida: $PayloadUrl"
+    throw "PayloadUrl invÃ¡lida: $PayloadUrl"
 }
 
 if ($parsedPayloadUrl.Scheme -ne "https") {
@@ -81,7 +81,7 @@ if ($parsedPayloadUrl.Scheme -ne "https") {
 if ($ExpectedTag -ne "") {
     $expectedSegment = "/releases/download/$ExpectedTag/"
     if (-not $PayloadUrl.Contains($expectedSegment)) {
-        throw "PayloadUrl não corresponde à tag esperada '$ExpectedTag': $PayloadUrl"
+        throw "PayloadUrl nÃ£o corresponde Ã  tag esperada '$ExpectedTag': $PayloadUrl"
     }
 }
 
@@ -102,7 +102,7 @@ Write-Output "  Sincronizando icones a partir de build\\*.png..."
 & $syncIconsScript -ProjectRoot $ProjectRoot
 
 if (-not (Test-Path $nsiFile)) {
-    throw "Arquivo NSIS não encontrado: $nsiFile"
+    throw "Arquivo NSIS nÃ£o encontrado: $nsiFile"
 }
 
 if (-not (Test-Path $iconPath)) {
@@ -152,7 +152,7 @@ finally {
 }
 
 if (-not (Test-Path $agentExe)) {
-    throw "Binário do agente não foi gerado: $agentExe"
+    throw "BinÃ¡rio do agente nÃ£o foi gerado: $agentExe"
 }
 
 Write-Output "[2/3] Build do bootstrap installer (NSIS)..."
@@ -191,7 +191,7 @@ if ($LASTEXITCODE -ne 0) {
 
 $installerPath = Join-Path $binDir $OutputName
 if (-not (Test-Path $installerPath)) {
-    throw "Bootstrap installer não encontrado após build: $installerPath"
+    throw "Bootstrap installer nÃ£o encontrado apÃ³s build: $installerPath"
 }
 
 Write-Output "[3/3] Concluido."
@@ -202,3 +202,4 @@ if ($EnableWindowsService -eq "1") {
 else {
     Write-Output "Esse bootstrap baixa a segunda etapa e executa o instalador completo em modo tray no logon (sem servico Windows)."
 }
+
