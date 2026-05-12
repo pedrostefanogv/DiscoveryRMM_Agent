@@ -147,15 +147,101 @@ func TestFormatRemoteDebugMessageWithOrigin_UI(t *testing.T) {
 	}
 }
 
-func TestDetectRemoteDebugLevel_DefaultsToTrace(t *testing.T) {
-	if got := detectRemoteDebugLevel("linha sem tag de nivel"); got != "trace" {
-		t.Fatalf("detectRemoteDebugLevel default = %q, want trace", got)
+func TestDetectRemoteDebugLevel_DefaultsToInfo(t *testing.T) {
+	if got := detectRemoteDebugLevel("linha sem tag de nivel"); got != "info" {
+		t.Fatalf("detectRemoteDebugLevel default = %q, want info", got)
 	}
 }
 
-func TestNormalizeRemoteDebugStreamLevel_DefaultsToTrace(t *testing.T) {
-	if got := normalizeRemoteDebugStreamLevel("verbose"); got != "trace" {
-		t.Fatalf("normalizeRemoteDebugStreamLevel = %q, want trace", got)
+func TestDetectRemoteDebugLevel_ErrorKeywords(t *testing.T) {
+	cases := []string{
+		"[sync] falha ao sincronizar apps: timeout",
+		"[sync] falha ao salvar snapshot local",
+		"[agent-sync] POST hardware falhou: connection refused",
+		"[agent-sync] erro ao verificar diff",
+		"[PANIC] goroutine panicou: nil pointer dereference",
+		"[CONTRACT_VIOLATION] component=Agent field=authToken",
+		"[zero-touch] falha na tentativa imediata apos peer novo xyz",
+		"[p2p] erro ao iniciar servidor local: port already in use",
+		"[transport][nats] FALHA ao criar publishers",
+		"stream: falha (EOF), fallback para endpoint sincrono",
+		"acesso negado ao executar comando",
+	}
+	for _, tc := range cases {
+		if got := detectRemoteDebugLevel(tc); got != "error" {
+			t.Fatalf("detectRemoteDebugLevel(%q) = %q, want error", tc, got)
+		}
+	}
+}
+
+func TestDetectRemoteDebugLevel_WarnKeywords(t *testing.T) {
+	cases := []string{
+		"[sync] aviso: configuracao indisponivel",
+		"[sync] ping ignorado: eventId duplicado",
+		"[sync] fila cheia, descartando: apps",
+		"[agent-sync] ignorado: apiScheme invalido",
+		"[heartbeat][force] timeout aguardando envio do heartbeat forcado",
+		"[p2p][api] envio adiado por sobrecarga do servidor",
+		"[zero-touch] limite de tentativas atingido, loop encerrado",
+		"[zero-touch] oferta rejeitada de agente xyz",
+		"configuracao de agente ausente: nenhum servidor configurado",
+		"[heartbeat][status] conexao perdida: disconnect",
+		"[agent-sync] envio remoto cancelado durante janela de adiamento",
+	}
+	for _, tc := range cases {
+		if got := detectRemoteDebugLevel(tc); got != "warn" {
+			t.Fatalf("detectRemoteDebugLevel(%q) = %q, want warn", tc, got)
+		}
+	}
+}
+
+func TestDetectRemoteDebugLevel_InfoDefault(t *testing.T) {
+	cases := []string{
+		"[sync] coordinator iniciado",
+		"[sync] recurso sincronizado: apps variant=stable",
+		"[sync] full resync concluido: source=server",
+		"[p2p] coordinator iniciado",
+		"[p2p] peer descoberto: agentId=xyz source=mdns",
+		"[zero-touch] configuracao recebida com sucesso, loop encerrado",
+		"[config] contexto canonico persistido: clientId=... siteId=...",
+		"[startup] modo debug ativo por tecla de atalho",
+		"[heartbeat][nats] heartbeat publicado com sucesso",
+		"mensagem recebida (150 chars)",
+		"[agent] iniciando sessao",
+		"[cmd] recebido: cmdType=powershell",
+	}
+	for _, tc := range cases {
+		if got := detectRemoteDebugLevel(tc); got != "info" {
+			t.Fatalf("detectRemoteDebugLevel(%q) = %q, want info", tc, got)
+		}
+	}
+}
+
+func TestDetectRemoteDebugLevel_ExplicitTags(t *testing.T) {
+	cases := []struct {
+		line  string
+		level string
+	}{
+		{"[error] algo deu errado", "error"},
+		{"[warn] cuidado com isso", "warn"},
+		{"[debug] valor da variavel x=42", "debug"},
+		{"[trace] entrando na funcao foo", "trace"},
+		{"[info] operacao concluida", "info"},
+		{"[error] falha critica", "error"},
+		{"[warn] timeout detectado", "warn"},
+		{"error something broke", "error"},
+		{"warn disk space low", "warn"},
+	}
+	for _, tc := range cases {
+		if got := detectRemoteDebugLevel(tc.line); got != tc.level {
+			t.Fatalf("detectRemoteDebugLevel(%q) = %q, want %q", tc.line, got, tc.level)
+		}
+	}
+}
+
+func TestNormalizeRemoteDebugStreamLevel_MapsInvalidLevelsToInfo(t *testing.T) {
+	if got := normalizeRemoteDebugStreamLevel("verbose"); got != "info" {
+		t.Fatalf("normalizeRemoteDebugStreamLevel = %q, want info", got)
 	}
 }
 

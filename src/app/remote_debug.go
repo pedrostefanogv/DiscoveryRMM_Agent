@@ -601,7 +601,7 @@ func normalizeRemoteDebugStreamLevel(level string) string {
 	case "trace", "debug", "info", "warn", "error":
 		return strings.ToLower(strings.TrimSpace(level))
 	default:
-		return "trace"
+		return "info"
 	}
 }
 
@@ -624,20 +624,86 @@ func remoteDebugLevelValue(level string) int {
 
 func detectRemoteDebugLevel(line string) string {
 	l := strings.ToLower(strings.TrimSpace(line))
-	switch {
-	case strings.Contains(l, "[error]") || strings.Contains(l, " error"):
+
+	if strings.Contains(l, "[error]") {
 		return "error"
-	case strings.Contains(l, "[warn]") || strings.Contains(l, " warning"):
+	}
+	if strings.Contains(l, "[warn]") {
 		return "warn"
-	case strings.Contains(l, "[debug]"):
+	}
+	if strings.Contains(l, "[debug]") {
 		return "debug"
-	case strings.Contains(l, "[trace]"):
-		return "trace"
-	case strings.Contains(l, "[info]"):
-		return "info"
-	default:
+	}
+	if strings.Contains(l, "[trace]") {
 		return "trace"
 	}
+	if strings.Contains(l, "[info]") {
+		return "info"
+	}
+
+	if strings.Contains(l, "falha") || strings.Contains(l, "falhou") {
+		return "error"
+	}
+	if strings.Contains(l, "panic") {
+		return "error"
+	}
+	if strings.Contains(l, "negado") {
+		return "error"
+	}
+	if strings.Contains(l, "violation") {
+		return "error"
+	}
+	if strings.Contains(l, " erro ") || strings.Contains(l, " erro:") || strings.HasPrefix(l, "erro ") {
+		return "error"
+	}
+	if strings.Contains(l, " error ") || strings.Contains(l, " error:") || strings.HasPrefix(l, "error ") {
+		return "error"
+	}
+	if strings.Contains(l, " fail") || strings.Contains(l, "fail ") || strings.Contains(l, "failed") {
+		return "error"
+	}
+
+	if strings.Contains(l, "aviso") || strings.Contains(l, "avisado") {
+		return "warn"
+	}
+	if strings.Contains(l, " warning") || strings.Contains(l, " warn ") || strings.HasPrefix(l, "warn ") {
+		return "warn"
+	}
+	if strings.Contains(l, "descartando") {
+		return "warn"
+	}
+	if strings.Contains(l, "ignorado") {
+		return "warn"
+	}
+	if strings.Contains(l, "rejeitad") {
+		return "warn"
+	}
+	if strings.Contains(l, "adiado") {
+		return "warn"
+	}
+	if strings.Contains(l, "cancelado") {
+		return "warn"
+	}
+	if strings.Contains(l, "timeout") {
+		return "warn"
+	}
+	if strings.Contains(l, "ausente") {
+		return "warn"
+	}
+	if strings.Contains(l, "perdida") {
+		return "warn"
+	}
+	if strings.Contains(l, "atingido") {
+		return "warn"
+	}
+	if strings.Contains(l, "indisponivel") {
+		return "warn"
+	}
+	if strings.Contains(l, "inválido") || strings.Contains(l, "invalido") {
+		return "warn"
+	}
+
+	return "info"
 }
 
 func isRemoteDebugCommandType(cmdType string) bool {
