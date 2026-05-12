@@ -1,6 +1,7 @@
 ﻿package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -28,9 +29,24 @@ type remoteDebugCommand struct {
 	Stream       remoteDebugStreamConfig `json:"stream"`
 }
 
+type remoteDebugCommandPayload struct {
+	Action       *string                   `json:"action"`
+	SessionID    *string                   `json:"sessionId"`
+	LogLevel     *string                   `json:"logLevel"`
+	StartedAtUTC *string                   `json:"startedAtUtc"`
+	ExpiresAtUTC *string                   `json:"expiresAtUtc"`
+	StoppedAtUTC *string                   `json:"stoppedAtUtc"`
+	Stream       *remoteDebugStreamPayload `json:"stream"`
+}
+
 type remoteDebugStreamConfig struct {
 	NatsSubject string `json:"natsSubject"`
 	NatsWssURL  string `json:"natsWssUrl"`
+}
+
+type remoteDebugStreamPayload struct {
+	NatsSubject *string `json:"natsSubject"`
+	NatsWssURL  *string `json:"natsWssUrl"`
 }
 
 type remoteDebugLogMessage struct {
@@ -97,23 +113,33 @@ type remoteDebugManager struct {
 	activeSession *remoteDebugSession
 	logf          func(string)
 	getDebugCfg   func() DebugConfig
+	getAgentCfg   func() AgentConfiguration
 	subscribeLogs func(func(string)) func()
+	replayLogs    func(func(string)) func()
 }
 
-func newRemoteDebugManager(logf func(string), getDebugCfg func() DebugConfig, subscribeLogs func(func(string)) func()) *remoteDebugManager {
+func newRemoteDebugManager(logf func(string), getDebugCfg func() DebugConfig, getAgentCfg func() AgentConfiguration, subscribeLogs func(func(string)) func(), replayLogs func(func(string)) func()) *remoteDebugManager {
 	if logf == nil {
 		logf = func(string) {}
 	}
 	if getDebugCfg == nil {
 		getDebugCfg = func() DebugConfig { return DebugConfig{} }
 	}
+	if getAgentCfg == nil {
+		getAgentCfg = func() AgentConfiguration { return AgentConfiguration{} }
+	}
 	if subscribeLogs == nil {
 		subscribeLogs = func(func(string)) func() { return func() {} }
+	}
+	if replayLogs == nil {
+		replayLogs = subscribeLogs
 	}
 	return &remoteDebugManager{
 		logf:          logf,
 		getDebugCfg:   getDebugCfg,
+		getAgentCfg:   getAgentCfg,
 		subscribeLogs: subscribeLogs,
+		replayLogs:    replayLogs,
 	}
 }
 
@@ -166,12 +192,19 @@ func (m *remoteDebugManager) startSession(cmd remoteDebugCommand) error {
 	token := strings.TrimSpace(cfg.AuthToken)
 	agentID := strings.TrimSpace(cfg.AgentID)
 	if token == "" || agentID == "" {
-		return fmt.Errorf("authToken/agentId ausentes para remote debug")
+		return fmt.Errorf("authToken/agentId ausentes para remote debug (token=vazio=%v agentId=vazio=%v)", token == "", agentID == "")
 	}
 
+	agentCfg := m.getAgentCfg()
+	clientID := strings.TrimSpace(agentCfg.ClientID)
+	siteID := strings.TrimSpace(agentCfg.SiteID)
+
+	m.logf(fmt.Sprintf("[remote-debug] iniciando sessao: sessionId=%s agentId=%s clientId=%s siteId=%s subjectRaw=%q", sessionID, agentID, clientID, siteID, strings.TrimSpace(cmd.Stream.NatsSubject)))
+
 	deadline := computeRemoteDebugDeadline(strings.TrimSpace(cmd.ExpiresAtUTC), time.Now().UTC())
-	publishers, err := buildRemoteDebugPublishers(cfg, cmd.Stream, token)
+	publishers, err := buildRemoteDebugPublishers(cfg, cmd.Stream, token, clientID, siteID)
 	if err != nil {
+		m.logf(fmt.Sprintf("[remote-debug] FALHA ao criar publishers: %v", err))
 		return err
 	}
 
@@ -186,7 +219,7 @@ func (m *remoteDebugManager) startSession(cmd remoteDebugCommand) error {
 		publishers: publishers,
 	}
 
-	unsubscribe := m.subscribeLogs(func(line string) {
+	unsubscribe := m.replayLogs(func(line string) {
 		m.enqueueWithSession(sessionID, line, detectRemoteDebugLevel(line))
 	})
 	session.unsubscribe = unsubscribe
@@ -231,9 +264,9 @@ func (m *remoteDebugManager) publishLoop(ctx context.Context, session *remoteDeb
 			msg := remoteDebugLogMessage{
 				SessionID:    session.sessionID,
 				AgentID:      session.agentID,
-				Message:      formatRemoteDebugMessageWithOrigin("ui", truncateRemoteDebugMessage(item.message)),
-				Level:        normalizeRemoteDebugLevel(item.level),
-				TimestampUTC: time.Now().UTC().Format(time.RFC3339),
+				Message:      truncateRemoteDebugMessage(item.message),
+				Level:        normalizeRemoteDebugStreamLevel(item.level),
+				TimestampUTC: time.Now().UTC().Format("2006-01-02T15:04:05.000Z07:00"),
 				Sequence:     seq,
 			}
 			if err := m.publishWithFallback(ctx, session, msg); err != nil {
@@ -332,18 +365,68 @@ func parseRemoteDebugCommand(payload any) (remoteDebugCommand, error) {
 	if payload == nil {
 		return remoteDebugCommand{}, fmt.Errorf("payload ausente")
 	}
-	b, err := json.Marshal(payload)
+	b, err := decodeRemoteDebugPayloadBytes(payload)
 	if err != nil {
 		return remoteDebugCommand{}, err
 	}
-	var cmd remoteDebugCommand
-	if err := json.Unmarshal(b, &cmd); err != nil {
+	var raw remoteDebugCommandPayload
+	if err := json.Unmarshal(b, &raw); err != nil {
 		return remoteDebugCommand{}, err
 	}
-	cmd.Action = strings.TrimSpace(cmd.Action)
-	cmd.SessionID = strings.TrimSpace(cmd.SessionID)
+	cmd := remoteDebugCommand{
+		Action:       strings.TrimSpace(ptrStringOrEmpty(raw.Action)),
+		SessionID:    strings.TrimSpace(ptrStringOrEmpty(raw.SessionID)),
+		LogLevel:     strings.TrimSpace(ptrStringOrEmpty(raw.LogLevel)),
+		StartedAtUTC: strings.TrimSpace(ptrStringOrEmpty(raw.StartedAtUTC)),
+		ExpiresAtUTC: strings.TrimSpace(ptrStringOrEmpty(raw.ExpiresAtUTC)),
+		StoppedAtUTC: strings.TrimSpace(ptrStringOrEmpty(raw.StoppedAtUTC)),
+	}
+	if raw.Stream != nil {
+		cmd.Stream.NatsSubject = strings.TrimSpace(ptrStringOrEmpty(raw.Stream.NatsSubject))
+		cmd.Stream.NatsWssURL = strings.TrimSpace(ptrStringOrEmpty(raw.Stream.NatsWssURL))
+	}
 	cmd.LogLevel = normalizeRemoteDebugLevel(cmd.LogLevel)
 	return cmd, nil
+}
+
+func decodeRemoteDebugPayloadBytes(payload any) ([]byte, error) {
+	switch typed := payload.(type) {
+	case string:
+		raw := strings.TrimSpace(typed)
+		if raw == "" {
+			return nil, fmt.Errorf("payload ausente")
+		}
+		return []byte(raw), nil
+	case []byte:
+		raw := bytes.TrimSpace(typed)
+		if len(raw) == 0 {
+			return nil, fmt.Errorf("payload ausente")
+		}
+		return raw, nil
+	case json.RawMessage:
+		raw := bytes.TrimSpace(typed)
+		if len(raw) == 0 {
+			return nil, fmt.Errorf("payload ausente")
+		}
+		return raw, nil
+	default:
+		b, err := json.Marshal(payload)
+		if err != nil {
+			return nil, err
+		}
+		raw := bytes.TrimSpace(b)
+		if len(raw) == 0 || strings.EqualFold(string(raw), "null") {
+			return nil, fmt.Errorf("payload ausente")
+		}
+		return raw, nil
+	}
+}
+
+func ptrStringOrEmpty(v *string) string {
+	if v == nil {
+		return ""
+	}
+	return *v
 }
 
 func computeRemoteDebugDeadline(expiresAt string, now time.Time) time.Time {
@@ -366,14 +449,14 @@ func computeRemoteDebugDeadline(expiresAt string, now time.Time) time.Time {
 	return defaultDeadline
 }
 
-func buildRemoteDebugPublishers(cfg DebugConfig, stream remoteDebugStreamConfig, token string) ([]remoteDebugPublisher, error) {
+func buildRemoteDebugPublishers(cfg DebugConfig, stream remoteDebugStreamConfig, token string, clientID, siteID string) ([]remoteDebugPublisher, error) {
 	var publishers []remoteDebugPublisher
-	subject := strings.TrimSpace(stream.NatsSubject)
+	subject := resolveRemoteDebugSubject(strings.TrimSpace(stream.NatsSubject), clientID, siteID, strings.TrimSpace(cfg.AgentID))
 	if subject == "" {
 		return nil, fmt.Errorf("subject NATS ausente no comando de remote debug")
 	}
 	if !isCanonicalRemoteDebugSubject(subject) {
-		return nil, fmt.Errorf("subject NATS invalido para remote debug: esperado sufixo .remote-debug.log")
+		return nil, fmt.Errorf("subject NATS invalido para remote debug: esperado sufixo .remote-debug.log, recebido=%q", subject)
 	}
 
 	if p, err := newNATSRemoteDebugPublisher(strings.TrimSpace(cfg.NatsServer), token, subject, "nats"); err == nil {
@@ -399,10 +482,43 @@ func isCanonicalRemoteDebugSubject(subject string) bool {
 	if subject == "" {
 		return false
 	}
-	if strings.ContainsAny(subject, " *>\t\r\n") {
+	if strings.ContainsAny(subject, " *\t\r\n") {
 		return false
 	}
 	return strings.HasSuffix(subject, ".remote-debug.log")
+}
+
+func resolveRemoteDebugSubject(subject, clientID, siteID, agentID string) string {
+	subject = strings.TrimSpace(subject)
+	if subject == "" {
+		return ""
+	}
+	subject = strings.ReplaceAll(subject, "<clientId>", strings.TrimSpace(clientID))
+	subject = strings.ReplaceAll(subject, "<siteId>", strings.TrimSpace(siteID))
+	subject = strings.ReplaceAll(subject, "<agentId>", strings.TrimSpace(agentID))
+	return subject
+}
+
+func truncatePayloadForLog(payload any) string {
+	if payload == nil {
+		return "<nil>"
+	}
+	switch v := payload.(type) {
+	case string:
+		if len(v) > 200 {
+			return v[:200] + "..."
+		}
+		return v
+	default:
+		b, err := json.Marshal(v)
+		if err != nil {
+			return fmt.Sprintf("<marshal error: %v>", err)
+		}
+		if len(b) > 300 {
+			return string(b[:300]) + "..."
+		}
+		return string(b)
+	}
 }
 
 func newNATSRemoteDebugPublisher(server, token, subject, name string) (remoteDebugPublisher, error) {
@@ -473,25 +589,36 @@ func formatRemoteDebugMessageWithOrigin(origin, message string) string {
 
 func normalizeRemoteDebugLevel(level string) string {
 	switch strings.ToLower(strings.TrimSpace(level)) {
-	case "debug", "info", "warn", "error":
+	case "trace", "debug", "info", "warn", "error":
 		return strings.ToLower(strings.TrimSpace(level))
 	default:
 		return "info"
 	}
 }
 
+func normalizeRemoteDebugStreamLevel(level string) string {
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "trace", "debug", "info", "warn", "error":
+		return strings.ToLower(strings.TrimSpace(level))
+	default:
+		return "trace"
+	}
+}
+
 func remoteDebugLevelValue(level string) int {
 	switch normalizeRemoteDebugLevel(level) {
-	case "debug":
+	case "trace":
 		return 0
+	case "debug":
+		return 1
 	case "info":
-		return 1
-	case "warn":
 		return 2
-	case "error":
+	case "warn":
 		return 3
+	case "error":
+		return 4
 	default:
-		return 1
+		return 2
 	}
 }
 
@@ -504,8 +631,12 @@ func detectRemoteDebugLevel(line string) string {
 		return "warn"
 	case strings.Contains(l, "[debug]"):
 		return "debug"
-	default:
+	case strings.Contains(l, "[trace]"):
+		return "trace"
+	case strings.Contains(l, "[info]"):
 		return "info"
+	default:
+		return "trace"
 	}
 }
 
@@ -613,6 +744,8 @@ func parseNotificationDispatchPayload(payload any) (NotificationDispatchRequest,
 }
 
 func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, payload any) (bool, int, string, string) {
+	a.logs.append(fmt.Sprintf("[cmd] recebido: cmdType=%q payload=%v", cmdType, truncatePayloadForLog(payload)))
+
 	if isPsadtAlertCommandType(cmdType) {
 		p, err := parsePsadtAlertPayload(payload)
 		if err != nil {

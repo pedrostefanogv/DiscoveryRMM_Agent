@@ -2,6 +2,8 @@ package app
 
 import (
 	"fmt"
+	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -80,6 +82,34 @@ func (l *logBuffer) subscribe(fn func(string)) func() {
 	id := l.nextSubID
 	l.subscribers[id] = fn
 	l.mu.Unlock()
+
+	return func() {
+		l.mu.Lock()
+		delete(l.subscribers, id)
+		l.mu.Unlock()
+	}
+}
+
+func (l *logBuffer) snapshotAndSubscribe(fn func(string)) func() {
+	if fn == nil {
+		return func() {}
+	}
+
+	l.mu.Lock()
+	snapshot := make([]string, len(l.lines))
+	copy(snapshot, l.lines)
+
+	if l.subscribers == nil {
+		l.subscribers = make(map[uint64]func(string))
+	}
+	l.nextSubID++
+	id := l.nextSubID
+	l.subscribers[id] = fn
+	l.mu.Unlock()
+
+	for _, line := range snapshot {
+		fn(line)
+	}
 
 	return func() {
 		l.mu.Lock()
@@ -174,4 +204,24 @@ func truncateLogBody(body []byte, max int) string {
 		return s
 	}
 	return s[:max] + "..."
+}
+
+type stdLogWriter struct {
+	buf *logBuffer
+}
+
+func (w *stdLogWriter) Write(p []byte) (int, error) {
+	line := strings.TrimRight(string(p), "\r\n")
+	if line != "" {
+		w.buf.append(line)
+	}
+	return len(p), nil
+}
+
+func captureStdLog(buf *logBuffer) func() {
+	original := log.Writer()
+	log.SetOutput(io.MultiWriter(os.Stderr, &stdLogWriter{buf: buf}))
+	return func() {
+		log.SetOutput(original)
+	}
 }

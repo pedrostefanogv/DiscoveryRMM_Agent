@@ -69,8 +69,52 @@ func TestParseRemoteDebugCommand_UsesCanonicalNATSSubject(t *testing.T) {
 	}
 }
 
+func TestParseRemoteDebugCommand_AllowsNullOptionalFields(t *testing.T) {
+	cmd, err := parseRemoteDebugCommand(map[string]any{
+		"action":       "stop",
+		"sessionId":    "sess-2",
+		"logLevel":     nil,
+		"startedAtUtc": nil,
+		"expiresAtUtc": nil,
+		"stoppedAtUtc": nil,
+		"stream": map[string]any{
+			"natsSubject": "tenant.client-1.site.site-1.agent.agent-1.remote-debug.log",
+			"natsWssUrl":  nil,
+		},
+	})
+	if err != nil {
+		t.Fatalf("parseRemoteDebugCommand with nulls: %v", err)
+	}
+	if cmd.LogLevel != "info" {
+		t.Fatalf("LogLevel = %q, want info", cmd.LogLevel)
+	}
+	if cmd.ExpiresAtUTC != "" {
+		t.Fatalf("ExpiresAtUTC = %q, want empty", cmd.ExpiresAtUTC)
+	}
+	if cmd.Stream.NatsWssURL != "" {
+		t.Fatalf("NatsWssURL = %q, want empty", cmd.Stream.NatsWssURL)
+	}
+}
+
+func TestParseRemoteDebugCommand_AcceptsJSONStringPayload(t *testing.T) {
+	raw := `{"action":"start","sessionId":"sess-3","logLevel":"debug","stream":{"natsSubject":"tenant.client-1.site.site-1.agent.agent-1.remote-debug.log"}}`
+	cmd, err := parseRemoteDebugCommand(raw)
+	if err != nil {
+		t.Fatalf("parseRemoteDebugCommand string payload: %v", err)
+	}
+	if cmd.Action != "start" {
+		t.Fatalf("Action = %q, want start", cmd.Action)
+	}
+	if cmd.SessionID != "sess-3" {
+		t.Fatalf("SessionID = %q, want sess-3", cmd.SessionID)
+	}
+	if cmd.LogLevel != "debug" {
+		t.Fatalf("LogLevel = %q, want debug", cmd.LogLevel)
+	}
+}
+
 func TestBuildRemoteDebugPublishers_RequiresCanonicalNATSSubject(t *testing.T) {
-	_, err := buildRemoteDebugPublishers(DebugConfig{}, remoteDebugStreamConfig{}, "token")
+	_, err := buildRemoteDebugPublishers(DebugConfig{}, remoteDebugStreamConfig{}, "token", "", "")
 	if err == nil {
 		t.Fatalf("expected error when natsSubject is missing")
 	}
@@ -82,7 +126,7 @@ func TestBuildRemoteDebugPublishers_RequiresCanonicalNATSSubject(t *testing.T) {
 func TestBuildRemoteDebugPublishers_RejectsNonCanonicalNATSSubject(t *testing.T) {
 	_, err := buildRemoteDebugPublishers(DebugConfig{}, remoteDebugStreamConfig{
 		NatsSubject: "tenant.client-1.site.site-1.agent.agent-1.remote.debug",
-	}, "token")
+	}, "token", "", "")
 	if err == nil {
 		t.Fatalf("expected error for non-canonical remote debug subject")
 	}
@@ -97,6 +141,21 @@ func TestFormatRemoteDebugMessageWithOrigin_UI(t *testing.T) {
 	}
 	if got := formatRemoteDebugMessageWithOrigin("ui", "[ui] erro xyz"); got != "[ui] erro xyz" {
 		t.Fatalf("formatRemoteDebugMessageWithOrigin should keep existing prefix, got %q", got)
+	}
+	if got := formatRemoteDebugMessageWithOrigin("", "mensagem sem origem"); got != "mensagem sem origem" {
+		t.Fatalf("formatRemoteDebugMessageWithOrigin with empty origin = %q", got)
+	}
+}
+
+func TestDetectRemoteDebugLevel_DefaultsToTrace(t *testing.T) {
+	if got := detectRemoteDebugLevel("linha sem tag de nivel"); got != "trace" {
+		t.Fatalf("detectRemoteDebugLevel default = %q, want trace", got)
+	}
+}
+
+func TestNormalizeRemoteDebugStreamLevel_DefaultsToTrace(t *testing.T) {
+	if got := normalizeRemoteDebugStreamLevel("verbose"); got != "trace" {
+		t.Fatalf("normalizeRemoteDebugStreamLevel = %q, want trace", got)
 	}
 }
 
@@ -114,3 +173,32 @@ func TestHandleAgentRuntimeCommand_UpdatePending(t *testing.T) {
 	}
 }
 
+func TestRemoteDebugHandleCommand_StopWithJSONStringPayloadDoesNotReturnParseError(t *testing.T) {
+	m := newRemoteDebugManager(nil, nil, nil, nil, nil)
+	raw := `{"action":"stop","sessionId":"sess-raw","logLevel":"info","expiresAtUtc":null,"stream":{"natsSubject":"tenant.client-1.site.site-1.agent.agent-1.remote-debug.log"}}`
+	handled, code, _, errText := m.HandleCommand(context.Background(), "remotedebug", raw)
+	if !handled {
+		t.Fatalf("expected remotedebug command to be handled")
+	}
+	if code == 2 {
+		t.Fatalf("expected no parse error (code=2), got err=%q", errText)
+	}
+	if code != 0 {
+		t.Fatalf("expected stop to return code=0, got code=%d err=%q", code, errText)
+	}
+}
+
+func TestRemoteDebugHandleCommand_StartWithJSONStringPayloadDoesNotReturnParseError(t *testing.T) {
+	m := newRemoteDebugManager(nil, nil, nil, nil, nil)
+	raw := `{"action":"start","sessionId":"sess-raw","logLevel":"debug","expiresAtUtc":"2026-05-12T02:35:31.6225487Z","stream":{"natsSubject":"tenant.client-1.site.site-1.agent.agent-1.remote-debug.log"}}`
+	handled, code, _, errText := m.HandleCommand(context.Background(), "remotedebug", raw)
+	if !handled {
+		t.Fatalf("expected remotedebug command to be handled")
+	}
+	if code == 2 {
+		t.Fatalf("expected no parse error (code=2), got err=%q", errText)
+	}
+	if code != 1 {
+		t.Fatalf("expected start without config to fail as business error (code=1), got code=%d err=%q", code, errText)
+	}
+}

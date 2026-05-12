@@ -220,7 +220,7 @@ func NewApp(opts AppStartupOptions) *App {
 			Message:     resp.Message,
 		}
 	})
-	a.remoteDebug = newRemoteDebugManager(a.logs.append, a.GetDebugConfig, a.logs.subscribe)
+	a.remoteDebug = newRemoteDebugManager(a.logs.append, a.GetDebugConfig, a.GetAgentConfiguration, a.logs.subscribe, a.logs.snapshotAndSubscribe)
 	inventoryProvider.SetProgressCallback(func() {
 		a.pulseInventoryHeartbeat()
 	})
@@ -484,6 +484,8 @@ func (a *App) startup(ctx context.Context) {
 	ctx, cancel := context.WithCancel(ctx)
 	a.ctx = ctx
 	a.cancel = cancel
+
+	captureStdLog(&a.logs)
 
 	a.safeGo(func() { a.StartP2PTelemetryLoop(ctx) })
 
