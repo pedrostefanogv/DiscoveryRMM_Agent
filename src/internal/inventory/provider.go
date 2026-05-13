@@ -196,7 +196,7 @@ func softwareInventoryQueries(programsRequired bool) []osqueryQuery {
 		},
 		{
 			name: "chocolatey_packages",
-			sql:  "SELECT name, version, author AS publisher, package_id AS install_id, '' AS uninstall_string, '' AS install_date, '' AS install_source FROM chocolatey_packages WHERE name <> ''",
+			sql:  "SELECT name, version, author AS publisher, path AS install_id, '' AS uninstall_string, '' AS install_date, '' AS install_source FROM chocolatey_packages WHERE name <> ''",
 		},
 		{
 			name: "npm_packages",
@@ -255,7 +255,7 @@ func (p *Provider) collectWithOsquery(ctx context.Context) (models.InventoryRepo
 		{name: "cpu_info", sql: "SELECT device_id, model, manufacturer, processor_type, cpu_status, number_of_cores, logical_processors, address_width, current_clock_speed, max_clock_speed, socket_designation, availability, load_percentage, number_of_efficiency_cores, number_of_performance_cores FROM cpu_info"},
 		{name: "cpuid", sql: "SELECT feature, value, output_register, output_bit, input_eax FROM cpuid"},
 		{name: "programs", sql: "SELECT name, version, publisher, identifying_number AS install_id, uninstall_string, install_date, install_source FROM programs WHERE name <> ''", required: true},
-		{name: "chocolatey_packages", sql: "SELECT name, version, author AS publisher, package_id AS install_id, '' AS uninstall_string, '' AS install_date, '' AS install_source FROM chocolatey_packages WHERE name <> ''"},
+		{name: "chocolatey_packages", sql: "SELECT name, version, author AS publisher, path AS install_id, '' AS uninstall_string, '' AS install_date, '' AS install_source FROM chocolatey_packages WHERE name <> ''"},
 		{name: "npm_packages", sql: "SELECT name, version, author AS publisher, path AS install_id, '' AS uninstall_string, '' AS install_date, path AS install_source FROM npm_packages WHERE name <> ''"},
 		{name: "python_packages", sql: "SELECT name, version, summary AS publisher, directory AS install_id, '' AS uninstall_string, '' AS install_date, directory AS install_source FROM python_packages WHERE name <> ''"},
 		{name: "startup_items", sql: "SELECT name, path, args, type, source, status, username FROM startup_items"},
