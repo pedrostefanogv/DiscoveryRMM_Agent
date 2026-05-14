@@ -147,25 +147,19 @@ func (c *p2pCoordinator) Run(ctx context.Context) {
 	discoveryTicker := time.NewTicker(p2pCoordinatorDiscoveryTickSeconds * time.Second)
 	cleanupTicker := time.NewTicker(p2pCoordinatorCleanupTickHours * time.Hour)
 	gossipTicker := time.NewTicker(45 * time.Second)
-	cloudBootstrapTicker := time.NewTicker(1 * time.Hour)
 	lanProbeWarmupTimer := time.NewTimer(p2pLANProbeWarmupDelay)
 	lanProbeTicker := time.NewTicker(p2pLANProbeInterval)
+	contentGCTicker := time.NewTicker(p2pCoordinatorCleanupTickHours * time.Hour)
 	defer discoveryTicker.Stop()
 	defer cleanupTicker.Stop()
 	defer gossipTicker.Stop()
-	defer cloudBootstrapTicker.Stop()
 	defer lanProbeWarmupTimer.Stop()
 	defer lanProbeTicker.Stop()
+	defer contentGCTicker.Stop()
 
 	go func() {
 		_, _ = c.runLANDiscoveryProbe(ctx, "startup")
 	}()
-
-	if cfg.BootstrapConfig.CloudBootstrapEnabled {
-		go func() {
-			_, _ = c.runCloudBootstrap(ctx)
-		}()
-	}
 
 	lanProbeSem := make(chan struct{}, 2)
 
@@ -182,6 +176,8 @@ func (c *p2pCoordinator) Run(ctx context.Context) {
 			if _, err := c.app.cleanupExpiredP2PTempArtifacts(time.Now()); err != nil {
 				c.setLastError(err)
 			}
+		case <-contentGCTicker.C:
+			c.collectOrphanArtifacts()
 		case <-lanProbeWarmupTimer.C:
 			lanProbeSem <- struct{}{}
 			go func() {
@@ -196,12 +192,6 @@ func (c *p2pCoordinator) Run(ctx context.Context) {
 					_, _ = c.runLANDiscoveryProbe(ctx, "periodic")
 				}()
 			default:
-			}
-		case <-cloudBootstrapTicker.C:
-			if c.app.GetP2PConfig().BootstrapConfig.CloudBootstrapEnabled {
-				go func() {
-					_, _ = c.runCloudBootstrap(ctx)
-				}()
 			}
 		}
 	}
@@ -299,13 +289,14 @@ func (c *p2pCoordinator) startDiscovery(ctx context.Context) error {
 
 	selfHost, _ := os.Hostname()
 	selfAgentID := strings.TrimSpace(c.app.GetDebugConfig().AgentID)
+	selfClientID := strings.TrimSpace(c.app.GetAgentConfiguration().ClientID)
 	baseURL := c.transferServer.BaseURL()
 	port := 0
 	if parsed, err := parsePortFromURL(baseURL); err == nil {
 		port = parsed
 	}
 
-	if err := provider.Start(ctx, p2pSelfEndpoint{AgentID: selfAgentID, Host: selfHost, Port: port}, func(peer p2pDiscoveredPeer) {
+	if err := provider.Start(ctx, p2pSelfEndpoint{AgentID: selfAgentID, Host: selfHost, Port: port, ClientID: selfClientID}, func(peer p2pDiscoveredPeer) {
 		if c.upsertPeer(peer) {
 			// Novo peer descoberto: busca imediata do catálogo e peers dele,
 			// sem esperar o próximo tick do coordinador (propagação gossip).

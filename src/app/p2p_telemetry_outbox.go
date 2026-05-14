@@ -31,10 +31,35 @@ func (a *App) buildP2PTelemetryPayload() (P2PTelemetryPayload, error) {
 		CollectedAtUTC:  time.Now().UTC().Format(time.RFC3339),
 		Metrics:         status.Metrics,
 		CurrentSeedPlan: status.CurrentSeedPlan,
+		KnownPeers:      a.p2pCoord.countKnownPeers(),
+		ConnectedPeers:  a.p2pCoord.countConnectedLibp2pPeers(),
 	}
 	if info, err := a.GetAgentInfo(); err == nil {
 		payload.SiteID = strings.TrimSpace(info.SiteID)
 	}
+
+	// Artifacts locais (truncado a 500 itens)
+	artifacts, _ := a.p2pCoord.ListArtifacts()
+	if len(artifacts) > 500 {
+		artifacts = artifacts[:500]
+	}
+	for _, art := range artifacts {
+		payload.Artifacts = append(payload.Artifacts, P2PArtifactPresenceItem{
+			ArtifactID:   art.ArtifactID,
+			ArtifactName: art.ArtifactName,
+			Sha256:       art.ChecksumSHA256,
+			SizeBytes:    art.SizeBytes,
+			CachedAtUtc:  art.ModifiedAtUTC,
+		})
+	}
+
+	// Carga do host: reusa coleta de métricas existente do heartbeat
+	cfg := a.GetP2PConfig()
+	if cfg.Enabled {
+		load := a.p2pCoord.collectHostLoad()
+		payload.HostLoad = &load
+	}
+
 	return payload, nil
 }
 

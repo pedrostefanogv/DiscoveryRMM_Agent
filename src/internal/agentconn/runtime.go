@@ -79,6 +79,10 @@ type AgentHeartbeat struct {
 	P2pPeers         *int     `json:"p2pPeers,omitempty"`
 	UptimeSeconds    *int64   `json:"uptimeSeconds,omitempty"`
 	ProcessCount     *int     `json:"processCount,omitempty"`
+	// ── NOVOS ──
+	PeerID string   `json:"peerId,omitempty"` // libp2p peer ID
+	Addrs  []string `json:"addrs,omitempty"`  // IPs roteáveis
+	Port   int      `json:"port,omitempty"`   // porta libp2p (41080-41120)
 }
 
 // AgentHeartbeatMetrics is a lightweight struct for collecting
@@ -98,6 +102,10 @@ type AgentHeartbeatMetrics struct {
 	P2pPeers         int
 	UptimeSeconds    int64
 	ProcessCount     int
+	// ── NOVOS ── P2P addressing for heartbeat-enriched peer discovery
+	PeerID string
+	Addrs  []string
+	Port   int
 }
 
 type natsResultEnvelope struct {
@@ -126,6 +134,7 @@ type P2PDiscoveryPeer struct {
 
 type P2PDiscoverySnapshot struct {
 	Sequence   uint64             `json:"sequence"`
+	ClientID   string             `json:"clientId,omitempty"`
 	TTLSeconds int                `json:"ttlSeconds"`
 	Peers      []P2PDiscoveryPeer `json:"peers"`
 	ReceivedAt time.Time          `json:"-"`
@@ -152,6 +161,18 @@ type GlobalPongMessage struct {
 	ServerTimeUTC    string `json:"serverTimeUtc"`
 	ServerOverloaded *bool  `json:"serverOverloaded"`
 	ReceivedAt       time.Time
+}
+
+// PeerEventMessage representa um evento peer.online recebido via NATS.
+type PeerEventMessage struct {
+	EventType   string   `json:"eventType"`
+	ClientID    string   `json:"clientId"`
+	SiteID      string   `json:"siteId"`
+	AgentID     string   `json:"agentId"`
+	PeerID      string   `json:"peerId"`
+	Addrs       []string `json:"addrs"`
+	Port        int      `json:"port"`
+	GeneratedAt string   `json:"generatedAtUtc"`
 }
 
 // Config is the backend communication configuration sourced from Debug settings.
@@ -186,6 +207,7 @@ type natsSubjects struct {
 	RemoteDebugLog      string
 	SyncPing            string
 	P2PDiscovery        string
+	P2PEvents           string
 }
 
 // Options defines dependencies injected by the app layer.
@@ -199,6 +221,7 @@ type Options struct {
 	OnCommandOutput        func(cmdType string, output string, errText string)
 
 	GetHeartbeatMetrics           func() AgentHeartbeatMetrics
+	OnP2PEvent                    func(PeerEventMessage)
 	EnqueueCommandResultOutbox    func(transport, dispatchID, commandID string, exitCode int, output, errText, sendError string) error
 	ListDueCommandResultOutbox    func(transport string, now time.Time, limit int) ([]CommandResultOutboxItem, error)
 	MarkSentCommandResultOutbox   func(id int64) error
@@ -335,6 +358,16 @@ func (r *Runtime) collectHeartbeat(cfg Config, ipAddr string) AgentHeartbeat {
 		hb.P2pPeers = &m.P2pPeers
 		hb.UptimeSeconds = &m.UptimeSeconds
 		hb.ProcessCount = &m.ProcessCount
+		// P2P addressing enriquecido no heartbeat
+		if m.PeerID != "" {
+			hb.PeerID = m.PeerID
+		}
+		if len(m.Addrs) > 0 {
+			hb.Addrs = m.Addrs
+		}
+		if m.Port > 0 {
+			hb.Port = m.Port
+		}
 	}
 	return hb
 }

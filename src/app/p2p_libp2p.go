@@ -33,6 +33,7 @@ const (
 // p2pLibP2PPeerInfo is exchanged over the /discovery-p2p/1.0.0 stream.
 type p2pLibP2PPeerInfo struct {
 	AgentID  string `json:"agentId"`
+	ClientID string `json:"clientId"`
 	HTTPPort int    `json:"httpPort"`
 }
 
@@ -40,7 +41,7 @@ type p2pLibP2PPeerInfo struct {
 // It advertises the local agent on the LAN and discovers peers via libp2p's
 // built-in mDNS service (distinct from the existing grandcat/zeroconf path).
 // When a peer is found, a /discovery-p2p/1.0.0 stream is opened to exchange
-// {agentId, httpPort}. The full P2P transport protocols (/artifact/*, /discovery/peers)
+// {agentId, clientId, httpPort}. The full P2P transport protocols (/artifact/*, /discovery/peers)
 // are registered on the same host so artifact transfers avoid HTTP entirely.
 type p2pLibP2PProvider struct {
 	// bootstrapPeers holds optional static multiaddr strings (including peer IDs)
@@ -60,6 +61,9 @@ type p2pLibP2PProvider struct {
 
 	// gater allows blocking misbehaving peers at the connection level.
 	gater *p2pConnectionGater
+
+	// clientID is the logical namespace for this P2P mesh.
+	clientID string
 }
 
 func (p *p2pLibP2PProvider) Name() string { return p2pDiscoveryLibP2P }
@@ -70,6 +74,8 @@ func (p *p2pLibP2PProvider) Start(
 	onPeer func(peer p2pDiscoveredPeer),
 	onTrace func(string),
 ) error {
+	p.clientID = normalizeClientID(self.ClientID)
+
 	// ConnManager: mantém entre 20–60 conexões ativas; excedente é podado.
 	cm, err := connmgr.NewConnManager(20, 60, connmgr.WithGracePeriod(2*time.Minute))
 	if err != nil {
@@ -96,7 +102,7 @@ func (p *p2pLibP2PProvider) Start(
 	}
 
 	// Stream handler (responder side): when a peer opens a stream to us,
-	// read their info, respond with ours, then emit onPeer.
+	// read their info, respond with ours, validate clientId, then emit onPeer.
 	h.SetStreamHandler(p2pLibP2PProtocolID, func(s network.Stream) {
 		defer s.Close()
 		_ = s.SetDeadline(time.Now().Add(p2pLibP2PHandshakeTimeout))
@@ -105,7 +111,7 @@ func (p *p2pLibP2PProvider) Start(
 		if err := json.NewDecoder(bufio.NewReader(s)).Decode(&remote); err != nil {
 			return
 		}
-		mine := p2pLibP2PPeerInfo{AgentID: self.AgentID, HTTPPort: self.Port}
+		mine := p2pLibP2PPeerInfo{AgentID: self.AgentID, ClientID: p.clientID, HTTPPort: self.Port}
 		if err := json.NewEncoder(s).Encode(mine); err != nil {
 			return
 		}
@@ -113,13 +119,24 @@ func (p *p2pLibP2PProvider) Start(
 		if strings.TrimSpace(remote.AgentID) == "" || remote.HTTPPort <= 0 {
 			return
 		}
+
+		// Validação de clientId: rejeita peers de malhas diferentes.
+		if p.clientID != "" && !strings.EqualFold(normalizeClientID(remote.ClientID), p.clientID) {
+			if onTrace != nil {
+				onTrace(fmt.Sprintf("peer rejeitado por clientId divergente: peer=%s clientId=%s esperado=%s",
+					strings.TrimSpace(remote.AgentID), strings.TrimSpace(remote.ClientID), p.clientID))
+			}
+			_ = s.Reset()
+			return
+		}
+
 		remoteAddr := extractIPFromMultiaddr(s.Conn().RemoteMultiaddr().String())
 		if remoteAddr == "" {
 			return
 		}
 		if onTrace != nil {
-			onTrace(fmt.Sprintf("libp2p peer (inbound): agentId=%s addr=%s:%d",
-				remote.AgentID, remoteAddr, remote.HTTPPort))
+			onTrace(fmt.Sprintf("libp2p peer (inbound): agentId=%s clientId=%s addr=%s:%d",
+				remote.AgentID, remote.ClientID, remoteAddr, remote.HTTPPort))
 		}
 		// Registrar mapeamento agentID → peer.ID para transfer streams.
 		if p.registry != nil {
@@ -139,6 +156,7 @@ func (p *p2pLibP2PProvider) Start(
 		}
 		onPeer(p2pDiscoveredPeer{
 			AgentID:      strings.TrimSpace(remote.AgentID),
+			ClientID:     strings.TrimSpace(remote.ClientID),
 			Host:         remoteAddr,
 			Address:      remoteAddr,
 			Port:         remote.HTTPPort,
@@ -156,7 +174,7 @@ func (p *p2pLibP2PProvider) Start(
 	}
 	p.h = h
 
-	notifee := &libp2pMDNSNotifee{h: h, self: self, onPeer: onPeer, onTrace: onTrace, registry: p.registry}
+	notifee := &libp2pMDNSNotifee{h: h, self: self, onPeer: onPeer, onTrace: onTrace, registry: p.registry, clientID: p.clientID}
 	svc := mdns.NewMdnsService(h, p2pLibP2PRendezvous, notifee)
 
 	// Connect to static bootstrap peers, if configured.
@@ -208,6 +226,7 @@ type libp2pMDNSNotifee struct {
 	onPeer   func(p2pDiscoveredPeer)
 	onTrace  func(string)
 	registry *libp2pPeerRegistry
+	clientID string
 }
 
 func (n *libp2pMDNSNotifee) HandlePeerFound(pi peer.AddrInfo) {
@@ -265,8 +284,9 @@ func (n *libp2pMDNSNotifee) HandlePeerFound(pi peer.AddrInfo) {
 	defer s.Close()
 	_ = s.SetDeadline(time.Now().Add(p2pLibP2PHandshakeTimeout))
 
-	// Initiator sends first, then reads response.
-	mine := p2pLibP2PPeerInfo{AgentID: n.self.AgentID, HTTPPort: n.self.Port}
+	// Initiator sends first (with clientId), then reads response.
+	clientID := normalizeClientID(n.self.ClientID)
+	mine := p2pLibP2PPeerInfo{AgentID: n.self.AgentID, ClientID: clientID, HTTPPort: n.self.Port}
 	if err := json.NewEncoder(s).Encode(mine); err != nil {
 		return
 	}
@@ -276,6 +296,16 @@ func (n *libp2pMDNSNotifee) HandlePeerFound(pi peer.AddrInfo) {
 	}
 
 	if strings.TrimSpace(remote.AgentID) == "" || remote.HTTPPort <= 0 {
+		return
+	}
+
+	// Validação de clientId: rejeita peers de malhas diferentes.
+	if clientID != "" && !strings.EqualFold(normalizeClientID(remote.ClientID), clientID) {
+		if n.onTrace != nil {
+			n.onTrace(fmt.Sprintf("peer rejeitado por clientId divergente: peer=%s clientId=%s esperado=%s",
+				strings.TrimSpace(remote.AgentID), strings.TrimSpace(remote.ClientID), clientID))
+		}
+		_ = n.h.Network().ClosePeer(pi.ID)
 		return
 	}
 
@@ -317,6 +347,7 @@ func (n *libp2pMDNSNotifee) HandlePeerFound(pi peer.AddrInfo) {
 	}
 	n.onPeer(p2pDiscoveredPeer{
 		AgentID:      strings.TrimSpace(remote.AgentID),
+		ClientID:     strings.TrimSpace(remote.ClientID),
 		Host:         remoteAddr,
 		Address:      remoteAddr,
 		Port:         remote.HTTPPort,

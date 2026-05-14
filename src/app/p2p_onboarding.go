@@ -573,9 +573,18 @@ func (a *App) applyZeroTouchRuntimeConnection(inst InstallerConfig) {
 		a.debugSvc.ApplyRuntimeConnectionConfig(inst.ApiScheme, inst.ApiServer, inst.AuthToken, inst.AgentID, inst.NatsServer, inst.NatsWsServer)
 	}
 
-
 	if a.agentConn != nil {
 		a.agentConn.Reload()
+	}
+
+	// Após zero-touch, reinicia o provider P2P com o clientId recém-obtido.
+	// Isso acelera a entrada na malha correta sem esperar o próximo ciclo.
+	if a.p2pCoord != nil {
+		agentCfg := a.GetAgentConfiguration()
+		if strings.TrimSpace(agentCfg.ClientID) != "" {
+			a.p2pCoord.restartProvider()
+			a.logs.append(fmt.Sprintf("[zero-touch] coordinator P2P reiniciado com clientId=%s", agentCfg.ClientID))
+		}
 	}
 }
 

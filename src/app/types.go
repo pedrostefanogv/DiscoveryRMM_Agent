@@ -78,6 +78,10 @@ type P2PMetrics = p2pmeta.Metrics
 
 type P2PTelemetryPayload = p2pmeta.TelemetryPayload
 
+type P2PHostLoad = p2pmeta.HostLoad
+
+type P2PArtifactPresenceItem = p2pmeta.ArtifactPresenceItem
+
 type P2PDistributionStatus = p2pmeta.DistributionStatus
 
 type P2PAuditEvent = p2pmeta.AuditEvent

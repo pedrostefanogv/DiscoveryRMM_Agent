@@ -186,6 +186,14 @@ func handleStreamArtifactManifest(s network.Stream, transfer *p2pTransferServer)
 		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "artifact nao encontrado"})
 		return
 	}
+
+	// Tentar cache de manifest primeiro.
+	manifestDir := filepath.Join(tempDir, manifestDirName)
+	if cached := loadCachedManifest(manifestDir, req.ArtifactName, path); cached != nil {
+		_ = json.NewEncoder(s).Encode(cached)
+		return
+	}
+
 	var chunkSize int64 = defaultChunkSizeBytes
 	if app != nil {
 		if cfg := app.GetP2PConfig(); cfg.ChunkSizeBytes > 0 {
@@ -198,6 +206,10 @@ func handleStreamArtifactManifest(s network.Stream, transfer *p2pTransferServer)
 		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "erro ao construir manifest: " + err.Error()})
 		return
 	}
+
+	// Cachear manifest para reuso futuro (best-effort).
+	_ = saveCachedManifest(manifestDir, req.ArtifactName, manifest)
+
 	_ = json.NewEncoder(s).Encode(manifest)
 }
 

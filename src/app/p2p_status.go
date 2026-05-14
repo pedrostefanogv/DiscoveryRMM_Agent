@@ -42,6 +42,7 @@ func (c *p2pCoordinator) GetPeers() []P2PPeerView {
 	for _, peer := range c.peers {
 		out = append(out, P2PPeerView{
 			AgentID:      peer.Peer.AgentID,
+			ClientID:     peer.Peer.ClientID,
 			Host:         peer.Peer.Host,
 			Address:      peer.Peer.Address,
 			Port:         peer.Peer.Port,

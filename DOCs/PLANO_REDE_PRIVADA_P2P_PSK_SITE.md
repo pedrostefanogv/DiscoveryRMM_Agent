@@ -150,7 +150,70 @@ if !strings.EqualFold(strings.TrimSpace(remote.ClientID), localClientID) {
 - **NATS discovery snapshot**: o servidor deve filtrar por `clientId`, e o agente deve revalidar.
 - **Cloud bootstrap**: mesma regra; `clientId` precisa entrar no payload e na validação local.
 
-### 1.6 Operação com clientId ausente
+### 1.6 Descoberta acelerada por evento de peer online
+
+Para acelerar a descoberta de agentes que acabaram de entrar online, o agent deve escutar
+eventos por cliente no barramento:
+
+1. escutar subject por cliente: `tenant.{clientId}.p2p.events`
+2. filtrar somente mensagens com `eventType = peer.online`
+
+Validação obrigatória antes de tentar conectar:
+
+1. `clientId` da mensagem igual ao `clientId` local
+2. `agentId` diferente do próprio agent (ignorar self)
+3. `peerId` não vazio
+4. `addrs` com pelo menos um endereço válido
+5. `port > 0`
+
+Dedupe recomendado:
+
+1. chave de dedupe: `agentId` (ou `peerId`)
+2. janela de debounce: 5 segundos para agrupar bursts
+
+Payload JSON recomendado:
+
+```json
+{
+  "eventType": "peer.online",
+  "clientId": "guid-do-cliente",
+  "siteId": "guid-do-site",
+  "agentId": "guid-do-agente",
+  "peerId": "12D3KooW...",
+  "addrs": ["10.0.0.5", "192.168.1.20"],
+  "port": 41090,
+  "generatedAtUtc": "2026-05-13T14:10:00Z"
+}
+```
+
+Exemplo conceitual de consumo:
+
+```go
+subject := fmt.Sprintf("tenant.%s.p2p.events", localClientID)
+subscribe(subject, func(msg PeerEventMessage) {
+    if msg.EventType != "peer.online" {
+        return
+    }
+    if !strings.EqualFold(strings.TrimSpace(msg.ClientID), localClientID) {
+        return
+    }
+    if strings.EqualFold(strings.TrimSpace(msg.AgentID), localAgentID) {
+        return
+    }
+    if strings.TrimSpace(msg.PeerID) == "" || msg.Port <= 0 || !hasValidAddr(msg.Addrs) {
+        return
+    }
+    if debounceSeen(msg.AgentID, 5*time.Second) {
+        return
+    }
+    attemptConnect(msg.PeerID, msg.Addrs, msg.Port)
+})
+```
+
+Esse caminho não substitui mDNS/snapshot/bootstrap; ele complementa para reduzir latência
+de descoberta após subida de novos agents.
+
+### 1.7 Operação com clientId ausente
 
 Para manter onboarding funcional:
 
@@ -158,7 +221,7 @@ Para manter onboarding funcional:
 2. a malha P2P principal só sobe quando `clientId` estiver disponível
 3. em ambiente produtivo, peer sem `clientId` válido não entra no cluster
 
-### 1.7 Evolução futura para shared key por cliente
+### 1.8 Evolução futura para shared key por cliente
 
 O plano inicial **não** usa `go-libp2p-pnet`. Futuramente, uma shared key por `clientId`
 pode ser adicionada como endurecimento opcional do transporte, sem reabrir o desenho
@@ -885,14 +948,256 @@ mas não será o eixo principal de isolamento.
 
 ---
 
-## Mapa de Esforço e Riscos
+## Fase 5 — Telemetria Enriquecida para Coordenação P2P
 
-| Fase | Descrição | Esforço | Complexidade | Risco |
-|---|---|---|---|---|
-| **1** | Isolamento lógico por `clientId` | ~2-3 dias | Baixa | Baixo — usa campos já existentes |
-| **2** | Transferência por manifesto + cache em arquivo completo | ~2-3 semanas | Média | Médio — ajuste do fluxo de cache e origem do artifact |
-| **3** | Want-Have protocol | ~1 semana | Média | Baixo — extensão natural |
-| **4** | DHT namespaced por `clientId` | ~2-3 semanas | Alta | Médio — tuning de parâmetros Kademlia |
+### 5.1 Motivação
+
+A telemetria atual enviada ao servidor (`POST /p2p-telemetry`) contém apenas métricas
+agregadas (contadores de replicação, bytes servidos, etc.). Para suportar as Fases 1–4,
+o servidor precisa saber:
+
+- Quais artifacts cada agent possui em cache → alimentar `p2p_artifact_presence`
+- Carga de hardware do host → eleição de fetcher e paralelismo dinâmico
+- Capacidade total do host → score de capacidade na eleição
+- Quantos peers estão ativos/conectados → saúde do mesh
+
+### 5.2 Campos novos no payload de telemetria
+
+```go
+type P2PTelemetryRequest struct {
+    AgentID        string                   `json:"agentId,omitempty"`
+    SiteID         string                   `json:"siteId,omitempty"`
+    CollectedAtUtc string                   `json:"collectedAtUtc"`
+    Metrics        P2PMetrics               `json:"metrics"`
+    CurrentSeedPlan P2PSeedPlan             `json:"currentSeedPlan"`
+
+    // ── NOVOS ──
+    Artifacts      []P2PArtifactPresenceItem `json:"artifacts,omitempty"`
+    HostLoad       *P2PHostLoad             `json:"hostLoad,omitempty"`
+    KnownPeers     int                      `json:"knownPeers"`
+    ConnectedPeers int                      `json:"connectedPeers"`
+}
+
+type P2PArtifactPresenceItem struct {
+    ArtifactID   string `json:"artifactId"`   // Guid do WingetPackage.Id ou AppPackage.Id
+    ArtifactName string `json:"artifactName"`
+    Sha256       string `json:"sha256"`
+    SizeBytes    int64  `json:"sizeBytes"`
+    CachedAtUtc  string `json:"cachedAtUtc,omitempty"` // mtime do arquivo
+}
+
+type P2PHostLoad struct {
+    CPUCores        int     `json:"cpuCores"`        // runtime.NumCPU()
+    RamGB           float64 `json:"ramGb"`           // mem.VirtualMemory().Total / 1e9
+    CPUPercent      float64 `json:"cpuPercent"`      // cpu.Percent(0, false)
+    MemoryPercent   float64 `json:"memoryPercent"`   // mem.VirtualMemory().UsedPercent
+    DiskBusyPercent float64 `json:"diskBusyPercent"` // disk.IOCounters() delta
+}
+```
+
+### 5.3 Coleta dos dados no Agent
+
+| Campo | Fonte | Observação |
+|-------|-------|------------|
+| `HostLoad.CPUCores` | `runtime.NumCPU()` | Estático, coletado uma vez |
+| `HostLoad.RamGB` | `mem.VirtualMemory().Total / 1e9` | gopsutil, atualizado a cada coleta |
+| `HostLoad.CpuPercent` | `cpu.Percent(0, false)` | Percentual médio desde última chamada |
+| `HostLoad.MemoryPercent` | `mem.VirtualMemory().UsedPercent` | Instantâneo |
+| `HostLoad.DiskBusyPercent` | `disk.IOCounters()` delta entre ticks | Média de todos os discos físicos |
+| `Artifacts[]` | `ListP2PArtifacts()` + `buildArtifactView()` | Truncado a 500 itens |
+| `KnownPeers` | `len(p2pCoord.peers)` | Total no registry |
+| `ConnectedPeers` | `len(libp2pHost.Network().Peers())` | Conexões libp2p ativas |
+
+### 5.4 Função de coleta de carga
+
+```go
+func (c *p2pCoordinator) collectHostLoad() P2PHostLoad {
+    load := P2PHostLoad{
+        CPUCores: runtime.NumCPU(),
+    }
+
+    if vmem, err := mem.VirtualMemory(); err == nil {
+        load.RamGB = float64(vmem.Total) / 1e9
+        load.MemoryPercent = vmem.UsedPercent
+    }
+
+    if cpuPercent, err := cpu.Percent(0, false); err == nil && len(cpuPercent) > 0 {
+        load.CPUPercent = cpuPercent[0]
+    }
+
+    // Disco: delta entre duas leituras com 1s de intervalo
+    io1, _ := disk.IOCounters()
+    time.Sleep(1 * time.Second)
+    io2, _ := disk.IOCounters()
+    if len(io1) > 0 && len(io2) > 0 {
+        var totalBusy float64
+        for name, c2 := range io2 {
+            if c1, ok := io1[name]; ok {
+                delta := c2.IoTime - c1.IoTime
+                totalBusy += float64(delta) / 10.0 // ms → percent (1s = 1000ms, /10 = %)
+            }
+        }
+        load.DiskBusyPercent = math.Min(totalBusy, 100.0)
+    }
+
+    return load
+}
+```
+
+### 5.5 Montagem do payload de telemetria (função completa)
+
+```go
+func (c *p2pCoordinator) buildTelemetryPayload() P2PTelemetryRequest {
+    cfg := c.app.GetDebugConfig()
+    p2pCfg := c.app.GetP2PConfig()
+
+    req := P2PTelemetryRequest{
+        AgentID:        strings.TrimSpace(cfg.AgentID),
+        CollectedAtUtc: time.Now().UTC().Format(time.RFC3339),
+        Metrics:        c.snapshotMetrics(),
+        CurrentSeedPlan: c.currentSeedPlan(),
+        KnownPeers:     c.countKnownPeers(),
+        ConnectedPeers: c.countConnectedLibp2pPeers(),
+    }
+
+    // Artifacts locais (truncado a 500)
+    artifacts, _ := c.app.ListP2PArtifacts()
+    if len(artifacts) > 500 {
+        artifacts = artifacts[:500]
+    }
+    for _, a := range artifacts {
+        req.Artifacts = append(req.Artifacts, P2PArtifactPresenceItem{
+            ArtifactID:   a.ArtifactID,
+            ArtifactName: a.ArtifactName,
+            Sha256:       a.ChecksumSHA256,
+            SizeBytes:    a.SizeBytes,
+            CachedAtUtc:  a.ModifiedAtUTC,
+        })
+    }
+
+    // Carga do host (se P2P estiver habilitado)
+    if p2pCfg.Enabled {
+        load := c.collectHostLoad()
+        req.HostLoad = &load
+    }
+
+    return req
+}
+
+func (c *p2pCoordinator) countKnownPeers() int {
+    c.mu.RLock()
+    defer c.mu.RUnlock()
+    return len(c.peers)
+}
+
+func (c *p2pCoordinator) countConnectedLibp2pPeers() int {
+    h, _ := c.libp2pHostAndRegistry()
+    if h == nil {
+        return 0
+    }
+    return len(h.Network().Peers())
+}
+```
+
+### 5.6 Envio da telemetria
+
+O envio já existe hoje via `POST /api/agent-auth/me/p2p-telemetry` a cada 5 minutos.
+A função `buildTelemetryPayload()` substitui a montagem atual. O resto do fluxo
+(serialização JSON, HTTP POST, tratamento de rate limit) permanece igual.
+
+### 5.7 Truncamento de artifacts
+
+Para evitar payloads excessivos (cada item tem ~200 bytes), o array `artifacts` é
+truncado a 500 itens (~100 KB). O servidor deve considerar que a ausência de um
+artifact na lista NÃO significa que ele foi removido — apenas que não coube no
+truncamento. A limpeza de `p2p_artifact_presence` é feita pelo job de TTL (2h),
+não pela omissão no payload.
+
+### 5.8 Benefícios para o ecossistema
+
+- **Eleição de fetcher (Fase 2):** `HostLoad` alimenta o score de capacidade sem
+  depender exclusivamente de gossip entre peers
+- **Paralelismo dinâmico (Fase 2):** `HostLoad.CPUPercent` e `MemoryPercent` são
+  usados pelo scheduler adaptativo de download
+- **Dashboard de operações:** `KnownPeers` e `ConnectedPeers` permitem alertas
+  de desconexão do mesh
+- **`p2p_artifact_presence`:** Alimentado diretamente pela telemetria, sem
+  depender de fonte complementar
+- **Auditoria:** `HostLoad` histórico permite correlacionar degradação de
+  performance P2P com carga do host
+
+### 5.9 Plano de validação adicional
+
+| # | Teste |
+|---|-------|
+| 13 | Payload de telemetria inclui `artifacts[]` com até 500 itens |
+| 14 | Payload de telemetria inclui `hostLoad` com CPU, RAM e disco |
+| 15 | `hostLoad.DiskBusyPercent` entre 0 e 100 |
+| 16 | `connectedPeers` <= `knownPeers` |
+| 17 | Servidor faz upsert de `p2p_artifact_presence` a partir do `artifacts[]` |
+| 18 | Servidor armazena `hostLoad` na tabela de telemetria |
+| 19 | Heartbeat inclui `peerId`, `addrs`, `port` |
+| 20 | Servidor publica `peer.online` ao detectar transicao Offline->Online no heartbeat |
+| 21 | `POST /p2p/bootstrap` removido |
+
+---
+
+## Fase 6 — Heartbeat P2P (Substitui Bootstrap HTTP)
+
+### 6.1 Motivação
+
+O agente envia heartbeat periódico via NATS. Em vez de ter um endpoint HTTP separado
+para registro de peer (`POST /p2p/bootstrap`), o próprio heartbeat carrega os dados
+de endereçamento do peer, eliminando a necessidade de HTTP para descoberta P2P.
+
+### 6.2 Mudanças no heartbeat
+
+```go
+// Em agent_types.go ou similar
+type AgentHeartbeat struct {
+    // ── Campos existentes ──
+    AgentID        string    `json:"agentId"`
+    ClientID       string    `json:"clientId"`
+    SiteID         string    `json:"siteId"`
+    TimestampUtc   time.Time `json:"timestampUtc"`
+    CPUPercent     float64   `json:"cpuPercent"`
+    MemoryPercent  float64   `json:"memoryPercent"`
+    // ... demais campos ...
+
+    // ── NOVOS ──
+    PeerID  string   `json:"peerId,omitempty"`   // libp2p peer ID (12D3KooW...)
+    Addrs   []string `json:"addrs,omitempty"`    // IPs roteáveis
+    Port    int      `json:"port,omitempty"`     // porta libp2p (41080-41120)
+}
+```
+
+### 6.3 Fluxo
+
+1. Agent envia heartbeat com `peerId`, `addrs`, `port` (mesmo subject, mesmo intervalo)
+2. Servidor processa heartbeat normalmente (liveness, cache Redis)
+3. Servidor detecta transição Offline→Online (chave Redis não existia antes)
+4. Servidor publica `peer.online` em `tenant.{clientId}.p2p.events`
+5. Demais agents do cliente recebem o evento (com debounce de 5s) e conectam via libp2p
+
+### 6.4 Remoção do endpoint HTTP
+
+| Componente | Ação |
+|------------|------|
+| `p2p_api.go` | Remover `callCloudBootstrapAPI()` e `runCloudBootstrap()` |
+| `p2p_cloud_bootstrap.go` | Remover arquivo |
+| `p2p.go` | Remover `cloudBootstrapTicker` |
+| Config | Remover `BootstrapConfig.CloudBootstrapEnabled` e `BootstrapConfig` |
+| Agent NATS | Publicar heartbeat com `peerId`/`addrs`/`port` |
+
+### 6.5 Plano de validação adicional
+
+| # | Teste |
+|---|-------|
+| 22 | Heartbeat com `peerId` válido dispara `peer.online` (primeira subida) |
+| 23 | Heartbeat sem `peerId` (P2P desabilitado) não dispara `peer.online` |
+| 24 | Heartbeat repetido (já online) não dispara `peer.online` duplicado |
+| 25 | Após expiração (chave Redis expirada), próximo heartbeat dispara `peer.online` |
+| 26 | Nenhuma chamada HTTP para bootstrap após remoção |
 
 ---
 
@@ -901,6 +1206,22 @@ mas não será o eixo principal de isolamento.
 | Pacote | Versão | Tamanho estimado | Finalidade |
 |---|---|---|---|
 | `github.com/libp2p/go-libp2p-kad-dht` | ~v0.30+ | ~500KB | DHT namespaced por `clientId` |
+
+O isolamento inicial por `clientId` não exige nova dependência além do stack atual.
+A telemetria enriquecida usa `gopsutil` (cpu, mem, disk) — já presente no projeto.
+
+---
+
+## Mapa de Esforço e Riscos
+
+| Fase | Descrição | Esforço | Complexidade | Risco |
+|---|---|---|---|---|
+| **1** | Isolamento lógico por `clientId` | ~2-3 dias | Baixa | Baixo — usa campos já existentes |
+| **2** | Transferência por manifesto + cache em arquivo completo | ~2-3 semanas | Média | Médio — ajuste do fluxo de cache e origem do artifact |
+| **3** | Want-Have protocol | ~1 semana | Média | Baixo — extensão natural |
+| **4** | DHT namespaced por `clientId` | ~2-3 semanas | Alta | Médio — tuning de parâmetros Kademlia |
+| **5** | Telemetria enriquecida | ~1 semana | Média | Médio — coleta de métricas de hardware |
+| **6** | Heartbeat P2P (substitui bootstrap HTTP) | ~2 dias | Baixa | Baixo — reuso de canal já existente |
 
 O isolamento inicial por `clientId` não exige nova dependência além do stack atual.
 
@@ -968,6 +1289,11 @@ Exemplo:
 10. manifesto no servidor indisponível → fallback para cache local e sincronização assíncrona posterior
 11. dois peers candidatos no mesmo grupo → vence o de maior score de capacidade
 12. dois grupos isolados tentando lock → só um obtém lock global
+13. evento `peer.online` no subject `tenant.{clientId}.p2p.events` dispara tentativa de conexão
+14. evento com `clientId` diferente é descartado sem conectar
+15. evento do próprio `agentId` (self) é ignorado
+16. evento com `peerId` vazio, `addrs` inválido ou `port <= 0` é descartado
+17. bursts repetidos do mesmo `agentId` dentro de 5 segundos são deduplicados
 
 ### Testes de Estresse
 
@@ -1000,3 +1326,6 @@ Exemplo:
 | 2026-05-13 | 1.7 | — | Adicionado fluxo pós-download com validação de hash, validação/geração de manifesto e publicação no servidor; definida política híbrida de manifesto server-first com fallback local |
 | 2026-05-13 | 1.8 | — | Coordenação de upstream fetch reestruturada em dois escopos: eleição local via gossip por grupo e lock global no servidor; heartbeat publicado exclusivamente em tópico scoped de gossip por artifact |
 | 2026-05-13 | 1.9 | — | Eleição local priorizada por score de capacidade de hardware (CPUs livres + RAM livre); candidatura inclui cpuCores, ramGB e percentuais de uso no gossip |
+| 2026-05-13 | 2.0 | — | Adicionada Fase 5 — Telemetria Enriquecida: payload expandido com artifacts[], hostLoad, knownPeers, connectedPeers; funções de coleta de carga via gopsutil; truncamento a 500 itens |
+| 2026-05-13 | 2.1 | — | Checklist de validação expandida com 6 novos cenários (13–18) para telemetria enriquecida |
+| 2026-05-13 | 2.2 | — | Incluída descoberta acelerada por eventos `peer.online` via subject `tenant.{clientId}.p2p.events`, com validação obrigatória de payload, dedupe por 5s e payload padrão recomendado |

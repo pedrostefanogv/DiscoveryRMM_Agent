@@ -112,6 +112,7 @@ type DebugStatus struct {
 
 type PeerView struct {
 	AgentID      string `json:"agentId"`
+	ClientID     string `json:"clientId,omitempty"`
 	Host         string `json:"host"`
 	Address      string `json:"address"`
 	Port         int    `json:"port"`
@@ -171,12 +172,34 @@ type Metrics struct {
 	ChunksDownloaded      int64 `json:"chunksDownloaded"`
 }
 
+// HostLoad descreve capacidade e carga atual do host para eleição de fetcher e paralelismo dinâmico.
+type HostLoad struct {
+	CPUCores        int     `json:"cpuCores"`
+	RamGB           float64 `json:"ramGb"`
+	CPUPercent      float64 `json:"cpuPercent"`
+	MemoryPercent   float64 `json:"memoryPercent"`
+	DiskBusyPercent float64 `json:"diskBusyPercent"`
+}
+
+// ArtifactPresenceItem descreve um artifact em cache no agent para telemetria.
+type ArtifactPresenceItem struct {
+	ArtifactID   string `json:"artifactId"`
+	ArtifactName string `json:"artifactName"`
+	Sha256       string `json:"sha256"`
+	SizeBytes    int64  `json:"sizeBytes"`
+	CachedAtUtc  string `json:"cachedAtUtc,omitempty"`
+}
+
 type TelemetryPayload struct {
-	AgentID         string   `json:"agentId,omitempty"`
-	SiteID          string   `json:"siteId,omitempty"`
-	CollectedAtUTC  string   `json:"collectedAtUtc"`
-	Metrics         Metrics  `json:"metrics"`
-	CurrentSeedPlan SeedPlan `json:"currentSeedPlan"`
+	AgentID         string                 `json:"agentId,omitempty"`
+	SiteID          string                 `json:"siteId,omitempty"`
+	CollectedAtUTC  string                 `json:"collectedAtUtc"`
+	Metrics         Metrics                `json:"metrics"`
+	CurrentSeedPlan SeedPlan               `json:"currentSeedPlan"`
+	Artifacts       []ArtifactPresenceItem `json:"artifacts,omitempty"`
+	HostLoad        *HostLoad              `json:"hostLoad,omitempty"`
+	KnownPeers      int                    `json:"knownPeers"`
+	ConnectedPeers  int                    `json:"connectedPeers"`
 }
 
 type DistributionStatus struct {

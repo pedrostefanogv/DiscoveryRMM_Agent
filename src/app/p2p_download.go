@@ -48,6 +48,8 @@ func (c *p2pCoordinator) DownloadArtifactFromPeer(ctx context.Context, artifactN
 		}
 		c.recordBytesDownloaded(size)
 		c.appendAudit("pull", artifactName, sourcePeerID, "libp2p", true, "artifact baixado via libp2p")
+		// Cachear manifest após download bem-sucedido.
+		go c.updateManifestCacheAfterDownload(artifactName, path)
 		return c.buildArtifactView(artifactName, access.ArtifactID, path)
 	}
 
@@ -127,6 +129,8 @@ func (c *p2pCoordinator) downloadArtifactSwarm(ctx context.Context, artifactName
 		}
 		c.recordBytesDownloaded(size)
 		c.appendAudit("swarm-pull", artifactName, peerEntries[0].peerID, "automation", true, "download simples via libp2p")
+		// Cachear manifest após download simples.
+		go c.updateManifestCacheAfterDownload(artifactName, path)
 		return c.buildArtifactView(artifactName, accesses[0].ArtifactID, path)
 	}
 
@@ -162,6 +166,8 @@ func (c *p2pCoordinator) downloadArtifactSwarm(ctx context.Context, artifactName
 		"automation", true, fmt.Sprintf("download em %d chunks de %d peers", manifest.TotalChunks, len(accesses)))
 
 	artifactID := CanonicalArtifactID(manifest.ArtifactID, artifactName, "")
+	// Cachear manifest após download chunked bem-sucedido.
+	go c.updateManifestCacheAfterDownload(artifactName, path)
 	return c.buildArtifactView(artifactName, artifactID, path)
 }
 

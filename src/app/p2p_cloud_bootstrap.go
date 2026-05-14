@@ -24,10 +24,11 @@ const (
 
 // p2pCloudBootstrapRequest é o payload enviado ao servidor.
 type p2pCloudBootstrapRequest struct {
-	AgentID string   `json:"agentId"`
-	PeerID  string   `json:"peerId"`
-	Addrs   []string `json:"addrs"`
-	Port    int      `json:"port"`
+	AgentID  string   `json:"agentId"`
+	ClientID string   `json:"clientId,omitempty"`
+	PeerID   string   `json:"peerId"`
+	Addrs    []string `json:"addrs"`
+	Port     int      `json:"port"`
 }
 
 // p2pCloudBootstrapPeer é um peer retornado pelo servidor.
@@ -87,11 +88,14 @@ func (c *p2pCoordinator) runCloudBootstrap(ctx context.Context) (int, error) {
 		}
 	}
 
+	localClientID := normalizeClientID(strings.TrimSpace(c.app.GetAgentConfiguration().ClientID))
+
 	payload := p2pCloudBootstrapRequest{
-		AgentID: agentID,
-		PeerID:  selfPeerID,
-		Addrs:   selfAddrs,
-		Port:    selfPort,
+		AgentID:  agentID,
+		ClientID: localClientID,
+		PeerID:   selfPeerID,
+		Addrs:    selfAddrs,
+		Port:     selfPort,
 	}
 
 	resp, err := c.callCloudBootstrapAPI(ctx, apiScheme, apiServer, authToken, agentID, payload)

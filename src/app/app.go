@@ -258,6 +258,7 @@ func NewApp(opts AppStartupOptions) *App {
 		OnGlobalPong:                  a.handleGlobalPong,
 		GetHeartbeatMetrics:           a.getHeartbeatMetrics,
 		OnP2PDiscoverySnapshot:        a.handleP2PDiscoverySnapshot,
+		OnP2PEvent:                    a.handleP2PEvent,
 		HandleCommand:                 a.handleAgentRuntimeCommand,
 		OnCommandOutput:               a.onAgentCommandOutput,
 		EnqueueCommandResultOutbox:    a.enqueueCommandResultOutbox,
@@ -468,6 +469,11 @@ func (a *App) getHeartbeatMetrics() agentconn.AgentHeartbeatMetrics {
 				metrics.CpuPercent = cpuPercent
 			}
 		}
+	}
+
+	// Enriquecer com dados de endereçamento P2P (libp2p peer ID, addrs, port)
+	if a.p2pCoord != nil {
+		metrics.PeerID, metrics.Addrs, metrics.Port = a.p2pCoord.getP2PAddressingInfo()
 	}
 
 	return metrics

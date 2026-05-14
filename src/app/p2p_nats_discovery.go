@@ -17,10 +17,91 @@ func (a *App) handleP2PDiscoverySnapshot(snapshot agentconn.P2PDiscoverySnapshot
 	a.p2pCoord.ApplyP2PDiscoverySnapshot(snapshot)
 }
 
+// handleP2PEvent processa eventos peer.online recebidos via NATS para descoberta acelerada.
+func (a *App) handleP2PEvent(event agentconn.PeerEventMessage) {
+	if a == nil || a.p2pCoord == nil {
+		return
+	}
+	a.p2pCoord.handlePeerOnlineEvent(event)
+}
+
+func (c *p2pCoordinator) handlePeerOnlineEvent(event agentconn.PeerEventMessage) {
+	if c == nil || c.app == nil {
+		return
+	}
+
+	// 1. Filtrar apenas peer.online
+	if strings.TrimSpace(event.EventType) != "peer.online" {
+		return
+	}
+
+	// 2. clientId deve ser igual ao local
+	localClientID := normalizeClientID(strings.TrimSpace(c.app.GetAgentConfiguration().ClientID))
+	eventClientID := normalizeClientID(strings.TrimSpace(event.ClientID))
+	if localClientID != "" && eventClientID != "" && !strings.EqualFold(eventClientID, localClientID) {
+		return
+	}
+
+	// 3. Ignorar self
+	selfAgentID := strings.TrimSpace(c.app.GetDebugConfig().AgentID)
+	if strings.EqualFold(strings.TrimSpace(event.AgentID), selfAgentID) {
+		return
+	}
+
+	// 4. Validar peerId, addrs, port
+	if strings.TrimSpace(event.PeerID) == "" || event.Port <= 0 || !hasValidAddr(event.Addrs) {
+		return
+	}
+
+	// 5. Dedupe por agentId (5s)
+	dedupeKey := "peer-online:" + strings.ToLower(strings.TrimSpace(event.AgentID))
+	c.mu.Lock()
+	if last, ok := c.peerLastAttempt[dedupeKey]; ok && time.Since(last) < 5*time.Second {
+		c.mu.Unlock()
+		return
+	}
+	c.peerLastAttempt[dedupeKey] = time.Now()
+	c.mu.Unlock()
+
+	// 6. Tentar conectar via libp2p
+	h, registry := c.libp2pHostAndRegistry()
+	if h == nil || registry == nil {
+		return
+	}
+
+	addrInfo, err := buildAddrInfo(strings.TrimSpace(event.PeerID), event.Addrs, event.Port)
+	if err != nil {
+		c.app.logs.append(fmt.Sprintf("[p2p][events] peer.online ignorado (addr invalido) agentId=%s: %v",
+			strings.TrimSpace(event.AgentID), err))
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), p2pLibP2PHandshakeTimeout)
+	err = h.Connect(ctx, addrInfo)
+	cancel()
+	if err != nil {
+		c.app.logs.append(fmt.Sprintf("[p2p][events] connect falhou agentId=%s peerId=%s: %v",
+			strings.TrimSpace(event.AgentID), strings.TrimSpace(event.PeerID), err))
+		return
+	}
+
+	c.app.logs.append(fmt.Sprintf("[p2p][events] conectado via peer.online: agentId=%s peerId=%s",
+		strings.TrimSpace(event.AgentID), strings.TrimSpace(event.PeerID)))
+}
+
 func (c *p2pCoordinator) ApplyP2PDiscoverySnapshot(snapshot agentconn.P2PDiscoverySnapshot) {
 	if c == nil || c.app == nil {
 		return
 	}
+
+	// Validar clientId: snapshot deve pertencer à mesma malha lógica.
+	localClientID := normalizeClientID(strings.TrimSpace(c.app.GetAgentConfiguration().ClientID))
+	if localClientID != "" && !strings.EqualFold(normalizeClientID(strings.TrimSpace(snapshot.ClientID)), localClientID) {
+		c.app.logs.append(fmt.Sprintf("[p2p][nats-discovery] snapshot rejeitado por clientId divergente: snapshotClientId=%s localClientId=%s",
+			strings.TrimSpace(snapshot.ClientID), localClientID))
+		return
+	}
+
 	now := snapshot.ReceivedAt
 	if now.IsZero() {
 		now = time.Now().UTC()
@@ -57,6 +138,7 @@ func (c *p2pCoordinator) ApplyP2PDiscoverySnapshot(snapshot agentconn.P2PDiscove
 		}
 		view := p2pDiscoveredPeer{
 			AgentID:      agentID,
+			ClientID:     strings.TrimSpace(snapshot.ClientID),
 			Host:         address,
 			Address:      address,
 			Port:         peer.Port,

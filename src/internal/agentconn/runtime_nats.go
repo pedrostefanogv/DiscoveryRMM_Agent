@@ -120,6 +120,13 @@ func (r *Runtime) runNATSSession(ctx context.Context, cfg Config, server, transp
 	if _, err = nc.Subscribe(subjects.P2PDiscovery, r.natsP2PDiscoveryHandler()); err != nil {
 		return fmt.Errorf("falha ao inscrever no subject de discovery P2P: %w", err)
 	}
+	if subjects.P2PEvents != "" {
+		if _, err = nc.Subscribe(subjects.P2PEvents, r.natsP2PEventHandler()); err != nil {
+			r.logf("[p2p][events] falha ao inscrever em %s: %v (continuando sem eventos)", subjects.P2PEvents, err)
+		} else {
+			r.logf("[p2p][events] inscrito em %s", subjects.P2PEvents)
+		}
+	}
 	globalPongReceived := make(chan time.Time, 1)
 	if _, err = nc.Subscribe(subjects.GlobalPong, r.natsGlobalPongHandler(globalPongReceived)); err != nil {
 		return fmt.Errorf("falha ao inscrever no subject de global pong: %w", err)
@@ -477,6 +484,19 @@ func (r *Runtime) natsP2PDiscoveryHandler() func(msg *nats.Msg) {
 	}
 }
 
+func (r *Runtime) natsP2PEventHandler() func(msg *nats.Msg) {
+	return func(msg *nats.Msg) {
+		var event PeerEventMessage
+		if err := json.Unmarshal(msg.Data, &event); err != nil {
+			r.logf("mensagem de evento P2P NATS invalida: %v", err)
+			return
+		}
+		if r.opts.OnP2PEvent != nil {
+			r.opts.OnP2PEvent(event)
+		}
+	}
+}
+
 // ─── NATS Event Loop ───────────────────────────────────────────────
 
 func (r *Runtime) runNATSEventLoop(ctx context.Context, nc *nats.Conn, cfg Config, subjects natsSubjects, ipAddr string, globalPongReceived <-chan time.Time) error {
@@ -585,6 +605,7 @@ func resolveNATSSubjects(cfg Config) (natsSubjects, error) {
 		RemoteDebugLog:      prefix + ".remote-debug.log",
 		SyncPing:            prefix + ".sync.ping",
 		P2PDiscovery:        fmt.Sprintf("tenant.%s.site.%s.p2p.discovery", clientID, siteID),
+		P2PEvents:           fmt.Sprintf("tenant.%s.p2p.events", clientID),
 	}, nil
 }
 

@@ -48,8 +48,15 @@ func (c *p2pCoordinator) refreshSinglePeer(ctx context.Context, peer p2pDiscover
 }
 
 // applyGossipResponse processa uma resposta de gossip (peers + artifacts) e atualiza o estado do coordinator.
+// Ignora peers com clientId divergente quando o clientId local está definido.
 func (c *p2pCoordinator) applyGossipResponse(sourceAgentID string, knownPeers []P2PPeerView, artifacts []P2PArtifactView, source string) {
+	localClientID := normalizeClientID(strings.TrimSpace(c.app.GetAgentConfiguration().ClientID))
 	for _, p := range knownPeers {
+		// Se o peer gossip trouxe clientId e ele diverge do local, ignora.
+		if localClientID != "" && strings.TrimSpace(p.ClientID) != "" &&
+			!strings.EqualFold(normalizeClientID(strings.TrimSpace(p.ClientID)), localClientID) {
+			continue
+		}
 		c.upsertPeer(p2pDiscoveredPeer{
 			AgentID:      strings.TrimSpace(p.AgentID),
 			Host:         strings.TrimSpace(p.Host),
