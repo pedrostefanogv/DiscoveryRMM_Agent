@@ -155,7 +155,7 @@ func (c *p2pCoordinator) downloadArtifactSwarm(ctx context.Context, artifactName
 	for i, pe := range peerEntries {
 		lp2pPeers[i] = libp2pPeer{agentID: pe.peerID, peerID: pe.libp2pID}
 	}
-	path, totalBytes, err := downloadChunkedLibp2p(ctx, h, lp2pPeers, manifest, artifactName, requesterID, destDir, sched)
+	path, totalBytes, err := downloadChunkedLibp2p(ctx, h, lp2pPeers, manifest, artifactName, requesterID, destDir, sched, c.dynamicMaxParallelChunks())
 	if err != nil {
 		c.appendAudit("swarm-pull", artifactName, "", "automation", false, err.Error())
 		return P2PArtifactView{}, err

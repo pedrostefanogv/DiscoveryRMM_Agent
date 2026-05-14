@@ -18,7 +18,8 @@ import (
 const (
 	defaultChunkSizeBytes = 8 * 1024 * 1024 // 8 MB
 	minChunkSizeBytes     = 1 * 1024 * 1024 // 1 MB
-	maxParallelChunks     = 4
+	minParallelChunks     = 2               // piso do paralelismo adaptativo
+	maxParallelChunks     = 4               // teto padrão (pode ser elevado dinamicamente até 8)
 )
 
 // libp2pPeer identifica um peer pelo agentID e pelo peer.ID do libp2p.
@@ -143,8 +144,9 @@ func buildChunkManifest(path, artifactID string, chunkSize int64) (P2PChunkManif
 }
 
 // downloadChunkedLibp2p downloads an artifact from multiple peers in parallel chunks
-// via libp2p streams. peers must contain at least one element.
-// Returns the final assembled file path and total bytes written.
+// via libp2p streams. maxParallel controla o teto de chunks simultâneos.
+// Goroutines que já adquiriram slot não são abortadas se o teto reduzir depois —
+// apenas novas goroutines esperam. Usa minParallelChunks como piso.
 func downloadChunkedLibp2p(
 	ctx context.Context,
 	h host.Host,
@@ -152,9 +154,13 @@ func downloadChunkedLibp2p(
 	manifest P2PChunkManifest,
 	artifactName, requesterID, destDir string,
 	sched *p2pChunkScheduler,
+	maxParallel int,
 ) (string, int64, error) {
 	if len(peers) == 0 {
 		return "", 0, fmt.Errorf("nenhum peer disponivel para download")
+	}
+	if maxParallel < minParallelChunks {
+		maxParallel = minParallelChunks
 	}
 
 	partsDir := filepath.Join(destDir, manifest.ArtifactName+".parts")
@@ -167,7 +173,7 @@ func downloadChunkedLibp2p(
 		err   error
 	}
 
-	sem := make(chan struct{}, maxParallelChunks)
+	sem := make(chan struct{}, maxParallel)
 	results := make(chan chunkResult, len(manifest.Chunks))
 	var wg sync.WaitGroup
 
@@ -175,6 +181,8 @@ func downloadChunkedLibp2p(
 		wg.Add(1)
 		go func(i int, chunk P2PChunk) {
 			defer wg.Done()
+			// Adquire slot — bloqueia se todos ocupados.
+			// Downloads em andamento continuam mesmo se o teto baixar depois.
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
