@@ -69,6 +69,9 @@ type p2pCoordinator struct {
 	autoProvisionedCount int64
 	autoProvisionedAudit []P2POnboardingAuditEvent
 	lastP2PDiscoverySeq  uint64
+
+	// fetchStates gerencia o estado de eleição de fetcher por artifact.
+	fetchStates *fetchStateMap
 }
 
 type p2pPeerState struct {
@@ -100,6 +103,7 @@ func newP2PCoordinator(app *App) *p2pCoordinator {
 		transferServer:   newP2PTransferServer(app),
 		replicationQueue: make(chan p2pReplicationJob, p2pReplicationQueueSize),
 		sha256Cache:      make(map[string]artifactSHA256CacheEntry),
+		fetchStates:      newFetchStateMap(),
 	}
 }
 
@@ -147,12 +151,16 @@ func (c *p2pCoordinator) Run(ctx context.Context) {
 	discoveryTicker := time.NewTicker(p2pCoordinatorDiscoveryTickSeconds * time.Second)
 	cleanupTicker := time.NewTicker(p2pCoordinatorCleanupTickHours * time.Hour)
 	gossipTicker := time.NewTicker(45 * time.Second)
+	fetchHeartbeatTicker := time.NewTicker(artifactFetchHeartbeatEvery)
+	electionTicker := time.NewTicker(60 * time.Second)
 	lanProbeWarmupTimer := time.NewTimer(p2pLANProbeWarmupDelay)
 	lanProbeTicker := time.NewTicker(p2pLANProbeInterval)
 	contentGCTicker := time.NewTicker(p2pCoordinatorCleanupTickHours * time.Hour)
 	defer discoveryTicker.Stop()
 	defer cleanupTicker.Stop()
 	defer gossipTicker.Stop()
+	defer fetchHeartbeatTicker.Stop()
+	defer electionTicker.Stop()
 	defer lanProbeWarmupTimer.Stop()
 	defer lanProbeTicker.Stop()
 	defer contentGCTicker.Stop()
@@ -172,6 +180,10 @@ func (c *p2pCoordinator) Run(ctx context.Context) {
 			_ = c.discoveryTick(time.Now())
 		case <-gossipTicker.C:
 			c.pullPeerGossip(ctx)
+		case <-fetchHeartbeatTicker.C:
+			c.publishFetchHeartbeats(ctx)
+		case <-electionTicker.C:
+			c.runPendingElections(ctx)
 		case <-cleanupTicker.C:
 			if _, err := c.app.cleanupExpiredP2PTempArtifacts(time.Now()); err != nil {
 				c.setLastError(err)

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -27,6 +28,7 @@ type agentHardwareEnvelope struct {
 	MACAddress             string                  `json:"macAddress"`
 	Hardware               agentHardwareInfo       `json:"hardware"`
 	Components             agentHardwareComponents `json:"components"`
+	MachineScore           int                     `json:"machineScore"`
 	InventoryRaw           json.RawMessage         `json:"inventoryRaw"`
 	InventorySchemaVersion string                  `json:"inventorySchemaVersion"`
 	InventoryCollectedAt   string                  `json:"inventoryCollectedAt"`
@@ -344,6 +346,35 @@ func buildAgentSoftwareEnvelope(report models.InventoryReport) agentSoftwareEnve
 	}
 }
 
+// computeMachineScore calcula um score de capacidade da máquina (sem limite superior) baseado em:
+// - CPU: núcleos físicos e threads lógicos (50% do score)
+// - RAM: total de memória em GB (50% do score)
+// Quanto mais recursos, maior o valor.
+// Referência: 16c/32t + 64 GB ≈ score 100 (não é teto, apenas referência).
+func computeMachineScore(report models.InventoryReport) int {
+	cores := report.Hardware.Cores
+	threads := report.Hardware.LogicalCores
+	ramGB := report.Hardware.MemoryGB
+
+	// CPU score: núcleos físicos valem 1.0, threads extras valem 0.3 cada
+	// Ex: 8c/16t => 8 + 8*0.3 = 10.4; referência: 16c/32t => 16 + 16*0.3 = 20.8
+	cpuRaw := float64(cores)
+	extraThreads := float64(threads - cores)
+	if extraThreads < 0 {
+		extraThreads = 0
+	}
+	cpuRaw += extraThreads * 0.3
+	// Normalizado contra baseline 16c/32t = 20.8, sem teto
+	cpuScore := cpuRaw / 20.8 * 100
+
+	// RAM score: linear, sem teto (64 GB = referência 100)
+	ramScore := ramGB / 64.0 * 100
+
+	// Score final: média ponderada 50% CPU + 50% RAM, mínimo 1
+	score := (cpuScore*0.5 + ramScore*0.5)
+	return int(math.Round(math.Max(score, 1)))
+}
+
 func buildAgentHardwareEnvelope(report models.InventoryReport, version string) agentHardwareEnvelope {
 	collected := strings.TrimSpace(report.CollectedAt)
 	if collected == "" {
@@ -376,7 +407,7 @@ func buildAgentHardwareEnvelope(report models.InventoryReport, version string) a
 			FileSystem:     trimToMaxLen(strings.TrimSpace(d.FileSystem), 50),
 			TotalSizeBytes: total,
 			FreeSpaceBytes: free,
-			MediaType:      trimToMaxLen(strings.TrimSpace(d.Type), 50),
+			MediaType:      trimToMaxLen(firstNonEmptyString(strings.TrimSpace(d.MediaType), strings.TrimSpace(d.Type)), 50),
 			CollectedAt:    collected,
 		})
 	}
@@ -474,6 +505,7 @@ func buildAgentHardwareEnvelope(report models.InventoryReport, version string) a
 		AgentVersion:    trimToMaxLen(strings.TrimSpace(version), 100),
 		LastIPAddress:   lastIP,
 		MACAddress:      primaryMAC,
+		MachineScore:    computeMachineScore(report),
 		Hardware: agentHardwareInfo{
 			InventoryRaw:            string(rawJSON),
 			InventorySchemaVersion:  "",

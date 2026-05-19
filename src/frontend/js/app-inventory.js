@@ -16,9 +16,10 @@ function renderFacts(target, data) {
 
 function renderVolumes(volumes) {
   renderCardList(volumeOutputEl, volumes, 'Nenhum volume encontrado.', function (d) {
+    var media = d.mediaType || d.type || '-';
     return '<div class="disk-card">' +
       '<strong>' + escapeHtml(d.device || '-') + (d.label ? ' - ' + escapeHtml(d.label) : '') + '</strong>' +
-      '<span class="meta">Tipo: ' + escapeHtml(d.type || '-') + ' | FS: ' + escapeHtml(d.fileSystem || '-') + '</span>' +
+      '<span class="meta">Tipo: ' + escapeHtml(d.type || '-') + ' | Midia: ' + escapeHtml(media) + ' | FS: ' + escapeHtml(d.fileSystem || '-') + '</span>' +
       '<span class="meta">Particao de boot: ' + (d.bootPartition ? 'sim' : 'nao') + '</span>' +
       '<span class="meta">Fabricante: ' + escapeHtml(d.manufacturer || '-') + '</span>' +
       '<span class="meta">Modelo: ' + escapeHtml(d.model || '-') + '</span>' +
@@ -36,9 +37,10 @@ function renderVolumes(volumes) {
 
 function renderPhysicalDisks(disks) {
   renderCardList(physicalDiskOutputEl, disks, 'Nenhum disco fisico encontrado.', function (d) {
+    var media = d.mediaType || d.type || '-';
     return '<div class="disk-card">' +
       '<strong>' + escapeHtml(d.device || '-') + (d.label ? ' - ' + escapeHtml(d.label) : '') + '</strong>' +
-      '<span class="meta">Tipo: ' + escapeHtml(d.type || '-') + '</span>' +
+      '<span class="meta">Tipo: ' + escapeHtml(d.type || '-') + ' | Midia: ' + escapeHtml(media) + '</span>' +
       '<span class="meta">Fabricante: ' + escapeHtml(d.manufacturer || '-') + '</span>' +
       '<span class="meta">Modelo: ' + escapeHtml(d.model || '-') + '</span>' +
       '<span class="meta">Serial: ' + escapeHtml(d.serial || '-') + '</span>' +

@@ -201,6 +201,7 @@ type DiskInfo struct {
 	Label         string  `json:"label"`
 	FileSystem    string  `json:"fileSystem"`
 	Type          string  `json:"type"`
+	MediaType     string  `json:"mediaType"`
 	SizeGB        float64 `json:"sizeGB"`
 	FreeGB        float64 `json:"freeGB"`
 	FreeKnown     bool    `json:"freeKnown"`

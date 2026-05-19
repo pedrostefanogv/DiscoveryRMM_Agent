@@ -406,6 +406,7 @@ export namespace models {
 	    label: string;
 	    fileSystem: string;
 	    type: string;
+	    mediaType: string;
 	    sizeGB: number;
 	    freeGB: number;
 	    freeKnown: boolean;
@@ -426,6 +427,7 @@ export namespace models {
 	        this.label = source["label"];
 	        this.fileSystem = source["fileSystem"];
 	        this.type = source["type"];
+	        this.mediaType = source["mediaType"];
 	        this.sizeGB = source["sizeGB"];
 	        this.freeGB = source["freeGB"];
 	        this.freeKnown = source["freeKnown"];

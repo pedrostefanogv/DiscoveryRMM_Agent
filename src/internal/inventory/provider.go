@@ -2,13 +2,18 @@ package inventory
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
+	"os/exec"
+	"runtime"
+	"strings"
 	"sync"
 	"time"
 
 	"discovery/internal/ctxutil"
 	"discovery/internal/models"
+	"discovery/internal/processutil"
 )
 
 // Provider orchestrates inventory collection using osquery.
@@ -346,6 +351,20 @@ func (p *Provider) collectWithOsquery(ctx context.Context) (models.InventoryRepo
 	report.Hardware.MemoryModulesCount = len(report.MemoryModules)
 	sanitizeHardwareFields(&report)
 
+	diskMediaTypes := collectPhysicalDiskMediaTypes()
+	for i := range report.Volumes {
+		dl := strings.ToUpper(strings.TrimSpace(report.Volumes[i].Device))
+		if mt, ok := diskMediaTypes[dl]; ok {
+			report.Volumes[i].MediaType = mt
+		}
+	}
+	for i := range report.PhysicalDisks {
+		dl := strings.ToUpper(strings.TrimSpace(report.PhysicalDisks[i].Device))
+		if mt, ok := diskMediaTypes[dl]; ok {
+			report.PhysicalDisks[i].MediaType = mt
+		}
+	}
+
 	report.Disks = report.Volumes
 	if len(report.Disks) == 0 {
 		report.Disks = report.PhysicalDisks
@@ -353,6 +372,69 @@ func (p *Provider) collectWithOsquery(ctx context.Context) (models.InventoryRepo
 	p.emitProgressHeartbeat()
 
 	return report, nil
+}
+
+// collectPhysicalDiskMediaTypes queries Get-PhysicalDisk via PowerShell to
+// determine whether each logical drive resides on an SSD or HDD. Returns a
+// map of drive letter (e.g. "C:") to media type ("SSD" / "HDD" / "UnSpecified").
+func collectPhysicalDiskMediaTypes() map[string]string {
+	if runtime.GOOS != "windows" {
+		return nil
+	}
+
+	script := `$ErrorActionPreference = 'Stop'
+Get-PhysicalDisk | ForEach-Object {
+    $disk = $_
+    Get-Disk -Number $_.DeviceId | Get-Partition |
+        Where-Object { $_.DriveLetter } |
+        ForEach-Object {
+            [PSCustomObject]@{
+                DriveLetter = $_.DriveLetter + ':'
+                MediaType   = $disk.MediaType
+            }
+        }
+} | ConvertTo-Json -Depth 2 -Compress`
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "powershell",
+		"-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
+		"-Command", script)
+	processutil.HideWindow(cmd)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		log.Printf("[inventory] falha ao consultar Get-PhysicalDisk: %v", err)
+		return nil
+	}
+
+	trimmed := strings.TrimSpace(string(output))
+	if trimmed == "" || trimmed == "null" {
+		return nil
+	}
+
+	type diskPartition struct {
+		DriveLetter string `json:"DriveLetter"`
+		MediaType   string `json:"MediaType"`
+	}
+
+	var partitions []diskPartition
+	if err := json.Unmarshal([]byte(trimmed), &partitions); err != nil {
+		log.Printf("[inventory] falha ao parsear saida do Get-PhysicalDisk: %v", err)
+		return nil
+	}
+
+	m := make(map[string]string, len(partitions))
+	for _, p := range partitions {
+		dl := strings.ToUpper(strings.TrimSpace(p.DriveLetter))
+		mt := strings.TrimSpace(p.MediaType)
+		if dl != "" && mt != "" {
+			m[dl] = mt
+		}
+	}
+
+	return m
 }
 
 // CollectSoftware collects only installed software.

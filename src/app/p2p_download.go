@@ -23,6 +23,14 @@ func (c *p2pCoordinator) DownloadArtifactFromPeer(ctx context.Context, artifactN
 		return P2PArtifactView{}, err
 	}
 
+	// Guarda de sobrecarga: recusar servir se o host estiver pesado.
+	load := c.collectHostLoad()
+	if !canServePartsNow(load) {
+		err := fmt.Errorf("host sobrecarregado, recusando download de artifact")
+		c.appendAudit("pull", artifactName, sourcePeerID, "libp2p", false, err.Error())
+		return P2PArtifactView{}, err
+	}
+
 	requesterID := strings.TrimSpace(c.app.GetDebugConfig().AgentID)
 	if requesterID == "" {
 		requesterID = "peer-local"
@@ -48,7 +56,8 @@ func (c *p2pCoordinator) DownloadArtifactFromPeer(ctx context.Context, artifactN
 		}
 		c.recordBytesDownloaded(size)
 		c.appendAudit("pull", artifactName, sourcePeerID, "libp2p", true, "artifact baixado via libp2p")
-		// Cachear manifest após download bem-sucedido.
+		// Pipeline pós-download: validar checksum + cachear manifest
+		go c.finalizeDownloadedArtifact(artifactName, path, access.ChecksumSHA256)
 		go c.updateManifestCacheAfterDownload(artifactName, path)
 		return c.buildArtifactView(artifactName, access.ArtifactID, path)
 	}
@@ -66,6 +75,13 @@ func (c *p2pCoordinator) downloadArtifactSwarm(ctx context.Context, artifactName
 	if artifactName == "" {
 		err := fmt.Errorf("artifact invalido")
 		c.appendAudit("swarm-pull", rawArtifactName, "", "automation", false, err.Error())
+		return P2PArtifactView{}, err
+	}
+
+	// Guarda de sobrecarga: recusar servir se o host estiver pesado.
+	if !canServePartsNow(c.collectHostLoad()) {
+		err := fmt.Errorf("host sobrecarregado, recusando swarm pull")
+		c.appendAudit("swarm-pull", artifactName, "", "automation", false, err.Error())
 		return P2PArtifactView{}, err
 	}
 
@@ -129,7 +145,8 @@ func (c *p2pCoordinator) downloadArtifactSwarm(ctx context.Context, artifactName
 		}
 		c.recordBytesDownloaded(size)
 		c.appendAudit("swarm-pull", artifactName, peerEntries[0].peerID, "automation", true, "download simples via libp2p")
-		// Cachear manifest após download simples.
+		// Pipeline pós-download: validar checksum + cachear manifest
+		go c.finalizeDownloadedArtifact(artifactName, path, accesses[0].ChecksumSHA256)
 		go c.updateManifestCacheAfterDownload(artifactName, path)
 		return c.buildArtifactView(artifactName, accesses[0].ArtifactID, path)
 	}
@@ -166,7 +183,8 @@ func (c *p2pCoordinator) downloadArtifactSwarm(ctx context.Context, artifactName
 		"automation", true, fmt.Sprintf("download em %d chunks de %d peers", manifest.TotalChunks, len(accesses)))
 
 	artifactID := CanonicalArtifactID(manifest.ArtifactID, artifactName, "")
-	// Cachear manifest após download chunked bem-sucedido.
+	// Pipeline pós-download: validar checksum + cachear manifest
+	go c.finalizeDownloadedArtifact(artifactName, path, manifest.SHA256)
 	go c.updateManifestCacheAfterDownload(artifactName, path)
 	return c.buildArtifactView(artifactName, artifactID, path)
 }
