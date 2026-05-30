@@ -701,11 +701,11 @@ Function DownloadAndRunStage2
 
    DetailPrint "Baixando instalador completo de segunda etapa..."
 
-   # Download HTTPS nativo via BITSAdmin (built-in do Windows, sem dependencia externa).
+   # Download HTTPS nativo via BITSAdmin com janela OCULTA (nsExec::ExecToLog).
    # BITS e um servico de transferencia assincrona do Windows que suporta HTTPS,
    # retoma downloads interrompidos e nao requer plugins NSIS adicionais.
-   # Uso do cmd /c para suprimir janela de console.
-   ExecWait '"$SYSDIR\cmd.exe" /c bitsadmin /transfer "DiscoveryStage2" /download /priority normal "$PayloadUrl" "$R7"' $R0
+   nsExec::ExecToLog '"$SYSDIR\cmd.exe" /c bitsadmin /transfer "DiscoveryStage2" /download /priority normal "$PayloadUrl" "$R7"'
+   Pop $R0
 
    ${If} $R0 != 0
       MessageBox MB_ICONSTOP "Falha ao baixar instalador completo (codigo: $R0). Verifique a conectividade com o servidor."
