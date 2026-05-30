@@ -2,6 +2,7 @@ package inventory
 
 import (
 	"context"
+	"errors"
 	"runtime"
 	"testing"
 	"time"
@@ -177,6 +178,92 @@ func TestApplyHeartbeatDiskIOFallback_NoDerivationWhenCollectorFails(t *testing.
 	}
 	if metrics.DiskResponseMs != -1 {
 		t.Fatalf("DiskResponseMs alterado indevidamente: got %v want -1", metrics.DiskResponseMs)
+	}
+}
+
+func TestApplyHeartbeatMemoryFallback_UsesCollectorWhenMissing(t *testing.T) {
+	previousCollector := collectHeartbeatMemoryMetricsFunc
+	collectHeartbeatMemoryMetricsFunc = func(context.Context) (float64, float64, float64, bool) {
+		return 16.0, 6.5, 40.6, true
+	}
+	defer func() {
+		collectHeartbeatMemoryMetricsFunc = previousCollector
+	}()
+
+	metrics := &agentconn.AgentHeartbeatMetrics{MemoryPercent: -1, MemoryTotalGb: 0, MemoryUsedGb: 0}
+	applyHeartbeatMemoryFallback(context.Background(), metrics)
+
+	if metrics.MemoryTotalGb != 16.0 {
+		t.Fatalf("MemoryTotalGb = %v, want 16.0", metrics.MemoryTotalGb)
+	}
+	if metrics.MemoryUsedGb != 6.5 {
+		t.Fatalf("MemoryUsedGb = %v, want 6.5", metrics.MemoryUsedGb)
+	}
+	if metrics.MemoryPercent != 40.6 {
+		t.Fatalf("MemoryPercent = %v, want 40.6", metrics.MemoryPercent)
+	}
+}
+
+func TestApplyHeartbeatMemoryFallback_DerivesPercentWithoutCollector(t *testing.T) {
+	called := false
+	previousCollector := collectHeartbeatMemoryMetricsFunc
+	collectHeartbeatMemoryMetricsFunc = func(context.Context) (float64, float64, float64, bool) {
+		called = true
+		return 99.0, 88.0, 77.0, true
+	}
+	defer func() {
+		collectHeartbeatMemoryMetricsFunc = previousCollector
+	}()
+
+	metrics := &agentconn.AgentHeartbeatMetrics{MemoryPercent: -1, MemoryTotalGb: 32.0, MemoryUsedGb: 8.0}
+	applyHeartbeatMemoryFallback(context.Background(), metrics)
+
+	if called {
+		t.Fatalf("collector nao deveria ser chamado quando total/usado ja permitem derivar percentual")
+	}
+	if metrics.MemoryPercent != 25.0 {
+		t.Fatalf("MemoryPercent = %v, want 25.0", metrics.MemoryPercent)
+	}
+}
+
+func TestCollectHeartbeatMetrics_ReturnsMemoryFallbackWithoutOsquery(t *testing.T) {
+	previousFind := findOsqueryBinaryFunc
+	previousMemoryCollector := collectHeartbeatMemoryMetricsFunc
+	previousCPUCollector := collectWindowsCPUPercentFunc
+	previousDiskCollector := collectWindowsDiskIOMetricsFunc
+
+	findOsqueryBinaryFunc = func() (string, error) {
+		return "", errors.New("osquery indisponivel")
+	}
+	collectHeartbeatMemoryMetricsFunc = func(context.Context) (float64, float64, float64, bool) {
+		return 24.0, 10.0, 41.7, true
+	}
+	collectWindowsCPUPercentFunc = func(context.Context) (float64, bool) {
+		return -1, false
+	}
+	collectWindowsDiskIOMetricsFunc = func(context.Context) (float64, float64, float64, float64, bool) {
+		return -1, -1, -1, -1, false
+	}
+
+	defer func() {
+		findOsqueryBinaryFunc = previousFind
+		collectHeartbeatMemoryMetricsFunc = previousMemoryCollector
+		collectWindowsCPUPercentFunc = previousCPUCollector
+		collectWindowsDiskIOMetricsFunc = previousDiskCollector
+	}()
+
+	metrics := CollectHeartbeatMetrics(context.Background())
+	if metrics == nil {
+		t.Fatalf("CollectHeartbeatMetrics retornou nil mesmo com fallback de memoria disponivel")
+	}
+	if metrics.MemoryTotalGb != 24.0 {
+		t.Fatalf("MemoryTotalGb = %v, want 24.0", metrics.MemoryTotalGb)
+	}
+	if metrics.MemoryUsedGb != 10.0 {
+		t.Fatalf("MemoryUsedGb = %v, want 10.0", metrics.MemoryUsedGb)
+	}
+	if metrics.MemoryPercent != 41.7 {
+		t.Fatalf("MemoryPercent = %v, want 41.7", metrics.MemoryPercent)
 	}
 }
 

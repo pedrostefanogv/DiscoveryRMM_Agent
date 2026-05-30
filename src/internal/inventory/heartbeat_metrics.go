@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
@@ -75,52 +76,87 @@ LIMIT 1
 // Quando cpu_percent vier ausente/invalidado no osquery, aplica fallback
 // local via PowerShell/WMI para evitar omissao de CPU no heartbeat.
 func CollectHeartbeatMetrics(ctx context.Context) *agentconn.AgentHeartbeatMetrics {
-	bin, err := FindOsqueryBinary()
-	if err != nil {
-		return nil
+	metrics := &agentconn.AgentHeartbeatMetrics{
+		CpuPercent:       -1,
+		MemoryPercent:    -1,
+		DiskPercent:      -1,
+		DiskReadPercent:  -1,
+		DiskWritePercent: -1,
+		DiskResponseMs:   -1,
 	}
 
-	runCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
+	osqueryCollected := false
+	if bin, err := findOsqueryBinaryFunc(); err == nil {
+		runCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
 
-	queries := []osqueryQuery{
-		{name: "heartbeat_metrics", sql: heartbeatMetricsSQL, required: true},
-	}
+		queries := []osqueryQuery{
+			{name: "heartbeat_metrics", sql: heartbeatMetricsSQL, required: true},
+		}
 
-	var results map[string]osqueryResult
+		var results map[string]osqueryResult
 
-	// 1. Tentar socket osqueryd (daemon rodando)
-	if socketPath := findOsquerydSocket(); socketPath != "" {
-		results = runQueriesViaSocket(runCtx, socketPath, queries, nil)
-		if results != nil {
-			if r, ok := results["heartbeat_metrics"]; ok && r.err == nil && len(r.rows) > 0 {
-				if m := mapHeartbeatRow(r.rows[0]); m != nil {
-					applyHeartbeatCPUFallback(runCtx, m)
-					applyHeartbeatDiskIOFallback(runCtx, m)
-					return m
+		// 1. Tentar socket osqueryd (daemon rodando)
+		if socketPath := findOsquerydSocket(); socketPath != "" {
+			results = runQueriesViaSocket(runCtx, socketPath, queries, nil)
+			if results != nil {
+				if r, ok := results["heartbeat_metrics"]; ok && r.err == nil && len(r.rows) > 0 {
+					if m := mapHeartbeatRow(r.rows[0]); m != nil {
+						*metrics = *m
+						osqueryCollected = true
+					}
+				}
+			}
+		}
+
+		// 2. Fallback: osqueryi transient socket
+		if !osqueryCollected {
+			proc, startErr := startOsqueryiSocket(runCtx, bin)
+			if startErr == nil {
+				defer proc.stop()
+
+				results = runQueriesViaSocket(runCtx, proc.socketPath, queries, nil)
+				if results != nil {
+					if r, ok := results["heartbeat_metrics"]; ok && r.err == nil && len(r.rows) > 0 {
+						if m := mapHeartbeatRow(r.rows[0]); m != nil {
+							*metrics = *m
+							osqueryCollected = true
+						}
+					}
 				}
 			}
 		}
 	}
 
-	// 2. Fallback: osqueryi transient socket
-	proc, err := startOsqueryiSocket(runCtx, bin)
-	if err != nil {
+	applyHeartbeatCPUFallback(ctx, metrics)
+	applyHeartbeatDiskIOFallback(ctx, metrics)
+	applyHeartbeatMemoryFallback(ctx, metrics)
+
+	if !osqueryCollected && !hasAnyHeartbeatMetric(metrics) {
 		return nil
 	}
-	defer proc.stop()
 
-	results = runQueriesViaSocket(runCtx, proc.socketPath, queries, nil)
-	if results != nil {
-		if r, ok := results["heartbeat_metrics"]; ok && r.err == nil && len(r.rows) > 0 {
-			m := mapHeartbeatRow(r.rows[0])
-			applyHeartbeatCPUFallback(runCtx, m)
-			applyHeartbeatDiskIOFallback(runCtx, m)
-			return m
-		}
+	return metrics
+}
+
+func hasAnyHeartbeatMetric(metrics *agentconn.AgentHeartbeatMetrics) bool {
+	if metrics == nil {
+		return false
 	}
 
-	return nil
+	return strings.TrimSpace(metrics.Hostname) != "" ||
+		metrics.CpuPercent >= 0 ||
+		metrics.MemoryPercent >= 0 ||
+		metrics.MemoryTotalGb > 0 ||
+		metrics.MemoryUsedGb > 0 ||
+		metrics.DiskPercent >= 0 ||
+		metrics.DiskTotalGb > 0 ||
+		metrics.DiskUsedGb > 0 ||
+		metrics.DiskReadPercent >= 0 ||
+		metrics.DiskWritePercent >= 0 ||
+		metrics.DiskResponseMs >= 0 ||
+		metrics.UptimeSeconds > 0 ||
+		metrics.ProcessCount > 0
 }
 
 // mapHeartbeatRow converte uma linha raw do osquery em AgentHeartbeatMetrics.
@@ -179,6 +215,8 @@ func parseHeartbeatFloat(row map[string]any, key string, def float64) float64 {
 
 var collectWindowsCPUPercentFunc = CollectWindowsCPUPercent
 var collectWindowsDiskIOMetricsFunc = CollectWindowsDiskIOMetrics
+var collectHeartbeatMemoryMetricsFunc = collectHeartbeatMemoryMetrics
+var findOsqueryBinaryFunc = FindOsqueryBinary
 
 func applyHeartbeatCPUFallback(ctx context.Context, metrics *agentconn.AgentHeartbeatMetrics) {
 	if metrics == nil || metrics.CpuPercent >= 0 {
@@ -244,6 +282,206 @@ func applyHeartbeatDiskIOFallback(ctx context.Context, metrics *agentconn.AgentH
 	} else {
 		metrics.DiskResponseMs = -1
 	}
+}
+
+func applyHeartbeatMemoryFallback(ctx context.Context, metrics *agentconn.AgentHeartbeatMetrics) {
+	if metrics == nil {
+		return
+	}
+
+	if metrics.MemoryPercent < 0 && metrics.MemoryTotalGb > 0 && metrics.MemoryUsedGb >= 0 {
+		metrics.MemoryPercent = normalizeHeartbeatPercent((metrics.MemoryUsedGb * 100.0) / metrics.MemoryTotalGb)
+	}
+
+	memoryMissing := metrics.MemoryPercent < 0 || metrics.MemoryTotalGb <= 0 || metrics.MemoryUsedGb <= 0
+	if memoryMissing {
+		if totalGB, usedGB, percent, ok := collectHeartbeatMemoryMetricsFunc(ctx); ok {
+			if metrics.MemoryTotalGb <= 0 {
+				metrics.MemoryTotalGb = totalGB
+			}
+			if metrics.MemoryUsedGb <= 0 {
+				metrics.MemoryUsedGb = usedGB
+			}
+			if metrics.MemoryPercent < 0 {
+				metrics.MemoryPercent = percent
+			}
+		}
+	}
+
+	if metrics.MemoryTotalGb > 0 {
+		metrics.MemoryTotalGb = normalizeHeartbeatGigabytes(metrics.MemoryTotalGb)
+	} else {
+		metrics.MemoryTotalGb = 0
+	}
+
+	if metrics.MemoryUsedGb > 0 {
+		metrics.MemoryUsedGb = normalizeHeartbeatGigabytes(metrics.MemoryUsedGb)
+	} else if metrics.MemoryUsedGb < 0 {
+		metrics.MemoryUsedGb = 0
+	}
+
+	if metrics.MemoryTotalGb > 0 && metrics.MemoryUsedGb > metrics.MemoryTotalGb {
+		metrics.MemoryUsedGb = metrics.MemoryTotalGb
+	}
+
+	if metrics.MemoryPercent < 0 && metrics.MemoryTotalGb > 0 && metrics.MemoryUsedGb >= 0 {
+		metrics.MemoryPercent = normalizeHeartbeatPercent((metrics.MemoryUsedGb * 100.0) / metrics.MemoryTotalGb)
+	}
+	if metrics.MemoryPercent >= 0 {
+		metrics.MemoryPercent = normalizeHeartbeatPercent(metrics.MemoryPercent)
+	} else {
+		metrics.MemoryPercent = -1
+	}
+}
+
+func normalizeHeartbeatGigabytes(value float64) float64 {
+	if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
+		return 0
+	}
+	return math.Round(value*100) / 100
+}
+
+func collectHeartbeatMemoryMetrics(ctx context.Context) (float64, float64, float64, bool) {
+	switch runtime.GOOS {
+	case "windows":
+		return CollectWindowsMemoryMetrics(ctx)
+	case "linux":
+		return CollectLinuxMemoryMetrics()
+	default:
+		return -1, -1, -1, false
+	}
+}
+
+// CollectWindowsMemoryMetrics coleta memoria total/usada (%) via Win32_OperatingSystem.
+// Retorna (totalGb, usedGb, percent, true) quando os valores sao validos.
+func CollectWindowsMemoryMetrics(ctx context.Context) (float64, float64, float64, bool) {
+	if runtime.GOOS != "windows" {
+		return -1, -1, -1, false
+	}
+
+	runCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	script := `$ErrorActionPreference = 'Stop'
+$os = Get-CimInstance Win32_OperatingSystem | Select-Object -First 1
+if ($null -eq $os -or [double]$os.TotalVisibleMemorySize -le 0) {
+	''
+} else {
+	$totalKb = [double]$os.TotalVisibleMemorySize
+	$freeKb = [double]$os.FreePhysicalMemory
+	$usedKb = [math]::Max($totalKb - $freeKb, 0)
+	$totalGb = [math]::Round($totalKb / 1048576.0, 2)
+	$usedGb = [math]::Round($usedKb / 1048576.0, 2)
+	$percent = [math]::Round(($usedKb * 100.0) / $totalKb, 1)
+	$ci = [System.Globalization.CultureInfo]::InvariantCulture
+	"$($totalGb.ToString($ci)),$($usedGb.ToString($ci)),$($percent.ToString($ci))"
+}`
+
+	cmd := exec.CommandContext(runCtx, "powershell",
+		"-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
+		"-Command", script)
+	processutil.HideWindow(cmd)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return -1, -1, -1, false
+	}
+
+	raw := strings.TrimSpace(string(output))
+	if raw == "" || strings.EqualFold(raw, "null") {
+		return -1, -1, -1, false
+	}
+
+	parts := strings.Split(raw, ",")
+	if len(parts) != 3 {
+		return -1, -1, -1, false
+	}
+
+	totalGB, err := strconv.ParseFloat(strings.TrimSpace(parts[0]), 64)
+	if err != nil || math.IsNaN(totalGB) || math.IsInf(totalGB, 0) || totalGB <= 0 {
+		return -1, -1, -1, false
+	}
+
+	usedGB, err := strconv.ParseFloat(strings.TrimSpace(parts[1]), 64)
+	if err != nil || math.IsNaN(usedGB) || math.IsInf(usedGB, 0) || usedGB < 0 {
+		return -1, -1, -1, false
+	}
+
+	percent, err := strconv.ParseFloat(strings.TrimSpace(parts[2]), 64)
+	if err != nil || math.IsNaN(percent) || math.IsInf(percent, 0) || percent < 0 {
+		return -1, -1, -1, false
+	}
+
+	if usedGB > totalGB {
+		usedGB = totalGB
+	}
+
+	return normalizeHeartbeatGigabytes(totalGB), normalizeHeartbeatGigabytes(usedGB), normalizeHeartbeatPercent(percent), true
+}
+
+// CollectLinuxMemoryMetrics coleta memoria total/usada (%) a partir de /proc/meminfo.
+// Retorna (totalGb, usedGb, percent, true) quando os valores sao validos.
+func CollectLinuxMemoryMetrics() (float64, float64, float64, bool) {
+	if runtime.GOOS != "linux" {
+		return -1, -1, -1, false
+	}
+
+	raw, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return -1, -1, -1, false
+	}
+
+	var totalKB float64
+	var availableKB float64
+	var freeKB float64
+	var buffersKB float64
+	var cachedKB float64
+
+	for _, line := range strings.Split(string(raw), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+
+		value, parseErr := strconv.ParseFloat(strings.TrimSpace(fields[1]), 64)
+		if parseErr != nil || math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
+			continue
+		}
+
+		switch strings.TrimSuffix(strings.TrimSpace(fields[0]), ":") {
+		case "MemTotal":
+			totalKB = value
+		case "MemAvailable":
+			availableKB = value
+		case "MemFree":
+			freeKB = value
+		case "Buffers":
+			buffersKB = value
+		case "Cached":
+			cachedKB = value
+		}
+	}
+
+	if totalKB <= 0 {
+		return -1, -1, -1, false
+	}
+
+	if availableKB <= 0 {
+		availableKB = freeKB + buffersKB + cachedKB
+	}
+	if availableKB < 0 {
+		availableKB = 0
+	}
+	if availableKB > totalKB {
+		availableKB = totalKB
+	}
+
+	usedKB := totalKB - availableKB
+	totalGB := normalizeHeartbeatGigabytes(totalKB / 1048576.0)
+	usedGB := normalizeHeartbeatGigabytes(usedKB / 1048576.0)
+	percent := normalizeHeartbeatPercent((usedKB * 100.0) / totalKB)
+
+	return totalGB, usedGB, percent, true
 }
 
 func normalizeHeartbeatPercent(value float64) float64 {

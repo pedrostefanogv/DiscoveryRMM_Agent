@@ -1,4 +1,4 @@
-﻿package app
+package app
 
 import (
 	"context"
@@ -457,17 +457,15 @@ func (a *App) getHeartbeatMetrics() agentconn.AgentHeartbeatMetrics {
 		P2pPeers:         a.getKnownP2PPeers(),
 	}
 
-	if runtime.GOOS == "windows" {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if m := inventory.CollectHeartbeatMetrics(ctx); m != nil {
-			metrics = *m
-			metrics.P2pPeers = a.getKnownP2PPeers()
-		}
-		if metrics.CpuPercent < 0 {
-			if cpuPercent, ok := inventory.CollectWindowsCPUPercent(ctx); ok {
-				metrics.CpuPercent = cpuPercent
-			}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if m := inventory.CollectHeartbeatMetrics(ctx); m != nil {
+		mergeHeartbeatMetrics(&metrics, m)
+		metrics.P2pPeers = a.getKnownP2PPeers()
+	}
+	if runtime.GOOS == "windows" && metrics.CpuPercent < 0 {
+		if cpuPercent, ok := inventory.CollectWindowsCPUPercent(ctx); ok {
+			metrics.CpuPercent = cpuPercent
 		}
 	}
 
@@ -477,6 +475,61 @@ func (a *App) getHeartbeatMetrics() agentconn.AgentHeartbeatMetrics {
 	}
 
 	return metrics
+}
+
+func mergeHeartbeatMetrics(dst *agentconn.AgentHeartbeatMetrics, src *agentconn.AgentHeartbeatMetrics) {
+	if dst == nil || src == nil {
+		return
+	}
+
+	if host := strings.TrimSpace(src.Hostname); host != "" {
+		dst.Hostname = host
+	}
+	if src.CpuPercent >= 0 {
+		dst.CpuPercent = src.CpuPercent
+	}
+	if src.MemoryPercent >= 0 {
+		dst.MemoryPercent = src.MemoryPercent
+	}
+	if src.MemoryTotalGb > 0 {
+		dst.MemoryTotalGb = src.MemoryTotalGb
+	}
+	if src.MemoryUsedGb > 0 {
+		dst.MemoryUsedGb = src.MemoryUsedGb
+	}
+	if src.DiskPercent >= 0 {
+		dst.DiskPercent = src.DiskPercent
+	}
+	if src.DiskTotalGb > 0 {
+		dst.DiskTotalGb = src.DiskTotalGb
+	}
+	if src.DiskUsedGb > 0 {
+		dst.DiskUsedGb = src.DiskUsedGb
+	}
+	if src.DiskReadPercent >= 0 {
+		dst.DiskReadPercent = src.DiskReadPercent
+	}
+	if src.DiskWritePercent >= 0 {
+		dst.DiskWritePercent = src.DiskWritePercent
+	}
+	if src.DiskResponseMs >= 0 {
+		dst.DiskResponseMs = src.DiskResponseMs
+	}
+	if src.UptimeSeconds > 0 {
+		dst.UptimeSeconds = src.UptimeSeconds
+	}
+	if src.ProcessCount > 0 {
+		dst.ProcessCount = src.ProcessCount
+	}
+	if src.PeerID != "" {
+		dst.PeerID = src.PeerID
+	}
+	if len(src.Addrs) > 0 {
+		dst.Addrs = append([]string(nil), src.Addrs...)
+	}
+	if src.Port > 0 {
+		dst.Port = src.Port
+	}
 }
 
 func (a *App) getKnownP2PPeers() int {
