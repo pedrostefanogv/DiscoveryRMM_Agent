@@ -714,22 +714,16 @@ Function DownloadAndRunStage2
 
    ${If} $PayloadSha256 != ""
       DetailPrint "Validando integridade SHA256 do payload..."
-      StrCpy $R9 "$TEMP\discovery_stage2_verify.ps1"
-      FileOpen $R8 "$R9" w
-      FileWrite $R8 "param([string]$$Path,[string]$$Expected)$\r$\n"
-      FileWrite $R8 "$$ErrorActionPreference = 'Stop'$\r$\n"
-      FileWrite $R8 "$$actual = (Get-FileHash -Algorithm SHA256 -Path $$Path).Hash.ToLowerInvariant()$\r$\n"
-      FileWrite $R8 "$$expectedNorm = $$Expected.ToLowerInvariant()$\r$\n"
-      FileWrite $R8 "if ($$actual -ne $$expectedNorm) { Write-Output ('sha256 mismatch: ' + $$actual); exit 2 }$\r$\n"
-      FileClose $R8
 
-      # nsExec::ExecToLog: executa PowerShell com janela OCULTA, saida no log do instalador.
-      nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$R9" -Path "$R7" -Expected "$PayloadSha256"'
+      # CertUtil (built-in Windows) + findstr: validacao nativa de hash, sem PowerShell,
+      # sem arquivos temporarios, janela oculta via nsExec::ExecToLog.
+      # CertUtil gera saida multi-linha (cabecalho + hash); findstr /i faz match
+      # case-insensitive do hash esperado em qualquer linha.
+      nsExec::ExecToLog '"$SYSDIR\cmd.exe" /c certutil -hashfile "$R7" SHA256 | findstr /i /c:"$PayloadSha256"'
       Pop $R0
-      Delete "$R9"
 
       ${If} $R0 != 0
-         MessageBox MB_ICONSTOP "Falha na validacao de integridade do payload (codigo: $R0)."
+         MessageBox MB_ICONSTOP "Falha na validacao de integridade do payload (hash mismatch)."
          Abort
       ${EndIf}
    ${EndIf}
