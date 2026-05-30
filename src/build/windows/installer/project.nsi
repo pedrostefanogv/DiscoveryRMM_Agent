@@ -593,85 +593,70 @@ Function SaveAgentConfig
 
    StrCpy $R1 "$R0\Discovery\config.json"
    StrCpy $R2 "$INSTDIR\config.json"
-   StrCpy $R3 "$TEMP\discovery_merge_config.ps1"
    DetailPrint "Mesclando configuracao em $R1"
 
+   # nsJSON (plugin nativo NSIS): merge JSON sem PowerShell, sem arquivos temporarios.
+   # Fluxo: carrega config existente (ou inicia vazio), aplica valores, serializa.
+   # Fallback para $INSTDIR se ProgramData falhar (ex.: maquina sem disco C: padrao).
+
+   # Tenta carregar config existente; ignora erro se arquivo nao existe (primeira instalacao).
    ClearErrors
-   FileOpen $0 "$R3" w
+   nsJSON::Set /file "$R1"
    ${If} ${Errors}
-      MessageBox MB_ICONSTOP "Falha ao criar script temporario para gravar a configuracao do agente."
-      Abort
+      ClearErrors
    ${EndIf}
 
-   FileWrite $0 "param([string]$$ConfigPath,[string]$$FallbackPath,[string]$$ServerUrl,[string]$$ServerKey,[string]$$AutoProvisioning,[string]$$GenericMode,[string]$$AllowInsecureTls)$\r$\n"
-   FileWrite $0 "$$ErrorActionPreference = 'Stop'$\r$\n"
-   FileWrite $0 "function Convert-ToHashtable([object]$$Value) {$\r$\n"
-   FileWrite $0 "  if ($$null -eq $$Value) { return $$null }$\r$\n"
-   FileWrite $0 "  if ($$Value -is [System.Collections.IDictionary]) {$\r$\n"
-   FileWrite $0 "    $$result = [ordered]@{}$\r$\n"
-   FileWrite $0 "    foreach ($$key in $$Value.Keys) { $$result[$$key] = Convert-ToHashtable $$Value[$$key] }$\r$\n"
-   FileWrite $0 "    return $$result$\r$\n"
-   FileWrite $0 "  }$\r$\n"
-   FileWrite $0 "  if ($$Value -is [System.Management.Automation.PSCustomObject]) {$\r$\n"
-   FileWrite $0 "    $$result = [ordered]@{}$\r$\n"
-   FileWrite $0 "    foreach ($$prop in $$Value.PSObject.Properties) { $$result[$$prop.Name] = Convert-ToHashtable $$prop.Value }$\r$\n"
-   FileWrite $0 "    return $$result$\r$\n"
-   FileWrite $0 "  }$\r$\n"
-   FileWrite $0 "  if ($$Value -is [System.Collections.IEnumerable] -and -not ($$Value -is [string])) {$\r$\n"
-   FileWrite $0 "    $$items = @()$\r$\n"
-   FileWrite $0 "    foreach ($$item in $$Value) { $$items += ,(Convert-ToHashtable $$item) }$\r$\n"
-   FileWrite $0 "    return $$items$\r$\n"
-   FileWrite $0 "  }$\r$\n"
-   FileWrite $0 "  return $$Value$\r$\n"
-   FileWrite $0 "}$\r$\n"
-   FileWrite $0 "$$config = [ordered]@{}$\r$\n"
-   FileWrite $0 "if (Test-Path $$ConfigPath) {$\r$\n"
-   FileWrite $0 "  $$raw = Get-Content -Raw -Path $$ConfigPath$\r$\n"
-   FileWrite $0 "  if (-not [string]::IsNullOrWhiteSpace($$raw)) { $$config = Convert-ToHashtable (ConvertFrom-Json -InputObject $$raw) }$\r$\n"
-   FileWrite $0 "}$\r$\n"
-   FileWrite $0 "if ($$null -eq $$config) { $$config = [ordered]@{} }$\r$\n"
-   FileWrite $0 "$$enabled = $$true$\r$\n"
-   FileWrite $0 "if ($$GenericMode -ne '1') {$\r$\n"
-   FileWrite $0 "  if (-not [string]::IsNullOrWhiteSpace($$ServerUrl)) { $$config['serverUrl'] = $$ServerUrl }$\r$\n"
-   FileWrite $0 "  if (-not [string]::IsNullOrWhiteSpace($$ServerKey)) { $$config['deployToken'] = $$ServerKey }$\r$\n"
-   FileWrite $0 "  $$enabled = ($$AutoProvisioning -eq '1')$\r$\n"
-   FileWrite $0 "}$\r$\n"
-   FileWrite $0 "$$config['autoProvisioning'] = $$enabled$\r$\n"
-   FileWrite $0 "if ($$config.Contains('discoveryEnabled')) { $$config.Remove('discoveryEnabled') }$\r$\n"
-   FileWrite $0 "if ($$AllowInsecureTls -eq '1') { $$config['allowInsecureTls'] = $$true }$\r$\n"
-   FileWrite $0 "$$p2p = [ordered]@{}$\r$\n"
-   FileWrite $0 "if ($$config.Contains('p2p') -and $$null -ne $$config['p2p']) {$\r$\n"
-   FileWrite $0 "  $$existingP2P = Convert-ToHashtable $$config['p2p']$\r$\n"
-   FileWrite $0 "  if ($$existingP2P -is [System.Collections.IDictionary]) { $$p2p = $$existingP2P }$\r$\n"
-   FileWrite $0 "}$\r$\n"
-   FileWrite $0 "$$p2p['enabled'] = $$enabled$\r$\n"
-   FileWrite $0 "$$config['p2p'] = $$p2p$\r$\n"
-   FileWrite $0 "$$targetPath = $$ConfigPath$\r$\n"
-   FileWrite $0 "try {$\r$\n"
-   FileWrite $0 "  New-Item -ItemType Directory -Path (Split-Path -Parent $$targetPath) -Force | Out-Null$\r$\n"
-   FileWrite $0 "  $$json = $$config | ConvertTo-Json -Depth 10$\r$\n"
-   FileWrite $0 "  $$utf8 = New-Object System.Text.UTF8Encoding($$false)$\r$\n"
-   FileWrite $0 "  [System.IO.File]::WriteAllText($$targetPath, $$json, $$utf8)$\r$\n"
-   FileWrite $0 "} catch {$\r$\n"
-   FileWrite $0 "  $$targetPath = $$FallbackPath$\r$\n"
-   FileWrite $0 "  New-Item -ItemType Directory -Path (Split-Path -Parent $$targetPath) -Force | Out-Null$\r$\n"
-   FileWrite $0 "  $$json = $$config | ConvertTo-Json -Depth 10$\r$\n"
-   FileWrite $0 "  $$utf8 = New-Object System.Text.UTF8Encoding($$false)$\r$\n"
-   FileWrite $0 "  [System.IO.File]::WriteAllText($$targetPath, $$json, $$utf8)$\r$\n"
-   FileWrite $0 "}$\r$\n"
-   FileWrite $0 "Remove-Item (Join-Path (Split-Path -Parent $$ConfigPath) 'installer.json') -Force -ErrorAction SilentlyContinue$\r$\n"
-   FileWrite $0 "if (-not [string]::IsNullOrWhiteSpace($$FallbackPath)) { Remove-Item (Join-Path (Split-Path -Parent $$FallbackPath) 'installer.json') -Force -ErrorAction SilentlyContinue }$\r$\n"
-   FileClose $0
-
-   # Executar script PowerShell com janela oculta via nsExec (plugin nativo NSIS).
-   # nsExec::ExecToLog captura saida no log do instalador sem abrir console.
-   nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$R3" -ConfigPath "$R1" -FallbackPath "$R2" -ServerUrl "$ServerUrl" -ServerKey "$ServerKey" -AutoProvisioning "$AutoProvisioning" -GenericMode "$GenericMode" -AllowInsecureTls "$AllowInsecureTls"'
-   Pop $R9
-   Delete "$R3"
-   ${If} $R9 != 0
-      MessageBox MB_ICONSTOP "Falha ao gravar a configuracao do agente (codigo: $R9). Verifique permissoes em $R0\Discovery e $INSTDIR."
-      Abort
+   # Aplica valores — nsJSON cria o caminho de nos automaticamente se nao existir.
+   ${If} $GenericMode != "1"
+      ${If} $ServerUrl != ""
+         nsJSON::Set "serverUrl" /value "$ServerUrl"
+      ${EndIf}
+      ${If} $ServerKey != ""
+         nsJSON::Set "deployToken" /value "$ServerKey"
+      ${EndIf}
    ${EndIf}
+
+   ${If} $AutoProvisioning == "1"
+      nsJSON::Set "autoProvisioning" /value "true"
+   ${Else}
+      nsJSON::Set "autoProvisioning" /value "false"
+   ${EndIf}
+
+   # Remove chave legada discoveryEnabled se existir
+   ClearErrors
+   nsJSON::Get /exists "discoveryEnabled" /end
+   Pop $R8
+   ${If} $R8 == "yes"
+      nsJSON::Delete "discoveryEnabled" /end
+   ${EndIf}
+
+   ${If} $AllowInsecureTls == "1"
+      nsJSON::Set "allowInsecureTls" /value "true"
+   ${EndIf}
+
+   # Configura p2p.enabled (preserva outras chaves existentes em p2p se houver)
+   ${If} $AutoProvisioning == "1"
+      nsJSON::Set "p2p" "enabled" /value "true"
+   ${Else}
+      nsJSON::Set "p2p" "enabled" /value "false"
+   ${EndIf}
+
+   # Serializa e grava em ProgramData; fallback para $INSTDIR em caso de erro.
+   ClearErrors
+   nsJSON::Serialize /format /file "$R1"
+   ${If} ${Errors}
+      ClearErrors
+      DetailPrint "Falha ao gravar em $R1, tentando fallback $R2"
+      nsJSON::Serialize /format /file "$R2"
+      ${If} ${Errors}
+         MessageBox MB_ICONSTOP "Falha ao gravar a configuracao do agente. Verifique permissoes em $R0\Discovery e $INSTDIR."
+         Abort
+      ${EndIf}
+   ${EndIf}
+
+   # Limpa installer.json legado
+   Delete "$R0\Discovery\installer.json"
+   Delete "$INSTDIR\installer.json"
 
    DetailPrint "Config salvo com sucesso em $R0\Discovery\config.json"
 FunctionEnd
@@ -828,26 +813,10 @@ Function RegisterUIStartupTask
    ; Limpar atalho legado de startup (migracao)
    Delete "$SMSTARTUP\${INFO_PRODUCTNAME}.lnk"
 
-   ; Escreve script PS1 temporÃ¡rio para evitar problemas de escaping no NSIS
-   StrCpy $R9 "$TEMP\discovery_ui_task_reg.ps1"
-   FileOpen $R8 "$R9" w
-   FileWrite $R8 "try {$\r$\n"
-   FileWrite $R8 "  $$action = New-ScheduledTaskAction -Execute '$INSTDIR\${PRODUCT_EXECUTABLE}' -Argument '--startup-minimized --startup-source=task-scheduler'$\r$\n"
-   FileWrite $R8 "  $$trigger = New-ScheduledTaskTrigger -AtLogOn$\r$\n"
-   FileWrite $R8 "  $$trigger.Delay = 'PT30S'$\r$\n"
-   FileWrite $R8 "  $$principal = New-ScheduledTaskPrincipal -GroupId 'S-1-5-32-545' -RunLevel Limited$\r$\n"
-   FileWrite $R8 "  Register-ScheduledTask -TaskName '${DISCOVERY_UI_TASK_NAME}' -Action $$action -Trigger $$trigger -Principal $$principal -Description 'Discovery UI autostart for any logged-on user' -Force | Out-Null$\r$\n"
-   FileWrite $R8 "  exit 0$\r$\n"
-   FileWrite $R8 "} catch {$\r$\n"
-   FileWrite $R8 "  Write-Output $$_.Exception.Message$\r$\n"
-   FileWrite $R8 "  exit 1$\r$\n"
-   FileWrite $R8 "}$\r$\n"
-   FileClose $R8
-
-   # Executar script PowerShell com janela oculta via nsExec (plugin nativo NSIS).
-   nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$R9"'
+   ; PowerShell -Command inline: registra scheduled task sem arquivo .ps1 temporario.
+   ; Aspas simples internas duplicadas (''...'') para sobreviver ao parser NSIS e cmd.
+   nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -Command "$act=New-ScheduledTaskAction -Execute ''$INSTDIR\${PRODUCT_EXECUTABLE}'' -Argument ''--startup-minimized --startup-source=task-scheduler'';$trig=New-ScheduledTaskTrigger -AtLogOn;$trig.Delay=''PT30S'';$prin=New-ScheduledTaskPrincipal -GroupId ''S-1-5-32-545'' -RunLevel Limited;Register-ScheduledTask -TaskName ''${DISCOVERY_UI_TASK_NAME}'' -Action $act -Trigger $trig -Principal $prin -Description ''Discovery UI autostart for any logged-on user'' -Force"'
    Pop $R0
-   Delete "$R9"
 
    ${If} $R0 != 0
       MessageBox MB_ICONSTOP "Falha ao registrar tarefa de autostart da UI (${DISCOVERY_UI_TASK_NAME}). Codigo: $R0"
