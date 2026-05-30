@@ -357,7 +357,15 @@ Function .onInit
          StrCpy $AllowInsecureTls "1"
       ${EndIf}
    ${EndIf}
-   
+   # Flag /BOOTSTRAP_STAGE2: chamado internamente pelo bootstrapper.
+   # Forca silencio absoluto (sem janela, sem progresso, sem wizard) para
+   # evitar duas telas de instalacao sobrepostas (bootstrap + stage2).
+   # Deve ser processado ANTES do /MINIMAL para ter precedencia.
+   ${GetOptions} $R0 "/BOOTSTRAP_STAGE2" $R1
+   ${IfNot} ${Errors}
+      SetSilent silent
+      StrCpy $MinimalMode "1"
+   ${EndIf}   
    # Verificar modo mÃ­nimo
    ${GetOptions} $R0 "/MINIMAL" $R1
    ${IfNot} ${Errors}
@@ -655,7 +663,10 @@ Function SaveAgentConfig
    FileWrite $0 "if (-not [string]::IsNullOrWhiteSpace($$FallbackPath)) { Remove-Item (Join-Path (Split-Path -Parent $$FallbackPath) 'installer.json') -Force -ErrorAction SilentlyContinue }$\r$\n"
    FileClose $0
 
-   ExecWait '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$R3" -ConfigPath "$R1" -FallbackPath "$R2" -ServerUrl "$ServerUrl" -ServerKey "$ServerKey" -AutoProvisioning "$AutoProvisioning" -GenericMode "$GenericMode" -AllowInsecureTls "$AllowInsecureTls"' $R9
+   # Executar script PowerShell com janela oculta via nsExec (plugin nativo NSIS).
+   # nsExec::ExecToLog captura saida no log do instalador sem abrir console.
+   nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$R3" -ConfigPath "$R1" -FallbackPath "$R2" -ServerUrl "$ServerUrl" -ServerKey "$ServerKey" -AutoProvisioning "$AutoProvisioning" -GenericMode "$GenericMode" -AllowInsecureTls "$AllowInsecureTls"'
+   Pop $R9
    Delete "$R3"
    ${If} $R9 != 0
       MessageBox MB_ICONSTOP "Falha ao gravar a configuracao do agente (codigo: $R9). Verifique permissoes em $R0\Discovery e $INSTDIR."
@@ -690,18 +701,14 @@ Function DownloadAndRunStage2
 
    DetailPrint "Baixando instalador completo de segunda etapa..."
 
-   StrCpy $R9 "$TEMP\discovery_stage2_download.ps1"
-   FileOpen $R8 "$R9" w
-   FileWrite $R8 "param([string]$$Url,[string]$$Out)$\r$\n"
-   FileWrite $R8 "$$ErrorActionPreference = 'Stop'$\r$\n"
-   FileWrite $R8 "Invoke-WebRequest -Uri $$Url -OutFile $$Out -UseBasicParsing$\r$\n"
-   FileClose $R8
-
-   ExecWait '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$R9" -Url "$PayloadUrl" -Out "$R7"' $R0
-   Delete "$R9"
+   # Download HTTPS nativo via BITSAdmin (built-in do Windows, sem dependencia externa).
+   # BITS e um servico de transferencia assincrona do Windows que suporta HTTPS,
+   # retoma downloads interrompidos e nao requer plugins NSIS adicionais.
+   # Uso do cmd /c para suprimir janela de console.
+   ExecWait '"$SYSDIR\cmd.exe" /c bitsadmin /transfer "DiscoveryStage2" /download /priority normal "$PayloadUrl" "$R7"' $R0
 
    ${If} $R0 != 0
-      MessageBox MB_ICONSTOP "Falha ao baixar instalador completo (codigo: $R0)."
+      MessageBox MB_ICONSTOP "Falha ao baixar instalador completo (codigo: $R0). Verifique a conectividade com o servidor."
       Abort
    ${EndIf}
 
@@ -716,7 +723,9 @@ Function DownloadAndRunStage2
       FileWrite $R8 "if ($$actual -ne $$expectedNorm) { Write-Output ('sha256 mismatch: ' + $$actual); exit 2 }$\r$\n"
       FileClose $R8
 
-      ExecWait '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$R9" -Path "$R7" -Expected "$PayloadSha256"' $R0
+      # nsExec::ExecToLog: executa PowerShell com janela OCULTA, saida no log do instalador.
+      nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$R9" -Path "$R7" -Expected "$PayloadSha256"'
+      Pop $R0
       Delete "$R9"
 
       ${If} $R0 != 0
@@ -728,15 +737,15 @@ Function DownloadAndRunStage2
    DetailPrint "Executando instalador completo de segunda etapa..."
    ${If} $GenericMode == "1"
       ${If} $UpdateMode == "1"
-         ExecWait '"$R7" /S /UPDATE /GENERIC /AUTO_PROVISIONING=$AutoProvisioning /ALLOW_INSECURE_TLS=$AllowInsecureTls /MINIMAL' $R0
+         ExecWait '"$R7" /S /UPDATE /GENERIC /BOOTSTRAP_STAGE2 /AUTO_PROVISIONING=$AutoProvisioning /ALLOW_INSECURE_TLS=$AllowInsecureTls' $R0
       ${Else}
-         ExecWait '"$R7" /S /GENERIC /AUTO_PROVISIONING=$AutoProvisioning /ALLOW_INSECURE_TLS=$AllowInsecureTls /MINIMAL' $R0
+         ExecWait '"$R7" /S /GENERIC /BOOTSTRAP_STAGE2 /AUTO_PROVISIONING=$AutoProvisioning /ALLOW_INSECURE_TLS=$AllowInsecureTls' $R0
       ${EndIf}
    ${Else}
       ${If} $UpdateMode == "1"
-         ExecWait '"$R7" /S /UPDATE /URL="$ServerUrl" /KEY="$ServerKey" /AUTO_PROVISIONING=$AutoProvisioning /ALLOW_INSECURE_TLS=$AllowInsecureTls /MINIMAL' $R0
+         ExecWait '"$R7" /S /UPDATE /BOOTSTRAP_STAGE2 /URL="$ServerUrl" /KEY="$ServerKey" /AUTO_PROVISIONING=$AutoProvisioning /ALLOW_INSECURE_TLS=$AllowInsecureTls' $R0
       ${Else}
-         ExecWait '"$R7" /S /URL="$ServerUrl" /KEY="$ServerKey" /AUTO_PROVISIONING=$AutoProvisioning /ALLOW_INSECURE_TLS=$AllowInsecureTls /MINIMAL' $R0
+         ExecWait '"$R7" /S /BOOTSTRAP_STAGE2 /URL="$ServerUrl" /KEY="$ServerKey" /AUTO_PROVISIONING=$AutoProvisioning /ALLOW_INSECURE_TLS=$AllowInsecureTls' $R0
       ${EndIf}
    ${EndIf}
 
@@ -806,16 +815,13 @@ FunctionEnd
 Function RegisterWindowsFirewallRule
    DetailPrint "Registrando regra de Windows Firewall para ${PRODUCT_EXECUTABLE}"
 
-   StrCpy $R9 "$TEMP\discovery_firewall_reg.ps1"
-   FileOpen $R8 "$R9" w
-   FileWrite $R8 "param([string]$$RuleName,[string]$$ProgramPath)$\r$\n"
-   FileWrite $R8 "$$ErrorActionPreference = 'Stop'$\r$\n"
-   FileWrite $R8 "Get-NetFirewallRule -DisplayName $$RuleName -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue | Out-Null$\r$\n"
-   FileWrite $R8 "New-NetFirewallRule -DisplayName $$RuleName -Direction Inbound -Action Allow -Program $$ProgramPath -Profile Any -Protocol Any -Enabled True -Description 'Permite trafego de rede para o Discovery Agent' | Out-Null$\r$\n"
-   FileClose $R8
+   # netsh advfirewall: nativo do Windows, sem dependencia de PowerShell ou plugins.
+   # Remove regra anterior (idempotente) e cria nova.
+   nsExec::ExecToLog '"$SYSDIR\netsh.exe" advfirewall firewall delete rule name="${DISCOVERY_FIREWALL_RULE_NAME}"'
+   Pop $R0
 
-   ExecWait '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$R9" -RuleName "${DISCOVERY_FIREWALL_RULE_NAME}" -ProgramPath "$INSTDIR\${PRODUCT_EXECUTABLE}"' $R0
-   Delete "$R9"
+   nsExec::ExecToLog '"$SYSDIR\netsh.exe" advfirewall firewall add rule name="${DISCOVERY_FIREWALL_RULE_NAME}" dir=in action=allow program="$INSTDIR\${PRODUCT_EXECUTABLE}" enable=yes profile=any'
+   Pop $R0
 
    ${If} $R0 != 0
       DetailPrint "Aviso: falha ao registrar regra de Windows Firewall para ${PRODUCT_EXECUTABLE}. Codigo: $R0"
@@ -844,7 +850,9 @@ Function RegisterUIStartupTask
    FileWrite $R8 "}$\r$\n"
    FileClose $R8
 
-   ExecWait '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$R9"' $R0
+   # Executar script PowerShell com janela oculta via nsExec (plugin nativo NSIS).
+   nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$R9"'
+   Pop $R0
    Delete "$R9"
 
    ${If} $R0 != 0
@@ -868,14 +876,9 @@ FunctionEnd
 Function un.UnregisterWindowsFirewallRule
    DetailPrint "Removendo regra de Windows Firewall de ${PRODUCT_EXECUTABLE}"
 
-   StrCpy $R9 "$TEMP\discovery_firewall_unreg.ps1"
-   FileOpen $R8 "$R9" w
-   FileWrite $R8 "param([string]$$RuleName)$\r$\n"
-   FileWrite $R8 "Get-NetFirewallRule -DisplayName $$RuleName -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue | Out-Null$\r$\n"
-   FileClose $R8
-
-   ExecWait '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$R9" -RuleName "${DISCOVERY_FIREWALL_RULE_NAME}"' $R0
-   Delete "$R9"
+   # netsh advfirewall: nativo do Windows, sem PowerShell.
+   nsExec::ExecToLog '"$SYSDIR\netsh.exe" advfirewall firewall delete rule name="${DISCOVERY_FIREWALL_RULE_NAME}"'
+   Pop $R0
 
    ${If} $R0 != 0
       DetailPrint "Aviso: falha ao remover regra de Windows Firewall de ${PRODUCT_EXECUTABLE}. Codigo: $R0"
