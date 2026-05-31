@@ -34,6 +34,14 @@ func executeCommand(parent context.Context, cmdType string, payload any) (int, s
 			return 2, "", "payload sem comando cmd/shell"
 		}
 		cmd = exec.CommandContext(ctx, "cmd", "/C", command)
+	case "restart", "reboot":
+		return executeRestartOrShutdown(ctx, "restart", payload)
+	case "shutdown":
+		return executeRestartOrShutdown(ctx, "shutdown", payload)
+	case "cancelrestart", "cancelshutdown", "abortshutdown":
+		return executeAbortShutdown(ctx)
+	case "wakeonlan", "wol":
+		return executeWakeOnLanPacket(ctx, payload)
 	case "exec", "process", "winget":
 		if command == "" {
 			return 2, "", "payload sem executavel"
@@ -213,4 +221,180 @@ func detectLocalIP() string {
 		return addr.IP.String()
 	}
 	return "127.0.0.1"
+}
+
+// ── Power Management Handlers ──
+
+// powerPayload represents the deserialized payload for restart/shutdown commands.
+type powerPayload struct {
+	DelaySeconds int    `json:"delaySeconds"`
+	Force        bool   `json:"force"`
+	Message      string `json:"message"`
+}
+
+// wolPayload represents the deserialized payload for Wake-on-LAN commands.
+type wolPayload struct {
+	MacAddress       string `json:"macAddress"`
+	BroadcastAddress string `json:"broadcastAddress"`
+}
+
+// executeRestartOrShutdown schedules a system restart or shutdown via the OS.
+// On Windows, it uses shutdown.exe with /r (restart) or /s (shutdown).
+// Returns immediately after scheduling — the action is asynchronous.
+func executeRestartOrShutdown(ctx context.Context, action string, payload any) (int, string, string) {
+	pp := parsePowerPayload(payload)
+	if pp.DelaySeconds <= 0 {
+		if action == "restart" {
+			pp.DelaySeconds = 15
+		} else {
+			pp.DelaySeconds = 30
+		}
+	}
+
+	flag := "/s"
+	label := "shutdown"
+	if action == "restart" {
+		flag = "/r"
+		label = "restart"
+	}
+
+	args := []string{flag, "/t", fmt.Sprintf("%d", pp.DelaySeconds)}
+
+	if pp.Force {
+		args = append(args, "/f")
+	}
+
+	if pp.Message != "" {
+		args = append(args, "/c", pp.Message)
+	}
+
+	// shutdown.exe does not need ctx — it schedules and returns immediately
+	cmd := exec.Command("shutdown", args...)
+	out, err := cmd.CombinedOutput()
+	output := string(out)
+
+	if err != nil {
+		return 1, output, fmt.Sprintf("falha ao agendar %s: %v", label, err)
+	}
+
+	return 0, fmt.Sprintf(
+		"%s agendado com sucesso (delay=%ds, force=%v, message=%q)",
+		label, pp.DelaySeconds, pp.Force, pp.Message,
+	), ""
+}
+
+// executeAbortShutdown cancels any scheduled system restart or shutdown.
+func executeAbortShutdown(ctx context.Context) (int, string, string) {
+	cmd := exec.CommandContext(ctx, "shutdown", "/a")
+	out, err := cmd.CombinedOutput()
+	output := string(out)
+
+	if err != nil {
+		return 1, output, fmt.Sprintf("falha ao cancelar shutdown agendado: %v", err)
+	}
+
+	return 0, "shutdown/restart agendado cancelado com sucesso", ""
+}
+
+// executeWakeOnLanPacket sends a Wake-on-LAN magic packet via UDP broadcast.
+// The magic packet consists of 6 bytes of 0xFF followed by the target MAC address
+// repeated 16 times, sent to port 9 (discard) on the broadcast address.
+func executeWakeOnLanPacket(ctx context.Context, payload any) (int, string, string) {
+	wp := parseWolPayload(payload)
+	if wp.MacAddress == "" {
+		return 2, "", "payload sem macAddress para Wake-on-LAN"
+	}
+
+	mac, err := net.ParseMAC(wp.MacAddress)
+	if err != nil {
+		return 2, "", fmt.Sprintf("macAddress invalido %q: %v", wp.MacAddress, err)
+	}
+
+	if len(mac) != 6 {
+		return 2, "", fmt.Sprintf("macAddress deve ter 6 bytes, recebeu %d", len(mac))
+	}
+
+	// Build magic packet: 6 bytes of 0xFF + 16 repetitions of the MAC address
+	packet := make([]byte, 102)
+	for i := 0; i < 6; i++ {
+		packet[i] = 0xFF
+	}
+	for i := 1; i <= 16; i++ {
+		copy(packet[i*6:], mac)
+	}
+
+	broadcastAddr := wp.BroadcastAddress
+	if broadcastAddr == "" {
+		broadcastAddr = "255.255.255.255"
+	}
+
+	addr := net.JoinHostPort(broadcastAddr, "9")
+
+	conn, err := net.Dial("udp", addr)
+	if err != nil {
+		return 1, "", fmt.Sprintf("falha ao conectar para WOL em %s: %v", addr, err)
+	}
+	defer conn.Close()
+
+	// Use WriteWithDeadline for safety, but with a short deadline
+	deadline, ok := ctx.Deadline()
+	if ok {
+		conn.SetWriteDeadline(deadline)
+	} else {
+		conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	}
+
+	n, err := conn.Write(packet)
+	if err != nil {
+		return 1, "", fmt.Sprintf("falha ao enviar magic packet para %s (%s): %v", wp.MacAddress, addr, err)
+	}
+
+	return 0, fmt.Sprintf(
+		"Magic Packet Wake-on-LAN enviado com sucesso (%d bytes) para MAC %s via broadcast %s",
+		n, wp.MacAddress, addr,
+	), ""
+}
+
+func parsePowerPayload(payload any) powerPayload {
+	if payload == nil {
+		return powerPayload{}
+	}
+
+	m, ok := payload.(map[string]any)
+	if !ok {
+		return powerPayload{}
+	}
+
+	pp := powerPayload{
+		Message: strings.TrimSpace(toString(m["message"])),
+	}
+
+	if v, ok := m["force"]; ok {
+		pp.Force, _ = v.(bool)
+	}
+
+	if d, ok := toInt(m["delaySeconds"]); ok && d > 0 {
+		pp.DelaySeconds = d
+	}
+	if d, ok := toInt(m["delay"]); ok && d > 0 && pp.DelaySeconds == 0 {
+		pp.DelaySeconds = d
+	}
+
+	return pp
+}
+
+func parseWolPayload(payload any) wolPayload {
+	if payload == nil {
+		return wolPayload{}
+	}
+
+	m, ok := payload.(map[string]any)
+	if !ok {
+		return wolPayload{}
+	}
+
+	return wolPayload{
+		MacAddress:       strings.TrimSpace(toString(m["macAddress"])),
+		BroadcastAddress: strings.TrimSpace(toString(m["broadcastAddress"])),
+	}
 }
