@@ -34,6 +34,8 @@ func executeCommand(parent context.Context, cmdType string, payload any) (int, s
 			return 2, "", "payload sem comando cmd/shell"
 		}
 		cmd = exec.CommandContext(ctx, "cmd", "/C", command)
+	case "update", "selfupdate":
+		return 0, "update delegado ao self-updater (via HandleCommand)", ""
 	case "restart", "reboot":
 		return executeRestartOrShutdown(ctx, "restart", payload)
 	case "shutdown":

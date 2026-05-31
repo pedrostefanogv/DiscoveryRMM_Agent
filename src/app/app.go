@@ -33,6 +33,8 @@ import (
 	"discovery/internal/platform"
 	"discovery/internal/printer"
 	"discovery/internal/processutil"
+	"path/filepath"
+	"discovery/internal/selfupdate"
 	"discovery/internal/services"
 	"discovery/internal/winget"
 )
@@ -133,6 +135,9 @@ type App struct {
 	notificationByKey   map[string]string
 
 	queuedForceHeartbeat atomic.Bool
+
+	selfUpdater    *selfupdate.Updater
+	selfUpdaterCh  chan bool
 }
 
 func NewApp(opts AppStartupOptions) *App {
@@ -351,6 +356,17 @@ func NewApp(opts AppStartupOptions) *App {
 			return a.ctx
 		},
 	})
+	a.selfUpdaterCh = make(chan bool, 4)
+	a.selfUpdater = &selfupdate.Updater{
+		ApiScheme:    "",
+		ApiServer:    "",
+		GetToken:     func() string { return a.GetDebugConfig().AuthToken },
+		GetAgentID:   func() string { return a.GetDebugConfig().AgentID },
+		GetPolicy:    func() selfupdate.Policy { return selfupdate.NormalizePolicy(a.GetAgentConfiguration().AgentUpdate) },
+		TempDir:      filepath.Join(platform.DataDir(), "updates"),
+		Logf:         func(format string, args ...any) { a.logs.append("[selfupdate] " + fmt.Sprintf(format, args...)) },
+		InvalidateCh: a.selfUpdaterCh,
+	}
 	a.exporter = updates.NewExporter(updates.ExportOptions{
 		BeginActivity: a.beginActivity,
 		Inventory: func() (models.InventoryReport, error) {
@@ -666,6 +682,17 @@ func (a *App) startup(ctx context.Context) {
 			})
 		}
 		a.p2pCoord.Run(ctx)
+	})
+
+	a.startupWg.Add(1)
+	a.safeGo(func() {
+		defer a.startupWg.Done()
+		a.selfUpdater.ApiScheme = a.GetDebugConfig().ApiScheme
+		a.selfUpdater.ApiServer = a.GetDebugConfig().ApiServer
+		if a.selfUpdater != nil {
+			a.selfUpdater.ResumePendingInstallReport(a.ctx)
+			a.selfUpdater.Run(a.ctx, 0)
+		}
 	})
 
 	a.startupWg.Add(1)

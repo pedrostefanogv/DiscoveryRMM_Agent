@@ -757,13 +757,23 @@ func (a *App) requestAgentUpdateCheck(ctx context.Context, source string) error 
 	if a == nil {
 		return fmt.Errorf("app indisponivel")
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	source = strings.TrimSpace(source)
 	if source == "" {
 		source = "manual"
 	}
+
+	if a.selfUpdater != nil {
+		select {
+		case a.selfUpdaterCh <- false:
+			a.logs.append("[selfupdate] check disparado via InvalidateCh: source=" + source)
+			return nil
+		default:
+			a.logs.append("[selfupdate] InvalidateCh cheio, ignorando duplicado: source=" + source)
+			return nil
+		}
+	}
+
+	// Fallback para o legacy updateTrigger
 	select {
 	case a.updateTrigger <- struct{}{}:
 		a.logs.append("[update] force-check de update disparado localmente: source=" + source)
@@ -810,7 +820,19 @@ func parseNotificationDispatchPayload(payload any) (NotificationDispatchRequest,
 }
 
 func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, payload any) (bool, int, string, string) {
+	cmdType = strings.ToLower(strings.TrimSpace(cmdType))
 	a.logs.append(fmt.Sprintf("[cmd] recebido: cmdType=%q payload=%v", cmdType, truncatePayloadForLog(payload)))
+
+	if cmdType == "update" || cmdType == "selfupdate" {
+		if a.selfUpdater == nil {
+			return true, 2, "", "self-updater nao inicializado"
+		}
+		a.logs.append("[selfupdate] comando update recebido via NATS — iniciando check forcado")
+		if err := a.selfUpdater.CheckAndUpdate(parent, true); err != nil {
+			return true, 1, "", fmt.Sprintf("self-update falhou: %v", err)
+		}
+		return true, 0, "self-update iniciado com sucesso", ""
+	}
 
 	if isPsadtAlertCommandType(cmdType) {
 		p, err := parsePsadtAlertPayload(payload)
