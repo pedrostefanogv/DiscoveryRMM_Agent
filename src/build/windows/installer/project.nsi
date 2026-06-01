@@ -588,8 +588,13 @@ Function SaveAgentConfig
       Abort
    ${EndIf}
 
-   ; Garantir permissao de escrita para Administrators
-   ExecWait '"$SYSDIR\icacls.exe" "$R0\Discovery" /grant "Administrators:(OI)(CI)(F)" /Q' $R9
+   ; Garantir permissao multiusuario para runtime sem servico Windows.
+   ; Usa SIDs bem conhecidos para evitar falha em SOs localizados.
+   ; /inheritance:e + /T aplica em filhos existentes (ex.: config.json legado).
+   ExecWait '"$SYSDIR\icacls.exe" "$R0\Discovery" /inheritance:e /grant "*S-1-5-18:(OI)(CI)(F)" "*S-1-5-32-544:(OI)(CI)(F)" "*S-1-5-32-545:(OI)(CI)(M)" /T /C /Q' $R9
+   ${If} $R9 != 0
+      DetailPrint "Aviso: nao foi possivel ajustar ACL de $R0\Discovery (icacls codigo $R9)"
+   ${EndIf}
 
    StrCpy $R1 "$R0\Discovery\config.json"
    StrCpy $R2 "$INSTDIR\config.json"
@@ -743,6 +748,14 @@ Function EnsureSharedDataDir
    ${EndIf}
    CreateDirectory "$R0\Discovery"
    CreateDirectory "$R0\Discovery\logs"
+
+   ; Aplicar ACL no diretorio compartilhado para execucao por usuarios padrao.
+   ; SIDs evitam dependencia de nomes localizados de grupos.
+   ; /inheritance:e + /T cobre arquivos preexistentes no diretorio.
+   ExecWait '"$SYSDIR\icacls.exe" "$R0\Discovery" /inheritance:e /grant "*S-1-5-18:(OI)(CI)(F)" "*S-1-5-32-544:(OI)(CI)(F)" "*S-1-5-32-545:(OI)(CI)(M)" /T /C /Q' $R9
+   ${If} $R9 != 0
+      DetailPrint "Aviso: nao foi possivel ajustar ACL de $R0\Discovery (icacls codigo $R9)"
+   ${EndIf}
 FunctionEnd
 
 Function PrepareForInPlaceUpdate
