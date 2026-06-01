@@ -970,22 +970,23 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 			pp.DelaySeconds = 15
 		}
 
-		// Exibe aviso PSADT antes de executar a acao no sistema.
+		// Exibe prompt PSADT antes de executar a acao no sistema.
+		//   force=true:  BalloonTip informativo (nao-bloqueante).
+		//   force=false: Dialog Yes/No — usuario decide.
 		decision, err := a.showPowerActionWarning(parent, action, pp.DelaySeconds, pp.Force, pp.Message)
 		if err != nil {
-			a.logs.append(fmt.Sprintf("[agent] %s-warning erro ao exibir aviso: %v", action, err))
+			a.logs.append(fmt.Sprintf("[agent] %s-prompt erro ao exibir aviso: %v", action, err))
 		}
 		if decision != "proceed" {
-			return true, 0, fmt.Sprintf("%s adiada pelo usuario", action), ""
+			a.logs.append(fmt.Sprintf("[agent] %s-prompt usuario adiou — retornando sem agendar shutdown", action))
+			return true, 0, fmt.Sprintf("%s adiado pelo usuario", action), ""
 		}
 
-		// No modo forcado, o dialog PSADT ja fez a contagem regressiva.
-		// Usa delay minimo para o shutdown.exe executar quase imediatamente.
-		execDelaySeconds := pp.DelaySeconds
-		if pp.Force {
-			execDelaySeconds = 5
-		}
-		exitCode, output, errText := a.executeSystemPowerAction(parent, action, execDelaySeconds, pp.Force, pp.Message)
+		// No modo forcado com balloon, o shutdown.exe usa o delay completo
+		// porque o balloon e nao-bloqueante (nao fez contagem regressiva).
+		// No modo nao-forcado, o usuario ja decidiu via Dialog, entao
+		// o shutdown pode usar o delay configurado normalmente.
+		exitCode, output, errText := a.executeSystemPowerAction(parent, action, pp.DelaySeconds, pp.Force, pp.Message)
 		return true, exitCode, output, errText
 	}
 
