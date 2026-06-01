@@ -244,6 +244,7 @@ type wolPayload struct {
 // resolveShutdownExe returns the absolute path to shutdown.exe in System32.
 // Using the absolute path avoids PATH resolution failures when the agent runs
 // in restricted contexts (Startup shortcut, Scheduled Task, service account).
+// Falls back to PATH lookup if the System32 path is unavailable.
 func resolveShutdownExe() string {
 	sysRoot := os.Getenv("SystemRoot")
 	if sysRoot == "" {
@@ -252,13 +253,21 @@ func resolveShutdownExe() string {
 	if sysRoot == "" {
 		sysRoot = `C:\Windows`
 	}
-	return filepath.Join(sysRoot, "System32", "shutdown.exe")
+	shutdownPath := filepath.Join(sysRoot, "System32", "shutdown.exe")
+	if _, err := os.Stat(shutdownPath); err == nil {
+		return shutdownPath
+	}
+	// Fallback: tenta shutdown.exe via PATH
+	if resolved, err := exec.LookPath("shutdown.exe"); err == nil {
+		return resolved
+	}
+	return shutdownPath // retorna o caminho canonico, o erro sera tratado por quem chama
 }
 
 // executeRestartOrShutdown schedules a system restart or shutdown via the OS.
 // On Windows, it uses shutdown.exe with /r (restart) or /s (shutdown).
 // Returns immediately after scheduling — the action is asynchronous.
-func executeRestartOrShutdown(ctx context.Context, action string, payload any) (int, string, string) {
+func executeRestartOrShutdown(_ context.Context, action string, payload any) (int, string, string) {
 	pp := parsePowerPayload(payload)
 	if pp.DelaySeconds <= 0 {
 		if action == "restart" {
@@ -287,6 +296,7 @@ func executeRestartOrShutdown(ctx context.Context, action string, payload any) (
 
 	// Usa caminho absoluto para shutdown.exe (System32) para evitar falha
 	// de PATH em contextos restritos (atalho Startup, Scheduled Task, service).
+	// Fallback para PATH se o caminho do System32 nao estiver disponivel.
 	shutdownExe := resolveShutdownExe()
 
 	// shutdown.exe does not need ctx — it schedules and returns immediately
@@ -295,7 +305,7 @@ func executeRestartOrShutdown(ctx context.Context, action string, payload any) (
 	output := string(out)
 
 	if err != nil {
-		return 1, output, fmt.Sprintf("falha ao agendar %s (%s %s): %v", label, shutdownExe, strings.Join(args, " "), err)
+		return 1, output, fmt.Sprintf("falha ao agendar %s (exe=%s args=%s): %v", label, shutdownExe, strings.Join(args, " "), err)
 	}
 
 	return 0, fmt.Sprintf(

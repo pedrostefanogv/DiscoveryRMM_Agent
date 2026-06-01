@@ -138,7 +138,7 @@ func buildPsadtAlertScript(p PsadtAlertPayload) (string, time.Duration) {
 			fmt.Sprintf("  Message = %s\n", psEscape(statusText)) +
 			fmt.Sprintf("  StepName = %s\n", psEscape(subtitle)) +
 			fmt.Sprintf("  CounterValue = %d\n", progressPercent) +
-			fmt.Sprintf("  MaxCounterValue = 100\n") +
+			"  MaxCounterValue = 100\n" +
 			"}\n" +
 			"Show-ADTInstallationProgress @progressParams\n" +
 			"Write-Host 'shown'\n" +
@@ -310,7 +310,8 @@ func (a *App) handlePsadtAlert(ctx context.Context, p PsadtAlertPayload) (int, s
 	execCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(execCtx, "powershell", "-NoProfile", "-NonInteractive", "-Command", script)
+	psExe := resolvePowerShellExe()
+	cmd := exec.CommandContext(execCtx, psExe, "-NoProfile", "-NonInteractive", "-Command", script)
 	outBytes, err := cmd.CombinedOutput()
 	rawOutput := strings.TrimSpace(string(outBytes))
 
@@ -330,7 +331,7 @@ func (a *App) handlePsadtAlert(ctx context.Context, p PsadtAlertPayload) (int, s
 		}
 		errMsg := err.Error()
 		if a != nil {
-			a.logs.append(fmt.Sprintf("[agent] psadt-alert erro type=%s alertId=%s: %s | output: %s", p.Type, p.AlertID, errMsg, rawOutput))
+			a.logs.append(fmt.Sprintf("[agent] psadt-alert erro type=%s alertId=%s exe=%s: %s | output: %s", p.Type, p.AlertID, psExe, errMsg, rawOutput))
 		}
 		return exitCode, "", errMsg
 	}
@@ -375,7 +376,8 @@ func (a *App) showPowerActionWarning(ctx context.Context, action string, delaySe
 
 	a.logs.append(fmt.Sprintf("[agent] psadt-%s-warning iniciando force=%t delay=%ds", action, force, delaySeconds))
 
-	cmd := exec.CommandContext(execCtx, "powershell", "-NoProfile", "-NonInteractive", "-Command", script)
+	psExe := resolvePowerShellExe()
+	cmd := exec.CommandContext(execCtx, psExe, "-NoProfile", "-NonInteractive", "-Command", script)
 	outBytes, err := cmd.CombinedOutput()
 	rawOutput := strings.TrimSpace(string(outBytes))
 
@@ -427,23 +429,29 @@ func buildPowerActionWarningScript(action string, delaySeconds int, force bool, 
 	closeSession := "try { Close-ADTSession -ExitCode 0 } catch {}\n"
 
 	if force {
-		// Dialog informativo sem botão de fechar: countdown regressivo com ExitOnTimeout.
-		// O shutdown.exe será chamado com delay mínimo (5s) porque a contagem já ocorreu aqui.
+		// Modo forcado: dialog nao-dispensavel com countdown regressivo.
+		// Usa loop para reexibir o dialog se o usuario tentar fechar via botao X.
+		// O shutdown.exe sera chamado com delay minimo (5s) porque a contagem ja ocorreu aqui.
 		body := header +
-			"$dialogParams = @{\n" +
-			fmt.Sprintf("  Title = %s\n", psEscape(title)) +
-			fmt.Sprintf("  Text = %s\n", psEscape(message)) +
-			"  Buttons = 'Ok'\n" +
-			"  Icon = 'Warning'\n" +
-			fmt.Sprintf("  Timeout = %d\n", delaySeconds) +
-			"  ExitOnTimeout = $true\n" +
-			"}\n" +
-			"$null = Show-ADTDialogBox @dialogParams\n" +
+			fmt.Sprintf("$startTime = Get-Date; $totalSeconds = %d\n", delaySeconds) +
+			"do {\n" +
+			"    $remaining = $totalSeconds - [int]((Get-Date) - $startTime).TotalSeconds\n" +
+			"    if ($remaining -le 0) { break }\n" +
+			"    $dialogParams = @{\n" +
+			fmt.Sprintf("      Title = %s\n", psEscape(title)) +
+			fmt.Sprintf("      Text = (%s) -f \"$remaining\" + \" segundos restantes.\")\n", psEscape(message+"\n\n{0}")) +
+			"      Buttons = 'Ok'\n" +
+			"      Icon = 'Warning'\n" +
+			"      Timeout = $remaining\n" +
+			"      ExitOnTimeout = $true\n" +
+			"    }\n" +
+			"    $null = Show-ADTDialogBox @dialogParams\n" +
+			"} while ($true)\n" +
 			"Write-Output 'proceed'\n" +
 			closeSession +
 			"exit 0\n"
 		timeoutVal := time.Duration(delaySeconds+30) * time.Second
-		return header + body, timeoutVal
+		return body, timeoutVal
 	}
 
 	// Modo não-forçado: botões Yes/No, usuário pode adiar.
@@ -462,11 +470,13 @@ func buildPowerActionWarningScript(action string, delaySeconds int, force bool, 
 		closeSession +
 		"exit 0\n"
 	timeoutVal := time.Duration(delaySeconds+90) * time.Second
-	return header + body, timeoutVal
+	return body, timeoutVal
 }
 
-// resolveShutdownExe returns the absolute path to shutdown.exe in System32.
-func resolveShutdownExe() string {
+// resolveSystem32Exe returns the absolute path to an executable in System32.
+// On 64-bit Windows, uses Sysnative alias when running as 32-bit process
+// to avoid WOW64 file system redirection.
+func resolveSystem32Exe(exeName string) string {
 	sysRoot := os.Getenv("SystemRoot")
 	if sysRoot == "" {
 		sysRoot = os.Getenv("windir")
@@ -474,11 +484,38 @@ func resolveShutdownExe() string {
 	if sysRoot == "" {
 		sysRoot = `C:\Windows`
 	}
-	return filepath.Join(sysRoot, "System32", "shutdown.exe")
+	return filepath.Join(sysRoot, "System32", exeName)
+}
+
+// resolveShutdownExe returns the absolute path to shutdown.exe in System32.
+func resolveShutdownExe() string {
+	return resolveSystem32Exe("shutdown.exe")
+}
+
+// resolvePowerShellExe returns the absolute path to powershell.exe.
+// Tries System32\WindowsPowerShell\v1.0 first, then falls back to PATH.
+func resolvePowerShellExe() string {
+	sysRoot := os.Getenv("SystemRoot")
+	if sysRoot == "" {
+		sysRoot = os.Getenv("windir")
+	}
+	if sysRoot == "" {
+		sysRoot = `C:\Windows`
+	}
+	// Caminho canonico do powershell.exe no Windows
+	psPath := filepath.Join(sysRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+	if _, err := os.Stat(psPath); err == nil {
+		return psPath
+	}
+	// Fallback: tenta o PATH
+	if resolved, err := exec.LookPath("powershell.exe"); err == nil {
+		return resolved
+	}
+	return psPath // retorna o caminho canonico mesmo se nao encontrado, o erro sera tratado por quem chama
 }
 
 // executeSystemPowerAction schedules the actual OS restart or shutdown via shutdown.exe.
-func (a *App) executeSystemPowerAction(ctx context.Context, action string, delaySeconds int, force bool, msg string) (int, string, string) {
+func (a *App) executeSystemPowerAction(_ context.Context, action string, delaySeconds int, force bool, msg string) (int, string, string) {
 	flag := "/s"
 	label := "shutdown"
 	if action == "restart" || action == "reboot" {
@@ -495,19 +532,36 @@ func (a *App) executeSystemPowerAction(ctx context.Context, action string, delay
 	}
 
 	shutdownExe := resolveShutdownExe()
+
+	// Verifica se o executavel existe antes de tentar executa-lo
+	if _, statErr := os.Stat(shutdownExe); statErr != nil {
+		if a != nil {
+			a.logs.append(fmt.Sprintf("[agent] %s-warning shutdown.exe nao encontrado em %s: %v", action, shutdownExe, statErr))
+		}
+		// Fallback: tenta shutdown.exe sem caminho absoluto (via PATH)
+		if resolved, lookErr := exec.LookPath("shutdown.exe"); lookErr == nil {
+			shutdownExe = resolved
+			if a != nil {
+				a.logs.append(fmt.Sprintf("[agent] %s-warning fallback shutdown.exe via PATH: %s", action, shutdownExe))
+			}
+		} else {
+			return 1, fmt.Sprintf("shutdown.exe nao encontrado: %v", statErr), fmt.Sprintf("falha ao localizar shutdown.exe: %v / PATH: %v", statErr, lookErr)
+		}
+	}
+
 	cmd := exec.Command(shutdownExe, args...)
 	out, err := cmd.CombinedOutput()
 	output := string(out)
 
 	if err != nil {
 		if a != nil {
-			a.logs.append(fmt.Sprintf("[agent] %s-warning falha ao agendar (%s %s): %v", action, shutdownExe, strings.Join(args, " "), err))
+			a.logs.append(fmt.Sprintf("[agent] %s-warning falha ao agendar (exe=%s args=%s): %v | output=%q", action, shutdownExe, strings.Join(args, " "), err, output))
 		}
-		return 1, output, fmt.Sprintf("falha ao agendar %s: %v", label, err)
+		return 1, output, fmt.Sprintf("falha ao agendar %s (%s): %v", label, shutdownExe, err)
 	}
 
 	if a != nil {
-		a.logs.append(fmt.Sprintf("[agent] %s agendado com sucesso (delay=%ds, force=%t)", label, delaySeconds, force))
+		a.logs.append(fmt.Sprintf("[agent] %s agendado com sucesso (exe=%s delay=%ds force=%t)", label, shutdownExe, delaySeconds, force))
 	}
 	return 0, fmt.Sprintf("%s agendado com sucesso (delay=%ds, force=%t, message=%q)", label, delaySeconds, force, msg), ""
 }

@@ -793,7 +793,7 @@ func parseAgentUpdateCommand(payload any) (agentUpdateCommand, error) {
 	}
 }
 
-func (a *App) requestAgentUpdateCheck(ctx context.Context, source string) error {
+func (a *App) requestAgentUpdateCheck(_ context.Context, source string) error {
 	if a == nil {
 		return fmt.Errorf("app indisponivel")
 	}
