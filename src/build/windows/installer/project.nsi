@@ -826,15 +826,45 @@ Function RegisterUIStartupTask
    ; Limpar atalho legado de startup (migracao)
    Delete "$SMSTARTUP\${INFO_PRODUCTNAME}.lnk"
 
-   ; PowerShell -Command inline: registra scheduled task sem arquivo .ps1 temporario.
-   ; Aspas simples internas duplicadas (''...'') para sobreviver ao parser NSIS e cmd.
-   nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -Command "$act=New-ScheduledTaskAction -Execute ''$INSTDIR\${PRODUCT_EXECUTABLE}'' -Argument ''--startup-minimized --startup-source=task-scheduler'';$trig=New-ScheduledTaskTrigger -AtLogOn;$trig.Delay=''PT30S'';$prin=New-ScheduledTaskPrincipal -GroupId ''S-1-5-32-545'' -RunLevel Limited;Register-ScheduledTask -TaskName ''${DISCOVERY_UI_TASK_NAME}'' -Action $act -Trigger $trig -Principal $prin -Description ''Discovery UI autostart for any logged-on user'' -Force"'
-   Pop $R0
+   ; Evita fragilidade de quoting no -Command inline: gera script temporario.
+   StrCpy $R9 "$TEMP\discovery_ui_task_reg.ps1"
+   ClearErrors
+   FileOpen $R8 "$R9" w
+   ${If} ${Errors}
+      Goto ui_startup_fallback
+   ${EndIf}
 
-   ${If} $R0 != 0
-      MessageBox MB_ICONSTOP "Falha ao registrar tarefa de autostart da UI (${DISCOVERY_UI_TASK_NAME}). Codigo: $R0"
+   FileWrite $R8 "try {$\r$\n"
+   FileWrite $R8 "  $$action = New-ScheduledTaskAction -Execute '$INSTDIR\${PRODUCT_EXECUTABLE}' -Argument '--startup-minimized --startup-source=task-scheduler'$\r$\n"
+   FileWrite $R8 "  $$trigger = New-ScheduledTaskTrigger -AtLogOn$\r$\n"
+   FileWrite $R8 "  $$trigger.Delay = 'PT30S'$\r$\n"
+   FileWrite $R8 "  $$principal = New-ScheduledTaskPrincipal -GroupId 'S-1-5-32-545' -LogonType Interactive -RunLevel Limited$\r$\n"
+   FileWrite $R8 "  Register-ScheduledTask -TaskName '${DISCOVERY_UI_TASK_NAME}' -Action $$action -Trigger $$trigger -Principal $$principal -Description 'Discovery UI autostart for any logged-on user' -Force | Out-Null$\r$\n"
+   FileWrite $R8 "  exit 0$\r$\n"
+   FileWrite $R8 "} catch {$\r$\n"
+   FileWrite $R8 "  Write-Output $$_.Exception.Message$\r$\n"
+   FileWrite $R8 "  exit 1$\r$\n"
+   FileWrite $R8 "}$\r$\n"
+   FileClose $R8
+
+   nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$R9"'
+   Pop $R0
+   Delete "$R9"
+
+   ${If} $R0 == 0
+      Return
+   ${EndIf}
+
+ui_startup_fallback:
+   DetailPrint "Aviso: falha ao registrar Scheduled Task (${DISCOVERY_UI_TASK_NAME}). Aplicando fallback via Startup folder."
+   ClearErrors
+   CreateShortCut "$SMSTARTUP\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}" "--startup-minimized --startup-source=startup-link" "$INSTDIR\${PRODUCT_EXECUTABLE}" 0
+   ${If} ${Errors}
+      MessageBox MB_ICONSTOP "Falha ao registrar autostart da UI (${DISCOVERY_UI_TASK_NAME}) em Scheduled Task e Startup folder."
       Abort
    ${EndIf}
+
+   DetailPrint "Fallback aplicado: autostart da UI registrado via Startup folder."
 FunctionEnd
 
 Function UnregisterWindowsService
