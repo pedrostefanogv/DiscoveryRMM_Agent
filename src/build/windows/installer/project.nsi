@@ -600,64 +600,85 @@ Function SaveAgentConfig
    StrCpy $R2 "$INSTDIR\config.json"
    DetailPrint "Mesclando configuracao em $R1"
 
-   # nsJSON (plugin nativo NSIS): merge JSON sem PowerShell, sem arquivos temporarios.
-   # Fluxo: carrega config existente (ou inicia vazio), aplica valores, serializa.
-   # Fallback para $INSTDIR se ProgramData falhar (ex.: maquina sem disco C: padrao).
+   ; Grava JSON valido com FileWrite (evita corrupcao do plugin nsJSON com strings).
+   ; Fallback para $INSTDIR se ProgramData falhar (ex.: maquina sem disco C: padrao).
 
-   # Tenta carregar config existente; ignora erro se arquivo nao existe (primeira instalacao).
    ClearErrors
-   nsJSON::Set /file "$R1"
+   FileOpen $0 "$R1" w
    ${If} ${Errors}
       ClearErrors
+      Goto config_fallback
    ${EndIf}
 
-   # Aplica valores — nsJSON cria o caminho de nos automaticamente se nao existir.
+   FileWrite $0 "{$\r$\n"
    ${If} $GenericMode != "1"
       ${If} $ServerUrl != ""
-         nsJSON::Set "serverUrl" /value "$ServerUrl"
+         FileWrite $0 '  "serverUrl": "$ServerUrl",$\r$\n'
       ${EndIf}
       ${If} $ServerKey != ""
-         nsJSON::Set "deployToken" /value "$ServerKey"
+         FileWrite $0 '  "deployToken": "$ServerKey",$\r$\n'
       ${EndIf}
    ${EndIf}
-
    ${If} $AutoProvisioning == "1"
-      nsJSON::Set "autoProvisioning" /value "true"
+      FileWrite $0 '  "autoProvisioning": true,$\r$\n'
    ${Else}
-      nsJSON::Set "autoProvisioning" /value "false"
+      FileWrite $0 '  "autoProvisioning": false,$\r$\n'
    ${EndIf}
-
-   # Remove chave legada discoveryEnabled se existir
-   ClearErrors
-   nsJSON::Get /exists "discoveryEnabled" /end
-   Pop $R8
-   ${If} $R8 == "yes"
-      nsJSON::Delete "discoveryEnabled" /end
-   ${EndIf}
-
    ${If} $AllowInsecureTls == "1"
-      nsJSON::Set "allowInsecureTls" /value "true"
+      FileWrite $0 '  "allowInsecureTls": true,$\r$\n'
    ${EndIf}
-
-   # Configura p2p.enabled (preserva outras chaves existentes em p2p se houver)
    ${If} $AutoProvisioning == "1"
-      nsJSON::Set "p2p" "enabled" /value "true"
+      FileWrite $0 '  "p2p": {$\r$\n'
+      FileWrite $0 '    "enabled": true$\r$\n'
+      FileWrite $0 '  }$\r$\n'
    ${Else}
-      nsJSON::Set "p2p" "enabled" /value "false"
+      FileWrite $0 '  "p2p": {$\r$\n'
+      FileWrite $0 '    "enabled": false$\r$\n'
+      FileWrite $0 '  }$\r$\n'
+   ${EndIf}
+   FileWrite $0 "}$\r$\n"
+   FileClose $0
+   Goto config_done
+
+config_fallback:
+   DetailPrint "Falha ao gravar em $R1, tentando fallback $R2"
+   ClearErrors
+   FileOpen $0 "$R2" w
+   ${If} ${Errors}
+      MessageBox MB_ICONSTOP "Falha ao gravar a configuracao do agente. Verifique permissoes em $R0\Discovery e $INSTDIR."
+      Abort
    ${EndIf}
 
-   # Serializa e grava em ProgramData; fallback para $INSTDIR em caso de erro.
-   ClearErrors
-   nsJSON::Serialize /format /file "$R1"
-   ${If} ${Errors}
-      ClearErrors
-      DetailPrint "Falha ao gravar em $R1, tentando fallback $R2"
-      nsJSON::Serialize /format /file "$R2"
-      ${If} ${Errors}
-         MessageBox MB_ICONSTOP "Falha ao gravar a configuracao do agente. Verifique permissoes em $R0\Discovery e $INSTDIR."
-         Abort
+   FileWrite $0 "{$\r$\n"
+   ${If} $GenericMode != "1"
+      ${If} $ServerUrl != ""
+         FileWrite $0 '  "serverUrl": "$ServerUrl",$\r$\n'
+      ${EndIf}
+      ${If} $ServerKey != ""
+         FileWrite $0 '  "deployToken": "$ServerKey",$\r$\n'
       ${EndIf}
    ${EndIf}
+   ${If} $AutoProvisioning == "1"
+      FileWrite $0 '  "autoProvisioning": true,$\r$\n'
+   ${Else}
+      FileWrite $0 '  "autoProvisioning": false,$\r$\n'
+   ${EndIf}
+   ${If} $AllowInsecureTls == "1"
+      FileWrite $0 '  "allowInsecureTls": true,$\r$\n'
+   ${EndIf}
+   ${If} $AutoProvisioning == "1"
+      FileWrite $0 '  "p2p": {$\r$\n'
+      FileWrite $0 '    "enabled": true$\r$\n'
+      FileWrite $0 '  }$\r$\n'
+   ${Else}
+      FileWrite $0 '  "p2p": {$\r$\n'
+      FileWrite $0 '    "enabled": false$\r$\n'
+      FileWrite $0 '  }$\r$\n'
+   ${EndIf}
+   FileWrite $0 "}$\r$\n"
+   FileClose $0
+
+config_done:
 
    # Limpa installer.json legado
    Delete "$R0\Discovery\installer.json"
@@ -838,7 +859,7 @@ Function RegisterUIStartupTask
    FileWrite $R8 "  $$action = New-ScheduledTaskAction -Execute '$INSTDIR\${PRODUCT_EXECUTABLE}' -Argument '--startup-minimized --startup-source=task-scheduler'$\r$\n"
    FileWrite $R8 "  $$trigger = New-ScheduledTaskTrigger -AtLogOn$\r$\n"
    FileWrite $R8 "  $$trigger.Delay = 'PT30S'$\r$\n"
-   FileWrite $R8 "  $$principal = New-ScheduledTaskPrincipal -GroupId 'S-1-5-32-545' -LogonType Interactive -RunLevel Limited$\r$\n"
+   FileWrite $R8 "  $$principal = New-ScheduledTaskPrincipal -GroupId 'S-1-5-32-545' -RunLevel Limited$\r$\n"
    FileWrite $R8 "  Register-ScheduledTask -TaskName '${DISCOVERY_UI_TASK_NAME}' -Action $$action -Trigger $$trigger -Principal $$principal -Description 'Discovery UI autostart for any logged-on user' -Force | Out-Null$\r$\n"
    FileWrite $R8 "  exit 0$\r$\n"
    FileWrite $R8 "} catch {$\r$\n"
