@@ -753,6 +753,46 @@ func parseAgentUpdatePayload(payload any) (string, error) {
 	}
 }
 
+// agentUpdateCommand representa o payload completo de um comando de update
+// enviado pelo servidor. Usado para extrair url/version para install direto.
+type agentUpdateCommand struct {
+	Action  string `json:"action"`
+	Version string `json:"version"`
+	URL     string `json:"url"`
+}
+
+func parseAgentUpdateCommand(payload any) (agentUpdateCommand, error) {
+	if payload == nil {
+		return agentUpdateCommand{Action: "check-update"}, nil
+	}
+	switch typed := payload.(type) {
+	case string:
+		var cmd agentUpdateCommand
+		if err := json.Unmarshal([]byte(typed), &cmd); err != nil {
+			return agentUpdateCommand{Action: "check-update"}, nil
+		}
+		cmd.Action = strings.ToLower(strings.TrimSpace(cmd.Action))
+		if cmd.Action == "" {
+			cmd.Action = "check-update"
+		}
+		return cmd, nil
+	default:
+		raw, err := json.Marshal(typed)
+		if err != nil {
+			return agentUpdateCommand{}, fmt.Errorf("falha ao serializar payload de update: %w", err)
+		}
+		var cmd agentUpdateCommand
+		if err := json.Unmarshal(raw, &cmd); err != nil {
+			return agentUpdateCommand{}, fmt.Errorf("payload de update invalido: %w", err)
+		}
+		cmd.Action = strings.ToLower(strings.TrimSpace(cmd.Action))
+		if cmd.Action == "" {
+			cmd.Action = "check-update"
+		}
+		return cmd, nil
+	}
+}
+
 func (a *App) requestAgentUpdateCheck(ctx context.Context, source string) error {
 	if a == nil {
 		return fmt.Errorf("app indisponivel")
@@ -827,6 +867,22 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 		if a.selfUpdater == nil {
 			return true, 2, "", "self-updater nao inicializado"
 		}
+
+		updateCmd, parseErr := parseAgentUpdateCommand(payload)
+		if parseErr != nil {
+			a.logs.append(fmt.Sprintf("[selfupdate] erro ao parsear payload: %v — fallback para check forcado", parseErr))
+		}
+
+		// Se o servidor enviou action=install com URL direta, faz download e instala imediatamente.
+		if updateCmd.Action == "install" && strings.TrimSpace(updateCmd.URL) != "" {
+			a.logs.append(fmt.Sprintf("[selfupdate] install direto: version=%s url=%s", updateCmd.Version, updateCmd.URL))
+			if err := a.selfUpdater.InstallFromURL(parent, updateCmd.Version, updateCmd.URL); err != nil {
+				return true, 1, "", fmt.Sprintf("self-update install direto falhou: %v", err)
+			}
+			return true, 0, "self-update install direto iniciado com sucesso", ""
+		}
+
+		// Fallback: check-update ou install sem URL → usa manifest da API.
 		a.logs.append("[selfupdate] comando update recebido via NATS — iniciando check forcado")
 		if err := a.selfUpdater.CheckAndUpdate(parent, true); err != nil {
 			return true, 1, "", fmt.Sprintf("self-update falhou: %v", err)
@@ -866,13 +922,36 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 	}
 
 	if isAgentUpdateCommandType(cmdType) {
-		action, err := parseAgentUpdatePayload(payload)
-		if err != nil {
-			return true, 2, "", err.Error()
+		updateCmd, parseErr := parseAgentUpdateCommand(payload)
+		if parseErr != nil {
+			// Fallback para o parser antigo (só action)
+			action, err := parseAgentUpdatePayload(payload)
+			if err != nil {
+				return true, 2, "", err.Error()
+			}
+			updateCmd = agentUpdateCommand{Action: action}
 		}
-		switch action {
+
+		switch updateCmd.Action {
+		case "install":
+			if a.selfUpdater == nil {
+				return true, 2, "", "self-updater nao inicializado"
+			}
+			if strings.TrimSpace(updateCmd.URL) == "" {
+				// Sem URL: tenta via manifest
+				a.logs.append("[selfupdate] install sem URL — usando manifest da API")
+				if err := a.selfUpdater.CheckAndUpdate(parent, true); err != nil {
+					return true, 1, "", fmt.Sprintf("self-update falhou: %v", err)
+				}
+				return true, 0, "self-update iniciado com sucesso (via manifest)", ""
+			}
+			a.logs.append(fmt.Sprintf("[selfupdate] install direto (alias): version=%s url=%s", updateCmd.Version, updateCmd.URL))
+			if err := a.selfUpdater.InstallFromURL(parent, updateCmd.Version, updateCmd.URL); err != nil {
+				return true, 1, "", fmt.Sprintf("self-update install direto falhou: %v", err)
+			}
+			return true, 0, "self-update install direto iniciado com sucesso", ""
 		case "", "check-update", "force-check":
-			if err := a.requestAgentUpdateCheck(parent, "command:"+action); err != nil {
+			if err := a.requestAgentUpdateCheck(parent, "command:"+updateCmd.Action); err != nil {
 				return true, 1, "", err.Error()
 			}
 			return true, 0, "self-update check solicitado", ""
@@ -900,7 +979,13 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 			return true, 0, fmt.Sprintf("%s adiada pelo usuario", action), ""
 		}
 
-		exitCode, output, errText := a.executeSystemPowerAction(parent, action, pp.DelaySeconds, pp.Force, pp.Message)
+		// No modo forcado, o dialog PSADT ja fez a contagem regressiva.
+		// Usa delay minimo para o shutdown.exe executar quase imediatamente.
+		execDelaySeconds := pp.DelaySeconds
+		if pp.Force {
+			execDelaySeconds = 5
+		}
+		exitCode, output, errText := a.executeSystemPowerAction(parent, action, execDelaySeconds, pp.Force, pp.Message)
 		return true, exitCode, output, errText
 	}
 

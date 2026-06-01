@@ -116,6 +116,37 @@ func buildPsadtAlertScript(p PsadtAlertPayload) (string, time.Duration) {
 		timeout := time.Duration(p.TimeoutSeconds+30) * time.Second
 		return header + body, timeout
 
+	case "update-progress":
+		// UpdateProgress: barra de progresso não-bloqueante para self-update.
+		// Usa Show-ADTInstallationProgress para exibir download/instalação.
+		// O agent pode reenviar este alerta com progressPercent atualizado.
+		statusText := p.StatusText
+		if statusText == "" {
+			statusText = p.Title
+		}
+		progressPercent := p.ProgressPercent
+		if progressPercent < 0 {
+			progressPercent = 0
+		}
+		if progressPercent > 100 {
+			progressPercent = 100
+		}
+		subtitle := p.Subtitle
+
+		body := openSession +
+			"$progressParams = @{\n" +
+			fmt.Sprintf("  Message = %s\n", psEscape(statusText)) +
+			fmt.Sprintf("  StepName = %s\n", psEscape(subtitle)) +
+			fmt.Sprintf("  CounterValue = %d\n", progressPercent) +
+			fmt.Sprintf("  MaxCounterValue = 100\n") +
+			"}\n" +
+			"Show-ADTInstallationProgress @progressParams\n" +
+			"Write-Host 'shown'\n" +
+			closeSession +
+			"exit 0\n"
+		timeout := time.Duration(30) * time.Second
+		return header + body, timeout
+
 	case "modal":
 		// Modal: DialogBox bloqueante com botões de ação.
 		// Constrói a lista de botões a partir das actions; usa YesNo como fallback.
@@ -326,21 +357,19 @@ func (a *App) showPowerActionWarning(ctx context.Context, action string, delaySe
 
 	label := "reiniciar"
 	actionPt := "reiniciado"
-	actionBtn := "Reiniciar agora"
 	if action == "shutdown" {
 		label = "desligar"
 		actionPt = "desligado"
-		actionBtn = "Desligar agora"
 	}
 	if msg == "" {
 		if force {
-			msg = fmt.Sprintf("O administrador solicitou a %s do sistema. O computador será %s em %d segundos.", label, actionPt, delaySeconds)
+			msg = fmt.Sprintf("O administrador solicitou a %s do sistema. O computador sera %s em %d segundos. Salve seu trabalho.", label, actionPt, delaySeconds)
 		} else {
-			msg = fmt.Sprintf("O administrador solicitou a %s do sistema. Deseja %s agora?", label, label)
+			msg = fmt.Sprintf("O administrador solicitou a %s do sistema. Deseja prosseguir?", label)
 		}
 	}
 
-	script, timeout := buildPowerActionWarningScript(action, delaySeconds, force, msg, actionBtn)
+	script, timeout := buildPowerActionWarningScript(action, delaySeconds, force, msg)
 	execCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -373,7 +402,12 @@ func (a *App) showPowerActionWarning(ctx context.Context, action string, delaySe
 
 // buildPowerActionWarningScript constrói o script PowerShell que exibe o aviso
 // de restart/shutdown via PSADT Show-ADTDialogBox com countdown.
-func buildPowerActionWarningScript(action string, delaySeconds int, force bool, message, actionBtn string) (string, time.Duration) {
+func buildPowerActionWarningScript(action string, delaySeconds int, force bool, message string) (string, time.Duration) {
+	title := "Reinicializacao do Sistema"
+	if action == "shutdown" {
+		title = "Desligamento do Sistema"
+	}
+
 	header := "$ErrorActionPreference = 'Stop'\n" +
 		"[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)\n" +
 		"$OutputEncoding = [Console]::OutputEncoding\n" +
@@ -394,9 +428,10 @@ func buildPowerActionWarningScript(action string, delaySeconds int, force bool, 
 
 	if force {
 		// Dialog informativo sem botão de fechar: countdown regressivo com ExitOnTimeout.
+		// O shutdown.exe será chamado com delay mínimo (5s) porque a contagem já ocorreu aqui.
 		body := header +
 			"$dialogParams = @{\n" +
-			fmt.Sprintf("  Title = %s\n", psEscape("Reinicializacao do Sistema")) +
+			fmt.Sprintf("  Title = %s\n", psEscape(title)) +
 			fmt.Sprintf("  Text = %s\n", psEscape(message)) +
 			"  Buttons = 'Ok'\n" +
 			"  Icon = 'Warning'\n" +
@@ -411,10 +446,10 @@ func buildPowerActionWarningScript(action string, delaySeconds int, force bool, 
 		return header + body, timeoutVal
 	}
 
-	// Modo não-forçado: botões Yes/No, timeout alto.
+	// Modo não-forçado: botões Yes/No, usuário pode adiar.
 	body := header +
 		"$dialogParams = @{\n" +
-		fmt.Sprintf("  Title = %s\n", psEscape("Reinicializacao do Sistema")) +
+		fmt.Sprintf("  Title = %s\n", psEscape(title)) +
 		fmt.Sprintf("  Text = %s\n", psEscape(message)) +
 		"  Buttons = 'YesNo'\n" +
 		"  DefaultButton = 'First'\n" +

@@ -105,14 +105,17 @@ type PsadtAlertAction struct {
 // PsadtAlertPayload representa o payload do commandType ShowPsadtAlert (9)
 // enviado pelo servidor via ExecuteCommand.
 type PsadtAlertPayload struct {
-	AlertID        string             `json:"alertId"`
-	Type           string             `json:"type"` // "toast" | "modal"
-	Title          string             `json:"title"`
-	Message        string             `json:"message"`
-	TimeoutSeconds int                `json:"timeoutSeconds"` // 0 = padrão
-	Icon           string             `json:"icon"`           // "info" | "warning" | "error" | "success" | "question"
-	Actions        []PsadtAlertAction `json:"actions"`        // apenas modal
-	DefaultAction  string             `json:"defaultAction"`  // ação ao fechar sem clicar (modal)
+	AlertID         string             `json:"alertId"`
+	Type            string             `json:"type"` // "toast" | "modal" | "update-progress"
+	Title           string             `json:"title"`
+	Message         string             `json:"message"`
+	TimeoutSeconds  int                `json:"timeoutSeconds"`  // 0 = padrão
+	Icon            string             `json:"icon"`            // "info" | "warning" | "error" | "success" | "question"
+	Actions         []PsadtAlertAction `json:"actions"`         // apenas modal
+	DefaultAction   string             `json:"defaultAction"`   // ação ao fechar sem clicar (modal)
+	ProgressPercent int                `json:"progressPercent"` // 0-100 para update-progress
+	StatusText      string             `json:"statusText"`      // texto de status para update-progress
+	Subtitle        string             `json:"subtitle"`        // subtítulo para update-progress
 }
 
 func (c *inventoryCache) get() (models.InventoryReport, bool) {
