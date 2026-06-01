@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -240,6 +241,20 @@ type wolPayload struct {
 	BroadcastAddress string `json:"broadcastAddress"`
 }
 
+// resolveShutdownExe returns the absolute path to shutdown.exe in System32.
+// Using the absolute path avoids PATH resolution failures when the agent runs
+// in restricted contexts (Startup shortcut, Scheduled Task, service account).
+func resolveShutdownExe() string {
+	sysRoot := os.Getenv("SystemRoot")
+	if sysRoot == "" {
+		sysRoot = os.Getenv("windir")
+	}
+	if sysRoot == "" {
+		sysRoot = `C:\Windows`
+	}
+	return filepath.Join(sysRoot, "System32", "shutdown.exe")
+}
+
 // executeRestartOrShutdown schedules a system restart or shutdown via the OS.
 // On Windows, it uses shutdown.exe with /r (restart) or /s (shutdown).
 // Returns immediately after scheduling — the action is asynchronous.
@@ -270,13 +285,17 @@ func executeRestartOrShutdown(ctx context.Context, action string, payload any) (
 		args = append(args, "/c", pp.Message)
 	}
 
+	// Usa caminho absoluto para shutdown.exe (System32) para evitar falha
+	// de PATH em contextos restritos (atalho Startup, Scheduled Task, service).
+	shutdownExe := resolveShutdownExe()
+
 	// shutdown.exe does not need ctx — it schedules and returns immediately
-	cmd := exec.Command("shutdown", args...)
+	cmd := exec.Command(shutdownExe, args...)
 	out, err := cmd.CombinedOutput()
 	output := string(out)
 
 	if err != nil {
-		return 1, output, fmt.Sprintf("falha ao agendar %s: %v", label, err)
+		return 1, output, fmt.Sprintf("falha ao agendar %s (%s %s): %v", label, shutdownExe, strings.Join(args, " "), err)
 	}
 
 	return 0, fmt.Sprintf(
@@ -287,7 +306,7 @@ func executeRestartOrShutdown(ctx context.Context, action string, payload any) (
 
 // executeAbortShutdown cancels any scheduled system restart or shutdown.
 func executeAbortShutdown(ctx context.Context) (int, string, string) {
-	cmd := exec.CommandContext(ctx, "shutdown", "/a")
+	cmd := exec.CommandContext(ctx, resolveShutdownExe(), "/a")
 	out, err := cmd.CombinedOutput()
 	output := string(out)
 

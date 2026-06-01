@@ -881,6 +881,29 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 		}
 	}
 
+	if isPowerActionCommandType(cmdType) {
+		pp := parsePowerCommandPayload(payload)
+		action := "restart"
+		if cmdType == "shutdown" {
+			action = "shutdown"
+		}
+		if pp.DelaySeconds <= 0 {
+			pp.DelaySeconds = 15
+		}
+
+		// Exibe aviso PSADT antes de executar a acao no sistema.
+		decision, err := a.showPowerActionWarning(parent, action, pp.DelaySeconds, pp.Force, pp.Message)
+		if err != nil {
+			a.logs.append(fmt.Sprintf("[agent] %s-warning erro ao exibir aviso: %v", action, err))
+		}
+		if decision != "proceed" {
+			return true, 0, fmt.Sprintf("%s adiada pelo usuario", action), ""
+		}
+
+		exitCode, output, errText := a.executeSystemPowerAction(parent, action, pp.DelaySeconds, pp.Force, pp.Message)
+		return true, exitCode, output, errText
+	}
+
 	if a == nil || a.remoteDebug == nil {
 		return false, 0, "", ""
 	}
@@ -892,4 +915,60 @@ func (a *App) onAgentCommandOutput(cmdType, output, errText string) {
 		return
 	}
 	a.remoteDebug.OnCommandOutput(cmdType, output, errText)
+}
+
+// ── Power Action Command Helpers ──
+
+type powerCommandPayload struct {
+	DelaySeconds int    `json:"delaySeconds"`
+	Force        bool   `json:"force"`
+	Message      string `json:"message"`
+}
+
+// isPowerActionCommandType checks whether cmdType is a restart/reboot/shutdown command.
+func isPowerActionCommandType(cmdType string) bool {
+	switch strings.ToLower(strings.TrimSpace(cmdType)) {
+	case "restart", "reboot", "shutdown":
+		return true
+	default:
+		return false
+	}
+}
+
+// parsePowerCommandPayload extracts delaySeconds, force, and message from the raw payload.
+func parsePowerCommandPayload(payload any) powerCommandPayload {
+	if payload == nil {
+		return powerCommandPayload{}
+	}
+
+	toString := func(v any) string {
+		s, _ := v.(string)
+		return strings.TrimSpace(s)
+	}
+	toBool := func(v any) bool {
+		b, _ := v.(bool)
+		return b
+	}
+	toInt := func(v any) int {
+		switch t := v.(type) {
+		case float64:
+			return int(t)
+		case int:
+			return t
+		case int64:
+			return int(t)
+		}
+		return 0
+	}
+
+	m, ok := payload.(map[string]any)
+	if !ok {
+		return powerCommandPayload{}
+	}
+
+	return powerCommandPayload{
+		DelaySeconds: toInt(m["delaySeconds"]),
+		Force:        toBool(m["force"]),
+		Message:      toString(m["message"]),
+	}
 }

@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -309,4 +311,168 @@ func (a *App) handlePsadtAlert(ctx context.Context, p PsadtAlertPayload) (int, s
 		a.logs.append(fmt.Sprintf("[agent] psadt-alert concluido type=%s alertId=%s action=%s", p.Type, p.AlertID, action))
 	}
 	return 0, string(body), ""
+}
+
+// ── Restart / Shutdown Warning ──
+
+// powerActionWarning builds and executes a PSADT warning dialog before a system
+// restart or shutdown. If force is true, the dialog is non-dismissible and
+// auto-proceeds after the countdown. Returns the user decision ("proceed" or
+// "deferred") for non-forced mode; always "proceed" for forced mode.
+func (a *App) showPowerActionWarning(ctx context.Context, action string, delaySeconds int, force bool, msg string) (string, error) {
+	if runtime.GOOS != "windows" {
+		return "proceed", nil
+	}
+
+	label := "reiniciar"
+	actionPt := "reiniciado"
+	actionBtn := "Reiniciar agora"
+	if action == "shutdown" {
+		label = "desligar"
+		actionPt = "desligado"
+		actionBtn = "Desligar agora"
+	}
+	if msg == "" {
+		if force {
+			msg = fmt.Sprintf("O administrador solicitou a %s do sistema. O computador será %s em %d segundos.", label, actionPt, delaySeconds)
+		} else {
+			msg = fmt.Sprintf("O administrador solicitou a %s do sistema. Deseja %s agora?", label, label)
+		}
+	}
+
+	script, timeout := buildPowerActionWarningScript(action, delaySeconds, force, msg, actionBtn)
+	execCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	a.logs.append(fmt.Sprintf("[agent] psadt-%s-warning iniciando force=%t delay=%ds", action, force, delaySeconds))
+
+	cmd := exec.CommandContext(execCtx, "powershell", "-NoProfile", "-NonInteractive", "-Command", script)
+	outBytes, err := cmd.CombinedOutput()
+	rawOutput := strings.TrimSpace(string(outBytes))
+
+	if err != nil {
+		if execCtx.Err() == context.DeadlineExceeded {
+			a.logs.append(fmt.Sprintf("[agent] psadt-%s-warning timeout — prosseguindo", action))
+			return "proceed", nil
+		}
+		a.logs.append(fmt.Sprintf("[agent] psadt-%s-warning erro: %v | output: %s", action, err, rawOutput))
+		return "proceed", nil // sempre prossegue em caso de erro
+	}
+
+	result := strings.ToLower(strings.TrimSpace(rawOutput))
+	a.logs.append(fmt.Sprintf("[agent] psadt-%s-warning concluido result=%s", action, result))
+
+	if force {
+		return "proceed", nil
+	}
+	if result == "yes" || result == "ok" || result == "proceed" {
+		return "proceed", nil
+	}
+	return "deferred", nil
+}
+
+// buildPowerActionWarningScript constrói o script PowerShell que exibe o aviso
+// de restart/shutdown via PSADT Show-ADTDialogBox com countdown.
+func buildPowerActionWarningScript(action string, delaySeconds int, force bool, message, actionBtn string) (string, time.Duration) {
+	header := "$ErrorActionPreference = 'Stop'\n" +
+		"[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)\n" +
+		"$OutputEncoding = [Console]::OutputEncoding\n" +
+		"try {\n" +
+		"    Import-Module -Name PSAppDeployToolkit -ErrorAction Stop\n" +
+		"} catch {\n" +
+		"    Write-Output 'proceed'; exit 0\n" +
+		"}\n" +
+		"try {\n" +
+		"    Open-ADTSession -SessionState $ExecutionContext.SessionState" +
+		" -AppName 'Discovery' -AppVersion '1.0' -AppVendor 'Discovery'" +
+		" -DeploymentType 'Install' -DeployMode 'Interactive'\n" +
+		"} catch {\n" +
+		"    Write-Output 'proceed'; exit 0\n" +
+		"}\n"
+
+	closeSession := "try { Close-ADTSession -ExitCode 0 } catch {}\n"
+
+	if force {
+		// Dialog informativo sem botão de fechar: countdown regressivo com ExitOnTimeout.
+		body := header +
+			"$dialogParams = @{\n" +
+			fmt.Sprintf("  Title = %s\n", psEscape("Reinicializacao do Sistema")) +
+			fmt.Sprintf("  Text = %s\n", psEscape(message)) +
+			"  Buttons = 'Ok'\n" +
+			"  Icon = 'Warning'\n" +
+			fmt.Sprintf("  Timeout = %d\n", delaySeconds) +
+			"  ExitOnTimeout = $true\n" +
+			"}\n" +
+			"$null = Show-ADTDialogBox @dialogParams\n" +
+			"Write-Output 'proceed'\n" +
+			closeSession +
+			"exit 0\n"
+		timeoutVal := time.Duration(delaySeconds+30) * time.Second
+		return header + body, timeoutVal
+	}
+
+	// Modo não-forçado: botões Yes/No, timeout alto.
+	body := header +
+		"$dialogParams = @{\n" +
+		fmt.Sprintf("  Title = %s\n", psEscape("Reinicializacao do Sistema")) +
+		fmt.Sprintf("  Text = %s\n", psEscape(message)) +
+		"  Buttons = 'YesNo'\n" +
+		"  DefaultButton = 'First'\n" +
+		"  Icon = 'Warning'\n" +
+		fmt.Sprintf("  Timeout = %d\n", delaySeconds+60) +
+		"  ExitOnTimeout = $true\n" +
+		"}\n" +
+		"$adtResult = Show-ADTDialogBox @dialogParams\n" +
+		"if ($adtResult -eq 'Yes') { Write-Output 'proceed' } else { Write-Output 'deferred' }\n" +
+		closeSession +
+		"exit 0\n"
+	timeoutVal := time.Duration(delaySeconds+90) * time.Second
+	return header + body, timeoutVal
+}
+
+// resolveShutdownExe returns the absolute path to shutdown.exe in System32.
+func resolveShutdownExe() string {
+	sysRoot := os.Getenv("SystemRoot")
+	if sysRoot == "" {
+		sysRoot = os.Getenv("windir")
+	}
+	if sysRoot == "" {
+		sysRoot = `C:\Windows`
+	}
+	return filepath.Join(sysRoot, "System32", "shutdown.exe")
+}
+
+// executeSystemPowerAction schedules the actual OS restart or shutdown via shutdown.exe.
+func (a *App) executeSystemPowerAction(ctx context.Context, action string, delaySeconds int, force bool, msg string) (int, string, string) {
+	flag := "/s"
+	label := "shutdown"
+	if action == "restart" || action == "reboot" {
+		flag = "/r"
+		label = "restart"
+	}
+
+	args := []string{flag, "/t", fmt.Sprintf("%d", delaySeconds)}
+	if force {
+		args = append(args, "/f")
+	}
+	if msg != "" {
+		args = append(args, "/c", msg)
+	}
+
+	shutdownExe := resolveShutdownExe()
+	cmd := exec.Command(shutdownExe, args...)
+	out, err := cmd.CombinedOutput()
+	output := string(out)
+
+	if err != nil {
+		if a != nil {
+			a.logs.append(fmt.Sprintf("[agent] %s-warning falha ao agendar (%s %s): %v", action, shutdownExe, strings.Join(args, " "), err))
+		}
+		return 1, output, fmt.Sprintf("falha ao agendar %s: %v", label, err)
+	}
+
+	if a != nil {
+		a.logs.append(fmt.Sprintf("[agent] %s agendado com sucesso (delay=%ds, force=%t)", label, delaySeconds, force))
+	}
+	return 0, fmt.Sprintf("%s agendado com sucesso (delay=%ds, force=%t, message=%q)", label, delaySeconds, force, msg), ""
 }
