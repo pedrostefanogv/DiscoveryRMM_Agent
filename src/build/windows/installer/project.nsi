@@ -496,6 +496,27 @@ Section
 
          !insertmacro wails.writeUninstaller
          WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${UNINST_KEY_NAME}" "InstallLocation" "$INSTDIR"
+
+         ; Restart agent apos update silencioso (/UPDATE).
+         ; O Task Scheduler so dispara no login; restart imediato garante que o
+         ; agente volte ao ar assim que o instalador terminar.
+         ${If} $UpdateMode == "1"
+            ; Verifica se o Windows Service existia antes do update e o reinicia.
+            nsExec::ExecToLog '"$SYSDIR\sc.exe" query "${DISCOVERY_SERVICE_NAME}"'
+            Pop $R0
+            ${If} $R0 == 0
+               DetailPrint "Update mode: reiniciando Windows Service ${DISCOVERY_SERVICE_NAME}..."
+               nsExec::ExecToLog '"$SYSDIR\sc.exe" start "${DISCOVERY_SERVICE_NAME}"'
+               Pop $R0
+               ${If} $R0 != 0
+                  DetailPrint "Aviso: falha ao reiniciar service (codigo $R0). Iniciando em modo UI..."
+                  Exec '"$INSTDIR\${PRODUCT_EXECUTABLE}"'
+               ${EndIf}
+            ${Else}
+               DetailPrint "Update mode: reiniciando o agente em modo UI..."
+               Exec '"$INSTDIR\${PRODUCT_EXECUTABLE}"'
+            ${EndIf}
+         ${EndIf}
       !endif
 SectionEnd
 
@@ -791,9 +812,21 @@ FunctionEnd
 Function PrepareForInPlaceUpdate
    DetailPrint "Preparando atualizacao in-place (encerrando instancias em execucao)..."
 
-   # Tentar remover startup task antiga e service antes de atualizar binarios.
+   ; Tentar remover startup task antiga antes de atualizar binarios.
    Call UnregisterUIStartupTask
-   Call UnregisterWindowsService
+
+   ; Em modo update, apenas PARA o servico sem deletar — sera reiniciado ao final.
+   ${If} $UpdateMode == "1"
+      DetailPrint "Parando Windows Service ${DISCOVERY_SERVICE_NAME} (update mode: sera reiniciado apos)..."
+      nsExec::ExecToLog '"$SYSDIR\sc.exe" stop "${DISCOVERY_SERVICE_NAME}"'
+      Pop $R0
+      ${If} $R0 != 0
+         DetailPrint "Aviso: falha (ou service inexistente) ao parar ${DISCOVERY_SERVICE_NAME}. Codigo: $R0"
+      ${EndIf}
+   ${Else}
+      ; Instalacao limpa: remove definitivamente.
+      Call UnregisterWindowsService
+   ${EndIf}
 
    # Garantir que nenhuma instancia do app permaneceu em execucao.
    nsExec::ExecToLog '"$SYSDIR\taskkill.exe" /IM "${PRODUCT_EXECUTABLE}" /F /T'
