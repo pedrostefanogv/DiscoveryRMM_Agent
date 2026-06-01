@@ -507,13 +507,15 @@ Section "uninstall"
    Call un.UnregisterWindowsFirewallRule
 
    # Garantir encerramento de qualquer instancia em modo UI/headless.
-   ExecWait '"$SYSDIR\taskkill.exe" /IM "${PRODUCT_EXECUTABLE}" /F /T' $R0
+   nsExec::ExecToLog '"$SYSDIR\taskkill.exe" /IM "${PRODUCT_EXECUTABLE}" /F /T'
+   Pop $R0
    ${If} $R0 != 0
       DetailPrint "Aviso: taskkill retornou codigo $R0 (pode nao haver processo em execucao)."
    ${EndIf}
 
    ${If} "${LEGACY_PRODUCT_EXECUTABLE}" != "${PRODUCT_EXECUTABLE}"
-      ExecWait '"$SYSDIR\taskkill.exe" /IM "${LEGACY_PRODUCT_EXECUTABLE}" /F /T' $R1
+      nsExec::ExecToLog '"$SYSDIR\taskkill.exe" /IM "${LEGACY_PRODUCT_EXECUTABLE}" /F /T'
+      Pop $R1
       ${If} $R1 != 0
          DetailPrint "Aviso: taskkill legado retornou codigo $R1 (pode nao haver processo legado em execucao)."
       ${EndIf}
@@ -522,7 +524,8 @@ Section "uninstall"
    # Executar decommission (DELETE remoto + limpeza local) antes de remover os binarios.
    IfFileExists "$INSTDIR\${PRODUCT_EXECUTABLE}" 0 decommission_done
       DetailPrint "Executando decommission do agente..."
-      ExecWait '"$INSTDIR\${PRODUCT_EXECUTABLE}" --agent-delete-cleanup' $R3
+      nsExec::ExecToLog '"$INSTDIR\${PRODUCT_EXECUTABLE}" --agent-delete-cleanup'
+      Pop $R3
       ${If} $R3 != 0
          DetailPrint "Aviso: decommission retornou codigo $R3."
       ${EndIf}
@@ -591,7 +594,8 @@ Function SaveAgentConfig
    ; Garantir permissao multiusuario para runtime sem servico Windows.
    ; Usa SIDs bem conhecidos para evitar falha em SOs localizados.
    ; /inheritance:e + /T aplica em filhos existentes (ex.: config.json legado).
-   ExecWait '"$SYSDIR\icacls.exe" "$R0\Discovery" /inheritance:e /grant "*S-1-5-18:(OI)(CI)(F)" "*S-1-5-32-544:(OI)(CI)(F)" "*S-1-5-32-545:(OI)(CI)(M)" /T /C /Q' $R9
+   nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$R0\Discovery" /inheritance:e /grant "*S-1-5-18:(OI)(CI)(F)" "*S-1-5-32-544:(OI)(CI)(F)" "*S-1-5-32-545:(OI)(CI)(M)" /T /C /Q'
+   Pop $R9
    ${If} $R9 != 0
       DetailPrint "Aviso: nao foi possivel ajustar ACL de $R0\Discovery (icacls codigo $R9)"
    ${EndIf}
@@ -742,15 +746,19 @@ Function DownloadAndRunStage2
    DetailPrint "Executando instalador completo de segunda etapa..."
    ${If} $GenericMode == "1"
       ${If} $UpdateMode == "1"
-         ExecWait '"$R7" /S /UPDATE /GENERIC /BOOTSTRAP_STAGE2 /AUTO_PROVISIONING=$AutoProvisioning /ALLOW_INSECURE_TLS=$AllowInsecureTls' $R0
+         nsExec::ExecToLog '"$R7" /S /UPDATE /GENERIC /BOOTSTRAP_STAGE2 /AUTO_PROVISIONING=$AutoProvisioning /ALLOW_INSECURE_TLS=$AllowInsecureTls'
+         Pop $R0
       ${Else}
-         ExecWait '"$R7" /S /GENERIC /BOOTSTRAP_STAGE2 /AUTO_PROVISIONING=$AutoProvisioning /ALLOW_INSECURE_TLS=$AllowInsecureTls' $R0
+         nsExec::ExecToLog '"$R7" /S /GENERIC /BOOTSTRAP_STAGE2 /AUTO_PROVISIONING=$AutoProvisioning /ALLOW_INSECURE_TLS=$AllowInsecureTls'
+         Pop $R0
       ${EndIf}
    ${Else}
       ${If} $UpdateMode == "1"
-         ExecWait '"$R7" /S /UPDATE /BOOTSTRAP_STAGE2 /URL="$ServerUrl" /KEY="$ServerKey" /AUTO_PROVISIONING=$AutoProvisioning /ALLOW_INSECURE_TLS=$AllowInsecureTls' $R0
+         nsExec::ExecToLog '"$R7" /S /UPDATE /BOOTSTRAP_STAGE2 /URL="$ServerUrl" /KEY="$ServerKey" /AUTO_PROVISIONING=$AutoProvisioning /ALLOW_INSECURE_TLS=$AllowInsecureTls'
+         Pop $R0
       ${Else}
-         ExecWait '"$R7" /S /BOOTSTRAP_STAGE2 /URL="$ServerUrl" /KEY="$ServerKey" /AUTO_PROVISIONING=$AutoProvisioning /ALLOW_INSECURE_TLS=$AllowInsecureTls' $R0
+         nsExec::ExecToLog '"$R7" /S /BOOTSTRAP_STAGE2 /URL="$ServerUrl" /KEY="$ServerKey" /AUTO_PROVISIONING=$AutoProvisioning /ALLOW_INSECURE_TLS=$AllowInsecureTls'
+         Pop $R0
       ${EndIf}
    ${EndIf}
 
@@ -773,7 +781,8 @@ Function EnsureSharedDataDir
    ; Aplicar ACL no diretorio compartilhado para execucao por usuarios padrao.
    ; SIDs evitam dependencia de nomes localizados de grupos.
    ; /inheritance:e + /T cobre arquivos preexistentes no diretorio.
-   ExecWait '"$SYSDIR\icacls.exe" "$R0\Discovery" /inheritance:e /grant "*S-1-5-18:(OI)(CI)(F)" "*S-1-5-32-544:(OI)(CI)(F)" "*S-1-5-32-545:(OI)(CI)(M)" /T /C /Q' $R9
+   nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$R0\Discovery" /inheritance:e /grant "*S-1-5-18:(OI)(CI)(F)" "*S-1-5-32-544:(OI)(CI)(F)" "*S-1-5-32-545:(OI)(CI)(M)" /T /C /Q'
+   Pop $R9
    ${If} $R9 != 0
       DetailPrint "Aviso: nao foi possivel ajustar ACL de $R0\Discovery (icacls codigo $R9)"
    ${EndIf}
@@ -787,13 +796,15 @@ Function PrepareForInPlaceUpdate
    Call UnregisterWindowsService
 
    # Garantir que nenhuma instancia do app permaneceu em execucao.
-   ExecWait '"$SYSDIR\taskkill.exe" /IM "${PRODUCT_EXECUTABLE}" /F /T' $R0
+   nsExec::ExecToLog '"$SYSDIR\taskkill.exe" /IM "${PRODUCT_EXECUTABLE}" /F /T'
+   Pop $R0
    ${If} $R0 != 0
       DetailPrint "Aviso: taskkill retornou codigo $R0 (pode nao haver processo em execucao)."
    ${EndIf}
 
    ${If} "${LEGACY_PRODUCT_EXECUTABLE}" != "${PRODUCT_EXECUTABLE}"
-      ExecWait '"$SYSDIR\taskkill.exe" /IM "${LEGACY_PRODUCT_EXECUTABLE}" /F /T' $R1
+      nsExec::ExecToLog '"$SYSDIR\taskkill.exe" /IM "${LEGACY_PRODUCT_EXECUTABLE}" /F /T'
+      Pop $R1
       ${If} $R1 != 0
          DetailPrint "Aviso: taskkill legado retornou codigo $R1 (pode nao haver processo legado em execucao)."
       ${EndIf}
@@ -804,22 +815,28 @@ Function RegisterWindowsService
    DetailPrint "Registrando Windows Service ${DISCOVERY_SERVICE_NAME}"
 
    # Remover versÃ£o anterior (idempotente)
-   ExecWait '"$SYSDIR\sc.exe" stop "${DISCOVERY_SERVICE_NAME}"' $R0
-   ExecWait '"$SYSDIR\sc.exe" delete "${DISCOVERY_SERVICE_NAME}"' $R0
+   nsExec::ExecToLog '"$SYSDIR\sc.exe" stop "${DISCOVERY_SERVICE_NAME}"'
+   Pop $R0
+   nsExec::ExecToLog '"$SYSDIR\sc.exe" delete "${DISCOVERY_SERVICE_NAME}"'
+   Pop $R0
 
    # Registrar serviÃ§o com inicializaÃ§Ã£o automÃ¡tica
-   ExecWait '"$SYSDIR\sc.exe" create "${DISCOVERY_SERVICE_NAME}" binPath= "\"$INSTDIR\${PRODUCT_EXECUTABLE}\" --service" start= auto DisplayName= "Discovery Agent Service"' $R0
+   nsExec::ExecToLog '"$SYSDIR\sc.exe" create "${DISCOVERY_SERVICE_NAME}" binPath= "\"$INSTDIR\${PRODUCT_EXECUTABLE}\" --service" start= auto DisplayName= "Discovery Agent Service"'
+   Pop $R0
    ${If} $R0 != 0
       MessageBox MB_ICONSTOP "Falha ao registrar o Windows Service (${DISCOVERY_SERVICE_NAME}). Codigo: $R0"
       Abort
    ${EndIf}
 
    # Configurar recuperaÃ§Ã£o automÃ¡tica
-   ExecWait '"$SYSDIR\sc.exe" failure "${DISCOVERY_SERVICE_NAME}" reset= 86400 actions= restart/5000/restart/5000/restart/5000' $R1
-   ExecWait '"$SYSDIR\sc.exe" description "${DISCOVERY_SERVICE_NAME}" "Discovery background service (multi-user)"' $R1
+   nsExec::ExecToLog '"$SYSDIR\sc.exe" failure "${DISCOVERY_SERVICE_NAME}" reset= 86400 actions= restart/5000/restart/5000/restart/5000'
+   Pop $R1
+   nsExec::ExecToLog '"$SYSDIR\sc.exe" description "${DISCOVERY_SERVICE_NAME}" "Discovery background service (multi-user)"'
+   Pop $R1
 
    # Iniciar serviÃ§o apÃ³s instalaÃ§Ã£o
-   ExecWait '"$SYSDIR\sc.exe" start "${DISCOVERY_SERVICE_NAME}"' $R1
+   nsExec::ExecToLog '"$SYSDIR\sc.exe" start "${DISCOVERY_SERVICE_NAME}"'
+   Pop $R1
    ${If} $R1 != 0
       DetailPrint "Aviso: service instalado, mas falhou ao iniciar automaticamente. Codigo: $R1"
    ${EndIf}
@@ -890,11 +907,13 @@ FunctionEnd
 
 Function UnregisterWindowsService
    DetailPrint "Removendo Windows Service ${DISCOVERY_SERVICE_NAME}"
-   ExecWait '"$SYSDIR\sc.exe" stop "${DISCOVERY_SERVICE_NAME}"' $R0
+   nsExec::ExecToLog '"$SYSDIR\sc.exe" stop "${DISCOVERY_SERVICE_NAME}"'
+   Pop $R0
    ${If} $R0 != 0
       DetailPrint "Aviso: falha (ou service inexistente) ao parar ${DISCOVERY_SERVICE_NAME}. Codigo: $R0"
    ${EndIf}
-   ExecWait '"$SYSDIR\sc.exe" delete "${DISCOVERY_SERVICE_NAME}"' $R0
+   nsExec::ExecToLog '"$SYSDIR\sc.exe" delete "${DISCOVERY_SERVICE_NAME}"'
+   Pop $R0
    ${If} $R0 != 0
       DetailPrint "Aviso: falha (ou service inexistente) ao remover ${DISCOVERY_SERVICE_NAME}. Codigo: $R0"
    ${EndIf}
@@ -914,17 +933,20 @@ FunctionEnd
 
 Function UnregisterUIStartupTask
    DetailPrint "Removendo tarefa de autostart da UI (${DISCOVERY_UI_TASK_NAME})"
-   ExecWait '"$SYSDIR\schtasks.exe" /Delete /TN "${DISCOVERY_UI_TASK_NAME}" /F' $R0
+   nsExec::ExecToLog '"$SYSDIR\schtasks.exe" /Delete /TN "${DISCOVERY_UI_TASK_NAME}" /F'
+   Pop $R0
    Delete "$SMSTARTUP\${INFO_PRODUCTNAME}.lnk"
 FunctionEnd
 
 Function un.UnregisterWindowsService
    DetailPrint "Removendo Windows Service ${DISCOVERY_SERVICE_NAME}"
-   ExecWait '"$SYSDIR\sc.exe" stop "${DISCOVERY_SERVICE_NAME}"' $R0
+   nsExec::ExecToLog '"$SYSDIR\sc.exe" stop "${DISCOVERY_SERVICE_NAME}"'
+   Pop $R0
    ${If} $R0 != 0
       DetailPrint "Aviso: falha (ou service inexistente) ao parar ${DISCOVERY_SERVICE_NAME}. Codigo: $R0"
    ${EndIf}
-   ExecWait '"$SYSDIR\sc.exe" delete "${DISCOVERY_SERVICE_NAME}"' $R0
+   nsExec::ExecToLog '"$SYSDIR\sc.exe" delete "${DISCOVERY_SERVICE_NAME}"'
+   Pop $R0
    ${If} $R0 != 0
       DetailPrint "Aviso: falha (ou service inexistente) ao remover ${DISCOVERY_SERVICE_NAME}. Codigo: $R0"
    ${EndIf}
@@ -932,7 +954,8 @@ FunctionEnd
 
 Function un.UnregisterUIStartupTask
    DetailPrint "Removendo tarefa de autostart da UI (${DISCOVERY_UI_TASK_NAME})"
-   ExecWait '"$SYSDIR\schtasks.exe" /Delete /TN "${DISCOVERY_UI_TASK_NAME}" /F' $R0
+   nsExec::ExecToLog '"$SYSDIR\schtasks.exe" /Delete /TN "${DISCOVERY_UI_TASK_NAME}" /F'
+   Pop $R0
    Delete "$SMSTARTUP\${INFO_PRODUCTNAME}.lnk"
 FunctionEnd
 

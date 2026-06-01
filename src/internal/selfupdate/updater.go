@@ -722,9 +722,62 @@ func (u *Updater) downloadToTemp(ctx context.Context, m *UpdateManifest) (string
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8*1024))
-		errutil.LogIfErr(os.Remove(path), "selfupdate: limpar download status != 200")
-		return "", fmt.Errorf("download status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
+		resp.Body.Close()
+
+		// Fallback: tenta o endpoint público para rebuilds de mesma versão.
+		publicURL := strings.TrimSpace(u.ApiScheme) + "://" + strings.TrimSpace(u.ApiServer) + "/api/v1/download/agent"
+		u.logf("selfupdate: download autenticado retornou %d — tentando endpoint público: %s", resp.StatusCode, publicURL)
+
+		req2, err2 := http.NewRequestWithContext(ctxDownload, http.MethodGet, publicURL, nil)
+		if err2 != nil {
+			errutil.LogIfErr(os.Remove(path), "selfupdate: limpar download fallback erro request")
+			return "", fmt.Errorf("download status=%d (fallback request error: %v)", resp.StatusCode, err2)
+		}
+		// Public endpoint is AllowAnonymous but we still send auth for consistency.
+		if err2 := netutil.SetAgentAuthHeadersWithAgentID(req2, token, agentID); err2 != nil {
+			errutil.LogIfErr(os.Remove(path), "selfupdate: limpar download fallback credenciais")
+			return "", fmt.Errorf("download status=%d (fallback auth error: %v)", resp.StatusCode, err2)
+		}
+
+		resp2, err2 := client.Do(req2)
+		if err2 != nil {
+			errutil.LogIfErr(os.Remove(path), "selfupdate: limpar download fallback falha HTTP")
+			return "", fmt.Errorf("download status=%d (fallback HTTP error: %v)", resp.StatusCode, err2)
+		}
+		defer resp2.Body.Close()
+
+		if resp2.StatusCode != http.StatusOK {
+			body2, _ := io.ReadAll(io.LimitReader(resp2.Body, 8*1024))
+			errutil.LogIfErr(os.Remove(path), "selfupdate: limpar download fallback status != 200")
+			return "", fmt.Errorf("download status=%d (fallback status=%d body=%s)", resp.StatusCode, resp2.StatusCode, strings.TrimSpace(string(body2)))
+		}
+
+		u.logf("selfupdate: fallback público OK — baixando de %s", publicURL)
+		buf := make([]byte, 128*1024)
+		if _, err := io.CopyBuffer(f, resp2.Body, buf); err != nil {
+			errutil.LogIfErr(os.Remove(path), "selfupdate: limpar download fallback apos falha de copy")
+			return "", err
+		}
+		if err := f.Sync(); err != nil {
+			errutil.LogIfErr(os.Remove(path), "selfupdate: limpar download fallback apos falha de sync")
+			return "", err
+		}
+		if err := f.Close(); err != nil {
+			errutil.LogIfErr(os.Remove(path), "selfupdate: limpar download fallback apos falha de close")
+			return "", err
+		}
+
+		actual, err := fileSHA256(path)
+		if err != nil {
+			errutil.LogIfErr(os.Remove(path), "selfupdate: limpar download fallback apos falha sha256")
+			return "", err
+		}
+		expected := strings.ToLower(strings.TrimSpace(*m.Sha256))
+		if expected != "" && actual != expected {
+			errutil.LogIfErr(os.Remove(path), "selfupdate: limpar download fallback sha256 mismatch")
+			return "", fmt.Errorf("sha256 mismatch (fallback): expected=%s got=%s", expected, actual)
+		}
+		return path, nil
 	}
 
 	buf := make([]byte, 128*1024)
