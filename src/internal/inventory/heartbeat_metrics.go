@@ -9,7 +9,9 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
+	"unsafe"
 
 	"discovery/internal/agentconn"
 	"discovery/internal/processutil"
@@ -31,7 +33,9 @@ const heartbeatMetricsSQL = `
 SELECT
   si.hostname,
   NULL AS cpu_percent,
-  ROUND(CAST(si.physical_memory AS REAL) / 1073741824.0, 2) AS memory_total_gb,
+  CASE WHEN si.physical_memory > 0
+    THEN ROUND(CAST(si.physical_memory AS REAL) / 1073741824.0, 2)
+  END AS memory_total_gb,
   ROUND(CAST(COALESCE(mem_agg.resident_bytes, 0) AS REAL) / 1073741824.0, 2) AS memory_used_gb,
   CASE WHEN si.physical_memory > 0
     THEN ROUND(COALESCE(mem_agg.resident_bytes, 0) * 100.0 / CAST(si.physical_memory AS REAL), 1)
@@ -352,13 +356,68 @@ func collectHeartbeatMemoryMetrics(ctx context.Context) (float64, float64, float
 	}
 }
 
-// CollectWindowsMemoryMetrics coleta memoria total/usada (%) via Win32_OperatingSystem.
+// memoryStatusEx is a Go representation of the Windows MEMORYSTATUSEX struct.
+type memoryStatusEx struct {
+	cbSize                  uint32
+	dwMemoryLoad            uint32
+	ullTotalPhys            uint64
+	ullAvailPhys            uint64
+	ullTotalPageFile        uint64
+	ullAvailPageFile        uint64
+	ullTotalVirtual         uint64
+	ullAvailVirtual         uint64
+	ullAvailExtendedVirtual uint64
+}
+
+// collectWindowsMemoryNative coleta métricas de memória via API nativa
+// GlobalMemoryStatusEx (kernel32.dll). Funciona em qualquer contexto de
+// execução (SYSTEM, serviço, usuário logado) sem depender de PowerShell.
+// Retorna (totalGb, usedGb, percent, true) quando os valores são válidos.
+func collectWindowsMemoryNative() (float64, float64, float64, bool) {
+	kernel32 := syscall.NewLazyDLL("kernel32.dll")
+	globalMemoryStatusEx := kernel32.NewProc("GlobalMemoryStatusEx")
+
+	var ms memoryStatusEx
+	ms.cbSize = uint32(unsafe.Sizeof(ms))
+
+	r, _, _ := globalMemoryStatusEx.Call(uintptr(unsafe.Pointer(&ms)))
+	if r == 0 {
+		return -1, -1, -1, false
+	}
+
+	if ms.ullTotalPhys == 0 {
+		return -1, -1, -1, false
+	}
+
+	totalBytes := float64(ms.ullTotalPhys)
+	freeBytes := float64(ms.ullAvailPhys)
+	usedBytes := totalBytes - freeBytes
+	if usedBytes < 0 {
+		usedBytes = 0
+	}
+
+	totalGB := totalBytes / (1024.0 * 1024.0 * 1024.0)
+	usedGB := usedBytes / (1024.0 * 1024.0 * 1024.0)
+	percent := (usedBytes * 100.0) / totalBytes
+
+	return normalizeHeartbeatGigabytes(totalGB), normalizeHeartbeatGigabytes(usedGB), normalizeHeartbeatPercent(percent), true
+}
+
+// CollectWindowsMemoryMetrics coleta memoria total/usada (%) usando
+// GlobalMemoryStatusEx (API nativa Windows). Funciona em qualquer
+// contexto de execucao (SYSTEM, servico, usuario logado).
 // Retorna (totalGb, usedGb, percent, true) quando os valores sao validos.
 func CollectWindowsMemoryMetrics(ctx context.Context) (float64, float64, float64, bool) {
 	if runtime.GOOS != "windows" {
 		return -1, -1, -1, false
 	}
 
+	// Tentativa 1: API nativa GlobalMemoryStatusEx via golang.org/x/sys/windows
+	if totalGB, usedGB, percent, ok := collectWindowsMemoryNative(); ok {
+		return totalGB, usedGB, percent, true
+	}
+
+	// Tentativa 2: Fallback para PowerShell/WMI (cobertura adicional)
 	runCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
