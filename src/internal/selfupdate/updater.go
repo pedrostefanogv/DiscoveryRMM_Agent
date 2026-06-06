@@ -88,6 +88,17 @@ type Updater struct {
 	TempDir      string
 	Logf         func(string, ...any)
 	InvalidateCh <-chan bool
+
+	// OnSelfUpdateInstall é um callback opcional que, se definido, é chamado
+	// ANTES do launchInstaller para mostrar UI (ex.: PSADT Welcome + Progress)
+	// e executar o instalador de forma controlada (sem defer, sem cancelar).
+	// O callback recebe (ctx, exePath, targetVersion) e deve:
+	//   - Mostrar progresso visual (Welcome sem AllowDefer + Progress)
+	//   - Executar o instalador com /S /UPDATE
+	//   - Retornar nil em caso de sucesso, ou erro
+	// Se o callback retornar erro, o fluxo trata como InstallFailed (sem fallback).
+	// Se OnSelfUpdateInstall for nil, usa launchInstaller direto (comportamento legado).
+	OnSelfUpdateInstall func(ctx context.Context, exePath string, targetVersion string) error
 }
 
 type UpdateManifest struct {
@@ -413,7 +424,7 @@ func (u *Updater) CheckAndUpdate(ctx context.Context, force bool) error {
 		return err
 	}
 
-	if err := u.launchInstaller(tempPath); err != nil {
+	if err := u.launchInstallerWithUI(ctx, tempPath, targetVersion); err != nil {
 		u.clearPendingInstallState()
 		errutil.LogIfErr(os.Remove(tempPath), "selfupdate: limpar temp apos falha de launch")
 		u.reportEvent(ctx, "InstallFailed", reportOpts{
@@ -493,7 +504,7 @@ func (u *Updater) forceInstallFromPublicEndpoint(ctx context.Context, currentVer
 		return err
 	}
 
-	if err := u.launchInstaller(tempPath); err != nil {
+	if err := u.launchInstallerWithUI(ctx, tempPath, currentVersion); err != nil {
 		u.clearPendingInstallState()
 		errutil.LogIfErr(os.Remove(tempPath), "selfupdate: limpar temp apos falha de launch")
 		u.reportEvent(ctx, "InstallFailed", reportOpts{
@@ -590,7 +601,7 @@ func (u *Updater) InstallFromURL(ctx context.Context, version, downloadURL strin
 		return err
 	}
 
-	if err := u.launchInstaller(tempPath); err != nil {
+	if err := u.launchInstallerWithUI(ctx, tempPath, targetVersion); err != nil {
 		u.clearPendingInstallState()
 		errutil.LogIfErr(os.Remove(tempPath), "selfupdate: limpar temp apos falha de launch")
 		u.reportEvent(ctx, "InstallFailed", reportOpts{
@@ -916,19 +927,24 @@ func (u *Updater) downloadToTemp(ctx context.Context, m *UpdateManifest) (string
 	return path, nil
 }
 
-func (u *Updater) launchInstaller(exePath string) error {
-	exePath = strings.TrimSpace(exePath)
-	if exePath == "" {
-		return errors.New("installer path vazio")
+// launchInstallerWithUI resolve o callback OnSelfUpdateInstall ou, como fallback,
+// chama launchInstaller diretamente (comportamento legado sem UI PSADT).
+func (u *Updater) launchInstallerWithUI(ctx context.Context, exePath, targetVersion string) error {
+	if u.OnSelfUpdateInstall != nil {
+		u.logf("[selfupdate] usando callback OnSelfUpdateInstall com PSADT UI para %s", targetVersion)
+		if err := u.OnSelfUpdateInstall(ctx, exePath, targetVersion); err == nil {
+			return nil
+		} else {
+			u.logf("[selfupdate] callback PSADT falhou, tentando fallback launchInstaller: %v", err)
+			if fallbackErr := u.launchInstaller(exePath); fallbackErr == nil {
+				return nil
+			} else {
+				return fmt.Errorf("selfupdate callback falhou: %v; fallback falhou: %w", err, fallbackErr)
+			}
+		}
 	}
-	cmd := exec.Command(exePath, "/S", "/UPDATE")
-	processutil.HideWindow(cmd)
-	// DETACHED_PROCESS (0x00000008) desacopla do ciclo de vida do agent.
-	// setSysProcCreationFlags usa reflexao para compatibilidade cross-platform.
-	if cmd.SysProcAttr != nil {
-		setSysProcCreationFlags(cmd.SysProcAttr, detachedProcessFlag)
-	}
-	return cmd.Start()
+	u.logf("[selfupdate] sem callback UI, usando launchInstaller direto")
+	return u.launchInstaller(exePath)
 }
 
 func (u *Updater) reportEvent(ctx context.Context, eventType string, opts reportOpts) {

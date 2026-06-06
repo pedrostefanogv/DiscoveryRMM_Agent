@@ -378,14 +378,15 @@ func NewApp(opts AppStartupOptions) *App {
 	})
 	a.selfUpdaterCh = make(chan bool, 4)
 	a.selfUpdater = &selfupdate.Updater{
-		GetToken:     func() string { return a.GetDebugConfig().AuthToken },
-		GetAgentID:   func() string { return a.GetDebugConfig().AgentID },
-		GetApiScheme: func() string { return a.GetDebugConfig().ApiScheme },
-		GetApiServer: func() string { return a.GetDebugConfig().ApiServer },
-		GetPolicy:    func() selfupdate.Policy { return selfupdate.NormalizePolicy(a.GetAgentConfiguration().AgentUpdate) },
-		TempDir:      filepath.Join(platform.DataDir(), "updates"),
-		Logf:         func(format string, args ...any) { a.logs.append("[selfupdate] " + fmt.Sprintf(format, args...)) },
-		InvalidateCh: a.selfUpdaterCh,
+		GetToken:            func() string { return a.GetDebugConfig().AuthToken },
+		GetAgentID:          func() string { return a.GetDebugConfig().AgentID },
+		GetApiScheme:        func() string { return a.GetDebugConfig().ApiScheme },
+		GetApiServer:        func() string { return a.GetDebugConfig().ApiServer },
+		GetPolicy:           func() selfupdate.Policy { return selfupdate.NormalizePolicy(a.GetAgentConfiguration().AgentUpdate) },
+		TempDir:             filepath.Join(platform.DataDir(), "updates"),
+		Logf:                func(format string, args ...any) { a.logs.append("[selfupdate] " + fmt.Sprintf(format, args...)) },
+		InvalidateCh:        a.selfUpdaterCh,
+		OnSelfUpdateInstall: a.selfUpdateInstallWithPSADT,
 	}
 	a.exporter = updates.NewExporter(updates.ExportOptions{
 		BeginActivity: a.beginActivity,
