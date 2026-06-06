@@ -439,14 +439,14 @@ func (u *Updater) forceInstallFromPublicEndpoint(ctx context.Context, currentVer
 
 	u.reportEvent(ctx, "UpdateAvailable", reportOpts{
 		CurrentVersion: currentVersion,
-		TargetVersion:  "force-reinstall",
+		TargetVersion:  currentVersion,
 		CorrelationID:  correlationID,
 		Message:        "force reinstall via public endpoint",
 	})
 
 	u.reportEvent(ctx, "DownloadStarted", reportOpts{
 		CurrentVersion: currentVersion,
-		TargetVersion:  "force-reinstall",
+		TargetVersion:  currentVersion,
 		CorrelationID:  correlationID,
 	})
 
@@ -455,7 +455,7 @@ func (u *Updater) forceInstallFromPublicEndpoint(ctx context.Context, currentVer
 		u.logf("[selfupdate] force-install download falhou: %v", err)
 		u.reportEvent(ctx, "DownloadFailed", reportOpts{
 			CurrentVersion: currentVersion,
-			TargetVersion:  "force-reinstall",
+			TargetVersion:  currentVersion,
 			CorrelationID:  correlationID,
 			Message:        err.Error(),
 		})
@@ -465,27 +465,27 @@ func (u *Updater) forceInstallFromPublicEndpoint(ctx context.Context, currentVer
 	u.logf("[selfupdate] force-install download concluido: tempPath=%s sha256=%s", tempPath, fileSha256)
 	u.reportEvent(ctx, "DownloadCompleted", reportOpts{
 		CurrentVersion: currentVersion,
-		TargetVersion:  "force-reinstall",
+		TargetVersion:  currentVersion,
 		CorrelationID:  correlationID,
 		Message:        fmt.Sprintf("sha256=%s", fileSha256),
 	})
 
 	u.reportEvent(ctx, "InstallStarted", reportOpts{
 		CurrentVersion: currentVersion,
-		TargetVersion:  "force-reinstall",
+		TargetVersion:  currentVersion,
 		CorrelationID:  correlationID,
 	})
 
 	if err := u.persistPendingInstallState(pendingInstallState{
 		CurrentVersion: currentVersion,
-		TargetVersion:  "force-reinstall",
+		TargetVersion:  currentVersion,
 		CorrelationID:  correlationID,
 		RecordedAtUTC:  time.Now().UTC().Format(time.RFC3339),
 	}); err != nil {
 		errutil.LogIfErr(os.Remove(tempPath), "selfupdate: limpar temp apos falha de persistencia")
 		u.reportEvent(ctx, "InstallFailed", reportOpts{
 			CurrentVersion: currentVersion,
-			TargetVersion:  "force-reinstall",
+			TargetVersion:  currentVersion,
 			CorrelationID:  correlationID,
 			Message:        "falha ao persistir estado pendente: " + err.Error(),
 		})
@@ -497,7 +497,7 @@ func (u *Updater) forceInstallFromPublicEndpoint(ctx context.Context, currentVer
 		errutil.LogIfErr(os.Remove(tempPath), "selfupdate: limpar temp apos falha de launch")
 		u.reportEvent(ctx, "InstallFailed", reportOpts{
 			CurrentVersion: currentVersion,
-			TargetVersion:  "force-reinstall",
+			TargetVersion:  currentVersion,
 			CorrelationID:  correlationID,
 			Message:        err.Error(),
 		})
