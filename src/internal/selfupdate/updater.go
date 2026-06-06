@@ -236,7 +236,7 @@ func (u *Updater) nextDelay(fallback time.Duration, startupPending bool) time.Du
 
 func (u *Updater) CheckAndUpdate(ctx context.Context, force bool) error {
 	policy := u.policy()
-	if !policy.Enabled {
+	if !force && !policy.Enabled {
 		u.logf("[selfupdate] check ignorado: policy disabled")
 		return nil
 	}
