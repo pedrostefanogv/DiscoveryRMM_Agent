@@ -2202,6 +2202,7 @@ export namespace p2pmeta {
 	}
 	export class PeerView {
 	    agentId: string;
+	    clientId?: string;
 	    host: string;
 	    address: string;
 	    port: number;
@@ -2217,6 +2218,7 @@ export namespace p2pmeta {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.agentId = source["agentId"];
+	        this.clientId = source["clientId"];
 	        this.host = source["host"];
 	        this.address = source["address"];
 	        this.port = source["port"];

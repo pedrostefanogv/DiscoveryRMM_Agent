@@ -1007,6 +1007,12 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 	if a == nil || a.remoteDebug == nil {
 		return false, 0, "", ""
 	}
+
+	// Delega comandos de inventário sob demanda (SystemInfo)
+	if cmdType == "systeminfo" {
+		return a.handleSystemInfoCommand(parent, payload)
+	}
+
 	return a.remoteDebug.HandleCommand(parent, cmdType, payload)
 }
 
