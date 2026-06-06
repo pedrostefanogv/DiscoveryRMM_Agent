@@ -7,6 +7,29 @@ import (
 	"strings"
 )
 
+// handleAgentRuntimeCommand processes commands received from the API via NATS.
+// It is invoked by the agentconn.Runtime before falling back to executeCommand().
+func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, payload any) (handled bool, exitCode int, output string, errText string) {
+	cmdType = strings.ToLower(strings.TrimSpace(cmdType))
+
+	switch cmdType {
+	case "systeminfo":
+		a.logs.append("[agent] processando systeminfo via HandleCommand")
+		return a.handleSystemInfoCommand(parent, payload)
+	case "update", "selfupdate":
+		a.logs.append("[agent] comando selfupdate/update recebido, delegando ao self-updater")
+		if a.selfUpdater != nil {
+			select {
+			case a.selfUpdaterCh <- true:
+			default:
+			}
+		}
+		return true, 0, "selfupdate delegado ao self-updater", ""
+	default:
+		return false, 0, "", ""
+	}
+}
+
 // handleSystemInfoCommand processes SystemInfo command payloads.
 // Supported operations:
 //   - "force-sync": full inventory + software sync (existing)

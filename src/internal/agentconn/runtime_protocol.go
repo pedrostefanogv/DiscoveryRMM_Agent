@@ -8,7 +8,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -45,6 +47,10 @@ func executeCommand(parent context.Context, cmdType string, payload any) (int, s
 		return executeAbortShutdown(ctx)
 	case "wakeonlan", "wol":
 		return executeWakeOnLanPacket(ctx, payload)
+	case "systeminfo":
+		// SystemInfo is handled by the app-layer HandleCommand callback.
+		// If we reach here it means HandleCommand is not wired — fail gracefully.
+		return 1, "", "systeminfo nao tratado (HandleCommand ausente)"
 	case "exec", "process", "winget":
 		if command == "" {
 			return 2, "", "payload sem executavel"
@@ -67,6 +73,10 @@ func executeCommand(parent context.Context, cmdType string, payload any) (int, s
 		cmd = exec.CommandContext(ctx, "cmd", "/C", command)
 	}
 
+	if cmd != nil {
+		setHideWindow(cmd)
+	}
+
 	out, err := cmd.CombinedOutput()
 	output := string(out)
 	if err == nil {
@@ -82,6 +92,18 @@ func executeCommand(parent context.Context, cmdType string, payload any) (int, s
 		errText = "timeout excedido"
 	}
 	return exitCode, output, errText
+}
+
+// setHideWindow configures the process to run without a visible terminal window on Windows.
+func setHideWindow(cmd *exec.Cmd) {
+	if cmd == nil || runtime.GOOS != "windows" {
+		return
+	}
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.HideWindow = true
+	cmd.SysProcAttr.CreationFlags |= 0x08000000 // CREATE_NO_WINDOW
 }
 
 func parsePayload(payload any) (string, []string, time.Duration) {

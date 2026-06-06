@@ -293,6 +293,28 @@ func applyHeartbeatMemoryFallback(ctx context.Context, metrics *agentconn.AgentH
 		return
 	}
 
+	// On Windows, always collect memory via native API (GlobalMemoryStatusEx).
+	// osquery system_info.physical_memory is unreliable on NUMA-enabled VMs
+	// (returns 0), which causes memoryTotalGb=0, memoryPercent=NULL, and
+	// the heartbeat displays "<omitido>". The native API is always correct.
+	if runtime.GOOS == "windows" {
+		if totalGB, usedGB, percent, ok := collectWindowsMemoryNative(); ok && totalGB > 0 {
+			metrics.MemoryTotalGb = totalGB
+			metrics.MemoryUsedGb = usedGB
+			metrics.MemoryPercent = percent
+			return
+		}
+
+		// Fallback to PowerShell/WMI if native API fails
+		if totalGB, usedGB, percent, ok := CollectWindowsMemoryMetrics(ctx); ok && totalGB > 0 {
+			metrics.MemoryTotalGb = totalGB
+			metrics.MemoryUsedGb = usedGB
+			metrics.MemoryPercent = percent
+			return
+		}
+	}
+
+	// Non-Windows or all Windows fallbacks failed: calculate from osquery data
 	if metrics.MemoryPercent < 0 && metrics.MemoryTotalGb > 0 && metrics.MemoryUsedGb >= 0 {
 		metrics.MemoryPercent = normalizeHeartbeatPercent((metrics.MemoryUsedGb * 100.0) / metrics.MemoryTotalGb)
 	}

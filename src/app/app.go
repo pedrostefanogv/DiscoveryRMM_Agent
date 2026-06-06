@@ -485,6 +485,17 @@ func (a *App) getHeartbeatMetrics() agentconn.AgentHeartbeatMetrics {
 		}
 	}
 
+	// Memory fallback: osquery system_info.physical_memory is unreliable on
+	// NUMA-enabled VMs (returns 0), which causes memoryTotalGb=0 and
+	// memoryPercent to be omitted from the heartbeat payload.
+	if runtime.GOOS == "windows" && metrics.MemoryTotalGb <= 0 {
+		if totalGB, usedGB, percent, ok := inventory.CollectWindowsMemoryMetrics(ctx); ok {
+			metrics.MemoryPercent = percent
+			metrics.MemoryTotalGb = totalGB
+			metrics.MemoryUsedGb = usedGB
+		}
+	}
+
 	// Enriquecer com dados de endereçamento P2P (libp2p peer ID, addrs, port)
 	if a.p2pCoord != nil {
 		metrics.PeerID, metrics.Addrs, metrics.Port = a.p2pCoord.getP2PAddressingInfo()
