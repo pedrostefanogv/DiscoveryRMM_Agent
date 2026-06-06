@@ -7,34 +7,11 @@ import (
 	"strings"
 )
 
-// handleAgentRuntimeCommand processes commands received from the API via NATS.
-// It is invoked by the agentconn.Runtime before falling back to executeCommand().
-func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, payload any) (handled bool, exitCode int, output string, errText string) {
-	cmdType = strings.ToLower(strings.TrimSpace(cmdType))
-
-	switch cmdType {
-	case "systeminfo":
-		a.logs.append("[agent] processando systeminfo via HandleCommand")
-		return a.handleSystemInfoCommand(parent, payload)
-	case "update", "selfupdate":
-		a.logs.append("[agent] comando selfupdate/update recebido, delegando ao self-updater")
-		if a.selfUpdater != nil {
-			select {
-			case a.selfUpdaterCh <- true:
-			default:
-			}
-		}
-		return true, 0, "selfupdate delegado ao self-updater", ""
-	default:
-		return false, 0, "", ""
-	}
-}
-
 // handleSystemInfoCommand processes SystemInfo command payloads.
 // Supported operations:
 //   - "force-sync": full inventory + software sync (existing)
 //   - "refresh-on-demand": selective collection per flags
-func (a *App) handleSystemInfoCommand(ctx context.Context, payload any) (handled bool, exitCode int, output string, errText string) {
+func (a *App) handleSystemInfoCommand(ctx context.Context, payload any) (bool, int, string, string) {
 	payloadJSON, err := normalizePayloadJSON(payload)
 	if err != nil {
 		return true, 1, "", "payload systeminfo invalido: " + err.Error()
@@ -42,6 +19,8 @@ func (a *App) handleSystemInfoCommand(ctx context.Context, payload any) (handled
 
 	operation := getStringField(payloadJSON, "Operation")
 	operation = strings.ToLower(strings.TrimSpace(operation))
+
+	a.logs.append(fmt.Sprintf("[agent] processando systeminfo: operation=%s", operation))
 
 	switch operation {
 	case "refresh-on-demand":
@@ -55,7 +34,7 @@ func (a *App) handleSystemInfoCommand(ctx context.Context, payload any) (handled
 }
 
 // handleRefreshOnDemand collects only the data requested by the dashboard refresh buttons.
-func (a *App) handleRefreshOnDemand(_ context.Context, payloadJSON map[string]any) (handled bool, exitCode int, output string, errText string) {
+func (a *App) handleRefreshOnDemand(_ context.Context, payloadJSON map[string]any) (bool, int, string, string) {
 	flags := refreshOnDemandFlags{
 		Ports:       getBoolField(payloadJSON, "Ports"),
 		Connections: getBoolField(payloadJSON, "Connections"),
@@ -132,7 +111,7 @@ func (a *App) handleRefreshOnDemand(_ context.Context, payloadJSON map[string]an
 }
 
 // handleForceSync triggers a full inventory and software sync.
-func (a *App) handleForceSync(_ context.Context, payloadJSON map[string]any) (handled bool, exitCode int, output string, errText string) {
+func (a *App) handleForceSync(_ context.Context, payloadJSON map[string]any) (bool, int, string, string) {
 	policies := getBoolField(payloadJSON, "Policies")
 	inventory := getBoolField(payloadJSON, "Inventory")
 	software := getBoolField(payloadJSON, "Software")
@@ -149,6 +128,7 @@ func (a *App) handleForceSync(_ context.Context, payloadJSON map[string]any) (ha
 		report, err := a.inventorySvc.RefreshInventory()
 		if err != nil {
 			a.logs.append("[agent] force-sync: falha ao coletar inventario: " + err.Error())
+			results = append(results, "inventory=failed")
 		} else {
 			results = append(results, fmt.Sprintf("inventory=ok(ports=%d,conn=%d)", len(report.ListeningPorts), len(report.OpenSockets)))
 		}
@@ -169,7 +149,7 @@ func (a *App) handleForceSync(_ context.Context, payloadJSON map[string]any) (ha
 	}
 
 	a.logs.append("[agent] force-sync concluido: " + strings.Join(results, ", "))
-	return true, 0, "force-sync: " + strings.Join(results, ", "), ""
+	return true, 0, "force-sync: "+strings.Join(results, ", "), ""
 }
 
 // ── helpers ────────────────────────────────────────────────────────────────
