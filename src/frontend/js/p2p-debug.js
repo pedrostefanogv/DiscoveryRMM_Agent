@@ -19,6 +19,8 @@
   var artifactsBody = document.getElementById("artifactsBody");
   var auditList = document.getElementById("auditList");
   var statusLine = document.getElementById("statusLine");
+  var transferProgressPanel = document.getElementById("transferProgressPanel");
+  var transferProgressList = document.getElementById("transferProgressList");
   var artifactSelectEl = document.getElementById("artifactSelect");
   var peerSelectEl = document.getElementById("peerSelect");
   var artifactNameEl = document.getElementById("artifactName");
@@ -364,10 +366,88 @@
     auditStatusFilterEl.addEventListener("change", refreshAll);
   }
 
+  // Botão para abrir pasta de downloads P2P
+  var openP2PFolderBtn = document.getElementById('openP2PFolderBtn');
+  if (openP2PFolderBtn) {
+    openP2PFolderBtn.addEventListener('click', function () {
+      appApi().GetP2PTempDir().then(function (dir) {
+        window.runtime.BrowserOpenURL('file:///' + dir.replace(/\\/g, '/'));
+      }).catch(function () {
+        setStatus('Falha ao obter diretorio P2P.', 'error');
+      });
+    });
+  }
+
   refreshAll();
   setInterval(function () {
     if (!document.hidden) {
       refreshAll();
     }
   }, 5000);
+
+  // ── Transferência P2P em tempo real ────────────────────────────────────
+
+  var transferProgressMap = {};
+
+  function formatBytes(bytes) {
+    if (!bytes || bytes <= 0) return "0 B";
+    var units = ["B", "KB", "MB", "GB"];
+    var i = Math.floor(Math.log(bytes) / Math.log(1024));
+    if (i >= units.length) i = units.length - 1;
+    return (bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1) + " " + units[i];
+  }
+
+  function renderTransferProgressList() {
+    if (!transferProgressPanel || !transferProgressList) return;
+    var keys = Object.keys(transferProgressMap);
+    if (keys.length === 0) {
+      transferProgressPanel.classList.add("hidden");
+      return;
+    }
+    transferProgressPanel.classList.remove("hidden");
+    var html = "";
+    keys.forEach(function (key) {
+      var p = transferProgressMap[key];
+      var pct = p.totalBytes > 0 ? Math.round((p.bytesRead / p.totalBytes) * 100) : 0;
+      var barColor = p.error ? "var(--danger)" : (p.done && !p.error ? "var(--accent)" : "#4a90d9");
+      var label = escapeHtml(p.artifactName) + " ← " + escapeHtml(p.peerID);
+      if (p.totalChunks > 0) {
+        label += " [chunk " + (p.chunkIndex + 1) + "/" + p.totalChunks + "]";
+      }
+      html += '<div class="transfer-item" style="margin-bottom:8px;">' +
+        '<div style="display:flex;justify-content:space-between;font-size:0.78rem;margin-bottom:3px;">' +
+          '<span class="mono">' + label + '</span>' +
+          '<span style="color:var(--muted)">' + formatBytes(p.bytesRead) + ' / ' + formatBytes(p.totalBytes) + ' (' + pct + '%)</span>' +
+        '</div>' +
+        '<div style="background:var(--bg);border-radius:6px;height:8px;overflow:hidden;">' +
+          '<div style="background:' + barColor + ';height:100%;width:' + pct + '%;transition:width 0.2s ease;"></div>' +
+        '</div>' +
+        (p.error ? '<div style="color:var(--danger);font-size:0.76rem;margin-top:2px;">' + escapeHtml(p.error) + '</div>' : '') +
+        (p.done && !p.error ? '<div style="color:var(--accent);font-size:0.76rem;margin-top:2px;">✓ Concluido</div>' : '') +
+      '</div>';
+    });
+    transferProgressList.innerHTML = html;
+
+    // Remove completed/errored items after 5s
+    keys.forEach(function (key) {
+      var p = transferProgressMap[key];
+      if (p.done) {
+        setTimeout(function () {
+          delete transferProgressMap[key];
+          renderTransferProgressList();
+        }, 5000);
+      }
+    });
+  }
+
+  function onTransferProgress(p) {
+    if (!p) return;
+    var key = (p.artifactName || "?") + "|" + (p.peerID || "?") + "|" + (p.operation || "?");
+    transferProgressMap[key] = p;
+    renderTransferProgressList();
+  }
+
+  if (window.runtime && window.runtime.EventsOn) {
+    window.runtime.EventsOn("p2p:transfer-progress", onTransferProgress);
+  }
 })();

@@ -47,15 +47,26 @@ func (c *p2pCoordinator) DownloadArtifactFromPeer(ctx context.Context, artifactN
 		access, err := libp2pRequestAccess(ctx, h, peerID, artifactName, requesterID)
 		if err != nil {
 			c.appendAudit("pull", artifactName, sourcePeerID, "libp2p", false, err.Error())
+			c.emitTransferDone(artifactName, sourcePeerID, "pull", err)
 			return P2PArtifactView{}, err
 		}
-		path, size, err := libp2pDownloadArtifact(ctx, h, peerID, access, c.app.p2pTempDir())
+		path, size, err := libp2pDownloadArtifact(ctx, h, peerID, access, c.app.p2pTempDir(), func(readSoFar, total int64) {
+			c.emitTransferProgress(p2pTransferProgress{
+				ArtifactName: artifactName,
+				PeerID:       sourcePeerID,
+				BytesRead:    readSoFar,
+				TotalBytes:   total,
+				Operation:    "pull",
+			})
+		})
 		if err != nil {
 			c.appendAudit("pull", artifactName, sourcePeerID, "libp2p", false, err.Error())
+			c.emitTransferDone(artifactName, sourcePeerID, "pull", err)
 			return P2PArtifactView{}, err
 		}
 		c.recordBytesDownloaded(size)
 		c.appendAudit("pull", artifactName, sourcePeerID, "libp2p", true, "artifact baixado via libp2p")
+		c.emitTransferDone(artifactName, sourcePeerID, "pull", nil)
 		// Pipeline pós-download: validar checksum + cachear manifest
 		go c.finalizeDownloadedArtifact(artifactName, path, access.ChecksumSHA256)
 		go c.updateManifestCacheAfterDownload(artifactName, path)
@@ -138,13 +149,23 @@ func (c *p2pCoordinator) downloadArtifactSwarm(ctx context.Context, artifactName
 			c.appendAudit("swarm-pull", artifactName, "", "automation", false, err.Error())
 			return P2PArtifactView{}, err
 		}
-		path, size, err := libp2pDownloadArtifact(ctx, h, peerEntries[0].libp2pID, accesses[0], c.app.p2pTempDir())
+		path, size, err := libp2pDownloadArtifact(ctx, h, peerEntries[0].libp2pID, accesses[0], c.app.p2pTempDir(), func(readSoFar, total int64) {
+			c.emitTransferProgress(p2pTransferProgress{
+				ArtifactName: artifactName,
+				PeerID:       peerEntries[0].peerID,
+				BytesRead:    readSoFar,
+				TotalBytes:   total,
+				Operation:    "swarm-pull",
+			})
+		})
 		if err != nil {
 			c.appendAudit("swarm-pull", artifactName, peerEntries[0].peerID, "automation", false, err.Error())
+			c.emitTransferDone(artifactName, peerEntries[0].peerID, "swarm-pull", err)
 			return P2PArtifactView{}, err
 		}
 		c.recordBytesDownloaded(size)
 		c.appendAudit("swarm-pull", artifactName, peerEntries[0].peerID, "automation", true, "download simples via libp2p")
+		c.emitTransferDone(artifactName, peerEntries[0].peerID, "swarm-pull", nil)
 		// Pipeline pós-download: validar checksum + cachear manifest
 		go c.finalizeDownloadedArtifact(artifactName, path, accesses[0].ChecksumSHA256)
 		go c.updateManifestCacheAfterDownload(artifactName, path)
@@ -172,15 +193,29 @@ func (c *p2pCoordinator) downloadArtifactSwarm(ctx context.Context, artifactName
 	for i, pe := range peerEntries {
 		lp2pPeers[i] = libp2pPeer{agentID: pe.peerID, peerID: pe.libp2pID}
 	}
-	path, totalBytes, err := downloadChunkedLibp2p(ctx, h, lp2pPeers, manifest, artifactName, requesterID, destDir, sched, c.dynamicMaxParallelChunks())
+	path, totalBytes, err := downloadChunkedLibp2p(ctx, h, lp2pPeers, manifest, artifactName, requesterID, destDir, sched, c.dynamicMaxParallelChunks(),
+		func(chunkIdx int, readSoFar, chunkSize int64, totalChunks int) {
+			// Progresso agregado de todos os chunks
+			c.emitTransferProgress(p2pTransferProgress{
+				ArtifactName: artifactName,
+				PeerID:       fmt.Sprintf("%d peers", len(peerEntries)),
+				BytesRead:    int64(chunkIdx)*chunkSize + readSoFar,
+				TotalBytes:   int64(totalChunks) * chunkSize,
+				Operation:    "swarm-pull",
+				ChunkIndex:   chunkIdx,
+				TotalChunks:  totalChunks,
+			})
+		})
 	if err != nil {
 		c.appendAudit("swarm-pull", artifactName, "", "automation", false, err.Error())
+		c.emitTransferDone(artifactName, fmt.Sprintf("%d peers", len(peerEntries)), "swarm-pull", err)
 		return P2PArtifactView{}, err
 	}
 	c.recordBytesDownloaded(totalBytes)
 	c.recordChunkedDownload(manifest.TotalChunks)
 	c.appendAudit("swarm-pull", artifactName, fmt.Sprintf("%d peers", len(accesses)),
 		"automation", true, fmt.Sprintf("download em %d chunks de %d peers", manifest.TotalChunks, len(accesses)))
+	c.emitTransferDone(artifactName, fmt.Sprintf("%d peers", len(peerEntries)), "swarm-pull", nil)
 
 	artifactID := CanonicalArtifactID(manifest.ArtifactID, artifactName, "")
 	// Pipeline pós-download: validar checksum + cachear manifest

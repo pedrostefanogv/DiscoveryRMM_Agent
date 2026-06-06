@@ -17,6 +17,7 @@
     { mountId: "debugViewMount", path: "partials/views/debugView.html" },
     { mountId: "psadtViewMount", path: "partials/views/psadtView.html" },
     { mountId: "p2pViewMount", path: "partials/views/p2pView.html" },
+    { mountId: "zeroTouchConfigViewMount", path: "partials/views/zeroTouchConfigView.html" },
   ];
 
   var APP_SCRIPTS = [
@@ -34,6 +35,7 @@
     "js/app-status.js",
     "js/app-debug.js",
     "js/psadt-debug.js",
+    "js/app-zero-touch-config.js",
     "app.js",
     "js/app-init.js",
   ];

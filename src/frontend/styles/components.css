@@ -42,6 +42,134 @@
   grid-column: 1 / -1;
 }
 
+.p2p-subtabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.p2p-subtab {
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 7px 12px;
+  font-size: 0.84rem;
+  font-weight: 600;
+  line-height: 1.2;
+  cursor: pointer;
+  transition: background var(--transition), border-color var(--transition), color var(--transition), box-shadow var(--transition);
+}
+
+.p2p-subtab:hover {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-sm);
+}
+
+.p2p-subtab.is-active {
+  background: var(--accent);
+  color: var(--on-accent);
+  border-color: var(--accent);
+}
+
+.p2p-subtab-panels {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.p2p-artifact-actions {
+  margin-bottom: 10px;
+}
+
+.p2p-audit-filters {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.p2p-audit-filters select {
+  flex: 1;
+  min-width: 120px;
+}
+
+.p2p-audit-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 440px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+
+.p2p-audit-item {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.p2p-audit-item:last-child {
+  border-bottom: none;
+}
+
+.p2p-audit-item-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.p2p-audit-summary {
+  font-size: 0.86rem;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.p2p-audit-meta {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.p2p-audit-message {
+  font-size: 0.82rem;
+  color: var(--text);
+  opacity: .9;
+  overflow-wrap: anywhere;
+}
+
+.p2p-audit-badge {
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: .02em;
+  text-transform: uppercase;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.p2p-audit-badge.success {
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 35%, transparent);
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+}
+
+.p2p-audit-badge.error {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 35%, transparent);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+
+.p2p-audit-item-empty {
+  color: var(--muted);
+}
+
 .facts-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
@@ -64,6 +192,26 @@
   font-size: 0.95rem;
   margin-top: 4px;
   font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  word-break: break-all;
+}
+
+.fact-label {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  margin-bottom: 2px;
+}
+
+.fact-value {
+  display: block;
+  font-size: 0.88rem;
+  font-weight: 600;
+  font-family: 'JetBrains Mono', 'Consolas', monospace;
+  word-break: break-all;
+  overflow-wrap: anywhere;
 }
 
 .disk-list {
@@ -407,7 +555,27 @@
   display: grid;
   grid-template-columns: minmax(280px, 1fr) auto;
   gap: 10px;
-  align-items: center;
+  align-items: start;
+}
+
+.store-toolbar-left {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.store-toolbar-left #searchInput {
+  width: 100%;
+}
+
+.store-catalog-info {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  padding-left: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .store-main {
@@ -572,6 +740,17 @@
   font-size: 1rem;
 }
 
+.card-header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.card-header-row h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
 .meta {
   color: var(--muted);
   font-size: 0.9rem;
@@ -710,6 +889,16 @@ input[type="search"] {
 
   .inventory-grid {
     grid-template-columns: 1fr;
+  }
+
+  .p2p-subtabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+
+  .p2p-subtab {
+    white-space: nowrap;
   }
 
   .sidebar {

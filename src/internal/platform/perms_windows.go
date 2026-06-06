@@ -35,3 +35,18 @@ func EnsureWorldAccess(path string) error {
 	}
 	return nil
 }
+
+// EnsureWorldReadable grants Everyone read+execute on a single file.
+// Used for downloaded artifacts so any user on the machine can access them.
+func EnsureWorldReadable(filePath string) error {
+	if _, err := os.Stat(filePath); err != nil {
+		return err
+	}
+	cmd := exec.Command("icacls.exe", filePath, "/grant", "Everyone:R", "/Q")
+	processutil.HideWindow(cmd)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("icacls arquivo falhou: %w — saida: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}

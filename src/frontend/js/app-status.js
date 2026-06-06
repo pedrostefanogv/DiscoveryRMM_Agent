@@ -18,7 +18,6 @@ const statusNonCriticalTrafficEl = document.getElementById('statusNonCriticalTra
 const statusMessageEl = document.getElementById('statusMessage');
 const serviceHealthDotEl = document.getElementById('serviceHealthDot');
 const serviceHealthLabelEl = document.getElementById('serviceHealthLabel');
-const serviceHealthIndicatorEl = document.getElementById('serviceHealthIndicator');
 
 function statusSafe(value, fallback) {
   if (value === null || value === undefined || String(value).trim() === '') {
@@ -225,21 +224,6 @@ function renderServiceHealth(health) {
 
   if (serviceHealthDotEl) serviceHealthDotEl.className = 'agent-status-indicator ' + statusClass;
   if (serviceHealthLabelEl) serviceHealthLabelEl.textContent = statusLabel;
-
-  updateTopbarServiceIndicator(statusClass, statusLabel);
-}
-
-function updateTopbarServiceIndicator(statusClass, label) {
-  if (!serviceHealthIndicatorEl) return;
-  
-  // Atualizar classe
-  serviceHealthIndicatorEl.className = 'topbar-indicator ' + statusClass;
-  
-  // Mostrar indicador se há conteúdo relevante
-  if (statusClass !== 'online' || label) {
-    serviceHealthIndicatorEl.style.display = 'inline-flex';
-    serviceHealthIndicatorEl.title = translate('status.serviceIndicator', { label: label || statusClass });
-  }
 }
 
 async function loadServiceHealth() {

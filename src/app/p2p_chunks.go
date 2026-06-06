@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 
+	"discovery/internal/platform"
+
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
 )
@@ -147,6 +149,7 @@ func buildChunkManifest(path, artifactID string, chunkSize int64) (P2PChunkManif
 // via libp2p streams. maxParallel controla o teto de chunks simultâneos.
 // Goroutines que já adquiriram slot não são abortadas se o teto reduzir depois —
 // apenas novas goroutines esperam. Usa minParallelChunks como piso.
+// onChunkProgress é opcional — quando != nil, chamado com (chunkIndex, bytesLidos, totalChunk, totalChunks).
 func downloadChunkedLibp2p(
 	ctx context.Context,
 	h host.Host,
@@ -155,6 +158,7 @@ func downloadChunkedLibp2p(
 	artifactName, requesterID, destDir string,
 	sched *p2pChunkScheduler,
 	maxParallel int,
+	onChunkProgress func(chunkIdx int, readSoFar, chunkSize int64, totalChunks int),
 ) (string, int64, error) {
 	if len(peers) == 0 {
 		return "", 0, fmt.Errorf("nenhum peer disponivel para download")
@@ -198,7 +202,14 @@ func downloadChunkedLibp2p(
 			}
 
 			lp := sched.pickPeer(i, peers)
-			err := libp2pDownloadChunk(ctx, h, lp.peerID, artifactName, requesterID, chunk, chunkFile)
+			chunkIdx := i
+			chunkSize := chunk.Size
+			totalChunks := len(manifest.Chunks)
+			err := libp2pDownloadChunk(ctx, h, lp.peerID, artifactName, requesterID, chunk, chunkFile, func(readSoFar, total int64) {
+				if onChunkProgress != nil {
+					onChunkProgress(chunkIdx, readSoFar, chunkSize, totalChunks)
+				}
+			})
 			if err != nil {
 				sched.recordError(lp.peerID)
 			}
@@ -263,6 +274,7 @@ func downloadChunkedLibp2p(
 		_ = os.Remove(tmpPath)
 		return "", 0, err
 	}
+	_ = platform.EnsureWorldReadable(targetPath)
 
 	_ = os.RemoveAll(partsDir)
 	return targetPath, totalBytes, nil

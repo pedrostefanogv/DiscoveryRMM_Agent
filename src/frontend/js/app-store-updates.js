@@ -36,6 +36,25 @@ function onStoreCatalogUpdated(data) {
 })();
 
 // ---------------------------------------------------------------------------
+// Strip basic Markdown syntax for clean card descriptions
+// ---------------------------------------------------------------------------
+function stripMarkdown(text) {
+  if (!text) return '';
+  return String(text)
+    .replace(/^#{1,6}\s+/gm, '')
+    .replace(/\*\*(.+?)\*\*/g, '$1')
+    .replace(/__([^_]+)__/g, '$1')
+    .replace(/\*([^*]+)\*/g, '$1')
+    .replace(/_([^_]+)_/g, '$1')
+    .replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/^[-*+]\s+/gm, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+// ---------------------------------------------------------------------------
 // Catalog card rendering with pagination
 // ---------------------------------------------------------------------------
 function renderCards() {
@@ -75,7 +94,7 @@ function renderCards() {
       '<h3>' + escapeHtml(pkg.name || pkg.id) + '</h3>' +
       '<div class="meta">' + escapeHtml(publisher) + ' | ' + escapeHtml(version) + '</div>' +
       '<div class="meta">' + escapeHtml(translate('store.packageId', { id: pkg.id })) + '</div>' +
-      '<p class="desc">' + escapeHtml(description).slice(0, 180) + '</p>' +
+      '<p class="desc">' + escapeHtml(stripMarkdown(description)).slice(0, 180) + '</p>' +
       '<div class="card-actions">' +
         actionButton +
         detailButton +
@@ -91,6 +110,7 @@ function updateCatalogPagination() {
   if (catalogPageInfoEl) catalogPageInfoEl.textContent = translate('pagination.page', { page: catalogPage, total: pg.totalPages });
   if (catalogPrevBtn) catalogPrevBtn.disabled = catalogPage <= 1;
   if (catalogNextBtn) catalogNextBtn.disabled = catalogPage >= pg.totalPages;
+  updateHomeBtn();
 }
 
 function applyFilter() {
@@ -103,6 +123,21 @@ function applyFilter() {
       .filter(Boolean)
       .some(function (v) { return String(v).toLowerCase().includes(q); });
   });
+  updateHomeBtn();
+  renderCards();
+}
+
+function updateHomeBtn() {
+  if (!homeBtn) return;
+  var hasSearch = searchEl ? searchEl.value.trim().length > 0 : false;
+  homeBtn.disabled = catalogPage <= 1 && !hasSearch;
+}
+
+function goHome() {
+  if (searchEl) searchEl.value = '';
+  catalogPage = 1;
+  state.filtered = state.allPackages;
+  updateHomeBtn();
   renderCards();
 }
 

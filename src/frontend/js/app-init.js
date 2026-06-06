@@ -49,6 +49,11 @@ function initAppBindings() {
   if (reloadBtn) {
     reloadBtn.addEventListener('click', loadCatalog);
   }
+  if (homeBtn) {
+    homeBtn.addEventListener('click', function () {
+      goHome();
+    });
+  }
   if (upgradeAllBtn) {
     upgradeAllBtn.addEventListener('click', runUpgradeAll);
   }
@@ -125,6 +130,15 @@ function initAppBindings() {
       setActiveTab('p2p');
       if (typeof loadP2PView === 'function') {
         loadP2PView();
+      }
+    });
+  }
+
+  if (tabZeroTouchConfigBtn) {
+    tabZeroTouchConfigBtn.addEventListener('click', function () {
+      setActiveTab('zeroTouchConfig');
+      if (typeof refreshZeroTouchConfig === 'function') {
+        refreshZeroTouchConfig();
       }
     });
   }

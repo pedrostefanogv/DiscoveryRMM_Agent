@@ -38,11 +38,11 @@
   --toast-error-bg: var(--danger);
   --toast-warning-bg: color-mix(in srgb, var(--accent-2) 72%, var(--danger) 28%);
 
-  --terminal-bg: color-mix(in srgb, var(--bg) 65%, var(--darken) 35%);
-  --terminal-fg: color-mix(in srgb, var(--text) 78%, #9fd9b4 22%);
-  --terminal-scrollbar: color-mix(in srgb, var(--border) 78%, var(--darken) 22%);
-  --terminal-bg-alt: color-mix(in srgb, var(--bg) 58%, var(--darken) 42%);
-  --terminal-fg-alt: color-mix(in srgb, var(--text) 70%, #9fd9b4 30%);
+  --terminal-bg: color-mix(in srgb, var(--bg) 82%, var(--darken) 18%);
+  --terminal-fg: var(--text);
+  --terminal-scrollbar: color-mix(in srgb, var(--muted) 68%, var(--darken) 32%);
+  --terminal-bg-alt: color-mix(in srgb, var(--bg) 68%, var(--darken) 32%);
+  --terminal-fg-alt: var(--text);
 
   --status-indicator-idle: #9e9e9e;
   --status-indicator-idle-ring: rgba(158,158,158,.25);
@@ -275,7 +275,7 @@ a:hover { text-decoration: underline; }
 #sidebarMount, #mainMount, #topbarMount,
 #statusViewMount, #storeViewMount, #updatesViewMount, #inventoryViewMount,
 #logsViewMount, #chatViewMount, #supportViewMount, #knowledgeViewMount,
-#automationViewMount, #p2pViewMount, #debugViewMount, #psadtViewMount {
+#automationViewMount, #p2pViewMount, #debugViewMount, #psadtViewMount, #zeroTouchConfigViewMount {
   display: contents;
 }
 
@@ -363,6 +363,18 @@ a:hover { text-decoration: underline; }
   padding: 10px 14px;
   border-top: 1px solid var(--sidebar-border);
   display: flex; flex-direction: column; gap: 6px;
+  flex-shrink: 0;
+}
+
+.sidebar-footer-bottom {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: auto;
+}
+
+.sidebar-footer-bottom .sidebar-link {
+  flex: 1;
 }
 
 .sidebar-user { display: flex; align-items: center; gap: 8px; padding: 6px 0; }
@@ -373,7 +385,8 @@ a:hover { text-decoration: underline; }
 
 .sidebar-version {
   font-size: 0.7rem; color: var(--sidebar-version);
-  text-align: center;
+  margin-left: auto;
+  white-space: nowrap;
 }
 
 /* ================================================================
@@ -395,43 +408,6 @@ a:hover { text-decoration: underline; }
   justify-content: flex-end;
   gap: 10px;
   min-height: 30px;
-}
-
-.topbar-indicators {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.topbar-indicator {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 9px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--muted);
-  font-size: 0.74rem;
-  font-weight: 600;
-}
-
-.topbar-indicator .indicator-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: currentColor;
-  opacity: 0.9;
-}
-
-.topbar-indicator.online {
-  color: var(--success);
-  border-color: color-mix(in srgb, var(--success) 30%, var(--border) 70%);
-}
-
-.topbar-indicator.offline {
-  color: var(--danger);
-  border-color: color-mix(in srgb, var(--danger) 30%, var(--border) 70%);
 }
 
 .topbar-feedback {

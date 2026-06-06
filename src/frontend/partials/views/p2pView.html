@@ -4,7 +4,8 @@
       <span class="meta">P2P nativo: descoberta, distribuicao hibrida e cache temporario</span>
       <div class="actions">
         <button id="refreshBtn" class="btn subtle">Atualizar</button>
-        <button id="cleanupBtn" class="btn subtle">Limpar Cache Expirado</button>
+        <button id="cleanupBtn" class="btn subtle">Limpar Cache</button>
+        <button id="cleanupAllBtn" class="btn danger btn-sm">Limpar Tudo</button>
       </div>
     </div>
 
@@ -13,25 +14,29 @@
       <div id="statusGrid" class="status-grid"></div>
     </article>
 
-    <div class="inventory-grid">
-      <article class="card wide">
+    <article id="p2pTransferPanel" class="card hidden">
+      <div class="card-header-row">
+        <h3>Transferencias em Andamento</h3>
+        <button id="openP2PFolderMainBtn" class="btn subtle btn-sm" title="Abrir pasta de downloads P2P">📂 Abrir Pasta</button>
+      </div>
+      <div id="p2pTransferList"></div>
+    </article>
+
+    <div class="p2p-subtabs" role="tablist" aria-label="Secoes P2P">
+      <button id="p2pTabArtifacts" class="p2p-subtab is-active" type="button" role="tab" aria-selected="true" aria-controls="p2pPanelArtifacts" data-p2p-tab-target="p2pPanelArtifacts">Artifacts Locais</button>
+      <button id="p2pTabPeers" class="p2p-subtab" type="button" role="tab" aria-selected="false" aria-controls="p2pPanelPeers" data-p2p-tab-target="p2pPanelPeers" tabindex="-1">Peers Descobertos</button>
+      <button id="p2pTabConfig" class="p2p-subtab" type="button" role="tab" aria-selected="false" aria-controls="p2pPanelConfig" data-p2p-tab-target="p2pPanelConfig" tabindex="-1">Configuracao P2P</button>
+      <button id="p2pTabAudit" class="p2p-subtab" type="button" role="tab" aria-selected="false" aria-controls="p2pPanelAudit" data-p2p-tab-target="p2pPanelAudit" tabindex="-1">Auditoria</button>
+    </div>
+
+    <div class="p2p-subtab-panels">
+      <article id="p2pPanelArtifacts" class="card wide p2p-subtab-panel" role="tabpanel" aria-labelledby="p2pTabArtifacts">
         <h3>Artifacts Locais</h3>
-        <div class="form-grid" style="margin-bottom: 12px;">
-          <div>
-            <label for="artifactName">Nome do artifact</label>
-            <input id="artifactName" type="text" placeholder="pacote-demo.bin" />
-          </div>
-          <div style="grid-column: 1 / -1;">
-            <label for="artifactContent">Conteudo de teste</label>
-            <input id="artifactContent" type="text" placeholder="conteudo de teste para distribuir via P2P" />
-          </div>
+        <div class="actions p2p-artifact-actions">
+          <button id="publishRealArtifactBtn" class="btn primary">Selecionar Arquivo para Publicar</button>
+          <button id="clearAllArtifactsBtn" class="btn subtle btn-sm">Apagar Todos</button>
         </div>
-        <div class="actions" style="margin-bottom: 10px;">
-          <button id="publishArtifactBtn" class="btn primary">Publicar Artifact Teste</button>
-          <button id="publishRealArtifactBtn" class="btn subtle">Selecionar Arquivo Real</button>
-          <button id="clearAllArtifactsBtn" class="btn subtle">Apagar Todos os Artifacts</button>
-        </div>
-        <div class="software-table-wrap">
+        <div class="software-table-wrap" style="max-height: 220px;">
           <table class="software-table">
             <thead>
               <tr>
@@ -45,43 +50,36 @@
         </div>
       </article>
 
-      <article class="card">
-		<h3>Transferencia Pull</h3>
-        <div class="form-grid">
-          <div>
-			<label for="artifactSelect">Artifact remoto</label>
-            <select id="artifactSelect"></select>
-          </div>
-          <div>
-			<label for="peerSelect">Peer origem</label>
-            <select id="peerSelect"></select>
-          </div>
+      <article id="p2pPanelPeers" class="card wide p2p-subtab-panel hidden" role="tabpanel" aria-labelledby="p2pTabPeers" hidden>
+        <div class="card-header-row">
+          <h3>Peers Descobertos</h3>
+          <button id="p2pRefreshPeersBtn" class="btn subtle btn-sm" title="Pesquisar peers na rede novamente" aria-label="Pesquisar peers na rede novamente" data-i18n-title="action.p2pRescanPeers" data-i18n-aria-label="action.p2pRescanPeers">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+          </button>
         </div>
-        <div class="actions" style="margin-top: 10px;">
-			<button id="replicateBtn" class="btn primary">Baixar do Peer</button>
-        </div>
-      </article>
-    </div>
-
-    <div class="inventory-grid">
-      <article class="card wide">
-        <h3>Peers Descobertos</h3>
-        <div class="software-table-wrap">
+        <div class="software-table-wrap" style="max-height: 260px;">
           <table class="software-table">
             <thead>
               <tr>
                 <th>Agent</th>
                 <th>Endereco</th>
                 <th>Origem</th>
-                <th>Visto em</th>
+                <th style="width:100px;">Acoes</th>
               </tr>
             </thead>
             <tbody id="peersBody"></tbody>
           </table>
         </div>
+        <div id="peerArtifactPanel" class="hidden" style="margin-top:10px;">
+          <label for="peerArtifactSelect" style="display:block;font-size:0.82rem;color:var(--muted);margin-bottom:4px;">Artifacts disponiveis neste peer</label>
+          <div style="display:flex;gap:8px;">
+            <select id="peerArtifactSelect" style="flex:1;"></select>
+            <button id="peerArtifactPullBtn" class="btn primary btn-sm">Puxar</button>
+          </div>
+        </div>
       </article>
 
-      <article class="card wide">
+      <article id="p2pPanelConfig" class="card wide p2p-subtab-panel hidden" role="tabpanel" aria-labelledby="p2pTabConfig" hidden>
         <h3>Configuracao P2P</h3>
         <div class="form-grid">
           <div>
@@ -118,45 +116,27 @@
         </div>
         <div id="statusLine" class="meta" style="margin-top: 8px;"></div>
       </article>
-    </div>
 
-    <article class="card wide">
-      <h3>Auditoria</h3>
-      <div class="form-grid" style="margin-bottom: 10px;">
-        <div>
-          <label for="auditActionFilter">Acao</label>
+      <article id="p2pPanelAudit" class="card wide p2p-subtab-panel hidden" role="tabpanel" aria-labelledby="p2pTabAudit" hidden>
+        <h3>Auditoria</h3>
+        <div class="p2p-audit-filters">
           <select id="auditActionFilter">
-            <option value="all">todas</option>
+            <option value="all">Todas as acoes</option>
             <option value="auto-distribute">auto-distribute</option>
             <option value="queue">queue</option>
             <option value="replicate">replicate</option>
             <option value="skip-duplicate">skip-duplicate</option>
             <option value="cooldown">cooldown</option>
           </select>
-        </div>
-        <div>
-          <label for="auditPeerFilter">Peer</label>
-          <select id="auditPeerFilter"><option value="all">todos</option></select>
-        </div>
-        <div>
-          <label for="auditStatusFilter">Status</label>
+          <select id="auditPeerFilter"><option value="all">Todos os peers</option></select>
           <select id="auditStatusFilter">
-            <option value="all">todos</option>
+            <option value="all">Todos os status</option>
             <option value="success">sucesso</option>
             <option value="error">erro</option>
           </select>
         </div>
-      </div>
-      <div id="auditList" class="automation-task-list"></div>
-    </article>
-
-    <!-- Auto-Provisioning -->
-    <article class="card wide" id="autoProvisioningCard">
-      <h3>Auto-Provisioning</h3>
-      <p class="meta" style="margin-bottom:12px;">Agentes instalados sem credenciais (instalador generico) sao configurados automaticamente via rede P2P quando este agente ja esta configurado e a feature esta ativa no servidor.</p>
-      <div id="autoProvisioningStatus" class="status-grid" style="margin-bottom:14px;"></div>
-      <h4 style="margin-bottom:8px;font-size:0.95rem;">Eventos recentes</h4>
-      <div id="autoProvisioningEvents" class="automation-task-list"></div>
-    </article>
+        <ul id="auditList" class="p2p-audit-list" aria-live="polite"></ul>
+      </article>
+    </div>
   </section>
 </main>

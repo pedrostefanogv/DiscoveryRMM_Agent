@@ -1,0 +1,18 @@
+<main id="zeroTouchConfigView" class="page-content hidden" role="tabpanel" aria-labelledby="tabZeroTouchConfig">
+  <section class="ztc-panel">
+    <div class="statusbar page-bar">
+      <span class="meta">Configuracao Zero-Touch: agentes sem credenciais sao provisionados via rede P2P</span>
+      <div class="actions">
+        <button id="ztcRefreshBtn" class="btn subtle">Atualizar</button>
+      </div>
+    </div>
+
+    <article class="card wide">
+      <h3>Status</h3>
+      <p class="meta" style="margin-bottom:12px;">Agentes instalados com instalador generico (sem credenciais pre-definidas) descobrem este agente via rede P2P e recebem a configuracao automaticamente quando a feature esta ativa no servidor.</p>
+      <div id="ztcStatus" class="status-grid" style="margin-bottom:14px;"></div>
+      <h4 style="margin-bottom:8px;font-size:0.95rem;">Eventos recentes de provisionamento</h4>
+      <div id="ztcEvents" class="automation-task-list"></div>
+    </article>
+  </section>
+</main>

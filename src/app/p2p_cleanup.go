@@ -33,7 +33,11 @@ func resolveP2PTempDir(goos string) string {
 }
 
 func (a *App) p2pTempDir() string {
-	return resolveP2PTempDir(runtime.GOOS)
+	dir := resolveP2PTempDir(runtime.GOOS)
+	// Garantir que o diretório exista e tenha permissão para todos os usuários
+	// da máquina (Windows: Everyone Full Control com herança; Linux: no-op).
+	_ = platform.EnsureWorldAccess(dir)
+	return dir
 }
 
 func (a *App) cleanupExpiredP2PTempArtifacts(now time.Time) (int, error) {

@@ -44,6 +44,7 @@ function setActiveTab(tab) {
     debug: debugViewEl,
     psadt: psadtViewEl,
     p2p: p2pViewEl,
+    zeroTouchConfig: zeroTouchConfigViewEl,
   };
   var tabs = {
     status: tabStatusBtn,
@@ -58,6 +59,7 @@ function setActiveTab(tab) {
     debug: tabDebugBtn,
     psadt: tabPSADTBtn,
     p2p: tabP2PBtn,
+    zeroTouchConfig: tabZeroTouchConfigBtn,
   };
 
   var titles = {

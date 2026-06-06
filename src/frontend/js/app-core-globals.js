@@ -21,6 +21,7 @@ const pageTitleEl = document.getElementById('pageTitle');
 const feedbackEl = document.getElementById('feedback');
 const installedOutputEl = document.getElementById('installedOutput');
 const reloadBtn = document.getElementById('reloadBtn');
+const homeBtn = document.getElementById('homeBtn');
 const upgradeAllBtn = document.getElementById('upgradeAllBtn');
 const installedBtn = document.getElementById('installedBtn');
 const tabStatusBtn = document.getElementById('tabStatus');
@@ -192,9 +193,11 @@ const logsSearchInputEl = document.getElementById('logsSearchInput');
 const tabDebugBtn = document.getElementById('tabDebug');
 const tabPSADTBtn = document.getElementById('tabPSADT');
 const tabP2PBtn = document.getElementById('tabP2P');
+const tabZeroTouchConfigBtn = document.getElementById('tabZeroTouchConfig');
 const debugViewEl = document.getElementById('debugView');
 const psadtViewEl = document.getElementById('psadtView');
 const p2pViewEl = document.getElementById('p2pView');
+const zeroTouchConfigViewEl = document.getElementById('zeroTouchConfigView');
 const apiSchemeEl = document.getElementById('apiScheme');
 const apiServerEl = document.getElementById('apiServer');
 const natsServerEl = document.getElementById('natsServer');
@@ -305,7 +308,7 @@ function isRuntimeTabAllowed(tab) {
     return true;
   }
   // In normal mode we hide tabs/views that are only relevant for debugging.
-  return tab !== 'logs' && tab !== 'debug' && tab !== 'psadt' && tab !== 'automation' && tab !== 'p2p' && tab !== 'inventory';
+  return tab !== 'logs' && tab !== 'debug' && tab !== 'psadt' && tab !== 'automation' && tab !== 'p2p' && tab !== 'inventory' && tab !== 'zeroTouchConfig';
 }
 
 function applyRuntimeTabVisibility() {
@@ -320,6 +323,7 @@ function applyRuntimeTabVisibility() {
   const openP2PDebugStatusBtnEl = document.getElementById('openP2PDebugStatusBtn');
   if (openP2PDebugStatusBtnEl) openP2PDebugStatusBtnEl.classList.toggle('hidden', hiddenInNormal);
   if (tabP2PBtn) tabP2PBtn.classList.toggle('hidden', hiddenInNormal);
+  if (tabZeroTouchConfigBtn) tabZeroTouchConfigBtn.classList.toggle('hidden', hiddenInNormal);
 
   if (hiddenInNormal) {
     if (inventoryViewEl) inventoryViewEl.classList.add('hidden');
@@ -328,6 +332,7 @@ function applyRuntimeTabVisibility() {
     if (psadtViewEl) psadtViewEl.classList.add('hidden');
     if (automationViewEl) automationViewEl.classList.add('hidden');
     if (p2pViewEl) p2pViewEl.classList.add('hidden');
+    if (zeroTouchConfigViewEl) zeroTouchConfigViewEl.classList.add('hidden');
   }
 
   if (!isRuntimeTabAllowed(activeTab)) {

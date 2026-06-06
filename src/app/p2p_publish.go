@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"discovery/internal/platform"
 )
 
 func (c *p2pCoordinator) ListArtifacts() ([]P2PArtifactView, error) {
@@ -63,6 +65,7 @@ func (c *p2pCoordinator) PublishTestArtifact(artifactName, content string) (P2PA
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		return P2PArtifactView{}, err
 	}
+	_ = platform.EnsureWorldReadable(path)
 	info, err := os.Stat(path)
 	if err != nil {
 		return P2PArtifactView{}, err
@@ -132,6 +135,7 @@ func (c *p2pCoordinator) PublishFile(sourcePath string) (P2PArtifactView, error)
 		_ = os.Remove(tmpPath)
 		return P2PArtifactView{}, err
 	}
+	_ = platform.EnsureWorldReadable(targetPath)
 
 	info, err := os.Stat(targetPath)
 	if err != nil {

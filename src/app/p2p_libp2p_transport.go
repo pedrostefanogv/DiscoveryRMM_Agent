@@ -27,6 +27,8 @@ import (
 	"sync"
 	"time"
 
+	"discovery/internal/platform"
+
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -438,7 +440,8 @@ func readPayloadExact(reader io.Reader, expected int64) ([]byte, error) {
 
 // libp2pDownloadChunk abre um stream /artifact/get/1.0.0, solicita um range e
 // salva os bytes no destFile. Verifica SHA256 do chunk após receber.
-func libp2pDownloadChunk(ctx context.Context, h host.Host, peerID peer.ID, artifactName, requesterID string, chunk P2PChunk, destFile string) error {
+// onProgress é opcional — quando != nil, chamado com (bytesLidosNoChunk, tamanhoDoChunk).
+func libp2pDownloadChunk(ctx context.Context, h host.Host, peerID peer.ID, artifactName, requesterID string, chunk P2PChunk, destFile string, onProgress func(readSoFar, total int64)) error {
 	if chunk.Size <= 0 {
 		return fmt.Errorf("chunk %d: tamanho invalido", chunk.Index)
 	}
@@ -481,7 +484,13 @@ func libp2pDownloadChunk(ctx context.Context, h host.Host, peerID peer.ID, artif
 	if chunkLen != chunk.Size {
 		return fmt.Errorf("chunk %d: tamanho divergente (esperado=%d recebido=%d)", chunk.Index, chunk.Size, chunkLen)
 	}
-	data, err := readPayloadExact(payloadReader, chunkLen)
+	var dataReader io.Reader = payloadReader
+	if onProgress != nil {
+		dataReader = newProgressReader(payloadReader, chunkLen, func(readSoFar int64) {
+			onProgress(readSoFar, chunkLen)
+		})
+	}
+	data, err := readPayloadExact(dataReader, chunkLen)
 	if err != nil {
 		return fmt.Errorf("leitura do chunk: %w", err)
 	}
@@ -495,7 +504,8 @@ func libp2pDownloadChunk(ctx context.Context, h host.Host, peerID peer.ID, artif
 }
 
 // libp2pDownloadArtifact faz download simples (arquivo inteiro) via /artifact/get/1.0.0.
-func libp2pDownloadArtifact(ctx context.Context, h host.Host, peerID peer.ID, access P2PArtifactAccess, destDir string) (string, int64, error) {
+// onProgress é opcional — quando != nil, é chamado com (bytesLidos, totalBytes) durante a transferência.
+func libp2pDownloadArtifact(ctx context.Context, h host.Host, peerID peer.ID, access P2PArtifactAccess, destDir string, onProgress func(readSoFar, total int64)) (string, int64, error) {
 	s, err := h.NewStream(ctx, peerID, protoArtifactGet)
 	if err != nil {
 		return "", 0, fmt.Errorf("stream get: %w", err)
@@ -535,7 +545,13 @@ func libp2pDownloadArtifact(ctx context.Context, h host.Host, peerID peer.ID, ac
 		return "", 0, err
 	}
 
-	size, copyErr := io.CopyN(f, payloadReader, expectedBytes)
+	var reader io.Reader = payloadReader
+	if onProgress != nil {
+		reader = newProgressReader(payloadReader, expectedBytes, func(readSoFar int64) {
+			onProgress(readSoFar, expectedBytes)
+		})
+	}
+	size, copyErr := io.CopyN(f, reader, expectedBytes)
 	closeErr := f.Close()
 	if copyErr != nil {
 		_ = os.Remove(tmpPath)
@@ -563,6 +579,7 @@ func libp2pDownloadArtifact(ctx context.Context, h host.Host, peerID peer.ID, ac
 		_ = os.Remove(tmpPath)
 		return "", 0, err
 	}
+	_ = platform.EnsureWorldReadable(targetPath)
 	return targetPath, size, nil
 }
 

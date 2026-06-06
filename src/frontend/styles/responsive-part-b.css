@@ -950,7 +950,10 @@
   max-height: none;
   flex: 1;
   overflow: auto;
-  white-space: pre;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  max-width: 100%;
   user-select: text;
   -webkit-user-select: text;
   tab-size: 4;
