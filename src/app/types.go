@@ -131,6 +131,12 @@ func (c *inventoryCache) set(r models.InventoryReport) {
 	c.loaded = true
 }
 
+func (c *inventoryCache) has() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.loaded
+}
+
 func (c *inventoryCache) Get() (models.InventoryReport, bool) {
 	return c.get()
 }

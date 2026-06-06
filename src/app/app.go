@@ -376,10 +376,10 @@ func NewApp(opts AppStartupOptions) *App {
 	})
 	a.selfUpdaterCh = make(chan bool, 4)
 	a.selfUpdater = &selfupdate.Updater{
-		ApiScheme:    "",
-		ApiServer:    "",
 		GetToken:     func() string { return a.GetDebugConfig().AuthToken },
 		GetAgentID:   func() string { return a.GetDebugConfig().AgentID },
+		GetApiScheme: func() string { return a.GetDebugConfig().ApiScheme },
+		GetApiServer: func() string { return a.GetDebugConfig().ApiServer },
 		GetPolicy:    func() selfupdate.Policy { return selfupdate.NormalizePolicy(a.GetAgentConfiguration().AgentUpdate) },
 		TempDir:      filepath.Join(platform.DataDir(), "updates"),
 		Logf:         func(format string, args ...any) { a.logs.append("[selfupdate] " + fmt.Sprintf(format, args...)) },
@@ -658,6 +658,14 @@ func (a *App) startup(ctx context.Context) {
 			a.debugSvc.BootstrapAgentCredentialsFromInstallerConfig(ctx)
 		}
 
+		// Após bootstrap bem-sucedido, dispara reconciliação de
+		// recursos que dependem de credenciais (inventário, sync,
+		// configuração do agente). Isso garante que o agent fique
+		// plenamente operacional no primeiro boot.
+		go func() {
+			_ = a.onPostBootstrapProvisioned(ctx)
+		}()
+
 		a.safeGo(func() {
 			a.ensureMeshCentralInstalled(ctx, "startup-auth", false)
 		})
@@ -716,8 +724,6 @@ func (a *App) startup(ctx context.Context) {
 	a.startupWg.Add(1)
 	a.safeGo(func() {
 		defer a.startupWg.Done()
-		a.selfUpdater.ApiScheme = a.GetDebugConfig().ApiScheme
-		a.selfUpdater.ApiServer = a.GetDebugConfig().ApiServer
 		if a.selfUpdater != nil {
 			a.selfUpdater.ResumePendingInstallReport(a.ctx)
 			a.selfUpdater.Run(a.ctx, 0)
@@ -802,6 +808,76 @@ func (a *App) isInventoryProvisioned() bool {
 		return false
 	}
 	return a.GetDebugConfig().IsProvisioned()
+}
+
+// onPostBootstrapProvisioned espera o agent ficar provisionado (com credenciais
+// de API) e então dispara reconciliação de recursos que dependem disso:
+// inventário inicial, refresh de configuração, app-store e suporte.
+// Resolve o problema do primeiro boot onde o inventário não rodava e os
+// serviços não iniciavam corretamente até o próximo ciclo agendado.
+func (a *App) onPostBootstrapProvisioned(ctx context.Context) error {
+	if a == nil {
+		return fmt.Errorf("app indisponivel")
+	}
+
+	// Aguarda até 60s pelo bootstrap. Se já estiver provisionado, não espera.
+	deadline := time.Now().Add(60 * time.Second)
+	for !a.isInventoryProvisioned() && time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
+
+	if !a.isInventoryProvisioned() {
+		a.logs.append("[startup] post-bootstrap: timeout aguardando provisionamento")
+		return nil
+	}
+
+	a.logs.append("[startup] post-bootstrap: agente provisionado — reconciliando recursos")
+
+	// 1. osquery + inventário inicial (não executou no goroutine #2 porque
+	//    ainda não estava provisionado).
+	a.ensureOsqueryInstalled(ctx)
+	if !a.invCache.has() {
+		a.startupLogf("[startup] post-bootstrap: executando inventario inicial")
+		report, err := a.collectInventoryWithHeartbeat(ctx)
+		if err != nil {
+			a.startupLogf("[startup] post-bootstrap: falha ao coletar inventario: %v", err)
+		} else {
+			a.invCache.set(report)
+			if a.inventorySvc != nil {
+				a.inventorySvc.SyncInventoryOnStartup(ctx, report)
+			}
+		}
+	}
+
+	// 2. Refresh da configuração do agent (clientId/siteId, políticas).
+	if a.syncCoord != nil {
+		_ = a.refreshAgentConfiguration(ctx)
+		a.syncCoord.reconcileFromManifest(ctx, "post-bootstrap")
+	}
+
+	// 3. Automação — carrega políticas iniciais.
+	if a.automationSvc != nil {
+		if _, err := a.automationSvc.RefreshPolicy(ctx, false); err != nil {
+			a.logs.append("[startup] post-bootstrap: falha ao carregar politicas de automacao: " + err.Error())
+		}
+	}
+
+	// 4. App-store e suporte.
+	if _, err := a.loadEffectiveAppStorePolicy(ctx, true); err != nil {
+		a.logs.append("[startup] post-bootstrap: falha ao carregar app-store: " + err.Error())
+	}
+	if a.supportSvc != nil && a.featureEnabled(a.GetAgentConfiguration().KnowledgeBaseEnabled) {
+		if err := a.supportSvc.RefreshKnowledgeBase(); err != nil {
+			a.logs.append("[startup] post-bootstrap: falha ao atualizar knowledge base: " + err.Error())
+		}
+	}
+
+	a.logs.append("[startup] post-bootstrap: reconciliacao concluida")
+	return nil
 }
 
 func (a *App) ensureOsqueryInstalled(ctx context.Context) {

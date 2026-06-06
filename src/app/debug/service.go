@@ -413,6 +413,8 @@ func (s *Service) BootstrapAgentCredentialsFromInstallerConfig(ctx context.Conte
 	inst.AuthToken = token
 	inst.AgentID = agentID
 	inst.APIKey = ""
+	// Normaliza ServerURL para manter consistência com ApiScheme/ApiServer.
+	inst.ServerURL = resolvedScheme + "://" + server
 	if strings.TrimSpace(clientID) != "" {
 		inst.ClientID = strings.TrimSpace(clientID)
 	}

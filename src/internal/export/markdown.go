@@ -2,8 +2,8 @@
 package export
 
 import (
+	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 
 	"discovery/internal/models"
@@ -18,26 +18,32 @@ func BuildMarkdown(r models.InventoryReport, redact bool) string {
 	}
 
 	var b strings.Builder
+
+	writeKV := func(key, value string) {
+		fmt.Fprintf(&b, "- %s: %s\n", key, md(value))
+	}
+
 	b.WriteString("# Inventario Discovery\n\n")
-	b.WriteString("- Coletado em: " + md(r.CollectedAt) + "\n")
-	b.WriteString("- Fonte: " + md(r.Source) + "\n\n")
+	fmt.Fprintf(&b, "- Coletado em: %s\n", md(r.CollectedAt))
+	fmt.Fprintf(&b, "- Fonte: %s\n\n", md(r.Source))
 
 	b.WriteString("## Hardware\n\n")
-	b.WriteString("- Hostname: " + md(hw.Hostname) + "\n")
-	b.WriteString("- Fabricante: " + md(hw.Manufacturer) + "\n")
-	b.WriteString("- Modelo: " + md(hw.Model) + "\n")
-	b.WriteString("- CPU: " + md(hw.CPU) + "\n")
-	b.WriteString("- Cores fisicos: " + strconv.Itoa(hw.Cores) + "\n")
-	b.WriteString("- Cores logicos: " + strconv.Itoa(hw.LogicalCores) + "\n")
-	b.WriteString("- Memoria (GB): " + strconv.FormatFloat(hw.MemoryGB, 'f', 2, 64) + "\n")
-	b.WriteString("- Placa-mae fabricante: " + md(hw.MotherboardManufacturer) + "\n")
-	b.WriteString("- Placa-mae modelo: " + md(hw.MotherboardModel) + "\n")
-	b.WriteString("- Placa-mae serial: " + md(hw.MotherboardSerial) + "\n")
-	b.WriteString("- BIOS vendor: " + md(hw.BIOSVendor) + "\n")
-	b.WriteString("- BIOS versao: " + md(hw.BIOSVersion) + "\n")
-	b.WriteString("- BIOS data: " + md(hw.BIOSReleaseDate) + "\n")
-	b.WriteString("- BIOS serial: " + md(hw.BIOSSerial) + "\n")
-	b.WriteString("- Quantidade de pentes: " + strconv.Itoa(hw.MemoryModulesCount) + "\n\n")
+	writeKV("Hostname", hw.Hostname)
+	writeKV("Fabricante", hw.Manufacturer)
+	writeKV("Modelo", hw.Model)
+	writeKV("Serial Number", hw.SerialNumber)
+	writeKV("CPU", hw.CPU)
+	fmt.Fprintf(&b, "- Cores fisicos: %d\n", hw.Cores)
+	fmt.Fprintf(&b, "- Cores logicos: %d\n", hw.LogicalCores)
+	fmt.Fprintf(&b, "- Memoria (GB): %.2f\n", hw.MemoryGB)
+	writeKV("Placa-mae fabricante", hw.MotherboardManufacturer)
+	writeKV("Placa-mae modelo", hw.MotherboardModel)
+	writeKV("Placa-mae serial", hw.MotherboardSerial)
+	writeKV("BIOS vendor", hw.BIOSVendor)
+	writeKV("BIOS versao", hw.BIOSVersion)
+	writeKV("BIOS data", hw.BIOSReleaseDate)
+	writeKV("BIOS serial", hw.BIOSSerial)
+	fmt.Fprintf(&b, "- Quantidade de pentes: %d\n\n", hw.MemoryModulesCount)
 
 	b.WriteString("## Memoria (Pentes)\n\n")
 	b.WriteString("| Slot | Banco | Fabricante | Part Number | Serial | Tamanho (GB) | Velocidade (MHz) | Tipo |\n")
@@ -47,7 +53,9 @@ func BuildMarkdown(r models.InventoryReport, redact bool) string {
 		if redact {
 			serial = Redacted
 		}
-		b.WriteString("| " + md(m.Slot) + " | " + md(m.Bank) + " | " + md(m.Manufacturer) + " | " + md(m.PartNumber) + " | " + md(serial) + " | " + strconv.FormatFloat(m.SizeGB, 'f', 2, 64) + " | " + strconv.Itoa(m.SpeedMHz) + " | " + md(m.Type) + " |\n")
+		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %.2f | %d | %s |\n",
+			md(m.Slot), md(m.Bank), md(m.Manufacturer), md(m.PartNumber),
+			md(serial), m.SizeGB, m.SpeedMHz, md(m.Type))
 	}
 	b.WriteString("\n")
 
@@ -59,7 +67,8 @@ func BuildMarkdown(r models.InventoryReport, redact bool) string {
 		if redact {
 			serial = Redacted
 		}
-		b.WriteString("| " + md(m.Name) + " | " + md(m.Manufacturer) + " | " + md(serial) + " | " + md(m.Resolution) + " | " + md(m.Status) + " |\n")
+		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s |\n",
+			md(m.Name), md(m.Manufacturer), md(serial), md(m.Resolution), md(m.Status))
 	}
 	b.WriteString("\n")
 
@@ -67,15 +76,17 @@ func BuildMarkdown(r models.InventoryReport, redact bool) string {
 	b.WriteString("| Nome | Fabricante | Driver | VRAM (GB) | Status |\n")
 	b.WriteString("| --- | --- | --- | ---: | --- |\n")
 	for _, g := range r.GPUs {
-		b.WriteString("| " + md(g.Name) + " | " + md(g.Manufacturer) + " | " + md(g.DriverVersion) + " | " + strconv.FormatFloat(g.VRAMGB, 'f', 2, 64) + " | " + md(g.Status) + " |\n")
+		fmt.Fprintf(&b, "| %s | %s | %s | %.2f | %s |\n",
+			md(g.Name), md(g.Manufacturer), md(g.DriverVersion), g.VRAMGB, md(g.Status))
 	}
 	b.WriteString("\n")
 
 	b.WriteString("## Sistema Operacional\n\n")
-	b.WriteString("- Nome: " + md(r.OS.Name) + "\n")
-	b.WriteString("- Versao: " + md(r.OS.Version) + "\n")
-	b.WriteString("- Build: " + md(r.OS.Build) + "\n")
-	b.WriteString("- Arquitetura: " + md(r.OS.Architecture) + "\n\n")
+	writeKV("Nome", r.OS.Name)
+	writeKV("Versao", r.OS.Version)
+	writeKV("Build", r.OS.Build)
+	writeKV("Arquitetura", r.OS.Architecture)
+	b.WriteString("\n")
 
 	b.WriteString("## Usuarios Logados\n\n")
 	b.WriteString("| Usuario | Tipo | TTY | Host | PID | SID |\n")
@@ -85,7 +96,8 @@ func BuildMarkdown(r models.InventoryReport, redact bool) string {
 		if redact {
 			sid = Redacted
 		}
-		b.WriteString("| " + md(u.User) + " | " + md(u.Type) + " | " + md(u.TTY) + " | " + md(u.Host) + " | " + strconv.Itoa(u.PID) + " | " + md(sid) + " |\n")
+		fmt.Fprintf(&b, "| %s | %s | %s | %s | %d | %s |\n",
+			md(u.User), md(u.Type), md(u.TTY), md(u.Host), u.PID, md(sid))
 	}
 	b.WriteString("\n")
 
@@ -93,15 +105,18 @@ func BuildMarkdown(r models.InventoryReport, redact bool) string {
 	b.WriteString("| Dispositivo | Label | Tipo | FS | Tamanho (GB) | Livre (GB) | Serial |\n")
 	b.WriteString("| --- | --- | --- | --- | ---: | ---: | --- |\n")
 	for _, v := range r.Volumes {
-		free := "-"
-		if v.FreeKnown {
-			free = strconv.FormatFloat(v.FreeGB, 'f', 2, 64)
-		}
 		serial := v.Serial
 		if redact {
 			serial = Redacted
 		}
-		b.WriteString("| " + md(v.Device) + " | " + md(v.Label) + " | " + md(v.Type) + " | " + md(v.FileSystem) + " | " + strconv.FormatFloat(v.SizeGB, 'f', 2, 64) + " | " + free + " | " + md(serial) + " |\n")
+		var free string
+		if v.FreeKnown {
+			free = fmt.Sprintf("%.2f", v.FreeGB)
+		} else {
+			free = "-"
+		}
+		fmt.Fprintf(&b, "| %s | %s | %s | %s | %.2f | %s | %s |\n",
+			md(v.Device), md(v.Label), md(v.Type), md(v.FileSystem), v.SizeGB, free, md(serial))
 	}
 	b.WriteString("\n")
 
@@ -113,7 +128,9 @@ func BuildMarkdown(r models.InventoryReport, redact bool) string {
 		if redact {
 			mac = Redacted
 		}
-		b.WriteString("| " + md(n.Interface) + " | " + md(mac) + " | " + md(n.IPv4) + " | " + md(n.IPv6) + " | " + md(n.Gateway) + " | " + md(n.Type) + " | " + md(n.ConnectionStatus) + " |\n")
+		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %s | %s |\n",
+			md(n.Interface), md(mac), md(n.IPv4), md(n.IPv6), md(n.Gateway),
+			md(n.Type), md(n.ConnectionStatus))
 	}
 	b.WriteString("\n")
 
@@ -121,7 +138,9 @@ func BuildMarkdown(r models.InventoryReport, redact bool) string {
 	b.WriteString("| Nome | Path | Args | Tipo | Source | Status | Usuario |\n")
 	b.WriteString("| --- | --- | --- | --- | --- | --- | --- |\n")
 	for _, s := range r.StartupItems {
-		b.WriteString("| " + md(s.Name) + " | " + md(s.Path) + " | " + md(s.Args) + " | " + md(s.Type) + " | " + md(s.Source) + " | " + md(s.Status) + " | " + md(s.Username) + " |\n")
+		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %s | %s |\n",
+			md(s.Name), md(s.Path), md(s.Args), md(s.Type), md(s.Source),
+			md(s.Status), md(s.Username))
 	}
 	b.WriteString("\n")
 
@@ -129,7 +148,7 @@ func BuildMarkdown(r models.InventoryReport, redact bool) string {
 	b.WriteString("| Nome | Path | Source |\n")
 	b.WriteString("| --- | --- | --- |\n")
 	for _, a := range r.Autoexec {
-		b.WriteString("| " + md(a.Name) + " | " + md(a.Path) + " | " + md(a.Source) + " |\n")
+		fmt.Fprintf(&b, "| %s | %s | %s |\n", md(a.Name), md(a.Path), md(a.Source))
 	}
 	b.WriteString("\n")
 
@@ -147,7 +166,8 @@ func BuildMarkdown(r models.InventoryReport, redact bool) string {
 		if redact {
 			serial = Redacted
 		}
-		b.WriteString("| " + md(s.Name) + " | " + md(s.Version) + " | " + md(s.Publisher) + " | " + md(s.InstallID) + " | " + md(serial) + " | " + md(s.Source) + " |\n")
+		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %s |\n",
+			md(s.Name), md(s.Version), md(s.Publisher), md(s.InstallID), md(serial), md(s.Source))
 	}
 
 	return b.String()

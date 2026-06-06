@@ -249,11 +249,11 @@ func (p *Provider) collectWithOsquery(ctx context.Context) (models.InventoryRepo
 	defer cancel()
 
 	queries := []osqueryQuery{
-		{name: "system_info", sql: "SELECT hostname, hardware_vendor, hardware_model, cpu_brand, cpu_physical_cores, cpu_logical_cores, physical_memory FROM system_info LIMIT 1", required: true},
+		{name: "system_info", sql: "SELECT hostname, hardware_vendor, hardware_model, hardware_serial, cpu_brand, cpu_physical_cores, cpu_logical_cores, physical_memory FROM system_info LIMIT 1", required: true},
 		{name: "os_version", sql: "SELECT name, version, build, arch FROM os_version LIMIT 1", required: true},
 		{name: "baseboard_info", sql: "SELECT manufacturer, model, serial FROM baseboard_info LIMIT 1"},
 		{name: "memory_devices", sql: "SELECT handle, array_handle, form_factor, total_width, data_width, size, set, device_locator, bank_locator, memory_type, memory_type_details, max_speed, configured_clock_speed, manufacturer, serial_number, asset_tag, part_number, min_voltage, max_voltage, configured_voltage FROM memory_devices WHERE size > 0"},
-		{name: "bios_info", sql: "SELECT vendor, version, date, revision FROM bios_info LIMIT 1"},
+		{name: "bios_info", sql: "SELECT vendor, version, date, revision, serial FROM bios_info LIMIT 1"},
 		{name: "video_info", sql: "SELECT model, vendor, driver, vram FROM video_info"},
 		{name: "battery", sql: "SELECT manufacturer, model, serial_number, cycle_count, state, charging, charged, designed_capacity, max_capacity, current_capacity, percent_remaining, amperage, voltage, minutes_until_empty, minutes_to_full_charge, chemistry, health, condition, manufacture_date FROM battery"},
 		{name: "bitlocker_info", sql: "SELECT device_id, drive_letter, persistent_volume_id, conversion_status, protection_status, encryption_method, version, percentage_encrypted, lock_status FROM bitlocker_info"},
@@ -313,6 +313,7 @@ func (p *Provider) collectWithOsquery(ctx context.Context) (models.InventoryRepo
 			Hostname:                getString(system, "hostname"),
 			Manufacturer:            getString(system, "hardware_vendor"),
 			Model:                   getString(system, "hardware_model"),
+			SerialNumber:            getString(system, "hardware_serial"),
 			CPU:                     getString(system, "cpu_brand"),
 			LogicalCores:            parseInt(getString(system, "cpu_logical_cores")),
 			Cores:                   parseInt(getString(system, "cpu_physical_cores")),
@@ -323,6 +324,7 @@ func (p *Provider) collectWithOsquery(ctx context.Context) (models.InventoryRepo
 			BIOSVendor:              getString(firstRow(get("bios_info")), "vendor"),
 			BIOSVersion:             getString(firstRow(get("bios_info")), "version"),
 			BIOSReleaseDate:         firstNonEmpty(getString(firstRow(get("bios_info")), "date"), getString(firstRow(get("bios_info")), "revision")),
+			BIOSSerial:              getString(firstRow(get("bios_info")), "serial"),
 		},
 		OS: models.OperatingSystem{
 			Name:         getString(osInfo, "name"),
@@ -350,6 +352,11 @@ func (p *Provider) collectWithOsquery(ctx context.Context) (models.InventoryRepo
 
 	report.Hardware.MemoryModulesCount = len(report.MemoryModules)
 	sanitizeHardwareFields(&report)
+
+	// Fallback WMI/CIM: em VMs (QEMU/KVM/Proxmox) o DMI/SMBIOS não é
+	// exposto ao osquery. Preenche campos vazios (serial, motherboard, BIOS)
+	// usando consultas WMI diretas.
+	enrichHardwareFromWMI(&report.Hardware)
 
 	diskMediaTypes := collectPhysicalDiskMediaTypes()
 	for i := range report.Volumes {

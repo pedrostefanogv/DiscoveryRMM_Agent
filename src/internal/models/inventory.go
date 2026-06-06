@@ -47,6 +47,7 @@ type HardwareInfo struct {
 	Hostname     string  `json:"hostname"`
 	Manufacturer string  `json:"manufacturer"`
 	Model        string  `json:"model"`
+	SerialNumber string  `json:"serialNumber"`
 	CPU          string  `json:"cpu"`
 	LogicalCores int     `json:"logicalCores"`
 	Cores        int     `json:"cores"`
