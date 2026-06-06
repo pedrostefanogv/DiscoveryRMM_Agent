@@ -20,6 +20,7 @@
   ];
 
   var APP_SCRIPTS = [
+    "js/debug-http-bridge.js",
     "js/app-utils.js",
     "js/app-core-globals.js",
     "js/app-window.js",

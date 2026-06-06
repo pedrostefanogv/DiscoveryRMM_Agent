@@ -3,7 +3,9 @@
 import (
 	"context"
 	"embed"
+	"io/fs"
 	"log"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -25,7 +27,7 @@ func main() {
 		log.Printf("[startup][gamebar] %s", note)
 	}
 
-	startupDebugMode := detectStartupDebugMode()
+	startupDebugMode := detectStartupDebugMode() || hasStartupArg("--debug")
 	startupMinimized := hasStartupArg("--startup-minimized")
 	startupSource := strings.TrimSpace(parseArgValue("--startup-source"))
 	startupWindowFrame, startupFrameless := resolveStartupWindowFrame()
@@ -41,8 +43,17 @@ func main() {
 	}
 
 	if startupDebugMode {
-		log.Println("[startup] Shift/Ctrl detectado: inicializando em modo debug (transitorio)")
+		log.Println("[startup] --debug detectado: inicializando em modo debug (transitorio)")
 	}
+	// Always inject frontend assets — debug HTTP server may be activated
+	// dynamically during startup() if Shift/Ctrl is detected.
+	// Strip the "frontend/" prefix from the embed.FS so the HTTP server
+	// can serve paths as "index.html", "app.js", etc. directly.
+	frontendSub, subErr := fs.Sub(assets, "frontend")
+	if subErr != nil {
+		log.Fatalf("[startup] falha ao resolver frontend assets: %v", subErr)
+	}
+	appkg.SetDebugFrontendAssets(http.FS(frontendSub))
 	if startupSource == "" {
 		if startupMinimized {
 			startupSource = "autostart"

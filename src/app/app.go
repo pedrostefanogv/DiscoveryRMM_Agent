@@ -94,6 +94,8 @@ type App struct {
 
 	consolEngine *ConsolidationEngine
 
+	debugHTTP *debugHTTPServer
+
 	p2pMu                      sync.RWMutex
 	p2pConfig                  P2PConfig
 	p2pSeedPlanCache           cachedP2PSeedPlan
@@ -591,6 +593,17 @@ func (a *App) startup(ctx context.Context) {
 
 	captureStdLog(&a.logs)
 
+	if a.runtimeFlags.DebugMode {
+		if a.debugHTTP == nil {
+			if err := a.StartDebugHTTPServer(); err != nil {
+				log.Printf("[debug-http] falha ao iniciar servidor HTTP local: %v", err)
+			}
+		}
+		if port := a.GetDebugHTTPPort(); port > 0 {
+			a.logs.append(fmt.Sprintf("[debug-http] servidor HTTP local iniciado em http://127.0.0.1:%d", port))
+		}
+	}
+
 	a.safeGo(func() { a.StartP2PTelemetryLoop(ctx) })
 
 	a.startTray()
@@ -948,6 +961,8 @@ func (a *App) hideWindowOnStartup() {
 func (a *App) shutdown(ctx context.Context) {
 	systray.Quit()
 	a.applyIdleMode(false)
+
+	a.StopDebugHTTPServer()
 
 	if a.cancel != nil {
 		a.cancel()

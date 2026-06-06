@@ -1,7 +1,9 @@
 package app
 
 import (
+	"fmt"
 	"log"
+	"os/exec"
 	"runtime/debug"
 	"time"
 
@@ -112,6 +114,22 @@ func (a *App) startTray() {
 					wailsRuntime.WindowShow(a.ctx)
 				})
 			})
+
+			// Debug-only: "Abrir no navegador" menu item.
+			// Only shown when the debug HTTP server is running.
+			if a.runtimeFlags.DebugMode && a.GetDebugHTTPPort() > 0 {
+				url := fmt.Sprintf("http://127.0.0.1:%d", a.GetDebugHTTPPort())
+				mBrowser := systray.AddMenuItem("Abrir no navegador", url)
+				mBrowser.Click(func() {
+					a.safeTrayAction("tray-menu-browser", func() {
+						cmd := exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+						cmd.Start()
+
+						// Log na UI
+						a.logs.append("[debug-http] abrindo " + url + " no navegador")
+					})
+				})
+			}
 
 			systray.AddSeparator()
 
