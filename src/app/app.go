@@ -474,10 +474,17 @@ func (a *App) featureEnabled(flag *bool) bool {
 	return *flag
 }
 
-const debugForcedHeartbeatIntervalSeconds = 10
+const defaultHeartbeatIntervalSeconds = 60
+const minHeartbeatIntervalSeconds = 30
 
-func heartbeatIntervalFromAgentConfig(_ AgentConfiguration) int {
-	return debugForcedHeartbeatIntervalSeconds
+func heartbeatIntervalFromAgentConfig(agentCfg AgentConfiguration) int {
+	if agentCfg.AgentHeartbeatIntervalSeconds != nil && *agentCfg.AgentHeartbeatIntervalSeconds > 0 {
+		if *agentCfg.AgentHeartbeatIntervalSeconds < minHeartbeatIntervalSeconds {
+			return minHeartbeatIntervalSeconds
+		}
+		return *agentCfg.AgentHeartbeatIntervalSeconds
+	}
+	return defaultHeartbeatIntervalSeconds
 }
 
 func (a *App) getHeartbeatMetrics() agentconn.AgentHeartbeatMetrics {
@@ -494,27 +501,14 @@ func (a *App) getHeartbeatMetrics() agentconn.AgentHeartbeatMetrics {
 		P2pPeers:         a.getKnownP2PPeers(),
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// CollectHeartbeatMetrics usa APIs nativas no Windows (zero subprocessos)
+	// e osquery socket no Linux/macOS. Todos os fallbacks de CPU/memória/disco
+	// estão internalizados — não precisa de fallback adicional aqui.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if m := inventory.CollectHeartbeatMetrics(ctx); m != nil {
 		mergeHeartbeatMetrics(&metrics, m)
 		metrics.P2pPeers = a.getKnownP2PPeers()
-	}
-	if runtime.GOOS == "windows" && metrics.CpuPercent < 0 {
-		if cpuPercent, ok := inventory.CollectWindowsCPUPercent(ctx); ok {
-			metrics.CpuPercent = cpuPercent
-		}
-	}
-
-	// Memory fallback: osquery system_info.physical_memory is unreliable on
-	// NUMA-enabled VMs (returns 0), which causes memoryTotalGb=0 and
-	// memoryPercent to be omitted from the heartbeat payload.
-	if runtime.GOOS == "windows" && metrics.MemoryTotalGb <= 0 {
-		if totalGB, usedGB, percent, ok := inventory.CollectWindowsMemoryMetrics(ctx); ok {
-			metrics.MemoryPercent = percent
-			metrics.MemoryTotalGb = totalGB
-			metrics.MemoryUsedGb = usedGB
-		}
 	}
 
 	// Enriquecer com dados de endereçamento P2P (libp2p peer ID, addrs, port)

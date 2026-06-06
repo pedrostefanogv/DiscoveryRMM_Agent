@@ -182,11 +182,16 @@ func TestApplyHeartbeatDiskIOFallback_NoDerivationWhenCollectorFails(t *testing.
 }
 
 func TestApplyHeartbeatMemoryFallback_UsesCollectorWhenMissing(t *testing.T) {
+	previousNative := collectWindowsMemoryNativeFunc
 	previousCollector := collectHeartbeatMemoryMetricsFunc
+	collectWindowsMemoryNativeFunc = func() (float64, float64, float64, bool) {
+		return -1, -1, -1, false
+	}
 	collectHeartbeatMemoryMetricsFunc = func(context.Context) (float64, float64, float64, bool) {
 		return 16.0, 6.5, 40.6, true
 	}
 	defer func() {
+		collectWindowsMemoryNativeFunc = previousNative
 		collectHeartbeatMemoryMetricsFunc = previousCollector
 	}()
 
@@ -206,12 +211,17 @@ func TestApplyHeartbeatMemoryFallback_UsesCollectorWhenMissing(t *testing.T) {
 
 func TestApplyHeartbeatMemoryFallback_DerivesPercentWithoutCollector(t *testing.T) {
 	called := false
+	previousNative := collectWindowsMemoryNativeFunc
 	previousCollector := collectHeartbeatMemoryMetricsFunc
+	collectWindowsMemoryNativeFunc = func() (float64, float64, float64, bool) {
+		return -1, -1, -1, false
+	}
 	collectHeartbeatMemoryMetricsFunc = func(context.Context) (float64, float64, float64, bool) {
 		called = true
 		return 99.0, 88.0, 77.0, true
 	}
 	defer func() {
+		collectWindowsMemoryNativeFunc = previousNative
 		collectHeartbeatMemoryMetricsFunc = previousCollector
 	}()
 
@@ -228,12 +238,20 @@ func TestApplyHeartbeatMemoryFallback_DerivesPercentWithoutCollector(t *testing.
 
 func TestCollectHeartbeatMetrics_ReturnsMemoryFallbackWithoutOsquery(t *testing.T) {
 	previousFind := findOsqueryBinaryFunc
+	previousMemoryNative := collectWindowsMemoryNativeFunc
 	previousMemoryCollector := collectHeartbeatMemoryMetricsFunc
 	previousCPUCollector := collectWindowsCPUPercentFunc
 	previousDiskCollector := collectWindowsDiskIOMetricsFunc
+	previousCPUNative := collectWindowsCPUPercentNativeFunc
+	previousDiskSpaceNative := collectDiskSpaceNativeFunc
+	previousUptime := collectUptimeSecondsFunc
+	previousProcessCount := collectProcessCountNativeFunc
 
 	findOsqueryBinaryFunc = func() (string, error) {
 		return "", errors.New("osquery indisponivel")
+	}
+	collectWindowsMemoryNativeFunc = func() (float64, float64, float64, bool) {
+		return -1, -1, -1, false
 	}
 	collectHeartbeatMemoryMetricsFunc = func(context.Context) (float64, float64, float64, bool) {
 		return 24.0, 10.0, 41.7, true
@@ -241,15 +259,32 @@ func TestCollectHeartbeatMetrics_ReturnsMemoryFallbackWithoutOsquery(t *testing.
 	collectWindowsCPUPercentFunc = func(context.Context) (float64, bool) {
 		return -1, false
 	}
+	collectWindowsCPUPercentNativeFunc = func() (float64, bool) {
+		return -1, false
+	}
 	collectWindowsDiskIOMetricsFunc = func(context.Context) (float64, float64, float64, float64, bool) {
 		return -1, -1, -1, -1, false
+	}
+	collectDiskSpaceNativeFunc = func() (float64, float64, float64, bool) {
+		return -1, -1, -1, false
+	}
+	collectUptimeSecondsFunc = func() int64 {
+		return -1
+	}
+	collectProcessCountNativeFunc = func() int {
+		return -1
 	}
 
 	defer func() {
 		findOsqueryBinaryFunc = previousFind
+		collectWindowsMemoryNativeFunc = previousMemoryNative
 		collectHeartbeatMemoryMetricsFunc = previousMemoryCollector
 		collectWindowsCPUPercentFunc = previousCPUCollector
+		collectWindowsCPUPercentNativeFunc = previousCPUNative
 		collectWindowsDiskIOMetricsFunc = previousDiskCollector
+		collectDiskSpaceNativeFunc = previousDiskSpaceNative
+		collectUptimeSecondsFunc = previousUptime
+		collectProcessCountNativeFunc = previousProcessCount
 	}()
 
 	metrics := CollectHeartbeatMetrics(context.Background())

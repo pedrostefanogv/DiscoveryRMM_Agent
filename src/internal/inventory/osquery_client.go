@@ -60,22 +60,48 @@ func osquerydSocketPaths() []string {
 	}
 }
 
+// osquerydSocketCache avoids repeated connect probes to the osqueryd pipe
+// on every inventory/heartbeat call when no daemon is running.
+var (
+	osquerydSocketCacheMu      sync.Mutex
+	osquerydSocketCachePath    string
+	osquerydSocketCacheChecked time.Time
+)
+
+const osquerydSocketCacheNegativeTTL = 60 * time.Second
+
 // findOsquerydSocket returns the socket path of a running osqueryd daemon,
 // or an empty string if no daemon socket is detected.
+// Results are cached (positive and negative) to avoid repeated connection
+// attempts on every heartbeat call.
 func findOsquerydSocket() string {
+	osquerydSocketCacheMu.Lock()
+	defer osquerydSocketCacheMu.Unlock()
+
+	if !osquerydSocketCacheChecked.IsZero() && time.Since(osquerydSocketCacheChecked) < osquerydSocketCacheNegativeTTL {
+		return osquerydSocketCachePath
+	}
+
 	for _, path := range osquerydSocketPaths() {
 		// On Windows, named pipes don't respond to os.Stat; try a real connect.
 		if runtime.GOOS == "windows" {
 			if c, err := osquery.NewClient(path, 500*time.Millisecond); err == nil {
 				c.Close()
+				osquerydSocketCachePath = path
+				osquerydSocketCacheChecked = time.Now()
 				return path
 			}
 			continue
 		}
 		if _, err := os.Stat(path); err == nil {
+			osquerydSocketCachePath = path
+			osquerydSocketCacheChecked = time.Now()
 			return path
 		}
 	}
+
+	osquerydSocketCachePath = ""
+	osquerydSocketCacheChecked = time.Now()
 	return ""
 }
 

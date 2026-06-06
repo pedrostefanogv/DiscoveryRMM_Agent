@@ -62,31 +62,36 @@ func TestParseUpgradeOutput_Empty(t *testing.T) {
 	}
 }
 
-
-
 // TestServiceConnectedMode_DefaultFalse verifica que o modo service-connected
 // começa como false (sem service detectado por padrão).
 
 // TestServiceConnectedMode_CanBeSetTrue verifica que o modo pode ser ativado
 // (simulando a deteção bem-sucedida do service no startup).
 
-
-
-
-
-
-func TestHeartbeatIntervalFromAgentConfig_DebugForcedInterval(t *testing.T) {
+func TestHeartbeatIntervalFromAgentConfig_UsesConfigValue(t *testing.T) {
 	configured := 45
 	got := heartbeatIntervalFromAgentConfig(AgentConfiguration{
 		AgentHeartbeatIntervalSeconds: &configured,
 	})
-	if got != debugForcedHeartbeatIntervalSeconds {
-		t.Fatalf("HeartbeatInterval = %d, want %d", got, debugForcedHeartbeatIntervalSeconds)
+	if got != configured {
+		t.Fatalf("HeartbeatInterval = %d, want %d", got, configured)
 	}
+}
 
-	got = heartbeatIntervalFromAgentConfig(AgentConfiguration{})
-	if got != debugForcedHeartbeatIntervalSeconds {
-		t.Fatalf("HeartbeatInterval (fallback) = %d, want %d", got, debugForcedHeartbeatIntervalSeconds)
+func TestHeartbeatIntervalFromAgentConfig_RespectsMinimum(t *testing.T) {
+	tooLow := 5
+	got := heartbeatIntervalFromAgentConfig(AgentConfiguration{
+		AgentHeartbeatIntervalSeconds: &tooLow,
+	})
+	if got != minHeartbeatIntervalSeconds {
+		t.Fatalf("HeartbeatInterval = %d, want min %d", got, minHeartbeatIntervalSeconds)
+	}
+}
+
+func TestHeartbeatIntervalFromAgentConfig_DefaultWhenNil(t *testing.T) {
+	got := heartbeatIntervalFromAgentConfig(AgentConfiguration{})
+	if got != defaultHeartbeatIntervalSeconds {
+		t.Fatalf("HeartbeatInterval (fallback) = %d, want %d", got, defaultHeartbeatIntervalSeconds)
 	}
 }
 

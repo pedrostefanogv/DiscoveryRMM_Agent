@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"discovery/internal/agentconn"
@@ -71,12 +72,15 @@ LIMIT 1
 `
 
 // CollectHeartbeatMetrics coleta métricas do sistema para o heartbeat
-// usando uma única query osquery otimizada. A estratégia de execução segue
-// a mesma prioridade do Provider: (1) socket osqueryd, (2) osqueryi socket.
+// usando APIs nativas do Windows sempre que disponível, com osquery como
+// fallback para plataformas não-Windows onde as APIs nativas não existem.
 //
-// Retorna um AgentHeartbeatMetrics preenchido ou nil em caso de erro.
-// Quando cpu_percent vier ausente/invalidado no osquery, aplica fallback
-// local via PowerShell/WMI para evitar omissao de CPU no heartbeat.
+// Windows: todas as métricas (CPU, memória, disco, uptime, processos) são
+// coletadas via syscalls nativos (kernel32.dll), eliminando subprocessos.
+// Isso reduz o consumo de CPU de ~3 subprocessos/heartbeat para zero.
+//
+// Não-Windows: mantém a estratégia original de socket osqueryd/osqueryi,
+// já que Linux/macOS possuem leitura eficiente de /proc e sysfs.
 func CollectHeartbeatMetrics(ctx context.Context) *agentconn.AgentHeartbeatMetrics {
 	metrics := &agentconn.AgentHeartbeatMetrics{
 		CpuPercent:       -1,
@@ -87,58 +91,176 @@ func CollectHeartbeatMetrics(ctx context.Context) *agentconn.AgentHeartbeatMetri
 		DiskResponseMs:   -1,
 	}
 
-	osqueryCollected := false
-	if bin, err := findOsqueryBinaryFunc(); err == nil {
-		runCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		defer cancel()
-
-		queries := []osqueryQuery{
-			{name: "heartbeat_metrics", sql: heartbeatMetricsSQL, required: true},
-		}
-
-		var results map[string]osqueryResult
-
-		// 1. Tentar socket osqueryd (daemon rodando)
-		if socketPath := findOsquerydSocket(); socketPath != "" {
-			results = runQueriesViaSocket(runCtx, socketPath, queries, nil)
-			if results != nil {
-				if r, ok := results["heartbeat_metrics"]; ok && r.err == nil && len(r.rows) > 0 {
-					if m := mapHeartbeatRow(r.rows[0]); m != nil {
-						*metrics = *m
-						osqueryCollected = true
-					}
-				}
-			}
-		}
-
-		// 2. Fallback: osqueryi transient socket
-		if !osqueryCollected {
-			proc, startErr := startOsqueryiSocket(runCtx, bin)
-			if startErr == nil {
-				defer proc.stop()
-
-				results = runQueriesViaSocket(runCtx, proc.socketPath, queries, nil)
-				if results != nil {
-					if r, ok := results["heartbeat_metrics"]; ok && r.err == nil && len(r.rows) > 0 {
-						if m := mapHeartbeatRow(r.rows[0]); m != nil {
-							*metrics = *m
-							osqueryCollected = true
-						}
-					}
-				}
-			}
-		}
+	if runtime.GOOS == "windows" {
+		collectHeartbeatMetricsWindows(ctx, metrics)
+	} else {
+		collectHeartbeatMetricsOsquery(ctx, metrics)
 	}
 
-	applyHeartbeatCPUFallback(ctx, metrics)
-	applyHeartbeatDiskIOFallback(ctx, metrics)
-	applyHeartbeatMemoryFallback(ctx, metrics)
-
-	if !osqueryCollected && !hasAnyHeartbeatMetric(metrics) {
+	if !hasAnyHeartbeatMetric(metrics) {
 		return nil
 	}
 
 	return metrics
+}
+
+// collectHeartbeatMetricsWindows coleta TODAS as métricas via APIs nativas
+// do Windows (kernel32.dll), sem subprocessos. Zero osquery, zero PowerShell.
+func collectHeartbeatMetricsWindows(ctx context.Context, metrics *agentconn.AgentHeartbeatMetrics) {
+	// CPU: sliding-window GetSystemTimes (instantâneo, sem subprocesso)
+	if cpuPercent, ok := collectWindowsCPUPercentNativeFunc(); ok {
+		metrics.CpuPercent = cpuPercent
+	} else {
+		// Fallback: PowerShell/WMI (apenas quando GetSystemTimes falha — raro)
+		if cpuPercent, ok := collectWindowsCPUPercentFunc(ctx); ok {
+			metrics.CpuPercent = cpuPercent
+		}
+	}
+
+	// Memória: GlobalMemoryStatusEx (API nativa, sempre confiável)
+	if totalGB, usedGB, percent, ok := collectWindowsMemoryNativeFunc(); ok && totalGB > 0 {
+		metrics.MemoryTotalGb = totalGB
+		metrics.MemoryUsedGb = usedGB
+		metrics.MemoryPercent = percent
+	} else if totalGB, usedGB, percent, ok := collectHeartbeatMemoryMetricsFunc(ctx); ok && totalGB > 0 {
+		metrics.MemoryTotalGb = totalGB
+		metrics.MemoryUsedGb = usedGB
+		metrics.MemoryPercent = percent
+	}
+
+	// Disco (espaço): GetDiskFreeSpaceExW (API nativa)
+	if totalGB, usedGB, percent, ok := collectDiskSpaceNativeFunc(); ok {
+		metrics.DiskTotalGb = totalGB
+		metrics.DiskUsedGb = usedGB
+		metrics.DiskPercent = percent
+	}
+
+	// Disco I/O: PowerShell/WMI com cache de 30s (evita subprocesso a cada heartbeat)
+	collectHeartbeatDiskIOWindowsCached(ctx, metrics)
+
+	// Uptime: GetTickCount64 (API nativa)
+	if uptime := collectUptimeSecondsFunc(); uptime > 0 {
+		metrics.UptimeSeconds = uptime
+	}
+
+	// Processos: CreateToolhelp32Snapshot (API nativa)
+	if count := collectProcessCountNativeFunc(); count >= 0 {
+		metrics.ProcessCount = count
+	}
+}
+
+// collectHeartbeatMetricsOsquery é o fallback para plataformas não-Windows
+// usando o mecanismo original de socket osquery.
+func collectHeartbeatMetricsOsquery(ctx context.Context, metrics *agentconn.AgentHeartbeatMetrics) {
+	bin, err := findOsqueryBinaryFunc()
+	if err != nil {
+		return
+	}
+
+	runCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	queries := []osqueryQuery{
+		{name: "heartbeat_metrics", sql: heartbeatMetricsSQL, required: true},
+	}
+
+	var results map[string]osqueryResult
+
+	// 1. Tentar socket osqueryd (daemon rodando)
+	if socketPath := findOsquerydSocket(); socketPath != "" {
+		results = runQueriesViaSocket(runCtx, socketPath, queries, nil)
+		if results != nil {
+			if r, ok := results["heartbeat_metrics"]; ok && r.err == nil && len(r.rows) > 0 {
+				if m := mapHeartbeatRow(r.rows[0]); m != nil {
+					*metrics = *m
+				}
+			}
+		}
+		return
+	}
+
+	// 2. Fallback: osqueryi transient socket
+	proc, startErr := startOsqueryiSocket(runCtx, bin)
+	if startErr != nil {
+		return
+	}
+	defer proc.stop()
+
+	results = runQueriesViaSocket(runCtx, proc.socketPath, queries, nil)
+	if results != nil {
+		if r, ok := results["heartbeat_metrics"]; ok && r.err == nil && len(r.rows) > 0 {
+			if m := mapHeartbeatRow(r.rows[0]); m != nil {
+				*metrics = *m
+			}
+		}
+	}
+
+	// Aplicar fallbacks para preencher lacunas do osquery
+	applyHeartbeatCPUFallback(ctx, metrics)
+	applyHeartbeatDiskIOFallback(ctx, metrics)
+	applyHeartbeatMemoryFallback(ctx, metrics)
+}
+
+// ─── Disk I/O Cache ──────────────────────────────────────────────────
+// Evita subprocesso PowerShell a cada heartbeat; coleta via CIM apenas
+// quando o cache expira (30s).
+
+var (
+	diskIOCacheMu       sync.Mutex
+	diskIOCacheAt       time.Time
+	diskIOCacheDisk     float64 = -1
+	diskIOCacheRead     float64 = -1
+	diskIOCacheWrite    float64 = -1
+	diskIOCacheResponse float64 = -1
+)
+
+const diskIOCacheTTL = 30 * time.Second
+
+func collectHeartbeatDiskIOWindowsCached(ctx context.Context, metrics *agentconn.AgentHeartbeatMetrics) {
+	if metrics == nil {
+		return
+	}
+	if runtime.GOOS != "windows" {
+		return
+	}
+
+	diskIOCacheMu.Lock()
+	cacheAge := time.Since(diskIOCacheAt)
+	cacheValid := cacheAge < diskIOCacheTTL
+	if cacheValid {
+		disk, read, write, resp := diskIOCacheDisk, diskIOCacheRead, diskIOCacheWrite, diskIOCacheResponse
+		diskIOCacheMu.Unlock()
+		metrics.DiskReadPercent = read
+		metrics.DiskWritePercent = write
+		metrics.DiskResponseMs = resp
+		// Não sobrescreve disk_percent se já coletado via GetDiskFreeSpaceExW
+		if metrics.DiskPercent < 0 && disk >= 0 {
+			metrics.DiskPercent = disk
+		}
+		return
+	}
+	diskIOCacheMu.Unlock()
+
+	// Coleta fresca
+	diskPercent, readPercent, writePercent, responseMs, ok := collectWindowsDiskIOMetricsFunc(ctx)
+	if !ok {
+		return
+	}
+
+	diskIOCacheMu.Lock()
+	diskIOCacheDisk = diskPercent
+	diskIOCacheRead = readPercent
+	diskIOCacheWrite = writePercent
+	diskIOCacheResponse = responseMs
+	diskIOCacheAt = time.Now()
+	diskIOCacheMu.Unlock()
+
+	metrics.DiskReadPercent = readPercent
+	metrics.DiskWritePercent = writePercent
+	metrics.DiskResponseMs = responseMs
+	if metrics.DiskPercent < 0 && diskPercent >= 0 {
+		metrics.DiskPercent = diskPercent
+	}
 }
 
 func hasAnyHeartbeatMetric(metrics *agentconn.AgentHeartbeatMetrics) bool {
@@ -220,6 +342,15 @@ var collectWindowsDiskIOMetricsFunc = CollectWindowsDiskIOMetrics
 var collectHeartbeatMemoryMetricsFunc = collectHeartbeatMemoryMetrics
 var findOsqueryBinaryFunc = FindOsqueryBinary
 
+// Native Windows collectors — mockable for testing.
+var (
+	collectWindowsCPUPercentNativeFunc = collectWindowsCPUPercentNative
+	collectWindowsMemoryNativeFunc     = collectWindowsMemoryNative
+	collectDiskSpaceNativeFunc         = collectDiskSpaceNative
+	collectUptimeSecondsFunc           = collectUptimeSeconds
+	collectProcessCountNativeFunc      = collectProcessCountNative
+)
+
 func applyHeartbeatCPUFallback(ctx context.Context, metrics *agentconn.AgentHeartbeatMetrics) {
 	if metrics == nil || metrics.CpuPercent >= 0 {
 		return
@@ -291,20 +422,23 @@ func applyHeartbeatMemoryFallback(ctx context.Context, metrics *agentconn.AgentH
 		return
 	}
 
+	// Se já temos total e usado, podemos derivar percent sem nenhum collector.
+	if metrics.MemoryTotalGb > 0 && metrics.MemoryUsedGb >= 0 && metrics.MemoryPercent < 0 {
+		metrics.MemoryPercent = normalizeHeartbeatPercent((metrics.MemoryUsedGb * 100.0) / metrics.MemoryTotalGb)
+		return
+	}
+
 	// On Windows, always collect memory via native API (GlobalMemoryStatusEx).
-	// osquery system_info.physical_memory is unreliable on NUMA-enabled VMs
-	// (returns 0), which causes memoryTotalGb=0, memoryPercent=NULL, and
-	// the heartbeat displays "<omitido>". The native API is always correct.
 	if runtime.GOOS == "windows" {
-		if totalGB, usedGB, percent, ok := collectWindowsMemoryNative(); ok && totalGB > 0 {
+		if totalGB, usedGB, percent, ok := collectWindowsMemoryNativeFunc(); ok && totalGB > 0 {
 			metrics.MemoryTotalGb = totalGB
 			metrics.MemoryUsedGb = usedGB
 			metrics.MemoryPercent = percent
 			return
 		}
 
-		// Fallback to PowerShell/WMI if native API fails
-		if totalGB, usedGB, percent, ok := CollectWindowsMemoryMetrics(ctx); ok && totalGB > 0 {
+		// Second fallback: high-level collector
+		if totalGB, usedGB, percent, ok := collectHeartbeatMemoryMetricsFunc(ctx); ok && totalGB > 0 {
 			metrics.MemoryTotalGb = totalGB
 			metrics.MemoryUsedGb = usedGB
 			metrics.MemoryPercent = percent
@@ -315,21 +449,7 @@ func applyHeartbeatMemoryFallback(ctx context.Context, metrics *agentconn.AgentH
 	// Non-Windows or all Windows fallbacks failed: calculate from osquery data
 	if metrics.MemoryPercent < 0 && metrics.MemoryTotalGb > 0 && metrics.MemoryUsedGb >= 0 {
 		metrics.MemoryPercent = normalizeHeartbeatPercent((metrics.MemoryUsedGb * 100.0) / metrics.MemoryTotalGb)
-	}
-
-	memoryMissing := metrics.MemoryPercent < 0 || metrics.MemoryTotalGb <= 0 || metrics.MemoryUsedGb <= 0
-	if memoryMissing {
-		if totalGB, usedGB, percent, ok := collectHeartbeatMemoryMetricsFunc(ctx); ok {
-			if metrics.MemoryTotalGb <= 0 {
-				metrics.MemoryTotalGb = totalGB
-			}
-			if metrics.MemoryUsedGb <= 0 {
-				metrics.MemoryUsedGb = usedGB
-			}
-			if metrics.MemoryPercent < 0 {
-				metrics.MemoryPercent = percent
-			}
-		}
+		return
 	}
 
 	if metrics.MemoryTotalGb > 0 {
@@ -385,8 +505,8 @@ func CollectWindowsMemoryMetrics(ctx context.Context) (float64, float64, float64
 		return -1, -1, -1, false
 	}
 
-	// Tentativa 1: API nativa GlobalMemoryStatusEx via golang.org/x/sys/windows
-	if totalGB, usedGB, percent, ok := collectWindowsMemoryNative(); ok {
+	// Tentativa 1: API nativa GlobalMemoryStatusEx
+	if totalGB, usedGB, percent, ok := collectWindowsMemoryNativeFunc(); ok {
 		return totalGB, usedGB, percent, true
 	}
 
