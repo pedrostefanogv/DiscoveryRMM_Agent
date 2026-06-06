@@ -474,8 +474,8 @@ func (a *App) featureEnabled(flag *bool) bool {
 	return *flag
 }
 
-const defaultHeartbeatIntervalSeconds = 60
-const minHeartbeatIntervalSeconds = 30
+const defaultHeartbeatIntervalSeconds = 15
+const minHeartbeatIntervalSeconds = 10
 
 func heartbeatIntervalFromAgentConfig(agentCfg AgentConfiguration) int {
 	if agentCfg.AgentHeartbeatIntervalSeconds != nil && *agentCfg.AgentHeartbeatIntervalSeconds > 0 {

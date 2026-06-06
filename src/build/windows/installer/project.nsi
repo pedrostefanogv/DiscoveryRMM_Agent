@@ -748,16 +748,39 @@ Function DownloadAndRunStage2
       Abort
    ${EndIf}
 
-   ${If} $PayloadSha256 != ""
+   # ── Dynamic SHA256 validation ──────────────────────────────────────────────
+   # Fetches the expected SHA256 from the API at install time (not compile time).
+   # The endpoint is derived from the payload URL: <payload>/sha256
+   # This avoids bootstrap breakage when the stage2 is rebuilt after generation.
+   #
+   # Fallback chain:
+   #  1. Dynamic: fetch expected hash from $PayloadUrl/sha256 (bitsadmin)
+   #  2. Static:  use compile-time embedded hash (backward compat, rare)
+   #  3. None:    skip validation with warning
+   # ────────────────────────────────────────────────────────────────────────────
+   StrCpy $R8 "$R6\expected.sha256"
+   nsExec::ExecToLog '"$SYSDIR\cmd.exe" /c bitsadmin /transfer "DiscoverySHA256" /download /priority normal "$PayloadUrl/sha256" "$R8"'
+   Pop $R0
+
+   ${If} $R0 != 0
+      # Dynamic fetch failed — fall back to compile-time hash or skip
+      ${If} $PayloadSha256 != ""
+         DetailPrint "Validando integridade SHA256 do payload (hash estatico)..."
+         nsExec::ExecToLog '"$SYSDIR\cmd.exe" /c certutil -hashfile "$R7" SHA256 | findstr /i /c:"$PayloadSha256"'
+         Pop $R0
+         ${If} $R0 != 0
+            MessageBox MB_ICONSTOP "Falha na validacao de integridade do payload (hash mismatch)."
+            Abort
+         ${EndIf}
+      ${Else}
+         DetailPrint "Aviso: nao foi possivel validar integridade (SHA256 endpoint indisponivel). Prosseguindo..."
+      ${EndIf}
+   ${Else}
       DetailPrint "Validando integridade SHA256 do payload..."
-
-      # CertUtil (built-in Windows) + findstr: validacao nativa de hash, sem PowerShell,
-      # sem arquivos temporarios, janela oculta via nsExec::ExecToLog.
-      # CertUtil gera saida multi-linha (cabecalho + hash); findstr /i faz match
-      # case-insensitive do hash esperado em qualquer linha.
-      nsExec::ExecToLog '"$SYSDIR\cmd.exe" /c certutil -hashfile "$R7" SHA256 | findstr /i /c:"$PayloadSha256"'
+      # findstr /g: reads expected hash from downloaded file; certutil output
+      # contains computed hash on its own line — findstr matches it case-insensitively.
+      nsExec::ExecToLog '"$SYSDIR\cmd.exe" /c certutil -hashfile "$R7" SHA256 | findstr /i /g:"$R8"'
       Pop $R0
-
       ${If} $R0 != 0
          MessageBox MB_ICONSTOP "Falha na validacao de integridade do payload (hash mismatch)."
          Abort

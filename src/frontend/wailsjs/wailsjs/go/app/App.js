@@ -174,6 +174,10 @@ export function GetDebugConfig() {
   return window['go']['app']['App']['GetDebugConfig']();
 }
 
+export function GetDebugHTTPPort() {
+  return window['go']['app']['App']['GetDebugHTTPPort']();
+}
+
 export function GetInventory() {
   return window['go']['app']['App']['GetInventory']();
 }
@@ -264,6 +268,10 @@ export function GetPSADTDebugState() {
 
 export function GetPSADTScriptTemplate() {
   return window['go']['app']['App']['GetPSADTScriptTemplate']();
+}
+
+export function GetPSADTSessionProperties() {
+  return window['go']['app']['App']['GetPSADTSessionProperties']();
 }
 
 export function GetPackageActions() {
@@ -502,6 +510,18 @@ export function RunOnboardingLoop(arg1) {
   return window['go']['app']['App']['RunOnboardingLoop'](arg1);
 }
 
+export function RunPSADTPreflightChecks() {
+  return window['go']['app']['App']['RunPSADTPreflightChecks']();
+}
+
+export function RunPSADTRestartPrompt(arg1, arg2) {
+  return window['go']['app']['App']['RunPSADTRestartPrompt'](arg1, arg2);
+}
+
+export function RunPSADTWelcome(arg1, arg2) {
+  return window['go']['app']['App']['RunPSADTWelcome'](arg1, arg2);
+}
+
 export function SearchCatalog(arg1) {
   return window['go']['app']['App']['SearchCatalog'](arg1);
 }
@@ -550,12 +570,20 @@ export function StartChatStream(arg1) {
   return window['go']['app']['App']['StartChatStream'](arg1);
 }
 
+export function StartDebugHTTPServer() {
+  return window['go']['app']['App']['StartDebugHTTPServer']();
+}
+
 export function StartP2PTelemetryLoop(arg1) {
   return window['go']['app']['App']['StartP2PTelemetryLoop'](arg1);
 }
 
 export function StopChatStream() {
   return window['go']['app']['App']['StopChatStream']();
+}
+
+export function StopDebugHTTPServer() {
+  return window['go']['app']['App']['StopDebugHTTPServer']();
 }
 
 export function SyncP2PBootstrapNow() {

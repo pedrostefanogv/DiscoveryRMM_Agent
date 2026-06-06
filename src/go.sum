@@ -185,8 +185,6 @@ github.com/osquery/osquery-go v0.0.0-20260306231408-a88c0766cd0d h1:oCgqAENoLjXn
 github.com/osquery/osquery-go v0.0.0-20260306231408-a88c0766cd0d/go.mod h1:pzstexGXSN0vxG4pWNrBxcG0uP+2bK7qkBSh240C/8s=
 github.com/pbnjay/memory v0.0.0-20210728143218-7b4eea64cf58 h1:onHthvaw9LFnH4t2DcNVpwGmV9E1BkGknEliJkfwQj0=
 github.com/pbnjay/memory v0.0.0-20210728143218-7b4eea64cf58/go.mod h1:DXv8WO4yhMYhSNPKjeNKa5WY9YCIEBRbNzFFPJbWO6Y=
-github.com/pedrostefanogv/go-psadt v0.0.0-20260429030338-1ecdd629424c h1:mc+hX9m05DbMg6dCkiOQ0nZofBpfeNcxS8HHw3F/83M=
-github.com/pedrostefanogv/go-psadt v0.0.0-20260429030338-1ecdd629424c/go.mod h1:PUkqB2pctu3jsH/AibulxNgiIJIRKms60lVMRubtO2Y=
 github.com/pedrostefanogv/go-psadt v0.0.0-20260606035251-839bc92e759a h1:YbfwZkTceiTlMEQMpkImN4quTuj00vovJhqZdJp8jRA=
 github.com/pedrostefanogv/go-psadt v0.0.0-20260606035251-839bc92e759a/go.mod h1:PUkqB2pctu3jsH/AibulxNgiIJIRKms60lVMRubtO2Y=
 github.com/pion/datachannel v1.5.10 h1:ly0Q26K1i6ZkGf42W7D4hQYR90pZwzFOjTq5AuCKk4o=

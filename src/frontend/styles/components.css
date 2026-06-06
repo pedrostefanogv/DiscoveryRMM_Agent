@@ -212,7 +212,7 @@
 }
 
 .startup-table summary:hover {
-  color: #0b6e4f;
+  color: var(--accent);
   font-weight: 500;
 }
 
@@ -278,7 +278,7 @@
 }
 
 #connectionsRefreshStatus.error {
-  color: #9a031e;
+  color: var(--danger);
 }
 
 .connections-table-wrap {
@@ -310,12 +310,12 @@
 
 .connections-table th.sortable.asc::after {
   content: ' \2191';
-  color: #0b6e4f;
+  color: var(--accent);
 }
 
 .connections-table th.sortable.desc::after {
   content: ' \2193';
-  color: #9a031e;
+  color: var(--danger);
 }
 
 .connections-table details {
@@ -329,7 +329,7 @@
 }
 
 .connections-table summary:hover {
-  color: #0b6e4f;
+  color: var(--accent);
   font-weight: 500;
 }
 
@@ -606,14 +606,14 @@
 
 .btn.primary {
   background: var(--accent);
-  color: #ffffff;
-  border-color: #0a5a42;
+  color: var(--on-accent);
+  border-color: color-mix(in srgb, var(--accent) 82%, var(--darken) 18%);
 }
 
 .btn.danger {
   background: var(--danger);
-  color: #ffffff;
-  border-color: #7f0018;
+  color: var(--on-accent);
+  border-color: color-mix(in srgb, var(--danger) 82%, var(--darken) 18%);
 }
 
 .btn.subtle {
@@ -631,7 +631,8 @@ input[type="search"] {
 }
 
 .terminal {
-  background: #0f0d0a; color: #e8ddc0;
+  background: var(--terminal-bg);
+  color: var(--terminal-fg);
   border-radius: var(--radius); padding: 12px;
   min-height: 180px; max-height: 300px;
   overflow: auto; white-space: pre-wrap;
@@ -779,7 +780,7 @@ input[type="search"] {
 
 .category-list li.active {
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
   font-weight: 600;
 }
 

@@ -45,8 +45,9 @@
     container.style.zIndex = "99999";
     container.style.padding = "14px";
     container.style.borderRadius = "10px";
-    container.style.background = "#9a031e";
-    container.style.color = "#fff";
+    var rootStyles = getComputedStyle(document.documentElement);
+    container.style.background = rootStyles.getPropertyValue('--danger').trim() || '#c1121f';
+    container.style.color = rootStyles.getPropertyValue('--on-accent').trim() || '#ffffff';
     container.style.fontFamily = "Space Grotesk, sans-serif";
     container.style.fontSize = "14px";
     container.textContent = message;

@@ -97,6 +97,8 @@ export function GetChatHistory():Promise<Array<app.ChatMessage>>;
 
 export function GetDebugConfig():Promise<debug.Config>;
 
+export function GetDebugHTTPPort():Promise<number>;
+
 export function GetInventory():Promise<models.InventoryReport>;
 
 export function GetInventoryJSON():Promise<json.RawMessage>;
@@ -142,6 +144,8 @@ export function GetP2PTempDir():Promise<string>;
 export function GetPSADTDebugState():Promise<app.PSADTDebugState>;
 
 export function GetPSADTScriptTemplate():Promise<string>;
+
+export function GetPSADTSessionProperties():Promise<app.PSADTSessionProperties>;
 
 export function GetPackageActions():Promise<Record<string, string>>;
 
@@ -261,6 +265,12 @@ export function RestartSpoolerJSON():Promise<json.RawMessage>;
 
 export function RunOnboardingLoop(arg1:context.Context):Promise<void>;
 
+export function RunPSADTPreflightChecks():Promise<app.PSADTPreflightResult>;
+
+export function RunPSADTRestartPrompt(arg1:number,arg2:boolean):Promise<app.PSADTRestartPromptResult>;
+
+export function RunPSADTWelcome(arg1:string,arg2:number):Promise<app.PSADTWelcomeResult>;
+
 export function SearchCatalog(arg1:string):Promise<json.RawMessage>;
 
 export function SelectAndPublishP2PArtifact():Promise<p2pmeta.ArtifactView>;
@@ -285,9 +295,13 @@ export function ShouldHideOnClose():Promise<boolean>;
 
 export function StartChatStream(arg1:string):Promise<void>;
 
+export function StartDebugHTTPServer():Promise<void>;
+
 export function StartP2PTelemetryLoop(arg1:context.Context):Promise<void>;
 
 export function StopChatStream():Promise<boolean>;
+
+export function StopDebugHTTPServer():Promise<void>;
 
 export function SyncP2PBootstrapNow():Promise<string>;
 

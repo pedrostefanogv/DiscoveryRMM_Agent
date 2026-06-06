@@ -352,7 +352,8 @@ function appApi() {
 function showFeedback(message, isError) {
   if (feedbackEl) {
     feedbackEl.textContent = message;
-    feedbackEl.style.color = isError ? '#9a031e' : '#665a4c';
+    var rootStyles = getComputedStyle(document.documentElement);
+    feedbackEl.style.color = isError ? rootStyles.getPropertyValue('--danger').trim() : rootStyles.getPropertyValue('--muted').trim();
   }
   showToast(message, isError ? 'error' : 'info');
 }

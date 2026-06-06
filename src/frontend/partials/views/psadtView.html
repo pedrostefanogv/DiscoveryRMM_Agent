@@ -1,35 +1,22 @@
 <main id="psadtView" class="page-content hidden" role="tabpanel" aria-labelledby="tabPSADT">
   <style>
     #psadtView {
-      --bg: #f8f1e7;
-      --surface: #fff8ef;
-      --surface-2: #f1e6d5;
-      --text: #2a1f16;
-      --muted: #665a4c;
-      --accent: #0b6e4f;
-      --border: #d9cfba;
-      --danger: #9a031e;
-      --warning: #8a4e12;
-      --success: #0b6e4f;
-    }
-
-    [data-theme="dark"] #psadtView {
-      --bg: #1f1f24;
-      --surface: #2a2b31;
-      --surface-2: #33343c;
-      --text: #ebe6dc;
-      --muted: #b9b1a3;
-      --accent: #3cc08a;
-      --border: #4a4b54;
-      --danger: #e35b66;
-      --warning: #e0a75f;
-      --success: #61c789;
+      --psadt-surface: var(--surface);
+      --psadt-surface-2: var(--surface-2);
+      --psadt-text: var(--text);
+      --psadt-muted: var(--muted);
+      --psadt-accent: var(--accent);
+      --psadt-border: var(--border);
+      --psadt-danger: var(--danger);
+      --psadt-warning: var(--accent-2);
+      --psadt-success: var(--success);
+      color: var(--psadt-text);
     }
 
     #psadtView .shell { display: grid; gap: 14px; padding: 18px; }
     #psadtView .panel {
-      background: var(--surface);
-      border: 1px solid var(--border);
+      background: var(--psadt-surface);
+      border: 1px solid var(--psadt-border);
       border-radius: 14px;
       padding: 14px;
     }
@@ -43,12 +30,12 @@
     #psadtView h1, #psadtView h2 { margin: 0; }
     #psadtView h1 { font-size: 1.15rem; }
     #psadtView h2 { font-size: 1rem; margin-bottom: 10px; }
-    #psadtView .meta { color: var(--muted); font-size: 0.88rem; }
+    #psadtView .meta { color: var(--psadt-muted); font-size: 0.88rem; }
     #psadtView .actions { display: flex; flex-wrap: wrap; gap: 8px; }
     #psadtView .btn {
-      border: 1px solid var(--border);
-      background: var(--surface-2);
-      color: var(--text);
+      border: 1px solid var(--psadt-border);
+      background: var(--psadt-surface-2);
+      color: var(--psadt-text);
       border-radius: 10px;
       padding: 8px 12px;
       font-family: inherit;
@@ -56,9 +43,9 @@
       cursor: pointer;
     }
     #psadtView .btn.primary {
-      background: var(--accent);
-      border-color: var(--accent);
-      color: #fff;
+      background: var(--psadt-accent);
+      border-color: var(--psadt-accent);
+      color: var(--on-accent);
     }
     #psadtView .grid {
       display: grid;
@@ -70,15 +57,27 @@
       grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
       gap: 10px;
     }
-    #psadtView label { display: block; font-size: 0.82rem; color: var(--muted); margin-bottom: 4px; }
+    #psadtView label { display: block; font-size: 0.82rem; color: var(--psadt-muted); margin-bottom: 4px; }
     #psadtView input, #psadtView select, #psadtView textarea {
       width: 100%;
-      border: 1px solid var(--border);
+      border: 1px solid var(--psadt-border);
       border-radius: 8px;
       padding: 8px 10px;
       font-family: inherit;
-      background: var(--surface);
-      color: var(--text);
+      background: var(--psadt-surface);
+      color: var(--psadt-text);
+    }
+    #psadtView input[type="color"] {
+      min-height: 40px;
+      padding: 4px 8px;
+      cursor: pointer;
+    }
+    #psadtView input[type="color"]::-webkit-color-swatch-wrapper {
+      padding: 0;
+    }
+    #psadtView input[type="color"]::-webkit-color-swatch {
+      border: 1px solid var(--psadt-border);
+      border-radius: 5px;
     }
     #psadtView textarea { min-height: 74px; resize: vertical; }
     #psadtView .status {
@@ -86,25 +85,25 @@
       min-height: 20px;
       font-size: 0.86rem;
     }
-    #psadtView .status.error { color: var(--danger); }
-    #psadtView .status.ok { color: var(--success); }
+    #psadtView .status.error { color: var(--psadt-danger); }
+    #psadtView .status.ok { color: var(--psadt-success); }
     #psadtView .kvs { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
-    #psadtView .kv { border: 1px solid var(--border); border-radius: 10px; padding: 10px; background: color-mix(in srgb, var(--surface-2) 90%, var(--surface) 10%); }
-    #psadtView .kv .k { display: block; font-size: 0.78rem; color: var(--muted); }
+    #psadtView .kv { border: 1px solid var(--psadt-border); border-radius: 10px; padding: 10px; background: color-mix(in srgb, var(--psadt-surface-2) 90%, var(--psadt-surface) 10%); }
+    #psadtView .kv .k { display: block; font-size: 0.78rem; color: var(--psadt-muted); }
     #psadtView .kv .v { display: block; margin-top: 2px; font-weight: 600; }
     #psadtView .mono { font-family: 'IBM Plex Mono', monospace; }
     #psadtView .preview-wrap { display: grid; gap: 10px; }
     #psadtView .preview-item {
-      border: 1px solid var(--border);
+      border: 1px solid var(--psadt-border);
       border-radius: 10px;
       padding: 10px;
-      background: color-mix(in srgb, var(--surface) 90%, var(--surface-2) 10%);
+      background: color-mix(in srgb, var(--psadt-surface) 90%, var(--psadt-surface-2) 10%);
     }
     #psadtView .preview-title { font-weight: 700; margin-bottom: 4px; }
-    #psadtView .preview-badge { font-size: 0.75rem; color: var(--muted); }
-    #psadtView .preview-item.warning { border-left: 4px solid var(--warning); }
-    #psadtView .preview-item.error { border-left: 4px solid var(--danger); }
-    #psadtView .preview-item.success { border-left: 4px solid var(--success); }
+    #psadtView .preview-badge { font-size: 0.75rem; color: var(--psadt-muted); }
+    #psadtView .preview-item.warning { border-left: 4px solid var(--psadt-warning); }
+    #psadtView .preview-item.error { border-left: 4px solid var(--psadt-danger); }
+    #psadtView .preview-item.success { border-left: 4px solid var(--psadt-success); }
     #psadtView .modal {
       position: fixed;
       inset: 0;
@@ -118,18 +117,19 @@
     #psadtView .modal.open { display: flex; }
     #psadtView .modal-card {
       width: min(540px, 100%);
-      background: var(--surface);
-      border: 1px solid var(--border);
+      background: var(--psadt-surface);
+      border: 1px solid var(--psadt-border);
       border-radius: 12px;
       padding: 14px;
     }
     #psadtView .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
     #psadtView .output-wrap {
       margin-top: 10px;
-      background: color-mix(in srgb, var(--surface-2) 88%, var(--surface) 12%);
+      background: color-mix(in srgb, var(--psadt-surface-2) 64%, var(--darken) 36%);
+      color: color-mix(in srgb, var(--psadt-text) 84%, var(--psadt-surface) 16%);
       padding: 10px;
       border-radius: 8px;
-      border-left: 3px solid var(--muted);
+      border-left: 3px solid var(--psadt-accent);
     }
     #psadtView .output-wrap.large {
       max-height: 400px;
@@ -196,23 +196,23 @@
         <div class="form-grid">
           <div>
             <label for="colorSurface">Surface</label>
-            <input id="colorSurface" type="color" value="#fff8ef" />
+            <input id="colorSurface" type="color" value="#fffefa" />
           </div>
           <div>
             <label for="colorText">Texto</label>
-            <input id="colorText" type="color" value="#2a1f16" />
+            <input id="colorText" type="color" value="#1a1712" />
           </div>
           <div>
             <label for="colorAccent">Accent</label>
-            <input id="colorAccent" type="color" value="#0b6e4f" />
+            <input id="colorAccent" type="color" value="#0a7a56" />
           </div>
           <div>
             <label for="colorWarning">Warning</label>
-            <input id="colorWarning" type="color" value="#8a4e12" />
+            <input id="colorWarning" type="color" value="#f0a04b" />
           </div>
           <div>
             <label for="colorDanger">Danger</label>
-            <input id="colorDanger" type="color" value="#9a031e" />
+            <input id="colorDanger" type="color" value="#c1121f" />
           </div>
         </div>
         <div class="actions" style="margin-top:10px;">
@@ -224,7 +224,7 @@
 
     <section class="grid">
       <article class="panel">
-        <h2>Notificacao Discovery <span style="font-weight:400;font-size:0.8rem;color:var(--muted);">(pipeline interno do app)</span></h2>
+        <h2>Notificacao Discovery <span style="font-weight:400;font-size:0.8rem;color:var(--psadt-muted);">(pipeline interno do app)</span></h2>
         <div class="meta" style="margin-bottom:8px;">Emite eventos via pipeline interno do Discovery. Nao usa cmdlets PSADT nativos.</div>
         <div class="form-grid">
           <div>
@@ -275,7 +275,7 @@
 
     <!-- ===== NOVAS SEÇÕES: Preflight, Welcome, Restart, Session Properties ===== -->
     <section class="panel">
-      <h2>🔍 Preflight Checks <span style="font-weight:400;font-size:0.8rem;color:var(--muted);">(go-psadt nativo)</span></h2>
+      <h2>🔍 Preflight Checks <span style="font-weight:400;font-size:0.8rem;color:var(--psadt-muted);">(go-psadt nativo)</span></h2>
       <div class="meta" style="margin-bottom:10px;">Executa verificações do sistema via lib go-psadt: ambiente, admin, reboot pendente, rede, Focus Assist, sessão.</div>
       <div class="actions" style="margin-top:8px;">
         <button id="runPreflightBtn" class="btn primary">Executar Preflight Checks</button>
@@ -315,7 +315,7 @@
             <input id="restartCountdown" type="number" value="300" min="30" max="3600" />
           </div>
           <div style="display:flex;align-items:flex-end;padding-bottom:2px;">
-            <label style="display:flex;align-items:center;gap:5px;font-size:0.82rem;color:var(--text);cursor:pointer;margin-bottom:0;">
+            <label style="display:flex;align-items:center;gap:5px;font-size:0.82rem;color:var(--psadt-text);cursor:pointer;margin-bottom:0;">
               <input id="restartSilent" type="checkbox" /> Silent Restart
             </label>
           </div>
@@ -366,7 +366,7 @@
           <button id="executeCustomBtn" class="btn primary">Executar Script</button>
         </div>
         <label for="customScript">Conteudo do Script</label>
-        <textarea id="customScript" style="min-height:120px; width:100%; border:1px solid var(--border); border-radius:8px; padding:8px 10px; font-family:'IBM Plex Mono',monospace; font-size:0.9rem;"></textarea>
+        <textarea id="customScript" style="min-height:120px; width:100%; border:1px solid var(--psadt-border); border-radius:8px; padding:8px 10px; font-family:'IBM Plex Mono',monospace; font-size:0.9rem;"></textarea>
         <div id="customStatus" class="status" style="margin-top:10px;"></div>
         <div class="output-wrap small">
           <pre id="customOutput" style="margin:0; white-space:pre-wrap; font-size:0.85rem; font-family:'IBM Plex Mono',monospace;"></pre>

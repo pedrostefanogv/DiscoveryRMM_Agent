@@ -540,6 +540,62 @@ export namespace app {
 		}
 	}
 	
+	export class PSADTPreflightResult {
+	    osName: string;
+	    osVersion: string;
+	    architecture: string;
+	    psVersion: string;
+	    isAdmin: boolean;
+	    rebootPending: boolean;
+	    networkAvailable: boolean;
+	    userInFocusMode: boolean;
+	    moduleVersion: string;
+	    activeUserSessions: number;
+	    success: boolean;
+	    error: string;
+	    checkedAtUtc: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new PSADTPreflightResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.osName = source["osName"];
+	        this.osVersion = source["osVersion"];
+	        this.architecture = source["architecture"];
+	        this.psVersion = source["psVersion"];
+	        this.isAdmin = source["isAdmin"];
+	        this.rebootPending = source["rebootPending"];
+	        this.networkAvailable = source["networkAvailable"];
+	        this.userInFocusMode = source["userInFocusMode"];
+	        this.moduleVersion = source["moduleVersion"];
+	        this.activeUserSessions = source["activeUserSessions"];
+	        this.success = source["success"];
+	        this.error = source["error"];
+	        this.checkedAtUtc = source["checkedAtUtc"];
+	    }
+	}
+	export class PSADTRestartPromptResult {
+	    success: boolean;
+	    action: string;
+	    message: string;
+	    executedAtUtc: string;
+	    durationMs: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new PSADTRestartPromptResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.action = source["action"];
+	        this.message = source["message"];
+	        this.executedAtUtc = source["executedAtUtc"];
+	        this.durationMs = source["durationMs"];
+	    }
+	}
 	export class PSADTScriptResult {
 	    success: boolean;
 	    exitCode: number;
@@ -560,6 +616,38 @@ export namespace app {
 	        this.error = source["error"];
 	        this.executedAtUtc = source["executedAtUtc"];
 	        this.durationMs = source["durationMs"];
+	    }
+	}
+	export class PSADTSessionProperties {
+	    appName: string;
+	    appVendor: string;
+	    appVersion: string;
+	    deploymentType: string;
+	    deployMode: string;
+	    logPath: string;
+	    logName: string;
+	    installPhase: string;
+	    success: boolean;
+	    error: string;
+	    checkedAtUtc: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new PSADTSessionProperties(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.appName = source["appName"];
+	        this.appVendor = source["appVendor"];
+	        this.appVersion = source["appVersion"];
+	        this.deploymentType = source["deploymentType"];
+	        this.deployMode = source["deployMode"];
+	        this.logPath = source["logPath"];
+	        this.logName = source["logName"];
+	        this.installPhase = source["installPhase"];
+	        this.success = source["success"];
+	        this.error = source["error"];
+	        this.checkedAtUtc = source["checkedAtUtc"];
 	    }
 	}
 	export class PSADTVisualNotificationRequest {
@@ -596,6 +684,26 @@ export namespace app {
 	        this.dialogExitOnTimeout = source["dialogExitOnTimeout"];
 	        this.dialogNotTopMost = source["dialogNotTopMost"];
 	        this.dialogForce = source["dialogForce"];
+	    }
+	}
+	export class PSADTWelcomeResult {
+	    success: boolean;
+	    action: string;
+	    message: string;
+	    executedAtUtc: string;
+	    durationMs: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new PSADTWelcomeResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.action = source["action"];
+	        this.message = source["message"];
+	        this.executedAtUtc = source["executedAtUtc"];
+	        this.durationMs = source["durationMs"];
 	    }
 	}
 	export class RuntimeFlags {
@@ -1341,6 +1449,7 @@ export namespace models {
 	    hostname: string;
 	    manufacturer: string;
 	    model: string;
+	    serialNumber: string;
 	    cpu: string;
 	    logicalCores: number;
 	    cores: number;
@@ -1363,6 +1472,7 @@ export namespace models {
 	        this.hostname = source["hostname"];
 	        this.manufacturer = source["manufacturer"];
 	        this.model = source["model"];
+	        this.serialNumber = source["serialNumber"];
 	        this.cpu = source["cpu"];
 	        this.logicalCores = source["logicalCores"];
 	        this.cores = source["cores"];

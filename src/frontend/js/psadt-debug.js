@@ -1,12 +1,12 @@
 "use strict";
 
 (function () {
-  var defaultTheme = {
-    surface: "#fff8ef",
-    text: "#2a1f16",
-    accent: "#0b6e4f",
-    warning: "#8a4e12",
-    danger: "#9a031e"
+  var defaultThemeFallback = {
+    surface: "#fffefa",
+    text: "#1a1712",
+    accent: "#0a7a56",
+    warning: "#f0a04b",
+    danger: "#c1121f"
   };
 
   function appApi() {
@@ -14,6 +14,21 @@
       throw new Error("API do Wails indisponivel");
     }
     return window.go.app.App;
+  }
+
+  function getDefaultTheme() {
+    var styles = getComputedStyle(document.documentElement);
+    return {
+      surface: normalizeThemeColor(styles.getPropertyValue("--surface"), defaultThemeFallback.surface),
+      text: normalizeThemeColor(styles.getPropertyValue("--text"), defaultThemeFallback.text),
+      accent: normalizeThemeColor(styles.getPropertyValue("--accent"), defaultThemeFallback.accent),
+      warning: normalizeThemeColor(styles.getPropertyValue("--accent-2"), defaultThemeFallback.warning),
+      danger: normalizeThemeColor(styles.getPropertyValue("--danger"), defaultThemeFallback.danger)
+    };
+  }
+
+  function getPsadtThemeScope() {
+    return document.getElementById("psadtView");
   }
 
   var refreshStateBtn = document.getElementById("refreshStateBtn");
@@ -34,6 +49,13 @@
   var applyThemeBtn = document.getElementById("applyThemeBtn");
   var resetThemeBtn = document.getElementById("resetThemeBtn");
 
+  // Reage à troca de tema global (claro ↔ escuro) limpando inline styles
+  // para que a view PSADT herde os tokens do tema automaticamente.
+  var themeObserver = new MutationObserver(function () {
+    clearInlinePsadtTheme();
+  });
+  themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+
   var notifTitle = document.getElementById("notifTitle");
   var notifMessage = document.getElementById("notifMessage");
   var notifSeverity = document.getElementById("notifSeverity");
@@ -46,6 +68,14 @@
     if (!el) return;
     el.textContent = message || "";
     el.className = "status" + (kind ? " " + kind : "");
+  }
+
+  function normalizeThemeColor(value, fallback) {
+    var normalized = String(value || "").trim();
+    if (!normalized) return fallback;
+    if (/^#[0-9a-fA-F]{3,8}$/.test(normalized)) return normalized;
+    if (/^(rgb|rgba|hsl|hsla)\(/i.test(normalized)) return normalized;
+    return fallback;
   }
 
   function escapeHtml(text) {
@@ -71,22 +101,34 @@
   }
 
   function currentTheme() {
+    var fallbackTheme = getDefaultTheme();
     return {
-      surface: colorSurface ? colorSurface.value : defaultTheme.surface,
-      text: colorText ? colorText.value : defaultTheme.text,
-      accent: colorAccent ? colorAccent.value : defaultTheme.accent,
-      warning: colorWarning ? colorWarning.value : defaultTheme.warning,
-      danger: colorDanger ? colorDanger.value : defaultTheme.danger
+      surface: colorSurface ? colorSurface.value : fallbackTheme.surface,
+      text: colorText ? colorText.value : fallbackTheme.text,
+      accent: colorAccent ? colorAccent.value : fallbackTheme.accent,
+      warning: colorWarning ? colorWarning.value : fallbackTheme.warning,
+      danger: colorDanger ? colorDanger.value : fallbackTheme.danger
     };
   }
 
   function applyTheme(theme) {
-    var root = document.documentElement;
-    root.style.setProperty("--surface", theme.surface);
-    root.style.setProperty("--text", theme.text);
-    root.style.setProperty("--accent", theme.accent);
-    root.style.setProperty("--warning", theme.warning);
-    root.style.setProperty("--danger", theme.danger);
+    var scope = getPsadtThemeScope();
+    if (!scope) return;
+    scope.style.setProperty("--psadt-surface", theme.surface);
+    scope.style.setProperty("--psadt-text", theme.text);
+    scope.style.setProperty("--psadt-accent", theme.accent);
+    scope.style.setProperty("--psadt-warning", theme.warning);
+    scope.style.setProperty("--psadt-danger", theme.danger);
+  }
+
+  function clearInlinePsadtTheme() {
+    var scope = getPsadtThemeScope();
+    if (!scope) return;
+    scope.style.removeProperty("--psadt-surface");
+    scope.style.removeProperty("--psadt-text");
+    scope.style.removeProperty("--psadt-accent");
+    scope.style.removeProperty("--psadt-warning");
+    scope.style.removeProperty("--psadt-danger");
   }
 
   function renderState(state) {
@@ -184,12 +226,13 @@
   }
 
   function resetTheme() {
-    if (colorSurface) colorSurface.value = defaultTheme.surface;
-    if (colorText) colorText.value = defaultTheme.text;
-    if (colorAccent) colorAccent.value = defaultTheme.accent;
-    if (colorWarning) colorWarning.value = defaultTheme.warning;
-    if (colorDanger) colorDanger.value = defaultTheme.danger;
-    applyTheme(defaultTheme);
+    var fallbackTheme = getDefaultTheme();
+    if (colorSurface) colorSurface.value = fallbackTheme.surface;
+    if (colorText) colorText.value = fallbackTheme.text;
+    if (colorAccent) colorAccent.value = fallbackTheme.accent;
+    if (colorWarning) colorWarning.value = fallbackTheme.warning;
+    if (colorDanger) colorDanger.value = fallbackTheme.danger;
+    clearInlinePsadtTheme();
   }
 
   function executeTestScript() {
@@ -468,6 +511,8 @@
   }
   if (loadSessionPropsBtn) loadSessionPropsBtn.addEventListener("click", loadSessionProps);
 
-  resetTheme();
-  loadState();
+  setTimeout(function () {
+    resetTheme();
+    loadState();
+  }, 0);
 })();

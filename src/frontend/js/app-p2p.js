@@ -56,7 +56,12 @@ function p2pSetStatus(message, type) {
   var statusLine = p2pEl('statusLine');
   if (!statusLine) return;
   statusLine.textContent = message || '';
-  statusLine.style.color = type === 'error' ? '#9a031e' : (type === 'ok' ? '#0b6e4f' : '');
+  if (type) {
+    var rootStyles = getComputedStyle(document.documentElement);
+    statusLine.style.color = type === 'error' ? rootStyles.getPropertyValue('--danger').trim() : (type === 'ok' ? rootStyles.getPropertyValue('--success').trim() : '');
+  } else {
+    statusLine.style.color = '';
+  }
 }
 
 // p2pFormatDate mantida como alias para compatibilidade; use formatDate diretamente.

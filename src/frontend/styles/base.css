@@ -19,6 +19,62 @@
   --gap: 12px;
   --card-bg: rgba(255,255,255,.78);
   --text-muted: var(--muted);
+  --on-accent: #ffffff;
+  --interactive-border-hover: color-mix(in srgb, var(--border) 72%, var(--text) 28%);
+  --interactive-card-border-hover: color-mix(in srgb, var(--border) 66%, var(--text) 34%);
+  --warning-strong: color-mix(in srgb, var(--accent-2) 68%, var(--text) 32%);
+  --focus-ring: color-mix(in srgb, var(--accent) 22%, transparent);
+
+  --darken: #000;
+  --lighten: #ffffff;
+
+  --syntax-type: #6fa8ff;
+  --syntax-string: #ef8e72;
+  --syntax-number: #b18cff;
+
+  --toast-info-bg: color-mix(in srgb, var(--surface-2) 72%, var(--bg) 28%);
+  --toast-info-text: var(--text);
+  --toast-success-bg: var(--success);
+  --toast-error-bg: var(--danger);
+  --toast-warning-bg: color-mix(in srgb, var(--accent-2) 72%, var(--danger) 28%);
+
+  --terminal-bg: color-mix(in srgb, var(--bg) 65%, var(--darken) 35%);
+  --terminal-fg: color-mix(in srgb, var(--text) 78%, #9fd9b4 22%);
+  --terminal-scrollbar: color-mix(in srgb, var(--border) 78%, var(--darken) 22%);
+  --terminal-bg-alt: color-mix(in srgb, var(--bg) 58%, var(--darken) 42%);
+  --terminal-fg-alt: color-mix(in srgb, var(--text) 70%, #9fd9b4 30%);
+
+  --status-indicator-idle: #9e9e9e;
+  --status-indicator-idle-ring: rgba(158,158,158,.25);
+  --status-indicator-online: #4caf50;
+  --status-indicator-online-ring: rgba(76,175,80,.3);
+  --status-indicator-online-pulse: rgba(76,175,80,.12);
+  --status-indicator-offline: #f44336;
+  --status-indicator-offline-ring: rgba(244,67,54,.2);
+
+  --debug-success-text: color-mix(in srgb, var(--success) 72%, var(--darken) 28%);
+  --debug-error-text: var(--danger);
+
+  --context-success-bg: color-mix(in srgb, var(--success) 18%, transparent);
+  --context-success-text: var(--success);
+  --context-success-border: color-mix(in srgb, var(--success) 34%, transparent);
+  --context-error-bg: color-mix(in srgb, var(--danger) 16%, transparent);
+  --context-error-text: var(--danger);
+  --context-error-border: color-mix(in srgb, var(--danger) 32%, transparent);
+
+  --priority-low-bg: color-mix(in srgb, var(--success) 18%, transparent);
+  --priority-low-text: var(--success);
+  --priority-medium-bg: color-mix(in srgb, var(--accent-2) 24%, transparent);
+  --priority-medium-text: var(--warning-strong);
+  --priority-high-bg: color-mix(in srgb, var(--danger) 18%, transparent);
+  --priority-high-text: var(--danger);
+  --priority-critical-bg: color-mix(in srgb, var(--danger) 34%, transparent);
+  --priority-critical-text: var(--danger);
+
+  --form-status-ok-bg: color-mix(in srgb, var(--success) 16%, transparent);
+  --form-status-ok-text: var(--success);
+  --form-status-error-bg: color-mix(in srgb, var(--danger) 16%, transparent);
+  --form-status-error-text: var(--danger);
 
   --shadow-sm: 0 1px 2px rgba(0,0,0,.04);
   --shadow-md: 0 4px 12px rgba(0,0,0,.06);
@@ -67,6 +123,7 @@
   --gap: 12px;
   --card-bg: rgba(44,44,50,.84);
   --text-muted: #a8a192;
+  --debug-success-text: color-mix(in srgb, var(--success) 86%, var(--lighten) 14%);
   --shadow-sm: 0 1px 2px rgba(0,0,0,.3);
   --shadow-md: 0 4px 12px rgba(0,0,0,.4);
   --shadow-lg: 0 8px 24px rgba(0,0,0,.5);
@@ -193,9 +250,9 @@ a:hover { text-decoration: underline; }
   -webkit-app-region: no-drag;
 }
 .window-chrome-btn:hover { background: rgba(0,0,0,.07); color: var(--text); }
-.window-chrome-btn.close:hover { background: var(--danger); color: #fff; }
-[data-theme="dark"] .window-chrome-btn { color: #8a8578; }
-[data-theme="dark"] .window-chrome-btn:hover { background: rgba(255,255,255,.1); color: #e8e4db; }
+.window-chrome-btn.close:hover { background: var(--danger); color: var(--on-accent); }
+[data-theme="dark"] .window-chrome-btn { color: var(--muted); }
+[data-theme="dark"] .window-chrome-btn:hover { background: rgba(255,255,255,.1); color: var(--text); }
 
 /* ================================================================
    AMBIENT BACKGROUND SHAPES
@@ -425,12 +482,12 @@ a:hover { text-decoration: underline; }
   cursor: pointer; transition: all var(--transition);
   white-space: nowrap; user-select: none;
 }
-.btn:hover { background: var(--surface-2); border-color: #c8c0ab; box-shadow: var(--shadow-sm); }
+.btn:hover { background: var(--surface-2); border-color: var(--interactive-border-hover); box-shadow: var(--shadow-sm); }
 .btn:active { transform: scale(0.98); }
-.btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-.btn-primary:hover { background: #0c8f63; border-color: #0c8f63; }
-.btn-danger { background: var(--danger); border-color: var(--danger); color: #fff; }
-.btn-danger:hover { background: #d62828; border-color: #d62828; }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.btn-primary:hover { background: color-mix(in srgb, var(--accent) 86%, var(--darken) 14%); border-color: color-mix(in srgb, var(--accent) 86%, var(--darken) 14%); }
+.btn-danger { background: var(--danger); border-color: var(--danger); color: var(--on-accent); }
+.btn-danger:hover { background: color-mix(in srgb, var(--danger) 86%, var(--darken) 14%); border-color: color-mix(in srgb, var(--danger) 86%, var(--darken) 14%); }
 .btn-sm { padding: 4px 10px; font-size: 0.78rem; border-radius: var(--radius-sm); }
 .btn-lg { padding: 10px 22px; font-size: 0.92rem; }
 .btn-icon { padding: 7px; min-width: 34px; }
@@ -442,8 +499,7 @@ a:hover { text-decoration: underline; }
   box-shadow: var(--shadow-sm);
   transition: box-shadow var(--transition), border-color var(--transition);
 }
-.card:hover { box-shadow: var(--shadow-md); border-color: #c8c0ab; }
-[data-theme="dark"] .card:hover { border-color: #4d483e; }
+.card:hover { box-shadow: var(--shadow-md); border-color: var(--interactive-card-border-hover); }
 
 /* Inputs */
 input[type="text"], input[type="search"], input[type="url"],
@@ -456,7 +512,7 @@ input[type="password"], input[type="number"], textarea, select {
 }
 input:focus, textarea:focus, select:focus {
   outline: none; border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(10,122,86,.12);
+  box-shadow: 0 0 0 3px var(--focus-ring);
 }
 input::placeholder, textarea::placeholder { color: var(--muted); opacity: 0.65; }
 
@@ -493,7 +549,7 @@ input::placeholder, textarea::placeholder { color: var(--muted); opacity: 0.65; 
   border: 1px solid transparent; font-size: 0.84rem; line-height: 1.5;
 }
 .alert-info    { background: rgba(10,122,86,.06);  border-color: rgba(10,122,86,.2);  color: var(--accent); }
-.alert-warning { background: rgba(240,160,75,.08); border-color: rgba(240,160,75,.25); color: #b06e1e; }
+.alert-warning { background: rgba(240,160,75,.08); border-color: rgba(240,160,75,.25); color: var(--warning-strong); }
 .alert-error   { background: rgba(193,18,31,.06);  border-color: rgba(193,18,31,.2);  color: var(--danger); }
 
 /* Toast */

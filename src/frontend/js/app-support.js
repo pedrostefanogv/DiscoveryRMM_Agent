@@ -358,7 +358,8 @@ async function loadSupportTickets() {
     if (supportTicketDetailEl) supportTicketDetailEl.classList.add('hidden');
     supportTicketsListEl.innerHTML = tickets.map(function (t) {
       var statusName = (t.workflowState && t.workflowState.name) ? t.workflowState.name : translate('support.defaultOpenStatus');
-      var statusColor = (t.workflowState && t.workflowState.color) ? t.workflowState.color : '#0b6e4f';
+      var rootStyles = getComputedStyle(document.documentElement);
+      var statusColor = (t.workflowState && t.workflowState.color) ? t.workflowState.color : (rootStyles.getPropertyValue('--success').trim() || '#2d7a44');
       var statusMeta = workflowMetaText(t.workflowState);
       var priLabel = ticketPriorityLabel(t.priority);
       var priClass = ticketPriorityClass(t.priority);
@@ -423,7 +424,8 @@ function showTicketDetail(t) {
 
 function renderTicketDetail(t) {
   var statusName = (t.workflowState && t.workflowState.name) ? t.workflowState.name : translate('support.defaultOpenStatus');
-  var statusColor = (t.workflowState && t.workflowState.color) ? t.workflowState.color : '#0b6e4f';
+  var rootStylesDS = getComputedStyle(document.documentElement);
+  var statusColor = (t.workflowState && t.workflowState.color) ? t.workflowState.color : (rootStylesDS.getPropertyValue('--success').trim() || '#2d7a44');
   var statusMeta = workflowMetaText(t.workflowState);
   var priLabel = ticketPriorityLabel(t.priority);
   var priClass = ticketPriorityClass(t.priority);
