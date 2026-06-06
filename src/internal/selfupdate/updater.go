@@ -237,18 +237,18 @@ func (u *Updater) nextDelay(fallback time.Duration, startupPending bool) time.Du
 func (u *Updater) CheckAndUpdate(ctx context.Context, force bool) error {
 	policy := u.policy()
 	if !policy.Enabled {
-		u.logf("self-update ignorado: policy disabled")
+		u.logf("[selfupdate] check ignorado: policy disabled")
 		return nil
 	}
 
 	token := strings.TrimSpace(u.getToken())
 	agentID := strings.TrimSpace(u.getAgentID())
 	if token == "" {
-		u.logf("self-update ignorado: token vazio")
+		u.logf("[selfupdate] check ignorado: token vazio")
 		return nil
 	}
 	if agentID == "" {
-		u.logf("self-update ignorado: agentId vazio")
+		u.logf("[selfupdate] check ignorado: agentId vazio")
 		return nil
 	}
 
@@ -257,6 +257,11 @@ func (u *Updater) CheckAndUpdate(ctx context.Context, force bool) error {
 		currentVersion = "0.0.0"
 	}
 	correlationID := uuid.NewString()
+	mode := "periodic"
+	if force {
+		mode = "forcado"
+	}
+	u.logf("[selfupdate] iniciando check (mode=%s current=%s correlationId=%s)", mode, currentVersion, correlationID)
 
 	u.reportEvent(ctx, "CheckStarted", reportOpts{
 		CurrentVersion: currentVersion,
@@ -265,6 +270,7 @@ func (u *Updater) CheckAndUpdate(ctx context.Context, force bool) error {
 
 	manifest, err := u.fetchManifest(ctx)
 	if err != nil {
+		u.logf("[selfupdate] falha ao buscar manifest: %v", err)
 		u.reportEvent(ctx, "CheckCompleted", reportOpts{
 			CurrentVersion: currentVersion,
 			CorrelationID:  correlationID,
@@ -272,6 +278,9 @@ func (u *Updater) CheckAndUpdate(ctx context.Context, force bool) error {
 		})
 		return err
 	}
+	u.logf("[selfupdate] manifest obtido: enabled=%t updateAvailable=%t rolloutEligible=%t direct=%t latestVersion=%s",
+		manifest.Enabled, manifest.UpdateAvailable, manifest.RolloutEligible,
+		manifest.DirectUpdateSupported, ptrStr(manifest.LatestVersion))
 
 	// Em modo forçado (comando do servidor), ignora guards de elegibilidade mas respeita o kill-switch global (Enabled).
 	if !manifest.Enabled {
@@ -327,6 +336,7 @@ func (u *Updater) CheckAndUpdate(ctx context.Context, force bool) error {
 		CorrelationID:  correlationID,
 		Message:        strings.TrimSpace(manifest.Message),
 	})
+	u.logf("[selfupdate] update disponivel: current=%s target=%s %s", currentVersion, targetVersion, manifestFileLogDetail(manifest))
 
 	if manifest.Sha256 == nil || strings.TrimSpace(*manifest.Sha256) == "" {
 		msg := "manifest without sha256"
@@ -347,8 +357,10 @@ func (u *Updater) CheckAndUpdate(ctx context.Context, force bool) error {
 		CorrelationID:  correlationID,
 	})
 
+	u.logf("[selfupdate] iniciando download: target=%s", targetVersion)
 	tempPath, err := u.downloadToTemp(ctx, manifest)
 	if err != nil {
+		u.logf("[selfupdate] download falhou: %v", err)
 		u.reportEvent(ctx, "DownloadFailed", reportOpts{
 			ReleaseID:      manifest.ReleaseID,
 			CurrentVersion: currentVersion,
@@ -358,6 +370,7 @@ func (u *Updater) CheckAndUpdate(ctx context.Context, force bool) error {
 		})
 		return err
 	}
+	u.logf("[selfupdate] download concluido: tempPath=%s", tempPath)
 
 	u.reportEvent(ctx, "DownloadCompleted", reportOpts{
 		ReleaseID:      manifest.ReleaseID,
@@ -1045,6 +1058,42 @@ func normalizeArtifactType(value string) string {
 		return artifactInstaller
 	}
 	return value
+}
+
+// ptrStr retorna uma representação legível de um ponteiro string.
+func ptrStr(s *string) string {
+	if s == nil {
+		return "<nil>"
+	}
+	return *s
+}
+
+// manifestFileLogDetail retorna detalhes do arquivo do manifest para log.
+func manifestFileLogDetail(m *UpdateManifest) string {
+	if m == nil {
+		return ""
+	}
+	parts := []string{}
+	if m.FileName != nil && strings.TrimSpace(*m.FileName) != "" {
+		parts = append(parts, fmt.Sprintf("file=%s", *m.FileName))
+	}
+	if m.SizeBytes != nil && *m.SizeBytes > 0 {
+		parts = append(parts, fmt.Sprintf("size=%d", *m.SizeBytes))
+	}
+	if m.Sha256 != nil && strings.TrimSpace(*m.Sha256) != "" {
+		s := strings.TrimSpace(*m.Sha256)
+		if len(s) > 12 {
+			s = s[:12] + "..."
+		}
+		parts = append(parts, fmt.Sprintf("sha256=%s", s))
+	}
+	if m.ArtifactType != "" {
+		parts = append(parts, fmt.Sprintf("artifact=%s", m.ArtifactType))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("(%s)", strings.Join(parts, " "))
 }
 
 func validateAuthenticodeSignature(ctx context.Context, path string) error {

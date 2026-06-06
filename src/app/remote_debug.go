@@ -724,32 +724,35 @@ func isAgentUpdateCommandType(cmdType string) bool {
 	}
 }
 
-func parseAgentUpdatePayload(payload any) (string, error) {
+func parseAgentUpdatePayload(payload any) (string, string, string) {
 	if payload == nil {
-		return "check-update", nil
+		return "check-update", "", ""
 	}
 	switch typed := payload.(type) {
 	case string:
 		action := strings.ToLower(strings.TrimSpace(typed))
 		if action == "" {
-			return "check-update", nil
+			return "check-update", "", ""
 		}
-		return action, nil
+		return action, "", ""
 	default:
 		raw, err := json.Marshal(typed)
 		if err != nil {
-			return "", fmt.Errorf("falha ao serializar payload de update: %w", err)
+			return "", "", fmt.Sprintf("falha ao serializar payload de update: %v", err)
 		}
 		var parsed struct {
-			Action string `json:"action"`
+			Action  string `json:"action"`
+			URL     string `json:"url"`     // URL direta do instalador (opcional)
+			Version string `json:"version"` // versão alvo (opcional)
 		}
 		if err := json.Unmarshal(raw, &parsed); err != nil {
-			return "", fmt.Errorf("payload de update invalido: %w", err)
+			return "", "", fmt.Sprintf("payload de update invalido: %v", err)
 		}
-		if strings.TrimSpace(parsed.Action) == "" {
-			return "check-update", nil
+		action := strings.ToLower(strings.TrimSpace(parsed.Action))
+		if action == "" {
+			action = "check-update"
 		}
-		return strings.ToLower(strings.TrimSpace(parsed.Action)), nil
+		return action, strings.TrimSpace(parsed.URL), strings.TrimSpace(parsed.Version)
 	}
 }
 
@@ -938,11 +941,7 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 	if isAgentUpdateCommandType(cmdType) {
 		updateCmd, parseErr := parseAgentUpdateCommand(payload)
 		if parseErr != nil {
-			// Fallback para o parser antigo (só action)
-			action, err := parseAgentUpdatePayload(payload)
-			if err != nil {
-				return true, 2, "", err.Error()
-			}
+			action, _, _ := parseAgentUpdatePayload(payload)
 			updateCmd = agentUpdateCommand{Action: action}
 		}
 
