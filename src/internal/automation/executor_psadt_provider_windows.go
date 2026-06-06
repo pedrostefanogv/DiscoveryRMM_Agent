@@ -57,6 +57,21 @@ func executePSADTWithLibrary(ctx context.Context, packageID, operation string, p
 
 	session = session.WithContext(runCtx)
 
+	// Pré-condições de deploy
+	if rebootInfo, err := session.GetPendingReboot(); err == nil && rebootInfo != nil && rebootInfo.IsSystemRebootPending {
+		return ExecutionResult{
+			Success: false, ExitCode: 1641, ExitCodeSet: true,
+			ErrorMessage: "reinicializacao pendente — deploy adiado",
+		}
+	}
+
+	if online, err := session.TestNetworkConnection(); err == nil && !online {
+		return ExecutionResult{
+			Success: false, ExitCode: 2, ExitCodeSet: true,
+			ErrorMessage: "sem conectividade de rede — deploy adiado",
+		}
+	}
+
 	if isMSIPackageID(id) {
 		result, runErr := session.StartMsiProcess(pstypes.MsiProcessOptions{
 			Action:   msiActionForOperation(operation),

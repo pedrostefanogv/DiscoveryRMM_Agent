@@ -10,6 +10,9 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	psadt "github.com/pedrostefanogv/go-psadt"
+	pstypes "github.com/pedrostefanogv/go-psadt/types"
 )
 
 // isPsadtAlertCommandType verifica se o commandType corresponde a ShowPsadtAlert (9).
@@ -74,224 +77,15 @@ func normalizePsadtAlertIcon(raw string) string {
 	}
 }
 
-// buildPsadtAlertScript constrói o script PowerShell que executa o alerta PSADT.
-// Retorna o script e o timeout máximo para execução.
-func buildPsadtAlertScript(p PsadtAlertPayload) (string, time.Duration) {
-	balloonIcon := "Info"
-	switch strings.ToLower(p.Icon) {
-	case "Warning":
-		balloonIcon = "Warning"
-	case "Error":
-		balloonIcon = "Error"
-	}
-
-	header := "$ErrorActionPreference = 'Stop'\n" +
-		"[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)\n" +
-		"$OutputEncoding = [Console]::OutputEncoding\n" +
-		"try {\n" +
-		"    Import-Module -Name PSAppDeployToolkit -ErrorAction Stop\n" +
-		"} catch {\n" +
-		"    Write-Error 'Falha ao importar PSAppDeployToolkit'; exit 1\n" +
-		"}\n"
-
-	openSession := "try {\n" +
-		"    Open-ADTSession -SessionState $ExecutionContext.SessionState" +
-		" -AppName 'Discovery' -AppVersion '1.0' -AppVendor 'Discovery'" +
-		" -DeploymentType 'Install' -DeployMode 'Interactive'\n" +
-		"} catch {\n" +
-		"    Write-Error \"Falha ao abrir sessao PSADT: $_\"; exit 2\n" +
-		"}\n"
-
-	closeSession := "try { Close-ADTSession -ExitCode 0 } catch {}\n"
-
-	switch p.Type {
-	case "toast":
-		// Toast: exibido via BalloonTip, non-blocking, fechamento automático pelo SO.
-		body := openSession +
-			fmt.Sprintf("Show-ADTBalloonTip -BalloonTipTitle %s -BalloonTipText %s -BalloonTipIcon '%s'\n",
-				psEscape(p.Title), psEscape(p.Message), balloonIcon) +
-			"Write-Host 'shown'\n" +
-			closeSession +
-			"exit 0\n"
-		timeout := time.Duration(p.TimeoutSeconds+30) * time.Second
-		return header + body, timeout
-
-	case "update-progress":
-		// UpdateProgress: barra de progresso não-bloqueante para self-update.
-		// Usa Show-ADTInstallationProgress para exibir download/instalação.
-		// O agent pode reenviar este alerta com progressPercent atualizado.
-		statusText := p.StatusText
-		if statusText == "" {
-			statusText = p.Title
-		}
-		progressPercent := p.ProgressPercent
-		if progressPercent < 0 {
-			progressPercent = 0
-		}
-		if progressPercent > 100 {
-			progressPercent = 100
-		}
-		subtitle := p.Subtitle
-
-		body := openSession +
-			"$progressParams = @{\n" +
-			fmt.Sprintf("  Message = %s\n", psEscape(statusText)) +
-			fmt.Sprintf("  StepName = %s\n", psEscape(subtitle)) +
-			fmt.Sprintf("  CounterValue = %d\n", progressPercent) +
-			"  MaxCounterValue = 100\n" +
-			"}\n" +
-			"Show-ADTInstallationProgress @progressParams\n" +
-			"Write-Host 'shown'\n" +
-			closeSession +
-			"exit 0\n"
-		timeout := time.Duration(30) * time.Second
-		return header + body, timeout
-
-	case "modal":
-		// Modal: DialogBox bloqueante com botões de ação.
-		// Constrói a lista de botões a partir das actions; usa YesNo como fallback.
-		buttons := buildDialogButtons(p.Actions)
-		defaultBtn := "First"
-		if strings.ToLower(strings.TrimSpace(p.DefaultAction)) != "" && len(p.Actions) >= 2 {
-			defaultBtn = mapDefaultAction(p.DefaultAction, p.Actions)
-		}
-
-		body := openSession +
-			"$dialogParams = @{\n" +
-			fmt.Sprintf("  Title = %s\n", psEscape(p.Title)) +
-			fmt.Sprintf("  Text = %s\n", psEscape(p.Message)) +
-			fmt.Sprintf("  Buttons = '%s'\n", buttons) +
-			fmt.Sprintf("  DefaultButton = '%s'\n", defaultBtn) +
-			fmt.Sprintf("  Icon = '%s'\n", p.Icon) +
-			"}\n" +
-			fmt.Sprintf("if (%d -gt 0) { $dialogParams.Timeout = %d }\n", p.TimeoutSeconds, p.TimeoutSeconds) +
-			"$dialogParams.ExitOnTimeout = $true\n" +
-			"$adtResult = Show-ADTDialogBox @dialogParams\n" +
-			"if ($null -ne $adtResult) { Write-Host $adtResult } else { Write-Host 'timeout' }\n" +
-			closeSession +
-			"exit 0\n"
-		timeout := time.Duration(p.TimeoutSeconds+30) * time.Second
-		return header + body, timeout
-
-	default:
-		// Fallback: trata como toast.
-		body := openSession +
-			fmt.Sprintf("Show-ADTBalloonTip -BalloonTipTitle %s -BalloonTipText %s -BalloonTipIcon 'Info'\n",
-				psEscape(p.Title), psEscape(p.Message)) +
-			"Write-Host 'shown'\n" +
-			closeSession +
-			"exit 0\n"
-		return header + body, 45 * time.Second
-	}
-}
-
-// buildDialogButtons retorna o valor do parâmetro -Buttons para Show-ADTDialogBox.
-// Se as actions tiverem correspondência com preset PSADT, usa o preset; senão YesNo.
-func buildDialogButtons(actions []PsadtAlertAction) string {
-	if len(actions) == 0 {
-		return "Ok"
-	}
-	// Tenta mapear para preset nativo do PSADT baseado nos valores das actions.
-	values := make([]string, 0, len(actions))
-	for _, a := range actions {
-		values = append(values, strings.ToLower(strings.TrimSpace(a.Value)))
-	}
-	key := strings.Join(values, "_")
-	switch key {
-	case "yes_no":
-		return "YesNo"
-	case "ok_cancel":
-		return "OkCancel"
-	case "yes_no_cancel":
-		return "YesNoCancel"
-	case "retry_cancel":
-		return "RetryCancel"
-	case "ok":
-		return "Ok"
-	default:
-		if len(actions) >= 2 {
-			return "YesNo"
-		}
-		return "Ok"
-	}
-}
-
-// mapDefaultAction converte o defaultAction do payload para First/Second/Third do PSADT.
-func mapDefaultAction(defaultAction string, actions []PsadtAlertAction) string {
-	d := strings.ToLower(strings.TrimSpace(defaultAction))
-	for i, a := range actions {
-		if strings.ToLower(strings.TrimSpace(a.Value)) == d {
-			switch i {
-			case 0:
-				return "First"
-			case 1:
-				return "Second"
-			case 2:
-				return "Third"
-			}
-		}
-	}
-	return "First"
-}
-
-// mapDialogOutput interpreta a saída stdout do script para o valor de ação do usuário.
-// O script escreve o texto retornado pelo PSADT (ex: "Yes", "No", "shown", "timeout").
-func mapDialogOutput(rawOutput string, p PsadtAlertPayload) string {
-	line := strings.ToLower(strings.TrimSpace(rawOutput))
-
-	// Toast sempre retorna "shown".
-	if p.Type == "toast" {
-		if strings.Contains(line, "shown") {
-			return "shown"
-		}
-		return "shown"
-	}
-
-	// Para modal, mapeia a saída PSADT para o value da action correspondente.
-	if strings.Contains(line, "timeout") {
-		if strings.TrimSpace(p.DefaultAction) != "" {
-			return strings.TrimSpace(p.DefaultAction)
-		}
-		return "timeout"
-	}
-
-	psadtToValue := map[string]string{
-		"yes":    "yes",
-		"no":     "no",
-		"ok":     "ok",
-		"cancel": "cancel",
-		"retry":  "retry",
-		"abort":  "abort",
-		"ignore": "ignore",
-	}
-	for psadtKey, value := range psadtToValue {
-		if strings.Contains(line, psadtKey) {
-			// Prefere o value da action que faz match com o label/value.
-			for _, a := range p.Actions {
-				if strings.ToLower(strings.TrimSpace(a.Value)) == value ||
-					strings.ToLower(strings.TrimSpace(a.Label)) == psadtKey {
-					return a.Value
-				}
-			}
-			return value
-		}
-	}
-
-	// Fallback: retorna defaultAction se definido.
-	if strings.TrimSpace(p.DefaultAction) != "" {
-		return strings.TrimSpace(p.DefaultAction)
-	}
-	return "timeout"
-}
-
 // psEscape converte uma string Go para um literal string PowerShell entre aspas simples,
-// escapando aspas simples internas.
+// escapando aspas simples internas. Usado por buildPowerActionWarningScript (shutdown/restart).
 func psEscape(s string) string {
 	s = strings.ReplaceAll(s, "'", "''")
 	return "'" + s + "'"
 }
 
-// handlePsadtAlert executa o alerta PSADT e retorna (exitCode, output JSON, errText).
+// handlePsadtAlert executa o alerta PSADT usando a lib go-psadt nativa,
+// eliminando concatenação manual de scripts PowerShell.
 func (a *App) handlePsadtAlert(ctx context.Context, p PsadtAlertPayload) (int, string, string) {
 	if runtime.GOOS != "windows" {
 		body, _ := json.Marshal(map[string]string{"action": "skipped_non_windows"})
@@ -301,66 +95,250 @@ func (a *App) handlePsadtAlert(ctx context.Context, p PsadtAlertPayload) (int, s
 		return 0, string(body), ""
 	}
 
-	if a != nil {
-		a.logs.append("[agent] psadt-alert iniciando type=" + p.Type + " alertId=" + p.AlertID + " timeout=" + fmt.Sprintf("%ds", p.TimeoutSeconds))
+	psadtCfg := a.GetAgentConfiguration().PSADT
+	if psadtCfg.Enabled == nil || !*psadtCfg.Enabled {
+		body, _ := json.Marshal(map[string]string{"action": "skipped_disabled"})
+		if a != nil {
+			a.logs.append("[agent] psadt-alert ignorado: psadt.enabled=false type=" + p.Type + " alertId=" + p.AlertID)
+		}
+		return 0, string(body), ""
 	}
 
-	script, timeout := buildPsadtAlertScript(p)
-
 	if a != nil {
-		a.logs.append(fmt.Sprintf("[agent] psadt-alert script gerado type=%s alertId=%s scriptSize=%dB timeout=%v", p.Type, p.AlertID, len(script), timeout))
+		a.logs.append(fmt.Sprintf("[agent] psadt-alert iniciando type=%s alertId=%s timeout=%ds via go-psadt", p.Type, p.AlertID, p.TimeoutSeconds))
 	}
 
+	timeout := time.Duration(p.TimeoutSeconds+15) * time.Second
 	execCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	psExe := resolvePowerShellExe()
-	cmd := exec.CommandContext(execCtx, psExe, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script)
-	outBytes, err := cmd.CombinedOutput()
-	rawOutput := strings.TrimSpace(string(outBytes))
-
+	client, err := psadt.NewClient(
+		psadt.WithTimeout(timeout),
+		psadt.WithMinModuleVersion(strings.TrimSpace(psadtCfg.RequiredVersion)),
+	)
 	if err != nil {
-		exitCode := 1
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			exitCode = exitErr.ExitCode()
-		}
-		if execCtx.Err() == context.DeadlineExceeded {
-			// Timeout na execução do próprio script — trata como timeout do usuário.
-			action := "timeout"
-			if strings.TrimSpace(p.DefaultAction) != "" {
-				action = strings.TrimSpace(p.DefaultAction)
-			}
-			body, _ := json.Marshal(map[string]string{"action": action})
-			if a != nil {
-				a.logs.append(fmt.Sprintf("[agent] psadt-alert [TIMEOUT] type=%s alertId=%s timeout=%v scriptSize=%dB", p.Type, p.AlertID, timeout, len(script)))
-			}
-			return 0, string(body), ""
-		}
-
-		// Diagnostico detalhado: classifica o erro para debug remoto.
-		errClass := classifyPsadtPowerShellError(rawOutput, err)
-		errMsg := err.Error()
+		errMsg := fmt.Sprintf("psadt.NewClient: %v", err)
 		if a != nil {
-			a.logs.append(fmt.Sprintf("[agent] psadt-alert [ERRO] type=%s alertId=%s exitCode=%d class=%s psExe=%s scriptSize=%dB err=%s", p.Type, p.AlertID, exitCode, errClass, psExe, len(script), errMsg))
-			if rawOutput != "" {
-				// Trunca output para evitar logs enormes, mas mantem as primeiras linhas uteis.
-				truncated := truncateStr(rawOutput, 2000)
-				a.logs.append(fmt.Sprintf("[agent] psadt-alert [ERRO-OUTPUT] type=%s alertId=%s class=%s output=%s", p.Type, p.AlertID, errClass, truncated))
-			}
+			a.logs.append("[agent] psadt-alert [ERRO] " + errMsg)
 		}
-		return exitCode, "", errMsg
+		return 1, "", errMsg
 	}
+	defer client.Close()
 
-	action := mapDialogOutput(rawOutput, p)
-	body, _ := json.Marshal(map[string]string{"action": action})
-
-	if a != nil {
-		a.logs.append(fmt.Sprintf("[agent] psadt-alert [OK] type=%s alertId=%s action=%s scriptSize=%dB elapsed=%v", p.Type, p.AlertID, action, len(script), timeout))
+	session, err := client.OpenSessionWithContext(execCtx, pstypes.SessionConfig{
+		AppVendor:      "Discovery",
+		AppName:        "Discovery Agent",
+		AppVersion:     "1.0",
+		DeploymentType: pstypes.DeployInstall,
+		DeployMode:     pstypes.DeployModeInteractive,
+	})
+	if err != nil {
+		errMsg := fmt.Sprintf("psadt.OpenSession: %v", err)
+		if a != nil {
+			a.logs.append("[agent] psadt-alert [ERRO] " + errMsg)
+		}
+		return 1, "", errMsg
 	}
-	return 0, string(body), ""
+	defer func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer closeCancel()
+		_ = session.CloseWithContext(closeCtx, 0)
+	}()
+
+	switch p.Type {
+	case "toast":
+		action, errMsg := a.showPSADTToast(session, p)
+		if errMsg != "" {
+			return 1, "", errMsg
+		}
+		body, _ := json.Marshal(map[string]string{"action": action})
+		return 0, string(body), ""
+
+	case "update-progress":
+		action, errMsg := a.showPSADTProgress(session, p)
+		if errMsg != "" {
+			return 1, "", errMsg
+		}
+		body, _ := json.Marshal(map[string]string{"action": action})
+		return 0, string(body), ""
+
+	case "modal":
+		action, errMsg := a.showPSADTModal(execCtx, session, p)
+		if errMsg != "" {
+			return 1, "", errMsg
+		}
+		body, _ := json.Marshal(map[string]string{"action": action})
+		return 0, string(body), ""
+
+	default:
+		// Fallback: toast.
+		action, errMsg := a.showPSADTToast(session, p)
+		if errMsg != "" {
+			return 1, "", errMsg
+		}
+		body, _ := json.Marshal(map[string]string{"action": action})
+		return 0, string(body), ""
+	}
 }
 
-// ── Restart / Shutdown Warning ──
+// showPSADTToast exibe um BalloonTip não-bloqueante.
+func (a *App) showPSADTToast(session *psadt.Session, p PsadtAlertPayload) (string, string) {
+	icon := pstypes.BalloonInfo
+	switch strings.ToLower(p.Icon) {
+	case "warning":
+		icon = pstypes.BalloonWarning
+	case "error":
+		icon = pstypes.BalloonError
+	}
+
+	err := session.ShowBalloonTip(pstypes.BalloonTipOptions{
+		BalloonTipTitle: strings.TrimSpace(p.Title),
+		BalloonTipText:  strings.TrimSpace(p.Message),
+		BalloonTipIcon:  icon,
+		NoWait:          true,
+	})
+	if err != nil {
+		errMsg := fmt.Sprintf("ShowBalloonTip: %v", err)
+		if a != nil {
+			a.logs.append("[agent] psadt-alert [ERRO] type=toast alertId=" + p.AlertID + " " + errMsg)
+		}
+		return "", errMsg
+	}
+
+	if a != nil {
+		a.logs.append(fmt.Sprintf("[agent] psadt-alert [OK] type=toast alertId=%s action=shown", p.AlertID))
+	}
+	return "shown", ""
+}
+
+// showPSADTModal exibe um DialogBox bloqueante com botões de ação.
+func (a *App) showPSADTModal(ctx context.Context, session *psadt.Session, p PsadtAlertPayload) (string, string) {
+	buttons := pstypes.ButtonsOk
+	switch {
+	case len(p.Actions) >= 3:
+		buttons = pstypes.ButtonsYesNoCancel
+	case len(p.Actions) >= 2:
+		buttons = pstypes.ButtonsYesNo
+	}
+
+	defaultButton := pstypes.DialogDefaultFirst
+	if strings.ToLower(strings.TrimSpace(p.DefaultAction)) != "" && len(p.Actions) >= 2 {
+		if strings.ToLower(strings.TrimSpace(p.DefaultAction)) == strings.ToLower(strings.TrimSpace(p.Actions[1].Value)) {
+			defaultButton = pstypes.DialogDefaultSecond
+		}
+	}
+
+	icon := pstypes.IconInformation
+	switch strings.ToLower(p.Icon) {
+	case "warning":
+		icon = pstypes.IconExclamation
+	case "error":
+		icon = pstypes.IconHand
+	case "question":
+		icon = pstypes.IconQuestion
+	}
+
+	result, err := session.ShowDialogBox(pstypes.DialogBoxOptions{
+		Title:         strings.TrimSpace(p.Title),
+		Text:          strings.TrimSpace(p.Message),
+		Buttons:       buttons,
+		DefaultButton: defaultButton,
+		Icon:          icon,
+		Timeout:       p.TimeoutSeconds,
+		ExitOnTimeout: true,
+	})
+	if err != nil {
+		errMsg := fmt.Sprintf("ShowDialogBox: %v", err)
+		if a != nil {
+			a.logs.append("[agent] psadt-alert [ERRO] type=modal alertId=" + p.AlertID + " " + errMsg)
+		}
+		return "", errMsg
+	}
+
+	action := mapPSADTDialogResult(result, p)
+	if a != nil {
+		a.logs.append(fmt.Sprintf("[agent] psadt-alert [OK] type=modal alertId=%s action=%s", p.AlertID, action))
+	}
+	return action, ""
+}
+
+// showPSADTProgress exibe uma barra de progresso não-bloqueante.
+func (a *App) showPSADTProgress(session *psadt.Session, p PsadtAlertPayload) (string, string) {
+	statusText := p.StatusText
+	if statusText == "" {
+		statusText = p.Title
+	}
+	progressPercent := p.ProgressPercent
+	if progressPercent < 0 {
+		progressPercent = 0
+	}
+	if progressPercent > 100 {
+		progressPercent = 100
+	}
+
+	err := session.ShowInstallationProgress(pstypes.ProgressOptions{
+		StatusMessage:       strings.TrimSpace(statusText),
+		StatusMessageDetail: strings.TrimSpace(p.Subtitle),
+		StatusBarPercentage: float64(progressPercent),
+	})
+	if err != nil {
+		errMsg := fmt.Sprintf("ShowInstallationProgress: %v", err)
+		if a != nil {
+			a.logs.append("[agent] psadt-alert [ERRO] type=update-progress alertId=" + p.AlertID + " " + errMsg)
+		}
+		return "", errMsg
+	}
+
+	if a != nil {
+		a.logs.append(fmt.Sprintf("[agent] psadt-alert [OK] type=update-progress alertId=%s action=shown", p.AlertID))
+	}
+	return "shown", ""
+}
+
+// mapPSADTDialogResult converte o resultado tipado do PSADT para o valor da action.
+// DialogBoxResult é uma string (ex: "Ok", "Yes", "No", "Cancel", "Timeout").
+func mapPSADTDialogResult(result pstypes.DialogBoxResult, p PsadtAlertPayload) string {
+	r := strings.ToLower(strings.TrimSpace(string(result)))
+
+	if r == "timeout" {
+		if strings.TrimSpace(p.DefaultAction) != "" {
+			return strings.TrimSpace(p.DefaultAction)
+		}
+		return "timeout"
+	}
+
+	// Mapeia o texto do botão para a action correspondente.
+	for i, a := range p.Actions {
+		if strings.EqualFold(r, strings.TrimSpace(a.Label)) || strings.EqualFold(r, strings.TrimSpace(a.Value)) {
+			return strings.TrimSpace(a.Value)
+		}
+		_ = i
+	}
+
+	// Fallback: mapeia strings comuns do PSADT.
+	switch r {
+	case "yes":
+		if len(p.Actions) > 0 {
+			return strings.TrimSpace(p.Actions[0].Value)
+		}
+		return "yes"
+	case "no":
+		if len(p.Actions) > 1 {
+			return strings.TrimSpace(p.Actions[1].Value)
+		}
+		return "no"
+	case "cancel":
+		if len(p.Actions) > 2 {
+			return strings.TrimSpace(p.Actions[2].Value)
+		}
+		return "cancel"
+	}
+
+	if strings.TrimSpace(p.DefaultAction) != "" {
+		return strings.TrimSpace(p.DefaultAction)
+	}
+	return r
+}
 
 // showPowerActionWarning builds and executes a PSADT prompt before a system
 // restart or shutdown.

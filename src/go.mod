@@ -12,7 +12,7 @@ require (
 	github.com/nats-io/nats-server/v2 v2.12.7
 	github.com/nats-io/nats.go v1.50.0
 	github.com/osquery/osquery-go v0.0.0-20260306231408-a88c0766cd0d
-	github.com/pedrostefanogv/go-psadt v0.0.0-20260429030338-1ecdd629424c
+	github.com/pedrostefanogv/go-psadt v0.0.0-20260606035251-839bc92e759a
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/samber/lo v1.53.0
 	github.com/wailsapp/wails/v2 v2.12.0
