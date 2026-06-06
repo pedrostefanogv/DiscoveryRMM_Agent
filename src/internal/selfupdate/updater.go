@@ -1151,7 +1151,7 @@ func setSysProcCreationFlags(attr *syscall.SysProcAttr, value uint32) {
 	}
 	switch f.Kind() {
 	case reflect.Uint32, reflect.Uint, reflect.Uint64:
-		f.SetUint(uint64(value))
+		f.SetUint(f.Uint() | uint64(value))
 	}
 }
 

@@ -21,7 +21,8 @@ import (
 // the service's SYSTEM-scoped environment. If BuildUserEnvironment fails,
 // cmd.Env is left unset (process inherits service env — non-fatal fallback).
 //
-// Must be called AFTER HideWindow(cmd) to preserve the HideWindow flag.
+// Can be called before or after HideWindow(cmd); HideWindow preserves
+// existing SysProcAttr values and only augments visibility flags.
 //
 // If no token is present in ctx, the function is a no-op (process runs as SYSTEM).
 func ApplyUserContext(ctx context.Context, cmd *exec.Cmd) {

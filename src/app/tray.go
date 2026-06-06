@@ -9,6 +9,8 @@ import (
 
 	"github.com/energye/systray"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
+
+	"discovery/internal/processutil"
 )
 
 const (
@@ -123,6 +125,7 @@ func (a *App) startTray() {
 				mBrowser.Click(func() {
 					a.safeTrayAction("tray-menu-browser", func() {
 						cmd := exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+						processutil.HideWindow(cmd)
 						cmd.Start()
 
 						// Log na UI

@@ -10,7 +10,15 @@ import (
 
 // HideWindow prevents console flash when executing child processes from GUI apps.
 func HideWindow(cmd *exec.Cmd) {
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	if cmd == nil {
+		return
+	}
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.HideWindow = true
+	// CREATE_NO_WINDOW avoids transient console windows for console executables.
+	cmd.SysProcAttr.CreationFlags |= 0x08000000
 }
 
 // HideCommand creates an exec.Cmd with HideWindow already applied.

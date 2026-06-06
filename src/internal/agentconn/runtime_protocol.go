@@ -31,12 +31,12 @@ func executeCommand(parent context.Context, cmdType string, payload any) (int, s
 		if command == "" {
 			return 2, "", "payload sem comando powershell"
 		}
-		cmd = exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-Command", command)
+		cmd = processutil.HideCommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-Command", command)
 	case "cmd", "shell":
 		if command == "" {
 			return 2, "", "payload sem comando cmd/shell"
 		}
-		cmd = exec.CommandContext(ctx, "cmd", "/C", command)
+		cmd = processutil.HideCommandContext(ctx, "cmd", "/C", command)
 	case "update", "selfupdate":
 		return 0, "update delegado ao self-updater (via HandleCommand)", ""
 	case "restart", "reboot":
@@ -65,16 +65,12 @@ func executeCommand(parent context.Context, cmdType string, payload any) (int, s
 			}
 			resolved = command
 		}
-		cmd = exec.CommandContext(ctx, resolved, args...)
+		cmd = processutil.HideCommandContext(ctx, resolved, args...)
 	default:
 		if command == "" {
 			return 2, "", "tipo de comando desconhecido e payload sem comando"
 		}
-		cmd = exec.CommandContext(ctx, "cmd", "/C", command)
-	}
-
-	if cmd != nil {
-		setHideWindow(cmd)
+		cmd = processutil.HideCommandContext(ctx, "cmd", "/C", command)
 	}
 
 	out, err := cmd.CombinedOutput()
@@ -92,14 +88,6 @@ func executeCommand(parent context.Context, cmdType string, payload any) (int, s
 		errText = "timeout excedido"
 	}
 	return exitCode, output, errText
-}
-
-// setHideWindow configures the process to run without a visible terminal window on Windows.
-func setHideWindow(cmd *exec.Cmd) {
-	if cmd == nil {
-		return
-	}
-	processutil.HideWindow(cmd)
 }
 
 func parsePayload(payload any) (string, []string, time.Duration) {
@@ -318,8 +306,7 @@ func executeRestartOrShutdown(_ context.Context, action string, payload any) (in
 	shutdownExe := resolveShutdownExe()
 
 	// shutdown.exe does not need ctx — it schedules and returns immediately
-	cmd := exec.Command(shutdownExe, args...)
-	setHideWindow(cmd)
+	cmd := processutil.HideCommand(shutdownExe, args...)
 	out, err := cmd.CombinedOutput()
 	output := string(out)
 
@@ -335,8 +322,7 @@ func executeRestartOrShutdown(_ context.Context, action string, payload any) (in
 
 // executeAbortShutdown cancels any scheduled system restart or shutdown.
 func executeAbortShutdown(ctx context.Context) (int, string, string) {
-	cmd := exec.CommandContext(ctx, resolveShutdownExe(), "/a")
-	setHideWindow(cmd)
+	cmd := processutil.HideCommandContext(ctx, resolveShutdownExe(), "/a")
 	out, err := cmd.CombinedOutput()
 	output := string(out)
 

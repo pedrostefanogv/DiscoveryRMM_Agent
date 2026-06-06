@@ -302,8 +302,7 @@ func (a *App) runMeshCentralInstall(ctx context.Context, info MeshCentralInstall
 			return fmt.Errorf("nenhum comando Windows disponivel para fallback")
 		}
 		a.meshLogf("executando fallback de instalacao via comando Windows")
-		cmd = exec.CommandContext(installCtx, "cmd", "/C", command)
-		processutil.HideWindow(cmd)
+		cmd = processutil.HideCommandContext(installCtx, "cmd", "/C", command)
 	} else {
 		command := strings.TrimSpace(firstNonEmptyString(
 			info.LinuxCommandBackground,
@@ -314,7 +313,7 @@ func (a *App) runMeshCentralInstall(ctx context.Context, info MeshCentralInstall
 			return fmt.Errorf("nenhum comando Linux disponivel para fallback")
 		}
 		a.meshLogf("executando fallback de instalacao Linux/macOS")
-		cmd = exec.CommandContext(installCtx, "sh", "-c", command)
+		cmd = processutil.HideCommandContext(installCtx, "sh", "-c", command)
 	}
 
 	var outBuf bytes.Buffer
