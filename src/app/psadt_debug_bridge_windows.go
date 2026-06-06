@@ -5,8 +5,11 @@ package app
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"strings"
 	"time"
+
+	"discovery/internal/processutil"
 
 	psadt "github.com/pedrostefanogv/go-psadt"
 	pstypes "github.com/pedrostefanogv/go-psadt/types"
@@ -168,39 +171,26 @@ func (a *App) RunPSADTRestartPrompt(countdownSeconds int, silentRestart bool) PS
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(countdownSeconds+120)*time.Second)
 	defer cancel()
 
-	client, err := psadt.NewClient(psadt.WithTimeout(time.Duration(countdownSeconds+120) * time.Second))
-	if err != nil {
-		result.Message = fmt.Sprintf("psadt.NewClient: %v", err)
-		return result
-	}
-	defer client.Close()
-
-	session, err := client.OpenSessionWithContext(ctx, pstypes.SessionConfig{
-		AppVendor:      "Discovery",
-		AppName:        "Discovery Agent",
-		AppVersion:     "1.0",
-		DeploymentType: pstypes.DeployInstall,
-		DeployMode:     pstypes.DeployModeInteractive,
-	})
-	if err != nil {
-		result.Message = fmt.Sprintf("OpenSession: %v", err)
-		return result
-	}
-	defer func() {
-		closeCtx, closeCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer closeCancel()
-		_ = session.CloseWithContext(closeCtx, 0)
-	}()
+	psExe := resolvePowerShellExe()
+	script := buildPSADTRestartPromptScript(countdownSeconds, silentRestart)
 
 	start := time.Now()
-	err = session.ShowInstallationRestartPrompt(pstypes.RestartPromptOptions{
-		CountdownSeconds: countdownSeconds,
-		SilentRestart:    silentRestart,
-	})
+	cmd := exec.CommandContext(ctx, psExe,
+		"-NoProfile",
+		"-NonInteractive",
+		"-WindowStyle", "Hidden",
+		"-ExecutionPolicy", "Bypass",
+		"-Command", script,
+	)
+	processutil.HideWindow(cmd)
+	out, err := cmd.CombinedOutput()
 	result.DurationMS = time.Since(start).Milliseconds()
 
 	if err != nil {
 		result.Message = fmt.Sprintf("ShowInstallationRestartPrompt: %v", err)
+		if output := strings.TrimSpace(decodePowerShellOutput(out)); output != "" {
+			result.Message += " | " + output
+		}
 		result.Action = "error"
 		a.logs.append("[psadt] restart prompt falhou: " + result.Message)
 		return result
@@ -211,6 +201,31 @@ func (a *App) RunPSADTRestartPrompt(countdownSeconds int, silentRestart bool) PS
 	result.Message = "Restart prompt exibido com sucesso"
 	a.logs.append("[psadt] restart prompt concluido")
 	return result
+}
+
+func buildPSADTRestartPromptScript(countdownSeconds int, silentRestart bool) string {
+	silentFlag := "$false"
+	if silentRestart {
+		silentFlag = "$true"
+	}
+
+	return fmt.Sprintf(`$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$OutputEncoding = [Console]::OutputEncoding
+
+Import-Module -Name PSAppDeployToolkit -ErrorAction Stop
+Open-ADTSession -SessionState $ExecutionContext.SessionState -AppName 'Discovery Agent' -AppVersion '1.0' -AppVendor 'Discovery' -DeploymentType 'Install' -DeployMode 'Interactive'
+
+try {
+    $restartParams = @{
+        CountdownSeconds = %d
+        SilentRestart = %s
+    }
+    Show-ADTInstallationRestartPrompt @restartParams
+} finally {
+    try { Close-ADTSession -ExitCode 0 } catch {}
+}
+`, countdownSeconds, silentFlag)
 }
 
 // GetPSADTSessionProperties obtem propriedades da sessao ativa via Get-ADTSession.
