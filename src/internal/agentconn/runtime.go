@@ -995,6 +995,10 @@ func (r *Runtime) waitOrStop(ctx context.Context, d time.Duration) {
 	defer t.Stop()
 	select {
 	case <-ctx.Done():
+	case <-r.reloadCh:
+		if !t.Stop() {
+			<-t.C
+		}
 	case <-t.C:
 	}
 }

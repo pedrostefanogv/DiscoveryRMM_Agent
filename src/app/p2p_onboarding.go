@@ -48,6 +48,8 @@ type zeroTouchRegisterCredentials struct {
 	AgentID   string
 	ApiScheme string
 	ApiServer string
+	ClientID  string
+	SiteID    string
 }
 
 // isAgentConfigured returns true when this agent already has server credentials persisted.
@@ -379,6 +381,12 @@ func (a *App) registerWithDeployKey(serverURL, deployKey string) (P2POnboardingR
 	inst.ApiServer = strings.TrimSpace(credentials.ApiServer)
 	inst.AuthToken = strings.TrimSpace(credentials.AuthToken)
 	inst.AgentID = strings.TrimSpace(credentials.AgentID)
+	if strings.TrimSpace(credentials.ClientID) != "" {
+		inst.ClientID = strings.TrimSpace(credentials.ClientID)
+	}
+	if strings.TrimSpace(credentials.SiteID) != "" {
+		inst.SiteID = strings.TrimSpace(credentials.SiteID)
+	}
 	// Mantem o deploy token para resiliencia de bootstrap (fallback de re-registro).
 	inst.APIKey = strings.TrimSpace(deployKey)
 
@@ -491,6 +499,8 @@ func parseZeroTouchRegisterResponse(body []byte, fallbackServerURL string) (zero
 			AgentID:   firstNonEmptyAnyString(m["agentId"], m["agentID"], m["agent_id"], m["id"]),
 			ApiScheme: strings.ToLower(strings.TrimSpace(firstNonEmptyAnyString(m["apiScheme"], m["api_scheme"], m["scheme"]))),
 			ApiServer: strings.TrimSpace(firstNonEmptyAnyString(m["apiServer"], m["api_server"], m["server"], m["serverHost"], m["server_host"])),
+			ClientID:  strings.TrimSpace(firstNonEmptyAnyString(m["clientId"], m["client_id"], m["client"])),
+			SiteID:    strings.TrimSpace(firstNonEmptyAnyString(m["siteId"], m["site_id"], m["site"])),
 		}
 
 		serverURL := strings.TrimSpace(firstNonEmptyAnyString(m["serverUrl"], m["server_url"], m["baseUrl"], m["base_url"]))
@@ -520,6 +530,12 @@ func parseZeroTouchRegisterResponse(body []byte, fallbackServerURL string) (zero
 		}
 		if strings.TrimSpace(dst.ApiServer) == "" {
 			dst.ApiServer = strings.TrimSpace(src.ApiServer)
+		}
+		if strings.TrimSpace(dst.ClientID) == "" {
+			dst.ClientID = strings.TrimSpace(src.ClientID)
+		}
+		if strings.TrimSpace(dst.SiteID) == "" {
+			dst.SiteID = strings.TrimSpace(src.SiteID)
 		}
 	}
 

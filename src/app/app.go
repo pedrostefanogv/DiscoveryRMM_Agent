@@ -33,10 +33,10 @@ import (
 	"discovery/internal/platform"
 	"discovery/internal/printer"
 	"discovery/internal/processutil"
-	"path/filepath"
 	"discovery/internal/selfupdate"
 	"discovery/internal/services"
 	"discovery/internal/winget"
+	"path/filepath"
 )
 
 var Version = "dev"
@@ -136,8 +136,8 @@ type App struct {
 
 	queuedForceHeartbeat atomic.Bool
 
-	selfUpdater    *selfupdate.Updater
-	selfUpdaterCh  chan bool
+	selfUpdater   *selfupdate.Updater
+	selfUpdaterCh chan bool
 }
 
 func NewApp(opts AppStartupOptions) *App {
@@ -233,6 +233,24 @@ func NewApp(opts AppStartupOptions) *App {
 		LoadConfig: func() agentconn.Config {
 			cfg := a.GetDebugConfig()
 			agentCfg := a.GetAgentConfiguration()
+
+			// Fallback para clientId/siteId do InstallerConfig quando
+			// AgentConfiguration ainda nao foi populada pelo sync (ex.: primeiro
+			// boot apos instalacao, onde o bootstrap ja persiste os valores mas
+			// o /me/configuration ainda nao respondeu).
+			clientID := agentCfg.ClientID
+			siteID := agentCfg.SiteID
+			if strings.TrimSpace(clientID) == "" || strings.TrimSpace(siteID) == "" {
+				if inst, _, err := loadInstallerConfig(); err == nil {
+					if strings.TrimSpace(clientID) == "" {
+						clientID = strings.TrimSpace(inst.ClientID)
+					}
+					if strings.TrimSpace(siteID) == "" {
+						siteID = strings.TrimSpace(inst.SiteID)
+					}
+				}
+			}
+
 			return agentconn.Config{
 				ApiScheme:                cfg.ApiScheme,
 				ApiServer:                cfg.ApiServer,
@@ -247,8 +265,8 @@ func NewApp(opts AppStartupOptions) *App {
 				AuthToken:                cfg.AuthToken,
 				AgentID:                  cfg.AgentID,
 				AgentVersion:             buildinfo.Version,
-				ClientID:                 agentCfg.ClientID,
-				SiteID:                   agentCfg.SiteID,
+				ClientID:                 clientID,
+				SiteID:                   siteID,
 				HeartbeatInterval:        heartbeatIntervalFromAgentConfig(agentCfg),
 			}
 		},
