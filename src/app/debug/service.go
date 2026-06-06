@@ -402,7 +402,7 @@ func (s *Service) BootstrapAgentCredentialsFromInstallerConfig(ctx context.Conte
 	}
 
 	s.logf("[installer-bootstrap] registrando agente em " + scheme + "://" + server + "/api/v1/agent-install/register")
-	token, agentID, resolvedScheme, err := s.registerAgentFromDeployToken(ctx, scheme, server, inst.APIKey)
+	token, agentID, clientID, siteID, resolvedScheme, err := s.registerAgentFromDeployToken(ctx, scheme, server, inst.APIKey)
 	if err != nil {
 		s.logf("[installer-bootstrap] falha ao obter credenciais: " + err.Error())
 		return
@@ -413,6 +413,12 @@ func (s *Service) BootstrapAgentCredentialsFromInstallerConfig(ctx context.Conte
 	inst.AuthToken = token
 	inst.AgentID = agentID
 	inst.APIKey = ""
+	if strings.TrimSpace(clientID) != "" {
+		inst.ClientID = strings.TrimSpace(clientID)
+	}
+	if strings.TrimSpace(siteID) != "" {
+		inst.SiteID = strings.TrimSpace(siteID)
+	}
 	writePath, err := persistInstallerConfig(path, inst)
 	if err != nil {
 		s.logf("[installer-bootstrap] falha ao persistir config de producao: " + err.Error())
@@ -431,7 +437,7 @@ func (s *Service) BootstrapAgentCredentialsFromInstallerConfig(ctx context.Conte
 
 	s.ApplyRuntimeConnectionConfig(inst.ApiScheme, inst.ApiServer, inst.AuthToken, inst.AgentID, inst.NatsServer, inst.NatsWsServer)
 
-	s.logf("[installer-bootstrap] credenciais aplicadas com sucesso (leitura: " + path + ", persistencia: " + writePath + ", agentId=" + agentID + ")")
+	s.logf("[installer-bootstrap] credenciais aplicadas com sucesso (leitura: " + path + ", persistencia: " + writePath + ", agentId=" + agentID + ", clientId=" + clientID + ", siteId=" + siteID + ")")
 	if s.agentConn != nil {
 		s.agentConn.Reload()
 	}

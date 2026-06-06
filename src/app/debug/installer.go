@@ -247,7 +247,7 @@ func parseInstallerServerURL(raw string) (string, string, error) {
 	return scheme, host, nil
 }
 
-func (s *Service) registerAgentFromDeployToken(ctx context.Context, scheme, server, deployToken string) (string, string, string, error) {
+func (s *Service) registerAgentFromDeployToken(ctx context.Context, scheme, server, deployToken string) (token, agentID, clientID, siteID, resolvedScheme string, err error) {
 	type registerRequest struct {
 		Hostname        string `json:"hostname"`
 		DisplayName     string `json:"displayName"`
@@ -278,7 +278,7 @@ func (s *Service) registerAgentFromDeployToken(ctx context.Context, scheme, serv
 	}
 	bodyBytes, err := json.Marshal(payload)
 	if err != nil {
-		return "", "", "", fmt.Errorf("falha ao serializar request: %w", err)
+		return "", "", "", "", "", fmt.Errorf("falha ao serializar request: %w", err)
 	}
 
 	schemes := []string{scheme}
@@ -320,15 +320,15 @@ func (s *Service) registerAgentFromDeployToken(ctx context.Context, scheme, serv
 			continue
 		}
 
-		token, agentID, err := extractTokenAndAgentID(body)
+		t, aID, cID, sID, err := extractTokenAgentIDAndRouting(body)
 		if err != nil {
 			errs = append(errs, endpoint+": "+err.Error())
 			continue
 		}
-		return token, agentID, candidateScheme, nil
+		return t, aID, cID, sID, candidateScheme, nil
 	}
 
-	return "", "", "", fmt.Errorf("nao foi possivel registrar agente: %s", strings.Join(errs, " | "))
+	return "", "", "", "", "", fmt.Errorf("nao foi possivel registrar agente: %s", strings.Join(errs, " | "))
 }
 
 func firstUsableMACAddress() string {
@@ -353,20 +353,27 @@ func installerServerURLForLog(server, scheme string) string {
 }
 
 func extractTokenAndAgentID(body []byte) (string, string, error) {
+	token, agentID, _, _, err := extractTokenAgentIDAndRouting(body)
+	return token, agentID, err
+}
+
+func extractTokenAgentIDAndRouting(body []byte) (token, agentID, clientID, siteID string, err error) {
 	var raw map[string]any
 	if err := json.Unmarshal(body, &raw); err != nil {
-		return "", "", fmt.Errorf("resposta JSON invalida: %w", err)
+		return "", "", "", "", fmt.Errorf("resposta JSON invalida: %w", err)
 	}
 
-	tryExtract := func(m map[string]any) (string, string) {
-		token := firstNonEmptyAnyString(m["token"], m["authToken"], m["accessToken"])
-		agentID := firstNonEmptyAnyString(m["agentId"], m["agentID"], m["id"])
-		return strings.TrimSpace(token), strings.TrimSpace(agentID)
+	tryExtract := func(m map[string]any) (string, string, string, string) {
+		t := firstNonEmptyAnyString(m["token"], m["authToken"], m["accessToken"])
+		a := firstNonEmptyAnyString(m["agentId"], m["agentID"], m["id"])
+		c := firstNonEmptyAnyString(m["clientId"], m["clientID"], m["client_id"])
+		s := firstNonEmptyAnyString(m["siteId"], m["siteID"], m["site_id"])
+		return strings.TrimSpace(t), strings.TrimSpace(a), strings.TrimSpace(c), strings.TrimSpace(s)
 	}
 
-	token, agentID := tryExtract(raw)
+	token, agentID, clientID, siteID = tryExtract(raw)
 	if token != "" && agentID != "" {
-		return token, agentID, nil
+		return token, agentID, clientID, siteID, nil
 	}
 
 	for _, key := range []string{"data", "result", "payload"} {
@@ -374,13 +381,13 @@ func extractTokenAndAgentID(body []byte) (string, string, error) {
 		if !ok {
 			continue
 		}
-		token, agentID = tryExtract(nested)
+		token, agentID, clientID, siteID = tryExtract(nested)
 		if token != "" && agentID != "" {
-			return token, agentID, nil
+			return token, agentID, clientID, siteID, nil
 		}
 	}
 
-	return "", "", fmt.Errorf("resposta sem token/agentId")
+	return "", "", "", "", fmt.Errorf("resposta sem token/agentId")
 }
 
 func firstNonEmptyAnyString(values ...any) string {
