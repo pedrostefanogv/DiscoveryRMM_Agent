@@ -284,7 +284,14 @@ func (u *Updater) CheckAndUpdate(ctx context.Context, force bool) error {
 		manifest.Enabled, manifest.UpdateAvailable, manifest.RolloutEligible,
 		manifest.DirectUpdateSupported, ptrStr(manifest.LatestVersion))
 
-	// Em modo forçado (comando do servidor), ignora guards de elegibilidade mas respeita o kill-switch global (Enabled).
+	// Em modo forçado (comando do servidor), ignora completamente o manifest
+	// e baixa direto do endpoint público /api/v1/download/agent sem validação
+	// de versão, elegibilidade ou sha256. É um force-reinstall.
+	if force {
+		u.logf("[selfupdate] modo forcado: ignorando manifest, baixando direto do endpoint publico")
+		return u.forceInstallFromPublicEndpoint(ctx, currentVersion, correlationID)
+	}
+
 	if !manifest.Enabled {
 		u.reportEvent(ctx, "CheckCompleted", reportOpts{
 			ReleaseID:      manifest.ReleaseID,
@@ -294,7 +301,7 @@ func (u *Updater) CheckAndUpdate(ctx context.Context, force bool) error {
 		})
 		return nil
 	}
-	if !force && (!manifest.UpdateAvailable || !manifest.RolloutEligible || !manifest.DirectUpdateSupported) {
+	if !manifest.UpdateAvailable || !manifest.RolloutEligible || !manifest.DirectUpdateSupported {
 		u.reportEvent(ctx, "CheckCompleted", reportOpts{
 			ReleaseID:      manifest.ReleaseID,
 			CurrentVersion: currentVersion,
@@ -314,7 +321,7 @@ func (u *Updater) CheckAndUpdate(ctx context.Context, force bool) error {
 		return nil
 	}
 	targetVersion := strings.TrimSpace(*manifest.LatestVersion)
-	if !force && compareVersions(targetVersion, currentVersion) <= 0 {
+	if compareVersions(targetVersion, currentVersion) <= 0 {
 		u.reportEvent(ctx, "CheckCompleted", reportOpts{
 			ReleaseID:      manifest.ReleaseID,
 			CurrentVersion: currentVersion,
@@ -419,6 +426,85 @@ func (u *Updater) CheckAndUpdate(ctx context.Context, force bool) error {
 	}
 
 	u.logf("installer iniciado em background: %s", tempPath)
+	return nil
+}
+
+// forceInstallFromPublicEndpoint baixa o instalador do endpoint público
+// /api/v1/download/agent e executa /S /UPDATE sem nenhuma validação de
+// versão, manifest ou sha256. Usado exclusivamente em modo force=true
+// (comando de update vindo do servidor).
+func (u *Updater) forceInstallFromPublicEndpoint(ctx context.Context, currentVersion, correlationID string) error {
+	downloadURL := u.apiScheme() + "://" + u.apiServer() + "/api/v1/download/agent"
+	u.logf("[selfupdate] force-install: baixando de %s", downloadURL)
+
+	u.reportEvent(ctx, "UpdateAvailable", reportOpts{
+		CurrentVersion: currentVersion,
+		TargetVersion:  "force-reinstall",
+		CorrelationID:  correlationID,
+		Message:        "force reinstall via public endpoint",
+	})
+
+	u.reportEvent(ctx, "DownloadStarted", reportOpts{
+		CurrentVersion: currentVersion,
+		TargetVersion:  "force-reinstall",
+		CorrelationID:  correlationID,
+	})
+
+	tempPath, fileSha256, err := u.downloadFromURL(ctx, downloadURL)
+	if err != nil {
+		u.logf("[selfupdate] force-install download falhou: %v", err)
+		u.reportEvent(ctx, "DownloadFailed", reportOpts{
+			CurrentVersion: currentVersion,
+			TargetVersion:  "force-reinstall",
+			CorrelationID:  correlationID,
+			Message:        err.Error(),
+		})
+		return err
+	}
+
+	u.logf("[selfupdate] force-install download concluido: tempPath=%s sha256=%s", tempPath, fileSha256)
+	u.reportEvent(ctx, "DownloadCompleted", reportOpts{
+		CurrentVersion: currentVersion,
+		TargetVersion:  "force-reinstall",
+		CorrelationID:  correlationID,
+		Message:        fmt.Sprintf("sha256=%s", fileSha256),
+	})
+
+	u.reportEvent(ctx, "InstallStarted", reportOpts{
+		CurrentVersion: currentVersion,
+		TargetVersion:  "force-reinstall",
+		CorrelationID:  correlationID,
+	})
+
+	if err := u.persistPendingInstallState(pendingInstallState{
+		CurrentVersion: currentVersion,
+		TargetVersion:  "force-reinstall",
+		CorrelationID:  correlationID,
+		RecordedAtUTC:  time.Now().UTC().Format(time.RFC3339),
+	}); err != nil {
+		errutil.LogIfErr(os.Remove(tempPath), "selfupdate: limpar temp apos falha de persistencia")
+		u.reportEvent(ctx, "InstallFailed", reportOpts{
+			CurrentVersion: currentVersion,
+			TargetVersion:  "force-reinstall",
+			CorrelationID:  correlationID,
+			Message:        "falha ao persistir estado pendente: " + err.Error(),
+		})
+		return err
+	}
+
+	if err := u.launchInstaller(tempPath); err != nil {
+		u.clearPendingInstallState()
+		errutil.LogIfErr(os.Remove(tempPath), "selfupdate: limpar temp apos falha de launch")
+		u.reportEvent(ctx, "InstallFailed", reportOpts{
+			CurrentVersion: currentVersion,
+			TargetVersion:  "force-reinstall",
+			CorrelationID:  correlationID,
+			Message:        err.Error(),
+		})
+		return err
+	}
+
+	u.logf("[selfupdate] force-install: instalador iniciado em background: %s", tempPath)
 	return nil
 }
 

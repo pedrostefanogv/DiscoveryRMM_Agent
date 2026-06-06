@@ -305,6 +305,13 @@ func (p *Provider) collectWithOsquery(ctx context.Context) (models.InventoryRepo
 
 	memoryBytes := parseFloat(getString(system, "physical_memory"))
 	memoryGB := memoryBytes / bytesPerGB
+	// osquery system_info.physical_memory retorna 0 em VMs com NUMA ativado.
+	// Fallback: API nativa GlobalMemoryStatusEx (kernel32.dll) — mesma usada no heartbeat.
+	if memoryBytes <= 0 {
+		if totalGB, _, _, ok := collectWindowsMemoryNative(); ok && totalGB > 0 {
+			memoryGB = totalGB
+		}
+	}
 
 	report := models.InventoryReport{
 		CollectedAt: time.Now().Format(time.RFC3339),
