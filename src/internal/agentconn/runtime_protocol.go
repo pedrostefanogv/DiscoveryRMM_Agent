@@ -8,10 +8,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
-	"syscall"
 	"time"
+
+	"discovery/internal/processutil"
 )
 
 func executeCommand(parent context.Context, cmdType string, payload any) (int, string, string) {
@@ -96,14 +96,10 @@ func executeCommand(parent context.Context, cmdType string, payload any) (int, s
 
 // setHideWindow configures the process to run without a visible terminal window on Windows.
 func setHideWindow(cmd *exec.Cmd) {
-	if cmd == nil || runtime.GOOS != "windows" {
+	if cmd == nil {
 		return
 	}
-	if cmd.SysProcAttr == nil {
-		cmd.SysProcAttr = &syscall.SysProcAttr{}
-	}
-	cmd.SysProcAttr.HideWindow = true
-	cmd.SysProcAttr.CreationFlags |= 0x08000000 // CREATE_NO_WINDOW
+	processutil.HideWindow(cmd)
 }
 
 func parsePayload(payload any) (string, []string, time.Duration) {
@@ -323,6 +319,7 @@ func executeRestartOrShutdown(_ context.Context, action string, payload any) (in
 
 	// shutdown.exe does not need ctx — it schedules and returns immediately
 	cmd := exec.Command(shutdownExe, args...)
+	setHideWindow(cmd)
 	out, err := cmd.CombinedOutput()
 	output := string(out)
 
@@ -339,6 +336,7 @@ func executeRestartOrShutdown(_ context.Context, action string, payload any) (in
 // executeAbortShutdown cancels any scheduled system restart or shutdown.
 func executeAbortShutdown(ctx context.Context) (int, string, string) {
 	cmd := exec.CommandContext(ctx, resolveShutdownExe(), "/a")
+	setHideWindow(cmd)
 	out, err := cmd.CombinedOutput()
 	output := string(out)
 

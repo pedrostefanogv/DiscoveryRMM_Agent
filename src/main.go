@@ -80,14 +80,15 @@ func main() {
 	}
 
 	err := wails.Run(&options.App{
-		Title:           "Discovery",
-		Width:           appkg.WindowWidth,
-		Height:          appkg.WindowHeight,
-		MinWidth:        appkg.WindowMinWidth,
-		MinHeight:       appkg.WindowMinHeight,
-		Frameless:       startupFrameless,
-		CSSDragProperty: "--wails-draggable",
-		CSSDragValue:    "drag",
+		Title:                    "Discovery",
+		Width:                    appkg.WindowWidth,
+		Height:                   appkg.WindowHeight,
+		MinWidth:                 appkg.WindowMinWidth,
+		MinHeight:                appkg.WindowMinHeight,
+		Frameless:                startupFrameless,
+		StartHidden:              startupMinimized,
+		CSSDragProperty:          "--wails-draggable",
+		CSSDragValue:             "drag",
 		EnableDefaultContextMenu: true,
 		AssetServer: &assetserver.Options{
 			Assets: assets,

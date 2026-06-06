@@ -1,3 +1,5 @@
+//go:build windows
+
 package app
 
 import (
@@ -13,6 +15,8 @@ import (
 
 	psadt "github.com/pedrostefanogv/go-psadt"
 	pstypes "github.com/pedrostefanogv/go-psadt/types"
+
+	"discovery/internal/processutil"
 )
 
 // isPsadtAlertCommandType verifica se o commandType corresponde a ShowPsadtAlert (9).
@@ -212,7 +216,7 @@ func (a *App) showPSADTToast(session *psadt.Session, p PsadtAlertPayload) (strin
 }
 
 // showPSADTModal exibe um DialogBox bloqueante com botões de ação.
-func (a *App) showPSADTModal(ctx context.Context, session *psadt.Session, p PsadtAlertPayload) (string, string) {
+func (a *App) showPSADTModal(_ context.Context, session *psadt.Session, p PsadtAlertPayload) (string, string) {
 	buttons := pstypes.ButtonsOk
 	switch {
 	case len(p.Actions) >= 3:
@@ -222,8 +226,8 @@ func (a *App) showPSADTModal(ctx context.Context, session *psadt.Session, p Psad
 	}
 
 	defaultButton := pstypes.DialogDefaultFirst
-	if strings.ToLower(strings.TrimSpace(p.DefaultAction)) != "" && len(p.Actions) >= 2 {
-		if strings.ToLower(strings.TrimSpace(p.DefaultAction)) == strings.ToLower(strings.TrimSpace(p.Actions[1].Value)) {
+	if strings.TrimSpace(p.DefaultAction) != "" && len(p.Actions) >= 2 {
+		if strings.EqualFold(strings.TrimSpace(p.DefaultAction), strings.TrimSpace(p.Actions[1].Value)) {
 			defaultButton = pstypes.DialogDefaultSecond
 		}
 	}
@@ -382,6 +386,7 @@ func (a *App) showPowerActionWarning(ctx context.Context, action string, delaySe
 	}
 
 	cmd := exec.CommandContext(execCtx, psExe, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script)
+	processutil.HideWindow(cmd)
 	outBytes, err := cmd.CombinedOutput()
 	rawOutput := strings.TrimSpace(string(outBytes))
 
@@ -573,6 +578,7 @@ func (a *App) executeSystemPowerAction(_ context.Context, action string, delaySe
 	}
 
 	cmd := exec.Command(shutdownExe, args...)
+	processutil.HideWindow(cmd)
 	out, err := cmd.CombinedOutput()
 	output := string(out)
 

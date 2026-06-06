@@ -26,6 +26,7 @@ import (
 
 	"discovery/app/netutil"
 	"discovery/internal/buildinfo"
+	"discovery/internal/processutil"
 )
 
 const (
@@ -921,9 +922,12 @@ func (u *Updater) launchInstaller(exePath string) error {
 		return errors.New("installer path vazio")
 	}
 	cmd := exec.Command(exePath, "/S", "/UPDATE")
-	attr := &syscall.SysProcAttr{}
-	setSysProcCreationFlags(attr, detachedProcessFlag)
-	cmd.SysProcAttr = attr
+	processutil.HideWindow(cmd)
+	// DETACHED_PROCESS (0x00000008) desacopla do ciclo de vida do agent.
+	// setSysProcCreationFlags usa reflexao para compatibilidade cross-platform.
+	if cmd.SysProcAttr != nil {
+		setSysProcCreationFlags(cmd.SysProcAttr, detachedProcessFlag)
+	}
 	return cmd.Start()
 }
 
@@ -1210,6 +1214,7 @@ func validateAuthenticodeSignature(ctx context.Context, path string) error {
 		"$sig = Get-AuthenticodeSignature -LiteralPath $args[0]; if ($null -eq $sig) { Write-Output 'UnknownError'; exit 3 }; Write-Output $sig.Status",
 		path,
 	)
+	processutil.HideWindow(cmd)
 	out, err := cmd.CombinedOutput()
 	status := strings.TrimSpace(string(out))
 	if ctx.Err() == context.DeadlineExceeded {

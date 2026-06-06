@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"discovery/internal/processutil"
 )
 
 // EnsureWorldAccess grants Everyone full control (read/write/execute) on the
@@ -26,6 +28,7 @@ func EnsureWorldAccess(path string) error {
 	// The /T flag is omitted on purpose: we only set the ACL on the directory root;
 	// inheritance handles the children automatically.
 	cmd := exec.Command("icacls.exe", path, "/grant", "Everyone:(OI)(CI)F", "/Q")
+	processutil.HideWindow(cmd)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("icacls falhou: %w — saida: %s", err, strings.TrimSpace(string(out)))

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"discovery/internal/processutil"
 )
 
 // PingResult is the structured response returned by the ping_host tool.
@@ -116,6 +118,7 @@ func buildPingCommand(host string, count int, timeoutSeconds int) (*exec.Cmd, er
 		// -c: count, -W: timeout in seconds (per packet) on Linux/BSD.
 		cmd = exec.Command("ping", "-c", fmt.Sprint(count), "-W", fmt.Sprint(timeoutSeconds), host)
 	}
+	processutil.HideWindow(cmd)
 	return cmd, nil
 }
 
@@ -134,6 +137,7 @@ func PingHost(ctx context.Context, host string, count int, timeoutSeconds int) (
 		return PingResult{}, err
 	}
 	cmd = exec.CommandContext(ctx, cmd.Path, cmd.Args[1:]...)
+	processutil.HideWindow(cmd)
 
 	start := time.Now()
 	out, err := cmd.CombinedOutput()
@@ -149,7 +153,9 @@ func PingHost(ctx context.Context, host string, count int, timeoutSeconds int) (
 
 func buildFlushDNSCommand() (*exec.Cmd, error) {
 	if runtime.GOOS == "windows" {
-		return exec.Command("ipconfig", "/flushdns"), nil
+		cmd := exec.Command("ipconfig", "/flushdns")
+		processutil.HideWindow(cmd)
+		return cmd, nil
 	}
 	if runtime.GOOS == "darwin" {
 		// macOS: reload mDNSResponder
@@ -157,10 +163,14 @@ func buildFlushDNSCommand() (*exec.Cmd, error) {
 	}
 	// Linux: prefer resolvectl, fall back to systemd-resolve
 	if _, err := exec.LookPath("resolvectl"); err == nil {
-		return exec.Command("resolvectl", "flush-caches"), nil
+		cmd := exec.Command("resolvectl", "flush-caches")
+		processutil.HideWindow(cmd)
+		return cmd, nil
 	}
 	if _, err := exec.LookPath("systemd-resolve"); err == nil {
-		return exec.Command("systemd-resolve", "--flush-caches"), nil
+		cmd := exec.Command("systemd-resolve", "--flush-caches")
+		processutil.HideWindow(cmd)
+		return cmd, nil
 	}
 	return nil, errors.New("nenhum comando de flush DNS disponivel neste sistema")
 }
@@ -176,6 +186,7 @@ func FlushDNS(ctx context.Context) (FlushDNSResult, error) {
 	defer cancel()
 
 	cmd = exec.CommandContext(ctx, cmd.Path, cmd.Args[1:]...)
+	processutil.HideWindow(cmd)
 	out, err := cmd.CombinedOutput()
 	return FlushDNSResult{
 		Success: err == nil,
