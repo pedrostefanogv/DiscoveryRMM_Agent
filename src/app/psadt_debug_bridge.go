@@ -11,6 +11,9 @@ import (
 	"time"
 	"unicode/utf8"
 
+	psadt "github.com/pedrostefanogv/go-psadt"
+	pstypes "github.com/pedrostefanogv/go-psadt/types"
+
 	"discovery/internal/processutil"
 
 	"golang.org/x/text/encoding/charmap"
@@ -525,19 +528,19 @@ func (a *App) ExecuteCustomPSADTScript(scriptContent string) PSADTScriptResult {
 
 // PSADTVisualNotificationRequest define os parametros para um teste visual nativo de notificacao PSADT.
 type PSADTVisualNotificationRequest struct {
-	NotifType       string `json:"notifType"` // balloon_info | balloon_warning | balloon_error | prompt_ok | prompt_continue | progress
-	Title           string `json:"title"`
-	Message         string `json:"message"`
-	AppName         string `json:"appName"`
-	DurationSeconds int    `json:"durationSeconds"` // utilizado apenas pelo tipo progress
-	DialogButtons   string `json:"dialogButtons"`   // Ok | OkCancel | AbortRetryIgnore | YesNoCancel | YesNo | RetryCancel | CancelTryContinue
-	DialogDefault   string `json:"dialogDefault"`   // First | Second | Third
-	DialogIcon      string `json:"dialogIcon"`      // None | Stop | Question | Exclamation | Information
-	DialogTimeout   int    `json:"dialogTimeout"`   // segundos, 0 = sem timeout
-	DialogNoWait    bool   `json:"dialogNoWait"`
-	DialogExitOnTimeout bool `json:"dialogExitOnTimeout"`
-	DialogNotTopMost bool `json:"dialogNotTopMost"`
-	DialogForce     bool   `json:"dialogForce"`
+	NotifType           string `json:"notifType"` // balloon_info | balloon_warning | balloon_error | prompt_ok | prompt_continue | progress
+	Title               string `json:"title"`
+	Message             string `json:"message"`
+	AppName             string `json:"appName"`
+	DurationSeconds     int    `json:"durationSeconds"` // utilizado apenas pelo tipo progress
+	DialogButtons       string `json:"dialogButtons"`   // Ok | OkCancel | AbortRetryIgnore | YesNoCancel | YesNo | RetryCancel | CancelTryContinue
+	DialogDefault       string `json:"dialogDefault"`   // First | Second | Third
+	DialogIcon          string `json:"dialogIcon"`      // None | Stop | Question | Exclamation | Information
+	DialogTimeout       int    `json:"dialogTimeout"`   // segundos, 0 = sem timeout
+	DialogNoWait        bool   `json:"dialogNoWait"`
+	DialogExitOnTimeout bool   `json:"dialogExitOnTimeout"`
+	DialogNotTopMost    bool   `json:"dialogNotTopMost"`
+	DialogForce         bool   `json:"dialogForce"`
 }
 
 // ExecutePSADTVisualNotification executa uma notificacao visual nativa via cmdlets reais do PSAppDeployToolkit.
@@ -759,6 +762,347 @@ func boolEnvValue(v bool) string {
 		return "1"
 	}
 	return "0"
+}
+
+// =============================================================================
+// Novos recursos — Preflight Checks, Environment, Welcome, Restart Prompt
+// =============================================================================
+
+// PSADTPreflightResult agrupa resultados de verificacoes pre-flight do PSADT.
+type PSADTPreflightResult struct {
+	OSName             string `json:"osName"`
+	OSVersion          string `json:"osVersion"`
+	Architecture       string `json:"architecture"`
+	PSVersion          string `json:"psVersion"`
+	IsAdmin            bool   `json:"isAdmin"`
+	RebootPending      bool   `json:"rebootPending"`
+	NetworkAvailable   bool   `json:"networkAvailable"`
+	UserInFocusMode    bool   `json:"userInFocusMode"`
+	ModuleVersion      string `json:"moduleVersion"`
+	ActiveUserSessions int    `json:"activeUserSessions"`
+	Success            bool   `json:"success"`
+	Error              string `json:"error"`
+	CheckedAtUTC       string `json:"checkedAtUtc"`
+}
+
+// PSADTWelcomeResult representa o resultado do Welcome Dialog.
+type PSADTWelcomeResult struct {
+	Success       bool   `json:"success"`
+	Action        string `json:"action"` // displayed, deferred, error
+	Message       string `json:"message"`
+	ExecutedAtUTC string `json:"executedAtUtc"`
+	DurationMS    int64  `json:"durationMs"`
+}
+
+// PSADTRestartPromptResult representa o resultado do Restart Prompt.
+type PSADTRestartPromptResult struct {
+	Success       bool   `json:"success"`
+	Action        string `json:"action"` // restart, defer, timeout, error
+	Message       string `json:"message"`
+	ExecutedAtUTC string `json:"executedAtUtc"`
+	DurationMS    int64  `json:"durationMs"`
+}
+
+// PSADTSessionProperties traz propriedades da sessao ativa (Get-ADTSession).
+type PSADTSessionProperties struct {
+	AppName        string `json:"appName"`
+	AppVendor      string `json:"appVendor"`
+	AppVersion     string `json:"appVersion"`
+	DeploymentType string `json:"deploymentType"`
+	DeployMode     string `json:"deployMode"`
+	LogPath        string `json:"logPath"`
+	LogName        string `json:"logName"`
+	InstallPhase   string `json:"installPhase"`
+	Success        bool   `json:"success"`
+	Error          string `json:"error"`
+	CheckedAtUTC   string `json:"checkedAtUtc"`
+}
+
+// RunPSADTPreflightChecks executa verificacoes pre-flight usando a lib go-psadt.
+func (a *App) RunPSADTPreflightChecks() PSADTPreflightResult {
+	result := PSADTPreflightResult{CheckedAtUTC: time.Now().UTC().Format(time.RFC3339)}
+	if runtime.GOOS != "windows" {
+		result.Error = "PSADT suportado apenas em Windows"
+		a.logs.append("[psadt] preflight checks ignorado: nao e Windows")
+		return result
+	}
+	a.logs.append("[psadt] executando preflight checks via go-psadt...")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	client, err := psadt.NewClient(
+		psadt.WithTimeout(60 * time.Second),
+	)
+	if err != nil {
+		result.Error = fmt.Sprintf("psadt.NewClient: %v", err)
+		a.logs.append("[psadt] preflight [ERRO] " + result.Error)
+		return result
+	}
+	defer client.Close()
+
+	// GetEnvironment — funciona sem sessao
+	env, err := client.GetEnvironment()
+	if err != nil {
+		result.Error = fmt.Sprintf("GetEnvironment: %v", err)
+		a.logs.append("[psadt] preflight [ERRO] " + result.Error)
+		return result
+	}
+
+	result.OSName = env.OS.Name
+	result.OSVersion = env.OS.Version
+	result.Architecture = env.OS.Architecture
+	result.PSVersion = env.PowerShell.PSVersion
+	result.ActiveUserSessions = len(env.Users.LoggedOnUserSessions)
+
+	// Find installed module version from environment
+	result.ModuleVersion = env.Toolkit.Version
+
+	// Abre sessao para verificacoes que exigem contexto ADT
+	session, err := client.OpenSessionWithContext(ctx, pstypes.SessionConfig{
+		AppVendor:      "Discovery",
+		AppName:        "Discovery Agent",
+		AppVersion:     "1.0",
+		DeploymentType: pstypes.DeployInstall,
+		DeployMode:     pstypes.DeployModeSilent,
+	})
+	if err != nil {
+		// Sessao falhou, mas environment ja foi obtido
+		result.Error = fmt.Sprintf("OpenSession: %v", err)
+		a.logs.append("[psadt] preflight [AVISO] " + result.Error)
+		result.Success = true // parcial
+		return result
+	}
+	defer func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer closeCancel()
+		_ = session.CloseWithContext(closeCtx, 0)
+	}()
+
+	if isAdmin, err := session.TestCallerIsAdmin(); err == nil {
+		result.IsAdmin = isAdmin
+	}
+	if rebootInfo, err := session.GetPendingReboot(); err == nil && rebootInfo != nil {
+		result.RebootPending = rebootInfo.IsSystemRebootPending
+	}
+	if online, err := session.TestNetworkConnection(); err == nil {
+		result.NetworkAvailable = online
+	}
+	if inFocus, err := session.TestUserInFocusMode(); err == nil {
+		result.UserInFocusMode = inFocus
+	}
+
+	result.Success = true
+	a.logs.append(fmt.Sprintf("[psadt] preflight concluido: os=%s %s admin=%t reboot=%t net=%t focus=%t",
+		result.OSName, result.OSVersion, result.IsAdmin, result.RebootPending, result.NetworkAvailable, result.UserInFocusMode))
+	return result
+}
+
+// RunPSADTWelcome executa o Welcome Dialog via go-psadt.
+func (a *App) RunPSADTWelcome(closeProcesses string, countdown int) PSADTWelcomeResult {
+	result := PSADTWelcomeResult{ExecutedAtUTC: time.Now().UTC().Format(time.RFC3339)}
+	if runtime.GOOS != "windows" {
+		result.Message = "PSADT suportado apenas em Windows"
+		result.Success = false
+		return result
+	}
+
+	processes := parseProcessList(closeProcesses)
+	if countdown <= 0 {
+		countdown = 120
+	}
+
+	a.logs.append(fmt.Sprintf("[psadt] welcome dialog iniciando: processes=%v countdown=%d", processes, countdown))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	client, err := psadt.NewClient(psadt.WithTimeout(5 * time.Minute))
+	if err != nil {
+		result.Message = fmt.Sprintf("psadt.NewClient: %v", err)
+		return result
+	}
+	defer client.Close()
+
+	session, err := client.OpenSessionWithContext(ctx, pstypes.SessionConfig{
+		AppVendor:      "Discovery",
+		AppName:        "Discovery Agent",
+		AppVersion:     "1.0",
+		DeploymentType: pstypes.DeployInstall,
+		DeployMode:     pstypes.DeployModeInteractive,
+	})
+	if err != nil {
+		result.Message = fmt.Sprintf("OpenSession: %v", err)
+		return result
+	}
+	defer func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer closeCancel()
+		_ = session.CloseWithContext(closeCtx, 0)
+	}()
+
+	start := time.Now()
+	welcomeOpts := pstypes.WelcomeOptions{
+		CloseProcessesCountdown: countdown,
+		CheckDiskSpace:          true,
+		AllowDefer:              true,
+		DeferTimes:              3,
+		Silent:                  false,
+	}
+	if len(processes) > 0 {
+		var defs []pstypes.ProcessDefinition
+		for _, p := range processes {
+			defs = append(defs, pstypes.ProcessDefinition{Name: p})
+		}
+		welcomeOpts.CloseProcesses = defs
+	}
+
+	err = session.ShowInstallationWelcome(welcomeOpts)
+	result.DurationMS = time.Since(start).Milliseconds()
+
+	if err != nil {
+		result.Message = fmt.Sprintf("ShowInstallationWelcome: %v", err)
+		if strings.Contains(strings.ToLower(err.Error()), "defer") {
+			result.Action = "deferred"
+		} else {
+			result.Action = "error"
+		}
+		a.logs.append("[psadt] welcome dialog falhou: " + result.Message)
+		return result
+	}
+
+	result.Success = true
+	result.Action = "displayed"
+	result.Message = "Welcome dialog exibido com sucesso"
+	a.logs.append("[psadt] welcome dialog concluido com sucesso")
+	return result
+}
+
+// RunPSADTRestartPrompt executa o restart prompt via go-psadt.
+func (a *App) RunPSADTRestartPrompt(countdownSeconds int, silentRestart bool) PSADTRestartPromptResult {
+	result := PSADTRestartPromptResult{ExecutedAtUTC: time.Now().UTC().Format(time.RFC3339)}
+	if runtime.GOOS != "windows" {
+		result.Message = "PSADT suportado apenas em Windows"
+		return result
+	}
+
+	if countdownSeconds <= 0 {
+		countdownSeconds = 300
+	}
+
+	a.logs.append(fmt.Sprintf("[psadt] restart prompt: countdown=%d silent=%t", countdownSeconds, silentRestart))
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(countdownSeconds+120)*time.Second)
+	defer cancel()
+
+	client, err := psadt.NewClient(psadt.WithTimeout(time.Duration(countdownSeconds+120) * time.Second))
+	if err != nil {
+		result.Message = fmt.Sprintf("psadt.NewClient: %v", err)
+		return result
+	}
+	defer client.Close()
+
+	session, err := client.OpenSessionWithContext(ctx, pstypes.SessionConfig{
+		AppVendor:      "Discovery",
+		AppName:        "Discovery Agent",
+		AppVersion:     "1.0",
+		DeploymentType: pstypes.DeployInstall,
+		DeployMode:     pstypes.DeployModeInteractive,
+	})
+	if err != nil {
+		result.Message = fmt.Sprintf("OpenSession: %v", err)
+		return result
+	}
+	defer func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer closeCancel()
+		_ = session.CloseWithContext(closeCtx, 0)
+	}()
+
+	start := time.Now()
+	err = session.ShowInstallationRestartPrompt(pstypes.RestartPromptOptions{
+		CountdownSeconds: countdownSeconds,
+		SilentRestart:    silentRestart,
+	})
+	result.DurationMS = time.Since(start).Milliseconds()
+
+	if err != nil {
+		result.Message = fmt.Sprintf("ShowInstallationRestartPrompt: %v", err)
+		result.Action = "error"
+		a.logs.append("[psadt] restart prompt falhou: " + result.Message)
+		return result
+	}
+
+	result.Success = true
+	result.Action = "restart"
+	result.Message = "Restart prompt exibido com sucesso"
+	a.logs.append("[psadt] restart prompt concluido")
+	return result
+}
+
+// GetPSADTSessionProperties obtem propriedades da sessao ativa via Get-ADTSession.
+func (a *App) GetPSADTSessionProperties() PSADTSessionProperties {
+	result := PSADTSessionProperties{CheckedAtUTC: time.Now().UTC().Format(time.RFC3339)}
+	if runtime.GOOS != "windows" {
+		result.Error = "PSADT suportado apenas em Windows"
+		return result
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	client, err := psadt.NewClient(psadt.WithTimeout(30 * time.Second))
+	if err != nil {
+		result.Error = fmt.Sprintf("psadt.NewClient: %v", err)
+		return result
+	}
+	defer client.Close()
+
+	session, err := client.OpenSessionWithContext(ctx, pstypes.SessionConfig{
+		AppVendor:      "Discovery",
+		AppName:        "Discovery Agent",
+		AppVersion:     "1.0",
+		DeploymentType: pstypes.DeployInstall,
+		DeployMode:     pstypes.DeployModeSilent,
+	})
+	if err != nil {
+		result.Error = fmt.Sprintf("OpenSession: %v", err)
+		return result
+	}
+	defer func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer closeCancel()
+		_ = session.CloseWithContext(closeCtx, 0)
+	}()
+
+	props, err := session.GetSession()
+	if err != nil {
+		result.Error = fmt.Sprintf("GetSession: %v", err)
+		return result
+	}
+
+	result.Success = true
+	result.AppName = props.AppName
+	result.AppVendor = props.AppVendor
+	result.AppVersion = props.AppVersion
+	result.DeploymentType = props.DeploymentType
+	result.DeployMode = props.DeployMode
+	result.LogPath = props.LogPath
+	result.LogName = props.LogName
+	result.InstallPhase = props.InstallPhase
+	return result
+}
+
+func parseProcessList(commaSep string) []string {
+	raw := strings.Split(commaSep, ",")
+	var out []string
+	for _, r := range raw {
+		trimmed := strings.TrimSpace(r)
+		if trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }
 
 func normalizeDialogButtons(raw string) string {

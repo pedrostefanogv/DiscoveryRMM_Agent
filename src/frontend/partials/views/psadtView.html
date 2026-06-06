@@ -273,6 +273,70 @@
       </article>
     </section>
 
+    <!-- ===== NOVAS SEÇÕES: Preflight, Welcome, Restart, Session Properties ===== -->
+    <section class="panel">
+      <h2>🔍 Preflight Checks <span style="font-weight:400;font-size:0.8rem;color:var(--muted);">(go-psadt nativo)</span></h2>
+      <div class="meta" style="margin-bottom:10px;">Executa verificações do sistema via lib go-psadt: ambiente, admin, reboot pendente, rede, Focus Assist, sessão.</div>
+      <div class="actions" style="margin-top:8px;">
+        <button id="runPreflightBtn" class="btn primary">Executar Preflight Checks</button>
+      </div>
+      <div id="preflightStatus" class="status"></div>
+      <div class="output-wrap small" style="margin-top:10px;">
+        <pre id="preflightOutput" style="margin:0;white-space:pre-wrap;font-size:0.85rem;font-family:'IBM Plex Mono',monospace;"></pre>
+      </div>
+    </section>
+
+    <section class="grid">
+      <article class="panel">
+        <h2>🚪 Welcome Dialog</h2>
+        <div class="meta" style="margin-bottom:8px;">Show-ADTInstallationWelcome via go-psadt. Fecha processos, verifica disco, permite adiar.</div>
+        <div class="form-grid">
+          <div>
+            <label for="welcomeProcesses">Processos (csv)</label>
+            <input id="welcomeProcesses" type="text" value="msiexec,setup,installer" placeholder="msiexec,setup" />
+          </div>
+          <div>
+            <label for="welcomeCountdown">Countdown (seg)</label>
+            <input id="welcomeCountdown" type="number" value="120" min="10" max="600" />
+          </div>
+        </div>
+        <div class="actions" style="margin-top:10px;">
+          <button id="runWelcomeBtn" class="btn primary">Exibir Welcome</button>
+        </div>
+        <div id="welcomeStatus" class="status"></div>
+      </article>
+
+      <article class="panel">
+        <h2>🔄 Restart Prompt</h2>
+        <div class="meta" style="margin-bottom:8px;">Show-ADTInstallationRestartPrompt via go-psadt. Contagem regressiva para reboot.</div>
+        <div class="form-grid">
+          <div>
+            <label for="restartCountdown">Countdown (seg)</label>
+            <input id="restartCountdown" type="number" value="300" min="30" max="3600" />
+          </div>
+          <div style="display:flex;align-items:flex-end;padding-bottom:2px;">
+            <label style="display:flex;align-items:center;gap:5px;font-size:0.82rem;color:var(--text);cursor:pointer;margin-bottom:0;">
+              <input id="restartSilent" type="checkbox" /> Silent Restart
+            </label>
+          </div>
+        </div>
+        <div class="actions" style="margin-top:10px;">
+          <button id="runRestartBtn" class="btn primary">Exibir Restart Prompt</button>
+        </div>
+        <div id="restartStatus" class="status"></div>
+      </article>
+    </section>
+
+    <section class="panel">
+      <h2>📋 Session Properties</h2>
+      <div class="meta" style="margin-bottom:8px;">Get-ADTSession via go-psadt. Propriedades da sessão ativa.</div>
+      <div class="actions" style="margin-top:8px;">
+        <button id="loadSessionPropsBtn" class="btn primary">Carregar Propriedades</button>
+      </div>
+      <div id="sessionPropsStatus" class="status"></div>
+      <div id="sessionPropsKvs" class="kvs" style="margin-top:10px;"></div>
+    </section>
+
     <section class="grid">
       <article class="panel">
         <h2>Executar Script PSADT Teste</h2>

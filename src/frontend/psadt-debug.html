@@ -59,6 +59,7 @@
     .preview-item.success{border-left:4px solid var(--success)}
 
     .output-block{margin-top:10px;background:var(--bg);padding:10px 12px;border-radius:var(--radius);border-left:3px solid var(--muted);max-height:200px;overflow:auto}
+    .output-block.large{max-height:400px}
     .output-block pre{margin:0;white-space:pre-wrap;font-size:.82rem;font-family:'JetBrains Mono',monospace}
 
     .modal{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;align-items:center;justify-content:center;z-index:9999;padding:12px}.modal.open{display:flex}
@@ -142,6 +143,70 @@
       </article>
     </section>
 
+    <!-- ===== NOVAS SEÇÕES: Preflight, Welcome, Restart, Session Properties ===== -->
+    <section class="panel">
+      <h2>🔍 Preflight Checks <span style="font-weight:400;font-size:.78rem;color:var(--muted)">(go-psadt nativo)</span></h2>
+      <div class="meta" style="margin-bottom:10px">Executa verificações do sistema via lib go-psadt: ambiente, admin, reboot pendente, rede, Focus Assist, sessão.</div>
+      <div class="actions" style="margin-top:8px">
+        <button id="runPreflightBtn" class="btn btn-primary">Executar Preflight Checks</button>
+      </div>
+      <div id="preflightStatus" class="status"></div>
+      <div class="output-block" style="margin-top:10px"><pre id="preflightOutput"></pre></div>
+    </section>
+
+    <section class="grid">
+      <article class="panel">
+        <h2>🚪 Welcome Dialog</h2>
+        <div class="meta" style="margin-bottom:8px">Show-ADTInstallationWelcome via go-psadt. Fecha processos, verifica disco, permite adiar.</div>
+        <div class="form-grid">
+          <div><label for="welcomeProcesses">Processos (csv)</label><input id="welcomeProcesses" type="text" value="msiexec,setup,installer" placeholder="msiexec,setup"></div>
+          <div><label for="welcomeCountdown">Countdown (seg)</label><input id="welcomeCountdown" type="number" value="120" min="10" max="600"></div>
+        </div>
+        <div class="actions" style="margin-top:10px"><button id="runWelcomeBtn" class="btn btn-primary">Exibir Welcome</button></div>
+        <div id="welcomeStatus" class="status"></div>
+      </article>
+
+      <article class="panel">
+        <h2>🔄 Restart Prompt</h2>
+        <div class="meta" style="margin-bottom:8px">Show-ADTInstallationRestartPrompt via go-psadt. Contagem regressiva para reboot.</div>
+        <div class="form-grid">
+          <div><label for="restartCountdown">Countdown (seg)</label><input id="restartCountdown" type="number" value="300" min="30" max="3600"></div>
+          <div style="display:flex;align-items:flex-end;padding-bottom:2px">
+            <label style="display:flex;align-items:center;gap:5px;font-size:.82rem;color:var(--text);cursor:pointer;margin-bottom:0">
+              <input id="restartSilent" type="checkbox"> Silent Restart
+            </label>
+          </div>
+        </div>
+        <div class="actions" style="margin-top:10px"><button id="runRestartBtn" class="btn btn-primary">Exibir Restart Prompt</button></div>
+        <div id="restartStatus" class="status"></div>
+      </article>
+    </section>
+
+    <section class="grid">
+      <article class="panel">
+        <h2>📋 Session Properties</h2>
+        <div class="meta" style="margin-bottom:8px">Get-ADTSession via go-psadt. Propriedades da sessão ativa.</div>
+        <div class="actions" style="margin-top:8px"><button id="loadSessionPropsBtn" class="btn btn-primary">Carregar Propriedades</button></div>
+        <div id="sessionPropsStatus" class="status"></div>
+        <div id="sessionPropsKvs" class="kvs" style="margin-top:10px"></div>
+      </article>
+
+      <article class="panel">
+        <h2>⚙️ Executar Script PSADT</h2>
+        <div class="meta" style="margin-bottom:8px">Valida módulo, versão e comandos exportados do PSADT.</div>
+        <div class="form-grid">
+          <div><label for="executeAppName">App Name</label><input id="executeAppName" type="text" value="TestApp"></div>
+          <div><label for="executeAppVersion">Versão</label><input id="executeAppVersion" type="text" value="1.0.0"></div>
+        </div>
+        <div class="actions" style="margin-top:10px">
+          <button id="executeTestBtn" class="btn btn-primary">Executar Script de Teste</button>
+          <button id="getTemplateBtn" class="btn">Obter Template</button>
+        </div>
+        <div id="executeStatus" class="status"></div>
+        <div class="output-block large"><pre id="executeOutput"></pre></div>
+      </article>
+    </section>
+
     <section class="panel">
       <h2>Notificação Visual Nativa PSADT</h2>
       <div class="meta" style="margin-bottom:10px">Executa cmdlets PSADT reais: <code class="mono" style="font-size:.78rem">Show-ADTBalloonTip</code>, <code class="mono" style="font-size:.78rem">Show-ADTInstallationPrompt</code>, <code class="mono" style="font-size:.78rem">Show-ADTInstallationProgress</code> e <code class="mono" style="font-size:.78rem">Show-ADTDialogBox</code>.</div>
@@ -165,6 +230,19 @@
       <div class="actions" style="margin-top:10px"><button id="visualNotifBtn" class="btn btn-primary">Executar Notificação PSADT</button></div>
       <div id="visualNotifStatus" class="status"></div>
       <div class="output-block"><pre id="visualNotifOutput"></pre></div>
+    </section>
+
+    <section class="panel">
+      <h2>📝 Script PSADT Customizado</h2>
+      <div class="meta" style="margin-bottom:8px">Execute scripts PowerShell arbitrários com contexto PSADT. Use o template como base.</div>
+      <div class="form-grid">
+        <div style="grid-column:1/-1"><label for="customScript">Script PowerShell</label><textarea id="customScript" rows="14" style="font-family:'JetBrains Mono',monospace;font-size:.8rem"></textarea></div>
+      </div>
+      <div class="actions" style="margin-top:10px">
+        <button id="executeCustomBtn" class="btn btn-primary">Executar Script Customizado</button>
+      </div>
+      <div id="customStatus" class="status"></div>
+      <div class="output-block large"><pre id="customOutput"></pre></div>
     </section>
   </div>
 
