@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"os"
 	"runtime"
+	runtimeDebug "runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -25,6 +26,7 @@ type StatusOverview struct {
 	NonCriticalDeferredUntil  string    `json:"nonCriticalDeferredUntilUtc,omitempty"`
 	NonCriticalDeferredReason string    `json:"nonCriticalDeferredReason,omitempty"`
 	AppVersion                string    `json:"appVersion"`
+	BuildDateUTC              string    `json:"buildDateUtc,omitempty"`
 	OSName                    string    `json:"osName"`
 	OSVersion                 string    `json:"osVersion"`
 	LastInventoryCollected    string    `json:"lastInventoryCollected"`
@@ -53,6 +55,7 @@ func (a *App) GetStatusOverview() StatusOverview {
 		LastGlobalPongAtUTC: strings.TrimSpace(agent.LastGlobalPongAtUTC),
 		GlobalPongStale:     agent.GlobalPongStale,
 		AppVersion:          strings.TrimSpace(Version),
+		BuildDateUTC:        resolveAgentBuildDateUTC(),
 		OSName:              runtime.GOOS,
 		OSVersion:           runtime.GOARCH,
 		CheckedAtUTC:        time.Now().UTC(),
@@ -280,4 +283,44 @@ func isRealtimeUnauthorizedError(err error) bool {
 		strings.Contains(msg, "unauthorized") ||
 		strings.Contains(msg, "autenticação necessária") ||
 		strings.Contains(msg, "autenticacao necessaria")
+}
+
+func resolveAgentBuildDateUTC() string {
+	if vcsTime := readBuildInfoVCSTime(); !vcsTime.IsZero() {
+		return vcsTime.UTC().Format(time.RFC3339)
+	}
+
+	execPath, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	info, err := os.Stat(execPath)
+	if err != nil {
+		return ""
+	}
+	if info.ModTime().IsZero() {
+		return ""
+	}
+
+	return info.ModTime().UTC().Format(time.RFC3339)
+}
+
+func readBuildInfoVCSTime() time.Time {
+	buildInfo, ok := runtimeDebug.ReadBuildInfo()
+	if !ok || buildInfo == nil {
+		return time.Time{}
+	}
+
+	for _, setting := range buildInfo.Settings {
+		if setting.Key != "vcs.time" {
+			continue
+		}
+		parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(setting.Value))
+		if err != nil {
+			return time.Time{}
+		}
+		return parsed.UTC()
+	}
+
+	return time.Time{}
 }

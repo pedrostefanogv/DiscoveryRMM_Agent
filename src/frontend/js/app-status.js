@@ -1,14 +1,13 @@
 "use strict";
 
 var statusPollId = null;
-var serviceHealthPollId = null;
 
 const statusRefreshBtnEl = document.getElementById('statusRefreshBtn');
 const statusConnectionDotEl = document.getElementById('statusConnectionDot');
 const statusConnectionLabelEl = document.getElementById('statusConnectionLabel');
 const statusConnectionDetailEl = document.getElementById('statusConnectionDetail');
 const statusAppVersionEl = document.getElementById('statusAppVersion');
-const statusCheckedAtEl = document.getElementById('statusCheckedAt');
+const statusBuildDateEl = document.getElementById('statusBuildDate');
 const statusOSNameEl = document.getElementById('statusOSName');
 const statusOSVersionEl = document.getElementById('statusOSVersion');
 const statusRealtimeEl = document.getElementById('statusRealtime');
@@ -16,8 +15,6 @@ const statusRealtimeAgentsEl = document.getElementById('statusRealtimeAgents');
 const statusServerPongAtEl = document.getElementById('statusServerPongAt');
 const statusNonCriticalTrafficEl = document.getElementById('statusNonCriticalTraffic');
 const statusMessageEl = document.getElementById('statusMessage');
-const serviceHealthDotEl = document.getElementById('serviceHealthDot');
-const serviceHealthLabelEl = document.getElementById('serviceHealthLabel');
 
 function statusSafe(value, fallback) {
   if (value === null || value === undefined || String(value).trim() === '') {
@@ -139,7 +136,10 @@ function renderStatusOverview(data) {
   }
 
   if (statusAppVersionEl) statusAppVersionEl.textContent = statusSafe(data && data.appVersion, 'dev');
-  if (statusCheckedAtEl) statusCheckedAtEl.textContent = formatStatusDate(data && data.checkedAtUtc);
+  if (statusBuildDateEl) {
+    var buildDateUtc = data && data.buildDateUtc;
+    statusBuildDateEl.textContent = buildDateUtc ? formatStatusDate(buildDateUtc) : translate('common.unavailable');
+  }
   if (statusOSNameEl) statusOSNameEl.textContent = statusSafe(data && data.osName, '-');
   if (statusOSVersionEl) statusOSVersionEl.textContent = statusSafe(data && data.osVersion, '-');
 
@@ -184,60 +184,6 @@ function renderStatusError(message) {
   }
 }
 
-function renderServiceHealth(health) {
-  if (health && health.service_only === false) {
-    var localRuntimeLabel = translate('status.localRuntimeMode');
-    if (serviceHealthDotEl) serviceHealthDotEl.className = 'agent-status-indicator online';
-    if (serviceHealthLabelEl) serviceHealthLabelEl.textContent = localRuntimeLabel;
-    updateTopbarServiceIndicator('online', localRuntimeLabel);
-    return;
-  }
-
-  if (!health) {
-    if (serviceHealthDotEl) serviceHealthDotEl.className = 'agent-status-indicator offline';
-    if (serviceHealthLabelEl) serviceHealthLabelEl.textContent = translate('status.serviceUnavailable');
-    updateTopbarServiceIndicator('offline', translate('status.serviceUnavailable'));
-    return;
-  }
-
-  if (health.error) {
-    if (serviceHealthDotEl) serviceHealthDotEl.className = 'agent-status-indicator offline';
-    if (serviceHealthLabelEl) serviceHealthLabelEl.textContent = translate('status.serviceUnavailable');
-    updateTopbarServiceIndicator('offline', translate('status.serviceUnavailable'));
-    return;
-  }
-
-  var running = !!health.running;
-  var unhealthyCount = health.unhealthy_count || 0;
-  var degradedCount = health.degraded_count || 0;
-  var hasProblems = unhealthyCount > 0 || degradedCount > 0;
-
-  var statusClass = 'online';
-  var statusLabel = translate('status.serviceOk');
-  if (!running) {
-    statusClass = 'offline';
-    statusLabel = translate('status.serviceUnavailable');
-  } else if (hasProblems) {
-    statusClass = 'warning';
-    statusLabel = translate('status.serviceUnavailable');
-  }
-
-  if (serviceHealthDotEl) serviceHealthDotEl.className = 'agent-status-indicator ' + statusClass;
-  if (serviceHealthLabelEl) serviceHealthLabelEl.textContent = statusLabel;
-}
-
-async function loadServiceHealth() {
-  if (document.hidden) {
-    return;
-  }
-  try {
-    var health = await appApi().GetServiceHealth();
-    renderServiceHealth(health || { error: 'Resposta vazia' });
-  } catch (error) {
-    renderServiceHealth({ error: error && error.message ? error.message : String(error) });
-  }
-}
-
 async function loadStatusOverview() {
   if (document.hidden) {
     return;
@@ -256,10 +202,6 @@ async function loadStatusOverview() {
   } catch (error) {
     renderStatusError(error && error.message ? error.message : String(error));
   }
-  // Carregar health do service em paralelo
-  loadServiceHealth().catch(function() {
-    // Ignorar erro de service health para não interromper status geral
-  });
 }
 
 function startStatusPoll() {
@@ -272,10 +214,6 @@ function stopStatusPoll() {
   if (statusPollId) {
     clearInterval(statusPollId);
     statusPollId = null;
-  }
-  if (serviceHealthPollId) {
-    clearInterval(serviceHealthPollId);
-    serviceHealthPollId = null;
   }
 }
 
