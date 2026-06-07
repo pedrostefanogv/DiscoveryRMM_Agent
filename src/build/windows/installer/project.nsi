@@ -713,10 +713,27 @@ config_done:
 FunctionEnd
 
 Function LaunchInstalledApp
-   ${If} "${BUILD_BOOTSTRAP_INSTALL}" == "1"
+   # Em bootstrap, a segunda etapa instala em modo silencioso e o Finish page
+   # deste instalador e o unico ponto interativo para abrir a UI imediatamente.
+   StrCpy $R0 "$INSTDIR\${PRODUCT_EXECUTABLE}"
+   ${If} ${FileExists} "$R0"
+      DetailPrint "Abrindo agente em $R0"
+      Exec '"$R0"'
       Return
    ${EndIf}
-   Exec '"$INSTDIR\${PRODUCT_EXECUTABLE}"'
+
+   # Fallback: usar caminho registrado pelo instalador completo.
+   ReadRegStr $R1 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${UNINST_KEY_NAME}" "InstallLocation"
+   ${If} $R1 != ""
+      StrCpy $R0 "$R1\${PRODUCT_EXECUTABLE}"
+      ${If} ${FileExists} "$R0"
+         DetailPrint "Abrindo agente em $R0"
+         Exec '"$R0"'
+         Return
+      ${EndIf}
+   ${EndIf}
+
+   DetailPrint "Aviso: nao foi possivel localizar ${PRODUCT_EXECUTABLE} para abrir automaticamente."
 FunctionEnd
 
 Function DownloadAndRunStage2
