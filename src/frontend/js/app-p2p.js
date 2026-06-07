@@ -155,7 +155,7 @@ function p2pRenderStatus(status) {
   rows.push(['Replicacoes', String(metrics.replicationsSucceeded || 0) + ' ok / ' + String(metrics.replicationsFailed || 0) + ' falhas']);
   rows.push(['Fila', String(metrics.queuedReplications || 0) + ' aguardando / ' + String(metrics.activeReplications || 0) + ' ativas']);
   rows.push(['Auto sync', String(metrics.autoDistributionRuns || 0)]);
-  rows.push(['Bytes P2P', String(metrics.bytesServed || 0) + ' up / ' + String(metrics.bytesDownloaded || 0) + ' down']);
+  rows.push(['Bytes P2P', formatP2PBytes(metrics.bytesServed || 0) + ' up / ' + formatP2PBytes(metrics.bytesDownloaded || 0) + ' down']);
 
   statusGrid.innerHTML = rows.map(function (entry) {
     return '<div class="fact"><div class="k">' + p2pEscapeHtml(entry[0]) + '</div><div class="v mono">' + p2pEscapeHtml(entry[1]) + '</div></div>';
