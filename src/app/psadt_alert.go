@@ -385,7 +385,7 @@ func (a *App) showPowerActionWarning(ctx context.Context, action string, delaySe
 		a.logs.append(fmt.Sprintf("[agent] psadt-%s-prompt [EXEC] psExe=%s arch=%s", action, psExe, runtime.GOARCH))
 	}
 
-	cmd := exec.CommandContext(execCtx, psExe, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script)
+	cmd := exec.CommandContext(execCtx, psExe, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script)
 	processutil.HideWindow(cmd)
 	outBytes, err := cmd.CombinedOutput()
 	rawOutput := strings.TrimSpace(string(outBytes))
@@ -423,6 +423,14 @@ func (a *App) showPowerActionWarning(ctx context.Context, action string, delaySe
 		return "proceed", nil
 	}
 
+	// force=false: usuario decidiu via prompt PSADT.
+	// Fallbacks explicitos (modulo/sessao indisponiveis) retornam proceed
+	// para manter compatibilidade com shutdown nativo do Windows.
+	if strings.HasPrefix(result, "fallback_") {
+		a.logs.append(fmt.Sprintf("[agent] psadt-%s-prompt [FALLBACK-SCRIPT] token=%s", action, result))
+		return "proceed", nil
+	}
+
 	// force=false: usuario decidiu via Dialog Yes/No.
 	if result == "yes" || result == "ok" || result == "proceed" {
 		return "proceed", nil
@@ -456,14 +464,14 @@ func buildPowerActionWarningScript(action string, delaySeconds int, force bool, 
 		"try {\n" +
 		"    Import-Module -Name PSAppDeployToolkit -ErrorAction Stop\n" +
 		"} catch {\n" +
-		"    Write-Output 'proceed'; exit 0\n" +
+		"    Write-Output 'fallback_module_missing'; exit 0\n" +
 		"}\n" +
 		"try {\n" +
 		"    Open-ADTSession -SessionState $ExecutionContext.SessionState" +
 		" -AppName 'Discovery' -AppVersion '1.0' -AppVendor 'Discovery'" +
 		" -DeploymentType 'Install' -DeployMode 'Interactive'\n" +
 		"} catch {\n" +
-		"    Write-Output 'proceed'; exit 0\n" +
+		"    Write-Output 'fallback_open_session_failed'; exit 0\n" +
 		"}\n"
 
 	closeSession := "try { Close-ADTSession -ExitCode 0 } catch {}\n"
@@ -479,7 +487,7 @@ func buildPowerActionWarningScript(action string, delaySeconds int, force bool, 
 			closeSession +
 			"exit 0\n"
 		timeoutVal := 30 * time.Second
-		return header + body, timeoutVal
+		return body, timeoutVal
 	}
 
 	// Modo nao-forcado: prompt interativo Yes/No via Show-ADTInstallationPrompt.
@@ -506,7 +514,7 @@ func buildPowerActionWarningScript(action string, delaySeconds int, force bool, 
 		closeSession +
 		"exit 0\n"
 	timeoutVal := time.Duration(delaySeconds+150) * time.Second
-	return header + body, timeoutVal
+	return body, timeoutVal
 }
 
 // resolveSystem32Exe returns the absolute path to an executable in System32.
