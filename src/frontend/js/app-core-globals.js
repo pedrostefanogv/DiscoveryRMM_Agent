@@ -111,6 +111,7 @@ const commentInputEl = document.getElementById('commentInput');
 const submitCommentBtnEl = document.getElementById('submitCommentBtn');
 const ticketFormStatusEl = document.getElementById('ticketFormStatus');
 const kbSearchInputEl = document.getElementById('kbSearchInput');
+const kbRefreshBtn = document.getElementById('kbRefreshBtn');
 const kbArticlesListEl = document.getElementById('kbArticlesList');
 const kbArticleDetailEl = document.getElementById('kbArticleDetail');
 const kbDetailTitleEl = document.getElementById('kbDetailTitle');

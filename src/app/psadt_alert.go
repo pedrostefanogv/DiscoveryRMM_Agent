@@ -402,6 +402,10 @@ func (a *App) showPowerActionWarning(ctx context.Context, action string, delaySe
 		if rawOutput != "" {
 			truncated := truncateStr(rawOutput, 2000)
 			a.logs.append(fmt.Sprintf("[agent] psadt-%s-prompt [ERRO-OUTPUT] class=%s output=%s", action, errClass, truncated))
+			tail := tailStr(rawOutput, 700)
+			if tail != "" {
+				a.logs.append(fmt.Sprintf("[agent] psadt-%s-prompt [ERRO-TAIL] class=%s tail=%s", action, errClass, tail))
+			}
 		}
 		// Fallback: prossegue com shutdown.exe nativo do Windows.
 		a.logs.append(fmt.Sprintf("[agent] psadt-%s-prompt [FALLBACK] class=%s — usando shutdown.exe com dialogo nativo do Windows", action, errClass))
@@ -501,6 +505,9 @@ func buildPowerActionWarningScript(action string, delaySeconds int, force bool, 
 	//   "Yes" / "Sim"   -> proceed
 	//   "No" / "Nao"     -> deferred
 	//   Timeout           -> deferred
+	// Compatibilidade: em PSADT 4.1.8, Show-ADTInstallationPrompt aceita
+	// -NotTopMost, mas nao -TopMost. Mantemos o comportamento padrao
+	// (topmost=true) sem forcar parametro para evitar NamedParameterNotFound.
 	body := header +
 		"$promptResult = Show-ADTInstallationPrompt" +
 		fmt.Sprintf(" -Message %s", psEscape(message)) +
@@ -508,7 +515,7 @@ func buildPowerActionWarningScript(action string, delaySeconds int, force bool, 
 		" -ButtonLeftText 'Sim'" +
 		" -ButtonRightText 'Não'" +
 		fmt.Sprintf(" -Timeout %d", delaySeconds+120) +
-		" -TopMost\n" +
+		"\n" +
 		"$promptResult = [string]($promptResult)\n" +
 		"if ($promptResult -like '*Sim*') { Write-Output 'proceed' } else { Write-Output 'deferred' }\n" +
 		closeSession +
@@ -628,6 +635,7 @@ func (a *App) executeSystemPowerAction(_ context.Context, action string, delaySe
 //   - format_file_corrupt:       Arquivo .ps1xml corrompido (ex: Dism.Format.ps1xml com NUL bytes)
 //   - module_not_found:          PSAppDeployToolkit nao encontrado
 //   - module_import_failed:      Modulo encontrado mas falha ao carregar (ex: dependencias)
+//   - invalid_parameter:         Parametro invalido para cmdlet (ex: -TopMost nao suportado)
 //   - session_open_failed:       Open-ADTSession falhou
 //   - cmdlet_not_found:          Cmdlet PSADT nao reconhecido
 //   - cmdlet_failed:             Cmdlet PSADT executou mas retornou erro
@@ -671,10 +679,12 @@ func classifyPsadtPowerShellError(output string, err error) string {
 		return "module_import_failed"
 	}
 
-	// 5. Sessao PSADT falhou ao abrir
-	if strings.Contains(lower, "open-adtsession") &&
-		(strings.Contains(lower, "falha") || strings.Contains(lower, "erro") || strings.Contains(lower, "error")) {
-		return "session_open_failed"
+	// 5. Parametro invalido (ex: -TopMost em cmdlet que nao suporta)
+	if strings.Contains(lower, "namedparameternotfound") ||
+		strings.Contains(lower, "cannot find a parameter that matches parameter name") ||
+		strings.Contains(lower, "não é possível localizar um parâmetro que coincida com o nome de parâmetro") ||
+		strings.Contains(lower, "parameterbindingexception") {
+		return "invalid_parameter"
 	}
 
 	// 6. Cmdlet PSADT nao reconhecido
@@ -684,12 +694,19 @@ func classifyPsadtPowerShellError(output string, err error) string {
 		return "cmdlet_not_found"
 	}
 
-	// 7. Cmdlet executou mas reportou erro via Write-Error
+	// 7. Sessao PSADT falhou ao abrir
+	if strings.Contains(lower, "open-adtsession :") ||
+		strings.Contains(lower, "[open-adtsession] [error]") ||
+		strings.Contains(lower, "fallback_open_session_failed") {
+		return "session_open_failed"
+	}
+
+	// 8. Cmdlet executou mas reportou erro via Write-Error
 	if strings.Contains(lower, "write-error") || strings.Contains(lower, "writeerror") {
 		return "cmdlet_failed"
 	}
 
-	// 8. Exit code especifico do script (1=import, 2=session, 3+=cmdlet)
+	// 9. Exit code especifico do script (1=import, 2=session, 3+=cmdlet)
 	if exitErr, ok := err.(*exec.ExitError); ok {
 		return fmt.Sprintf("exit_code_%d", exitErr.ExitCode())
 	}
@@ -703,14 +720,35 @@ func truncateStr(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
 	}
-	cut := maxLen - 30
-	if cut < 50 {
-		cut = maxLen - 10
+	if maxLen < 80 {
+		return s[:maxLen]
 	}
-	if cut < 0 {
-		cut = 200
+	headLen := int(float64(maxLen) * 0.65)
+	tailLen := maxLen - headLen - 40
+	if tailLen < 20 {
+		tailLen = 20
+		headLen = maxLen - tailLen - 40
 	}
-	return s[:cut] + fmt.Sprintf("... (truncado %d bytes)", len(s)-maxLen)
+	if headLen < 20 || tailLen < 20 || headLen+tailLen >= len(s) {
+		return s[:maxLen]
+	}
+	omitted := len(s) - headLen - tailLen
+	if omitted < 0 {
+		omitted = 0
+	}
+	return s[:headLen] + fmt.Sprintf("\n... (truncado %d bytes) ...\n", omitted) + s[len(s)-tailLen:]
+}
+
+// tailStr retorna apenas o final da string, util para capturar a causa real
+// do erro quando logs verbosos de inicializacao ocupam o inicio do output.
+func tailStr(s string, maxLen int) string {
+	if maxLen <= 0 || s == "" {
+		return ""
+	}
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[len(s)-maxLen:]
 }
 
 // extractLastLine extrai a ultima linha nao-vazia de uma string multi-linha.

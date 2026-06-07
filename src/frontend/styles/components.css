@@ -609,6 +609,7 @@
 .store-card {
   height: 320px;
   cursor: pointer;
+  gap: 7px;
 }
 
 .store-card-top {
@@ -625,15 +626,19 @@
 }
 
 .store-card h3 {
-  min-height: 2.4em;
-  line-height: 1.2;
+  min-height: 1.5em;
+  line-height: 1.15;
   overflow: hidden;
+}
+
+.store-card .meta {
+  line-height: 1.15;
 }
 
 .store-card .desc {
   flex: 1;
   min-height: 0;
-  max-height: 4.2em;
+  max-height: 5.2em;
   overflow: hidden;
 }
 

@@ -109,6 +109,12 @@ async function loadKnowledgeBase() {
 }
 
 function initKnowledge() {
+  if (kbRefreshBtn) {
+    kbRefreshBtn.addEventListener('click', function () {
+      loadKnowledgeBase();
+    });
+  }
+
   if (kbArticlesListEl) {
     kbArticlesListEl.addEventListener('click', function (e) {
       var btn = e.target.closest('.kb-article-card');
