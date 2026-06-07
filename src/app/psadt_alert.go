@@ -435,7 +435,9 @@ func (a *App) showPowerActionWarning(ctx context.Context, action string, delaySe
 //
 //   - force=true:  Show-ADTBalloonTip — balloon informativo (nao-bloqueante).
 //     O shutdown e inevitavel, o balloon apenas notifica.
-//   - force=false: Show-ADTDialogBox com Yes/No — usuario decide se prossegue.
+//   - force=false: Show-ADTInstallationPrompt com botoes Sim/Nao — usuario decide se prossegue.
+//     Usa Invoke-ADTClientServerOperation (processo separado na sessao do usuario)
+//     para garantir que a UI aparece mesmo quando o caller Go usa HideWindow.
 //
 // Se o modulo PSADT nao estiver disponivel, retorna 'proceed' para fallback
 // com shutdown.exe (dialogo nativo do Windows).
@@ -480,21 +482,27 @@ func buildPowerActionWarningScript(action string, delaySeconds int, force bool, 
 		return header + body, timeoutVal
 	}
 
-	// Modo nao-forcado: Dialog Yes/No interativo.
-	// O usuario decide se o sistema deve ser reiniciado/desligado.
-	// Yes -> 'proceed', No/Timeout -> 'deferred'.
+	// Modo nao-forcado: prompt interativo Yes/No via Show-ADTInstallationPrompt.
+	// IMPORTANTE: Usamos Show-ADTInstallationPrompt em vez de Show-ADTDialogBox porque
+	// Show-ADTDialogBox tenta criar WPF diretamente no processo atual — que nao tem
+	// contexto de janela devido ao HideWindow/CREATE_NO_WINDOW aplicado pelo Go.
+	// Show-ADTInstallationPrompt usa Invoke-ADTClientServerOperation, que spawna um
+	// processo separado na sessao do usuario logado com contexto de janela real.
+	//
+	// Retorno: PSADT escreve "Resultado: <texto_do_botao>" no stdout.
+	//   "Yes" / "Sim"   -> proceed
+	//   "No" / "Nao"     -> deferred
+	//   Timeout           -> deferred
 	body := header +
-		"$dialogParams = @{\n" +
-		fmt.Sprintf("  Title = %s\n", psEscape(title)) +
-		fmt.Sprintf("  Text = %s\n", psEscape(message)) +
-		"  Buttons = 'YesNo'\n" +
-		"  DefaultButton = 'First'\n" +
-		"  Icon = 'Warning'\n" +
-		fmt.Sprintf("  Timeout = %d\n", delaySeconds+120) +
-		"  ExitOnTimeout = $true\n" +
-		"}\n" +
-		"$adtResult = Show-ADTDialogBox @dialogParams\n" +
-		"if ($adtResult -eq 'Yes') { Write-Output 'proceed' } else { Write-Output 'deferred' }\n" +
+		"$promptResult = Show-ADTInstallationPrompt" +
+		fmt.Sprintf(" -Message %s", psEscape(message)) +
+		fmt.Sprintf(" -Title %s", psEscape(title)) +
+		" -ButtonLeftText 'Sim'" +
+		" -ButtonRightText 'Não'" +
+		fmt.Sprintf(" -Timeout %d", delaySeconds+120) +
+		" -TopMost\n" +
+		"$promptResult = [string]($promptResult)\n" +
+		"if ($promptResult -like '*Sim*') { Write-Output 'proceed' } else { Write-Output 'deferred' }\n" +
 		closeSession +
 		"exit 0\n"
 	timeoutVal := time.Duration(delaySeconds+150) * time.Second
