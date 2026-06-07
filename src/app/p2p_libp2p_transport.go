@@ -304,10 +304,49 @@ func handleStreamArtifactGet(s network.Stream, transfer *p2pTransferServer) {
 			return
 		}
 	}
-	if transfer.app != nil && transfer.app.p2pCoord != nil {
-		transfer.app.p2pCoord.recordBytesServed(chunkLen)
+
+	var coord *p2pCoordinator
+	if transfer.app != nil {
+		coord = transfer.app.p2pCoord
 	}
-	_, _ = io.Copy(s, io.LimitReader(f, chunkLen))
+	requesterID := strings.TrimSpace(req.RequesterID)
+	if requesterID == "" {
+		requesterID = "peer-remote"
+	}
+
+	reader := io.LimitReader(f, chunkLen)
+	if coord != nil {
+		reader = newProgressReader(reader, chunkLen, func(readSoFar int64) {
+			coord.emitTransferProgress(p2pTransferProgress{
+				ArtifactName: req.ArtifactName,
+				PeerID:       requesterID,
+				BytesRead:    readSoFar,
+				TotalBytes:   chunkLen,
+				Operation:    "serve",
+				Direction:    "upload",
+			})
+		})
+	}
+
+	written, copyErr := io.Copy(s, reader)
+	if coord != nil && written > 0 {
+		coord.recordBytesServed(written)
+	}
+	if coord != nil {
+		done := p2pTransferProgress{
+			ArtifactName: req.ArtifactName,
+			PeerID:       requesterID,
+			BytesRead:    written,
+			TotalBytes:   chunkLen,
+			Operation:    "serve",
+			Direction:    "upload",
+			Done:         true,
+		}
+		if copyErr != nil {
+			done.Error = copyErr.Error()
+		}
+		coord.emitTransferProgress(done)
+	}
 }
 
 func handleStreamArtifactReplicate(s network.Stream) {

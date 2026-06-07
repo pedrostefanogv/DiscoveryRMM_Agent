@@ -14,6 +14,7 @@ type p2pTransferProgress struct {
 	BytesRead    int64  `json:"bytesRead"`
 	TotalBytes   int64  `json:"totalBytes"`
 	Operation    string `json:"operation"`            // "pull", "swarm-pull", "chunk"
+	Direction    string `json:"direction,omitempty"`  // "download" | "upload"
 	ChunkIndex   int    `json:"chunkIndex,omitempty"` // preenchido apenas em download chunked
 	TotalChunks  int    `json:"totalChunks,omitempty"`
 	Done         bool   `json:"done"`

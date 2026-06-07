@@ -244,9 +244,11 @@ function p2pRenderArtifacts(artifacts) {
       artifactsBody.innerHTML = '<tr><td colspan="3">Nenhum artifact local.</td></tr>';
     } else {
       artifactsBody.innerHTML = artifacts.map(function (artifact) {
+        var sizeBytes = Number(artifact.sizeBytes || 0);
+        var sizeLabel = formatP2PBytes(sizeBytes);
         return '<tr>' +
           '<td class="mono">' + p2pEscapeHtml(artifact.artifactName || '-') + '</td>' +
-          '<td>' + p2pEscapeHtml(String(artifact.sizeBytes || 0)) + '</td>' +
+          '<td title="' + p2pEscapeHtml(String(sizeBytes) + ' bytes') + '">' + p2pEscapeHtml(sizeLabel) + '</td>' +
           '<td class="mono">' + p2pEscapeHtml((artifact.checksumSha256 || '-').slice(0, 18)) + '...</td>' +
           '</tr>';
       }).join('');
@@ -562,16 +564,23 @@ function renderP2PTransferList() {
   var html = '';
   keys.forEach(function (key) {
     var p = p2pTransferMap[key];
-    var pct = p.totalBytes > 0 ? Math.round((p.bytesRead / p.totalBytes) * 100) : 0;
+    var totalBytes = Number(p.totalBytes || 0);
+    var bytesRead = Number(p.bytesRead || 0);
+    var pct = totalBytes > 0 ? Math.round((bytesRead / totalBytes) * 100) : (p.done ? 100 : 0);
+    if (pct < 0) pct = 0;
+    if (pct > 100) pct = 100;
     var barColor = p.error ? 'var(--danger)' : (p.done && !p.error ? 'var(--accent)' : '#4a90d9');
-    var label = p2pEscapeHtml(p.artifactName || '?') + ' ← ' + p2pEscapeHtml(p.peerID || '?');
+    var isUpload = String(p.direction || '').toLowerCase() === 'upload' || String(p.operation || '').toLowerCase() === 'serve';
+    var directionArrow = isUpload ? '→' : '←';
+    var phaseLabel = isUpload ? 'enviando' : 'recebendo';
+    var label = p2pEscapeHtml(p.artifactName || '?') + ' ' + directionArrow + ' ' + p2pEscapeHtml(p.peerID || '?');
     if (p.totalChunks > 0) {
       label += ' [chunk ' + (p.chunkIndex + 1) + '/' + p.totalChunks + ']';
     }
     html += '<div class="p2p-transfer-item" style="margin-bottom:8px;">' +
       '<div style="display:flex;justify-content:space-between;font-size:0.78rem;margin-bottom:3px;">' +
-        '<span class="mono">' + label + '</span>' +
-        '<span style="color:var(--muted)">' + formatP2PBytes(p.bytesRead) + ' / ' + formatP2PBytes(p.totalBytes) + ' (' + pct + '%)</span>' +
+        '<span class="mono">' + label + ' (' + phaseLabel + ')</span>' +
+        '<span style="color:var(--muted)">' + formatP2PBytes(bytesRead) + ' / ' + formatP2PBytes(totalBytes) + ' (' + pct + '%)</span>' +
       '</div>' +
       '<div style="background:var(--bg);border-radius:6px;height:8px;overflow:hidden;">' +
         '<div style="background:' + barColor + ';height:100%;width:' + pct + '%;transition:width 0.2s ease;"></div>' +
@@ -597,7 +606,19 @@ function renderP2PTransferList() {
 function onP2PTransferProgress(p) {
   if (!p) return;
   var key = (p.artifactName || '?') + '|' + (p.peerID || '?') + '|' + (p.operation || '?');
-  p2pTransferMap[key] = p;
+  var prev = p2pTransferMap[key] || {};
+  p2pTransferMap[key] = {
+    artifactName: p.artifactName || prev.artifactName || '?',
+    peerID: p.peerID || prev.peerID || '?',
+    bytesRead: p.bytesRead != null ? p.bytesRead : (prev.bytesRead || 0),
+    totalBytes: p.totalBytes != null ? p.totalBytes : (prev.totalBytes || 0),
+    operation: p.operation || prev.operation || '?',
+    direction: p.direction || prev.direction || (String(p.operation || prev.operation || '').toLowerCase() === 'serve' ? 'upload' : 'download'),
+    chunkIndex: p.chunkIndex != null ? p.chunkIndex : (prev.chunkIndex || 0),
+    totalChunks: p.totalChunks != null ? p.totalChunks : (prev.totalChunks || 0),
+    done: !!p.done,
+    error: p.error || ''
+  };
   renderP2PTransferList();
 }
 
