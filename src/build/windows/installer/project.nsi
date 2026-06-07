@@ -737,14 +737,24 @@ Function DownloadAndRunStage2
 
    DetailPrint "Baixando instalador completo de segunda etapa..."
 
-   # Download HTTPS nativo via BITSAdmin com janela OCULTA (nsExec::ExecToLog).
-   # BITS e um servico de transferencia assincrona do Windows que suporta HTTPS,
-   # retoma downloads interrompidos e nao requer plugins NSIS adicionais.
-   nsExec::ExecToLog '"$SYSDIR\cmd.exe" /c bitsadmin /transfer "DiscoveryStage2" /download /priority normal "$PayloadUrl" "$R7"'
+   # Evita dependencia de BITS/bitsadmin (pode falhar com acesso negado em builds recentes).
+   # Prioriza curl nativo do Windows e usa certutil como fallback.
+   nsExec::ExecToLog '"$SYSDIR\curl.exe" -f -L --retry 2 --connect-timeout 20 --output "$R7" "$PayloadUrl"'
    Pop $R0
 
    ${If} $R0 != 0
+      DetailPrint "Aviso: curl falhou (codigo: $R0). Tentando fallback com certutil..."
+      nsExec::ExecToLog '"$SYSDIR\certutil.exe" -urlcache -split -f "$PayloadUrl" "$R7"'
+      Pop $R0
+   ${EndIf}
+
+   ${If} $R0 != 0
       MessageBox MB_ICONSTOP "Falha ao baixar instalador completo (codigo: $R0). Verifique a conectividade com o servidor."
+      Abort
+   ${EndIf}
+
+   ${IfNot} ${FileExists} "$R7"
+      MessageBox MB_ICONSTOP "Falha ao baixar instalador completo: arquivo nao encontrado apos download."
       Abort
    ${EndIf}
 
@@ -754,13 +764,18 @@ Function DownloadAndRunStage2
    # This avoids bootstrap breakage when the stage2 is rebuilt after generation.
    #
    # Fallback chain:
-   #  1. Dynamic: fetch expected hash from $PayloadUrl/sha256 (bitsadmin)
+   #  1. Dynamic: fetch expected hash from $PayloadUrl/sha256 (curl/certutil)
    #  2. Static:  use compile-time embedded hash (backward compat, rare)
    #  3. None:    skip validation with warning
    # ────────────────────────────────────────────────────────────────────────────
    StrCpy $R8 "$R6\expected.sha256"
-   nsExec::ExecToLog '"$SYSDIR\cmd.exe" /c bitsadmin /transfer "DiscoverySHA256" /download /priority normal "$PayloadUrl/sha256" "$R8"'
+   nsExec::ExecToLog '"$SYSDIR\curl.exe" -f -L --retry 2 --connect-timeout 20 --output "$R8" "$PayloadUrl/sha256"'
    Pop $R0
+
+   ${If} $R0 != 0
+      nsExec::ExecToLog '"$SYSDIR\certutil.exe" -urlcache -split -f "$PayloadUrl/sha256" "$R8"'
+      Pop $R0
+   ${EndIf}
 
    ${If} $R0 != 0
       # Dynamic fetch failed — fall back to compile-time hash or skip
