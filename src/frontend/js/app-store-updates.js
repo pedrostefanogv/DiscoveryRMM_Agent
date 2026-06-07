@@ -178,7 +178,7 @@ function renderCards() {
 
   cardsEl.innerHTML = pageItems.map(function (pkg) {
     var description = stripMarkdown(pkg.description || translate('store.noDescription'));
-    var shortDescription = description.slice(0, 180);
+    var shortDescription = description.slice(0, 280);
     var publisher = String(pkg.publisher || translate('common.unknown'));
     var version = String(pkg.version || translate('common.notAvailable'));
     var packageID = String(pkg.id || '');
@@ -202,9 +202,9 @@ function renderCards() {
       '</div>' +
       '<h3>' + highlightStoreText(nameLabel, searchTerms) + '</h3>' +
       '<div class="meta">' + highlightStoreText(publisherVersionLabel, searchTerms) + '</div>' +
-      '<div class="meta">' + highlightStoreText(packageLabel, searchTerms) + '</div>' +
       '<p class="desc">' + highlightStoreText(shortDescription, searchTerms) + '</p>' +
       '<div class="card-actions">' +
+        '<span class="card-info">' + escapeHtml(packageID) + ' &middot; v' + escapeHtml(version) + '</span>' +
         actionButton +
       '</div>' +
     '</article>';

@@ -638,7 +638,7 @@
 .store-card .desc {
   flex: 1;
   min-height: 0;
-  max-height: 5.2em;
+  max-height: 7em;
   overflow: hidden;
 }
 
@@ -651,9 +651,26 @@
   -webkit-box-decoration-break: clone;
 }
 
+/* Dark mode: highlight mais escuro com bom contraste sobre texto claro */
+[data-theme="dark"] .store-card .store-hit {
+  background: color-mix(in srgb, var(--accent) 35%, #2a2a2e 65%);
+  color: var(--text);
+}
+
 .store-card .card-actions {
   margin-top: auto;
-  justify-content: flex-end;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.store-card .card-info {
+  font-size: 0.75rem;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 60%;
+  line-height: 1.15;
 }
 
 .store-detail-btn {
