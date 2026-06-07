@@ -408,8 +408,15 @@ func (a *App) showPowerActionWarning(ctx context.Context, action string, delaySe
 		return "proceed", nil
 	}
 
-	result := strings.ToLower(strings.TrimSpace(rawOutput))
+	// O output do PSADT contem dezenas de linhas de log de inicializacao
+	// antes da palavra de decisao (proceed/deferred). TrimSpace remove
+	// espacos das bordas, mas nao quebras de linha no meio.
+	// Extraimos apenas a ultima linha nao-vazia, que e a decisao real.
+	result := extractLastLine(strings.TrimSpace(rawOutput))
 	a.logs.append(fmt.Sprintf("[agent] psadt-%s-prompt [OK] result=%s scriptSize=%dB", action, result, len(script)))
+	if len(rawOutput) > len(result)+10 {
+		a.logs.append(fmt.Sprintf("[agent] psadt-%s-prompt [DIAG] rawOutput possui %d linhas — apenas a ultima linha foi usada como decisao", action, countLines(rawOutput)))
+	}
 
 	// force=true: balloon apenas informativo — sempre prossegue.
 	if force {
@@ -688,4 +695,26 @@ func truncateStr(s string, maxLen int) string {
 		cut = 200
 	}
 	return s[:cut] + fmt.Sprintf("... (truncado %d bytes)", len(s)-maxLen)
+}
+
+// extractLastLine extrai a ultima linha nao-vazia de uma string multi-linha.
+// Usado para obter a decisao do usuario (proceed/deferred) no meio do output
+// verboso de inicializacao do PSADT (que pode ter dezenas de linhas de log).
+func extractLastLine(raw string) string {
+	lines := strings.Split(raw, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line != "" {
+			return strings.ToLower(line)
+		}
+	}
+	return ""
+}
+
+// countLines retorna o numero de linhas na string.
+func countLines(s string) int {
+	if s == "" {
+		return 0
+	}
+	return len(strings.Split(s, "\n"))
 }
