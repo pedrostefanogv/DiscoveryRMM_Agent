@@ -3,20 +3,32 @@
 function initAppBindings() {
   cardsEl.addEventListener('click', function (event) {
     var target = event.target;
-    if (!(target instanceof HTMLButtonElement)) return;
+    if (!(target instanceof Element)) return;
 
-    // Detail modal button
-    if (target.dataset.detailId) {
-      var pkg = (state.allPackages || []).find(function (p) { return p.id === target.dataset.detailId; });
-      if (pkg && typeof openAppDetailModal === 'function') openAppDetailModal(pkg);
+    var clickedButton = target.closest('button');
+    if (clickedButton instanceof HTMLButtonElement) {
+      // Detail modal button
+      if (clickedButton.dataset.detailId) {
+        var detailPkg = (state.allPackages || []).find(function (p) { return p.id === clickedButton.dataset.detailId; });
+        if (detailPkg && typeof openAppDetailModal === 'function') openAppDetailModal(detailPkg);
+        return;
+      }
+
+      var action = clickedButton.dataset.action;
+      var id = clickedButton.dataset.id;
+      if (!action || !id) return;
+
+      runAction(action, id);
       return;
     }
 
-    var action = target.dataset.action;
-    var id = target.dataset.id;
-    if (!action || !id) return;
+    var cardEl = target.closest('article.store-card[data-detail-id]');
+    if (!cardEl) return;
 
-    runAction(action, id);
+    var cardPkg = (state.allPackages || []).find(function (p) { return p.id === cardEl.dataset.detailId; });
+    if (cardPkg && typeof openAppDetailModal === 'function') {
+      openAppDetailModal(cardPkg);
+    }
   });
 
   // App detail modal close handlers

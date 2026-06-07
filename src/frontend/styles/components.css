@@ -608,6 +608,20 @@
 
 .store-card {
   height: 320px;
+  cursor: pointer;
+}
+
+.store-card-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.store-card .store-card-icon-slot {
+  margin-bottom: 0;
+  min-width: 48px;
+  min-height: 48px;
 }
 
 .store-card h3 {
@@ -623,8 +637,18 @@
   overflow: hidden;
 }
 
+.store-card .store-hit {
+  background: color-mix(in srgb, var(--accent) 26%, #ffeab0 74%);
+  color: inherit;
+  border-radius: 4px;
+  padding: 0 2px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
 .store-card .card-actions {
   margin-top: auto;
+  justify-content: flex-end;
 }
 
 .store-detail-btn {
