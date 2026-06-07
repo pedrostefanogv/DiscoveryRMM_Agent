@@ -35,10 +35,10 @@ function formatConnectionTypeLabel(value) {
     return 'NATS';
   }
   if (normalized === 'wss' || normalized === 'ws' || normalized === 'nats-ws' || normalized === 'nats-wss') {
-    return 'NATS WS';
+    return 'WSS';
   }
-  if (normalized.includes('nats') && normalized.includes('ws')) {
-    return 'NATS WS';
+  if (normalized.includes('ws')) {
+    return 'WSS';
   }
   return normalized.toUpperCase();
 }
@@ -121,18 +121,11 @@ function renderStatusOverview(data) {
     statusConnectionLabelEl.textContent = connected ? translate('common.online') : translate('common.offline');
   }
 
-  var line1 = translate('window.meta.pc') + ': ' + statusSafe(data && data.hostname, translate('status.localComputer'));
-  var serverPart = translate('window.meta.server') + ': ' + statusSafe(data && data.server, '-');
-  var connPart = translate('window.meta.connection') + ': ' + formatConnectionTypeLabel(data && data.connectionType);
-  var transportPart = translate('status.transportState') + ': ' + (data && data.transportConnected ? translate('common.online') : translate('common.offline'));
-  var line2 = serverPart + ' / ' + connPart + ' / ' + transportPart;
-  var line3 = '';
-  if (data && data.onlineReason) {
-    line3 = translate('status.onlineSignal') + ': ' + statusSafe(data.onlineReason, '-');
-  }
+  var line1 = translate('window.meta.server') + ': ' + statusSafe(data && data.server, '-');
+  var line2 = translate('status.transportState') + ': ' + formatConnectionTypeLabel(data && data.connectionType);
 
   if (statusConnectionDetailEl) {
-    statusConnectionDetailEl.textContent = line3 ? (line1 + '\n' + line2 + '\n' + line3) : (line1 + '\n' + line2);
+    statusConnectionDetailEl.textContent = line1 + '\n' + line2;
   }
 
   if (statusAppVersionEl) statusAppVersionEl.textContent = statusSafe(data && data.appVersion, 'dev');
