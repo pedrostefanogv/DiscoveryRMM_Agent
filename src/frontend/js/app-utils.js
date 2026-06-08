@@ -1252,16 +1252,14 @@ function renderMarkdown(markdown) {
 }
 
 function buildKnowledgeMeta(article) {
-  return [
-    '<span>' + escapeHtml(article.id || '-') + '</span>',
-    '<span>' + escapeHtml(article.category || '-') + '</span>',
-    '<span>Escopo: ' + escapeHtml(normalizeKbScope(article.scope)) + '</span>',
-    '<span>Autor: ' + escapeHtml(article.author || '-') + '</span>',
-    '<span>Nivel: ' + escapeHtml(article.difficulty || '-') + '</span>',
-    '<span>Leitura: ' + escapeHtml(String(article.readTimeMin || '-')) + ' min</span>',
-    '<span>Publicado: ' + escapeHtml(article.publishedAt || '-') + '</span>',
-    '<span>Atualizado: ' + escapeHtml(article.updatedAt || '-') + '</span>'
-  ].join('');
+  var parts = [];
+  if (article.category) parts.push('<span>' + escapeHtml(article.category) + '</span>');
+  if (article.scope) parts.push('<span>Escopo: ' + escapeHtml(normalizeKbScope(article.scope)) + '</span>');
+  if (article.author) parts.push('<span>Autor: ' + escapeHtml(article.author) + '</span>');
+  if (article.difficulty) parts.push('<span>Nivel: ' + escapeHtml(article.difficulty) + '</span>');
+  if (article.readTimeMin) parts.push('<span>Leitura: ' + escapeHtml(String(article.readTimeMin)) + ' min</span>');
+  if (article.updatedAt) parts.push('<span>Atualizado: ' + escapeHtml(formatDate(article.updatedAt, '-')) + '</span>');
+  return parts.join('');
 }
 
 function getDiskUsagePercent(disk) {
