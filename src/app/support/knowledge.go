@@ -16,8 +16,8 @@ import (
 )
 
 const (
-	knowledgeListCacheTTL   = 5 * time.Minute
-	knowledgeDetailCacheTTL = 30 * time.Minute
+	knowledgeListCacheTTL   = 24 * time.Hour
+	knowledgeDetailCacheTTL = 24 * time.Hour
 )
 
 func toStringSlice(value any) []string {

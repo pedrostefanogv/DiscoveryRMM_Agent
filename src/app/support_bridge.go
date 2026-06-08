@@ -58,6 +58,21 @@ func (a *App) AddTicketComment(ticketID, author, content string) error {
 	return a.supportSvc.AddTicketComment(ticketID, author, content)
 }
 
+func (a *App) GetKnowledgeBaseArticles() []KnowledgeArticle {
+	if err := a.requireSupportSvc(); err != nil {
+		return []KnowledgeArticle{}
+	}
+	return a.supportSvc.GetKnowledgeBaseArticles()
+}
+
+// RefreshKnowledgeBase limpa o cache local e recarrega os artigos da API.
+func (a *App) RefreshKnowledgeBase() error {
+	if err := a.requireSupportSvc(); err != nil {
+		return err
+	}
+	return a.supportSvc.RefreshKnowledgeBase()
+}
+
 func (a *App) CloseSupportTicket(ticketID string, input CloseTicketInput) (APITicket, error) {
 	if err := a.requireSupportSvc(); err != nil {
 		return APITicket{}, err

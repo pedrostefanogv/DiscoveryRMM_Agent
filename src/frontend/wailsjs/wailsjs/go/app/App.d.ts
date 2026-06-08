@@ -107,6 +107,8 @@ export function GetKnowledgeArticleDetails(arg1:string):Promise<supportmeta.Know
 
 export function GetKnowledgeArticles(arg1:string):Promise<Array<supportmeta.KnowledgeArticle>>;
 
+export function GetKnowledgeBaseArticles():Promise<Array<supportmeta.KnowledgeArticle>>;
+
 export function GetLocalMemories():Promise<Array<database.MemoryNote>>;
 
 export function GetLogCount():Promise<number>;
@@ -232,6 +234,8 @@ export function PullP2PArtifactFromPeer(arg1:string,arg2:string):Promise<p2pmeta
 export function RefreshAutomationPolicy(arg1:boolean):Promise<automation.StateView>;
 
 export function RefreshInventory():Promise<models.InventoryReport>;
+
+export function RefreshKnowledgeBase():Promise<void>;
 
 export function RefreshListeningPorts():Promise<Array<models.ListeningPortInfo>>;
 

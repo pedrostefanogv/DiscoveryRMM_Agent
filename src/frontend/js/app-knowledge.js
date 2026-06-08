@@ -110,8 +110,14 @@ async function loadKnowledgeBase() {
 
 function initKnowledge() {
   if (kbRefreshBtn) {
-    kbRefreshBtn.addEventListener('click', function () {
-      loadKnowledgeBase();
+    kbRefreshBtn.addEventListener('click', async function () {
+      kbRefreshBtn.disabled = true;
+      try {
+        // Limpa o cache local antes de recarregar
+        await appApi().RefreshKnowledgeBase();
+      } catch (_) { /* ignora erro do refresh e tenta recarregar mesmo assim */ }
+      await loadKnowledgeBase();
+      kbRefreshBtn.disabled = false;
     });
   }
 

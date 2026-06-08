@@ -194,6 +194,10 @@ export function GetKnowledgeArticles(arg1) {
   return window['go']['app']['App']['GetKnowledgeArticles'](arg1);
 }
 
+export function GetKnowledgeBaseArticles() {
+  return window['go']['app']['App']['GetKnowledgeBaseArticles']();
+}
+
 export function GetLocalMemories() {
   return window['go']['app']['App']['GetLocalMemories']();
 }
@@ -444,6 +448,10 @@ export function RefreshAutomationPolicy(arg1) {
 
 export function RefreshInventory() {
   return window['go']['app']['App']['RefreshInventory']();
+}
+
+export function RefreshKnowledgeBase() {
+  return window['go']['app']['App']['RefreshKnowledgeBase']();
 }
 
 export function RefreshListeningPorts() {

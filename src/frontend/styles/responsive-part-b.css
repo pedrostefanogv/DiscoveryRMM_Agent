@@ -5,7 +5,7 @@
 
 .kb-article-card {
   border: 1px solid var(--border);
-  background: var(--bg);
+  background: var(--surface);
   border-radius: 10px;
   padding: 10px;
   text-align: left;
@@ -14,15 +14,17 @@
   gap: 6px;
   cursor: pointer;
   font-family: inherit;
+  transition: border-color 0.15s, box-shadow 0.15s;
 }
 
 .kb-article-card:hover {
   border-color: var(--accent);
+  box-shadow: var(--shadow-sm);
 }
 
 .kb-article-card.active {
   border-color: var(--accent);
-  box-shadow: 0 0 0 1px rgba(11,110,79,0.15);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 28%, transparent);
 }
 
 .kb-article-title {
@@ -46,7 +48,7 @@
   font-weight: 600;
   padding: 2px 8px;
   border-radius: 999px;
-  background: rgba(11,110,79,0.12);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
   color: var(--accent);
 }
 
