@@ -8,8 +8,6 @@ param(
     [ValidateSet("0", "1")]
     [Alias("DiscoveryEnabled")]
     [string]$AutoProvisioning = "1",
-    [ValidateSet("0", "1")]
-    [string]$EnableWindowsService = "0",
     [switch]$GenericInstall
 )
 
@@ -151,8 +149,7 @@ $nsisArgs = @(
     "UTF8",
     "/DARG_WAILS_AMD64_BINARY=$agentExe",
     "/DARG_OUTFILE_NAME=$OutputName",
-    "/DARG_DEFAULT_DISCOVERY=$AutoProvisioning",
-    "/DARG_ENABLE_WINDOWS_SERVICE=$EnableWindowsService"
+    "/DARG_DEFAULT_DISCOVERY=$AutoProvisioning"
 )
 
 if ($DefaultUrl -ne "") {
@@ -190,10 +187,5 @@ if (-not (Test-Path $installerPath)) {
 
 Write-Output "[3/3] Concluido."
 Write-Output "Instalador gerado em: $installerPath"
-if ($EnableWindowsService -eq "1") {
-    Write-Output "Observacao: o instalador registra o servico Windows, configura autostart da UI no logon e cria a regra de Windows Firewall para o discovery-agent.exe."
-}
-else {
-    Write-Output "Observacao: modo padrao sem servico Windows. O agente inicia via Task Scheduler no logon (tray icon) e a regra de Windows Firewall e mantida para rede/P2P."
-}
+Write-Output "Observacao: o instalador configura autostart da UI no logon (Task Scheduler) e cria a regra de Windows Firewall para o discovery-agent.exe."
 

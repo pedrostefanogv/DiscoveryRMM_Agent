@@ -9,7 +9,6 @@
 O **Discovery Agent** é um aplicativo de inventário e gerenciamento de TI para Windows. Ele combina:
 
 - **UI Desktop** via [Wails v2](https://wails.io/) (frontend HTML/JS + backend Go)
-- **Windows Service** headless (sem UI) para execução em background
 - **Ferramentas MCP internas** para integração com o chat de IA embarcado no próprio agent
 - **Rede P2P** para distribuição de artefatos (instaladores, políticas) entre agentes na mesma rede local
 - **Automação** de tarefas via políticas baixadas do servidor central
@@ -19,7 +18,6 @@ O **Discovery Agent** é um aplicativo de inventário e gerenciamento de TI para
 | Modo | Trigger | Descrição |
 |------|---------|-----------|
 | GUI (Wails) | padrão | Janela desktop com system tray |
-| Windows Service | `--service` | Headless, sem UI, roda como serviço |
 | MCP (interno) | n/a | Tool calling interno do chat de IA do agent |
 
 ---
@@ -89,7 +87,6 @@ discovery/
 │   │   ├── remote_debug.go     # remoteDebugManager: debug remoto com streaming de logs
 │   │   └── psadt_debug_bridge.go # Bootstrap e diagnóstico do PSADT
 │   ├── P2P
-│   │   ├── headless_p2p_runtime.go # HeadlessP2PService: reutiliza o stack P2P do app no modo Windows Service
 │   │   ├── p2p.go              # p2pCoordinator — núcleo: discovery, lifecycle, estado
 │   │   ├── p2p_api.go          # Seed plan + telemetry (chamadas ao servidor central)
 │   │   ├── p2p_chunks.go       # p2pChunkScheduler: swarm/chunks, bandwidth cap
@@ -162,11 +159,6 @@ discovery/
 │   │   └── (util.go)           # Run command, capture output, etc.
 │   ├── selfupdate/             # Auto-atualização do agente
 │   │   └── updater.go          # Updater: download + verificação SHA-256 + substituição binária
-│   ├── service/                # Windows Service (modo headless)
-│   │   ├── client.go           # ServiceClient: cliente da Named Pipe usado pela UI
-│   │   ├── ipc.go              # IPCServer: protocolo e dispatch via Named Pipe
-│   │   ├── manager.go          # ServiceManager: ciclo de vida do service e workers headless
-│   │   └── runtime_services.go # Adapters de automação/inventário para o modo service
 │   ├── services/               # Serviços de alto nível (wrappers)
 │   │   ├── apps_service.go     # AppsService: install/uninstall/upgrade via winget
 │   │   ├── catalog_service.go  # CatalogService: fetch + cache do app store
@@ -206,12 +198,11 @@ discovery/
 │   ├── P2P_SERVER_API_IMPLEMENTATION.md
 │   ├── p2p-api-contract.md
 │   ├── WATCHDOG_SYSTEM.md
-│   ├── MULTI_USER_SERVICE_GUIDE.md
+│   ├── WATCHDOG_SYSTEM.md
 │   ├── INSTALADOR_PAYLOAD_E_PARAMETROS.md
 │   └── ANALISE_DEPENDENCIAS.md
 │
-├── main.go                     # Entry point: detecta modo (GUI/service/MCP)
-├── service_main.go             # Inicialização do Windows Service headless
+├── main.go                     # Entry point: inicia GUI Wails
 ├── tray_embed.go               # Embed do ícone ICO (deve ficar na raiz por go:embed)
 ├── startup_debug_keys_windows.go # Detecta Shift/Ctrl na inicialização (Windows)
 ├── startup_debug_keys_other.go   # Stub para outras plataformas
@@ -269,8 +260,6 @@ main.go ────────────────────────
    ├──► internal/selfupdate   # Auto-atualização do binário
    ├──► internal/services     # Wrappers de serviços
    └──► internal/watchdog     # Health monitoring
-
-service_main.go ──► internal/service (ServiceManager headless)
 ```
 
 ---
@@ -281,8 +270,7 @@ service_main.go ──► internal/service (ServiceManager headless)
 
 | Arquivo | Responsabilidade |
 |---------|-----------------|
-| `main.go` | Entry point. Detecta flag `--service` ou inicia GUI Wails. Modo standalone `--mcp` removido. |
-| `service_main.go` | Inicializa o modo Windows Service headless. Configura logging em arquivo, cria ServiceManager. |
+| `main.go` | Entry point. Inicia GUI Wails com system tray e opções de startup. |
 | `tray_embed.go` | Apenas o `//go:embed` do ícone `.ico`. Deve ficar na raiz: `//go:embed` não permite paths com `..`. Os bytes são passados ao App via `AppStartupOptions.TrayIcon`. |
 | `startup_debug_keys_windows.go` | Detecta Shift/Ctrl pressionados no startup via `GetAsyncKeyState` (Windows API). |
 | `startup_debug_keys_other.go` | Stub que retorna `false` em plataformas não-Windows. |
@@ -319,7 +307,6 @@ service_main.go ──► internal/service (ServiceManager headless)
 | `app/automation` | `types.go` | `StateView`, `TaskView`, `ExecutionView` — tipos de UI da automação. |
 | `app/p2pmeta` | `types.go` | Config, views, telemetry, onboarding, seed-plan e cache leve do domínio P2P. |
 | `app/supportmeta` | `types.go` | `AgentInfo`, workflow/tickets, knowledge base e cache leve. |
-| `app` | `headless_p2p_runtime.go` | `HeadlessP2PService`: sobe o coordinator P2P e a telemetria sem Wails para o Windows Service. |
 
 #### Bridges (delegates para subpacotes)
 
@@ -379,7 +366,6 @@ service_main.go ──► internal/service (ServiceManager headless)
 | Arquivo | Responsabilidade |
 |---------|-----------------|
 | `p2p.go` | `p2pCoordinator`: núcleo do P2P, lifecycle, estado e orquestração. |
-| `headless_p2p_runtime.go` | `HeadlessP2PService`: wrapper headless que reutiliza `p2pCoordinator` no modo service. |
 | `p2p_api.go` | Chamadas ao servidor para seed planning e telemetry P2P. |
 | `p2p_chunks.go` | `p2pChunkScheduler`: divide artefatos em chunks, distribui entre peers e aplica bandwidth cap. |
 | `p2p_cleanup.go` | Limpeza de artefatos expirados e arquivos temporários do diretório P2P. |
@@ -442,10 +428,6 @@ service_main.go ──► internal/service (ServiceManager headless)
 | `printer` | `manager.go` | `Manager`: list/install/remove impressoras via Windows Print Spooler. |
 | `processutil` | `(util.go)` | Executa processos externos, captura stdout/stderr, timeout. |
 | `selfupdate` | `updater.go` | `Updater`: download de nova versão do binário, verificação SHA-256 e substituição atômica do executável. |
-| `service` | `client.go` | `ServiceClient`: cliente da Named Pipe para a UI consultar status e saúde do service. |
-| `service` | `ipc.go` | `IPCServer`: protocolo de comandos e respostas do Windows Service via Named Pipe. |
-| `service` | `manager.go` | `ServiceManager`: entry point do modo headless. Gerencia watchdog, IPC e workers. |
-| `service` | `runtime_services.go` | Adapters de runtime que conectam automação/inventário reais ao modo service. |
 | `services` | `apps_service.go` | `AppsService`: wrapper de `winget.Client` para install/uninstall/upgrade. |
 | `services` | `catalog_service.go` | `CatalogService`: fetch e cache do catálogo de aplicativos. |
 | `services` | `inventory_service.go` | `InventoryService`: coleta com timeout e progress callback. |

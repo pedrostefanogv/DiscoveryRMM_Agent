@@ -14,29 +14,6 @@ type HealthCheckItem struct {
 	Recoverable bool   `json:"recoverable"`
 }
 
-// ─── Service Health ────────────────────────────────────────────────
-
-// ServiceHealthPayload representa o payload de GetServiceHealth.
-type ServiceHealthPayload struct {
-	Error       *string           `json:"error,omitempty"`
-	Running     bool              `json:"running"`
-	ServiceOnly bool              `json:"service_only"`
-	UserMessage string            `json:"user_message,omitempty"`
-	Components  []HealthCheckItem `json:"components,omitempty"`
-	Uptime      string            `json:"uptime,omitempty"`
-	Version     string            `json:"version,omitempty"`
-}
-
-// ─── Service IPC ───────────────────────────────────────────────────
-
-// IPCServiceStatus é retornado pelo named pipe do service.
-type IPCServiceStatus struct {
-	Running    bool              `json:"running"`
-	Uptime     string            `json:"uptime"`
-	Version    string            `json:"version"`
-	Components []HealthCheckItem `json:"components"`
-}
-
 // ─── Notifications ─────────────────────────────────────────────────
 
 // NotificationEvent representa um evento de notificação enviado ao frontend.

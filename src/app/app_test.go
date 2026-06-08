@@ -62,12 +62,6 @@ func TestParseUpgradeOutput_Empty(t *testing.T) {
 	}
 }
 
-// TestServiceConnectedMode_DefaultFalse verifica que o modo service-connected
-// começa como false (sem service detectado por padrão).
-
-// TestServiceConnectedMode_CanBeSetTrue verifica que o modo pode ser ativado
-// (simulando a deteção bem-sucedida do service no startup).
-
 func TestHeartbeatIntervalFromAgentConfig_UsesConfigValue(t *testing.T) {
 	configured := 45
 	got := heartbeatIntervalFromAgentConfig(AgentConfiguration{

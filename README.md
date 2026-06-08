@@ -120,6 +120,6 @@ Requisitos mínimos / Minimum requirements: Windows 10+, Go 1.23+, NSIS no `PATH
 
 <div align="center">
 
-Feito com 💙 por [@pedrostefanogv](https://github.com/pedrostefanogv)
+Feito por [@pedrostefanogv](https://github.com/pedrostefanogv)
 
 </div>

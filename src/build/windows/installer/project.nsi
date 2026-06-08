@@ -43,7 +43,6 @@
 !define PRODUCT_EXECUTABLE  "discovery-agent.exe"
 !define LEGACY_PRODUCT_EXECUTABLE "discovery.exe"
 !define UNINST_KEY_NAME     "Discovery.RMM"
-!define DISCOVERY_SERVICE_NAME "DiscoveryAgent"
 !define DISCOVERY_UI_TASK_NAME "DiscoveryAgentUI"
 !define DISCOVERY_FIREWALL_RULE_NAME "Discovery Agent Network Access"
 
@@ -121,16 +120,6 @@
 !define BUILD_BOOTSTRAP_INSTALL "1"
 !else
 !define BUILD_BOOTSTRAP_INSTALL "0"
-!endif
-!endif
-
-!ifdef ARG_ENABLE_WINDOWS_SERVICE
-!define BUILD_ENABLE_WINDOWS_SERVICE "${ARG_ENABLE_WINDOWS_SERVICE}"
-!else
-!ifdef ENABLE_WINDOWS_SERVICE
-!define BUILD_ENABLE_WINDOWS_SERVICE "1"
-!else
-!define BUILD_ENABLE_WINDOWS_SERVICE "0"
 !endif
 !endif
 
@@ -480,13 +469,8 @@ Section
          # Registrar regra de firewall para runtime local/P2P.
          Call RegisterWindowsFirewallRule
 
-         # Opcional: registrar serviÃ§o Windows somente quando habilitado em build.
-         ${If} "${BUILD_ENABLE_WINDOWS_SERVICE}" == "1"
-            Call RegisterWindowsService
-         ${Else}
-            # Garantir migraÃ§Ã£o limpa removendo serviÃ§o legado, se existir.
-            Call UnregisterWindowsService
-         ${EndIf}
+         # Modo de execucao: apenas Task Scheduler (tray icon no logon de qualquer usuario).
+         # Nao usamos mais Windows Service mode.
 
          # Registrar autostart da UI via Task Scheduler (At log on of any user)
          Call RegisterUIStartupTask
@@ -501,21 +485,8 @@ Section
          ; O Task Scheduler so dispara no login; restart imediato garante que o
          ; agente volte ao ar assim que o instalador terminar.
          ${If} $UpdateMode == "1"
-            ; Verifica se o Windows Service existia antes do update e o reinicia.
-            nsExec::ExecToLog '"$SYSDIR\sc.exe" query "${DISCOVERY_SERVICE_NAME}"'
-            Pop $R0
-            ${If} $R0 == 0
-               DetailPrint "Update mode: reiniciando Windows Service ${DISCOVERY_SERVICE_NAME}..."
-               nsExec::ExecToLog '"$SYSDIR\sc.exe" start "${DISCOVERY_SERVICE_NAME}"'
-               Pop $R0
-               ${If} $R0 != 0
-                  DetailPrint "Aviso: falha ao reiniciar service (codigo $R0). Iniciando em modo UI..."
-                  Exec '"$INSTDIR\${PRODUCT_EXECUTABLE}"'
-               ${EndIf}
-            ${Else}
-               DetailPrint "Update mode: reiniciando o agente em modo UI..."
-               Exec '"$INSTDIR\${PRODUCT_EXECUTABLE}"'
-            ${EndIf}
+            DetailPrint "Update mode: reiniciando o agente em modo UI..."
+            Exec '"$INSTDIR\${PRODUCT_EXECUTABLE}"'
          ${EndIf}
       !endif
 SectionEnd
@@ -523,19 +494,18 @@ SectionEnd
 Section "uninstall"
     !insertmacro wails.setShellContext
 
-   # Encerrar/remover service antes de limpar binÃ¡rios
-   Call un.UnregisterWindowsService
+   # Encerrar processo antes de limpar binarios
    Call un.UnregisterWindowsFirewallRule
 
    # Garantir encerramento de qualquer instancia em modo UI/headless.
-   nsExec::ExecToLog '"$SYSDIR\taskkill.exe" /IM "${PRODUCT_EXECUTABLE}" /F /T'
+   nsExec::ExecToLog /OEM '"$SYSDIR\taskkill.exe" /IM "${PRODUCT_EXECUTABLE}" /F /T'
    Pop $R0
    ${If} $R0 != 0
       DetailPrint "Aviso: taskkill retornou codigo $R0 (pode nao haver processo em execucao)."
    ${EndIf}
 
    ${If} "${LEGACY_PRODUCT_EXECUTABLE}" != "${PRODUCT_EXECUTABLE}"
-      nsExec::ExecToLog '"$SYSDIR\taskkill.exe" /IM "${LEGACY_PRODUCT_EXECUTABLE}" /F /T'
+      nsExec::ExecToLog /OEM '"$SYSDIR\taskkill.exe" /IM "${LEGACY_PRODUCT_EXECUTABLE}" /F /T'
       Pop $R1
       ${If} $R1 != 0
          DetailPrint "Aviso: taskkill legado retornou codigo $R1 (pode nao haver processo legado em execucao)."
@@ -615,7 +585,7 @@ Function SaveAgentConfig
    ; Garantir permissao multiusuario para runtime sem servico Windows.
    ; Usa SIDs bem conhecidos para evitar falha em SOs localizados.
    ; /inheritance:e + /T aplica em filhos existentes (ex.: config.json legado).
-   nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$R0\Discovery" /inheritance:e /grant "*S-1-5-18:(OI)(CI)(F)" "*S-1-5-32-544:(OI)(CI)(F)" "*S-1-5-32-545:(OI)(CI)(M)" /T /C /Q'
+   nsExec::ExecToLog /OEM '"$SYSDIR\icacls.exe" "$R0\Discovery" /inheritance:e /grant "*S-1-5-18:(OI)(CI)(F)" "*S-1-5-32-544:(OI)(CI)(F)" "*S-1-5-32-545:(OI)(CI)(M)" /T /C /Q'
    Pop $R9
    ${If} $R9 != 0
       DetailPrint "Aviso: nao foi possivel ajustar ACL de $R0\Discovery (icacls codigo $R9)"
@@ -756,12 +726,12 @@ Function DownloadAndRunStage2
 
    # Evita dependencia de BITS/bitsadmin (pode falhar com acesso negado em builds recentes).
    # Prioriza curl nativo do Windows e usa certutil como fallback.
-   nsExec::ExecToLog '"$SYSDIR\curl.exe" -f -L --retry 2 --connect-timeout 20 --output "$R7" "$PayloadUrl"'
+   nsExec::ExecToLog /OEM '"$SYSDIR\curl.exe" -f -L --retry 2 --connect-timeout 20 --output "$R7" "$PayloadUrl"'
    Pop $R0
 
    ${If} $R0 != 0
       DetailPrint "Aviso: curl falhou (codigo: $R0). Tentando fallback com certutil..."
-      nsExec::ExecToLog '"$SYSDIR\certutil.exe" -urlcache -split -f "$PayloadUrl" "$R7"'
+      nsExec::ExecToLog /OEM '"$SYSDIR\certutil.exe" -urlcache -split -f "$PayloadUrl" "$R7"'
       Pop $R0
    ${EndIf}
 
@@ -786,11 +756,11 @@ Function DownloadAndRunStage2
    #  3. None:    skip validation with warning
    # ────────────────────────────────────────────────────────────────────────────
    StrCpy $R8 "$R6\expected.sha256"
-   nsExec::ExecToLog '"$SYSDIR\curl.exe" -f -L --retry 2 --connect-timeout 20 --output "$R8" "$PayloadUrl/sha256"'
+   nsExec::ExecToLog /OEM '"$SYSDIR\curl.exe" -f -L --retry 2 --connect-timeout 20 --output "$R8" "$PayloadUrl/sha256"'
    Pop $R0
 
    ${If} $R0 != 0
-      nsExec::ExecToLog '"$SYSDIR\certutil.exe" -urlcache -split -f "$PayloadUrl/sha256" "$R8"'
+      nsExec::ExecToLog /OEM '"$SYSDIR\certutil.exe" -urlcache -split -f "$PayloadUrl/sha256" "$R8"'
       Pop $R0
    ${EndIf}
 
@@ -798,7 +768,7 @@ Function DownloadAndRunStage2
       # Dynamic fetch failed — fall back to compile-time hash or skip
       ${If} $PayloadSha256 != ""
          DetailPrint "Validando integridade SHA256 do payload (hash estatico)..."
-         nsExec::ExecToLog '"$SYSDIR\cmd.exe" /c certutil -hashfile "$R7" SHA256 | findstr /i /c:"$PayloadSha256"'
+         nsExec::ExecToLog /OEM '"$SYSDIR\cmd.exe" /c certutil -hashfile "$R7" SHA256 | findstr /i /c:"$PayloadSha256"'
          Pop $R0
          ${If} $R0 != 0
             MessageBox MB_ICONSTOP "Falha na validacao de integridade do payload (hash mismatch)."
@@ -811,7 +781,7 @@ Function DownloadAndRunStage2
       DetailPrint "Validando integridade SHA256 do payload..."
       # findstr /g: reads expected hash from downloaded file; certutil output
       # contains computed hash on its own line — findstr matches it case-insensitively.
-      nsExec::ExecToLog '"$SYSDIR\cmd.exe" /c certutil -hashfile "$R7" SHA256 | findstr /i /g:"$R8"'
+      nsExec::ExecToLog /OEM '"$SYSDIR\cmd.exe" /c certutil -hashfile "$R7" SHA256 | findstr /i /g:"$R8"'
       Pop $R0
       ${If} $R0 != 0
          MessageBox MB_ICONSTOP "Falha na validacao de integridade do payload (hash mismatch)."
@@ -857,7 +827,7 @@ Function EnsureSharedDataDir
    ; Aplicar ACL no diretorio compartilhado para execucao por usuarios padrao.
    ; SIDs evitam dependencia de nomes localizados de grupos.
    ; /inheritance:e + /T cobre arquivos preexistentes no diretorio.
-   nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$R0\Discovery" /inheritance:e /grant "*S-1-5-18:(OI)(CI)(F)" "*S-1-5-32-544:(OI)(CI)(F)" "*S-1-5-32-545:(OI)(CI)(M)" /T /C /Q'
+   nsExec::ExecToLog /OEM '"$SYSDIR\icacls.exe" "$R0\Discovery" /inheritance:e /grant "*S-1-5-18:(OI)(CI)(F)" "*S-1-5-32-544:(OI)(CI)(F)" "*S-1-5-32-545:(OI)(CI)(M)" /T /C /Q'
    Pop $R9
    ${If} $R9 != 0
       DetailPrint "Aviso: nao foi possivel ajustar ACL de $R0\Discovery (icacls codigo $R9)"
@@ -870,63 +840,19 @@ Function PrepareForInPlaceUpdate
    ; Tentar remover startup task antiga antes de atualizar binarios.
    Call UnregisterUIStartupTask
 
-   ; Em modo update, apenas PARA o servico sem deletar — sera reiniciado ao final.
-   ${If} $UpdateMode == "1"
-      DetailPrint "Parando Windows Service ${DISCOVERY_SERVICE_NAME} (update mode: sera reiniciado apos)..."
-      nsExec::ExecToLog '"$SYSDIR\sc.exe" stop "${DISCOVERY_SERVICE_NAME}"'
-      Pop $R0
-      ${If} $R0 != 0
-         DetailPrint "Aviso: falha (ou service inexistente) ao parar ${DISCOVERY_SERVICE_NAME}. Codigo: $R0"
-      ${EndIf}
-   ${Else}
-      ; Instalacao limpa: remove definitivamente.
-      Call UnregisterWindowsService
-   ${EndIf}
-
    # Garantir que nenhuma instancia do app permaneceu em execucao.
-   nsExec::ExecToLog '"$SYSDIR\taskkill.exe" /IM "${PRODUCT_EXECUTABLE}" /F /T'
+   nsExec::ExecToLog /OEM '"$SYSDIR\taskkill.exe" /IM "${PRODUCT_EXECUTABLE}" /F /T'
    Pop $R0
    ${If} $R0 != 0
       DetailPrint "Aviso: taskkill retornou codigo $R0 (pode nao haver processo em execucao)."
    ${EndIf}
 
    ${If} "${LEGACY_PRODUCT_EXECUTABLE}" != "${PRODUCT_EXECUTABLE}"
-      nsExec::ExecToLog '"$SYSDIR\taskkill.exe" /IM "${LEGACY_PRODUCT_EXECUTABLE}" /F /T'
+      nsExec::ExecToLog /OEM '"$SYSDIR\taskkill.exe" /IM "${LEGACY_PRODUCT_EXECUTABLE}" /F /T'
       Pop $R1
       ${If} $R1 != 0
          DetailPrint "Aviso: taskkill legado retornou codigo $R1 (pode nao haver processo legado em execucao)."
       ${EndIf}
-   ${EndIf}
-FunctionEnd
-
-Function RegisterWindowsService
-   DetailPrint "Registrando Windows Service ${DISCOVERY_SERVICE_NAME}"
-
-   # Remover versÃ£o anterior (idempotente)
-   nsExec::ExecToLog '"$SYSDIR\sc.exe" stop "${DISCOVERY_SERVICE_NAME}"'
-   Pop $R0
-   nsExec::ExecToLog '"$SYSDIR\sc.exe" delete "${DISCOVERY_SERVICE_NAME}"'
-   Pop $R0
-
-   # Registrar serviÃ§o com inicializaÃ§Ã£o automÃ¡tica
-   nsExec::ExecToLog '"$SYSDIR\sc.exe" create "${DISCOVERY_SERVICE_NAME}" binPath= "\"$INSTDIR\${PRODUCT_EXECUTABLE}\" --service" start= auto DisplayName= "Discovery Agent Service"'
-   Pop $R0
-   ${If} $R0 != 0
-      MessageBox MB_ICONSTOP "Falha ao registrar o Windows Service (${DISCOVERY_SERVICE_NAME}). Codigo: $R0"
-      Abort
-   ${EndIf}
-
-   # Configurar recuperaÃ§Ã£o automÃ¡tica
-   nsExec::ExecToLog '"$SYSDIR\sc.exe" failure "${DISCOVERY_SERVICE_NAME}" reset= 86400 actions= restart/5000/restart/5000/restart/5000'
-   Pop $R1
-   nsExec::ExecToLog '"$SYSDIR\sc.exe" description "${DISCOVERY_SERVICE_NAME}" "Discovery background service (multi-user)"'
-   Pop $R1
-
-   # Iniciar serviÃ§o apÃ³s instalaÃ§Ã£o
-   nsExec::ExecToLog '"$SYSDIR\sc.exe" start "${DISCOVERY_SERVICE_NAME}"'
-   Pop $R1
-   ${If} $R1 != 0
-      DetailPrint "Aviso: service instalado, mas falhou ao iniciar automaticamente. Codigo: $R1"
    ${EndIf}
 FunctionEnd
 
@@ -935,10 +861,10 @@ Function RegisterWindowsFirewallRule
 
    # netsh advfirewall: nativo do Windows, sem dependencia de PowerShell ou plugins.
    # Remove regra anterior (idempotente) e cria nova.
-   nsExec::ExecToLog '"$SYSDIR\netsh.exe" advfirewall firewall delete rule name="${DISCOVERY_FIREWALL_RULE_NAME}"'
+   nsExec::ExecToLog /OEM '"$SYSDIR\netsh.exe" advfirewall firewall delete rule name="${DISCOVERY_FIREWALL_RULE_NAME}"'
    Pop $R0
 
-   nsExec::ExecToLog '"$SYSDIR\netsh.exe" advfirewall firewall add rule name="${DISCOVERY_FIREWALL_RULE_NAME}" dir=in action=allow program="$INSTDIR\${PRODUCT_EXECUTABLE}" enable=yes profile=any'
+   nsExec::ExecToLog /OEM '"$SYSDIR\netsh.exe" advfirewall firewall add rule name="${DISCOVERY_FIREWALL_RULE_NAME}" dir=in action=allow program="$INSTDIR\${PRODUCT_EXECUTABLE}" enable=yes profile=any'
    Pop $R0
 
    ${If} $R0 != 0
@@ -973,7 +899,7 @@ Function RegisterUIStartupTask
    FileWrite $R8 "}$\r$\n"
    FileClose $R8
 
-   nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$R9"'
+   nsExec::ExecToLog /OEM '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$R9"'
    Pop $R0
    Delete "$R9"
 
@@ -993,25 +919,11 @@ ui_startup_fallback:
    DetailPrint "Fallback aplicado: autostart da UI registrado via Startup folder."
 FunctionEnd
 
-Function UnregisterWindowsService
-   DetailPrint "Removendo Windows Service ${DISCOVERY_SERVICE_NAME}"
-   nsExec::ExecToLog '"$SYSDIR\sc.exe" stop "${DISCOVERY_SERVICE_NAME}"'
-   Pop $R0
-   ${If} $R0 != 0
-      DetailPrint "Aviso: falha (ou service inexistente) ao parar ${DISCOVERY_SERVICE_NAME}. Codigo: $R0"
-   ${EndIf}
-   nsExec::ExecToLog '"$SYSDIR\sc.exe" delete "${DISCOVERY_SERVICE_NAME}"'
-   Pop $R0
-   ${If} $R0 != 0
-      DetailPrint "Aviso: falha (ou service inexistente) ao remover ${DISCOVERY_SERVICE_NAME}. Codigo: $R0"
-   ${EndIf}
-FunctionEnd
-
 Function un.UnregisterWindowsFirewallRule
    DetailPrint "Removendo regra de Windows Firewall de ${PRODUCT_EXECUTABLE}"
 
    # netsh advfirewall: nativo do Windows, sem PowerShell.
-   nsExec::ExecToLog '"$SYSDIR\netsh.exe" advfirewall firewall delete rule name="${DISCOVERY_FIREWALL_RULE_NAME}"'
+   nsExec::ExecToLog /OEM '"$SYSDIR\netsh.exe" advfirewall firewall delete rule name="${DISCOVERY_FIREWALL_RULE_NAME}"'
    Pop $R0
 
    ${If} $R0 != 0
@@ -1021,28 +933,14 @@ FunctionEnd
 
 Function UnregisterUIStartupTask
    DetailPrint "Removendo tarefa de autostart da UI (${DISCOVERY_UI_TASK_NAME})"
-   nsExec::ExecToLog '"$SYSDIR\schtasks.exe" /Delete /TN "${DISCOVERY_UI_TASK_NAME}" /F'
+   nsExec::ExecToLog /OEM '"$SYSDIR\schtasks.exe" /Delete /TN "${DISCOVERY_UI_TASK_NAME}" /F'
    Pop $R0
    Delete "$SMSTARTUP\${INFO_PRODUCTNAME}.lnk"
 FunctionEnd
 
-Function un.UnregisterWindowsService
-   DetailPrint "Removendo Windows Service ${DISCOVERY_SERVICE_NAME}"
-   nsExec::ExecToLog '"$SYSDIR\sc.exe" stop "${DISCOVERY_SERVICE_NAME}"'
-   Pop $R0
-   ${If} $R0 != 0
-      DetailPrint "Aviso: falha (ou service inexistente) ao parar ${DISCOVERY_SERVICE_NAME}. Codigo: $R0"
-   ${EndIf}
-   nsExec::ExecToLog '"$SYSDIR\sc.exe" delete "${DISCOVERY_SERVICE_NAME}"'
-   Pop $R0
-   ${If} $R0 != 0
-      DetailPrint "Aviso: falha (ou service inexistente) ao remover ${DISCOVERY_SERVICE_NAME}. Codigo: $R0"
-   ${EndIf}
-FunctionEnd
-
 Function un.UnregisterUIStartupTask
    DetailPrint "Removendo tarefa de autostart da UI (${DISCOVERY_UI_TASK_NAME})"
-   nsExec::ExecToLog '"$SYSDIR\schtasks.exe" /Delete /TN "${DISCOVERY_UI_TASK_NAME}" /F'
+   nsExec::ExecToLog /OEM '"$SYSDIR\schtasks.exe" /Delete /TN "${DISCOVERY_UI_TASK_NAME}" /F'
    Pop $R0
    Delete "$SMSTARTUP\${INFO_PRODUCTNAME}.lnk"
 FunctionEnd

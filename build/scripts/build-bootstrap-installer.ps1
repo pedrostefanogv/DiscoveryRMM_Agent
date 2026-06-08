@@ -10,8 +10,6 @@ param(
     [ValidateSet("0", "1")]
     [Alias("DiscoveryEnabled")]
     [string]$AutoProvisioning = "1",
-    [ValidateSet("0", "1")]
-    [string]$EnableWindowsService = "0",
     [string]$ExpectedTag = "",
     [switch]$GenericInstall
 )
@@ -169,8 +167,7 @@ $nsisArgs = @(
     "/DARG_PAYLOAD_URL=$PayloadUrl",
     "/DARG_PAYLOAD_FILENAME=$PayloadFileName",
     "/DARG_OUTFILE_NAME=$OutputName",
-    "/DARG_DEFAULT_DISCOVERY=$AutoProvisioning",
-    "/DARG_ENABLE_WINDOWS_SERVICE=$EnableWindowsService"
+    "/DARG_DEFAULT_DISCOVERY=$AutoProvisioning"
 )
 
 if ($PayloadSha256 -ne "") {
@@ -196,10 +193,5 @@ if (-not (Test-Path $installerPath)) {
 
 Write-Output "[3/3] Concluido."
 Write-Output "Bootstrap gerado em: $installerPath"
-if ($EnableWindowsService -eq "1") {
-    Write-Output "Esse bootstrap baixa a segunda etapa e executa o instalador completo com servico Windows habilitado."
-}
-else {
-    Write-Output "Esse bootstrap baixa a segunda etapa e executa o instalador completo em modo tray no logon (sem servico Windows)."
-}
+Write-Output "Esse bootstrap baixa a segunda etapa e executa o instalador completo em modo tray no logon (Task Scheduler, sem servico Windows)."
 

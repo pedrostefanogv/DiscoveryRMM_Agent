@@ -1083,7 +1083,6 @@ func (a *App) applyIdleMode(idle bool) bool {
 func (a *App) GetServiceHealth() map[string]interface{} {
 	return map[string]interface{}{
 		"running":      true,
-		"service_only": false,
 		"user_message": "Runtime local ativo (tray icon no logon).",
 	}
 }
