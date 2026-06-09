@@ -451,14 +451,14 @@ func (u *Updater) forceInstallFromPublicEndpoint(ctx context.Context, currentVer
 
 	u.reportEvent(ctx, "UpdateAvailable", reportOpts{
 		CurrentVersion: currentVersion,
-		TargetVersion:  currentVersion,
+		TargetVersion:  currentVersion, // Será atualizado após extrair versão real do arquivo
 		CorrelationID:  correlationID,
 		Message:        "force reinstall via public endpoint",
 	})
 
 	u.reportEvent(ctx, "DownloadStarted", reportOpts{
 		CurrentVersion: currentVersion,
-		TargetVersion:  currentVersion,
+		TargetVersion:  currentVersion, // Será atualizado após extrair versão real do arquivo
 		CorrelationID:  correlationID,
 	})
 
@@ -475,41 +475,50 @@ func (u *Updater) forceInstallFromPublicEndpoint(ctx context.Context, currentVer
 	}
 
 	u.logf("[selfupdate] force-install download concluido: tempPath=%s sha256=%s", tempPath, fileSha256)
+
+	// Extrair a versão real do arquivo baixado
+	targetVersion := extractFileVersion(tempPath)
+	if targetVersion == "" {
+		u.logf("[selfupdate] force-install aviso: nao conseguiu extrair versao do arquivo, usando currentVersion=%s", currentVersion)
+		targetVersion = currentVersion
+	}
+	u.logf("[selfupdate] force-install versao alvo determinada: %s", targetVersion)
+
 	u.reportEvent(ctx, "DownloadCompleted", reportOpts{
 		CurrentVersion: currentVersion,
-		TargetVersion:  currentVersion,
+		TargetVersion:  targetVersion,
 		CorrelationID:  correlationID,
 		Message:        fmt.Sprintf("sha256=%s", fileSha256),
 	})
 
 	u.reportEvent(ctx, "InstallStarted", reportOpts{
 		CurrentVersion: currentVersion,
-		TargetVersion:  currentVersion,
+		TargetVersion:  targetVersion,
 		CorrelationID:  correlationID,
 	})
 
 	if err := u.persistPendingInstallState(pendingInstallState{
 		CurrentVersion: currentVersion,
-		TargetVersion:  currentVersion,
+		TargetVersion:  targetVersion,
 		CorrelationID:  correlationID,
 		RecordedAtUTC:  time.Now().UTC().Format(time.RFC3339),
 	}); err != nil {
 		errutil.LogIfErr(os.Remove(tempPath), "selfupdate: limpar temp apos falha de persistencia")
 		u.reportEvent(ctx, "InstallFailed", reportOpts{
 			CurrentVersion: currentVersion,
-			TargetVersion:  currentVersion,
+			TargetVersion:  targetVersion,
 			CorrelationID:  correlationID,
 			Message:        "falha ao persistir estado pendente: " + err.Error(),
 		})
 		return err
 	}
 
-	if err := u.launchInstallerWithUI(ctx, tempPath, currentVersion); err != nil {
+	if err := u.launchInstallerWithUI(ctx, tempPath, targetVersion); err != nil {
 		u.clearPendingInstallState()
 		errutil.LogIfErr(os.Remove(tempPath), "selfupdate: limpar temp apos falha de launch")
 		u.reportEvent(ctx, "InstallFailed", reportOpts{
 			CurrentVersion: currentVersion,
-			TargetVersion:  currentVersion,
+			TargetVersion:  targetVersion,
 			CorrelationID:  correlationID,
 			Message:        err.Error(),
 		})
