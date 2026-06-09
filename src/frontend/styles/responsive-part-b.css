@@ -1,22 +1,23 @@
-  max-height: calc(100vh - 280px);
-  overflow-y: auto;
-  padding-right: 2px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
 .kb-article-card {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
   border: 1px solid var(--border);
+  border-style: solid;
   background: var(--surface);
+  background-color: var(--surface);
   border-radius: 10px;
   padding: 10px 12px;
   text-align: left;
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
   gap: 4px;
   cursor: pointer;
   font-family: inherit;
+  font-size: 0.85rem;
+  color: var(--text);
+  line-height: 1.35;
   transition: border-color var(--transition), box-shadow var(--transition), background var(--transition);
 }
 
@@ -31,7 +32,15 @@
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 15%, transparent);
 }
 
+.kb-article-card:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
 .kb-article-title {
+  display: block;
+  width: 100%;
   font-size: 0.85rem;
   font-weight: 600;
   color: var(--text);
@@ -42,6 +51,8 @@
 }
 
 .kb-article-summary {
+  display: block;
+  width: 100%;
   font-size: 0.75rem;
   color: var(--muted);
   line-height: 1.35;
@@ -52,6 +63,7 @@
 
 .kb-article-badges {
   display: flex;
+  width: 100%;
   flex-wrap: wrap;
   gap: 5px;
   margin-top: 2px;
@@ -74,6 +86,7 @@
 
 .kb-article-tags {
   display: flex;
+  width: 100%;
   flex-wrap: wrap;
   gap: 4px;
   color: var(--muted);
