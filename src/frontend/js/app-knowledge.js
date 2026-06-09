@@ -36,7 +36,10 @@ function renderKnowledgeArticles(items) {
   if (!kbArticlesListEl) return;
   var list = items || [];
   if (!list.length) {
-    kbArticlesListEl.innerHTML = '<div class="meta">' + escapeHtml(translate('knowledge.noArticlesFound')) + '</div>';
+    kbArticlesListEl.innerHTML = '<div class="kb-empty-state">' +
+      '<div class="kb-empty-icon">&#128218;</div>' +
+      '<div class="kb-empty-text">' + escapeHtml(translate('knowledge.noArticlesFound')) + '</div>' +
+      '</div>';
     renderKnowledgeArticleDetail(null);
     return;
   }
@@ -44,14 +47,17 @@ function renderKnowledgeArticles(items) {
   kbArticlesListEl.innerHTML = list.map(function (a) {
     var tags = Array.isArray(a.tags) ? a.tags : [];
     var isActive = selectedKnowledgeArticleID && selectedKnowledgeArticleID === a.id;
+    var cat = String(a.category || '').trim();
+    var diff = String(a.difficulty || '').trim();
+    var badges = '';
+    if (cat && cat !== '-') badges += '<span class="kb-badge">' + escapeHtml(cat) + '</span>';
+    if (diff && diff !== '-') badges += '<span class="kb-badge kb-badge-scope">' + escapeHtml(diff) + '</span>';
+    var tagsHtml = tags.map(function (t) { return '<em>#' + escapeHtml(t) + '</em>'; }).join(' ');
     return '<button class="kb-article-card ' + (isActive ? 'active' : '') + '" data-kb-id="' + escapeHtmlAttr(a.id) + '">' +
       '<span class="kb-article-title">' + escapeHtml(a.title || '-') + '</span>' +
-      '<span class="kb-article-summary">' + escapeHtml(a.summary || '-') + '</span>' +
-      '<span class="kb-article-badges">' +
-        '<span class="kb-badge">' + escapeHtml(a.category || '-') + '</span>' +
-        '<span class="kb-badge">' + escapeHtml(a.difficulty || '-') + '</span>' +
-      '</span>' +
-      '<span class="kb-article-tags">' + tags.map(function (t) { return '<em>#' + escapeHtml(t) + '</em>'; }).join(' ') + '</span>' +
+      (a.summary ? '<span class="kb-article-summary">' + escapeHtml(a.summary) + '</span>' : '') +
+      (badges ? '<span class="kb-article-badges">' + badges + '</span>' : '') +
+      (tagsHtml ? '<span class="kb-article-tags">' + tagsHtml + '</span>' : '') +
     '</button>';
   }).join('');
 }

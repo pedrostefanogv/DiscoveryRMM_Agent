@@ -809,7 +809,7 @@
 
 .knowledge-layout {
   display: grid;
-  grid-template-columns: minmax(320px, 420px) 1fr;
+  grid-template-columns: minmax(280px, 380px) 1fr;
   gap: 14px;
   min-height: calc(100vh - 220px);
 }
@@ -818,7 +818,7 @@
 .knowledge-layout > .kb-article-detail {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   padding: 12px;
 }
 
@@ -829,4 +829,4 @@
 .kb-articles-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;

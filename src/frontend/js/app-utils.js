@@ -1253,8 +1253,8 @@ function renderMarkdown(markdown) {
 
 function buildKnowledgeMeta(article) {
   var parts = [];
-  if (article.category) parts.push('<span>' + escapeHtml(article.category) + '</span>');
-  if (article.scope) parts.push('<span>Escopo: ' + escapeHtml(normalizeKbScope(article.scope)) + '</span>');
+  if (article.category) parts.push('<span class="kb-meta-cat">' + escapeHtml(article.category) + '</span>');
+  if (article.scope) { var s = normalizeKbScope(article.scope); if (s && s !== '-') parts.push('<span>Escopo: ' + escapeHtml(s) + '</span>'); }
   if (article.author) parts.push('<span>Autor: ' + escapeHtml(article.author) + '</span>');
   if (article.difficulty) parts.push('<span>Nivel: ' + escapeHtml(article.difficulty) + '</span>');
   if (article.readTimeMin) parts.push('<span>Leitura: ' + escapeHtml(String(article.readTimeMin)) + ' min</span>');
