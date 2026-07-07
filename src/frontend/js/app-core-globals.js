@@ -364,8 +364,17 @@ function showFeedback(message, isError) {
   showToast(message, isError ? 'error' : 'info');
 }
 
+var MAX_VISIBLE_TOASTS = 5;
+
 function showToast(message, type) {
   if (!toastContainerEl) return;
+  // Limitar toasts simultâneos: remover o mais antigo se exceder o limite
+  var existingToasts = toastContainerEl.querySelectorAll('.toast:not(.removing)');
+  if (existingToasts.length >= MAX_VISIBLE_TOASTS) {
+    var oldest = existingToasts[0];
+    oldest.classList.add('removing');
+    oldest.addEventListener('animationend', function () { oldest.remove(); });
+  }
   var toast = document.createElement('div');
   toast.className = 'toast ' + (type || 'info');
   toast.textContent = message;

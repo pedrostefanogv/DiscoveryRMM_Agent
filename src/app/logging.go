@@ -2,13 +2,13 @@ package app
 
 import (
 	"fmt"
-	"io"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+
+	"discovery/internal/logger"
 )
 
 // logBuffer stores command output lines for the embedded terminal view.
@@ -206,22 +206,9 @@ func truncateLogBody(body []byte, max int) string {
 	return s[:max] + "..."
 }
 
-type stdLogWriter struct {
-	buf *logBuffer
-}
-
-func (w *stdLogWriter) Write(p []byte) (int, error) {
-	line := strings.TrimRight(string(p), "\r\n")
-	if line != "" {
-		w.buf.append(line)
-	}
-	return len(p), nil
-}
-
 func captureStdLog(buf *logBuffer) func() {
-	original := log.Writer()
-	log.SetOutput(io.MultiWriter(os.Stderr, &stdLogWriter{buf: buf}))
+	logger.SetSink(logger.LogBufferAdapter(buf.append))
 	return func() {
-		log.SetOutput(original)
+		logger.SetSink(nil)
 	}
 }

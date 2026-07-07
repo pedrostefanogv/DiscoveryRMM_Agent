@@ -1,4 +1,4 @@
-package automation
+﻿package automation
 
 import (
 	"context"
@@ -392,7 +392,7 @@ func (s *Service) executeTaskAsync(ctx context.Context, agentID string, task Aut
 			}
 		}
 
-		// Carrega custom fields para esta execução (falha silenciosa - não bloqueia a execução).
+		// Carrega custom fields para esta execuÃ§Ã£o (falha silenciosa - nÃ£o bloqueia a execuÃ§Ã£o).
 		cfg := s.getConfig()
 		cfCtx := s.loadCustomFieldsForExecution(ctx, cfg, executionID, entry.TaskID, entry.ScriptID, correlationID)
 		defer s.clearCustomFieldCtx(executionID)
@@ -444,101 +444,6 @@ func (s *Service) executeTaskAsync(ctx context.Context, agentID string, task Aut
 	}()
 }
 
-func (s *Service) shouldDeferExecution(task AutomationTask, response AutomationNotificationResponse) bool {
-	if !isPackageAction(task.ActionType) {
-		return false
-	}
-	if !response.Accepted {
-		return false
-	}
-	return strings.EqualFold(strings.TrimSpace(response.Result), "deferred")
-}
-
-func (s *Service) recordAndGetNextDefer(agentID, executionID string, task AutomationTask, current deferState, welcome psadtWelcomeOptions) time.Time {
-	taskID := strings.TrimSpace(task.TaskID)
-	if taskID == "" {
-		return time.Time{}
-	}
-	agentID = strings.TrimSpace(agentID)
-	executionID = strings.TrimSpace(executionID)
-
-	if !welcome.AllowDefer {
-		current.Exhausted = true
-		s.mu.Lock()
-		s.deferByTask[taskID] = current
-		s.mu.Unlock()
-		s.persistDeferState(agentID, taskID, current, "deferred")
-		return time.Time{}
-	}
-
-	maxTimes := welcome.DeferTimes
-	if maxTimes <= 0 {
-		maxTimes = defaultDeferTimes
-	}
-	if current.Count >= maxTimes {
-		current.Exhausted = true
-		s.mu.Lock()
-		s.deferByTask[taskID] = current
-		s.mu.Unlock()
-		s.persistDeferState(agentID, taskID, current, "deferred")
-		return time.Time{}
-	}
-
-	now := time.Now().UTC()
-	current.ExecutionID = executionID
-	if current.FirstDeferAt.IsZero() {
-		current.FirstDeferAt = now
-	}
-
-	deadline := current.DeadlineAt
-	if !welcome.DeferDeadline.IsZero() {
-		if deadline.IsZero() || welcome.DeferDeadline.Before(deadline) {
-			deadline = welcome.DeferDeadline
-		}
-	}
-	if welcome.DeferDays > 0 {
-		windowDeadline := current.FirstDeferAt.Add(time.Duration(welcome.DeferDays * float64(24*time.Hour)))
-		if deadline.IsZero() || windowDeadline.Before(deadline) {
-			deadline = windowDeadline
-		}
-	}
-	if !deadline.IsZero() && (now.Equal(deadline) || now.After(deadline)) {
-		current.DeadlineAt = deadline
-		current.Exhausted = true
-		s.mu.Lock()
-		s.deferByTask[taskID] = current
-		s.mu.Unlock()
-		s.persistDeferState(agentID, taskID, current, "deferred")
-		return time.Time{}
-	}
-	current.DeadlineAt = deadline
-
-	current.Count++
-	current.LastDeferAt = now
-	interval := welcome.DeferRunInterval
-	if interval <= 0 {
-		interval = defaultDeferInterval
-	}
-	current.NextAttempt = now.Add(interval)
-	current.Exhausted = current.Count >= maxTimes
-
-	s.mu.Lock()
-	s.deferByTask[taskID] = current
-	s.mu.Unlock()
-	s.persistDeferState(agentID, taskID, current, "deferred")
-
-	if current.Count > maxTimes {
-		return time.Time{}
-	}
-	return current.NextAttempt
-}
-
-func (s *Service) resolvePSADTPolicyLocked() PSADTPolicy {
-	if s.psadtResolver == nil {
-		return normalizePSADTPolicy(PSADTPolicy{})
-	}
-	return normalizePSADTPolicy(s.psadtResolver())
-}
 
 func (s *Service) sendOrQueueCallback(ctx context.Context, agentID, executionID, commandID string, callbackType CallbackType, payload any, correlationID string) error {
 	if strings.TrimSpace(commandID) == "" {
@@ -590,8 +495,8 @@ func (s *Service) sendOrQueueCallback(ctx context.Context, agentID, executionID,
 	return callbackErr
 }
 
-// loadCustomFieldsForExecution consulta o endpoint de runtime e armazena o contexto em memória
-// escopado ao executionID. Em caso de erro, retorna um contexto vazio (não bloqueia a execução).
+// loadCustomFieldsForExecution consulta o endpoint de runtime e armazena o contexto em memÃ³ria
+// escopado ao executionID. Em caso de erro, retorna um contexto vazio (nÃ£o bloqueia a execuÃ§Ã£o).
 func (s *Service) loadCustomFieldsForExecution(ctx context.Context, cfg RuntimeConfig, executionID, taskID, scriptID, correlationID string) *ExecutionCustomFieldCtx {
 	fields, err := s.client.GetRuntimeCustomFields(ctx, cfg, taskID, scriptID, correlationID)
 	if err != nil {
@@ -611,7 +516,7 @@ func (s *Service) loadCustomFieldsForExecution(ctx context.Context, cfg RuntimeC
 	return cfCtx
 }
 
-// clearCustomFieldCtx remove o contexto de custom fields da execução da memória.
+// clearCustomFieldCtx remove o contexto de custom fields da execuÃ§Ã£o da memÃ³ria.
 func (s *Service) clearCustomFieldCtx(executionID string) {
 	s.cfMu.Lock()
 	delete(s.cfCache, executionID)
@@ -626,7 +531,7 @@ func (s *Service) postCollectedValues(ctx context.Context, cfg RuntimeConfig, ex
 	taskID := strings.TrimSpace(task.TaskID)
 	scriptID := strings.TrimSpace(task.ScriptID)
 	for i := range items {
-		// Propaga contexto de taskId/scriptId se não informado pelo script.
+		// Propaga contexto de taskId/scriptId se nÃ£o informado pelo script.
 		if items[i].TaskID == nil && taskID != "" {
 			id := taskID
 			items[i].TaskID = &id
@@ -635,7 +540,7 @@ func (s *Service) postCollectedValues(ctx context.Context, cfg RuntimeConfig, ex
 			id := scriptID
 			items[i].ScriptID = &id
 		}
-		// Validação local fail-fast.
+		// ValidaÃ§Ã£o local fail-fast.
 		if err := validateCollectedWrite(cfCtx, items[i]); err != nil {
 			s.logf("automacao: campo coletado bloqueado (execucao=%s): %s", executionID, sanitizeCustomFieldErrForLog(err))
 			continue

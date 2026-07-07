@@ -1,4 +1,4 @@
-package app
+﻿package app
 
 // app_p2p_libp2p_transport.go
 //
@@ -7,24 +7,21 @@ package app
 // /p2p/artifact/{name}, /p2p/artifact/{name}/manifest e /p2p/replicate.
 //
 // Protocolos definidos (stream-based, JSON framing):
-//   /discovery/peers/1.0.0       — gossip: retorna peers conhecidos + catálogo local
-//   /artifact/access/1.0.0       — emite token de acesso para um artifact
-//   /artifact/manifest/1.0.0     — retorna manifest de chunks de um artifact
-//   /artifact/get/1.0.0          — transfere bytes de um chunk (range-aware)
-//   /artifact/replicate/1.0.0    — notifica peer para pull de artifact (push desativado, retorna Gone)
+//   /discovery/peers/1.0.0       â€” gossip: retorna peers conhecidos + catÃ¡logo local
+//   /artifact/access/1.0.0       â€” emite token de acesso para um artifact
+//   /artifact/manifest/1.0.0     â€” retorna manifest de chunks de um artifact
+//   /artifact/get/1.0.0          â€” transfere bytes de um chunk (range-aware)
+//   /artifact/replicate/1.0.0    â€” notifica peer para pull de artifact (push desativado, retorna Gone)
 
 import (
 	"bufio"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"discovery/internal/platform"
@@ -47,7 +44,7 @@ const (
 	libp2pCandidacyTimeout = 10 * time.Second
 )
 
-// ── Request / Response types ─────────────────────────────────────────────────
+// â”€â”€ Request / Response types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 type libp2pPeersResponse struct {
 	AgentID       string            `json:"agentId"`
@@ -71,7 +68,7 @@ type libp2pGetRequest struct {
 	ArtifactName string `json:"artifactName"`
 	RequesterID  string `json:"requesterId"`
 	RangeStart   int64  `json:"rangeStart"`
-	RangeEnd     int64  `json:"rangeEnd"` // -1 = até o fim
+	RangeEnd     int64  `json:"rangeEnd"` // -1 = atÃ© o fim
 }
 
 type libp2pGetResponse struct {
@@ -80,7 +77,7 @@ type libp2pGetResponse struct {
 	TotalSize    int64  `json:"totalSize"`
 	RangeStart   int64  `json:"rangeStart"`
 	RangeEnd     int64  `json:"rangeEnd"`
-	// Após este JSON header, o remetente envia exatamente (RangeEnd-RangeStart+1) bytes.
+	// ApÃ³s este JSON header, o remetente envia exatamente (RangeEnd-RangeStart+1) bytes.
 }
 
 type libp2pReplicateRequest struct {
@@ -98,9 +95,9 @@ type libp2pErrorResponse struct {
 	Error string `json:"error"`
 }
 
-// ── Tipos do protocolo /fetch ───────────────────────────────────────────────
+// â”€â”€ Tipos do protocolo /fetch â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-// libp2pCandidacyRequest é enviado por um peer que quer se candidatar a fetcher.
+// libp2pCandidacyRequest Ã© enviado por um peer que quer se candidatar a fetcher.
 // Reutiliza ArtifactFetchCandidate como payload.
 type libp2pCandidacyRequest = ArtifactFetchCandidate
 
@@ -110,10 +107,10 @@ type libp2pCandidacyResponse struct {
 	Message  string `json:"message,omitempty"`
 }
 
-// ── Server-side: registrar handlers no host libp2p ───────────────────────────
+// â”€â”€ Server-side: registrar handlers no host libp2p â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 // RegisterP2PProtocols instala todos os stream handlers nos 7 protocolos.
-// Chamado em app_p2p_libp2p.go após criar o host.
+// Chamado em app_p2p_libp2p.go apÃ³s criar o host.
 func RegisterP2PProtocols(h host.Host, coord *p2pCoordinator, transfer *p2pTransferServer) {
 	h.SetStreamHandler(protoDiscoveryPeers, func(s network.Stream) {
 		handleStreamPeers(s, coord, transfer)
@@ -359,10 +356,10 @@ func handleStreamArtifactReplicate(s network.Stream) {
 	})
 }
 
-// ── Client-side: funções de chamada para peers ────────────────────────────────
+// â”€â”€ Client-side: funÃ§Ãµes de chamada para peers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 // libp2pFetchPeers abre um stream /discovery/peers/1.0.0 para o peer e retorna
-// a resposta de gossip (catálogo + peers conhecidos).
+// a resposta de gossip (catÃ¡logo + peers conhecidos).
 func libp2pFetchPeers(ctx context.Context, h host.Host, peerID peer.ID) (libp2pPeersResponse, error) {
 	s, err := h.NewStream(ctx, peerID, protoDiscoveryPeers)
 	if err != nil {
@@ -391,7 +388,7 @@ func libp2pRequestAccess(ctx context.Context, h host.Host, peerID peer.ID, artif
 	if err := json.NewEncoder(s).Encode(req); err != nil {
 		return P2PArtifactAccess{}, fmt.Errorf("encode access req: %w", err)
 	}
-	// Lê resposta: pode ser P2PArtifactAccess ou libp2pErrorResponse.
+	// LÃª resposta: pode ser P2PArtifactAccess ou libp2pErrorResponse.
 	raw, err := io.ReadAll(bufio.NewReader(s))
 	if err != nil {
 		return P2PArtifactAccess{}, fmt.Errorf("read access resp: %w", err)
@@ -478,8 +475,8 @@ func readPayloadExact(reader io.Reader, expected int64) ([]byte, error) {
 }
 
 // libp2pDownloadChunk abre um stream /artifact/get/1.0.0, solicita um range e
-// salva os bytes no destFile. Verifica SHA256 do chunk após receber.
-// onProgress é opcional — quando != nil, chamado com (bytesLidosNoChunk, tamanhoDoChunk).
+// salva os bytes no destFile. Verifica SHA256 do chunk apÃ³s receber.
+// onProgress Ã© opcional â€” quando != nil, chamado com (bytesLidosNoChunk, tamanhoDoChunk).
 func libp2pDownloadChunk(ctx context.Context, h host.Host, peerID peer.ID, artifactName, requesterID string, chunk P2PChunk, destFile string, onProgress func(readSoFar, total int64)) error {
 	if chunk.Size <= 0 {
 		return fmt.Errorf("chunk %d: tamanho invalido", chunk.Index)
@@ -543,7 +540,7 @@ func libp2pDownloadChunk(ctx context.Context, h host.Host, peerID peer.ID, artif
 }
 
 // libp2pDownloadArtifact faz download simples (arquivo inteiro) via /artifact/get/1.0.0.
-// onProgress é opcional — quando != nil, é chamado com (bytesLidos, totalBytes) durante a transferência.
+// onProgress Ã© opcional â€” quando != nil, Ã© chamado com (bytesLidos, totalBytes) durante a transferÃªncia.
 func libp2pDownloadArtifact(ctx context.Context, h host.Host, peerID peer.ID, access P2PArtifactAccess, destDir string, onProgress func(readSoFar, total int64)) (string, int64, error) {
 	s, err := h.NewStream(ctx, peerID, protoArtifactGet)
 	if err != nil {
@@ -623,217 +620,3 @@ func libp2pDownloadArtifact(ctx context.Context, h host.Host, peerID peer.ID, ac
 }
 
 // verifySHA256 verifica se data bate com o hex SHA256 esperado.
-func verifySHA256(data []byte, expected string) bool {
-	import_crypto_sha256 := sha256.Sum256(data)
-	got := hex.EncodeToString(import_crypto_sha256[:])
-	return strings.EqualFold(got, strings.TrimSpace(expected))
-}
-
-// ── Mapa agentID → libp2p peer.ID ────────────────────────────────────────────
-
-// libp2pPeerRegistry mantém mapeamento agentID → peer.ID libp2p para lookup
-// durante operações de transferência. Atualizado pelo notifee quando um peer é
-// conectado.
-// mu protege peers contra acesso concorrente de goroutines de stream handlers
-// (inbound/outbound) e leituras do coordinator.
-type libp2pPeerRegistry struct {
-	mu    sync.RWMutex
-	peers map[string]peer.ID
-}
-
-func newLibp2pPeerRegistry() *libp2pPeerRegistry {
-	return &libp2pPeerRegistry{peers: make(map[string]peer.ID)}
-}
-
-// Register associa um agentID a um peer.ID libp2p. Seguro para uso concorrente.
-func (r *libp2pPeerRegistry) Register(agentID string, id peer.ID) {
-	if r == nil {
-		return
-	}
-	key := strings.ToLower(strings.TrimSpace(agentID))
-	if key == "" {
-		return
-	}
-	r.mu.Lock()
-	r.peers[key] = id
-	r.mu.Unlock()
-}
-
-// RegisterStrict accepts the first mapping for an agentID and rejects
-// conflicting peer IDs for the same agentID.
-func (r *libp2pPeerRegistry) RegisterStrict(agentID string, id peer.ID) (accepted bool, existing peer.ID, conflict bool) {
-	if r == nil {
-		return false, "", false
-	}
-	key := strings.ToLower(strings.TrimSpace(agentID))
-	if key == "" {
-		return false, "", false
-	}
-
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	if prev, ok := r.peers[key]; ok {
-		if prev != "" && id != "" && prev != id {
-			return false, prev, true
-		}
-		return true, prev, false
-	}
-
-	r.peers[key] = id
-	return true, "", false
-}
-
-// Lookup retorna o peer.ID para um agentID, se registrado. Seguro para uso concorrente.
-func (r *libp2pPeerRegistry) Lookup(agentID string) (peer.ID, bool) {
-	if r == nil {
-		return "", false
-	}
-	key := strings.ToLower(strings.TrimSpace(agentID))
-	r.mu.RLock()
-	id, ok := r.peers[key]
-	r.mu.RUnlock()
-	return id, ok
-}
-
-// AgentIDs retorna todos os agentIDs registrados. Seguro para uso concorrente.
-func (r *libp2pPeerRegistry) AgentIDs() []string {
-	if r == nil {
-		return nil
-	}
-	r.mu.RLock()
-	ids := make([]string, 0, len(r.peers))
-	for id := range r.peers {
-		ids = append(ids, id)
-	}
-	r.mu.RUnlock()
-	return ids
-}
-
-// ── /fetch handlers ─────────────────────────────────────────────────────────
-
-// handleStreamFetchCandidacy processa uma candidatura de fetch recebida via libp2p.
-// Decodifica o candidato, chama handleFetchCandidacy no coordinator e responde.
-func handleStreamFetchCandidacy(s network.Stream, coord *p2pCoordinator) {
-	defer s.Close()
-	_ = s.SetDeadline(time.Now().Add(libp2pCandidacyTimeout))
-
-	var req libp2pCandidacyRequest
-	if err := json.NewDecoder(bufio.NewReader(s)).Decode(&req); err != nil {
-		_ = json.NewEncoder(s).Encode(libp2pCandidacyResponse{Accepted: false, Message: "payload invalido"})
-		return
-	}
-
-	req.ArtifactID = strings.TrimSpace(req.ArtifactID)
-	req.AgentID = strings.TrimSpace(req.AgentID)
-	if req.ArtifactID == "" || req.AgentID == "" {
-		_ = json.NewEncoder(s).Encode(libp2pCandidacyResponse{Accepted: false, Message: "artifactID ou agentID ausente"})
-		return
-	}
-
-	// Processar candidatura (eleição local)
-	if coord != nil && coord.app != nil {
-		coord.handleFetchCandidacy(context.Background(), ArtifactFetchCandidate(req))
-	}
-
-	_ = json.NewEncoder(s).Encode(libp2pCandidacyResponse{Accepted: true})
-}
-
-// handleStreamFetchHeartbeat processa um heartbeat de fetch recebido via libp2p.
-// Atualiza o lease remoto para evitar reeleição prematura.
-func handleStreamFetchHeartbeat(s network.Stream, coord *p2pCoordinator) {
-	defer s.Close()
-	_ = s.SetDeadline(time.Now().Add(libp2pStreamTimeout))
-
-	var hb ArtifactFetchHeartbeat
-	if err := json.NewDecoder(bufio.NewReader(s)).Decode(&hb); err != nil {
-		return
-	}
-
-	hb.ArtifactID = strings.TrimSpace(hb.ArtifactID)
-	hb.OwnerPeerID = strings.TrimSpace(hb.OwnerPeerID)
-	if hb.ArtifactID == "" || hb.OwnerPeerID == "" {
-		return
-	}
-
-	// Se o heartbeat é de outro peer, renovar o lease remoto no fetchStates
-	// para evitar que este peer tente reeleger o mesmo artifact.
-	if coord != nil && coord.app != nil {
-		selfAgentID := strings.TrimSpace(coord.app.GetDebugConfig().AgentID)
-		if !strings.EqualFold(hb.OwnerPeerID, selfAgentID) {
-			clientID := strings.TrimSpace(coord.app.GetAgentConfiguration().ClientID)
-			state := coord.fetchStates.getOrCreate(hb.ArtifactID, clientID)
-			state.OwnerPeerID = hb.OwnerPeerID
-			state.Status = hb.Status
-			state.LeaseUntil = hb.LeaseUntil
-			if hb.ProgressPct > state.ProgressPct {
-				state.ProgressPct = hb.ProgressPct
-			}
-		}
-	}
-}
-
-// ── Client-side: broadcast de candidatura e heartbeat ───────────────────────
-
-// libp2pBroadcastCandidacy envia uma candidatura de fetch para um peer específico.
-// Retorna true se o peer aceitou a candidatura.
-func libp2pBroadcastCandidacy(ctx context.Context, h host.Host, peerID peer.ID, candidate ArtifactFetchCandidate) (bool, error) {
-	s, err := h.NewStream(ctx, peerID, protoFetchCandidacy)
-	if err != nil {
-		return false, fmt.Errorf("stream candidacy: %w", err)
-	}
-	defer s.Close()
-	_ = s.SetDeadline(time.Now().Add(libp2pCandidacyTimeout))
-
-	req := libp2pCandidacyRequest(candidate)
-	if err := json.NewEncoder(s).Encode(req); err != nil {
-		return false, fmt.Errorf("encode candidacy: %w", err)
-	}
-
-	var resp libp2pCandidacyResponse
-	if err := json.NewDecoder(bufio.NewReader(s)).Decode(&resp); err != nil {
-		return false, fmt.Errorf("decode candidacy resp: %w", err)
-	}
-
-	return resp.Accepted, nil
-}
-
-// libp2pBroadcastCandidacyToAll envia a candidatura para todos os peers
-// conhecidos no registry e coleta as respostas.
-func libp2pBroadcastCandidacyToAll(ctx context.Context, h host.Host, registry *libp2pPeerRegistry, candidate ArtifactFetchCandidate) int {
-	count := 0
-	agentIDs := registry.AgentIDs()
-	for _, agentID := range agentIDs {
-		// Não enviar para si mesmo
-		if strings.EqualFold(strings.TrimSpace(agentID), strings.TrimSpace(candidate.AgentID)) {
-			continue
-		}
-		peerID, ok := registry.Lookup(agentID)
-		if !ok {
-			continue
-		}
-		accepted, err := libp2pBroadcastCandidacy(ctx, h, peerID, candidate)
-		if err != nil {
-			continue
-		}
-		if accepted {
-			count++
-		}
-	}
-	return count
-}
-
-// libp2pBroadcastFetchHeartbeat envia um heartbeat de fetch para um peer específico.
-func libp2pBroadcastFetchHeartbeat(ctx context.Context, h host.Host, peerID peer.ID, hb ArtifactFetchHeartbeat) error {
-	s, err := h.NewStream(ctx, peerID, protoFetchHeartbeat)
-	if err != nil {
-		return fmt.Errorf("stream heartbeat: %w", err)
-	}
-	defer s.Close()
-	_ = s.SetDeadline(time.Now().Add(libp2pStreamTimeout))
-
-	if err := json.NewEncoder(s).Encode(hb); err != nil {
-		return fmt.Errorf("encode heartbeat: %w", err)
-	}
-	return nil
-}

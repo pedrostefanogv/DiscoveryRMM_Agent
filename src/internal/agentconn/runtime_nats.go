@@ -1,13 +1,11 @@
-package agentconn
+﻿package agentconn
 
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"sort"
 	"strings"
 	"time"
 
@@ -35,7 +33,7 @@ func (scope natsCommandRouteScope) isFanout() bool {
 	return scope == natsCommandRouteSite || scope == natsCommandRouteClient || scope == natsCommandRouteGlobal
 }
 
-// ─── NATS Session ──────────────────────────────────────────────────
+// â”€â”€â”€ NATS Session â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 func (r *Runtime) runNATSSession(ctx context.Context, cfg Config, server, transportLabel string, connectTimeout time.Duration) error {
 	if !guidPattern.MatchString(strings.TrimSpace(cfg.AgentID)) {
@@ -55,13 +53,13 @@ func (r *Runtime) runNATSSession(ctx context.Context, cfg Config, server, transp
 		nats.ReconnectWait(reconnectBase),
 		nats.MaxReconnects(-1),
 		nats.DisconnectErrHandler(func(_ *nats.Conn, err error) {
-			r.logf("[heartbeat][nats] NATS desconectado: %v — heartbeats suspensos ate reconexao", err)
+			r.logf("[heartbeat][nats] NATS desconectado: %v â€” heartbeats suspensos ate reconexao", err)
 		}),
 		nats.ReconnectHandler(func(_ *nats.Conn) {
-			r.logf("[heartbeat][nats] NATS reconectado — heartbeats retomados")
+			r.logf("[heartbeat][nats] NATS reconectado â€” heartbeats retomados")
 		}),
 		nats.ClosedHandler(func(_ *nats.Conn) {
-			r.logf("[heartbeat][nats] conexao NATS encerrada permanentemente — heartbeats nao serao mais enviados")
+			r.logf("[heartbeat][nats] conexao NATS encerrada permanentemente â€” heartbeats nao serao mais enviados")
 		}),
 	}
 	if wsProxyPath != "" {
@@ -193,7 +191,7 @@ func natsFanoutDurableName(cfg Config, route natsCommandRouteScope) string {
 	return fmt.Sprintf("agent-%s-%s", agentID, string(route))
 }
 
-// ─── NATS Handlers ─────────────────────────────────────────────────
+// â”€â”€â”€ NATS Handlers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 func (r *Runtime) natsCommandHandler(ctx context.Context, nc *nats.Conn, cfg Config, subjects natsSubjects, route natsCommandRouteScope, requiresAck bool) func(msg *nats.Msg) {
 	return func(msg *nats.Msg) {
@@ -497,7 +495,7 @@ func (r *Runtime) natsP2PEventHandler() func(msg *nats.Msg) {
 	}
 }
 
-// ─── NATS Event Loop ───────────────────────────────────────────────
+// â”€â”€â”€ NATS Event Loop â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 func (r *Runtime) runNATSEventLoop(ctx context.Context, nc *nats.Conn, cfg Config, subjects natsSubjects, ipAddr string, globalPongReceived <-chan time.Time) error {
 	heartbeatInterval := heartbeatEvery
@@ -555,9 +553,9 @@ func (r *Runtime) runNATSEventLoop(ctx context.Context, nc *nats.Conn, cfg Confi
 			if reconnect, age := shouldReconnectForMissingGlobalPong(now, connectedAt, lastGlobalPongAt); reconnect {
 				roundedAge := age.Round(time.Second)
 				if lastGlobalPongAt.IsZero() {
-					r.logf("[heartbeat][nats] watchdog de global pong: sem tenant.global.pong desde conexao (%s) — forçando reconexao", roundedAge)
+					r.logf("[heartbeat][nats] watchdog de global pong: sem tenant.global.pong desde conexao (%s) â€” forÃ§ando reconexao", roundedAge)
 				} else {
-					r.logf("[heartbeat][nats] watchdog de global pong: sem tenant.global.pong ha %s — forçando reconexao", roundedAge)
+					r.logf("[heartbeat][nats] watchdog de global pong: sem tenant.global.pong ha %s â€” forÃ§ando reconexao", roundedAge)
 				}
 				return fmt.Errorf("watchdog global pong: sem sinal recente (%s)", roundedAge)
 			}
@@ -577,7 +575,7 @@ func shouldReconnectForMissingGlobalPong(now, connectedAt, lastGlobalPongAt time
 	return age > globalPongReconnectAfter, age
 }
 
-// ─── NATS Subjects ─────────────────────────────────────────────────
+// â”€â”€â”€ NATS Subjects â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 func resolveNATSSubjects(cfg Config) (natsSubjects, error) {
 	clientID, err := canonicalSubjectSegment("clientId", cfg.ClientID)
@@ -611,7 +609,7 @@ func resolveNATSSubjects(cfg Config) (natsSubjects, error) {
 
 func validateCanonicalNATSContext(cfg Config) error {
 	if !guidPattern.MatchString(strings.TrimSpace(cfg.AgentID)) {
-		return fmt.Errorf("agentId ausente ou invalido para NATS canônico")
+		return fmt.Errorf("agentId ausente ou invalido para NATS canÃ´nico")
 	}
 	if _, err := canonicalSubjectSegment("clientId", cfg.ClientID); err != nil {
 		return err
@@ -625,182 +623,12 @@ func validateCanonicalNATSContext(cfg Config) error {
 func canonicalSubjectSegment(name, value string) (string, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
-		return "", fmt.Errorf("%s ausente para subject NATS canônico", name)
+		return "", fmt.Errorf("%s ausente para subject NATS canÃ´nico", name)
 	}
 	if strings.ContainsAny(value, ".*> \t\r\n") {
-		return "", fmt.Errorf("%s invalido para subject NATS canônico", name)
+		return "", fmt.Errorf("%s invalido para subject NATS canÃ´nico", name)
 	}
 	return value, nil
-}
-
-func (r *Runtime) validateAgentIdentityACL(subjects natsSubjects, jwtCandidate string) error {
-	jwt := extractJWTToken(jwtCandidate)
-	if jwt == "" {
-		r.logf("[acl][nats] JWT indisponivel para validacao local dos subjects do AgentIdentity")
-		return nil
-	}
-	if err := validateAgentIdentityJWTClaims(jwt, subjects); err != nil {
-		return err
-	}
-	r.logf("[acl][nats] claims do AgentIdentity validadas para 7 subscribes e 4 publishes")
-	return nil
-}
-
-func validateAgentIdentityJWTClaims(jwt string, subjects natsSubjects) error {
-	claims, err := decodeJWTClaimsUnverified(jwt)
-	if err != nil {
-		return err
-	}
-	subAllow, err := extractJWTAllowedSubjects(claims, "sub")
-	if err != nil {
-		return fmt.Errorf("claim sub.allow invalida: %w", err)
-	}
-	pubAllow, err := extractJWTAllowedSubjects(claims, "pub")
-	if err != nil {
-		return fmt.Errorf("claim pub.allow invalida: %w", err)
-	}
-
-	expectedSub := []string{
-		subjects.CommandAgent,
-		subjects.CommandSiteFanout,
-		subjects.CommandClientFanout,
-		subjects.CommandGlobalFanout,
-		subjects.GlobalPong,
-		subjects.SyncPing,
-		subjects.P2PDiscovery,
-	}
-	expectedPub := []string{
-		subjects.Heartbeat,
-		subjects.Result,
-		subjects.Hardware,
-		subjects.RemoteDebugLog,
-	}
-
-	if err := compareSubjectSets("subscribe", subAllow, expectedSub); err != nil {
-		return err
-	}
-	if err := compareSubjectSets("publish", pubAllow, expectedPub); err != nil {
-		return err
-	}
-	return nil
-}
-
-func decodeJWTClaimsUnverified(jwt string) (map[string]any, error) {
-	parts := strings.Split(strings.TrimSpace(jwt), ".")
-	if len(parts) != 3 {
-		return nil, fmt.Errorf("token nao possui formato JWT")
-	}
-	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return nil, fmt.Errorf("falha ao decodificar payload JWT: %w", err)
-	}
-	var claims map[string]any
-	if err := json.Unmarshal(payload, &claims); err != nil {
-		return nil, fmt.Errorf("claims JWT invalidas: %w", err)
-	}
-	return claims, nil
-}
-
-func extractJWTAllowedSubjects(claims map[string]any, direction string) ([]string, error) {
-	natsClaims, ok := claims["nats"].(map[string]any)
-	if !ok {
-		return nil, fmt.Errorf("claim nats ausente")
-	}
-	dirClaim, ok := natsClaims[direction].(map[string]any)
-	if !ok {
-		return nil, fmt.Errorf("claim nats.%s ausente", direction)
-	}
-	allowRaw, ok := dirClaim["allow"]
-	if !ok {
-		return nil, fmt.Errorf("claim nats.%s.allow ausente", direction)
-	}
-
-	var out []string
-	switch typed := allowRaw.(type) {
-	case []any:
-		for _, value := range typed {
-			s := strings.TrimSpace(toString(value))
-			if s != "" {
-				out = append(out, s)
-			}
-		}
-	case []string:
-		for _, value := range typed {
-			s := strings.TrimSpace(value)
-			if s != "" {
-				out = append(out, s)
-			}
-		}
-	case string:
-		s := strings.TrimSpace(typed)
-		if s != "" {
-			out = append(out, s)
-		}
-	default:
-		return nil, fmt.Errorf("claim nats.%s.allow com tipo invalido", direction)
-	}
-	if len(out) == 0 {
-		return nil, fmt.Errorf("claim nats.%s.allow vazio", direction)
-	}
-	return out, nil
-}
-
-func compareSubjectSets(direction string, got []string, expected []string) error {
-	gotList := normalizeSubjectList(got)
-	expectedList := normalizeSubjectList(expected)
-
-	gotSet := make(map[string]struct{}, len(gotList))
-	for _, item := range gotList {
-		gotSet[item] = struct{}{}
-	}
-	expectedSet := make(map[string]struct{}, len(expectedList))
-	for _, item := range expectedList {
-		expectedSet[item] = struct{}{}
-	}
-
-	var missing []string
-	for _, item := range expectedList {
-		if _, ok := gotSet[item]; !ok {
-			missing = append(missing, item)
-		}
-	}
-	var extra []string
-	for _, item := range gotList {
-		if _, ok := expectedSet[item]; !ok {
-			extra = append(extra, item)
-		}
-	}
-
-	if len(missing) == 0 && len(extra) == 0 {
-		return nil
-	}
-	sort.Strings(missing)
-	sort.Strings(extra)
-	return fmt.Errorf("subjects de %s divergentes (missing=%v extra=%v)", direction, missing, extra)
-}
-
-func normalizeSubjectList(values []string) []string {
-	set := make(map[string]struct{}, len(values))
-	for _, value := range values {
-		normalized := strings.TrimSpace(value)
-		if normalized != "" {
-			set[normalized] = struct{}{}
-		}
-	}
-	out := make([]string, 0, len(set))
-	for value := range set {
-		out = append(out, value)
-	}
-	sort.Strings(out)
-	return out
-}
-
-func extractJWTToken(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if strings.Count(raw, ".") == 2 {
-		return raw
-	}
-	return ""
 }
 
 func publishJSON(nc *nats.Conn, subject string, payload any) error {

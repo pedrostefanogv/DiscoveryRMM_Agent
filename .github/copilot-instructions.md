@@ -4,6 +4,24 @@
 
 This rule applies to every request involving this codebase.
 
+## Build — SEMPRE usar Wails
+
+**NUNCA use `go build` diretamente.** O frontend (JS/HTML/CSS + wailsjs) é embedado via `//go:embed` e processado exclusivamente pelo Wails CLI.
+
+Comando correto para build:
+```powershell
+cd src
+wails build -o bin\discovery-agent.exe
+```
+
+Dev mode com hot-reload:
+```powershell
+cd src
+wails dev
+```
+
+`go build` compila o Go mas **NÃO** processa os assets do frontend — o binário gerado não terá a interface.
+
 ### Workflow
 
 1. Call `get_architecture(project)` FIRST to understand the codebase structure.

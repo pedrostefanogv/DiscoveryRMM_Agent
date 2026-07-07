@@ -27,7 +27,7 @@ function renderCardList(targetEl, items, emptyMessage, cardRenderer, opts) {
 
 function setActiveTab(tab) {
   if (!isRuntimeTabAllowed(tab)) {
-    tab = 'store';
+    tab = 'status';
   }
 
   activeTab = tab;
@@ -91,9 +91,8 @@ function setActiveTab(tab) {
   }
 
   // Stop logs auto-refresh when leaving logs tab
-  if (tab !== 'logs' && logsAutoRefreshId) {
-    clearInterval(logsAutoRefreshId);
-    logsAutoRefreshId = null;
+  if (tab !== 'logs') {
+    stopLogsAutoRefresh();
   }
 
   if (tab !== 'status' && typeof stopStatusPoll === 'function') {
@@ -117,8 +116,8 @@ function setActiveTab(tab) {
   // Start logs auto-refresh when entering logs tab
   if (tab === 'logs') {
     loadLogs();
-    if (isAppWindowVisible() && !logsAutoRefreshId) {
-      logsAutoRefreshId = setInterval(loadLogs, 3000);
+    if (isAppWindowVisible()) {
+      startLogsAutoRefresh();
     }
   }
 }
@@ -141,10 +140,7 @@ function handleWindowVisibilityChange() {
   if (!isAppWindowVisible()) {
     setUISuspended(true);
     stopUIRuntimeMonitor(true, 'visibilitychange:hidden');
-    if (logsAutoRefreshId) {
-      clearInterval(logsAutoRefreshId);
-      logsAutoRefreshId = null;
-    }
+    stopLogsAutoRefresh();
     if (typeof stopStatusPoll === 'function') stopStatusPoll();
     if (typeof stopAgentStatusPoll === 'function') stopAgentStatusPoll();
     return;
@@ -160,7 +156,7 @@ function handleWindowVisibilityChange() {
     if (typeof startAgentStatusPoll === 'function') startAgentStatusPoll();
   }
   if (activeTab === 'logs' && !logsAutoRefreshId) {
-    logsAutoRefreshId = setInterval(loadLogs, 3000);
+    startLogsAutoRefresh();
   }
 }
 
@@ -185,6 +181,47 @@ setUISuspended(!isAppWindowVisible());
 // ---------------------------------------------------------------------------
 // Logs tab
 // ---------------------------------------------------------------------------
+
+var logsAutoRefreshBaseMs = 3000;
+var logsAutoRefreshCurrentMs = 3000;
+var logsAutoRefreshMaxMs = 30000;
+var logsErrorStreak = 0;
+
+function startLogsAutoRefresh() {
+  if (logsAutoRefreshId) clearTimeout(logsAutoRefreshId);
+  logsAutoRefreshId = null;
+  scheduleLogsRefresh();
+}
+
+function stopLogsAutoRefresh() {
+  if (logsAutoRefreshId) {
+    clearTimeout(logsAutoRefreshId);
+    logsAutoRefreshId = null;
+  }
+  logsErrorStreak = 0;
+  logsAutoRefreshCurrentMs = logsAutoRefreshBaseMs;
+}
+
+function scheduleLogsRefresh() {
+  logsAutoRefreshId = setTimeout(async function () {
+    logsAutoRefreshId = null;
+    if (window.__discoveryUISuspended || document.hidden || activeTab !== 'logs') {
+      return;
+    }
+    try {
+      var lines = await appApi().GetLogs();
+      logsLastLines = lines || [];
+      logsErrorStreak = 0;
+      logsAutoRefreshCurrentMs = logsAutoRefreshBaseMs;
+      renderLogsOutput();
+      scheduleLogsRefresh();
+    } catch (_) {
+      logsErrorStreak++;
+      logsAutoRefreshCurrentMs = Math.min(logsAutoRefreshCurrentMs * 2, logsAutoRefreshMaxMs);
+      scheduleLogsRefresh();
+    }
+  }, logsAutoRefreshCurrentMs);
+}
 
 async function loadLogs() {
   if (window.__discoveryUISuspended || document.hidden) return;

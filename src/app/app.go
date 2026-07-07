@@ -6,7 +6,6 @@ import (
 	"log"
 	"os"
 	"runtime"
-	runtimeDebug "runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -33,6 +32,7 @@ import (
 	"discovery/internal/platform"
 	"discovery/internal/printer"
 	"discovery/internal/processutil"
+	"discovery/internal/safego"
 	"discovery/internal/selfupdate"
 	"discovery/internal/services"
 	"discovery/internal/winget"
@@ -795,20 +795,9 @@ func (a *App) startupLogf(format string, args ...any) {
 }
 
 func (a *App) safeGo(fn func()) {
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				stack := string(runtimeDebug.Stack())
-				log.Printf("[PANIC] goroutine panicou: %v\n%s", r, stack)
-				if a != nil {
-					a.logs.append(fmt.Sprintf("[PANIC] goroutine panicou: %v", r))
-					a.logs.append("[PANIC] stack trace:")
-					a.logs.append(stack)
-				}
-			}
-		}()
-		fn()
-	}()
+	safego.Go(fn, func(line string) {
+		a.logs.append(line)
+	})
 }
 
 func (a *App) isInventoryProvisioned() bool {

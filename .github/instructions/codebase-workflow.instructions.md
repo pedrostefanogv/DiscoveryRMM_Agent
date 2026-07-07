@@ -6,6 +6,24 @@ applyTo: '**'
 
 **This rule applies to EVERY request that involves this codebase.**
 
+## Build — SEMPRE usar Wails
+
+**NUNCA use `go build` diretamente.** O frontend (JS/HTML/CSS + wailsjs) é embedado via `//go:embed` e processado exclusivamente pelo Wails CLI.
+
+Comando correto para build:
+```powershell
+cd src
+wails build -o bin\discovery-agent.exe
+```
+
+Dev mode com hot-reload:
+```powershell
+cd src
+wails dev
+```
+
+`go build` compila o Go mas **NÃO** processa os assets do frontend — o binário gerado não terá a interface.
+
 ### Rules
 
 1. **Call `mcp_codebase-memo_get_architecture` FIRST** — before writing code, editing files, or answering any question about the codebase.

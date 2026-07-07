@@ -23,8 +23,6 @@ function statusSafe(value, fallback) {
   return String(value);
 }
 
-// formatStatusDate mantida como alias para compatibilidade; use formatDate diretamente.
-function formatStatusDate(value) { return formatDate(value, '-'); }
 
 function formatConnectionTypeLabel(value) {
   var normalized = String(value || '').trim().toLowerCase();
@@ -51,7 +49,7 @@ function formatStatusRelativeDate(value) {
   var diffSeconds = Math.round((d.getTime() - Date.now()) / 1000);
   var absSeconds = Math.abs(diffSeconds);
   if (absSeconds >= 24 * 60 * 60) {
-    return formatStatusDate(d);
+    return formatDate(d, '-');
   }
 
   var localeTag = 'pt-BR';
@@ -131,7 +129,7 @@ function renderStatusOverview(data) {
   if (statusAppVersionEl) statusAppVersionEl.textContent = statusSafe(data && data.appVersion, 'dev');
   if (statusBuildDateEl) {
     var buildDateUtc = data && data.buildDateUtc;
-    statusBuildDateEl.textContent = buildDateUtc ? formatStatusDate(buildDateUtc) : translate('common.unavailable');
+    statusBuildDateEl.textContent = buildDateUtc ? formatDate(buildDateUtc, '-') : translate('common.unavailable');
   }
   if (statusOSNameEl) statusOSNameEl.textContent = statusSafe(data && data.osName, '-');
   if (statusOSVersionEl) statusOSVersionEl.textContent = statusSafe(data && data.osVersion, '-');

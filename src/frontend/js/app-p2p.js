@@ -38,8 +38,8 @@ function p2pScheduleNextPoll() {
         p2pScheduleNextPoll();
       });
     } else {
-      // Aba oculta — reagendar sem fazer requisição
-      p2pScheduleNextPoll();
+      // Aba oculta ou app minimizado — parar polling, sera retomado ao reabrir a tab
+      p2pRefreshTimerId = null;
     }
   }, p2pPollCurrentMs);
 }
@@ -111,7 +111,7 @@ function p2pInitSubtabs() {
 }
 
 function p2pSetStatus(message, type) {
-  var statusLine = p2pEl('statusLine');
+  var statusLine = p2pEl('p2pStatusLine');
   if (!statusLine) return;
   statusLine.textContent = message || '';
   if (type) {
@@ -122,20 +122,10 @@ function p2pSetStatus(message, type) {
   }
 }
 
-// p2pFormatDate mantida como alias para compatibilidade; use formatDate diretamente.
-function p2pFormatDate(raw) { return formatDate(raw, '-'); }
-
-function p2pEscapeHtml(text) {
-  return String(text || '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/\"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
+// Todas as chamadas de formatDate usam fallback '-'.
 
 function p2pRenderStatus(status) {
-  var statusGrid = p2pEl('statusGrid');
+  var statusGrid = p2pEl('p2pStatusGrid');
   if (!statusGrid) return;
   var rows = [
     ['Ativo', String(!!status.active)],
@@ -144,8 +134,8 @@ function p2pRenderStatus(status) {
     ['Escuta', status.listenAddress || '-'],
     ['TempDir', status.tempDir || '-'],
     ['TTL (h)', String(status.tempTtlHours || '-')],
-    ['Ultima descoberta', p2pFormatDate(status.lastDiscoveryTickUtc)],
-    ['Ultima limpeza', p2pFormatDate(status.lastCleanupUtc)],
+    ['Ultima descoberta', formatDate(status.lastDiscoveryTickUtc, '-')],
+    ['Ultima limpeza', formatDate(status.lastCleanupUtc, '-')],
     ['Erro', status.lastError || '-']
   ];
   var plan = status.currentSeedPlan || {};
@@ -158,7 +148,7 @@ function p2pRenderStatus(status) {
   rows.push(['Bytes P2P', formatP2PBytes(metrics.bytesServed || 0) + ' up / ' + formatP2PBytes(metrics.bytesDownloaded || 0) + ' down']);
 
   statusGrid.innerHTML = rows.map(function (entry) {
-    return '<div class="fact"><div class="k">' + p2pEscapeHtml(entry[0]) + '</div><div class="v mono">' + p2pEscapeHtml(entry[1]) + '</div></div>';
+    return '<div class="fact"><div class="k">' + escapeHtml(entry[0]) + '</div><div class="v mono">' + escapeHtml(entry[1]) + '</div></div>';
   }).join('');
 }
 
@@ -168,17 +158,17 @@ function p2pRenderPeers(peers) {
 
   if (peersBody) {
     if (!peers || !peers.length) {
-      peersBody.innerHTML = '<tr><td colspan="4">Nenhum peer descoberto.</td></tr>';
+      peersBody.innerHTML = '<tr><td colspan="4">' + escapeHtml(translate('p2p.noPeers')) + '</td></tr>';
     } else {
       peersBody.innerHTML = peers.map(function (peer) {
         var addr = (peer.address || '-') + (peer.port ? (':' + peer.port) : '');
         var agentId = (peer.agentId || '-');
         return '<tr>' +
-          '<td class="mono">' + p2pEscapeHtml(agentId) + '</td>' +
-          '<td class="mono">' + p2pEscapeHtml(addr) + '</td>' +
-          '<td>' + p2pEscapeHtml((peer.source || '-') + ' / ' + (peer.connectedVia || '-')) + '</td>' +
+          '<td class="mono">' + escapeHtml(agentId) + '</td>' +
+          '<td class="mono">' + escapeHtml(addr) + '</td>' +
+          '<td>' + escapeHtml((peer.source || '-') + ' / ' + (peer.connectedVia || '-')) + '</td>' +
           '<td style="white-space:nowrap;">' +
-            '<button class="btn btn-sm" data-p2p-peer-id="' + p2pEscapeHtml(agentId) + '" title="Ver artifacts deste peer">📦</button>' +
+            '<button class="btn btn-sm" data-p2p-peer-id="' + escapeHtml(agentId) + '" title="Ver artifacts deste peer">📦</button>' +
           '</td>' +
           '</tr>';
       }).join('');
@@ -194,10 +184,10 @@ function p2pRenderPeers(peers) {
 
   if (auditPeerFilter) {
     var current = auditPeerFilter.value || 'all';
-    var options = ['<option value="all">Todos os peers</option>'];
+    var options = ['<option value="all">' + escapeHtml(translate('p2p.auditAllPeers')) + '</option>'];
     options = options.concat((peers || []).map(function (peer) {
       var id = peer.agentId || '';
-      return '<option value="' + p2pEscapeHtml(id) + '">' + p2pEscapeHtml(id || '-') + '</option>';
+      return '<option value="' + escapeHtml(id) + '">' + escapeHtml(id || '-') + '</option>';
     }));
     auditPeerFilter.innerHTML = options.join('');
     if (Array.prototype.some.call(auditPeerFilter.options, function (opt) { return opt.value === current; })) {
@@ -228,7 +218,7 @@ function p2pShowPeerArtifactPanel(peerId) {
 
   select.innerHTML = artifacts.map(function (a) {
     var name = a.artifactName || '';
-    return '<option value="' + p2pEscapeHtml(name) + '">' + p2pEscapeHtml(name) + '</option>';
+    return '<option value="' + escapeHtml(name) + '">' + escapeHtml(name) + '</option>';
   }).join('');
 
   select.setAttribute('data-p2p-peer-id', peerId);
@@ -241,15 +231,15 @@ function p2pRenderArtifacts(artifacts) {
 
   if (artifactsBody) {
     if (!artifacts || !artifacts.length) {
-      artifactsBody.innerHTML = '<tr><td colspan="3">Nenhum artifact local.</td></tr>';
+      artifactsBody.innerHTML = '<tr><td colspan="3">' + escapeHtml(translate('p2p.noArtifacts')) + '</td></tr>';
     } else {
       artifactsBody.innerHTML = artifacts.map(function (artifact) {
         var sizeBytes = Number(artifact.sizeBytes || 0);
         var sizeLabel = formatP2PBytes(sizeBytes);
         return '<tr>' +
-          '<td class="mono">' + p2pEscapeHtml(artifact.artifactName || '-') + '</td>' +
-          '<td title="' + p2pEscapeHtml(String(sizeBytes) + ' bytes') + '">' + p2pEscapeHtml(sizeLabel) + '</td>' +
-          '<td class="mono">' + p2pEscapeHtml((artifact.checksumSha256 || '-').slice(0, 18)) + '...</td>' +
+          '<td class="mono">' + escapeHtml(artifact.artifactName || '-') + '</td>' +
+          '<td title="' + escapeHtml(String(sizeBytes) + ' bytes') + '">' + escapeHtml(sizeLabel) + '</td>' +
+          '<td class="mono">' + escapeHtml((artifact.checksumSha256 || '-').slice(0, 18)) + '...</td>' +
           '</tr>';
       }).join('');
     }
@@ -264,7 +254,7 @@ function p2pRenderAudit(events) {
   var auditList = p2pEl('auditList');
   if (!auditList) return;
   if (!events || !events.length) {
-    auditList.innerHTML = '<li class="p2p-audit-item p2p-audit-item-empty">Nenhuma atividade registrada.</li>';
+    auditList.innerHTML = '<li class="p2p-audit-item p2p-audit-item-empty">' + escapeHtml(translate('p2p.noAudit')) + '</li>';
     return;
   }
 
@@ -274,12 +264,12 @@ function p2pRenderAudit(events) {
     var artifact = event.artifactName ? ('Artifact: ' + event.artifactName) : 'Artifact: -';
     return '<li class="p2p-audit-item">' +
       '<div class="p2p-audit-item-top">' +
-      '<span class="p2p-audit-summary mono">' + p2pEscapeHtml(summary) + '</span>' +
-      '<span class="p2p-audit-badge ' + badgeClass + '">' + p2pEscapeHtml(event.success ? 'ok' : 'erro') + '</span>' +
+      '<span class="p2p-audit-summary mono">' + escapeHtml(summary) + '</span>' +
+      '<span class="p2p-audit-badge ' + badgeClass + '">' + escapeHtml(event.success ? 'ok' : 'erro') + '</span>' +
       '</div>' +
-      '<div class="p2p-audit-meta">' + p2pEscapeHtml(p2pFormatDate(event.timestampUtc)) + '</div>' +
-      '<div class="p2p-audit-meta">' + p2pEscapeHtml(artifact) + '</div>' +
-      '<div class="p2p-audit-message">' + p2pEscapeHtml(event.message || '-') + '</div>' +
+      '<div class="p2p-audit-meta">' + escapeHtml(formatDate(event.timestampUtc, '-')) + '</div>' +
+      '<div class="p2p-audit-meta">' + escapeHtml(artifact) + '</div>' +
+      '<div class="p2p-audit-message">' + escapeHtml(event.message || '-') + '</div>' +
       '</li>';
   }).join('');
 }
@@ -298,7 +288,7 @@ function p2pRenderAutoProvisioning(stats) {
       ['Endpoint', '/p2p/config/onboard (GET)']
     ];
     statusEl.innerHTML = rows.map(function (r) {
-      return '<div class="fact"><div class="k">' + p2pEscapeHtml(r[0]) + '</div><div class="v mono">' + p2pEscapeHtml(r[1]) + '</div></div>';
+      return '<div class="fact"><div class="k">' + escapeHtml(r[0]) + '</div><div class="v mono">' + escapeHtml(r[1]) + '</div></div>';
     }).join('');
   }
 
@@ -311,12 +301,12 @@ function p2pRenderAutoProvisioning(stats) {
         var badge = ev.success ? 'success' : 'error';
         return '<article class="automation-task-card">' +
           '<div class="automation-task-top">' +
-          '<h4 class="mono">' + p2pEscapeHtml(ev.sourceAgentId || '-') + '</h4>' +
+          '<h4 class="mono">' + escapeHtml(ev.sourceAgentId || '-') + '</h4>' +
           '<span class="automation-execution-badge ' + badge + '">' + (ev.success ? 'ok' : 'erro') + '</span>' +
           '</div>' +
-          '<div class="automation-task-meta">' + p2pEscapeHtml(p2pFormatDate(ev.timestampUtc)) + '</div>' +
-          (ev.serverUrl ? '<div class="automation-task-desc">Servidor: ' + p2pEscapeHtml(ev.serverUrl) + '</div>' : '') +
-          '<div class="meta">' + p2pEscapeHtml(ev.message || '-') + '</div>' +
+          '<div class="automation-task-meta">' + escapeHtml(formatDate(ev.timestampUtc, '-')) + '</div>' +
+          (ev.serverUrl ? '<div class="automation-task-desc">Servidor: ' + escapeHtml(ev.serverUrl) + '</div>' : '') +
+          '<div class="meta">' + escapeHtml(ev.message || '-') + '</div>' +
           '</article>';
       }).join('');
     }
@@ -324,13 +314,13 @@ function p2pRenderAutoProvisioning(stats) {
 }
 
 function p2pFillConfig(cfg) {
-  var enabled = p2pEl('enabled');
-  var mode = p2pEl('mode');
-  var ttl = p2pEl('ttl');
-  var seedPercent = p2pEl('seedPercent');
-  var minSeeds = p2pEl('minSeeds');
-  var tokenMinutes = p2pEl('tokenMinutes');
-  var sharedSecret = p2pEl('sharedSecret');
+  var enabled = p2pEl('p2pEnabled');
+  var mode = p2pEl('p2pMode');
+  var ttl = p2pEl('p2pTtl');
+  var seedPercent = p2pEl('p2pSeedPercent');
+  var minSeeds = p2pEl('p2pMinSeeds');
+  var tokenMinutes = p2pEl('p2pTokenMinutes');
+  var sharedSecret = p2pEl('p2pSharedSecret');
 
   if (enabled) enabled.value = String(!!cfg.enabled);
   if (mode) mode.value = cfg.discoveryMode || 'mdns';
@@ -342,13 +332,13 @@ function p2pFillConfig(cfg) {
 }
 
 function p2pReadConfig() {
-  var enabled = p2pEl('enabled');
-  var mode = p2pEl('mode');
-  var ttl = p2pEl('ttl');
-  var seedPercent = p2pEl('seedPercent');
-  var minSeeds = p2pEl('minSeeds');
-  var tokenMinutes = p2pEl('tokenMinutes');
-  var sharedSecret = p2pEl('sharedSecret');
+  var enabled = p2pEl('p2pEnabled');
+  var mode = p2pEl('p2pMode');
+  var ttl = p2pEl('p2pTtl');
+  var seedPercent = p2pEl('p2pSeedPercent');
+  var minSeeds = p2pEl('p2pMinSeeds');
+  var tokenMinutes = p2pEl('p2pTokenMinutes');
+  var sharedSecret = p2pEl('p2pSharedSecret');
 
   return {
     enabled: enabled ? enabled.value === 'true' : true,
@@ -367,10 +357,13 @@ async function loadP2PView() {
     return;
   }
 
+  p2pSetStatus(translate('p2p.loadingData'), '');
+
   var auditAction = p2pEl('auditActionFilter');
   var auditPeer = p2pEl('auditPeerFilter');
   var auditStatus = p2pEl('auditStatusFilter');
 
+  try {
   var results = await Promise.all([
     p2pApi().GetP2PDebugStatus(),
     p2pApi().GetP2PPeers(),
@@ -394,15 +387,18 @@ async function loadP2PView() {
   p2pRenderAutoProvisioning(results[6]);
   // Limpar mensagem de erro anterior em caso de sucesso
   p2pSetStatus('', '');
+  } catch (err) {
+    p2pSetStatus(translate('p2p.loadError', { error: (err && err.message ? err.message : String(err)) }), 'error');
+  }
 }
 
 function initP2PPage() {
   p2pInitSubtabs();
 
-  var refreshBtn = p2pEl('refreshBtn');
-  var cleanupBtn = p2pEl('cleanupBtn');
+  var refreshBtn = p2pEl('p2pRefreshBtn');
+  var cleanupBtn = p2pEl('p2pCleanupBtn');
   var clearAllArtifactsBtn = p2pEl('clearAllArtifactsBtn');
-  var saveConfigBtn = p2pEl('saveConfigBtn');
+  var saveConfigBtn = p2pEl('p2pSaveConfigBtn');
   var publishRealArtifactBtn = p2pEl('publishRealArtifactBtn');
   var p2pRefreshPeersBtn = p2pEl('p2pRefreshPeersBtn');
   var auditActionFilter = p2pEl('auditActionFilter');
@@ -442,7 +438,7 @@ function initP2PPage() {
     });
   }
 
-  var cleanupAllBtn = p2pEl('cleanupAllBtn');
+  var cleanupAllBtn = p2pEl('p2pCleanupAllBtn');
   if (cleanupAllBtn) {
     cleanupAllBtn.addEventListener('click', function () {
       if (!window.confirm('Tem certeza que deseja limpar TODO o cache P2P (incluindo artifacts nao expirados)? Esta acao nao pode ser desfeita.')) {
@@ -573,7 +569,7 @@ function renderP2PTransferList() {
     var isUpload = String(p.direction || '').toLowerCase() === 'upload' || String(p.operation || '').toLowerCase() === 'serve';
     var directionArrow = isUpload ? '→' : '←';
     var phaseLabel = isUpload ? 'enviando' : 'recebendo';
-    var label = p2pEscapeHtml(p.artifactName || '?') + ' ' + directionArrow + ' ' + p2pEscapeHtml(p.peerID || '?');
+    var label = escapeHtml(p.artifactName || '?') + ' ' + directionArrow + ' ' + escapeHtml(p.peerID || '?');
     if (p.totalChunks > 0) {
       label += ' [chunk ' + (p.chunkIndex + 1) + '/' + p.totalChunks + ']';
     }
@@ -585,7 +581,7 @@ function renderP2PTransferList() {
       '<div style="background:var(--bg);border-radius:6px;height:8px;overflow:hidden;">' +
         '<div style="background:' + barColor + ';height:100%;width:' + pct + '%;transition:width 0.2s ease;"></div>' +
       '</div>' +
-      (p.error ? '<div style="color:var(--danger);font-size:0.76rem;margin-top:2px;">' + p2pEscapeHtml(p.error) + '</div>' : '') +
+      (p.error ? '<div style="color:var(--danger);font-size:0.76rem;margin-top:2px;">' + escapeHtml(p.error) + '</div>' : '') +
       (p.done && !p.error ? '<div style="color:var(--accent);font-size:0.76rem;margin-top:2px;">✓ Concluido</div>' : '') +
     '</div>';
   });

@@ -1,48 +1,48 @@
-<main id="p2pView" class="page-content hidden" role="tabpanel" aria-labelledby="tabP2P">
+﻿<main id="p2pView" class="page-content hidden" role="tabpanel" aria-labelledby="tabP2P">
   <section class="p2p-panel">
     <div class="statusbar page-bar">
-      <span class="meta">P2P nativo: descoberta, distribuicao hibrida e cache temporario</span>
+      <span class="meta" data-i18n="p2p.nativeSubtitle">P2P nativo: descoberta, distribuicao hibrida e cache temporario</span>
       <div class="actions">
-        <button id="refreshBtn" class="btn subtle">Atualizar</button>
-        <button id="cleanupBtn" class="btn subtle">Limpar Cache</button>
-        <button id="cleanupAllBtn" class="btn danger btn-sm">Limpar Tudo</button>
+        <button id="p2pRefreshBtn" class="btn subtle" aria-label="Atualizar dados P2P" data-i18n="action.refresh">Atualizar</button>
+        <button id="p2pCleanupBtn" class="btn subtle" aria-label="Limpar cache temporario P2P" data-i18n="p2p.cleanCache">Limpar Cache</button>
+        <button id="p2pCleanupAllBtn" class="btn danger btn-sm" aria-label="Limpar todo o cache P2P incluindo nao expirados" data-i18n="p2p.cleanAll">Limpar Tudo</button>
       </div>
     </div>
 
     <article class="card">
-      <h3>Status</h3>
-      <div id="statusGrid" class="status-grid"></div>
+      <h3 data-i18n="p2p.status">Status</h3>
+      <div id="p2pStatusGrid" class="status-grid"></div>
     </article>
 
     <article id="p2pTransferPanel" class="card hidden">
       <div class="card-header-row">
-        <h3>Transferencias em Andamento</h3>
-        <button id="openP2PFolderMainBtn" class="btn subtle btn-sm" title="Abrir pasta de downloads P2P">📂 Abrir Pasta</button>
+        <h3 data-i18n="p2p.transfers">Transferencias em Andamento</h3>
+        <button id="openP2PFolderMainBtn" class="btn subtle btn-sm" data-i18n-title="p2p.openFolder" title="Abrir pasta de downloads P2P">📂 Abrir Pasta</button>
       </div>
       <div id="p2pTransferList"></div>
     </article>
 
     <div class="p2p-subtabs" role="tablist" aria-label="Secoes P2P">
-      <button id="p2pTabArtifacts" class="p2p-subtab is-active" type="button" role="tab" aria-selected="true" aria-controls="p2pPanelArtifacts" data-p2p-tab-target="p2pPanelArtifacts">Artifacts Locais</button>
-      <button id="p2pTabPeers" class="p2p-subtab" type="button" role="tab" aria-selected="false" aria-controls="p2pPanelPeers" data-p2p-tab-target="p2pPanelPeers" tabindex="-1">Peers Descobertos</button>
-      <button id="p2pTabConfig" class="p2p-subtab" type="button" role="tab" aria-selected="false" aria-controls="p2pPanelConfig" data-p2p-tab-target="p2pPanelConfig" tabindex="-1">Configuracao P2P</button>
-      <button id="p2pTabAudit" class="p2p-subtab" type="button" role="tab" aria-selected="false" aria-controls="p2pPanelAudit" data-p2p-tab-target="p2pPanelAudit" tabindex="-1">Auditoria</button>
+      <button id="p2pTabArtifacts" class="p2p-subtab is-active" type="button" role="tab" aria-selected="true" aria-controls="p2pPanelArtifacts" data-p2p-tab-target="p2pPanelArtifacts" data-i18n="p2p.artifactsLocal">Artifacts Locais</button>
+      <button id="p2pTabPeers" class="p2p-subtab" type="button" role="tab" aria-selected="false" aria-controls="p2pPanelPeers" data-p2p-tab-target="p2pPanelPeers" tabindex="-1" data-i18n="p2p.peersDiscovered">Peers Descobertos</button>
+      <button id="p2pTabConfig" class="p2p-subtab" type="button" role="tab" aria-selected="false" aria-controls="p2pPanelConfig" data-p2p-tab-target="p2pPanelConfig" tabindex="-1" data-i18n="p2p.configuration">Configuracao P2P</button>
+      <button id="p2pTabAudit" class="p2p-subtab" type="button" role="tab" aria-selected="false" aria-controls="p2pPanelAudit" data-p2p-tab-target="p2pPanelAudit" tabindex="-1" data-i18n="p2p.audit">Auditoria</button>
     </div>
 
     <div class="p2p-subtab-panels">
       <article id="p2pPanelArtifacts" class="card wide p2p-subtab-panel" role="tabpanel" aria-labelledby="p2pTabArtifacts">
-        <h3>Artifacts Locais</h3>
+        <h3 data-i18n="p2p.artifactsLocal">Artifacts Locais</h3>
         <div class="actions p2p-artifact-actions">
-          <button id="publishRealArtifactBtn" class="btn primary">Selecionar Arquivo para Publicar</button>
-          <button id="clearAllArtifactsBtn" class="btn subtle btn-sm">Apagar Todos</button>
+          <button id="publishRealArtifactBtn" class="btn primary" data-i18n="p2p.selectFileToPublish">Selecionar Arquivo para Publicar</button>
+          <button id="clearAllArtifactsBtn" class="btn subtle btn-sm" data-i18n="p2p.deleteAll">Apagar Todos</button>
         </div>
         <div class="software-table-wrap" style="max-height: 220px;">
           <table class="software-table">
             <thead>
               <tr>
-                <th>Artifact</th>
-                <th>Tamanho</th>
-                <th>Checksum</th>
+                <th data-i18n="p2p.artifact">Artifact</th>
+                <th data-i18n="p2p.size">Tamanho</th>
+                <th data-i18n="p2p.checksum">Checksum</th>
               </tr>
             </thead>
             <tbody id="artifactsBody"></tbody>
@@ -52,7 +52,7 @@
 
       <article id="p2pPanelPeers" class="card wide p2p-subtab-panel hidden" role="tabpanel" aria-labelledby="p2pTabPeers" hidden>
         <div class="card-header-row">
-          <h3>Peers Descobertos</h3>
+          <h3 data-i18n="p2p.peersDiscovered">Peers Descobertos</h3>
           <button id="p2pRefreshPeersBtn" class="btn subtle btn-sm" title="Pesquisar peers na rede novamente" aria-label="Pesquisar peers na rede novamente" data-i18n-title="action.p2pRescanPeers" data-i18n-aria-label="action.p2pRescanPeers">
             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
           </button>
@@ -61,78 +61,78 @@
           <table class="software-table">
             <thead>
               <tr>
-                <th>Agent</th>
-                <th>Endereco</th>
-                <th>Origem</th>
-                <th style="width:100px;">Acoes</th>
+                <th data-i18n="p2p.agent">Agent</th>
+                <th data-i18n="p2p.address">Endereco</th>
+                <th data-i18n="p2p.sourceSlash">Origem</th>
+                <th style="width:100px;" data-i18n="p2p.actions">Acoes</th>
               </tr>
             </thead>
             <tbody id="peersBody"></tbody>
           </table>
         </div>
         <div id="peerArtifactPanel" class="hidden" style="margin-top:10px;">
-          <label for="peerArtifactSelect" style="display:block;font-size:0.82rem;color:var(--muted);margin-bottom:4px;">Artifacts disponiveis neste peer</label>
+          <label for="peerArtifactSelect" style="display:block;font-size:0.82rem;color:var(--muted);margin-bottom:4px;" data-i18n="p2p.artifactsAvailable">Artifacts disponiveis neste peer</label>
           <div style="display:flex;gap:8px;">
             <select id="peerArtifactSelect" style="flex:1;"></select>
-            <button id="peerArtifactPullBtn" class="btn primary btn-sm">Puxar</button>
+            <button id="peerArtifactPullBtn" class="btn primary btn-sm" data-i18n="p2p.pull">Puxar</button>
           </div>
         </div>
       </article>
 
       <article id="p2pPanelConfig" class="card wide p2p-subtab-panel hidden" role="tabpanel" aria-labelledby="p2pTabConfig" hidden>
-        <h3>Configuracao P2P</h3>
+        <h3 data-i18n="p2p.configuration">Configuracao P2P</h3>
         <div class="form-grid">
           <div>
-            <label for="enabled">Ativo</label>
-            <select id="enabled"><option value="true">true</option><option value="false">false</option></select>
+            <label for="p2pEnabled" data-i18n="p2p.active">Ativo</label>
+            <select id="p2pEnabled"><option value="true">true</option><option value="false">false</option></select>
           </div>
           <div>
-            <label for="mode">Discovery</label>
-            <select id="mode"><option value="mdns">mdns</option><option value="udp">udp</option></select>
+            <label for="p2pMode" data-i18n="p2p.discovery">Discovery</label>
+            <select id="p2pMode"><option value="mdns">mdns</option><option value="udp">udp</option></select>
           </div>
           <div>
-            <label for="ttl">TTL (horas)</label>
-            <input id="ttl" type="number" min="24" max="720" />
+            <label for="p2pTtl" data-i18n="p2p.ttl">TTL (horas)</label>
+            <input id="p2pTtl" type="number" min="24" max="720" />
           </div>
           <div>
-            <label for="seedPercent">Seed %</label>
-            <input id="seedPercent" type="number" min="1" max="100" />
+            <label for="p2pSeedPercent" data-i18n="p2p.seedPercent">Seed %</label>
+            <input id="p2pSeedPercent" type="number" min="1" max="100" />
           </div>
           <div>
-            <label for="minSeeds">Min seeds</label>
-            <input id="minSeeds" type="number" min="1" max="200" />
+            <label for="p2pMinSeeds" data-i18n="p2p.minSeeds">Min seeds</label>
+            <input id="p2pMinSeeds" type="number" min="1" max="200" />
           </div>
           <div>
-            <label for="tokenMinutes">Token (min)</label>
-            <input id="tokenMinutes" type="number" min="1" max="120" />
+            <label for="p2pTokenMinutes" data-i18n="p2p.tokenMinutes">Token (min)</label>
+            <input id="p2pTokenMinutes" type="number" min="1" max="120" />
           </div>
           <div style="grid-column: 1 / -1;">
-            <label for="sharedSecret">Shared Secret (opcional)</label>
-            <input id="sharedSecret" type="password" placeholder="habilita autenticacao do endpoint /p2p/replicate" />
+            <label for="p2pSharedSecret" data-i18n="p2p.sharedSecret">Shared Secret (opcional)</label>
+            <input id="p2pSharedSecret" type="password" data-i18n-placeholder="p2p.sharedSecretHint" placeholder="habilita autenticacao do endpoint /p2p/replicate" />
           </div>
         </div>
         <div class="actions" style="margin-top: 10px;">
-          <button id="saveConfigBtn" class="btn primary">Salvar</button>
+          <button id="p2pSaveConfigBtn" class="btn primary" data-i18n="p2p.save">Salvar</button>
         </div>
-        <div id="statusLine" class="meta" style="margin-top: 8px;"></div>
+        <div id="p2pStatusLine" class="meta" style="margin-top: 8px;"></div>
       </article>
 
       <article id="p2pPanelAudit" class="card wide p2p-subtab-panel hidden" role="tabpanel" aria-labelledby="p2pTabAudit" hidden>
-        <h3>Auditoria</h3>
+        <h3 data-i18n="p2p.audit">Auditoria</h3>
         <div class="p2p-audit-filters">
           <select id="auditActionFilter">
-            <option value="all">Todas as acoes</option>
+            <option value="all" data-i18n="p2p.auditAllActions">Todas as acoes</option>
             <option value="auto-distribute">auto-distribute</option>
             <option value="queue">queue</option>
             <option value="replicate">replicate</option>
             <option value="skip-duplicate">skip-duplicate</option>
             <option value="cooldown">cooldown</option>
           </select>
-          <select id="auditPeerFilter"><option value="all">Todos os peers</option></select>
+          <select id="auditPeerFilter"><option value="all" data-i18n="p2p.auditAllPeers">Todos os peers</option></select>
           <select id="auditStatusFilter">
-            <option value="all">Todos os status</option>
-            <option value="success">sucesso</option>
-            <option value="error">erro</option>
+            <option value="all" data-i18n="p2p.auditAllStatus">Todos os status</option>
+            <option value="success" data-i18n="p2p.auditSuccess">sucesso</option>
+            <option value="error" data-i18n="p2p.auditError">erro</option>
           </select>
         </div>
         <ul id="auditList" class="p2p-audit-list" aria-live="polite"></ul>

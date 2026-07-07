@@ -78,20 +78,28 @@ function initAppBindings() {
       loadStatusOverview();
     });
   }
-  tabStoreBtn.addEventListener('click', function () {
-    setActiveTab('store');
-    if (typeof handleStoreTabActivated === 'function') {
-      handleStoreTabActivated();
-    }
-  });
-  tabUpdatesBtn.addEventListener('click', function () { setActiveTab('updates'); });
-  tabInventoryBtn.addEventListener('click', function () {
-    setActiveTab('inventory');
-    if (!inventoryLoadedOnce) {
-      loadInventory();
-    }
-  });
-  tabLogsBtn.addEventListener('click', function () { setActiveTab('logs'); });
+  if (tabStoreBtn) {
+    tabStoreBtn.addEventListener('click', function () {
+      setActiveTab('store');
+      if (typeof handleStoreTabActivated === 'function') {
+        handleStoreTabActivated();
+      }
+    });
+  }
+  if (tabUpdatesBtn) {
+    tabUpdatesBtn.addEventListener('click', function () { setActiveTab('updates'); });
+  }
+  if (tabInventoryBtn) {
+    tabInventoryBtn.addEventListener('click', function () {
+      setActiveTab('inventory');
+      if (!inventoryLoadedOnce) {
+        loadInventory();
+      }
+    });
+  }
+  if (tabLogsBtn) {
+    tabLogsBtn.addEventListener('click', function () { setActiveTab('logs'); });
+  }
 
   if (tabChatBtn) {
     tabChatBtn.addEventListener('click', function () {
@@ -259,68 +267,94 @@ function initAppBindings() {
     exportInventoryPdfBtn.addEventListener('click', exportInventoryPdf);
   }
 
-  softwareSearchInputEl.addEventListener('input', debounce(applySoftwareFilter, 300));
-  softwarePrevBtn.addEventListener('click', function () {
-    softwarePage -= 1;
-    renderSoftwareTable();
-  });
-  softwareNextBtn.addEventListener('click', function () {
-    softwarePage += 1;
-    renderSoftwareTable();
-  });
+  if (softwareSearchInputEl) {
+    softwareSearchInputEl.addEventListener('input', debounce(applySoftwareFilter, 300));
+  }
+  if (softwarePrevBtn) {
+    softwarePrevBtn.addEventListener('click', function () {
+      softwarePage -= 1;
+      renderSoftwareTable();
+    });
+  }
+  if (softwareNextBtn) {
+    softwareNextBtn.addEventListener('click', function () {
+      softwarePage += 1;
+      renderSoftwareTable();
+    });
+  }
   if (refreshSoftwareBtn) {
     refreshSoftwareBtn.addEventListener('click', refreshSoftware);
   }
 
-  startupSearchInputEl.addEventListener('input', debounce(applyStartupFilter, 300));
-  startupPrevBtn.addEventListener('click', function () {
-    startupPage -= 1;
-    renderStartupTable();
-  });
-  startupNextBtn.addEventListener('click', function () {
-    startupPage += 1;
-    renderStartupTable();
-  });
+  if (startupSearchInputEl) {
+    startupSearchInputEl.addEventListener('input', debounce(applyStartupFilter, 300));
+  }
+  if (startupPrevBtn) {
+    startupPrevBtn.addEventListener('click', function () {
+      startupPage -= 1;
+      renderStartupTable();
+    });
+  }
+  if (startupNextBtn) {
+    startupNextBtn.addEventListener('click', function () {
+      startupPage += 1;
+      renderStartupTable();
+    });
+  }
   if (refreshStartupBtn) {
     refreshStartupBtn.addEventListener('click', refreshStartupItems);
   }
 
   // Network Connections listeners
-  connectionsSearchInputEl.addEventListener('input', debounce(applyConnectionsFilter, 300));
-  connectionsTabListening.addEventListener('click', function () {
-    switchConnectionsTab('listening');
-  });
-  connectionsTabOpen.addEventListener('click', function () {
-    switchConnectionsTab('open');
-  });
+  if (connectionsSearchInputEl) {
+    connectionsSearchInputEl.addEventListener('input', debounce(applyConnectionsFilter, 300));
+  }
+  if (connectionsTabListening) {
+    connectionsTabListening.addEventListener('click', function () {
+      switchConnectionsTab('listening');
+    });
+  }
+  if (connectionsTabOpen) {
+    connectionsTabOpen.addEventListener('click', function () {
+      switchConnectionsTab('open');
+    });
+  }
   if (refreshConnectionsBtn) {
     refreshConnectionsBtn.addEventListener('click', refreshNetworkConnections);
   }
   if (refreshListeningPortsBtn) {
     refreshListeningPortsBtn.addEventListener('click', refreshListeningPorts);
   }
-  connectionsPrevBtn.addEventListener('click', function () {
-    connectionsPage -= 1;
-    renderConnectionsTable();
-  });
-  connectionsNextBtn.addEventListener('click', function () {
-    connectionsPage += 1;
-    renderConnectionsTable();
-  });
+  if (connectionsPrevBtn) {
+    connectionsPrevBtn.addEventListener('click', function () {
+      connectionsPage -= 1;
+      renderConnectionsTable();
+    });
+  }
+  if (connectionsNextBtn) {
+    connectionsNextBtn.addEventListener('click', function () {
+      connectionsPage += 1;
+      renderConnectionsTable();
+    });
+  }
 
   // Connections table header sort listeners
-  var listeningHeaders = listeningPortsTableEl.querySelectorAll('th.sortable');
-  listeningHeaders.forEach(function (th) {
-    th.addEventListener('click', function () {
-      toggleConnectionsSort(this.dataset.sortKey);
+  if (listeningPortsTableEl) {
+    var listeningHeaders = listeningPortsTableEl.querySelectorAll('th.sortable');
+    listeningHeaders.forEach(function (th) {
+      th.addEventListener('click', function () {
+        toggleConnectionsSort(this.dataset.sortKey);
+      });
     });
-  });
-  var openHeaders = openSocketsTableEl.querySelectorAll('th.sortable');
-  openHeaders.forEach(function (th) {
-    th.addEventListener('click', function () {
-      toggleConnectionsSort(this.dataset.sortKey);
+  }
+  if (openSocketsTableEl) {
+    var openHeaders = openSocketsTableEl.querySelectorAll('th.sortable');
+    openHeaders.forEach(function (th) {
+      th.addEventListener('click', function () {
+        toggleConnectionsSort(this.dataset.sortKey);
+      });
     });
-  });
+  }
 
   if (catalogPrevBtn) {
     catalogPrevBtn.addEventListener('click', function () {

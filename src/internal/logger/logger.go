@@ -2,7 +2,9 @@ package logger
 
 import (
 	"context"
+	"fmt"
 	"io"
+	"log"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -82,6 +84,92 @@ func SetSink(fn func(level slog.Level, msg string, args ...any)) {
 	sinkMu.Lock()
 	logSink = fn
 	sinkMu.Unlock()
+}
+
+// RedirectStdLog captures all stdlib log output and routes it through slog.
+// Messages are logged at the specified level. Call this early to ensure
+// no log calls are missed by the structured logger.
+func RedirectStdLog(level slog.Level) {
+	log.SetOutput(&slogWriter{level: level})
+	log.SetFlags(0) // slog handles timestamps
+}
+
+// slogWriter adapts stdlib log writes into slog calls.
+type slogWriter struct {
+	level slog.Level
+}
+
+func (w *slogWriter) Write(p []byte) (int, error) {
+	msg := strings.TrimSpace(string(p))
+	if msg == "" {
+		return len(p), nil
+	}
+	switch w.level {
+	case LevelDebug:
+		defaultLogger.Debug(msg)
+	case LevelInfo:
+		defaultLogger.Info(msg)
+	case LevelWarn:
+		defaultLogger.Warn(msg)
+	case LevelError:
+		defaultLogger.Error(msg)
+	default:
+		defaultLogger.Info(msg)
+	}
+	return len(p), nil
+}
+
+// LogBufferAdapter creates a SetSink-compatible callback that writes
+// formatted log lines to an append func (e.g. logBuffer.append).
+// The format is: [LEVEL] message key=value ...
+func LogBufferAdapter(appendLine func(string)) func(slog.Level, string, ...any) {
+	return func(level slog.Level, msg string, args ...any) {
+		var b strings.Builder
+		b.WriteString("[")
+		b.WriteString(levelLabel(level))
+		b.WriteString("] ")
+		b.WriteString(msg)
+		for i := 0; i < len(args)-1; i += 2 {
+			k, okKey := args[i].(string)
+			v := args[i+1]
+			if !okKey {
+				continue
+			}
+			b.WriteByte(' ')
+			b.WriteString(k)
+			b.WriteByte('=')
+			if str, ok := v.(string); ok {
+				b.WriteString(str)
+			} else if err, ok := v.(error); ok {
+				b.WriteString(err.Error())
+			} else {
+				b.WriteString(fmt.Sprint(v))
+			}
+		}
+		appendLine(b.String())
+	}
+}
+
+func fmtSprint(v any) string {
+	if v == nil {
+		return "<nil>"
+	}
+	return strings.TrimSpace(fmt.Sprint(v))
+}
+
+func levelLabel(l slog.Level) string {
+	switch {
+	case l < LevelDebug:
+		return "TRACE"
+	case l < LevelInfo:
+		return "DEBUG"
+	case l < LevelWarn:
+		return "INFO"
+	case l < LevelError:
+		return "WARN"
+	default:
+		return "ERROR"
+	}
 }
 
 type sinkHandler struct{}

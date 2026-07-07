@@ -16,6 +16,7 @@ import (
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
 	appkg "discovery/app"
+	"discovery/internal/logger"
 	"discovery/internal/platform"
 )
 
@@ -23,8 +24,10 @@ import (
 var assets embed.FS
 
 func main() {
+	logger.RedirectStdLog(logger.LevelInfo)
+
 	if note := strings.TrimSpace(suppressGameBarOverlay()); note != "" {
-		log.Printf("[startup][gamebar] %s", note)
+		logger.Info("gamebar overlay", "note", note)
 	}
 
 	startupDebugMode := detectStartupDebugMode() || hasStartupArg("--debug")

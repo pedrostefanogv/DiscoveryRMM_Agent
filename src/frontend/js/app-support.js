@@ -12,9 +12,6 @@ var priorityClasses = { 1: 'p-baixa', 2: 'p-media', 3: 'p-alta', 4: 'p-critica' 
 function ticketPriorityLabel(p) { return priorityLabels[p] || 'N/A'; }
 function ticketPriorityClass(p) { return priorityClasses[p] || 'p-media'; }
 
-// formatDateTime mantida para compatibilidade com chamadas existentes.
-function formatDateTime(v) { return formatDate(v, ''); }
-
 function renderStars(rating) {
   if (rating === null || rating === undefined || rating === '') return 'Sem avaliacao';
   var value = Number(rating);
@@ -364,7 +361,7 @@ async function loadSupportTickets() {
       var priLabel = ticketPriorityLabel(t.priority);
       var priClass = ticketPriorityClass(t.priority);
       var cat = t.category || '';
-      var date = formatDateTime(t.createdAt);
+      var date = formatDate(t.createdAt, '');
       var ratingText = renderStars(t.rating);
       return '<button class="support-ticket-card" data-id="' + escapeHtml(t.id) + '" data-ticket=\'' + escapeAttr(t) + '\'>' +
         '<div class="ticket-header">' +
@@ -429,9 +426,9 @@ function renderTicketDetail(t) {
   var statusMeta = workflowMetaText(t.workflowState);
   var priLabel = ticketPriorityLabel(t.priority);
   var priClass = ticketPriorityClass(t.priority);
-  var date = formatDateTime(t.createdAt);
+  var date = formatDate(t.createdAt, '');
   var cat = t.category || '';
-  var ratedAt = formatDateTime(t.ratedAt);
+  var ratedAt = formatDate(t.ratedAt, '');
   var ratedBy = t.ratedBy || '';
   var isFinal = ticketHasFinalState(t);
 

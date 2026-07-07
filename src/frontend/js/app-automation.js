@@ -6,8 +6,6 @@ function setAutomationStatus(message, type) {
   automationStatusEl.className = 'debug-status' + (type ? ' ' + type : '');
 }
 
-// formatAutomationDate mantida como alias para compatibilidade; use formatDate diretamente.
-function formatAutomationDate(value) { return formatDate(value, 'N/A'); }
 
 function renderAutomationSummary(state) {
   if (!automationSummaryEl) return;
@@ -21,8 +19,8 @@ function renderAutomationSummary(state) {
     { label: translate('automation.tasks'), value: String(state.taskCount || 0) },
     { label: translate('automation.pendingCallbacksLabel'), value: String(state.pendingCallbacks || 0) },
     { label: translate('automation.upToDate'), value: upToDateText },
-    { label: translate('automation.lastSync'), value: formatAutomationDate(state.lastSyncAt) },
-    { label: translate('automation.lastAttempt'), value: formatAutomationDate(state.lastAttemptAt) },
+    { label: translate('automation.lastSync'), value: formatDate(state.lastSyncAt, 'N/A') },
+    { label: translate('automation.lastAttempt'), value: formatDate(state.lastAttemptAt, 'N/A') },
     { label: translate('automation.localCache'), value: cacheText },
     { label: 'Correlation ID', value: state.correlationId || 'N/A' },
   ];
@@ -36,7 +34,7 @@ function renderAutomationNotes(state) {
   if (!automationNotesEl) return;
 
   var notes = [];
-  if (state.generatedAt) notes.push(translate('automation.generatedAt', { date: formatAutomationDate(state.generatedAt) }));
+  if (state.generatedAt) notes.push(translate('automation.generatedAt', { date: formatDate(state.generatedAt, 'N/A') }));
   if (state.includeScriptContent) notes.push(translate('automation.manualSyncWithScript'));
   if (state.lastError) notes.push(translate('automation.lastErrorLine', { error: state.lastError }));
   if (!notes.length) notes.push(translate('automation.noAlerts'));
@@ -77,7 +75,7 @@ function renderAutomationTasks(tasks) {
     if (task.commandPayload) details.push('<div><strong>Payload:</strong> ' + escapeHtml(task.commandPayload) + '</div>');
     if (task.includeTags && task.includeTags.length) details.push('<div><strong>IncludeTags:</strong> ' + escapeHtml(task.includeTags.join(', ')) + '</div>');
     if (task.excludeTags && task.excludeTags.length) details.push('<div><strong>ExcludeTags:</strong> ' + escapeHtml(task.excludeTags.join(', ')) + '</div>');
-    if (task.lastUpdatedAt) details.push('<div><strong>' + escapeHtml(translate('automation.updatedAt')) + ':</strong> ' + escapeHtml(formatAutomationDate(task.lastUpdatedAt)) + '</div>');
+    if (task.lastUpdatedAt) details.push('<div><strong>' + escapeHtml(translate('automation.updatedAt')) + ':</strong> ' + escapeHtml(formatDate(task.lastUpdatedAt, 'N/A')) + '</div>');
 
     return '' +
       '<article class="automation-task-card">' +
@@ -180,8 +178,8 @@ function renderAutomationExecutions(executions, pendingCallbacks) {
       '  </div>' +
       '  <div class="automation-chip-row">' + chips.join(' ') + '</div>' +
       '  <div class="automation-task-details">' +
-      '    <div><strong>' + escapeHtml(translate('automation.start')) + ':</strong> ' + escapeHtml(formatAutomationDate(execution.startedAt)) + '</div>' +
-      '    <div><strong>' + escapeHtml(translate('automation.end')) + ':</strong> ' + escapeHtml(execution.finishedAt ? formatAutomationDate(execution.finishedAt) : translate('automation.inProgress')) + '</div>' +
+      '    <div><strong>' + escapeHtml(translate('automation.start')) + ':</strong> ' + escapeHtml(formatDate(execution.startedAt, 'N/A')) + '</div>' +
+      '    <div><strong>' + escapeHtml(translate('automation.end')) + ':</strong> ' + escapeHtml(execution.finishedAt ? formatDate(execution.finishedAt, 'N/A') : translate('automation.inProgress')) + '</div>' +
       (execution.durationLabel ? '<div><strong>' + escapeHtml(translate('automation.duration')) + ':</strong> ' + escapeHtml(execution.durationLabel) + '</div>' : '') +
       (execution.commandId ? '<div><strong>CommandId:</strong> ' + escapeHtml(execution.commandId) + '</div>' : '') +
       details.join('') +
