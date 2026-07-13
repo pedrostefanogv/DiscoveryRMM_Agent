@@ -43,7 +43,7 @@ func (a *App) requestProvisioningToken(ctx context.Context) (deployKey, expiresA
 	token := strings.TrimSpace(cfg.AuthToken)
 	agentID := strings.TrimSpace(cfg.AgentID)
 
-	endpoint := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/provisioning/token"
+	endpoint := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/zero-touch/deploy-token"
 	req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
 	if reqErr != nil {
 		return "", "", fmt.Errorf("request build: %w", reqErr)

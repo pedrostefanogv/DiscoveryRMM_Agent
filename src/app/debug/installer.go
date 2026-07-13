@@ -248,19 +248,17 @@ func parseInstallerServerURL(raw string) (string, string, error) {
 }
 
 func (s *Service) registerAgentFromDeployToken(ctx context.Context, scheme, server, deployToken string) (token, agentID, clientID, siteID, resolvedScheme string, err error) {
-	type registerRequest struct {
-		Hostname        string `json:"hostname"`
-		DisplayName     string `json:"displayName"`
-		OperatingSystem string `json:"operatingSystem"`
-		OSVersion       string `json:"osVersion,omitempty"`
-		AgentVersion    string `json:"agentVersion"`
-		MACAddress      string `json:"macAddress,omitempty"`
+	// Novo modelo CreateAgentCommand (API v1)
+	type createAgentRequest struct {
+		Name         string `json:"name"`
+		ClientID     string `json:"clientId"`
+		SiteID       string `json:"siteId"`
+		DepartmentID string `json:"departmentId"`
+		MACAddress   string `json:"macAddress"`
+		Notes        string `json:"notes"`
 	}
 
 	hostname, _ := os.Hostname()
-	displayName := hostname
-	osName := strings.Title(runtime.GOOS)
-	osVersion := strings.TrimSpace(os.Getenv("OS"))
 	macAddress := firstUsableMACAddress()
 
 	version := s.version
@@ -268,13 +266,10 @@ func (s *Service) registerAgentFromDeployToken(ctx context.Context, scheme, serv
 		version = "dev"
 	}
 
-	payload := registerRequest{
-		Hostname:        strings.TrimSpace(hostname),
-		DisplayName:     strings.TrimSpace(displayName),
-		OperatingSystem: osName,
-		OSVersion:       osVersion,
-		AgentVersion:    strings.TrimSpace(version),
-		MACAddress:      macAddress,
+	payload := createAgentRequest{
+		Name:       strings.TrimSpace(hostname),
+		MACAddress: macAddress,
+		Notes:      fmt.Sprintf("OS: %s | Version: %s | Agent: %s", strings.Title(runtime.GOOS), strings.TrimSpace(os.Getenv("OS")), strings.TrimSpace(version)),
 	}
 	bodyBytes, err := json.Marshal(payload)
 	if err != nil {
@@ -294,7 +289,7 @@ func (s *Service) registerAgentFromDeployToken(ctx context.Context, scheme, serv
 
 	var errs []string
 	for _, candidateScheme := range lo.Uniq(schemes) {
-		endpoint := candidateScheme + "://" + server + "/api/v1/agent-install/register"
+		endpoint := candidateScheme + "://" + server + "/api/v1/Agents"
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(bodyBytes))
 		if err != nil {
 			errs = append(errs, endpoint+": "+err.Error())

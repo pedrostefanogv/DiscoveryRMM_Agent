@@ -1,11 +1,13 @@
 ﻿package app
+
 import (
+	"discovery/internal/selfupdate"
 	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
-	"discovery/internal/selfupdate"
 )
+
 // AgentAutoUpdateConfig represents the agent-side auto-update policy.
 type AgentAutoUpdateConfig struct {
 	Enabled               bool     `json:"enabled"`
@@ -19,6 +21,7 @@ type AgentAutoUpdateConfig struct {
 	SilentInstall         bool     `json:"silentInstall"`
 	AutoRollbackOnFailure bool     `json:"autoRollbackOnFailure"`
 }
+
 // AgentPSADTConfig defines PSAppDeployToolkit integration settings from the API.
 type AgentPSADTConfig struct {
 	Enabled                 *bool  `json:"enabled"`
@@ -35,6 +38,7 @@ type AgentPSADTConfig struct {
 	TimeoutAction           string `json:"timeoutAction"`
 	UnknownExitCodePolicy   string `json:"unknownExitCodePolicy"`
 }
+
 // NotificationThemeConfig defines base colors used by notification UI.
 type NotificationThemeConfig struct {
 	Surface string `json:"surface"`
@@ -44,6 +48,7 @@ type NotificationThemeConfig struct {
 	Warning string `json:"warning"`
 	Danger  string `json:"danger"`
 }
+
 // AgentNotificationBrandingConfig defines tenant-level notification branding.
 type AgentNotificationBrandingConfig struct {
 	CompanyName string                  `json:"companyName"`
@@ -51,18 +56,21 @@ type AgentNotificationBrandingConfig struct {
 	BannerURL   string                  `json:"bannerUrl"`
 	Theme       NotificationThemeConfig `json:"theme"`
 }
+
 // AgentNotificationStyleOverride defines per-event visual customizations.
 type AgentNotificationStyleOverride struct {
 	Layout     string `json:"layout"`
 	Background string `json:"background"`
 	Text       string `json:"text"`
 }
+
 // AgentNotificationAction defines actions available in an interactive notification.
 type AgentNotificationAction struct {
 	ID         string `json:"id"`
 	Label      string `json:"label"`
 	ActionType string `json:"actionType"`
 }
+
 // AgentNotificationPolicy defines behavior and style for a notification event type.
 type AgentNotificationPolicy struct {
 	EventType      string                         `json:"eventType"`
@@ -72,6 +80,7 @@ type AgentNotificationPolicy struct {
 	StyleOverride  AgentNotificationStyleOverride `json:"styleOverride"`
 	Actions        []AgentNotificationAction      `json:"actions"`
 }
+
 // AgentRolloutConfig defines kill switches and phased rollout gates.
 type AgentRolloutConfig struct {
 	EnableNotifications           *bool    `json:"enableNotifications"`
@@ -83,16 +92,19 @@ type AgentRolloutConfig struct {
 	AllowedNotificationEventTypes []string `json:"allowedNotificationEventTypes"`
 	BlockedNotificationEventTypes []string `json:"blockedNotificationEventTypes"`
 }
+
 // AgentConsolidationPolicy defines the window mode for a specific data type.
 type AgentConsolidationPolicy struct {
 	DataType   string `json:"dataType"`
 	WindowMode string `json:"windowMode"`
 }
+
 // AgentConsolidationConfig groups feature flags and policies for send windows.
 type AgentConsolidationConfig struct {
 	Enabled  *bool                      `json:"enabled"`
 	Policies []AgentConsolidationPolicy `json:"policies"`
 }
+
 // AgentConfiguration defines the configuration schema returned by /api/v1/agent-auth/me/configuration.
 // It is used to control what features should be enabled on the agent.
 type AgentConfiguration struct {
@@ -124,8 +136,32 @@ type AgentConfiguration struct {
 	Consolidation                 AgentConsolidationConfig        `json:"consolidation"`
 	Rollout                       AgentRolloutConfig              `json:"rollout"`
 }
+
 // parseAgentConfiguration parses a configuration blob into a normalized AgentConfiguration.
+// Supports both:
+//   - Old flat format: {"chatAIEnabled": true, "appStoreEnabled": true, ...}
+//   - New API v1 hierarchical format: {"server": {...}, "client": {...}, "site": {...}}
 func parseAgentConfiguration(data []byte) (AgentConfiguration, error) {
+	// Try new API v1 format first (has "server" key at top level)
+	if newCfg, ok := tryParseAgentConfigV1(data); ok {
+		return newCfg, nil
+	}
+
+	// Fallback to legacy flat format
+	return parseLegacyAgentConfiguration(data)
+}
+
+// tryParseAgentConfigV1 tenta parsear o formato hierárquico novo (API v1).
+func tryParseAgentConfigV1(data []byte) (AgentConfiguration, bool) {
+	var resp AgentConfigResponse
+	if err := json.Unmarshal(data, &resp); err != nil || resp.Server == nil {
+		return AgentConfiguration{}, false
+	}
+	return mergeAgentConfigResponse(&resp), true
+}
+
+// parseLegacyAgentConfiguration parseia o formato flat antigo.
+func parseLegacyAgentConfiguration(data []byte) (AgentConfiguration, error) {
 	var raw map[string]any
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return AgentConfiguration{}, fmt.Errorf("falha ao decodificar configuracao do agent: %w", err)
@@ -135,7 +171,7 @@ func parseAgentConfiguration(data []byte) (AgentConfiguration, error) {
 		for _, k := range keys {
 			if v, ok := raw[k]; ok {
 				return v
-		}
+			}
 		}
 		return nil
 	}
@@ -572,6 +608,7 @@ func deriveAgentUpdatePolicyFromLegacy(legacy AgentAutoUpdateConfig) selfupdate.
 	}
 	return selfupdate.NormalizePolicy(policy)
 }
+
 // setAgentConfiguration stores the parsed configuration and applies relevant settings.
 func (a *App) setAgentConfiguration(cfg AgentConfiguration) {
 	a.agentConfigMu.RLock()
@@ -613,6 +650,7 @@ func (a *App) persistAgentRoutingContext(cfg AgentConfiguration) {
 	}
 	a.logs.append(fmt.Sprintf("[config] contexto canÃ´nico persistido: clientId=%s siteId=%s", clientID, siteID))
 }
+
 // applyAgentConfiguration adjusts runtime behavior based on the agent configuration.
 func (a *App) applyAgentConfiguration(cfg AgentConfiguration) {
 	// P2P files toggle.
@@ -692,4 +730,3 @@ func (a *App) loadCachedAgentConfiguration() error {
 	a.logs.append("[sync] configuraÃ§Ã£o do agent carregada do cache")
 	return nil
 }
-

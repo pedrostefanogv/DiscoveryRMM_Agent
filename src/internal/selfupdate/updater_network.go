@@ -169,7 +169,7 @@ func (u *Updater) downloadToTemp(ctx context.Context, m *UpdateManifest) (string
 		resp.Body.Close()
 
 		// Fallback: tenta o endpoint público para rebuilds de mesma versão.
-		publicURL := u.apiScheme() + "://" + u.apiServer() + "/api/v1/download/agent"
+		publicURL := u.apiScheme() + "://" + u.apiServer() + "/api/v1/agent-download"
 		u.logf("selfupdate: download autenticado retornou %d — tentando endpoint público: %s", resp.StatusCode, publicURL)
 
 		req2, err2 := http.NewRequestWithContext(ctxDownload, http.MethodGet, publicURL, nil)
@@ -267,13 +267,16 @@ func (u *Updater) reportEvent(ctx context.Context, eventType string, opts report
 	endpoint := u.apiScheme() + "://" + u.apiServer() + "/api/v1/agent-auth/me/update/report"
 
 	payload := reportPayload{
-		ReleaseID:      opts.ReleaseID,
-		EventType:      strings.TrimSpace(eventType),
-		CurrentVersion: strings.TrimSpace(opts.CurrentVersion),
-		TargetVersion:  strings.TrimSpace(opts.TargetVersion),
-		Message:        strings.TrimSpace(opts.Message),
-		CorrelationID:  strings.TrimSpace(opts.CorrelationID),
-		OccurredAtUTC:  time.Now().UTC().Format(time.RFC3339),
+		AgentID: agentID,
+		Request: reportPayloadRequest{
+			ReleaseID:      opts.ReleaseID,
+			EventType:      strings.TrimSpace(eventType),
+			CurrentVersion: strings.TrimSpace(opts.CurrentVersion),
+			TargetVersion:  strings.TrimSpace(opts.TargetVersion),
+			Message:        strings.TrimSpace(opts.Message),
+			CorrelationID:  strings.TrimSpace(opts.CorrelationID),
+			OccurredAtUTC:  time.Now().UTC().Format(time.RFC3339),
+		},
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {

@@ -10,6 +10,10 @@ export function AddLocalMemory(arg1) {
   return window['go']['app']['App']['AddLocalMemory'](arg1);
 }
 
+export function AddMyTicketComment(arg1, arg2, arg3) {
+  return window['go']['app']['App']['AddMyTicketComment'](arg1, arg2, arg3);
+}
+
 export function AddTicketComment(arg1, arg2, arg3) {
   return window['go']['app']['App']['AddTicketComment'](arg1, arg2, arg3);
 }
@@ -54,6 +58,10 @@ export function CloseAgentTicket(arg1, arg2, arg3, arg4) {
   return window['go']['app']['App']['CloseAgentTicket'](arg1, arg2, arg3, arg4);
 }
 
+export function CloseMyTicket(arg1, arg2, arg3, arg4) {
+  return window['go']['app']['App']['CloseMyTicket'](arg1, arg2, arg3, arg4);
+}
+
 export function CloseSupportTicket(arg1, arg2) {
   return window['go']['app']['App']['CloseSupportTicket'](arg1, arg2);
 }
@@ -66,6 +74,14 @@ export function CreateAgentTicket(arg1, arg2, arg3, arg4) {
   return window['go']['app']['App']['CreateAgentTicket'](arg1, arg2, arg3, arg4);
 }
 
+export function CreateMeshCentralEmbedURL(arg1, arg2) {
+  return window['go']['app']['App']['CreateMeshCentralEmbedURL'](arg1, arg2);
+}
+
+export function CreateMyTicket(arg1, arg2) {
+  return window['go']['app']['App']['CreateMyTicket'](arg1, arg2);
+}
+
 export function CreateSupportTicket(arg1) {
   return window['go']['app']['App']['CreateSupportTicket'](arg1);
 }
@@ -76,6 +92,10 @@ export function Ctx() {
 
 export function DeleteLocalMemory(arg1) {
   return window['go']['app']['App']['DeleteLocalMemory'](arg1);
+}
+
+export function DetectApiFeatures(arg1) {
+  return window['go']['app']['App']['DetectApiFeatures'](arg1);
 }
 
 export function DispatchNotification(arg1) {
@@ -216,6 +236,10 @@ export function GetLogsText() {
 
 export function GetMCPRegistry() {
   return window['go']['app']['App']['GetMCPRegistry']();
+}
+
+export function GetMyTickets(arg1, arg2) {
+  return window['go']['app']['App']['GetMyTickets'](arg1, arg2);
 }
 
 export function GetOnboardingStatus() {
@@ -430,6 +454,10 @@ export function ListPrintersJSON() {
   return window['go']['app']['App']['ListPrintersJSON']();
 }
 
+export function PollChatJob(arg1, arg2) {
+  return window['go']['app']['App']['PollChatJob'](arg1, arg2);
+}
+
 export function PostP2PTelemetry(arg1) {
   return window['go']['app']['App']['PostP2PTelemetry'](arg1);
 }
@@ -538,8 +566,20 @@ export function SelectAndPublishP2PArtifact() {
   return window['go']['app']['App']['SelectAndPublishP2PArtifact']();
 }
 
+export function SendChatAsync(arg1, arg2, arg3, arg4) {
+  return window['go']['app']['App']['SendChatAsync'](arg1, arg2, arg3, arg4);
+}
+
 export function SendChatMessage(arg1) {
   return window['go']['app']['App']['SendChatMessage'](arg1);
+}
+
+export function SendChatStream(arg1, arg2, arg3, arg4, arg5, arg6) {
+  return window['go']['app']['App']['SendChatStream'](arg1, arg2, arg3, arg4, arg5, arg6);
+}
+
+export function SendChatSync(arg1, arg2, arg3, arg4) {
+  return window['go']['app']['App']['SendChatSync'](arg1, arg2, arg3, arg4);
 }
 
 export function SendTestHeartbeat() {
@@ -628,4 +668,8 @@ export function UpgradeAllPackages() {
 
 export function UpgradePackage(arg1) {
   return window['go']['app']['App']['UpgradePackage'](arg1);
+}
+
+export function UpsertCollectedCustomField(arg1, arg2, arg3, arg4) {
+  return window['go']['app']['App']['UpsertCollectedCustomField'](arg1, arg2, arg3, arg4);
 }

@@ -358,6 +358,40 @@ export namespace app {
 	
 	
 	
+	export class ApiVersionInfo {
+	    Detected: boolean;
+	    Version: string;
+	    Features: string[];
+	    BaseURL: string;
+	    CheckedAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ApiVersionInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.Detected = source["Detected"];
+	        this.Version = source["Version"];
+	        this.Features = source["Features"];
+	        this.BaseURL = source["BaseURL"];
+	        this.CheckedAt = source["CheckedAt"];
+	    }
+	}
+	export class ChatAIResponse {
+	    message: string;
+	    sessionId: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ChatAIResponse(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.message = source["message"];
+	        this.sessionId = source["sessionId"];
+	    }
+	}
 	export class ChatConfig {
 	    endpoint: string;
 	    apiKey: string;
@@ -378,6 +412,26 @@ export namespace app {
 	        this.maxTokens = source["maxTokens"];
 	    }
 	}
+	export class ChatJobStatus {
+	    jobId: string;
+	    status: string;
+	    message?: string;
+	    sessionId?: string;
+	    error?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ChatJobStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.jobId = source["jobId"];
+	        this.status = source["status"];
+	        this.message = source["message"];
+	        this.sessionId = source["sessionId"];
+	        this.error = source["error"];
+	    }
+	}
 	export class ChatMessage {
 	    role: string;
 	    content: string;
@@ -390,6 +444,40 @@ export namespace app {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.role = source["role"];
 	        this.content = source["content"];
+	    }
+	}
+	export class CreateTicketRequest {
+	    title: string;
+	    description: string;
+	    category: string;
+	    priority: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new CreateTicketRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.title = source["title"];
+	        this.description = source["description"];
+	        this.category = source["category"];
+	        this.priority = source["priority"];
+	    }
+	}
+	export class MeshCentralEmbedResponse {
+	    url: string;
+	    expiresAt: string;
+	    sessionId: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new MeshCentralEmbedResponse(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.url = source["url"];
+	        this.expiresAt = source["expiresAt"];
+	        this.sessionId = source["sessionId"];
 	    }
 	}
 	export class NotificationDispatchRequest {
@@ -796,6 +884,40 @@ export namespace app {
 		    }
 		    return a;
 		}
+	}
+	export class TicketSummary {
+	    id: string;
+	    title: string;
+	    description: string;
+	    category: string;
+	    priority: string;
+	    workflowStateId: string;
+	    slaExpiresAt: string;
+	    slaBreached: boolean;
+	    daysOpen: number;
+	    createdAt: string;
+	    updatedAt: string;
+	    closedAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new TicketSummary(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.title = source["title"];
+	        this.description = source["description"];
+	        this.category = source["category"];
+	        this.priority = source["priority"];
+	        this.workflowStateId = source["workflowStateId"];
+	        this.slaExpiresAt = source["slaExpiresAt"];
+	        this.slaBreached = source["slaBreached"];
+	        this.daysOpen = source["daysOpen"];
+	        this.createdAt = source["createdAt"];
+	        this.updatedAt = source["updatedAt"];
+	        this.closedAt = source["closedAt"];
+	    }
 	}
 
 }

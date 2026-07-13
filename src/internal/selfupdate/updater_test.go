@@ -201,8 +201,8 @@ func TestResumePendingInstallReport_ReportsSuccessAndClearsState(t *testing.T) {
 	if len(events) != 1 {
 		t.Fatalf("expected exactly one report event, got %d", len(events))
 	}
-	if events[0].EventType != "InstallSucceeded" {
-		t.Fatalf("eventType = %q, want InstallSucceeded", events[0].EventType)
+	if events[0].Request.EventType != "InstallSucceeded" {
+		t.Fatalf("eventType = %q, want InstallSucceeded", events[0].Request.EventType)
 	}
 	if _, err := os.Stat(filepath.Join(tempDir, pendingInstallFile)); !os.IsNotExist(err) {
 		t.Fatalf("expected pending install file to be removed, stat err=%v", err)

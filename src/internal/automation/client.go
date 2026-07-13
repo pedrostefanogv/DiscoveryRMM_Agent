@@ -69,13 +69,35 @@ func normalizeBaseURL(endpoint string) (string, error) {
 	return strings.TrimRight(u.String(), "/"), nil
 }
 
+type syncPolicyRequest struct {
+	AgentID       string            `json:"agentId"`
+	Request       PolicySyncRequest `json:"request"`
+	CorrelationID string            `json:"correlationId"`
+	Username      string            `json:"username"`
+	IPAddress     string            `json:"ipAddress"`
+}
+
+type executionCallbackRequest struct {
+	AgentID       string      `json:"agentId"`
+	CommandID     string      `json:"commandId"`
+	Request       interface{} `json:"request"`
+	CorrelationID string      `json:"correlationId"`
+}
+
 func (c *Client) SyncPolicy(ctx context.Context, cfg RuntimeConfig, reqBody PolicySyncRequest, correlationID string) (*PolicySyncResponse, error) {
 	baseURL, err := normalizeBaseURL(cfg.BaseURL)
 	if err != nil {
 		return nil, err
 	}
 
-	payload, err := json.Marshal(reqBody)
+	wrapper := syncPolicyRequest{
+		AgentID:       cfg.AgentID,
+		Request:       reqBody,
+		CorrelationID: correlationID,
+		Username:      "agent",
+		IPAddress:     "",
+	}
+	payload, err := json.Marshal(wrapper)
 	if err != nil {
 		return nil, fmt.Errorf("falha ao serializar policy sync: %w", err)
 	}
@@ -138,7 +160,13 @@ func (c *Client) postExecutionCallback(ctx context.Context, cfg RuntimeConfig, c
 		return fmt.Errorf("commandId obrigatorio para callback de execucao")
 	}
 
-	body, err := json.Marshal(payload)
+	wrapper := executionCallbackRequest{
+		AgentID:       cfg.AgentID,
+		CommandID:     commandID,
+		Request:       payload,
+		CorrelationID: correlationID,
+	}
+	body, err := json.Marshal(wrapper)
 	if err != nil {
 		return fmt.Errorf("falha ao serializar callback %s: %w", suffix, err)
 	}

@@ -117,6 +117,11 @@ type reportOpts struct {
 }
 
 type reportPayload struct {
+	AgentID string               `json:"agentId"`
+	Request reportPayloadRequest `json:"request"`
+}
+
+type reportPayloadRequest struct {
 	ReleaseID      *string `json:"releaseId"`
 	EventType      string  `json:"eventType"`
 	CurrentVersion string  `json:"currentVersion"`

@@ -17,21 +17,22 @@ import (
 )
 
 type agentHardwareEnvelope struct {
-	Hostname               string                  `json:"hostname"`
-	DisplayName            string                  `json:"displayName"`
-	MeshCentralNodeID      string                  `json:"meshCentralNodeId,omitempty"`
-	Status                 string                  `json:"status"`
-	OperatingSystem        string                  `json:"operatingSystem"`
-	OSVersion              string                  `json:"osVersion"`
-	AgentVersion           string                  `json:"agentVersion"`
-	LastIPAddress          string                  `json:"lastIpAddress"`
-	MACAddress             string                  `json:"macAddress"`
-	Hardware               agentHardwareInfo       `json:"hardware"`
-	Components             agentHardwareComponents `json:"components"`
-	MachineScore           int                     `json:"machineScore"`
-	InventoryRaw           json.RawMessage         `json:"inventoryRaw"`
-	InventorySchemaVersion string                  `json:"inventorySchemaVersion"`
-	InventoryCollectedAt   string                  `json:"inventoryCollectedAt"`
+	AgentID                string          `json:"agentId"`
+	Hostname               string          `json:"hostname"`
+	DisplayName            string          `json:"displayName"`
+	MeshCentralNodeID      string          `json:"meshCentralNodeId,omitempty"`
+	Status                 string          `json:"status"`
+	OperatingSystem        string          `json:"operatingSystem"`
+	OSVersion              string          `json:"osVersion"`
+	AgentVersion           string          `json:"agentVersion"`
+	LastIPAddress          string          `json:"lastIpAddress"`
+	MACAddress             string          `json:"macAddress"`
+	Hardware               json.RawMessage `json:"hardware"`
+	Components             json.RawMessage `json:"components"`
+	MachineScore           int             `json:"machineScore"`
+	InventoryRaw           string          `json:"inventoryRaw"`
+	InventorySchemaVersion string          `json:"inventorySchemaVersion"`
+	InventoryCollectedAt   string          `json:"inventoryCollectedAt"`
 }
 
 type agentHardwareComponents struct {
@@ -114,6 +115,7 @@ type agentPrinterInfo struct {
 }
 
 type agentSoftwareEnvelope struct {
+	AgentID     string              `json:"agentId"`
 	CollectedAt string              `json:"collectedAt"`
 	Software    []agentSoftwareItem `json:"software"`
 }
@@ -140,6 +142,7 @@ func (s *Service) SyncInventoryOnStartup(ctx context.Context, report models.Inve
 	cfg.ApiScheme = strings.TrimSpace(strings.ToLower(cfg.ApiScheme))
 
 	hardwarePayload := buildAgentHardwareEnvelope(report, s.version)
+	hardwarePayload.AgentID = strings.TrimSpace(cfg.AgentID)
 	if s.resolveMeshCentralNodeID != nil {
 		hardwarePayload.MeshCentralNodeID = strings.TrimSpace(s.resolveMeshCentralNodeID())
 	}
@@ -149,7 +152,7 @@ func (s *Service) SyncInventoryOnStartup(ctx context.Context, report models.Inve
 		return
 	}
 
-	softwarePayload := buildAgentSoftwareEnvelope(report)
+	softwarePayload := buildAgentSoftwareEnvelope(report, strings.TrimSpace(cfg.AgentID))
 	softwareBody, err := json.Marshal(softwarePayload)
 	if err != nil {
 		s.logf("[agent-sync] falha ao serializar softwares: " + err.Error())
@@ -220,10 +223,10 @@ func (s *Service) SyncInventoryOnStartup(ctx context.Context, report models.Inve
 	s.logf(fmt.Sprintf(
 		"[agent-sync] hardware payload: collectedAt=%s disks=%d networkAdapters=%d memoryModules=%d printers=%d hostname=%s",
 		hardwarePayload.InventoryCollectedAt,
-		len(hardwarePayload.Components.Disks),
-		len(hardwarePayload.Components.NetworkAdapters),
-		len(hardwarePayload.Components.MemoryModules),
-		len(hardwarePayload.Components.Printers),
+		len(report.Disks),
+		len(report.Networks),
+		len(report.MemoryModules),
+		len(report.Printers),
 		hardwarePayload.Hostname,
 	))
 
@@ -312,7 +315,7 @@ func (s *Service) sendAgentInventoryRequest(parent context.Context, endpoint str
 	return nil
 }
 
-func buildAgentSoftwareEnvelope(report models.InventoryReport) agentSoftwareEnvelope {
+func buildAgentSoftwareEnvelope(report models.InventoryReport, agentID string) agentSoftwareEnvelope {
 	collected := strings.TrimSpace(report.CollectedAt)
 	if collected == "" {
 		collected = time.Now().UTC().Format(time.RFC3339)
@@ -341,6 +344,7 @@ func buildAgentSoftwareEnvelope(report models.InventoryReport) agentSoftwareEnve
 	}
 
 	return agentSoftwareEnvelope{
+		AgentID:     agentID,
 		CollectedAt: collected,
 		Software:    software,
 	}
@@ -496,47 +500,55 @@ func buildAgentHardwareEnvelope(report models.InventoryReport, version string) a
 	if version == "" {
 		version = "dev"
 	}
+	// Serializa hardware e components como json.RawMessage (API v1)
+	hwInfo := agentHardwareInfo{
+		InventoryRaw:            string(rawJSON),
+		InventorySchemaVersion:  "",
+		InventoryCollectedAt:    collected,
+		Manufacturer:            trimToMaxLen(strings.TrimSpace(report.Hardware.Manufacturer), 100),
+		Model:                   trimToMaxLen(strings.TrimSpace(report.Hardware.Model), 100),
+		SerialNumber:            trimToMaxLen(strings.TrimSpace(report.Hardware.BIOSSerial), 100),
+		MotherboardManufacturer: trimToMaxLen(strings.TrimSpace(report.Hardware.MotherboardManufacturer), 100),
+		MotherboardModel:        trimToMaxLen(strings.TrimSpace(report.Hardware.MotherboardModel), 100),
+		MotherboardSerialNumber: trimToMaxLen(strings.TrimSpace(report.Hardware.MotherboardSerial), 100),
+		Processor:               trimToMaxLen(strings.TrimSpace(report.Hardware.CPU), 100),
+		ProcessorCores:          report.Hardware.Cores,
+		ProcessorThreads:        report.Hardware.LogicalCores,
+		ProcessorArchitecture:   trimToMaxLen(strings.TrimSpace(report.OS.Architecture), 100),
+		TotalMemoryBytes:        memTotalBytes,
+		BIOSVersion:             trimToMaxLen(strings.TrimSpace(report.Hardware.BIOSVersion), 100),
+		BIOSManufacturer:        trimToMaxLen(strings.TrimSpace(report.Hardware.BIOSVendor), 100),
+		OSName:                  osName,
+		OSVersion:               osVersion,
+		OSBuild:                 trimToMaxLen(strings.TrimSpace(report.OS.Build), 100),
+		OSArchitecture:          trimToMaxLen(strings.TrimSpace(report.OS.Architecture), 100),
+		CollectedAt:             collected,
+		UpdatedAt:               updated,
+	}
+	hwJSON, _ := json.Marshal(hwInfo)
+
+	components := agentHardwareComponents{
+		Disks:           disks,
+		NetworkAdapters: adapters,
+		MemoryModules:   modules,
+		Printers:        printers,
+	}
+	compJSON, _ := json.Marshal(components)
+
 	envelope := agentHardwareEnvelope{
-		Hostname:        hostname,
-		DisplayName:     trimToMaxLen(hostname, 100),
-		Status:          "Online",
-		OperatingSystem: osName,
-		OSVersion:       osVersion,
-		AgentVersion:    trimToMaxLen(strings.TrimSpace(version), 100),
-		LastIPAddress:   lastIP,
-		MACAddress:      primaryMAC,
-		MachineScore:    computeMachineScore(report),
-		Hardware: agentHardwareInfo{
-			InventoryRaw:            string(rawJSON),
-			InventorySchemaVersion:  "",
-			InventoryCollectedAt:    collected,
-			Manufacturer:            trimToMaxLen(strings.TrimSpace(report.Hardware.Manufacturer), 100),
-			Model:                   trimToMaxLen(strings.TrimSpace(report.Hardware.Model), 100),
-			SerialNumber:            trimToMaxLen(strings.TrimSpace(report.Hardware.BIOSSerial), 100),
-			MotherboardManufacturer: trimToMaxLen(strings.TrimSpace(report.Hardware.MotherboardManufacturer), 100),
-			MotherboardModel:        trimToMaxLen(strings.TrimSpace(report.Hardware.MotherboardModel), 100),
-			MotherboardSerialNumber: trimToMaxLen(strings.TrimSpace(report.Hardware.MotherboardSerial), 100),
-			Processor:               trimToMaxLen(strings.TrimSpace(report.Hardware.CPU), 100),
-			ProcessorCores:          report.Hardware.Cores,
-			ProcessorThreads:        report.Hardware.LogicalCores,
-			ProcessorArchitecture:   trimToMaxLen(strings.TrimSpace(report.OS.Architecture), 100),
-			TotalMemoryBytes:        memTotalBytes,
-			BIOSVersion:             trimToMaxLen(strings.TrimSpace(report.Hardware.BIOSVersion), 100),
-			BIOSManufacturer:        trimToMaxLen(strings.TrimSpace(report.Hardware.BIOSVendor), 100),
-			OSName:                  osName,
-			OSVersion:               osVersion,
-			OSBuild:                 trimToMaxLen(strings.TrimSpace(report.OS.Build), 100),
-			OSArchitecture:          trimToMaxLen(strings.TrimSpace(report.OS.Architecture), 100),
-			CollectedAt:             collected,
-			UpdatedAt:               updated,
-		},
-		Components: agentHardwareComponents{
-			Disks:           disks,
-			NetworkAdapters: adapters,
-			MemoryModules:   modules,
-			Printers:        printers,
-		},
-		InventoryRaw:           rawJSON,
+		AgentID:                "",
+		Hostname:               hostname,
+		DisplayName:            trimToMaxLen(hostname, 100),
+		Status:                 "Online",
+		OperatingSystem:        osName,
+		OSVersion:              osVersion,
+		AgentVersion:           trimToMaxLen(strings.TrimSpace(version), 100),
+		LastIPAddress:          lastIP,
+		MACAddress:             primaryMAC,
+		MachineScore:           computeMachineScore(report),
+		Hardware:               hwJSON,
+		Components:             compJSON,
+		InventoryRaw:           string(rawJSON),
 		InventorySchemaVersion: "",
 		InventoryCollectedAt:   collected,
 	}

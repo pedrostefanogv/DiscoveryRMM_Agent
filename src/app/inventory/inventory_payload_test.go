@@ -40,8 +40,14 @@ func TestBuildAgentHardwareEnvelope_UsesStringStatusAndStringHardwareRawInventor
 		t.Fatalf("status = %q, esperado %q", status, "Online")
 	}
 
-	if _, ok := payload["inventoryRaw"].(map[string]any); !ok {
-		t.Fatalf("inventoryRaw deve ser objeto JSON no payload (raiz), veio %T", payload["inventoryRaw"])
+	// API v1: inventoryRaw na raiz é string (contém JSON válido)
+	invRawStr, ok := payload["inventoryRaw"].(string)
+	if !ok {
+		t.Fatalf("inventoryRaw deve ser string no payload (raiz), veio %T", payload["inventoryRaw"])
+	}
+	var invRawObj map[string]any
+	if err := json.Unmarshal([]byte(invRawStr), &invRawObj); err != nil {
+		t.Fatalf("inventoryRaw string deve conter JSON válido: %v", err)
 	}
 
 	hw, ok := payload["hardware"].(map[string]any)
@@ -79,18 +85,25 @@ func TestBuildAgentHardwareEnvelope_FiltersInvalidRequiredComponents(t *testing.
 	}
 
 	env := buildAgentHardwareEnvelope(report, "dev")
-	if len(env.Components.Disks) != 2 {
-		t.Fatalf("esperado 2 discos validos (somente o vazio deve ser filtrado), veio %d", len(env.Components.Disks))
-	}
-	if env.Components.Disks[1].DriveLetter != "C:" {
-		t.Fatalf("driveLetter = %q, esperado %q", env.Components.Disks[1].DriveLetter, "C:")
+
+	// Components agora é json.RawMessage; deserializar para acessar campos
+	var comps agentHardwareComponents
+	if err := json.Unmarshal(env.Components, &comps); err != nil {
+		t.Fatalf("unmarshal components: %v", err)
 	}
 
-	if len(env.Components.NetworkAdapters) != 1 {
-		t.Fatalf("esperado 1 adaptador valido, veio %d", len(env.Components.NetworkAdapters))
+	if len(comps.Disks) != 2 {
+		t.Fatalf("esperado 2 discos validos (somente o vazio deve ser filtrado), veio %d", len(comps.Disks))
 	}
-	if env.Components.NetworkAdapters[0].Name != "Ethernet" {
-		t.Fatalf("adapter name = %q, esperado %q", env.Components.NetworkAdapters[0].Name, "Ethernet")
+	if comps.Disks[1].DriveLetter != "C:" {
+		t.Fatalf("driveLetter = %q, esperado %q", comps.Disks[1].DriveLetter, "C:")
+	}
+
+	if len(comps.NetworkAdapters) != 1 {
+		t.Fatalf("esperado 1 adaptador valido, veio %d", len(comps.NetworkAdapters))
+	}
+	if comps.NetworkAdapters[0].Name != "Ethernet" {
+		t.Fatalf("adapter name = %q, esperado %q", comps.NetworkAdapters[0].Name, "Ethernet")
 	}
 }
 
@@ -112,7 +125,7 @@ func TestBuildAgentSoftwareEnvelope_AppliesContractLimits(t *testing.T) {
 		},
 	}
 
-	env := buildAgentSoftwareEnvelope(report)
+	env := buildAgentSoftwareEnvelope(report, "test-agent-id")
 	if len(env.Software) != 1 {
 		t.Fatalf("esperado 1 software valido, veio %d", len(env.Software))
 	}
@@ -167,10 +180,17 @@ func TestBuildAgentHardwareEnvelope_IncludesPrintersInComponents(t *testing.T) {
 	}
 
 	env := buildAgentHardwareEnvelope(report, "dev")
-	if len(env.Components.Printers) != 1 {
-		t.Fatalf("esperado 1 impressora no components.printers, veio %d", len(env.Components.Printers))
+
+	// Components agora é json.RawMessage; deserializar para acessar campos
+	var comps agentHardwareComponents
+	if err := json.Unmarshal(env.Components, &comps); err != nil {
+		t.Fatalf("unmarshal components: %v", err)
 	}
-	p := env.Components.Printers[0]
+
+	if len(comps.Printers) != 1 {
+		t.Fatalf("esperado 1 impressora no components.printers, veio %d", len(comps.Printers))
+	}
+	p := comps.Printers[0]
 	if p.Name != "HP LaserJet Pro M404" {
 		t.Fatalf("name = %q", p.Name)
 	}

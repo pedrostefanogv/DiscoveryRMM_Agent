@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	p2pSeedPlanEndpointPath    = "/api/v1/agent-auth/me/p2p-seed-plan"
+	p2pSeedPlanEndpointPath    = "/api/v1/agent-auth/me/p2p/seed-plan"
 	p2pTelemetryEndpointPath   = "/api/v1/agent-auth/me/p2p/telemetry"
 	p2pDistributionStatusPath  = "/api/v1/agent-auth/me/p2p/distribution"
 	p2pAPITimeout              = 20 * time.Second
