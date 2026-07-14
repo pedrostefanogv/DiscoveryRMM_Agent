@@ -49,6 +49,44 @@ func (a *App) fetchAppStoreByInstallationType(ctx context.Context, installationT
 		return AppStoreResponse{}, fmt.Errorf("apiScheme inválido: use http ou https")
 	}
 
+	// Coleta todas as páginas via cursor pagination (CQRS).
+	var allItems []AppStoreItem
+	cursor := ""
+	pageCount := 0
+	maxPages := 20 // safety limit
+
+	for {
+		pageCount++
+		if pageCount > maxPages {
+			return AppStoreResponse{}, fmt.Errorf("app-store (%s) excedeu limite de %d paginas", installationType, maxPages)
+		}
+
+		page, err := a.fetchAppStorePage(ctx, installationType, cursor, token, cfg.AgentID)
+		if err != nil {
+			return AppStoreResponse{}, err
+		}
+
+		allItems = append(allItems, page.Items...)
+
+		if !page.HasMore || strings.TrimSpace(page.NextCursor) == "" {
+			return AppStoreResponse{
+				InstallationType: string(installationType),
+				Count:            len(allItems),
+				Items:            allItems,
+			}, nil
+		}
+
+		cursor = strings.TrimSpace(page.NextCursor)
+		a.supportLogf("app-store (%s) pagina %d carregada, proximo cursor: %s", installationType, pageCount, cursor)
+	}
+}
+
+// fetchAppStorePage faz uma única requisição ao endpoint app-store com cursor opcional.
+func (a *App) fetchAppStorePage(ctx context.Context, installationType AppStoreInstallationType, cursor, token, agentID string) (AppStoreResponse, error) {
+	cfg := a.GetDebugConfig()
+	apiScheme := strings.TrimSpace(strings.ToLower(cfg.ApiScheme))
+	apiServer := strings.TrimSpace(cfg.ApiServer)
+
 	target := apiScheme + "://" + apiServer + "/api/v1/agent-auth/me/app-store"
 	parsed, err := url.Parse(target)
 	if err != nil {
@@ -56,6 +94,11 @@ func (a *App) fetchAppStoreByInstallationType(ctx context.Context, installationT
 	}
 	query := parsed.Query()
 	query.Set("installationType", string(installationType))
+	if cursor != "" {
+		query.Set("cursor", cursor)
+	}
+	// Informa à API o pageSize esperado pelo agent
+	query.Set("pageSize", "200")
 	parsed.RawQuery = query.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
@@ -63,7 +106,7 @@ func (a *App) fetchAppStoreByInstallationType(ctx context.Context, installationT
 		return AppStoreResponse{}, fmt.Errorf("falha ao criar request da app-store: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
-	if err := netutil.SetAgentAuthHeadersWithAgentID(req, token, cfg.AgentID); err != nil {
+	if err := netutil.SetAgentAuthHeadersWithAgentID(req, token, agentID); err != nil {
 		return AppStoreResponse{}, err
 	}
 

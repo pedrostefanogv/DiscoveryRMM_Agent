@@ -29,10 +29,15 @@ type Item struct {
 }
 
 // Response representa o envelope do endpoint /api/v1/agent-auth/me/app-store.
+// Suporta paginação CQRS por cursor — quando nextCursor não está vazio,
+// o caller deve fazer nova requisição com ?cursor=<nextCursor> para obter
+// a próxima página.
 type Response struct {
 	InstallationType string `json:"installationType"`
 	Count            int    `json:"count"`
 	Items            []Item `json:"items"`
+	NextCursor       string `json:"nextCursor"`
+	HasMore          bool   `json:"hasMore"`
 }
 
 // EffectivePolicy consolida os itens permitidos para todos os tipos suportados.
