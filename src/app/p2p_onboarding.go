@@ -615,6 +615,12 @@ func computeOnboardingSignature(sourceAgent, serverURL, deployKey, expiresAt, no
 
 // BuildOnboardingOffer creates a signed onboarding offer for distribution to unconfigured peers.
 func BuildOnboardingOffer(sourceAgentID, serverURL, deployKey string, ttl time.Duration) (P2POnboardingRequest, error) {
+	if strings.TrimSpace(deployKey) == "" {
+		return P2POnboardingRequest{}, fmt.Errorf("deployKey vazio: impossivel assinar oferta")
+	}
+	if strings.TrimSpace(serverURL) == "" {
+		return P2POnboardingRequest{}, fmt.Errorf("serverURL vazio: impossivel montar oferta")
+	}
 	nonceBytes := make([]byte, 16)
 	if _, err := rand.Read(nonceBytes); err != nil {
 		return P2POnboardingRequest{}, err

@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -56,6 +57,8 @@ func (s *p2pTransferServer) handleOnboardOffer(w http.ResponseWriter, r *http.Re
 		recordAutoProvisioningEvent(s.app, agentID, "", false, "provisioning token error: "+err.Error())
 		return
 	}
+	keyLen := len(deployKey)
+	s.app.logs.append(fmt.Sprintf("[zero-touch] provisioning token obtido (len=%d, expiresAt=%s)", keyLen, expiresAt))
 
 	// Construir URL canônica (evitar inst.ServerURL legado).
 	inst, _, loadErr := loadInstallerConfig()

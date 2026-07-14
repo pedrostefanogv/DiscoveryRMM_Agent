@@ -65,12 +65,23 @@ func (a *App) requestProvisioningToken(ctx context.Context) (deployKey, expiresA
 	}
 
 	var parsed struct {
-		DeployKey string `json:"deployKey"`
+		Token     string `json:"token"`
+		DeployKey string `json:"deployKey"` // fallback para compatibilidade
 		ExpiresAt string `json:"expiresAt"`
 	}
 	if err := json.Unmarshal(body, &parsed); err != nil {
 		return "", "", fmt.Errorf("parse: %w", err)
 	}
 
-	return strings.TrimSpace(parsed.DeployKey), strings.TrimSpace(parsed.ExpiresAt), nil
+	// Prefere o campo "token" (formato canônico do ProvisioningTokenResponse).
+	// Mantém fallback "deployKey" para retrocompatibilidade.
+	result := strings.TrimSpace(parsed.DeployKey)
+	if result == "" {
+		result = strings.TrimSpace(parsed.Token)
+	}
+	if result == "" {
+		return "", "", fmt.Errorf("parse: campo token vazio na resposta (esperado 'token' ou 'deployKey')")
+	}
+
+	return result, strings.TrimSpace(parsed.ExpiresAt), nil
 }
