@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -387,6 +388,35 @@ func NewApp(opts AppStartupOptions) *App {
 		Logf:                func(format string, args ...any) { a.logs.append("[selfupdate] " + fmt.Sprintf(format, args...)) },
 		InvalidateCh:        a.selfUpdaterCh,
 		OnSelfUpdateInstall: a.selfUpdateInstallWithPSADT,
+		FindPeersByReleaseID: func(ctx context.Context, artifactID string) ([]string, error) {
+			if a.p2pCoord == nil {
+				return nil, nil
+			}
+			result := a.p2pCoord.FindArtifactPeersByReleaseID(artifactID, "")
+			return result.PeerAgentIDs, nil
+		},
+		DownloadFromPeer: func(ctx context.Context, artifactID, peerID string) (string, error) {
+			if a.p2pCoord == nil {
+				return "", errors.New("p2p indisponivel")
+			}
+			view, err := a.p2pCoord.DownloadArtifactByID(ctx, artifactID, peerID)
+			if err != nil {
+				return "", err
+			}
+			return filepath.Join(a.p2pTempDir(), view.ArtifactName), nil
+		},
+		OnArtifactReady: func(ctx context.Context, path, artifactID, sha256, version string) error {
+			if a.p2pCoord == nil || artifactID == "" {
+				return nil
+			}
+			_, err := a.p2pCoord.PublishFileWithID(path, artifactID)
+			if err != nil {
+				a.logs.append("[selfupdate] aviso: P2P publish falhou: " + err.Error())
+			} else {
+				a.logs.append(fmt.Sprintf("[selfupdate] artifact publicado no P2P: artifactID=%s sha256=%s", artifactID, sha256[:12]))
+			}
+			return nil // best-effort, nunca falha o update
+		},
 	}
 	a.exporter = updates.NewExporter(updates.ExportOptions{
 		BeginActivity: a.beginActivity,

@@ -168,6 +168,91 @@ func (c *p2pCoordinator) PublishFile(sourcePath string) (P2PArtifactView, error)
 	}, nil
 }
 
+// PublishFileWithID publica um arquivo no diretório P2P com um ArtifactID
+// explícito (ex.: GUID de release, "sha256:<hex>") em vez de derivar do nome.
+// O arquivo é copiado para o p2pTempDir com o artifactID como nome de arquivo
+// (mantendo a extensão original).
+func (c *p2pCoordinator) PublishFileWithID(sourcePath string, artifactID string) (P2PArtifactView, error) {
+	sourcePath = strings.TrimSpace(sourcePath)
+	if sourcePath == "" {
+		return P2PArtifactView{}, fmt.Errorf("arquivo nao informado")
+	}
+	artifactID = strings.TrimSpace(artifactID)
+	if artifactID == "" {
+		return P2PArtifactView{}, fmt.Errorf("artifactID nao informado")
+	}
+	sourceInfo, err := os.Stat(sourcePath)
+	if err != nil {
+		return P2PArtifactView{}, err
+	}
+	sourceChecksum, err := computeFileSHA256(sourcePath)
+	if err != nil {
+		return P2PArtifactView{}, fmt.Errorf("falha ao calcular checksum de origem: %w", err)
+	}
+	sourceFile, err := os.Open(sourcePath)
+	if err != nil {
+		return P2PArtifactView{}, err
+	}
+	defer sourceFile.Close()
+
+	dir := c.app.p2pTempDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return P2PArtifactView{}, err
+	}
+	// Nome do arquivo: artifactID + extensão original (ex.: "rel-abc.exe")
+	targetName := sanitizeArtifactName(artifactID + filepath.Ext(sourcePath))
+	targetPath := filepath.Join(dir, targetName)
+	tmpPath := targetPath + ".importing"
+	targetFile, err := os.Create(tmpPath)
+	if err != nil {
+		return P2PArtifactView{}, err
+	}
+	if _, err := io.Copy(targetFile, sourceFile); err != nil {
+		targetFile.Close()
+		_ = os.Remove(tmpPath)
+		return P2PArtifactView{}, err
+	}
+	if err := targetFile.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return P2PArtifactView{}, err
+	}
+	if err := os.Rename(tmpPath, targetPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return P2PArtifactView{}, err
+	}
+	_ = platform.EnsureWorldReadable(targetPath)
+
+	info, err := os.Stat(targetPath)
+	if err != nil {
+		return P2PArtifactView{}, err
+	}
+	checksum, err := computeFileSHA256(targetPath)
+	if err != nil {
+		return P2PArtifactView{}, err
+	}
+	if sourceInfo.Size() != info.Size() {
+		_ = os.Remove(targetPath)
+		return P2PArtifactView{}, fmt.Errorf("arquivo importado com tamanho divergente")
+	}
+	if !strings.EqualFold(sourceChecksum, checksum) {
+		_ = os.Remove(targetPath)
+		return P2PArtifactView{}, fmt.Errorf("checksum divergente apos mover arquivo para temp")
+	}
+	c.mu.Lock()
+	c.metrics.PublishedArtifacts++
+	c.mu.Unlock()
+	return P2PArtifactView{
+		ArtifactID:       artifactID,
+		ArtifactName:     targetName,
+		Version:          "",
+		SizeBytes:        info.Size(),
+		ModifiedAtUTC:    formatTimeRFC3339(info.ModTime()),
+		ChecksumSHA256:   checksum,
+		Available:        true,
+		LastHeartbeatUTC: formatTimeRFC3339(time.Now().UTC()),
+	}, nil
+}
+
 func (c *p2pCoordinator) ReplicateArtifactToPeer(artifactName, targetPeerID string) (string, error) {
 	return "", fmt.Errorf("modo push desabilitado: use transferencia pull sob demanda")
 }

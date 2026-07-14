@@ -112,6 +112,57 @@ func (u *Updater) downloadToTemp(ctx context.Context, m *UpdateManifest) (string
 		return "", errors.New("agentId vazio")
 	}
 
+	expectedSHA256 := strings.ToLower(strings.TrimSpace(*m.Sha256))
+	releaseID := ""
+	if m.ReleaseID != nil {
+		releaseID = strings.TrimSpace(*m.ReleaseID)
+	}
+	targetVersion := ""
+	if m.LatestVersion != nil {
+		targetVersion = strings.TrimSpace(*m.LatestVersion)
+	}
+
+	// ── P2P-first: tenta baixar de peers antes de ir para HTTP ──
+	artifactID := releaseID
+	if artifactID == "" {
+		// Fallback: deriva ArtifactID do SHA256 quando não há releaseID
+		artifactID = "sha256:" + expectedSHA256
+	}
+
+	if u.FindPeersByReleaseID != nil && u.DownloadFromPeer != nil {
+		peers, findErr := u.FindPeersByReleaseID(ctx, artifactID)
+		if findErr != nil {
+			u.logf("[selfupdate] consulta P2P falhou (não-crítico): %v", findErr)
+		}
+		if len(peers) > 0 {
+			u.logf("[selfupdate] P2P: %d peer(s) encontrados para artifactID=%s", len(peers), artifactID)
+			for _, peerID := range peers {
+				path, dlErr := u.DownloadFromPeer(ctx, artifactID, peerID)
+				if dlErr != nil {
+					u.logf("[selfupdate] P2P download do peer %s falhou: %v", peerID, dlErr)
+					continue
+				}
+				actual, shaErr := fileSHA256(path)
+				if shaErr != nil {
+					u.logf("[selfupdate] P2P sha256 do peer %s falhou: %v", peerID, shaErr)
+					_ = os.Remove(path)
+					continue
+				}
+				if !strings.EqualFold(actual, expectedSHA256) {
+					u.logf("[selfupdate] P2P sha256 mismatch do peer %s: esperado=%s obtido=%s", peerID, expectedSHA256[:12], actual[:12])
+					_ = os.Remove(path)
+					continue
+				}
+				u.logf("[selfupdate] download P2P concluido: peer=%s artifactID=%s", peerID, artifactID)
+				return path, nil
+			}
+			u.logf("[selfupdate] P2P exaurido (%d peers tentados), fallback para HTTP", len(peers))
+		} else {
+			u.logf("[selfupdate] P2P: nenhum peer com artifactID=%s, usando HTTP", artifactID)
+		}
+	}
+
+	// ── HTTP download (comportamento original) ──
 	if err := os.MkdirAll(u.TempDir, 0o755); err != nil {
 		return "", err
 	}
@@ -216,11 +267,16 @@ func (u *Updater) downloadToTemp(ctx context.Context, m *UpdateManifest) (string
 			errutil.LogIfErr(os.Remove(path), "selfupdate: limpar download fallback apos falha sha256")
 			return "", err
 		}
-		expected := strings.ToLower(strings.TrimSpace(*m.Sha256))
-		if expected != "" && actual != expected {
+		if expectedSHA256 != "" && actual != expectedSHA256 {
 			errutil.LogIfErr(os.Remove(path), "selfupdate: limpar download fallback sha256 mismatch")
-			return "", fmt.Errorf("sha256 mismatch (fallback): expected=%s got=%s", expected, actual)
+			return "", fmt.Errorf("sha256 mismatch (fallback): expected=%s got=%s", expectedSHA256, actual)
 		}
+
+		// Publica no P2P após download HTTP bem-sucedido
+		if u.OnArtifactReady != nil {
+			_ = u.OnArtifactReady(ctx, path, artifactID, expectedSHA256, targetVersion)
+		}
+
 		return path, nil
 	}
 
@@ -243,16 +299,20 @@ func (u *Updater) downloadToTemp(ctx context.Context, m *UpdateManifest) (string
 		errutil.LogIfErr(os.Remove(path), "selfupdate: limpar download apos falha sha256")
 		return "", err
 	}
-	expected := strings.ToLower(strings.TrimSpace(*m.Sha256))
-	if expected != "" && actual != expected {
+	if expectedSHA256 != "" && actual != expectedSHA256 {
 		errutil.LogIfErr(os.Remove(path), "selfupdate: limpar download sha256 mismatch")
-		return "", fmt.Errorf("sha256 mismatch: expected=%s got=%s", expected, actual)
+		return "", fmt.Errorf("sha256 mismatch: expected=%s got=%s", expectedSHA256, actual)
 	}
 	if policy.RequireSignatureValidation {
 		if err := validateAuthenticodeSignature(ctx, path); err != nil {
 			errutil.LogIfErr(os.Remove(path), "selfupdate: limpar download assinatura invalida")
 			return "", err
 		}
+	}
+
+	// Publica no P2P após download HTTP bem-sucedido
+	if u.OnArtifactReady != nil {
+		_ = u.OnArtifactReady(ctx, path, artifactID, expectedSHA256, targetVersion)
 	}
 
 	return path, nil

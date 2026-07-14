@@ -83,6 +83,19 @@ type Updater struct {
 	// Se o callback retornar erro, o fluxo trata como InstallFailed (sem fallback).
 	// Se OnSelfUpdateInstall for nil, usa launchInstaller direto (comportamento legado).
 	OnSelfUpdateInstall func(ctx context.Context, exePath string, targetVersion string) error
+
+	// OnArtifactReady é chamado após um download HTTP bem-sucedido para
+	// publicar o artifact no P2P. Recebe: path, artifactID (releaseID ou "sha256:<hex>"),
+	// sha256 e version. É best-effort — falhas não interrompem o update.
+	OnArtifactReady func(ctx context.Context, path, artifactID, sha256, version string) error
+
+	// FindPeersByReleaseID consulta o P2P por peers que possuem o artifact
+	// com o artifactID especificado. Retorna lista de agentIDs.
+	FindPeersByReleaseID func(ctx context.Context, artifactID string) ([]string, error)
+
+	// DownloadFromPeer baixa o artifact pelo artifactID de um peer específico.
+	// Retorna o path do arquivo baixado.
+	DownloadFromPeer func(ctx context.Context, artifactID, peerID string) (string, error)
 }
 
 type UpdateManifest struct {

@@ -224,6 +224,43 @@ func (c *p2pCoordinator) downloadArtifactSwarm(ctx context.Context, artifactName
 	return c.buildArtifactView(artifactName, artifactID, path)
 }
 
+// DownloadArtifactByID faz download de um artifact via libp2p usando o artifactID
+// (GUID de release ou "sha256:<hex>") e o peerID de origem.
+// Diferente de DownloadArtifactFromPeer, aceita um artifactID explícito e
+// resolve o nome do arquivo a partir do índice de artifacts do peer.
+func (c *p2pCoordinator) DownloadArtifactByID(ctx context.Context, artifactID, sourcePeerID string) (P2PArtifactView, error) {
+	artifactID = strings.TrimSpace(artifactID)
+	sourcePeerID = strings.TrimSpace(sourcePeerID)
+	if artifactID == "" {
+		return P2PArtifactView{}, fmt.Errorf("artifactID invalido")
+	}
+	if sourcePeerID == "" {
+		return P2PArtifactView{}, fmt.Errorf("sourcePeerID invalido")
+	}
+
+	// Resolve o artifactName a partir do índice de artifacts do peer
+	var artifactName string
+	for _, peer := range c.GetPeerArtifactIndex() {
+		if !strings.EqualFold(strings.TrimSpace(peer.PeerAgentID), sourcePeerID) {
+			continue
+		}
+		for _, art := range peer.Artifacts {
+			if strings.EqualFold(strings.TrimSpace(art.ArtifactID), artifactID) {
+				artifactName = strings.TrimSpace(art.ArtifactName)
+				break
+			}
+		}
+		if artifactName != "" {
+			break
+		}
+	}
+	if artifactName == "" {
+		return P2PArtifactView{}, fmt.Errorf("artifact nao encontrado no indice do peer %s para artifactID=%s", sourcePeerID, artifactID)
+	}
+
+	return c.DownloadArtifactFromPeer(ctx, artifactName, sourcePeerID)
+}
+
 // buildArtifactView reads stat + checksum for a file and returns a P2PArtifactView.
 func (c *p2pCoordinator) buildArtifactView(artifactName, artifactID, path string) (P2PArtifactView, error) {
 	info, err := os.Stat(path)

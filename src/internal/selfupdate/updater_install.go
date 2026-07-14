@@ -53,6 +53,12 @@ func (u *Updater) forceInstallFromPublicEndpoint(ctx context.Context, currentVer
 
 	u.logf("[selfupdate] force-install download concluido: tempPath=%s sha256=%s", tempPath, fileSha256)
 
+	// Publica no P2P com ArtifactID derivado do SHA256 (sem releaseID disponível)
+	artifactID := "sha256:" + strings.ToLower(fileSha256)
+	if u.OnArtifactReady != nil {
+		_ = u.OnArtifactReady(ctx, tempPath, artifactID, fileSha256, "")
+	}
+
 	// Extrair a versão real do arquivo baixado
 	targetVersion := extractFileVersion(tempPath)
 	if targetVersion == "" {
@@ -164,6 +170,12 @@ func (u *Updater) InstallFromURL(ctx context.Context, version, downloadURL strin
 		CorrelationID:  correlationID,
 		Message:        fmt.Sprintf("sha256=%s", fileSha256),
 	})
+
+	// Publica no P2P com ArtifactID derivado do SHA256 (URL direta não tem releaseID)
+	artifactID := "sha256:" + strings.ToLower(fileSha256)
+	if u.OnArtifactReady != nil {
+		_ = u.OnArtifactReady(ctx, tempPath, artifactID, fileSha256, targetVersion)
+	}
 
 	u.reportEvent(ctx, "InstallStarted", reportOpts{
 		CurrentVersion: currentVersion,

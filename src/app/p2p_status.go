@@ -108,6 +108,41 @@ func (c *p2pCoordinator) FindArtifactPeers(artifactName string) P2PArtifactAvail
 	return result
 }
 
+// FindArtifactPeersByReleaseID busca peers que anunciam um artifact
+// com o artifactID (GUID de release) especificado e, opcionalmente,
+// filtra por SHA256 para garantir integridade cross-peer.
+// Se expectedSHA256 for vazia, retorna todos os peers com o artifactID.
+func (c *p2pCoordinator) FindArtifactPeersByReleaseID(artifactID string, expectedSHA256 string) P2PArtifactAvailabilityView {
+	artifactID = strings.TrimSpace(artifactID)
+	result := P2PArtifactAvailabilityView{
+		ArtifactID:   artifactID,
+		ArtifactName: "",
+		PeerAgentIDs: []string{},
+	}
+	if artifactID == "" {
+		return result
+	}
+	expectedSHA256 = strings.TrimSpace(expectedSHA256)
+
+	for _, peer := range c.GetPeerArtifactIndex() {
+		for _, artifact := range peer.Artifacts {
+			if !strings.EqualFold(strings.TrimSpace(artifact.ArtifactID), artifactID) {
+				continue
+			}
+			// Se esperadoSHA256 foi informado, só aceita peer com checksum correspondente
+			if expectedSHA256 != "" && !strings.EqualFold(strings.TrimSpace(artifact.ChecksumSHA256), expectedSHA256) {
+				continue
+			}
+			result.PeerAgentIDs = append(result.PeerAgentIDs, strings.TrimSpace(peer.PeerAgentID))
+			break
+		}
+	}
+	sort.Strings(result.PeerAgentIDs)
+	result.PeerCount = len(result.PeerAgentIDs)
+	result.Found = result.PeerCount > 0
+	return result
+}
+
 func (c *p2pCoordinator) ListAuditEvents() []P2PAuditEvent {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
