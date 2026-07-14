@@ -283,7 +283,7 @@ func (s *Service) registerAgentFromDeployToken(ctx context.Context, scheme, serv
 
 	var errs []string
 	for _, candidateScheme := range lo.Uniq(schemes) {
-		endpoint := candidateScheme + "://" + server + "/api/v1/Agents"
+		endpoint := candidateScheme + "://" + server + "/api/v1/agent-register"
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(bodyBytes))
 		if err != nil {
 			errs = append(errs, endpoint+": "+err.Error())

@@ -342,7 +342,7 @@ func (a *App) registerWithDeployKey(serverURL, deployKey string) (P2POnboardingR
 		"departmentId": nil,
 		"notes":        "Provisionado via zero-touch P2P",
 	})
-	endpoint := serverURL + "/api/v1/Agents"
+	endpoint := serverURL + "/api/v1/agent-register"
 	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(payload))
 	if err != nil {
 		return P2POnboardingResult{}, err
