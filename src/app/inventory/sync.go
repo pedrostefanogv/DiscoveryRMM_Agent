@@ -43,28 +43,38 @@ type agentHardwareComponents struct {
 }
 
 type agentHardwareInfo struct {
-	InventoryRaw            string `json:"inventoryRaw"`
-	InventorySchemaVersion  string `json:"inventorySchemaVersion"`
-	InventoryCollectedAt    string `json:"inventoryCollectedAt"`
-	Manufacturer            string `json:"manufacturer"`
-	Model                   string `json:"model"`
-	SerialNumber            string `json:"serialNumber"`
-	MotherboardManufacturer string `json:"motherboardManufacturer"`
-	MotherboardModel        string `json:"motherboardModel"`
-	MotherboardSerialNumber string `json:"motherboardSerialNumber"`
-	Processor               string `json:"processor"`
-	ProcessorCores          int    `json:"processorCores"`
-	ProcessorThreads        int    `json:"processorThreads"`
-	ProcessorArchitecture   string `json:"processorArchitecture"`
-	TotalMemoryBytes        int64  `json:"totalMemoryBytes"`
-	BIOSVersion             string `json:"biosVersion"`
-	BIOSManufacturer        string `json:"biosManufacturer"`
-	OSName                  string `json:"osName"`
-	OSVersion               string `json:"osVersion"`
-	OSBuild                 string `json:"osBuild"`
-	OSArchitecture          string `json:"osArchitecture"`
-	CollectedAt             string `json:"collectedAt"`
-	UpdatedAt               string `json:"updatedAt"`
+	InventoryRaw            string  `json:"inventoryRaw"`
+	InventorySchemaVersion  string  `json:"inventorySchemaVersion"`
+	InventoryCollectedAt    string  `json:"inventoryCollectedAt"`
+	Manufacturer            string  `json:"manufacturer"`
+	Model                   string  `json:"model"`
+	SerialNumber            string  `json:"serialNumber"`
+	MotherboardManufacturer string  `json:"motherboardManufacturer"`
+	MotherboardModel        string  `json:"motherboardModel"`
+	MotherboardSerialNumber string  `json:"motherboardSerialNumber"`
+	Processor               string  `json:"processor"`
+	ProcessorCores          int     `json:"processorCores"`
+	ProcessorThreads        int     `json:"processorThreads"`
+	ProcessorArchitecture   string  `json:"processorArchitecture"`
+	ProcessorTdpWatts       int     `json:"processorTdpWatts"`
+	ProcessorSocket         string  `json:"processorSocket"`
+	ProcessorFrequencyGhz   float64 `json:"processorFrequencyGhz"`
+	ProcessorReleaseDate    string  `json:"processorReleaseDate"`
+	TotalMemoryBytes        int64   `json:"totalMemoryBytes"`
+	GpuModel                string  `json:"gpuModel"`
+	GpuMemoryBytes          int64   `json:"gpuMemoryBytes"`
+	GpuDriverVersion        string  `json:"gpuDriverVersion"`
+	BIOSVersion             string  `json:"biosVersion"`
+	BIOSManufacturer        string  `json:"biosManufacturer"`
+	BIOSDate                string  `json:"biosDate"`
+	BIOSSerialNumber        string  `json:"biosSerialNumber"`
+	MachineScore            int     `json:"machineScore"`
+	OSName                  string  `json:"osName"`
+	OSVersion               string  `json:"osVersion"`
+	OSBuild                 string  `json:"osBuild"`
+	OSArchitecture          string  `json:"osArchitecture"`
+	CollectedAt             string  `json:"collectedAt"`
+	UpdatedAt               string  `json:"updatedAt"`
 }
 
 type agentDiskInfo struct {
@@ -391,6 +401,20 @@ func buildAgentHardwareEnvelope(report models.InventoryReport, version string) a
 		memTotalBytes = 0
 	}
 
+	machineScore := computeMachineScore(report)
+
+	// GPU info: usa a primeira GPU dedicada (ou onboard) do inventário
+	var gpuModel, gpuDriver string
+	var gpuMemoryBytes int64
+	if len(report.GPUs) > 0 {
+		gpuModel = trimToMaxLen(strings.TrimSpace(report.GPUs[0].Name), 200)
+		gpuDriver = trimToMaxLen(strings.TrimSpace(report.GPUs[0].DriverVersion), 100)
+		gpuMemoryBytes = int64(report.GPUs[0].VRAMGB * 1024 * 1024 * 1024)
+		if gpuMemoryBytes < 0 {
+			gpuMemoryBytes = 0
+		}
+	}
+
 	disks := make([]agentDiskInfo, 0, len(report.Disks))
 	for _, d := range report.Disks {
 		driveLetter := trimToMaxLen(normalizeDriveLetter(d.Device), 10)
@@ -516,8 +540,14 @@ func buildAgentHardwareEnvelope(report models.InventoryReport, version string) a
 		ProcessorThreads:        report.Hardware.LogicalCores,
 		ProcessorArchitecture:   trimToMaxLen(strings.TrimSpace(report.OS.Architecture), 100),
 		TotalMemoryBytes:        memTotalBytes,
+		GpuModel:                gpuModel,
+		GpuMemoryBytes:          gpuMemoryBytes,
+		GpuDriverVersion:        gpuDriver,
 		BIOSVersion:             trimToMaxLen(strings.TrimSpace(report.Hardware.BIOSVersion), 100),
 		BIOSManufacturer:        trimToMaxLen(strings.TrimSpace(report.Hardware.BIOSVendor), 100),
+		BIOSDate:                trimToMaxLen(strings.TrimSpace(report.Hardware.BIOSReleaseDate), 100),
+		BIOSSerialNumber:        trimToMaxLen(strings.TrimSpace(report.Hardware.BIOSSerial), 100),
+		MachineScore:            machineScore,
 		OSName:                  osName,
 		OSVersion:               osVersion,
 		OSBuild:                 trimToMaxLen(strings.TrimSpace(report.OS.Build), 100),
