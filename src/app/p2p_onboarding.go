@@ -335,11 +335,14 @@ func (a *App) registerWithDeployKey(serverURL, deployKey string) (P2POnboardingR
 		return P2POnboardingResult{}, err
 	}
 	hostname, _ := os.Hostname()
-	payload, _ := json.Marshal(map[string]string{
-		"hostname":  hostname,
-		"deployKey": deployKey,
+	payload, _ := json.Marshal(map[string]any{
+		"cmd":          "CreateAgent",
+		"name":         hostname,
+		"macAddress":   nil,
+		"departmentId": nil,
+		"notes":        "Provisionado via zero-touch P2P",
 	})
-	endpoint := serverURL + "/api/v1/agent-install/register"
+	endpoint := serverURL + "/api/v1/Agents"
 	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(payload))
 	if err != nil {
 		return P2POnboardingResult{}, err

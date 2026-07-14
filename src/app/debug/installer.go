@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -250,9 +251,19 @@ func parseInstallerServerURL(raw string) (string, string, error) {
 
 func (s *Service) registerAgentFromDeployToken(ctx context.Context, scheme, server, deployToken string) (token, agentID, clientID, siteID, resolvedScheme string, err error) {
 	hostname, _ := os.Hostname()
-	payload := map[string]string{
-		"hostname":  strings.TrimSpace(hostname),
-		"deployKey": strings.TrimSpace(deployToken),
+	macAddress := firstUsableMACAddress()
+
+	version := s.version
+	if version == "" {
+		version = "dev"
+	}
+
+	payload := map[string]any{
+		"cmd":          "CreateAgent",
+		"name":         strings.TrimSpace(hostname),
+		"macAddress":   macAddress,
+		"departmentId": nil,
+		"notes":        fmt.Sprintf("OS: %s | Agent: %s", runtime.GOOS, strings.TrimSpace(version)),
 	}
 	bodyBytes, err := json.Marshal(payload)
 	if err != nil {
@@ -272,7 +283,7 @@ func (s *Service) registerAgentFromDeployToken(ctx context.Context, scheme, serv
 
 	var errs []string
 	for _, candidateScheme := range lo.Uniq(schemes) {
-		endpoint := candidateScheme + "://" + server + "/api/v1/agent-install/register"
+		endpoint := candidateScheme + "://" + server + "/api/v1/Agents"
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(bodyBytes))
 		if err != nil {
 			errs = append(errs, endpoint+": "+err.Error())

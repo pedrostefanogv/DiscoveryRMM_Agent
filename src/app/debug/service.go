@@ -401,7 +401,7 @@ func (s *Service) BootstrapAgentCredentialsFromInstallerConfig(ctx context.Conte
 		return
 	}
 
-	s.logf("[installer-bootstrap] registrando agente em " + scheme + "://" + server + "/api/v1/agent-install/register")
+	s.logf("[installer-bootstrap] registrando agente em " + scheme + "://" + server + "/api/v1/Agents")
 	token, agentID, clientID, siteID, resolvedScheme, err := s.registerAgentFromDeployToken(ctx, scheme, server, inst.APIKey)
 	if err != nil {
 		s.logf("[installer-bootstrap] falha ao obter credenciais: " + err.Error())
