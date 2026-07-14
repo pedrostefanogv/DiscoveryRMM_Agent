@@ -12,7 +12,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
@@ -41,7 +40,9 @@ func loadInstallerConfigFromCandidates(paths []string, normalizeP2P func(p2pmeta
 	for _, path := range paths {
 		data, err := os.ReadFile(path)
 		if err != nil {
-			log.Printf("[config] aviso: nao foi possivel ler config candidate %s: %v", path, err)
+			if !os.IsNotExist(err) {
+				log.Printf("[config] aviso: nao foi possivel ler config candidate %s: %v", path, err)
+			}
 			continue
 		}
 		data = trimJSONBOM(data)
@@ -248,28 +249,10 @@ func parseInstallerServerURL(raw string) (string, string, error) {
 }
 
 func (s *Service) registerAgentFromDeployToken(ctx context.Context, scheme, server, deployToken string) (token, agentID, clientID, siteID, resolvedScheme string, err error) {
-	// Novo modelo CreateAgentCommand (API v1)
-	type createAgentRequest struct {
-		Name         string `json:"name"`
-		ClientID     string `json:"clientId"`
-		SiteID       string `json:"siteId"`
-		DepartmentID string `json:"departmentId"`
-		MACAddress   string `json:"macAddress"`
-		Notes        string `json:"notes"`
-	}
-
 	hostname, _ := os.Hostname()
-	macAddress := firstUsableMACAddress()
-
-	version := s.version
-	if version == "" {
-		version = "dev"
-	}
-
-	payload := createAgentRequest{
-		Name:       strings.TrimSpace(hostname),
-		MACAddress: macAddress,
-		Notes:      fmt.Sprintf("OS: %s | Version: %s | Agent: %s", strings.Title(runtime.GOOS), strings.TrimSpace(os.Getenv("OS")), strings.TrimSpace(version)),
+	payload := map[string]string{
+		"hostname":  strings.TrimSpace(hostname),
+		"deployKey": strings.TrimSpace(deployToken),
 	}
 	bodyBytes, err := json.Marshal(payload)
 	if err != nil {
@@ -289,7 +272,7 @@ func (s *Service) registerAgentFromDeployToken(ctx context.Context, scheme, serv
 
 	var errs []string
 	for _, candidateScheme := range lo.Uniq(schemes) {
-		endpoint := candidateScheme + "://" + server + "/api/v1/Agents"
+		endpoint := candidateScheme + "://" + server + "/api/v1/agent-install/register"
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(bodyBytes))
 		if err != nil {
 			errs = append(errs, endpoint+": "+err.Error())
