@@ -246,6 +246,11 @@ func (c *Client) GetRuntimeCustomFields(ctx context.Context, cfg RuntimeConfig, 
 
 	var result []RuntimeCustomField
 	if err := json.Unmarshal(body, &result); err != nil {
+		// Backend pode retornar um objeto vazio ({}) quando não há custom fields,
+		// em vez de um array vazio ([]). Tratamos como slice vazio.
+		if strings.Contains(err.Error(), "cannot unmarshal object into Go value of type []") {
+			return []RuntimeCustomField{}, nil
+		}
 		return nil, fmt.Errorf("falha ao decodificar runtime custom fields: %w", err)
 	}
 	return result, nil

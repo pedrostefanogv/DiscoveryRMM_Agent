@@ -213,6 +213,8 @@ export function InstallSharedPrinter(arg1:string,arg2:boolean):Promise<json.RawM
 
 export function InstallSharedPrinterJSON(arg1:string,arg2:boolean):Promise<json.RawMessage>;
 
+export function IsDebugHTTPBoundToAllInterfaces():Promise<boolean>;
+
 export function IsTrayReady():Promise<boolean>;
 
 export function ListAgentTickets():Promise<json.RawMessage>;
@@ -308,6 +310,8 @@ export function SetChatConfig(arg1:app.ChatConfig):Promise<void>;
 export function SetContext(arg1:context.Context):Promise<void>;
 
 export function SetDebugConfig(arg1:debug.Config):Promise<void>;
+
+export function SetDebugHTTPBindAllInterfaces(arg1:boolean):Promise<void>;
 
 export function SetExportRedaction(arg1:boolean):Promise<void>;
 

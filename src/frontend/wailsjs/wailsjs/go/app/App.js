@@ -406,6 +406,10 @@ export function InstallSharedPrinterJSON(arg1, arg2) {
   return window['go']['app']['App']['InstallSharedPrinterJSON'](arg1, arg2);
 }
 
+export function IsDebugHTTPBoundToAllInterfaces() {
+  return window['go']['app']['App']['IsDebugHTTPBoundToAllInterfaces']();
+}
+
 export function IsTrayReady() {
   return window['go']['app']['App']['IsTrayReady']();
 }
@@ -596,6 +600,10 @@ export function SetContext(arg1) {
 
 export function SetDebugConfig(arg1) {
   return window['go']['app']['App']['SetDebugConfig'](arg1);
+}
+
+export function SetDebugHTTPBindAllInterfaces(arg1) {
+  return window['go']['app']['App']['SetDebugHTTPBindAllInterfaces'](arg1);
 }
 
 export function SetExportRedaction(arg1) {

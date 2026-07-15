@@ -266,7 +266,7 @@ func (s *Service) reconcilePolicy(ctx context.Context, previous State, current S
 			s.triggerImmediate(ctx, agentID, current.PolicyFingerprint, task)
 		}
 		if task.TriggerOnAgentCheckIn {
-			s.executeTaskAsync(ctx, agentID, task, sourceForTrigger(TriggerTypeAgentCheckIn), TriggerTypeAgentCheckIn)
+			s.triggerOnAgentCheckIn(ctx, agentID, current.PolicyFingerprint, task)
 		}
 	}
 
@@ -298,6 +298,23 @@ func (s *Service) triggerImmediate(ctx context.Context, agentID, fingerprint str
 	}
 	errutil.LogIfErr(s.db.SetAutomationMarker(agentID, markerKey, time.Now().UTC().Format(time.RFC3339)), "automation: definir marker imediato")
 	s.executeTaskAsync(ctx, agentID, task, sourceForTrigger(TriggerTypeImmediate), TriggerTypeImmediate)
+}
+
+// triggerOnAgentCheckIn dispara tarefas TriggerOnAgentCheckIn com deduplicação por marcador.
+// O marcador é atrelado ao fingerprint da política, assim como no triggerImmediate.
+// Diferente do immediate, o marcador é resetado quando a política muda (novo fingerprint),
+// permitindo que a tarefa seja reexecutada após alteração no servidor.
+func (s *Service) triggerOnAgentCheckIn(ctx context.Context, agentID, fingerprint string, task AutomationTask) {
+	if s.db == nil || agentID == "" || fingerprint == "" {
+		s.executeTaskAsync(ctx, agentID, task, sourceForTrigger(TriggerTypeAgentCheckIn), TriggerTypeAgentCheckIn)
+		return
+	}
+	markerKey := "checkin:" + fingerprint + ":" + strings.TrimSpace(task.TaskID)
+	if _, found, err := s.db.GetAutomationMarker(agentID, markerKey); err == nil && found {
+		return
+	}
+	errutil.LogIfErr(s.db.SetAutomationMarker(agentID, markerKey, time.Now().UTC().Format(time.RFC3339)), "automation: definir marker checkin")
+	s.executeTaskAsync(ctx, agentID, task, sourceForTrigger(TriggerTypeAgentCheckIn), TriggerTypeAgentCheckIn)
 }
 
 func (s *Service) executeTaskAsync(ctx context.Context, agentID string, task AutomationTask, sourceType AutomationExecutionSourceType, triggerType TriggerType) {
@@ -443,7 +460,6 @@ func (s *Service) executeTaskAsync(ctx context.Context, agentID string, task Aut
 		s.refreshDerivedState(agentID)
 	}()
 }
-
 
 func (s *Service) sendOrQueueCallback(ctx context.Context, agentID, executionID, commandID string, callbackType CallbackType, payload any, correlationID string) error {
 	if strings.TrimSpace(commandID) == "" {

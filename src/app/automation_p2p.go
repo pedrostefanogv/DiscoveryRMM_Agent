@@ -50,6 +50,14 @@ func (m *automationPackageManagerRouter) UpgradeAll(ctx context.Context) (string
 	return m.fallback.UpgradeAll(ctx)
 }
 
+func (m *automationPackageManagerRouter) ListInstalled(ctx context.Context) (string, error) {
+	return m.fallback.ListInstalled(ctx)
+}
+
+func (m *automationPackageManagerRouter) ListUpgradable(ctx context.Context) (string, error) {
+	return m.fallback.ListUpgradable(ctx)
+}
+
 func (m *automationPackageManagerRouter) shouldUseP2PForWingetInstall() bool {
 	if m == nil || m.app == nil || m.fallback == nil {
 		return false

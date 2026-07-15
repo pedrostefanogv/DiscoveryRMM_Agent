@@ -267,6 +267,8 @@ type PackageManager interface {
 	Uninstall(ctx context.Context, id string) (string, error)
 	Upgrade(ctx context.Context, id string) (string, error)
 	UpgradeAll(ctx context.Context) (string, error)
+	ListInstalled(ctx context.Context) (string, error)
+	ListUpgradable(ctx context.Context) (string, error)
 }
 
 // --- Custom Fields ---

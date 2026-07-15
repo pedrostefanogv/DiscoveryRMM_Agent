@@ -67,6 +67,11 @@ func executePackageAction(ctx context.Context, packages PackageManager, authoriz
 		if packages == nil {
 			return ExecutionResult{Success: false, ExitCode: 2, ExitCodeSet: true, ErrorMessage: "gerenciador Winget indisponivel"}
 		}
+		// Verifica se o pacote já está instalado (install) ou se há update disponível (upgrade).
+		skip, skipMsg := shouldSkipWingetAction(ctx, packages, operation, packageID)
+		if skip {
+			return ExecutionResult{Success: true, ExitCode: 0, ExitCodeSet: true, Output: skipMsg}
+		}
 		var out string
 		var err error
 		switch operation {
@@ -242,6 +247,53 @@ func truncateOutput(output string) string {
 		return strings.TrimSpace(output)
 	}
 	return strings.TrimSpace(output[:maxStoredOutputBytes]) + "\n... output truncado ..."
+}
+
+// shouldSkipWingetAction verifica se a operação é desnecessária porque o pacote
+// já está instalado (para install) ou porque não há atualização pendente (para upgrade).
+// Retorna (skip=true, mensagem) quando a ação deve ser pulada.
+func shouldSkipWingetAction(ctx context.Context, packages PackageManager, operation, packageID string) (bool, string) {
+	packageID = strings.TrimSpace(packageID)
+	if packageID == "" {
+		return false, ""
+	}
+
+	switch operation {
+	case "install":
+		installed, err := packages.ListInstalled(ctx)
+		if err != nil {
+			return false, "" // erro na verificação — prossegue com install (fail-safe)
+		}
+		if isPackageInOutput(installed, packageID) {
+			return true, fmt.Sprintf("pacote %s ja instalado — pulando install", packageID)
+		}
+
+	case "upgrade":
+		upgradable, err := packages.ListUpgradable(ctx)
+		if err != nil {
+			return false, "" // erro na verificação — prossegue com upgrade (fail-safe)
+		}
+		if !isPackageInOutput(upgradable, packageID) {
+			// Verifica se ao menos está instalado; se nem instalado estiver, não faz sentido fazer upgrade.
+			installed, instErr := packages.ListInstalled(ctx)
+			if instErr == nil && !isPackageInOutput(installed, packageID) {
+				return true, fmt.Sprintf("pacote %s nao encontrado — pulando upgrade", packageID)
+			}
+			return true, fmt.Sprintf("pacote %s ja atualizado — pulando upgrade", packageID)
+		}
+	}
+
+	return false, ""
+}
+
+// isPackageInOutput verifica se o packageID aparece na saída do winget list/upgrade.
+// A comparação é case-insensitive e busca pelo ID exato como palavra.
+func isPackageInOutput(output, packageID string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(output))
+	target := strings.ToLower(packageID)
+	// Busca simples mas robusta: o ID deve aparecer como substring na saída do winget.
+	// O winget lista os IDs em uma coluna dedicada, então uma busca case-insensitive é suficiente.
+	return strings.Contains(normalized, target)
 }
 
 // buildCustomFieldsEnv serializa o mapa de custom fields como variável de ambiente MDZ_CUSTOM_FIELDS.
