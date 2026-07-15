@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -97,83 +96,34 @@ func (m *automationPackageManagerRouter) installViaP2P(ctx context.Context, pack
 }
 
 func (m *automationPackageManagerRouter) resolveArtifactSource(ctx context.Context, packageID string) (artifactName string, sourcePeerID string, err error) {
+	// artifactID exato: "winget:<packageId>" — lookup deterministico, nao fuzzy.
+	artifactLookupID := "winget:" + normalizePackageLookupKey(packageID)
+	if artifactLookupID == "winget:" {
+		return "", "", fmt.Errorf("packageId invalido: %s", packageID)
+	}
+
+	// 1. Tenta local primeiro (cache)
 	artifacts, listErr := m.app.ListP2PArtifacts()
 	if listErr == nil {
-		if local := findBestArtifactForPackage(artifacts, packageID); local != "" {
-			return local, "", nil
+		for _, a := range artifacts {
+			if strings.EqualFold(strings.TrimSpace(a.ArtifactID), artifactLookupID) {
+				return a.ArtifactName, "", nil
+			}
 		}
 	}
 
+	// 2. Busca em peers via gossip
 	m.app.p2pCoord.RefreshPeerArtifactIndex(ctx, "automation-install")
 	index := m.app.GetP2PPeerArtifactIndex()
-	bestPeer := ""
-	bestArtifact := ""
 	for _, peer := range index {
-		candidate := findBestArtifactForPackage(peer.Artifacts, packageID)
-		if candidate == "" {
-			continue
+		for _, a := range peer.Artifacts {
+			if strings.EqualFold(strings.TrimSpace(a.ArtifactID), artifactLookupID) {
+				return a.ArtifactName, strings.TrimSpace(peer.PeerAgentID), nil
+			}
 		}
-		if bestArtifact == "" || len(candidate) < len(bestArtifact) {
-			bestArtifact = candidate
-			bestPeer = strings.TrimSpace(peer.PeerAgentID)
-		}
-	}
-	if bestArtifact == "" {
-		return "", "", fmt.Errorf("nenhum artifact P2P encontrado para packageId=%s", packageID)
-	}
-	return bestArtifact, bestPeer, nil
-}
-
-func findBestArtifactForPackage(artifacts []P2PArtifactView, packageID string) string {
-	key := normalizePackageLookupKey(packageID)
-	if key == "" {
-		return ""
 	}
 
-	type candidate struct {
-		name  string
-		score int
-	}
-	candidates := make([]candidate, 0)
-	for _, artifact := range artifacts {
-		name := strings.TrimSpace(artifact.ArtifactName)
-		if name == "" {
-			continue
-		}
-		artifactKey := normalizePackageLookupKey(artifact.ArtifactID)
-		ext := strings.ToLower(filepath.Ext(name))
-		if ext != ".exe" && ext != ".msi" {
-			continue
-		}
-		norm := normalizePackageLookupKey(name)
-		if !strings.Contains(norm, key) && !strings.Contains(artifactKey, key) {
-			continue
-		}
-		score := 0
-		if artifactKey == key {
-			score += 5
-		}
-		if strings.HasPrefix(artifactKey, key) {
-			score += 3
-		}
-		if strings.HasPrefix(norm, key) {
-			score += 2
-		}
-		if ext == ".msi" {
-			score += 1
-		}
-		candidates = append(candidates, candidate{name: name, score: score})
-	}
-	if len(candidates) == 0 {
-		return ""
-	}
-	sort.SliceStable(candidates, func(i, j int) bool {
-		if candidates[i].score != candidates[j].score {
-			return candidates[i].score > candidates[j].score
-		}
-		return len(candidates[i].name) < len(candidates[j].name)
-	})
-	return candidates[0].name
+	return "", "", fmt.Errorf("nenhum artifact P2P encontrado para packageId=%s (artifactID=%s)", packageID, artifactLookupID)
 }
 
 func normalizePackageLookupKey(value string) string {

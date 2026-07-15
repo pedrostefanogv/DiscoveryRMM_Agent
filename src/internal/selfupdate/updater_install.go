@@ -61,8 +61,8 @@ func (u *Updater) InstallFromURL(ctx context.Context, version, downloadURL strin
 		return err
 	}
 
-	// Publica no P2P com artifactID fixo "agent-current" — mesmo ID usado no lookup
-	artifactID := "agent-current"
+	// Publica no P2P com artifactID baseado no SHA256 real do binario.
+	artifactID := "selfupdate:" + strings.ToLower(fileSha256)
 	if u.OnArtifactReady != nil {
 		_ = u.OnArtifactReady(ctx, tempPath, artifactID, fileSha256, targetVersion)
 	}

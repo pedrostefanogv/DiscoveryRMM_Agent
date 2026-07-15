@@ -39,13 +39,58 @@ func (u *Updater) ResumePendingInstallReport(ctx context.Context) {
 	u.clearPendingInstallState()
 }
 
+// fetchPublicSHA256 obtem o SHA256 do build atual sem baixar o binario.
+// Usa o endpoint /api/v1/download/agent/sha256 que retorna text/plain.
+func (u *Updater) fetchPublicSHA256(ctx context.Context) (string, error) {
+	endpoint := u.apiScheme() + "://" + u.apiServer() + "/api/v1/download/agent/sha256"
+	ctxReq, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctxReq, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return "", err
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2*1024))
+		return "", fmt.Errorf("sha256 endpoint status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	shaBytes, err := io.ReadAll(io.LimitReader(resp.Body, 128))
+	if err != nil {
+		return "", err
+	}
+	sha := strings.TrimSpace(string(shaBytes))
+	if len(sha) != 64 {
+		return "", fmt.Errorf("sha256 invalido: tamanho=%d esperado=64", len(sha))
+	}
+	return strings.ToLower(sha), nil
+}
+
 // downloadFromCacheOrPublic tenta baixar o artifact via P2P (se peers disponiveis)
 // e faz fallback para o endpoint publico /api/v1/download/agent.
+// expectedSHA256: se informado, monta artifactID = "selfupdate:" + sha256 e valida pos-download.
 // Retorna o path do arquivo temporario e o SHA256 calculado localmente.
-func (u *Updater) downloadFromCacheOrPublic(ctx context.Context, knownSHA256 string) (string, string, error) {
-	artifactID := "agent-current"
-	if knownSHA256 != "" {
-		artifactID = "sha256:" + strings.ToLower(knownSHA256)
+func (u *Updater) downloadFromCacheOrPublic(ctx context.Context, expectedSHA256 string) (string, string, error) {
+	artifactID := "selfupdate:current"
+	if expectedSHA256 != "" {
+		artifactID = "selfupdate:" + strings.ToLower(expectedSHA256)
+	} else {
+		// Sem SHA256 conhecido, tenta obter do servidor antes do P2P.
+		if sha, err := u.fetchPublicSHA256(ctx); err == nil && sha != "" {
+			expectedSHA256 = sha
+			artifactID = "selfupdate:" + sha
+			u.logf("[selfupdate] SHA256 obtido do servidor: %s (nao baixou binario)", sha[:12])
+		} else {
+			u.logf("[selfupdate] nao foi possivel obter SHA256 do servidor: %v — P2P usara ID generico", err)
+		}
 	}
 
 	// ── P2P-first ──
@@ -68,8 +113,8 @@ func (u *Updater) downloadFromCacheOrPublic(ctx context.Context, knownSHA256 str
 					_ = os.Remove(path)
 					continue
 				}
-				if knownSHA256 != "" && !strings.EqualFold(actual, knownSHA256) {
-					u.logf("[selfupdate] P2P sha256 mismatch do peer %s: esperado=%s obtido=%s", peerID, knownSHA256[:12], actual[:12])
+				if expectedSHA256 != "" && !strings.EqualFold(actual, expectedSHA256) {
+					u.logf("[selfupdate] P2P sha256 mismatch do peer %s: esperado=%s obtido=%s (stale)", peerID, expectedSHA256[:12], actual[:12])
 					_ = os.Remove(path)
 					continue
 				}

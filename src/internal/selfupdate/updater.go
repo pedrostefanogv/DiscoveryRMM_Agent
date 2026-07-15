@@ -281,14 +281,26 @@ func (u *Updater) CheckAndUpdate(ctx context.Context, force bool) error {
 	_ = currentVersion // usado abaixo
 	_ = correlationID  // mantido para logging ja embutido em downloadFromCacheOrPublic
 
-	// Baixa do endpoint publico /api/v1/download/agent (P2P-first se disponivel).
-	u.logf("[selfupdate] baixando do endpoint publico /api/v1/download/agent")
-	tempPath, fileSha256, err := u.downloadFromCacheOrPublic(ctx, "")
+	// Obtem SHA256 do build atual sem baixar (endpoint /sha256).
+	// Isso permite P2P com artifactID exato e validacao anti-staleness.
+	publicSHA256, shaErr := u.fetchPublicSHA256(ctx)
+	if shaErr != nil {
+		u.logf("[selfupdate] aviso: nao foi possivel obter SHA256 do servidor: %v", shaErr)
+	}
+
+	// Baixa do endpoint publico /api/v1/download/agent (P2P-first se SHA256 conhecido).
+	tempPath, fileSha256, err := u.downloadFromCacheOrPublic(ctx, publicSHA256)
 	if err != nil {
 		u.logf("[selfupdate] download falhou: %v", err)
 		return err
 	}
 	u.logf("[selfupdate] download concluido: tempPath=%s sha256=%s", tempPath, fileSha256[:12])
+
+	// Valida SHA256 contra o servidor se disponivel (defesa em profundidade).
+	if publicSHA256 != "" && !strings.EqualFold(fileSha256, publicSHA256) {
+		u.logf("[selfupdate] ALERTA: SHA256 divergente do servidor! local=%s servidor=%s", fileSha256[:12], publicSHA256[:12])
+		// Nao bloqueia — pode ser rebuild legitimo. O P2P usa o SHA256 local.
+	}
 
 	// Extrai a versao real do binario baixado
 	targetVersion := extractFileVersion(tempPath)
@@ -305,10 +317,9 @@ func (u *Updater) CheckAndUpdate(ctx context.Context, force bool) error {
 		return nil
 	}
 
-	// Publica no P2P com artifactID fixo "agent-current" — o endpoint /api/v1/download/agent
-	// sempre serve o build atual (current), entao o nome do artifact e estavel entre versoes.
-	// O SHA256 e usado para validacao pos-download, nao como ID de busca.
-	artifactID := "agent-current"
+	// Publica no P2P com artifactID baseado no SHA256 real do binario.
+	// Formato: "selfupdate:<sha256>" — imune a staleness porque cada versao tem SHA256 unico.
+	artifactID := "selfupdate:" + strings.ToLower(fileSha256)
 	if u.OnArtifactReady != nil {
 		_ = u.OnArtifactReady(ctx, tempPath, artifactID, fileSha256, targetVersion)
 	}

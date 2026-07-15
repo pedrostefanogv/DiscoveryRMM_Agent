@@ -128,9 +128,11 @@ func (c *p2pCoordinator) upsertPeerArtifacts(peerAgentID string, artifacts []P2P
 		}
 		canonicalID := CanonicalArtifactID(artifact.ArtifactID, name, "")
 		newChecksum := strings.TrimSpace(artifact.ChecksumSHA256)
-		// Log mismatch vs previously known checksum for same artifactId (audit Epic 1).
+		// Se checksum divergente do ja conhecido para mesmo artifactID,
+		// rejeita o artifact (possivel staleness ou corrupcao).
 		if canonicalID != "" && newChecksum != "" {
 			c.mu.RLock()
+			skip := false
 			if prev, ok := c.peerArtifacts[peerKey]; ok {
 				for _, pa := range prev.Artifacts {
 					if strings.EqualFold(strings.TrimSpace(pa.ArtifactID), canonicalID) &&
@@ -142,12 +144,17 @@ func (c *p2pCoordinator) upsertPeerArtifacts(peerAgentID string, artifacts []P2P
 							}
 							return s
 						}
-						c.app.logs.append(fmt.Sprintf("[p2p][audit] checksum divergente artifactId=%s peer=%s: anterior=%s... novo=%s...",
+						c.app.logs.append(fmt.Sprintf("[p2p][audit] checksum divergente artifactId=%s peer=%s: anterior=%s... novo=%s... IGNORADO",
 							canonicalID, peerAgentID, short(pa.ChecksumSHA256), short(newChecksum)))
+						skip = true
+						break
 					}
 				}
 			}
 			c.mu.RUnlock()
+			if skip {
+				continue
+			}
 		}
 		heartbeat := strings.TrimSpace(artifact.LastHeartbeatUTC)
 		if heartbeat == "" {

@@ -169,10 +169,16 @@ func (c *p2pCoordinator) PublishFile(sourcePath string) (P2PArtifactView, error)
 }
 
 // PublishFileWithID publica um arquivo no diretório P2P com um ArtifactID
-// explícito (ex.: GUID de release, "sha256:<hex>") em vez de derivar do nome.
+// explícito (ex.: GUID de release, "selfupdate:<sha256>") em vez de derivar do nome.
 // O arquivo é copiado para o p2pTempDir com o artifactID como nome de arquivo
 // (mantendo a extensão original).
+// version: versão do artifact (opcional) — propaga no gossip para validação cross-peer.
 func (c *p2pCoordinator) PublishFileWithID(sourcePath string, artifactID string) (P2PArtifactView, error) {
+	return c.PublishFileWithIDAndVersion(sourcePath, artifactID, "")
+}
+
+// PublishFileWithIDAndVersion publica com versão explícita para validação no gossip.
+func (c *p2pCoordinator) PublishFileWithIDAndVersion(sourcePath string, artifactID string, version string) (P2PArtifactView, error) {
 	sourcePath = strings.TrimSpace(sourcePath)
 	if sourcePath == "" {
 		return P2PArtifactView{}, fmt.Errorf("arquivo nao informado")
@@ -244,13 +250,43 @@ func (c *p2pCoordinator) PublishFileWithID(sourcePath string, artifactID string)
 	return P2PArtifactView{
 		ArtifactID:       artifactID,
 		ArtifactName:     targetName,
-		Version:          "",
+		Version:          strings.TrimSpace(version),
 		SizeBytes:        info.Size(),
 		ModifiedAtUTC:    formatTimeRFC3339(info.ModTime()),
 		ChecksumSHA256:   checksum,
 		Available:        true,
 		LastHeartbeatUTC: formatTimeRFC3339(time.Now().UTC()),
 	}, nil
+}
+
+// CleanupStaleArtifacts remove artifacts do diretório local que não foram
+// acessados/modificados há mais de 7 dias.
+func (c *p2pCoordinator) CleanupStaleArtifacts() {
+	dir := c.app.p2pTempDir()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-7 * 24 * time.Hour)
+	removed := 0
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		if info.ModTime().Before(cutoff) {
+			path := filepath.Join(dir, entry.Name())
+			if err := os.Remove(path); err == nil {
+				removed++
+			}
+		}
+	}
+	if removed > 0 {
+		c.app.logs.append(fmt.Sprintf("[p2p] cleanup: %d artifacts removidos (mais de 7 dias)", removed))
+	}
 }
 
 func (c *p2pCoordinator) ReplicateArtifactToPeer(artifactName, targetPeerID string) (string, error) {
