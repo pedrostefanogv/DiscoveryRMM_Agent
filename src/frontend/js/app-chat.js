@@ -449,7 +449,21 @@ function bindInternalChatLinks(containerEl) {
   });
 }
 
+function stripRawToolCalls(content) {
+  // Remove XML-like tool call blocks that the server LLM may emit as raw text
+  // instead of executing the tool. Matches both self-closing and paired tags.
+  var s = String(content || '');
+  // Self-closing: <toolname {"k":"v"} />
+  s = s.replace(/<(\w+)\s+(\{[^}]*\})\s*\/>/g, '');
+  // Paired: <toolname>{"k":"v"}</toolname>
+  s = s.replace(/<(\w+)\s*>\s*(\{[^}]*\})\s*<\/\1>/g, '');
+  // Self-closing without content: <toolname/>
+  s = s.replace(/<(\w+)\s*\/>/g, '');
+  return s;
+}
+
 function renderAssistantMarkdown(content) {
+  content = stripRawToolCalls(content);
   var lines = String(content || '').replace(/\r\n/g, '\n').split('\n');
   var html = [];
   var inCode = false;

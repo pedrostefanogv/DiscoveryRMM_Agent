@@ -235,18 +235,23 @@ func (c *syncCoordinator) processTrigger(ctx context.Context, trigger syncTrigge
 		return
 	}
 
-	if revision != "" {
-		c.setRevision(queued.Resource, variant, revision)
-	}
-	if resource == "appstore" && c.app.ctx != nil {
-		wailsRuntime.EventsEmit(c.app.ctx, "store:catalog-updated", map[string]any{
-			"resource":  queued.Resource,
-			"variant":   variant,
-			"revision":  revision,
-			"source":    queued.Source,
-			"itemCount": len(appStorePolicy.Items),
-			"updatedAt": time.Now().UTC().Format(time.RFC3339),
-		})
+	currentRev := c.getRevision(queued.Resource, variant)
+	if revision != "" && currentRev == revision {
+		c.app.logs.append("[sync] appstore sem alterações na revisão, ignorando: resource=" + queued.Resource + " revision=" + revision)
+	} else {
+		if revision != "" {
+			c.setRevision(queued.Resource, variant, revision)
+		}
+		if resource == "appstore" && c.app.ctx != nil {
+			wailsRuntime.EventsEmit(c.app.ctx, "store:catalog-updated", map[string]any{
+				"resource":  queued.Resource,
+				"variant":   variant,
+				"revision":  revision,
+				"source":    queued.Source,
+				"itemCount": len(appStorePolicy.Items),
+				"updatedAt": time.Now().UTC().Format(time.RFC3339),
+			})
+		}
 	}
 	if c.app.p2pCoord != nil {
 		c.app.p2pCoord.OnResourceSynced(queued.Resource, variant, revision)
