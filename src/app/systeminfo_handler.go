@@ -54,7 +54,7 @@ func (a *App) handleRefreshOnDemand(_ context.Context, payloadJSON map[string]an
 
 	if flags.Ports || flags.Connections {
 		if err := a.requireInventorySvc(); err != nil {
-			a.logs.append("[agent] refresh-on-demand: inventory nao provisionado: " + err.Error())
+			a.logs.append("[agent] refresh-on-demand: inventory não provisionado: " + err.Error())
 			return true, 1, "", err.Error()
 		}
 
@@ -149,7 +149,7 @@ func (a *App) handleForceSync(_ context.Context, payloadJSON map[string]any) (bo
 	}
 
 	a.logs.append("[agent] force-sync concluido: " + strings.Join(results, ", "))
-	return true, 0, "force-sync: "+strings.Join(results, ", "), ""
+	return true, 0, "force-sync: " + strings.Join(results, ", "), ""
 }
 
 // ── helpers ────────────────────────────────────────────────────────────────

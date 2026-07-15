@@ -62,7 +62,7 @@ func (a *App) ensureMeshCentralInstalled(ctx context.Context, reason string, res
 		return
 	}
 	if !a.meshEnsureRunning.CompareAndSwap(false, true) {
-		a.meshLogf("fluxo ja em execucao; ignorando gatilho=%s", strings.TrimSpace(reason))
+		a.meshLogf("fluxo já em execução; ignorando gatilho=%s", strings.TrimSpace(reason))
 		return
 	}
 	defer a.meshEnsureRunning.Store(false)
@@ -79,7 +79,7 @@ func (a *App) ensureMeshCentralInstalled(ctx context.Context, reason string, res
 		a.saveMeshCentralState(state)
 	}
 	if state.DisabledUntilRefresh {
-		a.meshLogf("instalacao pausada ate proximo refresh de configuracao")
+		a.meshLogf("instalação pausada até próximo refresh de configuração")
 		return
 	}
 
@@ -94,13 +94,13 @@ func (a *App) ensureMeshCentralInstalled(ctx context.Context, reason string, res
 	a.saveMeshCentralState(state)
 
 	if installed && serviceHealthy && state.NodeIDKnown {
-		a.meshLogf("mesh ja instalado e saudavel; node id conhecido")
+		a.meshLogf("mesh já instalado e saudável; node id conhecido")
 		a.markMeshCentralInstalled()
 		return
 	}
 
 	if installed && serviceHealthy && !state.NodeIDKnown {
-		a.meshLogf("mesh instalado, sem node id local; aguardando hardware report sem reinstalacao")
+		a.meshLogf("mesh instalado, sem node id local; aguardando hardware report sem reinstalação")
 		a.markMeshCentralInstalled()
 		return
 	}
@@ -114,11 +114,11 @@ func (a *App) ensureMeshCentralInstalled(ctx context.Context, reason string, res
 		switch statusCode {
 		case http.StatusForbidden, http.StatusLocked:
 			state.DisabledUntilRefresh = true
-			a.meshLogf("install endpoint retornou %d; fluxo pausado ate proximo refresh", statusCode)
+			a.meshLogf("install endpoint retornou %d; fluxo pausado até próximo refresh", statusCode)
 		case http.StatusServiceUnavailable:
-			a.meshLogf("install endpoint indisponivel (503) apos retries")
+			a.meshLogf("install endpoint indisponível (503) após retries")
 		default:
-			a.meshLogf("falha ao obter parametros de instalacao: %v", err)
+			a.meshLogf("falha ao obter parâmetros de instalação: %v", err)
 		}
 		a.saveMeshCentralState(state)
 		return
@@ -128,7 +128,7 @@ func (a *App) ensureMeshCentralInstalled(ctx context.Context, reason string, res
 		state.LastInstallError = strings.TrimSpace(err.Error())
 		state.RepairRequired = true
 		a.saveMeshCentralState(state)
-		a.meshLogf("erro na instalacao/reparo: %v", err)
+		a.meshLogf("erro na instalação/reparo: %v", err)
 		return
 	}
 
@@ -136,7 +136,7 @@ func (a *App) ensureMeshCentralInstalled(ctx context.Context, reason string, res
 		state.LastInstallError = err.Error()
 		state.RepairRequired = true
 		a.saveMeshCentralState(state)
-		a.meshLogf("servico MeshCentral nao ficou saudavel apos instalacao: %v", err)
+		a.meshLogf("serviço MeshCentral não ficou saudável após instalação: %v", err)
 		return
 	}
 
@@ -148,7 +148,7 @@ func (a *App) ensureMeshCentralInstalled(ctx context.Context, reason string, res
 	state.RepairRequired = false
 	a.saveMeshCentralState(state)
 	a.markMeshCentralInstalled()
-	a.meshLogf("instalacao/reparo concluido")
+	a.meshLogf("instalação/reparo concluído")
 }
 
 func (a *App) meshLogf(format string, args ...any) {
@@ -170,15 +170,15 @@ func (a *App) isMeshCentralInstalled() bool {
 func (a *App) markMeshCentralInstalled() {
 	inst, path, err := loadInstallerConfig()
 	if err != nil {
-		a.meshLogf("aviso: nao foi possivel carregar config para marcar instalacao: %v", err)
+		a.meshLogf("aviso: não foi possível carregar config para marcar instalação: %v", err)
 		return
 	}
 	inst.MeshCentralInstalled = true
 	if _, err := persistInstallerConfig(path, inst); err != nil {
-		a.meshLogf("aviso: falha ao persistir flag de instalacao: %v", err)
+		a.meshLogf("aviso: falha ao persistir flag de instalação: %v", err)
 		return
 	}
-	a.meshLogf("instalacao marcada como concluida no config.json")
+	a.meshLogf("instalação marcada como concluída no config.json")
 }
 
 // fetchMeshInstallInfo calls GET /api/v1/agent-auth/me/support/meshcentral/install
@@ -191,7 +191,7 @@ func (a *App) fetchMeshInstallInfo(ctx context.Context) (MeshCentralInstallInfo,
 	agentID := strings.TrimSpace(cfg.AgentID)
 
 	if scheme == "" || server == "" {
-		return MeshCentralInstallInfo{}, 0, fmt.Errorf("servidor API nao configurado")
+		return MeshCentralInstallInfo{}, 0, fmt.Errorf("servidor API não configurado")
 	}
 	if token == "" || agentID == "" {
 		return MeshCentralInstallInfo{}, 0, fmt.Errorf("credenciais do agente ausentes")
@@ -237,7 +237,7 @@ func (a *App) fetchMeshInstallInfo(ctx context.Context) (MeshCentralInstallInfo,
 	}
 
 	if runtime.GOOS == "windows" && strings.TrimSpace(info.InstallURL) == "" && strings.TrimSpace(info.WindowsCommandBackground) == "" && strings.TrimSpace(info.WindowsCommandInteractive) == "" && strings.TrimSpace(info.WindowsCommand) == "" {
-		return MeshCentralInstallInfo{}, http.StatusOK, fmt.Errorf("servidor nao forneceu installUrl/comandos para este agente Windows")
+		return MeshCentralInstallInfo{}, http.StatusOK, fmt.Errorf("servidor não forneceu installUrl/comandos para este agente Windows")
 	}
 	if runtime.GOOS != "windows" && strings.TrimSpace(info.InstallURL) == "" && strings.TrimSpace(info.LinuxCommandBackground) == "" && strings.TrimSpace(info.LinuxCommandInteractive) == "" && strings.TrimSpace(info.LinuxCommand) == "" {
 		return MeshCentralInstallInfo{}, http.StatusOK, fmt.Errorf("servidor nao forneceu installUrl/comandos para este agente")
@@ -301,7 +301,7 @@ func (a *App) runMeshCentralInstall(ctx context.Context, info MeshCentralInstall
 		if command == "" {
 			return fmt.Errorf("nenhum comando Windows disponivel para fallback")
 		}
-		a.meshLogf("executando fallback de instalacao via comando Windows")
+		a.meshLogf("executando fallback de instalação via comando Windows")
 		cmd = processutil.HideCommandContext(installCtx, "cmd", "/C", command)
 	} else {
 		command := strings.TrimSpace(firstNonEmptyString(

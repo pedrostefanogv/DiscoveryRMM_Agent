@@ -175,7 +175,7 @@ func (s *Service) fetchKnowledgeListWithCache(info AgentInfo, category string, u
 	cfg := s.debugConfig()
 	base := strings.TrimSpace(strings.ToLower(cfg.ApiScheme)) + "://" + strings.TrimSpace(cfg.ApiServer)
 	if strings.TrimSpace(cfg.ApiServer) == "" || strings.TrimSpace(cfg.AuthToken) == "" {
-		return nil, fmt.Errorf("configuracao de servidor API incompleta: preencha apiServer e token no Debug")
+		return nil, fmt.Errorf("configuração de servidor API incompleta: preencha apiServer e token no Debug")
 	}
 	cacheKey := "knowledge:list:" + knowledgeCacheScope(cfg, info) + ":" + url.QueryEscape(strings.TrimSpace(strings.ToLower(category)))
 
@@ -265,12 +265,12 @@ func (s *Service) RefreshKnowledgeBase() error {
 func (s *Service) fetchKnowledgeDetail(info AgentInfo, articleID string) (KnowledgeArticle, error) {
 	articleID = strings.TrimSpace(articleID)
 	if articleID == "" {
-		return KnowledgeArticle{}, fmt.Errorf("articleId invalido")
+		return KnowledgeArticle{}, fmt.Errorf("articleId inválido")
 	}
 
 	cfg := s.debugConfig()
 	if strings.TrimSpace(cfg.ApiServer) == "" || strings.TrimSpace(cfg.AuthToken) == "" {
-		return KnowledgeArticle{}, fmt.Errorf("configuracao de servidor API incompleta: preencha apiServer e token no Debug")
+		return KnowledgeArticle{}, fmt.Errorf("configuração de servidor API incompleta: preencha apiServer e token no Debug")
 	}
 	cacheKey := "knowledge:detail:" + knowledgeCacheScope(cfg, info) + ":" + url.QueryEscape(strings.ToLower(articleID))
 

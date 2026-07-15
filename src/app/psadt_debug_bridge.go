@@ -87,7 +87,7 @@ func (a *App) CheckPSADTModuleStatus() PSADTModuleStatus {
 	status := PSADTModuleStatus{CheckedAtUTC: time.Now().UTC().Format(time.RFC3339)}
 	if runtime.GOOS != "windows" {
 		status.Message = "PSADT suportado apenas no Windows"
-		a.logs.append("[psadt] verificacao ignorada: nao e Windows")
+		a.logs.append("[psadt] verificação ignorada: não é Windows")
 		return status
 	}
 
@@ -102,22 +102,22 @@ func (a *App) CheckPSADTModuleStatus() PSADTModuleStatus {
 	if err != nil {
 		status.Message = strings.TrimSpace(err.Error())
 		if status.Message == "" {
-			status.Message = "falha ao consultar modulo PSADT"
+			status.Message = "falha ao consultar módulo PSADT"
 		}
 		a.logs.append("[psadt] erro ao verificar modulo: " + status.Message)
 		return status
 	}
 
 	if text == "" {
-		status.Message = "modulo PSAppDeployToolkit nao encontrado"
-		a.logs.append("[psadt] modulo PSAppDeployToolkit nao instalado")
+		status.Message = "módulo PSAppDeployToolkit não encontrado"
+		a.logs.append("[psadt] módulo PSAppDeployToolkit não instalado")
 		return status
 	}
 
 	status.Installed = true
 	status.Version = text
-	status.Message = "modulo PSAppDeployToolkit disponivel"
-	a.logs.append("[psadt] modulo instalado: versao " + text)
+	status.Message = "módulo PSAppDeployToolkit disponível"
+	a.logs.append("[psadt] módulo instalado: versão " + text)
 	return status
 }
 
@@ -125,7 +125,7 @@ func (a *App) InstallPSADTModule(version string) PSADTModuleStatus {
 	status := PSADTModuleStatus{CheckedAtUTC: time.Now().UTC().Format(time.RFC3339)}
 	if runtime.GOOS != "windows" {
 		status.Message = "PSADT suportado apenas no Windows"
-		a.logs.append("[psadt] instalacao ignorada: nao e Windows")
+		a.logs.append("[psadt] instalação ignorada: não é Windows")
 		return status
 	}
 
@@ -134,8 +134,8 @@ func (a *App) InstallPSADTModule(version string) PSADTModuleStatus {
 		version = "4.1.8"
 	}
 	if !psadtVersionPattern.MatchString(version) {
-		status.Message = "versao invalida"
-		a.logs.append("[psadt] instalacao rejeitada: versao invalida '" + version + "'")
+		status.Message = "versão inválida"
+		a.logs.append("[psadt] instalação rejeitada: versão inválida '" + version + "'")
 		return status
 	}
 
@@ -144,7 +144,7 @@ func (a *App) InstallPSADTModule(version string) PSADTModuleStatus {
 		installSource = strings.TrimSpace(a.GetAgentConfiguration().PSADT.InstallSource)
 	}
 	sourceType, sourceValue := parsePSADTInstallSource(installSource)
-	a.logs.append("[psadt] iniciando instalacao do modulo versao " + version + " via source=" + sourceType)
+	a.logs.append("[psadt] iniciando instalação do módulo versão " + version + " via source=" + sourceType)
 
 	script := buildPSADTInstallScript(version, sourceType, sourceValue)
 
@@ -173,19 +173,19 @@ func (a *App) InstallPSADTModule(version string) PSADTModuleStatus {
 			if fallbackErr == nil {
 				status.Installed = true
 				status.Version = fallbackText
-				status.Message = "instalacao concluida (fallback powershell_gallery)"
-				a.logs.append("[psadt] modulo instalado com fallback PSGallery: versao " + fallbackText)
+				status.Message = "instalação concluída (fallback powershell_gallery)"
+				a.logs.append("[psadt] módulo instalado com fallback PSGallery: versão " + fallbackText)
 				return status
 			}
 		}
-		a.logs.append("[psadt] falha na instalacao do modulo: " + status.Message)
+		a.logs.append("[psadt] falha na instalação do módulo: " + status.Message)
 		return status
 	}
 
 	status.Installed = true
 	status.Version = text
-	status.Message = "instalacao concluida (source=" + sourceType + ")"
-	a.logs.append("[psadt] modulo instalado com sucesso: versao " + text)
+	status.Message = "instalação concluída (source=" + sourceType + ")"
+	a.logs.append("[psadt] módulo instalado com sucesso: versão " + text)
 	return status
 }
 
@@ -216,7 +216,7 @@ func buildPSADTInstallScript(version, sourceType, sourceValue string) string {
 		installCmd = fmt.Sprintf("Install-Module -Name PSAppDeployToolkit -RequiredVersion %s -Repository '%s' -Scope AllUsers -Force -AllowClobber", version, repo)
 	case "offline":
 		path := escapePowerShellSingleQuoted(sourceValue)
-		installCmd = fmt.Sprintf("$offlinePath='%s'; if (-not (Test-Path $offlinePath)) { throw 'offline source nao encontrada' }; Copy-Item -Path $offlinePath -Destination (Join-Path $env:ProgramFiles 'WindowsPowerShell\\Modules\\PSAppDeployToolkit') -Recurse -Force", path)
+		installCmd = fmt.Sprintf("$offlinePath='%s'; if (-not (Test-Path $offlinePath)) { throw 'offline source não encontrada' }; Copy-Item -Path $offlinePath -Destination (Join-Path $env:ProgramFiles 'WindowsPowerShell\\Modules\\PSAppDeployToolkit') -Recurse -Force", path)
 	default:
 		sourceType = "powershell_gallery"
 		installCmd = fmt.Sprintf("Install-Module -Name PSAppDeployToolkit -RequiredVersion %s -Scope AllUsers -Force -AllowClobber", version)
@@ -233,7 +233,7 @@ try {
   }
 }
 $m = Get-Module -ListAvailable -Name PSAppDeployToolkit | Sort-Object Version -Descending | Select-Object -First 1
-if (-not $m) { throw 'PSADT nao encontrado apos instalacao' }
+if (-not $m) { throw 'PSADT não encontrado após instalação' }
 Write-Output $m.Version.ToString()`, installCmd, sourceType, version)
 }
 
@@ -243,13 +243,13 @@ func escapePowerShellSingleQuoted(value string) string {
 
 func (a *App) EmitPSADTDebugNotification(req PSADTDebugNotificationRequest) error {
 	if a == nil || a.ctx == nil {
-		return fmt.Errorf("contexto do app indisponivel")
+		return fmt.Errorf("contexto do app indisponível")
 	}
 	if strings.TrimSpace(req.Title) == "" {
 		req.Title = "Teste PSADT"
 	}
 	if strings.TrimSpace(req.Message) == "" {
-		req.Message = "Notificacao de teste"
+		req.Message = "Notificação de teste"
 	}
 	if strings.TrimSpace(req.Mode) == "" {
 		req.Mode = "notify_only"
@@ -278,7 +278,7 @@ func (a *App) EmitPSADTDebugNotification(req PSADTDebugNotificationRequest) erro
 		},
 	})
 	if !resp.Accepted {
-		return fmt.Errorf("notificacao rejeitada: %s", strings.TrimSpace(resp.Message))
+		return fmt.Errorf("notificação rejeitada: %s", strings.TrimSpace(resp.Message))
 	}
 	a.logs.append("[notification] evento PSADT emitido via dispatch id=" + notificationID)
 	return nil
@@ -304,7 +304,7 @@ func (a *App) ExecutePSADTTestScript(appName string, appVersion string) PSADTScr
 		result.Success = false
 		result.Error = "PSADT suportado apenas em Windows"
 		result.ExitCode = 1
-		a.logs.append("[psadt] test script ignorado: nao e Windows")
+		a.logs.append("[psadt] test script ignorado: não é Windows")
 		return result
 	}
 
@@ -335,32 +335,32 @@ try {
 [string]$requiredVersion = "4.1.8"
 
 Write-Host "=========================================="
-Write-Host "Validacao PSADT Real do Discovery Agent"
+Write-Host "Validação PSADT Real do Discovery Agent"
 Write-Host "=========================================="
 Write-Host "Nome: $appName"
-Write-Host "Versao: $appVersion"
+Write-Host "Versão: $appVersion"
 Write-Host "Vendor: $appVendor"
 Write-Host "Timestamp: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
 Write-Host ""
 
 $psadtModule = Get-Module -ListAvailable -Name PSAppDeployToolkit | Sort-Object Version -Descending | Select-Object -First 1
 if (-not $psadtModule) {
-	Write-Error "Modulo PSAppDeployToolkit nao encontrado"
+	Write-Error "Módulo PSAppDeployToolkit não encontrado"
 	exit 2
 }
 
-Write-Host "Modulo detectado: $($psadtModule.Name)"
-Write-Host "Versao detectada: $($psadtModule.Version)"
+Write-Host "Módulo detectado: $($psadtModule.Name)"
+Write-Host "Versão detectada: $($psadtModule.Version)"
 
 if ([version]$psadtModule.Version -lt [version]$requiredVersion) {
-	Write-Error "Versao do modulo abaixo da requerida. Atual: $($psadtModule.Version), Requerida: $requiredVersion"
+	Write-Error "Versão do módulo abaixo da requerida. Atual: $($psadtModule.Version), Requerida: $requiredVersion"
 	exit 3
 }
 
 $commands = Get-Command -Module PSAppDeployToolkit -ErrorAction Stop
 $commandCount = @($commands).Count
 if ($commandCount -le 0) {
-	Write-Error "Modulo carregado, mas sem comandos exportados"
+	Write-Error "Módulo carregado, mas sem comandos exportados"
 	exit 4
 }
 
@@ -369,7 +369,7 @@ Write-Host "Primeiros comandos:"
 $commands | Select-Object -First 10 -ExpandProperty Name | ForEach-Object { Write-Host " - $_" }
 
 Write-Host ""
-Write-Host "✓ Validacao real concluida com sucesso"
+Write-Host "✓ Validação real concluída com sucesso"
 Write-Host "ExitCode: 0"
 Write-Host "Timestamp: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
 Write-Host "=========================================="
@@ -443,7 +443,7 @@ Write-Host "Iniciando Deploy: $appName v$appVersion"
 Write-Host "Tipo: $deploymentType"
 Write-Host ""
 
-# ===== INSTALACAO =====
+# ===== INSTALAÇÃO =====
 if ($deploymentType -eq 'Install') {
 	Write-Host "Instalando $appName..."
 	New-Item -ItemType Directory -Path $appDestinationPath -Force | Out-Null
@@ -454,16 +454,16 @@ if ($deploymentType -eq 'Install') {
 	# Exemplo real de execução de instalador silencioso
 	# Start-Process -FilePath "$appSourcePath\setup.exe" -ArgumentList "/quiet /norestart" -Wait -NoNewWindow
 
-	Write-Host "Instalacao finalizada"
+	Write-Host "Instalação finalizada"
 }
 
-# ===== DESINSTALACAO =====
+# ===== DESINSTALAÇÃO =====
 if ($deploymentType -eq 'Uninstall') {
     Write-Host "Desinstalando $appName..."
 	if (Test-Path -Path $appDestinationPath) {
 		Remove-Item -Path $appDestinationPath -Recurse -Force
 	}
-	Write-Host "Desinstalacao concluida"
+	Write-Host "Desinstalação concluída"
 }
 
 exit 0
@@ -480,7 +480,7 @@ func (a *App) ExecuteCustomPSADTScript(scriptContent string) PSADTScriptResult {
 		result.Success = false
 		result.Error = "PSADT suportado apenas em Windows"
 		result.ExitCode = 1
-		a.logs.append("[psadt] custom script ignorado: nao e Windows")
+		a.logs.append("[psadt] custom script ignorado: não é Windows")
 		return result
 	}
 
@@ -488,7 +488,7 @@ func (a *App) ExecuteCustomPSADTScript(scriptContent string) PSADTScriptResult {
 		result.Success = false
 		result.Error = "Script vazio"
 		result.ExitCode = 1
-		a.logs.append("[psadt] custom script rejeitado: conteudo vazio")
+		a.logs.append("[psadt] custom script rejeitado: conteúdo vazio")
 		return result
 	}
 	a.logs.append(fmt.Sprintf("[psadt] executando script customizado (%d bytes)...", len(strings.TrimSpace(scriptContent))))

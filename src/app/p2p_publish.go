@@ -55,7 +55,7 @@ func (c *p2pCoordinator) ListArtifacts() ([]P2PArtifactView, error) {
 func (c *p2pCoordinator) PublishTestArtifact(artifactName, content string) (P2PArtifactView, error) {
 	artifactName = sanitizeArtifactName(artifactName)
 	if artifactName == "" {
-		return P2PArtifactView{}, fmt.Errorf("nome de artifact invalido")
+		return P2PArtifactView{}, fmt.Errorf("nome de artifact inválido")
 	}
 	dir := c.app.p2pTempDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {

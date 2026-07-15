@@ -16,13 +16,13 @@ func NormalizeAgentToken(token string) (string, error) {
 		return "", fmt.Errorf("authToken ausente")
 	}
 	if strings.HasPrefix(strings.ToLower(token), "bearer ") {
-		return "", fmt.Errorf("authToken invalido: informe apenas o token (sem prefixo Bearer)")
+		return "", fmt.Errorf("authToken inválido: informe apenas o token (sem prefixo Bearer)")
 	}
 	if strings.ContainsAny(token, " \t\r\n") {
-		return "", fmt.Errorf("authToken invalido: token contem espacos")
+		return "", fmt.Errorf("authToken inválido: token contém espaços")
 	}
 	if !strings.HasPrefix(token, "mdz_") {
-		return "", fmt.Errorf("authToken invalido: esperado prefixo mdz_")
+		return "", fmt.Errorf("authToken inválido: esperado prefixo mdz_")
 	}
 	return token, nil
 }
@@ -34,7 +34,7 @@ func NormalizeAgentID(agentID string) (string, error) {
 		return "", fmt.Errorf("X-Agent-ID ausente")
 	}
 	if !agentIDPattern.MatchString(agentID) {
-		return "", fmt.Errorf("X-Agent-ID invalido: esperado GUID")
+		return "", fmt.Errorf("X-Agent-ID inválido: esperado GUID")
 	}
 	return agentID, nil
 }
@@ -62,9 +62,9 @@ func SetAgentAuthHeadersWithAgentID(req *http.Request, token, agentID string) er
 	return nil
 }
 
-// SanitizeHTTPErrorBody limpa o corpo de uma resposta de erro HTTP para exibicao
-// em logs. Se o corpo for HTML (ex: pagina de erro do nginx), retorna uma
-// mensagem limpa com o codigo HTTP; caso contrario, retorna o texto truncado.
+// SanitizeHTTPErrorBody limpa o corpo de uma resposta de erro HTTP para exibição
+// em logs. Se o corpo for HTML (ex: página de erro do nginx), retorna uma
+// mensagem limpa com o código HTTP; caso contrário, retorna o texto truncado.
 func SanitizeHTTPErrorBody(statusCode int, body string) string {
 	body = strings.TrimSpace(body)
 	if body == "" {
@@ -72,7 +72,7 @@ func SanitizeHTTPErrorBody(statusCode int, body string) string {
 	}
 	// Detecta HTML retornado por proxies/nginx quando o backend esta fora
 	if strings.HasPrefix(body, "<") || strings.Contains(body, "<html>") || strings.Contains(body, "<HTML>") {
-		return fmt.Sprintf("HTTP %d (servidor intermediario retornou pagina de erro)", statusCode)
+		return fmt.Sprintf("HTTP %d (servidor intermediário retornou página de erro)", statusCode)
 	}
 	// Trunca respostas muito longas (ex.: stack traces ou JSON extenso)
 	const maxLen = 300

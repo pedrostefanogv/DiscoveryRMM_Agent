@@ -14,35 +14,35 @@ import (
 
 func (a *App) requireInventorySvc() error {
 	if a == nil || a.inventorySvc == nil {
-		return fmt.Errorf("inventory service indisponivel")
+		return fmt.Errorf("inventory service indisponível")
 	}
 	return nil
 }
 
 func (a *App) requireSupportSvc() error {
 	if a == nil || a.supportSvc == nil {
-		return fmt.Errorf("support service indisponivel")
+		return fmt.Errorf("support service indisponível")
 	}
 	return nil
 }
 
 func (a *App) requireDebugSvc() error {
 	if a == nil || a.debugSvc == nil {
-		return fmt.Errorf("debug service indisponivel")
+		return fmt.Errorf("debug service indisponível")
 	}
 	return nil
 }
 
 func (a *App) requireUpdatesSvc() error {
 	if a == nil || a.updatesSvc == nil {
-		return fmt.Errorf("updates service indisponivel")
+		return fmt.Errorf("updates service indisponível")
 	}
 	return nil
 }
 
 func (a *App) requireExporter() error {
 	if a == nil || a.exporter == nil {
-		return fmt.Errorf("export service indisponivel")
+		return fmt.Errorf("export service indisponível")
 	}
 	return nil
 }

@@ -182,7 +182,7 @@ func (c *p2pCoordinator) GetArtifactAccess(artifactName, targetPeerID string) (P
 	transfer := c.transferServer
 	c.mu.RUnlock()
 	if transfer == nil {
-		return P2PArtifactAccess{}, fmt.Errorf("servidor de transferencia indisponivel")
+		return P2PArtifactAccess{}, fmt.Errorf("servidor de transferência indisponível")
 	}
 	return transfer.BuildArtifactAccess(artifactName, targetPeerID)
 }

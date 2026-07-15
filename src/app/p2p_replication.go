@@ -40,16 +40,16 @@ func (c *p2pCoordinator) replicateArtifactToPeerNow(ctx context.Context, artifac
 				if err := json.NewEncoder(stream).Encode(req); err != nil {
 					stream.Close()
 					c.recordReplicationResult(false)
-					return fmt.Errorf("falha ao codificar request de replicacao: %w", err)
+					return fmt.Errorf("falha ao codificar request de replicação: %w", err)
 				}
 				var resp libp2pReplicateResponse
 				if err := json.NewDecoder(stream).Decode(&resp); err != nil {
 					stream.Close()
 					c.recordReplicationResult(false)
-					return fmt.Errorf("falha ao decodificar resposta de replicacao: %w", err)
+					return fmt.Errorf("falha ao decodificar resposta de replicação: %w", err)
 				}
 				if closeErr := stream.Close(); closeErr != nil {
-					c.app.logs.append("[p2p] aviso ao fechar stream de replicacao: " + closeErr.Error())
+					c.app.logs.append("[p2p] aviso ao fechar stream de replicação: " + closeErr.Error())
 				}
 				c.recordReplicationResult(true)
 				return nil
@@ -58,7 +58,7 @@ func (c *p2pCoordinator) replicateArtifactToPeerNow(ctx context.Context, artifac
 	}
 
 	c.recordReplicationResult(false)
-	return fmt.Errorf("replicacao: peer %s nao alcancavel via libp2p", targetPeerID)
+	return fmt.Errorf("replicação: peer %s não alcançável via libp2p", targetPeerID)
 }
 
 func (c *p2pCoordinator) recordReplicationResult(success bool) {
@@ -98,10 +98,10 @@ func (c *p2pCoordinator) enqueueReplicationJob(job p2pReplicationJob) error {
 		job.Source = "manual"
 	}
 	if job.ArtifactName == "" {
-		return fmt.Errorf("artifact invalido")
+		return fmt.Errorf("artifact inválido")
 	}
 	if job.TargetPeerID == "" {
-		return fmt.Errorf("peer alvo nao informado")
+		return fmt.Errorf("peer alvo não informado")
 	}
 	if job.Checksum == "" {
 		resolvedChecksum, err := c.resolveArtifactChecksum(job.ArtifactName)

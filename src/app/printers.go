@@ -16,7 +16,7 @@ func (a *App) ListPrinters() (json.RawMessage, error) {
 }
 
 func (a *App) InstallPrinter(name, driverName, portName, portAddress string) (json.RawMessage, error) {
-	done := a.beginActivity("instalacao de impressora")
+	done := a.beginActivity("instalação de impressora")
 	defer done()
 	result, err := a.printerSvc.InstallPrinter(a.ctx, name, driverName, portName, portAddress)
 	a.logs.append("[printer install " + name + "] " + time.Now().Format("15:04:05"))
@@ -25,7 +25,7 @@ func (a *App) InstallPrinter(name, driverName, portName, portAddress string) (js
 }
 
 func (a *App) InstallSharedPrinter(connectionPath string, setDefault bool) (json.RawMessage, error) {
-	done := a.beginActivity("instalacao de impressora compartilhada")
+	done := a.beginActivity("instalação de impressora compartilhada")
 	defer done()
 	result, err := a.printerSvc.InstallSharedPrinter(a.ctx, connectionPath, setDefault)
 	a.logs.append("[printer install shared " + connectionPath + "] " + time.Now().Format("15:04:05"))
@@ -43,7 +43,7 @@ func (a *App) RemovePrinter(name string) (json.RawMessage, error) {
 }
 
 func (a *App) GetPrinterConfig(name string) (json.RawMessage, error) {
-	done := a.beginActivity("configuracao de impressora")
+	done := a.beginActivity("configuração de impressora")
 	defer done()
 	result, err := a.printerSvc.GetPrinterConfig(a.ctx, name)
 	a.logs.append("[printer config " + name + "] " + time.Now().Format("15:04:05"))

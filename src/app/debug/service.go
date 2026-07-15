@@ -115,12 +115,12 @@ func (s *Service) LoadPersistedConfig() {
 
 		var cfg Config
 		if err := json.Unmarshal(data, &cfg); err != nil {
-			s.logf("[debug] falha ao ler configuracao persistida: " + err.Error())
+			s.logf("[debug] falha ao ler configuração persistida: " + err.Error())
 			return
 		}
 
 		if !isValidDebugScheme(cfg.Scheme) {
-			s.logf("[debug] configuracao persistida ignorada: scheme invalido")
+			s.logf("[debug] configuração persistida ignorada: scheme inválido")
 			return
 		}
 		normalizeSecurityConfig(&cfg)
@@ -129,7 +129,7 @@ func (s *Service) LoadPersistedConfig() {
 		s.config = cfg
 		s.mu.Unlock()
 		tlsutil.SetConfigAllowInsecureTLS(cfg.AllowInsecureTLS)
-		s.logf("[debug] configuracao carregada de " + path)
+		s.logf("[debug] configuração carregada de " + path)
 		return
 	}
 }
@@ -138,7 +138,7 @@ func (s *Service) LoadPersistedConfig() {
 func (s *Service) PersistConfig(cfg Config) error {
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
-		return fmt.Errorf("falha ao serializar configuracao de debug: %w", err)
+		return fmt.Errorf("falha ao serializar configuração de debug: %w", err)
 	}
 
 	var errs []string
@@ -152,14 +152,14 @@ func (s *Service) PersistConfig(cfg Config) error {
 			errs = append(errs, path+": "+err.Error())
 			continue
 		}
-		s.logf("[debug] configuracao salva em " + path)
+		s.logf("[debug] configuração salva em " + path)
 		return nil
 	}
 
 	if len(errs) == 0 {
-		return fmt.Errorf("nenhum caminho valido para salvar configuracao de debug")
+		return fmt.Errorf("nenhum caminho válido para salvar configuração de debug")
 	}
-	return fmt.Errorf("falha ao salvar configuracao de debug: %s", strings.Join(errs, " | "))
+	return fmt.Errorf("falha ao salvar configuração de debug: %s", strings.Join(errs, " | "))
 }
 
 // GetConfig returns the current debug configuration.
@@ -174,7 +174,7 @@ func (s *Service) LoadConnectionConfigFromProduction() {
 	inst, path, err := s.loadInstallerConfig()
 	if err != nil {
 		s.applyAllowInsecureTLS(false)
-		s.logf("[config] config de producao nao encontrado: " + err.Error())
+		s.logf("[config] config de produção não encontrado: " + err.Error())
 		if s.defaultP2PConfig != nil && s.applyP2PConfig != nil {
 			s.applyP2PConfig(s.defaultP2PConfig())
 		}
@@ -201,18 +201,18 @@ func (s *Service) LoadConnectionConfigFromProduction() {
 
 	if strings.TrimSpace(inst.ApiScheme) == "" || strings.TrimSpace(inst.ApiServer) == "" {
 		if strings.TrimSpace(inst.NatsServer) == "" && strings.TrimSpace(inst.NatsWsServer) == "" {
-			s.logf("[config] config de producao sem apiScheme/apiServer e sem NATS: " + path)
+			s.logf("[config] config de produção sem apiScheme/apiServer e sem NATS: " + path)
 			return
 		}
 	}
 
 	if strings.TrimSpace(inst.AuthToken) == "" || strings.TrimSpace(inst.AgentID) == "" {
-		s.logf("[config] config de producao carregado sem authToken/agentId (bootstrap pendente): " + path)
+		s.logf("[config] config de produção carregado sem authToken/agentId (bootstrap pendente): " + path)
 		return
 	}
 
 	s.ApplyRuntimeConnectionConfig(inst.ApiScheme, inst.ApiServer, inst.AuthToken, inst.AgentID, inst.NatsServer, inst.NatsWsServer)
-	s.logf("[config] credenciais carregadas do config de producao: " + path)
+	s.logf("[config] credenciais carregadas do config de produção: " + path)
 }
 
 // ApplyRuntimeConnectionConfig updates runtime connection settings.
@@ -293,10 +293,10 @@ func (s *Service) ApplyRemoteConnectionSecurity(natsServerHost string, natsUseWs
 
 	persistErr := s.PersistConfig(cfg)
 	if persistErr != nil {
-		s.logf("[debug] falha ao persistir atualizacao de seguranca remota: " + persistErr.Error())
+		s.logf("[debug] falha ao persistir atualização de segurança remota: " + persistErr.Error())
 	}
 	if s.agentConn != nil {
-		s.logf("[debug] recarregando conexao apos atualizacao de seguranca remota")
+		s.logf("[debug] recarregando conexão após atualização de segurança remota")
 		s.agentConn.Reload()
 	}
 
@@ -397,7 +397,7 @@ func (s *Service) BootstrapAgentCredentialsFromInstallerConfig(ctx context.Conte
 	}
 
 	if strings.TrimSpace(inst.APIKey) == "" {
-		s.logf("[installer-bootstrap] deploy token ausente; nao foi possivel registrar agente")
+		s.logf("[installer-bootstrap] deploy token ausente; não foi possível registrar agente")
 		return
 	}
 
@@ -481,7 +481,7 @@ func (s *Service) SetConfig(cfg Config) error {
 
 	if cfg.NatsServer != "" || cfg.NatsWsServer != "" {
 		if !guidPattern.MatchString(cfg.AgentID) {
-			return fmt.Errorf("agentId invalido para NATS: informe um GUID valido")
+			return fmt.Errorf("agentId inválido para NATS: informe um GUID válido")
 		}
 	}
 
@@ -523,10 +523,10 @@ func (s *Service) SetConfig(cfg Config) error {
 		return err
 	}
 	if s.agentConn != nil {
-		s.logf("[debug] solicitando reload da conexao do agente")
+		s.logf("[debug] solicitando reload da conexão do agente")
 		s.agentConn.Reload()
 	}
-	s.logf("[debug] configuracao aplicada com sucesso")
+	s.logf("[debug] configuração aplicada com sucesso")
 	return nil
 }
 
@@ -593,7 +593,7 @@ func (s *Service) TestConnection(cfg Config) (string, error) {
 		} else {
 			results = append(results, "=== Servidor API ===\n"+string(body))
 		}
-		s.logf("[debug-test] teste API concluido com sucesso")
+		s.logf("[debug-test] teste API concluído com sucesso")
 	}
 
 	if cfg.NatsServer != "" || cfg.NatsWsServer != "" {

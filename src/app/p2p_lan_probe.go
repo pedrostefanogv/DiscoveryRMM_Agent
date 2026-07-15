@@ -242,14 +242,14 @@ func buildLANProbePorts(cfg P2PConfig, selfPort int) []int {
 
 func (c *p2pCoordinator) runLANDiscoveryProbe(ctx context.Context, source string) (int, error) {
 	if c == nil || c.app == nil {
-		return 0, fmt.Errorf("coordinator P2P indisponivel")
+		return 0, fmt.Errorf("coordinator P2P indisponível")
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	h, registry := c.libp2pHostAndRegistry()
 	if h == nil || registry == nil {
-		return 0, fmt.Errorf("host libp2p nao disponivel")
+		return 0, fmt.Errorf("host libp2p não disponível")
 	}
 	selfIPs := localRoutableIPv4Addrs()
 	hosts := buildLANProbeHostsFromIPs(selfIPs)

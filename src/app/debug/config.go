@@ -233,7 +233,7 @@ func parseInstallerBool(raw json.RawMessage) (*bool, error) {
 		}
 	}
 
-	return nil, fmt.Errorf("valor nao suportado")
+	return nil, fmt.Errorf("valor não suportado")
 }
 
 // AgentStatus is the frontend-facing agent connection snapshot.

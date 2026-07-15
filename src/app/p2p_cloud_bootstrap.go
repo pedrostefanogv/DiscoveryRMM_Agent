@@ -62,14 +62,14 @@ func (c *p2pCoordinator) runCloudBootstrap(ctx context.Context) (int, error) {
 	apiServer := strings.TrimSpace(debugCfg.ApiServer)
 
 	if agentID == "" || authToken == "" || apiScheme == "" || apiServer == "" {
-		err := fmt.Errorf("configuracao incompleta: agentId, authToken, apiScheme ou apiServer ausentes")
+		err := fmt.Errorf("configuração incompleta: agentId, authToken, apiScheme ou apiServer ausentes")
 		c.app.logs.append("[p2p][cloud-bootstrap] " + err.Error())
 		return 0, err
 	}
 
 	h, _ := c.libp2pHostAndRegistry()
 	if h == nil {
-		err := fmt.Errorf("host libp2p nao disponivel")
+		err := fmt.Errorf("host libp2p não disponível")
 		c.app.logs.append("[p2p][cloud-bootstrap] " + err.Error())
 		return 0, err
 	}
@@ -118,7 +118,7 @@ func (c *p2pCoordinator) runCloudBootstrap(ctx context.Context) (int, error) {
 
 		addrInfo, err := buildAddrInfo(rp.PeerID, rp.Addrs, rp.Port)
 		if err != nil {
-			c.app.logs.append(fmt.Sprintf("[p2p][cloud-bootstrap] peer ignorado (addr invalido) peerId=%s: %v", rp.PeerID, err))
+			c.app.logs.append(fmt.Sprintf("[p2p][cloud-bootstrap] peer ignorado (addr inválido) peerId=%s: %v", rp.PeerID, err))
 			continue
 		}
 

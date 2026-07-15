@@ -26,7 +26,7 @@ func loadInstallerConfigFromCandidates(paths []string) (InstallerConfig, string,
 		data, err := os.ReadFile(path)
 		if err != nil {
 			if !os.IsNotExist(err) {
-				log.Printf("[config] aviso: nao foi possivel ler config candidate %s: %v", path, err)
+				log.Printf("[config] aviso: não foi possível ler config candidate %s: %v", path, err)
 			}
 			continue
 		}

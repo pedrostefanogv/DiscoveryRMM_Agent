@@ -29,7 +29,7 @@ func (a *App) loadPersistedChatConfig() {
 
 		var cfg ChatConfig
 		if err := json.Unmarshal(data, &cfg); err != nil {
-			a.logs.append("[chat] falha ao ler configuracao persistida: " + err.Error())
+			a.logs.append("[chat] falha ao ler configuração persistida: " + err.Error())
 			return
 		}
 
@@ -45,7 +45,7 @@ func (a *App) loadPersistedChatConfig() {
 			SystemPrompt: cfg.SystemPrompt,
 			MaxTokens:    cfg.MaxTokens,
 		})
-		a.logs.append("[chat] configuracao carregada de " + path)
+		a.logs.append("[chat] configuração carregada de " + path)
 		return
 	}
 }
@@ -53,7 +53,7 @@ func (a *App) loadPersistedChatConfig() {
 func (a *App) persistChatConfig(cfg ChatConfig) error {
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
-		return fmt.Errorf("falha ao serializar configuracao do chat: %w", err)
+		return fmt.Errorf("falha ao serializar configuração do chat: %w", err)
 	}
 
 	var errs []string
@@ -67,14 +67,14 @@ func (a *App) persistChatConfig(cfg ChatConfig) error {
 			errs = append(errs, path+": "+err.Error())
 			continue
 		}
-		a.logs.append("[chat] configuracao salva em " + path)
+		a.logs.append("[chat] configuração salva em " + path)
 		return nil
 	}
 
 	if len(errs) == 0 {
-		return fmt.Errorf("nenhum caminho valido para salvar configuracao do chat")
+		return fmt.Errorf("nenhum caminho válido para salvar configuração do chat")
 	}
-	return fmt.Errorf("falha ao salvar configuracao do chat: %s", strings.Join(errs, " | "))
+	return fmt.Errorf("falha ao salvar configuração do chat: %s", strings.Join(errs, " | "))
 }
 
 // ChatConfig is the frontend-facing AI configuration.
@@ -109,7 +109,7 @@ func (a *App) resolveAgentChatRuntimeConfig(input ChatConfig) (ai.Config, error)
 	}
 
 	if endpoint == "" || token == "" {
-		return ai.Config{}, fmt.Errorf("configuracao de IA incompleta: informe endpoint/token no chat ou apiScheme/apiServer/authToken no Debug")
+		return ai.Config{}, fmt.Errorf("configuração de IA incompleta: informe endpoint/token no chat ou apiScheme/apiServer/authToken no Debug")
 	}
 
 	return ai.Config{
@@ -178,7 +178,7 @@ func (a *App) SendChatMessage(message string) (string, error) {
 	defer done()
 
 	if cfg := a.GetAgentConfiguration(); cfg.ChatAIEnabled != nil && !*cfg.ChatAIEnabled {
-		return "", fmt.Errorf("Chat AI desabilitado pela configuracao do servidor")
+		return "", fmt.Errorf("Chat AI desabilitado pela configuração do servidor")
 	}
 
 	current := a.chatSvc.GetConfig()
@@ -201,7 +201,7 @@ func (a *App) StartChatStream(message string) {
 	done := a.beginActivity("chat IA")
 
 	if cfg := a.GetAgentConfiguration(); cfg.ChatAIEnabled != nil && !*cfg.ChatAIEnabled {
-		wailsRuntime.EventsEmit(a.ctx, "chat:error", "Chat AI desabilitado pela configuracao do servidor")
+		wailsRuntime.EventsEmit(a.ctx, "chat:error", "Chat AI desabilitado pela configuração do servidor")
 		done()
 		return
 	}

@@ -80,7 +80,7 @@ func (a *App) RunPSADTPreflightChecks() PSADTPreflightResult {
 	}
 
 	result.Success = true
-	a.logs.append(fmt.Sprintf("[psadt] preflight concluido: os=%s %s admin=%t reboot=%t net=%t focus=%t",
+	a.logs.append(fmt.Sprintf("[psadt] preflight concluído: os=%s %s admin=%t reboot=%t net=%t focus=%t",
 		result.OSName, result.OSVersion, result.IsAdmin, result.RebootPending, result.NetworkAvailable, result.UserInFocusMode))
 	return result
 }
@@ -155,7 +155,7 @@ func (a *App) RunPSADTWelcome(closeProcesses string, countdown int) PSADTWelcome
 	result.Success = true
 	result.Action = "displayed"
 	result.Message = "Welcome dialog exibido com sucesso"
-	a.logs.append("[psadt] welcome dialog concluido com sucesso")
+	a.logs.append("[psadt] welcome dialog concluído com sucesso")
 	return result
 }
 
@@ -199,7 +199,7 @@ func (a *App) RunPSADTRestartPrompt(countdownSeconds int, silentRestart bool) PS
 	result.Success = true
 	result.Action = "restart"
 	result.Message = "Restart prompt exibido com sucesso"
-	a.logs.append("[psadt] restart prompt concluido")
+	a.logs.append("[psadt] restart prompt concluído")
 	return result
 }
 

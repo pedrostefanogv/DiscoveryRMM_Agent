@@ -71,7 +71,7 @@ func (c *p2pCoordinator) handlePeerOnlineEvent(event agentconn.PeerEventMessage)
 
 	addrInfo, err := buildAddrInfo(strings.TrimSpace(event.PeerID), event.Addrs, event.Port)
 	if err != nil {
-		c.app.logs.append(fmt.Sprintf("[p2p][events] peer.online ignorado (addr invalido) agentId=%s: %v",
+		c.app.logs.append(fmt.Sprintf("[p2p][events] peer.online ignorado (addr inválido) agentId=%s: %v",
 			strings.TrimSpace(event.AgentID), err))
 		return
 	}
@@ -195,7 +195,7 @@ func (c *p2pCoordinator) connectP2PDiscoveryPeer(peer agentconn.P2PDiscoveryPeer
 	}
 	addrInfo, err := buildAddrInfo(strings.TrimSpace(peer.PeerID), peer.Addrs, peer.Port)
 	if err != nil {
-		c.app.logs.append(fmt.Sprintf("[p2p][nats-discovery] peer ignorado (addr invalido) agentId=%s: %v", strings.TrimSpace(peer.AgentID), err))
+		c.app.logs.append(fmt.Sprintf("[p2p][nats-discovery] peer ignorado (addr inválido) agentId=%s: %v", strings.TrimSpace(peer.AgentID), err))
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), p2pLibP2PHandshakeTimeout)

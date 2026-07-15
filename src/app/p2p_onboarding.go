@@ -24,7 +24,7 @@ const (
 	onboardingDeployKeyTTL     = 30 * time.Minute
 	onboardingRetryBase        = 30 * time.Second
 	onboardingRetryMax         = 10 * time.Minute
-	onboardingMaxAttempts      = 0 // 0 = ilimitado enquanto nao houver credenciais
+	onboardingMaxAttempts      = 0 // 0 = ilimitado enquanto não houver credenciais
 	onboardingRetryInterval    = 60 * time.Second
 	onboardingPeerRecheckDelay = 60 * time.Second
 	onboardingAttemptTimeout   = 25 * time.Second
@@ -80,7 +80,7 @@ func (a *App) zeroTouchConfigRegistrationAllowed() bool {
 
 func (a *App) tryZeroTouchConfigRegistration(ctx context.Context, state *p2pOnboardingState, reason string) (bool, error) {
 	if a == nil {
-		return false, fmt.Errorf("app indisponivel")
+		return false, fmt.Errorf("app indisponível")
 	}
 	if isAgentConfigured() {
 		return false, nil
@@ -123,7 +123,7 @@ func (a *App) tryZeroTouchConfigRegistration(ctx context.Context, state *p2pOnbo
 // Exits when configured, max attempts reached, or ctx cancelled.
 func (a *App) RunOnboardingLoop(ctx context.Context) {
 	if isAgentConfigured() {
-		a.logs.append("[zero-touch] agente ja configurado, loop de zero-touch config registration nao iniciado")
+		a.logs.append("[zero-touch] agente já configurado, loop de zero-touch config registration não iniciado")
 		return
 	}
 	if !a.zeroTouchConfigRegistrationAllowed() {
@@ -134,11 +134,11 @@ func (a *App) RunOnboardingLoop(ctx context.Context) {
 	}
 
 	state := &p2pOnboardingState{}
-	a.logs.append("[zero-touch] agente generico detectado: aguardando Zero-Touch Config Registration")
+	a.logs.append("[zero-touch] agente genérico detectado: aguardando Zero-Touch Config Registration")
 
 	tryAttempt := func(reason string) bool {
 		if isAgentConfigured() {
-			a.logs.append("[zero-touch] configuracao recebida com sucesso, loop encerrado")
+			a.logs.append("[zero-touch] configuração recebida com sucesso, loop encerrado")
 			return true
 		}
 		state.mu.Lock()
@@ -155,7 +155,7 @@ func (a *App) RunOnboardingLoop(ctx context.Context) {
 			a.logs.append("[zero-touch] tentativa ignorada: outra tentativa em andamento")
 		}
 		if isAgentConfigured() {
-			a.logs.append("[zero-touch] configuracao recebida com sucesso, loop encerrado")
+			a.logs.append("[zero-touch] configuração recebida com sucesso, loop encerrado")
 			return true
 		}
 		return false
@@ -190,9 +190,9 @@ func (a *App) triggerZeroTouchConfigRegistrationOnPeerDiscovery(ctx context.Cont
 	}
 
 	if attempted, err := a.tryZeroTouchConfigRegistration(ctx, nil, "peer-novo:"+peerID); err != nil {
-		a.logs.append("[zero-touch] falha na tentativa imediata apos peer novo " + peerID + ": " + err.Error())
+		a.logs.append("[zero-touch] falha na tentativa imediata após peer novo " + peerID + ": " + err.Error())
 	} else if attempted {
-		a.logs.append("[zero-touch] tentativa imediata executada apos descobrir peer=" + peerID)
+		a.logs.append("[zero-touch] tentativa imediata executada após descobrir peer=" + peerID)
 	}
 
 	timer := time.NewTimer(onboardingPeerRecheckDelay)
@@ -215,7 +215,7 @@ func (a *App) triggerZeroTouchConfigRegistrationOnPeerDiscovery(ctx context.Cont
 
 func (a *App) requestOnboardingFromPeers(ctx context.Context, state *p2pOnboardingState) error {
 	if a.p2pCoord == nil {
-		return fmt.Errorf("coordinator P2P indisponivel")
+		return fmt.Errorf("coordinator P2P indisponível")
 	}
 	peers := a.p2pCoord.GetPeers()
 	if len(peers) == 0 {
@@ -271,7 +271,7 @@ func (a *App) requestOnboardingFromPeers(ctx context.Context, state *p2pOnboardi
 			return nil
 		}
 	}
-	return fmt.Errorf("nenhum peer forneceu configuracao valida")
+	return fmt.Errorf("nenhum peer forneceu configuração válida")
 }
 
 // applyOnboardingOffer validates and persists the received onboarding offer.
@@ -402,7 +402,7 @@ func (a *App) registerWithDeployKey(serverURL, deployKey string) (P2POnboardingR
 
 	a.applyZeroTouchRuntimeConnection(inst)
 	if !isAgentConfigured() {
-		return P2POnboardingResult{}, fmt.Errorf("credenciais persistidas, mas agente ainda nao aparece provisionado")
+		return P2POnboardingResult{}, fmt.Errorf("credenciais persistidas, mas agente ainda não aparece provisionado")
 	}
 
 	a.logs.append("[zero-touch] credenciais persistidas em " + strings.TrimSpace(writePath) + " agentId=" + inst.AgentID)

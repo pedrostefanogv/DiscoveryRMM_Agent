@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	inventoryProvisioningRequiredMessage    = "inventario indisponivel enquanto o agente nao estiver provisionado"
+	inventoryProvisioningRequiredMessage    = "inventário indisponível enquanto o agente não estiver provisionado"
 	postInstallInventoryRefreshDelayDefault = 2 * time.Minute
 	packageManagerTargetSeparator           = "::"
 )
@@ -173,7 +173,7 @@ func normalizeInventoryDB(db DB) DB {
 // GetCatalog resolves the package catalog.
 func (s *Service) GetCatalog() (models.Catalog, error) {
 	if s.getCatalog == nil {
-		return models.Catalog{}, fmt.Errorf("catalogo indisponivel")
+		return models.Catalog{}, fmt.Errorf("catálogo indisponível")
 	}
 	ctx := s.ctx()
 	return s.getCatalog(ctx)
@@ -181,31 +181,31 @@ func (s *Service) GetCatalog() (models.Catalog, error) {
 
 // Install installs the selected package.
 func (s *Service) Install(id string) (string, error) {
-	done := s.beginActivity("instalacao")
+	done := s.beginActivity("instalação")
 	if done != nil {
 		defer done()
 	}
 
 	packageID := strings.TrimSpace(id)
 	if packageID == "" {
-		return "", fmt.Errorf("id do pacote e obrigatorio")
+		return "", fmt.Errorf("id do pacote é obrigatório")
 	}
 
 	s.logf("[install " + packageID + "] " + time.Now().Format("15:04:05"))
 	correlationID := fmt.Sprintf("appstore-install-%s-%d", sanitizeNotificationIDPart(packageID), time.Now().UnixNano())
 
-	s.emitInstallNotification(correlationID, packageID, "install_start", "download", "in_progress", "Instalacao em andamento", "Baixando aplicativo...", nil)
+	s.emitInstallNotification(correlationID, packageID, "install_start", "download", "in_progress", "Instalação em andamento", "Baixando aplicativo...", nil)
 
 	allowed, err := s.resolveAllowed(s.ctx(), packageID)
 	if err != nil {
 		s.logf("[install blocked] " + err.Error())
-		s.emitInstallNotification(correlationID, packageID, "install_failed", "precheck", "failed", "Instalacao bloqueada", "Pacote nao autorizado para este agente.", map[string]any{
+		s.emitInstallNotification(correlationID, packageID, "install_failed", "precheck", "failed", "Instalação bloqueada", "Pacote não autorizado para este agente.", map[string]any{
 			"error": err.Error(),
 		})
 		return "", err
 	}
 
-	s.emitInstallNotification(correlationID, packageID, "install_start", "instalacao", "in_progress", "Instalacao em andamento", "Executando instalador...", nil)
+	s.emitInstallNotification(correlationID, packageID, "install_start", "instalação", "in_progress", "Instalação em andamento", "Executando instalador...", nil)
 
 	var out string
 	switch normalizeAppStoreInstallationType(allowed.InstallationType) {
@@ -214,20 +214,20 @@ func (s *Service) Install(id string) (string, error) {
 	case string(appstore.InstallationChocolatey):
 		out, err = s.runChocolatey(s.ctx(), "install", packageID)
 	default:
-		err = fmt.Errorf("installationType %q nao suportado", allowed.InstallationType)
+		err = fmt.Errorf("installationType %q não suportado", allowed.InstallationType)
 	}
 	s.logf(out)
 
 	if err != nil {
-		s.emitInstallNotification(correlationID, packageID, "install_failed", "instalacao", "failed", "Falha na instalacao", "Nao foi possivel concluir a instalacao do aplicativo.", map[string]any{
+		s.emitInstallNotification(correlationID, packageID, "install_failed", "instalação", "failed", "Falha na instalação", "Não foi possível concluir a instalação do aplicativo.", map[string]any{
 			"error": err.Error(),
 		})
 		return out, err
 	}
 
-	s.emitInstallNotification(correlationID, packageID, "install_end", "validacao", "completed", "Instalacao concluida", "Aplicativo instalado com sucesso.", nil)
+	s.emitInstallNotification(correlationID, packageID, "install_end", "validação", "completed", "Instalação concluída", "Aplicativo instalado com sucesso.", nil)
 	if hasRebootSignal(out) {
-		s.emitInstallNotification(correlationID, packageID, "reboot_required", "reinicio", "completed", "Reinicio necessario", "Reinicie o computador para concluir a instalacao.", nil)
+		s.emitInstallNotification(correlationID, packageID, "reboot_required", "reinício", "completed", "Reinício necessário", "Reinicie o computador para concluir a instalação.", nil)
 	}
 	s.scheduleInventoryRefreshAfterPackageChange("install", packageID)
 
@@ -236,7 +236,7 @@ func (s *Service) Install(id string) (string, error) {
 
 // Uninstall removes a package.
 func (s *Service) Uninstall(id string) (string, error) {
-	done := s.beginActivity("desinstalacao")
+	done := s.beginActivity("desinstalação")
 	if done != nil {
 		defer done()
 	}
@@ -248,13 +248,13 @@ func (s *Service) Uninstall(id string) (string, error) {
 
 // Upgrade upgrades a package.
 func (s *Service) Upgrade(id string) (string, error) {
-	done := s.beginActivity("atualizacao")
+	done := s.beginActivity("atualização")
 	if done != nil {
 		defer done()
 	}
 	sourceHint, packageID := splitPackageManagerTarget(id)
 	if packageID == "" {
-		return "", fmt.Errorf("id do pacote e obrigatorio")
+		return "", fmt.Errorf("id do pacote é obrigatório")
 	}
 
 	logTarget := packageID
@@ -276,7 +276,7 @@ func (s *Service) Upgrade(id string) (string, error) {
 	case string(appstore.InstallationChocolatey):
 		out, err = s.runChocolatey(s.ctx(), "upgrade", packageID)
 	default:
-		err = fmt.Errorf("installationType %q nao suportado", allowed.InstallationType)
+		err = fmt.Errorf("installationType %q não suportado", allowed.InstallationType)
 	}
 	s.logf(out)
 	if err == nil {
@@ -287,7 +287,7 @@ func (s *Service) Upgrade(id string) (string, error) {
 
 // UpgradeAll upgrades all packages.
 func (s *Service) UpgradeAll() (string, error) {
-	done := s.beginActivity("atualizacao em lote")
+	done := s.beginActivity("atualização em lote")
 	if done != nil {
 		defer done()
 	}
@@ -317,7 +317,7 @@ func (s *Service) resolveAllowedPackage(ctx context.Context, sourceHint, package
 		return s.resolveAllowedByType(ctx, sourceHint, packageID)
 	}
 	if s.resolveAllowed == nil {
-		return appstore.Item{}, fmt.Errorf("resolucao de pacote indisponivel")
+		return appstore.Item{}, fmt.Errorf("resolução de pacote indisponível")
 	}
 	return s.resolveAllowed(ctx, packageID)
 }
@@ -354,7 +354,7 @@ func (s *Service) runDelayedInventoryRefreshAfterPackageChange() {
 		return
 	}
 	if s.inventory == nil {
-		s.logf("[inventory-refresh] ignorado: provider de inventario indisponivel")
+		s.logf("[inventory-refresh] ignorado: provider de inventário indisponível")
 		return
 	}
 
@@ -365,13 +365,13 @@ func (s *Service) runDelayedInventoryRefreshAfterPackageChange() {
 
 	report, err := s.collectInventoryWithHeartbeat(ctx)
 	if err != nil {
-		s.logf("[inventory-refresh] falha ao atualizar inventario: " + err.Error())
+		s.logf("[inventory-refresh] falha ao atualizar inventário: " + err.Error())
 		return
 	}
 	if s.cache != nil {
 		s.cache.Set(report)
 	}
-	s.logf("[inventory-refresh] inventario atualizado apos alteracoes de software")
+	s.logf("[inventory-refresh] inventário atualizado após alterações de software")
 }
 
 func (s *Service) inventoryProvisioned() bool {
@@ -398,7 +398,7 @@ func (s *Service) collectNetworkConnectionsWithHeartbeat(ctx context.Context) (m
 
 // GetInventory returns cached inventory or collects if needed.
 func (s *Service) GetInventory() (models.InventoryReport, error) {
-	done := s.beginActivity("coleta de inventario")
+	done := s.beginActivity("coleta de inventário")
 	if done != nil {
 		defer done()
 	}
@@ -423,7 +423,7 @@ func (s *Service) GetInventory() (models.InventoryReport, error) {
 
 // RefreshInventory collects inventory and refreshes cache.
 func (s *Service) RefreshInventory() (models.InventoryReport, error) {
-	done := s.beginActivity("atualizacao de inventario")
+	done := s.beginActivity("atualização de inventário")
 	if done != nil {
 		defer done()
 	}
@@ -442,7 +442,7 @@ func (s *Service) RefreshInventory() (models.InventoryReport, error) {
 
 // RefreshNetworkConnections collects only listening ports and open sockets.
 func (s *Service) RefreshNetworkConnections() (models.NetworkConnectionsReport, error) {
-	done := s.beginActivity("atualizacao de conexoes de rede")
+	done := s.beginActivity("atualização de conexões de rede")
 	if done != nil {
 		defer done()
 	}
@@ -465,7 +465,7 @@ func (s *Service) RefreshNetworkConnections() (models.NetworkConnectionsReport, 
 
 // RefreshSoftware collects only installed software.
 func (s *Service) RefreshSoftware() ([]models.SoftwareItem, error) {
-	done := s.beginActivity("atualizacao de softwares")
+	done := s.beginActivity("atualização de softwares")
 	if done != nil {
 		defer done()
 	}

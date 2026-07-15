@@ -14,7 +14,7 @@ func (c *p2pCoordinator) DownloadArtifactFromPeer(ctx context.Context, artifactN
 	rawArtifactName := strings.TrimSpace(artifactName)
 	artifactName = sanitizeArtifactName(artifactName)
 	if artifactName == "" {
-		err := fmt.Errorf("artifact invalido")
+		err := fmt.Errorf("artifact inválido")
 		c.appendAudit("pull", rawArtifactName, sourcePeerID, "libp2p", false, err.Error())
 		return P2PArtifactView{}, err
 	}
@@ -40,7 +40,7 @@ func (c *p2pCoordinator) DownloadArtifactFromPeer(ctx context.Context, artifactN
 	if h, registry := c.libp2pHostAndRegistry(); h != nil && registry != nil {
 		peerID, ok := registry.Lookup(sourcePeerID)
 		if !ok {
-			err := fmt.Errorf("peer nao registrado no libp2p")
+			err := fmt.Errorf("peer não registrado no libp2p")
 			c.appendAudit("pull", artifactName, sourcePeerID, "libp2p", false, err.Error())
 			return P2PArtifactView{}, err
 		}
@@ -73,7 +73,7 @@ func (c *p2pCoordinator) DownloadArtifactFromPeer(ctx context.Context, artifactN
 		return c.buildArtifactView(artifactName, access.ArtifactID, path)
 	}
 
-	err := fmt.Errorf("libp2p indisponivel para download do artifact")
+	err := fmt.Errorf("libp2p indisponível para download do artifact")
 	c.appendAudit("pull", artifactName, sourcePeerID, "libp2p", false, err.Error())
 	return P2PArtifactView{}, err
 }
@@ -84,7 +84,7 @@ func (c *p2pCoordinator) downloadArtifactSwarm(ctx context.Context, artifactName
 	rawArtifactName := strings.TrimSpace(artifactName)
 	artifactName = sanitizeArtifactName(artifactName)
 	if artifactName == "" {
-		err := fmt.Errorf("artifact invalido")
+		err := fmt.Errorf("artifact inválido")
 		c.appendAudit("swarm-pull", rawArtifactName, "", "automation", false, err.Error())
 		return P2PArtifactView{}, err
 	}
@@ -145,7 +145,7 @@ func (c *p2pCoordinator) downloadArtifactSwarm(ctx context.Context, artifactName
 	// Peer único: download simples (sem manifest).
 	if len(accesses) < 2 || cfg.ChunkSizeBytes == 0 {
 		if len(peerEntries) == 0 || h == nil {
-			err := fmt.Errorf("libp2p indisponivel para download do artifact")
+			err := fmt.Errorf("libp2p indisponível para download do artifact")
 			c.appendAudit("swarm-pull", artifactName, "", "automation", false, err.Error())
 			return P2PArtifactView{}, err
 		}
@@ -175,7 +175,7 @@ func (c *p2pCoordinator) downloadArtifactSwarm(ctx context.Context, artifactName
 	// Multi-peer: buscar manifest e fazer download em chunks via libp2p.
 	var manifest P2PChunkManifest
 	if len(peerEntries) == 0 || h == nil {
-		err := fmt.Errorf("libp2p indisponivel para manifest do artifact")
+		err := fmt.Errorf("libp2p indisponível para manifest do artifact")
 		c.appendAudit("swarm-pull", artifactName, "", "automation", false, err.Error())
 		return P2PArtifactView{}, err
 	}

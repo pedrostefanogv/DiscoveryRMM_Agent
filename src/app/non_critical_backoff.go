@@ -37,7 +37,7 @@ func (a *App) handleGlobalPong(pong agentconn.GlobalPongMessage) {
 		a.extendNonCriticalBackoff(delay, "tenant.global.pong:serverOverloaded=true")
 		remaining, deferred, _ := a.nonCriticalBackoffWindow()
 		if deferred {
-			a.logs.append(fmt.Sprintf("[agent-sync] servidor sobrecarregado; trafego nao essencial adiado por %s", remaining.Round(time.Second)))
+			a.logs.append(fmt.Sprintf("[agent-sync] servidor sobrecarregado; tráfego não essencial adiado por %s", remaining.Round(time.Second)))
 		}
 		return
 	}

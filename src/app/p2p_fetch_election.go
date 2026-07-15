@@ -152,7 +152,7 @@ func (c *p2pCoordinator) runLocalElection(ctx context.Context, artifactID string
 
 	// Verificar se o host está apto para participar
 	if !c.isLoadOK() {
-		c.app.logs.append(fmt.Sprintf("[p2p][election] artifact=%s host sobrecarregado, nao participando da eleicao",
+		c.app.logs.append(fmt.Sprintf("[p2p][election] artifact=%s host sobrecarregado, não participando da eleição",
 			artifactID))
 		return
 	}

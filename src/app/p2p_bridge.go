@@ -33,11 +33,11 @@ func (a *App) SetP2PConfig(cfg P2PConfig) error {
 	}
 	inst.P2P = cfg
 	if _, err := persistInstallerConfig(path, inst); err != nil {
-		a.logs.append("[p2p] falha ao persistir configuracao em config.json: " + err.Error())
+		a.logs.append("[p2p] falha ao persistir configuração em config.json: " + err.Error())
 		return err
 	}
 
-	a.logs.append(fmt.Sprintf("[p2p] configuracao atualizada: enabled=%t mode=%s ttlHours=%d seedPercent=%d minSeeds=%d",
+	a.logs.append(fmt.Sprintf("[p2p] configuração atualizada: enabled=%t mode=%s ttlHours=%d seedPercent=%d minSeeds=%d",
 		cfg.Enabled, cfg.DiscoveryMode, cfg.TempTTLHours, cfg.SeedPercent, cfg.MinSeeds))
 	return nil
 }
@@ -65,7 +65,7 @@ func (a *App) RefreshP2PPeerCatalog() {
 
 func (a *App) SyncP2PBootstrapNow() (string, error) {
 	if a.p2pCoord == nil {
-		return "", fmt.Errorf("coordinator P2P indisponivel")
+		return "", fmt.Errorf("coordinator P2P indisponível")
 	}
 	ctx := a.ctx
 	if ctx == nil {
@@ -97,15 +97,15 @@ func (a *App) SyncP2PBootstrapNow() (string, error) {
 		return "", fmt.Errorf("descoberta LAN: %v; cloud bootstrap: %v", localErr, cloudErr)
 	}
 	if localErr != nil && cloudErr == nil {
-		return "sincronizacao concluida: " + strings.Join(parts, " | ") + " (descoberta LAN com aviso)", nil
+		return "sincronização concluída: " + strings.Join(parts, " | ") + " (descoberta LAN com aviso)", nil
 	}
 	if localErr == nil && cloudErr != nil && cloudEnabled {
-		return "sincronizacao concluida: " + strings.Join(parts, " | ") + " (cloud bootstrap com aviso)", nil
+		return "sincronização concluída: " + strings.Join(parts, " | ") + " (cloud bootstrap com aviso)", nil
 	}
 	if len(parts) == 0 {
-		return "sincronizacao concluida sem peers novos", nil
+		return "sincronização concluída sem peers novos", nil
 	}
-	return "sincronizacao concluida: " + strings.Join(parts, " | "), nil
+	return "sincronização concluída: " + strings.Join(parts, " | "), nil
 }
 
 func (a *App) GetP2PPeerArtifactIndex() []P2PPeerArtifactIndexView {
@@ -151,7 +151,7 @@ func (a *App) ComputeP2PSeedPlan(totalAgents int) P2PSeedPlan {
 
 func (a *App) GetP2PArtifactAccess(artifactName, targetPeerID string) (P2PArtifactAccess, error) {
 	if a.p2pCoord == nil {
-		return P2PArtifactAccess{}, fmt.Errorf("coordinator P2P indisponivel")
+		return P2PArtifactAccess{}, fmt.Errorf("coordinator P2P indisponível")
 	}
 	return a.p2pCoord.GetArtifactAccess(artifactName, targetPeerID)
 }
@@ -165,17 +165,17 @@ func (a *App) ListP2PArtifacts() ([]P2PArtifactView, error) {
 
 func (a *App) PublishP2PTestArtifact(artifactName, content string) (P2PArtifactView, error) {
 	if a.p2pCoord == nil {
-		return P2PArtifactView{}, fmt.Errorf("coordinator P2P indisponivel")
+		return P2PArtifactView{}, fmt.Errorf("coordinator P2P indisponível")
 	}
 	return a.p2pCoord.PublishTestArtifact(artifactName, content)
 }
 
 func (a *App) SelectAndPublishP2PArtifact() (P2PArtifactView, error) {
 	if a.p2pCoord == nil {
-		return P2PArtifactView{}, fmt.Errorf("coordinator P2P indisponivel")
+		return P2PArtifactView{}, fmt.Errorf("coordinator P2P indisponível")
 	}
 	if a.ctx == nil {
-		return P2PArtifactView{}, fmt.Errorf("contexto de runtime indisponivel")
+		return P2PArtifactView{}, fmt.Errorf("contexto de runtime indisponível")
 	}
 	selectedPath, err := wailsRuntime.OpenFileDialog(a.ctx, wailsRuntime.OpenDialogOptions{})
 	if err != nil {
@@ -194,7 +194,7 @@ func (a *App) ReplicateP2PArtifactToPeer(artifactName, targetPeerID string) (str
 
 func (a *App) PullP2PArtifactFromPeer(artifactName, sourcePeerID string) (P2PArtifactView, error) {
 	if a.p2pCoord == nil {
-		return P2PArtifactView{}, fmt.Errorf("coordinator P2P indisponivel")
+		return P2PArtifactView{}, fmt.Errorf("coordinator P2P indisponível")
 	}
 	ctx := a.ctx
 	if ctx == nil {

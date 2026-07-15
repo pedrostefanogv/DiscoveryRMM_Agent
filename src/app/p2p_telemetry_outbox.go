@@ -23,7 +23,7 @@ const (
 
 func (a *App) buildP2PTelemetryPayload() (P2PTelemetryPayload, error) {
 	if a.p2pCoord == nil {
-		return P2PTelemetryPayload{}, fmt.Errorf("coordinator P2P indisponivel")
+		return P2PTelemetryPayload{}, fmt.Errorf("coordinator P2P indisponível")
 	}
 	status := a.GetP2PDebugStatus()
 	payload := P2PTelemetryPayload{
@@ -131,7 +131,7 @@ func (a *App) drainP2PTelemetryOutbox(ctx context.Context, limit int) error {
 		}
 		var payload P2PTelemetryPayload
 		if err := json.Unmarshal([]byte(entry.PayloadJSON), &payload); err != nil {
-			a.logs.append("[p2p][api] payload outbox invalido removido id=" + strconv.FormatInt(entry.ID, 10) + " erro=" + err.Error())
+			a.logs.append("[p2p][api] payload outbox inválido removido id=" + strconv.FormatInt(entry.ID, 10) + " erro=" + err.Error())
 			_ = a.db.DeleteP2PTelemetryOutbox(entry.ID)
 			continue
 		}

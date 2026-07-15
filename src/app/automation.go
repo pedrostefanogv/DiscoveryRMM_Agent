@@ -181,7 +181,7 @@ func automationScriptLabel(value string) string {
 func automationSourceLabel(value string) string {
 	switch strings.TrimSpace(value) {
 	case "RunNow":
-		return "Execucao imediata"
+		return "Execução imediata"
 	case "Scheduled":
 		return "Agendado"
 	case "ForceSync":
@@ -217,7 +217,7 @@ func automationStatusLabel(value string) string {
 	case "Acknowledged":
 		return "ACK enviado"
 	case "Completed":
-		return "Concluido"
+		return "Concluído"
 	case "Failed":
 		return "Falhou"
 	default:
@@ -252,7 +252,7 @@ func automationExecutionSummary(execution automation.ExecutionRecord) string {
 		parts = append(parts, scriptID)
 	}
 	if len(parts) == 0 {
-		return "Execucao registrada"
+		return "Execução registrada"
 	}
 	return fmt.Sprintf("%s", strings.Join(parts, " • "))
 }

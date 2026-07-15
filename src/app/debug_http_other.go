@@ -16,7 +16,7 @@ func SetDebugFrontendAssets(fs http.FileSystem) {}
 
 // StartDebugHTTPServer is a no-op on non-Windows platforms.
 func (a *App) StartDebugHTTPServer() error {
-	return fmt.Errorf("debug-http nao suportado nesta plataforma")
+	return fmt.Errorf("debug-http não suportado nesta plataforma")
 }
 
 // StopDebugHTTPServer is a no-op on non-Windows platforms.

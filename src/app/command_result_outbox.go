@@ -83,8 +83,8 @@ func (a *App) listDueCommandResultOutbox(transport string, now time.Time, limit 
 	for _, entry := range entries {
 		var payload commandResultOutboxPayload
 		if err := json.Unmarshal([]byte(entry.PayloadJSON), &payload); err != nil {
-			a.logs.append("[agent][outbox] payload invalido removido id=" + strconv.FormatInt(entry.ID, 10) + " erro=" + err.Error())
-			errutil.LogIfErr(a.db.DeleteCommandResultOutbox(entry.ID), "outbox: remover payload invalido")
+			a.logs.append("[agent][outbox] payload inválido removido id=" + strconv.FormatInt(entry.ID, 10) + " erro=" + err.Error())
+			errutil.LogIfErr(a.db.DeleteCommandResultOutbox(entry.ID), "outbox: remover payload inválido")
 			continue
 		}
 		out = append(out, agentconn.CommandResultOutboxItem{

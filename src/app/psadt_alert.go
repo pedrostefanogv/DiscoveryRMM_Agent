@@ -94,7 +94,7 @@ func (a *App) handlePsadtAlert(ctx context.Context, p PsadtAlertPayload) (int, s
 	if runtime.GOOS != "windows" {
 		body, _ := json.Marshal(map[string]string{"action": "skipped_non_windows"})
 		if a != nil {
-			a.logs.append("[agent] psadt-alert ignorado: nao e windows type=" + p.Type + " alertId=" + p.AlertID)
+			a.logs.append("[agent] psadt-alert ignorado: não é windows type=" + p.Type + " alertId=" + p.AlertID)
 		}
 		return 0, string(body), ""
 	}
@@ -347,14 +347,14 @@ func mapPSADTDialogResult(result pstypes.DialogBoxResult, p PsadtAlertPayload) s
 // showPowerActionWarning builds and executes a PSADT prompt before a system
 // restart or shutdown.
 //
-//   - force=true:  Exibe Show-ADTBalloonTip (apenas notificacao informativa).
-//     O shutdown e inevitavel — o balloon so avisa o usuario.
+//   - force=true:  Exibe Show-ADTBalloonTip (apenas notificação informativa).
+//     O shutdown é inevitável — o balloon só avisa o usuário.
 //     Sempre retorna "proceed".
-//   - force=false: Exibe Show-ADTDialogBox com botoes Yes/No.
-//     Usuario pode confirmar ("proceed") ou adiar ("deferred").
+//   - force=false: Exibe Show-ADTDialogBox com botões Yes/No.
+//     Usuário pode confirmar ("proceed") ou adiar ("deferred").
 //
-// Quando PSADT nao esta instalado, o script escreve 'proceed' e o Go faz
-// fallback para shutdown.exe com dialogo nativo do Windows.
+// Quando PSADT não está instalado, o script escreve 'proceed' e o Go faz
+// fallback para shutdown.exe com diálogo nativo do Windows.
 func (a *App) showPowerActionWarning(ctx context.Context, action string, delaySeconds int, force bool, msg string) (string, error) {
 	if runtime.GOOS != "windows" {
 		return "proceed", nil
@@ -368,7 +368,7 @@ func (a *App) showPowerActionWarning(ctx context.Context, action string, delaySe
 	}
 	if msg == "" {
 		if force {
-			msg = fmt.Sprintf("O administrador solicitou a %s do sistema. O computador sera %s em %d segundos. Salve seu trabalho.", label, actionPt, delaySeconds)
+			msg = fmt.Sprintf("O administrador solicitou a %s do sistema. O computador será %s em %d segundos. Salve seu trabalho.", label, actionPt, delaySeconds)
 		} else {
 			msg = fmt.Sprintf("O administrador solicitou a %s do sistema. Deseja prosseguir?", label)
 		}
@@ -412,14 +412,14 @@ func (a *App) showPowerActionWarning(ctx context.Context, action string, delaySe
 		return "proceed", nil
 	}
 
-	// O output do PSADT contem dezenas de linhas de log de inicializacao
-	// antes da palavra de decisao (proceed/deferred). TrimSpace remove
-	// espacos das bordas, mas nao quebras de linha no meio.
-	// Extraimos apenas a ultima linha nao-vazia, que e a decisao real.
+	// O output do PSADT contém dezenas de linhas de log de inicialização
+	// antes da palavra de decisão (proceed/deferred). TrimSpace remove
+	// espaços das bordas, mas não quebras de linha no meio.
+	// Extraímos apenas a última linha não-vazia, que é a decisão real.
 	result := extractLastLine(strings.TrimSpace(rawOutput))
 	a.logs.append(fmt.Sprintf("[agent] psadt-%s-prompt [OK] result=%s scriptSize=%dB", action, result, len(script)))
 	if len(rawOutput) > len(result)+10 {
-		a.logs.append(fmt.Sprintf("[agent] psadt-%s-prompt [DIAG] rawOutput possui %d linhas — apenas a ultima linha foi usada como decisao", action, countLines(rawOutput)))
+		a.logs.append(fmt.Sprintf("[agent] psadt-%s-prompt [DIAG] rawOutput possui %d linhas — apenas a última linha foi usada como decisão", action, countLines(rawOutput)))
 	}
 
 	// force=true: balloon apenas informativo — sempre prossegue.
@@ -451,7 +451,7 @@ func (a *App) showPowerActionWarning(ctx context.Context, action string, delaySe
 //     Usa Invoke-ADTClientServerOperation (processo separado na sessao do usuario)
 //     para garantir que a UI aparece mesmo quando o caller Go usa HideWindow.
 //
-// Se o modulo PSADT nao estiver disponivel, retorna 'proceed' para fallback
+// Se o módulo PSADT não estiver disponível, retorna 'proceed' para fallback
 // com shutdown.exe (dialogo nativo do Windows).
 func buildPowerActionWarningScript(action string, delaySeconds int, force bool, message string) (string, time.Duration) {
 	title := "Reinicializacao do Sistema"
@@ -460,7 +460,7 @@ func buildPowerActionWarningScript(action string, delaySeconds int, force bool, 
 	}
 
 	// Header: importa PSADT e abre sessao.
-	// Se o modulo nao estiver disponivel, retorna 'proceed' para fallback
+	// Se o módulo não estiver disponível, retorna 'proceed' para fallback
 	// para shutdown.exe com dialogo nativo do Windows.
 	header := "$ErrorActionPreference = 'Stop'\n" +
 		"[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)\n" +
@@ -483,7 +483,7 @@ func buildPowerActionWarningScript(action string, delaySeconds int, force bool, 
 	if force {
 		// Modo forcado: balloon tip informativo (nao-bloqueante).
 		// O shutdown.exe e agendado em seguida pelo Go com o delay configurado.
-		// O usuario ve o balloon com o aviso, mas nao pode cancelar.
+		// O usuário vê o balloon com o aviso, mas não pode cancelar.
 		body := header +
 			fmt.Sprintf("Show-ADTBalloonTip -BalloonTipTitle %s -BalloonTipText %s -BalloonTipIcon 'Warning'\n",
 				psEscape(title), psEscape(message)) +
@@ -496,17 +496,17 @@ func buildPowerActionWarningScript(action string, delaySeconds int, force bool, 
 
 	// Modo nao-forcado: prompt interativo Yes/No via Show-ADTInstallationPrompt.
 	// IMPORTANTE: Usamos Show-ADTInstallationPrompt em vez de Show-ADTDialogBox porque
-	// Show-ADTDialogBox tenta criar WPF diretamente no processo atual — que nao tem
+	// Show-ADTDialogBox tenta criar WPF diretamente no processo atual — que não tem
 	// contexto de janela devido ao HideWindow/CREATE_NO_WINDOW aplicado pelo Go.
 	// Show-ADTInstallationPrompt usa Invoke-ADTClientServerOperation, que spawna um
 	// processo separado na sessao do usuario logado com contexto de janela real.
 	//
 	// Retorno: PSADT escreve "Resultado: <texto_do_botao>" no stdout.
 	//   "Yes" / "Sim"   -> proceed
-	//   "No" / "Nao"     -> deferred
+	//   "No" / "Não"     -> deferred
 	//   Timeout           -> deferred
 	// Compatibilidade: em PSADT 4.1.8, Show-ADTInstallationPrompt aceita
-	// -NotTopMost, mas nao -TopMost. Mantemos o comportamento padrao
+	// -NotTopMost, mas não -TopMost. Mantemos o comportamento padrão
 	// (topmost=true) sem forcar parametro para evitar NamedParameterNotFound.
 	body := header +
 		"$promptResult = Show-ADTInstallationPrompt" +
@@ -635,7 +635,7 @@ func (a *App) executeSystemPowerAction(_ context.Context, action string, delaySe
 //   - format_file_corrupt:       Arquivo .ps1xml corrompido (ex: Dism.Format.ps1xml com NUL bytes)
 //   - module_not_found:          PSAppDeployToolkit nao encontrado
 //   - module_import_failed:      Modulo encontrado mas falha ao carregar (ex: dependencias)
-//   - invalid_parameter:         Parametro invalido para cmdlet (ex: -TopMost nao suportado)
+//   - invalid_parameter:         Parâmetro inválido para cmdlet (ex: -TopMost não suportado)
 //   - session_open_failed:       Open-ADTSession falhou
 //   - cmdlet_not_found:          Cmdlet PSADT nao reconhecido
 //   - cmdlet_failed:             Cmdlet PSADT executou mas retornou erro
@@ -648,7 +648,7 @@ func classifyPsadtPowerShellError(output string, err error) string {
 	errStr := err.Error()
 	lower := strings.ToLower(output + "\n" + errStr)
 
-	// 1. ExecutionPolicy bloqueando execucao de scripts
+	// 1. ExecutionPolicy bloqueando execução de scripts
 	if strings.Contains(lower, "pssecurityexception") ||
 		strings.Contains(lower, "execução de scripts foi desabilitada") ||
 		strings.Contains(lower, "execution of scripts is disabled") ||

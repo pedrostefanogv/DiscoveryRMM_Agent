@@ -282,7 +282,7 @@ func (c *p2pCoordinator) touchP2PTempDir() error {
 
 func (c *p2pCoordinator) startTransferServer(ctx context.Context) error {
 	if c.transferServer == nil {
-		return fmt.Errorf("servidor de transferencia nao inicializado")
+		return fmt.Errorf("servidor de transferência não inicializado")
 	}
 	cfg := c.app.GetP2PConfig()
 	debugCfg := c.app.GetDebugConfig()

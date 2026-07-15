@@ -68,7 +68,7 @@ func TestInstallerConfigUnmarshalAutoProvisioningCompat(t *testing.T) {
 func TestInstallerConfigUnmarshalAutoProvisioningInvalid(t *testing.T) {
 	var cfg InstallerConfig
 	if err := json.Unmarshal([]byte(`{"autoProvisioning":2}`), &cfg); err == nil {
-		t.Fatal("esperava erro para autoProvisioning invalido")
+		t.Fatal("esperava erro para autoProvisioning inválido")
 	}
 	if err := json.Unmarshal([]byte(`{"discoveryEnabled":2}`), &cfg); err == nil {
 		t.Fatal("esperava erro para discoveryEnabled invalido")

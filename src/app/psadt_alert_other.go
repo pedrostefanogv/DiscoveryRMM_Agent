@@ -76,7 +76,7 @@ func normalizePsadtAlertIcon(raw string) string {
 func (a *App) handlePsadtAlert(_ context.Context, p PsadtAlertPayload) (int, string, string) {
 	body, _ := json.Marshal(map[string]string{"action": "skipped_non_windows"})
 	if a != nil {
-		a.logs.append("[agent] psadt-alert ignorado: nao e windows type=" + p.Type + " alertId=" + p.AlertID)
+		a.logs.append("[agent] psadt-alert ignorado: não é windows type=" + p.Type + " alertId=" + p.AlertID)
 	}
 	return 0, string(body), ""
 }

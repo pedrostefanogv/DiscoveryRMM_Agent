@@ -203,7 +203,7 @@ func runLocalInstaller(ctx context.Context, artifactPath string) (string, error)
 	case ".exe":
 		return executeHiddenProcess(ctx, timeout, artifactPath, []string{"/quiet", "/norestart"})
 	default:
-		return "", fmt.Errorf("formato de instalador nao suportado para P2P: %s", ext)
+		return "", fmt.Errorf("formato de instalador não suportado para P2P: %s", ext)
 	}
 }
 
@@ -217,7 +217,7 @@ func executeHiddenProcess(parent context.Context, timeout time.Duration, executa
 	text := strings.TrimSpace(string(output))
 	if err == nil {
 		if text == "" {
-			text = "instalacao concluida"
+			text = "instalação concluída"
 		}
 		return text, nil
 	}
@@ -225,7 +225,7 @@ func executeHiddenProcess(parent context.Context, timeout time.Duration, executa
 		text = err.Error()
 	}
 	if ctx.Err() == context.DeadlineExceeded {
-		return text, fmt.Errorf("timeout na execucao do instalador")
+		return text, fmt.Errorf("timeout na execução do instalador")
 	}
 	return text, err
 }

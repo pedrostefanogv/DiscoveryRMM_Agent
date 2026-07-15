@@ -64,7 +64,7 @@ func runAgentDecommissionRemoteCleanup(ctx context.Context) error {
 
 	db, dbErr := database.Open(GetDataDir())
 	if dbErr != nil {
-		return fmt.Errorf("falha no delete remoto e nao foi possivel abrir DB para outbox: %w", dbErr)
+		return fmt.Errorf("falha no delete remoto e não foi possível abrir DB para outbox: %w", dbErr)
 	}
 	defer db.Close()
 
@@ -94,7 +94,7 @@ func cleanupAgentDecommissionPaths(paths []string) error {
 		}
 		seen[key] = struct{}{}
 		if err := os.RemoveAll(path); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("falha ao remover diretorio local %s: %w", path, err)
+			return fmt.Errorf("falha ao remover diretório local %s: %w", path, err)
 		}
 	}
 	return nil
@@ -140,7 +140,7 @@ func resolveAgentDecommissionTargetFromInstaller() (agentDecommissionTarget, err
 		return agentDecommissionTarget{}, fmt.Errorf("credenciais insuficientes para delete remoto do agente")
 	}
 	if target.Scheme != "http" && target.Scheme != "https" {
-		return agentDecommissionTarget{}, fmt.Errorf("apiScheme invalido para delete remoto do agente")
+		return agentDecommissionTarget{}, fmt.Errorf("apiScheme inválido para delete remoto do agente")
 	}
 
 	return target, nil

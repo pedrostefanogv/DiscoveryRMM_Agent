@@ -62,11 +62,11 @@ func (a *App) DetectApiFeatures(ctx context.Context) *ApiVersionInfo {
 			if _, hasServer := raw["server"]; hasServer {
 				info.Version = "v1"
 				info.Features = append(info.Features, "config-hierarchical")
-				a.logs.append("[feature-detect] detectada configuracao hierarquica API v1")
+				a.logs.append("[feature-detect] detectada configuração hierárquica API v1")
 			} else {
 				info.Version = "legacy"
 				info.Features = append(info.Features, "config-flat")
-				a.logs.append("[feature-detect] detectada configuracao flat legada")
+				a.logs.append("[feature-detect] detectada configuração flat legada")
 			}
 		}
 	}

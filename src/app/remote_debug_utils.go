@@ -107,7 +107,7 @@ func buildRemoteDebugPublishers(cfg DebugConfig, stream remoteDebugStreamConfig,
 		return nil, fmt.Errorf("subject NATS ausente no comando de remote debug")
 	}
 	if !isCanonicalRemoteDebugSubject(subject) {
-		return nil, fmt.Errorf("subject NATS invalido para remote debug: esperado sufixo .remote-debug.log, recebido=%q", subject)
+		return nil, fmt.Errorf("subject NATS inválido para remote debug: esperado sufixo .remote-debug.log, recebido=%q", subject)
 	}
 
 	if p, err := newNATSRemoteDebugPublisher(strings.TrimSpace(cfg.NatsServer), token, subject, "nats"); err == nil {

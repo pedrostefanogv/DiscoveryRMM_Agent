@@ -164,7 +164,7 @@ func tryParseAgentConfigV1(data []byte) (AgentConfiguration, bool) {
 func parseLegacyAgentConfiguration(data []byte) (AgentConfiguration, error) {
 	var raw map[string]any
 	if err := json.Unmarshal(data, &raw); err != nil {
-		return AgentConfiguration{}, fmt.Errorf("falha ao decodificar configuracao do agent: %w", err)
+		return AgentConfiguration{}, fmt.Errorf("falha ao decodificar configuração do agent: %w", err)
 	}
 	// Helpers
 	getAny := func(keys ...string) any {
@@ -623,7 +623,7 @@ func (a *App) setAgentConfiguration(cfg AgentConfiguration) {
 		clientChanged := strings.TrimSpace(previous.ClientID) != strings.TrimSpace(cfg.ClientID)
 		siteChanged := strings.TrimSpace(previous.SiteID) != strings.TrimSpace(cfg.SiteID)
 		if clientChanged || siteChanged {
-			a.logs.append("[config] contexto NATS canÃ´nico atualizado; reconexao solicitada")
+			a.logs.append("[config] contexto NATS canônico atualizado; reconexão solicitada")
 			a.agentConn.Reload()
 		}
 	}
@@ -670,7 +670,7 @@ func (a *App) applyAgentConfiguration(cfg AgentConfiguration) {
 		if err != nil {
 			a.logs.append("[config] falha ao aplicar seguranca remota: " + err.Error())
 		} else if changed {
-			a.logs.append("[config] seguranca remota aplicada; reconexao solicitada")
+			a.logs.append("[config] segurança remota aplicada; reconexão solicitada")
 		}
 	}
 	a.persistAgentUpdatePolicy(cfg.AgentUpdate)
@@ -684,7 +684,7 @@ func (a *App) applyAgentConfiguration(cfg AgentConfiguration) {
 			a.syncCoord.setPollEvery(time.Duration(*cfg.InventoryIntervalHours) * time.Hour)
 		}
 	}
-	// MeshCentral bootstrap idempotente (instalacao/repair/report) apos refresh de configuracao.
+	// MeshCentral bootstrap idempotente (instalação/repair/report) após refresh de configuração.
 	if cfg.MeshCentralEnabledEffective != nil && *cfg.MeshCentralEnabledEffective {
 		go a.ensureMeshCentralInstalled(a.ctx, "configuration-refresh", true)
 	}

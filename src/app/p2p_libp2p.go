@@ -187,14 +187,14 @@ func (p *p2pLibP2PProvider) Start(
 		ma, err := multiaddr.NewMultiaddr(addrStr)
 		if err != nil {
 			if onTrace != nil {
-				onTrace(fmt.Sprintf("libp2p bootstrap peer multiaddr invalido %q: %v", addrStr, err))
+				onTrace(fmt.Sprintf("libp2p bootstrap peer multiaddr inválido %q: %v", addrStr, err))
 			}
 			continue
 		}
 		pi, err := peer.AddrInfoFromP2pAddr(ma)
 		if err != nil {
 			if onTrace != nil {
-				onTrace(fmt.Sprintf("libp2p bootstrap peer info invalido %q: %v", addrStr, err))
+				onTrace(fmt.Sprintf("libp2p bootstrap peer info inválido %q: %v", addrStr, err))
 			}
 			continue
 		}

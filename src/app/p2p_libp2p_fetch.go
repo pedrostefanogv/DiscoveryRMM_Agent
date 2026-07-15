@@ -23,7 +23,7 @@ func handleStreamFetchCandidacy(s network.Stream, coord *p2pCoordinator) {
 
 	var req libp2pCandidacyRequest
 	if err := json.NewDecoder(bufio.NewReader(s)).Decode(&req); err != nil {
-		_ = json.NewEncoder(s).Encode(libp2pCandidacyResponse{Accepted: false, Message: "payload invalido"})
+		_ = json.NewEncoder(s).Encode(libp2pCandidacyResponse{Accepted: false, Message: "payload inválido"})
 		return
 	}
 

@@ -11,7 +11,7 @@ import (
 // Esta API é exposta via Wails e MCP.
 func (a *App) GetLocalMemories() ([]database.MemoryNote, error) {
 	if a.db == nil {
-		return nil, fmt.Errorf("database nao inicializado")
+		return nil, fmt.Errorf("database não inicializado")
 	}
 	return a.db.ListMemoryNotes()
 }

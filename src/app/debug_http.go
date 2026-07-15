@@ -50,7 +50,7 @@ type debugHTTPServer struct {
 func (a *App) StartDebugHTTPServer() error {
 	fs := getFrontendFS()
 	if fs == nil {
-		return fmt.Errorf("frontend assets nao configurados — chame SetDebugFrontendAssets antes")
+		return fmt.Errorf("frontend assets não configurados — chame SetDebugFrontendAssets antes")
 	}
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -171,7 +171,7 @@ func (a *App) serveDebugAPI(w http.ResponseWriter, r *http.Request) {
 	v := reflect.ValueOf(a)
 	m := v.MethodByName(methodName)
 	if !m.IsValid() {
-		a.writeAPIError(w, http.StatusNotFound, "metodo nao encontrado: "+methodName)
+		a.writeAPIError(w, http.StatusNotFound, "método não encontrado: "+methodName)
 		return
 	}
 

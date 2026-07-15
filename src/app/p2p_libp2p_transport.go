@@ -161,13 +161,13 @@ func handleStreamArtifactAccess(s network.Stream, transfer *p2pTransferServer) {
 
 	var req libp2pAccessRequest
 	if err := json.NewDecoder(bufio.NewReader(s)).Decode(&req); err != nil {
-		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "payload invalido"})
+		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "payload inválido"})
 		return
 	}
 	req.ArtifactName = sanitizeArtifactName(req.ArtifactName)
 	req.RequesterID = strings.TrimSpace(req.RequesterID)
 	if req.ArtifactName == "" {
-		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "artifact invalido"})
+		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "artifact inválido"})
 		return
 	}
 	if req.RequesterID == "" {
@@ -187,13 +187,13 @@ func handleStreamArtifactManifest(s network.Stream, transfer *p2pTransferServer)
 
 	var req libp2pManifestRequest
 	if err := json.NewDecoder(bufio.NewReader(s)).Decode(&req); err != nil {
-		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "payload invalido"})
+		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "payload inválido"})
 		return
 	}
 	req.ArtifactName = sanitizeArtifactName(req.ArtifactName)
 	req.RequesterID = strings.TrimSpace(req.RequesterID)
 	if req.ArtifactName == "" {
-		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "artifact invalido"})
+		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "artifact inválido"})
 		return
 	}
 	transfer.mu.RLock()
@@ -203,7 +203,7 @@ func handleStreamArtifactManifest(s network.Stream, transfer *p2pTransferServer)
 
 	path := filepath.Join(tempDir, req.ArtifactName)
 	if _, err := os.Stat(path); err != nil {
-		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "artifact nao encontrado"})
+		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "artifact não encontrado"})
 		return
 	}
 
@@ -239,12 +239,12 @@ func handleStreamArtifactGet(s network.Stream, transfer *p2pTransferServer) {
 
 	var req libp2pGetRequest
 	if err := json.NewDecoder(bufio.NewReader(s)).Decode(&req); err != nil {
-		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "payload invalido"})
+		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "payload inválido"})
 		return
 	}
 	req.ArtifactName = sanitizeArtifactName(req.ArtifactName)
 	if req.ArtifactName == "" {
-		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "artifact invalido"})
+		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "artifact inválido"})
 		return
 	}
 	transfer.mu.RLock()
@@ -254,7 +254,7 @@ func handleStreamArtifactGet(s network.Stream, transfer *p2pTransferServer) {
 	path := filepath.Join(tempDir, req.ArtifactName)
 	info, err := os.Stat(path)
 	if err != nil || info.IsDir() {
-		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "artifact nao encontrado"})
+		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "artifact não encontrado"})
 		return
 	}
 	checksum, err := computeFileSHA256(path)
@@ -273,7 +273,7 @@ func handleStreamArtifactGet(s network.Stream, transfer *p2pTransferServer) {
 		rangeEnd = totalSize - 1
 	}
 	if rangeStart > rangeEnd {
-		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "range invalido"})
+		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "range inválido"})
 		return
 	}
 	chunkLen := rangeEnd - rangeStart + 1
@@ -442,7 +442,7 @@ func decodeLibp2pGetHeaderAndPayload(stream io.Reader) (libp2pGetResponse, io.Re
 		return libp2pGetResponse{}, nil, fmt.Errorf("resposta de get invalida")
 	}
 	if hdr.RangeEnd < hdr.RangeStart {
-		return libp2pGetResponse{}, nil, fmt.Errorf("range retornado invalido")
+		return libp2pGetResponse{}, nil, fmt.Errorf("range retornado inválido")
 	}
 	if payloadLen := hdr.RangeEnd - hdr.RangeStart + 1; payloadLen <= 0 {
 		return libp2pGetResponse{}, nil, fmt.Errorf("payload vazio")
@@ -461,7 +461,7 @@ func decodeLibp2pGetHeaderAndPayload(stream io.Reader) (libp2pGetResponse, io.Re
 
 func readPayloadExact(reader io.Reader, expected int64) ([]byte, error) {
 	if expected < 0 {
-		return nil, fmt.Errorf("tamanho de payload invalido")
+		return nil, fmt.Errorf("tamanho de payload inválido")
 	}
 	if expected > int64(^uint(0)>>1) {
 		return nil, fmt.Errorf("payload grande demais")
@@ -479,7 +479,7 @@ func readPayloadExact(reader io.Reader, expected int64) ([]byte, error) {
 // onProgress Ã© opcional â€” quando != nil, chamado com (bytesLidosNoChunk, tamanhoDoChunk).
 func libp2pDownloadChunk(ctx context.Context, h host.Host, peerID peer.ID, artifactName, requesterID string, chunk P2PChunk, destFile string, onProgress func(readSoFar, total int64)) error {
 	if chunk.Size <= 0 {
-		return fmt.Errorf("chunk %d: tamanho invalido", chunk.Index)
+		return fmt.Errorf("chunk %d: tamanho inválido", chunk.Index)
 	}
 	if chunk.Offset < 0 {
 		return fmt.Errorf("chunk %d: offset invalido", chunk.Index)

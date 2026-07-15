@@ -219,7 +219,7 @@ func NewApp(opts AppStartupOptions) *App {
 			Metadata:       req.Metadata,
 		})
 		if !resp.Accepted {
-			a.logs.append("[automation] notificacao nao aceita: " + strings.TrimSpace(resp.AgentAction))
+			a.logs.append("[automation] notificação não aceita: " + strings.TrimSpace(resp.AgentAction))
 		}
 		return automation.AutomationNotificationResponse{
 			Accepted:    resp.Accepted,
@@ -397,7 +397,7 @@ func NewApp(opts AppStartupOptions) *App {
 		},
 		DownloadFromPeer: func(ctx context.Context, artifactID, peerID string) (string, error) {
 			if a.p2pCoord == nil {
-				return "", errors.New("p2p indisponivel")
+				return "", errors.New("p2p indisponível")
 			}
 			view, err := a.p2pCoord.DownloadArtifactByID(ctx, artifactID, peerID)
 			if err != nil {
@@ -428,9 +428,9 @@ func NewApp(opts AppStartupOptions) *App {
 	})
 	if logPath := platform.LogFilePath(); logPath != "" {
 		if err := a.logs.enableFilePersistence(logPath); err != nil {
-			log.Printf("[startup] aviso: falha ao habilitar persistencia de logs em arquivo: %v", err)
+			log.Printf("[startup] aviso: falha ao habilitar persistência de logs em arquivo: %v", err)
 		} else {
-			a.logs.append("[startup] persistencia de logs habilitada em " + logPath)
+			a.logs.append("[startup] persistência de logs habilitada em " + logPath)
 		}
 	}
 	a.loadPersistedChatConfig()
@@ -441,7 +441,7 @@ func NewApp(opts AppStartupOptions) *App {
 	a.queuedForceHeartbeat.Store(false)
 
 	if opts.DebugMode {
-		a.logs.append("[startup] modo debug ativo por tecla de atalho (execucao atual)")
+		a.logs.append("[startup] modo debug ativo por tecla de atalho (execução atual)")
 	}
 
 	normalizePSADTConfigDefaults(&a.agentConfig.PSADT)
@@ -665,7 +665,7 @@ func (a *App) startup(ctx context.Context) {
 		defer a.startupWg.Done()
 
 		if !a.isInventoryProvisioned() {
-			log.Println("[startup] inventory-startup: ignorado (agente nao provisionado)")
+			log.Println("[startup] inventory-startup: ignorado (agente não provisionado)")
 			return
 		}
 
@@ -814,8 +814,8 @@ func (a *App) SendTestHeartbeat() string {
 		a.logs.append("[heartbeat][manual] heartbeat manual enviado com sucesso")
 		return "heartbeat manual enviado com sucesso"
 	}
-	a.logs.append("[heartbeat][manual] falha ao enviar heartbeat manual: timeout ou nenhuma conexao ativa")
-	return "falha ao enviar heartbeat manual: timeout ou nenhuma conexao ativa"
+	a.logs.append("[heartbeat][manual] falha ao enviar heartbeat manual: timeout ou nenhuma conexão ativa")
+	return "falha ao enviar heartbeat manual: timeout ou nenhuma conexão ativa"
 }
 
 func (a *App) startupLogf(format string, args ...any) {

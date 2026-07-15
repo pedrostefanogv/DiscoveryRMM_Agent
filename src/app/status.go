@@ -244,7 +244,7 @@ func applyRealtimeStatus(out *StatusOverview, rt RealtimeStatus) {
 	if rt.NATSConnected {
 		out.RealtimeMessage = "Realtime operacional"
 	} else {
-		out.RealtimeMessage = "Realtime indisponivel no momento"
+		out.RealtimeMessage = "Realtime indisponível no momento"
 	}
 }
 
@@ -258,7 +258,7 @@ func applyRealtimeFallbackFromAgentStatus(out *StatusOverview, agent AgentStatus
 	}
 	transportConnected := agent.TransportConnected || agent.Connected
 	if !transportConnected {
-		out.RealtimeMessage = "endpoint /api/v1/agent-auth/me/realtime/status nao autorizado para o token do agent"
+		out.RealtimeMessage = "endpoint /api/v1/agent-auth/me/realtime/status não autorizado para o token do agent"
 		return
 	}
 
@@ -268,7 +268,7 @@ func applyRealtimeFallbackFromAgentStatus(out *StatusOverview, agent AgentStatus
 	switch transport {
 	case "nats", "nats-ws", "nats-wss":
 		out.RealtimeNATSConnected = true
-		out.RealtimeMessage = "sessao remota ativa via NATS; endpoint /api/v1/agent-auth/me/realtime/status indisponivel ou token rejeitado"
+		out.RealtimeMessage = "sessão remota ativa via NATS; endpoint /api/v1/agent-auth/me/realtime/status indisponível ou token rejeitado"
 	default:
 		out.RealtimeMessage = "sessao remota ativa; endpoint /api/v1/agent-auth/me/realtime/status indisponivel ou token rejeitado"
 	}

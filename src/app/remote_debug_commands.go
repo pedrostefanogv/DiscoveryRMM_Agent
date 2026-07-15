@@ -107,7 +107,7 @@ func parseAgentUpdateCommand(payload any) (agentUpdateCommand, error) {
 
 func (a *App) requestAgentUpdateCheck(_ context.Context, source string) error {
 	if a == nil {
-		return fmt.Errorf("app indisponivel")
+		return fmt.Errorf("app indisponível")
 	}
 	source = strings.TrimSpace(source)
 	if source == "" {
@@ -163,7 +163,7 @@ func parseNotificationDispatchPayload(payload any) (NotificationDispatchRequest,
 	default:
 		raw, err := json.Marshal(typed)
 		if err != nil {
-			return NotificationDispatchRequest{}, fmt.Errorf("falha ao serializar payload de notificacao: %w", err)
+			return NotificationDispatchRequest{}, fmt.Errorf("falha ao serializar payload de notificação: %w", err)
 		}
 		var req NotificationDispatchRequest
 		if err := json.Unmarshal(raw, &req); err != nil {

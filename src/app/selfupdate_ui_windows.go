@@ -93,6 +93,6 @@ func (a *App) selfUpdateInstallWithPSADT(ctx context.Context, exePath, targetVer
 		return fmt.Errorf("instalador retornou exit code %d", result.ExitCode)
 	}
 
-	a.logs.append("[selfupdate] PSADT UI concluido com sucesso: versao=" + targetVersion)
+	a.logs.append("[selfupdate] PSADT UI concluído com sucesso: versão=" + targetVersion)
 	return nil
 }

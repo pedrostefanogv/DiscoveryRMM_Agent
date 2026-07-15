@@ -133,12 +133,12 @@ func (s *p2pTransferServer) BuildArtifactAccess(artifactName, targetPeerID strin
 	defer s.mu.RUnlock()
 
 	if s.server == nil || s.listener == nil {
-		return P2PArtifactAccess{}, errors.New("servidor P2P HTTP nao iniciado")
+		return P2PArtifactAccess{}, errors.New("servidor P2P HTTP não iniciado")
 	}
 
 	artifactName = sanitizeArtifactName(artifactName)
 	if artifactName == "" {
-		return P2PArtifactAccess{}, errors.New("nome de artifact invalido")
+		return P2PArtifactAccess{}, errors.New("nome de artifact inválido")
 	}
 
 	path := filepath.Join(s.tempDir, artifactName)
@@ -268,7 +268,7 @@ func (s *p2pTransferServer) verifyReplicationControl(r *http.Request, access P2P
 	}
 	tsUnix, err := strconv.ParseInt(timestamp, 10, 64)
 	if err != nil {
-		return errors.New("timestamp invalido")
+		return errors.New("timestamp inválido")
 	}
 	when := time.Unix(tsUnix, 0)
 	if time.Since(when) > p2pControlMaxSkew || time.Until(when) > p2pControlMaxSkew {
@@ -318,7 +318,7 @@ func (s *p2pTransferServer) verifyToken(artifactName, peerID, token string, now 
 
 	parts := strings.Split(token, ".")
 	if len(parts) != 2 {
-		return errors.New("token invalido")
+		return errors.New("token inválido")
 	}
 	bodyEncoded := parts[0]
 	receivedSig := parts[1]

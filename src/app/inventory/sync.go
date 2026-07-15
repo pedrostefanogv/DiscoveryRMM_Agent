@@ -190,7 +190,7 @@ func (s *Service) SyncInventoryOnStartup(ctx context.Context, report models.Inve
 			s.logf("[agent-sync] ignorado: faltam apiServer/token/agentId no Debug")
 			return
 		}
-		s.logf("[agent-sync] ignorado: apiScheme invalido (use http ou https)")
+		s.logf("[agent-sync] ignorado: apiScheme inválido (use http ou https)")
 		return
 	}
 

@@ -54,7 +54,7 @@ func (a *App) DispatchNotification(req NotificationDispatchRequest) Notification
 				NotificationID: strings.TrimSpace(req.NotificationID),
 				AgentAction:    "disabled_by_rollout",
 				Result:         "denied",
-				Message:        "notificacao bloqueada por rollout",
+				Message:        "notificação bloqueada por rollout",
 			}
 		}
 	}

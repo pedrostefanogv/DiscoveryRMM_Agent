@@ -36,11 +36,11 @@ func cachedManifestPath(manifestDir, artifactName string) string {
 // saveCachedManifest persiste um manifest em disco para reuso futuro.
 func saveCachedManifest(manifestDir string, artifactName string, manifest P2PChunkManifest) error {
 	if manifestDir == "" {
-		return fmt.Errorf("manifestDir nao definido")
+		return fmt.Errorf("manifestDir não definido")
 	}
 	path := cachedManifestPath(manifestDir, artifactName)
 	if path == "" {
-		return fmt.Errorf("artifactName invalido")
+		return fmt.Errorf("artifactName inválido")
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err

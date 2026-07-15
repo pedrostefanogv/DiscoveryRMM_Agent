@@ -291,7 +291,7 @@ func (c *syncCoordinator) fullResync(ctx context.Context, source string) error {
 func (c *syncCoordinator) reconcileFromManifest(ctx context.Context, source string) error {
 	manifest, err := c.app.fetchSyncManifest(ctx)
 	if err != nil {
-		c.app.logs.append("[sync] manifesto indisponivel (" + source + "): " + err.Error())
+		c.app.logs.append("[sync] manifesto indisponível (" + source + "): " + err.Error())
 		return err
 	}
 
@@ -490,7 +490,7 @@ func (a *App) refreshAgentConfiguration(ctx context.Context) error {
 		if applyErr != nil {
 			a.logs.append("[sync] falha ao aplicar seguranca remota de transporte: " + applyErr.Error())
 		} else if changed {
-			a.logs.append("[sync] seguranca de transporte aplicada e reconexao solicitada")
+			a.logs.append("[sync] segurança de transporte aplicada e reconexão solicitada")
 		}
 	}
 	a.logs.append("[sync] configuração do agent atualizada")
