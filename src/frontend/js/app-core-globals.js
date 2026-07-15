@@ -350,7 +350,7 @@ function setRuntimeFlags(flags) {
 
 function appApi() {
   if (!window.go || !window.go.app || !window.go.app.App) {
-    throw new Error('API do Wails indisponivel. Rode pelo wails dev/build.');
+    throw new Error('API do Wails indisponível. Rode pelo wails dev/build.');
   }
   return window.go.app.App;
 }
@@ -581,11 +581,11 @@ function buildNotificationMicrocopy(eventType, severity) {
 
   var eventLabelMap = isPT
     ? {
-      install_start: 'Instalacao iniciada',
-      install_end: 'Instalacao concluida',
-      install_failed: 'Instalacao com falha',
-      reboot_required: 'Reinicio necessario',
-      restart_required: 'Reinicio necessario',
+      install_start: 'Instalação iniciada',
+      install_end: 'Instalação concluída',
+      install_failed: 'Instalação com falha',
+      reboot_required: 'Reinício necessário',
+      restart_required: 'Reinício necessário',
     }
     : {
       install_start: 'Installation started',
@@ -597,7 +597,7 @@ function buildNotificationMicrocopy(eventType, severity) {
 
   return {
     severityLabel: severityLabel,
-    eventLabel: eventLabelMap[eventType] || (isPT ? 'Notificacao de instalacao' : 'Installation notification'),
+    eventLabel: eventLabelMap[eventType] || (isPT ? 'Notificação de instalação' : 'Installation notification'),
     approveLabel: isPT ? 'Aprovar' : 'Approve',
     deferLabel: isPT ? 'Adiar' : 'Defer',
     denyLabel: isPT ? 'Negar' : 'Deny',
@@ -605,7 +605,7 @@ function buildNotificationMicrocopy(eventType, severity) {
     detailsLabel: isPT ? 'Ver detalhes' : 'Details',
     restartNowLabel: isPT ? 'Reiniciar agora' : 'Restart now',
     restartLaterLabel: isPT ? 'Reiniciar depois' : 'Restart later',
-    rebootHint: isPT ? 'Salve seu trabalho. Reinicie para concluir a instalacao.' : 'Save your work. Restart to complete installation.',
+    rebootHint: isPT ? 'Salve seu trabalho. Reinicie para concluir a instalação.' : 'Save your work. Restart to complete installation.',
   };
 }
 
@@ -649,7 +649,7 @@ function ensureNotificationUX() {
     '<div class="ntf-banner-stack" id="ntfBannerStack"></div>' +
     '<div class="ntf-progress-card hidden" id="ntfProgressCard">' +
       '<div class="ntf-progress-head">' +
-        '<strong id="ntfProgressTitle">Progresso da instalacao</strong>' +
+        '<strong id="ntfProgressTitle">Progresso da instalação</strong>' +
         '<span id="ntfProgressMeta" class="meta"></span>' +
       '</div>' +
       '<div class="ntf-progress-bar-wrap"><div id="ntfProgressBar" class="ntf-progress-bar"></div></div>' +
@@ -662,9 +662,9 @@ function ensureNotificationUX() {
   modalOverlay.setAttribute('aria-hidden', 'true');
   modalOverlay.id = 'ntfModalOverlay';
   modalOverlay.innerHTML = '' +
-    '<div class="ntf-modal-card" role="dialog" aria-modal="true" aria-label="Notificacao">' +
+    '<div class="ntf-modal-card" role="dialog" aria-modal="true" aria-label="Notificação">' +
       '<div class="ntf-modal-brand" id="ntfModalBrand"></div>' +
-      '<h3 id="ntfModalTitle">Notificacao</h3>' +
+      '<h3 id="ntfModalTitle">Notificação</h3>' +
       '<p id="ntfModalMessage"></p>' +
       '<div class="ntf-modal-meta" id="ntfModalMeta"></div>' +
       '<div class="ntf-modal-countdown hidden" id="ntfModalCountdown"></div>' +
