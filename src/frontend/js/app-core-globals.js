@@ -233,6 +233,9 @@ const automationTaskCountEl = document.getElementById('automationTaskCount');
 const automationPendingCallbacksEl = document.getElementById('automationPendingCallbacks');
 const automationExecutionsEl = document.getElementById('automationExecutions');
 const automationExecutionCountEl = document.getElementById('automationExecutionCount');
+const debugBindAllInterfacesEl = document.getElementById('debugBindAllInterfaces');
+const debugBindStatusEl = document.getElementById('debugBindStatus');
+const debugBindAllInterfacesHintEl = document.getElementById('debugBindAllInterfacesHint');
 
 let agentStatusPollId = null;
 

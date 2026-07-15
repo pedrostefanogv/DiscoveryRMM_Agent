@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -15,37 +14,18 @@ import (
 	"discovery/internal/buildinfo"
 )
 
-func TestDownloadToTemp_FollowsSignedRedirectAndValidatesManifestSHA(t *testing.T) {
-	payload := []byte("signed update payload")
+func TestDownloadFromURL_DownloadsAndReturnsSHA256(t *testing.T) {
+	payload := []byte("update payload")
 	checksum := sha256.Sum256(payload)
 	checksumHex := hex.EncodeToString(checksum[:])
 
-	redirectHeaders := struct {
-		authorization string
-		agentID       string
-		artifactType  string
-	}{}
-
-	signedServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/signed/update.exe" {
+	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/download/agent" {
 			http.NotFound(w, r)
 			return
 		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(payload)
-	}))
-	defer signedServer.Close()
-
-	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/agent-auth/me/update/download" {
-			http.NotFound(w, r)
-			return
-		}
-		redirectHeaders.authorization = r.Header.Get("Authorization")
-		redirectHeaders.agentID = r.Header.Get("X-Agent-ID")
-		redirectHeaders.artifactType = r.URL.Query().Get("artifactType")
-		w.Header().Set("Location", signedServer.URL+"/signed/update.exe?sig=abc123")
-		w.WriteHeader(http.StatusFound)
 	}))
 	defer apiServer.Close()
 
@@ -54,9 +34,6 @@ func TestDownloadToTemp_FollowsSignedRedirectAndValidatesManifestSHA(t *testing.
 		t.Fatalf("url.Parse(apiServer): %v", err)
 	}
 
-	releaseID := "rel-1"
-	version := "1.2.3"
-	artifactType := "installer"
 	updater := &Updater{
 		ApiScheme:  apiURL.Scheme,
 		ApiServer:  apiURL.Host,
@@ -65,25 +42,15 @@ func TestDownloadToTemp_FollowsSignedRedirectAndValidatesManifestSHA(t *testing.
 		TempDir:    t.TempDir(),
 	}
 
-	path, err := updater.downloadToTemp(context.Background(), &UpdateManifest{
-		ReleaseID:     &releaseID,
-		LatestVersion: &version,
-		ArtifactType:  artifactType,
-		Sha256:        &checksumHex,
-	})
+	downloadURL := apiServer.URL + "/api/v1/download/agent"
+	path, sha, err := updater.downloadFromURL(context.Background(), downloadURL)
 	if err != nil {
-		t.Fatalf("downloadToTemp: %v", err)
+		t.Fatalf("downloadFromURL: %v", err)
 	}
 	defer os.Remove(path)
 
-	if redirectHeaders.authorization != "Bearer mdz_token_123" {
-		t.Fatalf("Authorization = %q", redirectHeaders.authorization)
-	}
-	if redirectHeaders.agentID != "8f6d6d72-4a8a-4c87-bffa-34ba29dc0bb7" {
-		t.Fatalf("X-Agent-ID = %q", redirectHeaders.agentID)
-	}
-	if redirectHeaders.artifactType != "Installer" {
-		t.Fatalf("artifactType = %q, want %q", redirectHeaders.artifactType, "Installer")
+	if sha != checksumHex {
+		t.Fatalf("sha256 = %q, want %q", sha, checksumHex)
 	}
 	if filepath.Ext(path) != ".exe" {
 		t.Fatalf("download path = %q, want .exe suffix", path)
@@ -98,18 +65,16 @@ func TestDownloadToTemp_FollowsSignedRedirectAndValidatesManifestSHA(t *testing.
 	}
 }
 
-func TestDownloadToTemp_UsesPreferredArtifactTypeFromPolicy(t *testing.T) {
-	payload := []byte("signed update payload")
+func TestDownloadFromCacheOrPublic_UsesPublicEndpoint(t *testing.T) {
+	payload := []byte("update payload")
 	checksum := sha256.Sum256(payload)
 	checksumHex := hex.EncodeToString(checksum[:])
 
-	artifactType := ""
 	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/agent-auth/me/update/download" {
+		if r.URL.Path != "/api/v1/download/agent" {
 			http.NotFound(w, r)
 			return
 		}
-		artifactType = r.URL.Query().Get("artifactType")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(payload)
 	}))
@@ -120,57 +85,34 @@ func TestDownloadToTemp_UsesPreferredArtifactTypeFromPolicy(t *testing.T) {
 		t.Fatalf("url.Parse(apiServer): %v", err)
 	}
 
-	releaseID := "rel-2"
-	version := "1.2.4"
 	updater := &Updater{
 		ApiScheme:  apiURL.Scheme,
 		ApiServer:  apiURL.Host,
 		GetToken:   func() string { return "mdz_token_123" },
 		GetAgentID: func() string { return "8f6d6d72-4a8a-4c87-bffa-34ba29dc0bb7" },
-		GetPolicy: func() Policy {
-			return Policy{CheckEveryHours: 6, PreferredArtifactType: "PortableZip"}
-		},
-		TempDir: t.TempDir(),
+		TempDir:    t.TempDir(),
 	}
 
-	path, err := updater.downloadToTemp(context.Background(), &UpdateManifest{
-		ReleaseID:     &releaseID,
-		LatestVersion: &version,
-		ArtifactType:  "Installer",
-		Sha256:        &checksumHex,
-	})
+	path, sha, err := updater.downloadFromCacheOrPublic(context.Background(), "")
 	if err != nil {
-		t.Fatalf("downloadToTemp: %v", err)
+		t.Fatalf("downloadFromCacheOrPublic: %v", err)
 	}
 	defer os.Remove(path)
 
-	if artifactType != "PortableZip" {
-		t.Fatalf("artifactType = %q, want PortableZip", artifactType)
+	if sha != checksumHex {
+		t.Fatalf("sha256 = %q, want %q", sha, checksumHex)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("os.ReadFile(%s): %v", path, err)
+	}
+	if string(data) != string(payload) {
+		t.Fatalf("downloaded payload mismatch: got %q want %q", string(data), string(payload))
 	}
 }
 
-func TestResumePendingInstallReport_ReportsSuccessAndClearsState(t *testing.T) {
-	events := make([]reportPayload, 0, 1)
-	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/agent-auth/me/update/report" {
-			http.NotFound(w, r)
-			return
-		}
-		defer r.Body.Close()
-		var payload reportPayload
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			t.Fatalf("decode report payload: %v", err)
-		}
-		events = append(events, payload)
-		w.WriteHeader(http.StatusAccepted)
-	}))
-	defer apiServer.Close()
-
-	apiURL, err := url.Parse(apiServer.URL)
-	if err != nil {
-		t.Fatalf("url.Parse(apiServer): %v", err)
-	}
-
+func TestResumePendingInstallReport_ClearsStateOnVersionMatch(t *testing.T) {
 	previousVersion := buildinfo.Version
 	buildinfo.Version = "1.2.5"
 	defer func() {
@@ -180,11 +122,7 @@ func TestResumePendingInstallReport_ReportsSuccessAndClearsState(t *testing.T) {
 	releaseID := "rel-3"
 	tempDir := t.TempDir()
 	updater := &Updater{
-		ApiScheme:  apiURL.Scheme,
-		ApiServer:  apiURL.Host,
-		GetToken:   func() string { return "mdz_token_123" },
-		GetAgentID: func() string { return "8f6d6d72-4a8a-4c87-bffa-34ba29dc0bb7" },
-		TempDir:    tempDir,
+		TempDir: tempDir,
 	}
 	if err := updater.persistPendingInstallState(pendingInstallState{
 		ReleaseID:      &releaseID,
@@ -198,12 +136,6 @@ func TestResumePendingInstallReport_ReportsSuccessAndClearsState(t *testing.T) {
 
 	updater.ResumePendingInstallReport(context.Background())
 
-	if len(events) != 1 {
-		t.Fatalf("expected exactly one report event, got %d", len(events))
-	}
-	if events[0].Request.EventType != "InstallSucceeded" {
-		t.Fatalf("eventType = %q, want InstallSucceeded", events[0].Request.EventType)
-	}
 	if _, err := os.Stat(filepath.Join(tempDir, pendingInstallFile)); !os.IsNotExist(err) {
 		t.Fatalf("expected pending install file to be removed, stat err=%v", err)
 	}
@@ -233,58 +165,5 @@ func TestNormalizeArtifactType_ToleratesInstallerCasing(t *testing.T) {
 	}
 	if got := normalizeArtifactType("PortableZip"); got != "PortableZip" {
 		t.Fatalf("normalizeArtifactType(custom) = %q", got)
-	}
-}
-
-func TestFetchManifest_SendsArtifactTypeQuery(t *testing.T) {
-	received := struct {
-		authorization string
-		agentID       string
-		artifactType  string
-	}{
-		artifactType: "",
-	}
-
-	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/agent-auth/me/update/manifest" {
-			http.NotFound(w, r)
-			return
-		}
-		received.authorization = r.Header.Get("Authorization")
-		received.agentID = r.Header.Get("X-Agent-ID")
-		received.artifactType = r.URL.Query().Get("artifactType")
-
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"enabled":true,"updateAvailable":false,"rolloutEligible":true,"directUpdateSupported":true,"platform":"windows","architecture":"amd64","artifactType":"Installer"}`))
-	}))
-	defer apiServer.Close()
-
-	apiURL, err := url.Parse(apiServer.URL)
-	if err != nil {
-		t.Fatalf("url.Parse(apiServer): %v", err)
-	}
-
-	updater := &Updater{
-		ApiScheme:  apiURL.Scheme,
-		ApiServer:  apiURL.Host,
-		GetToken:   func() string { return "mdz_token_123" },
-		GetAgentID: func() string { return "8f6d6d72-4a8a-4c87-bffa-34ba29dc0bb7" },
-		GetPolicy: func() Policy {
-			return Policy{PreferredArtifactType: "installer"}
-		},
-	}
-
-	if _, err := updater.fetchManifest(context.Background()); err != nil {
-		t.Fatalf("fetchManifest: %v", err)
-	}
-
-	if received.authorization != "Bearer mdz_token_123" {
-		t.Fatalf("Authorization = %q", received.authorization)
-	}
-	if received.agentID != "8f6d6d72-4a8a-4c87-bffa-34ba29dc0bb7" {
-		t.Fatalf("X-Agent-ID = %q", received.agentID)
-	}
-	if received.artifactType != "Installer" {
-		t.Fatalf("artifactType = %q, want Installer", received.artifactType)
 	}
 }

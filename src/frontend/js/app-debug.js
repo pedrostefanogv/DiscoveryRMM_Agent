@@ -82,6 +82,19 @@ function updateDebugResponseLabel() {
   debugResponseLabelEl.innerHTML = translate('debug.testResponse');
 }
 
+function updateDebugBindHint(bound) {
+  if (debugBindAllInterfacesHintEl) {
+    if (bound) {
+      debugBindAllInterfacesHintEl.innerHTML = '<span style="color:#f4a259;">⚠ Interface acessivel na rede local (0.0.0.0). Desmarque para restringir ao localhost.</span>';
+    } else {
+      debugBindAllInterfacesHintEl.innerHTML = 'Permite acessar esta interface de outras maquinas na rede (0.0.0.0)';
+    }
+  }
+  if (debugBindStatusEl) {
+    debugBindStatusEl.textContent = bound ? '✓ Rede' : '✓ Local';
+  }
+}
+
 function initDebug() {
   var openP2PDebugWindowBtn = document.getElementById('openP2PDebugWindowBtn');
   var openPSADTDebugWindowBtn = document.getElementById('openPSADTDebugWindowBtn');
@@ -176,6 +189,47 @@ function initDebug() {
         setDebugStatus(translate('debug.connectionFailure', { error: (err.message || String(err)) }), 'error');
         if (debugResponseWrapEl) debugResponseWrapEl.classList.add('hidden');
       });
+    });
+  }
+
+  // ── Network bind toggle ──────────────────────────────────────────────
+  if (debugBindAllInterfacesEl) {
+    // Poll current bind state on page load
+    try {
+      appApi().IsDebugHTTPBoundToAllInterfaces().then(function (bound) {
+        debugBindAllInterfacesEl.checked = !!bound;
+        updateDebugBindHint(!!bound);
+      }).catch(function () {
+        debugBindAllInterfacesEl.checked = false;
+        updateDebugBindHint(false);
+      });
+    } catch (e) {
+      debugBindAllInterfacesEl.checked = false;
+      updateDebugBindHint(false);
+    }
+
+    debugBindAllInterfacesEl.addEventListener('change', function () {
+      var enabled = debugBindAllInterfacesEl.checked;
+      debugBindAllInterfacesEl.disabled = true;
+      if (debugBindStatusEl) debugBindStatusEl.textContent = '...';
+      try {
+        appApi().SetDebugHTTPBindAllInterfaces(enabled).then(function () {
+          updateDebugBindHint(enabled);
+          if (debugBindStatusEl) debugBindStatusEl.textContent = enabled ? '✓ Rede' : '✓ Local';
+          debugBindAllInterfacesEl.disabled = false;
+        }).catch(function (err) {
+          debugBindAllInterfacesEl.checked = !enabled; // revert
+          setDebugStatus('Erro ao alterar bind: ' + (err.message || String(err)), 'error');
+          updateDebugBindHint(!enabled);
+          if (debugBindStatusEl) debugBindStatusEl.textContent = '';
+          debugBindAllInterfacesEl.disabled = false;
+        });
+      } catch (e) {
+        debugBindAllInterfacesEl.checked = !enabled; // revert
+        setDebugStatus('Erro ao alterar bind: ' + String(e), 'error');
+        if (debugBindStatusEl) debugBindStatusEl.textContent = '';
+        debugBindAllInterfacesEl.disabled = false;
+      }
     });
   }
 }

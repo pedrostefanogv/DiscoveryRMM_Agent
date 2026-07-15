@@ -2,7 +2,6 @@
 
 import (
 	"context"
-	"errors"
 	"os"
 	"strings"
 	"time"
@@ -277,162 +276,56 @@ func (u *Updater) CheckAndUpdate(ctx context.Context, force bool) error {
 	if force {
 		mode = "forcado"
 	}
-	u.logf("[selfupdate] iniciando check (mode=%s current=%s correlationId=%s)", mode, currentVersion, correlationID)
+	u.logf("[selfupdate] iniciando download (mode=%s current=%s correlationId=%s)", mode, currentVersion, correlationID)
 
-	u.reportEvent(ctx, "CheckStarted", reportOpts{
-		CurrentVersion: currentVersion,
-		CorrelationID:  correlationID,
-	})
+	_ = currentVersion // usado abaixo
+	_ = correlationID  // mantido para logging ja embutido em downloadFromCacheOrPublic
 
-	manifest, err := u.fetchManifest(ctx)
-	if err != nil {
-		u.logf("[selfupdate] falha ao buscar manifest: %v", err)
-		u.reportEvent(ctx, "CheckCompleted", reportOpts{
-			CurrentVersion: currentVersion,
-			CorrelationID:  correlationID,
-			Message:        "manifest fetch failed: " + err.Error(),
-		})
-		return err
-	}
-	u.logf("[selfupdate] manifest obtido: enabled=%t updateAvailable=%t rolloutEligible=%t direct=%t latestVersion=%s",
-		manifest.Enabled, manifest.UpdateAvailable, manifest.RolloutEligible,
-		manifest.DirectUpdateSupported, ptrStr(manifest.LatestVersion))
-
-	if force {
-		u.logf("[selfupdate] modo forcado: ignorando manifest, baixando direto do endpoint publico")
-		return u.forceInstallFromPublicEndpoint(ctx, currentVersion, correlationID)
-	}
-
-	if !manifest.Enabled {
-		u.reportEvent(ctx, "CheckCompleted", reportOpts{
-			ReleaseID:      manifest.ReleaseID,
-			CurrentVersion: currentVersion,
-			CorrelationID:  correlationID,
-			Message:        "no eligible direct update",
-		})
-		return nil
-	}
-	if !manifest.UpdateAvailable || !manifest.RolloutEligible || !manifest.DirectUpdateSupported {
-		u.reportEvent(ctx, "CheckCompleted", reportOpts{
-			ReleaseID:      manifest.ReleaseID,
-			CurrentVersion: currentVersion,
-			CorrelationID:  correlationID,
-			Message:        "no eligible direct update",
-		})
-		return nil
-	}
-
-	if manifest.LatestVersion == nil || strings.TrimSpace(*manifest.LatestVersion) == "" {
-		u.reportEvent(ctx, "CheckCompleted", reportOpts{
-			ReleaseID:      manifest.ReleaseID,
-			CurrentVersion: currentVersion,
-			CorrelationID:  correlationID,
-			Message:        "manifest without latestVersion",
-		})
-		return nil
-	}
-	targetVersion := strings.TrimSpace(*manifest.LatestVersion)
-	if compareVersions(targetVersion, currentVersion) <= 0 {
-		u.reportEvent(ctx, "CheckCompleted", reportOpts{
-			ReleaseID:      manifest.ReleaseID,
-			CurrentVersion: currentVersion,
-			TargetVersion:  targetVersion,
-			CorrelationID:  correlationID,
-			Message:        "latestVersion not greater than currentVersion",
-		})
-		return nil
-	}
-
-	u.reportEvent(ctx, "CheckCompleted", reportOpts{
-		ReleaseID:      manifest.ReleaseID,
-		CurrentVersion: currentVersion,
-		TargetVersion:  targetVersion,
-		CorrelationID:  correlationID,
-	})
-	u.reportEvent(ctx, "UpdateAvailable", reportOpts{
-		ReleaseID:      manifest.ReleaseID,
-		CurrentVersion: currentVersion,
-		TargetVersion:  targetVersion,
-		CorrelationID:  correlationID,
-		Message:        strings.TrimSpace(manifest.Message),
-	})
-	u.logf("[selfupdate] update disponivel: current=%s target=%s %s", currentVersion, targetVersion, manifestFileLogDetail(manifest))
-
-	if manifest.Sha256 == nil || strings.TrimSpace(*manifest.Sha256) == "" {
-		msg := "manifest without sha256"
-		u.reportEvent(ctx, "DownloadFailed", reportOpts{
-			ReleaseID:      manifest.ReleaseID,
-			CurrentVersion: currentVersion,
-			TargetVersion:  targetVersion,
-			CorrelationID:  correlationID,
-			Message:        msg,
-		})
-		return errors.New(msg)
-	}
-
-	u.reportEvent(ctx, "DownloadStarted", reportOpts{
-		ReleaseID:      manifest.ReleaseID,
-		CurrentVersion: currentVersion,
-		TargetVersion:  targetVersion,
-		CorrelationID:  correlationID,
-	})
-
-	u.logf("[selfupdate] iniciando download: target=%s", targetVersion)
-	tempPath, err := u.downloadToTemp(ctx, manifest)
+	// Baixa do endpoint publico /api/v1/download/agent (P2P-first se disponivel).
+	u.logf("[selfupdate] baixando do endpoint publico /api/v1/download/agent")
+	tempPath, fileSha256, err := u.downloadFromCacheOrPublic(ctx, "")
 	if err != nil {
 		u.logf("[selfupdate] download falhou: %v", err)
-		u.reportEvent(ctx, "DownloadFailed", reportOpts{
-			ReleaseID:      manifest.ReleaseID,
-			CurrentVersion: currentVersion,
-			TargetVersion:  targetVersion,
-			CorrelationID:  correlationID,
-			Message:        err.Error(),
-		})
 		return err
 	}
-	u.logf("[selfupdate] download concluido: tempPath=%s", tempPath)
+	u.logf("[selfupdate] download concluido: tempPath=%s sha256=%s", tempPath, fileSha256[:12])
 
-	u.reportEvent(ctx, "DownloadCompleted", reportOpts{
-		ReleaseID:      manifest.ReleaseID,
-		CurrentVersion: currentVersion,
-		TargetVersion:  targetVersion,
-		CorrelationID:  correlationID,
-	})
+	// Extrai a versao real do binario baixado
+	targetVersion := extractFileVersion(tempPath)
+	if targetVersion == "" {
+		u.logf("[selfupdate] aviso: nao conseguiu extrair versao do arquivo, usando currentVersion=%s", currentVersion)
+		targetVersion = currentVersion
+	}
+	u.logf("[selfupdate] versao alvo determinada: %s (current=%s)", targetVersion, currentVersion)
 
-	u.reportEvent(ctx, "InstallStarted", reportOpts{
-		ReleaseID:      manifest.ReleaseID,
-		CurrentVersion: currentVersion,
-		TargetVersion:  targetVersion,
-		CorrelationID:  correlationID,
-	})
+	// Se nao for force, verifica se realmente ha update (versao alvo > atual)
+	if !force && compareVersions(targetVersion, currentVersion) <= 0 {
+		u.logf("[selfupdate] ja esta na versao mais recente (current=%s >= target=%s)", currentVersion, targetVersion)
+		errutil.LogIfErr(os.Remove(tempPath), "selfupdate: limpar temp mesma versao")
+		return nil
+	}
+
+	// Publica no P2P com artifactID fixo "agent-current" — o endpoint /api/v1/download/agent
+	// sempre serve o build atual (current), entao o nome do artifact e estavel entre versoes.
+	// O SHA256 e usado para validacao pos-download, nao como ID de busca.
+	artifactID := "agent-current"
+	if u.OnArtifactReady != nil {
+		_ = u.OnArtifactReady(ctx, tempPath, artifactID, fileSha256, targetVersion)
+	}
+
 	if err := u.persistPendingInstallState(pendingInstallState{
-		ReleaseID:      manifest.ReleaseID,
 		CurrentVersion: currentVersion,
 		TargetVersion:  targetVersion,
 		CorrelationID:  correlationID,
 		RecordedAtUTC:  time.Now().UTC().Format(time.RFC3339),
 	}); err != nil {
 		errutil.LogIfErr(os.Remove(tempPath), "selfupdate: limpar temp apos falha de persistencia")
-		u.reportEvent(ctx, "InstallFailed", reportOpts{
-			ReleaseID:      manifest.ReleaseID,
-			CurrentVersion: currentVersion,
-			TargetVersion:  targetVersion,
-			CorrelationID:  correlationID,
-			Message:        "falha ao persistir estado pendente: " + err.Error(),
-		})
 		return err
 	}
 
 	if err := u.launchInstallerWithUI(ctx, tempPath, targetVersion); err != nil {
 		u.clearPendingInstallState()
 		errutil.LogIfErr(os.Remove(tempPath), "selfupdate: limpar temp apos falha de launch")
-		u.reportEvent(ctx, "InstallFailed", reportOpts{
-			ReleaseID:      manifest.ReleaseID,
-			CurrentVersion: currentVersion,
-			TargetVersion:  targetVersion,
-			CorrelationID:  correlationID,
-			Message:        err.Error(),
-		})
 		return err
 	}
 

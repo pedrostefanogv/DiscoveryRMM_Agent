@@ -3,114 +3,15 @@ package selfupdate
 import (
 	"context"
 	"errors"
-	"fmt"
-	"io"
-	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
-	"discovery/app/netutil"
 	"discovery/internal/buildinfo"
 	"discovery/internal/errutil"
 )
-
-// forceInstallFromPublicEndpoint baixa o instalador do endpoint público
-// /api/v1/download/agent e executa /S /UPDATE sem nenhuma validação de
-// versão, manifest ou sha256. Usado exclusivamente em modo force=true
-// (comando de update vindo do servidor).
-func (u *Updater) forceInstallFromPublicEndpoint(ctx context.Context, currentVersion, correlationID string) error {
-	downloadURL := u.apiScheme() + "://" + u.apiServer() + "/api/v1/download/agent"
-	u.logf("[selfupdate] force-install: baixando de %s", downloadURL)
-
-	u.reportEvent(ctx, "UpdateAvailable", reportOpts{
-		CurrentVersion: currentVersion,
-		TargetVersion:  currentVersion, // Será atualizado após extrair versão real do arquivo
-		CorrelationID:  correlationID,
-		Message:        "force reinstall via public endpoint",
-	})
-
-	u.reportEvent(ctx, "DownloadStarted", reportOpts{
-		CurrentVersion: currentVersion,
-		TargetVersion:  currentVersion, // Será atualizado após extrair versão real do arquivo
-		CorrelationID:  correlationID,
-	})
-
-	tempPath, fileSha256, err := u.downloadFromURL(ctx, downloadURL)
-	if err != nil {
-		u.logf("[selfupdate] force-install download falhou: %v", err)
-		u.reportEvent(ctx, "DownloadFailed", reportOpts{
-			CurrentVersion: currentVersion,
-			TargetVersion:  currentVersion,
-			CorrelationID:  correlationID,
-			Message:        err.Error(),
-		})
-		return err
-	}
-
-	u.logf("[selfupdate] force-install download concluido: tempPath=%s sha256=%s", tempPath, fileSha256)
-
-	// Publica no P2P com ArtifactID derivado do SHA256 (sem releaseID disponível)
-	artifactID := "sha256:" + strings.ToLower(fileSha256)
-	if u.OnArtifactReady != nil {
-		_ = u.OnArtifactReady(ctx, tempPath, artifactID, fileSha256, "")
-	}
-
-	// Extrair a versão real do arquivo baixado
-	targetVersion := extractFileVersion(tempPath)
-	if targetVersion == "" {
-		u.logf("[selfupdate] force-install aviso: nao conseguiu extrair versao do arquivo, usando currentVersion=%s", currentVersion)
-		targetVersion = currentVersion
-	}
-	u.logf("[selfupdate] force-install versao alvo determinada: %s", targetVersion)
-
-	u.reportEvent(ctx, "DownloadCompleted", reportOpts{
-		CurrentVersion: currentVersion,
-		TargetVersion:  targetVersion,
-		CorrelationID:  correlationID,
-		Message:        fmt.Sprintf("sha256=%s", fileSha256),
-	})
-
-	u.reportEvent(ctx, "InstallStarted", reportOpts{
-		CurrentVersion: currentVersion,
-		TargetVersion:  targetVersion,
-		CorrelationID:  correlationID,
-	})
-
-	if err := u.persistPendingInstallState(pendingInstallState{
-		CurrentVersion: currentVersion,
-		TargetVersion:  targetVersion,
-		CorrelationID:  correlationID,
-		RecordedAtUTC:  time.Now().UTC().Format(time.RFC3339),
-	}); err != nil {
-		errutil.LogIfErr(os.Remove(tempPath), "selfupdate: limpar temp apos falha de persistencia")
-		u.reportEvent(ctx, "InstallFailed", reportOpts{
-			CurrentVersion: currentVersion,
-			TargetVersion:  targetVersion,
-			CorrelationID:  correlationID,
-			Message:        "falha ao persistir estado pendente: " + err.Error(),
-		})
-		return err
-	}
-
-	if err := u.launchInstallerWithUI(ctx, tempPath, targetVersion); err != nil {
-		u.clearPendingInstallState()
-		errutil.LogIfErr(os.Remove(tempPath), "selfupdate: limpar temp apos falha de launch")
-		u.reportEvent(ctx, "InstallFailed", reportOpts{
-			CurrentVersion: currentVersion,
-			TargetVersion:  targetVersion,
-			CorrelationID:  correlationID,
-			Message:        err.Error(),
-		})
-		return err
-	}
-
-	u.logf("[selfupdate] force-install: instalador iniciado em background: %s", tempPath)
-	return nil
-}
 
 // InstallFromURL faz o download do instalador a partir de uma URL direta
 // fornecida pelo servidor e o executa em background (/S /UPDATE).
@@ -123,12 +24,8 @@ func (u *Updater) InstallFromURL(ctx context.Context, version, downloadURL strin
 
 	token := strings.TrimSpace(u.getToken())
 	agentID := strings.TrimSpace(u.getAgentID())
-	if token == "" {
-		return errors.New("token vazio")
-	}
-	if agentID == "" {
-		return errors.New("agentId vazio")
-	}
+	_ = token
+	_ = agentID // endpoint publico nao exige auth, mas token/agentID usados em downloadFromURL
 
 	currentVersion := strings.TrimSpace(buildinfo.Version)
 	if currentVersion == "" {
@@ -140,49 +37,41 @@ func (u *Updater) InstallFromURL(ctx context.Context, version, downloadURL strin
 	}
 	correlationID := uuid.NewString()
 
-	u.reportEvent(ctx, "UpdateAvailable", reportOpts{
-		CurrentVersion: currentVersion,
-		TargetVersion:  targetVersion,
-		CorrelationID:  correlationID,
-		Message:        "install direto via comando do servidor",
-	})
+	u.logf("[selfupdate] install-direto: baixando de %s (target=%s correlationId=%s)", downloadURL, targetVersion, correlationID)
 
-	u.reportEvent(ctx, "DownloadStarted", reportOpts{
-		CurrentVersion: currentVersion,
-		TargetVersion:  targetVersion,
-		CorrelationID:  correlationID,
-	})
+	// Se a URL for relativa (comeca com /), monta com o apiServer
+	finalURL := downloadURL
+	if strings.HasPrefix(finalURL, "/") {
+		finalURL = u.apiScheme() + "://" + u.apiServer() + finalURL
+	}
 
-	tempPath, fileSha256, err := u.downloadFromURL(ctx, downloadURL)
+	// Para URLs nao-relativas que sao do endpoint publico, usa P2P-first
+	if strings.Contains(finalURL, "/api/v1/download/agent") {
+		tempPath, fileSha256, err := u.downloadFromCacheOrPublic(ctx, "")
+		if err != nil {
+			return err
+		}
+		_ = fileSha256
+		return u.finishInstall(ctx, tempPath, targetVersion, currentVersion, correlationID)
+	}
+
+	// URLs externas: download direto
+	tempPath, fileSha256, err := u.downloadFromURL(ctx, finalURL)
 	if err != nil {
-		u.reportEvent(ctx, "DownloadFailed", reportOpts{
-			CurrentVersion: currentVersion,
-			TargetVersion:  targetVersion,
-			CorrelationID:  correlationID,
-			Message:        err.Error(),
-		})
 		return err
 	}
 
-	u.reportEvent(ctx, "DownloadCompleted", reportOpts{
-		CurrentVersion: currentVersion,
-		TargetVersion:  targetVersion,
-		CorrelationID:  correlationID,
-		Message:        fmt.Sprintf("sha256=%s", fileSha256),
-	})
-
-	// Publica no P2P com ArtifactID derivado do SHA256 (URL direta não tem releaseID)
-	artifactID := "sha256:" + strings.ToLower(fileSha256)
+	// Publica no P2P com artifactID fixo "agent-current" — mesmo ID usado no lookup
+	artifactID := "agent-current"
 	if u.OnArtifactReady != nil {
 		_ = u.OnArtifactReady(ctx, tempPath, artifactID, fileSha256, targetVersion)
 	}
 
-	u.reportEvent(ctx, "InstallStarted", reportOpts{
-		CurrentVersion: currentVersion,
-		TargetVersion:  targetVersion,
-		CorrelationID:  correlationID,
-	})
+	return u.finishInstall(ctx, tempPath, targetVersion, currentVersion, correlationID)
+}
 
+// finishInstall persiste o estado pendente e lanca o instalador.
+func (u *Updater) finishInstall(ctx context.Context, tempPath, targetVersion, currentVersion, correlationID string) error {
 	if err := u.persistPendingInstallState(pendingInstallState{
 		CurrentVersion: currentVersion,
 		TargetVersion:  targetVersion,
@@ -190,102 +79,17 @@ func (u *Updater) InstallFromURL(ctx context.Context, version, downloadURL strin
 		RecordedAtUTC:  time.Now().UTC().Format(time.RFC3339),
 	}); err != nil {
 		errutil.LogIfErr(os.Remove(tempPath), "selfupdate: limpar temp apos falha de persistencia")
-		u.reportEvent(ctx, "InstallFailed", reportOpts{
-			CurrentVersion: currentVersion,
-			TargetVersion:  targetVersion,
-			CorrelationID:  correlationID,
-			Message:        "falha ao persistir estado pendente: " + err.Error(),
-		})
 		return err
 	}
 
 	if err := u.launchInstallerWithUI(ctx, tempPath, targetVersion); err != nil {
 		u.clearPendingInstallState()
 		errutil.LogIfErr(os.Remove(tempPath), "selfupdate: limpar temp apos falha de launch")
-		u.reportEvent(ctx, "InstallFailed", reportOpts{
-			CurrentVersion: currentVersion,
-			TargetVersion:  targetVersion,
-			CorrelationID:  correlationID,
-			Message:        err.Error(),
-		})
 		return err
 	}
 
-	u.logf("installer direto iniciado em background: version=%s url=%s", targetVersion, downloadURL)
+	u.logf("installer iniciado em background: %s", tempPath)
 	return nil
-}
-
-// downloadFromURL faz o download do instalador a partir de uma URL pública.
-// Retorna o caminho do arquivo temporário e o SHA256 do conteúdo.
-func (u *Updater) downloadFromURL(ctx context.Context, downloadURL string) (string, string, error) {
-	if err := os.MkdirAll(u.TempDir, 0o755); err != nil {
-		return "", "", err
-	}
-
-	path := filepath.Join(u.TempDir, fmt.Sprintf("discovery-update-%s.exe", uuid.NewString()))
-	f, err := os.Create(path)
-	if err != nil {
-		return "", "", err
-	}
-
-	ctxDownload, cancel := context.WithDeadline(ctx, time.Now().Add(downloadDeadline))
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctxDownload, http.MethodGet, downloadURL, nil)
-	if err != nil {
-		errutil.LogIfErr(f.Close(), "selfupdate: fechar arquivo apos erro de request")
-		errutil.LogIfErr(os.Remove(path), "selfupdate: limpar download temp")
-		return "", "", err
-	}
-
-	// Usa o mesmo header de auth que os outros endpoints da API
-	token := strings.TrimSpace(u.getToken())
-	agentID := strings.TrimSpace(u.getAgentID())
-	if err := netutil.SetAgentAuthHeadersWithAgentID(req, token, agentID); err != nil {
-		errutil.LogIfErr(f.Close(), "selfupdate: fechar arquivo apos erro de header")
-		errutil.LogIfErr(os.Remove(path), "selfupdate: limpar download credenciais invalidas")
-		return "", "", err
-	}
-
-	client := &http.Client{Timeout: downloadDeadline}
-	resp, err := client.Do(req)
-	if err != nil {
-		errutil.LogIfErr(f.Close(), "selfupdate: fechar arquivo apos falha HTTP")
-		errutil.LogIfErr(os.Remove(path), "selfupdate: limpar download apos falha HTTP")
-		return "", "", err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8*1024))
-		errutil.LogIfErr(f.Close(), "selfupdate: fechar arquivo status != 200")
-		errutil.LogIfErr(os.Remove(path), "selfupdate: limpar download status != 200")
-		return "", "", fmt.Errorf("download status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
-	}
-
-	buf := make([]byte, 128*1024)
-	if _, err := io.CopyBuffer(f, resp.Body, buf); err != nil {
-		errutil.LogIfErr(f.Close(), "selfupdate: fechar arquivo apos falha de copy")
-		errutil.LogIfErr(os.Remove(path), "selfupdate: limpar download apos falha de copy")
-		return "", "", err
-	}
-	if err := f.Sync(); err != nil {
-		errutil.LogIfErr(f.Close(), "selfupdate: fechar arquivo apos falha de sync")
-		errutil.LogIfErr(os.Remove(path), "selfupdate: limpar download apos falha de sync")
-		return "", "", err
-	}
-	if err := f.Close(); err != nil {
-		errutil.LogIfErr(os.Remove(path), "selfupdate: limpar download apos falha de close")
-		return "", "", err
-	}
-
-	sha, err := fileSHA256(path)
-	if err != nil {
-		errutil.LogIfErr(os.Remove(path), "selfupdate: limpar download apos falha sha256")
-		return "", "", err
-	}
-
-	return path, sha, nil
 }
 
 // launchInstallerWithUI resolve o callback OnSelfUpdateInstall ou, como fallback,
@@ -300,7 +104,7 @@ func (u *Updater) launchInstallerWithUI(ctx context.Context, exePath, targetVers
 			if fallbackErr := u.launchInstaller(exePath); fallbackErr == nil {
 				return nil
 			} else {
-				return fmt.Errorf("selfupdate callback falhou: %v; fallback falhou: %w", err, fallbackErr)
+				return errors.New("selfupdate callback falhou: " + err.Error() + "; fallback falhou: " + fallbackErr.Error())
 			}
 		}
 	}

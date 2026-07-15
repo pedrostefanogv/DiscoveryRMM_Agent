@@ -39,26 +39,27 @@ func getFrontendFS() http.FileSystem {
 
 // debugHTTPServer serves the embedded frontend and a REST API mirroring the Wails bridge.
 type debugHTTPServer struct {
-	server   *http.Server
-	listener net.Listener
-	port     int
-	app      *App
+	server            *http.Server
+	listener          net.Listener
+	port              int
+	bindAllInterfaces bool
+	app               *App
 }
 
-// StartDebugHTTPServer binds a local-only HTTP server on a random port.
-// The server serves static frontend assets and a /api/* REST bridge.
-func (a *App) StartDebugHTTPServer() error {
+// startDebugHTTPInternal binds and starts the HTTP server on the given bind address.
+func (a *App) startDebugHTTPInternal(bindAddr string) error {
 	fs := getFrontendFS()
 	if fs == nil {
 		return fmt.Errorf("frontend assets não configurados — chame SetDebugFrontendAssets antes")
 	}
 
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listener, err := net.Listen("tcp", bindAddr+":0")
 	if err != nil {
-		return fmt.Errorf("falha ao criar listener debug-http: %w", err)
+		return fmt.Errorf("falha ao criar listener debug-http em %s: %w", bindAddr, err)
 	}
 
 	port := listener.Addr().(*net.TCPAddr).Port
+	bindAll := bindAddr == "0.0.0.0"
 
 	mux := http.NewServeMux()
 
@@ -109,21 +110,32 @@ func (a *App) StartDebugHTTPServer() error {
 			WriteTimeout: 60 * time.Second,
 			IdleTimeout:  120 * time.Second,
 		},
-		listener: listener,
-		port:     port,
-		app:      a,
+		listener:          listener,
+		port:              port,
+		bindAllInterfaces: bindAll,
+		app:               a,
 	}
 
 	a.debugHTTP = srv
 
 	go func() {
-		log.Printf("[debug-http] servidor iniciado em http://127.0.0.1:%d", port)
+		bindLabel := "127.0.0.1"
+		if bindAll {
+			bindLabel = "0.0.0.0 (rede)"
+		}
+		log.Printf("[debug-http] servidor iniciado em http://%s:%d", bindLabel, port)
 		if err := srv.server.Serve(listener); err != nil && err != http.ErrServerClosed {
 			log.Printf("[debug-http] erro no servidor: %v", err)
 		}
 	}()
 
 	return nil
+}
+
+// StartDebugHTTPServer binds a local-only HTTP server on a random port.
+// The server serves static frontend assets and a /api/* REST bridge.
+func (a *App) StartDebugHTTPServer() error {
+	return a.startDebugHTTPInternal("127.0.0.1")
 }
 
 // StopDebugHTTPServer gracefully shuts down the debug HTTP server.
@@ -149,9 +161,68 @@ func (a *App) GetDebugHTTPPort() int {
 	return a.debugHTTP.port
 }
 
+// IsDebugHTTPBoundToAllInterfaces returns whether the debug HTTP server is bound
+// to 0.0.0.0 (all network interfaces) instead of the default 127.0.0.1.
+func (a *App) IsDebugHTTPBoundToAllInterfaces() bool {
+	if a.debugHTTP == nil {
+		return false
+	}
+	return a.debugHTTP.bindAllInterfaces
+}
+
+// SetDebugHTTPBindAllInterfaces restarts the debug HTTP server to bind on
+// 0.0.0.0 (when enabled=true) or 127.0.0.1 (when enabled=false).
+// Only works when the debug HTTP server is already running.
+func (a *App) SetDebugHTTPBindAllInterfaces(enabled bool) error {
+	if a.debugHTTP == nil {
+		return fmt.Errorf("servidor debug-http nao esta em execucao")
+	}
+	if a.debugHTTP.bindAllInterfaces == enabled {
+		// Already in the requested state — no-op
+		return nil
+	}
+
+	// Stop the current listener/server
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := a.debugHTTP.server.Shutdown(ctx); err != nil {
+		log.Printf("[debug-http] aviso ao parar servidor para rebind: %v", err)
+	}
+	a.debugHTTP.listener.Close()
+	a.debugHTTP = nil
+
+	// Restart with the new bind address
+	bindAddr := "127.0.0.1"
+	if enabled {
+		bindAddr = "0.0.0.0"
+	}
+
+	if err := a.startDebugHTTPInternal(bindAddr); err != nil {
+		return fmt.Errorf("falha ao reiniciar debug-http com bind %s: %w", bindAddr, err)
+	}
+
+	if enabled {
+		log.Printf("[debug-http] servidor reiniciado em 0.0.0.0:%d (acessivel na rede)", a.debugHTTP.port)
+	} else {
+		log.Printf("[debug-http] servidor reiniciado em 127.0.0.1:%d (somente local)", a.debugHTTP.port)
+	}
+	return nil
+}
+
+// resolveDebugCORSOrigin returns the CORS header value for the debug HTTP server.
+func (a *App) resolveDebugCORSOrigin() string {
+	if a.debugHTTP != nil && a.debugHTTP.bindAllInterfaces {
+		return "*"
+	}
+	if a.debugHTTP != nil {
+		return "http://127.0.0.1:" + fmt.Sprint(a.debugHTTP.port)
+	}
+	return "http://localhost"
+}
+
 // serveDebugAPI handles /api/<method> requests, dispatching to the corresponding App method.
 func (a *App) serveDebugAPI(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Access-Control-Allow-Origin", "http://127.0.0.1:"+fmt.Sprint(a.debugHTTP.port))
+	w.Header().Set("Access-Control-Allow-Origin", a.resolveDebugCORSOrigin())
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 
@@ -268,10 +339,15 @@ func (a *App) serveDebugAPIList(w http.ResponseWriter, _ *http.Request) {
 		}
 		methods = append(methods, m.Name)
 	}
+	displayHost := "127.0.0.1"
+	if a.debugHTTP != nil && a.debugHTTP.bindAllInterfaces {
+		displayHost = "0.0.0.0"
+	}
 	a.writeAPIJSON(w, http.StatusOK, map[string]interface{}{
-		"methods": methods,
-		"port":    a.debugHTTP.port,
-		"url":     fmt.Sprintf("http://127.0.0.1:%d", a.debugHTTP.port),
+		"methods":           methods,
+		"port":              a.debugHTTP.port,
+		"url":               fmt.Sprintf("http://%s:%d", displayHost, a.debugHTTP.port),
+		"bindAllInterfaces": a.debugHTTP != nil && a.debugHTTP.bindAllInterfaces,
 	})
 }
 
