@@ -61,7 +61,7 @@ func (a *App) requestProvisioningToken(ctx context.Context) (deployKey, expiresA
 
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", "", fmt.Errorf("status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return "", "", fmt.Errorf("status %d: %s", resp.StatusCode, netutil.SanitizeHTTPErrorBody(resp.StatusCode, string(body)))
 	}
 
 	var parsed struct {

@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"discovery/app/netutil"
 	"discovery/app/p2pmeta"
 	"discovery/internal/platform"
 	"discovery/internal/tlsutil"
@@ -305,7 +306,7 @@ func (s *Service) registerAgentFromDeployToken(ctx context.Context, scheme, serv
 			continue
 		}
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			errs = append(errs, fmt.Sprintf("%s: HTTP %d: %s", endpoint, resp.StatusCode, strings.TrimSpace(string(body))))
+			errs = append(errs, fmt.Sprintf("%s: HTTP %d: %s", endpoint, resp.StatusCode, netutil.SanitizeHTTPErrorBody(resp.StatusCode, string(body))))
 			continue
 		}
 

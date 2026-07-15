@@ -61,3 +61,23 @@ func SetAgentAuthHeadersWithAgentID(req *http.Request, token, agentID string) er
 	req.Header.Set("X-Agent-ID", normalizedAgentID)
 	return nil
 }
+
+// SanitizeHTTPErrorBody limpa o corpo de uma resposta de erro HTTP para exibicao
+// em logs. Se o corpo for HTML (ex: pagina de erro do nginx), retorna uma
+// mensagem limpa com o codigo HTTP; caso contrario, retorna o texto truncado.
+func SanitizeHTTPErrorBody(statusCode int, body string) string {
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return fmt.Sprintf("HTTP %d (sem corpo)", statusCode)
+	}
+	// Detecta HTML retornado por proxies/nginx quando o backend esta fora
+	if strings.HasPrefix(body, "<") || strings.Contains(body, "<html>") || strings.Contains(body, "<HTML>") {
+		return fmt.Sprintf("HTTP %d (servidor intermediario retornou pagina de erro)", statusCode)
+	}
+	// Trunca respostas muito longas (ex.: stack traces ou JSON extenso)
+	const maxLen = 300
+	if len(body) > maxLen {
+		return body[:maxLen] + "..."
+	}
+	return body
+}
