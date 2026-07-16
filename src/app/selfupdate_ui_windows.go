@@ -5,24 +5,29 @@ package app
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	psadt "github.com/pedrostefanogv/go-psadt"
 	pstypes "github.com/pedrostefanogv/go-psadt/types"
+
+	"discovery/internal/selfupdate"
 )
 
 // selfUpdateInstallWithPSADT implementa o callback OnSelfUpdateInstall do selfupdate.Updater.
-// Fluxo:
-//  1. Abre client PSADT + sessão Interactive
-//  2. Exibe Welcome SEM AllowDefer (força continuar), HideCloseButton=true
-//  3. Exibe Progress durante a execução
-//  4. NÃO executa o instalador — apenas mostra UI (Welcome+Progress) e retorna nil
-//  5. O launchInstallerWithUI chama launchInstaller (ShellExecuteEx runas) em seguida
 //
-// Motivo: o PSADT StartProcess NÃO consegue elevar privilégios, e o instalador
-// NSIS /S /UPDATE sempre requer admin (taskkill, Program Files, HKLM).
+// Fluxo SEM interação do usuário:
+//  1. Abre sessão PSADT
+//  2. Welcome com CloseProcesses=["discovery-agent"] — PSADT fecha o agente atual
+//     automaticamente (CloseProcessesCountdown + ForceCloseProcessesCountdown)
+//  3. Exibe Progress: "Instalando Discovery Agent vX.Y.Z..."
+//  4. Lança o instalador via LaunchInstallerElevated (UAC) — sem diálogo nativo
+//  5. Aguarda alguns segundos para o instalador iniciar
+//  6. Retorna nil — o instalador NSIS faz taskkill do agente, matando esta sessão
+//
+// O usuário NÃO interage — apenas vê a barra de progresso.
 func (a *App) selfUpdateInstallWithPSADT(ctx context.Context, exePath, targetVersion string) error {
-	a.logs.append("[selfupdate] iniciando PSADT UI: exePath=" + exePath + " targetVersion=" + targetVersion)
+	a.logs.append("[selfupdate] iniciando PSADT UI (auto-close): exePath=" + exePath + " targetVersion=" + targetVersion)
 
 	client, err := psadt.NewClient(
 		psadt.WithTimeout(10 * time.Minute),
@@ -48,18 +53,30 @@ func (a *App) selfUpdateInstallWithPSADT(ctx context.Context, exePath, targetVer
 		_ = session.CloseWithContext(closeCtx, 0)
 	}()
 
-	// Welcome SEM AllowDefer — user não pode adiar
+	// ── Welcome SEM interação: auto-close do agente atual ──
+	// CloseProcesses = [discovery-agent.exe] → PSADT detecta e fecha automaticamente.
+	// AllowDefer = false → usuário não pode adiar.
+	// HideCloseButton = true → sem botão X.
+	// BlockExecution = true → trava até processos estarem fechados.
+	// CloseProcessesCountdown = 10s → fecha após 10s de inatividade.
+	// ForceCloseProcessesCountdown = 5s → força fechamento 5s após o countdown.
+	a.logs.append("[selfupdate] PSADT Welcome com CloseProcesses=[discovery-agent] (auto-close, sem interacao)")
 	if err := session.ShowInstallationWelcome(pstypes.WelcomeOptions{
-		Title:           "Atualização do Discovery Agent",
-		Subtitle:        fmt.Sprintf("Versão %s", targetVersion),
-		HideCloseButton: true,
-		Silent:          false,
-		CheckDiskSpace:  true,
+		Title:                        "Atualização do Discovery Agent",
+		Subtitle:                     fmt.Sprintf("Versão %s", targetVersion),
+		CloseProcesses:               []pstypes.ProcessDefinition{{Name: "discovery-agent"}},
+		AllowDefer:                   false,
+		HideCloseButton:              true,
+		BlockExecution:               true,
+		CloseProcessesCountdown:      10,
+		ForceCloseProcessesCountdown: 5,
+		CheckDiskSpace:               true,
 	}); err != nil {
-		return fmt.Errorf("welcome dialog: %w", err)
+		a.logs.append("[selfupdate] aviso: Welcome dialog falhou (pode estar sem sessao interativa): " + err.Error())
+		// Fallback: tenta prosseguir sem Welcome
 	}
 
-	// Exibe progresso (não-fatal)
+	// ── Progress: mostra que está instalando ──
 	if err := session.ShowInstallationProgress(pstypes.ProgressOptions{
 		StatusMessage: fmt.Sprintf("Instalando Discovery Agent %s...", targetVersion),
 	}); err != nil {
@@ -71,9 +88,24 @@ func (a *App) selfUpdateInstallWithPSADT(ctx context.Context, exePath, targetVer
 		}
 	}()
 
-	// NÃO executa o instalador via PSADT — o launchInstallerWithUI chamará
-	// launchInstaller (ShellExecuteEx runas) que tem elevação UAC.
-	// Apenas mostra UI e retorna nil.
-	a.logs.append("[selfupdate] PSADT UI exibido — delegando execucao para ShellExecuteEx runas")
+	// ── Lança o instalador com elevação UAC ──
+	// ShellExecuteEx("runas") é necessário porque o instalador NSIS /S /UPDATE
+	// sempre requer admin (taskkill, Program Files, HKLM).
+	if _, statErr := os.Stat(exePath); statErr != nil {
+		return fmt.Errorf("instalador nao encontrado: %w", statErr)
+	}
+
+	a.logs.append("[selfupdate] lancando instalador via LaunchInstallerElevated: " + exePath)
+	if err := selfupdate.LaunchInstallerElevated(exePath, "/S /UPDATE"); err != nil {
+		return fmt.Errorf("LaunchInstallerElevated: %w", err)
+	}
+
+	// ── Aguarda alguns segundos para o instalador iniciar ──
+	// O instalador NSIS faz taskkill do discovery-agent.exe.
+	// Enquanto isso, o PSADT fica visível mostrando o progresso.
+	a.logs.append("[selfupdate] instalador lancado — aguardando taskkill pelo NSIS...")
+	time.Sleep(3 * time.Second)
+
+	a.logs.append("[selfupdate] PSADT UI concluido — instalador NSIS assumiu")
 	return nil
 }

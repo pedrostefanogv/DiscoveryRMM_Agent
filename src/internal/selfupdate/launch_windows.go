@@ -53,10 +53,10 @@ func mustUTF16Ptr(s string) *uint16 {
 	return ptr
 }
 
-// launchInstallerElevated lanca o instalador com elevação UAC via ShellExecuteEx("runas").
-// Este é o fallback quando exec.Command falha com "required elevation".
-// Retorna nil em caso de sucesso (o processo foi iniciado com UAC).
-func launchInstallerElevated(exePath string, args string) error {
+// LaunchInstallerElevated lanca o instalador com elevação UAC via ShellExecuteEx("runas").
+// Exportado para que o callback PSADT no pacote app possa chamar a elevação UAC
+// diretamente de dentro da sessão PSADT.
+func LaunchInstallerElevated(exePath string, args string) error {
 	verb, _ := windows.UTF16PtrFromString("runas")
 	file, _ := windows.UTF16PtrFromString(exePath)
 	params := mustUTF16Ptr(args)
@@ -97,7 +97,7 @@ func (u *Updater) launchInstaller(exePath string) error {
 
 	// Tenta ShellExecuteEx("runas") primeiro — o instalador NSIS /S /UPDATE
 	// sempre requer elevação admin.
-	elevateErr := launchInstallerElevated(exePath, "/S /UPDATE")
+	elevateErr := LaunchInstallerElevated(exePath, "/S /UPDATE")
 	if elevateErr == nil {
 		u.logf("[selfupdate] instalador iniciado com elevacao UAC: %s", exePath)
 		return nil
