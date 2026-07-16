@@ -822,6 +822,7 @@ export namespace app {
 	    nonCriticalDeferredUntilUtc?: string;
 	    nonCriticalDeferredReason?: string;
 	    appVersion: string;
+	    appCommit?: string;
 	    buildDateUtc?: string;
 	    osName: string;
 	    osVersion: string;
@@ -854,6 +855,7 @@ export namespace app {
 	        this.nonCriticalDeferredUntilUtc = source["nonCriticalDeferredUntilUtc"];
 	        this.nonCriticalDeferredReason = source["nonCriticalDeferredReason"];
 	        this.appVersion = source["appVersion"];
+	        this.appCommit = source["appCommit"];
 	        this.buildDateUtc = source["buildDateUtc"];
 	        this.osName = source["osName"];
 	        this.osVersion = source["osVersion"];

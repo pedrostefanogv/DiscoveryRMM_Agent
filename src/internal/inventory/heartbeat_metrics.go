@@ -9,7 +9,6 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"discovery/internal/agentconn"
@@ -135,8 +134,8 @@ func collectHeartbeatMetricsWindows(ctx context.Context, metrics *agentconn.Agen
 		metrics.DiskPercent = percent
 	}
 
-	// Disco I/O: PowerShell/WMI com cache de 30s (evita subprocesso a cada heartbeat)
-	collectHeartbeatDiskIOWindowsCached(ctx, metrics)
+	// Disco I/O: PDH nativo (pdh.dll) — zero subprocessos, sem cache
+	collectHeartbeatDiskIOWindowsNative(metrics)
 
 	// Uptime: GetTickCount64 (API nativa)
 	if uptime := collectUptimeSecondsFunc(); uptime > 0 {
@@ -199,68 +198,6 @@ func collectHeartbeatMetricsOsquery(ctx context.Context, metrics *agentconn.Agen
 	applyHeartbeatCPUFallback(ctx, metrics)
 	applyHeartbeatDiskIOFallback(ctx, metrics)
 	applyHeartbeatMemoryFallback(ctx, metrics)
-}
-
-// ─── Disk I/O Cache ──────────────────────────────────────────────────
-// Evita subprocesso PowerShell a cada heartbeat; coleta via CIM apenas
-// quando o cache expira (30s).
-
-var (
-	diskIOCacheMu       sync.Mutex
-	diskIOCacheAt       time.Time
-	diskIOCacheDisk     float64 = -1
-	diskIOCacheRead     float64 = -1
-	diskIOCacheWrite    float64 = -1
-	diskIOCacheResponse float64 = -1
-)
-
-const diskIOCacheTTL = 30 * time.Second
-
-func collectHeartbeatDiskIOWindowsCached(ctx context.Context, metrics *agentconn.AgentHeartbeatMetrics) {
-	if metrics == nil {
-		return
-	}
-	if runtime.GOOS != "windows" {
-		return
-	}
-
-	diskIOCacheMu.Lock()
-	cacheAge := time.Since(diskIOCacheAt)
-	cacheValid := cacheAge < diskIOCacheTTL
-	if cacheValid {
-		disk, read, write, resp := diskIOCacheDisk, diskIOCacheRead, diskIOCacheWrite, diskIOCacheResponse
-		diskIOCacheMu.Unlock()
-		metrics.DiskReadPercent = read
-		metrics.DiskWritePercent = write
-		metrics.DiskResponseMs = resp
-		// Não sobrescreve disk_percent se já coletado via GetDiskFreeSpaceExW
-		if metrics.DiskPercent < 0 && disk >= 0 {
-			metrics.DiskPercent = disk
-		}
-		return
-	}
-	diskIOCacheMu.Unlock()
-
-	// Coleta fresca
-	diskPercent, readPercent, writePercent, responseMs, ok := collectWindowsDiskIOMetricsFunc(ctx)
-	if !ok {
-		return
-	}
-
-	diskIOCacheMu.Lock()
-	diskIOCacheDisk = diskPercent
-	diskIOCacheRead = readPercent
-	diskIOCacheWrite = writePercent
-	diskIOCacheResponse = responseMs
-	diskIOCacheAt = time.Now()
-	diskIOCacheMu.Unlock()
-
-	metrics.DiskReadPercent = readPercent
-	metrics.DiskWritePercent = writePercent
-	metrics.DiskResponseMs = responseMs
-	if metrics.DiskPercent < 0 && diskPercent >= 0 {
-		metrics.DiskPercent = diskPercent
-	}
 }
 
 func hasAnyHeartbeatMetric(metrics *agentconn.AgentHeartbeatMetrics) bool {
