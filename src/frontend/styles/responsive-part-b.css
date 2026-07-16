@@ -125,11 +125,14 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
+  overflow: hidden;
+  min-height: 0;
 }
 
 .kb-article-detail h2 {
   margin: 0 0 6px;
   font-size: 1.15rem;
+  flex-shrink: 0;
 }
 
 .kb-detail-meta {
@@ -139,6 +142,7 @@
   margin-bottom: 8px;
   font-size: 0.72rem;
   color: var(--muted);
+  flex-shrink: 0;
 }
 
 .kb-detail-meta span {
@@ -156,7 +160,8 @@
 
 .kb-detail-content {
   margin: 0;
-  max-height: calc(100vh - 420px);
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   font-family: 'Space Grotesk', sans-serif;
   font-size: 0.95rem;
@@ -165,6 +170,10 @@
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 12px;
+}
+
+.kb-detail-actions {
+  flex-shrink: 0;
 }
 
 .kb-detail-content p,
@@ -225,6 +234,34 @@
   width: 100%;
   overflow-x: auto;
   margin: 8px 0 12px;
+}
+
+/* ================================================================
+   DEBUG NETWORK TOGGLE
+   ================================================================ */
+.debug-network-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.debug-network-toggle-text {
+  flex: 1;
+}
+
+.debug-network-toggle-hint {
+  opacity: 0.7;
+}
+
+.debug-bind-status {
+  font-size: 12px;
+  opacity: 0.6;
 }
 
 .kb-markdown-table {
@@ -319,7 +356,8 @@
 @media (max-width: 980px) {
   .knowledge-layout {
     grid-template-columns: 1fr;
-    min-height: auto;
+    height: auto;
+    overflow: visible;
   }
 
   .kb-articles-list {
@@ -327,7 +365,7 @@
   }
 
   .kb-detail-content {
-    max-height: 320px;
+    max-height: 420px;
   }
 }
 

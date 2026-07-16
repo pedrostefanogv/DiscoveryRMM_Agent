@@ -98,13 +98,13 @@
           </div>
 
           <div class="debug-network-toggle-wrap">
-            <label class="debug-network-toggle" style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-top:12px;padding:10px 12px;border:1px solid var(--border-subtle, #3a352d);border-radius:8px;background:var(--bg-elevated, #25221e);">
+            <label class="debug-network-toggle">
               <input id="debugBindAllInterfaces" type="checkbox" />
-              <span style="flex:1">
+              <span class="debug-network-toggle-text">
                 <strong data-i18n="debug.networkToggle">Disponivel na rede</strong>
-                <br /><small style="opacity:0.7" id="debugBindAllInterfacesHint" data-i18n="debug.networkToggleHint">Permite acessar esta interface de outras maquinas na rede (0.0.0.0)</small>
+                <br /><small class="debug-network-toggle-hint" id="debugBindAllInterfacesHint" data-i18n="debug.networkToggleHint">Permite acessar esta interface de outras maquinas na rede (0.0.0.0)</small>
               </span>
-              <span id="debugBindStatus" class="debug-bind-status" style="font-size:12px;opacity:0.6"></span>
+              <span id="debugBindStatus" class="debug-bind-status"></span>
             </label>
           </div>
           <div id="debugStatus" class="debug-status" aria-live="polite"></div>

@@ -643,7 +643,7 @@
 }
 
 .store-card .store-hit {
-  background: color-mix(in srgb, var(--accent) 26%, #ffeab0 74%);
+  background: color-mix(in srgb, var(--accent-2) 18%, var(--surface) 82%);
   color: inherit;
   border-radius: 4px;
   padding: 0 2px;
@@ -651,9 +651,9 @@
   -webkit-box-decoration-break: clone;
 }
 
-/* Dark mode: highlight mais escuro com bom contraste sobre texto claro */
+/* Dark mode: highlight com tom dourado visivel sobre fundo escuro */
 [data-theme="dark"] .store-card .store-hit {
-  background: color-mix(in srgb, var(--accent) 35%, #2a2a2e 65%);
+  background: color-mix(in srgb, var(--accent-2) 32%, transparent 68%);
   color: var(--text);
 }
 

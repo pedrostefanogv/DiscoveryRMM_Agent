@@ -128,6 +128,8 @@ function renderStatusOverview(data) {
   }
 
   if (statusAppVersionEl) statusAppVersionEl.textContent = statusSafe(data && data.appVersion, 'dev');
+  var sidebarVersionEl = document.querySelector('.sidebar-version');
+  if (sidebarVersionEl) sidebarVersionEl.textContent = 'v' + statusSafe(data && data.appVersion, 'dev');
   if (statusAppCommitEl) statusAppCommitEl.textContent = statusSafe(data && data.appCommit, '-');
   if (statusBuildDateEl) {
     var buildDateUtc = data && data.buildDateUtc;
