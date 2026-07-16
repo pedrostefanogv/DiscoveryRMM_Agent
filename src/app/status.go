@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"discovery/internal/buildinfo"
 )
 
 // StatusOverview provides a simplified health snapshot for the default status page.
@@ -26,6 +28,7 @@ type StatusOverview struct {
 	NonCriticalDeferredUntil  string    `json:"nonCriticalDeferredUntilUtc,omitempty"`
 	NonCriticalDeferredReason string    `json:"nonCriticalDeferredReason,omitempty"`
 	AppVersion                string    `json:"appVersion"`
+	AppCommit                 string    `json:"appCommit,omitempty"`
 	BuildDateUTC              string    `json:"buildDateUtc,omitempty"`
 	OSName                    string    `json:"osName"`
 	OSVersion                 string    `json:"osVersion"`
@@ -55,6 +58,7 @@ func (a *App) GetStatusOverview() StatusOverview {
 		LastGlobalPongAtUTC: strings.TrimSpace(agent.LastGlobalPongAtUTC),
 		GlobalPongStale:     agent.GlobalPongStale,
 		AppVersion:          strings.TrimSpace(Version),
+		AppCommit:           strings.TrimSpace(buildinfo.Commit),
 		BuildDateUTC:        resolveAgentBuildDateUTC(),
 		OSName:              runtime.GOOS,
 		OSVersion:           runtime.GOARCH,

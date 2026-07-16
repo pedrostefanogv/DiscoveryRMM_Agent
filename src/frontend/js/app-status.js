@@ -7,6 +7,7 @@ const statusConnectionDotEl = document.getElementById('statusConnectionDot');
 const statusConnectionLabelEl = document.getElementById('statusConnectionLabel');
 const statusConnectionDetailEl = document.getElementById('statusConnectionDetail');
 const statusAppVersionEl = document.getElementById('statusAppVersion');
+const statusAppCommitEl = document.getElementById('statusAppCommit');
 const statusBuildDateEl = document.getElementById('statusBuildDate');
 const statusOSNameEl = document.getElementById('statusOSName');
 const statusOSVersionEl = document.getElementById('statusOSVersion');
@@ -127,6 +128,7 @@ function renderStatusOverview(data) {
   }
 
   if (statusAppVersionEl) statusAppVersionEl.textContent = statusSafe(data && data.appVersion, 'dev');
+  if (statusAppCommitEl) statusAppCommitEl.textContent = statusSafe(data && data.appCommit, '-');
   if (statusBuildDateEl) {
     var buildDateUtc = data && data.buildDateUtc;
     statusBuildDateEl.textContent = buildDateUtc ? formatDate(buildDateUtc, '-') : translate('common.unavailable');
