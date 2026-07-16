@@ -154,10 +154,32 @@ if [[ -n "$VERSION" ]]; then
   LDFLAGS+=" -X discovery/internal/buildinfo.Version=$VERSION"
 fi
 
+# Resolve commit hash (short) for buildinfo.Commit and agent-version.json
+COMMIT="unknown"
+if GIT_COMMIT=$(git -C "$PROJECT_ROOT" rev-parse --short=8 HEAD 2>/dev/null); then
+  COMMIT="$GIT_COMMIT"
+  LDFLAGS+=" -X discovery/internal/buildinfo.Commit=$COMMIT"
+  echo "buildinfo.Commit = $COMMIT"
+else
+  echo "[aviso] git rev-parse falhou; buildinfo.Commit ficara 'unknown'"
+fi
+
 go build -tags "desktop,production" -ldflags "$LDFLAGS" -o "$OUT_DIR/$OUTPUT_NAME" .
 popd >/dev/null
 
 echo "[3/3] Finalizando artefatos..."
+
+# Generate agent-version.json for API post-build commit resolution
+if [[ -n "$VERSION" ]]; then
+  VER_JSON="$OUT_DIR/agent-version.json"
+  cat > "$VER_JSON" <<EOF
+{
+  "version": "$VERSION",
+  "commitHash": "$COMMIT"
+}
+EOF
+  echo "agent-version.json gerado em: $VER_JSON"
+fi
 
 if [[ "$WRITE_INSTALLER_JSON" == "1" ]]; then
   INSTALLER_JSON_PATH="$OUT_DIR/installer.json"

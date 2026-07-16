@@ -153,6 +153,12 @@ finally {
 if (-not (Test-Path $agentExe)) {
     throw "BinÃ¡rio do agente nÃ£o foi gerado: $agentExe"
 }
+# Generate agent-version.json for API post-build commit resolution
+$agentVersionJson = Join-Path $binDir "agent-version.json"
+$agentVer = if ($Version) { $Version } else { "unknown" }
+$agentCommit = if ($gitCommit) { $gitCommit } else { "unknown" }
+@{ version = $agentVer; commitHash = $agentCommit } | ConvertTo-Json -Compress | Set-Content -Path $agentVersionJson -Encoding UTF8
+Write-Output "  agent-version.json gerado: version=$agentVer, commitHash=$agentCommit"
 
 Write-Output "[2/3] Build do instalador padrao (NSIS)..."
 
