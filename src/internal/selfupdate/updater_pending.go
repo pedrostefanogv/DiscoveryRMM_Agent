@@ -14,8 +14,9 @@ import (
 const (
 	// cleanupOldDownloadsAge é a idade máxima de arquivos .exe baixados na
 	// pasta de updates. Arquivos mais antigos são removidos no startup para
-	// evitar acúmulo de instaladores (~30MB cada).
-	cleanupOldDownloadsAge = 24 * time.Hour
+	// evitar acúmulo de instaladores (~30MB cada). Reduzido para 6h para
+	// evitar acúmulo rápido durante loops de update.
+	cleanupOldDownloadsAge = 6 * time.Hour
 )
 
 func (u *Updater) pendingInstallStatePath() string {

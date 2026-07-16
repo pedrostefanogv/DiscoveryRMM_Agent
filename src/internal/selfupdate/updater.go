@@ -323,7 +323,27 @@ func (u *Updater) CheckAndUpdate(ctx context.Context, force bool) error {
 		if targetVersion == "" {
 			targetVersion = serverVersion
 		}
+		// Se extractFileVersion retornou uma versão inferior à do servidor (ex.: NSIS
+		// VIProductVersion desatualizado), prefere serverVersion que é a fonte canônica.
+		if targetVersion != serverVersion && serverVersion != "" &&
+			compareVersions(targetVersion, serverVersion) < 0 {
+			u.logf("[selfupdate] versao PE=%s inferior a server=%s — usando serverVersion", targetVersion, serverVersion)
+			targetVersion = serverVersion
+		}
 		u.logf("[selfupdate] versao alvo: %s (current=%s serverCommit=%s)", targetVersion, currentVersion, serverCommit)
+
+		// ── Validação de versão: skip se alvo é inferior à versão atual ──
+		// Isso evita loop de instalação quando extractFileVersion (PE) diverge de
+		// buildinfo.Version (ldflags), por exemplo quando INFO_FILEVERSION do NSIS
+		// não reflete o productVersion correto.
+		// IMPORTANTE: NÃO bloqueia quando targetVersion == currentVersion (pode ser rebuild).
+		if !force && compareVersions(targetVersion, currentVersion) < 0 &&
+			compareVersions(serverVersion, currentVersion) <= 0 {
+			u.logf("[selfupdate] ja esta na versao mais recente (current=%s > target=%s, server=%s) — ignorando",
+				currentVersion, targetVersion, serverVersion)
+			errutil.LogIfErr(os.Remove(tempPath), "selfupdate: limpar temp mesma versao")
+			return nil
+		}
 
 		// Publica no P2P
 		artifactID := "selfupdate:" + strings.ToLower(fileSha256)

@@ -37,7 +37,7 @@
 !define INFO_PRODUCTVERSION "1.0.0"
 !endif
 !ifndef INFO_FILEVERSION
-!define INFO_FILEVERSION "1.0.0.0"
+!define INFO_FILEVERSION "${INFO_PRODUCTVERSION}.0"
 !endif
 !define INFO_COPYRIGHT      "Copyright (c) 2026 Discovery"
 !define PRODUCT_EXECUTABLE  "discovery-agent.exe"

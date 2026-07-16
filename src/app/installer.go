@@ -118,7 +118,7 @@ func loadInstallerConfig() (InstallerConfig, string, error) {
 	}
 
 	if !baseFound && !overrideFound {
-		return InstallerConfig{}, "", fmt.Errorf("config.json de producao nao encontrado")
+		return ensureDefaultInstallerConfig()
 	}
 
 	resolved := baseCfg
@@ -126,14 +126,14 @@ func loadInstallerConfig() (InstallerConfig, string, error) {
 
 	if !baseFound {
 		if overrideCfg.ServerURL == "" && (overrideCfg.ApiScheme == "" || overrideCfg.ApiServer == "") {
-			return InstallerConfig{}, "", fmt.Errorf("config.json de producao nao encontrado")
+			return ensureDefaultInstallerConfig()
 		}
 		resolved = overrideCfg
 		resolvedPath = ""
 	} else {
 		resolved = mergeInstallerOverride(baseCfg, overrideCfg)
 		if resolved.ServerURL == "" && (resolved.ApiScheme == "" || resolved.ApiServer == "") {
-			return InstallerConfig{}, "", fmt.Errorf("config.json de producao nao encontrado")
+			return ensureDefaultInstallerConfig()
 		}
 	}
 
@@ -144,6 +144,41 @@ func loadInstallerConfig() (InstallerConfig, string, error) {
 	}
 
 	return resolved, resolvedPath, nil
+}
+
+// ensureDefaultInstallerConfig cria um config.json padrão com P2P ativo
+// quando nenhum arquivo de configuração é encontrado. Isso garante que
+// o agente possa iniciar em modo zero-touch mesmo após um update onde
+// o NSIS pulou a criação do config (modo /UPDATE).
+func ensureDefaultInstallerConfig() (InstallerConfig, string, error) {
+	autoProv := true
+	cfg := InstallerConfig{
+		AutoProvisioning: &autoProv,
+		P2P: P2PConfig{
+			Enabled: true,
+		},
+	}
+
+	path := platform.SharedConfigPath()
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		log.Printf("[config] aviso: nao foi possivel criar diretorio padrao %s: %v", dir, err)
+		return cfg, "", nil // Retorna sem persistir, mas não falha
+	}
+
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		log.Printf("[config] aviso: nao foi possivel serializar config padrao: %v", err)
+		return cfg, "", nil
+	}
+
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		log.Printf("[config] aviso: nao foi possivel persistir config padrao em %s: %v", path, err)
+		return cfg, "", nil
+	}
+
+	log.Printf("[config] config padrao criado com auto-provisioning e P2P ativos em %s", path)
+	return cfg, path, nil
 }
 
 func persistInstallerConfig(sourcePath string, cfg InstallerConfig) (string, error) {

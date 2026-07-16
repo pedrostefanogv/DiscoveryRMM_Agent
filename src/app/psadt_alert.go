@@ -347,14 +347,15 @@ func mapPSADTDialogResult(result pstypes.DialogBoxResult, p PsadtAlertPayload) s
 // showPowerActionWarning builds and executes a PSADT prompt before a system
 // restart or shutdown.
 //
-//   - force=true:  Exibe Show-ADTBalloonTip (apenas notificação informativa).
-//     O shutdown é inevitável — o balloon só avisa o usuário.
-//     Sempre retorna "proceed".
-//   - force=false: Exibe Show-ADTDialogBox com botões Yes/No.
-//     Usuário pode confirmar ("proceed") ou adiar ("deferred").
+//   - force=false: Show-ADTInstallationPrompt com contagem regressiva
+//     (timeout = delaySeconds) e botoes Sim/Nao.
+//     Se o tempo esgotar: reinicia automaticamente (proceed).
+//     Se clicar "Sim": proceed. Se clicar "Nao": deferred (cancela).
+//   - force=true:  Show-ADTInstallationPrompt com apenas botao "Reiniciar Agora"
+//     (sem botao direito, sem contagem regressiva). O usuario nao pode cancelar.
 //
-// Quando PSADT não está instalado, o script escreve 'proceed' e o Go faz
-// fallback para shutdown.exe com diálogo nativo do Windows.
+// Quando PSADT nao esta instalado, o script escreve 'proceed' e o Go faz
+// fallback para shutdown.exe com dialogo nativo do Windows.
 func (a *App) showPowerActionWarning(ctx context.Context, action string, delaySeconds int, force bool, msg string) (string, error) {
 	if runtime.GOOS != "windows" {
 		return "proceed", nil
@@ -445,13 +446,13 @@ func (a *App) showPowerActionWarning(ctx context.Context, action string, delaySe
 // buildPowerActionWarningScript constroi o script PowerShell que exibe o aviso
 // de restart/shutdown via PSADT.
 //
-//   - force=true:  Show-ADTBalloonTip — balloon informativo (nao-bloqueante).
-//     O shutdown e inevitavel, o balloon apenas notifica.
-//   - force=false: Show-ADTInstallationPrompt com botoes Sim/Nao — usuario decide se prossegue.
-//     Usa Invoke-ADTClientServerOperation (processo separado na sessao do usuario)
-//     para garantir que a UI aparece mesmo quando o caller Go usa HideWindow.
+//   - force=false: Show-ADTInstallationPrompt com contagem regressiva
+//     (-Timeout = delaySeconds) e botoes Sim/Nao.
+//     Timeout → proceed automatico. Sim → proceed. Nao → deferred.
+//   - force=true:  Show-ADTInstallationPrompt apenas com botao "Reiniciar Agora"
+//     (sem botao direito, sem timeout). O usuario so pode confirmar.
 //
-// Se o módulo PSADT não estiver disponível, retorna 'proceed' para fallback
+// Se o modulo PSADT nao estiver disponivel, retorna 'proceed' para fallback
 // com shutdown.exe (dialogo nativo do Windows).
 func buildPowerActionWarningScript(action string, delaySeconds int, force bool, message string) (string, time.Duration) {
 	title := "Reinicializacao do Sistema"
@@ -460,7 +461,7 @@ func buildPowerActionWarningScript(action string, delaySeconds int, force bool, 
 	}
 
 	// Header: importa PSADT e abre sessao.
-	// Se o módulo não estiver disponível, retorna 'proceed' para fallback
+	// Se o modulo nao estiver disponivel, retorna 'proceed' para fallback
 	// para shutdown.exe com dialogo nativo do Windows.
 	header := "$ErrorActionPreference = 'Stop'\n" +
 		"[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)\n" +
@@ -481,46 +482,50 @@ func buildPowerActionWarningScript(action string, delaySeconds int, force bool, 
 	closeSession := "try { Close-ADTSession -ExitCode 0 } catch {}\n"
 
 	if force {
-		// Modo forcado: balloon tip informativo (nao-bloqueante).
-		// O shutdown.exe e agendado em seguida pelo Go com o delay configurado.
-		// O usuário vê o balloon com o aviso, mas não pode cancelar.
+		// ── Modo forcado: apenas botao "Reiniciar Agora", sem timeout ──
+		// O usuario nao pode cancelar — so confirma o restart.
+		// Botao direito vazio = ausente na UI do PSADT.
+		// Timeout 0 = sem contagem regressiva, espera indefinidamente.
 		body := header +
-			fmt.Sprintf("Show-ADTBalloonTip -BalloonTipTitle %s -BalloonTipText %s -BalloonTipIcon 'Warning'\n",
-				psEscape(title), psEscape(message)) +
+			"$promptResult = Show-ADTInstallationPrompt" +
+			fmt.Sprintf(" -Message %s", psEscape(message)) +
+			fmt.Sprintf(" -Title %s", psEscape(title)) +
+			" -ButtonLeftText 'Reiniciar Agora'" +
+			" -ButtonRightText ''" +
+			" -Timeout 0" +
+			"\n" +
+			"$promptResult = [string]($promptResult)\n" +
 			"Write-Output 'proceed'\n" +
 			closeSession +
 			"exit 0\n"
-		timeoutVal := 30 * time.Second
+		timeoutVal := 5 * time.Minute
 		return body, timeoutVal
 	}
 
-	// Modo nao-forcado: prompt interativo Yes/No via Show-ADTInstallationPrompt.
-	// IMPORTANTE: Usamos Show-ADTInstallationPrompt em vez de Show-ADTDialogBox porque
-	// Show-ADTDialogBox tenta criar WPF diretamente no processo atual — que não tem
-	// contexto de janela devido ao HideWindow/CREATE_NO_WINDOW aplicado pelo Go.
-	// Show-ADTInstallationPrompt usa Invoke-ADTClientServerOperation, que spawna um
-	// processo separado na sessao do usuario logado com contexto de janela real.
+	// ── Modo nao-forcado: contagem regressiva + Sim/Nao ──
+	// Timeout = delaySeconds: ao esgotar o tempo, o PSADT retorna
+	// automaticamente como "Sim" e o restart prossegue.
+	// "Sim" → proceed, "Nao" → deferred (cancela).
 	//
-	// Retorno: PSADT escreve "Resultado: <texto_do_botao>" no stdout.
-	//   "Yes" / "Sim"   -> proceed
-	//   "No" / "Não"     -> deferred
-	//   Timeout           -> deferred
-	// Compatibilidade: em PSADT 4.1.8, Show-ADTInstallationPrompt aceita
-	// -NotTopMost, mas não -TopMost. Mantemos o comportamento padrão
-	// (topmost=true) sem forcar parametro para evitar NamedParameterNotFound.
+	// Usa Show-ADTInstallationPrompt via Invoke-ADTClientServerOperation
+	// para garantir que a UI aparece mesmo com HideWindow no Go.
+	if delaySeconds <= 0 {
+		delaySeconds = 60 // minimo 60s de contagem
+	}
+	timeoutVal := time.Duration(delaySeconds+150) * time.Second
+
 	body := header +
 		"$promptResult = Show-ADTInstallationPrompt" +
 		fmt.Sprintf(" -Message %s", psEscape(message)) +
 		fmt.Sprintf(" -Title %s", psEscape(title)) +
 		" -ButtonLeftText 'Sim'" +
-		" -ButtonRightText 'Não'" +
-		fmt.Sprintf(" -Timeout %d", delaySeconds+120) +
+		" -ButtonRightText 'Nao'" +
+		fmt.Sprintf(" -Timeout %d", delaySeconds) +
 		"\n" +
 		"$promptResult = [string]($promptResult)\n" +
-		"if ($promptResult -like '*Sim*') { Write-Output 'proceed' } else { Write-Output 'deferred' }\n" +
+		"if ($promptResult -like '*Sim*' -or $promptResult -like '*Timeout*') { Write-Output 'proceed' } else { Write-Output 'deferred' }\n" +
 		closeSession +
 		"exit 0\n"
-	timeoutVal := time.Duration(delaySeconds+150) * time.Second
 	return body, timeoutVal
 }
 
@@ -565,8 +570,13 @@ func resolvePowerShellExe() string {
 	return psPath // retorna o caminho canonico mesmo se nao encontrado, o erro sera tratado por quem chama
 }
 
-// executeSystemPowerAction schedules the actual OS restart or shutdown via shutdown.exe.
-func (a *App) executeSystemPowerAction(_ context.Context, action string, delaySeconds int, force bool, msg string) (int, string, string) {
+// executeSystemPowerAction executa o restart/shutdown imediato no SO.
+//
+// IMPORTANTE: A UI (contagem regressiva, confirmacao) ja foi tratada pelo
+// PSADT no showPowerActionWarning. Esta funcao apenas executa a acao final.
+// Usa shutdown.exe /t 0 para restart imediato SEM dialogo nativo do Windows —
+// evitando contagem regressiva redundante ja que o usuario ja interagiu no PSADT.
+func (a *App) executeSystemPowerAction(_ context.Context, action string, _ int, _ bool, _ string) (int, string, string) {
 	flag := "/s"
 	label := "shutdown"
 	if action == "restart" || action == "reboot" {
@@ -574,37 +584,24 @@ func (a *App) executeSystemPowerAction(_ context.Context, action string, delaySe
 		label = "restart"
 	}
 
-	args := []string{flag, "/t", fmt.Sprintf("%d", delaySeconds)}
-	if force {
-		args = append(args, "/f")
-	}
-	if msg != "" {
-		args = append(args, "/c", msg)
-	}
-
 	shutdownExe := resolveShutdownExe()
-
-	// Verifica se o executavel existe antes de tentar executa-lo
 	if _, statErr := os.Stat(shutdownExe); statErr != nil {
-		if a != nil {
-			a.logs.append(fmt.Sprintf("[agent] %s-action [ERRO-RESOLVE] shutdown.exe ausente em %s: %v", action, shutdownExe, statErr))
-		}
-		// Fallback: tenta shutdown.exe sem caminho absoluto (via PATH)
 		if resolved, lookErr := exec.LookPath("shutdown.exe"); lookErr == nil {
 			shutdownExe = resolved
-			if a != nil {
-				a.logs.append(fmt.Sprintf("[agent] %s-action [FALLBACK-PATH] shutdown.exe resolvido via PATH: %s", action, shutdownExe))
-			}
 		} else {
 			if a != nil {
-				a.logs.append(fmt.Sprintf("[agent] %s-action [FATAL] shutdown.exe nao encontrado: Stat=%v LookPath=%v", action, statErr, lookErr))
+				a.logs.append(fmt.Sprintf("[agent] %s-action [FATAL] shutdown.exe nao encontrado: Stat=%v LookPath=%v", label, statErr, lookErr))
 			}
 			return 1, fmt.Sprintf("shutdown.exe nao encontrado: %v", statErr), fmt.Sprintf("falha ao localizar shutdown.exe: %v / PATH: %v", statErr, lookErr)
 		}
 	}
 
+	// /t 0 = imediato, sem dialogo de contagem regressiva do Windows.
+	// /f = forcado (fecha apps sem confirmacao adicional).
+	args := []string{flag, "/t", "0", "/f"}
+
 	if a != nil {
-		a.logs.append(fmt.Sprintf("[agent] %s-action [EXEC] exe=%s args=%s delay=%ds force=%t", action, shutdownExe, strings.Join(args, " "), delaySeconds, force))
+		a.logs.append(fmt.Sprintf("[agent] %s-action [EXEC] exe=%s args=%s (psadt ja tratou UX)", label, shutdownExe, strings.Join(args, " ")))
 	}
 
 	cmd := exec.Command(shutdownExe, args...)
@@ -614,15 +611,15 @@ func (a *App) executeSystemPowerAction(_ context.Context, action string, delaySe
 
 	if err != nil {
 		if a != nil {
-			a.logs.append(fmt.Sprintf("[agent] %s-action [ERRO] exe=%s args=%s err=%v output=%q", action, shutdownExe, strings.Join(args, " "), err, output))
+			a.logs.append(fmt.Sprintf("[agent] %s-action [ERRO] exe=%s err=%v output=%q", label, shutdownExe, err, output))
 		}
-		return 1, output, fmt.Sprintf("falha ao agendar %s (%s): %v", label, shutdownExe, err)
+		return 1, output, fmt.Sprintf("falha ao executar %s (%s): %v", label, shutdownExe, err)
 	}
 
 	if a != nil {
-		a.logs.append(fmt.Sprintf("[agent] %s-action [OK] exe=%s delay=%ds force=%t message=%q", label, shutdownExe, delaySeconds, force, msg))
+		a.logs.append(fmt.Sprintf("[agent] %s-action [OK] exe=%s (imediato, sem dialogo nativo)", label, shutdownExe))
 	}
-	return 0, fmt.Sprintf("%s agendado com sucesso (delay=%ds, force=%t, message=%q)", label, delaySeconds, force, msg), ""
+	return 0, fmt.Sprintf("%s executado com sucesso", label), ""
 }
 
 // ── Diagnostic Helpers ──

@@ -39,6 +39,18 @@ func (u *Updater) ResumePendingInstallReport(ctx context.Context) {
 	}
 	currentCommit := strings.TrimSpace(buildinfo.Commit)
 
+	// ── Early exit: target mais antigo que versão atual ──
+	// Se o targetVersion registrado é inferior à versão atual, o estado pendente
+	// foi criado por um check defeituoso (ex.: extractFileVersion do PE divergente
+	// do buildinfo.Version real). Neste caso, limpa imediatamente sem reportar
+	// falha — o agente já está em versão superior.
+	if compareVersions(state.TargetVersion, currentVersion) < 0 {
+		u.logf("estado pendente de install descartado: target=%s inferior a current=%s (estado invalido)",
+			state.TargetVersion, currentVersion)
+		u.clearPendingInstallState()
+		return
+	}
+
 	// ── Decisao baseada em commit (preferencial) ──
 	// Se o estado pendente tem installedCommit, comparamos commits ao inves
 	// de versoes. Isso funciona mesmo quando a versao nao muda (rebuilds em dev).
@@ -65,7 +77,7 @@ func (u *Updater) ResumePendingInstallReport(ctx context.Context) {
 		return
 	}
 
-	// ── Fallback: decisao baseada em versao (legado, sem commit info) ──
+	// ── Fallback: decisao baseada em versao (commit ausente ou unknown) ──
 	if state.InstallAttempts >= maxInstallAttempts {
 		u.logf("estado pendente de install: maximo de %d tentativas excedido — buildinfo.Version=%s target=%s",
 			maxInstallAttempts, currentVersion, state.TargetVersion)
