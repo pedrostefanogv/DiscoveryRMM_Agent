@@ -26,15 +26,25 @@ var assets embed.FS
 func main() {
 	logger.RedirectStdLog(logger.LevelInfo)
 
+	// Help/version: exibe e sai sem iniciar a GUI.
+	// showCLIHelp respeita a regra de nao misturar prefixos (-- vs / vs -).
+	if showCLIHelp() {
+		return
+	}
+
 	if note := strings.TrimSpace(suppressGameBarOverlay()); note != "" {
 		logger.Info("gamebar overlay", "note", note)
 	}
 
-	startupDebugMode := detectStartupDebugMode() || hasStartupArg("--debug")
-	startupMinimized := hasStartupArg("--startup-minimized")
-	startupSource := strings.TrimSpace(parseArgValue("--startup-source"))
+	startupDebugMode := detectStartupDebugMode() || hasStartupArg("--debug") || hasStartupArg("/debug") || hasStartupArg("-debug")
+	startupMinimized := hasStartupArg("--startup-minimized") || hasStartupArg("/startup-minimized") || hasStartupArg("-startup-minimized")
+	startupSource := firstNonEmpty(
+		strings.TrimSpace(parseArgValue("--startup-source")),
+		strings.TrimSpace(parseArgValue("/startup-source")),
+		strings.TrimSpace(parseArgValue("-startup-source")),
+	)
 	startupWindowFrame, startupFrameless := resolveStartupWindowFrame()
-	cleanupDeleteOnExit := hasStartupArg("--agent-delete-cleanup")
+	cleanupDeleteOnExit := hasStartupArg("--agent-delete-cleanup") || hasStartupArg("/agent-delete-cleanup") || hasStartupArg("-agent-delete-cleanup")
 
 	if cleanupDeleteOnExit {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
@@ -46,7 +56,7 @@ func main() {
 	}
 
 	if startupDebugMode {
-		log.Println("[startup] --debug detectado: inicializando em modo debug (transitorio)")
+		log.Println("[startup] modo debug detectado: inicializando com servidor HTTP de debug (transitorio)")
 	}
 	// Always inject frontend assets — debug HTTP server may be activated
 	// dynamically during startup() if Shift/Ctrl is detected.
@@ -131,6 +141,15 @@ func main() {
 	}
 }
 
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 func hasStartupArg(arg string) bool {
 	for _, value := range os.Args[1:] {
 		if strings.EqualFold(strings.TrimSpace(value), arg) {
@@ -150,11 +169,15 @@ func parseArgValue(argName string) string {
 }
 
 func resolveStartupWindowFrame() (string, bool) {
-	if hasStartupArg("--windowed-frame") {
+	if hasStartupArg("--windowed-frame") || hasStartupArg("/windowed-frame") || hasStartupArg("-windowed-frame") {
 		return "standard", false
 	}
 
-	frame := strings.TrimSpace(parseArgValue("--window-frame"))
+	frame := firstNonEmpty(
+		strings.TrimSpace(parseArgValue("--window-frame")),
+		strings.TrimSpace(parseArgValue("/window-frame")),
+		strings.TrimSpace(parseArgValue("-window-frame")),
+	)
 	if frame == "" {
 		frame = platform.WindowFrame()
 	}

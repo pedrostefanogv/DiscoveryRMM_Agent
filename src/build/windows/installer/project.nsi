@@ -246,7 +246,29 @@ ShowInstDetails show # This will always show the installation details.
 
 Function .onInit
    !insertmacro wails.checkArchitecture
-   
+
+   # ── Help (/?  /H  /HELP) ──
+   # Deve vir ANTES de SetSilent e StrCpy de defaults para funcionar
+   # mesmo em builds que forcam silent (UPDATE_INSTALL, BOOTSTRAP_STAGE2).
+   # REGRA: nao misturar prefixos (/ com -- ou -). Se detectar mistura, ignora
+   # flags de help e segue instalacao normal.
+   ${GetParameters} $R0
+   ${GetOptions} $R0 "/?" $R1
+   ${IfNot} ${Errors}
+      Call ShowHelpMessageBox
+      Abort
+   ${EndIf}
+   ${GetOptions} $R0 "/H" $R1
+   ${IfNot} ${Errors}
+      Call ShowHelpMessageBox
+      Abort
+   ${EndIf}
+   ${GetOptions} $R0 "/HELP" $R1
+   ${IfNot} ${Errors}
+      Call ShowHelpMessageBox
+      Abort
+   ${EndIf}
+
    # Definir valores padrÃ£o vindos do build
    StrCpy $ServerUrl "${BUILD_DEFAULT_URL}"
    StrCpy $ServerKey "${BUILD_DEFAULT_KEY}"
@@ -283,10 +305,11 @@ Function .onInit
       StrCpy $MinimalMode "0"
    ${EndIf}
    
-   # Obter parÃ¢metros da linha de comando
+   # Obter parametros da linha de comando
    ${GetParameters} $R0
 
    # Parse UPDATE (atualizacao in-place): silencioso, sem wizard e sem sobrescrever config.
+   # Short form: /U
    ${GetOptions} $R0 "/UPDATE" $R1
    ${IfNot} ${Errors}
       StrCpy $UpdateMode "1"
@@ -297,28 +320,56 @@ Function .onInit
          StrCpy $INSTDIR $R2
       ${EndIf}
    ${EndIf}
-   
+   ${GetOptions} $R0 "/U" $R1
+   ${IfNot} ${Errors}
+      StrCpy $UpdateMode "1"
+      StrCpy $MinimalMode "1"
+      SetSilent silent
+      ReadRegStr $R2 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${UNINST_KEY_NAME}" "InstallLocation"
+      ${If} $R2 != ""
+         StrCpy $INSTDIR $R2
+      ${EndIf}
+   ${EndIf}
+
    # Parse URL
    ${GetOptions} $R0 "/URL=" $R1
    ${If} $R1 != ""
       StrCpy $ServerUrl $R1
    ${EndIf}
-   
+
    # Parse KEY
+   # Short form: /K=
    ${GetOptions} $R0 "/KEY=" $R1
+   ${If} $R1 != ""
+      StrCpy $ServerKey $R1
+   ${EndIf}
+   ${GetOptions} $R0 "/K=" $R1
    ${If} $R1 != ""
       StrCpy $ServerKey $R1
    ${EndIf}
 
    # Parse PAYLOAD_URL (override de build para bootstrap)
+   # Short form: /PU=
    ${GetOptions} $R0 "/PAYLOAD_URL=" $R1
    ${If} $R1 != ""
       StrCpy $PayloadUrl $R1
    ${EndIf}
-   
-   # Parse AUTO_PROVISIONING (0 ou 1) - chave canÃ´nica para zero-touch provisioning.
-   # Aceita /DISCOVERY= como alias legado para compatibilidade com automaÃ§Ãµes antigas.
+   ${GetOptions} $R0 "/PU=" $R1
+   ${If} $R1 != ""
+      StrCpy $PayloadUrl $R1
+   ${EndIf}
+
+   # Parse AUTO_PROVISIONING (0 ou 1) - chave canonica para zero-touch provisioning.
+   # Aceita /DISCOVERY= como alias legado para compatibilidade com automacoes antigas.
+   # Short form: /AP=
    ${GetOptions} $R0 "/AUTO_PROVISIONING=" $R1
+   ${If} $R1 != ""
+      ${If} $R1 == "0"
+      ${OrIf} $R1 == "1"
+         StrCpy $AutoProvisioning $R1
+      ${EndIf}
+   ${EndIf}
+   ${GetOptions} $R0 "/AP=" $R1
    ${If} $R1 != ""
       ${If} $R1 == "0"
       ${OrIf} $R1 == "1"
@@ -334,7 +385,20 @@ Function .onInit
    ${EndIf}
 
    # Parse ALLOW_INSECURE_TLS (1/true/yes/on habilita persistencia no config)
+   # Short form: /TLS=
    ${GetOptions} $R0 "/ALLOW_INSECURE_TLS=" $R1
+   ${If} $R1 != ""
+      ${If} $R1 == "1"
+      ${OrIf} $R1 == "true"
+      ${OrIf} $R1 == "TRUE"
+      ${OrIf} $R1 == "yes"
+      ${OrIf} $R1 == "YES"
+      ${OrIf} $R1 == "on"
+      ${OrIf} $R1 == "ON"
+         StrCpy $AllowInsecureTls "1"
+      ${EndIf}
+   ${EndIf}
+   ${GetOptions} $R0 "/TLS=" $R1
    ${If} $R1 != ""
       ${If} $R1 == "1"
       ${OrIf} $R1 == "true"
@@ -354,9 +418,20 @@ Function .onInit
    ${IfNot} ${Errors}
       SetSilent silent
       StrCpy $MinimalMode "1"
-   ${EndIf}   
-   # Verificar modo mÃ­nimo
+   ${EndIf}
+   # Verificar modo minimo
+   # Short form: /M
    ${GetOptions} $R0 "/MINIMAL" $R1
+   ${IfNot} ${Errors}
+      StrCpy $MinimalMode "1"
+      # Em modo minimo, pular wizard se tiver parametros
+      ${If} $ServerUrl != ""
+      ${AndIf} $ServerKey != ""
+         SetSilent normal  # Mostra so o progresso
+      ${EndIf}
+   ${EndIf}
+   # Short form: /M
+   ${GetOptions} $R0 "/M" $R1
    ${IfNot} ${Errors}
       StrCpy $MinimalMode "1"
       # Em modo mÃ­nimo, pular wizard se tiver parÃ¢metros
@@ -367,7 +442,12 @@ Function .onInit
    ${EndIf}
 
    # Modo genÃ©rico: sem URL/KEY â€” agente entra em auto-provisioning via P2P
+   # Short form: /G
    ${GetOptions} $R0 "/GENERIC" $R1
+   ${IfNot} ${Errors}
+      StrCpy $GenericMode "1"
+   ${EndIf}
+   ${GetOptions} $R0 "/G" $R1
    ${IfNot} ${Errors}
       StrCpy $GenericMode "1"
    ${EndIf}
@@ -943,6 +1023,48 @@ Function un.UnregisterUIStartupTask
    nsExec::ExecToLog /OEM '"$SYSDIR\schtasks.exe" /Delete /TN "${DISCOVERY_UI_TASK_NAME}" /F'
    Pop $R0
    Delete "$SMSTARTUP\${INFO_PRODUCTNAME}.lnk"
+FunctionEnd
+
+# ── Help: exibe MessageBox com todos os parametros disponiveis e sai ──
+Function ShowHelpMessageBox
+   StrCpy $R9 "Discovery Agent Installer v${INFO_PRODUCTVERSION}"
+
+   ; Identifica tipo de build no titulo
+   !if "${BUILD_BOOTSTRAP_INSTALL}" == "1"
+      StrCpy $R9 "$R9 (build: bootstrap)"
+   !else if "${BUILD_UPDATE_INSTALL}" == "1"
+      StrCpy $R9 "$R9 (build: update)"
+   !else
+      StrCpy $R9 "$R9 (build: standard)"
+   !endif
+
+   MessageBox MB_OK|MB_ICONINFORMATION "$R9$\r$\n\
+$\r$\n\
+Parametros disponiveis (forma longa / forma curta):$\r$\n\
+$\r$\n\
+  /?, /H, /HELP           Exibe esta ajuda$\r$\n\
+  /S                      Instalacao silenciosa (sem interface grafica)$\r$\n\
+  /UPDATE, /U             Modo atualizacao: silencioso, preserva config local$\r$\n\
+  /URL=<endereco>         URL do servidor API$\r$\n\
+  /KEY=<chave>, /K=<c>    Chave de API / tenant key$\r$\n\
+  /AUTO_PROVISIONING=<0|1>, /AP=<0|1>$\r$\n\
+                          Habilita (1) ou desabilita (0) zero-touch provisioning$\r$\n\
+  /ALLOW_INSECURE_TLS=<1|true|yes|on>, /TLS=<valor>$\r$\n\
+                          Permite conexao TLS insegura$\r$\n\
+  /MINIMAL, /M            Modo minimo: pula wizard se URL+KEY informados$\r$\n\
+  /GENERIC, /G            Modo generico: provisioning P2P sem wizard$\r$\n\
+  /D=<diretorio>          Diretorio de instalacao$\r$\n\
+                          (padrao: C:\Program Files\Discovery)$\r$\n\
+$\r$\n\
+Exemplos:$\r$\n\
+$\r$\n\
+  discovery-amd64-installer.exe /S /URL=api.empresa.com /KEY=abc123$\r$\n\
+  discovery-amd64-installer.exe /U$\r$\n\
+  discovery-amd64-installer.exe /G /AP=1$\r$\n\
+  discovery-amd64-installer.exe /S /URL=api.empresa.com /K=abc123 /D=C:\Discovery$\r$\n\
+$\r$\n\
+Documentacao: https://docs.discovery.rmm$\r$\n\
+Para ajuda do agente: discovery-agent.exe --help (ou /?)"
 FunctionEnd
 
 
