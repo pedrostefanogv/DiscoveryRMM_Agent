@@ -21,6 +21,10 @@ import (
 )
 
 func (u *Updater) ResumePendingInstallReport(ctx context.Context) {
+	// Limpa downloads antigos na pasta de updates no startup.
+	// Arquivos discovery-update-*.exe com mais de 24h são removidos.
+	u.cleanupOldDownloads()
+
 	state, err := u.loadPendingInstallState()
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
