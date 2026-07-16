@@ -413,10 +413,10 @@ func (a *App) showPowerActionWarning(ctx context.Context, action string, delaySe
 	}
 
 	// O output do PSADT contém dezenas de linhas de log de inicialização
-	// antes da palavra de decisão (proceed/deferred). TrimSpace remove
-	// espaços das bordas, mas não quebras de linha no meio.
-	// Extraímos apenas a última linha não-vazia, que é a decisão real.
-	result := extractLastLine(strings.TrimSpace(rawOutput))
+	// antes da palavra de decisão (proceed/deferred). Além disso, após a
+	// decisão, o PSADT ainda imprime [finalization] [close-adtsession].
+	// extractDecision ignora linhas de log e busca apenas a decisão real.
+	result := extractDecision(rawOutput)
 	a.logs.append(fmt.Sprintf("[agent] psadt-%s-prompt [OK] result=%s scriptSize=%dB", action, result, len(script)))
 	if len(rawOutput) > len(result)+10 {
 		a.logs.append(fmt.Sprintf("[agent] psadt-%s-prompt [DIAG] rawOutput possui %d linhas — apenas a última linha foi usada como decisão", action, countLines(rawOutput)))
@@ -751,15 +751,37 @@ func tailStr(s string, maxLen int) string {
 	return s[len(s)-maxLen:]
 }
 
-// extractLastLine extrai a ultima linha nao-vazia de uma string multi-linha.
-// Usado para obter a decisao do usuario (proceed/deferred) no meio do output
-// verboso de inicializacao do PSADT (que pode ter dezenas de linhas de log).
-func extractLastLine(raw string) string {
+// extractDecision extrai a decisao do usuario (proceed/deferred) do output
+// verboso do PSADT. Diferente de extractLastLine, ignora linhas de log do
+// PSADT como [finalization] [close-adtsession] que aparecem DEPOIS da decisao.
+//
+// O output do PSADT tem este formato:
+//
+//	... (dezenas de linhas de init/log PSADT) ...
+//	proceed              ← decisao do usuario (Show-ADTInstallationPrompt)
+//	[timestamp] [finalization] [close-adtsession] [info] :: --------
+//
+// extractLastLine SEMPRE pegava a linha de finalizacao, causando falso "deferred".
+func extractDecision(raw string) string {
 	lines := strings.Split(raw, "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
-		line := strings.TrimSpace(lines[i])
-		if line != "" {
-			return strings.ToLower(line)
+		line := strings.ToLower(strings.TrimSpace(lines[i]))
+		if line == "" {
+			continue
+		}
+		// Ignora linhas de log do PSADT (comecam com timestamp entre colchetes
+		// seguidas de tags como [finalization], [initialization], etc.)
+		if strings.Contains(line, "[finalization]") ||
+			strings.Contains(line, "[initialization]") ||
+			strings.Contains(line, "[pre-installation]") ||
+			strings.Contains(line, "[post-installation]") ||
+			strings.Contains(line, "[installation]") {
+			continue
+		}
+		// Palavras de decisao emitidas pelo script PowerShell
+		if line == "proceed" || line == "deferred" ||
+			line == "yes" || line == "ok" {
+			return line
 		}
 	}
 	return ""
