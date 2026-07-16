@@ -96,20 +96,23 @@ func (u *Updater) finishInstall(ctx context.Context, tempPath, targetVersion, cu
 
 // launchInstallerWithUI resolve o callback OnSelfUpdateInstall ou, como fallback,
 // chama launchInstaller diretamente (comportamento legado sem UI PSADT).
+//
+// NOTA: O instalador NSIS /S /UPDATE sempre requer elevação admin (escreve em
+// Program Files, HKLM). O PSADT StartProcess herda o contexto do processo atual
+// e NÃO consegue elevar. Por isso, o callback PSADT só mostra UI (Welcome+Progress)
+// e depois retorna nil, delegando a execução real ao launchInstaller que usa
+// ShellExecuteEx("runas") com elevação UAC.
 func (u *Updater) launchInstallerWithUI(ctx context.Context, exePath, targetVersion string) error {
 	if u.OnSelfUpdateInstall != nil {
 		u.logf("[selfupdate] usando callback OnSelfUpdateInstall com PSADT UI para %s", targetVersion)
-		if err := u.OnSelfUpdateInstall(ctx, exePath, targetVersion); err == nil {
-			return nil
-		} else {
-			u.logf("[selfupdate] callback PSADT falhou, tentando fallback launchInstaller: %v", err)
-			if fallbackErr := u.launchInstaller(exePath); fallbackErr == nil {
-				return nil
-			} else {
-				return errors.New("selfupdate callback falhou: " + err.Error() + "; fallback falhou: " + fallbackErr.Error())
-			}
+		// O callback mostra a UI do PSADT (Welcome + Progress) mas NÃO executa
+		// o instalador. A execução real é feita via ShellExecuteEx("runas") abaixo.
+		if err := u.OnSelfUpdateInstall(ctx, exePath, targetVersion); err != nil {
+			u.logf("[selfupdate] callback PSADT falhou: %v — tentando launchInstaller direto sem UI", err)
 		}
 	}
-	u.logf("[selfupdate] sem callback UI, usando launchInstaller direto")
+	// SEMPRE usa launchInstaller (ShellExecuteEx runas) para execução real.
+	// O instalador NSIS /S /UPDATE precisa de elevação admin.
+	u.logf("[selfupdate] executando instalador via ShellExecuteEx runas: %s", exePath)
 	return u.launchInstaller(exePath)
 }

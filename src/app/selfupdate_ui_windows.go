@@ -5,7 +5,6 @@ package app
 import (
 	"context"
 	"fmt"
-	"os"
 	"time"
 
 	psadt "github.com/pedrostefanogv/go-psadt"
@@ -14,13 +13,14 @@ import (
 
 // selfUpdateInstallWithPSADT implementa o callback OnSelfUpdateInstall do selfupdate.Updater.
 // Fluxo:
-//  1. Abre client PSADT + sessão NonInteractive
+//  1. Abre client PSADT + sessão Interactive
 //  2. Exibe Welcome SEM AllowDefer (força continuar), HideCloseButton=true
 //  3. Exibe Progress durante a execução
-//  4. Executa o instalador /S /UPDATE via StartProcess
-//  5. Fecha progress e sessão
+//  4. NÃO executa o instalador — apenas mostra UI (Welcome+Progress) e retorna nil
+//  5. O launchInstallerWithUI chama launchInstaller (ShellExecuteEx runas) em seguida
 //
-// O user NÃO pode adiar nem cancelar — só vê o progresso.
+// Motivo: o PSADT StartProcess NÃO consegue elevar privilégios, e o instalador
+// NSIS /S /UPDATE sempre requer admin (taskkill, Program Files, HKLM).
 func (a *App) selfUpdateInstallWithPSADT(ctx context.Context, exePath, targetVersion string) error {
 	a.logs.append("[selfupdate] iniciando PSADT UI: exePath=" + exePath + " targetVersion=" + targetVersion)
 
@@ -49,9 +49,6 @@ func (a *App) selfUpdateInstallWithPSADT(ctx context.Context, exePath, targetVer
 	}()
 
 	// Welcome SEM AllowDefer — user não pode adiar
-	// HideCloseButton evita fechar pelo X
-	// Não tem AllowDefer nem DeferTimes — se fechar de alguma forma, o
-	// ShowInstallationWelcome retorna erro e o fluxo falha.
 	if err := session.ShowInstallationWelcome(pstypes.WelcomeOptions{
 		Title:           "Atualização do Discovery Agent",
 		Subtitle:        fmt.Sprintf("Versão %s", targetVersion),
@@ -62,12 +59,11 @@ func (a *App) selfUpdateInstallWithPSADT(ctx context.Context, exePath, targetVer
 		return fmt.Errorf("welcome dialog: %w", err)
 	}
 
-	// Exibe progresso
+	// Exibe progresso (não-fatal)
 	if err := session.ShowInstallationProgress(pstypes.ProgressOptions{
 		StatusMessage: fmt.Sprintf("Instalando Discovery Agent %s...", targetVersion),
 	}); err != nil {
 		a.logs.append("[selfupdate] aviso: falha ao exibir progresso: " + err.Error())
-		// Non-fatal — continua mesmo sem progresso
 	}
 	defer func() {
 		if cerr := session.CloseInstallationProgress(); cerr != nil {
@@ -75,24 +71,9 @@ func (a *App) selfUpdateInstallWithPSADT(ctx context.Context, exePath, targetVer
 		}
 	}()
 
-	// Executa o instalador
-	result, err := session.StartProcess(pstypes.StartProcessOptions{
-		FilePath:     exePath,
-		ArgumentList: []string{"/S", "/UPDATE"},
-		WindowStyle:  pstypes.WindowHidden,
-		PassThru:     true,
-	})
-	if err != nil {
-		return fmt.Errorf("instalador falhou: %w", err)
-	}
-
-	// Remove o temp file após execução
-	_ = os.Remove(exePath)
-
-	if result.ExitCode != 0 {
-		return fmt.Errorf("instalador retornou exit code %d", result.ExitCode)
-	}
-
-	a.logs.append("[selfupdate] PSADT UI concluído com sucesso: versão=" + targetVersion)
+	// NÃO executa o instalador via PSADT — o launchInstallerWithUI chamará
+	// launchInstaller (ShellExecuteEx runas) que tem elevação UAC.
+	// Apenas mostra UI e retorna nil.
+	a.logs.append("[selfupdate] PSADT UI exibido — delegando execucao para ShellExecuteEx runas")
 	return nil
 }
