@@ -72,11 +72,13 @@ func (u *Updater) InstallFromURL(ctx context.Context, version, downloadURL strin
 
 // finishInstall persiste o estado pendente e lanca o instalador.
 func (u *Updater) finishInstall(ctx context.Context, tempPath, targetVersion, currentVersion, correlationID string) error {
+	currentCommit := strings.TrimSpace(buildinfo.Commit)
 	if err := u.persistPendingInstallState(pendingInstallState{
-		CurrentVersion: currentVersion,
-		TargetVersion:  targetVersion,
-		CorrelationID:  correlationID,
-		RecordedAtUTC:  time.Now().UTC().Format(time.RFC3339),
+		CurrentVersion:  currentVersion,
+		TargetVersion:   targetVersion,
+		CorrelationID:   correlationID,
+		RecordedAtUTC:   time.Now().UTC().Format(time.RFC3339),
+		InstalledCommit: currentCommit,
 	}); err != nil {
 		errutil.LogIfErr(os.Remove(tempPath), "selfupdate: limpar temp apos falha de persistencia")
 		return err

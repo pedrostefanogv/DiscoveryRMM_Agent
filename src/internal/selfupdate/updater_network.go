@@ -2,12 +2,14 @@ package selfupdate
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -31,12 +33,90 @@ func (u *Updater) ResumePendingInstallReport(ctx context.Context) {
 	if currentVersion == "" {
 		currentVersion = "0.0.0"
 	}
+	currentCommit := strings.TrimSpace(buildinfo.Commit)
+
+	// ── Decisao baseada em commit (preferencial) ──
+	// Se o estado pendente tem installedCommit, comparamos commits ao inves
+	// de versoes. Isso funciona mesmo quando a versao nao muda (rebuilds em dev).
+	if state.InstalledCommit != "" && currentCommit != "" && currentCommit != "unknown" {
+		if !strings.EqualFold(currentCommit, state.InstalledCommit) {
+			u.logf("estado pendente de install resolvido: commit mudou de %s para %s (instalacao OK)",
+				state.InstalledCommit, currentCommit)
+			u.clearPendingInstallState()
+			return
+		}
+		// Mesmo commit → binario nao mudou → falhou
+		u.logf("estado pendente de install: commit nao mudou (%s) — instalacao falhou? tentativas=%d/%d",
+			currentCommit, state.InstallAttempts, maxInstallAttempts)
+		if state.InstallAttempts >= maxInstallAttempts {
+			u.logf("estado pendente de install: maximo de %d tentativas excedido (commit=%s target=%s). Possivel loop de instalacao.",
+				maxInstallAttempts, currentCommit, state.TargetVersion)
+			u.clearPendingInstallState()
+			u.reportInstallFailed(ctx, state, "install-loop: commit nao mudou apos "+strconv.Itoa(state.InstallAttempts)+" tentativas")
+			return
+		}
+		// Mantem pending — o Run loop vai tentar novamente no proximo ciclo
+		u.logf("estado pendente de install mantido: commit ainda %s target=%s (tentativa %d/%d)",
+			currentCommit, state.TargetVersion, state.InstallAttempts, maxInstallAttempts)
+		return
+	}
+
+	// ── Fallback: decisao baseada em versao (legado, sem commit info) ──
+	if state.InstallAttempts >= maxInstallAttempts {
+		u.logf("estado pendente de install: maximo de %d tentativas excedido — buildinfo.Version=%s target=%s",
+			maxInstallAttempts, currentVersion, state.TargetVersion)
+		u.clearPendingInstallState()
+		u.reportInstallFailed(ctx, state, "install-loop: excedeu maximo de tentativas (fallback versao)")
+		return
+	}
+
 	if compareVersions(currentVersion, state.TargetVersion) < 0 {
-		u.logf("estado pendente de install mantido: versao atual=%s target=%s", currentVersion, state.TargetVersion)
+		u.logf("estado pendente de install mantido: versao atual=%s target=%s tentativas=%d/%d",
+			currentVersion, state.TargetVersion, state.InstallAttempts, maxInstallAttempts)
 		return
 	}
 	u.logf("estado pendente de install resolvido: versao atual=%s >= target=%s (limpo)", currentVersion, state.TargetVersion)
 	u.clearPendingInstallState()
+}
+
+// AgentVersionInfo representa a resposta do endpoint /api/v1/download/agent/version.
+type AgentVersionInfo struct {
+	Version    string `json:"version"`
+	CommitHash string `json:"commitHash"`
+	Sha256     string `json:"sha256"`
+}
+
+// fetchAgentVersion consulta o endpoint /api/v1/download/agent/version
+// para obter (version, commitHash, sha256) do build atual no servidor.
+// Retorna erro se o endpoint nao existir (404) — o caller faz fallback.
+func (u *Updater) fetchAgentVersion(ctx context.Context) (AgentVersionInfo, error) {
+	endpoint := u.apiScheme() + "://" + u.apiServer() + "/api/v1/download/agent/version"
+	ctxReq, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctxReq, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return AgentVersionInfo{}, err
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return AgentVersionInfo{}, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2*1024))
+		return AgentVersionInfo{}, fmt.Errorf("version endpoint status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var info AgentVersionInfo
+	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+		return AgentVersionInfo{}, fmt.Errorf("version endpoint decode: %w", err)
+	}
+
+	return info, nil
 }
 
 // fetchPublicSHA256 obtem o SHA256 do build atual sem baixar o binario.
@@ -209,3 +289,15 @@ func (u *Updater) downloadFromURL(ctx context.Context, downloadURL string) (stri
 // reportEvent is a no-op — o endpoint /api/v1/agent-auth/me/update/report nao existe na API.
 // Mantido como stub para nao quebrar chamadas existentes no codigo.
 func (u *Updater) reportEvent(_ context.Context, _ string, _ reportOpts) {}
+
+// reportInstallFailed limpa o estado pendente e loga a falha.
+// Usado quando o loop de instalacao excede o maximo de tentativas.
+func (u *Updater) reportInstallFailed(_ context.Context, state pendingInstallState, reason string) {
+	u.reportEvent(context.Background(), "InstallFailed", reportOpts{
+		ReleaseID:      state.ReleaseID,
+		CurrentVersion: state.CurrentVersion,
+		TargetVersion:  state.TargetVersion,
+		Message:        reason,
+		CorrelationID:  state.CorrelationID,
+	})
+}

@@ -28,6 +28,7 @@ const (
 	signatureTimeout      = 2 * time.Minute
 	detachedProcessFlag   = 0x00000008
 	pendingInstallFile    = "pending-install.json"
+	maxInstallAttempts    = 3
 )
 
 type Policy struct {
@@ -144,11 +145,13 @@ type reportPayloadRequest struct {
 }
 
 type pendingInstallState struct {
-	ReleaseID      *string `json:"releaseId,omitempty"`
-	CurrentVersion string  `json:"currentVersion"`
-	TargetVersion  string  `json:"targetVersion"`
-	CorrelationID  string  `json:"correlationId"`
-	RecordedAtUTC  string  `json:"recordedAtUtc"`
+	ReleaseID       *string `json:"releaseId,omitempty"`
+	CurrentVersion  string  `json:"currentVersion"`
+	TargetVersion   string  `json:"targetVersion"`
+	CorrelationID   string  `json:"correlationId"`
+	RecordedAtUTC   string  `json:"recordedAtUtc"`
+	InstallAttempts int     `json:"installAttempts"`
+	InstalledCommit string  `json:"installedCommit"`
 }
 
 func (u *Updater) Run(ctx context.Context, checkInterval time.Duration) {
@@ -271,24 +274,98 @@ func (u *Updater) CheckAndUpdate(ctx context.Context, force bool) error {
 	if currentVersion == "" {
 		currentVersion = "0.0.0"
 	}
+	currentCommit := strings.TrimSpace(buildinfo.Commit)
 	correlationID := uuid.NewString()
 	mode := "periodic"
 	if force {
 		mode = "forcado"
 	}
-	u.logf("[selfupdate] iniciando download (mode=%s current=%s correlationId=%s)", mode, currentVersion, correlationID)
+	u.logf("[selfupdate] iniciando check (mode=%s current=%s commit=%s correlationId=%s)", mode, currentVersion, currentCommit, correlationID)
 
-	_ = currentVersion // usado abaixo
-	_ = correlationID  // mantido para logging ja embutido em downloadFromCacheOrPublic
+	// ── Fase 1: Consulta versao/commit do servidor (leve, ~200 bytes) ──
+	// Se o servidor nao tiver o endpoint /version, faz fallback para o fluxo
+	// antigo (download direto sem pre-check).
+	if !force {
+		serverInfo, err := u.fetchAgentVersion(ctx)
+		if err != nil {
+			u.logf("[selfupdate] aviso: endpoint /version indisponivel (%v) — usando fluxo sem pre-check", err)
+			// Fallback: usa fluxo antigo sem decisao version+commit.
+			return u.checkAndUpdateFallback(ctx, force, currentVersion, correlationID)
+		}
+		serverVersion := strings.TrimSpace(serverInfo.Version)
+		serverCommit := strings.TrimSpace(serverInfo.CommitHash)
+		serverSHA256 := strings.TrimSpace(serverInfo.Sha256)
 
-	// Obtem SHA256 do build atual sem baixar (endpoint /sha256).
-	// Isso permite P2P com artifactID exato e validacao anti-staleness.
+		u.logf("[selfupdate] servidor: version=%s commit=%s sha256=%s", serverVersion, serverCommit, serverSHA256[:12])
+
+		// Decisao version+commit:
+		// - Versoes diferentes → download (update normal)
+		// - Mesma versao, commit diferente → download (rebuild)
+		// - Mesma versao E mesmo commit → skip (mesmo build)
+		if compareVersions(serverVersion, currentVersion) == 0 &&
+			currentCommit != "" && currentCommit != "unknown" &&
+			serverCommit != "" && serverCommit != "unknown" &&
+			strings.EqualFold(currentCommit, serverCommit) {
+			u.logf("[selfupdate] skip: mesmo build (version=%s commit=%s)", currentVersion, currentCommit)
+			return nil
+		}
+
+		// Usa o SHA256 do servidor para P2P artifactID preciso.
+		publicSHA256 := serverSHA256
+		tempPath, fileSha256, err := u.downloadFromCacheOrPublic(ctx, publicSHA256)
+		if err != nil {
+			u.logf("[selfupdate] download falhou: %v", err)
+			return err
+		}
+		u.logf("[selfupdate] download concluido: tempPath=%s sha256=%s", tempPath, fileSha256[:12])
+
+		targetVersion := extractFileVersion(tempPath)
+		if targetVersion == "" {
+			targetVersion = serverVersion
+		}
+		u.logf("[selfupdate] versao alvo: %s (current=%s serverCommit=%s)", targetVersion, currentVersion, serverCommit)
+
+		// Publica no P2P
+		artifactID := "selfupdate:" + strings.ToLower(fileSha256)
+		if u.OnArtifactReady != nil {
+			_ = u.OnArtifactReady(ctx, tempPath, artifactID, fileSha256, targetVersion)
+		}
+
+		if err := u.persistPendingInstallState(pendingInstallState{
+			CurrentVersion:  currentVersion,
+			TargetVersion:   targetVersion,
+			CorrelationID:   correlationID,
+			RecordedAtUTC:   time.Now().UTC().Format(time.RFC3339),
+			InstalledCommit: currentCommit,
+		}); err != nil {
+			errutil.LogIfErr(os.Remove(tempPath), "selfupdate: limpar temp apos falha de persistencia")
+			return err
+		}
+
+		if err := u.launchInstallerWithUI(ctx, tempPath, targetVersion); err != nil {
+			u.clearPendingInstallState()
+			errutil.LogIfErr(os.Remove(tempPath), "selfupdate: limpar temp apos falha de launch")
+			return err
+		}
+
+		u.logf("installer iniciado em background: %s", tempPath)
+		return nil
+	}
+
+	// ── Forced mode: ignora version+commit check, sempre baixa ──
+	return u.checkAndUpdateFallback(ctx, force, currentVersion, correlationID)
+}
+
+// checkAndUpdateFallback executa o fluxo antigo de download+install sem pre-check
+// version+commit. Usado em modo forcado ou quando o endpoint /version nao existe.
+func (u *Updater) checkAndUpdateFallback(ctx context.Context, force bool, currentVersion, correlationID string) error {
+	u.logf("[selfupdate] usando fluxo fallback (mode=forcado=%v current=%s)", force, currentVersion)
+
 	publicSHA256, shaErr := u.fetchPublicSHA256(ctx)
 	if shaErr != nil {
 		u.logf("[selfupdate] aviso: nao foi possivel obter SHA256 do servidor: %v", shaErr)
 	}
 
-	// Baixa do endpoint publico /api/v1/download/agent (P2P-first se SHA256 conhecido).
 	tempPath, fileSha256, err := u.downloadFromCacheOrPublic(ctx, publicSHA256)
 	if err != nil {
 		u.logf("[selfupdate] download falhou: %v", err)
@@ -296,13 +373,10 @@ func (u *Updater) CheckAndUpdate(ctx context.Context, force bool) error {
 	}
 	u.logf("[selfupdate] download concluido: tempPath=%s sha256=%s", tempPath, fileSha256[:12])
 
-	// Valida SHA256 contra o servidor se disponivel (defesa em profundidade).
 	if publicSHA256 != "" && !strings.EqualFold(fileSha256, publicSHA256) {
 		u.logf("[selfupdate] ALERTA: SHA256 divergente do servidor! local=%s servidor=%s", fileSha256[:12], publicSHA256[:12])
-		// Nao bloqueia — pode ser rebuild legitimo. O P2P usa o SHA256 local.
 	}
 
-	// Extrai a versao real do binario baixado
 	targetVersion := extractFileVersion(tempPath)
 	if targetVersion == "" {
 		u.logf("[selfupdate] aviso: nao conseguiu extrair versao do arquivo, usando currentVersion=%s", currentVersion)
@@ -310,25 +384,24 @@ func (u *Updater) CheckAndUpdate(ctx context.Context, force bool) error {
 	}
 	u.logf("[selfupdate] versao alvo determinada: %s (current=%s)", targetVersion, currentVersion)
 
-	// Se nao for force, verifica se realmente ha update (versao alvo > atual)
 	if !force && compareVersions(targetVersion, currentVersion) <= 0 {
 		u.logf("[selfupdate] ja esta na versao mais recente (current=%s >= target=%s)", currentVersion, targetVersion)
 		errutil.LogIfErr(os.Remove(tempPath), "selfupdate: limpar temp mesma versao")
 		return nil
 	}
 
-	// Publica no P2P com artifactID baseado no SHA256 real do binario.
-	// Formato: "selfupdate:<sha256>" — imune a staleness porque cada versao tem SHA256 unico.
 	artifactID := "selfupdate:" + strings.ToLower(fileSha256)
 	if u.OnArtifactReady != nil {
 		_ = u.OnArtifactReady(ctx, tempPath, artifactID, fileSha256, targetVersion)
 	}
 
+	currentCommit := strings.TrimSpace(buildinfo.Commit)
 	if err := u.persistPendingInstallState(pendingInstallState{
-		CurrentVersion: currentVersion,
-		TargetVersion:  targetVersion,
-		CorrelationID:  correlationID,
-		RecordedAtUTC:  time.Now().UTC().Format(time.RFC3339),
+		CurrentVersion:  currentVersion,
+		TargetVersion:   targetVersion,
+		CorrelationID:   correlationID,
+		RecordedAtUTC:   time.Now().UTC().Format(time.RFC3339),
+		InstalledCommit: currentCommit,
 	}); err != nil {
 		errutil.LogIfErr(os.Remove(tempPath), "selfupdate: limpar temp apos falha de persistencia")
 		return err

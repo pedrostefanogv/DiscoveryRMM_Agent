@@ -13,6 +13,21 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# Auto-detect version from wails.json productVersion if not explicitly provided
+if ($Version -eq "") {
+    $wailsJsonPath = Join-Path $ProjectRoot "src\wails.json"
+    if (Test-Path $wailsJsonPath) {
+        $wailsConfig = Get-Content $wailsJsonPath -Raw | ConvertFrom-Json
+        if ($wailsConfig.info.productVersion) {
+            $Version = $wailsConfig.info.productVersion
+            Write-Output "Versao detectada do wails.json: $Version"
+        }
+    }
+    if ($Version -eq "") {
+        Write-Warning "Versao nao definida e nao detectada do wails.json; binario ficara com buildinfo.Version='0.0.0' (self-update loop pode ocorrer)"
+    }
+}
+
 function Assert-Command([string]$Name) {
     if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
         throw "Comando '$Name' nao encontrado no PATH."
@@ -111,6 +126,16 @@ try {
     if ($Version -ne "") {
         $ldflags += "-X discovery/app.Version=$Version"
         $ldflags += "-X discovery/internal/buildinfo.Version=$Version"
+    } else {
+        Write-Warning "BUILD SEM VERSAO: -ldflags sem -X discovery/internal/buildinfo.Version — o binario ficara com '0.0.0' (self-update pode entrar em loop)"
+    }
+    # Injeta commit hash do git para decisao de self-update (version+commit)
+    $gitCommit = (git -C $srcRoot rev-parse --short=8 HEAD 2>$null)
+    if ($gitCommit) {
+        $ldflags += "-X discovery/internal/buildinfo.Commit=$gitCommit"
+        Write-Output "  buildinfo.Commit = $gitCommit"
+    } else {
+        Write-Warning "  git rev-parse falhou; buildinfo.Commit ficara 'unknown'"
     }
 
     go build -tags "desktop,production" -ldflags ($ldflags -join ' ') -o $agentExe .
