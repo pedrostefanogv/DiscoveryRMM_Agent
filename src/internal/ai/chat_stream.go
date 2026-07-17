@@ -35,14 +35,27 @@ func (s *Service) callAgentChatStream(
 	sessionID string,
 	onToken func(string),
 ) (string, string, bool, error) {
+	startTime := time.Now()
 	baseURL, err := normalizeAgentChatBaseURL(cfg.Endpoint)
 	if err != nil {
+		s.logChatEntry(ChatLogEntry{
+			Type:    "chat_request",
+			Method:  "stream",
+			Error:   err.Error(),
+			UserMsg: TruncateForLog(message, 2000),
+		})
 		return "", "", false, err
 	}
 
 	requestBody := s.buildAgentChatRequest(message, sessionID, cfg.MaxTokens)
 	payload, err := json.Marshal(requestBody)
 	if err != nil {
+		s.logChatEntry(ChatLogEntry{
+			Type:    "chat_request",
+			Method:  "stream",
+			Error:   fmt.Sprintf("marshal error: %v", err),
+			UserMsg: TruncateForLog(message, 2000),
+		})
 		return "", "", false, fmt.Errorf("falha ao serializar request de stream: %w", err)
 	}
 
@@ -52,16 +65,42 @@ func (s *Service) callAgentChatStream(
 	endpoint := baseURL + "/api/v1/agent-auth/me/ai-chat/stream"
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, endpoint, bytes.NewReader(payload))
 	if err != nil {
+		s.logChatEntry(ChatLogEntry{
+			Type:       "chat_request",
+			Method:     "stream",
+			Endpoint:   endpoint,
+			MessageLen: len(message),
+			SessionID:  sessionID,
+			Error:      fmt.Sprintf("request create error: %v", err),
+		})
 		return "", "", false, fmt.Errorf("falha ao criar request de stream: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
 	if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.APIKey, cfg.AgentID); err != nil {
+		s.logChatEntry(ChatLogEntry{
+			Type:       "chat_request",
+			Method:     "stream",
+			Endpoint:   endpoint,
+			MessageLen: len(message),
+			SessionID:  sessionID,
+			Error:      fmt.Sprintf("auth header error: %v", err),
+		})
 		return "", "", false, err
 	}
 
 	resp, err := tlsutil.NewHTTPClient(130 * time.Second).Do(req)
 	if err != nil {
+		elapsed := time.Since(startTime)
+		s.logChatEntry(ChatLogEntry{
+			Type:       "chat_response",
+			Method:     "stream",
+			Endpoint:   endpoint,
+			MessageLen: len(message),
+			SessionID:  sessionID,
+			Error:      fmt.Sprintf("request failed: %v", err),
+			LatencyMs:  int(elapsed.Milliseconds()),
+		})
 		return "", "", false, fmt.Errorf("falha ao chamar stream: %w", err)
 	}
 	defer resp.Body.Close()
@@ -69,16 +108,71 @@ func (s *Service) callAgentChatStream(
 	contentType := strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Type")))
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
+		elapsed := time.Since(startTime)
+		s.logChatEntry(ChatLogEntry{
+			Type:       "chat_response",
+			Method:     "stream",
+			Endpoint:   endpoint,
+			MessageLen: len(message),
+			SessionID:  sessionID,
+			StatusCode: resp.StatusCode,
+			Error:      strings.TrimSpace(string(body)),
+			LatencyMs:  int(elapsed.Milliseconds()),
+		})
 		if resp.StatusCode == http.StatusUnauthorized {
 			return "", "", false, fmt.Errorf("nao autorizado (401): verifique token do agente")
 		}
 		return "", "", false, fmt.Errorf("stream retornou status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 	if !strings.Contains(contentType, "text/event-stream") {
+		elapsed := time.Since(startTime)
+		s.logChatEntry(ChatLogEntry{
+			Type:       "chat_response",
+			Method:     "stream",
+			Endpoint:   endpoint,
+			MessageLen: len(message),
+			SessionID:  sessionID,
+			StatusCode: resp.StatusCode,
+			Error:      fmt.Sprintf("content-type inesperado: %s", contentType),
+			LatencyMs:  int(elapsed.Milliseconds()),
+		})
 		return "", "", false, fmt.Errorf("resposta sem SSE (content-type: %s)", contentType)
 	}
 
-	return s.parseSSEStream(resp.Body, onToken)
+	content, streamSessionID, hasToken, err := s.parseSSEStream(resp.Body, onToken)
+	elapsed := time.Since(startTime)
+
+	if err != nil {
+		s.logChatEntry(ChatLogEntry{
+			Type:        "chat_response",
+			Method:      "stream",
+			Endpoint:    endpoint,
+			MessageLen:  len(message),
+			SessionID:   streamSessionID,
+			StatusCode:  resp.StatusCode,
+			Error:       err.Error(),
+			LatencyMs:   int(elapsed.Milliseconds()),
+			ResponseLen: len(content),
+			HasTokens:   hasToken,
+		})
+		return content, streamSessionID, hasToken, err
+	}
+
+	s.logChatEntry(ChatLogEntry{
+		Type:        "chat_response",
+		Method:      "stream",
+		Endpoint:    endpoint,
+		MessageLen:  len(message),
+		SessionID:   streamSessionID,
+		StatusCode:  resp.StatusCode,
+		LatencyMs:   int(elapsed.Milliseconds()),
+		ResponseLen: len(content),
+		HasTokens:   hasToken,
+		StreamDone:  true,
+		UserMsg:     TruncateForLog(message, 2000),
+		Assistant:   TruncateForLog(content, 4000),
+	})
+	return content, streamSessionID, hasToken, nil
 }
 
 func (s *Service) parseSSEStream(body io.Reader, onToken func(string)) (string, string, bool, error) {

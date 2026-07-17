@@ -62,6 +62,16 @@ type InstallerConfig struct {
 	AgentUpdate          *selfupdate.Policy `json:"agentUpdate,omitempty"`
 	P2P                  p2pmeta.Config     `json:"p2p,omitempty"`
 	MeshCentralInstalled bool               `json:"meshCentralInstalled,omitempty"`
+	ChatLog              ChatLogConfig      `json:"chatLog,omitempty"`
+}
+
+// ChatLogConfig controla o log detalhado das conversas do chat com IA.
+// Quando Enabled é nil (campo ausente no JSON) ou true, todas as interações
+// do chat são registradas em chat_logs.jsonl no diretório de dados do agente,
+// independentemente do modo debug estar ativo ou não.
+// Quando Enabled é explicitamente false, o log de chat é desativado.
+type ChatLogConfig struct {
+	Enabled *bool `json:"enabled,omitempty"`
 }
 
 func (c *InstallerConfig) UnmarshalJSON(data []byte) error {
@@ -84,6 +94,7 @@ func (c *InstallerConfig) UnmarshalJSON(data []byte) error {
 		AgentUpdate          *selfupdate.Policy `json:"agentUpdate,omitempty"`
 		P2P                  p2pmeta.Config     `json:"p2p,omitempty"`
 		MeshCentralInstalled bool               `json:"meshCentralInstalled,omitempty"`
+		ChatLog              ChatLogConfig      `json:"chatLog,omitempty"`
 	}
 
 	// Schema alternativo (snake_case) — usado pelo ServiceManager (SharedConfig)
@@ -105,6 +116,7 @@ func (c *InstallerConfig) UnmarshalJSON(data []byte) error {
 		AgentUpdate          *selfupdate.Policy `json:"agent_update,omitempty"`
 		P2P                  p2pmeta.Config     `json:"p2p,omitempty"`
 		MeshCentralInstalled bool               `json:"mesh_central_installed,omitempty"`
+		ChatLog              ChatLogConfig      `json:"chat_log,omitempty"`
 	}
 
 	var raw rawInstallerConfig
@@ -136,6 +148,9 @@ func (c *InstallerConfig) UnmarshalJSON(data []byte) error {
 			}
 			if raw.AgentUpdate == nil {
 				raw.AgentUpdate = snake.AgentUpdate
+			}
+			if raw.ChatLog.Enabled == nil {
+				raw.ChatLog = snake.ChatLog
 			}
 		}
 	}
@@ -180,6 +195,7 @@ func (c *InstallerConfig) UnmarshalJSON(data []byte) error {
 		AgentUpdate:          raw.AgentUpdate,
 		P2P:                  raw.P2P,
 		MeshCentralInstalled: raw.MeshCentralInstalled,
+		ChatLog:              raw.ChatLog,
 	}
 	return nil
 }

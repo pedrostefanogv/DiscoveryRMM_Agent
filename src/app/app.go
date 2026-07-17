@@ -435,6 +435,7 @@ func NewApp(opts AppStartupOptions) *App {
 	}
 	a.loadPersistedChatConfig()
 	a.debugSvc.LoadConnectionConfigFromProduction()
+	a.initChatLogger()
 
 	mcp.RegisterDiscoveryTools(reg, a)
 

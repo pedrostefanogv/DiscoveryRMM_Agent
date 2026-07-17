@@ -10,6 +10,7 @@ import (
 
 	"github.com/samber/lo"
 
+	"discovery/app/debug"
 	"discovery/internal/platform"
 )
 
@@ -152,10 +153,14 @@ func loadInstallerConfig() (InstallerConfig, string, error) {
 // o NSIS pulou a criação do config (modo /UPDATE).
 func ensureDefaultInstallerConfig() (InstallerConfig, string, error) {
 	autoProv := true
+	chatLogEnabled := true
 	cfg := InstallerConfig{
 		AutoProvisioning: &autoProv,
 		P2P: P2PConfig{
 			Enabled: true,
+		},
+		ChatLog: debug.ChatLogConfig{
+			Enabled: &chatLogEnabled,
 		},
 	}
 

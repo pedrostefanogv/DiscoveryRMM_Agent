@@ -86,6 +86,62 @@ type ChatConfig struct {
 	MaxTokens    int    `json:"maxTokens"`
 }
 
+// initChatLogger inicializa o logger JSONL de chat baseado na configuração
+// do config.json. Se o campo chatLog estiver ausente (nil), ativa o log
+// por padrão e persiste a configuração. Se estiver explicitamente false,
+// desativa. Se true, ativa.
+func (a *App) initChatLogger() {
+	// Criar o ChatLogger no diretório de dados do agente
+	chatLogger := ai.NewChatLogger("")
+	chatLogger.Enable(platform.DataDir())
+
+	// Verificar config do installer para decidir se ativa ou não
+	shouldEnable := true // padrão: ativado
+
+	inst, _, err := loadInstallerConfig()
+	if err == nil {
+		if inst.ChatLog.Enabled != nil {
+			shouldEnable = *inst.ChatLog.Enabled
+		} else {
+			// Campo ausente: ativar por padrão e persistir
+			go a.ensureChatLogConfigEnabled(&inst)
+		}
+	}
+
+	if shouldEnable {
+		a.chatSvc.SetChatLogger(chatLogger)
+		a.logs.append("[chat] log detalhado de chat ativado em " + platform.DataDir() + "/chat_logs.jsonl")
+	} else {
+		chatLogger.Disable()
+		a.logs.append("[chat] log detalhado de chat desativado pela configuração")
+	}
+}
+
+// ensureChatLogConfigEnabled persiste o campo chatLog.enabled = true
+// no config.json quando ele está ausente, garantindo que o log fique
+// ativo por padrão.
+func (a *App) ensureChatLogConfigEnabled(inst *InstallerConfig) {
+	if inst == nil {
+		return
+	}
+	enabled := true
+	inst.ChatLog.Enabled = &enabled
+
+	// Persistir usando a mesma lógica de persistInstallerConfig
+	basePath := ""
+	for _, path := range installerConfigPathCandidates() {
+		if _, err := os.Stat(path); err == nil {
+			basePath = path
+			break
+		}
+	}
+	if _, err := persistInstallerConfig(basePath, *inst); err != nil {
+		a.logs.append("[chat] aviso: falha ao persistir chatLog.enabled no config.json: " + err.Error())
+	} else {
+		a.logs.append("[chat] chatLog.enabled = true adicionado ao config.json")
+	}
+}
+
 func (a *App) resolveAgentChatRuntimeConfig(input ChatConfig) (ai.Config, error) {
 	endpoint := strings.TrimSpace(input.Endpoint)
 	token := strings.TrimSpace(input.APIKey)

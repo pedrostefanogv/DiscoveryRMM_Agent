@@ -61,6 +61,8 @@ type Service struct {
 	streamMu           sync.Mutex
 	activeStreamID     uint64
 	activeStreamCancel context.CancelFunc
+
+	chatLogger *ChatLogger
 }
 
 // NewService creates a chat service.
@@ -76,6 +78,23 @@ func (s *Service) SetLogger(logger func(string)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.logger = logger
+}
+
+// SetChatLogger configura o logger JSONL dedicado para logs de chat.
+func (s *Service) SetChatLogger(cl *ChatLogger) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.chatLogger = cl
+}
+
+// IsChatLogEnabled retorna true se o log de chat JSONL está ativo.
+func (s *Service) IsChatLogEnabled() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.chatLogger == nil {
+		return false
+	}
+	return s.chatLogger.IsEnabled()
 }
 
 // SetConfig updates the LLM API configuration.
@@ -302,14 +321,27 @@ func normalizeAgentChatBaseURL(endpoint string) (string, error) {
 }
 
 func (s *Service) callAgentChatSync(ctx context.Context, cfg Config, message, sessionID string) (*agentChatSyncResponse, error) {
+	startTime := time.Now()
 	baseURL, err := normalizeAgentChatBaseURL(cfg.Endpoint)
 	if err != nil {
+		s.logChatEntry(ChatLogEntry{
+			Type:    "chat_request",
+			Method:  "sync",
+			Error:   err.Error(),
+			UserMsg: TruncateForLog(message, 2000),
+		})
 		return nil, err
 	}
 
 	requestBody := s.buildAgentChatRequest(message, sessionID, cfg.MaxTokens)
 	payload, err := json.Marshal(requestBody)
 	if err != nil {
+		s.logChatEntry(ChatLogEntry{
+			Type:    "chat_request",
+			Method:  "sync",
+			Error:   fmt.Sprintf("marshal error: %v", err),
+			UserMsg: TruncateForLog(message, 2000),
+		})
 		return nil, fmt.Errorf("falha ao serializar request de chat: %w", err)
 	}
 
@@ -319,25 +351,71 @@ func (s *Service) callAgentChatSync(ctx context.Context, cfg Config, message, se
 	endpoint := baseURL + "/api/v1/agent-auth/me/ai-chat"
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, endpoint, bytes.NewReader(payload))
 	if err != nil {
+		s.logChatEntry(ChatLogEntry{
+			Type:       "chat_request",
+			Method:     "sync",
+			Endpoint:   endpoint,
+			MessageLen: len(message),
+			SessionID:  sessionID,
+			Error:      fmt.Sprintf("request create error: %v", err),
+		})
 		return nil, fmt.Errorf("falha ao criar request de chat: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.APIKey, cfg.AgentID); err != nil {
+		s.logChatEntry(ChatLogEntry{
+			Type:       "chat_request",
+			Method:     "sync",
+			Endpoint:   endpoint,
+			MessageLen: len(message),
+			SessionID:  sessionID,
+			Error:      fmt.Sprintf("auth header error: %v", err),
+		})
 		return nil, err
 	}
 
 	resp, err := tlsutil.NewHTTPClient(120 * time.Second).Do(req)
+	elapsed := time.Since(startTime)
 	if err != nil {
+		s.logChatEntry(ChatLogEntry{
+			Type:       "chat_response",
+			Method:     "sync",
+			Endpoint:   endpoint,
+			MessageLen: len(message),
+			SessionID:  sessionID,
+			Error:      fmt.Sprintf("request failed: %v", err),
+			LatencyMs:  int(elapsed.Milliseconds()),
+		})
 		return nil, fmt.Errorf("falha ao chamar chat: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
+		s.logChatEntry(ChatLogEntry{
+			Type:       "chat_response",
+			Method:     "sync",
+			Endpoint:   endpoint,
+			MessageLen: len(message),
+			SessionID:  sessionID,
+			StatusCode: resp.StatusCode,
+			Error:      fmt.Sprintf("read body error: %v", err),
+			LatencyMs:  int(elapsed.Milliseconds()),
+		})
 		return nil, fmt.Errorf("falha ao ler resposta de chat: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		s.logChatEntry(ChatLogEntry{
+			Type:       "chat_response",
+			Method:     "sync",
+			Endpoint:   endpoint,
+			MessageLen: len(message),
+			SessionID:  sessionID,
+			StatusCode: resp.StatusCode,
+			Error:      strings.TrimSpace(string(body)),
+			LatencyMs:  int(elapsed.Milliseconds()),
+		})
 		if resp.StatusCode == http.StatusRequestTimeout {
 			return nil, fmt.Errorf("chat expirou (timeout): %s", strings.TrimSpace(string(body)))
 		}
@@ -346,8 +424,33 @@ func (s *Service) callAgentChatSync(ctx context.Context, cfg Config, message, se
 
 	var result agentChatSyncResponse
 	if err := json.Unmarshal(body, &result); err != nil {
+		s.logChatEntry(ChatLogEntry{
+			Type:       "chat_response",
+			Method:     "sync",
+			Endpoint:   endpoint,
+			MessageLen: len(message),
+			SessionID:  sessionID,
+			StatusCode: resp.StatusCode,
+			Error:      fmt.Sprintf("parse error: %v", err),
+			LatencyMs:  int(elapsed.Milliseconds()),
+		})
 		return nil, fmt.Errorf("falha ao decodificar resposta de chat: %w", err)
 	}
+
+	// Log de sucesso com detalhes da resposta
+	s.logChatEntry(ChatLogEntry{
+		Type:        "chat_response",
+		Method:      "sync",
+		Endpoint:    endpoint,
+		MessageLen:  len(message),
+		SessionID:   result.SessionID,
+		StatusCode:  resp.StatusCode,
+		TokensUsed:  result.TokensUsed,
+		LatencyMs:   int(elapsed.Milliseconds()),
+		ResponseLen: len(result.AssistantMessage),
+		UserMsg:     TruncateForLog(message, 2000),
+		Assistant:   TruncateForLog(result.AssistantMessage, 4000),
+	})
 	return &result, nil
 }
 
@@ -389,6 +492,21 @@ func (s *Service) logf(format string, args ...any) {
 	if logger != nil {
 		logger(fmt.Sprintf(format, args...))
 	}
+}
+
+// logChatEntry escreve uma entrada no log JSONL de chat, se o logger estiver ativo.
+func (s *Service) logChatEntry(entry ChatLogEntry) {
+	s.mu.RLock()
+	cl := s.chatLogger
+	s.mu.RUnlock()
+	if cl != nil {
+		cl.Log(entry)
+	}
+}
+
+// LogChatEntry é a versão pública de logChatEntry para uso externo (ex.: chat_bridge).
+func (s *Service) LogChatEntry(entry ChatLogEntry) {
+	s.logChatEntry(entry)
 }
 
 func (s *Service) buildMessages(systemPrompt string) []map[string]any {

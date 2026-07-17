@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"discovery/app/netutil"
+	"discovery/internal/ai"
 	"discovery/internal/tlsutil"
 )
 
@@ -49,6 +50,7 @@ type ChatJobStatus struct {
 
 // SendChatSync envia mensagem de chat síncrona via API v1.
 func (a *App) SendChatSync(ctx context.Context, message, sessionID string, maxTokens int) (*ChatAIResponse, error) {
+	startTime := time.Now()
 	cfg := a.GetDebugConfig()
 	agentID := strings.TrimSpace(cfg.AgentID)
 	token := strings.TrimSpace(cfg.AuthToken)
@@ -63,28 +65,85 @@ func (a *App) SendChatSync(ctx context.Context, message, sessionID string, maxTo
 	endpoint := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/ai-chat"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
 	if err != nil {
+		a.logChatBridgeEntry(ai.ChatLogEntry{
+			Type:    "chat_bridge_request",
+			Method:  "sync",
+			Error:   fmt.Sprintf("request create: %v", err),
+			UserMsg: ai.TruncateForLog(message, 2000),
+		})
 		return nil, err
 	}
 	if err := netutil.SetAgentAuthHeadersWithAgentID(req, token, agentID); err != nil {
+		a.logChatBridgeEntry(ai.ChatLogEntry{
+			Type:       "chat_bridge_request",
+			Method:     "sync",
+			Endpoint:   endpoint,
+			MessageLen: len(message),
+			SessionID:  sessionID,
+			Error:      fmt.Sprintf("auth header: %v", err),
+		})
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := tlsutil.NewHTTPClient(120 * time.Second).Do(req)
+	elapsed := time.Since(startTime)
 	if err != nil {
+		a.logChatBridgeEntry(ai.ChatLogEntry{
+			Type:       "chat_bridge_response",
+			Method:     "sync",
+			Endpoint:   endpoint,
+			MessageLen: len(message),
+			SessionID:  sessionID,
+			Error:      fmt.Sprintf("request: %v", err),
+			LatencyMs:  int(elapsed.Milliseconds()),
+		})
 		return nil, fmt.Errorf("chat sync: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 400 {
+		a.logChatBridgeEntry(ai.ChatLogEntry{
+			Type:       "chat_bridge_response",
+			Method:     "sync",
+			Endpoint:   endpoint,
+			MessageLen: len(message),
+			SessionID:  sessionID,
+			StatusCode: resp.StatusCode,
+			Error:      strings.TrimSpace(string(body)),
+			LatencyMs:  int(elapsed.Milliseconds()),
+		})
 		return nil, fmt.Errorf("chat sync HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
 	var result ChatAIResponse
 	if err := json.Unmarshal(body, &result); err != nil {
+		a.logChatBridgeEntry(ai.ChatLogEntry{
+			Type:       "chat_bridge_response",
+			Method:     "sync",
+			Endpoint:   endpoint,
+			MessageLen: len(message),
+			SessionID:  sessionID,
+			StatusCode: resp.StatusCode,
+			Error:      fmt.Sprintf("parse: %v", err),
+			LatencyMs:  int(elapsed.Milliseconds()),
+		})
 		return nil, fmt.Errorf("chat sync parse: %w", err)
 	}
+
+	a.logChatBridgeEntry(ai.ChatLogEntry{
+		Type:        "chat_bridge_response",
+		Method:      "sync",
+		Endpoint:    endpoint,
+		MessageLen:  len(message),
+		SessionID:   result.SessionID,
+		StatusCode:  resp.StatusCode,
+		LatencyMs:   int(elapsed.Milliseconds()),
+		ResponseLen: len(result.Message),
+		UserMsg:     ai.TruncateForLog(message, 2000),
+		Assistant:   ai.TruncateForLog(result.Message, 4000),
+	})
 	return &result, nil
 }
 
@@ -229,4 +288,12 @@ func (a *App) SendChatStream(ctx context.Context, message, sessionID string, max
 		onDone()
 	}
 	return nil
+}
+
+// logChatBridgeEntry escreve uma entrada no log JSONL de chat via ai.Service.
+func (a *App) logChatBridgeEntry(entry ai.ChatLogEntry) {
+	if a == nil || a.chatSvc == nil {
+		return
+	}
+	a.chatSvc.LogChatEntry(entry)
 }
