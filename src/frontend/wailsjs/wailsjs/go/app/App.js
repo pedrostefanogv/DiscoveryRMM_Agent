@@ -466,6 +466,10 @@ export function PostP2PTelemetry(arg1) {
   return window['go']['app']['App']['PostP2PTelemetry'](arg1);
 }
 
+export function PublishChatEvent(arg1, arg2) {
+  return window['go']['app']['App']['PublishChatEvent'](arg1, arg2);
+}
+
 export function PublishP2PTestArtifact(arg1, arg2) {
   return window['go']['app']['App']['PublishP2PTestArtifact'](arg1, arg2);
 }

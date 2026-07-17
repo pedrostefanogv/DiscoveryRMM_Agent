@@ -243,6 +243,8 @@ export function PollChatJob(arg1:context.Context,arg2:string):Promise<app.ChatJo
 
 export function PostP2PTelemetry(arg1:context.Context):Promise<void>;
 
+export function PublishChatEvent(arg1:string,arg2:string):Promise<void>;
+
 export function PublishP2PTestArtifact(arg1:string,arg2:string):Promise<p2pmeta.ArtifactView>;
 
 export function PullP2PArtifactFromPeer(arg1:string,arg2:string):Promise<p2pmeta.ArtifactView>;

@@ -21,6 +21,67 @@ var (
 	frontendFSMu sync.RWMutex
 )
 
+// ── Chat Event Broker (SSE para debug HTTP) ─────────────────────────────
+
+// chatEventBroker gerencia inscritos SSE para eventos de streaming do chat.
+// Permite que o chat funcione no navegador (debug HTTP) onde o runtime Wails
+// não está disponível para receber EventsEmit/EventsOn.
+type chatEventBroker struct {
+	mu          sync.RWMutex
+	subscribers map[chan string]struct{}
+}
+
+func newChatEventBroker() *chatEventBroker {
+	return &chatEventBroker{
+		subscribers: make(map[chan string]struct{}),
+	}
+}
+
+func (b *chatEventBroker) subscribe() chan string {
+	ch := make(chan string, 128)
+	b.mu.Lock()
+	b.subscribers[ch] = struct{}{}
+	b.mu.Unlock()
+	return ch
+}
+
+func (b *chatEventBroker) unsubscribe(ch chan string) {
+	b.mu.Lock()
+	delete(b.subscribers, ch)
+	b.mu.Unlock()
+}
+
+// publish envia um evento JSON para todos os inscritos SSE.
+// Formato: {"event":"chat:token","data":"conteudo"}
+func (b *chatEventBroker) publish(eventType, data string) {
+	payload, err := json.Marshal(map[string]string{
+		"event": eventType,
+		"data":  data,
+	})
+	if err != nil {
+		return
+	}
+	line := string(payload)
+
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	for ch := range b.subscribers {
+		select {
+		case ch <- line:
+		default:
+			// descarta se inscrito estiver lento (buffer cheio)
+		}
+	}
+}
+
+// PublishChatEvent publica um evento de chat para os inscritos SSE.
+// Chamado por StartChatStream para forward dos eventos Wails → HTTP.
+func (a *App) PublishChatEvent(eventType, data string) {
+	if a.chatEvents != nil {
+		a.chatEvents.publish(eventType, data)
+	}
+}
+
 // SetDebugFrontendAssets stores the embedded frontend filesystem for the debug HTTP server.
 // The embed.FS from `//go:embed all:frontend` has a `frontend/` prefix — we strip it
 // via fs.Sub so that the HTTP server can serve paths as `index.html`, `app.js`, etc.
@@ -98,6 +159,11 @@ func (a *App) startDebugHTTPInternal(bindAddr string, port int) error {
 		defer f.Close()
 		stat, _ := f.Stat()
 		http.ServeContent(w, r, "index.html", stat.ModTime(), f.(io.ReadSeeker))
+	})
+
+	// /api/chat-events — SSE streaming para eventos de chat no navegador
+	mux.HandleFunc("/api/chat-events", func(w http.ResponseWriter, r *http.Request) {
+		a.serveChatEventsSSE(w, r)
 	})
 
 	// /api/* — REST bridge mirroring Wails bindings
@@ -371,4 +437,46 @@ func (a *App) writeAPIJSON(w http.ResponseWriter, status int, data interface{}) 
 
 func (a *App) writeAPIError(w http.ResponseWriter, status int, message string) {
 	a.writeAPIJSON(w, status, map[string]string{"error": message})
+}
+
+// serveChatEventsSSE mantém uma conexão SSE (Server-Sent Events) para
+// transmitir eventos de streaming de chat ao navegador no modo debug HTTP.
+// O frontend usa esse endpoint como fallback para window.runtime.EventsOn.
+func (a *App) serveChatEventsSSE(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming nao suportado", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", a.resolveDebugCORSOrigin())
+
+	if a.chatEvents == nil {
+		http.Error(w, "chat events indisponivel", http.StatusServiceUnavailable)
+		return
+	}
+
+	ctx := r.Context()
+	ch := a.chatEvents.subscribe()
+	defer a.chatEvents.unsubscribe(ch)
+
+	// Envia um evento inicial para confirmar conexão
+	fmt.Fprintf(w, "data: {\"event\":\"chat:connected\",\"data\":\"\"}\n\n")
+	flusher.Flush()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case msg, ok := <-ch:
+			if !ok {
+				return
+			}
+			fmt.Fprintf(w, "data: %s\n\n", msg)
+			flusher.Flush()
+		}
+	}
 }

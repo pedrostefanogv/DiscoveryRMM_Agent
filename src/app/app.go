@@ -95,7 +95,8 @@ type App struct {
 
 	consolEngine *ConsolidationEngine
 
-	debugHTTP *debugHTTPServer
+	debugHTTP  *debugHTTPServer
+	chatEvents *chatEventBroker
 
 	p2pMu                      sync.RWMutex
 	p2pConfig                  P2PConfig
@@ -167,6 +168,7 @@ func NewApp(opts AppStartupOptions) *App {
 		printerSvc:          services.NewPrinterService(printerManager),
 		mcpRegistry:         reg,
 		chatSvc:             chatSvc,
+		chatEvents:          newChatEventBroker(),
 		pendingNotifyResult: make(map[string]chan string),
 		notificationByKey:   make(map[string]string),
 		startupTime:         time.Now(),

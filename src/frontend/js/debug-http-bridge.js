@@ -90,8 +90,87 @@
     },
   };
 
-  // Também mockamos o window.runtime para evitar erros em chamadas que usam
-  // funções do Wails runtime (WindowToggleMaximise, WindowHide, etc.)
+  // ── SSE-based EventsOn/EventsOff para streaming (chat, etc.) ───
+  // No navegador, conectamos ao endpoint SSE /api/chat-events para
+  // receber eventos que o backend emite via Wails EventsEmit.
+  var sseEventSource = null;
+  var sseListeners = {}; // { eventName: [callback, ...] }
+  var sseReconnectTimer = null;
+  var sseReconnectDelay = 500;
+
+  function ensureSSEConnection() {
+    if (sseEventSource && sseEventSource.readyState !== EventSource.CLOSED) {
+      return;
+    }
+    var url = location.origin + '/api/chat-events';
+    console.log('[debug-http] conectando SSE: ' + url);
+    sseEventSource = new EventSource(url);
+
+    sseEventSource.onmessage = function (msg) {
+      try {
+        var parsed = JSON.parse(msg.data);
+        var eventType = parsed.event;
+        var eventData = parsed.data;
+        var callbacks = sseListeners[eventType];
+        if (callbacks && callbacks.length > 0) {
+          for (var i = 0; i < callbacks.length; i++) {
+            try {
+              callbacks[i](eventData);
+            } catch (e) {
+              console.error('[debug-http] erro no listener SSE ' + eventType + ':', e);
+            }
+          }
+        }
+      } catch (e) {
+        // ignora mensagens não-JSON
+      }
+    };
+
+    sseEventSource.onerror = function () {
+      console.warn('[debug-http] erro na conexao SSE, reconectando...');
+      if (sseEventSource) {
+        sseEventSource.close();
+        sseEventSource = null;
+      }
+      // Reconexão com backoff
+      if (sseReconnectTimer) clearTimeout(sseReconnectTimer);
+      sseReconnectTimer = setTimeout(function () {
+        sseReconnectDelay = Math.min(sseReconnectDelay * 2, 10000);
+        ensureSSEConnection();
+      }, sseReconnectDelay);
+    };
+
+    sseEventSource.onopen = function () {
+      console.log('[debug-http] SSE conectado');
+      sseReconnectDelay = 500; // reset backoff
+    };
+  }
+
+  function EventsOn(eventName, callback) {
+    if (!sseListeners[eventName]) {
+      sseListeners[eventName] = [];
+    }
+    sseListeners[eventName].push(callback);
+    // Inicia conexão SSE lazy — só quando alguém se inscreve
+    ensureSSEConnection();
+  }
+
+  function EventsOff(eventName) {
+    delete sseListeners[eventName];
+  }
+
+  function EventsOffAll() {
+    sseListeners = {};
+    if (sseEventSource) {
+      sseEventSource.close();
+      sseEventSource = null;
+    }
+    if (sseReconnectTimer) {
+      clearTimeout(sseReconnectTimer);
+      sseReconnectTimer = null;
+    }
+  }
+
   window.runtime = {
     LogPrint: function (msg) { console.log('[wails]', msg); },
     LogTrace: function (msg) { console.debug('[wails]', msg); },
@@ -123,11 +202,11 @@
     WindowSetMinSize: function () {},
     WindowSetPosition: function () {},
     WindowGetPosition: function () { return { x: 0, y: 0 }; },
-    EventsOn: function () {},
-    EventsOff: function () {},
-    EventsOffAll: function () {},
-    EventsEmit: function () {},
-    EventsOnMultiple: function () {},
+    EventsOn: EventsOn,
+    EventsOff: EventsOff,
+    EventsOffAll: EventsOffAll,
+    EventsOnMultiple: EventsOn,
+    EventsEmit: function () {}
   };
 
   console.log('[debug-http] bridge HTTP ativo — ' + API_BASE);

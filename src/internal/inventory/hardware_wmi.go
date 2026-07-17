@@ -35,19 +35,27 @@ func enrichHardwareFromWMI(hw *models.HardwareInfo) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	// Consulta única via PowerShell — mais rápido que 3 chamadas CIM separadas.
+	// Consulta única via PowerShell. Todos os campos de texto são forçados para
+	// [string] via casting explícito para evitar que ConvertTo-Json serialize
+	// $null como {} (objeto vazio) em vez de "" — comum em VMs Proxmox/QEMU
+	// onde vários campos WMI/CIM não têm valor.
+	// BIOSReleaseDate é formatado explicitamente porque o objeto DateTime do WMI
+	// é serializado como sub-objeto pelo ConvertTo-Json.
 	script := `$ErrorActionPreference = 'Stop'
+$bios = Get-CimInstance Win32_BIOS -ErrorAction SilentlyContinue
+$biosDate = ''
+if ($bios -and $bios.ReleaseDate) { try { $biosDate = [string]($bios.ReleaseDate.ToString('yyyyMMddHHmmss')) } catch {} }
 [PSCustomObject]@{
-	SystemManufacturer  = (Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Manufacturer -ErrorAction SilentlyContinue)
-	SystemModel         = (Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Model -ErrorAction SilentlyContinue)
-	SystemSerial        = (Get-CimInstance Win32_BIOS -ErrorAction SilentlyContinue | Select-Object -ExpandProperty SerialNumber -ErrorAction SilentlyContinue)
-	BaseboardMfr        = (Get-CimInstance Win32_BaseBoard -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Manufacturer -ErrorAction SilentlyContinue)
-	BaseboardProduct    = (Get-CimInstance Win32_BaseBoard -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Product -ErrorAction SilentlyContinue)
-	BaseboardSerial     = (Get-CimInstance Win32_BaseBoard -ErrorAction SilentlyContinue | Select-Object -ExpandProperty SerialNumber -ErrorAction SilentlyContinue)
-	BIOSVendor          = (Get-CimInstance Win32_BIOS -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Manufacturer -ErrorAction SilentlyContinue)
-	BIOSVersion         = (Get-CimInstance Win32_BIOS -ErrorAction SilentlyContinue | Select-Object -ExpandProperty SMBIOSBIOSVersion -ErrorAction SilentlyContinue)
-	BIOSReleaseDate     = (Get-CimInstance Win32_BIOS -ErrorAction SilentlyContinue | Select-Object -ExpandProperty ReleaseDate -ErrorAction SilentlyContinue)
-	BIOSSerial          = (Get-CimInstance Win32_BIOS -ErrorAction SilentlyContinue | Select-Object -ExpandProperty SerialNumber -ErrorAction SilentlyContinue)
+	SystemManufacturer  = [string](Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Manufacturer -ErrorAction SilentlyContinue)
+	SystemModel         = [string](Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Model -ErrorAction SilentlyContinue)
+	SystemSerial        = [string](Get-CimInstance Win32_BIOS -ErrorAction SilentlyContinue | Select-Object -ExpandProperty SerialNumber -ErrorAction SilentlyContinue)
+	BaseboardMfr        = [string](Get-CimInstance Win32_BaseBoard -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Manufacturer -ErrorAction SilentlyContinue)
+	BaseboardProduct    = [string](Get-CimInstance Win32_BaseBoard -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Product -ErrorAction SilentlyContinue)
+	BaseboardSerial     = [string](Get-CimInstance Win32_BaseBoard -ErrorAction SilentlyContinue | Select-Object -ExpandProperty SerialNumber -ErrorAction SilentlyContinue)
+	BIOSVendor          = [string](Get-CimInstance Win32_BIOS -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Manufacturer -ErrorAction SilentlyContinue)
+	BIOSVersion         = [string](Get-CimInstance Win32_BIOS -ErrorAction SilentlyContinue | Select-Object -ExpandProperty SMBIOSBIOSVersion -ErrorAction SilentlyContinue)
+	BIOSReleaseDate     = $biosDate
+	BIOSSerial          = [string](Get-CimInstance Win32_BIOS -ErrorAction SilentlyContinue | Select-Object -ExpandProperty SerialNumber -ErrorAction SilentlyContinue)
 } | ConvertTo-Json -Depth 1 -Compress`
 
 	cmd := exec.CommandContext(ctx, "powershell",
@@ -74,8 +82,26 @@ func enrichHardwareFromWMI(hw *models.HardwareInfo) {
 		BIOSSerial         string `json:"BIOSSerial"`
 	}
 	if err := json.Unmarshal(output, &wmi); err != nil {
-		log.Printf("[inventory] fallback WMI parse falhou: %v (output=%s)", err, strings.TrimSpace(string(output)))
-		return
+		// Fallback: WMI pode retornar campos como {} (objeto vazio) em VMs
+		// em vez de "" quando o valor é $null. Tenta parse via RawMessage
+		// para extrair apenas os campos string.
+		wmi = parseFlexibleWMIFields(output)
+		if wmi == (struct {
+			SystemManufacturer string `json:"SystemManufacturer"`
+			SystemModel        string `json:"SystemModel"`
+			SystemSerial       string `json:"SystemSerial"`
+			BaseboardMfr       string `json:"BaseboardMfr"`
+			BaseboardProduct   string `json:"BaseboardProduct"`
+			BaseboardSerial    string `json:"BaseboardSerial"`
+			BIOSVendor         string `json:"BIOSVendor"`
+			BIOSVersion        string `json:"BIOSVersion"`
+			BIOSReleaseDate    string `json:"BIOSReleaseDate"`
+			BIOSSerial         string `json:"BIOSSerial"`
+		}{}) {
+			log.Printf("[inventory] fallback WMI parse falhou: %v (output=%s)", err, strings.TrimSpace(string(output)))
+			return
+		}
+		log.Printf("[inventory] fallback WMI: parse flexivel bem-sucedido apos erro=%v", err)
 	}
 
 	log.Printf("[inventory] fallback WMI: preenchendo campos vazios do hardware")
@@ -132,4 +158,92 @@ func wmiBIOSReleaseDate(wmiDate string) string {
 		return y + "-" + m + "-" + d
 	}
 	return ""
+}
+
+// parseFlexibleWMIFields é um fallback que usa RawMessage para tolerar campos
+// WMI que venham como objetos vazios ({}) em vez de strings quando $null.
+// Comum em VMs Proxmox/QEMU onde vários campos CIM não têm valor.
+func parseFlexibleWMIFields(output []byte) struct {
+	SystemManufacturer string `json:"SystemManufacturer"`
+	SystemModel        string `json:"SystemModel"`
+	SystemSerial       string `json:"SystemSerial"`
+	BaseboardMfr       string `json:"BaseboardMfr"`
+	BaseboardProduct   string `json:"BaseboardProduct"`
+	BaseboardSerial    string `json:"BaseboardSerial"`
+	BIOSVendor         string `json:"BIOSVendor"`
+	BIOSVersion        string `json:"BIOSVersion"`
+	BIOSReleaseDate    string `json:"BIOSReleaseDate"`
+	BIOSSerial         string `json:"BIOSSerial"`
+} {
+	type flexibleStrings struct {
+		SystemManufacturer json.RawMessage `json:"SystemManufacturer"`
+		SystemModel        json.RawMessage `json:"SystemModel"`
+		SystemSerial       json.RawMessage `json:"SystemSerial"`
+		BaseboardMfr       json.RawMessage `json:"BaseboardMfr"`
+		BaseboardProduct   json.RawMessage `json:"BaseboardProduct"`
+		BaseboardSerial    json.RawMessage `json:"BaseboardSerial"`
+		BIOSVendor         json.RawMessage `json:"BIOSVendor"`
+		BIOSVersion        json.RawMessage `json:"BIOSVersion"`
+		BIOSReleaseDate    json.RawMessage `json:"BIOSReleaseDate"`
+		BIOSSerial         json.RawMessage `json:"BIOSSerial"`
+	}
+
+	var fs flexibleStrings
+	if err := json.Unmarshal(output, &fs); err != nil {
+		return struct {
+			SystemManufacturer string `json:"SystemManufacturer"`
+			SystemModel        string `json:"SystemModel"`
+			SystemSerial       string `json:"SystemSerial"`
+			BaseboardMfr       string `json:"BaseboardMfr"`
+			BaseboardProduct   string `json:"BaseboardProduct"`
+			BaseboardSerial    string `json:"BaseboardSerial"`
+			BIOSVendor         string `json:"BIOSVendor"`
+			BIOSVersion        string `json:"BIOSVersion"`
+			BIOSReleaseDate    string `json:"BIOSReleaseDate"`
+			BIOSSerial         string `json:"BIOSSerial"`
+		}{}
+	}
+
+	rawToStr := func(raw json.RawMessage) string {
+		if len(raw) == 0 {
+			return ""
+		}
+		// Se começa com aspas, é uma string JSON — tenta extrair
+		if raw[0] == '"' {
+			var s string
+			if err := json.Unmarshal(raw, &s); err == nil {
+				return s
+			}
+		}
+		// Se é um objeto ({...}) ou outro tipo não-string, retorna vazio
+		if raw[0] == '{' || raw[0] == '[' {
+			return ""
+		}
+		// Última tentativa: trata como string pura
+		return strings.TrimSpace(string(raw))
+	}
+
+	return struct {
+		SystemManufacturer string `json:"SystemManufacturer"`
+		SystemModel        string `json:"SystemModel"`
+		SystemSerial       string `json:"SystemSerial"`
+		BaseboardMfr       string `json:"BaseboardMfr"`
+		BaseboardProduct   string `json:"BaseboardProduct"`
+		BaseboardSerial    string `json:"BaseboardSerial"`
+		BIOSVendor         string `json:"BIOSVendor"`
+		BIOSVersion        string `json:"BIOSVersion"`
+		BIOSReleaseDate    string `json:"BIOSReleaseDate"`
+		BIOSSerial         string `json:"BIOSSerial"`
+	}{
+		SystemManufacturer: rawToStr(fs.SystemManufacturer),
+		SystemModel:        rawToStr(fs.SystemModel),
+		SystemSerial:       rawToStr(fs.SystemSerial),
+		BaseboardMfr:       rawToStr(fs.BaseboardMfr),
+		BaseboardProduct:   rawToStr(fs.BaseboardProduct),
+		BaseboardSerial:    rawToStr(fs.BaseboardSerial),
+		BIOSVendor:         rawToStr(fs.BIOSVendor),
+		BIOSVersion:        rawToStr(fs.BIOSVersion),
+		BIOSReleaseDate:    rawToStr(fs.BIOSReleaseDate),
+		BIOSSerial:         rawToStr(fs.BIOSSerial),
+	}
 }
