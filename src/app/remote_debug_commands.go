@@ -369,10 +369,12 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 	}
 
 	// ── Power Actions: restart / shutdown ──
-	// Fluxo: shutdown.exe /r ou /s com /t <delaySeconds> + /f.
-	// O shutdown.exe exibe diálogo nativo do Windows com countdown e botão
-	// "Fechar" para cancelar. NÃO usa PSADT para evitar flash de janela
-	// PowerShell (go-psadt runner não aplica HideWindow).
+	// Fluxo:
+	//   1. showPowerActionWarning → PSADT Show-ADTInstallationRestartPrompt
+	//      (countdown visual com barra de progresso + botão "Reiniciar Agora").
+	//   2. Se PSADT indisponível (disabled, erro, falha de sessão): fallback
+	//      para shutdown.exe com diálogo nativo do Windows.
+	//   3. executeSystemPowerAction → shutdown.exe /r ou /s com /t.
 	if isPowerActionCommandType(cmdType) {
 		pp := parsePowerCommandPayload(payload)
 		action := "restart"
@@ -383,7 +385,20 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 			pp.DelaySeconds = 60 // mínimo para contagem regressiva
 		}
 
-		a.logs.append(fmt.Sprintf("[agent] %s-action [EXEC] via shutdown.exe delay=%ds force=%t", action, pp.DelaySeconds, pp.Force))
+		// Etapa 1: prompt PSADT com countdown visual.
+		// Se PSADT estiver habilitado, exibe Show-ADTInstallationRestartPrompt.
+		// Retorna "proceed" quando o countdown termina (usuário pode clicar
+		// "Reiniciar Agora" antes). Se PSADT falhar/disabled, retorna
+		// "proceed_fallback" e usamos shutdown.exe diretamente.
+		result, psadtErr := a.showPowerActionWarning(parent, action, pp.DelaySeconds, pp.Force, pp.Message)
+		if psadtErr != nil {
+			a.logs.append(fmt.Sprintf("[agent] %s-action [WARN] PSADT prompt falhou: %v — fallback shutdown.exe", action, psadtErr))
+		}
+
+		// Etapa 2: executar restart/shutdown no SO.
+		// shutdown.exe exibe diálogo nativo com countdown + botão "Fechar"
+		// como fallback caso PSADT não tenha mostrado o prompt.
+		a.logs.append(fmt.Sprintf("[agent] %s-action [EXEC] psadt-result=%s via shutdown.exe delay=%ds force=%t", action, result, pp.DelaySeconds, pp.Force))
 		exitCode, output, errText := a.executeSystemPowerAction(parent, action, pp.DelaySeconds, pp.Force, pp.Message)
 		return true, exitCode, output, errText
 	}

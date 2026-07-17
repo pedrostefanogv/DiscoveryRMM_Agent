@@ -187,8 +187,6 @@ github.com/osquery/osquery-go v0.0.0-20260630173615-eb39ad3443df h1:GEa8SFf/OXRX
 github.com/osquery/osquery-go v0.0.0-20260630173615-eb39ad3443df/go.mod h1:/Nxgn14on72pNnpjn9Fbw9WQc8JKY1sVv5K+SRZknEk=
 github.com/pbnjay/memory v0.0.0-20210728143218-7b4eea64cf58 h1:onHthvaw9LFnH4t2DcNVpwGmV9E1BkGknEliJkfwQj0=
 github.com/pbnjay/memory v0.0.0-20210728143218-7b4eea64cf58/go.mod h1:DXv8WO4yhMYhSNPKjeNKa5WY9YCIEBRbNzFFPJbWO6Y=
-github.com/pedrostefanogv/go-psadt v0.0.0-20260606151140-81bcbd5c3d85 h1:jHdQS3ePUFiVf1+xqIbEWoAA+Hf2+N8M839S7O+h9cQ=
-github.com/pedrostefanogv/go-psadt v0.0.0-20260606151140-81bcbd5c3d85/go.mod h1:PUkqB2pctu3jsH/AibulxNgiIJIRKms60lVMRubtO2Y=
 github.com/pion/datachannel v1.6.2 h1:7EXQ8TH3vTouBUdRWYbcX2edSx9Yj6k5zl5P+qyxEPc=
 github.com/pion/datachannel v1.6.2/go.mod h1:pzbdAZvyGtXbcHM1hBbsFaOTf40lZizU/dNlvVOak6E=
 github.com/pion/dtls/v3 v3.1.5 h1:9xJtVsHwMYeSjPp5Hh1FTis4DchnQWtnOa5o+6ygqfc=
