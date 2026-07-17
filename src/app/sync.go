@@ -2,16 +2,20 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
+	"discovery/app/appstore"
 	"discovery/app/netutil"
 	"discovery/internal/agentconn"
 	"discovery/internal/selfupdate"
@@ -56,6 +60,7 @@ type syncCoordinator struct {
 	queuedByKey     map[string]syncTrigger
 	processedEvents map[string]time.Time
 	revisions       map[string]string
+	contentHashes   map[string]string
 	pollEvery       time.Duration
 }
 
@@ -67,6 +72,7 @@ func newSyncCoordinator(app *App, updateTrigger chan struct{}) *syncCoordinator 
 		queuedByKey:     make(map[string]syncTrigger),
 		processedEvents: make(map[string]time.Time),
 		revisions:       make(map[string]string),
+		contentHashes:   make(map[string]string),
 		pollEvery:       time.Duration(defaultPollSeconds) * time.Second,
 	}
 	c.loadPersistedRevisions()
@@ -237,26 +243,43 @@ func (c *syncCoordinator) processTrigger(ctx context.Context, trigger syncTrigge
 
 	currentRev := c.getRevision(queued.Resource, variant)
 	if revision != "" && currentRev == revision {
-		c.app.logs.append("[sync] appstore sem alterações na revisão, ignorando: resource=" + queued.Resource + " revision=" + revision)
-	} else {
-		if revision != "" {
-			c.setRevision(queued.Resource, variant, revision)
-		}
-		if resource == "appstore" && c.app.ctx != nil {
-			wailsRuntime.EventsEmit(c.app.ctx, "store:catalog-updated", map[string]any{
-				"resource":  queued.Resource,
-				"variant":   variant,
-				"revision":  revision,
-				"source":    queued.Source,
-				"itemCount": len(appStorePolicy.Items),
-				"updatedAt": time.Now().UTC().Format(time.RFC3339),
-			})
-		}
+		c.app.logs.append("[sync] recurso sem alterações na revisão, ignorando: resource=" + queued.Resource + " revision=" + revision)
+		c.cleanupProcessedTrigger(queued)
+		return
 	}
-	if c.app.p2pCoord != nil {
-		c.app.p2pCoord.OnResourceSynced(queued.Resource, variant, revision)
+
+	if revision != "" {
+		c.setRevision(queued.Resource, variant, revision)
 	}
-	c.app.logs.append("[sync] recurso sincronizado: " + queued.Resource + " variant=" + variant + " source=" + queued.Source)
+
+	if resource == "appstore" && c.app.ctx != nil {
+		contentHash := computeAppStoreContentHash(appStorePolicy.Items)
+		prevHash := c.getContentHash(key)
+
+		if contentHash != "" && prevHash == contentHash {
+			c.app.logs.append("[sync] appstore sem alterações no conteúdo, ignorando toast: resource=" + queued.Resource + " hash=" + contentHash[:12])
+			c.cleanupProcessedTrigger(queued)
+			return
+		}
+
+		if contentHash != "" {
+			c.setContentHash(key, contentHash)
+		}
+
+		wailsRuntime.EventsEmit(c.app.ctx, "store:catalog-updated", map[string]any{
+			"resource":  queued.Resource,
+			"variant":   variant,
+			"revision":  revision,
+			"source":    queued.Source,
+			"itemCount": len(appStorePolicy.Items),
+			"updatedAt": time.Now().UTC().Format(time.RFC3339),
+		})
+	} else if resource == "appstore" {
+		// ctx nulo (ex.: before startup completo) — apenas registra sem emitir evento
+		c.app.logs.append("[sync] appstore atualizada mas sem contexto de UI para emitir evento: resource=" + queued.Resource)
+	}
+
+	c.cleanupProcessedTrigger(queued)
 }
 
 func (c *syncCoordinator) fullResync(ctx context.Context, source string) error {
@@ -507,4 +530,56 @@ func parseZeroTouchPendingConfiguration(body []byte) (bool, bool) {
 		return false, false
 	}
 	return toBool(v), true
+}
+
+// computeAppStoreContentHash calcula um hash determinístico do conteúdo real
+// dos itens da app-store para detectar mudanças reais, independente da revision.
+func computeAppStoreContentHash(items []appstore.Item) string {
+	if len(items) == 0 {
+		return ""
+	}
+
+	// Ordena os itens por chave composta para hash determinístico
+	sorted := make([]appstore.Item, len(items))
+	copy(sorted, items)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		return sorted[i].PackageID < sorted[j].PackageID ||
+			(sorted[i].PackageID == sorted[j].PackageID && sorted[i].InstallationType < sorted[j].InstallationType)
+	})
+
+	h := sha256.New()
+	for _, item := range sorted {
+		h.Write([]byte(item.PackageID))
+		h.Write([]byte{0})
+		h.Write([]byte(item.InstallationType))
+		h.Write([]byte{0})
+		h.Write([]byte(item.Name))
+		h.Write([]byte{0})
+		h.Write([]byte(item.Version))
+		h.Write([]byte{0})
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func (c *syncCoordinator) getContentHash(key string) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.contentHashes[key]
+}
+
+func (c *syncCoordinator) setContentHash(key, hash string) {
+	c.mu.Lock()
+	c.contentHashes[key] = hash
+	c.mu.Unlock()
+}
+
+// cleanupProcessedTrigger remove o trigger da fila e notifica P2P.
+func (c *syncCoordinator) cleanupProcessedTrigger(trigger syncTrigger) {
+	resource := strings.ToLower(strings.TrimSpace(trigger.Resource))
+	variant := strings.TrimSpace(trigger.Variant)
+	revision := strings.TrimSpace(trigger.Revision)
+	if c.app.p2pCoord != nil {
+		c.app.p2pCoord.OnResourceSynced(resource, variant, revision)
+	}
+	c.app.logs.append("[sync] recurso sincronizado: " + resource + " variant=" + variant + " source=" + trigger.Source)
 }

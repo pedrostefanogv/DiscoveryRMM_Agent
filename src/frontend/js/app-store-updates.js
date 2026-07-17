@@ -1,6 +1,7 @@
 "use strict";
 
 var storeCatalogDirty = false;
+var lastStoreUpdateToastAt = 0;
 
 function handleStoreTabActivated() {
   if (!storeCatalogDirty) return;
@@ -15,10 +16,18 @@ function onStoreCatalogUpdated(data) {
     storeCatalogDirty = false;
     loadCatalog();
     showToast(translate('store.synced', { variant: data && data.variant ? ' (' + data.variant + ')' : '' }), 'info');
+    lastStoreUpdateToastAt = Date.now();
+    return;
+  }
+
+  // Throttle: evita toast repetido em menos de 5 minutos
+  var now = Date.now();
+  if (now - lastStoreUpdateToastAt < 5 * 60 * 1000) {
     return;
   }
 
   showToast(translate('store.newDataSync'), 'info');
+  lastStoreUpdateToastAt = now;
 }
 
 (function registerStoreSyncEvents() {
