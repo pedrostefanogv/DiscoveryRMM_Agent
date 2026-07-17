@@ -469,11 +469,10 @@ func resolvePowerShellExe() string {
 
 // executeSystemPowerAction executa o restart/shutdown no SO.
 //
-// delaySeconds:
-//   - 0: PSADT ja tratou UX — shutdown.exe /t 0 (imediato, sem dialogo nativo).
-//   - >0: PSADT falhou (proceed_fallback) — shutdown.exe /t <delay> com
-//     dialogo nativo do Windows para dar tempo do usuario salvar trabalho.
-func (a *App) executeSystemPowerAction(_ context.Context, action string, delaySeconds int, _ bool, _ string) (int, string, string) {
+// Usa shutdown.exe com diálogo nativo do Windows (countdown + botão "Fechar").
+// force=true adiciona /f (fecha apps sem confirmação adicional).
+// message (se não vazia) é exibida no diálogo nativo via /c.
+func (a *App) executeSystemPowerAction(_ context.Context, action string, delaySeconds int, force bool, message string) (int, string, string) {
 	flag := "/s"
 	label := "shutdown"
 	if action == "restart" || action == "reboot" {
@@ -493,18 +492,22 @@ func (a *App) executeSystemPowerAction(_ context.Context, action string, delaySe
 		}
 	}
 
-	delayArg := "0"
-	mode := "imediato"
-	if delaySeconds > 0 {
-		delayArg = fmt.Sprintf("%d", delaySeconds)
-		mode = fmt.Sprintf("delay %ds (dialogo nativo)", delaySeconds)
+	if delaySeconds <= 0 {
+		delaySeconds = 60
 	}
 
-	// /f = forcado (fecha apps sem confirmacao adicional).
-	args := []string{flag, "/t", delayArg, "/f"}
+	args := []string{flag, "/t", fmt.Sprintf("%d", delaySeconds)}
+
+	if force {
+		args = append(args, "/f")
+	}
+
+	if strings.TrimSpace(message) != "" {
+		args = append(args, "/c", message)
+	}
 
 	if a != nil {
-		a.logs.append(fmt.Sprintf("[agent] %s-action [EXEC] exe=%s args=%s (modo=%s)", label, shutdownExe, strings.Join(args, " "), mode))
+		a.logs.append(fmt.Sprintf("[agent] %s-action [EXEC] exe=%s args=%s (modo=delay %ds force=%t)", label, shutdownExe, strings.Join(args, " "), delaySeconds, force))
 	}
 
 	cmd := exec.Command(shutdownExe, args...)
@@ -520,7 +523,7 @@ func (a *App) executeSystemPowerAction(_ context.Context, action string, delaySe
 	}
 
 	if a != nil {
-		a.logs.append(fmt.Sprintf("[agent] %s-action [OK] exe=%s (modo=%s)", label, shutdownExe, mode))
+		a.logs.append(fmt.Sprintf("[agent] %s-action [OK] exe=%s (modo=delay %ds)", label, shutdownExe, delaySeconds))
 	}
-	return 0, fmt.Sprintf("%s executado com sucesso", label), ""
+	return 0, fmt.Sprintf("%s agendado com sucesso (delay=%ds)", label, delaySeconds), ""
 }

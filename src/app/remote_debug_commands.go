@@ -369,15 +369,10 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 	}
 
 	// ── Power Actions: restart / shutdown ──
-	// Fluxo:
-	//   1. showPowerActionWarning exibe countdown PSADT via
-	//      Show-ADTInstallationRestartPrompt (countdown visual nativo).
-	//      - force=false: countdown = delaySeconds, botão "Reiniciar Agora".
-	//        Ao esgotar: ação padrão = proceed.
-	//      - force=true: countdown = min(30, delaySeconds).
-	//   2. Se proceed: executeSystemPowerAction com /t 0 (imediato).
-	//   3. Se proceed_fallback (PSADT indisponível): executeSystemPowerAction
-	//      com /t <delaySeconds> + diálogo nativo do Windows.
+	// Fluxo: shutdown.exe /r ou /s com /t <delaySeconds> + /f.
+	// O shutdown.exe exibe diálogo nativo do Windows com countdown e botão
+	// "Fechar" para cancelar. NÃO usa PSADT para evitar flash de janela
+	// PowerShell (go-psadt runner não aplica HideWindow).
 	if isPowerActionCommandType(cmdType) {
 		pp := parsePowerCommandPayload(payload)
 		action := "restart"
@@ -388,23 +383,8 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 			pp.DelaySeconds = 60 // mínimo para contagem regressiva
 		}
 
-		decision, err := a.showPowerActionWarning(parent, action, pp.DelaySeconds, pp.Force, pp.Message)
-		if err != nil {
-			a.logs.append(fmt.Sprintf("[agent] %s-prompt erro ao exibir aviso: %v", action, err))
-		}
-		if decision != "proceed" && decision != "proceed_fallback" {
-			a.logs.append(fmt.Sprintf("[agent] %s-prompt usuario cancelou — retornando sem executar %s", action, action))
-			return true, 0, fmt.Sprintf("%s cancelado pelo usuario", action), ""
-		}
-
-		// proceed_fallback: PSADT falhou — repassa delaySeconds para shutdown.exe
-		// mostrar diálogo nativo do Windows como fallback.
-		fallbackDelay := 0
-		if decision == "proceed_fallback" {
-			fallbackDelay = pp.DelaySeconds
-			a.logs.append(fmt.Sprintf("[agent] %s-prompt [FALLBACK] shutdown.exe com /t %d (dialogo nativo)", action, fallbackDelay))
-		}
-		exitCode, output, errText := a.executeSystemPowerAction(parent, action, fallbackDelay, false, "")
+		a.logs.append(fmt.Sprintf("[agent] %s-action [EXEC] via shutdown.exe delay=%ds force=%t", action, pp.DelaySeconds, pp.Force))
+		exitCode, output, errText := a.executeSystemPowerAction(parent, action, pp.DelaySeconds, pp.Force, pp.Message)
 		return true, exitCode, output, errText
 	}
 

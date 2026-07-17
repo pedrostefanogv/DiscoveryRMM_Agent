@@ -47,18 +47,20 @@ type debugHTTPServer struct {
 }
 
 // startDebugHTTPInternal binds and starts the HTTP server on the given bind address.
-func (a *App) startDebugHTTPInternal(bindAddr string) error {
+// If port is 0, a random port is allocated. Otherwise the specified port is used.
+func (a *App) startDebugHTTPInternal(bindAddr string, port int) error {
 	fs := getFrontendFS()
 	if fs == nil {
 		return fmt.Errorf("frontend assets não configurados — chame SetDebugFrontendAssets antes")
 	}
 
-	listener, err := net.Listen("tcp", bindAddr+":0")
+	listenAddr := fmt.Sprintf("%s:%d", bindAddr, port)
+	listener, err := net.Listen("tcp", listenAddr)
 	if err != nil {
-		return fmt.Errorf("falha ao criar listener debug-http em %s: %w", bindAddr, err)
+		return fmt.Errorf("falha ao criar listener debug-http em %s: %w", listenAddr, err)
 	}
 
-	port := listener.Addr().(*net.TCPAddr).Port
+	port = listener.Addr().(*net.TCPAddr).Port
 	bindAll := bindAddr == "0.0.0.0"
 
 	mux := http.NewServeMux()
@@ -135,7 +137,7 @@ func (a *App) startDebugHTTPInternal(bindAddr string) error {
 // StartDebugHTTPServer binds a local-only HTTP server on a random port.
 // The server serves static frontend assets and a /api/* REST bridge.
 func (a *App) StartDebugHTTPServer() error {
-	return a.startDebugHTTPInternal("127.0.0.1")
+	return a.startDebugHTTPInternal("127.0.0.1", 0)
 }
 
 // StopDebugHTTPServer gracefully shuts down the debug HTTP server.
@@ -172,7 +174,8 @@ func (a *App) IsDebugHTTPBoundToAllInterfaces() bool {
 
 // SetDebugHTTPBindAllInterfaces restarts the debug HTTP server to bind on
 // 0.0.0.0 (when enabled=true) or 127.0.0.1 (when enabled=false).
-// Only works when the debug HTTP server is already running.
+// Preserves the current port so tray menu "Abrir no navegador" and other
+// references remain valid after the rebind.
 func (a *App) SetDebugHTTPBindAllInterfaces(enabled bool) error {
 	if a.debugHTTP == nil {
 		return fmt.Errorf("servidor debug-http nao esta em execucao")
@@ -181,6 +184,9 @@ func (a *App) SetDebugHTTPBindAllInterfaces(enabled bool) error {
 		// Already in the requested state — no-op
 		return nil
 	}
+
+	// Preserve the current port so references (tray, logs) stay valid.
+	currentPort := a.debugHTTP.port
 
 	// Stop the current listener/server
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -191,14 +197,18 @@ func (a *App) SetDebugHTTPBindAllInterfaces(enabled bool) error {
 	a.debugHTTP.listener.Close()
 	a.debugHTTP = nil
 
-	// Restart with the new bind address
+	// Restart with the new bind address, preserving the port.
 	bindAddr := "127.0.0.1"
 	if enabled {
 		bindAddr = "0.0.0.0"
 	}
 
-	if err := a.startDebugHTTPInternal(bindAddr); err != nil {
-		return fmt.Errorf("falha ao reiniciar debug-http com bind %s: %w", bindAddr, err)
+	if err := a.startDebugHTTPInternal(bindAddr, currentPort); err != nil {
+		// If the port was somehow taken, fall back to random port
+		log.Printf("[debug-http] falha ao reiniciar na porta %d, tentando porta aleatoria: %v", currentPort, err)
+		if err2 := a.startDebugHTTPInternal(bindAddr, 0); err2 != nil {
+			return fmt.Errorf("falha ao reiniciar debug-http com bind %s: %w", bindAddr, err2)
+		}
 	}
 
 	if enabled {
