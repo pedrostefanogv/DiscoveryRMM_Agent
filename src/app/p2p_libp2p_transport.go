@@ -39,10 +39,31 @@ const (
 	protoArtifactReplicate = "/artifact/replicate/1.0.0"
 	protoFetchCandidacy    = "/fetch/candidacy/1.0.0"
 	protoFetchHeartbeat    = "/fetch/heartbeat/1.0.0"
-	libp2pStreamTimeout    = 30 * time.Second
-	libp2pTransferTimeout  = 2 * time.Minute
-	libp2pCandidacyTimeout = 10 * time.Second
+	libp2pStreamTimeout        = 30 * time.Second
+	libp2pTransferTimeout      = 2 * time.Minute
+	libp2pCandidacyTimeout     = 10 * time.Second
+	libp2pTransferTimeoutMax   = 30 * time.Minute
+	libp2pManifestTimeout      = 5 * time.Minute   // cobre leitura completa do arquivo para gerar manifest
+	libp2pMinTransferSpeed     = 1 * 1024 * 1024   // 1 MB/s — piso de velocidade para cálculo de timeout
+	libp2pTransferTimeoutMargin = 30 * time.Second
 )
+
+// computeTransferDeadline calcula um deadline adaptativo baseado no tamanho dos dados.
+// Piso: libp2pTransferTimeout (2 min). Teto: libp2pTransferTimeoutMax (30 min).
+// Assume velocidade mínima de 1 MB/s mais margem fixa de 30s.
+func computeTransferDeadline(dataSize int64) time.Time {
+	if dataSize <= 0 {
+		return time.Now().Add(libp2pTransferTimeout)
+	}
+	estimated := time.Duration(dataSize/libp2pMinTransferSpeed)*time.Second + libp2pTransferTimeoutMargin
+	if estimated < libp2pTransferTimeout {
+		estimated = libp2pTransferTimeout
+	}
+	if estimated > libp2pTransferTimeoutMax {
+		estimated = libp2pTransferTimeoutMax
+	}
+	return time.Now().Add(estimated)
+}
 
 // â”€â”€ Request / Response types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -202,7 +223,8 @@ func handleStreamArtifactManifest(s network.Stream, transfer *p2pTransferServer)
 	transfer.mu.RUnlock()
 
 	path := filepath.Join(tempDir, req.ArtifactName)
-	if _, err := os.Stat(path); err != nil {
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
 		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "artifact não encontrado"})
 		return
 	}
@@ -213,6 +235,9 @@ func handleStreamArtifactManifest(s network.Stream, transfer *p2pTransferServer)
 		_ = json.NewEncoder(s).Encode(cached)
 		return
 	}
+
+	// Reajustar deadline: buildChunkManifest lê o arquivo inteiro.
+	_ = s.SetDeadline(computeTransferDeadline(info.Size()))
 
 	var chunkSize int64 = defaultChunkSizeBytes
 	if app != nil {
@@ -235,7 +260,6 @@ func handleStreamArtifactManifest(s network.Stream, transfer *p2pTransferServer)
 
 func handleStreamArtifactGet(s network.Stream, transfer *p2pTransferServer) {
 	defer s.Close()
-	_ = s.SetDeadline(time.Now().Add(libp2pTransferTimeout))
 
 	var req libp2pGetRequest
 	if err := json.NewDecoder(bufio.NewReader(s)).Decode(&req); err != nil {
@@ -277,6 +301,9 @@ func handleStreamArtifactGet(s network.Stream, transfer *p2pTransferServer) {
 		return
 	}
 	chunkLen := rangeEnd - rangeStart + 1
+
+	// Deadline adaptativo baseado no tamanho real a transferir.
+	_ = s.SetDeadline(computeTransferDeadline(chunkLen))
 
 	// Enviar header JSON primeiro.
 	hdr := libp2pGetResponse{
@@ -411,7 +438,7 @@ func libp2pFetchManifest(ctx context.Context, h host.Host, peerID peer.ID, artif
 		return P2PChunkManifest{}, fmt.Errorf("stream manifest: %w", err)
 	}
 	defer s.Close()
-	_ = s.SetDeadline(time.Now().Add(libp2pStreamTimeout))
+	_ = s.SetDeadline(time.Now().Add(libp2pManifestTimeout))
 
 	req := libp2pManifestRequest{ArtifactName: artifactName, RequesterID: requesterID}
 	if err := json.NewEncoder(s).Encode(req); err != nil {
@@ -490,7 +517,7 @@ func libp2pDownloadChunk(ctx context.Context, h host.Host, peerID peer.ID, artif
 		return fmt.Errorf("stream get: %w", err)
 	}
 	defer s.Close()
-	_ = s.SetDeadline(time.Now().Add(libp2pTransferTimeout))
+	_ = s.SetDeadline(computeTransferDeadline(chunk.Size))
 
 	req := libp2pGetRequest{
 		ArtifactName: artifactName,
@@ -547,6 +574,7 @@ func libp2pDownloadArtifact(ctx context.Context, h host.Host, peerID peer.ID, ac
 		return "", 0, fmt.Errorf("stream get: %w", err)
 	}
 	defer s.Close()
+	// Deadline inicial: 2 min para handshake + header. Será reajustado após ler o header.
 	_ = s.SetDeadline(time.Now().Add(libp2pTransferTimeout))
 
 	req := libp2pGetRequest{
@@ -570,6 +598,9 @@ func libp2pDownloadArtifact(ctx context.Context, h host.Host, peerID peer.ID, ac
 		return "", 0, fmt.Errorf("range inicial inesperado no payload")
 	}
 	expectedBytes := hdr.RangeEnd - hdr.RangeStart + 1
+
+	// Reajustar deadline com base no tamanho real do payload.
+	_ = s.SetDeadline(computeTransferDeadline(expectedBytes))
 
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
 		return "", 0, err

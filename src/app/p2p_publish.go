@@ -48,8 +48,44 @@ func (c *p2pCoordinator) ListArtifacts() ([]P2PArtifactView, error) {
 			Available:        true,
 			LastHeartbeatUTC: formatTimeRFC3339(time.Now().UTC()),
 		})
+
+		// Garantir que o manifest está gerado e cacheado para download chunked.
+		go c.ensureManifestForArtifact(name, path, info.ModTime())
 	}
 	return artifacts, nil
+}
+
+// ensureManifestForArtifact verifica se um manifest cacheado existe e é válido;
+// caso contrário, gera e persiste um novo manifest para o artifact.
+func (c *p2pCoordinator) ensureManifestForArtifact(artifactName, path string, modTime time.Time) {
+	if c.transferServer == nil {
+		return
+	}
+	manifestDir := c.transferServer.manifestDir()
+	if manifestDir == "" {
+		return
+	}
+
+	existing := loadCachedManifest(manifestDir, artifactName, path)
+	if existing != nil && manifestMatchesFile(existing, path) {
+		return // já válido
+	}
+
+	artifactID := CanonicalArtifactID("", artifactName, "")
+	var chunkSize int64 = defaultChunkSizeBytes
+	if cfg := c.app.GetP2PConfig(); cfg.ChunkSizeBytes > 0 {
+		chunkSize = cfg.ChunkSizeBytes
+	}
+	manifest, err := buildChunkManifest(path, artifactID, chunkSize)
+	if err != nil {
+		c.app.logs.append(fmt.Sprintf("[p2p] aviso: falha ao gerar manifest para %s: %v", artifactName, err))
+		return
+	}
+	if err := saveCachedManifest(manifestDir, artifactName, manifest); err != nil {
+		c.app.logs.append(fmt.Sprintf("[p2p] aviso: falha ao salvar manifest para %s: %v", artifactName, err))
+		return
+	}
+	c.app.logs.append(fmt.Sprintf("[p2p] manifest gerado: %s chunks=%d size=%d", artifactName, manifest.TotalChunks, manifest.TotalSize))
 }
 
 func (c *p2pCoordinator) PublishTestArtifact(artifactName, content string) (P2PArtifactView, error) {

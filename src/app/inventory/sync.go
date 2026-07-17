@@ -25,6 +25,7 @@ type agentHardwareEnvelope struct {
 	OperatingSystem        string          `json:"operatingSystem"`
 	OSVersion              string          `json:"osVersion"`
 	AgentVersion           string          `json:"agentVersion"`
+	CommitHash             string          `json:"commitHash,omitempty"`
 	LastIPAddress          string          `json:"lastIpAddress"`
 	MACAddress             string          `json:"macAddress"`
 	Hardware               json.RawMessage `json:"hardware"`
@@ -175,7 +176,7 @@ func (s *Service) SyncInventoryOnStartup(ctx context.Context, report models.Inve
 	cfg.ApiServer = strings.TrimSpace(cfg.ApiServer)
 	cfg.ApiScheme = strings.TrimSpace(strings.ToLower(cfg.ApiScheme))
 
-	hardwarePayload := buildAgentHardwareEnvelope(report, s.version)
+	hardwarePayload := buildAgentHardwareEnvelope(report, s.version, s.commitHash)
 	hardwarePayload.AgentID = strings.TrimSpace(cfg.AgentID)
 	if s.resolveMeshCentralNodeID != nil {
 		hardwarePayload.MeshCentralNodeID = strings.TrimSpace(s.resolveMeshCentralNodeID())
@@ -516,7 +517,7 @@ func computeMachineScore(report models.InventoryReport) int {
 	return int(math.Round(math.Max(score, 1)))
 }
 
-func buildAgentHardwareEnvelope(report models.InventoryReport, version string) agentHardwareEnvelope {
+func buildAgentHardwareEnvelope(report models.InventoryReport, version, commitHash string) agentHardwareEnvelope {
 	collected := strings.TrimSpace(report.CollectedAt)
 	if collected == "" {
 		collected = time.Now().UTC().Format(time.RFC3339)
@@ -703,6 +704,7 @@ func buildAgentHardwareEnvelope(report models.InventoryReport, version string) a
 		OperatingSystem:        osName,
 		OSVersion:              osVersion,
 		AgentVersion:           trimToMaxLen(strings.TrimSpace(version), 100),
+		CommitHash:             trimToMaxLen(strings.TrimSpace(commitHash), 64),
 		LastIPAddress:          lastIP,
 		MACAddress:             primaryMAC,
 		MachineScore:           computeMachineScore(report),

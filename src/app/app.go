@@ -361,6 +361,7 @@ func NewApp(opts AppStartupOptions) *App {
 		DB:                       nil,
 		DebugConfig:              a.GetDebugConfig,
 		Version:                  Version,
+		CommitHash:               buildinfo.Commit,
 		ResolveMeshCentralNodeID: a.getMeshCentralNodeIDForReport,
 		OnHardwareReportSuccess:  a.markMeshCentralReportSuccess,
 		ShouldDeferNonCritical:   a.nonCriticalBackoffWindow,
