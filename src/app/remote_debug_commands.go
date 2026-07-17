@@ -370,12 +370,14 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 
 	// ── Power Actions: restart / shutdown ──
 	// Fluxo:
-	//   1. showPowerActionWarning exibe prompt PSADT:
-	//      - force=false: contagem regressiva (delaySeconds) + Sim/Não.
-	//        Timeout → proceed automático. Não → deferred.
-	//      - force=true: apenas botão "Reiniciar Agora", sem cancelar.
-	//   2. Se proceed: executeSystemPowerAction usa shutdown.exe /t 0
-	//      (imediato, SEM diálogo nativo redundante do Windows).
+	//   1. showPowerActionWarning exibe countdown PSADT via
+	//      Show-ADTInstallationRestartPrompt (countdown visual nativo).
+	//      - force=false: countdown = delaySeconds, botão "Reiniciar Agora".
+	//        Ao esgotar: ação padrão = proceed.
+	//      - force=true: countdown = min(30, delaySeconds).
+	//   2. Se proceed: executeSystemPowerAction com /t 0 (imediato).
+	//   3. Se proceed_fallback (PSADT indisponível): executeSystemPowerAction
+	//      com /t <delaySeconds> + diálogo nativo do Windows.
 	if isPowerActionCommandType(cmdType) {
 		pp := parsePowerCommandPayload(payload)
 		action := "restart"
@@ -383,22 +385,26 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 			action = "shutdown"
 		}
 		if pp.DelaySeconds <= 0 {
-			pp.DelaySeconds = 60 // mínimo para contagem regressiva PSADT
+			pp.DelaySeconds = 60 // mínimo para contagem regressiva
 		}
 
 		decision, err := a.showPowerActionWarning(parent, action, pp.DelaySeconds, pp.Force, pp.Message)
 		if err != nil {
 			a.logs.append(fmt.Sprintf("[agent] %s-prompt erro ao exibir aviso: %v", action, err))
 		}
-		if decision != "proceed" {
+		if decision != "proceed" && decision != "proceed_fallback" {
 			a.logs.append(fmt.Sprintf("[agent] %s-prompt usuario cancelou — retornando sem executar %s", action, action))
 			return true, 0, fmt.Sprintf("%s cancelado pelo usuario", action), ""
 		}
 
-		// PSADT já tratou a UX (contagem regressiva ou confirmação).
-		// shutdown.exe /t 0 executa o restart imediatamente, sem
-		// diálogo nativo redundante do Windows.
-		exitCode, output, errText := a.executeSystemPowerAction(parent, action, 0, false, "")
+		// proceed_fallback: PSADT falhou — repassa delaySeconds para shutdown.exe
+		// mostrar diálogo nativo do Windows como fallback.
+		fallbackDelay := 0
+		if decision == "proceed_fallback" {
+			fallbackDelay = pp.DelaySeconds
+			a.logs.append(fmt.Sprintf("[agent] %s-prompt [FALLBACK] shutdown.exe com /t %d (dialogo nativo)", action, fallbackDelay))
+		}
+		exitCode, output, errText := a.executeSystemPowerAction(parent, action, fallbackDelay, false, "")
 		return true, exitCode, output, errText
 	}
 

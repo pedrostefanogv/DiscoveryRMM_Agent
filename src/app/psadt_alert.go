@@ -81,13 +81,6 @@ func normalizePsadtAlertIcon(raw string) string {
 	}
 }
 
-// psEscape converte uma string Go para um literal string PowerShell entre aspas simples,
-// escapando aspas simples internas. Usado por buildPowerActionWarningScript (shutdown/restart).
-func psEscape(s string) string {
-	s = strings.ReplaceAll(s, "'", "''")
-	return "'" + s + "'"
-}
-
 // handlePsadtAlert executa o alerta PSADT usando a lib go-psadt nativa,
 // eliminando concatenação manual de scripts PowerShell.
 func (a *App) handlePsadtAlert(ctx context.Context, p PsadtAlertPayload) (int, string, string) {
@@ -344,189 +337,93 @@ func mapPSADTDialogResult(result pstypes.DialogBoxResult, p PsadtAlertPayload) s
 	return r
 }
 
-// showPowerActionWarning builds and executes a PSADT prompt before a system
-// restart or shutdown.
+// showPowerActionWarning exibe o prompt PSADT de restart/shutdown usando
+// Show-ADTInstallationRestartPrompt via lib go-psadt.
 //
-//   - force=false: Show-ADTInstallationPrompt com contagem regressiva
-//     (timeout = delaySeconds) e botoes Sim/Nao.
-//     Se o tempo esgotar: reinicia automaticamente (proceed).
-//     Se clicar "Sim": proceed. Se clicar "Nao": deferred (cancela).
-//   - force=true:  Show-ADTInstallationPrompt com apenas botao "Reiniciar Agora"
-//     (sem botao direito, sem contagem regressiva). O usuario nao pode cancelar.
+//   - force=false: CountdownSeconds = delaySeconds. O usuário vê countdown
+//     visual + botão "Reiniciar Agora". Ao esgotar: action padrão = proceed.
+//     O PSADT NÃO executa o restart — apenas retorna quando o countdown acaba
+//     ou o usuário clica. O caller deve chamar executeSystemPowerAction depois.
+//   - force=true:  CountdownSeconds = min(30, delaySeconds). Countdown visível
+//     SEM botão de cancelar. Ao esgotar: proceed.
 //
-// Quando PSADT nao esta instalado, o script escreve 'proceed' e o Go faz
-// fallback para shutdown.exe com dialogo nativo do Windows.
-func (a *App) showPowerActionWarning(ctx context.Context, action string, delaySeconds int, force bool, msg string) (string, error) {
+// Retorna:
+//   - "proceed" — PSADT countdown concluído, prosseguir com restart.
+//   - "proceed_fallback" — PSADT indisponível (disabled, sessão falhou, erro).
+//     Caller deve usar shutdown.exe com /t <delay> + diálogo nativo do Windows.
+func (a *App) showPowerActionWarning(ctx context.Context, action string, delaySeconds int, force bool, _ string) (string, error) {
 	if runtime.GOOS != "windows" {
 		return "proceed", nil
 	}
 
-	label := "reiniciar"
-	actionPt := "reiniciado"
-	if action == "shutdown" {
-		label = "desligar"
-		actionPt = "desligado"
-	}
-	if msg == "" {
-		if force {
-			msg = fmt.Sprintf("O administrador solicitou a %s do sistema. O computador será %s em %d segundos. Salve seu trabalho.", label, actionPt, delaySeconds)
-		} else {
-			msg = fmt.Sprintf("O administrador solicitou a %s do sistema. Deseja prosseguir?", label)
-		}
+	psadtCfg := a.GetAgentConfiguration().PSADT
+	if psadtCfg.Enabled == nil || !*psadtCfg.Enabled {
+		a.logs.append(fmt.Sprintf("[agent] psadt-%s-prompt [SKIP] psadt.enabled=false — fallback shutdown.exe", action))
+		return "proceed_fallback", nil
 	}
 
-	script, timeout := buildPowerActionWarningScript(action, delaySeconds, force, msg)
+	if delaySeconds <= 0 {
+		delaySeconds = 60
+	}
+
+	// Cap do countdown forçado: mesmo forçado, dá tempo de salvar trabalho.
+	countdown := delaySeconds
+	if force && countdown > 30 {
+		countdown = 30
+	}
+
+	timeout := time.Duration(countdown+120) * time.Second
 	execCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	a.logs.append(fmt.Sprintf("[agent] psadt-%s-prompt [INICIO] force=%t delay=%ds scriptSize=%dB timeout=%v", action, force, delaySeconds, len(script), timeout))
-
-	psExe := resolvePowerShellExe()
-	if a != nil {
-		a.logs.append(fmt.Sprintf("[agent] psadt-%s-prompt [EXEC] psExe=%s arch=%s", action, psExe, runtime.GOARCH))
-	}
-
-	cmd := exec.CommandContext(execCtx, psExe, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script)
-	processutil.HideWindow(cmd)
-	outBytes, err := cmd.CombinedOutput()
-	rawOutput := strings.TrimSpace(string(outBytes))
-
+	client, err := psadt.NewClient(
+		psadt.WithTimeout(timeout),
+		psadt.WithMinModuleVersion(strings.TrimSpace(psadtCfg.RequiredVersion)),
+	)
 	if err != nil {
-		if execCtx.Err() == context.DeadlineExceeded {
-			a.logs.append(fmt.Sprintf("[agent] psadt-%s-prompt [TIMEOUT] force=%t delay=%ds scriptSize=%dB — prosseguindo com fallback", action, force, delaySeconds, len(script)))
-			return "proceed", nil
-		}
+		a.logs.append(fmt.Sprintf("[agent] psadt-%s-prompt [ERRO] NewClient: %v — fallback", action, err))
+		return "proceed_fallback", nil
+	}
+	defer client.Close()
 
-		// Diagnostico detalhado: classifica o erro para debug remoto.
-		errClass := classifyPsadtPowerShellError(rawOutput, err)
-		a.logs.append(fmt.Sprintf("[agent] psadt-%s-prompt [ERRO] force=%t delay=%ds class=%s psExe=%s scriptSize=%dB err=%v", action, force, delaySeconds, errClass, psExe, len(script), err))
-		if rawOutput != "" {
-			truncated := truncateStr(rawOutput, 2000)
-			a.logs.append(fmt.Sprintf("[agent] psadt-%s-prompt [ERRO-OUTPUT] class=%s output=%s", action, errClass, truncated))
-			tail := tailStr(rawOutput, 700)
-			if tail != "" {
-				a.logs.append(fmt.Sprintf("[agent] psadt-%s-prompt [ERRO-TAIL] class=%s tail=%s", action, errClass, tail))
-			}
-		}
-		// Fallback: prossegue com shutdown.exe nativo do Windows.
-		a.logs.append(fmt.Sprintf("[agent] psadt-%s-prompt [FALLBACK] class=%s — usando shutdown.exe com dialogo nativo do Windows", action, errClass))
-		return "proceed", nil
+	session, err := client.OpenSessionWithContext(execCtx, pstypes.SessionConfig{
+		AppVendor:      "Discovery",
+		AppName:        "Discovery Agent",
+		AppVersion:     "1.0",
+		DeploymentType: pstypes.DeployInstall,
+		DeployMode:     pstypes.DeployModeInteractive,
+	})
+	if err != nil {
+		a.logs.append(fmt.Sprintf("[agent] psadt-%s-prompt [ERRO] OpenSession: %v — fallback", action, err))
+		return "proceed_fallback", nil
+	}
+	defer func() {
+		closeCtx, c := context.WithTimeout(context.Background(), 10*time.Second)
+		defer c()
+		_ = session.CloseWithContext(closeCtx, 0)
+	}()
+
+	// Show-ADTInstallationRestartPrompt exibe countdown visual nativo:
+	// barra de progresso + segundos restantes + botão "Reiniciar Agora".
+	// Ao esgotar o countdown, o cmdlet retorna (não executa restart).
+	// O caller (handleAgentRuntimeCommand) é responsável pelo shutdown.exe.
+	opts := pstypes.RestartPromptOptions{
+		CountdownSeconds:       countdown,
+		CountdownNoHideSeconds: 5,
+		SilentRestart:          false,
+		NoCountdown:            false,
 	}
 
-	// O output do PSADT contém dezenas de linhas de log de inicialização
-	// antes da palavra de decisão (proceed/deferred). Além disso, após a
-	// decisão, o PSADT ainda imprime [finalization] [close-adtsession].
-	// extractDecision ignora linhas de log e busca apenas a decisão real.
-	result := extractDecision(rawOutput)
-	a.logs.append(fmt.Sprintf("[agent] psadt-%s-prompt [OK] result=%s scriptSize=%dB", action, result, len(script)))
-	if len(rawOutput) > len(result)+10 {
-		a.logs.append(fmt.Sprintf("[agent] psadt-%s-prompt [DIAG] rawOutput possui %d linhas — apenas a última linha foi usada como decisão", action, countLines(rawOutput)))
+	a.logs.append(fmt.Sprintf("[agent] psadt-%s-prompt [EXEC] countdown=%ds force=%t via ShowInstallationRestartPrompt",
+		action, countdown, force))
+
+	if err := session.ShowInstallationRestartPrompt(opts); err != nil {
+		a.logs.append(fmt.Sprintf("[agent] psadt-%s-prompt [ERRO] ShowInstallationRestartPrompt: %v — fallback", action, err))
+		return "proceed_fallback", nil
 	}
 
-	// force=true: balloon apenas informativo — sempre prossegue.
-	if force {
-		return "proceed", nil
-	}
-
-	// force=false: usuario decidiu via prompt PSADT.
-	// Fallbacks explicitos (modulo/sessao indisponiveis) retornam proceed
-	// para manter compatibilidade com shutdown nativo do Windows.
-	if strings.HasPrefix(result, "fallback_") {
-		a.logs.append(fmt.Sprintf("[agent] psadt-%s-prompt [FALLBACK-SCRIPT] token=%s", action, result))
-		return "proceed", nil
-	}
-
-	// force=false: usuario decidiu via Dialog Yes/No.
-	if result == "yes" || result == "ok" || result == "proceed" {
-		return "proceed", nil
-	}
-	return "deferred", nil
-}
-
-// buildPowerActionWarningScript constroi o script PowerShell que exibe o aviso
-// de restart/shutdown via PSADT.
-//
-//   - force=false: Show-ADTInstallationPrompt com contagem regressiva
-//     (-Timeout = delaySeconds) e botoes Sim/Nao.
-//     Timeout → proceed automatico. Sim → proceed. Nao → deferred.
-//   - force=true:  Show-ADTInstallationPrompt apenas com botao "Reiniciar Agora"
-//     (sem botao direito, sem timeout). O usuario so pode confirmar.
-//
-// Se o modulo PSADT nao estiver disponivel, retorna 'proceed' para fallback
-// com shutdown.exe (dialogo nativo do Windows).
-func buildPowerActionWarningScript(action string, delaySeconds int, force bool, message string) (string, time.Duration) {
-	title := "Reinicializacao do Sistema"
-	if action == "shutdown" {
-		title = "Desligamento do Sistema"
-	}
-
-	// Header: importa PSADT e abre sessao.
-	// Se o modulo nao estiver disponivel, retorna 'proceed' para fallback
-	// para shutdown.exe com dialogo nativo do Windows.
-	header := "$ErrorActionPreference = 'Stop'\n" +
-		"[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)\n" +
-		"$OutputEncoding = [Console]::OutputEncoding\n" +
-		"try {\n" +
-		"    Import-Module -Name PSAppDeployToolkit -ErrorAction Stop\n" +
-		"} catch {\n" +
-		"    Write-Output 'fallback_module_missing'; exit 0\n" +
-		"}\n" +
-		"try {\n" +
-		"    Open-ADTSession -SessionState $ExecutionContext.SessionState" +
-		" -AppName 'Discovery' -AppVersion '1.0' -AppVendor 'Discovery'" +
-		" -DeploymentType 'Install' -DeployMode 'Interactive'\n" +
-		"} catch {\n" +
-		"    Write-Output 'fallback_open_session_failed'; exit 0\n" +
-		"}\n"
-
-	closeSession := "try { Close-ADTSession -ExitCode 0 } catch {}\n"
-
-	if force {
-		// ── Modo forcado: apenas botao "Reiniciar Agora", sem timeout ──
-		// O usuario nao pode cancelar — so confirma o restart.
-		// Botao direito vazio = ausente na UI do PSADT.
-		// Timeout 0 = sem contagem regressiva, espera indefinidamente.
-		body := header +
-			"$promptResult = Show-ADTInstallationPrompt" +
-			fmt.Sprintf(" -Message %s", psEscape(message)) +
-			fmt.Sprintf(" -Title %s", psEscape(title)) +
-			" -ButtonLeftText 'Reiniciar Agora'" +
-			" -ButtonRightText ''" +
-			" -Timeout 0" +
-			"\n" +
-			"$promptResult = [string]($promptResult)\n" +
-			"Write-Output 'proceed'\n" +
-			closeSession +
-			"exit 0\n"
-		timeoutVal := 5 * time.Minute
-		return body, timeoutVal
-	}
-
-	// ── Modo nao-forcado: contagem regressiva + Sim/Nao ──
-	// Timeout = delaySeconds: ao esgotar o tempo, o PSADT retorna
-	// automaticamente como "Sim" e o restart prossegue.
-	// "Sim" → proceed, "Nao" → deferred (cancela).
-	//
-	// Usa Show-ADTInstallationPrompt via Invoke-ADTClientServerOperation
-	// para garantir que a UI aparece mesmo com HideWindow no Go.
-	if delaySeconds <= 0 {
-		delaySeconds = 60 // minimo 60s de contagem
-	}
-	timeoutVal := time.Duration(delaySeconds+150) * time.Second
-
-	body := header +
-		"$promptResult = Show-ADTInstallationPrompt" +
-		fmt.Sprintf(" -Message %s", psEscape(message)) +
-		fmt.Sprintf(" -Title %s", psEscape(title)) +
-		" -ButtonLeftText 'Sim'" +
-		" -ButtonRightText 'Nao'" +
-		fmt.Sprintf(" -Timeout %d", delaySeconds) +
-		"\n" +
-		"$promptResult = [string]($promptResult)\n" +
-		"if ($promptResult -like '*Sim*' -or $promptResult -like '*Timeout*') { Write-Output 'proceed' } else { Write-Output 'deferred' }\n" +
-		closeSession +
-		"exit 0\n"
-	return body, timeoutVal
+	a.logs.append(fmt.Sprintf("[agent] psadt-%s-prompt [OK] countdown concluido — proceed", action))
+	return "proceed", nil
 }
 
 // resolveSystem32Exe returns the absolute path to an executable in System32.
@@ -570,13 +467,13 @@ func resolvePowerShellExe() string {
 	return psPath // retorna o caminho canonico mesmo se nao encontrado, o erro sera tratado por quem chama
 }
 
-// executeSystemPowerAction executa o restart/shutdown imediato no SO.
+// executeSystemPowerAction executa o restart/shutdown no SO.
 //
-// IMPORTANTE: A UI (contagem regressiva, confirmacao) ja foi tratada pelo
-// PSADT no showPowerActionWarning. Esta funcao apenas executa a acao final.
-// Usa shutdown.exe /t 0 para restart imediato SEM dialogo nativo do Windows —
-// evitando contagem regressiva redundante ja que o usuario ja interagiu no PSADT.
-func (a *App) executeSystemPowerAction(_ context.Context, action string, _ int, _ bool, _ string) (int, string, string) {
+// delaySeconds:
+//   - 0: PSADT ja tratou UX — shutdown.exe /t 0 (imediato, sem dialogo nativo).
+//   - >0: PSADT falhou (proceed_fallback) — shutdown.exe /t <delay> com
+//     dialogo nativo do Windows para dar tempo do usuario salvar trabalho.
+func (a *App) executeSystemPowerAction(_ context.Context, action string, delaySeconds int, _ bool, _ string) (int, string, string) {
 	flag := "/s"
 	label := "shutdown"
 	if action == "restart" || action == "reboot" {
@@ -596,12 +493,18 @@ func (a *App) executeSystemPowerAction(_ context.Context, action string, _ int, 
 		}
 	}
 
-	// /t 0 = imediato, sem dialogo de contagem regressiva do Windows.
+	delayArg := "0"
+	mode := "imediato"
+	if delaySeconds > 0 {
+		delayArg = fmt.Sprintf("%d", delaySeconds)
+		mode = fmt.Sprintf("delay %ds (dialogo nativo)", delaySeconds)
+	}
+
 	// /f = forcado (fecha apps sem confirmacao adicional).
-	args := []string{flag, "/t", "0", "/f"}
+	args := []string{flag, "/t", delayArg, "/f"}
 
 	if a != nil {
-		a.logs.append(fmt.Sprintf("[agent] %s-action [EXEC] exe=%s args=%s (psadt ja tratou UX)", label, shutdownExe, strings.Join(args, " ")))
+		a.logs.append(fmt.Sprintf("[agent] %s-action [EXEC] exe=%s args=%s (modo=%s)", label, shutdownExe, strings.Join(args, " "), mode))
 	}
 
 	cmd := exec.Command(shutdownExe, args...)
@@ -617,177 +520,7 @@ func (a *App) executeSystemPowerAction(_ context.Context, action string, _ int, 
 	}
 
 	if a != nil {
-		a.logs.append(fmt.Sprintf("[agent] %s-action [OK] exe=%s (imediato, sem dialogo nativo)", label, shutdownExe))
+		a.logs.append(fmt.Sprintf("[agent] %s-action [OK] exe=%s (modo=%s)", label, shutdownExe, mode))
 	}
 	return 0, fmt.Sprintf("%s executado com sucesso", label), ""
-}
-
-// ── Diagnostic Helpers ──
-
-// classifyPsadtPowerShellError inspeciona o output combinado (stdout+stderr) do
-// PowerShell e classifica o erro em categorias acionaveis para debug remoto.
-//
-// Categorias:
-//   - execution_policy_blocked: ExecutionPolicy restrita (PSSecurityException)
-//   - format_file_corrupt:       Arquivo .ps1xml corrompido (ex: Dism.Format.ps1xml com NUL bytes)
-//   - module_not_found:          PSAppDeployToolkit nao encontrado
-//   - module_import_failed:      Modulo encontrado mas falha ao carregar (ex: dependencias)
-//   - invalid_parameter:         Parâmetro inválido para cmdlet (ex: -TopMost não suportado)
-//   - session_open_failed:       Open-ADTSession falhou
-//   - cmdlet_not_found:          Cmdlet PSADT nao reconhecido
-//   - cmdlet_failed:             Cmdlet PSADT executou mas retornou erro
-//   - exit_code_N:               Script terminou com exit code N
-//   - unknown:                   Erro nao classificado
-func classifyPsadtPowerShellError(output string, err error) string {
-	if err == nil {
-		return "no_error"
-	}
-	errStr := err.Error()
-	lower := strings.ToLower(output + "\n" + errStr)
-
-	// 1. ExecutionPolicy bloqueando execução de scripts
-	if strings.Contains(lower, "pssecurityexception") ||
-		strings.Contains(lower, "execução de scripts foi desabilitada") ||
-		strings.Contains(lower, "execution of scripts is disabled") ||
-		strings.Contains(lower, "unauthorizedaccess") {
-		return "execution_policy_blocked"
-	}
-
-	// 2. Arquivo de formato corrompido (byte NUL, XML invalido em .ps1xml)
-	if strings.Contains(lower, "format.ps1xml") ||
-		strings.Contains(lower, "caractere inválido") ||
-		strings.Contains(lower, "invalid character") ||
-		strings.Contains(lower, "hexadecimal 0x00") ||
-		(strings.Contains(lower, "erro no arquivo") && strings.Contains(lower, ".ps1xml")) {
-		return "format_file_corrupt"
-	}
-
-	// 3. Modulo PSADT nao encontrado
-	if strings.Contains(lower, "the specified module") && strings.Contains(lower, "was not loaded") ||
-		strings.Contains(lower, "não pode ser carregado porque não foi encontrado") ||
-		strings.Contains(lower, "module not found") ||
-		strings.Contains(lower, "módulo") && strings.Contains(lower, "não encontrado") {
-		return "module_not_found"
-	}
-
-	// 4. Modulo encontrado mas falha no import (dependencias, erros internos do .psm1)
-	if strings.Contains(lower, "import-module") &&
-		(strings.Contains(lower, "falha") || strings.Contains(lower, "erro") || strings.Contains(lower, "error") || strings.Contains(lower, "cannot")) {
-		return "module_import_failed"
-	}
-
-	// 5. Parametro invalido (ex: -TopMost em cmdlet que nao suporta)
-	if strings.Contains(lower, "namedparameternotfound") ||
-		strings.Contains(lower, "cannot find a parameter that matches parameter name") ||
-		strings.Contains(lower, "não é possível localizar um parâmetro que coincida com o nome de parâmetro") ||
-		strings.Contains(lower, "parameterbindingexception") {
-		return "invalid_parameter"
-	}
-
-	// 6. Cmdlet PSADT nao reconhecido
-	if strings.Contains(lower, "is not recognized as the name of a cmdlet") ||
-		strings.Contains(lower, "não é reconhecido como nome de cmdlet") ||
-		strings.Contains(lower, "the term") && strings.Contains(lower, "is not recognized") {
-		return "cmdlet_not_found"
-	}
-
-	// 7. Sessao PSADT falhou ao abrir
-	if strings.Contains(lower, "open-adtsession :") ||
-		strings.Contains(lower, "[open-adtsession] [error]") ||
-		strings.Contains(lower, "fallback_open_session_failed") {
-		return "session_open_failed"
-	}
-
-	// 8. Cmdlet executou mas reportou erro via Write-Error
-	if strings.Contains(lower, "write-error") || strings.Contains(lower, "writeerror") {
-		return "cmdlet_failed"
-	}
-
-	// 9. Exit code especifico do script (1=import, 2=session, 3+=cmdlet)
-	if exitErr, ok := err.(*exec.ExitError); ok {
-		return fmt.Sprintf("exit_code_%d", exitErr.ExitCode())
-	}
-
-	return "unknown"
-}
-
-// truncateStr trunca a string para maxLen caracteres, adicionando "... (truncado N bytes)"
-// se o limite for excedido.
-func truncateStr(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	if maxLen < 80 {
-		return s[:maxLen]
-	}
-	headLen := int(float64(maxLen) * 0.65)
-	tailLen := maxLen - headLen - 40
-	if tailLen < 20 {
-		tailLen = 20
-		headLen = maxLen - tailLen - 40
-	}
-	if headLen < 20 || tailLen < 20 || headLen+tailLen >= len(s) {
-		return s[:maxLen]
-	}
-	omitted := len(s) - headLen - tailLen
-	if omitted < 0 {
-		omitted = 0
-	}
-	return s[:headLen] + fmt.Sprintf("\n... (truncado %d bytes) ...\n", omitted) + s[len(s)-tailLen:]
-}
-
-// tailStr retorna apenas o final da string, util para capturar a causa real
-// do erro quando logs verbosos de inicializacao ocupam o inicio do output.
-func tailStr(s string, maxLen int) string {
-	if maxLen <= 0 || s == "" {
-		return ""
-	}
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[len(s)-maxLen:]
-}
-
-// extractDecision extrai a decisao do usuario (proceed/deferred) do output
-// verboso do PSADT. Diferente de extractLastLine, ignora linhas de log do
-// PSADT como [finalization] [close-adtsession] que aparecem DEPOIS da decisao.
-//
-// O output do PSADT tem este formato:
-//
-//	... (dezenas de linhas de init/log PSADT) ...
-//	proceed              ← decisao do usuario (Show-ADTInstallationPrompt)
-//	[timestamp] [finalization] [close-adtsession] [info] :: --------
-//
-// extractLastLine SEMPRE pegava a linha de finalizacao, causando falso "deferred".
-func extractDecision(raw string) string {
-	lines := strings.Split(raw, "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		line := strings.ToLower(strings.TrimSpace(lines[i]))
-		if line == "" {
-			continue
-		}
-		// Ignora linhas de log do PSADT (comecam com timestamp entre colchetes
-		// seguidas de tags como [finalization], [initialization], etc.)
-		if strings.Contains(line, "[finalization]") ||
-			strings.Contains(line, "[initialization]") ||
-			strings.Contains(line, "[pre-installation]") ||
-			strings.Contains(line, "[post-installation]") ||
-			strings.Contains(line, "[installation]") {
-			continue
-		}
-		// Palavras de decisao emitidas pelo script PowerShell
-		if line == "proceed" || line == "deferred" ||
-			line == "yes" || line == "ok" {
-			return line
-		}
-	}
-	return ""
-}
-
-// countLines retorna o numero de linhas na string.
-func countLines(s string) int {
-	if s == "" {
-		return 0
-	}
-	return len(strings.Split(s, "\n"))
 }

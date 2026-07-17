@@ -6,6 +6,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
+	"syscall"
 	"time"
 
 	psadt "github.com/pedrostefanogv/go-psadt"
@@ -17,17 +19,33 @@ import (
 // selfUpdateInstallWithPSADT implementa o callback OnSelfUpdateInstall do selfupdate.Updater.
 //
 // Fluxo SEM interação do usuário:
-//  1. Abre sessão PSADT
-//  2. Welcome com CloseProcesses=["discovery-agent"] — PSADT fecha o agente atual
+//  1. Detecta sessão não-interativa → desvia para modo silencioso.
+//  2. Abre sessão PSADT
+//  3. Welcome com CloseProcesses=["discovery-agent"] — PSADT fecha o agente atual
 //     automaticamente (CloseProcessesCountdown + ForceCloseProcessesCountdown)
-//  3. Exibe Progress: "Instalando Discovery Agent vX.Y.Z..."
-//  4. Lança o instalador via LaunchInstallerElevated (UAC) — sem diálogo nativo
-//  5. Aguarda alguns segundos para o instalador iniciar
-//  6. Retorna nil — o instalador NSIS faz taskkill do agente, matando esta sessão
+//  4. Exibe Progress: "Instalando Discovery Agent vX.Y.Z..."
+//  5. Lança o instalador via LaunchInstallerElevated (UAC) — sem diálogo nativo
+//  6. Se falhar, exibe balloon de erro visível ao usuário.
+//  7. Retorna nil — o instalador NSIS faz taskkill do agente, matando esta sessão
 //
 // O usuário NÃO interage — apenas vê a barra de progresso.
 func (a *App) selfUpdateInstallWithPSADT(ctx context.Context, exePath, targetVersion string) error {
 	a.logs.append("[selfupdate] iniciando PSADT UI (auto-close): exePath=" + exePath + " targetVersion=" + targetVersion)
+
+	// ── Detecção de sessão não-interativa ──
+	// Serviço, sessão 0, ou SESSIONNAME vazio/Services → sem UI PSADT.
+	// Lança instalador diretamente com elevação UAC.
+	if !hasInteractiveSession() {
+		a.logs.append("[selfupdate] sessão não-interativa detectada — modo silencioso (sem UI PSADT)")
+		if _, statErr := os.Stat(exePath); statErr != nil {
+			return fmt.Errorf("instalador nao encontrado: %w", statErr)
+		}
+		if err := selfupdate.LaunchInstallerElevated(exePath, "/S /UPDATE"); err != nil {
+			return fmt.Errorf("LaunchInstallerElevated (silent): %w", err)
+		}
+		a.logs.append("[selfupdate] instalador lançado em modo silencioso — aguardando taskkill pelo NSIS")
+		return nil
+	}
 
 	client, err := psadt.NewClient(
 		psadt.WithTimeout(10 * time.Minute),
@@ -97,15 +115,54 @@ func (a *App) selfUpdateInstallWithPSADT(ctx context.Context, exePath, targetVer
 
 	a.logs.append("[selfupdate] lancando instalador via LaunchInstallerElevated: " + exePath)
 	if err := selfupdate.LaunchInstallerElevated(exePath, "/S /UPDATE"); err != nil {
+		// ── Feedback visual de erro antes de propagar ──
+		a.logs.append("[selfupdate] LaunchInstallerElevated falhou: " + err.Error())
+		balloonErr := session.ShowBalloonTip(pstypes.BalloonTipOptions{
+			BalloonTipTitle: "Falha na atualização",
+			BalloonTipText:  fmt.Sprintf("Não foi possível iniciar o instalador. Verifique as permissões de administrador.\n\nErro: %v", err),
+			BalloonTipIcon:  pstypes.BalloonError,
+			NoWait:          false,
+		})
+		if balloonErr != nil {
+			a.logs.append("[selfupdate] aviso: falha ao exibir balloon de erro: " + balloonErr.Error())
+		}
+		// Aguarda um pouco para o usuário ver o balloon
+		time.Sleep(2 * time.Second)
 		return fmt.Errorf("LaunchInstallerElevated: %w", err)
 	}
 
-	// ── Aguarda alguns segundos para o instalador iniciar ──
+	// ── Aguarda o instalador iniciar ──
 	// O instalador NSIS faz taskkill do discovery-agent.exe.
-	// Enquanto isso, o PSADT fica visível mostrando o progresso.
+	// 1s é suficiente para o launch; o defer session.CloseWithContext pode
+	// não executar se o taskkill for rápido (aceitável — sessão PSADT é stateless).
 	a.logs.append("[selfupdate] instalador lancado — aguardando taskkill pelo NSIS...")
-	time.Sleep(3 * time.Second)
+	time.Sleep(1 * time.Second)
 
 	a.logs.append("[selfupdate] PSADT UI concluido — instalador NSIS assumiu")
 	return nil
+}
+
+// hasInteractiveSession verifica se o processo atual está rodando em uma
+// sessão interativa de usuário (com desktop). Retorna false para sessão 0
+// (serviços), sessões não-interativas ou SESSIONNAME vazio/Services.
+func hasInteractiveSession() bool {
+	sessionName := strings.TrimSpace(os.Getenv("SESSIONNAME"))
+	// Sessão 0 = serviços, non-interactive
+	// SESSIONNAME vazio = pode ser serviço ou processo sem sessão
+	if sessionName == "" || strings.EqualFold(sessionName, "Services") {
+		return false
+	}
+
+	// Verifica se o console atual está associado a uma window station interativa.
+	// Se GetConsoleWindow retornar NULL + SESSIONNAME definido mas não "Services",
+	// pode ser uma sessão RDP sem desktop — tratamos como interativa (otimista).
+	var kernel32 = syscall.NewLazyDLL("user32.dll")
+	procGetConsoleWindow := kernel32.NewProc("GetConsoleWindow")
+	hwnd, _, _ := procGetConsoleWindow.Call()
+	if hwnd == 0 {
+		// Sem console window — pode ser GUI (Wails) ou serviço puro.
+		// Se SESSIONNAME não é Services e não é vazio, assume interativa.
+		return true
+	}
+	return true
 }
