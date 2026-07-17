@@ -298,10 +298,6 @@ export function GetPSADTScriptTemplate() {
   return window['go']['app']['App']['GetPSADTScriptTemplate']();
 }
 
-export function GetPSADTSessionProperties() {
-  return window['go']['app']['App']['GetPSADTSessionProperties']();
-}
-
 export function GetPackageActions() {
   return window['go']['app']['App']['GetPackageActions']();
 }
@@ -556,14 +552,6 @@ export function RunOnboardingLoop(arg1) {
 
 export function RunPSADTPreflightChecks() {
   return window['go']['app']['App']['RunPSADTPreflightChecks']();
-}
-
-export function RunPSADTRestartPrompt(arg1, arg2) {
-  return window['go']['app']['App']['RunPSADTRestartPrompt'](arg1, arg2);
-}
-
-export function RunPSADTWelcome(arg1, arg2) {
-  return window['go']['app']['App']['RunPSADTWelcome'](arg1, arg2);
 }
 
 export function SearchCatalog(arg1) {

@@ -159,8 +159,6 @@ export function GetPSADTDebugState():Promise<app.PSADTDebugState>;
 
 export function GetPSADTScriptTemplate():Promise<string>;
 
-export function GetPSADTSessionProperties():Promise<app.PSADTSessionProperties>;
-
 export function GetPackageActions():Promise<Record<string, string>>;
 
 export function GetPackageActionsJSON():Promise<json.RawMessage>;
@@ -288,10 +286,6 @@ export function RestartSpoolerJSON():Promise<json.RawMessage>;
 export function RunOnboardingLoop(arg1:context.Context):Promise<void>;
 
 export function RunPSADTPreflightChecks():Promise<app.PSADTPreflightResult>;
-
-export function RunPSADTRestartPrompt(arg1:number,arg2:boolean):Promise<app.PSADTRestartPromptResult>;
-
-export function RunPSADTWelcome(arg1:string,arg2:number):Promise<app.PSADTWelcomeResult>;
 
 export function SearchCatalog(arg1:string):Promise<json.RawMessage>;
 

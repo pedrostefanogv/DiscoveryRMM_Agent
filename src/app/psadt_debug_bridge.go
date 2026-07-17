@@ -762,7 +762,7 @@ func boolEnvValue(v bool) string {
 }
 
 // =============================================================================
-// Novos recursos — Preflight Checks, Environment, Welcome, Restart Prompt
+// Preflight Checks
 // =============================================================================
 
 // PSADTPreflightResult agrupa resultados de verificacoes pre-flight do PSADT.
@@ -780,39 +780,6 @@ type PSADTPreflightResult struct {
 	Success            bool   `json:"success"`
 	Error              string `json:"error"`
 	CheckedAtUTC       string `json:"checkedAtUtc"`
-}
-
-// PSADTWelcomeResult representa o resultado do Welcome Dialog.
-type PSADTWelcomeResult struct {
-	Success       bool   `json:"success"`
-	Action        string `json:"action"` // displayed, deferred, error
-	Message       string `json:"message"`
-	ExecutedAtUTC string `json:"executedAtUtc"`
-	DurationMS    int64  `json:"durationMs"`
-}
-
-// PSADTRestartPromptResult representa o resultado do Restart Prompt.
-type PSADTRestartPromptResult struct {
-	Success       bool   `json:"success"`
-	Action        string `json:"action"` // restart, defer, timeout, error
-	Message       string `json:"message"`
-	ExecutedAtUTC string `json:"executedAtUtc"`
-	DurationMS    int64  `json:"durationMs"`
-}
-
-// PSADTSessionProperties traz propriedades da sessao ativa (Get-ADTSession).
-type PSADTSessionProperties struct {
-	AppName        string `json:"appName"`
-	AppVendor      string `json:"appVendor"`
-	AppVersion     string `json:"appVersion"`
-	DeploymentType string `json:"deploymentType"`
-	DeployMode     string `json:"deployMode"`
-	LogPath        string `json:"logPath"`
-	LogName        string `json:"logName"`
-	InstallPhase   string `json:"installPhase"`
-	Success        bool   `json:"success"`
-	Error          string `json:"error"`
-	CheckedAtUTC   string `json:"checkedAtUtc"`
 }
 
 func normalizeDialogButtons(raw string) string {

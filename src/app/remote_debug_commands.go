@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // ── Agent Update Commands ──
@@ -179,6 +180,8 @@ type powerCommandPayload struct {
 	DelaySeconds int    `json:"delaySeconds"`
 	Force        bool   `json:"force"`
 	Message      string `json:"message"`
+	DeferMinutes int    `json:"deferMinutes"` // minutos para adiar (default 60)
+	MaxDefers    int    `json:"maxDefers"`    // máximo de adiamentos permitidos (default 3)
 }
 
 // isPowerActionCommandType checks whether cmdType is a restart/reboot/shutdown command.
@@ -267,6 +270,8 @@ func parsePowerCommandPayload(payload any) powerCommandPayload {
 		DelaySeconds: toInt(m["delaySeconds"]),
 		Force:        toBool(m["force"]),
 		Message:      toString(m["message"]),
+		DeferMinutes: toInt(m["deferMinutes"]),
+		MaxDefers:    toInt(m["maxDefers"]),
 	}
 }
 
@@ -369,12 +374,21 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 	}
 
 	// ── Power Actions: restart / shutdown ──
-	// Fluxo:
-	//   1. showPowerActionWarning → PSADT Show-ADTInstallationRestartPrompt
-	//      (countdown visual com barra de progresso + botão "Reiniciar Agora").
-	//   2. Se PSADT indisponível (disabled, erro, falha de sessão): fallback
-	//      para shutdown.exe com diálogo nativo do Windows.
-	//   3. executeSystemPowerAction → shutdown.exe /r ou /s com /t.
+	// Fluxo revisado (2026-07-17):
+	//
+	//   FORCE (force=true):
+	//     1. showForceRestartBalloon → PSADT BalloonTip Warning (não-bloqueante)
+	//     2. Aguarda delaySeconds no agent (permite abort com shutdown /a)
+	//     3. executeSystemPowerAction → shutdown.exe /r /t 0 /f (imediato)
+	//
+	//   NORMAL (force=false, com adiamento):
+	//     1. showDeferrableRestartPrompt → PSADT ShowDialogBox YesNo
+	//        - Yes / timeout → restart agora
+	//        - No → adiar (scheduleDeferredRestart)
+	//     2. Se restart_now: executeSystemPowerAction
+	//     3. Se defer: agenda timer para re-exibição após deferMinutes
+	//     4. Se PSADT indisponível: fallback para DispatchNotification
+	//
 	if isPowerActionCommandType(cmdType) {
 		pp := parsePowerCommandPayload(payload)
 		action := "restart"
@@ -382,25 +396,73 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 			action = "shutdown"
 		}
 		if pp.DelaySeconds <= 0 {
-			pp.DelaySeconds = 60 // mínimo para contagem regressiva
+			if pp.Force {
+				pp.DelaySeconds = 60
+			} else {
+				pp.DelaySeconds = 300 // normal: 5 min para usuário reagir
+			}
+		}
+		// Defaults de defer
+		if pp.DeferMinutes <= 0 {
+			pp.DeferMinutes = 60
+		}
+		if pp.MaxDefers <= 0 {
+			pp.MaxDefers = 3
 		}
 
-		// Etapa 1: prompt PSADT com countdown visual.
-		// Se PSADT estiver habilitado, exibe Show-ADTInstallationRestartPrompt.
-		// Retorna "proceed" quando o countdown termina (usuário pode clicar
-		// "Reiniciar Agora" antes). Se PSADT falhar/disabled, retorna
-		// "proceed_fallback" e usamos shutdown.exe diretamente.
-		result, psadtErr := a.showPowerActionWarning(parent, action, pp.DelaySeconds, pp.Force, pp.Message)
-		if psadtErr != nil {
-			a.logs.append(fmt.Sprintf("[agent] %s-action [WARN] PSADT prompt falhou: %v — fallback shutdown.exe", action, psadtErr))
+		// Cancela qualquer deferred restart pendente se receber novo comando
+		a.cancelDeferredRestart()
+
+		if pp.Force {
+			// ── FORCE: balloon informativo + delay + shutdown imediato ──
+			a.logs.append(fmt.Sprintf("[agent] %s-action [FORCE] delay=%ds force=true — modo balloon", action, pp.DelaySeconds))
+			a.showForceRestartBalloon(action, pp.DelaySeconds, pp.Message)
+
+			// Aguarda o delay no agent para dar tempo do usuário ver o balloon
+			// e potencialmente salvar trabalho.
+			select {
+			case <-time.After(time.Duration(pp.DelaySeconds) * time.Second):
+			case <-parent.Done():
+				return true, 1, "", "contexto cancelado durante delay de restart forçado"
+			}
+
+			exitCode, output, errText := a.executeSystemPowerAction(parent, action, 0, true, pp.Message)
+			return true, exitCode, output, errText
 		}
 
-		// Etapa 2: executar restart/shutdown no SO.
-		// shutdown.exe exibe diálogo nativo com countdown + botão "Fechar"
-		// como fallback caso PSADT não tenha mostrado o prompt.
-		a.logs.append(fmt.Sprintf("[agent] %s-action [EXEC] psadt-result=%s via shutdown.exe delay=%ds force=%t", action, result, pp.DelaySeconds, pp.Force))
-		exitCode, output, errText := a.executeSystemPowerAction(parent, action, pp.DelaySeconds, pp.Force, pp.Message)
-		return true, exitCode, output, errText
+		// ── NORMAL: diálogo com opção de adiar ──
+		result := a.showDeferrableRestartPrompt(action, pp.DelaySeconds, pp.Message, pp.DeferMinutes)
+		a.logs.append(fmt.Sprintf("[agent] %s-action [NORMAL] psadt-result=%s", action, result))
+
+		switch result {
+		case "restart_now":
+			exitCode, output, errText := a.executeSystemPowerAction(parent, action, pp.DelaySeconds, false, pp.Message)
+			return true, exitCode, output, errText
+
+		case "defer":
+			a.scheduleDeferredRestart(action, pp)
+			return true, 0, fmt.Sprintf("%s adiado pelo usuário (defer=%d/%d, %dmin)", action, 1, pp.MaxDefers, pp.DeferMinutes), ""
+
+		default:
+			// "fallback" — PSADT indisponível, usar DispatchNotification
+			a.logs.append(fmt.Sprintf("[agent] %s-action [FALLBACK] PSADT indisponível — usando DispatchNotification", action))
+			notifResp := a.DispatchNotification(NotificationDispatchRequest{
+				NotificationID: fmt.Sprintf("restart-%d", time.Now().UnixNano()),
+				Title:          "Reinicialização Necessária",
+				Message:        pp.Message,
+				Mode:           "require_confirmation",
+				Severity:       "high",
+				EventType:      "system_restart",
+				Layout:         "modal",
+				TimeoutSeconds: pp.DelaySeconds,
+			})
+
+			if notifResp.Result == "approved" {
+				exitCode, output, errText := a.executeSystemPowerAction(parent, action, pp.DelaySeconds, false, pp.Message)
+				return true, exitCode, output, errText
+			}
+			return true, 10, notifResp.Message, "usuário negou a reinicialização"
+		}
 	}
 
 	if a == nil || a.remoteDebug == nil {

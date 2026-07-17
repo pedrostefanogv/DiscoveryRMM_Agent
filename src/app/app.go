@@ -142,6 +142,18 @@ type App struct {
 
 	selfUpdater   *selfupdate.Updater
 	selfUpdaterCh chan bool
+
+	deferredRestart *deferredRestartState
+}
+
+// deferredRestartState tracks pending deferred restart state.
+type deferredRestartState struct {
+	mu           sync.Mutex
+	deferCount   int
+	maxDefers    int
+	deferMinutes int
+	message      string
+	timer        *time.Timer
 }
 
 func NewApp(opts AppStartupOptions) *App {
@@ -992,6 +1004,82 @@ func (a *App) shutdown(ctx context.Context) {
 		}
 	}
 	a.logs.closeFile()
+}
+
+// cancelDeferredRestart cancela qualquer restart adiado pendente.
+func (a *App) cancelDeferredRestart() {
+	if a.deferredRestart == nil {
+		return
+	}
+	a.deferredRestart.mu.Lock()
+	defer a.deferredRestart.mu.Unlock()
+	if a.deferredRestart.timer != nil {
+		a.deferredRestart.timer.Stop()
+		a.deferredRestart.timer = nil
+	}
+	a.deferredRestart.deferCount = 0
+}
+
+// scheduleDeferredRestart agenda a re-exibição do prompt de restart após
+// deferMinutes. Se maxDefers for atingido, força o restart imediatamente.
+func (a *App) scheduleDeferredRestart(action string, pp powerCommandPayload) {
+	if a.deferredRestart == nil {
+		a.deferredRestart = &deferredRestartState{
+			maxDefers:    3,
+			deferMinutes: 60,
+			message:      pp.Message,
+		}
+	}
+	ds := a.deferredRestart
+	ds.mu.Lock()
+
+	if pp.MaxDefers > 0 {
+		ds.maxDefers = pp.MaxDefers
+	}
+	if pp.DeferMinutes > 0 {
+		ds.deferMinutes = pp.DeferMinutes
+	}
+	if pp.Message != "" {
+		ds.message = pp.Message
+	}
+
+	ds.deferCount++
+
+	if ds.deferCount >= ds.maxDefers {
+		ds.mu.Unlock()
+		a.logs.append(fmt.Sprintf("[agent] %s-defer [FORCE] maxDefers=%d atingido — restart forçado", action, ds.maxDefers))
+		go func() {
+			a.executeSystemPowerAction(context.Background(), action, 0, true, ds.message)
+		}()
+		return
+	}
+
+	delaySeconds := pp.DelaySeconds
+	if delaySeconds <= 0 {
+		delaySeconds = 300
+	}
+	deferMinutes := ds.deferMinutes
+	msg := ds.message
+
+	// Cancela timer anterior se existir
+	if ds.timer != nil {
+		ds.timer.Stop()
+	}
+
+	ds.timer = time.AfterFunc(time.Duration(deferMinutes)*time.Minute, func() {
+		a.logs.append(fmt.Sprintf("[agent] %s-defer [RETRY] defer=%d/%d — re-exibindo prompt", action, ds.deferCount, ds.maxDefers))
+		result := a.showDeferrableRestartPrompt(action, delaySeconds, msg, deferMinutes)
+		if result == "restart_now" || result == "fallback" {
+			a.executeSystemPowerAction(context.Background(), action, delaySeconds, false, msg)
+		} else {
+			// "defer" — re-agenda
+			a.scheduleDeferredRestart(action, pp)
+		}
+	})
+
+	ds.mu.Unlock()
+
+	a.logs.append(fmt.Sprintf("[agent] %s-defer [SCHED] adiado para daqui %dmin (defer=%d/%d)", action, deferMinutes, ds.deferCount, ds.maxDefers))
 }
 
 func (a *App) RequestAppClose() {

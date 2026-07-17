@@ -400,7 +400,7 @@
   }
 
   // =====================================================================
-  // NOVOS HANDLERS: Preflight, Welcome, Restart, Session Properties
+  // Preflight Checks handler
   // =====================================================================
 
   // --- Preflight Checks ---
@@ -430,86 +430,6 @@
     });
   }
   if (runPreflightBtn) runPreflightBtn.addEventListener("click", runPreflight);
-
-  // --- Welcome Dialog ---
-  var runWelcomeBtn = document.getElementById("runWelcomeBtn");
-  function runWelcome() {
-    var statusEl = document.getElementById("welcomeStatus");
-    var processesEl = document.getElementById("welcomeProcesses");
-    var countdownEl = document.getElementById("welcomeCountdown");
-    var processes = processesEl ? processesEl.value : "msiexec,setup";
-    var countdown = countdownEl ? parseInt(countdownEl.value, 10) || 120 : 120;
-    setStatus(statusEl, "Exibindo Welcome Dialog...", "");
-
-    appApi().RunPSADTWelcome(processes, countdown).then(function (r) {
-      var msg = (r && r.message) || "";
-      if (r && r.success) {
-        setStatus(statusEl, "✓ " + msg + " (" + (r.durationMs || 0) + "ms)", "ok");
-      } else {
-        setStatus(statusEl, "✗ " + msg, "error");
-      }
-    }).catch(function (err) {
-      setStatus(statusEl, "Falha: " + (err && err.message ? err.message : String(err)), "error");
-    });
-  }
-  if (runWelcomeBtn) runWelcomeBtn.addEventListener("click", runWelcome);
-
-  // --- Restart Prompt ---
-  var runRestartBtn = document.getElementById("runRestartBtn");
-  function runRestart() {
-    var statusEl = document.getElementById("restartStatus");
-    var countdownEl = document.getElementById("restartCountdown");
-    var silentEl = document.getElementById("restartSilent");
-    var countdown = countdownEl ? parseInt(countdownEl.value, 10) || 300 : 300;
-    var silent = silentEl ? !!silentEl.checked : false;
-    setStatus(statusEl, "Exibindo Restart Prompt...", "");
-
-    appApi().RunPSADTRestartPrompt(countdown, silent).then(function (r) {
-      var msg = (r && r.message) || "";
-      if (r && r.success) {
-        setStatus(statusEl, "✓ " + msg + " (" + (r.durationMs || 0) + "ms)", "ok");
-      } else {
-        setStatus(statusEl, "✗ " + msg, "error");
-      }
-    }).catch(function (err) {
-      setStatus(statusEl, "Falha: " + (err && err.message ? err.message : String(err)), "error");
-    });
-  }
-  if (runRestartBtn) runRestartBtn.addEventListener("click", runRestart);
-
-  // --- Session Properties ---
-  var loadSessionPropsBtn = document.getElementById("loadSessionPropsBtn");
-  function loadSessionProps() {
-    var statusEl = document.getElementById("sessionPropsStatus");
-    var kvsEl = document.getElementById("sessionPropsKvs");
-    setStatus(statusEl, "Carregando propriedades da sessão...", "");
-
-    appApi().GetPSADTSessionProperties().then(function (r) {
-      if (!r || !r.success) {
-        setStatus(statusEl, "Erro: " + (r && r.error ? r.error : "desconhecido"), "error");
-        return;
-      }
-      var rows = [
-        ["App Name", r.appName || "-"],
-        ["App Vendor", r.appVendor || "-"],
-        ["App Version", r.appVersion || "-"],
-        ["Deployment", r.deploymentType || "-"],
-        ["Deploy Mode", r.deployMode || "-"],
-        ["Log Path", r.logPath || "-"],
-        ["Log Name", r.logName || "-"],
-        ["Phase", r.installPhase || "-"]
-      ];
-      if (kvsEl) {
-        kvsEl.innerHTML = rows.map(function (row) {
-          return '<div class="kv"><span class="k">' + escapeHtml(row[0]) + '</span><span class="v mono">' + escapeHtml(row[1]) + '</span></div>';
-        }).join("");
-      }
-      setStatus(statusEl, "Propriedades carregadas.", "ok");
-    }).catch(function (err) {
-      setStatus(statusEl, "Falha: " + (err && err.message ? err.message : String(err)), "error");
-    });
-  }
-  if (loadSessionPropsBtn) loadSessionPropsBtn.addEventListener("click", loadSessionProps);
 
   setTimeout(function () {
     resetTheme();

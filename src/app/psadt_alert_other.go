@@ -81,8 +81,12 @@ func (a *App) handlePsadtAlert(_ context.Context, p PsadtAlertPayload) (int, str
 	return 0, string(body), ""
 }
 
-func (a *App) showPowerActionWarning(_ context.Context, _ string, _ int, _ bool, _ string) (string, error) {
-	return "proceed", nil
+func (a *App) showForceRestartBalloon(_ string, _ int, _ string) string {
+	return "skipped"
+}
+
+func (a *App) showDeferrableRestartPrompt(_ string, _ int, _ string, _ int) string {
+	return "restart_now"
 }
 
 func (a *App) executeSystemPowerAction(_ context.Context, action string, _ int, _ bool, _ string) (int, string, string) {
