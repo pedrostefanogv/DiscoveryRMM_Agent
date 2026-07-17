@@ -58,28 +58,17 @@ func (a *App) handleRefreshOnDemand(_ context.Context, payloadJSON map[string]an
 			return true, 1, "", err.Error()
 		}
 
-		if flags.Ports && flags.Connections {
-			report, err := a.inventorySvc.RefreshNetworkConnections()
-			if err != nil {
-				a.logs.append("[agent] refresh-on-demand: falha ao coletar conexoes de rede: " + err.Error())
-				return true, 1, "", err.Error()
-			}
-			results = append(results, fmt.Sprintf("ports=%d", len(report.ListeningPorts)))
-			results = append(results, fmt.Sprintf("connections=%d", len(report.OpenSockets)))
-		} else if flags.Ports {
-			ports, err := a.inventorySvc.RefreshListeningPorts()
-			if err != nil {
-				a.logs.append("[agent] refresh-on-demand: falha ao coletar portas: " + err.Error())
-				return true, 1, "", err.Error()
-			}
-			results = append(results, fmt.Sprintf("ports=%d", len(ports)))
-		} else if flags.Connections {
-			report, err := a.inventorySvc.RefreshNetworkConnections()
-			if err != nil {
-				a.logs.append("[agent] refresh-on-demand: falha ao coletar conexoes: " + err.Error())
-				return true, 1, "", err.Error()
-			}
-			results = append(results, fmt.Sprintf("connections=%d", len(report.OpenSockets)))
+		// Coleta e faz upload das conexões de rede para a API
+		if err := a.SyncNetworkConnections(); err != nil {
+			a.logs.append("[agent] refresh-on-demand: falha ao coletar/enviar conexoes de rede: " + err.Error())
+			return true, 1, "", err.Error()
+		}
+		// Obtém os dados do cache para o log
+		if cached, ok := a.invCache.Get(); ok {
+			results = append(results, fmt.Sprintf("ports=%d", len(cached.ListeningPorts)))
+			results = append(results, fmt.Sprintf("connections=%d", len(cached.OpenSockets)))
+		} else {
+			results = append(results, "network=synced")
 		}
 	}
 

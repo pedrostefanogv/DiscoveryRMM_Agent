@@ -69,6 +69,13 @@ func (a *App) RefreshNetworkConnections() (models.NetworkConnectionsReport, erro
 	return a.inventorySvc.RefreshNetworkConnections()
 }
 
+func (a *App) SyncNetworkConnections() error {
+	if err := a.requireInventorySvc(); err != nil {
+		return err
+	}
+	return a.inventorySvc.SyncNetworkConnections(context.Background())
+}
+
 func (a *App) RefreshSoftware() ([]models.SoftwareItem, error) {
 	if err := a.requireInventorySvc(); err != nil {
 		return []models.SoftwareItem{}, err

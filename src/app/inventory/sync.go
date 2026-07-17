@@ -40,6 +40,8 @@ type agentHardwareComponents struct {
 	NetworkAdapters []agentNetworkAdapterInfo `json:"networkAdapters"`
 	MemoryModules   []agentMemoryModuleInfo   `json:"memoryModules"`
 	Printers        []agentPrinterInfo        `json:"printers"`
+	ListeningPorts  []agentListeningPortInfo  `json:"listeningPorts"`
+	OpenSockets     []agentOpenSocketInfo     `json:"openSockets"`
 }
 
 type agentHardwareInfo struct {
@@ -91,6 +93,7 @@ type agentNetworkAdapterInfo struct {
 	Name          string `json:"name"`
 	MACAddress    string `json:"macAddress"`
 	IPAddress     string `json:"ipAddress"`
+	Ipv6Address   string `json:"ipv6Address"`
 	SubnetMask    string `json:"subnetMask"`
 	Gateway       string `json:"gateway"`
 	DNSServers    string `json:"dnsServers"`
@@ -122,6 +125,27 @@ type agentPrinterInfo struct {
 	ShareName        *string `json:"shareName"`
 	Location         string  `json:"location"`
 	CollectedAt      string  `json:"collectedAt"`
+}
+
+type agentListeningPortInfo struct {
+	ProcessName string `json:"processName"`
+	ProcessID   int    `json:"processId"`
+	ProcessPath string `json:"processPath"`
+	Protocol    string `json:"protocol"`
+	Address     string `json:"address"`
+	Port        int    `json:"port"`
+}
+
+type agentOpenSocketInfo struct {
+	ProcessName   string `json:"processName"`
+	ProcessID     int    `json:"processId"`
+	ProcessPath   string `json:"processPath"`
+	LocalAddress  string `json:"localAddress"`
+	LocalPort     int    `json:"localPort"`
+	RemoteAddress string `json:"remoteAddress"`
+	RemotePort    int    `json:"remotePort"`
+	Protocol      string `json:"protocol"`
+	Family        string `json:"family"`
 }
 
 type agentSoftwareEnvelope struct {
@@ -293,6 +317,109 @@ func (s *Service) SyncInventoryOnStartup(ctx context.Context, report models.Inve
 	}
 }
 
+// SyncNetworkConnections collects and uploads only listening ports and open sockets.
+func (s *Service) SyncNetworkConnections(ctx context.Context) error {
+	if err := s.requireProvisionedInventory(); err != nil {
+		return err
+	}
+	report, err := s.collectNetworkConnectionsWithHeartbeat(ctx)
+	if err != nil {
+		return err
+	}
+	// Atualiza cache local
+	if s.cache != nil {
+		if cached, ok := s.cache.Get(); ok {
+			cached.ListeningPorts = report.ListeningPorts
+			cached.OpenSockets = report.OpenSockets
+			s.cache.Set(cached)
+		}
+	}
+
+	cfg := s.debugConfig()
+	cfg.ApiServer = strings.TrimSpace(cfg.ApiServer)
+	cfg.ApiScheme = strings.TrimSpace(strings.ToLower(cfg.ApiScheme))
+
+	hasRemoteCredentials := cfg.ApiServer != "" && strings.TrimSpace(cfg.AuthToken) != "" && strings.TrimSpace(cfg.AgentID) != ""
+	validScheme := cfg.ApiScheme == "http" || cfg.ApiScheme == "https"
+	if !hasRemoteCredentials || !validScheme {
+		s.logf("[agent-sync] SyncNetworkConnections: sem credenciais remotas, pulando upload")
+		return nil
+	}
+
+	// Build minimal envelope with just network data
+	collected := time.Now().UTC().Format(time.RFC3339)
+	components := agentHardwareComponents{
+		ListeningPorts: mapAgentListeningPorts(report.ListeningPorts),
+		OpenSockets:    mapAgentOpenSockets(report.OpenSockets),
+	}
+	compJSON, _ := json.Marshal(components)
+
+	envelope := agentHardwareEnvelope{
+		AgentID:                strings.TrimSpace(cfg.AgentID),
+		Status:                 "online",
+		InventoryCollectedAt:   collected,
+		InventorySchemaVersion: "",
+		Components:             compJSON,
+	}
+	body, err := json.Marshal(envelope)
+	if err != nil {
+		return fmt.Errorf("marshal network envelope: %w", err)
+	}
+
+	hardwareEndpoint := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/hardware"
+	if err := s.sendAgentInventoryRequest(ctx, hardwareEndpoint, cfg, http.MethodPost, body); err != nil {
+		s.logf("[agent-sync] SyncNetworkConnections POST falhou: " + err.Error())
+		if err := s.sendAgentInventoryRequest(ctx, hardwareEndpoint, cfg, http.MethodPut, body); err != nil {
+			s.logf("[agent-sync] SyncNetworkConnections PUT falhou: " + err.Error())
+			return err
+		}
+	}
+	s.logf(fmt.Sprintf("[agent-sync] SyncNetworkConnections enviado: ports=%d sockets=%d",
+		len(report.ListeningPorts), len(report.OpenSockets)))
+	return nil
+}
+
+// mapAgentListeningPorts converts model ports to API envelope format.
+func mapAgentListeningPorts(ports []models.ListeningPortInfo) []agentListeningPortInfo {
+	result := make([]agentListeningPortInfo, 0, len(ports))
+	for _, p := range ports {
+		if p.Port == 0 {
+			continue
+		}
+		result = append(result, agentListeningPortInfo{
+			ProcessName: trimToMaxLen(strings.TrimSpace(p.ProcessName), 200),
+			ProcessID:   p.ProcessID,
+			ProcessPath: trimToMaxLen(strings.TrimSpace(p.ProcessPath), 500),
+			Protocol:    trimToMaxLen(strings.TrimSpace(p.Protocol), 10),
+			Address:     trimToMaxLen(strings.TrimSpace(p.Address), 45),
+			Port:        p.Port,
+		})
+	}
+	return result
+}
+
+// mapAgentOpenSockets converts model sockets to API envelope format.
+func mapAgentOpenSockets(sockets []models.OpenSocketInfo) []agentOpenSocketInfo {
+	result := make([]agentOpenSocketInfo, 0, len(sockets))
+	for _, s := range sockets {
+		if s.LocalPort == 0 && s.RemotePort == 0 {
+			continue
+		}
+		result = append(result, agentOpenSocketInfo{
+			ProcessName:   trimToMaxLen(strings.TrimSpace(s.ProcessName), 200),
+			ProcessID:     s.ProcessID,
+			ProcessPath:   trimToMaxLen(strings.TrimSpace(s.ProcessPath), 500),
+			LocalAddress:  trimToMaxLen(strings.TrimSpace(s.LocalAddress), 45),
+			LocalPort:     s.LocalPort,
+			RemoteAddress: trimToMaxLen(strings.TrimSpace(s.RemoteAddress), 45),
+			RemotePort:    s.RemotePort,
+			Protocol:      trimToMaxLen(strings.TrimSpace(s.Protocol), 10),
+			Family:        trimToMaxLen(strings.TrimSpace(s.Family), 10),
+		})
+	}
+	return result
+}
+
 var inventoryHTTPClient = &http.Client{Timeout: 20 * time.Second}
 
 func (s *Service) sendAgentInventoryRequest(parent context.Context, endpoint string, cfg debug.Config, method string, body []byte) error {
@@ -449,7 +576,8 @@ func buildAgentHardwareEnvelope(report models.InventoryReport, version string) a
 		adapters = append(adapters, agentNetworkAdapterInfo{
 			Name:          name,
 			MACAddress:    trimToMaxLen(strings.TrimSpace(n.MAC), 32),
-			IPAddress:     trimToMaxLen(firstNonEmptyString(strings.TrimSpace(n.IPv4), strings.TrimSpace(n.IPv6)), 45),
+			IPAddress:     trimToMaxLen(strings.TrimSpace(n.IPv4), 45),
+			Ipv6Address:   trimToMaxLen(strings.TrimSpace(n.IPv6), 500),
 			SubnetMask:    "",
 			Gateway:       trimToMaxLen(strings.TrimSpace(n.Gateway), 45),
 			DNSServers:    trimToMaxLen(normalizeDNSServers(n.DNSServers), 500),
@@ -562,6 +690,8 @@ func buildAgentHardwareEnvelope(report models.InventoryReport, version string) a
 		NetworkAdapters: adapters,
 		MemoryModules:   modules,
 		Printers:        printers,
+		ListeningPorts:  mapAgentListeningPorts(report.ListeningPorts),
+		OpenSockets:     mapAgentOpenSockets(report.OpenSockets),
 	}
 	compJSON, _ := json.Marshal(components)
 
