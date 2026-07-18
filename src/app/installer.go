@@ -118,6 +118,7 @@ func loadInstallerConfig() (InstallerConfig, string, error) {
 		return InstallerConfig{}, "", overrideErr
 	}
 
+	// Só cria config padrão quando NENHUM arquivo existe.
 	if !baseFound && !overrideFound {
 		return ensureDefaultInstallerConfig()
 	}
@@ -126,18 +127,18 @@ func loadInstallerConfig() (InstallerConfig, string, error) {
 	resolvedPath := basePath
 
 	if !baseFound {
-		// ApiServer é o campo canônico; ApiScheme (json:"-") e ServerURL (legado) não são mais populados.
-		if overrideCfg.ApiServer == "" && overrideCfg.ServerURL == "" {
-			return ensureDefaultInstallerConfig()
-		}
+		// Só override está presente.
 		resolved = overrideCfg
 		resolvedPath = ""
 	} else {
 		resolved = mergeInstallerOverride(baseCfg, overrideCfg)
-		// ApiServer é o campo canônico; ApiScheme (json:"-") e ServerURL (legado) não são mais populados.
-		if resolved.ApiServer == "" && resolved.ServerURL == "" {
-			return ensureDefaultInstallerConfig()
-		}
+	}
+
+	// Se o config não tem conexão (sem ApiServer, ServerURL nem deployToken),
+	// retorna como está — NÃO sobrescreve com defaults. O bootstrap tratará.
+	if resolved.ApiServer == "" && resolved.ServerURL == "" && resolved.APIKey == "" {
+		log.Printf("[config] config.json encontrado mas sem conexão — retornando como está para bootstrap")
+		return resolved, resolvedPath, nil
 	}
 
 	if overrideFound {
@@ -153,6 +154,9 @@ func loadInstallerConfig() (InstallerConfig, string, error) {
 // quando nenhum arquivo de configuração é encontrado. Isso garante que
 // o agente possa iniciar em modo zero-touch mesmo após um update onde
 // o NSIS pulou a criação do config (modo /UPDATE).
+//
+// NUNCA sobrescreve um arquivo existente — apenas cria quando o caminho
+// não existe no disco.
 func ensureDefaultInstallerConfig() (InstallerConfig, string, error) {
 	autoProv := true
 	chatLogEnabled := true
@@ -167,6 +171,13 @@ func ensureDefaultInstallerConfig() (InstallerConfig, string, error) {
 	}
 
 	path := platform.SharedConfigPath()
+
+	// Não sobrescreve arquivo existente — apenas cria se não existir.
+	if _, err := os.Stat(path); err == nil {
+		log.Printf("[config] config.json ja existe em %s — nao sera sobrescrito", path)
+		return cfg, path, nil
+	}
+
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		log.Printf("[config] aviso: nao foi possivel criar diretorio padrao %s: %v", dir, err)

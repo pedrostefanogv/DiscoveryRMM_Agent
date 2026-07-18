@@ -408,7 +408,12 @@ func (a *App) registerWithDeployKey(serverURL, deployKey string) (P2POnboardingR
 		return P2POnboardingResult{}, fmt.Errorf("credenciais persistidas, mas agente ainda não aparece provisionado")
 	}
 
-	a.logs.append("[zero-touch] credenciais persistidas em " + strings.TrimSpace(writePath) + " agentId=" + inst.AgentID)
+	tokenPreview := inst.AuthToken
+	if len(tokenPreview) > 12 {
+		tokenPreview = tokenPreview[:12] + "..."
+	}
+	a.logs.append(fmt.Sprintf("[zero-touch] credenciais persistidas em %s agentId=%s clientId=%s siteId=%s apiServer=%s authToken=%s",
+		strings.TrimSpace(writePath), inst.AgentID, inst.ClientID, inst.SiteID, inst.ApiServer, tokenPreview))
 	return P2POnboardingResult{
 		AgentID:    inst.AgentID,
 		Registered: true,
