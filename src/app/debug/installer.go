@@ -148,6 +148,8 @@ func (s *Service) loadInstallerConfig() (InstallerConfig, string, error) {
 		return InstallerConfig{}, "", overrideErr
 	}
 
+	// Só retorna erro quando NENHUM arquivo existe — os callers tratam
+	// config vazio adequadamente (ex.: bootstrap pendente).
 	if !baseFound && !overrideFound {
 		return InstallerConfig{}, "", fmt.Errorf("config.json de producao nao encontrado")
 	}
@@ -156,18 +158,18 @@ func (s *Service) loadInstallerConfig() (InstallerConfig, string, error) {
 	resolvedPath := basePath
 
 	if !baseFound {
-		// ApiServer é o campo canônico; ApiScheme (json:"-") e ServerURL (legado) não são mais populados.
-		if overrideCfg.ApiServer == "" && overrideCfg.ServerURL == "" {
-			return InstallerConfig{}, "", fmt.Errorf("config.json de producao nao encontrado")
-		}
 		resolved = overrideCfg
 		resolvedPath = ""
 	} else {
 		resolved = mergeInstallerOverride(baseCfg, overrideCfg)
-		// ApiServer é o campo canônico; ApiScheme (json:"-") e ServerURL (legado) não são mais populados.
-		if resolved.ApiServer == "" && resolved.ServerURL == "" {
-			return InstallerConfig{}, "", fmt.Errorf("config.json de producao nao encontrado")
-		}
+	}
+
+	// Se o config não tem conexão (sem ApiServer, ServerURL nem deployToken),
+	// retorna como está — NÃO sobrescreve com defaults. O bootstrap tratará.
+	// Alinhado com app/installer.go:loadInstallerConfig.
+	if resolved.ApiServer == "" && resolved.ServerURL == "" && resolved.APIKey == "" {
+		log.Printf("[config] config.json encontrado mas sem conexao — retornando como esta para bootstrap")
+		return resolved, resolvedPath, nil
 	}
 
 	if overrideFound {

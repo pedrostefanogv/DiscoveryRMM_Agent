@@ -187,9 +187,15 @@ func (s *Service) LoadConnectionConfigFromProduction() {
 		if s.normalizeP2PConfig != nil {
 			p2pCfg = s.normalizeP2PConfig(p2pCfg)
 		}
-		p2pCfg.Enabled = true
+		switch {
+		case (inst.AutoProvisioning != nil && *inst.AutoProvisioning) || inst.APIKey != "":
+			// Cenário de provisionamento: força P2P ativo para zero-touch.
+			p2pCfg.Enabled = true
+			s.logf("[config] P2P inicializado com enabled=true (auto-provisioning ou deploy token presente)")
+		default:
+			s.logf(fmt.Sprintf("[config] P2P inicializado com enabled=%v (config.json)", p2pCfg.Enabled))
+		}
 		s.applyP2PConfig(p2pCfg)
-		s.logf("[config] P2P inicializado com enabled=true")
 	}
 
 	if inst.ApiServer == "" {
@@ -417,9 +423,30 @@ func (s *Service) BootstrapAgentCredentialsFromInstallerConfig(ctx context.Conte
 	}
 
 	s.logf("[installer-bootstrap] registrando agente em " + scheme + "://" + server + "/api/v1/agent-register")
-	token, agentID, clientID, siteID, resolvedScheme, err := s.registerAgentFromDeployToken(ctx, scheme, server, inst.APIKey)
-	if err != nil {
-		s.logf("[installer-bootstrap] falha ao obter credenciais: " + err.Error())
+
+	const maxRetries = 3
+	var (
+		token, agentID, clientID, siteID, resolvedScheme string
+		registerErr                                      error
+	)
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		token, agentID, clientID, siteID, resolvedScheme, registerErr = s.registerAgentFromDeployToken(ctx, scheme, server, inst.APIKey)
+		if registerErr == nil {
+			break
+		}
+		if attempt < maxRetries {
+			backoff := time.Duration(1<<uint(attempt)) * time.Second // 2s, 4s, 8s
+			s.logf(fmt.Sprintf("[installer-bootstrap] tentativa %d/%d falhou: %v — retry em %v", attempt, maxRetries, registerErr, backoff))
+			select {
+			case <-ctx.Done():
+				s.logf("[installer-bootstrap] contexto cancelado durante retry")
+				return
+			case <-time.After(backoff):
+			}
+		}
+	}
+	if registerErr != nil {
+		s.logf(fmt.Sprintf("[installer-bootstrap] falha ao obter credenciais apos %d tentativas: %v", maxRetries, registerErr))
 		return
 	}
 

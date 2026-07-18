@@ -75,6 +75,10 @@ func (s *Service) SendStreamMultiRound(
 		}
 		if len(pendingCalls) == 0 {
 			s.logf("[chat] round %d: LLM respondeu sem tool_call (resposta direta)", round)
+			// Diagnóstico: detectar perguntas que provavelmente precisariam de tools
+			if round == 0 {
+				diagnoseMissingToolCall(userMessage, s.logf)
+			}
 			break
 		}
 		if onStatus != nil {
@@ -238,4 +242,58 @@ func (s *Service) fallbackToSync(ctx context.Context, cfg Config, message, sessi
 	s.history = append(s.history, Message{Role: "assistant", Content: assistant})
 	s.mu.Unlock()
 	return assistant, nil
+}
+
+// diagnoseMissingToolCall verifica se a pergunta do usuario contem palavras-chave
+// que sugerem que o LLM deveria ter usado uma ferramenta MCP, e emite um warning
+// no log para facilitar o diagnostico de System Prompts ineficazes.
+func diagnoseMissingToolCall(userMessage string, logf func(string, ...any)) {
+	msg := strings.ToLower(userMessage)
+	hints := map[string]string{
+		"instalado":      "list_installed_packages",
+		"instalada":      "list_installed_packages",
+		"instalar":       "search_packages / install_package",
+		"instale":        "search_packages / install_package",
+		"instala":        "search_packages / install_package",
+		"desinstalar":    "uninstall_package",
+		"desinstale":     "uninstall_package",
+		"atualizar":      "get_pending_updates / upgrade_package",
+		"atualizacao":    "get_pending_updates",
+		"update":         "get_pending_updates",
+		"memoria":        "get_inventory",
+		"ram":            "get_inventory",
+		"cpu":            "get_inventory",
+		"processador":    "get_inventory",
+		"disco":          "get_inventory",
+		"hd":             "get_inventory",
+		"ssd":            "get_inventory",
+		"gpu":            "get_inventory",
+		"placa de video": "get_inventory",
+		"versao":         "get_inventory",
+		"windows":        "get_inventory",
+		"impressora":     "list_printers",
+		"imprimir":       "list_printers / list_print_jobs",
+		"chamado":        "list_tickets",
+		"ticket":         "list_tickets",
+		"suporte":        "list_tickets",
+		"ping":           "ping_host",
+		"dns":            "flush_dns",
+		"firewall":       "get_inventory",
+		"antivirus":      "get_inventory",
+		"bateria":        "get_inventory",
+		"bitlocker":      "get_inventory",
+		"usuarios":       "get_inventory",
+		"logados":        "get_inventory",
+		"exportar":       "export_inventory_markdown / export_inventory_pdf",
+		"relatorio":      "export_inventory_markdown / export_inventory_pdf",
+	}
+	hits := make([]string, 0)
+	for keyword, tool := range hints {
+		if strings.Contains(msg, keyword) {
+			hits = append(hits, fmt.Sprintf("%s→%s", keyword, tool))
+		}
+	}
+	if len(hits) > 0 {
+		logf("[chat] diagnostico: LLM nao usou tools, mas mensagem contem palavras-chave: %s. Verifique o System Prompt do servidor.", strings.Join(hits, ", "))
+	}
 }

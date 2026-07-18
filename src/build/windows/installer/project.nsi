@@ -187,6 +187,7 @@ ManifestDPIAware true
 !include "nsDialogs.nsh"
 !include "LogicLib.nsh"
 !include "FileFunc.nsh"
+!include "WordFunc.nsh"
 
 !define MUI_ICON "..\icon.ico"
 !define MUI_UNICON "..\icon.ico"
@@ -215,6 +216,10 @@ Var UpdateMode
 Var PayloadUrl
 Var PayloadSha256
 Var PayloadFileName
+
+; Campos canonicos do agent (derivados de ServerUrl)
+Var ApiServer
+Var ApiInsecure
 
 !insertmacro MUI_PAGE_WELCOME # Welcome to the installer page.
 # !insertmacro MUI_PAGE_LICENSE "resources\eula.txt" # Adds a EULA page to the installer
@@ -633,6 +638,37 @@ decommission_done:
 SectionEnd
 
 # FunÃ§Ã£o para salvar as configuraÃ§Ãµes do agente
+# Deriva campos canonicos (apiServer, apiInsecure) a partir de serverUrl.
+# Ex: "https://tngplacas.com.br/api/" -> apiServer="tngplacas.com.br", apiInsecure="0"
+Function DeriveApiFields
+   StrCpy $ApiServer ""
+   StrCpy $ApiInsecure "0"
+
+   ${If} $ServerUrl == ""
+      Return
+   ${EndIf}
+
+   # Detecta HTTP (nao seguro).
+   ${WordFind} "$ServerUrl" "http://" "*" $R0
+   ${If} $R0 != "$ServerUrl"
+      StrCpy $ApiInsecure "1"
+      StrCpy $R1 "$ServerUrl" "" 7  ; remove "http://"
+   ${Else}
+      ${WordFind} "$ServerUrl" "https://" "*" $R0
+      ${If} $R0 != "$ServerUrl"
+         StrCpy $R1 "$ServerUrl" "" 8  ; remove "https://"
+      ${Else}
+         StrCpy $R1 "$ServerUrl"  ; sem scheme
+      ${EndIf}
+   ${EndIf}
+
+   ; Extrai hostname: pega da posicao 0 ate a primeira "/".
+   ${WordFind} "$R1" "/" "+1" $ApiServer
+   ${If} $ApiServer == ""
+      StrCpy $ApiServer "$R1"
+   ${EndIf}
+FunctionEnd
+
 Function SaveAgentConfig
    # Build de update nÃ£o altera configuraÃ§Ã£o local existente.
    ${If} "${BUILD_UPDATE_INSTALL}" == "1"
@@ -687,6 +723,12 @@ Function SaveAgentConfig
 
    FileWrite $0 "{$\r$\n"
    ${If} $GenericMode != "1"
+      ${If} $ApiServer != ""
+         FileWrite $0 '  "apiServer": "$ApiServer",$\r$\n'
+      ${EndIf}
+      ${If} $ApiInsecure == "1"
+         FileWrite $0 '  "apiInsecure": true,$\r$\n'
+      ${EndIf}
       ${If} $ServerUrl != ""
          FileWrite $0 '  "serverUrl": "$ServerUrl",$\r$\n'
       ${EndIf}
@@ -726,6 +768,12 @@ config_fallback:
 
    FileWrite $0 "{$\r$\n"
    ${If} $GenericMode != "1"
+      ${If} $ApiServer != ""
+         FileWrite $0 '  "apiServer": "$ApiServer",$\r$\n'
+      ${EndIf}
+      ${If} $ApiInsecure == "1"
+         FileWrite $0 '  "apiInsecure": true,$\r$\n'
+      ${EndIf}
       ${If} $ServerUrl != ""
          FileWrite $0 '  "serverUrl": "$ServerUrl",$\r$\n'
       ${EndIf}

@@ -196,6 +196,7 @@ func ensureDefaultInstallerConfig() (InstallerConfig, string, error) {
 	}
 
 	log.Printf("[config] config padrao criado com auto-provisioning e P2P ativos em %s", path)
+	log.Printf("[config] ATENCAO: config padrao criado sem deployToken. O agente dependera exclusivamente de zero-touch P2P para provisionamento.")
 	return cfg, path, nil
 }
 
