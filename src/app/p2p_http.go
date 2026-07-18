@@ -20,6 +20,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"discovery/internal/platform"
 )
 
 const (
@@ -230,7 +232,7 @@ func (s *p2pTransferServer) downloadArtifact(access P2PArtifactAccess) (string, 
 		_ = os.Remove(tmpPath)
 		return "", 0, fmt.Errorf("checksum divergente")
 	}
-	if err := os.Rename(tmpPath, targetPath); err != nil {
+	if err := platform.RenameAtomic(tmpPath, targetPath); err != nil {
 		_ = os.Remove(tmpPath)
 		return "", 0, err
 	}

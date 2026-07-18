@@ -79,6 +79,7 @@ type P2PChunkManifest struct {
 	ChunkSize    int64      `json:"chunkSize"`
 	TotalChunks  int        `json:"totalChunks"`
 	SHA256       string     `json:"sha256"`
+	SourceMTime  int64      `json:"sourceMtime"` // UnixNano do mtime do arquivo fonte
 	Chunks       []P2PChunk `json:"chunks"`
 }
 
@@ -192,6 +193,7 @@ func buildChunkManifest(ctx context.Context, path, artifactID string, chunkSize 
 		ChunkSize:    chunkSize,
 		TotalChunks:  len(chunks),
 		SHA256:       hex.EncodeToString(fullHash.Sum(nil)),
+		SourceMTime:  info.ModTime().UnixNano(),
 		Chunks:       chunks,
 	}, nil
 }
@@ -219,6 +221,7 @@ func downloadChunkedLibp2p(
 	sched *p2pChunkScheduler,
 	maxParallel int,
 	onChunkProgress func(chunkIdx int, readSoFar, chunkSize int64, totalChunks int),
+	onChunkComplete func(completed, total int),
 	logf func(string),
 ) (string, int64, error) {
 	if len(peers) == 0 {
@@ -311,6 +314,8 @@ func downloadChunkedLibp2p(
 
 	var firstErr error
 	var failedChunks int
+	var completedChunks int
+	totalChunks := len(manifest.Chunks)
 	for res := range results {
 		if res.err != nil {
 			failedChunks++
@@ -319,6 +324,11 @@ func downloadChunkedLibp2p(
 			}
 			if firstErr == nil {
 				firstErr = fmt.Errorf("chunk %d: %w", res.index, res.err)
+			}
+		} else {
+			completedChunks++
+			if onChunkComplete != nil {
+				onChunkComplete(completedChunks, totalChunks)
 			}
 		}
 	}
@@ -365,7 +375,7 @@ func downloadChunkedLibp2p(
 		return "", 0, fmt.Errorf("checksum do arquivo final divergente")
 	}
 
-	if err := os.Rename(tmpPath, targetPath); err != nil {
+	if err := platform.RenameAtomic(tmpPath, targetPath); err != nil {
 		_ = os.Remove(tmpPath)
 		return "", 0, err
 	}

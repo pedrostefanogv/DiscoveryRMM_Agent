@@ -33,6 +33,7 @@ const (
 // p2pLibP2PPeerInfo is exchanged over the /discovery-p2p/1.0.0 stream.
 type p2pLibP2PPeerInfo struct {
 	AgentID  string `json:"agentId"`
+	Host     string `json:"host,omitempty"`
 	ClientID string `json:"clientId"`
 	HTTPPort int    `json:"httpPort"`
 }
@@ -111,7 +112,7 @@ func (p *p2pLibP2PProvider) Start(
 		if err := json.NewDecoder(bufio.NewReader(s)).Decode(&remote); err != nil {
 			return
 		}
-		mine := p2pLibP2PPeerInfo{AgentID: self.AgentID, ClientID: p.clientID, HTTPPort: self.Port}
+		mine := p2pLibP2PPeerInfo{AgentID: self.AgentID, Host: self.Host, ClientID: p.clientID, HTTPPort: self.Port}
 		if err := json.NewEncoder(s).Encode(mine); err != nil {
 			return
 		}
@@ -154,10 +155,14 @@ func (p *p2pLibP2PProvider) Start(
 				return
 			}
 		}
+		peerHost := strings.TrimSpace(remote.Host)
+		if peerHost == "" {
+			peerHost = remoteAddr
+		}
 		onPeer(p2pDiscoveredPeer{
 			AgentID:      strings.TrimSpace(remote.AgentID),
 			ClientID:     strings.TrimSpace(remote.ClientID),
-			Host:         remoteAddr,
+			Host:         peerHost,
 			Address:      remoteAddr,
 			Port:         remote.HTTPPort,
 			Source:       p2pDiscoveryLibP2P,
@@ -286,7 +291,7 @@ func (n *libp2pMDNSNotifee) HandlePeerFound(pi peer.AddrInfo) {
 
 	// Initiator sends first (with clientId), then reads response.
 	clientID := normalizeClientID(n.self.ClientID)
-	mine := p2pLibP2PPeerInfo{AgentID: n.self.AgentID, ClientID: clientID, HTTPPort: n.self.Port}
+	mine := p2pLibP2PPeerInfo{AgentID: n.self.AgentID, Host: n.self.Host, ClientID: clientID, HTTPPort: n.self.Port}
 	if err := json.NewEncoder(s).Encode(mine); err != nil {
 		return
 	}
@@ -345,10 +350,14 @@ func (n *libp2pMDNSNotifee) HandlePeerFound(pi peer.AddrInfo) {
 			return
 		}
 	}
+	peerHost := strings.TrimSpace(remote.Host)
+	if peerHost == "" {
+		peerHost = remoteAddr
+	}
 	n.onPeer(p2pDiscoveredPeer{
 		AgentID:      strings.TrimSpace(remote.AgentID),
 		ClientID:     strings.TrimSpace(remote.ClientID),
-		Host:         remoteAddr,
+		Host:         peerHost,
 		Address:      remoteAddr,
 		Port:         remote.HTTPPort,
 		Source:       p2pDiscoveryLibP2P,

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -26,6 +27,7 @@ const (
 type p2pHealthResponse struct {
 	OK           bool     `json:"ok"`
 	AgentID      string   `json:"agentId"`
+	Host         string   `json:"host,omitempty"`
 	HTTPPort     int      `json:"httpPort,omitempty"`
 	LibP2PPeerID string   `json:"libp2pPeerId,omitempty"`
 	LibP2PAddrs  []string `json:"libp2pAddrs,omitempty"`
@@ -49,6 +51,9 @@ func (s *p2pTransferServer) buildHealthResponse() p2pHealthResponse {
 	out := p2pHealthResponse{
 		OK:      true,
 		AgentID: agentID,
+	}
+	if host, err := os.Hostname(); err == nil {
+		out.Host = strings.TrimSpace(host)
 	}
 	if port, err := parsePortFromURL(baseURL); err == nil {
 		out.HTTPPort = port
@@ -353,9 +358,13 @@ func (c *p2pCoordinator) probeLANPeer(ctx context.Context, client *http.Client, 
 	if health.HTTPPort > 0 {
 		peerPort = health.HTTPPort
 	}
+	peerHost := strings.TrimSpace(health.Host)
+	if peerHost == "" {
+		peerHost = strings.TrimSpace(target.Host)
+	}
 	peerView := p2pDiscoveredPeer{
 		AgentID:      health.AgentID,
-		Host:         strings.TrimSpace(target.Host),
+		Host:         peerHost,
 		Address:      strings.TrimSpace(target.Host),
 		Port:         peerPort,
 		Source:       "lan-probe",

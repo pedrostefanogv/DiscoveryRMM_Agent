@@ -77,6 +77,7 @@ func loadCachedManifest(manifestDir, artifactName, artifactPath string) *P2PChun
 }
 
 // manifestMatchesFile verifica se um manifest é consistente com o arquivo em disco.
+// Valida tamanho e mtime para detectar arquivos sobrescritos com mesmo tamanho.
 func manifestMatchesFile(manifest *P2PChunkManifest, path string) bool {
 	if manifest == nil {
 		return false
@@ -86,6 +87,10 @@ func manifestMatchesFile(manifest *P2PChunkManifest, path string) bool {
 		return false
 	}
 	if info.Size() != manifest.TotalSize {
+		return false
+	}
+	// Valida mtime quando disponível no manifest (compatível com versões antigas sem o campo).
+	if manifest.SourceMTime > 0 && info.ModTime().UnixNano() != manifest.SourceMTime {
 		return false
 	}
 	return true
@@ -119,7 +124,7 @@ func (c *p2pCoordinator) finalizeDownloadedArtifact(artifactName, path, expected
 			if cfg := c.app.GetP2PConfig(); cfg.ChunkSizeBytes > 0 {
 				chunkSize = cfg.ChunkSizeBytes
 			}
-			cpuFn := func() float64 { return c.app.getHeartbeatMetrics().CpuPercent }
+			cpuFn := func() float64 { return c.cpuSampler.Sample() }
 			generated, err := buildChunkManifest(context.Background(), path, artifactID, chunkSize, nil, cpuFn)
 			if err != nil {
 				return fmt.Errorf("falha ao gerar manifest: %w", err)
@@ -161,7 +166,7 @@ func (c *p2pCoordinator) updateManifestCacheAfterDownload(artifactName, path str
 	if cfg := c.app.GetP2PConfig(); cfg.ChunkSizeBytes > 0 {
 		chunkSize = cfg.ChunkSizeBytes
 	}
-	cpuFn := func() float64 { return c.app.getHeartbeatMetrics().CpuPercent }
+	cpuFn := func() float64 { return c.cpuSampler.Sample() }
 	manifest, err := buildChunkManifest(context.Background(), path, artifactID, chunkSize, nil, cpuFn)
 	if err != nil {
 		c.app.logs.append(fmt.Sprintf("[p2p] aviso: falha ao gerar manifest pos-download para %s: %v", artifactName, err))

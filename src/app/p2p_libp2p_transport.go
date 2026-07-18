@@ -247,8 +247,8 @@ func handleStreamArtifactManifest(s network.Stream, transfer *p2pTransferServer)
 	}
 	artifactID := CanonicalArtifactID("", req.ArtifactName, "")
 	var cpuFn func() float64
-	if app != nil {
-		cpuFn = func() float64 { return app.getHeartbeatMetrics().CpuPercent }
+	if transfer != nil {
+		cpuFn = func() float64 { return transfer.app.p2pCoord.cpuSampler.Sample() }
 	}
 	manifest, err := buildChunkManifest(context.Background(), path, artifactID, chunkSize, nil, cpuFn)
 	if err != nil {
@@ -278,6 +278,12 @@ func handleStreamArtifactGet(s network.Stream, transfer *p2pTransferServer) {
 	transfer.mu.RLock()
 	tempDir := transfer.tempDir
 	transfer.mu.RUnlock()
+
+	// Rejeitar arquivos .importing (ainda sendo copiados) — não devem ser servidos.
+	if strings.HasSuffix(req.ArtifactName, ".importing") {
+		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "artifact em andamento"})
+		return
+	}
 
 	path := filepath.Join(tempDir, req.ArtifactName)
 	info, err := os.Stat(path)
@@ -367,6 +373,10 @@ func handleStreamArtifactGet(s network.Stream, transfer *p2pTransferServer) {
 			})
 		})
 	}
+
+	// Deadline para o lado servidor: evita que o libp2p encerre a conexão
+	// por timeout enquanto o chunk está sendo enviado (especialmente em redes lentas).
+	_ = s.SetDeadline(computeTransferDeadline(chunkLen))
 
 	written, copyErr := io.Copy(s, reader)
 	if coord != nil && written > 0 {
@@ -662,7 +672,7 @@ func libp2pDownloadArtifact(ctx context.Context, h host.Host, peerID peer.ID, ac
 		_ = os.Remove(tmpPath)
 		return "", 0, fmt.Errorf("checksum divergente")
 	}
-	if err := os.Rename(tmpPath, targetPath); err != nil {
+	if err := platform.RenameAtomic(tmpPath, targetPath); err != nil {
 		_ = os.Remove(tmpPath)
 		return "", 0, err
 	}

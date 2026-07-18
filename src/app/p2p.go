@@ -75,6 +75,15 @@ type p2pCoordinator struct {
 
 	// fetchStates gerencia o estado de eleição de fetcher por artifact.
 	fetchStates *fetchStateMap
+
+	// manifestInFlight deduplica gerações concorrentes de manifest para o mesmo
+	// artifact. Cada chave (artifactName) aponta para um chan struct{} que é
+	// fechado quando a geração termina.
+	manifestInFlight sync.Map
+
+	// cpuSampler mede CPU via GetSystemTimes com estado próprio, isolado
+	// do heartbeat. Usado para throttling adaptativo durante build de manifest.
+	cpuSampler *platform.CPUSampler
 }
 
 type p2pPeerState struct {
@@ -107,6 +116,7 @@ func newP2PCoordinator(app *App) *p2pCoordinator {
 		replicationQueue: make(chan p2pReplicationJob, p2pReplicationQueueSize),
 		sha256Cache:      make(map[string]artifactSHA256CacheEntry),
 		fetchStates:      newFetchStateMap(),
+		cpuSampler:       platform.NewCPUSampler(),
 	}
 }
 

@@ -163,7 +163,8 @@ function p2pRenderPeers(peers) {
       peersBody.innerHTML = peers.map(function (peer) {
         var addr = (peer.address || '-') + (peer.port ? (':' + peer.port) : '');
         var agentId = (peer.agentId || '-');
-        var displayName = (peer.host || agentId);
+        // Prioridade de exibição: hostname > clientId > agentId.
+        var displayName = (peer.host || peer.clientId || agentId);
         return '<tr>' +
           '<td class="mono" title="' + escapeHtml(agentId) + '">' + escapeHtml(displayName) + '</td>' +
           '<td class="mono">' + escapeHtml(addr) + '</td>' +
@@ -621,17 +622,50 @@ function onP2PTransferProgress(p) {
   if (!p) return;
   var key = (p.artifactName || '?') + '|' + (p.peerID || '?') + '|' + (p.operation || '?');
   var prev = p2pTransferMap[key] || {};
+
+  // Progresso monotônico: se CompletedChunks está presente, usa ele como
+  // referência de progresso real (chunks já salvos em disco). BytesRead
+  // e ChunkIndex são mantidos para retrocompatibilidade com eventos antigos.
+  var bytesRead = p.bytesRead;
+  var totalBytes = p.totalBytes;
+  if (p.completedChunks != null && p.completedChunks > 0 && p.totalChunks > 0) {
+    // Recalcula bytes baseado em chunks concluídos (monotônico, nunca diminui).
+    var chunkSize = p.totalBytes > 0 && p.totalChunks > 0 ? Math.floor(p.totalBytes / p.totalChunks) : 0;
+    var monotonicBytes = p.completedChunks * chunkSize;
+    // Só atualiza se for maior que o anterior (monotônico).
+    var prevMonotonic = prev._monotonicBytes || 0;
+    if (monotonicBytes > prevMonotonic) {
+      bytesRead = monotonicBytes;
+      prev._monotonicBytes = monotonicBytes;
+    } else {
+      bytesRead = prevMonotonic;
+    }
+    totalBytes = p.totalBytes || prev.totalBytes || 0;
+  } else if (p.bytesRead != null) {
+    // Fallback: comportamento antigo para eventos sem completedChunks.
+    // Garantir monotônico também: nunca diminuir bytesRead.
+    if (prev.bytesRead != null && p.bytesRead < prev.bytesRead) {
+      bytesRead = prev.bytesRead;
+    }
+    totalBytes = p.totalBytes != null ? p.totalBytes : (prev.totalBytes || 0);
+  } else {
+    bytesRead = prev.bytesRead || 0;
+    totalBytes = prev.totalBytes || 0;
+  }
+
   p2pTransferMap[key] = {
     artifactName: p.artifactName || prev.artifactName || '?',
     peerID: p.peerID || prev.peerID || '?',
-    bytesRead: p.bytesRead != null ? p.bytesRead : (prev.bytesRead || 0),
-    totalBytes: p.totalBytes != null ? p.totalBytes : (prev.totalBytes || 0),
+    bytesRead: bytesRead,
+    totalBytes: totalBytes,
     operation: p.operation || prev.operation || '?',
     direction: p.direction || prev.direction || (String(p.operation || prev.operation || '').toLowerCase() === 'serve' ? 'upload' : 'download'),
     chunkIndex: p.chunkIndex != null ? p.chunkIndex : (prev.chunkIndex || 0),
     totalChunks: p.totalChunks != null ? p.totalChunks : (prev.totalChunks || 0),
+    completedChunks: p.completedChunks != null ? p.completedChunks : (prev.completedChunks || 0),
     done: !!p.done,
-    error: p.error || ''
+    error: p.error || '',
+    _monotonicBytes: prev._monotonicBytes || bytesRead
   };
   renderP2PTransferList();
 }
@@ -640,5 +674,25 @@ function onP2PTransferProgress(p) {
 (function () {
   if (window.runtime && window.runtime.EventsOn) {
     window.runtime.EventsOn('p2p:transfer-progress', onP2PTransferProgress);
+    window.runtime.EventsOn('p2p:publish:progress', onP2PPublishProgress);
   }
 })();
+
+// onP2PPublishProgress trata o evento de progresso de publicação (import) de artifact.
+// Adapta o payload para o formato unificado do painel de transferências.
+function onP2PPublishProgress(p) {
+  if (!p) return;
+  var key = (p.artifactName || '?') + '|publish|import';
+  var prev = p2pTransferMap[key] || {};
+  p2pTransferMap[key] = {
+    artifactName: p.artifactName || prev.artifactName || '?',
+    peerID: '',
+    bytesRead: p.bytesProcessed != null ? p.bytesProcessed : (prev.bytesRead || 0),
+    totalBytes: p.totalBytes != null ? p.totalBytes : (prev.totalBytes || 0),
+    operation: 'import',
+    direction: 'upload',
+    done: !!p.done,
+    error: p.error || ''
+  };
+  renderP2PTransferList();
+}

@@ -60,15 +60,16 @@ func (c *p2pCoordinator) DownloadArtifactFromPeer(ctx context.Context, artifactN
 		sched := newP2PChunkScheduler()
 		lp2pPeers := []libp2pPeer{{agentID: sourcePeerID, peerID: peerID}}
 		path, totalBytes, err := downloadChunkedLibp2p(ctx, h, lp2pPeers, manifest, artifactName, requesterID, destDir, sched, c.dynamicMaxParallelChunks(),
-			func(chunkIdx int, readSoFar, chunkSize int64, totalChunks int) {
+			nil, // onChunkProgress: desabilitado; usamos onChunkComplete para progresso monotônico
+			func(completed, total int) {
 				c.emitTransferProgress(p2pTransferProgress{
-					ArtifactName: artifactName,
-					PeerID:       sourcePeerID,
-					BytesRead:    int64(chunkIdx)*chunkSize + readSoFar,
-					TotalBytes:   int64(totalChunks) * chunkSize,
-					Operation:    "pull",
-					ChunkIndex:   chunkIdx,
-					TotalChunks:  totalChunks,
+					ArtifactName:    artifactName,
+					PeerID:          sourcePeerID,
+					BytesRead:       int64(completed) * manifest.ChunkSize,
+					TotalBytes:      int64(total) * manifest.ChunkSize,
+					Operation:       "pull",
+					CompletedChunks: completed,
+					TotalChunks:     total,
 				})
 			},
 			func(msg string) {
@@ -182,16 +183,16 @@ func (c *p2pCoordinator) downloadArtifactSwarm(ctx context.Context, artifactName
 		lp2pPeers[i] = libp2pPeer{agentID: pe.peerID, peerID: pe.libp2pID}
 	}
 	path, totalBytes, err := downloadChunkedLibp2p(ctx, h, lp2pPeers, manifest, artifactName, requesterID, destDir, sched, c.dynamicMaxParallelChunks(),
-		func(chunkIdx int, readSoFar, chunkSize int64, totalChunks int) {
-			// Progresso agregado de todos os chunks
+		nil, // onChunkProgress: desabilitado; usamos onChunkComplete
+		func(completed, total int) {
 			c.emitTransferProgress(p2pTransferProgress{
-				ArtifactName: artifactName,
-				PeerID:       fmt.Sprintf("%d peers", len(peerEntries)),
-				BytesRead:    int64(chunkIdx)*chunkSize + readSoFar,
-				TotalBytes:   int64(totalChunks) * chunkSize,
-				Operation:    "swarm-pull",
-				ChunkIndex:   chunkIdx,
-				TotalChunks:  totalChunks,
+				ArtifactName:    artifactName,
+				PeerID:          fmt.Sprintf("%d peers", len(peerEntries)),
+				BytesRead:       int64(completed) * manifest.ChunkSize,
+				TotalBytes:      int64(total) * manifest.ChunkSize,
+				Operation:       "swarm-pull",
+				CompletedChunks: completed,
+				TotalChunks:     total,
 			})
 		},
 		func(msg string) {
