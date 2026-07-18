@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
@@ -240,6 +241,9 @@ func (a *App) SendChatMessage(message string) (string, error) {
 		return "", fmt.Errorf("Chat AI desabilitado pela configuração do servidor")
 	}
 
+	// Garantir que as tools MCP estão registradas no servidor.
+	a.ensureAgentToolsRegistered()
+
 	current := a.chatSvc.GetConfig()
 	runtimeCfg, err := a.resolveAgentChatRuntimeConfig(ChatConfig{
 		Endpoint:     current.Endpoint,
@@ -268,6 +272,10 @@ func (a *App) StartChatStream(message string) {
 
 	a.safeGo(func() {
 		defer done()
+
+		// Garantir que as tools MCP estão registradas no servidor
+		// (cache do servidor expira em ~5 minutos).
+		a.ensureAgentToolsRegistered()
 
 		current := a.chatSvc.GetConfig()
 		runtimeCfg, cfgErr := a.resolveAgentChatRuntimeConfig(ChatConfig{
@@ -409,10 +417,33 @@ func (a *App) RegisterAgentToolsOnServer() error {
 
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)
-		a.logs.append(fmt.Sprintf("[chat] registro tools retornou %d: %s", resp.StatusCode, strings.TrimSpace(string(bodyBytes))))
+		a.logs.append(fmt.Sprintf("[chat] registro tools retornou HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(bodyBytes))))
 		return fmt.Errorf("status %d", resp.StatusCode)
 	}
 
-	a.logs.append(fmt.Sprintf("[chat] %d tools registradas no servidor", len(entries)))
+	a.logs.append(fmt.Sprintf("[chat] %d tools MCP registradas com sucesso no servidor", len(entries)))
+
+	// Registrar timestamp para re-registro automático antes do chat.
+	a.toolsRegistrationMu.Lock()
+	a.lastToolsRegistration = time.Now()
+	a.toolsRegistrationMu.Unlock()
+
 	return nil
+}
+
+// ensureAgentToolsRegistered verifica se as tools precisam ser re-registradas
+// antes de um chat. O cache do servidor expira em ~5 minutos; re-registramos
+// preventivamente se o último registro foi há mais de 4 minutos.
+func (a *App) ensureAgentToolsRegistered() {
+	a.toolsRegistrationMu.RLock()
+	lastReg := a.lastToolsRegistration
+	a.toolsRegistrationMu.RUnlock()
+
+	if time.Since(lastReg) < 4*time.Minute {
+		return // cache ainda válido
+	}
+
+	if err := a.RegisterAgentToolsOnServer(); err != nil {
+		a.logs.append("[chat] aviso: re-registro de tools falhou: " + err.Error())
+	}
 }

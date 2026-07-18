@@ -261,9 +261,10 @@ func (s *Service) Send(ctx context.Context, userMessage string) (string, error) 
 }
 
 type agentChatRequest struct {
-	Message   string  `json:"message"`
-	SessionID *string `json:"sessionId,omitempty"`
-	MaxTokens *int    `json:"maxTokens,omitempty"`
+	Message   string           `json:"message"`
+	SessionID *string          `json:"sessionId,omitempty"`
+	MaxTokens *int             `json:"maxTokens,omitempty"`
+	Tools     []map[string]any `json:"tools,omitempty"`
 }
 
 type agentChatSyncResponse struct {
@@ -286,6 +287,14 @@ func (s *Service) buildAgentChatRequest(message, sessionID string, maxTokens int
 		tmp := maxTokens
 		req.MaxTokens = &tmp
 	}
+	s.mu.RLock()
+	if s.registry != nil {
+		tools := s.registry.OpenAIFunctions()
+		if len(tools) > 0 {
+			req.Tools = tools
+		}
+	}
+	s.mu.RUnlock()
 	return req
 }
 

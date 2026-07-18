@@ -43,6 +43,7 @@ type agentStreamRequest struct {
 	SessionID   string           `json:"sessionId,omitempty"`
 	ToolResults []toolResultItem `json:"toolResults,omitempty"`
 	MaxTokens   int              `json:"maxTokens,omitempty"`
+	Tools       []map[string]any `json:"tools,omitempty"`
 }
 
 // pendingToolCall collects a tool_call event before execution.

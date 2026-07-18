@@ -44,6 +44,20 @@ func (s *Service) SendStreamMultiRound(
 
 	pendingCalls := make([]pendingToolCall, 0)
 	req := agentStreamRequest{Message: userMessage, SessionID: sessionID}
+	// Injetar tools MCP no primeiro round (round 0).
+	s.mu.RLock()
+	if s.registry != nil {
+		tools := s.registry.OpenAIFunctions()
+		if len(tools) > 0 {
+			req.Tools = tools
+			s.logf(fmt.Sprintf("[chat] %d tools enviadas para o servidor", len(tools)))
+		} else {
+			s.logf("[chat] aviso: nenhuma tool MCP registrada — chat funcionara sem function calling")
+		}
+	} else {
+		s.logf("[chat] aviso: registry MCP nao disponivel")
+	}
+	s.mu.RUnlock()
 	var currentSessionID string
 	var err error
 
@@ -60,6 +74,7 @@ func (s *Service) SendStreamMultiRound(
 			return s.fallbackToSync(streamCtx, cfg, userMessage, sessionID, onToken)
 		}
 		if len(pendingCalls) == 0 {
+			s.logf(fmt.Sprintf("[chat] round %d: LLM respondeu sem tool_call (resposta direta)", round))
 			break
 		}
 		if onStatus != nil {
@@ -154,6 +169,7 @@ func (s *Service) parseMultiRoundSSE(body io.Reader, onToken func(string), pendi
 		}
 		var evt agentChatStreamEvent
 		if err := json.Unmarshal([]byte(data), &evt); err != nil {
+			s.logf(fmt.Sprintf("[chat] SSE parse error: %v (raw=%s)", err, TruncateForLog(data, 200)))
 			continue
 		}
 		switch strings.ToLower(evt.Type) {

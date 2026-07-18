@@ -77,21 +77,26 @@ type App struct {
 	exportCfg exportConfig
 	logs      logBuffer
 
-	mcpRegistry    *mcp.Registry
-	chatSvc        *ai.Service
-	automationSvc  *automation.Service
-	agentConn      *agentconn.Runtime
-	remoteDebug    *remoteDebugManager
-	syncCoord      *syncCoordinator
-	p2pCoord       *p2pCoordinator
-	updateTrigger  chan struct{}
-	agentInfo      agentInfoCache
-	appStorePolicy appStorePolicyCache
-	debugSvc       *debug.Service
-	updatesSvc     *updates.Service
-	exporter       *updates.Exporter
-	inventorySvc   *appinventory.Service
-	supportSvc     *appsupport.Service
+	mcpRegistry   *mcp.Registry
+	chatSvc       *ai.Service
+	automationSvc *automation.Service
+
+	// toolsRegistration guarda o timestamp do último registro bem-sucedido de tools.
+	// Usado para re-registrar se o cache do servidor expirou (TTL 5min por padrão no servidor).
+	toolsRegistrationMu   sync.RWMutex
+	lastToolsRegistration time.Time
+	agentConn             *agentconn.Runtime
+	remoteDebug           *remoteDebugManager
+	syncCoord             *syncCoordinator
+	p2pCoord              *p2pCoordinator
+	updateTrigger         chan struct{}
+	agentInfo             agentInfoCache
+	appStorePolicy        appStorePolicyCache
+	debugSvc              *debug.Service
+	updatesSvc            *updates.Service
+	exporter              *updates.Exporter
+	inventorySvc          *appinventory.Service
+	supportSvc            *appsupport.Service
 
 	consolEngine *ConsolidationEngine
 
@@ -962,24 +967,24 @@ func (a *App) onPostBootstrapProvisioned(ctx context.Context) error {
 		}
 	}
 
-// 4. App-store, suporte e registro de tools MCP (deferred 30s — non-critical at startup).
-		a.safeGo(func() {
-			select {
-			case <-a.ctx.Done():
-				return
-			case <-time.After(30 * time.Second):
+	// 4. App-store, suporte e registro de tools MCP (deferred 30s — non-critical at startup).
+	a.safeGo(func() {
+		select {
+		case <-a.ctx.Done():
+			return
+		case <-time.After(30 * time.Second):
+		}
+		if _, err := a.loadEffectiveAppStorePolicy(a.ctx, true); err != nil {
+			a.logs.append("[startup] post-bootstrap: falha ao carregar app-store: " + err.Error())
+		}
+		if a.supportSvc != nil && a.featureEnabled(a.GetAgentConfiguration().KnowledgeBaseEnabled) {
+			if err := a.supportSvc.RefreshKnowledgeBase(); err != nil {
+				a.logs.append("[startup] post-bootstrap: falha ao atualizar knowledge base: " + err.Error())
 			}
-			if _, err := a.loadEffectiveAppStorePolicy(a.ctx, true); err != nil {
-				a.logs.append("[startup] post-bootstrap: falha ao carregar app-store: " + err.Error())
-			}
-			if a.supportSvc != nil && a.featureEnabled(a.GetAgentConfiguration().KnowledgeBaseEnabled) {
-				if err := a.supportSvc.RefreshKnowledgeBase(); err != nil {
-					a.logs.append("[startup] post-bootstrap: falha ao atualizar knowledge base: " + err.Error())
-				}
-			}
-			// Registra tools MCP do agent na API para o fluxo multi-round do chat
-			if err := a.RegisterAgentToolsOnServer(); err != nil {
-				a.logs.append("[startup] post-bootstrap: falha ao registrar agent tools: " + err.Error())
+		}
+		// Registra tools MCP do agent na API para o fluxo multi-round do chat
+		if err := a.RegisterAgentToolsOnServer(); err != nil {
+			a.logs.append("[startup] post-bootstrap: falha ao registrar agent tools: " + err.Error())
 		}
 	})
 
