@@ -186,7 +186,7 @@ func (c *p2pCoordinator) PublishFile(sourcePath string) (P2PArtifactView, error)
 	c.mu.Unlock()
 
 	// Cacheia o manifest gerado durante a cópia (evita rebuildChunkManifest).
-	c.cacheManifestAfterSinglePass(targetPath, artifactName, manifest)
+	c.cacheManifestAfterSinglePass(artifactName, manifest)
 
 	return P2PArtifactView{
 		ArtifactID:       CanonicalArtifactID("", artifactName, ""),
@@ -254,7 +254,7 @@ func (c *p2pCoordinator) PublishFileWithIDAndVersion(sourcePath string, artifact
 	c.mu.Unlock()
 
 	// Cacheia o manifest gerado durante a cópia (evita rebuildChunkManifest).
-	c.cacheManifestAfterSinglePass(targetPath, targetName, manifest)
+	c.cacheManifestAfterSinglePass(targetName, manifest)
 
 	return P2PArtifactView{
 		ArtifactID:       artifactID,
@@ -419,7 +419,7 @@ func (c *p2pCoordinator) publishFileSinglePass(sourcePath, targetPath, artifactN
 
 // cacheManifestAfterSinglePass salva o manifest gerado durante o single-pass
 // no cache de manifest, evitando que generateManifestEager precise re-ler o arquivo.
-func (c *p2pCoordinator) cacheManifestAfterSinglePass(path, artifactName string, manifest P2PChunkManifest) {
+func (c *p2pCoordinator) cacheManifestAfterSinglePass(artifactName string, manifest P2PChunkManifest) {
 	if c.transferServer == nil {
 		return
 	}
