@@ -404,6 +404,7 @@
   // ── Transferência P2P em tempo real ────────────────────────────────────
 
   var transferProgressMap = {};
+  var transferProgressTimers = {}; // timeout IDs por key, para evitar flicker
 
   function formatBytes(bytes) {
     if (!bytes || bytes <= 0) return "0 B";
@@ -451,19 +452,29 @@
         (p.error ? '<div style="color:var(--danger);font-size:0.76rem;margin-top:2px;">' + escapeHtml(p.error) + '</div>' : '') +
         (p.done && !p.error ? '<div style="color:var(--accent);font-size:0.76rem;margin-top:2px;">✓ Concluido</div>' : '') +
       '</div>';
-    });
-    transferProgressList.innerHTML = html;
 
-    // Remove completed/errored items after 5s
-    keys.forEach(function (key) {
-      var p = transferProgressMap[key];
+      // Agenda remoção apenas para entradas concluídas/erro, evitando
+      // múltiplos timers acumulados (cancela timer anterior primeiro).
       if (p.done) {
-        setTimeout(function () {
-          delete transferProgressMap[key];
-          renderTransferProgressList();
-        }, 5000);
+        clearTimeout(transferProgressTimers[key]);
+        transferProgressTimers[key] = setTimeout(function () {
+          // Só remove se a entrada ainda estiver como done (não foi reaberta
+          // por um novo chunk da mesma transferência).
+          var entry = transferProgressMap[key];
+          if (entry && entry.done) {
+            delete transferProgressMap[key];
+            delete transferProgressTimers[key];
+            renderTransferProgressList();
+          }
+        }, 10000);
+      } else {
+        // Transferência ainda em andamento: cancela qualquer timer pendente
+        // para que a entrada não desapareça enquanto há chunks sendo enviados.
+        clearTimeout(transferProgressTimers[key]);
+        delete transferProgressTimers[key];
       }
     });
+    transferProgressList.innerHTML = html;
   }
 
   function onTransferProgress(p) {

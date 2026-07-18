@@ -417,30 +417,41 @@ func handleStreamArtifactGet(s network.Stream, transfer *p2pTransferServer) {
 			req.ArtifactName, requesterID, chunkLen, written, copyErr))
 	}
 	if coord != nil {
-		done := p2pTransferProgress{
-			ArtifactName: req.ArtifactName,
-			PeerID:       requesterID,
-			BytesRead:    written,
-			TotalBytes:   chunkLen,
-			Operation:    "serve",
-			Direction:    "upload",
-			Done:         true,
-		}
-		if copyErr != nil {
-			done.Error = copyErr.Error()
-		}
-
-		// Atualiza a sessão com os bytes acumulados desse chunk e emite progresso final.
+		// Atualiza a sessão com os bytes acumulados desse chunk.
 		sessionKey := req.ArtifactName + "|" + requesterID
 		coord.servingSessionsMu.Lock()
 		sess, ok := coord.servingSessions[sessionKey]
 		if ok {
 			sess.servedBytes += written
-			done.BytesRead = sess.servedBytes
-			done.TotalBytes = sess.totalSize
 			sess.lastReported = sess.servedBytes
 		}
+		isComplete := ok && sess.servedBytes >= sess.totalSize
+		// Se deu erro ou a sessão não existe, também encerra.
+		isDone := copyErr != nil || isComplete || !ok
+		if isDone {
+			delete(coord.servingSessions, sessionKey)
+		}
 		coord.servingSessionsMu.Unlock()
+
+		done := p2pTransferProgress{
+			ArtifactName: req.ArtifactName,
+			PeerID:       requesterID,
+			Operation:    "serve",
+			Direction:    "upload",
+		}
+		// BytesRead/TotalBytes são sempre relativos ao arquivo completo
+		// para uma barra de progresso monotônica.
+		if ok {
+			done.BytesRead = sess.servedBytes
+			done.TotalBytes = sess.totalSize
+		} else {
+			done.BytesRead = written
+			done.TotalBytes = chunkLen
+		}
+		done.Done = isDone
+		if copyErr != nil {
+			done.Error = copyErr.Error()
+		}
 
 		coord.emitTransferProgress(done)
 	}

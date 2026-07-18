@@ -557,6 +557,7 @@ function initP2PPage() {
 // ── Progresso de transferência P2P em tempo real ─────────────────────
 
 var p2pTransferMap = {};
+var p2pTransferTimers = {}; // timeout IDs por key, para evitar flicker
 
 function formatP2PBytes(bytes) {
   if (!bytes || bytes <= 0) return "0 B";
@@ -621,14 +622,24 @@ function renderP2PTransferList() {
   });
   list.innerHTML = html;
 
-  // Limpar concluídos após 5s
+  // Agenda remoção apenas para entradas concluídas, cancelando timer anterior.
   keys.forEach(function (key) {
     var p = p2pTransferMap[key];
     if (p.done) {
-      setTimeout(function () {
-        delete p2pTransferMap[key];
-        renderP2PTransferList();
-      }, 5000);
+      clearTimeout(p2pTransferTimers[key]);
+      p2pTransferTimers[key] = setTimeout(function () {
+        var entry = p2pTransferMap[key];
+        if (entry && entry.done) {
+          delete p2pTransferMap[key];
+          delete p2pTransferTimers[key];
+          renderP2PTransferList();
+        }
+      }, 10000);
+    } else {
+      // Transferência em andamento: cancela timer pendente para evitar
+      // que a entrada suma enquanto chunks ainda estão sendo transferidos.
+      clearTimeout(p2pTransferTimers[key]);
+      delete p2pTransferTimers[key];
     }
   });
 }
