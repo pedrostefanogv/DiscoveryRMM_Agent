@@ -446,6 +446,12 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 		default:
 			// "fallback" — PSADT indisponível, usar DispatchNotification
 			a.logs.append(fmt.Sprintf("[agent] %s-action [FALLBACK] PSADT indisponível — usando DispatchNotification", action))
+			// Timeout mínimo de 60s para o fallback de confirmação,
+			// independente do delaySeconds recebido do servidor.
+			notifTimeout := pp.DelaySeconds
+			if notifTimeout < 60 {
+				notifTimeout = 60
+			}
 			notifResp := a.DispatchNotification(NotificationDispatchRequest{
 				NotificationID: fmt.Sprintf("restart-%d", time.Now().UnixNano()),
 				Title:          "Reinicialização Necessária",
@@ -454,7 +460,7 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 				Severity:       "high",
 				EventType:      "system_restart",
 				Layout:         "modal",
-				TimeoutSeconds: pp.DelaySeconds,
+				TimeoutSeconds: notifTimeout,
 			})
 
 			if notifResp.Result == "approved" {

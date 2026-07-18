@@ -105,12 +105,14 @@ func (a *App) handlePsadtAlert(ctx context.Context, p PsadtAlertPayload) (int, s
 		a.logs.append(fmt.Sprintf("[agent] psadt-alert iniciando type=%s alertId=%s timeout=%ds via go-psadt", p.Type, p.AlertID, p.TimeoutSeconds))
 	}
 
-	timeout := time.Duration(p.TimeoutSeconds+15) * time.Second
-	execCtx, cancel := context.WithTimeout(ctx, timeout)
+	// Init timeout: Import-Module + Get-Module -ListAvailable pode demorar.
+	// Mínimo de 90s para inicialização, independente do timeout do alerta.
+	initTimeout := 90 * time.Second
+	execCtx, cancel := context.WithTimeout(ctx, initTimeout)
 	defer cancel()
 
 	client, err := psadt.NewClient(
-		psadt.WithTimeout(timeout),
+		psadt.WithTimeout(initTimeout),
 		psadt.WithMinModuleVersion(strings.TrimSpace(psadtCfg.RequiredVersion)),
 	)
 	if err != nil {
@@ -358,12 +360,14 @@ func (a *App) showForceRestartBalloon(action string, delaySeconds int, message s
 		return "skipped"
 	}
 
-	timeout := 30 * time.Second
-	execCtx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
+	// Init pode demorar (Import-Module + Get-Module -ListAvailable).
+	// Mínimo de 60s, mesmo para balloon simples.
+	initTimeout := 60 * time.Second
+	initCtx, initCancel := context.WithTimeout(context.Background(), initTimeout)
+	defer initCancel()
 
 	client, err := psadt.NewClient(
-		psadt.WithTimeout(timeout),
+		psadt.WithTimeout(initTimeout),
 		psadt.WithMinModuleVersion(strings.TrimSpace(psadtCfg.RequiredVersion)),
 	)
 	if err != nil {
@@ -372,7 +376,7 @@ func (a *App) showForceRestartBalloon(action string, delaySeconds int, message s
 	}
 	defer client.Close()
 
-	session, err := client.OpenSessionWithContext(execCtx, pstypes.SessionConfig{
+	session, err := client.OpenSessionWithContext(initCtx, pstypes.SessionConfig{
 		AppVendor:      "Discovery",
 		AppName:        "Discovery Agent",
 		AppVersion:     "1.0",
@@ -446,12 +450,24 @@ func (a *App) showDeferrableRestartPrompt(action string, delaySeconds int, messa
 		}
 	}
 
-	timeout := time.Duration(delaySeconds+60) * time.Second
-	execCtx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
+	// Tempo para inicializar o PSADT + executar o diálogo.
+	// NewClient faz Import-Module + Get-Module -ListAvailable, que pode
+	// demorar em máquinas lentas ou com muitos módulos no PSModulePath.
+	// Usamos pelo menos 120s para a inicialização.
+	initTimeout := time.Duration(delaySeconds+60) * time.Second
+	if initTimeout < 120*time.Second {
+		initTimeout = 120 * time.Second
+	}
+
+	// Context separado para inicialização: timeout maior que o diálogo
+	// porque o CheckModuleVersion (Get-Module -ListAvailable) pode ser lento.
+	initCtx, initCancel := context.WithTimeout(context.Background(), initTimeout)
+	defer initCancel()
+
+	a.logs.append(fmt.Sprintf("[agent] psadt-%s-defer [DIAG] inicializando PSADT client (initTimeout=%v delaySeconds=%d deferMinutes=%d)", action, initTimeout, delaySeconds, deferMinutes))
 
 	client, err := psadt.NewClient(
-		psadt.WithTimeout(timeout),
+		psadt.WithTimeout(initTimeout),
 		psadt.WithMinModuleVersion(strings.TrimSpace(psadtCfg.RequiredVersion)),
 	)
 	if err != nil {
@@ -460,7 +476,9 @@ func (a *App) showDeferrableRestartPrompt(action string, delaySeconds int, messa
 	}
 	defer client.Close()
 
-	session, err := client.OpenSessionWithContext(execCtx, pstypes.SessionConfig{
+	a.logs.append(fmt.Sprintf("[agent] psadt-%s-defer [DIAG] PSADT client inicializado, abrindo sessão interativa", action))
+
+	session, err := client.OpenSessionWithContext(initCtx, pstypes.SessionConfig{
 		AppVendor:      "Discovery",
 		AppName:        "Discovery Agent",
 		AppVersion:     "1.0",

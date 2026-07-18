@@ -32,19 +32,19 @@ import (
 )
 
 const (
-	protoDiscoveryPeers    = "/discovery/peers/1.0.0"
-	protoArtifactAccess    = "/artifact/access/1.0.0"
-	protoArtifactManifest  = "/artifact/manifest/1.0.0"
-	protoArtifactGet       = "/artifact/get/1.0.0"
-	protoArtifactReplicate = "/artifact/replicate/1.0.0"
-	protoFetchCandidacy    = "/fetch/candidacy/1.0.0"
-	protoFetchHeartbeat    = "/fetch/heartbeat/1.0.0"
-	libp2pStreamTimeout        = 30 * time.Second
-	libp2pTransferTimeout      = 2 * time.Minute
-	libp2pCandidacyTimeout     = 10 * time.Second
-	libp2pTransferTimeoutMax   = 30 * time.Minute
-	libp2pManifestTimeout      = 5 * time.Minute   // cobre leitura completa do arquivo para gerar manifest
-	libp2pMinTransferSpeed     = 1 * 1024 * 1024   // 1 MB/s — piso de velocidade para cálculo de timeout
+	protoDiscoveryPeers         = "/discovery/peers/1.0.0"
+	protoArtifactAccess         = "/artifact/access/1.0.0"
+	protoArtifactManifest       = "/artifact/manifest/1.0.0"
+	protoArtifactGet            = "/artifact/get/1.0.0"
+	protoArtifactReplicate      = "/artifact/replicate/1.0.0"
+	protoFetchCandidacy         = "/fetch/candidacy/1.0.0"
+	protoFetchHeartbeat         = "/fetch/heartbeat/1.0.0"
+	libp2pStreamTimeout         = 30 * time.Second
+	libp2pTransferTimeout       = 2 * time.Minute
+	libp2pCandidacyTimeout      = 10 * time.Second
+	libp2pTransferTimeoutMax    = 30 * time.Minute
+	libp2pManifestTimeout       = 5 * time.Minute // cobre leitura completa do arquivo para gerar manifest
+	libp2pMinTransferSpeed      = 1 * 1024 * 1024 // 1 MB/s — piso de velocidade para cálculo de timeout
 	libp2pTransferTimeoutMargin = 30 * time.Second
 )
 
