@@ -20,9 +20,25 @@ Este documento descreve os arquivos locais de configuração usados pelo agent D
 
 ```json
 {
-  "serverUrl": "https://discovery.exemplo.local",
+  "apiServer": "discovery.exemplo.local",
   "deployToken": "SEU_DEPLOY_TOKEN",
   "allowInsecureTls": true
+}
+```
+
+## Exemplo completo após bootstrap
+
+```json
+{
+  "apiServer": "tngplacas.com.br",
+  "autoProvisioning": true,
+  "authToken": "mdz_...",
+  "agentId": "019f70eb-...",
+  "clientId": "019dead3-...",
+  "siteId": "019dead3-...",
+  "agentUpdate": { ... },
+  "p2p": { ... },
+  "chatLog": { "enabled": true }
 }
 ```
 
@@ -30,12 +46,13 @@ Este documento descreve os arquivos locais de configuração usados pelo agent D
 
 | Campo | Tipo | Obrigatório | Descrição |
 |---|---|---:|---|
-| `serverUrl` | string | não | URL base legada/canônica do servidor. Se `apiScheme`/`apiServer` não vierem preenchidos, o agent tenta derivá-los daqui. |
-| `deployToken` | string | não | Token de bootstrap usado em `/api/agent-install/register`. Depois que o agent recebe `authToken` e `agentId`, esse campo tende a ser removido do arquivo. |
+| `apiServer` | string | **sim** | Host da API sem scheme e sem path. Ex: `tngplacas.com.br` ou `192.168.1.131:8443`. Campo canônico para conexão com o servidor. |
+| `apiInsecure` | bool | não | Quando `true`, usa `http://` em vez de `https://`. Só deve ser usado em laboratório. Padrão (ausente/false): `https`. **Substitui o legado `apiScheme`.** |
+| ~~`serverUrl`~~ | string | não | **Deprecated.** URL completa legada usada apenas pelo instalador NSIS no bootstrap. Após o primeiro registro bem-sucedido, este campo é automaticamente removido do `config.json`. Aceito em leitura para retrocompatibilidade. |
+| ~~`apiScheme`~~ | string | não | **Deprecated.** Aceito em leitura para retrocompatibilidade. Substituído por `apiInsecure`. Se `apiScheme: "http"` for lido, é convertido para `apiInsecure: true`. |
+| `deployToken` | string | não | Token de bootstrap usado em `/api/agent-install/register`. Depois que o agent recebe `authToken` e `agentId`, esse campo é removido do arquivo. |
 | `apiKey` | string | não | Alias legado de leitura para `deployToken`. Não deve ser usado em novas instalações. |
 | `autoProvisioning` | bool | não | Habilita a participação local no fluxo de **zero-touch auto-provisioning** via P2P. Quando `false`, o agente não inicia o loop de onboarding mesmo estando não configurado. Quando ausente, o agente segue a feature flag do servidor. **Substitui o legado `discoveryEnabled`**, que ainda é aceito em leitura para retrocompat. |
-| `apiScheme` | string | não | Esquema da API. Valores esperados: `http` ou `https`. Em ambiente remoto, o padrão operacional é `https`. |
-| `apiServer` | string | não | Host da API sem path, por exemplo `192-168-1-131.nip.io` ou `api.exemplo.local:8443`. |
 | `authToken` | string | não | Token definitivo do agent após bootstrap. É usado nas chamadas autenticadas para API e sync. |
 | `agentId` | string | não | Identificador definitivo do agent após bootstrap. Também é usado nos fluxos autenticados de API e NATS. |
 | `natsServer` | string | não | Endpoint NATS canônico. Pode ser `nats://host:4222`, `ws://...` ou `wss://...`, respeitando as políticas de segurança do runtime. |
@@ -87,10 +104,10 @@ Este documento descreve os arquivos locais de configuração usados pelo agent D
 
 O arquivo `installer.json` não substitui todo o `config.json`. Hoje ele é tratado como override para estes campos:
 
-1. `serverUrl`
-2. `deployToken` ou `apiKey`
-3. `apiScheme`
-4. `apiServer`
+1. `apiServer`
+2. `apiInsecure`
+3. ~~`serverUrl`~~ (legado, convertido para `apiServer` + `apiInsecure`)
+4. `deployToken` ou `apiKey`
 5. `autoProvisioning` (legado: `discoveryEnabled`)
 6. `natsServer`
 7. `natsWsServer`
@@ -102,7 +119,6 @@ Para API com certificado autoassinado, configure:
 
 ```json
 {
-  "apiScheme": "https",
   "apiServer": "192-168-1-131.nip.io",
   "deployToken": "SEU_DEPLOY_TOKEN",
   "allowInsecureTls": true
@@ -118,6 +134,8 @@ O instalador também aceita `/AUTO_PROVISIONING=0|1` (alias legado: `/DISCOVERY=
 ## Observações operacionais
 
 1. Se `authToken` e `agentId` estiverem vazios, o agent tenta bootstrap usando `deployToken`.
-2. Se `apiScheme`/`apiServer` estiverem vazios, o agent tenta derivá-los de `serverUrl`.
-3. `authToken` e `agentId` normalmente são mantidos pelo próprio agent; evitar edição manual quando o bootstrap já foi concluído.
-4. A variável de ambiente `DISCOVERY_ALLOW_INSECURE_TLS=1` continua existindo como fallback de laboratório, mas o caminho preferido agora é `allowInsecureTls` no `config.json`.
+2. Se `apiServer` estiver vazio, o agent tenta derivá-lo de `serverUrl` (legado).
+3. O scheme da API é sempre `https`, a menos que `apiInsecure: true` esteja definido (HTTP simples, apenas laboratório).
+4. `serverUrl` e `apiScheme` são campos legados — aceitos na leitura mas nunca escritos de volta após o bootstrap.
+5. `authToken` e `agentId` normalmente são mantidos pelo próprio agent; evitar edição manual quando o bootstrap já foi concluído.
+6. A variável de ambiente `DISCOVERY_ALLOW_INSECURE_TLS=1` continua existindo como fallback de laboratório, mas o caminho preferido agora é `allowInsecureTls` no `config.json`.

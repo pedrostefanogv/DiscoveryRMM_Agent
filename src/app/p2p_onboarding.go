@@ -376,9 +376,12 @@ func (a *App) registerWithDeployKey(serverURL, deployKey string) (P2POnboardingR
 	if err != nil {
 		return P2POnboardingResult{}, fmt.Errorf("falha ao carregar config para persistencia zero-touch: %w", err)
 	}
-	inst.ServerURL = buildZeroTouchServerURL(credentials.ApiScheme, credentials.ApiServer)
 	inst.ApiScheme = strings.TrimSpace(credentials.ApiScheme)
 	inst.ApiServer = strings.TrimSpace(credentials.ApiServer)
+	if strings.ToLower(strings.TrimSpace(credentials.ApiScheme)) == "http" {
+		v := true
+		inst.ApiInsecure = &v
+	}
 	inst.AuthToken = strings.TrimSpace(credentials.AuthToken)
 	inst.AgentID = strings.TrimSpace(credentials.AgentID)
 	if strings.TrimSpace(credentials.ClientID) != "" {
@@ -390,7 +393,7 @@ func (a *App) registerWithDeployKey(serverURL, deployKey string) (P2POnboardingR
 	// Mantem o deploy token para resiliencia de bootstrap (fallback de re-registro).
 	inst.APIKey = strings.TrimSpace(deployKey)
 
-	if strings.TrimSpace(inst.ApiScheme) == "" || strings.TrimSpace(inst.ApiServer) == "" ||
+	if strings.TrimSpace(inst.ApiServer) == "" ||
 		strings.TrimSpace(inst.AuthToken) == "" || strings.TrimSpace(inst.AgentID) == "" {
 		return P2POnboardingResult{}, fmt.Errorf("credenciais incompletas apos registro zero-touch")
 	}
@@ -586,7 +589,7 @@ func (a *App) applyZeroTouchRuntimeConnection(inst InstallerConfig) {
 		return
 	}
 	if a.debugSvc != nil {
-		a.debugSvc.ApplyRuntimeConnectionConfig(inst.ApiScheme, inst.ApiServer, inst.AuthToken, inst.AgentID, inst.NatsServer, inst.NatsWsServer)
+		a.debugSvc.ApplyRuntimeConnectionConfig(inst.APIScheme(), inst.ApiServer, inst.AuthToken, inst.AgentID, inst.NatsServer, inst.NatsWsServer)
 	}
 
 	if a.agentConn != nil {

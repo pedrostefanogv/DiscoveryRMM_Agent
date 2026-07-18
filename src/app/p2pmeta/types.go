@@ -135,6 +135,7 @@ type ArtifactView struct {
 
 type PeerArtifactIndexView struct {
 	PeerAgentID    string         `json:"peerAgentId"`
+	PeerHost       string         `json:"peerHost,omitempty"`
 	LastUpdatedUTC string         `json:"lastUpdatedUtc"`
 	Source         string         `json:"source"`
 	Artifacts      []ArtifactView `json:"artifacts"`

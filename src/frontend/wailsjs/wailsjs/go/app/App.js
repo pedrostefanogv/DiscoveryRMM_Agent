@@ -94,6 +94,10 @@ export function DeleteLocalMemory(arg1) {
   return window['go']['app']['App']['DeleteLocalMemory'](arg1);
 }
 
+export function DeleteP2PArtifact(arg1) {
+  return window['go']['app']['App']['DeleteP2PArtifact'](arg1);
+}
+
 export function DetectApiFeatures(arg1) {
   return window['go']['app']['App']['DetectApiFeatures'](arg1);
 }
@@ -632,6 +636,10 @@ export function StopChatStream() {
 
 export function StopDebugHTTPServer() {
   return window['go']['app']['App']['StopDebugHTTPServer']();
+}
+
+export function SyncNetworkConnections() {
+  return window['go']['app']['App']['SyncNetworkConnections']();
 }
 
 export function SyncP2PBootstrapNow() {

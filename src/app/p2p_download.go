@@ -48,6 +48,8 @@ func (c *p2pCoordinator) DownloadArtifactFromPeer(ctx context.Context, artifactN
 		// Obter manifest do peer para download chunked.
 		manifest, manifestErr := libp2pFetchManifest(ctx, h, peerID, artifactName, requesterID)
 		if manifestErr != nil || manifest.TotalChunks == 0 {
+			// Cache stale: peer não tem mais este artifact. Invalida.
+			c.InvalidatePeerArtifact(sourcePeerID, artifactName)
 			err := fmt.Errorf("manifest indisponivel: %w", manifestErr)
 			c.appendAudit("pull", artifactName, sourcePeerID, "libp2p", false, err.Error())
 			c.emitTransferDone(artifactName, sourcePeerID, "pull", err)
@@ -157,9 +159,17 @@ func (c *p2pCoordinator) downloadArtifactSwarm(ctx context.Context, artifactName
 	var manifestErr error
 	manifest, manifestErr = libp2pFetchManifest(ctx, h, peerEntries[0].libp2pID, artifactName, requesterID)
 	if manifestErr != nil || manifest.TotalChunks == 0 {
-		err := fmt.Errorf("manifest indisponivel: %w", manifestErr)
-		c.appendAudit("swarm-pull", artifactName, peerEntries[0].peerID, "automation", false, err.Error())
-		return P2PArtifactView{}, err
+		// Cache stale: primeiro peer não tem mais este artifact. Invalida e tenta próximo.
+		c.InvalidatePeerArtifact(peerEntries[0].peerID, artifactName)
+		// Tenta o próximo peer da lista, se houver.
+		if len(peerEntries) > 1 {
+			manifest, manifestErr = libp2pFetchManifest(ctx, h, peerEntries[1].libp2pID, artifactName, requesterID)
+		}
+		if manifestErr != nil || manifest.TotalChunks == 0 {
+			err := fmt.Errorf("manifest indisponivel: %w", manifestErr)
+			c.appendAudit("swarm-pull", artifactName, peerEntries[0].peerID, "automation", false, err.Error())
+			return P2PArtifactView{}, err
+		}
 	}
 
 	destDir := c.app.p2pTempDir()

@@ -163,8 +163,9 @@ function p2pRenderPeers(peers) {
       peersBody.innerHTML = peers.map(function (peer) {
         var addr = (peer.address || '-') + (peer.port ? (':' + peer.port) : '');
         var agentId = (peer.agentId || '-');
+        var displayName = (peer.host || agentId);
         return '<tr>' +
-          '<td class="mono">' + escapeHtml(agentId) + '</td>' +
+          '<td class="mono" title="' + escapeHtml(agentId) + '">' + escapeHtml(displayName) + '</td>' +
           '<td class="mono">' + escapeHtml(addr) + '</td>' +
           '<td>' + escapeHtml((peer.source || '-') + ' / ' + (peer.connectedVia || '-')) + '</td>' +
           '<td style="white-space:nowrap;">' +
@@ -231,17 +232,34 @@ function p2pRenderArtifacts(artifacts) {
 
   if (artifactsBody) {
     if (!artifacts || !artifacts.length) {
-      artifactsBody.innerHTML = '<tr><td colspan="3">' + escapeHtml(translate('p2p.noArtifacts')) + '</td></tr>';
+      artifactsBody.innerHTML = '<tr><td colspan="4">' + escapeHtml(translate('p2p.noArtifacts')) + '</td></tr>';
     } else {
       artifactsBody.innerHTML = artifacts.map(function (artifact) {
         var sizeBytes = Number(artifact.sizeBytes || 0);
         var sizeLabel = formatP2PBytes(sizeBytes);
+        var name = artifact.artifactName || '-';
         return '<tr>' +
-          '<td class="mono">' + escapeHtml(artifact.artifactName || '-') + '</td>' +
+          '<td class="mono">' + escapeHtml(name) + '</td>' +
           '<td title="' + escapeHtml(String(sizeBytes) + ' bytes') + '">' + escapeHtml(sizeLabel) + '</td>' +
           '<td class="mono">' + escapeHtml((artifact.checksumSha256 || '-').slice(0, 18)) + '...</td>' +
+          '<td style="white-space:nowrap;">' +
+            '<button class="btn btn-sm danger" data-p2p-delete-artifact="' + escapeHtml(name) + '" title="Apagar este artifact">🗑️</button>' +
+          '</td>' +
           '</tr>';
       }).join('');
+
+      artifactsBody.querySelectorAll('[data-p2p-delete-artifact]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          var artifactName = this.getAttribute('data-p2p-delete-artifact');
+          if (!window.confirm('Apagar o artifact "' + artifactName + '"?')) return;
+          p2pApi().DeleteP2PArtifact(artifactName).then(function (msg) {
+            p2pSetStatus(msg || 'Artifact apagado.', 'ok');
+            loadP2PView();
+          }).catch(function (err) {
+            p2pSetStatus('Erro ao apagar: ' + (err && err.message ? err.message : String(err)), 'error');
+          });
+        });
+      });
     }
   }
 

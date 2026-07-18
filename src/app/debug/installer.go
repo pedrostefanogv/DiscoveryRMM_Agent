@@ -99,6 +99,9 @@ func mergeInstallerOverride(base, override InstallerConfig) InstallerConfig {
 	if override.AllowInsecureTLS != nil {
 		base.AllowInsecureTLS = override.AllowInsecureTLS
 	}
+	if override.ApiInsecure != nil {
+		base.ApiInsecure = override.ApiInsecure
+	}
 	if strings.TrimSpace(override.NatsServer) != "" {
 		base.NatsServer = strings.TrimSpace(override.NatsServer)
 	}
@@ -180,6 +183,8 @@ func persistInstallerConfig(sourcePath string, cfg InstallerConfig) (string, err
 		return "", fmt.Errorf("nenhum caminho disponivel para persistir config de producao")
 	}
 
+	cleanInstallerConfigForPersistence(&cfg)
+
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("falha ao serializar config de producao: %w", err)
@@ -203,10 +208,18 @@ func persistInstallerConfig(sourcePath string, cfg InstallerConfig) (string, err
 	return "", fmt.Errorf("falha ao persistir config de producao: %s", strings.Join(errs, " | "))
 }
 
+// cleanInstallerConfigForPersistence remove campos legados redundantes antes da serialização.
+// serverUrl e apiScheme são deriváveis e não devem ser persistidos após o bootstrap.
+func cleanInstallerConfigForPersistence(cfg *InstallerConfig) {
+	cfg.ServerURL = ""
+	cfg.ApiScheme = ""
+}
+
 func scrubInstallerConfigSource(path string, cfg InstallerConfig) error {
 	if strings.TrimSpace(path) == "" {
 		return nil
 	}
+	cleanInstallerConfigForPersistence(&cfg)
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err

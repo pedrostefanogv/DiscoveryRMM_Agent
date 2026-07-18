@@ -154,7 +154,7 @@ func (a *App) resolveAgentChatRuntimeConfig(input ChatConfig) (ai.Config, error)
 	}
 
 	dbg := a.GetDebugConfig()
-	scheme := strings.TrimSpace(strings.ToLower(dbg.ApiScheme))
+	scheme := dbg.APIScheme()
 	server := strings.TrimSpace(dbg.ApiServer)
 
 	if endpoint == "" && (scheme == "http" || scheme == "https") && server != "" {

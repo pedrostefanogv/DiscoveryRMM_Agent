@@ -58,11 +58,11 @@ func (c *p2pCoordinator) runCloudBootstrap(ctx context.Context) (int, error) {
 	debugCfg := c.app.GetDebugConfig()
 	agentID := strings.TrimSpace(debugCfg.AgentID)
 	authToken := strings.TrimSpace(debugCfg.AuthToken)
-	apiScheme := strings.TrimSpace(debugCfg.ApiScheme)
+	apiScheme := debugCfg.APIScheme()
 	apiServer := strings.TrimSpace(debugCfg.ApiServer)
 
-	if agentID == "" || authToken == "" || apiScheme == "" || apiServer == "" {
-		err := fmt.Errorf("configuração incompleta: agentId, authToken, apiScheme ou apiServer ausentes")
+	if agentID == "" || authToken == "" || apiServer == "" {
+		err := fmt.Errorf("configuração incompleta: agentId, authToken ou apiServer ausentes")
 		c.app.logs.append("[p2p][cloud-bootstrap] " + err.Error())
 		return 0, err
 	}

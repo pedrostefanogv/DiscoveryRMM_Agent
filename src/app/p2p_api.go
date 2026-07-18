@@ -345,12 +345,12 @@ func (a *App) StartP2PTelemetryLoop(ctx context.Context) {
 
 func (a *App) p2pAPIAuthEndpoint(path string) (string, string, string, error) {
 	cfg := a.GetDebugConfig()
-	scheme := strings.TrimSpace(cfg.ApiScheme)
+	scheme := cfg.APIScheme()
 	server := strings.TrimSpace(cfg.ApiServer)
 	token := strings.TrimSpace(cfg.AuthToken)
 	agentID := strings.TrimSpace(cfg.AgentID)
-	if scheme == "" || server == "" {
-		return "", "", "", fmt.Errorf("apiScheme/apiServer ausentes")
+	if server == "" {
+		return "", "", "", fmt.Errorf("apiServer ausente")
 	}
 	if token == "" {
 		return "", "", "", fmt.Errorf("authToken ausente")

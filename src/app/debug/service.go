@@ -124,6 +124,7 @@ func (s *Service) LoadPersistedConfig() {
 			return
 		}
 		normalizeSecurityConfig(&cfg)
+		cfg.normalizeApiScheme()
 
 		s.mu.Lock()
 		s.config = cfg
@@ -191,15 +192,18 @@ func (s *Service) LoadConnectionConfigFromProduction() {
 		s.logf("[config] P2P inicializado com enabled=true")
 	}
 
-	if strings.TrimSpace(inst.ApiScheme) == "" || strings.TrimSpace(inst.ApiServer) == "" {
+	if inst.ApiServer == "" {
 		scheme, server, parseErr := parseInstallerServerURL(inst.ServerURL)
 		if parseErr == nil {
-			inst.ApiScheme = scheme
 			inst.ApiServer = server
+			if scheme == "http" {
+				v := true
+				inst.ApiInsecure = &v
+			}
 		}
 	}
 
-	if strings.TrimSpace(inst.ApiScheme) == "" || strings.TrimSpace(inst.ApiServer) == "" {
+	if inst.ApiServer == "" {
 		if strings.TrimSpace(inst.NatsServer) == "" && strings.TrimSpace(inst.NatsWsServer) == "" {
 			s.logf("[config] config de produção sem apiScheme/apiServer e sem NATS: " + path)
 			return
@@ -211,7 +215,7 @@ func (s *Service) LoadConnectionConfigFromProduction() {
 		return
 	}
 
-	s.ApplyRuntimeConnectionConfig(inst.ApiScheme, inst.ApiServer, inst.AuthToken, inst.AgentID, inst.NatsServer, inst.NatsWsServer)
+	s.ApplyRuntimeConnectionConfig(inst.APIScheme(), inst.ApiServer, inst.AuthToken, inst.AgentID, inst.NatsServer, inst.NatsWsServer)
 	s.logf("[config] credenciais carregadas do config de produção: " + path)
 }
 
@@ -224,6 +228,8 @@ func (s *Service) ApplyRuntimeConnectionConfig(apiScheme, apiServer, authToken, 
 	cfg.AgentID = strings.TrimSpace(agentID)
 	cfg.NatsServer = strings.TrimSpace(natsServer)
 	cfg.NatsWsServer = strings.TrimSpace(natsWsServer)
+	// Sincroniza ApiInsecure com base no scheme recebido.
+	cfg.ApiInsecure = (cfg.ApiScheme == "http")
 	if cfg.NatsServer == "" {
 		cfg.NatsServer = deriveNativeNATSServerFromAPI(cfg.ApiServer)
 	}
@@ -352,14 +358,23 @@ func (s *Service) BootstrapAgentCredentialsFromInstallerConfig(ctx context.Conte
 	}
 	s.applyAllowInsecureTLS(installerConfigAllowInsecureTLS(inst))
 
-	scheme, server, err := parseInstallerServerURL(inst.ServerURL)
-	if err != nil {
-		s.logf("[installer-bootstrap] serverUrl invalida no config do instalador: " + err.Error())
-		return
+	scheme := inst.APIScheme()
+	server := inst.ApiServer
+	if server == "" {
+		// Fallback: deriva de serverUrl legado (instalador NSIS).
+		parsedScheme, parsedServer, err := parseInstallerServerURL(inst.ServerURL)
+		if err != nil {
+			s.logf("[installer-bootstrap] serverUrl invalida no config do instalador: " + err.Error())
+			return
+		}
+		scheme = parsedScheme
+		server = parsedServer
+		inst.ApiServer = parsedServer
+		if parsedScheme == "http" {
+			v := true
+			inst.ApiInsecure = &v
+		}
 	}
-
-	inst.ApiScheme = scheme
-	inst.ApiServer = server
 
 	if strings.TrimSpace(inst.AuthToken) != "" && strings.TrimSpace(inst.AgentID) != "" {
 		s.ApplyRuntimeConnectionConfig(scheme, server, inst.AuthToken, inst.AgentID, inst.NatsServer, inst.NatsWsServer)
@@ -413,8 +428,10 @@ func (s *Service) BootstrapAgentCredentialsFromInstallerConfig(ctx context.Conte
 	inst.AuthToken = token
 	inst.AgentID = agentID
 	inst.APIKey = ""
-	// Normaliza ServerURL para manter consistência com ApiScheme/ApiServer.
-	inst.ServerURL = resolvedScheme + "://" + server
+	if resolvedScheme == "http" {
+		v := true
+		inst.ApiInsecure = &v
+	}
 	if strings.TrimSpace(clientID) != "" {
 		inst.ClientID = strings.TrimSpace(clientID)
 	}
@@ -437,7 +454,7 @@ func (s *Service) BootstrapAgentCredentialsFromInstallerConfig(ctx context.Conte
 		}
 	}
 
-	s.ApplyRuntimeConnectionConfig(inst.ApiScheme, inst.ApiServer, inst.AuthToken, inst.AgentID, inst.NatsServer, inst.NatsWsServer)
+	s.ApplyRuntimeConnectionConfig(inst.APIScheme(), inst.ApiServer, inst.AuthToken, inst.AgentID, inst.NatsServer, inst.NatsWsServer)
 
 	s.logf("[installer-bootstrap] credenciais aplicadas com sucesso (leitura: " + path + ", persistencia: " + writePath + ", agentId=" + agentID + ", clientId=" + clientID + ", siteId=" + siteID + ")")
 	if s.agentConn != nil {
@@ -473,6 +490,11 @@ func (s *Service) SetConfig(cfg Config) error {
 	cfg.AuthToken = strings.TrimSpace(cfg.AuthToken)
 	normalizeSecurityConfig(&cfg)
 
+	cfg.normalizeApiScheme()
+
+	// Sincroniza ApiInsecure com ApiScheme (mantém compatibilidade com debug UI que ainda usa ApiScheme).
+	cfg.ApiInsecure = (cfg.ApiScheme == "http")
+
 	if cfg.ApiServer != "" {
 		if cfg.ApiScheme != "http" && cfg.ApiScheme != "https" {
 			return fmt.Errorf("apiScheme invalido: use 'http' ou 'https'")
@@ -496,12 +518,12 @@ func (s *Service) SetConfig(cfg Config) error {
 		cfg.Scheme = "nats"
 		cfg.Server = cfg.NatsWsServer
 	} else if cfg.ApiServer != "" {
-		cfg.Scheme = cfg.ApiScheme
+		cfg.Scheme = cfg.APIScheme()
 		cfg.Server = cfg.ApiServer
 	}
 
 	s.logf(fmt.Sprintf("[debug] atualizando configuracao: api=%s://%s nats=%s natsWs=%s agentId=%s",
-		cfg.ApiScheme, cfg.ApiServer, cfg.NatsServer, cfg.NatsWsServer, cfg.AgentID))
+		cfg.APIScheme(), cfg.ApiServer, cfg.NatsServer, cfg.NatsWsServer, cfg.AgentID))
 
 	s.mu.Lock()
 	s.config = cfg
@@ -548,11 +570,12 @@ func (s *Service) TestConnection(cfg Config) (string, error) {
 	var results []string
 
 	if cfg.ApiServer != "" {
-		s.logf(fmt.Sprintf("[debug-test] testando API: %s://%s", cfg.ApiScheme, cfg.ApiServer))
+		scheme := cfg.APIScheme()
+		s.logf(fmt.Sprintf("[debug-test] testando API: %s://%s", scheme, cfg.ApiServer))
 		if cfg.AuthToken == "" || cfg.AgentID == "" {
 			return "", fmt.Errorf("authToken/agentId obrigatorios para testar endpoint /api/v1/agent-auth")
 		}
-		target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/configuration"
+		target := scheme + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/configuration"
 		client := tlsutil.NewHTTPClient(10 * time.Second)
 		req, err := http.NewRequest(http.MethodGet, target, nil)
 		if err != nil {
@@ -643,11 +666,12 @@ func (s *Service) GetRealtimeStatus() (RealtimeStatus, error) {
 	if cfg.ApiServer == "" {
 		return RealtimeStatus{}, fmt.Errorf("servidor API nao configurado")
 	}
-	if cfg.ApiScheme != "http" && cfg.ApiScheme != "https" {
+	scheme := cfg.APIScheme()
+	if scheme != "http" && scheme != "https" {
 		return RealtimeStatus{}, fmt.Errorf("apiScheme invalido: use http ou https")
 	}
 
-	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/realtime/status"
+	target := scheme + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/realtime/status"
 	req, err := http.NewRequest(http.MethodGet, target, nil)
 	if err != nil {
 		return RealtimeStatus{}, fmt.Errorf("URL invalida: %w", err)

@@ -2330,6 +2330,7 @@ export namespace p2pmeta {
 	
 	export class PeerArtifactIndexView {
 	    peerAgentId: string;
+	    peerHost?: string;
 	    lastUpdatedUtc: string;
 	    source: string;
 	    artifacts: ArtifactView[];
@@ -2341,6 +2342,7 @@ export namespace p2pmeta {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.peerAgentId = source["peerAgentId"];
+	        this.peerHost = source["peerHost"];
 	        this.lastUpdatedUtc = source["lastUpdatedUtc"];
 	        this.source = source["source"];
 	        this.artifacts = this.convertValues(source["artifacts"], ArtifactView);

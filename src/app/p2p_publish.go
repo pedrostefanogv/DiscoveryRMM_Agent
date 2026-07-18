@@ -57,7 +57,7 @@ func (c *p2pCoordinator) ListArtifacts() ([]P2PArtifactView, error) {
 
 // ensureManifestForArtifact verifica se um manifest cacheado existe e é válido;
 // caso contrário, gera e persiste um novo manifest para o artifact.
-func (c *p2pCoordinator) ensureManifestForArtifact(artifactName, path string, modTime time.Time) {
+func (c *p2pCoordinator) ensureManifestForArtifact(artifactName, path string, _ time.Time) {
 	if c.transferServer == nil {
 		return
 	}
@@ -88,6 +88,42 @@ func (c *p2pCoordinator) ensureManifestForArtifact(artifactName, path string, mo
 	c.app.logs.append(fmt.Sprintf("[p2p] manifest gerado: %s chunks=%d size=%d", artifactName, manifest.TotalChunks, manifest.TotalSize))
 }
 
+// deleteArtifact remove um único artifact do diretório P2P:
+// arquivo, manifest cacheado e entrada do sha256Cache.
+func (c *p2pCoordinator) deleteArtifact(artifactName string) error {
+	artifactName = sanitizeArtifactName(artifactName)
+	if artifactName == "" {
+		return fmt.Errorf("nome de artifact inválido")
+	}
+
+	dir := c.app.p2pTempDir()
+	path := filepath.Join(dir, artifactName)
+
+	// Remove o arquivo.
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("falha ao remover arquivo: %w", err)
+	}
+
+	// Remove o manifest cacheado.
+	if c.transferServer != nil {
+		manifestDir := c.transferServer.manifestDir()
+		if manifestDir != "" {
+			manifestPath := cachedManifestPath(manifestDir, artifactName)
+			if manifestPath != "" {
+				_ = os.Remove(manifestPath)
+			}
+		}
+	}
+
+	// Remove o cache SHA256 em memória.
+	c.sha256CacheMu.Lock()
+	delete(c.sha256Cache, path)
+	c.sha256CacheMu.Unlock()
+
+	c.app.logs.append(fmt.Sprintf("[p2p] artifact apagado: %s", artifactName))
+	return nil
+}
+
 func (c *p2pCoordinator) PublishTestArtifact(artifactName, content string) (P2PArtifactView, error) {
 	artifactName = sanitizeArtifactName(artifactName)
 	if artifactName == "" {
@@ -113,6 +149,10 @@ func (c *p2pCoordinator) PublishTestArtifact(artifactName, content string) (P2PA
 	c.mu.Lock()
 	c.metrics.PublishedArtifacts++
 	c.mu.Unlock()
+
+	// Gera manifest em background para ficar pronto antes do primeiro download.
+	go c.generateManifestEager(path, artifactName)
+
 	return P2PArtifactView{
 		ArtifactID:       CanonicalArtifactID("", artifactName, ""),
 		ArtifactName:     artifactName,
@@ -192,6 +232,10 @@ func (c *p2pCoordinator) PublishFile(sourcePath string) (P2PArtifactView, error)
 	c.mu.Lock()
 	c.metrics.PublishedArtifacts++
 	c.mu.Unlock()
+
+	// Gera manifest em background para ficar pronto antes do primeiro download.
+	go c.generateManifestEager(targetPath, artifactName)
+
 	return P2PArtifactView{
 		ArtifactID:       CanonicalArtifactID("", artifactName, ""),
 		ArtifactName:     artifactName,
@@ -283,6 +327,10 @@ func (c *p2pCoordinator) PublishFileWithIDAndVersion(sourcePath string, artifact
 	c.mu.Lock()
 	c.metrics.PublishedArtifacts++
 	c.mu.Unlock()
+
+	// Gera manifest em background para ficar pronto antes do primeiro download.
+	go c.generateManifestEager(targetPath, targetName)
+
 	return P2PArtifactView{
 		ArtifactID:       artifactID,
 		ArtifactName:     targetName,
@@ -293,6 +341,34 @@ func (c *p2pCoordinator) PublishFileWithIDAndVersion(sourcePath string, artifact
 		Available:        true,
 		LastHeartbeatUTC: formatTimeRFC3339(time.Now().UTC()),
 	}, nil
+}
+
+// generateManifestEager constrói e cacheia o manifest para um artifact recém-publicado.
+// Executado em goroutine para não bloquear o retorno ao chamador.
+func (c *p2pCoordinator) generateManifestEager(path, artifactName string) {
+	if c.transferServer == nil {
+		return
+	}
+	manifestDir := c.transferServer.manifestDir()
+	if manifestDir == "" {
+		return
+	}
+
+	artifactID := CanonicalArtifactID("", artifactName, "")
+	var chunkSize int64 = defaultChunkSizeBytes
+	if cfg := c.app.GetP2PConfig(); cfg.ChunkSizeBytes > 0 {
+		chunkSize = cfg.ChunkSizeBytes
+	}
+	manifest, err := buildChunkManifest(path, artifactID, chunkSize)
+	if err != nil {
+		c.app.logs.append(fmt.Sprintf("[p2p] aviso: falha ao gerar manifest eager para %s: %v", artifactName, err))
+		return
+	}
+	if err := saveCachedManifest(manifestDir, artifactName, manifest); err != nil {
+		c.app.logs.append(fmt.Sprintf("[p2p] aviso: falha ao salvar manifest eager para %s: %v", artifactName, err))
+		return
+	}
+	c.app.logs.append(fmt.Sprintf("[p2p] manifest eager gerado: %s chunks=%d size=%d", artifactName, manifest.TotalChunks, manifest.TotalSize))
 }
 
 // CleanupStaleArtifacts remove artifacts do diretório local que não foram

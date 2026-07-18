@@ -128,8 +128,9 @@
 
     peersBody.innerHTML = peers.map(function (peer) {
       var addr = (peer.address || "-") + (peer.port ? (":" + peer.port) : "");
+      var displayName = (peer.host || peer.agentId || "-");
       return "<tr>" +
-        "<td class=\"mono\">" + escapeHtml(peer.agentId || "-") + "</td>" +
+        "<td class=\"mono\" title=\"" + escapeHtml(peer.agentId || "") + "\">" + escapeHtml(displayName) + "</td>" +
         "<td class=\"mono\">" + escapeHtml(addr) + "</td>" +
         "<td>" + escapeHtml((peer.source || "-") + " / " + (peer.connectedVia || "-")) + "</td>" +
         "<td>" + escapeHtml(formatDate(peer.lastSeenUtc)) + "</td>" +
@@ -159,18 +160,33 @@
   function renderArtifacts(artifacts) {
     if (!artifactsBody) return;
     if (!artifacts || !artifacts.length) {
-      artifactsBody.innerHTML = '<tr><td colspan="3">Nenhum artifact local.</td></tr>';
+      artifactsBody.innerHTML = '<tr><td colspan="4">Nenhum artifact local.</td></tr>';
       if (artifactSelectEl) artifactSelectEl.innerHTML = '<option value="">Nenhum</option>';
       return;
     }
 
     artifactsBody.innerHTML = artifacts.map(function (artifact) {
+      var name = artifact.artifactName || '-';
       return '<tr>' +
-        '<td class="mono">' + escapeHtml(artifact.artifactName || '-') + '</td>' +
+        '<td class="mono">' + escapeHtml(name) + '</td>' +
         '<td>' + escapeHtml(String(artifact.sizeBytes || 0)) + '</td>' +
         '<td class="mono">' + escapeHtml((artifact.checksumSha256 || '-').slice(0, 18)) + '...</td>' +
+        '<td style="white-space:nowrap;"><button class="btn btn-sm danger" data-p2p-delete-debug-artifact="' + escapeHtml(name) + '" title="Apagar este artifact">🗑️</button></td>' +
         '</tr>';
     }).join('');
+
+    artifactsBody.querySelectorAll('[data-p2p-delete-debug-artifact]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var artifactName = this.getAttribute('data-p2p-delete-debug-artifact');
+        if (!window.confirm('Apagar o artifact "' + artifactName + '"?')) return;
+        appApi().DeleteP2PArtifact(artifactName).then(function (msg) {
+          setStatus(msg || 'Artifact apagado.', 'ok');
+          refreshAll();
+        }).catch(function (err) {
+          setStatus('Erro ao apagar: ' + (err && err.message ? err.message : String(err)), 'error');
+        });
+      });
+    });
 
     if (artifactSelectEl) {
       artifactSelectEl.innerHTML = artifacts.map(function (artifact) {

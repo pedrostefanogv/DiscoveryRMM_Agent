@@ -120,12 +120,15 @@ func resolveAgentDecommissionTargetFromInstaller() (agentDecommissionTarget, err
 		return agentDecommissionTarget{}, err
 	}
 
-	scheme := strings.TrimSpace(strings.ToLower(inst.ApiScheme))
+	scheme := inst.APIScheme()
 	server := strings.TrimSpace(inst.ApiServer)
-	if scheme == "" || server == "" {
-		if parsedScheme, parsedServer := parseInstallerServerURLLite(inst.ServerURL); parsedScheme != "" && parsedServer != "" {
-			scheme = parsedScheme
+	if server == "" {
+		parsedScheme, parsedServer := parseInstallerServerURLLite(inst.ServerURL)
+		if parsedServer != "" {
 			server = parsedServer
+			if parsedScheme == "http" {
+				scheme = "http"
+			}
 		}
 	}
 

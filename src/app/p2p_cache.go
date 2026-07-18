@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 )
 
 const (
@@ -145,20 +144,13 @@ func (c *p2pCoordinator) updateManifestCacheAfterDownload(artifactName, path str
 		return
 	}
 
-	info, err := os.Stat(path)
-	if err != nil {
+	if _, err := os.Stat(path); err != nil {
 		return
 	}
 
 	// Só atualiza cache se o manifest não existir ou estiver desatualizado
 	existing := loadCachedManifest(manifestDir, artifactName, path)
 	if existing != nil && manifestMatchesFile(existing, path) {
-		return
-	}
-
-	// Verifica mtime: se o arquivo foi modificado há menos de 5 segundos,
-	// provavelmente acabou de ser baixado — gera manifest.
-	if time.Since(info.ModTime()) > 5*time.Second {
 		return
 	}
 

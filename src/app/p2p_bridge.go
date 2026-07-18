@@ -144,6 +144,17 @@ func (a *App) ClearAllP2PArtifacts() (string, error) {
 	return fmt.Sprintf("limpeza total concluida: %d item(ns) removido(s)", removed), nil
 }
 
+// DeleteP2PArtifact remove um único artifact (arquivo + manifest + cache SHA256) do diretório P2P.
+func (a *App) DeleteP2PArtifact(artifactName string) (string, error) {
+	if a.p2pCoord == nil {
+		return "", fmt.Errorf("coordinator P2P indisponível")
+	}
+	if err := a.p2pCoord.deleteArtifact(artifactName); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("artifact %q apagado", artifactName), nil
+}
+
 func (a *App) ComputeP2PSeedPlan(totalAgents int) P2PSeedPlan {
 	cfg := a.GetP2PConfig()
 	return buildP2PSeedPlan(totalAgents, cfg)

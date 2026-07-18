@@ -21,7 +21,7 @@ func TestBuildAgentHardwareEnvelope_UsesStringStatusAndStringHardwareRawInventor
 		},
 	}
 
-	env := buildAgentHardwareEnvelope(report, "dev")
+	env := buildAgentHardwareEnvelope(report, "dev", "")
 	body, err := json.Marshal(env)
 	if err != nil {
 		t.Fatalf("marshal envelope: %v", err)
@@ -84,7 +84,7 @@ func TestBuildAgentHardwareEnvelope_FiltersInvalidRequiredComponents(t *testing.
 		},
 	}
 
-	env := buildAgentHardwareEnvelope(report, "dev")
+	env := buildAgentHardwareEnvelope(report, "dev", "")
 
 	// Components agora é json.RawMessage; deserializar para acessar campos
 	var comps agentHardwareComponents
@@ -179,7 +179,7 @@ func TestBuildAgentHardwareEnvelope_IncludesPrintersInComponents(t *testing.T) {
 		},
 	}
 
-	env := buildAgentHardwareEnvelope(report, "dev")
+	env := buildAgentHardwareEnvelope(report, "dev", "")
 
 	// Components agora é json.RawMessage; deserializar para acessar campos
 	var comps agentHardwareComponents

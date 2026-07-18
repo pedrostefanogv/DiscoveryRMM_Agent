@@ -130,6 +130,9 @@ func (a *App) clearAllP2PTempArtifacts(now time.Time) (int, error) {
 		a.p2pCoord.sha256CacheMu.Lock()
 		a.p2pCoord.sha256Cache = make(map[string]artifactSHA256CacheEntry)
 		a.p2pCoord.sha256CacheMu.Unlock()
+
+		// Remove manifests órfãos após limpeza total.
+		a.p2pCoord.collectOrphanArtifacts()
 	}
 
 	if removed > 0 {

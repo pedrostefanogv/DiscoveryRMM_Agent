@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -28,6 +29,8 @@ const (
 	p2pReplicationDedupTTL             = 24 * time.Hour
 	p2pLANProbeWarmupDelay             = 12 * time.Second
 	p2pLANProbeInterval                = 2 * time.Minute
+	peerArtifactCacheTTL               = 72 * time.Hour // cache de artifacts por peer expira em 72h
+	maxPeerArtifactEntries             = 500            // cap máximo de entries no mapa peerArtifacts
 )
 
 var errP2PDuplicateReplication = errors.New("artifact ja distribuido recentemente para este peer")
@@ -246,6 +249,8 @@ func (c *p2pCoordinator) discoveryTick(now time.Time) error {
 			delete(c.peerArtifacts, key)
 		}
 	}
+	// Expurga cache de artifacts stale (72h TTL independente do TTL de peer).
+	c.pruneStalePeerArtifactsLocked(now)
 	c.knownPeers = len(c.peers)
 	c.lastDiscoveryTick = now.UTC()
 	if c.currentSeedPlan.TotalAgents == 0 {
@@ -255,6 +260,36 @@ func (c *p2pCoordinator) discoveryTick(now time.Time) error {
 	}
 	c.mu.Unlock()
 	return nil
+}
+
+// pruneStalePeerArtifactsLocked remove entradas de peerArtifacts cujo TTL expirou
+// ou quando o mapa excede o número máximo de entries (remove os mais antigos).
+// Deve ser chamada com c.mu já adquirido.
+func (c *p2pCoordinator) pruneStalePeerArtifactsLocked(now time.Time) {
+	// Remove entradas com TTL expirado.
+	for key, state := range c.peerArtifacts {
+		if now.Sub(state.LastUpdatedUTC) > peerArtifactCacheTTL {
+			delete(c.peerArtifacts, key)
+		}
+	}
+	// Se ainda exceder o cap, remove as N entradas mais antigas.
+	if len(c.peerArtifacts) > maxPeerArtifactEntries {
+		type entry struct {
+			key     string
+			updated time.Time
+		}
+		entries := make([]entry, 0, len(c.peerArtifacts))
+		for key, state := range c.peerArtifacts {
+			entries = append(entries, entry{key, state.LastUpdatedUTC})
+		}
+		sort.SliceStable(entries, func(i, j int) bool {
+			return entries[i].updated.Before(entries[j].updated)
+		})
+		toRemove := len(c.peerArtifacts) - maxPeerArtifactEntries
+		for i := 0; i < toRemove && i < len(entries); i++ {
+			delete(c.peerArtifacts, entries[i].key)
+		}
+	}
 }
 
 func (c *p2pCoordinator) setLastError(err error) {

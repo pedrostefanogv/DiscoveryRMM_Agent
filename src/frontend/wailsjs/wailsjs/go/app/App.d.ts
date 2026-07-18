@@ -57,6 +57,8 @@ export function Ctx():Promise<context.Context>;
 
 export function DeleteLocalMemory(arg1:number):Promise<void>;
 
+export function DeleteP2PArtifact(arg1:string):Promise<string>;
+
 export function DetectApiFeatures(arg1:context.Context):Promise<app.ApiVersionInfo>;
 
 export function DispatchNotification(arg1:app.NotificationDispatchRequest):Promise<app.NotificationDispatchResponse>;
@@ -326,6 +328,8 @@ export function StartP2PTelemetryLoop(arg1:context.Context):Promise<void>;
 export function StopChatStream():Promise<boolean>;
 
 export function StopDebugHTTPServer():Promise<void>;
+
+export function SyncNetworkConnections():Promise<void>;
 
 export function SyncP2PBootstrapNow():Promise<string>;
 

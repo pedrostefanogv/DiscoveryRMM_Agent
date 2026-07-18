@@ -281,10 +281,22 @@ func handleStreamArtifactGet(s network.Stream, transfer *p2pTransferServer) {
 		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "artifact não encontrado"})
 		return
 	}
-	checksum, err := computeFileSHA256(path)
-	if err != nil {
-		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "erro ao calcular checksum"})
-		return
+
+	// Reusa SHA256 do manifest cacheado em vez de recalcular o arquivo inteiro.
+	checksum := ""
+	if transfer != nil {
+		manifestDir := transfer.manifestDir()
+		if cached := loadCachedManifest(manifestDir, req.ArtifactName, path); cached != nil {
+			checksum = cached.SHA256
+		}
+	}
+	if checksum == "" {
+		var csErr error
+		checksum, csErr = computeFileSHA256(path)
+		if csErr != nil {
+			_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "erro ao calcular checksum"})
+			return
+		}
 	}
 
 	totalSize := info.Size()

@@ -12,7 +12,8 @@ import (
 
 // Config holds server connection settings for the debug page.
 type Config struct {
-	ApiScheme                         string `json:"apiScheme"`
+	// Deprecated: use ApiInsecure instead. Kept for runtime compatibility.
+	ApiScheme                         string `json:"apiScheme,omitempty"`
 	ApiServer                         string `json:"apiServer"`
 	AuthToken                         string `json:"authToken"`
 	NatsServer                        string `json:"natsServer"`
@@ -28,21 +29,40 @@ type Config struct {
 	Scheme                            string `json:"scheme,omitempty"`
 	Server                            string `json:"server,omitempty"`
 	AutomationP2PWingetInstallEnabled bool   `json:"automationP2pWingetInstallEnabled,omitempty"`
+	// ApiInsecure quando true indica que o servidor usa HTTP simples (sem TLS).
+	// O padrão (false/ausente) é HTTPS. Substitui o campo legado apiScheme.
+	ApiInsecure bool `json:"apiInsecure,omitempty"`
+}
+
+// APIScheme retorna o scheme da API: "https" por padrão, "http" se ApiInsecure for true.
+// Este método substitui a leitura direta do campo legado ApiScheme.
+func (c Config) APIScheme() string {
+	if c.ApiInsecure {
+		return "http"
+	}
+	return "https"
+}
+
+// normalizeApiScheme sincroniza o campo legado ApiScheme com ApiInsecure
+// para manter compatibilidade com código que ainda lê ApiScheme diretamente.
+func (c *Config) normalizeApiScheme() {
+	c.ApiScheme = c.APIScheme()
 }
 
 func (c Config) IsProvisioned() bool {
-	scheme := strings.TrimSpace(strings.ToLower(c.ApiScheme))
 	server := strings.TrimSpace(c.ApiServer)
 	token := strings.TrimSpace(c.AuthToken)
 	agentID := strings.TrimSpace(c.AgentID)
-	return scheme != "" && server != "" && token != "" && agentID != ""
+	return server != "" && token != "" && agentID != ""
 }
 
 // InstallerConfig is the bootstrap config saved by the NSIS installer.
 // The JSON contract now persists deployToken, while apiKey remains accepted
 // on read for backward compatibility with older installers.
 type InstallerConfig struct {
-	ServerURL string `json:"serverUrl"`
+	// Deprecated: campo legado usado apenas na leitura (retrocompatibilidade).
+	// Após bootstrap, não é mais serializado. O campo canônico é ApiServer.
+	ServerURL string `json:"serverUrl,omitempty"`
 	APIKey    string `json:"deployToken,omitempty"`
 	// AutoProvisioning controla a participação local no fluxo de zero-touch
 	// auto-provisioning via P2P (endpoint /p2p/config/onboard). Quando ausente,
@@ -50,7 +70,7 @@ type InstallerConfig struct {
 	// servidor. O JSON canônico é "autoProvisioning"; o campo legado
 	// "discoveryEnabled" continua sendo aceito em leitura para retrocompat.
 	AutoProvisioning     *bool              `json:"autoProvisioning,omitempty"`
-	ApiScheme            string             `json:"apiScheme,omitempty"`
+	ApiScheme            string             `json:"-"` // Deprecated: não serializado. Usar ApiInsecure.
 	ApiServer            string             `json:"apiServer,omitempty"`
 	AuthToken            string             `json:"authToken,omitempty"`
 	AgentID              string             `json:"agentId,omitempty"`
@@ -63,6 +83,9 @@ type InstallerConfig struct {
 	P2P                  p2pmeta.Config     `json:"p2p,omitempty"`
 	MeshCentralInstalled bool               `json:"meshCentralInstalled,omitempty"`
 	ChatLog              ChatLogConfig      `json:"chatLog,omitempty"`
+	// ApiInsecure quando true indica HTTP simples (sem TLS).
+	// Padrão (false/ausente) = HTTPS. Substitui o campo legado apiScheme.
+	ApiInsecure *bool `json:"apiInsecure,omitempty"`
 }
 
 // ChatLogConfig controla o log detalhado das conversas do chat com IA.
@@ -84,6 +107,7 @@ func (c *InstallerConfig) UnmarshalJSON(data []byte) error {
 		DiscoveryEnabled     json.RawMessage    `json:"discoveryEnabled,omitempty"`
 		ApiScheme            string             `json:"apiScheme,omitempty"`
 		ApiServer            string             `json:"apiServer,omitempty"`
+		ApiInsecure          json.RawMessage    `json:"apiInsecure,omitempty"`
 		AuthToken            string             `json:"authToken,omitempty"`
 		AgentID              string             `json:"agentId,omitempty"`
 		ClientID             string             `json:"clientId,omitempty"`
@@ -106,6 +130,7 @@ func (c *InstallerConfig) UnmarshalJSON(data []byte) error {
 		AutoProvisioning     json.RawMessage    `json:"auto_provisioning,omitempty"`
 		ApiScheme            string             `json:"api_scheme,omitempty"`
 		ApiServer            string             `json:"api_server,omitempty"`
+		ApiInsecure          json.RawMessage    `json:"api_insecure,omitempty"`
 		AuthToken            string             `json:"auth_token,omitempty"`
 		AgentID              string             `json:"agent_id,omitempty"`
 		ClientID             string             `json:"client_id,omitempty"`
@@ -131,7 +156,9 @@ func (c *InstallerConfig) UnmarshalJSON(data []byte) error {
 			raw.ServerURL = coalesceStr(raw.ServerURL, snake.ServerURL)
 			raw.DeployToken = coalesceStr(raw.DeployToken, snake.DeployToken)
 			raw.APIKey = coalesceStr(raw.APIKey, snake.APIKey)
-			raw.ApiScheme = coalesceStr(raw.ApiScheme, snake.ApiScheme)
+			if raw.ApiScheme == "" {
+				raw.ApiScheme = coalesceStr(raw.ApiScheme, snake.ApiScheme)
+			}
 			raw.ApiServer = coalesceStr(raw.ApiServer, snake.ApiServer)
 			raw.AuthToken = coalesceStr(raw.AuthToken, snake.AuthToken)
 			raw.AgentID = coalesceStr(raw.AgentID, snake.AgentID)
@@ -145,6 +172,9 @@ func (c *InstallerConfig) UnmarshalJSON(data []byte) error {
 			}
 			if raw.AllowInsecureTLS == nil {
 				raw.AllowInsecureTLS = snake.AllowInsecureTLS
+			}
+			if raw.ApiInsecure == nil {
+				raw.ApiInsecure = snake.ApiInsecure
 			}
 			if raw.AgentUpdate == nil {
 				raw.AgentUpdate = snake.AgentUpdate
@@ -179,6 +209,25 @@ func (c *InstallerConfig) UnmarshalJSON(data []byte) error {
 		return fmt.Errorf("allowInsecureTls invalido: %w", err)
 	}
 
+	// Migração: apiInsecure explícito, ou derivado de apiScheme=http, ou de serverUrl com scheme http.
+	apiInsecure, err := parseInstallerBool(raw.ApiInsecure)
+	if err != nil {
+		return fmt.Errorf("apiInsecure invalido: %w", err)
+	}
+	if apiInsecure == nil {
+		apiScheme := strings.TrimSpace(strings.ToLower(raw.ApiScheme))
+		if apiScheme == "http" {
+			v := true
+			apiInsecure = &v
+		} else if apiScheme == "" && strings.TrimSpace(raw.ServerURL) != "" {
+			// Tenta derivar de serverUrl legado.
+			if parsedScheme, _, _ := parseInstallerServerURL(raw.ServerURL); parsedScheme == "http" {
+				v := true
+				apiInsecure = &v
+			}
+		}
+	}
+
 	*c = InstallerConfig{
 		ServerURL:            raw.ServerURL,
 		APIKey:               deployToken,
@@ -192,12 +241,21 @@ func (c *InstallerConfig) UnmarshalJSON(data []byte) error {
 		NatsServer:           raw.NatsServer,
 		NatsWsServer:         raw.NatsWsServer,
 		AllowInsecureTLS:     allowInsecureTLS,
+		ApiInsecure:          apiInsecure,
 		AgentUpdate:          raw.AgentUpdate,
 		P2P:                  raw.P2P,
 		MeshCentralInstalled: raw.MeshCentralInstalled,
 		ChatLog:              raw.ChatLog,
 	}
 	return nil
+}
+
+// APIScheme retorna o scheme da API: "https" por padrão, "http" se ApiInsecure for true.
+func (c InstallerConfig) APIScheme() string {
+	if c.ApiInsecure != nil && *c.ApiInsecure {
+		return "http"
+	}
+	return "https"
 }
 
 // coalesceStr retorna a primeira string não vazia.
