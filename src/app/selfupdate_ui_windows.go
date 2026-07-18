@@ -29,7 +29,17 @@ import (
 //  7. Retorna nil — o instalador NSIS faz taskkill do agente, matando esta sessão
 //
 // O usuário NÃO interage — apenas vê a barra de progresso.
-func (a *App) selfUpdateInstallWithPSADT(ctx context.Context, exePath, targetVersion string) error {
+func (a *App) selfUpdateInstallWithPSADT(ctx context.Context, exePath, targetVersion string) (err error) {
+	// ── Panic guard: se PSADT ou qualquer chamada interna panicar,
+	// transforma em erro para que launchInstallerWithUI possa fazer
+	// fallback para launchInstaller direto (ShellExecuteEx runas).
+	defer func() {
+		if r := recover(); r != nil {
+			a.logs.append(fmt.Sprintf("[selfupdate] PANIC na UI PSADT: %v — propagando como erro para fallback", r))
+			err = fmt.Errorf("psadt ui panic: %v", r)
+		}
+	}()
+
 	a.logs.append("[selfupdate] iniciando PSADT UI (auto-close): exePath=" + exePath + " targetVersion=" + targetVersion)
 
 	// ── Detecção de sessão não-interativa ──

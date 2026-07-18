@@ -21,14 +21,15 @@ func Go(fn func(), logf LogFunc) {
 			if r := recover(); r != nil {
 				stack := make([]byte, 65536)
 				n := runtime.Stack(stack, false)
-				msg := fmt.Sprintf("[PANIC] goroutine panicou: %v\n%s", r, string(stack[:n]))
-				log.Println(msg)
 				if logf != nil {
 					logf(fmt.Sprintf("[PANIC] goroutine panicou: %v", r))
 					logf("[PANIC] stack trace:")
 					for _, line := range splitLines(string(stack[:n])) {
 						logf(line)
 					}
+				} else {
+					// Fallback: sem callback de log, usa log.Printf padrao
+					log.Printf("[PANIC] goroutine panicou: %v\n%s", r, string(stack[:n]))
 				}
 			}
 		}()
