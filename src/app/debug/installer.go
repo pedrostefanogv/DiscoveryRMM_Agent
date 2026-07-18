@@ -156,14 +156,16 @@ func (s *Service) loadInstallerConfig() (InstallerConfig, string, error) {
 	resolvedPath := basePath
 
 	if !baseFound {
-		if overrideCfg.ServerURL == "" && (overrideCfg.ApiScheme == "" || overrideCfg.ApiServer == "") {
+		// ApiServer é o campo canônico; ApiScheme (json:"-") e ServerURL (legado) não são mais populados.
+		if overrideCfg.ApiServer == "" && overrideCfg.ServerURL == "" {
 			return InstallerConfig{}, "", fmt.Errorf("config.json de producao nao encontrado")
 		}
 		resolved = overrideCfg
 		resolvedPath = ""
 	} else {
 		resolved = mergeInstallerOverride(baseCfg, overrideCfg)
-		if resolved.ServerURL == "" && (resolved.ApiScheme == "" || resolved.ApiServer == "") {
+		// ApiServer é o campo canônico; ApiScheme (json:"-") e ServerURL (legado) não são mais populados.
+		if resolved.ApiServer == "" && resolved.ServerURL == "" {
 			return InstallerConfig{}, "", fmt.Errorf("config.json de producao nao encontrado")
 		}
 	}
@@ -183,7 +185,7 @@ func persistInstallerConfig(sourcePath string, cfg InstallerConfig) (string, err
 		return "", fmt.Errorf("nenhum caminho disponivel para persistir config de producao")
 	}
 
-	cleanInstallerConfigForPersistence(&cfg)
+	CleanInstallerConfigForPersistence(&cfg)
 
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
@@ -208,9 +210,9 @@ func persistInstallerConfig(sourcePath string, cfg InstallerConfig) (string, err
 	return "", fmt.Errorf("falha ao persistir config de producao: %s", strings.Join(errs, " | "))
 }
 
-// cleanInstallerConfigForPersistence remove campos legados redundantes antes da serialização.
+// CleanInstallerConfigForPersistence remove campos legados redundantes antes da serialização.
 // serverUrl e apiScheme são deriváveis e não devem ser persistidos após o bootstrap.
-func cleanInstallerConfigForPersistence(cfg *InstallerConfig) {
+func CleanInstallerConfigForPersistence(cfg *InstallerConfig) {
 	cfg.ServerURL = ""
 	cfg.ApiScheme = ""
 }
@@ -219,7 +221,7 @@ func scrubInstallerConfigSource(path string, cfg InstallerConfig) error {
 	if strings.TrimSpace(path) == "" {
 		return nil
 	}
-	cleanInstallerConfigForPersistence(&cfg)
+	CleanInstallerConfigForPersistence(&cfg)
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -76,7 +77,12 @@ func (c *p2pCoordinator) ensureManifestForArtifact(artifactName, path string, _ 
 	if cfg := c.app.GetP2PConfig(); cfg.ChunkSizeBytes > 0 {
 		chunkSize = cfg.ChunkSizeBytes
 	}
-	manifest, err := buildChunkManifest(path, artifactID, chunkSize)
+	cpuFn := func() float64 { return c.app.getHeartbeatMetrics().CpuPercent }
+	ctx := context.Background()
+	if c.app.ctx != nil {
+		ctx = c.app.ctx
+	}
+	manifest, err := buildChunkManifest(ctx, path, artifactID, chunkSize, nil, cpuFn)
 	if err != nil {
 		c.app.logs.append(fmt.Sprintf("[p2p] aviso: falha ao gerar manifest para %s: %v", artifactName, err))
 		return
@@ -359,7 +365,12 @@ func (c *p2pCoordinator) generateManifestEager(path, artifactName string) {
 	if cfg := c.app.GetP2PConfig(); cfg.ChunkSizeBytes > 0 {
 		chunkSize = cfg.ChunkSizeBytes
 	}
-	manifest, err := buildChunkManifest(path, artifactID, chunkSize)
+	cpuFn := func() float64 { return c.app.getHeartbeatMetrics().CpuPercent }
+	ctx := context.Background()
+	if c.app.ctx != nil {
+		ctx = c.app.ctx
+	}
+	manifest, err := buildChunkManifest(ctx, path, artifactID, chunkSize, nil, cpuFn)
 	if err != nil {
 		c.app.logs.append(fmt.Sprintf("[p2p] aviso: falha ao gerar manifest eager para %s: %v", artifactName, err))
 		return

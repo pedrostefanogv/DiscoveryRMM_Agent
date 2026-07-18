@@ -8,8 +8,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
+	"time"
 
 	"discovery/internal/platform"
 
@@ -22,6 +24,8 @@ const (
 	minChunkSizeBytes     = 1 * 1024 * 1024 // 1 MB
 	minParallelChunks     = 2               // piso do paralelismo adaptativo
 	maxParallelChunks     = 4               // teto padrão (pode ser elevado dinamicamente até 8)
+	maxChunkRetries       = 3               // tentativas por chunk antes de desistir
+	chunkRetryBaseDelay   = 1 * time.Second // backoff inicial entre retries
 )
 
 // libp2pPeer identifica um peer pelo agentID e pelo peer.ID do libp2p.
@@ -88,7 +92,16 @@ type P2PChunk struct {
 
 // buildChunkManifest computes a P2PChunkManifest for a file on disk.
 // It reads the file once: per-chunk SHA256 and full-file SHA256 in one pass.
-func buildChunkManifest(path, artifactID string, chunkSize int64) (P2PChunkManifest, error) {
+//
+// ctx permite cancelamento cooperativo. A cada chunkProcessedThreshold chunks,
+// a goroutine faz yield (runtime.Gosched) e, se cpuCheck não for nil, aplica
+// throttling adaptativo baseado na métrica de CPU retornada pelo callback
+// (percentual 0-100). Acima de cpuThrottleThreshold, dorme por cpuThrottleSleep.
+//
+// onProgress é opcional — se não-nil, chamado com (chunksProcessados, totalChunks, bytesProcessados).
+func buildChunkManifest(ctx context.Context, path, artifactID string, chunkSize int64,
+	onProgress func(processedChunks, totalChunks int, bytesProcessed int64),
+	cpuCheck func() float64) (P2PChunkManifest, error) {
 	if chunkSize <= 0 {
 		chunkSize = defaultChunkSizeBytes
 	}
@@ -104,12 +117,28 @@ func buildChunkManifest(path, artifactID string, chunkSize int64) (P2PChunkManif
 	}
 	totalSize := info.Size()
 
+	// Pré-alocar slice de chunks para evitar realocações no loop.
+	totalChunksEstimate := int(totalSize/chunkSize) + 1
+	if totalChunksEstimate < 1 {
+		totalChunksEstimate = 1
+	}
+	if totalChunksEstimate > 100000 {
+		totalChunksEstimate = 100000 // sanity cap
+	}
+
 	fullHash := sha256.New()
-	var chunks []P2PChunk
+	chunks := make([]P2PChunk, 0, totalChunksEstimate)
 	var offset int64
 
 	buf := make([]byte, chunkSize)
 	for {
+		// Verificar cancelamento a cada chunk.
+		select {
+		case <-ctx.Done():
+			return P2PChunkManifest{}, ctx.Err()
+		default:
+		}
+
 		n, readErr := io.ReadFull(f, buf)
 		if n == 0 {
 			break
@@ -126,12 +155,34 @@ func buildChunkManifest(path, artifactID string, chunkSize int64) (P2PChunkManif
 		})
 		offset += int64(n)
 
+		// Throttling adaptativo: a cada chunkProcessedThreshold chunks,
+		// yield para não travar a UI e reduzir CPU se necessário.
+		if len(chunks)%chunkProcessedThreshold == 0 {
+			runtime.Gosched()
+
+			if cpuCheck != nil {
+				cpu := cpuCheck()
+				if cpu > cpuThrottleThreshold {
+					time.Sleep(cpuThrottleSleep)
+				}
+			}
+
+			if onProgress != nil {
+				onProgress(len(chunks), totalChunksEstimate, offset)
+			}
+		}
+
 		if readErr == io.EOF || readErr == io.ErrUnexpectedEOF {
 			break
 		}
 		if readErr != nil {
 			return P2PChunkManifest{}, readErr
 		}
+	}
+
+	// Último callback de progresso (garante 100% reportado).
+	if onProgress != nil {
+		onProgress(len(chunks), len(chunks), totalSize)
 	}
 
 	return P2PChunkManifest{
@@ -145,11 +196,20 @@ func buildChunkManifest(path, artifactID string, chunkSize int64) (P2PChunkManif
 	}, nil
 }
 
+// manifestProgressThreshold define a frequência de yield e throttling.
+// A cada N chunks, a goroutine faz yield e verifica CPU.
+const (
+	chunkProcessedThreshold = 16          // yield a cada 16 chunks (~128 MB com 8 MB)
+	cpuThrottleThreshold    = float64(60) // CPU > 60% → throttle
+	cpuThrottleSleep        = 100 * time.Millisecond
+)
+
 // downloadChunkedLibp2p downloads an artifact from multiple peers in parallel chunks
 // via libp2p streams. maxParallel controla o teto de chunks simultâneos.
 // Goroutines que já adquiriram slot não são abortadas se o teto reduzir depois —
 // apenas novas goroutines esperam. Usa minParallelChunks como piso.
 // onChunkProgress é opcional — quando != nil, chamado com (chunkIndex, bytesLidos, totalChunk, totalChunks).
+// logf é opcional — quando != nil, chamado para logging de progresso e erros de chunks.
 func downloadChunkedLibp2p(
 	ctx context.Context,
 	h host.Host,
@@ -159,6 +219,7 @@ func downloadChunkedLibp2p(
 	sched *p2pChunkScheduler,
 	maxParallel int,
 	onChunkProgress func(chunkIdx int, readSoFar, chunkSize int64, totalChunks int),
+	logf func(string),
 ) (string, int64, error) {
 	if len(peers) == 0 {
 		return "", 0, fmt.Errorf("nenhum peer disponivel para download")
@@ -199,21 +260,47 @@ func downloadChunkedLibp2p(
 					results <- chunkResult{index: i, err: nil}
 					return
 				}
+				// Arquivo existe mas hash não bate — remove e re-download.
+				_ = os.Remove(chunkFile)
 			}
 
-			lp := sched.pickPeer(i, peers)
 			chunkIdx := i
 			chunkSize := chunk.Size
 			totalChunks := len(manifest.Chunks)
-			err := libp2pDownloadChunk(ctx, h, lp.peerID, artifactName, requesterID, chunk, chunkFile, func(readSoFar, total int64) {
-				if onChunkProgress != nil {
-					onChunkProgress(chunkIdx, readSoFar, chunkSize, totalChunks)
+
+			// Retry loop: tenta o chunk até maxChunkRetries vezes com backoff.
+			var lastErr error
+			for attempt := 0; attempt < maxChunkRetries; attempt++ {
+				// Pick peer considerando erros acumulados em tentativas anteriores.
+				lp := sched.pickPeer(i, peers)
+
+				lastErr = libp2pDownloadChunk(ctx, h, lp.peerID, artifactName, requesterID, chunk, chunkFile, func(readSoFar, total int64) {
+					if onChunkProgress != nil {
+						onChunkProgress(chunkIdx, readSoFar, chunkSize, totalChunks)
+					}
+				})
+				if lastErr == nil {
+					// Sucesso: verifica hash salvo já foi feito em libp2pDownloadChunk.
+					results <- chunkResult{index: i, err: nil}
+					return
 				}
-			})
-			if err != nil {
 				sched.recordError(lp.peerID)
+				if logf != nil {
+					logf(fmt.Sprintf("[p2p][chunk] chunk %d/%d tentativa %d/%d falhou para artifact=%s: %v",
+						chunkIdx, totalChunks, attempt+1, maxChunkRetries, artifactName, lastErr))
+				}
+				// Backoff: 1s, 2s, 4s entre tentativas.
+				if attempt < maxChunkRetries-1 {
+					delay := chunkRetryBaseDelay * (1 << attempt)
+					select {
+					case <-ctx.Done():
+						results <- chunkResult{index: i, err: ctx.Err()}
+						return
+					case <-time.After(delay):
+					}
+				}
 			}
-			results <- chunkResult{index: i, err: err}
+			results <- chunkResult{index: i, err: lastErr}
 		}(i, chunk)
 	}
 
@@ -223,13 +310,21 @@ func downloadChunkedLibp2p(
 	}()
 
 	var firstErr error
+	var failedChunks int
 	for res := range results {
-		if res.err != nil && firstErr == nil {
-			firstErr = fmt.Errorf("chunk %d: %w", res.index, res.err)
+		if res.err != nil {
+			failedChunks++
+			if logf != nil {
+				logf(fmt.Sprintf("[p2p][chunk] chunk %d/%d falhou para artifact=%s: %v", res.index, len(manifest.Chunks), artifactName, res.err))
+			}
+			if firstErr == nil {
+				firstErr = fmt.Errorf("chunk %d: %w", res.index, res.err)
+			}
 		}
 	}
 	if firstErr != nil {
-		return "", 0, firstErr
+		return "", 0, fmt.Errorf("%d/%d chunks falharam; primeiro erro: chunk %d: %w",
+			failedChunks, len(manifest.Chunks), 0, firstErr)
 	}
 
 	// Assemble chunks into final file.

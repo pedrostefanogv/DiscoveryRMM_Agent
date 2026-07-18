@@ -126,14 +126,16 @@ func loadInstallerConfig() (InstallerConfig, string, error) {
 	resolvedPath := basePath
 
 	if !baseFound {
-		if overrideCfg.ServerURL == "" && (overrideCfg.ApiScheme == "" || overrideCfg.ApiServer == "") {
+		// ApiServer é o campo canônico; ApiScheme (json:"-") e ServerURL (legado) não são mais populados.
+		if overrideCfg.ApiServer == "" && overrideCfg.ServerURL == "" {
 			return ensureDefaultInstallerConfig()
 		}
 		resolved = overrideCfg
 		resolvedPath = ""
 	} else {
 		resolved = mergeInstallerOverride(baseCfg, overrideCfg)
-		if resolved.ServerURL == "" && (resolved.ApiScheme == "" || resolved.ApiServer == "") {
+		// ApiServer é o campo canônico; ApiScheme (json:"-") e ServerURL (legado) não são mais populados.
+		if resolved.ApiServer == "" && resolved.ServerURL == "" {
 			return ensureDefaultInstallerConfig()
 		}
 	}
@@ -191,6 +193,8 @@ func persistInstallerConfig(sourcePath string, cfg InstallerConfig) (string, err
 	if len(paths) == 0 {
 		return "", fmt.Errorf("nenhum caminho disponivel para persistir config de producao")
 	}
+
+	debug.CleanInstallerConfigForPersistence(&cfg)
 
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {

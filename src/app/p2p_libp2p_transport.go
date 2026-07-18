@@ -42,9 +42,9 @@ const (
 	libp2pStreamTimeout         = 30 * time.Second
 	libp2pTransferTimeout       = 2 * time.Minute
 	libp2pCandidacyTimeout      = 10 * time.Second
-	libp2pTransferTimeoutMax    = 30 * time.Minute
+	libp2pTransferTimeoutMax    = 4 * time.Hour   // arquivos grandes (6GB+) precisam de deadlines longos
 	libp2pManifestTimeout       = 5 * time.Minute // cobre leitura completa do arquivo para gerar manifest
-	libp2pMinTransferSpeed      = 1 * 1024 * 1024 // 1 MB/s — piso de velocidade para cálculo de timeout
+	libp2pMinTransferSpeed      = 512 * 1024      // 512 KB/s — piso conservador para cálculo de timeout
 	libp2pTransferTimeoutMargin = 30 * time.Second
 )
 
@@ -246,7 +246,11 @@ func handleStreamArtifactManifest(s network.Stream, transfer *p2pTransferServer)
 		}
 	}
 	artifactID := CanonicalArtifactID("", req.ArtifactName, "")
-	manifest, err := buildChunkManifest(path, artifactID, chunkSize)
+	var cpuFn func() float64
+	if app != nil {
+		cpuFn = func() float64 { return app.getHeartbeatMetrics().CpuPercent }
+	}
+	manifest, err := buildChunkManifest(context.Background(), path, artifactID, chunkSize, nil, cpuFn)
 	if err != nil {
 		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "erro ao construir manifest: " + err.Error()})
 		return
@@ -367,6 +371,10 @@ func handleStreamArtifactGet(s network.Stream, transfer *p2pTransferServer) {
 	written, copyErr := io.Copy(s, reader)
 	if coord != nil && written > 0 {
 		coord.recordBytesServed(written)
+	}
+	if copyErr != nil && coord != nil && coord.app != nil {
+		coord.app.logs.append(fmt.Sprintf("[p2p][serve] erro ao enviar chunk artifact=%s para peer=%s chunkLen=%d enviado=%d: %v",
+			req.ArtifactName, requesterID, chunkLen, written, copyErr))
 	}
 	if coord != nil {
 		done := p2pTransferProgress{

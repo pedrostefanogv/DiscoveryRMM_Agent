@@ -458,10 +458,6 @@ export function ListPrintersJSON() {
   return window['go']['app']['App']['ListPrintersJSON']();
 }
 
-export function PollChatJob(arg1, arg2) {
-  return window['go']['app']['App']['PollChatJob'](arg1, arg2);
-}
-
 export function PostP2PTelemetry(arg1) {
   return window['go']['app']['App']['PostP2PTelemetry'](arg1);
 }
@@ -508,6 +504,10 @@ export function RefreshSoftware() {
 
 export function RefreshStartupItems() {
   return window['go']['app']['App']['RefreshStartupItems']();
+}
+
+export function RegisterAgentToolsOnServer() {
+  return window['go']['app']['App']['RegisterAgentToolsOnServer']();
 }
 
 export function RemovePrintJob(arg1, arg2) {
@@ -566,20 +566,8 @@ export function SelectAndPublishP2PArtifact() {
   return window['go']['app']['App']['SelectAndPublishP2PArtifact']();
 }
 
-export function SendChatAsync(arg1, arg2, arg3, arg4) {
-  return window['go']['app']['App']['SendChatAsync'](arg1, arg2, arg3, arg4);
-}
-
 export function SendChatMessage(arg1) {
   return window['go']['app']['App']['SendChatMessage'](arg1);
-}
-
-export function SendChatStream(arg1, arg2, arg3, arg4, arg5, arg6) {
-  return window['go']['app']['App']['SendChatStream'](arg1, arg2, arg3, arg4, arg5, arg6);
-}
-
-export function SendChatSync(arg1, arg2, arg3, arg4) {
-  return window['go']['app']['App']['SendChatSync'](arg1, arg2, arg3, arg4);
 }
 
 export function SendTestHeartbeat() {

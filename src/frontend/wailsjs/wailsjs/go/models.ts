@@ -382,20 +382,6 @@ export namespace app {
 	        this.CheckedAt = source["CheckedAt"];
 	    }
 	}
-	export class ChatAIResponse {
-	    message: string;
-	    sessionId: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new ChatAIResponse(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.message = source["message"];
-	        this.sessionId = source["sessionId"];
-	    }
-	}
 	export class ChatConfig {
 	    endpoint: string;
 	    apiKey: string;
@@ -414,26 +400,6 @@ export namespace app {
 	        this.model = source["model"];
 	        this.systemPrompt = source["systemPrompt"];
 	        this.maxTokens = source["maxTokens"];
-	    }
-	}
-	export class ChatJobStatus {
-	    jobId: string;
-	    status: string;
-	    message?: string;
-	    sessionId?: string;
-	    error?: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new ChatJobStatus(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.jobId = source["jobId"];
-	        this.status = source["status"];
-	        this.message = source["message"];
-	        this.sessionId = source["sessionId"];
-	        this.error = source["error"];
 	    }
 	}
 	export class ChatMessage {

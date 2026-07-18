@@ -545,7 +545,7 @@ func TestBuildChunkManifestSingleChunk(t *testing.T) {
 	if err := writeTestFile(path, 512); err != nil {
 		t.Fatal(err)
 	}
-	manifest, err := buildChunkManifest(path, "ARTID-1", defaultChunkSizeBytes)
+	manifest, err := buildChunkManifest(context.Background(), path, "ARTID-1", defaultChunkSizeBytes, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -566,7 +566,7 @@ func TestBuildChunkManifestMultipleChunks(t *testing.T) {
 	if err := writeTestFile(path, 3*1024*1024); err != nil {
 		t.Fatal(err)
 	}
-	manifest, err := buildChunkManifest(path, "", int64(minChunkSizeBytes))
+	manifest, err := buildChunkManifest(context.Background(), path, "", int64(minChunkSizeBytes), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -590,7 +590,7 @@ func TestBuildChunkManifestRemainder(t *testing.T) {
 	if err := writeTestFile(path, size); err != nil {
 		t.Fatal(err)
 	}
-	manifest, err := buildChunkManifest(path, "", int64(minChunkSizeBytes))
+	manifest, err := buildChunkManifest(context.Background(), path, "", int64(minChunkSizeBytes), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -609,8 +609,8 @@ func TestBuildChunkManifestChecksumConsistent(t *testing.T) {
 	if err := writeTestFile(path, 4*1024*1024); err != nil {
 		t.Fatal(err)
 	}
-	m1, _ := buildChunkManifest(path, "", int64(minChunkSizeBytes))
-	m2, _ := buildChunkManifest(path, "", int64(minChunkSizeBytes))
+	m1, _ := buildChunkManifest(context.Background(), path, "", int64(minChunkSizeBytes), nil, nil)
+	m2, _ := buildChunkManifest(context.Background(), path, "", int64(minChunkSizeBytes), nil, nil)
 	if m1.SHA256 != m2.SHA256 {
 		t.Fatal("manifest SHA256 must be deterministic")
 	}

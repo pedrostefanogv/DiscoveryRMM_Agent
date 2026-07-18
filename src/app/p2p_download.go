@@ -70,6 +70,9 @@ func (c *p2pCoordinator) DownloadArtifactFromPeer(ctx context.Context, artifactN
 					ChunkIndex:   chunkIdx,
 					TotalChunks:  totalChunks,
 				})
+			},
+			func(msg string) {
+				c.app.logs.append(msg)
 			})
 		if err != nil {
 			c.appendAudit("pull", artifactName, sourcePeerID, "libp2p", false, err.Error())
@@ -190,6 +193,9 @@ func (c *p2pCoordinator) downloadArtifactSwarm(ctx context.Context, artifactName
 				ChunkIndex:   chunkIdx,
 				TotalChunks:  totalChunks,
 			})
+		},
+		func(msg string) {
+			c.app.logs.append(msg)
 		})
 	if err != nil {
 		c.appendAudit("swarm-pull", artifactName, "", "automation", false, err.Error())

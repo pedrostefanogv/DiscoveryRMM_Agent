@@ -239,8 +239,6 @@ export function ListPrinters():Promise<json.RawMessage>;
 
 export function ListPrintersJSON():Promise<json.RawMessage>;
 
-export function PollChatJob(arg1:context.Context,arg2:string):Promise<app.ChatJobStatus>;
-
 export function PostP2PTelemetry(arg1:context.Context):Promise<void>;
 
 export function PublishChatEvent(arg1:string,arg2:string):Promise<void>;
@@ -264,6 +262,8 @@ export function RefreshP2PPeerCatalog():Promise<void>;
 export function RefreshSoftware():Promise<Array<models.SoftwareItem>>;
 
 export function RefreshStartupItems():Promise<Array<models.StartupItem>>;
+
+export function RegisterAgentToolsOnServer():Promise<void>;
 
 export function RemovePrintJob(arg1:string,arg2:number):Promise<json.RawMessage>;
 
@@ -293,13 +293,7 @@ export function SearchCatalog(arg1:string):Promise<json.RawMessage>;
 
 export function SelectAndPublishP2PArtifact():Promise<p2pmeta.ArtifactView>;
 
-export function SendChatAsync(arg1:context.Context,arg2:string,arg3:string,arg4:number):Promise<string>;
-
 export function SendChatMessage(arg1:string):Promise<string>;
-
-export function SendChatStream(arg1:context.Context,arg2:string,arg3:string,arg4:number,arg5:any,arg6:any):Promise<void>;
-
-export function SendChatSync(arg1:context.Context,arg2:string,arg3:string,arg4:number):Promise<app.ChatAIResponse>;
 
 export function SendTestHeartbeat():Promise<string>;
 

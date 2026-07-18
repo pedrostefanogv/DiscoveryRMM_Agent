@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -118,7 +119,8 @@ func (c *p2pCoordinator) finalizeDownloadedArtifact(artifactName, path, expected
 			if cfg := c.app.GetP2PConfig(); cfg.ChunkSizeBytes > 0 {
 				chunkSize = cfg.ChunkSizeBytes
 			}
-			generated, err := buildChunkManifest(path, artifactID, chunkSize)
+			cpuFn := func() float64 { return c.app.getHeartbeatMetrics().CpuPercent }
+			generated, err := buildChunkManifest(context.Background(), path, artifactID, chunkSize, nil, cpuFn)
 			if err != nil {
 				return fmt.Errorf("falha ao gerar manifest: %w", err)
 			}
@@ -159,7 +161,8 @@ func (c *p2pCoordinator) updateManifestCacheAfterDownload(artifactName, path str
 	if cfg := c.app.GetP2PConfig(); cfg.ChunkSizeBytes > 0 {
 		chunkSize = cfg.ChunkSizeBytes
 	}
-	manifest, err := buildChunkManifest(path, artifactID, chunkSize)
+	cpuFn := func() float64 { return c.app.getHeartbeatMetrics().CpuPercent }
+	manifest, err := buildChunkManifest(context.Background(), path, artifactID, chunkSize, nil, cpuFn)
 	if err != nil {
 		c.app.logs.append(fmt.Sprintf("[p2p] aviso: falha ao gerar manifest pos-download para %s: %v", artifactName, err))
 		return
