@@ -178,12 +178,25 @@ func collectHeartbeatMetricsOsquery(ctx context.Context, metrics *agentconn.Agen
 		return
 	}
 
-	// 2. Fallback: osqueryi transient socket
+	// 2. Try keep-alive pool (reuses osqueryi from previous calls).
+	if socketPath := acquireOsqueryiSocket(); socketPath != "" {
+		results = runQueriesViaSocket(runCtx, socketPath, queries, nil)
+		if results != nil {
+			if r, ok := results["heartbeat_metrics"]; ok && r.err == nil && len(r.rows) > 0 {
+				if m := mapHeartbeatRow(r.rows[0]); m != nil {
+					*metrics = *m
+				}
+			}
+		}
+		return
+	}
+
+	// 3. Fallback: osqueryi transient socket (stored in pool).
 	proc, startErr := startOsqueryiSocket(runCtx, bin)
 	if startErr != nil {
 		return
 	}
-	defer proc.stop()
+	storeOsqueryiSocket(proc)
 
 	results = runQueriesViaSocket(runCtx, proc.socketPath, queries, nil)
 	if results != nil {

@@ -296,6 +296,8 @@ export namespace app {
 	    notificationPolicies: AgentNotificationPolicy[];
 	    consolidation: AgentConsolidationConfig;
 	    rollout: AgentRolloutConfig;
+	    startupThrottleEnabled?: boolean;
+	    startupMaxCPUPercent?: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new AgentConfiguration(source);
@@ -330,6 +332,8 @@ export namespace app {
 	        this.notificationPolicies = this.convertValues(source["notificationPolicies"], AgentNotificationPolicy);
 	        this.consolidation = this.convertValues(source["consolidation"], AgentConsolidationConfig);
 	        this.rollout = this.convertValues(source["rollout"], AgentRolloutConfig);
+	        this.startupThrottleEnabled = source["startupThrottleEnabled"];
+	        this.startupMaxCPUPercent = source["startupMaxCPUPercent"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -1121,7 +1125,7 @@ export namespace debug {
 	    }
 	}
 	export class Config {
-	    apiScheme: string;
+	    apiScheme?: string;
 	    apiServer: string;
 	    authToken: string;
 	    natsServer: string;
@@ -1137,6 +1141,7 @@ export namespace debug {
 	    scheme?: string;
 	    server?: string;
 	    automationP2pWingetInstallEnabled?: boolean;
+	    apiInsecure?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new Config(source);
@@ -1160,6 +1165,7 @@ export namespace debug {
 	        this.scheme = source["scheme"];
 	        this.server = source["server"];
 	        this.automationP2pWingetInstallEnabled = source["automationP2pWingetInstallEnabled"];
+	        this.apiInsecure = source["apiInsecure"];
 	    }
 	}
 	export class RealtimeStatus {

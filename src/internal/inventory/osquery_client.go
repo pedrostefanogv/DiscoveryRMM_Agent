@@ -38,7 +38,84 @@ const (
 
 	// socketQueryMaxAttempts limits retry attempts for each query.
 	socketQueryMaxAttempts = 2
+
+	// osqueryiKeepAliveTTL defines how long a transient osqueryi process
+	// is kept alive after the last query to avoid paying the startup cost
+	// on subsequent inventory/heartbeat calls.
+	osqueryiKeepAliveTTL = 5 * time.Minute
 )
+
+// osqueryiKeepAlivePool reuses a transient osqueryi process across multiple
+// inventory/heartbeat calls to avoid the CPU cost of spawning a new osqueryi
+// on every collection. A timer resets on each access and cleans up after TTL.
+type osqueryiKeepAlivePool struct {
+	mu       sync.Mutex
+	proc     *osqueryiSocketProcess
+	socket   string
+	timer    *time.Timer
+	released bool
+}
+
+// globalOsqueryiPool is the singleton keep-alive pool for osqueryi processes.
+var globalOsqueryiPool osqueryiKeepAlivePool
+
+// acquireOsqueryiSocket returns an existing live osqueryi socket from the pool,
+// or an empty string if no process is currently available.
+func acquireOsqueryiSocket() string {
+	globalOsqueryiPool.mu.Lock()
+	defer globalOsqueryiPool.mu.Unlock()
+
+	if globalOsqueryiPool.proc == nil || globalOsqueryiPool.released {
+		return ""
+	}
+
+	// Reset the TTL timer so the process stays alive while in use.
+	if globalOsqueryiPool.timer != nil {
+		globalOsqueryiPool.timer.Stop()
+	}
+	globalOsqueryiPool.timer = time.AfterFunc(osqueryiKeepAliveTTL, releaseOsqueryiPool)
+
+	return globalOsqueryiPool.socket
+}
+
+// storeOsqueryiSocket registers a freshly-started osqueryi process in the pool.
+func storeOsqueryiSocket(proc *osqueryiSocketProcess) {
+	globalOsqueryiPool.mu.Lock()
+	defer globalOsqueryiPool.mu.Unlock()
+
+	// Release any previous process first.
+	if globalOsqueryiPool.proc != nil && !globalOsqueryiPool.released {
+		globalOsqueryiPool.proc.stop()
+	}
+	if globalOsqueryiPool.timer != nil {
+		globalOsqueryiPool.timer.Stop()
+	}
+
+	globalOsqueryiPool.proc = proc
+	globalOsqueryiPool.socket = proc.socketPath
+	globalOsqueryiPool.released = false
+	globalOsqueryiPool.timer = time.AfterFunc(osqueryiKeepAliveTTL, releaseOsqueryiPool)
+}
+
+// releaseOsqueryiPool stops the pooled osqueryi process and marks the pool as
+// released. Safe to call multiple times.
+func releaseOsqueryiPool() {
+	globalOsqueryiPool.mu.Lock()
+	defer globalOsqueryiPool.mu.Unlock()
+
+	if globalOsqueryiPool.released || globalOsqueryiPool.proc == nil {
+		return
+	}
+	globalOsqueryiPool.released = true
+	if globalOsqueryiPool.timer != nil {
+		globalOsqueryiPool.timer.Stop()
+		globalOsqueryiPool.timer = nil
+	}
+	proc := globalOsqueryiPool.proc
+	globalOsqueryiPool.proc = nil
+	globalOsqueryiPool.socket = ""
+	proc.stop()
+}
 
 // osquerydSocketPaths returns platform-specific candidate paths where a
 // running osqueryd daemon would expose its extension socket.
@@ -262,6 +339,12 @@ func runQueriesViaSocket(ctx context.Context, socketPath string, queries []osque
 				rows[i] = r
 			}
 			m[q.name] = osqueryResult{name: q.name, rows: rows}
+		}
+
+		// CPU-aware throttle: insert adaptive pause between queries
+		// so we don't overload modest machines during inventory collection.
+		if delay := throttleDelayForQuery(q.name); delay > 0 {
+			sleepWithContext(ctx, delay)
 		}
 
 		if progress != nil {

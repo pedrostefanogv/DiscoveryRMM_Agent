@@ -501,6 +501,7 @@ func (a *App) refreshAgentConfiguration(ctx context.Context) error {
 		return nil
 	}
 	a.setAgentConfiguration(cfgParsed)
+	a.applyStartupThrottleConfig()
 	if a.debugSvc != nil {
 		changed, applyErr := a.debugSvc.ApplyRemoteConnectionSecurity(
 			cfgParsed.NatsServerHost,

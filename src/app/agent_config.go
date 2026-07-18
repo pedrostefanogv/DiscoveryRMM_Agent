@@ -135,6 +135,13 @@ type AgentConfiguration struct {
 	NotificationPolicies          []AgentNotificationPolicy       `json:"notificationPolicies"`
 	Consolidation                 AgentConsolidationConfig        `json:"consolidation"`
 	Rollout                       AgentRolloutConfig              `json:"rollout"`
+	// StartupThrottleEnabled enables CPU-aware throttling during agent startup.
+	// When nil (default), auto-detection is used (throttled on <=4 cores).
+	// When explicitly false, the agent runs at full speed during startup.
+	StartupThrottleEnabled *bool `json:"startupThrottleEnabled"`
+	// StartupMaxCPUPercent defines the CPU usage threshold (0-100) above which
+	// the agent will throttle osquery queries during startup. Default 50.
+	StartupMaxCPUPercent *int `json:"startupMaxCPUPercent"`
 }
 
 // parseAgentConfiguration parses a configuration blob into a normalized AgentConfiguration.
@@ -363,6 +370,9 @@ func parseLegacyAgentConfiguration(data []byte) (AgentConfiguration, error) {
 			cfg.Rollout.BlockedNotificationEventTypes = getStringSliceFromMap(rolloutMap, "blockedNotificationEventTypes")
 		}
 	}
+	// Parse startup throttle fields (flat format only; API v1 handled in mergeAgentConfigResponse).
+	cfg.StartupThrottleEnabled = getBoolPtr("startupThrottleEnabled")
+	cfg.StartupMaxCPUPercent = getIntPtr("startupMaxCPUPercent")
 	normalizePSADTConfigDefaults(&cfg.PSADT)
 	normalizeConsolidationConfigDefaults(&cfg.Consolidation)
 	normalizeRolloutDefaults(&cfg.Rollout)

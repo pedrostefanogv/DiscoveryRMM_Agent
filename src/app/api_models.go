@@ -44,6 +44,10 @@ type ServerConfiguration struct {
 	TicketAttachmentSettingsJSON  string `json:"ticketAttachmentSettingsJson"`
 	CreatedAt                     string `json:"createdAt"`
 	UpdatedAt                     string `json:"updatedAt"`
+	// StartupThrottleEnabled enables CPU-aware throttling during agent startup.
+	StartupThrottleEnabled *bool `json:"startupThrottleEnabled"`
+	// StartupMaxCPUPercent defines the CPU usage threshold (0-100) for throttling.
+	StartupMaxCPUPercent int `json:"startupMaxCPUPercent"`
 }
 
 // ClientConfiguration representa a configuração no nível do cliente (API v1).
@@ -71,6 +75,8 @@ type ClientConfiguration struct {
 	CreatedBy                     *string `json:"createdBy"`
 	UpdatedBy                     *string `json:"updatedBy"`
 	Version                       int     `json:"version"`
+	StartupThrottleEnabled        *bool   `json:"startupThrottleEnabled"`
+	StartupMaxCPUPercent          *int    `json:"startupMaxCPUPercent"`
 }
 
 // SiteConfiguration representa a configuração no nível do site (API v1).
@@ -105,6 +111,8 @@ type SiteConfiguration struct {
 	CreatedBy                            *string `json:"createdBy"`
 	UpdatedBy                            *string `json:"updatedBy"`
 	Version                              int     `json:"version"`
+	StartupThrottleEnabled               *bool   `json:"startupThrottleEnabled"`
+	StartupMaxCPUPercent                 *int    `json:"startupMaxCPUPercent"`
 }
 
 // AgentConfigResponse é o wrapper completo retornado por GET /me/configuration (API v1).
@@ -288,6 +296,22 @@ func mergeAgentConfigResponse(resp *AgentConfigResponse) AgentConfiguration {
 			cfg.NotificationBranding = branding
 		}
 	}
+
+	// Startup throttle fields: server provides defaults; site/client can override.
+	cfg.StartupThrottleEnabled = resolveBoolPtr(
+		resolveBoolPtr(
+			boolFromPtr(site, func(s *SiteConfiguration) *bool { return s.StartupThrottleEnabled }),
+			boolFromPtr(cli, func(c *ClientConfiguration) *bool { return c.StartupThrottleEnabled }),
+		),
+		srv.StartupThrottleEnabled,
+	)
+	cfg.StartupMaxCPUPercent = resolveIntPtr(
+		intFromPtr(site, func(s *SiteConfiguration) *int { return s.StartupMaxCPUPercent }),
+		resolveInt(
+			intFromPtr(cli, func(c *ClientConfiguration) *int { return c.StartupMaxCPUPercent }),
+			srv.StartupMaxCPUPercent,
+		),
+	)
 
 	return cfg
 }

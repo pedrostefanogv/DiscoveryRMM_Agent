@@ -676,9 +676,33 @@ func (a *App) startup(ctx context.Context) {
 
 	log.Println("[startup] runtime local (tray) ativo — todos os workers locais iniciados")
 
+	// ── Phase 1: Staged startup ────────────────────────────────────────
+	// To avoid saturating modest CPUs, heavyweight operations are staggered
+	// instead of launching all goroutines simultaneously.
+	//   Phase 0 (immediate):  tray, DB, debug HTTP, P2P telemetry
+	//   Phase 1 (+2s):        inventory collection (osqueryi) + sync
+	//   Phase 2 (+8s):        agentConn bootstrap + heartbeat
+	//   Phase 3 (+10s):       automation, syncCoord, P2P bootstrap
+	//   Phase 4 (+12s):       self-update, cleanup ticker
+	// ────────────────────────────────────────────────────────────────────
+
+	const (
+		startupPhaseInventory   = 2 * time.Second
+		startupPhaseAgentConn   = 8 * time.Second
+		startupPhaseBackground  = 10 * time.Second
+		startupPhaseMaintenance = 12 * time.Second
+	)
+
+	// Phase 1: Inventory collection (heaviest operation — delayed 2s).
 	a.startupWg.Add(1)
 	a.safeGo(func() {
 		defer a.startupWg.Done()
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(startupPhaseInventory):
+		}
 
 		if !a.isInventoryProvisioned() {
 			log.Println("[startup] inventory-startup: ignorado (agente não provisionado)")
@@ -704,9 +728,16 @@ func (a *App) startup(ctx context.Context) {
 		}
 	})
 
+	// Phase 2: Agent connection (bootstrap + heartbeat).
 	a.startupWg.Add(1)
 	a.safeGo(func() {
 		defer a.startupWg.Done()
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(startupPhaseAgentConn):
+		}
 
 		if a.debugSvc != nil {
 			a.debugSvc.BootstrapAgentCredentialsFromInstallerConfig(ctx)
@@ -727,66 +758,74 @@ func (a *App) startup(ctx context.Context) {
 		a.agentConn.Run(ctx)
 	})
 
+	// Phase 3: Automation, sync coordinator, P2P bootstrap.
 	a.startupWg.Add(1)
 	a.safeGo(func() {
 		defer a.startupWg.Done()
-		a.drainAgentDecommissionOutbox(ctx, "startup")
-		ticker := time.NewTicker(15 * time.Minute)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				a.drainAgentDecommissionOutbox(ctx, "periodic")
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(startupPhaseBackground):
+		}
+
+		// Decommission outbox drainer (runs periodically forever).
+		a.safeGo(func() {
+			a.drainAgentDecommissionOutbox(ctx, "startup")
+			ticker := time.NewTicker(15 * time.Minute)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					a.drainAgentDecommissionOutbox(ctx, "periodic")
+				}
 			}
-		}
-	})
+		})
 
-	a.startupWg.Add(1)
-	a.safeGo(func() {
-		defer a.startupWg.Done()
-		if a.automationSvc == nil {
-			return
-		}
-		a.automationSvc.Run(ctx, func() {})
-	})
-
-	a.startupWg.Add(1)
-	a.safeGo(func() {
-		defer a.startupWg.Done()
-		if a.syncCoord == nil {
-			return
-		}
-		a.syncCoord.Run(ctx)
-	})
-
-	a.startupWg.Add(1)
-	a.safeGo(func() {
-		defer a.startupWg.Done()
-		if a.p2pCoord == nil {
-			return
-		}
-		if !isAgentConfigured() && a.zeroTouchConfigRegistrationAllowed() {
+		if a.automationSvc != nil {
 			a.safeGo(func() {
-				a.RunOnboardingLoop(ctx)
+				a.automationSvc.Run(ctx, func() {})
 			})
 		}
-		a.p2pCoord.Run(ctx)
-	})
 
-	a.startupWg.Add(1)
-	a.safeGo(func() {
-		defer a.startupWg.Done()
-		if a.selfUpdater != nil {
-			a.selfUpdater.ResumePendingInstallReport(a.ctx)
-			a.selfUpdater.Run(a.ctx, 0)
+		if a.syncCoord != nil {
+			a.safeGo(func() {
+				a.syncCoord.Run(ctx)
+			})
+		}
+
+		if a.p2pCoord != nil {
+			if !isAgentConfigured() && a.zeroTouchConfigRegistrationAllowed() {
+				a.safeGo(func() {
+					a.RunOnboardingLoop(ctx)
+				})
+			}
+			a.safeGo(func() {
+				a.p2pCoord.Run(ctx)
+			})
 		}
 	})
 
+	// Phase 4: Self-updater + DB cleanup ticker (lowest priority).
 	a.startupWg.Add(1)
 	a.safeGo(func() {
 		defer a.startupWg.Done()
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(startupPhaseMaintenance):
+		}
+
+		if a.selfUpdater != nil {
+			a.safeGo(func() {
+				a.selfUpdater.ResumePendingInstallReport(a.ctx)
+				a.selfUpdater.Run(a.ctx, 0)
+			})
+		}
+
 		const cleanupInterval = 6 * time.Hour
 		const cleanupBatchSize = 500
 		ticker := time.NewTicker(cleanupInterval)
@@ -813,6 +852,9 @@ func (a *App) startup(ctx context.Context) {
 			}
 		}
 	})
+
+	// Apply startup throttle config from agent configuration (if already loaded).
+	a.applyStartupThrottleConfig()
 }
 
 func (a *App) SendTestHeartbeat() string {
@@ -851,6 +893,17 @@ func (a *App) isInventoryProvisioned() bool {
 		return false
 	}
 	return a.GetDebugConfig().IsProvisioned()
+}
+
+// applyStartupThrottleConfig pushes the agent's throttle policy to the
+// inventory subsystem, controlling whether osquery queries are paced
+// to avoid CPU saturation on modest machines.
+func (a *App) applyStartupThrottleConfig() {
+	if a == nil {
+		return
+	}
+	cfg := a.GetAgentConfiguration()
+	inventory.SetThrottleConfig(cfg.StartupThrottleEnabled, cfg.StartupMaxCPUPercent)
 }
 
 // onPostBootstrapProvisioned espera o agent ficar provisionado (com credenciais
@@ -909,15 +962,22 @@ func (a *App) onPostBootstrapProvisioned(ctx context.Context) error {
 		}
 	}
 
-	// 4. App-store e suporte.
-	if _, err := a.loadEffectiveAppStorePolicy(ctx, true); err != nil {
-		a.logs.append("[startup] post-bootstrap: falha ao carregar app-store: " + err.Error())
-	}
-	if a.supportSvc != nil && a.featureEnabled(a.GetAgentConfiguration().KnowledgeBaseEnabled) {
-		if err := a.supportSvc.RefreshKnowledgeBase(); err != nil {
-			a.logs.append("[startup] post-bootstrap: falha ao atualizar knowledge base: " + err.Error())
+	// 4. App-store e suporte — deferred 30s (non-critical at startup).
+	a.safeGo(func() {
+		select {
+		case <-a.ctx.Done():
+			return
+		case <-time.After(30 * time.Second):
 		}
-	}
+		if _, err := a.loadEffectiveAppStorePolicy(a.ctx, true); err != nil {
+			a.logs.append("[startup] post-bootstrap: falha ao carregar app-store: " + err.Error())
+		}
+		if a.supportSvc != nil && a.featureEnabled(a.GetAgentConfiguration().KnowledgeBaseEnabled) {
+			if err := a.supportSvc.RefreshKnowledgeBase(); err != nil {
+				a.logs.append("[startup] post-bootstrap: falha ao atualizar knowledge base: " + err.Error())
+			}
+		}
+	})
 
 	a.logs.append("[startup] post-bootstrap: reconciliacao concluida")
 	return nil

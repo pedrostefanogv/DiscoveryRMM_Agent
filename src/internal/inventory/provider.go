@@ -48,7 +48,8 @@ func (p *Provider) emitProgressHeartbeat() {
 //
 // Priority:
 //  1. Running osqueryd socket (fastest – reuses an existing daemon connection).
-//  2. osqueryi launched in socket mode (single init + Thrift calls per query).
+//  2. Keep-alive pool (osqueryi cached from previous calls within TTL).
+//  3. osqueryi launched in socket mode (single init + Thrift calls per query).
 func (p *Provider) runQueries(ctx context.Context, binary string, queries []osqueryQuery) map[string]osqueryResult {
 	// 1. Try a running osqueryd daemon socket.
 	if socketPath := findOsquerydSocket(); socketPath != "" {
@@ -57,12 +58,22 @@ func (p *Provider) runQueries(ctx context.Context, binary string, queries []osqu
 		if allRequiredSucceeded(results, queries) {
 			return results
 		}
-		log.Printf("[inventory] socket osqueryd falhou; tentando modo socket do osqueryi")
+		log.Printf("[inventory] socket osqueryd falhou; tentando pool osqueryi")
 	}
 
-	// 2. Start osqueryi in socket mode for a single-connection, multi-query session.
+	// 2. Try the keep-alive pool (reuses osqueryi from previous calls).
+	if socketPath := acquireOsqueryiSocket(); socketPath != "" {
+		log.Printf("[inventory] usando osqueryi do pool em %s", socketPath)
+		results := runQueriesViaSocket(ctx, socketPath, queries, p.emitProgressHeartbeat)
+		if allRequiredSucceeded(results, queries) {
+			return results
+		}
+		log.Printf("[inventory] pool osqueryi falhou; tentando novo osqueryi")
+	}
+
+	// 3. Start osqueryi in socket mode and store in the keep-alive pool.
 	if proc, err := startOsqueryiSocket(ctx, binary); err == nil {
-		defer proc.stop()
+		storeOsqueryiSocket(proc)
 		log.Printf("[inventory] usando osqueryi em modo socket em %s", proc.socketPath)
 		results := runQueriesViaSocket(ctx, proc.socketPath, queries, p.emitProgressHeartbeat)
 		if allRequiredSucceeded(results, queries) {
@@ -114,11 +125,21 @@ func (p *Provider) runQueriesAllowEmpty(ctx context.Context, binary string, quer
 		if allQueriesSucceeded(results, queries) {
 			return results
 		}
-		log.Printf("[inventory] socket osqueryd falhou; tentando modo socket do osqueryi")
+		log.Printf("[inventory] socket osqueryd falhou; tentando pool osqueryi")
+	}
+
+	// Try the keep-alive pool first.
+	if socketPath := acquireOsqueryiSocket(); socketPath != "" {
+		log.Printf("[inventory] usando osqueryi do pool em %s", socketPath)
+		results := runQueriesViaSocket(ctx, socketPath, queries, p.emitProgressHeartbeat)
+		if allQueriesSucceeded(results, queries) {
+			return results
+		}
+		log.Printf("[inventory] pool osqueryi falhou; tentando novo osqueryi")
 	}
 
 	if proc, err := startOsqueryiSocket(ctx, binary); err == nil {
-		defer proc.stop()
+		storeOsqueryiSocket(proc)
 		log.Printf("[inventory] usando osqueryi em modo socket em %s", proc.socketPath)
 		results := runQueriesViaSocket(ctx, proc.socketPath, queries, p.emitProgressHeartbeat)
 		if allQueriesSucceeded(results, queries) {
