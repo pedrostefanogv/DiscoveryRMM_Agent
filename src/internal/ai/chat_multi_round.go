@@ -122,7 +122,6 @@ func (s *Service) executeRound(ctx context.Context, cfg Config, req agentStreamR
 	httpReq.Header.Set("Accept", "text/event-stream")
 	netutil.SetAgentAuthHeadersWithAgentID(httpReq, cfg.APIKey, cfg.AgentID)
 
-	startTime := time.Now()
 	resp, err := tlsutil.NewHTTPClient(130 * time.Second).Do(httpReq)
 	if err != nil {
 		return "", err

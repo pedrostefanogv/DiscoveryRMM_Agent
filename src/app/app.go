@@ -962,20 +962,24 @@ func (a *App) onPostBootstrapProvisioned(ctx context.Context) error {
 		}
 	}
 
-	// 4. App-store e suporte — deferred 30s (non-critical at startup).
-	a.safeGo(func() {
-		select {
-		case <-a.ctx.Done():
-			return
-		case <-time.After(30 * time.Second):
-		}
-		if _, err := a.loadEffectiveAppStorePolicy(a.ctx, true); err != nil {
-			a.logs.append("[startup] post-bootstrap: falha ao carregar app-store: " + err.Error())
-		}
-		if a.supportSvc != nil && a.featureEnabled(a.GetAgentConfiguration().KnowledgeBaseEnabled) {
-			if err := a.supportSvc.RefreshKnowledgeBase(); err != nil {
-				a.logs.append("[startup] post-bootstrap: falha ao atualizar knowledge base: " + err.Error())
+// 4. App-store, suporte e registro de tools MCP (deferred 30s — non-critical at startup).
+		a.safeGo(func() {
+			select {
+			case <-a.ctx.Done():
+				return
+			case <-time.After(30 * time.Second):
 			}
+			if _, err := a.loadEffectiveAppStorePolicy(a.ctx, true); err != nil {
+				a.logs.append("[startup] post-bootstrap: falha ao carregar app-store: " + err.Error())
+			}
+			if a.supportSvc != nil && a.featureEnabled(a.GetAgentConfiguration().KnowledgeBaseEnabled) {
+				if err := a.supportSvc.RefreshKnowledgeBase(); err != nil {
+					a.logs.append("[startup] post-bootstrap: falha ao atualizar knowledge base: " + err.Error())
+				}
+			}
+			// Registra tools MCP do agent na API para o fluxo multi-round do chat
+			if err := a.RegisterAgentToolsOnServer(); err != nil {
+				a.logs.append("[startup] post-bootstrap: falha ao registrar agent tools: " + err.Error())
 		}
 	})
 
