@@ -1,11 +1,13 @@
 package platform
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -44,25 +46,51 @@ func RenameAtomic(oldPath, newPath string) error {
 	return nil
 }
 
-// isRetryableRenameError verifica se o erro é transiente (arquivo em uso).
+// isRetryableRenameError verifica se o erro é transiente (arquivo em uso) usando
+// o código syscall subjacente no Windows (language-agnostic), com fallback para
+// verificação de permissão no Linux/macOS.
 func isRetryableRenameError(err error) bool {
 	if err == nil {
 		return false
 	}
-	// No Windows, os.Rename falha com "The process cannot access the file
-	// because it is being used by another process" quando outro programa
-	// (AV, indexador) tem handle aberto.
+
+	// Windows: verificar pelo código de erro do syscall (independente de locale).
+	// ERROR_SHARING_VIOLATION (32): outro processo usa o arquivo.
+	// ERROR_LOCK_VIOLATION (33): outro processo bloqueou a região.
+	// ERROR_ACCESS_DENIED (5): pode ser AV segurando o handle.
 	if runtime.GOOS == "windows" {
-		msg := err.Error()
-		// Erros comuns: acesso negado, arquivo em uso, sharing violation.
-		if containsAny(msg, []string{
-			"being used by another process",
-			"acesso negado",
-			"cannot access the file",
-			"sharing violation",
-		}) {
+		var errno syscall.Errno
+		if errors.As(err, &errno) {
+			switch errno {
+			case 32, 33, 5: // ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION, ERROR_ACCESS_DENIED
+				return true
+			}
+		}
+		// Fallback string-based para wrappers que ocultam o Errno (robustez extra).
+		msg := strings.ToLower(err.Error())
+		if strings.Contains(msg, "being used by another process") ||
+			strings.Contains(msg, "cannot access the file") ||
+			strings.Contains(msg, "sharing violation") ||
+			strings.Contains(msg, "acesso negado") ||
+			strings.Contains(msg, "sendo usado por outro processo") ||
+			strings.Contains(msg, "não pode acessar o arquivo") ||
+			strings.Contains(msg, "violação de compartilhamento") {
 			return true
 		}
+		return false
+	}
+
+	// Linux/macOS: verificar permissão (EACCES, EPERM).
+	var errno syscall.Errno
+	if errors.As(err, &errno) {
+		if errno == syscall.EACCES || errno == syscall.EPERM {
+			return true
+		}
+	}
+	// Fallback string-based para Linux.
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "text file busy") || strings.Contains(msg, "permission denied") {
+		return true
 	}
 	return false
 }
@@ -98,13 +126,4 @@ func copyAndDelete(src, dst string) error {
 		return nil
 	}
 	return nil
-}
-
-func containsAny(s string, substrs []string) bool {
-	for _, sub := range substrs {
-		if strings.Contains(s, sub) {
-			return true
-		}
-	}
-	return false
 }

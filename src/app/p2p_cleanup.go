@@ -49,6 +49,13 @@ func (a *App) cleanupExpiredP2PTempArtifacts(now time.Time) (int, error) {
 		return 0, err
 	}
 
+	// TTL curto para artefatos temporários de transferência (partial files, parts dirs).
+	// Se a transferência falhou ou o RenameAtomic deixou orfão, limpamos em 1 hora.
+	orphanTTL := 1 * time.Hour
+	if orphanTTL > ttl {
+		orphanTTL = ttl
+	}
+
 	removed := 0
 	emptyDirs := make(map[string]struct{})
 	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, walkErr error) error {
@@ -58,10 +65,53 @@ func (a *App) cleanupExpiredP2PTempArtifacts(now time.Time) (int, error) {
 		if path == dir {
 			return nil
 		}
+
+		// Diretórios .parts: limpar se expirados (transferência abortada/crash).
+		if d.IsDir() && strings.HasSuffix(d.Name(), ".parts") {
+			info, infoErr := d.Info()
+			if infoErr != nil || now.Sub(info.ModTime()) < orphanTTL {
+				emptyDirs[path] = struct{}{}
+				return nil
+			}
+			if err := os.RemoveAll(path); err == nil {
+				removed++
+				a.logs.append(fmt.Sprintf("[p2p] limpeza: diretorio de chunks orfao removido: %s", d.Name()))
+			}
+			return nil
+		}
+
 		if d.IsDir() {
 			emptyDirs[path] = struct{}{}
 			return nil
 		}
+
+		// Arquivos .partial: limpar agressivamente (são temporários de montagem).
+		// Se o RenameAtomic falhou, o .partial ficou orfão. Limpamos com TTL curto.
+		if strings.HasSuffix(d.Name(), ".partial") {
+			info, infoErr := d.Info()
+			if infoErr != nil || now.Sub(info.ModTime()) < orphanTTL {
+				return nil
+			}
+			if err := os.Remove(path); err == nil {
+				removed++
+				a.logs.append(fmt.Sprintf("[p2p] limpeza: partial orfao removido: %s", d.Name()))
+			}
+			return nil
+		}
+
+		// Arquivos .importing: temporários de import (single-pass).
+		if strings.HasSuffix(d.Name(), ".importing") {
+			info, infoErr := d.Info()
+			if infoErr != nil || now.Sub(info.ModTime()) < orphanTTL {
+				return nil
+			}
+			if err := os.Remove(path); err == nil {
+				removed++
+				a.logs.append(fmt.Sprintf("[p2p] limpeza: importing orfao removido: %s", d.Name()))
+			}
+			return nil
+		}
+
 		info, err := d.Info()
 		if err != nil {
 			return nil
