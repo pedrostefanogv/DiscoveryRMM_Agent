@@ -362,15 +362,45 @@ func handleStreamArtifactGet(s network.Stream, transfer *p2pTransferServer) {
 
 	reader := io.LimitReader(f, chunkLen)
 	if coord != nil {
+		// Track progresso acumulado por sessão (artifact+requester) para
+		// que a barra seja monotônica e relativa ao tamanho total do arquivo,
+		// não a cada chunk individual.
+		sessionKey := req.ArtifactName + "|" + requesterID
+		coord.servingSessionsMu.Lock()
+		sess, exists := coord.servingSessions[sessionKey]
+		if !exists {
+			sess = &servingSession{
+				artifactName: req.ArtifactName,
+				requesterID:  requesterID,
+				totalSize:    totalSize,
+			}
+			coord.servingSessions[sessionKey] = sess
+		}
+		coord.servingSessionsMu.Unlock()
+
 		reader = newProgressReader(reader, chunkLen, func(readSoFar int64) {
-			coord.emitTransferProgress(p2pTransferProgress{
-				ArtifactName: req.ArtifactName,
-				PeerID:       requesterID,
-				BytesRead:    readSoFar,
-				TotalBytes:   chunkLen,
-				Operation:    "serve",
-				Direction:    "upload",
-			})
+			coord.servingSessionsMu.Lock()
+			accumulated := sess.servedBytes + readSoFar
+			// Só emite se houve mudança significativa (>1% ou 100KB)
+			delta := accumulated - sess.lastReported
+			threshold := sess.totalSize / 100
+			if threshold < 100*1024 {
+				threshold = 100 * 1024
+			}
+			if delta >= threshold || accumulated >= sess.totalSize {
+				sess.lastReported = accumulated
+				coord.servingSessionsMu.Unlock()
+				coord.emitTransferProgress(p2pTransferProgress{
+					ArtifactName: req.ArtifactName,
+					PeerID:       requesterID,
+					BytesRead:    accumulated,
+					TotalBytes:   sess.totalSize,
+					Operation:    "serve",
+					Direction:    "upload",
+				})
+				return
+			}
+			coord.servingSessionsMu.Unlock()
 		})
 	}
 
@@ -399,6 +429,19 @@ func handleStreamArtifactGet(s network.Stream, transfer *p2pTransferServer) {
 		if copyErr != nil {
 			done.Error = copyErr.Error()
 		}
+
+		// Atualiza a sessão com os bytes acumulados desse chunk e emite progresso final.
+		sessionKey := req.ArtifactName + "|" + requesterID
+		coord.servingSessionsMu.Lock()
+		sess, ok := coord.servingSessions[sessionKey]
+		if ok {
+			sess.servedBytes += written
+			done.BytesRead = sess.servedBytes
+			done.TotalBytes = sess.totalSize
+			sess.lastReported = sess.servedBytes
+		}
+		coord.servingSessionsMu.Unlock()
+
 		coord.emitTransferProgress(done)
 	}
 }

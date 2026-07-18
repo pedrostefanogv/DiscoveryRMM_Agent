@@ -211,6 +211,8 @@ const (
 // Goroutines que já adquiriram slot não são abortadas se o teto reduzir depois —
 // apenas novas goroutines esperam. Usa minParallelChunks como piso.
 // onChunkProgress é opcional — quando != nil, chamado com (chunkIndex, bytesLidos, totalChunk, totalChunks).
+// onChunkComplete é opcional — quando != nil, chamado com (completed, total) após cada chunk concluído.
+// onPhase é opcional — quando != nil, chamado com fases ("assembling", "verifying") durante a remontagem.
 // logf é opcional — quando != nil, chamado para logging de progresso e erros de chunks.
 func downloadChunkedLibp2p(
 	ctx context.Context,
@@ -222,6 +224,7 @@ func downloadChunkedLibp2p(
 	maxParallel int,
 	onChunkProgress func(chunkIdx int, readSoFar, chunkSize int64, totalChunks int),
 	onChunkComplete func(completed, total int),
+	onPhase func(phase string),
 	logf func(string),
 ) (string, int64, error) {
 	if len(peers) == 0 {
@@ -338,6 +341,9 @@ func downloadChunkedLibp2p(
 	}
 
 	// Assemble chunks into final file.
+	if onPhase != nil {
+		onPhase("assembling")
+	}
 	targetPath := filepath.Join(destDir, manifest.ArtifactName)
 	tmpPath := targetPath + ".partial"
 	out, err := os.Create(tmpPath)
@@ -369,6 +375,9 @@ func downloadChunkedLibp2p(
 	}
 
 	// Verify full file hash.
+	if onPhase != nil {
+		onPhase("verifying")
+	}
 	assembled := hex.EncodeToString(fullHash.Sum(nil))
 	if strings.TrimSpace(manifest.SHA256) != "" && !strings.EqualFold(assembled, manifest.SHA256) {
 		_ = os.Remove(tmpPath)

@@ -84,6 +84,20 @@ type p2pCoordinator struct {
 	// cpuSampler mede CPU via GetSystemTimes com estado próprio, isolado
 	// do heartbeat. Usado para throttling adaptativo durante build de manifest.
 	cpuSampler *platform.CPUSampler
+
+	// servingSessions rastreia bytes acumulados servidos por artifact,
+	// para que o progresso de upload seja relativo ao arquivo completo,
+	// não a cada chunk individual. Chave: "artifactName|requesterID".
+	servingSessionsMu sync.Mutex
+	servingSessions   map[string]*servingSession
+}
+
+type servingSession struct {
+	artifactName string
+	requesterID  string
+	totalSize    int64
+	servedBytes  int64
+	lastReported int64 // evita emitir progresso redundante (mesmo byte count)
 }
 
 type p2pPeerState struct {
@@ -117,6 +131,7 @@ func newP2PCoordinator(app *App) *p2pCoordinator {
 		sha256Cache:      make(map[string]artifactSHA256CacheEntry),
 		fetchStates:      newFetchStateMap(),
 		cpuSampler:       platform.NewCPUSampler(),
+		servingSessions:  make(map[string]*servingSession),
 	}
 }
 

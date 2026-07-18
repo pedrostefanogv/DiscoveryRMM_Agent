@@ -22,7 +22,8 @@ type p2pTransferProgress struct {
 	// CompletedChunks é o número de chunks já concluídos com sucesso.
 	// Diferente de BytesRead (que flutua por chunk), CompletedChunks é
 	// monotônico e representa progresso real consolidado.
-	CompletedChunks int `json:"completedChunks,omitempty"`
+	CompletedChunks int    `json:"completedChunks,omitempty"`
+	Phase           string `json:"phase,omitempty"` // "transfer", "assembling", "verifying", "done"
 }
 
 // emitTransferProgress emite um evento Wails p2p:transfer-progress para o frontend.

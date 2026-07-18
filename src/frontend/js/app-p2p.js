@@ -587,19 +587,34 @@ function renderP2PTransferList() {
     var barColor = p.error ? 'var(--danger)' : (p.done && !p.error ? 'var(--accent)' : '#4a90d9');
     var isUpload = String(p.direction || '').toLowerCase() === 'upload' || String(p.operation || '').toLowerCase() === 'serve';
     var directionArrow = isUpload ? '→' : '←';
-    var phaseLabel = isUpload ? 'enviando' : 'recebendo';
+    var phaseLabel = '';
+    if (p.phase) {
+      // Fases de pós-transferência (montagem/verificação)
+      var phaseMap = { 'assembling': 'remontando chunks', 'verifying': 'verificando checksum' };
+      phaseLabel = ' (' + (phaseMap[p.phase] || p.phase) + ')';
+    } else if (isUpload) {
+      phaseLabel = ' (' + formatP2PBytes(bytesRead) + ' de ' + formatP2PBytes(totalBytes) + ' enviados)';
+    } else {
+      phaseLabel = ' (' + formatP2PBytes(bytesRead) + ' de ' + formatP2PBytes(totalBytes) + ' recebidos)';
+    }
     var label = escapeHtml(p.artifactName || '?') + ' ' + directionArrow + ' ' + escapeHtml(p.peerID || '?');
-    if (p.totalChunks > 0) {
-      label += ' [chunk ' + (p.chunkIndex + 1) + '/' + p.totalChunks + ']';
+    if (!p.phase && p.totalChunks > 0 && p.operation !== 'serve') {
+      // Apenas para download: mostra chunk info se não está em fase de pós-processamento
+      label += ' [chunk ' + p.completedChunks + '/' + p.totalChunks + ']';
     }
     html += '<div class="p2p-transfer-item" style="margin-bottom:8px;">' +
       '<div style="display:flex;justify-content:space-between;font-size:0.78rem;margin-bottom:3px;">' +
-        '<span class="mono">' + label + ' (' + phaseLabel + ')</span>' +
-        '<span style="color:var(--muted)">' + formatP2PBytes(bytesRead) + ' / ' + formatP2PBytes(totalBytes) + ' (' + pct + '%)</span>' +
+        '<span class="mono">' + label + '</span>' +
+        '<span style="color:var(--muted)">' + phaseLabel + '</span>' +
       '</div>' +
-      '<div style="background:var(--bg);border-radius:6px;height:8px;overflow:hidden;">' +
-        '<div style="background:' + barColor + ';height:100%;width:' + pct + '%;transition:width 0.2s ease;"></div>' +
-      '</div>' +
+      // Barra de progresso (oculta durante fases de pós-processamento não quantificáveis)
+      (!p.phase || p.phase === 'assembling' ? (
+        '<div style="background:var(--bg);border-radius:6px;height:8px;overflow:hidden;">' +
+          '<div style="background:' + barColor + ';height:100%;width:' + pct + '%;transition:width 0.2s ease;"></div>' +
+        '</div>'
+      ) : (
+        '<div style="color:var(--muted);font-size:0.74rem;margin-top:2px;">⏳ ' + (p.phase === 'verifying' ? 'Verificando integridade do arquivo...' : 'Processando...') + '</div>'
+      )) +
       (p.error ? '<div style="color:var(--danger);font-size:0.76rem;margin-top:2px;">' + escapeHtml(p.error) + '</div>' : '') +
       (p.done && !p.error ? '<div style="color:var(--accent);font-size:0.76rem;margin-top:2px;">✓ Concluido</div>' : '') +
     '</div>';
@@ -665,6 +680,7 @@ function onP2PTransferProgress(p) {
     completedChunks: p.completedChunks != null ? p.completedChunks : (prev.completedChunks || 0),
     done: !!p.done,
     error: p.error || '',
+    phase: p.phase || '',
     _monotonicBytes: prev._monotonicBytes || bytesRead
   };
   renderP2PTransferList();

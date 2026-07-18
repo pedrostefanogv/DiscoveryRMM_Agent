@@ -72,6 +72,18 @@ func (c *p2pCoordinator) DownloadArtifactFromPeer(ctx context.Context, artifactN
 					TotalChunks:     total,
 				})
 			},
+			func(phase string) {
+				c.emitTransferProgress(p2pTransferProgress{
+					ArtifactName:    artifactName,
+					PeerID:          sourcePeerID,
+					TotalBytes:      manifest.TotalSize,
+					TotalChunks:     manifest.TotalChunks,
+					CompletedChunks: manifest.TotalChunks,
+					BytesRead:       manifest.TotalSize,
+					Operation:       "pull",
+					Phase:           phase,
+				})
+			},
 			func(msg string) {
 				c.app.logs.append(msg)
 			})
@@ -193,6 +205,18 @@ func (c *p2pCoordinator) downloadArtifactSwarm(ctx context.Context, artifactName
 				Operation:       "swarm-pull",
 				CompletedChunks: completed,
 				TotalChunks:     total,
+			})
+		},
+		func(phase string) {
+			c.emitTransferProgress(p2pTransferProgress{
+				ArtifactName:    artifactName,
+				PeerID:          fmt.Sprintf("%d peers", len(peerEntries)),
+				TotalBytes:      manifest.TotalSize,
+				TotalChunks:     manifest.TotalChunks,
+				CompletedChunks: manifest.TotalChunks,
+				BytesRead:       manifest.TotalSize,
+				Operation:       "swarm-pull",
+				Phase:           phase,
 			})
 		},
 		func(msg string) {

@@ -426,18 +426,28 @@
       var p = transferProgressMap[key];
       var pct = p.totalBytes > 0 ? Math.round((p.bytesRead / p.totalBytes) * 100) : 0;
       var barColor = p.error ? "var(--danger)" : (p.done && !p.error ? "var(--accent)" : "#4a90d9");
-      var label = escapeHtml(p.artifactName) + " ← " + escapeHtml(p.peerID);
-      if (p.totalChunks > 0) {
-        label += " [chunk " + (p.chunkIndex + 1) + "/" + p.totalChunks + "]";
+      var directionArrow = String(p.direction || "").toLowerCase() === "upload" ? "→" : "←";
+      var label = escapeHtml(p.artifactName) + " " + directionArrow + " " + escapeHtml(p.peerID);
+      var subLabel = "";
+      if (p.phase) {
+        var phaseMap = { "assembling": "remontando", "verifying": "verificando" };
+        subLabel = " (" + (phaseMap[p.phase] || p.phase) + ")";
+      } else if (p.totalChunks > 0) {
+        subLabel = " [chunk " + (p.completedChunks || 0) + "/" + p.totalChunks + "]";
       }
+      var statusText = formatBytes(p.bytesRead) + " / " + formatBytes(p.totalBytes) + " (" + pct + "%)";
       html += '<div class="transfer-item" style="margin-bottom:8px;">' +
         '<div style="display:flex;justify-content:space-between;font-size:0.78rem;margin-bottom:3px;">' +
-          '<span class="mono">' + label + '</span>' +
-          '<span style="color:var(--muted)">' + formatBytes(p.bytesRead) + ' / ' + formatBytes(p.totalBytes) + ' (' + pct + '%)</span>' +
+          '<span class="mono">' + label + subLabel + '</span>' +
+          '<span style="color:var(--muted)">' + statusText + '</span>' +
         '</div>' +
-        '<div style="background:var(--bg);border-radius:6px;height:8px;overflow:hidden;">' +
-          '<div style="background:' + barColor + ';height:100%;width:' + pct + '%;transition:width 0.2s ease;"></div>' +
-        '</div>' +
+        (!p.phase ? (
+          '<div style="background:var(--bg);border-radius:6px;height:8px;overflow:hidden;">' +
+            '<div style="background:' + barColor + ';height:100%;width:' + pct + '%;transition:width 0.2s ease;"></div>' +
+          '</div>'
+        ) : (
+          '<div style="color:var(--muted);font-size:0.74rem;margin-top:2px;">⏳ Processando...</div>'
+        )) +
         (p.error ? '<div style="color:var(--danger);font-size:0.76rem;margin-top:2px;">' + escapeHtml(p.error) + '</div>' : '') +
         (p.done && !p.error ? '<div style="color:var(--accent);font-size:0.76rem;margin-top:2px;">✓ Concluido</div>' : '') +
       '</div>';
