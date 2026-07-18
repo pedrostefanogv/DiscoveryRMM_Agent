@@ -1,10 +1,13 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -280,7 +283,7 @@ func (a *App) StartChatStream(message string) {
 		}
 		a.chatSvc.SetConfig(runtimeCfg)
 
-		_, err := a.chatSvc.SendStream(
+		_, err := a.chatSvc.SendStreamMultiRound(
 			a.ctx,
 			message,
 			func(token string) {
@@ -291,6 +294,7 @@ func (a *App) StartChatStream(message string) {
 				wailsRuntime.EventsEmit(a.ctx, "chat:thinking", status)
 				a.PublishChatEvent("chat:thinking", status)
 			},
+			a.mcpExecuteForChat,
 		)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
@@ -343,7 +347,72 @@ func (a *App) GetAvailableTools() []map[string]string {
 	return result
 }
 
+// mcpExecuteForChat executa uma tool MCP local para o fluxo multi-round.
+func (a *App) mcpExecuteForChat(ctx context.Context, toolName, argsJSON string) (string, error) {
+	result, err := a.mcpRegistry.Call(toolName, json.RawMessage(argsJSON))
+	if err != nil {
+		return "", err
+	}
+	b, marshalErr := json.Marshal(result)
+	if marshalErr != nil {
+		return fmt.Sprintf(`{"result":%q}`, fmt.Sprint(result)), nil
+	}
+	return string(b), nil
+}
+
 // GetMCPRegistry returns the registry (used by main.go for MCP server mode).
 func (a *App) GetMCPRegistry() *mcp.Registry {
 	return a.mcpRegistry
+}
+
+// RegisterAgentToolsOnServer envia a lista de tools MCP para a API.
+func (a *App) RegisterAgentToolsOnServer() error {
+	dbg := a.GetDebugConfig()
+	baseURL := strings.TrimSpace(dbg.ApiScheme) + "://" + strings.TrimSpace(dbg.ApiServer)
+	if strings.TrimSpace(dbg.ApiScheme) == "" || strings.TrimSpace(dbg.ApiServer) == "" {
+		return fmt.Errorf("apiScheme/apiServer nao configurados")
+	}
+
+	tools := a.mcpRegistry.Tools()
+	type toolEntry struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		Schema      any    `json:"parametersSchema"`
+	}
+	entries := make([]toolEntry, 0, len(tools))
+	for _, t := range tools {
+		entries = append(entries, toolEntry{
+			Name:        t.Name,
+			Description: t.Description,
+			Schema:      t.InputSchema(),
+		})
+	}
+
+	body := map[string]any{"tools": entries}
+	payload, _ := json.Marshal(body)
+
+	endpoint := baseURL + "/api/v1/agent-auth/me/agent-tools/registry"
+	req, err := http.NewRequestWithContext(a.ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
+	if err != nil {
+		a.logs.append("[chat] registro tools request: " + err.Error())
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(dbg.AuthToken))
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		a.logs.append("[chat] registro tools falhou: " + err.Error())
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		a.logs.append(fmt.Sprintf("[chat] registro tools retornou %d: %s", resp.StatusCode, strings.TrimSpace(string(bodyBytes))))
+		return fmt.Errorf("status %d", resp.StatusCode)
+	}
+
+	a.logs.append(fmt.Sprintf("[chat] %d tools registradas no servidor", len(entries)))
+	return nil
 }

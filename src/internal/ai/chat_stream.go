@@ -19,11 +19,37 @@ import (
 // ─── Stream Types ──────────────────────────────────────────────────
 
 type agentChatStreamEvent struct {
-	Type      string `json:"type"`
-	Content   string `json:"content"`
-	SessionID string `json:"sessionId"`
-	Error     string `json:"error"`
-	LatencyMs int    `json:"latencyMs"`
+	Type          string `json:"type"`
+	Content       string `json:"content"`
+	SessionID     string `json:"sessionId"`
+	Error         string `json:"error"`
+	LatencyMs     int    `json:"latencyMs"`
+	TokensUsed    int    `json:"tokensUsed"`
+	ToolCallID    string `json:"toolCallId"`
+	ToolName      string `json:"toolName"`
+	ToolArguments string `json:"toolArguments"`
+}
+
+// toolResultItem sent back to the server in rounds 2+.
+type toolResultItem struct {
+	CallID string `json:"callId"`
+	Name   string `json:"name"`
+	Result string `json:"result"`
+}
+
+// agentStreamRequest is the JSON body sent to /me/ai-chat/stream.
+type agentStreamRequest struct {
+	Message     string           `json:"message,omitempty"`
+	SessionID   string           `json:"sessionId,omitempty"`
+	ToolResults []toolResultItem `json:"toolResults,omitempty"`
+	MaxTokens   int              `json:"maxTokens,omitempty"`
+}
+
+// pendingToolCall collects a tool_call event before execution.
+type pendingToolCall struct {
+	CallID string
+	Name   string
+	Args   string
 }
 
 // ─── Stream Call ───────────────────────────────────────────────────
