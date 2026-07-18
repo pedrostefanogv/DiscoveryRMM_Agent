@@ -47,7 +47,7 @@ func (u *Updater) InstallFromURL(ctx context.Context, version, downloadURL strin
 
 	// Para URLs nao-relativas que sao do endpoint publico, usa P2P-first
 	if strings.Contains(finalURL, "/api/v1/download/agent") {
-		tempPath, fileSha256, err := u.downloadFromCacheOrPublic(ctx, "")
+		tempPath, fileSha256, _, err := u.downloadFromCacheOrPublic(ctx, "")
 		if err != nil {
 			return err
 		}

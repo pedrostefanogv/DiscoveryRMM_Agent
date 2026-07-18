@@ -102,9 +102,12 @@ func (u *Updater) cleanupOldDownloads() {
 			continue
 		}
 		name := entry.Name()
-		// Só limpa arquivos de download (discovery-update-*.exe).
+		// Limpa arquivos de download residuais (tanto legado discovery-update-*.exe
+		// quanto o novo padrão canônico selfupdate-<sha256>.exe).
 		// Não remove pending-install.json (gerenciado separadamente).
-		if !strings.HasPrefix(name, "discovery-update-") || !strings.HasSuffix(name, ".exe") {
+		isLegacy := strings.HasPrefix(name, "discovery-update-") && strings.HasSuffix(name, ".exe")
+		isCanonical := strings.HasPrefix(name, "selfupdate-") && strings.HasSuffix(name, ".exe")
+		if !isLegacy && !isCanonical {
 			continue
 		}
 

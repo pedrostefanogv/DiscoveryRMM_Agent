@@ -312,12 +312,12 @@ func (u *Updater) CheckAndUpdate(ctx context.Context, force bool) error {
 
 		// Usa o SHA256 do servidor para P2P artifactID preciso.
 		publicSHA256 := serverSHA256
-		tempPath, fileSha256, err := u.downloadFromCacheOrPublic(ctx, publicSHA256)
+		tempPath, fileSha256, fromP2P, err := u.downloadFromCacheOrPublic(ctx, publicSHA256)
 		if err != nil {
 			u.logf("[selfupdate] download falhou: %v", err)
 			return err
 		}
-		u.logf("[selfupdate] download concluido: tempPath=%s sha256=%s", tempPath, fileSha256[:12])
+		u.logf("[selfupdate] download concluido: tempPath=%s sha256=%s fromP2P=%v", tempPath, fileSha256[:12], fromP2P)
 
 		targetVersion := extractFileVersion(tempPath)
 		if targetVersion == "" {
@@ -345,10 +345,12 @@ func (u *Updater) CheckAndUpdate(ctx context.Context, force bool) error {
 			return nil
 		}
 
-		// Publica no P2P
-		artifactID := "selfupdate:" + strings.ToLower(fileSha256)
-		if u.OnArtifactReady != nil {
-			_ = u.OnArtifactReady(ctx, tempPath, artifactID, fileSha256, targetVersion)
+		// Publica no P2P (apenas se veio de HTTP — P2P já está indexado).
+		if !fromP2P {
+			artifactID := "selfupdate:" + strings.ToLower(fileSha256)
+			if u.OnArtifactReady != nil {
+				_ = u.OnArtifactReady(ctx, tempPath, artifactID, fileSha256, targetVersion)
+			}
 		}
 
 		if err := u.persistPendingInstallState(pendingInstallState{
@@ -386,12 +388,12 @@ func (u *Updater) checkAndUpdateFallback(ctx context.Context, force bool, curren
 		u.logf("[selfupdate] aviso: nao foi possivel obter SHA256 do servidor: %v", shaErr)
 	}
 
-	tempPath, fileSha256, err := u.downloadFromCacheOrPublic(ctx, publicSHA256)
+	tempPath, fileSha256, fromP2P, err := u.downloadFromCacheOrPublic(ctx, publicSHA256)
 	if err != nil {
 		u.logf("[selfupdate] download falhou: %v", err)
 		return err
 	}
-	u.logf("[selfupdate] download concluido: tempPath=%s sha256=%s", tempPath, fileSha256[:12])
+	u.logf("[selfupdate] download concluido: tempPath=%s sha256=%s fromP2P=%v", tempPath, fileSha256[:12], fromP2P)
 
 	if publicSHA256 != "" && !strings.EqualFold(fileSha256, publicSHA256) {
 		u.logf("[selfupdate] ALERTA: SHA256 divergente do servidor! local=%s servidor=%s", fileSha256[:12], publicSHA256[:12])
@@ -410,9 +412,12 @@ func (u *Updater) checkAndUpdateFallback(ctx context.Context, force bool, curren
 		return nil
 	}
 
-	artifactID := "selfupdate:" + strings.ToLower(fileSha256)
-	if u.OnArtifactReady != nil {
-		_ = u.OnArtifactReady(ctx, tempPath, artifactID, fileSha256, targetVersion)
+	// Publica no P2P (apenas se veio de HTTP — P2P já está indexado).
+	if !fromP2P {
+		artifactID := "selfupdate:" + strings.ToLower(fileSha256)
+		if u.OnArtifactReady != nil {
+			_ = u.OnArtifactReady(ctx, tempPath, artifactID, fileSha256, targetVersion)
+		}
 	}
 
 	currentCommit := strings.TrimSpace(buildinfo.Commit)

@@ -173,8 +173,9 @@ func (u *Updater) fetchPublicSHA256(ctx context.Context) (string, error) {
 // downloadFromCacheOrPublic tenta baixar o artifact via P2P (se peers disponiveis)
 // e faz fallback para o endpoint publico /api/v1/download/agent.
 // expectedSHA256: se informado, monta artifactID = "selfupdate:" + sha256 e valida pos-download.
-// Retorna o path do arquivo temporario e o SHA256 calculado localmente.
-func (u *Updater) downloadFromCacheOrPublic(ctx context.Context, expectedSHA256 string) (string, string, error) {
+// Retorna o path do arquivo temporario, SHA256 calculado localmente e flag indicando
+// se o download veio do P2P (true) ou HTTP (false).
+func (u *Updater) downloadFromCacheOrPublic(ctx context.Context, expectedSHA256 string) (path string, sha string, fromP2P bool, err error) {
 	artifactID := "selfupdate:current"
 	if expectedSHA256 != "" {
 		artifactID = "selfupdate:" + strings.ToLower(expectedSHA256)
@@ -215,7 +216,7 @@ func (u *Updater) downloadFromCacheOrPublic(ctx context.Context, expectedSHA256 
 					continue
 				}
 				u.logf("[selfupdate] download P2P concluido: peer=%s artifactID=%s sha256=%s", peerID, artifactID, actual[:12])
-				return path, actual, nil
+				return path, actual, true, nil
 			}
 			u.logf("[selfupdate] P2P exaurido (%d peers tentados), fallback para HTTP", len(peers))
 		} else {
@@ -225,7 +226,9 @@ func (u *Updater) downloadFromCacheOrPublic(ctx context.Context, expectedSHA256 
 
 	// ── HTTP download do endpoint publico ──
 	downloadURL := u.apiScheme() + "://" + u.apiServer() + "/api/v1/download/agent"
-	return u.downloadFromURL(ctx, downloadURL)
+	var httpErr error
+	path, sha, httpErr = u.downloadFromURL(ctx, downloadURL)
+	return path, sha, false, httpErr
 }
 
 // downloadFromURL faz o download do instalador a partir de uma URL.
@@ -296,6 +299,18 @@ func (u *Updater) downloadFromURL(ctx context.Context, downloadURL string) (stri
 	if err != nil {
 		errutil.LogIfErr(os.Remove(path), "selfupdate: limpar download apos falha sha256")
 		return "", "", err
+	}
+
+	// Renomeia para o nome canônico P2P (selfupdate-<sha256>.exe).
+	// Isso coloca o arquivo no P2P_Temp com o nome que o gossip scanner
+	// reconhece e registra no índice, sem precisar de cópia extra.
+	canonicalPath := filepath.Join(u.TempDir, fmt.Sprintf("selfupdate-%s.exe", strings.ToLower(sha)))
+	_ = os.Remove(canonicalPath) // remove se já existir (raro)
+	if err := os.Rename(path, canonicalPath); err != nil {
+		// Fallback: se rename falhar (ex.: cross-device), mantém path original.
+		u.logf("[selfupdate] aviso: rename para canonical falhou: %v — mantendo path original", err)
+	} else {
+		path = canonicalPath
 	}
 
 	u.logf("[selfupdate] download concluido: path=%s sha256=%s", path, sha[:12])

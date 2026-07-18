@@ -93,11 +93,15 @@ func TestDownloadFromCacheOrPublic_UsesPublicEndpoint(t *testing.T) {
 		TempDir:    t.TempDir(),
 	}
 
-	path, sha, err := updater.downloadFromCacheOrPublic(context.Background(), "")
+	path, sha, fromP2P, err := updater.downloadFromCacheOrPublic(context.Background(), "")
 	if err != nil {
 		t.Fatalf("downloadFromCacheOrPublic: %v", err)
 	}
 	defer os.Remove(path)
+
+	if fromP2P {
+		t.Fatalf("fromP2P = true, want false (HTTP fallback)")
+	}
 
 	if sha != checksumHex {
 		t.Fatalf("sha256 = %q, want %q", sha, checksumHex)

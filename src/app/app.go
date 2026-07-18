@@ -399,12 +399,15 @@ func NewApp(opts AppStartupOptions) *App {
 	})
 	a.selfUpdaterCh = make(chan bool, 4)
 	a.selfUpdater = &selfupdate.Updater{
-		GetToken:            func() string { return a.GetDebugConfig().AuthToken },
-		GetAgentID:          func() string { return a.GetDebugConfig().AgentID },
-		GetApiScheme:        func() string { return a.GetDebugConfig().ApiScheme },
-		GetApiServer:        func() string { return a.GetDebugConfig().ApiServer },
-		GetPolicy:           func() selfupdate.Policy { return selfupdate.NormalizePolicy(a.GetAgentConfiguration().AgentUpdate) },
-		TempDir:             filepath.Join(platform.DataDir(), "updates"),
+		GetToken:     func() string { return a.GetDebugConfig().AuthToken },
+		GetAgentID:   func() string { return a.GetDebugConfig().AgentID },
+		GetApiScheme: func() string { return a.GetDebugConfig().ApiScheme },
+		GetApiServer: func() string { return a.GetDebugConfig().ApiServer },
+		GetPolicy:    func() selfupdate.Policy { return selfupdate.NormalizePolicy(a.GetAgentConfiguration().AgentUpdate) },
+		// Downloads unificados no P2P_Temp: tanto P2P quanto HTTP escrevem no mesmo
+		// diretório, e o gossip scanner registra automaticamente artifacts com nome
+		// canônico (selfupdate-<sha256>.exe) no índice P2P — sem cópia extra.
+		TempDir:             a.p2pTempDir(),
 		Logf:                func(format string, args ...any) { a.logs.append("[selfupdate] " + fmt.Sprintf(format, args...)) },
 		InvalidateCh:        a.selfUpdaterCh,
 		OnSelfUpdateInstall: a.selfUpdateInstallWithPSADT,
@@ -425,17 +428,17 @@ func NewApp(opts AppStartupOptions) *App {
 			}
 			return filepath.Join(a.p2pTempDir(), view.ArtifactName), nil
 		},
+		// OnArtifactReady é chamado apenas para downloads HTTP (P2P já está
+		// indexado). Como o arquivo já está no P2P_Temp com nome canônico
+		// (selfupdate-<sha256>.exe), o gossip scanner faz o registro automaticamente.
+		// Aqui apenas confirmamos no log — sem cópia redundante.
 		OnArtifactReady: func(ctx context.Context, path, artifactID, sha256, version string) error {
 			if a.p2pCoord == nil || artifactID == "" {
 				return nil
 			}
-			_, err := a.p2pCoord.PublishFileWithID(path, artifactID)
-			if err != nil {
-				a.logs.append("[selfupdate] aviso: P2P publish falhou: " + err.Error())
-			} else {
-				a.logs.append(fmt.Sprintf("[selfupdate] artifact publicado no P2P: artifactID=%s sha256=%s", artifactID, sha256[:12]))
-			}
-			return nil // best-effort, nunca falha o update
+			a.logs.append(fmt.Sprintf("[selfupdate] artifact disponivel no P2P: artifactID=%s sha256=%s path=%s",
+				artifactID, sha256[:12], filepath.Base(path)))
+			return nil
 		},
 	}
 	a.exporter = updates.NewExporter(updates.ExportOptions{
