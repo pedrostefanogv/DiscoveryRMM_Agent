@@ -291,8 +291,10 @@ func (c *p2pCoordinator) PublishFileWithIDAndVersion(sourcePath string, artifact
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return P2PArtifactView{}, err
 	}
-	// Nome do arquivo: artifactID + extensão original (ex.: "rel-abc.exe")
-	targetName := sanitizeArtifactName(artifactID + filepath.Ext(sourcePath))
+	// Nome do arquivo: artifactID sanitizado + extensão original (ex.: "rel-abc.exe").
+	// Substitui ':' para evitar nomes inválidos no Windows (ex.: "selfupdate:<sha256>"
+	// vira "selfupdate-<sha256>.exe").
+	targetName := sanitizeArtifactName(strings.NewReplacer(":", "-").Replace(artifactID) + filepath.Ext(sourcePath))
 	targetPath := filepath.Join(dir, targetName)
 	tmpPath := targetPath + ".importing"
 	targetFile, err := os.Create(tmpPath)
