@@ -1,4 +1,4 @@
-﻿package app
+package app
 
 import (
 	"context"
@@ -244,7 +244,17 @@ func (m *remoteDebugManager) autoStopAtDeadline(sessionID string, deadline time.
 	timer := time.NewTimer(wait)
 	defer timer.Stop()
 	<-timer.C
-	m.stopSession(sessionID, "timeout")
+	// Só para a sessão se ela ainda for a ativa com o mesmo sessionID.
+	// Se o servidor reabriu a sessão com mesmo ID, a sessão antiga já foi
+	// parada por stopGivenSession("replaced") no startSession, e uma nova
+	// sessão com novo deadline foi criada — não devemos parar a nova.
+	m.mu.Lock()
+	current := m.activeSession
+	matches := current != nil && strings.EqualFold(current.sessionID, strings.TrimSpace(sessionID))
+	m.mu.Unlock()
+	if matches {
+		m.stopSession(sessionID, "timeout")
+	}
 }
 
 func (m *remoteDebugManager) publishLoop(ctx context.Context, session *remoteDebugSession) {

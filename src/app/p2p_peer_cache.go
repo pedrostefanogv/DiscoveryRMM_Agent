@@ -17,7 +17,16 @@ type p2pCachedPeer struct {
 	Addrs      []string  `json:"addrs"`
 	Port       int       `json:"port"`
 	LastSeenAt time.Time `json:"lastSeenAt"`
+	// FailCount acumula falhas consecutivas de conexão. Após atingir
+	// p2pCachedPeerMaxFailures, o peer é removido do cache para evitar
+	// tentativas infinitas em peers permanentemente inalcançáveis.
+	FailCount int `json:"failCount,omitempty"`
 }
+
+// p2pCachedPeerMaxFailures é o número máximo de falhas consecutivas antes
+// de remover um peer do cache. 3 falhas toleram flutuações temporárias de
+// rede sem descartar peers que voltam a responder.
+const p2pCachedPeerMaxFailures = 3
 
 func p2pPeerCachePath() string {
 	return filepath.Join(GetDataDir(), "p2p_peer_cache.json")

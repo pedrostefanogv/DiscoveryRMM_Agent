@@ -1,4 +1,4 @@
-﻿package app
+package app
 
 // app_p2p_libp2p_transport.go
 //
@@ -7,11 +7,11 @@
 // /p2p/artifact/{name}, /p2p/artifact/{name}/manifest e /p2p/replicate.
 //
 // Protocolos definidos (stream-based, JSON framing):
-//   /discovery/peers/1.0.0       â€” gossip: retorna peers conhecidos + catÃ¡logo local
-//   /artifact/access/1.0.0       â€” emite token de acesso para um artifact
-//   /artifact/manifest/1.0.0     â€” retorna manifest de chunks de um artifact
-//   /artifact/get/1.0.0          â€” transfere bytes de um chunk (range-aware)
-//   /artifact/replicate/1.0.0    â€” notifica peer para pull de artifact (push desativado, retorna Gone)
+//   /discovery/peers/1.0.0       —" gossip: retorna peers conhecidos + catálogo local
+//   /artifact/access/1.0.0       —" emite token de acesso para um artifact
+//   /artifact/manifest/1.0.0     —" retorna manifest de chunks de um artifact
+//   /artifact/get/1.0.0          —" transfere bytes de um chunk (range-aware)
+//   /artifact/replicate/1.0.0    —" notifica peer para pull de artifact (push desativado, retorna Gone)
 
 import (
 	"bufio"
@@ -44,13 +44,13 @@ const (
 	libp2pCandidacyTimeout      = 10 * time.Second
 	libp2pTransferTimeoutMax    = 4 * time.Hour   // arquivos grandes (6GB+) precisam de deadlines longos
 	libp2pManifestTimeout       = 5 * time.Minute // cobre leitura completa do arquivo para gerar manifest
-	libp2pMinTransferSpeed      = 512 * 1024      // 512 KB/s — piso conservador para cálculo de timeout
+	libp2pMinTransferSpeed      = 512 * 1024      // 512 KB/s - piso conservador para clculo de timeout
 	libp2pTransferTimeoutMargin = 30 * time.Second
 )
 
 // computeTransferDeadline calcula um deadline adaptativo baseado no tamanho dos dados.
 // Piso: libp2pTransferTimeout (2 min). Teto: libp2pTransferTimeoutMax (30 min).
-// Assume velocidade mínima de 1 MB/s mais margem fixa de 30s.
+// Assume velocidade mnima de 1 MB/s mais margem fixa de 30s.
 func computeTransferDeadline(dataSize int64) time.Time {
 	if dataSize <= 0 {
 		return time.Now().Add(libp2pTransferTimeout)
@@ -65,7 +65,7 @@ func computeTransferDeadline(dataSize int64) time.Time {
 	return time.Now().Add(estimated)
 }
 
-// â”€â”€ Request / Response types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// "—"— Request / Response types "—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—
 
 type libp2pPeersResponse struct {
 	AgentID       string            `json:"agentId"`
@@ -89,7 +89,7 @@ type libp2pGetRequest struct {
 	ArtifactName string `json:"artifactName"`
 	RequesterID  string `json:"requesterId"`
 	RangeStart   int64  `json:"rangeStart"`
-	RangeEnd     int64  `json:"rangeEnd"` // -1 = atÃ© o fim
+	RangeEnd     int64  `json:"rangeEnd"` // -1 = até o fim
 }
 
 type libp2pGetResponse struct {
@@ -98,7 +98,7 @@ type libp2pGetResponse struct {
 	TotalSize    int64  `json:"totalSize"`
 	RangeStart   int64  `json:"rangeStart"`
 	RangeEnd     int64  `json:"rangeEnd"`
-	// ApÃ³s este JSON header, o remetente envia exatamente (RangeEnd-RangeStart+1) bytes.
+	// Após este JSON header, o remetente envia exatamente (RangeEnd-RangeStart+1) bytes.
 }
 
 type libp2pReplicateRequest struct {
@@ -116,9 +116,9 @@ type libp2pErrorResponse struct {
 	Error string `json:"error"`
 }
 
-// â”€â”€ Tipos do protocolo /fetch â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// "—"— Tipos do protocolo /fetch "—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—
 
-// libp2pCandidacyRequest Ã© enviado por um peer que quer se candidatar a fetcher.
+// libp2pCandidacyRequest é enviado por um peer que quer se candidatar a fetcher.
 // Reutiliza ArtifactFetchCandidate como payload.
 type libp2pCandidacyRequest = ArtifactFetchCandidate
 
@@ -128,10 +128,10 @@ type libp2pCandidacyResponse struct {
 	Message  string `json:"message,omitempty"`
 }
 
-// â”€â”€ Server-side: registrar handlers no host libp2p â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// "—"— Server-side: registrar handlers no host libp2p "—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—
 
 // RegisterP2PProtocols instala todos os stream handlers nos 7 protocolos.
-// Chamado em app_p2p_libp2p.go apÃ³s criar o host.
+// Chamado em app_p2p_libp2p.go após criar o host.
 func RegisterP2PProtocols(h host.Host, coord *p2pCoordinator, transfer *p2pTransferServer) {
 	h.SetStreamHandler(protoDiscoveryPeers, func(s network.Stream) {
 		handleStreamPeers(s, coord, transfer)
@@ -182,13 +182,13 @@ func handleStreamArtifactAccess(s network.Stream, transfer *p2pTransferServer) {
 
 	var req libp2pAccessRequest
 	if err := json.NewDecoder(bufio.NewReader(s)).Decode(&req); err != nil {
-		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "payload inválido"})
+		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "payload invlido"})
 		return
 	}
 	req.ArtifactName = sanitizeArtifactName(req.ArtifactName)
 	req.RequesterID = strings.TrimSpace(req.RequesterID)
 	if req.ArtifactName == "" {
-		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "artifact inválido"})
+		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "artifact invlido"})
 		return
 	}
 	if req.RequesterID == "" {
@@ -208,13 +208,13 @@ func handleStreamArtifactManifest(s network.Stream, transfer *p2pTransferServer)
 
 	var req libp2pManifestRequest
 	if err := json.NewDecoder(bufio.NewReader(s)).Decode(&req); err != nil {
-		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "payload inválido"})
+		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "payload invlido"})
 		return
 	}
 	req.ArtifactName = sanitizeArtifactName(req.ArtifactName)
 	req.RequesterID = strings.TrimSpace(req.RequesterID)
 	if req.ArtifactName == "" {
-		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "artifact inválido"})
+		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "artifact invlido"})
 		return
 	}
 	transfer.mu.RLock()
@@ -225,7 +225,7 @@ func handleStreamArtifactManifest(s network.Stream, transfer *p2pTransferServer)
 	path := filepath.Join(tempDir, req.ArtifactName)
 	info, err := os.Stat(path)
 	if err != nil || info.IsDir() {
-		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "artifact não encontrado"})
+		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "artifact no encontrado"})
 		return
 	}
 
@@ -236,7 +236,7 @@ func handleStreamArtifactManifest(s network.Stream, transfer *p2pTransferServer)
 		return
 	}
 
-	// Reajustar deadline: buildChunkManifest lê o arquivo inteiro.
+	// Reajustar deadline: buildChunkManifest l o arquivo inteiro.
 	_ = s.SetDeadline(computeTransferDeadline(info.Size()))
 
 	var chunkSize int64 = defaultChunkSizeBytes
@@ -267,19 +267,19 @@ func handleStreamArtifactGet(s network.Stream, transfer *p2pTransferServer) {
 
 	var req libp2pGetRequest
 	if err := json.NewDecoder(bufio.NewReader(s)).Decode(&req); err != nil {
-		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "payload inválido"})
+		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "payload invlido"})
 		return
 	}
 	req.ArtifactName = sanitizeArtifactName(req.ArtifactName)
 	if req.ArtifactName == "" {
-		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "artifact inválido"})
+		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "artifact invlido"})
 		return
 	}
 	transfer.mu.RLock()
 	tempDir := transfer.tempDir
 	transfer.mu.RUnlock()
 
-	// Rejeitar arquivos .importing (ainda sendo copiados) — não devem ser servidos.
+	// Rejeitar arquivos .importing (ainda sendo copiados) - no devem ser servidos.
 	if strings.HasSuffix(req.ArtifactName, ".importing") {
 		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "artifact em andamento"})
 		return
@@ -288,7 +288,7 @@ func handleStreamArtifactGet(s network.Stream, transfer *p2pTransferServer) {
 	path := filepath.Join(tempDir, req.ArtifactName)
 	info, err := os.Stat(path)
 	if err != nil || info.IsDir() {
-		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "artifact não encontrado"})
+		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "artifact no encontrado"})
 		return
 	}
 
@@ -319,7 +319,7 @@ func handleStreamArtifactGet(s network.Stream, transfer *p2pTransferServer) {
 		rangeEnd = totalSize - 1
 	}
 	if rangeStart > rangeEnd {
-		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "range inválido"})
+		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "range invlido"})
 		return
 	}
 	chunkLen := rangeEnd - rangeStart + 1
@@ -362,9 +362,9 @@ func handleStreamArtifactGet(s network.Stream, transfer *p2pTransferServer) {
 
 	reader := io.LimitReader(f, chunkLen)
 	if coord != nil {
-		// Track progresso acumulado por sessão (artifact+requester) para
-		// que a barra seja monotônica e relativa ao tamanho total do arquivo,
-		// não a cada chunk individual.
+		// Track progresso acumulado por sesso (artifact+requester) para
+		// que a barra seja monotnica e relativa ao tamanho total do arquivo,
+		// no a cada chunk individual.
 		sessionKey := req.ArtifactName + "|" + requesterID
 		coord.servingSessionsMu.Lock()
 		sess, exists := coord.servingSessions[sessionKey]
@@ -381,7 +381,7 @@ func handleStreamArtifactGet(s network.Stream, transfer *p2pTransferServer) {
 		reader = newProgressReader(reader, chunkLen, func(readSoFar int64) {
 			coord.servingSessionsMu.Lock()
 			accumulated := sess.servedBytes + readSoFar
-			// Só emite se houve mudança significativa (>1% ou 100KB)
+			// S emite se houve mudana significativa (>1% ou 100KB)
 			delta := accumulated - sess.lastReported
 			threshold := sess.totalSize / 100
 			if threshold < 100*1024 {
@@ -404,8 +404,8 @@ func handleStreamArtifactGet(s network.Stream, transfer *p2pTransferServer) {
 		})
 	}
 
-	// Deadline para o lado servidor: evita que o libp2p encerre a conexão
-	// por timeout enquanto o chunk está sendo enviado (especialmente em redes lentas).
+	// Deadline para o lado servidor: evita que o libp2p encerre a conexo
+	// por timeout enquanto o chunk est sendo enviado (especialmente em redes lentas).
 	_ = s.SetDeadline(computeTransferDeadline(chunkLen))
 
 	written, copyErr := io.Copy(s, reader)
@@ -417,7 +417,7 @@ func handleStreamArtifactGet(s network.Stream, transfer *p2pTransferServer) {
 			req.ArtifactName, requesterID, chunkLen, written, copyErr))
 	}
 	if coord != nil {
-		// Atualiza a sessão com os bytes acumulados desse chunk.
+		// Atualiza a sesso com os bytes acumulados desse chunk.
 		sessionKey := req.ArtifactName + "|" + requesterID
 		coord.servingSessionsMu.Lock()
 		sess, ok := coord.servingSessions[sessionKey]
@@ -426,7 +426,7 @@ func handleStreamArtifactGet(s network.Stream, transfer *p2pTransferServer) {
 			sess.lastReported = sess.servedBytes
 		}
 		isComplete := ok && sess.servedBytes >= sess.totalSize
-		// Se deu erro ou a sessão não existe, também encerra.
+		// Se deu erro ou a sesso no existe, tambm encerra.
 		isDone := copyErr != nil || isComplete || !ok
 		if isDone {
 			delete(coord.servingSessions, sessionKey)
@@ -439,8 +439,8 @@ func handleStreamArtifactGet(s network.Stream, transfer *p2pTransferServer) {
 			Operation:    "serve",
 			Direction:    "upload",
 		}
-		// BytesRead/TotalBytes são sempre relativos ao arquivo completo
-		// para uma barra de progresso monotônica.
+		// BytesRead/TotalBytes so sempre relativos ao arquivo completo
+		// para uma barra de progresso monotnica.
 		if ok {
 			done.BytesRead = sess.servedBytes
 			done.TotalBytes = sess.totalSize
@@ -467,10 +467,10 @@ func handleStreamArtifactReplicate(s network.Stream) {
 	})
 }
 
-// â”€â”€ Client-side: funÃ§Ãµes de chamada para peers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// "—"— Client-side: funções de chamada para peers "—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—
 
 // libp2pFetchPeers abre um stream /discovery/peers/1.0.0 para o peer e retorna
-// a resposta de gossip (catÃ¡logo + peers conhecidos).
+// a resposta de gossip (catálogo + peers conhecidos).
 func libp2pFetchPeers(ctx context.Context, h host.Host, peerID peer.ID) (libp2pPeersResponse, error) {
 	s, err := h.NewStream(ctx, peerID, protoDiscoveryPeers)
 	if err != nil {
@@ -499,7 +499,7 @@ func libp2pRequestAccess(ctx context.Context, h host.Host, peerID peer.ID, artif
 	if err := json.NewEncoder(s).Encode(req); err != nil {
 		return P2PArtifactAccess{}, fmt.Errorf("encode access req: %w", err)
 	}
-	// LÃª resposta: pode ser P2PArtifactAccess ou libp2pErrorResponse.
+	// Lê resposta: pode ser P2PArtifactAccess ou libp2pErrorResponse.
 	raw, err := io.ReadAll(bufio.NewReader(s))
 	if err != nil {
 		return P2PArtifactAccess{}, fmt.Errorf("read access resp: %w", err)
@@ -572,7 +572,7 @@ func decodeLibp2pGetHeaderAndPayload(stream io.Reader) (libp2pGetResponse, io.Re
 
 func readPayloadExact(reader io.Reader, expected int64) ([]byte, error) {
 	if expected < 0 {
-		return nil, fmt.Errorf("tamanho de payload inválido")
+		return nil, fmt.Errorf("tamanho de payload invlido")
 	}
 	if expected > int64(^uint(0)>>1) {
 		return nil, fmt.Errorf("payload grande demais")
@@ -586,11 +586,11 @@ func readPayloadExact(reader io.Reader, expected int64) ([]byte, error) {
 }
 
 // libp2pDownloadChunk abre um stream /artifact/get/1.0.0, solicita um range e
-// salva os bytes no destFile. Verifica SHA256 do chunk apÃ³s receber.
-// onProgress Ã© opcional â€” quando != nil, chamado com (bytesLidosNoChunk, tamanhoDoChunk).
+// salva os bytes no destFile. Verifica SHA256 do chunk após receber.
+// onProgress é opcional —" quando != nil, chamado com (bytesLidosNoChunk, tamanhoDoChunk).
 func libp2pDownloadChunk(ctx context.Context, h host.Host, peerID peer.ID, artifactName, requesterID string, chunk P2PChunk, destFile string, onProgress func(readSoFar, total int64)) error {
 	if chunk.Size <= 0 {
-		return fmt.Errorf("chunk %d: tamanho inválido", chunk.Index)
+		return fmt.Errorf("chunk %d: tamanho invlido", chunk.Index)
 	}
 	if chunk.Offset < 0 {
 		return fmt.Errorf("chunk %d: offset invalido", chunk.Index)
@@ -651,14 +651,14 @@ func libp2pDownloadChunk(ctx context.Context, h host.Host, peerID peer.ID, artif
 }
 
 // libp2pDownloadArtifact faz download simples (arquivo inteiro) via /artifact/get/1.0.0.
-// onProgress Ã© opcional â€” quando != nil, Ã© chamado com (bytesLidos, totalBytes) durante a transferÃªncia.
+// onProgress é opcional —" quando != nil, é chamado com (bytesLidos, totalBytes) durante a transferência.
 func libp2pDownloadArtifact(ctx context.Context, h host.Host, peerID peer.ID, access P2PArtifactAccess, destDir string, onProgress func(readSoFar, total int64)) (string, int64, error) {
 	s, err := h.NewStream(ctx, peerID, protoArtifactGet)
 	if err != nil {
 		return "", 0, fmt.Errorf("stream get: %w", err)
 	}
 	defer s.Close()
-	// Deadline inicial: 2 min para handshake + header. Será reajustado após ler o header.
+	// Deadline inicial: 2 min para handshake + header. Ser reajustado aps ler o header.
 	_ = s.SetDeadline(time.Now().Add(libp2pTransferTimeout))
 
 	req := libp2pGetRequest{

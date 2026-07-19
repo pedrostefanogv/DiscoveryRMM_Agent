@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"discovery/internal/agentconn"
+	"discovery/internal/envutil"
 )
 
 func TestP2PSeedCountRule(t *testing.T) {
@@ -192,6 +193,9 @@ func TestClearAllP2PArtifacts(t *testing.T) {
 	t.Setenv("HOME", root)
 	t.Setenv("PROGRAMDATA", root)
 	t.Setenv("WINDIR", root)
+	// envutil cacheia variáveis via sync.Once — resetar para que t.Setenv
+	// seja efetivo neste teste.
+	envutil.Reset()
 
 	a := &App{}
 	dir := a.p2pTempDir()

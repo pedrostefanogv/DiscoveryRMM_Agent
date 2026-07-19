@@ -280,9 +280,15 @@ func NewRuntime(opts Options) *Runtime {
 
 // ForceHeartbeat triggers an immediate heartbeat send in the active
 // connection event loop. It waits for the send to complete (or timeout).
-// Returns true if the heartbeat was sent, false if no connection is active.
+// Returns true if the heartbeat was sent, false if no connection is active
+// or the event loop is too busy to accept the request.
 func (r *Runtime) ForceHeartbeat() bool {
 	done := make(chan struct{}, 1)
+	// Em vez de default imediato (que retorna falso-negativo quando o event
+	// loop está temporariamente bloqueado em nc.Publish lento), usa um
+	// timeout curto de 2s para aguardar o event loop consumir o pedido.
+	// Se o buffer do canal encher (4 heartbeats pendentes), o timeout
+	// dispara e retorna false — sinalizando corretamente sobrecarga.
 	select {
 	case r.forceHeartbeatCh <- done:
 		select {
@@ -292,8 +298,8 @@ func (r *Runtime) ForceHeartbeat() bool {
 			r.logf("[heartbeat][force] timeout aguardando envio do heartbeat forçado (10s)")
 			return false
 		}
-	default:
-		r.logf("[heartbeat][force] sessao inativa: nenhuma conexao consumindo heartbeats — agent desconectado")
+	case <-time.After(2 * time.Second):
+		r.logf("[heartbeat][force] timeout aguardando event loop consumir pedido (2s) — sessao possivelmente sobrecarregada ou inativa")
 		return false
 	}
 }
@@ -724,6 +730,14 @@ func extractHostFromServer(server string) string {
 }
 
 // autoDeriveNATSEndpoints derives NATS endpoints from NatsServerHost.
+//
+// Regras de derivação:
+//   - WSS é sempre derivável a partir de NatsServerHost (quando NatsWsServer estiver vazio),
+//     já que o servidor central normalmente expõe NATS sobre WebSocket na porta 443.
+//   - NATS nativo (nats://host:4222) só é derivado quando:
+//     1. NatsUseWssExternal=false (servidor não exige WSS externo), E
+//     2. host é local/privado (LAN/lab). Em hosts remotos públicos, o NATS nativo
+//     na porta 4222 raramente é exposto diretamente — WSS é o caminho canônico.
 func autoDeriveNATSEndpoints(cfg *Config) (derivedNATS bool, derivedWSS bool) {
 	if cfg == nil {
 		return false, false
@@ -740,7 +754,10 @@ func autoDeriveNATSEndpoints(cfg *Config) (derivedNATS bool, derivedWSS bool) {
 		}
 	}
 
-	if cfg.NatsServer == "" {
+	// Só deriva nats:// nativo quando o servidor não exige WSS externo E
+	// o host é local/privado (LAN/lab). Em hosts remotos públicos, o NATS
+	// nativo na porta 4222 normalmente não é exposto — WSS é o caminho canônico.
+	if cfg.NatsServer == "" && !cfg.NatsUseWssExternal && isLocalOrPrivateHost(host) {
 		if nativeURL := deriveNativeNATSServerFromHost(host); nativeURL != "" {
 			cfg.NatsServer = nativeURL
 			derivedNATS = true
@@ -748,6 +765,38 @@ func autoDeriveNATSEndpoints(cfg *Config) (derivedNATS bool, derivedWSS bool) {
 	}
 
 	return derivedNATS, derivedWSS
+}
+
+// isLocalOrPrivateHost retorna true para hosts que tipicamente expõem NATS nativo
+// na porta 4222 em ambientes LAN/lab: localhost, loopback, e ranges privados IPv4.
+// Hosts remotos públicos (ex.: tngplacas.com.br) não entram nesta categoria —
+// para eles, o caminho canônico é WSS na porta 443.
+func isLocalOrPrivateHost(rawHost string) bool {
+	host := strings.TrimSpace(strings.Trim(rawHost, "[]"))
+	if host == "" {
+		return false
+	}
+	lower := strings.ToLower(host)
+	if lower == "localhost" {
+		return true
+	}
+	// Loopback IPv4/IPv6
+	if strings.HasPrefix(lower, "127.") || lower == "::1" {
+		return true
+	}
+	// Ranges privados IPv4 (RFC 1918)
+	if strings.HasPrefix(lower, "10.") ||
+		strings.HasPrefix(lower, "192.168.") ||
+		strings.HasPrefix(lower, "172.") {
+		return true
+	}
+	// Link-local APIPA (169.254.x.x) — não é roteável, mas pode ser lab local
+	if strings.HasPrefix(lower, "169.254.") {
+		return true
+	}
+	// Sem suporte a DNS reverso aqui: hostnames como "tngplacas.com.br"
+	// são tratados como remotos públicos por padrão.
+	return false
 }
 
 func deriveNativeNATSServerFromHost(rawHost string) string {

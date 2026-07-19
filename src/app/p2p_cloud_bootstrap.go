@@ -169,12 +169,21 @@ func (c *p2pCoordinator) connectCachedPeers(ctx context.Context, h interface {
 		err = h.Connect(connCtx, addrInfo)
 		cancel()
 		if err != nil {
-			c.app.logs.append(fmt.Sprintf("[p2p][cloud-bootstrap] cache: connect falhou peerId=%s (removendo): %v", cp.PeerID, err))
-			// Peer inválido — não adiciona ao slice válido (remoção implícita).
+			// Incrementa contador de falhas. Só remove o peer do cache
+			// após p2pCachedPeerMaxFailures consecutivas — tolera flutuações
+			// temporárias de rede sem descartar peers que voltam a responder.
+			cp.FailCount++
+			if cp.FailCount >= p2pCachedPeerMaxFailures {
+				c.app.logs.append(fmt.Sprintf("[p2p][cloud-bootstrap] cache: connect falhou peerId=%s (removendo após %d falhas consecutivas): %v", cp.PeerID, cp.FailCount, err))
+				continue // não adiciona ao slice válido (remoção implícita)
+			}
+			c.app.logs.append(fmt.Sprintf("[p2p][cloud-bootstrap] cache: connect falhou peerId=%s (falha %d/%d, mantendo no cache): %v", cp.PeerID, cp.FailCount, p2pCachedPeerMaxFailures, err))
+			valid = append(valid, cp)
 			continue
 		}
 		c.app.logs.append(fmt.Sprintf("[p2p][cloud-bootstrap] cache: reconectado peerId=%s", cp.PeerID))
 		cp.LastSeenAt = time.Now().UTC()
+		cp.FailCount = 0 // reset em sucesso
 		valid = append(valid, cp)
 	}
 	return valid

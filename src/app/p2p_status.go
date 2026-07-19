@@ -147,8 +147,16 @@ func (c *p2pCoordinator) GetPeerArtifactIndex() []P2PPeerArtifactIndexView {
 }
 
 // FindArtifactPeers returns a summary of which peers currently advertise the
-// named artifact. Lookup uses cached data first; on cache miss or stale cache,
-// falls back to live libp2p query to each known peer.
+// named artifact. Lookup uses the in-memory cache (peerArtifacts) first;
+// on cache miss, falls back to live libp2p query to each known peer.
+//
+// O cache peerArtifacts é populado por:
+//   - gossip pull (RefreshPeerArtifactIndex)
+//   - fetch on-demand (libp2pFetchPeers)
+//   - snapshots NATS (ApplyP2PDiscoverySnapshot)
+//
+// Usar o cache evita latência (5s timeout por peer) e permite que o lookup
+// funcione mesmo quando libp2p não está disponível (ex.: modo service-only).
 func (c *p2pCoordinator) FindArtifactPeers(artifactName string) P2PArtifactAvailabilityView {
 	safeArtifact := sanitizeArtifactName(artifactName)
 	artifactID := CanonicalArtifactID("", safeArtifact, "")
@@ -161,46 +169,56 @@ func (c *p2pCoordinator) FindArtifactPeers(artifactName string) P2PArtifactAvail
 		return result
 	}
 
-	// Tenta cache primeiro.
+	// 1. Consulta o cache peerArtifacts primeiro (rápido, sem rede).
+	//    Cada entrada é peerKey (lowercase agentID) → []P2PArtifactView.
 	cacheHadEntry := false
-	for _, peer := range c.GetPeerArtifactIndex() {
-		for _, artifact := range peer.Artifacts {
+	c.mu.RLock()
+	for peerKey, state := range c.peerArtifacts {
+		for _, artifact := range state.Artifacts {
 			if strings.EqualFold(strings.TrimSpace(artifact.ArtifactID), artifactID) {
-				result.PeerAgentIDs = append(result.PeerAgentIDs, strings.TrimSpace(peer.PeerAgentID))
+				result.PeerAgentIDs = append(result.PeerAgentIDs, peerKey)
 				cacheHadEntry = true
 				break
 			}
 		}
 	}
+	c.mu.RUnlock()
 
-	// Se o cache não tinha nenhum dado para este artifact (miss total),
-	// faz query on-demand via libp2p para cada peer conhecido.
-	if !cacheHadEntry {
-		h, registry := c.libp2pHostAndRegistry()
-		if h != nil && registry != nil {
-			c.mu.RLock()
-			peers := make([]p2pPeerState, 0, len(c.peers))
-			for _, p := range c.peers {
-				peers = append(peers, p)
-			}
-			c.mu.RUnlock()
+	// 2. Se o cache tinha pelo menos um peer com o artifact, retorna imediatamente.
+	//    Não há motivo para fazer fetch live — já temos a resposta.
+	if cacheHadEntry {
+		sort.Strings(result.PeerAgentIDs)
+		result.PeerCount = len(result.PeerAgentIDs)
+		result.Found = result.PeerCount > 0
+		return result
+	}
 
-			for _, peer := range peers {
-				if lpID, ok := registry.Lookup(peer.Peer.AgentID); ok {
-					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-					resp, err := libp2pFetchPeers(ctx, h, lpID)
-					cancel()
-					if err != nil {
-						continue
-					}
-					// Atualiza o cache com os artifacts recebidos.
-					c.upsertPeerArtifacts(peer.Peer.AgentID, resp.Artifacts, "on-demand")
-					// Verifica se este peer tem o artifact procurado.
-					for _, a := range resp.Artifacts {
-						if strings.EqualFold(strings.TrimSpace(a.ArtifactID), artifactID) {
-							result.PeerAgentIDs = append(result.PeerAgentIDs, strings.TrimSpace(peer.Peer.AgentID))
-							break
-						}
+	// 3. Cache miss total → fetch on-demand via libp2p para cada peer conhecido.
+	//    Atualiza o cache peerArtifacts com os resultados para próximas chamadas.
+	h, registry := c.libp2pHostAndRegistry()
+	if h != nil && registry != nil {
+		c.mu.RLock()
+		peers := make([]p2pPeerState, 0, len(c.peers))
+		for _, p := range c.peers {
+			peers = append(peers, p)
+		}
+		c.mu.RUnlock()
+
+		for _, peer := range peers {
+			if lpID, ok := registry.Lookup(peer.Peer.AgentID); ok {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				resp, err := libp2pFetchPeers(ctx, h, lpID)
+				cancel()
+				if err != nil {
+					continue
+				}
+				// Atualiza o cache com os artifacts recebidos.
+				c.upsertPeerArtifacts(peer.Peer.AgentID, resp.Artifacts, "on-demand")
+				// Verifica se este peer tem o artifact procurado.
+				for _, a := range resp.Artifacts {
+					if strings.EqualFold(strings.TrimSpace(a.ArtifactID), artifactID) {
+						result.PeerAgentIDs = append(result.PeerAgentIDs, strings.TrimSpace(peer.Peer.AgentID))
+						break
 					}
 				}
 			}

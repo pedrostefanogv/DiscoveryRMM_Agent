@@ -208,7 +208,9 @@ func (s *Service) Install(id string) (string, error) {
 		return "", err
 	}
 
-	s.emitInstallNotification(correlationID, packageID, "install_start", "instalação", "in_progress", "Instalação em andamento", "Executando instalador...", nil)
+	// phase é um identifier técnico (não exibido ao usuário) — padronizado sem acento
+	// para evitar dependência de locale em comparações e logs.
+	s.emitInstallNotification(correlationID, packageID, "install_start", "instalacao", "in_progress", "Instalação em andamento", "Executando instalador...", nil)
 
 	var out string
 	switch normalizeAppStoreInstallationType(allowed.InstallationType) {
@@ -222,13 +224,13 @@ func (s *Service) Install(id string) (string, error) {
 	s.logf(out)
 
 	if err != nil {
-		s.emitInstallNotification(correlationID, packageID, "install_failed", "instalação", "failed", "Falha na instalação", "Não foi possível concluir a instalação do aplicativo.", map[string]any{
+		s.emitInstallNotification(correlationID, packageID, "install_failed", "instalacao", "failed", "Falha na instalação", "Não foi possível concluir a instalação do aplicativo.", map[string]any{
 			"error": err.Error(),
 		})
 		return out, err
 	}
 
-	s.emitInstallNotification(correlationID, packageID, "install_end", "validação", "completed", "Instalação concluída", "Aplicativo instalado com sucesso.", nil)
+	s.emitInstallNotification(correlationID, packageID, "install_end", "validacao", "completed", "Instalação concluída", "Aplicativo instalado com sucesso.", nil)
 	if hasRebootSignal(out) {
 		s.emitInstallNotification(correlationID, packageID, "reboot_required", "reinício", "completed", "Reinício necessário", "Reinicie o computador para concluir a instalação.", nil)
 	}

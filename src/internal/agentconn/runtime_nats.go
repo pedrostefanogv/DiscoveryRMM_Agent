@@ -1,4 +1,4 @@
-﻿package agentconn
+package agentconn
 
 import (
 	"bytes"
