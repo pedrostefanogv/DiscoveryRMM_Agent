@@ -220,6 +220,12 @@ func CleanInstallerConfigForPersistence(cfg *InstallerConfig) {
 }
 
 func scrubInstallerConfigSource(path string, cfg InstallerConfig) error {
+	return ScrubInstallerConfigSource(path, cfg)
+}
+
+// ScrubInstallerConfigSource limpa campos legados e reescreve um arquivo de config
+// de instalação no caminho especificado. Exportada para uso cross-package (zero-touch P2P).
+func ScrubInstallerConfigSource(path string, cfg InstallerConfig) error {
 	if strings.TrimSpace(path) == "" {
 		return nil
 	}

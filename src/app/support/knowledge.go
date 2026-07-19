@@ -38,6 +38,18 @@ func toStringSlice(value any) []string {
 	return out
 }
 
+func parseTagsFromJSON(value any) []string {
+	s := strings.TrimSpace(fmt.Sprint(value))
+	if s == "" || s == "<nil>" {
+		return nil
+	}
+	var arr []string
+	if err := json.Unmarshal([]byte(s), &arr); err != nil {
+		return nil
+	}
+	return arr
+}
+
 func estimateReadTimeMin(markdown string) int {
 	words := len(strings.Fields(strings.TrimSpace(markdown)))
 	if words <= 0 {
@@ -67,13 +79,18 @@ func buildSummary(content string) string {
 }
 
 func parseKnowledgeArticle(raw map[string]any) KnowledgeArticle {
+	tags := toStringSlice(raw["tags"])
+	if len(tags) == 0 {
+		tags = parseTagsFromJSON(raw["tagsJson"])
+	}
+
 	article := KnowledgeArticle{
 		ID:          extractStr(raw, "id"),
 		Title:       extractStr(raw, "title"),
 		Category:    extractStr(raw, "category"),
 		Summary:     extractStr(raw, "summary"),
 		Content:     extractStr(raw, "content"),
-		Tags:        toStringSlice(raw["tags"]),
+		Tags:        tags,
 		Author:      extractStr(raw, "author"),
 		Scope:       extractStr(raw, "scope"),
 		PublishedAt: extractStr(raw, "publishedAt"),

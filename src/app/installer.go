@@ -157,6 +157,11 @@ func loadInstallerConfig() (InstallerConfig, string, error) {
 //
 // NUNCA sobrescreve um arquivo existente — apenas cria quando o caminho
 // não existe no disco.
+//
+// O JSON gerado é mínimo: apenas autoProvisioning, p2p.enabled e chatLog.enabled.
+// Campos como deployToken, authToken, agentId, siteId, clientId e detalhes de P2P
+// NÃO são incluídos — o agente dependerá exclusivamente de zero-touch P2P para
+// obter essas informações no primeiro provisionamento.
 func ensureDefaultInstallerConfig() (InstallerConfig, string, error) {
 	autoProv := true
 	chatLogEnabled := true
@@ -184,7 +189,19 @@ func ensureDefaultInstallerConfig() (InstallerConfig, string, error) {
 		return cfg, "", nil // Retorna sem persistir, mas não falha
 	}
 
-	data, err := json.MarshalIndent(cfg, "", "  ")
+	// Serializa apenas os campos mínimos para evitar poluir o config.json
+	// com dezenas de campos zerados do struct p2pmeta.Config (que não usa
+	// omitempty para a maioria dos campos).
+	minimal := map[string]any{
+		"autoProvisioning": true,
+		"p2p": map[string]any{
+			"enabled": true,
+		},
+		"chatLog": map[string]any{
+			"enabled": true,
+		},
+	}
+	data, err := json.MarshalIndent(minimal, "", "  ")
 	if err != nil {
 		log.Printf("[config] aviso: nao foi possivel serializar config padrao: %v", err)
 		return cfg, "", nil

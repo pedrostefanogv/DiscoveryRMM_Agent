@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"discovery/app/debug"
 	"discovery/internal/tlsutil"
 )
 
@@ -390,8 +392,10 @@ func (a *App) registerWithDeployKey(serverURL, deployKey string) (P2POnboardingR
 	if strings.TrimSpace(credentials.SiteID) != "" {
 		inst.SiteID = strings.TrimSpace(credentials.SiteID)
 	}
-	// Mantem o deploy token para resiliencia de bootstrap (fallback de re-registro).
-	inst.APIKey = strings.TrimSpace(deployKey)
+	// Deploy key é temporário (TTL 30min). Após registro bem-sucedido com
+	// authToken + agentId definitivos, o deploy token é removido do config,
+	// alinhado com BootstrapAgentCredentialsFromInstallerConfig.
+	inst.APIKey = ""
 
 	if strings.TrimSpace(inst.ApiServer) == "" ||
 		strings.TrimSpace(inst.AuthToken) == "" || strings.TrimSpace(inst.AgentID) == "" {
@@ -401,6 +405,17 @@ func (a *App) registerWithDeployKey(serverURL, deployKey string) (P2POnboardingR
 	writePath, err := persistInstallerConfig(path, inst)
 	if err != nil {
 		return P2POnboardingResult{}, fmt.Errorf("falha ao persistir credenciais: %w", err)
+	}
+	// Limpa arquivo de origem e override (mesmo padrão do installer bootstrap).
+	if writePath != path {
+		if err := debug.ScrubInstallerConfigSource(path, inst); err != nil {
+			log.Printf("[zero-touch] aviso: falha ao limpar deploy token no config de origem: %v", err)
+		}
+	}
+	if overridePath := findInstallerOverridePath(); overridePath != "" && overridePath != path {
+		if err := debug.ScrubInstallerConfigSource(overridePath, inst); err != nil {
+			log.Printf("[zero-touch] aviso: falha ao limpar deploy token no override: %v", err)
+		}
 	}
 
 	a.applyZeroTouchRuntimeConnection(inst)
