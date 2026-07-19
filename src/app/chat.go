@@ -95,9 +95,9 @@ type ChatConfig struct {
 // por padrão e persiste a configuração. Se estiver explicitamente false,
 // desativa. Se true, ativa.
 func (a *App) initChatLogger() {
-	// Criar o ChatLogger no diretório de dados do agente
+	// Criar o ChatLogger na pasta logs/ dentro do diretório de dados do agente
 	chatLogger := ai.NewChatLogger("")
-	chatLogger.Enable(platform.DataDir())
+	chatLogger.Enable(filepath.Join(platform.DataDir(), "logs"))
 
 	// Verificar config do installer para decidir se ativa ou não
 	shouldEnable := true // padrão: ativado
@@ -114,7 +114,7 @@ func (a *App) initChatLogger() {
 
 	if shouldEnable {
 		a.chatSvc.SetChatLogger(chatLogger)
-		a.logs.append("[chat] log detalhado de chat ativado em " + platform.DataDir() + "/chat_logs.jsonl")
+		a.logs.append("[chat] log detalhado de chat ativado em " + filepath.Join(platform.DataDir(), "logs", "chat_logs.jsonl"))
 	} else {
 		chatLogger.Disable()
 		a.logs.append("[chat] log detalhado de chat desativado pela configuração")

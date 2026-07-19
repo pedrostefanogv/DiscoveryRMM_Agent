@@ -532,7 +532,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 	// ========== CHAMADOS DE SUPORTE ==========
 	reg.Register(Tool{
 		Name:        "get_agent_info",
-		Description: "Retorna as informacoes do agente atual: agentId, clientId, siteId, hostname.",
+		Description: "Retorna dados de identificacao do agente: agentId, clientId, siteId, hostname, IP, SO e versao. Use ANTES de criar qualquer chamado (create_ticket) para enriquecer a descricao com informacoes da maquina.",
 		Handler: func(args map[string]any) (any, error) {
 			return app.GetAgentInfoJSON()
 		},
@@ -590,7 +590,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 
 	reg.Register(Tool{
 		Name:        "create_ticket",
-		Description: "Abre um novo chamado de suporte vinculado automaticamente a esta maquina/agente.",
+		Description: "ABRE um novo chamado de suporte vinculado a esta maquina. Use SEMPRE que o usuario pedir para abrir ticket, chamado, reportar problema ou solicitar suporte. O chamado e automaticamente associado ao agente/maquina. Chame get_agent_info antes para enriquecer o titulo e descricao com dados da maquina. NUNCA oriente o usuario a acessar portais web externos.",
 		Params: []ToolParam{
 			{Name: "title", Type: "string", Description: "Titulo do chamado", Required: true},
 			{Name: "description", Type: "string", Description: "Descricao detalhada do problema", Required: true},
