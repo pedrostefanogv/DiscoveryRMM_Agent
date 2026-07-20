@@ -394,7 +394,7 @@ func (s *Service) parseMultiRoundSSE(body io.Reader, onToken func(string), pendi
 					Method:    "multi_round",
 					ToolCalls: []string{evt.ToolName},
 				})
-				*pendingCalls = append(*pendingCalls, pendingToolCall{CallID: evt.ToolCallID, Name: evt.ToolName, Args: evt.ToolArguments})
+				*pendingCalls = append(*pendingCalls, pendingToolCall{CallID: evt.ToolCallID, Name: evt.ToolName, Args: toolArgsString(evt.ToolArguments)})
 			}
 		case "round_end":
 			if evt.SessionID != "" {

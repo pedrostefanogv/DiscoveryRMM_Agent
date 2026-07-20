@@ -19,15 +19,27 @@ import (
 // ─── Stream Types ──────────────────────────────────────────────────
 
 type agentChatStreamEvent struct {
-	Type          string `json:"type"`
-	Content       string `json:"content"`
-	SessionID     string `json:"sessionId"`
-	Error         string `json:"error"`
-	LatencyMs     int    `json:"latencyMs"`
-	TokensUsed    int    `json:"tokensUsed"`
-	ToolCallID    string `json:"toolCallId"`
-	ToolName      string `json:"toolName"`
-	ToolArguments string `json:"toolArguments"`
+	Type          string          `json:"type"`
+	Content       string          `json:"content"`
+	SessionID     string          `json:"sessionId"`
+	Error         string          `json:"error"`
+	LatencyMs     int             `json:"latencyMs"`
+	TokensUsed    int             `json:"tokensUsed"`
+	ToolCallID    string          `json:"toolCallId"`
+	ToolName      string          `json:"toolName"`
+	ToolArguments json.RawMessage `json:"toolArguments"`
+}
+
+// toolArgsString normaliza toolArguments (pode ser string JSON ou objeto JSON).
+func toolArgsString(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	s := strings.TrimSpace(string(raw))
+	if s == "" || s == "null" {
+		return ""
+	}
+	return s
 }
 
 // toolResultItem sent back to the server in rounds 2+.
