@@ -324,9 +324,22 @@ func (s *Service) Send(ctx context.Context, userMessage string) (string, error) 
 	s.logf("mensagem recebida (%d chars)", len(strings.TrimSpace(userMessage)))
 
 	if strings.TrimSpace(cfg.Endpoint) == "" || strings.TrimSpace(cfg.APIKey) == "" {
-		return "", fmt.Errorf("configuracao de IA incompleta: defina endpoint e token de agente")
+		err := fmt.Errorf("configuracao de IA incompleta: defina endpoint e token de agente")
+		s.logChatEntry(ChatLogEntry{
+			Type:    "chat_request",
+			Method:  "sync",
+			Error:   err.Error(),
+			UserMsg: TruncateForLog(userMessage, 2000),
+		})
+		return "", err
 	}
 	if err := validateChatMessage(userMessage); err != nil {
+		s.logChatEntry(ChatLogEntry{
+			Type:    "chat_request",
+			Method:  "sync",
+			Error:   err.Error(),
+			UserMsg: TruncateForLog(userMessage, 2000),
+		})
 		return "", err
 	}
 

@@ -439,11 +439,40 @@ func (a *App) ensureAgentToolsRegistered() {
 	lastReg := a.lastToolsRegistration
 	a.toolsRegistrationMu.RUnlock()
 
-	if time.Since(lastReg) < 4*time.Minute {
+	registrySize := len(a.mcpRegistry.Tools())
+	sinceLast := time.Since(lastReg)
+
+	if sinceLast < 4*time.Minute {
+		a.chatSvc.LogChatEntry(ai.ChatLogEntry{
+			Type:      "tools_registry",
+			Method:    "multi_round",
+			ToolCount: registrySize,
+			UserMsg:   fmt.Sprintf("cache valido (registrado ha %.0fs)", sinceLast.Seconds()),
+		})
 		return // cache ainda válido
 	}
 
+	a.chatSvc.LogChatEntry(ai.ChatLogEntry{
+		Type:      "tools_registry",
+		Method:    "multi_round",
+		ToolCount: registrySize,
+		UserMsg:   fmt.Sprintf("re-registrando (ultimo ha %.0fs)", sinceLast.Seconds()),
+	})
+
 	if err := a.RegisterAgentToolsOnServer(); err != nil {
 		a.logs.append("[chat] aviso: re-registro de tools falhou: " + err.Error())
+		a.chatSvc.LogChatEntry(ai.ChatLogEntry{
+			Type:      "tools_registry",
+			Method:    "multi_round",
+			Error:     err.Error(),
+			ToolCount: registrySize,
+		})
+	} else {
+		a.chatSvc.LogChatEntry(ai.ChatLogEntry{
+			Type:      "tools_registry",
+			Method:    "multi_round",
+			ToolCount: registrySize,
+			UserMsg:   "re-registro ok",
+		})
 	}
 }

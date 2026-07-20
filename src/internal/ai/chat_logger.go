@@ -13,21 +13,26 @@ import (
 
 // ChatLogEntry representa uma entrada de log de chat.
 type ChatLogEntry struct {
-	Timestamp   string `json:"timestamp"`
-	Type        string `json:"type"`
-	Endpoint    string `json:"endpoint,omitempty"`
-	Method      string `json:"method,omitempty"` // sync / stream / async
-	MessageLen  int    `json:"messageLen,omitempty"`
-	SessionID   string `json:"sessionId,omitempty"`
-	StatusCode  int    `json:"statusCode,omitempty"`
-	TokensUsed  int    `json:"tokensUsed,omitempty"`
-	LatencyMs   int    `json:"latencyMs,omitempty"`
-	Error       string `json:"error,omitempty"`
-	ResponseLen int    `json:"responseLen,omitempty"`
-	StreamDone  bool   `json:"streamDone,omitempty"`
-	HasTokens   bool   `json:"hasTokens,omitempty"`
-	UserMsg     string `json:"userMsg,omitempty"`
-	Assistant   string `json:"assistant,omitempty"`
+	Timestamp    string   `json:"timestamp"`
+	Type         string   `json:"type"`
+	Endpoint     string   `json:"endpoint,omitempty"`
+	Method       string   `json:"method,omitempty"` // sync / stream / multi_round / tool_exec
+	MessageLen   int      `json:"messageLen,omitempty"`
+	SessionID    string   `json:"sessionId,omitempty"`
+	StatusCode   int      `json:"statusCode,omitempty"`
+	TokensUsed   int      `json:"tokensUsed,omitempty"`
+	LatencyMs    int      `json:"latencyMs,omitempty"`
+	Error        string   `json:"error,omitempty"`
+	ResponseLen  int      `json:"responseLen,omitempty"`
+	StreamDone   bool     `json:"streamDone,omitempty"`
+	HasTokens    bool     `json:"hasTokens,omitempty"`
+	UserMsg      string   `json:"userMsg,omitempty"`
+	Assistant    string   `json:"assistant,omitempty"`
+	Round        int      `json:"round,omitempty"`        // multi-round: número do round (0-based)
+	ToolCount    int      `json:"toolCount,omitempty"`    // multi-round: quantas tools enviadas no request
+	HasToolCalls bool     `json:"hasToolCalls,omitempty"` // multi-round: true se LLM retornou tool_calls
+	ToolCalls    []string `json:"toolCalls,omitempty"`    // multi-round: nomes das tools chamadas pelo LLM
+	ToolResults  []string `json:"toolResults,omitempty"`  // multi-round: resultados das execuções (truncados)
 }
 
 // ChatLogger é um logger thread-safe que escreve entradas JSONL

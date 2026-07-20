@@ -26,15 +26,30 @@ func (s *Service) SendStreamMultiRound(
 	streamCtx, streamCancel := context.WithCancel(ctx)
 	defer streamCancel()
 
+	startTime := time.Now()
+
 	s.mu.Lock()
 	cfg := s.cfg
 	sessionID := s.sessionID
 	s.mu.Unlock()
 
 	if strings.TrimSpace(cfg.Endpoint) == "" || strings.TrimSpace(cfg.APIKey) == "" {
-		return "", fmt.Errorf("configuracao de IA incompleta")
+		err := fmt.Errorf("configuracao de IA incompleta")
+		s.logChatEntry(ChatLogEntry{
+			Type:    "chat_request",
+			Method:  "multi_round",
+			Error:   err.Error(),
+			UserMsg: TruncateForLog(userMessage, 2000),
+		})
+		return "", err
 	}
 	if err := validateChatMessage(userMessage); err != nil {
+		s.logChatEntry(ChatLogEntry{
+			Type:    "chat_request",
+			Method:  "multi_round",
+			Error:   err.Error(),
+			UserMsg: TruncateForLog(userMessage, 2000),
+		})
 		return "", err
 	}
 
@@ -46,11 +61,13 @@ func (s *Service) SendStreamMultiRound(
 	req := agentStreamRequest{Message: userMessage, SessionID: sessionID}
 	// Injetar tools MCP no primeiro round (round 0).
 	s.mu.RLock()
+	toolCount := 0
 	if s.registry != nil {
 		tools := s.registry.OpenAIFunctions()
-		if len(tools) > 0 {
+		toolCount = len(tools)
+		if toolCount > 0 {
 			req.Tools = tools
-			s.logf("[chat] %d tools enviadas para o servidor", len(tools))
+			s.logf("[chat] %d tools enviadas para o servidor", toolCount)
 		} else {
 			s.logf("[chat] aviso: nenhuma tool MCP registrada — chat funcionara sem function calling")
 		}
@@ -58,10 +75,24 @@ func (s *Service) SendStreamMultiRound(
 		s.logf("[chat] aviso: registry MCP nao disponivel")
 	}
 	s.mu.RUnlock()
+
+	// Log de início do fluxo multi-round
+	s.logChatEntry(ChatLogEntry{
+		Type:       "multi_round_start",
+		Method:     "multi_round",
+		SessionID:  sessionID,
+		MessageLen: len(userMessage),
+		ToolCount:  toolCount,
+		UserMsg:    TruncateForLog(userMessage, 2000),
+	})
+
 	var currentSessionID string
 	var err error
+	totalToolCalls := 0
+	allCalledTools := make([]string, 0)
 
 	for round := 0; round < 5; round++ {
+		roundStart := time.Now()
 		if onStatus != nil {
 			if round == 0 {
 				onStatus("Conectando ao servidor...")
@@ -69,37 +100,133 @@ func (s *Service) SendStreamMultiRound(
 				onStatus(fmt.Sprintf("Round %d — processando tools...", round+1))
 			}
 		}
+
+		// Log de início do round
+		roundToolCount := 0
+		if req.Tools != nil {
+			roundToolCount = len(req.Tools)
+		}
+		s.logChatEntry(ChatLogEntry{
+			Type:       "round_start",
+			Method:     "multi_round",
+			SessionID:  currentSessionID,
+			Round:      round,
+			ToolCount:  roundToolCount,
+			MessageLen: len(req.Message),
+		})
+
 		currentSessionID, err = s.executeRound(streamCtx, cfg, req, onToken, &pendingCalls)
+		roundElapsed := time.Since(roundStart)
+
 		if err != nil {
+			s.logChatEntry(ChatLogEntry{
+				Type:      "round_error",
+				Method:    "multi_round",
+				SessionID: currentSessionID,
+				Round:     round,
+				Error:     err.Error(),
+				LatencyMs: int(roundElapsed.Milliseconds()),
+			})
 			return s.fallbackToSync(streamCtx, cfg, userMessage, sessionID, onToken)
 		}
-		if len(pendingCalls) == 0 {
+
+		hasToolCalls := len(pendingCalls) > 0
+		calledTools := make([]string, 0, len(pendingCalls))
+		for _, tc := range pendingCalls {
+			calledTools = append(calledTools, tc.Name)
+		}
+
+		if !hasToolCalls {
 			s.logf("[chat] round %d: LLM respondeu sem tool_call (resposta direta)", round)
+			s.logChatEntry(ChatLogEntry{
+				Type:         "round_end",
+				Method:       "multi_round",
+				SessionID:    currentSessionID,
+				Round:        round,
+				HasToolCalls: false,
+				LatencyMs:    int(roundElapsed.Milliseconds()),
+			})
 			// Diagnóstico: detectar perguntas que provavelmente precisariam de tools
 			if round == 0 {
-				diagnoseMissingToolCall(userMessage, s.logf)
+				diagnoseMissingToolCall(s, userMessage)
 			}
 			break
 		}
+
+		// Log das tool calls recebidas
+		s.logChatEntry(ChatLogEntry{
+			Type:         "tool_calls_received",
+			Method:       "multi_round",
+			SessionID:    currentSessionID,
+			Round:        round,
+			HasToolCalls: true,
+			ToolCalls:    calledTools,
+			LatencyMs:    int(roundElapsed.Milliseconds()),
+		})
+
+		totalToolCalls += len(pendingCalls)
+		allCalledTools = append(allCalledTools, calledTools...)
+
 		if onStatus != nil {
 			onStatus(fmt.Sprintf("Executando %d ferramenta(s)...", len(pendingCalls)))
 		}
 		var toolResults []toolResultItem
+		toolResultNames := make([]string, 0, len(pendingCalls))
 		for _, tc := range pendingCalls {
+			toolExecStart := time.Now()
+			var result string
+			var execErr error
 			if mcpExecutor == nil {
-				toolResults = append(toolResults, toolResultItem{CallID: tc.CallID, Name: tc.Name, Result: `{"error":"MCP indisponivel"}`})
-				continue
+				result = `{"error":"MCP indisponivel"}`
+				execErr = fmt.Errorf("MCP indisponivel")
+			} else {
+				result, execErr = mcpExecutor(streamCtx, tc.Name, tc.Args)
 			}
-			result, execErr := mcpExecutor(streamCtx, tc.Name, tc.Args)
+			toolElapsed := time.Since(toolExecStart)
+
 			if execErr != nil {
 				result = fmt.Sprintf(`{"error":"%s"}`, strings.ReplaceAll(execErr.Error(), `"`, `'`))
+				s.logChatEntry(ChatLogEntry{
+					Type:      "tool_exec_error",
+					Method:    "tool_exec",
+					SessionID: currentSessionID,
+					Round:     round,
+					ToolCalls: []string{tc.Name},
+					Error:     execErr.Error(),
+					LatencyMs: int(toolElapsed.Milliseconds()),
+				})
+			} else {
+				s.logChatEntry(ChatLogEntry{
+					Type:        "tool_exec_ok",
+					Method:      "tool_exec",
+					SessionID:   currentSessionID,
+					Round:       round,
+					ToolCalls:   []string{tc.Name},
+					ToolResults: []string{TruncateForLog(result, 500)},
+					LatencyMs:   int(toolElapsed.Milliseconds()),
+				})
 			}
+
 			toolResults = append(toolResults, toolResultItem{CallID: tc.CallID, Name: tc.Name, Result: result})
+			toolResultNames = append(toolResultNames, fmt.Sprintf("%s=ok", tc.Name))
 		}
+
+		s.logChatEntry(ChatLogEntry{
+			Type:         "round_end",
+			Method:       "multi_round",
+			SessionID:    currentSessionID,
+			Round:        round,
+			HasToolCalls: true,
+			ToolCalls:    calledTools,
+			ToolResults:  toolResultNames,
+			LatencyMs:    int(roundElapsed.Milliseconds()),
+		})
+
 		pendingCalls = nil
 		req = agentStreamRequest{SessionID: currentSessionID, ToolResults: toolResults}
 	}
 
+	totalElapsed := time.Since(startTime)
 	assistant := s.lastAssistantContent()
 	if assistant == "" {
 		assistant = "(sem resposta)"
@@ -109,6 +236,20 @@ func (s *Service) SendStreamMultiRound(
 		s.sessionID = currentSessionID
 	}
 	s.mu.Unlock()
+
+	// Log final do fluxo multi-round
+	s.logChatEntry(ChatLogEntry{
+		Type:         "multi_round_done",
+		Method:       "multi_round",
+		SessionID:    currentSessionID,
+		HasToolCalls: totalToolCalls > 0,
+		ToolCalls:    allCalledTools,
+		ToolCount:    totalToolCalls,
+		ResponseLen:  len(assistant),
+		Assistant:    TruncateForLog(assistant, 4000),
+		LatencyMs:    int(totalElapsed.Milliseconds()),
+	})
+
 	return assistant, nil
 }
 
@@ -124,8 +265,16 @@ func (s *Service) lastAssistantContent() string {
 }
 
 func (s *Service) executeRound(ctx context.Context, cfg Config, req agentStreamRequest, onToken func(string), pendingCalls *[]pendingToolCall) (string, error) {
+	startTime := time.Now()
 	baseURL, err := normalizeAgentChatBaseURL(cfg.Endpoint)
 	if err != nil {
+		s.logChatEntry(ChatLogEntry{
+			Type:      "round_http_error",
+			Method:    "multi_round",
+			SessionID: req.SessionID,
+			Error:     fmt.Sprintf("baseURL: %v", err),
+			LatencyMs: int(time.Since(startTime).Milliseconds()),
+		})
 		return "", err
 	}
 	payload, _ := json.Marshal(req)
@@ -135,6 +284,14 @@ func (s *Service) executeRound(ctx context.Context, cfg Config, req agentStreamR
 	endpoint := baseURL + "/api/v1/agent-auth/me/ai-chat/stream"
 	httpReq, err := http.NewRequestWithContext(reqCtx, http.MethodPost, endpoint, bytes.NewReader(payload))
 	if err != nil {
+		s.logChatEntry(ChatLogEntry{
+			Type:      "round_http_error",
+			Method:    "multi_round",
+			Endpoint:  endpoint,
+			SessionID: req.SessionID,
+			Error:     fmt.Sprintf("new request: %v", err),
+			LatencyMs: int(time.Since(startTime).Milliseconds()),
+		})
 		return "", fmt.Errorf("criar request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -143,14 +300,52 @@ func (s *Service) executeRound(ctx context.Context, cfg Config, req agentStreamR
 
 	resp, err := tlsutil.NewHTTPClient(130 * time.Second).Do(httpReq)
 	if err != nil {
+		s.logChatEntry(ChatLogEntry{
+			Type:      "round_http_error",
+			Method:    "multi_round",
+			Endpoint:  endpoint,
+			SessionID: req.SessionID,
+			Error:     fmt.Sprintf("Do: %v", err),
+			LatencyMs: int(time.Since(startTime).Milliseconds()),
+		})
 		return "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("stream status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		errMsg := strings.TrimSpace(string(body))
+		s.logChatEntry(ChatLogEntry{
+			Type:       "round_http_error",
+			Method:     "multi_round",
+			Endpoint:   endpoint,
+			SessionID:  req.SessionID,
+			StatusCode: resp.StatusCode,
+			Error:      errMsg,
+			LatencyMs:  int(time.Since(startTime).Milliseconds()),
+		})
+		return "", fmt.Errorf("stream status %d: %s", resp.StatusCode, errMsg)
 	}
+
+	s.logChatEntry(ChatLogEntry{
+		Type:       "round_http_ok",
+		Method:     "multi_round",
+		Endpoint:   endpoint,
+		SessionID:  req.SessionID,
+		StatusCode: resp.StatusCode,
+		LatencyMs:  int(time.Since(startTime).Milliseconds()),
+	})
+
 	sessionID, _, err := s.parseMultiRoundSSE(resp.Body, onToken, pendingCalls)
+	if err != nil {
+		s.logChatEntry(ChatLogEntry{
+			Type:      "round_sse_error",
+			Method:    "multi_round",
+			Endpoint:  endpoint,
+			SessionID: sessionID,
+			Error:     err.Error(),
+			LatencyMs: int(time.Since(startTime).Milliseconds()),
+		})
+	}
 	return sessionID, err
 }
 
@@ -158,6 +353,7 @@ func (s *Service) parseMultiRoundSSE(body io.Reader, onToken func(string), pendi
 	var contentBuf strings.Builder
 	currentSessionID := ""
 	done := false
+	parsedEvents := 0
 
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
@@ -174,8 +370,15 @@ func (s *Service) parseMultiRoundSSE(body io.Reader, onToken func(string), pendi
 		var evt agentChatStreamEvent
 		if err := json.Unmarshal([]byte(data), &evt); err != nil {
 			s.logf("[chat] SSE parse error: %v (raw=%s)", err, TruncateForLog(data, 200))
+			s.logChatEntry(ChatLogEntry{
+				Type:    "sse_parse_error",
+				Method:  "multi_round",
+				Error:   fmt.Sprintf("json: %v", err),
+				UserMsg: TruncateForLog(data, 500),
+			})
 			continue
 		}
+		parsedEvents++
 		switch strings.ToLower(evt.Type) {
 		case "token":
 			if evt.Content != "" {
@@ -186,6 +389,11 @@ func (s *Service) parseMultiRoundSSE(body io.Reader, onToken func(string), pendi
 			}
 		case "tool_call":
 			if evt.ToolCallID != "" && evt.ToolName != "" {
+				s.logChatEntry(ChatLogEntry{
+					Type:      "sse_tool_call",
+					Method:    "multi_round",
+					ToolCalls: []string{evt.ToolName},
+				})
 				*pendingCalls = append(*pendingCalls, pendingToolCall{CallID: evt.ToolCallID, Name: evt.ToolName, Args: evt.ToolArguments})
 			}
 		case "round_end":
@@ -218,14 +426,41 @@ func (s *Service) parseMultiRoundSSE(body io.Reader, onToken func(string), pendi
 		}
 	}
 	if err := scanner.Err(); err != nil {
+		s.logChatEntry(ChatLogEntry{
+			Type:      "sse_scanner_error",
+			Method:    "multi_round",
+			SessionID: currentSessionID,
+			Error:     err.Error(),
+		})
 		return currentSessionID, false, fmt.Errorf("ler stream: %w", err)
 	}
+
+	s.logChatEntry(ChatLogEntry{
+		Type:        "sse_stream_end",
+		Method:      "multi_round",
+		SessionID:   currentSessionID,
+		ResponseLen: parsedEvents,
+	})
 	return currentSessionID, done, nil
 }
 
 func (s *Service) fallbackToSync(ctx context.Context, cfg Config, message, sessionID string, onToken func(string)) (string, error) {
+	s.logChatEntry(ChatLogEntry{
+		Type:       "fallback_to_sync",
+		Method:     "multi_round",
+		SessionID:  sessionID,
+		MessageLen: len(message),
+		UserMsg:    TruncateForLog(message, 500),
+	})
+
 	resp, err := s.callAgentChatSync(ctx, cfg, message, sessionID)
 	if err != nil {
+		s.logChatEntry(ChatLogEntry{
+			Type:      "fallback_sync_error",
+			Method:    "multi_round",
+			SessionID: sessionID,
+			Error:     err.Error(),
+		})
 		return "", err
 	}
 	assistant := strings.TrimSpace(resp.AssistantMessage)
@@ -241,13 +476,21 @@ func (s *Service) fallbackToSync(ctx context.Context, cfg Config, message, sessi
 	}
 	s.history = append(s.history, Message{Role: "assistant", Content: assistant})
 	s.mu.Unlock()
+
+	s.logChatEntry(ChatLogEntry{
+		Type:        "fallback_sync_ok",
+		Method:      "multi_round",
+		SessionID:   resp.SessionID,
+		ResponseLen: len(assistant),
+		Assistant:   TruncateForLog(assistant, 2000),
+	})
 	return assistant, nil
 }
 
 // diagnoseMissingToolCall verifica se a pergunta do usuario contem palavras-chave
 // que sugerem que o LLM deveria ter usado uma ferramenta MCP, e emite um warning
 // no log para facilitar o diagnostico de System Prompts ineficazes.
-func diagnoseMissingToolCall(userMessage string, logf func(string, ...any)) {
+func diagnoseMissingToolCall(s *Service, userMessage string) {
 	msg := strings.ToLower(userMessage)
 	hints := map[string]string{
 		"instalado":      "list_installed_packages",
@@ -294,6 +537,13 @@ func diagnoseMissingToolCall(userMessage string, logf func(string, ...any)) {
 		}
 	}
 	if len(hits) > 0 {
-		logf("[chat] diagnostico: LLM nao usou tools, mas mensagem contem palavras-chave: %s. Verifique o System Prompt do servidor.", strings.Join(hits, ", "))
+		s.logf("[chat] diagnostico: LLM nao usou tools, mas mensagem contem palavras-chave: %s. Verifique o System Prompt do servidor.", strings.Join(hits, ", "))
+		s.logChatEntry(ChatLogEntry{
+			Type:      "missing_tool_diagnostic",
+			Method:    "multi_round",
+			UserMsg:   TruncateForLog(userMessage, 500),
+			ToolCalls: hits,
+			Error:     "LLM nao usou tools nesta pergunta. Ferramentas sugeridas: " + strings.Join(hits, ", "),
+		})
 	}
 }
