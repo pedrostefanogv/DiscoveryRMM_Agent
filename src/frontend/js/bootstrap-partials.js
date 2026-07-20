@@ -8,16 +8,28 @@
     { mountId: "statusViewMount", path: "partials/views/statusView.html" },
     { mountId: "storeViewMount", path: "partials/views/storeView.html" },
     { mountId: "updatesViewMount", path: "partials/views/updatesView.html" },
-    { mountId: "inventoryViewMount", path: "partials/views/inventoryView.html" },
+    {
+      mountId: "inventoryViewMount",
+      path: "partials/views/inventoryView.html",
+    },
     { mountId: "logsViewMount", path: "partials/views/logsView.html" },
     { mountId: "chatViewMount", path: "partials/views/chatView.html" },
     { mountId: "supportViewMount", path: "partials/views/supportView.html" },
-    { mountId: "knowledgeViewMount", path: "partials/views/knowledgeView.html" },
-    { mountId: "automationViewMount", path: "partials/views/automationView.html" },
+    {
+      mountId: "knowledgeViewMount",
+      path: "partials/views/knowledgeView.html",
+    },
+    {
+      mountId: "automationViewMount",
+      path: "partials/views/automationView.html",
+    },
     { mountId: "debugViewMount", path: "partials/views/debugView.html" },
     { mountId: "psadtViewMount", path: "partials/views/psadtView.html" },
     { mountId: "p2pViewMount", path: "partials/views/p2pView.html" },
-    { mountId: "zeroTouchConfigViewMount", path: "partials/views/zeroTouchConfigView.html" },
+    {
+      mountId: "zeroTouchConfigViewMount",
+      path: "partials/views/zeroTouchConfigView.html",
+    },
   ];
 
   var APP_SCRIPTS = [
@@ -48,8 +60,10 @@
     container.style.padding = "14px";
     container.style.borderRadius = "10px";
     var rootStyles = getComputedStyle(document.documentElement);
-    container.style.background = rootStyles.getPropertyValue('--danger').trim() || '#c1121f';
-    container.style.color = rootStyles.getPropertyValue('--on-accent').trim() || '#ffffff';
+    container.style.background =
+      rootStyles.getPropertyValue("--danger").trim() || "#c1121f";
+    container.style.color =
+      rootStyles.getPropertyValue("--on-accent").trim() || "#ffffff";
     container.style.fontFamily = "Space Grotesk, sans-serif";
     container.style.fontSize = "14px";
     container.textContent = message;
@@ -61,8 +75,12 @@
       var script = document.createElement("script");
       script.src = src;
       script.async = false;
-      script.onload = function () { resolve(); };
-      script.onerror = function () { reject(new Error("Falha ao carregar script: " + src)); };
+      script.onload = function () {
+        resolve();
+      };
+      script.onerror = function () {
+        reject(new Error("Falha ao carregar script: " + src));
+      };
       document.body.appendChild(script);
     });
   }
@@ -75,7 +93,13 @@
 
     var response = await fetch(partial.path, { cache: "no-store" });
     if (!response.ok) {
-      throw new Error("Falha ao carregar parcial: " + partial.path + " (" + response.status + ")");
+      throw new Error(
+        "Falha ao carregar parcial: " +
+          partial.path +
+          " (" +
+          response.status +
+          ")",
+      );
     }
 
     mount.innerHTML = await response.text();
@@ -88,16 +112,26 @@
 
     for (var j = 0; j < APP_SCRIPTS.length; j += 1) {
       await loadScript(APP_SCRIPTS[j]);
-      if (APP_SCRIPTS[j] === "js/app-utils.js" && typeof initApplicationLocale === "function") {
+      if (
+        APP_SCRIPTS[j] === "js/app-utils.js" &&
+        typeof initApplicationLocale === "function"
+      ) {
         await initApplicationLocale();
       }
+    }
+
+    if (typeof initColorModeSync === "function") {
+      initColorModeSync();
     }
   }
 
   document.addEventListener("DOMContentLoaded", function () {
     bootstrap().catch(function (error) {
       console.error(error);
-      showBootstrapError("Erro ao montar UI modular: " + (error && error.message ? error.message : "desconhecido"));
+      showBootstrapError(
+        "Erro ao montar UI modular: " +
+          (error && error.message ? error.message : "desconhecido"),
+      );
     });
   });
 })();

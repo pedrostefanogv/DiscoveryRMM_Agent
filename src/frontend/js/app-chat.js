@@ -6,25 +6,26 @@ var chatThinkingPollId = null;
 
 // Streaming state
 var streamingBubble = null;
-var streamingRawContent = '';
+var streamingRawContent = "";
 var streamingRafPending = false;
 
 function flushStreamingContent() {
   streamingRafPending = false;
   if (!streamingBubble) return;
-  var contentEl = streamingBubble.querySelector('.stream-content');
+  var contentEl = streamingBubble.querySelector(".stream-content");
   if (!contentEl) {
-    contentEl = document.createElement('div');
-    contentEl.className = 'stream-content';
-    var thinkingEl = streamingBubble.querySelector('.stream-thinking');
+    contentEl = document.createElement("div");
+    contentEl.className = "stream-content";
+    var thinkingEl = streamingBubble.querySelector(".stream-thinking");
     if (thinkingEl) {
       streamingBubble.insertBefore(contentEl, thinkingEl);
-      thinkingEl.style.display = 'none';
+      thinkingEl.style.display = "none";
     } else {
       streamingBubble.appendChild(contentEl);
     }
   }
   contentEl.innerHTML = renderAssistantMarkdown(streamingRawContent);
+  syncColorMode();
   bindInternalChatLinks(contentEl);
   scheduleChatScrollToBottom();
 }
@@ -33,9 +34,9 @@ function setChatBusy(isBusy) {
   chatSending = !!isBusy;
   if (chatSendBtn) chatSendBtn.disabled = !!isBusy;
   if (chatStopBtn) {
-    chatStopBtn.classList.toggle('hidden', !isBusy);
+    chatStopBtn.classList.toggle("hidden", !isBusy);
     chatStopBtn.disabled = !isBusy;
-    chatStopBtn.textContent = translate('action.stop');
+    chatStopBtn.textContent = translate("action.stop");
   }
 }
 
@@ -44,12 +45,14 @@ function requestStopChatStream() {
   chatStopRequested = true;
   if (chatStopBtn) {
     chatStopBtn.disabled = true;
-    chatStopBtn.textContent = translate('chat.stopping');
+    chatStopBtn.textContent = translate("chat.stopping");
   }
   try {
-    appApi().StopChatStream().catch(function () {
-      // If backend stop fails, UI still waits stream terminal event.
-    });
+    appApi()
+      .StopChatStream()
+      .catch(function () {
+        // If backend stop fails, UI still waits stream terminal event.
+      });
   } catch (_) {
     // ignore
   }
@@ -69,11 +72,11 @@ function onStreamToken(token) {
 function onStreamThinking(status) {
   if (document.hidden || window.__discoveryUISuspended) return;
   if (!streamingBubble) return;
-  var thinkingEl = streamingBubble.querySelector('.stream-thinking');
+  var thinkingEl = streamingBubble.querySelector(".stream-thinking");
   if (!thinkingEl) return;
   if (!streamingRawContent) {
-    thinkingEl.style.display = '';
-    thinkingEl.textContent = status || translate('chat.thinking');
+    thinkingEl.style.display = "";
+    thinkingEl.textContent = status || translate("chat.thinking");
     scheduleChatScrollToBottom();
   }
 }
@@ -85,11 +88,11 @@ function finaliseStreamingBubble() {
   flushStreamingContent();
 
   // Remove streaming indicators.
-  var thinkingEl = streamingBubble.querySelector('.stream-thinking');
+  var thinkingEl = streamingBubble.querySelector(".stream-thinking");
   if (thinkingEl) thinkingEl.remove();
-  var cursor = streamingBubble.querySelector('.stream-cursor');
+  var cursor = streamingBubble.querySelector(".stream-cursor");
   if (cursor) cursor.remove();
-  streamingBubble.classList.remove('streaming');
+  streamingBubble.classList.remove("streaming");
 
   // Add quick-action buttons if applicable.
   var finalContent = streamingRawContent;
@@ -101,7 +104,7 @@ function finaliseStreamingBubble() {
   }
 
   streamingBubble = null;
-  streamingRawContent = '';
+  streamingRawContent = "";
   scheduleChatScrollToBottom();
 }
 
@@ -118,7 +121,7 @@ function onStreamError(errMsg) {
 
   if (chatStopRequested) {
     if (streamingBubble && !streamingRawContent) {
-      streamingRawContent = translate('chat.responseInterrupted');
+      streamingRawContent = translate("chat.responseInterrupted");
     }
     finaliseStreamingBubble();
     chatStopRequested = false;
@@ -130,11 +133,18 @@ function onStreamError(errMsg) {
   if (streamingBubble) {
     // Show whatever content arrived; fallback to error text if nothing came.
     if (!streamingRawContent) {
-      streamingRawContent = translate('chat.errorUnknown', { error: String(errMsg || translate('common.unknown')) });
+      streamingRawContent = translate("chat.errorUnknown", {
+        error: String(errMsg || translate("common.unknown")),
+      });
     }
     finaliseStreamingBubble();
   } else {
-    addChatMessage('assistant', translate('chat.errorUnknown', { error: String(errMsg || translate('common.unknown')) }));
+    addChatMessage(
+      "assistant",
+      translate("chat.errorUnknown", {
+        error: String(errMsg || translate("common.unknown")),
+      }),
+    );
   }
   setChatBusy(false);
   if (chatInputEl) chatInputEl.focus();
@@ -143,7 +153,7 @@ function onStreamError(errMsg) {
 function onStreamStopped() {
   stopThinkingStatusUpdates();
   if (streamingBubble && !streamingRawContent) {
-    streamingRawContent = translate('chat.responseInterrupted');
+    streamingRawContent = translate("chat.responseInterrupted");
   }
   finaliseStreamingBubble();
   chatStopRequested = false;
@@ -155,15 +165,15 @@ function onStreamStopped() {
 (function registerChatStreamEvents() {
   function doRegister() {
     if (window.runtime && window.runtime.EventsOn) {
-      window.runtime.EventsOn('chat:token', onStreamToken);
-      window.runtime.EventsOn('chat:thinking', onStreamThinking);
-      window.runtime.EventsOn('chat:done', onStreamDone);
-      window.runtime.EventsOn('chat:error', onStreamError);
-      window.runtime.EventsOn('chat:stopped', onStreamStopped);
+      window.runtime.EventsOn("chat:token", onStreamToken);
+      window.runtime.EventsOn("chat:thinking", onStreamThinking);
+      window.runtime.EventsOn("chat:done", onStreamDone);
+      window.runtime.EventsOn("chat:error", onStreamError);
+      window.runtime.EventsOn("chat:stopped", onStreamStopped);
     }
   }
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', doRegister);
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", doRegister);
   } else {
     // Runtime may not be injected yet - defer slightly.
     setTimeout(doRegister, 200);
@@ -186,13 +196,15 @@ function scheduleChatScrollToBottom() {
 }
 
 function shouldSuggestChatActions(content) {
-  var text = String(content || '').toLowerCase();
+  var text = String(content || "").toLowerCase();
   if (!text) return false;
-  return /confirme|confirmacao|pode prosseguir|posso prosseguir|deseja que eu|quer que eu|autoriza|aprova|aguardo.*confirmacao/.test(text);
+  return /confirme|confirmacao|pode prosseguir|posso prosseguir|deseja que eu|quer que eu|autoriza|aprova|aguardo.*confirmacao/.test(
+    text,
+  );
 }
 
 function extractChatActionOptions(content) {
-  var text = String(content || '');
+  var text = String(content || "");
   if (!text) return [];
 
   var lines = text.split(/\r?\n/);
@@ -200,9 +212,9 @@ function extractChatActionOptions(content) {
   var seen = new Set();
 
   function pushOption(raw) {
-    var clean = String(raw || '')
-      .replace(/^[-*]\s+/, '')
-      .replace(/^\d+\.\s+/, '')
+    var clean = String(raw || "")
+      .replace(/^[-*]\s+/, "")
+      .replace(/^\d+\.\s+/, "")
       .trim();
     if (!clean) return;
 
@@ -210,12 +222,12 @@ function extractChatActionOptions(content) {
     if (seen.has(key)) return;
     seen.add(key);
 
-    var label = clean.length > 52 ? (clean.slice(0, 49) + '...') : clean;
+    var label = clean.length > 52 ? clean.slice(0, 49) + "..." : clean;
     options.push({ label: label, value: clean });
   }
 
   for (var i = 0; i < lines.length; i += 1) {
-    var line = String(lines[i] || '').trim();
+    var line = String(lines[i] || "").trim();
     if (/^[-*]\s+/.test(line) || /^\d+\.\s+/.test(line)) {
       pushOption(line);
     }
@@ -227,24 +239,25 @@ function extractChatActionOptions(content) {
 
 function appendChatQuickActions(containerEl, actionOptions) {
   if (!containerEl || !chatMessagesEl) return;
-  var actions = document.createElement('div');
-  actions.className = 'chat-msg-actions';
+  var actions = document.createElement("div");
+  actions.className = "chat-msg-actions";
 
-  var options = actionOptions && actionOptions.length
-    ? actionOptions
-    : [
-      { label: 'Confirmar', value: 'Confirmo. Pode prosseguir.' },
-      { label: 'Cancelar', value: 'Cancelar. Nao execute nenhuma acao.' },
-      { label: 'Sim', value: 'Sim, pode executar.' },
-      { label: 'Nao', value: 'Nao, por enquanto nao.' },
-    ];
+  var options =
+    actionOptions && actionOptions.length
+      ? actionOptions
+      : [
+          { label: "Confirmar", value: "Confirmo. Pode prosseguir." },
+          { label: "Cancelar", value: "Cancelar. Nao execute nenhuma acao." },
+          { label: "Sim", value: "Sim, pode executar." },
+          { label: "Nao", value: "Nao, por enquanto nao." },
+        ];
 
   options.forEach(function (item) {
-    var btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'btn subtle btn-xs';
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn subtle btn-xs";
     btn.textContent = item.label;
-    btn.addEventListener('click', function () {
+    btn.addEventListener("click", function () {
       if (chatSending || !chatInputEl) return;
       chatInputEl.value = item.value;
       sendChatMessage();
@@ -256,22 +269,27 @@ function appendChatQuickActions(containerEl, actionOptions) {
 }
 
 function parseChatProgressLine(line) {
-  var raw = String(line || '');
-  if (!raw.startsWith('[chat] ')) return '';
-  var text = raw.replace(/^\[chat\]\s*/, '');
+  var raw = String(line || "");
+  if (!raw.startsWith("[chat] ")) return "";
+  var text = raw.replace(/^\[chat\]\s*/, "");
 
-  if (text.indexOf('mensagem recebida') >= 0) return 'Entendendo sua solicitacao...';
-  if (text.indexOf('ferramentas disponiveis') >= 0) return 'Preparando ferramentas...';
-  if (text.indexOf('rodada de ferramentas') >= 0) return 'Analisando e planejando a melhor acao...';
-  if (text.indexOf('chamando ferramenta:') >= 0) {
-    var name = text.split('chamando ferramenta:')[1] || '';
+  if (text.indexOf("mensagem recebida") >= 0)
+    return "Entendendo sua solicitacao...";
+  if (text.indexOf("ferramentas disponiveis") >= 0)
+    return "Preparando ferramentas...";
+  if (text.indexOf("rodada de ferramentas") >= 0)
+    return "Analisando e planejando a melhor acao...";
+  if (text.indexOf("chamando ferramenta:") >= 0) {
+    var name = text.split("chamando ferramenta:")[1] || "";
     name = name.trim();
-    return name ? ('Executando: ' + name + '...') : 'Executando ferramenta...';
+    return name ? "Executando: " + name + "..." : "Executando ferramenta...";
   }
-  if (text.indexOf('executada com sucesso') >= 0) return 'Acao concluida com sucesso, preparando resposta...';
-  if (text.indexOf('retornou erro') >= 0) return 'Houve um erro na acao. Ajustando resposta...';
-  if (text.indexOf('resposta final') >= 0) return 'Finalizando resposta...';
-  return '';
+  if (text.indexOf("executada com sucesso") >= 0)
+    return "Acao concluida com sucesso, preparando resposta...";
+  if (text.indexOf("retornou erro") >= 0)
+    return "Houve um erro na acao. Ajustando resposta...";
+  if (text.indexOf("resposta final") >= 0) return "Finalizando resposta...";
+  return "";
 }
 
 function stopThinkingStatusUpdates() {
@@ -285,20 +303,20 @@ function handleChatUISuspend() {
   stopThinkingStatusUpdates();
 }
 
-document.addEventListener('ui:suspend', handleChatUISuspend);
+document.addEventListener("ui:suspend", handleChatUISuspend);
 
 function startThinkingStatusUpdates(thinkingEl) {
   stopThinkingStatusUpdates();
   if (!thinkingEl) return;
 
   var busy = false;
-  var lastStatus = '';
+  var lastStatus = "";
   chatThinkingPollId = setInterval(async function () {
     if (busy) return;
     busy = true;
     try {
       var lines = await appApi().GetLogs();
-      var status = '';
+      var status = "";
       for (var i = (lines || []).length - 1; i >= 0; i -= 1) {
         status = parseChatProgressLine(lines[i]);
         if (status) break;
@@ -317,42 +335,72 @@ function startThinkingStatusUpdates(thinkingEl) {
 }
 
 function formatInlineChatMarkdown(text) {
-  var escaped = escapeHtml(String(text || ''));
+  var escaped = escapeHtml(String(text || ""));
   var codeTokens = [];
 
   escaped = escaped.replace(/`([^`\n]+)`/g, function (_, code) {
-    var token = '__CHAT_CODE_' + codeTokens.length + '__';
-    codeTokens.push('<code>' + code + '</code>');
+    var token = "__CHAT_CODE_" + codeTokens.length + "__";
+    codeTokens.push("<code>" + code + "</code>");
     return token;
   });
 
-  escaped = escaped.replace(/\[([^\]]+)\]\(((?:https?:\/\/|(?:discovery|app):\/\/)[^\s)]+)\)/g, function (_, label, url) {
-    var safeLabel = String(label || '').trim();
-    if (/^(?:discovery|app):\/\//i.test(url)) {
-      var parts = safeLabel.split('|').map(function (p) { return p.trim(); }).filter(Boolean);
-      if (parts.length >= 2) {
-        var title = parts[0];
-        var subtitle = parts[1];
-        var meta = parts.slice(2).join(' - ');
-        return '<a href="#" class="chat-internal-link chat-internal-card" data-internal-url="' + escapeHtmlAttr(url) + '">' +
-          '<span class="chat-internal-card-title">' + title + '</span>' +
-          '<span class="chat-internal-card-subtitle">' + subtitle + '</span>' +
-          (meta ? '<span class="chat-internal-card-meta">' + meta + '</span>' : '') +
-        '</a>';
+  escaped = escaped.replace(
+    /\[([^\]]+)\]\(((?:https?:\/\/|(?:discovery|app):\/\/)[^\s)]+)\)/g,
+    function (_, label, url) {
+      var safeLabel = String(label || "").trim();
+      if (/^(?:discovery|app):\/\//i.test(url)) {
+        var parts = safeLabel
+          .split("|")
+          .map(function (p) {
+            return p.trim();
+          })
+          .filter(Boolean);
+        if (parts.length >= 2) {
+          var title = parts[0];
+          var subtitle = parts[1];
+          var meta = parts.slice(2).join(" - ");
+          return (
+            '<a href="#" class="chat-internal-link chat-internal-card" data-internal-url="' +
+            escapeHtmlAttr(url) +
+            '">' +
+            '<span class="chat-internal-card-title">' +
+            title +
+            "</span>" +
+            '<span class="chat-internal-card-subtitle">' +
+            subtitle +
+            "</span>" +
+            (meta
+              ? '<span class="chat-internal-card-meta">' + meta + "</span>"
+              : "") +
+            "</a>"
+          );
+        }
+        return (
+          '<a href="#" class="chat-internal-link" data-internal-url="' +
+          escapeHtmlAttr(url) +
+          '">' +
+          safeLabel +
+          "</a>"
+        );
       }
-      return '<a href="#" class="chat-internal-link" data-internal-url="' + escapeHtmlAttr(url) + '">' + safeLabel + '</a>';
-    }
-    return '<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + safeLabel + '</a>';
-  });
+      return (
+        '<a href="' +
+        url +
+        '" target="_blank" rel="noopener noreferrer">' +
+        safeLabel +
+        "</a>"
+      );
+    },
+  );
 
   escaped = escaped
-    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/__([^_]+)__/g, '<strong>$1</strong>')
-    .replace(/\*([^*\n]+)\*/g, '<em>$1</em>')
-    .replace(/_([^_\n]+)_/g, '<em>$1</em>');
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/__([^_]+)__/g, "<strong>$1</strong>")
+    .replace(/\*([^*\n]+)\*/g, "<em>$1</em>")
+    .replace(/_([^_\n]+)_/g, "<em>$1</em>");
 
   for (var i = 0; i < codeTokens.length; i += 1) {
-    escaped = escaped.replace('__CHAT_CODE_' + i + '__', codeTokens[i]);
+    escaped = escaped.replace("__CHAT_CODE_" + i + "__", codeTokens[i]);
   }
 
   return escaped;
@@ -360,47 +408,62 @@ function formatInlineChatMarkdown(text) {
 
 function parseInternalAppRoute(url) {
   try {
-    var parsed = new URL(String(url || ''));
-    var scheme = (parsed.protocol || '').replace(':', '').toLowerCase();
-    if (scheme !== 'discovery' && scheme !== 'app') return null;
+    var parsed = new URL(String(url || ""));
+    var scheme = (parsed.protocol || "").replace(":", "").toLowerCase();
+    if (scheme !== "discovery" && scheme !== "app") return null;
 
     var segments = [];
     if (parsed.hostname) segments.push(parsed.hostname.toLowerCase());
     if (parsed.pathname) {
-      segments = segments.concat(parsed.pathname.split('/').filter(Boolean).map(function (s) { return s.toLowerCase(); }));
+      segments = segments.concat(
+        parsed.pathname
+          .split("/")
+          .filter(Boolean)
+          .map(function (s) {
+            return s.toLowerCase();
+          }),
+      );
     }
 
-    var ticketId = parsed.searchParams.get('ticketId') || parsed.searchParams.get('id') || '';
-    if (!ticketId && segments[0] === 'support' && segments[1] === 'ticket' && segments[2]) {
+    var ticketId =
+      parsed.searchParams.get("ticketId") ||
+      parsed.searchParams.get("id") ||
+      "";
+    if (
+      !ticketId &&
+      segments[0] === "support" &&
+      segments[1] === "ticket" &&
+      segments[2]
+    ) {
       ticketId = segments[2];
     }
 
     var tabBySegment;
     switch (segments[0]) {
-      case 'support':
-      case 'tickets':
-        tabBySegment = 'support';
+      case "support":
+      case "tickets":
+        tabBySegment = "support";
         break;
-      case 'store':
-        tabBySegment = 'store';
+      case "store":
+        tabBySegment = "store";
         break;
-      case 'updates':
-        tabBySegment = 'updates';
+      case "updates":
+        tabBySegment = "updates";
         break;
-      case 'inventory':
-        tabBySegment = 'inventory';
+      case "inventory":
+        tabBySegment = "inventory";
         break;
-      case 'logs':
-        tabBySegment = 'logs';
+      case "logs":
+        tabBySegment = "logs";
         break;
-      case 'chat':
-        tabBySegment = 'chat';
+      case "chat":
+        tabBySegment = "chat";
         break;
-      case 'knowledge':
-        tabBySegment = 'knowledge';
+      case "knowledge":
+        tabBySegment = "knowledge";
         break;
-      case 'debug':
-        tabBySegment = 'debug';
+      case "debug":
+        tabBySegment = "debug";
         break;
       default:
         tabBySegment = undefined;
@@ -416,20 +479,26 @@ function parseInternalAppRoute(url) {
 async function navigateInternalAppRoute(url) {
   var route = parseInternalAppRoute(url);
   if (!route) {
-    showToast(translate('chat.invalidInternalLink', { url: String(url || '') }), 'error');
+    showToast(
+      translate("chat.invalidInternalLink", { url: String(url || "") }),
+      "error",
+    );
     return;
   }
 
   setActiveTab(route.tab);
 
-  if (route.tab === 'support') {
+  if (route.tab === "support") {
     await loadSupportTickets();
     if (route.ticketId) {
       try {
         var ticket = await appApi().GetSupportTicketDetails(route.ticketId);
         showTicketDetail(ticket);
       } catch (err) {
-        showToast(translate('chat.openTicketError', { error: String(err) }), 'error');
+        showToast(
+          translate("chat.openTicketError", { error: String(err) }),
+          "error",
+        );
       }
     }
   }
@@ -437,13 +506,15 @@ async function navigateInternalAppRoute(url) {
 
 function bindInternalChatLinks(containerEl) {
   if (!containerEl) return;
-  var links = containerEl.querySelectorAll('a.chat-internal-link[data-internal-url]');
+  var links = containerEl.querySelectorAll(
+    "a.chat-internal-link[data-internal-url]",
+  );
   links.forEach(function (link) {
-    if (link.dataset.boundInternalClick === '1') return;
-    link.dataset.boundInternalClick = '1';
-    link.addEventListener('click', function (e) {
+    if (link.dataset.boundInternalClick === "1") return;
+    link.dataset.boundInternalClick = "1";
+    link.addEventListener("click", function (e) {
       e.preventDefault();
-      var internalURL = link.getAttribute('data-internal-url') || '';
+      var internalURL = link.getAttribute("data-internal-url") || "";
       navigateInternalAppRoute(internalURL);
     });
   });
@@ -452,42 +523,52 @@ function bindInternalChatLinks(containerEl) {
 function stripRawToolCalls(content) {
   // Remove XML-like tool call blocks that the server LLM may emit as raw text
   // instead of executing the tool. Matches both self-closing and paired tags.
-  var s = String(content || '');
+  var s = String(content || "");
   // Self-closing: <toolname {"k":"v"} />
-  s = s.replace(/<(\w+)\s+(\{[^}]*\})\s*\/>/g, '');
+  s = s.replace(/<(\w+)\s+(\{[^}]*\})\s*\/>/g, "");
   // Paired: <toolname>{"k":"v"}</toolname>
-  s = s.replace(/<(\w+)\s*>\s*(\{[^}]*\})\s*<\/\1>/g, '');
+  s = s.replace(/<(\w+)\s*>\s*(\{[^}]*\})\s*<\/\1>/g, "");
   // Self-closing without content: <toolname/>
-  s = s.replace(/<(\w+)\s*\/>/g, '');
+  s = s.replace(/<(\w+)\s*\/>/g, "");
   return s;
 }
 
 function renderAssistantMarkdown(content) {
   content = stripRawToolCalls(content);
-  var lines = String(content || '').replace(/\r\n/g, '\n').split('\n');
-  var html = [];
+  var lines = String(content || "")
+    .replace(/\r\n/g, "\n")
+    .split("\n");
+  var html = ['<div class="md-content">'];
   var inCode = false;
-  var codeLang = '';
+  var codeLang = "";
   var codeLines = [];
   var inUl = false;
   var inOl = false;
 
   function closeLists() {
     if (inUl) {
-      html.push('</ul>');
+      html.push("</ul>");
       inUl = false;
     }
     if (inOl) {
-      html.push('</ol>');
+      html.push("</ol>");
       inOl = false;
     }
   }
 
   function flushCodeBlock() {
-    var langClass = codeLang ? (' class="lang-' + escapeHtmlAttr(codeLang) + '"') : '';
-    html.push('<pre class="chat-code"><code' + langClass + '>' + escapeHtml(codeLines.join('\n')) + '</code></pre>');
+    var langClass = codeLang
+      ? ' class="lang-' + escapeHtmlAttr(codeLang) + '"'
+      : "";
+    html.push(
+      '<pre class="chat-code"><code' +
+        langClass +
+        ">" +
+        escapeHtml(codeLines.join("\n")) +
+        "</code></pre>",
+    );
     inCode = false;
-    codeLang = '';
+    codeLang = "";
     codeLines = [];
   }
 
@@ -500,36 +581,54 @@ function renderAssistantMarkdown(content) {
   }
 
   function parseTableCells(s) {
-    return s.trim().replace(/^\|/, '').replace(/\|\s*$/, '').split('|').map(function (c) { return c.trim(); });
+    return s
+      .trim()
+      .replace(/^\|/, "")
+      .replace(/\|\s*$/, "")
+      .split("|")
+      .map(function (c) {
+        return c.trim();
+      });
   }
 
   function parseTableAlign(s) {
     return parseTableCells(s).map(function (c) {
-      if (/^:-+:$/.test(c)) return 'center';
-      if (/-+:$/.test(c)) return 'right';
-      return 'left';
+      if (/^:-+:$/.test(c)) return "center";
+      if (/-+:$/.test(c)) return "right";
+      return "left";
     });
   }
 
   function renderTable(startIdx) {
     var headerCells = parseTableCells(lines[startIdx]);
     var aligns = parseTableAlign(lines[startIdx + 1]);
-    var out = '<div class="chat-table-wrap"><table class="chat-table"><thead><tr>';
+    var out =
+      '<div class="chat-table-wrap"><table class="chat-table"><thead><tr>';
     for (var c = 0; c < headerCells.length; c += 1) {
-      out += '<th style="text-align:' + (aligns[c] || 'left') + '">' + formatInlineChatMarkdown(headerCells[c]) + '</th>';
+      out +=
+        '<th style="text-align:' +
+        (aligns[c] || "left") +
+        '">' +
+        formatInlineChatMarkdown(headerCells[c]) +
+        "</th>";
     }
-    out += '</tr></thead><tbody>';
+    out += "</tr></thead><tbody>";
     var r = startIdx + 2;
     while (r < lines.length && isTableRow(lines[r])) {
       var cells = parseTableCells(lines[r]);
-      out += '<tr>';
+      out += "<tr>";
       for (var c2 = 0; c2 < headerCells.length; c2 += 1) {
-        out += '<td style="text-align:' + (aligns[c2] || 'left') + '">' + formatInlineChatMarkdown(cells[c2] || '') + '</td>';
+        out +=
+          '<td style="text-align:' +
+          (aligns[c2] || "left") +
+          '">' +
+          formatInlineChatMarkdown(cells[c2] || "") +
+          "</td>";
       }
-      out += '</tr>';
+      out += "</tr>";
       r += 1;
     }
-    out += '</tbody></table></div>';
+    out += "</tbody></table></div>";
     return { html: out, nextIndex: r };
   }
 
@@ -549,7 +648,7 @@ function renderAssistantMarkdown(content) {
     if (fence) {
       closeLists();
       inCode = true;
-      codeLang = fence[1] || '';
+      codeLang = fence[1] || "";
       continue;
     }
 
@@ -559,7 +658,11 @@ function renderAssistantMarkdown(content) {
       continue;
     }
 
-    if (isTableRow(line) && (i + 1) < lines.length && isSeparatorRow(lines[i + 1].trim())) {
+    if (
+      isTableRow(line) &&
+      i + 1 < lines.length &&
+      isSeparatorRow(lines[i + 1].trim())
+    ) {
       closeLists();
       var tbl = renderTable(i);
       html.push(tbl.html);
@@ -571,44 +674,64 @@ function renderAssistantMarkdown(content) {
     if (heading) {
       closeLists();
       var level = heading[1].length;
-      html.push('<h' + level + '>' + formatInlineChatMarkdown(heading[2]) + '</h' + level + '>');
+      html.push(
+        "<h" +
+          level +
+          ">" +
+          formatInlineChatMarkdown(heading[2]) +
+          "</h" +
+          level +
+          ">",
+      );
       continue;
     }
 
     if (/^>\s+/.test(line)) {
       closeLists();
-      html.push('<blockquote>' + formatInlineChatMarkdown(line.replace(/^>\s+/, '')) + '</blockquote>');
+      html.push(
+        "<blockquote>" +
+          formatInlineChatMarkdown(line.replace(/^>\s+/, "")) +
+          "</blockquote>",
+      );
       continue;
     }
 
     if (/^[-*]\s+/.test(line)) {
       if (inOl) {
-        html.push('</ol>');
+        html.push("</ol>");
         inOl = false;
       }
       if (!inUl) {
-        html.push('<ul>');
+        html.push("<ul>");
         inUl = true;
       }
-      html.push('<li>' + formatInlineChatMarkdown(line.replace(/^[-*]\s+/, '')) + '</li>');
+      html.push(
+        "<li>" +
+          formatInlineChatMarkdown(line.replace(/^[-*]\s+/, "")) +
+          "</li>",
+      );
       continue;
     }
 
     if (/^\d+\.\s+/.test(line)) {
       if (inUl) {
-        html.push('</ul>');
+        html.push("</ul>");
         inUl = false;
       }
       if (!inOl) {
-        html.push('<ol>');
+        html.push("<ol>");
         inOl = true;
       }
-      html.push('<li>' + formatInlineChatMarkdown(line.replace(/^\d+\.\s+/, '')) + '</li>');
+      html.push(
+        "<li>" +
+          formatInlineChatMarkdown(line.replace(/^\d+\.\s+/, "")) +
+          "</li>",
+      );
       continue;
     }
 
     closeLists();
-    html.push('<p>' + formatInlineChatMarkdown(line) + '</p>');
+    html.push("<p>" + formatInlineChatMarkdown(line) + "</p>");
   }
 
   if (inCode) {
@@ -616,22 +739,24 @@ function renderAssistantMarkdown(content) {
   }
   closeLists();
 
-  return html.join('');
+  html.push("</div>");
+  return html.join("");
 }
 
 function addChatMessage(role, content) {
   if (!chatMessagesEl) return;
-  var div = document.createElement('div');
-  div.className = 'chat-msg ' + role;
+  var div = document.createElement("div");
+  div.className = "chat-msg " + role;
 
-  if (role === 'assistant') {
+  if (role === "assistant") {
     div.innerHTML = renderAssistantMarkdown(content);
+    syncColorMode();
     bindInternalChatLinks(div);
   } else {
     div.textContent = content;
   }
 
-  if (role === 'assistant') {
+  if (role === "assistant") {
     var dynamicActions = extractChatActionOptions(content);
     if (dynamicActions.length > 0) {
       appendChatQuickActions(div, dynamicActions);
@@ -648,7 +773,7 @@ function addChatMessage(role, content) {
 function removeChatThinking() {
   if (!chatMessagesEl) return;
   stopThinkingStatusUpdates();
-  var thinking = chatMessagesEl.querySelector('.chat-msg.thinking');
+  var thinking = chatMessagesEl.querySelector(".chat-msg.thinking");
   if (thinking) {
     thinking.remove();
     scheduleChatScrollToBottom();
@@ -660,25 +785,25 @@ async function sendChatMessage() {
   var text = chatInputEl.value.trim();
   if (!text) return;
 
-  chatInputEl.value = '';
-  addChatMessage('user', text);
+  chatInputEl.value = "";
+  addChatMessage("user", text);
 
   chatStopRequested = false;
   setChatBusy(true);
 
   // Create the streaming bubble immediately.
-  streamingRawContent = '';
+  streamingRawContent = "";
   streamingRafPending = false;
-  streamingBubble = document.createElement('div');
-  streamingBubble.className = 'chat-msg assistant streaming';
+  streamingBubble = document.createElement("div");
+  streamingBubble.className = "chat-msg assistant streaming";
 
-  var thinkingEl = document.createElement('div');
-  thinkingEl.className = 'stream-thinking';
-  thinkingEl.textContent = translate('chat.thinking');
+  var thinkingEl = document.createElement("div");
+  thinkingEl.className = "stream-thinking";
+  thinkingEl.textContent = translate("chat.thinking");
   streamingBubble.appendChild(thinkingEl);
 
-  var cursorEl = document.createElement('span');
-  cursorEl.className = 'stream-cursor';
+  var cursorEl = document.createElement("span");
+  cursorEl.className = "stream-cursor";
   streamingBubble.appendChild(cursorEl);
 
   if (chatMessagesEl) chatMessagesEl.appendChild(streamingBubble);
@@ -686,9 +811,11 @@ async function sendChatMessage() {
 
   try {
     // StartChatStream returns immediately; response arrives via events.
-    appApi().StartChatStream(text).catch(function (err) {
-      onStreamError(String(err));
-    });
+    appApi()
+      .StartChatStream(text)
+      .catch(function (err) {
+        onStreamError(String(err));
+      });
   } catch (err) {
     onStreamError(String(err));
   }
@@ -697,55 +824,64 @@ async function sendChatMessage() {
 async function loadChatConfig() {
   try {
     var cfg = await appApi().GetChatConfig();
-    if (chatEndpointEl) chatEndpointEl.value = cfg.endpoint || '';
-    if (chatModelEl) chatModelEl.value = cfg.model || '';
+    if (chatEndpointEl) chatEndpointEl.value = cfg.endpoint || "";
+    if (chatModelEl) chatModelEl.value = cfg.model || "";
     if (chatMaxTokensEl) {
       var maxTokens = Number(cfg.maxTokens || 0);
-      chatMaxTokensEl.value = maxTokens > 0 ? String(maxTokens) : '';
+      chatMaxTokensEl.value = maxTokens > 0 ? String(maxTokens) : "";
     }
-    if (chatSystemPromptEl) chatSystemPromptEl.value = cfg.systemPrompt || '';
+    if (chatSystemPromptEl) chatSystemPromptEl.value = cfg.systemPrompt || "";
     // Don't set API key - it's masked
   } catch (_) {}
 }
 
 async function saveChatConfig() {
-  var endpoint = chatEndpointEl ? chatEndpointEl.value.trim() : '';
-  var apiKey = chatApiKeyEl ? chatApiKeyEl.value.trim() : '';
-  var model = chatModelEl ? chatModelEl.value.trim() : '';
-  var maxTokensRaw = chatMaxTokensEl ? chatMaxTokensEl.value.trim() : '';
-  var systemPrompt = chatSystemPromptEl ? chatSystemPromptEl.value.trim() : '';
+  var endpoint = chatEndpointEl ? chatEndpointEl.value.trim() : "";
+  var apiKey = chatApiKeyEl ? chatApiKeyEl.value.trim() : "";
+  var model = chatModelEl ? chatModelEl.value.trim() : "";
+  var maxTokensRaw = chatMaxTokensEl ? chatMaxTokensEl.value.trim() : "";
+  var systemPrompt = chatSystemPromptEl ? chatSystemPromptEl.value.trim() : "";
   var maxTokens = 0;
 
   if (maxTokensRaw) {
     maxTokens = Number(maxTokensRaw);
     if (!Number.isFinite(maxTokens) || maxTokens < 0) {
-      showFeedback(translate('chat.maxTokensValidation'), true);
+      showFeedback(translate("chat.maxTokensValidation"), true);
       return;
     }
     maxTokens = Math.floor(maxTokens);
   }
 
   try {
-    await appApi().SetChatConfig({ endpoint: endpoint, apiKey: apiKey, model: model, systemPrompt: systemPrompt, maxTokens: maxTokens });
-    showFeedback(translate('chat.configSavedSuccess'));
-    if (chatConfigPanel) chatConfigPanel.classList.add('hidden');
+    await appApi().SetChatConfig({
+      endpoint: endpoint,
+      apiKey: apiKey,
+      model: model,
+      systemPrompt: systemPrompt,
+      maxTokens: maxTokens,
+    });
+    showFeedback(translate("chat.configSavedSuccess"));
+    if (chatConfigPanel) chatConfigPanel.classList.add("hidden");
   } catch (err) {
-    showFeedback(translate('chat.configSaveError', { error: String(err) }), true);
+    showFeedback(
+      translate("chat.configSaveError", { error: String(err) }),
+      true,
+    );
   }
 }
 
 async function testChatConfig() {
-  var endpoint = chatEndpointEl ? chatEndpointEl.value.trim() : '';
-  var apiKey = chatApiKeyEl ? chatApiKeyEl.value.trim() : '';
-  var model = chatModelEl ? chatModelEl.value.trim() : '';
-  var maxTokensRaw = chatMaxTokensEl ? chatMaxTokensEl.value.trim() : '';
-  var systemPrompt = chatSystemPromptEl ? chatSystemPromptEl.value.trim() : '';
+  var endpoint = chatEndpointEl ? chatEndpointEl.value.trim() : "";
+  var apiKey = chatApiKeyEl ? chatApiKeyEl.value.trim() : "";
+  var model = chatModelEl ? chatModelEl.value.trim() : "";
+  var maxTokensRaw = chatMaxTokensEl ? chatMaxTokensEl.value.trim() : "";
+  var systemPrompt = chatSystemPromptEl ? chatSystemPromptEl.value.trim() : "";
   var maxTokens = 0;
 
   if (maxTokensRaw) {
     maxTokens = Number(maxTokensRaw);
     if (!Number.isFinite(maxTokens) || maxTokens < 0) {
-      showFeedback(translate('chat.maxTokensValidation'), true);
+      showFeedback(translate("chat.maxTokensValidation"), true);
       return;
     }
     maxTokens = Math.floor(maxTokens);
@@ -753,12 +889,25 @@ async function testChatConfig() {
 
   if (chatTestConfigBtn) chatTestConfigBtn.disabled = true;
   try {
-    showFeedback(translate('chat.configTesting'));
-    var reply = await appApi().TestChatConfig({ endpoint: endpoint, apiKey: apiKey, model: model, systemPrompt: systemPrompt, maxTokens: maxTokens });
-    var normalized = String(reply || '').trim();
-    showFeedback(translate('chat.configTestSuccess', { suffix: normalized ? ': ' + normalized : '' }));
+    showFeedback(translate("chat.configTesting"));
+    var reply = await appApi().TestChatConfig({
+      endpoint: endpoint,
+      apiKey: apiKey,
+      model: model,
+      systemPrompt: systemPrompt,
+      maxTokens: maxTokens,
+    });
+    var normalized = String(reply || "").trim();
+    showFeedback(
+      translate("chat.configTestSuccess", {
+        suffix: normalized ? ": " + normalized : "",
+      }),
+    );
   } catch (err) {
-    showFeedback(translate('chat.configTestFailure', { error: String(err) }), true);
+    showFeedback(
+      translate("chat.configTestFailure", { error: String(err) }),
+      true,
+    );
   } finally {
     if (chatTestConfigBtn) chatTestConfigBtn.disabled = false;
   }
@@ -768,13 +917,22 @@ async function loadChatTools() {
   if (!chatToolsList) return;
   try {
     var tools = await appApi().GetAvailableTools();
-    chatToolsList.innerHTML = (tools || []).map(function (t) {
-      return '<span class="chat-tool-badge" title="' + escapeHtml(t.description) + '">' +
-        escapeHtml(t.name) +
-      '</span>';
-    }).join('');
+    chatToolsList.innerHTML = (tools || [])
+      .map(function (t) {
+        return (
+          '<span class="chat-tool-badge" title="' +
+          escapeHtml(t.description) +
+          '">' +
+          escapeHtml(t.name) +
+          "</span>"
+        );
+      })
+      .join("");
   } catch (_) {
-    chatToolsList.innerHTML = '<span class="meta">' + escapeHtml(translate('chat.toolsLoadError')) + '</span>';
+    chatToolsList.innerHTML =
+      '<span class="meta">' +
+      escapeHtml(translate("chat.toolsLoadError")) +
+      "</span>";
   }
 }
 
@@ -783,12 +941,16 @@ async function loadChatDebugLogs() {
   try {
     var lines = await appApi().GetLogs();
     var chatLines = (lines || []).filter(function (line) {
-      return String(line).startsWith('[chat]');
+      return String(line).startsWith("[chat]");
     });
-    chatLogsOutput.textContent = chatLines.length ? chatLines.join('\n') : translate('chat.noLogsYet');
+    chatLogsOutput.textContent = chatLines.length
+      ? chatLines.join("\n")
+      : translate("chat.noLogsYet");
     chatLogsOutput.scrollTop = chatLogsOutput.scrollHeight;
   } catch (err) {
-    chatLogsOutput.textContent = translate('chat.logsLoadError', { error: String(err) });
+    chatLogsOutput.textContent = translate("chat.logsLoadError", {
+      error: String(err),
+    });
   }
 }
 
@@ -797,150 +959,183 @@ async function loadChatMemories() {
   try {
     var notes = await appApi().GetLocalMemories();
     if (!notes || !notes.length) {
-      chatMemoriesList.innerHTML = '<div class="meta">' + escapeHtml(translate('chat.noMemoryFound')) + '</div>';
+      chatMemoriesList.innerHTML =
+        '<div class="meta">' +
+        escapeHtml(translate("chat.noMemoryFound")) +
+        "</div>";
       return;
     }
 
-    var html = notes.map(function (n) {
-      var created = n.createdAt ? formatDate(n.createdAt, '') : '';
-      var updated = n.updatedAt ? formatDate(n.updatedAt, '') : '';
-      return '<div class="chat-memory-item">' +
-        '<div class="chat-memory-meta"><span>' + escapeHtml(created) + '</span>' +
-        (updated && updated !== created ? ' <span>' + escapeHtml(translate('chat.updatedAt', { date: updated })) + '</span>' : '') +
-        '</div>' +
-        '<div class="chat-memory-content">' + escapeHtml(n.content) + '</div>' +
-        '<div class="chat-memory-actions">' +
-        '<button class="btn danger chat-memory-delete-btn" data-id="' + escapeHtml(String(n.id)) + '">' + escapeHtml(translate('action.delete')) + '</button>' +
-        '</div>' +
-      '</div>';
-    }).join('');
+    var html = notes
+      .map(function (n) {
+        var created = n.createdAt ? formatDate(n.createdAt, "") : "";
+        var updated = n.updatedAt ? formatDate(n.updatedAt, "") : "";
+        return (
+          '<div class="chat-memory-item">' +
+          '<div class="chat-memory-meta"><span>' +
+          escapeHtml(created) +
+          "</span>" +
+          (updated && updated !== created
+            ? " <span>" +
+              escapeHtml(translate("chat.updatedAt", { date: updated })) +
+              "</span>"
+            : "") +
+          "</div>" +
+          '<div class="chat-memory-content">' +
+          escapeHtml(n.content) +
+          "</div>" +
+          '<div class="chat-memory-actions">' +
+          '<button class="btn danger chat-memory-delete-btn" data-id="' +
+          escapeHtml(String(n.id)) +
+          '">' +
+          escapeHtml(translate("action.delete")) +
+          "</button>" +
+          "</div>" +
+          "</div>"
+        );
+      })
+      .join("");
 
     chatMemoriesList.innerHTML = html;
 
     // Attach delete handlers
-    var deleteButtons = chatMemoriesList.querySelectorAll('.chat-memory-delete-btn');
+    var deleteButtons = chatMemoriesList.querySelectorAll(
+      ".chat-memory-delete-btn",
+    );
     deleteButtons.forEach(function (btn) {
-      btn.addEventListener('click', function () {
-        var id = parseInt(btn.getAttribute('data-id'), 10);
+      btn.addEventListener("click", function () {
+        var id = parseInt(btn.getAttribute("data-id"), 10);
         if (!Number.isFinite(id)) return;
         deleteChatMemory(id);
       });
     });
   } catch (err) {
-    chatMemoriesList.innerHTML = '<div class="meta">' + escapeHtml(translate('chat.memoriesLoadError', { error: String(err) })) + '</div>';
+    chatMemoriesList.innerHTML =
+      '<div class="meta">' +
+      escapeHtml(translate("chat.memoriesLoadError", { error: String(err) })) +
+      "</div>";
   }
 }
 
 function openChatMemoriesModal() {
   if (!chatMemoriesModal) return;
-  chatMemoriesModal.classList.remove('hidden');
-  chatMemoriesModal.setAttribute('aria-hidden', 'false');
+  chatMemoriesModal.classList.remove("hidden");
+  chatMemoriesModal.setAttribute("aria-hidden", "false");
   loadChatMemories();
 }
 
 function closeChatMemoriesModal() {
   if (!chatMemoriesModal) return;
-  chatMemoriesModal.classList.add('hidden');
-  chatMemoriesModal.setAttribute('aria-hidden', 'true');
+  chatMemoriesModal.classList.add("hidden");
+  chatMemoriesModal.setAttribute("aria-hidden", "true");
 }
 
 function deleteChatMemory(id) {
   if (!chatMemoriesList) return;
-  appApi().DeleteLocalMemory(id).then(function () {
-    loadChatMemories();
-  }).catch(function (err) {
-    showFeedback(translate('chat.memoryDeleteError', { error: String(err) }), true);
-  });
+  appApi()
+    .DeleteLocalMemory(id)
+    .then(function () {
+      loadChatMemories();
+    })
+    .catch(function (err) {
+      showFeedback(
+        translate("chat.memoryDeleteError", { error: String(err) }),
+        true,
+      );
+    });
 }
 
 function openChatLogsModal() {
   if (!chatLogsModal) return;
-  chatLogsModal.classList.remove('hidden');
-  chatLogsModal.setAttribute('aria-hidden', 'false');
+  chatLogsModal.classList.remove("hidden");
+  chatLogsModal.setAttribute("aria-hidden", "false");
   loadChatDebugLogs();
 }
 
 function closeChatLogsModal() {
   if (!chatLogsModal) return;
-  chatLogsModal.classList.add('hidden');
-  chatLogsModal.setAttribute('aria-hidden', 'true');
+  chatLogsModal.classList.add("hidden");
+  chatLogsModal.setAttribute("aria-hidden", "true");
 }
 
 function initChat() {
   if (chatSendBtn) {
-    chatSendBtn.addEventListener('click', sendChatMessage);
+    chatSendBtn.addEventListener("click", sendChatMessage);
   }
   if (chatStopBtn) {
-    chatStopBtn.addEventListener('click', requestStopChatStream);
+    chatStopBtn.addEventListener("click", requestStopChatStream);
   }
   if (chatInputEl) {
-    chatInputEl.addEventListener('keydown', function (e) {
-      if (e.key === 'Enter' && !e.shiftKey) {
+    chatInputEl.addEventListener("keydown", function (e) {
+      if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         sendChatMessage();
       }
     });
   }
   if (chatConfigBtn && chatConfigPanel) {
-    chatConfigBtn.addEventListener('click', function () {
-      chatConfigPanel.classList.toggle('hidden');
-      if (chatToolsPanel) chatToolsPanel.classList.add('hidden');
+    chatConfigBtn.addEventListener("click", function () {
+      chatConfigPanel.classList.toggle("hidden");
+      if (chatToolsPanel) chatToolsPanel.classList.add("hidden");
       loadChatConfig();
     });
   }
   if (chatToolsBtn && chatToolsPanel) {
-    chatToolsBtn.addEventListener('click', function () {
-      chatToolsPanel.classList.toggle('hidden');
-      if (chatConfigPanel) chatConfigPanel.classList.add('hidden');
+    chatToolsBtn.addEventListener("click", function () {
+      chatToolsPanel.classList.toggle("hidden");
+      if (chatConfigPanel) chatConfigPanel.classList.add("hidden");
       loadChatTools();
     });
   }
   if (chatLogsBtn) {
-    chatLogsBtn.addEventListener('click', openChatLogsModal);
+    chatLogsBtn.addEventListener("click", openChatLogsModal);
   }
   if (chatLogsCloseBtn) {
-    chatLogsCloseBtn.addEventListener('click', closeChatLogsModal);
+    chatLogsCloseBtn.addEventListener("click", closeChatLogsModal);
   }
   if (chatLogsRefreshBtn) {
-    chatLogsRefreshBtn.addEventListener('click', loadChatDebugLogs);
+    chatLogsRefreshBtn.addEventListener("click", loadChatDebugLogs);
   }
   if (chatLogsModal) {
-    chatLogsModal.addEventListener('click', function (e) {
+    chatLogsModal.addEventListener("click", function (e) {
       if (e.target === chatLogsModal) closeChatLogsModal();
     });
   }
 
   if (chatMemoriesBtn) {
-    chatMemoriesBtn.classList.toggle('hidden', !isDebugRuntimeMode());
-    chatMemoriesBtn.addEventListener('click', openChatMemoriesModal);
+    chatMemoriesBtn.classList.toggle("hidden", !isDebugRuntimeMode());
+    chatMemoriesBtn.addEventListener("click", openChatMemoriesModal);
   }
   if (chatMemoriesCloseBtn) {
-    chatMemoriesCloseBtn.addEventListener('click', closeChatMemoriesModal);
+    chatMemoriesCloseBtn.addEventListener("click", closeChatMemoriesModal);
   }
   if (chatMemoriesRefreshBtn) {
-    chatMemoriesRefreshBtn.addEventListener('click', loadChatMemories);
+    chatMemoriesRefreshBtn.addEventListener("click", loadChatMemories);
   }
   if (chatMemoriesModal) {
-    chatMemoriesModal.addEventListener('click', function (e) {
+    chatMemoriesModal.addEventListener("click", function (e) {
       if (e.target === chatMemoriesModal) closeChatMemoriesModal();
     });
   }
 
   if (chatClearBtn) {
-    chatClearBtn.addEventListener('click', async function () {
+    chatClearBtn.addEventListener("click", async function () {
       try {
         await appApi().ClearChatHistory();
-        if (chatMessagesEl) chatMessagesEl.innerHTML = '';
-        showFeedback(translate('chat.cleared'));
+        if (chatMessagesEl) chatMessagesEl.innerHTML = "";
+        showFeedback(translate("chat.cleared"));
       } catch (err) {
-        showFeedback(translate('chat.clearError', { error: String(err) }), true);
+        showFeedback(
+          translate("chat.clearError", { error: String(err) }),
+          true,
+        );
       }
     });
   }
   if (chatSaveConfigBtn) {
-    chatSaveConfigBtn.addEventListener('click', saveChatConfig);
+    chatSaveConfigBtn.addEventListener("click", saveChatConfig);
   }
   if (chatTestConfigBtn) {
-    chatTestConfigBtn.addEventListener('click', testChatConfig);
+    chatTestConfigBtn.addEventListener("click", testChatConfig);
   }
 }
