@@ -94,3 +94,22 @@ func coalesceEnv(keys ...string) string {
 	}
 	return ""
 }
+
+// Reset limpa o cache de variáveis de ambiente e permite que Init() seja
+// re-executado. Usado apenas em testes para isolar variáveis via t.Setenv.
+// Não é thread-safe com Init() — chamar apenas quando nenhuma goroutine
+// está lendo variáveis cacheadas simultaneamente.
+func Reset() {
+	initOnce = sync.Once{}
+	programData = ""
+	localAppData = ""
+	windowsDir = ""
+	homeDir = ""
+	exeDir = ""
+	osName = ""
+	logFile = ""
+	frameMode = ""
+	localeEnv = ""
+	insecureTLS = ""
+	insecureTrans = ""
+}

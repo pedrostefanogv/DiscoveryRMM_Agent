@@ -33,7 +33,9 @@ func TestBuildPSADTInstallScript_BySource(t *testing.T) {
 	}
 
 	offlineScript := buildPSADTInstallScript("4.1.8", "offline", "C:/repo/PSAppDeployToolkit")
-	if !strings.Contains(offlineScript, "offline source nao encontrada") {
+	// Substring sem acento para evitar dependência de locale/encoding.
+	if !strings.Contains(strings.ToLower(offlineScript), "source nao encontrada") &&
+		!strings.Contains(offlineScript, "source não encontrada") {
 		t.Fatalf("expected offline source script validation")
 	}
 

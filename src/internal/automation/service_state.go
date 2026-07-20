@@ -72,10 +72,11 @@ func (s *Service) loadDeferStateForAgent(agentID string) {
 		}
 	}
 
+	// Substitui o mapa inteiro em vez de mesclar — entradas órfãs do agente
+	// anterior não devem persistir em memória após a troca de agente.
+	// Sem isso, o mapa cresceria indefinidamente a cada troca de agente.
 	s.mu.Lock()
-	for taskID, state := range loaded {
-		s.deferByTask[taskID] = state
-	}
+	s.deferByTask = loaded
 	s.mu.Unlock()
 }
 

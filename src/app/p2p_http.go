@@ -223,6 +223,12 @@ func (s *p2pTransferServer) downloadArtifact(access P2PArtifactAccess) (string, 
 		_ = os.Remove(tmpPath)
 		return "", 0, closeErr
 	}
+	// Validação de tamanho: falha cedo se o servidor enviou bytes truncados,
+	// antes de gastar CPU recalcular SHA256 do arquivo incompleto.
+	if access.SizeBytes > 0 && size != access.SizeBytes {
+		_ = os.Remove(tmpPath)
+		return "", 0, fmt.Errorf("tamanho divergente: esperado=%d recebido=%d", access.SizeBytes, size)
+	}
 	checksum, err := computeFileSHA256(tmpPath)
 	if err != nil {
 		_ = os.Remove(tmpPath)

@@ -58,7 +58,9 @@ func TestDecodeLibp2pGetHeaderAndPayloadRejectsInvalidRange(t *testing.T) {
 	if err == nil {
 		t.Fatal("esperava erro para range invalido")
 	}
-	if !strings.Contains(err.Error(), "range retornado invalido") {
+	// Substring sem acento para evitar dependência de locale/encoding.
+	lower := strings.ToLower(err.Error())
+	if !strings.Contains(lower, "range retornado invalido") && !strings.Contains(lower, "range retornado inválido") {
 		t.Fatalf("mensagem inesperada: %v", err)
 	}
 }

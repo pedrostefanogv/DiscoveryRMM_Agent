@@ -141,7 +141,7 @@ type App struct {
 
 	notificationMu      sync.Mutex
 	pendingNotifyResult map[string]chan string
-	notificationByKey   map[string]string
+	notificationByKey   map[string]notificationIdempotencyEntry
 
 	queuedForceHeartbeat atomic.Bool
 
@@ -187,7 +187,7 @@ func NewApp(opts AppStartupOptions) *App {
 		chatSvc:             chatSvc,
 		chatEvents:          newChatEventBroker(),
 		pendingNotifyResult: make(map[string]chan string),
-		notificationByKey:   make(map[string]string),
+		notificationByKey:   make(map[string]notificationIdempotencyEntry),
 		startupTime:         time.Now(),
 	}
 	a.automationSvc = automation.NewService(func() automation.RuntimeConfig {

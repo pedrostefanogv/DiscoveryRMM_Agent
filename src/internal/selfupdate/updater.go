@@ -1,4 +1,4 @@
-﻿package selfupdate
+package selfupdate
 
 import (
 	"context"

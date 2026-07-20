@@ -63,7 +63,8 @@ func TestRefreshInventory_SkipsCollectionWhenNotProvisioned(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected provisioning error")
 	}
-	if !strings.Contains(err.Error(), "nao estiver provisionado") {
+	// Substring sem acento para evitar dependência de locale/encoding.
+	if !strings.Contains(strings.ToLower(err.Error()), "provisionado") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if provider.getInventoryCalls != 0 {

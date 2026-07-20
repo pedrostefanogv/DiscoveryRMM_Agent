@@ -65,7 +65,7 @@ func TestDispatchNotificationHeadless(t *testing.T) {
 }
 
 func TestDispatchNotification_IdempotencyDeduplicates(t *testing.T) {
-	a := &App{notificationByKey: map[string]string{}}
+	a := &App{notificationByKey: map[string]notificationIdempotencyEntry{}}
 
 	first := a.DispatchNotification(NotificationDispatchRequest{
 		IdempotencyKey: "notif-key-1",
@@ -94,7 +94,7 @@ func TestDispatchNotification_IdempotencyDeduplicates(t *testing.T) {
 func TestDispatchNotification_RolloutDisableNotifications(t *testing.T) {
 	disabled := false
 	a := &App{
-		notificationByKey: map[string]string{},
+		notificationByKey: map[string]notificationIdempotencyEntry{},
 		agentConfig: AgentConfiguration{
 			Rollout: AgentRolloutConfig{EnableNotifications: &disabled},
 		},
@@ -118,7 +118,7 @@ func TestDispatchNotification_RolloutDisablesRequireConfirmation(t *testing.T) {
 	allowNotifications := true
 	disableConfirm := false
 	a := &App{
-		notificationByKey: map[string]string{},
+		notificationByKey: map[string]notificationIdempotencyEntry{},
 		agentConfig: AgentConfiguration{
 			Rollout: AgentRolloutConfig{
 				EnableNotifications:       &allowNotifications,

@@ -12,6 +12,23 @@ import (
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
+// notificationIdempotencyEntry armazena o notificationID associado a um
+// idempotencyKey junto com o timestamp de criação, para permitir limpeza
+// periódica e evitar crescimento indefinido do mapa em execução longa.
+type notificationIdempotencyEntry struct {
+	NotificationID string
+	CreatedAt      time.Time
+}
+
+// notificationIdempotencyTTL define quanto tempo uma entrada de idempotência
+// permanece no cache antes de ser elegível para limpeza. 24h cobre janelas
+// típicas de retry de automação sem crescer indefinidamente.
+const notificationIdempotencyTTL = 24 * time.Hour
+
+// notificationIdempotencyPruneLimit é o número máximo de entradas removidas
+// por chamada de limpeza para evitar picos de CPU.
+const notificationIdempotencyPruneLimit = 200
+
 type NotificationDispatchRequest struct {
 	NotificationID string         `json:"notificationId"`
 	IdempotencyKey string         `json:"idempotencyKey"`
@@ -63,10 +80,11 @@ func (a *App) DispatchNotification(req NotificationDispatchRequest) Notification
 		req.IdempotencyKey = strings.TrimSpace(req.IdempotencyKey)
 		if req.IdempotencyKey != "" {
 			a.notificationMu.Lock()
-			if existingID, ok := a.notificationByKey[req.IdempotencyKey]; ok {
+			a.pruneNotificationByKeyLocked(time.Now())
+			if existing, ok := a.notificationByKey[req.IdempotencyKey]; ok {
 				a.notificationMu.Unlock()
 				a.persistNotificationEvent(database.NotificationEventEntry{
-					NotificationID: existingID,
+					NotificationID: existing.NotificationID,
 					Mode:           req.Mode,
 					Severity:       req.Severity,
 					EventType:      req.EventType,
@@ -77,7 +95,7 @@ func (a *App) DispatchNotification(req NotificationDispatchRequest) Notification
 				})
 				return NotificationDispatchResponse{
 					Accepted:       true,
-					NotificationID: existingID,
+					NotificationID: existing.NotificationID,
 					AgentAction:    "deduplicated",
 					Result:         "approved",
 				}
@@ -125,7 +143,10 @@ func (a *App) DispatchNotification(req NotificationDispatchRequest) Notification
 
 	if a != nil && req.IdempotencyKey != "" {
 		a.notificationMu.Lock()
-		a.notificationByKey[req.IdempotencyKey] = req.NotificationID
+		a.notificationByKey[req.IdempotencyKey] = notificationIdempotencyEntry{
+			NotificationID: req.NotificationID,
+			CreatedAt:      time.Now(),
+		}
 		a.notificationMu.Unlock()
 	}
 
@@ -376,6 +397,30 @@ func containsNormalizedString(values []string, target string) bool {
 		}
 	}
 	return false
+}
+
+// pruneNotificationByKeyLocked remove entradas expiradas do mapa de
+// idempotência (notificationByKey). Deve ser chamado com a.notificationMu
+// já adquirido. Limita o número de remoções por chamada para evitar
+// picos de CPU em mapas muito grandes.
+//
+// O mapa cresce a cada dispatch com IdempotencyKey; sem limpeza, em
+// execução longa (agente roda por semanas), consumiria memória
+// indefinidamente. O TTL de 24h cobre janelas típicas de retry.
+func (a *App) pruneNotificationByKeyLocked(now time.Time) {
+	if a == nil || len(a.notificationByKey) == 0 {
+		return
+	}
+	removed := 0
+	for key, entry := range a.notificationByKey {
+		if now.Sub(entry.CreatedAt) > notificationIdempotencyTTL {
+			delete(a.notificationByKey, key)
+			removed++
+			if removed >= notificationIdempotencyPruneLimit {
+				break
+			}
+		}
+	}
 }
 
 func applyNotificationPolicyByEventType(req NotificationDispatchRequest, cfg AgentConfiguration) NotificationDispatchRequest {

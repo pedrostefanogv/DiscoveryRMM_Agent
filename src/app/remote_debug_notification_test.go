@@ -7,7 +7,7 @@ import (
 )
 
 func TestHandleAgentRuntimeCommand_NotificationDispatchApproved(t *testing.T) {
-	a := &App{notificationByKey: map[string]string{}}
+	a := &App{notificationByKey: map[string]notificationIdempotencyEntry{}}
 	handled, code, output, errText := a.handleAgentRuntimeCommand(context.Background(), "notification", map[string]any{
 		"notificationId": "n1",
 		"mode":           "notify_only",

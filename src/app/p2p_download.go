@@ -197,11 +197,18 @@ func (c *p2pCoordinator) downloadArtifactSwarm(ctx context.Context, artifactName
 	path, totalBytes, err := downloadChunkedLibp2p(ctx, h, lp2pPeers, manifest, artifactName, requesterID, destDir, sched, c.dynamicMaxParallelChunks(),
 		nil, // onChunkProgress: desabilitado; usamos onChunkComplete
 		func(completed, total int) {
+			// Calcula bytes reais somando o tamanho de cada chunk concluído.
+			// O último chunk geralmente é menor que manifest.ChunkSize, então
+			// usar completed * manifest.ChunkSize faria a barra "pular" no final.
+			bytesRead := int64(0)
+			for i := 0; i < completed && i < len(manifest.Chunks); i++ {
+				bytesRead += manifest.Chunks[i].Size
+			}
 			c.emitTransferProgress(p2pTransferProgress{
 				ArtifactName:    artifactName,
 				PeerID:          fmt.Sprintf("%d peers", len(peerEntries)),
-				BytesRead:       int64(completed) * manifest.ChunkSize,
-				TotalBytes:      int64(total) * manifest.ChunkSize,
+				BytesRead:       bytesRead,
+				TotalBytes:      manifest.TotalSize,
 				Operation:       "swarm-pull",
 				CompletedChunks: completed,
 				TotalChunks:     total,
