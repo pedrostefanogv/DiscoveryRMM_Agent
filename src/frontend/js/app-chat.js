@@ -96,13 +96,11 @@ function finaliseStreamingBubble() {
   if (cursor) cursor.remove();
   streamingBubble.classList.remove("streaming");
 
-  // Add quick-action buttons if applicable.
+  // Add quick-action suggestion buttons if the assistant wrote "- " lines.
   var finalContent = streamingRawContent;
   var dynamicActions = extractChatActionOptions(finalContent);
   if (dynamicActions.length > 0) {
     appendChatQuickActions(streamingBubble, dynamicActions);
-  } else if (shouldSuggestChatActions(finalContent)) {
-    appendChatQuickActions(streamingBubble, null);
   }
 
   streamingBubble = null;
@@ -296,14 +294,6 @@ function scheduleChatScrollToBottom() {
     scrollChatToBottom();
     requestAnimationFrame(scrollChatToBottom);
   });
-}
-
-function shouldSuggestChatActions(content) {
-  var text = String(content || "").toLowerCase();
-  if (!text) return false;
-  return /confirme|confirmacao|pode prosseguir|posso prosseguir|deseja que eu|quer que eu|autoriza|aprova|aguardo.*confirmacao/.test(
-    text,
-  );
 }
 
 function extractChatActionOptions(content) {
@@ -865,8 +855,6 @@ function addChatMessage(role, content) {
     var dynamicActions = extractChatActionOptions(content);
     if (dynamicActions.length > 0) {
       appendChatQuickActions(div, dynamicActions);
-    } else if (shouldSuggestChatActions(content)) {
-      appendChatQuickActions(div, null);
     }
   }
 
