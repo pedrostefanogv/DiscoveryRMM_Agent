@@ -21,6 +21,12 @@ export function AddTicketComment(arg1:string,arg2:string,arg3:string):Promise<vo
 
 export function AddTicketCommentWithOptions(arg1:string,arg2:string,arg3:boolean):Promise<supportmeta.TicketComment>;
 
+export function AnswerChatQuestion(arg1:string,arg2:string):Promise<void>;
+
+export function AskUser(arg1:string,arg2:string,arg3:string):Promise<string>;
+
+export function AskUserChat(arg1:string,arg2:string,arg3:string):Promise<string>;
+
 export function CheckPSADTModuleStatus():Promise<app.PSADTModuleStatus>;
 
 export function CleanupP2PTempNow():Promise<string>;

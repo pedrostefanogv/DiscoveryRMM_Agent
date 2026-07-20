@@ -22,6 +22,18 @@ export function AddTicketCommentWithOptions(arg1, arg2, arg3) {
   return window['go']['app']['App']['AddTicketCommentWithOptions'](arg1, arg2, arg3);
 }
 
+export function AnswerChatQuestion(arg1, arg2) {
+  return window['go']['app']['App']['AnswerChatQuestion'](arg1, arg2);
+}
+
+export function AskUser(arg1, arg2, arg3) {
+  return window['go']['app']['App']['AskUser'](arg1, arg2, arg3);
+}
+
+export function AskUserChat(arg1, arg2, arg3) {
+  return window['go']['app']['App']['AskUserChat'](arg1, arg2, arg3);
+}
+
 export function CheckPSADTModuleStatus() {
   return window['go']['app']['App']['CheckPSADTModuleStatus']();
 }

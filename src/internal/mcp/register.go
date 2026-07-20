@@ -47,6 +47,9 @@ type AppBridge interface {
 	GetAgentTicketDetails(ticketID string) (json.RawMessage, error)
 	AddAgentTicketComment(ticketID, content string, isInternal bool) (json.RawMessage, error)
 	CreateAgentTicket(title, description string, priority int, category string) (json.RawMessage, error)
+
+	// Chat — pergunta interativa ao usuario
+	AskUserChat(question, optionsJSON, allowText string) (string, error)
 }
 
 // RegisterDiscoveryTools adds all Discovery app tools to the registry.
@@ -733,6 +736,34 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 		Description: "Retorna o status de saude dos discos fisicos via WMI (Win32_DiskDrive). Inclui modelo, fabricante, serial, interface, tamanho e status (OK / Pred Fail / Unknown). Util para identificar discos com falha iminente.",
 		Handler: func(args map[string]any) (any, error) {
 			return GetDiskHealth(context.Background())
+		},
+	})
+
+	// ========== PERGUNTA INTERATIVA ==========
+	reg.Register(Tool{
+		Name: "ask_user",
+		Description: "Faz uma pergunta ao usuario com opcoes clicaveis e aguarda a resposta. " +
+			"Use SEMPRE que precisar de confirmacao, escolha entre alternativas ou esclarecimento do usuario. " +
+			"A ferramenta BLOQUEIA ate o usuario responder — use apenas quando realmente precisar de input. " +
+			"Prefira usar texto com botoes (- opcao) para perguntas simples que nao bloqueiam o fluxo.",
+		Params: []ToolParam{
+			{Name: "question", Type: "string", Description: "A pergunta a ser exibida ao usuario (ex: 'Qual programa voce quer instalar?')", Required: true},
+			{Name: "options", Type: "string", Description: "JSON array de opcoes clicaveis. Ex: '[\"Google Chrome\",\"Firefox\",\"Outro\"]'. Maximo 6. Use [] para so texto livre.", Required: false},
+			{Name: "allowText", Type: "string", Description: "Se 'true', mostra campo de texto livre para o usuario digitar uma resposta personalizada", Required: false},
+		},
+		Handler: func(args map[string]any) (any, error) {
+			question, err := requiredStringArg(args, "question")
+			if err != nil {
+				return nil, err
+			}
+			optionsJSON, _ := args["options"].(string)
+			allowText, _ := args["allowText"].(string)
+
+			answer, err := app.AskUserChat(question, optionsJSON, allowText)
+			if err != nil {
+				return nil, err
+			}
+			return map[string]string{"answer": answer}, nil
 		},
 	})
 }

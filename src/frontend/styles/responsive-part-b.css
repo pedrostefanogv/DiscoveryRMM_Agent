@@ -491,6 +491,7 @@
   color: var(--text);
   border: 1px solid var(--border);
   border-bottom-left-radius: 4px;
+  white-space: normal;
 }
 
 .chat-msg.assistant p,
@@ -660,14 +661,18 @@
 .chat-msg-actions {
   margin-top: 10px;
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   gap: 6px;
 }
 
 .btn-xs {
-  padding: 5px 10px;
+  padding: 6px 12px;
   font-size: 0.78rem;
-  border-radius: 999px;
+  border-radius: 8px;
+  width: 100%;
+  text-align: left;
+  white-space: normal;
+  word-break: break-word;
 }
 
 .chat-msg.thinking {
@@ -682,6 +687,8 @@
 /* ---- Streaming response bubble ---- */
 .chat-msg.assistant.streaming {
   min-height: 36px;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .stream-thinking {
@@ -699,6 +706,48 @@
   background: var(--accent);
   margin-left: 2px;
   vertical-align: text-bottom;
+
+/* ---- Mini-questionário interativo ---- */
+.chat-msg.chat-question {
+  background: color-mix(in srgb, var(--accent) 8%, var(--card-bg, var(--surface)));
+  border-color: color-mix(in srgb, var(--accent) 25%, var(--border));
+  border-left: 3px solid var(--accent);
+}
+
+.chat-msg.chat-question .chat-msg-actions {
+  margin-top: 8px;
+}
+
+.chat-question-text-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.chat-question-input {
+  flex: 1;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 0.82rem;
+  background: var(--surface);
+  color: var(--text);
+}
+
+.chat-question-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.chat-question-send-btn {
+  flex-shrink: 0;
+  width: auto !important;
+}
+
+[data-theme="dark"] .chat-msg.chat-question {
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface) 88%);
+}
   border-radius: 1px;
   animation: blink-cursor 0.8s step-start infinite;
 }

@@ -111,3 +111,9 @@ func (a *App) GetOsqueryStatusJSON() (json.RawMessage, error) {
 func (a *App) GetLogsText() string {
 	return strings.Join(a.logs.getAll(), "\n")
 }
+
+// AskUserChat exibe uma pergunta interativa ao usuário e aguarda a resposta.
+// Implementa AppBridge.AskUserChat para o MCP tool ask_user.
+func (a *App) AskUserChat(question, optionsJSON, allowText string) (string, error) {
+	return a.AskUser(question, optionsJSON, allowText)
+}

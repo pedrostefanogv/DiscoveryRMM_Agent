@@ -27,6 +27,8 @@ function flushStreamingContent() {
   contentEl.innerHTML = renderAssistantMarkdown(streamingRawContent);
   syncColorMode();
   bindInternalChatLinks(contentEl);
+  // Force reflow to ensure the bubble background expands with the content.
+  void streamingBubble.offsetHeight;
   scheduleChatScrollToBottom();
 }
 
@@ -161,6 +163,106 @@ function onStreamStopped() {
   if (chatInputEl) chatInputEl.focus();
 }
 
+// ─── Mini-Questionário Interativo (ask_user MCP) ───
+
+function onChatQuestion(data) {
+  try {
+    var q = typeof data === "string" ? JSON.parse(data) : data;
+    if (!q || !q.id) return;
+    showChatQuestion(q);
+  } catch (e) {
+    console.error("chat:question parse error:", e);
+  }
+}
+
+function showChatQuestion(question) {
+  if (!chatMessagesEl) return;
+
+  var div = document.createElement("div");
+  div.className = "chat-msg assistant chat-question";
+  div.dataset.questionId = question.id;
+
+  // Pergunta renderizada com markdown
+  var contentEl = document.createElement("div");
+  contentEl.className = "stream-content";
+  contentEl.innerHTML = renderAssistantMarkdown(question.question);
+  div.appendChild(contentEl);
+
+  // Container de ações
+  var actions = document.createElement("div");
+  actions.className = "chat-msg-actions";
+
+  // Opções como botões
+  if (question.options && question.options.length > 0) {
+    question.options.forEach(function (opt) {
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "btn subtle btn-xs";
+      btn.innerHTML = formatInlineChatMarkdown(opt);
+      btn.addEventListener("click", function () {
+        answerChatQuestion(question.id, opt);
+        disableQuestionButtons(div);
+      });
+      actions.appendChild(btn);
+    });
+  }
+
+  // Campo de texto livre (sempre visível se allowText=true ou sem opções)
+  if (question.allowText || !question.options || question.options.length === 0) {
+    var textRow = document.createElement("div");
+    textRow.className = "chat-question-text-row";
+
+    var input = document.createElement("input");
+    input.type = "text";
+    input.className = "chat-question-input";
+    input.placeholder = "Digite sua resposta...";
+
+    var sendBtn = document.createElement("button");
+    sendBtn.type = "button";
+    sendBtn.className = "btn primary btn-xs chat-question-send-btn";
+    sendBtn.textContent = "Enviar";
+
+    sendBtn.addEventListener("click", function () {
+      var answer = input.value.trim();
+      if (!answer) return;
+      answerChatQuestion(question.id, answer);
+      disableQuestionButtons(div);
+    });
+
+    input.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") {
+        sendBtn.click();
+      }
+    });
+
+    textRow.appendChild(input);
+    textRow.appendChild(sendBtn);
+    actions.appendChild(textRow);
+  }
+
+  div.appendChild(actions);
+  chatMessagesEl.appendChild(div);
+  syncColorMode();
+  scheduleChatScrollToBottom();
+}
+
+function answerChatQuestion(questionId, answer) {
+  try {
+    appApi().AnswerChatQuestion(questionId, answer);
+  } catch (e) {
+    console.error("answerChatQuestion error:", e);
+  }
+}
+
+function disableQuestionButtons(container) {
+  container.querySelectorAll("button").forEach(function (btn) {
+    btn.disabled = true;
+  });
+  container.querySelectorAll("input").forEach(function (input) {
+    input.disabled = true;
+  });
+}
+
 // Register Wails event listeners once the runtime is ready.
 (function registerChatStreamEvents() {
   function doRegister() {
@@ -170,6 +272,7 @@ function onStreamStopped() {
       window.runtime.EventsOn("chat:done", onStreamDone);
       window.runtime.EventsOn("chat:error", onStreamError);
       window.runtime.EventsOn("chat:stopped", onStreamStopped);
+      window.runtime.EventsOn("chat:question", onChatQuestion);
     }
   }
   if (document.readyState === "loading") {
@@ -222,8 +325,10 @@ function extractChatActionOptions(content) {
     if (seen.has(key)) return;
     seen.add(key);
 
-    var label = clean.length > 52 ? clean.slice(0, 49) + "..." : clean;
-    options.push({ label: label, value: clean });
+    var label = clean.length > 120 ? clean.slice(0, 117) + "..." : clean;
+    // Remove markdown markers from the action value so the sent text is clean.
+    var value = clean.replace(/[*_`~]/g, "").trim();
+    options.push({ label: label, value: value || clean });
   }
 
   for (var i = 0; i < lines.length; i += 1) {
@@ -256,7 +361,7 @@ function appendChatQuickActions(containerEl, actionOptions) {
     var btn = document.createElement("button");
     btn.type = "button";
     btn.className = "btn subtle btn-xs";
-    btn.textContent = item.label;
+    btn.innerHTML = formatInlineChatMarkdown(item.label);
     btn.addEventListener("click", function () {
       if (chatSending || !chatInputEl) return;
       chatInputEl.value = item.value;
