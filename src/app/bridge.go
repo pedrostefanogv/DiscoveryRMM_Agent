@@ -79,7 +79,26 @@ func (a *App) SearchCatalog(query string) (json.RawMessage, error) {
 	return json.Marshal(matches)
 }
 
-func (a *App) InstallPackage(id string) (string, error)   { return a.Install(id) }
+func (a *App) InstallPackage(id string) (string, error) {
+	// Valida se o pacote existe no catálogo da loja (App Store).
+	// Só permite instalar apps aprovados/cadastrados pela empresa.
+	if id != "" && a.inventorySvc != nil {
+		catalog, catErr := a.inventorySvc.GetCatalog()
+		if catErr == nil {
+			found := false
+			for _, item := range catalog.Packages {
+				if strings.EqualFold(item.ID, id) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return "", fmt.Errorf("pacote '%s' nao encontrado na loja de aplicativos. Use search_packages para ver os apps disponiveis", id)
+			}
+		}
+	}
+	return a.Install(id)
+}
 func (a *App) UninstallPackage(id string) (string, error) { return a.Uninstall(id) }
 func (a *App) UpgradePackage(id string) (string, error)   { return a.Upgrade(id) }
 func (a *App) UpgradeAllPackages() (string, error)        { return a.UpgradeAll() }
