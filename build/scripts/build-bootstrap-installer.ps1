@@ -138,9 +138,7 @@ try {
         throw "Falha ao gerar recurso de icone com windres"
     }
 
-    $env:CGO_ENABLED = "0"
-    $env:GOOS = "windows"
-    $env:GOARCH = "amd64"
+    # Wails gerencia CGO, GOOS, GOARCH internamente.
     $ldflags = @()
     if ($Version -ne "") {
         $ldflags += "-X discovery/app.Version=$Version"
@@ -157,11 +155,14 @@ try {
         Write-Warning "  git rev-parse falhou; buildinfo.Commit ficara 'unknown'"
     }
 
+    $wailsBuildArgs = @("build", "-o", $agentExe)
     if ($ldflags.Count -gt 0) {
-        go build -ldflags ($ldflags -join ' ') -o $agentExe .
+        $wailsBuildArgs += "-ldflags"
+        $wailsBuildArgs += ($ldflags -join ' ')
     }
-    else {
-        go build -o $agentExe .
+    & wails @wailsBuildArgs
+    if ($LASTEXITCODE -ne 0) {
+        throw "Falha no wails build (exit code: $LASTEXITCODE)"
     }
 }
 finally {
