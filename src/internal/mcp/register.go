@@ -756,8 +756,25 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 			if err != nil {
 				return nil, err
 			}
-			optionsJSON, _ := args["options"].(string)
-			allowText, _ := args["allowText"].(string)
+			// options pode vir como string JSON ou como array nativo do JSON unmarshal
+			optionsJSON := ""
+			switch v := args["options"].(type) {
+			case string:
+				optionsJSON = v
+			case []any:
+				b, _ := json.Marshal(v)
+				optionsJSON = string(b)
+			}
+			// allowText pode vir como string "true"/"false" ou bool nativo
+			allowText := "false"
+			switch v := args["allowText"].(type) {
+			case string:
+				allowText = v
+			case bool:
+				if v {
+					allowText = "true"
+				}
+			}
 
 			answer, err := app.AskUserChat(question, optionsJSON, allowText)
 			if err != nil {

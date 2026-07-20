@@ -706,6 +706,9 @@
   background: var(--accent);
   margin-left: 2px;
   vertical-align: text-bottom;
+  border-radius: 1px;
+  animation: blink-cursor 0.8s step-start infinite;
+}
 
 /* ---- Mini-questionário interativo ---- */
 .chat-msg.chat-question {
@@ -747,9 +750,6 @@
 
 [data-theme="dark"] .chat-msg.chat-question {
   background: color-mix(in srgb, var(--accent) 12%, var(--surface) 88%);
-}
-  border-radius: 1px;
-  animation: blink-cursor 0.8s step-start infinite;
 }
 
 @keyframes blink-cursor {
