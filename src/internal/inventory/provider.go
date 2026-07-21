@@ -418,7 +418,7 @@ func collectPhysicalDiskMediaTypes() map[string]string {
 	}
 
 	script := `$ErrorActionPreference = 'Stop'
-Get-PhysicalDisk | ForEach-Object {
+@(Get-PhysicalDisk | ForEach-Object {
     $disk = $_
     Get-Disk -Number $_.DeviceId | Get-Partition |
         Where-Object { $_.DriveLetter } |
@@ -428,7 +428,7 @@ Get-PhysicalDisk | ForEach-Object {
                 MediaType   = $disk.MediaType
             }
         }
-} | ConvertTo-Json -Depth 2 -Compress`
+}) | ConvertTo-Json -Depth 2 -Compress`
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

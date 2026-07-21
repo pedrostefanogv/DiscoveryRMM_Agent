@@ -865,8 +865,68 @@ func (a *App) startup(ctx context.Context) {
 		}
 	})
 
+	// Periodic inventory collection (6h loop — after throttle window expires).
+	a.safeGo(func() {
+		const periodicInventoryInterval = 6 * time.Hour
+		// Wait for throttle window (120s) + buffer (60s) to avoid
+		// double-collecting during the initial startup window.
+		const initialDelay = 180 * time.Second
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(initialDelay):
+		}
+
+		log.Printf("[inventory] iniciando loop de coleta periodica a cada %s", periodicInventoryInterval)
+		ticker := time.NewTicker(periodicInventoryInterval)
+		defer ticker.Stop()
+
+		// Fire immediately after initial delay.
+		a.runPeriodicInventorySync(ctx)
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				a.runPeriodicInventorySync(ctx)
+			}
+		}
+	})
+
 	// Apply startup throttle config from agent configuration (if already loaded).
 	a.applyStartupThrottleConfig()
+}
+
+// runPeriodicInventorySync collects full inventory and syncs to server.
+// Logs failures but never panics — safe to call from a ticker goroutine.
+func (a *App) runPeriodicInventorySync(ctx context.Context) {
+	if a == nil {
+		return
+	}
+	if !a.isInventoryProvisioned() {
+		log.Printf("[inventory] coleta periodica ignorada: agente nao provisionado")
+		return
+	}
+
+	done := a.beginActivity("inventario periodico")
+	if done != nil {
+		defer done()
+	}
+
+	a.ensureOsqueryInstalled(ctx)
+	report, err := a.collectInventoryWithHeartbeat(ctx)
+	if err != nil {
+		log.Printf("[inventory] coleta periodica falhou: %v", err)
+		return
+	}
+	a.invCache.set(report)
+
+	if a.inventorySvc != nil {
+		a.logs.append("[inventory] coleta periodica concluida; sincronizando com servidor")
+		a.inventorySvc.SyncInventoryOnStartup(ctx, report)
+	}
 }
 
 func (a *App) SendTestHeartbeat() string {
