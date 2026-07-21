@@ -161,6 +161,7 @@ func (s *Service) SendStreamMultiRound(
 			Round:        round,
 			HasToolCalls: true,
 			ToolCalls:    calledTools,
+			ToolArgs:     toolArgsForLog(pendingCalls),
 			LatencyMs:    int(roundElapsed.Milliseconds()),
 		})
 
@@ -192,9 +193,11 @@ func (s *Service) SendStreamMultiRound(
 					SessionID: currentSessionID,
 					Round:     round,
 					ToolCalls: []string{tc.Name},
+					ToolArgs:  []string{TruncateForLog(tc.Args, 300)},
 					Error:     execErr.Error(),
 					LatencyMs: int(toolElapsed.Milliseconds()),
 				})
+				toolResultNames = append(toolResultNames, fmt.Sprintf("%s=err", tc.Name))
 			} else {
 				s.logChatEntry(ChatLogEntry{
 					Type:        "tool_exec_ok",
@@ -202,13 +205,14 @@ func (s *Service) SendStreamMultiRound(
 					SessionID:   currentSessionID,
 					Round:       round,
 					ToolCalls:   []string{tc.Name},
+					ToolArgs:    []string{TruncateForLog(tc.Args, 300)},
 					ToolResults: []string{TruncateForLog(result, 500)},
 					LatencyMs:   int(toolElapsed.Milliseconds()),
 				})
+				toolResultNames = append(toolResultNames, fmt.Sprintf("%s=ok", tc.Name))
 			}
 
 			toolResults = append(toolResults, toolResultItem{CallID: tc.CallID, Name: tc.Name, Result: result})
-			toolResultNames = append(toolResultNames, fmt.Sprintf("%s=ok", tc.Name))
 		}
 
 		s.logChatEntry(ChatLogEntry{
@@ -389,12 +393,14 @@ func (s *Service) parseMultiRoundSSE(body io.Reader, onToken func(string), pendi
 			}
 		case "tool_call":
 			if evt.ToolCallID != "" && evt.ToolName != "" {
+				argsStr := toolArgsString(evt.ToolArguments)
 				s.logChatEntry(ChatLogEntry{
 					Type:      "sse_tool_call",
 					Method:    "multi_round",
 					ToolCalls: []string{evt.ToolName},
+					ToolArgs:  []string{TruncateForLog(argsStr, 300)},
 				})
-				*pendingCalls = append(*pendingCalls, pendingToolCall{CallID: evt.ToolCallID, Name: evt.ToolName, Args: toolArgsString(evt.ToolArguments)})
+				*pendingCalls = append(*pendingCalls, pendingToolCall{CallID: evt.ToolCallID, Name: evt.ToolName, Args: argsStr})
 			}
 		case "round_end":
 			if evt.SessionID != "" {
@@ -442,6 +448,18 @@ func (s *Service) parseMultiRoundSSE(body io.Reader, onToken func(string), pendi
 		ResponseLen: parsedEvents,
 	})
 	return currentSessionID, done, nil
+}
+
+// toolArgsForLog extrai os argumentos de pendingToolCalls para logging (truncados 300 chars cada).
+func toolArgsForLog(calls []pendingToolCall) []string {
+	if len(calls) == 0 {
+		return nil
+	}
+	args := make([]string, len(calls))
+	for i, tc := range calls {
+		args[i] = TruncateForLog(tc.Args, 300)
+	}
+	return args
 }
 
 func (s *Service) fallbackToSync(ctx context.Context, cfg Config, message, sessionID string, onToken func(string)) (string, error) {

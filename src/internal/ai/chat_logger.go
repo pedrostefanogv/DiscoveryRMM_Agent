@@ -32,6 +32,7 @@ type ChatLogEntry struct {
 	ToolCount    int      `json:"toolCount,omitempty"`    // multi-round: quantas tools enviadas no request
 	HasToolCalls bool     `json:"hasToolCalls,omitempty"` // multi-round: true se LLM retornou tool_calls
 	ToolCalls    []string `json:"toolCalls,omitempty"`    // multi-round: nomes das tools chamadas pelo LLM
+	ToolArgs     []string `json:"toolArgs,omitempty"`     // multi-round: argumentos das tools chamadas (truncados 300 chars)
 	ToolResults  []string `json:"toolResults,omitempty"`  // multi-round: resultados das execuções (truncados)
 }
 
