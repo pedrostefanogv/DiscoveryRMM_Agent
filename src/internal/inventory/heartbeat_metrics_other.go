@@ -25,3 +25,5 @@ func collectProcessCountNative() int {
 }
 
 func collectHeartbeatDiskIOWindowsNative(_ *agentconn.AgentHeartbeatMetrics) {}
+
+func collectHeartbeatCPUTemperatureWindowsNative(_ *agentconn.AgentHeartbeatMetrics) {}

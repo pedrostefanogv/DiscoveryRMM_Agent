@@ -544,15 +544,16 @@ func heartbeatIntervalFromAgentConfig(agentCfg AgentConfiguration) int {
 func (a *App) getHeartbeatMetrics() agentconn.AgentHeartbeatMetrics {
 	hostname, _ := os.Hostname()
 	metrics := agentconn.AgentHeartbeatMetrics{
-		Hostname:         hostname,
-		CpuPercent:       -1,
-		MemoryPercent:    -1,
-		DiskPercent:      -1,
-		DiskReadPercent:  -1,
-		DiskWritePercent: -1,
-		DiskResponseMs:   -1,
-		UptimeSeconds:    int64(time.Since(a.startupTime).Seconds()),
-		P2pPeers:         a.getKnownP2PPeers(),
+		Hostname:              hostname,
+		CpuPercent:            -1,
+		MemoryPercent:         -1,
+		DiskPercent:           -1,
+		DiskReadPercent:       -1,
+		DiskWritePercent:      -1,
+		DiskResponseMs:        -1,
+		CpuTemperatureCelsius: -1,
+		UptimeSeconds:         int64(time.Since(a.startupTime).Seconds()),
+		P2pPeers:              a.getKnownP2PPeers(),
 	}
 
 	// CollectHeartbeatMetrics usa APIs nativas no Windows (zero subprocessos)
@@ -610,6 +611,9 @@ func mergeHeartbeatMetrics(dst *agentconn.AgentHeartbeatMetrics, src *agentconn.
 	}
 	if src.DiskResponseMs >= 0 {
 		dst.DiskResponseMs = src.DiskResponseMs
+	}
+	if src.CpuTemperatureCelsius >= 0 {
+		dst.CpuTemperatureCelsius = src.CpuTemperatureCelsius
 	}
 	if src.UptimeSeconds > 0 {
 		dst.UptimeSeconds = src.UptimeSeconds

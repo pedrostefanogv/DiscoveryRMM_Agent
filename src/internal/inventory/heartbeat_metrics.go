@@ -146,6 +146,9 @@ func collectHeartbeatMetricsWindows(ctx context.Context, metrics *agentconn.Agen
 	if count := collectProcessCountNativeFunc(); count >= 0 {
 		metrics.ProcessCount = count
 	}
+
+	// Temperatura da CPU: PDH nativo (pdh.dll) — zero subprocessos
+	collectHeartbeatCPUTemperatureWindowsNative(metrics)
 }
 
 // collectHeartbeatMetricsOsquery é o fallback para plataformas não-Windows
@@ -230,7 +233,8 @@ func hasAnyHeartbeatMetric(metrics *agentconn.AgentHeartbeatMetrics) bool {
 		metrics.DiskWritePercent >= 0 ||
 		metrics.DiskResponseMs >= 0 ||
 		metrics.UptimeSeconds > 0 ||
-		metrics.ProcessCount > 0
+		metrics.ProcessCount > 0 ||
+		metrics.CpuTemperatureCelsius >= 0
 }
 
 // mapHeartbeatRow converte uma linha raw do osquery em AgentHeartbeatMetrics.

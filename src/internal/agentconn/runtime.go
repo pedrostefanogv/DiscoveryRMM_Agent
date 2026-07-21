@@ -59,26 +59,27 @@ type natsCommandEnvelope struct {
 // AgentHeartbeat is the standardized payload for heartbeats
 // sent over NATS transports (nats:// and ws/wss).
 type AgentHeartbeat struct {
-	AgentId          string   `json:"agentId"`
-	ClientId         string   `json:"clientId,omitempty"`
-	SiteId           string   `json:"siteId,omitempty"`
-	IpAddress        string   `json:"ipAddress,omitempty"`
-	Hostname         string   `json:"hostname,omitempty"`
-	AgentVersion     string   `json:"agentVersion,omitempty"`
-	TimestampUtc     string   `json:"timestampUtc,omitempty"` // RFC3339
-	CpuPercent       *float64 `json:"cpuPercent,omitempty"`
-	MemoryPercent    *float64 `json:"memoryPercent,omitempty"`
-	MemoryTotalGb    *float64 `json:"memoryTotalGb,omitempty"`
-	MemoryUsedGb     *float64 `json:"memoryUsedGb,omitempty"`
-	DiskPercent      *float64 `json:"diskPercent,omitempty"`
-	DiskTotalGb      *float64 `json:"diskTotalGb,omitempty"`
-	DiskUsedGb       *float64 `json:"diskUsedGb,omitempty"`
-	DiskReadPercent  *float64 `json:"diskReadPercent,omitempty"`
-	DiskWritePercent *float64 `json:"diskWritePercent,omitempty"`
-	DiskResponseMs   *float64 `json:"diskResponseMs,omitempty"`
-	P2pPeers         *int     `json:"p2pPeers,omitempty"`
-	UptimeSeconds    *int64   `json:"uptimeSeconds,omitempty"`
-	ProcessCount     *int     `json:"processCount,omitempty"`
+	AgentId               string   `json:"agentId"`
+	ClientId              string   `json:"clientId,omitempty"`
+	SiteId                string   `json:"siteId,omitempty"`
+	IpAddress             string   `json:"ipAddress,omitempty"`
+	Hostname              string   `json:"hostname,omitempty"`
+	AgentVersion          string   `json:"agentVersion,omitempty"`
+	TimestampUtc          string   `json:"timestampUtc,omitempty"` // RFC3339
+	CpuPercent            *float64 `json:"cpuPercent,omitempty"`
+	MemoryPercent         *float64 `json:"memoryPercent,omitempty"`
+	MemoryTotalGb         *float64 `json:"memoryTotalGb,omitempty"`
+	MemoryUsedGb          *float64 `json:"memoryUsedGb,omitempty"`
+	DiskPercent           *float64 `json:"diskPercent,omitempty"`
+	DiskTotalGb           *float64 `json:"diskTotalGb,omitempty"`
+	DiskUsedGb            *float64 `json:"diskUsedGb,omitempty"`
+	DiskReadPercent       *float64 `json:"diskReadPercent,omitempty"`
+	DiskWritePercent      *float64 `json:"diskWritePercent,omitempty"`
+	DiskResponseMs        *float64 `json:"diskResponseMs,omitempty"`
+	P2pPeers              *int     `json:"p2pPeers,omitempty"`
+	UptimeSeconds         *int64   `json:"uptimeSeconds,omitempty"`
+	ProcessCount          *int     `json:"processCount,omitempty"`
+	CpuTemperatureCelsius *float64 `json:"cpuTemperatureCelsius,omitempty"`
 	// ── NOVOS ──
 	PeerID string   `json:"peerId,omitempty"` // libp2p peer ID
 	Addrs  []string `json:"addrs,omitempty"`  // IPs roteáveis
@@ -88,20 +89,21 @@ type AgentHeartbeat struct {
 // AgentHeartbeatMetrics is a lightweight struct for collecting
 // system metrics to include in heartbeats.
 type AgentHeartbeatMetrics struct {
-	Hostname         string
-	CpuPercent       float64
-	MemoryPercent    float64
-	MemoryTotalGb    float64
-	MemoryUsedGb     float64
-	DiskPercent      float64
-	DiskTotalGb      float64
-	DiskUsedGb       float64
-	DiskReadPercent  float64
-	DiskWritePercent float64
-	DiskResponseMs   float64
-	P2pPeers         int
-	UptimeSeconds    int64
-	ProcessCount     int
+	Hostname              string
+	CpuPercent            float64
+	MemoryPercent         float64
+	MemoryTotalGb         float64
+	MemoryUsedGb          float64
+	DiskPercent           float64
+	DiskTotalGb           float64
+	DiskUsedGb            float64
+	DiskReadPercent       float64
+	DiskWritePercent      float64
+	DiskResponseMs        float64
+	P2pPeers              int
+	UptimeSeconds         int64
+	ProcessCount          int
+	CpuTemperatureCelsius float64
 	// ── NOVOS ── P2P addressing for heartbeat-enriched peer discovery
 	PeerID string
 	Addrs  []string
@@ -364,6 +366,7 @@ func (r *Runtime) collectHeartbeat(cfg Config, ipAddr string) AgentHeartbeat {
 		hb.P2pPeers = &m.P2pPeers
 		hb.UptimeSeconds = &m.UptimeSeconds
 		hb.ProcessCount = &m.ProcessCount
+		hb.CpuTemperatureCelsius = nonNegFloatPtr(m.CpuTemperatureCelsius)
 		// P2P addressing enriquecido no heartbeat
 		if m.PeerID != "" {
 			hb.PeerID = m.PeerID
@@ -390,7 +393,7 @@ func heartbeatLogPayload(hb AgentHeartbeat) string {
 // heartbeatLogFields detalha todos os campos do heartbeat para auditoria.
 func heartbeatLogFields(hb AgentHeartbeat) string {
 	return fmt.Sprintf(
-		"agentId=%q clientId=%s siteId=%s ipAddress=%s hostname=%s agentVersion=%s timestampUtc=%s cpuPercent=%s memoryPercent=%s memoryTotalGb=%s memoryUsedGb=%s diskPercent=%s diskTotalGb=%s diskUsedGb=%s diskReadPercent=%s diskWritePercent=%s diskResponseMs=%s p2pPeers=%s uptimeSeconds=%s processCount=%s",
+		"agentId=%q clientId=%s siteId=%s ipAddress=%s hostname=%s agentVersion=%s timestampUtc=%s cpuPercent=%s memoryPercent=%s memoryTotalGb=%s memoryUsedGb=%s diskPercent=%s diskTotalGb=%s diskUsedGb=%s diskReadPercent=%s diskWritePercent=%s diskResponseMs=%s p2pPeers=%s uptimeSeconds=%s processCount=%s cpuTemperatureCelsius=%s",
 		hb.AgentId,
 		heartbeatOptionalQuotedString(hb.ClientId),
 		heartbeatOptionalQuotedString(hb.SiteId),
@@ -411,6 +414,7 @@ func heartbeatLogFields(hb AgentHeartbeat) string {
 		heartbeatOptionalIntValue(hb.P2pPeers),
 		heartbeatOptionalInt64Value(hb.UptimeSeconds),
 		heartbeatOptionalIntValue(hb.ProcessCount),
+		heartbeatOptionalFloatValue(hb.CpuTemperatureCelsius),
 	)
 }
 
