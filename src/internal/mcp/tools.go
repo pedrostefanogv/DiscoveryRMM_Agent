@@ -2,7 +2,10 @@
 // Discovery's capabilities as callable tools for AI assistants.
 package mcp
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"log"
+)
 
 // ToolParam describes a single parameter of a tool.
 type ToolParam struct {
@@ -100,6 +103,7 @@ func (r *Registry) Call(name string, argsJSON json.RawMessage) (any, error) {
 	var args map[string]any
 	if len(argsJSON) > 0 {
 		if err := json.Unmarshal(argsJSON, &args); err != nil {
+			log.Printf("[mcp] Registry.Call(%q): unmarshal args falhou (argsJSON=%s): %v", name, string(argsJSON), err)
 			args = map[string]any{}
 		}
 	}

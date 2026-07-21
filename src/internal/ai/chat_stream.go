@@ -39,6 +39,13 @@ func toolArgsString(raw json.RawMessage) string {
 	if s == "" || s == "null" {
 		return ""
 	}
+	// Desempacota string JSON duplamente codificada (ex: "\"{\\\"query\\\": \\\"Foxit\\\"}\"")
+	if s[0] == '"' && len(s) > 1 {
+		var unescaped string
+		if err := json.Unmarshal(raw, &unescaped); err == nil && unescaped != "" {
+			return unescaped
+		}
+	}
 	return s
 }
 
