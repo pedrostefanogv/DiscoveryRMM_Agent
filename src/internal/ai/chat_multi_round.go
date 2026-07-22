@@ -169,7 +169,11 @@ func (s *Service) SendStreamMultiRound(
 		allCalledTools = append(allCalledTools, calledTools...)
 
 		if onStatus != nil {
-			onStatus(fmt.Sprintf("Executando %d ferramenta(s)...", len(pendingCalls)))
+			names := make([]string, len(pendingCalls))
+			for i, tc := range pendingCalls {
+				names[i] = tc.Name
+			}
+			onStatus(fmt.Sprintf("Executando: %s...", strings.Join(names, ", ")))
 		}
 		var toolResults []toolResultItem
 		toolResultNames := make([]string, 0, len(pendingCalls))
@@ -227,7 +231,17 @@ func (s *Service) SendStreamMultiRound(
 		})
 
 		pendingCalls = nil
-		req = agentStreamRequest{SessionID: currentSessionID, ToolResults: toolResults}
+		// Reenviar tools nos rounds 2+ para que o LLM mantenha contexto
+		// das ferramentas disponíveis. Modelos menores (ex: gpt-oss-20b)
+		// podem "esquecer" as tools entre rounds se não reenviadas.
+		s.mu.RLock()
+		tools := s.registry.OpenAIFunctions()
+		s.mu.RUnlock()
+		req = agentStreamRequest{
+			SessionID:   currentSessionID,
+			ToolResults: toolResults,
+			Tools:       tools,
+		}
 	}
 
 	totalElapsed := time.Since(startTime)
