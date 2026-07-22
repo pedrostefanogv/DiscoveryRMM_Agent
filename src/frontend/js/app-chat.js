@@ -434,7 +434,7 @@ function formatInlineChatMarkdown(text) {
   var codeTokens = [];
 
   escaped = escaped.replace(/`([^`\n]+)`/g, function (_, code) {
-    var token = "__CHAT_CODE_" + codeTokens.length + "__";
+    var token = "\x01CHAT_CODE_" + codeTokens.length + "\x01";
     codeTokens.push("<code>" + code + "</code>");
     return token;
   });
@@ -495,7 +495,7 @@ function formatInlineChatMarkdown(text) {
     .replace(/_([^_\n]+)_/g, "<em>$1</em>");
 
   for (var i = 0; i < codeTokens.length; i += 1) {
-    escaped = escaped.replace("__CHAT_CODE_" + i + "__", codeTokens[i]);
+    escaped = escaped.replace("\x01CHAT_CODE_" + i + "\x01", codeTokens[i]);
   }
 
   return escaped;

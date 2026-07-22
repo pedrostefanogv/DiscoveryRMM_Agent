@@ -492,6 +492,10 @@
   border: 1px solid var(--border);
   border-bottom-left-radius: 4px;
   white-space: normal;
+  /* BFC: garante que o background envolva todo o conteudo, incluindo
+     floats e elementos com margens colapsadas (ex.: .md-content) */
+  overflow: hidden;
+  min-width: 0;
 }
 
 .chat-msg.assistant p,
