@@ -4,7 +4,9 @@ package mcp
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
+	"strings"
 )
 
 // ToolParam describes a single parameter of a tool.
@@ -110,6 +112,28 @@ func (r *Registry) Call(name string, argsJSON json.RawMessage) (any, error) {
 	if args == nil {
 		args = map[string]any{}
 	}
+
+	// Validar parametros obrigatorios ANTES de chamar o handler.
+	// Isso garante mensagens de erro consistentes e informativas para o LLM,
+	// ajudando-o a corrigir os argumentos no proximo round.
+	for _, p := range tool.Params {
+		if !p.Required {
+			continue
+		}
+		val, ok := args[p.Name]
+		if !ok {
+			return nil, fmt.Errorf("parametro obrigatorio '%s' (%s) ausente — use: %s", p.Name, p.Type, tool.ParamsDesc())
+		}
+		switch v := val.(type) {
+		case string:
+			if strings.TrimSpace(v) == "" {
+				return nil, fmt.Errorf("parametro obrigatorio '%s' (%s) nao pode ser vazio — preencha com: %s", p.Name, p.Type, p.Description)
+			}
+		case nil:
+			return nil, fmt.Errorf("parametro obrigatorio '%s' (%s) recebeu null — use: %s", p.Name, p.Type, tool.ParamsDesc())
+		}
+	}
+
 	return tool.Handler(args)
 }
 
@@ -120,6 +144,23 @@ func (r *Registry) OpenAIFunctions() []map[string]any {
 		funcs[i] = t.OpenAIFunction()
 	}
 	return funcs
+}
+
+// ParamsDesc returns a human-readable description of the tool's parameters
+// for use in error messages (e.g., "query: string (obrigatorio), limit: integer").
+func (t Tool) ParamsDesc() string {
+	if len(t.Params) == 0 {
+		return "sem parametros obrigatorios"
+	}
+	parts := make([]string, len(t.Params))
+	for i, p := range t.Params {
+		req := ""
+		if p.Required {
+			req = " (obrigatorio)"
+		}
+		parts[i] = fmt.Sprintf("%s: %s%s", p.Name, p.Type, req)
+	}
+	return strings.Join(parts, ", ")
 }
 
 // ToolNotFoundError is returned when a tool is not found in the registry.
