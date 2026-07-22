@@ -407,7 +407,10 @@ func (s *Service) parseMultiRoundSSE(body io.Reader, onToken func(string), pendi
 			}
 		case "tool_call":
 			if evt.ToolCallID != "" && evt.ToolName != "" {
-				argsStr := toolArgsString(evt.ToolArguments)
+				argsStr := evt.effectiveToolArgs()
+				if argsStr == "" {
+					s.logf("[chat] ALERTA: tool_call '%s' recebido SEM argumentos! toolArguments e toolArgumentsDelta estao vazios. Verifique a serializacao do servidor (esperado: toolArgumentsDelta em camelCase).", evt.ToolName)
+				}
 				s.logChatEntry(ChatLogEntry{
 					Type:      "sse_tool_call",
 					Method:    "multi_round",

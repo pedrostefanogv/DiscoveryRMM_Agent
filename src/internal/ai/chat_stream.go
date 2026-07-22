@@ -28,6 +28,11 @@ type agentChatStreamEvent struct {
 	ToolCallID    string          `json:"toolCallId"`
 	ToolName      string          `json:"toolName"`
 	ToolArguments json.RawMessage `json:"toolArguments"`
+	// ToolArgumentsDelta captura o nome de campo usado pelo servidor C#.
+	// O servidor serializa AiChatStreamChunk.ToolArgumentsDelta como "toolArgumentsDelta"
+	// (camelCase), enquanto o campo canônico acima é "toolArguments".
+	// Este alias garante compatibilidade com ambas as convenções.
+	ToolArgumentsDelta json.RawMessage `json:"toolArgumentsDelta"`
 }
 
 // toolArgsString normaliza toolArguments (pode ser string JSON ou objeto JSON).
@@ -47,6 +52,18 @@ func toolArgsString(raw json.RawMessage) string {
 		}
 	}
 	return s
+}
+
+// effectiveToolArgs retorna os argumentos de tool do evento, priorizando toolArguments
+// e usando toolArgumentsDelta como fallback (compatibilidade com servidor C#).
+func (evt agentChatStreamEvent) effectiveToolArgs() string {
+	if len(evt.ToolArguments) > 0 {
+		return toolArgsString(evt.ToolArguments)
+	}
+	if len(evt.ToolArgumentsDelta) > 0 {
+		return toolArgsString(evt.ToolArgumentsDelta)
+	}
+	return ""
 }
 
 // toolResultItem sent back to the server in rounds 2+.

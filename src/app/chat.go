@@ -440,6 +440,36 @@ func (a *App) ensureAgentToolsRegistered() {
 	a.toolsRegistrationMu.RUnlock()
 
 	registrySize := len(a.mcpRegistry.Tools())
+
+	// Primeira execução (lastToolsRegistration == zero value) — força registro.
+	// time.Since(time.Time{}) retorna ~292 anos; o log "ultimo ha 9223372037s"
+	// é inútil e confunde o diagnóstico. Tratamos zero value explicitamente.
+	if lastReg.IsZero() {
+		a.chatSvc.LogChatEntry(ai.ChatLogEntry{
+			Type:      "tools_registry",
+			Method:    "multi_round",
+			ToolCount: registrySize,
+			UserMsg:   "primeiro registro de tools (nunca registrado antes)",
+		})
+		if err := a.RegisterAgentToolsOnServer(); err != nil {
+			a.logs.append("[chat] aviso: registro inicial de tools falhou: " + err.Error())
+			a.chatSvc.LogChatEntry(ai.ChatLogEntry{
+				Type:      "tools_registry",
+				Method:    "multi_round",
+				Error:     err.Error(),
+				ToolCount: registrySize,
+			})
+		} else {
+			a.chatSvc.LogChatEntry(ai.ChatLogEntry{
+				Type:      "tools_registry",
+				Method:    "multi_round",
+				ToolCount: registrySize,
+				UserMsg:   "registro inicial ok",
+			})
+		}
+		return
+	}
+
 	sinceLast := time.Since(lastReg)
 
 	if sinceLast < 4*time.Minute {
