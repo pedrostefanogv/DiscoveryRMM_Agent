@@ -1,5 +1,16 @@
 "use strict";
 
+function showKBList() {
+  if (kbListViewEl) kbListViewEl.classList.remove("hidden");
+  if (kbDetailViewEl) kbDetailViewEl.classList.add("hidden");
+  selectedKnowledgeArticleID = null;
+}
+
+function showKBDetail() {
+  if (kbListViewEl) kbListViewEl.classList.add("hidden");
+  if (kbDetailViewEl) kbDetailViewEl.classList.remove("hidden");
+}
+
 function renderKnowledgeArticleDetail(article) {
   if (
     !kbArticleDetailEl ||
@@ -9,7 +20,6 @@ function renderKnowledgeArticleDetail(article) {
   )
     return;
   if (!article) {
-    kbArticleDetailEl.classList.add("hidden");
     kbDetailTitleEl.textContent = "";
     kbDetailMetaEl.textContent = "";
     kbDetailContentEl.innerHTML = "";
@@ -20,31 +30,6 @@ function renderKnowledgeArticleDetail(article) {
   kbDetailMetaEl.innerHTML = buildKnowledgeMeta(article);
   kbDetailContentEl.innerHTML = renderMarkdown(article.content || "");
   syncColorMode();
-  kbArticleDetailEl.classList.remove("hidden");
-}
-
-function openKnowledgeReader(article) {
-  if (
-    !kbReaderModal ||
-    !kbReaderTitleEl ||
-    !kbReaderMetaEl ||
-    !kbReaderContentEl ||
-    !article
-  )
-    return;
-
-  kbReaderTitleEl.textContent = article.title || "-";
-  kbReaderMetaEl.innerHTML = buildKnowledgeMeta(article);
-  kbReaderContentEl.innerHTML = renderMarkdown(article.content || "");
-  syncColorMode();
-  kbReaderModal.classList.remove("hidden");
-  kbReaderModal.setAttribute("aria-hidden", "false");
-}
-
-function closeKnowledgeReader() {
-  if (!kbReaderModal) return;
-  kbReaderModal.classList.add("hidden");
-  kbReaderModal.setAttribute("aria-hidden", "true");
 }
 
 function renderKnowledgeArticles(items) {
@@ -58,15 +43,12 @@ function renderKnowledgeArticles(items) {
       escapeHtml(translate("knowledge.noArticlesFound")) +
       "</div>" +
       "</div>";
-    renderKnowledgeArticleDetail(null);
     return;
   }
 
   kbArticlesListEl.innerHTML = list
     .map(function (a) {
       var tags = Array.isArray(a.tags) ? a.tags : [];
-      var isActive =
-        selectedKnowledgeArticleID && selectedKnowledgeArticleID === a.id;
       var cat = String(a.category || "").trim();
       var diff = String(a.difficulty || "").trim();
       var badges = "";
@@ -83,9 +65,7 @@ function renderKnowledgeArticles(items) {
         })
         .join(" ");
       return (
-        '<button class="kb-article-card ' +
-        (isActive ? "active" : "") +
-        '" data-kb-id="' +
+        '<button class="kb-article-card" data-kb-id="' +
         escapeHtmlAttr(a.id) +
         '">' +
         '<span class="kb-article-title">' +
@@ -115,10 +95,7 @@ function selectKnowledgeArticle(id) {
     return a.id === id;
   });
   renderKnowledgeArticleDetail(article || null);
-
-  // Re-render only visual active state without changing current filter.
-  var q = kbSearchInputEl ? kbSearchInputEl.value.trim() : "";
-  filterKnowledgeArticles(q);
+  showKBDetail();
 }
 
 function filterKnowledgeArticles(query) {
@@ -153,20 +130,9 @@ function filterKnowledgeArticles(query) {
     });
   }
 
-  if (
-    filtered.length &&
-    !filtered.some(function (a) {
-      return a.id === selectedKnowledgeArticleID;
-    })
-  ) {
-    selectedKnowledgeArticleID = filtered[0].id;
-  }
-
   renderKnowledgeArticles(filtered);
-  var selected = filtered.find(function (a) {
-    return a.id === selectedKnowledgeArticleID;
-  });
-  renderKnowledgeArticleDetail(selected || null);
+  // When searching, always switch back to list view
+  showKBList();
 }
 
 async function loadKnowledgeBase() {
@@ -180,9 +146,7 @@ async function loadKnowledgeBase() {
     knowledgeArticles = Array.isArray(knowledgeArticles)
       ? knowledgeArticles
       : [];
-    if (knowledgeArticles.length && !selectedKnowledgeArticleID) {
-      selectedKnowledgeArticleID = knowledgeArticles[0].id;
-    }
+    showKBList();
     filterKnowledgeArticles(kbSearchInputEl ? kbSearchInputEl.value : "");
   } catch (err) {
     kbArticlesListEl.innerHTML =
@@ -198,7 +162,6 @@ function initKnowledge() {
     kbRefreshBtn.addEventListener("click", async function () {
       kbRefreshBtn.disabled = true;
       try {
-        // Limpa o cache local antes de recarregar
         await appApi().RefreshKnowledgeBase();
       } catch (_) {
         /* ignora erro do refresh e tenta recarregar mesmo assim */
@@ -216,6 +179,12 @@ function initKnowledge() {
     });
   }
 
+  if (kbBackBtn) {
+    kbBackBtn.addEventListener("click", function () {
+      showKBList();
+    });
+  }
+
   if (kbSearchInputEl) {
     kbSearchInputEl.addEventListener(
       "input",
@@ -223,24 +192,5 @@ function initKnowledge() {
         filterKnowledgeArticles(kbSearchInputEl.value);
       }, 250),
     );
-  }
-
-  if (kbOpenFullBtn) {
-    kbOpenFullBtn.addEventListener("click", function () {
-      var article = knowledgeArticles.find(function (a) {
-        return a.id === selectedKnowledgeArticleID;
-      });
-      if (article) openKnowledgeReader(article);
-    });
-  }
-
-  if (kbReaderCloseBtn) {
-    kbReaderCloseBtn.addEventListener("click", closeKnowledgeReader);
-  }
-
-  if (kbReaderModal) {
-    kbReaderModal.addEventListener("click", function (e) {
-      if (e.target === kbReaderModal) closeKnowledgeReader();
-    });
   }
 }

@@ -9,32 +9,19 @@
         <input id="kbSearchInput" type="search" class="kb-search-input" placeholder="Buscar por titulo, categoria, tag ou conteudo" data-i18n-placeholder="knowledge.searchPlaceholder" />
       </div>
 
-      <div class="knowledge-layout">
-        <aside>
-          <div id="kbArticlesList" class="kb-articles-list">
-            <div class="meta" data-i18n="knowledge.loadingArticles">Carregando artigos...</div>
-          </div>
-        </aside>
+      <div id="kbListView" class="kb-list-view">
+        <div id="kbArticlesList" class="kb-articles-grid">
+          <div class="meta" data-i18n="knowledge.loadingArticles">Carregando artigos...</div>
+        </div>
+      </div>
 
-        <article id="kbArticleDetail" class="kb-article-detail hidden">
+      <div id="kbDetailView" class="kb-detail-view hidden">
+        <button id="kbBackBtn" class="btn subtle kb-detail-back" type="button" data-i18n="action.back">&#x2190; Voltar</button>
+        <article id="kbArticleDetail" class="kb-article-detail">
           <h2 id="kbDetailTitle"></h2>
           <div id="kbDetailMeta" class="kb-detail-meta"></div>
           <div id="kbDetailContent" class="kb-detail-content"></div>
-          <div class="kb-detail-actions">
-            <button id="kbOpenFullBtn" class="btn primary" data-i18n="action.openFullscreen">Abrir em tela cheia</button>
-          </div>
         </article>
-      </div>
-
-      <div id="kbReaderModal" class="kb-reader-modal hidden" aria-hidden="true">
-        <div class="kb-reader-card">
-          <div class="kb-reader-head section-bar">
-            <strong id="kbReaderTitle" data-i18n="knowledge.article">Artigo</strong>
-            <button id="kbReaderCloseBtn" class="btn danger" data-i18n="action.close">Fechar</button>
-          </div>
-          <div id="kbReaderMeta" class="kb-detail-meta"></div>
-          <div id="kbReaderContent" class="kb-reader-content"></div>
-        </div>
       </div>
     </section>
   </main>

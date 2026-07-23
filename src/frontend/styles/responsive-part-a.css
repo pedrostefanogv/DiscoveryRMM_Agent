@@ -808,34 +808,40 @@
 }
 
 .knowledge-layout {
-  display: grid;
-  grid-template-columns: minmax(280px, 380px) 1fr;
-  gap: 14px;
-  height: calc(100vh - 240px);
-  overflow: hidden;
-}
-
-.knowledge-layout > aside,
-.knowledge-layout > .kb-article-detail {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: 12px;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
+  display: none;
 }
 
 .kb-search-input {
   width: min(520px, 100%);
 }
 
-.kb-articles-list {
+.kb-list-view {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  flex: 1;
+  min-height: 0;
+}
+
+.kb-articles-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 10px;
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   padding-right: 2px;
+  align-content: start;
+}
+
+.kb-detail-view {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1;
+  min-height: 0;
+}
+
+.kb-detail-back {
+  align-self: flex-start;
+  flex-shrink: 0;
 }
