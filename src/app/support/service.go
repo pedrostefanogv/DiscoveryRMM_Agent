@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"discovery/app/debug"
@@ -73,6 +74,9 @@ type Service struct {
 	featureEnabled   func(*bool) bool
 	supportEnabled   func() *bool
 	knowledgeEnabled func() *bool
+
+	knowledgeMu          sync.Mutex
+	lastKnowledgeRefresh time.Time
 }
 
 // NewService builds a support service.

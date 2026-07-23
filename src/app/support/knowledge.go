@@ -16,8 +16,9 @@ import (
 )
 
 const (
-	knowledgeListCacheTTL   = 24 * time.Hour
-	knowledgeDetailCacheTTL = 24 * time.Hour
+	knowledgeListCacheTTL       = 6 * time.Hour
+	knowledgeDetailCacheTTL     = 6 * time.Hour
+	knowledgeMinRefreshInterval = 5 * time.Minute
 )
 
 func toStringSlice(value any) []string {
@@ -255,6 +256,13 @@ func (s *Service) RefreshKnowledgeBase() error {
 		return nil
 	}
 
+	s.knowledgeMu.Lock()
+	if time.Since(s.lastKnowledgeRefresh) < knowledgeMinRefreshInterval {
+		s.knowledgeMu.Unlock()
+		return nil
+	}
+	s.knowledgeMu.Unlock()
+
 	info, err := s.fetchAgentContext()
 	if err != nil {
 		s.supportLogf("falha ao resolver contexto para refresh da knowledge base: %v", err)
@@ -274,6 +282,10 @@ func (s *Service) RefreshKnowledgeBase() error {
 		s.supportLogf("falha ao recarregar base de conhecimento: %v", err)
 		return err
 	}
+
+	s.knowledgeMu.Lock()
+	s.lastKnowledgeRefresh = time.Now()
+	s.knowledgeMu.Unlock()
 
 	s.supportLogf("base de conhecimento recarregada: %d artigo(s)", len(articles))
 	return nil

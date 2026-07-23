@@ -231,6 +231,10 @@ func (c *syncCoordinator) processTrigger(ctx context.Context, trigger syncTrigge
 		_, err = c.app.RefreshAutomationPolicy(false)
 	case "configuration":
 		err = c.app.refreshAgentConfiguration(ctx)
+	case "knowledge":
+		if c.app.supportSvc != nil {
+			err = c.app.supportSvc.RefreshKnowledgeBase()
+		}
 	case "zerotouchapproved":
 		err = c.fullResync(ctx, "zero-touch")
 	default:
@@ -294,11 +298,6 @@ func (c *syncCoordinator) fullResync(ctx context.Context, source string) error {
 	}
 	if _, err := c.app.loadEffectiveAppStorePolicy(ctx, true); err != nil && firstErr == nil {
 		firstErr = err
-	}
-	if c.app.supportSvc != nil && c.app.featureEnabled(c.app.GetAgentConfiguration().KnowledgeBaseEnabled) {
-		if err := c.app.supportSvc.RefreshKnowledgeBase(); err != nil && firstErr == nil {
-			firstErr = err
-		}
 	}
 
 	if c.app.p2pCoord != nil {
