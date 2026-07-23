@@ -21,8 +21,9 @@ import (
 // Fluxo SEM interação do usuário:
 //  1. Detecta sessão não-interativa → desvia para modo silencioso.
 //  2. Abre sessão PSADT
-//  3. Welcome com CloseProcesses=["discovery-agent"] — PSADT fecha o agente atual
-//     automaticamente (CloseProcessesCountdown + ForceCloseProcessesCountdown)
+//  3. Welcome INFORMATIVO (sem CloseProcesses) — o instalador NSIS já faz taskkill.
+//     Não fechamos o agente aqui para evitar race condition: se o PSADT matar
+//     o processo antes do LaunchInstallerElevated, o instalador nunca executa.
 //  4. Exibe Progress: "Instalando Discovery Agent vX.Y.Z..."
 //  5. Lança o instalador via LaunchInstallerElevated (UAC) — sem diálogo nativo
 //  6. Se falhar, exibe balloon de erro visível ao usuário.
@@ -81,24 +82,21 @@ func (a *App) selfUpdateInstallWithPSADT(ctx context.Context, exePath, targetVer
 		_ = session.CloseWithContext(closeCtx, 0)
 	}()
 
-	// ── Welcome SEM interação: auto-close do agente atual ──
-	// CloseProcesses = [discovery-agent.exe] → PSADT detecta e fecha automaticamente.
+	// ── Welcome INFORMATIVO (sem fechar processos) ──
+	// NÃO usamos CloseProcesses/BlockExecution aqui porque:
+	//   - Se o PSADT fechar discovery-agent.exe ANTES do LaunchInstallerElevated,
+	//     o processo Go morre e o instalador NSIS nunca é lançado (race condition).
+	//   - O instalador NSIS JÁ faz taskkill como primeira ação (/S /UPDATE).
+	//   - O Welcome serve apenas para informar o usuário sobre a atualização.
 	// AllowDefer = false → usuário não pode adiar.
 	// HideCloseButton = true → sem botão X.
-	// BlockExecution = true → trava até processos estarem fechados.
-	// CloseProcessesCountdown = 10s → fecha após 10s de inatividade.
-	// ForceCloseProcessesCountdown = 5s → força fechamento 5s após o countdown.
-	a.logs.append("[selfupdate] PSADT Welcome com CloseProcesses=[discovery-agent] (auto-close, sem interacao)")
+	a.logs.append("[selfupdate] PSADT Welcome informativo (instalador NSIS fara o taskkill)")
 	if err := session.ShowInstallationWelcome(pstypes.WelcomeOptions{
-		Title:                        "Atualização do Discovery Agent",
-		Subtitle:                     fmt.Sprintf("Versão %s", targetVersion),
-		CloseProcesses:               []pstypes.ProcessDefinition{{Name: "discovery-agent"}},
-		AllowDefer:                   false,
-		HideCloseButton:              true,
-		BlockExecution:               true,
-		CloseProcessesCountdown:      10,
-		ForceCloseProcessesCountdown: 5,
-		CheckDiskSpace:               true,
+		Title:           "Atualização do Discovery Agent",
+		Subtitle:        fmt.Sprintf("Versão %s", targetVersion),
+		AllowDefer:      false,
+		HideCloseButton: true,
+		CheckDiskSpace:  true,
 	}); err != nil {
 		a.logs.append("[selfupdate] aviso: Welcome dialog falhou (pode estar sem sessao interativa): " + err.Error())
 		// Fallback: tenta prosseguir sem Welcome
