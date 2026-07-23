@@ -15,18 +15,24 @@ import (
 	"discovery/internal/selfupdate"
 )
 
+// psadtClientResult transports the result of psadt.NewClient across a channel.
+type psadtClientResult struct {
+	client *psadt.Client
+	err    error
+}
+
 // selfUpdateInstallWithPSADT implementa o callback OnSelfUpdateInstall do selfupdate.Updater.
 //
 // Fluxo SEM interação do usuário:
 //  1. Detecta sessão não-interativa → desvia para modo silencioso.
-//  2. Abre sessão PSADT
-//  3. Welcome INFORMATIVO (sem CloseProcesses) — o instalador NSIS já faz taskkill.
-//     Não fechamos o agente aqui para evitar race condition: se o PSADT matar
-//     o processo antes do LaunchInstallerElevated, o instalador nunca executa.
-//  4. Exibe Progress: "Instalando Discovery Agent vX.Y.Z..."
-//  5. Lança o instalador via LaunchInstallerElevated (UAC) — sem diálogo nativo
-//  6. Se falhar, exibe balloon de erro visível ao usuário.
-//  7. Retorna nil — o instalador NSIS faz taskkill do agente, matando esta sessão
+//  2. Cria ctx com timeout de 3min para todo o fluxo PSADT.
+//  3. NewClient em goroutine dedicada com timeout — a lib usa context.Background()
+//     hardcoded no ImportModule, então envolvemos em goroutine+select para garantir
+//     que travamentos no PowerShell (spawn, scanner.Scan) não bloqueiem para sempre.
+//  4. Abre sessão PSADT com o ctx de timeout.
+//  5. Welcome/Progress/BalloonTip usam session.WithContext(psadtCtx) para timeout.
+//  6. Lança o instalador via LaunchInstallerElevated (UAC) — sem diálogo nativo.
+//  7. Retorna nil — o instalador NSIS faz taskkill do agente, matando esta sessão.
 //
 // O usuário NÃO interage — apenas vê a barra de progresso.
 func (a *App) selfUpdateInstallWithPSADT(ctx context.Context, exePath, targetVersion string) (err error) {
@@ -43,8 +49,6 @@ func (a *App) selfUpdateInstallWithPSADT(ctx context.Context, exePath, targetVer
 	a.logs.append("[selfupdate] iniciando PSADT UI (auto-close): exePath=" + exePath + " targetVersion=" + targetVersion)
 
 	// ── Detecção de sessão não-interativa ──
-	// Serviço, sessão 0, ou SESSIONNAME vazio/Services → sem UI PSADT.
-	// Lança instalador diretamente com elevação UAC.
 	if !hasInteractiveSession() {
 		a.logs.append("[selfupdate] sessão não-interativa detectada — modo silencioso (sem UI PSADT)")
 		if _, statErr := os.Stat(exePath); statErr != nil {
@@ -57,23 +61,41 @@ func (a *App) selfUpdateInstallWithPSADT(ctx context.Context, exePath, targetVer
 		return nil
 	}
 
-	// ── Context com timeout dedicado para PSADT ──
-	// Usamos um ctx derivado com deadline de 3 minutos. O ctx original do Wails
-	// não tem timeout — se PSADT travar (Import-Module, PowerShell bloqueado),
-	// a goroutine fica travada indefinidamente sem erro. Com timeout, o
-	// OpenSessionWithContext retorna error após 3min, o callback retorna erro,
-	// e o launchInstallerWithUI faz fallback para launchInstaller direto.
+	// ── Context com timeout dedicado para todo o fluxo PSADT ──
+	// O ctx original do Wails não tem deadline. Se o PowerShell travar no spawn
+	// ou no Import-Module, a goroutine bloqueia indefinidamente. Com timeout de
+	// 3min, o callback retorna erro e o launchInstallerWithUI faz fallback.
 	psadtTimeout := 3 * time.Minute
 	psadtCtx, psadtCancel := context.WithTimeout(ctx, psadtTimeout)
 	defer psadtCancel()
 
-	a.logs.append(fmt.Sprintf("[selfupdate] PSADT: chamando NewClient (timeout=%.0fs)", psadtTimeout.Seconds()))
-	client, err := psadt.NewClient(
-		psadt.WithTimeout(psadtTimeout),
-	)
-	if err != nil {
-		a.logs.append("[selfupdate] PSADT: NewClient falhou: " + err.Error())
-		return fmt.Errorf("psadt.NewClient: %w", err)
+	// ── NewClient em goroutine dedicada com timeout ──
+	// psadt.NewClient() usa context.Background() hardcoded no ImportModule.
+	// Não podemos passar nosso psadtCtx para ele. A solução é rodar NewClient
+	// em uma goroutine separada e usar select com o psadtCtx.Done() como timeout.
+	// Se o PowerShell travar no spawn/scanner, o select dispara após 3min e
+	// retornamos erro. A goroutine interna fica leaked, mas é aceitável porque
+	// o instalador NSIS vai matar o processo do agente em seguida.
+	a.logs.append(fmt.Sprintf("[selfupdate] PSADT: chamando NewClient em goroutine com timeout=%.0fs", psadtTimeout.Seconds()))
+	clientCh := make(chan psadtClientResult, 1)
+	go func() {
+		c, err := psadt.NewClient(
+			psadt.WithTimeout(psadtTimeout),
+		)
+		clientCh <- psadtClientResult{c, err}
+	}()
+
+	var client *psadt.Client
+	select {
+	case res := <-clientCh:
+		if res.err != nil {
+			a.logs.append("[selfupdate] PSADT: NewClient falhou: " + res.err.Error())
+			return fmt.Errorf("psadt.NewClient: %w", res.err)
+		}
+		client = res.client
+	case <-psadtCtx.Done():
+		a.logs.append("[selfupdate] PSADT: NewClient timeout apos " + psadtTimeout.String() + " — PowerShell travou no spawn/Import-Module")
+		return fmt.Errorf("psadt.NewClient: timeout apos %v (PowerShell travado)", psadtTimeout)
 	}
 	defer client.Close()
 	a.logs.append("[selfupdate] PSADT: NewClient OK — chamando OpenSession")
@@ -97,14 +119,10 @@ func (a *App) selfUpdateInstallWithPSADT(ctx context.Context, exePath, targetVer
 	a.logs.append("[selfupdate] PSADT: OpenSession OK — chamando ShowInstallationWelcome")
 
 	// ── Welcome INFORMATIVO (sem fechar processos) ──
-	// NÃO usamos CloseProcesses/BlockExecution aqui porque:
-	//   - Se o PSADT fechar discovery-agent.exe ANTES do LaunchInstallerElevated,
-	//     o processo Go morre e o instalador NSIS nunca é lançado (race condition).
-	//   - O instalador NSIS JÁ faz taskkill como primeira ação (/S /UPDATE).
-	//   - O Welcome serve apenas para informar o usuário sobre a atualização.
-	// AllowDefer = false → usuário não pode adiar.
-	// HideCloseButton = true → sem botão X.
-	if err := session.ShowInstallationWelcome(pstypes.WelcomeOptions{
+	// Usamos session.WithContext(psadtCtx) para que o Welcome respeite o timeout
+	// e não bloqueie indefinidamente se o PSADT travar na UI.
+	timedSession := session.WithContext(psadtCtx)
+	if err := timedSession.ShowInstallationWelcome(pstypes.WelcomeOptions{
 		Title:           "Atualização do Discovery Agent",
 		Subtitle:        fmt.Sprintf("Versão %s", targetVersion),
 		AllowDefer:      false,
@@ -112,13 +130,12 @@ func (a *App) selfUpdateInstallWithPSADT(ctx context.Context, exePath, targetVer
 		CheckDiskSpace:  true,
 	}); err != nil {
 		a.logs.append("[selfupdate] PSADT: Welcome dialog falhou (pode estar sem sessao interativa): " + err.Error())
-		// Fallback: tenta prosseguir sem Welcome
 	} else {
 		a.logs.append("[selfupdate] PSADT: Welcome OK — chamando ShowInstallationProgress")
 	}
 
 	// ── Progress: mostra que está instalando ──
-	if err := session.ShowInstallationProgress(pstypes.ProgressOptions{
+	if err := timedSession.ShowInstallationProgress(pstypes.ProgressOptions{
 		StatusMessage: fmt.Sprintf("Instalando Discovery Agent %s...", targetVersion),
 	}); err != nil {
 		a.logs.append("[selfupdate] PSADT: Progress falhou: " + err.Error())
@@ -132,17 +149,14 @@ func (a *App) selfUpdateInstallWithPSADT(ctx context.Context, exePath, targetVer
 	}()
 
 	// ── Lança o instalador com elevação UAC ──
-	// ShellExecuteEx("runas") é necessário porque o instalador NSIS /S /UPDATE
-	// sempre requer admin (taskkill, Program Files, HKLM).
 	if _, statErr := os.Stat(exePath); statErr != nil {
 		return fmt.Errorf("instalador nao encontrado: %w", statErr)
 	}
 
 	a.logs.append("[selfupdate] PSADT: lancando instalador via LaunchInstallerElevated: " + exePath)
 	if err := selfupdate.LaunchInstallerElevated(exePath, "/S /UPDATE"); err != nil {
-		// ── Feedback visual de erro antes de propagar ──
 		a.logs.append("[selfupdate] LaunchInstallerElevated falhou: " + err.Error())
-		balloonErr := session.ShowBalloonTip(pstypes.BalloonTipOptions{
+		balloonErr := timedSession.ShowBalloonTip(pstypes.BalloonTipOptions{
 			BalloonTipTitle: "Falha na atualização",
 			BalloonTipText:  fmt.Sprintf("Não foi possível iniciar o instalador. Verifique as permissões de administrador.\n\nErro: %v", err),
 			BalloonTipIcon:  pstypes.BalloonError,
@@ -151,15 +165,11 @@ func (a *App) selfUpdateInstallWithPSADT(ctx context.Context, exePath, targetVer
 		if balloonErr != nil {
 			a.logs.append("[selfupdate] aviso: falha ao exibir balloon de erro: " + balloonErr.Error())
 		}
-		// Aguarda um pouco para o usuário ver o balloon
 		time.Sleep(2 * time.Second)
 		return fmt.Errorf("LaunchInstallerElevated: %w", err)
 	}
 
 	// ── Aguarda o instalador iniciar ──
-	// O instalador NSIS faz taskkill do discovery-agent.exe.
-	// 2s é suficiente para o launch; o defer session.CloseWithContext pode
-	// não executar se o taskkill for rápido (aceitável — sessão PSADT é stateless).
 	a.logs.append("[selfupdate] PSADT: instalador lancado — aguardando taskkill pelo NSIS...")
 	time.Sleep(2 * time.Second)
 
