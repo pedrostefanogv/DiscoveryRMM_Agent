@@ -772,6 +772,77 @@
   border-color: var(--accent);
 }
 
+/* Support detail header row */
+.support-detail-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+/* Close ticket modal */
+.close-ticket-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 9100;
+  background: rgba(0,0,0,0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+}
+
+.close-ticket-modal.hidden { display: none; }
+
+.close-ticket-modal-card {
+  width: min(520px, 96vw);
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  box-shadow: 0 16px 46px rgba(0,0,0,0.3);
+  overflow: hidden;
+}
+
+.close-ticket-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 14px 18px 0 18px;
+}
+
+.close-ticket-modal-header h4 {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+.close-ticket-modal .ticket-close-panel {
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  padding: 14px 18px 18px 18px;
+}
+
+.close-ticket-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.btn-icon {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.2rem;
+  line-height: 1;
+  border-radius: 8px;
+}
+
 .actions {
   display: flex;
   gap: 8px;

@@ -43,6 +43,7 @@ var APP_I18N_DICTIONARY = {
     "action.sendComment": "Enviar Comentário",
     "action.closeTicket": "Fechar Chamado",
     "action.back": "Voltar",
+    "action.cancel": "Cancelar",
     "action.backToForm": "Voltar ao formulário",
     "action.openP2PDebug": "Abrir P2P Debug",
     "action.p2pRescanPeers": "Pesquisar peers",

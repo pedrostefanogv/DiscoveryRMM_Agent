@@ -9,6 +9,14 @@ var WORKFLOW_STATES_CACHE_TTL_MS = 10 * 60 * 1000;
 var priorityLabels = { 1: 'Baixa', 2: 'Media', 3: 'Alta', 4: 'Critica' };
 var priorityClasses = { 1: 'p-baixa', 2: 'p-media', 3: 'p-alta', 4: 'p-critica' };
 
+function showCloseTicketModal() {
+  if (closeTicketModalEl) closeTicketModalEl.classList.remove('hidden');
+}
+
+function hideCloseTicketModal() {
+  if (closeTicketModalEl) closeTicketModalEl.classList.add('hidden');
+}
+
 function showSupportList() {
   if (supportListViewEl) supportListViewEl.classList.remove("hidden");
   if (supportDetailViewEl) supportDetailViewEl.classList.add("hidden");
@@ -280,6 +288,7 @@ function initSupport() {
         showToast(translate('support.ticketClosedSuccess'), 'success');
         currentTicket = ticket;
         renderTicketDetail(ticket);
+        hideCloseTicketModal();
         if (closeTicketCommentEl) closeTicketCommentEl.value = '';
         if (closeTicketRatingEl) closeTicketRatingEl.value = '';
         if (closeTicketWorkflowStateIdEl) closeTicketWorkflowStateIdEl.value = '';
@@ -299,6 +308,37 @@ function initSupport() {
       var manual = closeTicketWorkflowStateSelectEl.value === '__manual__';
       closeTicketWorkflowStateIdEl.classList.toggle('hidden', !manual);
       if (!manual) closeTicketWorkflowStateIdEl.value = '';
+    });
+  }
+
+  // Open close ticket modal
+  if (openCloseTicketBtnEl) {
+    openCloseTicketBtnEl.addEventListener('click', function () {
+      if (!currentTicketId) return;
+      showCloseTicketModal();
+    });
+  }
+
+  // Close modal via X button
+  if (closeTicketModalCancelBtnEl) {
+    closeTicketModalCancelBtnEl.addEventListener('click', function () {
+      hideCloseTicketModal();
+    });
+  }
+
+  // Close modal via Cancel button
+  if (closeTicketModalCancelBottomBtnEl) {
+    closeTicketModalCancelBottomBtnEl.addEventListener('click', function () {
+      hideCloseTicketModal();
+    });
+  }
+
+  // Close modal on overlay click
+  if (closeTicketModalEl) {
+    closeTicketModalEl.addEventListener('click', function (e) {
+      if (e.target === closeTicketModalEl) {
+        hideCloseTicketModal();
+      }
     });
   }
 }
@@ -445,8 +485,9 @@ function renderTicketDetail(t) {
   }
   if (ticketDetailDescEl) ticketDetailDescEl.textContent = t.description || '';
 
-  if (ticketClosePanelEl) {
-    ticketClosePanelEl.classList.toggle('hidden', isFinal);
+  // Show/hide close ticket button based on final state
+  if (openCloseTicketBtnEl) {
+    openCloseTicketBtnEl.classList.toggle('hidden', isFinal);
   }
 }
 
@@ -454,6 +495,7 @@ function closeTicketDetail() {
   currentTicketId = '';
   currentTicket = null;
   showSupportList();
+  hideCloseTicketModal();
   if (closeTicketWorkflowStateSelectEl) closeTicketWorkflowStateSelectEl.value = '';
   if (closeTicketWorkflowStateIdEl) {
     closeTicketWorkflowStateIdEl.value = '';
