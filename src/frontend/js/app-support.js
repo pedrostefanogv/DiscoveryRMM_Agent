@@ -9,6 +9,25 @@ var WORKFLOW_STATES_CACHE_TTL_MS = 10 * 60 * 1000;
 var priorityLabels = { 1: 'Baixa', 2: 'Media', 3: 'Alta', 4: 'Critica' };
 var priorityClasses = { 1: 'p-baixa', 2: 'p-media', 3: 'p-alta', 4: 'p-critica' };
 
+function showSupportList() {
+  if (supportListViewEl) supportListViewEl.classList.remove("hidden");
+  if (supportDetailViewEl) supportDetailViewEl.classList.add("hidden");
+  if (supportNewTicketViewEl) supportNewTicketViewEl.classList.add("hidden");
+}
+
+function showSupportDetail() {
+  if (supportListViewEl) supportListViewEl.classList.add("hidden");
+  if (supportDetailViewEl) supportDetailViewEl.classList.remove("hidden");
+  if (supportNewTicketViewEl) supportNewTicketViewEl.classList.add("hidden");
+}
+
+function showNewTicketForm() {
+  if (supportListViewEl) supportListViewEl.classList.add("hidden");
+  if (supportDetailViewEl) supportDetailViewEl.classList.add("hidden");
+  if (supportNewTicketViewEl) supportNewTicketViewEl.classList.remove("hidden");
+  hideTicketFormStatus();
+}
+
 function ticketPriorityLabel(p) { return priorityLabels[p] || 'N/A'; }
 function ticketPriorityClass(p) { return priorityClasses[p] || 'p-media'; }
 
@@ -163,27 +182,6 @@ function hideTicketFormStatus() {
   if (ticketFormStatusEl) ticketFormStatusEl.classList.add('hidden');
 }
 
-function openNewTicketModal() {
-  if (supportCreateOverlayEl) {
-    supportCreateOverlayEl.classList.remove('hidden');
-    supportCreateOverlayEl.setAttribute('aria-hidden', 'false');
-  }
-  if (supportCreateFormEl) {
-    supportCreateFormEl.classList.remove('hidden');
-  }
-  hideTicketFormStatus();
-}
-
-function closeNewTicketModal() {
-  if (supportCreateOverlayEl) {
-    supportCreateOverlayEl.classList.add('hidden');
-    supportCreateOverlayEl.setAttribute('aria-hidden', 'true');
-  }
-  if (supportCreateFormEl) {
-    supportCreateFormEl.classList.add('hidden');
-  }
-}
-
 function initSupport() {
   if (!supportFormEl) return;
 
@@ -208,7 +206,7 @@ function initSupport() {
       showToast(translate('support.ticketCreatedSuccess'), 'success');
       supportFormEl.reset();
       hideTicketFormStatus();
-      closeNewTicketModal();
+      showSupportList();
       loadSupportTickets();
     } catch (err) {
       showTicketFormStatus(translate('support.ticketCreateError', { error: String(err) }), true);
@@ -222,16 +220,13 @@ function initSupport() {
     refreshTicketsBtnEl.addEventListener('click', function () { loadSupportTickets(); });
   }
   if (newTicketBtnEl) {
-    newTicketBtnEl.addEventListener('click', function () { openNewTicketModal(); });
+    newTicketBtnEl.addEventListener('click', function () { showNewTicketForm(); });
   }
-  if (closeNewTicketBtnEl) {
-    closeNewTicketBtnEl.addEventListener('click', function () { closeNewTicketModal(); });
+  if (backFromNewBtnEl) {
+    backFromNewBtnEl.addEventListener('click', function () { showSupportList(); });
   }
-  if (supportCreateOverlayEl) {
-    supportCreateOverlayEl.addEventListener('click', function () { closeNewTicketModal(); });
-  }
-  if (backToFormBtnEl) {
-    backToFormBtnEl.addEventListener('click', function () { closeTicketDetail(); });
+  if (backToListBtnEl) {
+    backToListBtnEl.addEventListener('click', function () { showSupportList(); });
   }
   if (submitCommentBtnEl) {
     submitCommentBtnEl.addEventListener('click', async function () {
@@ -311,7 +306,7 @@ function initSupport() {
 async function loadSupportTickets() {
   if (!supportTicketsListEl) return;
 
-  closeNewTicketModal();
+  showSupportList();
 
   // show loading
   if (ticketsLoadingEl) ticketsLoadingEl.classList.remove('hidden');
@@ -337,8 +332,7 @@ async function loadSupportTickets() {
     if (agentContextBannerEl) agentContextBannerEl.classList.add('hidden');
     if (ticketsLoadingEl) ticketsLoadingEl.classList.add('hidden');
     supportTicketsListEl.innerHTML = '<div class="meta">' + escapeHtml(translate('support.serverNotConfigured')) + '</div>';
-    if (supportSidePanelEl) supportSidePanelEl.classList.add('hidden');
-    if (supportTicketDetailEl) supportTicketDetailEl.classList.add('hidden');
+    showSupportList();
     return;
   }
 
@@ -347,12 +341,10 @@ async function loadSupportTickets() {
     if (ticketsLoadingEl) ticketsLoadingEl.classList.add('hidden');
     if (!tickets || !tickets.length) {
       supportTicketsListEl.innerHTML = '<div class="meta">' + escapeHtml(translate('support.noTicketsPrompt')) + '</div>';
-      if (supportSidePanelEl) supportSidePanelEl.classList.add('hidden');
-      if (supportTicketDetailEl) supportTicketDetailEl.classList.add('hidden');
+      showSupportList();
       return;
     }
-    if (supportSidePanelEl) supportSidePanelEl.classList.add('hidden');
-    if (supportTicketDetailEl) supportTicketDetailEl.classList.add('hidden');
+    showSupportList();
     supportTicketsListEl.innerHTML = tickets.map(function (t) {
       var statusName = (t.workflowState && t.workflowState.name) ? t.workflowState.name : translate('support.defaultOpenStatus');
       var rootStyles = getComputedStyle(document.documentElement);
@@ -401,8 +393,7 @@ function escapeAttr(obj) {
 function showTicketDetail(t) {
   currentTicketId = t.id;
   currentTicket = t;
-  if (supportSidePanelEl) supportSidePanelEl.classList.remove('hidden');
-  if (supportTicketDetailEl) supportTicketDetailEl.classList.remove('hidden');
+  showSupportDetail();
 
   renderTicketDetail(t);
   loadWorkflowStatesForClose(t);
@@ -462,8 +453,7 @@ function renderTicketDetail(t) {
 function closeTicketDetail() {
   currentTicketId = '';
   currentTicket = null;
-  if (supportTicketDetailEl) supportTicketDetailEl.classList.add('hidden');
-  if (supportSidePanelEl) supportSidePanelEl.classList.add('hidden');
+  showSupportList();
   if (closeTicketWorkflowStateSelectEl) closeTicketWorkflowStateSelectEl.value = '';
   if (closeTicketWorkflowStateIdEl) {
     closeTicketWorkflowStateIdEl.value = '';

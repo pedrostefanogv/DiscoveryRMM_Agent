@@ -397,16 +397,34 @@
 }
 
 .support-layout {
-  display: grid;
-  grid-template-columns: 1fr 1.2fr;
-  gap: 18px;
-  align-items: start;
+  display: none;
 }
 
-@media (max-width: 900px) {
-  .support-layout {
-    grid-template-columns: 1fr;
-  }
+/* Support list view */
+.support-list-view {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+  min-height: 0;
+}
+
+/* Support detail view */
+.support-detail-view {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1;
+  min-height: 0;
+}
+
+/* Support new ticket view */
+.support-new-ticket-view {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1;
+  min-height: 0;
 }
 
 /* Agent context banners */
@@ -432,13 +450,7 @@
   border: 1px solid var(--context-error-border);
 }
 
-/* Tickets section (left column) */
-.support-tickets-section {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
+/* Tickets section (now full-width in single view) */
 .support-sec-header {
   margin-bottom: 4px;
 }
@@ -530,10 +542,9 @@
   flex-wrap: wrap;
 }
 
-/* Side panel (right column) */
+/* Side panel (obsolete — now single-view) */
 .support-side-panel {
-  position: sticky;
-  top: 12px;
+  display: none;
 }
 
 .support-form-card {
@@ -544,36 +555,6 @@
   display: flex;
   flex-direction: column;
   gap: 14px;
-}
-
-.support-create-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.45);
-  z-index: 70;
-}
-
-.support-create-modal {
-  position: fixed;
-  inset: 0;
-  transform: none;
-  width: 100vw;
-  height: 100vh;
-  max-height: none;
-  overflow: auto;
-  z-index: 80;
-  border-radius: 0;
-  box-shadow: none;
-}
-
-.support-create-head {
-  margin-bottom: 8px;
-}
-
-.support-form-card h3 {
-  margin: 0;
-  font-size: 1rem;
-  font-weight: 700;
 }
 
 .support-form {

@@ -20,114 +20,114 @@
         <span id="agentContextErrorText" class="meta"></span>
       </div>
 
-      <div class="support-layout">
-        <div class="support-tickets-section">
-          <div class="support-sec-header section-bar">
-            <span class="meta" data-i18n="support.myTickets">Meus Chamados</span>
-            <span id="ticketsLoading" class="tickets-loading hidden" data-i18n="common.loading">Carregando...</span>
-          </div>
-          <div id="supportTicketsList" class="support-tickets-list">
-            <div class="meta" data-i18n="support.noTickets">Nenhum chamado.</div>
-          </div>
+      <div id="supportListView" class="support-list-view">
+        <div class="support-sec-header section-bar">
+          <span class="meta" data-i18n="support.myTickets">Meus Chamados</span>
+          <span id="ticketsLoading" class="tickets-loading hidden" data-i18n="common.loading">Carregando...</span>
         </div>
+        <div id="supportTicketsList" class="support-tickets-list">
+          <div class="meta" data-i18n="support.noTickets">Nenhum chamado.</div>
+        </div>
+      </div>
 
-        <div id="supportSidePanel" class="support-side-panel hidden">
-          <div id="supportTicketDetail" class="support-form-card hidden">
-            <button id="backToFormBtn" class="btn subtle back-btn"><span aria-hidden="true">← </span><span data-i18n="action.backToForm">Voltar ao formulario</span></button>
-            <div class="ticket-detail-top">
-              <span id="ticketDetailId" class="ticket-id-badge"></span>
-              <span id="ticketDetailStatus" class="ticket-status-badge"></span>
-              <span id="ticketDetailPriority" class="ticket-priority-badge"></span>
-            </div>
-            <h3 id="ticketDetailTitle" class="ticket-detail-title"></h3>
-            <div id="ticketDetailMeta" class="ticket-detail-meta"></div>
-            <div id="ticketDetailDesc" class="ticket-detail-desc"></div>
+      <div id="supportDetailView" class="support-detail-view hidden">
+        <button id="backToListBtn" class="btn subtle kb-detail-back" type="button" data-i18n="action.back">&#x2190; Voltar</button>
+        <div id="supportTicketDetail" class="support-form-card">
+          <div class="ticket-detail-top">
+            <span id="ticketDetailId" class="ticket-id-badge"></span>
+            <span id="ticketDetailStatus" class="ticket-status-badge"></span>
+            <span id="ticketDetailPriority" class="ticket-priority-badge"></span>
+          </div>
+          <h3 id="ticketDetailTitle" class="ticket-detail-title"></h3>
+          <div id="ticketDetailMeta" class="ticket-detail-meta"></div>
+          <div id="ticketDetailDesc" class="ticket-detail-desc"></div>
 
-            <div id="ticketClosePanel" class="ticket-close-panel">
-              <h4 data-i18n="support.closeTicketTitle">Fechar Chamado</h4>
-              <div class="form-row">
-                <div class="form-field">
-                  <label for="closeTicketRating" data-i18n="field.rating">Avaliacao</label>
-                  <select id="closeTicketRating">
-                    <option value="" data-i18n="support.noRating">Sem avaliacao</option>
-                    <option value="0">0</option>
-                    <option value="1">1</option>
-                    <option value="2">2</option>
-                    <option value="3">3</option>
-                    <option value="4">4</option>
-                    <option value="5">5</option>
-                  </select>
-                </div>
-                <div class="form-field">
-                  <label for="closeTicketWorkflowStateSelect" data-i18n="support.finalStateOptional">Estado final (opcional)</label>
-                  <select id="closeTicketWorkflowStateSelect">
-                    <option value="" data-i18n="support.closeWithDefaultState">Fechar com estado padrao</option>
-                  </select>
-                  <input id="closeTicketWorkflowStateId" class="hidden" type="text" placeholder="GUID do estado final customizado" data-i18n-placeholder="support.customFinalStateGuidPlaceholder" />
-                </div>
+          <div id="ticketClosePanel" class="ticket-close-panel">
+            <h4 data-i18n="support.closeTicketTitle">Fechar Chamado</h4>
+            <div class="form-row">
+              <div class="form-field">
+                <label for="closeTicketRating" data-i18n="field.rating">Avaliacao</label>
+                <select id="closeTicketRating">
+                  <option value="" data-i18n="support.noRating">Sem avaliacao</option>
+                  <option value="0">0</option>
+                  <option value="1">1</option>
+                  <option value="2">2</option>
+                  <option value="3">3</option>
+                  <option value="4">4</option>
+                  <option value="5">5</option>
+                </select>
               </div>
               <div class="form-field">
-                <label for="closeTicketComment" data-i18n="support.closingCommentOptional">Comentario de fechamento (opcional)</label>
-                <textarea id="closeTicketComment" rows="3" placeholder="Descreva a solucao aplicada..." data-i18n-placeholder="support.describeAppliedSolution" data-app-lang="true"></textarea>
+                <label for="closeTicketWorkflowStateSelect" data-i18n="support.finalStateOptional">Estado final (opcional)</label>
+                <select id="closeTicketWorkflowStateSelect">
+                  <option value="" data-i18n="support.closeWithDefaultState">Fechar com estado padrao</option>
+                </select>
+                <input id="closeTicketWorkflowStateId" class="hidden" type="text" placeholder="GUID do estado final customizado" data-i18n-placeholder="support.customFinalStateGuidPlaceholder" />
               </div>
-              <button id="closeTicketBtn" class="btn danger" data-i18n="action.closeTicket">Fechar Chamado</button>
             </div>
+            <div class="form-field">
+              <label for="closeTicketComment" data-i18n="support.closingCommentOptional">Comentario de fechamento (opcional)</label>
+              <textarea id="closeTicketComment" rows="3" placeholder="Descreva a solucao aplicada..." data-i18n-placeholder="support.describeAppliedSolution" data-app-lang="true"></textarea>
+            </div>
+            <button id="closeTicketBtn" class="btn danger" data-i18n="action.closeTicket">Fechar Chamado</button>
+          </div>
 
-            <div class="comments-section">
-              <h4 data-i18n="support.comments">Comentarios</h4>
-              <div id="commentsList" class="comments-list"><div class="meta" data-i18n="common.loading">Carregando...</div></div>
-              <div class="comment-compose">
-                <textarea id="commentInput" rows="3" placeholder="Escreva um comentario..." data-i18n-placeholder="support.writeCommentPlaceholder" data-app-lang="true"></textarea>
-                <button id="submitCommentBtn" class="btn primary" data-i18n="action.sendComment">Enviar Comentario</button>
-              </div>
+          <div class="comments-section">
+            <h4 data-i18n="support.comments">Comentarios</h4>
+            <div id="commentsList" class="comments-list"><div class="meta" data-i18n="common.loading">Carregando...</div></div>
+            <div class="comment-compose">
+              <textarea id="commentInput" rows="3" placeholder="Escreva um comentario..." data-i18n-placeholder="support.writeCommentPlaceholder" data-app-lang="true"></textarea>
+              <button id="submitCommentBtn" class="btn primary" data-i18n="action.sendComment">Enviar Comentario</button>
             </div>
           </div>
         </div>
       </div>
 
-      <div id="supportCreateOverlay" class="support-create-overlay hidden" aria-hidden="true"></div>
-
-      <div id="supportCreateForm" class="support-form-card support-create-modal hidden" role="dialog" aria-modal="true" aria-labelledby="supportCreateTitle">
-        <div class="support-create-head section-bar">
+      <div id="supportNewTicketView" class="support-new-ticket-view hidden">
+        <button id="backFromNewBtn" class="btn subtle kb-detail-back" type="button" data-i18n="action.back">&#x2190; Voltar</button>
+        <div class="support-form-card">
           <h3 id="supportCreateTitle" data-i18n="support.openTicketTitle">Abrir Chamado</h3>
-          <button id="closeNewTicketBtn" class="btn subtle" type="button" data-i18n="action.close">Fechar</button>
+          <form id="supportForm" class="support-form" autocomplete="off">
+            <div class="form-field">
+              <label for="ticketTitle" data-i18n="support.ticketTitle">Titulo *</label>
+              <input id="ticketTitle" type="text" placeholder="Resumo do problema" required maxlength="200" data-i18n-placeholder="support.problemSummary" />
+            </div>
+            <div class="form-row">
+              <div class="form-field">
+                <label for="ticketCategory" data-i18n="field.category">Categoria</label>
+                <select id="ticketCategory">
+                  <option value="" data-i18n="support.select">Selecione...</option>
+                  <option value="Hardware" data-i18n="support.category.hardware">Hardware</option>
+                  <option value="Software" data-i18n="support.category.software">Software</option>
+                  <option value="Rede" data-i18n="support.category.network">Rede</option>
+                  <option value="Acesso" data-i18n="support.category.access">Acesso / Permissoes</option>
+                  <option value="Email" data-i18n="support.category.email">E-mail</option>
+                  <option value="Impressora" data-i18n="support.category.printer">Impressora</option>
+                  <option value="VPN" data-i18n="support.category.vpn">VPN</option>
+                  <option value="Outro" data-i18n="support.category.other">Outro</option>
+                </select>
+              </div>
+              <div class="form-field">
+                <label for="ticketPriority" data-i18n="field.priority">Prioridade</label>
+                <select id="ticketPriority">
+                  <option value="1" data-i18n="support.priority.low">Baixa</option>
+                  <option value="2" selected data-i18n="support.priority.medium">Media</option>
+                  <option value="3" data-i18n="support.priority.high">Alta</option>
+                  <option value="4" data-i18n="support.priority.critical">Critica</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-field">
+              <label for="ticketDescription" data-i18n="support.descriptionRequired">Descricao *</label>
+              <textarea id="ticketDescription" rows="6" placeholder="Descreva o problema com detalhes..." required data-i18n-placeholder="support.describeProblemDetails" data-app-lang="true"></textarea>
+            </div>
+            <div id="ticketFormStatus" class="form-status hidden"></div>
+            <button type="submit" id="submitTicketBtn" class="btn primary full" data-i18n="action.sendTicket">Enviar Chamado</button>
+          </form>
         </div>
-        <form id="supportForm" class="support-form" autocomplete="off">
-          <div class="form-field">
-            <label for="ticketTitle" data-i18n="support.ticketTitle">Titulo *</label>
-            <input id="ticketTitle" type="text" placeholder="Resumo do problema" required maxlength="200" data-i18n-placeholder="support.problemSummary" />
-          </div>
-          <div class="form-row">
-            <div class="form-field">
-              <label for="ticketCategory" data-i18n="field.category">Categoria</label>
-              <select id="ticketCategory">
-                <option value="" data-i18n="support.select">Selecione...</option>
-                <option value="Hardware" data-i18n="support.category.hardware">Hardware</option>
-                <option value="Software" data-i18n="support.category.software">Software</option>
-                <option value="Rede" data-i18n="support.category.network">Rede</option>
-                <option value="Acesso" data-i18n="support.category.access">Acesso / Permissoes</option>
-                <option value="Email" data-i18n="support.category.email">E-mail</option>
-                <option value="Impressora" data-i18n="support.category.printer">Impressora</option>
-                <option value="VPN" data-i18n="support.category.vpn">VPN</option>
-                <option value="Outro" data-i18n="support.category.other">Outro</option>
-              </select>
-            </div>
-            <div class="form-field">
-              <label for="ticketPriority" data-i18n="field.priority">Prioridade</label>
-              <select id="ticketPriority">
-                <option value="1" data-i18n="support.priority.low">Baixa</option>
-                <option value="2" selected data-i18n="support.priority.medium">Media</option>
-                <option value="3" data-i18n="support.priority.high">Alta</option>
-                <option value="4" data-i18n="support.priority.critical">Critica</option>
-              </select>
-            </div>
-          </div>
-          <div class="form-field">
-            <label for="ticketDescription" data-i18n="support.descriptionRequired">Descricao *</label>
-            <textarea id="ticketDescription" rows="6" placeholder="Descreva o problema com detalhes..." required data-i18n-placeholder="support.describeProblemDetails" data-app-lang="true"></textarea>
-          </div>
-          <div id="ticketFormStatus" class="form-status hidden"></div>
-          <button type="submit" id="submitTicketBtn" class="btn primary full" data-i18n="action.sendTicket">Enviar Chamado</button>
+      </div>
+    </section>
+  </main>
         </form>
       </div>
     </section>
