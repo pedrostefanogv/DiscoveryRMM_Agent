@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"syscall"
 	"time"
 
 	psadt "github.com/pedrostefanogv/go-psadt"
@@ -153,24 +152,17 @@ func (a *App) selfUpdateInstallWithPSADT(ctx context.Context, exePath, targetVer
 // hasInteractiveSession verifica se o processo atual está rodando em uma
 // sessão interativa de usuário (com desktop). Retorna false para sessão 0
 // (serviços), sessões não-interativas ou SESSIONNAME vazio/Services.
+//
+// NOTA: NÃO usamos GetConsoleWindow / GetProcessWindowStation para detectar
+// interatividade porque:
+//   - GetConsoleWindow está em kernel32.dll, não user32.dll (confusão comum).
+//   - A Wails UI não tem console window (hwnd=0) mas tem sessão interativa.
+//   - O SESSIONNAME já é suficiente: vazio/"Services" = não-interativo,
+//     qualquer outro valor = sessão de usuário com desktop.
 func hasInteractiveSession() bool {
 	sessionName := strings.TrimSpace(os.Getenv("SESSIONNAME"))
-	// Sessão 0 = serviços, non-interactive
-	// SESSIONNAME vazio = pode ser serviço ou processo sem sessão
 	if sessionName == "" || strings.EqualFold(sessionName, "Services") {
 		return false
-	}
-
-	// Verifica se o console atual está associado a uma window station interativa.
-	// Se GetConsoleWindow retornar NULL + SESSIONNAME definido mas não "Services",
-	// pode ser uma sessão RDP sem desktop — tratamos como interativa (otimista).
-	var kernel32 = syscall.NewLazyDLL("user32.dll")
-	procGetConsoleWindow := kernel32.NewProc("GetConsoleWindow")
-	hwnd, _, _ := procGetConsoleWindow.Call()
-	if hwnd == 0 {
-		// Sem console window — pode ser GUI (Wails) ou serviço puro.
-		// Se SESSIONNAME não é Services e não é vazio, assume interativa.
-		return true
 	}
 	return true
 }

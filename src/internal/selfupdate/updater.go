@@ -26,7 +26,8 @@ const (
 	manifestTimeout       = 30 * time.Second
 	downloadDeadline      = 30 * time.Minute
 	signatureTimeout      = 2 * time.Minute
-	detachedProcessFlag   = 0x00000008
+	breakawayFromJobFlag  = 0x01000000 // CREATE_BREAKAWAY_FROM_JOB
+	newProcessGroupFlag   = 0x00000200 // CREATE_NEW_PROCESS_GROUP
 	pendingInstallFile    = "pending-install.json"
 	maxInstallAttempts    = 3
 )

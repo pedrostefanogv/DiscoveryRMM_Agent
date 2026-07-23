@@ -9,10 +9,8 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"reflect"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"discovery/internal/processutil"
@@ -39,21 +37,6 @@ func backoffForFailures(failures int) time.Duration {
 		return backoffSecondFailure
 	}
 	return backoffThirdOrGreater
-}
-
-func setSysProcCreationFlags(attr *syscall.SysProcAttr, value uint32) {
-	if attr == nil {
-		return
-	}
-	v := reflect.ValueOf(attr).Elem()
-	f := v.FieldByName("CreationFlags")
-	if !f.IsValid() || !f.CanSet() {
-		return
-	}
-	switch f.Kind() {
-	case reflect.Uint32, reflect.Uint, reflect.Uint64:
-		f.SetUint(f.Uint() | uint64(value))
-	}
 }
 
 func normalizeArtifactType(value string) string {

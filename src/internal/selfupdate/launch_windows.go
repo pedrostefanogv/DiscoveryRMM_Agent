@@ -5,11 +5,8 @@ package selfupdate
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 	"unsafe"
-
-	"discovery/internal/processutil"
 
 	"golang.org/x/sys/windows"
 )
@@ -108,17 +105,53 @@ func (u *Updater) launchInstaller(exePath string) error {
 		return fmt.Errorf("instalador requer elevacao administrativa (UAC negado): %w", elevateErr)
 	}
 
-	// Fallback: exec.Command (funciona se o processo já está elevado)
-	u.logf("[selfupdate] ShellExecuteEx runas falhou (%v), tentando exec.Command", elevateErr)
-	cmd := exec.Command(exePath, "/S", "/UPDATE")
-	processutil.HideWindow(cmd)
-	if cmd.SysProcAttr != nil {
-		setSysProcCreationFlags(cmd.SysProcAttr, detachedProcessFlag)
+	// Fallback: CreateProcess direto (funciona se o processo já está elevado).
+	//
+	// CRÍTICO: O instalador NSIS faz taskkill do agente. O processo instalador
+	// precisa ser INDEPENDENTE para sobreviver a isso. Flags:
+	//   DETACHED_PROCESS         — sem console pai
+	//   CREATE_BREAKAWAY_FROM_JOB — escapa do job object do agente
+	//   CREATE_NEW_PROCESS_GROUP — Ctrl+C/term não propaga para o grupo
+	//   CloseHandle(Process)    — libera o handle, sem vínculo de wait
+	u.logf("[selfupdate] ShellExecuteEx runas falhou (%v), tentando CreateProcess independente", elevateErr)
+
+	argv0, argvErr := windows.UTF16PtrFromString(exePath)
+	if argvErr != nil {
+		return fmt.Errorf("UTF16PtrFromString: %w (ShellExecuteEx: %v)", argvErr, elevateErr)
 	}
-	startErr := cmd.Start()
-	if startErr != nil {
-		return fmt.Errorf("exec.Command falhou: %w (ShellExecuteEx: %v)", startErr, elevateErr)
+
+	cmdLine := windows.StringToUTF16Ptr(fmt.Sprintf(`"%s" /S /UPDATE`, exePath))
+
+	var si windows.StartupInfo
+	si.Flags = windows.STARTF_USESHOWWINDOW
+	si.ShowWindow = 0 // SW_HIDE
+
+	var pi windows.ProcessInformation
+	createFlags := uint32(windows.CREATE_NO_WINDOW | windows.DETACHED_PROCESS)
+	createFlags |= breakawayFromJobFlag
+	createFlags |= newProcessGroupFlag
+
+	err = windows.CreateProcess(
+		argv0,
+		cmdLine,
+		nil, // lpProcessAttributes
+		nil, // lpThreadAttributes
+		false,
+		createFlags,
+		nil, // lpEnvironment
+		nil, // lpCurrentDirectory
+		&si,
+		&pi,
+	)
+	if err != nil {
+		return fmt.Errorf("CreateProcess falhou: %w (ShellExecuteEx: %v)", err, elevateErr)
 	}
+
+	// Libera handles — o instalador é independente, não precisamos esperar.
+	windows.CloseHandle(pi.Thread)
+	windows.CloseHandle(pi.Process)
+
+	u.logf("[selfupdate] instalador iniciado como processo independente (PID=%d)", pi.ProcessId)
 	return nil
 }
 
