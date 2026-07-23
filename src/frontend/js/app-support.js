@@ -11,6 +11,7 @@ var priorityClasses = { 1: 'p-baixa', 2: 'p-media', 3: 'p-alta', 4: 'p-critica' 
 
 function showCloseTicketModal() {
   if (closeTicketModalEl) closeTicketModalEl.classList.remove('hidden');
+  resetRating();
 }
 
 function hideCloseTicketModal() {
@@ -127,18 +128,12 @@ function populateWorkflowStateOptions(states, currentWorkflowStateId) {
     options.push('<option value="' + escapeHtmlAttr(s.id) + '">' + escapeHtml(label) + '</option>');
   });
 
-  options.push('<option value="__manual__">Informar GUID manualmente</option>');
   closeTicketWorkflowStateSelectEl.innerHTML = options.join('');
 
   if (currentWorkflowStateId && available.some(function (s) { return s.id === currentWorkflowStateId; })) {
     closeTicketWorkflowStateSelectEl.value = currentWorkflowStateId;
   } else {
     closeTicketWorkflowStateSelectEl.value = '';
-  }
-
-  if (closeTicketWorkflowStateIdEl) {
-    closeTicketWorkflowStateIdEl.classList.add('hidden');
-    closeTicketWorkflowStateIdEl.value = '';
   }
 }
 
@@ -174,8 +169,7 @@ async function loadWorkflowStatesForClose(ticket) {
     populateWorkflowStateOptions(workflowStatesCache, ticket && ticket.workflowState ? ticket.workflowState.id : '');
   } catch (err) {
     closeTicketWorkflowStateSelectEl.innerHTML =
-      '<option value="">Fechar com estado padrao</option>' +
-      '<option value="__manual__">Informar GUID manualmente</option>';
+      '<option value="">Fechar com estado padrao</option>';
     closeTicketWorkflowStateSelectEl.value = '';
   }
 }
@@ -188,6 +182,25 @@ function showTicketFormStatus(msg, isError) {
 }
 function hideTicketFormStatus() {
   if (ticketFormStatusEl) ticketFormStatusEl.classList.add('hidden');
+}
+
+var currentRating = 0;
+
+function setStars(value) {
+  currentRating = value;
+  if (!closeTicketStarsEl) return;
+  var stars = closeTicketStarsEl.querySelectorAll('.star-btn');
+  stars.forEach(function (s) {
+    var v = parseInt(s.getAttribute('data-value'), 10);
+    s.classList.toggle('active', v <= value);
+  });
+  if (clearRatingBtnEl) {
+    clearRatingBtnEl.classList.toggle('hidden', value === 0);
+  }
+}
+
+function resetRating() {
+  setStars(0);
 }
 
 function initSupport() {
@@ -259,24 +272,9 @@ function initSupport() {
     closeTicketBtnEl.addEventListener('click', async function () {
       if (!currentTicketId) return;
 
-      var rating = null;
-      if (closeTicketRatingEl && closeTicketRatingEl.value !== '') {
-        rating = parseInt(closeTicketRatingEl.value, 10);
-        if (Number.isNaN(rating) || rating < 0 || rating > 5) {
-          showToast(translate('support.invalidRating'), 'error');
-          return;
-        }
-      }
-
+      var rating = currentRating > 0 ? currentRating : null;
       var comment = closeTicketCommentEl ? closeTicketCommentEl.value.trim() : '';
-      var workflowStateId = '';
-      if (closeTicketWorkflowStateSelectEl && closeTicketWorkflowStateSelectEl.value === '__manual__') {
-        workflowStateId = closeTicketWorkflowStateIdEl ? closeTicketWorkflowStateIdEl.value.trim() : '';
-      } else if (closeTicketWorkflowStateSelectEl) {
-        workflowStateId = closeTicketWorkflowStateSelectEl.value.trim();
-      } else if (closeTicketWorkflowStateIdEl) {
-        workflowStateId = closeTicketWorkflowStateIdEl.value.trim();
-      }
+      var workflowStateId = closeTicketWorkflowStateSelectEl ? closeTicketWorkflowStateSelectEl.value.trim() : '';
 
       closeTicketBtnEl.disabled = true;
       closeTicketBtnEl.textContent = translate('support.closing');
@@ -289,9 +287,8 @@ function initSupport() {
         currentTicket = ticket;
         renderTicketDetail(ticket);
         hideCloseTicketModal();
+        resetRating();
         if (closeTicketCommentEl) closeTicketCommentEl.value = '';
-        if (closeTicketRatingEl) closeTicketRatingEl.value = '';
-        if (closeTicketWorkflowStateIdEl) closeTicketWorkflowStateIdEl.value = '';
         if (closeTicketWorkflowStateSelectEl) closeTicketWorkflowStateSelectEl.value = '';
         await loadSupportTickets();
       } catch (err) {
@@ -303,11 +300,19 @@ function initSupport() {
     });
   }
 
-  if (closeTicketWorkflowStateSelectEl && closeTicketWorkflowStateIdEl) {
-    closeTicketWorkflowStateSelectEl.addEventListener('change', function () {
-      var manual = closeTicketWorkflowStateSelectEl.value === '__manual__';
-      closeTicketWorkflowStateIdEl.classList.toggle('hidden', !manual);
-      if (!manual) closeTicketWorkflowStateIdEl.value = '';
+  // Star rating widget
+  if (closeTicketStarsEl) {
+    closeTicketStarsEl.querySelectorAll('.star-btn').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var v = parseInt(btn.getAttribute('data-value'), 10);
+        setStars(v === currentRating ? 0 : v);
+      });
+    });
+  }
+
+  if (clearRatingBtnEl) {
+    clearRatingBtnEl.addEventListener('click', function () {
+      resetRating();
     });
   }
 
@@ -496,11 +501,9 @@ function closeTicketDetail() {
   currentTicket = null;
   showSupportList();
   hideCloseTicketModal();
+  resetRating();
   if (closeTicketWorkflowStateSelectEl) closeTicketWorkflowStateSelectEl.value = '';
-  if (closeTicketWorkflowStateIdEl) {
-    closeTicketWorkflowStateIdEl.value = '';
-    closeTicketWorkflowStateIdEl.classList.add('hidden');
-  }
+  if (closeTicketCommentEl) closeTicketCommentEl.value = '';
 }
 
 async function loadTicketComments(ticketId) {

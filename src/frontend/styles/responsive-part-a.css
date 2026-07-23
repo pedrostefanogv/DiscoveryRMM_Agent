@@ -831,6 +831,34 @@
   margin-top: 6px;
 }
 
+.stars-row {
+  display: flex;
+  gap: 4px;
+}
+
+.star-btn {
+  background: none;
+  border: none;
+  padding: 2px;
+  cursor: pointer;
+  color: var(--border);
+  transition: color 0.12s, transform 0.12s;
+  line-height: 0;
+}
+
+.star-btn:hover {
+  color: var(--accent-2);
+  transform: scale(1.15);
+}
+
+.star-btn.active {
+  color: #f4a239;
+}
+
+.star-btn.active svg {
+  fill: #f4a239;
+}
+
 .btn-icon {
   width: 32px;
   height: 32px;

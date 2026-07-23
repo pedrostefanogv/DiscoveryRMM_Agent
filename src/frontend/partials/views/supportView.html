@@ -63,26 +63,22 @@
             <button id="closeTicketModalCancelBtn" class="btn subtle btn-icon" type="button" aria-label="Fechar" title="Fechar">&times;</button>
           </div>
           <div id="ticketClosePanel" class="ticket-close-panel">
-            <div class="form-row">
-              <div class="form-field">
-                <label for="closeTicketRating" data-i18n="field.rating">Avaliacao</label>
-                <select id="closeTicketRating">
-                  <option value="" data-i18n="support.noRating">Sem avaliacao</option>
-                  <option value="0">0</option>
-                  <option value="1">1</option>
-                  <option value="2">2</option>
-                  <option value="3">3</option>
-                  <option value="4">4</option>
-                  <option value="5">5</option>
-                </select>
+            <div class="form-field">
+              <label data-i18n="field.rating">Avaliacao</label>
+              <div id="closeTicketStars" class="stars-row">
+                <button type="button" class="star-btn" data-value="1" aria-label="1 estrela" title="Muito ruim"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg></button>
+                <button type="button" class="star-btn" data-value="2" aria-label="2 estrelas" title="Ruim"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg></button>
+                <button type="button" class="star-btn" data-value="3" aria-label="3 estrelas" title="Regular"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg></button>
+                <button type="button" class="star-btn" data-value="4" aria-label="4 estrelas" title="Bom"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg></button>
+                <button type="button" class="star-btn" data-value="5" aria-label="5 estrelas" title="Excelente"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg></button>
               </div>
-              <div class="form-field">
-                <label for="closeTicketWorkflowStateSelect" data-i18n="support.finalStateOptional">Estado final (opcional)</label>
-                <select id="closeTicketWorkflowStateSelect">
-                  <option value="" data-i18n="support.closeWithDefaultState">Fechar com estado padrao</option>
-                </select>
-                <input id="closeTicketWorkflowStateId" class="hidden" type="text" placeholder="GUID do estado final customizado" data-i18n-placeholder="support.customFinalStateGuidPlaceholder" />
-              </div>
+              <button type="button" id="clearRatingBtn" class="btn subtle btn-sm hidden" data-i18n="support.noRating">Sem avaliacao</button>
+            </div>
+            <div class="form-field">
+              <label for="closeTicketWorkflowStateSelect" data-i18n="support.finalStateOptional">Estado final (opcional)</label>
+              <select id="closeTicketWorkflowStateSelect">
+                <option value="" data-i18n="support.closeWithDefaultState">Fechar com estado padrao</option>
+              </select>
             </div>
             <div class="form-field">
               <label for="closeTicketComment" data-i18n="support.closingCommentOptional">Comentario de fechamento (opcional)</label>
