@@ -21,8 +21,6 @@ require (
 	modernc.org/sqlite v1.53.0
 )
 
-replace github.com/pedrostefanogv/go-psadt => ../../Go_PSADT
-
 require (
 	filippo.io/bigmod v0.1.1-0.20260103110540-f8a47775ebe5 // indirect
 	filippo.io/keygen v1.0.0 // indirect
