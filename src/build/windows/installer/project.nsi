@@ -189,6 +189,57 @@ ManifestDPIAware true
 !include "FileFunc.nsh"
 !include "WordFunc.nsh"
 
+# ── Macros de logging do instalador ──
+# Loga mensagens com timestamp em %ProgramData%\Discovery\logs\installer.log
+# Uso: ${InstallerLogInit}, ${InstallerLog} "msg", ${InstallerLogError} "msg"
+Var InstallerLogFile
+
+!macro _InstallerLogInit
+   ReadEnvStr $R0 "ProgramData"
+   ${If} $R0 != ""
+      CreateDirectory "$R0\Discovery\logs"
+      StrCpy $InstallerLogFile "$R0\Discovery\logs\installer.log"
+      ${GetTime} "" "L" $0 $1 $2 $3 $4 $5 $6
+      FileOpen $R9 "$InstallerLogFile" a
+      ${If} $R9 != ""
+         FileWrite $R9 "===== Discovery Agent Installer Log =====$\r$\n"
+         FileWrite $R9 "Date: $2/$1/$0 $4:$5:$6$\r$\n"
+         FileWrite $R9 "Version: ${INFO_PRODUCTVERSION}$\r$\n"
+         FileWrite $R9 "InstallDir: $INSTDIR$\r$\n"
+         FileWrite $R9 "CommandLine: $CMDLINE$\r$\n"
+         FileWrite $R9 "=========================================$\r$\n"
+         FileClose $R9
+      ${EndIf}
+   ${EndIf}
+!macroend
+!define InstallerLogInit "!insertmacro _InstallerLogInit"
+
+!macro _InstallerLog _MSG
+   ${If} $InstallerLogFile != ""
+      ${GetTime} "" "L" $0 $1 $2 $3 $4 $5 $6
+      FileOpen $R9 "$InstallerLogFile" a
+      ${If} $R9 != ""
+         FileWrite $R9 "$2-$1-$0 $4:$5:$6 ${_MSG}$\r$\n"
+         FileClose $R9
+      ${EndIf}
+   ${EndIf}
+   DetailPrint "${_MSG}"
+!macroend
+!define InstallerLog "!insertmacro _InstallerLog"
+
+!macro _InstallerLogError _MSG
+   ${If} $InstallerLogFile != ""
+      ${GetTime} "" "L" $0 $1 $2 $3 $4 $5 $6
+      FileOpen $R9 "$InstallerLogFile" a
+      ${If} $R9 != ""
+         FileWrite $R9 "$2-$1-$0 $4:$5:$6 [ERROR] ${_MSG}$\r$\n"
+         FileClose $R9
+      ${EndIf}
+   ${EndIf}
+   DetailPrint "[ERROR] ${_MSG}"
+!macroend
+!define InstallerLogError "!insertmacro _InstallerLogError"
+
 !define MUI_ICON "..\icon.ico"
 !define MUI_UNICON "..\icon.ico"
 # !define MUI_WELCOMEFINISHPAGE_BITMAP "resources\leftimage.bmp" #Include this to add a bitmap on the left side of the Welcome Page. Must be a size of 164x314
@@ -526,12 +577,19 @@ Section
 
       SetOutPath $INSTDIR
 
+      # ── Logging do instalador ──
+      ${InstallerLogInit}
+
       !if "${BUILD_BOOTSTRAP_INSTALL}" == "1"
+         ${InstallerLog} "Modo bootstrapper detectado"
          # Bootstrapper: grava config local e dispara instalador completo de segunda etapa.
          Call EnsureSharedDataDir
          Call SaveAgentConfig
          Call DownloadAndRunStage2
       !else
+         ${InstallerLog} "Modo install/update detectado (updateMode=$UpdateMode minimal=$MinimalMode)"
+         ${InstallerLog} "InstallDir: $INSTDIR"
+
          # Atualizacao in-place: parar instancias anteriores para evitar lock no executavel.
          Call PrepareForInPlaceUpdate
 
@@ -540,8 +598,24 @@ Section
          SetOverwrite on
          AllowSkipFiles off
 
+         ${InstallerLog} "Iniciando copia de arquivos (SetOverwrite=on AllowSkipFiles=off)..."
+
          !insertmacro wails.webview2runtime
          !insertmacro wails.files
+
+         ${IfNot} ${Errors}
+            ${InstallerLog} "wails.files concluido com sucesso"
+         ${Else}
+            ${InstallerLogError} "wails.files falhou — binario pode nao ter sido copiado"
+         ${EndIf}
+
+         ; Verificar se o binario foi realmente copiado
+         IfFileExists "$INSTDIR\${PRODUCT_EXECUTABLE}" 0 install_binary_missing
+         ${InstallerLog} "Binario verificado: $INSTDIR\${PRODUCT_EXECUTABLE} existe"
+         Goto install_binary_ok
+         install_binary_missing:
+         ${InstallerLogError} "Binario NAO encontrado apos copia: $INSTDIR\${PRODUCT_EXECUTABLE}"
+         install_binary_ok:
 
          ${If} "${LEGACY_PRODUCT_EXECUTABLE}" != "${PRODUCT_EXECUTABLE}"
             Delete "$INSTDIR\${LEGACY_PRODUCT_EXECUTABLE}"
@@ -575,9 +649,16 @@ Section
          ; O Task Scheduler so dispara no login; restart imediato garante que o
          ; agente volte ao ar assim que o instalador terminar.
          ${If} $UpdateMode == "1"
-            DetailPrint "Update mode: reiniciando o agente em modo UI..."
+            ${InstallerLog} "Update mode: verificando binario antes de reiniciar..."
+            IfFileExists "$INSTDIR\${PRODUCT_EXECUTABLE}" 0 update_binary_missing
+            ${InstallerLog} "Update mode: binario encontrado — reiniciando agente..."
             Exec '"$INSTDIR\${PRODUCT_EXECUTABLE}"'
+            Goto update_restart_done
+            update_binary_missing:
+            ${InstallerLogError} "Update mode: binario NAO encontrado em $INSTDIR\${PRODUCT_EXECUTABLE} — agente nao reiniciado"
+            update_restart_done:
          ${EndIf}
+         ${InstallerLog} "Instalacao concluida com sucesso"
       !endif
 SectionEnd
 
@@ -968,29 +1049,34 @@ Function EnsureSharedDataDir
 FunctionEnd
 
 Function PrepareForInPlaceUpdate
+   ${InstallerLog} "PrepareForInPlaceUpdate: iniciando"
    DetailPrint "Preparando atualizacao in-place (encerrando instancias em execucao)..."
 
    ; Tentar remover startup task antiga antes de atualizar binarios.
+   ${InstallerLog} "Removendo startup task antiga..."
    Call UnregisterUIStartupTask
 
    # Garantir que nenhuma instancia do app permaneceu em execucao.
    nsExec::ExecToLog /OEM '"$SYSDIR\taskkill.exe" /IM "${PRODUCT_EXECUTABLE}" /F /T'
    Pop $R0
    ${If} $R0 != 0
-      DetailPrint "Aviso: taskkill retornou codigo $R0 (pode nao haver processo em execucao)."
+      ${InstallerLog} "taskkill ${PRODUCT_EXECUTABLE}: codigo $R0 (pode nao haver processo)"
+   ${Else}
+      ${InstallerLog} "taskkill ${PRODUCT_EXECUTABLE}: processo encerrado"
    ${EndIf}
 
    ${If} "${LEGACY_PRODUCT_EXECUTABLE}" != "${PRODUCT_EXECUTABLE}"
       nsExec::ExecToLog /OEM '"$SYSDIR\taskkill.exe" /IM "${LEGACY_PRODUCT_EXECUTABLE}" /F /T'
       Pop $R1
       ${If} $R1 != 0
-         DetailPrint "Aviso: taskkill legado retornou codigo $R1 (pode nao haver processo legado em execucao)."
+         ${InstallerLog} "taskkill legado ${LEGACY_PRODUCT_EXECUTABLE}: codigo $R1"
       ${EndIf}
    ${EndIf}
 
    # Esperar o processo ser totalmente encerrado e o handle do arquivo liberado.
    # O Windows pode levar 1-3 segundos para liberar o lock do .exe apos taskkill.
    # Sem esse delay, o File do NSIS falha ao sobrescrever o binario (Access Denied).
+   ${InstallerLog} "Aguardando 2s para liberacao de handles..."
    Sleep 2000
 
    # Retry: tentar renomear o executavel atual para verificar se o lock foi liberado.
@@ -998,20 +1084,20 @@ Function PrepareForInPlaceUpdate
    StrCpy $R3 0
    retry_lock_check:
       ${If} $R3 >= 3
-         DetailPrint "Aviso: nao foi possivel obter lock exclusivo apos 3 tentativas. Prosseguindo..."
+         ${InstallerLogError} "lock check: falhou apos 3 tentativas — prosseguindo mesmo assim"
          Goto lock_check_done
       ${EndIf}
       ClearErrors
       Rename "$INSTDIR\${PRODUCT_EXECUTABLE}" "$INSTDIR\${PRODUCT_EXECUTABLE}.bak_update"
       ${If} ${Errors}
          IntOp $R3 $R3 + 1
-         DetailPrint "Aguardando liberacao do arquivo (tentativa $R3/3)..."
+         ${InstallerLog} "lock check: tentativa $R3/3 falhou (arquivo ainda em uso)"
          Sleep 2000
          Goto retry_lock_check
       ${Else}
          # Lock liberado: remover o .bak e prosseguir.
          Delete "$INSTDIR\${PRODUCT_EXECUTABLE}.bak_update"
-         DetailPrint "Arquivo liberado, prosseguindo com a atualizacao."
+         ${InstallerLog} "lock check: arquivo liberado na tentativa $R3 — prosseguindo"
       ${EndIf}
    lock_check_done:
 FunctionEnd

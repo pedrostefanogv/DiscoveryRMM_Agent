@@ -95,7 +95,7 @@ func (u *Updater) finishInstall(ctx context.Context, tempPath, targetVersion, cu
 }
 
 // launchInstallerWithUI resolve o callback OnSelfUpdateInstall ou, como fallback,
-// chama launchInstaller diretamente (comportamento legado sem UI PSADT).
+// chama RenameAgentSelfAndLaunch (rename .old + launch) diretamente.
 //
 // IMPORTANTE: Quando OnSelfUpdateInstall é chamado com sucesso, o callback JÁ
 // lançou o instalador via LaunchInstallerElevated. NÃO chamamos launchInstaller
@@ -105,13 +105,14 @@ func (u *Updater) launchInstallerWithUI(ctx context.Context, exePath, targetVers
 		u.logf("[selfupdate] usando callback OnSelfUpdateInstall com PSADT UI para %s", targetVersion)
 		if err := u.OnSelfUpdateInstall(ctx, exePath, targetVersion); err != nil {
 			u.logf("[selfupdate] callback PSADT falhou: %v — tentando launchInstaller direto sem UI", err)
-			// Fallback: callback falhou, tenta launchInstaller direto
-			return u.launchInstaller(exePath)
+			// Fallback: callback falhou, tenta RenameAgentSelfAndLaunch
+			return u.RenameAgentSelfAndLaunch(exePath)
 		}
 		// Callback PSADT já lançou o instalador — não faz nada adicional.
 		return nil
 	}
-	// Sem callback PSADT: usa launchInstaller direto (comportamento legado).
-	u.logf("[selfupdate] executando instalador via ShellExecuteEx runas: %s", exePath)
-	return u.launchInstaller(exePath)
+	// Sem callback PSADT: renomeia o executável atual (.old) e lança o instalador.
+	// O rename previne "Access Denied" no NSIS ao copiar o novo .exe.
+	u.logf("[selfupdate] renomeando self .old e executando instalador via ShellExecuteEx runas: %s", exePath)
+	return u.RenameAgentSelfAndLaunch(exePath)
 }

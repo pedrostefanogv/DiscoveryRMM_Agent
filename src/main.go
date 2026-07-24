@@ -26,6 +26,22 @@ var assets embed.FS
 func main() {
 	logger.RedirectStdLog(logger.LevelInfo)
 
+	// ── Cleanup de binário .old de self-update ──
+	// O selfupdate renomeia discovery-agent.exe -> discovery-agent.exe.old
+	// antes de lançar o instalador (truque do Windows: arquivo em execução
+	// pode ser renomeado, liberando o path original para o NSIS).
+	// Após update bem-sucedido, o .old é o binário antigo — removemos aqui.
+	if exePath, exeErr := os.Executable(); exeErr == nil {
+		oldPath := exePath + ".old"
+		if _, statErr := os.Stat(oldPath); statErr == nil {
+			if rmErr := os.Remove(oldPath); rmErr != nil {
+				log.Printf("[startup] aviso: nao foi possivel remover binario .old: %v", rmErr)
+			} else {
+				log.Printf("[startup] binario .old de self-update removido: %s", oldPath)
+			}
+		}
+	}
+
 	// Help/version: exibe e sai sem iniciar a GUI.
 	// showCLIHelp respeita a regra de nao misturar prefixos (-- vs / vs -).
 	if showCLIHelp() {

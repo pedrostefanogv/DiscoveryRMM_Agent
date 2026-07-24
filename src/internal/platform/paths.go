@@ -74,9 +74,21 @@ func SharedConfigPath() string {
 	return filepath.Join(DataDir(), "config.json")
 }
 
-// LogFilePath retorna o caminho para o arquivo de log, se configurado.
+// LogFilePath retorna o caminho para o arquivo de log do agente.
+// Prioridade:
+//  1. DISCOVERY_LOG_FILE (env var)
+//  2. %ProgramData%\Discovery\logs\agent.log (default Windows)
+//  3. Vazio (não Windows)
 func LogFilePath() string {
-	return envutil.LogFile()
+	if logFile := envutil.LogFile(); logFile != "" {
+		return logFile
+	}
+	if runtime.GOOS == "windows" {
+		if pd := envutil.ProgramData(); pd != "" {
+			return filepath.Join(pd, "Discovery", "logs", "agent.log")
+		}
+	}
+	return ""
 }
 
 // ─── Caminhos do Chat Config ────────────────────────────────────────

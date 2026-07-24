@@ -76,6 +76,29 @@ func LaunchInstallerElevated(exePath string, args string) error {
 	return nil
 }
 
+// RenameAgentSelfAndLaunch renomeia o executável atual do agente para
+// discovery-agent.exe.old e lança o instalador. O truque do rename libera o
+// arquivo original para o NSIS sobrescrever — o Windows permite renomear um
+// .exe em execução, mas não permite sobrescrevê-lo ou deletá-lo.
+//
+// O cleanup do .old é feito no startup (main.go) via CleanupOldAgentBinary.
+func (u *Updater) RenameAgentSelfAndLaunch(installerPath string) error {
+	exePath, err := os.Executable()
+	if err != nil {
+		u.logf("[selfupdate] aviso: nao foi possivel obter caminho do executavel atual: %v", err)
+	} else {
+		oldPath := exePath + ".old"
+		_ = os.Remove(oldPath) // limpa .old anterior se existir
+		if renameErr := os.Rename(exePath, oldPath); renameErr != nil {
+			u.logf("[selfupdate] aviso: rename self .old falhou: %v — prosseguindo sem rename", renameErr)
+		} else {
+			u.logf("[selfupdate] executavel atual renomeado: %s -> %s", exePath, oldPath)
+		}
+	}
+
+	return u.launchInstaller(installerPath)
+}
+
 // launchInstallerViaExec tenta o launch via exec.Command com SysProcAttr para
 // elevação via Token (CreateProcessAsUser) ou DETACHED_PROCESS.
 // Se falhar com "required elevation", faz fallback para ShellExecuteEx("runas").
