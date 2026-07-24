@@ -612,9 +612,17 @@ Section
          ; Verificar se o binario foi realmente copiado
          IfFileExists "$INSTDIR\${PRODUCT_EXECUTABLE}" 0 install_binary_missing
          ${InstallerLog} "Binario verificado: $INSTDIR\${PRODUCT_EXECUTABLE} existe"
+         ; Cleanup do .bak_update — o rename no PrepareForInPlaceUpdate
+         ; liberou o path original, agora o novo binário está no lugar.
+         Delete "$INSTDIR\${PRODUCT_EXECUTABLE}.bak_update"
+         ${InstallerLog} "Cleanup: .bak_update removido"
          Goto install_binary_ok
          install_binary_missing:
          ${InstallerLogError} "Binario NAO encontrado apos copia: $INSTDIR\${PRODUCT_EXECUTABLE}"
+         ; Se a cópia falhou, tentar restaurar o .bak
+         IfFileExists "$INSTDIR\${PRODUCT_EXECUTABLE}.bak_update" 0 install_binary_ok
+         Rename "$INSTDIR\${PRODUCT_EXECUTABLE}.bak_update" "$INSTDIR\${PRODUCT_EXECUTABLE}"
+         ${InstallerLogError} "Restaurado .bak_update -> ${PRODUCT_EXECUTABLE} (rollback)"
          install_binary_ok:
 
          ${If} "${LEGACY_PRODUCT_EXECUTABLE}" != "${PRODUCT_EXECUTABLE}"
@@ -1079,25 +1087,28 @@ Function PrepareForInPlaceUpdate
    ${InstallerLog} "Aguardando 2s para liberacao de handles..."
    Sleep 2000
 
-   # Retry: tentar renomear o executavel atual para verificar se o lock foi liberado.
-   # Se o rename falhar, esperar mais e tentar novamente (max 3 tentativas).
+   # Retry: tentar renomear o executavel atual para liberar o path.
+   # O Windows permite renomear um .exe mesmo que ele esteja em execução
+   # (após taskkill, o processo está morto mas pode ainda não ter liberado
+   # o handle). O rename para .bak_update libera o path original para o
+   # NSIS copiar o novo binário sem "Access Denied".
+   # NOTA: o .bak_update é deletado APÓS a cópia bem-sucedida (na Section).
    StrCpy $R3 0
    retry_lock_check:
-      ${If} $R3 >= 3
-         ${InstallerLogError} "lock check: falhou apos 3 tentativas — prosseguindo mesmo assim"
+      ${If} $R3 >= 5
+         ${InstallerLogError} "lock check: falhou apos 5 tentativas — prosseguindo mesmo assim"
          Goto lock_check_done
       ${EndIf}
+      IfFileExists "$INSTDIR\${PRODUCT_EXECUTABLE}" 0 lock_check_done
       ClearErrors
       Rename "$INSTDIR\${PRODUCT_EXECUTABLE}" "$INSTDIR\${PRODUCT_EXECUTABLE}.bak_update"
       ${If} ${Errors}
          IntOp $R3 $R3 + 1
-         ${InstallerLog} "lock check: tentativa $R3/3 falhou (arquivo ainda em uso)"
-         Sleep 2000
+         ${InstallerLog} "lock check: tentativa $R3/5 falhou — aguardando liberacao do arquivo..."
+         Sleep 1500
          Goto retry_lock_check
       ${Else}
-         # Lock liberado: remover o .bak e prosseguir.
-         Delete "$INSTDIR\${PRODUCT_EXECUTABLE}.bak_update"
-         ${InstallerLog} "lock check: arquivo liberado na tentativa $R3 — prosseguindo"
+         ${InstallerLog} "lock check: executavel renomeado para .bak_update — path liberado para nova copia"
       ${EndIf}
    lock_check_done:
 FunctionEnd
