@@ -21,6 +21,8 @@ jobs:
     runs-on: windows-latest
     permissions:
       contents: read
+    env:
+      GOWORK: off
 
     steps:
       - name: Checkout
@@ -45,6 +47,8 @@ jobs:
     runs-on: windows-latest
     permissions:
       contents: read
+    env:
+      GOWORK: off
 
     steps:
       - name: Checkout
