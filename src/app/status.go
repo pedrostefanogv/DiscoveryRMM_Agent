@@ -41,6 +41,10 @@ type StatusOverview struct {
 	// Outbox offline queue backlog counts
 	PendingCommandResults int `json:"pendingCommandResults"`
 	PendingP2PTelemetry   int `json:"pendingP2pTelemetry"`
+	// Update do agente (self-update)
+	UpdateCheckEnabled    bool   `json:"updateCheckEnabled"`
+	UpdateCheckInProgress bool   `json:"updateCheckInProgress"`
+	LastUpdateCheckAtUTC  string `json:"lastUpdateCheckAtUtc,omitempty"`
 }
 
 // GetStatusOverview returns a user-friendly status summary for the Status tab.
@@ -131,6 +135,16 @@ func (a *App) GetStatusOverview() StatusOverview {
 			if n, err := a.db.CountPendingP2PTelemetryOutbox(agentID); err == nil {
 				out.PendingP2PTelemetry = n
 			}
+		}
+	}
+
+	// Status de self-update do agente.
+	if a.selfUpdater != nil {
+		policy := a.selfUpdater.GetPolicy()
+		out.UpdateCheckEnabled = policy.Enabled
+		out.UpdateCheckInProgress = a.selfUpdater.IsChecking()
+		if t := a.selfUpdater.LastCheckAt(); !t.IsZero() {
+			out.LastUpdateCheckAtUTC = t.UTC().Format(time.RFC3339)
 		}
 	}
 

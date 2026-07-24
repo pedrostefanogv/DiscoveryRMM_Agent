@@ -16,6 +16,9 @@ const statusRealtimeAgentsEl = document.getElementById('statusRealtimeAgents');
 const statusServerPongAtEl = document.getElementById('statusServerPongAt');
 const statusNonCriticalTrafficEl = document.getElementById('statusNonCriticalTraffic');
 const statusMessageEl = document.getElementById('statusMessage');
+const statusLastUpdateCheckEl = document.getElementById('statusLastUpdateCheck');
+const statusUpdateStateEl = document.getElementById('statusUpdateState');
+const agentUpdateCheckBtnEl = document.getElementById('agentUpdateCheckBtn');
 
 function statusSafe(value, fallback) {
   if (value === null || value === undefined || String(value).trim() === '') {
@@ -158,6 +161,24 @@ function renderStatusOverview(data) {
     statusNonCriticalTrafficEl.textContent = formatNonCriticalTrafficStatus(data);
   }
 
+  // Renderiza status de self-update do agente.
+  if (statusLastUpdateCheckEl) {
+    if (data && data.lastUpdateCheckAtUtc) {
+      statusLastUpdateCheckEl.textContent = formatStatusRelativeDate(data.lastUpdateCheckAtUtc);
+    } else {
+      statusLastUpdateCheckEl.textContent = translate('status.notCheckedYet');
+    }
+  }
+  if (statusUpdateStateEl) {
+    if (!(data && data.updateCheckEnabled)) {
+      statusUpdateStateEl.textContent = translate('common.disabled');
+    } else if (data && data.updateCheckInProgress) {
+      statusUpdateStateEl.textContent = translate('status.checkingUpdate');
+    } else {
+      statusUpdateStateEl.textContent = translate('common.idle');
+    }
+  }
+
   if (statusMessageEl) {
     var message = statusSafe(data && data.realtimeMessage, translate('common.noAdditionalInfo'));
     if (data && data.nonCriticalDeferred && data.nonCriticalDeferredReason) {
@@ -215,6 +236,26 @@ function stopStatusPoll() {
 function initStatusPage() {
   if (statusRefreshBtnEl) {
     statusRefreshBtnEl.addEventListener('click', loadStatusOverview);
+  }
+  if (agentUpdateCheckBtnEl) {
+    agentUpdateCheckBtnEl.addEventListener('click', async function () {
+      agentUpdateCheckBtnEl.disabled = true;
+      var originalText = agentUpdateCheckBtnEl.textContent;
+      agentUpdateCheckBtnEl.textContent = translate('status.checkingUpdate');
+      try {
+        var api = appApi();
+        if (api && typeof api.CheckAgentUpdate === 'function') {
+          await api.CheckAgentUpdate();
+        }
+      } catch (e) {
+        console.error('CheckAgentUpdate error:', e);
+      } finally {
+        agentUpdateCheckBtnEl.disabled = false;
+        agentUpdateCheckBtnEl.textContent = originalText;
+        // Força refresh do status para mostrar timestamp atualizado.
+        loadStatusOverview();
+      }
+    });
   }
 }
 

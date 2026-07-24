@@ -127,6 +127,13 @@ func (a *App) GetOsqueryStatusJSON() (json.RawMessage, error) {
 	return json.Marshal(status)
 }
 
+// CheckAgentUpdate dispara uma verificação manual de atualização do agente.
+// Aciona o mesmo fluxo do check automático de startup (respeita a política de
+// update), mas sem esperar pelo timer interno.
+func (a *App) CheckAgentUpdate() error {
+	return a.requestAgentUpdateCheck(a.ctx, "manual-ui")
+}
+
 func (a *App) GetLogsText() string {
 	return strings.Join(a.logs.getAll(), "\n")
 }

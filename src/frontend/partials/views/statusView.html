@@ -1,49 +1,93 @@
 <main id="statusView" class="page-content" role="tabpanel" aria-labelledby="tabStatus">
-    <section class="status-panel">
-      <div class="statusbar page-bar">
-        <span class="meta" data-i18n="status.summary">Resumo rapido de saude do agente</span>
-        <div class="actions">
-          <button id="statusRefreshBtn" class="btn primary" data-i18n="action.refreshStatus">Atualizar Status</button>
+  <section class="status-panel">
+    <div class="statusbar page-bar">
+      <span class="meta" data-i18n="status.summary">Resumo rapido de saude do agente</span>
+      <div class="actions">
+        <button id="agentUpdateCheckBtn" class="btn primary" data-i18n="action.checkAgentUpdate">Verificar
+          Atualizacao</button>
+        <button id="statusRefreshBtn" class="btn primary" data-i18n="action.refreshStatus">Atualizar Status</button>
+      </div>
+    </div>
+
+    <div class="status-grid">
+      <article class="card status-kpi-card">
+        <h3 data-i18n="status.connectionTitle">Status do Agente</h3>
+        <div class="status-kpi-line">
+          <span id="statusConnectionDot" class="agent-status-indicator"></span>
+          <strong id="statusConnectionLabel" data-i18n="common.verifying">Verificando...</strong>
         </div>
-      </div>
+        <div id="statusConnectionDetail" class="meta" data-i18n="status.awaitingRead">Aguardando leitura do status.
+        </div>
+      </article>
 
-      <div class="status-grid">
-        <article class="card status-kpi-card">
-          <h3 data-i18n="status.connectionTitle">Status do Agente</h3>
-          <div class="status-kpi-line">
-            <span id="statusConnectionDot" class="agent-status-indicator"></span>
-            <strong id="statusConnectionLabel" data-i18n="common.verifying">Verificando...</strong>
+      <article class="card status-kpi-card">
+        <h3 data-i18n="status.applicationTitle">Aplicacao</h3>
+        <div class="status-facts">
+          <div class="fact">
+            <div class="k" data-i18n="field.version">Versao</div>
+            <div id="statusAppVersion" class="v">-</div>
           </div>
-          <div id="statusConnectionDetail" class="meta" data-i18n="status.awaitingRead">Aguardando leitura do status.</div>
-        </article>
+          <div class="fact">
+            <div class="k" data-i18n="field.commit">Commit</div>
+            <div id="statusAppCommit" class="v mono">-</div>
+          </div>
+          <div class="fact">
+            <div class="k" data-i18n="field.buildDate">Data do build</div>
+            <div id="statusBuildDate" class="v">-</div>
+          </div>
+        </div>
+      </article>
 
-        <article class="card status-kpi-card">
-          <h3 data-i18n="status.applicationTitle">Aplicacao</h3>
-          <div class="status-facts">
-            <div class="fact"><div class="k" data-i18n="field.version">Versao</div><div id="statusAppVersion" class="v">-</div></div>
-            <div class="fact"><div class="k" data-i18n="field.commit">Commit</div><div id="statusAppCommit" class="v mono">-</div></div>
-            <div class="fact"><div class="k" data-i18n="field.buildDate">Data do build</div><div id="statusBuildDate" class="v">-</div></div>
+      <article class="card status-kpi-card">
+        <h3 data-i18n="status.agentUpdateTitle">Atualizacao do Agente</h3>
+        <div class="status-facts">
+          <div class="fact">
+            <div class="k" data-i18n="field.lastCheck">Ultima verificacao</div>
+            <div id="statusLastUpdateCheck" class="v">-</div>
           </div>
-        </article>
+          <div class="fact">
+            <div class="k" data-i18n="field.status">Status</div>
+            <div id="statusUpdateState" class="v">-</div>
+          </div>
+        </div>
+      </article>
 
-        <article class="card status-kpi-card">
-          <h3 data-i18n="status.systemTitle">Sistema</h3>
-          <div class="status-facts">
-            <div class="fact"><div class="k" data-i18n="field.os">SO</div><div id="statusOSName" class="v">-</div></div>
-            <div class="fact"><div class="k" data-i18n="field.osVersion">Versao do SO</div><div id="statusOSVersion" class="v">-</div></div>
+      <article class="card status-kpi-card">
+        <h3 data-i18n="status.systemTitle">Sistema</h3>
+        <div class="status-facts">
+          <div class="fact">
+            <div class="k" data-i18n="field.os">SO</div>
+            <div id="statusOSName" class="v">-</div>
           </div>
-        </article>
+          <div class="fact">
+            <div class="k" data-i18n="field.osVersion">Versao do SO</div>
+            <div id="statusOSVersion" class="v">-</div>
+          </div>
+        </div>
+      </article>
 
-        <article class="card status-kpi-card wide">
-          <h3 data-i18n="status.realtimeTitle">Realtime e Integracao</h3>
-          <div class="status-facts">
-            <div class="fact"><div class="k" data-i18n="field.realtime">Realtime</div><div id="statusRealtime" class="v">-</div></div>
-            <div class="fact"><div class="k" data-i18n="field.connectedAgents">Agentes P2P conectados</div><div id="statusRealtimeAgents" class="v">-</div></div>
-            <div class="fact"><div class="k" data-i18n="field.serverPong">Ultimo ping do servidor</div><div id="statusServerPongAt" class="v">-</div></div>
-            <div class="fact"><div class="k" data-i18n="field.nonCriticalTraffic">Trafego nao critico</div><div id="statusNonCriticalTraffic" class="v">-</div></div>
+      <article class="card status-kpi-card wide">
+        <h3 data-i18n="status.realtimeTitle">Realtime e Integracao</h3>
+        <div class="status-facts">
+          <div class="fact">
+            <div class="k" data-i18n="field.realtime">Realtime</div>
+            <div id="statusRealtime" class="v">-</div>
           </div>
-          <div id="statusMessage" class="meta" data-i18n="common.noAdditionalInfo">Sem informacoes adicionais.</div>
-        </article>
-      </div>
-    </section>
-  </main>
+          <div class="fact">
+            <div class="k" data-i18n="field.connectedAgents">Agentes P2P conectados</div>
+            <div id="statusRealtimeAgents" class="v">-</div>
+          </div>
+          <div class="fact">
+            <div class="k" data-i18n="field.serverPong">Ultimo ping do servidor</div>
+            <div id="statusServerPongAt" class="v">-</div>
+          </div>
+          <div class="fact">
+            <div class="k" data-i18n="field.nonCriticalTraffic">Trafego nao critico</div>
+            <div id="statusNonCriticalTraffic" class="v">-</div>
+          </div>
+        </div>
+        <div id="statusMessage" class="meta" data-i18n="common.noAdditionalInfo">Sem informacoes adicionais.</div>
+      </article>
+    </div>
+  </section>
+</main>

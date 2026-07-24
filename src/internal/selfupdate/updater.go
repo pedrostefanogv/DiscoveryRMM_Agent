@@ -17,7 +17,7 @@ import (
 
 const (
 	defaultCheckInterval  = 12 * time.Hour
-	initialStartupDelay   = 30 * time.Second
+	initialStartupDelay   = 90 * time.Second
 	inactivePolicyRefresh = 30 * time.Minute
 	backoffFirstFailure   = 5 * time.Minute
 	backoffSecondFailure  = 30 * time.Minute
@@ -106,6 +106,24 @@ type Updater struct {
 	// está aguardando o NSIS fazer taskkill. Chamadas concorrentes (ex.:
 	// InvalidateCh durante o download/launch) são ignoradas.
 	installing atomic.Bool
+
+	// lastCheckAtUTC armazena o timestamp da última verificação de update
+	// concluída (UTC). Usado pelo frontend para exibir ao usuário.
+	lastCheckAtUTC atomic.Value // time.Time
+}
+
+// IsChecking retorna true se há uma verificação de update em andamento.
+func (u *Updater) IsChecking() bool {
+	return u.installing.Load()
+}
+
+// LastCheckAt retorna o timestamp da última verificação concluída.
+// Retorna zero time se nunca houve verificação.
+func (u *Updater) LastCheckAt() time.Time {
+	if v := u.lastCheckAtUTC.Load(); v != nil {
+		return v.(time.Time)
+	}
+	return time.Time{}
 }
 
 type UpdateManifest struct {
@@ -272,6 +290,10 @@ func (u *Updater) CheckAndUpdate(ctx context.Context, force bool) error {
 		u.logf("[selfupdate] check ignorado: instalador ja em andamento")
 		return nil
 	}
+
+	// Registra timestamp de verificação concluída (exceto quando ignorado por
+	// instalação em andamento — o timestamp é atualizado quando o ciclo termina).
+	u.lastCheckAtUTC.Store(time.Now().UTC())
 
 	policy := u.policy()
 	if !force && !policy.Enabled {
