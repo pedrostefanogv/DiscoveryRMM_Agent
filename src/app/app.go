@@ -407,10 +407,16 @@ func NewApp(opts AppStartupOptions) *App {
 		// Downloads unificados no P2P_Temp: tanto P2P quanto HTTP escrevem no mesmo
 		// diretório, e o gossip scanner registra automaticamente artifacts com nome
 		// canônico (selfupdate-<sha256>.exe) no índice P2P — sem cópia extra.
-		TempDir:             a.p2pTempDir(),
-		Logf:                func(format string, args ...any) { a.logs.append("[selfupdate] " + fmt.Sprintf(format, args...)) },
-		InvalidateCh:        a.selfUpdaterCh,
-		OnSelfUpdateInstall: a.selfUpdateInstallWithPSADT,
+		TempDir:      a.p2pTempDir(),
+		Logf:         func(format string, args ...any) { a.logs.append("[selfupdate] " + fmt.Sprintf(format, args...)) },
+		InvalidateCh: a.selfUpdaterCh,
+		// OnSelfUpdateInstall: PSADT desabilitado para selfupdate.
+		// O ShellExecuteEx("runas") em LaunchInstallerElevated já lança
+		// o instalador como processo independente (não filho), garantindo
+		// que o NSIS sobreviva ao taskkill do agente.
+		// PSADT é inadequado aqui: Import-Module demora ~3min e sempre
+		// falha com timeout, atrasando o update.
+		OnSelfUpdateInstall: nil,
 		FindPeersByReleaseID: func(ctx context.Context, artifactID string) ([]string, error) {
 			if a.p2pCoord == nil {
 				return nil, nil

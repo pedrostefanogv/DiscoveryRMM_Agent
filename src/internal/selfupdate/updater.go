@@ -2,8 +2,11 @@ package selfupdate
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -97,6 +100,12 @@ type Updater struct {
 	// DownloadFromPeer baixa o artifact pelo artifactID de um peer específico.
 	// Retorna o path do arquivo baixado.
 	DownloadFromPeer func(ctx context.Context, artifactID, peerID string) (string, error)
+
+	// installing é um flag atômico que previne execuções concorrentes de
+	// CheckAndUpdate. Quando true, um instalador já foi lançado e o processo
+	// está aguardando o NSIS fazer taskkill. Chamadas concorrentes (ex.:
+	// InvalidateCh durante o download/launch) são ignoradas.
+	installing atomic.Bool
 }
 
 type UpdateManifest struct {
@@ -254,6 +263,16 @@ func (u *Updater) nextDelay(fallback time.Duration, startupPending bool) time.Du
 }
 
 func (u *Updater) CheckAndUpdate(ctx context.Context, force bool) error {
+	// ── Previne execuções concorrentes ──
+	// Quando o InvalidateCh dispara durante um download/launch em andamento,
+	// o segundo CheckAndUpdate faria download duplicado e incrementaria o
+	// contador de tentativas incorretamente. A trava é liberada pelo
+	// ResumePendingInstallReport no próximo startup (após NSIS taskkill).
+	if !force && u.installing.Load() {
+		u.logf("[selfupdate] check ignorado: instalador ja em andamento")
+		return nil
+	}
+
 	policy := u.policy()
 	if !force && !policy.Enabled {
 		u.logf("[selfupdate] check ignorado: policy disabled")
@@ -311,11 +330,18 @@ func (u *Updater) CheckAndUpdate(ctx context.Context, force bool) error {
 			return nil
 		}
 
+		// ── Trava instalação ANTES do download ──
+		// Previne que InvalidateCh dispare um segundo CheckAndUpdate.
+		// Só é liberada no próximo startup (ResumePendingInstallReport)
+		// ou em clearPendingInstallState (caminho de erro).
+		u.installing.Store(true)
+
 		// Usa o SHA256 do servidor para P2P artifactID preciso.
 		publicSHA256 := serverSHA256
 		tempPath, fileSha256, fromP2P, err := u.downloadFromCacheOrPublic(ctx, publicSHA256)
 		if err != nil {
 			u.logf("[selfupdate] download falhou: %v", err)
+			u.installing.Store(false)
 			return err
 		}
 		u.logf("[selfupdate] download concluido: tempPath=%s sha256=%s fromP2P=%v", tempPath, fileSha256[:12], fromP2P)
@@ -342,6 +368,7 @@ func (u *Updater) CheckAndUpdate(ctx context.Context, force bool) error {
 			compareVersions(serverVersion, currentVersion) <= 0 {
 			u.logf("[selfupdate] ja esta na versao mais recente (current=%s > target=%s, server=%s) — ignorando",
 				currentVersion, targetVersion, serverVersion)
+			u.installing.Store(false)
 			errutil.LogIfErr(os.Remove(tempPath), "selfupdate: limpar temp mesma versao")
 			return nil
 		}
@@ -354,6 +381,21 @@ func (u *Updater) CheckAndUpdate(ctx context.Context, force bool) error {
 			}
 		}
 
+		// ── Verifica maxInstallAttempts ANTES de persistir ──
+		// Evita que o contador vá de 3 para 4 quando o InvalidateCh dispara
+		// um novo ciclo antes do ResumePendingInstallReport rodar no startup.
+		if existing, loadErr := u.loadPendingInstallState(); loadErr == nil &&
+			existing.TargetVersion == targetVersion &&
+			existing.CurrentVersion == currentVersion &&
+			existing.InstallAttempts >= maxInstallAttempts {
+			u.logf("[selfupdate] maximo de %d tentativas ja atingido para target=%s — abortando",
+				maxInstallAttempts, targetVersion)
+			u.clearPendingInstallState()
+			errutil.LogIfErr(os.Remove(tempPath), "selfupdate: limpar temp max attempts")
+			u.reportInstallFailed(ctx, existing, "max-install-attempts: "+strconv.Itoa(existing.InstallAttempts)+" tentativas")
+			return fmt.Errorf("max install attempts reached for %s", targetVersion)
+		}
+
 		if err := u.persistPendingInstallState(pendingInstallState{
 			CurrentVersion:  currentVersion,
 			TargetVersion:   targetVersion,
@@ -361,6 +403,7 @@ func (u *Updater) CheckAndUpdate(ctx context.Context, force bool) error {
 			RecordedAtUTC:   time.Now().UTC().Format(time.RFC3339),
 			InstalledCommit: currentCommit,
 		}); err != nil {
+			u.installing.Store(false)
 			errutil.LogIfErr(os.Remove(tempPath), "selfupdate: limpar temp apos falha de persistencia")
 			return err
 		}
@@ -384,6 +427,9 @@ func (u *Updater) CheckAndUpdate(ctx context.Context, force bool) error {
 func (u *Updater) checkAndUpdateFallback(ctx context.Context, force bool, currentVersion, correlationID string) error {
 	u.logf("[selfupdate] usando fluxo fallback (mode=forcado=%v current=%s)", force, currentVersion)
 
+	// Trava instalação ANTES do download.
+	u.installing.Store(true)
+
 	publicSHA256, shaErr := u.fetchPublicSHA256(ctx)
 	if shaErr != nil {
 		u.logf("[selfupdate] aviso: nao foi possivel obter SHA256 do servidor: %v", shaErr)
@@ -392,6 +438,7 @@ func (u *Updater) checkAndUpdateFallback(ctx context.Context, force bool, curren
 	tempPath, fileSha256, fromP2P, err := u.downloadFromCacheOrPublic(ctx, publicSHA256)
 	if err != nil {
 		u.logf("[selfupdate] download falhou: %v", err)
+		u.installing.Store(false)
 		return err
 	}
 	u.logf("[selfupdate] download concluido: tempPath=%s sha256=%s fromP2P=%v", tempPath, fileSha256[:12], fromP2P)
@@ -409,6 +456,7 @@ func (u *Updater) checkAndUpdateFallback(ctx context.Context, force bool, curren
 
 	if !force && compareVersions(targetVersion, currentVersion) <= 0 {
 		u.logf("[selfupdate] ja esta na versao mais recente (current=%s >= target=%s)", currentVersion, targetVersion)
+		u.installing.Store(false)
 		errutil.LogIfErr(os.Remove(tempPath), "selfupdate: limpar temp mesma versao")
 		return nil
 	}
@@ -422,6 +470,18 @@ func (u *Updater) checkAndUpdateFallback(ctx context.Context, force bool, curren
 	}
 
 	currentCommit := strings.TrimSpace(buildinfo.Commit)
+	// ── Verifica maxInstallAttempts ANTES de persistir ──
+	if existing, loadErr := u.loadPendingInstallState(); loadErr == nil &&
+		existing.TargetVersion == targetVersion &&
+		existing.CurrentVersion == currentVersion &&
+		existing.InstallAttempts >= maxInstallAttempts {
+		u.logf("[selfupdate] maximo de %d tentativas ja atingido para target=%s — abortando",
+			maxInstallAttempts, targetVersion)
+		u.clearPendingInstallState()
+		errutil.LogIfErr(os.Remove(tempPath), "selfupdate: limpar temp max attempts")
+		u.reportInstallFailed(ctx, existing, "max-install-attempts: "+strconv.Itoa(existing.InstallAttempts)+" tentativas")
+		return fmt.Errorf("max install attempts reached for %s", targetVersion)
+	}
 	if err := u.persistPendingInstallState(pendingInstallState{
 		CurrentVersion:  currentVersion,
 		TargetVersion:   targetVersion,
@@ -429,6 +489,7 @@ func (u *Updater) checkAndUpdateFallback(ctx context.Context, force bool, curren
 		RecordedAtUTC:   time.Now().UTC().Format(time.RFC3339),
 		InstalledCommit: currentCommit,
 	}); err != nil {
+		u.installing.Store(false)
 		errutil.LogIfErr(os.Remove(tempPath), "selfupdate: limpar temp apos falha de persistencia")
 		return err
 	}

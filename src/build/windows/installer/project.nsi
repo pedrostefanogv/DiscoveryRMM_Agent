@@ -535,6 +535,11 @@ Section
          # Atualizacao in-place: parar instancias anteriores para evitar lock no executavel.
          Call PrepareForInPlaceUpdate
 
+         # Garantir sobrescrita forcada dos binarios (default do NSIS e on,
+         # mas explicitamos para clareza e para nao pular em caso de erro).
+         SetOverwrite on
+         AllowSkipFiles off
+
          !insertmacro wails.webview2runtime
          !insertmacro wails.files
 
@@ -982,6 +987,33 @@ Function PrepareForInPlaceUpdate
          DetailPrint "Aviso: taskkill legado retornou codigo $R1 (pode nao haver processo legado em execucao)."
       ${EndIf}
    ${EndIf}
+
+   # Esperar o processo ser totalmente encerrado e o handle do arquivo liberado.
+   # O Windows pode levar 1-3 segundos para liberar o lock do .exe apos taskkill.
+   # Sem esse delay, o File do NSIS falha ao sobrescrever o binario (Access Denied).
+   Sleep 2000
+
+   # Retry: tentar renomear o executavel atual para verificar se o lock foi liberado.
+   # Se o rename falhar, esperar mais e tentar novamente (max 3 tentativas).
+   StrCpy $R3 0
+   retry_lock_check:
+      ${If} $R3 >= 3
+         DetailPrint "Aviso: nao foi possivel obter lock exclusivo apos 3 tentativas. Prosseguindo..."
+         Goto lock_check_done
+      ${EndIf}
+      ClearErrors
+      Rename "$INSTDIR\${PRODUCT_EXECUTABLE}" "$INSTDIR\${PRODUCT_EXECUTABLE}.bak_update"
+      ${If} ${Errors}
+         IntOp $R3 $R3 + 1
+         DetailPrint "Aguardando liberacao do arquivo (tentativa $R3/3)..."
+         Sleep 2000
+         Goto retry_lock_check
+      ${Else}
+         # Lock liberado: remover o .bak e prosseguir.
+         Delete "$INSTDIR\${PRODUCT_EXECUTABLE}.bak_update"
+         DetailPrint "Arquivo liberado, prosseguindo com a atualizacao."
+      ${EndIf}
+   lock_check_done:
 FunctionEnd
 
 Function RegisterWindowsFirewallRule

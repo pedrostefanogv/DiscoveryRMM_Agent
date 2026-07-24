@@ -21,8 +21,15 @@ import (
 )
 
 func (u *Updater) ResumePendingInstallReport(ctx context.Context) {
+	// Reseta o flag de instalação em andamento. Este flag previne execuções
+	// concorrentes de CheckAndUpdate durante o mesmo ciclo de vida do processo.
+	// No startup, o flag sempre começa false (zero value de atomic.Bool),
+	// mas resetamos explicitamente para segurança em edge cases onde o NSIS
+	// não conseguiu matar o processo.
+	u.installing.Store(false)
+
 	// Limpa downloads antigos na pasta de updates no startup.
-	// Arquivos discovery-update-*.exe com mais de 24h são removidos.
+	// Arquivos discovery-update-*.exe com mais de 6h são removidos.
 	u.cleanupOldDownloads()
 
 	state, err := u.loadPendingInstallState()
@@ -305,9 +312,22 @@ func (u *Updater) downloadFromURL(ctx context.Context, downloadURL string) (stri
 	// Isso coloca o arquivo no P2P_Temp com o nome que o gossip scanner
 	// reconhece e registra no índice, sem precisar de cópia extra.
 	canonicalPath := filepath.Join(u.TempDir, fmt.Sprintf("selfupdate-%s.exe", strings.ToLower(sha)))
-	_ = os.Remove(canonicalPath) // remove se já existir (raro)
+	// Se o arquivo canônico já existe com o mesmo conteúdo (ex.: download
+	// concorrente via InvalidateCh), reusa-o e remove o duplicado UUID.
+	if existing, statErr := os.Stat(canonicalPath); statErr == nil && existing.Size() > 0 {
+		if existingSHA, shaErr := fileSHA256(canonicalPath); shaErr == nil && strings.EqualFold(existingSHA, sha) {
+			u.logf("[selfupdate] canonical ja existe com mesmo hash, reusando: %s", canonicalPath)
+			_ = os.Remove(path) // remove o download duplicado UUID
+			return canonicalPath, sha, nil
+		}
+		// Hash diferente — força remoção do antigo (stale).
+		if err := os.Remove(canonicalPath); err != nil {
+			u.logf("[selfupdate] aviso: nao foi possivel remover canonical stale: %v", err)
+		}
+	}
 	if err := os.Rename(path, canonicalPath); err != nil {
-		// Fallback: se rename falhar (ex.: cross-device), mantém path original.
+		// Fallback: se rename falhar (ex.: cross-device ou arquivo em uso),
+		// mantém path original. O conteúdo é válido e já foi verificado.
 		u.logf("[selfupdate] aviso: rename para canonical falhou: %v — mantendo path original", err)
 	} else {
 		path = canonicalPath

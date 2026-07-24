@@ -74,6 +74,7 @@ func (u *Updater) clearPendingInstallState() {
 	if path == "" {
 		return
 	}
+	u.installing.Store(false) // libera trava de concorrência
 	errutil.LogIfErr(os.Remove(path), "selfupdate: limpar estado de instalacao pendente")
 }
 

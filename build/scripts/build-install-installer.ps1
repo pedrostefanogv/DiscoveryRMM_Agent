@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path,
     [string]$OutputName = "discovery-agent-install.exe",
@@ -96,7 +96,7 @@ Write-Output "  Sincronizando icones a partir de build\\*.png..."
 & $syncIconsScript -ProjectRoot $ProjectRoot
 
 if (-not (Test-Path $nsiFile)) {
-    throw "Arquivo NSIS nÃ£o encontrado: $nsiFile"
+    throw "Arquivo NSIS nÃÂ£o encontrado: $nsiFile"
 }
 
 if (-not (Test-Path $iconPath)) {
@@ -125,7 +125,7 @@ try {
         $ldflags += "-X discovery/app.Version=$Version"
         $ldflags += "-X discovery/internal/buildinfo.Version=$Version"
     } else {
-        Write-Warning "BUILD SEM VERSAO: -ldflags sem -X discovery/internal/buildinfo.Version — o binario ficara com '0.0.0' (self-update pode entrar em loop)"
+        Write-Warning "BUILD SEM VERSAO: -ldflags sem -X discovery/internal/buildinfo.Version â o binario ficara com '0.0.0' (self-update pode entrar em loop)"
     }
     # Injeta commit hash do git para decisao de self-update (version+commit)
     $gitCommit = (git -C $srcRoot rev-parse --short=8 HEAD 2>$null)
@@ -161,7 +161,7 @@ finally {
 }
 
 if (-not (Test-Path $agentExe)) {
-    throw "BinÃ¡rio do agente nÃ£o foi gerado: $agentExe"
+    throw "BinÃÂ¡rio do agente nÃÂ£o foi gerado: $agentExe"
 }
 # Generate agent-version.json for API post-build commit resolution
 $agentVersionJson = Join-Path $binDir "agent-version.json"
@@ -223,7 +223,7 @@ if ($LASTEXITCODE -ne 0) {
 
 $installerPath = Join-Path $binDir $OutputName
 if (-not (Test-Path $installerPath)) {
-    throw "Instalador nÃ£o encontrado apÃ³s build: $installerPath"
+    throw "Instalador nÃÂ£o encontrado apÃÂ³s build: $installerPath"
 }
 
 Write-Output "[3/3] Concluido."
