@@ -38,6 +38,7 @@ func loadInstallerConfigFromCandidates(paths []string) (InstallerConfig, string,
 		}
 
 		cfg.ServerURL = strings.TrimSpace(cfg.ServerURL)
+		cfg.ServerAPI = strings.TrimSpace(cfg.ServerAPI)
 		cfg.APIKey = strings.TrimSpace(cfg.APIKey)
 		cfg.ApiScheme = strings.TrimSpace(strings.ToLower(cfg.ApiScheme))
 		cfg.ApiServer = strings.TrimSpace(cfg.ApiServer)
@@ -56,6 +57,9 @@ func loadInstallerConfigFromCandidates(paths []string) (InstallerConfig, string,
 func mergeInstallerOverride(base, override InstallerConfig) InstallerConfig {
 	if strings.TrimSpace(override.ServerURL) != "" {
 		base.ServerURL = strings.TrimSpace(override.ServerURL)
+	}
+	if strings.TrimSpace(override.ServerAPI) != "" {
+		base.ServerAPI = strings.TrimSpace(override.ServerAPI)
 	}
 	if strings.TrimSpace(override.APIKey) != "" {
 		base.APIKey = strings.TrimSpace(override.APIKey)
@@ -134,9 +138,9 @@ func loadInstallerConfig() (InstallerConfig, string, error) {
 		resolved = mergeInstallerOverride(baseCfg, overrideCfg)
 	}
 
-	// Se o config não tem conexão (sem ApiServer, ServerURL nem deployToken),
+	// Se o config não tem conexão (sem ApiServer, ServerAPI, ServerURL nem deployToken),
 	// retorna como está — NÃO sobrescreve com defaults. O bootstrap tratará.
-	if resolved.ApiServer == "" && resolved.ServerURL == "" && resolved.APIKey == "" {
+	if resolved.ApiServer == "" && resolved.ServerAPI == "" && resolved.ServerURL == "" && resolved.APIKey == "" {
 		log.Printf("[config] config.json encontrado mas sem conexão — retornando como está para bootstrap")
 		return resolved, resolvedPath, nil
 	}

@@ -144,6 +144,67 @@ func TestInstallerConfigMarshalUsesDeployTokenField(t *testing.T) {
 	}
 }
 
+func TestInstallerConfigUnmarshalMigratesServerURLToApiServer(t *testing.T) {
+	var cfg InstallerConfig
+	if err := json.Unmarshal([]byte(`{"serverUrl":"https://tngplacas.com.br/api/","deployToken":"token-123"}`), &cfg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if got := strings.TrimSpace(cfg.ApiServer); got != "tngplacas.com.br" {
+		t.Fatalf("ApiServer = %q, want %q", got, "tngplacas.com.br")
+	}
+	if cfg.APIKey != "token-123" {
+		t.Fatalf("APIKey = %q, want %q", cfg.APIKey, "token-123")
+	}
+}
+
+func TestInstallerConfigUnmarshalUsesServerAPIField(t *testing.T) {
+	var cfg InstallerConfig
+	if err := json.Unmarshal([]byte(`{"serverapi":"tngplacas.com.br","deployToken":"token-456"}`), &cfg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if got := strings.TrimSpace(cfg.ServerAPI); got != "tngplacas.com.br" {
+		t.Fatalf("ServerAPI = %q, want %q", got, "tngplacas.com.br")
+	}
+	if got := strings.TrimSpace(cfg.ApiServer); got != "tngplacas.com.br" {
+		t.Fatalf("ApiServer = %q, want %q", got, "tngplacas.com.br")
+	}
+	if cfg.APIKey != "token-456" {
+		t.Fatalf("APIKey = %q, want %q", cfg.APIKey, "token-456")
+	}
+}
+
+func TestCleanInstallerConfigForPersistenceMigratesLegacyServerURL(t *testing.T) {
+	cfg := InstallerConfig{ServerURL: "https://tngplacas.com.br/api/", APIKey: "token-123"}
+	CleanInstallerConfigForPersistence(&cfg)
+
+	if got := strings.TrimSpace(cfg.ServerAPI); got != "tngplacas.com.br" {
+		t.Fatalf("ServerAPI = %q, want %q", got, "tngplacas.com.br")
+	}
+	if strings.TrimSpace(cfg.ServerURL) != "" {
+		t.Fatalf("ServerURL should be cleared, got %q", cfg.ServerURL)
+	}
+	if strings.TrimSpace(cfg.ApiServer) != "" {
+		t.Fatalf("ApiServer should be cleared for persistence, got %q", cfg.ApiServer)
+	}
+	if cfg.APIKey != "token-123" {
+		t.Fatalf("APIKey = %q, want %q", cfg.APIKey, "token-123")
+	}
+}
+
+func TestCleanInstallerConfigForPersistenceUsesServerAPI(t *testing.T) {
+	cfg := InstallerConfig{ApiServer: "tngplacas.com.br", APIKey: "token-789"}
+	CleanInstallerConfigForPersistence(&cfg)
+
+	if got := strings.TrimSpace(cfg.ServerAPI); got != "tngplacas.com.br" {
+		t.Fatalf("ServerAPI = %q, want %q", got, "tngplacas.com.br")
+	}
+	if strings.TrimSpace(cfg.ApiServer) != "" {
+		t.Fatalf("ApiServer should be cleared for persistence, got %q", cfg.ApiServer)
+	}
+}
+
 func TestLoadInstallerConfigFromCandidates_StripsUTF8BOM(t *testing.T) {
 	tempDir := t.TempDir()
 	path := tempDir + string(os.PathSeparator) + "config.json"

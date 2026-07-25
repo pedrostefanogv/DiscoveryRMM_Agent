@@ -78,6 +78,9 @@ func mergeInstallerOverride(base, override InstallerConfig) InstallerConfig {
 	if strings.TrimSpace(override.ServerURL) != "" {
 		base.ServerURL = strings.TrimSpace(override.ServerURL)
 	}
+	if strings.TrimSpace(override.ServerAPI) != "" {
+		base.ServerAPI = strings.TrimSpace(override.ServerAPI)
+	}
 	if strings.TrimSpace(override.APIKey) != "" {
 		base.APIKey = strings.TrimSpace(override.APIKey)
 	}
@@ -215,7 +218,12 @@ func persistInstallerConfig(sourcePath string, cfg InstallerConfig) (string, err
 // CleanInstallerConfigForPersistence remove campos legados redundantes antes da serialização.
 // serverUrl e apiScheme são deriváveis e não devem ser persistidos após o bootstrap.
 func CleanInstallerConfigForPersistence(cfg *InstallerConfig) {
+	tryMigrateInstallerServerURL(cfg)
+	if cfg.ServerAPI == "" {
+		cfg.ServerAPI = cfg.ApiServer
+	}
 	cfg.ServerURL = ""
+	cfg.ApiServer = ""
 	cfg.ApiScheme = ""
 }
 

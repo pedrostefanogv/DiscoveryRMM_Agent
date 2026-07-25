@@ -822,7 +822,7 @@ Function SaveAgentConfig
    FileWrite $0 "{$\r$\n"
    ${If} $GenericMode != "1"
       ${If} $ApiServer != ""
-         FileWrite $0 '  "apiServer": "$ApiServer",$\r$\n'
+         FileWrite $0 '  "serverapi": "$ApiServer",$\r$\n'
       ${EndIf}
       ${If} $ApiInsecure == "1"
          FileWrite $0 '  "apiInsecure": true,$\r$\n'
@@ -867,7 +867,7 @@ config_fallback:
    FileWrite $0 "{$\r$\n"
    ${If} $GenericMode != "1"
       ${If} $ApiServer != ""
-         FileWrite $0 '  "apiServer": "$ApiServer",$\r$\n'
+         FileWrite $0 '  "serverapi": "$ApiServer",$\r$\n'
       ${EndIf}
       ${If} $ApiInsecure == "1"
          FileWrite $0 '  "apiInsecure": true,$\r$\n'

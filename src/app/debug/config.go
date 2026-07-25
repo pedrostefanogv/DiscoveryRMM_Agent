@@ -61,8 +61,10 @@ func (c Config) IsProvisioned() bool {
 // on read for backward compatibility with older installers.
 type InstallerConfig struct {
 	// Deprecated: campo legado usado apenas na leitura (retrocompatibilidade).
-	// Após bootstrap, não é mais serializado. O campo canônico é ApiServer.
+	// Após bootstrap, não é mais serializado. O campo canônico é ServerAPI.
 	ServerURL string `json:"serverUrl,omitempty"`
+	// ServerAPI é o nome canônico do FQN do endpoint da API.
+	ServerAPI string `json:"serverapi,omitempty"`
 	APIKey    string `json:"deployToken,omitempty"`
 	// AutoProvisioning controla a participação local no fluxo de zero-touch
 	// auto-provisioning via P2P (endpoint /p2p/config/onboard). Quando ausente,
@@ -101,6 +103,7 @@ func (c *InstallerConfig) UnmarshalJSON(data []byte) error {
 	// Schema canônico (camelCase) — usado pelo instalador NSIS.
 	type rawInstallerConfig struct {
 		ServerURL            string             `json:"serverUrl"`
+		ServerAPI            string             `json:"serverapi,omitempty"`
 		DeployToken          string             `json:"deployToken,omitempty"`
 		APIKey               string             `json:"apiKey"`
 		AutoProvisioning     json.RawMessage    `json:"autoProvisioning,omitempty"`
@@ -125,6 +128,7 @@ func (c *InstallerConfig) UnmarshalJSON(data []byte) error {
 	// quando persiste o config.json em C:\ProgramData\Discovery\config.json.
 	type snakeCaseInstallerConfig struct {
 		ServerURL            string             `json:"server_url"`
+		ServerAPI            string             `json:"server_api,omitempty"`
 		DeployToken          string             `json:"deploy_token,omitempty"`
 		APIKey               string             `json:"api_key"`
 		AutoProvisioning     json.RawMessage    `json:"auto_provisioning,omitempty"`
@@ -154,6 +158,7 @@ func (c *InstallerConfig) UnmarshalJSON(data []byte) error {
 		var snake snakeCaseInstallerConfig
 		if err := json.Unmarshal(data, &snake); err == nil {
 			raw.ServerURL = coalesceStr(raw.ServerURL, snake.ServerURL)
+			raw.ServerAPI = coalesceStr(raw.ServerAPI, snake.ServerAPI)
 			raw.DeployToken = coalesceStr(raw.DeployToken, snake.DeployToken)
 			raw.APIKey = coalesceStr(raw.APIKey, snake.APIKey)
 			if raw.ApiScheme == "" {
@@ -228,8 +233,9 @@ func (c *InstallerConfig) UnmarshalJSON(data []byte) error {
 		}
 	}
 
-	*c = InstallerConfig{
+	cfg := InstallerConfig{
 		ServerURL:            raw.ServerURL,
+		ServerAPI:            raw.ServerAPI,
 		APIKey:               deployToken,
 		AutoProvisioning:     autoProvisioning,
 		ApiScheme:            raw.ApiScheme,
@@ -247,6 +253,8 @@ func (c *InstallerConfig) UnmarshalJSON(data []byte) error {
 		MeshCentralInstalled: raw.MeshCentralInstalled,
 		ChatLog:              raw.ChatLog,
 	}
+	tryMigrateInstallerServerURL(&cfg)
+	*c = cfg
 	return nil
 }
 
@@ -256,6 +264,41 @@ func (c InstallerConfig) APIScheme() string {
 		return "http"
 	}
 	return "https"
+}
+
+func tryMigrateInstallerServerURL(cfg *InstallerConfig) {
+	cfg.ServerURL = strings.TrimSpace(cfg.ServerURL)
+	cfg.ServerAPI = strings.TrimSpace(cfg.ServerAPI)
+	cfg.ApiServer = strings.TrimSpace(cfg.ApiServer)
+
+	serverRef := cfg.ServerAPI
+	if serverRef == "" {
+		serverRef = cfg.ServerURL
+	}
+	if serverRef == "" {
+		if cfg.ApiServer != "" {
+			cfg.ServerAPI = cfg.ApiServer
+		}
+		return
+	}
+
+	parsedScheme, parsedServer, err := parseInstallerServerURL(serverRef)
+	if err != nil {
+		if cfg.ServerAPI == "" {
+			cfg.ServerAPI = strings.Trim(strings.TrimSpace(serverRef), "/")
+		}
+		if cfg.ApiServer == "" {
+			cfg.ApiServer = strings.Trim(strings.TrimSpace(serverRef), "/")
+		}
+		return
+	}
+
+	cfg.ServerAPI = parsedServer
+	cfg.ApiServer = parsedServer
+	if cfg.ApiInsecure == nil && parsedScheme == "http" {
+		value := true
+		cfg.ApiInsecure = &value
+	}
 }
 
 // coalesceStr retorna a primeira string não vazia.
