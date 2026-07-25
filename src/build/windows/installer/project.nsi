@@ -360,7 +360,7 @@ Function .onInit
    ${AndIf} $MinimalMode != "1"
       StrCpy $MinimalMode "0"
    ${EndIf}
-   
+
    # Obter parametros da linha de comando
    ${GetParameters} $R0
 
@@ -521,41 +521,41 @@ Function AgentConfigPage
    ${OrIf} $MinimalMode == "1"
       Abort
    ${EndIf}
-   
+
    # Se jÃ¡ temos URL e KEY via CLI, pular o wizard
    ${If} $ServerUrl != ""
    ${AndIf} $ServerKey != ""
       Abort
    ${EndIf}
-   
+
    nsDialogs::Create 1018
    Pop $Dialog
    ${If} $Dialog == error
       Abort
    ${EndIf}
-   
+
    # TÃ­tulo da pÃ¡gina
    !insertmacro MUI_HEADER_TEXT "ConfiguraÃ§Ã£o do Agente Discovery" "Configure a conexÃ£o com o servidor"
-   
+
    # Label e campo de texto para URL
    ${NSD_CreateLabel} 0 10u 100% 12u "URL do Servidor:"
    Pop $UrlLabel
    ${NSD_CreateText} 0 25u 100% 12u $ServerUrl
    Pop $UrlText
-   
+
    # Label e campo de texto para KEY
    ${NSD_CreateLabel} 0 50u 100% 12u "Chave de API:"
    Pop $KeyLabel
    ${NSD_CreateText} 0 65u 100% 12u $ServerKey
    Pop $KeyText
-   
+
    # Checkbox para habilitar/desabilitar Auto-Provisioning (zero-touch)
    ${NSD_CreateCheckbox} 0 90u 100% 12u "Habilitar Auto-Provisioning (zero-touch via P2P)"
    Pop $DiscoveryCheck
    ${If} $AutoProvisioning == "1"
       ${NSD_Check} $DiscoveryCheck
    ${EndIf}
-   
+
    nsDialogs::Show
 FunctionEnd
 
@@ -563,7 +563,7 @@ FunctionEnd
 Function AgentConfigPageLeave
    ${NSD_GetText} $UrlText $ServerUrl
    ${NSD_GetText} $KeyText $ServerKey
-   
+
    ${NSD_GetState} $DiscoveryCheck $R0
    ${If} $R0 == ${BST_CHECKED}
       StrCpy $AutoProvisioning "1"
@@ -584,6 +584,7 @@ Section
          ${InstallerLog} "Modo bootstrapper detectado"
          # Bootstrapper: grava config local e dispara instalador completo de segunda etapa.
          Call EnsureSharedDataDir
+         Call DeriveApiFields
          Call SaveAgentConfig
          Call DownloadAndRunStage2
       !else
@@ -634,6 +635,9 @@ Section
 
          # Garantir estrutura compartilhada em ProgramData
          Call EnsureSharedDataDir
+
+         # Derivar campos canonicos (apiServer, apiInsecure) a partir de serverUrl
+         Call DeriveApiFields
 
          # Salvar configuraÃ§Ãµes do agente
          Call SaveAgentConfig
