@@ -34,7 +34,14 @@ Unicode true
 !define INFO_COMPANYNAME    "Discovery"
 !define INFO_PRODUCTNAME    "Discovery"
 !ifndef INFO_PRODUCTVERSION
-!define INFO_PRODUCTVERSION "1.0.0"
+  !tempfile DISCOVERY_VER_INC
+  !system 'powershell -NoProfile -Command "$wj = Join-Path (Split-Path ''${__FILE__}'') ''..\..\..\wails.json''; if (Test-Path $wj) { $v = (Get-Content $wj -Raw | ConvertFrom-Json).info.productVersion; if ($v) { Set-Content ''${DISCOVERY_VER_INC}'' -Value (''!define INFO_PRODUCTVERSION '' + $v) -Enc ASCII } }"'
+  !searchparse /file "${DISCOVERY_VER_INC}" "" INFO_PRODUCTVERSION
+  !delfile "${DISCOVERY_VER_INC}"
+  !undef DISCOVERY_VER_INC
+  !ifndef INFO_PRODUCTVERSION
+    !define INFO_PRODUCTVERSION "1.0.0"
+  !endif
 !endif
 !ifndef INFO_FILEVERSION
 !define INFO_FILEVERSION "${INFO_PRODUCTVERSION}.0"

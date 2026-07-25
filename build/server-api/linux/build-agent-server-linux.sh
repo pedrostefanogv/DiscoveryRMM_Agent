@@ -24,7 +24,7 @@ Opcoes:
   --project-root <path>          Raiz do repositorio (default: auto)
   --out-dir <path>               Diretorio de saida do exe (default: src/build/bin)
   --output-name <name>           Nome do executavel (default: discovery-agent.exe)
-  --version <semver>             Injeta versao em ldflags (ex: 1.2.3)
+  --version <semver>             Injeta versao em ldflags (ex: 1.2.3). Se omitido, detecta automaticamente do src/wails.json
   --server-url <url>             Server URL para gerar installer.json
   --api-key <token>              API key para gerar installer.json
   --auto-provisioning <0|1>      autoProvisioning no installer.json (default: 1) (alias: --discovery-enabled)
@@ -99,6 +99,20 @@ fi
 if [[ "$WRITE_INSTALLER_JSON" != "0" && "$WRITE_INSTALLER_JSON" != "1" ]]; then
   echo "[erro] --write-installer-json deve ser 0 ou 1" >&2
   exit 1
+fi
+
+# Auto-detect version from wails.json productVersion if not explicitly provided
+if [[ -z "$VERSION" ]]; then
+  WAILS_JSON="$SRC_ROOT/wails.json"
+  if [[ -f "$WAILS_JSON" ]]; then
+    VERSION=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['info']['productVersion'])" "$WAILS_JSON" 2>/dev/null) || true
+    if [[ -n "$VERSION" ]]; then
+      echo "[info] versao detectada do wails.json: $VERSION"
+    fi
+  fi
+  if [[ -z "$VERSION" ]]; then
+    echo "[aviso] versao nao definida e nao detectada do wails.json; binario ficara com buildinfo.Version='0.0.0' (self-update loop pode ocorrer)"
+  fi
 fi
 
 if ! command -v go >/dev/null 2>&1; then
