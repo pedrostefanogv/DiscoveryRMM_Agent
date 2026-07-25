@@ -69,20 +69,26 @@ type Service struct {
 	cronEntries      map[string]cron.EntryID
 	activeTasks      map[string]bool
 	userLoginHandled bool
-	cfMu             sync.RWMutex
-	cfCache          map[string]*ExecutionCustomFieldCtx // key = executionID
+	// processStartAt identifica a sessão atual do processo. Usado como parte da chave
+	// do marcador userLogin para que TriggerOnUserLogin dispare uma vez por sessão
+	// (não uma vez para sempre). Sobrevive a crashes curtos, mas expira em reboot
+	// do processo do agente.
+	processStartAt time.Time
+	cfMu           sync.RWMutex
+	cfCache        map[string]*ExecutionCustomFieldCtx // key = executionID
 }
 
 func NewService(getConfig func() RuntimeConfig, logger func(string)) *Service {
 	return &Service{
-		client:      NewClient(30 * time.Second),
-		getConfig:   getConfig,
-		logger:      logger,
-		state:       State{},
-		cronEntries: make(map[string]cron.EntryID),
-		activeTasks: make(map[string]bool),
-		deferByTask: make(map[string]deferState),
-		cfCache:     make(map[string]*ExecutionCustomFieldCtx),
+		client:         NewClient(30 * time.Second),
+		getConfig:      getConfig,
+		logger:         logger,
+		state:          State{},
+		cronEntries:    make(map[string]cron.EntryID),
+		activeTasks:    make(map[string]bool),
+		deferByTask:    make(map[string]deferState),
+		processStartAt: time.Now().UTC(),
+		cfCache:        make(map[string]*ExecutionCustomFieldCtx),
 	}
 }
 
@@ -270,6 +276,21 @@ func (s *Service) reconcilePolicy(ctx context.Context, previous State, current S
 		}
 	}
 
+	// Persiste userLoginHandled no SQLite para sobreviver a crashes curtos do agente.
+	// A chave inclui o timestamp de início do processo, então expira a cada restart
+	// do processo (não a cada reboot do Windows). Isso preserva a semântica original
+	// de "uma vez por ciclo de vida do processo" e evita que TriggerOnUserLogin
+	// nunca mais dispare após o primeiro login.
+	userLoginMarkerKey := "_sys:userlogin:handled:" + s.processStartAt.Format(time.RFC3339)
+	if !s.userLoginHandled {
+		if s.db != nil && agentID != "" {
+			// Se o marcador existe no banco, user login já foi tratado nesta sessão.
+			if _, found, _ := s.db.GetAutomationMarker(agentID, userLoginMarkerKey); found {
+				s.userLoginHandled = true
+			}
+		}
+	}
+
 	if !s.userLoginHandled {
 		triggered := false
 		for _, task := range current.Tasks {
@@ -280,6 +301,9 @@ func (s *Service) reconcilePolicy(ctx context.Context, previous State, current S
 		}
 		if triggered {
 			s.userLoginHandled = true
+			if s.db != nil && agentID != "" {
+				errutil.LogIfErr(s.db.SetAutomationMarker(agentID, userLoginMarkerKey, time.Now().UTC().Format(time.RFC3339)), "automation: persistir marcador userLogin")
+			}
 		}
 	}
 
@@ -593,7 +617,31 @@ func (s *Service) rebuildRecurringSchedules(ctx context.Context, tasks []Automat
 		}
 		taskCopy := task
 		entryID, err := cronInstance.AddFunc(strings.TrimSpace(task.ScheduleCron), func() {
-			s.executeTaskAsync(ctx, strings.TrimSpace(s.getConfig().AgentID), taskCopy, sourceForTrigger(TriggerTypeRecurring), TriggerTypeRecurring)
+			agentID := strings.TrimSpace(s.getConfig().AgentID)
+			taskID := strings.TrimSpace(taskCopy.TaskID)
+			// Dedup persistente: evita reexecucao apos crash do agente no mesmo intervalo do cron.
+			// O marcador tem um cooldown de 60s — se a ultima execucao foi ha menos de 60s, pula.
+			// Lê s.db sob lock para refletir SetDB() chamado apos o agendamento.
+			s.mu.RLock()
+			db := s.db
+			s.mu.RUnlock()
+			if db != nil && agentID != "" && taskID != "" {
+				markerKey := "recurring:last:" + taskID
+				if lastRun, found, err := db.GetAutomationMarker(agentID, markerKey); err == nil && found {
+					if lastTS, parseErr := time.Parse(time.RFC3339, lastRun); parseErr == nil {
+						if time.Since(lastTS) < 60*time.Second {
+							s.logf("automacao: tarefa recorrente %s pulada — ultima execucao em %s (cooldown)", taskID, lastTS.UTC().Format(time.RFC3339))
+							return
+						}
+					}
+				}
+				// Atualiza o marcador ANTES de despachar (executeTaskAsync é assíncrono).
+				// Se a execucao falhar, o cooldown de 60s ainda bloqueia reexecucao imediata,
+				// o que e desejavel para tarefas com cron agressivo (ex: a cada 1 min).
+				// O proximo slot do cron tipicamente ocorrera apos o cooldown expirar.
+				errutil.LogIfErr(db.SetAutomationMarker(agentID, markerKey, time.Now().UTC().Format(time.RFC3339)), "automation: atualizar marcador recorrente")
+			}
+			s.executeTaskAsync(ctx, agentID, taskCopy, sourceForTrigger(TriggerTypeRecurring), TriggerTypeRecurring)
 		})
 		if err != nil {
 			s.logf("automacao: cron invalido para tarefa %s: %v", task.TaskID, err)

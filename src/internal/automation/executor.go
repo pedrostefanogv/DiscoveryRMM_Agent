@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 
@@ -287,13 +288,28 @@ func shouldSkipWingetAction(ctx context.Context, packages PackageManager, operat
 }
 
 // isPackageInOutput verifica se o packageID aparece na saída do winget list/upgrade.
-// A comparação é case-insensitive e busca pelo ID exato como palavra.
+// A comparação é case-insensitive e trata o ID como um token delimitado por
+// whitespace/início/fim de linha. Isso evita falsos positivos como "Foxit"
+// batendo em "Foxit.FoxitReader" — o ponto não é whitespace, então não há match.
+//
+// Nota: o winget lista IDs em coluna dedicada (ex: "Foxit.FoxitReader"), então
+// a busca por token whitespace é mais robusta que \b (que trata "." como boundary).
 func isPackageInOutput(output, packageID string) bool {
-	normalized := strings.ToLower(strings.TrimSpace(output))
-	target := strings.ToLower(packageID)
-	// Busca simples mas robusta: o ID deve aparecer como substring na saída do winget.
-	// O winget lista os IDs em uma coluna dedicada, então uma busca case-insensitive é suficiente.
-	return strings.Contains(normalized, target)
+	normalized := strings.TrimSpace(output)
+	target := strings.TrimSpace(packageID)
+	if normalized == "" || target == "" {
+		return false
+	}
+	// Match case-insensitive do ID como token delimitado por whitespace ou início/fim.
+	// Ex: "Foxit" NÃO match em "Foxit.FoxitReader" (seguido de ".", não whitespace).
+	//     "Foxit.FoxitReader" SIM match na coluna de ID.
+	pattern := `(?i)(?:^|\s)` + regexp.QuoteMeta(target) + `(?:\s|$)`
+	matched, err := regexp.MatchString(pattern, normalized)
+	if err != nil {
+		// Fallback para o comportamento antigo em caso de erro de regex.
+		return strings.Contains(strings.ToLower(normalized), strings.ToLower(target))
+	}
+	return matched
 }
 
 // buildCustomFieldsEnv serializa o mapa de custom fields como variável de ambiente MDZ_CUSTOM_FIELDS.
