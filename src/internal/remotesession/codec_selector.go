@@ -39,3 +39,8 @@ func (cs *CodecSelector) Select(profile string, preferredCodec string) screen.En
 		return screen.NewJPEGEncoder()
 	}
 }
+
+// HasGPU reports whether GPU-accelerated H.264 encoding is available.
+func (cs *CodecSelector) HasGPU() bool {
+	return cs.gpu.MediaFoundationH264
+}

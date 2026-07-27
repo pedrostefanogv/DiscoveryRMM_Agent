@@ -79,10 +79,10 @@ func (p *Proxy) HandleRequest(raw []byte) []byte {
 	return resp
 }
 
-func (p *Proxy) doRequest(req ProxyRequest) []byte {
+func (p *Proxy) doRequest(req ProxyRequest) ([]byte, error) {
 	httpReq, err := http.NewRequest(req.Method, req.URL, strings.NewReader(req.Body))
 	if err != nil {
-		return p.errorResponse("criar request: " + err.Error())
+		return nil, fmt.Errorf("criar request: %w", err)
 	}
 
 	for k, v := range req.Headers {
@@ -94,7 +94,7 @@ func (p *Proxy) doRequest(req ProxyRequest) []byte {
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
-		return p.errorResponse("executar request: " + err.Error())
+		return nil, fmt.Errorf("executar request: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -102,7 +102,7 @@ func (p *Proxy) doRequest(req ProxyRequest) []byte {
 	limitedReader := io.LimitReader(resp.Body, p.maxBytes)
 	bodyBytes, err := io.ReadAll(limitedReader)
 	if err != nil {
-		return p.errorResponse("ler resposta: " + err.Error())
+		return nil, fmt.Errorf("ler resposta: %w", err)
 	}
 
 	headers := make(map[string]string)
@@ -120,7 +120,7 @@ func (p *Proxy) doRequest(req ProxyRequest) []byte {
 		ContentLen: int64(len(bodyBytes)),
 	}
 	b, _ := json.Marshal(result)
-	return b
+	return b, nil
 }
 
 func (p *Proxy) errorResponse(msg string) []byte {

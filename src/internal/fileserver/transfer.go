@@ -81,9 +81,17 @@ func (t *Transfer) GetFileChunked(raw []byte) []byte {
 
 // PutFileChunked recebe um chunk e o escreve (resume).
 func (t *Transfer) PutFileChunked(raw []byte) []byte {
-	var req ChunkResponse
+	var req struct {
+		Path       string `json:"path"`
+		ChunkIndex int    `json:"chunkIndex"`
+		ChunkSize  int    `json:"chunkSize"`
+		Data       []byte `json:"data"`
+	}
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return t.errorChunk(err.Error())
+	}
+	if req.ChunkSize <= 0 {
+		req.ChunkSize = 256 << 10
 	}
 
 	fullPath := t.safePath(req.Path)
@@ -98,7 +106,7 @@ func (t *Transfer) PutFileChunked(raw []byte) []byte {
 	}
 	defer f.Close()
 
-	offset := int64(req.ChunkIndex * req.TotalChunks)
+	offset := int64(req.ChunkIndex * req.ChunkSize)
 	if _, err := f.Seek(offset, 0); err != nil {
 		return t.errorChunk("seek: " + err.Error())
 	}

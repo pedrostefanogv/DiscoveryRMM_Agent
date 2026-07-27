@@ -120,6 +120,8 @@ func (m *Manager) handleStart(ctx context.Context, payload map[string]any) (bool
 	// Monitor de expiração
 	safego.Go(func() {
 		m.monitorExpiration(sessionID, expiresAt)
+	}, func(format string, args ...interface{}) {
+		fmt.Printf("[remote-session] "+format+"\n", args...)
 	})
 
 	if m.onSessionStarted != nil {

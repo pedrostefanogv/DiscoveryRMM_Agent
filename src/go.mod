@@ -3,18 +3,22 @@ module discovery
 go 1.26.0
 
 require (
+	github.com/chai2010/webp v1.4.0
 	github.com/energye/systray v1.0.3
 	github.com/go-pdf/fpdf v0.9.0
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
+	github.com/klauspost/compress v1.19.0
 	github.com/libp2p/go-libp2p v0.48.0
 	github.com/multiformats/go-multiaddr v0.16.1
 	github.com/nats-io/nats-server/v2 v2.12.7
 	github.com/nats-io/nats.go v1.52.0
 	github.com/osquery/osquery-go v0.0.0-20260630173615-eb39ad3443df
 	github.com/pedrostefanogv/go-psadt v0.0.0-20260724000345-4f8011207c09
+	github.com/pion/webrtc/v4 v4.2.16
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/samber/lo v1.53.0
+	github.com/vmihailenco/msgpack/v5 v5.4.1
 	github.com/wailsapp/wails/v2 v2.13.0
 	golang.org/x/sys v0.47.0
 	golang.org/x/text v0.40.0
@@ -48,7 +52,6 @@ require (
 	github.com/jackpal/go-nat-pmp v1.0.2 // indirect
 	github.com/jbenet/go-temp-err-catcher v0.1.0 // indirect
 	github.com/jchv/go-winloader v0.0.0-20250406163304-c1995be93bd1 // indirect
-	github.com/klauspost/compress v1.19.0 // indirect
 	github.com/klauspost/cpuid/v2 v2.4.0 // indirect
 	github.com/koron/go-ssdp v0.9.1 // indirect
 	github.com/labstack/echo/v4 v4.15.4 // indirect
@@ -104,7 +107,6 @@ require (
 	github.com/pion/stun/v3 v3.1.6 // indirect
 	github.com/pion/transport/v4 v4.0.2 // indirect
 	github.com/pion/turn/v5 v5.0.12 // indirect
-	github.com/pion/webrtc/v4 v4.2.16 // indirect
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/prometheus/client_golang v1.23.2 // indirect
@@ -120,6 +122,7 @@ require (
 	github.com/tkrajina/go-reflector v0.5.8 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasttemplate v1.2.2 // indirect
+	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect
 	github.com/wailsapp/go-webview2 v1.0.23 // indirect
 	github.com/wailsapp/mimetype v1.4.1 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect

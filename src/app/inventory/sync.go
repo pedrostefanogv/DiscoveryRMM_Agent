@@ -308,10 +308,6 @@ func (s *Service) SyncInventoryOnStartup(ctx context.Context, report models.Inve
 			s.logf("[agent-sync] snapshot salvo e timestamp atualizado")
 		}
 	}
-
-	if hardwareSuccess && s.onHardwareReportSuccess != nil {
-		s.onHardwareReportSuccess(strings.TrimSpace(hardwarePayload.MeshCentralNodeID))
-	}
 }
 func (s *Service) SyncNetworkConnections(ctx context.Context) error {
 	if err := s.requireProvisionedInventory(); err != nil {

@@ -3,6 +3,7 @@ package screen
 import (
 	"fmt"
 	"syscall"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )

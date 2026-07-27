@@ -87,7 +87,7 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 			}
 
 			// Encode JPEG
-			q := quality.jpegQuality
+			q := quality.JpegQuality
 			encoded, err := s.encoder.Encode(frame, q)
 			s.capturer.ReleaseFrame()
 			if err != nil {
