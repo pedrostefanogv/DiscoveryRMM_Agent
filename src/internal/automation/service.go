@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -264,7 +265,7 @@ func (s *Service) refreshPolicy(ctx context.Context, includeScriptContent bool) 
 }
 
 func (s *Service) reconcilePolicy(ctx context.Context, previous State, current State, agentID string) error {
-	s.rebuildRecurringSchedules(ctx, current.Tasks)
+	s.rebuildRecurringSchedules(ctx, previous.Tasks, current.Tasks)
 
 	for _, task := range current.Tasks {
 		task := task
@@ -296,7 +297,7 @@ func (s *Service) reconcilePolicy(ctx context.Context, previous State, current S
 		for _, task := range current.Tasks {
 			if task.TriggerOnUserLogin {
 				triggered = true
-				s.executeTaskAsync(ctx, agentID, task, sourceForTrigger(TriggerTypeUserLogin), TriggerTypeUserLogin)
+				s.executeTaskAsync(ctx, agentID, task, sourceForTrigger(TriggerTypeUserLogin), TriggerTypeUserLogin, nil)
 			}
 		}
 		if triggered {
@@ -308,12 +309,17 @@ func (s *Service) reconcilePolicy(ctx context.Context, previous State, current S
 	}
 
 	_ = previous
+
+	// Remove marcadores órfãos do SQLite (immediate/checkin de fingerprints antigos,
+	// recurring:last de tasks deletadas, userlogin de sessões passadas).
+	s.cleanupOrphanedMarkers(agentID, current)
+
 	return nil
 }
 
 func (s *Service) triggerImmediate(ctx context.Context, agentID, fingerprint string, task AutomationTask) {
 	if s.db == nil || agentID == "" || fingerprint == "" {
-		s.executeTaskAsync(ctx, agentID, task, sourceForTrigger(TriggerTypeImmediate), TriggerTypeImmediate)
+		s.executeTaskAsync(ctx, agentID, task, sourceForTrigger(TriggerTypeImmediate), TriggerTypeImmediate, nil)
 		return
 	}
 	markerKey := "immediate:" + fingerprint + ":" + strings.TrimSpace(task.TaskID)
@@ -321,7 +327,7 @@ func (s *Service) triggerImmediate(ctx context.Context, agentID, fingerprint str
 		return
 	}
 	errutil.LogIfErr(s.db.SetAutomationMarker(agentID, markerKey, time.Now().UTC().Format(time.RFC3339)), "automation: definir marker imediato")
-	s.executeTaskAsync(ctx, agentID, task, sourceForTrigger(TriggerTypeImmediate), TriggerTypeImmediate)
+	s.executeTaskAsync(ctx, agentID, task, sourceForTrigger(TriggerTypeImmediate), TriggerTypeImmediate, nil)
 }
 
 // triggerOnAgentCheckIn dispara tarefas TriggerOnAgentCheckIn com deduplicação por marcador.
@@ -330,7 +336,7 @@ func (s *Service) triggerImmediate(ctx context.Context, agentID, fingerprint str
 // permitindo que a tarefa seja reexecutada após alteração no servidor.
 func (s *Service) triggerOnAgentCheckIn(ctx context.Context, agentID, fingerprint string, task AutomationTask) {
 	if s.db == nil || agentID == "" || fingerprint == "" {
-		s.executeTaskAsync(ctx, agentID, task, sourceForTrigger(TriggerTypeAgentCheckIn), TriggerTypeAgentCheckIn)
+		s.executeTaskAsync(ctx, agentID, task, sourceForTrigger(TriggerTypeAgentCheckIn), TriggerTypeAgentCheckIn, nil)
 		return
 	}
 	markerKey := "checkin:" + fingerprint + ":" + strings.TrimSpace(task.TaskID)
@@ -338,10 +344,10 @@ func (s *Service) triggerOnAgentCheckIn(ctx context.Context, agentID, fingerprin
 		return
 	}
 	errutil.LogIfErr(s.db.SetAutomationMarker(agentID, markerKey, time.Now().UTC().Format(time.RFC3339)), "automation: definir marker checkin")
-	s.executeTaskAsync(ctx, agentID, task, sourceForTrigger(TriggerTypeAgentCheckIn), TriggerTypeAgentCheckIn)
+	s.executeTaskAsync(ctx, agentID, task, sourceForTrigger(TriggerTypeAgentCheckIn), TriggerTypeAgentCheckIn, nil)
 }
 
-func (s *Service) executeTaskAsync(ctx context.Context, agentID string, task AutomationTask, sourceType AutomationExecutionSourceType, triggerType TriggerType) {
+func (s *Service) executeTaskAsync(ctx context.Context, agentID string, task AutomationTask, sourceType AutomationExecutionSourceType, triggerType TriggerType, onComplete func(success bool)) {
 	if agentID == "" {
 		return
 	}
@@ -412,7 +418,7 @@ func (s *Service) executeTaskAsync(ctx context.Context, agentID string, task Aut
 					delay = 0
 				}
 				time.AfterFunc(delay, func() {
-					s.executeTaskAsync(context.Background(), agentID, taskCopy, sourceType, triggerType)
+					s.executeTaskAsync(context.Background(), agentID, taskCopy, sourceType, triggerType, nil)
 				})
 				return
 			}
@@ -476,6 +482,11 @@ func (s *Service) executeTaskAsync(ctx context.Context, agentID string, task Aut
 				payload.ExitCode = &exitCode
 			}
 			_ = s.sendOrQueueCallback(ctx, agentID, executionID, entry.CommandID, CallbackTypeResult, payload, correlationID)
+		}
+
+		// Notifica o chamador do resultado (ex: marcador recurring:last).
+		if onComplete != nil {
+			onComplete(result.Success)
 		}
 
 		s.dispatchExecutionNotification(notifyDispatcher, task, entry, &result, s.deferByTask[strings.TrimSpace(task.TaskID)], welcome)
@@ -596,18 +607,33 @@ func (s *Service) postCollectedValues(ctx context.Context, cfg RuntimeConfig, ex
 	}
 }
 
-func (s *Service) rebuildRecurringSchedules(ctx context.Context, tasks []AutomationTask) {
+func (s *Service) rebuildRecurringSchedules(ctx context.Context, previous, current []AutomationTask) {
 	s.startCron()
 
-	s.mu.Lock()
-	for taskID, entryID := range s.cronEntries {
-		s.cron.Remove(entryID)
-		delete(s.cronEntries, taskID)
+	// Constrói mapas de diff para evitar remover/recriar jobs que não mudaram.
+	prevByID := make(map[string]AutomationTask, len(previous))
+	for _, t := range previous {
+		prevByID[t.TaskID] = t
 	}
+	currByID := make(map[string]AutomationTask, len(current))
+	for _, t := range current {
+		currByID[t.TaskID] = t
+	}
+
+	s.mu.Lock()
 	cronInstance := s.cron
+	// Remove apenas jobs cuja tarefa foi deletada ou alterada.
+	for taskID, entryID := range s.cronEntries {
+		curr, currExists := currByID[taskID]
+		prev, prevExists := prevByID[taskID]
+		if !currExists || !prevExists || cronKey(prev) != cronKey(curr) {
+			cronInstance.Remove(entryID)
+			delete(s.cronEntries, taskID)
+		}
+	}
 	s.mu.Unlock()
 
-	for _, task := range tasks {
+	for _, task := range current {
 		if !task.TriggerRecurring || strings.TrimSpace(task.ScheduleCron) == "" {
 			continue
 		}
@@ -615,13 +641,23 @@ func (s *Service) rebuildRecurringSchedules(ctx context.Context, tasks []Automat
 			s.logf("automacao: tarefa %s requer aprovacao e nao sera agendada no cron", task.TaskID)
 			continue
 		}
+
+		// Pula se já existe um job igual para esta tarefa.
+		existingPrev, hadPrev := prevByID[task.TaskID]
+		existingCurr, hasCurr := currByID[task.TaskID]
+		s.mu.RLock()
+		_, hasEntry := s.cronEntries[task.TaskID]
+		s.mu.RUnlock()
+		if hasEntry && hadPrev && hasCurr && cronKey(existingPrev) == cronKey(existingCurr) {
+			continue // job não mudou, mantém
+		}
+
 		taskCopy := task
 		entryID, err := cronInstance.AddFunc(strings.TrimSpace(task.ScheduleCron), func() {
 			agentID := strings.TrimSpace(s.getConfig().AgentID)
 			taskID := strings.TrimSpace(taskCopy.TaskID)
 			// Dedup persistente: evita reexecucao apos crash do agente no mesmo intervalo do cron.
-			// O marcador tem um cooldown de 60s — se a ultima execucao foi ha menos de 60s, pula.
-			// Lê s.db sob lock para refletir SetDB() chamado apos o agendamento.
+			// Verifica cooldown de 60s — se a ultima execucao foi ha menos de 60s, pula.
 			s.mu.RLock()
 			db := s.db
 			s.mu.RUnlock()
@@ -635,13 +671,19 @@ func (s *Service) rebuildRecurringSchedules(ctx context.Context, tasks []Automat
 						}
 					}
 				}
-				// Atualiza o marcador ANTES de despachar (executeTaskAsync é assíncrono).
-				// Se a execucao falhar, o cooldown de 60s ainda bloqueia reexecucao imediata,
-				// o que e desejavel para tarefas com cron agressivo (ex: a cada 1 min).
-				// O proximo slot do cron tipicamente ocorrera apos o cooldown expirar.
-				errutil.LogIfErr(db.SetAutomationMarker(agentID, markerKey, time.Now().UTC().Format(time.RFC3339)), "automation: atualizar marcador recorrente")
 			}
-			s.executeTaskAsync(ctx, agentID, taskCopy, sourceForTrigger(TriggerTypeRecurring), TriggerTypeRecurring)
+			// O marcador é atualizado APÓS a execução via callback onComplete,
+			// garantindo que falhas não bloqueiem o próximo slot do cron.
+			s.executeTaskAsync(ctx, agentID, taskCopy, sourceForTrigger(TriggerTypeRecurring), TriggerTypeRecurring,
+				func(success bool) {
+					s.mu.RLock()
+					db := s.db
+					s.mu.RUnlock()
+					if db != nil && agentID != "" && taskID != "" {
+						markerKey := "recurring:last:" + taskID
+						errutil.LogIfErr(db.SetAutomationMarker(agentID, markerKey, time.Now().UTC().Format(time.RFC3339)), "automacao: atualizar marcador recorrente")
+					}
+				})
 		})
 		if err != nil {
 			s.logf("automacao: cron invalido para tarefa %s: %v", task.TaskID, err)
@@ -650,6 +692,55 @@ func (s *Service) rebuildRecurringSchedules(ctx context.Context, tasks []Automat
 		s.mu.Lock()
 		s.cronEntries[task.TaskID] = entryID
 		s.mu.Unlock()
+	}
+}
+
+// cronKey produz uma chave estável para comparar se a configuração de cron de uma tarefa mudou.
+func cronKey(t AutomationTask) string {
+	return t.TaskID + "|" + t.ScheduleCron + "|" + strconv.FormatBool(t.TriggerRecurring)
+}
+
+// collectValidMarkerKeys coleta todas as chaves de marcadores legítimas para as tarefas atuais.
+// Chaves órfãs (de fingerprints/tasks antigas) serão removidas por cleanupOrphanedMarkers.
+func (s *Service) collectValidMarkerKeys(current State) []string {
+	keys := make([]string, 0, len(current.Tasks)*2+2)
+
+	fingerprint := current.PolicyFingerprint
+	for _, task := range current.Tasks {
+		taskID := strings.TrimSpace(task.TaskID)
+		if taskID == "" {
+			continue
+		}
+		if task.TriggerImmediate {
+			keys = append(keys, "immediate:"+fingerprint+":"+taskID)
+		}
+		if task.TriggerOnAgentCheckIn {
+			keys = append(keys, "checkin:"+fingerprint+":"+taskID)
+		}
+		if task.TriggerRecurring {
+			keys = append(keys, "recurring:last:"+taskID)
+		}
+	}
+	// Marcador de sistema: userLoginHandled da sessão atual.
+	keys = append(keys, "_sys:userlogin:handled:"+s.processStartAt.Format(time.RFC3339))
+
+	return keys
+}
+
+// cleanupOrphanedMarkers remove marcadores órfãos do SQLite para evitar acúmulo
+// de lixo (immediate/checkin de fingerprints antigos, recurring:last de tasks deletadas).
+func (s *Service) cleanupOrphanedMarkers(agentID string, current State) {
+	if s.db == nil || agentID == "" {
+		return
+	}
+	validKeys := s.collectValidMarkerKeys(current)
+	deleted, err := s.db.DeleteAutomationMarkersExcept(agentID, validKeys)
+	if err != nil {
+		s.logf("automacao: falha ao limpar marcadores orfaos: %v", err)
+		return
+	}
+	if deleted > 0 {
+		s.logf("automacao: %d marcadores orfaos removidos para agente %s", deleted, agentID)
 	}
 }
 

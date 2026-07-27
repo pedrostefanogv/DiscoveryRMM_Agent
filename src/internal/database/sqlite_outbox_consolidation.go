@@ -451,3 +451,32 @@ func (db *DB) GetAutomationMarker(agentID, markerKey string) (string, bool, erro
 	}
 	return value, true, nil
 }
+
+// DeleteAutomationMarkersExcept remove todos os marcadores de automação do agente
+// cujas chaves NÃO estão em validKeys. Se validKeys estiver vazio, remove todos.
+// Retorna o número de linhas removidas. Usado para limpeza periódica de marcadores
+// órfãos (ex: immediate/checkin de fingerprints antigos, recurring:last de tasks deletadas).
+func (db *DB) DeleteAutomationMarkersExcept(agentID string, validKeys []string) (int64, error) {
+	if len(validKeys) == 0 {
+		result, err := db.conn.Exec("DELETE FROM automation_marker_state WHERE agent_id = ?", agentID)
+		if err != nil {
+			return 0, err
+		}
+		return result.RowsAffected()
+	}
+	placeholders := make([]string, len(validKeys))
+	args := make([]any, 0, 1+len(validKeys))
+	args = append(args, agentID)
+	for i, key := range validKeys {
+		placeholders[i] = "?"
+		args = append(args, key)
+	}
+	query := fmt.Sprintf(
+		"DELETE FROM automation_marker_state WHERE agent_id = ? AND marker_key NOT IN (%s)",
+		strings.Join(placeholders, ","))
+	result, err := db.conn.Exec(query, args...)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
