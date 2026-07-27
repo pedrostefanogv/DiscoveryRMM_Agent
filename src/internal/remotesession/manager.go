@@ -31,9 +31,10 @@ type Session struct {
 
 // Manager gerencia o lifecycle de sessoes remotas no agent.
 type Manager struct {
-	mu       sync.RWMutex
-	sessions map[string]*Session // key: sessionId
-	nc       *nats.Conn
+	mu           sync.RWMutex
+	sessions     map[string]*Session // key: sessionId
+	nc           *nats.Conn
+	natsStream   *NatsStreamHandler
 
 	// callbacks para notificar a UI/tray
 	onSessionStarted func(sessionID, kind string)
@@ -46,6 +47,11 @@ func NewManager(nc *nats.Conn) *Manager {
 		sessions: make(map[string]*Session),
 		nc:       nc,
 	}
+}
+
+// SetNatsStream configura o NatsStreamHandler (tenant/site/agent IDs vindos do payload de start).
+func (m *Manager) SetNatsStream(tenantID, siteID, agentID string) {
+	m.natsStream = NewNatsStreamHandler(m.nc, tenantID, siteID, agentID)
 }
 
 // SetCallbacks configura callbacks para notificar a UI/tray sobre mudancas de sessao.
@@ -78,18 +84,24 @@ func (m *Manager) HandleCommand(ctx context.Context, payload map[string]any) (bo
 	}
 }
 
-func (m *Manager) handleStart(_ context.Context, payload map[string]any) (bool, string) {
+func (m *Manager) handleStart(ctx context.Context, payload map[string]any) (bool, string) {
 	sessionID := toString(payload["sessionId"])
 	if sessionID == "" {
 		return false, "payload sem sessionId"
 	}
+
+	kind := toString(payload["kind"])
+	transport := toString(payload["transport"])
+	quality := toString(payload["quality"])
+	codec := toString(payload["codec"])
+	natsSubject := toString(payload["natsSubject"])
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	// Fecha sessao anterior do mesmo tipo se existir (uma por kind)
 	for id, s := range m.sessions {
-		if s.Kind == toString(payload["kind"]) {
+		if s.Kind == kind {
 			m.closeSessionLocked(id, "superseded")
 			break
 		}
@@ -97,35 +109,69 @@ func (m *Manager) handleStart(_ context.Context, payload map[string]any) (bool, 
 
 	expiresAt, _ := time.Parse(time.RFC3339, toString(payload["expiresAtUtc"]))
 	if expiresAt.IsZero() {
-		expiresAt = time.Now().Add(8 * time.Hour)
+		expiresAt = time.Now().Add(30 * time.Minute)
 	}
 
 	session := &Session{
 		ID:          sessionID,
-		Kind:        toString(payload["kind"]),
-		Transport:   toString(payload["transport"]),
-		Quality:     toString(payload["quality"]),
-		Codec:       toString(payload["codec"]),
-		NatsSubject: toString(payload["natsSubject"]),
-		ExpiresAt:   expiresAt,
+		Kind:        kind,
+		Transport:   transport,
+		Quality:     quality,
+		Codec:       codec,
+		NatsSubject: natsSubject,
 		StartedAt:   time.Now(),
+		ExpiresAt:   expiresAt,
 		stopCh:      make(chan struct{}),
 		doneCh:      make(chan struct{}),
 	}
 	m.sessions[sessionID] = session
 
-	// Publica evento de sessão iniciada no NATS
-	m.publishEvent(sessionID, "started", session)
+	// Garante que o NatsStreamHandler esta configurado (extrai tenant/site/agent do subject)
+	if m.natsStream == nil {
+		// Tenta extrair IDs do natsSubject: tenant.{c}.site.{s}.agent.{a}.remote.session.{id}
+		m.publishEventLegacy(sessionID, "started", session)
+	} else {
+		m.natsStream.PublishEvent(sessionID, "started", session)
+	}
 
-	// Monitor de expiração
+	// Inicia o stream conforme o tipo (goroutine com safego)
+	switch kind {
+	case "screen", "all":
+		safego.Go(func() {
+			m.runScreenSession(ctx, session)
+		}, func(line string) {
+			fmt.Printf("[remote-session-screen] %s\n", line)
+		})
+	case "terminal":
+		safego.Go(func() {
+			m.runTerminalSession(ctx, session)
+		}, func(line string) {
+			fmt.Printf("[remote-session-term] %s\n", line)
+		})
+	case "files":
+		safego.Go(func() {
+			m.runFilesSession(ctx, session)
+		}, func(line string) {
+			fmt.Printf("[remote-session-files] %s\n", line)
+		})
+	case "proxy":
+		safego.Go(func() {
+			m.runProxySession(ctx, session)
+		}, func(line string) {
+			fmt.Printf("[remote-session-proxy] %s\n", line)
+		})
+	}
+
+	// Monitor de expiracao — copia o stopCh ANTES de soltar o lock (evita race)
+	stopCh := session.stopCh
 	safego.Go(func() {
-		m.monitorExpiration(sessionID, expiresAt)
+		m.monitorExpiration(sessionID, expiresAt, stopCh)
 	}, func(line string) {
 		fmt.Printf("[remote-session] %s\n", line)
 	})
 
 	if m.onSessionStarted != nil {
-		m.onSessionStarted(sessionID, session.Kind)
+		m.onSessionStarted(sessionID, kind)
 	}
 
 	return true, ""
@@ -208,7 +254,11 @@ func (m *Manager) closeSessionLocked(sessionID, reason string) bool {
 		close(s.stopCh)
 	}
 
-	m.publishEvent(sessionID, "closed", map[string]string{"reason": reason})
+	if m.natsStream != nil {
+		m.natsStream.PublishEvent(sessionID, "closed", map[string]string{"reason": reason})
+	} else {
+		m.publishEventLegacy(sessionID, "closed", nil)
+	}
 
 	if m.onSessionEnded != nil {
 		m.onSessionEnded(sessionID, reason)
@@ -216,7 +266,7 @@ func (m *Manager) closeSessionLocked(sessionID, reason string) bool {
 	return true
 }
 
-func (m *Manager) publishEvent(sessionID, eventType string, data any) {
+func (m *Manager) publishEventLegacy(sessionID, eventType string, data any) {
 	if m.nc == nil || !m.nc.IsConnected() {
 		return
 	}
@@ -226,12 +276,19 @@ func (m *Manager) publishEvent(sessionID, eventType string, data any) {
 		"data":      data,
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
 	})
-	// Publica no subject de eventos (formato tenant.{c}.site.{s}.agent.{a}.remote.session.{id}.event)
-	// Como estamos no agent, o servidor inscreve nesse subject
+	// Fallback: publica no subject legacy; sera substituido quando natsStream configurado
 	_ = m.nc.Publish(fmt.Sprintf("agent.remote.session.%s.event", sessionID), payload)
 }
 
-func (m *Manager) monitorExpiration(sessionID string, expiresAt time.Time) {
+func (m *Manager) publishEvent(sessionID, eventType string, data any) {
+	if m.natsStream != nil {
+		_ = m.natsStream.PublishEvent(sessionID, eventType, data)
+		return
+	}
+	m.publishEventLegacy(sessionID, eventType, data)
+}
+
+func (m *Manager) monitorExpiration(sessionID string, expiresAt time.Time, stopCh chan struct{}) {
 	select {
 	case <-time.After(time.Until(expiresAt)):
 		m.mu.Lock()
@@ -239,8 +296,122 @@ func (m *Manager) monitorExpiration(sessionID string, expiresAt time.Time) {
 		if _, ok := m.sessions[sessionID]; ok {
 			m.closeSessionLocked(sessionID, "expired")
 		}
-	case <-m.sessions[sessionID].stopCh:
+	case <-stopCh:
 		// sessao fechada antes de expirar
+	}
+}
+
+// ── Stream runners (iniciados em goroutines pelo handleStart) ──
+
+func (m *Manager) runScreenSession(ctx context.Context, session *Session) {
+	defer close(session.doneCh)
+
+	if m.natsStream == nil {
+		fmt.Printf("[remote-session-screen] natsStream nao configurado para sessao %s\n", session.ID)
+		return
+	}
+
+	screenSession, err := NewSessionScreen(session.ID, m.natsStream)
+	if err != nil {
+		m.publishEvent(session.ID, "error", map[string]string{"error": err.Error()})
+		return
+	}
+	defer screenSession.Stop()
+
+	// Configura qualidade e codec
+	screenSession.SetQuality(session.Quality)
+	screenSession.SetCodec(session.Codec)
+
+	// Context que encerra quando stopCh fecha ou expires
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	go func() {
+		select {
+		case <-session.stopCh:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+
+	fps := 15 // default; o quality manager ajusta
+	if err := screenSession.Start(ctx, fps); err != nil {
+		m.publishEvent(session.ID, "error", map[string]string{"error": err.Error()})
+	}
+}
+
+func (m *Manager) runTerminalSession(ctx context.Context, session *Session) {
+	defer close(session.doneCh)
+
+	if m.natsStream == nil {
+		return
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	go func() {
+		select {
+		case <-session.stopCh:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+
+	// TODO: integrar terminal.Shell com natsStream.SubscribeToTermIn + PublishTermOut
+	select {
+	case <-ctx.Done():
+	case <-session.stopCh:
+	}
+}
+
+func (m *Manager) runFilesSession(ctx context.Context, session *Session) {
+	defer close(session.doneCh)
+
+	if m.natsStream == nil {
+		return
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	go func() {
+		select {
+		case <-session.stopCh:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+
+	// TODO: integrar fileserver.Server com natsStream.SubscribeToFilesReq
+	select {
+	case <-ctx.Done():
+	case <-session.stopCh:
+	}
+}
+
+func (m *Manager) runProxySession(ctx context.Context, session *Session) {
+	defer close(session.doneCh)
+
+	if m.natsStream == nil {
+		return
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	go func() {
+		select {
+		case <-session.stopCh:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+
+	// TODO: integrar netproxy.Proxy com natsStream.SubscribeToProxyReq
+	select {
+	case <-ctx.Done():
+	case <-session.stopCh:
 	}
 }
 

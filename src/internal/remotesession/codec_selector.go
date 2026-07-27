@@ -4,13 +4,20 @@ import "discovery/internal/screen"
 
 // CodecSelector seleciona o encoder apropriado baseado no perfil e GPU.
 type CodecSelector struct {
-	gpu screen.GPUCapability
+	gpu            screen.GPUCapability
+	preferredCodec string
 }
 
-func NewCodecSelector() *CodecSelector {
-	return &CodecSelector{
-		gpu: screen.DetectGPU(),
+func NewCodecSelector() CodecSelector {
+	return CodecSelector{
+		gpu:            screen.DetectGPU(),
+		preferredCodec: "auto",
 	}
+}
+
+// SetPreferred define o codec preferido (auto/jpeg/webp/h264).
+func (cs *CodecSelector) SetPreferred(codec string) {
+	cs.preferredCodec = codec
 }
 
 // Select retorna o encoder ideal para o perfil e codec desejado.

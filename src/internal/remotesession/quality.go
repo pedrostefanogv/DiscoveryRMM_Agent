@@ -66,6 +66,13 @@ func (qm *QualityManager) SetProfile(profile string) {
 	}
 }
 
+// Profile retorna o nome do perfil atual.
+func (qm *QualityManager) Profile() string {
+	qm.mu.RLock()
+	defer qm.mu.RUnlock()
+	return qm.profile
+}
+
 // RecordFrame registra metricas de um frame para adaptacao.
 func (qm *QualityManager) RecordFrame(bytes int, ts time.Time) {
 	qm.mu.Lock()

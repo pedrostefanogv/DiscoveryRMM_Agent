@@ -11,20 +11,43 @@ import (
 // NatsStreamHandler manages NATS-based bidirectional communication for remote sessions.
 type NatsStreamHandler struct {
 	nc       *nats.Conn
-	agentID  string // used for constructing subject patterns
+	agentID  string
+	tenantID string
+	siteID   string
 }
 
 // NewNatsStreamHandler creates a new NATS stream handler.
-func NewNatsStreamHandler(nc *nats.Conn, agentID string) *NatsStreamHandler {
+// tenantID, siteID, agentID are required to construct literal subject patterns for publish.
+func NewNatsStreamHandler(nc *nats.Conn, tenantID, siteID, agentID string) *NatsStreamHandler {
 	return &NatsStreamHandler{
-		nc:      nc,
-		agentID: agentID,
+		nc:       nc,
+		tenantID: tenantID,
+		siteID:   siteID,
+		agentID:  agentID,
 	}
+}
+
+// subjectBase returns the literal base subject for this handler's scope (for publish).
+// Format: tenant.{tenantID}.site.{siteID}.agent.{agentID}.remote.session
+func (h *NatsStreamHandler) subjectBase() string {
+	return fmt.Sprintf("tenant.%s.site.%s.agent.%s.remote.session", h.tenantID, h.siteID, h.agentID)
+}
+
+// subscribeBase returns the wildcard pattern for subscribing across tenants/sites/agents.
+// Format: tenant.*.site.*.agent.*.remote.session.{sessionID}
+func (h *NatsStreamHandler) subscribePattern(sessionID, suffix string) string {
+	return fmt.Sprintf("tenant.*.site.*.agent.*.remote.session.%s.%s", sessionID, suffix)
+}
+
+// publishSubject builds the literal publish subject for a given session and suffix.
+// Format: tenant.{tenantID}.site.{siteID}.agent.{agentID}.remote.session.{sessionID}.{suffix}
+func (h *NatsStreamHandler) publishSubject(sessionID, suffix string) string {
+	return fmt.Sprintf("%s.%s.%s", h.subjectBase(), sessionID, suffix)
 }
 
 // SubscribeToControl subscreve ao subject de controle da sessao (Server→Agent).
 func (h *NatsStreamHandler) SubscribeToControl(sessionID string, handler func(action string, payload json.RawMessage)) (*nats.Subscription, error) {
-	subject := fmt.Sprintf("tenant.*.site.*.agent.*.remote.session.%s.control", sessionID)
+	subject := h.subscribePattern(sessionID, "control")
 	return h.nc.Subscribe(subject, func(msg *nats.Msg) {
 		var ctrl struct {
 			Action  string          `json:"action"`
@@ -39,14 +62,12 @@ func (h *NatsStreamHandler) SubscribeToControl(sessionID string, handler func(ac
 
 // PublishFrame envia um frame de tela para o viewer.
 func (h *NatsStreamHandler) PublishFrame(sessionID string, frameData []byte) error {
-	subject := fmt.Sprintf("tenant.*.site.*.agent.*.remote.session.%s.frame", sessionID)
-	return h.nc.Publish(subject, frameData)
+	return h.nc.Publish(h.publishSubject(sessionID, "frame"), frameData)
 }
 
 // PublishTermOut envia saida do terminal para o viewer.
 func (h *NatsStreamHandler) PublishTermOut(sessionID string, data string) error {
-	subject := fmt.Sprintf("tenant.*.site.*.agent.*.remote.session.%s.term.out", sessionID)
-	return h.nc.Publish(subject, []byte(data))
+	return h.nc.Publish(h.publishSubject(sessionID, "term.out"), []byte(data))
 }
 
 // PublishEvent envia um evento de sessao.
@@ -56,60 +77,51 @@ func (h *NatsStreamHandler) PublishEvent(sessionID string, eventType string, dat
 		"eventType": eventType,
 		"data":      data,
 	})
-	subject := fmt.Sprintf("tenant.*.site.*.agent.*.remote.session.%s.event", sessionID)
-	return h.nc.Publish(subject, payload)
+	return h.nc.Publish(h.publishSubject(sessionID, "event"), payload)
 }
 
 // PublishSignal envia sinalizacao WebRTC (SDP/ICE).
 func (h *NatsStreamHandler) PublishSignal(sessionID string, signalData []byte) error {
-	subject := fmt.Sprintf("tenant.*.site.*.agent.*.remote.session.%s.signal", sessionID)
-	return h.nc.Publish(subject, signalData)
+	return h.nc.Publish(h.publishSubject(sessionID, "signal"), signalData)
 }
 
 // SubscribeToInput subscreve a eventos de input (mouse/teclado) do viewer.
 func (h *NatsStreamHandler) SubscribeToInput(sessionID string, handler func(inputData []byte)) (*nats.Subscription, error) {
-	subject := fmt.Sprintf("tenant.*.site.*.agent.*.remote.session.%s.input", sessionID)
-	return h.nc.Subscribe(subject, func(msg *nats.Msg) {
+	return h.nc.Subscribe(h.subscribePattern(sessionID, "input"), func(msg *nats.Msg) {
 		handler(msg.Data)
 	})
 }
 
 // SubscribeToTermIn subscreve a stdin do terminal enviado pelo viewer.
 func (h *NatsStreamHandler) SubscribeToTermIn(sessionID string, handler func(data []byte)) (*nats.Subscription, error) {
-	subject := fmt.Sprintf("tenant.*.site.*.agent.*.remote.session.%s.term.in", sessionID)
-	return h.nc.Subscribe(subject, func(msg *nats.Msg) {
+	return h.nc.Subscribe(h.subscribePattern(sessionID, "term.in"), func(msg *nats.Msg) {
 		handler(msg.Data)
 	})
 }
 
 // SubscribeToFilesReq subscreve a requisicoes de arquivos (list/get/put/delete).
 func (h *NatsStreamHandler) SubscribeToFilesReq(sessionID string, handler func(reqData []byte) []byte) (*nats.Subscription, error) {
-	subject := fmt.Sprintf("tenant.*.site.*.agent.*.remote.session.%s.files.req", sessionID)
-	return h.nc.Subscribe(subject, func(msg *nats.Msg) {
+	return h.nc.Subscribe(h.subscribePattern(sessionID, "files.req"), func(msg *nats.Msg) {
 		resp := handler(msg.Data)
 		if resp != nil {
-			respSubject := fmt.Sprintf("tenant.*.site.*.agent.*.remote.session.%s.files.resp", sessionID)
-			_ = h.nc.Publish(respSubject, resp)
+			_ = h.nc.Publish(h.publishSubject(sessionID, "files.resp"), resp)
 		}
 	})
 }
 
 // SubscribeToProxyReq subscreve a requisicoes de proxy HTTP.
 func (h *NatsStreamHandler) SubscribeToProxyReq(sessionID string, handler func(reqData []byte) []byte) (*nats.Subscription, error) {
-	subject := fmt.Sprintf("tenant.*.site.*.agent.*.remote.session.%s.proxy.req", sessionID)
-	return h.nc.Subscribe(subject, func(msg *nats.Msg) {
+	return h.nc.Subscribe(h.subscribePattern(sessionID, "proxy.req"), func(msg *nats.Msg) {
 		resp := handler(msg.Data)
 		if resp != nil {
-			respSubject := fmt.Sprintf("tenant.*.site.*.agent.*.remote.session.%s.proxy.resp", sessionID)
-			_ = h.nc.Publish(respSubject, resp)
+			_ = h.nc.Publish(h.publishSubject(sessionID, "proxy.resp"), resp)
 		}
 	})
 }
 
 // SubscribeToSignal subscreve a sinalizacao WebRTC do viewer.
 func (h *NatsStreamHandler) SubscribeToSignal(sessionID string, handler func(signalData []byte)) (*nats.Subscription, error) {
-	subject := fmt.Sprintf("tenant.*.site.*.agent.*.remote.session.%s.signal", sessionID)
-	return h.nc.Subscribe(subject, func(msg *nats.Msg) {
+	return h.nc.Subscribe(h.subscribePattern(sessionID, "signal"), func(msg *nats.Msg) {
 		handler(msg.Data)
 	})
 }
@@ -171,11 +183,47 @@ func (h *NatsStreamHandler) SubscribeAll(ctx context.Context, sessionID string, 
 		}
 	}
 
+	if handlers.OnTermIn != nil {
+		subs.TermIn, err = h.SubscribeToTermIn(sessionID, handlers.OnTermIn)
+		if err != nil {
+			subs.UnsubscribeAll()
+			return nil, fmt.Errorf("subscribe term.in: %w", err)
+		}
+	}
+
+	if handlers.OnFilesReq != nil {
+		subs.FilesReq, err = h.SubscribeToFilesReq(sessionID, handlers.OnFilesReq)
+		if err != nil {
+			subs.UnsubscribeAll()
+			return nil, fmt.Errorf("subscribe files.req: %w", err)
+		}
+	}
+
+	if handlers.OnProxyReq != nil {
+		subs.ProxyReq, err = h.SubscribeToProxyReq(sessionID, handlers.OnProxyReq)
+		if err != nil {
+			subs.UnsubscribeAll()
+			return nil, fmt.Errorf("subscribe proxy.req: %w", err)
+		}
+	}
+
+	if handlers.OnSignal != nil {
+		subs.Signal, err = h.SubscribeToSignal(sessionID, handlers.OnSignal)
+		if err != nil {
+			subs.UnsubscribeAll()
+			return nil, fmt.Errorf("subscribe signal: %w", err)
+		}
+	}
+
 	return subs, nil
 }
 
 // SessionHandlers define os handlers de eventos para uma sessao.
 type SessionHandlers struct {
-	OnControl func(action string, payload json.RawMessage)
-	OnInput   func(data []byte)
+	OnControl   func(action string, payload json.RawMessage)
+	OnInput     func(data []byte)
+	OnTermIn    func(data []byte)
+	OnFilesReq  func(reqData []byte) []byte
+	OnProxyReq  func(reqData []byte) []byte
+	OnSignal    func(signalData []byte)
 }

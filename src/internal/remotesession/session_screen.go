@@ -3,7 +3,6 @@ package remotesession
 import (
 	"context"
 	"encoding/binary"
-	"encoding/json"
 	"fmt"
 	"time"
 
@@ -17,6 +16,8 @@ type SessionScreen struct {
 	encoder    screen.Encoder
 	natsStream *NatsStreamHandler
 	quality    *QualityManager
+	codecSel   CodecSelector
+	recording  *RecordingSource
 
 	frameSeq  uint64
 	stopCh    chan struct{}
@@ -25,7 +26,7 @@ type SessionScreen struct {
 
 // FrameHeader binario para frames (12 bytes).
 //   seq (uint32) | ts (uint32 unix ms) | w (uint16) | h (uint16)
-// O payload JPEG/WebP segue apos o header.
+// O payload JPEG/WebP/H.264 segue apos o header.
 const frameHeaderLen = 12
 
 // NewSessionScreen cria uma nova sessao de screen capture.
@@ -36,7 +37,9 @@ func NewSessionScreen(sessionID string, natsStream *NatsStreamHandler) (*Session
 	}
 
 	encoder := screen.NewJPEGEncoder()
+	codecSel := NewCodecSelector()
 	quality := NewQualityManager(QualityConfig{})
+	recording := NewRecordingSource(sessionID, natsStream)
 
 	return &SessionScreen{
 		sessionID:  sessionID,
@@ -44,6 +47,8 @@ func NewSessionScreen(sessionID string, natsStream *NatsStreamHandler) (*Session
 		encoder:    encoder,
 		natsStream: natsStream,
 		quality:    &quality,
+		codecSel:   codecSel,
+		recording:  recording,
 		stopCh:     make(chan struct{}),
 		doneCh:     make(chan struct{}),
 	}, nil
@@ -55,12 +60,15 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 	defer close(s.doneCh)
 	defer s.capturer.Close()
 
-	gpu := screen.DetectGPU()
+	_ = screen.DetectGPU() // GPU detection for future optimization (H.264 encoder selection)
+
 	frameInterval := time.Second / time.Duration(fps)
 	ticker := time.NewTicker(frameInterval)
 	defer ticker.Stop()
 
 	quality := s.quality.Current()
+	// Cache DXGI→GDI fallback state (melhoria M5)
+	dxgiFailed := false
 
 	for {
 		select {
@@ -75,18 +83,19 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 		case <-ticker.C:
 			frame, err := s.capturer.AcquireNextFrame()
 			if err != nil {
-				// Fallback GDI se DXGI falhou
-				if s.capturer.Name() == "dxgi" {
+				// Fallback GDI se DXGI falhou — cache do estado (M5)
+				if !dxgiFailed && s.capturer.Name() == "dxgi" {
 					gdi, gdiErr := screen.NewGDICapturer()
 					if gdiErr == nil {
 						s.capturer.Close()
 						s.capturer = gdi
+						dxgiFailed = true
 					}
 				}
 				continue
 			}
 
-			// Encode JPEG
+			// Encode frame
 			q := quality.JpegQuality
 			encoded, err := s.encoder.Encode(frame, q)
 			s.capturer.ReleaseFrame()
@@ -107,13 +116,13 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 				continue
 			}
 
+			// Tap de gravação (G5)
+			s.recording.CaptureFrame(buf)
+
 			s.frameSeq++
 
 			// Adaptacao de qualidade
 			s.quality.RecordFrame(len(buf), time.Now())
-
-			_ = gpu // gpu info available for future optimization
-			_ = json.Marshal // keep json import
 		}
 	}
 }
@@ -131,4 +140,14 @@ func (s *SessionScreen) Stop() {
 // SetQuality atualiza o perfil de qualidade.
 func (s *SessionScreen) SetQuality(profile string) {
 	s.quality.SetProfile(profile)
+}
+
+// SetCodec configura o codec preferencial (auto/jpeg/webp/h264).
+func (s *SessionScreen) SetCodec(codec string) {
+	s.codecSel.SetPreferred(codec)
+	// Seleciona o encoder otimo com base na GPU e codec
+	encoder := s.codecSel.Select(s.quality.Profile(), codec)
+	if encoder != nil {
+		s.encoder = encoder
+	}
 }

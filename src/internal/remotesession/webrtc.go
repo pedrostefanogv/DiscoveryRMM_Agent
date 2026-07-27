@@ -83,6 +83,37 @@ func NewWebRTCSession(
 // Start inicia a negociacao WebRTC e aguarda a conexao.
 // O browser envia offer via NATS signal; o agent responde com answer.
 func (w *WebRTCSession) Start(ctx context.Context) error {
+	// B12: Configura callback de ICE candidate
+	connected := make(chan struct{})
+	iceDone := make(chan struct{})
+
+	w.peerConn.OnICECandidate(func(candidate *webrtc.ICECandidate) {
+		if candidate == nil {
+			// ICE gathering completo
+			close(iceDone)
+			return
+		}
+		// Envia candidato ao viewer via NATS signal
+		candidateJSON, err := json.Marshal(candidate.ToJSON())
+		if err != nil {
+			return
+		}
+		_ = w.natsStream.PublishSignal(w.sessionID, candidateJSON)
+	})
+
+	w.peerConn.OnICEConnectionStateChange(func(state webrtc.ICEConnectionState) {
+		switch state {
+		case webrtc.ICEConnectionStateConnected:
+			select {
+			case <-connected:
+			default:
+				close(connected)
+			}
+		case webrtc.ICEConnectionStateFailed:
+			fmt.Printf("[webrtc] ICE failed for session %s\n", w.sessionID)
+		}
+	})
+
 	// Subscreve a signaling
 	sub, err := w.natsStream.SubscribeToSignal(w.sessionID, func(data []byte) {
 		w.handleSignal(data)
@@ -96,6 +127,8 @@ func (w *WebRTCSession) Start(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
+	case <-connected:
+		return nil
 	case <-time.After(30 * time.Second):
 		return fmt.Errorf("webrtc ice timeout")
 	}
