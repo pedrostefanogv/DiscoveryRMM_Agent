@@ -484,7 +484,10 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 		if handled {
 			return true, 0, "ok", errMsg
 		}
-		return false, 0, "", errMsg
+		// Retorna handled=true mesmo em caso de erro (ex: payload string em vez de map,
+		// action ausente ou desconhecida) para evitar que o payload JSON seja executado
+		// como comando shell via cmd /C no fallback de executeCommand.
+		return true, 1, "", "remotesession: " + errMsg
 	}
 
 	// Delega comandos de inventário sob demanda (SystemInfo)
@@ -511,6 +514,18 @@ func isRemoteSessionCommandType(cmdType string) bool {
 func parseAnyMap(v any) map[string]any {
 	if m, ok := v.(map[string]any); ok {
 		return m
+	}
+	// Trata double-encoding: payload chegou como string JSON (ex: via Relay que
+	// re-encoda o payload). Sem isso, o Manager.HandleCommand recebe nil e retorna
+	// handled=false, fazendo o fallback executar o JSON como comando shell.
+	if s, ok := v.(string); ok {
+		s = strings.TrimSpace(s)
+		if len(s) > 0 && s[0] == '{' {
+			var m map[string]any
+			if err := json.Unmarshal([]byte(s), &m); err == nil {
+				return m
+			}
+		}
 	}
 	return nil
 }
