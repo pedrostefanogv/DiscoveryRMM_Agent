@@ -33,10 +33,6 @@ const (
 	// Provisioning & Zero-Touch
 	APIEndpointProvisioningToken = 15 * time.Second
 
-	// Suporte & MeshCentral
-	APIEndpointMeshCentralInstall = 30 * time.Second
-	APIEndpointMeshCentralEmbed   = 15 * time.Second
-
 	// Updates
 	APIEndpointUpdateManifest = 30 * time.Second
 	APIEndpointUpdateDownload = 30 * time.Minute

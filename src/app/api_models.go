@@ -21,7 +21,6 @@ type ServerConfiguration struct {
 	P2PFilesEnabled               bool   `json:"p2PFilesEnabled"`
 	CloudBootstrapEnabled         bool   `json:"cloudBootstrapEnabled"`
 	SupportEnabled                bool   `json:"supportEnabled"`
-	MeshCentralGroupPolicyProfile string `json:"meshCentralGroupPolicyProfile"`
 	ChatAIEnabled                 bool   `json:"chatAIEnabled"`
 	KnowledgeBaseEnabled          bool   `json:"knowledgeBaseEnabled"`
 	AppStorePolicy                string `json:"appStorePolicy"`
@@ -59,7 +58,6 @@ type ClientConfiguration struct {
 	P2PFilesEnabled               *bool   `json:"p2PFilesEnabled"`
 	CloudBootstrapEnabled         *bool   `json:"cloudBootstrapEnabled"`
 	SupportEnabled                *bool   `json:"supportEnabled"`
-	MeshCentralGroupPolicyProfile *string `json:"meshCentralGroupPolicyProfile"`
 	ChatAIEnabled                 *bool   `json:"chatAIEnabled"`
 	KnowledgeBaseEnabled          *bool   `json:"knowledgeBaseEnabled"`
 	AppStorePolicy                *string `json:"appStorePolicy"`
@@ -88,7 +86,6 @@ type SiteConfiguration struct {
 	DiscoveryEnabled                     *bool   `json:"discoveryEnabled"`
 	P2PFilesEnabled                      *bool   `json:"p2PFilesEnabled"`
 	SupportEnabled                       *bool   `json:"supportEnabled"`
-	MeshCentralGroupPolicyProfile        *string `json:"meshCentralGroupPolicyProfile"`
 	ChatAIEnabled                        *bool   `json:"chatAIEnabled"`
 	KnowledgeBaseEnabled                 *bool   `json:"knowledgeBaseEnabled"`
 	AppStorePolicy                       *string `json:"appStorePolicy"`
@@ -101,10 +98,6 @@ type SiteConfiguration struct {
 	Location                             *string `json:"location"`
 	ContactPerson                        *string `json:"contactPerson"`
 	ContactEmail                         *string `json:"contactEmail"`
-	MeshCentralGroupName                 *string `json:"meshCentralGroupName"`
-	MeshCentralMeshID                    *string `json:"meshCentralMeshId"`
-	MeshCentralAppliedGroupPolicyProfile *string `json:"meshCentralAppliedGroupPolicyProfile"`
-	MeshCentralAppliedGroupPolicyAt      *string `json:"meshCentralAppliedGroupPolicyAt"`
 	LockedFieldsJSON                     string  `json:"lockedFieldsJson"`
 	CreatedAt                            string  `json:"createdAt"`
 	UpdatedAt                            string  `json:"updatedAt"`
@@ -251,13 +244,6 @@ func mergeAgentConfigResponse(resp *AgentConfigResponse) AgentConfiguration {
 		cfg.NatsServerHost = srv.NatsServerHostInternal
 	}
 	cfg.NatsUseWssExternal = boolPtr(srv.NatsUseWssExternal)
-	cfg.MeshCentralGroupPolicyProfile = resolveString(
-		stringFromPtr(site, func(s *SiteConfiguration) *string { return s.MeshCentralGroupPolicyProfile }),
-		resolveString(
-			stringFromPtr(cli, func(c *ClientConfiguration) *string { return c.MeshCentralGroupPolicyProfile }),
-			srv.MeshCentralGroupPolicyProfile,
-		),
-	)
 
 	// Parse embedded JSON strings (autoUpdate, agentUpdate, branding, etc.)
 	// Server fornece os defaults; Client/Site podem sobrescrever

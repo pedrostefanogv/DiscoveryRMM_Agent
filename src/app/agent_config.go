@@ -118,8 +118,6 @@ type AgentConfiguration struct {
 	HandshakeEnabled              *bool                           `json:"handshakeEnabled"`
 	ApiTlsCertHash                string                          `json:"apiTlsCertHash"`
 	NatsTlsCertHash               string                          `json:"natsTlsCertHash"`
-	MeshCentralEnabledEffective   *bool                           `json:"meshCentralEnabledEffective"`
-	MeshCentralGroupPolicyProfile string                          `json:"meshCentralGroupPolicyProfile"`
 	ChatAIEnabled                 *bool                           `json:"chatAIEnabled"`
 	KnowledgeBaseEnabled          *bool                           `json:"knowledgeBaseEnabled"`
 	AppStoreEnabled               *bool                           `json:"appStoreEnabled"`
@@ -216,8 +214,6 @@ func parseLegacyAgentConfiguration(data []byte) (AgentConfiguration, error) {
 		HandshakeEnabled:              getBoolPtr("handshakeEnabled"),
 		ApiTlsCertHash:                strings.ToUpper(getString("apiTlsCertHash")),
 		NatsTlsCertHash:               strings.ToUpper(getString("natsTlsCertHash")),
-		MeshCentralEnabledEffective:   getBoolPtr("meshCentralEnabledEffective"),
-		MeshCentralGroupPolicyProfile: getString("meshCentralGroupPolicyProfile"),
 		ChatAIEnabled:                 getBoolPtr("chatAIEnabled"),
 		KnowledgeBaseEnabled:          getBoolPtr("knowledgeBaseEnabled"),
 		AppStoreEnabled:               getBoolPtr("appStoreEnabled"),
@@ -694,10 +690,7 @@ func (a *App) applyAgentConfiguration(cfg AgentConfiguration) {
 			a.syncCoord.setPollEvery(time.Duration(*cfg.InventoryIntervalHours) * time.Hour)
 		}
 	}
-	// MeshCentral bootstrap idempotente (instalação/repair/report) após refresh de configuração.
-	if cfg.MeshCentralEnabledEffective != nil && *cfg.MeshCentralEnabledEffective {
-		go a.ensureMeshCentralInstalled(a.ctx, "configuration-refresh", true)
-	}
+
 	// Consolidation engine: propagar polÃ­ticas de janela quando disponÃ­veis.
 	if a.consolEngine != nil {
 		a.consolEngine.SetAgentID(strings.TrimSpace(a.GetDebugConfig().AgentID))

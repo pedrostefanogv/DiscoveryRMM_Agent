@@ -33,6 +33,7 @@ import (
 	"discovery/internal/platform"
 	"discovery/internal/printer"
 	"discovery/internal/processutil"
+	"discovery/internal/remotesession"
 	"discovery/internal/safego"
 	"discovery/internal/selfupdate"
 	"discovery/internal/services"
@@ -133,7 +134,7 @@ type App struct {
 	trayIcon                 []byte
 	trayProvisioning         []byte
 	trayOffline              []byte
-	meshEnsureRunning        atomic.Bool
+	remoteSessionMgr         *remotesession.Manager
 	zeroTouchAttemptInFlight atomic.Bool
 	zeroTouchApprovalPending atomic.Bool
 
@@ -248,6 +249,7 @@ func NewApp(opts AppStartupOptions) *App {
 		}
 	})
 	a.remoteDebug = newRemoteDebugManager(a.logs.append, a.GetDebugConfig, a.GetAgentConfiguration, a.logs.subscribe, a.logs.snapshotAndSubscribe)
+	a.remoteSessionMgr = remotesession.NewManager(nil) // NATS sera injetado quando conectado; Fase 1 opera via commandos apenas
 	inventoryProvider.SetProgressCallback(func() {
 		a.pulseInventoryHeartbeat()
 	})
@@ -367,8 +369,8 @@ func NewApp(opts AppStartupOptions) *App {
 		DebugConfig:              a.GetDebugConfig,
 		Version:                  Version,
 		CommitHash:               buildinfo.Commit,
-		ResolveMeshCentralNodeID: a.getMeshCentralNodeIDForReport,
-		OnHardwareReportSuccess:  a.markMeshCentralReportSuccess,
+		ResolveMeshCentralNodeID: nil,
+		OnHardwareReportSuccess:  nil,
 		ShouldDeferNonCritical:   a.nonCriticalBackoffWindow,
 	})
 	a.supportSvc = appsupport.NewService(appsupport.Options{
@@ -768,10 +770,6 @@ func (a *App) startup(ctx context.Context) {
 		go func() {
 			_ = a.onPostBootstrapProvisioned(ctx)
 		}()
-
-		a.safeGo(func() {
-			a.ensureMeshCentralInstalled(ctx, "startup-auth", false)
-		})
 
 		a.agentConn.Run(ctx)
 	})

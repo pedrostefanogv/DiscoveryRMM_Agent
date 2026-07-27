@@ -97,8 +97,7 @@ type Options struct {
 	DebugConfig              func() debug.Config
 	Version                  string
 	CommitHash               string
-	ResolveMeshCentralNodeID func() string
-	OnHardwareReportSuccess  func(string)
+
 	ShouldDeferNonCritical   func() (time.Duration, bool, string)
 }
 
@@ -118,8 +117,6 @@ type Service struct {
 	debugConfig                      func() debug.Config
 	version                          string
 	commitHash                       string
-	resolveMeshCentralNodeID         func() string
-	onHardwareReportSuccess          func(string)
 	shouldDeferNonCritical           func() (time.Duration, bool, string)
 	postInstallInventoryRefreshDelay time.Duration
 	postInstallInventoryRefreshMu    sync.Mutex
@@ -147,8 +144,6 @@ func NewService(opts Options) *Service {
 		debugConfig:                      opts.DebugConfig,
 		version:                          opts.Version,
 		commitHash:                       opts.CommitHash,
-		resolveMeshCentralNodeID:         opts.ResolveMeshCentralNodeID,
-		onHardwareReportSuccess:          opts.OnHardwareReportSuccess,
 		shouldDeferNonCritical:           opts.ShouldDeferNonCritical,
 		postInstallInventoryRefreshDelay: postInstallInventoryRefreshDelayDefault,
 	}

@@ -475,12 +475,42 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 		return false, 0, "", ""
 	}
 
+	// ── Remote Session Commands (acesso remoto nativo) ──
+	if isRemoteSessionCommandType(cmdType) {
+		if a.remoteSessionMgr == nil {
+			return true, 1, "", "remote session manager nao inicializado"
+		}
+		handled, errMsg := a.remoteSessionMgr.HandleCommand(parent, parseAnyMap(payload))
+		if handled {
+			return true, 0, "ok", errMsg
+		}
+		return false, 0, "", errMsg
+	}
+
 	// Delega comandos de inventário sob demanda (SystemInfo)
 	if cmdType == "systeminfo" {
 		return a.handleSystemInfoCommand(parent, payload)
 	}
 
 	return a.remoteDebug.HandleCommand(parent, cmdType, payload)
+// ── Remote Session Helpers ──
+
+func isRemoteSessionCommandType(cmdType string) bool {
+	switch strings.ToLower(strings.TrimSpace(cmdType)) {
+	case "remotesessionstart", "remote_session_start", "remotesessionstop", "remote_session_stop",
+		"remotesessionquality", "remote_session_quality",
+		"recordingstart", "recording_start", "recordingstop", "recording_stop":
+		return true
+	default:
+		return false
+	}
+}
+
+func parseAnyMap(v any) map[string]any {
+	if m, ok := v.(map[string]any); ok {
+		return m
+	}
+	return nil
 }
 
 func (a *App) onAgentCommandOutput(cmdType, output, errText string) {

@@ -20,7 +20,6 @@ type agentHardwareEnvelope struct {
 	AgentID                string          `json:"agentId"`
 	Hostname               string          `json:"hostname"`
 	DisplayName            string          `json:"displayName"`
-	MeshCentralNodeID      string          `json:"meshCentralNodeId,omitempty"`
 	Status                 string          `json:"status"`
 	OperatingSystem        string          `json:"operatingSystem"`
 	OSVersion              string          `json:"osVersion"`
@@ -178,9 +177,6 @@ func (s *Service) SyncInventoryOnStartup(ctx context.Context, report models.Inve
 
 	hardwarePayload := buildAgentHardwareEnvelope(report, s.version, s.commitHash)
 	hardwarePayload.AgentID = strings.TrimSpace(cfg.AgentID)
-	if s.resolveMeshCentralNodeID != nil {
-		hardwarePayload.MeshCentralNodeID = strings.TrimSpace(s.resolveMeshCentralNodeID())
-	}
 	hardwareBody, err := json.Marshal(hardwarePayload)
 	if err != nil {
 		s.logf("[agent-sync] falha ao serializar inventario: " + err.Error())
@@ -317,8 +313,6 @@ func (s *Service) SyncInventoryOnStartup(ctx context.Context, report models.Inve
 		s.onHardwareReportSuccess(strings.TrimSpace(hardwarePayload.MeshCentralNodeID))
 	}
 }
-
-// SyncNetworkConnections collects and uploads only listening ports and open sockets.
 func (s *Service) SyncNetworkConnections(ctx context.Context) error {
 	if err := s.requireProvisionedInventory(); err != nil {
 		return err
