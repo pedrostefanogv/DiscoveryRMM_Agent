@@ -68,7 +68,7 @@ func (m *Manager) HandleCommand(ctx context.Context, payload map[string]any) (bo
 	case "stop":
 		return m.handleStop(ctx, payload)
 	case "quality":
-		return m.handleQuality(payload)
+		return m.handleQuality(ctx, payload)
 	case "recording_start":
 		return m.handleRecordingStart(ctx, payload)
 	case "recording_stop":
@@ -78,7 +78,7 @@ func (m *Manager) HandleCommand(ctx context.Context, payload map[string]any) (bo
 	}
 }
 
-func (m *Manager) handleStart(ctx context.Context, payload map[string]any) (bool, string) {
+func (m *Manager) handleStart(_ context.Context, payload map[string]any) (bool, string) {
 	sessionID := toString(payload["sessionId"])
 	if sessionID == "" {
 		return false, "payload sem sessionId"
@@ -120,8 +120,8 @@ func (m *Manager) handleStart(ctx context.Context, payload map[string]any) (bool
 	// Monitor de expiração
 	safego.Go(func() {
 		m.monitorExpiration(sessionID, expiresAt)
-	}, func(format string, args ...interface{}) {
-		fmt.Printf("[remote-session] "+format+"\n", args...)
+	}, func(line string) {
+		fmt.Printf("[remote-session] %s\n", line)
 	})
 
 	if m.onSessionStarted != nil {
@@ -131,7 +131,7 @@ func (m *Manager) handleStart(ctx context.Context, payload map[string]any) (bool
 	return true, ""
 }
 
-func (m *Manager) handleStop(ctx context.Context, payload map[string]any) (bool, string) {
+func (m *Manager) handleStop(_ context.Context, payload map[string]any) (bool, string) {
 	sessionID := toString(payload["sessionId"])
 	if sessionID == "" {
 		return false, "payload sem sessionId"
@@ -143,7 +143,7 @@ func (m *Manager) handleStop(ctx context.Context, payload map[string]any) (bool,
 	return m.closeSessionLocked(sessionID, "stopped-by-server"), ""
 }
 
-func (m *Manager) handleQuality(payload map[string]any) (bool, string) {
+func (m *Manager) handleQuality(_ context.Context, payload map[string]any) (bool, string) {
 	sessionID := toString(payload["sessionId"])
 	quality := toString(payload["quality"])
 	if sessionID == "" || quality == "" {
@@ -162,7 +162,7 @@ func (m *Manager) handleQuality(payload map[string]any) (bool, string) {
 	return true, ""
 }
 
-func (m *Manager) handleRecordingStart(ctx context.Context, payload map[string]any) (bool, string) {
+func (m *Manager) handleRecordingStart(_ context.Context, payload map[string]any) (bool, string) {
 	sessionID := toString(payload["sessionId"])
 	if sessionID == "" {
 		return false, "payload sem sessionId"
@@ -178,7 +178,7 @@ func (m *Manager) handleRecordingStart(ctx context.Context, payload map[string]a
 	return true, ""
 }
 
-func (m *Manager) handleRecordingStop(ctx context.Context, payload map[string]any) (bool, string) {
+func (m *Manager) handleRecordingStop(_ context.Context, payload map[string]any) (bool, string) {
 	sessionID := toString(payload["sessionId"])
 	if sessionID == "" {
 		return false, "payload sem sessionId"

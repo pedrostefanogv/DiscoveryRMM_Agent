@@ -34,6 +34,10 @@ export function AskUserChat(arg1, arg2, arg3) {
   return window['go']['app']['App']['AskUserChat'](arg1, arg2, arg3);
 }
 
+export function CheckAgentUpdate() {
+  return window['go']['app']['App']['CheckAgentUpdate']();
+}
+
 export function CheckPSADTModuleStatus() {
   return window['go']['app']['App']['CheckPSADTModuleStatus']();
 }
@@ -84,10 +88,6 @@ export function ComputeP2PSeedPlan(arg1) {
 
 export function CreateAgentTicket(arg1, arg2, arg3, arg4) {
   return window['go']['app']['App']['CreateAgentTicket'](arg1, arg2, arg3, arg4);
-}
-
-export function CreateMeshCentralEmbedURL(arg1, arg2) {
-  return window['go']['app']['App']['CreateMeshCentralEmbedURL'](arg1, arg2);
 }
 
 export function CreateMyTicket(arg1, arg2) {

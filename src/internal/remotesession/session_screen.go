@@ -16,7 +16,7 @@ type SessionScreen struct {
 	capturer   screen.Capturer
 	encoder    screen.Encoder
 	natsStream *NatsStreamHandler
-	quality    QualityManager
+	quality    *QualityManager
 
 	frameSeq  uint64
 	stopCh    chan struct{}
@@ -43,7 +43,7 @@ func NewSessionScreen(sessionID string, natsStream *NatsStreamHandler) (*Session
 		capturer:   capturer,
 		encoder:    encoder,
 		natsStream: natsStream,
-		quality:    quality,
+		quality:    &quality,
 		stopCh:     make(chan struct{}),
 		doneCh:     make(chan struct{}),
 	}, nil

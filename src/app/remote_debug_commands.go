@@ -493,6 +493,8 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 	}
 
 	return a.remoteDebug.HandleCommand(parent, cmdType, payload)
+}
+
 // ── Remote Session Helpers ──
 
 func isRemoteSessionCommandType(cmdType string) bool {

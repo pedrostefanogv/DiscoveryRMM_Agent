@@ -369,8 +369,6 @@ func NewApp(opts AppStartupOptions) *App {
 		DebugConfig:              a.GetDebugConfig,
 		Version:                  Version,
 		CommitHash:               buildinfo.Commit,
-		ResolveMeshCentralNodeID: nil,
-		OnHardwareReportSuccess:  nil,
 		ShouldDeferNonCritical:   a.nonCriticalBackoffWindow,
 	})
 	a.supportSvc = appsupport.NewService(appsupport.Options{

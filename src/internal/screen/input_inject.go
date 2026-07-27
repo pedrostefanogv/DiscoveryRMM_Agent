@@ -202,8 +202,8 @@ const (
 	VK_F12    = 0x7B
 )
 
-func unsafePtr(v any) unsafe.Pointer {
-	return unsafe.Pointer(uintptr(0)) // Placeholder sera corrigido
+func unsafePtr(_ any) unsafe.Pointer {
+	return unsafe.Pointer(uintptr(0))
 }
 
 // Placeholder

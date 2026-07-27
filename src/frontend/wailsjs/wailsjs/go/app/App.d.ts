@@ -27,6 +27,8 @@ export function AskUser(arg1:string,arg2:string,arg3:string):Promise<string>;
 
 export function AskUserChat(arg1:string,arg2:string,arg3:string):Promise<string>;
 
+export function CheckAgentUpdate():Promise<void>;
+
 export function CheckPSADTModuleStatus():Promise<app.PSADTModuleStatus>;
 
 export function CleanupP2PTempNow():Promise<string>;
@@ -52,8 +54,6 @@ export function CloseSupportTicket(arg1:string,arg2:supportmeta.CloseTicketInput
 export function ComputeP2PSeedPlan(arg1:number):Promise<p2pmeta.SeedPlan>;
 
 export function CreateAgentTicket(arg1:string,arg2:string,arg3:number,arg4:string):Promise<json.RawMessage>;
-
-export function CreateMeshCentralEmbedURL(arg1:context.Context,arg2:number):Promise<app.MeshCentralEmbedResponse>;
 
 export function CreateMyTicket(arg1:context.Context,arg2:app.CreateTicketRequest):Promise<app.TicketSummary>;
 

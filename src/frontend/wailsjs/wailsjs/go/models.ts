@@ -279,8 +279,6 @@ export namespace app {
 	    handshakeEnabled?: boolean;
 	    apiTlsCertHash: string;
 	    natsTlsCertHash: string;
-	    meshCentralEnabledEffective?: boolean;
-	    meshCentralGroupPolicyProfile: string;
 	    chatAIEnabled?: boolean;
 	    knowledgeBaseEnabled?: boolean;
 	    appStoreEnabled?: boolean;
@@ -315,8 +313,6 @@ export namespace app {
 	        this.handshakeEnabled = source["handshakeEnabled"];
 	        this.apiTlsCertHash = source["apiTlsCertHash"];
 	        this.natsTlsCertHash = source["natsTlsCertHash"];
-	        this.meshCentralEnabledEffective = source["meshCentralEnabledEffective"];
-	        this.meshCentralGroupPolicyProfile = source["meshCentralGroupPolicyProfile"];
 	        this.chatAIEnabled = source["chatAIEnabled"];
 	        this.knowledgeBaseEnabled = source["knowledgeBaseEnabled"];
 	        this.appStoreEnabled = source["appStoreEnabled"];
@@ -432,22 +428,6 @@ export namespace app {
 	        this.description = source["description"];
 	        this.category = source["category"];
 	        this.priority = source["priority"];
-	    }
-	}
-	export class MeshCentralEmbedResponse {
-	    url: string;
-	    expiresAt: string;
-	    sessionId: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new MeshCentralEmbedResponse(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.url = source["url"];
-	        this.expiresAt = source["expiresAt"];
-	        this.sessionId = source["sessionId"];
 	    }
 	}
 	export class NotificationDispatchRequest {
@@ -733,6 +713,9 @@ export namespace app {
 	    checkedAtUtc: any;
 	    pendingCommandResults: number;
 	    pendingP2pTelemetry: number;
+	    updateCheckEnabled: boolean;
+	    updateCheckInProgress: boolean;
+	    lastUpdateCheckAtUtc?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new StatusOverview(source);
@@ -765,6 +748,9 @@ export namespace app {
 	        this.checkedAtUtc = this.convertValues(source["checkedAtUtc"], null);
 	        this.pendingCommandResults = source["pendingCommandResults"];
 	        this.pendingP2pTelemetry = source["pendingP2pTelemetry"];
+	        this.updateCheckEnabled = source["updateCheckEnabled"];
+	        this.updateCheckInProgress = source["updateCheckInProgress"];
+	        this.lastUpdateCheckAtUtc = source["lastUpdateCheckAtUtc"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
