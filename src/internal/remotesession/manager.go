@@ -96,7 +96,7 @@ func (m *Manager) handleStart(ctx context.Context, payload map[string]any) (bool
 	}
 
 	kind := toString(payload["kind"])
-	transport := toString(payload["transport"])
+	transport := normalizeTransport(toString(payload["transport"]))
 	quality := toString(payload["quality"])
 	codec := toString(payload["codec"])
 	natsSubject := toString(payload["natsSubject"])
@@ -475,6 +475,19 @@ func (m *Manager) StopAll() {
 	for id := range m.sessions {
 		m.closeSessionLocked(id, "agent-shutdown")
 	}
+}
+
+// normalizeTransport garante que o transport reportado ao servidor/viewer
+// reflita a capacidade real do binario. Se o servidor pediu WebRTC mas o
+// binario foi compilado sem a build tag webrtc, faz fallback para NATS.
+func normalizeTransport(requested string) string {
+	if requested == "" {
+		return "nats"
+	}
+	if requested == "webrtc" && !WebRTCAvailable {
+		return "nats"
+	}
+	return requested
 }
 
 // helper
