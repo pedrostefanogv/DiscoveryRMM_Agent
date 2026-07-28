@@ -49,9 +49,13 @@ func NewManager(nc *nats.Conn) *Manager {
 	}
 }
 
-// SetNatsStream configura o NatsStreamHandler (tenant/site/agent IDs vindos do payload de start).
-func (m *Manager) SetNatsStream(tenantID, siteID, agentID string) {
-	m.natsStream = NewNatsStreamHandler(m.nc, tenantID, siteID, agentID)
+// SetNatsConn configura a conexão NATS e inicializa o NatsStreamHandler.
+// Deve ser chamado após a conexão NATS ser estabelecida.
+func (m *Manager) SetNatsConn(nc *nats.Conn, tenantID, siteID, agentID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.nc = nc
+	m.natsStream = NewNatsStreamHandler(nc, tenantID, siteID, agentID)
 }
 
 // SetCallbacks configura callbacks para notificar a UI/tray sobre mudancas de sessao.

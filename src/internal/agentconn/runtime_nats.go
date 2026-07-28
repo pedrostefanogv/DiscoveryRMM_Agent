@@ -100,6 +100,11 @@ func (r *Runtime) runNATSSession(ctx context.Context, cfg Config, server, transp
 	r.setStatusConnected(cfg.AgentID, natsURL, transportLabel)
 	r.logf("agente conectado ao NATS (commandUnicast=%s, commandSite=%s, commandClient=%s, commandGlobal=%s, globalPong=%s, syncSubject=%s, p2pDiscovery=%s)", subjects.CommandAgent, subjects.CommandSiteFanout, subjects.CommandClientFanout, subjects.CommandGlobalFanout, subjects.GlobalPong, subjects.SyncPing, subjects.P2PDiscovery)
 
+	// Notifica subscribers que a conexão NATS está pronta (ex: remoteSessionMgr)
+	if r.opts.OnNatsConnected != nil {
+		r.opts.OnNatsConnected(nc, cfg)
+	}
+
 	if _, err = nc.Subscribe(subjects.CommandAgent, r.natsCommandHandler(ctx, nc, cfg, subjects, natsCommandRouteAgent, false)); err != nil {
 		return fmt.Errorf("falha ao inscrever no subject de comando unicast: %w", err)
 	}

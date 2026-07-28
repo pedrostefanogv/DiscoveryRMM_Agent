@@ -14,6 +14,7 @@ import (
 
 	"github.com/energye/systray"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
+	"github.com/nats-io/nats.go"
 
 	"discovery/app/appstore"
 	"discovery/app/debug"
@@ -308,6 +309,7 @@ func NewApp(opts AppStartupOptions) *App {
 		OnP2PEvent:                    a.handleP2PEvent,
 		HandleCommand:                 a.handleAgentRuntimeCommand,
 		OnCommandOutput:               a.onAgentCommandOutput,
+		OnNatsConnected:               a.onNatsConnected,
 		EnqueueCommandResultOutbox:    a.enqueueCommandResultOutbox,
 		ListDueCommandResultOutbox:    a.listDueCommandResultOutbox,
 		MarkSentCommandResultOutbox:   a.markSentCommandResultOutbox,
@@ -643,6 +645,17 @@ func (a *App) getKnownP2PPeers() int {
 		return 0
 	}
 	return len(a.p2pCoord.GetPeers())
+}
+
+// onNatsConnected é chamado pelo agentconn após a conexão NATS ser estabelecida.
+// Injeta a conexão NATS no remoteSessionMgr para habilitar o streaming de frames.
+func (a *App) onNatsConnected(nc *nats.Conn, cfg agentconn.Config) {
+	if a.remoteSessionMgr == nil {
+		return
+	}
+	a.remoteSessionMgr.SetNatsConn(nc, cfg.ClientID, cfg.SiteID, cfg.AgentID)
+	a.logs.append(fmt.Sprintf("[remote-session] NATS conectado — streaming habilitado (tenant=%s, site=%s, agent=%s)",
+		cfg.ClientID, cfg.SiteID, cfg.AgentID))
 }
 
 func (a *App) startup(ctx context.Context) {

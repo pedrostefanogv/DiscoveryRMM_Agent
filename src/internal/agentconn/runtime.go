@@ -224,6 +224,7 @@ type Options struct {
 
 	GetHeartbeatMetrics           func() AgentHeartbeatMetrics
 	OnP2PEvent                    func(PeerEventMessage)
+	OnNatsConnected               func(nc *nats.Conn, cfg Config) // chamado após conexão NATS estabelecida
 	EnqueueCommandResultOutbox    func(transport, dispatchID, commandID string, exitCode int, output, errText, sendError string) error
 	ListDueCommandResultOutbox    func(transport string, now time.Time, limit int) ([]CommandResultOutboxItem, error)
 	MarkSentCommandResultOutbox   func(id int64) error
