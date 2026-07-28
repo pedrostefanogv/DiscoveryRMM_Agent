@@ -8,13 +8,13 @@ import (
 // RecordingSource intercepta frames da sessão para gravação.
 // Envia frames duplicados ao servidor via subject de recording.
 type RecordingSource struct {
-	mu              sync.Mutex
-	enabled         bool
-	startedAt       time.Time
-	framesCaptured  int64
-	bytesCaptured   int64
-	natsStream      *NatsStreamHandler
-	sessionID       string
+	mu             sync.Mutex
+	enabled        bool
+	startedAt      time.Time
+	framesCaptured int64
+	bytesCaptured  int64
+	natsStream     *NatsStreamHandler
+	sessionID      string
 }
 
 // NewRecordingSource cria um tap de gravação.
@@ -73,12 +73,7 @@ func (rs *RecordingSource) CaptureFrame(frameData []byte) {
 		rs.mu.Unlock()
 		return
 	}
-	enabled := rs.enabled
 	rs.mu.Unlock()
-
-	if !enabled {
-		return
-	}
 
 	// Publica no subject de recording
 	rs.natsStream.PublishFrame(rs.sessionID+".recording", frameData)

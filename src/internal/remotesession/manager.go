@@ -15,15 +15,15 @@ import (
 
 // Session representa uma sessao remota ativa gerenciada pelo agent.
 type Session struct {
-	ID           string    `json:"sessionId"`
-	Kind         string    `json:"kind"`         // screen, terminal, files, proxy
-	Transport    string    `json:"transport"`    // webrtc, nats, http
-	Quality      string    `json:"quality"`      // ultra, high, medium, low, ultralow
-	Codec        string    `json:"codec"`        // jpeg, webp, h264
-	NatsSubject  string    `json:"natsSubject"`  // subject base para stream
-	ExpiresAt    time.Time `json:"expiresAtUtc"`
-	StartedAt    time.Time `json:"startedAtUtc"`
-	Recording    bool      `json:"recording"`
+	ID          string    `json:"sessionId"`
+	Kind        string    `json:"kind"`        // screen, terminal, files, proxy
+	Transport   string    `json:"transport"`   // webrtc, nats, http
+	Quality     string    `json:"quality"`     // ultra, high, medium, low, ultralow
+	Codec       string    `json:"codec"`       // jpeg, webp, h264
+	NatsSubject string    `json:"natsSubject"` // subject base para stream
+	ExpiresAt   time.Time `json:"expiresAtUtc"`
+	StartedAt   time.Time `json:"startedAtUtc"`
+	Recording   bool      `json:"recording"`
 
 	// estado interno
 	stopCh chan struct{}
@@ -32,10 +32,10 @@ type Session struct {
 
 // Manager gerencia o lifecycle de sessoes remotas no agent.
 type Manager struct {
-	mu           sync.RWMutex
-	sessions     map[string]*Session // key: sessionId
-	nc           *nats.Conn
-	natsStream   *NatsStreamHandler
+	mu         sync.RWMutex
+	sessions   map[string]*Session // key: sessionId
+	nc         *nats.Conn
+	natsStream *NatsStreamHandler
 
 	// callbacks para notificar a UI/tray
 	onSessionStarted func(sessionID, kind string)
@@ -349,7 +349,10 @@ func (m *Manager) runScreenSession(ctx context.Context, session *Session) {
 		}
 	}()
 
-	fps := 15 // default; o quality manager ajusta
+	fps := screenSession.quality.Current().Fps
+	if fps <= 0 {
+		fps = 15
+	}
 	log.Printf("[remote-session-screen] iniciando loop de captura (fps=%d) para sessao %s\n", fps, session.ID)
 	if err := screenSession.Start(ctx, fps); err != nil {
 		log.Printf("[remote-session-screen] loop de captura encerrado com erro: %v\n", err)

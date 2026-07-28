@@ -20,13 +20,15 @@ type SessionScreen struct {
 	codecSel   CodecSelector
 	recording  *RecordingSource
 
-	frameSeq  uint64
-	stopCh    chan struct{}
-	doneCh    chan struct{}
+	frameSeq uint64
+	stopCh   chan struct{}
+	doneCh   chan struct{}
 }
 
 // FrameHeader binario para frames (12 bytes).
-//   seq (uint32) | ts (uint32 unix ms) | w (uint16) | h (uint16)
+//
+//	seq (uint32) | ts (uint32 unix ms) | w (uint16) | h (uint16)
+//
 // O payload JPEG/WebP/H.264 segue apos o header.
 const frameHeaderLen = 12
 
@@ -57,11 +59,19 @@ func NewSessionScreen(sessionID string, natsStream *NatsStreamHandler) (*Session
 
 // Start inicia o loop de captura e envio de frames.
 // Bloqueia ate o contexto ser cancelado ou Stop() ser chamado.
+// fps: se <= 0, usa o FPS do perfil de qualidade atual.
 func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 	defer close(s.doneCh)
 	defer s.capturer.Close()
 
 	_ = screen.DetectGPU() // GPU detection for future optimization (H.264 encoder selection)
+
+	if fps <= 0 {
+		fps = s.quality.Current().Fps
+	}
+	if fps <= 0 {
+		fps = 15
+	}
 
 	log.Printf("[remote-session-screen] Start: fps=%d capturer=%s\n", fps, s.capturer.Name())
 
@@ -70,56 +80,56 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 	defer ticker.Stop()
 
 	quality := s.quality.Current()
-	// Cache DXGI→GDI fallback state (melhoria M5)
-	dxgiFailed := false
 
+	var totalFramesSent int64
+	var totalFramesSkipped int64
 	var framesSent int64
 	var framesSkipped int64
+	var rawBytesTotal int64
+	var encBytesTotal int64
+	var encodeTimeTotal time.Duration
 	lastLogTime := time.Now()
 
 	for {
 		select {
 		case <-ctx.Done():
 			log.Printf("[remote-session-screen] contexto cancelado apos %d frames enviados, %d pulados. Motivo: %v\n",
-				framesSent, framesSkipped, ctx.Err())
+				totalFramesSent, totalFramesSkipped, ctx.Err())
 			s.natsStream.PublishEvent(s.sessionID, "screen_stopped", map[string]string{"reason": "context_cancelled"})
 			return ctx.Err()
 
 		case <-s.stopCh:
 			log.Printf("[remote-session-screen] stop solicitado apos %d frames enviados, %d pulados\n",
-				framesSent, framesSkipped)
+				totalFramesSent, totalFramesSkipped)
 			s.natsStream.PublishEvent(s.sessionID, "screen_stopped", map[string]string{"reason": "stopped"})
 			return nil
 
 		case <-ticker.C:
 			frame, err := s.capturer.AcquireNextFrame()
 			if err != nil {
-				// Fallback GDI se DXGI falhou — cache do estado (M5)
-				if !dxgiFailed && s.capturer.Name() == "dxgi" {
-					log.Printf("[remote-session-screen] DXGI falhou, tentando fallback GDI: %v\n", err)
-					gdi, gdiErr := screen.NewGDICapturer()
-					if gdiErr == nil {
-						s.capturer.Close()
-						s.capturer = gdi
-						dxgiFailed = true
-						log.Printf("[remote-session-screen] fallback GDI ativo\n")
-					} else {
-						log.Printf("[remote-session-screen] ERRO ao criar GDI capturer: %v\n", gdiErr)
-					}
-				}
+				log.Printf("[remote-session-screen] ERRO ao capturar frame: %v\n", err)
 				framesSkipped++
+				totalFramesSkipped++
 				continue
 			}
 
 			// Encode frame
 			q := quality.JpegQuality
+			rawSize := len(frame.Data)
+			encodeStart := time.Now()
 			encoded, err := s.encoder.Encode(frame, q)
+			encodeTime := time.Since(encodeStart)
 			s.capturer.ReleaseFrame()
 			if err != nil {
 				log.Printf("[remote-session-screen] ERRO ao encodar frame: %v\n", err)
 				framesSkipped++
+				totalFramesSkipped++
 				continue
 			}
+			encSize := len(encoded)
+			rawBytesTotal += int64(rawSize)
+			encBytesTotal += int64(encSize)
+			encodeTimeTotal += encodeTime
 
 			// Monta frame com header binario
 			ts := uint32(time.Now().UnixMilli())
@@ -133,6 +143,7 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 			if err := s.natsStream.PublishFrame(s.sessionID, buf); err != nil {
 				log.Printf("[remote-session-screen] ERRO ao publicar frame %d: %v\n", s.frameSeq, err)
 				framesSkipped++
+				totalFramesSkipped++
 				continue
 			}
 
@@ -144,12 +155,27 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 			// Adaptacao de qualidade
 			s.quality.RecordFrame(len(buf), time.Now())
 
-			// Log periodico a cada 10s (aproximadamente 150 frames a 15fps)
+			// Log periodico a cada 10s com metricas de compressao
 			framesSent++
+			totalFramesSent++
 			if time.Since(lastLogTime) >= 10*time.Second {
-				log.Printf("[remote-session-screen] status: %d frames enviados (%dx%d), %d pulados, ultimo frame %d bytes\n",
-					framesSent, frame.Width, frame.Height, framesSkipped, len(buf))
+				compressionRatio := float64(0)
+				avgEncodeMs := float64(0)
+				if rawBytesTotal > 0 {
+					compressionRatio = float64(rawBytesTotal) / float64(encBytesTotal)
+				}
+				if framesSent > 0 {
+					avgEncodeMs = float64(encodeTimeTotal.Milliseconds()) / float64(framesSent)
+				}
+				log.Printf("[remote-session-screen] status: %d frames enviados (%dx%d), %d pulados, ultimo frame %d bytes | compressao %.1f:1 (raw=%dKB enc=%dKB) | encode avg %.1fms\n",
+					framesSent, frame.Width, frame.Height, framesSkipped, len(buf),
+					compressionRatio, rawBytesTotal/1024, encBytesTotal/1024, avgEncodeMs)
 				lastLogTime = time.Now()
+				framesSent = 0
+				framesSkipped = 0
+				rawBytesTotal = 0
+				encBytesTotal = 0
+				encodeTimeTotal = 0
 			}
 		}
 	}

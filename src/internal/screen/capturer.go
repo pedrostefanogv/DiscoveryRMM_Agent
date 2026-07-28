@@ -1,7 +1,5 @@
 package screen
 
-import "fmt"
-
 // Capturer captura frames da tela do Windows.
 type Capturer interface {
 	// AcquireNextFrame captura o proximo frame. Retorna os bytes raw BGRA e as dimensoes.
@@ -23,18 +21,8 @@ type Frame struct {
 }
 
 // NewCapturer cria o capturador apropriado para o sistema.
-// Prioriza DXGI; fallback para GDI.
+// Usa GDI diretamente; DXGI Desktop Duplication requer bindings COM extensivos
+// (IDXGIOutputDuplication) que ainda nao estao implementados.
 func NewCapturer(monitorIndex int) (Capturer, error) {
-	// Tenta DXGI primeiro
-	dxgi, err := NewDXGICapturer(monitorIndex)
-	if err == nil {
-		return dxgi, nil
-	}
-
-	// Fallback para GDI
-	gdi, gdiErr := NewGDICapturer()
-	if gdiErr != nil {
-		return nil, fmt.Errorf("nenhum capturador disponivel: dxgi=%v, gdi=%v", err, gdiErr)
-	}
-	return gdi, nil
+	return NewGDICapturer()
 }

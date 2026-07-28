@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"github.com/energye/systray"
-	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 	"github.com/nats-io/nats.go"
+	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"discovery/app/appstore"
 	"discovery/app/debug"
@@ -136,6 +136,7 @@ type App struct {
 	trayProvisioning         []byte
 	trayOffline              []byte
 	remoteSessionMgr         *remotesession.Manager
+	activeRemoteSessions     atomic.Int32
 	zeroTouchAttemptInFlight atomic.Bool
 	zeroTouchApprovalPending atomic.Bool
 
@@ -251,6 +252,18 @@ func NewApp(opts AppStartupOptions) *App {
 	})
 	a.remoteDebug = newRemoteDebugManager(a.logs.append, a.GetDebugConfig, a.GetAgentConfiguration, a.logs.subscribe, a.logs.snapshotAndSubscribe)
 	a.remoteSessionMgr = remotesession.NewManager(nil) // NATS sera injetado quando conectado; Fase 1 opera via commandos apenas
+	a.remoteSessionMgr.SetCallbacks(
+		func(sessionID, kind string) {
+			a.activeRemoteSessions.Add(1)
+			a.syncRemoteSessionTray()
+			a.logs.append(fmt.Sprintf("[remote-session] sessao iniciada: %s (%s) — %d ativas", sessionID, kind, a.activeRemoteSessions.Load()))
+		},
+		func(sessionID, reason string) {
+			a.activeRemoteSessions.Add(-1)
+			a.syncRemoteSessionTray()
+			a.logs.append(fmt.Sprintf("[remote-session] sessao encerrada: %s (%s) — %d ativas", sessionID, reason, a.activeRemoteSessions.Load()))
+		},
+	)
 	inventoryProvider.SetProgressCallback(func() {
 		a.pulseInventoryHeartbeat()
 	})
@@ -367,11 +380,11 @@ func NewApp(opts AppStartupOptions) *App {
 		Ctx: func() context.Context {
 			return a.ctx
 		},
-		DB:                       nil,
-		DebugConfig:              a.GetDebugConfig,
-		Version:                  Version,
-		CommitHash:               buildinfo.Commit,
-		ShouldDeferNonCritical:   a.nonCriticalBackoffWindow,
+		DB:                     nil,
+		DebugConfig:            a.GetDebugConfig,
+		Version:                Version,
+		CommitHash:             buildinfo.Commit,
+		ShouldDeferNonCritical: a.nonCriticalBackoffWindow,
 	})
 	a.supportSvc = appsupport.NewService(appsupport.Options{
 		Logf:        a.logs.append,

@@ -194,3 +194,26 @@ func (a *App) updateTrayIdleState(idle bool, supported bool) {
 		setTrayTooltip("Discovery - Processando")
 	})
 }
+
+// syncRemoteSessionTray atualiza o tooltip da tray com indicacao de sessoes
+// remotas ativas, fornecendo visibilidade ao usuario local.
+func (a *App) syncRemoteSessionTray() {
+	if a == nil || !a.trayReady.Load() {
+		return
+	}
+
+	a.safeTrayAction("tray-remote-session", func() {
+		count := a.activeRemoteSessions.Load()
+		if count <= 0 {
+			// Sem sessoes ativas — volta ao estado normal (idle state loop cuida do resto)
+			return
+		}
+		tooltip := "Discovery"
+		if count == 1 {
+			tooltip = "Discovery - 1 sessao remota ativa"
+		} else {
+			tooltip = fmt.Sprintf("Discovery - %d sessoes remotas ativas", count)
+		}
+		setTrayTooltip(tooltip)
+	})
+}

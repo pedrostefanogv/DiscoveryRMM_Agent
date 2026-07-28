@@ -9,19 +9,19 @@ import (
 )
 
 var (
-	user32DLL           = windows.NewLazySystemDLL("user32.dll")
-	procSendInput       = user32DLL.NewProc("SendInput")
-	procSetCursorPos    = user32DLL.NewProc("SetCursorPos")
-	procMapVirtualKeyW  = user32DLL.NewProc("MapVirtualKeyW")
+	user32DLL          = windows.NewLazySystemDLL("user32.dll")
+	procSendInput      = user32DLL.NewProc("SendInput")
+	procSetCursorPos   = user32DLL.NewProc("SetCursorPos")
+	procMapVirtualKeyW = user32DLL.NewProc("MapVirtualKeyW")
 )
 
 const (
 	INPUT_MOUSE    = 0
 	INPUT_KEYBOARD = 1
 
-	MOUSEEVENTF_MOVE     = 0x0001
-	MOUSEEVENTF_LEFTDOWN = 0x0002
-	MOUSEEVENTF_LEFTUP   = 0x0004
+	MOUSEEVENTF_MOVE      = 0x0001
+	MOUSEEVENTF_LEFTDOWN  = 0x0002
+	MOUSEEVENTF_LEFTUP    = 0x0004
 	MOUSEEVENTF_RIGHTDOWN = 0x0008
 	MOUSEEVENTF_RIGHTUP   = 0x0010
 	MOUSEEVENTF_WHEEL     = 0x0800
@@ -31,19 +31,19 @@ const (
 )
 
 type mouseInput struct {
-	dx         int32
-	dy         int32
-	mouseData  uint32
-	dwFlags    uint32
-	time       uint32
+	dx          int32
+	dy          int32
+	mouseData   uint32
+	dwFlags     uint32
+	time        uint32
 	dwExtraInfo uintptr
 }
 
 type keybdInput struct {
-	wVk        uint16
-	wScan      uint16
-	dwFlags    uint32
-	time       uint32
+	wVk         uint16
+	wScan       uint16
+	dwFlags     uint32
+	time        uint32
 	dwExtraInfo uintptr
 }
 
@@ -183,27 +183,27 @@ func SetCursorPosAbsolute(x, y int32) error {
 
 // VK constants
 const (
-	VK_BACK   = 0x08
-	VK_TAB    = 0x09
-	VK_RETURN = 0x0D
-	VK_SHIFT  = 0x10
+	VK_BACK    = 0x08
+	VK_TAB     = 0x09
+	VK_RETURN  = 0x0D
+	VK_SHIFT   = 0x10
 	VK_CONTROL = 0x11
-	VK_MENU   = 0x12 // ALT
-	VK_ESCAPE = 0x1B
-	VK_SPACE  = 0x20
-	VK_LEFT   = 0x25
-	VK_UP     = 0x26
-	VK_RIGHT  = 0x27
-	VK_DOWN   = 0x28
-	VK_DELETE = 0x2E
-	VK_LWIN   = 0x5B
-	VK_RWIN   = 0x5C
-	VK_F1     = 0x70
-	VK_F12    = 0x7B
+	VK_MENU    = 0x12 // ALT
+	VK_ESCAPE  = 0x1B
+	VK_SPACE   = 0x20
+	VK_LEFT    = 0x25
+	VK_UP      = 0x26
+	VK_RIGHT   = 0x27
+	VK_DOWN    = 0x28
+	VK_DELETE  = 0x2E
+	VK_LWIN    = 0x5B
+	VK_RWIN    = 0x5C
+	VK_F1      = 0x70
+	VK_F12     = 0x7B
 )
 
 func unsafePtr(_ any) unsafe.Pointer {
-	return unsafe.Pointer(uintptr(0))
+	return nil
 }
 
 // Placeholder

@@ -33,17 +33,23 @@ func (e *jpegEncoder) Encode(frame *Frame, quality int) ([]byte, error) {
 		quality = 100
 	}
 
-	// Converte BGRA para RGBA (JPEG espera RGB)
-	img := image.NewRGBA(image.Rect(0, 0, frame.Width, frame.Height))
+	// Conversao BGRA→RGBA in-place (swap B↔R) para evitar alocacao extra.
+	// O buffer GDI eh alocado fresh a cada AcquireNextFrame, entao modificar
+	// in-place eh seguro. Usamos stride para lidar com padding.
+	bgra := frame.Data
+	stride := frame.Stride
 	for y := 0; y < frame.Height; y++ {
+		rowStart := y * stride
 		for x := 0; x < frame.Width; x++ {
-			offset := y*frame.Stride + x*4
-			dst := y*img.Stride + x*4
-			img.Pix[dst] = frame.Data[offset+2]   // R ← B
-			img.Pix[dst+1] = frame.Data[offset+1] // G ← G
-			img.Pix[dst+2] = frame.Data[offset]   // B ← R
-			img.Pix[dst+3] = 255                   // A = 255
+			offset := rowStart + x*4
+			bgra[offset], bgra[offset+2] = bgra[offset+2], bgra[offset] // swap B↔R
 		}
+	}
+
+	img := &image.RGBA{
+		Pix:    frame.Data,
+		Stride: stride,
+		Rect:   image.Rect(0, 0, frame.Width, frame.Height),
 	}
 
 	var buf bytes.Buffer
