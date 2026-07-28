@@ -16,14 +16,14 @@ var (
 	procReleaseDC        = user32.NewProc("ReleaseDC")
 	procGetSystemMetrics = user32.NewProc("GetSystemMetrics")
 
-	gdi32             = windows.NewLazySystemDLL("gdi32.dll")
-	procCreateCompatibleDC = gdi32.NewProc("CreateCompatibleDC")
+	gdi32                      = windows.NewLazySystemDLL("gdi32.dll")
+	procCreateCompatibleDC     = gdi32.NewProc("CreateCompatibleDC")
 	procCreateCompatibleBitmap = gdi32.NewProc("CreateCompatibleBitmap")
-	procSelectObject   = gdi32.NewProc("SelectObject")
-	procDeleteDC       = gdi32.NewProc("DeleteDC")
-	procDeleteObject   = gdi32.NewProc("DeleteObject")
-	procBitBlt         = gdi32.NewProc("BitBlt")
-	procGetDIBits      = gdi32.NewProc("GetDIBits")
+	procSelectObject           = gdi32.NewProc("SelectObject")
+	procDeleteDC               = gdi32.NewProc("DeleteDC")
+	procDeleteObject           = gdi32.NewProc("DeleteObject")
+	procBitBlt                 = gdi32.NewProc("BitBlt")
+	procGetDIBits              = gdi32.NewProc("GetDIBits")
 )
 
 const (
@@ -37,30 +37,38 @@ const (
 )
 
 type gdiCapturer struct {
-	screenDC    uintptr
-	memDC       uintptr
-	memBitmap   uintptr
-	width       int
-	height      int
-	lastFrame   *Frame
+	screenDC  uintptr
+	memDC     uintptr
+	memBitmap uintptr
+	width     int
+	height    int
+	lastFrame *Frame
 }
 
 func NewGDICapturer() (Capturer, error) {
+	// GDI objects (HDC, HBITMAP) are thread-affine on Windows.
+	// We must pin this goroutine to a single OS thread for the entire
+	// lifetime of the capturer. The pin is released in Close().
+	runtime.LockOSThread()
+
 	width, _, _ := procGetSystemMetrics.Call(SM_CXSCREEN)
 	height, _, _ := procGetSystemMetrics.Call(SM_CYSCREEN)
 
 	if width == 0 || height == 0 {
+		runtime.UnlockOSThread()
 		return nil, fmt.Errorf("nao foi possivel obter resolucao da tela")
 	}
 
 	screenDC, _, _ := procGetDC.Call(0) // 0 = desktop inteiro
 	if screenDC == 0 {
+		runtime.UnlockOSThread()
 		return nil, fmt.Errorf("GetDC falhou")
 	}
 
 	memDC, _, _ := procCreateCompatibleDC.Call(screenDC)
 	if memDC == 0 {
 		procReleaseDC.Call(0, screenDC)
+		runtime.UnlockOSThread()
 		return nil, fmt.Errorf("CreateCompatibleDC falhou")
 	}
 
@@ -68,6 +76,7 @@ func NewGDICapturer() (Capturer, error) {
 	if memBitmap == 0 {
 		procDeleteDC.Call(memDC)
 		procReleaseDC.Call(0, screenDC)
+		runtime.UnlockOSThread()
 		return nil, fmt.Errorf("CreateCompatibleBitmap falhou")
 	}
 
@@ -83,9 +92,6 @@ func NewGDICapturer() (Capturer, error) {
 }
 
 func (c *gdiCapturer) AcquireNextFrame() (*Frame, error) {
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-
 	ret, _, _ := procBitBlt.Call(c.memDC, 0, 0, uintptr(c.width), uintptr(c.height), c.screenDC, 0, 0, SRCCOPY)
 	if ret == 0 {
 		return nil, fmt.Errorf("BitBlt falhou (GDI)")
@@ -127,6 +133,7 @@ func (c *gdiCapturer) Close() error {
 	procDeleteObject.Call(c.memBitmap)
 	procDeleteDC.Call(c.memDC)
 	procReleaseDC.Call(0, c.screenDC)
+	runtime.UnlockOSThread()
 	return nil
 }
 
@@ -155,4 +162,4 @@ type BITMAPINFO struct {
 // Ensure gdiCapturer implements Capturer
 var _ Capturer = (*gdiCapturer)(nil)
 var _ = syscall.StringToUTF16 // keep syscall import happy
-var _ = image.Pt // keep image import happy
+var _ = image.Pt              // keep image import happy
