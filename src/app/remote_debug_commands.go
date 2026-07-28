@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 )
@@ -478,10 +479,23 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 	// ── Remote Session Commands (acesso remoto nativo) ──
 	if isRemoteSessionCommandType(cmdType) {
 		if a.remoteSessionMgr == nil {
+			log.Printf("[remote-session] ERRO: remoteSessionMgr nil — nao inicializado\n")
 			return true, 1, "", "remote session manager nao inicializado"
 		}
-		handled, errMsg := a.remoteSessionMgr.HandleCommand(parent, parseAnyMap(payload))
+		parsedPayload := parseAnyMap(payload)
+		if parsedPayload == nil {
+			log.Printf("[remote-session] ERRO: parseAnyMap retornou nil para cmdType=%s\n", cmdType)
+			return true, 1, "", "remotesession: payload invalido (nao eh JSON object)"
+		}
+		sid, _ := parsedPayload["sessionId"].(string)
+		act, _ := parsedPayload["action"].(string)
+		log.Printf("[remote-session] dispatch: cmdType=%s sessionId=%s action=%s\n",
+			cmdType, sid, act)
+		handled, errMsg := a.remoteSessionMgr.HandleCommand(parent, parsedPayload)
 		if handled {
+			if errMsg != "" {
+				log.Printf("[remote-session] comando processado com mensagem: %s\n", errMsg)
+			}
 			return true, 0, "ok", errMsg
 		}
 		// Retorna handled=true mesmo em caso de erro (ex: payload string em vez de map,

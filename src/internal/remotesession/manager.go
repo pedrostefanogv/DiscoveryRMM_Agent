@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -100,12 +101,16 @@ func (m *Manager) handleStart(ctx context.Context, payload map[string]any) (bool
 	codec := toString(payload["codec"])
 	natsSubject := toString(payload["natsSubject"])
 
+	log.Printf("[remote-session] handleStart: sessionId=%s kind=%s transport=%s quality=%s codec=%s natsSubject=%s\n",
+		sessionID, kind, transport, quality, codec, natsSubject)
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	// Fecha sessao anterior do mesmo tipo se existir (uma por kind)
 	for id, s := range m.sessions {
 		if s.Kind == kind {
+			log.Printf("[remote-session] handleStart: fechando sessao anterior %s (kind=%s)\n", id, kind)
 			m.closeSessionLocked(id, "superseded")
 			break
 		}
@@ -311,16 +316,22 @@ func (m *Manager) runScreenSession(ctx context.Context, session *Session) {
 	defer close(session.doneCh)
 
 	if m.natsStream == nil {
-		fmt.Printf("[remote-session-screen] natsStream nao configurado para sessao %s\n", session.ID)
+		log.Printf("[remote-session-screen] ERRO: natsStream nao configurado para sessao %s\n", session.ID)
 		return
 	}
 
+	log.Printf("[remote-session-screen] iniciando screen capturer para sessao %s (quality=%s codec=%s)\n",
+		session.ID, session.Quality, session.Codec)
+
 	screenSession, err := NewSessionScreen(session.ID, m.natsStream)
 	if err != nil {
+		log.Printf("[remote-session-screen] ERRO ao criar SessionScreen: %v\n", err)
 		m.publishEvent(session.ID, "error", map[string]string{"error": err.Error()})
 		return
 	}
 	defer screenSession.Stop()
+
+	log.Printf("[remote-session-screen] SessionScreen criado com sucesso para sessao %s\n", session.ID)
 
 	// Configura qualidade e codec
 	screenSession.SetQuality(session.Quality)
@@ -339,8 +350,12 @@ func (m *Manager) runScreenSession(ctx context.Context, session *Session) {
 	}()
 
 	fps := 15 // default; o quality manager ajusta
+	log.Printf("[remote-session-screen] iniciando loop de captura (fps=%d) para sessao %s\n", fps, session.ID)
 	if err := screenSession.Start(ctx, fps); err != nil {
+		log.Printf("[remote-session-screen] loop de captura encerrado com erro: %v\n", err)
 		m.publishEvent(session.ID, "error", map[string]string{"error": err.Error()})
+	} else {
+		log.Printf("[remote-session-screen] loop de captura encerrado normalmente para sessao %s\n", session.ID)
 	}
 }
 

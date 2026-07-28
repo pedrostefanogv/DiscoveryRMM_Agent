@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"log"
 	"time"
 
 	"discovery/internal/screen"
@@ -62,6 +63,8 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 
 	_ = screen.DetectGPU() // GPU detection for future optimization (H.264 encoder selection)
 
+	log.Printf("[remote-session-screen] Start: fps=%d capturer=%s\n", fps, s.capturer.Name())
+
 	frameInterval := time.Second / time.Duration(fps)
 	ticker := time.NewTicker(frameInterval)
 	defer ticker.Stop()
@@ -70,13 +73,21 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 	// Cache DXGI→GDI fallback state (melhoria M5)
 	dxgiFailed := false
 
+	var framesSent int64
+	var framesSkipped int64
+	lastLogTime := time.Now()
+
 	for {
 		select {
 		case <-ctx.Done():
+			log.Printf("[remote-session-screen] contexto cancelado apos %d frames enviados, %d pulados. Motivo: %v\n",
+				framesSent, framesSkipped, ctx.Err())
 			s.natsStream.PublishEvent(s.sessionID, "screen_stopped", map[string]string{"reason": "context_cancelled"})
 			return ctx.Err()
 
 		case <-s.stopCh:
+			log.Printf("[remote-session-screen] stop solicitado apos %d frames enviados, %d pulados\n",
+				framesSent, framesSkipped)
 			s.natsStream.PublishEvent(s.sessionID, "screen_stopped", map[string]string{"reason": "stopped"})
 			return nil
 
@@ -85,13 +96,18 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 			if err != nil {
 				// Fallback GDI se DXGI falhou — cache do estado (M5)
 				if !dxgiFailed && s.capturer.Name() == "dxgi" {
+					log.Printf("[remote-session-screen] DXGI falhou, tentando fallback GDI: %v\n", err)
 					gdi, gdiErr := screen.NewGDICapturer()
 					if gdiErr == nil {
 						s.capturer.Close()
 						s.capturer = gdi
 						dxgiFailed = true
+						log.Printf("[remote-session-screen] fallback GDI ativo\n")
+					} else {
+						log.Printf("[remote-session-screen] ERRO ao criar GDI capturer: %v\n", gdiErr)
 					}
 				}
+				framesSkipped++
 				continue
 			}
 
@@ -100,6 +116,8 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 			encoded, err := s.encoder.Encode(frame, q)
 			s.capturer.ReleaseFrame()
 			if err != nil {
+				log.Printf("[remote-session-screen] ERRO ao encodar frame: %v\n", err)
+				framesSkipped++
 				continue
 			}
 
@@ -113,6 +131,8 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 			copy(buf[frameHeaderLen:], encoded)
 
 			if err := s.natsStream.PublishFrame(s.sessionID, buf); err != nil {
+				log.Printf("[remote-session-screen] ERRO ao publicar frame %d: %v\n", s.frameSeq, err)
+				framesSkipped++
 				continue
 			}
 
@@ -123,6 +143,14 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 
 			// Adaptacao de qualidade
 			s.quality.RecordFrame(len(buf), time.Now())
+
+			// Log periodico a cada 10s (aproximadamente 150 frames a 15fps)
+			framesSent++
+			if time.Since(lastLogTime) >= 10*time.Second {
+				log.Printf("[remote-session-screen] status: %d frames enviados (%dx%d), %d pulados, ultimo frame %d bytes\n",
+					framesSent, frame.Width, frame.Height, framesSkipped, len(buf))
+				lastLogTime = time.Now()
+			}
 		}
 	}
 }

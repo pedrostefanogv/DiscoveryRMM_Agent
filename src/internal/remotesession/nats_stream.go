@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 
 	"github.com/nats-io/nats.go"
 )
@@ -62,12 +63,16 @@ func (h *NatsStreamHandler) SubscribeToControl(sessionID string, handler func(ac
 
 // PublishFrame envia um frame de tela para o viewer.
 func (h *NatsStreamHandler) PublishFrame(sessionID string, frameData []byte) error {
-	return h.nc.Publish(h.publishSubject(sessionID, "frame"), frameData)
+	subject := h.publishSubject(sessionID, "frame")
+	err := h.nc.Publish(subject, frameData)
+	return err
 }
 
 // PublishTermOut envia saida do terminal para o viewer.
 func (h *NatsStreamHandler) PublishTermOut(sessionID string, data string) error {
-	return h.nc.Publish(h.publishSubject(sessionID, "term.out"), []byte(data))
+	subject := h.publishSubject(sessionID, "term.out")
+	err := h.nc.Publish(subject, []byte(data))
+	return err
 }
 
 // PublishEvent envia um evento de sessao.
@@ -77,7 +82,9 @@ func (h *NatsStreamHandler) PublishEvent(sessionID string, eventType string, dat
 		"eventType": eventType,
 		"data":      data,
 	})
-	return h.nc.Publish(h.publishSubject(sessionID, "event"), payload)
+	subject := h.publishSubject(sessionID, "event")
+	log.Printf("[remote-session-nats] PublishEvent: subject=%s eventType=%s\n", subject, eventType)
+	return h.nc.Publish(subject, payload)
 }
 
 // PublishSignal envia sinalizacao WebRTC (SDP/ICE).
