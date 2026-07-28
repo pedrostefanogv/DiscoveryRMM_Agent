@@ -5,9 +5,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/nats-io/nats.go"
 )
+
+// stripHyphens remove hifens de UUIDs para garantir compatibilidade com o
+// formato de subject usado pelo servidor e viewer (UUIDs sem hifens).
+func stripHyphens(id string) string {
+	return strings.ReplaceAll(id, "-", "")
+}
 
 // NatsStreamHandler manages NATS-based bidirectional communication for remote sessions.
 type NatsStreamHandler struct {
@@ -19,12 +26,13 @@ type NatsStreamHandler struct {
 
 // NewNatsStreamHandler creates a new NATS stream handler.
 // tenantID, siteID, agentID are required to construct literal subject patterns for publish.
+// UUIDs are normalized (hyphens stripped) to match server subject format.
 func NewNatsStreamHandler(nc *nats.Conn, tenantID, siteID, agentID string) *NatsStreamHandler {
 	return &NatsStreamHandler{
 		nc:       nc,
-		tenantID: tenantID,
-		siteID:   siteID,
-		agentID:  agentID,
+		tenantID: stripHyphens(tenantID),
+		siteID:   stripHyphens(siteID),
+		agentID:  stripHyphens(agentID),
 	}
 }
 
@@ -37,13 +45,14 @@ func (h *NatsStreamHandler) subjectBase() string {
 // subscribeBase returns the wildcard pattern for subscribing across tenants/sites/agents.
 // Format: tenant.*.site.*.agent.*.remote.session.{sessionID}
 func (h *NatsStreamHandler) subscribePattern(sessionID, suffix string) string {
-	return fmt.Sprintf("tenant.*.site.*.agent.*.remote.session.%s.%s", sessionID, suffix)
+	return fmt.Sprintf("tenant.*.site.*.agent.*.remote.session.%s.%s", stripHyphens(sessionID), suffix)
 }
 
 // publishSubject builds the literal publish subject for a given session and suffix.
 // Format: tenant.{tenantID}.site.{siteID}.agent.{agentID}.remote.session.{sessionID}.{suffix}
+// All UUIDs are normalized (hyphens stripped) to match server subject format.
 func (h *NatsStreamHandler) publishSubject(sessionID, suffix string) string {
-	return fmt.Sprintf("%s.%s.%s", h.subjectBase(), sessionID, suffix)
+	return fmt.Sprintf("%s.%s.%s", h.subjectBase(), stripHyphens(sessionID), suffix)
 }
 
 // SubscribeToControl subscreve ao subject de controle da sessao (Server→Agent).
@@ -141,12 +150,12 @@ func (h *NatsStreamHandler) Close() error {
 // Subscription helpers para gerenciar subscricoes
 
 type SessionSubscriptions struct {
-	Control   *nats.Subscription
-	Input     *nats.Subscription
-	TermIn    *nats.Subscription
-	FilesReq  *nats.Subscription
-	ProxyReq  *nats.Subscription
-	Signal    *nats.Subscription
+	Control  *nats.Subscription
+	Input    *nats.Subscription
+	TermIn   *nats.Subscription
+	FilesReq *nats.Subscription
+	ProxyReq *nats.Subscription
+	Signal   *nats.Subscription
 }
 
 // UnsubscribeAll cancela todas as subscricoes.
@@ -227,10 +236,10 @@ func (h *NatsStreamHandler) SubscribeAll(ctx context.Context, sessionID string, 
 
 // SessionHandlers define os handlers de eventos para uma sessao.
 type SessionHandlers struct {
-	OnControl   func(action string, payload json.RawMessage)
-	OnInput     func(data []byte)
-	OnTermIn    func(data []byte)
-	OnFilesReq  func(reqData []byte) []byte
-	OnProxyReq  func(reqData []byte) []byte
-	OnSignal    func(signalData []byte)
+	OnControl  func(action string, payload json.RawMessage)
+	OnInput    func(data []byte)
+	OnTermIn   func(data []byte)
+	OnFilesReq func(reqData []byte) []byte
+	OnProxyReq func(reqData []byte) []byte
+	OnSignal   func(signalData []byte)
 }
