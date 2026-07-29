@@ -109,9 +109,9 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 			return nil
 
 		case <-ticker.C:
-			// Le qualidade atual a cada frame — permite SetQuality() runtime
+			// Le qualidade atual a cada frame — permite SetQuality/SetImageQuality/SetMaxFps runtime
 			q := s.quality.Current()
-			curFps := q.Fps
+			curFps := q.EffectiveFps()
 			if curFps <= 0 {
 				curFps = 15
 			}
@@ -131,7 +131,7 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 			}
 
 			// Encode frame (protege leitura do encoder com RLock)
-			jpgQuality := q.JpegQuality
+			jpgQuality := q.EffectiveJpegQuality()
 			rawSize := len(frame.Data)
 			encodeStart := time.Now()
 			s.encoderMu.RLock()
@@ -232,6 +232,30 @@ func (s *SessionScreen) SetCodec(codec string) {
 		s.encoder = encoder
 		s.encoderMu.Unlock()
 	}
+}
+
+// SetImageQuality define a compressão da imagem (1-100). Sobrescreve o perfil.
+func (s *SessionScreen) SetImageQuality(q int) {
+	if q >= 1 && q <= 100 {
+		s.quality.SetImageQuality(q)
+	}
+}
+
+// ClearImageQuality remove o override de imagem (volta ao perfil).
+func (s *SessionScreen) ClearImageQuality() {
+	s.quality.ClearImageQuality()
+}
+
+// SetMaxFps define a taxa máxima de quadros por segundo. Sobrescreve o perfil.
+func (s *SessionScreen) SetMaxFps(fps int) {
+	if fps >= 1 && fps <= 60 {
+		s.quality.SetMaxFps(fps)
+	}
+}
+
+// ClearMaxFps remove o override de FPS (volta ao perfil).
+func (s *SessionScreen) ClearMaxFps() {
+	s.quality.ClearMaxFps()
 }
 
 // publishMetrics publica metricas de streaming no subject .event para o viewer.

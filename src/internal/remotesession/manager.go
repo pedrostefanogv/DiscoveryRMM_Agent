@@ -20,6 +20,8 @@ type Session struct {
 	Transport   string    `json:"transport"`   // webrtc, nats, http
 	Quality     string    `json:"quality"`     // ultra, high, medium, low, ultralow
 	Codec       string    `json:"codec"`       // jpeg, webp, h264
+	ImageQuality int      `json:"imageQuality"` // compressão JPEG/WebP 1-100, default 70
+	MaxFps       int      `json:"maxFps"`       // taxa máxima de quadros por segundo, default 15
 	NatsSubject string    `json:"natsSubject"` // subject base para stream
 	ExpiresAt   time.Time `json:"expiresAtUtc"`
 	StartedAt   time.Time `json:"startedAtUtc"`
@@ -102,9 +104,11 @@ func (m *Manager) handleStart(ctx context.Context, payload map[string]any) (bool
 	quality := toString(payload["quality"])
 	codec := toString(payload["codec"])
 	natsSubject := toString(payload["natsSubject"])
+	imageQuality := toInt(payload["imageQuality"], 70)
+	maxFps := toInt(payload["maxFps"], 15)
 
-	log.Printf("[remote-session] handleStart: sessionId=%s kind=%s transport=%s quality=%s codec=%s natsSubject=%s\n",
-		sessionID, kind, transport, quality, codec, natsSubject)
+	log.Printf("[remote-session] handleStart: sessionId=%s kind=%s transport=%s quality=%s codec=%s imageQ=%d maxFps=%d natsSubject=%s\n",
+		sessionID, kind, transport, quality, codec, imageQuality, maxFps, natsSubject)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -124,16 +128,18 @@ func (m *Manager) handleStart(ctx context.Context, payload map[string]any) (bool
 	}
 
 	session := &Session{
-		ID:          sessionID,
-		Kind:        kind,
-		Transport:   transport,
-		Quality:     quality,
-		Codec:       codec,
-		NatsSubject: natsSubject,
-		StartedAt:   time.Now(),
-		ExpiresAt:   expiresAt,
-		stopCh:      make(chan struct{}),
-		doneCh:      make(chan struct{}),
+		ID:           sessionID,
+		Kind:         kind,
+		Transport:    transport,
+		Quality:      quality,
+		Codec:        codec,
+		ImageQuality: imageQuality,
+		MaxFps:       maxFps,
+		NatsSubject:  natsSubject,
+		StartedAt:    time.Now(),
+		ExpiresAt:    expiresAt,
+		stopCh:       make(chan struct{}),
+		doneCh:       make(chan struct{}),
 	}
 	m.sessions[sessionID] = session
 
@@ -204,6 +210,8 @@ func (m *Manager) handleQuality(ctx context.Context, payload map[string]any) (bo
 	sessionID := toString(payload["sessionId"])
 	quality := toString(payload["quality"])
 	codec := toString(payload["codec"])
+	imageQuality := payload["imageQuality"]   // pode ser nil ou float64
+	maxFpsVal := payload["maxFps"]            // pode ser nil ou float64
 	if sessionID == "" || quality == "" {
 		return false, "payload sem sessionId ou quality"
 	}
@@ -226,16 +234,33 @@ func (m *Manager) handleQuality(ctx context.Context, payload map[string]any) (bo
 		if codec != "" {
 			screen.SetCodec(codec)
 		}
-		log.Printf("[remote-session] qualidade alterada: sessionId=%s quality=%s codec=%s\n",
-			sessionID, quality, codec)
+		// Só aplica override se o valor veio explicitamente no payload
+		if iq, ok := toFloat64(imageQuality); ok {
+			s.ImageQuality = int(iq)
+			screen.SetImageQuality(int(iq))
+		} else {
+			s.ImageQuality = 0 // reset — volta ao perfil
+			screen.ClearImageQuality()
+		}
+		if mf, ok := toFloat64(maxFpsVal); ok {
+			s.MaxFps = int(mf)
+			screen.SetMaxFps(int(mf))
+		} else {
+			s.MaxFps = 0 // reset — volta ao perfil
+			screen.ClearMaxFps()
+		}
+		log.Printf("[remote-session] qualidade alterada: sessionId=%s quality=%s codec=%s imageQ=%d maxFps=%d\n",
+			sessionID, quality, codec, s.ImageQuality, s.MaxFps)
 	} else {
 		log.Printf("[remote-session] qualidade alterada no registro, mas sessao screen nao encontrada: sessionId=%s\n",
 			sessionID)
 	}
 
 	m.publishEvent(sessionID, "quality_changed", map[string]string{
-		"quality": quality,
-		"codec":   codec,
+		"quality":      quality,
+		"codec":        codec,
+		"imageQuality": fmt.Sprintf("%d", s.ImageQuality),
+		"maxFps":       fmt.Sprintf("%d", s.MaxFps),
 	})
 
 	return true, ""
@@ -369,9 +394,15 @@ func (m *Manager) runScreenSession(ctx context.Context, session *Session) {
 		m.mu.Unlock()
 	}()
 
-	// Configura qualidade e codec
+	// Configura qualidade, codec, imagem e FPS
 	screenSession.SetQuality(session.Quality)
 	screenSession.SetCodec(session.Codec)
+	if session.ImageQuality > 0 {
+		screenSession.SetImageQuality(session.ImageQuality)
+	}
+	if session.MaxFps > 0 {
+		screenSession.SetMaxFps(session.MaxFps)
+	}
 
 	// Context que encerra quando stopCh fecha ou expires
 	ctx, cancel := context.WithCancel(ctx)
@@ -530,4 +561,30 @@ func normalizeTransport(requested string) string {
 func toString(v any) string {
 	s, _ := v.(string)
 	return s
+}
+
+func toInt(v any, defaultVal int) int {
+	switch val := v.(type) {
+	case float64:
+		return int(val)
+	case int:
+		return val
+	case int64:
+		return int(val)
+	default:
+		return defaultVal
+	}
+}
+
+func toFloat64(v any) (float64, bool) {
+	switch val := v.(type) {
+	case float64:
+		return val, true
+	case int:
+		return float64(val), true
+	case int64:
+		return float64(val), true
+	default:
+		return 0, false
+	}
 }

@@ -10,6 +10,26 @@ type QualityConfig struct {
 	JpegQuality int
 	Fps         int
 	ScaleFactor float64 // 1.0 = nativa, 0.5 = metade
+
+	// Overrides manuais (têm precedência sobre o perfil)
+	overrideImageQ int // 0 = usar perfil
+	overrideMaxFps int // 0 = usar perfil
+}
+
+// EffectiveJpegQuality retorna a qualidade JPEG efetiva (override ou perfil).
+func (qc QualityConfig) EffectiveJpegQuality() int {
+	if qc.overrideImageQ > 0 {
+		return qc.overrideImageQ
+	}
+	return qc.JpegQuality
+}
+
+// EffectiveFps retorna o FPS efetivo (override ou perfil).
+func (qc QualityConfig) EffectiveFps() int {
+	if qc.overrideMaxFps > 0 {
+		return qc.overrideMaxFps
+	}
+	return qc.Fps
 }
 
 // QualityManager adapta qualidade do stream baseado em metricas.
@@ -54,14 +74,19 @@ func (qm *QualityManager) Current() QualityConfig {
 	return qm.current
 }
 
-// SetProfile atualiza para um perfil pre-definido.
+// SetProfile atualiza para um perfil pre-definido, preservando overrides.
 func (qm *QualityManager) SetProfile(profile string) {
 	qm.mu.Lock()
 	defer qm.mu.Unlock()
 
 	if cfg, ok := defaultProfiles[profile]; ok {
 		qm.profile = profile
+		// Preserva overrides manuais ao trocar de perfil
+		oldOverrideQ := qm.current.overrideImageQ
+		oldOverrideFps := qm.current.overrideMaxFps
 		qm.current = cfg
+		qm.current.overrideImageQ = oldOverrideQ
+		qm.current.overrideMaxFps = oldOverrideFps
 	}
 }
 
@@ -70,6 +95,34 @@ func (qm *QualityManager) Profile() string {
 	qm.mu.RLock()
 	defer qm.mu.RUnlock()
 	return qm.profile
+}
+
+// SetImageQuality define override de compressão (1-100). 0 = usar perfil.
+func (qm *QualityManager) SetImageQuality(q int) {
+	qm.mu.Lock()
+	defer qm.mu.Unlock()
+	qm.current.overrideImageQ = q
+}
+
+// ClearImageQuality remove o override de qualidade de imagem (volta ao perfil).
+func (qm *QualityManager) ClearImageQuality() {
+	qm.mu.Lock()
+	defer qm.mu.Unlock()
+	qm.current.overrideImageQ = 0
+}
+
+// SetMaxFps define override de FPS (1-60). 0 = usar perfil.
+func (qm *QualityManager) SetMaxFps(fps int) {
+	qm.mu.Lock()
+	defer qm.mu.Unlock()
+	qm.current.overrideMaxFps = fps
+}
+
+// ClearMaxFps remove o override de FPS (volta ao perfil).
+func (qm *QualityManager) ClearMaxFps() {
+	qm.mu.Lock()
+	defer qm.mu.Unlock()
+	qm.current.overrideMaxFps = 0
 }
 
 // RecordFrame registra metricas de um frame para adaptacao.
