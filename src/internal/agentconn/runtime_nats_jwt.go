@@ -49,6 +49,11 @@ func validateAgentIdentityJWTClaims(jwt string, subjects natsSubjects) error {
 		subjects.Result,
 		subjects.Hardware,
 		subjects.RemoteDebugLog,
+		// Remote-session subjects use canonical UUIDs without hyphens.
+		fmt.Sprintf("tenant.%s.site.%s.agent.%s.remote.session.>",
+			stripSubjectHyphens(subjects.ClientID),
+			stripSubjectHyphens(subjects.SiteID),
+			stripSubjectHyphens(subjects.AgentID)),
 	}
 
 	if err := compareSubjectSets("subscribe", subAllow, expectedSub); err != nil {

@@ -3,6 +3,7 @@ package agentconn
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"testing"
 )
 
@@ -129,6 +130,10 @@ func TestValidateAgentIdentityJWTClaims_ExactSubjects(t *testing.T) {
 					subjects.Result,
 					subjects.Hardware,
 					subjects.RemoteDebugLog,
+					fmt.Sprintf("tenant.%s.site.%s.agent.%s.remote.session.>",
+						stripSubjectHyphens(subjects.ClientID),
+						stripSubjectHyphens(subjects.SiteID),
+						stripSubjectHyphens(subjects.AgentID)),
 				},
 			},
 		},

@@ -198,6 +198,9 @@ type Config struct {
 }
 
 type natsSubjects struct {
+	ClientID            string
+	SiteID              string
+	AgentID             string
 	CommandAgent        string
 	CommandSiteFanout   string
 	CommandClientFanout string

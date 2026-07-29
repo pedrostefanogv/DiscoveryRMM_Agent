@@ -597,6 +597,9 @@ func resolveNATSSubjects(cfg Config) (natsSubjects, error) {
 	}
 	prefix := fmt.Sprintf("tenant.%s.site.%s.agent.%s", clientID, siteID, agentID)
 	return natsSubjects{
+		ClientID:            clientID,
+		SiteID:              siteID,
+		AgentID:             agentID,
 		CommandAgent:        prefix + ".command",
 		CommandSiteFanout:   fmt.Sprintf("tenant.%s.site.%s.agents.command", clientID, siteID),
 		CommandClientFanout: fmt.Sprintf("tenant.%s.agents.command", clientID),
@@ -634,6 +637,10 @@ func canonicalSubjectSegment(name, value string) (string, error) {
 		return "", fmt.Errorf("%s invalido para subject NATS canÃ´nico", name)
 	}
 	return value, nil
+}
+
+func stripSubjectHyphens(value string) string {
+	return strings.ReplaceAll(value, "-", "")
 }
 
 func publishJSON(nc *nats.Conn, subject string, payload any) error {
