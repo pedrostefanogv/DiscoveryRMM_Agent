@@ -33,7 +33,8 @@ type Session struct {
 // Manager gerencia o lifecycle de sessoes remotas no agent.
 type Manager struct {
 	mu         sync.RWMutex
-	sessions   map[string]*Session // key: sessionId
+	sessions   map[string]*Session       // key: sessionId
+	screenSessions map[string]*SessionScreen // key: sessionId — referência às goroutines ativas
 	nc         *nats.Conn
 	natsStream *NatsStreamHandler
 
@@ -45,8 +46,9 @@ type Manager struct {
 // NewManager cria um novo gerenciador de sessoes remotas.
 func NewManager(nc *nats.Conn) *Manager {
 	return &Manager{
-		sessions: make(map[string]*Session),
-		nc:       nc,
+		sessions:       make(map[string]*Session),
+		screenSessions: make(map[string]*SessionScreen),
+		nc:             nc,
 	}
 }
 
@@ -198,9 +200,10 @@ func (m *Manager) handleStop(_ context.Context, payload map[string]any) (bool, s
 	return m.closeSessionLocked(sessionID, "stopped-by-server"), ""
 }
 
-func (m *Manager) handleQuality(_ context.Context, payload map[string]any) (bool, string) {
+func (m *Manager) handleQuality(ctx context.Context, payload map[string]any) (bool, string) {
 	sessionID := toString(payload["sessionId"])
 	quality := toString(payload["quality"])
+	codec := toString(payload["codec"])
 	if sessionID == "" || quality == "" {
 		return false, "payload sem sessionId ou quality"
 	}
@@ -213,7 +216,28 @@ func (m *Manager) handleQuality(_ context.Context, payload map[string]any) (bool
 		return false, "sessao nao encontrada"
 	}
 	s.Quality = quality
-	s.Codec = toString(payload["codec"])
+	if codec != "" {
+		s.Codec = codec
+	}
+
+	// Propaga mudanca para a sessao ativa (SessionScreen)
+	if screen, ok := m.screenSessions[sessionID]; ok {
+		screen.SetQuality(quality)
+		if codec != "" {
+			screen.SetCodec(codec)
+		}
+		log.Printf("[remote-session] qualidade alterada: sessionId=%s quality=%s codec=%s\n",
+			sessionID, quality, codec)
+	} else {
+		log.Printf("[remote-session] qualidade alterada no registro, mas sessao screen nao encontrada: sessionId=%s\n",
+			sessionID)
+	}
+
+	m.publishEvent(sessionID, "quality_changed", map[string]string{
+		"quality": quality,
+		"codec":   codec,
+	})
+
 	return true, ""
 }
 
@@ -255,6 +279,7 @@ func (m *Manager) closeSessionLocked(sessionID, reason string) bool {
 		return false
 	}
 	delete(m.sessions, sessionID)
+	delete(m.screenSessions, sessionID) // limpa referencia da SessionScreen
 
 	select {
 	case <-s.stopCh:
@@ -332,6 +357,17 @@ func (m *Manager) runScreenSession(ctx context.Context, session *Session) {
 	defer screenSession.Stop()
 
 	log.Printf("[remote-session-screen] SessionScreen criado com sucesso para sessao %s\n", session.ID)
+
+	// Registra referencia para permitir handleQuality propagar mudancas
+	m.mu.Lock()
+	m.screenSessions[session.ID] = screenSession
+	m.mu.Unlock()
+
+	defer func() {
+		m.mu.Lock()
+		delete(m.screenSessions, session.ID)
+		m.mu.Unlock()
+	}()
 
 	// Configura qualidade e codec
 	screenSession.SetQuality(session.Quality)

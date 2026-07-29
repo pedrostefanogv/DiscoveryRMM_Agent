@@ -26,14 +26,13 @@ type QualityManager struct {
 	lossPercent   float64
 }
 
-// Profiles padrao
+// Profiles padrao — alinhados com QualityProfileMapping.cs do backend
 var defaultProfiles = map[string]QualityConfig{
-	"ultra":     {JpegQuality: 90, Fps: 30, ScaleFactor: 1.0},
-	"high":      {JpegQuality: 85, Fps: 20, ScaleFactor: 1.0},
-	"medium":    {JpegQuality: 75, Fps: 15, ScaleFactor: 0.75},
-	"low":       {JpegQuality: 60, Fps: 10, ScaleFactor: 0.50},
-	"ultra-low": {JpegQuality: 50, Fps: 5, ScaleFactor: 0.50},
-	"ultralow":  {JpegQuality: 50, Fps: 5, ScaleFactor: 0.50},
+	"ultra":    {JpegQuality: 92, Fps: 30, ScaleFactor: 1.0},
+	"high":     {JpegQuality: 75, Fps: 15, ScaleFactor: 1.0},
+	"medium":   {JpegQuality: 60, Fps: 10, ScaleFactor: 0.75},
+	"low":      {JpegQuality: 40, Fps: 5, ScaleFactor: 0.50},
+	"ultralow": {JpegQuality: 25, Fps: 2, ScaleFactor: 0.30},
 }
 
 // NewQualityManager cria um gerenciador de qualidade.

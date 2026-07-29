@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	"discovery/internal/screen"
@@ -15,6 +16,7 @@ type SessionScreen struct {
 	sessionID  string
 	capturer   screen.Capturer
 	encoder    screen.Encoder
+	encoderMu  sync.RWMutex // protege troca de encoder (SetCodec)
 	natsStream *NatsStreamHandler
 	quality    *QualityManager
 	codecSel   CodecSelector
@@ -79,7 +81,8 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 	ticker := time.NewTicker(frameInterval)
 	defer ticker.Stop()
 
-	quality := s.quality.Current()
+	// quality é lido dinamicamente a cada frame para suportar mudancas em tempo real.
+	// A variavel local captura o snapshot inicial para o ticker.
 
 	var totalFramesSent int64
 	var totalFramesSkipped int64
@@ -89,6 +92,7 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 	var encBytesTotal int64
 	var encodeTimeTotal time.Duration
 	lastLogTime := time.Now()
+	lastMetricsTime := time.Now()
 
 	for {
 		select {
@@ -105,6 +109,19 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 			return nil
 
 		case <-ticker.C:
+			// Le qualidade atual a cada frame — permite SetQuality() runtime
+			q := s.quality.Current()
+			curFps := q.Fps
+			if curFps <= 0 {
+				curFps = 15
+			}
+			// Ajusta ticker se FPS mudou
+			newInterval := time.Second / time.Duration(curFps)
+			if newInterval != frameInterval {
+				frameInterval = newInterval
+				ticker.Reset(frameInterval)
+			}
+
 			frame, err := s.capturer.AcquireNextFrame()
 			if err != nil {
 				log.Printf("[remote-session-screen] ERRO ao capturar frame: %v\n", err)
@@ -113,11 +130,14 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 				continue
 			}
 
-			// Encode frame
-			q := quality.JpegQuality
+			// Encode frame (protege leitura do encoder com RLock)
+			jpgQuality := q.JpegQuality
 			rawSize := len(frame.Data)
 			encodeStart := time.Now()
-			encoded, err := s.encoder.Encode(frame, q)
+			s.encoderMu.RLock()
+			enc := s.encoder
+			s.encoderMu.RUnlock()
+			encoded, err := enc.Encode(frame, jpgQuality)
 			encodeTime := time.Since(encodeStart)
 			s.capturer.ReleaseFrame()
 			if err != nil {
@@ -155,9 +175,15 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 			// Adaptacao de qualidade
 			s.quality.RecordFrame(len(buf), time.Now())
 
-			// Log periodico a cada 10s com metricas de compressao
+			// Publica metricas a cada 5s para o viewer (P2)
 			framesSent++
 			totalFramesSent++
+			if time.Since(lastMetricsTime) >= 5*time.Second {
+				s.publishMetrics(int(frame.Width), int(frame.Height), framesSent, framesSkipped, rawBytesTotal, encBytesTotal, encodeTimeTotal)
+				lastMetricsTime = time.Now()
+			}
+
+			// Log periodico a cada 10s com metricas de compressao
 			if time.Since(lastLogTime) >= 10*time.Second {
 				compressionRatio := float64(0)
 				avgEncodeMs := float64(0)
@@ -202,6 +228,35 @@ func (s *SessionScreen) SetCodec(codec string) {
 	// Seleciona o encoder otimo com base na GPU e codec
 	encoder := s.codecSel.Select(s.quality.Profile(), codec)
 	if encoder != nil {
+		s.encoderMu.Lock()
 		s.encoder = encoder
+		s.encoderMu.Unlock()
 	}
+}
+
+// publishMetrics publica metricas de streaming no subject .event para o viewer.
+func (s *SessionScreen) publishMetrics(width, height int, framesSent, framesSkipped int64, rawBytes, encBytes int64, encodeTimeTotal time.Duration) {
+	q := s.quality.Current()
+	compressionRatio := float64(0)
+	avgEncodeMs := float64(0)
+	if rawBytes > 0 {
+		compressionRatio = float64(rawBytes) / float64(encBytes)
+	}
+	if framesSent > 0 {
+		avgEncodeMs = float64(encodeTimeTotal.Milliseconds()) / float64(framesSent)
+	}
+
+	metrics := map[string]any{
+		"eventType":     "metrics",
+		"fps":           q.Fps,
+		"quality":       s.quality.Profile(),
+		"resolution":    fmt.Sprintf("%dx%d", width, height),
+		"compressionRatio": fmt.Sprintf("%.1f:1", compressionRatio),
+		"avgEncodeMs":   fmt.Sprintf("%.1f", avgEncodeMs),
+		"framesSent5s":  framesSent,
+		"framesSkipped5s": framesSkipped,
+		"totalFrames":   s.frameSeq,
+	}
+
+	s.natsStream.PublishEvent(s.sessionID, "metrics", metrics)
 }
