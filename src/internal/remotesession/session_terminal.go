@@ -18,10 +18,10 @@ import (
 // ── Constantes de timing do terminal ──
 
 const (
-	termOutputCoalesceMs = 16  // debounce de coalescimento (~60Hz)
-	termMaxMsgPerSec     = 60  // rate limit maximo de mensagens/segundo
-	termRateWindowMs     = 100 // janela deslizante para rate limit
-	termMaxInputSize     = 4 * 1024 // limite de input por mensagem (4KB)
+	termOutputCoalesceMs = 16      // debounce de coalescimento (~60Hz)
+	termMaxMsgPerSec     = 60      // rate limit maximo de mensagens/segundo
+	termRateWindowMs     = 100     // janela deslizante para rate limit
+	termMaxInputSize     = 32 * 1024 // limite de input por mensagem (32KB — suporta paste de textos longos)
 )
 
 // ── TerminalTab ──
