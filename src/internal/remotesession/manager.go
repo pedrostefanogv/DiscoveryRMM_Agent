@@ -11,6 +11,7 @@ import (
 	"github.com/nats-io/nats.go"
 
 	"discovery/internal/safego"
+	"discovery/internal/terminal"
 )
 
 // Session representa uma sessao remota ativa gerenciada pelo agent.
@@ -30,6 +31,7 @@ type Session struct {
 	// estado interno
 	stopCh chan struct{}
 	doneCh chan struct{}
+	Meta   map[string]any `json:"-"` // metadados do payload original (shell, termCols, termRows, etc.)
 }
 
 // Manager gerencia o lifecycle de sessoes remotas no agent.
@@ -140,6 +142,7 @@ func (m *Manager) handleStart(ctx context.Context, payload map[string]any) (bool
 		ExpiresAt:    expiresAt,
 		stopCh:       make(chan struct{}),
 		doneCh:       make(chan struct{}),
+		Meta:         payload, // armazena payload original para acesso a shell, termCols, termRows
 	}
 	m.sessions[sessionID] = session
 
@@ -436,6 +439,75 @@ func (m *Manager) runTerminalSession(ctx context.Context, session *Session) {
 		return
 	}
 
+	// Shell padrao: powershell
+	defaultShell := terminal.ShellPowerShell
+	if sk, ok := sessionMetaString(session, "shell"); ok && sk != "" {
+		defaultShell = terminal.ShellKind(sk)
+	}
+
+	cols := sessionMetaInt(session, "termCols", 120)
+	rows := sessionMetaInt(session, "termRows", 40)
+
+	sessTerm := NewSessionTerminal(session.ID, m.natsStream, session.Recording)
+
+	// Criar tab inicial
+	firstTab, err := sessTerm.CreateTab(ctx, defaultShell, cols, rows)
+	if err != nil {
+		log.Printf("[remote-session-term] ERRO ao criar tab inicial: %v", err)
+		m.publishEvent(session.ID, "error", map[string]string{"error": err.Error()})
+		return
+	}
+
+	// Subscrever comandos de controle de tabs
+	m.natsStream.SubscribeToTermCreate(session.ID, func(data []byte) {
+		var req struct {
+			Shell string `json:"shell"`
+			Cols  int    `json:"cols"`
+			Rows  int    `json:"rows"`
+		}
+		if err := json.Unmarshal(data, &req); err != nil {
+			return
+		}
+		sk := terminal.ShellKind(req.Shell)
+		if sk == "" {
+			sk = terminal.ShellPowerShell
+		}
+		c := req.Cols
+		r := req.Rows
+		if c <= 0 { c = cols }
+		if r <= 0 { r = rows }
+		tab, err := sessTerm.CreateTab(ctx, sk, c, r)
+		if err != nil {
+			log.Printf("[remote-session-term] ERRO ao criar tab %s: %v", req.Shell, err)
+			return
+		}
+		log.Printf("[remote-session-term] nova tab criada: %s shell=%s", tab.ID, sk)
+	})
+
+	m.natsStream.SubscribeToTermClose(session.ID, func(data []byte) {
+		var req struct {
+			TabID string `json:"tabId"`
+		}
+		if err := json.Unmarshal(data, &req); err != nil {
+			return
+		}
+		sessTerm.CloseTab(req.TabID)
+	})
+
+	// Notificar viewer com shells disponiveis
+	availableShells := []string{"powershell", "cmd"}
+	if available, distros := terminal.IsWSLAvailable(); available {
+		for _, d := range distros {
+			availableShells = append(availableShells, "wsl:"+d)
+		}
+	}
+	m.natsStream.PublishTermReady(session.ID, map[string]any{
+		"shells":      availableShells,
+		"defaultTab":  firstTab.ID,
+		"termCols":    cols,
+		"termRows":    rows,
+	})
+
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -447,11 +519,42 @@ func (m *Manager) runTerminalSession(ctx context.Context, session *Session) {
 		}
 	}()
 
-	// TODO: integrar terminal.Shell com natsStream.SubscribeToTermIn + PublishTermOut
-	select {
-	case <-ctx.Done():
-	case <-session.stopCh:
-	}
+	<-ctx.Done()
+	sessTerm.Stop()
+}
+
+// sessionMetaString extrai string de session.meta (via payload original).
+// Como Session nao tem campo meta, usamos valores default.
+func sessionMetaString(session *Session, key string) (string, bool) {
+        if session.Meta == nil {
+                return "", false
+        }
+        v, ok := session.Meta[key]
+        if !ok {
+                return "", false
+        }
+        s, ok := v.(string)
+        return s, ok
+}
+
+func sessionMetaInt(session *Session, key string, defaultVal int) int {
+        if session.Meta == nil {
+                return defaultVal
+        }
+        v, ok := session.Meta[key]
+        if !ok {
+                return defaultVal
+        }
+        switch val := v.(type) {
+        case float64:
+                return int(val)
+        case int:
+                return val
+        case int64:
+                return int(val)
+        default:
+                return defaultVal
+        }
 }
 
 func (m *Manager) runFilesSession(ctx context.Context, session *Session) {

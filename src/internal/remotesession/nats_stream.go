@@ -84,6 +84,26 @@ func (h *NatsStreamHandler) PublishTermOut(sessionID string, data string) error 
 	return err
 }
 
+// PublishTermOutTab envia saida do terminal para o viewer (multi-tab).
+func (h *NatsStreamHandler) PublishTermOutTab(sessionID, tabID string, data string) error {
+	subject := fmt.Sprintf("%s.%s.term.%s.out", h.subjectBase(), stripHyphens(sessionID), stripHyphens(tabID))
+	err := h.nc.Publish(subject, []byte(data))
+	return err
+}
+
+// PublishTermReady notifica o viewer sobre shells disponiveis e tab inicial.
+func (h *NatsStreamHandler) PublishTermReady(sessionID string, data any) error {
+	payload, _ := json.Marshal(data)
+	subject := h.publishSubject(sessionID, "term.ready")
+	return h.nc.Publish(subject, payload)
+}
+
+// PublishRecordingTerm envia frames de terminal para gravacao.
+func (h *NatsStreamHandler) PublishRecordingTerm(sessionID string, data []byte) error {
+	subject := h.publishSubject(sessionID, "recording.term")
+	return h.nc.Publish(subject, data)
+}
+
 // PublishEvent envia um evento de sessao.
 func (h *NatsStreamHandler) PublishEvent(sessionID string, eventType string, data any) error {
 	payload, _ := json.Marshal(map[string]any{
@@ -111,6 +131,30 @@ func (h *NatsStreamHandler) SubscribeToInput(sessionID string, handler func(inpu
 // SubscribeToTermIn subscreve a stdin do terminal enviado pelo viewer.
 func (h *NatsStreamHandler) SubscribeToTermIn(sessionID string, handler func(data []byte)) (*nats.Subscription, error) {
 	return h.nc.Subscribe(h.subscribePattern(sessionID, "term.in"), func(msg *nats.Msg) {
+		handler(msg.Data)
+	})
+}
+
+// SubscribeToTermInTab subscreve a stdin de uma aba especifica (multi-tab).
+func (h *NatsStreamHandler) SubscribeToTermInTab(sessionID, tabID string, handler func(data []byte)) (*nats.Subscription, error) {
+	subject := fmt.Sprintf("tenant.*.site.*.agent.*.remote.session.%s.term.%s.in", stripHyphens(sessionID), stripHyphens(tabID))
+	return h.nc.Subscribe(subject, func(msg *nats.Msg) {
+		handler(msg.Data)
+	})
+}
+
+// SubscribeToTermCreate subscreve a comandos de criacao de tab.
+func (h *NatsStreamHandler) SubscribeToTermCreate(sessionID string, handler func(data []byte)) (*nats.Subscription, error) {
+	subject := h.subscribePattern(sessionID, "term.create")
+	return h.nc.Subscribe(subject, func(msg *nats.Msg) {
+		handler(msg.Data)
+	})
+}
+
+// SubscribeToTermClose subscreve a comandos de fechamento de tab.
+func (h *NatsStreamHandler) SubscribeToTermClose(sessionID string, handler func(data []byte)) (*nats.Subscription, error) {
+	subject := h.subscribePattern(sessionID, "term.close")
+	return h.nc.Subscribe(subject, func(msg *nats.Msg) {
 		handler(msg.Data)
 	})
 }
