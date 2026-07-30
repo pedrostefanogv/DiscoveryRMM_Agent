@@ -21,8 +21,11 @@ type Frame struct {
 }
 
 // NewCapturer cria o capturador apropriado para o sistema.
-// Usa GDI diretamente; DXGI Desktop Duplication requer bindings COM extensivos
-// (IDXGIOutputDuplication) que ainda nao estao implementados.
+// Tenta DXGI Desktop Duplication primeiro; fallback para GDI se indisponivel.
 func NewCapturer(monitorIndex int) (Capturer, error) {
-	return NewGDICapturer()
+	c, err := NewDXGICapturer(monitorIndex)
+	if err != nil {
+		return NewGDICapturer()
+	}
+	return c, nil
 }

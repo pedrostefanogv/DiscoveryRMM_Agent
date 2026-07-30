@@ -21,6 +21,7 @@ type SessionScreen struct {
 	quality    *QualityManager
 	codecSel   CodecSelector
 	recording  *RecordingSource
+	inputCtrl  *InputController
 
 	frameSeq uint64
 	stopCh   chan struct{}
@@ -45,6 +46,7 @@ func NewSessionScreen(sessionID string, natsStream *NatsStreamHandler) (*Session
 	codecSel := NewCodecSelector()
 	quality := NewQualityManager(QualityConfig{})
 	recording := NewRecordingSource(sessionID, natsStream)
+	inputCtrl := NewInputController(sessionID)
 
 	return &SessionScreen{
 		sessionID:  sessionID,
@@ -54,6 +56,7 @@ func NewSessionScreen(sessionID string, natsStream *NatsStreamHandler) (*Session
 		quality:    &quality,
 		codecSel:   codecSel,
 		recording:  recording,
+		inputCtrl:  inputCtrl,
 		stopCh:     make(chan struct{}),
 		doneCh:     make(chan struct{}),
 	}, nil
@@ -122,13 +125,24 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 				ticker.Reset(frameInterval)
 			}
 
+			captureStart := time.Now()
 			frame, err := s.capturer.AcquireNextFrame()
+			captureMs := float64(time.Since(captureStart).Microseconds()) / 1000.0
 			if err != nil {
-				log.Printf("[remote-session-screen] ERRO ao capturar frame: %v\n", err)
+				log.Printf("[remote-session-screen] ERRO ao capturar frame: %v (captureMs=%.1f)\n", err, captureMs)
 				framesSkipped++
 				totalFramesSkipped++
 				continue
 			}
+
+			// Aplica escala (B2) — redimensiona antes do encode se ScaleFactor < 1.0
+			origFrame := frame
+			scaleFactor := q.ScaleFactor
+			if scaleFactor > 0 && scaleFactor < 1.0 {
+				frame = screen.ResizeBGRA(frame, scaleFactor)
+				s.capturer.ReleaseFrame() // frame original liberado, usamos o escalado
+			}
+			_ = captureMs // reservado para telemetria futura
 
 			// Encode frame (protege leitura do encoder com RLock)
 			jpgQuality := q.EffectiveJpegQuality()
@@ -138,8 +152,12 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 			enc := s.encoder
 			s.encoderMu.RUnlock()
 			encoded, err := enc.Encode(frame, jpgQuality)
-			encodeTime := time.Since(encodeStart)
-			s.capturer.ReleaseFrame()
+			if scaleFactor < 1.0 && frame != origFrame {
+				// frame foi alocado por ResizeBGRA — liberar após uso
+			}
+			if frame == origFrame {
+				s.capturer.ReleaseFrame()
+			}
 			if err != nil {
 				log.Printf("[remote-session-screen] ERRO ao encodar frame: %v\n", err)
 				framesSkipped++
@@ -149,23 +167,28 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 			encSize := len(encoded)
 			rawBytesTotal += int64(rawSize)
 			encBytesTotal += int64(encSize)
-			encodeTimeTotal += encodeTime
+			encodeTimeTotal += time.Since(encodeStart)
 
-			// Monta frame com header binario
+			// Monta frame com header binario (usa dimensões efetivas após escala)
 			ts := uint32(time.Now().UnixMilli())
-			buf := make([]byte, frameHeaderLen+len(encoded))
+			buf := make([]byte, frameHeaderLen+encSize)
 			binary.BigEndian.PutUint32(buf[0:4], uint32(s.frameSeq))
 			binary.BigEndian.PutUint32(buf[4:8], ts)
 			binary.BigEndian.PutUint16(buf[8:10], uint16(frame.Width))
 			binary.BigEndian.PutUint16(buf[10:12], uint16(frame.Height))
 			copy(buf[frameHeaderLen:], encoded)
 
+			publishStart := time.Now()
 			if err := s.natsStream.PublishFrame(s.sessionID, buf); err != nil {
 				log.Printf("[remote-session-screen] ERRO ao publicar frame %d: %v\n", s.frameSeq, err)
 				framesSkipped++
 				totalFramesSkipped++
 				continue
 			}
+			_ = publishStart // reservado para telemetria futura
+
+			// Atualiza métricas de input para coordenadas
+			s.inputCtrl.UpdateFrameMetrics(frame.Width, frame.Height, frame.Width, frame.Height)
 
 			// Tap de gravação (G5)
 			s.recording.CaptureFrame(buf)
@@ -271,15 +294,21 @@ func (s *SessionScreen) publishMetrics(width, height int, framesSent, framesSkip
 	}
 
 	metrics := map[string]any{
-		"eventType":     "metrics",
-		"fps":           q.Fps,
-		"quality":       s.quality.Profile(),
-		"resolution":    fmt.Sprintf("%dx%d", width, height),
-		"compressionRatio": fmt.Sprintf("%.1f:1", compressionRatio),
-		"avgEncodeMs":   fmt.Sprintf("%.1f", avgEncodeMs),
-		"framesSent5s":  framesSent,
+		"eventType":       "metrics",
+		"effectiveFps":    q.EffectiveFps(),
+		"profileFps":      q.Fps,
+		"quality":         s.quality.Profile(),
+		"imageQuality":    q.EffectiveJpegQuality(),
+		"resolution":      fmt.Sprintf("%dx%d", width, height),
+		"compressionRatio": compressionRatio,
+		"avgEncodeMs":     avgEncodeMs,
+		"frameBytesAvg":   int64(0),
+		"framesSent5s":    framesSent,
 		"framesSkipped5s": framesSkipped,
-		"totalFrames":   s.frameSeq,
+		"totalFrames":     s.frameSeq,
+	}
+	if framesSent > 0 {
+		metrics["frameBytesAvg"] = encBytes / framesSent
 	}
 
 	s.natsStream.PublishEvent(s.sessionID, "metrics", metrics)

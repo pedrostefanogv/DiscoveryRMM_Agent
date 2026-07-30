@@ -33,14 +33,20 @@ func (e *jpegEncoder) Encode(frame *Frame, quality int) ([]byte, error) {
 		quality = 100
 	}
 
+	bgra := frame.Data
+	stride := frame.Stride
+	w := frame.Width
+	h := frame.Height
+
+	// Aplica ScaleFactor se frame ja foi redimensionado no capturador
+	// (w/h ja sao as dimensoes efetivas apos ResizeBGRA)
+
 	// Conversao BGRA→RGBA in-place (swap B↔R) para evitar alocacao extra.
 	// O buffer GDI eh alocado fresh a cada AcquireNextFrame, entao modificar
 	// in-place eh seguro. Usamos stride para lidar com padding.
-	bgra := frame.Data
-	stride := frame.Stride
-	for y := 0; y < frame.Height; y++ {
+	for y := 0; y < h; y++ {
 		rowStart := y * stride
-		for x := 0; x < frame.Width; x++ {
+		for x := 0; x < w; x++ {
 			offset := rowStart + x*4
 			bgra[offset], bgra[offset+2] = bgra[offset+2], bgra[offset] // swap B↔R
 		}
@@ -49,7 +55,7 @@ func (e *jpegEncoder) Encode(frame *Frame, quality int) ([]byte, error) {
 	img := &image.RGBA{
 		Pix:    frame.Data,
 		Stride: stride,
-		Rect:   image.Rect(0, 0, frame.Width, frame.Height),
+		Rect:   image.Rect(0, 0, w, h),
 	}
 
 	var buf bytes.Buffer
@@ -58,6 +64,41 @@ func (e *jpegEncoder) Encode(frame *Frame, quality int) ([]byte, error) {
 		return nil, fmt.Errorf("jpeg encode: %w", err)
 	}
 	return buf.Bytes(), nil
+}
+
+// ResizeBGRA redimensiona um frame BGRA usando nearest-neighbor (rápido).
+// Retorna novo buffer com as dimensões reduzidas. O original não é alterado.
+func ResizeBGRA(src *Frame, scaleFactor float64) *Frame {
+	if scaleFactor >= 1.0 {
+		return src
+	}
+
+	newW := int(float64(src.Width) * scaleFactor)
+	newH := int(float64(src.Height) * scaleFactor)
+	if newW < 1 { newW = 1 }
+	if newH < 1 { newH = 1 }
+
+	newStride := newW * 4
+	dst := &Frame{
+		Data:   make([]byte, newStride*newH),
+		Width:  newW,
+		Height: newH,
+		Stride: newStride,
+	}
+
+	for y := 0; y < newH; y++ {
+		srcY := int(float64(y) / scaleFactor)
+		rowDst := y * newStride
+		rowSrc := srcY * src.Stride
+		for x := 0; x < newW; x++ {
+			srcX := int(float64(x) / scaleFactor)
+			offsetDst := rowDst + x*4
+			offsetSrc := rowSrc + srcX*4
+			copy(dst.Data[offsetDst:offsetDst+4], src.Data[offsetSrc:offsetSrc+4])
+		}
+	}
+
+	return dst
 }
 
 func (e *jpegEncoder) Name() string { return "jpeg" }

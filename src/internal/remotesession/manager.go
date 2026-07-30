@@ -407,6 +407,16 @@ func (m *Manager) runScreenSession(ctx context.Context, session *Session) {
 		screenSession.SetMaxFps(session.MaxFps)
 	}
 
+	// Subscreve input do viewer (mouse/teclado)
+	inputSub, err := m.natsStream.SubscribeToInput(session.ID, func(data []byte) {
+		screenSession.inputCtrl.HandleInput(data)
+	})
+	if err != nil {
+		log.Printf("[remote-session-screen] ERRO ao subscrever input: %v", err)
+	} else {
+		defer inputSub.Unsubscribe()
+	}
+
 	// Context que encerra quando stopCh fecha ou expires
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -564,21 +574,13 @@ func (m *Manager) runFilesSession(ctx context.Context, session *Session) {
 		return
 	}
 
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	sf := NewSessionFiles(session.ID, m.natsStream, "C:\\")
+	log.Printf("[remote-session-files] sessão de arquivos iniciada para %s", session.ID)
 
-	go func() {
-		select {
-		case <-session.stopCh:
-			cancel()
-		case <-ctx.Done():
-		}
-	}()
-
-	// TODO: integrar fileserver.Server com natsStream.SubscribeToFilesReq
-	select {
-	case <-ctx.Done():
-	case <-session.stopCh:
+	if err := sf.Start(ctx); err != nil {
+		log.Printf("[remote-session-files] sessão encerrada: %v", err)
+	} else {
+		log.Printf("[remote-session-files] sessão encerrada normalmente para %s", session.ID)
 	}
 }
 
