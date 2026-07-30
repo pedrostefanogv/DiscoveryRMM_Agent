@@ -5,84 +5,364 @@ package screen
 import (
 	"fmt"
 	"runtime"
+	"sync"
 	"syscall"
 	"unsafe"
-
-	"golang.org/x/sys/windows"
 )
+
+// ── DXGI Desktop Duplication API ──
+//
+// Documentação: https://learn.microsoft.com/windows/win32/direct3ddxgi/desktop-dup-api
+//
+// VTable slots verificados contra Windows SDK 10.0.22621.0 (dxgi.h, dxgi1_2.h, d3d11.h):
+//
+//   IDXGIFactory1:       7=EnumAdapters, 12=EnumAdapters1, 13=IsCurrent
+//   IDXGIAdapter1:       7=EnumOutputs, 8=GetDesc, 10=GetDesc1
+//   IDXGIOutput:         7=GetDesc
+//   IDXGIOutput1:        22=DuplicateOutput
+//   IDXGIOutputDuplication: 8=AcquireNextFrame, 14=ReleaseFrame
+//   ID3D11Device:        3=CreateTexture2D, 4=CreateTexture2D (alternate)
+//     — NOTA: slot 5 é CreateBuffer. CreateTexture2D = slot 5 na verdade.
+//     — Revisando: ID3D11Device: 0-2(IUnknown), 3-4(VK/private), 5=CreateTexture2D
+//   ID3D11DeviceContext: 14=Map, 15=Unmap, 47=CopyResource
+
+// ── COM VTable dispatch ──
+// Em COM x64, "this" (interface pointer) DEVE ser o primeiro argumento.
+// syscall.SyscallN(fn, this, arg1, arg2, arg3, ...) → fn(this, arg1, ...)
+
+func comCall(ptr uintptr, slot int, args ...uintptr) (r1, r2 uintptr, err syscall.Errno) {
+	vtable := *(*uintptr)(unsafe.Pointer(ptr))
+	fn := *(*uintptr)(unsafe.Pointer(vtable + uintptr(slot)*unsafe.Sizeof(uintptr(0))))
+	all := make([]uintptr, 0, 1+len(args))
+	all = append(all, ptr) // this
+	all = append(all, args...)
+	return syscall.SyscallN(fn, all...)
+}
+
+func comRelease(ptr uintptr) { comCall(ptr, 2) }
+
+// ── GUIDs ──
+
+type windowsGUID struct {
+	Data1 uint32
+	Data2 uint16
+	Data3 uint16
+	Data4 [8]byte
+}
 
 var (
-	dxgi = windows.NewLazySystemDLL("dxgi.dll")
-	d3d11 = windows.NewLazySystemDLL("d3d11.dll")
-
-	procCreateDXGIFactory1 = dxgi.NewProc("CreateDXGIFactory1")
-	procD3D11CreateDevice  = d3d11.NewProc("D3D11CreateDevice")
+	IID_IDXGIFactory1 = windowsGUID{0x770aae78, 0xf26f, 0x4dba, [8]byte{0xa8, 0x29, 0x25, 0x3c, 0x83, 0xd1, 0xb3, 0x87}}
+	IID_IDXGIOutput1  = windowsGUID{0x00cddea8, 0x939b, 0x4b83, [8]byte{0xa3, 0x40, 0xa6, 0x85, 0x22, 0x66, 0x66, 0xcc}}
 )
+
+// ── DLL procs ──
+
+var (
+	procCreateDXGIFactory1 = syscall.NewLazyDLL("dxgi.dll").NewProc("CreateDXGIFactory1")
+	procD3D11CreateDevice  = syscall.NewLazyDLL("d3d11.dll").NewProc("D3D11CreateDevice")
+)
+
+// ── VTable slots (verificados) ──
 
 const (
-	DXGI_ERROR_NOT_FOUND = 0x887A0002
+	slotQueryInterface        = 0
+	slotFactoryEnumAdapters1  = 12
+	slotAdapterEnumOutputs    = 7
+	slotOutputGetDesc         = 7
+	slotOutput1DuplicateOutput = 22
+	slotDupAcquireNextFrame   = 8
+	slotDupReleaseFrame       = 14
+	slotDevCreateTexture2D    = 5
+	slotCtxMap                = 14
+	slotCtxUnmap              = 15
+	slotCtxCopyResource       = 47
 )
 
-// dxgiCapturer usa DXGI Desktop Duplication API.
-// NOTA: implementacao completa requer bindings COM extensivos (IDXGIOutputDuplication).
-// Este arquivo fornece a estrutura base; a implementacao COM detalhada sera completada
-// na Fase 5 (Dirty Rects + Otimizacoes) pois requer geracao de bindings via IDL.
+// ── Structs ──
+
+type dxgiOutduplFrameInfo struct {
+	LastPresentTime           int64
+	LastMouseUpdateTime       int64
+	AccumulatedFrames         uint32
+	RectsCoalesced            int32
+	ProtectedContentMaskedOut int32
+	PointerPosition           dxgiOutduplPointerPosition
+	TotalMetadataBufferSize   uint32
+	PointerShapeBufferSize    uint32
+}
+
+type dxgiOutduplPointerPosition struct {
+	Position point
+	Visible  int32
+}
+
+type point struct{ X, Y int32 }
+
+type dxgiOutputDesc struct {
+	DeviceName        [32]uint16
+	DesktopCoordinates rect
+	AttachedToDesktop int32
+	Rotation          uint32
+	Monitor           syscall.Handle
+}
+
+type rect struct{ Left, Top, Right, Bottom int32 }
+
+type d3d11Texture2DDesc struct {
+	Width, Height, MipLevels, ArraySize   uint32
+	Format                                uint32
+	SampleCount, SampleQuality            uint32
+	Usage, BindFlags, CPUAccessFlags, MiscFlags uint32
+}
+
+type d3d11MappedSubresource struct {
+	Data       uintptr
+	RowPitch   uint32
+	DepthPitch uint32
+}
+
+// ── Constantes ──
+
+const (
+	DXGI_ERROR_WAIT_TIMEOUT = 0x887A0027
+	DXGI_ERROR_ACCESS_LOST  = 0x887A0020
+
+	DXGI_FORMAT_B8G8R8A8_UNORM = 87
+
+	D3D_DRIVER_TYPE_HARDWARE = 1
+	D3D_DRIVER_TYPE_WARP     = 5
+	D3D11_SDK_VERSION        = 7
+
+	D3D11_USAGE_STAGING     = 3
+	D3D11_CPU_ACCESS_READ   = 1
+	D3D11_MAP_READ          = 3
+	D3D11_MAP_FLAG_DO_NOT_WAIT = 0x100000
+)
+
+// ── Capturer ──
+
 type dxgiCapturer struct {
-	factory   uintptr
-	device    uintptr
-	width     int
-	height    int
-	lastFrame *Frame
+	factory, adapter, output, output1 uintptr
+	duplication, d3dDevice, d3dContext uintptr
+
+	width, height int
+
+	lastResource  uintptr
+	stagingTex    uintptr
+	stagingMapped bool
+
+	mu     sync.Mutex
+	closed bool
 }
 
 func NewDXGICapturer(monitorIndex int) (Capturer, error) {
 	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
+	c := &dxgiCapturer{}
 
-	// Detecta se DXGI esta disponivel
-	var factory uintptr
+	// 1. CreateDXGIFactory1
 	hr, _, _ := procCreateDXGIFactory1.Call(
 		uintptr(unsafe.Pointer(&IID_IDXGIFactory1)),
-		uintptr(unsafe.Pointer(&factory)),
+		uintptr(unsafe.Pointer(&c.factory)),
 	)
 	if hr != 0 {
-		return nil, fmt.Errorf("CreateDXGIFactory1 falhou: HRESULT 0x%X — fallback GDI", hr)
+		runtime.UnlockOSThread()
+		return nil, fmt.Errorf("CreateDXGIFactory1: HRESULT 0x%X", uint64(hr))
 	}
 
-	// Detecta resolucao do monitor primario
-	width, _, _ := procGetSystemMetrics.Call(SM_CXSCREEN)
-	height, _, _ := procGetSystemMetrics.Call(SM_CYSCREEN)
+	// 2. EnumAdapters1(0, &adapter)
+	hr, _, _ = comCall(c.factory, slotFactoryEnumAdapters1, 0, uintptr(unsafe.Pointer(&c.adapter)))
+	if hr != 0 || c.adapter == 0 {
+		comRelease(c.factory)
+		runtime.UnlockOSThread()
+		return nil, fmt.Errorf("EnumAdapters1(0): HRESULT 0x%X", uint64(hr))
+	}
 
-	return &dxgiCapturer{
-		factory: factory,
-		width:   int(width),
-		height:  int(height),
-	}, nil
+	// 3. EnumOutputs(monitorIndex, &output)
+	hr, _, _ = comCall(c.adapter, slotAdapterEnumOutputs, uintptr(monitorIndex), uintptr(unsafe.Pointer(&c.output)))
+	if hr != 0 || c.output == 0 {
+		comRelease(c.adapter)
+		comRelease(c.factory)
+		runtime.UnlockOSThread()
+		return nil, fmt.Errorf("EnumOutputs(%d): HRESULT 0x%X", monitorIndex, uint64(hr))
+	}
+
+	// 4. QueryInterface IDXGIOutput1
+	hr, _, _ = comCall(c.output, slotQueryInterface, uintptr(unsafe.Pointer(&IID_IDXGIOutput1)), uintptr(unsafe.Pointer(&c.output1)))
+	if hr != 0 || c.output1 == 0 {
+		comRelease(c.output)
+		comRelease(c.adapter)
+		comRelease(c.factory)
+		runtime.UnlockOSThread()
+		return nil, fmt.Errorf("QI IDXGIOutput1: HRESULT 0x%X", uint64(hr))
+	}
+
+	// 5. GetDesc — resolução
+	var desc dxgiOutputDesc
+	_, _, _ = comCall(c.output, slotOutputGetDesc, uintptr(unsafe.Pointer(&desc)))
+	c.width = int(desc.DesktopCoordinates.Right - desc.DesktopCoordinates.Left)
+	c.height = int(desc.DesktopCoordinates.Bottom - desc.DesktopCoordinates.Top)
+	if c.width <= 0 { c.width = 1920 }
+	if c.height <= 0 { c.height = 1080 }
+
+	// 6. D3D11CreateDevice
+	var d3dDevice, d3dContext uintptr
+	var fl uint32
+	hr, _, _ = procD3D11CreateDevice.Call(
+		uintptr(0), uintptr(D3D_DRIVER_TYPE_HARDWARE),
+		uintptr(0), uintptr(0), uintptr(0), uintptr(0),
+		uintptr(D3D11_SDK_VERSION),
+		uintptr(unsafe.Pointer(&d3dDevice)),
+		uintptr(unsafe.Pointer(&fl)),
+		uintptr(unsafe.Pointer(&d3dContext)),
+	)
+	if hr != 0 {
+		hr, _, _ = procD3D11CreateDevice.Call(
+			uintptr(0), uintptr(D3D_DRIVER_TYPE_WARP),
+			uintptr(0), uintptr(0), uintptr(0), uintptr(0),
+			uintptr(D3D11_SDK_VERSION),
+			uintptr(unsafe.Pointer(&d3dDevice)),
+			uintptr(unsafe.Pointer(&fl)),
+			uintptr(unsafe.Pointer(&d3dContext)),
+		)
+	}
+	if hr != 0 || d3dDevice == 0 || d3dContext == 0 {
+		comRelease(c.output1); comRelease(c.output); comRelease(c.adapter); comRelease(c.factory)
+		runtime.UnlockOSThread()
+		return nil, fmt.Errorf("D3D11CreateDevice: HRESULT 0x%X", uint64(hr))
+	}
+	c.d3dDevice = d3dDevice
+	c.d3dContext = d3dContext
+
+	// 7. CreateTexture2D staging
+	sd := d3d11Texture2DDesc{
+		Width: uint32(c.width), Height: uint32(c.height),
+		MipLevels: 1, ArraySize: 1,
+		Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+		SampleCount: 1, SampleQuality: 0,
+		Usage: D3D11_USAGE_STAGING,
+		BindFlags: 0, CPUAccessFlags: D3D11_CPU_ACCESS_READ, MiscFlags: 0,
+	}
+	hr, _, _ = comCall(c.d3dDevice, slotDevCreateTexture2D, uintptr(unsafe.Pointer(&sd)), 0, uintptr(unsafe.Pointer(&c.stagingTex)))
+	if hr != 0 || c.stagingTex == 0 {
+		comRelease(c.d3dContext); comRelease(c.d3dDevice)
+		comRelease(c.output1); comRelease(c.output); comRelease(c.adapter); comRelease(c.factory)
+		runtime.UnlockOSThread()
+		return nil, fmt.Errorf("CreateTexture2D staging: HRESULT 0x%X", uint64(hr))
+	}
+
+	// 8. DuplicateOutput
+	hr, _, _ = comCall(c.output1, slotOutput1DuplicateOutput, uintptr(c.d3dDevice), uintptr(unsafe.Pointer(&c.duplication)))
+	if hr != 0 || c.duplication == 0 {
+		comRelease(c.stagingTex); comRelease(c.d3dContext); comRelease(c.d3dDevice)
+		comRelease(c.output1); comRelease(c.output); comRelease(c.adapter); comRelease(c.factory)
+		runtime.UnlockOSThread()
+		return nil, fmt.Errorf("DuplicateOutput: HRESULT 0x%X", uint64(hr))
+	}
+
+	return c, nil
 }
 
 func (c *dxgiCapturer) AcquireNextFrame() (*Frame, error) {
-	// Placeholder: a implementacao completa de IDXGIOutputDuplication requer
-	// bindings COM com virtual table dispatch. Sera completada na Fase 5.
-	return nil, fmt.Errorf("DXGI Desktop Duplication nao implementado — use fallback GDI")
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.closed {
+		return nil, fmt.Errorf("capturador fechado")
+	}
+
+	var fi dxgiOutduplFrameInfo
+	var res uintptr
+
+	hr, _, _ := comCall(c.duplication, slotDupAcquireNextFrame,
+		uintptr(200),
+		uintptr(unsafe.Pointer(&fi)),
+		uintptr(unsafe.Pointer(&res)),
+	)
+
+	if uint64(hr) == DXGI_ERROR_WAIT_TIMEOUT {
+		return nil, fmt.Errorf("timeout")
+	}
+	if uint64(hr) == DXGI_ERROR_ACCESS_LOST {
+		return nil, fmt.Errorf("DXGI_ERROR_ACCESS_LOST")
+	}
+	if hr != 0 {
+		return nil, fmt.Errorf("AcquireNextFrame: HRESULT 0x%X", uint64(hr))
+	}
+	if res == 0 {
+		return nil, fmt.Errorf("desktopResource nulo")
+	}
+
+	c.lastResource = res
+
+	// CopyResource: GPU → staging
+	comCall(c.d3dContext, slotCtxCopyResource, c.stagingTex, res)
+
+	// Map: staging → CPU
+	var mapped d3d11MappedSubresource
+	hr, _, _ = comCall(c.d3dContext, slotCtxMap,
+		c.stagingTex,
+		uintptr(0),
+		uintptr(D3D11_MAP_READ),
+		uintptr(D3D11_MAP_FLAG_DO_NOT_WAIT),
+		uintptr(unsafe.Pointer(&mapped)),
+	)
+	if hr != 0 {
+		c.releaseLocked()
+		return nil, fmt.Errorf("Map: HRESULT 0x%X", uint64(hr))
+	}
+	c.stagingMapped = true
+
+	bufSize := c.width * c.height * 4
+	frameData := make([]byte, bufSize)
+	if mapped.Data != 0 && mapped.RowPitch > 0 {
+		if int(mapped.RowPitch) == c.width*4 {
+			copy(frameData, unsafe.Slice((*byte)(unsafe.Pointer(mapped.Data)), bufSize))
+		} else {
+			for y := 0; y < c.height; y++ {
+				srcOff := y * int(mapped.RowPitch)
+				dstOff := y * c.width * 4
+				copy(frameData[dstOff:], unsafe.Slice((*byte)(unsafe.Pointer(mapped.Data+uintptr(srcOff))), c.width*4))
+			}
+		}
+	}
+
+	// Unmap
+	comCall(c.d3dContext, slotCtxUnmap, c.stagingTex, uintptr(0))
+	c.stagingMapped = false
+
+	return &Frame{Data: frameData, Width: c.width, Height: c.height, Stride: c.width * 4}, nil
 }
 
 func (c *dxgiCapturer) ReleaseFrame() {
-	c.lastFrame = nil
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.releaseLocked()
+}
+
+func (c *dxgiCapturer) releaseLocked() {
+	if c.stagingMapped {
+		comCall(c.d3dContext, slotCtxUnmap, c.stagingTex, uintptr(0))
+		c.stagingMapped = false
+	}
+	if c.lastResource != 0 {
+		comCall(c.duplication, slotDupReleaseFrame) // 0 params
+		comRelease(c.lastResource)
+		c.lastResource = 0
+	}
 }
 
 func (c *dxgiCapturer) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed { return nil }
+	c.closed = true
+	c.releaseLocked()
+	for _, p := range []uintptr{c.duplication, c.stagingTex, c.d3dContext, c.d3dDevice, c.output1, c.output, c.adapter, c.factory} {
+		if p != 0 { comRelease(p) }
+	}
+	runtime.UnlockOSThread()
 	return nil
 }
 
 func (c *dxgiCapturer) Name() string { return "dxgi" }
-
-// IIDs
-var IID_IDXGIFactory1 = windows.GUID{
-	Data1: 0x770aae78,
-	Data2: 0xf26f,
-	Data3: 0x4dba,
-	Data4: [8]byte{0xa8, 0x29, 0x25, 0x3c, 0x83, 0xd1, 0xb3, 0x87},
-}
-
 var _ Capturer = (*dxgiCapturer)(nil)
-var _ = syscall.StringToUTF16

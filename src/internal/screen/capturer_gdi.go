@@ -1,22 +1,24 @@
+//go:build windows
+
 package screen
 
 import (
 	"fmt"
-	"image"
 	"runtime"
 	"syscall"
 	"unsafe"
-
-	"golang.org/x/sys/windows"
 )
 
+// ── GDI Screen Capture (BitBlt + GetDIBits) ──
+// Fallback para sistemas sem DXGI (VM sem GPU, RDP, Windows 7/8).
+
 var (
-	user32               = windows.NewLazySystemDLL("user32.dll")
+	user32               = syscall.NewLazyDLL("user32.dll")
 	procGetDC            = user32.NewProc("GetDC")
 	procReleaseDC        = user32.NewProc("ReleaseDC")
 	procGetSystemMetrics = user32.NewProc("GetSystemMetrics")
 
-	gdi32                      = windows.NewLazySystemDLL("gdi32.dll")
+	gdi32                      = syscall.NewLazyDLL("gdi32.dll")
 	procCreateCompatibleDC     = gdi32.NewProc("CreateCompatibleDC")
 	procCreateCompatibleBitmap = gdi32.NewProc("CreateCompatibleBitmap")
 	procSelectObject           = gdi32.NewProc("SelectObject")
@@ -29,9 +31,7 @@ var (
 const (
 	SM_CXSCREEN = 0
 	SM_CYSCREEN = 1
-
-	SRCCOPY = 0x00CC0020
-
+	SRCCOPY     = 0x00CC0020
 	DIB_RGB_COLORS = 0
 	BI_RGB         = 0
 )
@@ -42,24 +42,19 @@ type gdiCapturer struct {
 	memBitmap uintptr
 	width     int
 	height    int
-	lastFrame *Frame
 }
 
 func NewGDICapturer() (Capturer, error) {
-	// GDI objects (HDC, HBITMAP) are thread-affine on Windows.
-	// We must pin this goroutine to a single OS thread for the entire
-	// lifetime of the capturer. The pin is released in Close().
 	runtime.LockOSThread()
 
 	width, _, _ := procGetSystemMetrics.Call(SM_CXSCREEN)
 	height, _, _ := procGetSystemMetrics.Call(SM_CYSCREEN)
-
 	if width == 0 || height == 0 {
 		runtime.UnlockOSThread()
 		return nil, fmt.Errorf("nao foi possivel obter resolucao da tela")
 	}
 
-	screenDC, _, _ := procGetDC.Call(0) // 0 = desktop inteiro
+	screenDC, _, _ := procGetDC.Call(0)
 	if screenDC == 0 {
 		runtime.UnlockOSThread()
 		return nil, fmt.Errorf("GetDC falhou")
@@ -72,7 +67,7 @@ func NewGDICapturer() (Capturer, error) {
 		return nil, fmt.Errorf("CreateCompatibleDC falhou")
 	}
 
-	memBitmap, _, _ := procCreateCompatibleBitmap.Call(screenDC, uintptr(width), uintptr(height))
+	memBitmap, _, _ := procCreateCompatibleBitmap.Call(screenDC, width, height)
 	if memBitmap == 0 {
 		procDeleteDC.Call(memDC)
 		procReleaseDC.Call(0, screenDC)
@@ -92,42 +87,35 @@ func NewGDICapturer() (Capturer, error) {
 }
 
 func (c *gdiCapturer) AcquireNextFrame() (*Frame, error) {
-	ret, _, _ := procBitBlt.Call(c.memDC, 0, 0, uintptr(c.width), uintptr(c.height), c.screenDC, 0, 0, SRCCOPY)
-	if ret == 0 {
-		return nil, fmt.Errorf("BitBlt falhou (GDI)")
+	r, _, _ := procBitBlt.Call(c.memDC, 0, 0, uintptr(c.width), uintptr(c.height), c.screenDC, 0, 0, SRCCOPY)
+	if r == 0 {
+		return nil, fmt.Errorf("BitBlt falhou")
 	}
 
 	bufSize := c.width * c.height * 4
-	buf := make([]byte, bufSize)
+	frameData := make([]byte, bufSize)
 
-	var bi BITMAPINFO
-	bi.bmiHeader.biSize = uint32(unsafe.Sizeof(bi.bmiHeader))
-	bi.bmiHeader.biWidth = int32(c.width)
-	bi.bmiHeader.biHeight = -int32(c.height) // top-down
-	bi.bmiHeader.biPlanes = 1
-	bi.bmiHeader.biBitCount = 32
-	bi.bmiHeader.biCompression = BI_RGB
+	// BITMAPINFO header
+	var bi [40]byte
+	bi[0] = 40 // biSize
+	*(*int32)(unsafe.Pointer(&bi[4]))  = int32(c.width)
+	*(*int32)(unsafe.Pointer(&bi[8]))  = -int32(c.height) // negativo = top-down
+	*(*uint16)(unsafe.Pointer(&bi[12])) = 1               // biPlanes
+	*(*uint16)(unsafe.Pointer(&bi[14])) = 32              // biBitCount
+	*(*uint32)(unsafe.Pointer(&bi[16])) = BI_RGB
 
-	ret, _, _ = procGetDIBits.Call(c.memDC, c.memBitmap, 0, uintptr(c.height),
-		uintptr(unsafe.Pointer(&buf[0])),
-		uintptr(unsafe.Pointer(&bi)),
+	r, _, _ = procGetDIBits.Call(c.memDC, c.memBitmap, 0, uintptr(c.height),
+		uintptr(unsafe.Pointer(&frameData[0])),
+		uintptr(unsafe.Pointer(&bi[0])),
 		DIB_RGB_COLORS)
-	if ret == 0 {
-		return nil, fmt.Errorf("GetDIBits falhou (GDI)")
+	if r == 0 {
+		return nil, fmt.Errorf("GetDIBits falhou")
 	}
 
-	c.lastFrame = &Frame{
-		Data:   buf,
-		Width:  c.width,
-		Height: c.height,
-		Stride: c.width * 4,
-	}
-	return c.lastFrame, nil
+	return &Frame{Data: frameData, Width: c.width, Height: c.height, Stride: c.width * 4}, nil
 }
 
-func (c *gdiCapturer) ReleaseFrame() {
-	c.lastFrame = nil
-}
+func (c *gdiCapturer) ReleaseFrame() {}
 
 func (c *gdiCapturer) Close() error {
 	procDeleteObject.Call(c.memBitmap)
@@ -138,28 +126,4 @@ func (c *gdiCapturer) Close() error {
 }
 
 func (c *gdiCapturer) Name() string { return "gdi" }
-
-// BITMAPINFO para GetDIBits
-type BITMAPINFOHEADER struct {
-	biSize          uint32
-	biWidth         int32
-	biHeight        int32
-	biPlanes        uint16
-	biBitCount      uint16
-	biCompression   uint32
-	biSizeImage     uint32
-	biXPelsPerMeter int32
-	biYPelsPerMeter int32
-	biClrUsed       uint32
-	biClrImportant  uint32
-}
-
-type BITMAPINFO struct {
-	bmiHeader BITMAPINFOHEADER
-	bmiColors [1]uint32
-}
-
-// Ensure gdiCapturer implements Capturer
 var _ Capturer = (*gdiCapturer)(nil)
-var _ = syscall.StringToUTF16 // keep syscall import happy
-var _ = image.Pt              // keep image import happy

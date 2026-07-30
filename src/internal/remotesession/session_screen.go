@@ -135,12 +135,14 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 				continue
 			}
 
-			// Aplica escala (B2) — redimensiona antes do encode se ScaleFactor < 1.0
-			origFrame := frame
+			// Aplica escala — redimensiona antes do encode se ScaleFactor < 1.0
 			scaleFactor := q.ScaleFactor
+			scaled := false
 			if scaleFactor > 0 && scaleFactor < 1.0 {
-				frame = screen.ResizeBGRA(frame, scaleFactor)
-				s.capturer.ReleaseFrame() // frame original liberado, usamos o escalado
+				scaled = true
+				resized := screen.ResizeBGRA(frame, scaleFactor) // lê do frame original ANTES de liberar
+				s.capturer.ReleaseFrame()                          // libera GPU resource do original
+				frame = resized                                    // substitui pelo buffer alocado
 			}
 			_ = captureMs // reservado para telemetria futura
 
@@ -152,12 +154,10 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 			enc := s.encoder
 			s.encoderMu.RUnlock()
 			encoded, err := enc.Encode(frame, jpgQuality)
-			if scaleFactor < 1.0 && frame != origFrame {
-				// frame foi alocado por ResizeBGRA — liberar após uso
-			}
-			if frame == origFrame {
+			if !scaled {
 				s.capturer.ReleaseFrame()
 			}
+			// se scaled=true, o frame é um buffer Go alocado — GC cuida
 			if err != nil {
 				log.Printf("[remote-session-screen] ERRO ao encodar frame: %v\n", err)
 				framesSkipped++
