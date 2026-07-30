@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"image"
 	"image/jpeg"
-
-	"github.com/klauspost/compress/zstd"
 )
 
 // Encoder comprime frames em um formato especifico para envio.
@@ -18,6 +16,9 @@ type Encoder interface {
 }
 
 // ── JPEG Encoder ──
+// Usa image/jpeg da stdlib. Compatível com o viewer sem alterações.
+// Zstd pós-compressão requer mudança no frameDecoder.ts (0xFE prefixo mágico).
+// TODO: Adicionar quando frontend for atualizado para suportar Zstd.
 
 type jpegEncoder struct{}
 
@@ -38,12 +39,8 @@ func (e *jpegEncoder) Encode(frame *Frame, quality int) ([]byte, error) {
 	w := frame.Width
 	h := frame.Height
 
-	// Aplica ScaleFactor se frame ja foi redimensionado no capturador
-	// (w/h ja sao as dimensoes efetivas apos ResizeBGRA)
-
 	// Conversao BGRA→RGBA in-place (swap B↔R) para evitar alocacao extra.
-	// O buffer GDI eh alocado fresh a cada AcquireNextFrame, entao modificar
-	// in-place eh seguro. Usamos stride para lidar com padding.
+	// Seguro porque o buffer do GDI eh alocado fresh a cada AcquireNextFrame.
 	for y := 0; y < h; y++ {
 		rowStart := y * stride
 		for x := 0; x < w; x++ {
@@ -102,39 +99,5 @@ func ResizeBGRA(src *Frame, scaleFactor float64) *Frame {
 }
 
 func (e *jpegEncoder) Name() string { return "jpeg" }
-
-// ── Compressao adicional ──
-
-// CompressZstd comprime dados binarios com Zstd para reducao adicional de banda.
-func CompressZstd(data []byte) ([]byte, error) {
-	var buf bytes.Buffer
-	w, err := zstd.NewWriter(&buf, zstd.WithEncoderLevel(zstd.SpeedDefault))
-	if err != nil {
-		return nil, err
-	}
-	if _, err := w.Write(data); err != nil {
-		w.Close()
-		return nil, err
-	}
-	if err := w.Close(); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
-}
-
-// DecompressZstd descomprime dados com Zstd.
-func DecompressZstd(data []byte) ([]byte, error) {
-	r, err := zstd.NewReader(bytes.NewReader(data))
-	if err != nil {
-		return nil, err
-	}
-	defer r.Close()
-
-	var buf bytes.Buffer
-	if _, err := buf.ReadFrom(r); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
-}
 
 var _ Encoder = (*jpegEncoder)(nil)

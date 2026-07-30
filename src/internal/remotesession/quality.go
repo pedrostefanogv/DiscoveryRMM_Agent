@@ -160,8 +160,8 @@ func (qm *QualityManager) adapt() {
 	// Banda estimada: bytes/seg
 	bandwidthKbps := float64(qm.bytesLastSec*8) / 2.0 / 1000.0 // media em 2s
 	if bandwidthKbps < 500 {
-		qm.current = defaultProfiles["ultra-low"]
-		qm.profile = "ultra-low-adapted"
+		qm.current = defaultProfiles["ultralow"]
+		qm.profile = "ultralow-adapted"
 	} else if bandwidthKbps < 800 {
 		qm.current = defaultProfiles["low"]
 		qm.profile = "low-adapted"
@@ -177,7 +177,7 @@ func (qm *QualityManager) downgrade() {
 		qm.current = defaultProfiles["low"]
 		qm.profile = "low-adapted"
 	case "low":
-		qm.current = defaultProfiles["ultra-low"]
-		qm.profile = "ultra-low-adapted"
+		qm.current = defaultProfiles["ultralow"]
+		qm.profile = "ultralow-adapted"
 	}
 }

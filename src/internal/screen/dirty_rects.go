@@ -71,9 +71,6 @@ func (d *DirtyDetector) Detect(frame *Frame) []DirtyRect {
 	// Atualiza referencia
 	copy(d.lastFrame, frame.Data)
 
-	if len(rects) == 0 {
-		return []DirtyRect{{X: 0, Y: 0, Width: frame.Width, Height: frame.Height}}
-	}
 	return rects
 }
 

@@ -12,6 +12,11 @@ import (
 )
 
 // SessionScreen gerencia uma sessao de screen capture remota.
+// Pipeline otimizado com:
+//   - Dirty rect detection (software tile diff)
+//   - Frame skip em idle (0 bytes quando tela parada — maior economia)
+//   - Bounded channel backpressure (capacity=2, igual ControlR)
+//   - Adaptive throttle (0ms com pouca mudanca, delay proporcional com muita)
 type SessionScreen struct {
 	sessionID  string
 	capturer   screen.Capturer
@@ -23,9 +28,17 @@ type SessionScreen struct {
 	recording  *RecordingSource
 	inputCtrl  *InputController
 
+	// Dirty rect detection
+	dirtyDetector *screen.DirtyDetector
+	useDirtyRect  bool // ativado apos primeiro frame completo
+
 	frameSeq uint64
 	stopCh   chan struct{}
 	doneCh   chan struct{}
+
+	// Estatisticas para log/metrics
+	lastLogTime     time.Time
+	lastMetricsTime time.Time
 }
 
 // FrameHeader binario para frames (12 bytes).
@@ -34,6 +47,14 @@ type SessionScreen struct {
 //
 // O payload JPEG/WebP/H.264 segue apos o header.
 const frameHeaderLen = 12
+
+// Constantes de timing
+const (
+	idleDelay          = 50 * time.Millisecond // delay quando tela esta parada
+	afterFailureDelay  = 100 * time.Millisecond // delay apos erro de captura
+	dirtyRectCheckFreq = 60                     // frames entre verificacao completa (a cada ~2-3s em 30fps)
+	deepIdleThreshold  = 15                     // frames idle consecutivos antes de deep idle (~3s com DXGI timeout 200ms)
+)
 
 // NewSessionScreen cria uma nova sessao de screen capture.
 func NewSessionScreen(sessionID string, natsStream *NatsStreamHandler) (*SessionScreen, error) {
@@ -49,27 +70,30 @@ func NewSessionScreen(sessionID string, natsStream *NatsStreamHandler) (*Session
 	inputCtrl := NewInputController(sessionID)
 
 	return &SessionScreen{
-		sessionID:  sessionID,
-		capturer:   capturer,
-		encoder:    encoder,
-		natsStream: natsStream,
-		quality:    &quality,
-		codecSel:   codecSel,
-		recording:  recording,
-		inputCtrl:  inputCtrl,
-		stopCh:     make(chan struct{}),
-		doneCh:     make(chan struct{}),
+		sessionID:       sessionID,
+		capturer:        capturer,
+		encoder:         encoder,
+		natsStream:      natsStream,
+		quality:         &quality,
+		codecSel:        codecSel,
+		recording:       recording,
+		inputCtrl:       inputCtrl,
+		dirtyDetector:   screen.NewDirtyDetector(32),
+		stopCh:          make(chan struct{}),
+		doneCh:          make(chan struct{}),
+		lastLogTime:     time.Now(),
+		lastMetricsTime: time.Now(),
 	}, nil
 }
 
-// Start inicia o loop de captura e envio de frames.
-// Bloqueia ate o contexto ser cancelado ou Stop() ser chamado.
-// fps: se <= 0, usa o FPS do perfil de qualidade atual.
+// Start inicia o loop de captura e envio de frames com pipeline otimizado.
+// Pipeline: captura → dirty rect detection → skip idle / encode → publish
+// Usa bounded channel backpressure e adaptive throttle.
 func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 	defer close(s.doneCh)
 	defer s.capturer.Close()
 
-	_ = screen.DetectGPU() // GPU detection for future optimization (H.264 encoder selection)
+	_ = screen.DetectGPU()
 
 	if fps <= 0 {
 		fps = s.quality.Current().Fps
@@ -78,154 +102,204 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 		fps = 15
 	}
 
-	log.Printf("[remote-session-screen] Start: fps=%d capturer=%s\n", fps, s.capturer.Name())
+	log.Printf("[remote-session-screen] Start: fps=%d capturer=%s dirtyRects=true\n",
+		fps, s.capturer.Name())
 
-	frameInterval := time.Second / time.Duration(fps)
-	ticker := time.NewTicker(frameInterval)
-	defer ticker.Stop()
+	// Bounded channel — backpressure (capacity=2, igual ControlR)
+	type frameJob struct{ data []byte }
+	frameChan := make(chan frameJob, 2)
 
-	// quality é lido dinamicamente a cada frame para suportar mudancas em tempo real.
-	// A variavel local captura o snapshot inicial para o ticker.
+	// Consumer goroutine
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for job := range frameChan {
+			if err := s.natsStream.PublishFrame(s.sessionID, job.data); err != nil {
+				log.Printf("[remote-session-screen] ERRO ao publicar frame: %v\n", err)
+			}
+		}
+	}()
 
-	var totalFramesSent int64
-	var totalFramesSkipped int64
-	var framesSent int64
-	var framesSkipped int64
-	var rawBytesTotal int64
-	var encBytesTotal int64
+	// Producer loop
+	var totalSent, totalSkipped, totalIdle int64
+	var sent, skipped int64
+	var rawBytes, encBytes int64
 	var encodeTimeTotal time.Duration
-	lastLogTime := time.Now()
-	lastMetricsTime := time.Now()
+	consecutiveIdle := 0
+	noChangeCount := 0
 
 	for {
 		select {
 		case <-ctx.Done():
-			log.Printf("[remote-session-screen] contexto cancelado apos %d frames enviados, %d pulados. Motivo: %v\n",
-				totalFramesSent, totalFramesSkipped, ctx.Err())
-			s.natsStream.PublishEvent(s.sessionID, "screen_stopped", map[string]string{"reason": "context_cancelled"})
+			log.Printf("[remote-session-screen] ctx cancelado: %d env, %d skip, %d idle\n",
+				totalSent, totalSkipped, totalIdle)
+			s.natsStream.PublishEvent(s.sessionID, "screen_stopped",
+				map[string]string{"reason": "context_cancelled"})
+			close(frameChan)
+			wg.Wait()
 			return ctx.Err()
 
 		case <-s.stopCh:
-			log.Printf("[remote-session-screen] stop solicitado apos %d frames enviados, %d pulados\n",
-				totalFramesSent, totalFramesSkipped)
-			s.natsStream.PublishEvent(s.sessionID, "screen_stopped", map[string]string{"reason": "stopped"})
+			log.Printf("[remote-session-screen] stop: %d env, %d skip, %d idle\n",
+				totalSent, totalSkipped, totalIdle)
+			s.natsStream.PublishEvent(s.sessionID, "screen_stopped",
+				map[string]string{"reason": "stopped"})
+			close(frameChan)
+			wg.Wait()
 			return nil
 
-		case <-ticker.C:
-			// Le qualidade atual a cada frame — permite SetQuality/SetImageQuality/SetMaxFps runtime
-			q := s.quality.Current()
-			curFps := q.EffectiveFps()
-			if curFps <= 0 {
-				curFps = 15
-			}
-			// Ajusta ticker se FPS mudou
-			newInterval := time.Second / time.Duration(curFps)
-			if newInterval != frameInterval {
-				frameInterval = newInterval
-				ticker.Reset(frameInterval)
-			}
+		default:
+		}
 
-			captureStart := time.Now()
-			frame, err := s.capturer.AcquireNextFrame()
-			captureMs := float64(time.Since(captureStart).Microseconds()) / 1000.0
-			if err != nil {
-				log.Printf("[remote-session-screen] ERRO ao capturar frame: %v (captureMs=%.1f)\n", err, captureMs)
-				framesSkipped++
-				totalFramesSkipped++
-				continue
-			}
+		q := s.quality.Current()
+		curFps := q.EffectiveFps()
+		if curFps <= 0 {
+			curFps = 15
+		}
 
-			// Aplica escala — redimensiona antes do encode se ScaleFactor < 1.0
-			scaleFactor := q.ScaleFactor
-			scaled := false
-			if scaleFactor > 0 && scaleFactor < 1.0 {
-				scaled = true
-				resized := screen.ResizeBGRA(frame, scaleFactor) // lê do frame original ANTES de liberar
-				s.capturer.ReleaseFrame()                          // libera GPU resource do original
-				frame = resized                                    // substitui pelo buffer alocado
-			}
-			_ = captureMs // reservado para telemetria futura
+		// Backpressure
+		if len(frameChan) >= 2 {
+			time.Sleep(time.Millisecond)
+			continue
+		}
 
-			// Encode frame (protege leitura do encoder com RLock)
-			jpgQuality := q.EffectiveJpegQuality()
-			rawSize := len(frame.Data)
-			encodeStart := time.Now()
-			s.encoderMu.RLock()
-			enc := s.encoder
-			s.encoderMu.RUnlock()
-			encoded, err := enc.Encode(frame, jpgQuality)
-			if !scaled {
+		// Capture
+		frame, err := s.capturer.AcquireNextFrame()
+		if err != nil {
+			skipped++
+			totalSkipped++
+			time.Sleep(idleDelay)
+			continue
+		}
+
+		// Aplica escala (copia GPU resource ANTES de liberar)
+		scaleFactor := q.ScaleFactor
+		ownsFrame := false
+		if scaleFactor > 0 && scaleFactor < 1.0 {
+			resized := screen.ResizeBGRA(frame, scaleFactor)
+			s.capturer.ReleaseFrame()
+			frame = resized
+			ownsFrame = true
+		}
+
+		// Dirty rect detection
+		noChangeCount++
+		rects := s.dirtyDetector.Detect(frame)
+
+		if len(rects) == 0 && s.useDirtyRect && noChangeCount < dirtyRectCheckFreq {
+			// Idle: nada mudou
+			if !ownsFrame {
 				s.capturer.ReleaseFrame()
 			}
-			// se scaled=true, o frame é um buffer Go alocado — GC cuida
-			if err != nil {
-				log.Printf("[remote-session-screen] ERRO ao encodar frame: %v\n", err)
-				framesSkipped++
-				totalFramesSkipped++
-				continue
+			totalIdle++
+			consecutiveIdle++
+			if consecutiveIdle > deepIdleThreshold {
+				time.Sleep(idleDelay * 2)
 			}
-			encSize := len(encoded)
-			rawBytesTotal += int64(rawSize)
-			encBytesTotal += int64(encSize)
-			encodeTimeTotal += time.Since(encodeStart)
+			continue
+		}
+		consecutiveIdle = 0
+		noChangeCount = 0
 
-			// Monta frame com header binario (usa dimensões efetivas após escala)
-			ts := uint32(time.Now().UnixMilli())
-			buf := make([]byte, frameHeaderLen+encSize)
-			binary.BigEndian.PutUint32(buf[0:4], uint32(s.frameSeq))
-			binary.BigEndian.PutUint32(buf[4:8], ts)
-			binary.BigEndian.PutUint16(buf[8:10], uint16(frame.Width))
-			binary.BigEndian.PutUint16(buf[10:12], uint16(frame.Height))
-			copy(buf[frameHeaderLen:], encoded)
-
-			publishStart := time.Now()
-			if err := s.natsStream.PublishFrame(s.sessionID, buf); err != nil {
-				log.Printf("[remote-session-screen] ERRO ao publicar frame %d: %v\n", s.frameSeq, err)
-				framesSkipped++
-				totalFramesSkipped++
-				continue
+		// Copia frame do GPU se ainda nao foi copiado
+		if !ownsFrame {
+			frameCopy := &screen.Frame{
+				Data:   make([]byte, len(frame.Data)),
+				Width:  frame.Width,
+				Height: frame.Height,
+				Stride: frame.Stride,
 			}
-			_ = publishStart // reservado para telemetria futura
+			copy(frameCopy.Data, frame.Data)
+			s.capturer.ReleaseFrame()
+			frame = frameCopy
+		}
+		s.useDirtyRect = true
 
-			// Atualiza métricas de input para coordenadas
-			s.inputCtrl.UpdateFrameMetrics(frame.Width, frame.Height, frame.Width, frame.Height)
+		// Encode
+		jpgQuality := q.EffectiveJpegQuality()
+		encodeStart := time.Now()
+		enc := s.getEncoder()
+		encoded, encErr := enc.Encode(frame, jpgQuality)
+		encodeTimeTotal += time.Since(encodeStart)
 
-			// Tap de gravação (G5)
-			s.recording.CaptureFrame(buf)
+		if encErr != nil {
+			log.Printf("[remote-session-screen] ERRO encode: %v\n", encErr)
+			skipped++
+			totalSkipped++
+			time.Sleep(afterFailureDelay)
+			continue
+		}
 
-			s.frameSeq++
+		rawBytes += int64(len(frame.Data))
+		encBytes += int64(len(encoded))
 
-			// Adaptacao de qualidade
-			s.quality.RecordFrame(len(buf), time.Now())
+		// Monta header binario (12 bytes) + payload JPEG
+		encSize := len(encoded)
+		buf := make([]byte, frameHeaderLen+encSize)
+		binary.BigEndian.PutUint32(buf[0:4], uint32(s.frameSeq))
+		binary.BigEndian.PutUint32(buf[4:8], uint32(time.Now().UnixMilli()))
+		binary.BigEndian.PutUint16(buf[8:10], uint16(frame.Width))
+		binary.BigEndian.PutUint16(buf[10:12], uint16(frame.Height))
+		copy(buf[frameHeaderLen:], encoded)
 
-			// Publica metricas a cada 5s para o viewer (P2)
-			framesSent++
-			totalFramesSent++
-			if time.Since(lastMetricsTime) >= 5*time.Second {
-				s.publishMetrics(int(frame.Width), int(frame.Height), framesSent, framesSkipped, rawBytesTotal, encBytesTotal, encodeTimeTotal)
-				lastMetricsTime = time.Now()
+		// Publish via channel
+		select {
+		case frameChan <- frameJob{data: buf}:
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-s.stopCh:
+			return nil
+		}
+
+		// Atualiza metricas
+		s.inputCtrl.UpdateFrameMetrics(frame.Width, frame.Height, frame.Width, frame.Height)
+		s.recording.CaptureFrame(buf)
+		s.frameSeq++
+		s.quality.RecordFrame(len(buf), time.Now())
+
+		sent++
+		totalSent++
+
+		// Metricas a cada 5s
+		if time.Since(s.lastMetricsTime) >= 5*time.Second {
+			s.publishMetrics(frame.Width, frame.Height, sent, skipped, rawBytes, encBytes, encodeTimeTotal)
+			s.lastMetricsTime = time.Now()
+		}
+
+		// Log a cada 10s
+		if time.Since(s.lastLogTime) >= 10*time.Second {
+			compRatio := float64(0)
+			avgEncMs := float64(0)
+			if rawBytes > 0 {
+				compRatio = float64(rawBytes) / float64(encBytes)
 			}
-
-			// Log periodico a cada 10s com metricas de compressao
-			if time.Since(lastLogTime) >= 10*time.Second {
-				compressionRatio := float64(0)
-				avgEncodeMs := float64(0)
-				if rawBytesTotal > 0 {
-					compressionRatio = float64(rawBytesTotal) / float64(encBytesTotal)
-				}
-				if framesSent > 0 {
-					avgEncodeMs = float64(encodeTimeTotal.Milliseconds()) / float64(framesSent)
-				}
-				log.Printf("[remote-session-screen] status: %d frames enviados (%dx%d), %d pulados, ultimo frame %d bytes | compressao %.1f:1 (raw=%dKB enc=%dKB) | encode avg %.1fms\n",
-					framesSent, frame.Width, frame.Height, framesSkipped, len(buf),
-					compressionRatio, rawBytesTotal/1024, encBytesTotal/1024, avgEncodeMs)
-				lastLogTime = time.Now()
-				framesSent = 0
-				framesSkipped = 0
-				rawBytesTotal = 0
-				encBytesTotal = 0
-				encodeTimeTotal = 0
+			if sent > 0 {
+				avgEncMs = float64(encodeTimeTotal.Milliseconds()) / float64(sent)
 			}
+			log.Printf("[remote-session-screen] %d env, %d idle | comp %.1f:1 | enc %.1fms | fps=%d\n",
+				sent, totalIdle, compRatio, avgEncMs, curFps)
+			s.lastLogTime = time.Now()
+			sent, skipped = 0, 0
+			rawBytes, encBytes = 0, 0
+			encodeTimeTotal = 0
+		}
+
+		// Adaptive throttle: delay baseado em % de mudanca nos dirty rects
+		changedArea := 0
+		for _, r := range rects {
+			changedArea += r.Width * r.Height
+		}
+		totalArea := frame.Width * frame.Height
+		if totalArea > 0 {
+			changePercent := float64(changedArea) / float64(totalArea)
+			targetInterval := time.Second / time.Duration(curFps)
+			if changePercent > 0.5 {
+				time.Sleep(targetInterval / 2)
+			} else if changePercent > 0.1 {
+				time.Sleep(targetInterval / 4)
+			}
+			// < 10%: no delay (captura imediatamente proxima mudanca)
 		}
 	}
 }
@@ -238,6 +312,13 @@ func (s *SessionScreen) Stop() {
 		close(s.stopCh)
 	}
 	<-s.doneCh // aguarda loop terminar
+}
+
+// getEncoder retorna o encoder atual thread-safe.
+func (s *SessionScreen) getEncoder() screen.Encoder {
+	s.encoderMu.RLock()
+	defer s.encoderMu.RUnlock()
+	return s.encoder
 }
 
 // SetQuality atualiza o perfil de qualidade.

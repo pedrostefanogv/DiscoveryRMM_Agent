@@ -30,6 +30,7 @@ type ConPTYShell struct {
 	mu       sync.Mutex
 	closed   bool
 	onOutput func(string)
+	waitOnce sync.Once
 }
 
 // NewConPTYShell cria um novo shell interativo usando ConPTY.
@@ -318,6 +319,28 @@ func (s *ConPTYShell) readLoop(r io.Reader) {
 			return
 		}
 	}
+}
+
+// Wait aguarda o processo shell terminar e retorna o erro de saida.
+// Retorna nil se o shell saiu normalmente (exit code 0).
+// Thread-safe e seguro para chamadas multiplas (sync.Once).
+func (s *ConPTYShell) Wait() error {
+	var waitErr error
+	s.waitOnce.Do(func() {
+		if s.cmd == nil || s.cmd.Process == nil {
+			waitErr = fmt.Errorf("processo nao inicializado")
+			return
+		}
+		state, err := s.cmd.Process.Wait()
+		if err != nil {
+			waitErr = fmt.Errorf("shell exit error: %w", err)
+			return
+		}
+		if code := state.ExitCode(); code != 0 {
+			waitErr = fmt.Errorf("shell exit code: %d", code)
+		}
+	})
+	return waitErr
 }
 
 var _ io.Reader
