@@ -22,10 +22,11 @@ type Frame struct {
 
 // NewCapturer cria o capturador apropriado para o sistema.
 // Tenta DXGI Desktop Duplication primeiro; fallback para GDI se indisponivel.
+// NOTA: DXGI Desktop Duplication ainda e um stub — GDI e usado como primario ate
+// a implementacao completa dos bindings COM na Fase 5 (Dirty Rects + Otimizacoes).
 func NewCapturer(monitorIndex int) (Capturer, error) {
-	c, err := NewDXGICapturer(monitorIndex)
-	if err != nil {
-		return NewGDICapturer()
-	}
-	return c, nil
+	// DXGI ainda e stub — usar GDI diretamente
+	// TODO: reativar DXGI quando os bindings COM de IDXGIOutputDuplication
+	// forem implementados na Fase 5.
+	return NewGDICapturer()
 }
