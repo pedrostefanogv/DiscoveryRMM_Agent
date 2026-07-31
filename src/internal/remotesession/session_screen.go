@@ -34,6 +34,11 @@ type SessionScreen struct {
 
 	tileMode bool // quando true, envia apenas os tiles alterados (EncodeDirtyRects)
 
+	// Cursor separado: frame não contém cursor; posição/estado via subject .cursor
+	cursorSeparate bool
+	cursorSender   *screen.CursorSpriteSender
+	cursorStopCh   chan struct{}
+
 	frameSeq uint64
 	stopCh   chan struct{}
 	doneCh   chan struct{}
@@ -64,7 +69,8 @@ func NewSessionScreen(sessionID string, natsStream *NatsStreamHandler) (*Session
 
 // NewSessionScreenMonitor cria uma sessao de screen capture de um monitor específico.
 func NewSessionScreenMonitor(sessionID string, natsStream *NatsStreamHandler, monitorIndex int) (*SessionScreen, error) {
-	capturer, err := screen.NewCapturer(monitorIndex)
+	// Cursor separado por padrão (P2): frame sem cursor, cursor via subject .cursor.
+	capturer, err := screen.NewCapturerMode(monitorIndex, false)
 	if err != nil {
 		return nil, fmt.Errorf("screen capture: %w", err)
 	}
@@ -85,6 +91,8 @@ func NewSessionScreenMonitor(sessionID string, natsStream *NatsStreamHandler, mo
 		recording:       recording,
 		inputCtrl:       inputCtrl,
 		dirtyDetector:   screen.NewDirtyDetector(32),
+		cursorSender:    screen.NewCursorSpriteSender(),
+		cursorStopCh:    make(chan struct{}),
 		stopCh:          make(chan struct{}),
 		doneCh:          make(chan struct{}),
 		lastLogTime:     time.Now(),
@@ -109,6 +117,30 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 	}
 
 	log.Printf("[remote-session-screen] Start: fps=%d capturer=%s\n", fps, s.capturer.Name())
+
+	// ── Cursor separado (P2): publica posição/estado do cursor quando muda ──
+	if s.cursorSeparate && s.cursorSender != nil {
+		go func() {
+			ticker := time.NewTicker(16 * time.Millisecond) // ~60Hz
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					info, err := screen.GetCursorPos()
+					if err != nil {
+						continue
+					}
+					if s.cursorSender.ShouldSend(info) {
+						_ = s.natsStream.PublishCursor(s.sessionID, s.cursorSender.Encode(info))
+					}
+				case <-ctx.Done():
+					return
+				case <-s.cursorStopCh:
+					return
+				}
+			}
+		}()
+	}
 
 	// ── Encode worker: goroutine dedicada para JPEG (overlap com captura) ──
 	type encodeJob struct {
@@ -398,6 +430,13 @@ func (s *SessionScreen) Stop() {
 	default:
 		close(s.stopCh)
 	}
+	if s.cursorStopCh != nil {
+		select {
+		case <-s.cursorStopCh:
+		default:
+			close(s.cursorStopCh)
+		}
+	}
 	<-s.doneCh // aguarda loop terminar
 }
 
@@ -429,6 +468,13 @@ func (s *SessionScreen) SetCodec(codec string) {
 // Requer viewer compatível; desligado por padrão (backward compatible).
 func (s *SessionScreen) SetTileMode(enabled bool) {
 	s.tileMode = enabled
+}
+
+// SetCursorSeparate ativa/desativa o envio do cursor separado do frame.
+// Quando ativo, o capturer não desenha o cursor no frame e a posição é
+// publicada via subject .cursor (economia de banda em interações de mouse).
+func (s *SessionScreen) SetCursorSeparate(enabled bool) {
+	s.cursorSeparate = enabled
 }
 
 // SetImageQuality define a compressão da imagem (1-100). Sobrescreve o perfil.

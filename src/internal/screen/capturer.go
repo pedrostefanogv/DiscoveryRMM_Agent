@@ -23,8 +23,15 @@ type Frame struct {
 // NewCapturer cria o capturador apropriado para o sistema.
 // Prioridade: go-d3d (HW dirty rects + cursor) → DXGI manual → GDI fallback.
 func NewCapturer(monitorIndex int) (Capturer, error) {
-	// Tenta go-d3d primeiro (HW dirty rects, cursor overlay, release otimizado)
-	c, err := NewDXGIGoD3dCapturer(monitorIndex)
+	return NewCapturerMode(monitorIndex, true)
+}
+
+// NewCapturerMode cria o capturador com controle de cursor.
+// drawCursor=true: cursor desenhado no frame (compat).
+// drawCursor=false: cursor separado (enviado via subject .cursor pelo viewer).
+func NewCapturerMode(monitorIndex int, drawCursor bool) (Capturer, error) {
+	// Tenta go-d3d primeiro (HW dirty rects, release otimizado)
+	c, err := NewDXGIGoD3dCapturerMode(monitorIndex, drawCursor)
 	if err == nil {
 		return c, nil
 	}

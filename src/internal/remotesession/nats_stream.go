@@ -160,6 +160,13 @@ func (h *NatsStreamHandler) PublishRecordingTerm(sessionID string, data []byte) 
 	return h.nc.Publish(subject, data)
 }
 
+// PublishCursor envia a posição/estado do cursor separadamente do frame.
+// Formato: 6 bytes (flags | x int16 | y int16) — pequeno e frequente.
+func (h *NatsStreamHandler) PublishCursor(sessionID string, cursorData []byte) error {
+	subject := h.publishSubject(sessionID, "cursor")
+	return h.nc.Publish(subject, cursorData)
+}
+
 // PublishEvent envia um evento de sessao.
 func (h *NatsStreamHandler) PublishEvent(sessionID string, eventType string, data any) error {
 	payload, _ := json.Marshal(map[string]any{

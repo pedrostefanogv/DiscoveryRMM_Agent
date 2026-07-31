@@ -421,6 +421,15 @@ func (m *Manager) runScreenSession(ctx context.Context, session *Session) {
 	screenSession.SetTileMode(tileMode)
 	log.Printf("[remote-session-screen] tile-mode=%v para sessao %s\n", tileMode, session.ID)
 
+	// Cursor separado (P2) — ATIVADO POR PADRÃO: frame sem cursor + subject .cursor.
+	// Desligar via Meta["cursorSeparate"]:false.
+	cursorSeparate := true
+	if cs, ok := session.Meta["cursorSeparate"].(bool); ok {
+		cursorSeparate = cs
+	}
+	screenSession.SetCursorSeparate(cursorSeparate)
+	log.Printf("[remote-session-screen] cursor-separate=%v para sessao %s\n", cursorSeparate, session.ID)
+
 	// Subscreve input do viewer (mouse/teclado)
 	inputSub, err := m.natsStream.SubscribeToInput(session.ID, func(data []byte) {
 		screenSession.inputCtrl.HandleInput(data)

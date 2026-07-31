@@ -29,10 +29,18 @@ type dxgiGoD3dCapturer struct {
 	img        *image.RGBA
 	width      int
 	height     int
+	drawCursor bool // se true, desenha o cursor no frame (compat); false = cursor separado
 }
 
 // NewDXGIGoD3dCapturer cria um capturador DXGI usando go-d3d.
 func NewDXGIGoD3dCapturer(monitorIndex int) (Capturer, error) {
+	return NewDXGIGoD3dCapturerMode(monitorIndex, true)
+}
+
+// NewDXGIGoD3dCapturerMode cria um capturador DXGI usando go-d3d.
+// drawCursor=true desenha o cursor no frame (comportamento antigo/compatível);
+// drawCursor=false deixa o frame limpo (cursor enviado separadamente pelo viewer).
+func NewDXGIGoD3dCapturerMode(monitorIndex int, drawCursor bool) (Capturer, error) {
 	runtime.LockOSThread()
 
 	// Cria D3D11 device
@@ -50,9 +58,9 @@ func NewDXGIGoD3dCapturer(monitorIndex int) (Capturer, error) {
 		return nil, fmt.Errorf("go-d3d NewIDXGIOutputDuplication: %w", err)
 	}
 
-	// Habilita cursor drawing + pointer update
-	dup.DrawPointer = true
-	dup.UpdatePointerInfo = true
+	// Cursor: desenha no frame (compat) ou deixa limpo (cursor separado).
+	dup.DrawPointer = drawCursor
+	dup.UpdatePointerInfo = drawCursor
 
 	bounds, err := dup.GetBounds()
 	if err != nil {
@@ -75,12 +83,13 @@ func NewDXGIGoD3dCapturer(monitorIndex int) (Capturer, error) {
 	img := image.NewRGBA(image.Rect(0, 0, width, height))
 
 	return &dxgiGoD3dCapturer{
-		dup:       dup,
-		device:    device,
-		deviceCtx: deviceCtx,
-		img:       img,
-		width:     width,
-		height:    height,
+		dup:        dup,
+		device:     device,
+		deviceCtx:  deviceCtx,
+		img:        img,
+		width:      width,
+		height:     height,
+		drawCursor: drawCursor,
 	}, nil
 }
 
