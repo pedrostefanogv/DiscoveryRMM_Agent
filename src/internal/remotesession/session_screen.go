@@ -87,8 +87,8 @@ func NewSessionScreen(sessionID string, natsStream *NatsStreamHandler) (*Session
 }
 
 // Start inicia o loop de captura e envio de frames com pipeline otimizado.
-// Pipeline: captura → dirty rect detection → skip idle / encode → publish
-// Usa bounded channel backpressure e adaptive throttle.
+// Pipeline: captura → detect dirty rects → skip idle / async encode → publish
+// Encode roda em goroutine separada (overlap com captura do proximo frame).
 func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 	defer close(s.doneCh)
 	defer s.capturer.Close()
@@ -102,14 +102,67 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 		fps = 15
 	}
 
-	log.Printf("[remote-session-screen] Start: fps=%d capturer=%s dirtyRects=true\n",
+	log.Printf("[remote-session-screen] Start: fps=%d capturer=%s dirtyRects=true asyncEncode=true\n",
 		fps, s.capturer.Name())
 
-	// Bounded channel — backpressure (capacity=2, igual ControlR)
+	// ── Encode worker: goroutine dedicada para JPEG (overlap com captura) ──
+	type encodeJob struct {
+		frame  *screen.Frame
+		width  int
+		height int
+		seq    uint64
+	}
+
+	type frameResult struct {
+		data   []byte
+		seq    uint64
+		width  int
+		height int
+		rawBytes int64
+	}
+
+	encodeChan := make(chan encodeJob, 1) // buffer=1: captura nunca bloqueia se encoder ocupado
+	resultChan := make(chan frameResult, 2)
+
+	var encodeWg sync.WaitGroup
+	encodeWg.Add(1)
+	go func() {
+		defer encodeWg.Done()
+		for job := range encodeChan {
+			enc := s.getEncoder()
+			encoded, err := enc.Encode(job.frame, s.quality.Current().EffectiveJpegQuality())
+			if err != nil {
+				log.Printf("[remote-session-screen] ERRO encode: %v\n", err)
+				continue
+			}
+			// Monta header binario (12 bytes) + payload JPEG
+			buf := make([]byte, frameHeaderLen+len(encoded))
+			binary.BigEndian.PutUint32(buf[0:4], uint32(job.seq))
+			binary.BigEndian.PutUint32(buf[4:8], uint32(time.Now().UnixMilli()))
+			binary.BigEndian.PutUint16(buf[8:10], uint16(job.width))
+			binary.BigEndian.PutUint16(buf[10:12], uint16(job.height))
+			copy(buf[frameHeaderLen:], encoded)
+
+			select {
+			case resultChan <- frameResult{
+				data:   buf,
+				seq:    job.seq,
+				width:  job.width,
+				height: job.height,
+				rawBytes: int64(len(job.frame.Data)),
+			}:
+			case <-ctx.Done():
+				return
+			case <-s.stopCh:
+				return
+			}
+		}
+	}()
+
+	// ── Consumer: publica resultados do encode ──
 	type frameJob struct{ data []byte }
 	frameChan := make(chan frameJob, 2)
 
-	// Consumer goroutine
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
@@ -121,13 +174,14 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 		}
 	}()
 
-	// Producer loop
+	// ── Producer loop (captura rapida, sem bloqueio de encode) ──
 	var totalSent, totalSkipped, totalIdle int64
 	var sent, skipped int64
 	var rawBytes, encBytes int64
 	var encodeTimeTotal time.Duration
 	consecutiveIdle := 0
 	noChangeCount := 0
+	curFps := fps
 
 	for {
 		select {
@@ -136,6 +190,9 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 				totalSent, totalSkipped, totalIdle)
 			s.natsStream.PublishEvent(s.sessionID, "screen_stopped",
 				map[string]string{"reason": "context_cancelled"})
+			close(encodeChan)
+			encodeWg.Wait()
+			close(resultChan)
 			close(frameChan)
 			wg.Wait()
 			return ctx.Err()
@@ -145,24 +202,75 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 				totalSent, totalSkipped, totalIdle)
 			s.natsStream.PublishEvent(s.sessionID, "screen_stopped",
 				map[string]string{"reason": "stopped"})
+			close(encodeChan)
+			encodeWg.Wait()
+			close(resultChan)
 			close(frameChan)
 			wg.Wait()
 			return nil
+
+		// Resultado do encode worker — publica e atualiza metricas
+		case result := <-resultChan:
+			select {
+			case frameChan <- frameJob{data: result.data}:
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-s.stopCh:
+				return nil
+			}
+
+			s.inputCtrl.UpdateFrameMetrics(result.width, result.height, result.width, result.height)
+			s.recording.CaptureFrame(result.data)
+			s.frameSeq++
+			s.quality.RecordFrame(len(result.data), time.Now())
+
+			rawBytes += result.rawBytes
+			encBytes += int64(len(result.data) - frameHeaderLen)
+			sent++
+			totalSent++
+
+			// Metricas a cada 5s
+			if time.Since(s.lastMetricsTime) >= 5*time.Second {
+				s.publishMetrics(result.width, result.height, sent, skipped, rawBytes, encBytes, encodeTimeTotal)
+				s.lastMetricsTime = time.Now()
+			}
+
+			// Log a cada 10s
+			if time.Since(s.lastLogTime) >= 10*time.Second {
+				compRatio := float64(0)
+				avgEncMs := float64(0)
+				if rawBytes > 0 {
+					compRatio = float64(rawBytes) / float64(encBytes)
+				}
+				if sent > 0 {
+					avgEncMs = float64(encodeTimeTotal.Milliseconds()) / float64(sent)
+				}
+				log.Printf("[remote-session-screen] %d env, %d idle | comp %.1f:1 | enc %.1fms | fps=%d\n",
+					sent, totalIdle, compRatio, avgEncMs, curFps)
+				s.lastLogTime = time.Now()
+				sent, skipped = 0, 0
+				rawBytes, encBytes = 0, 0
+				encodeTimeTotal = 0
+			}
+			continue
 
 		default:
 		}
 
 		q := s.quality.Current()
-		curFps := q.EffectiveFps()
+		curFps = q.EffectiveFps()
 		if curFps <= 0 {
 			curFps = 15
 		}
 
-		// Backpressure
-		if len(frameChan) >= 2 {
+		// Backpressure: nao captura se encoder estiver ocupado (buffer=1 cheio)
+		if len(encodeChan) >= 1 {
 			time.Sleep(time.Millisecond)
 			continue
 		}
+
+		// Throttle adaptativo baseado em curFps
+		targetInterval := time.Second / time.Duration(curFps)
 
 		// Capture
 		frame, err := s.capturer.AcquireNextFrame()
@@ -173,7 +281,7 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 			continue
 		}
 
-		// Aplica escala (copia GPU resource ANTES de liberar)
+		// Aplica escala
 		scaleFactor := q.ScaleFactor
 		ownsFrame := false
 		if scaleFactor > 0 && scaleFactor < 1.0 {
@@ -183,12 +291,11 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 			ownsFrame = true
 		}
 
-		// Dirty rect detection
+		// Dirty rect detection — pula frames idle
 		noChangeCount++
 		rects := s.dirtyDetector.Detect(frame)
 
 		if len(rects) == 0 && s.useDirtyRect && noChangeCount < dirtyRectCheckFreq {
-			// Idle: nada mudou
 			if !ownsFrame {
 				s.capturer.ReleaseFrame()
 			}
@@ -202,7 +309,7 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 		consecutiveIdle = 0
 		noChangeCount = 0
 
-		// Copia frame do GPU se ainda nao foi copiado
+		// Copia frame do GPU
 		if !ownsFrame {
 			frameCopy := &screen.Frame{
 				Data:   make([]byte, len(frame.Data)),
@@ -216,91 +323,23 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 		}
 		s.useDirtyRect = true
 
-		// Encode
-		jpgQuality := q.EffectiveJpegQuality()
-		encodeStart := time.Now()
-		enc := s.getEncoder()
-		encoded, encErr := enc.Encode(frame, jpgQuality)
-		encodeTimeTotal += time.Since(encodeStart)
-
-		if encErr != nil {
-			log.Printf("[remote-session-screen] ERRO encode: %v\n", encErr)
-			skipped++
-			totalSkipped++
-			time.Sleep(afterFailureDelay)
-			continue
-		}
-
-		rawBytes += int64(len(frame.Data))
-		encBytes += int64(len(encoded))
-
-		// Monta header binario (12 bytes) + payload JPEG
-		encSize := len(encoded)
-		buf := make([]byte, frameHeaderLen+encSize)
-		binary.BigEndian.PutUint32(buf[0:4], uint32(s.frameSeq))
-		binary.BigEndian.PutUint32(buf[4:8], uint32(time.Now().UnixMilli()))
-		binary.BigEndian.PutUint16(buf[8:10], uint16(frame.Width))
-		binary.BigEndian.PutUint16(buf[10:12], uint16(frame.Height))
-		copy(buf[frameHeaderLen:], encoded)
-
-		// Publish via channel
+		// Envia para encode worker (nao bloqueante com buffer=1)
 		select {
-		case frameChan <- frameJob{data: buf}:
+		case encodeChan <- encodeJob{
+			frame:  frame,
+			width:  frame.Width,
+			height: frame.Height,
+			seq:    s.frameSeq,
+		}:
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-s.stopCh:
 			return nil
 		}
 
-		// Atualiza metricas
-		s.inputCtrl.UpdateFrameMetrics(frame.Width, frame.Height, frame.Width, frame.Height)
-		s.recording.CaptureFrame(buf)
-		s.frameSeq++
-		s.quality.RecordFrame(len(buf), time.Now())
-
-		sent++
-		totalSent++
-
-		// Metricas a cada 5s
-		if time.Since(s.lastMetricsTime) >= 5*time.Second {
-			s.publishMetrics(frame.Width, frame.Height, sent, skipped, rawBytes, encBytes, encodeTimeTotal)
-			s.lastMetricsTime = time.Now()
-		}
-
-		// Log a cada 10s
-		if time.Since(s.lastLogTime) >= 10*time.Second {
-			compRatio := float64(0)
-			avgEncMs := float64(0)
-			if rawBytes > 0 {
-				compRatio = float64(rawBytes) / float64(encBytes)
-			}
-			if sent > 0 {
-				avgEncMs = float64(encodeTimeTotal.Milliseconds()) / float64(sent)
-			}
-			log.Printf("[remote-session-screen] %d env, %d idle | comp %.1f:1 | enc %.1fms | fps=%d\n",
-				sent, totalIdle, compRatio, avgEncMs, curFps)
-			s.lastLogTime = time.Now()
-			sent, skipped = 0, 0
-			rawBytes, encBytes = 0, 0
-			encodeTimeTotal = 0
-		}
-
-		// Adaptive throttle: delay baseado em % de mudanca nos dirty rects
-		changedArea := 0
-		for _, r := range rects {
-			changedArea += r.Width * r.Height
-		}
-		totalArea := frame.Width * frame.Height
-		if totalArea > 0 {
-			changePercent := float64(changedArea) / float64(totalArea)
-			targetInterval := time.Second / time.Duration(curFps)
-			if changePercent > 0.5 {
-				time.Sleep(targetInterval / 2)
-			} else if changePercent > 0.1 {
-				time.Sleep(targetInterval / 4)
-			}
-			// < 10%: no delay (captura imediatamente proxima mudanca)
-		}
+		// Throttle: espera o tempo restante do intervalo FPS
+		// O encode roda em paralelo — nao impacta a latencia de captura
+		time.Sleep(targetInterval / 3)
 	}
 }
 
