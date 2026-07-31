@@ -113,11 +113,12 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 	}
 
 	type frameResult struct {
-		data   []byte
-		seq    uint64
-		width  int
-		height int
-		rawBytes int64
+		data      []byte
+		seq       uint64
+		width     int
+		height    int
+		rawBytes  int64
+		encodeMs  float64
 	}
 
 	encodeChan := make(chan encodeJob, 1) // buffer=1: captura nunca bloqueia se encoder ocupado
@@ -128,8 +129,10 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 	go func() {
 		defer encodeWg.Done()
 		for job := range encodeChan {
+			encStart := time.Now()
 			enc := s.getEncoder()
 			encoded, err := enc.Encode(job.frame, s.quality.Current().EffectiveJpegQuality())
+			encMs := float64(time.Since(encStart).Microseconds()) / 1000.0
 			if err != nil {
 				log.Printf("[remote-session-screen] ERRO encode: %v\n", err)
 				continue
@@ -144,11 +147,12 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 
 			select {
 			case resultChan <- frameResult{
-				data:   buf,
-				seq:    job.seq,
-				width:  job.width,
-				height: job.height,
+				data:     buf,
+				seq:      job.seq,
+				width:    job.width,
+				height:   job.height,
 				rawBytes: int64(len(job.frame.Data)),
+				encodeMs: encMs,
 			}:
 			case <-ctx.Done():
 				return
@@ -178,8 +182,8 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 	var sent, skipped int64
 	var rawBytes, encBytes int64
 	var encodeTimeTotal time.Duration
+	var captureMsTotal, dirtyMsTotal, copyMsTotal float64
 	consecutiveIdle := 0
-	noChangeCount := 0
 	curFps := fps
 
 	for {
@@ -225,6 +229,7 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 
 			rawBytes += result.rawBytes
 			encBytes += int64(len(result.data) - frameHeaderLen)
+			encodeTimeTotal += time.Duration(result.encodeMs * float64(time.Millisecond))
 			sent++
 			totalSent++
 
@@ -234,22 +239,29 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 				s.lastMetricsTime = time.Now()
 			}
 
-			// Log a cada 10s
+			// Log detalhado a cada 10s — timing de cada etapa do pipeline
 			if time.Since(s.lastLogTime) >= 10*time.Second {
 				compRatio := float64(0)
 				avgEncMs := float64(0)
+				avgCapMs := float64(0)
+				avgDirtyMs := float64(0)
+				avgCopyMs := float64(0)
 				if rawBytes > 0 {
 					compRatio = float64(rawBytes) / float64(encBytes)
 				}
 				if sent > 0 {
 					avgEncMs = float64(encodeTimeTotal.Milliseconds()) / float64(sent)
+					avgCapMs = captureMsTotal / float64(sent)
+					avgDirtyMs = dirtyMsTotal / float64(sent)
+					avgCopyMs = copyMsTotal / float64(sent)
 				}
-				log.Printf("[remote-session-screen] %d env, %d idle | comp %.1f:1 | enc %.1fms | fps=%d\n",
-					sent, totalIdle, compRatio, avgEncMs, curFps)
+				log.Printf("[remote-session-screen] %d env, %d idle | comp %.1f:1 | cap=%.1fms dirty=%.1fms copy=%.1fms enc=%.1fms | fps=%d\n",
+					sent, totalIdle, compRatio, avgCapMs, avgDirtyMs, avgCopyMs, avgEncMs, curFps)
 				s.lastLogTime = time.Now()
 				sent, skipped = 0, 0
 				rawBytes, encBytes = 0, 0
 				encodeTimeTotal = 0
+				captureMsTotal, dirtyMsTotal, copyMsTotal = 0, 0, 0
 			}
 			continue
 
@@ -268,19 +280,19 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 			continue
 		}
 
-		// Throttle adaptativo baseado em curFps
-		targetInterval := time.Second / time.Duration(curFps)
-
-		// Capture
+		// ── Capture (timing) ──
+		capStart := time.Now()
 		frame, err := s.capturer.AcquireNextFrame()
+		capMs := float64(time.Since(capStart).Microseconds()) / 1000.0
 		if err != nil {
 			skipped++
 			totalSkipped++
 			time.Sleep(idleDelay)
 			continue
 		}
+		captureMsTotal += capMs
 
-		// Aplica escala
+		// ── Aplica escala (se necessario) ──
 		scaleFactor := q.ScaleFactor
 		ownsFrame := false
 		if scaleFactor > 0 && scaleFactor < 1.0 {
@@ -290,11 +302,18 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 			ownsFrame = true
 		}
 
-		// Dirty rect detection — pula frames idle
-		noChangeCount++
+		// ── Dirty rect detection (timing) ──
+		// NOTA: go-d3d já faz HW dirty rects internamente em GetImage().
+		// Este software diff é REDUNDANTE quando usando go-d3d, mas mantido
+		// para fallback (DXGI manual/GDI). Em go-d3d, se a GPU disse que nada
+		// mudou, GetImage retorna ErrNoImageYet (timeout) — já tratado acima.
+		dirtyStart := time.Now()
 		rects := s.dirtyDetector.Detect(frame)
+		dirtyMs := float64(time.Since(dirtyStart).Microseconds()) / 1000.0
+		dirtyMsTotal += dirtyMs
 
-		if len(rects) == 0 && s.useDirtyRect && noChangeCount < dirtyRectCheckFreq {
+		if len(rects) == 0 && s.useDirtyRect {
+			// Idle: nada mudou
 			if !ownsFrame {
 				s.capturer.ReleaseFrame()
 			}
@@ -306,9 +325,12 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 			continue
 		}
 		consecutiveIdle = 0
-		noChangeCount = 0
 
-		// Copia frame do GPU
+		// ── Copia frame do GPU (timing) ──
+		// NOTA: go-d3d retorna c.img.Pix (buffer Go reutilizado).
+		// Precisamos copiar ANTES de enviar ao encode worker, pois o próximo
+		// AcquireNextFrame() sobrescreve c.img.Pix.
+		copyStart := time.Now()
 		if !ownsFrame {
 			frameCopy := &screen.Frame{
 				Data:   make([]byte, len(frame.Data)),
@@ -320,6 +342,8 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 			s.capturer.ReleaseFrame()
 			frame = frameCopy
 		}
+		copyMs := float64(time.Since(copyStart).Microseconds()) / 1000.0
+		copyMsTotal += copyMs
 		s.useDirtyRect = true
 
 		// Envia para encode worker (nao bloqueante com buffer=1)
@@ -336,9 +360,9 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 			return nil
 		}
 
-		// Throttle: espera o tempo restante do intervalo FPS
-		// O encode roda em paralelo — nao impacta a latencia de captura
-		time.Sleep(targetInterval / 3)
+		// SEM throttle fixo — o backpressure (len(encodeChan) >= 1) já controla.
+		// O encode roda em paralelo. Se o encoder for lento, o backpressure
+		// naturalmente reduz o FPS. Se for rapido, captura o mais rápido possível.
 	}
 }
 

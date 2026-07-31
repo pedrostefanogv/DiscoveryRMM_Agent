@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"image"
 	"image/jpeg"
+	"unsafe"
 )
 
 // Encoder comprime frames em um formato especifico para envio.
@@ -17,8 +18,6 @@ type Encoder interface {
 
 // ── JPEG Encoder ──
 // Usa image/jpeg da stdlib. Compatível com o viewer sem alterações.
-// Zstd pós-compressão requer mudança no frameDecoder.ts (0xFE prefixo mágico).
-// TODO: Adicionar quando frontend for atualizado para suportar Zstd.
 
 type jpegEncoder struct{}
 
@@ -39,13 +38,27 @@ func (e *jpegEncoder) Encode(frame *Frame, quality int) ([]byte, error) {
 	w := frame.Width
 	h := frame.Height
 
-	// Conversao BGRA→RGBA in-place (swap B↔R) para evitar alocacao extra.
-	// Seguro porque o buffer do GDI eh alocado fresh a cada AcquireNextFrame.
-	for y := 0; y < h; y++ {
-		rowStart := y * stride
-		for x := 0; x < w; x++ {
-			offset := rowStart + x*4
-			bgra[offset], bgra[offset+2] = bgra[offset+2], bgra[offset] // swap B↔R
+	// Conversao BGRA→RGBA in-place (swap B↔R) usando uint32 cast.
+	// ~4x mais rapido que byte-by-byte: 1 operacao por pixel em vez de 3.
+	// Requer que stride seja multiplo de 4 (sempre verdade para BGRA).
+	if stride%4 == 0 {
+		pixels := unsafe.Slice((*uint32)(unsafe.Pointer(&bgra[0])), len(bgra)/4)
+		for i := range pixels {
+			// BGRA: 0xAARRGGBB → RGBA: 0xAABBGGRR
+			// Swap bytes 0 (B) e 2 (R) mantendo A e G
+			c := pixels[i]
+			pixels[i] = (c & 0xFF00FF00) | // A e G nos lugares certos
+				((c & 0x000000FF) << 16) | // B → R
+				((c & 0x00FF0000) >> 16) // R → B
+		}
+	} else {
+		// Fallback: stride com padding — swap byte-by-byte
+		for y := 0; y < h; y++ {
+			rowStart := y * stride
+			for x := 0; x < w; x++ {
+				offset := rowStart + x*4
+				bgra[offset], bgra[offset+2] = bgra[offset+2], bgra[offset]
+			}
 		}
 	}
 
