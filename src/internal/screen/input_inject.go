@@ -181,6 +181,13 @@ func SetCursorPosAbsolute(x, y int32) error {
 	return nil
 }
 
+// unsafePtr converte *inputUnion para unsafe.Pointer para escrita na union.
+// mouseInput e keybdInput são os primeiros campos de inputUnion,
+// então o ponteiro da struct coincide com o ponteiro do primeiro campo.
+func unsafePtr(v any) unsafe.Pointer {
+	return unsafe.Pointer(v.(*inputUnion))
+}
+
 // VK constants
 const (
 	VK_BACK    = 0x08
@@ -201,10 +208,6 @@ const (
 	VK_F1      = 0x70
 	VK_F12     = 0x7B
 )
-
-func unsafePtr(_ any) unsafe.Pointer {
-	return nil
-}
 
 // Placeholder
 var _ = syscall.EINVAL

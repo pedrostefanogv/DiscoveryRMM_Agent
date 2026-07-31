@@ -82,6 +82,13 @@ func (c *InputController) HandleInput(data []byte) {
 	var evt InputEvent
 	if err := json.Unmarshal(data, &evt); err != nil {
 		// Tenta formato legado (JSON simples sem version)
+		log.Printf("[input-controller] JSON inválido, tentando legado: %v", err)
+		c.handleLegacyInput(data)
+		return
+	}
+
+	// Se version é 0 (ausente), trata como formato legado
+	if evt.Version == 0 {
 		c.handleLegacyInput(data)
 		return
 	}
@@ -90,6 +97,9 @@ func (c *InputController) HandleInput(data []byte) {
 		log.Printf("[input-controller] versão não suportada: %d", evt.Version)
 		return
 	}
+
+	log.Printf("[input-controller] recebido: type=%s x=%d y=%d button=%d deltaX=%d deltaY=%d",
+		evt.Type, evt.X, evt.Y, evt.Button, evt.DeltaX, evt.DeltaY)
 
 	// Dedup por sequência
 	c.mu.Lock()
@@ -189,7 +199,7 @@ func applyModifier(vk uint16, down bool) {
 	}
 }
 
-// handleLegacyInput processa formato JSON simples (usado pelo viewer antigo).
+// handleLegacyInput processa formato JSON simples (usado pelo viewer atual).
 func (c *InputController) handleLegacyInput(data []byte) {
 	var raw map[string]any
 	if err := json.Unmarshal(data, &raw); err != nil {
@@ -197,14 +207,24 @@ func (c *InputController) handleLegacyInput(data []byte) {
 	}
 
 	typ, _ := raw["type"].(string)
+	log.Printf("[input-controller] legado: type=%s raw=%s", typ, string(data))
+
 	switch typ {
 	case "mousedown":
 		x, _ := toFloat64(raw["x"]); y, _ := toFloat64(raw["y"]); btn, _ := toFloat64(raw["button"])
 		c.handleMouseMoveNormalized(int(x), int(y))
-		_ = screen.InjectMouseClickLeft(int(btn) == 0)
+		if int(btn) == 2 {
+			_ = screen.InjectMouseClickRight(true)
+		} else {
+			_ = screen.InjectMouseClickLeft(true)
+		}
 	case "mouseup":
 		btn, _ := toFloat64(raw["button"])
-		_ = screen.InjectMouseClickLeft(int(btn) != 1) // up after click
+		if int(btn) == 2 {
+			_ = screen.InjectMouseClickRight(false)
+		} else {
+			_ = screen.InjectMouseClickLeft(false)
+		}
 	case "mousemove":
 		x, _ := toFloat64(raw["x"]); y, _ := toFloat64(raw["y"])
 		c.handleMouseMoveNormalized(int(x), int(y))
