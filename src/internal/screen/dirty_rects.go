@@ -168,11 +168,19 @@ func (d *DirtyDetector) mergeTiles(changed [][]bool, width, height, cols, rows i
 }
 
 // EncodeDirtyRects codifica apenas as regioes alteradas como tiles JPEG.
+// Formato de saída:
+//   Header (4B): numRects (uint16) | flags (uint16)
+//   Para cada tile:
+//     Tile header (12B): x(uint16) y(uint16) w(uint16) h(uint16) size(uint32)
+//     JPEG data (size bytes)
 func EncodeDirtyRects(frame *Frame, rects []DirtyRect, quality int) ([]byte, error) {
 	var buf bytes.Buffer
 
-	// Header: 4 bytes (numRects uint16) + padding
-	binary.BigEndian.PutUint16(make([]byte, 2), uint16(len(rects)))
+	// Header: numRects (uint16) + flags (uint16, 0 por enquanto)
+	header := make([]byte, 4)
+	binary.BigEndian.PutUint16(header[0:2], uint16(len(rects)))
+	binary.BigEndian.PutUint16(header[2:4], 0)
+	buf.Write(header)
 
 	for _, rect := range rects {
 		// Extrai tile

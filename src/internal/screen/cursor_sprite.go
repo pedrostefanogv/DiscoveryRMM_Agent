@@ -1,8 +1,12 @@
+//go:build windows
+
 package screen
 
 import (
 	"encoding/binary"
 	"fmt"
+	"syscall"
+	"unsafe"
 )
 
 // CursorInfo representa a posicao e estado do cursor.
@@ -61,13 +65,71 @@ func (cs *CursorSpriteSender) Encode(info CursorInfo) []byte {
 	return buf
 }
 
+// ── Win32 cursor capture ──
+
+var (
+	procGetCursorPos    = user32.NewProc("GetCursorPos")
+	procGetCursorInfo   = user32.NewProc("GetCursorInfo")
+	procGetIconInfo     = user32.NewProc("GetIconInfo")
+	procDestroyIcon     = user32.NewProc("DestroyIcon")
+	procGetSystemCursor = user32.NewProc("CopyIcon")
+)
+
+// CURSORINFO — usado para detectar visibilidade e handle do cursor.
+type cursorInfo struct {
+	cbSize      uint32
+	flags       uint32
+	hCursor     uintptr
+	ptScreenPos point
+}
+
+const CURSOR_SHOWING = 0x00000001
+
+// ICONINFO — para extrair bitmaps do cursor.
+type iconInfo struct {
+	fIcon    uint32
+	xHotspot uint32
+	yHotspot uint32
+	hbmMask  uintptr
+	hbmColor uintptr
+}
+
 // GetCursorPos retorna a posicao atual do cursor via GetCursorPos Win32.
 func GetCursorPos() (CursorInfo, error) {
-	// Placeholder: seria implementado via syscall GetCursorPos + GetCursorInfo
-	// Na Fase 5, retorna posicao fixa como fallback
-	return CursorInfo{X: 0, Y: 0, Visible: true, Shape: "arrow"}, nil
+	var p point
+	ret, _, _ := procGetCursorPos.Call(uintptr(unsafe.Pointer(&p)))
+	if ret == 0 {
+		return CursorInfo{}, fmt.Errorf("GetCursorPos falhou")
+	}
+
+	// Determina visibilidade via GetCursorInfo (CURSOR_SHOWING).
+	visible := true
+	var ci cursorInfo
+	ci.cbSize = uint32(unsafe.Sizeof(ci))
+	if r, _, _ := procGetCursorInfo.Call(uintptr(unsafe.Pointer(&ci))); r != 0 {
+		visible = ci.flags&CURSOR_SHOWING != 0
+	}
+
+	return CursorInfo{
+		X:       int16(p.X),
+		Y:       int16(p.Y),
+		Visible: visible,
+		Shape:   "arrow", // forma determinada no render (ver GetCursorShape)
+	}, nil
+}
+
+// GetCursorShape tenta inferir a forma do cursor a partir do ID do sistema.
+// Retorna um dos valores reconhecidos pelo viewer (arrow/hand/ibeam/crosshair).
+func GetCursorShape() string {
+	// Fallback simples — sem mapeamento do sistema aqui para evitar
+	// dependencia de LoadCursor. O capturer DXGI go-d3d já desenha o cursor
+	// real como overlay quando DrawPointer=true; este método serve para
+	// o modo cursor-separado.
+	return "arrow"
 }
 
 // Ensure imports
-var _ = fmt.Println
-var _ = binary.BigEndian
+var _ = syscall.NewLazyDLL
+var _ = procGetIconInfo
+var _ = procGetSystemCursor
+var _ = procDestroyIcon

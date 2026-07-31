@@ -76,7 +76,9 @@ func (e *jpegEncoder) Encode(frame *Frame, quality int) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// ResizeBGRA redimensiona um frame BGRA usando nearest-neighbor (rápido).
+// ResizeBGRA redimensiona um frame BGRA.
+// Usa interpolação bilinear (qualidade superior ao nearest-neighbor, comparável
+// ao StretchBlt HALFTONE do MeshAgent) para scaleFactor < 1.
 // Retorna novo buffer com as dimensões reduzidas. O original não é alterado.
 func ResizeBGRA(src *Frame, scaleFactor float64) *Frame {
 	if scaleFactor >= 1.0 {
@@ -96,15 +98,49 @@ func ResizeBGRA(src *Frame, scaleFactor float64) *Frame {
 		Stride: newStride,
 	}
 
+	srcStride := src.Stride
+	srcW := src.Width
+	srcH := src.Height
+	inv := 1.0 / scaleFactor
+
 	for y := 0; y < newH; y++ {
-		srcY := int(float64(y) / scaleFactor)
+		// Posição em float na imagem original
+		srcYf := float64(y) * inv
+		y0 := int(srcYf)
+		if y0 > srcH-1 { y0 = srcH - 1 }
+		y1 := y0 + 1
+		if y1 > srcH-1 { y1 = srcH - 1 }
+		fy := srcYf - float64(y0)
+
 		rowDst := y * newStride
-		rowSrc := srcY * src.Stride
+		rowY0 := y0 * srcStride
+		rowY1 := y1 * srcStride
+
 		for x := 0; x < newW; x++ {
-			srcX := int(float64(x) / scaleFactor)
+			srcXf := float64(x) * inv
+			x0 := int(srcXf)
+			if x0 > srcW-1 { x0 = srcW - 1 }
+			x1 := x0 + 1
+			if x1 > srcW-1 { x1 = srcW - 1 }
+			fx := srcXf - float64(x0)
+
 			offsetDst := rowDst + x*4
-			offsetSrc := rowSrc + srcX*4
-			copy(dst.Data[offsetDst:offsetDst+4], src.Data[offsetSrc:offsetSrc+4])
+
+			// 4 pixels vizinhos
+			o00 := rowY0 + x0*4
+			o10 := rowY0 + x1*4
+			o01 := rowY1 + x0*4
+			o11 := rowY1 + x1*4
+
+			// Bilinear por canal (B,G,R,A)
+			for c := 0; c < 4; c++ {
+				top := float64(src.Data[o00+c])*(1-fx) + float64(src.Data[o10+c])*fx
+				bot := float64(src.Data[o01+c])*(1-fx) + float64(src.Data[o11+c])*fx
+				val := top*(1-fy) + bot*fy
+				if val < 0 { val = 0 }
+				if val > 255 { val = 255 }
+				dst.Data[offsetDst+c] = byte(val)
+			}
 		}
 	}
 

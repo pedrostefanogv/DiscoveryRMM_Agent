@@ -2,6 +2,7 @@ package remotesession
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -22,18 +23,38 @@ type NatsStreamHandler struct {
 	agentID  string
 	tenantID string
 	siteID   string
+
+	// maxPayloadBytes é o limite de payload do servidor NATS. Frames maiores
+	// são fragmentados (JUMBO) para não exceder o limite.
+	maxPayloadBytes int
 }
+
+// DefaultMaxPayloadBytes é o padrão (2MB), alinhado ao servidor NATS.
+const DefaultMaxPayloadBytes = 2 * 1024 * 1024
 
 // NewNatsStreamHandler creates a new NATS stream handler.
 // tenantID, siteID, agentID are required to construct literal subject patterns for publish.
 // UUIDs are normalized (hyphens stripped) to match server subject format.
 func NewNatsStreamHandler(nc *nats.Conn, tenantID, siteID, agentID string) *NatsStreamHandler {
 	return &NatsStreamHandler{
-		nc:       nc,
-		tenantID: stripHyphens(tenantID),
-		siteID:   stripHyphens(siteID),
-		agentID:  stripHyphens(agentID),
+		nc:              nc,
+		tenantID:        stripHyphens(tenantID),
+		siteID:          stripHyphens(siteID),
+		agentID:         stripHyphens(agentID),
+		maxPayloadBytes: DefaultMaxPayloadBytes,
 	}
+}
+
+// SetMaxPayloadBytes define o limite de payload (para alinhar ao servidor).
+func (h *NatsStreamHandler) SetMaxPayloadBytes(max int) {
+	if max > 0 {
+		h.maxPayloadBytes = max
+	}
+}
+
+// MaxPayloadBytes retorna o limite de payload configurado.
+func (h *NatsStreamHandler) MaxPayloadBytes() int {
+	return h.maxPayloadBytes
 }
 
 // subjectBase returns the literal base subject for this handler's scope (for publish).
@@ -71,10 +92,52 @@ func (h *NatsStreamHandler) SubscribeToControl(sessionID string, handler func(ac
 }
 
 // PublishFrame envia um frame de tela para o viewer.
+// Se o frame exceder maxPayloadBytes, é fragmentado (JUMBO) em múltiplos
+// publishes .frame.frag com reassembly no viewer.
 func (h *NatsStreamHandler) PublishFrame(sessionID string, frameData []byte) error {
-	subject := h.publishSubject(sessionID, "frame")
-	err := h.nc.Publish(subject, frameData)
-	return err
+	if len(frameData) <= h.maxPayloadBytes {
+		subject := h.publishSubject(sessionID, "frame")
+		return h.nc.Publish(subject, frameData)
+	}
+
+	// ── Fragmentação JUMBO ──
+	// Formato de cada fragmento:
+	//   [4B totalLen][4B offset][2B fragIndex][2B fragCount][payload]
+	// O offset explícito torna o reassembly determinístico (o tamanho de
+	// fragmento no agent pode não dividir o total uniformemente).
+	const fragHeaderLen = 12
+	maxFrag := h.maxPayloadBytes - 32 // reserva margem p/ header NATS
+	if maxFrag <= fragHeaderLen {
+		maxFrag = fragHeaderLen + 64
+	}
+
+	total := len(frameData)
+	count := (total + maxFrag - 1) / maxFrag
+	if count > 65535 {
+		count = 65535 // limita nº de fragmentos
+	}
+
+	base := h.publishSubject(sessionID, "frame.frag")
+	for i := 0; i < count; i++ {
+		start := i * maxFrag
+		end := start + maxFrag
+		if end > total {
+			end = total
+		}
+		part := frameData[start:end]
+
+		buf := make([]byte, fragHeaderLen+len(part))
+		binary.BigEndian.PutUint32(buf[0:4], uint32(total))
+		binary.BigEndian.PutUint32(buf[4:8], uint32(start))
+		binary.BigEndian.PutUint16(buf[8:10], uint16(i))
+		binary.BigEndian.PutUint16(buf[10:12], uint16(count))
+		copy(buf[fragHeaderLen:], part)
+
+		if err := h.nc.Publish(base, buf); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // PublishTermOut envia saida do terminal para o viewer.
@@ -84,14 +147,7 @@ func (h *NatsStreamHandler) PublishTermOut(sessionID string, data string) error 
 	return err
 }
 
-// PublishTermOutTab envia saida do terminal para o viewer (multi-tab).
-func (h *NatsStreamHandler) PublishTermOutTab(sessionID, tabID string, data string) error {
-	subject := fmt.Sprintf("%s.%s.term.%s.out", h.subjectBase(), stripHyphens(sessionID), stripHyphens(tabID))
-	err := h.nc.Publish(subject, []byte(data))
-	return err
-}
-
-// PublishTermReady notifica o viewer sobre shells disponiveis e tab inicial.
+// PublishTermReady notifica o viewer sobre shells disponiveis e console pronto.
 func (h *NatsStreamHandler) PublishTermReady(sessionID string, data any) error {
 	payload, _ := json.Marshal(data)
 	subject := h.publishSubject(sessionID, "term.ready")
@@ -131,30 +187,6 @@ func (h *NatsStreamHandler) SubscribeToInput(sessionID string, handler func(inpu
 // SubscribeToTermIn subscreve a stdin do terminal enviado pelo viewer.
 func (h *NatsStreamHandler) SubscribeToTermIn(sessionID string, handler func(data []byte)) (*nats.Subscription, error) {
 	return h.nc.Subscribe(h.subscribePattern(sessionID, "term.in"), func(msg *nats.Msg) {
-		handler(msg.Data)
-	})
-}
-
-// SubscribeToTermInTab subscreve a stdin de uma aba especifica (multi-tab).
-func (h *NatsStreamHandler) SubscribeToTermInTab(sessionID, tabID string, handler func(data []byte)) (*nats.Subscription, error) {
-	subject := fmt.Sprintf("tenant.*.site.*.agent.*.remote.session.%s.term.%s.in", stripHyphens(sessionID), stripHyphens(tabID))
-	return h.nc.Subscribe(subject, func(msg *nats.Msg) {
-		handler(msg.Data)
-	})
-}
-
-// SubscribeToTermCreate subscreve a comandos de criacao de tab.
-func (h *NatsStreamHandler) SubscribeToTermCreate(sessionID string, handler func(data []byte)) (*nats.Subscription, error) {
-	subject := h.subscribePattern(sessionID, "term.create")
-	return h.nc.Subscribe(subject, func(msg *nats.Msg) {
-		handler(msg.Data)
-	})
-}
-
-// SubscribeToTermClose subscreve a comandos de fechamento de tab.
-func (h *NatsStreamHandler) SubscribeToTermClose(sessionID string, handler func(data []byte)) (*nats.Subscription, error) {
-	subject := h.subscribePattern(sessionID, "term.close")
-	return h.nc.Subscribe(subject, func(msg *nats.Msg) {
 		handler(msg.Data)
 	})
 }

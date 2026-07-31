@@ -34,5 +34,5 @@ func NewCapturer(monitorIndex int) (Capturer, error) {
 		return c, nil
 	}
 	// Fallback final: GDI BitBlt (VM sem GPU, RDP)
-	return NewGDICapturer()
+	return NewGDICapturerMonitor(monitorIndex)
 }

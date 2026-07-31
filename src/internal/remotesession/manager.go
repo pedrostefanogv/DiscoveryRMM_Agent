@@ -376,7 +376,13 @@ func (m *Manager) runScreenSession(ctx context.Context, session *Session) {
 	log.Printf("[remote-session-screen] iniciando screen capturer para sessao %s (quality=%s codec=%s)\n",
 		session.ID, session.Quality, session.Codec)
 
-	screenSession, err := NewSessionScreen(session.ID, m.natsStream)
+	// Seleção de monitor opcional via payload (Meta["monitorIndex"]). Fallback 0 (primário).
+	monitorIndex := 0
+	if idx, ok := session.Meta["monitorIndex"].(float64); ok && int(idx) >= 0 {
+		monitorIndex = int(idx)
+	}
+
+	screenSession, err := NewSessionScreenMonitor(session.ID, m.natsStream, monitorIndex)
 	if err != nil {
 		log.Printf("[remote-session-screen] ERRO ao criar SessionScreen: %v\n", err)
 		m.publishEvent(session.ID, "error", map[string]string{"error": err.Error()})
@@ -406,6 +412,14 @@ func (m *Manager) runScreenSession(ctx context.Context, session *Session) {
 	if session.MaxFps > 0 {
 		screenSession.SetMaxFps(session.MaxFps)
 	}
+	// Modo tile-based (otimização de banda) — ATIVADO POR PADRÃO.
+	// Pode ser desligado explicitamente via payload Meta["tileMode"]:false.
+	tileMode := true
+	if tm, ok := session.Meta["tileMode"].(bool); ok {
+		tileMode = tm
+	}
+	screenSession.SetTileMode(tileMode)
+	log.Printf("[remote-session-screen] tile-mode=%v para sessao %s\n", tileMode, session.ID)
 
 	// Subscreve input do viewer (mouse/teclado)
 	inputSub, err := m.natsStream.SubscribeToInput(session.ID, func(data []byte) {
@@ -460,51 +474,24 @@ func (m *Manager) runTerminalSession(ctx context.Context, session *Session) {
 
 	sessTerm := NewSessionTerminal(session.ID, m.natsStream, session.Recording)
 
-	// Criar tab inicial
-	firstTab, err := sessTerm.CreateTab(ctx, defaultShell, cols, rows)
+	// Quando o console (shell) encerra, fecha a sessão para liberar recursos
+	// e notificar o viewer (não deixa sessão "morta" ativa).
+	sessTerm.SetOnExit(func(reason string) {
+		log.Printf("[remote-session-term] console encerrado (sessao %s): %s", session.ID, reason)
+		m.mu.Lock()
+		m.closeSessionLocked(session.ID, "terminal-exit")
+		m.mu.Unlock()
+	})
+
+	// Console único — cria o terminal (subjects fixos term.out / term.in)
+	console, err := sessTerm.Start(ctx, defaultShell, cols, rows)
 	if err != nil {
-		log.Printf("[remote-session-term] ERRO ao criar tab inicial: %v", err)
+		log.Printf("[remote-session-term] ERRO ao iniciar console: %v", err)
 		m.publishEvent(session.ID, "error", map[string]string{"error": err.Error()})
 		return
 	}
 
-	// Subscrever comandos de controle de tabs
-	m.natsStream.SubscribeToTermCreate(session.ID, func(data []byte) {
-		var req struct {
-			Shell string `json:"shell"`
-			Cols  int    `json:"cols"`
-			Rows  int    `json:"rows"`
-		}
-		if err := json.Unmarshal(data, &req); err != nil {
-			return
-		}
-		sk := terminal.ShellKind(req.Shell)
-		if sk == "" {
-			sk = terminal.ShellPowerShell
-		}
-		c := req.Cols
-		r := req.Rows
-		if c <= 0 { c = cols }
-		if r <= 0 { r = rows }
-		tab, err := sessTerm.CreateTab(ctx, sk, c, r)
-		if err != nil {
-			log.Printf("[remote-session-term] ERRO ao criar tab %s: %v", req.Shell, err)
-			return
-		}
-		log.Printf("[remote-session-term] nova tab criada: %s shell=%s", tab.ID, sk)
-	})
-
-	m.natsStream.SubscribeToTermClose(session.ID, func(data []byte) {
-		var req struct {
-			TabID string `json:"tabId"`
-		}
-		if err := json.Unmarshal(data, &req); err != nil {
-			return
-		}
-		sessTerm.CloseTab(req.TabID)
-	})
-
-	// Notificar viewer com shells disponiveis
+	// Notificar viewer com shells disponiveis e console pronto
 	availableShells := []string{"powershell", "cmd"}
 	if available, distros := terminal.IsWSLAvailable(); available {
 		for _, d := range distros {
@@ -512,10 +499,10 @@ func (m *Manager) runTerminalSession(ctx context.Context, session *Session) {
 		}
 	}
 	m.natsStream.PublishTermReady(session.ID, map[string]any{
-		"shells":      availableShells,
-		"defaultTab":  firstTab.ID,
-		"termCols":    cols,
-		"termRows":    rows,
+		"shells":     availableShells,
+		"consoleId":  console.ID,
+		"termCols":   cols,
+		"termRows":   rows,
 	})
 
 	ctx, cancel := context.WithCancel(ctx)

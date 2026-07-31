@@ -42,36 +42,66 @@ type gdiCapturer struct {
 	memBitmap uintptr
 	width     int
 	height    int
+	offsetX   int // origem do monitor no desktop virtual (multi-monitor)
+	offsetY   int
 }
 
+// NewGDICapturer cria um capturador GDI do monitor primário.
 func NewGDICapturer() (Capturer, error) {
+	return NewGDICapturerMonitor(0)
+}
+
+// NewGDICapturerMonitor cria um capturador GDI de um monitor específico.
+// monitorIndex 0 = primário. Usa EnumDisplayMonitors para localizar a região.
+func NewGDICapturerMonitor(monitorIndex int) (Capturer, error) {
 	runtime.LockOSThread()
 
-	width, _, _ := procGetSystemMetrics.Call(SM_CXSCREEN)
-	height, _, _ := procGetSystemMetrics.Call(SM_CYSCREEN)
-	if width == 0 || height == 0 {
+	// Localiza a região do monitor desejado (0 = primário).
+	mons, err := GetMonitors()
+	if err != nil || len(mons) == 0 {
 		runtime.UnlockOSThread()
-		return nil, fmt.Errorf("nao foi possivel obter resolucao da tela")
+		// Fallback: desktop virtual inteiro
+		return newGDICapturerRegion(0, 0, 0, 0)
+	}
+
+	if monitorIndex < 0 || monitorIndex >= len(mons) {
+		monitorIndex = 0
+	}
+	m := mons[monitorIndex]
+
+	c, err := newGDICapturerRegion(m.X, m.Y, m.Width, m.Height)
+	if err != nil {
+		runtime.UnlockOSThread()
+		return nil, err
+	}
+	return c, nil
+}
+
+// newGDICapturerRegion cria o capturer GDI capturando a região (offsetX, offsetY, width, height).
+// Se width/height == 0, captura o desktop virtual inteiro.
+func newGDICapturerRegion(offsetX, offsetY, width, height int) (Capturer, error) {
+	if width <= 0 || height <= 0 {
+		w, _, _ := procGetSystemMetrics.Call(SM_CXSCREEN)
+		h, _, _ := procGetSystemMetrics.Call(SM_CYSCREEN)
+		width, height = int(w), int(h)
+		offsetX, offsetY = 0, 0
 	}
 
 	screenDC, _, _ := procGetDC.Call(0)
 	if screenDC == 0 {
-		runtime.UnlockOSThread()
 		return nil, fmt.Errorf("GetDC falhou")
 	}
 
 	memDC, _, _ := procCreateCompatibleDC.Call(screenDC)
 	if memDC == 0 {
 		procReleaseDC.Call(0, screenDC)
-		runtime.UnlockOSThread()
 		return nil, fmt.Errorf("CreateCompatibleDC falhou")
 	}
 
-	memBitmap, _, _ := procCreateCompatibleBitmap.Call(screenDC, width, height)
+	memBitmap, _, _ := procCreateCompatibleBitmap.Call(screenDC, uintptr(width), uintptr(height))
 	if memBitmap == 0 {
 		procDeleteDC.Call(memDC)
 		procReleaseDC.Call(0, screenDC)
-		runtime.UnlockOSThread()
 		return nil, fmt.Errorf("CreateCompatibleBitmap falhou")
 	}
 
@@ -81,13 +111,15 @@ func NewGDICapturer() (Capturer, error) {
 		screenDC:  screenDC,
 		memDC:     memDC,
 		memBitmap: memBitmap,
-		width:     int(width),
-		height:    int(height),
+		width:     width,
+		height:    height,
+		offsetX:   offsetX,
+		offsetY:   offsetY,
 	}, nil
 }
 
 func (c *gdiCapturer) AcquireNextFrame() (*Frame, error) {
-	r, _, _ := procBitBlt.Call(c.memDC, 0, 0, uintptr(c.width), uintptr(c.height), c.screenDC, 0, 0, SRCCOPY)
+	r, _, _ := procBitBlt.Call(c.memDC, 0, 0, uintptr(c.width), uintptr(c.height), c.screenDC, uintptr(c.offsetX), uintptr(c.offsetY), SRCCOPY)
 	if r == 0 {
 		return nil, fmt.Errorf("BitBlt falhou")
 	}

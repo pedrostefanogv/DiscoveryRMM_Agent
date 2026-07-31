@@ -10,24 +10,24 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
-
 	"discovery/internal/terminal"
 )
 
 // ── Constantes de timing do terminal ──
 
 const (
-	termOutputCoalesceMs = 16      // debounce de coalescimento (~60Hz)
-	termMaxMsgPerSec     = 60      // rate limit maximo de mensagens/segundo
-	termRateWindowMs     = 100     // janela deslizante para rate limit
+	termOutputCoalesceMs = 16        // debounce de coalescimento (~60Hz)
+	termMaxMsgPerSec     = 60        // rate limit maximo de mensagens/segundo
+	termRateWindowMs     = 100       // janela deslizante para rate limit
 	termMaxInputSize     = 32 * 1024 // limite de input por mensagem (32KB — suporta paste de textos longos)
 )
 
-// ── TerminalTab ──
+// ── TerminalSession ──
 
-// TerminalTab representa uma aba de terminal individual dentro da sessao.
-type TerminalTab struct {
+// TerminalSession representa o console remoto unico de uma sessao.
+// Ao contrario do design antigo (multi-abas), mantemos UM console por sessao,
+// usando subjects fixos (term.out / term.in), similar ao MeshCentral.
+type TerminalSession struct {
 	ID        string
 	Shell     *terminal.ConPTYShell
 	ShellKind terminal.ShellKind
@@ -120,22 +120,6 @@ func (oc *outputCoalescer) ForceFlush() {
 	}
 }
 
-// ── SessionTerminal ──
-
-// SessionTerminal gerencia uma sessao de terminal com multiplas abas.
-type SessionTerminal struct {
-	sessionID  string
-	natsStream *NatsStreamHandler
-	tabs       map[string]*TerminalTab
-
-	recordingEnabled bool
-	recordingTap     *RecordingTap
-
-	stopCh chan struct{}
-	doneCh chan struct{}
-	mu     sync.RWMutex
-}
-
 // ── RecordingTap ──
 
 // RecordingTap captura output do terminal para gravacao.
@@ -148,14 +132,13 @@ type RecordingTap struct {
 
 // TermRecordingFrame representa um frame de terminal para gravacao.
 type TermRecordingFrame struct {
-	TabID       string `json:"tabId"`
 	Data        string `json:"data"`
 	Seq         int64  `json:"seq"`
 	TimestampMs int64  `json:"timestampMs"`
 }
 
 // Write grava um frame de terminal, thread-safe.
-func (rt *RecordingTap) Write(tabID string, data string, seq int64) {
+func (rt *RecordingTap) Write(data string, seq int64) {
 	rt.mu.Lock()
 	if !rt.enabled {
 		rt.mu.Unlock()
@@ -164,7 +147,6 @@ func (rt *RecordingTap) Write(tabID string, data string, seq int64) {
 	rt.mu.Unlock()
 
 	frame := TermRecordingFrame{
-		TabID:       tabID,
 		Data:        data,
 		Seq:         seq,
 		TimestampMs: time.Now().UnixMilli(),
@@ -180,14 +162,37 @@ func (rt *RecordingTap) SetEnabled(v bool) {
 	rt.enabled = v
 }
 
-// ── NewSessionTerminal ──
+// ── SessionTerminal ──
 
-// NewSessionTerminal cria um novo gerenciador de sessao de terminal.
+// SessionTerminal gerencia uma sessao de terminal com UM console unico.
+type SessionTerminal struct {
+	sessionID  string
+	natsStream *NatsStreamHandler
+	terminal   *TerminalSession
+
+	recordingEnabled bool
+	recordingTap     *RecordingTap
+
+	// onExit é chamado quando o console/shell encerra (para o manager encerrar a sessão).
+	onExit func(reason string)
+
+	stopCh chan struct{}
+	doneCh chan struct{}
+	mu     sync.RWMutex
+}
+
+// SetOnExit define o callback de encerramento do console.
+func (st *SessionTerminal) SetOnExit(cb func(reason string)) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.onExit = cb
+}
+
+// NewSessionTerminal cria um novo gerenciador de sessao de terminal (console unico).
 func NewSessionTerminal(sessionID string, natsStream *NatsStreamHandler, recordingEnabled bool) *SessionTerminal {
 	st := &SessionTerminal{
 		sessionID:  sessionID,
 		natsStream: natsStream,
-		tabs:       make(map[string]*TerminalTab),
 		stopCh:     make(chan struct{}),
 		doneCh:     make(chan struct{}),
 	}
@@ -223,10 +228,17 @@ func (st *SessionTerminal) DisableRecording() {
 	st.recordingEnabled = false
 }
 
-// ── CreateTab ──
+// Start inicia o console unico com output coalescing, rate limiting e subjects fixos
+// (term.out para saida, term.in para entrada), similar ao MeshCentral.
+func (st *SessionTerminal) Start(ctx context.Context, shellKind terminal.ShellKind, cols, rows int) (*TerminalSession, error) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
 
-// CreateTab cria uma nova aba de terminal com output coalescing e rate limiting.
-func (st *SessionTerminal) CreateTab(ctx context.Context, shellKind terminal.ShellKind, cols, rows int) (*TerminalTab, error) {
+	// Se já existe um console ativo, fecha antes de recriar (substituição limpa)
+	if st.terminal != nil {
+		st.closeTerminalLocked()
+	}
+
 	if cols <= 0 {
 		cols = 120
 	}
@@ -234,9 +246,8 @@ func (st *SessionTerminal) CreateTab(ctx context.Context, shellKind terminal.She
 		rows = 40
 	}
 
-	tabID := uuid.New().String()
-	tab := &TerminalTab{
-		ID:        tabID,
+	term := &TerminalSession{
+		ID:        "main",
 		ShellKind: shellKind,
 		Cols:      cols,
 		Rows:      rows,
@@ -259,13 +270,14 @@ func (st *SessionTerminal) CreateTab(ctx context.Context, shellKind terminal.She
 			"seq":  currentSeq,
 		})
 
-		if err := st.natsStream.PublishTermOutTab(st.sessionID, tabID, string(payload)); err != nil {
-			log.Printf("[session-terminal] erro ao publicar term.out.%s: %v", tabID, err)
+		// Subject fixo term.out (console unico)
+		if err := st.natsStream.PublishTermOut(st.sessionID, string(payload)); err != nil {
+			log.Printf("[session-terminal] erro ao publicar term.out: %v", err)
 		}
 
 		// Gravação (thread-safe)
 		if st.recordingTap != nil {
-			st.recordingTap.Write(tabID, encoded, currentSeq)
+			st.recordingTap.Write(encoded, currentSeq)
 		}
 	}, termOutputCoalesceMs*time.Millisecond)
 
@@ -276,13 +288,10 @@ func (st *SessionTerminal) CreateTab(ctx context.Context, shellKind terminal.She
 		return nil, fmt.Errorf("criar shell %s: %w", shellKind, err)
 	}
 
-	tab.Shell = shell
+	term.Shell = shell
+	st.terminal = term
 
-	st.mu.Lock()
-	st.tabs[tabID] = tab
-	st.mu.Unlock()
-
-	// Monitor de exit do shell — notifica viewer
+	// Monitor de exit do shell — notifica viewer e encerra a sessão
 	go func() {
 		err := shell.Wait()
 		exitMsg := "shell encerrado"
@@ -297,20 +306,27 @@ func (st *SessionTerminal) CreateTab(ctx context.Context, shellKind terminal.She
 		exitSeq := seq
 		seqMu.Unlock()
 
-		log.Printf("[session-terminal] shell saiu: tab=%s shell=%s motivo=%s hasOutput=%v",
-			tabID, shellKind, exitMsg, hasOutput)
+		log.Printf("[session-terminal] shell saiu: shell=%s motivo=%s hasOutput=%v",
+			shellKind, exitMsg, hasOutput)
 		if hasOutput {
-			// Garante que a mensagem de exit tem seq consistente
-			st.natsStream.PublishTermOutTab(st.sessionID, tabID,
+			st.natsStream.PublishTermOut(st.sessionID,
 				fmt.Sprintf(`{"data":"","seq":%d,"exit":true,"reason":"%s"}`, exitSeq, exitMsg))
 		} else {
-			st.natsStream.PublishTermOutTab(st.sessionID, tabID,
+			st.natsStream.PublishTermOut(st.sessionID,
 				fmt.Sprintf(`{"data":"","seq":0,"exit":true,"reason":"%s"}`, exitMsg))
+		}
+
+		// Notifica o manager para encerrar a sessão (console morto)
+		st.mu.RLock()
+		cb := st.onExit
+		st.mu.RUnlock()
+		if cb != nil {
+			cb(exitMsg)
 		}
 	}()
 
-	// Subscrever input do viewer para esta tab
-	sub, err := st.natsStream.SubscribeToTermInTab(st.sessionID, tabID, func(data []byte) {
+	// Subscrever input do viewer no subject fixo term.in
+	sub, err := st.natsStream.SubscribeToTermIn(st.sessionID, func(data []byte) {
 		var req struct {
 			Data string `json:"data"`
 			Cols int    `json:"cols"`
@@ -323,8 +339,8 @@ func (st *SessionTerminal) CreateTab(ctx context.Context, shellKind terminal.She
 		// Resize se dimensoes informadas
 		if req.Cols > 0 && req.Rows > 0 {
 			_ = shell.Resize(req.Cols, req.Rows)
-			tab.Cols = req.Cols
-			tab.Rows = req.Rows
+			term.Cols = req.Cols
+			term.Rows = req.Rows
 			return
 		}
 
@@ -339,68 +355,66 @@ func (st *SessionTerminal) CreateTab(ctx context.Context, shellKind terminal.She
 	})
 	if err != nil {
 		_ = shell.Close()
-		st.mu.Lock()
-		delete(st.tabs, tabID)
-		st.mu.Unlock()
-		return nil, fmt.Errorf("subscribe term.in.%s: %w", tabID, err)
+		st.terminal = nil
+		return nil, fmt.Errorf("subscribe term.in: %w", err)
 	}
 
-	// Cleanup da subscription quando a tab for fechada
+	// Cleanup da subscription quando o console for encerrado
 	go func() {
-		<-tab.stopCh
+		<-term.stopCh
 		_ = sub.Unsubscribe()
 	}()
 
-	log.Printf("[session-terminal] tab criada: %s shell=%s cols=%d rows=%d coalesce=%dms",
-		tabID, shellKind, cols, rows, termOutputCoalesceMs)
+	log.Printf("[session-terminal] console criado: shell=%s cols=%d rows=%d coalesce=%dms",
+		shellKind, cols, rows, termOutputCoalesceMs)
 
-	return tab, nil
+	return term, nil
 }
 
-// CloseTab fecha uma aba de terminal especifica.
-func (st *SessionTerminal) CloseTab(tabID string) {
-	st.mu.Lock()
-	tab, ok := st.tabs[tabID]
-	if !ok {
-		st.mu.Unlock()
+// closeTerminalLocked fecha o console atual (assume st.mu travado).
+func (st *SessionTerminal) closeTerminalLocked() {
+	term := st.terminal
+	st.terminal = nil
+	if term == nil {
 		return
 	}
-	delete(st.tabs, tabID)
-	st.mu.Unlock()
 
 	select {
-	case <-tab.stopCh:
+	case <-term.stopCh:
 		// ja fechado
 	default:
-		close(tab.stopCh)
+		close(term.stopCh)
 	}
 
-	if tab.Shell != nil {
-		_ = tab.Shell.Close()
+	if term.Shell != nil {
+		_ = term.Shell.Close()
 	}
 
-	log.Printf("[session-terminal] tab fechada: %s", tabID)
+	log.Printf("[session-terminal] console encerrado: session=%s", st.sessionID)
 }
 
-// TabCount retorna o numero de abas ativas.
-func (st *SessionTerminal) TabCount() int {
+// CloseTerminal fecha o console atual.
+func (st *SessionTerminal) CloseTerminal() {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.closeTerminalLocked()
+}
+
+// HasTerminal indica se há um console ativo.
+func (st *SessionTerminal) HasTerminal() bool {
 	st.mu.RLock()
 	defer st.mu.RUnlock()
-	return len(st.tabs)
+	return st.terminal != nil
 }
 
-// GetTabs retorna um snapshot das abas ativas.
-func (st *SessionTerminal) GetTabs() []TerminalTab {
+// GetTerminal retorna o console ativo (ou nil).
+func (st *SessionTerminal) GetTerminal() *TerminalSession {
 	st.mu.RLock()
 	defer st.mu.RUnlock()
-	tabs := make([]TerminalTab, 0, len(st.tabs))
-	for _, t := range st.tabs {
-		tabs = append(tabs, *t)
-	}
-	return tabs
+	return st.terminal
 }
 
-// Stop fecha todas as abas e libera recursos.
+// Stop encerra o console e libera recursos.
 func (st *SessionTerminal) Stop() {
 	select {
 	case <-st.stopCh:
@@ -410,29 +424,14 @@ func (st *SessionTerminal) Stop() {
 	}
 
 	st.mu.Lock()
-	tabs := make([]*TerminalTab, 0, len(st.tabs))
-	for id, tab := range st.tabs {
-		tabs = append(tabs, tab)
-		delete(st.tabs, id)
-	}
+	st.closeTerminalLocked()
 	st.mu.Unlock()
-
-	for _, tab := range tabs {
-		select {
-		case <-tab.stopCh:
-		default:
-			close(tab.stopCh)
-		}
-		if tab.Shell != nil {
-			_ = tab.Shell.Close()
-		}
-	}
 
 	if st.recordingTap != nil {
 		st.recordingTap.SetEnabled(false)
 	}
 
-	log.Printf("[session-terminal] todas as tabs fechadas: session=%s", st.sessionID)
+	log.Printf("[session-terminal] console encerrado: session=%s", st.sessionID)
 }
 
 // Ensure imports

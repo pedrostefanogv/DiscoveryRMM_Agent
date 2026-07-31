@@ -32,6 +32,8 @@ type SessionScreen struct {
 	dirtyDetector *screen.DirtyDetector
 	useDirtyRect  bool // ativado apos primeiro frame completo
 
+	tileMode bool // quando true, envia apenas os tiles alterados (EncodeDirtyRects)
+
 	frameSeq uint64
 	stopCh   chan struct{}
 	doneCh   chan struct{}
@@ -40,7 +42,6 @@ type SessionScreen struct {
 	lastLogTime     time.Time
 	lastMetricsTime time.Time
 }
-
 // FrameHeader binario para frames (12 bytes).
 //
 //	seq (uint32) | ts (uint32 unix ms) | w (uint16) | h (uint16)
@@ -56,8 +57,14 @@ const (
 )
 
 // NewSessionScreen cria uma nova sessao de screen capture.
+// monitorIndex permite selecionar um monitor (0 = primário); use -1 para o padrão.
 func NewSessionScreen(sessionID string, natsStream *NatsStreamHandler) (*SessionScreen, error) {
-	capturer, err := screen.NewCapturer(0) // monitor primario
+	return NewSessionScreenMonitor(sessionID, natsStream, 0)
+}
+
+// NewSessionScreenMonitor cria uma sessao de screen capture de um monitor específico.
+func NewSessionScreenMonitor(sessionID string, natsStream *NatsStreamHandler, monitorIndex int) (*SessionScreen, error) {
+	capturer, err := screen.NewCapturer(monitorIndex)
 	if err != nil {
 		return nil, fmt.Errorf("screen capture: %w", err)
 	}
@@ -109,6 +116,7 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 		width  int
 		height int
 		seq    uint64
+		rects  []screen.DirtyRect // dirty rects (modo tile); nil = frame completo
 	}
 
 	type frameResult struct {
@@ -130,13 +138,26 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 		for job := range encodeChan {
 			encStart := time.Now()
 			enc := s.getEncoder()
-			encoded, err := enc.Encode(job.frame, s.quality.Current().EffectiveJpegQuality())
-			encMs := float64(time.Since(encStart).Microseconds()) / 1000.0
-			if err != nil {
-				log.Printf("[remote-session-screen] ERRO encode: %v\n", err)
-				continue
+			quality := s.quality.Current().EffectiveJpegQuality()
+			var encoded []byte
+			if job.rects != nil {
+				// Modo tile: codifica apenas os rects alterados (economia de banda)
+				tiles, err := screen.EncodeDirtyRects(job.frame, job.rects, quality)
+				if err != nil {
+					log.Printf("[remote-session-screen] ERRO encode tiles: %v\n", err)
+					continue
+				}
+				encoded = tiles
+			} else {
+				var err error
+				encoded, err = enc.Encode(job.frame, quality)
+				if err != nil {
+					log.Printf("[remote-session-screen] ERRO encode: %v\n", err)
+					continue
+				}
 			}
-			// Monta header binario (12 bytes) + payload JPEG
+			encMs := float64(time.Since(encStart).Microseconds()) / 1000.0
+			// Monta header binario (12 bytes) + payload (JPEG frame ou tiles)
 			buf := make([]byte, frameHeaderLen+len(encoded))
 			binary.BigEndian.PutUint32(buf[0:4], uint32(job.seq))
 			binary.BigEndian.PutUint32(buf[4:8], uint32(time.Now().UnixMilli()))
@@ -346,12 +367,17 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 		s.useDirtyRect = true
 
 		// Envia para encode worker (nao bloqueante com buffer=1)
+		var jobRects []screen.DirtyRect
+		if s.tileMode && len(rects) > 0 {
+			jobRects = rects
+		}
 		select {
 		case encodeChan <- encodeJob{
 			frame:  frame,
 			width:  frame.Width,
 			height: frame.Height,
 			seq:    s.frameSeq,
+			rects:  jobRects,
 		}:
 		case <-ctx.Done():
 			return ctx.Err()
@@ -397,6 +423,12 @@ func (s *SessionScreen) SetCodec(codec string) {
 		s.encoder = encoder
 		s.encoderMu.Unlock()
 	}
+}
+
+// SetTileMode ativa/desativa o modo tile-based (apenas tiles alterados).
+// Requer viewer compatível; desligado por padrão (backward compatible).
+func (s *SessionScreen) SetTileMode(enabled bool) {
+	s.tileMode = enabled
 }
 
 // SetImageQuality define a compressão da imagem (1-100). Sobrescreve o perfil.
