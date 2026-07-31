@@ -12,8 +12,10 @@ type QualityConfig struct {
 	ScaleFactor float64 // 1.0 = nativa, 0.5 = metade
 
 	// Overrides manuais (têm precedência sobre o perfil)
-	overrideImageQ int // 0 = usar perfil
-	overrideMaxFps int // 0 = usar perfil
+	// overrideImageQ: 0 = usar perfil; 1-100 = override
+	// overrideMaxFps: -1 = usar perfil; 0 = sem limite; >0 = FPS maximo
+	overrideImageQ int
+	overrideMaxFps int
 }
 
 // EffectiveJpegQuality retorna a qualidade JPEG efetiva (override ou perfil).
@@ -25,8 +27,9 @@ func (qc QualityConfig) EffectiveJpegQuality() int {
 }
 
 // EffectiveFps retorna o FPS efetivo (override ou perfil).
+// 0 = SEM LIMITE (captura o mais rápido possível, sujeito ao backpressure).
 func (qc QualityConfig) EffectiveFps() int {
-	if qc.overrideMaxFps > 0 {
+	if qc.overrideMaxFps >= 0 {
 		return qc.overrideMaxFps
 	}
 	return qc.Fps
@@ -46,13 +49,20 @@ type QualityManager struct {
 	lossPercent   float64
 }
 
-// Profiles padrao — alinhados com QualityProfileMapping.cs do backend
+// Profiles padrao — alinhados com QualityProfileMapping.cs do backend.
+// ScaleFactor SEMPRE 1.0: a resolução é a nativa do monitor (o viewer
+// redimensiona via CSS para caber na janela). Reduzir a resolução aqui
+// causava tela minúscula no viewer.
+// "fast": FPS 20 (fluido com banda moderada).
+// "unlimited": SEM LIMITE de FPS (captura o mais rápido possível).
 var defaultProfiles = map[string]QualityConfig{
-	"ultra":    {JpegQuality: 92, Fps: 30, ScaleFactor: 1.0},
-	"high":     {JpegQuality: 75, Fps: 15, ScaleFactor: 1.0},
-	"medium":   {JpegQuality: 60, Fps: 10, ScaleFactor: 0.75},
-	"low":      {JpegQuality: 40, Fps: 5, ScaleFactor: 0.50},
-	"ultralow": {JpegQuality: 25, Fps: 2, ScaleFactor: 0.30},
+	"ultra":     {JpegQuality: 92, Fps: 30, ScaleFactor: 1.0},
+	"fast":      {JpegQuality: 80, Fps: 20, ScaleFactor: 1.0},
+	"high":      {JpegQuality: 75, Fps: 15, ScaleFactor: 1.0},
+	"medium":    {JpegQuality: 60, Fps: 12, ScaleFactor: 1.0},
+	"low":       {JpegQuality: 40, Fps: 5, ScaleFactor: 1.0},
+	"ultralow":  {JpegQuality: 25, Fps: 2, ScaleFactor: 1.0},
+	"unlimited": {JpegQuality: 75, Fps: 0, ScaleFactor: 1.0}, // 0 = sem limite
 }
 
 // NewQualityManager cria um gerenciador de qualidade.
@@ -60,6 +70,7 @@ func NewQualityManager(cfg QualityConfig) QualityManager {
 	if cfg.JpegQuality == 0 {
 		cfg = defaultProfiles["high"]
 	}
+	cfg.overrideMaxFps = -1 // -1 = usar perfil (não setado); 0 = sem limite; >0 = max
 	return QualityManager{
 		profile:       "high",
 		current:       cfg,
@@ -111,10 +122,15 @@ func (qm *QualityManager) ClearImageQuality() {
 	qm.current.overrideImageQ = 0
 }
 
-// SetMaxFps define override de FPS (1-60). 0 = usar perfil.
+// SetMaxFps define override de FPS. 0 = sem limite (captura o mais rápido
+// possível); -1 = limpar override (voltar ao perfil).
 func (qm *QualityManager) SetMaxFps(fps int) {
 	qm.mu.Lock()
 	defer qm.mu.Unlock()
+	if fps < 0 {
+		qm.current.overrideMaxFps = -1
+		return
+	}
 	qm.current.overrideMaxFps = fps
 }
 
@@ -122,7 +138,7 @@ func (qm *QualityManager) SetMaxFps(fps int) {
 func (qm *QualityManager) ClearMaxFps() {
 	qm.mu.Lock()
 	defer qm.mu.Unlock()
-	qm.current.overrideMaxFps = 0
+	qm.current.overrideMaxFps = -1
 }
 
 // RecordFrame registra metricas de um frame para adaptacao.

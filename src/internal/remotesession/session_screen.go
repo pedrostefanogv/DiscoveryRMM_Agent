@@ -109,11 +109,9 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 
 	_ = screen.DetectGPU()
 
+	// fps: >0 = máximo; 0 = sem limite. Se ausente, usa o perfil.
 	if fps <= 0 {
-		fps = s.quality.Current().Fps
-	}
-	if fps <= 0 {
-		fps = 15
+		fps = s.quality.Current().EffectiveFps()
 	}
 
 	log.Printf("[remote-session-screen] Start: fps=%d capturer=%s\n", fps, s.capturer.Name())
@@ -237,6 +235,7 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 	var captureMsTotal, dirtyMsTotal, copyMsTotal float64
 	consecutiveIdle := 0
 	curFps := fps
+	loopStart := time.Now()
 
 	for {
 		select {
@@ -322,9 +321,6 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 
 		q := s.quality.Current()
 		curFps = q.EffectiveFps()
-		if curFps <= 0 {
-			curFps = 15
-		}
 
 		// Backpressure: nao captura se encoder estiver ocupado (buffer=1 cheio)
 		if len(encodeChan) >= 1 {
@@ -399,8 +395,25 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 		s.useDirtyRect = true
 
 		// Envia para encode worker (nao bloqueante com buffer=1)
+		// KEY FRAME: o primeiro frame (ou quando o rect cobre a tela toda)
+		// é enviado como frame COMPLETO (não tile) para o viewer ter a base.
+		// Sem isso, o viewer fica com tela preta até a primeira mudança.
 		var jobRects []screen.DirtyRect
-		if s.tileMode && len(rects) > 0 {
+		fullFrame := !s.useDirtyRect // primeiro frame = key frame
+		if s.tileMode && len(rects) > 0 && !fullFrame {
+			// Tile-mode: envia apenas os rects alterados (economia de banda).
+			// Se o rect cobre ~100% da tela, envia como frame completo também
+			// (mais eficiente que N tiles grandes).
+			covered := 0
+			for _, r := range rects {
+				covered += r.Width * r.Height
+			}
+			totalPx := frame.Width * frame.Height
+			if totalPx > 0 && covered >= totalPx*90/100 {
+				fullFrame = true
+			}
+		}
+		if s.tileMode && len(rects) > 0 && !fullFrame {
 			jobRects = rects
 		}
 		select {
@@ -417,9 +430,24 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 			return nil
 		}
 
-		// SEM throttle fixo — o backpressure (len(encodeChan) >= 1) já controla.
-		// O encode roda em paralelo. Se o encoder for lento, o backpressure
-		// naturalmente reduz o FPS. Se for rapido, captura o mais rápido possível.
+		// ── Throttle real por FPS ──
+		// curFps vem de q.EffectiveFps(): >0 = FPS máximo; 0 = sem limite.
+		// Sem throttle, o agent captura o mais rápido possível (bug: enviava
+		// mais frames que o definido). Aqui limitamos a taxa de captura.
+		if curFps > 0 {
+			frameInterval := time.Second / time.Duration(curFps)
+			elapsed := time.Since(loopStart)
+			if elapsed < frameInterval {
+				select {
+				case <-time.After(frameInterval - elapsed):
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-s.stopCh:
+					return nil
+				}
+			}
+		}
+		loopStart = time.Now()
 	}
 }
 

@@ -1,5 +1,5 @@
-//go:build webp
-// +build webp
+//go:build cgo
+// +build cgo
 
 package screen
 

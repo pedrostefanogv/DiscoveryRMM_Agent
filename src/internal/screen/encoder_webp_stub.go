@@ -1,11 +1,11 @@
-//go:build !webp
-// +build !webp
+//go:build !cgo
+// +build !cgo
 
 package screen
 
 import "errors"
 
-var errWebPNotAvailable = errors.New("WebP encoder not available (build tag webp not set)")
+var errWebPNotAvailable = errors.New("WebP encoder not available (cgo disabled)")
 
 func NewWebPEncoder() Encoder {
 	return nil

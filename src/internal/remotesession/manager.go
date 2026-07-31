@@ -215,6 +215,10 @@ func (m *Manager) handleQuality(_ context.Context, payload map[string]any) (bool
 	codec := toString(payload["codec"])
 	imageQuality := payload["imageQuality"]   // pode ser nil ou float64
 	maxFpsVal := payload["maxFps"]            // pode ser nil ou float64
+	autoMode := false
+	if a, ok := payload["auto"].(bool); ok {
+		autoMode = a
+	}
 	if sessionID == "" || quality == "" {
 		return false, "payload sem sessionId ou quality"
 	}
@@ -237,23 +241,40 @@ func (m *Manager) handleQuality(_ context.Context, payload map[string]any) (bool
 		if codec != "" {
 			screen.SetCodec(codec)
 		}
-		// Só aplica override se o valor veio explicitamente no payload
-		if iq, ok := toFloat64(imageQuality); ok {
-			s.ImageQuality = int(iq)
-			screen.SetImageQuality(int(iq))
-		} else {
-			s.ImageQuality = 0 // reset — volta ao perfil
+		// Em modo Auto: limpa TODOS os overrides (volta ao perfil) e,
+		// se o codec for webp, o backend já envia a qualidade do perfil webp.
+		// Em Manual: aplica overrides explícitos.
+		if autoMode {
+			s.ImageQuality = 0
 			screen.ClearImageQuality()
-		}
-		if mf, ok := toFloat64(maxFpsVal); ok {
-			s.MaxFps = int(mf)
-			screen.SetMaxFps(int(mf))
-		} else {
-			s.MaxFps = 0 // reset — volta ao perfil
+			s.MaxFps = 0
 			screen.ClearMaxFps()
+			// Aplica a qualidade do perfil do codec efetivo
+			if iq, ok := toFloat64(imageQuality); ok {
+				screen.SetImageQuality(int(iq))
+			}
+			if mf, ok := toFloat64(maxFpsVal); ok {
+				screen.SetMaxFps(int(mf))
+			}
+		} else {
+			// Só aplica override se o valor veio explicitamente no payload
+			if iq, ok := toFloat64(imageQuality); ok {
+				s.ImageQuality = int(iq)
+				screen.SetImageQuality(int(iq))
+			} else {
+				s.ImageQuality = 0 // reset — volta ao perfil
+				screen.ClearImageQuality()
+			}
+			if mf, ok := toFloat64(maxFpsVal); ok {
+				s.MaxFps = int(mf)
+				screen.SetMaxFps(int(mf))
+			} else {
+				s.MaxFps = 0 // reset — volta ao perfil
+				screen.ClearMaxFps()
+			}
 		}
-		log.Printf("[remote-session] qualidade alterada: sessionId=%s quality=%s codec=%s imageQ=%d maxFps=%d\n",
-			sessionID, quality, codec, s.ImageQuality, s.MaxFps)
+		log.Printf("[remote-session] qualidade alterada: sessionId=%s quality=%s codec=%s imageQ=%d maxFps=%d auto=%v\n",
+			sessionID, quality, codec, s.ImageQuality, s.MaxFps, autoMode)
 	} else {
 		log.Printf("[remote-session] qualidade alterada no registro, mas sessao screen nao encontrada: sessionId=%s\n",
 			sessionID)
@@ -409,8 +430,13 @@ func (m *Manager) runScreenSession(ctx context.Context, session *Session) {
 	if session.ImageQuality > 0 {
 		screenSession.SetImageQuality(session.ImageQuality)
 	}
+	// FPS: >0 = máximo; 0 = sem limite (perfil "unlimited").
+	// O backend sempre envia maxFps (defaultFps do perfil), então o valor
+	// presente no payload é o desejado. Se ausente (0 default), usa o perfil.
 	if session.MaxFps > 0 {
 		screenSession.SetMaxFps(session.MaxFps)
+	} else if session.Quality == "unlimited" {
+		screenSession.SetMaxFps(0) // sem limite
 	}
 	// Modo tile-based (otimização de banda) — ATIVADO POR PADRÃO.
 	// Pode ser desligado explicitamente via payload Meta["tileMode"]:false.
@@ -452,10 +478,8 @@ func (m *Manager) runScreenSession(ctx context.Context, session *Session) {
 		}
 	}()
 
-	fps := screenSession.quality.Current().Fps
-	if fps <= 0 {
-		fps = 15
-	}
+	fps := screenSession.quality.Current().EffectiveFps()
+	// 0 = sem limite (o loop de captura respeita: curFps 0 = sem throttle)
 	log.Printf("[remote-session-screen] iniciando loop de captura (fps=%d) para sessao %s\n", fps, session.ID)
 	if err := screenSession.Start(ctx, fps); err != nil {
 		log.Printf("[remote-session-screen] loop de captura encerrado com erro: %v\n", err)

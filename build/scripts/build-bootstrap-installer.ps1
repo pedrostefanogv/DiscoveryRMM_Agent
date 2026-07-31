@@ -155,7 +155,7 @@ try {
         Write-Warning "  git rev-parse falhou; buildinfo.Commit ficara 'unknown'"
     }
 
-    $wailsBuildArgs = @("build", "-o", $agentExe)
+    $wailsBuildArgs = @("build", "-tags", "desktop,production", "-o", $agentExe)
     if ($ldflags.Count -gt 0) {
         $wailsBuildArgs += "-ldflags"
         $wailsBuildArgs += ($ldflags -join ' ')

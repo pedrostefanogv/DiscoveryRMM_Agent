@@ -29,17 +29,29 @@ import (
 // ── COM VTable dispatch ──
 // Em COM x64, "this" (interface pointer) DEVE ser o primeiro argumento.
 // syscall.SyscallN(fn, this, arg1, arg2, arg3, ...) → fn(this, arg1, ...)
+//
+// Segurança de ponteiro: interfaces COM são memória nativa (não-GC), então
+// converter o ponteiro da interface para unsafe.Pointer é seguro. O analyzer
+// unsafeptr reclama da conversão uintptr→Pointer; para manter o padrão limpo,
+// recebemos o ponteiro como unsafe.Pointer (não uintptr) e o mantemos vivo
+// durante a chamada via runtime.KeepAlive.
 
-func comCall(ptr uintptr, slot int, args ...uintptr) (r1, r2 uintptr, err syscall.Errno) {
-	vtable := *(*uintptr)(unsafe.Pointer(ptr))
-	fn := *(*uintptr)(unsafe.Pointer(vtable + uintptr(slot)*unsafe.Sizeof(uintptr(0))))
+func comCall(ptr unsafe.Pointer, slot int, args ...uintptr) (r1, r2 uintptr, err syscall.Errno) {
+	// A interface COM é um ponteiro para o ponteiro da vtable (memória nativa,
+	// não-GC). Lê o ponteiro da vtable e depois o endereço do slot via unsafe.Add
+	// (sem conversão uintptr→Pointer, que o analyzer unsafeptr rejeita).
+	vtable := *(*unsafe.Pointer)(ptr)
+	fn := *(*uintptr)(unsafe.Add(vtable, uintptr(slot)*unsafe.Sizeof(uintptr(0))))
 	all := make([]uintptr, 0, 1+len(args))
-	all = append(all, ptr) // this
+	all = append(all, uintptr(ptr)) // this (conversão no último momento)
 	all = append(all, args...)
-	return syscall.SyscallN(fn, all...)
+	r1, r2, err = syscall.SyscallN(fn, all...)
+	// Mantém ptr vivo até depois da chamada (evita GC durante syscall)
+	runtime.KeepAlive(ptr)
+	return
 }
 
-func comRelease(ptr uintptr) { comCall(ptr, 2) }
+func comRelease(ptr unsafe.Pointer) { comCall(ptr, 2) }
 
 // ── GUIDs ──
 
@@ -116,7 +128,7 @@ type d3d11Texture2DDesc struct {
 }
 
 type d3d11MappedSubresource struct {
-	Data       uintptr
+	Data       unsafe.Pointer // ponteiro para memória GPU mapeada (não-GC)
 	RowPitch   uint32
 	DepthPitch uint32
 }
@@ -142,13 +154,13 @@ const (
 // ── Capturer ──
 
 type dxgiCapturer struct {
-	factory, adapter, output, output1 uintptr
-	duplication, d3dDevice, d3dContext uintptr
+	factory, adapter, output, output1 unsafe.Pointer
+	duplication, d3dDevice, d3dContext unsafe.Pointer
 
 	width, height int
 
-	lastResource  uintptr
-	stagingTex    uintptr
+	lastResource unsafe.Pointer
+	stagingTex   unsafe.Pointer
 	stagingMapped bool
 
 	mu     sync.Mutex
@@ -171,7 +183,7 @@ func NewDXGICapturer(monitorIndex int) (Capturer, error) {
 
 	// 2. EnumAdapters1(0, &adapter)
 	hr, _, _ = comCall(c.factory, slotFactoryEnumAdapters1, 0, uintptr(unsafe.Pointer(&c.adapter)))
-	if hr != 0 || c.adapter == 0 {
+	if hr != 0 || c.adapter == nil {
 		comRelease(c.factory)
 		runtime.UnlockOSThread()
 		return nil, fmt.Errorf("EnumAdapters1(0): HRESULT 0x%X", uint64(hr))
@@ -179,7 +191,7 @@ func NewDXGICapturer(monitorIndex int) (Capturer, error) {
 
 	// 3. EnumOutputs(monitorIndex, &output)
 	hr, _, _ = comCall(c.adapter, slotAdapterEnumOutputs, uintptr(monitorIndex), uintptr(unsafe.Pointer(&c.output)))
-	if hr != 0 || c.output == 0 {
+	if hr != 0 || c.output == nil {
 		comRelease(c.adapter)
 		comRelease(c.factory)
 		runtime.UnlockOSThread()
@@ -188,7 +200,7 @@ func NewDXGICapturer(monitorIndex int) (Capturer, error) {
 
 	// 4. QueryInterface IDXGIOutput1
 	hr, _, _ = comCall(c.output, slotQueryInterface, uintptr(unsafe.Pointer(&IID_IDXGIOutput1)), uintptr(unsafe.Pointer(&c.output1)))
-	if hr != 0 || c.output1 == 0 {
+	if hr != 0 || c.output1 == nil {
 		comRelease(c.output)
 		comRelease(c.adapter)
 		comRelease(c.factory)
@@ -205,7 +217,7 @@ func NewDXGICapturer(monitorIndex int) (Capturer, error) {
 	if c.height <= 0 { c.height = 1080 }
 
 	// 6. D3D11CreateDevice
-	var d3dDevice, d3dContext uintptr
+	var d3dDevice, d3dContext unsafe.Pointer
 	var fl uint32
 	hr, _, _ = procD3D11CreateDevice.Call(
 		uintptr(0), uintptr(D3D_DRIVER_TYPE_HARDWARE),
@@ -225,7 +237,7 @@ func NewDXGICapturer(monitorIndex int) (Capturer, error) {
 			uintptr(unsafe.Pointer(&d3dContext)),
 		)
 	}
-	if hr != 0 || d3dDevice == 0 || d3dContext == 0 {
+	if hr != 0 || d3dDevice == nil || d3dContext == nil {
 		comRelease(c.output1); comRelease(c.output); comRelease(c.adapter); comRelease(c.factory)
 		runtime.UnlockOSThread()
 		return nil, fmt.Errorf("D3D11CreateDevice: HRESULT 0x%X", uint64(hr))
@@ -243,7 +255,7 @@ func NewDXGICapturer(monitorIndex int) (Capturer, error) {
 		BindFlags: 0, CPUAccessFlags: D3D11_CPU_ACCESS_READ, MiscFlags: 0,
 	}
 	hr, _, _ = comCall(c.d3dDevice, slotDevCreateTexture2D, uintptr(unsafe.Pointer(&sd)), 0, uintptr(unsafe.Pointer(&c.stagingTex)))
-	if hr != 0 || c.stagingTex == 0 {
+	if hr != 0 || c.stagingTex == nil {
 		comRelease(c.d3dContext); comRelease(c.d3dDevice)
 		comRelease(c.output1); comRelease(c.output); comRelease(c.adapter); comRelease(c.factory)
 		runtime.UnlockOSThread()
@@ -252,7 +264,7 @@ func NewDXGICapturer(monitorIndex int) (Capturer, error) {
 
 	// 8. DuplicateOutput
 	hr, _, _ = comCall(c.output1, slotOutput1DuplicateOutput, uintptr(c.d3dDevice), uintptr(unsafe.Pointer(&c.duplication)))
-	if hr != 0 || c.duplication == 0 {
+	if hr != 0 || c.duplication == nil {
 		comRelease(c.stagingTex); comRelease(c.d3dContext); comRelease(c.d3dDevice)
 		comRelease(c.output1); comRelease(c.output); comRelease(c.adapter); comRelease(c.factory)
 		runtime.UnlockOSThread()
@@ -271,7 +283,7 @@ func (c *dxgiCapturer) AcquireNextFrame() (*Frame, error) {
 	}
 
 	var fi dxgiOutduplFrameInfo
-	var res uintptr
+	var res unsafe.Pointer
 
 	hr, _, _ := comCall(c.duplication, slotDupAcquireNextFrame,
 		uintptr(200),
@@ -288,19 +300,19 @@ func (c *dxgiCapturer) AcquireNextFrame() (*Frame, error) {
 	if hr != 0 {
 		return nil, fmt.Errorf("AcquireNextFrame: HRESULT 0x%X", uint64(hr))
 	}
-	if res == 0 {
+	if res == nil {
 		return nil, fmt.Errorf("desktopResource nulo")
 	}
 
 	c.lastResource = res
 
 	// CopyResource: GPU → staging
-	comCall(c.d3dContext, slotCtxCopyResource, c.stagingTex, res)
+	comCall(c.d3dContext, slotCtxCopyResource, uintptr(c.stagingTex), uintptr(res))
 
 	// Map: staging → CPU
 	var mapped d3d11MappedSubresource
 	hr, _, _ = comCall(c.d3dContext, slotCtxMap,
-		c.stagingTex,
+		uintptr(c.stagingTex),
 		uintptr(0),
 		uintptr(D3D11_MAP_READ),
 		uintptr(D3D11_MAP_FLAG_DO_NOT_WAIT),
@@ -314,20 +326,23 @@ func (c *dxgiCapturer) AcquireNextFrame() (*Frame, error) {
 
 	bufSize := c.width * c.height * 4
 	frameData := make([]byte, bufSize)
-	if mapped.Data != 0 && mapped.RowPitch > 0 {
+	if mapped.Data != nil && mapped.RowPitch > 0 {
+		// mapped.Data aponta para memória GPU staging (não-GC) — o campo já é
+		// unsafe.Pointer, então unsafe.Slice/unsafe.Add operam sem conversão uintptr.
 		if int(mapped.RowPitch) == c.width*4 {
-			copy(frameData, unsafe.Slice((*byte)(unsafe.Pointer(mapped.Data)), bufSize))
+			copy(frameData, unsafe.Slice((*byte)(mapped.Data), bufSize))
 		} else {
 			for y := 0; y < c.height; y++ {
 				srcOff := y * int(mapped.RowPitch)
 				dstOff := y * c.width * 4
-				copy(frameData[dstOff:], unsafe.Slice((*byte)(unsafe.Pointer(mapped.Data+uintptr(srcOff))), c.width*4))
+				row := unsafe.Add(mapped.Data, uintptr(srcOff))
+				copy(frameData[dstOff:], unsafe.Slice((*byte)(row), c.width*4))
 			}
 		}
 	}
 
 	// Unmap
-	comCall(c.d3dContext, slotCtxUnmap, c.stagingTex, uintptr(0))
+	comCall(c.d3dContext, slotCtxUnmap, uintptr(c.stagingTex), uintptr(0))
 	c.stagingMapped = false
 
 	return &Frame{Data: frameData, Width: c.width, Height: c.height, Stride: c.width * 4}, nil
@@ -341,13 +356,13 @@ func (c *dxgiCapturer) ReleaseFrame() {
 
 func (c *dxgiCapturer) releaseLocked() {
 	if c.stagingMapped {
-		comCall(c.d3dContext, slotCtxUnmap, c.stagingTex, uintptr(0))
+		comCall(c.d3dContext, slotCtxUnmap, uintptr(c.stagingTex), uintptr(0))
 		c.stagingMapped = false
 	}
-	if c.lastResource != 0 {
+	if c.lastResource != nil {
 		comCall(c.duplication, slotDupReleaseFrame) // 0 params
 		comRelease(c.lastResource)
-		c.lastResource = 0
+		c.lastResource = nil
 	}
 }
 
@@ -357,8 +372,8 @@ func (c *dxgiCapturer) Close() error {
 	if c.closed { return nil }
 	c.closed = true
 	c.releaseLocked()
-	for _, p := range []uintptr{c.duplication, c.stagingTex, c.d3dContext, c.d3dDevice, c.output1, c.output, c.adapter, c.factory} {
-		if p != 0 { comRelease(p) }
+	for _, p := range []unsafe.Pointer{c.duplication, c.stagingTex, c.d3dContext, c.d3dDevice, c.output1, c.output, c.adapter, c.factory} {
+		if p != nil { comRelease(p) }
 	}
 	runtime.UnlockOSThread()
 	return nil
