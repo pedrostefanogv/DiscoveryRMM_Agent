@@ -570,8 +570,26 @@ func (m *Manager) runFilesSession(ctx context.Context, session *Session) {
 		return
 	}
 
-	sf := NewSessionFiles(session.ID, m.natsStream, "C:\\")
-	log.Printf("[remote-session-files] sessão de arquivos iniciada para %s", session.ID)
+	// Raiz padrão: C:\ (Windows). Pode ser sobrescrita via payload Meta["rootPath"].
+	rootPath := "C:\\"
+	if rp, ok := sessionMetaString(session, "rootPath"); ok && rp != "" {
+		rootPath = rp
+	}
+
+	sf := NewSessionFiles(session.ID, m.natsStream, rootPath)
+	log.Printf("[remote-session-files] sessão de arquivos iniciada para %s (root=%s)", session.ID, rootPath)
+
+	// Context que encerra quando stopCh fecha (sessão encerrada/expirou)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	go func() {
+		select {
+		case <-session.stopCh:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
 
 	if err := sf.Start(ctx); err != nil {
 		log.Printf("[remote-session-files] sessão encerrada: %v", err)

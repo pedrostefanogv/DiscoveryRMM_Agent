@@ -38,11 +38,17 @@ func (e *jpegEncoder) Encode(frame *Frame, quality int) ([]byte, error) {
 	w := frame.Width
 	h := frame.Height
 
-	// Conversao BGRA→RGBA in-place (swap B↔R) usando uint32 cast.
-	// ~4x mais rapido que byte-by-byte: 1 operacao por pixel em vez de 3.
+	// Conversao BGRA→RGBA em buffer LOCAL (NUNCA muta frame.Data).
+	// Motivo: frame.Data pode ser reutilizado (DirtyDetector.lastFrame, tile-mode
+	// extractTile). Mutar in-place corrompia a detecção de dirty rects e trocava
+	// as cores nos tiles seguintes.
+	rgba := make([]byte, len(bgra))
+	copy(rgba, bgra)
+
+	// Swap B↔R usando uint32 cast (~4x mais rapido que byte-by-byte).
 	// Requer que stride seja multiplo de 4 (sempre verdade para BGRA).
 	if stride%4 == 0 {
-		pixels := unsafe.Slice((*uint32)(unsafe.Pointer(&bgra[0])), len(bgra)/4)
+		pixels := unsafe.Slice((*uint32)(unsafe.Pointer(&rgba[0])), len(rgba)/4)
 		for i := range pixels {
 			// BGRA: 0xAARRGGBB → RGBA: 0xAABBGGRR
 			// Swap bytes 0 (B) e 2 (R) mantendo A e G
@@ -57,13 +63,13 @@ func (e *jpegEncoder) Encode(frame *Frame, quality int) ([]byte, error) {
 			rowStart := y * stride
 			for x := 0; x < w; x++ {
 				offset := rowStart + x*4
-				bgra[offset], bgra[offset+2] = bgra[offset+2], bgra[offset]
+				rgba[offset], rgba[offset+2] = rgba[offset+2], rgba[offset]
 			}
 		}
 	}
 
 	img := &image.RGBA{
-		Pix:    frame.Data,
+		Pix:    rgba,
 		Stride: stride,
 		Rect:   image.Rect(0, 0, w, h),
 	}

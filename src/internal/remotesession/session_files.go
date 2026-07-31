@@ -5,33 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"sync"
 	"time"
 
 	"discovery/internal/fileserver"
 )
-
-// FileSessionRequest representa uma requisição de arquivo versionada (v1).
-type FileSessionRequest struct {
-	Version   int    `json:"version"`
-	RequestID string `json:"requestId"`
-	Action    string `json:"action"` // list|get|put|delete|mkdir
-	Path      string `json:"path"`
-	Data      []byte `json:"data,omitempty"`
-	Chunk     int    `json:"chunk,omitempty"`
-	TotalChunks int  `json:"totalChunks,omitempty"`
-}
-
-// FileSessionResponse representa uma resposta versionada (v1).
-type FileSessionResponse struct {
-	Version     int                    `json:"version"`
-	RequestID   string                 `json:"requestId"`
-	Success     bool                   `json:"success"`
-	Error       string                 `json:"error,omitempty"`
-	Entries     []fileserver.FileInfo  `json:"entries,omitempty"`
-	Data        []byte                 `json:"data,omitempty"`
-	Size        int64                  `json:"size,omitempty"`
-}
 
 // SessionFiles gerencia uma sessão de transferência de arquivos remota.
 type SessionFiles struct {
@@ -41,7 +18,6 @@ type SessionFiles struct {
 
 	stopCh chan struct{}
 	doneCh chan struct{}
-	mu     sync.Mutex
 }
 
 // NewSessionFiles cria um gerenciador de sessão de arquivos.
@@ -91,7 +67,7 @@ func (sf *SessionFiles) Stop() {
 }
 
 func (sf *SessionFiles) handleRequest(reqData []byte) []byte {
-	var req FileSessionRequest
+	var req fileserver.FileSessionRequest
 	if err := json.Unmarshal(reqData, &req); err != nil {
 		return sf.errorResponse("", "payload json inválido: "+err.Error())
 	}
@@ -106,11 +82,22 @@ func (sf *SessionFiles) handleRequest(reqData []byte) []byte {
 
 	log.Printf("[session-files] req=%s path=%s elapsed=%v", req.Action, req.Path, elapsed)
 
+	// Propaga o requestId na resposta para o viewer correlacionar.
+	// O server.HandleRequest retorna FileSessionResponse v1 sem requestId
+	// (ele não conhece a requisição) — preenche aqui.
+	var resp fileserver.FileSessionResponse
+	if err := json.Unmarshal(result, &resp); err == nil && resp.RequestID == "" {
+		resp.RequestID = req.RequestID
+		if data, err := json.Marshal(resp); err == nil {
+			return data
+		}
+	}
+
 	return result
 }
 
 func (sf *SessionFiles) errorResponse(requestID, msg string) []byte {
-	resp := FileSessionResponse{
+	resp := fileserver.FileSessionResponse{
 		Version:   1,
 		RequestID: requestID,
 		Success:   false,
