@@ -50,10 +50,9 @@ const frameHeaderLen = 12
 
 // Constantes de timing
 const (
-	idleDelay          = 50 * time.Millisecond // delay quando tela esta parada
-	afterFailureDelay  = 100 * time.Millisecond // delay apos erro de captura
-	dirtyRectCheckFreq = 60                     // frames entre verificacao completa (a cada ~2-3s em 30fps)
-	deepIdleThreshold  = 15                     // frames idle consecutivos antes de deep idle (~3s com DXGI timeout 200ms)
+	idleDelay         = 50 * time.Millisecond  // delay quando tela esta parada
+	afterFailureDelay = 100 * time.Millisecond // delay apos erro de captura
+	deepIdleThreshold = 15                     // frames idle consecutivos antes de deep idle (~3s com DXGI timeout 200ms)
 )
 
 // NewSessionScreen cria uma nova sessao de screen capture.
