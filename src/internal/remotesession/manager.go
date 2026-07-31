@@ -209,7 +209,7 @@ func (m *Manager) handleStop(_ context.Context, payload map[string]any) (bool, s
 	return m.closeSessionLocked(sessionID, "stopped-by-server"), ""
 }
 
-func (m *Manager) handleQuality(ctx context.Context, payload map[string]any) (bool, string) {
+func (m *Manager) handleQuality(_ context.Context, payload map[string]any) (bool, string) {
 	sessionID := toString(payload["sessionId"])
 	quality := toString(payload["quality"])
 	codec := toString(payload["codec"])
