@@ -21,12 +21,18 @@ type Frame struct {
 }
 
 // NewCapturer cria o capturador apropriado para o sistema.
-// Tenta DXGI Desktop Duplication primeiro (zero-copy GPU, ~1ms);
-// fallback para GDI BitBlt se DXGI indisponivel (VM sem GPU, RDP).
+// Prioridade: go-d3d (HW dirty rects + cursor) → DXGI manual → GDI fallback.
 func NewCapturer(monitorIndex int) (Capturer, error) {
-	c, err := NewDXGICapturer(monitorIndex)
-	if err != nil {
-		return NewGDICapturer()
+	// Tenta go-d3d primeiro (HW dirty rects, cursor overlay, release otimizado)
+	c, err := NewDXGIGoD3dCapturer(monitorIndex)
+	if err == nil {
+		return c, nil
 	}
-	return c, nil
+	// Fallback: DXGI manual (VTable syscall)
+	c, err = NewDXGICapturer(monitorIndex)
+	if err == nil {
+		return c, nil
+	}
+	// Fallback final: GDI BitBlt (VM sem GPU, RDP)
+	return NewGDICapturer()
 }

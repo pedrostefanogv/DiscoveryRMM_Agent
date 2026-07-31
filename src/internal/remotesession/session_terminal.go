@@ -291,14 +291,22 @@ func (st *SessionTerminal) CreateTab(ctx context.Context, shellKind terminal.She
 		}
 		coalescer.ForceFlush() // flush final
 
-		// Captura o seq final de forma segura
+		// Só notifica exit se há dados pendentes ou seq > 0 (shell produziu output)
 		seqMu.Lock()
+		hasOutput := seq > 0
 		exitSeq := seq
 		seqMu.Unlock()
 
-		log.Printf("[session-terminal] shell saiu: tab=%s shell=%s motivo=%s", tabID, shellKind, exitMsg)
-		st.natsStream.PublishTermOutTab(st.sessionID, tabID,
-			fmt.Sprintf(`{"data":"","seq":%d,"exit":true,"reason":"%s"}`, exitSeq, exitMsg))
+		log.Printf("[session-terminal] shell saiu: tab=%s shell=%s motivo=%s hasOutput=%v",
+			tabID, shellKind, exitMsg, hasOutput)
+		if hasOutput {
+			// Garante que a mensagem de exit tem seq consistente
+			st.natsStream.PublishTermOutTab(st.sessionID, tabID,
+				fmt.Sprintf(`{"data":"","seq":%d,"exit":true,"reason":"%s"}`, exitSeq, exitMsg))
+		} else {
+			st.natsStream.PublishTermOutTab(st.sessionID, tabID,
+				fmt.Sprintf(`{"data":"","seq":0,"exit":true,"reason":"%s"}`, exitMsg))
+		}
 	}()
 
 	// Subscrever input do viewer para esta tab

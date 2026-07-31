@@ -102,8 +102,7 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 		fps = 15
 	}
 
-	log.Printf("[remote-session-screen] Start: fps=%d capturer=%s dirtyRects=true asyncEncode=true\n",
-		fps, s.capturer.Name())
+	log.Printf("[remote-session-screen] Start: fps=%d capturer=%s\n", fps, s.capturer.Name())
 
 	// ── Encode worker: goroutine dedicada para JPEG (overlap com captura) ──
 	type encodeJob struct {
