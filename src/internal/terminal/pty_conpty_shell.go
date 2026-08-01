@@ -156,7 +156,10 @@ type procInfo struct {
 func createProcessConPTY(cmdLine *uint16, hpc HPCON, pi *procInfo) error {
 	si := startupInfoExPool.Get().(*startupInfoEx)
 	defer startupInfoExPool.Put(si)
-	si.cb = sizeOfStartupInfo
+	// cb deve ser o tamanho de STARTUPINFOEXW (STARTUPINFOW + lpAttributeList),
+	// ou seja 112 bytes em 64-bit. Usar 104 (só STARTUPINFOW) faz o
+	// CreateProcessW falhar com ERROR_INVALID_PARAMETER.
+	si.cb = sizeOfStartupInfoEx
 	si.lpAttributeList = nil
 
 	buf := make([]byte, 2*sizeOfAttributeEntry+sizeOfPtr)
@@ -186,7 +189,10 @@ func createProcessConPTY(cmdLine *uint16, hpc HPCON, pi *procInfo) error {
 }
 
 const (
+	// STARTUPINFOW tem 104 bytes (64-bit). STARTUPINFOEXW adiciona o campo
+	// lpAttributeList (8 bytes), totalizando 112 bytes.
 	sizeOfStartupInfo    = 104
+	sizeOfStartupInfoEx  = 112
 	sizeOfAttributeEntry = 24
 	sizeOfPtr            = 8
 
