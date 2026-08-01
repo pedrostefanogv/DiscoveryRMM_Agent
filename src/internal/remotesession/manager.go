@@ -11,6 +11,7 @@ import (
 	"github.com/nats-io/nats.go"
 
 	"discovery/internal/safego"
+	"discovery/internal/screen"
 	"discovery/internal/terminal"
 )
 
@@ -412,6 +413,12 @@ func (m *Manager) runScreenSession(ctx context.Context, session *Session) {
 	defer screenSession.Stop()
 
 	log.Printf("[remote-session-screen] SessionScreen criado com sucesso para sessao %s\n", session.ID)
+
+	// Publica a lista de monitores do agent para o viewer (seletor dinâmico).
+	if mons, err := screen.GetMonitors(); err == nil && len(mons) > 0 {
+		_ = m.natsStream.PublishMonitors(session.ID, mons)
+		log.Printf("[remote-session-screen] %d monitor(es) publicado(s) para sessao %s\n", len(mons), session.ID)
+	}
 
 	// Registra referencia para permitir handleQuality propagar mudancas
 	m.mu.Lock()

@@ -185,6 +185,14 @@ func (h *NatsStreamHandler) PublishCursorImage(sessionID string, img *screen.Cur
 	return h.nc.Publish(subject, buf)
 }
 
+// PublishMonitors envia a lista de monitores do agent para o viewer.
+// Formato JSON: [{index, x, y, width, height, name, isPrimary}].
+func (h *NatsStreamHandler) PublishMonitors(sessionID string, monitors []screen.Monitor) error {
+	payload, _ := json.Marshal(monitors)
+	subject := h.publishSubject(sessionID, "monitors")
+	return h.nc.Publish(subject, payload)
+}
+
 // PublishEvent envia um evento de sessao.
 func (h *NatsStreamHandler) PublishEvent(sessionID string, eventType string, data any) error {
 	payload, _ := json.Marshal(map[string]any{
