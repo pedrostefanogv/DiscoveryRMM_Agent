@@ -69,7 +69,7 @@ func InjectMouseMove(x, y int32) error {
 	mi := mouseInput{
 		dx:      x,
 		dy:      y,
-		dwFlags: MOUSEEVENTF_MOVE | 0x8000 | 0x4000, // MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK
+		dwFlags: MOUSEEVENTF_MOVE | 0x8000, // MOUSEEVENTF_ABSOLUTE
 	}
 	var inputs [1]winInput
 	inputs[0].inputType = INPUT_MOUSE

@@ -221,7 +221,11 @@ func (c *InputController) handleLegacyInput(data []byte) {
 	switch typ {
 	case "mousedown":
 		x, _ := toFloat64(raw["x"]); y, _ := toFloat64(raw["y"]); btn, _ := toFloat64(raw["button"])
-		c.handleMouseMoveNormalized(int(x), int(y))
+		// Move o mouse para a posição do clique ANTES de pressionar o botão.
+		// O viewer envia x/y (coordenadas do frame) no mousedown.
+		if _, hasX := raw["x"]; hasX {
+			c.handleMouseMoveNormalized(int(x), int(y))
+		}
 		if int(btn) == 2 {
 			_ = screen.InjectMouseClickRight(true)
 		} else {
