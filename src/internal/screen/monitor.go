@@ -10,12 +10,13 @@ import (
 
 // Monitor representa um monitor conectado.
 type Monitor struct {
-	Index     int    // índice na ordem de enumeração (usado como monitorIndex do capturer)
-	X, Y      int    // posição no desktop virtual
-	Width     int    // largura
-	Height    int    // altura
-	Name      string // device name (ex: \\.\DISPLAY1)
-	IsPrimary bool
+	Index     int    `json:"index"`     // índice na ordem de enumeração (usado como monitorIndex do capturer)
+	X         int    `json:"x"`         // posição no desktop virtual
+	Y         int    `json:"y"`         // posição no desktop virtual
+	Width     int    `json:"width"`     // largura
+	Height    int    `json:"height"`    // altura
+	Name      string `json:"name"`      // device name (ex: \\.\DISPLAY1)
+	IsPrimary bool   `json:"isPrimary"` // se é o monitor primário
 }
 
 // Retangulo (reutiliza `rect` de capturer_dxgi.go) — usado por GetMonitorInfoW.
