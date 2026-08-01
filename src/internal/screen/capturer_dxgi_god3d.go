@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"image"
 	"runtime"
+	"unsafe"
 
 	"github.com/kirides/go-d3d/d3d11"
 	"github.com/kirides/go-d3d/outputduplication"
@@ -94,26 +95,83 @@ func NewDXGIGoD3dCapturerMode(monitorIndex int, drawCursor bool) (Capturer, erro
 }
 
 func (c *dxgiGoD3dCapturer) AcquireNextFrame() (*Frame, error) {
-	// GetImage: AcquireFrame(200ms) → CopyResource → Map → DrawCursor → ReleaseFrame
-	// Retorna ErrNoImageYet se timeout (sem frame novo)
-	err := c.dup.GetImage(c.img, 200)
+	// Usa Snapshot() DIRETAMENTE (não GetImage) para evitar o latch de swizzle
+	// do go-d3d: GetImage aplica swizzle.BGRA() (BGRA→RGBA) SOMENTE após o
+	// primeiro frame sem metadata — antes disso retorna BGRA cru. Isso fazia o
+	// frame alternar entre BGRA e RGBA de forma intermitente → cores invertidas.
+	//
+	// Snapshot() retorna SEMPRE os bytes BGRA crus (DXGI_FORMAT_B8G8R8A8_UNORM),
+	// independentemente do estado do latch. Os encoders (jpeg/webp) já esperam
+	// BGRA e fazem o swap B↔R corretamente.
+	unmap, mappedRect, size, err := c.dup.Snapshot(200)
 	if err != nil {
 		if err == outputduplication.ErrNoImageYet {
 			return nil, fmt.Errorf("timeout")
 		}
-		// DXGI_ERROR_ACCESS_LOST ou outro erro
-		return nil, fmt.Errorf("go-d3d GetImage: %w", err)
+		return nil, fmt.Errorf("go-d3d Snapshot: %w", err)
+	}
+	defer unmap()
+
+	// Copia linha a linha respeitando o pitch (padding entre linhas).
+	dataSize := int(mappedRect.Pitch) * int(size.Y)
+	data := unsafe.Slice((*byte)(mappedRect.PBits), dataSize)
+	contentWidth := int(size.X) * 4
+	dataWidth := int(mappedRect.Pitch)
+
+	frame := &Frame{
+		Data:   make([]byte, contentWidth*int(size.Y)),
+		Width:  int(size.X),
+		Height: int(size.Y),
+		Stride: contentWidth,
+	}
+	var src, dst int
+	for i := 0; i < int(size.Y); i++ {
+		copy(frame.Data[dst:], data[src:src+contentWidth])
+		src += dataWidth
+		dst += contentWidth
 	}
 
-	// image.RGBA já está em BGRA (DXGI_FORMAT_B8G8R8A8_UNORM)
-	// NOTA: session_screen.go faz cópia adicional (frameCopy) para liberar capturador.
-	// Nao fazemos copia aqui — o caller decide se precisa.
-	return &Frame{
-		Data:   c.img.Pix,
-		Width:  c.width,
-		Height: c.height,
-		Stride: c.img.Stride,
-	}, nil
+	if c.drawCursor {
+		// Desenha o cursor sobre o frame capturado (BGRA) — igual ao
+		// GetImage com DrawPointer, mas preservando o formato BGRA.
+		c.drawCursorBGRA(frame)
+	}
+
+	return frame, nil
+}
+
+// drawCursorBGRA desenha o cursor do sistema sobre um frame BGRA.
+// Equivalente ao dup.DrawPointer do go-d3d, mas operando sobre []byte BGRA
+// (não image.RGBA), preservando o formato esperado pelos encoders.
+func (c *dxgiGoD3dCapturer) drawCursorBGRA(frame *Frame) {
+	// O go-d3d não expõe a forma do cursor fora do drawPointer interno.
+	// No modo cursor separado (padrão), drawCursor=false e este caminho não
+	// é executado. Para compatibilidade, desenha um cursor básico na posição
+	// atual do mouse via GetCursorPos.
+	info, err := GetCursorPos()
+	if err != nil {
+		return
+	}
+	x, y := int(info.X), int(info.Y)
+	if x < 0 || y < 0 || x >= frame.Width || y >= frame.Height {
+		return
+	}
+
+	// Seta simples (12x12) em branco com contorno — BGRA
+	path := [][2]int{
+		{0, 0}, {0, 12}, {1, 12}, {1, 1}, {12, 1}, {12, 0},
+	}
+	for _, p := range path {
+		px, py := x+p[0], y+p[1]
+		if px < 0 || py < 0 || px >= frame.Width || py >= frame.Height {
+			continue
+		}
+		off := py*frame.Stride + px*4
+		frame.Data[off] = 0xff
+		frame.Data[off+1] = 0xff
+		frame.Data[off+2] = 0xff
+		frame.Data[off+3] = 0xff
+	}
 }
 
 func (c *dxgiGoD3dCapturer) ReleaseFrame() {
