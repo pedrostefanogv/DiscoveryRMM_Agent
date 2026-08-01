@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/nats-io/nats.go"
+
+	"discovery/internal/screen"
 )
 
 // stripHyphens remove hifens de UUIDs para garantir compatibilidade com o
@@ -165,6 +167,22 @@ func (h *NatsStreamHandler) PublishRecordingTerm(sessionID string, data []byte) 
 func (h *NatsStreamHandler) PublishCursor(sessionID string, cursorData []byte) error {
 	subject := h.publishSubject(sessionID, "cursor")
 	return h.nc.Publish(subject, cursorData)
+}
+
+// PublishCursorImage envia o bitmap do cursor (PNG) quando a forma muda.
+// Formato binário: [4B width][4B height][4B hotX][4B hotY][PNG bytes].
+func (h *NatsStreamHandler) PublishCursorImage(sessionID string, img *screen.CursorImage) error {
+	if img == nil || len(img.PNG) == 0 {
+		return nil
+	}
+	buf := make([]byte, 16+len(img.PNG))
+	binary.BigEndian.PutUint32(buf[0:4], uint32(img.Width))
+	binary.BigEndian.PutUint32(buf[4:8], uint32(img.Height))
+	binary.BigEndian.PutUint32(buf[8:12], uint32(img.HotX))
+	binary.BigEndian.PutUint32(buf[12:16], uint32(img.HotY))
+	copy(buf[16:], img.PNG)
+	subject := h.publishSubject(sessionID, "cursor.img")
+	return h.nc.Publish(subject, buf)
 }
 
 // PublishEvent envia um evento de sessao.

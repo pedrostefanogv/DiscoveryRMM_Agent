@@ -131,6 +131,14 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 					if s.cursorSender.ShouldSend(info) {
 						_ = s.natsStream.PublishCursor(s.sessionID, s.cursorSender.Encode(info))
 					}
+					// Envia o bitmap do cursor apenas quando a FORMA muda
+					// (handle diferente) — evita re-encodar PNG a cada frame.
+					handle := screen.GetCursorHandle()
+					if s.cursorSender.ShouldSendImage(handle) {
+						if img := screen.CaptureCursorImage(); img != nil {
+							_ = s.natsStream.PublishCursorImage(s.sessionID, img)
+						}
+					}
 				case <-ctx.Done():
 					return
 				case <-s.cursorStopCh:

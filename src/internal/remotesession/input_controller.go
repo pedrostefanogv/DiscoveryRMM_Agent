@@ -58,7 +58,7 @@ type InputController struct {
 func NewInputController(sessionID string) *InputController {
 	return &InputController{
 		sessionID:     sessionID,
-		maxEventsPerS: 100,
+		maxEventsPerS: 300,
 	}
 }
 
@@ -139,7 +139,7 @@ func (c *InputController) handleMouseMove(evt *InputEvent) {
 	}
 
 	// Converte coordenadas do frame para desktop virtual
-	// frameX/frameW * capW = desktopX
+	// frameX/frameW * capW = desktopX (usa capW/capH = desktop real)
 	absX := int32(float64(evt.X) / float64(fw) * 65535)
 	absY := int32(float64(evt.Y) / float64(fh) * 65535)
 
@@ -209,6 +209,15 @@ func (c *InputController) handleLegacyInput(data []byte) {
 	typ, _ := raw["type"].(string)
 	log.Printf("[input-controller] legado: type=%s raw=%s", typ, string(data))
 
+	// O viewer envia frameWidth/frameHeight no payload. Usa-os para
+	// normalização quando presentes (mais preciso que o default interno),
+	// evitando que o mouse vá para o lugar errado nos primeiros frames.
+	if fw, ok := toFloat64(raw["frameWidth"]); ok && fw > 0 {
+		if fh, ok2 := toFloat64(raw["frameHeight"]); ok2 && fh > 0 {
+			c.UpdateFrameMetrics(int(fw), int(fh), int(fw), int(fh))
+		}
+	}
+
 	switch typ {
 	case "mousedown":
 		x, _ := toFloat64(raw["x"]); y, _ := toFloat64(raw["y"]); btn, _ := toFloat64(raw["button"])
@@ -258,8 +267,27 @@ func (c *InputController) handleMouseMoveNormalized(x, y int) {
 		cw, ch = 1920, 1080
 	}
 
-	absX := int32(float64(x) / float64(fw) * 65535)
-	absY := int32(float64(y) / float64(fh) * 65535)
+	// Normaliza para o espaço absoluto do desktop virtual (0-65535).
+	// frameX/frameW * 65535 = desktopX. Usa capW/capH (desktop real) como
+	// denominador quando disponível, senão frameW/frameH.
+	denW, denH := fw, fh
+	if cw > 0 && ch > 0 {
+		denW, denH = cw, ch
+	}
+	absX := int32(float64(x) / float64(denW) * 65535)
+	absY := int32(float64(y) / float64(denH) * 65535)
+	if absX < 0 {
+		absX = 0
+	}
+	if absY < 0 {
+		absY = 0
+	}
+	if absX > 65535 {
+		absX = 65535
+	}
+	if absY > 65535 {
+		absY = 65535
+	}
 	_ = screen.InjectMouseMove(absX, absY)
 }
 
