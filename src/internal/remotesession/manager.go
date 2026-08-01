@@ -500,6 +500,7 @@ func (m *Manager) runTerminalSession(ctx context.Context, session *Session) {
 	defer close(session.doneCh)
 
 	if m.natsStream == nil {
+		log.Printf("[remote-session-term] ERRO: natsStream nao configurado para sessao %s\n", session.ID)
 		return
 	}
 
@@ -511,6 +512,9 @@ func (m *Manager) runTerminalSession(ctx context.Context, session *Session) {
 
 	cols := sessionMetaInt(session, "termCols", 120)
 	rows := sessionMetaInt(session, "termRows", 40)
+
+	log.Printf("[remote-session-term] iniciando console para sessao %s (shell=%s cols=%d rows=%d)\n",
+		session.ID, defaultShell, cols, rows)
 
 	sessTerm := NewSessionTerminal(session.ID, m.natsStream, session.Recording)
 
@@ -544,6 +548,8 @@ func (m *Manager) runTerminalSession(ctx context.Context, session *Session) {
 		"termCols":   cols,
 		"termRows":   rows,
 	})
+	log.Printf("[remote-session-term] console pronto para sessao %s (consoleId=%s, shells=%v)\n",
+		session.ID, console.ID, availableShells)
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()

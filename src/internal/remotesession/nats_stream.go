@@ -146,6 +146,9 @@ func (h *NatsStreamHandler) PublishFrame(sessionID string, frameData []byte) err
 func (h *NatsStreamHandler) PublishTermOut(sessionID string, data string) error {
 	subject := h.publishSubject(sessionID, "term.out")
 	err := h.nc.Publish(subject, []byte(data))
+	if err != nil {
+		log.Printf("[remote-session-nats] PublishTermOut erro: subject=%s err=%v\n", subject, err)
+	}
 	return err
 }
 
@@ -219,9 +222,16 @@ func (h *NatsStreamHandler) SubscribeToInput(sessionID string, handler func(inpu
 
 // SubscribeToTermIn subscreve a stdin do terminal enviado pelo viewer.
 func (h *NatsStreamHandler) SubscribeToTermIn(sessionID string, handler func(data []byte)) (*nats.Subscription, error) {
-	return h.nc.Subscribe(h.subscribePattern(sessionID, "term.in"), func(msg *nats.Msg) {
+	pattern := h.subscribePattern(sessionID, "term.in")
+	sub, err := h.nc.Subscribe(pattern, func(msg *nats.Msg) {
 		handler(msg.Data)
 	})
+	if err != nil {
+		log.Printf("[remote-session-nats] SubscribeToTermIn erro: pattern=%s err=%v\n", pattern, err)
+	} else {
+		log.Printf("[remote-session-nats] SubscribeToTermIn ok: pattern=%s\n", pattern)
+	}
+	return sub, err
 }
 
 // SubscribeToFilesReq subscreve a requisicoes de arquivos (list/get/put/delete).

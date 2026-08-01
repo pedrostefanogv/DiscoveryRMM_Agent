@@ -273,6 +273,9 @@ func (st *SessionTerminal) Start(ctx context.Context, shellKind terminal.ShellKi
 		// Subject fixo term.out (console unico)
 		if err := st.natsStream.PublishTermOut(st.sessionID, string(payload)); err != nil {
 			log.Printf("[session-terminal] erro ao publicar term.out: %v", err)
+		} else {
+			log.Printf("[session-terminal] term.out publicado: session=%s seq=%d bytes=%d\n",
+				st.sessionID, currentSeq, len(output))
 		}
 
 		// Gravação (thread-safe)
@@ -333,11 +336,14 @@ func (st *SessionTerminal) Start(ctx context.Context, shellKind terminal.ShellKi
 			Rows int    `json:"rows"`
 		}
 		if err := json.Unmarshal(data, &req); err != nil {
+			log.Printf("[session-terminal] term.in JSON invalido: %v\n", err)
 			return
 		}
 
 		// Resize se dimensoes informadas
 		if req.Cols > 0 && req.Rows > 0 {
+			log.Printf("[session-terminal] term.in resize: session=%s cols=%d rows=%d\n",
+				st.sessionID, req.Cols, req.Rows)
 			_ = shell.Resize(req.Cols, req.Rows)
 			term.Cols = req.Cols
 			term.Rows = req.Rows
@@ -348,8 +354,11 @@ func (st *SessionTerminal) Start(ctx context.Context, shellKind terminal.ShellKi
 		if req.Data != "" && len(req.Data) <= termMaxInputSize {
 			decoded, err := base64.StdEncoding.DecodeString(req.Data)
 			if err != nil {
+				log.Printf("[session-terminal] term.in base64 invalido: %v\n", err)
 				return
 			}
+			log.Printf("[session-terminal] term.in input: session=%s bytes=%d\n",
+				st.sessionID, len(decoded))
 			_ = shell.WriteStdin(string(decoded))
 		}
 	})
