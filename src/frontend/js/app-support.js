@@ -22,12 +22,16 @@ function showSupportList() {
   if (supportListViewEl) supportListViewEl.classList.remove("hidden");
   if (supportDetailViewEl) supportDetailViewEl.classList.add("hidden");
   if (supportNewTicketViewEl) supportNewTicketViewEl.classList.add("hidden");
+  if (supportStatusBarEl) supportStatusBarEl.classList.remove("hidden");
+  if (supportAgentBannerEl) supportAgentBannerEl.classList.remove("hidden");
 }
 
 function showSupportDetail() {
   if (supportListViewEl) supportListViewEl.classList.add("hidden");
   if (supportDetailViewEl) supportDetailViewEl.classList.remove("hidden");
   if (supportNewTicketViewEl) supportNewTicketViewEl.classList.add("hidden");
+  if (supportStatusBarEl) supportStatusBarEl.classList.add("hidden");
+  if (supportAgentBannerEl) supportAgentBannerEl.classList.add("hidden");
 }
 
 function showNewTicketForm() {

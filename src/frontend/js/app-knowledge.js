@@ -4,6 +4,7 @@ function showKBList() {
   if (kbListViewEl) kbListViewEl.classList.remove("hidden");
   if (kbDetailViewEl) kbDetailViewEl.classList.add("hidden");
   if (kbSearchInputEl) kbSearchInputEl.classList.remove("hidden");
+  if (kbStatusBarEl) kbStatusBarEl.classList.remove("hidden");
   selectedKnowledgeArticleID = null;
 }
 
@@ -11,6 +12,7 @@ function showKBDetail() {
   if (kbListViewEl) kbListViewEl.classList.add("hidden");
   if (kbDetailViewEl) kbDetailViewEl.classList.remove("hidden");
   if (kbSearchInputEl) kbSearchInputEl.classList.add("hidden");
+  if (kbStatusBarEl) kbStatusBarEl.classList.add("hidden");
 }
 
 function renderKnowledgeArticleDetail(article) {

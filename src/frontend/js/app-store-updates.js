@@ -256,6 +256,7 @@ function goHome() {
 }
 
 async function loadCatalog() {
+  if (reloadBtn) reloadBtn.classList.add('loading');
   try {
     showFeedback(translate('store.catalogLoading'));
     var api = appApi();
@@ -270,6 +271,8 @@ async function loadCatalog() {
   } catch (error) {
     showFeedback(String(error), true);
     infoEl.textContent = translate('store.catalogLoadFailure');
+  } finally {
+    if (reloadBtn) reloadBtn.classList.remove('loading');
   }
 }
 

@@ -503,9 +503,9 @@ var APP_I18N_DICTIONARY = {
     "psadt.close": "Fechar",
     "psadt.previewHistory": "Historico de Preview",
     "ztc.subtitle":
-      "Configuracao Zero-Touch: agentes sem credenciais sao provisionados via rede P2P",
+      "Zero-Touch: agentes sem credenciais sao provisionados via rede P2P",
     "ztc.description":
-      "Agentes instalados com instalador generico (sem credenciais pre-definidas) descobrem este agente via rede P2P e recebem a configuracao automaticamente quando a feature esta ativa no servidor.",
+      "Agentes instalados sem credenciais pre-definidas, aguardam provisionamento via rede P2P. O agente que possui credenciais pre-definidas atua como 'Provisioner' e distribui as credenciais para os agentes sem credenciais. O Provisioner deve estar online e conectado ao servidor para que o provisionamento ocorra. Os novos agentes provisionados recebem as credenciais e devem ser autorizados no servidor para que possam se conectar e operar normalmente.",
     "ztc.recentEvents": "Eventos recentes de provisionamento",
     "ztc.noEvents": "Nenhum evento de provisionamento Zero-Touch registrado.",
     "ztc.loading": "Carregando dados de provisionamento Zero-Touch...",

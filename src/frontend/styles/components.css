@@ -578,6 +578,42 @@
   text-overflow: ellipsis;
 }
 
+/* Botão recarregar catálogo: ícone gira enquanto atualiza */
+#reloadBtn.loading {
+  opacity: 0.75;
+  cursor: progress;
+  pointer-events: none;
+}
+
+#reloadBtn.loading svg {
+  animation: spin 0.8s linear infinite;
+}
+
+/* Card unificado de status + observações da automação */
+.automation-summary-card h3 {
+  margin: 0 0 6px;
+  font-size: 0.9rem;
+}
+
+.automation-summary-card .facts-grid {
+  margin-bottom: 4px;
+}
+
+.automation-notes-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 10px 0;
+}
+
+.automation-summary-card .automation-notes {
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.automation-summary-card .automation-notes > div {
+  margin-bottom: 4px;
+}
+
 .store-main {
   display: flex;
   flex-direction: column;
