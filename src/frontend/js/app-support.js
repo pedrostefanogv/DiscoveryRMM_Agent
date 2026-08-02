@@ -23,7 +23,6 @@ function showSupportList() {
   if (supportDetailViewEl) supportDetailViewEl.classList.add("hidden");
   if (supportNewTicketViewEl) supportNewTicketViewEl.classList.add("hidden");
   if (supportStatusBarEl) supportStatusBarEl.classList.remove("hidden");
-  if (supportAgentBannerEl) supportAgentBannerEl.classList.remove("hidden");
 }
 
 function showSupportDetail() {
@@ -31,7 +30,6 @@ function showSupportDetail() {
   if (supportDetailViewEl) supportDetailViewEl.classList.remove("hidden");
   if (supportNewTicketViewEl) supportNewTicketViewEl.classList.add("hidden");
   if (supportStatusBarEl) supportStatusBarEl.classList.add("hidden");
-  if (supportAgentBannerEl) supportAgentBannerEl.classList.add("hidden");
 }
 
 function showNewTicketForm() {
@@ -358,36 +356,10 @@ async function loadSupportTickets() {
   showSupportList();
 
   // show loading
-  if (ticketsLoadingEl) ticketsLoadingEl.classList.remove('hidden');
   supportTicketsListEl.innerHTML = '';
-
-  // Resolve agent context for the banner
-  try {
-    var agent = await appApi().GetAgentInfo();
-    if (agentContextBannerEl && agentContextTextEl) {
-      var computerName = (agent && agent.hostname) ? String(agent.hostname).trim() : '';
-      if (!computerName) {
-        computerName = translate('status.localComputer');
-      }
-      agentContextTextEl.textContent = translate('support.agentLabel', { name: computerName });
-      agentContextBannerEl.classList.remove('hidden');
-    }
-    if (agentContextErrorEl) agentContextErrorEl.classList.add('hidden');
-  } catch (err) {
-    if (agentContextErrorEl && agentContextErrorTextEl) {
-      agentContextErrorTextEl.textContent = String(err);
-      agentContextErrorEl.classList.remove('hidden');
-    }
-    if (agentContextBannerEl) agentContextBannerEl.classList.add('hidden');
-    if (ticketsLoadingEl) ticketsLoadingEl.classList.add('hidden');
-    supportTicketsListEl.innerHTML = '<div class="meta">' + escapeHtml(translate('support.serverNotConfigured')) + '</div>';
-    showSupportList();
-    return;
-  }
 
   try {
     var tickets = await appApi().GetSupportTickets();
-    if (ticketsLoadingEl) ticketsLoadingEl.classList.add('hidden');
     if (!tickets || !tickets.length) {
       supportTicketsListEl.innerHTML = '<div class="meta">' + escapeHtml(translate('support.noTicketsPrompt')) + '</div>';
       showSupportList();

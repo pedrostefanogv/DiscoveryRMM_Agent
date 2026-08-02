@@ -82,12 +82,6 @@ const supportFormEl = document.getElementById('supportForm');
 const supportTicketsListEl = document.getElementById('supportTicketsList');
 // Support - extended refs
 const supportStatusBarEl = document.getElementById('supportStatusBar');
-const supportAgentBannerEl = document.getElementById('supportAgentBanner');
-const agentContextBannerEl = document.getElementById('supportAgentBanner');
-const agentContextTextEl = document.getElementById('agentContextText');
-const agentContextErrorEl = document.getElementById('agentContextError');
-const agentContextErrorTextEl = document.getElementById('agentContextErrorText');
-const ticketsLoadingEl = document.getElementById('ticketsLoading');
 const refreshTicketsBtnEl = document.getElementById('refreshTicketsBtn');
 const newTicketBtnEl = document.getElementById('newTicketBtn');
 const backToListBtnEl = document.getElementById('backToListBtn');
