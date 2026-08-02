@@ -29,6 +29,11 @@ const (
 	handshakeTimeout = 10 * time.Second
 	maxOutputBytes   = 1 << 20
 
+	// nativeNATSRecheckEvery define a cadência com que o agente, quando conectado
+	// via NATS sobre WebSocket (wss), tenta voltar ao NATS nativo (nats://).
+	// 30 minutos por hora — intervalo conservador para não gerar carga; ajustável no futuro.
+	nativeNATSRecheckEvery = 30 * time.Minute
+
 	commandResultDrainEvery = 15 * time.Second
 	commandResultDrainLimit = 20
 	commandResultRetryBase  = 15 * time.Second

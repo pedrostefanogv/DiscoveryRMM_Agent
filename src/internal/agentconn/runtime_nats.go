@@ -135,7 +135,7 @@ func (r *Runtime) runNATSSession(ctx context.Context, cfg Config, server, transp
 		return fmt.Errorf("falha ao inscrever no subject de global pong: %w", err)
 	}
 
-	return r.runNATSEventLoop(ctx, nc, cfg, subjects, ipAddr, globalPongReceived)
+	return r.runNATSEventLoop(ctx, nc, cfg, subjects, ipAddr, globalPongReceived, transportLabel)
 }
 
 func natsWebSocketProxyPath(natsURL string) string {
@@ -502,7 +502,7 @@ func (r *Runtime) natsP2PEventHandler() func(msg *nats.Msg) {
 
 // â”€â”€â”€ NATS Event Loop â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-func (r *Runtime) runNATSEventLoop(ctx context.Context, nc *nats.Conn, cfg Config, subjects natsSubjects, ipAddr string, globalPongReceived <-chan time.Time) error {
+func (r *Runtime) runNATSEventLoop(ctx context.Context, nc *nats.Conn, cfg Config, subjects natsSubjects, ipAddr string, globalPongReceived <-chan time.Time, transportLabel string) error {
 	heartbeatInterval := heartbeatEvery
 	if cfg.HeartbeatInterval > 0 {
 		heartbeatInterval = time.Duration(cfg.HeartbeatInterval) * time.Second
@@ -513,6 +513,16 @@ func (r *Runtime) runNATSEventLoop(ctx context.Context, nc *nats.Conn, cfg Confi
 	defer drainTicker.Stop()
 	globalPongWatchdogTicker := time.NewTicker(globalPongWatchdogEvery)
 	defer globalPongWatchdogTicker.Stop()
+
+	// Quando conectado via NATS sobre WebSocket (wss), tenta periodicamente
+	// voltar ao NATS nativo (nats://). Se o probe tiver sucesso, encerra a
+	// sessão atual para que o loop Run reinicie e priorize o NATS nativo.
+	var nativeNATSRecheckTicker *time.Ticker
+	if isWSSLabel(transportLabel) && strings.TrimSpace(cfg.NatsServer) != "" {
+		nativeNATSRecheckTicker = time.NewTicker(nativeNATSRecheckEvery)
+		defer nativeNATSRecheckTicker.Stop()
+		r.logf("[transport][nats] conectado via %s — recheck periodico do NATS nativo a cada %s", transportLabel, nativeNATSRecheckEvery)
+	}
 
 	connectedAt := time.Now().UTC()
 	var lastGlobalPongAt time.Time
@@ -545,6 +555,11 @@ func (r *Runtime) runNATSEventLoop(ctx context.Context, nc *nats.Conn, cfg Confi
 				}
 				return publishJSON(nc, subjects.Result, res)
 			})
+		case <-nativeNATSRecheckTicker.C:
+			if r.probeNativeNATS(cfg) {
+				r.logf("[transport][nats] NATS nativo disponivel (%s) — alternando de %s para nats://", cfg.NatsServer, transportLabel)
+				return fmt.Errorf("NATS nativo disponivel — alternando de %s para nats://", transportLabel)
+			}
 		case <-globalPongWatchdogTicker.C:
 			status := nc.Status()
 			if status == nats.CONNECTING || status == nats.RECONNECTING {
@@ -578,6 +593,49 @@ func shouldReconnectForMissingGlobalPong(now, connectedAt, lastGlobalPongAt time
 	}
 	age := now.Sub(reference)
 	return age > globalPongReconnectAfter, age
+}
+
+// isWSSLabel reports whether a transport label refers to NATS over WebSocket.
+func isWSSLabel(transportLabel string) bool {
+	switch strings.ToLower(strings.TrimSpace(transportLabel)) {
+	case "nats-ws", "nats-wss", "nats-ws/wss":
+		return true
+	default:
+		return false
+	}
+}
+
+// probeNativeNATS tenta uma conexão curta ao NATS nativo (nats://) para verificar
+// se ele voltou a ficar disponível. Retorna true se a conexão foi bem-sucedida.
+// A conexão é fechada imediatamente após o sucesso — o loop Run fará a troca real.
+func (r *Runtime) probeNativeNATS(cfg Config) bool {
+	server := strings.TrimSpace(cfg.NatsServer)
+	if server == "" {
+		return false
+	}
+	natsURL, err := normalizeNATSURL(server)
+	if err != nil {
+		return false
+	}
+	authToken, err := netutil.NormalizeAgentToken(cfg.AuthToken)
+	if err != nil {
+		return false
+	}
+
+	opts := []nats.Option{
+		nats.Name("discovery-agent-probe-" + cfg.AgentID),
+		nats.Timeout(connectAttemptTimeout),
+		nats.MaxReconnects(0),
+		nats.Token(authToken),
+	}
+	nc, err := nats.Connect(natsURL, opts...)
+	if err != nil {
+		r.logf("[transport][nats] probe NATS nativo falhou (%s): %v", natsURL, err)
+		return false
+	}
+	defer nc.Close()
+	r.logf("[transport][nats] probe NATS nativo OK (%s)", natsURL)
+	return true
 }
 
 // â”€â”€â”€ NATS Subjects â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
