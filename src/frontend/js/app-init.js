@@ -296,11 +296,50 @@ function initAppBindings() {
   }
 
   if (sidebarToggleBtn && sidebarEl) {
-    sidebarToggleBtn.addEventListener("click", function () {
-      sidebarEl.classList.toggle("collapsed");
+    var sidebarHoverTimer = null;
+    var sidebarHoverActive = false;
+
+    function expandSidebarTemporarily() {
+      if (!sidebarEl.classList.contains("collapsed")) return;
+      sidebarHoverActive = true;
+      sidebarEl.classList.remove("collapsed");
       if (typeof syncWindowChromeSidebarWidth === "function") {
         syncWindowChromeSidebarWidth();
       }
+    }
+
+    function collapseSidebarTemporarily() {
+      if (!sidebarHoverActive) return;
+      sidebarHoverActive = false;
+      sidebarEl.classList.add("collapsed");
+      if (typeof syncWindowChromeSidebarWidth === "function") {
+        syncWindowChromeSidebarWidth();
+      }
+    }
+
+    sidebarToggleBtn.addEventListener("click", function () {
+      if (sidebarHoverActive) {
+        // Clicou enquanto expandido por hover -> torna permanente
+        sidebarHoverActive = false;
+        sidebarEl.classList.remove("collapsed");
+      } else {
+        sidebarEl.classList.toggle("collapsed");
+      }
+      if (typeof syncWindowChromeSidebarWidth === "function") {
+        syncWindowChromeSidebarWidth();
+      }
+    });
+
+    sidebarEl.addEventListener("mouseenter", function () {
+      if (sidebarEl.classList.contains("collapsed")) {
+        clearTimeout(sidebarHoverTimer);
+        sidebarHoverTimer = setTimeout(expandSidebarTemporarily, 250);
+      }
+    });
+
+    sidebarEl.addEventListener("mouseleave", function () {
+      clearTimeout(sidebarHoverTimer);
+      collapseSidebarTemporarily();
     });
   }
 

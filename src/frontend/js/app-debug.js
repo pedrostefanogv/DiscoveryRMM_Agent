@@ -87,7 +87,7 @@ function updateDebugBindHint(bound) {
     if (bound) {
       debugBindAllInterfacesHintEl.innerHTML = '<span style="color:#f4a259;">⚠ Interface acessivel na rede local (0.0.0.0). Desmarque para restringir ao localhost.</span>';
     } else {
-      debugBindAllInterfacesHintEl.innerHTML = 'Permite acessar esta interface de outras maquinas na rede (0.0.0.0)';
+      debugBindAllInterfacesHintEl.innerHTML = 'Permite que outras maquinas da rede acessem esta interface (0.0.0.0)';
     }
   }
   if (debugBindStatusEl) {

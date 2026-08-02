@@ -344,36 +344,63 @@ func (a *App) registerWithDeployKey(serverURL, deployKey string) (P2POnboardingR
 		"departmentId": nil,
 		"notes":        "Provisionado via zero-touch P2P",
 	})
-	endpoint := serverURL + "/api/v1/agent-register"
-	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(payload))
-	if err != nil {
-		return P2POnboardingResult{}, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+deployKey)
 
-	resp, err := tlsutil.NewHTTPClient(20 * time.Second).Do(req)
-	if err != nil {
-		return P2POnboardingResult{}, err
+	// Tenta o scheme informado e, em seguida, o alternativo (https<->http).
+	// Isso torna o registro resiliente quando o peer emite a oferta com um
+	// scheme (ex.: http por apiInsecure) mas o servidor aceita o outro.
+	parsed, _ := url.Parse(serverURL)
+	schemes := []string{parsed.Scheme}
+	switch parsed.Scheme {
+	case "https":
+		schemes = append(schemes, "http")
+	case "http":
+		schemes = append(schemes, "https")
 	}
-	defer resp.Body.Close()
-	body, readErr := io.ReadAll(resp.Body)
-	if readErr != nil {
-		return P2POnboardingResult{}, fmt.Errorf("falha ao ler resposta de registro: %w", readErr)
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		preview := strings.TrimSpace(string(body))
-		if len(preview) > 240 {
-			preview = preview[:240] + "..."
+
+	var lastErr error
+	for _, candidateScheme := range schemes {
+		candidateURL := candidateScheme + "://" + parsed.Host
+		endpoint := candidateURL + "/api/v1/agent-register"
+		req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(payload))
+		if err != nil {
+			lastErr = err
+			continue
 		}
-		return P2POnboardingResult{}, fmt.Errorf("registro falhou HTTP %d: %s", resp.StatusCode, preview)
-	}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+deployKey)
 
-	credentials, err := parseZeroTouchRegisterResponse(body, serverURL)
-	if err != nil {
-		return P2POnboardingResult{}, err
-	}
+		resp, err := tlsutil.NewHTTPClient(20 * time.Second).Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		body, readErr := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if readErr != nil {
+			lastErr = fmt.Errorf("falha ao ler resposta de registro: %w", readErr)
+			continue
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			preview := strings.TrimSpace(string(body))
+			if len(preview) > 240 {
+				preview = preview[:240] + "..."
+			}
+			lastErr = fmt.Errorf("registro falhou HTTP %d: %s", resp.StatusCode, preview)
+			continue
+		}
 
+		credentials, err := parseZeroTouchRegisterResponse(body, candidateURL)
+		if err != nil {
+			return P2POnboardingResult{}, err
+		}
+		return a.persistZeroTouchCredentials(credentials)
+	}
+	return P2POnboardingResult{}, lastErr
+}
+
+// persistZeroTouchCredentials persiste as credenciais retornadas pelo servidor
+// no config.json e aplica a conexão em runtime.
+func (a *App) persistZeroTouchCredentials(credentials zeroTouchRegisterCredentials) (P2POnboardingResult, error) {
 	inst, path, err := loadInstallerConfigForZeroTouchPersist()
 	if err != nil {
 		return P2POnboardingResult{}, fmt.Errorf("falha ao carregar config para persistencia zero-touch: %w", err)

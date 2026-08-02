@@ -61,10 +61,12 @@ func (s *p2pTransferServer) handleOnboardOffer(w http.ResponseWriter, r *http.Re
 	s.app.logs.append(fmt.Sprintf("[zero-touch] provisioning token obtido (len=%d, expiresAt=%s)", keyLen, expiresAt))
 
 	// Construir URL canônica (evitar inst.ServerURL legado).
+	// Usa inst.APIScheme() que deriva o scheme de ApiInsecure (campo canônico),
+	// pois ApiScheme é legado e não é serializado no config.json.
 	inst, _, loadErr := loadInstallerConfig()
 	var serverURL string
-	if loadErr == nil && strings.TrimSpace(inst.ApiScheme) != "" && strings.TrimSpace(inst.ApiServer) != "" {
-		serverURL = strings.TrimSpace(inst.ApiScheme) + "://" + strings.TrimSpace(inst.ApiServer)
+	if loadErr == nil && strings.TrimSpace(inst.ApiServer) != "" {
+		serverURL = inst.APIScheme() + "://" + strings.TrimSpace(inst.ApiServer)
 	} else if loadErr == nil && strings.TrimSpace(inst.ServerURL) != "" {
 		// fallback compatível com instalações legadas
 		serverURL = strings.TrimSpace(inst.ServerURL)

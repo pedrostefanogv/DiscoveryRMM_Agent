@@ -20,8 +20,7 @@
     if (statusEl) {
       var rows = [
         ['Ativo', s.enabled ? 'sim' : 'nao'],
-        ['Agentes provisionados', String(s.totalProvisioned || 0)],
-        ['Endpoint', '/p2p/config/onboard (GET)']
+        ['Agentes provisionados', String(s.totalProvisioned || 0)]
       ];
       statusEl.innerHTML = rows.map(function (r) {
         return '<div class="fact"><div class="k">' + escapeHtml(r[0]) + '</div><div class="v mono">' + escapeHtml(r[1]) + '</div></div>';
