@@ -227,9 +227,21 @@ a:hover { text-decoration: underline; }
   max-width: 300px; overflow: hidden; text-overflow: ellipsis;
 }
 
-.window-chrome-meta span::before {
-  content: ''; display: inline-block; width: 6px; height: 6px;
-  border-radius: 50%; background: var(--muted); opacity: 0.5;
+/* Bolinha de status do PC na borda da janela */
+.window-meta-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--muted); opacity: 0.6;
+  flex: 0 0 auto;
+  transition: background 0.3s ease, box-shadow 0.3s ease;
+}
+.window-meta-dot.online {
+  background: var(--status-indicator-online, #4caf50);
+  opacity: 1;
+  box-shadow: 0 0 0 3px var(--status-indicator-online-ring, rgba(76,175,80,.3));
+}
+.window-meta-dot.offline {
+  background: var(--danger, #d9534f);
+  opacity: 1;
 }
 
 .window-chrome-actions {

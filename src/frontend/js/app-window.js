@@ -3,9 +3,8 @@
 (function initWindowChrome() {
   var maxBtn = document.getElementById('windowMaxBtn');
   var closeBtn = document.getElementById('windowCloseBtn');
-  var metaPC = document.getElementById('windowMetaPC');
-  var metaServer = document.getElementById('windowMetaServer');
-  var metaConn = document.getElementById('windowMetaConn');
+  var metaPCName = document.getElementById('windowMetaPCName');
+  var metaDot = document.getElementById('windowMetaDot');
 
   function runtimeReady() {
     return !!(window.runtime && typeof window.runtime.WindowToggleMaximise === 'function');
@@ -28,13 +27,19 @@
     }
 
     window.go.app.App.GetStatusOverview().then(function (status) {
-      if (metaPC) metaPC.textContent = translate('window.meta.pc') + ': ' + ((status && status.hostname) ? status.hostname : '-');
-      if (metaServer) metaServer.textContent = translate('window.meta.server') + ': ' + ((status && status.server) ? status.server : '-');
-      if (metaConn) metaConn.textContent = translate('window.meta.connection') + ': ' + ((status && status.connectionType) ? status.connectionType : '-');
+      var hostname = (status && status.hostname) ? status.hostname : '-';
+      if (metaPCName) metaPCName.textContent = translate('window.meta.pc') + ': ' + hostname;
+      if (metaDot) {
+        var online = !!(status && status.connected);
+        metaDot.classList.toggle('online', online);
+        metaDot.classList.toggle('offline', !online);
+      }
     }).catch(function () {
-      if (metaPC) metaPC.textContent = translate('window.meta.pc') + ': -';
-      if (metaServer) metaServer.textContent = translate('window.meta.server') + ': -';
-      if (metaConn) metaConn.textContent = translate('window.meta.connection') + ': -';
+      if (metaPCName) metaPCName.textContent = translate('window.meta.pc') + ': -';
+      if (metaDot) {
+        metaDot.classList.add('offline');
+        metaDot.classList.remove('online');
+      }
     });
   }
 
