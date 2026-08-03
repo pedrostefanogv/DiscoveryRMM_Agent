@@ -1,6 +1,6 @@
 {
   "mcp": {
-    "command": "c:\\Users\\pedro\\.vscode-insiders\\extensions\\tunakite03.codebase-memory-mcp-0.5.22\\bin\\win32-x64\\codebase-memory-mcp.exe",
+    "command": "c:\\Users\\pedro\\.vscode\\extensions\\tunakite03.codebase-memory-mcp-0.5.23\\bin\\win32-x64\\codebase-memory-mcp.exe",
     "args": [],
     "transport": "stdio"
   },

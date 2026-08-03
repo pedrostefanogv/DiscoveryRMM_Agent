@@ -173,15 +173,26 @@ func (c *InputController) handleKey(code, key string, down bool, mods InputModif
 		return
 	}
 
-	// Aplica modificadores antes da tecla
-	if mods.Ctrl {
-		applyModifier(VK_CONTROL, down)
-	}
-	if mods.Alt {
-		applyModifier(VK_MENU, down)
-	}
-	if mods.Shift {
-		applyModifier(VK_SHIFT, down)
+	// Se a própria tecla é um modificador (Ctrl/Alt/Shift/Win), NÃO aplica o
+	// modificador separadamente — senão injeta a tecla duas vezes (ex: Ctrl
+	// pressionado → applyModifier(VK_CONTROL) + InjectKeyDown(VK_CONTROL)).
+	// O vk já cobre o modificador; os mods são para combinações (ex: Ctrl+C).
+	isModifier := vk == VK_CONTROL || vk == VK_MENU || vk == VK_SHIFT || vk == VK_LWIN
+
+	if !isModifier {
+		// Aplica modificadores antes da tecla
+		if mods.Ctrl {
+			applyModifier(VK_CONTROL, down)
+		}
+		if mods.Alt {
+			applyModifier(VK_MENU, down)
+		}
+		if mods.Shift {
+			applyModifier(VK_SHIFT, down)
+		}
+		if mods.Meta {
+			applyModifier(VK_LWIN, down)
+		}
 	}
 
 	if down {
@@ -250,11 +261,12 @@ func (c *InputController) handleLegacyInput(data []byte) {
 		}
 	case "keydown":
 		code, _ := raw["code"].(string); key, _ := raw["key"].(string)
-		ctrl, _ := raw["ctrl"].(bool); alt, _ := raw["alt"].(bool); shift, _ := raw["shift"].(bool)
-		c.handleKey(code, key, true, InputModifiers{Ctrl: ctrl, Alt: alt, Shift: shift})
+		ctrl, _ := raw["ctrl"].(bool); alt, _ := raw["alt"].(bool); shift, _ := raw["shift"].(bool); meta, _ := raw["meta"].(bool)
+		c.handleKey(code, key, true, InputModifiers{Ctrl: ctrl, Alt: alt, Shift: shift, Meta: meta})
 	case "keyup":
 		code, _ := raw["code"].(string); key, _ := raw["key"].(string)
-		c.handleKey(code, key, false, InputModifiers{})
+		ctrl, _ := raw["ctrl"].(bool); alt, _ := raw["alt"].(bool); shift, _ := raw["shift"].(bool); meta, _ := raw["meta"].(bool)
+		c.handleKey(code, key, false, InputModifiers{Ctrl: ctrl, Alt: alt, Shift: shift, Meta: meta})
 	}
 }
 
