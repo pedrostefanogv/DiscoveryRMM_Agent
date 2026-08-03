@@ -50,6 +50,26 @@ function renderKnowledgeArticles(items) {
     return;
   }
 
+  // Calcula o nível de profundidade de cada artigo (0 = raiz) a partir de parentId
+  var depthMap = {};
+  var byId = {};
+  list.forEach(function (a) {
+    byId[a.id] = a;
+  });
+  function depthOf(a) {
+    if (depthMap[a.id] !== undefined) return depthMap[a.id];
+    var d = 0;
+    var cur = a;
+    var guard = 0;
+    while (cur && cur.parentId && byId[cur.parentId] && guard < 4) {
+      d++;
+      cur = byId[cur.parentId];
+      guard++;
+    }
+    depthMap[a.id] = d;
+    return d;
+  }
+
   kbArticlesListEl.innerHTML = list
     .map(function (a) {
       var tags = Array.isArray(a.tags) ? a.tags : [];
@@ -68,10 +88,20 @@ function renderKnowledgeArticles(items) {
           return "<em>#" + escapeHtml(t) + "</em>";
         })
         .join(" ");
+      var depth = depthOf(a);
+      var indent = depth > 0 ? ' style="margin-left:' + depth * 16 + 'px"' : "";
+      var icon = a.isPage
+        ? '<span class="kb-tree-icon">&#128193;</span>'
+        : depth > 0
+          ? '<span class="kb-tree-icon">&#128196;</span>'
+          : "";
       return (
         '<button class="kb-article-card" data-kb-id="' +
         escapeHtmlAttr(a.id) +
-        '">' +
+        '"' +
+        indent +
+        ">" +
+        icon +
         '<span class="kb-article-title">' +
         escapeHtml(a.title || "-") +
         "</span>" +

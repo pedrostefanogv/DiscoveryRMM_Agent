@@ -139,6 +139,10 @@ type KnowledgeArticle struct {
 	Difficulty  string   `json:"difficulty"`
 	ReadTimeMin int      `json:"readTimeMin"`
 	UpdatedAt   string   `json:"updatedAt"`
+	// Hierarquia de páginas (estilo Notion)
+	ParentID  string `json:"parentId"`
+	SortOrder int    `json:"sortOrder"`
+	IsPage    bool   `json:"isPage"`
 }
 
 type AgentInfoCache struct {

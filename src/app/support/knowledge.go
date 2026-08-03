@@ -97,6 +97,9 @@ func parseKnowledgeArticle(raw map[string]any) KnowledgeArticle {
 		PublishedAt: extractStr(raw, "publishedAt"),
 		Difficulty:  extractStr(raw, "difficulty"),
 		UpdatedAt:   extractStr(raw, "updatedAt"),
+		ParentID:    extractStr(raw, "parentId"),
+		SortOrder:   toInt(raw["sortOrder"]),
+		IsPage:      toBool(raw["isPage"]),
 	}
 
 	if article.Summary == "" {

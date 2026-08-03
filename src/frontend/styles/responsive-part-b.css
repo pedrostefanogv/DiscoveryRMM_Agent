@@ -38,6 +38,16 @@
   box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
+.kb-tree-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.8rem;
+  line-height: 1;
+  margin-right: 2px;
+  opacity: 0.85;
+}
+
 .kb-article-title {
   display: block;
   width: 100%;
