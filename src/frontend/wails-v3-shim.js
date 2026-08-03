@@ -69,6 +69,37 @@ import { Events, Browser, Window } from "/wails/runtime.js";
     Events.Emit(eventName, ...data);
   };
 
+  // ── Browser ──
+  window.runtime.BrowserOpenURL = function (url) {
+    return Browser.OpenURL(url);
+  };
+
+  // ── Window (compat v2) ──
+  // O frontend usa alguns métodos de janela via window.runtime.
+  window.runtime.WindowToggleMaximise = function () { return Window.ToggleMaximise(); };
+  window.runtime.WindowMaximise = function () { return Window.Maximise(); };
+  window.runtime.WindowUnmaximise = function () { return Window.Restore(); };
+  window.runtime.WindowMinimise = function () { return Window.Minimise(); };
+  window.runtime.WindowUnminimise = function () { return Window.Restore(); };
+  window.runtime.WindowShow = function () { return Window.Show(); };
+  window.runtime.WindowHide = function () { return Window.Hide(); };
+  window.runtime.WindowSetTitle = function (title) { return Window.SetTitle(title); };
+  window.runtime.WindowSetAlwaysOnTop = function (b) { return Window.SetAlwaysOnTop(b); };
+  window.runtime.WindowCenter = function () { return Window.Center(); };
+  window.runtime.WindowFullscreen = function () { return Window.Fullscreen(); };
+  window.runtime.WindowUnfullscreen = function () { return Window.Restore(); };
+  window.runtime.WindowIsFullscreen = function () { return Window.IsFullscreen(); };
+  window.runtime.WindowIsMaximised = function () { return Window.IsMaximised(); };
+  window.runtime.WindowIsMinimised = function () { return Window.IsMinimised(); };
+  window.runtime.WindowGetSize = function () { return Window.Size(); };
+  window.runtime.WindowSetSize = function (width, height) { return Window.SetSize(width, height); };
+  window.runtime.WindowSetMaxSize = function (width, height) { return Window.SetMaxSize(width, height); };
+  window.runtime.WindowSetMinSize = function (width, height) { return Window.SetMinSize(width, height); };
+  window.runtime.WindowSetPosition = function (x, y) { return Window.SetPosition(x, y); };
+  window.runtime.WindowGetPosition = function () { return Window.Position(); };
+  window.runtime.WindowReload = function () { return Window.Reload(); };
+  window.runtime.WindowReloadApp = function () { return Window.Reload(); };
+
   // Log helpers (usados pelo frontend em alguns pontos).
   window.runtime.LogPrint = function (msg) { console.log("[wails]", msg); };
   window.runtime.LogInfo = function (msg) { console.info("[wails]", msg); };

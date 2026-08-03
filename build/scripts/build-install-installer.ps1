@@ -119,7 +119,7 @@ try {
         throw "Falha ao gerar recurso de icone com windres"
     }
 
-    # Wails gerencia GOOS, GOARCH internamente.
+    # Build Windows AMD64 (go build direto — Wails v3 embeda o frontend via //go:embed).
     $ldflags = @("-H=windowsgui")
     if ($Version -ne "") {
         $ldflags += "-X discovery/app.Version=$Version"
@@ -136,18 +136,21 @@ try {
         Write-Warning "  git rev-parse falhou; buildinfo.Commit ficara 'unknown'"
     }
 
-    $wailsBuildArgs = @(
+    # Wails v3: o frontend é embedado via //go:embed all:frontend e os bindings
+    # já estão gerados em frontend/bindings. Usamos `go build` direto para ter
+    # controle total sobre -o e -ldflags (injeção de versão/commit).
+    $goBuildArgs = @(
         "build",
         "-tags", "desktop,production",
         "-o", $agentExe
     )
     if ($ldflags.Count -gt 0) {
-        $wailsBuildArgs += "-ldflags"
-        $wailsBuildArgs += ($ldflags -join ' ')
+        $goBuildArgs += "-ldflags"
+        $goBuildArgs += ($ldflags -join ' ')
     }
-    & wails @wailsBuildArgs
+    & go @goBuildArgs
     if ($LASTEXITCODE -ne 0) {
-        throw "Falha no wails build (exit code: $LASTEXITCODE)"
+        throw "Falha no go build (exit code: $LASTEXITCODE)"
     }
 }
 finally {
