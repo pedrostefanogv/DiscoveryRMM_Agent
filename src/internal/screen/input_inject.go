@@ -69,7 +69,11 @@ func InjectMouseMove(x, y int32) error {
 	mi := mouseInput{
 		dx:      x,
 		dy:      y,
-		dwFlags: MOUSEEVENTF_MOVE | 0x8000, // MOUSEEVENTF_ABSOLUTE
+		// MOUSEEVENTF_ABSOLUTE (0x8000) + MOUSEEVENTF_VIRTUALDESK (0x4000).
+		// VIRTUALDESK é necessário para mapear coordenadas absolutas (0-65535)
+		// corretamente no desktop virtual, especialmente com múltiplos monitores
+		// ou DPI scaling. Sem ela, o cursor pode não ir para a posição correta.
+		dwFlags: MOUSEEVENTF_MOVE | 0x8000 | 0x4000,
 	}
 	var inputs [1]winInput
 	inputs[0].inputType = INPUT_MOUSE
