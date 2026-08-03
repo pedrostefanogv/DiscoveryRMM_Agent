@@ -1,83 +1,14 @@
 package app
 
 import (
-	"bytes"
-	"context"
-	"encoding/json"
-	"errors"
-	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
-	"time"
 
+	"discovery/app/services/chat"
 	"discovery/internal/ai"
 	"discovery/internal/mcp"
 	"discovery/internal/platform"
 )
-
-func chatConfigPathCandidates() []string {
-	return platform.ChatConfigPathCandidates(chatConfigFile)
-}
-
-func (a *App) loadPersistedChatConfig() {
-	for _, path := range chatConfigPathCandidates() {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			continue
-		}
-
-		var cfg ChatConfig
-		if err := json.Unmarshal(data, &cfg); err != nil {
-			a.logs.append("[chat] falha ao ler configuração persistida: " + err.Error())
-			return
-		}
-
-		if cfg.MaxTokens < 0 {
-			cfg.MaxTokens = 0
-		}
-
-		a.chatSvc.SetConfig(ai.Config{
-			Endpoint:     cfg.Endpoint,
-			APIKey:       cfg.APIKey,
-			AgentID:      a.GetDebugConfig().AgentID,
-			Model:        cfg.Model,
-			SystemPrompt: cfg.SystemPrompt,
-			MaxTokens:    cfg.MaxTokens,
-		})
-		a.logs.append("[chat] configuração carregada de " + path)
-		return
-	}
-}
-
-func (a *App) persistChatConfig(cfg ChatConfig) error {
-	data, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return fmt.Errorf("falha ao serializar configuração do chat: %w", err)
-	}
-
-	var errs []string
-	for _, path := range chatConfigPathCandidates() {
-		dir := filepath.Dir(path)
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			errs = append(errs, dir+": "+err.Error())
-			continue
-		}
-		if err := os.WriteFile(path, data, 0o600); err != nil {
-			errs = append(errs, path+": "+err.Error())
-			continue
-		}
-		a.logs.append("[chat] configuração salva em " + path)
-		return nil
-	}
-
-	if len(errs) == 0 {
-		return fmt.Errorf("nenhum caminho válido para salvar configuração do chat")
-	}
-	return fmt.Errorf("falha ao salvar configuração do chat: %s", strings.Join(errs, " | "))
-}
 
 // ChatConfig is the frontend-facing AI configuration.
 type ChatConfig struct {
@@ -111,7 +42,7 @@ func (a *App) initChatLogger() {
 	}
 
 	if shouldEnable {
-		a.chatSvc.SetChatLogger(chatLogger)
+		a.chatSvc.Service().SetChatLogger(chatLogger)
 		a.logs.append("[chat] log detalhado de chat ativado em " + filepath.Join(platform.DataDir(), "logs", "chat_logs.jsonl"))
 	} else {
 		chatLogger.Disable()
@@ -144,42 +75,6 @@ func (a *App) ensureChatLogConfigEnabled(inst *InstallerConfig) {
 	}
 }
 
-func (a *App) resolveAgentChatRuntimeConfig(input ChatConfig) (ai.Config, error) {
-	endpoint := strings.TrimSpace(input.Endpoint)
-	token := strings.TrimSpace(input.APIKey)
-	model := strings.TrimSpace(input.Model)
-	systemPrompt := strings.TrimSpace(input.SystemPrompt)
-	maxTokens := input.MaxTokens
-
-	if maxTokens < 0 {
-		return ai.Config{}, fmt.Errorf("maxTokens invalido: use 0 ou um valor positivo")
-	}
-
-	dbg := a.GetDebugConfig()
-	scheme := dbg.APIScheme()
-	server := strings.TrimSpace(dbg.ApiServer)
-
-	if endpoint == "" && (scheme == "http" || scheme == "https") && server != "" {
-		endpoint = scheme + "://" + server
-	}
-	if token == "" {
-		token = strings.TrimSpace(dbg.AuthToken)
-	}
-
-	if endpoint == "" || token == "" {
-		return ai.Config{}, fmt.Errorf("configuração de IA incompleta: informe endpoint/token no chat ou apiScheme/apiServer/authToken no Debug")
-	}
-
-	return ai.Config{
-		Endpoint:     endpoint,
-		APIKey:       token,
-		AgentID:      strings.TrimSpace(dbg.AgentID),
-		Model:        model,
-		SystemPrompt: systemPrompt,
-		MaxTokens:    maxTokens,
-	}, nil
-}
-
 // ChatMessage is a single message for the frontend.
 type ChatMessage struct {
 	Role    string `json:"role"`
@@ -188,34 +83,24 @@ type ChatMessage struct {
 
 // SetChatConfig updates and persists the LLM API settings.
 func (a *App) SetChatConfig(cfg ChatConfig) error {
-	if cfg.MaxTokens < 0 {
-		return fmt.Errorf("maxTokens invalido: use 0 ou um valor positivo")
-	}
-
-	a.chatSvc.SetConfig(ai.Config{
+	return a.chatSvc.SetConfig(chat.Config{
 		Endpoint:     cfg.Endpoint,
 		APIKey:       cfg.APIKey,
-		AgentID:      a.GetDebugConfig().AgentID,
 		Model:        cfg.Model,
 		SystemPrompt: cfg.SystemPrompt,
 		MaxTokens:    cfg.MaxTokens,
 	})
-
-	if err := a.persistChatConfig(cfg); err != nil {
-		return err
-	}
-	return nil
 }
 
 // TestChatConfig checks whether the informed LLM settings are valid without saving them.
 func (a *App) TestChatConfig(cfg ChatConfig) (string, error) {
-	ctx := a.ctx
-	runtimeCfg, err := a.resolveAgentChatRuntimeConfig(cfg)
-	if err != nil {
-		return "", err
-	}
-
-	return a.chatSvc.TestConfig(ctx, runtimeCfg)
+	return a.chatSvc.TestConfig(chat.Config{
+		Endpoint:     cfg.Endpoint,
+		APIKey:       cfg.APIKey,
+		Model:        cfg.Model,
+		SystemPrompt: cfg.SystemPrompt,
+		MaxTokens:    cfg.MaxTokens,
+	})
 }
 
 // GetChatConfig returns the current config (API key masked).
@@ -232,89 +117,12 @@ func (a *App) GetChatConfig() ChatConfig {
 
 // SendChatMessage sends a user message and returns the assistant response.
 func (a *App) SendChatMessage(message string) (string, error) {
-	done := a.beginActivity("chat IA")
-	defer done()
-
-	if cfg := a.GetAgentConfiguration(); cfg.ChatAIEnabled != nil && !*cfg.ChatAIEnabled {
-		return "", fmt.Errorf("Chat AI desabilitado pela configuração do servidor")
-	}
-
-	// Garantir que as tools MCP estão registradas no servidor.
-	a.ensureAgentToolsRegistered()
-
-	current := a.chatSvc.GetConfig()
-	runtimeCfg, err := a.resolveAgentChatRuntimeConfig(ChatConfig{
-		Endpoint:     current.Endpoint,
-		Model:        current.Model,
-		SystemPrompt: current.SystemPrompt,
-		MaxTokens:    current.MaxTokens,
-	})
-	if err != nil {
-		return "", err
-	}
-	a.chatSvc.SetConfig(runtimeCfg)
-
-	return a.chatSvc.Send(a.ctx, message)
+	return a.chatSvc.SendMessage(message)
 }
 
 // StartChatStream sends a chat message and streams the response via Wails events.
 func (a *App) StartChatStream(message string) {
-	done := a.beginActivity("chat IA")
-
-	if cfg := a.GetAgentConfiguration(); cfg.ChatAIEnabled != nil && !*cfg.ChatAIEnabled {
-		a.EmitEvent("chat:error", "Chat AI desabilitado pela configuração do servidor")
-		a.PublishChatEvent("chat:error", "Chat AI desabilitado pela configuração do servidor")
-		done()
-		return
-	}
-
-	a.safeGo(func() {
-		defer done()
-
-		// Garantir que as tools MCP estão registradas no servidor
-		// (cache do servidor expira em ~5 minutos).
-		a.ensureAgentToolsRegistered()
-
-		current := a.chatSvc.GetConfig()
-		runtimeCfg, cfgErr := a.resolveAgentChatRuntimeConfig(ChatConfig{
-			Endpoint:     current.Endpoint,
-			Model:        current.Model,
-			SystemPrompt: current.SystemPrompt,
-			MaxTokens:    current.MaxTokens,
-		})
-		if cfgErr != nil {
-			a.EmitEvent("chat:error", cfgErr.Error())
-			a.PublishChatEvent("chat:error", cfgErr.Error())
-			return
-		}
-		a.chatSvc.SetConfig(runtimeCfg)
-
-		_, err := a.chatSvc.SendStreamMultiRound(
-			a.ctx,
-			message,
-			func(token string) {
-				a.EmitEvent("chat:token", token)
-				a.PublishChatEvent("chat:token", token)
-			},
-			func(status string) {
-				a.EmitEvent("chat:thinking", status)
-				a.PublishChatEvent("chat:thinking", status)
-			},
-			a.mcpExecuteForChat,
-		)
-		if err != nil {
-			if errors.Is(err, context.Canceled) {
-				a.EmitEvent("chat:stopped")
-				a.PublishChatEvent("chat:stopped", "")
-			} else {
-				a.EmitEvent("chat:error", err.Error())
-				a.PublishChatEvent("chat:error", err.Error())
-			}
-		} else {
-			a.EmitEvent("chat:done")
-			a.PublishChatEvent("chat:done", "")
-		}
-	})
+	a.chatSvc.StartStream(message)
 }
 
 // StopChatStream interrupts the active streamed AI response, if running.
@@ -332,9 +140,6 @@ func (a *App) GetChatHistory() []ChatMessage {
 	history := a.chatSvc.GetHistory()
 	msgs := make([]ChatMessage, 0, len(history))
 	for _, m := range history {
-		if m.Role == "tool" || (m.Role == "assistant" && m.Content == "" && len(m.ToolCalls) > 0) {
-			continue
-		}
 		msgs = append(msgs, ChatMessage{Role: m.Role, Content: m.Content})
 	}
 	return msgs
@@ -342,165 +147,15 @@ func (a *App) GetChatHistory() []ChatMessage {
 
 // GetAvailableTools returns the list of MCP tools for display.
 func (a *App) GetAvailableTools() []map[string]string {
-	tools := a.mcpRegistry.Tools()
-	result := make([]map[string]string, len(tools))
-	for i, t := range tools {
-		result[i] = map[string]string{
-			"name":        t.Name,
-			"description": t.Description,
-		}
-	}
-	return result
-}
-
-// mcpExecuteForChat executa uma tool MCP local para o fluxo multi-round.
-func (a *App) mcpExecuteForChat(ctx context.Context, toolName, argsJSON string) (string, error) {
-	result, err := a.mcpRegistry.Call(toolName, json.RawMessage(argsJSON))
-	if err != nil {
-		return "", err
-	}
-	b, marshalErr := json.Marshal(result)
-	if marshalErr != nil {
-		return fmt.Sprintf(`{"result":%q}`, fmt.Sprint(result)), nil
-	}
-	return string(b), nil
+	return a.chatSvc.GetAvailableTools()
 }
 
 // GetMCPRegistry returns the registry (used by main.go for MCP server mode).
 func (a *App) GetMCPRegistry() *mcp.Registry {
-	return a.mcpRegistry
+	return a.chatSvc.Registry()
 }
 
 // RegisterAgentToolsOnServer envia a lista de tools MCP para a API.
 func (a *App) RegisterAgentToolsOnServer() error {
-	dbg := a.GetDebugConfig()
-	baseURL := strings.TrimSpace(dbg.ApiScheme) + "://" + strings.TrimSpace(dbg.ApiServer)
-	if strings.TrimSpace(dbg.ApiScheme) == "" || strings.TrimSpace(dbg.ApiServer) == "" {
-		return fmt.Errorf("apiScheme/apiServer nao configurados")
-	}
-
-	tools := a.mcpRegistry.Tools()
-	type toolEntry struct {
-		Name        string `json:"name"`
-		Description string `json:"description"`
-		Schema      any    `json:"parametersSchema"`
-	}
-	entries := make([]toolEntry, 0, len(tools))
-	for _, t := range tools {
-		entries = append(entries, toolEntry{
-			Name:        t.Name,
-			Description: t.Description,
-			Schema:      t.InputSchema(),
-		})
-	}
-
-	body := map[string]any{"tools": entries}
-	payload, _ := json.Marshal(body)
-
-	endpoint := baseURL + "/api/v1/agent-auth/me/agent-tools/registry"
-	req, err := http.NewRequestWithContext(a.ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
-	if err != nil {
-		a.logs.append("[chat] registro tools request: " + err.Error())
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(dbg.AuthToken))
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		a.logs.append("[chat] registro tools falhou: " + err.Error())
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		a.logs.append(fmt.Sprintf("[chat] registro tools retornou HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(bodyBytes))))
-		return fmt.Errorf("status %d", resp.StatusCode)
-	}
-
-	a.logs.append(fmt.Sprintf("[chat] %d tools MCP registradas com sucesso no servidor", len(entries)))
-
-	// Registrar timestamp para re-registro automático antes do chat.
-	a.toolsRegistrationMu.Lock()
-	a.lastToolsRegistration = time.Now()
-	a.toolsRegistrationMu.Unlock()
-
-	return nil
-}
-
-// ensureAgentToolsRegistered verifica se as tools precisam ser re-registradas
-// antes de um chat. O cache do servidor expira em ~5 minutos; re-registramos
-// preventivamente se o último registro foi há mais de 4 minutos.
-func (a *App) ensureAgentToolsRegistered() {
-	a.toolsRegistrationMu.RLock()
-	lastReg := a.lastToolsRegistration
-	a.toolsRegistrationMu.RUnlock()
-
-	registrySize := len(a.mcpRegistry.Tools())
-
-	// Primeira execução (lastToolsRegistration == zero value) — força registro.
-	// time.Since(time.Time{}) retorna ~292 anos; o log "ultimo ha 9223372037s"
-	// é inútil e confunde o diagnóstico. Tratamos zero value explicitamente.
-	if lastReg.IsZero() {
-		a.chatSvc.LogChatEntry(ai.ChatLogEntry{
-			Type:      "tools_registry",
-			Method:    "multi_round",
-			ToolCount: registrySize,
-			UserMsg:   "primeiro registro de tools (nunca registrado antes)",
-		})
-		if err := a.RegisterAgentToolsOnServer(); err != nil {
-			a.logs.append("[chat] aviso: registro inicial de tools falhou: " + err.Error())
-			a.chatSvc.LogChatEntry(ai.ChatLogEntry{
-				Type:      "tools_registry",
-				Method:    "multi_round",
-				Error:     err.Error(),
-				ToolCount: registrySize,
-			})
-		} else {
-			a.chatSvc.LogChatEntry(ai.ChatLogEntry{
-				Type:      "tools_registry",
-				Method:    "multi_round",
-				ToolCount: registrySize,
-				UserMsg:   "registro inicial ok",
-			})
-		}
-		return
-	}
-
-	sinceLast := time.Since(lastReg)
-
-	if sinceLast < 4*time.Minute {
-		a.chatSvc.LogChatEntry(ai.ChatLogEntry{
-			Type:      "tools_registry",
-			Method:    "multi_round",
-			ToolCount: registrySize,
-			UserMsg:   fmt.Sprintf("cache valido (registrado ha %.0fs)", sinceLast.Seconds()),
-		})
-		return // cache ainda válido
-	}
-
-	a.chatSvc.LogChatEntry(ai.ChatLogEntry{
-		Type:      "tools_registry",
-		Method:    "multi_round",
-		ToolCount: registrySize,
-		UserMsg:   fmt.Sprintf("re-registrando (ultimo ha %.0fs)", sinceLast.Seconds()),
-	})
-
-	if err := a.RegisterAgentToolsOnServer(); err != nil {
-		a.logs.append("[chat] aviso: re-registro de tools falhou: " + err.Error())
-		a.chatSvc.LogChatEntry(ai.ChatLogEntry{
-			Type:      "tools_registry",
-			Method:    "multi_round",
-			Error:     err.Error(),
-			ToolCount: registrySize,
-		})
-	} else {
-		a.chatSvc.LogChatEntry(ai.ChatLogEntry{
-			Type:      "tools_registry",
-			Method:    "multi_round",
-			ToolCount: registrySize,
-			UserMsg:   "re-registro ok",
-		})
-	}
+	return a.chatSvc.RegisterToolsOnServer()
 }

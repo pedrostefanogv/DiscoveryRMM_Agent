@@ -18,10 +18,11 @@ import (
 	"discovery/app/appstore"
 	"discovery/app/debug"
 	appinventory "discovery/app/inventory"
+	"discovery/app/services/chat"
+	"discovery/app/services/psadt"
 	appsupport "discovery/app/support"
 	"discovery/app/updates"
 	"discovery/internal/agentconn"
-	"discovery/internal/ai"
 	"discovery/internal/automation"
 	"discovery/internal/buildinfo"
 	"discovery/internal/chocolatey"
@@ -79,7 +80,8 @@ type App struct {
 	logs      logBuffer
 
 	mcpRegistry   *mcp.Registry
-	chatSvc       *ai.Service
+	chatSvc       *chat.Service
+	psadtSvc      *psadt.Service
 	automationSvc *automation.Service
 
 	// toolsRegistration guarda o timestamp do último registro bem-sucedido de tools.
@@ -185,7 +187,6 @@ func NewApp(opts AppStartupOptions) *App {
 	printerManager := printer.NewManager(printerTimeout)
 
 	reg := mcp.NewRegistry()
-	chatSvc := ai.NewService(reg)
 
 	a := &App{
 		ctx:                 context.Background(),
@@ -200,12 +201,70 @@ func NewApp(opts AppStartupOptions) *App {
 		invSvc:              services.NewInventoryService(inventoryProvider),
 		printerSvc:          services.NewPrinterService(printerManager),
 		mcpRegistry:         reg,
-		chatSvc:             chatSvc,
 		chatEvents:          newChatEventBroker(),
 		pendingNotifyResult: make(map[string]chan string),
 		notificationByKey:   make(map[string]notificationIdempotencyEntry),
 		startupTime:         time.Now(),
 	}
+	a.chatSvc = chat.New(reg, chat.Deps{
+		Ctx: func() context.Context { return a.ctx },
+		Logf: func(line string) {
+			a.logs.append(line)
+		},
+		GetDebugConfig: func() chat.DebugConfig {
+			cfg := a.GetDebugConfig()
+			return chat.DebugConfig{
+				AgentID:   cfg.AgentID,
+				ApiScheme: cfg.ApiScheme,
+				ApiServer: cfg.ApiServer,
+				AuthToken: cfg.AuthToken,
+			}
+		},
+		GetAgentConfiguration: func() chat.AgentConfiguration {
+			cfg := a.GetAgentConfiguration()
+			return chat.AgentConfiguration{ChatAIEnabled: cfg.ChatAIEnabled}
+		},
+		BeginActivity:    a.beginActivity,
+		EmitEvent:        a.EmitEvent,
+		PublishChatEvent: a.PublishChatEvent,
+		SafeGo:           a.safeGo,
+		ChatConfigFile:   chatConfigFile,
+	})
+	a.psadtSvc = psadt.New(psadt.Deps{
+		Logf: func(line string) {
+			a.logs.append(line)
+		},
+		GetAgentConfiguration: func() psadt.AgentConfiguration {
+			cfg := a.GetAgentConfiguration()
+			return psadt.AgentConfiguration{
+				PSADT: psadt.PSADTConfig{
+					Enabled:         cfg.PSADT.Enabled,
+					RequiredVersion: cfg.PSADT.RequiredVersion,
+					InstallSource:   cfg.PSADT.InstallSource,
+				},
+			}
+		},
+		RuntimeDebugMode: func() bool {
+			return a.runtimeFlags.DebugMode
+		},
+		DispatchNotification: func(req psadt.NotificationRequest) psadt.NotificationResponse {
+			resp := a.DispatchNotification(NotificationDispatchRequest{
+				NotificationID: req.NotificationID,
+				Title:          req.Title,
+				Message:        req.Message,
+				Mode:           req.Mode,
+				Severity:       req.Severity,
+				EventType:      req.EventType,
+				Layout:         req.Layout,
+				TimeoutSeconds: req.TimeoutSeconds,
+				Metadata:       req.Metadata,
+			})
+			return psadt.NotificationResponse{
+				Accepted: resp.Accepted,
+				Message:  resp.Message,
+			}
+		},
+	})
 	a.automationSvc = automation.NewService(func() automation.RuntimeConfig {
 		cfg := a.GetDebugConfig()
 		baseURL := strings.TrimSpace(cfg.ApiScheme) + "://" + strings.TrimSpace(cfg.ApiServer)
@@ -356,7 +415,7 @@ func NewApp(opts AppStartupOptions) *App {
 	a.syncCoord = newSyncCoordinator(a, a.updateTrigger)
 	a.p2pConfig = defaultP2PConfig()
 	a.p2pCoord = newP2PCoordinator(a)
-	a.chatSvc.SetLogger(func(line string) {
+	a.chatSvc.Service().SetLogger(func(line string) {
 		a.logs.append("[chat] " + line)
 	})
 	a.inventorySvc = appinventory.NewService(appinventory.Options{
@@ -490,7 +549,7 @@ func NewApp(opts AppStartupOptions) *App {
 			a.logs.append("[startup] persistência de logs habilitada em " + logPath)
 		}
 	}
-	a.loadPersistedChatConfig()
+	a.chatSvc.LoadPersistedConfig()
 	a.debugSvc.LoadConnectionConfigFromProduction()
 	a.initChatLogger()
 

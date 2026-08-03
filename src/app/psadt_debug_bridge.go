@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"discovery/app/services/psadt"
 	"discovery/internal/processutil"
 
 	"golang.org/x/text/encoding/charmap"
@@ -77,116 +78,28 @@ func (a *App) GetPSADTDebugState() PSADTDebugState {
 		RuntimeDebugMode:     a.runtimeFlags.DebugMode,
 		Configuration:        cfg,
 		ModuleStatus:         module,
-		NotificationBranding: cfg.NotificationBranding,
-		NotificationPolicies: cfg.NotificationPolicies,
+		NotificationBranding: cfg.NotificationBranding, NotificationPolicies: cfg.NotificationPolicies,
 	}
 }
 
 func (a *App) CheckPSADTModuleStatus() PSADTModuleStatus {
-	a.logs.append("[psadt] verificando status do modulo PSAppDeployToolkit...")
-	status := PSADTModuleStatus{CheckedAtUTC: time.Now().UTC().Format(time.RFC3339)}
-	if runtime.GOOS != "windows" {
-		status.Message = "PSADT suportado apenas no Windows"
-		a.logs.append("[psadt] verificação ignorada: não é Windows")
-		return status
+	status := a.psadtSvc.CheckModuleStatus()
+	return PSADTModuleStatus{
+		Installed:    status.Installed,
+		Version:      status.Version,
+		Message:      status.Message,
+		CheckedAtUTC: status.CheckedAtUTC,
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-Command",
-		"$m = Get-Module -ListAvailable -Name PSAppDeployToolkit | Sort-Object Version -Descending | Select-Object -First 1; if ($m) { Write-Output $m.Version.ToString() }")
-	processutil.HideWindow(cmd)
-	out, err := cmd.CombinedOutput()
-	text := decodePowerShellOutput(out)
-	if err != nil {
-		status.Message = strings.TrimSpace(err.Error())
-		if status.Message == "" {
-			status.Message = "falha ao consultar módulo PSADT"
-		}
-		a.logs.append("[psadt] erro ao verificar modulo: " + status.Message)
-		return status
-	}
-
-	if text == "" {
-		status.Message = "módulo PSAppDeployToolkit não encontrado"
-		a.logs.append("[psadt] módulo PSAppDeployToolkit não instalado")
-		return status
-	}
-
-	status.Installed = true
-	status.Version = text
-	status.Message = "módulo PSAppDeployToolkit disponível"
-	a.logs.append("[psadt] módulo instalado: versão " + text)
-	return status
 }
 
 func (a *App) InstallPSADTModule(version string) PSADTModuleStatus {
-	status := PSADTModuleStatus{CheckedAtUTC: time.Now().UTC().Format(time.RFC3339)}
-	if runtime.GOOS != "windows" {
-		status.Message = "PSADT suportado apenas no Windows"
-		a.logs.append("[psadt] instalação ignorada: não é Windows")
-		return status
+	status := a.psadtSvc.InstallModule(version)
+	return PSADTModuleStatus{
+		Installed:    status.Installed,
+		Version:      status.Version,
+		Message:      status.Message,
+		CheckedAtUTC: status.CheckedAtUTC,
 	}
-
-	version = strings.TrimSpace(version)
-	if version == "" {
-		version = "4.1.8"
-	}
-	if !psadtVersionPattern.MatchString(version) {
-		status.Message = "versão inválida"
-		a.logs.append("[psadt] instalação rejeitada: versão inválida '" + version + "'")
-		return status
-	}
-
-	installSource := "powershell_gallery"
-	if a != nil {
-		installSource = strings.TrimSpace(a.GetAgentConfiguration().PSADT.InstallSource)
-	}
-	sourceType, sourceValue := parsePSADTInstallSource(installSource)
-	a.logs.append("[psadt] iniciando instalação do módulo versão " + version + " via source=" + sourceType)
-
-	script := buildPSADTInstallScript(version, sourceType, sourceValue)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-Command", script)
-	processutil.HideWindow(cmd)
-	out, err := cmd.CombinedOutput()
-	text := decodePowerShellOutput(out)
-	if err != nil {
-		status.Message = strings.TrimSpace(err.Error())
-		if text != "" {
-			status.Message = text
-		}
-		if status.Message == "" {
-			status.Message = "falha ao instalar PSADT"
-		}
-		if sourceType != "powershell_gallery" {
-			a.logs.append("[psadt] source " + sourceType + " falhou; fallback para powershell_gallery")
-			fallbackScript := buildPSADTInstallScript(version, "powershell_gallery", "")
-			fallbackCmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-Command", fallbackScript)
-			processutil.HideWindow(fallbackCmd)
-			fallbackOut, fallbackErr := fallbackCmd.CombinedOutput()
-			fallbackText := decodePowerShellOutput(fallbackOut)
-			if fallbackErr == nil {
-				status.Installed = true
-				status.Version = fallbackText
-				status.Message = "instalação concluída (fallback powershell_gallery)"
-				a.logs.append("[psadt] módulo instalado com fallback PSGallery: versão " + fallbackText)
-				return status
-			}
-		}
-		a.logs.append("[psadt] falha na instalação do módulo: " + status.Message)
-		return status
-	}
-
-	status.Installed = true
-	status.Version = text
-	status.Message = "instalação concluída (source=" + sourceType + ")"
-	a.logs.append("[psadt] módulo instalado com sucesso: versão " + text)
-	return status
 }
 
 func parsePSADTInstallSource(raw string) (string, string) {
@@ -242,46 +155,15 @@ func escapePowerShellSingleQuoted(value string) string {
 }
 
 func (a *App) EmitPSADTDebugNotification(req PSADTDebugNotificationRequest) error {
-	if a == nil || a.ctx == nil {
-		return fmt.Errorf("contexto do app indisponível")
-	}
-	if strings.TrimSpace(req.Title) == "" {
-		req.Title = "Teste PSADT"
-	}
-	if strings.TrimSpace(req.Message) == "" {
-		req.Message = "Notificação de teste"
-	}
-	if strings.TrimSpace(req.Mode) == "" {
-		req.Mode = "notify_only"
-	}
-	if strings.TrimSpace(req.Severity) == "" {
-		req.Severity = "medium"
-	}
-	if strings.TrimSpace(req.Layout) == "" {
-		req.Layout = "toast"
-	}
-
-	notificationID := fmt.Sprintf("psadt-debug-%d", time.Now().UnixNano())
-	resp := a.DispatchNotification(NotificationDispatchRequest{
-		NotificationID: notificationID,
-		Title:          req.Title,
-		Message:        req.Message,
-		Mode:           req.Mode,
-		Severity:       req.Severity,
-		EventType:      "psadt_debug_runtime",
-		Layout:         req.Layout,
-		TimeoutSeconds: 45,
-		Metadata: map[string]any{
-			"source":     "psadt-debug",
-			"accent":     req.Accent,
-			"requireAck": req.RequireAck,
-		},
+	return a.psadtSvc.EmitDebugNotification(psadt.DebugNotificationRequest{
+		Title:      req.Title,
+		Message:    req.Message,
+		Mode:       req.Mode,
+		Severity:   req.Severity,
+		Layout:     req.Layout,
+		Accent:     req.Accent,
+		RequireAck: req.RequireAck,
 	})
-	if !resp.Accepted {
-		return fmt.Errorf("notificação rejeitada: %s", strings.TrimSpace(resp.Message))
-	}
-	a.logs.append("[notification] evento PSADT emitido via dispatch id=" + notificationID)
-	return nil
 }
 
 // PSADTScriptResult representa o resultado da execução de um script PSADT
@@ -409,118 +291,20 @@ exit 0
 
 // GetPSADTScriptTemplate retorna um template de script PSADT para customização
 func (a *App) GetPSADTScriptTemplate() string {
-	return `# PSAppDeployToolkit - Deploy Script Template
-# Baseado em: https://psappdeploytoolkit.com/docs/4.1.x/
-
-# Importar o módulo PSAppDeployToolkit
-try {
-    Import-Module -Name PSAppDeployToolkit -ErrorAction Stop
-} catch {
-    Write-Error "Falha ao importar PSAppDeployToolkit: $_"
-    exit 1
-}
-
-# Variáveis de Configuração da Aplicação
-[string]$appVendor = "Company"
-[string]$appName = "MyApp"
-[string]$appVersion = "1.0"
-[string]$appArch = "x64"
-[string]$appLang = "pt-BR"
-[string]$appRevision = "01"
-[string]$appScriptVersion = "1.0"
-[string]$deploymentType = "Install"
-
-# Diretórios
-[string]$appDeployToolkitPath = Split-Path -Parent $MyInvocation.MyCommand.Definition
-[string]$appSourcePath = Join-Path -Path $appDeployToolkitPath -ChildPath 'Files'
-[string]$appDestinationPath = "$env:ProgramFiles\$appVendor\$appName"
-
-# Configurações de Log
-[string]$appScriptLogPath = Join-Path -Path $appDeployToolkitPath -ChildPath 'Logs'
-
-Write-Host ""
-Write-Host "Iniciando Deploy: $appName v$appVersion"
-Write-Host "Tipo: $deploymentType"
-Write-Host ""
-
-# ===== INSTALAÇÃO =====
-if ($deploymentType -eq 'Install') {
-	Write-Host "Instalando $appName..."
-	New-Item -ItemType Directory -Path $appDestinationPath -Force | Out-Null
-
-	# Exemplo real de cópia de artefatos do pacote
-	# Copy-Item -Path "$appSourcePath\*" -Destination $appDestinationPath -Recurse -Force
-
-	# Exemplo real de execução de instalador silencioso
-	# Start-Process -FilePath "$appSourcePath\setup.exe" -ArgumentList "/quiet /norestart" -Wait -NoNewWindow
-
-	Write-Host "Instalação finalizada"
-}
-
-# ===== DESINSTALAÇÃO =====
-if ($deploymentType -eq 'Uninstall') {
-    Write-Host "Desinstalando $appName..."
-	if (Test-Path -Path $appDestinationPath) {
-		Remove-Item -Path $appDestinationPath -Recurse -Force
-	}
-	Write-Host "Desinstalação concluída"
-}
-
-exit 0
-`
+	return a.psadtSvc.GetScriptTemplate()
 }
 
 // ExecuteCustomPSADTScript executa um script PSADT customizado fornecido pelo usuário
 func (a *App) ExecuteCustomPSADTScript(scriptContent string) PSADTScriptResult {
-	result := PSADTScriptResult{
-		ExecutedAtUTC: time.Now().UTC().Format(time.RFC3339),
+	result := a.psadtSvc.ExecuteCustomScript(scriptContent)
+	return PSADTScriptResult{
+		Success:       result.Success,
+		ExitCode:      result.ExitCode,
+		Output:        result.Output,
+		Error:         result.Error,
+		ExecutedAtUTC: result.ExecutedAtUTC,
+		DurationMS:    result.DurationMS,
 	}
-
-	if runtime.GOOS != "windows" {
-		result.Success = false
-		result.Error = "PSADT suportado apenas em Windows"
-		result.ExitCode = 1
-		a.logs.append("[psadt] custom script ignorado: não é Windows")
-		return result
-	}
-
-	if strings.TrimSpace(scriptContent) == "" {
-		result.Success = false
-		result.Error = "Script vazio"
-		result.ExitCode = 1
-		a.logs.append("[psadt] custom script rejeitado: conteúdo vazio")
-		return result
-	}
-	a.logs.append(fmt.Sprintf("[psadt] executando script customizado (%d bytes)...", len(strings.TrimSpace(scriptContent))))
-
-	start := time.Now()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-Command", scriptContent)
-	processutil.HideWindow(cmd)
-	output, err := cmd.CombinedOutput()
-	elapsed := time.Since(start).Milliseconds()
-
-	result.DurationMS = elapsed
-	result.Output = decodePowerShellOutput(output)
-
-	if err != nil {
-		result.Success = false
-		result.Error = err.Error()
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			result.ExitCode = exitErr.ExitCode()
-		} else {
-			result.ExitCode = 1
-		}
-		a.logs.append(fmt.Sprintf("[psadt] custom script falhou: %v", err))
-		return result
-	}
-
-	result.Success = true
-	result.ExitCode = 0
-	a.logs.append(fmt.Sprintf("[psadt] custom script executado com sucesso em %dms", elapsed))
-	return result
 }
 
 // PSADTVisualNotificationRequest define os parametros para um teste visual nativo de notificacao PSADT.
