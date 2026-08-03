@@ -1,3 +1,5 @@
+//go:build windows
+
 package screen
 
 // GPUCapability indica capacidades da GPU detectada.

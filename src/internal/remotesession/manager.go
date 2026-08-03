@@ -1,3 +1,5 @@
+//go:build windows
+
 package remotesession
 
 import (
@@ -17,17 +19,17 @@ import (
 
 // Session representa uma sessao remota ativa gerenciada pelo agent.
 type Session struct {
-	ID          string    `json:"sessionId"`
-	Kind        string    `json:"kind"`        // screen, terminal, files, proxy
-	Transport   string    `json:"transport"`   // webrtc, nats, http
-	Quality     string    `json:"quality"`     // ultra, high, medium, low, ultralow
-	Codec       string    `json:"codec"`       // jpeg, webp, h264
-	ImageQuality int      `json:"imageQuality"` // compressão JPEG/WebP 1-100, default 70
-	MaxFps       int      `json:"maxFps"`       // taxa máxima de quadros por segundo, default 15
-	NatsSubject string    `json:"natsSubject"` // subject base para stream
-	ExpiresAt   time.Time `json:"expiresAtUtc"`
-	StartedAt   time.Time `json:"startedAtUtc"`
-	Recording   bool      `json:"recording"`
+	ID           string    `json:"sessionId"`
+	Kind         string    `json:"kind"`         // screen, terminal, files, proxy
+	Transport    string    `json:"transport"`    // webrtc, nats, http
+	Quality      string    `json:"quality"`      // ultra, high, medium, low, ultralow
+	Codec        string    `json:"codec"`        // jpeg, webp, h264
+	ImageQuality int       `json:"imageQuality"` // compressão JPEG/WebP 1-100, default 70
+	MaxFps       int       `json:"maxFps"`       // taxa máxima de quadros por segundo, default 15
+	NatsSubject  string    `json:"natsSubject"`  // subject base para stream
+	ExpiresAt    time.Time `json:"expiresAtUtc"`
+	StartedAt    time.Time `json:"startedAtUtc"`
+	Recording    bool      `json:"recording"`
 
 	// estado interno
 	stopCh chan struct{}
@@ -37,11 +39,11 @@ type Session struct {
 
 // Manager gerencia o lifecycle de sessoes remotas no agent.
 type Manager struct {
-	mu         sync.RWMutex
-	sessions   map[string]*Session       // key: sessionId
+	mu             sync.RWMutex
+	sessions       map[string]*Session       // key: sessionId
 	screenSessions map[string]*SessionScreen // key: sessionId — referência às goroutines ativas
-	nc         *nats.Conn
-	natsStream *NatsStreamHandler
+	nc             *nats.Conn
+	natsStream     *NatsStreamHandler
 
 	// callbacks para notificar a UI/tray
 	onSessionStarted func(sessionID, kind string)
@@ -214,8 +216,8 @@ func (m *Manager) handleQuality(_ context.Context, payload map[string]any) (bool
 	sessionID := toString(payload["sessionId"])
 	quality := toString(payload["quality"])
 	codec := toString(payload["codec"])
-	imageQuality := payload["imageQuality"]   // pode ser nil ou float64
-	maxFpsVal := payload["maxFps"]            // pode ser nil ou float64
+	imageQuality := payload["imageQuality"] // pode ser nil ou float64
+	maxFpsVal := payload["maxFps"]          // pode ser nil ou float64
 	autoMode := false
 	if a, ok := payload["auto"].(bool); ok {
 		autoMode = a
@@ -543,10 +545,10 @@ func (m *Manager) runTerminalSession(ctx context.Context, session *Session) {
 		}
 	}
 	m.natsStream.PublishTermReady(session.ID, map[string]any{
-		"shells":     availableShells,
-		"consoleId":  console.ID,
-		"termCols":   cols,
-		"termRows":   rows,
+		"shells":    availableShells,
+		"consoleId": console.ID,
+		"termCols":  cols,
+		"termRows":  rows,
 	})
 	log.Printf("[remote-session-term] console pronto para sessao %s (consoleId=%s, shells=%v)\n",
 		session.ID, console.ID, availableShells)
@@ -569,35 +571,35 @@ func (m *Manager) runTerminalSession(ctx context.Context, session *Session) {
 // sessionMetaString extrai string de session.meta (via payload original).
 // Como Session nao tem campo meta, usamos valores default.
 func sessionMetaString(session *Session, key string) (string, bool) {
-        if session.Meta == nil {
-                return "", false
-        }
-        v, ok := session.Meta[key]
-        if !ok {
-                return "", false
-        }
-        s, ok := v.(string)
-        return s, ok
+	if session.Meta == nil {
+		return "", false
+	}
+	v, ok := session.Meta[key]
+	if !ok {
+		return "", false
+	}
+	s, ok := v.(string)
+	return s, ok
 }
 
 func sessionMetaInt(session *Session, key string, defaultVal int) int {
-        if session.Meta == nil {
-                return defaultVal
-        }
-        v, ok := session.Meta[key]
-        if !ok {
-                return defaultVal
-        }
-        switch val := v.(type) {
-        case float64:
-                return int(val)
-        case int:
-                return val
-        case int64:
-                return int(val)
-        default:
-                return defaultVal
-        }
+	if session.Meta == nil {
+		return defaultVal
+	}
+	v, ok := session.Meta[key]
+	if !ok {
+		return defaultVal
+	}
+	switch val := v.(type) {
+	case float64:
+		return int(val)
+	case int:
+		return val
+	case int64:
+		return int(val)
+	default:
+		return defaultVal
+	}
 }
 
 func (m *Manager) runFilesSession(ctx context.Context, session *Session) {

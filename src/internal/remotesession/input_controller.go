@@ -1,3 +1,5 @@
+//go:build windows
+
 package remotesession
 
 import (
@@ -15,19 +17,19 @@ const InputVersion = 1
 
 // InputEvent representa um evento de input do viewer (contrato canônico v1).
 type InputEvent struct {
-	Version     int              `json:"version"`
-	Type        string           `json:"type"` // mouse.move|mouse.down|mouse.up|mouse.wheel|key.down|key.up|clipboard
-	FrameWidth  int              `json:"frameWidth"`
-	FrameHeight int              `json:"frameHeight"`
-	X           int              `json:"x"`
-	Y           int              `json:"y"`
-	Button      int              `json:"button"` // 0=left, 1=middle, 2=right
-	DeltaX      int              `json:"deltaX"`
-	DeltaY      int              `json:"deltaY"`
-	Code        string           `json:"code"`  // KeyboardEvent.code
-	Key         string           `json:"key"`   // KeyboardEvent.key
-	Modifiers   InputModifiers   `json:"modifiers"`
-	Sequence    uint64           `json:"sequence"`
+	Version     int            `json:"version"`
+	Type        string         `json:"type"` // mouse.move|mouse.down|mouse.up|mouse.wheel|key.down|key.up|clipboard
+	FrameWidth  int            `json:"frameWidth"`
+	FrameHeight int            `json:"frameHeight"`
+	X           int            `json:"x"`
+	Y           int            `json:"y"`
+	Button      int            `json:"button"` // 0=left, 1=middle, 2=right
+	DeltaX      int            `json:"deltaX"`
+	DeltaY      int            `json:"deltaY"`
+	Code        string         `json:"code"` // KeyboardEvent.code
+	Key         string         `json:"key"`  // KeyboardEvent.key
+	Modifiers   InputModifiers `json:"modifiers"`
+	Sequence    uint64         `json:"sequence"`
 }
 
 // InputModifiers representa teclas modificadoras.
@@ -44,8 +46,8 @@ type InputController struct {
 
 	mu             sync.Mutex
 	lastSeq        uint64
-	frameW, frameH int    // dimensões do último frame
-	capW, capH     int    // dimensões da captura real (virtual desktop)
+	frameW, frameH int // dimensões do último frame
+	capW, capH     int // dimensões da captura real (virtual desktop)
 	rateLimiter    *rateLimiter
 
 	// Eventos por segundo (leaky bucket)
@@ -231,7 +233,9 @@ func (c *InputController) handleLegacyInput(data []byte) {
 
 	switch typ {
 	case "mousedown":
-		x, _ := toFloat64(raw["x"]); y, _ := toFloat64(raw["y"]); btn, _ := toFloat64(raw["button"])
+		x, _ := toFloat64(raw["x"])
+		y, _ := toFloat64(raw["y"])
+		btn, _ := toFloat64(raw["button"])
 		// Move o mouse para a posição do clique ANTES de pressionar o botão.
 		// O viewer envia x/y (coordenadas do frame) no mousedown.
 		if _, hasX := raw["x"]; hasX {
@@ -250,22 +254,32 @@ func (c *InputController) handleLegacyInput(data []byte) {
 			_ = screen.InjectMouseClickLeft(false)
 		}
 	case "mousemove":
-		x, _ := toFloat64(raw["x"]); y, _ := toFloat64(raw["y"])
+		x, _ := toFloat64(raw["x"])
+		y, _ := toFloat64(raw["y"])
 		c.handleMouseMoveNormalized(int(x), int(y))
 	case "wheel":
-		dx, _ := toFloat64(raw["deltaX"]); dy, _ := toFloat64(raw["deltaY"])
+		dx, _ := toFloat64(raw["deltaX"])
+		dy, _ := toFloat64(raw["deltaY"])
 		if dy != 0 {
 			_ = screen.InjectMouseWheel(int16(dy))
 		} else if dx != 0 {
 			_ = screen.InjectMouseWheel(int16(dx))
 		}
 	case "keydown":
-		code, _ := raw["code"].(string); key, _ := raw["key"].(string)
-		ctrl, _ := raw["ctrl"].(bool); alt, _ := raw["alt"].(bool); shift, _ := raw["shift"].(bool); meta, _ := raw["meta"].(bool)
+		code, _ := raw["code"].(string)
+		key, _ := raw["key"].(string)
+		ctrl, _ := raw["ctrl"].(bool)
+		alt, _ := raw["alt"].(bool)
+		shift, _ := raw["shift"].(bool)
+		meta, _ := raw["meta"].(bool)
 		c.handleKey(code, key, true, InputModifiers{Ctrl: ctrl, Alt: alt, Shift: shift, Meta: meta})
 	case "keyup":
-		code, _ := raw["code"].(string); key, _ := raw["key"].(string)
-		ctrl, _ := raw["ctrl"].(bool); alt, _ := raw["alt"].(bool); shift, _ := raw["shift"].(bool); meta, _ := raw["meta"].(bool)
+		code, _ := raw["code"].(string)
+		key, _ := raw["key"].(string)
+		ctrl, _ := raw["ctrl"].(bool)
+		alt, _ := raw["alt"].(bool)
+		shift, _ := raw["shift"].(bool)
+		meta, _ := raw["meta"].(bool)
 		c.handleKey(code, key, false, InputModifiers{Ctrl: ctrl, Alt: alt, Shift: shift, Meta: meta})
 	}
 }
@@ -328,39 +342,72 @@ type rateLimiter struct{}
 func mapBrowserCodeToVK(code, key string) uint16 {
 	// Mapeamento por code (mais confiável)
 	switch code {
-	case "Backspace": return VK_BACK
-	case "Tab": return VK_TAB
-	case "Enter", "NumpadEnter": return VK_RETURN
-	case "ShiftLeft", "ShiftRight": return VK_SHIFT
-	case "ControlLeft", "ControlRight": return VK_CONTROL
-	case "AltLeft", "AltRight": return VK_MENU
-	case "Escape": return VK_ESCAPE
-	case "Space": return VK_SPACE
-	case "ArrowLeft": return VK_LEFT
-	case "ArrowUp": return VK_UP
-	case "ArrowRight": return VK_RIGHT
-	case "ArrowDown": return VK_DOWN
-	case "Delete": return VK_DELETE
-	case "MetaLeft", "MetaRight": return VK_LWIN
-	case "CapsLock": return 0x14
-	case "F1": return 0x70
-	case "F2": return 0x71
-	case "F3": return 0x72
-	case "F4": return 0x73
-	case "F5": return 0x74
-	case "F6": return 0x75
-	case "F7": return 0x76
-	case "F8": return 0x77
-	case "F9": return 0x78
-	case "F10": return 0x79
-	case "F11": return 0x7A
-	case "F12": return 0x7B
-	case "Home": return 0x24
-	case "End": return 0x23
-	case "PageUp": return 0x21
-	case "PageDown": return 0x22
-	case "Insert": return 0x2D
-	case "PrintScreen": return 0x2C
+	case "Backspace":
+		return VK_BACK
+	case "Tab":
+		return VK_TAB
+	case "Enter", "NumpadEnter":
+		return VK_RETURN
+	case "ShiftLeft", "ShiftRight":
+		return VK_SHIFT
+	case "ControlLeft", "ControlRight":
+		return VK_CONTROL
+	case "AltLeft", "AltRight":
+		return VK_MENU
+	case "Escape":
+		return VK_ESCAPE
+	case "Space":
+		return VK_SPACE
+	case "ArrowLeft":
+		return VK_LEFT
+	case "ArrowUp":
+		return VK_UP
+	case "ArrowRight":
+		return VK_RIGHT
+	case "ArrowDown":
+		return VK_DOWN
+	case "Delete":
+		return VK_DELETE
+	case "MetaLeft", "MetaRight":
+		return VK_LWIN
+	case "CapsLock":
+		return 0x14
+	case "F1":
+		return 0x70
+	case "F2":
+		return 0x71
+	case "F3":
+		return 0x72
+	case "F4":
+		return 0x73
+	case "F5":
+		return 0x74
+	case "F6":
+		return 0x75
+	case "F7":
+		return 0x76
+	case "F8":
+		return 0x77
+	case "F9":
+		return 0x78
+	case "F10":
+		return 0x79
+	case "F11":
+		return 0x7A
+	case "F12":
+		return 0x7B
+	case "Home":
+		return 0x24
+	case "End":
+		return 0x23
+	case "PageUp":
+		return 0x21
+	case "PageDown":
+		return 0x22
+	case "Insert":
+		return 0x2D
+	case "PrintScreen":
+		return 0x2C
 	}
 
 	// Fallback por key (menos confiável, depende do layout)
@@ -377,17 +424,28 @@ func mapBrowserCodeToVK(code, key string) uint16 {
 		}
 		// Símbolos comuns
 		switch ch {
-		case '.': return 0xBE
-		case ',': return 0xBC
-		case '/': return 0xBF
-		case '\\': return 0xDC
-		case '-': return 0xBD
-		case '=': return 0xBB
-		case ';': return 0xBA
-		case '\'': return 0xDE
-		case '[': return 0xDB
-		case ']': return 0xDD
-		case '`': return 0xC0
+		case '.':
+			return 0xBE
+		case ',':
+			return 0xBC
+		case '/':
+			return 0xBF
+		case '\\':
+			return 0xDC
+		case '-':
+			return 0xBD
+		case '=':
+			return 0xBB
+		case ';':
+			return 0xBA
+		case '\'':
+			return 0xDE
+		case '[':
+			return 0xDB
+		case ']':
+			return 0xDD
+		case '`':
+			return 0xC0
 		}
 	}
 

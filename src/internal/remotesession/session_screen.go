@@ -1,3 +1,5 @@
+//go:build windows
+
 package remotesession
 
 import (
@@ -47,6 +49,7 @@ type SessionScreen struct {
 	lastLogTime     time.Time
 	lastMetricsTime time.Time
 }
+
 // FrameHeader binario para frames (12 bytes).
 //
 //	seq (uint32) | ts (uint32 unix ms) | w (uint16) | h (uint16)
@@ -158,12 +161,12 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 	}
 
 	type frameResult struct {
-		data      []byte
-		seq       uint64
-		width     int
-		height    int
-		rawBytes  int64
-		encodeMs  float64
+		data     []byte
+		seq      uint64
+		width    int
+		height   int
+		rawBytes int64
+		encodeMs float64
 	}
 
 	encodeChan := make(chan encodeJob, 1) // buffer=1: captura nunca bloqueia se encoder ocupado
@@ -550,18 +553,18 @@ func (s *SessionScreen) publishMetrics(width, height int, framesSent, framesSkip
 	}
 
 	metrics := map[string]any{
-		"eventType":       "metrics",
-		"effectiveFps":    q.EffectiveFps(),
-		"profileFps":      q.Fps,
-		"quality":         s.quality.Profile(),
-		"imageQuality":    q.EffectiveJpegQuality(),
-		"resolution":      fmt.Sprintf("%dx%d", width, height),
+		"eventType":        "metrics",
+		"effectiveFps":     q.EffectiveFps(),
+		"profileFps":       q.Fps,
+		"quality":          s.quality.Profile(),
+		"imageQuality":     q.EffectiveJpegQuality(),
+		"resolution":       fmt.Sprintf("%dx%d", width, height),
 		"compressionRatio": compressionRatio,
-		"avgEncodeMs":     avgEncodeMs,
-		"frameBytesAvg":   int64(0),
-		"framesSent5s":    framesSent,
-		"framesSkipped5s": framesSkipped,
-		"totalFrames":     s.frameSeq,
+		"avgEncodeMs":      avgEncodeMs,
+		"frameBytesAvg":    int64(0),
+		"framesSent5s":     framesSent,
+		"framesSkipped5s":  framesSkipped,
+		"totalFrames":      s.frameSeq,
 	}
 	if framesSent > 0 {
 		metrics["frameBytesAvg"] = encBytes / framesSent

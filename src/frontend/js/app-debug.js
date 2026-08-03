@@ -75,11 +75,69 @@ function loadDebugConfig() {
     }).catch(function () {});
   } catch (e) {}
   startAgentStatusPoll();
+  loadHardwareIdentity();
 }
 
 function updateDebugResponseLabel() {
   if (!debugResponseLabelEl) return;
   debugResponseLabelEl.innerHTML = translate('debug.testResponse');
+}
+
+// ── Identidade de Hardware (TPM EK + UUID SMBIOS) ────────────────────────
+function renderHardwareIdentity(h) {
+  if (!h) {
+    if (hardwareTpmEkEl) hardwareTpmEkEl.textContent = '—';
+    if (hardwareSmbiosUuidEl) hardwareSmbiosUuidEl.textContent = '—';
+    return;
+  }
+  if (hardwareTpmEkEl) {
+    hardwareTpmEkEl.textContent = h.tpmEkAvailable && h.tpmEk ? h.tpmEk : '—';
+  }
+  if (hardwareTpmEkStatusEl) {
+    if (h.tpmEkAvailable) {
+      hardwareTpmEkStatusEl.textContent = '✓ TPM ' + (h.tpmEkAlg || '');
+      hardwareTpmEkStatusEl.className = 'debug-hardware-status ok';
+    } else {
+      hardwareTpmEkStatusEl.textContent = h.tpmEkError ? '✗ ' + h.tpmEkError : '✗ indisponível';
+      hardwareTpmEkStatusEl.className = 'debug-hardware-status err';
+    }
+  }
+  if (hardwareSmbiosUuidEl) {
+    hardwareSmbiosUuidEl.textContent = h.smbiosUuidAvailable && h.smbiosUuid ? h.smbiosUuid : '—';
+  }
+  if (hardwareSmbiosUuidStatusEl) {
+    if (h.smbiosUuidAvailable) {
+      hardwareSmbiosUuidStatusEl.textContent = '✓ SMBIOS';
+      hardwareSmbiosUuidStatusEl.className = 'debug-hardware-status ok';
+    } else {
+      hardwareSmbiosUuidStatusEl.textContent = h.smbiosUuidError ? '✗ ' + h.smbiosUuidError : '✗ indisponível';
+      hardwareSmbiosUuidStatusEl.className = 'debug-hardware-status err';
+    }
+  }
+}
+
+function loadHardwareIdentity() {
+  try {
+    appApi().GetHardwareIdentity().then(function (h) {
+      renderHardwareIdentity(h);
+    }).catch(function () {
+      renderHardwareIdentity(null);
+    });
+  } catch (e) {
+    renderHardwareIdentity(null);
+  }
+}
+
+function refreshHardwareIdentity() {
+  try {
+    appApi().RefreshHardwareIdentity().then(function (h) {
+      renderHardwareIdentity(h);
+    }).catch(function () {
+      renderHardwareIdentity(null);
+    });
+  } catch (e) {
+    renderHardwareIdentity(null);
+  }
 }
 
 function updateDebugBindHint(bound) {
@@ -115,6 +173,14 @@ function initDebug() {
 
   if (agentStatusRefreshBtn) {
     agentStatusRefreshBtn.addEventListener('click', refreshAgentStatus);
+  }
+
+  if (hardwareRefreshBtn) {
+    hardwareRefreshBtn.addEventListener('click', function () {
+      hardwareRefreshBtn.disabled = true;
+      refreshHardwareIdentity();
+      setTimeout(function () { hardwareRefreshBtn.disabled = false; }, 800);
+    });
   }
 
   var sendTestHeartbeatBtn = document.getElementById('sendTestHeartbeatBtn');

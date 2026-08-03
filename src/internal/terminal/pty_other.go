@@ -45,8 +45,30 @@ func NewShell(shell string, onOutput func(string)) (*Shell, error) {
 	}
 
 	// Leitura assincrona
-	go func() { buf := make([]byte, 4096); for { n, err := stdout.Read(buf); if n > 0 { s.onOutput(string(buf[:n])) } if err != nil { return } } }()
-	go func() { buf := make([]byte, 4096); for { n, err := stderr.Read(buf); if n > 0 { s.onOutput(string(buf[:n])) } if err != nil { return } } }()
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			n, err := stdout.Read(buf)
+			if n > 0 {
+				s.onOutput(string(buf[:n]))
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			n, err := stderr.Read(buf)
+			if n > 0 {
+				s.onOutput(string(buf[:n]))
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
 
 	return s, nil
 }

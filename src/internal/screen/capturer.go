@@ -1,3 +1,5 @@
+//go:build windows
+
 package screen
 
 // Capturer captura frames da tela do Windows.

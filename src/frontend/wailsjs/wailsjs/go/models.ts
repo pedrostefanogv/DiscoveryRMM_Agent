@@ -430,6 +430,30 @@ export namespace app {
 	        this.priority = source["priority"];
 	    }
 	}
+	export class HardwareIdentityInfo {
+	    tpmEk: string;
+	    tpmEkAvailable: boolean;
+	    tpmEkError?: string;
+	    tpmEkAlg?: string;
+	    smbiosUuid: string;
+	    smbiosUuidAvailable: boolean;
+	    smbiosUuidError?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new HardwareIdentityInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.tpmEk = source["tpmEk"];
+	        this.tpmEkAvailable = source["tpmEkAvailable"];
+	        this.tpmEkError = source["tpmEkError"];
+	        this.tpmEkAlg = source["tpmEkAlg"];
+	        this.smbiosUuid = source["smbiosUuid"];
+	        this.smbiosUuidAvailable = source["smbiosUuidAvailable"];
+	        this.smbiosUuidError = source["smbiosUuidError"];
+	    }
+	}
 	export class NotificationDispatchRequest {
 	    notificationId: string;
 	    idempotencyKey: string;

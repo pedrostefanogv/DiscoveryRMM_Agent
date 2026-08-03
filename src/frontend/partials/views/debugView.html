@@ -17,6 +17,25 @@
       </div>
     </div>
 
+    <div class="debug-hardware-wrap">
+      <h2 data-i18n="debug.hardwareIdentityTitle">Identidade de Hardware</h2>
+      <div class="debug-hardware-card">
+        <div class="debug-hardware-row">
+          <span class="debug-hardware-label">TPM 2.0 Endorsement Key (EK)</span>
+          <span id="hardwareTpmEk" class="debug-hardware-value mono">—</span>
+          <span id="hardwareTpmEkStatus" class="debug-hardware-status"></span>
+        </div>
+        <div class="debug-hardware-row">
+          <span class="debug-hardware-label">UUID SMBIOS</span>
+          <span id="hardwareSmbiosUuid" class="debug-hardware-value mono">—</span>
+          <span id="hardwareSmbiosUuidStatus" class="debug-hardware-status"></span>
+        </div>
+        <div class="debug-hardware-actions">
+          <button id="hardwareRefreshBtn" class="btn subtle" title="Atualizar identidade de hardware">Atualizar</button>
+        </div>
+      </div>
+    </div>
+
     <div class="debug-config-wrap">
       <h2 data-i18n="debug.connectionSettings">Configuracoes de Conexao</h2>
       <div class="debug-config-form">

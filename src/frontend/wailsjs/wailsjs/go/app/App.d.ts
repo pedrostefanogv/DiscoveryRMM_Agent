@@ -117,6 +117,8 @@ export function GetDebugConfig():Promise<debug.Config>;
 
 export function GetDebugHTTPPort():Promise<number>;
 
+export function GetHardwareIdentity():Promise<app.HardwareIdentityInfo>;
+
 export function GetInventory():Promise<models.InventoryReport>;
 
 export function GetInventoryJSON():Promise<json.RawMessage>;
@@ -254,6 +256,8 @@ export function PublishP2PTestArtifact(arg1:string,arg2:string):Promise<p2pmeta.
 export function PullP2PArtifactFromPeer(arg1:string,arg2:string):Promise<p2pmeta.ArtifactView>;
 
 export function RefreshAutomationPolicy(arg1:boolean):Promise<automation.StateView>;
+
+export function RefreshHardwareIdentity():Promise<app.HardwareIdentityInfo>;
 
 export function RefreshInventory():Promise<models.InventoryReport>;
 

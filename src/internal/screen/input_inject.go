@@ -1,3 +1,5 @@
+//go:build windows
+
 package screen
 
 import (
@@ -67,8 +69,8 @@ type winInput struct {
 // InjectMouseMove move o cursor para posicao absoluta (0-65535).
 func InjectMouseMove(x, y int32) error {
 	mi := mouseInput{
-		dx:      x,
-		dy:      y,
+		dx: x,
+		dy: y,
 		// MOUSEEVENTF_ABSOLUTE (0x8000) + MOUSEEVENTF_VIRTUALDESK (0x4000).
 		// VIRTUALDESK é necessário para mapear coordenadas absolutas (0-65535)
 		// corretamente no desktop virtual, especialmente com múltiplos monitores

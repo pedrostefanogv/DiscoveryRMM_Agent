@@ -214,6 +214,10 @@ export function GetDebugHTTPPort() {
   return window['go']['app']['App']['GetDebugHTTPPort']();
 }
 
+export function GetHardwareIdentity() {
+  return window['go']['app']['App']['GetHardwareIdentity']();
+}
+
 export function GetInventory() {
   return window['go']['app']['App']['GetInventory']();
 }
@@ -488,6 +492,10 @@ export function PullP2PArtifactFromPeer(arg1, arg2) {
 
 export function RefreshAutomationPolicy(arg1) {
   return window['go']['app']['App']['RefreshAutomationPolicy'](arg1);
+}
+
+export function RefreshHardwareIdentity() {
+  return window['go']['app']['App']['RefreshHardwareIdentity']();
 }
 
 export function RefreshInventory() {

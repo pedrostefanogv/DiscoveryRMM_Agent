@@ -234,6 +234,11 @@ const automationExecutionCountEl = document.getElementById('automationExecutionC
 const debugBindAllInterfacesEl = document.getElementById('debugBindAllInterfaces');
 const debugBindStatusEl = document.getElementById('debugBindStatus');
 const debugBindAllInterfacesHintEl = document.getElementById('debugBindAllInterfacesHint');
+const hardwareTpmEkEl = document.getElementById('hardwareTpmEk');
+const hardwareTpmEkStatusEl = document.getElementById('hardwareTpmEkStatus');
+const hardwareSmbiosUuidEl = document.getElementById('hardwareSmbiosUuid');
+const hardwareSmbiosUuidStatusEl = document.getElementById('hardwareSmbiosUuidStatus');
+const hardwareRefreshBtn = document.getElementById('hardwareRefreshBtn');
 
 let agentStatusPollId = null;
 

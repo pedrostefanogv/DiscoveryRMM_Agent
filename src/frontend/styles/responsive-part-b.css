@@ -893,6 +893,69 @@
   opacity: .65;
 }
 
+/* -------- Hardware identity (TPM EK + SMBIOS UUID) -------- */
+.debug-hardware-wrap h2 {
+  font-size: 1rem;
+  font-weight: 600;
+  margin-bottom: .75rem;
+  color: var(--fg);
+}
+
+.debug-hardware-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg2);
+}
+
+.debug-hardware-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.debug-hardware-label {
+  font-size: .8rem;
+  font-weight: 600;
+  color: var(--fg);
+  opacity: .8;
+  min-width: 220px;
+}
+
+.debug-hardware-value {
+  font-size: .8rem;
+  color: var(--fg);
+  word-break: break-all;
+  flex: 1;
+}
+
+.debug-hardware-value.mono {
+  font-family: var(--font-mono, ui-monospace, "Cascadia Code", Consolas, monospace);
+}
+
+.debug-hardware-status {
+  font-size: .75rem;
+  font-weight: 600;
+}
+
+.debug-hardware-status.ok {
+  color: var(--success, #2a9d8f);
+}
+
+.debug-hardware-status.err {
+  color: var(--danger, #c1121f);
+}
+
+.debug-hardware-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
 .debug-config-form {
   display: flex;
   flex-direction: column;

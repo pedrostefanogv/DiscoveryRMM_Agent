@@ -81,13 +81,13 @@ func NewShell(shell string, onOutput func(string)) (*Shell, error) {
 	}
 
 	// Leitura assincrona da saida
-	go s.readLoop(stdoutPipe, "stdout")
-	go s.readLoop(stderrPipe, "stderr")
+	go s.readLoop(stdoutPipe)
+	go s.readLoop(stderrPipe)
 
 	return s, nil
 }
 
-func (s *Shell) readLoop(r io.Reader, source string) {
+func (s *Shell) readLoop(r io.Reader) {
 	buf := make([]byte, 4096)
 	for {
 		n, err := r.Read(buf)

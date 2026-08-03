@@ -105,6 +105,13 @@ type App struct {
 	debugHTTP  *debugHTTPServer
 	chatEvents *chatEventBroker
 
+	// hardwareIdentityCache guarda o resultado da coleta de identidade de
+	// hardware (TPM EK + SMBIOS UUID). O hardware não muda em runtime, então
+	// cacheamos para evitar chamadas repetidas ao TPM/WMI (que são lentas).
+	hardwareIdentityMu    sync.RWMutex
+	hardwareIdentityCache HardwareIdentityInfo
+	hardwareIdentityDone  bool
+
 	p2pMu                      sync.RWMutex
 	p2pConfig                  P2PConfig
 	p2pSeedPlanCache           cachedP2PSeedPlan
