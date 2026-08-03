@@ -517,10 +517,13 @@ func (r *Runtime) runNATSEventLoop(ctx context.Context, nc *nats.Conn, cfg Confi
 	// Quando conectado via NATS sobre WebSocket (wss), tenta periodicamente
 	// voltar ao NATS nativo (nats://). Se o probe tiver sucesso, encerra a
 	// sessão atual para que o loop Run reinicie e priorize o NATS nativo.
-	var nativeNATSRecheckTicker *time.Ticker
+	// Usa um canal (nil quando não aplicável) em vez de um ponteiro de ticker:
+	// um canal nil desabilita o case no select sem causar nil pointer dereference.
+	var nativeNATSRecheckCh <-chan time.Time
 	if isWSSLabel(transportLabel) && strings.TrimSpace(cfg.NatsServer) != "" {
-		nativeNATSRecheckTicker = time.NewTicker(nativeNATSRecheckEvery)
+		nativeNATSRecheckTicker := time.NewTicker(nativeNATSRecheckEvery)
 		defer nativeNATSRecheckTicker.Stop()
+		nativeNATSRecheckCh = nativeNATSRecheckTicker.C
 		r.logf("[transport][nats] conectado via %s — recheck periodico do NATS nativo a cada %s", transportLabel, nativeNATSRecheckEvery)
 	}
 
@@ -555,7 +558,7 @@ func (r *Runtime) runNATSEventLoop(ctx context.Context, nc *nats.Conn, cfg Confi
 				}
 				return publishJSON(nc, subjects.Result, res)
 			})
-		case <-nativeNATSRecheckTicker.C:
+		case <-nativeNATSRecheckCh:
 			if r.probeNativeNATS(cfg) {
 				r.logf("[transport][nats] NATS nativo disponivel (%s) — alternando de %s para nats://", cfg.NatsServer, transportLabel)
 				return fmt.Errorf("NATS nativo disponivel — alternando de %s para nats://", transportLabel)
