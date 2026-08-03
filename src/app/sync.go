@@ -13,8 +13,6 @@ import (
 	"sync"
 	"time"
 
-	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
-
 	"discovery/app/appstore"
 	"discovery/app/netutil"
 	"discovery/internal/agentconn"
@@ -270,7 +268,7 @@ func (c *syncCoordinator) processTrigger(ctx context.Context, trigger syncTrigge
 			c.setContentHash(key, contentHash)
 		}
 
-		wailsRuntime.EventsEmit(c.app.ctx, "store:catalog-updated", map[string]any{
+		c.app.EmitEvent("store:catalog-updated", map[string]any{
 			"resource":  queued.Resource,
 			"variant":   variant,
 			"revision":  revision,

@@ -3,8 +3,6 @@ package app
 import (
 	"io"
 	"sync/atomic"
-
-	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // p2pTransferProgress representa o progresso de uma transferência P2P em tempo real.
@@ -28,10 +26,10 @@ type p2pTransferProgress struct {
 
 // emitTransferProgress emite um evento Wails p2p:transfer-progress para o frontend.
 func (c *p2pCoordinator) emitTransferProgress(p p2pTransferProgress) {
-	if c.app == nil || c.app.ctx == nil {
+	if c.app == nil {
 		return
 	}
-	wailsRuntime.EventsEmit(c.app.ctx, "p2p:transfer-progress", p)
+	c.app.EmitEvent("p2p:transfer-progress", p)
 }
 
 // emitTransferDone emite evento de conclusão e limpa o progresso.

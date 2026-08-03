@@ -6,8 +6,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // ChatQuestion represents an interactive question sent to the user.
@@ -78,7 +76,7 @@ func (a *App) AskUser(question, optionsJSON, allowTextRaw string) (string, error
 
 	// Emit event to the frontend
 	qJSON, _ := json.Marshal(q)
-	wailsRuntime.EventsEmit(a.ctx, "chat:question", string(qJSON))
+	a.EmitEvent("chat:question", string(qJSON))
 
 	// Wait for answer with timeout
 	select {

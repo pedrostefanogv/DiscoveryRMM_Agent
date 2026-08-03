@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-
-	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 func (a *App) applyP2PConfig(cfg P2PConfig) {
@@ -185,10 +183,10 @@ func (a *App) SelectAndPublishP2PArtifact() (P2PArtifactView, error) {
 	if a.p2pCoord == nil {
 		return P2PArtifactView{}, fmt.Errorf("coordinator P2P indisponível")
 	}
-	if a.ctx == nil {
-		return P2PArtifactView{}, fmt.Errorf("contexto de runtime indisponível")
+	if a.app == nil {
+		return P2PArtifactView{}, fmt.Errorf("runtime de aplicação indisponível")
 	}
-	selectedPath, err := wailsRuntime.OpenFileDialog(a.ctx, wailsRuntime.OpenDialogOptions{})
+	selectedPath, err := a.app.Dialog.OpenFile().PromptForSingleSelection()
 	if err != nil {
 		return P2PArtifactView{}, err
 	}

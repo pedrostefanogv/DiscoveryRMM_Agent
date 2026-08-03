@@ -13,8 +13,6 @@ import (
 	"time"
 
 	"discovery/internal/platform"
-
-	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 const (
@@ -448,14 +446,14 @@ type p2pPublishProgress struct {
 
 // emitPublishProgress emite evento Wails p2p:publish:progress para o frontend.
 func (c *p2pCoordinator) emitPublishProgress(artifactName string, processed, total int64, done bool, errMsg string) {
-	if c.app == nil || c.app.ctx == nil {
+	if c.app == nil {
 		return
 	}
 	percent := 0
 	if total > 0 {
 		percent = int(processed * 100 / total)
 	}
-	wailsRuntime.EventsEmit(c.app.ctx, "p2p:publish:progress", p2pPublishProgress{
+	c.app.EmitEvent("p2p:publish:progress", p2pPublishProgress{
 		ArtifactName:   artifactName,
 		BytesProcessed: processed,
 		TotalBytes:     total,

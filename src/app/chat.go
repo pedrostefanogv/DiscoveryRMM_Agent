@@ -13,8 +13,6 @@ import (
 	"strings"
 	"time"
 
-	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
-
 	"discovery/internal/ai"
 	"discovery/internal/mcp"
 	"discovery/internal/platform"
@@ -264,7 +262,7 @@ func (a *App) StartChatStream(message string) {
 	done := a.beginActivity("chat IA")
 
 	if cfg := a.GetAgentConfiguration(); cfg.ChatAIEnabled != nil && !*cfg.ChatAIEnabled {
-		wailsRuntime.EventsEmit(a.ctx, "chat:error", "Chat AI desabilitado pela configuração do servidor")
+		a.EmitEvent("chat:error", "Chat AI desabilitado pela configuração do servidor")
 		a.PublishChatEvent("chat:error", "Chat AI desabilitado pela configuração do servidor")
 		done()
 		return
@@ -285,7 +283,7 @@ func (a *App) StartChatStream(message string) {
 			MaxTokens:    current.MaxTokens,
 		})
 		if cfgErr != nil {
-			wailsRuntime.EventsEmit(a.ctx, "chat:error", cfgErr.Error())
+			a.EmitEvent("chat:error", cfgErr.Error())
 			a.PublishChatEvent("chat:error", cfgErr.Error())
 			return
 		}
@@ -295,25 +293,25 @@ func (a *App) StartChatStream(message string) {
 			a.ctx,
 			message,
 			func(token string) {
-				wailsRuntime.EventsEmit(a.ctx, "chat:token", token)
+				a.EmitEvent("chat:token", token)
 				a.PublishChatEvent("chat:token", token)
 			},
 			func(status string) {
-				wailsRuntime.EventsEmit(a.ctx, "chat:thinking", status)
+				a.EmitEvent("chat:thinking", status)
 				a.PublishChatEvent("chat:thinking", status)
 			},
 			a.mcpExecuteForChat,
 		)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
-				wailsRuntime.EventsEmit(a.ctx, "chat:stopped")
+				a.EmitEvent("chat:stopped")
 				a.PublishChatEvent("chat:stopped", "")
 			} else {
-				wailsRuntime.EventsEmit(a.ctx, "chat:error", err.Error())
+				a.EmitEvent("chat:error", err.Error())
 				a.PublishChatEvent("chat:error", err.Error())
 			}
 		} else {
-			wailsRuntime.EventsEmit(a.ctx, "chat:done")
+			a.EmitEvent("chat:done")
 			a.PublishChatEvent("chat:done", "")
 		}
 	})

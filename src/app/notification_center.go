@@ -8,8 +8,6 @@ import (
 	"time"
 
 	"discovery/internal/database"
-
-	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // notificationIdempotencyEntry armazena o notificationID associado a um
@@ -197,7 +195,7 @@ func (a *App) DispatchNotification(req NotificationDispatchRequest) Notification
 		payload["mode"] = req.Mode
 	}
 
-	wailsRuntime.EventsEmit(a.ctx, "notification:new", payload)
+	a.EmitEvent("notification:new", payload)
 	a.logs.append("[notification] dispatched id=" + req.NotificationID + " mode=" + req.Mode + " severity=" + req.Severity)
 	a.persistNotificationEvent(database.NotificationEventEntry{
 		NotificationID: req.NotificationID,

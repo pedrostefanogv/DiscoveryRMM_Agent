@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/energye/systray"
-	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"discovery/internal/processutil"
 )
@@ -98,22 +97,19 @@ func (a *App) startTray() {
 
 			systray.SetOnClick(func(menu systray.IMenu) {
 				a.safeTrayAction("tray-click", func() {
-					wailsRuntime.WindowUnminimise(a.ctx)
-					wailsRuntime.WindowShow(a.ctx)
+					a.ShowMainWindow()
 				})
 			})
 			systray.SetOnDClick(func(menu systray.IMenu) {
 				a.safeTrayAction("tray-double-click", func() {
-					wailsRuntime.WindowUnminimise(a.ctx)
-					wailsRuntime.WindowShow(a.ctx)
+					a.ShowMainWindow()
 				})
 			})
 
 			mShow := systray.AddMenuItem("Abrir", "Mostrar a janela")
 			mShow.Click(func() {
 				a.safeTrayAction("tray-menu-open", func() {
-					wailsRuntime.WindowUnminimise(a.ctx)
-					wailsRuntime.WindowShow(a.ctx)
+					a.ShowMainWindow()
 				})
 			})
 
@@ -140,7 +136,7 @@ func (a *App) startTray() {
 			mQuit.Click(func() {
 				a.safeTrayAction("tray-menu-quit", func() {
 					a.RequestAppClose()
-					go wailsRuntime.Quit(a.ctx)
+					go a.QuitApp()
 				})
 			})
 

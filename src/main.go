@@ -10,10 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wailsapp/wails/v2"
-	"github.com/wailsapp/wails/v2/pkg/options"
-	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
-	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
+	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/events"
 
 	appkg "discovery/app"
 	"discovery/internal/logger"
@@ -99,55 +97,63 @@ func main() {
 		TrayOfflineIcon:      trayOfflineICO,
 	})
 
-	singleInstance := &options.SingleInstanceLock{
-		UniqueId: "com.discovery.app",
-		OnSecondInstanceLaunch: func(data options.SecondInstanceData) {
-			log.Printf("[single-instance] segunda abertura bloqueada. args=%v", data.Args)
-			ctx := app.Ctx()
-			if ctx == nil {
-				return
-			}
-			wailsRuntime.WindowUnminimise(ctx)
-			wailsRuntime.WindowShow(ctx)
-			wailsRuntime.WindowSetAlwaysOnTop(ctx, true)
-			wailsRuntime.WindowSetAlwaysOnTop(ctx, false)
+	// ── Wails v3: aplicação explícita ──
+	// Cria a aplicação, registra o App como service, cria a janela e executa.
+	// O ciclo de vida (startup/shutdown) é tratado via ServiceStartup/ServiceShutdown.
+	appInstance := application.New(application.Options{
+		Name: "Discovery",
+		Services: []application.Service{
+			application.NewService(app),
 		},
-	}
-
-	err := wails.Run(&options.App{
-		Title:                    "Discovery",
-		Width:                    appkg.WindowWidth,
-		Height:                   appkg.WindowHeight,
-		MinWidth:                 appkg.WindowMinWidth,
-		MinHeight:                appkg.WindowMinHeight,
-		Frameless:                startupFrameless,
-		StartHidden:              startupMinimized,
-		CSSDragProperty:          "--wails-draggable",
-		CSSDragValue:             "drag",
-		EnableDefaultContextMenu: true,
-		AssetServer: &assetserver.Options{
-			Assets: assets,
+		Assets: application.AssetOptions{
+			Handler: application.AssetFileServerFS(assets),
 		},
-		OnStartup:  appkg.AppStartup(app),
-		OnShutdown: appkg.AppShutdown(app),
-		OnBeforeClose: func(ctx context.Context) (prevent bool) {
-			if !app.ShouldHideOnClose() {
-				return false
-			}
-			if !app.IsTrayReady() {
-				log.Println("[tray] close solicitado antes do tray ficar pronto; encerrando app para evitar estado sem menu")
-				return false
-			}
-			app.ClearMemoryCaches()
-			wailsRuntime.WindowHide(ctx)
-			return true
+		SingleInstance: &application.SingleInstanceOptions{
+			UniqueID: "com.discovery.app",
+			OnSecondInstanceLaunch: func(data application.SecondInstanceData) {
+				log.Printf("[single-instance] segunda abertura bloqueada. args=%v", data.Args)
+				app.ShowMainWindow()
+			},
 		},
-		SingleInstanceLock: singleInstance,
-		Bind: []interface{}{
-			app,
+		OnShutdown: func() {
+			appkg.AppShutdown(app)
 		},
 	})
-	if err != nil {
+
+	// Guarda a referência da aplicação no App para acesso a eventos/janela/tray.
+	app.SetApplication(appInstance)
+
+	window := appInstance.Window.NewWithOptions(application.WebviewWindowOptions{
+		Title:     "Discovery",
+		Width:     appkg.WindowWidth,
+		Height:    appkg.WindowHeight,
+		MinWidth:  appkg.WindowMinWidth,
+		MinHeight: appkg.WindowMinHeight,
+		Frameless: startupFrameless,
+		Hidden:    startupMinimized,
+		// No v3 o drag de janela frameless é feito via CSS `--wails-draggable`.
+		// O frontend já usa essa propriedade (CSSDragProperty do v2).
+	})
+
+	// Close-to-tray: intercepta o fechamento da janela.
+	// Se o app deve esconder em vez de fechar, cancela o evento (impede o
+	// hook interno de marcar a janela como "unconditionallyClose").
+	window.RegisterHook(events.Common.WindowClosing, func(event *application.WindowEvent) {
+		if !app.ShouldHideOnClose() {
+			return
+		}
+		if !app.IsTrayReady() {
+			log.Println("[tray] close solicitado antes do tray ficar pronto; encerrando app para evitar estado sem menu")
+			return
+		}
+		app.ClearMemoryCaches()
+		window.Hide()
+		event.Cancel()
+	})
+
+	app.SetMainWindow(window)
+
+	if err := appInstance.Run(); err != nil {
 		log.Fatal(err)
 	}
 }

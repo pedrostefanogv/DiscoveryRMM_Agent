@@ -1,0 +1,47 @@
+version: '3'
+
+tasks:
+  go:mod:tidy:
+    summary: Runs `go mod tidy`
+    internal: true
+    cmds:
+      - go mod tidy
+
+  generate:bindings:
+    label: generate:bindings (BUILD_FLAGS={{.BUILD_FLAGS}})
+    summary: Generates bindings for the frontend
+    deps:
+      - task: go:mod:tidy
+    sources:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+    generates:
+      - frontend/bindings/**/*
+    cmds:
+      - wails3 generate bindings -b -clean=true -d frontend/bindings ./...
+
+  # O frontend do Discovery é JS puro (sem npm/bundler). Os assets são
+  # embedados via //go:embed all:frontend no main.go. Não há passo de build
+  # de frontend — apenas a geração de bindings.
+  build:frontend:
+    label: build:frontend (PRODUCTION={{.PRODUCTION}})
+    summary: Prepares the frontend (vanilla JS — no bundler)
+    deps:
+      - task: generate:bindings
+        vars:
+          BUILD_FLAGS:
+            ref: .BUILD_FLAGS
+    cmds:
+      - echo "Frontend vanilla JS — sem bundler; assets embedados via go:embed"
+
+  generate:icons:
+    summary: Generates Windows `.ico` and Mac `.icns` files from an image
+    dir: build
+    sources:
+      - "appicon.png"
+    generates:
+      - "darwin/icons.icns"
+      - "windows/icon.ico"
+    cmds:
+      - wails3 generate icons -input appicon.png -macfilename darwin/icons.icns -windowsfilename windows/icon.ico

@@ -14,7 +14,7 @@ import (
 
 	"github.com/energye/systray"
 	"github.com/nats-io/nats.go"
-	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
+	"github.com/wailsapp/wails/v3/pkg/application"
 
 	"discovery/app/appstore"
 	"discovery/app/debug"
@@ -159,6 +159,12 @@ type App struct {
 	selfUpdaterCh chan bool
 
 	deferredRestart *deferredRestartState
+
+	// ── Wails v3 ──
+	// Referências explícitas à aplicação/janela do Wails v3.
+	// Substituem o acesso implícito via ctx do v2.
+	app        *application.App
+	mainWindow application.Window
 }
 
 // deferredRestartState tracks pending deferred restart state.
@@ -522,6 +528,87 @@ func (a *App) ClearMemoryCaches() { a.clearMemoryCaches() }
 func AppStartup(a *App) func(context.Context) { return a.startup }
 
 func AppShutdown(a *App) func(context.Context) { return a.shutdown }
+
+// ── Wails v3: service lifecycle ──
+// ServiceStartup é chamado pelo Wails v3 durante a inicialização da aplicação.
+// Substitui o OnStartup do v2. O ctx recebido é o contexto da aplicação.
+func (a *App) ServiceStartup(ctx context.Context, options application.ServiceOptions) error {
+	a.startup(ctx)
+	return nil
+}
+
+// ServiceShutdown é chamado pelo Wails v3 durante o encerramento.
+func (a *App) ServiceShutdown() error {
+	a.shutdown(context.Background())
+	return nil
+}
+
+// SetApplication guarda a referência da aplicação Wails v3.
+//
+//wails:ignore
+func (a *App) SetApplication(app *application.App) {
+	a.app = app
+}
+
+// SetMainWindow guarda a referência da janela principal.
+//
+//wails:ignore
+func (a *App) SetMainWindow(window application.Window) {
+	a.mainWindow = window
+}
+
+// ShowMainWindow restaura e mostra a janela principal (usado no single-instance).
+//
+//wails:ignore
+func (a *App) ShowMainWindow() {
+	if a.mainWindow == nil {
+		return
+	}
+	a.mainWindow.UnMinimise()
+	a.mainWindow.Show()
+	a.mainWindow.SetAlwaysOnTop(true)
+	a.mainWindow.SetAlwaysOnTop(false)
+}
+
+// EmitEvent emite um evento customizado para o frontend (v3).
+//
+//wails:ignore
+func (a *App) EmitEvent(name string, data ...any) {
+	if a.app == nil {
+		return
+	}
+	a.app.Event.Emit(name, data...)
+}
+
+// HideMainWindow esconde a janela principal (close-to-tray).
+//
+//wails:ignore
+func (a *App) HideMainWindow() {
+	if a.mainWindow == nil {
+		return
+	}
+	a.mainWindow.Hide()
+}
+
+// MinimiseMainWindow minimiza a janela principal.
+//
+//wails:ignore
+func (a *App) MinimiseMainWindow() {
+	if a.mainWindow == nil {
+		return
+	}
+	a.mainWindow.Minimise()
+}
+
+// QuitApp encerra a aplicação (v3).
+//
+//wails:ignore
+func (a *App) QuitApp() {
+	if a.app == nil {
+		return
+	}
+	a.app.Quit()
+}
 
 func (a *App) GetAgentConfiguration() AgentConfiguration {
 	a.agentConfigMu.RLock()
@@ -1150,8 +1237,8 @@ func (a *App) hideWindowOnStartup() {
 				if !a.IsTrayReady() {
 					continue
 				}
-				wailsRuntime.WindowMinimise(a.ctx)
-				wailsRuntime.WindowHide(a.ctx)
+				a.MinimiseMainWindow()
+				a.HideMainWindow()
 				log.Println("[startup] janela iniciada minimizada no tray")
 				return
 			}

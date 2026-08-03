@@ -1,0 +1,11 @@
+# Wails v3 / Task cache
+.task/
+
+# Build output
+bin/
+
+# Wails v3 generated syso (regenerado a cada build)
+*.syso
+
+# Go
+*.exe
