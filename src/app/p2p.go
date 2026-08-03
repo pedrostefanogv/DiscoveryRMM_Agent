@@ -90,6 +90,20 @@ type p2pCoordinator struct {
 	// não a cada chunk individual. Chave: "artifactName|requesterID".
 	servingSessionsMu sync.Mutex
 	servingSessions   map[string]*servingSession
+
+	// downloadLocks serializa downloads do mesmo artifact para evitar que
+	// dois downloads concorrentes escrevam no mesmo partsDir e corrompam
+	// os chunks. Chave: artifactName.
+	downloadLocksMu sync.Mutex
+	downloadLocks   map[string]*downloadLockEntry
+}
+
+// downloadLockEntry guarda o mutex de um artifact e o número de esperadores
+// ativos, permitindo remover o lock do mapa com segurança quando o último
+// esperador termina.
+type downloadLockEntry struct {
+	mu      *sync.Mutex
+	waiters int
 }
 
 type servingSession struct {
@@ -97,7 +111,8 @@ type servingSession struct {
 	requesterID  string
 	totalSize    int64
 	servedBytes  int64
-	lastReported int64 // evita emitir progresso redundante (mesmo byte count)
+	lastReported int64     // evita emitir progresso redundante (mesmo byte count)
+	lastActive   time.Time // última atividade; usado para GC de sessões órfãs
 }
 
 type p2pPeerState struct {
@@ -132,6 +147,48 @@ func newP2PCoordinator(app *App) *p2pCoordinator {
 		fetchStates:      newFetchStateMap(),
 		cpuSampler:       platform.NewCPUSampler(),
 		servingSessions:  make(map[string]*servingSession),
+		downloadLocks:    make(map[string]*downloadLockEntry),
+	}
+}
+
+// lockDownload serializa downloads do mesmo artifact. Retorna uma função de
+// unlock que também remove o lock do mapa quando não há mais esperadores.
+// Usa um contador de esperadores (em vez de TryLock) para detectar de forma
+// confiável quando o lock pode ser removido sem janela de race.
+func (c *p2pCoordinator) lockDownload(artifactName string) func() {
+	c.downloadLocksMu.Lock()
+	entry, ok := c.downloadLocks[artifactName]
+	if !ok {
+		entry = &downloadLockEntry{mu: &sync.Mutex{}}
+		c.downloadLocks[artifactName] = entry
+	}
+	entry.waiters++
+	c.downloadLocksMu.Unlock()
+
+	entry.mu.Lock()
+
+	return func() {
+		entry.mu.Unlock()
+		c.downloadLocksMu.Lock()
+		entry.waiters--
+		// Remove do mapa apenas quando não há mais esperadores.
+		if entry.waiters == 0 {
+			delete(c.downloadLocks, artifactName)
+		}
+		c.downloadLocksMu.Unlock()
+	}
+}
+
+// gcServingSessions remove sessões de upload órfãs (sem atividade recente).
+// Ocorre quando um peer desconecta no meio de um stream sem encerrar a sessão.
+func (c *p2pCoordinator) gcServingSessions(now time.Time) {
+	const servingSessionTTL = 10 * time.Minute
+	c.servingSessionsMu.Lock()
+	defer c.servingSessionsMu.Unlock()
+	for key, sess := range c.servingSessions {
+		if now.Sub(sess.lastActive) > servingSessionTTL {
+			delete(c.servingSessions, key)
+		}
 	}
 }
 
@@ -216,6 +273,7 @@ func (c *p2pCoordinator) Run(ctx context.Context) {
 			if _, err := c.app.cleanupExpiredP2PTempArtifacts(time.Now()); err != nil {
 				c.setLastError(err)
 			}
+			c.gcServingSessions(time.Now())
 		case <-contentGCTicker.C:
 			c.collectOrphanArtifacts()
 		case <-lanProbeWarmupTimer.C:

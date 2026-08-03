@@ -316,7 +316,9 @@ func (c *p2pCoordinator) publishFileSinglePass(sourcePath, targetPath, artifactN
 
 	fullHash := sha256.New()
 	chunks := make([]P2PChunk, 0, totalChunksEstimate)
-	buf := make([]byte, 4<<20) // 4 MB buffer
+	// Buffer do tamanho do chunk para que cada leitura gere exatamente um chunk
+	// de chunkSize bytes (consistente com buildChunkManifest e manifest.ChunkSize).
+	buf := make([]byte, chunkSize)
 	multiWriter := io.MultiWriter(dstFile, fullHash)
 	var offset int64
 

@@ -48,6 +48,10 @@ type ArtifactFetchHeartbeat struct {
 const (
 	artifactFetchLeaseTTL       = 90 * time.Second
 	artifactFetchHeartbeatEvery = 15 * time.Second
+	// electionGracePeriod é o tempo que um peer aguarda após broadcast de
+	// candidatura antes de se auto-eleger, permitindo que peers remotos
+	// reivindiquem o lease e evitem fetchers duplicados.
+	electionGracePeriod = 2 * time.Second
 )
 
 // fetchStateMap guarda o estado atual de cada artifact neste grupo.

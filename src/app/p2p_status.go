@@ -231,6 +231,27 @@ func (c *p2pCoordinator) FindArtifactPeers(artifactName string) P2PArtifactAvail
 	return result
 }
 
+// resolveArtifactNameByID retorna o nome do arquivo de um artifact a partir do
+// seu artifactID (GUID de release ou "sha256:<hex>"), consultando o cache de
+// peers. Retorna "" se não encontrar. Usado quando o fetch recebe apenas o
+// artifactID e precisa do nome real para o download.
+func (c *p2pCoordinator) resolveArtifactNameByID(artifactID string) string {
+	artifactID = strings.TrimSpace(artifactID)
+	if artifactID == "" {
+		return ""
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	for _, state := range c.peerArtifacts {
+		for _, a := range state.Artifacts {
+			if strings.EqualFold(strings.TrimSpace(a.ArtifactID), artifactID) {
+				return strings.TrimSpace(a.ArtifactName)
+			}
+		}
+	}
+	return ""
+}
+
 // InvalidatePeerArtifact remove um artifact específico do cache de um peer.
 // Usado quando o cache diz que o peer tem o artifact mas o download falha
 // (peer não tem mais o arquivo).

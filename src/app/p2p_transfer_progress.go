@@ -48,6 +48,18 @@ func (c *p2pCoordinator) emitTransferDone(artifactName, peerID, operation string
 	c.emitTransferProgress(p)
 }
 
+// completedChunksBytes soma o tamanho real dos chunks concluídos (0..completed).
+// O último chunk geralmente é menor que manifest.ChunkSize, então usar
+// completed*ChunkSize faria a barra "pular" no final. Este helper garante
+// progresso monotônico e preciso.
+func completedChunksBytes(manifest P2PChunkManifest, completed int) int64 {
+	var bytesRead int64
+	for i := 0; i < completed && i < len(manifest.Chunks); i++ {
+		bytesRead += manifest.Chunks[i].Size
+	}
+	return bytesRead
+}
+
 // progressReader é um io.Reader que reporta progresso via callback.
 type progressReader struct {
 	r      io.Reader

@@ -252,23 +252,26 @@ func downloadChunkedLibp2p(
 		wg.Add(1)
 		go func(i int, chunk P2PChunk) {
 			defer wg.Done()
-			// Adquire slot — bloqueia se todos ocupados.
-			// Downloads em andamento continuam mesmo se o teto baixar depois.
-			sem <- struct{}{}
+			// Adquire slot — bloqueia se todos ocupados, mas aborta se o contexto
+			// for cancelado enquanto espera (cancelamento imediato).
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				results <- chunkResult{index: i, err: ctx.Err()}
+				return
+			}
 			defer func() { <-sem }()
 
 			chunkFile := filepath.Join(partsDir, fmt.Sprintf("chunk-%04d", i))
 
 			// Resume: if chunk file exists and hash matches, skip.
-			if data, err := os.ReadFile(chunkFile); err == nil {
-				h := sha256.Sum256(data)
-				if strings.EqualFold(hex.EncodeToString(h[:]), chunk.SHA256) {
-					results <- chunkResult{index: i, err: nil}
-					return
-				}
-				// Arquivo existe mas hash não bate — remove e re-download.
-				_ = os.Remove(chunkFile)
+			// Usa hash em streaming para não carregar o chunk inteiro em memória.
+			if chunkFileHashMatches(chunkFile, chunk.SHA256) {
+				results <- chunkResult{index: i, err: nil}
+				return
 			}
+			// Arquivo existe mas hash não bate (ou não existe) — remove e re-download.
+			_ = os.Remove(chunkFile)
 
 			chunkIdx := i
 			chunkSize := chunk.Size
@@ -336,8 +339,11 @@ func downloadChunkedLibp2p(
 		}
 	}
 	if firstErr != nil {
-		return "", 0, fmt.Errorf("%d/%d chunks falharam; primeiro erro: chunk %d: %w",
-			failedChunks, len(manifest.Chunks), 0, firstErr)
+		// Limpa o diretório de partes em falha para não acumular lixo
+		// (o GC de 1h só limparia depois).
+		_ = os.RemoveAll(partsDir)
+		return "", 0, fmt.Errorf("%d/%d chunks falharam; primeiro erro: %w",
+			failedChunks, len(manifest.Chunks), firstErr)
 	}
 
 	// Assemble chunks into final file.
@@ -400,4 +406,23 @@ func (c *p2pCoordinator) recordChunkedDownload(chunks int) {
 	defer c.mu.Unlock()
 	c.metrics.ChunkedDownloads++
 	c.metrics.ChunksDownloaded += int64(chunks)
+}
+
+// chunkFileHashMatches verifica se o arquivo de chunk em disco tem o SHA256
+// esperado, calculando o hash em streaming (sem carregar o arquivo inteiro
+// em memória). Retorna false se o arquivo não existir ou o hash divergir.
+func chunkFileHashMatches(path, expectedSHA256 string) bool {
+	if strings.TrimSpace(expectedSHA256) == "" {
+		return false
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return false
+	}
+	return strings.EqualFold(hex.EncodeToString(h.Sum(nil)), expectedSHA256)
 }

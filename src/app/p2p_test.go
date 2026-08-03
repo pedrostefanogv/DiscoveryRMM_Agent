@@ -519,6 +519,90 @@ func TestPickDiscoveryProviderLibP2POnly(t *testing.T) {
 	}
 }
 
+// ── Progresso de chunks ──────────────────────────────────────────────────────
+
+func TestCompletedChunksBytes(t *testing.T) {
+	manifest := P2PChunkManifest{
+		ChunkSize: 8,
+		Chunks: []P2PChunk{
+			{Index: 0, Size: 8},
+			{Index: 1, Size: 8},
+			{Index: 2, Size: 3}, // último chunk menor
+		},
+	}
+	if got := completedChunksBytes(manifest, 0); got != 0 {
+		t.Fatalf("completed=0: got %d, want 0", got)
+	}
+	if got := completedChunksBytes(manifest, 1); got != 8 {
+		t.Fatalf("completed=1: got %d, want 8", got)
+	}
+	if got := completedChunksBytes(manifest, 2); got != 16 {
+		t.Fatalf("completed=2: got %d, want 16", got)
+	}
+	if got := completedChunksBytes(manifest, 3); got != 19 {
+		t.Fatalf("completed=3: got %d, want 19", got)
+	}
+	// completed maior que o número de chunks não deve estourar.
+	if got := completedChunksBytes(manifest, 99); got != 19 {
+		t.Fatalf("completed=99: got %d, want 19", got)
+	}
+}
+
+// ── Lock por artifact ────────────────────────────────────────────────────────
+
+func TestLockDownloadSerializesAndCleansUp(t *testing.T) {
+	c := &p2pCoordinator{downloadLocks: make(map[string]*downloadLockEntry)}
+
+	unlock1 := c.lockDownload("artifact-a")
+	// Segundo lock no mesmo artifact deve bloquear (serialização).
+	done := make(chan struct{})
+	go func() {
+		unlock2 := c.lockDownload("artifact-a")
+		unlock2()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("segundo lock nao deveria adquirir enquanto o primeiro esta ativo")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	unlock1()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("segundo lock deveria adquirir apos o primeiro liberar")
+	}
+
+	// Após ambos liberarem, o lock deve ser removido do mapa (sem leak).
+	c.downloadLocksMu.Lock()
+	_, exists := c.downloadLocks["artifact-a"]
+	c.downloadLocksMu.Unlock()
+	if exists {
+		t.Fatal("lock de artifact-a deveria ter sido removido do mapa")
+	}
+}
+
+// ── GC de sessões de upload ─────────────────────────────────────────────────
+
+func TestGCServingSessionsRemovesStale(t *testing.T) {
+	c := &p2pCoordinator{
+		servingSessions: map[string]*servingSession{
+			"a|peer1": {lastActive: time.Now().Add(-30 * time.Minute)},
+			"b|peer2": {lastActive: time.Now()},
+		},
+	}
+	c.gcServingSessions(time.Now())
+	if _, ok := c.servingSessions["a|peer1"]; ok {
+		t.Fatal("sessao stale deveria ter sido removida")
+	}
+	if _, ok := c.servingSessions["b|peer2"]; !ok {
+		t.Fatal("sessao ativa nao deveria ser removida")
+	}
+}
+
 func TestExtractIPFromMultiaddr(t *testing.T) {
 	tests := []struct{ ma, want string }{
 		{"/ip4/192.168.1.5/tcp/41080", "192.168.1.5"},

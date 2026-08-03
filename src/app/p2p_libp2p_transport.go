@@ -16,6 +16,7 @@ package app
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -49,8 +50,8 @@ const (
 )
 
 // computeTransferDeadline calcula um deadline adaptativo baseado no tamanho dos dados.
-// Piso: libp2pTransferTimeout (2 min). Teto: libp2pTransferTimeoutMax (30 min).
-// Assume velocidade mnima de 1 MB/s mais margem fixa de 30s.
+// Piso: libp2pTransferTimeout (2 min). Teto: libp2pTransferTimeoutMax (4 horas).
+// Assume velocidade mnima de 512 KB/s mais margem fixa de 30s.
 func computeTransferDeadline(dataSize int64) time.Time {
 	if dataSize <= 0 {
 		return time.Now().Add(libp2pTransferTimeout)
@@ -373,13 +374,18 @@ func handleStreamArtifactGet(s network.Stream, transfer *p2pTransferServer) {
 				artifactName: req.ArtifactName,
 				requesterID:  requesterID,
 				totalSize:    totalSize,
+				lastActive:   time.Now(),
 			}
 			coord.servingSessions[sessionKey] = sess
 		}
+		sess.lastActive = time.Now()
 		coord.servingSessionsMu.Unlock()
 
 		reader = newProgressReader(reader, chunkLen, func(readSoFar int64) {
 			coord.servingSessionsMu.Lock()
+			// Atualiza lastActive para que o GC não remova a sessão durante
+			// um upload longo (ex.: arquivos grandes em redes lentas).
+			sess.lastActive = time.Now()
 			accumulated := sess.servedBytes + readSoFar
 			// S emite se houve mudana significativa (>1% ou 100KB)
 			delta := accumulated - sess.lastReported
@@ -637,17 +643,42 @@ func libp2pDownloadChunk(ctx context.Context, h host.Host, peerID peer.ID, artif
 			onProgress(readSoFar, chunkLen)
 		})
 	}
-	data, err := readPayloadExact(dataReader, chunkLen)
+
+	// Streaming para disco: grava o chunk em um arquivo temporário enquanto
+	// calcula o SHA256 em fluxo, evitando carregar o chunk inteiro em memória
+	// (relevante com paralelismo alto e chunks de 8 MB).
+	tmpFile := destFile + ".tmp"
+	f, err := os.Create(tmpFile)
 	if err != nil {
-		return fmt.Errorf("leitura do chunk: %w", err)
+		return fmt.Errorf("criar arquivo temporario do chunk: %w", err)
+	}
+	hasher := sha256.New()
+	written, copyErr := io.CopyN(io.MultiWriter(f, hasher), dataReader, chunkLen)
+	closeErr := f.Close()
+	if copyErr != nil {
+		_ = os.Remove(tmpFile)
+		return fmt.Errorf("leitura do chunk: %w", copyErr)
+	}
+	if closeErr != nil {
+		_ = os.Remove(tmpFile)
+		return fmt.Errorf("fechar arquivo temporario do chunk: %w", closeErr)
+	}
+	if written != chunkLen {
+		_ = os.Remove(tmpFile)
+		return fmt.Errorf("chunk %d: leitura incompleta (esperado=%d recebido=%d)", chunk.Index, chunkLen, written)
 	}
 
 	// Verificar hash do chunk.
-	if !verifySHA256(data, chunk.SHA256) {
+	if !verifySHA256(hasher.Sum(nil), chunk.SHA256) {
+		_ = os.Remove(tmpFile)
 		return fmt.Errorf("chunk %d: checksum divergente", chunk.Index)
 	}
 
-	return os.WriteFile(destFile, data, 0o644)
+	if err := os.Rename(tmpFile, destFile); err != nil {
+		_ = os.Remove(tmpFile)
+		return fmt.Errorf("chunk %d: renomear arquivo: %w", chunk.Index, err)
+	}
+	return nil
 }
 
 // libp2pDownloadArtifact faz download simples (arquivo inteiro) via /artifact/get/1.0.0.

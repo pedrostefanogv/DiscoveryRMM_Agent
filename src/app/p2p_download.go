@@ -59,14 +59,16 @@ func (c *p2pCoordinator) DownloadArtifactFromPeer(ctx context.Context, artifactN
 		destDir := c.app.p2pTempDir()
 		sched := newP2PChunkScheduler()
 		lp2pPeers := []libp2pPeer{{agentID: sourcePeerID, peerID: peerID}}
+		// Serializa downloads do mesmo artifact para não corromper o partsDir.
+		unlock := c.lockDownload(artifactName)
 		path, totalBytes, err := downloadChunkedLibp2p(ctx, h, lp2pPeers, manifest, artifactName, requesterID, destDir, sched, c.dynamicMaxParallelChunks(),
 			nil, // onChunkProgress: desabilitado; usamos onChunkComplete para progresso monotônico
 			func(completed, total int) {
 				c.emitTransferProgress(p2pTransferProgress{
 					ArtifactName:    artifactName,
 					PeerID:          sourcePeerID,
-					BytesRead:       int64(completed) * manifest.ChunkSize,
-					TotalBytes:      int64(total) * manifest.ChunkSize,
+					BytesRead:       completedChunksBytes(manifest, completed),
+					TotalBytes:      manifest.TotalSize,
 					Operation:       "pull",
 					CompletedChunks: completed,
 					TotalChunks:     total,
@@ -87,6 +89,7 @@ func (c *p2pCoordinator) DownloadArtifactFromPeer(ctx context.Context, artifactN
 			func(msg string) {
 				c.app.logs.append(msg)
 			})
+		unlock()
 		if err != nil {
 			c.appendAudit("pull", artifactName, sourcePeerID, "libp2p", false, err.Error())
 			c.emitTransferDone(artifactName, sourcePeerID, "pull", err)
@@ -188,22 +191,50 @@ func (c *p2pCoordinator) downloadArtifactSwarm(ctx context.Context, artifactName
 		}
 	}
 
+	// Validação cross-peer: verifica que os demais peers anunciam a mesma
+	// versão do artifact (mesmo SHA256 e tamanho). Peers com versão divergente
+	// são removidos do swarm para evitar montar um arquivo corrompido com
+	// chunks de versões diferentes.
+	if len(peerEntries) > 1 {
+		validPeers := make([]peerEntry, 0, len(peerEntries))
+		validPeers = append(validPeers, peerEntries[0])
+		for _, pe := range peerEntries[1:] {
+			pm, pmErr := libp2pFetchManifest(ctx, h, pe.libp2pID, artifactName, requesterID)
+			if pmErr != nil || pm.TotalChunks == 0 {
+				c.InvalidatePeerArtifact(pe.peerID, artifactName)
+				continue
+			}
+			if !strings.EqualFold(strings.TrimSpace(pm.SHA256), strings.TrimSpace(manifest.SHA256)) ||
+				pm.TotalSize != manifest.TotalSize {
+				c.app.logs.append(fmt.Sprintf("[p2p][swarm] peer %s com versao divergente do artifact %s (sha=%s size=%d), removido do swarm",
+					pe.peerID, artifactName, pm.SHA256, pm.TotalSize))
+				continue
+			}
+			validPeers = append(validPeers, pe)
+		}
+		peerEntries = validPeers
+		if len(peerEntries) == 0 {
+			err := fmt.Errorf("nenhum peer com versao consistente do artifact %q", artifactName)
+			c.appendAudit("swarm-pull", artifactName, "", "automation", false, err.Error())
+			return P2PArtifactView{}, err
+		}
+	}
+
 	destDir := c.app.p2pTempDir()
 	sched := newP2PChunkScheduler()
 	lp2pPeers := make([]libp2pPeer, len(peerEntries))
 	for i, pe := range peerEntries {
 		lp2pPeers[i] = libp2pPeer{agentID: pe.peerID, peerID: pe.libp2pID}
 	}
+	// Serializa downloads do mesmo artifact para não corromper o partsDir.
+	unlock := c.lockDownload(artifactName)
 	path, totalBytes, err := downloadChunkedLibp2p(ctx, h, lp2pPeers, manifest, artifactName, requesterID, destDir, sched, c.dynamicMaxParallelChunks(),
 		nil, // onChunkProgress: desabilitado; usamos onChunkComplete
 		func(completed, total int) {
 			// Calcula bytes reais somando o tamanho de cada chunk concluído.
 			// O último chunk geralmente é menor que manifest.ChunkSize, então
 			// usar completed * manifest.ChunkSize faria a barra "pular" no final.
-			bytesRead := int64(0)
-			for i := 0; i < completed && i < len(manifest.Chunks); i++ {
-				bytesRead += manifest.Chunks[i].Size
-			}
+			bytesRead := completedChunksBytes(manifest, completed)
 			c.emitTransferProgress(p2pTransferProgress{
 				ArtifactName:    artifactName,
 				PeerID:          fmt.Sprintf("%d peers", len(peerEntries)),
@@ -229,6 +260,7 @@ func (c *p2pCoordinator) downloadArtifactSwarm(ctx context.Context, artifactName
 		func(msg string) {
 			c.app.logs.append(msg)
 		})
+	unlock()
 	if err != nil {
 		c.appendAudit("swarm-pull", artifactName, "", "automation", false, err.Error())
 		c.emitTransferDone(artifactName, fmt.Sprintf("%d peers", len(peerEntries)), "swarm-pull", err)

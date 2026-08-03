@@ -38,6 +38,11 @@ func (c *p2pCoordinator) publishFetchHeartbeats(ctx context.Context) {
 			continue
 		}
 
+		// Renova o lease enquanto o fetch está em andamento. Sem isso, um
+		// download longo (> artifactFetchLeaseTTL) expiraria o lease e outro
+		// peer re-elegeria um fetcher, causando download duplicado/abortado.
+		state.LeaseUntil = now.Add(artifactFetchLeaseTTL)
+
 		hb := ArtifactFetchHeartbeat{
 			ArtifactID:  artifactID,
 			ClientID:    state.ClientID,
@@ -182,7 +187,17 @@ func (c *p2pCoordinator) runLocalElection(ctx context.Context, artifactID string
 			artifactID, candidate.CPUCores, candidate.RAMGB, candidate.CPUPercent, candidate.MemPercent))
 	}
 
-	// Auto-eleição: se não houver outros peers, este peer se elege.
+	// Período de graça: aguarda um curto intervalo após o broadcast para que
+	// peers remotos processem a candidatura e reivindiquem o lease (via
+	// heartbeat). Isso reduz a chance de múltiplos peers se auto-elegerem e
+	// baixarem o mesmo artifact em paralelo.
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(electionGracePeriod):
+	}
+
+	// Auto-eleição: se não houver outro peer com lease válido, este peer se elege.
 	state := c.fetchStates.getOrCreate(artifactID, clientID)
 	if canStartLocalElection(state, time.Now(), c.isLoadOK()) {
 		state.OwnerPeerID = selfAgentID
@@ -204,6 +219,15 @@ func (c *p2pCoordinator) executeFetch(ctx context.Context, artifactID string, ar
 	state.Status = "fetching"
 	state.ProgressPct = 0
 	c.fetchStates.set(artifactID, state)
+
+	// O artifactName pode ser um GUID de release (artifactID) em vez do nome do
+	// arquivo. Nesse caso, resolve o nome real a partir do índice de peers para
+	// que downloadArtifactSwarm encontre o artifact corretamente.
+	if strings.TrimSpace(artifactName) == "" || strings.EqualFold(strings.TrimSpace(artifactName), artifactID) {
+		if resolved := c.resolveArtifactNameByID(artifactID); resolved != "" {
+			artifactName = resolved
+		}
+	}
 
 	// Tentar download via swarm (chunked de múltiplos peers)
 	view, err := c.downloadArtifactSwarm(ctx, artifactName)
