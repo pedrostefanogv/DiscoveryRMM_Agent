@@ -1,5 +1,4 @@
 {
-  "$schema": "https://wails.io/schemas/config.v2.json",
   "version": "2",
   "name": "discovery",
   "outputfilename": "discovery-agent",

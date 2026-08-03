@@ -12,7 +12,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/energye/systray"
 	"github.com/nats-io/nats.go"
 	"github.com/wailsapp/wails/v3/pkg/application"
 
@@ -165,6 +164,7 @@ type App struct {
 	// Substituem o acesso implícito via ctx do v2.
 	app        *application.App
 	mainWindow application.Window
+	systemTray *application.SystemTray
 }
 
 // deferredRestartState tracks pending deferred restart state.
@@ -525,10 +525,6 @@ func (a *App) Ctx() context.Context { return a.ctx }
 
 func (a *App) ClearMemoryCaches() { a.clearMemoryCaches() }
 
-func AppStartup(a *App) func(context.Context) { return a.startup }
-
-func AppShutdown(a *App) func(context.Context) { return a.shutdown }
-
 // ── Wails v3: service lifecycle ──
 // ServiceStartup é chamado pelo Wails v3 durante a inicialização da aplicação.
 // Substitui o OnStartup do v2. O ctx recebido é o contexto da aplicação.
@@ -539,7 +535,7 @@ func (a *App) ServiceStartup(ctx context.Context, options application.ServiceOpt
 
 // ServiceShutdown é chamado pelo Wails v3 durante o encerramento.
 func (a *App) ServiceShutdown() error {
-	a.shutdown(context.Background())
+	a.shutdown()
 	return nil
 }
 
@@ -1246,8 +1242,7 @@ func (a *App) hideWindowOnStartup() {
 	}()
 }
 
-func (a *App) shutdown(ctx context.Context) {
-	systray.Quit()
+func (a *App) shutdown() {
 	a.applyIdleMode(false)
 
 	a.StopDebugHTTPServer()

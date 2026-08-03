@@ -115,9 +115,6 @@ func main() {
 				app.ShowMainWindow()
 			},
 		},
-		OnShutdown: func() {
-			appkg.AppShutdown(app)
-		},
 	})
 
 	// Guarda a referência da aplicação no App para acesso a eventos/janela/tray.

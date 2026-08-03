@@ -7,7 +7,7 @@ import (
 	"runtime/debug"
 	"time"
 
-	"github.com/energye/systray"
+	"github.com/wailsapp/wails/v3/pkg/application"
 
 	"discovery/internal/processutil"
 )
@@ -53,6 +53,9 @@ func (a *App) trayIconForState(state int32) []byte {
 }
 
 func (a *App) syncTrayVisualState() {
+	if a.systemTray == nil {
+		return
+	}
 	state := a.currentTrayIconState()
 	if a.trayIconState.Load() == state {
 		return
@@ -61,18 +64,16 @@ func (a *App) syncTrayVisualState() {
 	if len(icon) == 0 {
 		return
 	}
-	setTrayIcon(icon)
+	a.systemTray.SetIcon(icon)
 	a.trayIconState.Store(state)
 }
 
-func (a *App) runTrayStateLoop(stop <-chan struct{}) {
+func (a *App) runTrayStateLoop() {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
 	for {
 		select {
-		case <-stop:
-			return
 		case <-a.ctx.Done():
 			return
 		case <-ticker.C:
@@ -81,76 +82,80 @@ func (a *App) runTrayStateLoop(stop <-chan struct{}) {
 	}
 }
 
-// startTray initialises the system-tray icon in a background goroutine.
+// startTray initialises the system-tray icon using the Wails v3 native tray.
 // The icon bytes come from a.trayIcon (set via AppStartupOptions.TrayIcon).
-// It must be called after the Wails context is stored in a.ctx.
+// It must be called after the Wails application is created (a.app != nil).
 func (a *App) startTray() {
+	if a.app == nil {
+		log.Println("[tray] aviso: aplicação Wails não disponível; tray não iniciado")
+		return
+	}
+
 	a.trayReady.Store(false)
 	a.trayIconState.Store(trayIconStateUnknown)
 
-	go func() {
-		trayStop := make(chan struct{})
+	// Cria o tray nativo do Wails v3.
+	tray := a.app.SystemTray.New()
+	a.systemTray = tray
 
-		systray.Run(func() {
-			setTrayTitle("Discovery")
-			setTrayTooltip("Discovery")
+	// Ícone inicial (estado atual).
+	if icon := a.trayIconForState(a.currentTrayIconState()); len(icon) > 0 {
+		tray.SetIcon(icon)
+	}
+	tray.SetTooltip("Discovery")
 
-			systray.SetOnClick(func(menu systray.IMenu) {
-				a.safeTrayAction("tray-click", func() {
-					a.ShowMainWindow()
-				})
-			})
-			systray.SetOnDClick(func(menu systray.IMenu) {
-				a.safeTrayAction("tray-double-click", func() {
-					a.ShowMainWindow()
-				})
-			})
-
-			mShow := systray.AddMenuItem("Abrir", "Mostrar a janela")
-			mShow.Click(func() {
-				a.safeTrayAction("tray-menu-open", func() {
-					a.ShowMainWindow()
-				})
-			})
-
-			// Debug-only: "Abrir no navegador" menu item.
-			// Only shown when the debug HTTP server is running.
-			if a.runtimeFlags.DebugMode && a.GetDebugHTTPPort() > 0 {
-				url := fmt.Sprintf("http://127.0.0.1:%d", a.GetDebugHTTPPort())
-				mBrowser := systray.AddMenuItem("Abrir no navegador", url)
-				mBrowser.Click(func() {
-					a.safeTrayAction("tray-menu-browser", func() {
-						cmd := exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
-						processutil.HideWindow(cmd)
-						cmd.Start()
-
-						// Log na UI
-						a.logs.append("[debug-http] abrindo " + url + " no navegador")
-					})
-				})
-			}
-
-			systray.AddSeparator()
-
-			mQuit := systray.AddMenuItem("Sair", "Encerrar o aplicativo")
-			mQuit.Click(func() {
-				a.safeTrayAction("tray-menu-quit", func() {
-					a.RequestAppClose()
-					go a.QuitApp()
-				})
-			})
-
-			a.trayReady.Store(true)
-			a.syncTrayVisualState()
-			go a.runTrayStateLoop(trayStop)
-			log.Println("[tray] pronto: icone e menu inicializados")
-		}, func() {
-			close(trayStop)
-			a.trayReady.Store(false)
-			a.trayIconState.Store(trayIconStateUnknown)
-			log.Println("[tray] encerrado")
+	// Clique simples/duplo: mostra a janela.
+	tray.OnClick(func() {
+		a.safeTrayAction("tray-click", func() {
+			a.ShowMainWindow()
 		})
-	}()
+	})
+	tray.OnDoubleClick(func() {
+		a.safeTrayAction("tray-double-click", func() {
+			a.ShowMainWindow()
+		})
+	})
+
+	// Menu do tray.
+	menu := a.app.Menu.New()
+
+	menu.Add("Abrir").OnClick(func(_ *application.Context) {
+		a.safeTrayAction("tray-menu-open", func() {
+			a.ShowMainWindow()
+		})
+	})
+
+	// Debug-only: "Abrir no navegador" menu item.
+	// Only shown when the debug HTTP server is running.
+	if a.runtimeFlags.DebugMode && a.GetDebugHTTPPort() > 0 {
+		url := fmt.Sprintf("http://127.0.0.1:%d", a.GetDebugHTTPPort())
+		menu.Add("Abrir no navegador").OnClick(func(_ *application.Context) {
+			a.safeTrayAction("tray-menu-browser", func() {
+				cmd := exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+				processutil.HideWindow(cmd)
+				_ = cmd.Start()
+
+				// Log na UI
+				a.logs.append("[debug-http] abrindo " + url + " no navegador")
+			})
+		})
+	}
+
+	menu.AddSeparator()
+
+	menu.Add("Sair").OnClick(func(_ *application.Context) {
+		a.safeTrayAction("tray-menu-quit", func() {
+			a.RequestAppClose()
+			go a.QuitApp()
+		})
+	})
+
+	tray.SetMenu(menu)
+
+	a.trayReady.Store(true)
+	a.syncTrayVisualState()
+	go a.runTrayStateLoop()
+	log.Println("[tray] pronto: icone e menu inicializados (Wails v3 nativo)")
 }
 
 func (a *App) safeTrayAction(name string, fn func()) {
@@ -163,38 +168,34 @@ func (a *App) safeTrayAction(name string, fn func()) {
 }
 
 func (a *App) updateTrayIdleState(idle bool, supported bool) {
-	if a == nil || !a.trayReady.Load() {
+	if a == nil || !a.trayReady.Load() || a.systemTray == nil {
 		return
 	}
 
 	a.safeTrayAction("tray-idle-state", func() {
 		if !efficiencyModeEnabled {
-			setTrayTitle("Discovery")
-			setTrayTooltip("Discovery")
+			a.systemTray.SetTooltip("Discovery")
 			return
 		}
 
 		if !supported {
-			setTrayTitle("Discovery")
-			setTrayTooltip("Discovery")
+			a.systemTray.SetTooltip("Discovery")
 			return
 		}
 
 		if idle {
-			setTrayTitle("Discovery Eco")
-			setTrayTooltip("Discovery - Modo de eficiencia ativo (aguardo)")
+			a.systemTray.SetTooltip("Discovery - Modo de eficiencia ativo (aguardo)")
 			return
 		}
 
-		setTrayTitle("Discovery")
-		setTrayTooltip("Discovery - Processando")
+		a.systemTray.SetTooltip("Discovery - Processando")
 	})
 }
 
 // syncRemoteSessionTray atualiza o tooltip da tray com indicacao de sessoes
 // remotas ativas, fornecendo visibilidade ao usuario local.
 func (a *App) syncRemoteSessionTray() {
-	if a == nil || !a.trayReady.Load() {
+	if a == nil || !a.trayReady.Load() || a.systemTray == nil {
 		return
 	}
 
@@ -210,6 +211,6 @@ func (a *App) syncRemoteSessionTray() {
 		} else {
 			tooltip = fmt.Sprintf("Discovery - %d sessoes remotas ativas", count)
 		}
-		setTrayTooltip(tooltip)
+		a.systemTray.SetTooltip(tooltip)
 	})
 }

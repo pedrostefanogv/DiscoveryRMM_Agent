@@ -17,7 +17,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import * as App from "./bindings/discovery/app/app.js";
-import { Events } from "/wails/runtime.js";
+import { Events, Browser, Window } from "/wails/runtime.js";
 
 // ── window.go.app.App ────────────────────────────────────────────────────────
 // Expõe todos os métodos do binding v3 sob `window.go.app.App`.
