@@ -32,6 +32,9 @@ import * as p2pmeta$0 from "./p2pmeta/models.js";
 import * as hardwareid$0 from "./services/hardwareid/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
+import * as notifications$0 from "./services/notifications/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
 import * as supportmeta$0 from "./supportmeta/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
@@ -312,6 +315,7 @@ export function DetectApiFeatures() {
 }
 
 /**
+ * DispatchNotification processa e despacha uma notificação.
  * @param {$models.NotificationDispatchRequest} req
  * @returns {$CancellablePromise<$models.NotificationDispatchResponse>}
  */
@@ -1315,6 +1319,7 @@ export function RequestAppClose() {
 }
 
 /**
+ * RespondToNotification processa a resposta do usuário a uma notificação.
  * @param {string} notificationID
  * @param {string} result
  * @returns {$CancellablePromise<boolean>}
@@ -1600,7 +1605,7 @@ const $$createType5 = $models.TicketSummary.createFrom;
 const $$createType6 = $Create.Nullable($$createType5);
 const $$createType7 = $models.ApiVersionInfo.createFrom;
 const $$createType8 = $Create.Nullable($$createType7);
-const $$createType9 = $models.NotificationDispatchResponse.createFrom;
+const $$createType9 = notifications$0.DispatchResponse.createFrom;
 const $$createType10 = p2pmeta$0.ArtifactView.createFrom;
 const $$createType11 = $models.PSADTScriptResult.createFrom;
 const $$createType12 = p2pmeta$0.ArtifactAvailabilityView.createFrom;

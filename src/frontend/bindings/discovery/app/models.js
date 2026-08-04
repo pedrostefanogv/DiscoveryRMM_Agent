@@ -23,6 +23,9 @@ import * as p2pmeta$0 from "./p2pmeta/models.js";
 import * as hardwareid$0 from "./services/hardwareid/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
+import * as notifications$0 from "./services/notifications/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
 import * as supportmeta$0 from "./supportmeta/models.js";
 
 export const APITicket = supportmeta$0.APITicket;
@@ -1167,156 +1170,25 @@ export const KnowledgeArticle = supportmeta$0.KnowledgeArticle;
  * @typedef {supportmeta$0.KnowledgeArticle} KnowledgeArticle
  */
 
-export class NotificationDispatchRequest {
-    /**
-     * Creates a new NotificationDispatchRequest instance.
-     * @param {Partial<NotificationDispatchRequest>} [$$source = {}] - The source object to create the NotificationDispatchRequest.
-     */
-    constructor($$source = {}) {
-        if (!("notificationId" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["notificationId"] = "";
-        }
-        if (!("idempotencyKey" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["idempotencyKey"] = "";
-        }
-        if (!("title" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["title"] = "";
-        }
-        if (!("message" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["message"] = "";
-        }
-        if (!("mode" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["mode"] = "";
-        }
-        if (!("severity" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["severity"] = "";
-        }
-        if (!("eventType" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["eventType"] = "";
-        }
-        if (!("layout" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["layout"] = "";
-        }
-        if (!("timeoutSeconds" in $$source)) {
-            /**
-             * @member
-             * @type {number}
-             */
-            this["timeoutSeconds"] = 0;
-        }
-        if (!("metadata" in $$source)) {
-            /**
-             * @member
-             * @type {{ [_ in string]?: any }}
-             */
-            this["metadata"] = {};
-        }
+/**
+ * NotificationDispatchRequest é o payload de uma notificação.
+ */
+export const NotificationDispatchRequest = notifications$0.DispatchRequest;
 
-        Object.assign(this, $$source);
-    }
+/**
+ * NotificationDispatchRequest é o payload de uma notificação.
+ * @typedef {notifications$0.DispatchRequest} NotificationDispatchRequest
+ */
 
-    /**
-     * Creates a new NotificationDispatchRequest instance from a string or object.
-     * @param {any} [$$source = {}]
-     * @returns {NotificationDispatchRequest}
-     */
-    static createFrom($$source = {}) {
-        const $$createField9_0 = $$createType16;
-        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        if ("metadata" in $$parsedSource) {
-            $$parsedSource["metadata"] = $$createField9_0($$parsedSource["metadata"]);
-        }
-        return new NotificationDispatchRequest(/** @type {Partial<NotificationDispatchRequest>} */($$parsedSource));
-    }
-}
+/**
+ * NotificationDispatchResponse é a resposta de uma notificação.
+ */
+export const NotificationDispatchResponse = notifications$0.DispatchResponse;
 
-export class NotificationDispatchResponse {
-    /**
-     * Creates a new NotificationDispatchResponse instance.
-     * @param {Partial<NotificationDispatchResponse>} [$$source = {}] - The source object to create the NotificationDispatchResponse.
-     */
-    constructor($$source = {}) {
-        if (!("accepted" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["accepted"] = false;
-        }
-        if (!("notificationId" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["notificationId"] = "";
-        }
-        if (!("agentAction" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["agentAction"] = "";
-        }
-        if (/** @type {any} */(false)) {
-            /**
-             * @member
-             * @type {string | undefined}
-             */
-            this["result"] = undefined;
-        }
-        if (/** @type {any} */(false)) {
-            /**
-             * @member
-             * @type {string | undefined}
-             */
-            this["message"] = undefined;
-        }
-
-        Object.assign(this, $$source);
-    }
-
-    /**
-     * Creates a new NotificationDispatchResponse instance from a string or object.
-     * @param {any} [$$source = {}]
-     * @returns {NotificationDispatchResponse}
-     */
-    static createFrom($$source = {}) {
-        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        return new NotificationDispatchResponse(/** @type {Partial<NotificationDispatchResponse>} */($$parsedSource));
-    }
-}
+/**
+ * NotificationDispatchResponse é a resposta de uma notificação.
+ * @typedef {notifications$0.DispatchResponse} NotificationDispatchResponse
+ */
 
 /**
  * NotificationThemeConfig defines base colors used by notification UI.
@@ -1623,8 +1495,8 @@ export class PSADTDebugState {
      * @returns {PSADTDebugState}
      */
     static createFrom($$source = {}) {
-        const $$createField1_0 = $$createType17;
-        const $$createField2_0 = $$createType18;
+        const $$createField1_0 = $$createType16;
+        const $$createField2_0 = $$createType17;
         const $$createField3_0 = $$createType4;
         const $$createField4_0 = $$createType6;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
@@ -2392,6 +2264,5 @@ const $$createType12 = AgentNotificationStyleOverride.createFrom;
 const $$createType13 = AgentNotificationAction.createFrom;
 const $$createType14 = $Create.Array($$createType13);
 const $$createType15 = $Create.Array($Create.Any);
-const $$createType16 = $Create.Map($Create.Any, $Create.Any);
-const $$createType17 = AgentConfiguration.createFrom;
-const $$createType18 = PSADTModuleStatus.createFrom;
+const $$createType16 = AgentConfiguration.createFrom;
+const $$createType17 = PSADTModuleStatus.createFrom;

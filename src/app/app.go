@@ -38,6 +38,7 @@ import (
 	"discovery/app/services/chat"
 	"discovery/app/services/hardwareid"
 	"discovery/app/services/memory"
+	"discovery/app/services/notifications"
 	"discovery/app/services/psadt"
 	appsupport "discovery/app/support"
 	"discovery/app/updates"
@@ -152,9 +153,8 @@ type App struct {
 
 	startupTime time.Time
 
-	notificationMu      sync.Mutex
-	pendingNotifyResult map[string]chan string
-	notificationByKey   map[string]notificationIdempotencyEntry
+	// notificationSvc encapsula o centro de notificações.
+	notificationSvc *notifications.Service
 
 	queuedForceHeartbeat atomic.Bool
 
@@ -191,22 +191,20 @@ func NewApp(opts AppStartupOptions) *App {
 	reg := mcp.NewRegistry()
 
 	a := &App{
-		ctx:                 context.Background(),
-		runtimeFlags:        RuntimeFlags{DebugMode: opts.DebugMode},
-		trayIcon:            opts.TrayIcon,
-		trayProvisioning:    opts.TrayProvisioningIcon,
-		trayOffline:         opts.TrayOfflineIcon,
-		updateTrigger:       make(chan struct{}, 1),
-		catalogSvc:          services.NewCatalogService(catalogClient),
-		catalogClient:       catalogClient,
-		appsSvc:             services.NewAppsService(wingetClient, chocolateyClient),
-		invSvc:              services.NewInventoryService(inventoryProvider),
-		printerSvc:          services.NewPrinterService(printerManager),
-		mcpRegistry:         reg,
-		chatEvents:          newChatEventBroker(),
-		pendingNotifyResult: make(map[string]chan string),
-		notificationByKey:   make(map[string]notificationIdempotencyEntry),
-		startupTime:         time.Now(),
+		ctx:              context.Background(),
+		runtimeFlags:     RuntimeFlags{DebugMode: opts.DebugMode},
+		trayIcon:         opts.TrayIcon,
+		trayProvisioning: opts.TrayProvisioningIcon,
+		trayOffline:      opts.TrayOfflineIcon,
+		updateTrigger:    make(chan struct{}, 1),
+		catalogSvc:       services.NewCatalogService(catalogClient),
+		catalogClient:    catalogClient,
+		appsSvc:          services.NewAppsService(wingetClient, chocolateyClient),
+		invSvc:           services.NewInventoryService(inventoryProvider),
+		printerSvc:       services.NewPrinterService(printerManager),
+		mcpRegistry:      reg,
+		chatEvents:       newChatEventBroker(),
+		startupTime:      time.Now(),
 	}
 	a.chatSvc = chat.New(reg, chat.Deps{
 		Ctx: func() context.Context { return a.ctx },
@@ -275,6 +273,35 @@ func NewApp(opts AppStartupOptions) *App {
 	a.memorySvc = memory.New(memory.Deps{
 		DB: func() *database.DB {
 			return a.db
+		},
+	})
+	a.notificationSvc = notifications.New(notifications.Deps{
+		Logf: func(line string) {
+			a.logs.append(line)
+		},
+		Ctx: func() interface{ Done() <-chan struct{} } {
+			return a.ctx
+		},
+		DB: func() *database.DB {
+			return a.db
+		},
+		EmitEvent: a.EmitEvent,
+		GetAgentConfiguration: func() notifications.AgentConfiguration {
+			cfg := a.GetAgentConfiguration()
+			return notifications.AgentConfiguration{
+				Rollout: notifications.AgentRolloutConfig{
+					EnableNotifications:           cfg.Rollout.EnableNotifications,
+					BlockedNotificationEventTypes: cfg.Rollout.BlockedNotificationEventTypes,
+					AllowedNotificationEventTypes: cfg.Rollout.AllowedNotificationEventTypes,
+					EnableRequireConfirmation:     cfg.Rollout.EnableRequireConfirmation,
+				},
+				NotificationPolicies: mapNotificationPolicies(cfg.NotificationPolicies),
+				NotificationBranding: notifications.AgentNotificationBrandingConfig{
+					CompanyName: cfg.NotificationBranding.CompanyName,
+					LogoURL:     cfg.NotificationBranding.LogoURL,
+					BannerURL:   cfg.NotificationBranding.BannerURL,
+				},
+			}
 		},
 	})
 	a.automationSvc = automation.NewService(func() automation.RuntimeConfig {
