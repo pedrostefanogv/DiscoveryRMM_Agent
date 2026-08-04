@@ -1,14 +1,11 @@
-package app
+// Package apimetrics encapsula a coleta de métricas de latência e erro
+// por endpoint para telemetria e diagnóstico da comunicação com a API.
+package apimetrics
 
 import (
 	"sync"
 	"time"
 )
-
-// ── API Metrics ──────────────────────────────────────────────────────────
-//
-// Coleta de métricas de latência e erro por endpoint para telemetria.
-// Usado para diagnóstico e monitoramento da comunicação com a API.
 
 // EndpointMetric armazena métricas de um endpoint.
 type EndpointMetric struct {
@@ -22,30 +19,30 @@ type EndpointMetric struct {
 	TotalLatency time.Duration // cumulative for avg calculation
 }
 
-// ApiMetrics coleta e agrega métricas de chamadas à API.
-type ApiMetrics struct {
+// Service coleta e agrega métricas de chamadas à API.
+type Service struct {
 	mu        sync.RWMutex
 	metrics   map[string]*EndpointMetric
 	startedAt time.Time
 }
 
-// NewApiMetrics cria um novo coletor de métricas.
-func NewApiMetrics() *ApiMetrics {
-	return &ApiMetrics{
+// New cria um coletor de métricas de API.
+func New() *Service {
+	return &Service{
 		metrics:   make(map[string]*EndpointMetric),
 		startedAt: time.Now(),
 	}
 }
 
 // RecordCall registra uma chamada de API bem-sucedida.
-func (m *ApiMetrics) RecordCall(endpoint string, latency time.Duration) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+func (s *Service) RecordCall(endpoint string, latency time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-	metric, ok := m.metrics[endpoint]
+	metric, ok := s.metrics[endpoint]
 	if !ok {
 		metric = &EndpointMetric{Endpoint: endpoint}
-		m.metrics[endpoint] = metric
+		s.metrics[endpoint] = metric
 	}
 	metric.LastCall = time.Now()
 	metric.LastLatency = latency
@@ -56,14 +53,14 @@ func (m *ApiMetrics) RecordCall(endpoint string, latency time.Duration) {
 }
 
 // RecordError registra uma chamada de API com erro.
-func (m *ApiMetrics) RecordError(endpoint string, latency time.Duration, errMsg string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+func (s *Service) RecordError(endpoint string, latency time.Duration, errMsg string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-	metric, ok := m.metrics[endpoint]
+	metric, ok := s.metrics[endpoint]
 	if !ok {
 		metric = &EndpointMetric{Endpoint: endpoint}
-		m.metrics[endpoint] = metric
+		s.metrics[endpoint] = metric
 	}
 	metric.LastCall = time.Now()
 	metric.LastLatency = latency
@@ -74,12 +71,12 @@ func (m *ApiMetrics) RecordError(endpoint string, latency time.Duration, errMsg 
 }
 
 // GetSnapshot retorna uma cópia das métricas atuais.
-func (m *ApiMetrics) GetSnapshot() map[string]EndpointMetric {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+func (s *Service) GetSnapshot() map[string]EndpointMetric {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
-	snapshot := make(map[string]EndpointMetric, len(m.metrics))
-	for k, v := range m.metrics {
+	snapshot := make(map[string]EndpointMetric, len(s.metrics))
+	for k, v := range s.metrics {
 		metric := *v
 		if metric.TotalCalls > 0 {
 			avgLatency := metric.TotalLatency / time.Duration(metric.TotalCalls)
@@ -91,11 +88,11 @@ func (m *ApiMetrics) GetSnapshot() map[string]EndpointMetric {
 }
 
 // GetErrorRate retorna a taxa de erro (0.0 - 1.0) para um endpoint.
-func (m *ApiMetrics) GetErrorRate(endpoint string) float64 {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+func (s *Service) GetErrorRate(endpoint string) float64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
-	metric, ok := m.metrics[endpoint]
+	metric, ok := s.metrics[endpoint]
 	if !ok || metric.TotalCalls == 0 {
 		return 0
 	}
@@ -103,26 +100,26 @@ func (m *ApiMetrics) GetErrorRate(endpoint string) float64 {
 }
 
 // Reset limpa todas as métricas.
-func (m *ApiMetrics) Reset() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+func (s *Service) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-	m.metrics = make(map[string]*EndpointMetric)
-	m.startedAt = time.Now()
+	s.metrics = make(map[string]*EndpointMetric)
+	s.startedAt = time.Now()
 }
 
 // GetOverallStats retorna estatísticas agregadas.
-func (m *ApiMetrics) GetOverallStats() (totalCalls, totalErrors int64, avgLatency time.Duration) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+func (s *Service) GetOverallStats() (totalCalls, totalErrors int64, avgLatency time.Duration) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
-	for _, v := range m.metrics {
+	for _, v := range s.metrics {
 		totalCalls += v.TotalCalls
 		totalErrors += v.ErrorCount
 	}
 	if totalCalls > 0 {
 		var total time.Duration
-		for _, v := range m.metrics {
+		for _, v := range s.metrics {
 			total += v.TotalLatency
 		}
 		avgLatency = total / time.Duration(totalCalls)
