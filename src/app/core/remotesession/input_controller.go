@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"discovery/internal/screen"
+	"discovery/app/core/screen"
 )
 
 // InputVersion define o contrato canônico de input (v1).

@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"discovery/app/netutil"
-	"discovery/internal/tlsutil"
+	"discovery/app/core/tlsutil"
 )
 
 // ── Agent Ticket Bridge (API v1) ────────────────────────────────────────────

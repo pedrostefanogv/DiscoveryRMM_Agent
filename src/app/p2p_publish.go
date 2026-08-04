@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"discovery/internal/platform"
+	"discovery/app/core/platform"
 )
 
 const (

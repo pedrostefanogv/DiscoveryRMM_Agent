@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"discovery/app/debug"
-	"discovery/internal/models"
+	"discovery/app/core/models"
 )
 
 type mockSyncDB struct {

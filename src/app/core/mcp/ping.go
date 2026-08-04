@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"discovery/internal/processutil"
+	"discovery/app/core/processutil"
 )
 
 // PingResult is the structured response returned by the ping_host tool.

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"discovery/internal/processutil"
+	"discovery/app/core/processutil"
 )
 
 const (

@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"discovery/app/netutil"
-	"discovery/internal/tlsutil"
+	"discovery/app/core/tlsutil"
 )
 
 // RestCommandPoller implementa polling REST para comandos via GET /api/v1/agent-auth/me/commands

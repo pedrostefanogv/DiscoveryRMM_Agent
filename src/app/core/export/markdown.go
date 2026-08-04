@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"discovery/internal/models"
+	"discovery/app/core/models"
 )
 
 // BuildMarkdown renders the inventory report as a Markdown document.

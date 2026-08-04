@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"discovery/internal/models"
-	"discovery/internal/processutil"
+	"discovery/app/core/models"
+	"discovery/app/core/processutil"
 )
 
 // osqueryQuery describes a single osquery SQL query to execute.

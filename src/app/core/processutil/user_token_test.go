@@ -8,7 +8,7 @@ import (
 	"syscall"
 	"testing"
 
-	"discovery/internal/ctxutil"
+	"discovery/app/core/ctxutil"
 )
 
 func TestApplyUserContext_NoToken_DoesNotSetToken(t *testing.T) {

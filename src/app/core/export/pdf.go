@@ -9,7 +9,7 @@ import (
 
 	"github.com/go-pdf/fpdf"
 
-	"discovery/internal/models"
+	"discovery/app/core/models"
 )
 
 const maxPDFSoftwareItems = 200

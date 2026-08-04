@@ -5,7 +5,7 @@ package psadt
 import (
 	"os/exec"
 
-	"discovery/internal/processutil"
+	"discovery/app/core/processutil"
 )
 
 func init() {

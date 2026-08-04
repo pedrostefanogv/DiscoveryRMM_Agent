@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"discovery/internal/processutil"
-	"discovery/internal/services"
+	"discovery/app/core/processutil"
+	"discovery/app/core/services"
 )
 
 type automationPackageManagerRouter struct {

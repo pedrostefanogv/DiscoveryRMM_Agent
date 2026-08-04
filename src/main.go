@@ -14,8 +14,8 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/events"
 
 	appkg "discovery/app"
-	"discovery/internal/logger"
-	"discovery/internal/platform"
+	"discovery/app/core/logger"
+	"discovery/app/core/platform"
 )
 
 //go:embed all:frontend

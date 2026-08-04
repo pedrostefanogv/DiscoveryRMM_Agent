@@ -3,7 +3,7 @@ package services
 import (
 	"context"
 
-	"discovery/internal/models"
+	"discovery/app/core/models"
 )
 
 type CatalogProvider interface {

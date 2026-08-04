@@ -2,7 +2,7 @@ package mcp
 
 import (
 	"context"
-	"discovery/internal/database"
+	"discovery/app/core/database"
 	"encoding/json"
 	"fmt"
 	"strings"

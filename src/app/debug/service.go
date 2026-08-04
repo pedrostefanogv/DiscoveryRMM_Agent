@@ -21,8 +21,8 @@ import (
 
 	"discovery/app/netutil"
 	"discovery/app/p2pmeta"
-	"discovery/internal/agentconn"
-	"discovery/internal/tlsutil"
+	"discovery/app/core/agentconn"
+	"discovery/app/core/tlsutil"
 )
 
 const debugConfigFile = "debug_config.json"

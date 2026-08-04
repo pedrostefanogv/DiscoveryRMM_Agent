@@ -7,7 +7,7 @@ import (
 	"os/exec"
 	"syscall"
 
-	"discovery/internal/ctxutil"
+	"discovery/app/core/ctxutil"
 )
 
 // ApplyUserContext sets cmd.SysProcAttr.Token when a Windows primary token is

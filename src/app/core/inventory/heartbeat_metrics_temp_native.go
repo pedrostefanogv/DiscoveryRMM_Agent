@@ -14,8 +14,8 @@ import (
 	"time"
 	"unsafe"
 
-	"discovery/internal/agentconn"
-	"discovery/internal/processutil"
+	"discovery/app/core/agentconn"
+	"discovery/app/core/processutil"
 )
 
 // ─── PDH (Performance Data Helper) CPU Thermal ────────────────────────

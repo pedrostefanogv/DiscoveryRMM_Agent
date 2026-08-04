@@ -1,6 +1,6 @@
 package app
 
-import "discovery/internal/models"
+import "discovery/app/core/models"
 
 func (a *App) getInventoryForExport() (models.InventoryReport, error) {
 	if cached, ok := a.invCache.get(); ok {

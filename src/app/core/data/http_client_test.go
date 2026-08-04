@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"discovery/internal/models"
+	"discovery/app/core/models"
 )
 
 func TestHTTPClient_GetCatalog_Success(t *testing.T) {

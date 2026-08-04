@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"discovery/internal/database"
+	"discovery/app/core/database"
 )
 
 func cloneState(in State) State {

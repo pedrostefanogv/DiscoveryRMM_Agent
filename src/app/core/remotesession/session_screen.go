@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"discovery/internal/screen"
+	"discovery/app/core/screen"
 )
 
 // SessionScreen gerencia uma sessao de screen capture remota.

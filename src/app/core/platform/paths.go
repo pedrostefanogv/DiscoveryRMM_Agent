@@ -3,7 +3,7 @@
 package platform
 
 import (
-	"discovery/internal/envutil"
+	"discovery/app/core/envutil"
 	"os"
 	"path/filepath"
 	"runtime"

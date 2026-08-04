@@ -14,9 +14,9 @@ import (
 	"sync"
 	"time"
 
-	"discovery/internal/ai"
-	"discovery/internal/mcp"
-	"discovery/internal/platform"
+	"discovery/app/core/ai"
+	"discovery/app/core/mcp"
+	"discovery/app/core/platform"
 )
 
 // Config is the frontend-facing AI configuration.

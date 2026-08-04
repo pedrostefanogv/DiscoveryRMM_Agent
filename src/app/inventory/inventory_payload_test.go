@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"discovery/internal/models"
+	"discovery/app/core/models"
 )
 
 func TestBuildAgentHardwareEnvelope_UsesStringStatusAndStringHardwareRawInventory(t *testing.T) {

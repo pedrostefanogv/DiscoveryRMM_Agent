@@ -165,14 +165,14 @@ export CC=x86_64-w64-mingw32-gcc
 LDFLAGS="-H=windowsgui"
 if [[ -n "$VERSION" ]]; then
   LDFLAGS+=" -X discovery/app.Version=$VERSION"
-  LDFLAGS+=" -X discovery/internal/buildinfo.Version=$VERSION"
+  LDFLAGS+=" -X discovery/app/core/buildinfo.Version=$VERSION"
 fi
 
 # Resolve commit hash (short) for buildinfo.Commit and agent-version.json
 COMMIT="unknown"
 if GIT_COMMIT=$(git -C "$PROJECT_ROOT" rev-parse --short=8 HEAD 2>/dev/null); then
   COMMIT="$GIT_COMMIT"
-  LDFLAGS+=" -X discovery/internal/buildinfo.Commit=$COMMIT"
+  LDFLAGS+=" -X discovery/app/core/buildinfo.Commit=$COMMIT"
   echo "buildinfo.Commit = $COMMIT"
 else
   echo "[aviso] git rev-parse falhou; buildinfo.Commit ficara 'unknown'"

@@ -123,14 +123,14 @@ try {
     $ldflags = @("-H=windowsgui")
     if ($Version -ne "") {
         $ldflags += "-X discovery/app.Version=$Version"
-        $ldflags += "-X discovery/internal/buildinfo.Version=$Version"
+        $ldflags += "-X discovery/app/core/buildinfo.Version=$Version"
     } else {
-        Write-Warning "BUILD SEM VERSAO: -ldflags sem -X discovery/internal/buildinfo.Version â o binario ficara com '0.0.0' (self-update pode entrar em loop)"
+        Write-Warning "BUILD SEM VERSAO: -ldflags sem -X discovery/app/core/buildinfo.Version â o binario ficara com '0.0.0' (self-update pode entrar em loop)"
     }
     # Injeta commit hash do git para decisao de self-update (version+commit)
     $gitCommit = (git -C $srcRoot rev-parse --short=8 HEAD 2>$null)
     if ($gitCommit) {
-        $ldflags += "-X discovery/internal/buildinfo.Commit=$gitCommit"
+        $ldflags += "-X discovery/app/core/buildinfo.Commit=$gitCommit"
         Write-Output "  buildinfo.Commit = $gitCommit"
     } else {
         Write-Warning "  git rev-parse falhou; buildinfo.Commit ficara 'unknown'"

@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"discovery/internal/terminal"
+	"discovery/app/core/terminal"
 )
 
 // ── Constantes de timing do terminal ──

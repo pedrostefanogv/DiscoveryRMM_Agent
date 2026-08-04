@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"discovery/internal/agentconn"
-	"discovery/internal/tlsutil"
+	"discovery/app/core/agentconn"
+	"discovery/app/core/tlsutil"
 )
 
 type fakeAgentConn struct {

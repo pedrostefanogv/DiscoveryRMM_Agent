@@ -15,9 +15,9 @@ import (
 
 	"discovery/app/appstore"
 	"discovery/app/netutil"
-	"discovery/internal/agentconn"
-	"discovery/internal/selfupdate"
-	"discovery/internal/tlsutil"
+	"discovery/app/core/agentconn"
+	"discovery/app/core/selfupdate"
+	"discovery/app/core/tlsutil"
 )
 
 const (

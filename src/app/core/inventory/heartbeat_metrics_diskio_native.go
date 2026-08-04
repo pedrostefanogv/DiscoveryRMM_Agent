@@ -9,7 +9,7 @@ import (
 	"time"
 	"unsafe"
 
-	"discovery/internal/agentconn"
+	"discovery/app/core/agentconn"
 )
 
 // ─── PDH (Performance Data Helper) Disk I/O ──────────────────────────

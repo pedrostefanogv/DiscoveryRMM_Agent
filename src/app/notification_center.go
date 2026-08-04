@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"discovery/internal/database"
+	"discovery/app/core/database"
 )
 
 // notificationIdempotencyEntry armazena o notificationID associado a um

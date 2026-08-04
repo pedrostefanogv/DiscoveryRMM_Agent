@@ -12,7 +12,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 
-	"discovery/internal/screen"
+	"discovery/app/core/screen"
 )
 
 // stripHyphens remove hifens de UUIDs para garantir compatibilidade com o

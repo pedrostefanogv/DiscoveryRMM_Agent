@@ -11,7 +11,7 @@ import (
 	"github.com/samber/lo"
 
 	"discovery/app/debug"
-	"discovery/internal/platform"
+	"discovery/app/core/platform"
 )
 
 func installerConfigPathCandidates() []string {

@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"discovery/internal/agentconn"
-	"discovery/internal/database"
-	"discovery/internal/errutil"
+	"discovery/app/core/agentconn"
+	"discovery/app/core/database"
+	"discovery/app/core/errutil"
 )
 
 type commandResultOutboxPayload struct {

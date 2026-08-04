@@ -17,8 +17,8 @@ import (
 	"unicode/utf8"
 
 	"discovery/app/netutil"
-	"discovery/internal/mcp"
-	"discovery/internal/tlsutil"
+	"discovery/app/core/mcp"
+	"discovery/app/core/tlsutil"
 )
 
 // Config holds the LLM API settings.

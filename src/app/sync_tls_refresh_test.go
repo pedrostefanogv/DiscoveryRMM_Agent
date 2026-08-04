@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"discovery/app/debug"
-	"discovery/internal/agentconn"
+	"discovery/app/core/agentconn"
 )
 
 type syncTestAgentConn struct {

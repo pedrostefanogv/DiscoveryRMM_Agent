@@ -17,7 +17,7 @@ import (
 	"discovery/app/debug"
 	"discovery/app/netutil"
 	"discovery/app/supportmeta"
-	"discovery/internal/tlsutil"
+	"discovery/app/core/tlsutil"
 )
 
 var guidPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)

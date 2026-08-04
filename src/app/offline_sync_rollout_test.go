@@ -9,7 +9,7 @@ import (
 	"time"
 
 	debugsvc "discovery/app/debug"
-	"discovery/internal/database"
+	"discovery/app/core/database"
 )
 
 func newOfflineSyncTestApp(t *testing.T, rollout AgentRolloutConfig) *App {

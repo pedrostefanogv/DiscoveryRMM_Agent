@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"discovery/internal/agentconn"
+	"discovery/app/core/agentconn"
 )
 
 const (

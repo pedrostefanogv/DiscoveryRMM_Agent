@@ -10,8 +10,8 @@ import (
 
 	"github.com/samber/lo"
 
-	"discovery/internal/export"
-	"discovery/internal/models"
+	"discovery/app/core/export"
+	"discovery/app/core/models"
 )
 
 // InventoryGetter resolves inventory for export.

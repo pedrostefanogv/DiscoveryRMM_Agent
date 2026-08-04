@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"discovery/internal/ctxutil"
-	"discovery/internal/processutil"
+	"discovery/app/core/ctxutil"
+	"discovery/app/core/processutil"
 )
 
 var idPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)

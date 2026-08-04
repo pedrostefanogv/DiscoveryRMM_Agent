@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"discovery/internal/models"
+	"discovery/app/core/models"
 )
 
 // AppsService defines the package manager surface used by updates.

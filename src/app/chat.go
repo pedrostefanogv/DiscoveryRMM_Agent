@@ -5,9 +5,9 @@ import (
 	"path/filepath"
 
 	"discovery/app/services/chat"
-	"discovery/internal/ai"
-	"discovery/internal/mcp"
-	"discovery/internal/platform"
+	"discovery/app/core/ai"
+	"discovery/app/core/mcp"
+	"discovery/app/core/platform"
 )
 
 // ChatConfig is the frontend-facing AI configuration.

@@ -11,9 +11,9 @@ import (
 	"time"
 
 	"discovery/app/netutil"
-	"discovery/internal/database"
-	"discovery/internal/platform"
-	"discovery/internal/tlsutil"
+	"discovery/app/core/database"
+	"discovery/app/core/platform"
+	"discovery/app/core/tlsutil"
 )
 
 const agentDecommissionOutboxCacheKey = "agent_decommission_outbox"

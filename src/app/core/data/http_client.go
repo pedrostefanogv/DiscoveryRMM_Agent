@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"discovery/internal/models"
+	"discovery/app/core/models"
 )
 
 // maxCatalogSize limits the response body to prevent runaway memory usage

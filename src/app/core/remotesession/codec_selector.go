@@ -2,7 +2,7 @@
 
 package remotesession
 
-import "discovery/internal/screen"
+import "discovery/app/core/screen"
 
 // CodecSelector seleciona o encoder apropriado baseado no codec solicitado.
 type CodecSelector struct {

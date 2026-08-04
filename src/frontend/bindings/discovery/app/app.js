@@ -14,22 +14,25 @@ import * as context$0 from "../../context/models.js";
 import * as automation$0 from "./automation/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
+import * as database$0 from "./core/database/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as mcp$0 from "./core/mcp/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as models$0 from "./core/models/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
 import * as debug$0 from "./debug/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
 import * as p2pmeta$0 from "./p2pmeta/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
+import * as hardwareid$0 from "./services/hardwareid/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
 import * as supportmeta$0 from "./supportmeta/models.js";
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore: Unused imports
-import * as database$0 from "../internal/database/models.js";
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore: Unused imports
-import * as mcp$0 from "../internal/mcp/models.js";
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore: Unused imports
-import * as models$0 from "../internal/models/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
 import * as json$0 from "../../encoding/json/models.js";
@@ -547,10 +550,6 @@ export function GetDebugHTTPPort() {
 /**
  * GetHardwareIdentity retorna as identidades de hardware da máquina (TPM EK e
  * UUID SMBIOS). É exposto ao frontend via Wails e ao debug HTTP via /api/.
- * 
- * O resultado é cacheado no App: o hardware não muda em runtime, e a coleta
- * (TPM + WMI) é relativamente lenta. A primeira chamada coleta e cacheia; as
- * chamadas seguintes retornam do cache imediatamente.
  * @returns {$CancellablePromise<$models.HardwareIdentityInfo>}
  */
 export function GetHardwareIdentity() {
@@ -1617,7 +1616,7 @@ const $$createType21 = $models.ChatConfig.createFrom;
 const $$createType22 = $models.ChatMessage.createFrom;
 const $$createType23 = $Create.Array($$createType22);
 const $$createType24 = debug$0.Config.createFrom;
-const $$createType25 = $models.HardwareIdentityInfo.createFrom;
+const $$createType25 = hardwareid$0.Info.createFrom;
 const $$createType26 = models$0.InventoryReport.createFrom;
 const $$createType27 = supportmeta$0.KnowledgeArticle.createFrom;
 const $$createType28 = $Create.Array($$createType27);

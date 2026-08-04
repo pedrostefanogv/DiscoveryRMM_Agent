@@ -11,16 +11,19 @@ import { Create as $Create } from "/wails/runtime.js";
 import * as automation$0 from "./automation/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
+import * as selfupdate$0 from "./core/selfupdate/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
 import * as debug$0 from "./debug/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
 import * as p2pmeta$0 from "./p2pmeta/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
-import * as supportmeta$0 from "./supportmeta/models.js";
+import * as hardwareid$0 from "./services/hardwareid/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
-import * as selfupdate$0 from "../internal/selfupdate/models.js";
+import * as supportmeta$0 from "./supportmeta/models.js";
 
 export const APITicket = supportmeta$0.APITicket;
 
@@ -1149,90 +1152,14 @@ export const DebugConfig = debug$0.Config;
 /**
  * HardwareIdentityInfo agrega as identidades de hardware da máquina usadas
  * para identificação persistente do agente (sobrevive a formatação).
- * 
- * TPMEK é a chave Endorsement Key (EK) do TPM 2.0 — imutável e única por chip.
- * SMBIOSUUID é o UUID do SMBIOS (System Information) — persistente na placa-mãe.
- * Ambos são apresentados quando disponíveis; o agente pode usar um como
- * Hardware ID e o outro como fallback.
  */
-export class HardwareIdentityInfo {
-    /**
-     * Creates a new HardwareIdentityInfo instance.
-     * @param {Partial<HardwareIdentityInfo>} [$$source = {}] - The source object to create the HardwareIdentityInfo.
-     */
-    constructor($$source = {}) {
-        if (!("tpmEk" in $$source)) {
-            /**
-             * TPMEK é o hash SHA-256 da chave pública da Endorsement Key (EK) do TPM 2.0.
-             * Vazio quando não há TPM disponível/acessível.
-             * @member
-             * @type {string}
-             */
-            this["tpmEk"] = "";
-        }
-        if (!("tpmEkAvailable" in $$source)) {
-            /**
-             * TPMEKAvailable indica se a EK foi lida com sucesso do TPM.
-             * @member
-             * @type {boolean}
-             */
-            this["tpmEkAvailable"] = false;
-        }
-        if (/** @type {any} */(false)) {
-            /**
-             * TPMEKError descreve a falha ao ler a EK (se houver).
-             * @member
-             * @type {string | undefined}
-             */
-            this["tpmEkError"] = undefined;
-        }
-        if (/** @type {any} */(false)) {
-            /**
-             * TPMEKAlg indica o algoritmo da EK (ex.: "RSA", "ECC").
-             * @member
-             * @type {string | undefined}
-             */
-            this["tpmEkAlg"] = undefined;
-        }
-        if (!("smbiosUuid" in $$source)) {
-            /**
-             * SMBIOSUUID é o UUID do SMBIOS da máquina (Win32_ComputerSystemProduct.UUID).
-             * Vazio quando não foi possível obter.
-             * @member
-             * @type {string}
-             */
-            this["smbiosUuid"] = "";
-        }
-        if (!("smbiosUuidAvailable" in $$source)) {
-            /**
-             * SMBIOSUUIDAvailable indica se o UUID foi obtido com sucesso.
-             * @member
-             * @type {boolean}
-             */
-            this["smbiosUuidAvailable"] = false;
-        }
-        if (/** @type {any} */(false)) {
-            /**
-             * SMBIOSUUIDError descreve a falha ao obter o UUID (se houver).
-             * @member
-             * @type {string | undefined}
-             */
-            this["smbiosUuidError"] = undefined;
-        }
+export const HardwareIdentityInfo = hardwareid$0.Info;
 
-        Object.assign(this, $$source);
-    }
-
-    /**
-     * Creates a new HardwareIdentityInfo instance from a string or object.
-     * @param {any} [$$source = {}]
-     * @returns {HardwareIdentityInfo}
-     */
-    static createFrom($$source = {}) {
-        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        return new HardwareIdentityInfo(/** @type {Partial<HardwareIdentityInfo>} */($$parsedSource));
-    }
-}
+/**
+ * HardwareIdentityInfo agrega as identidades de hardware da máquina usadas
+ * para identificação persistente do agente (sobrevive a formatação).
+ * @typedef {hardwareid$0.Info} HardwareIdentityInfo
+ */
 
 export const KnowledgeArticle = supportmeta$0.KnowledgeArticle;
 

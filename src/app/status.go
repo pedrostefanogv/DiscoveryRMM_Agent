@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"discovery/internal/buildinfo"
+	"discovery/app/core/buildinfo"
 )
 
 // StatusOverview provides a simplified health snapshot for the default status page.

@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"discovery/internal/logger"
+	"discovery/app/core/logger"
 )
 
 // logBuffer stores command output lines for the embedded terminal view.

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"discovery/internal/errutil"
+	"discovery/app/core/errutil"
 )
 
 const (

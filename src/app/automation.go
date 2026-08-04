@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"discovery/internal/automation"
+	"discovery/app/core/automation"
 )
 
 func (a *App) GetAutomationState() AutomationStateView {

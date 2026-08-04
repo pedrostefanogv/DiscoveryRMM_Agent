@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"discovery/internal/processutil"
+	"discovery/app/core/processutil"
 )
 
 func executeCommand(parent context.Context, cmdType string, payload any) (int, string, string) {

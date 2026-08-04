@@ -3,7 +3,7 @@ package inventory
 import (
 	"testing"
 
-	"discovery/internal/models"
+	"discovery/app/core/models"
 )
 
 func TestMapPrograms_NilInput(t *testing.T) {

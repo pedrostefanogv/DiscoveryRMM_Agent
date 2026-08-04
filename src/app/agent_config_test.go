@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"discovery/internal/selfupdate"
+	"discovery/app/core/selfupdate"
 )
 
 func TestParseAgentConfiguration_BasicFields(t *testing.T) {

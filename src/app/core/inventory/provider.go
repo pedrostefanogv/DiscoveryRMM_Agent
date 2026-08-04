@@ -11,9 +11,9 @@ import (
 	"sync"
 	"time"
 
-	"discovery/internal/ctxutil"
-	"discovery/internal/models"
-	"discovery/internal/processutil"
+	"discovery/app/core/ctxutil"
+	"discovery/app/core/models"
+	"discovery/app/core/processutil"
 )
 
 // Provider orchestrates inventory collection using osquery.

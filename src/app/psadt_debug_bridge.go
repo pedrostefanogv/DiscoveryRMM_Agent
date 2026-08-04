@@ -12,7 +12,7 @@ import (
 	"unicode/utf8"
 
 	"discovery/app/services/psadt"
-	"discovery/internal/processutil"
+	"discovery/app/core/processutil"
 
 	"golang.org/x/text/encoding/charmap"
 )

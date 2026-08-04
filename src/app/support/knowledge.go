@@ -12,7 +12,7 @@ import (
 
 	"discovery/app/debug"
 	"discovery/app/netutil"
-	"discovery/internal/tlsutil"
+	"discovery/app/core/tlsutil"
 )
 
 const (

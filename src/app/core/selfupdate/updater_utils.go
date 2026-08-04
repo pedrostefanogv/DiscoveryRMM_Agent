@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"discovery/internal/processutil"
+	"discovery/app/core/processutil"
 )
 
 func fileSHA256(path string) (string, error) {

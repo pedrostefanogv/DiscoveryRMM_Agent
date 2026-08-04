@@ -9,7 +9,7 @@ import (
 	"log"
 	"time"
 
-	"discovery/internal/fileserver"
+	"discovery/app/core/fileserver"
 )
 
 // SessionFiles gerencia uma sessão de transferência de arquivos remota.

@@ -13,7 +13,7 @@ import (
 
 	"discovery/app/debug"
 	"discovery/app/netutil"
-	"discovery/internal/models"
+	"discovery/app/core/models"
 )
 
 type agentHardwareEnvelope struct {

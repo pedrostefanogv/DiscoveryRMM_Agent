@@ -14,8 +14,8 @@ import (
 
 	osquery "github.com/osquery/osquery-go"
 
-	"discovery/internal/errutil"
-	"discovery/internal/processutil"
+	"discovery/app/core/errutil"
+	"discovery/app/core/processutil"
 )
 
 var osquerySocketSeq uint64

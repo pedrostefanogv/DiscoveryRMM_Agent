@@ -12,9 +12,9 @@ import (
 
 	"github.com/nats-io/nats.go"
 
-	"discovery/internal/safego"
-	"discovery/internal/screen"
-	"discovery/internal/terminal"
+	"discovery/app/core/safego"
+	"discovery/app/core/screen"
+	"discovery/app/core/terminal"
 )
 
 // Session representa uma sessao remota ativa gerenciada pelo agent.

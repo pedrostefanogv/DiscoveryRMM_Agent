@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"discovery/internal/agentconn"
+	"discovery/app/core/agentconn"
 )
 
 func TestApplyHeartbeatCPUFallback_UsesCollectorWhenMissing(t *testing.T) {

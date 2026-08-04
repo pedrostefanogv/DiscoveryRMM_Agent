@@ -19,7 +19,7 @@ import (
 	"github.com/nats-io/nats.go"
 
 	"discovery/app/netutil"
-	"discovery/internal/tlsutil"
+	"discovery/app/core/tlsutil"
 )
 
 const (

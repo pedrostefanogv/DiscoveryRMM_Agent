@@ -16,29 +16,31 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 
 	"discovery/app/appstore"
+	"discovery/app/core/agentconn"
+	"discovery/app/core/automation"
+	"discovery/app/core/buildinfo"
+	"discovery/app/core/chocolatey"
+	"discovery/app/core/data"
+	"discovery/app/core/database"
+	"discovery/app/core/inventory"
+	"discovery/app/core/mcp"
+	"discovery/app/core/models"
+	"discovery/app/core/platform"
+	"discovery/app/core/printer"
+	"discovery/app/core/processutil"
+	"discovery/app/core/remotesession"
+	"discovery/app/core/safego"
+	"discovery/app/core/selfupdate"
+	"discovery/app/core/services"
+	"discovery/app/core/winget"
 	"discovery/app/debug"
 	appinventory "discovery/app/inventory"
 	"discovery/app/services/chat"
+	"discovery/app/services/hardwareid"
+	"discovery/app/services/memory"
 	"discovery/app/services/psadt"
 	appsupport "discovery/app/support"
 	"discovery/app/updates"
-	"discovery/internal/agentconn"
-	"discovery/internal/automation"
-	"discovery/internal/buildinfo"
-	"discovery/internal/chocolatey"
-	"discovery/internal/data"
-	"discovery/internal/database"
-	"discovery/internal/inventory"
-	"discovery/internal/mcp"
-	"discovery/internal/models"
-	"discovery/internal/platform"
-	"discovery/internal/printer"
-	"discovery/internal/processutil"
-	"discovery/internal/remotesession"
-	"discovery/internal/safego"
-	"discovery/internal/selfupdate"
-	"discovery/internal/services"
-	"discovery/internal/winget"
 	"path/filepath"
 )
 
@@ -106,12 +108,12 @@ type App struct {
 	debugHTTP  *debugHTTPServer
 	chatEvents *chatEventBroker
 
-	// hardwareIdentityCache guarda o resultado da coleta de identidade de
-	// hardware (TPM EK + SMBIOS UUID). O hardware não muda em runtime, então
-	// cacheamos para evitar chamadas repetidas ao TPM/WMI (que são lentas).
-	hardwareIdentityMu    sync.RWMutex
-	hardwareIdentityCache HardwareIdentityInfo
-	hardwareIdentityDone  bool
+	// hardwareIDSvc encapsula a coleta e cache de identidade de hardware
+	// (TPM EK + SMBIOS UUID).
+	hardwareIDSvc *hardwareid.Service
+
+	// memorySvc encapsula as memórias/anotações locais persistidas.
+	memorySvc *memory.Service
 
 	p2pMu                      sync.RWMutex
 	p2pConfig                  P2PConfig
@@ -263,6 +265,16 @@ func NewApp(opts AppStartupOptions) *App {
 				Accepted: resp.Accepted,
 				Message:  resp.Message,
 			}
+		},
+	})
+	a.hardwareIDSvc = hardwareid.New(hardwareid.Deps{
+		Logf: func(line string) {
+			a.logs.append(line)
+		},
+	})
+	a.memorySvc = memory.New(memory.Deps{
+		DB: func() *database.DB {
+			return a.db
 		},
 	})
 	a.automationSvc = automation.NewService(func() automation.RuntimeConfig {

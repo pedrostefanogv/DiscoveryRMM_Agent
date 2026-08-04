@@ -1,6 +1,6 @@
 package app
 
-import "discovery/internal/models"
+import "discovery/app/core/models"
 
 // GetPendingUpdates runs `winget upgrade` and parses the output into structured items.
 func (a *App) GetPendingUpdates() ([]models.UpgradeItem, error) {

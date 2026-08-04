@@ -18,8 +18,8 @@ import (
 
 	"discovery/app/netutil"
 	"discovery/app/p2pmeta"
-	"discovery/internal/platform"
-	"discovery/internal/tlsutil"
+	"discovery/app/core/platform"
+	"discovery/app/core/tlsutil"
 
 	"github.com/samber/lo"
 )

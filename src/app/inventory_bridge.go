@@ -3,7 +3,7 @@
 import (
 	"context"
 
-	"discovery/internal/models"
+	"discovery/app/core/models"
 )
 
 func (a *App) GetCatalog() (models.Catalog, error) {

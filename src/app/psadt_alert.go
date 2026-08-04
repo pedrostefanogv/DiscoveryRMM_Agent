@@ -16,7 +16,7 @@ import (
 	psadt "github.com/pedrostefanogv/go-psadt"
 	pstypes "github.com/pedrostefanogv/go-psadt/types"
 
-	"discovery/internal/processutil"
+	"discovery/app/core/processutil"
 )
 
 // isPsadtAlertCommandType verifica se o commandType corresponde a ShowPsadtAlert (9).

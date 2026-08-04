@@ -4,7 +4,7 @@ import (
 	"sort"
 	"strings"
 
-	"discovery/internal/models"
+	"discovery/app/core/models"
 )
 
 // -----------------------------------------------------------------------

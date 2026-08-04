@@ -2,7 +2,7 @@ package app
 
 import (
 	"discovery/app/updates"
-	"discovery/internal/models"
+	"discovery/app/core/models"
 )
 
 func parseUpgradeOutput(raw string) []models.UpgradeItem {

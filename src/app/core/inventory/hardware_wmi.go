@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"discovery/internal/models"
-	"discovery/internal/processutil"
+	"discovery/app/core/models"
+	"discovery/app/core/processutil"
 )
 
 // enrichHardwareFromWMI preenche campos vazios do HardwareInfo via WMI/CIM.

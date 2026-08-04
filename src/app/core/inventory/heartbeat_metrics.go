@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"discovery/internal/agentconn"
-	"discovery/internal/processutil"
+	"discovery/app/core/agentconn"
+	"discovery/app/core/processutil"
 )
 
 // heartbeatMetricsSQL é uma única query osquery que coleta todas as métricas

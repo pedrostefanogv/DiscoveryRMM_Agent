@@ -9,7 +9,7 @@ import (
 
 	"discovery/app/appstore"
 	"discovery/app/debug"
-	"discovery/internal/models"
+	"discovery/app/core/models"
 )
 
 type delayedRefreshAppsService struct {

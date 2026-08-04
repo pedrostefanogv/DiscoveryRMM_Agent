@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"discovery/internal/tlsutil"
+	"discovery/app/core/tlsutil"
 )
 
 func normalizeNATSURL(server string) (string, error) {

@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"discovery/internal/platform"
+	"discovery/app/core/platform"
 )
 
 const (

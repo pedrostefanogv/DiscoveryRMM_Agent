@@ -25,7 +25,7 @@ import (
 	"strings"
 	"time"
 
-	"discovery/internal/platform"
+	"discovery/app/core/platform"
 
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
@@ -183,13 +183,13 @@ func handleStreamArtifactAccess(s network.Stream, transfer *p2pTransferServer) {
 
 	var req libp2pAccessRequest
 	if err := json.NewDecoder(bufio.NewReader(s)).Decode(&req); err != nil {
-		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "payload invlido"})
+		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "payload inválido"})
 		return
 	}
 	req.ArtifactName = sanitizeArtifactName(req.ArtifactName)
 	req.RequesterID = strings.TrimSpace(req.RequesterID)
 	if req.ArtifactName == "" {
-		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "artifact invlido"})
+		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "artifact inválido"})
 		return
 	}
 	if req.RequesterID == "" {
@@ -209,13 +209,13 @@ func handleStreamArtifactManifest(s network.Stream, transfer *p2pTransferServer)
 
 	var req libp2pManifestRequest
 	if err := json.NewDecoder(bufio.NewReader(s)).Decode(&req); err != nil {
-		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "payload invlido"})
+		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "payload inválido"})
 		return
 	}
 	req.ArtifactName = sanitizeArtifactName(req.ArtifactName)
 	req.RequesterID = strings.TrimSpace(req.RequesterID)
 	if req.ArtifactName == "" {
-		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "artifact invlido"})
+		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "artifact inválido"})
 		return
 	}
 	transfer.mu.RLock()
@@ -268,12 +268,12 @@ func handleStreamArtifactGet(s network.Stream, transfer *p2pTransferServer) {
 
 	var req libp2pGetRequest
 	if err := json.NewDecoder(bufio.NewReader(s)).Decode(&req); err != nil {
-		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "payload invlido"})
+		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "payload inválido"})
 		return
 	}
 	req.ArtifactName = sanitizeArtifactName(req.ArtifactName)
 	if req.ArtifactName == "" {
-		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "artifact invlido"})
+		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "artifact inválido"})
 		return
 	}
 	transfer.mu.RLock()
@@ -320,7 +320,7 @@ func handleStreamArtifactGet(s network.Stream, transfer *p2pTransferServer) {
 		rangeEnd = totalSize - 1
 	}
 	if rangeStart > rangeEnd {
-		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "range invlido"})
+		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "range inválido"})
 		return
 	}
 	chunkLen := rangeEnd - rangeStart + 1
@@ -578,7 +578,7 @@ func decodeLibp2pGetHeaderAndPayload(stream io.Reader) (libp2pGetResponse, io.Re
 
 func readPayloadExact(reader io.Reader, expected int64) ([]byte, error) {
 	if expected < 0 {
-		return nil, fmt.Errorf("tamanho de payload invlido")
+		return nil, fmt.Errorf("tamanho de payload inválido")
 	}
 	if expected > int64(^uint(0)>>1) {
 		return nil, fmt.Errorf("payload grande demais")
@@ -596,7 +596,7 @@ func readPayloadExact(reader io.Reader, expected int64) ([]byte, error) {
 // onProgress é opcional —" quando != nil, chamado com (bytesLidosNoChunk, tamanhoDoChunk).
 func libp2pDownloadChunk(ctx context.Context, h host.Host, peerID peer.ID, artifactName, requesterID string, chunk P2PChunk, destFile string, onProgress func(readSoFar, total int64)) error {
 	if chunk.Size <= 0 {
-		return fmt.Errorf("chunk %d: tamanho invlido", chunk.Index)
+		return fmt.Errorf("chunk %d: tamanho inválido", chunk.Index)
 	}
 	if chunk.Offset < 0 {
 		return fmt.Errorf("chunk %d: offset invalido", chunk.Index)

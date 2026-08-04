@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"discovery/app/debug"
-	"discovery/internal/tlsutil"
+	"discovery/app/core/tlsutil"
 )
 
 const (

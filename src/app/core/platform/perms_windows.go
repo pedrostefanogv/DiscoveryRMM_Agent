@@ -8,7 +8,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"discovery/internal/processutil"
+	"discovery/app/core/processutil"
 )
 
 // EnsureWorldAccess grants Everyone full control (read/write/execute) on the

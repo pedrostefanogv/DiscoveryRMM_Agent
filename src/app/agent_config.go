@@ -1,7 +1,7 @@
 package app
 
 import (
-	"discovery/internal/selfupdate"
+	"discovery/app/core/selfupdate"
 	"encoding/json"
 	"fmt"
 	"strings"

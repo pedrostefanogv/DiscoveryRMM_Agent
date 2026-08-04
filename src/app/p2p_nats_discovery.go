@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"discovery/internal/agentconn"
+	"discovery/app/core/agentconn"
 )
 
 func (a *App) handleP2PDiscoverySnapshot(snapshot agentconn.P2PDiscoverySnapshot) {

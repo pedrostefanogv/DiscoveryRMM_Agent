@@ -2,7 +2,7 @@
 // intencionalmente (via _ =), garantindo que sejam logados para diagnóstico.
 package errutil
 
-import "discovery/internal/logger"
+import "discovery/app/core/logger"
 
 // LogIfErr loga o erro com nível Warn se não for nil.
 // Use no lugar de _ = para operações cujo erro não é crítico mas deve ser observável.

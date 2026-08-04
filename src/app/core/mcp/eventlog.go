@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"discovery/internal/processutil"
+	"discovery/app/core/processutil"
 )
 
 // allowedEventLogNames is the hard-coded set of Windows Event Log names that

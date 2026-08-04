@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"discovery/internal/agentconn"
-	"discovery/internal/envutil"
+	"discovery/app/core/agentconn"
+	"discovery/app/core/envutil"
 )
 
 func TestP2PSeedCountRule(t *testing.T) {

@@ -9,7 +9,7 @@ import (
 	debug "discovery/app/debug"
 	p2pmeta "discovery/app/p2pmeta"
 	supportmeta "discovery/app/supportmeta"
-	"discovery/internal/models"
+	"discovery/app/core/models"
 )
 
 // inventoryCache manages thread-safe caching of the last inventory report.

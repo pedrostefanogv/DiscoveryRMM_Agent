@@ -11,8 +11,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"discovery/internal/buildinfo"
-	"discovery/internal/errutil"
+	"discovery/app/core/buildinfo"
+	"discovery/app/core/errutil"
 )
 
 const (

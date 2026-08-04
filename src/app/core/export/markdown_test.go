@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"discovery/internal/models"
+	"discovery/app/core/models"
 )
 
 func TestBuildMarkdown_Basic(t *testing.T) {

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"discovery/internal/agentconn"
+	"discovery/app/core/agentconn"
 )
 
 func TestRandomNonCriticalBackoffDuration_Range(t *testing.T) {

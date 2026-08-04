@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"discovery/internal/models"
+	"discovery/app/core/models"
 )
 
 // -----------------------------------------------------------------------

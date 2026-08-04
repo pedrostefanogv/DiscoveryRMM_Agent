@@ -11,9 +11,9 @@ import (
 
 	"discovery/app/appstore"
 	"discovery/app/debug"
-	"discovery/internal/inventory"
-	"discovery/internal/models"
-	"discovery/internal/processutil"
+	"discovery/app/core/inventory"
+	"discovery/app/core/models"
+	"discovery/app/core/processutil"
 )
 
 const (

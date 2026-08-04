@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"discovery/internal/platform"
+	"discovery/app/core/platform"
 )
 
 func parsePortFromURL(raw string) (int, error) {

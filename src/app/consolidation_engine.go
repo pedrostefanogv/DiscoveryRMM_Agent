@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"discovery/internal/database"
+	"discovery/app/core/database"
 )
 
 // Consolidation window mode constants.

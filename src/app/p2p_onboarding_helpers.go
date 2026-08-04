@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"discovery/app/netutil"
-	"discovery/internal/tlsutil"
+	"discovery/app/core/tlsutil"
 )
 
 // ── Backoff ───────────────────────────────────────────────────────────────────

@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"discovery/internal/database"
+	"discovery/app/core/database"
 )
 
 func TestDeferredStatePersistenceAndReload(t *testing.T) {

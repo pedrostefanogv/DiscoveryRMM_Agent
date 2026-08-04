@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"discovery/internal/buildinfo"
+	"discovery/app/core/buildinfo"
 )
 
 func TestDownloadFromURL_DownloadsAndReturnsSHA256(t *testing.T) {

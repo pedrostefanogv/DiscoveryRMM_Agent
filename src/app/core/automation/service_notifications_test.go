@@ -3,7 +3,7 @@ package automation
 import (
 	"testing"
 
-	"discovery/internal/database"
+	"discovery/app/core/database"
 )
 
 func TestDispatchExecutionNotification_PackageTaskStart(t *testing.T) {

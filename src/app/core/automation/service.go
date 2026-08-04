@@ -12,8 +12,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/robfig/cron/v3"
 
-	"discovery/internal/database"
-	"discovery/internal/errutil"
+	"discovery/app/core/database"
+	"discovery/app/core/errutil"
 )
 
 const (
@@ -439,7 +439,7 @@ func (s *Service) executeTaskAsync(ctx context.Context, agentID string, task Aut
 			}
 		}
 
-		// Carrega custom fields para esta execuÃ§Ã£o (falha silenciosa - nÃ£o bloqueia a execuÃ§Ã£o).
+		// Carrega custom fields para esta execução (falha silenciosa - não bloqueia a execução).
 		cfg := s.getConfig()
 		cfCtx := s.loadCustomFieldsForExecution(ctx, cfg, executionID, entry.TaskID, entry.ScriptID, correlationID)
 		defer s.clearCustomFieldCtx(executionID)
@@ -547,7 +547,7 @@ func (s *Service) sendOrQueueCallback(ctx context.Context, agentID, executionID,
 }
 
 // loadCustomFieldsForExecution consulta o endpoint de runtime e armazena o contexto em memÃ³ria
-// escopado ao executionID. Em caso de erro, retorna um contexto vazio (nÃ£o bloqueia a execuÃ§Ã£o).
+// escopado ao executionID. Em caso de erro, retorna um contexto vazio (não bloqueia a execução).
 func (s *Service) loadCustomFieldsForExecution(ctx context.Context, cfg RuntimeConfig, executionID, taskID, scriptID, correlationID string) *ExecutionCustomFieldCtx {
 	fields, err := s.client.GetRuntimeCustomFields(ctx, cfg, taskID, scriptID, correlationID)
 	if err != nil {
@@ -567,7 +567,7 @@ func (s *Service) loadCustomFieldsForExecution(ctx context.Context, cfg RuntimeC
 	return cfCtx
 }
 
-// clearCustomFieldCtx remove o contexto de custom fields da execuÃ§Ã£o da memÃ³ria.
+// clearCustomFieldCtx remove o contexto de custom fields da execução da memÃ³ria.
 func (s *Service) clearCustomFieldCtx(executionID string) {
 	s.cfMu.Lock()
 	delete(s.cfCache, executionID)
@@ -582,7 +582,7 @@ func (s *Service) postCollectedValues(ctx context.Context, cfg RuntimeConfig, ex
 	taskID := strings.TrimSpace(task.TaskID)
 	scriptID := strings.TrimSpace(task.ScriptID)
 	for i := range items {
-		// Propaga contexto de taskId/scriptId se nÃ£o informado pelo script.
+		// Propaga contexto de taskId/scriptId se não informado pelo script.
 		if items[i].TaskID == nil && taskID != "" {
 			id := taskID
 			items[i].TaskID = &id

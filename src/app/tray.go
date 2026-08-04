@@ -9,7 +9,7 @@ import (
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
-	"discovery/internal/processutil"
+	"discovery/app/core/processutil"
 )
 
 const (

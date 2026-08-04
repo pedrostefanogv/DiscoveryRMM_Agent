@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"discovery/app/netutil"
-	"discovery/internal/models"
-	"discovery/internal/tlsutil"
+	"discovery/app/core/models"
+	"discovery/app/core/tlsutil"
 )
 
 const (

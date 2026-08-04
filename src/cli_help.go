@@ -5,7 +5,7 @@ import (
 	"os"
 	"strings"
 
-	"discovery/internal/buildinfo"
+	"discovery/app/core/buildinfo"
 )
 
 // showCLIHelp detecta flags de ajuda/versao e exibe a mensagem apropriada.

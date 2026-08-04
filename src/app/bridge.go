@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"discovery/internal/models"
+	"discovery/app/core/models"
 )
 
 // ─── Helpers de guard de serviço ────────────────────────────────────────────

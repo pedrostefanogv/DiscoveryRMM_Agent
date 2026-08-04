@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 
-	"discovery/internal/database"
-	"discovery/internal/errutil"
+	"discovery/app/core/database"
+	"discovery/app/core/errutil"
 )
 
 func (s *Service) clearDeferState(agentID, taskID, finalStatus string) {

@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"discovery/app/p2pmeta"
-	"discovery/internal/selfupdate"
+	"discovery/app/core/selfupdate"
 )
 
 // Config holds server connection settings for the debug page.
