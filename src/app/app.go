@@ -28,6 +28,7 @@ import (
 	"discovery/app/core/platform"
 	"discovery/app/core/printer"
 	"discovery/app/core/processutil"
+	"discovery/app/core/remotedebug"
 	"discovery/app/core/remotesession"
 	"discovery/app/core/safego"
 	"discovery/app/core/selfupdate"
@@ -92,7 +93,7 @@ type App struct {
 	toolsRegistrationMu   sync.RWMutex
 	lastToolsRegistration time.Time
 	agentConn             *agentconn.Runtime
-	remoteDebug           *remoteDebugManager
+	remoteDebug           *remotedebug.Manager
 	syncCoord             *syncCoordinator
 	p2pCoord              *p2pCoordinator
 	updateTrigger         chan struct{}
@@ -361,7 +362,27 @@ func NewApp(opts AppStartupOptions) *App {
 			Message:     resp.Message,
 		}
 	})
-	a.remoteDebug = newRemoteDebugManager(a.logs.append, a.GetDebugConfig, a.GetAgentConfiguration, a.logs.subscribe, a.logs.snapshotAndSubscribe)
+	a.remoteDebug = remotedebug.New(remotedebug.Deps{
+		Logf: a.logs.append,
+		GetConfig: func() remotedebug.Config {
+			cfg := a.GetDebugConfig()
+			return remotedebug.Config{
+				AuthToken:    cfg.AuthToken,
+				AgentID:      cfg.AgentID,
+				NatsServer:   cfg.NatsServer,
+				NatsWsServer: cfg.NatsWsServer,
+			}
+		},
+		GetAgentConfig: func() remotedebug.AgentConfig {
+			cfg := a.GetAgentConfiguration()
+			return remotedebug.AgentConfig{
+				ClientID: cfg.ClientID,
+				SiteID:   cfg.SiteID,
+			}
+		},
+		SubscribeLogs: a.logs.subscribe,
+		ReplayLogs:    a.logs.snapshotAndSubscribe,
+	})
 	a.remoteSessionMgr = remotesession.NewManager(nil) // NATS sera injetado quando conectado; Fase 1 opera via commandos apenas
 	a.remoteSessionMgr.SetCallbacks(
 		func(sessionID, kind string) {
@@ -1344,6 +1365,10 @@ func (a *App) shutdown() {
 	a.applyIdleMode(false)
 
 	a.StopDebugHTTPServer()
+
+	if a.remoteDebug != nil {
+		a.remoteDebug.Shutdown()
+	}
 
 	if a.cancel != nil {
 		a.cancel()

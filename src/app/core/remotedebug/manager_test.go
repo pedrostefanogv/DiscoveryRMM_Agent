@@ -1,4 +1,4 @@
-package app
+package remotedebug
 
 import (
 	"context"
@@ -7,36 +7,36 @@ import (
 	"time"
 )
 
-func TestComputeRemoteDebugDeadline_DefaultOneHourCap(t *testing.T) {
+func TestComputeDeadline_DefaultOneHourCap(t *testing.T) {
 	now := time.Date(2026, 3, 28, 10, 0, 0, 0, time.UTC)
-	got := computeRemoteDebugDeadline("", now)
+	got := ComputeDeadline("", now)
 	want := now.Add(time.Hour)
 	if !got.Equal(want) {
 		t.Fatalf("deadline = %s, want %s", got.Format(time.RFC3339), want.Format(time.RFC3339))
 	}
 }
 
-func TestComputeRemoteDebugDeadline_UsesSoonerExpiry(t *testing.T) {
+func TestComputeDeadline_UsesSoonerExpiry(t *testing.T) {
 	now := time.Date(2026, 3, 28, 10, 0, 0, 0, time.UTC)
 	expires := now.Add(20 * time.Minute).Format(time.RFC3339)
-	got := computeRemoteDebugDeadline(expires, now)
+	got := ComputeDeadline(expires, now)
 	want := now.Add(20 * time.Minute)
 	if !got.Equal(want) {
 		t.Fatalf("deadline = %s, want %s", got.Format(time.RFC3339), want.Format(time.RFC3339))
 	}
 }
 
-func TestComputeRemoteDebugDeadline_CapsLongExpiryToOneHour(t *testing.T) {
+func TestComputeDeadline_CapsLongExpiryToOneHour(t *testing.T) {
 	now := time.Date(2026, 3, 28, 10, 0, 0, 0, time.UTC)
 	expires := now.Add(3 * time.Hour).Format(time.RFC3339)
-	got := computeRemoteDebugDeadline(expires, now)
+	got := ComputeDeadline(expires, now)
 	want := now.Add(time.Hour)
 	if !got.Equal(want) {
 		t.Fatalf("deadline = %s, want %s", got.Format(time.RFC3339), want.Format(time.RFC3339))
 	}
 }
 
-func TestIsRemoteDebugCommandType(t *testing.T) {
+func TestIsCommandType(t *testing.T) {
 	cases := []struct {
 		in   string
 		want bool
@@ -47,14 +47,14 @@ func TestIsRemoteDebugCommandType(t *testing.T) {
 		{in: "cmd", want: false},
 	}
 	for _, tc := range cases {
-		if got := isRemoteDebugCommandType(tc.in); got != tc.want {
-			t.Fatalf("isRemoteDebugCommandType(%q) = %t, want %t", tc.in, got, tc.want)
+		if got := IsCommandType(tc.in); got != tc.want {
+			t.Fatalf("IsCommandType(%q) = %t, want %t", tc.in, got, tc.want)
 		}
 	}
 }
 
-func TestParseRemoteDebugCommand_UsesCanonicalNATSSubject(t *testing.T) {
-	cmd, err := parseRemoteDebugCommand(map[string]any{
+func TestParseCommand_UsesCanonicalNATSSubject(t *testing.T) {
+	cmd, err := ParseCommand(map[string]any{
 		"action":    "start",
 		"sessionId": "sess-1",
 		"stream": map[string]any{
@@ -62,15 +62,15 @@ func TestParseRemoteDebugCommand_UsesCanonicalNATSSubject(t *testing.T) {
 		},
 	})
 	if err != nil {
-		t.Fatalf("parseRemoteDebugCommand: %v", err)
+		t.Fatalf("ParseCommand: %v", err)
 	}
 	if got := strings.TrimSpace(cmd.Stream.NatsSubject); got != "tenant.client-1.site.site-1.agent.agent-1.remote-debug.log" {
 		t.Fatalf("NatsSubject = %q", got)
 	}
 }
 
-func TestParseRemoteDebugCommand_AllowsNullOptionalFields(t *testing.T) {
-	cmd, err := parseRemoteDebugCommand(map[string]any{
+func TestParseCommand_AllowsNullOptionalFields(t *testing.T) {
+	cmd, err := ParseCommand(map[string]any{
 		"action":       "stop",
 		"sessionId":    "sess-2",
 		"logLevel":     nil,
@@ -83,7 +83,7 @@ func TestParseRemoteDebugCommand_AllowsNullOptionalFields(t *testing.T) {
 		},
 	})
 	if err != nil {
-		t.Fatalf("parseRemoteDebugCommand with nulls: %v", err)
+		t.Fatalf("ParseCommand with nulls: %v", err)
 	}
 	if cmd.LogLevel != "info" {
 		t.Fatalf("LogLevel = %q, want info", cmd.LogLevel)
@@ -96,11 +96,11 @@ func TestParseRemoteDebugCommand_AllowsNullOptionalFields(t *testing.T) {
 	}
 }
 
-func TestParseRemoteDebugCommand_AcceptsJSONStringPayload(t *testing.T) {
+func TestParseCommand_AcceptsJSONStringPayload(t *testing.T) {
 	raw := `{"action":"start","sessionId":"sess-3","logLevel":"debug","stream":{"natsSubject":"tenant.client-1.site.site-1.agent.agent-1.remote-debug.log"}}`
-	cmd, err := parseRemoteDebugCommand(raw)
+	cmd, err := ParseCommand(raw)
 	if err != nil {
-		t.Fatalf("parseRemoteDebugCommand string payload: %v", err)
+		t.Fatalf("ParseCommand string payload: %v", err)
 	}
 	if cmd.Action != "start" {
 		t.Fatalf("Action = %q, want start", cmd.Action)
@@ -113,8 +113,8 @@ func TestParseRemoteDebugCommand_AcceptsJSONStringPayload(t *testing.T) {
 	}
 }
 
-func TestBuildRemoteDebugPublishers_RequiresCanonicalNATSSubject(t *testing.T) {
-	_, err := buildRemoteDebugPublishers(DebugConfig{}, remoteDebugStreamConfig{}, "token", "", "")
+func TestBuildPublishers_RequiresCanonicalNATSSubject(t *testing.T) {
+	_, err := BuildPublishers(Config{}, StreamConfig{}, "token", "", "")
 	if err == nil {
 		t.Fatalf("expected error when natsSubject is missing")
 	}
@@ -123,8 +123,8 @@ func TestBuildRemoteDebugPublishers_RequiresCanonicalNATSSubject(t *testing.T) {
 	}
 }
 
-func TestBuildRemoteDebugPublishers_RejectsNonCanonicalNATSSubject(t *testing.T) {
-	_, err := buildRemoteDebugPublishers(DebugConfig{}, remoteDebugStreamConfig{
+func TestBuildPublishers_RejectsNonCanonicalNATSSubject(t *testing.T) {
+	_, err := BuildPublishers(Config{}, StreamConfig{
 		NatsSubject: "tenant.client-1.site.site-1.agent.agent-1.remote.debug",
 	}, "token", "", "")
 	if err == nil {
@@ -135,25 +135,25 @@ func TestBuildRemoteDebugPublishers_RejectsNonCanonicalNATSSubject(t *testing.T)
 	}
 }
 
-func TestFormatRemoteDebugMessageWithOrigin_UI(t *testing.T) {
-	if got := formatRemoteDebugMessageWithOrigin("ui", "erro xyz"); got != "[ui] erro xyz" {
-		t.Fatalf("formatRemoteDebugMessageWithOrigin = %q", got)
+func TestFormatMessageWithOrigin_UI(t *testing.T) {
+	if got := FormatMessageWithOrigin("ui", "erro xyz"); got != "[ui] erro xyz" {
+		t.Fatalf("FormatMessageWithOrigin = %q", got)
 	}
-	if got := formatRemoteDebugMessageWithOrigin("ui", "[ui] erro xyz"); got != "[ui] erro xyz" {
-		t.Fatalf("formatRemoteDebugMessageWithOrigin should keep existing prefix, got %q", got)
+	if got := FormatMessageWithOrigin("ui", "[ui] erro xyz"); got != "[ui] erro xyz" {
+		t.Fatalf("FormatMessageWithOrigin should keep existing prefix, got %q", got)
 	}
-	if got := formatRemoteDebugMessageWithOrigin("", "mensagem sem origem"); got != "mensagem sem origem" {
-		t.Fatalf("formatRemoteDebugMessageWithOrigin with empty origin = %q", got)
-	}
-}
-
-func TestDetectRemoteDebugLevel_DefaultsToInfo(t *testing.T) {
-	if got := detectRemoteDebugLevel("linha sem tag de nivel"); got != "info" {
-		t.Fatalf("detectRemoteDebugLevel default = %q, want info", got)
+	if got := FormatMessageWithOrigin("", "mensagem sem origem"); got != "mensagem sem origem" {
+		t.Fatalf("FormatMessageWithOrigin with empty origin = %q", got)
 	}
 }
 
-func TestDetectRemoteDebugLevel_ErrorKeywords(t *testing.T) {
+func TestDetectLevel_DefaultsToInfo(t *testing.T) {
+	if got := DetectLevel("linha sem tag de nivel"); got != "info" {
+		t.Fatalf("DetectLevel default = %q, want info", got)
+	}
+}
+
+func TestDetectLevel_ErrorKeywords(t *testing.T) {
 	cases := []string{
 		"[sync] falha ao sincronizar apps: timeout",
 		"[sync] falha ao salvar snapshot local",
@@ -168,13 +168,13 @@ func TestDetectRemoteDebugLevel_ErrorKeywords(t *testing.T) {
 		"acesso negado ao executar comando",
 	}
 	for _, tc := range cases {
-		if got := detectRemoteDebugLevel(tc); got != "error" {
-			t.Fatalf("detectRemoteDebugLevel(%q) = %q, want error", tc, got)
+		if got := DetectLevel(tc); got != "error" {
+			t.Fatalf("DetectLevel(%q) = %q, want error", tc, got)
 		}
 	}
 }
 
-func TestDetectRemoteDebugLevel_WarnKeywords(t *testing.T) {
+func TestDetectLevel_WarnKeywords(t *testing.T) {
 	cases := []string{
 		"[sync] aviso: configuracao indisponivel",
 		"[sync] ping ignorado: eventId duplicado",
@@ -189,13 +189,13 @@ func TestDetectRemoteDebugLevel_WarnKeywords(t *testing.T) {
 		"[agent-sync] envio remoto cancelado durante janela de adiamento",
 	}
 	for _, tc := range cases {
-		if got := detectRemoteDebugLevel(tc); got != "warn" {
-			t.Fatalf("detectRemoteDebugLevel(%q) = %q, want warn", tc, got)
+		if got := DetectLevel(tc); got != "warn" {
+			t.Fatalf("DetectLevel(%q) = %q, want warn", tc, got)
 		}
 	}
 }
 
-func TestDetectRemoteDebugLevel_InfoDefault(t *testing.T) {
+func TestDetectLevel_InfoDefault(t *testing.T) {
 	cases := []string{
 		"[sync] coordinator iniciado",
 		"[sync] recurso sincronizado: apps variant=stable",
@@ -211,13 +211,13 @@ func TestDetectRemoteDebugLevel_InfoDefault(t *testing.T) {
 		"[cmd] recebido: cmdType=powershell",
 	}
 	for _, tc := range cases {
-		if got := detectRemoteDebugLevel(tc); got != "info" {
-			t.Fatalf("detectRemoteDebugLevel(%q) = %q, want info", tc, got)
+		if got := DetectLevel(tc); got != "info" {
+			t.Fatalf("DetectLevel(%q) = %q, want info", tc, got)
 		}
 	}
 }
 
-func TestDetectRemoteDebugLevel_ExplicitTags(t *testing.T) {
+func TestDetectLevel_ExplicitTags(t *testing.T) {
 	cases := []struct {
 		line  string
 		level string
@@ -233,34 +233,20 @@ func TestDetectRemoteDebugLevel_ExplicitTags(t *testing.T) {
 		{"warn disk space low", "warn"},
 	}
 	for _, tc := range cases {
-		if got := detectRemoteDebugLevel(tc.line); got != tc.level {
-			t.Fatalf("detectRemoteDebugLevel(%q) = %q, want %q", tc.line, got, tc.level)
+		if got := DetectLevel(tc.line); got != tc.level {
+			t.Fatalf("DetectLevel(%q) = %q, want %q", tc.line, got, tc.level)
 		}
 	}
 }
 
-func TestNormalizeRemoteDebugStreamLevel_MapsInvalidLevelsToInfo(t *testing.T) {
-	if got := normalizeRemoteDebugStreamLevel("verbose"); got != "info" {
-		t.Fatalf("normalizeRemoteDebugStreamLevel = %q, want info", got)
+func TestNormalizeStreamLevel_MapsInvalidLevelsToInfo(t *testing.T) {
+	if got := NormalizeStreamLevel("verbose"); got != "info" {
+		t.Fatalf("NormalizeStreamLevel = %q, want info", got)
 	}
 }
 
-func TestHandleAgentRuntimeCommand_UpdatePending(t *testing.T) {
-	a := &App{updateTrigger: make(chan struct{}, 1)}
-	handled, code, output, errText := a.handleAgentRuntimeCommand(context.Background(), "update", map[string]any{"action": "check-update"})
-	if !handled {
-		t.Fatalf("expected update command to be handled")
-	}
-	if code != 0 {
-		t.Fatalf("expected update command code=0, got code=%d err=%q", code, errText)
-	}
-	if strings.TrimSpace(output) == "" {
-		t.Fatalf("expected non-empty output on success, got output=%q err=%q", output, errText)
-	}
-}
-
-func TestRemoteDebugHandleCommand_StopWithJSONStringPayloadDoesNotReturnParseError(t *testing.T) {
-	m := newRemoteDebugManager(nil, nil, nil, nil, nil)
+func TestHandleCommand_StopWithJSONStringPayloadDoesNotReturnParseError(t *testing.T) {
+	m := New(Deps{})
 	raw := `{"action":"stop","sessionId":"sess-raw","logLevel":"info","expiresAtUtc":null,"stream":{"natsSubject":"tenant.client-1.site.site-1.agent.agent-1.remote-debug.log"}}`
 	handled, code, _, errText := m.HandleCommand(context.Background(), "remotedebug", raw)
 	if !handled {
@@ -274,8 +260,8 @@ func TestRemoteDebugHandleCommand_StopWithJSONStringPayloadDoesNotReturnParseErr
 	}
 }
 
-func TestRemoteDebugHandleCommand_StartWithJSONStringPayloadDoesNotReturnParseError(t *testing.T) {
-	m := newRemoteDebugManager(nil, nil, nil, nil, nil)
+func TestHandleCommand_StartWithJSONStringPayloadDoesNotReturnParseError(t *testing.T) {
+	m := New(Deps{})
 	raw := `{"action":"start","sessionId":"sess-raw","logLevel":"debug","expiresAtUtc":"2026-05-12T02:35:31.6225487Z","stream":{"natsSubject":"tenant.client-1.site.site-1.agent.agent-1.remote-debug.log"}}`
 	handled, code, _, errText := m.HandleCommand(context.Background(), "remotedebug", raw)
 	if !handled {
@@ -286,5 +272,110 @@ func TestRemoteDebugHandleCommand_StartWithJSONStringPayloadDoesNotReturnParseEr
 	}
 	if code != 1 {
 		t.Fatalf("expected start without config to fail as business error (code=1), got code=%d err=%q", code, errText)
+	}
+}
+
+func TestShutdown_NoActiveSessionIsSafe(t *testing.T) {
+	m := New(Deps{})
+	// Sem sessão ativa: Shutdown não deve entrar em pânico.
+	m.Shutdown()
+	m.Shutdown() // idempotente
+}
+
+func TestShutdown_StopsActiveSession(t *testing.T) {
+	var stopped bool
+	m := New(Deps{
+		Logf: func(string) {},
+		ReplayLogs: func(fn func(string)) func() {
+			return func() { stopped = true }
+		},
+	})
+
+	// Injeta uma sessão ativa diretamente (evita depender de conexão NATS real).
+	ctx, cancel := context.WithCancel(context.Background())
+	_ = ctx
+	m.mu.Lock()
+	m.activeSession = &Session{
+		sessionID:   "sess-shutdown",
+		agentID:     "agent-1",
+		minLevel:    LevelValue("info"),
+		deadline:    time.Now().Add(time.Hour),
+		logQueue:    make(chan queuedLine, QueueSize),
+		cancel:      cancel,
+		unsubscribe: func() { stopped = true },
+		publishers:  []Publisher{},
+	}
+	m.mu.Unlock()
+
+	m.Shutdown()
+	if !stopped {
+		t.Fatalf("expected active session unsubscribe to be called on Shutdown")
+	}
+
+	// Após shutdown, stop não deve encontrar sessão ativa.
+	if m.stopSession("sess-shutdown", "stop") {
+		t.Fatalf("expected no active session after Shutdown")
+	}
+}
+
+func TestAutoStopAtDeadline_DoesNotStopSessionWithDifferentDeadline(t *testing.T) {
+	m := New(Deps{Logf: func(string) {}})
+
+	// Sessão ativa com deadline T2 (mais longo).
+	deadlineT2 := time.Now().Add(2 * time.Hour)
+	ctx, cancel := context.WithCancel(context.Background())
+	_ = ctx
+	m.mu.Lock()
+	m.activeSession = &Session{
+		sessionID:   "sess-same-id",
+		agentID:     "agent-1",
+		minLevel:    LevelValue("info"),
+		deadline:    deadlineT2,
+		logQueue:    make(chan queuedLine, QueueSize),
+		cancel:      cancel,
+		unsubscribe: func() {},
+		publishers:  []Publisher{},
+	}
+	m.mu.Unlock()
+
+	// Timer antigo com deadline T1 (mais curto) e mesmo sessionID.
+	// Não deve parar a sessão ativa (deadline diferente).
+	m.autoStopAtDeadline("sess-same-id", time.Now().Add(time.Hour))
+
+	m.mu.Lock()
+	stillActive := m.activeSession != nil
+	m.mu.Unlock()
+	if !stillActive {
+		t.Fatalf("expected session to remain active when deadline differs")
+	}
+}
+
+func TestAutoStopAtDeadline_StopsSessionWithSameDeadline(t *testing.T) {
+	m := New(Deps{Logf: func(string) {}})
+
+	deadline := time.Now().Add(2 * time.Hour)
+	ctx, cancel := context.WithCancel(context.Background())
+	_ = ctx
+	m.mu.Lock()
+	m.activeSession = &Session{
+		sessionID:   "sess-same-id",
+		agentID:     "agent-1",
+		minLevel:    LevelValue("info"),
+		deadline:    deadline,
+		logQueue:    make(chan queuedLine, QueueSize),
+		cancel:      cancel,
+		unsubscribe: func() {},
+		publishers:  []Publisher{},
+	}
+	m.mu.Unlock()
+
+	// Timer com o MESMO deadline e mesmo sessionID → deve parar.
+	m.autoStopAtDeadline("sess-same-id", deadline)
+
+	m.mu.Lock()
+	stillActive := m.activeSession != nil
+	m.mu.Unlock()
+	if stillActive {
+		t.Fatalf("expected session to be stopped when deadline matches")
 	}
 }

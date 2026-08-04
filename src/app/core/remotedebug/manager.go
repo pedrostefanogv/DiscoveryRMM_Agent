@@ -1,151 +1,102 @@
-package app
+package remotedebug
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/nats-io/nats.go"
 )
 
-const (
-	remoteDebugDefaultSessionCap = time.Hour
-	remoteDebugQueueSize         = 2048
-)
-
-type remoteDebugCommand struct {
-	Action       string                  `json:"action"`
-	SessionID    string                  `json:"sessionId"`
-	LogLevel     string                  `json:"logLevel"`
-	StartedAtUTC string                  `json:"startedAtUtc"`
-	ExpiresAtUTC string                  `json:"expiresAtUtc"`
-	StoppedAtUTC string                  `json:"stoppedAtUtc"`
-	Stream       remoteDebugStreamConfig `json:"stream"`
-}
-
-type remoteDebugCommandPayload struct {
-	Action       *string                   `json:"action"`
-	SessionID    *string                   `json:"sessionId"`
-	LogLevel     *string                   `json:"logLevel"`
-	StartedAtUTC *string                   `json:"startedAtUtc"`
-	ExpiresAtUTC *string                   `json:"expiresAtUtc"`
-	StoppedAtUTC *string                   `json:"stoppedAtUtc"`
-	Stream       *remoteDebugStreamPayload `json:"stream"`
-}
-
-type remoteDebugStreamConfig struct {
-	NatsSubject string `json:"natsSubject"`
-	NatsWssURL  string `json:"natsWssUrl"`
-}
-
-type remoteDebugStreamPayload struct {
-	NatsSubject *string `json:"natsSubject"`
-	NatsWssURL  *string `json:"natsWssUrl"`
-}
-
-type remoteDebugLogMessage struct {
-	SessionID    string `json:"sessionId"`
-	AgentID      string `json:"agentId"`
-	Message      string `json:"message"`
-	Level        string `json:"level"`
-	TimestampUTC string `json:"timestampUtc"`
-	Sequence     uint64 `json:"sequence"`
-}
-
-type queuedRemoteDebugLine struct {
+// queuedLine é uma linha de log enfileirada para publicação.
+type queuedLine struct {
 	message string
 	level   string
 }
 
-type remoteDebugPublisher interface {
-	Name() string
-	Publish(ctx context.Context, msg remoteDebugLogMessage) error
-	Close() error
-}
-
-type natsRemoteDebugPublisher struct {
-	name    string
-	subject string
-	conn    *nats.Conn
-}
-
-func (p *natsRemoteDebugPublisher) Name() string { return p.name }
-
-func (p *natsRemoteDebugPublisher) Publish(_ context.Context, msg remoteDebugLogMessage) error {
-	payload, err := json.Marshal(msg)
-	if err != nil {
-		return err
-	}
-	if err := p.conn.Publish(p.subject, payload); err != nil {
-		return err
-	}
-	p.conn.Flush()
-	return p.conn.LastError()
-}
-
-func (p *natsRemoteDebugPublisher) Close() error {
-	if p.conn != nil {
-		p.conn.Close()
-	}
-	return nil
-}
-
-type remoteDebugSession struct {
+// Session representa uma sessão de remote debug ativa.
+type Session struct {
 	sessionID   string
 	agentID     string
 	minLevel    int
 	deadline    time.Time
-	logQueue    chan queuedRemoteDebugLine
+	logQueue    chan queuedLine
 	cancel      context.CancelFunc
 	unsubscribe func()
-	publishers  []remoteDebugPublisher
+	publishers  []Publisher
 	activeIndex int
 }
 
-type remoteDebugManager struct {
+// Deps são as dependências injetadas no Manager.
+type Deps struct {
+	// Logf appends a log line.
+	Logf func(string)
+	// GetConfig retorna a configuração de conexão (token, agentId, NATS).
+	GetConfig func() Config
+	// GetAgentConfig retorna clientId/siteId do agente.
+	GetAgentConfig func() AgentConfig
+	// SubscribeLogs assina novas linhas de log.
+	SubscribeLogs func(func(string)) func()
+	// ReplayLogs assina novas linhas e reproduz o histórico.
+	ReplayLogs func(func(string)) func()
+}
+
+// AgentConfig é a visão mínima da configuração do agente usada pelo remote debug.
+type AgentConfig struct {
+	ClientID string
+	SiteID   string
+}
+
+// Manager gerencia o lifecycle de sessões de remote debug.
+type Manager struct {
 	mu            sync.Mutex
-	activeSession *remoteDebugSession
+	activeSession *Session
 	logf          func(string)
-	getDebugCfg   func() DebugConfig
-	getAgentCfg   func() AgentConfiguration
+	getConfig     func() Config
+	getAgentCfg   func() AgentConfig
 	subscribeLogs func(func(string)) func()
 	replayLogs    func(func(string)) func()
 }
 
-func newRemoteDebugManager(logf func(string), getDebugCfg func() DebugConfig, getAgentCfg func() AgentConfiguration, subscribeLogs func(func(string)) func(), replayLogs func(func(string)) func()) *remoteDebugManager {
+// New cria um Manager com as dependências injetadas.
+func New(deps Deps) *Manager {
+	logf := deps.Logf
 	if logf == nil {
 		logf = func(string) {}
 	}
-	if getDebugCfg == nil {
-		getDebugCfg = func() DebugConfig { return DebugConfig{} }
+	getConfig := deps.GetConfig
+	if getConfig == nil {
+		getConfig = func() Config { return Config{} }
 	}
+	getAgentCfg := deps.GetAgentConfig
 	if getAgentCfg == nil {
-		getAgentCfg = func() AgentConfiguration { return AgentConfiguration{} }
+		getAgentCfg = func() AgentConfig { return AgentConfig{} }
 	}
+	subscribeLogs := deps.SubscribeLogs
 	if subscribeLogs == nil {
 		subscribeLogs = func(func(string)) func() { return func() {} }
 	}
+	replayLogs := deps.ReplayLogs
 	if replayLogs == nil {
 		replayLogs = subscribeLogs
 	}
-	return &remoteDebugManager{
+	return &Manager{
 		logf:          logf,
-		getDebugCfg:   getDebugCfg,
+		getConfig:     getConfig,
 		getAgentCfg:   getAgentCfg,
 		subscribeLogs: subscribeLogs,
 		replayLogs:    replayLogs,
 	}
 }
 
-func (m *remoteDebugManager) HandleCommand(_ context.Context, cmdType string, payload any) (bool, int, string, string) {
-	if !isRemoteDebugCommandType(cmdType) {
+// HandleCommand processa um comando de remote debug.
+// Retorna (handled, exitCode, output, errText) no mesmo contrato do router de comandos.
+func (m *Manager) HandleCommand(_ context.Context, cmdType string, payload any) (bool, int, string, string) {
+	if !IsCommandType(cmdType) {
 		return false, 0, "", ""
 	}
 
-	cmd, err := parseRemoteDebugCommand(payload)
+	cmd, err := ParseCommand(payload)
 	if err != nil {
 		return true, 2, "", "payload remoto invalido: " + err.Error()
 	}
@@ -167,25 +118,26 @@ func (m *remoteDebugManager) HandleCommand(_ context.Context, cmdType string, pa
 	}
 }
 
-func (m *remoteDebugManager) OnCommandOutput(cmdType, output, errText string) {
-	if isRemoteDebugCommandType(cmdType) {
+// OnCommandOutput enfileira a saída de um comando para a sessão ativa.
+func (m *Manager) OnCommandOutput(cmdType, output, errText string) {
+	if IsCommandType(cmdType) {
 		return
 	}
-	for _, line := range splitLines(output) {
+	for _, line := range SplitLines(output) {
 		m.enqueue(line, "info")
 	}
-	for _, line := range splitLines(errText) {
+	for _, line := range SplitLines(errText) {
 		m.enqueue(line, "error")
 	}
 }
 
-func (m *remoteDebugManager) startSession(cmd remoteDebugCommand) error {
+func (m *Manager) startSession(cmd Command) error {
 	sessionID := strings.TrimSpace(cmd.SessionID)
 	if sessionID == "" {
 		return fmt.Errorf("sessionId ausente")
 	}
 
-	cfg := m.getDebugCfg()
+	cfg := m.getConfig()
 	token := strings.TrimSpace(cfg.AuthToken)
 	agentID := strings.TrimSpace(cfg.AgentID)
 	if token == "" || agentID == "" {
@@ -198,26 +150,26 @@ func (m *remoteDebugManager) startSession(cmd remoteDebugCommand) error {
 
 	m.logf(fmt.Sprintf("[remote-debug] iniciando sessao: sessionId=%s agentId=%s clientId=%s siteId=%s subjectRaw=%q", sessionID, agentID, clientID, siteID, strings.TrimSpace(cmd.Stream.NatsSubject)))
 
-	deadline := computeRemoteDebugDeadline(strings.TrimSpace(cmd.ExpiresAtUTC), time.Now().UTC())
-	publishers, err := buildRemoteDebugPublishers(cfg, cmd.Stream, token, clientID, siteID)
+	deadline := ComputeDeadline(strings.TrimSpace(cmd.ExpiresAtUTC), time.Now().UTC())
+	publishers, err := BuildPublishers(cfg, cmd.Stream, token, clientID, siteID)
 	if err != nil {
 		m.logf(fmt.Sprintf("[remote-debug] FALHA ao criar publishers: %v", err))
 		return err
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	session := &remoteDebugSession{
+	session := &Session{
 		sessionID:  sessionID,
 		agentID:    agentID,
-		minLevel:   remoteDebugLevelValue(cmd.LogLevel),
+		minLevel:   LevelValue(cmd.LogLevel),
 		deadline:   deadline,
-		logQueue:   make(chan queuedRemoteDebugLine, remoteDebugQueueSize),
+		logQueue:   make(chan queuedLine, QueueSize),
 		cancel:     cancel,
 		publishers: publishers,
 	}
 
 	unsubscribe := m.replayLogs(func(line string) {
-		m.enqueueWithSession(sessionID, line, detectRemoteDebugLevel(line))
+		m.enqueueWithSession(sessionID, line, DetectLevel(line))
 	})
 	session.unsubscribe = unsubscribe
 
@@ -236,7 +188,7 @@ func (m *remoteDebugManager) startSession(cmd remoteDebugCommand) error {
 	return nil
 }
 
-func (m *remoteDebugManager) autoStopAtDeadline(sessionID string, deadline time.Time) {
+func (m *Manager) autoStopAtDeadline(sessionID string, deadline time.Time) {
 	wait := time.Until(deadline)
 	if wait < 0 {
 		wait = 0
@@ -244,20 +196,23 @@ func (m *remoteDebugManager) autoStopAtDeadline(sessionID string, deadline time.
 	timer := time.NewTimer(wait)
 	defer timer.Stop()
 	<-timer.C
-	// Só para a sessão se ela ainda for a ativa com o mesmo sessionID.
-	// Se o servidor reabriu a sessão com mesmo ID, a sessão antiga já foi
-	// parada por stopGivenSession("replaced") no startSession, e uma nova
-	// sessão com novo deadline foi criada — não devemos parar a nova.
+	// Só para a sessão se ela ainda for a ativa com o MESMO sessionID E o MESMO
+	// deadline. Se o servidor reabriu a sessão com o mesmo ID mas um deadline
+	// mais longo, a sessão antiga já foi parada por stopGivenSession("replaced")
+	// no startSession, e uma nova sessão com novo deadline foi criada — o timer
+	// antigo não deve parar a nova prematuramente.
 	m.mu.Lock()
 	current := m.activeSession
-	matches := current != nil && strings.EqualFold(current.sessionID, strings.TrimSpace(sessionID))
+	matches := current != nil &&
+		strings.EqualFold(current.sessionID, strings.TrimSpace(sessionID)) &&
+		current.deadline.Equal(deadline)
 	m.mu.Unlock()
 	if matches {
 		m.stopSession(sessionID, "timeout")
 	}
 }
 
-func (m *remoteDebugManager) publishLoop(ctx context.Context, session *remoteDebugSession) {
+func (m *Manager) publishLoop(ctx context.Context, session *Session) {
 	var seq uint64
 	for {
 		select {
@@ -268,11 +223,11 @@ func (m *remoteDebugManager) publishLoop(ctx context.Context, session *remoteDeb
 				continue
 			}
 			seq++
-			msg := remoteDebugLogMessage{
+			msg := LogMessage{
 				SessionID:    session.sessionID,
 				AgentID:      session.agentID,
-				Message:      truncateRemoteDebugMessage(item.message),
-				Level:        normalizeRemoteDebugStreamLevel(item.level),
+				Message:      TruncateMessage(item.message),
+				Level:        NormalizeStreamLevel(item.level),
 				TimestampUTC: time.Now().UTC().Format("2006-01-02T15:04:05.000Z07:00"),
 				Sequence:     seq,
 			}
@@ -283,7 +238,7 @@ func (m *remoteDebugManager) publishLoop(ctx context.Context, session *remoteDeb
 	}
 }
 
-func (m *remoteDebugManager) publishWithFallback(ctx context.Context, session *remoteDebugSession, msg remoteDebugLogMessage) error {
+func (m *Manager) publishWithFallback(ctx context.Context, session *Session, msg LogMessage) error {
 	for idx := session.activeIndex; idx < len(session.publishers); idx++ {
 		pub := session.publishers[idx]
 		if err := pub.Publish(ctx, msg); err != nil {
@@ -301,7 +256,7 @@ func (m *remoteDebugManager) publishWithFallback(ctx context.Context, session *r
 	return fmt.Errorf("nenhum transporte remoto disponivel")
 }
 
-func (m *remoteDebugManager) enqueue(message, level string) {
+func (m *Manager) enqueue(message, level string) {
 	m.mu.Lock()
 	session := m.activeSession
 	m.mu.Unlock()
@@ -311,7 +266,7 @@ func (m *remoteDebugManager) enqueue(message, level string) {
 	m.enqueueToSession(session, message, level)
 }
 
-func (m *remoteDebugManager) enqueueWithSession(sessionID, message, level string) {
+func (m *Manager) enqueueWithSession(sessionID, message, level string) {
 	m.mu.Lock()
 	session := m.activeSession
 	m.mu.Unlock()
@@ -321,18 +276,18 @@ func (m *remoteDebugManager) enqueueWithSession(sessionID, message, level string
 	m.enqueueToSession(session, message, level)
 }
 
-func (m *remoteDebugManager) enqueueToSession(session *remoteDebugSession, message, level string) {
-	if remoteDebugLevelValue(level) < session.minLevel {
+func (m *Manager) enqueueToSession(session *Session, message, level string) {
+	if LevelValue(level) < session.minLevel {
 		return
 	}
 	select {
-	case session.logQueue <- queuedRemoteDebugLine{message: message, level: level}:
+	case session.logQueue <- queuedLine{message: message, level: level}:
 	default:
 		m.logf("[remote-debug] fila cheia: log descartado")
 	}
 }
 
-func (m *remoteDebugManager) stopSession(sessionID, reason string) bool {
+func (m *Manager) stopSession(sessionID, reason string) bool {
 	sessionID = strings.TrimSpace(sessionID)
 
 	m.mu.Lock()
@@ -352,7 +307,7 @@ func (m *remoteDebugManager) stopSession(sessionID, reason string) bool {
 	return true
 }
 
-func (m *remoteDebugManager) stopGivenSession(session *remoteDebugSession, reason string) {
+func (m *Manager) stopGivenSession(session *Session, reason string) {
 	if session == nil {
 		return
 	}
@@ -366,4 +321,16 @@ func (m *remoteDebugManager) stopGivenSession(session *remoteDebugSession, reaso
 		_ = pub.Close()
 	}
 	m.logf(fmt.Sprintf("[remote-debug] sessao encerrada: sessionId=%s reason=%s", session.sessionID, strings.TrimSpace(reason)))
+}
+
+// Shutdown encerra a sessão ativa (se houver) e libera publishers/goroutines.
+// Chamado pelo App durante o shutdown da aplicação.
+func (m *Manager) Shutdown() {
+	m.mu.Lock()
+	session := m.activeSession
+	m.activeSession = nil
+	m.mu.Unlock()
+	if session != nil {
+		m.stopGivenSession(session, "shutdown")
+	}
 }
