@@ -16,6 +16,7 @@ import (
 
 	"discovery/app/core/agentconn"
 	"discovery/app/core/envutil"
+	"discovery/app/logs"
 )
 
 func TestP2PSeedCountRule(t *testing.T) {
@@ -86,6 +87,7 @@ func TestListAuditEventsFiltered(t *testing.T) {
 
 func TestAppendAuditWritesAgentLogLine(t *testing.T) {
 	a := &App{}
+	a.logs.Buffer = logs.New()
 	c := &p2pCoordinator{app: a}
 
 	c.appendAudit("pull", "agent.bin", "peer-a", "libp2p", false, "falha simulada")

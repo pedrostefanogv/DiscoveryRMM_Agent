@@ -36,8 +36,10 @@ import (
 	"discovery/app/core/selfupdate"
 	"discovery/app/core/services"
 	"discovery/app/core/winget"
+	"discovery/app/customfields"
 	"discovery/app/debug"
 	appinventory "discovery/app/inventory"
+	"discovery/app/logs"
 	"discovery/app/services/chat"
 	"discovery/app/services/hardwareid"
 	"discovery/app/services/memory"
@@ -162,6 +164,12 @@ type App struct {
 	// apiClientSvc encapsula a detecção de features da API.
 	apiClientSvc *apiclient.Service
 
+	// customFieldsSvc encapsula o envio de campos customizados.
+	customFieldsSvc *customfields.Service
+
+	// appStoreSvc encapsula a lógica de app-store (fetch, cache e política).
+	appStoreSvc *appstore.Service
+
 	queuedForceHeartbeat atomic.Bool
 
 	selfUpdater   *selfupdate.Updater
@@ -212,6 +220,7 @@ func NewApp(opts AppStartupOptions) *App {
 		chatEvents:       newChatEventBroker(),
 		startupTime:      time.Now(),
 	}
+	a.logs.Buffer = logs.New()
 	a.chatSvc = chat.New(reg, chat.Deps{
 		Ctx: func() context.Context { return a.ctx },
 		Logf: func(line string) {
@@ -323,6 +332,40 @@ func NewApp(opts AppStartupOptions) *App {
 		Logf: func(line string) {
 			a.logs.append(line)
 		},
+	})
+	a.customFieldsSvc = customfields.New(customfields.Deps{
+		GetDebugConfig: func() customfields.DebugConfig {
+			cfg := a.GetDebugConfig()
+			return customfields.DebugConfig{
+				ApiScheme: cfg.ApiScheme,
+				ApiServer: cfg.ApiServer,
+				AuthToken: cfg.AuthToken,
+				AgentID:   cfg.AgentID,
+			}
+		},
+	})
+	a.appStoreSvc = appstore.New(appstore.Deps{
+		GetDebugConfig: func() appstore.DebugConfig {
+			cfg := a.GetDebugConfig()
+			return appstore.DebugConfig{
+				ApiScheme: cfg.ApiScheme,
+				ApiServer: cfg.ApiServer,
+				AuthToken: cfg.AuthToken,
+				AgentID:   cfg.AgentID,
+			}
+		},
+		GetAgentConfiguration: func() appstore.AgentConfiguration {
+			cfg := a.GetAgentConfiguration()
+			return appstore.AgentConfiguration{AppStoreEnabled: cfg.AppStoreEnabled}
+		},
+		FeatureEnabled: a.featureEnabled,
+		Logf: func(line string) {
+			a.logs.append(line)
+		},
+		DB: func() *database.DB {
+			return a.db
+		},
+		Cache: &a.appStorePolicy.inner,
 	})
 	a.automationSvc = automation.NewService(func() automation.RuntimeConfig {
 		cfg := a.GetDebugConfig()

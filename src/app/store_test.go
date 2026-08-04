@@ -7,8 +7,39 @@ import (
 	"strings"
 	"testing"
 
+	"discovery/app/appstore"
+	"discovery/app/core/database"
 	"discovery/app/debug"
 )
+
+// newTestAppStoreApp cria um App com o appStoreSvc inicializado para testes.
+func newTestAppStoreApp() *App {
+	app := &App{ctx: context.Background()}
+	app.appStoreSvc = appstore.New(appstore.Deps{
+		GetDebugConfig: func() appstore.DebugConfig {
+			cfg := app.GetDebugConfig()
+			return appstore.DebugConfig{
+				ApiScheme: cfg.ApiScheme,
+				ApiServer: cfg.ApiServer,
+				AuthToken: cfg.AuthToken,
+				AgentID:   cfg.AgentID,
+			}
+		},
+		GetAgentConfiguration: func() appstore.AgentConfiguration {
+			cfg := app.GetAgentConfiguration()
+			return appstore.AgentConfiguration{AppStoreEnabled: cfg.AppStoreEnabled}
+		},
+		FeatureEnabled: app.featureEnabled,
+		Logf: func(line string) {
+			app.logs.append(line)
+		},
+		DB: func() *database.DB {
+			return app.db
+		},
+		Cache: &app.appStorePolicy.inner,
+	})
+	return app
+}
 
 func TestLoadEffectiveAppStorePolicyMergesWingetAndChocolatey(t *testing.T) {
 	const token = "mdz_test_token"
@@ -36,7 +67,7 @@ func TestLoadEffectiveAppStorePolicyMergesWingetAndChocolatey(t *testing.T) {
 	}))
 	defer server.Close()
 
-	app := &App{ctx: context.Background()}
+	app := newTestAppStoreApp()
 	app.debugSvc = debug.NewService(debug.Options{})
 	app.debugSvc.ApplyRuntimeConnectionConfig("http", strings.TrimPrefix(server.URL, "http://"), token, "8f6d6d72-4a8a-4c87-bffa-34ba29dc0bb7", "", "")
 
@@ -53,7 +84,7 @@ func TestLoadEffectiveAppStorePolicyMergesWingetAndChocolatey(t *testing.T) {
 }
 
 func TestResolveAllowedPackageDetectsAmbiguousPackageID(t *testing.T) {
-	app := &App{}
+	app := newTestAppStoreApp()
 	app.appStorePolicy.set(AppStoreEffectivePolicy{
 		Items: []AppStoreItem{
 			{InstallationType: "Winget", PackageID: "Duplicate.Package"},
@@ -68,14 +99,14 @@ func TestResolveAllowedPackageDetectsAmbiguousPackageID(t *testing.T) {
 }
 
 func TestAuthorizeAutomationPackageUninstallBypassesPolicy(t *testing.T) {
-	app := &App{}
+	app := newTestAppStoreApp()
 	if err := app.authorizeAutomationPackage(context.Background(), "Winget", "Any.Package", "uninstall"); err != nil {
 		t.Fatalf("uninstall deve bypass da policy nesta rodada: %v", err)
 	}
 }
 
 func TestFindAllowedPackageFailsWhenConfigIncomplete(t *testing.T) {
-	app := &App{}
+	app := newTestAppStoreApp()
 	_, err := app.findAllowedPackage(context.Background(), "Winget", "Google.Chrome")
 	if err == nil {
 		t.Fatalf("esperava erro quando config está incompleta")
