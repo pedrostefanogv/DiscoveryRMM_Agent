@@ -32,9 +32,9 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 			}
 
 			// Se o servidor enviou action=install com URL direta, faz download e instala imediatamente.
-			if updateCmd.Action == "install" && updateCmd.downloadURL() != "" {
-				a.logs.append(fmt.Sprintf("[selfupdate] install direto: version=%s url=%s", updateCmd.version(), updateCmd.downloadURL()))
-				if err := a.selfUpdater.InstallFromURL(parent, updateCmd.version(), updateCmd.downloadURL()); err != nil {
+			if updateCmd.Action == "install" && updateCmd.DownloadURL() != "" {
+				a.logs.append(fmt.Sprintf("[selfupdate] install direto: version=%s url=%s", updateCmd.VersionValue(), updateCmd.DownloadURL()))
+				if err := a.selfUpdater.InstallFromURL(parent, updateCmd.VersionValue(), updateCmd.DownloadURL()); err != nil {
 					return true, 1, "", fmt.Sprintf("self-update install direto falhou: %v", err)
 				}
 				return true, 0, "self-update install direto iniciado com sucesso", ""
@@ -93,7 +93,7 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 			if a.selfUpdater == nil {
 				return true, 2, "", "self-updater nao inicializado"
 			}
-			if updateCmd.downloadURL() == "" {
+			if updateCmd.DownloadURL() == "" {
 				// Sem URL: tenta via manifest
 				a.logs.append("[selfupdate] install sem URL — usando manifest da API")
 				if err := a.selfUpdater.CheckAndUpdate(parent, true); err != nil {
@@ -101,8 +101,8 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 				}
 				return true, 0, "self-update iniciado com sucesso (via manifest)", ""
 			}
-			a.logs.append(fmt.Sprintf("[selfupdate] install direto (alias): version=%s url=%s", updateCmd.version(), updateCmd.downloadURL()))
-			if err := a.selfUpdater.InstallFromURL(parent, updateCmd.version(), updateCmd.downloadURL()); err != nil {
+			a.logs.append(fmt.Sprintf("[selfupdate] install direto (alias): version=%s url=%s", updateCmd.VersionValue(), updateCmd.DownloadURL()))
+			if err := a.selfUpdater.InstallFromURL(parent, updateCmd.VersionValue(), updateCmd.DownloadURL()); err != nil {
 				return true, 1, "", fmt.Sprintf("self-update install direto falhou: %v", err)
 			}
 			return true, 0, "self-update install direto iniciado com sucesso", ""

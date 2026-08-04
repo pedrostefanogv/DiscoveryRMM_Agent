@@ -2,6 +2,8 @@
 
 package app
 
+import "discovery/app/uiruntime"
+
 func probeUIRuntimeNative() uiRuntimeNativeProbe {
-	return uiRuntimeNativeProbe{}
+	return uiruntime.ProbeNative()
 }

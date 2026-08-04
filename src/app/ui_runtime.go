@@ -1,13 +1,11 @@
 package app
 
+import (
+	"discovery/app/uiruntime"
+)
+
 // uiRuntimeNativeProbe retained for compilation of platform stubs.
-type uiRuntimeNativeProbe struct {
-	Supported   bool
-	WindowFound bool
-	Visible     bool
-	Hung        bool
-	Title       string
-}
+type uiRuntimeNativeProbe = uiruntime.NativeProbe
 
 // SetUIRuntimeSuspended is a no-op (watchdog system removed).
 func (a *App) SetUIRuntimeSuspended(suspended bool, reason string) {

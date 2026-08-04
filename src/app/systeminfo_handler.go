@@ -2,9 +2,10 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
+
+	"discovery/app/agentcommands"
 )
 
 // handleSystemInfoCommand processes SystemInfo command payloads.
@@ -12,12 +13,12 @@ import (
 //   - "force-sync": full inventory + software sync (existing)
 //   - "refresh-on-demand": selective collection per flags
 func (a *App) handleSystemInfoCommand(ctx context.Context, payload any) (bool, int, string, string) {
-	payloadJSON, err := normalizePayloadJSON(payload)
+	payloadJSON, err := agentcommands.NormalizePayloadJSON(payload)
 	if err != nil {
 		return true, 1, "", "payload systeminfo invalido: " + err.Error()
 	}
 
-	operation := getStringField(payloadJSON, "Operation")
+	operation := agentcommands.GetStringField(payloadJSON, "Operation")
 	operation = strings.ToLower(strings.TrimSpace(operation))
 
 	a.logs.append(fmt.Sprintf("[agent] processando systeminfo: operation=%s", operation))
@@ -36,11 +37,11 @@ func (a *App) handleSystemInfoCommand(ctx context.Context, payload any) (bool, i
 // handleRefreshOnDemand collects only the data requested by the dashboard refresh buttons.
 func (a *App) handleRefreshOnDemand(_ context.Context, payloadJSON map[string]any) (bool, int, string, string) {
 	flags := refreshOnDemandFlags{
-		Ports:       getBoolField(payloadJSON, "Ports"),
-		Connections: getBoolField(payloadJSON, "Connections"),
-		Software:    getBoolField(payloadJSON, "Software"),
-		Printers:    getBoolField(payloadJSON, "Printers"),
-		Hardware:    getBoolField(payloadJSON, "Hardware"),
+		Ports:       agentcommands.GetBoolField(payloadJSON, "Ports"),
+		Connections: agentcommands.GetBoolField(payloadJSON, "Connections"),
+		Software:    agentcommands.GetBoolField(payloadJSON, "Software"),
+		Printers:    agentcommands.GetBoolField(payloadJSON, "Printers"),
+		Hardware:    agentcommands.GetBoolField(payloadJSON, "Hardware"),
 	}
 
 	// If nothing specific requested, default to ports + connections only
@@ -101,9 +102,9 @@ func (a *App) handleRefreshOnDemand(_ context.Context, payloadJSON map[string]an
 
 // handleForceSync triggers a full inventory and software sync.
 func (a *App) handleForceSync(_ context.Context, payloadJSON map[string]any) (bool, int, string, string) {
-	policies := getBoolField(payloadJSON, "Policies")
-	inventory := getBoolField(payloadJSON, "Inventory")
-	software := getBoolField(payloadJSON, "Software")
+	policies := agentcommands.GetBoolField(payloadJSON, "Policies")
+	inventory := agentcommands.GetBoolField(payloadJSON, "Inventory")
+	software := agentcommands.GetBoolField(payloadJSON, "Software")
 
 	hasAny := policies || inventory || software
 	if !hasAny {
@@ -152,48 +153,13 @@ type refreshOnDemandFlags struct {
 }
 
 func normalizePayloadJSON(payload any) (map[string]any, error) {
-	switch v := payload.(type) {
-	case map[string]any:
-		return v, nil
-	case string:
-		var m map[string]any
-		if err := json.Unmarshal([]byte(v), &m); err != nil {
-			return nil, err
-		}
-		return m, nil
-	default:
-		b, err := json.Marshal(v)
-		if err != nil {
-			return nil, err
-		}
-		var m map[string]any
-		if err := json.Unmarshal(b, &m); err != nil {
-			return nil, err
-		}
-		return m, nil
-	}
+	return agentcommands.NormalizePayloadJSON(payload)
 }
 
 func getStringField(m map[string]any, key string) string {
-	if v, ok := m[key]; ok {
-		if s, ok := v.(string); ok {
-			return s
-		}
-		return fmt.Sprintf("%v", v)
-	}
-	return ""
+	return agentcommands.GetStringField(m, key)
 }
 
 func getBoolField(m map[string]any, key string) bool {
-	if v, ok := m[key]; ok {
-		switch b := v.(type) {
-		case bool:
-			return b
-		case string:
-			return strings.EqualFold(b, "true") || b == "1"
-		case float64:
-			return b != 0
-		}
-	}
-	return false
+	return agentcommands.GetBoolField(m, key)
 }
