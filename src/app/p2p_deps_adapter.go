@@ -54,3 +54,23 @@ func (a *App) ApplyOnboardingOffer(offer P2POnboardingRequest) (P2POnboardingRes
 func (a *App) TriggerZeroTouchConfigRegistrationOnPeerDiscovery(ctx context.Context, peer p2pDiscoveredPeer) {
 	a.triggerZeroTouchConfigRegistrationOnPeerDiscovery(ctx, peer)
 }
+
+// IsAgentConfigured expõe isAgentConfigured via interface.
+func (a *App) IsAgentConfigured() bool {
+	return isAgentConfigured()
+}
+
+// LoadInstallerConfig expõe loadInstallerConfig via interface.
+func (a *App) LoadInstallerConfig() (InstallerConfig, string, error) {
+	return loadInstallerConfig()
+}
+
+// BuildOnboardingOffer expõe BuildOnboardingOffer via interface.
+func (a *App) BuildOnboardingOffer(sourceAgentID, serverURL, deployKey string, ttl time.Duration) (P2POnboardingRequest, error) {
+	return BuildOnboardingOffer(sourceAgentID, serverURL, deployKey, ttl)
+}
+
+// GetDataDir expõe GetDataDir via interface.
+func (a *App) GetDataDir() string {
+	return GetDataDir()
+}

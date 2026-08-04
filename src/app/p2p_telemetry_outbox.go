@@ -31,8 +31,8 @@ func (a *App) buildP2PTelemetryPayload() (P2PTelemetryPayload, error) {
 		CollectedAtUTC:  time.Now().UTC().Format(time.RFC3339),
 		Metrics:         status.Metrics,
 		CurrentSeedPlan: status.CurrentSeedPlan,
-		KnownPeers:      a.p2pCoord.countKnownPeers(),
-		ConnectedPeers:  a.p2pCoord.countConnectedLibp2pPeers(),
+		KnownPeers:      a.p2pCoord.CountKnownPeers(),
+		ConnectedPeers:  a.p2pCoord.CountConnectedLibp2pPeers(),
 	}
 	if info, err := a.GetAgentInfo(); err == nil {
 		payload.SiteID = strings.TrimSpace(info.SiteID)
@@ -56,7 +56,7 @@ func (a *App) buildP2PTelemetryPayload() (P2PTelemetryPayload, error) {
 	// Carga do host: reusa coleta de métricas existente do heartbeat
 	cfg := a.GetP2PConfig()
 	if cfg.Enabled {
-		load := a.p2pCoord.collectHostLoad()
+		load := a.p2pCoord.CollectHostLoad()
 		payload.HostLoad = &load
 	}
 

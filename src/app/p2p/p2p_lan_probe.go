@@ -1,4 +1,4 @@
-package app
+package p2p
 
 import (
 	"context"
@@ -38,7 +38,7 @@ type p2pLANProbeTarget struct {
 	Port int
 }
 
-func (s *p2pTransferServer) buildHealthResponse() p2pHealthResponse {
+func (s *TransferServer) buildHealthResponse() p2pHealthResponse {
 	if s == nil {
 		return p2pHealthResponse{}
 	}
@@ -245,7 +245,7 @@ func buildLANProbePorts(cfg P2PConfig, selfPort int) []int {
 	return out
 }
 
-func (c *p2pCoordinator) runLANDiscoveryProbe(ctx context.Context, source string) (int, error) {
+func (c *Coordinator) RunLANDiscoveryProbe(ctx context.Context, source string) (int, error) {
 	if c == nil || c.deps == nil {
 		return 0, fmt.Errorf("coordinator P2P indisponível")
 	}
@@ -322,7 +322,7 @@ func (c *p2pCoordinator) runLANDiscoveryProbe(ctx context.Context, source string
 	return newPeers, nil
 }
 
-func (c *p2pCoordinator) probeLANPeer(ctx context.Context, client *http.Client, h host.Host, registry *libp2pPeerRegistry, selfAgentID, source string, target p2pLANProbeTarget) (bool, bool) {
+func (c *Coordinator) probeLANPeer(ctx context.Context, client *http.Client, h host.Host, registry *libp2pPeerRegistry, selfAgentID, source string, target p2pLANProbeTarget) (bool, bool) {
 	probeURL := fmt.Sprintf("http://%s:%d/p2p/health", strings.TrimSpace(target.Host), target.Port)
 	reqCtx, cancel := context.WithTimeout(ctx, p2pLANProbeRequestTimeout)
 	defer cancel()

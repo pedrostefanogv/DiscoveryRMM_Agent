@@ -1,4 +1,4 @@
-package app
+package p2p
 
 import (
 	"context"
@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-func (c *p2pCoordinator) GetStatus() P2PDebugStatus {
+func (c *Coordinator) GetStatus() P2PDebugStatus {
 	cfg := c.deps.GetP2PConfig()
 	c.mu.RLock()
 	active := c.deps.DebugMode() && cfg.Enabled
@@ -37,7 +37,7 @@ func (c *p2pCoordinator) GetStatus() P2PDebugStatus {
 	}
 }
 
-func (c *p2pCoordinator) GetPeers() []P2PPeerView {
+func (c *Coordinator) GetPeers() []P2PPeerView {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	out := make([]P2PPeerView, 0, len(c.peers))
@@ -67,7 +67,7 @@ func (c *p2pCoordinator) GetPeers() []P2PPeerView {
 
 // GetPeerArtifactIndex SEMPRE faz fetch live dos artifacts de cada peer via libp2p.
 // Não usa cache — é o caminho de debug que precisa de dados fidedignos.
-func (c *p2pCoordinator) GetPeerArtifactIndex() []P2PPeerArtifactIndexView {
+func (c *Coordinator) GetPeerArtifactIndex() []P2PPeerArtifactIndexView {
 	h, registry := c.libp2pHostAndRegistry()
 
 	c.mu.RLock()
@@ -157,7 +157,7 @@ func (c *p2pCoordinator) GetPeerArtifactIndex() []P2PPeerArtifactIndexView {
 //
 // Usar o cache evita latência (5s timeout por peer) e permite que o lookup
 // funcione mesmo quando libp2p não está disponível (ex.: modo service-only).
-func (c *p2pCoordinator) FindArtifactPeers(artifactName string) P2PArtifactAvailabilityView {
+func (c *Coordinator) FindArtifactPeers(artifactName string) P2PArtifactAvailabilityView {
 	safeArtifact := sanitizeArtifactName(artifactName)
 	artifactID := CanonicalArtifactID("", safeArtifact, "")
 	result := P2PArtifactAvailabilityView{
@@ -235,7 +235,7 @@ func (c *p2pCoordinator) FindArtifactPeers(artifactName string) P2PArtifactAvail
 // seu artifactID (GUID de release ou "sha256:<hex>"), consultando o cache de
 // peers. Retorna "" se não encontrar. Usado quando o fetch recebe apenas o
 // artifactID e precisa do nome real para o download.
-func (c *p2pCoordinator) resolveArtifactNameByID(artifactID string) string {
+func (c *Coordinator) resolveArtifactNameByID(artifactID string) string {
 	artifactID = strings.TrimSpace(artifactID)
 	if artifactID == "" {
 		return ""
@@ -255,7 +255,7 @@ func (c *p2pCoordinator) resolveArtifactNameByID(artifactID string) string {
 // InvalidatePeerArtifact remove um artifact específico do cache de um peer.
 // Usado quando o cache diz que o peer tem o artifact mas o download falha
 // (peer não tem mais o arquivo).
-func (c *p2pCoordinator) InvalidatePeerArtifact(peerAgentID, artifactName string) {
+func (c *Coordinator) InvalidatePeerArtifact(peerAgentID, artifactName string) {
 	peerKey := strings.ToLower(strings.TrimSpace(peerAgentID))
 	if peerKey == "" {
 		return
@@ -291,7 +291,7 @@ func (c *p2pCoordinator) InvalidatePeerArtifact(peerAgentID, artifactName string
 // com o artifactID (GUID de release) especificado e, opcionalmente,
 // filtra por SHA256 para garantir integridade cross-peer.
 // Se expectedSHA256 for vazia, retorna todos os peers com o artifactID.
-func (c *p2pCoordinator) FindArtifactPeersByReleaseID(artifactID string, expectedSHA256 string) P2PArtifactAvailabilityView {
+func (c *Coordinator) FindArtifactPeersByReleaseID(artifactID string, expectedSHA256 string) P2PArtifactAvailabilityView {
 	artifactID = strings.TrimSpace(artifactID)
 	result := P2PArtifactAvailabilityView{
 		ArtifactID:   artifactID,
@@ -322,7 +322,7 @@ func (c *p2pCoordinator) FindArtifactPeersByReleaseID(artifactID string, expecte
 	return result
 }
 
-func (c *p2pCoordinator) ListAuditEvents() []P2PAuditEvent {
+func (c *Coordinator) ListAuditEvents() []P2PAuditEvent {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	out := make([]P2PAuditEvent, len(c.audit))
@@ -330,7 +330,7 @@ func (c *p2pCoordinator) ListAuditEvents() []P2PAuditEvent {
 	return out
 }
 
-func (c *p2pCoordinator) ListAuditEventsFiltered(action, peerAgentID, status string) []P2PAuditEvent {
+func (c *Coordinator) ListAuditEventsFiltered(action, peerAgentID, status string) []P2PAuditEvent {
 	action = strings.ToLower(strings.TrimSpace(action))
 	peerAgentID = strings.ToLower(strings.TrimSpace(peerAgentID))
 	status = strings.ToLower(strings.TrimSpace(status))
@@ -356,7 +356,7 @@ func (c *p2pCoordinator) ListAuditEventsFiltered(action, peerAgentID, status str
 	return out
 }
 
-func (c *p2pCoordinator) GetArtifactAccess(artifactName, targetPeerID string) (P2PArtifactAccess, error) {
+func (c *Coordinator) GetArtifactAccess(artifactName, targetPeerID string) (P2PArtifactAccess, error) {
 	c.mu.RLock()
 	transfer := c.transferServer
 	c.mu.RUnlock()
@@ -364,4 +364,28 @@ func (c *p2pCoordinator) GetArtifactAccess(artifactName, targetPeerID string) (P
 		return P2PArtifactAccess{}, fmt.Errorf("servidor de transferência indisponível")
 	}
 	return transfer.BuildArtifactAccess(artifactName, targetPeerID)
+}
+
+// GetAutoProvisioningStats retorna o snapshot dos campos de auto-provisioning.
+func (c *Coordinator) GetAutoProvisioningStats() (total int64, events []P2POnboardingAuditEvent) {
+	c.autoProvisionedMu.RLock()
+	defer c.autoProvisionedMu.RUnlock()
+	total = c.autoProvisionedCount
+	events = make([]P2POnboardingAuditEvent, len(c.autoProvisionedAudit))
+	copy(events, c.autoProvisionedAudit)
+	return total, events
+}
+
+// SetLastCleanupUTC atualiza o timestamp da última limpeza de temp.
+func (c *Coordinator) SetLastCleanupUTC(now time.Time) {
+	c.mu.Lock()
+	c.lastCleanupUTC = now.UTC()
+	c.mu.Unlock()
+}
+
+// ResetSHA256Cache limpa o cache de SHA256 de artifacts locais.
+func (c *Coordinator) ResetSHA256Cache() {
+	c.sha256CacheMu.Lock()
+	c.sha256Cache = make(map[string]artifactSHA256CacheEntry)
+	c.sha256CacheMu.Unlock()
 }

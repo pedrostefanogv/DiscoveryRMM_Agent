@@ -1,4 +1,4 @@
-package app
+package p2p
 
 import (
 	"io"
@@ -25,7 +25,7 @@ type p2pTransferProgress struct {
 }
 
 // emitTransferProgress emite um evento Wails p2p:transfer-progress para o frontend.
-func (c *p2pCoordinator) emitTransferProgress(p p2pTransferProgress) {
+func (c *Coordinator) emitTransferProgress(p p2pTransferProgress) {
 	if c.deps == nil {
 		return
 	}
@@ -33,7 +33,7 @@ func (c *p2pCoordinator) emitTransferProgress(p p2pTransferProgress) {
 }
 
 // emitTransferDone emite evento de conclusão e limpa o progresso.
-func (c *p2pCoordinator) emitTransferDone(artifactName, peerID, operation string, err error) {
+func (c *Coordinator) emitTransferDone(artifactName, peerID, operation string, err error) {
 	p := p2pTransferProgress{
 		ArtifactName: artifactName,
 		PeerID:       peerID,

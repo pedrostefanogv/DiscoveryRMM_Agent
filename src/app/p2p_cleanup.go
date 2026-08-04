@@ -5,25 +5,11 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"time"
 
 	"discovery/app/core/platform"
 )
-
-func parsePortFromURL(raw string) (int, error) {
-	parts := strings.Split(strings.TrimSpace(raw), ":")
-	if len(parts) < 2 {
-		return 0, fmt.Errorf("url sem porta")
-	}
-	portPart := strings.TrimSpace(parts[len(parts)-1])
-	if strings.Contains(portPart, "/") {
-		chunks := strings.Split(portPart, "/")
-		portPart = chunks[0]
-	}
-	return strconv.Atoi(portPart)
-}
 
 func resolveP2PTempDir(goos string) string {
 	if strings.EqualFold(strings.TrimSpace(goos), "windows") {
@@ -140,9 +126,7 @@ func (a *App) cleanupExpiredP2PTempArtifacts(now time.Time) (int, error) {
 	}
 
 	if a.p2pCoord != nil {
-		a.p2pCoord.mu.Lock()
-		a.p2pCoord.lastCleanupUTC = now.UTC()
-		a.p2pCoord.mu.Unlock()
+		a.p2pCoord.SetLastCleanupUTC(now)
 	}
 
 	if removed > 0 {
@@ -173,16 +157,12 @@ func (a *App) clearAllP2PTempArtifacts(now time.Time) (int, error) {
 	}
 
 	if a.p2pCoord != nil {
-		a.p2pCoord.mu.Lock()
-		a.p2pCoord.lastCleanupUTC = now.UTC()
-		a.p2pCoord.mu.Unlock()
+		a.p2pCoord.SetLastCleanupUTC(now)
 
-		a.p2pCoord.sha256CacheMu.Lock()
-		a.p2pCoord.sha256Cache = make(map[string]artifactSHA256CacheEntry)
-		a.p2pCoord.sha256CacheMu.Unlock()
+		a.p2pCoord.ResetSHA256Cache()
 
 		// Remove manifests órfãos após limpeza total.
-		a.p2pCoord.collectOrphanArtifacts()
+		a.p2pCoord.CollectOrphanArtifacts()
 	}
 
 	if removed > 0 {

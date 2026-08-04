@@ -1,4 +1,4 @@
-package app
+package p2p
 
 import (
 	"bytes"
@@ -21,6 +21,10 @@ const (
 	p2pCloudBootstrapTimeout   = 15 * time.Second
 	p2pCloudBootstrapConnectTO = 10 * time.Second
 )
+
+// CloudBootstrapTimeout é o timeout da chamada de cloud bootstrap, exposto
+// para o package app.
+const CloudBootstrapTimeout = p2pCloudBootstrapTimeout
 
 // p2pCloudBootstrapRequest é o payload enviado ao servidor.
 type p2pCloudBootstrapRequest struct {
@@ -49,7 +53,7 @@ type p2pCloudBootstrapResponse struct {
 //  3. Tenta conectar nos peers retornados, atualiza o cache (sucesso=upsert, falha=remove)
 //
 // Retorna a quantidade de peers retornada pela API.
-func (c *p2pCoordinator) runCloudBootstrap(ctx context.Context) (int, error) {
+func (c *Coordinator) RunCloudBootstrap(ctx context.Context) (int, error) {
 	cfg := c.deps.GetP2PConfig()
 	if !cfg.BootstrapConfig.CloudBootstrapEnabled {
 		return 0, fmt.Errorf("cloud bootstrap P2P desabilitado")
@@ -75,7 +79,7 @@ func (c *p2pCoordinator) runCloudBootstrap(ctx context.Context) (int, error) {
 	}
 
 	// Carregar cache local e tentar conexões imediatas (antes de chamar a API).
-	cachedPeers, _ := loadP2PPeerCache()
+	cachedPeers, _ := c.loadP2PPeerCache()
 	cachedPeers = c.connectCachedPeers(ctx, h, cachedPeers)
 
 	// Coletar IPs IPv4 roteáveis e porta do próprio host.
@@ -102,7 +106,7 @@ func (c *p2pCoordinator) runCloudBootstrap(ctx context.Context) (int, error) {
 	if err != nil {
 		c.deps.Log("[p2p][cloud-bootstrap] erro ao chamar API: " + err.Error())
 		// Mesmo com falha na API, persistir o estado atual do cache (conexões locais já limpas).
-		_ = saveP2PPeerCache(cachedPeers)
+		_ = c.saveP2PPeerCache(cachedPeers)
 		return 0, err
 	}
 
@@ -141,7 +145,7 @@ func (c *p2pCoordinator) runCloudBootstrap(ctx context.Context) (int, error) {
 		})
 	}
 
-	if err := saveP2PPeerCache(cachedPeers); err != nil {
+	if err := c.saveP2PPeerCache(cachedPeers); err != nil {
 		c.deps.Log("[p2p][cloud-bootstrap] erro ao salvar cache: " + err.Error())
 		return peerCount, err
 	}
@@ -150,7 +154,7 @@ func (c *p2pCoordinator) runCloudBootstrap(ctx context.Context) (int, error) {
 
 // connectCachedPeers tenta conectar nos peers do cache local.
 // Remove entradas inválidas e retorna o cache atualizado.
-func (c *p2pCoordinator) connectCachedPeers(ctx context.Context, h interface {
+func (c *Coordinator) connectCachedPeers(ctx context.Context, h interface {
 	Connect(context.Context, peer.AddrInfo) error
 }, cached []p2pCachedPeer) []p2pCachedPeer {
 	if len(cached) == 0 {
@@ -190,7 +194,7 @@ func (c *p2pCoordinator) connectCachedPeers(ctx context.Context, h interface {
 }
 
 // callCloudBootstrapAPI faz POST no endpoint de bootstrap e retorna a resposta parseada.
-func (c *p2pCoordinator) callCloudBootstrapAPI(ctx context.Context, scheme, server, token, agentID string, payload p2pCloudBootstrapRequest) (*p2pCloudBootstrapResponse, error) {
+func (c *Coordinator) callCloudBootstrapAPI(ctx context.Context, scheme, server, token, agentID string, payload p2pCloudBootstrapRequest) (*p2pCloudBootstrapResponse, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("marshal payload: %w", err)

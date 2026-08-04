@@ -1,4 +1,4 @@
-package app
+package p2p
 
 import (
 	"context"
@@ -11,26 +11,25 @@ import (
 	"time"
 
 	"discovery/app/core/platform"
+	"discovery/app/p2pmeta"
 )
 
 const (
-	defaultP2PTempTTLHours             = 20 * 24
-	defaultP2PSeedPercent              = 10
-	defaultP2PMinSeeds                 = 2
-	defaultP2PPortRangeStart           = 41080
-	defaultP2PPortRangeEnd             = 41120
-	defaultP2PTokenRotationMinutes     = 15
-	p2pCoordinatorDiscoveryTickSeconds = 30
-	p2pCoordinatorCleanupTickHours     = 1
-	p2pReplicationWorkers              = 2
-	p2pReplicationQueueSize            = 64
-	p2pPeerReplicationCooldown         = 20 * time.Second
-	p2pAuditLimit                      = 100
-	p2pReplicationDedupTTL             = 24 * time.Hour
-	p2pLANProbeWarmupDelay             = 12 * time.Second
-	p2pLANProbeInterval                = 2 * time.Minute
-	peerArtifactCacheTTL               = 72 * time.Hour // cache de artifacts por peer expira em 72h
-	maxPeerArtifactEntries             = 500            // cap máximo de entries no mapa peerArtifacts
+	defaultP2PTempTTLHours         = 20 * 24
+	defaultP2PSeedPercent          = 10
+	defaultP2PMinSeeds             = 2
+	defaultP2PPortRangeStart       = 41080
+	defaultP2PPortRangeEnd         = 41120
+	defaultP2PTokenRotationMinutes = 15
+	p2pReplicationWorkers          = 2
+	p2pReplicationQueueSize        = 64
+	p2pPeerReplicationCooldown     = 20 * time.Second
+	p2pAuditLimit                  = 100
+	p2pReplicationDedupTTL         = 24 * time.Hour
+	p2pLANProbeWarmupDelay         = 12 * time.Second
+	p2pLANProbeInterval            = 2 * time.Minute
+	peerArtifactCacheTTL           = 72 * time.Hour // cache de artifacts por peer expira em 72h
+	maxPeerArtifactEntries         = 500            // cap máximo de entries no mapa peerArtifacts
 )
 
 var errP2PDuplicateReplication = errors.New("artifact ja distribuido recentemente para este peer")
@@ -42,7 +41,10 @@ type artifactSHA256CacheEntry struct {
 	mtime time.Time
 }
 
-type p2pCoordinator struct {
+// ArtifactSHA256CacheEntry é exposto para o package app.
+type ArtifactSHA256CacheEntry = artifactSHA256CacheEntry
+
+type Coordinator struct {
 	deps AppDeps
 
 	mu                sync.RWMutex
@@ -59,7 +61,7 @@ type p2pCoordinator struct {
 	currentSeedPlan   P2PSeedPlan
 	listenAddress     string
 	discoveryProvider p2pDiscoveryProvider
-	transferServer    *p2pTransferServer
+	transferServer    *TransferServer
 	replicationQueue  chan p2pReplicationJob
 
 	// sha256Cache evita recalcular SHA256 de artifacts locais a cada gossip tick.
@@ -134,8 +136,8 @@ type p2pReplicationJob struct {
 	Result       chan error
 }
 
-func newP2PCoordinator(deps AppDeps) *p2pCoordinator {
-	c := &p2pCoordinator{
+func NewCoordinator(deps AppDeps) *Coordinator {
+	c := &Coordinator{
 		deps:             deps,
 		peers:            make(map[string]p2pPeerState),
 		peerArtifacts:    make(map[string]p2pPeerArtifactState),
@@ -148,7 +150,7 @@ func newP2PCoordinator(deps AppDeps) *p2pCoordinator {
 		servingSessions:  make(map[string]*servingSession),
 		downloadLocks:    make(map[string]*downloadLockEntry),
 	}
-	c.transferServer = newP2PTransferServer(deps, c)
+	c.transferServer = NewTransferServer(deps, c)
 	return c
 }
 
@@ -156,7 +158,7 @@ func newP2PCoordinator(deps AppDeps) *p2pCoordinator {
 // unlock que também remove o lock do mapa quando não há mais esperadores.
 // Usa um contador de esperadores (em vez de TryLock) para detectar de forma
 // confiável quando o lock pode ser removido sem janela de race.
-func (c *p2pCoordinator) lockDownload(artifactName string) func() {
+func (c *Coordinator) lockDownload(artifactName string) func() {
 	c.downloadLocksMu.Lock()
 	entry, ok := c.downloadLocks[artifactName]
 	if !ok {
@@ -182,7 +184,7 @@ func (c *p2pCoordinator) lockDownload(artifactName string) func() {
 
 // gcServingSessions remove sessões de upload órfãs (sem atividade recente).
 // Ocorre quando um peer desconecta no meio de um stream sem encerrar a sessão.
-func (c *p2pCoordinator) gcServingSessions(now time.Time) {
+func (c *Coordinator) gcServingSessions(now time.Time) {
 	const servingSessionTTL = 10 * time.Minute
 	c.servingSessionsMu.Lock()
 	defer c.servingSessionsMu.Unlock()
@@ -194,7 +196,7 @@ func (c *p2pCoordinator) gcServingSessions(now time.Time) {
 }
 
 // cachedFileSHA256 retorna o SHA256 do arquivo, usando cache invalidado por mtime.
-func (c *p2pCoordinator) cachedFileSHA256(path string, mtime time.Time) (string, error) {
+func (c *Coordinator) cachedFileSHA256(path string, mtime time.Time) (string, error) {
 	c.sha256CacheMu.Lock()
 	defer c.sha256CacheMu.Unlock()
 	if entry, ok := c.sha256Cache[path]; ok && entry.mtime.Equal(mtime) {
@@ -208,7 +210,7 @@ func (c *p2pCoordinator) cachedFileSHA256(path string, mtime time.Time) (string,
 	return sum, nil
 }
 
-func (c *p2pCoordinator) Run(ctx context.Context) {
+func (c *Coordinator) Run(ctx context.Context) {
 	if c.deps == nil {
 		return
 	}
@@ -234,14 +236,14 @@ func (c *p2pCoordinator) Run(ctx context.Context) {
 	}
 	_ = c.discoveryTick(time.Now())
 
-	discoveryTicker := time.NewTicker(p2pCoordinatorDiscoveryTickSeconds * time.Second)
-	cleanupTicker := time.NewTicker(p2pCoordinatorCleanupTickHours * time.Hour)
+	discoveryTicker := time.NewTicker(CoordinatorDiscoveryTickSeconds * time.Second)
+	cleanupTicker := time.NewTicker(CoordinatorCleanupTickHours * time.Hour)
 	gossipTicker := time.NewTicker(45 * time.Second)
 	fetchHeartbeatTicker := time.NewTicker(artifactFetchHeartbeatEvery)
 	electionTicker := time.NewTicker(60 * time.Second)
 	lanProbeWarmupTimer := time.NewTimer(p2pLANProbeWarmupDelay)
 	lanProbeTicker := time.NewTicker(p2pLANProbeInterval)
-	contentGCTicker := time.NewTicker(p2pCoordinatorCleanupTickHours * time.Hour)
+	contentGCTicker := time.NewTicker(CoordinatorCleanupTickHours * time.Hour)
 	defer discoveryTicker.Stop()
 	defer cleanupTicker.Stop()
 	defer gossipTicker.Stop()
@@ -252,7 +254,7 @@ func (c *p2pCoordinator) Run(ctx context.Context) {
 	defer contentGCTicker.Stop()
 
 	go func() {
-		_, _ = c.runLANDiscoveryProbe(ctx, "startup")
+		_, _ = c.RunLANDiscoveryProbe(ctx, "startup")
 	}()
 
 	lanProbeSem := make(chan struct{}, 2)
@@ -276,19 +278,19 @@ func (c *p2pCoordinator) Run(ctx context.Context) {
 			}
 			c.gcServingSessions(time.Now())
 		case <-contentGCTicker.C:
-			c.collectOrphanArtifacts()
+			c.CollectOrphanArtifacts()
 		case <-lanProbeWarmupTimer.C:
 			lanProbeSem <- struct{}{}
 			go func() {
 				defer func() { <-lanProbeSem }()
-				_, _ = c.runLANDiscoveryProbe(ctx, "warmup")
+				_, _ = c.RunLANDiscoveryProbe(ctx, "warmup")
 			}()
 		case <-lanProbeTicker.C:
 			select {
 			case lanProbeSem <- struct{}{}:
 				go func() {
 					defer func() { <-lanProbeSem }()
-					_, _ = c.runLANDiscoveryProbe(ctx, "periodic")
+					_, _ = c.RunLANDiscoveryProbe(ctx, "periodic")
 				}()
 			default:
 			}
@@ -296,7 +298,7 @@ func (c *p2pCoordinator) Run(ctx context.Context) {
 	}
 }
 
-func (c *p2pCoordinator) OnResourceSynced(resource, variant, revision string) {
+func (c *Coordinator) OnResourceSynced(resource, variant, revision string) {
 	cfg := c.deps.GetP2PConfig()
 	totalAgents := c.currentAgentsEstimate()
 	plan := buildP2PSeedPlan(totalAgents, cfg)
@@ -310,14 +312,14 @@ func (c *p2pCoordinator) OnResourceSynced(resource, variant, revision string) {
 	c.appendAudit("auto-distribute", "", "", "sync", true, "modo pull-only: distribuicao forçada desabilitada")
 }
 
-func (c *p2pCoordinator) currentAgentsEstimate() int {
+func (c *Coordinator) currentAgentsEstimate() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	// total = peers conhecidos + este agente
 	return c.knownPeers + 1
 }
 
-func (c *p2pCoordinator) discoveryTick(now time.Time) error {
+func (c *Coordinator) discoveryTick(now time.Time) error {
 	cfg := c.deps.GetP2PConfig()
 	if !cfg.Enabled {
 		return nil
@@ -349,7 +351,7 @@ func (c *p2pCoordinator) discoveryTick(now time.Time) error {
 // pruneStalePeerArtifactsLocked remove entradas de peerArtifacts cujo TTL expirou
 // ou quando o mapa excede o número máximo de entries (remove os mais antigos).
 // Deve ser chamada com c.mu já adquirido.
-func (c *p2pCoordinator) pruneStalePeerArtifactsLocked(now time.Time) {
+func (c *Coordinator) pruneStalePeerArtifactsLocked(now time.Time) {
 	// Remove entradas com TTL expirado.
 	for key, state := range c.peerArtifacts {
 		if now.Sub(state.LastUpdatedUTC) > peerArtifactCacheTTL {
@@ -376,7 +378,7 @@ func (c *p2pCoordinator) pruneStalePeerArtifactsLocked(now time.Time) {
 	}
 }
 
-func (c *p2pCoordinator) setLastError(err error) {
+func (c *Coordinator) setLastError(err error) {
 	if err == nil {
 		return
 	}
@@ -385,7 +387,7 @@ func (c *p2pCoordinator) setLastError(err error) {
 	c.mu.Unlock()
 }
 
-func (c *p2pCoordinator) touchP2PTempDir() error {
+func (c *Coordinator) touchP2PTempDir() error {
 	dir := c.deps.P2PTempDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		c.setLastError(err)
@@ -399,7 +401,7 @@ func (c *p2pCoordinator) touchP2PTempDir() error {
 	return nil
 }
 
-func (c *p2pCoordinator) startTransferServer(ctx context.Context) error {
+func (c *Coordinator) startTransferServer(ctx context.Context) error {
 	if c.transferServer == nil {
 		return fmt.Errorf("servidor de transferência não inicializado")
 	}
@@ -414,7 +416,7 @@ func (c *p2pCoordinator) startTransferServer(ctx context.Context) error {
 	return nil
 }
 
-func (c *p2pCoordinator) startDiscovery(ctx context.Context) error {
+func (c *Coordinator) startDiscovery(ctx context.Context) error {
 	cfg := c.deps.GetP2PConfig()
 	provider := pickDiscoveryProvider(cfg, c, c.transferServer)
 
@@ -456,7 +458,7 @@ func (c *p2pCoordinator) startDiscovery(ctx context.Context) error {
 // upsertPeer inserts or updates a discovered peer. Returns true when the peer
 // was not previously known (newly inserted), so callers can trigger an
 // immediate gossip fetch for that peer.
-func (c *p2pCoordinator) upsertPeer(peer p2pDiscoveredPeer) bool {
+func (c *Coordinator) upsertPeer(peer p2pDiscoveredPeer) bool {
 	if strings.TrimSpace(peer.AgentID) == "" {
 		return false
 	}
@@ -482,7 +484,7 @@ func (c *p2pCoordinator) upsertPeer(peer p2pDiscoveredPeer) bool {
 	return false
 }
 
-func (c *p2pCoordinator) findPeerByAgentID(agentID string) (P2PPeerView, error) {
+func (c *Coordinator) findPeerByAgentID(agentID string) (P2PPeerView, error) {
 	target := strings.ToLower(strings.TrimSpace(agentID))
 	if target == "" {
 		return P2PPeerView{}, fmt.Errorf("peer alvo nao informado")
@@ -493,4 +495,10 @@ func (c *p2pCoordinator) findPeerByAgentID(agentID string) (P2PPeerView, error) 
 		}
 	}
 	return P2PPeerView{}, fmt.Errorf("peer %s nao encontrado", agentID)
+}
+
+// UpsertPeer insere ou atualiza um peer conhecido. Retorna true se o peer
+// era novo (não existia antes). Exportado para uso externo/testes.
+func (c *Coordinator) UpsertPeer(peer p2pmeta.DiscoveredPeer) bool {
+	return c.upsertPeer(peer)
 }

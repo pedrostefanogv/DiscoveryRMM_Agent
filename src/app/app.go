@@ -881,7 +881,7 @@ func (a *App) getHeartbeatMetrics() agentconn.AgentHeartbeatMetrics {
 
 	// Enriquecer com dados de endereçamento P2P (libp2p peer ID, addrs, port)
 	if a.p2pCoord != nil {
-		metrics.PeerID, metrics.Addrs, metrics.Port = a.p2pCoord.getP2PAddressingInfo()
+		metrics.PeerID, metrics.Addrs, metrics.Port = a.p2pCoord.GetP2PAddressingInfo()
 	}
 
 	return metrics

@@ -1,4 +1,4 @@
-package app
+package p2p
 
 import (
 	"bufio"
@@ -17,7 +17,7 @@ import (
 
 // handleStreamFetchCandidacy processa uma candidatura de fetch recebida via libp2p.
 // Decodifica o candidato, chama handleFetchCandidacy no coordinator e responde.
-func handleStreamFetchCandidacy(s network.Stream, coord *p2pCoordinator) {
+func handleStreamFetchCandidacy(s network.Stream, coord *Coordinator) {
 	defer s.Close()
 	_ = s.SetDeadline(time.Now().Add(libp2pCandidacyTimeout))
 
@@ -44,7 +44,7 @@ func handleStreamFetchCandidacy(s network.Stream, coord *p2pCoordinator) {
 
 // handleStreamFetchHeartbeat processa um heartbeat de fetch recebido via libp2p.
 // Atualiza o lease remoto para evitar reeleição prematura.
-func handleStreamFetchHeartbeat(s network.Stream, coord *p2pCoordinator) {
+func handleStreamFetchHeartbeat(s network.Stream, coord *Coordinator) {
 	defer s.Close()
 	_ = s.SetDeadline(time.Now().Add(libp2pStreamTimeout))
 

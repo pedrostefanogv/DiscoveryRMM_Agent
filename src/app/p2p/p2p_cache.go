@@ -1,4 +1,4 @@
-package app
+package p2p
 
 import (
 	"context"
@@ -14,7 +14,7 @@ const (
 )
 
 // manifestDir retorna o diretório onde manifests cacheados são armazenados.
-func (s *p2pTransferServer) manifestDir() string {
+func (s *TransferServer) manifestDir() string {
 	s.mu.RLock()
 	base := s.tempDir
 	s.mu.RUnlock()
@@ -101,7 +101,7 @@ func manifestMatchesFile(manifest *P2PChunkManifest, path string) bool {
 // 2. Gera/valida manifesto
 // 3. Cacheia manifest local
 // 4. Anuncia artifact como available (via P2P metadata em memória)
-func (c *p2pCoordinator) finalizeDownloadedArtifact(artifactName, path, expectedSHA256 string) error {
+func (c *Coordinator) finalizeDownloadedArtifact(artifactName, path, expectedSHA256 string) error {
 	if strings.TrimSpace(expectedSHA256) != "" {
 		checksum, err := computeFileSHA256(path)
 		if err != nil {
@@ -142,7 +142,7 @@ func (c *p2pCoordinator) finalizeDownloadedArtifact(artifactName, path, expected
 
 // updateManifestCacheAfterDownload é chamado após um artifact ser baixado com sucesso
 // para gerar/cachear o manifest e atualizar o tempo de modificação.
-func (c *p2pCoordinator) updateManifestCacheAfterDownload(artifactName, path string) {
+func (c *Coordinator) updateManifestCacheAfterDownload(artifactName, path string) {
 	if c.transferServer == nil {
 		return
 	}

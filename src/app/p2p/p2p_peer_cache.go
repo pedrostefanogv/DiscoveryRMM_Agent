@@ -1,4 +1,4 @@
-package app
+package p2p
 
 import (
 	"encoding/json"
@@ -28,13 +28,13 @@ type p2pCachedPeer struct {
 // rede sem descartar peers que voltam a responder.
 const p2pCachedPeerMaxFailures = 3
 
-func p2pPeerCachePath() string {
-	return filepath.Join(GetDataDir(), "p2p_peer_cache.json")
+func (c *Coordinator) p2pPeerCachePath() string {
+	return filepath.Join(c.deps.GetDataDir(), "p2p_peer_cache.json")
 }
 
 // loadP2PPeerCache lê o cache do disco. Retorna slice vazio se o arquivo não existir.
-func loadP2PPeerCache() ([]p2pCachedPeer, error) {
-	data, err := os.ReadFile(p2pPeerCachePath())
+func (c *Coordinator) loadP2PPeerCache() ([]p2pCachedPeer, error) {
+	data, err := os.ReadFile(c.p2pPeerCachePath())
 	if os.IsNotExist(err) {
 		return []p2pCachedPeer{}, nil
 	}
@@ -50,8 +50,8 @@ func loadP2PPeerCache() ([]p2pCachedPeer, error) {
 }
 
 // saveP2PPeerCache persiste o cache atomicamente (write tmp + rename).
-func saveP2PPeerCache(peers []p2pCachedPeer) error {
-	if err := os.MkdirAll(filepath.Dir(p2pPeerCachePath()), 0o755); err != nil {
+func (c *Coordinator) saveP2PPeerCache(peers []p2pCachedPeer) error {
+	if err := os.MkdirAll(filepath.Dir(c.p2pPeerCachePath()), 0o755); err != nil {
 		return err
 	}
 	// Limitar tamanho máximo do cache.
@@ -62,11 +62,11 @@ func saveP2PPeerCache(peers []p2pCachedPeer) error {
 	if err != nil {
 		return err
 	}
-	tmp := p2pPeerCachePath() + ".tmp"
+	tmp := c.p2pPeerCachePath() + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return err
 	}
-	return os.Rename(tmp, p2pPeerCachePath())
+	return os.Rename(tmp, c.p2pPeerCachePath())
 }
 
 // upsertP2PPeerCacheEntry insere ou atualiza uma entrada por PeerID.

@@ -1,4 +1,4 @@
-package app
+package p2p
 
 import (
 	"context"
@@ -22,7 +22,7 @@ const (
 	p2pImportMaxBytesPerSec = 100 << 20 // 100 MB/s
 )
 
-func (c *p2pCoordinator) ListArtifacts() ([]P2PArtifactView, error) {
+func (c *Coordinator) ListArtifacts() ([]P2PArtifactView, error) {
 	dir := c.deps.P2PTempDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
@@ -69,7 +69,7 @@ func (c *p2pCoordinator) ListArtifacts() ([]P2PArtifactView, error) {
 
 // deleteArtifact remove um único artifact do diretório P2P:
 // arquivo, manifest cacheado e entrada do sha256Cache.
-func (c *p2pCoordinator) deleteArtifact(artifactName string) error {
+func (c *Coordinator) DeleteArtifact(artifactName string) error {
 	artifactName = sanitizeArtifactName(artifactName)
 	if artifactName == "" {
 		return fmt.Errorf("nome de artifact inválido")
@@ -103,7 +103,7 @@ func (c *p2pCoordinator) deleteArtifact(artifactName string) error {
 	return nil
 }
 
-func (c *p2pCoordinator) PublishTestArtifact(artifactName, content string) (P2PArtifactView, error) {
+func (c *Coordinator) PublishTestArtifact(artifactName, content string) (P2PArtifactView, error) {
 	artifactName = sanitizeArtifactName(artifactName)
 	if artifactName == "" {
 		return P2PArtifactView{}, fmt.Errorf("nome de artifact inválido")
@@ -144,7 +144,7 @@ func (c *p2pCoordinator) PublishTestArtifact(artifactName, content string) (P2PA
 	}, nil
 }
 
-func (c *p2pCoordinator) PublishFile(sourcePath string) (P2PArtifactView, error) {
+func (c *Coordinator) PublishFile(sourcePath string) (P2PArtifactView, error) {
 	sourcePath = strings.TrimSpace(sourcePath)
 	if sourcePath == "" {
 		return P2PArtifactView{}, fmt.Errorf("arquivo nao informado")
@@ -203,12 +203,12 @@ func (c *p2pCoordinator) PublishFile(sourcePath string) (P2PArtifactView, error)
 // O arquivo é copiado para o p2pTempDir com o artifactID como nome de arquivo
 // (mantendo a extensão original).
 // version: versão do artifact (opcional) — propaga no gossip para validação cross-peer.
-func (c *p2pCoordinator) PublishFileWithID(sourcePath string, artifactID string) (P2PArtifactView, error) {
+func (c *Coordinator) PublishFileWithID(sourcePath string, artifactID string) (P2PArtifactView, error) {
 	return c.PublishFileWithIDAndVersion(sourcePath, artifactID, "")
 }
 
 // PublishFileWithIDAndVersion publica com versão explícita para validação no gossip.
-func (c *p2pCoordinator) PublishFileWithIDAndVersion(sourcePath string, artifactID string, version string) (P2PArtifactView, error) {
+func (c *Coordinator) PublishFileWithIDAndVersion(sourcePath string, artifactID string, version string) (P2PArtifactView, error) {
 	sourcePath = strings.TrimSpace(sourcePath)
 	if sourcePath == "" {
 		return P2PArtifactView{}, fmt.Errorf("arquivo nao informado")
@@ -273,7 +273,7 @@ func (c *p2pCoordinator) PublishFileWithIDAndVersion(sourcePath string, artifact
 //
 // Retorna o SHA256 e o manifest. Lê o arquivo UMA única vez.
 // Usa buffer de 4 MB e throttling adaptativo baseado no cpuSampler.
-func (c *p2pCoordinator) publishFileSinglePass(sourcePath, targetPath, artifactName string) (sha256Hex string, manifest P2PChunkManifest, err error) {
+func (c *Coordinator) publishFileSinglePass(sourcePath, targetPath, artifactName string) (sha256Hex string, manifest P2PChunkManifest, err error) {
 	// OpenFileSequential usa FILE_FLAG_SEQUENTIAL_SCAN no Windows para
 	// reduzir pressão no cache de disco e prioridade de I/O.
 	srcFile, err := platform.OpenFileSequential(sourcePath)
@@ -419,7 +419,7 @@ func (c *p2pCoordinator) publishFileSinglePass(sourcePath, targetPath, artifactN
 
 // cacheManifestAfterSinglePass salva o manifest gerado durante o single-pass
 // no cache de manifest, evitando que generateManifestEager precise re-ler o arquivo.
-func (c *p2pCoordinator) cacheManifestAfterSinglePass(artifactName string, manifest P2PChunkManifest) {
+func (c *Coordinator) cacheManifestAfterSinglePass(artifactName string, manifest P2PChunkManifest) {
 	if c.transferServer == nil {
 		return
 	}
@@ -445,7 +445,7 @@ type p2pPublishProgress struct {
 }
 
 // emitPublishProgress emite evento Wails p2p:publish:progress para o frontend.
-func (c *p2pCoordinator) emitPublishProgress(artifactName string, processed, total int64, done bool, errMsg string) {
+func (c *Coordinator) emitPublishProgress(artifactName string, processed, total int64, done bool, errMsg string) {
 	if c.deps == nil {
 		return
 	}
@@ -466,7 +466,7 @@ func (c *p2pCoordinator) emitPublishProgress(artifactName string, processed, tot
 // generateManifestEager constrói e cacheia o manifest para um artifact recém-publicado.
 // Executado em goroutine para não bloquear o retorno ao chamador.
 // Usa manifestInFlight para evitar geração duplicada concorrente do mesmo artifact.
-func (c *p2pCoordinator) generateManifestEager(path, artifactName string) {
+func (c *Coordinator) generateManifestEager(path, artifactName string) {
 	if c.transferServer == nil {
 		return
 	}
@@ -512,7 +512,7 @@ func (c *p2pCoordinator) generateManifestEager(path, artifactName string) {
 
 // CleanupStaleArtifacts remove artifacts do diretório local que não foram
 // acessados/modificados há mais de 7 dias.
-func (c *p2pCoordinator) CleanupStaleArtifacts() {
+func (c *Coordinator) CleanupStaleArtifacts() {
 	dir := c.deps.P2PTempDir()
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -540,6 +540,6 @@ func (c *p2pCoordinator) CleanupStaleArtifacts() {
 	}
 }
 
-func (c *p2pCoordinator) ReplicateArtifactToPeer(artifactName, targetPeerID string) (string, error) {
+func (c *Coordinator) ReplicateArtifactToPeer(artifactName, targetPeerID string) (string, error) {
 	return "", fmt.Errorf("modo push desabilitado: use transferencia pull sob demanda")
 }

@@ -1,4 +1,4 @@
-package app
+package p2p
 
 import (
 	"bufio"
@@ -51,8 +51,8 @@ type p2pLibP2PProvider struct {
 
 	// coord and transfer are injected by startDiscovery so the host can serve
 	// the libp2p transport protocols (peers/access/manifest/get/replicate).
-	coord    *p2pCoordinator
-	transfer *p2pTransferServer
+	coord    *Coordinator
+	transfer *TransferServer
 
 	// registry maps agentID -> libp2p peer.ID for client-side calls.
 	registry *libp2pPeerRegistry
@@ -367,7 +367,7 @@ func (n *libp2pMDNSNotifee) HandlePeerFound(pi peer.AddrInfo) {
 
 // pickDiscoveryProvider returns the libp2p provider, injecting coord e transfer
 // para que o host registre os protocolos de transporte de artifacts.
-func pickDiscoveryProvider(cfg P2PConfig, coord *p2pCoordinator, transfer *p2pTransferServer) p2pDiscoveryProvider {
+func pickDiscoveryProvider(cfg P2PConfig, coord *Coordinator, transfer *TransferServer) p2pDiscoveryProvider {
 	registry := newLibp2pPeerRegistry()
 	return &p2pLibP2PProvider{
 		bootstrapPeers: cfg.BootstrapConfig.BootstrapPeers,

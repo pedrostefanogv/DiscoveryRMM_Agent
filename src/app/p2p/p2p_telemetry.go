@@ -1,4 +1,4 @@
-package app
+package p2p
 
 import (
 	"math"
@@ -8,7 +8,7 @@ import (
 
 // collectHostLoad retorna um snapshot da carga atual do host para telemetria enriquecida.
 // Reusa a coleta de métricas já existente do sistema de heartbeat (getHeartbeatMetrics).
-func (c *p2pCoordinator) collectHostLoad() P2PHostLoad {
+func (c *Coordinator) CollectHostLoad() P2PHostLoad {
 	load := P2PHostLoad{
 		CPUCores: runtime.NumCPU(),
 	}
@@ -39,14 +39,14 @@ func (c *p2pCoordinator) collectHostLoad() P2PHostLoad {
 }
 
 // countKnownPeers retorna o total de peers no registry do coordinator.
-func (c *p2pCoordinator) countKnownPeers() int {
+func (c *Coordinator) CountKnownPeers() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.knownPeers
 }
 
 // countConnectedLibp2pPeers retorna a quantidade de peers conectados via libp2p.
-func (c *p2pCoordinator) countConnectedLibp2pPeers() int {
+func (c *Coordinator) CountConnectedLibp2pPeers() int {
 	h, _ := c.libp2pHostAndRegistry()
 	if h == nil {
 		return 0
@@ -55,7 +55,7 @@ func (c *p2pCoordinator) countConnectedLibp2pPeers() int {
 }
 
 // getP2PAddressingInfo retorna o peerID, addrs roteáveis e porta libp2p para enriquecer heartbeats.
-func (c *p2pCoordinator) getP2PAddressingInfo() (peerID string, addrs []string, port int) {
+func (c *Coordinator) GetP2PAddressingInfo() (peerID string, addrs []string, port int) {
 	h, _ := c.libp2pHostAndRegistry()
 	if h == nil {
 		return "", nil, 0

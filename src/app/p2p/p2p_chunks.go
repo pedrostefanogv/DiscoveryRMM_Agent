@@ -1,4 +1,4 @@
-package app
+package p2p
 
 import (
 	"context"
@@ -381,7 +381,7 @@ func downloadChunkedLibp2p(
 }
 
 // recordChunkedDownload increments the chunked-download metrics atomically.
-func (c *p2pCoordinator) recordChunkedDownload(chunks int) {
+func (c *Coordinator) recordChunkedDownload(chunks int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.metrics.ChunkedDownloads++

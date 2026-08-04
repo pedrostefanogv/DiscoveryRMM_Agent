@@ -18,8 +18,8 @@ import (
 	"sync"
 	"time"
 
-	"discovery/app/debug"
 	"discovery/app/core/tlsutil"
+	"discovery/app/debug"
 )
 
 const (
@@ -648,7 +648,7 @@ func (a *App) applyZeroTouchRuntimeConnection(inst InstallerConfig) {
 	if a.p2pCoord != nil {
 		agentCfg := a.GetAgentConfiguration()
 		if strings.TrimSpace(agentCfg.ClientID) != "" {
-			a.p2pCoord.restartProvider()
+			a.p2pCoord.RestartProvider()
 			a.logs.append(fmt.Sprintf("[zero-touch] coordinator P2P reiniciado com clientId=%s", agentCfg.ClientID))
 		}
 	}

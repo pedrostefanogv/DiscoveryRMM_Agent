@@ -1,4 +1,4 @@
-package app
+package p2p
 
 import (
 	"context"
@@ -117,8 +117,8 @@ func canServePartsNow(load P2PHostLoad) bool {
 }
 
 // isLoadOK verifica se o host está abaixo dos limiares de sobrecarga para participar de eleição.
-func (c *p2pCoordinator) isLoadOK() bool {
-	load := c.collectHostLoad()
+func (c *Coordinator) isLoadOK() bool {
+	load := c.CollectHostLoad()
 	return load.CPUPercent < 70 && load.MemoryPercent < 85 && load.DiskBusyPercent < 80
 }
 
@@ -144,7 +144,7 @@ func decideDownloadParallelism(load TransferLoadSnapshot) int {
 }
 
 // dynamicMaxParallelChunks retorna o número de chunks paralelos com base na carga atual do host.
-func (c *p2pCoordinator) dynamicMaxParallelChunks() int {
+func (c *Coordinator) dynamicMaxParallelChunks() int {
 	if c.deps == nil {
 		return maxParallelChunks
 	}
@@ -160,7 +160,7 @@ func (c *p2pCoordinator) dynamicMaxParallelChunks() int {
 // ─── Fase 2.7: Garbage Collection de manifests órfãos ───────────────────────
 
 // collectOrphanArtifacts remove arquivos de cache de manifest cujo artifact original não existe mais.
-func (c *p2pCoordinator) collectOrphanArtifacts() {
+func (c *Coordinator) CollectOrphanArtifacts() {
 	if c.transferServer == nil {
 		return
 	}
@@ -207,7 +207,7 @@ func (c *p2pCoordinator) collectOrphanArtifacts() {
 // restartProvider reinicia o provider de descoberta após mudança de configuração.
 // Usado após zero-touch config registration para entrar na malha correta.
 // O clientId é lido diretamente de c.deps.GetAgentConfiguration() via startDiscovery.
-func (c *p2pCoordinator) restartProvider() {
+func (c *Coordinator) RestartProvider() {
 	c.mu.Lock()
 	oldProvider := c.discoveryProvider
 	c.mu.Unlock()

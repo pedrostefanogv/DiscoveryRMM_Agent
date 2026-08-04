@@ -1,4 +1,4 @@
-package app
+package p2p
 
 import (
 	"context"
@@ -12,7 +12,7 @@ import (
 
 // libp2pHostAndRegistry retorna o host e registry libp2p quando o provider
 // ativo é libp2p (ou hybrid com libp2p). Retorna nil, nil nos demais modos.
-func (c *p2pCoordinator) libp2pHostAndRegistry() (host.Host, *libp2pPeerRegistry) {
+func (c *Coordinator) libp2pHostAndRegistry() (host.Host, *libp2pPeerRegistry) {
 	c.mu.RLock()
 	p := c.discoveryProvider
 	c.mu.RUnlock()
@@ -25,13 +25,13 @@ func (c *p2pCoordinator) libp2pHostAndRegistry() (host.Host, *libp2pPeerRegistry
 	return nil, nil
 }
 
-func (c *p2pCoordinator) pullPeerGossip(ctx context.Context) {
+func (c *Coordinator) pullPeerGossip(ctx context.Context) {
 	c.RefreshPeerArtifactIndex(ctx, "gossip")
 }
 
 // refreshSinglePeer faz um fetch imediato de gossip em um único peer recém-descoberto.
 // Requer libp2p stream para coletar o gossip.
-func (c *p2pCoordinator) refreshSinglePeer(ctx context.Context, peer p2pDiscoveredPeer) {
+func (c *Coordinator) refreshSinglePeer(ctx context.Context, peer p2pDiscoveredPeer) {
 	if strings.TrimSpace(peer.Address) == "" || peer.Port <= 0 {
 		return
 	}
@@ -49,7 +49,7 @@ func (c *p2pCoordinator) refreshSinglePeer(ctx context.Context, peer p2pDiscover
 
 // applyGossipResponse processa uma resposta de gossip (peers + artifacts) e atualiza o estado do coordinator.
 // Ignora peers com clientId divergente quando o clientId local está definido.
-func (c *p2pCoordinator) applyGossipResponse(sourceAgentID string, knownPeers []P2PPeerView, artifacts []P2PArtifactView, source string) {
+func (c *Coordinator) applyGossipResponse(sourceAgentID string, knownPeers []P2PPeerView, artifacts []P2PArtifactView, source string) {
 	localClientID := normalizeClientID(strings.TrimSpace(c.deps.GetAgentConfiguration().ClientID))
 	for _, p := range knownPeers {
 		// Se o peer gossip trouxe clientId e ele diverge do local, ignora.
@@ -74,7 +74,7 @@ func (c *p2pCoordinator) applyGossipResponse(sourceAgentID string, knownPeers []
 	}
 }
 
-func (c *p2pCoordinator) RefreshPeerArtifactIndex(ctx context.Context, source string) {
+func (c *Coordinator) RefreshPeerArtifactIndex(ctx context.Context, source string) {
 	peers := c.GetPeers()
 	source = strings.TrimSpace(source)
 	if source == "" {
@@ -112,7 +112,7 @@ func (c *p2pCoordinator) RefreshPeerArtifactIndex(ctx context.Context, source st
 	}
 }
 
-func (c *p2pCoordinator) upsertPeerArtifacts(peerAgentID string, artifacts []P2PArtifactView, source string) {
+func (c *Coordinator) upsertPeerArtifacts(peerAgentID string, artifacts []P2PArtifactView, source string) {
 	peerKey := strings.ToLower(strings.TrimSpace(peerAgentID))
 	if peerKey == "" {
 		return

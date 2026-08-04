@@ -1,4 +1,4 @@
-package app
+package p2p
 
 import (
 	"context"
@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-func (c *p2pCoordinator) replicateArtifactToPeerNow(ctx context.Context, artifactName, targetPeerID string) error {
+func (c *Coordinator) replicateArtifactToPeerNow(ctx context.Context, artifactName, targetPeerID string) error {
 	_, err := c.findPeerByAgentID(targetPeerID)
 	if err != nil {
 		c.recordReplicationResult(false)
@@ -61,7 +61,7 @@ func (c *p2pCoordinator) replicateArtifactToPeerNow(ctx context.Context, artifac
 	return fmt.Errorf("replicação: peer %s não alcançável via libp2p", targetPeerID)
 }
 
-func (c *p2pCoordinator) recordReplicationResult(success bool) {
+func (c *Coordinator) recordReplicationResult(success bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if success {
@@ -71,7 +71,7 @@ func (c *p2pCoordinator) recordReplicationResult(success bool) {
 	c.metrics.ReplicationsFailed++
 }
 
-func (c *p2pCoordinator) recordBytesServed(size int64) {
+func (c *Coordinator) recordBytesServed(size int64) {
 	if size <= 0 {
 		return
 	}
@@ -80,7 +80,7 @@ func (c *p2pCoordinator) recordBytesServed(size int64) {
 	c.mu.Unlock()
 }
 
-func (c *p2pCoordinator) recordBytesDownloaded(size int64) {
+func (c *Coordinator) recordBytesDownloaded(size int64) {
 	if size <= 0 {
 		return
 	}
@@ -89,7 +89,7 @@ func (c *p2pCoordinator) recordBytesDownloaded(size int64) {
 	c.mu.Unlock()
 }
 
-func (c *p2pCoordinator) enqueueReplicationJob(job p2pReplicationJob) error {
+func (c *Coordinator) enqueueReplicationJob(job p2pReplicationJob) error {
 	job.ArtifactName = sanitizeArtifactName(job.ArtifactName)
 	job.Checksum = strings.TrimSpace(job.Checksum)
 	job.TargetPeerID = strings.TrimSpace(job.TargetPeerID)
@@ -134,7 +134,7 @@ func (c *p2pCoordinator) enqueueReplicationJob(job p2pReplicationJob) error {
 	}
 }
 
-func (c *p2pCoordinator) replicationWorker(ctx context.Context) {
+func (c *Coordinator) replicationWorker(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -155,7 +155,7 @@ func (c *p2pCoordinator) replicationWorker(ctx context.Context) {
 	}
 }
 
-func (c *p2pCoordinator) processReplicationJob(ctx context.Context, job p2pReplicationJob) error {
+func (c *Coordinator) processReplicationJob(ctx context.Context, job p2pReplicationJob) error {
 	peerKey := strings.ToLower(strings.TrimSpace(job.TargetPeerID))
 	now := time.Now().UTC()
 
@@ -189,7 +189,7 @@ func (c *p2pCoordinator) processReplicationJob(ctx context.Context, job p2pRepli
 	return err
 }
 
-func (c *p2pCoordinator) appendAudit(action, artifactName, peerAgentID, source string, success bool, message string) {
+func (c *Coordinator) appendAudit(action, artifactName, peerAgentID, source string, success bool, message string) {
 	event := P2PAuditEvent{
 		TimestampUTC: formatTimeRFC3339(time.Now().UTC()),
 		Action:       strings.TrimSpace(action),
@@ -240,7 +240,7 @@ func formatP2PAuditLogLine(event P2PAuditEvent) string {
 		status, action, artifact, peer, source, message)
 }
 
-func (c *p2pCoordinator) autoDistributeLocalArtifacts(resource, variant, revision string) {
+func (c *Coordinator) autoDistributeLocalArtifacts(resource, variant, revision string) {
 	artifacts, err := c.ListArtifacts()
 	if err != nil {
 		c.appendAudit("auto-distribute", "", "", "sync", false, err.Error())
@@ -287,7 +287,7 @@ func (c *p2pCoordinator) autoDistributeLocalArtifacts(resource, variant, revisio
 	c.appendAudit("auto-distribute", "", "", "sync", true, fmt.Sprintf("resource=%s variant=%s revision=%s jobs=%d duplicates=%d", resource, variant, revision, enqueued, skippedDuplicates))
 }
 
-func (c *p2pCoordinator) artifactPriority(resource, variant, artifactName string) int {
+func (c *Coordinator) artifactPriority(resource, variant, artifactName string) int {
 	name := strings.ToLower(strings.TrimSpace(artifactName))
 	res := strings.ToLower(strings.TrimSpace(resource))
 	varKey := strings.ToLower(strings.TrimSpace(variant))
@@ -310,7 +310,7 @@ func (c *p2pCoordinator) artifactPriority(resource, variant, artifactName string
 	return 2
 }
 
-func (c *p2pCoordinator) resolveArtifactChecksum(artifactName string) (string, error) {
+func (c *Coordinator) resolveArtifactChecksum(artifactName string) (string, error) {
 	artifacts, err := c.ListArtifacts()
 	if err != nil {
 		return "", err
@@ -328,11 +328,11 @@ func (c *p2pCoordinator) resolveArtifactChecksum(artifactName string) (string, e
 	return "", fmt.Errorf("checksum do artifact nao encontrado")
 }
 
-func (c *p2pCoordinator) dedupKey(peerAgentID, artifactName, checksum string) string {
+func (c *Coordinator) dedupKey(peerAgentID, artifactName, checksum string) string {
 	return strings.ToLower(strings.TrimSpace(peerAgentID)) + "|" + strings.ToLower(strings.TrimSpace(artifactName)) + "|" + strings.ToLower(strings.TrimSpace(checksum))
 }
 
-func (c *p2pCoordinator) wasRecentlyReplicatedLocked(peerAgentID, artifactName, checksum string, now time.Time) bool {
+func (c *Coordinator) wasRecentlyReplicatedLocked(peerAgentID, artifactName, checksum string, now time.Time) bool {
 	if strings.TrimSpace(checksum) == "" {
 		return false
 	}
@@ -343,7 +343,7 @@ func (c *p2pCoordinator) wasRecentlyReplicatedLocked(peerAgentID, artifactName, 
 	return now.Sub(last) < p2pReplicationDedupTTL
 }
 
-func (c *p2pCoordinator) markReplicated(peerAgentID, artifactName, checksum string) {
+func (c *Coordinator) markReplicated(peerAgentID, artifactName, checksum string) {
 	if strings.TrimSpace(checksum) == "" {
 		return
 	}
@@ -354,7 +354,7 @@ func (c *p2pCoordinator) markReplicated(peerAgentID, artifactName, checksum stri
 	c.mu.Unlock()
 }
 
-func (c *p2pCoordinator) pruneDedupLocked(now time.Time) {
+func (c *Coordinator) pruneDedupLocked(now time.Time) {
 	for key, ts := range c.replicationDedup {
 		if now.Sub(ts) >= p2pReplicationDedupTTL {
 			delete(c.replicationDedup, key)
@@ -362,7 +362,7 @@ func (c *p2pCoordinator) pruneDedupLocked(now time.Time) {
 	}
 }
 
-func (c *p2pCoordinator) selectAutoDistributionPeers(peers []P2PPeerView) []P2PPeerView {
+func (c *Coordinator) selectAutoDistributionPeers(peers []P2PPeerView) []P2PPeerView {
 	status := c.GetStatus()
 	leechers := len(peers) - maxInt(status.CurrentSeedPlan.SelectedSeeds-1, 0)
 	if leechers <= 0 {

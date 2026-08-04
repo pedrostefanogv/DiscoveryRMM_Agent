@@ -1,4 +1,4 @@
-package app
+package p2p
 
 import (
 	"context"
@@ -10,7 +10,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
-func (c *p2pCoordinator) DownloadArtifactFromPeer(ctx context.Context, artifactName, sourcePeerID string) (P2PArtifactView, error) {
+func (c *Coordinator) DownloadArtifactFromPeer(ctx context.Context, artifactName, sourcePeerID string) (P2PArtifactView, error) {
 	rawArtifactName := strings.TrimSpace(artifactName)
 	artifactName = sanitizeArtifactName(artifactName)
 	if artifactName == "" {
@@ -24,7 +24,7 @@ func (c *p2pCoordinator) DownloadArtifactFromPeer(ctx context.Context, artifactN
 	}
 
 	// Guarda de sobrecarga: recusar servir se o host estiver pesado.
-	load := c.collectHostLoad()
+	load := c.CollectHostLoad()
 	if !canServePartsNow(load) {
 		err := fmt.Errorf("host sobrecarregado, recusando download de artifact")
 		c.appendAudit("pull", artifactName, sourcePeerID, "libp2p", false, err.Error())
@@ -113,7 +113,7 @@ func (c *p2pCoordinator) DownloadArtifactFromPeer(ctx context.Context, artifactN
 
 // downloadArtifactSwarm encontra todos os peers que possuem o artifact e faz
 // download chunked via libp2p streams, mesmo com peer único (resiliência/resume).
-func (c *p2pCoordinator) downloadArtifactSwarm(ctx context.Context, artifactName string) (P2PArtifactView, error) {
+func (c *Coordinator) DownloadArtifactSwarm(ctx context.Context, artifactName string) (P2PArtifactView, error) {
 	rawArtifactName := strings.TrimSpace(artifactName)
 	artifactName = sanitizeArtifactName(artifactName)
 	if artifactName == "" {
@@ -123,7 +123,7 @@ func (c *p2pCoordinator) downloadArtifactSwarm(ctx context.Context, artifactName
 	}
 
 	// Guarda de sobrecarga: recusar servir se o host estiver pesado.
-	if !canServePartsNow(c.collectHostLoad()) {
+	if !canServePartsNow(c.CollectHostLoad()) {
 		err := fmt.Errorf("host sobrecarregado, recusando swarm pull")
 		c.appendAudit("swarm-pull", artifactName, "", "automation", false, err.Error())
 		return P2PArtifactView{}, err
@@ -283,7 +283,7 @@ func (c *p2pCoordinator) downloadArtifactSwarm(ctx context.Context, artifactName
 // (GUID de release ou "sha256:<hex>") e o peerID de origem.
 // Diferente de DownloadArtifactFromPeer, aceita um artifactID explícito e
 // resolve o nome do arquivo a partir do índice de artifacts do peer.
-func (c *p2pCoordinator) DownloadArtifactByID(ctx context.Context, artifactID, sourcePeerID string) (P2PArtifactView, error) {
+func (c *Coordinator) DownloadArtifactByID(ctx context.Context, artifactID, sourcePeerID string) (P2PArtifactView, error) {
 	artifactID = strings.TrimSpace(artifactID)
 	sourcePeerID = strings.TrimSpace(sourcePeerID)
 	if artifactID == "" {
@@ -317,7 +317,7 @@ func (c *p2pCoordinator) DownloadArtifactByID(ctx context.Context, artifactID, s
 }
 
 // buildArtifactView reads stat + checksum for a file and returns a P2PArtifactView.
-func (c *p2pCoordinator) buildArtifactView(artifactName, artifactID, path string) (P2PArtifactView, error) {
+func (c *Coordinator) buildArtifactView(artifactName, artifactID, path string) (P2PArtifactView, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return P2PArtifactView{}, err

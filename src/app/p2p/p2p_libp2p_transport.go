@@ -1,4 +1,4 @@
-package app
+package p2p
 
 // app_p2p_libp2p_transport.go
 //
@@ -133,7 +133,7 @@ type libp2pCandidacyResponse struct {
 
 // RegisterP2PProtocols instala todos os stream handlers nos 7 protocolos.
 // Chamado em app_p2p_libp2p.go após criar o host.
-func RegisterP2PProtocols(h host.Host, coord *p2pCoordinator, transfer *p2pTransferServer) {
+func RegisterP2PProtocols(h host.Host, coord *Coordinator, transfer *TransferServer) {
 	h.SetStreamHandler(protoDiscoveryPeers, func(s network.Stream) {
 		handleStreamPeers(s, coord, transfer)
 	})
@@ -157,7 +157,7 @@ func RegisterP2PProtocols(h host.Host, coord *p2pCoordinator, transfer *p2pTrans
 	})
 }
 
-func handleStreamPeers(s network.Stream, coord *p2pCoordinator, transfer *p2pTransferServer) {
+func handleStreamPeers(s network.Stream, coord *Coordinator, transfer *TransferServer) {
 	defer s.Close()
 	_ = s.SetDeadline(time.Now().Add(libp2pStreamTimeout))
 
@@ -177,7 +177,7 @@ func handleStreamPeers(s network.Stream, coord *p2pCoordinator, transfer *p2pTra
 	})
 }
 
-func handleStreamArtifactAccess(s network.Stream, transfer *p2pTransferServer) {
+func handleStreamArtifactAccess(s network.Stream, transfer *TransferServer) {
 	defer s.Close()
 	_ = s.SetDeadline(time.Now().Add(libp2pStreamTimeout))
 
@@ -203,7 +203,7 @@ func handleStreamArtifactAccess(s network.Stream, transfer *p2pTransferServer) {
 	_ = json.NewEncoder(s).Encode(access)
 }
 
-func handleStreamArtifactManifest(s network.Stream, transfer *p2pTransferServer) {
+func handleStreamArtifactManifest(s network.Stream, transfer *TransferServer) {
 	defer s.Close()
 	_ = s.SetDeadline(time.Now().Add(libp2pStreamTimeout))
 
@@ -263,7 +263,7 @@ func handleStreamArtifactManifest(s network.Stream, transfer *p2pTransferServer)
 	_ = json.NewEncoder(s).Encode(manifest)
 }
 
-func handleStreamArtifactGet(s network.Stream, transfer *p2pTransferServer) {
+func handleStreamArtifactGet(s network.Stream, transfer *TransferServer) {
 	defer s.Close()
 
 	var req libp2pGetRequest
@@ -352,7 +352,7 @@ func handleStreamArtifactGet(s network.Stream, transfer *p2pTransferServer) {
 		}
 	}
 
-	var coord *p2pCoordinator
+	var coord *Coordinator
 	if transfer != nil {
 		coord = transfer.coord
 	}

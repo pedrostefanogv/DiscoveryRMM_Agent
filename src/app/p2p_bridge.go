@@ -71,7 +71,7 @@ func (a *App) SyncP2PBootstrapNow() (string, error) {
 	}
 	bootstrapCtx, cancel := context.WithTimeout(ctx, p2pCloudBootstrapTimeout+5*time.Second)
 	defer cancel()
-	localPeers, localErr := a.p2pCoord.runLANDiscoveryProbe(bootstrapCtx, "manual")
+	localPeers, localErr := a.p2pCoord.RunLANDiscoveryProbe(bootstrapCtx, "manual")
 	cloudEnabled := a.GetP2PConfig().BootstrapConfig.CloudBootstrapEnabled
 
 	parts := make([]string, 0, 2)
@@ -82,7 +82,7 @@ func (a *App) SyncP2PBootstrapNow() (string, error) {
 	cloudPeers := 0
 	cloudErr := error(nil)
 	if cloudEnabled {
-		cloudPeers, cloudErr = a.p2pCoord.runCloudBootstrap(bootstrapCtx)
+		cloudPeers, cloudErr = a.p2pCoord.RunCloudBootstrap(bootstrapCtx)
 		if cloudErr == nil {
 			parts = append(parts, fmt.Sprintf("cloud: %d peer(s)", cloudPeers))
 		}
@@ -147,7 +147,7 @@ func (a *App) DeleteP2PArtifact(artifactName string) (string, error) {
 	if a.p2pCoord == nil {
 		return "", fmt.Errorf("coordinator P2P indisponível")
 	}
-	if err := a.p2pCoord.deleteArtifact(artifactName); err != nil {
+	if err := a.p2pCoord.DeleteArtifact(artifactName); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("artifact %q apagado", artifactName), nil
@@ -223,7 +223,7 @@ func (a *App) DownloadP2PArtifactSwarm(artifactName string) (P2PArtifactView, er
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return a.p2pCoord.downloadArtifactSwarm(ctx, artifactName)
+	return a.p2pCoord.DownloadArtifactSwarm(ctx, artifactName)
 }
 
 func (a *App) ListP2PAuditEvents() []P2PAuditEvent {
@@ -252,11 +252,7 @@ func (a *App) GetAutoProvisioningStats() P2PAutoProvisioningStats {
 	}
 
 	c := a.p2pCoord
-	c.autoProvisionedMu.RLock()
-	total := c.autoProvisionedCount
-	events := make([]P2POnboardingAuditEvent, len(c.autoProvisionedAudit))
-	copy(events, c.autoProvisionedAudit)
-	c.autoProvisionedMu.RUnlock()
+	total, events := c.GetAutoProvisioningStats()
 
 	// Retornar os eventos mais recentes primeiro.
 	for i, j := 0, len(events)-1; i < j; i, j = i+1, j-1 {

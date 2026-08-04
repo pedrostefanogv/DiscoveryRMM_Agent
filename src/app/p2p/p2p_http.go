@@ -1,4 +1,4 @@
-package app
+package p2p
 
 import (
 	"context"
@@ -6,7 +6,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,9 +30,9 @@ const (
 	p2pControlMaxSkew           = 5 * time.Minute
 )
 
-type p2pTransferServer struct {
+type TransferServer struct {
 	deps  AppDeps
-	coord *p2pCoordinator
+	coord *Coordinator
 
 	mu           sync.RWMutex
 	secret       []byte
@@ -53,11 +52,11 @@ type p2pTokenPayload struct {
 	Exp      int64  `json:"e"`
 }
 
-func newP2PTransferServer(deps AppDeps, coord *p2pCoordinator) *p2pTransferServer {
-	return &p2pTransferServer{deps: deps, coord: coord}
+func NewTransferServer(deps AppDeps, coord *Coordinator) *TransferServer {
+	return &TransferServer{deps: deps, coord: coord}
 }
 
-func (s *p2pTransferServer) Start(ctx context.Context, cfg P2PConfig, agentID, tempDir string, peerSnapshot func() []P2PPeerView) error {
+func (s *TransferServer) Start(ctx context.Context, cfg P2PConfig, agentID, tempDir string, peerSnapshot func() []P2PPeerView) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -120,18 +119,18 @@ func (s *p2pTransferServer) Start(ctx context.Context, cfg P2PConfig, agentID, t
 	return nil
 }
 
-func (s *p2pTransferServer) BaseURL() string {
+func (s *TransferServer) BaseURL() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.baseURL
 }
 
-func (s *p2pTransferServer) handleP2PHealth(w http.ResponseWriter, _ *http.Request) {
+func (s *TransferServer) handleP2PHealth(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(s.buildHealthResponse())
 }
 
-func (s *p2pTransferServer) BuildArtifactAccess(artifactName, targetPeerID string) (P2PArtifactAccess, error) {
+func (s *TransferServer) BuildArtifactAccess(artifactName, targetPeerID string) (P2PArtifactAccess, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -183,7 +182,7 @@ func (s *p2pTransferServer) BuildArtifactAccess(artifactName, targetPeerID strin
 	}, nil
 }
 
-func (s *p2pTransferServer) localArtifactsSnapshot() []P2PArtifactView {
+func (s *TransferServer) localArtifactsSnapshot() []P2PArtifactView {
 	if s.coord == nil {
 		return []P2PArtifactView{}
 	}
@@ -194,7 +193,7 @@ func (s *p2pTransferServer) localArtifactsSnapshot() []P2PArtifactView {
 	return artifacts
 }
 
-func (s *p2pTransferServer) downloadArtifact(access P2PArtifactAccess) (string, int64, error) {
+func (s *TransferServer) downloadArtifact(access P2PArtifactAccess) (string, int64, error) {
 	resp, err := (&http.Client{Timeout: 45 * time.Second}).Get(access.URL)
 	if err != nil {
 		return "", 0, err
@@ -246,7 +245,7 @@ func (s *p2pTransferServer) downloadArtifact(access P2PArtifactAccess) (string, 
 	return targetPath, size, nil
 }
 
-func (s *p2pTransferServer) BuildReplicationHeaders(sourceAgentID string, access P2PArtifactAccess) map[string]string {
+func (s *TransferServer) BuildReplicationHeaders(sourceAgentID string, access P2PArtifactAccess) map[string]string {
 	headers := map[string]string{
 		p2pControlHeaderSourceAgent: strings.TrimSpace(sourceAgentID),
 	}
@@ -262,7 +261,7 @@ func (s *p2pTransferServer) BuildReplicationHeaders(sourceAgentID string, access
 	return headers
 }
 
-func (s *p2pTransferServer) verifyReplicationControl(r *http.Request, access P2PArtifactAccess) error {
+func (s *TransferServer) verifyReplicationControl(r *http.Request, access P2PArtifactAccess) error {
 	s.mu.RLock()
 	secret := s.sharedSecret
 	s.mu.RUnlock()
@@ -290,19 +289,7 @@ func (s *p2pTransferServer) verifyReplicationControl(r *http.Request, access P2P
 	return nil
 }
 
-func signReplicationControl(secret []byte, sourceAgentID string, access P2PArtifactAccess, timestamp string) string {
-	payload := strings.Join([]string{
-		strings.TrimSpace(sourceAgentID),
-		strings.TrimSpace(access.ArtifactName),
-		strings.TrimSpace(access.ChecksumSHA256),
-		strings.TrimSpace(timestamp),
-	}, "\n")
-	mac := hmac.New(sha256.New, secret)
-	_, _ = mac.Write([]byte(payload))
-	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
-}
-
-func (s *p2pTransferServer) issueTokenLocked(artifactName, peerID string, expiresAt time.Time) (string, error) {
+func (s *TransferServer) issueTokenLocked(artifactName, peerID string, expiresAt time.Time) (string, error) {
 	payload := p2pTokenPayload{
 		Artifact: artifactName,
 		PeerID:   strings.TrimSpace(peerID),
@@ -320,7 +307,7 @@ func (s *p2pTransferServer) issueTokenLocked(artifactName, peerID string, expire
 	return bodyEncoded + "." + sig, nil
 }
 
-func (s *p2pTransferServer) verifyToken(artifactName, peerID, token string, now time.Time) error {
+func (s *TransferServer) verifyToken(artifactName, peerID, token string, now time.Time) error {
 	s.mu.RLock()
 	secret := s.secret
 	s.mu.RUnlock()
@@ -360,19 +347,6 @@ func (s *p2pTransferServer) verifyToken(artifactName, peerID, token string, now 
 	return nil
 }
 
-func listenInRange(start, end int) (net.Listener, int, error) {
-	if start <= 0 || end <= 0 || start > end {
-		return nil, 0, errors.New("range de portas invalida")
-	}
-	for port := start; port <= end; port++ {
-		ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
-		if err == nil {
-			return ln, port, nil
-		}
-	}
-	return nil, 0, fmt.Errorf("nao foi possivel abrir porta no range %d-%d", start, end)
-}
-
 func sanitizeArtifactName(name string) string {
 	name = strings.TrimSpace(name)
 	if strings.Contains(name, "..") {
@@ -386,31 +360,4 @@ func sanitizeArtifactName(name string) string {
 		return ""
 	}
 	return name
-}
-
-func computeFileSHA256(path string) (string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(h.Sum(nil)), nil
-}
-
-func detectLocalAddressForPeers() string {
-	conn, err := net.Dial("udp", "8.8.8.8:80")
-	if err != nil {
-		return ""
-	}
-	defer conn.Close()
-	localAddr, ok := conn.LocalAddr().(*net.UDPAddr)
-	if !ok || localAddr.IP == nil {
-		return ""
-	}
-	return localAddr.IP.String()
 }

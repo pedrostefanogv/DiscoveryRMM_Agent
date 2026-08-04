@@ -1,4 +1,4 @@
-package app
+package p2p
 
 import (
 	"context"
@@ -10,22 +10,7 @@ import (
 	"discovery/app/core/agentconn"
 )
 
-func (a *App) handleP2PDiscoverySnapshot(snapshot agentconn.P2PDiscoverySnapshot) {
-	if a == nil || a.p2pCoord == nil {
-		return
-	}
-	a.p2pCoord.ApplyP2PDiscoverySnapshot(snapshot)
-}
-
-// handleP2PEvent processa eventos peer.online recebidos via NATS para descoberta acelerada.
-func (a *App) handleP2PEvent(event agentconn.PeerEventMessage) {
-	if a == nil || a.p2pCoord == nil {
-		return
-	}
-	a.p2pCoord.handlePeerOnlineEvent(event)
-}
-
-func (c *p2pCoordinator) handlePeerOnlineEvent(event agentconn.PeerEventMessage) {
+func (c *Coordinator) HandlePeerOnlineEvent(event agentconn.PeerEventMessage) {
 	if c == nil || c.deps == nil {
 		return
 	}
@@ -89,7 +74,7 @@ func (c *p2pCoordinator) handlePeerOnlineEvent(event agentconn.PeerEventMessage)
 		strings.TrimSpace(event.AgentID), strings.TrimSpace(event.PeerID)))
 }
 
-func (c *p2pCoordinator) ApplyP2PDiscoverySnapshot(snapshot agentconn.P2PDiscoverySnapshot) {
+func (c *Coordinator) ApplyP2PDiscoverySnapshot(snapshot agentconn.P2PDiscoverySnapshot) {
 	if c == nil || c.deps == nil {
 		return
 	}
@@ -188,7 +173,7 @@ func firstUsableSnapshotAddr(addrs []string) string {
 	return ""
 }
 
-func (c *p2pCoordinator) connectP2PDiscoveryPeer(peer agentconn.P2PDiscoveryPeer) {
+func (c *Coordinator) connectP2PDiscoveryPeer(peer agentconn.P2PDiscoveryPeer) {
 	h, registry := c.libp2pHostAndRegistry()
 	if h == nil || registry == nil {
 		return

@@ -1,4 +1,4 @@
-package app
+package p2p
 
 import (
 	"crypto/sha256"

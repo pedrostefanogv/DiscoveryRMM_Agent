@@ -1,4 +1,4 @@
-package app
+package p2p
 
 import (
 	"context"
@@ -15,7 +15,7 @@ import (
 
 // publishFetchHeartbeats publica heartbeats de lease para artifacts que este peer
 // está ativamente buscando como fetcher. Só publica se a carga do host permitir.
-func (c *p2pCoordinator) publishFetchHeartbeats(ctx context.Context) {
+func (c *Coordinator) publishFetchHeartbeats(ctx context.Context) {
 	if !c.isLoadOK() {
 		return
 	}
@@ -64,7 +64,7 @@ func (c *p2pCoordinator) publishFetchHeartbeats(ctx context.Context) {
 // subscriber de logs e enviado via NATS/WebSocket.
 // Também envia o heartbeat para todos os peers conhecidos via libp2p para
 // que renovem o lease remoto e evitem reeleição prematura.
-func (c *p2pCoordinator) publishFetchHeartbeatToGossip(ctx context.Context, hb ArtifactFetchHeartbeat) {
+func (c *Coordinator) publishFetchHeartbeatToGossip(ctx context.Context, hb ArtifactFetchHeartbeat) {
 	logLine := fmt.Sprintf("[p2p][fetch-hb] artifact=%s status=%s progress=%.0f%% lease=%s owner=%s",
 		hb.ArtifactID, hb.Status, hb.ProgressPct,
 		hb.LeaseUntil.Format(time.RFC3339), hb.OwnerPeerID)
@@ -94,7 +94,7 @@ func (c *p2pCoordinator) publishFetchHeartbeatToGossip(ctx context.Context, hb A
 // handleFetchCandidacy processa uma candidatura de fetch recebida de um peer.
 // Compara com a capacidade local via electBestFetcher e decide o vencedor.
 // Deve ser chamado pelo handler de gossip quando receber ArtifactFetchCandidate.
-func (c *p2pCoordinator) handleFetchCandidacy(ctx context.Context, msg ArtifactFetchCandidate) {
+func (c *Coordinator) handleFetchCandidacy(ctx context.Context, msg ArtifactFetchCandidate) {
 	artifactID := strings.TrimSpace(msg.ArtifactID)
 	if artifactID == "" {
 		return
@@ -108,7 +108,7 @@ func (c *p2pCoordinator) handleFetchCandidacy(ctx context.Context, msg ArtifactF
 	clientID := strings.TrimSpace(c.deps.GetAgentConfiguration().ClientID)
 
 	// Construir candidatura local
-	load := c.collectHostLoad()
+	load := c.CollectHostLoad()
 	selfCandidate := ArtifactFetchCandidate{
 		ArtifactID: artifactID,
 		ClientID:   clientID,
@@ -149,7 +149,7 @@ func (c *p2pCoordinator) handleFetchCandidacy(ctx context.Context, msg ArtifactF
 
 // runLocalElection inicia uma eleição local para um artifact que está faltando.
 // Publica a candidatura e aguarda respostas para decidir o fetcher.
-func (c *p2pCoordinator) runLocalElection(ctx context.Context, artifactID string) {
+func (c *Coordinator) runLocalElection(ctx context.Context, artifactID string) {
 	selfAgentID := strings.TrimSpace(c.deps.GetDebugConfig().AgentID)
 	if selfAgentID == "" {
 		return
@@ -163,7 +163,7 @@ func (c *p2pCoordinator) runLocalElection(ctx context.Context, artifactID string
 	}
 
 	clientID := strings.TrimSpace(c.deps.GetAgentConfiguration().ClientID)
-	load := c.collectHostLoad()
+	load := c.CollectHostLoad()
 
 	candidate := ArtifactFetchCandidate{
 		ArtifactID: artifactID,
@@ -210,7 +210,7 @@ func (c *p2pCoordinator) runLocalElection(ctx context.Context, artifactID string
 // ─── Passo 5: Executar fetch quando eleito ──────────────────────────────────
 
 // executeFetch executa o download do artifact quando este peer é eleito fetcher.
-func (c *p2pCoordinator) executeFetch(ctx context.Context, artifactID string, artifactName string) {
+func (c *Coordinator) executeFetch(ctx context.Context, artifactID string, artifactName string) {
 	clientID := strings.TrimSpace(c.deps.GetAgentConfiguration().ClientID)
 
 	c.deps.Log(fmt.Sprintf("[p2p][fetch] iniciando artifact=%s", artifactID))
@@ -230,7 +230,7 @@ func (c *p2pCoordinator) executeFetch(ctx context.Context, artifactID string, ar
 	}
 
 	// Tentar download via swarm (chunked de múltiplos peers)
-	view, err := c.downloadArtifactSwarm(ctx, artifactName)
+	view, err := c.DownloadArtifactSwarm(ctx, artifactName)
 
 	// Recuperar estado atualizado após o download (pode ter sido alterado por heartbeat)
 	state = c.fetchStates.getOrCreate(artifactID, clientID)
@@ -253,7 +253,7 @@ func (c *p2pCoordinator) executeFetch(ctx context.Context, artifactID string, ar
 
 // runPendingElections varre artifacts em estado "missing" e inicia eleição para cada um.
 // Chamado periodicamente pelo loop principal do coordinator.
-func (c *p2pCoordinator) runPendingElections(ctx context.Context) {
+func (c *Coordinator) runPendingElections(ctx context.Context) {
 	c.fetchStates.mu.Lock()
 	var pending []string
 	for artifactID, state := range c.fetchStates.states {

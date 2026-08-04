@@ -1,4 +1,4 @@
-package app
+package p2p
 
 import (
 	"encoding/json"
@@ -8,13 +8,16 @@ import (
 	"time"
 )
 
+// onboardingDeployKeyTTL é o TTL padrão da chave de deploy na oferta de onboarding.
+const onboardingDeployKeyTTL = 30 * time.Minute
+
 // ── Handlers HTTP para /p2p/config/onboard ───────────────────────────────────
 
 // handleP2POnboard is the HTTP handler for GET/PUT /p2p/config/onboard.
 //
 //	GET  → returns a signed offer when this agent is already configured (for unconfigured peers pulling).
 //	PUT  → receives an offer pushed from another peer.
-func (s *p2pTransferServer) handleP2POnboard(w http.ResponseWriter, r *http.Request) {
+func (s *TransferServer) handleP2POnboard(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		s.handleOnboardOffer(w, r)
@@ -28,12 +31,12 @@ func (s *p2pTransferServer) handleP2POnboard(w http.ResponseWriter, r *http.Requ
 // handleOnboardOffer responde ao GET /p2p/config/onboard com uma oferta de
 // provisionamento assinada. Requer que este agente esteja configurado e que a
 // feature DiscoveryEnabled esteja ativa na configuração do servidor.
-func (s *p2pTransferServer) handleOnboardOffer(w http.ResponseWriter, r *http.Request) {
+func (s *TransferServer) handleOnboardOffer(w http.ResponseWriter, r *http.Request) {
 	if s.deps == nil {
 		http.Error(w, "unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	if !isAgentConfigured() {
+	if !s.deps.IsAgentConfigured() {
 		http.Error(w, "not configured", http.StatusNoContent)
 		return
 	}
@@ -63,7 +66,7 @@ func (s *p2pTransferServer) handleOnboardOffer(w http.ResponseWriter, r *http.Re
 	// Construir URL canônica (evitar inst.ServerURL legado).
 	// Usa inst.APIScheme() que deriva o scheme de ApiInsecure (campo canônico),
 	// pois ApiScheme é legado e não é serializado no config.json.
-	inst, _, loadErr := loadInstallerConfig()
+	inst, _, loadErr := s.deps.LoadInstallerConfig()
 	var serverURL string
 	if loadErr == nil && strings.TrimSpace(inst.ApiServer) != "" {
 		serverURL = inst.APIScheme() + "://" + strings.TrimSpace(inst.ApiServer)
@@ -85,7 +88,7 @@ func (s *p2pTransferServer) handleOnboardOffer(w http.ResponseWriter, r *http.Re
 		}
 	}
 
-	offer, err := BuildOnboardingOffer(agentID, serverURL, deployKey, ttl)
+	offer, err := s.deps.BuildOnboardingOffer(agentID, serverURL, deployKey, ttl)
 	if err != nil {
 		http.Error(w, "failed to build offer", http.StatusInternalServerError)
 		recordAutoProvisioningEvent(s.coord, agentID, serverURL, false, "build offer error: "+err.Error())
@@ -99,12 +102,12 @@ func (s *p2pTransferServer) handleOnboardOffer(w http.ResponseWriter, r *http.Re
 	recordAutoProvisioningEvent(s.coord, agentID, serverURL, true, "offer emitida")
 }
 
-func (s *p2pTransferServer) handleOnboardReceive(w http.ResponseWriter, r *http.Request) {
+func (s *TransferServer) handleOnboardReceive(w http.ResponseWriter, r *http.Request) {
 	if s.deps == nil {
 		http.Error(w, "unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	if isAgentConfigured() {
+	if s.deps.IsAgentConfigured() {
 		http.Error(w, "already configured", http.StatusConflict)
 		return
 	}
@@ -127,7 +130,7 @@ func (s *p2pTransferServer) handleOnboardReceive(w http.ResponseWriter, r *http.
 
 // recordAutoProvisioningEvent regista um evento de auditoria no coordinator
 // pelo lado do provisionador (agente configurado que entregou uma oferta).
-func recordAutoProvisioningEvent(c *p2pCoordinator, sourceAgentID, serverURL string, success bool, msg string) {
+func recordAutoProvisioningEvent(c *Coordinator, sourceAgentID, serverURL string, success bool, msg string) {
 	if c == nil {
 		return
 	}

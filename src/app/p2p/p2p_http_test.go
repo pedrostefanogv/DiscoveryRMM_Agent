@@ -1,4 +1,4 @@
-package app
+package p2p
 
 import (
 	"net/http"
@@ -10,7 +10,7 @@ import (
 )
 
 func TestP2PTokenValidation(t *testing.T) {
-	srv := &p2pTransferServer{secret: []byte("01234567890123456789012345678901")}
+	srv := &TransferServer{secret: []byte("01234567890123456789012345678901")}
 	token, err := srv.issueTokenLocked("artifact.bin", "peer-a", time.Now().Add(2*time.Minute))
 	if err != nil {
 		t.Fatalf("issue token: %v", err)
@@ -54,7 +54,7 @@ func TestComputeFileSHA256(t *testing.T) {
 }
 
 func TestVerifyReplicationControl(t *testing.T) {
-	srv := &p2pTransferServer{sharedSecret: []byte("shared-secret")}
+	srv := &TransferServer{sharedSecret: []byte("shared-secret")}
 	access := P2PArtifactAccess{
 		ArtifactName:   "artifact.bin",
 		ChecksumSHA256: "abc123",

@@ -1,23 +1,70 @@
-package app
+package p2p
 
 import (
 	"context"
-	"encoding/json"
-	"net"
-	"net/http"
-	"net/http/httptest"
-	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"discovery/app/agentconfig"
 	"discovery/app/core/agentconn"
-	"discovery/app/core/envutil"
+	debug "discovery/app/debug"
 	"discovery/app/logs"
+	"discovery/app/p2pmeta"
+	supportmeta "discovery/app/supportmeta"
 )
+
+// mockDeps implementa AppDeps para testes do Coordinator.
+type mockDeps struct {
+	cfg       Config
+	debugCfg  debug.Config
+	agentCfg  agentconfig.AgentConfiguration
+	tempDir   string
+	dataDir   string
+	logBuffer *logs.Buffer
+}
+
+func (m *mockDeps) GetP2PConfig() p2pmeta.Config { return m.cfg }
+func (m *mockDeps) GetDebugConfig() debug.Config { return m.debugCfg }
+func (m *mockDeps) GetAgentConfiguration() agentconfig.AgentConfiguration {
+	return m.agentCfg
+}
+func (m *mockDeps) P2PTempDir() string { return m.tempDir }
+func (m *mockDeps) CleanupExpiredP2PTempArtifacts(now time.Time) (int, error) {
+	return 0, nil
+}
+func (m *mockDeps) GetDataDir() string                 { return m.dataDir }
+func (m *mockDeps) EmitEvent(name string, data ...any) {}
+func (m *mockDeps) Log(line string) {
+	if m.logBuffer != nil {
+		m.logBuffer.Append(line)
+	}
+}
+func (m *mockDeps) GetHeartbeatMetrics() agentconn.AgentHeartbeatMetrics {
+	return agentconn.AgentHeartbeatMetrics{}
+}
+func (m *mockDeps) GetAgentInfo() (supportmeta.AgentInfo, error) {
+	return supportmeta.AgentInfo{}, nil
+}
+func (m *mockDeps) Context() context.Context { return context.Background() }
+func (m *mockDeps) DebugMode() bool          { return false }
+func (m *mockDeps) RequestProvisioningToken(ctx context.Context) (string, string, error) {
+	return "", "", nil
+}
+func (m *mockDeps) ApplyOnboardingOffer(offer p2pmeta.OnboardingRequest) (p2pmeta.OnboardingResult, error) {
+	return p2pmeta.OnboardingResult{}, nil
+}
+func (m *mockDeps) TriggerZeroTouchConfigRegistrationOnPeerDiscovery(ctx context.Context, peer p2pmeta.DiscoveredPeer) {
+}
+func (m *mockDeps) IsAgentConfigured() bool { return false }
+func (m *mockDeps) LoadInstallerConfig() (debug.InstallerConfig, string, error) {
+	return debug.InstallerConfig{}, "", nil
+}
+func (m *mockDeps) BuildOnboardingOffer(sourceAgentID, serverURL, deployKey string, ttl time.Duration) (p2pmeta.OnboardingRequest, error) {
+	return p2pmeta.OnboardingRequest{}, nil
+}
 
 func TestP2PSeedCountRule(t *testing.T) {
 	tests := []struct {
@@ -69,7 +116,7 @@ func TestBuildP2PSeedPlan(t *testing.T) {
 }
 
 func TestListAuditEventsFiltered(t *testing.T) {
-	c := &p2pCoordinator{}
+	c := &Coordinator{}
 	c.audit = []P2PAuditEvent{
 		{TimestampUTC: time.Now().UTC().Format(time.RFC3339), Action: "replicate", PeerAgentID: "peer-a", Success: true, Message: "ok"},
 		{TimestampUTC: time.Now().UTC().Format(time.RFC3339), Action: "queue", PeerAgentID: "peer-b", Success: true, Message: "queued"},
@@ -86,16 +133,16 @@ func TestListAuditEventsFiltered(t *testing.T) {
 }
 
 func TestAppendAuditWritesAgentLogLine(t *testing.T) {
-	a := &App{}
-	a.logs.Buffer = logs.New()
-	c := &p2pCoordinator{deps: a}
+	buf := logs.New()
+	a := &mockDeps{logBuffer: buf}
+	c := &Coordinator{deps: a}
 
 	c.appendAudit("pull", "agent.bin", "peer-a", "libp2p", false, "falha simulada")
 
 	if len(c.audit) != 1 {
 		t.Fatalf("expected 1 audit event, got %d", len(c.audit))
 	}
-	lines := a.logs.getAll()
+	lines := buf.GetAll()
 	if len(lines) != 1 {
 		t.Fatalf("expected 1 log line, got %d", len(lines))
 	}
@@ -105,8 +152,8 @@ func TestAppendAuditWritesAgentLogLine(t *testing.T) {
 }
 
 func TestDownloadArtifactFromPeerAuditsFailureWhenPeerNotFound(t *testing.T) {
-	a := &App{}
-	c := &p2pCoordinator{deps: a, peers: map[string]p2pPeerState{}, peerArtifacts: map[string]p2pPeerArtifactState{}}
+	a := &mockDeps{}
+	c := &Coordinator{deps: a, peers: map[string]p2pPeerState{}, peerArtifacts: map[string]p2pPeerArtifactState{}}
 
 	_, err := c.DownloadArtifactFromPeer(context.Background(), "agent.bin", "peer-missing")
 	if err == nil {
@@ -123,7 +170,7 @@ func TestDownloadArtifactFromPeerAuditsFailureWhenPeerNotFound(t *testing.T) {
 }
 
 func TestArtifactPriorityByResource(t *testing.T) {
-	c := &p2pCoordinator{}
+	c := &Coordinator{}
 	high := c.artifactPriority("appstore", "stable", "appstore-catalog-v2.json")
 	medium := c.artifactPriority("appstore", "stable", "agent-stable-package.bin")
 	low := c.artifactPriority("appstore", "stable", "unrelated-backup.dat")
@@ -134,7 +181,7 @@ func TestArtifactPriorityByResource(t *testing.T) {
 }
 
 func TestFindArtifactPeersFromIndex(t *testing.T) {
-	c := &p2pCoordinator{
+	c := &Coordinator{
 		peers:         make(map[string]p2pPeerState),
 		peerArtifacts: make(map[string]p2pPeerArtifactState),
 	}
@@ -176,101 +223,9 @@ func TestFindArtifactPeersFromIndex(t *testing.T) {
 	}
 }
 
-func TestResolveP2PTempDir(t *testing.T) {
-	windowsPath := resolveP2PTempDir("windows")
-	wantWindows := filepath.Join("C:\\", "Windows", "Temp", "Discovery", "P2P_Temp")
-	if !strings.EqualFold(filepath.Clean(windowsPath), filepath.Clean(wantWindows)) {
-		t.Fatalf("windows path = %q, want %q", windowsPath, wantWindows)
-	}
-
-	linuxPath := resolveP2PTempDir("linux")
-	wantLinux := filepath.Join(GetDataDir(), "TempP2P")
-	if linuxPath != wantLinux {
-		t.Fatalf("linux path = %q, want %q", linuxPath, wantLinux)
-	}
-}
-
-func TestClearAllP2PArtifacts(t *testing.T) {
-	root := t.TempDir()
-	t.Setenv("HOME", root)
-	t.Setenv("PROGRAMDATA", root)
-	t.Setenv("WINDIR", root)
-	// envutil cacheia variáveis via sync.Once — resetar para que t.Setenv
-	// seja efetivo neste teste.
-	envutil.Reset()
-
-	a := &App{}
-	dir := a.p2pTempDir()
-	if err := os.MkdirAll(filepath.Join(dir, "nested"), 0o755); err != nil {
-		t.Fatalf("mkdir failed: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "artifact-a.bin"), []byte("a"), 0o600); err != nil {
-		t.Fatalf("write file failed: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "nested", "artifact-b.bin"), []byte("b"), 0o600); err != nil {
-		t.Fatalf("write nested file failed: %v", err)
-	}
-
-	msg, err := a.ClearAllP2PArtifacts()
-	if err != nil {
-		t.Fatalf("ClearAllP2PArtifacts() returned error: %v", err)
-	}
-	if !strings.Contains(msg, "limpeza total concluida") {
-		t.Fatalf("unexpected message: %q", msg)
-	}
-
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatalf("read dir failed: %v", err)
-	}
-	if len(entries) != 0 {
-		t.Fatalf("expected empty temp dir after clear-all, got %d entries", len(entries))
-	}
-}
-
-func TestBuildLANProbeHostsFromIPs_ExpandsSlash24AndSkipsSelf(t *testing.T) {
-	hosts := buildLANProbeHostsFromIPs([]string{"192.168.10.8"})
-	if len(hosts) != 253 {
-		t.Fatalf("expected 253 probe hosts, got %d", len(hosts))
-	}
-	seen := make(map[string]struct{}, len(hosts))
-	for _, host := range hosts {
-		seen[host] = struct{}{}
-		if host == "192.168.10.8" {
-			t.Fatal("self IP should not be probed")
-		}
-	}
-	if _, ok := seen["192.168.10.1"]; !ok {
-		t.Fatal("expected subnet first usable IP to be included")
-	}
-	if _, ok := seen["192.168.10.254"]; !ok {
-		t.Fatal("expected subnet last usable IP to be included")
-	}
-}
-
-func TestBuildLANProbePorts_PrioritizesSelfAndRangeStart(t *testing.T) {
-	ports := buildLANProbePorts(P2PConfig{
-		HTTPListenPortRangeStart: 41080,
-		HTTPListenPortRangeEnd:   41120,
-	}, 41085)
-
-	if len(ports) != p2pLANProbePreferredPorts+1 {
-		t.Fatalf("unexpected port count: %d", len(ports))
-	}
-	if ports[0] != 41085 {
-		t.Fatalf("expected self port first, got %d", ports[0])
-	}
-	if ports[1] != 41080 {
-		t.Fatalf("expected range start second, got %d", ports[1])
-	}
-	if ports[2] != 41081 || ports[3] != 41082 || ports[4] != 41083 {
-		t.Fatalf("unexpected probe ports ordering: %v", ports)
-	}
-}
-
 func TestApplyP2PDiscoverySnapshot_UsesTTLAndSequence(t *testing.T) {
-	c := &p2pCoordinator{
-		deps:  &App{},
+	c := &Coordinator{
+		deps:  &mockDeps{},
 		peers: make(map[string]p2pPeerState),
 	}
 	c.ApplyP2PDiscoverySnapshot(agentconn.P2PDiscoverySnapshot{
@@ -354,163 +309,6 @@ func TestCanonicalArtifactIDEmpty(t *testing.T) {
 
 // ── Epic 2: Onboarding signature & offer ─────────────────────────────────────
 
-func TestComputeOnboardingSignatureConsistent(t *testing.T) {
-	sig1 := computeOnboardingSignature("agent-a", "https://server.local", "key123", "2026-01-01T00:00:00Z", "nonce1")
-	sig2 := computeOnboardingSignature("agent-a", "https://server.local", "key123", "2026-01-01T00:00:00Z", "nonce1")
-	if sig1 != sig2 {
-		t.Fatal("signature must be deterministic")
-	}
-	// Different nonce → different signature (replay prevention).
-	sig3 := computeOnboardingSignature("agent-a", "https://server.local", "key123", "2026-01-01T00:00:00Z", "nonce2")
-	if sig1 == sig3 {
-		t.Fatal("different nonce must produce different signature")
-	}
-}
-
-func TestBuildOnboardingOfferExpiry(t *testing.T) {
-	offer, err := BuildOnboardingOffer("agent-src", "https://srv", "key", 5*time.Minute)
-	if err != nil {
-		t.Fatal(err)
-	}
-	exp, err := time.Parse(time.RFC3339, offer.ExpiresAtUTC)
-	if err != nil {
-		t.Fatalf("invalid expiresAt: %v", err)
-	}
-	if time.Until(exp) < 4*time.Minute || time.Until(exp) > 6*time.Minute {
-		t.Fatalf("expiry out of expected range: %s", offer.ExpiresAtUTC)
-	}
-	// Verify offer self-validates.
-	expected := computeOnboardingSignature(offer.SourceAgent, offer.ServerURL, offer.DeployKey, offer.ExpiresAtUTC, offer.Nonce)
-	if offer.Signature != expected {
-		t.Fatal("offer signature mismatch")
-	}
-}
-
-func TestApplyOnboardingOfferExpired(t *testing.T) {
-	offer := P2POnboardingRequest{
-		ServerURL:    "https://srv",
-		DeployKey:    "key",
-		ExpiresAtUTC: time.Now().UTC().Add(-1 * time.Minute).Format(time.RFC3339),
-		SourceAgent:  "agent-src",
-		Nonce:        "abc",
-		Signature:    "irrelevant",
-	}
-	a := &App{}
-	_, err := a.applyOnboardingOffer(offer)
-	if err == nil {
-		t.Fatal("expected error for expired offer")
-	}
-}
-
-func TestApplyOnboardingOfferBadSignature(t *testing.T) {
-	expiresAt := time.Now().UTC().Add(10 * time.Minute).Format(time.RFC3339)
-	offer := P2POnboardingRequest{
-		ServerURL:    "https://srv",
-		DeployKey:    "key",
-		ExpiresAtUTC: expiresAt,
-		SourceAgent:  "agent-src",
-		Nonce:        "abc",
-		Signature:    "badsig",
-	}
-	a := &App{}
-	_, err := a.applyOnboardingOffer(offer)
-	if err == nil {
-		t.Fatal("expected error for invalid signature")
-	}
-}
-
-func TestParseZeroTouchRegisterResponseSupportsNestedSnakeCase(t *testing.T) {
-	body := []byte(`{"result":{"auth_token":"token-1","agent_id":"agent-1"}}`)
-
-	credentials, err := parseZeroTouchRegisterResponse(body, "https://tngplacas.com.br")
-	if err != nil {
-		t.Fatalf("parseZeroTouchRegisterResponse() error = %v", err)
-	}
-	if credentials.AuthToken != "token-1" {
-		t.Fatalf("AuthToken = %q", credentials.AuthToken)
-	}
-	if credentials.AgentID != "agent-1" {
-		t.Fatalf("AgentID = %q", credentials.AgentID)
-	}
-	if credentials.ApiScheme != "https" {
-		t.Fatalf("ApiScheme = %q", credentials.ApiScheme)
-	}
-	if credentials.ApiServer != "tngplacas.com.br" {
-		t.Fatalf("ApiServer = %q", credentials.ApiServer)
-	}
-}
-
-func TestParseZeroTouchRegisterResponseUsesServerURLFromPayload(t *testing.T) {
-	body := []byte(`{"authToken":"token-2","agentId":"agent-2","serverUrl":"https://srv.example/api/"}`)
-
-	credentials, err := parseZeroTouchRegisterResponse(body, "")
-	if err != nil {
-		t.Fatalf("parseZeroTouchRegisterResponse() error = %v", err)
-	}
-	if credentials.ApiScheme != "https" {
-		t.Fatalf("ApiScheme = %q", credentials.ApiScheme)
-	}
-	if credentials.ApiServer != "srv.example" {
-		t.Fatalf("ApiServer = %q", credentials.ApiServer)
-	}
-}
-
-func TestRequestOnboardingFromPeersNilStateDoesNotPanic(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		offer := P2POnboardingRequest{
-			ServerURL:    "https://srv.local",
-			DeployKey:    "deploy-key",
-			ExpiresAtUTC: time.Now().UTC().Add(5 * time.Minute).Format(time.RFC3339),
-			SourceAgent:  "peer-a",
-			Nonce:        "nonce",
-			Signature:    "invalid-signature",
-		}
-		_ = json.NewEncoder(w).Encode(offer)
-	}))
-	defer server.Close()
-
-	parsed, err := url.Parse(server.URL)
-	if err != nil {
-		t.Fatalf("url parse: %v", err)
-	}
-	host, portRaw, err := net.SplitHostPort(parsed.Host)
-	if err != nil {
-		t.Fatalf("split host/port: %v", err)
-	}
-	port, err := strconv.Atoi(portRaw)
-	if err != nil {
-		t.Fatalf("atoi port: %v", err)
-	}
-
-	a := &App{}
-	a.p2pCoord = &p2pCoordinator{
-		deps: a,
-		peers: map[string]p2pPeerState{
-			"peer-a": {
-				Peer:        p2pDiscoveredPeer{AgentID: "peer-a", Address: host, Port: port},
-				LastSeenUTC: time.Now().UTC(),
-			},
-		},
-	}
-
-	panicObserved := false
-	func() {
-		defer func() {
-			if recover() != nil {
-				panicObserved = true
-			}
-		}()
-		err = a.requestOnboardingFromPeers(context.Background(), nil)
-	}()
-
-	if panicObserved {
-		t.Fatal("requestOnboardingFromPeers(nil) nao deveria panicar")
-	}
-	if err == nil {
-		t.Fatal("esperava erro com oferta invalida")
-	}
-}
-
 // ── Epic 7: go-libp2p provider ────────────────────────────────────────────────
 
 func TestPickDiscoveryProviderLibP2POnly(t *testing.T) {
@@ -553,7 +351,7 @@ func TestCompletedChunksBytes(t *testing.T) {
 // ── Lock por artifact ────────────────────────────────────────────────────────
 
 func TestLockDownloadSerializesAndCleansUp(t *testing.T) {
-	c := &p2pCoordinator{downloadLocks: make(map[string]*downloadLockEntry)}
+	c := &Coordinator{downloadLocks: make(map[string]*downloadLockEntry)}
 
 	unlock1 := c.lockDownload("artifact-a")
 	// Segundo lock no mesmo artifact deve bloquear (serialização).
@@ -590,7 +388,7 @@ func TestLockDownloadSerializesAndCleansUp(t *testing.T) {
 // ── GC de sessões de upload ─────────────────────────────────────────────────
 
 func TestGCServingSessionsRemovesStale(t *testing.T) {
-	c := &p2pCoordinator{
+	c := &Coordinator{
 		servingSessions: map[string]*servingSession{
 			"a|peer1": {lastActive: time.Now().Add(-30 * time.Minute)},
 			"b|peer2": {lastActive: time.Now()},
