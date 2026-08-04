@@ -338,9 +338,9 @@ func TestAutoStopAtDeadline_DoesNotStopSessionWithDifferentDeadline(t *testing.T
 	}
 	m.mu.Unlock()
 
-	// Timer antigo com deadline T1 (mais curto) e mesmo sessionID.
+	// Timer antigo com deadline T1 (mais curto, já expirado) e mesmo sessionID.
 	// Não deve parar a sessão ativa (deadline diferente).
-	m.autoStopAtDeadline("sess-same-id", time.Now().Add(time.Hour))
+	m.autoStopAtDeadline("sess-same-id", time.Now().Add(-time.Hour))
 
 	m.mu.Lock()
 	stillActive := m.activeSession != nil
@@ -353,7 +353,8 @@ func TestAutoStopAtDeadline_DoesNotStopSessionWithDifferentDeadline(t *testing.T
 func TestAutoStopAtDeadline_StopsSessionWithSameDeadline(t *testing.T) {
 	m := New(Deps{Logf: func(string) {}})
 
-	deadline := time.Now().Add(2 * time.Hour)
+	// Deadline já expirado para o timer disparar imediatamente.
+	deadline := time.Now().Add(-time.Hour)
 	ctx, cancel := context.WithCancel(context.Background())
 	_ = ctx
 	m.mu.Lock()
@@ -369,7 +370,7 @@ func TestAutoStopAtDeadline_StopsSessionWithSameDeadline(t *testing.T) {
 	}
 	m.mu.Unlock()
 
-	// Timer com o MESMO deadline e mesmo sessionID → deve parar.
+	// Timer com o MESMO deadline (expirado) e mesmo sessionID → deve parar.
 	m.autoStopAtDeadline("sess-same-id", deadline)
 
 	m.mu.Lock()

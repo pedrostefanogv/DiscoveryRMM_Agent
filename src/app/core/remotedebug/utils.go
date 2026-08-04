@@ -231,6 +231,12 @@ func TruncatePayloadForLog(payload any) string {
 			return v[:200] + "..."
 		}
 		return v
+	case []byte:
+		s := string(v)
+		if len(s) > 200 {
+			return s[:200] + "..."
+		}
+		return s
 	default:
 		b, err := json.Marshal(v)
 		if err != nil {
