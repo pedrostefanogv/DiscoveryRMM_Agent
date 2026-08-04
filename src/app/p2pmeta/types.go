@@ -293,14 +293,15 @@ func CanonicalArtifactID(artifactID, artifactName, sourceURL string) string {
 		sum := sha256.Sum256([]byte(rawURL))
 		return "urlsha256:" + hex.EncodeToString(sum[:])
 	}
-	name := sanitizeArtifactName(artifactName)
+	name := SanitizeArtifactName(artifactName)
 	if name != "" {
 		return "name:" + strings.ToLower(name)
 	}
 	return ""
 }
 
-func sanitizeArtifactName(name string) string {
+// SanitizeArtifactName sanitiza um nome de artifact para uso seguro em paths.
+func SanitizeArtifactName(name string) string {
 	trimmed := strings.TrimSpace(name)
 	if trimmed == "" {
 		return ""

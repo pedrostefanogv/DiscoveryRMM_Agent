@@ -1,8 +1,7 @@
 package app
 
 import (
-	"math"
-	"strings"
+	"discovery/app/p2p"
 )
 
 // defaultInt returns def when v is not positive.
@@ -44,77 +43,17 @@ func clampInt64(v, lo, hi int64) int64 {
 }
 
 func defaultP2PConfig() P2PConfig {
-	return P2PConfig{
-		Enabled:                  true,
-		P2PMode:                  P2PModeLibp2pOnly,
-		TempTTLHours:             defaultP2PTempTTLHours,
-		SeedPercent:              defaultP2PSeedPercent,
-		MinSeeds:                 defaultP2PMinSeeds,
-		HTTPListenPortRangeStart: defaultP2PPortRangeStart,
-		HTTPListenPortRangeEnd:   defaultP2PPortRangeEnd,
-		AuthTokenRotationMinutes: defaultP2PTokenRotationMinutes,
-	}
+	return p2p.DefaultConfig()
 }
 
 func normalizeP2PConfig(cfg P2PConfig) P2PConfig {
-	out := cfg
-	d := defaultP2PConfig()
-
-	out.TempTTLHours = clampInt(defaultInt(out.TempTTLHours, d.TempTTLHours), 24, 24*30)
-	out.SeedPercent = clampInt(defaultInt(out.SeedPercent, d.SeedPercent), 1, 100)
-	out.MinSeeds = defaultInt(out.MinSeeds, d.MinSeeds)
-	out.AuthTokenRotationMinutes = defaultInt(out.AuthTokenRotationMinutes, d.AuthTokenRotationMinutes)
-	out.SharedSecret = strings.TrimSpace(out.SharedSecret)
-
-	out.HTTPListenPortRangeStart = defaultInt(out.HTTPListenPortRangeStart, d.HTTPListenPortRangeStart)
-	out.HTTPListenPortRangeEnd = defaultInt(out.HTTPListenPortRangeEnd, d.HTTPListenPortRangeEnd)
-	if out.HTTPListenPortRangeStart > out.HTTPListenPortRangeEnd {
-		out.HTTPListenPortRangeStart = d.HTTPListenPortRangeStart
-		out.HTTPListenPortRangeEnd = d.HTTPListenPortRangeEnd
-	}
-
-	out.ChunkSizeBytes = clampInt64(defaultInt64(out.ChunkSizeBytes, defaultChunkSizeBytes), minChunkSizeBytes, math.MaxInt64)
-
-	// MaxBandwidthBytesPerSec: < 0 → 0 (ilimitado); valor positivo abaixo do mínimo → eleva ao mínimo.
-	if out.MaxBandwidthBytesPerSec < 0 {
-		out.MaxBandwidthBytesPerSec = 0
-	}
-	const minBandwidthBytesPerSec = 64 * 1024
-	if out.MaxBandwidthBytesPerSec > 0 && out.MaxBandwidthBytesPerSec < minBandwidthBytesPerSec {
-		out.MaxBandwidthBytesPerSec = minBandwidthBytesPerSec
-	}
-
-	out.P2PMode = P2PModeLibp2pOnly
-	return out
+	return p2p.NormalizeConfig(cfg)
 }
 
 func p2pSeedCount(totalAgents, seedPercent, minSeeds int) int {
-	if totalAgents <= 0 {
-		return 0
-	}
-	if seedPercent < 0 {
-		seedPercent = 0
-	}
-	if minSeeds < 1 {
-		minSeeds = 1
-	}
-	byPercent := int(math.Ceil(float64(totalAgents) * float64(seedPercent) / 100.0))
-	selected := byPercent
-	if selected < minSeeds {
-		selected = minSeeds
-	}
-	if selected > totalAgents {
-		selected = totalAgents
-	}
-	return selected
+	return p2p.SeedCount(totalAgents, seedPercent, minSeeds)
 }
 
 func buildP2PSeedPlan(totalAgents int, cfg P2PConfig) P2PSeedPlan {
-	cfg = normalizeP2PConfig(cfg)
-	return P2PSeedPlan{
-		TotalAgents:       totalAgents,
-		ConfiguredPercent: cfg.SeedPercent,
-		MinSeeds:          cfg.MinSeeds,
-		SelectedSeeds:     p2pSeedCount(totalAgents, cfg.SeedPercent, cfg.MinSeeds),
-	}
+	return p2p.BuildSeedPlan(totalAgents, cfg)
 }
