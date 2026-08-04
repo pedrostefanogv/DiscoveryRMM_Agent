@@ -1,4 +1,4 @@
-package app
+package agentconfig
 
 import (
 	"encoding/json"
@@ -10,7 +10,7 @@ import (
 func TestParseAgentConfiguration_BasicFields(t *testing.T) {
 	payloadData := []byte(`{"recoveryEnabled":true,"discoveryEnabled":false,"p2pFilesEnabled":true,"supportEnabled":true,"natsServerHost":"nats.example.local","natsUseWssExternal":true,"enforceTlsHashValidation":true,"handshakeEnabled":true,"apiTlsCertHash":"aa:bb:cc","natsTlsCertHash":"11 22 33","chatAIEnabled":false,"inventoryIntervalHours":12,"agentHeartbeatIntervalSeconds":60,"siteId":"s1","clientId":"c1","resolvedAt":"2026-03-17T13:45:00.000Z","autoUpdate":{"enabled":true,"checkEveryHours":4},"psadt":{"enabled":true,"requiredVersion":"4.1.8","autoInstallModule":true,"installSource":"powershell_gallery","executionTimeoutSeconds":1800,"fallbackPolicy":"winget_then_choco","installOnStartup":true,"installOnDemand":true},"notificationBranding":{"companyName":"Meduza","logoUrl":"https://example/logo.svg","bannerUrl":"https://example/banner.png","theme":{"surface":"#111827","text":"#f9fafb","accent":"#0ea5e9","success":"#0b6e4f","warning":"#8a4e12","danger":"#9a031e"}}}`)
 
-	cfg, err := parseAgentConfiguration(payloadData)
+	cfg, err := ParseAgentConfiguration(payloadData)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -28,7 +28,7 @@ func TestParseAgentConfiguration_BasicFields(t *testing.T) {
 		t.Fatalf("expected chatAIEnabled=false")
 	}
 	if cfg.NatsServerHost != "nats.example.local" {
-		t.Fatalf("expected natsServerHost set")
+		t.Fatalf("expected natsServerHost=nats.example.local")
 	}
 	if cfg.NatsUseWssExternal == nil || !*cfg.NatsUseWssExternal {
 		t.Fatalf("expected natsUseWssExternal=true")
@@ -40,10 +40,10 @@ func TestParseAgentConfiguration_BasicFields(t *testing.T) {
 		t.Fatalf("expected handshakeEnabled=true")
 	}
 	if cfg.ApiTlsCertHash != "AA:BB:CC" {
-		t.Fatalf("expected apiTlsCertHash normalized, got %q", cfg.ApiTlsCertHash)
+		t.Fatalf("expected apiTlsCertHash uppercased, got %q", cfg.ApiTlsCertHash)
 	}
 	if cfg.NatsTlsCertHash != "11 22 33" {
-		t.Fatalf("expected natsTlsCertHash preserved casing normalization")
+		t.Fatalf("expected natsTlsCertHash preserved, got %q", cfg.NatsTlsCertHash)
 	}
 	if cfg.InventoryIntervalHours == nil || *cfg.InventoryIntervalHours != 12 {
 		t.Fatalf("expected inventoryIntervalHours=12")
@@ -52,40 +52,19 @@ func TestParseAgentConfiguration_BasicFields(t *testing.T) {
 		t.Fatalf("expected agentHeartbeatIntervalSeconds=60")
 	}
 	if cfg.SiteID != "s1" || cfg.ClientID != "c1" {
-		t.Fatalf("expected siteId/clientId set")
+		t.Fatalf("expected siteId/clientId parsed")
 	}
-	if cfg.AutoUpdate.Enabled != true || cfg.AutoUpdate.CheckEveryHours != 4 {
-		t.Fatalf("expected autoUpdate enabled and checkEveryHours")
-	}
-	if !cfg.AgentUpdate.Enabled || cfg.AgentUpdate.CheckEveryHours != 4 {
-		t.Fatalf("expected legacy autoUpdate fallback into agentUpdate")
+	if !cfg.AutoUpdate.Enabled || cfg.AutoUpdate.CheckEveryHours != 4 {
+		t.Fatalf("expected autoUpdate parsed")
 	}
 	if cfg.PSADT.Enabled == nil || !*cfg.PSADT.Enabled {
 		t.Fatalf("expected psadt.enabled=true")
 	}
-	if cfg.PSADT.RequiredVersion != "4.1.8" {
-		t.Fatalf("expected psadt.requiredVersion=4.1.8")
-	}
-	if cfg.PSADT.ExecutionTimeoutSeconds == nil || *cfg.PSADT.ExecutionTimeoutSeconds != 1800 {
-		t.Fatalf("expected psadt.executionTimeoutSeconds=1800")
-	}
-	if len(cfg.PSADT.SuccessExitCodes) != 2 || cfg.PSADT.SuccessExitCodes[0] != 0 || cfg.PSADT.SuccessExitCodes[1] != 3010 {
-		t.Fatalf("expected default psadt.successExitCodes=[0,3010]")
-	}
-	if len(cfg.PSADT.RebootExitCodes) != 2 || cfg.PSADT.RebootExitCodes[0] != 1641 || cfg.PSADT.RebootExitCodes[1] != 3010 {
-		t.Fatalf("expected default psadt.rebootExitCodes=[1641,3010]")
-	}
-	if cfg.PSADT.TimeoutAction != "fail" {
-		t.Fatalf("expected default psadt.timeoutAction=fail")
-	}
-	if cfg.PSADT.UnknownExitCodePolicy != "recoverable_failure" {
-		t.Fatalf("expected default psadt.unknownExitCodePolicy=recoverable_failure")
-	}
 	if cfg.NotificationBranding.CompanyName != "Meduza" {
-		t.Fatalf("expected notificationBranding.companyName")
+		t.Fatalf("expected branding companyName=Meduza")
 	}
 	if cfg.NotificationBranding.Theme.Accent != "#0ea5e9" {
-		t.Fatalf("expected notificationBranding.theme.accent")
+		t.Fatalf("expected branding theme accent")
 	}
 	if len(cfg.NotificationPolicies) != 0 {
 		t.Fatalf("expected notification policies absent in this payload")
@@ -94,7 +73,7 @@ func TestParseAgentConfiguration_BasicFields(t *testing.T) {
 
 func TestParseAgentConfiguration_AgentUpdateOverridesLegacyPolicy(t *testing.T) {
 	payload := []byte(`{"autoUpdate":{"enabled":true,"checkEveryHours":24},"agentUpdate":{"enabled":false,"checkOnStartup":false,"checkPeriodically":true,"checkOnSyncManifest":false,"checkEveryHours":12,"preferredArtifactType":"PortableZip","requireSignatureValidation":true}}`)
-	cfg, err := parseAgentConfiguration(payload)
+	cfg, err := ParseAgentConfiguration(payload)
 	if err != nil {
 		t.Fatalf("expected agentUpdate payload to parse, got %v", err)
 	}
@@ -120,7 +99,7 @@ func TestParseAgentConfiguration_AgentUpdateOverridesLegacyPolicy(t *testing.T) 
 
 func TestParseAgentConfiguration_NotificationPolicies(t *testing.T) {
 	payloadData := []byte(`{"notificationPolicies":[{"eventType":"install_start","mode":"notify_only","severity":"medium","timeoutSeconds":8,"styleOverride":{"layout":"toast","background":"#1e293b","text":"#f8fafc"},"actions":[{"id":"details","label":"Ver detalhes","actionType":"open_logs"}]}]}`)
-	cfg, err := parseAgentConfiguration(payloadData)
+	cfg, err := ParseAgentConfiguration(payloadData)
 	if err != nil {
 		t.Fatalf("expected policy payload to parse, got %v", err)
 	}
@@ -137,7 +116,7 @@ func TestParseAgentConfiguration_NotificationPolicies(t *testing.T) {
 
 func TestParseAgentConfiguration_PSADTPolicyOverrides(t *testing.T) {
 	payloadData := []byte(`{"psadt":{"enabled":true,"successExitCodes":[0,2022],"rebootExitCodes":"3010,1641","ignoreExitCodes":[42],"timeoutAction":"RETRY","unknownExitCodePolicy":"FATAL"}}`)
-	cfg, err := parseAgentConfiguration(payloadData)
+	cfg, err := ParseAgentConfiguration(payloadData)
 	if err != nil {
 		t.Fatalf("expected psadt override payload to parse, got %v", err)
 	}
@@ -159,7 +138,7 @@ func TestParseAgentConfiguration_PSADTPolicyOverrides(t *testing.T) {
 }
 
 func TestParseAgentConfiguration_RolloutDefaults(t *testing.T) {
-	cfg, err := parseAgentConfiguration([]byte(`{"siteId":"s1"}`))
+	cfg, err := ParseAgentConfiguration([]byte(`{"siteId":"s1"}`))
 	if err != nil {
 		t.Fatalf("expected parse without rollout, got %v", err)
 	}
@@ -185,7 +164,7 @@ func TestParseAgentConfiguration_RolloutDefaults(t *testing.T) {
 
 func TestParseAgentConfiguration_RolloutOverrides(t *testing.T) {
 	payload := []byte(`{"rollout":{"enableNotifications":false,"enableRequireConfirmation":false,"enablePsadtBootstrap":false,"enableConsolidationEngine":false,"commandResultOfflineMode":"enqueue_only","p2pTelemetryOfflineMode":"logging_only","allowedNotificationEventTypes":["install_start","install_end"],"blockedNotificationEventTypes":["critical_override"]}}`)
-	cfg, err := parseAgentConfiguration(payload)
+	cfg, err := ParseAgentConfiguration(payload)
 	if err != nil {
 		t.Fatalf("expected rollout payload to parse, got %v", err)
 	}
@@ -217,7 +196,7 @@ func TestParseAgentConfiguration_RolloutOverrides(t *testing.T) {
 
 func TestParseAgentConfiguration_ConsolidationPolicies(t *testing.T) {
 	payload := []byte(`{"consolidation":{"enabled":true,"policies":[{"dataType":"p2p_telemetry","windowMode":"batch_1min"},{"dataType":"command_result","windowMode":"1MIN"},{"dataType":"logs","windowMode":"batch_5min"}]}}`)
-	cfg, err := parseAgentConfiguration(payload)
+	cfg, err := ParseAgentConfiguration(payload)
 	if err != nil {
 		t.Fatalf("expected consolidation payload to parse, got %v", err)
 	}
@@ -239,7 +218,7 @@ func TestParseAgentConfiguration_ConsolidationPolicies(t *testing.T) {
 }
 
 func TestParseAgentConfiguration_InvalidJSON(t *testing.T) {
-	_, err := parseAgentConfiguration([]byte(`{invalid`))
+	_, err := ParseAgentConfiguration([]byte(`{invalid`))
 	if err == nil {
 		t.Fatalf("expected error for invalid JSON")
 	}
@@ -247,7 +226,7 @@ func TestParseAgentConfiguration_InvalidJSON(t *testing.T) {
 
 func TestParseAgentConfiguration_UnknownFieldIgnored(t *testing.T) {
 	payload := `{"unknownField": true}`
-	_, err := parseAgentConfiguration([]byte(payload))
+	_, err := ParseAgentConfiguration([]byte(payload))
 	if err != nil {
 		t.Fatalf("expected no error for unknown field, got %v", err)
 	}

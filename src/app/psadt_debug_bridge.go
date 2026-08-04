@@ -11,8 +11,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"discovery/app/services/psadt"
+	"discovery/app/agentconfig"
 	"discovery/app/core/processutil"
+	"discovery/app/services/psadt"
 
 	"golang.org/x/text/encoding/charmap"
 )
@@ -43,11 +44,11 @@ type PSADTModuleStatus struct {
 }
 
 type PSADTDebugState struct {
-	RuntimeDebugMode     bool                            `json:"runtimeDebugMode"`
-	Configuration        AgentConfiguration              `json:"configuration"`
-	ModuleStatus         PSADTModuleStatus               `json:"moduleStatus"`
-	NotificationBranding AgentNotificationBrandingConfig `json:"notificationBranding"`
-	NotificationPolicies []AgentNotificationPolicy       `json:"notificationPolicies"`
+	RuntimeDebugMode     bool                                        `json:"runtimeDebugMode"`
+	Configuration        agentconfig.AgentConfiguration              `json:"configuration"`
+	ModuleStatus         PSADTModuleStatus                           `json:"moduleStatus"`
+	NotificationBranding agentconfig.AgentNotificationBrandingConfig `json:"notificationBranding"`
+	NotificationPolicies []agentconfig.AgentNotificationPolicy       `json:"notificationPolicies"`
 }
 
 type PSADTDebugNotificationRequest struct {

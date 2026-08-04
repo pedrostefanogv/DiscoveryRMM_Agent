@@ -1,6 +1,9 @@
 package app
 
-import "discovery/app/services/notifications"
+import (
+	"discovery/app/agentconfig"
+	"discovery/app/services/notifications"
+)
 
 // NotificationDispatchRequest é o payload de uma notificação.
 type NotificationDispatchRequest = notifications.DispatchRequest
@@ -9,7 +12,7 @@ type NotificationDispatchRequest = notifications.DispatchRequest
 type NotificationDispatchResponse = notifications.DispatchResponse
 
 // mapNotificationPolicies converte as políticas de notificação do app para o service.
-func mapNotificationPolicies(policies []AgentNotificationPolicy) []notifications.AgentNotificationPolicy {
+func mapNotificationPolicies(policies []agentconfig.AgentNotificationPolicy) []notifications.AgentNotificationPolicy {
 	result := make([]notifications.AgentNotificationPolicy, 0, len(policies))
 	for _, p := range policies {
 		actions := make([]notifications.AgentNotificationAction, 0, len(p.Actions))

@@ -1,4 +1,4 @@
-package app
+package apiclient
 
 import (
 	"context"
@@ -13,8 +13,6 @@ import (
 	"discovery/app/core/tlsutil"
 )
 
-// ── API Feature Detection ─────────────────────────────────────────────────
-
 // ApiVersionInfo contém informações da versão e capacidades da API.
 type ApiVersionInfo struct {
 	Detected  bool
@@ -24,78 +22,112 @@ type ApiVersionInfo struct {
 	CheckedAt string
 }
 
+// DebugConfig é uma visão mínima da configuração de debug usada pela detecção.
+type DebugConfig struct {
+	ApiScheme string
+	ApiServer string
+	AuthToken string
+	AgentID   string
+}
+
+// Deps são as dependências injetadas no Service.
+type Deps struct {
+	// GetDebugConfig retorna a configuração de debug.
+	GetDebugConfig func() DebugConfig
+	// Logf appends a log line.
+	Logf func(string)
+}
+
+// Service encapsula a detecção de features da API.
+type Service struct {
+	getDebugConfig func() DebugConfig
+	logf           func(string)
+}
+
+// New cria um ApiClientService.
+func New(deps Deps) *Service {
+	logf := deps.Logf
+	if logf == nil {
+		logf = func(string) {}
+	}
+	return &Service{
+		getDebugConfig: deps.GetDebugConfig,
+		logf:           logf,
+	}
+}
+
 // DetectApiFeatures testa a conectividade com a API e detecta quais features estão disponíveis.
 // Faz um GET para /me/configuration e testa endpoints opcionais.
-func (a *App) DetectApiFeatures(ctx context.Context) *ApiVersionInfo {
+func (s *Service) DetectApiFeatures(ctx context.Context) *ApiVersionInfo {
 	info := &ApiVersionInfo{
 		Features:  make([]string, 0),
 		CheckedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 
-	cfg := a.GetDebugConfig()
+	cfg := s.getDebugConfig()
 	apiScheme := strings.TrimSpace(strings.ToLower(cfg.ApiScheme))
 	apiServer := strings.TrimSpace(cfg.ApiServer)
 	token := strings.TrimSpace(cfg.AuthToken)
 	agentID := strings.TrimSpace(cfg.AgentID)
 
 	if apiServer == "" || token == "" || agentID == "" {
-		a.logs.append("[feature-detect] credenciais insuficientes; ignorando deteccao de API")
+		s.logf("[feature-detect] credenciais insuficientes; ignorando deteccao de API")
 		return info
 	}
 
 	info.BaseURL = apiScheme + "://" + apiServer
-	a.logs.append(fmt.Sprintf("[feature-detect] iniciando deteccao em %s", info.BaseURL))
+	s.logf(fmt.Sprintf("[feature-detect] iniciando deteccao em %s", info.BaseURL))
 
 	// Test 1: GET /me/configuration (sempre obrigatório)
-	if err := a.checkAPIEndpoint(ctx, "GET", "/api/v1/agent-auth/me/configuration", nil); err != nil {
-		a.logs.append(fmt.Sprintf("[feature-detect] endpoint base falhou: %v", err))
+	if err := s.checkAPIEndpoint(ctx, "GET", "/api/v1/agent-auth/me/configuration", nil); err != nil {
+		s.logf(fmt.Sprintf("[feature-detect] endpoint base falhou: %v", err))
 		return info
 	}
 	info.Detected = true
 	info.Features = append(info.Features, "configuration")
 
 	// Test 2: Detect hierarchical config (v1) vs flat config (legacy)
-	body, err := a.fetchAPIBody(ctx, "GET", "/api/v1/agent-auth/me/configuration")
+	body, err := s.fetchAPIBody(ctx, "GET", "/api/v1/agent-auth/me/configuration")
 	if err == nil {
 		var raw map[string]interface{}
 		if json.Unmarshal(body, &raw) == nil {
 			if _, hasServer := raw["server"]; hasServer {
 				info.Version = "v1"
 				info.Features = append(info.Features, "config-hierarchical")
-				a.logs.append("[feature-detect] detectada configuração hierárquica API v1")
+				s.logf("[feature-detect] detectada configuração hierárquica API v1")
 			} else {
 				info.Version = "legacy"
 				info.Features = append(info.Features, "config-flat")
-				a.logs.append("[feature-detect] detectada configuração flat legada")
+				s.logf("[feature-detect] detectada configuração flat legada")
 			}
 		}
 	}
 
 	// Test 3: REST commands endpoint
-	if err := a.checkAPIEndpoint(ctx, "GET", "/api/v1/agent-auth/me/commands?limit=1", nil); err == nil {
+	if err := s.checkAPIEndpoint(ctx, "GET", "/api/v1/agent-auth/me/commands?limit=1", nil); err == nil {
 		info.Features = append(info.Features, "rest-commands")
-		a.logs.append("[feature-detect] endpoint REST commands disponivel")
+		s.logf("[feature-detect] endpoint REST commands disponivel")
 	}
 
 	// Test 4: Tickets endpoint
-	if err := a.checkAPIEndpoint(ctx, "GET", "/api/v1/agent-auth/me/tickets?limit=1", nil); err == nil {
+	if err := s.checkAPIEndpoint(ctx, "GET", "/api/v1/agent-auth/me/tickets?limit=1", nil); err == nil {
 		info.Features = append(info.Features, "tickets")
-		a.logs.append("[feature-detect] endpoint tickets disponivel")
+		s.logf("[feature-detect] endpoint tickets disponivel")
 	}
 
 	// Test 5: Custom fields collected
-	if err := a.checkAPIEndpoint(ctx, "GET", "/api/v1/agent-auth/me/custom-fields/collected", nil); err == nil {
+	if err := s.checkAPIEndpoint(ctx, "GET", "/api/v1/agent-auth/me/custom-fields/collected", nil); err == nil {
 		info.Features = append(info.Features, "custom-fields-collected")
-		a.logs.append("[feature-detect] endpoint custom-fields collected disponivel")
+		s.logf("[feature-detect] endpoint custom-fields collected disponivel")
 	}
 
-	a.logs.append(fmt.Sprintf("[feature-detect] deteccao concluida: version=%s features=%v", info.Version, info.Features))
+	s.logf(fmt.Sprintf("[feature-detect] deteccao concluida: version=%s features=%v", info.Version, info.Features))
 	return info
 }
 
 // checkAPIEndpoint verifica se um endpoint responde com status 2xx.
-func (a *App) checkAPIEndpoint(ctx context.Context, method, path string, body io.Reader) error {
-	cfg := a.GetDebugConfig()
+func (s *Service) checkAPIEndpoint(ctx context.Context, method, path string, body io.Reader) error {
+	cfg := s.getDebugConfig()
 	apiScheme := strings.TrimSpace(strings.ToLower(cfg.ApiScheme))
 	apiServer := strings.TrimSpace(cfg.ApiServer)
 	token := strings.TrimSpace(cfg.AuthToken)
@@ -128,8 +160,8 @@ func (a *App) checkAPIEndpoint(ctx context.Context, method, path string, body io
 }
 
 // fetchAPIBody faz um GET e retorna o body.
-func (a *App) fetchAPIBody(ctx context.Context, method, path string) ([]byte, error) {
-	cfg := a.GetDebugConfig()
+func (s *Service) fetchAPIBody(ctx context.Context, method, path string) ([]byte, error) {
+	cfg := s.getDebugConfig()
 	apiScheme := strings.TrimSpace(strings.ToLower(cfg.ApiScheme))
 	apiServer := strings.TrimSpace(cfg.ApiServer)
 	token := strings.TrimSpace(cfg.AuthToken)

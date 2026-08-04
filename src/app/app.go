@@ -15,6 +15,8 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/wailsapp/wails/v3/pkg/application"
 
+	"discovery/app/agentconfig"
+	"discovery/app/apiclient"
 	"discovery/app/appstore"
 	"discovery/app/core/agentconn"
 	"discovery/app/core/automation"
@@ -130,7 +132,7 @@ type App struct {
 	lastGlobalPongOverloaded   bool
 
 	agentConfigMu sync.RWMutex
-	agentConfig   AgentConfiguration
+	agentConfig   agentconfig.AgentConfiguration
 
 	startupMu                sync.RWMutex
 	startupErr               error
@@ -156,6 +158,9 @@ type App struct {
 
 	// notificationSvc encapsula o centro de notificações.
 	notificationSvc *notifications.Service
+
+	// apiClientSvc encapsula a detecção de features da API.
+	apiClientSvc *apiclient.Service
 
 	queuedForceHeartbeat atomic.Bool
 
@@ -303,6 +308,20 @@ func NewApp(opts AppStartupOptions) *App {
 					BannerURL:   cfg.NotificationBranding.BannerURL,
 				},
 			}
+		},
+	})
+	a.apiClientSvc = apiclient.New(apiclient.Deps{
+		GetDebugConfig: func() apiclient.DebugConfig {
+			cfg := a.GetDebugConfig()
+			return apiclient.DebugConfig{
+				ApiScheme: cfg.ApiScheme,
+				ApiServer: cfg.ApiServer,
+				AuthToken: cfg.AuthToken,
+				AgentID:   cfg.AgentID,
+			}
+		},
+		Logf: func(line string) {
+			a.logs.append(line)
 		},
 	})
 	a.automationSvc = automation.NewService(func() automation.RuntimeConfig {
@@ -621,8 +640,8 @@ func NewApp(opts AppStartupOptions) *App {
 		a.logs.append("[startup] modo debug ativo por tecla de atalho (execução atual)")
 	}
 
-	normalizePSADTConfigDefaults(&a.agentConfig.PSADT)
-	normalizeRolloutDefaults(&a.agentConfig.Rollout)
+	agentconfig.NormalizePSADTConfigDefaults(&a.agentConfig.PSADT)
+	agentconfig.NormalizeRolloutDefaults(&a.agentConfig.Rollout)
 
 	return a
 }
@@ -725,7 +744,7 @@ func (a *App) QuitApp() {
 	a.app.Quit()
 }
 
-func (a *App) GetAgentConfiguration() AgentConfiguration {
+func (a *App) GetAgentConfiguration() agentconfig.AgentConfiguration {
 	a.agentConfigMu.RLock()
 	cfg := a.agentConfig
 	a.agentConfigMu.RUnlock()
@@ -761,7 +780,7 @@ func (a *App) featureEnabled(flag *bool) bool {
 const defaultHeartbeatIntervalSeconds = 15
 const minHeartbeatIntervalSeconds = 10
 
-func heartbeatIntervalFromAgentConfig(agentCfg AgentConfiguration) int {
+func heartbeatIntervalFromAgentConfig(agentCfg agentconfig.AgentConfiguration) int {
 	if agentCfg.AgentHeartbeatIntervalSeconds != nil && *agentCfg.AgentHeartbeatIntervalSeconds > 0 {
 		if *agentCfg.AgentHeartbeatIntervalSeconds < minHeartbeatIntervalSeconds {
 			return minHeartbeatIntervalSeconds

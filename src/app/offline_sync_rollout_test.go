@@ -8,11 +8,12 @@ import (
 	"testing"
 	"time"
 
-	debugsvc "discovery/app/debug"
+	"discovery/app/agentconfig"
 	"discovery/app/core/database"
+	debugsvc "discovery/app/debug"
 )
 
-func newOfflineSyncTestApp(t *testing.T, rollout AgentRolloutConfig) *App {
+func newOfflineSyncTestApp(t *testing.T, rollout agentconfig.AgentRolloutConfig) *App {
 	t.Helper()
 
 	db, err := database.Open(t.TempDir())
@@ -25,7 +26,7 @@ func newOfflineSyncTestApp(t *testing.T, rollout AgentRolloutConfig) *App {
 
 	a := &App{
 		db:          db,
-		agentConfig: AgentConfiguration{Rollout: rollout},
+		agentConfig: agentconfig.AgentConfiguration{Rollout: rollout},
 	}
 	a.debugSvc = debugsvc.NewService(debugsvc.Options{})
 	a.debugSvc.ApplyRuntimeConnectionConfig("https", "example.local", "token", "agent-1", "", "")
@@ -33,7 +34,7 @@ func newOfflineSyncTestApp(t *testing.T, rollout AgentRolloutConfig) *App {
 }
 
 func TestCommandResultOutboxLoggingOnlySkipsEnqueue(t *testing.T) {
-	a := newOfflineSyncTestApp(t, AgentRolloutConfig{CommandResultOfflineMode: OfflineQueueModeLoggingOnly})
+	a := newOfflineSyncTestApp(t, agentconfig.AgentRolloutConfig{CommandResultOfflineMode: agentconfig.OfflineQueueModeLoggingOnly})
 
 	if err := a.enqueueCommandResultOutbox("nats-wss", "", "cmd-1", 0, "ok", "", "network error"); err != nil {
 		t.Fatalf("enqueue command result outbox: %v", err)
@@ -48,7 +49,7 @@ func TestCommandResultOutboxLoggingOnlySkipsEnqueue(t *testing.T) {
 }
 
 func TestCommandResultOutboxEnqueueOnlySkipsDrain(t *testing.T) {
-	a := newOfflineSyncTestApp(t, AgentRolloutConfig{CommandResultOfflineMode: OfflineQueueModeEnqueueOnly})
+	a := newOfflineSyncTestApp(t, agentconfig.AgentRolloutConfig{CommandResultOfflineMode: agentconfig.OfflineQueueModeEnqueueOnly})
 
 	if err := a.enqueueCommandResultOutbox("nats-wss", "", "cmd-1", 0, "ok", "", "network error"); err != nil {
 		t.Fatalf("enqueue command result outbox: %v", err)
@@ -70,7 +71,7 @@ func TestCommandResultOutboxEnqueueOnlySkipsDrain(t *testing.T) {
 }
 
 func TestP2PTelemetryOutboxLoggingOnlySkipsEnqueue(t *testing.T) {
-	a := newOfflineSyncTestApp(t, AgentRolloutConfig{P2PTelemetryOfflineMode: OfflineQueueModeLoggingOnly})
+	a := newOfflineSyncTestApp(t, agentconfig.AgentRolloutConfig{P2PTelemetryOfflineMode: agentconfig.OfflineQueueModeLoggingOnly})
 	payload := P2PTelemetryPayload{AgentID: "agent-1", CollectedAtUTC: time.Now().UTC().Format(time.RFC3339)}
 
 	if err := a.enqueueP2PTelemetryOutbox(payload, errors.New("offline")); err != nil {
@@ -86,7 +87,7 @@ func TestP2PTelemetryOutboxLoggingOnlySkipsEnqueue(t *testing.T) {
 }
 
 func TestP2PTelemetryOutboxEnqueueOnlySkipsDrain(t *testing.T) {
-	a := newOfflineSyncTestApp(t, AgentRolloutConfig{P2PTelemetryOfflineMode: OfflineQueueModeEnqueueOnly})
+	a := newOfflineSyncTestApp(t, agentconfig.AgentRolloutConfig{P2PTelemetryOfflineMode: agentconfig.OfflineQueueModeEnqueueOnly})
 	payload := P2PTelemetryPayload{AgentID: "agent-1", CollectedAtUTC: time.Now().UTC().Format(time.RFC3339)}
 
 	if err := a.enqueueP2PTelemetryOutbox(payload, errors.New("offline")); err != nil {

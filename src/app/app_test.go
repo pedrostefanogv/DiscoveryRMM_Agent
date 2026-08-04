@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"discovery/app/agentconfig"
 )
 
 // TestParseUpgradeOutput_WithSpinner verifies that the parser handles the \r-only
@@ -64,7 +66,7 @@ func TestParseUpgradeOutput_Empty(t *testing.T) {
 
 func TestHeartbeatIntervalFromAgentConfig_UsesConfigValue(t *testing.T) {
 	configured := 45
-	got := heartbeatIntervalFromAgentConfig(AgentConfiguration{
+	got := heartbeatIntervalFromAgentConfig(agentconfig.AgentConfiguration{
 		AgentHeartbeatIntervalSeconds: &configured,
 	})
 	if got != configured {
@@ -74,7 +76,7 @@ func TestHeartbeatIntervalFromAgentConfig_UsesConfigValue(t *testing.T) {
 
 func TestHeartbeatIntervalFromAgentConfig_RespectsMinimum(t *testing.T) {
 	tooLow := 5
-	got := heartbeatIntervalFromAgentConfig(AgentConfiguration{
+	got := heartbeatIntervalFromAgentConfig(agentconfig.AgentConfiguration{
 		AgentHeartbeatIntervalSeconds: &tooLow,
 	})
 	if got != minHeartbeatIntervalSeconds {
@@ -83,7 +85,7 @@ func TestHeartbeatIntervalFromAgentConfig_RespectsMinimum(t *testing.T) {
 }
 
 func TestHeartbeatIntervalFromAgentConfig_DefaultWhenNil(t *testing.T) {
-	got := heartbeatIntervalFromAgentConfig(AgentConfiguration{})
+	got := heartbeatIntervalFromAgentConfig(agentconfig.AgentConfiguration{})
 	if got != defaultHeartbeatIntervalSeconds {
 		t.Fatalf("HeartbeatInterval (fallback) = %d, want %d", got, defaultHeartbeatIntervalSeconds)
 	}

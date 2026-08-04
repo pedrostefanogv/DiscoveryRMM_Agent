@@ -5,21 +5,15 @@ import (
 	"sync"
 	"time"
 
+	"discovery/app/agentconfig"
 	"discovery/app/core/database"
-)
-
-// Consolidation window mode constants.
-const (
-	ConsolidationModeRealtime = "realtime"
-	ConsolidationMode1Min     = "1min"
-	ConsolidationMode5Min     = "5min"
 )
 
 // consolidationWindowDurations maps each window mode to its duration.
 var consolidationWindowDurations = map[string]time.Duration{
-	ConsolidationModeRealtime: 0,
-	ConsolidationMode1Min:     1 * time.Minute,
-	ConsolidationMode5Min:     5 * time.Minute,
+	agentconfig.ConsolidationModeRealtime: 0,
+	agentconfig.ConsolidationMode1Min:     1 * time.Minute,
+	agentconfig.ConsolidationMode5Min:     5 * time.Minute,
 }
 
 // ConsolidationEngine controls send-batching windows per data type.
@@ -87,7 +81,7 @@ func (e *ConsolidationEngine) GetWindowMode(dataType string) string {
 	if mode, ok := e.policies[strings.TrimSpace(dataType)]; ok && mode != "" {
 		return mode
 	}
-	return ConsolidationModeRealtime
+	return agentconfig.ConsolidationModeRealtime
 }
 
 // ShouldFlush reports whether the given data type should be sent right now.
@@ -152,7 +146,7 @@ func (e *ConsolidationEngine) RecordFlush(dataType string, now time.Time) error 
 }
 
 // ApplyAgentConfig updates consolidation policies from the remote agent configuration.
-func (e *ConsolidationEngine) ApplyAgentConfig(cfg AgentConfiguration) {
+func (e *ConsolidationEngine) ApplyAgentConfig(cfg agentconfig.AgentConfiguration) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -172,6 +166,6 @@ func (e *ConsolidationEngine) ApplyAgentConfig(cfg AgentConfiguration) {
 		if dataType == "" {
 			continue
 		}
-		e.policies[dataType] = normalizeConsolidationWindowMode(policy.WindowMode)
+		e.policies[dataType] = agentconfig.NormalizeConsolidationWindowMode(policy.WindowMode)
 	}
 }

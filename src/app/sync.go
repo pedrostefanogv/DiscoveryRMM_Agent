@@ -13,11 +13,12 @@ import (
 	"sync"
 	"time"
 
+	"discovery/app/agentconfig"
 	"discovery/app/appstore"
-	"discovery/app/netutil"
 	"discovery/app/core/agentconn"
 	"discovery/app/core/selfupdate"
 	"discovery/app/core/tlsutil"
+	"discovery/app/netutil"
 )
 
 const (
@@ -492,7 +493,7 @@ func (a *App) refreshAgentConfiguration(ctx context.Context) error {
 		_ = a.db.CacheSet("agent_configuration_raw", body, 30*24*time.Hour)
 	}
 
-	cfgParsed, err := parseAgentConfiguration(body)
+	cfgParsed, err := agentconfig.ParseAgentConfiguration(body)
 	if err != nil {
 		a.logs.append("[sync] falha ao parsear configuration do agent: " + err.Error())
 		return nil
@@ -527,7 +528,7 @@ func parseZeroTouchPendingConfiguration(body []byte) (bool, bool) {
 	if !ok {
 		return false, false
 	}
-	return toBool(v), true
+	return agentconfig.ToBool(v), true
 }
 
 // computeAppStoreContentHash calcula um hash determinístico do conteúdo real

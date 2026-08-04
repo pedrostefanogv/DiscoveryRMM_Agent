@@ -1,14 +1,11 @@
-package app
+// Package apiclient encapsula a detecção de features da API e os timeouts
+// centralizados dos endpoints da API v1, separados do App.
+package apiclient
 
-import (
-	"time"
-)
+import "time"
 
-// ── API Timeouts Centralizados ─────────────────────────────────────────────
-//
-// Todos os timeouts de endpoints da API v1 centralizados para facilitar ajustes
+// Timeouts centralizados de endpoints da API v1 para facilitar ajustes
 // e consistência entre componentes.
-
 const (
 	// Registro & Bootstrap
 	APIEndpointRegister      = 30 * time.Second
