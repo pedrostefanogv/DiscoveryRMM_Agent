@@ -26,7 +26,7 @@ func (a *App) handleP2PEvent(event agentconn.PeerEventMessage) {
 }
 
 func (c *p2pCoordinator) handlePeerOnlineEvent(event agentconn.PeerEventMessage) {
-	if c == nil || c.app == nil {
+	if c == nil || c.deps == nil {
 		return
 	}
 
@@ -36,14 +36,14 @@ func (c *p2pCoordinator) handlePeerOnlineEvent(event agentconn.PeerEventMessage)
 	}
 
 	// 2. clientId deve ser igual ao local
-	localClientID := normalizeClientID(strings.TrimSpace(c.app.GetAgentConfiguration().ClientID))
+	localClientID := normalizeClientID(strings.TrimSpace(c.deps.GetAgentConfiguration().ClientID))
 	eventClientID := normalizeClientID(strings.TrimSpace(event.ClientID))
 	if localClientID != "" && eventClientID != "" && !strings.EqualFold(eventClientID, localClientID) {
 		return
 	}
 
 	// 3. Ignorar self
-	selfAgentID := strings.TrimSpace(c.app.GetDebugConfig().AgentID)
+	selfAgentID := strings.TrimSpace(c.deps.GetDebugConfig().AgentID)
 	if strings.EqualFold(strings.TrimSpace(event.AgentID), selfAgentID) {
 		return
 	}
@@ -71,7 +71,7 @@ func (c *p2pCoordinator) handlePeerOnlineEvent(event agentconn.PeerEventMessage)
 
 	addrInfo, err := buildAddrInfo(strings.TrimSpace(event.PeerID), event.Addrs, event.Port)
 	if err != nil {
-		c.app.logs.append(fmt.Sprintf("[p2p][events] peer.online ignorado (addr inválido) agentId=%s: %v",
+		c.deps.Log(fmt.Sprintf("[p2p][events] peer.online ignorado (addr inválido) agentId=%s: %v",
 			strings.TrimSpace(event.AgentID), err))
 		return
 	}
@@ -80,24 +80,24 @@ func (c *p2pCoordinator) handlePeerOnlineEvent(event agentconn.PeerEventMessage)
 	err = h.Connect(ctx, addrInfo)
 	cancel()
 	if err != nil {
-		c.app.logs.append(fmt.Sprintf("[p2p][events] connect falhou agentId=%s peerId=%s: %v",
+		c.deps.Log(fmt.Sprintf("[p2p][events] connect falhou agentId=%s peerId=%s: %v",
 			strings.TrimSpace(event.AgentID), strings.TrimSpace(event.PeerID), err))
 		return
 	}
 
-	c.app.logs.append(fmt.Sprintf("[p2p][events] conectado via peer.online: agentId=%s peerId=%s",
+	c.deps.Log(fmt.Sprintf("[p2p][events] conectado via peer.online: agentId=%s peerId=%s",
 		strings.TrimSpace(event.AgentID), strings.TrimSpace(event.PeerID)))
 }
 
 func (c *p2pCoordinator) ApplyP2PDiscoverySnapshot(snapshot agentconn.P2PDiscoverySnapshot) {
-	if c == nil || c.app == nil {
+	if c == nil || c.deps == nil {
 		return
 	}
 
 	// Validar clientId: snapshot deve pertencer à mesma malha lógica.
-	localClientID := normalizeClientID(strings.TrimSpace(c.app.GetAgentConfiguration().ClientID))
+	localClientID := normalizeClientID(strings.TrimSpace(c.deps.GetAgentConfiguration().ClientID))
 	if localClientID != "" && !strings.EqualFold(normalizeClientID(strings.TrimSpace(snapshot.ClientID)), localClientID) {
-		c.app.logs.append(fmt.Sprintf("[p2p][nats-discovery] snapshot rejeitado por clientId divergente: snapshotClientId=%s localClientId=%s",
+		c.deps.Log(fmt.Sprintf("[p2p][nats-discovery] snapshot rejeitado por clientId divergente: snapshotClientId=%s localClientId=%s",
 			strings.TrimSpace(snapshot.ClientID), localClientID))
 		return
 	}
@@ -114,7 +114,7 @@ func (c *p2pCoordinator) ApplyP2PDiscoverySnapshot(snapshot agentconn.P2PDiscove
 	c.mu.Lock()
 	if snapshot.Sequence > 0 && snapshot.Sequence < c.lastP2PDiscoverySeq {
 		c.mu.Unlock()
-		c.app.logs.append(fmt.Sprintf("[p2p][nats-discovery] snapshot ignorado: sequence=%d < ultimo=%d", snapshot.Sequence, c.lastP2PDiscoverySeq))
+		c.deps.Log(fmt.Sprintf("[p2p][nats-discovery] snapshot ignorado: sequence=%d < ultimo=%d", snapshot.Sequence, c.lastP2PDiscoverySeq))
 		return
 	}
 	if snapshot.Sequence > c.lastP2PDiscoverySeq {
@@ -123,7 +123,7 @@ func (c *p2pCoordinator) ApplyP2PDiscoverySnapshot(snapshot agentconn.P2PDiscove
 	c.lastDiscoveryTick = now.UTC()
 	c.mu.Unlock()
 
-	selfAgentID := strings.TrimSpace(c.app.GetDebugConfig().AgentID)
+	selfAgentID := strings.TrimSpace(c.deps.GetDebugConfig().AgentID)
 	newPeers := make([]p2pDiscoveredPeer, 0, len(snapshot.Peers))
 	connectPeers := make([]agentconn.P2PDiscoveryPeer, 0, len(snapshot.Peers))
 	knownPeers := len(snapshot.Peers)
@@ -163,7 +163,7 @@ func (c *p2pCoordinator) ApplyP2PDiscoverySnapshot(snapshot agentconn.P2PDiscove
 		go c.refreshSinglePeer(context.Background(), peer)
 	}
 
-	c.app.logs.append(fmt.Sprintf("[p2p][nats-discovery] snapshot aplicado: sequence=%d peers=%d ttl=%ds novos=%d",
+	c.deps.Log(fmt.Sprintf("[p2p][nats-discovery] snapshot aplicado: sequence=%d peers=%d ttl=%ds novos=%d",
 		snapshot.Sequence, len(snapshot.Peers), ttlSeconds, len(newPeers)))
 }
 
@@ -195,22 +195,22 @@ func (c *p2pCoordinator) connectP2PDiscoveryPeer(peer agentconn.P2PDiscoveryPeer
 	}
 	addrInfo, err := buildAddrInfo(strings.TrimSpace(peer.PeerID), peer.Addrs, peer.Port)
 	if err != nil {
-		c.app.logs.append(fmt.Sprintf("[p2p][nats-discovery] peer ignorado (addr inválido) agentId=%s: %v", strings.TrimSpace(peer.AgentID), err))
+		c.deps.Log(fmt.Sprintf("[p2p][nats-discovery] peer ignorado (addr inválido) agentId=%s: %v", strings.TrimSpace(peer.AgentID), err))
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), p2pLibP2PHandshakeTimeout)
 	err = h.Connect(ctx, addrInfo)
 	cancel()
 	if err != nil {
-		c.app.logs.append(fmt.Sprintf("[p2p][nats-discovery] connect falhou agentId=%s peerId=%s: %v", strings.TrimSpace(peer.AgentID), strings.TrimSpace(peer.PeerID), err))
+		c.deps.Log(fmt.Sprintf("[p2p][nats-discovery] connect falhou agentId=%s peerId=%s: %v", strings.TrimSpace(peer.AgentID), strings.TrimSpace(peer.PeerID), err))
 		return
 	}
 	if ok, existing, conflict := registry.RegisterStrict(strings.TrimSpace(peer.AgentID), addrInfo.ID); conflict {
 		_ = h.Network().ClosePeer(addrInfo.ID)
-		c.app.logs.append(fmt.Sprintf("[p2p][nats-discovery] conflito de identidade agentId=%s peerAtual=%s peerRegistrado=%s", strings.TrimSpace(peer.AgentID), addrInfo.ID, existing))
+		c.deps.Log(fmt.Sprintf("[p2p][nats-discovery] conflito de identidade agentId=%s peerAtual=%s peerRegistrado=%s", strings.TrimSpace(peer.AgentID), addrInfo.ID, existing))
 		return
 	} else if !ok {
 		return
 	}
-	c.app.logs.append(fmt.Sprintf("[p2p][nats-discovery] peer conectado via libp2p: agentId=%s peerId=%s", strings.TrimSpace(peer.AgentID), strings.TrimSpace(peer.PeerID)))
+	c.deps.Log(fmt.Sprintf("[p2p][nats-discovery] peer conectado via libp2p: agentId=%s peerId=%s", strings.TrimSpace(peer.AgentID), strings.TrimSpace(peer.PeerID)))
 }

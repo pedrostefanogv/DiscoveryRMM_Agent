@@ -14,8 +14,8 @@ func (c *p2pCoordinator) collectHostLoad() P2PHostLoad {
 	}
 
 	// Reusa as métricas do heartbeat que já são coletadas via osquery.
-	if c.app != nil {
-		metrics := c.app.getHeartbeatMetrics()
+	if c.deps != nil {
+		metrics := c.deps.GetHeartbeatMetrics()
 		if metrics.CpuPercent >= 0 {
 			load.CPUPercent = metrics.CpuPercent
 		}

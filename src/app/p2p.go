@@ -43,7 +43,7 @@ type artifactSHA256CacheEntry struct {
 }
 
 type p2pCoordinator struct {
-	app *App
+	deps AppDeps
 
 	mu                sync.RWMutex
 	peers             map[string]p2pPeerState
@@ -134,14 +134,13 @@ type p2pReplicationJob struct {
 	Result       chan error
 }
 
-func newP2PCoordinator(app *App) *p2pCoordinator {
-	return &p2pCoordinator{
-		app:              app,
+func newP2PCoordinator(deps AppDeps) *p2pCoordinator {
+	c := &p2pCoordinator{
+		deps:             deps,
 		peers:            make(map[string]p2pPeerState),
 		peerArtifacts:    make(map[string]p2pPeerArtifactState),
 		peerLastAttempt:  make(map[string]time.Time),
 		replicationDedup: make(map[string]time.Time),
-		transferServer:   newP2PTransferServer(app),
 		replicationQueue: make(chan p2pReplicationJob, p2pReplicationQueueSize),
 		sha256Cache:      make(map[string]artifactSHA256CacheEntry),
 		fetchStates:      newFetchStateMap(),
@@ -149,6 +148,8 @@ func newP2PCoordinator(app *App) *p2pCoordinator {
 		servingSessions:  make(map[string]*servingSession),
 		downloadLocks:    make(map[string]*downloadLockEntry),
 	}
+	c.transferServer = newP2PTransferServer(deps, c)
+	return c
 }
 
 // lockDownload serializa downloads do mesmo artifact. Retorna uma função de
@@ -208,25 +209,25 @@ func (c *p2pCoordinator) cachedFileSHA256(path string, mtime time.Time) (string,
 }
 
 func (c *p2pCoordinator) Run(ctx context.Context) {
-	if c.app == nil {
+	if c.deps == nil {
 		return
 	}
 
-	cfg := c.app.GetP2PConfig()
+	cfg := c.deps.GetP2PConfig()
 	if !cfg.Enabled {
-		c.app.logs.append("[p2p] coordinator inativo: p2p.enabled=false")
+		c.deps.Log("[p2p] coordinator inativo: p2p.enabled=false")
 		return
 	}
 
-	c.app.logs.append("[p2p] coordinator iniciado")
+	c.deps.Log("[p2p] coordinator iniciado")
 	_ = c.touchP2PTempDir()
 	if err := c.startTransferServer(ctx); err != nil {
 		c.setLastError(err)
-		c.app.logs.append("[p2p] erro ao iniciar servidor local: " + err.Error())
+		c.deps.Log("[p2p] erro ao iniciar servidor local: " + err.Error())
 	}
 	if err := c.startDiscovery(ctx); err != nil {
 		c.setLastError(err)
-		c.app.logs.append("[p2p] erro ao iniciar descoberta de peers: " + err.Error())
+		c.deps.Log("[p2p] erro ao iniciar descoberta de peers: " + err.Error())
 	}
 	for workerIndex := 0; workerIndex < p2pReplicationWorkers; workerIndex++ {
 		go c.replicationWorker(ctx)
@@ -259,7 +260,7 @@ func (c *p2pCoordinator) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			c.app.logs.append("[p2p] coordinator finalizado")
+			c.deps.Log("[p2p] coordinator finalizado")
 			return
 		case <-discoveryTicker.C:
 			_ = c.discoveryTick(time.Now())
@@ -270,7 +271,7 @@ func (c *p2pCoordinator) Run(ctx context.Context) {
 		case <-electionTicker.C:
 			c.runPendingElections(ctx)
 		case <-cleanupTicker.C:
-			if _, err := c.app.cleanupExpiredP2PTempArtifacts(time.Now()); err != nil {
+			if _, err := c.deps.CleanupExpiredP2PTempArtifacts(time.Now()); err != nil {
 				c.setLastError(err)
 			}
 			c.gcServingSessions(time.Now())
@@ -296,7 +297,7 @@ func (c *p2pCoordinator) Run(ctx context.Context) {
 }
 
 func (c *p2pCoordinator) OnResourceSynced(resource, variant, revision string) {
-	cfg := c.app.GetP2PConfig()
+	cfg := c.deps.GetP2PConfig()
 	totalAgents := c.currentAgentsEstimate()
 	plan := buildP2PSeedPlan(totalAgents, cfg)
 
@@ -304,7 +305,7 @@ func (c *p2pCoordinator) OnResourceSynced(resource, variant, revision string) {
 	c.currentSeedPlan = plan
 	c.mu.Unlock()
 
-	c.app.logs.append(fmt.Sprintf("[p2p] plano calculado apos sync resource=%s variant=%s revision=%s totalAgents=%d seeds=%d",
+	c.deps.Log(fmt.Sprintf("[p2p] plano calculado apos sync resource=%s variant=%s revision=%s totalAgents=%d seeds=%d",
 		resource, variant, revision, plan.TotalAgents, plan.SelectedSeeds))
 	c.appendAudit("auto-distribute", "", "", "sync", true, "modo pull-only: distribuicao forçada desabilitada")
 }
@@ -317,7 +318,7 @@ func (c *p2pCoordinator) currentAgentsEstimate() int {
 }
 
 func (c *p2pCoordinator) discoveryTick(now time.Time) error {
-	cfg := c.app.GetP2PConfig()
+	cfg := c.deps.GetP2PConfig()
 	if !cfg.Enabled {
 		return nil
 	}
@@ -385,7 +386,7 @@ func (c *p2pCoordinator) setLastError(err error) {
 }
 
 func (c *p2pCoordinator) touchP2PTempDir() error {
-	dir := c.app.p2pTempDir()
+	dir := c.deps.P2PTempDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		c.setLastError(err)
 		return err
@@ -402,9 +403,9 @@ func (c *p2pCoordinator) startTransferServer(ctx context.Context) error {
 	if c.transferServer == nil {
 		return fmt.Errorf("servidor de transferência não inicializado")
 	}
-	cfg := c.app.GetP2PConfig()
-	debugCfg := c.app.GetDebugConfig()
-	if err := c.transferServer.Start(ctx, cfg, debugCfg.AgentID, c.app.p2pTempDir(), c.GetPeers); err != nil {
+	cfg := c.deps.GetP2PConfig()
+	debugCfg := c.deps.GetDebugConfig()
+	if err := c.transferServer.Start(ctx, cfg, debugCfg.AgentID, c.deps.P2PTempDir(), c.GetPeers); err != nil {
 		return err
 	}
 	c.mu.Lock()
@@ -414,12 +415,12 @@ func (c *p2pCoordinator) startTransferServer(ctx context.Context) error {
 }
 
 func (c *p2pCoordinator) startDiscovery(ctx context.Context) error {
-	cfg := c.app.GetP2PConfig()
+	cfg := c.deps.GetP2PConfig()
 	provider := pickDiscoveryProvider(cfg, c, c.transferServer)
 
 	selfHost, _ := os.Hostname()
-	selfAgentID := strings.TrimSpace(c.app.GetDebugConfig().AgentID)
-	selfClientID := strings.TrimSpace(c.app.GetAgentConfiguration().ClientID)
+	selfAgentID := strings.TrimSpace(c.deps.GetDebugConfig().AgentID)
+	selfClientID := strings.TrimSpace(c.deps.GetAgentConfiguration().ClientID)
 	baseURL := c.transferServer.BaseURL()
 	port := 0
 	if parsed, err := parsePortFromURL(baseURL); err == nil {
@@ -431,15 +432,15 @@ func (c *p2pCoordinator) startDiscovery(ctx context.Context) error {
 			// Novo peer descoberto: busca imediata do catálogo e peers dele,
 			// sem esperar o próximo tick do coordinador (propagação gossip).
 			go c.refreshSinglePeer(ctx, peer)
-			if c.app != nil {
-				go c.app.triggerZeroTouchConfigRegistrationOnPeerDiscovery(ctx, peer)
+			if c.deps != nil {
+				go c.deps.TriggerZeroTouchConfigRegistrationOnPeerDiscovery(ctx, peer)
 			}
 		}
 	}, func(message string) {
 		if strings.TrimSpace(message) == "" {
 			return
 		}
-		c.app.logs.append("[p2p][discovery] " + message)
+		c.deps.Log("[p2p][discovery] " + message)
 	}); err != nil {
 		return err
 	}
@@ -448,7 +449,7 @@ func (c *p2pCoordinator) startDiscovery(ctx context.Context) error {
 	c.discoveryProvider = provider
 	c.lastDiscoveryTick = time.Now().UTC()
 	c.mu.Unlock()
-	c.app.logs.append("[p2p] descoberta iniciada via " + provider.Name())
+	c.deps.Log("[p2p] descoberta iniciada via " + provider.Name())
 	return nil
 }
 
@@ -471,12 +472,12 @@ func (c *p2pCoordinator) upsertPeer(peer p2pDiscoveredPeer) bool {
 	c.mu.Unlock()
 
 	if !existed {
-		c.app.logs.append(fmt.Sprintf("[p2p] peer descoberto: agentId=%s source=%s addr=%s:%d", strings.TrimSpace(peer.AgentID), strings.TrimSpace(peer.Source), strings.TrimSpace(peer.Address), peer.Port))
+		c.deps.Log(fmt.Sprintf("[p2p] peer descoberto: agentId=%s source=%s addr=%s:%d", strings.TrimSpace(peer.AgentID), strings.TrimSpace(peer.Source), strings.TrimSpace(peer.Address), peer.Port))
 		return true
 	}
 
 	if strings.TrimSpace(previous.Peer.Address) != strings.TrimSpace(peer.Address) || previous.Peer.Port != peer.Port || strings.TrimSpace(previous.Peer.Source) != strings.TrimSpace(peer.Source) {
-		c.app.logs.append(fmt.Sprintf("[p2p] peer atualizado: agentId=%s source=%s addr=%s:%d", strings.TrimSpace(peer.AgentID), strings.TrimSpace(peer.Source), strings.TrimSpace(peer.Address), peer.Port))
+		c.deps.Log(fmt.Sprintf("[p2p] peer atualizado: agentId=%s source=%s addr=%s:%d", strings.TrimSpace(peer.AgentID), strings.TrimSpace(peer.Source), strings.TrimSpace(peer.Address), peer.Port))
 	}
 	return false
 }

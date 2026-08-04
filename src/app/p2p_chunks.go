@@ -71,26 +71,6 @@ func (s *p2pChunkScheduler) recordError(peerID peer.ID) {
 	s.errorCounts[peerID.String()]++
 }
 
-// P2PChunkManifest describes how an artifact is divided for swarm download.
-type P2PChunkManifest struct {
-	ArtifactID   string     `json:"artifactId"`
-	ArtifactName string     `json:"artifactName"`
-	TotalSize    int64      `json:"totalSize"`
-	ChunkSize    int64      `json:"chunkSize"`
-	TotalChunks  int        `json:"totalChunks"`
-	SHA256       string     `json:"sha256"`
-	SourceMTime  int64      `json:"sourceMtime"` // UnixNano do mtime do arquivo fonte
-	Chunks       []P2PChunk `json:"chunks"`
-}
-
-// P2PChunk describes a single chunk within a manifest.
-type P2PChunk struct {
-	Index  int    `json:"index"`
-	Offset int64  `json:"offset"`
-	Size   int64  `json:"size"`
-	SHA256 string `json:"sha256"`
-}
-
 // buildChunkManifest computes a P2PChunkManifest for a file on disk.
 // It reads the file once: per-chunk SHA256 and full-file SHA256 in one pass.
 //

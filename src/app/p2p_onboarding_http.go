@@ -29,7 +29,7 @@ func (s *p2pTransferServer) handleP2POnboard(w http.ResponseWriter, r *http.Requ
 // provisionamento assinada. Requer que este agente esteja configurado e que a
 // feature DiscoveryEnabled esteja ativa na configuração do servidor.
 func (s *p2pTransferServer) handleOnboardOffer(w http.ResponseWriter, r *http.Request) {
-	if s.app == nil {
+	if s.deps == nil {
 		http.Error(w, "unavailable", http.StatusServiceUnavailable)
 		return
 	}
@@ -39,7 +39,7 @@ func (s *p2pTransferServer) handleOnboardOffer(w http.ResponseWriter, r *http.Re
 	}
 
 	// Respeitar feature flag DiscoveryEnabled (controlada pelo servidor).
-	agentCfg := s.app.GetAgentConfiguration()
+	agentCfg := s.deps.GetAgentConfiguration()
 	if agentCfg.DiscoveryEnabled != nil && !*agentCfg.DiscoveryEnabled {
 		http.Error(w, "zero-touch config registration disabled", http.StatusForbidden)
 		return
@@ -50,15 +50,15 @@ func (s *p2pTransferServer) handleOnboardOffer(w http.ResponseWriter, r *http.Re
 	s.mu.RUnlock()
 
 	// Buscar token de provisionamento temporário na API.
-	deployKey, expiresAt, err := s.app.requestProvisioningToken(r.Context())
+	deployKey, expiresAt, err := s.deps.RequestProvisioningToken(r.Context())
 	if err != nil {
-		s.app.logs.append("[zero-touch] falha ao obter provisioning token: " + err.Error())
+		s.deps.Log("[zero-touch] falha ao obter provisioning token: " + err.Error())
 		http.Error(w, "provisioning token unavailable", http.StatusServiceUnavailable)
-		recordAutoProvisioningEvent(s.app, agentID, "", false, "provisioning token error: "+err.Error())
+		recordAutoProvisioningEvent(s.coord, agentID, "", false, "provisioning token error: "+err.Error())
 		return
 	}
 	keyLen := len(deployKey)
-	s.app.logs.append(fmt.Sprintf("[zero-touch] provisioning token obtido (len=%d, expiresAt=%s)", keyLen, expiresAt))
+	s.deps.Log(fmt.Sprintf("[zero-touch] provisioning token obtido (len=%d, expiresAt=%s)", keyLen, expiresAt))
 
 	// Construir URL canônica (evitar inst.ServerURL legado).
 	// Usa inst.APIScheme() que deriva o scheme de ApiInsecure (campo canônico),
@@ -73,7 +73,7 @@ func (s *p2pTransferServer) handleOnboardOffer(w http.ResponseWriter, r *http.Re
 	}
 	if serverURL == "" {
 		http.Error(w, "server url not configured", http.StatusInternalServerError)
-		recordAutoProvisioningEvent(s.app, agentID, "", false, "server url missing")
+		recordAutoProvisioningEvent(s.coord, agentID, "", false, "server url missing")
 		return
 	}
 
@@ -88,7 +88,7 @@ func (s *p2pTransferServer) handleOnboardOffer(w http.ResponseWriter, r *http.Re
 	offer, err := BuildOnboardingOffer(agentID, serverURL, deployKey, ttl)
 	if err != nil {
 		http.Error(w, "failed to build offer", http.StatusInternalServerError)
-		recordAutoProvisioningEvent(s.app, agentID, serverURL, false, "build offer error: "+err.Error())
+		recordAutoProvisioningEvent(s.coord, agentID, serverURL, false, "build offer error: "+err.Error())
 		return
 	}
 
@@ -96,11 +96,11 @@ func (s *p2pTransferServer) handleOnboardOffer(w http.ResponseWriter, r *http.Re
 	_ = json.NewEncoder(w).Encode(offer)
 
 	// Registrar evento de auditoria (lado provisionador).
-	recordAutoProvisioningEvent(s.app, agentID, serverURL, true, "offer emitida")
+	recordAutoProvisioningEvent(s.coord, agentID, serverURL, true, "offer emitida")
 }
 
 func (s *p2pTransferServer) handleOnboardReceive(w http.ResponseWriter, r *http.Request) {
-	if s.app == nil {
+	if s.deps == nil {
 		http.Error(w, "unavailable", http.StatusServiceUnavailable)
 		return
 	}
@@ -113,7 +113,7 @@ func (s *p2pTransferServer) handleOnboardReceive(w http.ResponseWriter, r *http.
 		http.Error(w, "invalid payload", http.StatusBadRequest)
 		return
 	}
-	result, err := s.app.applyOnboardingOffer(offer)
+	result, err := s.deps.ApplyOnboardingOffer(offer)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 		return
@@ -127,8 +127,8 @@ func (s *p2pTransferServer) handleOnboardReceive(w http.ResponseWriter, r *http.
 
 // recordAutoProvisioningEvent regista um evento de auditoria no coordinator
 // pelo lado do provisionador (agente configurado que entregou uma oferta).
-func recordAutoProvisioningEvent(a *App, sourceAgentID, serverURL string, success bool, msg string) {
-	if a == nil || a.p2pCoord == nil {
+func recordAutoProvisioningEvent(c *p2pCoordinator, sourceAgentID, serverURL string, success bool, msg string) {
+	if c == nil {
 		return
 	}
 	event := P2POnboardingAuditEvent{
@@ -138,7 +138,6 @@ func recordAutoProvisioningEvent(a *App, sourceAgentID, serverURL string, succes
 		Success:       success,
 		Message:       msg,
 	}
-	c := a.p2pCoord
 	c.autoProvisionedMu.Lock()
 	if success {
 		c.autoProvisionedCount++

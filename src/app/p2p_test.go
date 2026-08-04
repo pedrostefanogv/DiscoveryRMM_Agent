@@ -88,7 +88,7 @@ func TestListAuditEventsFiltered(t *testing.T) {
 func TestAppendAuditWritesAgentLogLine(t *testing.T) {
 	a := &App{}
 	a.logs.Buffer = logs.New()
-	c := &p2pCoordinator{app: a}
+	c := &p2pCoordinator{deps: a}
 
 	c.appendAudit("pull", "agent.bin", "peer-a", "libp2p", false, "falha simulada")
 
@@ -106,7 +106,7 @@ func TestAppendAuditWritesAgentLogLine(t *testing.T) {
 
 func TestDownloadArtifactFromPeerAuditsFailureWhenPeerNotFound(t *testing.T) {
 	a := &App{}
-	c := &p2pCoordinator{app: a, peers: map[string]p2pPeerState{}, peerArtifacts: map[string]p2pPeerArtifactState{}}
+	c := &p2pCoordinator{deps: a, peers: map[string]p2pPeerState{}, peerArtifacts: map[string]p2pPeerArtifactState{}}
 
 	_, err := c.DownloadArtifactFromPeer(context.Background(), "agent.bin", "peer-missing")
 	if err == nil {
@@ -270,7 +270,7 @@ func TestBuildLANProbePorts_PrioritizesSelfAndRangeStart(t *testing.T) {
 
 func TestApplyP2PDiscoverySnapshot_UsesTTLAndSequence(t *testing.T) {
 	c := &p2pCoordinator{
-		app:   &App{},
+		deps:  &App{},
 		peers: make(map[string]p2pPeerState),
 	}
 	c.ApplyP2PDiscoverySnapshot(agentconn.P2PDiscoverySnapshot{
@@ -484,7 +484,7 @@ func TestRequestOnboardingFromPeersNilStateDoesNotPanic(t *testing.T) {
 
 	a := &App{}
 	a.p2pCoord = &p2pCoordinator{
-		app: a,
+		deps: a,
 		peers: map[string]p2pPeerState{
 			"peer-a": {
 				Peer:        p2pDiscoveredPeer{AgentID: "peer-a", Address: host, Port: port},

@@ -145,10 +145,10 @@ func decideDownloadParallelism(load TransferLoadSnapshot) int {
 
 // dynamicMaxParallelChunks retorna o número de chunks paralelos com base na carga atual do host.
 func (c *p2pCoordinator) dynamicMaxParallelChunks() int {
-	if c.app == nil {
+	if c.deps == nil {
 		return maxParallelChunks
 	}
-	metrics := c.app.getHeartbeatMetrics()
+	metrics := c.deps.GetHeartbeatMetrics()
 	snapshot := TransferLoadSnapshot{
 		CPUPercent:      math.Max(metrics.CpuPercent, 0),
 		MemoryPercent:   math.Max(metrics.MemoryPercent, 0),
@@ -174,7 +174,7 @@ func (c *p2pCoordinator) collectOrphanArtifacts() {
 		return
 	}
 
-	tempDir := c.app.p2pTempDir()
+	tempDir := c.deps.P2PTempDir()
 	removed := 0
 	for _, entry := range entries {
 		if entry.IsDir() {
@@ -197,8 +197,8 @@ func (c *p2pCoordinator) collectOrphanArtifacts() {
 		}
 	}
 
-	if removed > 0 && c.app != nil {
-		c.app.logs.append(fmt.Sprintf("[p2p][gc] %d manifest(s) orfao(s) removido(s)", removed))
+	if removed > 0 && c.deps != nil {
+		c.deps.Log(fmt.Sprintf("[p2p][gc] %d manifest(s) orfao(s) removido(s)", removed))
 	}
 }
 
@@ -206,7 +206,7 @@ func (c *p2pCoordinator) collectOrphanArtifacts() {
 
 // restartProvider reinicia o provider de descoberta após mudança de configuração.
 // Usado após zero-touch config registration para entrar na malha correta.
-// O clientId é lido diretamente de c.app.GetAgentConfiguration() via startDiscovery.
+// O clientId é lido diretamente de c.deps.GetAgentConfiguration() via startDiscovery.
 func (c *p2pCoordinator) restartProvider() {
 	c.mu.Lock()
 	oldProvider := c.discoveryProvider
@@ -223,8 +223,8 @@ func (c *p2pCoordinator) restartProvider() {
 
 	// Start new provider — clientId será lido da config agente por startDiscovery.
 	ctx := context.Background()
-	if c.app != nil && c.app.ctx != nil {
-		ctx = c.app.ctx
+	if c.deps != nil && c.deps.Context() != nil {
+		ctx = c.deps.Context()
 	}
 
 	_ = c.startDiscovery(ctx)

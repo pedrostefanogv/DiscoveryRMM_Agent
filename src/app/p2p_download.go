@@ -31,7 +31,7 @@ func (c *p2pCoordinator) DownloadArtifactFromPeer(ctx context.Context, artifactN
 		return P2PArtifactView{}, err
 	}
 
-	requesterID := strings.TrimSpace(c.app.GetDebugConfig().AgentID)
+	requesterID := strings.TrimSpace(c.deps.GetDebugConfig().AgentID)
 	if requesterID == "" {
 		requesterID = "peer-local"
 	}
@@ -56,7 +56,7 @@ func (c *p2pCoordinator) DownloadArtifactFromPeer(ctx context.Context, artifactN
 			return P2PArtifactView{}, err
 		}
 
-		destDir := c.app.p2pTempDir()
+		destDir := c.deps.P2PTempDir()
 		sched := newP2PChunkScheduler()
 		lp2pPeers := []libp2pPeer{{agentID: sourcePeerID, peerID: peerID}}
 		// Serializa downloads do mesmo artifact para não corromper o partsDir.
@@ -87,7 +87,7 @@ func (c *p2pCoordinator) DownloadArtifactFromPeer(ctx context.Context, artifactN
 				})
 			},
 			func(msg string) {
-				c.app.logs.append(msg)
+				c.deps.Log(msg)
 			})
 		unlock()
 		if err != nil {
@@ -136,7 +136,7 @@ func (c *p2pCoordinator) downloadArtifactSwarm(ctx context.Context, artifactName
 		return P2PArtifactView{}, err
 	}
 
-	requesterID := strings.TrimSpace(c.app.GetDebugConfig().AgentID)
+	requesterID := strings.TrimSpace(c.deps.GetDebugConfig().AgentID)
 	if requesterID == "" {
 		requesterID = "peer-local"
 	}
@@ -206,7 +206,7 @@ func (c *p2pCoordinator) downloadArtifactSwarm(ctx context.Context, artifactName
 			}
 			if !strings.EqualFold(strings.TrimSpace(pm.SHA256), strings.TrimSpace(manifest.SHA256)) ||
 				pm.TotalSize != manifest.TotalSize {
-				c.app.logs.append(fmt.Sprintf("[p2p][swarm] peer %s com versao divergente do artifact %s (sha=%s size=%d), removido do swarm",
+				c.deps.Log(fmt.Sprintf("[p2p][swarm] peer %s com versao divergente do artifact %s (sha=%s size=%d), removido do swarm",
 					pe.peerID, artifactName, pm.SHA256, pm.TotalSize))
 				continue
 			}
@@ -220,7 +220,7 @@ func (c *p2pCoordinator) downloadArtifactSwarm(ctx context.Context, artifactName
 		}
 	}
 
-	destDir := c.app.p2pTempDir()
+	destDir := c.deps.P2PTempDir()
 	sched := newP2PChunkScheduler()
 	lp2pPeers := make([]libp2pPeer, len(peerEntries))
 	for i, pe := range peerEntries {
@@ -258,7 +258,7 @@ func (c *p2pCoordinator) downloadArtifactSwarm(ctx context.Context, artifactName
 			})
 		},
 		func(msg string) {
-			c.app.logs.append(msg)
+			c.deps.Log(msg)
 		})
 	unlock()
 	if err != nil {

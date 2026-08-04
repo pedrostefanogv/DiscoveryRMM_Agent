@@ -26,10 +26,10 @@ type p2pTransferProgress struct {
 
 // emitTransferProgress emite um evento Wails p2p:transfer-progress para o frontend.
 func (c *p2pCoordinator) emitTransferProgress(p p2pTransferProgress) {
-	if c.app == nil {
+	if c.deps == nil {
 		return
 	}
-	c.app.EmitEvent("p2p:transfer-progress", p)
+	c.deps.EmitEvent("p2p:transfer-progress", p)
 }
 
 // emitTransferDone emite evento de conclusão e limpa o progresso.

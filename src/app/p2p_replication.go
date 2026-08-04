@@ -35,7 +35,7 @@ func (c *p2pCoordinator) replicateArtifactToPeerNow(ctx context.Context, artifac
 				req := libp2pReplicateRequest{
 					ArtifactName:   access.ArtifactName,
 					ChecksumSHA256: access.ChecksumSHA256,
-					SourceAgentID:  strings.TrimSpace(c.app.GetDebugConfig().AgentID),
+					SourceAgentID:  strings.TrimSpace(c.deps.GetDebugConfig().AgentID),
 				}
 				if err := json.NewEncoder(stream).Encode(req); err != nil {
 					stream.Close()
@@ -49,7 +49,7 @@ func (c *p2pCoordinator) replicateArtifactToPeerNow(ctx context.Context, artifac
 					return fmt.Errorf("falha ao decodificar resposta de replicação: %w", err)
 				}
 				if closeErr := stream.Close(); closeErr != nil {
-					c.app.logs.append("[p2p] aviso ao fechar stream de replicação: " + closeErr.Error())
+					c.deps.Log("[p2p] aviso ao fechar stream de replicação: " + closeErr.Error())
 				}
 				c.recordReplicationResult(true)
 				return nil
@@ -206,8 +206,8 @@ func (c *p2pCoordinator) appendAudit(action, artifactName, peerAgentID, source s
 	}
 	c.mu.Unlock()
 
-	if c.app != nil {
-		c.app.logs.append(formatP2PAuditLogLine(event))
+	if c.deps != nil {
+		c.deps.Log(formatP2PAuditLogLine(event))
 	}
 }
 

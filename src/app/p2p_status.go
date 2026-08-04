@@ -10,9 +10,9 @@ import (
 )
 
 func (c *p2pCoordinator) GetStatus() P2PDebugStatus {
-	cfg := c.app.GetP2PConfig()
+	cfg := c.deps.GetP2PConfig()
 	c.mu.RLock()
-	active := c.app.runtimeFlags.DebugMode && cfg.Enabled
+	active := c.deps.DebugMode() && cfg.Enabled
 	listenAddress := c.listenAddress
 	if strings.TrimSpace(listenAddress) == "" && c.transferServer != nil {
 		listenAddress = c.transferServer.BaseURL()
@@ -27,7 +27,7 @@ func (c *p2pCoordinator) GetStatus() P2PDebugStatus {
 		DiscoveryMode:        cfg.DiscoveryMode,
 		KnownPeers:           c.knownPeers,
 		ListenAddress:        listenAddress,
-		TempDir:              c.app.p2pTempDir(),
+		TempDir:              c.deps.P2PTempDir(),
 		TempTTLHours:         cfg.TempTTLHours,
 		LastCleanupUTC:       formatTimeRFC3339(c.lastCleanupUTC),
 		LastDiscoveryTickUTC: formatTimeRFC3339(lastDiscoveryTick),
@@ -280,7 +280,7 @@ func (c *p2pCoordinator) InvalidatePeerArtifact(peerAgentID, artifactName string
 		filtered = append(filtered, a)
 	}
 	if len(filtered) < len(state.Artifacts) {
-		c.app.logs.append(fmt.Sprintf("[p2p][cache] artifact %s removido do cache do peer %s (stale)", artifactName, peerAgentID))
+		c.deps.Log(fmt.Sprintf("[p2p][cache] artifact %s removido do cache do peer %s (stale)", artifactName, peerAgentID))
 	}
 	state.Artifacts = filtered
 	state.LastUpdatedUTC = time.Now().UTC()

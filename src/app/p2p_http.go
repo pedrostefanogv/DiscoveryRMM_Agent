@@ -32,7 +32,8 @@ const (
 )
 
 type p2pTransferServer struct {
-	app *App
+	deps  AppDeps
+	coord *p2pCoordinator
 
 	mu           sync.RWMutex
 	secret       []byte
@@ -52,8 +53,8 @@ type p2pTokenPayload struct {
 	Exp      int64  `json:"e"`
 }
 
-func newP2PTransferServer(app *App) *p2pTransferServer {
-	return &p2pTransferServer{app: app}
+func newP2PTransferServer(deps AppDeps, coord *p2pCoordinator) *p2pTransferServer {
+	return &p2pTransferServer{deps: deps, coord: coord}
 }
 
 func (s *p2pTransferServer) Start(ctx context.Context, cfg P2PConfig, agentID, tempDir string, peerSnapshot func() []P2PPeerView) error {
@@ -112,8 +113,8 @@ func (s *p2pTransferServer) Start(ctx context.Context, cfg P2PConfig, agentID, t
 		_ = httpServer.Serve(ln)
 	}()
 
-	if s.app != nil {
-		s.app.logs.append("[p2p] servidor HTTP local ativo em " + baseURL)
+	if s.deps != nil {
+		s.deps.Log("[p2p] servidor HTTP local ativo em " + baseURL)
 	}
 
 	return nil
@@ -183,10 +184,10 @@ func (s *p2pTransferServer) BuildArtifactAccess(artifactName, targetPeerID strin
 }
 
 func (s *p2pTransferServer) localArtifactsSnapshot() []P2PArtifactView {
-	if s.app == nil || s.app.p2pCoord == nil {
+	if s.coord == nil {
 		return []P2PArtifactView{}
 	}
-	artifacts, err := s.app.p2pCoord.ListArtifacts()
+	artifacts, err := s.coord.ListArtifacts()
 	if err != nil {
 		return []P2PArtifactView{}
 	}

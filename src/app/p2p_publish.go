@@ -23,7 +23,7 @@ const (
 )
 
 func (c *p2pCoordinator) ListArtifacts() ([]P2PArtifactView, error) {
-	dir := c.app.p2pTempDir()
+	dir := c.deps.P2PTempDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
@@ -75,7 +75,7 @@ func (c *p2pCoordinator) deleteArtifact(artifactName string) error {
 		return fmt.Errorf("nome de artifact inválido")
 	}
 
-	dir := c.app.p2pTempDir()
+	dir := c.deps.P2PTempDir()
 	path := filepath.Join(dir, artifactName)
 
 	// Remove o arquivo.
@@ -99,7 +99,7 @@ func (c *p2pCoordinator) deleteArtifact(artifactName string) error {
 	delete(c.sha256Cache, path)
 	c.sha256CacheMu.Unlock()
 
-	c.app.logs.append(fmt.Sprintf("[p2p] artifact apagado: %s", artifactName))
+	c.deps.Log(fmt.Sprintf("[p2p] artifact apagado: %s", artifactName))
 	return nil
 }
 
@@ -108,7 +108,7 @@ func (c *p2pCoordinator) PublishTestArtifact(artifactName, content string) (P2PA
 	if artifactName == "" {
 		return P2PArtifactView{}, fmt.Errorf("nome de artifact inválido")
 	}
-	dir := c.app.p2pTempDir()
+	dir := c.deps.P2PTempDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return P2PArtifactView{}, err
 	}
@@ -158,7 +158,7 @@ func (c *p2pCoordinator) PublishFile(sourcePath string) (P2PArtifactView, error)
 		return P2PArtifactView{}, err
 	}
 
-	dir := c.app.p2pTempDir()
+	dir := c.deps.P2PTempDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return P2PArtifactView{}, err
 	}
@@ -222,7 +222,7 @@ func (c *p2pCoordinator) PublishFileWithIDAndVersion(sourcePath string, artifact
 		return P2PArtifactView{}, err
 	}
 
-	dir := c.app.p2pTempDir()
+	dir := c.deps.P2PTempDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return P2PArtifactView{}, err
 	}
@@ -300,7 +300,7 @@ func (c *p2pCoordinator) publishFileSinglePass(sourcePath, targetPath, artifactN
 	}
 
 	var chunkSize int64 = defaultChunkSizeBytes
-	if cfg := c.app.GetP2PConfig(); cfg.ChunkSizeBytes > 0 {
+	if cfg := c.deps.GetP2PConfig(); cfg.ChunkSizeBytes > 0 {
 		chunkSize = cfg.ChunkSizeBytes
 	}
 
@@ -428,10 +428,10 @@ func (c *p2pCoordinator) cacheManifestAfterSinglePass(artifactName string, manif
 		return
 	}
 	if err := saveCachedManifest(manifestDir, artifactName, manifest); err != nil {
-		c.app.logs.append(fmt.Sprintf("[p2p] aviso: falha ao salvar manifest para %s: %v", artifactName, err))
+		c.deps.Log(fmt.Sprintf("[p2p] aviso: falha ao salvar manifest para %s: %v", artifactName, err))
 		return
 	}
-	c.app.logs.append(fmt.Sprintf("[p2p] manifest gerado: %s chunks=%d size=%d", artifactName, manifest.TotalChunks, manifest.TotalSize))
+	c.deps.Log(fmt.Sprintf("[p2p] manifest gerado: %s chunks=%d size=%d", artifactName, manifest.TotalChunks, manifest.TotalSize))
 }
 
 // p2pPublishProgress representa o progresso de importação de um arquivo para o P2P.
@@ -446,14 +446,14 @@ type p2pPublishProgress struct {
 
 // emitPublishProgress emite evento Wails p2p:publish:progress para o frontend.
 func (c *p2pCoordinator) emitPublishProgress(artifactName string, processed, total int64, done bool, errMsg string) {
-	if c.app == nil {
+	if c.deps == nil {
 		return
 	}
 	percent := 0
 	if total > 0 {
 		percent = int(processed * 100 / total)
 	}
-	c.app.EmitEvent("p2p:publish:progress", p2pPublishProgress{
+	c.deps.EmitEvent("p2p:publish:progress", p2pPublishProgress{
 		ArtifactName:   artifactName,
 		BytesProcessed: processed,
 		TotalBytes:     total,
@@ -490,30 +490,30 @@ func (c *p2pCoordinator) generateManifestEager(path, artifactName string) {
 
 	artifactID := CanonicalArtifactID("", artifactName, "")
 	var chunkSize int64 = defaultChunkSizeBytes
-	if cfg := c.app.GetP2PConfig(); cfg.ChunkSizeBytes > 0 {
+	if cfg := c.deps.GetP2PConfig(); cfg.ChunkSizeBytes > 0 {
 		chunkSize = cfg.ChunkSizeBytes
 	}
 	cpuFn := func() float64 { return c.cpuSampler.Sample() }
 	ctx := context.Background()
-	if c.app.ctx != nil {
-		ctx = c.app.ctx
+	if c.deps.Context() != nil {
+		ctx = c.deps.Context()
 	}
 	manifest, err := buildChunkManifest(ctx, path, artifactID, chunkSize, nil, cpuFn)
 	if err != nil {
-		c.app.logs.append(fmt.Sprintf("[p2p] aviso: falha ao gerar manifest eager para %s: %v", artifactName, err))
+		c.deps.Log(fmt.Sprintf("[p2p] aviso: falha ao gerar manifest eager para %s: %v", artifactName, err))
 		return
 	}
 	if err := saveCachedManifest(manifestDir, artifactName, manifest); err != nil {
-		c.app.logs.append(fmt.Sprintf("[p2p] aviso: falha ao salvar manifest eager para %s: %v", artifactName, err))
+		c.deps.Log(fmt.Sprintf("[p2p] aviso: falha ao salvar manifest eager para %s: %v", artifactName, err))
 		return
 	}
-	c.app.logs.append(fmt.Sprintf("[p2p] manifest eager gerado: %s chunks=%d size=%d", artifactName, manifest.TotalChunks, manifest.TotalSize))
+	c.deps.Log(fmt.Sprintf("[p2p] manifest eager gerado: %s chunks=%d size=%d", artifactName, manifest.TotalChunks, manifest.TotalSize))
 }
 
 // CleanupStaleArtifacts remove artifacts do diretório local que não foram
 // acessados/modificados há mais de 7 dias.
 func (c *p2pCoordinator) CleanupStaleArtifacts() {
-	dir := c.app.p2pTempDir()
+	dir := c.deps.P2PTempDir()
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return
@@ -536,7 +536,7 @@ func (c *p2pCoordinator) CleanupStaleArtifacts() {
 		}
 	}
 	if removed > 0 {
-		c.app.logs.append(fmt.Sprintf("[p2p] cleanup: %d artifacts removidos (mais de 7 dias)", removed))
+		c.deps.Log(fmt.Sprintf("[p2p] cleanup: %d artifacts removidos (mais de 7 dias)", removed))
 	}
 }
 

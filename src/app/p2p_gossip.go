@@ -50,7 +50,7 @@ func (c *p2pCoordinator) refreshSinglePeer(ctx context.Context, peer p2pDiscover
 // applyGossipResponse processa uma resposta de gossip (peers + artifacts) e atualiza o estado do coordinator.
 // Ignora peers com clientId divergente quando o clientId local está definido.
 func (c *p2pCoordinator) applyGossipResponse(sourceAgentID string, knownPeers []P2PPeerView, artifacts []P2PArtifactView, source string) {
-	localClientID := normalizeClientID(strings.TrimSpace(c.app.GetAgentConfiguration().ClientID))
+	localClientID := normalizeClientID(strings.TrimSpace(c.deps.GetAgentConfiguration().ClientID))
 	for _, p := range knownPeers {
 		// Se o peer gossip trouxe clientId e ele diverge do local, ignora.
 		if localClientID != "" && strings.TrimSpace(p.ClientID) != "" &&
@@ -69,7 +69,7 @@ func (c *p2pCoordinator) applyGossipResponse(sourceAgentID string, knownPeers []
 	}
 	if len(artifacts) > 0 {
 		c.upsertPeerArtifacts(sourceAgentID, artifacts, source)
-		c.app.logs.append(fmt.Sprintf("[p2p][gossip] peer=%s artifacts=%d transitivos=%d",
+		c.deps.Log(fmt.Sprintf("[p2p][gossip] peer=%s artifacts=%d transitivos=%d",
 			strings.TrimSpace(sourceAgentID), len(artifacts), len(knownPeers)))
 	}
 }
@@ -102,7 +102,7 @@ func (c *p2pCoordinator) RefreshPeerArtifactIndex(ctx context.Context, source st
 					}
 					c.applyGossipResponse(peer.AgentID, resp.KnownPeers, resp.Artifacts, catalogSource)
 					if len(resp.Artifacts) > 0 {
-						c.app.logs.append(fmt.Sprintf("[p2p] catálogo via libp2p: peer=%s artifacts=%d source=%s",
+						c.deps.Log(fmt.Sprintf("[p2p] catálogo via libp2p: peer=%s artifacts=%d source=%s",
 							strings.TrimSpace(peer.AgentID), len(resp.Artifacts), catalogSource))
 					}
 					continue
@@ -144,7 +144,7 @@ func (c *p2pCoordinator) upsertPeerArtifacts(peerAgentID string, artifacts []P2P
 							}
 							return s
 						}
-						c.app.logs.append(fmt.Sprintf("[p2p][audit] checksum divergente artifactId=%s peer=%s: anterior=%s... novo=%s... IGNORADO",
+						c.deps.Log(fmt.Sprintf("[p2p][audit] checksum divergente artifactId=%s peer=%s: anterior=%s... novo=%s... IGNORADO",
 							canonicalID, peerAgentID, short(pa.ChecksumSHA256), short(newChecksum)))
 						skip = true
 						break

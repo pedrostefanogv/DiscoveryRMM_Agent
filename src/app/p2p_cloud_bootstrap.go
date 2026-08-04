@@ -50,12 +50,12 @@ type p2pCloudBootstrapResponse struct {
 //
 // Retorna a quantidade de peers retornada pela API.
 func (c *p2pCoordinator) runCloudBootstrap(ctx context.Context) (int, error) {
-	cfg := c.app.GetP2PConfig()
+	cfg := c.deps.GetP2PConfig()
 	if !cfg.BootstrapConfig.CloudBootstrapEnabled {
 		return 0, fmt.Errorf("cloud bootstrap P2P desabilitado")
 	}
 
-	debugCfg := c.app.GetDebugConfig()
+	debugCfg := c.deps.GetDebugConfig()
 	agentID := strings.TrimSpace(debugCfg.AgentID)
 	authToken := strings.TrimSpace(debugCfg.AuthToken)
 	apiScheme := debugCfg.APIScheme()
@@ -63,14 +63,14 @@ func (c *p2pCoordinator) runCloudBootstrap(ctx context.Context) (int, error) {
 
 	if agentID == "" || authToken == "" || apiServer == "" {
 		err := fmt.Errorf("configuração incompleta: agentId, authToken ou apiServer ausentes")
-		c.app.logs.append("[p2p][cloud-bootstrap] " + err.Error())
+		c.deps.Log("[p2p][cloud-bootstrap] " + err.Error())
 		return 0, err
 	}
 
 	h, _ := c.libp2pHostAndRegistry()
 	if h == nil {
 		err := fmt.Errorf("host libp2p não disponível")
-		c.app.logs.append("[p2p][cloud-bootstrap] " + err.Error())
+		c.deps.Log("[p2p][cloud-bootstrap] " + err.Error())
 		return 0, err
 	}
 
@@ -88,7 +88,7 @@ func (c *p2pCoordinator) runCloudBootstrap(ctx context.Context) (int, error) {
 		}
 	}
 
-	localClientID := normalizeClientID(strings.TrimSpace(c.app.GetAgentConfiguration().ClientID))
+	localClientID := normalizeClientID(strings.TrimSpace(c.deps.GetAgentConfiguration().ClientID))
 
 	payload := p2pCloudBootstrapRequest{
 		AgentID:  agentID,
@@ -100,13 +100,13 @@ func (c *p2pCoordinator) runCloudBootstrap(ctx context.Context) (int, error) {
 
 	resp, err := c.callCloudBootstrapAPI(ctx, apiScheme, apiServer, authToken, agentID, payload)
 	if err != nil {
-		c.app.logs.append("[p2p][cloud-bootstrap] erro ao chamar API: " + err.Error())
+		c.deps.Log("[p2p][cloud-bootstrap] erro ao chamar API: " + err.Error())
 		// Mesmo com falha na API, persistir o estado atual do cache (conexões locais já limpas).
 		_ = saveP2PPeerCache(cachedPeers)
 		return 0, err
 	}
 
-	c.app.logs.append(fmt.Sprintf("[p2p][cloud-bootstrap] API retornou %d peer(s)", len(resp.Peers)))
+	c.deps.Log(fmt.Sprintf("[p2p][cloud-bootstrap] API retornou %d peer(s)", len(resp.Peers)))
 	peerCount := len(resp.Peers)
 
 	// Conectar nos peers retornados pela API e atualizar cache.
@@ -118,7 +118,7 @@ func (c *p2pCoordinator) runCloudBootstrap(ctx context.Context) (int, error) {
 
 		addrInfo, err := buildAddrInfo(rp.PeerID, rp.Addrs, rp.Port)
 		if err != nil {
-			c.app.logs.append(fmt.Sprintf("[p2p][cloud-bootstrap] peer ignorado (addr inválido) peerId=%s: %v", rp.PeerID, err))
+			c.deps.Log(fmt.Sprintf("[p2p][cloud-bootstrap] peer ignorado (addr inválido) peerId=%s: %v", rp.PeerID, err))
 			continue
 		}
 
@@ -127,12 +127,12 @@ func (c *p2pCoordinator) runCloudBootstrap(ctx context.Context) (int, error) {
 		cancel()
 
 		if err != nil {
-			c.app.logs.append(fmt.Sprintf("[p2p][cloud-bootstrap] connect falhou peerId=%s: %v", rp.PeerID, err))
+			c.deps.Log(fmt.Sprintf("[p2p][cloud-bootstrap] connect falhou peerId=%s: %v", rp.PeerID, err))
 			cachedPeers = removeP2PPeerCacheEntry(cachedPeers, rp.PeerID)
 			continue
 		}
 
-		c.app.logs.append(fmt.Sprintf("[p2p][cloud-bootstrap] conectado peerId=%s addrs=%v", rp.PeerID, rp.Addrs))
+		c.deps.Log(fmt.Sprintf("[p2p][cloud-bootstrap] conectado peerId=%s addrs=%v", rp.PeerID, rp.Addrs))
 		cachedPeers = upsertP2PPeerCacheEntry(cachedPeers, p2pCachedPeer{
 			PeerID:     rp.PeerID,
 			Addrs:      rp.Addrs,
@@ -142,7 +142,7 @@ func (c *p2pCoordinator) runCloudBootstrap(ctx context.Context) (int, error) {
 	}
 
 	if err := saveP2PPeerCache(cachedPeers); err != nil {
-		c.app.logs.append("[p2p][cloud-bootstrap] erro ao salvar cache: " + err.Error())
+		c.deps.Log("[p2p][cloud-bootstrap] erro ao salvar cache: " + err.Error())
 		return peerCount, err
 	}
 	return peerCount, nil
@@ -174,14 +174,14 @@ func (c *p2pCoordinator) connectCachedPeers(ctx context.Context, h interface {
 			// temporárias de rede sem descartar peers que voltam a responder.
 			cp.FailCount++
 			if cp.FailCount >= p2pCachedPeerMaxFailures {
-				c.app.logs.append(fmt.Sprintf("[p2p][cloud-bootstrap] cache: connect falhou peerId=%s (removendo após %d falhas consecutivas): %v", cp.PeerID, cp.FailCount, err))
+				c.deps.Log(fmt.Sprintf("[p2p][cloud-bootstrap] cache: connect falhou peerId=%s (removendo após %d falhas consecutivas): %v", cp.PeerID, cp.FailCount, err))
 				continue // não adiciona ao slice válido (remoção implícita)
 			}
-			c.app.logs.append(fmt.Sprintf("[p2p][cloud-bootstrap] cache: connect falhou peerId=%s (falha %d/%d, mantendo no cache): %v", cp.PeerID, cp.FailCount, p2pCachedPeerMaxFailures, err))
+			c.deps.Log(fmt.Sprintf("[p2p][cloud-bootstrap] cache: connect falhou peerId=%s (falha %d/%d, mantendo no cache): %v", cp.PeerID, cp.FailCount, p2pCachedPeerMaxFailures, err))
 			valid = append(valid, cp)
 			continue
 		}
-		c.app.logs.append(fmt.Sprintf("[p2p][cloud-bootstrap] cache: reconectado peerId=%s", cp.PeerID))
+		c.deps.Log(fmt.Sprintf("[p2p][cloud-bootstrap] cache: reconectado peerId=%s", cp.PeerID))
 		cp.LastSeenAt = time.Now().UTC()
 		cp.FailCount = 0 // reset em sucesso
 		valid = append(valid, cp)

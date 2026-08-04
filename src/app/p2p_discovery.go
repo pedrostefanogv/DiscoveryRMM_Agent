@@ -2,27 +2,13 @@ package app
 
 import (
 	"context"
-	"strings"
+
+	"discovery/app/p2pmeta"
 )
 
-type p2pSelfEndpoint struct {
-	AgentID  string
-	Host     string
-	Port     int
-	ClientID string
-}
+type p2pSelfEndpoint = p2pmeta.SelfEndpoint
 
-type p2pDiscoveredPeer struct {
-	AgentID      string
-	Host         string
-	Address      string
-	Port         int
-	Source       string
-	KnownPeers   int
-	ConnectedVia string
-	TTLSeconds   int
-	ClientID     string
-}
+type p2pDiscoveredPeer = p2pmeta.DiscoveredPeer
 
 type p2pDiscoveryProvider interface {
 	Name() string
@@ -31,5 +17,5 @@ type p2pDiscoveryProvider interface {
 
 // normalizeClientID normalizes a clientId for comparison.
 func normalizeClientID(value string) string {
-	return strings.TrimSpace(strings.ToLower(value))
+	return p2pmeta.NormalizeClientID(value)
 }

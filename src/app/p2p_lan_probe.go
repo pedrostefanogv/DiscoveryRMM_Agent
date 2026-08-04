@@ -45,7 +45,7 @@ func (s *p2pTransferServer) buildHealthResponse() p2pHealthResponse {
 	s.mu.RLock()
 	agentID := strings.TrimSpace(s.agentID)
 	baseURL := strings.TrimSpace(s.baseURL)
-	app := s.app
+	coord := s.coord
 	s.mu.RUnlock()
 
 	out := p2pHealthResponse{
@@ -58,10 +58,10 @@ func (s *p2pTransferServer) buildHealthResponse() p2pHealthResponse {
 	if port, err := parsePortFromURL(baseURL); err == nil {
 		out.HTTPPort = port
 	}
-	if app == nil || app.p2pCoord == nil {
+	if coord == nil {
 		return out
 	}
-	h, _ := app.p2pCoord.libp2pHostAndRegistry()
+	h, _ := coord.libp2pHostAndRegistry()
 	if h == nil {
 		return out
 	}
@@ -246,7 +246,7 @@ func buildLANProbePorts(cfg P2PConfig, selfPort int) []int {
 }
 
 func (c *p2pCoordinator) runLANDiscoveryProbe(ctx context.Context, source string) (int, error) {
-	if c == nil || c.app == nil {
+	if c == nil || c.deps == nil {
 		return 0, fmt.Errorf("coordinator P2P indisponível")
 	}
 	if ctx == nil {
@@ -262,13 +262,13 @@ func (c *p2pCoordinator) runLANDiscoveryProbe(ctx context.Context, source string
 		return 0, fmt.Errorf("nenhuma faixa IPv4 local elegivel para probe")
 	}
 	selfPort, _ := parsePortFromURL(c.transferServer.BaseURL())
-	ports := buildLANProbePorts(c.app.GetP2PConfig(), selfPort)
+	ports := buildLANProbePorts(c.deps.GetP2PConfig(), selfPort)
 	if len(ports) == 0 {
 		return 0, fmt.Errorf("nenhuma porta elegivel para probe LAN")
 	}
 
 	client := &http.Client{Timeout: p2pLANProbeRequestTimeout}
-	selfAgentID := strings.TrimSpace(c.app.GetDebugConfig().AgentID)
+	selfAgentID := strings.TrimSpace(c.deps.GetDebugConfig().AgentID)
 	targets := make(chan p2pLANProbeTarget, len(hosts))
 	workerCount := p2pLANProbeWorkers
 	if total := len(hosts) * len(ports); total > 0 && total < workerCount {
@@ -316,7 +316,7 @@ func (c *p2pCoordinator) runLANDiscoveryProbe(ctx context.Context, source string
 
 	newPeers := int(found.Load())
 	if probeHits := int(hits.Load()); probeHits > 0 || newPeers > 0 {
-		c.app.logs.append(fmt.Sprintf("[p2p][lan-probe] source=%s hosts=%d ports=%d hits=%d novos=%d",
+		c.deps.Log(fmt.Sprintf("[p2p][lan-probe] source=%s hosts=%d ports=%d hits=%d novos=%d",
 			strings.TrimSpace(source), len(hosts), len(ports), probeHits, newPeers))
 	}
 	return newPeers, nil
@@ -373,7 +373,7 @@ func (c *p2pCoordinator) probeLANPeer(ctx context.Context, client *http.Client, 
 	inserted := c.upsertPeer(peerView)
 	if inserted {
 		go c.refreshSinglePeer(ctx, peerView)
-		c.app.logs.append(fmt.Sprintf("[p2p][lan-probe] peer confirmado: agentId=%s addr=%s:%d source=%s",
+		c.deps.Log(fmt.Sprintf("[p2p][lan-probe] peer confirmado: agentId=%s addr=%s:%d source=%s",
 			peerView.AgentID, peerView.Address, peerView.Port, strings.TrimSpace(source)))
 	}
 	return true, inserted

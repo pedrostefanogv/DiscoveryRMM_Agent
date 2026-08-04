@@ -35,7 +35,7 @@ func handleStreamFetchCandidacy(s network.Stream, coord *p2pCoordinator) {
 	}
 
 	// Processar candidatura (eleição local)
-	if coord != nil && coord.app != nil {
+	if coord != nil && coord.deps != nil {
 		coord.handleFetchCandidacy(context.Background(), ArtifactFetchCandidate(req))
 	}
 
@@ -60,10 +60,10 @@ func handleStreamFetchHeartbeat(s network.Stream, coord *p2pCoordinator) {
 	}
 
 	// Se o heartbeat é de outro peer, renovar o lease remoto no fetchStates
-	if coord != nil && coord.app != nil {
-		selfAgentID := strings.TrimSpace(coord.app.GetDebugConfig().AgentID)
+	if coord != nil && coord.deps != nil {
+		selfAgentID := strings.TrimSpace(coord.deps.GetDebugConfig().AgentID)
 		if !strings.EqualFold(hb.OwnerPeerID, selfAgentID) {
-			clientID := strings.TrimSpace(coord.app.GetAgentConfiguration().ClientID)
+			clientID := strings.TrimSpace(coord.deps.GetAgentConfiguration().ClientID)
 			state := coord.fetchStates.getOrCreate(hb.ArtifactID, clientID)
 			state.OwnerPeerID = hb.OwnerPeerID
 			state.Status = hb.Status

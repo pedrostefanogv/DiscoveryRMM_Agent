@@ -20,7 +20,7 @@ func (c *p2pCoordinator) publishFetchHeartbeats(ctx context.Context) {
 		return
 	}
 
-	selfAgentID := strings.TrimSpace(c.app.GetDebugConfig().AgentID)
+	selfAgentID := strings.TrimSpace(c.deps.GetDebugConfig().AgentID)
 	if selfAgentID == "" {
 		return
 	}
@@ -68,7 +68,7 @@ func (c *p2pCoordinator) publishFetchHeartbeatToGossip(ctx context.Context, hb A
 	logLine := fmt.Sprintf("[p2p][fetch-hb] artifact=%s status=%s progress=%.0f%% lease=%s owner=%s",
 		hb.ArtifactID, hb.Status, hb.ProgressPct,
 		hb.LeaseUntil.Format(time.RFC3339), hb.OwnerPeerID)
-	c.app.logs.append(logLine)
+	c.deps.Log(logLine)
 
 	// Broadcast para peers via libp2p
 	if h, registry := c.libp2pHostAndRegistry(); h != nil && registry != nil {
@@ -82,7 +82,7 @@ func (c *p2pCoordinator) publishFetchHeartbeatToGossip(ctx context.Context, hb A
 			}
 			go func(pid peer.ID) {
 				if err := libp2pBroadcastFetchHeartbeat(ctx, h, pid, hb); err != nil {
-					c.app.logs.append(fmt.Sprintf("[p2p][fetch-hb] falha broadcast para %s: %v", agentID, err))
+					c.deps.Log(fmt.Sprintf("[p2p][fetch-hb] falha broadcast para %s: %v", agentID, err))
 				}
 			}(peerID)
 		}
@@ -100,12 +100,12 @@ func (c *p2pCoordinator) handleFetchCandidacy(ctx context.Context, msg ArtifactF
 		return
 	}
 
-	selfAgentID := strings.TrimSpace(c.app.GetDebugConfig().AgentID)
+	selfAgentID := strings.TrimSpace(c.deps.GetDebugConfig().AgentID)
 	if selfAgentID == "" {
 		return
 	}
 
-	clientID := strings.TrimSpace(c.app.GetAgentConfiguration().ClientID)
+	clientID := strings.TrimSpace(c.deps.GetAgentConfiguration().ClientID)
 
 	// Construir candidatura local
 	load := c.collectHostLoad()
@@ -122,7 +122,7 @@ func (c *p2pCoordinator) handleFetchCandidacy(ctx context.Context, msg ArtifactF
 	// Delegar a seleção para electBestFetcher
 	winner := electBestFetcher(selfCandidate, []ArtifactFetchCandidate{msg})
 
-	c.app.logs.append(fmt.Sprintf("[p2p][election] artifact=%s winner=%s (remote=%s)",
+	c.deps.Log(fmt.Sprintf("[p2p][election] artifact=%s winner=%s (remote=%s)",
 		artifactID, winner.AgentID, msg.AgentID))
 
 	// Atualizar estado
@@ -137,12 +137,12 @@ func (c *p2pCoordinator) handleFetchCandidacy(ctx context.Context, msg ArtifactF
 			go c.executeFetch(ctx, artifactID, msg.ArtifactID)
 		} else {
 			state.Status = "missing"
-			c.app.logs.append(fmt.Sprintf("[p2p][election] artifact=%s vencedor=local mas host sobrecarregado, adiando",
+			c.deps.Log(fmt.Sprintf("[p2p][election] artifact=%s vencedor=local mas host sobrecarregado, adiando",
 				artifactID))
 		}
 	} else {
 		state.Status = "fetching"
-		c.app.logs.append(fmt.Sprintf("[p2p][election] artifact=%s vencedor=remoto peer=%s",
+		c.deps.Log(fmt.Sprintf("[p2p][election] artifact=%s vencedor=remoto peer=%s",
 			artifactID, winner.AgentID))
 	}
 }
@@ -150,19 +150,19 @@ func (c *p2pCoordinator) handleFetchCandidacy(ctx context.Context, msg ArtifactF
 // runLocalElection inicia uma eleição local para um artifact que está faltando.
 // Publica a candidatura e aguarda respostas para decidir o fetcher.
 func (c *p2pCoordinator) runLocalElection(ctx context.Context, artifactID string) {
-	selfAgentID := strings.TrimSpace(c.app.GetDebugConfig().AgentID)
+	selfAgentID := strings.TrimSpace(c.deps.GetDebugConfig().AgentID)
 	if selfAgentID == "" {
 		return
 	}
 
 	// Verificar se o host está apto para participar
 	if !c.isLoadOK() {
-		c.app.logs.append(fmt.Sprintf("[p2p][election] artifact=%s host sobrecarregado, não participando da eleição",
+		c.deps.Log(fmt.Sprintf("[p2p][election] artifact=%s host sobrecarregado, não participando da eleição",
 			artifactID))
 		return
 	}
 
-	clientID := strings.TrimSpace(c.app.GetAgentConfiguration().ClientID)
+	clientID := strings.TrimSpace(c.deps.GetAgentConfiguration().ClientID)
 	load := c.collectHostLoad()
 
 	candidate := ArtifactFetchCandidate{
@@ -180,10 +180,10 @@ func (c *p2pCoordinator) runLocalElection(ctx context.Context, artifactID string
 	// candidato seja escolhido pelo electBestFetcher.
 	if h, registry := c.libp2pHostAndRegistry(); h != nil && registry != nil {
 		acceptedBy := libp2pBroadcastCandidacyToAll(ctx, h, registry, candidate)
-		c.app.logs.append(fmt.Sprintf("[p2p][election] artifact=%s candidatura broadcast: %d peers aceitaram",
+		c.deps.Log(fmt.Sprintf("[p2p][election] artifact=%s candidatura broadcast: %d peers aceitaram",
 			artifactID, acceptedBy))
 	} else {
-		c.app.logs.append(fmt.Sprintf("[p2p][election] artifact=%s candidatura publicada (sem libp2p, apenas log) cpu=%d ram=%.1fGB cpuUse=%.1f%% memUse=%.1f%%",
+		c.deps.Log(fmt.Sprintf("[p2p][election] artifact=%s candidatura publicada (sem libp2p, apenas log) cpu=%d ram=%.1fGB cpuUse=%.1f%% memUse=%.1f%%",
 			artifactID, candidate.CPUCores, candidate.RAMGB, candidate.CPUPercent, candidate.MemPercent))
 	}
 
@@ -211,9 +211,9 @@ func (c *p2pCoordinator) runLocalElection(ctx context.Context, artifactID string
 
 // executeFetch executa o download do artifact quando este peer é eleito fetcher.
 func (c *p2pCoordinator) executeFetch(ctx context.Context, artifactID string, artifactName string) {
-	clientID := strings.TrimSpace(c.app.GetAgentConfiguration().ClientID)
+	clientID := strings.TrimSpace(c.deps.GetAgentConfiguration().ClientID)
 
-	c.app.logs.append(fmt.Sprintf("[p2p][fetch] iniciando artifact=%s", artifactID))
+	c.deps.Log(fmt.Sprintf("[p2p][fetch] iniciando artifact=%s", artifactID))
 
 	state := c.fetchStates.getOrCreate(artifactID, clientID)
 	state.Status = "fetching"
@@ -237,7 +237,7 @@ func (c *p2pCoordinator) executeFetch(ctx context.Context, artifactID string, ar
 	if err != nil {
 		state.Status = "failed"
 		c.fetchStates.set(artifactID, state)
-		c.app.logs.append(fmt.Sprintf("[p2p][fetch] artifact=%s falhou: %s", artifactID, err.Error()))
+		c.deps.Log(fmt.Sprintf("[p2p][fetch] artifact=%s falhou: %s", artifactID, err.Error()))
 		return
 	}
 
@@ -245,7 +245,7 @@ func (c *p2pCoordinator) executeFetch(ctx context.Context, artifactID string, ar
 	state.ProgressPct = 100
 	c.fetchStates.set(artifactID, state)
 
-	c.app.logs.append(fmt.Sprintf("[p2p][fetch] artifact=%s concluido path=%s size=%d",
+	c.deps.Log(fmt.Sprintf("[p2p][fetch] artifact=%s concluido path=%s size=%d",
 		artifactID, view.ArtifactName, view.SizeBytes))
 }
 

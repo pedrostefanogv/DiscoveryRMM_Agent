@@ -121,7 +121,7 @@ func (c *p2pCoordinator) finalizeDownloadedArtifact(artifactName, path, expected
 		if manifest == nil || !manifestMatchesFile(manifest, path) {
 			artifactID := CanonicalArtifactID("", artifactName, "")
 			var chunkSize int64 = defaultChunkSizeBytes
-			if cfg := c.app.GetP2PConfig(); cfg.ChunkSizeBytes > 0 {
+			if cfg := c.deps.GetP2PConfig(); cfg.ChunkSizeBytes > 0 {
 				chunkSize = cfg.ChunkSizeBytes
 			}
 			cpuFn := func() float64 { return c.cpuSampler.Sample() }
@@ -133,7 +133,7 @@ func (c *p2pCoordinator) finalizeDownloadedArtifact(artifactName, path, expected
 		}
 
 		if err := saveCachedManifest(manifestDir, artifactName, *manifest); err != nil {
-			c.app.logs.append(fmt.Sprintf("[p2p] aviso: falha ao salvar cache de manifest para %s: %v", artifactName, err))
+			c.deps.Log(fmt.Sprintf("[p2p] aviso: falha ao salvar cache de manifest para %s: %v", artifactName, err))
 		}
 	}
 
@@ -163,19 +163,19 @@ func (c *p2pCoordinator) updateManifestCacheAfterDownload(artifactName, path str
 
 	artifactID := CanonicalArtifactID("", artifactName, "")
 	var chunkSize int64 = defaultChunkSizeBytes
-	if cfg := c.app.GetP2PConfig(); cfg.ChunkSizeBytes > 0 {
+	if cfg := c.deps.GetP2PConfig(); cfg.ChunkSizeBytes > 0 {
 		chunkSize = cfg.ChunkSizeBytes
 	}
 	cpuFn := func() float64 { return c.cpuSampler.Sample() }
 	manifest, err := buildChunkManifest(context.Background(), path, artifactID, chunkSize, nil, cpuFn)
 	if err != nil {
-		c.app.logs.append(fmt.Sprintf("[p2p] aviso: falha ao gerar manifest pos-download para %s: %v", artifactName, err))
+		c.deps.Log(fmt.Sprintf("[p2p] aviso: falha ao gerar manifest pos-download para %s: %v", artifactName, err))
 		return
 	}
 	if err := saveCachedManifest(manifestDir, artifactName, manifest); err != nil {
-		c.app.logs.append(fmt.Sprintf("[p2p] aviso: falha ao salvar manifest pos-download para %s: %v", artifactName, err))
+		c.deps.Log(fmt.Sprintf("[p2p] aviso: falha ao salvar manifest pos-download para %s: %v", artifactName, err))
 		return
 	}
-	c.app.logs.append(fmt.Sprintf("[p2p] manifest cacheado pos-download: %s chunks=%d sha256=%s",
+	c.deps.Log(fmt.Sprintf("[p2p] manifest cacheado pos-download: %s chunks=%d sha256=%s",
 		artifactName, manifest.TotalChunks, manifest.SHA256))
 }

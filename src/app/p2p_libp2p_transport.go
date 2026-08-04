@@ -220,7 +220,7 @@ func handleStreamArtifactManifest(s network.Stream, transfer *p2pTransferServer)
 	}
 	transfer.mu.RLock()
 	tempDir := transfer.tempDir
-	app := transfer.app
+	deps := transfer.deps
 	transfer.mu.RUnlock()
 
 	path := filepath.Join(tempDir, req.ArtifactName)
@@ -241,15 +241,15 @@ func handleStreamArtifactManifest(s network.Stream, transfer *p2pTransferServer)
 	_ = s.SetDeadline(computeTransferDeadline(info.Size()))
 
 	var chunkSize int64 = defaultChunkSizeBytes
-	if app != nil {
-		if cfg := app.GetP2PConfig(); cfg.ChunkSizeBytes > 0 {
+	if deps != nil {
+		if cfg := deps.GetP2PConfig(); cfg.ChunkSizeBytes > 0 {
 			chunkSize = cfg.ChunkSizeBytes
 		}
 	}
 	artifactID := CanonicalArtifactID("", req.ArtifactName, "")
 	var cpuFn func() float64
-	if transfer != nil {
-		cpuFn = func() float64 { return transfer.app.p2pCoord.cpuSampler.Sample() }
+	if transfer != nil && transfer.coord != nil {
+		cpuFn = func() float64 { return transfer.coord.cpuSampler.Sample() }
 	}
 	manifest, err := buildChunkManifest(context.Background(), path, artifactID, chunkSize, nil, cpuFn)
 	if err != nil {
@@ -353,8 +353,8 @@ func handleStreamArtifactGet(s network.Stream, transfer *p2pTransferServer) {
 	}
 
 	var coord *p2pCoordinator
-	if transfer.app != nil {
-		coord = transfer.app.p2pCoord
+	if transfer != nil {
+		coord = transfer.coord
 	}
 	requesterID := strings.TrimSpace(req.RequesterID)
 	if requesterID == "" {
@@ -418,8 +418,8 @@ func handleStreamArtifactGet(s network.Stream, transfer *p2pTransferServer) {
 	if coord != nil && written > 0 {
 		coord.recordBytesServed(written)
 	}
-	if copyErr != nil && coord != nil && coord.app != nil {
-		coord.app.logs.append(fmt.Sprintf("[p2p][serve] erro ao enviar chunk artifact=%s para peer=%s chunkLen=%d enviado=%d: %v",
+	if copyErr != nil && coord != nil && coord.deps != nil {
+		coord.deps.Log(fmt.Sprintf("[p2p][serve] erro ao enviar chunk artifact=%s para peer=%s chunkLen=%d enviado=%d: %v",
 			req.ArtifactName, requesterID, chunkLen, written, copyErr))
 	}
 	if coord != nil {

@@ -6,10 +6,10 @@ import (
 
 	appstore "discovery/app/appstore"
 	appautomation "discovery/app/automation"
+	"discovery/app/core/models"
 	debug "discovery/app/debug"
 	p2pmeta "discovery/app/p2pmeta"
 	supportmeta "discovery/app/supportmeta"
-	"discovery/app/core/models"
 )
 
 // inventoryCache manages thread-safe caching of the last inventory report.
@@ -45,6 +45,14 @@ const (
 type P2PConfig = p2pmeta.Config
 
 type P2PBootstrapConfig = p2pmeta.BootstrapConfig
+
+type P2PChunkManifest = p2pmeta.ChunkManifest
+
+type P2PChunk = p2pmeta.Chunk
+
+type P2PSelfEndpoint = p2pmeta.SelfEndpoint
+
+type P2PDiscoveredPeer = p2pmeta.DiscoveredPeer
 
 type P2PSeedPlan = p2pmeta.SeedPlan
 
