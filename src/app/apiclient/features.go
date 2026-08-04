@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"discovery/app/netutil"
 	"discovery/app/core/tlsutil"
+	"discovery/app/netutil"
 )
 
 // ApiVersionInfo contém informações da versão e capacidades da API.
