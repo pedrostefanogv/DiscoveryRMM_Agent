@@ -2,109 +2,48 @@ package app
 
 import (
 	"context"
-	"fmt"
-	"io"
-	"net/http"
-	"net/url"
-	"os"
 	"strings"
 	"time"
 
-	"discovery/app/netutil"
 	"discovery/app/core/database"
-	"discovery/app/core/platform"
-	"discovery/app/core/tlsutil"
+	"discovery/app/decommission"
 )
 
-const agentDecommissionOutboxCacheKey = "agent_decommission_outbox"
-
-type agentDecommissionTarget struct {
-	Scheme  string `json:"scheme"`
-	Server  string `json:"server"`
-	Token   string `json:"token"`
-	AgentID string `json:"agentId"`
-}
-
-type agentDecommissionOutboxEntry struct {
-	Target        agentDecommissionTarget `json:"target"`
-	Attempts      int                     `json:"attempts"`
-	NextAttemptAt string                  `json:"nextAttemptAt"`
-	LastError     string                  `json:"lastError"`
-	CreatedAt     string                  `json:"createdAt"`
-	UpdatedAt     string                  `json:"updatedAt"`
-}
+// decommissionSvc é o service de decommission do agente.
+var decommissionSvc *decommission.Service
 
 // RunAgentDecommissionCleanup executa o DELETE do agente no backend.
 // Em falha transitória, persiste um outbox local para retry no próximo startup.
 func RunAgentDecommissionCleanup(ctx context.Context) error {
-	remoteErr := runAgentDecommissionRemoteCleanup(ctx)
-	localErr := cleanupAgentDecommissionLocalTempDirs()
-
-	if remoteErr != nil && localErr != nil {
-		return fmt.Errorf("falha no decommission remoto e na limpeza local: remoto=%v local=%w", remoteErr, localErr)
+	if decommissionSvc == nil {
+		return nil
 	}
-	if remoteErr != nil {
-		return remoteErr
-	}
-	if localErr != nil {
-		return localErr
-	}
-	return nil
+	return decommissionSvc.RunCleanup(ctx)
 }
 
 func runAgentDecommissionRemoteCleanup(ctx context.Context) error {
-	target, err := resolveAgentDecommissionTargetFromInstaller()
-	if err != nil {
-		return err
-	}
-
-	if err := performAgentDecommissionDelete(ctx, target); err == nil {
+	if decommissionSvc == nil {
 		return nil
 	}
-
-	db, dbErr := database.Open(GetDataDir())
-	if dbErr != nil {
-		return fmt.Errorf("falha no delete remoto e não foi possível abrir DB para outbox: %w", dbErr)
-	}
-	defer db.Close()
-
-	if queueErr := enqueueAgentDecommissionOutbox(db, target, err); queueErr != nil {
-		return fmt.Errorf("falha no delete remoto e no enqueue de outbox: %v | %w", err, queueErr)
-	}
-	return nil
+	return decommissionSvc.RunRemoteCleanup(ctx)
 }
 
 func cleanupAgentDecommissionLocalTempDirs() error {
-	return cleanupAgentDecommissionPaths([]string{
-		platform.P2PTempDir(),
-		platform.TempDir(),
-	})
+	if decommissionSvc == nil {
+		return nil
+	}
+	return decommissionSvc.CleanupLocalTempDirs()
 }
 
 func cleanupAgentDecommissionPaths(paths []string) error {
-	seen := make(map[string]struct{}, len(paths))
-	for _, rawPath := range paths {
-		path := strings.TrimSpace(rawPath)
-		if path == "" {
-			continue
-		}
-		key := strings.ToLower(path)
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		if err := os.RemoveAll(path); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("falha ao remover diretório local %s: %w", path, err)
-		}
-	}
-	return nil
+	return decommission.CleanupPaths(paths)
 }
 
 func (a *App) drainAgentDecommissionOutbox(ctx context.Context, reason string) {
 	if a == nil || a.db == nil {
 		return
 	}
-	sent, err := drainAgentDecommissionOutbox(a.db, ctx)
+	sent, err := decommission.DrainOutbox(a.db, ctx)
 	if err != nil {
 		a.logs.append("[agent][decommission] erro ao drenar outbox (" + strings.TrimSpace(reason) + "): " + err.Error())
 		return
@@ -114,152 +53,33 @@ func (a *App) drainAgentDecommissionOutbox(ctx context.Context, reason string) {
 	}
 }
 
-func resolveAgentDecommissionTargetFromInstaller() (agentDecommissionTarget, error) {
-	inst, _, err := loadInstallerConfig()
-	if err != nil {
-		return agentDecommissionTarget{}, err
+func resolveAgentDecommissionTargetFromInstaller() (decommission.Target, error) {
+	if decommissionSvc == nil {
+		return decommission.Target{}, nil
 	}
-
-	scheme := inst.APIScheme()
-	server := strings.TrimSpace(inst.ApiServer)
-	if server == "" {
-		parsedScheme, parsedServer := parseInstallerServerURLLite(inst.ServerURL)
-		if parsedServer != "" {
-			server = parsedServer
-			if parsedScheme == "http" {
-				scheme = "http"
-			}
-		}
-	}
-
-	target := agentDecommissionTarget{
-		Scheme:  scheme,
-		Server:  server,
-		Token:   strings.TrimSpace(inst.AuthToken),
-		AgentID: strings.TrimSpace(inst.AgentID),
-	}
-
-	if target.Scheme == "" || target.Server == "" || target.Token == "" || target.AgentID == "" {
-		return agentDecommissionTarget{}, fmt.Errorf("credenciais insuficientes para delete remoto do agente")
-	}
-	if target.Scheme != "http" && target.Scheme != "https" {
-		return agentDecommissionTarget{}, fmt.Errorf("apiScheme inválido para delete remoto do agente")
-	}
-
-	return target, nil
+	return decommissionSvc.ResolveTargetFromInstaller()
 }
 
 func parseInstallerServerURLLite(raw string) (string, string) {
-	parsed, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || parsed == nil {
-		return "", ""
-	}
-	scheme := strings.TrimSpace(strings.ToLower(parsed.Scheme))
-	server := strings.TrimSpace(parsed.Host)
-	return scheme, server
+	return decommission.ParseInstallerServerURLLite(raw)
 }
 
-func performAgentDecommissionDelete(ctx context.Context, target agentDecommissionTarget) error {
-	endpoint := strings.TrimSpace(target.Scheme) + "://" + strings.TrimSpace(target.Server) + "/api/v1/agent-auth/me"
-	reqCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodDelete, endpoint, nil)
-	if err != nil {
-		return err
-	}
-	if err := netutil.SetAgentAuthHeadersWithAgentID(req, target.Token, target.AgentID); err != nil {
-		return err
-	}
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := tlsutil.NewHTTPClient(20 * time.Second).Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		return nil
-	}
-	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone {
-		return nil
-	}
-	return fmt.Errorf("delete agent retornou HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+func performAgentDecommissionDelete(ctx context.Context, target decommission.Target) error {
+	return decommission.PerformDelete(ctx, target)
 }
 
-func enqueueAgentDecommissionOutbox(db *database.DB, target agentDecommissionTarget, cause error) error {
-	entry := agentDecommissionOutboxEntry{}
-	now := time.Now().UTC()
-
-	if ok, err := db.CacheGetJSON(agentDecommissionOutboxCacheKey, &entry); err != nil {
-		return err
-	} else if !ok {
-		entry = agentDecommissionOutboxEntry{
-			Target:    target,
-			CreatedAt: now.Format(time.RFC3339),
-		}
-	}
-
-	entry.Target = target
-	entry.Attempts++
-	entry.LastError = strings.TrimSpace(cause.Error())
-	entry.UpdatedAt = now.Format(time.RFC3339)
-	entry.NextAttemptAt = now.Add(agentDecommissionBackoff(entry.Attempts)).Format(time.RFC3339)
-
-	return db.CacheSetJSON(agentDecommissionOutboxCacheKey, entry, 30*24*time.Hour)
+func enqueueAgentDecommissionOutbox(db *database.DB, target decommission.Target, cause error) error {
+	return decommission.EnqueueOutbox(db, target, cause)
 }
 
 func drainAgentDecommissionOutbox(db *database.DB, ctx context.Context) (bool, error) {
-	entry := agentDecommissionOutboxEntry{}
-	ok, err := db.CacheGetJSON(agentDecommissionOutboxCacheKey, &entry)
-	if err != nil {
-		return false, err
-	}
-	if !ok {
-		return false, nil
-	}
-
-	nextAt := parseRFC3339(entry.NextAttemptAt)
-	if !nextAt.IsZero() && time.Now().UTC().Before(nextAt) {
-		return false, nil
-	}
-
-	if opErr := performAgentDecommissionDelete(ctx, entry.Target); opErr == nil {
-		if delErr := db.CacheDelete(agentDecommissionOutboxCacheKey); delErr != nil {
-			return false, delErr
-		}
-		return true, nil
-	} else {
-		err = opErr
-	}
-
-	entry.Attempts++
-	entry.LastError = strings.TrimSpace(err.Error())
-	entry.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-	entry.NextAttemptAt = time.Now().UTC().Add(agentDecommissionBackoff(entry.Attempts)).Format(time.RFC3339)
-	if saveErr := db.CacheSetJSON(agentDecommissionOutboxCacheKey, entry, 30*24*time.Hour); saveErr != nil {
-		return false, saveErr
-	}
-	return false, nil
+	return decommission.DrainOutbox(db, ctx)
 }
 
 func parseRFC3339(value string) time.Time {
-	parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(value))
-	if err != nil {
-		return time.Time{}
-	}
-	return parsed
+	return decommission.ParseRFC3339(value)
 }
 
 func agentDecommissionBackoff(attempt int) time.Duration {
-	if attempt < 1 {
-		attempt = 1
-	}
-	base := time.Duration(1<<uint(attempt-1)) * time.Minute
-	if base > 6*time.Hour {
-		base = 6 * time.Hour
-	}
-	return base
+	return decommission.Backoff(attempt)
 }

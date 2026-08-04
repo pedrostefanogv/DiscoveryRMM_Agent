@@ -1,6 +1,10 @@
 package app
 
-import "testing"
+import (
+	"testing"
+
+	"discovery/app/status"
+)
 
 func TestNormalizeStatusServer(t *testing.T) {
 	t.Parallel()
@@ -23,8 +27,8 @@ func TestNormalizeStatusServer(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if got := normalizeStatusServer(tt.input); got != tt.want {
-				t.Fatalf("normalizeStatusServer(%q) = %q, want %q", tt.input, got, tt.want)
+			if got := status.NormalizeServer(tt.input); got != tt.want {
+				t.Fatalf("NormalizeServer(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
 	}
@@ -36,24 +40,24 @@ func TestResolveStatusConnectionType(t *testing.T) {
 	tests := []struct {
 		name      string
 		transport string
-		cfg       DebugConfig
+		cfg       status.DebugConfig
 		want      string
 	}{
 		{name: "direct nats transport", transport: "nats", want: "nats"},
 		{name: "websocket transport wss", transport: "nats-wss", want: "wss"},
 		{name: "websocket transport ws", transport: "nats-ws", want: "wss"},
-		{name: "fallback from cfg nats", transport: "", cfg: DebugConfig{Scheme: "nats"}, want: "nats"},
-		{name: "fallback from cfg websocket", transport: "", cfg: DebugConfig{NatsWsServer: "wss://bus.exemplo.com.br:443/nats"}, want: "wss"},
+		{name: "fallback from cfg nats", transport: "", cfg: status.DebugConfig{Scheme: "nats"}, want: "nats"},
+		{name: "fallback from cfg websocket", transport: "", cfg: status.DebugConfig{NatsWsServer: "wss://bus.exemplo.com.br:443/nats"}, want: "wss"},
 		{name: "unknown transport", transport: "mqtt", want: "mqtt"},
-		{name: "no data", transport: "", cfg: DebugConfig{}, want: "-"},
+		{name: "no data", transport: "", cfg: status.DebugConfig{}, want: "-"},
 	}
 
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if got := resolveStatusConnectionType(tt.transport, tt.cfg); got != tt.want {
-				t.Fatalf("resolveStatusConnectionType(%q) = %q, want %q", tt.transport, got, tt.want)
+			if got := status.ResolveConnectionType(tt.transport, tt.cfg); got != tt.want {
+				t.Fatalf("ResolveConnectionType(%q) = %q, want %q", tt.transport, got, tt.want)
 			}
 		})
 	}
@@ -62,18 +66,18 @@ func TestResolveStatusConnectionType(t *testing.T) {
 func TestFirstStatusServerCandidate(t *testing.T) {
 	t.Parallel()
 
-	cfg := DebugConfig{
+	cfg := status.DebugConfig{
 		Server:       "",
 		NatsWsServer: "wss://ws.exemplo.com.br:443/nats",
 		NatsServer:   "nats://nats.exemplo.com.br:4222",
 		ApiServer:    "https://api.exemplo.com.br:443",
 	}
 
-	if got := firstStatusServerCandidate("nats://runtime.exemplo.com.br:4222", cfg); got != "nats://runtime.exemplo.com.br:4222" {
-		t.Fatalf("firstStatusServerCandidate(agentServer) = %q", got)
+	if got := status.FirstServerCandidate("nats://runtime.exemplo.com.br:4222", cfg); got != "nats://runtime.exemplo.com.br:4222" {
+		t.Fatalf("FirstServerCandidate(agentServer) = %q", got)
 	}
 
-	if got := firstStatusServerCandidate("", cfg); got != "wss://ws.exemplo.com.br:443/nats" {
-		t.Fatalf("firstStatusServerCandidate(cfg fallback) = %q", got)
+	if got := status.FirstServerCandidate("", cfg); got != "wss://ws.exemplo.com.br:443/nats" {
+		t.Fatalf("FirstServerCandidate(cfg fallback) = %q", got)
 	}
 }

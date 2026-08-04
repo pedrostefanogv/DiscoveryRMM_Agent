@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"discovery/app/decommission"
 )
 
 func TestCleanupAgentDecommissionPathsRemovesDirectories(t *testing.T) {
@@ -21,8 +23,8 @@ func TestCleanupAgentDecommissionPathsRemovesDirectories(t *testing.T) {
 		t.Fatalf("write p2p file: %v", err)
 	}
 
-	if err := cleanupAgentDecommissionPaths([]string{p2pDir, tempDir}); err != nil {
-		t.Fatalf("cleanupAgentDecommissionPaths returned error: %v", err)
+	if err := decommission.CleanupPaths([]string{p2pDir, tempDir}); err != nil {
+		t.Fatalf("CleanupPaths returned error: %v", err)
 	}
 
 	if _, err := os.Stat(tempDir); !os.IsNotExist(err) {
@@ -39,8 +41,8 @@ func TestCleanupAgentDecommissionPathsAcceptsDuplicatesAndMissing(t *testing.T) 
 	}
 	missingDir := filepath.Join(root, "does-not-exist")
 
-	if err := cleanupAgentDecommissionPaths([]string{"", tempDir, tempDir, missingDir}); err != nil {
-		t.Fatalf("cleanupAgentDecommissionPaths returned error: %v", err)
+	if err := decommission.CleanupPaths([]string{"", tempDir, tempDir, missingDir}); err != nil {
+		t.Fatalf("CleanupPaths returned error: %v", err)
 	}
 
 	if _, err := os.Stat(tempDir); !os.IsNotExist(err) {

@@ -38,6 +38,8 @@ import (
 	"discovery/app/core/winget"
 	"discovery/app/customfields"
 	"discovery/app/debug"
+	"discovery/app/decommission"
+	"discovery/app/installer"
 	appinventory "discovery/app/inventory"
 	"discovery/app/logs"
 	"discovery/app/services/chat"
@@ -221,6 +223,25 @@ func NewApp(opts AppStartupOptions) *App {
 		startupTime:      time.Now(),
 	}
 	a.logs.Buffer = logs.New()
+	installerSvc = installer.New(installer.Deps{
+		NormalizeP2PConfig: normalizeP2PConfig,
+	})
+	decommissionSvc = decommission.New(decommission.Deps{
+		LoadInstallerConfig: func() (decommission.InstallerConfig, string, error) {
+			inst, path, err := loadInstallerConfig()
+			if err != nil {
+				return decommission.InstallerConfig{}, "", err
+			}
+			return decommission.InstallerConfig{
+				APIScheme: inst.APIScheme,
+				ApiServer: inst.ApiServer,
+				ServerURL: inst.ServerURL,
+				AuthToken: inst.AuthToken,
+				AgentID:   inst.AgentID,
+			}, path, nil
+		},
+		GetDataDir: GetDataDir,
+	})
 	a.chatSvc = chat.New(reg, chat.Deps{
 		Ctx: func() context.Context { return a.ctx },
 		Logf: func(line string) {

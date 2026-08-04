@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"discovery/app/agentconfig"
+	"discovery/app/status"
 )
 
 // TestParseUpgradeOutput_WithSpinner verifies that the parser handles the \r-only
@@ -93,7 +94,7 @@ func TestHeartbeatIntervalFromAgentConfig_DefaultWhenNil(t *testing.T) {
 
 func TestApplyRealtimeFallbackFromAgentStatus_UsesLocalConnectionOnUnauthorized(t *testing.T) {
 	out := StatusOverview{}
-	applyRealtimeFallbackFromAgentStatus(&out, AgentStatus{
+	status.ApplyRealtimeFallbackFromAgentStatus(&out, status.AgentStatus{
 		Connected: true,
 		Transport: "nats",
 	}, fmt.Errorf("HTTP 401 Unauthorized: {\"message\":\"Autenticação necessária.\"}"))
