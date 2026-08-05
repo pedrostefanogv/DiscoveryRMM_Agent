@@ -82,6 +82,7 @@ const (
 	slotAdapterEnumOutputs    = 7
 	slotOutputGetDesc         = 7
 	slotOutput1DuplicateOutput = 22
+	slotOutput1DuplicateOutput1 = 23
 	slotDupAcquireNextFrame   = 8
 	slotDupReleaseFrame       = 14
 	slotDevCreateTexture2D    = 5
@@ -140,6 +141,7 @@ const (
 	DXGI_ERROR_ACCESS_LOST  = 0x887A0020
 
 	DXGI_FORMAT_B8G8R8A8_UNORM = 87
+	DXGI_FORMAT_R8G8B8A8_UNORM = 28
 
 	D3D_DRIVER_TYPE_HARDWARE = 1
 	D3D_DRIVER_TYPE_WARP     = 5
@@ -262,13 +264,32 @@ func NewDXGICapturer(monitorIndex int) (Capturer, error) {
 		return nil, fmt.Errorf("CreateTexture2D staging: HRESULT 0x%X", uint64(hr))
 	}
 
-	// 8. DuplicateOutput
-	hr, _, _ = comCall(c.output1, slotOutput1DuplicateOutput, uintptr(c.d3dDevice), uintptr(unsafe.Pointer(&c.duplication)))
+	// 8. DuplicateOutput1 com formato B8G8R8A8 forçado.
+	// Usa DuplicateOutput1 (em vez de DuplicateOutput) para forçar o formato
+	// de saída para DXGI_FORMAT_B8G8R8A8_UNORM, independente do formato nativo
+	// do desktop. O DuplicateOutput retorna o formato nativo (que pode ser
+	// R8G8B8A8 em algumas GPUs/configurações), e o CopyResource para o staging
+	// B8G8R8A8 copia os bytes SEM conversão → cores invertidas (azul↔laranja).
+	// Com DuplicateOutput1, o driver converte para B8G8R8A8 na origem, e o
+	// encoder (que espera BGRA) faz o swap B↔R corretamente.
+	var supportedFormats = [1]uint32{DXGI_FORMAT_B8G8R8A8_UNORM}
+	hr, _, _ = comCall(c.output1, slotOutput1DuplicateOutput1,
+		uintptr(c.d3dDevice),
+		uintptr(0), // Flags
+		uintptr(1), // SupportedFormatsCount
+		uintptr(unsafe.Pointer(&supportedFormats[0])),
+		uintptr(unsafe.Pointer(&c.duplication)),
+	)
+	if hr != 0 || c.duplication == nil {
+		// Fallback: DuplicateOutput (formato nativo) — se o desktop for
+		// R8G8B8A8, as cores podem ficar invertidas, mas é melhor que falhar.
+		hr, _, _ = comCall(c.output1, slotOutput1DuplicateOutput, uintptr(c.d3dDevice), uintptr(unsafe.Pointer(&c.duplication)))
+	}
 	if hr != 0 || c.duplication == nil {
 		comRelease(c.stagingTex); comRelease(c.d3dContext); comRelease(c.d3dDevice)
 		comRelease(c.output1); comRelease(c.output); comRelease(c.adapter); comRelease(c.factory)
 		runtime.UnlockOSThread()
-		return nil, fmt.Errorf("DuplicateOutput: HRESULT 0x%X", uint64(hr))
+		return nil, fmt.Errorf("DuplicateOutput1: HRESULT 0x%X", uint64(hr))
 	}
 
 	return c, nil
