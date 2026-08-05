@@ -12,73 +12,16 @@ import (
 	"net/http"
 	"reflect"
 	"strings"
-	"sync"
 	"time"
+
+	"discovery/app/debughttp"
 )
-
-var (
-	frontendFS   http.FileSystem
-	frontendFSMu sync.RWMutex
-)
-
-// ── Chat Event Broker (SSE para debug HTTP) ─────────────────────────────
-
-// chatEventBroker gerencia inscritos SSE para eventos de streaming do chat.
-// Permite que o chat funcione no navegador (debug HTTP) onde o runtime Wails
-// não está disponível para receber EventsEmit/EventsOn.
-type chatEventBroker struct {
-	mu          sync.RWMutex
-	subscribers map[chan string]struct{}
-}
-
-func newChatEventBroker() *chatEventBroker {
-	return &chatEventBroker{
-		subscribers: make(map[chan string]struct{}),
-	}
-}
-
-func (b *chatEventBroker) subscribe() chan string {
-	ch := make(chan string, 128)
-	b.mu.Lock()
-	b.subscribers[ch] = struct{}{}
-	b.mu.Unlock()
-	return ch
-}
-
-func (b *chatEventBroker) unsubscribe(ch chan string) {
-	b.mu.Lock()
-	delete(b.subscribers, ch)
-	b.mu.Unlock()
-}
-
-// publish envia um evento JSON para todos os inscritos SSE.
-// Formato: {"event":"chat:token","data":"conteudo"}
-func (b *chatEventBroker) publish(eventType, data string) {
-	payload, err := json.Marshal(map[string]string{
-		"event": eventType,
-		"data":  data,
-	})
-	if err != nil {
-		return
-	}
-	line := string(payload)
-
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	for ch := range b.subscribers {
-		select {
-		case ch <- line:
-		default:
-			// descarta se inscrito estiver lento (buffer cheio)
-		}
-	}
-}
 
 // PublishChatEvent publica um evento de chat para os inscritos SSE.
 // Chamado por StartChatStream para forward dos eventos Wails → HTTP.
 func (a *App) PublishChatEvent(eventType, data string) {
 	if a.chatEvents != nil {
-		a.chatEvents.publish(eventType, data)
+		a.chatEvents.Publish(eventType, data)
 	}
 }
 
@@ -87,30 +30,13 @@ func (a *App) PublishChatEvent(eventType, data string) {
 // via fs.Sub so that the HTTP server can serve paths as `index.html`, `app.js`, etc.
 // Must be called before App.startup() runs (i.e. before wails.Run).
 func SetDebugFrontendAssets(fs http.FileSystem) {
-	frontendFSMu.Lock()
-	frontendFS = fs
-	frontendFSMu.Unlock()
-}
-
-func getFrontendFS() http.FileSystem {
-	frontendFSMu.RLock()
-	defer frontendFSMu.RUnlock()
-	return frontendFS
-}
-
-// debugHTTPServer serves the embedded frontend and a REST API mirroring the Wails bridge.
-type debugHTTPServer struct {
-	server            *http.Server
-	listener          net.Listener
-	port              int
-	bindAllInterfaces bool
-	app               *App
+	debughttp.SetFrontendAssets(fs)
 }
 
 // startDebugHTTPInternal binds and starts the HTTP server on the given bind address.
 // If port is 0, a random port is allocated. Otherwise the specified port is used.
 func (a *App) startDebugHTTPInternal(bindAddr string, port int) error {
-	fs := getFrontendFS()
+	fs := debughttp.GetFrontendFS()
 	if fs == nil {
 		return fmt.Errorf("frontend assets não configurados — chame SetDebugFrontendAssets antes")
 	}
@@ -171,18 +97,17 @@ func (a *App) startDebugHTTPInternal(bindAddr string, port int) error {
 		a.serveDebugAPI(w, r)
 	})
 
-	srv := &debugHTTPServer{
-		server: &http.Server{
+	srv := debughttp.NewServer(
+		&http.Server{
 			Handler:      mux,
 			ReadTimeout:  30 * time.Second,
 			WriteTimeout: 60 * time.Second,
 			IdleTimeout:  120 * time.Second,
 		},
-		listener:          listener,
-		port:              port,
-		bindAllInterfaces: bindAll,
-		app:               a,
-	}
+		listener,
+		port,
+		bindAll,
+	)
 
 	a.debugHTTP = srv
 
@@ -192,7 +117,7 @@ func (a *App) startDebugHTTPInternal(bindAddr string, port int) error {
 			bindLabel = "0.0.0.0 (rede)"
 		}
 		log.Printf("[debug-http] servidor iniciado em http://%s:%d", bindLabel, port)
-		if err := srv.server.Serve(listener); err != nil && err != http.ErrServerClosed {
+		if err := srv.HTTP.Serve(listener); err != nil && err != http.ErrServerClosed {
 			log.Printf("[debug-http] erro no servidor: %v", err)
 		}
 	}()
@@ -213,10 +138,10 @@ func (a *App) StopDebugHTTPServer() {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := a.debugHTTP.server.Shutdown(ctx); err != nil {
+	if err := a.debugHTTP.HTTP.Shutdown(ctx); err != nil {
 		log.Printf("[debug-http] erro ao parar servidor: %v", err)
 	}
-	a.debugHTTP.listener.Close()
+	a.debugHTTP.Listener.Close()
 	a.debugHTTP = nil
 	log.Println("[debug-http] servidor parado")
 }
@@ -226,7 +151,7 @@ func (a *App) GetDebugHTTPPort() int {
 	if a.debugHTTP == nil {
 		return 0
 	}
-	return a.debugHTTP.port
+	return a.debugHTTP.Port
 }
 
 // IsDebugHTTPBoundToAllInterfaces returns whether the debug HTTP server is bound
@@ -235,7 +160,7 @@ func (a *App) IsDebugHTTPBoundToAllInterfaces() bool {
 	if a.debugHTTP == nil {
 		return false
 	}
-	return a.debugHTTP.bindAllInterfaces
+	return a.debugHTTP.BindAllInterfaces
 }
 
 // SetDebugHTTPBindAllInterfaces restarts the debug HTTP server to bind on
@@ -246,21 +171,21 @@ func (a *App) SetDebugHTTPBindAllInterfaces(enabled bool) error {
 	if a.debugHTTP == nil {
 		return fmt.Errorf("servidor debug-http nao esta em execucao")
 	}
-	if a.debugHTTP.bindAllInterfaces == enabled {
+	if a.debugHTTP.BindAllInterfaces == enabled {
 		// Already in the requested state — no-op
 		return nil
 	}
 
 	// Preserve the current port so references (tray, logs) stay valid.
-	currentPort := a.debugHTTP.port
+	currentPort := a.debugHTTP.Port
 
 	// Stop the current listener/server
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := a.debugHTTP.server.Shutdown(ctx); err != nil {
+	if err := a.debugHTTP.HTTP.Shutdown(ctx); err != nil {
 		log.Printf("[debug-http] aviso ao parar servidor para rebind: %v", err)
 	}
-	a.debugHTTP.listener.Close()
+	a.debugHTTP.Listener.Close()
 	a.debugHTTP = nil
 
 	// Restart with the new bind address, preserving the port.
@@ -278,20 +203,20 @@ func (a *App) SetDebugHTTPBindAllInterfaces(enabled bool) error {
 	}
 
 	if enabled {
-		log.Printf("[debug-http] servidor reiniciado em 0.0.0.0:%d (acessivel na rede)", a.debugHTTP.port)
+		log.Printf("[debug-http] servidor reiniciado em 0.0.0.0:%d (acessivel na rede)", a.debugHTTP.Port)
 	} else {
-		log.Printf("[debug-http] servidor reiniciado em 127.0.0.1:%d (somente local)", a.debugHTTP.port)
+		log.Printf("[debug-http] servidor reiniciado em 127.0.0.1:%d (somente local)", a.debugHTTP.Port)
 	}
 	return nil
 }
 
 // resolveDebugCORSOrigin returns the CORS header value for the debug HTTP server.
 func (a *App) resolveDebugCORSOrigin() string {
-	if a.debugHTTP != nil && a.debugHTTP.bindAllInterfaces {
+	if a.debugHTTP != nil && a.debugHTTP.BindAllInterfaces {
 		return "*"
 	}
 	if a.debugHTTP != nil {
-		return "http://127.0.0.1:" + fmt.Sprint(a.debugHTTP.port)
+		return "http://127.0.0.1:" + fmt.Sprint(a.debugHTTP.Port)
 	}
 	return "http://localhost"
 }
@@ -416,14 +341,14 @@ func (a *App) serveDebugAPIList(w http.ResponseWriter, _ *http.Request) {
 		methods = append(methods, m.Name)
 	}
 	displayHost := "127.0.0.1"
-	if a.debugHTTP != nil && a.debugHTTP.bindAllInterfaces {
+	if a.debugHTTP != nil && a.debugHTTP.BindAllInterfaces {
 		displayHost = "0.0.0.0"
 	}
 	a.writeAPIJSON(w, http.StatusOK, map[string]interface{}{
 		"methods":           methods,
-		"port":              a.debugHTTP.port,
-		"url":               fmt.Sprintf("http://%s:%d", displayHost, a.debugHTTP.port),
-		"bindAllInterfaces": a.debugHTTP != nil && a.debugHTTP.bindAllInterfaces,
+		"port":              a.debugHTTP.Port,
+		"url":               fmt.Sprintf("http://%s:%d", displayHost, a.debugHTTP.Port),
+		"bindAllInterfaces": a.debugHTTP != nil && a.debugHTTP.BindAllInterfaces,
 	})
 }
 
@@ -460,8 +385,8 @@ func (a *App) serveChatEventsSSE(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	ch := a.chatEvents.subscribe()
-	defer a.chatEvents.unsubscribe(ch)
+	ch := a.chatEvents.Subscribe()
+	defer a.chatEvents.Unsubscribe(ch)
 
 	// Envia um evento inicial para confirmar conexão
 	fmt.Fprintf(w, "data: {\"event\":\"chat:connected\",\"data\":\"\"}\n\n")

@@ -5,12 +5,7 @@ package app
 import (
 	"fmt"
 	"net/http"
-	"sync"
 )
-
-// debugHTTPServer is a minimal stub for non-Windows platforms
-// so the App struct field compiles cross-platform.
-type debugHTTPServer struct{}
 
 // SetDebugFrontendAssets is a no-op on non-Windows platforms.
 func SetDebugFrontendAssets(fs http.FileSystem) {}
@@ -32,16 +27,6 @@ func (a *App) IsDebugHTTPBoundToAllInterfaces() bool { return false }
 // SetDebugHTTPBindAllInterfaces is a no-op on non-Windows platforms.
 func (a *App) SetDebugHTTPBindAllInterfaces(enabled bool) error {
 	return fmt.Errorf("debug-http não suportado nesta plataforma")
-}
-
-// chatEventBroker stub for non-Windows cross-compilation.
-type chatEventBroker struct {
-	mu          sync.RWMutex
-	subscribers map[chan string]struct{}
-}
-
-func newChatEventBroker() *chatEventBroker {
-	return &chatEventBroker{subscribers: make(map[chan string]struct{})}
 }
 
 // PublishChatEvent is a no-op stub for non-Windows platforms.

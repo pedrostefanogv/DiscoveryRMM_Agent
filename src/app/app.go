@@ -38,6 +38,7 @@ import (
 	"discovery/app/core/winget"
 	"discovery/app/customfields"
 	"discovery/app/debug"
+	"discovery/app/debughttp"
 	"discovery/app/decommission"
 	"discovery/app/installer"
 	appinventory "discovery/app/inventory"
@@ -48,6 +49,7 @@ import (
 	"discovery/app/services/notifications"
 	"discovery/app/services/psadt"
 	appsupport "discovery/app/support"
+	"discovery/app/tickets"
 	"discovery/app/updates"
 	"path/filepath"
 )
@@ -107,6 +109,7 @@ type App struct {
 	appStorePolicy        appStorePolicyCache
 	debugSvc              *debug.Service
 	agentConfigSvc        *agentconfig.Service
+	ticketsSvc            *tickets.Service
 	updatesSvc            *updates.Service
 	exporter              *updates.Exporter
 	inventorySvc          *appinventory.Service
@@ -114,8 +117,8 @@ type App struct {
 
 	consolEngine *ConsolidationEngine
 
-	debugHTTP  *debugHTTPServer
-	chatEvents *chatEventBroker
+	debugHTTP  *debughttp.Server
+	chatEvents *debughttp.ChatEventBroker
 
 	// hardwareIDSvc encapsula a coleta e cache de identidade de hardware
 	// (TPM EK + SMBIOS UUID).
@@ -220,7 +223,7 @@ func NewApp(opts AppStartupOptions) *App {
 		invSvc:           services.NewInventoryService(inventoryProvider),
 		printerSvc:       services.NewPrinterService(printerManager),
 		mcpRegistry:      reg,
-		chatEvents:       newChatEventBroker(),
+		chatEvents:       debughttp.NewChatEventBroker(),
 		startupTime:      time.Now(),
 	}
 	a.logs.Buffer = logs.New()
@@ -557,6 +560,9 @@ func NewApp(opts AppStartupOptions) *App {
 		Version:            Version,
 	})
 	a.agentConfigSvc = agentconfig.New(agentconfig.FetchDeps{
+		GetDebugConfig: a.GetDebugConfig,
+	})
+	a.ticketsSvc = tickets.New(tickets.Deps{
 		GetDebugConfig: a.GetDebugConfig,
 	})
 	a.syncCoord = newSyncCoordinator(a, a.updateTrigger)
