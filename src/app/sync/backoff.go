@@ -44,7 +44,7 @@ func (b *Backoff) HandleGlobalPong(pong agentconn.GlobalPongMessage) {
 	if receivedAt.IsZero() {
 		receivedAt = time.Now().UTC()
 	}
-	b.recordGlobalPong(receivedAt, strings.TrimSpace(pong.ServerTimeUTC), pong.ServerOverloaded)
+	b.RecordGlobalPong(receivedAt, strings.TrimSpace(pong.ServerTimeUTC), pong.ServerOverloaded)
 
 	if pong.ServerOverloaded == nil {
 		b.deps.Log("[agent-sync] global pong recebido sem estado de sobrecarga")
@@ -66,7 +66,8 @@ func (b *Backoff) HandleGlobalPong(pong agentconn.GlobalPongMessage) {
 	}
 }
 
-func (b *Backoff) recordGlobalPong(receivedAt time.Time, serverTime string, overloaded *bool) {
+// RecordGlobalPong registra o estado do último pong global.
+func (b *Backoff) RecordGlobalPong(receivedAt time.Time, serverTime string, overloaded *bool) {
 	if b == nil {
 		return
 	}

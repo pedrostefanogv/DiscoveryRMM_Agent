@@ -5,6 +5,7 @@
 export {
     ArtifactAccess,
     ArtifactAvailabilityView,
+    ArtifactPresenceItem,
     ArtifactView,
     AuditEvent,
     AutoProvisioningStats,
@@ -13,6 +14,7 @@ export {
     DebugStatus,
     DiscoveredPeer,
     DistributionStatus,
+    HostLoad,
     Metrics,
     OnboardingAuditEvent,
     OnboardingRequest,
@@ -20,5 +22,6 @@ export {
     PeerArtifactIndexView,
     PeerView,
     SeedPlan,
-    SeedPlanRecommendation
+    SeedPlanRecommendation,
+    TelemetryPayload
 } from "./models.js";

@@ -129,6 +129,65 @@ export class ArtifactAvailabilityView {
     }
 }
 
+/**
+ * ArtifactPresenceItem descreve um artifact em cache no agent para telemetria.
+ */
+export class ArtifactPresenceItem {
+    /**
+     * Creates a new ArtifactPresenceItem instance.
+     * @param {Partial<ArtifactPresenceItem>} [$$source = {}] - The source object to create the ArtifactPresenceItem.
+     */
+    constructor($$source = {}) {
+        if (!("artifactId" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["artifactId"] = "";
+        }
+        if (!("artifactName" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["artifactName"] = "";
+        }
+        if (!("sha256" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["sha256"] = "";
+        }
+        if (!("sizeBytes" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["sizeBytes"] = 0;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["cachedAtUtc"] = undefined;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new ArtifactPresenceItem instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {ArtifactPresenceItem}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new ArtifactPresenceItem(/** @type {Partial<ArtifactPresenceItem>} */($$parsedSource));
+    }
+}
+
 export class ArtifactView {
     /**
      * Creates a new ArtifactView instance.
@@ -741,6 +800,65 @@ export class DistributionStatus {
     }
 }
 
+/**
+ * HostLoad descreve capacidade e carga atual do host para eleição de fetcher e paralelismo dinâmico.
+ */
+export class HostLoad {
+    /**
+     * Creates a new HostLoad instance.
+     * @param {Partial<HostLoad>} [$$source = {}] - The source object to create the HostLoad.
+     */
+    constructor($$source = {}) {
+        if (!("cpuCores" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["cpuCores"] = 0;
+        }
+        if (!("ramGb" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["ramGb"] = 0;
+        }
+        if (!("cpuPercent" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["cpuPercent"] = 0;
+        }
+        if (!("memoryPercent" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["memoryPercent"] = 0;
+        }
+        if (!("diskBusyPercent" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["diskBusyPercent"] = 0;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new HostLoad instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {HostLoad}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new HostLoad(/** @type {Partial<HostLoad>} */($$parsedSource));
+    }
+}
+
 export class Metrics {
     /**
      * Creates a new Metrics instance.
@@ -1253,6 +1371,106 @@ export class SeedPlanRecommendation {
     }
 }
 
+export class TelemetryPayload {
+    /**
+     * Creates a new TelemetryPayload instance.
+     * @param {Partial<TelemetryPayload>} [$$source = {}] - The source object to create the TelemetryPayload.
+     */
+    constructor($$source = {}) {
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["agentId"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["siteId"] = undefined;
+        }
+        if (!("collectedAtUtc" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["collectedAtUtc"] = "";
+        }
+        if (!("metrics" in $$source)) {
+            /**
+             * @member
+             * @type {Metrics}
+             */
+            this["metrics"] = (new Metrics());
+        }
+        if (!("currentSeedPlan" in $$source)) {
+            /**
+             * @member
+             * @type {SeedPlan}
+             */
+            this["currentSeedPlan"] = (new SeedPlan());
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {ArtifactPresenceItem[] | undefined}
+             */
+            this["artifacts"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {HostLoad | null | undefined}
+             */
+            this["hostLoad"] = undefined;
+        }
+        if (!("knownPeers" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["knownPeers"] = 0;
+        }
+        if (!("connectedPeers" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["connectedPeers"] = 0;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new TelemetryPayload instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {TelemetryPayload}
+     */
+    static createFrom($$source = {}) {
+        const $$createField3_0 = $$createType5;
+        const $$createField4_0 = $$createType4;
+        const $$createField5_0 = $$createType9;
+        const $$createField6_0 = $$createType11;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("metrics" in $$parsedSource) {
+            $$parsedSource["metrics"] = $$createField3_0($$parsedSource["metrics"]);
+        }
+        if ("currentSeedPlan" in $$parsedSource) {
+            $$parsedSource["currentSeedPlan"] = $$createField4_0($$parsedSource["currentSeedPlan"]);
+        }
+        if ("artifacts" in $$parsedSource) {
+            $$parsedSource["artifacts"] = $$createField5_0($$parsedSource["artifacts"]);
+        }
+        if ("hostLoad" in $$parsedSource) {
+            $$parsedSource["hostLoad"] = $$createField6_0($$parsedSource["hostLoad"]);
+        }
+        return new TelemetryPayload(/** @type {Partial<TelemetryPayload>} */($$parsedSource));
+    }
+}
+
 // Private type creation functions
 const $$createType0 = $Create.Array($Create.Any);
 const $$createType1 = OnboardingAuditEvent.createFrom;
@@ -1262,3 +1480,7 @@ const $$createType4 = SeedPlan.createFrom;
 const $$createType5 = Metrics.createFrom;
 const $$createType6 = ArtifactView.createFrom;
 const $$createType7 = $Create.Array($$createType6);
+const $$createType8 = ArtifactPresenceItem.createFrom;
+const $$createType9 = $Create.Array($$createType8);
+const $$createType10 = HostLoad.createFrom;
+const $$createType11 = $Create.Nullable($$createType10);

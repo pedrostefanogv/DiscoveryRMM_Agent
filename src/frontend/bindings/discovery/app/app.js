@@ -1295,6 +1295,16 @@ export function PostP2PTelemetry() {
 }
 
 /**
+ * PostP2PTelemetryPayload expõe postP2PTelemetryPayload via interface.
+ * @param {p2pmeta$0.TelemetryPayload} payload
+ * @param {string} idempotencyKey
+ * @returns {$CancellablePromise<void>}
+ */
+export function PostP2PTelemetryPayload(payload, idempotencyKey) {
+    return $Call.ByID(3216398493, payload, idempotencyKey);
+}
+
+/**
  * PublishChatEvent publica um evento de chat para os inscritos SSE.
  * Chamado por StartChatStream para forward dos eventos Wails → HTTP.
  * @param {string} eventType

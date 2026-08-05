@@ -11,6 +11,7 @@ import (
 	"discovery/app/agentconfig"
 	"discovery/app/core/database"
 	debugsvc "discovery/app/debug"
+	syncsvc "discovery/app/sync"
 )
 
 func newOfflineSyncTestApp(t *testing.T, rollout agentconfig.AgentRolloutConfig) *App {
@@ -30,6 +31,9 @@ func newOfflineSyncTestApp(t *testing.T, rollout agentconfig.AgentRolloutConfig)
 	}
 	a.debugSvc = debugsvc.NewService(debugsvc.Options{})
 	a.debugSvc.ApplyRuntimeConnectionConfig("https", "example.local", "token", "agent-1", "", "")
+	a.syncRollout = syncsvc.NewRollout(a)
+	a.syncCommandOutbox = syncsvc.NewCommandOutbox(a, a.syncRollout)
+	a.syncP2PTelemetryOutbox = syncsvc.NewP2PTelemetryOutbox(a, a.syncRollout)
 	return a
 }
 

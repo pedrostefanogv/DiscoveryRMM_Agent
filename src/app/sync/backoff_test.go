@@ -1,4 +1,4 @@
-package app
+package sync
 
 import (
 	"strings"
@@ -6,27 +6,30 @@ import (
 	"time"
 
 	"discovery/app/core/agentconn"
+	debug "discovery/app/debug"
+	"discovery/app/syncmeta"
 )
 
 func TestRandomNonCriticalBackoffDuration_Range(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		d := randomNonCriticalBackoffDuration()
-		if d < nonCriticalBackoffMin || d > nonCriticalBackoffMax {
+		if d < syncmeta.NonCriticalBackoffMin || d > syncmeta.NonCriticalBackoffMax {
 			t.Fatalf("duracao fora do range: %s", d)
 		}
 	}
 }
 
 func TestHandleGlobalPong_OverloadedSetsBackoff(t *testing.T) {
-	a := &App{}
+	deps := newFakeDeps(t)
+	b := NewBackoff(deps)
 	overloaded := true
-	a.handleGlobalPong(agentconn.GlobalPongMessage{EventType: "pong", ServerOverloaded: &overloaded})
+	b.HandleGlobalPong(agentconn.GlobalPongMessage{EventType: "pong", ServerOverloaded: &overloaded})
 
-	remaining, deferred, reason := a.nonCriticalBackoffWindow()
+	remaining, deferred, reason := b.NonCriticalBackoffWindow()
 	if !deferred {
 		t.Fatalf("esperava trafego nao-critico adiado")
 	}
-	if remaining < 9*time.Minute || remaining > nonCriticalBackoffMax {
+	if remaining < 9*time.Minute || remaining > syncmeta.NonCriticalBackoffMax {
 		t.Fatalf("remaining fora do intervalo esperado: %s", remaining)
 	}
 	if reason == "" {
@@ -35,20 +38,22 @@ func TestHandleGlobalPong_OverloadedSetsBackoff(t *testing.T) {
 }
 
 func TestHandleGlobalPong_NotOverloadedClearsBackoff(t *testing.T) {
-	a := &App{}
-	a.extendNonCriticalBackoff(12*time.Minute, "manual")
+	deps := newFakeDeps(t)
+	b := NewBackoff(deps)
+	b.ExtendNonCriticalBackoff(12*time.Minute, "manual")
 
 	overloaded := false
-	a.handleGlobalPong(agentconn.GlobalPongMessage{EventType: "pong", ServerOverloaded: &overloaded})
+	b.HandleGlobalPong(agentconn.GlobalPongMessage{EventType: "pong", ServerOverloaded: &overloaded})
 
-	if _, deferred, _ := a.nonCriticalBackoffWindow(); deferred {
+	if _, deferred, _ := b.NonCriticalBackoffWindow(); deferred {
 		t.Fatalf("nao esperava trafego nao-critico adiado apos overloaded=false")
 	}
 }
 
 func TestResolveAgentConnectivity_TransportDisconnected(t *testing.T) {
-	a := &App{}
-	status := a.resolveAgentConnectivity(AgentStatus{Connected: false, TransportConnected: false})
+	deps := newFakeDeps(t)
+	b := NewBackoff(deps)
+	status := b.ResolveAgentConnectivity(debug.AgentStatus{Connected: false, TransportConnected: false})
 	if status.Connected {
 		t.Fatalf("esperava connected=false quando transporte estiver desconectado")
 	}
@@ -58,9 +63,10 @@ func TestResolveAgentConnectivity_TransportDisconnected(t *testing.T) {
 }
 
 func TestResolveAgentConnectivity_FreshPongKeepsOnline(t *testing.T) {
-	a := &App{}
+	deps := newFakeDeps(t)
+	b := NewBackoff(deps)
 	now := time.Now().UTC()
-	status := a.resolveAgentConnectivity(AgentStatus{
+	status := b.ResolveAgentConnectivity(debug.AgentStatus{
 		Connected:           true,
 		TransportConnected:  true,
 		LastGlobalPongAtUTC: now.Format(time.RFC3339),
@@ -74,9 +80,10 @@ func TestResolveAgentConnectivity_FreshPongKeepsOnline(t *testing.T) {
 }
 
 func TestResolveAgentConnectivity_StalePongMarksOffline(t *testing.T) {
-	a := &App{}
-	stale := time.Now().UTC().Add(-(globalPongStaleAfter + 2*time.Minute))
-	status := a.resolveAgentConnectivity(AgentStatus{
+	deps := newFakeDeps(t)
+	b := NewBackoff(deps)
+	stale := time.Now().UTC().Add(-(syncmeta.GlobalPongStaleAfter + 2*time.Minute))
+	status := b.ResolveAgentConnectivity(debug.AgentStatus{
 		Connected:           true,
 		TransportConnected:  true,
 		LastGlobalPongAtUTC: stale.Format(time.RFC3339),

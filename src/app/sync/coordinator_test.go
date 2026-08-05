@@ -10,6 +10,7 @@ import (
 	"discovery/app/core/agentconn"
 	"discovery/app/core/database"
 	debug "discovery/app/debug"
+	"discovery/app/p2pmeta"
 	"discovery/app/syncmeta"
 )
 
@@ -61,6 +62,9 @@ func (f *fakeDeps) RefreshKnowledgeBase() error {
 }
 func (f *fakeDeps) RefreshAgentConfiguration(_ context.Context) error {
 	f.refreshConfig = true
+	return nil
+}
+func (f *fakeDeps) PostP2PTelemetryPayload(_ context.Context, _ p2pmeta.TelemetryPayload, _ string) error {
 	return nil
 }
 
