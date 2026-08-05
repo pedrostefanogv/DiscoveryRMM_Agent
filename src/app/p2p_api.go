@@ -7,12 +7,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
 	"discovery/app/netutil"
+	"discovery/app/p2p"
 	p2pmeta "discovery/app/p2pmeta"
 )
 
@@ -31,18 +30,7 @@ type cachedP2PSeedPlan = p2pmeta.CachedSeedPlan
 
 // P2PDistributionStatusQueryOptions defines optional filters used by
 // GET /api/v1/agent-auth/me/p2p-distribution-status.
-type P2PDistributionStatusQueryOptions struct {
-	ArtifactID string
-	Limit      int
-	Offset     int
-}
-
-type p2pAPIErrorEnvelope struct {
-	Error             string `json:"error"`
-	Field             string `json:"field,omitempty"`
-	Code              string `json:"code,omitempty"`
-	RetryAfterSeconds int    `json:"retryAfterSeconds,omitempty"`
-}
+type P2PDistributionStatusQueryOptions = p2p.DistributionStatusQueryOptions
 
 // GetP2PSeedPlanRecommendation returns a cached plan when fresh, otherwise
 // fetches from API and updates local cache.
@@ -152,12 +140,12 @@ func (a *App) postP2PTelemetryPayload(ctx context.Context, payload P2PTelemetryP
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusTooManyRequests {
-		if until, ok := p2pRetryAfterFromResponse(resp, time.Now()); ok {
+		if until, ok := p2p.RetryAfterFromResponse(resp, time.Now()); ok {
 			a.setP2PTelemetryRateLimitUntil(until)
 		}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return p2pAPIResponseError("telemetry API", resp)
+		return p2p.APIResponseError("telemetry API", resp)
 	}
 	return nil
 }
@@ -183,7 +171,7 @@ func (a *App) GetP2PDistributionStatusWithOptions(ctx context.Context, opts P2PD
 	if err != nil {
 		return nil, err
 	}
-	endpoint, err = p2pDistributionStatusEndpointWithOptions(endpoint, opts)
+	endpoint, err = p2p.DistributionStatusEndpointWithOptions(endpoint, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -201,7 +189,7 @@ func (a *App) GetP2PDistributionStatusWithOptions(ctx context.Context, opts P2PD
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, p2pAPIResponseError("distribution-status API", resp)
+		return nil, p2p.APIResponseError("distribution-status API", resp)
 	}
 
 	var out []P2PDistributionStatus
@@ -209,70 +197,6 @@ func (a *App) GetP2PDistributionStatusWithOptions(ctx context.Context, opts P2PD
 		return nil, err
 	}
 	return out, nil
-}
-
-func p2pDistributionStatusEndpointWithOptions(endpoint string, opts P2PDistributionStatusQueryOptions) (string, error) {
-	u, err := url.Parse(endpoint)
-	if err != nil {
-		return "", err
-	}
-	q := u.Query()
-	if artifactID := strings.TrimSpace(opts.ArtifactID); artifactID != "" {
-		q.Set("artifactId", artifactID)
-	}
-	if opts.Limit > 0 {
-		q.Set("limit", strconv.Itoa(opts.Limit))
-	}
-	if opts.Offset > 0 {
-		q.Set("offset", strconv.Itoa(opts.Offset))
-	}
-	u.RawQuery = q.Encode()
-	return u.String(), nil
-}
-
-func p2pAPIResponseError(apiName string, resp *http.Response) error {
-	body, _ := io.ReadAll(resp.Body)
-	trimmedBody := strings.TrimSpace(string(body))
-	if trimmedBody == "" {
-		return fmt.Errorf("%s HTTP %d", apiName, resp.StatusCode)
-	}
-	var parsed p2pAPIErrorEnvelope
-	if err := json.Unmarshal(body, &parsed); err == nil && strings.TrimSpace(parsed.Error) != "" {
-		details := strings.TrimSpace(parsed.Error)
-		if code := strings.TrimSpace(parsed.Code); code != "" {
-			details += " (code=" + code + ")"
-		}
-		if field := strings.TrimSpace(parsed.Field); field != "" {
-			details += " (field=" + field + ")"
-		}
-		if parsed.RetryAfterSeconds > 0 {
-			details += " (retryAfterSeconds=" + strconv.Itoa(parsed.RetryAfterSeconds) + ")"
-		}
-		return fmt.Errorf("%s HTTP %d: %s", apiName, resp.StatusCode, details)
-	}
-	return fmt.Errorf("%s HTTP %d: %s", apiName, resp.StatusCode, trimmedBody)
-}
-
-func p2pRetryAfterFromResponse(resp *http.Response, now time.Time) (time.Time, bool) {
-	if raw := strings.TrimSpace(resp.Header.Get("Retry-After")); raw != "" {
-		if seconds, err := strconv.Atoi(raw); err == nil && seconds > 0 {
-			return now.Add(time.Duration(seconds) * time.Second), true
-		}
-		if ts, err := http.ParseTime(raw); err == nil {
-			if ts.After(now) {
-				return ts, true
-			}
-		}
-	}
-	body, _ := io.ReadAll(resp.Body)
-	resp.Body = io.NopCloser(bytes.NewReader(body))
-	if len(body) > 0 {
-		var parsed p2pAPIErrorEnvelope
-		if err := json.Unmarshal(body, &parsed); err == nil && parsed.RetryAfterSeconds > 0 {
-			return now.Add(time.Duration(parsed.RetryAfterSeconds) * time.Second), true
-		}
-	}
-	return time.Time{}, false
 }
 
 func (a *App) getP2PTelemetryRateLimitUntil() (time.Time, bool) {

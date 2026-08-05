@@ -11,14 +11,15 @@ import (
 	"time"
 
 	"discovery/app/core/database"
+	"discovery/app/p2p"
 )
 
 const (
-	p2pTelemetryRetryBase       = 30 * time.Second
-	p2pTelemetryRetryMax        = 5 * time.Minute
-	p2pTelemetryDrainLimit      = 20
-	p2pTelemetryDedupWindow     = 5 * time.Minute
-	p2pTelemetryMaxPayloadBytes = 1 << 20
+	p2pTelemetryRetryBase       = p2p.TelemetryRetryBase
+	p2pTelemetryRetryMax        = p2p.TelemetryRetryMax
+	p2pTelemetryDrainLimit      = p2p.TelemetryDrainLimit
+	p2pTelemetryDedupWindow     = p2p.TelemetryDedupWindow
+	p2pTelemetryMaxPayloadBytes = p2p.TelemetryMaxPayloadBytes
 )
 
 func (a *App) buildP2PTelemetryPayload() (P2PTelemetryPayload, error) {
@@ -137,7 +138,7 @@ func (a *App) drainP2PTelemetryOutbox(ctx context.Context, limit int) error {
 		}
 		if err := a.postP2PTelemetryPayload(ctx, payload, entry.IdempotencyKey); err != nil {
 			attempt := entry.Attempts + 1
-			nextAttemptAt := time.Now().Add(p2pTelemetryRetryBackoff(attempt))
+			nextAttemptAt := time.Now().Add(p2p.TelemetryRetryBackoff(attempt))
 			_ = a.db.RescheduleP2PTelemetryOutbox(entry.ID, attempt, nextAttemptAt, err.Error())
 			continue
 		}
@@ -146,28 +147,8 @@ func (a *App) drainP2PTelemetryOutbox(ctx context.Context, limit int) error {
 	return nil
 }
 
-func p2pTelemetryRetryBackoff(attempt int) time.Duration {
-	if attempt <= 0 {
-		attempt = 1
-	}
-	backoff := p2pTelemetryRetryBase
-	for i := 1; i < attempt; i++ {
-		backoff *= 2
-		if backoff >= p2pTelemetryRetryMax {
-			backoff = p2pTelemetryRetryMax
-			break
-		}
-	}
-	return backoff
-}
-
+// marshalP2PTelemetryPayload delega a serialização (com limite de tamanho)
+// para o pacote p2p.
 func marshalP2PTelemetryPayload(payload P2PTelemetryPayload) ([]byte, error) {
-	payloadJSON, err := json.Marshal(payload)
-	if err != nil {
-		return nil, err
-	}
-	if len(payloadJSON) > p2pTelemetryMaxPayloadBytes {
-		return nil, fmt.Errorf("payload de telemetria excede limite de %d bytes", p2pTelemetryMaxPayloadBytes)
-	}
-	return payloadJSON, nil
+	return p2p.MarshalTelemetryPayload(payload)
 }

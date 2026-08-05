@@ -77,7 +77,7 @@ discovery/
 │   │   ├── printers.go         # Gerenciamento de impressoras
 │   │   └── export_redact.go    # getRedact() — flag de redação de PII para exports
 │   ├── Automação
-│   │   ├── automation.go       # Bridge entre internal/automation.Service e frontend
+│   │   ├── automation.go       # Bridge entre core/automation.Service e frontend
 │   │   └── automation_p2p.go   # automationPackageManagerRouter: P2P vs HTTP vs winget
 │   ├── Notificações e Comandos
 │   │   ├── notification_center.go   # NotificationDispatchRequest, DispatchNotification, loop de resposta
@@ -86,37 +86,37 @@ discovery/
 │   ├── Debug e Diagnóstico
 │   │   ├── remote_debug.go     # remoteDebugManager: debug remoto com streaming de logs
 │   │   └── psadt_debug_bridge.go # Bootstrap e diagnóstico do PSADT
-│   ├── P2P
-│   │   ├── p2p.go              # p2pCoordinator — núcleo: discovery, lifecycle, estado
-│   │   ├── p2p_api.go          # Seed plan + telemetry (chamadas ao servidor central)
+│   ├── P2P (app/p2p/ — núcleo do domínio)
+│   │   ├── p2p.go              # Coordinator — núcleo: discovery, lifecycle, estado
+│   │   ├── api.go              # Helpers de API: seed plan + telemetry (erros, retry, query)
+│   │   ├── onboarding.go       # Zero-touch: assinatura HMAC, ofertas, parse de credenciais
+│   │   ├── telemetry.go        # Outbox de telemetria: backoff, marshalling, limites
+│   │   ├── config.go           # Configuração P2P (normalização, defaults, seed plan)
+│   │   ├── helpers.go          # Helpers: SHA256, listen range, assinatura de replicação
 │   │   ├── p2p_chunks.go       # p2pChunkScheduler: swarm/chunks, bandwidth cap
 │   │   ├── p2p_cleanup.go      # Limpeza de artefatos expirados e arquivos temporários
 │   │   ├── p2p_cloud_bootstrap.go # Bootstrap via servidor externo (cloud seed)
-│   │   ├── p2p_config.go       # Helpers de configuração P2P (normalização, defaults)
 │   │   ├── p2p_discovery.go    # p2pDiscoveryProvider interface + mDNS e UDP broadcast
 │   │   ├── p2p_download.go     # Download de artefatos (single peer e helpers)
 │   │   ├── p2p_gossip.go       # Gossip pull: sincronização do índice de peers via libp2p
-│   │   ├── p2p_http.go         # p2pTransferServer: servidor HTTP local P2P
+│   │   ├── p2p_http.go         # TransferServer: servidor HTTP local P2P
 │   │   ├── p2p_libp2p.go       # p2pLibP2PProvider + p2pMultiProvider (DHT, bootstrap)
 │   │   ├── p2p_libp2p_transport.go # Transport layer libp2p (stream handling)
-│   │   ├── p2p_onboarding.go   # p2pOnboardingState: loop de onboarding com backoff
+│   │   ├── p2p_onboarding_http.go # HTTP handler de onboarding (GET/PUT /p2p/config/onboard)
 │   │   ├── p2p_peer_cache.go   # Cache persistente de peers conhecidos (até 128 entradas)
 │   │   ├── p2p_publish.go      # ListArtifacts e publicação de artefatos
 │   │   ├── p2p_replication.go  # Workers de replicação: push de artefatos entre peers
 │   │   ├── p2p_status.go       # Views de status P2P para UI
-│   │   └── p2p_telemetry_outbox.go # Outbox de telemetria P2P (batch envio ao servidor)
+│   │   └── p2p_transfer_progress.go # Progresso de transferência (upload/download)
 │   └── UI e Suporte
 │       ├── chat.go             # Chat AI: config, histórico, streaming, integração MCP
-│       ├── mesh.go             # Instalação automática do MeshCentral Agent
 │       ├── status.go           # GetStatusOverview — snapshot de saúde para UI
 │       ├── tray.go             # System tray: ícone, menu, heartbeat watchdog
 │       ├── ui_runtime.go       # Heartbeat/suspensão do runtime da UI para o watchdog
 │       ├── ui_runtime_windows.go # Probe Win32 (EnumWindows/IsHungAppWindow) para validar a janela principal
-│       ├── ui_runtime_other.go # Fallback cross-platform sem probe nativo
-│       ├── tray_text_other.go  # Wrappers systray non-Darwin
-│       └── tray_text_darwin.go # Wrappers systray Darwin
+│       └── ui_runtime_other.go # Fallback cross-platform sem probe nativo
 │
-├── internal/                   # Pacotes internos (lógica sem dependência do App)
+├── core/                       # Pacotes internos (lógica sem dependência do App)
 │   ├── agentconn/              # Conexão NATS/WebSocket com servidor central
 │   │   └── runtime.go          # Runtime de conexão: config, reconexão, callbacks de ping e comandos
 │   ├── ai/                     # Serviço de chat AI (LLM OpenAI-compatible)
@@ -164,8 +164,8 @@ discovery/
 │   │   ├── catalog_service.go  # CatalogService: fetch + cache do app store
 │   │   ├── inventory_service.go# InventoryService: coleta com timeout e progress
 │   │   └── printer_service.go  # PrinterService: wrapper do printer.Manager
-│   ├── watchdog/               # Health monitoring e recovery de goroutines
-│   │   └── watchdog.go         # Watchdog: heartbeat, timeout, panic recovery
+│   ├── remotedebug/            # Debug remoto (streaming de logs)
+│   │   └── service.go          # Sessões de debug remoto com streaming
 │   └── winget/                 # Cliente winget (Windows Package Manager)
 │       └── client.go           # Run winget commands, parse tabular output
 │
@@ -238,28 +238,29 @@ main.go ────────────────────────
    │         │      ├── command_result_outbox.go: outbox pattern para resultados
    │         │      └── consolidation_engine.go: janelas de consolidação de eventos
    │         │
-   │         ├── P2P domain (p2p.go, p2p_*.go)
-   │         │      ├── p2pCoordinator: descoberta + replicação + gossip
-   │         │      ├── p2pTransferServer: HTTP local P2P
+   │         ├── P2P domain (app/p2p/ — núcleo; bridges na raiz de app/)
+   │         │      ├── Coordinator: descoberta + replicação + gossip
+   │         │      ├── TransferServer: HTTP local P2P
    │         │      ├── p2pChunkScheduler: swarm downloads
    │         │      ├── p2pPeerCache: cache persistente de peers
    │         │      ├── Providers: mDNS, UDP, libp2p (DHT)
    │         │      ├── Cloud bootstrap: seed externo via servidor
-   │         │      └── Onboarding: boot sem servidor
+   │         │      ├── Onboarding: boot sem servidor (zero-touch)
+   │         │      └── API/Telemetry: helpers de seed plan + outbox
    │         │
    │         └── Shared (chat.go, sync.go, store.go, ...)
    │
-   ├──► internal/agentconn    # Conexão servidor (NATS/WS + dispatch de comandos)
-   ├──► internal/ai           # LLM chat service
-   ├──► internal/automation   # Motor de automação
-   ├──► internal/buildinfo    # Versão de build para pacotes internos
-   ├──► internal/database     # SQLite KV cache
-   ├──► internal/inventory    # Coleta de inventário
-   ├──► internal/mcp          # MCP server + registry + ping
-   ├──► internal/models       # Tipos compartilhados
-   ├──► internal/selfupdate   # Auto-atualização do binário
-   ├──► internal/services     # Wrappers de serviços
-   └──► internal/watchdog     # Health monitoring
+   ├──► core/agentconn    # Conexão servidor (NATS/WS + dispatch de comandos)
+   ├──► core/ai           # LLM chat service
+   ├──► core/automation   # Motor de automação
+   ├──► core/buildinfo    # Versão de build para pacotes internos
+   ├──► core/database     # SQLite KV cache
+   ├──► core/inventory    # Coleta de inventário
+   ├──► core/mcp          # MCP server + registry + ping
+   ├──► core/models       # Tipos compartilhados
+   ├──► core/selfupdate   # Auto-atualização do binário
+   ├──► core/services     # Wrappers de serviços
+   └──► core/remotedebug  # Debug remoto (streaming de logs)
 ```
 
 ---
@@ -285,7 +286,7 @@ main.go ────────────────────────
 | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `app.go`     | `App` struct central. Campos de estado, `NewApp()`, `startup()`, `shutdown()`, `beginActivity()`, lifecycle helpers.                                 |
 | `types.go`   | Tipos compartilhados usados por quase todo o pacote: `AppStartupOptions`, `RuntimeFlags`, `P2PConfig`, `P2PMetrics`, views de UI e tipos auxiliares. |
-| `bridge.go`  | Implementa a interface `AppBridge` esperada por `internal/mcp/register.go`. Converte resultados internos → JSON para ferramentas MCP.                |
+| `bridge.go`  | Implementa a interface `AppBridge` esperada por `core/mcp/register.go`. Converte resultados internos → JSON para ferramentas MCP.                    |
 | `logging.go` | `logBuffer`: ring buffer thread-safe, persistência opcional em arquivo e sanitização de tokens.                                                      |
 | `memory.go`  | CRUD de notas locais via SQLite.                                                                                                                     |
 
@@ -343,7 +344,7 @@ main.go ────────────────────────
 
 | Arquivo             | Responsabilidade                                                                               |
 | ------------------- | ---------------------------------------------------------------------------------------------- |
-| `automation.go`     | Bridge entre `internal/automation.Service` e frontend. Traduz estado e enums para a UI.        |
+| `automation.go`     | Bridge entre `core/automation.Service` e frontend. Traduz estado e enums para a UI.            |
 | `automation_p2p.go` | `automationPackageManagerRouter`: decide se instalação usa P2P (swarm), HTTP ou winget nativo. |
 
 #### Notificações e Comandos
@@ -361,44 +362,47 @@ main.go ────────────────────────
 | `remote_debug.go`       | `remoteDebugManager`: sessão de debug remoto com streaming de logs do agente. |
 | `psadt_debug_bridge.go` | Bootstrap e diagnóstico do PSADT (PowerShell App Deploy Toolkit).             |
 
-#### P2P
+#### P2P (pacote `app/p2p/`)
 
-| Arquivo                   | Responsabilidade                                                                                              |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `p2p.go`                  | `p2pCoordinator`: núcleo do P2P, lifecycle, estado e orquestração.                                            |
-| `p2p_api.go`              | Chamadas ao servidor para seed planning e telemetry P2P.                                                      |
-| `p2p_chunks.go`           | `p2pChunkScheduler`: divide artefatos em chunks, distribui entre peers e aplica bandwidth cap.                |
-| `p2p_cleanup.go`          | Limpeza de artefatos expirados e arquivos temporários do diretório P2P.                                       |
-| `p2p_cloud_bootstrap.go`  | Bootstrap via servidor externo: obtém peers iniciais quando não há descoberta local.                          |
-| `p2p_config.go`           | Helpers de configuração P2P: normalização, valores default e validação.                                       |
-| `p2p_discovery.go`        | `p2pDiscoveryProvider` interface + providers: `p2pMDNSProvider` e UDP broadcast.                              |
-| `p2p_download.go`         | Download de artefatos de um único peer e helpers de verificação.                                              |
-| `p2p_gossip.go`           | Gossip pull: `pullPeerGossip()` — sincronização do índice de artefatos entre peers via libp2p.                |
-| `p2p_http.go`             | `p2pTransferServer`: HTTP local para servir artefatos e receber onboarding.                                   |
-| `p2p_libp2p.go`           | `p2pLibP2PProvider` e `p2pMultiProvider`: integração libp2p com DHT, bootstrap estático (hybrid/libp2p-only). |
-| `p2p_libp2p_transport.go` | Transport layer libp2p (stream handling).                                                                     |
-| `p2p_onboarding.go`       | `p2pOnboardingState`: loop de onboarding para agentes sem servidor. Retry com backoff exponencial.            |
-| `p2p_peer_cache.go`       | Cache persistente de peers conhecidos (até 128 entradas) entre reinicializações.                              |
-| `p2p_publish.go`          | `ListArtifacts` e publicação de artefatos para os peers.                                                      |
-| `p2p_replication.go`      | Workers de replicação: `replicateArtifactToPeerNow()` — push com validação e token auth.                      |
-| `p2p_status.go`           | Views de status P2P para UI (peers, artefatos, modo).                                                         |
-| `p2p_telemetry_outbox.go` | Outbox de telemetria P2P: batch de eventos enviados ao servidor central.                                      |
+| Arquivo                    | Responsabilidade                                                                                              |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `p2p.go`                   | `Coordinator`: núcleo do P2P, lifecycle, estado e orquestração.                                               |
+| `api.go`                   | Helpers de API: `APIResponseError`, `RetryAfterFromResponse`, `DistributionStatusEndpointWithOptions`.        |
+| `onboarding.go`            | Zero-touch: `ComputeOnboardingSignature`, `BuildOnboardingOffer`, `ParseZeroTouchRegisterResponse`.           |
+| `telemetry.go`             | Outbox de telemetria: `TelemetryRetryBackoff`, `MarshalTelemetryPayload` e limites.                           |
+| `config.go`                | Configuração P2P: normalização, valores default, seed plan.                                                   |
+| `helpers.go`               | Helpers: `ComputeFileSHA256`, `ListenInRange`, `SignReplicationControl`, `ParsePortFromURL`.                  |
+| `p2p_chunks.go`            | `p2pChunkScheduler`: divide artefatos em chunks, distribui entre peers e aplica bandwidth cap.                |
+| `p2p_cleanup.go`           | Limpeza de artefatos expirados e arquivos temporários do diretório P2P.                                       |
+| `p2p_cloud_bootstrap.go`   | Bootstrap via servidor externo: obtém peers iniciais quando não há descoberta local.                          |
+| `p2p_discovery.go`         | `p2pDiscoveryProvider` interface + providers: `p2pMDNSProvider` e UDP broadcast.                              |
+| `p2p_download.go`          | Download de artefatos de um único peer e helpers de verificação.                                              |
+| `p2p_gossip.go`            | Gossip pull: `pullPeerGossip()` — sincronização do índice de artefatos entre peers via libp2p.                |
+| `p2p_http.go`              | `TransferServer`: HTTP local para servir artefatos e receber onboarding.                                      |
+| `p2p_libp2p.go`            | `p2pLibP2PProvider` e `p2pMultiProvider`: integração libp2p com DHT, bootstrap estático (hybrid/libp2p-only). |
+| `p2p_libp2p_transport.go`  | Transport layer libp2p (stream handling).                                                                     |
+| `p2p_onboarding_http.go`   | HTTP handler de onboarding (GET/PUT `/p2p/config/onboard`).                                                   |
+| `p2p_peer_cache.go`        | Cache persistente de peers conhecidos (até 128 entradas) entre reinicializações.                              |
+| `p2p_publish.go`           | `ListArtifacts` e publicação de artefatos para os peers.                                                      |
+| `p2p_replication.go`       | Workers de replicação: `replicateArtifactToPeerNow()` — push com validação e token auth.                      |
+| `p2p_status.go`            | Views de status P2P para UI (peers, artefatos, modo).                                                         |
+| `p2p_transfer_progress.go` | Progresso de transferência (upload/download) emitido via eventos.                                             |
+
+> **Bridges na raiz de `app/`** (`p2p_bridge.go`, `p2p_api.go`, `p2p_onboarding.go`, `p2p_telemetry_outbox.go`, etc.) permanecem no `package app` delegando para `app/p2p/` — os métodos exportados são bound pelo Wails e não podem ser movidos.
 
 #### UI, Apresentação e Suporte
 
 | Arquivo                 | Responsabilidade                                                                                       |
 | ----------------------- | ------------------------------------------------------------------------------------------------------ |
-| `chat.go`               | Config de chat, histórico em memória, streaming e integração com `internal/ai` e `internal/mcp`.       |
+| `chat.go`               | Config de chat, histórico em memória, streaming e integração com `core/ai` e `core/mcp`.               |
 | `status.go`             | `GetStatusOverview()` → `StatusOverview`: snapshot de saúde geral para a UI.                           |
-| `mesh.go`               | Instalação automática do MeshCentral Agent quando habilitado no servidor.                              |
 | `tray.go`               | System tray: ícone, menu, heartbeat watchdog e ações de janela.                                        |
 | `ui_runtime.go`         | Heartbeat, suspensão e recovery do runtime da UI integrados ao watchdog.                               |
 | `ui_runtime_windows.go` | Probe nativo Win32 (`EnumWindows`, `IsHungAppWindow`) para validar responsividade da janela principal. |
 | `ui_runtime_other.go`   | Fallback cross-platform quando o probe nativo não existe.                                              |
-| `tray_text_other.go`    | Wrappers de `systray.Set*` para plataformas não-Darwin.                                                |
-| `tray_text_darwin.go`   | Wrappers de `systray.Set*` para Darwin.                                                                |
+| `tray_embed.go` (raiz)  | `//go:embed` dos ícones PNG 32x32 do systray (normal, provisioning, offline).                          |
 
-### Package `internal/`
+### Package `core/`
 
 | Pacote        | Arquivo                | Responsabilidade                                                                                                                                                                                       |
 | ------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -432,7 +436,7 @@ main.go ────────────────────────
 | `services`    | `catalog_service.go`   | `CatalogService`: fetch e cache do catálogo de aplicativos.                                                                                                                                            |
 | `services`    | `inventory_service.go` | `InventoryService`: coleta com timeout e progress callback.                                                                                                                                            |
 | `services`    | `printer_service.go`   | `PrinterService`: wrapper do `printer.Manager`.                                                                                                                                                        |
-| `watchdog`    | `watchdog.go`          | `Watchdog`: heartbeat por componente, timeout de inatividade, recuperação de goroutine panic.                                                                                                          |
+| `remotedebug` | `service.go`           | Sessões de debug remoto com streaming de logs do agente.                                                                                                                                               |
 | `winget`      | `client.go`            | `Client`: executa `winget` commands e faz parse da saída tabular no formato Windows.                                                                                                                   |
 
 ### Frontend `frontend/`
@@ -474,7 +478,6 @@ main()
               ├─► syncCoord.Run()       // goroutine: sync de políticas
               ├─► p2pCoord.Run()        // goroutine: P2P discovery
               ├─► automationSvc.Run()   // goroutine: cron + callbacks
-              └─► meshCentral install   // se habilitado
 ```
 
 ### P2P Artifact Distribution
@@ -523,27 +526,27 @@ UI Chat interno → ai.Service
 
 ### Onde adicionar cada tipo de funcionalidade
 
-| Tipo de mudança                              | Onde implementar                                                            |
-| -------------------------------------------- | --------------------------------------------------------------------------- |
-| Nova feature de UI (método Go para frontend) | `app/{dominio}_bridge.go` ou `app/{dominio}.go` — método em `*App `         |
-| Nova ferramenta MCP                          | `internal/mcp/register.go` (interface) + `app/bridge.go` (implementação)    |
-| Nova query de inventário                     | `internal/inventory/osquery.go` ou `powershell.go` + mapper em `mappers.go` |
-| Nova lógica de inventário (negócio)          | `app/inventory/service.go` ou `app/inventory/sync.go`                       |
-| Nova fonte de dados P2P                      | `app/p2p.go` (coordinator) + se necessário `app/p2p_discovery.go`           |
-| Nova política de automação                   | `internal/automation/types.go` (tipo) + `service.go` (execução)             |
-| Persistência de novo dado                    | `internal/database/sqlite.go` (schema + métodos)                            |
-| Novo export format                           | `internal/export/` (renderer) + `app/updates/export.go` (orquestrador)      |
-| Nova configuração de debug/conexão           | `app/debug/config.go` (campo) + `app/debug/service.go` (lógica)             |
-| Auto-atualização do binário                  | `internal/selfupdate/updater.go`                                            |
-| Nova notificação para usuário                | `app/notification_center.go` (`DispatchNotification`)                       |
+| Tipo de mudança                              | Onde implementar                                                                  |
+| -------------------------------------------- | --------------------------------------------------------------------------------- |
+| Nova feature de UI (método Go para frontend) | `app/{dominio}_bridge.go` ou `app/{dominio}.go` — método em `*App `               |
+| Nova ferramenta MCP                          | `core/mcp/register.go` (interface) + `app/bridge.go` (implementação)              |
+| Nova query de inventário                     | `core/inventory/osquery.go` ou `powershell.go` + mapper em `mappers.go`           |
+| Nova lógica de inventário (negócio)          | `app/inventory/service.go` ou `app/inventory/sync.go`                             |
+| Nova fonte de dados P2P                      | `app/p2p/` (núcleo: `p2p.go`, `p2p_discovery.go`) + bridge em `app/p2p_bridge.go` |
+| Nova política de automação                   | `core/automation/types.go` (tipo) + `service.go` (execução)                       |
+| Persistência de novo dado                    | `core/database/sqlite.go` (schema + métodos)                                      |
+| Novo export format                           | `core/export/` (renderer) + `app/updates/export.go` (orquestrador)                |
+| Nova configuração de debug/conexão           | `app/debug/config.go` (campo) + `app/debug/service.go` (lógica)                   |
+| Auto-atualização do binário                  | `core/selfupdate/updater.go`                                                      |
+| Nova notificação para usuário                | `app/notification_center.go` (`DispatchNotification`)                             |
 
 ### Convenções
 
 - **Métodos de UI** (chamados pelo JS): receptor `*App`, exportados, retornam tipos serializáveis JSON
-- **Goroutines**: usar `watchdog.SafeGoWithContext()` para monitoramento e recuperação de panics
+- **Goroutines**: usar `safego.Go()` (via `a.safeGo`) para monitoramento e recuperação de panics
 - **Logging**: `a.logs.append("[modulo] mensagem")` — ring buffer acessível via `GetLogs()` no frontend
 - **Config persistence**: SQLite `CacheSetJSON` / `CacheGetJSON` — nunca gravar credenciais em texto simples sem necessidade
-- **Cross-domain calls**: `app/` pode importar qualquer `internal/`; `internal/` não deve importar `app/`
+- **Cross-domain calls**: `app/` pode importar qualquer `core/`; `core/` não deve importar `app/`
 - **Organização física do `app/`**: manter arquivos no mesmo diretório enquanto forem `package app`. Separação em subpastas exige subpacotes Go e refatoração explícita de imports e bindings.
 
 ---
@@ -584,15 +587,14 @@ Os arquivos em `frontend/wailsjs/go/app/` são **gerados automaticamente** pelo 
 
 ## 7. Dependências Notáveis
 
-| Dependência          | Uso                                                          |
-| -------------------- | ------------------------------------------------------------ |
-| `wails/v2`           | Framework GUI desktop (runtime, bindings, window management) |
-| `energye/systray`    | System tray cross-platform                                   |
-| `libp2p/go-libp2p`   | Stack P2P (DHT, mDNS, TCP/QUIC transport)                    |
-| `grandcat/zeroconf`  | mDNS discovery (modo legacy P2P)                             |
-| `robfig/cron/v3`     | Cron scheduling para automação                               |
-| `nats-io/nats.go`    | Comunicação com servidor central via NATS                    |
-| `modernc.org/sqlite` | SQLite driver (pure Go, sem CGO)                             |
-| `go-pdf/fpdf`        | Geração de PDFs                                              |
-| `samber/lo`          | Utilities funcionais (map, filter, etc.)                     |
-| `google/uuid`        | Geração de UUIDs para IDs de peers/artifacts                 |
+| Dependência          | Uso                                                                              |
+| -------------------- | -------------------------------------------------------------------------------- |
+| `wails/v3`           | Framework GUI desktop (runtime, bindings, window management, system tray nativo) |
+| `libp2p/go-libp2p`   | Stack P2P (DHT, mDNS, TCP/QUIC transport)                                        |
+| `grandcat/zeroconf`  | mDNS discovery (modo legacy P2P)                                                 |
+| `robfig/cron/v3`     | Cron scheduling para automação                                                   |
+| `nats-io/nats.go`    | Comunicação com servidor central via NATS                                        |
+| `modernc.org/sqlite` | SQLite driver (pure Go, sem CGO)                                                 |
+| `go-pdf/fpdf`        | Geração de PDFs                                                                  |
+| `samber/lo`          | Utilities funcionais (map, filter, etc.)                                         |
+| `google/uuid`        | Geração de UUIDs para IDs de peers/artifacts                                     |

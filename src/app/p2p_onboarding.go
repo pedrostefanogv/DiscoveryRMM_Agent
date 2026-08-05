@@ -4,9 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/hmac"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -20,6 +17,7 @@ import (
 
 	"discovery/app/core/tlsutil"
 	"discovery/app/debug"
+	"discovery/app/p2p"
 )
 
 const (
@@ -313,20 +311,9 @@ func (a *App) applyOnboardingOffer(offer P2POnboardingRequest) (P2POnboardingRes
 	return a.registerWithDeployKey(offer.ServerURL, offer.DeployKey)
 }
 
-// validateServerURL ensures the URL uses http or https and has a non-empty host,
-// preventing SSRF via unexpected schemes (file://, data://, etc.).
+// validateServerURL delega para p2p.ValidateServerURL.
 func validateServerURL(rawURL string) error {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return fmt.Errorf("URL do servidor invalida: %w", err)
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return fmt.Errorf("URL do servidor deve usar http ou https, obtido: %q", u.Scheme)
-	}
-	if u.Host == "" {
-		return fmt.Errorf("URL do servidor sem host")
-	}
-	return nil
+	return p2p.ValidateServerURL(rawURL)
 }
 
 // registerWithDeployKey calls the server registration endpoint with the deploy key
@@ -485,150 +472,35 @@ func loadInstallerConfigForZeroTouchPersist() (InstallerConfig, string, error) {
 	return InstallerConfig{}, "", nil
 }
 
+// buildZeroTouchServerURL delega para p2p.BuildZeroTouchServerURL.
 func buildZeroTouchServerURL(scheme, server string) string {
-	scheme = strings.TrimSpace(strings.ToLower(scheme))
-	if scheme == "" {
-		scheme = "https"
-	}
-	server = strings.TrimSpace(server)
-	if server == "" {
-		return ""
-	}
-	return scheme + "://" + server
+	return p2p.BuildZeroTouchServerURL(scheme, server)
 }
 
+// parseZeroTouchServerURL delega para p2p.ParseZeroTouchServerURL.
 func parseZeroTouchServerURL(raw string) (string, string, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return "", "", fmt.Errorf("server url vazio")
-	}
-	input := raw
-	if !strings.Contains(input, "://") {
-		input = "https://" + input
-	}
-	u, err := url.Parse(input)
-	if err != nil {
-		return "", "", err
-	}
-	scheme := strings.TrimSpace(strings.ToLower(u.Scheme))
-	if scheme == "" {
-		scheme = "https"
-	}
-	if scheme != "http" && scheme != "https" {
-		return "", "", fmt.Errorf("scheme invalido: %s", scheme)
-	}
-	host := strings.TrimSpace(u.Host)
-	if host == "" {
-		host = strings.Trim(strings.TrimSpace(u.Path), "/")
-	}
-	if host == "" {
-		return "", "", fmt.Errorf("host ausente em server url")
-	}
-	return scheme, host, nil
+	return p2p.ParseZeroTouchServerURL(raw)
 }
 
+// firstNonEmptyAnyString delega para p2p.FirstNonEmptyAnyString.
 func firstNonEmptyAnyString(values ...any) string {
-	for _, value := range values {
-		s := strings.TrimSpace(fmt.Sprint(value))
-		if s != "" && s != "<nil>" {
-			return s
-		}
-	}
-	return ""
+	return p2p.FirstNonEmptyAnyString(values...)
 }
 
+// parseZeroTouchRegisterResponse delega para p2p.ParseZeroTouchRegisterResponse.
 func parseZeroTouchRegisterResponse(body []byte, fallbackServerURL string) (zeroTouchRegisterCredentials, error) {
-	var raw map[string]any
-	if err := json.Unmarshal(body, &raw); err != nil {
-		return zeroTouchRegisterCredentials{}, fmt.Errorf("resposta JSON invalida no registro zero-touch: %w", err)
+	creds, err := p2p.ParseZeroTouchRegisterResponse(body, fallbackServerURL)
+	if err != nil {
+		return zeroTouchRegisterCredentials{}, err
 	}
-
-	extract := func(m map[string]any) zeroTouchRegisterCredentials {
-		credentials := zeroTouchRegisterCredentials{
-			AuthToken: firstNonEmptyAnyString(m["token"], m["authToken"], m["auth_token"], m["accessToken"], m["access_token"]),
-			AgentID:   firstNonEmptyAnyString(m["agentId"], m["agentID"], m["agent_id"], m["id"]),
-			ApiScheme: strings.ToLower(strings.TrimSpace(firstNonEmptyAnyString(m["apiScheme"], m["api_scheme"], m["scheme"]))),
-			ApiServer: strings.TrimSpace(firstNonEmptyAnyString(m["apiServer"], m["api_server"], m["server"], m["serverHost"], m["server_host"])),
-			ClientID:  strings.TrimSpace(firstNonEmptyAnyString(m["clientId"], m["client_id"], m["client"])),
-			SiteID:    strings.TrimSpace(firstNonEmptyAnyString(m["siteId"], m["site_id"], m["site"])),
-		}
-
-		serverURL := strings.TrimSpace(firstNonEmptyAnyString(m["serverUrl"], m["server_url"], m["baseUrl"], m["base_url"]))
-		if credentials.ApiScheme == "" || credentials.ApiServer == "" {
-			if parsedScheme, parsedServer, err := parseZeroTouchServerURL(serverURL); err == nil {
-				if credentials.ApiScheme == "" {
-					credentials.ApiScheme = parsedScheme
-				}
-				if credentials.ApiServer == "" {
-					credentials.ApiServer = parsedServer
-				}
-			}
-		}
-
-		return credentials
-	}
-
-	mergeMissing := func(dst *zeroTouchRegisterCredentials, src zeroTouchRegisterCredentials) {
-		if strings.TrimSpace(dst.AuthToken) == "" {
-			dst.AuthToken = strings.TrimSpace(src.AuthToken)
-		}
-		if strings.TrimSpace(dst.AgentID) == "" {
-			dst.AgentID = strings.TrimSpace(src.AgentID)
-		}
-		if strings.TrimSpace(dst.ApiScheme) == "" {
-			dst.ApiScheme = strings.TrimSpace(src.ApiScheme)
-		}
-		if strings.TrimSpace(dst.ApiServer) == "" {
-			dst.ApiServer = strings.TrimSpace(src.ApiServer)
-		}
-		if strings.TrimSpace(dst.ClientID) == "" {
-			dst.ClientID = strings.TrimSpace(src.ClientID)
-		}
-		if strings.TrimSpace(dst.SiteID) == "" {
-			dst.SiteID = strings.TrimSpace(src.SiteID)
-		}
-	}
-
-	credentials := extract(raw)
-	for _, key := range []string{"data", "result", "payload"} {
-		nested, ok := raw[key].(map[string]any)
-		if !ok {
-			continue
-		}
-		mergeMissing(&credentials, extract(nested))
-	}
-
-	credentials.AuthToken = strings.TrimSpace(credentials.AuthToken)
-	credentials.AgentID = strings.TrimSpace(credentials.AgentID)
-	credentials.ApiScheme = strings.TrimSpace(strings.ToLower(credentials.ApiScheme))
-	credentials.ApiServer = strings.TrimSpace(credentials.ApiServer)
-
-	if credentials.AuthToken == "" || credentials.AgentID == "" {
-		return zeroTouchRegisterCredentials{}, fmt.Errorf("resposta sem auth token/agent id no registro zero-touch")
-	}
-
-	if credentials.ApiScheme == "" || credentials.ApiServer == "" {
-		parsedScheme, parsedServer, err := parseZeroTouchServerURL(fallbackServerURL)
-		if err != nil {
-			return zeroTouchRegisterCredentials{}, fmt.Errorf("resposta sem apiScheme/apiServer e fallback invalido: %w", err)
-		}
-		if credentials.ApiScheme == "" {
-			credentials.ApiScheme = parsedScheme
-		}
-		if credentials.ApiServer == "" {
-			credentials.ApiServer = parsedServer
-		}
-	}
-
-	if credentials.ApiScheme != "http" && credentials.ApiScheme != "https" {
-		return zeroTouchRegisterCredentials{}, fmt.Errorf("apiScheme invalido na resposta do registro zero-touch")
-	}
-
-	if strings.TrimSpace(credentials.ApiServer) == "" {
-		return zeroTouchRegisterCredentials{}, fmt.Errorf("apiServer vazio na resposta do registro zero-touch")
-	}
-
-	return credentials, nil
+	return zeroTouchRegisterCredentials{
+		AuthToken: creds.AuthToken,
+		AgentID:   creds.AgentID,
+		ApiScheme: creds.ApiScheme,
+		ApiServer: creds.ApiServer,
+		ClientID:  creds.ClientID,
+		SiteID:    creds.SiteID,
+	}, nil
 }
 
 func (a *App) applyZeroTouchRuntimeConnection(inst InstallerConfig) {
@@ -654,38 +526,18 @@ func (a *App) applyZeroTouchRuntimeConnection(inst InstallerConfig) {
 	}
 }
 
-// computeOnboardingSignature builds the HMAC-SHA256 for an onboarding offer.
-// Key = deployKey itself (self-contained; no out-of-band shared secret needed).
+// computeOnboardingSignature delega para p2p.ComputeOnboardingSignature.
 func computeOnboardingSignature(sourceAgent, serverURL, deployKey, expiresAt, nonce string) string {
-	payload := strings.Join([]string{sourceAgent, serverURL, deployKey, expiresAt, nonce}, "\n")
-	mac := hmac.New(sha256.New, []byte(deployKey))
-	_, _ = mac.Write([]byte(payload))
-	return hex.EncodeToString(mac.Sum(nil))
+	return p2p.ComputeOnboardingSignature(sourceAgent, serverURL, deployKey, expiresAt, nonce)
 }
 
-// BuildOnboardingOffer creates a signed onboarding offer for distribution to unconfigured peers.
+// BuildOnboardingOffer delega para p2p.BuildOnboardingOffer.
 func BuildOnboardingOffer(sourceAgentID, serverURL, deployKey string, ttl time.Duration) (P2POnboardingRequest, error) {
-	if strings.TrimSpace(deployKey) == "" {
-		return P2POnboardingRequest{}, fmt.Errorf("deployKey vazio: impossivel assinar oferta")
-	}
-	if strings.TrimSpace(serverURL) == "" {
-		return P2POnboardingRequest{}, fmt.Errorf("serverURL vazio: impossivel montar oferta")
-	}
-	nonceBytes := make([]byte, 16)
-	if _, err := rand.Read(nonceBytes); err != nil {
+	offer, err := p2p.BuildOnboardingOffer(sourceAgentID, serverURL, deployKey, ttl)
+	if err != nil {
 		return P2POnboardingRequest{}, err
 	}
-	nonce := hex.EncodeToString(nonceBytes)
-	expiresAt := time.Now().UTC().Add(ttl).Format(time.RFC3339)
-	sig := computeOnboardingSignature(sourceAgentID, serverURL, deployKey, expiresAt, nonce)
-	return P2POnboardingRequest{
-		ServerURL:    serverURL,
-		DeployKey:    deployKey,
-		ExpiresAtUTC: expiresAt,
-		SourceAgent:  sourceAgentID,
-		Nonce:        nonce,
-		Signature:    sig,
-	}, nil
+	return P2POnboardingRequest(offer), nil
 }
 
 // handleP2POnboard is the HTTP handler for GET/PUT /p2p/config/onboard.
