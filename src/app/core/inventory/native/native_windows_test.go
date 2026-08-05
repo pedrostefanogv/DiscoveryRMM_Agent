@@ -1,0 +1,124 @@
+//go:build windows
+
+package native
+
+import (
+	"context"
+	"testing"
+)
+
+// TestCollectSystemInfo verifies that native system info collection works
+// and returns a hostname.
+func TestCollectSystemInfo(t *testing.T) {
+	hw, osInfo, err := collectSystemInfoNative(context.Background())
+	if err != nil {
+		t.Fatalf("collectSystemInfoNative: %v", err)
+	}
+	if hw.Hostname == "" {
+		t.Error("hostname vazio")
+	}
+	if osInfo.Name == "" {
+		t.Error("os name vazio")
+	}
+}
+
+// TestCollectDisks verifies that logical volumes are enumerated.
+func TestCollectDisks(t *testing.T) {
+	volumes, physical, err := collectDisksNative(context.Background())
+	if err != nil {
+		t.Fatalf("collectDisksNative: %v", err)
+	}
+	// At least the C: drive should be present.
+	foundC := false
+	for _, v := range volumes {
+		if v.Device == "C:\\" {
+			foundC = true
+			break
+		}
+	}
+	if !foundC {
+		t.Errorf("volume C:\\ nao encontrado; volumes=%v", volumes)
+	}
+	_ = physical
+}
+
+// TestCollectSoftware verifies that installed software is read from the registry.
+func TestCollectSoftware(t *testing.T) {
+	items, err := collectSoftwareNative(context.Background())
+	if err != nil {
+		t.Fatalf("collectSoftwareNative: %v", err)
+	}
+	if len(items) == 0 {
+		t.Log("nenhum software encontrado (pode ser ambiente minimo)")
+	}
+}
+
+// TestCollectNetworks verifies that network interfaces are enumerated.
+func TestCollectNetworks(t *testing.T) {
+	networks, err := collectNetworksNative(context.Background())
+	if err != nil {
+		t.Fatalf("collectNetworksNative: %v", err)
+	}
+	if len(networks) == 0 {
+		t.Log("nenhuma interface de rede encontrada")
+	}
+}
+
+// TestCollectNetworkConnections verifies that listening ports are enumerated.
+func TestCollectNetworkConnections(t *testing.T) {
+	listening, open, err := collectNetworkConnectionsNative(context.Background())
+	if err != nil {
+		t.Fatalf("collectNetworkConnectionsNative: %v", err)
+	}
+	_ = listening
+	_ = open
+}
+
+// TestCollectHardware verifies that hardware details are collected via WMI.
+func TestCollectHardware(t *testing.T) {
+	hw, memory, gpus, cpus, features, err := collectHardwareNative(context.Background())
+	if err != nil {
+		t.Fatalf("collectHardwareNative: %v", err)
+	}
+	_ = hw
+	_ = memory
+	_ = gpus
+	_ = cpus
+	_ = features
+}
+
+// TestCollectStartupItems verifies that startup items are read from the registry.
+func TestCollectStartupItems(t *testing.T) {
+	items, err := collectStartupItemsNative(context.Background())
+	if err != nil {
+		t.Fatalf("collectStartupItemsNative: %v", err)
+	}
+	_ = items
+}
+
+// TestCollectLoggedInUsers verifies that logged-in users are enumerated.
+func TestCollectLoggedInUsers(t *testing.T) {
+	users, err := collectLoggedInUsersNative(context.Background())
+	if err != nil {
+		t.Fatalf("collectLoggedInUsersNative: %v", err)
+	}
+	_ = users
+}
+
+// TestCollectBattery verifies that battery info is collected.
+func TestCollectBattery(t *testing.T) {
+	battery, err := collectBatteryNative(context.Background())
+	if err != nil {
+		t.Fatalf("collectBatteryNative: %v", err)
+	}
+	_ = battery
+}
+
+// TestCollectBitLocker verifies that BitLocker status is collected.
+func TestCollectBitLocker(t *testing.T) {
+	bitlocker, err := collectBitLockerNative(context.Background())
+	if err != nil {
+		t.Fatalf("collectBitLockerNative: %v", err)
+	}
+	_ = bitlocker
+}

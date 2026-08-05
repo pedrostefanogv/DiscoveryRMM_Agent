@@ -13,7 +13,7 @@
 [![License](https://img.shields.io/github/license/pedrostefanogv/DiscoveryRMM_Agent?style=flat-square)](LICENSE)
 
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%2B-0078D6?style=flat-square&logo=windows)](https://github.com/pedrostefanogv/DiscoveryRMM_Agent/releases/latest)
-[![Go](https://img.shields.io/badge/go-1.23%2B-00ADD8?style=flat-square&logo=go)](https://go.dev/)
+[![Go](https://img.shields.io/badge/go-1.26%2B-00ADD8?style=flat-square&logo=go)](https://go.dev/)
 [![Wails](https://img.shields.io/badge/UI-Wails-DF0000?style=flat-square)](https://wails.io/)
 [![Installer](https://img.shields.io/badge/installer-NSIS-2A6A9C?style=flat-square)](https://nsis.sourceforge.io/)
 
@@ -31,14 +31,14 @@
 
 ## ✨ Features / Recursos
 
-| | PT_BR | EN |
-|---|---|---|
-| 🖥️ | Modo GUI desktop ou serviço Windows headless | Desktop GUI or headless Windows Service |
-| 📦 | Inventário de hardware e software (osquery + PowerShell) | Hardware/software inventory (osquery + PowerShell) |
-| ⚙️ | Automação operacional e execução de tarefas | Operational automation and task execution |
-| 🔗 | Distribuição P2P com descoberta local | P2P distribution with local discovery |
-| 🤖 | Integração com chat/IA e ferramentas MCP | Chat/AI integration and MCP tooling |
-| 📥 | Instalador NSIS, bootstrap online, versionamento por tag | NSIS installer, online bootstrap, tag versioning |
+|     | PT_BR                                                    | EN                                                 |
+| --- | -------------------------------------------------------- | -------------------------------------------------- |
+| 🖥️  | Modo GUI desktop ou serviço Windows headless             | Desktop GUI or headless Windows Service            |
+| 📦  | Inventário de hardware e software (osquery + PowerShell) | Hardware/software inventory (osquery + PowerShell) |
+| ⚙️  | Automação operacional e execução de tarefas              | Operational automation and task execution          |
+| 🔗  | Distribuição P2P com descoberta local                    | P2P distribution with local discovery              |
+| 🤖  | Integração com chat/IA e ferramentas MCP                 | Chat/AI integration and MCP tooling                |
+| 📥  | Instalador NSIS, bootstrap online, versionamento por tag | NSIS installer, online bootstrap, tag versioning   |
 
 ---
 
@@ -47,11 +47,11 @@
 **PT_BR:** baixe o instalador mais recente na página de releases.
 **EN:** grab the latest installer from the releases page.
 
-| Canal / Channel | Tag | Link |
-|---|---|---|
-| 🟢 Stable | `vX.Y.Z` | [Latest release](https://github.com/pedrostefanogv/DiscoveryRMM_Agent/releases/latest) |
-| 🔵 Beta | `vX.Y.Z-beta.N` | [Pre-releases](https://github.com/pedrostefanogv/DiscoveryRMM_Agent/releases?q=prerelease%3Atrue) |
-| 🟡 LTS | `vX.Y.Z-lts.N` | [All releases](https://github.com/pedrostefanogv/DiscoveryRMM_Agent/releases) |
+| Canal / Channel | Tag             | Link                                                                                              |
+| --------------- | --------------- | ------------------------------------------------------------------------------------------------- |
+| 🟢 Stable       | `vX.Y.Z`        | [Latest release](https://github.com/pedrostefanogv/DiscoveryRMM_Agent/releases/latest)            |
+| 🔵 Beta         | `vX.Y.Z-beta.N` | [Pre-releases](https://github.com/pedrostefanogv/DiscoveryRMM_Agent/releases?q=prerelease%3Atrue) |
+| 🟡 LTS          | `vX.Y.Z-lts.N`  | [All releases](https://github.com/pedrostefanogv/DiscoveryRMM_Agent/releases)                     |
 
 > **PT_BR:** o instalador padrão registra o serviço Windows com discovery/P2P habilitado por padrão. Regras de firewall podem ser necessárias.
 > **EN:** the default installer registers the Windows Service with discovery/P2P enabled by default. Firewall rules may be required.
@@ -73,12 +73,12 @@ feature/* ──► dev ──► beta ──► release ──► lts
                                   └─► tag vX.Y.Z ──► GitHub Release
 ```
 
-| Branch | Propósito / Purpose |
-|---|---|
-| `dev` | Integração de features e bugfixes / Feature & bugfix integration |
-| `beta` | Validação pré-release / Pre-release validation |
-| `release` | **Default** — produção estável / production stable |
-| `lts` | Long-term support |
+| Branch    | Propósito / Purpose                                              |
+| --------- | ---------------------------------------------------------------- |
+| `dev`     | Integração de features e bugfixes / Feature & bugfix integration |
+| `beta`    | Validação pré-release / Pre-release validation                   |
+| `release` | **Default** — produção estável / production stable               |
+| `lts`     | Long-term support                                                |
 
 Detalhes em [BRANCHING.md](BRANCHING.md).
 
@@ -87,12 +87,14 @@ Detalhes em [BRANCHING.md](BRANCHING.md).
 ## Debug Mode / Modo Debug
 
 **PT_BR:** Para abrir a interface do agente em modo debug:
+
 1. Feche o agente pelo ícone na bandeja do sistema (clique com botão direito → **Sair / Exit**).
 2. Abra o agente novamente **segurando `Shift` ou `Ctrl`** ao clicar no ícone/atalho (**qualquer uma das duas teclas funciona**).
 
 > O modo debug exibe logs detalhados na interface e habilita painéis de diagnóstico internos.
 
 **EN:** To open the agent UI in debug mode:
+
 1. Close the agent from the system tray icon (right-click → **Exit**).
 2. Reopen the agent **while holding `Shift` or `Ctrl`** when clicking the icon/shortcut (**either key works**).
 
@@ -114,7 +116,7 @@ Detalhes em [BRANCHING.md](BRANCHING.md).
 **PT_BR:** este projeto usa GitHub Actions para build oficial. Para desenvolvimento local consulte [DOCs/README.md](DOCs/README.md).
 **EN:** official builds run on GitHub Actions. For local development see [DOCs/README.md](DOCs/README.md).
 
-Requisitos mínimos / Minimum requirements: Windows 10+, Go 1.23+, NSIS no `PATH`.
+Requisitos mínimos / Minimum requirements: Windows 10+, Go 1.26+, NSIS no `PATH`.
 
 ---
 

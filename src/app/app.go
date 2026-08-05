@@ -1390,40 +1390,25 @@ func (a *App) onPostBootstrapProvisioned(ctx context.Context) error {
 }
 
 func (a *App) ensureOsqueryInstalled(ctx context.Context) {
+	// O coletor nativo é agora a fonte primária de inventário no Windows.
+	// Não é mais necessário instalar o osquery automaticamente. O osquery
+	// permanece apenas como fallback opcional quando já está presente no
+	// sistema (ver inventory.Provider).
 	if runtime.GOOS != "windows" {
 		return
 	}
 	if !a.isInventoryProvisioned() {
-		a.startupLogf("[startup] osquery: verificacao ignorada (agente nao provisionado)")
 		return
 	}
 	if a.appsSvc == nil {
-		a.startupLogf("[startup] aviso: apps service indisponivel; nao foi possivel verificar osquery")
 		return
 	}
 
+	// Apenas registra o status sem instalar.
 	status := inventory.GetOsqueryStatus()
 	if status.Installed {
-		return
+		a.startupLogf("[startup] osquery presente (fallback opcional): %s", status.Path)
 	}
-
-	packageID := strings.TrimSpace(status.SuggestedPackageID)
-	if packageID == "" {
-		packageID = "osquery.osquery"
-	}
-
-	a.startupLogf("[startup] osquery ausente; instalando via winget (%s)", packageID)
-	out, err := a.appsSvc.Install(ctx, packageID)
-	if out != "" {
-		a.startupLogf("[startup] winget install output: %s", out)
-	}
-	if err != nil {
-		a.startupLogf("[startup] aviso: falha ao instalar osquery via winget: %v", err)
-		return
-	}
-
-	inventory.InvalidateOsqueryBinaryCache()
-	a.startupLogf("[startup] osquery instalado com sucesso")
 }
 
 func (a *App) hideWindowOnStartup() {

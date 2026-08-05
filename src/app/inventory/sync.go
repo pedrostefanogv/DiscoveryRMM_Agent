@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
+	"discovery/app/core/models"
 	"discovery/app/debug"
 	"discovery/app/netutil"
-	"discovery/app/core/models"
 )
 
 type agentHardwareEnvelope struct {
@@ -457,7 +457,7 @@ func buildAgentSoftwareEnvelope(report models.InventoryReport, agentID string) a
 		}
 		source := trimToMaxLen(strings.TrimSpace(s.Source), 120)
 		if source == "" {
-			source = "osquery/programs"
+			source = "native/registry"
 		}
 		software = append(software, agentSoftwareItem{
 			Name:          name,

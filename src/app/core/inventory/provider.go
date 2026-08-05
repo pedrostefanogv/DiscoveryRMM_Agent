@@ -12,20 +12,27 @@ import (
 	"time"
 
 	"discovery/app/core/ctxutil"
+	"discovery/app/core/inventory/native"
 	"discovery/app/core/models"
 	"discovery/app/core/processutil"
 )
 
-// Provider orchestrates inventory collection using osquery.
+// Provider orchestrates inventory collection. It uses native collectors as
+// the primary strategy (zero subprocess) and falls back to osquery when the
+// native collector is unavailable or fails.
 type Provider struct {
 	timeout          time.Duration
 	progressMu       sync.RWMutex
 	progressCallback func()
+	native           native.Collector
 }
 
 // NewProvider creates a Provider with the given per-collection timeout.
 func NewProvider(timeout time.Duration) *Provider {
-	return &Provider{timeout: timeout}
+	return &Provider{
+		timeout: timeout,
+		native:  native.New(),
+	}
 }
 
 // SetProgressCallback registers a hook called during long-running collection steps.
@@ -151,9 +158,16 @@ func (p *Provider) runQueriesAllowEmpty(ctx context.Context, binary string, quer
 	return failedQueryResults(queries, fmt.Errorf("falha na execucao via socket (osqueryd/osqueryi)"))
 }
 
-// Collect gathers a full inventory report using osquery-only execution.
+// Collect gathers a full inventory report. It prefers the native collector
+// (zero subprocess) and falls back to osquery when native is unavailable.
 func (p *Provider) Collect(ctx context.Context) (models.InventoryReport, error) {
 	p.emitProgressHeartbeat()
+
+	if report, err := p.collectWithNative(ctx); err == nil {
+		p.emitProgressHeartbeat()
+		return report, nil
+	}
+
 	report, err := p.collectWithOsquery(ctx)
 	if err != nil {
 		return models.InventoryReport{}, err
@@ -162,9 +176,162 @@ func (p *Provider) Collect(ctx context.Context) (models.InventoryReport, error) 
 	return report, nil
 }
 
+// collectWithNative assembles a full inventory report using native collectors.
+func (p *Provider) collectWithNative(ctx context.Context) (models.InventoryReport, error) {
+	if p.native == nil {
+		return models.InventoryReport{}, fmt.Errorf("coletor nativo indisponivel")
+	}
+
+	hw, osInfo, err := p.native.CollectSystemInfo(ctx)
+	if err != nil {
+		return models.InventoryReport{}, err
+	}
+
+	// Hardware details (motherboard, BIOS, GPU, memory, CPU).
+	hwDetail, memoryModules, gpus, cpus, cpuFeatures, err := p.native.CollectHardware(ctx)
+	if err == nil {
+		hw = mergeHardwareInfo(hw, hwDetail)
+	}
+
+	volumes, physicalDisks, err := p.native.CollectDisks(ctx)
+	if err != nil {
+		return models.InventoryReport{}, err
+	}
+
+	networks, err := p.native.CollectNetworks(ctx)
+	if err != nil {
+		return models.InventoryReport{}, err
+	}
+
+	listeningPorts, openSockets, err := p.native.CollectNetworkConnections(ctx)
+	if err != nil {
+		return models.InventoryReport{}, err
+	}
+
+	software, err := p.native.CollectSoftware(ctx)
+	if err != nil {
+		return models.InventoryReport{}, err
+	}
+
+	startupItems, err := p.native.CollectStartupItems(ctx)
+	if err != nil {
+		return models.InventoryReport{}, err
+	}
+
+	loggedInUsers, err := p.native.CollectLoggedInUsers(ctx)
+	if err != nil {
+		return models.InventoryReport{}, err
+	}
+
+	bitLocker, err := p.native.CollectBitLocker(ctx)
+	if err != nil {
+		return models.InventoryReport{}, err
+	}
+
+	battery, err := p.native.CollectBattery(ctx)
+	if err != nil {
+		return models.InventoryReport{}, err
+	}
+
+	// Media types for volumes/disks.
+	mediaTypes := p.native.CollectDiskMediaTypes(ctx)
+	for i := range volumes {
+		dl := strings.ToUpper(strings.TrimSpace(volumes[i].Device))
+		if mt, ok := mediaTypes[dl]; ok {
+			volumes[i].MediaType = mt
+		}
+	}
+	for i := range physicalDisks {
+		dl := strings.ToUpper(strings.TrimSpace(physicalDisks[i].Device))
+		if mt, ok := mediaTypes[dl]; ok {
+			physicalDisks[i].MediaType = mt
+		}
+	}
+
+	hw.MemoryModulesCount = len(memoryModules)
+
+	report := models.InventoryReport{
+		CollectedAt:    time.Now().Format(time.RFC3339),
+		Source:         "native",
+		Hardware:       hw,
+		OS:             osInfo,
+		LoggedInUsers:  loggedInUsers,
+		Battery:        battery,
+		BitLocker:      bitLocker,
+		CPUInfo:        cpus,
+		CPUFeatures:    cpuFeatures,
+		MemoryModules:  memoryModules,
+		GPUs:           gpus,
+		Volumes:        volumes,
+		PhysicalDisks:  physicalDisks,
+		Disks:          volumes,
+		Networks:       networks,
+		ListeningPorts: listeningPorts,
+		OpenSockets:    openSockets,
+		Software:       software,
+		StartupItems:   startupItems,
+	}
+
+	if len(report.Disks) == 0 {
+		report.Disks = report.PhysicalDisks
+	}
+
+	sanitizeHardwareFields(&report)
+	return report, nil
+}
+
+// mergeHardwareInfo merges basic hardware info with detailed hardware info,
+// preferring non-empty values from the detail.
+func mergeHardwareInfo(base, detail models.HardwareInfo) models.HardwareInfo {
+	if base.Manufacturer == "" {
+		base.Manufacturer = detail.Manufacturer
+	}
+	if base.Model == "" {
+		base.Model = detail.Model
+	}
+	if base.SerialNumber == "" {
+		base.SerialNumber = detail.SerialNumber
+	}
+	if base.MotherboardManufacturer == "" {
+		base.MotherboardManufacturer = detail.MotherboardManufacturer
+	}
+	if base.MotherboardModel == "" {
+		base.MotherboardModel = detail.MotherboardModel
+	}
+	if base.MotherboardSerial == "" {
+		base.MotherboardSerial = detail.MotherboardSerial
+	}
+	if base.BIOSVendor == "" {
+		base.BIOSVendor = detail.BIOSVendor
+	}
+	if base.BIOSVersion == "" {
+		base.BIOSVersion = detail.BIOSVersion
+	}
+	if base.BIOSReleaseDate == "" {
+		base.BIOSReleaseDate = detail.BIOSReleaseDate
+	}
+	if base.BIOSSerial == "" {
+		base.BIOSSerial = detail.BIOSSerial
+	}
+	return base
+}
+
 // CollectNetworkConnections gathers only listening ports and open sockets.
 func (p *Provider) CollectNetworkConnections(ctx context.Context) (models.NetworkConnectionsReport, error) {
 	p.emitProgressHeartbeat()
+
+	if p.native != nil {
+		if listening, open, err := p.native.CollectNetworkConnections(ctx); err == nil {
+			p.emitProgressHeartbeat()
+			return models.NetworkConnectionsReport{
+				CollectedAt:    time.Now().Format(time.RFC3339),
+				Source:         "native",
+				ListeningPorts: listening,
+				OpenSockets:    open,
+			}, nil
+		}
+	}
+
 	report, err := p.collectNetworkConnectionsWithOsquery(ctx)
 	if err != nil {
 		return models.NetworkConnectionsReport{}, err
@@ -476,6 +643,13 @@ func collectPhysicalDiskMediaTypes() map[string]string {
 func (p *Provider) CollectSoftware(ctx context.Context) ([]models.SoftwareItem, error) {
 	p.emitProgressHeartbeat()
 
+	if p.native != nil {
+		if items, err := p.native.CollectSoftware(ctx); err == nil {
+			p.emitProgressHeartbeat()
+			return items, nil
+		}
+	}
+
 	bin, err := FindOsqueryBinary()
 	if err != nil {
 		return []models.SoftwareItem{}, err
@@ -499,6 +673,13 @@ func (p *Provider) CollectSoftware(ctx context.Context) ([]models.SoftwareItem, 
 // CollectStartupItems collects only startup items.
 func (p *Provider) CollectStartupItems(ctx context.Context) ([]models.StartupItem, error) {
 	p.emitProgressHeartbeat()
+
+	if p.native != nil {
+		if items, err := p.native.CollectStartupItems(ctx); err == nil {
+			p.emitProgressHeartbeat()
+			return items, nil
+		}
+	}
 
 	bin, err := FindOsqueryBinary()
 	if err != nil {
@@ -525,6 +706,13 @@ func (p *Provider) CollectStartupItems(ctx context.Context) ([]models.StartupIte
 // CollectListeningPorts collects only listening ports.
 func (p *Provider) CollectListeningPorts(ctx context.Context) ([]models.ListeningPortInfo, error) {
 	p.emitProgressHeartbeat()
+
+	if p.native != nil {
+		if listening, _, err := p.native.CollectNetworkConnections(ctx); err == nil {
+			p.emitProgressHeartbeat()
+			return listening, nil
+		}
+	}
 
 	bin, err := FindOsqueryBinary()
 	if err != nil {

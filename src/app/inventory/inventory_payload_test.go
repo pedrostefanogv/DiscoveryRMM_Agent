@@ -151,8 +151,8 @@ func TestBuildAgentSoftwareEnvelope_AppliesContractLimits(t *testing.T) {
 	if len(item.InstallSource) > 1000 {
 		t.Fatalf("installSource excedeu limite: %d", len(item.InstallSource))
 	}
-	if item.Source != "osquery/programs" {
-		t.Fatalf("source = %q, esperado fallback %q", item.Source, "osquery/programs")
+	if item.Source != "native/registry" {
+		t.Fatalf("source = %q, esperado fallback %q", item.Source, "native/registry")
 	}
 }
 
