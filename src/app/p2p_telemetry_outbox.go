@@ -15,8 +15,6 @@ import (
 )
 
 const (
-	p2pTelemetryRetryBase       = p2p.TelemetryRetryBase
-	p2pTelemetryRetryMax        = p2p.TelemetryRetryMax
 	p2pTelemetryDrainLimit      = p2p.TelemetryDrainLimit
 	p2pTelemetryDedupWindow     = p2p.TelemetryDedupWindow
 	p2pTelemetryMaxPayloadBytes = p2p.TelemetryMaxPayloadBytes
