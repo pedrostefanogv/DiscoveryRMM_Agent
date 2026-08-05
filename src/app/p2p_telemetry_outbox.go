@@ -10,9 +10,7 @@ import (
 )
 
 const (
-	p2pTelemetryDrainLimit      = p2p.TelemetryDrainLimit
-	p2pTelemetryDedupWindow     = p2p.TelemetryDedupWindow
-	p2pTelemetryMaxPayloadBytes = p2p.TelemetryMaxPayloadBytes
+	p2pTelemetryDrainLimit = p2p.TelemetryDrainLimit
 )
 
 // buildP2PTelemetryPayload monta o payload de telemetria P2P a partir do
@@ -61,18 +59,18 @@ func (a *App) buildP2PTelemetryPayload() (P2PTelemetryPayload, error) {
 
 // enqueueP2PTelemetryOutbox delega para o outbox do pacote sync.
 func (a *App) enqueueP2PTelemetryOutbox(payload P2PTelemetryPayload, sendErr error) error {
-	if a.syncP2PTelemetryOutbox == nil {
+	if a.syncSvc == nil {
 		return nil
 	}
-	return a.syncP2PTelemetryOutbox.Enqueue(payload, sendErr)
+	return a.syncSvc.EnqueueP2PTelemetryOutbox(payload, sendErr)
 }
 
 // drainP2PTelemetryOutbox delega para o outbox do pacote sync.
 func (a *App) drainP2PTelemetryOutbox(ctx context.Context, limit int) error {
-	if a.syncP2PTelemetryOutbox == nil {
+	if a.syncSvc == nil {
 		return nil
 	}
-	return a.syncP2PTelemetryOutbox.Drain(ctx, limit)
+	return a.syncSvc.DrainP2PTelemetryOutbox(ctx, limit)
 }
 
 // marshalP2PTelemetryPayload delega a serialização (com limite de tamanho)

@@ -11,6 +11,7 @@ import (
 	"discovery/app/agentconfig"
 	"discovery/app/core/database"
 	debugsvc "discovery/app/debug"
+	"discovery/app/p2p"
 	syncsvc "discovery/app/sync"
 )
 
@@ -31,9 +32,7 @@ func newOfflineSyncTestApp(t *testing.T, rollout agentconfig.AgentRolloutConfig)
 	}
 	a.debugSvc = debugsvc.NewService(debugsvc.Options{})
 	a.debugSvc.ApplyRuntimeConnectionConfig("https", "example.local", "token", "agent-1", "", "")
-	a.syncRollout = syncsvc.NewRollout(a)
-	a.syncCommandOutbox = syncsvc.NewCommandOutbox(a, a.syncRollout)
-	a.syncP2PTelemetryOutbox = syncsvc.NewP2PTelemetryOutbox(a, a.syncRollout)
+	a.syncSvc = syncsvc.NewService(a)
 	return a
 }
 
@@ -118,7 +117,7 @@ func TestP2PTelemetryOutboxEnqueueOnlySkipsDrain(t *testing.T) {
 
 func TestMarshalP2PTelemetryPayloadRejectsOversize(t *testing.T) {
 	payload := P2PTelemetryPayload{
-		AgentID:        strings.Repeat("a", p2pTelemetryMaxPayloadBytes+1),
+		AgentID:        strings.Repeat("a", p2p.TelemetryMaxPayloadBytes+1),
 		CollectedAtUTC: time.Now().UTC().Format(time.RFC3339),
 	}
 
@@ -126,7 +125,7 @@ func TestMarshalP2PTelemetryPayloadRejectsOversize(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected oversize telemetry payload to fail")
 	}
-	if !strings.Contains(err.Error(), fmt.Sprintf("%d", p2pTelemetryMaxPayloadBytes)) {
+	if !strings.Contains(err.Error(), fmt.Sprintf("%d", p2p.TelemetryMaxPayloadBytes)) {
 		t.Fatalf("expected error to mention payload limit, got %v", err)
 	}
 }

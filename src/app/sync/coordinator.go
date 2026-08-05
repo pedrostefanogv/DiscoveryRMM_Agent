@@ -26,8 +26,6 @@ import (
 type Coordinator struct {
 	deps SyncDeps
 
-	updateTrigger chan struct{}
-
 	mu              sync.Mutex
 	queue           chan syncmeta.SyncTrigger
 	queuedByKey     map[string]syncmeta.SyncTrigger
@@ -38,10 +36,9 @@ type Coordinator struct {
 }
 
 // New cria um Coordinator com as dependências injetadas.
-func New(deps SyncDeps, updateTrigger chan struct{}) *Coordinator {
+func New(deps SyncDeps) *Coordinator {
 	c := &Coordinator{
 		deps:            deps,
-		updateTrigger:   updateTrigger,
 		queue:           make(chan syncmeta.SyncTrigger, 64),
 		queuedByKey:     make(map[string]syncmeta.SyncTrigger),
 		processedEvents: make(map[string]time.Time),

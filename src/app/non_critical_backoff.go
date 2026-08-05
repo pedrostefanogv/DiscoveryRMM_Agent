@@ -8,67 +8,35 @@ import (
 )
 
 // Bridges de backoff não-crítico e sinal de conectividade. A lógica foi
-// movida para o pacote sync (sync.Backoff); estes métodos delegam para a
-// instância do *App e são usados como callbacks do agentconn e por status.go.
+// movida para o pacote sync (sync.Service → sync.Backoff); estes métodos
+// delegam para a instância do *App e são usados como callbacks do agentconn
+// e por status.go.
 func (a *App) handleGlobalPong(pong agentconn.GlobalPongMessage) {
-	if a.syncBackoff == nil {
+	if a.syncSvc == nil {
 		return
 	}
-	a.syncBackoff.HandleGlobalPong(pong)
-}
-
-func (a *App) recordGlobalPong(receivedAt time.Time, serverTime string, overloaded *bool) {
-	if a.syncBackoff == nil {
-		return
-	}
-	a.syncBackoff.RecordGlobalPong(receivedAt, serverTime, overloaded)
-}
-
-func (a *App) extendNonCriticalBackoff(delay time.Duration, reason string) {
-	if a.syncBackoff == nil {
-		return
-	}
-	a.syncBackoff.ExtendNonCriticalBackoff(delay, reason)
-}
-
-func (a *App) clearNonCriticalBackoff() bool {
-	if a.syncBackoff == nil {
-		return false
-	}
-	return a.syncBackoff.ClearNonCriticalBackoff()
+	a.syncSvc.HandleGlobalPong(pong)
 }
 
 func (a *App) nonCriticalBackoffWindow() (time.Duration, bool, string) {
-	if a.syncBackoff == nil {
+	if a.syncSvc == nil {
 		return 0, false, ""
 	}
-	return a.syncBackoff.NonCriticalBackoffWindow()
+	return a.syncSvc.NonCriticalBackoffWindow()
 }
 
 func (a *App) nonCriticalBackoffStatus() (time.Time, bool, string) {
-	if a.syncBackoff == nil {
+	if a.syncSvc == nil {
 		return time.Time{}, false, ""
 	}
-	return a.syncBackoff.NonCriticalBackoffStatus()
-}
-
-func (a *App) globalPongStatus() (time.Time, string, bool, bool) {
-	if a.syncBackoff == nil {
-		return time.Time{}, "", false, false
-	}
-	return a.syncBackoff.GlobalPongStatus()
+	return a.syncSvc.NonCriticalBackoffStatus()
 }
 
 func (a *App) resolveAgentConnectivity(status AgentStatus) AgentStatus {
-	if a.syncBackoff == nil {
+	if a.syncSvc == nil {
 		return status
 	}
-	return a.syncBackoff.ResolveAgentConnectivity(status)
-}
-
-// evaluateAgentOnlineSignal delega para o pacote sync.
-func evaluateAgentOnlineSignal(transportConnected bool, lastGlobalPongAt time.Time) (bool, string, bool) {
-	return sync.EvaluateAgentOnlineSignal(transportConnected, lastGlobalPongAt)
+	return a.syncSvc.ResolveAgentConnectivity(status)
 }
 
 // parseRFC3339Time delega para o pacote sync.

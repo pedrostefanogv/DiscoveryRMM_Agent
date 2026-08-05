@@ -235,14 +235,16 @@ func ParseRFC3339Time(raw string) time.Time {
 	return parsed
 }
 
-// randomNonCriticalBackoffDuration gera um atraso aleatório dentro do range.
+// randomNonCriticalBackoffDuration gera um atraso aleatório dentro do range
+// [min, max] (inclusive), preservando o comportamento original.
 func randomNonCriticalBackoffDuration() time.Duration {
 	min := int64(syncmeta.NonCriticalBackoffMin)
 	max := int64(syncmeta.NonCriticalBackoffMax)
 	if max <= min {
 		return syncmeta.NonCriticalBackoffMin
 	}
-	n, err := cryptorand.Int(cryptorand.Reader, big.NewInt(max-min))
+	// big.NewInt(max-min+1) torna o limite superior inclusivo.
+	n, err := cryptorand.Int(cryptorand.Reader, big.NewInt(max-min+1))
 	if err != nil {
 		return syncmeta.NonCriticalBackoffMin
 	}

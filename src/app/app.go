@@ -100,26 +100,22 @@ type App struct {
 
 	// toolsRegistration guarda o timestamp do último registro bem-sucedido de tools.
 	// Usado para re-registrar se o cache do servidor expirou (TTL 5min por padrão no servidor).
-	toolsRegistrationMu    sync.RWMutex
-	lastToolsRegistration  time.Time
-	agentConn              *agentconn.Runtime
-	remoteDebug            *remotedebug.Manager
-	syncCoord              *syncsvc.Coordinator
-	syncRollout            *syncsvc.Rollout
-	syncBackoff            *syncsvc.Backoff
-	syncCommandOutbox      *syncsvc.CommandOutbox
-	syncP2PTelemetryOutbox *syncsvc.P2PTelemetryOutbox
-	p2pCoord               *p2pCoordinator
-	updateTrigger          chan struct{}
-	agentInfo              agentInfoCache
-	appStorePolicy         appStorePolicyCache
-	debugSvc               *debug.Service
-	agentConfigSvc         *agentconfig.Service
-	ticketsSvc             *tickets.Service
-	updatesSvc             *updates.Service
-	exporter               *updates.Exporter
-	inventorySvc           *appinventory.Service
-	supportSvc             *appsupport.Service
+	toolsRegistrationMu   sync.RWMutex
+	lastToolsRegistration time.Time
+	agentConn             *agentconn.Runtime
+	remoteDebug           *remotedebug.Manager
+	syncSvc               *syncsvc.Service
+	p2pCoord              *p2pCoordinator
+	updateTrigger         chan struct{}
+	agentInfo             agentInfoCache
+	appStorePolicy        appStorePolicyCache
+	debugSvc              *debug.Service
+	agentConfigSvc        *agentconfig.Service
+	ticketsSvc            *tickets.Service
+	updatesSvc            *updates.Service
+	exporter              *updates.Exporter
+	inventorySvc          *appinventory.Service
+	supportSvc            *appsupport.Service
 
 	consolEngine *consolidation.Engine
 
@@ -530,8 +526,8 @@ func NewApp(opts AppStartupOptions) *App {
 			a.logs.append("[agent] " + fmt.Sprintf(format, args...))
 		},
 		OnSyncPing: func(ping agentconn.SyncPing) {
-			if a.syncCoord != nil {
-				a.syncCoord.HandlePing(ping)
+			if a.syncSvc != nil {
+				a.syncSvc.HandlePing(ping)
 			}
 		},
 		OnGlobalPong:                  a.handleGlobalPong,
@@ -564,11 +560,7 @@ func NewApp(opts AppStartupOptions) *App {
 	a.ticketsSvc = tickets.New(tickets.Deps{
 		GetDebugConfig: a.GetDebugConfig,
 	})
-	a.syncCoord = syncsvc.New(a, a.updateTrigger)
-	a.syncRollout = syncsvc.NewRollout(a)
-	a.syncBackoff = syncsvc.NewBackoff(a)
-	a.syncCommandOutbox = syncsvc.NewCommandOutbox(a, a.syncRollout)
-	a.syncP2PTelemetryOutbox = syncsvc.NewP2PTelemetryOutbox(a, a.syncRollout)
+	a.syncSvc = syncsvc.NewService(a)
 	a.p2pConfig = defaultP2PConfig()
 	a.p2pCoord = newP2PCoordinator(a)
 	a.chatSvc.Service().SetLogger(func(line string) {
@@ -1031,7 +1023,7 @@ func (a *App) startup(ctx context.Context) {
 	//   Phase 0 (immediate):  tray, DB, debug HTTP, P2P telemetry
 	//   Phase 1 (+2s):        inventory collection (osqueryi) + sync
 	//   Phase 2 (+8s):        agentConn bootstrap + heartbeat
-	//   Phase 3 (+10s):       automation, syncCoord, P2P bootstrap
+	//   Phase 3 (+10s):       automation, syncSvc, P2P bootstrap
 	//   Phase 4 (+12s):       self-update, cleanup ticker
 	// ────────────────────────────────────────────────────────────────────
 
@@ -1135,9 +1127,9 @@ func (a *App) startup(ctx context.Context) {
 			})
 		}
 
-		if a.syncCoord != nil {
+		if a.syncSvc != nil {
 			a.safeGo(func() {
-				a.syncCoord.Run(ctx)
+				a.syncSvc.Run(ctx)
 			})
 		}
 
@@ -1355,9 +1347,9 @@ func (a *App) onPostBootstrapProvisioned(ctx context.Context) error {
 	}
 
 	// 2. Refresh da configuração do agent (clientId/siteId, políticas).
-	if a.syncCoord != nil {
+	if a.syncSvc != nil {
 		_ = a.refreshAgentConfiguration(ctx)
-		a.syncCoord.ReconcileFromManifest(ctx, "post-bootstrap")
+		a.syncSvc.ReconcileFromManifest(ctx, "post-bootstrap")
 	}
 
 	// 3. Automação — carrega políticas iniciais.

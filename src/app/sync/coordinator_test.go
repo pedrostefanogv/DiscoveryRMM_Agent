@@ -80,7 +80,7 @@ func newFakeDeps(t *testing.T) *fakeDeps {
 
 func TestHandlePing_EnqueuesAndProcesses(t *testing.T) {
 	deps := newFakeDeps(t)
-	c := New(deps, make(chan struct{}))
+	c := New(deps)
 
 	// Ping de invalidação de configuration.
 	c.HandlePing(agentconn.SyncPing{
@@ -108,7 +108,7 @@ func TestHandlePing_EnqueuesAndProcesses(t *testing.T) {
 
 func TestHandlePing_IgnoresWrongEventType(t *testing.T) {
 	deps := newFakeDeps(t)
-	c := New(deps, make(chan struct{}))
+	c := New(deps)
 
 	c.HandlePing(agentconn.SyncPing{
 		EventID:   "evt-2",
@@ -125,7 +125,7 @@ func TestHandlePing_IgnoresWrongEventType(t *testing.T) {
 
 func TestReconcileFromManifest_EnqueuesChangedResources(t *testing.T) {
 	deps := newFakeDeps(t)
-	c := New(deps, make(chan struct{}))
+	c := New(deps)
 
 	// Sem servidor configurado, fetchSyncManifest falha — mas o teste valida
 	// que a falha é tratada sem pânico.
@@ -137,7 +137,7 @@ func TestReconcileFromManifest_EnqueuesChangedResources(t *testing.T) {
 
 func TestSetPollEvery_IgnoresNonPositive(t *testing.T) {
 	deps := newFakeDeps(t)
-	c := New(deps, make(chan struct{}))
+	c := New(deps)
 
 	c.SetPollEvery(0)
 	if got := c.getPollEvery(); got != time.Duration(syncmeta.DefaultPollSeconds)*time.Second {

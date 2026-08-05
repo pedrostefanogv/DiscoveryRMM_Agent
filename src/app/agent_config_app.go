@@ -80,9 +80,9 @@ func (a *App) applyAgentConfiguration(cfg agentconfig.AgentConfiguration) {
 		a.logs.append(fmt.Sprintf("[config] discoveryEnabled=%t", *cfg.DiscoveryEnabled))
 	}
 	// Sync interval (if specified).
-	if cfg.InventoryIntervalHours != nil && a.syncCoord != nil {
+	if cfg.InventoryIntervalHours != nil && a.syncSvc != nil {
 		if *cfg.InventoryIntervalHours > 0 {
-			a.syncCoord.SetPollEvery(time.Duration(*cfg.InventoryIntervalHours) * time.Hour)
+			a.syncSvc.SetPollEvery(time.Duration(*cfg.InventoryIntervalHours) * time.Hour)
 		}
 	}
 
