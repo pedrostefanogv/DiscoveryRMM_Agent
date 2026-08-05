@@ -443,42 +443,19 @@ func (a *App) fetchSyncManifest(ctx context.Context) (SyncManifestResponse, erro
 }
 
 func (a *App) refreshAgentConfiguration(ctx context.Context) error {
-	cfg := a.GetDebugConfig()
-	apiScheme := strings.TrimSpace(strings.ToLower(cfg.ApiScheme))
-	apiServer := strings.TrimSpace(cfg.ApiServer)
-	token := strings.TrimSpace(cfg.AuthToken)
-	if apiServer == "" || token == "" {
-		return fmt.Errorf("configuração de servidor API incompleta")
+	if a.agentConfigSvc == nil {
+		a.agentConfigSvc = agentconfig.New(agentconfig.FetchDeps{
+			GetDebugConfig: a.GetDebugConfig,
+		})
 	}
-	if apiScheme != "http" && apiScheme != "https" {
-		return fmt.Errorf("apiScheme inválido")
-	}
-
-	target := apiScheme + "://" + apiServer + "/api/v1/agent-auth/me/configuration"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Accept", "application/json")
-	if err := netutil.SetAgentAuthHeadersWithAgentID(req, token, cfg.AgentID); err != nil {
-		return err
-	}
-
-	resp, err := tlsutil.NewHTTPClient(15 * time.Second).Do(req)
+	result, err := a.agentConfigSvc.Fetch(ctx)
 	if err != nil {
 		// fallback to cached config when request fails
 		_ = a.loadCachedAgentConfiguration()
 		return err
 	}
-	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		_ = a.loadCachedAgentConfiguration()
-		return fmt.Errorf("configuration retornou HTTP %s: %s", resp.Status, strings.TrimSpace(string(body)))
-	}
-
-	if pending, hasPendingFlag := parseZeroTouchPendingConfiguration(body); hasPendingFlag && pending {
+	if result.HasZeroTouchPendingFlag && result.ZeroTouchPending {
 		if a.setZeroTouchApprovalPending(true) {
 			a.logs.append("[sync] dispositivo provisionado e aguardando aprovacao da equipe de TI para integracao com o servidor")
 		}
@@ -490,24 +467,19 @@ func (a *App) refreshAgentConfiguration(ctx context.Context) error {
 	}
 
 	if a.db != nil {
-		_ = a.db.CacheSet("agent_configuration_raw", body, 30*24*time.Hour)
+		_ = a.db.CacheSet("agent_configuration_raw", result.RawBody, 30*24*time.Hour)
 	}
 
-	cfgParsed, err := agentconfig.ParseAgentConfiguration(body)
-	if err != nil {
-		a.logs.append("[sync] falha ao parsear configuration do agent: " + err.Error())
-		return nil
-	}
-	a.setAgentConfiguration(cfgParsed)
+	a.setAgentConfiguration(result.Config)
 	a.applyStartupThrottleConfig()
 	if a.debugSvc != nil {
 		changed, applyErr := a.debugSvc.ApplyRemoteConnectionSecurity(
-			cfgParsed.NatsServerHost,
-			cfgParsed.NatsUseWssExternal,
-			cfgParsed.EnforceTlsHashValidation,
-			cfgParsed.HandshakeEnabled,
-			cfgParsed.ApiTlsCertHash,
-			cfgParsed.NatsTlsCertHash,
+			result.Config.NatsServerHost,
+			result.Config.NatsUseWssExternal,
+			result.Config.EnforceTlsHashValidation,
+			result.Config.HandshakeEnabled,
+			result.Config.ApiTlsCertHash,
+			result.Config.NatsTlsCertHash,
 		)
 		if applyErr != nil {
 			a.logs.append("[sync] falha ao aplicar seguranca remota de transporte: " + applyErr.Error())
@@ -517,18 +489,6 @@ func (a *App) refreshAgentConfiguration(ctx context.Context) error {
 	}
 	a.logs.append("[sync] configuração do agent atualizada")
 	return nil
-}
-
-func parseZeroTouchPendingConfiguration(body []byte) (bool, bool) {
-	var raw map[string]any
-	if err := json.Unmarshal(body, &raw); err != nil {
-		return false, false
-	}
-	v, ok := raw["zeroTouchPending"]
-	if !ok {
-		return false, false
-	}
-	return agentconfig.ToBool(v), true
 }
 
 // computeAppStoreContentHash calcula um hash determinístico do conteúdo real

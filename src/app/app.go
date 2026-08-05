@@ -106,6 +106,7 @@ type App struct {
 	agentInfo             agentInfoCache
 	appStorePolicy        appStorePolicyCache
 	debugSvc              *debug.Service
+	agentConfigSvc        *agentconfig.Service
 	updatesSvc            *updates.Service
 	exporter              *updates.Exporter
 	inventorySvc          *appinventory.Service
@@ -554,6 +555,9 @@ func NewApp(opts AppStartupOptions) *App {
 		ApplyP2PConfig:     a.applyP2PConfig,
 		DefaultP2PConfig:   defaultP2PConfig,
 		Version:            Version,
+	})
+	a.agentConfigSvc = agentconfig.New(agentconfig.FetchDeps{
+		GetDebugConfig: a.GetDebugConfig,
 	})
 	a.syncCoord = newSyncCoordinator(a, a.updateTrigger)
 	a.p2pConfig = defaultP2PConfig()
