@@ -594,6 +594,93 @@ export class DebugStatus {
     }
 }
 
+/**
+ * DiscoveredPeer representa um peer descoberto na rede P2P.
+ */
+export class DiscoveredPeer {
+    /**
+     * Creates a new DiscoveredPeer instance.
+     * @param {Partial<DiscoveredPeer>} [$$source = {}] - The source object to create the DiscoveredPeer.
+     */
+    constructor($$source = {}) {
+        if (!("AgentID" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["AgentID"] = "";
+        }
+        if (!("Host" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["Host"] = "";
+        }
+        if (!("Address" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["Address"] = "";
+        }
+        if (!("Port" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["Port"] = 0;
+        }
+        if (!("Source" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["Source"] = "";
+        }
+        if (!("KnownPeers" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["KnownPeers"] = 0;
+        }
+        if (!("ConnectedVia" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["ConnectedVia"] = "";
+        }
+        if (!("TTLSeconds" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["TTLSeconds"] = 0;
+        }
+        if (!("ClientID" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["ClientID"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new DiscoveredPeer instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {DiscoveredPeer}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new DiscoveredPeer(/** @type {Partial<DiscoveredPeer>} */($$parsedSource));
+    }
+}
+
 export class DistributionStatus {
     /**
      * Creates a new DistributionStatus instance.
@@ -819,6 +906,111 @@ export class OnboardingAuditEvent {
     static createFrom($$source = {}) {
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         return new OnboardingAuditEvent(/** @type {Partial<OnboardingAuditEvent>} */($$parsedSource));
+    }
+}
+
+export class OnboardingRequest {
+    /**
+     * Creates a new OnboardingRequest instance.
+     * @param {Partial<OnboardingRequest>} [$$source = {}] - The source object to create the OnboardingRequest.
+     */
+    constructor($$source = {}) {
+        if (!("serverUrl" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["serverUrl"] = "";
+        }
+        if (!("deployKey" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["deployKey"] = "";
+        }
+        if (!("expiresAtUtc" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["expiresAtUtc"] = "";
+        }
+        if (!("sourceAgent" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["sourceAgent"] = "";
+        }
+        if (!("nonce" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["nonce"] = "";
+        }
+        if (!("signature" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["signature"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new OnboardingRequest instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {OnboardingRequest}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new OnboardingRequest(/** @type {Partial<OnboardingRequest>} */($$parsedSource));
+    }
+}
+
+export class OnboardingResult {
+    /**
+     * Creates a new OnboardingResult instance.
+     * @param {Partial<OnboardingResult>} [$$source = {}] - The source object to create the OnboardingResult.
+     */
+    constructor($$source = {}) {
+        if (!("agentId" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["agentId"] = "";
+        }
+        if (!("registered" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["registered"] = false;
+        }
+        if (!("message" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["message"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new OnboardingResult instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {OnboardingResult}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new OnboardingResult(/** @type {Partial<OnboardingResult>} */($$parsedSource));
     }
 }
 

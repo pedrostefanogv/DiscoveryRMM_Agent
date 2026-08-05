@@ -1,27 +1,45 @@
 package app
 
-import "discovery/app/agentconfig"
-
+// Bridges de rollout offline. A lógica foi movida para o pacote sync
+// (sync.Rollout); estes métodos delegam para a instância do *App.
 func (a *App) commandResultOfflineMode() string {
-	return agentconfig.NormalizeOfflineQueueMode(a.GetAgentConfiguration().Rollout.CommandResultOfflineMode)
+	if a.syncRollout == nil {
+		return ""
+	}
+	return a.syncRollout.CommandResultOfflineMode()
 }
 
 func (a *App) p2pTelemetryOfflineMode() string {
-	return agentconfig.NormalizeOfflineQueueMode(a.GetAgentConfiguration().Rollout.P2PTelemetryOfflineMode)
+	if a.syncRollout == nil {
+		return ""
+	}
+	return a.syncRollout.P2PTelemetryOfflineMode()
 }
 
 func (a *App) shouldEnqueueCommandResultOutbox() bool {
-	return a.commandResultOfflineMode() != agentconfig.OfflineQueueModeLoggingOnly
+	if a.syncRollout == nil {
+		return false
+	}
+	return a.syncRollout.ShouldEnqueueCommandResultOutbox()
 }
 
 func (a *App) shouldDrainCommandResultOutbox() bool {
-	return a.commandResultOfflineMode() == agentconfig.OfflineQueueModeEnqueueAndDrain
+	if a.syncRollout == nil {
+		return false
+	}
+	return a.syncRollout.ShouldDrainCommandResultOutbox()
 }
 
 func (a *App) shouldEnqueueP2PTelemetryOutbox() bool {
-	return a.p2pTelemetryOfflineMode() != agentconfig.OfflineQueueModeLoggingOnly
+	if a.syncRollout == nil {
+		return false
+	}
+	return a.syncRollout.ShouldEnqueueP2PTelemetryOutbox()
 }
 
 func (a *App) shouldDrainP2PTelemetryOutbox() bool {
-	return a.p2pTelemetryOfflineMode() == agentconfig.OfflineQueueModeEnqueueAndDrain
+	if a.syncRollout == nil {
+		return false
+	}
+	return a.syncRollout.ShouldDrainP2PTelemetryOutbox()
 }

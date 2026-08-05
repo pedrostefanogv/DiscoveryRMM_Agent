@@ -1,115 +1,38 @@
 package app
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
-	"strconv"
-	"strings"
 	"time"
 
 	"discovery/app/core/agentconn"
-	"discovery/app/core/database"
-	"discovery/app/core/errutil"
 )
 
-type commandResultOutboxPayload struct {
-	DispatchID   string `json:"dispatchId,omitempty"`
-	CommandID    string `json:"commandId"`
-	ExitCode     int    `json:"exitCode"`
-	Output       string `json:"output,omitempty"`
-	ErrorMessage string `json:"errorMessage,omitempty"`
-}
-
+// Bridges de outbox de resultados de comando. A lógica foi movida para o
+// pacote sync (sync.CommandOutbox); estes métodos delegam para a instância
+// do *App e são usados como callbacks do agentconn.
 func (a *App) enqueueCommandResultOutbox(transport, dispatchID, commandID string, exitCode int, output, errText, sendError string) error {
-	if !a.shouldEnqueueCommandResultOutbox() {
+	if a.syncCommandOutbox == nil {
 		return nil
 	}
-	if a.db == nil {
-		return nil
-	}
-	agentID := strings.TrimSpace(a.GetDebugConfig().AgentID)
-	if agentID == "" {
-		return nil
-	}
-	payload := commandResultOutboxPayload{
-		DispatchID:   strings.TrimSpace(dispatchID),
-		CommandID:    strings.TrimSpace(commandID),
-		ExitCode:     exitCode,
-		Output:       output,
-		ErrorMessage: errText,
-	}
-	payloadJSON, err := json.Marshal(payload)
-	if err != nil {
-		return err
-	}
-	payloadHash := sha256.Sum256(payloadJSON)
-	idempotencySuffix := payload.CommandID
-	if strings.TrimSpace(payload.DispatchID) != "" {
-		idempotencySuffix = payload.DispatchID
-	}
-	idempotencyKey := strings.TrimSpace(transport) + ":" + idempotencySuffix
-	return a.db.EnqueueCommandResultOutbox(database.CommandResultOutboxEntry{
-		AgentID:        agentID,
-		Transport:      strings.TrimSpace(transport),
-		CommandID:      payload.CommandID,
-		IdempotencyKey: idempotencyKey,
-		PayloadJSON:    string(payloadJSON),
-		PayloadHash:    hex.EncodeToString(payloadHash[:]),
-		Attempts:       0,
-		NextAttemptAt:  time.Now(),
-		LastError:      strings.TrimSpace(sendError),
-		ExpiresAt:      time.Now().Add(14 * 24 * time.Hour),
-	})
+	return a.syncCommandOutbox.Enqueue(transport, dispatchID, commandID, exitCode, output, errText, sendError)
 }
 
 func (a *App) listDueCommandResultOutbox(transport string, now time.Time, limit int) ([]agentconn.CommandResultOutboxItem, error) {
-	if !a.shouldDrainCommandResultOutbox() {
+	if a.syncCommandOutbox == nil {
 		return nil, nil
 	}
-	if a.db == nil {
-		return nil, nil
-	}
-	agentID := strings.TrimSpace(a.GetDebugConfig().AgentID)
-	if agentID == "" {
-		return nil, nil
-	}
-	entries, err := a.db.ListDueCommandResultOutbox(agentID, transport, now, limit)
-	if err != nil {
-		return nil, err
-	}
-
-	out := make([]agentconn.CommandResultOutboxItem, 0, len(entries))
-	for _, entry := range entries {
-		var payload commandResultOutboxPayload
-		if err := json.Unmarshal([]byte(entry.PayloadJSON), &payload); err != nil {
-			a.logs.append("[agent][outbox] payload inválido removido id=" + strconv.FormatInt(entry.ID, 10) + " erro=" + err.Error())
-			errutil.LogIfErr(a.db.DeleteCommandResultOutbox(entry.ID), "outbox: remover payload inválido")
-			continue
-		}
-		out = append(out, agentconn.CommandResultOutboxItem{
-			ID:           entry.ID,
-			DispatchID:   strings.TrimSpace(payload.DispatchID),
-			CommandID:    strings.TrimSpace(payload.CommandID),
-			ExitCode:     payload.ExitCode,
-			Output:       payload.Output,
-			ErrorMessage: payload.ErrorMessage,
-			Attempts:     entry.Attempts,
-		})
-	}
-	return out, nil
+	return a.syncCommandOutbox.ListDue(transport, now, limit)
 }
 
 func (a *App) markSentCommandResultOutbox(id int64) error {
-	if a.db == nil {
+	if a.syncCommandOutbox == nil {
 		return nil
 	}
-	return a.db.MarkSentCommandResultOutbox(id)
+	return a.syncCommandOutbox.MarkSent(id)
 }
 
 func (a *App) rescheduleCommandResultOutbox(id int64, attempts int, nextAttemptAt time.Time, lastError string) error {
-	if a.db == nil {
+	if a.syncCommandOutbox == nil {
 		return nil
 	}
-	return a.db.RescheduleCommandResultOutbox(id, attempts, nextAttemptAt, strings.TrimSpace(lastError))
+	return a.syncCommandOutbox.Reschedule(id, attempts, nextAttemptAt, lastError)
 }

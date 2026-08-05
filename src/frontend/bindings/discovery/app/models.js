@@ -8,13 +8,16 @@ import { Create as $Create } from "/wails/runtime.js";
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
+import * as agentconfig$0 from "./agentconfig/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
 import * as automation$0 from "./automation/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
-import * as selfupdate$0 from "./core/selfupdate/models.js";
+import * as debug$0 from "./debug/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
-import * as debug$0 from "./debug/models.js";
+import * as p2p$0 from "./p2p/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
 import * as p2pmeta$0 from "./p2pmeta/models.js";
@@ -26,7 +29,13 @@ import * as hardwareid$0 from "./services/hardwareid/models.js";
 import * as notifications$0 from "./services/notifications/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
+import * as status$0 from "./status/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
 import * as supportmeta$0 from "./supportmeta/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as tickets$0 from "./tickets/models.js";
 
 export const APITicket = supportmeta$0.APITicket;
 
@@ -40,940 +49,17 @@ export const APIWorkflowState = supportmeta$0.APIWorkflowState;
  * @typedef {supportmeta$0.APIWorkflowState} APIWorkflowState
  */
 
-/**
- * AgentAutoUpdateConfig represents the agent-side auto-update policy.
- */
-export class AgentAutoUpdateConfig {
-    /**
-     * Creates a new AgentAutoUpdateConfig instance.
-     * @param {Partial<AgentAutoUpdateConfig>} [$$source = {}] - The source object to create the AgentAutoUpdateConfig.
-     */
-    constructor($$source = {}) {
-        if (!("enabled" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["enabled"] = false;
-        }
-        if (!("checkEveryHours" in $$source)) {
-            /**
-             * @member
-             * @type {number}
-             */
-            this["checkEveryHours"] = 0;
-        }
-        if (!("allowUserDelay" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["allowUserDelay"] = false;
-        }
-        if (!("maxDelayHours" in $$source)) {
-            /**
-             * @member
-             * @type {number}
-             */
-            this["maxDelayHours"] = 0;
-        }
-        if (!("forceRestartDelay" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["forceRestartDelay"] = false;
-        }
-        if (!("restartDelayHours" in $$source)) {
-            /**
-             * @member
-             * @type {number}
-             */
-            this["restartDelayHours"] = 0;
-        }
-        if (!("updateOnLogon" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["updateOnLogon"] = false;
-        }
-        if (!("maintenanceWindows" in $$source)) {
-            /**
-             * @member
-             * @type {string[]}
-             */
-            this["maintenanceWindows"] = [];
-        }
-        if (!("silentInstall" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["silentInstall"] = false;
-        }
-        if (!("autoRollbackOnFailure" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["autoRollbackOnFailure"] = false;
-        }
-
-        Object.assign(this, $$source);
-    }
-
-    /**
-     * Creates a new AgentAutoUpdateConfig instance from a string or object.
-     * @param {any} [$$source = {}]
-     * @returns {AgentAutoUpdateConfig}
-     */
-    static createFrom($$source = {}) {
-        const $$createField7_0 = $$createType0;
-        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        if ("maintenanceWindows" in $$parsedSource) {
-            $$parsedSource["maintenanceWindows"] = $$createField7_0($$parsedSource["maintenanceWindows"]);
-        }
-        return new AgentAutoUpdateConfig(/** @type {Partial<AgentAutoUpdateConfig>} */($$parsedSource));
-    }
-}
-
-/**
- * AgentConfiguration defines the configuration schema returned by /api/v1/agent-auth/me/configuration.
- * It is used to control what features should be enabled on the agent.
- */
-export class AgentConfiguration {
-    /**
-     * Creates a new AgentConfiguration instance.
-     * @param {Partial<AgentConfiguration>} [$$source = {}] - The source object to create the AgentConfiguration.
-     */
-    constructor($$source = {}) {
-        if (!("recoveryEnabled" in $$source)) {
-            /**
-             * @member
-             * @type {boolean | null}
-             */
-            this["recoveryEnabled"] = null;
-        }
-        if (!("discoveryEnabled" in $$source)) {
-            /**
-             * @member
-             * @type {boolean | null}
-             */
-            this["discoveryEnabled"] = null;
-        }
-        if (!("p2pFilesEnabled" in $$source)) {
-            /**
-             * @member
-             * @type {boolean | null}
-             */
-            this["p2pFilesEnabled"] = null;
-        }
-        if (!("supportEnabled" in $$source)) {
-            /**
-             * @member
-             * @type {boolean | null}
-             */
-            this["supportEnabled"] = null;
-        }
-        if (!("natsServerHost" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["natsServerHost"] = "";
-        }
-        if (!("natsUseWssExternal" in $$source)) {
-            /**
-             * @member
-             * @type {boolean | null}
-             */
-            this["natsUseWssExternal"] = null;
-        }
-        if (!("enforceTlsHashValidation" in $$source)) {
-            /**
-             * @member
-             * @type {boolean | null}
-             */
-            this["enforceTlsHashValidation"] = null;
-        }
-        if (!("handshakeEnabled" in $$source)) {
-            /**
-             * @member
-             * @type {boolean | null}
-             */
-            this["handshakeEnabled"] = null;
-        }
-        if (!("apiTlsCertHash" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["apiTlsCertHash"] = "";
-        }
-        if (!("natsTlsCertHash" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["natsTlsCertHash"] = "";
-        }
-        if (!("chatAIEnabled" in $$source)) {
-            /**
-             * @member
-             * @type {boolean | null}
-             */
-            this["chatAIEnabled"] = null;
-        }
-        if (!("knowledgeBaseEnabled" in $$source)) {
-            /**
-             * @member
-             * @type {boolean | null}
-             */
-            this["knowledgeBaseEnabled"] = null;
-        }
-        if (!("appStoreEnabled" in $$source)) {
-            /**
-             * @member
-             * @type {boolean | null}
-             */
-            this["appStoreEnabled"] = null;
-        }
-        if (!("inventoryIntervalHours" in $$source)) {
-            /**
-             * @member
-             * @type {number | null}
-             */
-            this["inventoryIntervalHours"] = null;
-        }
-        if (!("agentHeartbeatIntervalSeconds" in $$source)) {
-            /**
-             * @member
-             * @type {number | null}
-             */
-            this["agentHeartbeatIntervalSeconds"] = null;
-        }
-        if (!("siteId" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["siteId"] = "";
-        }
-        if (!("clientId" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["clientId"] = "";
-        }
-        if (!("resolvedAt" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["resolvedAt"] = "";
-        }
-        if (!("autoUpdate" in $$source)) {
-            /**
-             * @member
-             * @type {AgentAutoUpdateConfig}
-             */
-            this["autoUpdate"] = (new AgentAutoUpdateConfig());
-        }
-        if (!("agentUpdate" in $$source)) {
-            /**
-             * @member
-             * @type {selfupdate$0.Policy}
-             */
-            this["agentUpdate"] = (new selfupdate$0.Policy());
-        }
-        if (!("psadt" in $$source)) {
-            /**
-             * @member
-             * @type {AgentPSADTConfig}
-             */
-            this["psadt"] = (new AgentPSADTConfig());
-        }
-        if (!("notificationBranding" in $$source)) {
-            /**
-             * @member
-             * @type {AgentNotificationBrandingConfig}
-             */
-            this["notificationBranding"] = (new AgentNotificationBrandingConfig());
-        }
-        if (!("notificationPolicies" in $$source)) {
-            /**
-             * @member
-             * @type {AgentNotificationPolicy[]}
-             */
-            this["notificationPolicies"] = [];
-        }
-        if (!("consolidation" in $$source)) {
-            /**
-             * @member
-             * @type {AgentConsolidationConfig}
-             */
-            this["consolidation"] = (new AgentConsolidationConfig());
-        }
-        if (!("rollout" in $$source)) {
-            /**
-             * @member
-             * @type {AgentRolloutConfig}
-             */
-            this["rollout"] = (new AgentRolloutConfig());
-        }
-        if (!("startupThrottleEnabled" in $$source)) {
-            /**
-             * StartupThrottleEnabled enables CPU-aware throttling during agent startup.
-             * When nil (default), auto-detection is used (throttled on <=4 cores).
-             * When explicitly false, the agent runs at full speed during startup.
-             * @member
-             * @type {boolean | null}
-             */
-            this["startupThrottleEnabled"] = null;
-        }
-        if (!("startupMaxCPUPercent" in $$source)) {
-            /**
-             * StartupMaxCPUPercent defines the CPU usage threshold (0-100) above which
-             * the agent will throttle osquery queries during startup. Default 50.
-             * @member
-             * @type {number | null}
-             */
-            this["startupMaxCPUPercent"] = null;
-        }
-
-        Object.assign(this, $$source);
-    }
-
-    /**
-     * Creates a new AgentConfiguration instance from a string or object.
-     * @param {any} [$$source = {}]
-     * @returns {AgentConfiguration}
-     */
-    static createFrom($$source = {}) {
-        const $$createField18_0 = $$createType1;
-        const $$createField19_0 = $$createType2;
-        const $$createField20_0 = $$createType3;
-        const $$createField21_0 = $$createType4;
-        const $$createField22_0 = $$createType6;
-        const $$createField23_0 = $$createType7;
-        const $$createField24_0 = $$createType8;
-        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        if ("autoUpdate" in $$parsedSource) {
-            $$parsedSource["autoUpdate"] = $$createField18_0($$parsedSource["autoUpdate"]);
-        }
-        if ("agentUpdate" in $$parsedSource) {
-            $$parsedSource["agentUpdate"] = $$createField19_0($$parsedSource["agentUpdate"]);
-        }
-        if ("psadt" in $$parsedSource) {
-            $$parsedSource["psadt"] = $$createField20_0($$parsedSource["psadt"]);
-        }
-        if ("notificationBranding" in $$parsedSource) {
-            $$parsedSource["notificationBranding"] = $$createField21_0($$parsedSource["notificationBranding"]);
-        }
-        if ("notificationPolicies" in $$parsedSource) {
-            $$parsedSource["notificationPolicies"] = $$createField22_0($$parsedSource["notificationPolicies"]);
-        }
-        if ("consolidation" in $$parsedSource) {
-            $$parsedSource["consolidation"] = $$createField23_0($$parsedSource["consolidation"]);
-        }
-        if ("rollout" in $$parsedSource) {
-            $$parsedSource["rollout"] = $$createField24_0($$parsedSource["rollout"]);
-        }
-        return new AgentConfiguration(/** @type {Partial<AgentConfiguration>} */($$parsedSource));
-    }
-}
-
-/**
- * AgentConsolidationConfig groups feature flags and policies for send windows.
- */
-export class AgentConsolidationConfig {
-    /**
-     * Creates a new AgentConsolidationConfig instance.
-     * @param {Partial<AgentConsolidationConfig>} [$$source = {}] - The source object to create the AgentConsolidationConfig.
-     */
-    constructor($$source = {}) {
-        if (!("enabled" in $$source)) {
-            /**
-             * @member
-             * @type {boolean | null}
-             */
-            this["enabled"] = null;
-        }
-        if (!("policies" in $$source)) {
-            /**
-             * @member
-             * @type {AgentConsolidationPolicy[]}
-             */
-            this["policies"] = [];
-        }
-
-        Object.assign(this, $$source);
-    }
-
-    /**
-     * Creates a new AgentConsolidationConfig instance from a string or object.
-     * @param {any} [$$source = {}]
-     * @returns {AgentConsolidationConfig}
-     */
-    static createFrom($$source = {}) {
-        const $$createField1_0 = $$createType10;
-        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        if ("policies" in $$parsedSource) {
-            $$parsedSource["policies"] = $$createField1_0($$parsedSource["policies"]);
-        }
-        return new AgentConsolidationConfig(/** @type {Partial<AgentConsolidationConfig>} */($$parsedSource));
-    }
-}
-
-/**
- * AgentConsolidationPolicy defines the window mode for a specific data type.
- */
-export class AgentConsolidationPolicy {
-    /**
-     * Creates a new AgentConsolidationPolicy instance.
-     * @param {Partial<AgentConsolidationPolicy>} [$$source = {}] - The source object to create the AgentConsolidationPolicy.
-     */
-    constructor($$source = {}) {
-        if (!("dataType" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["dataType"] = "";
-        }
-        if (!("windowMode" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["windowMode"] = "";
-        }
-
-        Object.assign(this, $$source);
-    }
-
-    /**
-     * Creates a new AgentConsolidationPolicy instance from a string or object.
-     * @param {any} [$$source = {}]
-     * @returns {AgentConsolidationPolicy}
-     */
-    static createFrom($$source = {}) {
-        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        return new AgentConsolidationPolicy(/** @type {Partial<AgentConsolidationPolicy>} */($$parsedSource));
-    }
-}
-
 export const AgentInfo = supportmeta$0.AgentInfo;
 
 /**
  * @typedef {supportmeta$0.AgentInfo} AgentInfo
  */
 
-/**
- * AgentNotificationAction defines actions available in an interactive notification.
- */
-export class AgentNotificationAction {
-    /**
-     * Creates a new AgentNotificationAction instance.
-     * @param {Partial<AgentNotificationAction>} [$$source = {}] - The source object to create the AgentNotificationAction.
-     */
-    constructor($$source = {}) {
-        if (!("id" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["id"] = "";
-        }
-        if (!("label" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["label"] = "";
-        }
-        if (!("actionType" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["actionType"] = "";
-        }
-
-        Object.assign(this, $$source);
-    }
-
-    /**
-     * Creates a new AgentNotificationAction instance from a string or object.
-     * @param {any} [$$source = {}]
-     * @returns {AgentNotificationAction}
-     */
-    static createFrom($$source = {}) {
-        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        return new AgentNotificationAction(/** @type {Partial<AgentNotificationAction>} */($$parsedSource));
-    }
-}
-
-/**
- * AgentNotificationBrandingConfig defines tenant-level notification branding.
- */
-export class AgentNotificationBrandingConfig {
-    /**
-     * Creates a new AgentNotificationBrandingConfig instance.
-     * @param {Partial<AgentNotificationBrandingConfig>} [$$source = {}] - The source object to create the AgentNotificationBrandingConfig.
-     */
-    constructor($$source = {}) {
-        if (!("companyName" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["companyName"] = "";
-        }
-        if (!("logoUrl" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["logoUrl"] = "";
-        }
-        if (!("bannerUrl" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["bannerUrl"] = "";
-        }
-        if (!("theme" in $$source)) {
-            /**
-             * @member
-             * @type {NotificationThemeConfig}
-             */
-            this["theme"] = (new NotificationThemeConfig());
-        }
-
-        Object.assign(this, $$source);
-    }
-
-    /**
-     * Creates a new AgentNotificationBrandingConfig instance from a string or object.
-     * @param {any} [$$source = {}]
-     * @returns {AgentNotificationBrandingConfig}
-     */
-    static createFrom($$source = {}) {
-        const $$createField3_0 = $$createType11;
-        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        if ("theme" in $$parsedSource) {
-            $$parsedSource["theme"] = $$createField3_0($$parsedSource["theme"]);
-        }
-        return new AgentNotificationBrandingConfig(/** @type {Partial<AgentNotificationBrandingConfig>} */($$parsedSource));
-    }
-}
-
-/**
- * AgentNotificationPolicy defines behavior and style for a notification event type.
- */
-export class AgentNotificationPolicy {
-    /**
-     * Creates a new AgentNotificationPolicy instance.
-     * @param {Partial<AgentNotificationPolicy>} [$$source = {}] - The source object to create the AgentNotificationPolicy.
-     */
-    constructor($$source = {}) {
-        if (!("eventType" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["eventType"] = "";
-        }
-        if (!("mode" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["mode"] = "";
-        }
-        if (!("severity" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["severity"] = "";
-        }
-        if (!("timeoutSeconds" in $$source)) {
-            /**
-             * @member
-             * @type {number | null}
-             */
-            this["timeoutSeconds"] = null;
-        }
-        if (!("styleOverride" in $$source)) {
-            /**
-             * @member
-             * @type {AgentNotificationStyleOverride}
-             */
-            this["styleOverride"] = (new AgentNotificationStyleOverride());
-        }
-        if (!("actions" in $$source)) {
-            /**
-             * @member
-             * @type {AgentNotificationAction[]}
-             */
-            this["actions"] = [];
-        }
-
-        Object.assign(this, $$source);
-    }
-
-    /**
-     * Creates a new AgentNotificationPolicy instance from a string or object.
-     * @param {any} [$$source = {}]
-     * @returns {AgentNotificationPolicy}
-     */
-    static createFrom($$source = {}) {
-        const $$createField4_0 = $$createType12;
-        const $$createField5_0 = $$createType14;
-        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        if ("styleOverride" in $$parsedSource) {
-            $$parsedSource["styleOverride"] = $$createField4_0($$parsedSource["styleOverride"]);
-        }
-        if ("actions" in $$parsedSource) {
-            $$parsedSource["actions"] = $$createField5_0($$parsedSource["actions"]);
-        }
-        return new AgentNotificationPolicy(/** @type {Partial<AgentNotificationPolicy>} */($$parsedSource));
-    }
-}
-
-/**
- * AgentNotificationStyleOverride defines per-event visual customizations.
- */
-export class AgentNotificationStyleOverride {
-    /**
-     * Creates a new AgentNotificationStyleOverride instance.
-     * @param {Partial<AgentNotificationStyleOverride>} [$$source = {}] - The source object to create the AgentNotificationStyleOverride.
-     */
-    constructor($$source = {}) {
-        if (!("layout" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["layout"] = "";
-        }
-        if (!("background" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["background"] = "";
-        }
-        if (!("text" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["text"] = "";
-        }
-
-        Object.assign(this, $$source);
-    }
-
-    /**
-     * Creates a new AgentNotificationStyleOverride instance from a string or object.
-     * @param {any} [$$source = {}]
-     * @returns {AgentNotificationStyleOverride}
-     */
-    static createFrom($$source = {}) {
-        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        return new AgentNotificationStyleOverride(/** @type {Partial<AgentNotificationStyleOverride>} */($$parsedSource));
-    }
-}
-
-/**
- * AgentPSADTConfig defines PSAppDeployToolkit integration settings from the API.
- */
-export class AgentPSADTConfig {
-    /**
-     * Creates a new AgentPSADTConfig instance.
-     * @param {Partial<AgentPSADTConfig>} [$$source = {}] - The source object to create the AgentPSADTConfig.
-     */
-    constructor($$source = {}) {
-        if (!("enabled" in $$source)) {
-            /**
-             * @member
-             * @type {boolean | null}
-             */
-            this["enabled"] = null;
-        }
-        if (!("requiredVersion" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["requiredVersion"] = "";
-        }
-        if (!("autoInstallModule" in $$source)) {
-            /**
-             * @member
-             * @type {boolean | null}
-             */
-            this["autoInstallModule"] = null;
-        }
-        if (!("installSource" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["installSource"] = "";
-        }
-        if (!("executionTimeoutSeconds" in $$source)) {
-            /**
-             * @member
-             * @type {number | null}
-             */
-            this["executionTimeoutSeconds"] = null;
-        }
-        if (!("fallbackPolicy" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["fallbackPolicy"] = "";
-        }
-        if (!("installOnStartup" in $$source)) {
-            /**
-             * @member
-             * @type {boolean | null}
-             */
-            this["installOnStartup"] = null;
-        }
-        if (!("installOnDemand" in $$source)) {
-            /**
-             * @member
-             * @type {boolean | null}
-             */
-            this["installOnDemand"] = null;
-        }
-        if (!("successExitCodes" in $$source)) {
-            /**
-             * @member
-             * @type {number[]}
-             */
-            this["successExitCodes"] = [];
-        }
-        if (!("rebootExitCodes" in $$source)) {
-            /**
-             * @member
-             * @type {number[]}
-             */
-            this["rebootExitCodes"] = [];
-        }
-        if (!("ignoreExitCodes" in $$source)) {
-            /**
-             * @member
-             * @type {number[]}
-             */
-            this["ignoreExitCodes"] = [];
-        }
-        if (!("timeoutAction" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["timeoutAction"] = "";
-        }
-        if (!("unknownExitCodePolicy" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["unknownExitCodePolicy"] = "";
-        }
-
-        Object.assign(this, $$source);
-    }
-
-    /**
-     * Creates a new AgentPSADTConfig instance from a string or object.
-     * @param {any} [$$source = {}]
-     * @returns {AgentPSADTConfig}
-     */
-    static createFrom($$source = {}) {
-        const $$createField8_0 = $$createType15;
-        const $$createField9_0 = $$createType15;
-        const $$createField10_0 = $$createType15;
-        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        if ("successExitCodes" in $$parsedSource) {
-            $$parsedSource["successExitCodes"] = $$createField8_0($$parsedSource["successExitCodes"]);
-        }
-        if ("rebootExitCodes" in $$parsedSource) {
-            $$parsedSource["rebootExitCodes"] = $$createField9_0($$parsedSource["rebootExitCodes"]);
-        }
-        if ("ignoreExitCodes" in $$parsedSource) {
-            $$parsedSource["ignoreExitCodes"] = $$createField10_0($$parsedSource["ignoreExitCodes"]);
-        }
-        return new AgentPSADTConfig(/** @type {Partial<AgentPSADTConfig>} */($$parsedSource));
-    }
-}
-
-/**
- * AgentRolloutConfig defines kill switches and phased rollout gates.
- */
-export class AgentRolloutConfig {
-    /**
-     * Creates a new AgentRolloutConfig instance.
-     * @param {Partial<AgentRolloutConfig>} [$$source = {}] - The source object to create the AgentRolloutConfig.
-     */
-    constructor($$source = {}) {
-        if (!("enableNotifications" in $$source)) {
-            /**
-             * @member
-             * @type {boolean | null}
-             */
-            this["enableNotifications"] = null;
-        }
-        if (!("enableRequireConfirmation" in $$source)) {
-            /**
-             * @member
-             * @type {boolean | null}
-             */
-            this["enableRequireConfirmation"] = null;
-        }
-        if (!("enablePsadtBootstrap" in $$source)) {
-            /**
-             * @member
-             * @type {boolean | null}
-             */
-            this["enablePsadtBootstrap"] = null;
-        }
-        if (!("enableConsolidationEngine" in $$source)) {
-            /**
-             * @member
-             * @type {boolean | null}
-             */
-            this["enableConsolidationEngine"] = null;
-        }
-        if (!("commandResultOfflineMode" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["commandResultOfflineMode"] = "";
-        }
-        if (!("p2pTelemetryOfflineMode" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["p2pTelemetryOfflineMode"] = "";
-        }
-        if (!("allowedNotificationEventTypes" in $$source)) {
-            /**
-             * @member
-             * @type {string[]}
-             */
-            this["allowedNotificationEventTypes"] = [];
-        }
-        if (!("blockedNotificationEventTypes" in $$source)) {
-            /**
-             * @member
-             * @type {string[]}
-             */
-            this["blockedNotificationEventTypes"] = [];
-        }
-
-        Object.assign(this, $$source);
-    }
-
-    /**
-     * Creates a new AgentRolloutConfig instance from a string or object.
-     * @param {any} [$$source = {}]
-     * @returns {AgentRolloutConfig}
-     */
-    static createFrom($$source = {}) {
-        const $$createField6_0 = $$createType0;
-        const $$createField7_0 = $$createType0;
-        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        if ("allowedNotificationEventTypes" in $$parsedSource) {
-            $$parsedSource["allowedNotificationEventTypes"] = $$createField6_0($$parsedSource["allowedNotificationEventTypes"]);
-        }
-        if ("blockedNotificationEventTypes" in $$parsedSource) {
-            $$parsedSource["blockedNotificationEventTypes"] = $$createField7_0($$parsedSource["blockedNotificationEventTypes"]);
-        }
-        return new AgentRolloutConfig(/** @type {Partial<AgentRolloutConfig>} */($$parsedSource));
-    }
-}
-
 export const AgentStatus = debug$0.AgentStatus;
 
 /**
  * @typedef {debug$0.AgentStatus} AgentStatus
  */
-
-/**
- * ApiVersionInfo contém informações da versão e capacidades da API.
- */
-export class ApiVersionInfo {
-    /**
-     * Creates a new ApiVersionInfo instance.
-     * @param {Partial<ApiVersionInfo>} [$$source = {}] - The source object to create the ApiVersionInfo.
-     */
-    constructor($$source = {}) {
-        if (!("Detected" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["Detected"] = false;
-        }
-        if (!("Version" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["Version"] = "";
-        }
-        if (!("Features" in $$source)) {
-            /**
-             * @member
-             * @type {string[]}
-             */
-            this["Features"] = [];
-        }
-        if (!("BaseURL" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["BaseURL"] = "";
-        }
-        if (!("CheckedAt" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["CheckedAt"] = "";
-        }
-
-        Object.assign(this, $$source);
-    }
-
-    /**
-     * Creates a new ApiVersionInfo instance from a string or object.
-     * @param {any} [$$source = {}]
-     * @returns {ApiVersionInfo}
-     */
-    static createFrom($$source = {}) {
-        const $$createField2_0 = $$createType0;
-        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        if ("Features" in $$parsedSource) {
-            $$parsedSource["Features"] = $$createField2_0($$parsedSource["Features"]);
-        }
-        return new ApiVersionInfo(/** @type {Partial<ApiVersionInfo>} */($$parsedSource));
-    }
-}
 
 /**
  * AutomationStateView represents the current automation policy state in the UI.
@@ -1097,54 +183,12 @@ export const CreateTicketInput = supportmeta$0.CreateTicketInput;
 /**
  * CreateTicketRequest é o payload para POST /me/tickets.
  */
-export class CreateTicketRequest {
-    /**
-     * Creates a new CreateTicketRequest instance.
-     * @param {Partial<CreateTicketRequest>} [$$source = {}] - The source object to create the CreateTicketRequest.
-     */
-    constructor($$source = {}) {
-        if (!("title" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["title"] = "";
-        }
-        if (!("description" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["description"] = "";
-        }
-        if (!("category" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["category"] = "";
-        }
-        if (!("priority" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["priority"] = "";
-        }
+export const CreateTicketRequest = tickets$0.CreateTicketRequest;
 
-        Object.assign(this, $$source);
-    }
-
-    /**
-     * Creates a new CreateTicketRequest instance from a string or object.
-     * @param {any} [$$source = {}]
-     * @returns {CreateTicketRequest}
-     */
-    static createFrom($$source = {}) {
-        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        return new CreateTicketRequest(/** @type {Partial<CreateTicketRequest>} */($$parsedSource));
-    }
-}
+/**
+ * CreateTicketRequest é o payload para POST /me/tickets.
+ * @typedef {tickets$0.CreateTicketRequest} CreateTicketRequest
+ */
 
 export const DebugConfig = debug$0.Config;
 
@@ -1162,6 +206,12 @@ export const HardwareIdentityInfo = hardwareid$0.Info;
  * HardwareIdentityInfo agrega as identidades de hardware da máquina usadas
  * para identificação persistente do agente (sobrevive a formatação).
  * @typedef {hardwareid$0.Info} HardwareIdentityInfo
+ */
+
+export const InstallerConfig = debug$0.InstallerConfig;
+
+/**
+ * @typedef {debug$0.InstallerConfig} InstallerConfig
  */
 
 export const KnowledgeArticle = supportmeta$0.KnowledgeArticle;
@@ -1189,72 +239,6 @@ export const NotificationDispatchResponse = notifications$0.DispatchResponse;
  * NotificationDispatchResponse é a resposta de uma notificação.
  * @typedef {notifications$0.DispatchResponse} NotificationDispatchResponse
  */
-
-/**
- * NotificationThemeConfig defines base colors used by notification UI.
- */
-export class NotificationThemeConfig {
-    /**
-     * Creates a new NotificationThemeConfig instance.
-     * @param {Partial<NotificationThemeConfig>} [$$source = {}] - The source object to create the NotificationThemeConfig.
-     */
-    constructor($$source = {}) {
-        if (!("surface" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["surface"] = "";
-        }
-        if (!("text" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["text"] = "";
-        }
-        if (!("accent" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["accent"] = "";
-        }
-        if (!("success" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["success"] = "";
-        }
-        if (!("warning" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["warning"] = "";
-        }
-        if (!("danger" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["danger"] = "";
-        }
-
-        Object.assign(this, $$source);
-    }
-
-    /**
-     * Creates a new NotificationThemeConfig instance from a string or object.
-     * @param {any} [$$source = {}]
-     * @returns {NotificationThemeConfig}
-     */
-    static createFrom($$source = {}) {
-        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        return new NotificationThemeConfig(/** @type {Partial<NotificationThemeConfig>} */($$parsedSource));
-    }
-}
 
 export const P2PArtifactAccess = p2pmeta$0.ArtifactAccess;
 
@@ -1308,47 +292,25 @@ export const P2PDistributionStatus = p2pmeta$0.DistributionStatus;
  * P2PDistributionStatusQueryOptions defines optional filters used by
  * GET /api/v1/agent-auth/me/p2p-distribution-status.
  */
-export class P2PDistributionStatusQueryOptions {
-    /**
-     * Creates a new P2PDistributionStatusQueryOptions instance.
-     * @param {Partial<P2PDistributionStatusQueryOptions>} [$$source = {}] - The source object to create the P2PDistributionStatusQueryOptions.
-     */
-    constructor($$source = {}) {
-        if (!("ArtifactID" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["ArtifactID"] = "";
-        }
-        if (!("Limit" in $$source)) {
-            /**
-             * @member
-             * @type {number}
-             */
-            this["Limit"] = 0;
-        }
-        if (!("Offset" in $$source)) {
-            /**
-             * @member
-             * @type {number}
-             */
-            this["Offset"] = 0;
-        }
+export const P2PDistributionStatusQueryOptions = p2p$0.DistributionStatusQueryOptions;
 
-        Object.assign(this, $$source);
-    }
+/**
+ * P2PDistributionStatusQueryOptions defines optional filters used by
+ * GET /api/v1/agent-auth/me/p2p-distribution-status.
+ * @typedef {p2p$0.DistributionStatusQueryOptions} P2PDistributionStatusQueryOptions
+ */
 
-    /**
-     * Creates a new P2PDistributionStatusQueryOptions instance from a string or object.
-     * @param {any} [$$source = {}]
-     * @returns {P2PDistributionStatusQueryOptions}
-     */
-    static createFrom($$source = {}) {
-        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        return new P2PDistributionStatusQueryOptions(/** @type {Partial<P2PDistributionStatusQueryOptions>} */($$parsedSource));
-    }
-}
+export const P2POnboardingRequest = p2pmeta$0.OnboardingRequest;
+
+/**
+ * @typedef {p2pmeta$0.OnboardingRequest} P2POnboardingRequest
+ */
+
+export const P2POnboardingResult = p2pmeta$0.OnboardingResult;
+
+/**
+ * @typedef {p2pmeta$0.OnboardingResult} P2POnboardingResult
+ */
 
 export const P2PPeerArtifactIndexView = p2pmeta$0.PeerArtifactIndexView;
 
@@ -1460,9 +422,9 @@ export class PSADTDebugState {
         if (!("configuration" in $$source)) {
             /**
              * @member
-             * @type {AgentConfiguration}
+             * @type {agentconfig$0.AgentConfiguration}
              */
-            this["configuration"] = (new AgentConfiguration());
+            this["configuration"] = (new agentconfig$0.AgentConfiguration());
         }
         if (!("moduleStatus" in $$source)) {
             /**
@@ -1474,14 +436,14 @@ export class PSADTDebugState {
         if (!("notificationBranding" in $$source)) {
             /**
              * @member
-             * @type {AgentNotificationBrandingConfig}
+             * @type {agentconfig$0.AgentNotificationBrandingConfig}
              */
-            this["notificationBranding"] = (new AgentNotificationBrandingConfig());
+            this["notificationBranding"] = (new agentconfig$0.AgentNotificationBrandingConfig());
         }
         if (!("notificationPolicies" in $$source)) {
             /**
              * @member
-             * @type {AgentNotificationPolicy[]}
+             * @type {agentconfig$0.AgentNotificationPolicy[]}
              */
             this["notificationPolicies"] = [];
         }
@@ -1495,10 +457,10 @@ export class PSADTDebugState {
      * @returns {PSADTDebugState}
      */
     static createFrom($$source = {}) {
-        const $$createField1_0 = $$createType16;
-        const $$createField2_0 = $$createType17;
-        const $$createField3_0 = $$createType4;
-        const $$createField4_0 = $$createType6;
+        const $$createField1_0 = $$createType0;
+        const $$createField2_0 = $$createType1;
+        const $$createField3_0 = $$createType2;
+        const $$createField4_0 = $$createType4;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("configuration" in $$parsedSource) {
             $$parsedSource["configuration"] = $$createField1_0($$parsedSource["configuration"]);
@@ -1914,224 +876,12 @@ export class RuntimeFlags {
 /**
  * StatusOverview provides a simplified health snapshot for the default status page.
  */
-export class StatusOverview {
-    /**
-     * Creates a new StatusOverview instance.
-     * @param {Partial<StatusOverview>} [$$source = {}] - The source object to create the StatusOverview.
-     */
-    constructor($$source = {}) {
-        if (!("connected" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["connected"] = false;
-        }
-        if (!("transportConnected" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["transportConnected"] = false;
-        }
-        if (!("connectionLabel" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["connectionLabel"] = "";
-        }
-        if (/** @type {any} */(false)) {
-            /**
-             * @member
-             * @type {string | undefined}
-             */
-            this["onlineReason"] = undefined;
-        }
-        if (!("hostname" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["hostname"] = "";
-        }
-        if (!("server" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["server"] = "";
-        }
-        if (!("connectionType" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["connectionType"] = "";
-        }
-        if (/** @type {any} */(false)) {
-            /**
-             * @member
-             * @type {string | undefined}
-             */
-            this["lastGlobalPongAtUtc"] = undefined;
-        }
-        if (!("globalPongStale" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["globalPongStale"] = false;
-        }
-        if (!("nonCriticalDeferred" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["nonCriticalDeferred"] = false;
-        }
-        if (/** @type {any} */(false)) {
-            /**
-             * @member
-             * @type {string | undefined}
-             */
-            this["nonCriticalDeferredUntilUtc"] = undefined;
-        }
-        if (/** @type {any} */(false)) {
-            /**
-             * @member
-             * @type {string | undefined}
-             */
-            this["nonCriticalDeferredReason"] = undefined;
-        }
-        if (!("appVersion" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["appVersion"] = "";
-        }
-        if (/** @type {any} */(false)) {
-            /**
-             * @member
-             * @type {string | undefined}
-             */
-            this["appCommit"] = undefined;
-        }
-        if (/** @type {any} */(false)) {
-            /**
-             * @member
-             * @type {string | undefined}
-             */
-            this["buildDateUtc"] = undefined;
-        }
-        if (!("osName" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["osName"] = "";
-        }
-        if (!("osVersion" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["osVersion"] = "";
-        }
-        if (!("lastInventoryCollected" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["lastInventoryCollected"] = "";
-        }
-        if (!("realtimeAvailable" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["realtimeAvailable"] = false;
-        }
-        if (!("realtimeNatsConnected" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["realtimeNatsConnected"] = false;
-        }
-        if (!("realtimeConnectedAgents" in $$source)) {
-            /**
-             * @member
-             * @type {number}
-             */
-            this["realtimeConnectedAgents"] = 0;
-        }
-        if (!("realtimeMessage" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["realtimeMessage"] = "";
-        }
-        if (!("checkedAtUtc" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["checkedAtUtc"] = "0001-01-01T00:00:00.000Z";
-        }
-        if (!("pendingCommandResults" in $$source)) {
-            /**
-             * Outbox offline queue backlog counts
-             * @member
-             * @type {number}
-             */
-            this["pendingCommandResults"] = 0;
-        }
-        if (!("pendingP2pTelemetry" in $$source)) {
-            /**
-             * @member
-             * @type {number}
-             */
-            this["pendingP2pTelemetry"] = 0;
-        }
-        if (!("updateCheckEnabled" in $$source)) {
-            /**
-             * Update do agente (self-update)
-             * @member
-             * @type {boolean}
-             */
-            this["updateCheckEnabled"] = false;
-        }
-        if (!("updateCheckInProgress" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["updateCheckInProgress"] = false;
-        }
-        if (/** @type {any} */(false)) {
-            /**
-             * @member
-             * @type {string | undefined}
-             */
-            this["lastUpdateCheckAtUtc"] = undefined;
-        }
+export const StatusOverview = status$0.Overview;
 
-        Object.assign(this, $$source);
-    }
-
-    /**
-     * Creates a new StatusOverview instance from a string or object.
-     * @param {any} [$$source = {}]
-     * @returns {StatusOverview}
-     */
-    static createFrom($$source = {}) {
-        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        return new StatusOverview(/** @type {Partial<StatusOverview>} */($$parsedSource));
-    }
-}
+/**
+ * StatusOverview provides a simplified health snapshot for the default status page.
+ * @typedef {status$0.Overview} StatusOverview
+ */
 
 export const TicketComment = supportmeta$0.TicketComment;
 
@@ -2142,127 +892,22 @@ export const TicketComment = supportmeta$0.TicketComment;
 /**
  * TicketSummary representa um ticket retornado pela API.
  */
-export class TicketSummary {
-    /**
-     * Creates a new TicketSummary instance.
-     * @param {Partial<TicketSummary>} [$$source = {}] - The source object to create the TicketSummary.
-     */
-    constructor($$source = {}) {
-        if (!("id" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["id"] = "";
-        }
-        if (!("title" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["title"] = "";
-        }
-        if (!("description" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["description"] = "";
-        }
-        if (!("category" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["category"] = "";
-        }
-        if (!("priority" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["priority"] = "";
-        }
-        if (!("workflowStateId" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["workflowStateId"] = "";
-        }
-        if (!("slaExpiresAt" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["slaExpiresAt"] = "";
-        }
-        if (!("slaBreached" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["slaBreached"] = false;
-        }
-        if (!("daysOpen" in $$source)) {
-            /**
-             * @member
-             * @type {number}
-             */
-            this["daysOpen"] = 0;
-        }
-        if (!("createdAt" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["createdAt"] = "";
-        }
-        if (!("updatedAt" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["updatedAt"] = "";
-        }
-        if (!("closedAt" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["closedAt"] = "";
-        }
+export const TicketSummary = tickets$0.TicketSummary;
 
-        Object.assign(this, $$source);
-    }
+/**
+ * TicketSummary representa um ticket retornado pela API.
+ * @typedef {tickets$0.TicketSummary} TicketSummary
+ */
 
-    /**
-     * Creates a new TicketSummary instance from a string or object.
-     * @param {any} [$$source = {}]
-     * @returns {TicketSummary}
-     */
-    static createFrom($$source = {}) {
-        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        return new TicketSummary(/** @type {Partial<TicketSummary>} */($$parsedSource));
-    }
-}
+export const p2pDiscoveredPeer = p2pmeta$0.DiscoveredPeer;
+
+/**
+ * @typedef {p2pmeta$0.DiscoveredPeer} p2pDiscoveredPeer
+ */
 
 // Private type creation functions
-const $$createType0 = $Create.Array($Create.Any);
-const $$createType1 = AgentAutoUpdateConfig.createFrom;
-const $$createType2 = selfupdate$0.Policy.createFrom;
-const $$createType3 = AgentPSADTConfig.createFrom;
-const $$createType4 = AgentNotificationBrandingConfig.createFrom;
-const $$createType5 = AgentNotificationPolicy.createFrom;
-const $$createType6 = $Create.Array($$createType5);
-const $$createType7 = AgentConsolidationConfig.createFrom;
-const $$createType8 = AgentRolloutConfig.createFrom;
-const $$createType9 = AgentConsolidationPolicy.createFrom;
-const $$createType10 = $Create.Array($$createType9);
-const $$createType11 = NotificationThemeConfig.createFrom;
-const $$createType12 = AgentNotificationStyleOverride.createFrom;
-const $$createType13 = AgentNotificationAction.createFrom;
-const $$createType14 = $Create.Array($$createType13);
-const $$createType15 = $Create.Array($Create.Any);
-const $$createType16 = AgentConfiguration.createFrom;
-const $$createType17 = PSADTModuleStatus.createFrom;
+const $$createType0 = agentconfig$0.AgentConfiguration.createFrom;
+const $$createType1 = PSADTModuleStatus.createFrom;
+const $$createType2 = agentconfig$0.AgentNotificationBrandingConfig.createFrom;
+const $$createType3 = agentconfig$0.AgentNotificationPolicy.createFrom;
+const $$createType4 = $Create.Array($$createType3);

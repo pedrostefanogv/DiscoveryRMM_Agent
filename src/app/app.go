@@ -50,6 +50,7 @@ import (
 	"discovery/app/services/notifications"
 	"discovery/app/services/psadt"
 	appsupport "discovery/app/support"
+	syncsvc "discovery/app/sync"
 	"discovery/app/tickets"
 	"discovery/app/updates"
 	"path/filepath"
@@ -99,22 +100,26 @@ type App struct {
 
 	// toolsRegistration guarda o timestamp do último registro bem-sucedido de tools.
 	// Usado para re-registrar se o cache do servidor expirou (TTL 5min por padrão no servidor).
-	toolsRegistrationMu   sync.RWMutex
-	lastToolsRegistration time.Time
-	agentConn             *agentconn.Runtime
-	remoteDebug           *remotedebug.Manager
-	syncCoord             *syncCoordinator
-	p2pCoord              *p2pCoordinator
-	updateTrigger         chan struct{}
-	agentInfo             agentInfoCache
-	appStorePolicy        appStorePolicyCache
-	debugSvc              *debug.Service
-	agentConfigSvc        *agentconfig.Service
-	ticketsSvc            *tickets.Service
-	updatesSvc            *updates.Service
-	exporter              *updates.Exporter
-	inventorySvc          *appinventory.Service
-	supportSvc            *appsupport.Service
+	toolsRegistrationMu    sync.RWMutex
+	lastToolsRegistration  time.Time
+	agentConn              *agentconn.Runtime
+	remoteDebug            *remotedebug.Manager
+	syncCoord              *syncsvc.Coordinator
+	syncRollout            *syncsvc.Rollout
+	syncBackoff            *syncsvc.Backoff
+	syncCommandOutbox      *syncsvc.CommandOutbox
+	syncP2PTelemetryOutbox *syncsvc.P2PTelemetryOutbox
+	p2pCoord               *p2pCoordinator
+	updateTrigger          chan struct{}
+	agentInfo              agentInfoCache
+	appStorePolicy         appStorePolicyCache
+	debugSvc               *debug.Service
+	agentConfigSvc         *agentconfig.Service
+	ticketsSvc             *tickets.Service
+	updatesSvc             *updates.Service
+	exporter               *updates.Exporter
+	inventorySvc           *appinventory.Service
+	supportSvc             *appsupport.Service
 
 	consolEngine *consolidation.Engine
 
@@ -132,13 +137,6 @@ type App struct {
 	p2pConfig                  P2PConfig
 	p2pSeedPlanCache           cachedP2PSeedPlan
 	p2pTelemetryRateLimitUntil time.Time
-	nonCriticalMu              sync.RWMutex
-	nonCriticalBackoffUntil    time.Time
-	nonCriticalBackoffReason   string
-	lastGlobalPongAt           time.Time
-	lastGlobalPongServerTime   string
-	lastGlobalPongKnown        bool
-	lastGlobalPongOverloaded   bool
 
 	agentConfigMu sync.RWMutex
 	agentConfig   agentconfig.AgentConfiguration
@@ -566,7 +564,11 @@ func NewApp(opts AppStartupOptions) *App {
 	a.ticketsSvc = tickets.New(tickets.Deps{
 		GetDebugConfig: a.GetDebugConfig,
 	})
-	a.syncCoord = newSyncCoordinator(a, a.updateTrigger)
+	a.syncCoord = syncsvc.New(a, a.updateTrigger)
+	a.syncRollout = syncsvc.NewRollout(a)
+	a.syncBackoff = syncsvc.NewBackoff(a)
+	a.syncCommandOutbox = syncsvc.NewCommandOutbox(a, a.syncRollout)
+	a.syncP2PTelemetryOutbox = syncsvc.NewP2PTelemetryOutbox(a, a.syncRollout)
 	a.p2pConfig = defaultP2PConfig()
 	a.p2pCoord = newP2PCoordinator(a)
 	a.chatSvc.Service().SetLogger(func(line string) {
@@ -1355,7 +1357,7 @@ func (a *App) onPostBootstrapProvisioned(ctx context.Context) error {
 	// 2. Refresh da configuração do agent (clientId/siteId, políticas).
 	if a.syncCoord != nil {
 		_ = a.refreshAgentConfiguration(ctx)
-		a.syncCoord.reconcileFromManifest(ctx, "post-bootstrap")
+		a.syncCoord.ReconcileFromManifest(ctx, "post-bootstrap")
 	}
 
 	// 3. Automação — carrega políticas iniciais.

@@ -7,6 +7,30 @@
 import { Create as $Create } from "/wails/runtime.js";
 
 /**
+ * DB encapsula a conexão SQLite e operações de cache
+ */
+export class DB {
+    /**
+     * Creates a new DB instance.
+     * @param {Partial<DB>} [$$source = {}] - The source object to create the DB.
+     */
+    constructor($$source = {}) {
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new DB instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {DB}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new DB(/** @type {Partial<DB>} */($$parsedSource));
+    }
+}
+
+/**
  * MemoryNote representa uma anotação/memória local persistida.
  */
 export class MemoryNote {

@@ -6,6 +6,13 @@
 // @ts-ignore: Unused imports
 import { Create as $Create } from "/wails/runtime.js";
 
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as selfupdate$0 from "../core/selfupdate/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as p2pmeta$0 from "../p2pmeta/models.js";
+
 /**
  * AgentStatus is the frontend-facing agent connection snapshot.
  */
@@ -104,6 +111,41 @@ export class AgentStatus {
     static createFrom($$source = {}) {
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         return new AgentStatus(/** @type {Partial<AgentStatus>} */($$parsedSource));
+    }
+}
+
+/**
+ * ChatLogConfig controla o log detalhado das conversas do chat com IA.
+ * Quando Enabled é nil (campo ausente no JSON) ou true, todas as interações
+ * do chat são registradas em chat_logs.jsonl no diretório de dados do agente,
+ * independentemente do modo debug estar ativo ou não.
+ * Quando Enabled é explicitamente false, o log de chat é desativado.
+ */
+export class ChatLogConfig {
+    /**
+     * Creates a new ChatLogConfig instance.
+     * @param {Partial<ChatLogConfig>} [$$source = {}] - The source object to create the ChatLogConfig.
+     */
+    constructor($$source = {}) {
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {boolean | null | undefined}
+             */
+            this["enabled"] = undefined;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new ChatLogConfig instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {ChatLogConfig}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new ChatLogConfig(/** @type {Partial<ChatLogConfig>} */($$parsedSource));
     }
 }
 
@@ -254,6 +296,173 @@ export class Config {
 }
 
 /**
+ * InstallerConfig is the bootstrap config saved by the NSIS installer.
+ * The JSON contract now persists deployToken, while apiKey remains accepted
+ * on read for backward compatibility with older installers.
+ */
+export class InstallerConfig {
+    /**
+     * Creates a new InstallerConfig instance.
+     * @param {Partial<InstallerConfig>} [$$source = {}] - The source object to create the InstallerConfig.
+     */
+    constructor($$source = {}) {
+        if (/** @type {any} */(false)) {
+            /**
+             * Deprecated: campo legado usado apenas na leitura (retrocompatibilidade).
+             * Após bootstrap, não é mais serializado. O campo canônico é ServerAPI.
+             * @member
+             * @type {string | undefined}
+             */
+            this["serverUrl"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * ServerAPI é o nome canônico do FQN do endpoint da API.
+             * @member
+             * @type {string | undefined}
+             */
+            this["serverapi"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["deployToken"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * AutoProvisioning controla a participação local no fluxo de zero-touch
+             * auto-provisioning via P2P (endpoint /p2p/config/onboard). Quando ausente,
+             * o agente assume o comportamento padrão definido pela configuração do
+             * servidor. O JSON canônico é "autoProvisioning"; o campo legado
+             * "discoveryEnabled" continua sendo aceito em leitura para retrocompat.
+             * @member
+             * @type {boolean | null | undefined}
+             */
+            this["autoProvisioning"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["apiServer"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["authToken"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["agentId"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["clientId"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["siteId"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["natsServer"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["natsWsServer"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {boolean | null | undefined}
+             */
+            this["allowInsecureTls"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {selfupdate$0.Policy | null | undefined}
+             */
+            this["agentUpdate"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {p2pmeta$0.Config | undefined}
+             */
+            this["p2p"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {boolean | undefined}
+             */
+            this["meshCentralInstalled"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {ChatLogConfig | undefined}
+             */
+            this["chatLog"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * ApiInsecure quando true indica HTTP simples (sem TLS).
+             * Padrão (false/ausente) = HTTPS. Substitui o campo legado apiScheme.
+             * @member
+             * @type {boolean | null | undefined}
+             */
+            this["apiInsecure"] = undefined;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new InstallerConfig instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {InstallerConfig}
+     */
+    static createFrom($$source = {}) {
+        const $$createField12_0 = $$createType1;
+        const $$createField13_0 = $$createType2;
+        const $$createField15_0 = $$createType3;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("agentUpdate" in $$parsedSource) {
+            $$parsedSource["agentUpdate"] = $$createField12_0($$parsedSource["agentUpdate"]);
+        }
+        if ("p2p" in $$parsedSource) {
+            $$parsedSource["p2p"] = $$createField13_0($$parsedSource["p2p"]);
+        }
+        if ("chatLog" in $$parsedSource) {
+            $$parsedSource["chatLog"] = $$createField15_0($$parsedSource["chatLog"]);
+        }
+        return new InstallerConfig(/** @type {Partial<InstallerConfig>} */($$parsedSource));
+    }
+}
+
+/**
  * RealtimeStatus represents server-side realtime transport health.
  */
 export class RealtimeStatus {
@@ -297,3 +506,9 @@ export class RealtimeStatus {
         return new RealtimeStatus(/** @type {Partial<RealtimeStatus>} */($$parsedSource));
     }
 }
+
+// Private type creation functions
+const $$createType0 = selfupdate$0.Policy.createFrom;
+const $$createType1 = $Create.Nullable($$createType0);
+const $$createType2 = p2pmeta$0.Config.createFrom;
+const $$createType3 = ChatLogConfig.createFrom;

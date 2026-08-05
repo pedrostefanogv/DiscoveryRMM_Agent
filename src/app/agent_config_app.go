@@ -82,7 +82,7 @@ func (a *App) applyAgentConfiguration(cfg agentconfig.AgentConfiguration) {
 	// Sync interval (if specified).
 	if cfg.InventoryIntervalHours != nil && a.syncCoord != nil {
 		if *cfg.InventoryIntervalHours > 0 {
-			a.syncCoord.setPollEvery(time.Duration(*cfg.InventoryIntervalHours) * time.Hour)
+			a.syncCoord.SetPollEvery(time.Duration(*cfg.InventoryIntervalHours) * time.Hour)
 		}
 	}
 

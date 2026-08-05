@@ -4,6 +4,8 @@
 
 export {
     AgentStatus,
+    ChatLogConfig,
     Config,
+    InstallerConfig,
     RealtimeStatus
 } from "./models.js";

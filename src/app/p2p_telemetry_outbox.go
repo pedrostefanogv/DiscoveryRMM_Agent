@@ -2,15 +2,10 @@ package app
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
-	"discovery/app/core/database"
 	"discovery/app/p2p"
 )
 
@@ -20,6 +15,8 @@ const (
 	p2pTelemetryMaxPayloadBytes = p2p.TelemetryMaxPayloadBytes
 )
 
+// buildP2PTelemetryPayload monta o payload de telemetria P2P a partir do
+// estado do coordinator. Permanece no *App porque depende de p2pCoord.
 func (a *App) buildP2PTelemetryPayload() (P2PTelemetryPayload, error) {
 	if a.p2pCoord == nil {
 		return P2PTelemetryPayload{}, fmt.Errorf("coordinator P2P indisponível")
@@ -62,87 +59,20 @@ func (a *App) buildP2PTelemetryPayload() (P2PTelemetryPayload, error) {
 	return payload, nil
 }
 
+// enqueueP2PTelemetryOutbox delega para o outbox do pacote sync.
 func (a *App) enqueueP2PTelemetryOutbox(payload P2PTelemetryPayload, sendErr error) error {
-	if !a.shouldEnqueueP2PTelemetryOutbox() {
+	if a.syncP2PTelemetryOutbox == nil {
 		return nil
 	}
-	if a.db == nil {
-		return nil
-	}
-	agentID := strings.TrimSpace(payload.AgentID)
-	if agentID == "" {
-		agentID = strings.TrimSpace(a.GetDebugConfig().AgentID)
-	}
-	if agentID == "" {
-		return nil
-	}
-	payloadJSON, err := marshalP2PTelemetryPayload(payload)
-	if err != nil {
-		return err
-	}
-	hashBytes := sha256.Sum256(payloadJSON)
-	payloadHash := hex.EncodeToString(hashBytes[:])
-	alreadyQueued, err := a.db.ExistsRecentP2PTelemetryOutboxHash(agentID, payloadHash, time.Now().Add(-p2pTelemetryDedupWindow))
-	if err != nil {
-		return err
-	}
-	if alreadyQueued {
-		return nil
-	}
-	lastError := ""
-	if sendErr != nil {
-		lastError = sendErr.Error()
-	}
-	idempotencyKey := payloadHash + ":" + strconv.FormatInt(time.Now().Unix(), 10)
-	return a.db.EnqueueP2PTelemetryOutbox(database.P2PTelemetryOutboxEntry{
-		AgentID:        agentID,
-		IdempotencyKey: idempotencyKey,
-		PayloadJSON:    string(payloadJSON),
-		PayloadHash:    payloadHash,
-		Attempts:       0,
-		NextAttemptAt:  time.Now(),
-		LastError:      strings.TrimSpace(lastError),
-		ExpiresAt:      time.Now().Add(14 * 24 * time.Hour),
-	})
+	return a.syncP2PTelemetryOutbox.Enqueue(payload, sendErr)
 }
 
+// drainP2PTelemetryOutbox delega para o outbox do pacote sync.
 func (a *App) drainP2PTelemetryOutbox(ctx context.Context, limit int) error {
-	if !a.shouldDrainP2PTelemetryOutbox() {
+	if a.syncP2PTelemetryOutbox == nil {
 		return nil
 	}
-	if a.db == nil {
-		return nil
-	}
-	agentID := strings.TrimSpace(a.GetDebugConfig().AgentID)
-	if agentID == "" {
-		return nil
-	}
-	if limit <= 0 {
-		limit = p2pTelemetryDrainLimit
-	}
-	entries, err := a.db.ListDueP2PTelemetryOutbox(agentID, time.Now(), limit)
-	if err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		if ctx != nil && ctx.Err() != nil {
-			return ctx.Err()
-		}
-		var payload P2PTelemetryPayload
-		if err := json.Unmarshal([]byte(entry.PayloadJSON), &payload); err != nil {
-			a.logs.append("[p2p][api] payload outbox inválido removido id=" + strconv.FormatInt(entry.ID, 10) + " erro=" + err.Error())
-			_ = a.db.DeleteP2PTelemetryOutbox(entry.ID)
-			continue
-		}
-		if err := a.postP2PTelemetryPayload(ctx, payload, entry.IdempotencyKey); err != nil {
-			attempt := entry.Attempts + 1
-			nextAttemptAt := time.Now().Add(p2p.TelemetryRetryBackoff(attempt))
-			_ = a.db.RescheduleP2PTelemetryOutbox(entry.ID, attempt, nextAttemptAt, err.Error())
-			continue
-		}
-		_ = a.db.MarkSentP2PTelemetryOutbox(entry.ID)
-	}
-	return nil
+	return a.syncP2PTelemetryOutbox.Drain(ctx, limit)
 }
 
 // marshalP2PTelemetryPayload delega a serialização (com limite de tamanho)
