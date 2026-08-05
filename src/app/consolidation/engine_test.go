@@ -1,4 +1,4 @@
-package app
+package consolidation
 
 import (
 	"testing"
@@ -6,10 +6,10 @@ import (
 	"discovery/app/agentconfig"
 )
 
-func TestConsolidationEngineApplyAgentConfig(t *testing.T) {
+func TestApplyAgentConfig(t *testing.T) {
 	enabled := true
 	rolloutEnabled := true
-	engine := newConsolidationEngine(nil, "agent-1")
+	engine := New(nil, "agent-1")
 
 	engine.ApplyAgentConfig(agentconfig.AgentConfiguration{
 		Consolidation: agentconfig.AgentConsolidationConfig{
@@ -36,10 +36,10 @@ func TestConsolidationEngineApplyAgentConfig(t *testing.T) {
 	}
 }
 
-func TestConsolidationEngineApplyAgentConfigRolloutDisabled(t *testing.T) {
+func TestApplyAgentConfigRolloutDisabled(t *testing.T) {
 	enabled := true
 	rolloutDisabled := false
-	engine := newConsolidationEngine(nil, "agent-1")
+	engine := New(nil, "agent-1")
 
 	engine.ApplyAgentConfig(agentconfig.AgentConfiguration{
 		Consolidation: agentconfig.AgentConsolidationConfig{Enabled: &enabled},
@@ -47,6 +47,6 @@ func TestConsolidationEngineApplyAgentConfigRolloutDisabled(t *testing.T) {
 	})
 
 	if engine.IsEnabled() {
-		t.Fatalf("expected consolidation engine to remain disabled when rollout blocks it")
+		t.Fatalf("expected consolidation engine to be disabled when rollout disables it")
 	}
 }

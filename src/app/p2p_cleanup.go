@@ -171,10 +171,3 @@ func (a *App) clearAllP2PTempArtifacts(now time.Time) (int, error) {
 
 	return removed, nil
 }
-
-func formatTimeRFC3339(v time.Time) string {
-	if v.IsZero() {
-		return ""
-	}
-	return v.UTC().Format(time.RFC3339)
-}

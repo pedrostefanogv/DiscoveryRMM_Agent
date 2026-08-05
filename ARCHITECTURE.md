@@ -84,7 +84,7 @@ discovery/
 │   ├── Notificações e Comandos
 │   │   ├── notification_center.go   # NotificationDispatchRequest, DispatchNotification, loop de resposta
 │   │   ├── command_result_outbox.go # Outbox pattern para resultados de comandos (SHA-256, retry)
-│   │   └── consolidation_engine.go  # ConsolidationEngine: janela realtime/1min/5min para eventos
+│   │   └── consolidation/           # ConsolidationEngine: janela realtime/1min/5min para eventos
 │   ├── Debug e Diagnóstico
 │   │   ├── remote_debug.go     # remoteDebugManager: debug remoto com streaming de logs
 │   │   └── psadt_debug_bridge.go # Bootstrap e diagnóstico do PSADT
@@ -355,7 +355,7 @@ main.go ────────────────────────
 | -------------------------- | ------------------------------------------------------------------------------------------------------------------ |
 | `notification_center.go`   | `NotificationDispatchRequest`, `DispatchNotification()`: envio e aguardo de resposta do usuário via Wails eventos. |
 | `command_result_outbox.go` | Outbox pattern para resultados de comandos: deduplicação SHA-256, retry com timestamp.                             |
-| `consolidation_engine.go`  | `ConsolidationEngine`: janelas de consolidação de eventos (realtime / 1min / 5min).                                |
+| `consolidation/`           | `consolidation.Engine`: janelas de consolidação de eventos (realtime / 1min / 5min).                               |
 
 #### Debug e Diagnóstico
 

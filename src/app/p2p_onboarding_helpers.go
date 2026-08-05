@@ -2,36 +2,16 @@ package app
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
-	"math"
-	"math/big"
 	"net/http"
 	"strings"
 	"time"
 
-	"discovery/app/netutil"
 	"discovery/app/core/tlsutil"
+	"discovery/app/netutil"
 )
-
-// ── Backoff ───────────────────────────────────────────────────────────────────
-
-// onboardingBackoff returns an exponential backoff with up to 20% jitter.
-func onboardingBackoff(attempt int) time.Duration {
-	exp := math.Pow(2, float64(attempt))
-	base := float64(onboardingRetryBase) * exp
-	if base > float64(onboardingRetryMax) {
-		base = float64(onboardingRetryMax)
-	}
-	jitterMax := int64(base * 0.2)
-	if jitterMax < 1 {
-		jitterMax = 1
-	}
-	jitter, _ := rand.Int(rand.Reader, big.NewInt(jitterMax))
-	return time.Duration(int64(base) + jitter.Int64())
-}
 
 // ── Provisioning Token ───────────────────────────────────────────────────────
 

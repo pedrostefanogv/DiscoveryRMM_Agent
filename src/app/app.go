@@ -18,6 +18,7 @@ import (
 	"discovery/app/agentconfig"
 	"discovery/app/apiclient"
 	"discovery/app/appstore"
+	"discovery/app/consolidation"
 	"discovery/app/core/agentconn"
 	"discovery/app/core/automation"
 	"discovery/app/core/buildinfo"
@@ -115,7 +116,7 @@ type App struct {
 	inventorySvc          *appinventory.Service
 	supportSvc            *appsupport.Service
 
-	consolEngine *ConsolidationEngine
+	consolEngine *consolidation.Engine
 
 	debugHTTP  *debughttp.Server
 	chatEvents *debughttp.ChatEventBroker
@@ -1017,7 +1018,7 @@ func (a *App) startup(ctx context.Context) {
 			a.inventorySvc.SetDB(db)
 		}
 		agentIDForEngine := strings.TrimSpace(a.GetDebugConfig().AgentID)
-		a.consolEngine = newConsolidationEngine(db, agentIDForEngine)
+		a.consolEngine = consolidation.New(db, agentIDForEngine)
 	}
 
 	log.Println("[startup] runtime local (tray) ativo — todos os workers locais iniciados")

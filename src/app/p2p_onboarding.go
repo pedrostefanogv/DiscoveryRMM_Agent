@@ -472,21 +472,6 @@ func loadInstallerConfigForZeroTouchPersist() (InstallerConfig, string, error) {
 	return InstallerConfig{}, "", nil
 }
 
-// buildZeroTouchServerURL delega para p2p.BuildZeroTouchServerURL.
-func buildZeroTouchServerURL(scheme, server string) string {
-	return p2p.BuildZeroTouchServerURL(scheme, server)
-}
-
-// parseZeroTouchServerURL delega para p2p.ParseZeroTouchServerURL.
-func parseZeroTouchServerURL(raw string) (string, string, error) {
-	return p2p.ParseZeroTouchServerURL(raw)
-}
-
-// firstNonEmptyAnyString delega para p2p.FirstNonEmptyAnyString.
-func firstNonEmptyAnyString(values ...any) string {
-	return p2p.FirstNonEmptyAnyString(values...)
-}
-
 // parseZeroTouchRegisterResponse delega para p2p.ParseZeroTouchRegisterResponse.
 func parseZeroTouchRegisterResponse(body []byte, fallbackServerURL string) (zeroTouchRegisterCredentials, error) {
 	creds, err := p2p.ParseZeroTouchRegisterResponse(body, fallbackServerURL)

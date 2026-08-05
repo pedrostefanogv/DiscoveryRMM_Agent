@@ -151,15 +151,3 @@ type refreshOnDemandFlags struct {
 	Printers    bool
 	Hardware    bool
 }
-
-func normalizePayloadJSON(payload any) (map[string]any, error) {
-	return agentcommands.NormalizePayloadJSON(payload)
-}
-
-func getStringField(m map[string]any, key string) string {
-	return agentcommands.GetStringField(m, key)
-}
-
-func getBoolField(m map[string]any, key string) bool {
-	return agentcommands.GetBoolField(m, key)
-}

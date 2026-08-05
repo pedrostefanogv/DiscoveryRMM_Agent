@@ -1,4 +1,6 @@
-package app
+// Package consolidation implements the send-batching (consolidation) engine
+// that groups event delivery into configurable time windows per data type.
+package consolidation
 
 import (
 	"strings"
@@ -9,18 +11,18 @@ import (
 	"discovery/app/core/database"
 )
 
-// consolidationWindowDurations maps each window mode to its duration.
-var consolidationWindowDurations = map[string]time.Duration{
+// windowDurations maps each window mode to its duration.
+var windowDurations = map[string]time.Duration{
 	agentconfig.ConsolidationModeRealtime: 0,
 	agentconfig.ConsolidationMode1Min:     1 * time.Minute,
 	agentconfig.ConsolidationMode5Min:     5 * time.Minute,
 }
 
-// ConsolidationEngine controls send-batching windows per data type.
+// Engine controls send-batching windows per data type.
 // It is feature-flagged: disabled by default, falling back to realtime behavior.
 // When enabled, it uses the persisted window state in SQLite to decide whether
 // enough time has elapsed since the last flush for a given data type.
-type ConsolidationEngine struct {
+type Engine struct {
 	mu       sync.RWMutex
 	enabled  bool
 	policies map[string]string // dataType → windowMode
@@ -28,9 +30,9 @@ type ConsolidationEngine struct {
 	agentID  string
 }
 
-// newConsolidationEngine creates a disabled engine. Call Enable() to activate.
-func newConsolidationEngine(db *database.DB, agentID string) *ConsolidationEngine {
-	return &ConsolidationEngine{
+// New creates a disabled engine. Call Enable() to activate.
+func New(db *database.DB, agentID string) *Engine {
+	return &Engine{
 		enabled:  false,
 		policies: make(map[string]string),
 		db:       db,
@@ -39,35 +41,35 @@ func newConsolidationEngine(db *database.DB, agentID string) *ConsolidationEngin
 }
 
 // SetAgentID refreshes the agent identifier used for persisted window state.
-func (e *ConsolidationEngine) SetAgentID(agentID string) {
+func (e *Engine) SetAgentID(agentID string) {
 	e.mu.Lock()
 	e.agentID = strings.TrimSpace(agentID)
 	e.mu.Unlock()
 }
 
 // Enable activates the consolidation engine.
-func (e *ConsolidationEngine) Enable() {
+func (e *Engine) Enable() {
 	e.mu.Lock()
 	e.enabled = true
 	e.mu.Unlock()
 }
 
 // Disable deactivates the engine, restoring realtime behavior for all data types.
-func (e *ConsolidationEngine) Disable() {
+func (e *Engine) Disable() {
 	e.mu.Lock()
 	e.enabled = false
 	e.mu.Unlock()
 }
 
 // IsEnabled reports whether the engine is currently active.
-func (e *ConsolidationEngine) IsEnabled() bool {
+func (e *Engine) IsEnabled() bool {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return e.enabled
 }
 
 // SetPolicy configures the window mode for a data type.
-func (e *ConsolidationEngine) SetPolicy(dataType, windowMode string) {
+func (e *Engine) SetPolicy(dataType, windowMode string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.policies[strings.TrimSpace(dataType)] = strings.TrimSpace(windowMode)
@@ -75,7 +77,7 @@ func (e *ConsolidationEngine) SetPolicy(dataType, windowMode string) {
 
 // GetWindowMode returns the effective window mode for a data type.
 // Falls back to realtime when not configured.
-func (e *ConsolidationEngine) GetWindowMode(dataType string) string {
+func (e *Engine) GetWindowMode(dataType string) string {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	if mode, ok := e.policies[strings.TrimSpace(dataType)]; ok && mode != "" {
@@ -92,12 +94,12 @@ func (e *ConsolidationEngine) GetWindowMode(dataType string) string {
 //   - the window duration has elapsed since the last flush
 //
 // Returns false (skip / batch) otherwise.
-func (e *ConsolidationEngine) ShouldFlush(dataType string, now time.Time) (bool, error) {
+func (e *Engine) ShouldFlush(dataType string, now time.Time) (bool, error) {
 	if !e.IsEnabled() {
 		return true, nil
 	}
 	mode := e.GetWindowMode(dataType)
-	dur, known := consolidationWindowDurations[mode]
+	dur, known := windowDurations[mode]
 	if !known || dur == 0 {
 		return true, nil
 	}
@@ -120,7 +122,7 @@ func (e *ConsolidationEngine) ShouldFlush(dataType string, now time.Time) (bool,
 }
 
 // RecordFlush persists the post-flush window state for a given data type.
-func (e *ConsolidationEngine) RecordFlush(dataType string, now time.Time) error {
+func (e *Engine) RecordFlush(dataType string, now time.Time) error {
 	if e.db == nil || e.agentID == "" {
 		return nil
 	}
@@ -146,7 +148,7 @@ func (e *ConsolidationEngine) RecordFlush(dataType string, now time.Time) error 
 }
 
 // ApplyAgentConfig updates consolidation policies from the remote agent configuration.
-func (e *ConsolidationEngine) ApplyAgentConfig(cfg agentconfig.AgentConfiguration) {
+func (e *Engine) ApplyAgentConfig(cfg agentconfig.AgentConfiguration) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
