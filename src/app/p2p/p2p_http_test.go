@@ -27,13 +27,13 @@ func TestP2PTokenValidation(t *testing.T) {
 }
 
 func TestSanitizeArtifactName(t *testing.T) {
-	if got := sanitizeArtifactName("../danger.txt"); got != "" {
+	if got := SanitizeArtifactName("../danger.txt"); got != "" {
 		t.Fatalf("expected empty for traversal, got %q", got)
 	}
-	if got := sanitizeArtifactName("folder/file.txt"); got != "" {
+	if got := SanitizeArtifactName("folder/file.txt"); got != "" {
 		t.Fatalf("expected empty for path separator, got %q", got)
 	}
-	if got := sanitizeArtifactName("artifact.bin"); got != "artifact.bin" {
+	if got := SanitizeArtifactName("artifact.bin"); got != "artifact.bin" {
 		t.Fatalf("expected artifact.bin, got %q", got)
 	}
 }

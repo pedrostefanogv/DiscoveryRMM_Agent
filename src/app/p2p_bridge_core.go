@@ -1,9 +1,6 @@
 package app
 
 import (
-	"path/filepath"
-	"strings"
-
 	"discovery/app/p2p"
 )
 
@@ -44,20 +41,9 @@ const (
 // artifactSHA256CacheEntry é um alias para p2p.ArtifactSHA256CacheEntry.
 type artifactSHA256CacheEntry = p2p.ArtifactSHA256CacheEntry
 
-// sanitizeArtifactName valida e normaliza o nome de um artifact.
+// sanitizeArtifactName delega para p2p.SanitizeArtifactName.
 // DIFERE de p2pmeta.SanitizeArtifactName: retorna "" para "..", "/" e "\\"
-// (em vez de substituí-los por "-"). Mantida no app por comportamento específico.
+// (em vez de substituí-los por "-").
 func sanitizeArtifactName(name string) string {
-	name = strings.TrimSpace(name)
-	if strings.Contains(name, "..") {
-		return ""
-	}
-	if strings.Contains(name, "/") || strings.Contains(name, "\\") {
-		return ""
-	}
-	name = filepath.Base(name)
-	if name == "." || name == "" {
-		return ""
-	}
-	return name
+	return p2p.SanitizeArtifactName(name)
 }

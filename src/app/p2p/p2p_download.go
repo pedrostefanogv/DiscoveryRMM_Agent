@@ -12,7 +12,7 @@ import (
 
 func (c *Coordinator) DownloadArtifactFromPeer(ctx context.Context, artifactName, sourcePeerID string) (P2PArtifactView, error) {
 	rawArtifactName := strings.TrimSpace(artifactName)
-	artifactName = sanitizeArtifactName(artifactName)
+	artifactName = SanitizeArtifactName(artifactName)
 	if artifactName == "" {
 		err := fmt.Errorf("artifact inválido")
 		c.appendAudit("pull", rawArtifactName, sourcePeerID, "libp2p", false, err.Error())
@@ -115,7 +115,7 @@ func (c *Coordinator) DownloadArtifactFromPeer(ctx context.Context, artifactName
 // download chunked via libp2p streams, mesmo com peer único (resiliência/resume).
 func (c *Coordinator) DownloadArtifactSwarm(ctx context.Context, artifactName string) (P2PArtifactView, error) {
 	rawArtifactName := strings.TrimSpace(artifactName)
-	artifactName = sanitizeArtifactName(artifactName)
+	artifactName = SanitizeArtifactName(artifactName)
 	if artifactName == "" {
 		err := fmt.Errorf("artifact inválido")
 		c.appendAudit("swarm-pull", rawArtifactName, "", "automation", false, err.Error())

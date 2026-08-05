@@ -26,7 +26,7 @@ func (s *TransferServer) manifestDir() string {
 
 // cachedManifestPath retorna o caminho completo para o arquivo de cache do manifest.
 func cachedManifestPath(manifestDir, artifactName string) string {
-	safe := sanitizeArtifactName(artifactName)
+	safe := SanitizeArtifactName(artifactName)
 	if safe == "" {
 		return ""
 	}

@@ -138,7 +138,7 @@ func (s *TransferServer) BuildArtifactAccess(artifactName, targetPeerID string) 
 		return P2PArtifactAccess{}, errors.New("servidor P2P HTTP não iniciado")
 	}
 
-	artifactName = sanitizeArtifactName(artifactName)
+	artifactName = SanitizeArtifactName(artifactName)
 	if artifactName == "" {
 		return P2PArtifactAccess{}, errors.New("nome de artifact inválido")
 	}
@@ -347,7 +347,9 @@ func (s *TransferServer) verifyToken(artifactName, peerID, token string, now tim
 	return nil
 }
 
-func sanitizeArtifactName(name string) string {
+// SanitizeArtifactName valida e normaliza o nome de um artifact.
+// Retorna "" para "..", "/" e "\\" (em vez de substituí-los por "-").
+func SanitizeArtifactName(name string) string {
 	name = strings.TrimSpace(name)
 	if strings.Contains(name, "..") {
 		return ""

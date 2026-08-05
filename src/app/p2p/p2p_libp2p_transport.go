@@ -186,7 +186,7 @@ func handleStreamArtifactAccess(s network.Stream, transfer *TransferServer) {
 		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "payload inválido"})
 		return
 	}
-	req.ArtifactName = sanitizeArtifactName(req.ArtifactName)
+	req.ArtifactName = SanitizeArtifactName(req.ArtifactName)
 	req.RequesterID = strings.TrimSpace(req.RequesterID)
 	if req.ArtifactName == "" {
 		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "artifact inválido"})
@@ -212,7 +212,7 @@ func handleStreamArtifactManifest(s network.Stream, transfer *TransferServer) {
 		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "payload inválido"})
 		return
 	}
-	req.ArtifactName = sanitizeArtifactName(req.ArtifactName)
+	req.ArtifactName = SanitizeArtifactName(req.ArtifactName)
 	req.RequesterID = strings.TrimSpace(req.RequesterID)
 	if req.ArtifactName == "" {
 		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "artifact inválido"})
@@ -271,7 +271,7 @@ func handleStreamArtifactGet(s network.Stream, transfer *TransferServer) {
 		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "payload inválido"})
 		return
 	}
-	req.ArtifactName = sanitizeArtifactName(req.ArtifactName)
+	req.ArtifactName = SanitizeArtifactName(req.ArtifactName)
 	if req.ArtifactName == "" {
 		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "artifact inválido"})
 		return

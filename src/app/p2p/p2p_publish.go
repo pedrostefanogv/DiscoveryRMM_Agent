@@ -36,7 +36,7 @@ func (c *Coordinator) ListArtifacts() ([]P2PArtifactView, error) {
 		if entry.IsDir() {
 			continue
 		}
-		name := sanitizeArtifactName(entry.Name())
+		name := SanitizeArtifactName(entry.Name())
 		if name == "" {
 			continue
 		}
@@ -70,7 +70,7 @@ func (c *Coordinator) ListArtifacts() ([]P2PArtifactView, error) {
 // deleteArtifact remove um único artifact do diretório P2P:
 // arquivo, manifest cacheado e entrada do sha256Cache.
 func (c *Coordinator) DeleteArtifact(artifactName string) error {
-	artifactName = sanitizeArtifactName(artifactName)
+	artifactName = SanitizeArtifactName(artifactName)
 	if artifactName == "" {
 		return fmt.Errorf("nome de artifact inválido")
 	}
@@ -104,7 +104,7 @@ func (c *Coordinator) DeleteArtifact(artifactName string) error {
 }
 
 func (c *Coordinator) PublishTestArtifact(artifactName, content string) (P2PArtifactView, error) {
-	artifactName = sanitizeArtifactName(artifactName)
+	artifactName = SanitizeArtifactName(artifactName)
 	if artifactName == "" {
 		return P2PArtifactView{}, fmt.Errorf("nome de artifact inválido")
 	}
@@ -149,7 +149,7 @@ func (c *Coordinator) PublishFile(sourcePath string) (P2PArtifactView, error) {
 	if sourcePath == "" {
 		return P2PArtifactView{}, fmt.Errorf("arquivo nao informado")
 	}
-	artifactName := sanitizeArtifactName(filepath.Base(sourcePath))
+	artifactName := SanitizeArtifactName(filepath.Base(sourcePath))
 	if artifactName == "" {
 		return P2PArtifactView{}, fmt.Errorf("nome de artifact invalido")
 	}
@@ -229,7 +229,7 @@ func (c *Coordinator) PublishFileWithIDAndVersion(sourcePath string, artifactID 
 	// Nome do arquivo: artifactID sanitizado + extensão original (ex.: "rel-abc.exe").
 	// Substitui ':' para evitar nomes inválidos no Windows (ex.: "selfupdate:<sha256>"
 	// vira "selfupdate-<sha256>.exe").
-	targetName := sanitizeArtifactName(strings.NewReplacer(":", "-").Replace(artifactID) + filepath.Ext(sourcePath))
+	targetName := SanitizeArtifactName(strings.NewReplacer(":", "-").Replace(artifactID) + filepath.Ext(sourcePath))
 	targetPath := filepath.Join(dir, targetName)
 
 	checksum, manifest, err := c.publishFileSinglePass(sourcePath, targetPath, targetName)

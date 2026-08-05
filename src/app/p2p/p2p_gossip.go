@@ -122,7 +122,7 @@ func (c *Coordinator) upsertPeerArtifacts(peerAgentID string, artifacts []P2PArt
 	}
 	clean := make([]P2PArtifactView, 0, len(artifacts))
 	for _, artifact := range artifacts {
-		name := sanitizeArtifactName(artifact.ArtifactName)
+		name := SanitizeArtifactName(artifact.ArtifactName)
 		if name == "" {
 			continue
 		}

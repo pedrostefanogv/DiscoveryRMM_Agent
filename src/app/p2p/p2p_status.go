@@ -158,7 +158,7 @@ func (c *Coordinator) GetPeerArtifactIndex() []P2PPeerArtifactIndexView {
 // Usar o cache evita latência (5s timeout por peer) e permite que o lookup
 // funcione mesmo quando libp2p não está disponível (ex.: modo service-only).
 func (c *Coordinator) FindArtifactPeers(artifactName string) P2PArtifactAvailabilityView {
-	safeArtifact := sanitizeArtifactName(artifactName)
+	safeArtifact := SanitizeArtifactName(artifactName)
 	artifactID := CanonicalArtifactID("", safeArtifact, "")
 	result := P2PArtifactAvailabilityView{
 		ArtifactID:   artifactID,
@@ -260,7 +260,7 @@ func (c *Coordinator) InvalidatePeerArtifact(peerAgentID, artifactName string) {
 	if peerKey == "" {
 		return
 	}
-	artifactName = sanitizeArtifactName(artifactName)
+	artifactName = SanitizeArtifactName(artifactName)
 	if artifactName == "" {
 		return
 	}

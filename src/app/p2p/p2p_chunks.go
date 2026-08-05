@@ -168,7 +168,7 @@ func buildChunkManifest(ctx context.Context, path, artifactID string, chunkSize 
 
 	return P2PChunkManifest{
 		ArtifactID:   artifactID,
-		ArtifactName: sanitizeArtifactName(filepath.Base(path)),
+		ArtifactName: SanitizeArtifactName(filepath.Base(path)),
 		TotalSize:    totalSize,
 		ChunkSize:    chunkSize,
 		TotalChunks:  len(chunks),

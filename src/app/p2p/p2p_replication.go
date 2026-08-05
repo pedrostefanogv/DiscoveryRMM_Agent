@@ -90,7 +90,7 @@ func (c *Coordinator) recordBytesDownloaded(size int64) {
 }
 
 func (c *Coordinator) enqueueReplicationJob(job p2pReplicationJob) error {
-	job.ArtifactName = sanitizeArtifactName(job.ArtifactName)
+	job.ArtifactName = SanitizeArtifactName(job.ArtifactName)
 	job.Checksum = strings.TrimSpace(job.Checksum)
 	job.TargetPeerID = strings.TrimSpace(job.TargetPeerID)
 	job.Source = strings.TrimSpace(job.Source)
