@@ -9,7 +9,7 @@ info:
   description: "Solução de monitoramento, gerenciamento e suporte para ambientes Windows"
   copyright: "Copyright © 2026 Discovery RMM"
   comments: "Solução de monitoramento, gerenciamento e suporte para ambientes Windows"
-  version: "1.1.1"
+  version: "1.2.0"
 
 # Dev mode configuration
 dev_mode:

@@ -4,11 +4,12 @@ import _ "embed"
 
 // trayIconICO holds the embedded system tray icon for the normal state.
 // Keep this file in the root package: go:embed cannot use parent paths (..).
-//go:embed build/windows/icon.ico
+// Usa PNG 32x32 (formato recomendado pelo Wails v3 para o systray no Windows).
+//go:embed build/windows/tray_normal.png
 var trayIconICO []byte
 
-//go:embed build/windows/provisionig.ico
+//go:embed build/windows/tray_provisioning.png
 var trayProvisioningICO []byte
 
-//go:embed build/windows/offline.ico
+//go:embed build/windows/tray_offline.png
 var trayOfflineICO []byte

@@ -108,10 +108,49 @@ $buildDir = Join-Path $srcRoot "build"
 $windowsIconDir = Join-Path $buildDir "windows"
 $iconSizes = @(256, 128, 64, 48, 32, 24, 16)
 
+# Gera um PNG 32x32 (formato recomendado pelo Wails v3 para o systray no Windows).
+function Convert-PngToTrayPng {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SourcePng,
+        [Parameter(Mandatory = $true)]
+        [string]$TargetPng
+    )
+
+    $sourceImage = $null
+    $bitmap = $null
+    $graphics = $null
+
+    try {
+        $sourceImage = [System.Drawing.Image]::FromFile($SourcePng)
+        $bitmap = New-Object System.Drawing.Bitmap(32, 32, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+        $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+        $graphics.Clear([System.Drawing.Color]::Transparent)
+        $graphics.CompositingQuality = [System.Drawing.Drawing2D.CompositingQuality]::HighQuality
+        $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+        $graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+        $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
+        $graphics.DrawImage($sourceImage, 0, 0, 32, 32)
+        $bitmap.Save($TargetPng, [System.Drawing.Imaging.ImageFormat]::Png)
+    }
+    finally {
+        if ($graphics) { $graphics.Dispose() }
+        if ($bitmap) { $bitmap.Dispose() }
+        if ($sourceImage) { $sourceImage.Dispose() }
+    }
+}
+
 $iconSpecs = @(
     @{ Source = (Join-Path $buildDir "appicon.png"); Target = (Join-Path $windowsIconDir "icon.ico"); Label = "normal" },
     @{ Source = (Join-Path $buildDir "provisionig.png"); Target = (Join-Path $windowsIconDir "provisionig.ico"); Label = "provisioning" },
     @{ Source = (Join-Path $buildDir "offline.png"); Target = (Join-Path $windowsIconDir "offline.ico"); Label = "offline" }
+)
+
+# PNGs 32x32 para o systray (embedados via tray_embed.go).
+$trayPngSpecs = @(
+    @{ Source = (Join-Path $buildDir "appicon.png"); Target = (Join-Path $windowsIconDir "tray_normal.png"); Label = "tray-normal" },
+    @{ Source = (Join-Path $buildDir "provisionig.png"); Target = (Join-Path $windowsIconDir "tray_provisioning.png"); Label = "tray-provisioning" },
+    @{ Source = (Join-Path $buildDir "offline.png"); Target = (Join-Path $windowsIconDir "tray_offline.png"); Label = "tray-offline" }
 )
 
 if (-not (Test-Path $windowsIconDir)) {
@@ -126,4 +165,13 @@ foreach ($icon in $iconSpecs) {
     Convert-PngToIco -SourcePng $icon.Source -TargetIco $icon.Target -IconSizes $iconSizes
     Write-Output "Icone $($icon.Label) sincronizado a partir de: $($icon.Source)"
     Write-Output "ICO gerado em: $($icon.Target)"
+}
+
+foreach ($tray in $trayPngSpecs) {
+    if (-not (Test-Path $tray.Source)) {
+        throw "Arquivo fonte do icone nao encontrado: $($tray.Source)"
+    }
+
+    Convert-PngToTrayPng -SourcePng $tray.Source -TargetPng $tray.Target
+    Write-Output "Icone $($tray.Label) gerado em: $($tray.Target)"
 }
