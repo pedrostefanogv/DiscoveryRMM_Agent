@@ -24,6 +24,7 @@ var procGetSystemPowerStatus = modkernel32.NewProc("GetSystemPowerStatus")
 // collectBatteryNative returns battery info via GetSystemPowerStatus and WMI
 // (Win32_Battery).
 func collectBatteryNative(ctx context.Context) ([]models.BatteryInfo, error) {
+	_ = ctx
 	var items []models.BatteryInfo
 
 	// WMI Win32_Battery provides detailed battery info.

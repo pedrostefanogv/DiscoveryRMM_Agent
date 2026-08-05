@@ -29,6 +29,7 @@ const (
 // Logical volumes are enumerated via GetLogicalDriveStringsW + GetDiskFreeSpaceExW.
 // Physical disks are enumerated via WMI (Win32_DiskDrive) in a separate helper.
 func collectDisksNative(ctx context.Context) ([]models.DiskInfo, []models.DiskInfo, error) {
+	_ = ctx
 	volumes := collectLogicalVolumes()
 	physical := collectPhysicalDisks()
 	return volumes, physical, nil

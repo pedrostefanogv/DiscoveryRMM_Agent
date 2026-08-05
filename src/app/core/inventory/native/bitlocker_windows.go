@@ -12,6 +12,7 @@ import (
 // (Win32_EncryptableVolume in the root\cimv2\Security\MicrosoftVolumeEncryption
 // namespace).
 func collectBitLockerNative(ctx context.Context) ([]models.BitLockerInfo, error) {
+	_ = ctx
 	const ns = `root\cimv2\Security\MicrosoftVolumeEncryption`
 	rows, err := wmiQuery(ns, "SELECT DriveLetter, ProtectionStatus, ConversionStatus, EncryptionMethod, PercentageEncrypted, LockStatus FROM Win32_EncryptableVolume")
 	if err != nil {

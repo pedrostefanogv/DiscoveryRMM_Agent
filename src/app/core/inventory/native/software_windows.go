@@ -20,6 +20,7 @@ const (
 // collectSoftwareNative reads installed software from the registry
 // (both 64-bit and 32-bit views), without any subprocess.
 func collectSoftwareNative(ctx context.Context) ([]models.SoftwareItem, error) {
+	_ = ctx
 	var items []models.SoftwareItem
 
 	items = append(items, readUninstallKey(registry.LOCAL_MACHINE, uninstallKey64, windows.KEY_READ|windows.KEY_WOW64_64KEY, "registry")...)

@@ -60,6 +60,7 @@ type systemInfo struct {
 // identity using native Win32 APIs. It returns a partially-filled
 // HardwareInfo (hostname, CPU brand, cores, memory) and OperatingSystem.
 func collectSystemInfoNative(ctx context.Context) (models.HardwareInfo, models.OperatingSystem, error) {
+	_ = ctx
 	hw := models.HardwareInfo{}
 	osInfo := models.OperatingSystem{}
 

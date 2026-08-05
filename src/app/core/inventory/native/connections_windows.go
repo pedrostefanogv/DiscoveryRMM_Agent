@@ -30,6 +30,7 @@ const (
 // collectNetworkConnectionsNative returns listening ports and open sockets
 // using GetExtendedTcpTable/GetExtendedUdpTable (no subprocess).
 func collectNetworkConnectionsNative(ctx context.Context) ([]models.ListeningPortInfo, []models.OpenSocketInfo, error) {
+	_ = ctx
 	listening := collectListeningPortsNative()
 	open := collectOpenSocketsNative()
 	return listening, open, nil

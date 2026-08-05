@@ -21,6 +21,7 @@ const (
 // collectStartupItemsNative reads startup items from the registry Run/RunOnce
 // keys (HKLM and HKCU) and the startup folder.
 func collectStartupItemsNative(ctx context.Context) ([]models.StartupItem, error) {
+	_ = ctx
 	var items []models.StartupItem
 
 	// HKLM Run
@@ -71,5 +72,6 @@ func readRunKey(root registry.Key, path, source string) []models.StartupItem {
 
 // collectLoggedInUsersNative returns logged-in users via the WTS API.
 func collectLoggedInUsersNative(ctx context.Context) ([]models.LoggedInUser, error) {
+	_ = ctx
 	return collectLoggedInUsersWTS()
 }

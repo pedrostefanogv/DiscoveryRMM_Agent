@@ -16,6 +16,7 @@ import (
 // replacement for the osquery chocolatey_packages/npm_packages/python_packages
 // tables.
 func collectPackageManagers(ctx context.Context) []models.SoftwareItem {
+	_ = ctx
 	var items []models.SoftwareItem
 
 	// Chocolatey: C:\ProgramData\chocolatey\lib\<pkg>\<pkg>.nuspec

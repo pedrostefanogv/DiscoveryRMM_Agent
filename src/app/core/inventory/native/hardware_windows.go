@@ -14,6 +14,7 @@ const wmiNamespace = `root\cimv2`
 // collectHardwareNative collects motherboard, BIOS, GPU, memory and CPU
 // details via WMI (COM), without any PowerShell subprocess.
 func collectHardwareNative(ctx context.Context) (models.HardwareInfo, []models.MemoryModule, []models.GPUInfo, []models.CPUInfo, []models.CPUFeature, error) {
+	_ = ctx
 	hw := models.HardwareInfo{}
 
 	// Motherboard (Win32_BaseBoard).

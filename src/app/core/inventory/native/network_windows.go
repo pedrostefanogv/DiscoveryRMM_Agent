@@ -99,6 +99,7 @@ type sockaddrStorage struct {
 
 // collectNetworksNative enumerates network interfaces via GetAdaptersAddresses.
 func collectNetworksNative(ctx context.Context) ([]models.NetworkInfo, error) {
+	_ = ctx
 	var items []models.NetworkInfo
 
 	// First call to get the required buffer size.
