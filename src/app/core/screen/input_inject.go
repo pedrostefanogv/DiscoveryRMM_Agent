@@ -142,7 +142,8 @@ func InjectMouseWheel(delta int16) error {
 // InjectKeyDown simula tecla pressionada.
 func InjectKeyDown(vkCode uint16) error {
 	ki := keybdInput{
-		wVk: vkCode,
+		wVk:   vkCode,
+		wScan: mapVKToScan(vkCode),
 	}
 	var inputs [1]winInput
 	inputs[0].inputType = INPUT_KEYBOARD
@@ -158,6 +159,7 @@ func InjectKeyDown(vkCode uint16) error {
 func InjectKeyUp(vkCode uint16) error {
 	ki := keybdInput{
 		wVk:     vkCode,
+		wScan:   mapVKToScan(vkCode),
 		dwFlags: KEYEVENTF_KEYUP,
 	}
 	var inputs [1]winInput
@@ -168,6 +170,18 @@ func InjectKeyUp(vkCode uint16) error {
 		return fmt.Errorf("SendInput key up falhou para VK=0x%X", vkCode)
 	}
 	return nil
+}
+
+// mapVKToScan converte um Virtual Key code para o scan code correspondente
+// via MapVirtualKeyW (MAPVK_VK_TO_VSC = 0). Preencher wScan melhora a
+// compatibilidade com teclas que dependem de scan code (acentos, teclas
+// especiais em layouts não-US, teclas de mídia).
+func mapVKToScan(vkCode uint16) uint16 {
+	if vkCode == 0 {
+		return 0
+	}
+	ret, _, _ := procMapVirtualKeyW.Call(uintptr(vkCode), 0) // MAPVK_VK_TO_VSC
+	return uint16(ret)
 }
 
 // InjectKeyPress simula tecla pressionada e liberada.

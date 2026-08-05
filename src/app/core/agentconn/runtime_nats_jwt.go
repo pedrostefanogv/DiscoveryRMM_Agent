@@ -43,6 +43,14 @@ func validateAgentIdentityJWTClaims(jwt string, subjects natsSubjects) error {
 		subjects.GlobalPong,
 		subjects.SyncPing,
 		subjects.P2PDiscovery,
+		// Remote-session subjects use canonical UUIDs without hyphens.
+		// O agent precisa SUBSCREVER os subjects de input/control/term.in/files.req/
+		// proxy.req/signal para receber interação do viewer (mouse, teclado, terminal,
+		// arquivos, proxy). Sem isso, o NATS bloqueia a entrega (Permissions Violation).
+		fmt.Sprintf("tenant.%s.site.%s.agent.%s.remote.session.>",
+			stripSubjectHyphens(subjects.ClientID),
+			stripSubjectHyphens(subjects.SiteID),
+			stripSubjectHyphens(subjects.AgentID)),
 	}
 	expectedPub := []string{
 		subjects.Heartbeat,

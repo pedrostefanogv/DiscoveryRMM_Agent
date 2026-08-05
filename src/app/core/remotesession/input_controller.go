@@ -50,6 +50,12 @@ type InputController struct {
 	capW, capH     int // dimensões da captura real (virtual desktop)
 	rateLimiter    *rateLimiter
 
+	// Teclas atualmente pressionadas (dedup de key-repeat).
+	// O browser dispara keydown repetidamente (auto-repeat) enquanto a tecla
+	// está pressionada; sem dedup, o agent injeta repetição excessiva ou
+	// teclas "presas" na máquina remota.
+	keysDown map[string]struct{}
+
 	// Eventos por segundo (leaky bucket)
 	lastEventTime time.Time
 	eventCount    int
@@ -61,6 +67,7 @@ func NewInputController(sessionID string) *InputController {
 	return &InputController{
 		sessionID:     sessionID,
 		maxEventsPerS: 300,
+		keysDown:      make(map[string]struct{}),
 	}
 }
 
@@ -174,6 +181,26 @@ func (c *InputController) handleKey(code, key string, down bool, mods InputModif
 	if vk == 0 {
 		return
 	}
+
+	// Dedup de key-repeat (K2): o browser dispara keydown repetido enquanto a
+	// tecla está pressionada (auto-repeat). Ignora keydown repetido da mesma
+	// tecla sem keyup intermediário — evita repetição excessiva e teclas
+	// "presas" na máquina remota.
+	keyID := fmt.Sprintf("%s|%s", code, key)
+	if keyID == "|" {
+		keyID = fmt.Sprintf("vk:%d", vk)
+	}
+	c.mu.Lock()
+	if down {
+		if _, already := c.keysDown[keyID]; already {
+			c.mu.Unlock()
+			return // key-repeat: ignora
+		}
+		c.keysDown[keyID] = struct{}{}
+	} else {
+		delete(c.keysDown, keyID)
+	}
+	c.mu.Unlock()
 
 	// Se a própria tecla é um modificador (Ctrl/Alt/Shift/Win), NÃO aplica o
 	// modificador separadamente — senão injeta a tecla duas vezes (ex: Ctrl
@@ -408,6 +435,84 @@ func mapBrowserCodeToVK(code, key string) uint16 {
 		return 0x2D
 	case "PrintScreen":
 		return 0x2C
+	case "Pause":
+		return 0x13
+	case "ScrollLock":
+		return 0x91
+	case "NumLock":
+		return 0x90
+	case "ContextMenu":
+		return 0x5D
+
+	// Numpad (códigos do teclado numérico)
+	case "Numpad0":
+		return 0x60
+	case "Numpad1":
+		return 0x61
+	case "Numpad2":
+		return 0x62
+	case "Numpad3":
+		return 0x63
+	case "Numpad4":
+		return 0x64
+	case "Numpad5":
+		return 0x65
+	case "Numpad6":
+		return 0x66
+	case "Numpad7":
+		return 0x67
+	case "Numpad8":
+		return 0x68
+	case "Numpad9":
+		return 0x69
+	case "NumpadMultiply":
+		return 0x6A
+	case "NumpadAdd":
+		return 0x6B
+	case "NumpadSubtract":
+		return 0x6D
+	case "NumpadDecimal":
+		return 0x6E
+	case "NumpadDivide":
+		return 0x6F
+
+	// Teclas de mídia e browser
+	case "MediaPlayPause":
+		return 0xB3
+	case "MediaStop":
+		return 0xB2
+	case "MediaTrackNext":
+		return 0xB0
+	case "MediaTrackPrevious":
+		return 0xB1
+	case "VolumeMute":
+		return 0xAD
+	case "VolumeDown":
+		return 0xAE
+	case "VolumeUp":
+		return 0xAF
+	case "BrowserBack":
+		return 0xA6
+	case "BrowserForward":
+		return 0xA7
+	case "BrowserRefresh":
+		return 0xA8
+	case "BrowserStop":
+		return 0xA9
+	case "BrowserSearch":
+		return 0xAA
+	case "BrowserFavorites":
+		return 0xAB
+	case "BrowserHome":
+		return 0xAC
+	case "LaunchMail":
+		return 0xB4
+	case "LaunchMediaPlayer":
+		return 0xB5
+	case "LaunchApp1":
+		return 0xB6
+	case "LaunchApp2":
+		return 0xB7
 	}
 
 	// Fallback por key (menos confiável, depende do layout)

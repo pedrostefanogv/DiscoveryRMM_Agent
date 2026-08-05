@@ -122,6 +122,10 @@ func TestValidateAgentIdentityJWTClaims_ExactSubjects(t *testing.T) {
 					subjects.GlobalPong,
 					subjects.SyncPing,
 					subjects.P2PDiscovery,
+					fmt.Sprintf("tenant.%s.site.%s.agent.%s.remote.session.>",
+						stripSubjectHyphens(subjects.ClientID),
+						stripSubjectHyphens(subjects.SiteID),
+						stripSubjectHyphens(subjects.AgentID)),
 				},
 			},
 			"pub": map[string]any{
