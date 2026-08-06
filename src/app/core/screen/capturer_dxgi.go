@@ -161,6 +161,12 @@ type dxgiCapturer struct {
 
 	width, height int
 
+	// HDR / Advanced Color: quando o monitor é HDR, captura em scRGB
+	// (R16G16B16A16_FLOAT, 8 bytes/px) e o pipeline aplica tone mapping.
+	hdr          bool
+	colorSpace   uint32
+	bytesPerPixel int
+
 	lastResource unsafe.Pointer
 	stagingTex   unsafe.Pointer
 	stagingMapped bool
@@ -218,6 +224,18 @@ func NewDXGICapturer(monitorIndex int) (Capturer, error) {
 	if c.width <= 0 { c.width = 1920 }
 	if c.height <= 0 { c.height = 1080 }
 
+	// 5b. Detecta Advanced Color / HDR (IDXGIOutput6::GetDesc1).
+	// Se o monitor é HDR, capturamos em scRGB (R16G16B16A16_FLOAT) e o
+	// pipeline aplica tone mapping HDR→SDR. Caso contrário, BGRA 8-bit.
+	ac, _ := DetectAdvancedColor(monitorIndex)
+	c.hdr = ac != nil && ac.IsHDR
+	c.colorSpace = 0
+	c.bytesPerPixel = 4
+	if c.hdr {
+		c.colorSpace = ac.ColorSpace
+		c.bytesPerPixel = 8
+	}
+
 	// 6. D3D11CreateDevice
 	var d3dDevice, d3dContext unsafe.Pointer
 	var fl uint32
@@ -248,10 +266,15 @@ func NewDXGICapturer(monitorIndex int) (Capturer, error) {
 	c.d3dContext = d3dContext
 
 	// 7. CreateTexture2D staging
+	// Formato: BGRA 8-bit (SDR) ou R16G16B16A16_FLOAT (scRGB/HDR).
+	stagingFormat := uint32(DXGI_FORMAT_B8G8R8A8_UNORM)
+	if c.hdr {
+		stagingFormat = DXGI_FORMAT_R16G16B16A16_FLOAT
+	}
 	sd := d3d11Texture2DDesc{
 		Width: uint32(c.width), Height: uint32(c.height),
 		MipLevels: 1, ArraySize: 1,
-		Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+		Format: stagingFormat,
 		SampleCount: 1, SampleQuality: 0,
 		Usage: D3D11_USAGE_STAGING,
 		BindFlags: 0, CPUAccessFlags: D3D11_CPU_ACCESS_READ, MiscFlags: 0,
@@ -264,15 +287,12 @@ func NewDXGICapturer(monitorIndex int) (Capturer, error) {
 		return nil, fmt.Errorf("CreateTexture2D staging: HRESULT 0x%X", uint64(hr))
 	}
 
-	// 8. DuplicateOutput1 com formato B8G8R8A8 forçado.
-	// Usa DuplicateOutput1 (em vez de DuplicateOutput) para forçar o formato
-	// de saída para DXGI_FORMAT_B8G8R8A8_UNORM, independente do formato nativo
-	// do desktop. O DuplicateOutput retorna o formato nativo (que pode ser
-	// R8G8B8A8 em algumas GPUs/configurações), e o CopyResource para o staging
-	// B8G8R8A8 copia os bytes SEM conversão → cores invertidas (azul↔laranja).
-	// Com DuplicateOutput1, o driver converte para B8G8R8A8 na origem, e o
-	// encoder (que espera BGRA) faz o swap B↔R corretamente.
-	var supportedFormats = [1]uint32{DXGI_FORMAT_B8G8R8A8_UNORM}
+	// 8. DuplicateOutput1 com formato forçado.
+	// SDR: B8G8R8A8_UNORM (driver converte na origem, evita cores invertidas).
+	// HDR: R16G16B16A16_FLOAT (scRGB) para preservar o range HDR e permitir
+	// tone mapping no pipeline.
+	var supportedFormats [1]uint32
+	supportedFormats[0] = stagingFormat
 	hr, _, _ = comCall(c.output1, slotOutput1DuplicateOutput1,
 		uintptr(c.d3dDevice),
 		uintptr(0), // Flags
@@ -284,6 +304,13 @@ func NewDXGICapturer(monitorIndex int) (Capturer, error) {
 		// Fallback: DuplicateOutput (formato nativo) — se o desktop for
 		// R8G8B8A8, as cores podem ficar invertidas, mas é melhor que falhar.
 		hr, _, _ = comCall(c.output1, slotOutput1DuplicateOutput, uintptr(c.d3dDevice), uintptr(unsafe.Pointer(&c.duplication)))
+		// Se caiu no fallback, o formato pode não ser o esperado — desativa HDR
+		// para não interpretar bytes errados.
+		if c.hdr {
+			c.hdr = false
+			c.colorSpace = 0
+			c.bytesPerPixel = 4
+		}
 	}
 	if hr != 0 || c.duplication == nil {
 		comRelease(c.stagingTex); comRelease(c.d3dContext); comRelease(c.d3dDevice)
@@ -345,19 +372,20 @@ func (c *dxgiCapturer) AcquireNextFrame() (*Frame, error) {
 	}
 	c.stagingMapped = true
 
-	bufSize := c.width * c.height * 4
+	bpp := c.bytesPerPixel
+	bufSize := c.width * c.height * bpp
 	frameData := make([]byte, bufSize)
 	if mapped.Data != nil && mapped.RowPitch > 0 {
 		// mapped.Data aponta para memória GPU staging (não-GC) — o campo já é
 		// unsafe.Pointer, então unsafe.Slice/unsafe.Add operam sem conversão uintptr.
-		if int(mapped.RowPitch) == c.width*4 {
+		if int(mapped.RowPitch) == c.width*bpp {
 			copy(frameData, unsafe.Slice((*byte)(mapped.Data), bufSize))
 		} else {
 			for y := 0; y < c.height; y++ {
 				srcOff := y * int(mapped.RowPitch)
-				dstOff := y * c.width * 4
+				dstOff := y * c.width * bpp
 				row := unsafe.Add(mapped.Data, uintptr(srcOff))
-				copy(frameData[dstOff:], unsafe.Slice((*byte)(row), c.width*4))
+				copy(frameData[dstOff:], unsafe.Slice((*byte)(row), c.width*bpp))
 			}
 		}
 	}
@@ -366,7 +394,13 @@ func (c *dxgiCapturer) AcquireNextFrame() (*Frame, error) {
 	comCall(c.d3dContext, slotCtxUnmap, uintptr(c.stagingTex), uintptr(0))
 	c.stagingMapped = false
 
-	return &Frame{Data: frameData, Width: c.width, Height: c.height, Stride: c.width * 4}, nil
+	return &Frame{
+		Data:       frameData,
+		Width:      c.width,
+		Height:     c.height,
+		Stride:     c.width * bpp,
+		ColorSpace: c.colorSpace,
+	}, nil
 }
 
 func (c *dxgiCapturer) ReleaseFrame() {

@@ -26,6 +26,9 @@ type Frame struct {
 	Width  int
 	Height int
 	Stride int
+
+	// ColorSpace indica o color space do frame (0 = SDR BGRA 8-bit).
+	ColorSpace uint32
 }
 
 // Monitor representa um monitor conectado.

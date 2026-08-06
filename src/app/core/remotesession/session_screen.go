@@ -351,12 +351,31 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 		}
 		captureMsTotal += capMs
 
+		// ownsFrame indica se o frame atual é um buffer alocado por nós
+		// (tone mapping/escala) e não pertence mais ao capturer.
+		ownsFrame := false
+
+		// ── Tone mapping HDR→SDR (ANTES da escala) ──
+		// Quando o monitor é HDR, o capturador DXGI manual entrega o frame em
+		// scRGB (R16G16B16A16_FLOAT, ColorSpace != 0). Converte para SDR 8-bit
+		// BGRA com tone mapping (preserva destaques HDR sem aspecto lavado).
+		// Deve ocorrer ANTES da escala, pois ResizeBGRA espera BGRA 4 bytes/px.
+		if frame.ColorSpace != 0 {
+			tonemapped := screen.ToneMapHDRToSDR(frame)
+			if !ownsFrame {
+				s.capturer.ReleaseFrame()
+			}
+			frame = tonemapped
+			ownsFrame = true
+		}
+
 		// ── Aplica escala (se necessario) ──
 		scaleFactor := q.ScaleFactor
-		ownsFrame := false
 		if scaleFactor > 0 && scaleFactor < 1.0 {
 			resized := screen.ResizeBGRA(frame, scaleFactor)
-			s.capturer.ReleaseFrame()
+			if !ownsFrame {
+				s.capturer.ReleaseFrame()
+			}
 			frame = resized
 			ownsFrame = true
 		}
