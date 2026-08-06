@@ -3,8 +3,10 @@ package app
 import (
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
 	"runtime/debug"
+	"strings"
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -78,6 +80,8 @@ func (a *App) runTrayStateLoop() {
 			return
 		case <-ticker.C:
 			a.syncTrayVisualState()
+			a.updateTrayMenu()
+			a.updateTrayTooltip()
 		}
 	}
 }
@@ -119,6 +123,17 @@ func (a *App) startTray() {
 	// Menu do tray.
 	menu := a.app.Menu.New()
 
+	// ── Submenu de status (informativo, itens desabilitados) ──
+	// Mostra o estado atual do agente de forma visível no tray.
+	statusMenu := menu.AddSubmenu("Status")
+	a.trayStatusHostname = statusMenu.Add("Hostname: —")
+	a.trayStatusHostname.SetEnabled(false)
+	a.trayStatusVersion = statusMenu.Add("Versão: —")
+	a.trayStatusVersion.SetEnabled(false)
+	a.trayStatusConnection = statusMenu.AddCheckbox("Conectado", false)
+	a.trayStatusConnection.SetEnabled(false)
+
+	// ── Ações ──
 	menu.Add("Abrir").OnClick(func(_ *application.Context) {
 		a.safeTrayAction("tray-menu-open", func() {
 			a.ShowMainWindow()
@@ -154,8 +169,77 @@ func (a *App) startTray() {
 
 	a.trayReady.Store(true)
 	a.syncTrayVisualState()
+	a.updateTrayMenu()
 	go a.runTrayStateLoop()
 	log.Println("[tray] pronto: icone e menu inicializados (Wails v3 nativo)")
+}
+
+// updateTrayMenu atualiza dinamicamente os itens de status do menu do tray
+// (hostname, versão e estado de conexão). Deve ser chamado sempre que o
+// estado do agente mudar (ex: no loop de estado do tray).
+//
+// IMPORTANTE: usa apenas dados locais (os.Hostname, Version, GetAgentStatus)
+// para evitar chamadas HTTP ao servidor a cada ciclo (GetStatusOverview faz
+// uma requisição a /api/v1/agent-auth/me/realtime/status).
+func (a *App) updateTrayMenu() {
+	if a == nil || !a.trayReady.Load() || a.systemTray == nil {
+		return
+	}
+	a.safeTrayAction("tray-update-menu", func() {
+		if a.trayStatusHostname != nil {
+			host := ""
+			if h, err := os.Hostname(); err == nil {
+				host = strings.TrimSpace(h)
+			}
+			if host == "" {
+				host = "—"
+			}
+			a.trayStatusHostname.SetLabel("Hostname: " + host)
+		}
+		if a.trayStatusVersion != nil {
+			ver := strings.TrimSpace(Version)
+			if ver == "" {
+				ver = "dev"
+			}
+			a.trayStatusVersion.SetLabel("Versão: " + ver)
+		}
+		if a.trayStatusConnection != nil {
+			a.trayStatusConnection.SetChecked(a.GetAgentStatus().Connected)
+		}
+	})
+}
+
+// updateTrayTooltip atualiza o tooltip do tray com o estado de conexão.
+// Mantém a indicação de sessões remotas ativas quando houver.
+//
+// Usa apenas dados locais (GetAgentStatus) — sem chamadas HTTP.
+func (a *App) updateTrayTooltip() {
+	if a == nil || !a.trayReady.Load() || a.systemTray == nil {
+		return
+	}
+	a.safeTrayAction("tray-tooltip", func() {
+		// Sessões remotas ativas têm prioridade na indicação.
+		if count := a.activeRemoteSessions.Load(); count > 0 {
+			if count == 1 {
+				a.systemTray.SetTooltip("Discovery - 1 sessao remota ativa")
+			} else {
+				a.systemTray.SetTooltip(fmt.Sprintf("Discovery - %d sessoes remotas ativas", count))
+			}
+			return
+		}
+
+		// Modo eficiência tem prioridade sobre o estado de conexão.
+		if efficiencyModeEnabled {
+			// O updateTrayIdleState cuida do tooltip nesse modo.
+			return
+		}
+
+		if a.GetAgentStatus().Connected {
+			a.systemTray.SetTooltip("Discovery - Online")
+		} else {
+			a.systemTray.SetTooltip("Discovery - Offline")
+		}
+	})
 }
 
 func (a *App) safeTrayAction(name string, fn func()) {

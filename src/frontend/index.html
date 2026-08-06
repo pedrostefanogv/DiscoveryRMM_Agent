@@ -50,9 +50,9 @@
     <div id="mainMount"></div>
   </div>
 
-  <!-- Wails v3 compatibility shim: expõe window.go.app.App e window.runtime
-       por cima dos bindings v3. Deve carregar ANTES do bootstrap-partials.js. -->
-  <script type="module" src="wails-v3-shim.js"></script>
+  <!-- Wails v3 bridge: expõe os bindings nativos v3 sob window.go.app.App e
+       um window.runtime mínimo. Deve carregar ANTES do bootstrap-partials.js. -->
+  <script type="module" src="wails-bridge.js"></script>
   <script src="js/bootstrap-partials.js"></script>
 </body>
 

@@ -184,6 +184,11 @@ type App struct {
 	app        *application.App
 	mainWindow application.Window
 	systemTray *application.SystemTray
+
+	// Itens de status do menu do tray (atualizados dinamicamente).
+	trayStatusHostname   *application.MenuItem
+	trayStatusVersion    *application.MenuItem
+	trayStatusConnection *application.MenuItem
 }
 
 // deferredRestartState tracks pending deferred restart state.
@@ -578,7 +583,8 @@ func NewApp(opts AppStartupOptions) *App {
 		Cache:          &a.invCache,
 		ResolveAllowed: a.resolveAllowedPackage,
 		ResolveAllowedByType: func(ctx context.Context, installationType, packageID string) (appstore.Item, error) {
-			return a.findAllowedPackage(ctx, installationType, packageID)		},
+			return a.findAllowedPackage(ctx, installationType, packageID)
+		},
 		GetCatalog:    a.getCatalogFromAppStore,
 		BeginActivity: a.beginActivity,
 		DispatchNotification: func(req appinventory.InventoryNotification) appinventory.InventoryNotificationResponse {
@@ -1064,7 +1070,7 @@ func (a *App) startup(ctx context.Context) {
 		done := a.beginActivity("inventario inicial")
 		defer done()
 
-		a.ensureOsqueryInstalled(ctx)
+		a.ensureOsqueryInstalled()
 
 		report, err := a.collectInventoryWithHeartbeat(ctx)
 		if err != nil {
@@ -1251,7 +1257,7 @@ func (a *App) runPeriodicInventorySync(ctx context.Context) {
 		defer done()
 	}
 
-	a.ensureOsqueryInstalled(ctx)
+	a.ensureOsqueryInstalled()
 	report, err := a.collectInventoryWithHeartbeat(ctx)
 	if err != nil {
 		log.Printf("[inventory] coleta periodica falhou: %v", err)
@@ -1343,7 +1349,7 @@ func (a *App) onPostBootstrapProvisioned(ctx context.Context) error {
 
 	// 1. osquery + inventário inicial (não executou no goroutine #2 porque
 	//    ainda não estava provisionado).
-	a.ensureOsqueryInstalled(ctx)
+	a.ensureOsqueryInstalled()
 	if !a.invCache.has() {
 		a.startupLogf("[startup] post-bootstrap: executando inventario inicial")
 		report, err := a.collectInventoryWithHeartbeat(ctx)
@@ -1395,7 +1401,7 @@ func (a *App) onPostBootstrapProvisioned(ctx context.Context) error {
 	return nil
 }
 
-func (a *App) ensureOsqueryInstalled(ctx context.Context) {
+func (a *App) ensureOsqueryInstalled() {
 	// O coletor nativo é agora a fonte primária de inventário no Windows.
 	// Não é mais necessário instalar o osquery automaticamente. O osquery
 	// permanece apenas como fallback opcional quando já está presente no
