@@ -14,6 +14,7 @@ import (
 	"discovery/app/core/models"
 	"discovery/app/debug"
 	"discovery/app/netutil"
+	"discovery/app/services/hardwareid"
 )
 
 type agentHardwareEnvelope struct {
@@ -75,6 +76,8 @@ type agentHardwareInfo struct {
 	OSVersion               string  `json:"osVersion"`
 	OSBuild                 string  `json:"osBuild"`
 	OSArchitecture          string  `json:"osArchitecture"`
+	TpmEkHash               string  `json:"tpmEk,omitempty"`
+	SmbiosUuid              string  `json:"smbiosUuid,omitempty"`
 	CollectedAt             string  `json:"collectedAt"`
 	UpdatedAt               string  `json:"updatedAt"`
 }
@@ -175,7 +178,7 @@ func (s *Service) SyncInventoryOnStartup(ctx context.Context, report models.Inve
 	cfg.ApiServer = strings.TrimSpace(cfg.ApiServer)
 	cfg.ApiScheme = strings.TrimSpace(strings.ToLower(cfg.ApiScheme))
 
-	hardwarePayload := buildAgentHardwareEnvelope(report, s.version, s.commitHash)
+	hardwarePayload := buildAgentHardwareEnvelope(report, s.version, s.commitHash, s.hardwareIdentity)
 	hardwarePayload.AgentID = strings.TrimSpace(cfg.AgentID)
 	hardwareBody, err := json.Marshal(hardwarePayload)
 	if err != nil {
@@ -507,7 +510,7 @@ func computeMachineScore(report models.InventoryReport) int {
 	return int(math.Round(math.Max(score, 1)))
 }
 
-func buildAgentHardwareEnvelope(report models.InventoryReport, version, commitHash string) agentHardwareEnvelope {
+func buildAgentHardwareEnvelope(report models.InventoryReport, version, commitHash string, hwIdentity func() hardwareid.Info) agentHardwareEnvelope {
 	collected := strings.TrimSpace(report.CollectedAt)
 	if collected == "" {
 		collected = time.Now().UTC().Format(time.RFC3339)
@@ -674,6 +677,14 @@ func buildAgentHardwareEnvelope(report models.InventoryReport, version, commitHa
 		CollectedAt:             collected,
 		UpdatedAt:               updated,
 	}
+
+	// Fingerprint de hardware (Recuperação de Dispositivos): TPM EK + SMBIOS UUID.
+	if hwIdentity != nil {
+		hw := hwIdentity()
+		hwInfo.TpmEkHash = trimToMaxLen(strings.TrimSpace(hw.TPMEK), 64)
+		hwInfo.SmbiosUuid = trimToMaxLen(strings.TrimSpace(hw.SMBIOSUUID), 64)
+	}
+
 	hwJSON, _ := json.Marshal(hwInfo)
 
 	components := agentHardwareComponents{

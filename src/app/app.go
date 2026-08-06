@@ -553,6 +553,12 @@ func NewApp(opts AppStartupOptions) *App {
 		ApplyP2PConfig:     a.applyP2PConfig,
 		DefaultP2PConfig:   defaultP2PConfig,
 		Version:            Version,
+		HardwareIdentity: func() hardwareid.Info {
+			if a.hardwareIDSvc == nil {
+				return hardwareid.Info{}
+			}
+			return a.hardwareIDSvc.Get()
+		},
 	})
 	a.agentConfigSvc = agentconfig.New(agentconfig.FetchDeps{
 		GetDebugConfig: a.GetDebugConfig,
@@ -572,8 +578,7 @@ func NewApp(opts AppStartupOptions) *App {
 		Cache:          &a.invCache,
 		ResolveAllowed: a.resolveAllowedPackage,
 		ResolveAllowedByType: func(ctx context.Context, installationType, packageID string) (appstore.Item, error) {
-			return a.findAllowedPackage(ctx, installationType, packageID)
-		},
+			return a.findAllowedPackage(ctx, installationType, packageID)		},
 		GetCatalog:    a.getCatalogFromAppStore,
 		BeginActivity: a.beginActivity,
 		DispatchNotification: func(req appinventory.InventoryNotification) appinventory.InventoryNotificationResponse {
@@ -605,6 +610,12 @@ func NewApp(opts AppStartupOptions) *App {
 		Version:                Version,
 		CommitHash:             buildinfo.Commit,
 		ShouldDeferNonCritical: a.nonCriticalBackoffWindow,
+		HardwareIdentity: func() hardwareid.Info {
+			if a.hardwareIDSvc == nil {
+				return hardwareid.Info{}
+			}
+			return a.hardwareIDSvc.Get()
+		},
 	})
 	a.supportSvc = appsupport.NewService(appsupport.Options{
 		Logf:        a.logs.append,

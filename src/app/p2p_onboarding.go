@@ -324,13 +324,26 @@ func (a *App) registerWithDeployKey(serverURL, deployKey string) (P2POnboardingR
 		return P2POnboardingResult{}, err
 	}
 	hostname, _ := os.Hostname()
-	payload, _ := json.Marshal(map[string]any{
+	payloadMap := map[string]any{
 		"cmd":          "CreateAgent",
 		"name":         hostname,
 		"macAddress":   nil,
 		"departmentId": nil,
 		"notes":        "Provisionado via zero-touch P2P",
-	})
+	}
+
+	// Fingerprint de hardware (Recuperação de Dispositivos): TPM EK + SMBIOS UUID.
+	if a.hardwareIDSvc != nil {
+		hw := a.hardwareIDSvc.Get()
+		if strings.TrimSpace(hw.TPMEK) != "" {
+			payloadMap["tpmEkHash"] = strings.TrimSpace(hw.TPMEK)
+		}
+		if strings.TrimSpace(hw.SMBIOSUUID) != "" {
+			payloadMap["smbiosUuid"] = strings.TrimSpace(hw.SMBIOSUUID)
+		}
+	}
+
+	payload, _ := json.Marshal(payloadMap)
 
 	// Tenta o scheme informado e, em seguida, o alternativo (https<->http).
 	// Isso torna o registro resiliente quando o peer emite a oferta com um

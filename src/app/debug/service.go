@@ -23,6 +23,7 @@ import (
 	"discovery/app/p2pmeta"
 	"discovery/app/core/agentconn"
 	"discovery/app/core/tlsutil"
+	"discovery/app/services/hardwareid"
 )
 
 const debugConfigFile = "debug_config.json"
@@ -55,6 +56,9 @@ type Options struct {
 	ApplyP2PConfig     func(p2pmeta.Config)
 	DefaultP2PConfig   func() p2pmeta.Config
 	Version            string
+	// HardwareIdentity retorna a identidade de hardware (TPM EK + SMBIOS UUID)
+	// usada como fingerprint na Recuperação de Dispositivos. Pode ser nil.
+	HardwareIdentity func() hardwareid.Info
 }
 
 // Service owns runtime debug configuration and related workflows.
@@ -70,6 +74,7 @@ type Service struct {
 	applyP2PConfig     func(p2pmeta.Config)
 	defaultP2PConfig   func() p2pmeta.Config
 	version            string
+	hardwareIdentity   func() hardwareid.Info
 }
 
 // NewService builds a debug service with its dependencies.
@@ -88,6 +93,7 @@ func NewService(opts Options) *Service {
 		applyP2PConfig:     opts.ApplyP2PConfig,
 		defaultP2PConfig:   opts.DefaultP2PConfig,
 		version:            strings.TrimSpace(opts.Version),
+		hardwareIdentity:   opts.HardwareIdentity,
 	}
 }
 

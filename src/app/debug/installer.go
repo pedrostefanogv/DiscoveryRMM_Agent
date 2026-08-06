@@ -297,6 +297,18 @@ func (s *Service) registerAgentFromDeployToken(ctx context.Context, scheme, serv
 		"departmentId": nil,
 		"notes":        fmt.Sprintf("OS: %s | Agent: %s", runtime.GOOS, strings.TrimSpace(version)),
 	}
+
+	// Fingerprint de hardware (Recuperação de Dispositivos): TPM EK + SMBIOS UUID.
+	if s.hardwareIdentity != nil {
+		hw := s.hardwareIdentity()
+		if strings.TrimSpace(hw.TPMEK) != "" {
+			payload["tpmEkHash"] = strings.TrimSpace(hw.TPMEK)
+		}
+		if strings.TrimSpace(hw.SMBIOSUUID) != "" {
+			payload["smbiosUuid"] = strings.TrimSpace(hw.SMBIOSUUID)
+		}
+	}
+
 	bodyBytes, err := json.Marshal(payload)
 	if err != nil {
 		return "", "", "", "", "", fmt.Errorf("falha ao serializar request: %w", err)

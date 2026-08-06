@@ -14,6 +14,7 @@ import (
 	"discovery/app/core/inventory"
 	"discovery/app/core/models"
 	"discovery/app/core/processutil"
+	"discovery/app/services/hardwareid"
 )
 
 const (
@@ -99,6 +100,9 @@ type Options struct {
 	CommitHash               string
 
 	ShouldDeferNonCritical   func() (time.Duration, bool, string)
+	// HardwareIdentity retorna a identidade de hardware (TPM EK + SMBIOS UUID)
+	// usada como fingerprint na Recuperação de Dispositivos. Pode ser nil.
+	HardwareIdentity func() hardwareid.Info
 }
 
 // Service handles inventory, installs and sync operations.
@@ -121,6 +125,7 @@ type Service struct {
 	postInstallInventoryRefreshDelay time.Duration
 	postInstallInventoryRefreshMu    sync.Mutex
 	postInstallInventoryRefreshTimer *time.Timer
+	hardwareIdentity                 func() hardwareid.Info
 }
 
 // NewService builds an inventory service.
@@ -146,6 +151,7 @@ func NewService(opts Options) *Service {
 		commitHash:                       opts.CommitHash,
 		shouldDeferNonCritical:           opts.ShouldDeferNonCritical,
 		postInstallInventoryRefreshDelay: postInstallInventoryRefreshDelayDefault,
+		hardwareIdentity:                 opts.HardwareIdentity,
 	}
 }
 
