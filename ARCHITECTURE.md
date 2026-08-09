@@ -209,7 +209,7 @@ discovery/
 ├── startup_debug_keys_windows.go # Detecta Shift/Ctrl na inicialização (Windows)
 ├── startup_debug_keys_other.go   # Stub para outras plataformas
 ├── go.mod                      # Dependências Go
-├── wails.json                  # Config do Wails (build, nome, ícones)
+├── build/config.yml            # Config do Wails v3 (build, nome, versão, ícones)
 └── ARCHITECTURE.md             # Este arquivo
 ```
 

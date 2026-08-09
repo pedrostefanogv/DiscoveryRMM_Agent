@@ -13,18 +13,21 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# Auto-detect version from wails.json productVersion if not explicitly provided
+# Auto-detect version from build/config.yml (Wails v3 schema: info.version).
+# Fallback legado: src/wails.json (v2: info.productVersion) — removido na migracao v3.
 if ($Version -eq "") {
-    $wailsJsonPath = Join-Path $ProjectRoot "src\wails.json"
-    if (Test-Path $wailsJsonPath) {
-        $wailsConfig = Get-Content $wailsJsonPath -Raw | ConvertFrom-Json
-        if ($wailsConfig.info.productVersion) {
-            $Version = $wailsConfig.info.productVersion
-            Write-Output "Versao detectada do wails.json: $Version"
+    $configYmlPath = Join-Path $ProjectRoot "src\build\config.yml"
+    if (Test-Path $configYmlPath) {
+        $ymlContent = Get-Content $configYmlPath -Raw
+        # Parse simples: extrai o campo "version:" dentro da seção "info:".
+        # O config.yml do Wails v3 usa `info:\n  version: "1.2.0"`.
+        if ($ymlContent -match '(?ms)^\s*info:\s*\n(?:.*\n)*?\s+version:\s*"?([^"\s#]+)"?') {
+            $Version = $Matches[1]
+            Write-Output "Versao detectada do build/config.yml: $Version"
         }
     }
     if ($Version -eq "") {
-        Write-Warning "Versao nao definida e nao detectada do wails.json; binario ficara com buildinfo.Version='0.0.0' (self-update loop pode ocorrer)"
+        Write-Warning "Versao nao definida e nao detectada do config.yml; binario ficara com buildinfo.Version='0.0.0' (self-update loop pode ocorrer)"
     }
 }
 

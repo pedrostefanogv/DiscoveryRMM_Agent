@@ -24,7 +24,7 @@ Opcoes:
   --project-root <path>          Raiz do repositorio (default: auto)
   --out-dir <path>               Diretorio de saida do exe (default: src/build/bin)
   --output-name <name>           Nome do executavel (default: discovery-agent.exe)
-  --version <semver>             Injeta versao em ldflags (ex: 1.2.3). Se omitido, detecta automaticamente do src/wails.json
+  --version <semver>             Injeta versao em ldflags (ex: 1.2.3). Se omitido, detecta automaticamente do src/build/config.yml (info.version)
   --server-url <url>             Server URL para gerar installer.json
   --api-key <token>              API key para gerar installer.json
   --auto-provisioning <0|1>      autoProvisioning no installer.json (default: 1) (alias: --discovery-enabled)
@@ -35,6 +35,7 @@ Dependencias (Ubuntu):
   - go
   - x86_64-w64-mingw32-gcc
   - x86_64-w64-mingw32-windres
+  - wails3 (opcional — auto-instalado via go install se ausente; usado para regenerar bindings)
 
 Exemplo:
   ./build/server-api/linux/build-agent-server-linux.sh \
@@ -101,17 +102,26 @@ if [[ "$WRITE_INSTALLER_JSON" != "0" && "$WRITE_INSTALLER_JSON" != "1" ]]; then
   exit 1
 fi
 
-# Auto-detect version from wails.json productVersion if not explicitly provided
+# Auto-detect version from build/config.yml (Wails v3 schema: info.version).
+# Fallback legado: src/wails.json (v2: info.productVersion) — removido na migracao v3.
 if [[ -z "$VERSION" ]]; then
-  WAILS_JSON="$SRC_ROOT/wails.json"
-  if [[ -f "$WAILS_JSON" ]]; then
-    VERSION=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['info']['productVersion'])" "$WAILS_JSON" 2>/dev/null) || true
+  CONFIG_YML="$SRC_ROOT/build/config.yml"
+  if [[ -f "$CONFIG_YML" ]]; then
+    # Parse simples com python3: extrai info.version do YAML.
+    # O config.yml do Wails v3 usa `info:\n  version: "1.2.0"`.
+    VERSION=$(python3 -c "
+import sys, re
+with open(sys.argv[1], encoding='utf-8') as f:
+    content = f.read()
+m = re.search(r'(?ms)^\s*info:\s*\n(?:.*\n)*?\s+version:\s*[\"\\']?([^\"\\'\\s#]+)[\"\\']?', content)
+print(m.group(1) if m else '')
+" "$CONFIG_YML" 2>/dev/null) || true
     if [[ -n "$VERSION" ]]; then
-      echo "[info] versao detectada do wails.json: $VERSION"
+      echo "[info] versao detectada do build/config.yml: $VERSION"
     fi
   fi
   if [[ -z "$VERSION" ]]; then
-    echo "[aviso] versao nao definida e nao detectada do wails.json; binario ficara com buildinfo.Version='0.0.0' (self-update loop pode ocorrer)"
+    echo "[aviso] versao nao definida e nao detectada do config.yml; binario ficara com buildinfo.Version='0.0.0' (self-update loop pode ocorrer)"
   fi
 fi
 
@@ -128,8 +138,61 @@ fi
 
 if ! command -v x86_64-w64-mingw32-windres >/dev/null 2>&1; then
   echo "[erro] x86_64-w64-mingw32-windres nao encontrado no PATH" >&2
-  echo "[dica] sudo apt-get install -y binutils-mingw-w64-x86-64" >&2
+  echo "[dica] sudo apt-get install -y binutils-mingw-w64-x-64" >&2
   exit 1
+fi
+
+# ── Wails v3 CLI (wails3) ──
+# O build Linux usa `go build` direto (cross-compile com MinGW), mas o wails3
+# é necessário para regenerar bindings (frontend/bindings) e assets quando há
+# mudanças na API Go exposta ao frontend. Se não estiver instalado, instala
+# automaticamente via `go install`.
+WAILS3_BIN="${WAILS3_BIN:-$(command -v wails3 2>/dev/null) || true}"
+if [[ -z "$WAILS3_BIN" ]]; then
+  echo "[info] wails3 nao encontrado no PATH; instalando via go install..."
+  # GOBIN defaults to $GOPATH/bin or $HOME/go/bin; garantimos que fica acessível.
+  if ! go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.3 2>/dev/null; then
+    echo "[aviso] falha ao instalar wails3; continuando (bindings nao serao regenerados)"
+    echo "[dica] instale manualmente: go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.3"
+  else
+    # Resolve o caminho do binário instalado (GOBIN ou GOPATH/bin).
+    WAILS3_BIN="$(go env GOBIN 2>/dev/null)"
+    if [[ -z "$WAILS3_BIN" ]]; then
+      WAILS3_BIN="$(go env GOPATH 2>/dev/null)/bin/wails3"
+    fi
+    if [[ -f "$WAILS3_BIN" ]]; then
+      echo "[info] wails3 instalado em: $WAILS3_BIN"
+      export PATH="$(dirname "$WAILS3_BIN"):$PATH"
+      WAILS3_BIN="$WAILS3_BIN"
+    else
+      echo "[aviso] wails3 instalado mas binario nao encontrado; continuando sem regenerar bindings"
+      WAILS3_BIN=""
+    fi
+  fi
+fi
+
+# Regenera bindings do frontend se wails3 estiver disponível e houver mudanças
+# na API Go (detecção simples: compara timestamp dos bindings com arquivos .go).
+if [[ -n "$WAILS3_BIN" ]]; then
+  BINDINGS_DIR="$SRC_ROOT/frontend/bindings"
+  NEED_REGEN=0
+  if [[ ! -d "$BINDINGS_DIR" ]]; then
+    NEED_REGEN=1
+  else
+    # Verifica se algum .go em app/ é mais recente que os bindings gerados.
+    NEWEST_GO=$(find "$SRC_ROOT/app" -name '*.go' -newer "$BINDINGS_DIR" -print -quit 2>/dev/null)
+    if [[ -n "$NEWEST_GO" ]]; then
+      NEED_REGEN=1
+    fi
+  fi
+  if [[ "$NEED_REGEN" -eq 1 ]]; then
+    echo "[info] regenerando bindings do frontend com wails3..."
+    pushd "$SRC_ROOT" >/dev/null
+    "$WAILS3_BIN" generate bindings -b -clean=true -d frontend/bindings ./... || {
+      echo "[aviso] falha ao regenerar bindings; continuando com bindings existentes"
+    }
+    popd >/dev/null
+  fi
 fi
 
 ICON_PATH="$SRC_ROOT/build/windows/icon.ico"

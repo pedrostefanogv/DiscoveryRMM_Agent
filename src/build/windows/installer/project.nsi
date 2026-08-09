@@ -35,7 +35,9 @@ Unicode true
 !define INFO_PRODUCTNAME    "Discovery"
 !ifndef INFO_PRODUCTVERSION
   !tempfile DISCOVERY_VER_INC
-  !system 'powershell -NoProfile -Command "$wj = Join-Path (Split-Path ''${__FILE__}'') ''..\..\..\wails.json''; if (Test-Path $wj) { $v = (Get-Content $wj -Raw | ConvertFrom-Json).info.productVersion; if ($v) { Set-Content ''${DISCOVERY_VER_INC}'' -Value (''!define INFO_PRODUCTVERSION '' + $v) -Enc ASCII } }"'
+  # Wails v3: lê a versão de build/config.yml (info.version).
+  # Fallback legado: src/wails.json (v2: info.productVersion) — removido na migração v3.
+  !system 'powershell -NoProfile -Command "$cfg = Join-Path (Split-Path ''${__FILE__}'') ''..\..\..\build\config.yml''; if (Test-Path $cfg) { $c = Get-Content $cfg -Raw; if ($c -match ''(?ms)^\s*info:\s*\n(?:.*\n)*?\s+version:\s*[\"'']?([^\"''\s#]+)'') { Set-Content ''${DISCOVERY_VER_INC}'' -Value (''!define INFO_PRODUCTVERSION '' + $Matches[1]) -Enc ASCII } }"'
   !searchparse /file "${DISCOVERY_VER_INC}" "" INFO_PRODUCTVERSION
   !delfile "${DISCOVERY_VER_INC}"
   !undef DISCOVERY_VER_INC
