@@ -542,7 +542,9 @@ function initP2PPage() {
   if (openP2PFolderMainBtn) {
     openP2PFolderMainBtn.addEventListener('click', function () {
       p2pApi().GetP2PTempDir().then(function (dir) {
-        window.wails.openURL('file:///' + dir.replace(/\\/g, '/'));
+        if (window.wails && typeof window.wails.openURL === 'function') {
+          window.wails.openURL('file:///' + dir.replace(/\\/g, '/'));
+        }
       }).catch(function () {
         p2pSetStatus('Falha ao obter diretorio P2P.', 'error');
       });

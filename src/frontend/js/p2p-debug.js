@@ -387,7 +387,9 @@
   if (openP2PFolderBtn) {
     openP2PFolderBtn.addEventListener('click', function () {
       appApi().GetP2PTempDir().then(function (dir) {
-        window.wails.openURL('file:///' + dir.replace(/\\/g, '/'));
+        if (window.wails && typeof window.wails.openURL === 'function') {
+          window.wails.openURL('file:///' + dir.replace(/\\/g, '/'));
+        }
       }).catch(function () {
         setStatus('Falha ao obter diretorio P2P.', 'error');
       });

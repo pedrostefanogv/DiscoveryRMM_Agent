@@ -4,14 +4,14 @@
 // Debug HTTP Bridge — Fallback HTTP quando rodando fora do WebView2 (navegador)
 // ─────────────────────────────────────────────────────────────────────────────
 // Este arquivo é carregado antes dos scripts da aplicação e detecta se o
-// runtime Wails está disponível. Se não estiver (navegador comum), intercepta
-// as chamadas a `window.go.main.App.*` e as redireciona para a API HTTP local.
+// runtime Wails v3 está disponível. Se não estiver (navegador comum), intercepta
+// as chamadas a `window.go.app.App.*` e as redireciona para a API HTTP local.
 // ─────────────────────────────────────────────────────────────────────────────
 
 (function () {
   // O bridge HTTP deve rodar SOMENTE quando a UI estiver aberta em navegador
-  // no loopback local (127.0.0.1/localhost). Em runtime nativo (Wails),
-  // não devemos sobrescrever window.runtime/window.go.
+  // no loopback local (127.0.0.1/localhost). Em runtime nativo (Wails v3),
+  // não devemos sobrescrever window.wails/window.go.
   var protocol = String(location.protocol || '').toLowerCase();
   var host = String(location.hostname || '').toLowerCase();
   var isHTTP = protocol === 'http:' || protocol === 'https:';
@@ -22,9 +22,10 @@
     return;
   }
 
-  // Se o runtime Wails já estiver disponível, não habilita fallback.
-  if (typeof window.go !== 'undefined' && window.go && window.go.main && window.go.main.App) {
-    console.log('[debug-http] runtime Wails detectado no navegador local — usando bridge nativo');
+  // Se o runtime Wails v3 já estiver disponível, não habilita fallback.
+  // v3 expõe bindings em window.go.app.App (v2 usava window.go.main.App).
+  if (typeof window.go !== 'undefined' && window.go && window.go.app && window.go.app.App) {
+    console.log('[debug-http] runtime Wails v3 detectado no navegador local — usando bridge nativo');
     return;
   }
 
@@ -33,7 +34,7 @@
   // No modo navegador, reutiliza a origem atual da página debug HTTP.
   var API_BASE = location.origin + '/api/';
 
-  // Cria um proxy que intercepta chamadas a window.go.main.App.*
+  // Cria um proxy que intercepta chamadas a window.go.app.App.*
   function createGoBridge() {
     var handler = {
       get: function (target, methodName) {
@@ -80,11 +81,8 @@
     return new Proxy({}, handler);
   }
 
-  // Injeta a estrutura window.go.main.App como proxy HTTP
+  // Injeta a estrutura window.go.app.App como proxy HTTP
   window.go = {
-    main: {
-      App: createGoBridge(),
-    },
     app: {
       App: createGoBridge(),
     },
