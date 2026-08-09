@@ -264,13 +264,13 @@ function disableQuestionButtons(container) {
 // Register Wails event listeners once the runtime is ready.
 (function registerChatStreamEvents() {
   function doRegister() {
-    if (window.runtime && window.runtime.EventsOn) {
-      window.runtime.EventsOn("chat:token", onStreamToken);
-      window.runtime.EventsOn("chat:thinking", onStreamThinking);
-      window.runtime.EventsOn("chat:done", onStreamDone);
-      window.runtime.EventsOn("chat:error", onStreamError);
-      window.runtime.EventsOn("chat:stopped", onStreamStopped);
-      window.runtime.EventsOn("chat:question", onChatQuestion);
+    if (window.wails && typeof window.wails.on === 'function') {
+      window.wails.on("chat:token", onStreamToken);
+      window.wails.on("chat:thinking", onStreamThinking);
+      window.wails.on("chat:done", onStreamDone);
+      window.wails.on("chat:error", onStreamError);
+      window.wails.on("chat:stopped", onStreamStopped);
+      window.wails.on("chat:question", onChatQuestion);
     }
   }
   if (document.readyState === "loading") {

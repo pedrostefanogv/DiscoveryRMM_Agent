@@ -1,19 +1,24 @@
 "use strict";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Wails v3 Bridge — bindings nativos + runtime nativo
+// Wails v3 Bridge — bindings nativos + runtime nativo estruturado
 // ─────────────────────────────────────────────────────────────────────────────
-// Substitui o antigo `wails-v3-shim.js`. Em vez de reconstruir manualmente a
-// API do Wails v2, este bridge importa DIRETAMENTE os bindings nativos v3
-// (gerados por `wails3 generate bindings`) e o runtime nativo (`/wails/runtime.js`).
+// Importa DIRETAMENTE os bindings nativos v3 (gerados por `wails3 generate
+// bindings`) e o runtime nativo (`/wails/runtime.js`).
 //
-// O frontend do Discovery ainda usa scripts clássicos (não ES modules), então
-// expomos os bindings nativos sob `window.go.app.App` e um `window.runtime`
-// MÍNIMO (apenas os métodos realmente usados pelos scripts), que delega para
-// o runtime nativo v3.
+// Expõe:
+//   - window.go.app.App  → bindings dos métodos Go (Service App)
+//   - window.wails       → runtime v3 estruturado (Events, Browser, Window)
 //
-// Este arquivo DEVE ser carregado como `<script type="module">` ANTES do
-// `bootstrap-partials.js`, pois os bindings v3 são módulos ES.
+// O frontend usa scripts clássicos (não ES modules), então este bridge é o
+// ponto único de integração. Deve ser carregado como `<script type="module">`
+// ANTES do `bootstrap-partials.js`.
+//
+// Helpers de conveniência sob window.wails:
+//   - wails.on(name, cb)      → Events.On com unwrap WailsEvent→data
+//   - wails.openURL(url)      → Browser.OpenURL
+//   - wails.toggleMaximise()  → Window.ToggleMaximise
+//   - wails.hideWindow()      → Window.Hide
 // ─────────────────────────────────────────────────────────────────────────────
 
 import * as App from "./bindings/discovery/app/app.js";
@@ -33,32 +38,37 @@ import { Events, Browser, Window } from "/wails/runtime.js";
   window.go.app.App = App;
 })();
 
-// ── window.runtime (mínimo, delegando ao runtime nativo v3) ─────────────────
-// O frontend usa `window.runtime.EventsOn(name, cb)` onde `cb` recebe o dado
-// diretamente. No v3, o callback de `Events.On` recebe um objeto `WailsEvent`
-// com `.data`. Adaptamos apenas os métodos efetivamente usados.
-// Só define se ainda não existir (não sobrescreve o debug-http-bridge).
-(function exposeRuntime() {
-  if (window.runtime && window.runtime.EventsOn) {
+// ── window.wails (runtime v3 estruturado) ───────────────────────────────────
+// Expõe o runtime nativo v3 de forma estruturada para os scripts clássicos.
+// Só define se ainda não existir (não sobrescreve o debug-http-bridge no
+// modo navegador, que injeta seu próprio window.wails via SSE).
+(function exposeWailsRuntime() {
+  if (window.wails) {
     return;
   }
-  window.runtime = window.runtime || {};
 
-  // Eventos: unwrap do WailsEvent → dado cru (compat com handlers existentes).
-  window.runtime.EventsOn = function (eventName, callback) {
+  // Helper de conveniência: registra listener de evento com unwrap automático
+  // do WailsEvent → dado cru (compat com handlers existentes que esperam o
+  // dado diretamente, não o objeto WailsEvent).
+  function on(eventName, callback) {
     return Events.On(eventName, function (ev) {
       callback(ev && ev.data !== undefined ? ev.data : ev);
     });
-  };
+  }
 
-  // Navegador.
-  window.runtime.BrowserOpenURL = function (url) {
-    return Browser.OpenURL(url);
-  };
+  window.wails = {
+    // Módulos nativos v3 (para uso direto quando necessário).
+    Events: Events,
+    Browser: Browser,
+    Window: Window,
 
-  // Janela (usado pelo chrome da janela frameless).
-  window.runtime.WindowToggleMaximise = function () { return Window.ToggleMaximise(); };
-  window.runtime.WindowHide = function () { return Window.Hide(); };
+    // Helpers de conveniência (API simplificada).
+    on: on,
+    emit: function (name) { return Events.Emit.apply(Events, arguments); },
+    openURL: function (url) { return Browser.OpenURL(url); },
+    toggleMaximise: function () { return Window.ToggleMaximise(); },
+    hideWindow: function () { return Window.Hide(); },
+  };
 })();
 
 // Sinaliza que o bridge v3 foi carregado (útil para debug).

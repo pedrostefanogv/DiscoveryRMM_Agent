@@ -32,8 +32,8 @@ function onStoreCatalogUpdated(data) {
 
 (function registerStoreSyncEvents() {
   function doRegister() {
-    if (window.runtime && window.runtime.EventsOn) {
-      window.runtime.EventsOn('store:catalog-updated', onStoreCatalogUpdated);
+    if (window.wails && typeof window.wails.on === 'function') {
+      window.wails.on('store:catalog-updated', onStoreCatalogUpdated);
     }
   }
 

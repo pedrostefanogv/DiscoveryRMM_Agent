@@ -567,11 +567,11 @@ async function bootstrapApp() {
   }
 
   if (
-    window.runtime &&
-    window.runtime.EventsOn &&
+    window.wails &&
+    typeof window.wails.on === "function" &&
     typeof handleNotificationEvent === "function"
   ) {
-    window.runtime.EventsOn("notification:new", handleNotificationEvent);
+    window.wails.on("notification:new", handleNotificationEvent);
   }
   if (typeof startUIRuntimeMonitor === "function") {
     startUIRuntimeMonitor("bootstrap");

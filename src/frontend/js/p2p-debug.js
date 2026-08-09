@@ -87,7 +87,7 @@
 
   function renderServiceHealth(health) {
     if (!serviceHealthGrid) return;
-    
+
     if (!health || health.error) {
       serviceHealthGrid.innerHTML = '<div class="kv"><span class="k">Status</span><span class="v" style="color: var(--danger);">Indisponível (' + escapeHtml(health && health.error ? health.error : "desconectado") + ')</span></div>';
       return;
@@ -387,7 +387,7 @@
   if (openP2PFolderBtn) {
     openP2PFolderBtn.addEventListener('click', function () {
       appApi().GetP2PTempDir().then(function (dir) {
-        window.runtime.BrowserOpenURL('file:///' + dir.replace(/\\/g, '/'));
+        window.wails.openURL('file:///' + dir.replace(/\\/g, '/'));
       }).catch(function () {
         setStatus('Falha ao obter diretorio P2P.', 'error');
       });
@@ -484,7 +484,7 @@
     renderTransferProgressList();
   }
 
-  if (window.runtime && window.runtime.EventsOn) {
-    window.runtime.EventsOn("p2p:transfer-progress", onTransferProgress);
+  if (window.wails && typeof window.wails.on === 'function') {
+    window.wails.on("p2p:transfer-progress", onTransferProgress);
   }
 })();

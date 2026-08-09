@@ -542,7 +542,7 @@ function initP2PPage() {
   if (openP2PFolderMainBtn) {
     openP2PFolderMainBtn.addEventListener('click', function () {
       p2pApi().GetP2PTempDir().then(function (dir) {
-        window.runtime.BrowserOpenURL('file:///' + dir.replace(/\\/g, '/'));
+        window.wails.openURL('file:///' + dir.replace(/\\/g, '/'));
       }).catch(function () {
         p2pSetStatus('Falha ao obter diretorio P2P.', 'error');
       });
@@ -699,9 +699,9 @@ function onP2PTransferProgress(p) {
 
 // Registrar listener de evento Wails
 (function () {
-  if (window.runtime && window.runtime.EventsOn) {
-    window.runtime.EventsOn('p2p:transfer-progress', onP2PTransferProgress);
-    window.runtime.EventsOn('p2p:publish:progress', onP2PPublishProgress);
+  if (window.wails && typeof window.wails.on === 'function') {
+    window.wails.on('p2p:transfer-progress', onP2PTransferProgress);
+    window.wails.on('p2p:publish:progress', onP2PPublishProgress);
   }
 })();
 

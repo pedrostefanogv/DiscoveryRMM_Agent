@@ -209,5 +209,29 @@
     EventsEmit: function () {}
   };
 
+  // Expõe window.wails (API v3 estruturada) no modo navegador, espelhando o
+  // wails-bridge.js nativo. Usa os mesmos helpers SSE para eventos.
+  window.wails = {
+    Events: {
+      On: function (eventName, callback) {
+        EventsOn(eventName, callback);
+      },
+      Emit: function () { /* no-op no modo navegador */ },
+    },
+    Browser: {
+      OpenURL: function (url) { window.open(url, '_blank'); },
+    },
+    Window: {
+      ToggleMaximise: function () { console.log('[wails] Window.ToggleMaximise (no-op no browser)'); },
+      Hide: function () { console.log('[wails] Window.Hide (no-op no browser)'); },
+    },
+    // Helpers de conveniência (mesma API do wails-bridge.js nativo).
+    on: function (eventName, callback) { EventsOn(eventName, callback); },
+    emit: function () { /* no-op */ },
+    openURL: function (url) { window.open(url, '_blank'); },
+    toggleMaximise: function () { console.log('[wails] toggleMaximise (no-op no browser)'); },
+    hideWindow: function () { console.log('[wails] hideWindow (no-op no browser)'); },
+  };
+
   console.log('[debug-http] bridge HTTP ativo — ' + API_BASE);
 })();

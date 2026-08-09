@@ -7,17 +7,17 @@
   var metaDot = document.getElementById('windowMetaDot');
 
   function runtimeReady() {
-    return !!(window.runtime && typeof window.runtime.WindowToggleMaximise === 'function');
+    return !!(window.wails && typeof window.wails.toggleMaximise === 'function');
   }
 
   function toggleMaximise() {
     if (!runtimeReady()) return;
-    window.runtime.WindowToggleMaximise();
+    window.wails.toggleMaximise();
   }
 
   function hideToTray() {
     if (!runtimeReady()) return;
-    window.runtime.WindowHide();
+    window.wails.hideWindow();
   }
 
   function updateWindowMeta() {
