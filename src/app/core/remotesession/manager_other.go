@@ -38,3 +38,18 @@ func (m *Manager) SetCallbacks(onStarted func(sessionID, kind string), onEnded f
 func (m *Manager) HandleCommand(ctx context.Context, payload map[string]any) (bool, string) {
 	return false, "acesso remoto não suportado nesta plataforma"
 }
+
+// ServiceName retorna o nome do service para logging.
+func (m *Manager) ServiceName() string {
+	return "remotesession.Manager"
+}
+
+// Startup é um no-op em plataformas não-Windows.
+func (m *Manager) Startup(_ context.Context) error {
+	return nil
+}
+
+// Shutdown é um no-op em plataformas não-Windows.
+func (m *Manager) Shutdown() error {
+	return nil
+}

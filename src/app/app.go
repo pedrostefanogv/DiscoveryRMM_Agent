@@ -1462,9 +1462,11 @@ func (a *App) shutdown() {
 
 	a.StopDebugHTTPServer()
 
-	if a.remoteDebug != nil {
-		a.remoteDebug.Shutdown()
-	}
+	// NOTA: remoteDebug e remoteSessionMgr agora são Services Wails v3
+	// separados (adapters thin em remote_services.go). Seus ciclos de vida
+	// (Startup/Shutdown) são gerenciados pelo Wails, que encerra os services
+	// na ordem inversa de registro — ou seja, antes do App. Por isso não são
+	// encerrados aqui.
 
 	// Desliga o domínio Sync (cancela contexto, aguarda goroutines).
 	if a.syncSvc != nil {

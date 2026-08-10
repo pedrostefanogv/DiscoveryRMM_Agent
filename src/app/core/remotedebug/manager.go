@@ -56,6 +56,12 @@ type Manager struct {
 	getAgentCfg   func() AgentConfig
 	subscribeLogs func(func(string)) func()
 	replayLogs    func(func(string)) func()
+
+	// ctx é o contexto de ciclo de vida, cancelado no shutdown.
+	ctx    context.Context
+	cancel context.CancelFunc
+	// started indica se Startup foi chamado com sucesso.
+	started bool
 }
 
 // New cria um Manager com as dependências injetadas.
@@ -137,6 +143,17 @@ func (m *Manager) startSession(cmd Command) error {
 		return fmt.Errorf("sessionId ausente")
 	}
 
+	// Garante que o manager está com lifecycle iniciado. Se o shutdown já
+	// ocorreu (started=false), recusa abrir sessão para evitar sessões órfãs
+	// com contexto de ciclo de vida já cancelado.
+	m.mu.Lock()
+	started := m.started
+	lifecycleCtx := m.ctx
+	m.mu.Unlock()
+	if !started {
+		return fmt.Errorf("remote debug nao inicializado (shutdown em andamento)")
+	}
+
 	cfg := m.getConfig()
 	token := strings.TrimSpace(cfg.AuthToken)
 	agentID := strings.TrimSpace(cfg.AgentID)
@@ -157,7 +174,11 @@ func (m *Manager) startSession(cmd Command) error {
 		return err
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	lifecycleBase := lifecycleCtx
+	if lifecycleBase == nil {
+		lifecycleBase = context.Background()
+	}
+	ctx, cancel := context.WithCancel(lifecycleBase)
 	session := &Session{
 		sessionID:  sessionID,
 		agentID:    agentID,
@@ -323,14 +344,71 @@ func (m *Manager) stopGivenSession(session *Session, reason string) {
 	m.logf(fmt.Sprintf("[remote-debug] sessao encerrada: sessionId=%s reason=%s", session.sessionID, strings.TrimSpace(reason)))
 }
 
-// Shutdown encerra a sessão ativa (se houver) e libera publishers/goroutines.
-// Chamado pelo App durante o shutdown da aplicação.
-func (m *Manager) Shutdown() {
+// ServiceName retorna o nome do service para logging.
+func (m *Manager) ServiceName() string {
+	return "remotedebug.Manager"
+}
+
+// Startup prepara o contexto de ciclo de vida do domínio remote debug.
+// É chamado pelo App (ou pelo adapter Wails v3) durante o startup.
+// Idempotente: a primeira chamada vence.
+func (m *Manager) Startup(ctx context.Context) error {
+	if m == nil {
+		return nil
+	}
 	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.started {
+		return nil
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	m.ctx = ctx
+	m.cancel = cancel
+	m.started = true
+	return nil
+}
+
+// Shutdown encerra a sessão ativa (se houver), cancela o contexto de ciclo de
+// vida e libera publishers/goroutines. Idempotente.
+func (m *Manager) Shutdown() error {
+	if m == nil {
+		return nil
+	}
+
+	m.mu.Lock()
+	if !m.started {
+		m.mu.Unlock()
+		return nil
+	}
+	cancel := m.cancel
+	m.cancel = nil
+	m.ctx = nil
+	m.started = false
 	session := m.activeSession
 	m.activeSession = nil
 	m.mu.Unlock()
+
+	// Cancela o contexto de ciclo de vida e encerra a sessão ativa (se houver)
+	// fora do lock para evitar bloquear concurrentes no startSession.
+	if cancel != nil {
+		cancel()
+	}
 	if session != nil {
 		m.stopGivenSession(session, "shutdown")
 	}
+	return nil
+}
+
+// Ctx retorna o contexto de ciclo de vida do service.
+// Retorna context.Background() se Startup ainda não foi chamado.
+func (m *Manager) Ctx() context.Context {
+	if m == nil {
+		return context.Background()
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.ctx == nil {
+		return context.Background()
+	}
+	return m.ctx
 }

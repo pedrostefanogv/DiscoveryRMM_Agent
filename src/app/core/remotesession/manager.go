@@ -48,6 +48,9 @@ type Manager struct {
 	// callbacks para notificar a UI/tray
 	onSessionStarted func(sessionID, kind string)
 	onSessionEnded   func(sessionID, reason string)
+
+	// started indica se Startup foi chamado com sucesso.
+	started bool
 }
 
 // NewManager cria um novo gerenciador de sessoes remotas.
@@ -700,6 +703,37 @@ func (m *Manager) StopAll() {
 	for id := range m.sessions {
 		m.closeSessionLocked(id, "agent-shutdown")
 	}
+}
+
+// ServiceName retorna o nome do service para logging.
+func (m *Manager) ServiceName() string {
+	return "remotesession.Manager"
+}
+
+// Startup marca o ciclo de vida do domínio de acesso remoto como iniciado.
+// Não há contexto de ciclo de vida próprio a preparar: as goroutines de
+// sessão são controladas por stopCh (fechado via StopAll/closeSessionLocked),
+// não por um ctx compartilhado. Idempotente: a primeira chamada vence.
+func (m *Manager) Startup(_ context.Context) error {
+	if m == nil {
+		return nil
+	}
+	if m.started {
+		return nil
+	}
+	m.started = true
+	return nil
+}
+
+// Shutdown encerra todas as sessoes ativas via StopAll (fecha stopCh de cada
+// sessão, parando as goroutines de stream). Idempotente.
+func (m *Manager) Shutdown() error {
+	if m == nil || !m.started {
+		return nil
+	}
+	m.StopAll()
+	m.started = false
+	return nil
 }
 
 // normalizeTransport garante que o transport reportado ao servidor/viewer

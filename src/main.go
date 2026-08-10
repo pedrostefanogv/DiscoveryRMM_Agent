@@ -100,10 +100,17 @@ func main() {
 	// ── Wails v3: aplicação explícita ──
 	// Cria a aplicação, registra o App como service, cria a janela e executa.
 	// O ciclo de vida (startup/shutdown) é tratado via ServiceStartup/ServiceShutdown.
+	//
+	// Os domínios remote debug e acesso remoto são registrados como Services
+	// Wails v3 separados (via adapters thin) para dividir a carga de trabalho
+	// do App. Os services são iniciados na ordem de registro e encerrados na
+	// ordem inversa.
 	appInstance := application.New(application.Options{
 		Name: "Discovery",
 		Services: []application.Service{
 			application.NewService(app),
+			application.NewService(app.RemoteDebugService()),
+			application.NewService(app.RemoteSessionService()),
 		},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),

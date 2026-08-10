@@ -291,6 +291,11 @@ func TestShutdown_StopsActiveSession(t *testing.T) {
 		},
 	})
 
+	// Inicializa o ciclo de vida (Startup) antes de injetar a sessão ativa.
+	if err := m.Startup(context.Background()); err != nil {
+		t.Fatalf("Startup falhou: %v", err)
+	}
+
 	// Injeta uma sessão ativa diretamente (evita depender de conexão NATS real).
 	ctx, cancel := context.WithCancel(context.Background())
 	_ = ctx
