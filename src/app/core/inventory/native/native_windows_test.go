@@ -8,7 +8,7 @@ import (
 )
 
 // TestCollectSystemInfo verifies that native system info collection works
-// and returns a hostname.
+// and returns a hostname plus CPU brand/cores (bug "0C / 0T").
 func TestCollectSystemInfo(t *testing.T) {
 	hw, osInfo, err := collectSystemInfoNative(context.Background())
 	if err != nil {
@@ -19,6 +19,25 @@ func TestCollectSystemInfo(t *testing.T) {
 	}
 	if osInfo.Name == "" {
 		t.Error("os name vazio")
+	}
+	// Bug "0C / 0T": a coleta deve sempre reportar núcleos/threads > 0.
+	if hw.CPU == "" {
+		t.Error("cpu brand vazio")
+	}
+	if hw.Cores <= 0 {
+		t.Errorf("physical cores deve ser > 0, veio %d", hw.Cores)
+	}
+	if hw.LogicalCores <= 0 {
+		t.Errorf("logical cores deve ser > 0, veio %d", hw.LogicalCores)
+	}
+	// Bug "16C / 16T": em CPUs com SMT/HT, lógicos > físicos. Se a detecção
+	// degenerar (físico = lógico num sistema com HT ativo), é regressão.
+	if hw.LogicalCores > hw.Cores && getNativeLogicalProcessorCount() > hw.Cores {
+		// Sistema com HT/SMT: físico NUNCA deve ser 1:1 com lógico.
+		if hw.LogicalCores == hw.Cores {
+			t.Errorf("cores identicos a logical cores em CPU com HT (fisico=%d logico=%d) — deteccao degenerada", hw.Cores, hw.LogicalCores)
+		}
+		t.Logf("CPU com HT: fisico=%d logico=%d", hw.Cores, hw.LogicalCores)
 	}
 }
 

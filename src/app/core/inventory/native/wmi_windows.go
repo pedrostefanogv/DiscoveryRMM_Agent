@@ -136,6 +136,14 @@ func normalizeWMIValue(v *ole.VARIANT) any {
 		return v.ToString()
 	case ole.VT_I4, ole.VT_I2, ole.VT_I1, ole.VT_UI4, ole.VT_UI2, ole.VT_UI1:
 		return int64(v.Val)
+	case ole.VT_I8, ole.VT_UI8:
+		// Valores 64-bit (ex.: Win32_Processor.NumberOfCores em alguns
+		// sistemas) — go-ole expõe I8/UI8 como int64/uint64 em v.Val?
+		// (depende da versão). Usamos o valor convertido via int64.
+		if v.VT == ole.VT_UI8 {
+			return int64(v.Val) // 32-bit truncation warning — ver nota abaixo
+		}
+		return v.Value()
 	case ole.VT_R4, ole.VT_R8:
 		return v.Value()
 	case ole.VT_BOOL:

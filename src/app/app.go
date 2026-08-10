@@ -172,6 +172,7 @@ type App struct {
 	appStoreSvc *appstore.Service
 
 	queuedForceHeartbeat atomic.Bool
+	quitRequested        atomic.Bool
 
 	selfUpdater   *selfupdate.Updater
 	selfUpdaterCh chan bool
@@ -542,6 +543,7 @@ func NewApp(opts AppStartupOptions) *App {
 		HandleCommand:                 a.handleAgentRuntimeCommand,
 		OnCommandOutput:               a.onAgentCommandOutput,
 		OnNatsConnected:               a.onNatsConnected,
+		OnConnectivityChange:          a.onConnectivityChange,
 		EnqueueCommandResultOutbox:    a.enqueueCommandResultOutbox,
 		ListDueCommandResultOutbox:    a.listDueCommandResultOutbox,
 		MarkSentCommandResultOutbox:   a.markSentCommandResultOutbox,
@@ -824,6 +826,9 @@ func (a *App) MinimiseMainWindow() {
 //
 //wails:ignore
 func (a *App) QuitApp() {
+	if a.quitRequested.Swap(true) {
+		return
+	}
 	if a.app == nil {
 		return
 	}
@@ -983,6 +988,27 @@ func (a *App) onNatsConnected(nc *nats.Conn, cfg agentconn.Config) {
 	a.remoteSessionMgr.SetNatsConn(nc, cfg.ClientID, cfg.SiteID, cfg.AgentID)
 	a.logs.append(fmt.Sprintf("[remote-session] NATS conectado — streaming habilitado (tenant=%s, site=%s, agent=%s)",
 		cfg.ClientID, cfg.SiteID, cfg.AgentID))
+}
+
+// onConnectivityChange é chamado pelo agentconn quando o estado online/offline
+// muda. Atualiza o tray imediatamente e emite um evento para o frontend, para
+// que a bolinha da barra, a página de Status e a consulta de versão reajam na
+// hora — sem depender do polling.
+func (a *App) onConnectivityChange(connected bool, transport string) {
+	state := "offline"
+	if connected {
+		state = "online"
+	}
+	a.logs.append(fmt.Sprintf("[connectivity] mudanca de estado para %s (transport=%s)", state, transport))
+	a.EmitEvent("agent:connectivity", map[string]any{
+		"connected": connected,
+		"transport": transport,
+	})
+	// Atualiza o ícone e o tooltip do tray imediatamente (safeTrayAction cobre
+	// o caso de o tray ainda não ter sido iniciado).
+	a.syncTrayVisualState()
+	a.updateTrayTooltip()
+	a.updateTrayMenu()
 }
 
 func (a *App) startup(ctx context.Context) {
@@ -1486,7 +1512,24 @@ func (a *App) shutdown() {
 	if a.cancel != nil {
 		a.cancel()
 	}
-	a.startupWg.Wait()
+
+	// Aguarda as goroutines de startup com timeout. Quando o agente está
+	// offline, o loop de reconexão do agentconn pode ficar preso numa
+	// chamada de conexão (nats.Connect com timeout de 5s) que não respeita
+	// o cancelamento do contexto. Sem limite, o shutdown e o "Sair" do tray
+	// travariam permanentemente — dando a impressão de que o agente "não
+	// fecha e não abre mais". Um timeout razoável garante que o processo
+	// sempre encerre, mesmo que alguma goroutine não responda a tempo.
+	startupDone := make(chan struct{})
+	go func() {
+		a.startupWg.Wait()
+		close(startupDone)
+	}()
+	select {
+	case <-startupDone:
+	case <-time.After(8 * time.Second):
+		log.Printf("[shutdown] timeout aguardando goroutines de startup; forçando encerramento")
+	}
 
 	if a.db != nil {
 		if err := a.db.Close(); err != nil {

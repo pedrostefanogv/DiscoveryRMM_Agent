@@ -223,7 +223,7 @@ async function loadStatusOverview() {
 function startStatusPoll() {
   stopStatusPoll();
   loadStatusOverview();
-  statusPollId = setInterval(loadStatusOverview, 10000);
+  statusPollId = setInterval(loadStatusOverview, 4000);
 }
 
 function stopStatusPoll() {
@@ -260,3 +260,26 @@ function initStatusPage() {
 }
 
 initStatusPage();
+
+// Hook chamado pelo app-window.js quando um evento de conectividade dedicado
+// (agent:connectivity) chega do backend. Atualiza imediatamente os indicadores
+// da página de Status, sem depender do polling.
+window.__connectivityEventPing = function (connected, transport, source) {
+  if (statusConnectionDotEl) {
+    statusConnectionDotEl.className = 'agent-status-indicator ' + (connected ? 'online' : 'offline');
+  }
+  if (statusConnectionLabelEl) {
+    statusConnectionLabelEl.textContent = connected ? translate('common.online') : translate('common.offline');
+  }
+};
+
+// Este arquivo carrega DEPOIS do app-window.js; se um evento de conectividade
+// já tiver chegado, re-aplica o último estado aos indicadores.
+if (typeof window.__lastConnectivityState === 'function') {
+  try {
+    var __lastConn = window.__lastConnectivityState();
+    if (__lastConn && typeof window.__connectivityEventPing === 'function') {
+      window.__connectivityEventPing(__lastConn.connected, __lastConn.transport, 'replay');
+    }
+  } catch (e) { /* não crítico */ }
+}

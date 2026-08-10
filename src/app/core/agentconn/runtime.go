@@ -18,8 +18,8 @@ import (
 
 	"github.com/nats-io/nats.go"
 
-	"discovery/app/netutil"
 	"discovery/app/core/tlsutil"
+	"discovery/app/netutil"
 )
 
 const (
@@ -232,7 +232,8 @@ type Options struct {
 
 	GetHeartbeatMetrics           func() AgentHeartbeatMetrics
 	OnP2PEvent                    func(PeerEventMessage)
-	OnNatsConnected               func(nc *nats.Conn, cfg Config) // chamado após conexão NATS estabelecida
+	OnNatsConnected               func(nc *nats.Conn, cfg Config)        // chamado após conexão NATS estabelecida
+	OnConnectivityChange          func(connected bool, transport string) // chamado quando online<->offline muda
 	EnqueueCommandResultOutbox    func(transport, dispatchID, commandID string, exitCode int, output, errText, sendError string) error
 	ListDueCommandResultOutbox    func(transport string, now time.Time, limit int) ([]CommandResultOutboxItem, error)
 	MarkSentCommandResultOutbox   func(id int64) error
@@ -334,16 +335,31 @@ func (r *Runtime) setStatus(connected bool, event string) {
 			r.logf("[heartbeat][status] conexao perdida: %s — heartbeats serao suspensos ate reconexao", event)
 		}
 	}
+	r.notifyConnectivityChange(wasConnected, connected, "")
 }
 
 func (r *Runtime) setStatusConnected(agentID, server, transport string) {
 	r.statMu.Lock()
 	defer r.statMu.Unlock()
+	wasConnected := r.statSnap.Connected
 	r.statSnap.Connected = true
 	r.statSnap.AgentID = agentID
 	r.statSnap.Server = server
 	r.statSnap.LastEvent = "conectado"
 	r.statSnap.Transport = transport
+	r.notifyConnectivityChange(wasConnected, true, transport)
+}
+
+// notifyConnectivityChange chama o callback OnConnectivityChange apenas quando
+// o estado online/offline realmente mudou, evitando eventos redundantes a cada
+// heartbeat. Deve ser chamado com r.statMu já travado.
+func (r *Runtime) notifyConnectivityChange(wasConnected, nowConnected bool, transport string) {
+	if wasConnected == nowConnected {
+		return
+	}
+	if r.opts.OnConnectivityChange != nil {
+		r.opts.OnConnectivityChange(nowConnected, transport)
+	}
 }
 
 // collectHeartbeat assembles a standardized AgentHeartbeat payload using

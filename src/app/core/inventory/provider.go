@@ -313,6 +313,16 @@ func mergeHardwareInfo(base, detail models.HardwareInfo) models.HardwareInfo {
 	if base.BIOSSerial == "" {
 		base.BIOSSerial = detail.BIOSSerial
 	}
+	// Núcleos/threads: o detalhe WMI (Win32_Processor) é autoritativo e
+	// corrige o fallback do registro/systeminfo (Windows moderno não expõe
+	// ProcessorCoreCount/ProcessorLogicalCount — bug "0C / 0T" no card).
+	// Só sobrescreve quando há um valor real do WMI (nunca um placeholder).
+	if detail.Cores > 0 {
+		base.Cores = detail.Cores
+	}
+	if detail.LogicalCores > 0 {
+		base.LogicalCores = detail.LogicalCores
+	}
 	return base
 }
 

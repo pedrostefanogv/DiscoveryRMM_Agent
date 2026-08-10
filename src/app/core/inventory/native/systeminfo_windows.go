@@ -4,6 +4,7 @@ package native
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"syscall"
 	"unsafe"
@@ -14,21 +15,27 @@ import (
 	"discovery/app/core/models"
 )
 
+const (
+	logicalProcessorRelationshipCore       = 0 // RelationProcessorCore
+	logicalProcessorRelationshipPackage    = 3 // RelationProcessorPackage
+	processorArchitectureAmd64            = 9
+	processorArchitectureIntel            = 0
+	processorArchitectureArm64            = 12
+
+	computerNamePhysicalDnsFullyQualified = 5
+	allProcessorGroups                    = 0xffff
+)
+
 var (
 	modkernel32 = windows.NewLazySystemDLL("kernel32.dll")
 	modntdll    = windows.NewLazySystemDLL("ntdll.dll")
 	modiphlpapi = windows.NewLazySystemDLL("iphlpapi.dll")
 
-	procGetComputerNameExW  = modkernel32.NewProc("GetComputerNameExW")
-	procGetNativeSystemInfo = modkernel32.NewProc("GetNativeSystemInfo")
-	procRtlGetVersion       = modntdll.NewProc("RtlGetVersion")
-)
-
-const (
-	computerNamePhysicalDnsFullyQualified = 5
-	processorArchitectureAmd64            = 9
-	processorArchitectureIntel            = 0
-	processorArchitectureArm64            = 12
+	procGetComputerNameExW               = modkernel32.NewProc("GetComputerNameExW")
+	procGetNativeSystemInfo              = modkernel32.NewProc("GetNativeSystemInfo")
+	procGetLogicalProcessorInformationEx = modkernel32.NewProc("GetLogicalProcessorInformationEx")
+	procGetActiveProcessorCount          = modkernel32.NewProc("GetActiveProcessorCount")
+	procRtlGetVersion                    = modntdll.NewProc("RtlGetVersion")
 )
 
 // osVersionInfoEx mirrors the RTL_OSVERSIONINFOW structure.
@@ -135,6 +142,14 @@ func getArchitecture() string {
 }
 
 // getCPUInfoFromRegistry reads CPU brand and core counts from the registry.
+//
+// Nota: em Windows modernos, ProcessorCoreCount e ProcessorLogicalCount não
+// existem mais em HKLM\HARDWARE\DESCRIPTION\System\CentralProcessor\0 (ou são
+// armazenados como REG_QWORD/bits), fazendo GetIntegerValue retornar 0. Por
+// isso a contagem cai em cascata: registro (DWORD/QWORD/binary) →
+// GetNativeSystemInfo (lógicos) → placeholder físico = lógicos. A contagem
+// física/real é refinada depois via WMI Win32_Processor (collectCPUsWMI) em
+// collectHardwareNative.
 func getCPUInfoFromRegistry() (brand string, physicalCores, logicalCores int) {
 	key, err := registry.OpenKey(
 		registry.LOCAL_MACHINE,
@@ -147,7 +162,151 @@ func getCPUInfoFromRegistry() (brand string, physicalCores, logicalCores int) {
 	defer key.Close()
 
 	brand, _, _ = key.GetStringValue("ProcessorNameString")
+
+	// 1) Tenta DWORD/QWORD (builds antigas expõem estes valores).
 	pc, _, _ := key.GetIntegerValue("ProcessorCoreCount")
 	lc, _, _ := key.GetIntegerValue("ProcessorLogicalCount")
-	return brand, int(pc), int(lc)
+	physicalCores, logicalCores = int(pc), int(lc)
+
+	// 2) Fallback para REG_BINARY/QWORD de 8 bytes little-endian.
+	if physicalCores == 0 {
+		if raw, _, err := key.GetBinaryValue("ProcessorCoreCount"); err == nil && len(raw) >= 8 {
+			physicalCores = int(binary.LittleEndian.Uint64(raw[:8]))
+		}
+	}
+	if logicalCores == 0 {
+		if raw, _, err := key.GetBinaryValue("ProcessorLogicalCount"); err == nil && len(raw) >= 8 {
+			logicalCores = int(binary.LittleEndian.Uint64(raw[:8]))
+		}
+	}
+
+	// 3) Fallback via GetLogicalProcessorInformationEx: determina núcleos
+	// físicos e lógicos diretamente da afinidade do sistema (Vista+).
+	if physicalCores <= 0 || logicalCores <= 0 {
+		if phys, logi := getPhysicalAndLogicalProcessors(); phys > 0 || logi > 0 {
+			if physicalCores <= 0 {
+				physicalCores = phys
+			}
+			if logicalCores <= 0 {
+				logicalCores = logi
+			}
+		}
+	}
+
+	// 4) Guarda de última instância: threads ativas via GetNativeSystemInfo.
+	if logicalCores <= 0 {
+		logicalCores = getNativeLogicalProcessorCount()
+	}
+	// Se ainda não soubermos um valor físico confiável, usamos o lógico como
+	// estimativa inicial; o refinamento WMI (Win32_Processor) em
+	// collectHardwareNative sobrescreverá com a contagem física real.
+	if logicalCores <= 0 {
+		logicalCores = 1
+	}
+	if physicalCores <= 0 {
+		physicalCores = logicalCores
+	}
+
+	return brand, physicalCores, logicalCores
+}
+
+// getNativeLogicalProcessorCount returns the number of logical processors
+// (threads) via GetNativeSystemInfo.dwNumberOfProcessors.
+func getNativeLogicalProcessorCount() int {
+	var si systemInfo
+	procGetNativeSystemInfo.Call(uintptr(unsafe.Pointer(&si)))
+	return int(si.dwNumberOfProcessors)
+}
+
+// getPhysicalAndLogicalProcessors returns the number of physical cores and
+// logical processors.
+//
+// Physical cores are counted from GetLogicalProcessorInformationEx
+// (RelationProcessorCore — one entry per physical core). Logical processors
+// are counted via GetActiveProcessorCount(ALL_PROCESSOR_GROUPS), which
+// returns the total across all processor groups (important on systems with
+// more than 64 logical processors / multiple groups).
+//
+// Returns (0,0) when the APIs are unavailable, so callers can fall back.
+func getPhysicalAndLogicalProcessors() (physical, logical int) {
+	if procGetLogicalProcessorInformationEx == nil {
+		return 0, 0
+	}
+
+	// Primeira chamada: determina o tamanho do buffer. A API retorna FALSE e
+	// define ERROR_INSUFFICIENT_BUFFER (122) quando o buffer é insuficiente —
+	// o que é esperado aqui (queremos apenas o tamanho necessário).
+	var required uint32
+	r, _, _ := procGetLogicalProcessorInformationEx.Call(
+		uintptr(logicalProcessorRelationshipCore),
+		0,
+		uintptr(unsafe.Pointer(&required)),
+	)
+	if (r == 0 && required == 0) || required == 0 || required > 1<<20 {
+		return 0, 0
+	}
+
+	buf := make([]byte, required)
+	r, _, _ = procGetLogicalProcessorInformationEx.Call(
+		uintptr(logicalProcessorRelationshipCore),
+		uintptr(unsafe.Pointer(&buf[0])),
+		uintptr(unsafe.Pointer(&required)),
+	)
+	if r == 0 {
+		return 0, 0
+	}
+
+	// Estrutura retornada:
+	//   SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX {
+	//     LOGICAL_PROCESSOR_RELATIONSHIP Relationship; // offset 0 (4 bytes)
+	//     DWORD Size;                                   // offset 4 (4 bytes)
+	//     union {...}                                  // corpo
+	//   }
+	// Para RelationProcessorCore, cada entrada corresponde a UM núcleo físico
+	// (independente de grupo). Contamos as entradas.
+	const headerSize = 8 // Relationship (4) + Size (4)
+
+	physical = 0
+	for offset := 0; offset < len(buf); {
+		if offset+headerSize > len(buf) {
+			break
+		}
+		size := *(*uint32)(unsafe.Pointer(&buf[offset+4]))
+		if size < uint32(headerSize) || offset+int(size) > len(buf) {
+			break
+		}
+		// Relação 0 = RelationProcessorCore.
+		rel := *(*uint32)(unsafe.Pointer(&buf[offset]))
+		if rel == logicalProcessorRelationshipCore {
+			physical++
+		}
+		offset += int(size)
+	}
+
+	if physical == 0 {
+		return 0, 0
+	}
+
+	// Lógicos globais: GetActiveProcessorCount(ALL_PROCESSOR_GROUPS).
+	if procGetActiveProcessorCount != nil {
+		if n, _, _ := procGetActiveProcessorCount.Call(uintptr(allProcessorGroups)); n > 0 {
+			logical = int(n)
+		}
+	}
+	if logical <= 0 {
+		logical = getNativeLogicalProcessorCount()
+	}
+
+	return physical, logical
+}
+
+// popcount64 returns the number of set bits in a 64-bit word (used to count
+// logical processors within a core's processor mask).
+func popcount64(x uint64) int {
+	c := 0
+	for x != 0 {
+		x &= x - 1
+		c++
+	}
+	return c
 }

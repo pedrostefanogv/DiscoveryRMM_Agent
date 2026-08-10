@@ -223,21 +223,28 @@ a:hover { text-decoration: underline; }
 }
 
 .window-chrome-meta span {
-  display: inline-flex; align-items: center; gap: 5px;
-  max-width: 300px; overflow: hidden; text-overflow: ellipsis;
+  display: inline-flex; align-items: center; gap: 7px;
+  max-width: 300px;
+}
+
+.window-chrome-meta span > span:last-child {
+  overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Bolinha de status do PC na borda da janela */
 .window-meta-dot {
-  width: 8px; height: 8px; border-radius: 50%;
+  width: 10px; height: 10px; border-radius: 50%;
   background: var(--muted); opacity: 0.6;
-  flex: 0 0 auto;
+  flex: 0 0 auto; flex-shrink: 0;
+  margin: 0 1px;
   transition: background 0.3s ease, box-shadow 0.3s ease;
 }
 .window-meta-dot.online {
   background: var(--status-indicator-online, #4caf50);
   opacity: 1;
-  box-shadow: 0 0 0 3px var(--status-indicator-online-ring, rgba(76,175,80,.3));
+  box-shadow: 0 0 0 2px var(--status-indicator-online-ring, rgba(76,175,80,.3));
+  animation: pulse-green 2s infinite;
 }
 .window-meta-dot.offline {
   background: var(--danger, #d9534f);

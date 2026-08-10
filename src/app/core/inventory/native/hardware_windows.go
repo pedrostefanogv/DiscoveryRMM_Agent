@@ -59,6 +59,25 @@ func collectHardwareNative(ctx context.Context) (models.HardwareInfo, []models.M
 	// CPU features via cpuid (native).
 	features := collectCPUFeaturesNative()
 
+	// Refina núcleos/threads via Win32_Processor (fonte autoritativa).
+	// Windows moderno não expõe ProcessorCoreCount/ProcessorLogicalCount
+	// em HKLM\HARDWARE\DESCRIPTION\System\CentralProcessor\0 (ou os
+	// armazena como QWORD), então o systeminfo pode retornar 0 — este
+	// preenchimento corrige o "0C / 0T" no card do agente.
+	if len(cpus) > 0 {
+		var wmiCores, wmiLogical int
+		for _, cpu := range cpus {
+			wmiCores += cpu.NumberOfCores
+			wmiLogical += cpu.LogicalProcessors
+		}
+		if hw.Cores <= 0 {
+			hw.Cores = wmiCores
+		}
+		if hw.LogicalCores <= 0 {
+			hw.LogicalCores = wmiLogical
+		}
+	}
+
 	return hw, memoryModules, gpus, cpus, features, nil
 }
 
