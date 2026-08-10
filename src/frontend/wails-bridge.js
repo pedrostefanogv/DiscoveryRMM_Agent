@@ -40,13 +40,20 @@ import { Events, Browser, Window } from "/wails/runtime.js";
 
 // ── window.wails (runtime v3 estruturado) ───────────────────────────────────
 // Expõe o runtime nativo v3 de forma estruturada para os scripts clássicos.
-// Só define se ainda não existir (não sobrescreve o debug-http-bridge no
-// modo navegador, que injeta seu próprio window.wails via SSE).
+//
+// IMPORTANTE: o runtime nativo do Wails v3 JÁ define `window.wails` com os
+// módulos padrão (`index_exports`: Events, Browser, Window, ...) quando
+// `/wails/runtime.js` é avaliado. Como este bridge é um ES module que importa
+// esse runtime, `window.wails` já existe quando este corpo roda. Portanto NÃO
+// podemos retornar cedo se `window.wails` existir — senão os helpers de
+// conveniência (`toggleMaximise`, `hideWindow`, `on`, `emit`, `openURL`) nunca
+// seriam adicionados e os botões de janela do frontend (que checam
+// `window.wails.toggleMaximise`) parariam de funcionar.
+//
+// Estratégia: MESCLAR os helpers sobre o objeto existente, sem sobrescrever os
+// módulos nativos. Só define os módulos caso `window.wails` não exista ainda
+// (ex.: modo navegador sem o bridge HTTP, que injeta seu próprio window.wails).
 (function exposeWailsRuntime() {
-  if (window.wails) {
-    return;
-  }
-
   // Helper de conveniência: registra listener de evento com unwrap automático
   // do WailsEvent → dado cru (compat com handlers existentes que esperam o
   // dado diretamente, não o objeto WailsEvent).
@@ -56,18 +63,28 @@ import { Events, Browser, Window } from "/wails/runtime.js";
     });
   }
 
-  window.wails = {
-    // Módulos nativos v3 (para uso direto quando necessário).
-    Events: Events,
-    Browser: Browser,
-    Window: Window,
+  window.wails = window.wails || {};
 
-    // Helpers de conveniência (API simplificada).
-    on: on,
-    emit: function (name) { return Events.Emit.apply(Events, arguments); },
-    openURL: function (url) { return Browser.OpenURL(url); },
-    toggleMaximise: function () { return Window.ToggleMaximise(); },
-    hideWindow: function () { return Window.Hide(); },
+  // Garante os módulos nativos (já presentes quando o runtime nativo rodou).
+  window.wails.Events = window.wails.Events || Events;
+  window.wails.Browser = window.wails.Browser || Browser;
+  window.wails.Window = window.wails.Window || Window;
+
+  // Helpers de conveniência (API simplificada usada pelos scripts clássicos).
+  // `||` preserva implementações já existentes (ex.: do debug-http-bridge
+  // no modo navegador), se houver.
+  window.wails.on = window.wails.on || on;
+  window.wails.emit = window.wails.emit || function (name) {
+    return Events.Emit.apply(Events, arguments);
+  };
+  window.wails.openURL = window.wails.openURL || function (url) {
+    return Browser.OpenURL(url);
+  };
+  window.wails.toggleMaximise = window.wails.toggleMaximise || function () {
+    return Window.ToggleMaximise();
+  };
+  window.wails.hideWindow = window.wails.hideWindow || function () {
+    return Window.Hide();
   };
 })();
 
