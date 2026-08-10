@@ -1027,6 +1027,8 @@ func (a *App) startup(ctx context.Context) {
 		}
 		if a.inventorySvc != nil {
 			a.inventorySvc.SetDB(db)
+			// Inicializa o ciclo de vida do inventory.Service após o DB estar disponível.
+			_ = a.inventorySvc.Startup(ctx)
 		}
 		agentIDForEngine := strings.TrimSpace(a.GetDebugConfig().AgentID)
 		a.consolEngine = consolidation.New(db, agentIDForEngine)
@@ -1145,12 +1147,16 @@ func (a *App) startup(ctx context.Context) {
 		}
 
 		if a.syncSvc != nil {
+			// Inicializa o ciclo de vida do sync.Service antes de iniciar o loop.
+			_ = a.syncSvc.Startup(ctx)
 			a.safeGo(func() {
 				a.syncSvc.Run(ctx)
 			})
 		}
 
 		if a.p2pCoord != nil {
+			// Inicializa o ciclo de vida do p2p.Coordinator antes de iniciar o loop.
+			_ = a.p2pCoord.Startup(ctx)
 			if !isAgentConfigured() && a.zeroTouchConfigRegistrationAllowed() {
 				a.safeGo(func() {
 					a.RunOnboardingLoop(ctx)
@@ -1458,6 +1464,21 @@ func (a *App) shutdown() {
 
 	if a.remoteDebug != nil {
 		a.remoteDebug.Shutdown()
+	}
+
+	// Desliga o domínio Sync (cancela contexto, aguarda goroutines).
+	if a.syncSvc != nil {
+		_ = a.syncSvc.Shutdown()
+	}
+
+	// Desliga o domínio P2P (cancela contexto do Coordinator).
+	if a.p2pCoord != nil {
+		_ = a.p2pCoord.Shutdown()
+	}
+
+	// Desliga o domínio Inventory (para timer de refresh pós-instalação).
+	if a.inventorySvc != nil {
+		_ = a.inventorySvc.Shutdown()
 	}
 
 	if a.cancel != nil {

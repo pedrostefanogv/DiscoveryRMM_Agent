@@ -73,6 +73,8 @@ type p2pDiscoveredPeer = p2pmeta.DiscoveredPeer
 type p2pDiscoveryProvider interface {
 	Name() string
 	Start(ctx context.Context, self p2pSelfEndpoint, onPeer func(peer p2pDiscoveredPeer), onTrace func(message string)) error
+	// Close desliga o provider de forma síncrona (idempotente).
+	Close()
 }
 
 // normalizeClientID normalizes a clientId for comparison.

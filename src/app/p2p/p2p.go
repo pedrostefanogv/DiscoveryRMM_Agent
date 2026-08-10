@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"sort"
 	"strings"
@@ -98,6 +99,13 @@ type Coordinator struct {
 	// os chunks. Chave: artifactName.
 	downloadLocksMu sync.Mutex
 	downloadLocks   map[string]*downloadLockEntry
+
+	// ── Lifecycle (Fase 4.1) ──
+	// ctx é o contexto de ciclo de vida, cancelado no Shutdown.
+	ctx    context.Context
+	cancel context.CancelFunc
+	// started indica se Startup foi chamado com sucesso.
+	started bool
 }
 
 // downloadLockEntry guarda o mutex de um artifact e o número de esperadores
@@ -152,6 +160,63 @@ func NewCoordinator(deps AppDeps) *Coordinator {
 	}
 	c.transferServer = NewTransferServer(deps, c)
 	return c
+}
+
+// Startup prepara o contexto de ciclo de vida do Coordinator P2P.
+// É chamado pelo *App antes de iniciar o loop Run.
+//
+// NOTA: Este método NÃO implementa a interface ServiceStartup do Wails v3
+// (que requer application.ServiceOptions) para evitar dependência do pacote
+// p2p (domínio puro) no Wails. O *App chama este método explicitamente.
+func (c *Coordinator) Startup(ctx context.Context) error {
+	if c == nil {
+		return nil
+	}
+	if c.started {
+		return nil
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	c.ctx = ctx
+	c.cancel = cancel
+	c.started = true
+	log.Println("[p2p] Startup concluído")
+	return nil
+}
+
+// Shutdown cancela o contexto de ciclo de vida do Coordinator e fecha
+// explicitamente o discoveryProvider (libp2p host + mDNS) e o TransferServer
+// (HTTP listener). É chamado pelo *App em seu shutdown.
+func (c *Coordinator) Shutdown() error {
+	if c == nil || !c.started {
+		return nil
+	}
+	if c.cancel != nil {
+		c.cancel()
+	}
+	// Cleanup síncrono do discoveryProvider (libp2p host + mDNS service).
+	c.mu.Lock()
+	provider := c.discoveryProvider
+	c.discoveryProvider = nil
+	c.mu.Unlock()
+	if provider != nil {
+		provider.Close()
+	}
+	// Cleanup síncrono do TransferServer (HTTP listener).
+	if c.transferServer != nil {
+		c.transferServer.Close()
+	}
+	c.started = false
+	log.Println("[p2p] Shutdown concluído")
+	return nil
+}
+
+// Ctx retorna o contexto de ciclo de vida do Coordinator.
+// Retorna context.Background() se Startup ainda não foi chamado.
+func (c *Coordinator) Ctx() context.Context {
+	if c == nil || c.ctx == nil {
+		return context.Background()
+	}
+	return c.ctx
 }
 
 // lockDownload serializa downloads do mesmo artifact. Retorna uma função de
@@ -215,6 +280,13 @@ func (c *Coordinator) Run(ctx context.Context) {
 		return
 	}
 
+	// Usa o contexto de lifecycle se Startup foi chamado; senão, usa o ctx
+	// passado como argumento (compat).
+	runCtx := ctx
+	if c.ctx != nil {
+		runCtx = c.ctx
+	}
+
 	cfg := c.deps.GetP2PConfig()
 	if !cfg.Enabled {
 		c.deps.Log("[p2p] coordinator inativo: p2p.enabled=false")
@@ -223,16 +295,16 @@ func (c *Coordinator) Run(ctx context.Context) {
 
 	c.deps.Log("[p2p] coordinator iniciado")
 	_ = c.touchP2PTempDir()
-	if err := c.startTransferServer(ctx); err != nil {
+	if err := c.startTransferServer(runCtx); err != nil {
 		c.setLastError(err)
 		c.deps.Log("[p2p] erro ao iniciar servidor local: " + err.Error())
 	}
-	if err := c.startDiscovery(ctx); err != nil {
+	if err := c.startDiscovery(runCtx); err != nil {
 		c.setLastError(err)
 		c.deps.Log("[p2p] erro ao iniciar descoberta de peers: " + err.Error())
 	}
 	for workerIndex := 0; workerIndex < p2pReplicationWorkers; workerIndex++ {
-		go c.replicationWorker(ctx)
+		go c.replicationWorker(runCtx)
 	}
 	_ = c.discoveryTick(time.Now())
 
@@ -254,24 +326,24 @@ func (c *Coordinator) Run(ctx context.Context) {
 	defer contentGCTicker.Stop()
 
 	go func() {
-		_, _ = c.RunLANDiscoveryProbe(ctx, "startup")
+		_, _ = c.RunLANDiscoveryProbe(runCtx, "startup")
 	}()
 
 	lanProbeSem := make(chan struct{}, 2)
 
 	for {
 		select {
-		case <-ctx.Done():
+		case <-runCtx.Done():
 			c.deps.Log("[p2p] coordinator finalizado")
 			return
 		case <-discoveryTicker.C:
 			_ = c.discoveryTick(time.Now())
 		case <-gossipTicker.C:
-			c.pullPeerGossip(ctx)
+			c.pullPeerGossip(runCtx)
 		case <-fetchHeartbeatTicker.C:
-			c.publishFetchHeartbeats(ctx)
+			c.publishFetchHeartbeats(runCtx)
 		case <-electionTicker.C:
-			c.runPendingElections(ctx)
+			c.runPendingElections(runCtx)
 		case <-cleanupTicker.C:
 			if _, err := c.deps.CleanupExpiredP2PTempArtifacts(time.Now()); err != nil {
 				c.setLastError(err)
@@ -283,14 +355,14 @@ func (c *Coordinator) Run(ctx context.Context) {
 			lanProbeSem <- struct{}{}
 			go func() {
 				defer func() { <-lanProbeSem }()
-				_, _ = c.RunLANDiscoveryProbe(ctx, "warmup")
+				_, _ = c.RunLANDiscoveryProbe(runCtx, "warmup")
 			}()
 		case <-lanProbeTicker.C:
 			select {
 			case lanProbeSem <- struct{}{}:
 				go func() {
 					defer func() { <-lanProbeSem }()
-					_, _ = c.RunLANDiscoveryProbe(ctx, "periodic")
+					_, _ = c.RunLANDiscoveryProbe(runCtx, "periodic")
 				}()
 			default:
 			}

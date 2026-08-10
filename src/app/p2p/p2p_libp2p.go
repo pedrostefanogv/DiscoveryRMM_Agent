@@ -65,9 +65,38 @@ type p2pLibP2PProvider struct {
 
 	// clientID is the logical namespace for this P2P mesh.
 	clientID string
+
+	// svc é o serviço mDNS, guardado para cleanup síncrono no Close.
+	svc mdns.Service
+
+	// closeMu protege Close contra chamadas concorrentes.
+	closeMu sync.Mutex
+	closed  bool
 }
 
 func (p *p2pLibP2PProvider) Name() string { return p2pDiscoveryLibP2P }
+
+// Close desliga o provider libp2p de forma síncrona: fecha o mDNS service e o
+// host libp2p. É idempotente. Se Start não foi chamado, é no-op.
+func (p *p2pLibP2PProvider) Close() {
+	if p == nil {
+		return
+	}
+	p.closeMu.Lock()
+	defer p.closeMu.Unlock()
+	if p.closed {
+		return
+	}
+	p.closed = true
+	if p.svc != nil {
+		_ = p.svc.Close()
+		p.svc = nil
+	}
+	if p.h != nil {
+		_ = p.h.Close()
+		p.h = nil
+	}
+}
 
 func (p *p2pLibP2PProvider) Start(
 	ctx context.Context,
@@ -181,6 +210,7 @@ func (p *p2pLibP2PProvider) Start(
 
 	notifee := &libp2pMDNSNotifee{h: h, self: self, onPeer: onPeer, onTrace: onTrace, registry: p.registry, clientID: p.clientID}
 	svc := mdns.NewMdnsService(h, p2pLibP2PRendezvous, notifee)
+	p.svc = svc
 
 	// Connect to static bootstrap peers, if configured.
 	// These are used in corporate/VPN networks where mDNS multicast is blocked.
@@ -212,10 +242,11 @@ func (p *p2pLibP2PProvider) Start(
 		}
 	}
 
+	// Cleanup assíncrono quando o ctx é cancelado (backup — Close() síncrono
+	// também pode ser chamado pelo Coordinator.Shutdown).
 	go func() {
 		<-ctx.Done()
-		_ = svc.Close()
-		_ = h.Close()
+		p.Close()
 	}()
 
 	if onTrace != nil {

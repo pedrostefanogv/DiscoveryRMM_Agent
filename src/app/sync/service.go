@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"log"
 	"time"
 
 	"discovery/app/core/agentconn"
@@ -15,8 +16,11 @@ import (
 // (persistência offline). O *App mantém uma única referência a este agregador,
 // e os bridges na raiz delegam para ele.
 //
-// Futuramente este tipo pode ser registrado como um Service Wails3
-// (ServiceStartup/ServiceShutdown) para ciclo de vida próprio.
+// Implementa ServiceStartup/ServiceShutdown (interfaces opcionais do Wails v3)
+// para ciclo de vida próprio. Atualmente o *App chama estes métodos
+// explicitamente em seu próprio startup/shutdown; quando as dependências
+// forem totalmente desacopladas, o sync.Service poderá ser registrado como
+// Service Wails3 separado em main.go.
 type Service struct {
 	deps SyncDeps
 
@@ -25,6 +29,12 @@ type Service struct {
 	Backoff            *Backoff
 	CommandOutbox      *CommandOutbox
 	P2PTelemetryOutbox *P2PTelemetryOutbox
+
+	// ctx é o contexto de ciclo de vida, cancelado no shutdown.
+	ctx    context.Context
+	cancel context.CancelFunc
+	// started indica se ServiceStartup foi chamado com sucesso.
+	started bool
 }
 
 // NewService cria o agregador do domínio Sync/offline com as dependências
@@ -41,14 +51,72 @@ func NewService(deps SyncDeps) *Service {
 	}
 }
 
+// ServiceName retorna o nome do service para logging.
+func (s *Service) ServiceName() string {
+	return "sync.Service"
+}
+
+// Startup prepara o contexto de ciclo de vida do domínio Sync.
+// É chamado pelo *App em sua fase de startup (Phase 3, +10s).
+//
+// NOTA: Este método NÃO implementa a interface ServiceStartup do Wails v3
+// (que requer application.ServiceOptions) para evitar dependência do pacote
+// sync no Wails. O *App chama este método explicitamente. Quando o sync.Service
+// for registrado como Service Wails3 separado, um adapter thin em app.go
+// implementará a interface exata e delegará para este método.
+func (s *Service) Startup(ctx context.Context) error {
+	if s == nil {
+		return nil
+	}
+	if s.started {
+		return nil
+	}
+	// Deriva um contexto cancelável do ctx recebido (lifetime da aplicação).
+	ctx, cancel := context.WithCancel(ctx)
+	s.ctx = ctx
+	s.cancel = cancel
+	s.started = true
+	log.Println("[sync] Startup concluído")
+	return nil
+}
+
+// Shutdown cancela o contexto de ciclo de vida do domínio Sync.
+// É chamado pelo *App em seu shutdown.
+func (s *Service) Shutdown() error {
+	if s == nil || !s.started {
+		return nil
+	}
+	if s.cancel != nil {
+		s.cancel()
+	}
+	s.started = false
+	log.Println("[sync] Shutdown concluído")
+	return nil
+}
+
+// Ctx retorna o contexto de ciclo de vida do service.
+// Retorna context.Background() se Startup ainda não foi chamado.
+func (s *Service) Ctx() context.Context {
+	if s == nil || s.ctx == nil {
+		return context.Background()
+	}
+	return s.ctx
+}
+
 // ── Delegados do Coordinator ──
 
 // Run inicia o loop de sincronização até o contexto ser cancelado.
+// Usa o contexto de ciclo de vida (s.ctx) se Startup foi chamado;
+// caso contrário, usa o ctx passado como argumento (compat).
 func (s *Service) Run(ctx context.Context) {
 	if s == nil || s.Coordinator == nil {
 		return
 	}
-	s.Coordinator.Run(ctx)
+	runCtx := ctx
+	if s.ctx != nil {
+		runCtx = s.ctx
+	}
+	s.Coordinator.Run(runCtx)
 }
 
 // HandlePing processa um ping de invalidação de sync.

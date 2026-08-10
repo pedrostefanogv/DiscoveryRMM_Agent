@@ -56,6 +56,30 @@ func NewTransferServer(deps AppDeps, coord *Coordinator) *TransferServer {
 	return &TransferServer{deps: deps, coord: coord}
 }
 
+// Close desliga o servidor HTTP e fecha o listener de forma explícita.
+// Limpa o estado interno para permitir que Start seja chamado novamente
+// (ex: em um restart do Coordinator). É idempotente.
+func (s *TransferServer) Close() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.server != nil {
+		// Shutdown com timeout curto para não bloquear o encerramento.
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		_ = s.server.Shutdown(ctx)
+		cancel()
+		s.server = nil
+	}
+	if s.listener != nil {
+		_ = s.listener.Close()
+		s.listener = nil
+	}
+	s.baseURL = ""
+}
+
 func (s *TransferServer) Start(ctx context.Context, cfg P2PConfig, agentID, tempDir string, peerSnapshot func() []P2PPeerView) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

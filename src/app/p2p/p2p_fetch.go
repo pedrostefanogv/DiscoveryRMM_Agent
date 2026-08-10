@@ -216,9 +216,9 @@ func (c *Coordinator) RestartProvider() {
 		return
 	}
 
-	// Close old host if libp2p.
-	if lp, ok := oldProvider.(*p2pLibP2PProvider); ok && lp.h != nil {
-		_ = lp.h.Close()
+	// Close old provider if libp2p (fecha host + mDNS de forma idempotente).
+	if lp, ok := oldProvider.(*p2pLibP2PProvider); ok {
+		lp.Close()
 	}
 
 	// Start new provider — clientId será lido da config agente por startDiscovery.

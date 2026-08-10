@@ -3,6 +3,7 @@ package inventory
 import (
 	"context"
 	"fmt"
+	"log"
 	"os/exec"
 	"reflect"
 	"strings"
@@ -10,10 +11,10 @@ import (
 	"time"
 
 	"discovery/app/appstore"
-	"discovery/app/debug"
 	"discovery/app/core/inventory"
 	"discovery/app/core/models"
 	"discovery/app/core/processutil"
+	"discovery/app/debug"
 	"discovery/app/services/hardwareid"
 )
 
@@ -84,22 +85,22 @@ type InventoryNotificationDispatcher func(InventoryNotification) InventoryNotifi
 
 // Options wires the inventory service.
 type Options struct {
-	Apps                     AppsService
-	Inventory                InventoryService
-	Cache                    InventoryCache
-	ResolveAllowed           func(context.Context, string) (appstore.Item, error)
-	ResolveAllowedByType     func(context.Context, string, string) (appstore.Item, error)
-	GetCatalog               func(context.Context) (models.Catalog, error)
-	BeginActivity            ActivityFunc
-	DispatchNotification     InventoryNotificationDispatcher
-	Logf                     func(string)
-	Ctx                      func() context.Context
-	DB                       DB
-	DebugConfig              func() debug.Config
-	Version                  string
-	CommitHash               string
+	Apps                 AppsService
+	Inventory            InventoryService
+	Cache                InventoryCache
+	ResolveAllowed       func(context.Context, string) (appstore.Item, error)
+	ResolveAllowedByType func(context.Context, string, string) (appstore.Item, error)
+	GetCatalog           func(context.Context) (models.Catalog, error)
+	BeginActivity        ActivityFunc
+	DispatchNotification InventoryNotificationDispatcher
+	Logf                 func(string)
+	Ctx                  func() context.Context
+	DB                   DB
+	DebugConfig          func() debug.Config
+	Version              string
+	CommitHash           string
 
-	ShouldDeferNonCritical   func() (time.Duration, bool, string)
+	ShouldDeferNonCritical func() (time.Duration, bool, string)
 	// HardwareIdentity retorna a identidade de hardware (TPM EK + SMBIOS UUID)
 	// usada como fingerprint na Recuperação de Dispositivos. Pode ser nil.
 	HardwareIdentity func() hardwareid.Info
@@ -126,6 +127,12 @@ type Service struct {
 	postInstallInventoryRefreshMu    sync.Mutex
 	postInstallInventoryRefreshTimer *time.Timer
 	hardwareIdentity                 func() hardwareid.Info
+
+	// ── Lifecycle (Fase 4.1) ──
+	// lifecycleCtx é o contexto de ciclo de vida, cancelado no Shutdown.
+	lifecycleCtx     context.Context
+	lifecycleCancel  context.CancelFunc
+	lifecycleStarted bool
 }
 
 // NewService builds an inventory service.
@@ -161,6 +168,55 @@ func (s *Service) SetDB(db DB) {
 		return
 	}
 	s.db = normalizeInventoryDB(db)
+}
+
+// Startup prepara o contexto de ciclo de vida do inventory.Service.
+// É chamado pelo *App em seu startup (após DB estar disponível).
+//
+// NOTA: Este método NÃO implementa a interface ServiceStartup do Wails v3
+// (que requer application.ServiceOptions) para evitar dependência do pacote
+// inventory (domínio puro) no Wails. O *App chama este método explicitamente.
+func (s *Service) Startup(ctx context.Context) error {
+	if s == nil {
+		return nil
+	}
+	if s.lifecycleStarted {
+		return nil
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	s.lifecycleCtx = ctx
+	s.lifecycleCancel = cancel
+	s.lifecycleStarted = true
+	log.Println("[inventory] Startup concluído")
+	return nil
+}
+
+// Shutdown cancela o contexto de ciclo de vida do inventory.Service.
+// Para o timer de refresh pós-instalação se ativo.
+// É chamado pelo *App em seu shutdown.
+func (s *Service) Shutdown() error {
+	if s == nil || !s.lifecycleStarted {
+		return nil
+	}
+	// Para o timer de refresh pós-instalação se ativo.
+	if s.postInstallInventoryRefreshTimer != nil {
+		s.postInstallInventoryRefreshTimer.Stop()
+	}
+	if s.lifecycleCancel != nil {
+		s.lifecycleCancel()
+	}
+	s.lifecycleStarted = false
+	log.Println("[inventory] Shutdown concluído")
+	return nil
+}
+
+// LifecycleCtx retorna o contexto de ciclo de vida do service.
+// Retorna context.Background() se Startup ainda não foi chamado.
+func (s *Service) LifecycleCtx() context.Context {
+	if s == nil || s.lifecycleCtx == nil {
+		return context.Background()
+	}
+	return s.lifecycleCtx
 }
 
 func normalizeInventoryDB(db DB) DB {
