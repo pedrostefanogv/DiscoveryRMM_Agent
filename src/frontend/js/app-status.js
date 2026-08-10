@@ -114,7 +114,11 @@ async function fetchConnectedP2PAgents() {
 }
 
 function renderStatusOverview(data) {
-  var connected = !!(data && data.connected);
+  // "Online" reflete o transporte conectado (fonte confiável do agentconn),
+  // com fallback para o campo connected consolidado. Consistente com a bolinha
+  // da barra (app-window.js) — o pong global pode ficar stale sem derrubar o
+  // transporte, e não deve deixar o agente aparecendo offline.
+  var connected = !!(data && (data.transportConnected || data.connected));
 
   if (statusConnectionDotEl) {
     statusConnectionDotEl.className = 'agent-status-indicator ' + (connected ? 'online' : 'offline');

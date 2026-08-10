@@ -79,7 +79,7 @@ func TestResolveAgentConnectivity_FreshPongKeepsOnline(t *testing.T) {
 	}
 }
 
-func TestResolveAgentConnectivity_StalePongMarksOffline(t *testing.T) {
+func TestResolveAgentConnectivity_StalePongKeepsOnlineWhenTransportUp(t *testing.T) {
 	deps := newFakeDeps(t)
 	b := NewBackoff(deps)
 	stale := time.Now().UTC().Add(-(syncmeta.GlobalPongStaleAfter + 2*time.Minute))
@@ -88,10 +88,29 @@ func TestResolveAgentConnectivity_StalePongMarksOffline(t *testing.T) {
 		TransportConnected:  true,
 		LastGlobalPongAtUTC: stale.Format(time.RFC3339),
 	})
-	if status.Connected {
-		t.Fatalf("esperava connected=false com pong stale")
+	// Transporte conectado mantém o agente online, mesmo com pong stale
+	// (a staleness é informativa — não derruba a conectividade).
+	if !status.Connected {
+		t.Fatalf("esperava connected=true com transporte conectado, mesmo com pong stale")
 	}
 	if !status.GlobalPongStale {
 		t.Fatalf("esperava stale=true com pong antigo")
+	}
+}
+
+// TestResolveAgentConnectivity_StalePongMarksOfflineWithoutTransport garante
+// que, sem transporte conectado, o agente fica offline (e o stale do pong não
+// é sinalizado, pois a prioridade é "transporte desconectado").
+func TestResolveAgentConnectivity_StalePongMarksOfflineWithoutTransport(t *testing.T) {
+	deps := newFakeDeps(t)
+	b := NewBackoff(deps)
+	stale := time.Now().UTC().Add(-(syncmeta.GlobalPongStaleAfter + 2*time.Minute))
+	status := b.ResolveAgentConnectivity(debug.AgentStatus{
+		Connected:           false,
+		TransportConnected:  false,
+		LastGlobalPongAtUTC: stale.Format(time.RFC3339),
+	})
+	if status.Connected {
+		t.Fatalf("esperava connected=false sem transporte conectado")
 	}
 }

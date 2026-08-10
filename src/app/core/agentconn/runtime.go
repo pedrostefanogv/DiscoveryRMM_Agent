@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -279,6 +280,20 @@ type Runtime struct {
 	forceHeartbeatCh chan chan struct{}
 	// reloadCh requests the active session loop to reconnect with fresh config.
 	reloadCh chan struct{}
+
+	// ── Diagnóstico de mensagens de entrada ──
+	// Contadores atômicos de mensagens NATS RECEBIDAS por categoria. Ajudam a
+	// detectar falha silenciosa de recebimento (agente conectado/publica, mas
+	// não recebe nada do servidor). Zerados a cada reconexão.
+	msgRxGlobalPong atomic.Int64
+	msgRxSyncPing   atomic.Int64
+	msgRxCommand    atomic.Int64
+	msgRxP2P        atomic.Int64
+
+	// connectedAt marca quando a sessão NATS atual conectou, para cálculo de
+	// "tempo sem receber mensagens" no diagnóstico.
+	connectedAtMu sync.RWMutex
+	connectedAt   time.Time
 }
 
 func NewRuntime(opts Options) *Runtime {
@@ -325,7 +340,6 @@ func (r *Runtime) GetStatus() Status {
 
 func (r *Runtime) setStatus(connected bool, event string) {
 	r.statMu.Lock()
-	defer r.statMu.Unlock()
 	wasConnected := r.statSnap.Connected
 	r.statSnap.Connected = connected
 	r.statSnap.LastEvent = event
@@ -335,24 +349,33 @@ func (r *Runtime) setStatus(connected bool, event string) {
 			r.logf("[heartbeat][status] conexao perdida: %s — heartbeats serao suspensos ate reconexao", event)
 		}
 	}
+	r.statMu.Unlock()
+	// Notifica FORA do lock: o callback OnConnectivityChange pode reler o
+	// status (GetStatus()/RLock) ou chamar outras rotinas; fazê-lo com o lock
+	// segurado causaria deadlock (self-lock).
 	r.notifyConnectivityChange(wasConnected, connected, "")
 }
 
 func (r *Runtime) setStatusConnected(agentID, server, transport string) {
 	r.statMu.Lock()
-	defer r.statMu.Unlock()
 	wasConnected := r.statSnap.Connected
 	r.statSnap.Connected = true
 	r.statSnap.AgentID = agentID
 	r.statSnap.Server = server
 	r.statSnap.LastEvent = "conectado"
 	r.statSnap.Transport = transport
+	// Zera contadores de diagnóstico e marca o momento da nova sessão.
+	r.markSessionConnected()
+	r.statMu.Unlock()
+	// Notifica FORA do lock (ver comentário em setStatus).
 	r.notifyConnectivityChange(wasConnected, true, transport)
 }
 
 // notifyConnectivityChange chama o callback OnConnectivityChange apenas quando
 // o estado online/offline realmente mudou, evitando eventos redundantes a cada
-// heartbeat. Deve ser chamado com r.statMu já travado.
+// heartbeat. NÃO deve ser chamado com r.statMu travado: o callback pode reler
+// o status (GetStatus → RLock), o que causaria deadlock se o lock estivesse
+// segurado.
 func (r *Runtime) notifyConnectivityChange(wasConnected, nowConnected bool, transport string) {
 	if wasConnected == nowConnected {
 		return
@@ -1085,6 +1108,46 @@ func (r *Runtime) logf(format string, args ...any) {
 	if r.opts.Logf != nil {
 		r.opts.Logf(format, args...)
 	}
+}
+
+// markSessionConnected registra o momento da conexão da sessão NATS atual e
+// zera os contadores de mensagens recebidas (deve ser chamado ao conectar).
+func (r *Runtime) markSessionConnected() {
+	r.msgRxGlobalPong.Store(0)
+	r.msgRxSyncPing.Store(0)
+	r.msgRxCommand.Store(0)
+	r.msgRxP2P.Store(0)
+	r.connectedAtMu.Lock()
+	r.connectedAt = time.Now().UTC()
+	r.connectedAtMu.Unlock()
+}
+
+// logDiagnosticReport emite um relatório de saúde de mensagens de entrada.
+// Útil para detectar falha silenciosa de recebimento (agente publica heartbeat
+// mas não recebe nada do servidor). Fornece uma snapshot clara para o log.
+func (r *Runtime) logDiagnosticReport(reason string) {
+	pong := r.msgRxGlobalPong.Load()
+	sync := r.msgRxSyncPing.Load()
+	cmd := r.msgRxCommand.Load()
+	p2p := r.msgRxP2P.Load()
+
+	r.connectedAtMu.RLock()
+	age := "— (nunca conectado)"
+	if !r.connectedAt.IsZero() {
+		d := time.Since(r.connectedAt)
+		age = d.Round(time.Second).String()
+	}
+	r.connectedAtMu.RUnlock()
+
+	total := pong + sync + cmd + p2p
+	if total == 0 {
+		r.logf("[DIAG][nats] %s: NENHUMA mensagem de entrada recebida desde a conexao (tempo=%s). "+
+			"pong=%d sync_ping=%d comandos=%d p2p=%d — verificar permissao de SUBSCRIBE/"+
+			"entrega de subject no servidor NATS (heartbeat de saida esta OK)", reason, age, pong, sync, cmd, p2p)
+		return
+	}
+	r.logf("[DIAG][nats] %s: recebimento ativo (tempo=%s). pong=%d sync_ping=%d comandos=%d p2p=%d",
+		reason, age, pong, sync, cmd, p2p)
 }
 
 func (r *Runtime) emitSyncPing(ping SyncPing) {

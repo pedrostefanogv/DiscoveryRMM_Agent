@@ -200,6 +200,7 @@ func natsFanoutDurableName(cfg Config, route natsCommandRouteScope) string {
 
 func (r *Runtime) natsCommandHandler(ctx context.Context, nc *nats.Conn, cfg Config, subjects natsSubjects, route natsCommandRouteScope, requiresAck bool) func(msg *nats.Msg) {
 	return func(msg *nats.Msg) {
+		r.msgRxCommand.Add(1)
 		var env natsCommandEnvelope
 		if err := json.Unmarshal(msg.Data, &env); err != nil {
 			r.logf("mensagem de comando NATS invalida (subject=%s): %v", strings.TrimSpace(msg.Subject), err)
@@ -445,6 +446,7 @@ func ackNATSMessage(msg *nats.Msg) error {
 
 func (r *Runtime) natsSyncPingHandler() func(msg *nats.Msg) {
 	return func(msg *nats.Msg) {
+		r.msgRxSyncPing.Add(1)
 		var ping SyncPing
 		if err := json.Unmarshal(msg.Data, &ping); err != nil {
 			r.logf("mensagem de sync ping NATS invalida: %v", err)
@@ -456,6 +458,7 @@ func (r *Runtime) natsSyncPingHandler() func(msg *nats.Msg) {
 
 func (r *Runtime) natsGlobalPongHandler(globalPongReceived chan<- time.Time) func(msg *nats.Msg) {
 	return func(msg *nats.Msg) {
+		r.msgRxGlobalPong.Add(1)
 		pong, err := parseGlobalPongMessage(msg.Data)
 		if err != nil {
 			r.logf("mensagem de global pong NATS invalida: %v", err)
@@ -475,6 +478,7 @@ func (r *Runtime) natsGlobalPongHandler(globalPongReceived chan<- time.Time) fun
 
 func (r *Runtime) natsP2PDiscoveryHandler() func(msg *nats.Msg) {
 	return func(msg *nats.Msg) {
+		r.msgRxP2P.Add(1)
 		snapshot, err := parseP2PDiscoverySnapshot(msg.Data)
 		if err != nil {
 			r.logf("mensagem de discovery P2P NATS invalida: %v", err)
@@ -489,6 +493,7 @@ func (r *Runtime) natsP2PDiscoveryHandler() func(msg *nats.Msg) {
 
 func (r *Runtime) natsP2PEventHandler() func(msg *nats.Msg) {
 	return func(msg *nats.Msg) {
+		r.msgRxP2P.Add(1)
 		var event PeerEventMessage
 		if err := json.Unmarshal(msg.Data, &event); err != nil {
 			r.logf("mensagem de evento P2P NATS invalida: %v", err)
@@ -571,6 +576,10 @@ func (r *Runtime) runNATSEventLoop(ctx context.Context, nc *nats.Conn, cfg Confi
 			if status == nats.CLOSED {
 				return fmt.Errorf("conexao NATS encerrada")
 			}
+
+			// Relatório periódico de saúde das mensagens de entrada. Ajuda a
+			// distinguir "servidor não publica" de "agente não recebe nada".
+			r.logDiagnosticReport("watchdog global pong")
 
 			now := time.Now().UTC()
 			if reconnect, age := shouldReconnectForMissingGlobalPong(now, connectedAt, lastGlobalPongAt); reconnect {

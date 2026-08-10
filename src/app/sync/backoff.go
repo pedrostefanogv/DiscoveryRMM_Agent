@@ -196,6 +196,15 @@ func (b *Backoff) ResolveAgentConnectivity(status debug.AgentStatus) debug.Agent
 
 	lastPongAt := ParseRFC3339Time(strings.TrimSpace(status.LastGlobalPongAtUTC))
 	online, reason, stale := EvaluateAgentOnlineSignal(transportConnected, lastPongAt)
+	// O `Connected` deve refletir pelo menos o estado do TRANSPORTE: se o
+	// transporte está conectado, o agente está online, mesmo que o pong global
+	// esteja stale (a staleness é informativa, não derruba a conectividade).
+	// Isso mantém o indicador/tray online durante problemas de pong no servidor,
+	// sem esconder o alerta de `GlobalPongStale`.
+	if transportConnected && !online {
+		online = true
+		reason = "transporte conectado; pong global stale ou ausente (indicador mantido online)"
+	}
 	status.Connected = online
 	status.GlobalPongStale = stale
 	if strings.TrimSpace(status.OnlineReason) == "" {

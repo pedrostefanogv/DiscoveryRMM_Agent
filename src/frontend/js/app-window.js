@@ -80,9 +80,13 @@
       var hostname = (status && status.hostname) ? status.hostname : '-';
       if (metaPCName) metaPCName.textContent = translate('window.meta.pc') + ': ' + hostname;
       if (metaDot) {
-        var online = !!(status && status.connected);
-        metaDot.classList.toggle('online', online);
-        metaDot.classList.toggle('offline', !online);
+        // "Online" reflete o transporte conectado (fonte confiável do agentconn),
+        // com fallback para o campo connected consolidado caso transportConnected
+        // não venha preenchido. Evita correlacionar o indicador com o status do
+        // pong global (que pode ficar stale sem derrubar o transporte).
+        var transportUp = !!(status && (status.transportConnected || status.connected));
+        metaDot.classList.toggle('online', transportUp);
+        metaDot.classList.toggle('offline', !transportUp);
       }
       // Mantém a versão do sidebar sempre em dia no boot/visível, sem
       // depender de abrir a página Status.
@@ -154,43 +158,27 @@
   }
 
   // Atualização imediata via evento dedicado do backend (agent:connectivity).
-  // Quando o estado online/offline muda, o Go emite este evento e atualizamos
-  // a bolinha, o tooltip e (se visível) o status sem esperar o polling.
+  // Quando o estado online/offline muda, o Go emite este evento com o estado
+  // REAL de conectividade (transport conectado / perda de conexão). Aplicamos
+  // esse estado diretamente para refletir na hora o que o backend já sabe.
   var lastConnectivityState = null;
 
   function applyConnectivityEvent(data) {
-    // O evento do backend indica que a conectividade mudou, mas a FONTE de
-    // verdade do indicador é o estado consolidado de GetStatusOverview()
-    // (que considera o transporte E o pong global do sync). Usamos o evento
-    // apenas como gatilho para uma atualização imediata, evitando conflito
-    // entre duas fontes divergentes (transporte vs. sinal online).
-    if (!(window.go && window.go.app && window.go.app.App && typeof window.go.app.App.GetStatusOverview === 'function')) {
-      return;
-    }
-    window.go.app.App.GetStatusOverview().then(function (status) {
-      if (!status) return;
-      var connected = !!status.connected;
-      lastConnectivityState = { connected: connected, transport: (status && status.connectionType) || '' };
+    if (!data) return;
+    var connected = !!data.connected;
+    var transport = (data && data.transport) || '';
+    lastConnectivityState = { connected: connected, transport: transport };
 
-      if (metaDot) {
-        metaDot.classList.toggle('online', connected);
-        metaDot.classList.toggle('offline', !connected);
-      }
-      if (metaPCName && status.hostname) {
-        metaPCName.textContent = translate('window.meta.pc') + ': ' + status.hostname;
-      }
-      if (typeof window.__connectivityEventPing === 'function') {
-        try {
-          window.__connectivityEventPing(connected, lastConnectivityState.transport, 'event');
-        } catch (e) { /* não crítico */ }
-      }
-    }).catch(function () {
-      if (typeof window.__connectivityEventPing === 'function') {
-        try {
-          window.__connectivityEventPing(false, '', 'event');
-        } catch (e) { /* não crítico */ }
-      }
-    });
+    if (metaDot) {
+      metaDot.classList.toggle('online', connected);
+      metaDot.classList.toggle('offline', !connected);
+    }
+
+    if (typeof window.__connectivityEventPing === 'function') {
+      try {
+        window.__connectivityEventPing(connected, transport, 'event');
+      } catch (e) { /* não crítico */ }
+    }
   }
 
   // Expõe o último estado para o app-status.js re-aplicar ao ser carregado.
