@@ -230,14 +230,18 @@ function selectKnowledgeArticle(id) {
 
   // Busca as sub-páginas do artigo (árvore Notion-style)
   if (article && article.id) {
+    var requestedId = article.id;
     appApi()
-      .GetKnowledgeArticlePages(article.id)
+      .GetKnowledgeArticlePages(requestedId)
       .then(function (pages) {
+        // Guard de race: se o usuário já trocou de artigo, ignora a resposta atrasada
+        if (requestedId !== selectedKnowledgeArticleID) return;
         kbActivePages = Array.isArray(pages) ? pages : [];
         kbActivePageId = null;
         renderKnowledgeArticleDetail(article);
       })
       .catch(function () {
+        if (requestedId !== selectedKnowledgeArticleID) return;
         kbActivePages = [];
         kbActivePageId = null;
         renderKnowledgeArticleDetail(article);
