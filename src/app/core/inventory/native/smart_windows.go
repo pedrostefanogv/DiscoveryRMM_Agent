@@ -100,6 +100,10 @@ if ($result.Count -eq 0) { '[]' } else { $result | ConvertTo-Json -Depth 2 -Comp
 	result := make(map[string]SmartHealth, len(raw))
 	for _, r := range raw {
 		letter := strings.ToUpper(strings.TrimSpace(wmiString(map[string]any{"v": r.DriveLetter}, "v")))
+		letter = strings.TrimRight(letter, `\`)
+		if len(letter) >= 2 && letter[1] == ':' {
+			letter = letter[:2]
+		}
 		if letter == "" {
 			continue
 		}

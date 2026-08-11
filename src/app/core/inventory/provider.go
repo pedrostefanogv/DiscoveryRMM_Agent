@@ -236,13 +236,13 @@ func (p *Provider) collectWithNative(ctx context.Context) (models.InventoryRepor
 	// Media types for volumes/disks.
 	mediaTypes := p.native.CollectDiskMediaTypes(ctx)
 	for i := range volumes {
-		dl := strings.ToUpper(strings.TrimSpace(volumes[i].Device))
+		dl := normalizeDriveKey(volumes[i].Device)
 		if mt, ok := mediaTypes[dl]; ok {
 			volumes[i].MediaType = mt
 		}
 	}
 	for i := range physicalDisks {
-		dl := strings.ToUpper(strings.TrimSpace(physicalDisks[i].Device))
+		dl := normalizeDriveKey(physicalDisks[i].Device)
 		if mt, ok := mediaTypes[dl]; ok {
 			physicalDisks[i].MediaType = mt
 		}
@@ -251,7 +251,7 @@ func (p *Provider) collectWithNative(ctx context.Context) (models.InventoryRepor
 	// SMART/health data for volumes (keyed by drive letter).
 	smart := p.native.CollectSmartHealth(ctx)
 	for i := range volumes {
-		dl := strings.ToUpper(strings.TrimSpace(volumes[i].Device))
+		dl := normalizeDriveKey(volumes[i].Device)
 		sh, ok := smart[dl]
 		if !ok {
 			continue
@@ -625,6 +625,18 @@ func mapSmartStatus(health string) string {
 	default:
 		return "Indisponível"
 	}
+}
+
+// normalizeDriveKey normalizes a volume device string (e.g. "C:\" or "C:")
+// into a canonical drive-letter key ("C:") used to look up media types and
+// SMART health maps.
+func normalizeDriveKey(device string) string {
+	key := strings.ToUpper(strings.TrimSpace(device))
+	key = strings.TrimRight(key, `\`)
+	if len(key) >= 2 && key[1] == ':' {
+		return key[:2]
+	}
+	return key
 }
 
 // collectPhysicalDiskMediaTypes queries Get-PhysicalDisk via PowerShell to
