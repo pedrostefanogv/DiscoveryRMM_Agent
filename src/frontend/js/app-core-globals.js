@@ -121,6 +121,7 @@ const kbArticleDetailEl = document.getElementById('kbArticleDetail');
 const kbDetailTitleEl = document.getElementById('kbDetailTitle');
 const kbDetailMetaEl = document.getElementById('kbDetailMeta');
 const kbDetailContentEl = document.getElementById('kbDetailContent');
+const kbPagesNavEl = document.getElementById('kbPagesNav');
 const chatMessagesEl = document.getElementById('chatMessages');
 const chatInputEl = document.getElementById('chatInput');
 const chatSendBtn = document.getElementById('chatSendBtn');

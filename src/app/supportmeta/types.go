@@ -145,6 +145,19 @@ type KnowledgeArticle struct {
 	IsPage    bool   `json:"isPage"`
 }
 
+// KnowledgePage represents a sub-page inside a knowledge article (Notion-style).
+// Pages can be nested up to 3 levels via ParentPageID. Children holds the nested tree.
+type KnowledgePage struct {
+	ID           string          `json:"id"`
+	ArticleID    string          `json:"articleId"`
+	ParentPageID string          `json:"parentPageId"`
+	Title        string          `json:"title"`
+	Content      string          `json:"content"`
+	SortOrder    int             `json:"sortOrder"`
+	ChildCount   int             `json:"childCount"`
+	Children     []KnowledgePage `json:"children"`
+}
+
 type AgentInfoCache struct {
 	mu     sync.RWMutex
 	info   AgentInfo

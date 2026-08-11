@@ -187,6 +187,8 @@ type CloseTicketInput = supportmeta.CloseTicketInput
 
 type KnowledgeArticle = supportmeta.KnowledgeArticle
 
+type KnowledgePage = supportmeta.KnowledgePage
+
 // Automation* aliases keep the app public surface stable while types move into a dedicated subpackage.
 type AutomationTaskView = appautomation.TaskView
 

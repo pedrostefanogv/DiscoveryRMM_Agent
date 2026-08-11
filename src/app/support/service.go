@@ -38,6 +38,8 @@ type CloseTicketInput = supportmeta.CloseTicketInput
 
 type KnowledgeArticle = supportmeta.KnowledgeArticle
 
+type KnowledgePage = supportmeta.KnowledgePage
+
 // AgentInfoCache handles cached agent identity values.
 type AgentInfoCache interface {
 	Get() (AgentInfo, bool)

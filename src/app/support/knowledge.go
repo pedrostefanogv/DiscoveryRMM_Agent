@@ -174,6 +174,61 @@ func parseKnowledgeDetailBody(body []byte) (KnowledgeArticle, error) {
 	return parseKnowledgeArticle(direct), nil
 }
 
+func parseKnowledgePage(raw map[string]any) KnowledgePage {
+	page := KnowledgePage{
+		ID:           extractStr(raw, "id"),
+		ArticleID:    extractStr(raw, "articleId"),
+		ParentPageID: extractStr(raw, "parentPageId"),
+		Title:        extractStr(raw, "title"),
+		Content:      extractStr(raw, "content"),
+		SortOrder:    toInt(raw["sortOrder"]),
+		ChildCount:   toInt(raw["childCount"]),
+	}
+
+	if children, ok := raw["children"].([]any); ok {
+		page.Children = make([]KnowledgePage, 0, len(children))
+		for _, entry := range children {
+			if m, ok := entry.(map[string]any); ok {
+				page.Children = append(page.Children, parseKnowledgePage(m))
+			}
+		}
+	}
+
+	return page
+}
+
+func parseKnowledgePagesBody(body []byte) ([]KnowledgePage, error) {
+	var direct []map[string]any
+	if err := json.Unmarshal(body, &direct); err == nil {
+		out := make([]KnowledgePage, 0, len(direct))
+		for _, item := range direct {
+			out = append(out, parseKnowledgePage(item))
+		}
+		return out, nil
+	}
+
+	var envelope map[string]any
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return nil, err
+	}
+
+	for _, key := range []string{"items", "data", "pages", "result"} {
+		arr, ok := envelope[key].([]any)
+		if !ok {
+			continue
+		}
+		out := make([]KnowledgePage, 0, len(arr))
+		for _, entry := range arr {
+			if m, ok := entry.(map[string]any); ok {
+				out = append(out, parseKnowledgePage(m))
+			}
+		}
+		return out, nil
+	}
+
+	return []KnowledgePage{}, nil
+}
+
 func knowledgeCacheScope(cfg debug.Config, info AgentInfo) string {
 	parts := []string{
 		strings.TrimSpace(strings.ToLower(cfg.ApiScheme)),
@@ -352,6 +407,68 @@ func (s *Service) fetchKnowledgeDetail(info AgentInfo, articleID string) (Knowle
 	return article, nil
 }
 
+func (s *Service) fetchKnowledgePages(info AgentInfo, articleID string) ([]KnowledgePage, error) {
+	articleID = strings.TrimSpace(articleID)
+	if articleID == "" {
+		return nil, fmt.Errorf("articleId inválido")
+	}
+
+	cfg := s.debugConfig()
+	if strings.TrimSpace(cfg.ApiServer) == "" || strings.TrimSpace(cfg.AuthToken) == "" {
+		return nil, fmt.Errorf("configuração de servidor API incompleta: preencha apiServer e token no Debug")
+	}
+	cacheKey := "knowledge:pages:" + knowledgeCacheScope(cfg, info) + ":" + url.QueryEscape(strings.ToLower(articleID))
+
+	if s.db != nil {
+		var cached []KnowledgePage
+		if found, err := s.db.CacheGetJSON(cacheKey, &cached); err == nil && found {
+			if cached == nil {
+				return []KnowledgePage{}, nil
+			}
+			return cached, nil
+		}
+	}
+
+	target := strings.TrimSpace(strings.ToLower(cfg.ApiScheme)) + "://" + strings.TrimSpace(cfg.ApiServer) + "/api/v1/agent-auth/knowledge/" + url.PathEscape(articleID) + "/pages"
+
+	ctx := s.ctxOrBackground()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return nil, fmt.Errorf("URL invalida: %w", err)
+	}
+	if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, info.AgentID); err != nil {
+		return nil, err
+	}
+
+	resp, err := tlsutil.NewHTTPClient(15 * time.Second).Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("falha ao buscar páginas do artigo: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+
+	pages, err := parseKnowledgePagesBody(body)
+	if err != nil {
+		return nil, fmt.Errorf("resposta invalida ao listar páginas do artigo: %w", err)
+	}
+	if pages == nil {
+		pages = []KnowledgePage{}
+	}
+
+	if s.db != nil {
+		if err := s.db.CacheSetJSON(cacheKey, pages, knowledgeDetailCacheTTL); err != nil {
+			log.Printf("[support] aviso: falha ao salvar cache de knowledge pages: %v", err)
+		}
+	}
+
+	return pages, nil
+}
+
 // GetKnowledgeBaseArticles returns knowledge-base articles available to the authenticated agent.
 func (s *Service) GetKnowledgeBaseArticles() []KnowledgeArticle {
 	if !s.featureEnabled(s.knowledgeEnabled()) {
@@ -416,6 +533,20 @@ func (s *Service) GetKnowledgeArticleDetails(articleID string) (KnowledgeArticle
 		return KnowledgeArticle{}, err
 	}
 	return s.fetchKnowledgeDetail(info, articleID)
+}
+
+// GetKnowledgeArticlePages returns the nested sub-pages tree of an article (Notion-style).
+func (s *Service) GetKnowledgeArticlePages(articleID string) ([]KnowledgePage, error) {
+	if !s.featureEnabled(s.knowledgeEnabled()) {
+		s.supportLogf("base de conhecimento desabilitada pela configuracao do agente")
+		return []KnowledgePage{}, nil
+	}
+	info, err := s.fetchAgentContext()
+	if err != nil {
+		s.supportLogf("falha ao resolver contexto para knowledge pages: %v", err)
+		return nil, err
+	}
+	return s.fetchKnowledgePages(info, articleID)
 }
 
 // SearchKnowledgeBaseArticles filters articles by title/category/tags/content.

@@ -135,3 +135,10 @@ func (a *App) GetKnowledgeArticleDetails(articleID string) (KnowledgeArticle, er
 	}
 	return a.supportSvc.GetKnowledgeArticleDetails(articleID)
 }
+
+func (a *App) GetKnowledgeArticlePages(articleID string) ([]KnowledgePage, error) {
+	if err := a.requireSupportSvc(); err != nil {
+		return []KnowledgePage{}, err
+	}
+	return a.supportSvc.GetKnowledgeArticlePages(articleID)
+}
