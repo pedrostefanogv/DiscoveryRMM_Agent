@@ -231,8 +231,31 @@ function selectKnowledgeArticle(id) {
   // Busca as sub-páginas do artigo (árvore Notion-style)
   if (article && article.id) {
     var requestedId = article.id;
-    appApi()
-      .GetKnowledgeArticlePages(requestedId)
+    var api = appApi();
+    var bindingFn = api && typeof api.GetKnowledgeArticlePages === "function"
+      ? api.GetKnowledgeArticlePages.bind(api)
+      : null;
+
+    if (!bindingFn) {
+      // Binding ausente (ex.: binário antigo sem bindings regenerados).
+      // NÃO falha silenciosamente: loga para diagnóstico e segue sem a árvore.
+      try {
+        console.warn(
+          "[knowledge] GetKnowledgeArticlePages indisponivel nos bindings. " +
+            "Binário desatualizado? Use `wails3 generate bindings` e rebuild.",
+        );
+      } catch (_) {
+        /* console indisponível */
+      }
+      if (requestedId === selectedKnowledgeArticleID) {
+        kbActivePages = [];
+        kbActivePageId = null;
+        renderKnowledgeArticleDetail(article);
+      }
+      return;
+    }
+
+    bindingFn(requestedId)
       .then(function (pages) {
         // Guard de race: se o usuário já trocou de artigo, ignora a resposta atrasada
         if (requestedId !== selectedKnowledgeArticleID) return;
@@ -240,7 +263,17 @@ function selectKnowledgeArticle(id) {
         kbActivePageId = null;
         renderKnowledgeArticleDetail(article);
       })
-      .catch(function () {
+      .catch(function (err) {
+        try {
+          console.warn(
+            "[knowledge] falha ao carregar paginas do artigo " +
+              requestedId +
+              ":",
+            err,
+          );
+        } catch (_) {
+          /* console indisponível */
+        }
         if (requestedId !== selectedKnowledgeArticleID) return;
         kbActivePages = [];
         kbActivePageId = null;
