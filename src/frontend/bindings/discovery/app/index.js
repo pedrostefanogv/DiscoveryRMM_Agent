@@ -22,6 +22,7 @@ export {
     HardwareIdentityInfo,
     InstallerConfig,
     KnowledgeArticle,
+    KnowledgePage,
     NotificationDispatchRequest,
     NotificationDispatchResponse,
     P2PArtifactAccess,

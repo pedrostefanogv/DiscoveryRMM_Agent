@@ -9,6 +9,7 @@ export {
     CloseTicketInput,
     CreateTicketInput,
     KnowledgeArticle,
+    KnowledgePage,
     TicketComment
 } from "./models.js";
 

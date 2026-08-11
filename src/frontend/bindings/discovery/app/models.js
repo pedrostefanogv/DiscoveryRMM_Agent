@@ -220,6 +220,12 @@ export const KnowledgeArticle = supportmeta$0.KnowledgeArticle;
  * @typedef {supportmeta$0.KnowledgeArticle} KnowledgeArticle
  */
 
+export const KnowledgePage = supportmeta$0.KnowledgePage;
+
+/**
+ * @typedef {supportmeta$0.KnowledgePage} KnowledgePage
+ */
+
 /**
  * NotificationDispatchRequest é o payload de uma notificação.
  */

@@ -482,6 +482,91 @@ export class KnowledgeArticle {
 }
 
 /**
+ * KnowledgePage represents a sub-page inside a knowledge article (Notion-style).
+ * Pages can be nested up to 3 levels via ParentPageID. Children holds the nested tree.
+ */
+export class KnowledgePage {
+    /**
+     * Creates a new KnowledgePage instance.
+     * @param {Partial<KnowledgePage>} [$$source = {}] - The source object to create the KnowledgePage.
+     */
+    constructor($$source = {}) {
+        if (!("id" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["id"] = "";
+        }
+        if (!("articleId" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["articleId"] = "";
+        }
+        if (!("parentPageId" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["parentPageId"] = "";
+        }
+        if (!("title" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["title"] = "";
+        }
+        if (!("content" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["content"] = "";
+        }
+        if (!("sortOrder" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["sortOrder"] = 0;
+        }
+        if (!("childCount" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["childCount"] = 0;
+        }
+        if (!("children" in $$source)) {
+            /**
+             * @member
+             * @type {KnowledgePage[]}
+             */
+            this["children"] = [];
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new KnowledgePage instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {KnowledgePage}
+     */
+    static createFrom($$source = {}) {
+        const $$createField7_0 = $$createType4;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("children" in $$parsedSource) {
+            $$parsedSource["children"] = $$createField7_0($$parsedSource["children"]);
+        }
+        return new KnowledgePage(/** @type {Partial<KnowledgePage>} */($$parsedSource));
+    }
+}
+
+/**
  * TicketComment is a comment on a ticket.
  */
 export class TicketComment {
@@ -549,3 +634,5 @@ export class TicketComment {
 const $$createType0 = APIWorkflowState.createFrom;
 const $$createType1 = $Create.Nullable($$createType0);
 const $$createType2 = $Create.Array($Create.Any);
+const $$createType3 = KnowledgePage.createFrom;
+const $$createType4 = $Create.Array($$createType3);

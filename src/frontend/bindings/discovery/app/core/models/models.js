@@ -734,6 +734,36 @@ export class DiskInfo {
              */
             this["description"] = "";
         }
+        if (/** @type {any} */(false)) {
+            /**
+             * ── Saúde SMART (opcional; preenchido quando o Windows expõe os dados) ──
+             * smartStatus: "OK" | "Falha prevista" | "Indisponível"
+             * @member
+             * @type {string | undefined}
+             */
+            this["smartStatus"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {number | null | undefined}
+             */
+            this["temperatureC"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {number | null | undefined}
+             */
+            this["powerOnHours"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {number | null | undefined}
+             */
+            this["reallocatedSectors"] = undefined;
+        }
 
         Object.assign(this, $$source);
     }
