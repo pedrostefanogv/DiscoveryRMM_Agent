@@ -12,14 +12,14 @@ func TestHalfToFloat(t *testing.T) {
 		h    uint16
 		want float32
 	}{
-		{0x0000, 0},          // +0
-		{0x3C00, 1.0},        // 1.0
-		{0x4000, 2.0},        // 2.0
-		{0x3800, 0.5},        // 0.5
+		{0x0000, 0},            // +0
+		{0x3C00, 1.0},          // 1.0
+		{0x4000, 2.0},          // 2.0
+		{0x3800, 0.5},          // 0.5
 		{0x0001, 0.0000000596}, // subnormal mínimo
-		{0x7BFF, 65504},      // maior half normal
-		{0x8000, 0},          // -0
-		{0xBC00, -1.0},       // -1.0
+		{0x7BFF, 65504},        // maior half normal
+		{0x8000, 0},            // -0
+		{0xBC00, -1.0},         // -1.0
 	}
 	for _, c := range cases {
 		got := halfToFloat(c.h)
@@ -122,5 +122,40 @@ func TestIsHDRColorSpace(t *testing.T) {
 	}
 	if isHDRColorSpace(DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709) {
 		t.Error("SDR não deveria ser HDR")
+	}
+}
+
+func TestSwapRB_BGRA(t *testing.T) {
+	// RGBA (R,G,B,A) → BGRA (B,G,R,A). Verde (#00FF00) permanece intacto;
+	// vermelho (#FF0000) e azul (#0000FF) trocam entre si — reproduz o bug.
+	cases := []struct {
+		name string
+		in   []byte
+		want []byte
+	}{
+		{"vermelho pra azul", []byte{0xFF, 0x00, 0x00, 0xFF}, []byte{0x00, 0x00, 0xFF, 0xFF}},
+		{"azul pra vermelho", []byte{0x00, 0x00, 0xFF, 0xFF}, []byte{0xFF, 0x00, 0x00, 0xFF}},
+		{"verde permanece", []byte{0x00, 0xFF, 0x00, 0xFF}, []byte{0x00, 0xFF, 0x00, 0xFF}},
+		{"grayscale invariante", []byte{0x80, 0x80, 0x80, 0xAA}, []byte{0x80, 0x80, 0x80, 0xAA}},
+		{"multi pixel", []byte{0xFF, 0x00, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF},
+			[]byte{0x00, 0x00, 0xFF, 0xFF, 0x00, 0xFF, 0x00, 0xFF}},
+	}
+	for _, c := range cases {
+		buf := append([]byte(nil), c.in...)
+		swapRB_BGRA(buf)
+		if string(buf) != string(c.want) {
+			t.Errorf("%s: swapRB_BGRA(%v) = %v, want %v", c.name, c.in, buf, c.want)
+		}
+		// Idempotência: aplicar de novo deve restaurar o original.
+		swapRB_BGRA(buf)
+		if string(buf) != string(c.in) {
+			t.Errorf("%s: segunda chamada não é idempotente: %v", c.name, buf)
+		}
+	}
+
+	// Buffer vazio e buffer com tamanho não-múltiplo de 4 não devem causar
+	// panic (path de fallback byte-a-byte).
+	for _, edge := range [][]byte{nil, {}, {0xFF}, {0xFF, 0x00}} {
+		swapRB_BGRA(edge) // só garante que não panica
 	}
 }

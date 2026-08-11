@@ -97,12 +97,21 @@ func NewDXGIGoD3dCapturerMode(monitorIndex int, drawCursor bool) (Capturer, erro
 func (c *dxgiGoD3dCapturer) AcquireNextFrame() (*Frame, error) {
 	// Usa Snapshot() DIRETAMENTE (não GetImage) para evitar o latch de swizzle
 	// do go-d3d: GetImage aplica swizzle.BGRA() (BGRA→RGBA) SOMENTE após o
-	// primeiro frame sem metadata — antes disso retorna BGRA cru. Isso fazia o
-	// frame alternar entre BGRA e RGBA de forma intermitente → cores invertidas.
+	// primeiro frame sem metadata — antes disso retorna bytes crus. Isso fazia
+	// o frame alternar entre formatos de forma imprevisível → cores invertidas.
 	//
-	// Snapshot() retorna SEMPRE os bytes BGRA crus (DXGI_FORMAT_B8G8R8A8_UNORM),
-	// independentemente do estado do latch. Os encoders (jpeg/webp) já esperam
-	// BGRA e fazem o swap B↔R corretamente.
+	// IMPORTANTE — formato de saída do Snapshot():
+	// O go-d3d cria o duplicator via NewIDXGIOutputDuplication, que força
+	// DXGI_FORMAT_R8G8B8A8_UNORM (RGBA) através de DuplicateOutput1. No
+	// caminho principal (Win10/11 com DPI awareness PerMonitorV2), o
+	// Snapshot() devolve a staging herdando esse formato → bytes RGBA.
+	// Somente no fallback (DuplicateOutput, sem suporte a formato forçado) o
+	// desktop nativo é entregue, tipicamente B8G8R8A8_UNORM (BGRA).
+	//
+	// Os encoders (jpeg/webp/tile) e os demais capturers (dxgi manual, GDI)
+	// assumem BGRA. Para manter o contrato uniforme do Frame e evitar a
+	// inversão R↔B (verde ok; vermelho→azul, azul→vermelho), normalizamos o
+	// frame para BGRA a seguir.
 	unmap, mappedRect, size, err := c.dup.Snapshot(200)
 	if err != nil {
 		if err == outputduplication.ErrNoImageYet {
@@ -131,6 +140,11 @@ func (c *dxgiGoD3dCapturer) AcquireNextFrame() (*Frame, error) {
 		dst += contentWidth
 	}
 
+	// Normaliza RGBA → BGRA no caminho principal do go-d3d (ver comentário
+	// acima). Swap dos bytes 0 (R) e 2 (B) preservando G e A. Buffer é novo
+	// (alocado acima), então a mutação in-place é segura.
+	swapRB_BGRA(frame.Data)
+
 	if c.drawCursor {
 		// Desenha o cursor sobre o frame capturado (BGRA) — igual ao
 		// GetImage com DrawPointer, mas preservando o formato BGRA.
@@ -138,6 +152,35 @@ func (c *dxgiGoD3dCapturer) AcquireNextFrame() (*Frame, error) {
 	}
 
 	return frame, nil
+}
+
+// swapRB_BGRA converte um buffer RGBA (R,G,B,A) para BGRA (B,G,R,A) trocando
+// os bytes 0 e 2 de cada pixel, preservando G e A. Compatível com o mesmo
+// swap feito pelos encoders (jpeg/webp) — idempotente se aplicado de novo.
+func swapRB_BGRA(buf []byte) {
+	// Buffer vazio ou não alinhado: não há pixels para trocar.
+	if len(buf) < 4 {
+		return
+	}
+	// Aproveita chunk de 4 bytes (uint32) quando o comprimento for múltiplo
+	// de 4 (sempre verdade para buffers RGBA sem padding).
+	if len(buf)%4 == 0 {
+		pixels := unsafe.Slice((*uint32)(unsafe.Pointer(&buf[0])), len(buf)/4)
+		for i := range pixels {
+			c := pixels[i]
+			// RGBA como uint32 LE = 0xAABBGGRR (bytes [R,G,B,A]).
+			// BGRA como uint32 LE = 0xAARRGGBB (bytes [B,G,R,A]).
+			// Mantém G (bits 8-15) e A (bits 24-31); troca R (0-7) e B (16-23).
+			pixels[i] = (c & 0xFF00FF00) | // A e G nos lugares certos
+				((c & 0x000000FF) << 16) | // R → posição de B
+				((c & 0x00FF0000) >> 16) // B → posição de R
+		}
+		return
+	}
+	// Fallback byte-a-byte (padding atípico).
+	for i := 0; i+3 < len(buf); i += 4 {
+		buf[i], buf[i+2] = buf[i+2], buf[i]
+	}
 }
 
 // drawCursorBGRA desenha o cursor do sistema sobre um frame BGRA.
