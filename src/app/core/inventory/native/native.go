@@ -22,6 +22,8 @@ type Collector interface {
 	CollectDisks(ctx context.Context) ([]models.DiskInfo, []models.DiskInfo, error)
 	// CollectDiskMediaTypes returns a map of drive letter -> media type (SSD/HDD).
 	CollectDiskMediaTypes(ctx context.Context) map[string]string
+	// CollectSmartHealth returns a map of drive letter -> SMART/health data.
+	CollectSmartHealth(ctx context.Context) map[string]SmartHealth
 	// CollectNetworks returns network interfaces.
 	CollectNetworks(ctx context.Context) ([]models.NetworkInfo, error)
 	// CollectNetworkConnections returns listening ports and open sockets.

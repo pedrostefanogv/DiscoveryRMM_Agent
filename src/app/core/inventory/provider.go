@@ -248,6 +248,32 @@ func (p *Provider) collectWithNative(ctx context.Context) (models.InventoryRepor
 		}
 	}
 
+	// SMART/health data for volumes (keyed by drive letter).
+	smart := p.native.CollectSmartHealth(ctx)
+	for i := range volumes {
+		dl := strings.ToUpper(strings.TrimSpace(volumes[i].Device))
+		sh, ok := smart[dl]
+		if !ok {
+			continue
+		}
+		volumes[i].SmartStatus = mapSmartStatus(sh.HealthStatus)
+		if sh.TemperatureC > 0 {
+			t := sh.TemperatureC
+			volumes[i].TemperatureC = &t
+		}
+		if sh.PowerOnHours > 0 {
+			p := sh.PowerOnHours
+			volumes[i].PowerOnHours = &p
+		}
+		// Erros acumulados (leitura + escrita) são o sinal mais relevante de
+		// degradação. Wear (desgaste SSD) não é mapeado para ReallocatedSectors
+		// para não misturar semânticas distintas.
+		if sh.ReadErrorsTotal > 0 || sh.WriteErrorsTotal > 0 {
+			r := sh.ReadErrorsTotal + sh.WriteErrorsTotal
+			volumes[i].ReallocatedSectors = &r
+		}
+	}
+
 	hw.MemoryModulesCount = len(memoryModules)
 
 	report := models.InventoryReport{
@@ -584,6 +610,21 @@ func (p *Provider) collectWithOsquery(ctx context.Context) (models.InventoryRepo
 	p.emitProgressHeartbeat()
 
 	return report, nil
+}
+
+// mapSmartStatus normalizes the Windows HealthStatus string into a compact
+// status used by the API/frontend.
+func mapSmartStatus(health string) string {
+	switch strings.ToLower(strings.TrimSpace(health)) {
+	case "healthy":
+		return "OK"
+	case "warning":
+		return "Atenção"
+	case "unhealthy":
+		return "Falha prevista"
+	default:
+		return "Indisponível"
+	}
 }
 
 // collectPhysicalDiskMediaTypes queries Get-PhysicalDisk via PowerShell to

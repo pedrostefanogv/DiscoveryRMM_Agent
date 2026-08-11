@@ -213,6 +213,13 @@ type DiskInfo struct {
 	Serial       string `json:"serial"`
 	Partitions   int    `json:"partitions"`
 	Description  string `json:"description"`
+
+	// ── Saúde SMART (opcional; preenchido quando o Windows expõe os dados) ──
+	// smartStatus: "OK" | "Falha prevista" | "Indisponível"
+	SmartStatus        string `json:"smartStatus,omitempty"`
+	TemperatureC       *int   `json:"temperatureC,omitempty"`
+	PowerOnHours       *int   `json:"powerOnHours,omitempty"`
+	ReallocatedSectors *int   `json:"reallocatedSectors,omitempty"`
 }
 
 type NetworkInfo struct {

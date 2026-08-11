@@ -29,6 +29,11 @@ func (windowsCollector) CollectDiskMediaTypes(ctx context.Context) map[string]st
 	return collectDiskMediaTypesWMI()
 }
 
+// CollectSmartHealth returns a map of drive letter -> SMART/health data.
+func (windowsCollector) CollectSmartHealth(ctx context.Context) map[string]SmartHealth {
+	return collectSmartHealth()
+}
+
 // CollectNetworks returns network interfaces using GetAdaptersAddresses.
 func (windowsCollector) CollectNetworks(ctx context.Context) ([]models.NetworkInfo, error) {
 	return collectNetworksNative(ctx)

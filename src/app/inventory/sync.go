@@ -90,6 +90,12 @@ type agentDiskInfo struct {
 	FreeSpaceBytes int64  `json:"freeSpaceBytes"`
 	MediaType      string `json:"mediaType"`
 	CollectedAt    string `json:"collectedAt"`
+
+	// ── Saúde SMART (opcional) ──
+	SmartStatus        string `json:"smartStatus,omitempty"`
+	TemperatureC       *int   `json:"temperatureC,omitempty"`
+	PowerOnHours       *int   `json:"powerOnHours,omitempty"`
+	ReallocatedSectors *int   `json:"reallocatedSectors,omitempty"`
 }
 
 type agentNetworkAdapterInfo struct {
@@ -558,6 +564,11 @@ func buildAgentHardwareEnvelope(report models.InventoryReport, version, commitHa
 			FreeSpaceBytes: free,
 			MediaType:      trimToMaxLen(firstNonEmptyString(strings.TrimSpace(d.MediaType), strings.TrimSpace(d.Type)), 50),
 			CollectedAt:    collected,
+
+			SmartStatus:        trimToMaxLen(strings.TrimSpace(d.SmartStatus), 30),
+			TemperatureC:       d.TemperatureC,
+			PowerOnHours:       d.PowerOnHours,
+			ReallocatedSectors: d.ReallocatedSectors,
 		})
 	}
 

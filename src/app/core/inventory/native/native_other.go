@@ -26,6 +26,9 @@ func (unsupportedCollector) CollectDisks(context.Context) ([]models.DiskInfo, []
 func (unsupportedCollector) CollectDiskMediaTypes(context.Context) map[string]string {
 	return nil
 }
+func (unsupportedCollector) CollectSmartHealth(context.Context) map[string]SmartHealth {
+	return nil
+}
 func (unsupportedCollector) CollectNetworks(context.Context) ([]models.NetworkInfo, error) {
 	return nil, ErrUnsupported
 }
