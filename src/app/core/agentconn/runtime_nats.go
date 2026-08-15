@@ -61,6 +61,11 @@ func (r *Runtime) runNATSSession(ctx context.Context, cfg Config, server, transp
 		nats.ClosedHandler(func(_ *nats.Conn) {
 			r.logf("[heartbeat][nats] conexao NATS encerrada permanentemente â€” heartbeats nao serao mais enviados")
 		}),
+		nats.ErrorHandler(func(_ *nats.Conn, _ *nats.Subscription, err error) {
+			// Erros assíncronos do NATS (ex: Permissions Violation em subscribes
+			// de remote session, publish negado, etc.) — loga para diagnóstico.
+			r.logf("[nats][error] %v", err)
+		}),
 	}
 	if wsProxyPath != "" {
 		opts = append(opts, nats.ProxyPath(wsProxyPath))

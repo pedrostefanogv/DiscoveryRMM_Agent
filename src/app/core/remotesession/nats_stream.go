@@ -67,10 +67,18 @@ func (h *NatsStreamHandler) subjectBase() string {
 	return fmt.Sprintf("tenant.%s.site.%s.agent.%s.remote.session", h.tenantID, h.siteID, h.agentID)
 }
 
-// subscribeBase returns the wildcard pattern for subscribing across tenants/sites/agents.
-// Format: tenant.*.site.*.agent.*.remote.session.{sessionID}
+// subscribePattern returns the literal subject for subscribing to a session's
+// interactive subjects (input, term.in, files.req, proxy.req, signal, control).
+// Format: tenant.{tenantID}.site.{siteID}.agent.{agentID}.remote.session.{sessionID}.{suffix}
+//
+// IMPORTANTE (segurança): o subject é LITERAL e amarrado à identidade do próprio
+// agente (tenantID/siteID/agentID injetados via SetNatsConn). NÃO usar wildcards
+// (tenant.*.site.*.agent.*) aqui: além de não serem cobertos pela ACL literal do
+// backend (Permissions Violation), wildcards permitiriam receber mensagens
+// destinadas a outros agentes/sites/tenants. O literal é um subconjunto exato da
+// permissão `tenant.{c}.site.{s}.agent.{a}.remote.session.>` emitida pelo backend.
 func (h *NatsStreamHandler) subscribePattern(sessionID, suffix string) string {
-	return fmt.Sprintf("tenant.*.site.*.agent.*.remote.session.%s.%s", stripHyphens(sessionID), suffix)
+	return fmt.Sprintf("%s.%s.%s", h.subjectBase(), stripHyphens(sessionID), suffix)
 }
 
 // publishSubject builds the literal publish subject for a given session and suffix.
@@ -217,9 +225,16 @@ func (h *NatsStreamHandler) PublishSignal(sessionID string, signalData []byte) e
 
 // SubscribeToInput subscreve a eventos de input (mouse/teclado) do viewer.
 func (h *NatsStreamHandler) SubscribeToInput(sessionID string, handler func(inputData []byte)) (*nats.Subscription, error) {
-	return h.nc.Subscribe(h.subscribePattern(sessionID, "input"), func(msg *nats.Msg) {
+	pattern := h.subscribePattern(sessionID, "input")
+	sub, err := h.nc.Subscribe(pattern, func(msg *nats.Msg) {
 		handler(msg.Data)
 	})
+	if err != nil {
+		log.Printf("[remote-session-nats] SubscribeToInput erro: pattern=%s err=%v\n", pattern, err)
+	} else {
+		log.Printf("[remote-session-nats] SubscribeToInput ok: pattern=%s\n", pattern)
+	}
+	return sub, err
 }
 
 // SubscribeToTermIn subscreve a stdin do terminal enviado pelo viewer.

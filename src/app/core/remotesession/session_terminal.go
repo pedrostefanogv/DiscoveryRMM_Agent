@@ -313,13 +313,13 @@ func (st *SessionTerminal) Start(ctx context.Context, shellKind terminal.ShellKi
 
 		log.Printf("[session-terminal] shell saiu: shell=%s motivo=%s hasOutput=%v",
 			shellKind, exitMsg, hasOutput)
-		if hasOutput {
-			st.natsStream.PublishTermOut(st.sessionID,
-				fmt.Sprintf(`{"data":"","seq":%d,"exit":true,"reason":"%s"}`, exitSeq, exitMsg))
-		} else {
-			st.natsStream.PublishTermOut(st.sessionID,
-				fmt.Sprintf(`{"data":"","seq":0,"exit":true,"reason":"%s"}`, exitMsg))
-		}
+		exitPayload, _ := json.Marshal(map[string]any{
+			"data":   "",
+			"seq":    exitSeq,
+			"exit":   true,
+			"reason": exitMsg,
+		})
+		st.natsStream.PublishTermOut(st.sessionID, string(exitPayload))
 
 		// Notifica o manager para encerrar a sessão (console morto)
 		st.mu.RLock()
@@ -447,4 +447,3 @@ func (st *SessionTerminal) Stop() {
 
 // Ensure imports
 var _ context.Context
-var _ fmt.Stringer
