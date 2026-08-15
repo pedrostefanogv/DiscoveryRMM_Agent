@@ -150,15 +150,21 @@ func (m *Manager) handleStart(ctx context.Context, payload map[string]any) (bool
 		doneCh:       make(chan struct{}),
 		Meta:         payload, // armazena payload original para acesso a shell, termCols, termRows
 	}
+
+	// Garante que o NatsStreamHandler esta configurado. Como o comando start
+	// chega via NATS, o natsStream normalmente já está setado (onNatsConnected).
+	// Se não estiver, NÃO criar sessão fantasma: os runners retornariam cedo e
+	// o viewer ficaria preso sem stream. Retorna erro para o backend ANTES de
+	// registrar a sessão no map (evita sessão órfã que nunca seria limpa).
+	if m.natsStream == nil {
+		log.Printf("[remote-session] handleStart: natsStream NAO configurado — rejeitando start sessionId=%s kind=%s\n",
+			sessionID, kind)
+		return false, "nats stream not ready"
+	}
+
 	m.sessions[sessionID] = session
 
-	// Garante que o NatsStreamHandler esta configurado (extrai tenant/site/agent do subject)
-	if m.natsStream == nil {
-		// Tenta extrair IDs do natsSubject: tenant.{c}.site.{s}.agent.{a}.remote.session.{id}
-		m.publishEventLegacy(sessionID, "started", session)
-	} else {
-		m.natsStream.PublishEvent(sessionID, "started", session)
-	}
+	m.natsStream.PublishEvent(sessionID, "started", session)
 
 	// Inicia o stream conforme o tipo (goroutine com safego)
 	switch kind {
