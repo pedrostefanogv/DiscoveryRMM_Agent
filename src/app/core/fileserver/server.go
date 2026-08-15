@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -27,7 +28,7 @@ type FileSessionRequest struct {
 	Path        string `json:"path"`
 	NewPath     string `json:"newPath,omitempty"` // rename/move/copy destino
 	Data        []byte `json:"data,omitempty"`
-	ChunkIndex  int    `json:"chunkIndex,omitempty"`
+	ChunkIndex  *int   `json:"chunkIndex,omitempty"` // nil = sem chunk (arquivo inteiro)
 	ChunkSize   int    `json:"chunkSize,omitempty"`
 	TotalChunks int    `json:"totalChunks,omitempty"`
 }
@@ -38,7 +39,7 @@ type FileSessionResponse struct {
 	RequestID   string     `json:"requestId"`
 	Success     bool       `json:"success"`
 	Error       string     `json:"error,omitempty"`
-	Entries     []FileInfo `json:"entries,omitempty"`
+	Entries     []FileInfo `json:"entries"` // sempre serializado ([] quando vazio)
 	Data        []byte     `json:"data,omitempty"`
 	Size        int64      `json:"size,omitempty"`
 	ChunkIndex  int        `json:"chunkIndex,omitempty"`
@@ -72,6 +73,11 @@ func NewServer(basePath string) *Server {
 	return &Server{basePath: filepath.Clean(basePath)}
 }
 
+// RootPath retorna o diretório raiz (sandbox) do servidor.
+func (s *Server) RootPath() string {
+	return s.basePath
+}
+
 // HandleRequest processa uma requisicao de arquivo (protocolo versionado v1).
 // Aceita tanto FileSessionRequest (com requestId) quanto FileRequest legado.
 func (s *Server) HandleRequest(raw []byte) []byte {
@@ -86,7 +92,7 @@ func (s *Server) HandleRequest(raw []byte) []byte {
 		if err := json.Unmarshal(raw, &legacy); err != nil {
 			return s.marshal(s.errorResponse("", "payload json invalido: "+err.Error()))
 		}
-		resp := s.dispatch(legacy.Action, legacy.Path, "", legacy.Data, 0, 0, 0)
+		resp := s.dispatch(legacy.Action, legacy.Path, "", legacy.Data, nil, 0, 0)
 		// Converte para FileResponse legado
 		legacyResp := FileResponse{Success: resp.Success, Error: resp.Error, Files: resp.Entries, Data: resp.Data, Size: resp.Size}
 		b, _ := json.Marshal(legacyResp)
@@ -96,7 +102,7 @@ func (s *Server) HandleRequest(raw []byte) []byte {
 	return s.marshal(s.dispatch(req.Action, req.Path, req.NewPath, req.Data, req.ChunkIndex, req.ChunkSize, req.TotalChunks))
 }
 
-func (s *Server) dispatch(action, path, newPath string, data []byte, chunkIndex, chunkSize, totalChunks int) FileSessionResponse {
+func (s *Server) dispatch(action, path, newPath string, data []byte, chunkIndex *int, chunkSize, totalChunks int) FileSessionResponse {
 	var resp FileSessionResponse
 	switch action {
 	case "list":
@@ -138,7 +144,9 @@ func (s *Server) handleList(path string) FileSessionResponse {
 		return s.errorResponse("", "listar diretorio: "+err.Error())
 	}
 
-	var files []FileInfo
+	// Ordena: diretorios primeiro, depois arquivos, ambos alfabeticamente.
+	// (os.ReadDir ja ordena por nome, mas nao garante diretorios primeiro.)
+	files := make([]FileInfo, 0, len(entries))
 	for _, entry := range entries {
 		info, err := entry.Info()
 		if err != nil {
@@ -153,13 +161,20 @@ func (s *Server) handleList(path string) FileSessionResponse {
 		})
 	}
 
+	sort.SliceStable(files, func(i, j int) bool {
+		if files[i].IsDir != files[j].IsDir {
+			return files[i].IsDir
+		}
+		return strings.ToLower(files[i].Name) < strings.ToLower(files[j].Name)
+	})
+
 	return s.okResponse(files, nil, 0, 0, 0)
 }
 
-// handleGet retorna um arquivo. Se chunkIndex >= 0, retorna apenas o chunk
-// solicitado (chunked download com resume). Caso contrario, retorna o arquivo
-// inteiro se <= 1MB, ou o primeiro chunk se maior.
-func (s *Server) handleGet(path string, chunkIndex, chunkSize int) FileSessionResponse {
+// handleGet retorna um arquivo. Se chunkIndex != nil, retorna apenas o chunk
+// solicitado (chunked download com resume). Caso contrario (nil), retorna o
+// arquivo inteiro se <= 1MB, ou o primeiro chunk se maior.
+func (s *Server) handleGet(path string, chunkIndex *int, chunkSize int) FileSessionResponse {
 	fullPath, err := s.safePath(path)
 	if err != nil {
 		return s.errorResponse("", err.Error())
@@ -181,7 +196,7 @@ func (s *Server) handleGet(path string, chunkIndex, chunkSize int) FileSessionRe
 	}
 
 	// Sem chunkIndex: arquivo pequeno retorna inteiro; grande retorna primeiro chunk
-	if chunkIndex < 0 {
+	if chunkIndex == nil {
 		if info.Size() <= 1<<20 {
 			data, err := os.ReadFile(fullPath)
 			if err != nil {
@@ -189,11 +204,12 @@ func (s *Server) handleGet(path string, chunkIndex, chunkSize int) FileSessionRe
 			}
 			return s.okResponse(nil, data, info.Size(), 0, 1)
 		}
-		chunkIndex = 0
+		zero := 0
+		chunkIndex = &zero
 	}
 
-	if chunkIndex >= totalChunks {
-		return s.errorResponse("", fmt.Sprintf("chunk %d fora do range (0-%d)", chunkIndex, totalChunks-1))
+	if *chunkIndex >= totalChunks {
+		return s.errorResponse("", fmt.Sprintf("chunk %d fora do range (0-%d)", *chunkIndex, totalChunks-1))
 	}
 
 	f, err := os.Open(fullPath)
@@ -202,7 +218,7 @@ func (s *Server) handleGet(path string, chunkIndex, chunkSize int) FileSessionRe
 	}
 	defer f.Close()
 
-	offset := int64(chunkIndex * chunkSize)
+	offset := int64(*chunkIndex * chunkSize)
 	if _, err := f.Seek(offset, 0); err != nil {
 		return s.errorResponse("", "seek: "+err.Error())
 	}
@@ -213,12 +229,13 @@ func (s *Server) handleGet(path string, chunkIndex, chunkSize int) FileSessionRe
 		return s.errorResponse("", "ler chunk: "+err.Error())
 	}
 
-	return s.okResponse(nil, buf[:n], info.Size(), chunkIndex, totalChunks)
+	return s.okResponse(nil, buf[:n], info.Size(), *chunkIndex, totalChunks)
 }
 
-// handlePut escreve um arquivo. Com chunkIndex >= 0, escreve o chunk na
-// posicao correta (upload chunked com resume). Sem chunkIndex, escreve inteiro.
-func (s *Server) handlePut(path string, data []byte, chunkIndex, chunkSize, totalChunks int) FileSessionResponse {
+// handlePut escreve um arquivo. Com chunkIndex != nil, escreve o chunk na
+// posicao correta (upload chunked com resume). Sem chunkIndex (nil), escreve
+// o arquivo inteiro de uma vez.
+func (s *Server) handlePut(path string, data []byte, chunkIndex *int, chunkSize, totalChunks int) FileSessionResponse {
 	fullPath, err := s.safePath(path)
 	if err != nil {
 		return s.errorResponse("", err.Error())
@@ -230,7 +247,7 @@ func (s *Server) handlePut(path string, data []byte, chunkIndex, chunkSize, tota
 		return s.errorResponse("", "criar diretorio: "+err.Error())
 	}
 
-	if chunkIndex < 0 {
+	if chunkIndex == nil {
 		if err := os.WriteFile(fullPath, data, 0644); err != nil {
 			return s.errorResponse("", "escrever arquivo: "+err.Error())
 		}
@@ -244,7 +261,7 @@ func (s *Server) handlePut(path string, data []byte, chunkIndex, chunkSize, tota
 	// Chunk 0: trunca o arquivo (remove restos de uploads anteriores).
 	// Chunks seguintes: append/seek sem truncar.
 	flags := os.O_CREATE | os.O_WRONLY
-	if chunkIndex == 0 {
+	if *chunkIndex == 0 {
 		flags |= os.O_TRUNC
 	}
 
@@ -254,7 +271,7 @@ func (s *Server) handlePut(path string, data []byte, chunkIndex, chunkSize, tota
 	}
 	defer f.Close()
 
-	offset := int64(chunkIndex * chunkSize)
+	offset := int64(*chunkIndex * chunkSize)
 	if _, err := f.Seek(offset, 0); err != nil {
 		return s.errorResponse("", "seek: "+err.Error())
 	}
@@ -266,7 +283,7 @@ func (s *Server) handlePut(path string, data []byte, chunkIndex, chunkSize, tota
 	if totalChunks <= 0 {
 		totalChunks = 1
 	}
-	return s.okResponse(nil, nil, int64(len(data)), chunkIndex, totalChunks)
+	return s.okResponse(nil, nil, int64(len(data)), *chunkIndex, totalChunks)
 }
 
 func (s *Server) handleDelete(path string) FileSessionResponse {
@@ -426,6 +443,12 @@ func (s *Server) safePath(rel string) (string, error) {
 }
 
 func (s *Server) okResponse(files []FileInfo, data []byte, size int64, chunkIndex, totalChunks int) FileSessionResponse {
+	// Garante entries serializado como [] (nunca null/ausente) — o frontend
+	// trata `success=true` sem `entries` como erro; asterisco diretório vazio
+	// deve resultar em lista vazia, não em erro.
+	if files == nil {
+		files = []FileInfo{}
+	}
 	return FileSessionResponse{
 		Version:     1,
 		Success:     true,
@@ -443,6 +466,7 @@ func (s *Server) errorResponse(requestID, msg string) FileSessionResponse {
 		RequestID: requestID,
 		Success:   false,
 		Error:     msg,
+		Entries:   []FileInfo{},
 	}
 }
 

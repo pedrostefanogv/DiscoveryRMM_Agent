@@ -253,12 +253,30 @@ func (h *NatsStreamHandler) SubscribeToTermIn(sessionID string, handler func(dat
 
 // SubscribeToFilesReq subscreve a requisicoes de arquivos (list/get/put/delete).
 func (h *NatsStreamHandler) SubscribeToFilesReq(sessionID string, handler func(reqData []byte) []byte) (*nats.Subscription, error) {
-	return h.nc.Subscribe(h.subscribePattern(sessionID, "files.req"), func(msg *nats.Msg) {
+	pattern := h.subscribePattern(sessionID, "files.req")
+	sub, err := h.nc.Subscribe(pattern, func(msg *nats.Msg) {
 		resp := handler(msg.Data)
 		if resp != nil {
 			_ = h.nc.Publish(h.publishSubject(sessionID, "files.resp"), resp)
 		}
 	})
+	if err != nil {
+		log.Printf("[remote-session-nats] SubscribeToFilesReq erro: pattern=%s err=%v\n", pattern, err)
+	} else {
+		log.Printf("[remote-session-nats] SubscribeToFilesReq ok: pattern=%s\n", pattern)
+	}
+	return sub, err
+}
+
+// PublishFilesReady notifica o viewer que a sessão de arquivos está pronta
+// (subscribe em files.req ativo). O viewer aguarda este evento antes de
+// enviar o primeiro list — evita a race em que o list chega antes do
+// subscribe e é perdido (NATS core não tem replay).
+func (h *NatsStreamHandler) PublishFilesReady(sessionID string, data any) error {
+	payload, _ := json.Marshal(data)
+	subject := h.publishSubject(sessionID, "files.ready")
+	log.Printf("[remote-session-nats] PublishFilesReady: subject=%s\n", subject)
+	return h.nc.Publish(subject, payload)
 }
 
 // SubscribeToProxyReq subscreve a requisicoes de proxy HTTP.

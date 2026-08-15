@@ -50,6 +50,14 @@ func (sf *SessionFiles) Start(ctx context.Context) error {
 
 	log.Printf("[session-files] sessão iniciada para %s", sf.sessionID)
 
+	// Notifica o viewer que a sessão está pronta (subscribe ativo). O viewer
+	// aguarda files.ready antes de enviar o primeiro list — evita a race em
+	// que o list chega antes do subscribe e é perdido (NATS core sem replay).
+	_ = sf.natsStream.PublishFilesReady(sf.sessionID, map[string]any{
+		"rootPath": sf.server.RootPath(),
+		"status":   "ready",
+	})
+
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
