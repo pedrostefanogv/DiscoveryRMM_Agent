@@ -39,6 +39,9 @@
     "js/app-window.js",
     "js/app-store-updates.js",
     "js/app-inventory.js",
+    // Bundle A2UI (renderer de interfaces geradas por IA). Deve carregar
+    // ANTES de app-chat.js, que consome window.A2uiChat.
+    "a2ui-bundle.js",
     "js/app-chat.js",
     "js/app-support.js",
     "js/app-knowledge.js",

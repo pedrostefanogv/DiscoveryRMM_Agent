@@ -114,3 +114,31 @@ func (a *App) AnswerChatQuestion(questionID, answer string) {
 		// Channel full, discard
 	}
 }
+
+// A2uiActionPayload é a estrutura de uma ação do usuário em uma surface A2UI.
+type A2uiActionPayload struct {
+	SurfaceID string         `json:"surfaceId"`
+	Name      string         `json:"name"`
+	Context   map[string]any `json:"context"`
+}
+
+// AnswerA2uiAction é o binding Wails chamado pelo frontend quando o usuário
+// interage com um componente A2UI (clique em botão, input, etc.).
+//
+// A ação é encaminhada ao serviço de chat, que a resolve como um tool result
+// no próximo round do loop multi-round (o LLM recebe o resultado e continua).
+// Se não houver stream ativo, a ação é descartada silenciosamente.
+func (a *App) AnswerA2uiAction(payloadJSON string) {
+	if a.chatSvc == nil {
+		return
+	}
+	var payload A2uiActionPayload
+	if err := json.Unmarshal([]byte(payloadJSON), &payload); err != nil {
+		a.logs.append("[chat] AnswerA2uiAction: payload inválido: " + err.Error())
+		return
+	}
+	if strings.TrimSpace(payload.Name) == "" {
+		return
+	}
+	a.chatSvc.SubmitA2uiAction(payload.SurfaceID, payload.Name, payload.Context)
+}

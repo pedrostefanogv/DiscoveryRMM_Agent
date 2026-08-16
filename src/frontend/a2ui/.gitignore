@@ -1,0 +1,6 @@
+# Dependências npm do bundle A2UI — não commitadas.
+# O artefato gerado (frontend/a2ui-bundle.js) é commitado; o runtime não
+# depende de node/npm. Reinstale com `npm install` em frontend/a2ui e rode
+# `npm run build` apenas quando precisar regenerar o bundle.
+node_modules/
+package-lock.json

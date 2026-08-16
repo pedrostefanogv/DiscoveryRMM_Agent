@@ -122,6 +122,20 @@ export function AddTicketCommentWithOptions(ticketID, content, isInternal) {
 }
 
 /**
+ * AnswerA2uiAction é o binding Wails chamado pelo frontend quando o usuário
+ * interage com um componente A2UI (clique em botão, input, etc.).
+ * 
+ * A ação é encaminhada ao serviço de chat, que a resolve como um tool result
+ * no próximo round do loop multi-round (o LLM recebe o resultado e continua).
+ * Se não houver stream ativo, a ação é descartada silenciosamente.
+ * @param {string} payloadJSON
+ * @returns {$CancellablePromise<void>}
+ */
+export function AnswerA2uiAction(payloadJSON) {
+    return $Call.ByID(1598998367, payloadJSON);
+}
+
+/**
  * AnswerChatQuestion is the Wails binding called by the frontend when the user clicks an option.
  * @param {string} questionID
  * @param {string} answer

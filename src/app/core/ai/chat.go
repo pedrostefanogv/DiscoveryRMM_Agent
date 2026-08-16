@@ -63,6 +63,18 @@ type Service struct {
 	activeStreamCancel context.CancelFunc
 
 	chatLogger *ChatLogger
+
+	// a2uiActionMu protege a ação A2UI pendente (userAction) que será enviada
+	// ao LLM no próximo round do loop multi-round.
+	a2uiActionMu sync.Mutex
+	a2uiAction   *A2uiAction
+}
+
+// A2uiAction representa uma ação do usuário em uma surface A2UI.
+type A2uiAction struct {
+	SurfaceID string
+	Name      string
+	Context   map[string]any
 }
 
 // NewService creates a chat service.
@@ -71,6 +83,31 @@ func NewService(registry *mcp.Registry) *Service {
 		registry: registry,
 		history:  []Message{},
 	}
+}
+
+// SubmitA2uiAction registra uma ação do usuário em uma surface A2UI. A ação é
+// consumida pelo próximo round do loop multi-round (SendStreamMultiRound) e
+// enviada ao LLM como um tool result, permitindo que o agente reaja ao clique.
+func (s *Service) SubmitA2uiAction(surfaceID, name string, context map[string]any) {
+	s.a2uiActionMu.Lock()
+	defer s.a2uiActionMu.Unlock()
+	s.a2uiAction = &A2uiAction{SurfaceID: surfaceID, Name: name, Context: context}
+}
+
+// takeA2uiAction consome e retorna a ação A2UI pendente (se houver).
+func (s *Service) takeA2uiAction() *A2uiAction {
+	s.a2uiActionMu.Lock()
+	defer s.a2uiActionMu.Unlock()
+	action := s.a2uiAction
+	s.a2uiAction = nil
+	return action
+}
+
+// peekA2uiAction retorna a ação A2UI pendente SEM consumi-la (se houver).
+func (s *Service) peekA2uiAction() *A2uiAction {
+	s.a2uiActionMu.Lock()
+	defer s.a2uiActionMu.Unlock()
+	return s.a2uiAction
 }
 
 // SetLogger configures an optional callback for chat diagnostics.
@@ -123,6 +160,11 @@ func (s *Service) ClearHistory() {
 	defer s.mu.Unlock()
 	s.history = []Message{}
 	s.sessionID = ""
+	// Limpa também a ação A2UI pendente (se o usuário clicou num botão e depois
+	// limpou o chat, a ação não deve ser processada na próxima mensagem).
+	s.a2uiActionMu.Lock()
+	s.a2uiAction = nil
+	s.a2uiActionMu.Unlock()
 }
 
 func (s *Service) registerStreamCancel(cancel context.CancelFunc) uint64 {

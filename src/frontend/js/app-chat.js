@@ -261,6 +261,184 @@ function disableQuestionButtons(container) {
   });
 }
 
+// ─── A2UI (Agent-to-User Interface) — interfaces ricas geradas por IA ───
+
+// Estado da surface A2UI ativa no chat.
+var a2uiSurfaceHandle = null;
+var a2uiSurfaceBubble = null;
+
+// onChatA2ui recebe uma mensagem A2UI (JSON) emitida pelo agent via "chat:a2ui".
+// A primeira mensagem (createSurface) cria a bolha/surface; as demais
+// (updateComponents/updateDataModel) alimentam o MessageProcessor.
+function onChatA2ui(data) {
+  var msg = typeof data === "string" ? data : JSON.stringify(data || "");
+  if (!msg) return;
+
+  // Garante que o bundle A2UI foi carregado (window.A2uiChat).
+  if (!window.A2uiChat || typeof window.A2uiChat.createSurface !== "function") {
+    console.warn("[a2ui] bundle A2UI não carregado; ignorando mensagem");
+    return;
+  }
+
+  try {
+    var parsed = JSON.parse(msg);
+    if (!parsed || !parsed.version) return;
+
+    // Determina o surfaceId da mensagem (createSurface/updateComponents/...).
+    var msgSurfaceId = null;
+    if (parsed.createSurface) {
+      msgSurfaceId = parsed.createSurface.surfaceId || "discovery-chat-surface";
+    } else if (parsed.updateComponents) {
+      msgSurfaceId = parsed.updateComponents.surfaceId || null;
+    } else if (parsed.updateDataModel) {
+      msgSurfaceId = parsed.updateDataModel.surfaceId || null;
+    } else if (parsed.deleteSurface) {
+      msgSurfaceId = parsed.deleteSurface.surfaceId || null;
+    }
+
+    // Se a mensagem referencia uma surface diferente da ativa, ignora (defensivo).
+    if (
+      msgSurfaceId &&
+      a2uiSurfaceHandle &&
+      a2uiSurfaceHandle.surfaceId !== msgSurfaceId
+    ) {
+      console.warn("[a2ui] mensagem para surface diferente; ignorando:", msgSurfaceId);
+      return;
+    }
+
+    // createSurface → cria a bolha e a surface. O ensureA2uiSurface já envia
+    // a mensagem createSurface ao processor (via entry.js), então não reenviamos
+    // aqui para evitar duplicação.
+    var isCreateSurface = !!parsed.createSurface;
+    if (isCreateSurface) {
+      ensureA2uiSurface(msgSurfaceId || "discovery-chat-surface");
+    }
+
+    if (!a2uiSurfaceHandle) {
+      // Sem surface ativa, cria uma default (defensivo).
+      ensureA2uiSurface("discovery-chat-surface");
+    }
+
+    // Para createSurface, o ensureA2uiSurface já enviou a mensagem ao processor.
+    // Para as demais (updateComponents/updateDataModel/deleteSurface), envia.
+    if (!isCreateSurface) {
+      a2uiSurfaceHandle.processMessages([parsed]);
+    }
+    scheduleChatScrollToBottom();
+  } catch (e) {
+    console.error("[a2ui] erro ao processar mensagem:", e);
+  }
+}
+
+// ensureA2uiSurface cria a bolha de mensagem e a surface A2UI dentro dela.
+function ensureA2uiSurface(surfaceId) {
+  if (a2uiSurfaceHandle && a2uiSurfaceHandle.surfaceId === surfaceId) return;
+  if (!chatMessagesEl) return;
+
+  // Destrói surface anterior, se houver.
+  if (a2uiSurfaceHandle) {
+    try { a2uiSurfaceHandle.destroy(); } catch (_) {}
+    a2uiSurfaceHandle = null;
+  }
+
+  var div = document.createElement("div");
+  div.className = "chat-msg assistant chat-a2ui";
+  div.dataset.surfaceId = surfaceId;
+
+  var contentEl = document.createElement("div");
+  contentEl.className = "a2ui-container";
+  div.appendChild(contentEl);
+
+  chatMessagesEl.appendChild(div);
+  a2uiSurfaceBubble = div;
+
+  try {
+    a2uiSurfaceHandle = window.A2uiChat.createSurface(contentEl, surfaceId);
+    a2uiSurfaceHandle.onUserAction(function (action) {
+      handleA2uiUserAction(surfaceId, action);
+    });
+  } catch (e) {
+    console.error("[a2ui] falha ao criar surface:", e);
+    div.remove();
+    a2uiSurfaceHandle = null;
+    a2uiSurfaceBubble = null;
+  }
+
+  syncColorMode();
+  scheduleChatScrollToBottom();
+}
+
+// handleA2uiUserAction encaminha uma ação do usuário (clique/input) ao agent.
+// Registra a ação via AnswerA2uiAction e dispara um novo StartStream para que
+// o agent processe a ação como um tool result no próximo round (resposta
+// imediata ao clique, sem exigir que o usuário digite outra mensagem).
+function handleA2uiUserAction(surfaceId, action) {
+  if (!action || !action.name) return;
+  try {
+    var payload = {
+      surfaceId: surfaceId,
+      name: action.name,
+      context: action.context || {},
+    };
+    appApi().AnswerA2uiAction(JSON.stringify(payload));
+    // Dispara o processamento da ação. Usa uma mensagem-sentinela que o agent
+    // reconhece como "ação A2UI" (a mensagem em si é ignorada; o que importa é
+    // o tool result injetado). Evita duplicar se já houver um stream ativo.
+    if (!chatSending) {
+      sendChatMessageWithA2uiAction();
+    }
+  } catch (e) {
+    console.error("[a2ui] falha ao enviar userAction:", e);
+  }
+}
+
+// sendChatMessageWithA2uiAction dispara o processamento de uma ação A2UI.
+// Não adiciona uma bolha de usuário (a ação não é uma mensagem digitada) e
+// usa uma sentinela interna que o agent converte em tool result.
+function sendChatMessageWithA2uiAction() {
+  if (chatSending || !chatInputEl) return;
+
+  chatStopRequested = false;
+  setChatBusy(true);
+
+  // Cria a bolha de streaming para a resposta do agent à ação.
+  streamingRawContent = "";
+  streamingRafPending = false;
+  streamingBubble = document.createElement("div");
+  streamingBubble.className = "chat-msg assistant streaming";
+
+  var thinkingEl = document.createElement("div");
+  thinkingEl.className = "stream-thinking";
+  thinkingEl.textContent = translate("chat.thinking");
+  streamingBubble.appendChild(thinkingEl);
+
+  var cursorEl = document.createElement("span");
+  cursorEl.className = "stream-cursor";
+  streamingBubble.appendChild(cursorEl);
+
+  if (chatMessagesEl) chatMessagesEl.appendChild(streamingBubble);
+  scheduleChatScrollToBottom();
+
+  try {
+    appApi()
+      .StartChatStream("__a2ui_action__")
+      .catch(function (err) {
+        onStreamError(String(err));
+      });
+  } catch (err) {
+    onStreamError(String(err));
+  }
+}
+
+// Limpa a surface A2UI quando o chat é limpo.
+function clearA2uiSurface() {
+  if (a2uiSurfaceHandle) {
+    try { a2uiSurfaceHandle.destroy(); } catch (_) {}
+    a2uiSurfaceHandle = null;
+  }
+  a2uiSurfaceBubble = null;
+}
+
 // Register Wails event listeners once the runtime is ready.
 (function registerChatStreamEvents() {
   function doRegister() {
@@ -271,6 +449,7 @@ function disableQuestionButtons(container) {
       window.wails.on("chat:error", onStreamError);
       window.wails.on("chat:stopped", onStreamStopped);
       window.wails.on("chat:question", onChatQuestion);
+      window.wails.on("chat:a2ui", onChatA2ui);
     }
   }
   if (document.readyState === "loading") {
@@ -1216,6 +1395,7 @@ function initChat() {
       try {
         await appApi().ClearChatHistory();
         if (chatMessagesEl) chatMessagesEl.innerHTML = "";
+        clearA2uiSurface();
         showFeedback(translate("chat.cleared"));
       } catch (err) {
         showFeedback(

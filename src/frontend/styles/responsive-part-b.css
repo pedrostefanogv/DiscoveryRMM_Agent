@@ -1222,3 +1222,120 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* ─── A2UI (Agent-to-User Interface) — interfaces ricas geradas por IA ─── */
+
+.chat-msg.assistant.chat-a2ui {
+  max-width: 100%;
+  padding: 12px 14px;
+  white-space: normal;
+}
+
+.a2ui-container {
+  width: 100%;
+  min-width: 0;
+}
+
+.a2ui-surface-host {
+  width: 100%;
+  min-width: 0;
+}
+
+/* Estilos básicos para os componentes do catálogo A2UI renderizados pelo
+   renderer Lit. Usam as variáveis de tema do Discovery para consistência. */
+.a2ui-surface-host a2ui-surface {
+  display: block;
+  width: 100%;
+}
+
+.a2ui-surface-host [data-component="Card"],
+.a2ui-surface-host a2ui-card {
+  display: block;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card-bg, rgba(255,255,255,0.85));
+  margin-bottom: 8px;
+}
+
+.a2ui-surface-host [data-component="Button"],
+.a2ui-surface-host a2ui-button,
+.a2ui-surface-host button.a2ui-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: background var(--transition), opacity var(--transition);
+}
+
+.a2ui-surface-host [data-component="Button"]:hover,
+.a2ui-surface-host a2ui-button:hover,
+.a2ui-surface-host button.a2ui-button:hover {
+  opacity: 0.9;
+}
+
+.a2ui-surface-host [data-component="Text"],
+.a2ui-surface-host a2ui-text {
+  display: block;
+  margin: 4px 0;
+  line-height: 1.5;
+}
+
+.a2ui-surface-host [data-component="Column"],
+.a2ui-surface-host a2ui-column {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.a2ui-surface-host [data-component="Row"],
+.a2ui-surface-host a2ui-row {
+  display: flex;
+  flex-direction: row;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.a2ui-surface-host [data-component="Divider"],
+.a2ui-surface-host a2ui-divider {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 8px 0;
+}
+
+.a2ui-surface-host [data-component="TextField"] input,
+.a2ui-surface-host a2ui-textfield input {
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--input-bg, transparent);
+  color: var(--text);
+  font-size: 0.85rem;
+}
+
+.a2ui-surface-host [data-component="CheckBox"],
+.a2ui-surface-host a2ui-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0;
+}
+
+.a2ui-surface-host [data-component="StatusBar"],
+.a2ui-surface-host a2ui-statusbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  font-size: 0.85rem;
+}

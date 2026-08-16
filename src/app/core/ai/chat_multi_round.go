@@ -22,6 +22,7 @@ func (s *Service) SendStreamMultiRound(
 	onToken func(string),
 	onStatus func(string),
 	mcpExecutor func(ctx context.Context, toolName, argsJSON string) (string, error),
+	onA2ui ...func(string),
 ) (string, error) {
 	streamCtx, streamCancel := context.WithCancel(ctx)
 	defer streamCancel()
@@ -43,22 +44,63 @@ func (s *Service) SendStreamMultiRound(
 		})
 		return "", err
 	}
-	if err := validateChatMessage(userMessage); err != nil {
-		s.logChatEntry(ChatLogEntry{
-			Type:    "chat_request",
-			Method:  "multi_round",
-			Error:   err.Error(),
-			UserMsg: TruncateForLog(userMessage, 2000),
-		})
-		return "", err
+	// Verifica se há ação A2UI pendente ANTES de validar a mensagem. Quando o
+	// usuário clica num botão A2UI, a mensagem pode ser vazia (a ação é enviada
+	// como tool result). Nesse caso, pulamos a validação de mensagem.
+	hasPendingA2ui := s.peekA2uiAction() != nil
+	if !hasPendingA2ui {
+		if err := validateChatMessage(userMessage); err != nil {
+			s.logChatEntry(ChatLogEntry{
+				Type:    "chat_request",
+				Method:  "multi_round",
+				Error:   err.Error(),
+				UserMsg: TruncateForLog(userMessage, 2000),
+			})
+			return "", err
+		}
 	}
 
-	s.mu.Lock()
-	s.history = append(s.history, Message{Role: "user", Content: userMessage})
-	s.mu.Unlock()
+	// Quando há ação A2UI, a "mensagem" é apenas uma sentinela interna
+	// (__a2ui_action__) que não deve poluir o histórico nem ser enviada ao LLM.
+	// A ação em si é injetada como tool result. Só adiciona ao history quando
+	// for uma mensagem real do usuário.
+	if !hasPendingA2ui {
+		s.mu.Lock()
+		s.history = append(s.history, Message{Role: "user", Content: userMessage})
+		s.mu.Unlock()
+	}
+
+	// Se houver uma ação A2UI pendente (userAction de uma surface), injeta-a
+	// como um tool result no primeiro round para o LLM reagir ao clique/input.
+	// O servidor C# espera toolResults no formato {callId, name, result}.
+	//
+	// IMPORTANTE: quando há ação A2UI, o request deve ter Message VAZIO (null)
+	// e ToolResults preenchido, para que o servidor chame StreamMultiRoundAsync
+	// (round 2+) em vez de StreamAsync (round 1). O AgentAuthController decide:
+	//   (cmd.Message != null) ? StreamAsync : StreamMultiRoundAsync
+	// Se enviarmos Message + ToolResults juntos, o servidor chama StreamAsync e
+	// IGNORA os ToolResults — a ação A2UI nunca chegaria ao LLM.
+	var initialToolResults []toolResultItem
+	hasA2uiAction := false
+	if action := s.takeA2uiAction(); action != nil {
+		hasA2uiAction = true
+		ctxJSON, _ := json.Marshal(action.Context)
+		initialToolResults = append(initialToolResults, toolResultItem{
+			CallID: "a2ui_" + action.SurfaceID,
+			Name:   "a2ui_action",
+			Result: fmt.Sprintf(`{"surfaceId":%q,"name":%q,"context":%s}`, action.SurfaceID, action.Name, string(ctxJSON)),
+		})
+		s.logf("[chat] ação A2UI '%s' injetada como tool result", action.Name)
+	}
 
 	pendingCalls := make([]pendingToolCall, 0)
-	req := agentStreamRequest{Message: userMessage, SessionID: sessionID}
+	// Se há ação A2UI, Message fica vazio (null) para o servidor usar o fluxo
+	// multi-round com ToolResults. Caso contrário, envia a mensagem do usuário.
+	reqMessage := userMessage
+	if hasA2uiAction {
+		reqMessage = ""
+	}
+	req := agentStreamRequest{Message: reqMessage, SessionID: sessionID, ToolResults: initialToolResults}
 	// Injetar tools MCP no primeiro round (round 0).
 	s.mu.RLock()
 	toolCount := 0
@@ -115,7 +157,7 @@ func (s *Service) SendStreamMultiRound(
 			MessageLen: len(req.Message),
 		})
 
-		currentSessionID, err = s.executeRound(streamCtx, cfg, req, onToken, &pendingCalls)
+		currentSessionID, err = s.executeRound(streamCtx, cfg, req, onToken, &pendingCalls, onA2ui...)
 		roundElapsed := time.Since(roundStart)
 
 		if err != nil {
@@ -282,7 +324,7 @@ func (s *Service) lastAssistantContent() string {
 	return ""
 }
 
-func (s *Service) executeRound(ctx context.Context, cfg Config, req agentStreamRequest, onToken func(string), pendingCalls *[]pendingToolCall) (string, error) {
+func (s *Service) executeRound(ctx context.Context, cfg Config, req agentStreamRequest, onToken func(string), pendingCalls *[]pendingToolCall, onA2ui ...func(string)) (string, error) {
 	startTime := time.Now()
 	baseURL, err := normalizeAgentChatBaseURL(cfg.Endpoint)
 	if err != nil {
@@ -353,7 +395,7 @@ func (s *Service) executeRound(ctx context.Context, cfg Config, req agentStreamR
 		LatencyMs:  int(time.Since(startTime).Milliseconds()),
 	})
 
-	sessionID, _, err := s.parseMultiRoundSSE(resp.Body, onToken, pendingCalls)
+	sessionID, _, err := s.parseMultiRoundSSE(resp.Body, onToken, pendingCalls, onA2ui...)
 	if err != nil {
 		s.logChatEntry(ChatLogEntry{
 			Type:      "round_sse_error",
@@ -367,7 +409,7 @@ func (s *Service) executeRound(ctx context.Context, cfg Config, req agentStreamR
 	return sessionID, err
 }
 
-func (s *Service) parseMultiRoundSSE(body io.Reader, onToken func(string), pendingCalls *[]pendingToolCall) (string, bool, error) {
+func (s *Service) parseMultiRoundSSE(body io.Reader, onToken func(string), pendingCalls *[]pendingToolCall, onA2ui ...func(string)) (string, bool, error) {
 	var contentBuf strings.Builder
 	currentSessionID := ""
 	done := false
@@ -403,6 +445,17 @@ func (s *Service) parseMultiRoundSSE(body io.Reader, onToken func(string), pendi
 				contentBuf.WriteString(evt.Content)
 				if onToken != nil {
 					onToken(evt.Content)
+				}
+			}
+		case "a2ui":
+			// Mensagem A2UI (interface rica) emitida pelo servidor. Repassa ao
+			// frontend via callback onA2ui (que emite o evento Wails "chat:a2ui").
+			if len(evt.A2UI) > 0 {
+				msg := strings.TrimSpace(string(evt.A2UI))
+				if msg != "" && msg != "null" {
+					if len(onA2ui) > 0 && onA2ui[0] != nil {
+						onA2ui[0](msg)
+					}
 				}
 			}
 		case "tool_call":

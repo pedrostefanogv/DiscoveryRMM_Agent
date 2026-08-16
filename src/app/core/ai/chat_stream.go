@@ -33,6 +33,10 @@ type agentChatStreamEvent struct {
 	// (camelCase), enquanto o campo canônico acima é "toolArguments".
 	// Este alias garante compatibilidade com ambas as convenções.
 	ToolArgumentsDelta json.RawMessage `json:"toolArgumentsDelta"`
+	// A2UI carrega uma mensagem A2UI (createSurface/updateComponents/updateDataModel/deleteSurface)
+	// emitida pelo servidor quando o LLM gera uma interface rica. O agent repassa
+	// ao frontend via evento "chat:a2ui".
+	A2UI json.RawMessage `json:"a2uiJson"`
 }
 
 // toolArgsString normaliza toolArguments (pode ser string JSON ou objeto JSON).

@@ -282,6 +282,10 @@ func (s *Service) StartStream(message string) {
 				s.publishChatEvent("chat:thinking", status)
 			},
 			s.mcpExecuteForChat,
+			func(a2uiMsg string) {
+				s.emitEvent("chat:a2ui", a2uiMsg)
+				s.publishChatEvent("chat:a2ui", a2uiMsg)
+			},
 		)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
@@ -301,6 +305,14 @@ func (s *Service) StartStream(message string) {
 // StopStream interrupts the active streamed AI response, if running.
 func (s *Service) StopStream() bool {
 	return s.chatSvc.StopStream()
+}
+
+// SubmitA2uiAction encaminha uma ação do usuário em uma surface A2UI para o
+// serviço de chat. A ação é registrada como um "tool result" pendente que o
+// próximo round do loop multi-round enviará ao LLM, permitindo que o agente
+// reaja ao clique/input do usuário.
+func (s *Service) SubmitA2uiAction(surfaceID, name string, context map[string]any) {
+	s.chatSvc.SubmitA2uiAction(surfaceID, name, context)
 }
 
 // ClearHistory resets the conversation.
