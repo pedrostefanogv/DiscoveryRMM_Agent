@@ -55,19 +55,32 @@ func (c *Coordinator) DownloadArtifactFromPeer(ctx context.Context, artifactName
 			c.emitTransferDone(artifactName, sourcePeerID, "pull", err)
 			return P2PArtifactView{}, err
 		}
+		// Valida a consistência interna do manifest ANTES do download. Isso
+		// detecta manifests stale (de um artifact republicado) que causariam
+		// checksum divergente nos chunks.
+		if vErr := validateDownloadManifest(&manifest); vErr != nil {
+			err := fmt.Errorf("manifest rejeitado: %w", vErr)
+			c.appendAudit("pull", artifactName, sourcePeerID, "libp2p", false, err.Error())
+			c.emitTransferDone(artifactName, sourcePeerID, "pull", err)
+			return P2PArtifactView{}, err
+		}
 
 		destDir := c.deps.P2PTempDir()
 		sched := newP2PChunkScheduler()
 		lp2pPeers := []libp2pPeer{{agentID: sourcePeerID, peerID: peerID}}
 		// Serializa downloads do mesmo artifact para não corromper o partsDir.
 		unlock := c.lockDownload(artifactName)
+		// Rastreia os índices dos chunks concluídos para progresso preciso
+		// (chunks completam fora de ordem em paralelo).
+		completedIdx := make(map[int]bool)
 		path, totalBytes, err := downloadChunkedLibp2p(ctx, h, lp2pPeers, manifest, artifactName, requesterID, destDir, sched, c.dynamicMaxParallelChunks(),
 			nil, // onChunkProgress: desabilitado; usamos onChunkComplete para progresso monotônico
-			func(completed, total int) {
+			func(chunkIdx, completed, total int) {
+				completedIdx[chunkIdx] = true
 				c.emitTransferProgress(p2pTransferProgress{
 					ArtifactName:    artifactName,
 					PeerID:          sourcePeerID,
-					BytesRead:       completedChunksBytes(manifest, completed),
+					BytesRead:       completedChunksBytes(manifest, completedIdx),
 					TotalBytes:      manifest.TotalSize,
 					Operation:       "pull",
 					CompletedChunks: completed,
@@ -191,6 +204,16 @@ func (c *Coordinator) DownloadArtifactSwarm(ctx context.Context, artifactName st
 		}
 	}
 
+	// Valida a consistência interna do manifest ANTES do download. Isso
+	// detecta manifests stale (de um artifact republicado) que causariam
+	// checksum divergente nos chunks.
+	if vErr := validateDownloadManifest(&manifest); vErr != nil {
+		err := fmt.Errorf("manifest rejeitado: %w", vErr)
+		c.appendAudit("swarm-pull", artifactName, peerEntries[0].peerID, "automation", false, err.Error())
+		c.emitTransferDone(artifactName, peerEntries[0].peerID, "swarm-pull", err)
+		return P2PArtifactView{}, err
+	}
+
 	// Validação cross-peer: verifica que os demais peers anunciam a mesma
 	// versão do artifact (mesmo SHA256 e tamanho). Peers com versão divergente
 	// são removidos do swarm para evitar montar um arquivo corrompido com
@@ -228,13 +251,17 @@ func (c *Coordinator) DownloadArtifactSwarm(ctx context.Context, artifactName st
 	}
 	// Serializa downloads do mesmo artifact para não corromper o partsDir.
 	unlock := c.lockDownload(artifactName)
+	// Rastreia os índices dos chunks concluídos para progresso preciso
+	// (chunks completam fora de ordem em paralelo).
+	completedIdx := make(map[int]bool)
 	path, totalBytes, err := downloadChunkedLibp2p(ctx, h, lp2pPeers, manifest, artifactName, requesterID, destDir, sched, c.dynamicMaxParallelChunks(),
 		nil, // onChunkProgress: desabilitado; usamos onChunkComplete
-		func(completed, total int) {
+		func(chunkIdx, completed, total int) {
+			completedIdx[chunkIdx] = true
 			// Calcula bytes reais somando o tamanho de cada chunk concluído.
 			// O último chunk geralmente é menor que manifest.ChunkSize, então
 			// usar completed * manifest.ChunkSize faria a barra "pular" no final.
-			bytesRead := completedChunksBytes(manifest, completed)
+			bytesRead := completedChunksBytes(manifest, completedIdx)
 			c.emitTransferProgress(p2pTransferProgress{
 				ArtifactName:    artifactName,
 				PeerID:          fmt.Sprintf("%d peers", len(peerEntries)),

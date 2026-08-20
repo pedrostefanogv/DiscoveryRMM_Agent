@@ -46,14 +46,22 @@ func (c *Coordinator) emitTransferDone(artifactName, peerID, operation string, e
 	c.emitTransferProgress(p)
 }
 
-// completedChunksBytes soma o tamanho real dos chunks concluídos (0..completed).
+// completedChunksBytes soma o tamanho real dos chunks concluídos.
 // O último chunk geralmente é menor que manifest.ChunkSize, então usar
 // completed*ChunkSize faria a barra "pular" no final. Este helper garante
 // progresso monotônico e preciso.
-func completedChunksBytes(manifest P2PChunkManifest, completed int) int64 {
+//
+// IMPORTANTE: os chunks são baixados em paralelo e completam FORA de ordem
+// (ex.: chunk 5 pode chegar antes do chunk 2). Por isso, em vez de somar
+// Chunks[0..completed-1] (que assumiria ordem sequencial e daria progresso
+// incorreto), recebemos um mapa dos índices efetivamente concluídos e somamos
+// apenas os tamanhos desses chunks.
+func completedChunksBytes(manifest P2PChunkManifest, completedIdx map[int]bool) int64 {
 	var bytesRead int64
-	for i := 0; i < completed && i < len(manifest.Chunks); i++ {
-		bytesRead += manifest.Chunks[i].Size
+	for idx := range completedIdx {
+		if idx >= 0 && idx < len(manifest.Chunks) {
+			bytesRead += manifest.Chunks[idx].Size
+		}
 	}
 	return bytesRead
 }

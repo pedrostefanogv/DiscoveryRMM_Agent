@@ -7548,7 +7548,7 @@ var A2uiChat = (() => {
   var v2 = /<(?:(!--|\/[^a-zA-Z])|(\/?[a-zA-Z][^>\s]*)|(\/?$))/g;
   var _2 = /-->/g;
   var m2 = />/g;
-  var p3 = RegExp(`>|${f3}(?:([^\\s"'>=/]+)(${f3}*=${f3}*(?:[^ 	
+  var p3 = RegExp(`>|${f3}(?:([^\\s"'>=/]+)(${f3}*=${f3}*(?:[^
 \f\r"'\`<>=]|("|')|))|$)`, "g");
   var g2 = /'/g;
   var $ = /"/g;
@@ -12883,6 +12883,7 @@ var A2uiChat = (() => {
   }
   return __toCommonJS(entry_exports);
 })();
+window.A2uiChat = A2uiChat;
 /*! Bundled license information:
 
 @lit/reactive-element/css-tag.js:

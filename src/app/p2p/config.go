@@ -75,7 +75,7 @@ func NormalizeConfig(cfg Config) Config {
 
 	out.HTTPListenPortRangeStart = defaultInt(out.HTTPListenPortRangeStart, d.HTTPListenPortRangeStart)
 	out.HTTPListenPortRangeEnd = defaultInt(out.HTTPListenPortRangeEnd, d.HTTPListenPortRangeEnd)
-	out.ChunkSizeBytes = clampInt64(defaultInt64(out.ChunkSizeBytes, DefaultChunkSizeBytes), MinChunkSizeBytes, math.MaxInt64)
+	out.ChunkSizeBytes = clampInt64(defaultInt64(out.ChunkSizeBytes, DefaultChunkSizeBytes), MinChunkSizeBytes, MaxChunkSizeBytes)
 	out.MaxBandwidthBytesPerSec = defaultInt64(out.MaxBandwidthBytesPerSec, 0)
 
 	if out.P2PMode == "" {

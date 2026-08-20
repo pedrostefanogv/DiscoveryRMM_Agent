@@ -3,6 +3,10 @@
 var chatSending = false;
 var chatStopRequested = false;
 var chatThinkingPollId = null;
+// Timer de segurança: se o stream não terminar em X segundos, força o
+// encerramento da bolha "Pensando..." para não travar a interface.
+var chatStreamTimeoutId = null;
+var CHAT_STREAM_TIMEOUT_MS = 60000; // 60s
 
 // Streaming state
 var streamingBubble = null;
@@ -113,6 +117,28 @@ function setChatBusy(isBusy) {
   }
 }
 
+// clearChatStreamTimeout cancela o timer de segurança do stream, se ativo.
+function clearChatStreamTimeout() {
+  if (chatStreamTimeoutId) {
+    clearTimeout(chatStreamTimeoutId);
+    chatStreamTimeoutId = null;
+  }
+}
+
+// armChatStreamTimeout inicia o timer de segurança. Se o stream não terminar
+// dentro de CHAT_STREAM_TIMEOUT_MS, força onStreamError para não deixar o
+// usuário preso em "Pensando..." indefinidamente.
+function armChatStreamTimeout() {
+  clearChatStreamTimeout();
+  chatStreamTimeoutId = setTimeout(function () {
+    chatStreamTimeoutId = null;
+    if (chatSending) {
+      console.warn("[chat] timeout de segurança do stream atingido; encerrando");
+      onStreamError(translate("chat.timeout"));
+    }
+  }, CHAT_STREAM_TIMEOUT_MS);
+}
+
 function requestStopChatStream() {
   if (!chatSending) return;
   chatStopRequested = true;
@@ -180,6 +206,7 @@ function finaliseStreamingBubble() {
 
 function onStreamDone() {
   stopThinkingStatusUpdates();
+  clearChatStreamTimeout();
   finaliseStreamingBubble();
   chatStopRequested = false;
   setChatBusy(false);
@@ -188,6 +215,7 @@ function onStreamDone() {
 
 function onStreamError(errMsg) {
   stopThinkingStatusUpdates();
+  clearChatStreamTimeout();
 
   if (chatStopRequested) {
     if (streamingBubble && !streamingRawContent) {
@@ -222,6 +250,7 @@ function onStreamError(errMsg) {
 
 function onStreamStopped() {
   stopThinkingStatusUpdates();
+  clearChatStreamTimeout();
   if (streamingBubble && !streamingRawContent) {
     streamingRawContent = translate("chat.responseInterrupted");
   }
@@ -346,7 +375,12 @@ function onChatA2ui(data) {
 
   // Garante que o bundle A2UI foi carregado (window.A2uiChat).
   if (!window.A2uiChat || typeof window.A2uiChat.createSurface !== "function") {
-    console.warn("[a2ui] bundle A2UI não carregado; ignorando mensagem");
+    console.warn("[a2ui] bundle A2UI não carregado; exibindo fallback");
+    // Fallback visual: em vez de ignorar silenciosamente (que deixava o
+    // usuário preso em "Pensando..." sem resposta), mostra uma mensagem
+    // amigável. O texto markdown normal (fora do bloco a2ui) já foi exibido
+    // pelo streaming, então não há perda de conteúdo relevante.
+    fallbackA2uiToMarkdown(msg);
     return;
   }
 
@@ -533,6 +567,10 @@ function sendChatMessageWithA2uiAction() {
 
   if (chatMessagesEl) chatMessagesEl.appendChild(streamingBubble);
   scheduleChatScrollToBottom();
+
+  // Timer de segurança: também cobre o stream disparado por ação A2UI, para
+  // não deixar "Pensando..." preso se o evento chat:done nunca chegar.
+  armChatStreamTimeout();
 
   try {
     appApi()
@@ -1196,6 +1234,10 @@ async function sendChatMessage() {
 
   if (chatMessagesEl) chatMessagesEl.appendChild(streamingBubble);
   scheduleChatScrollToBottom();
+
+  // Timer de segurança: garante que "Pensando..." não fique preso se o
+  // evento chat:done nunca chegar (erro de rede, goroutine perdida, etc.).
+  armChatStreamTimeout();
 
   try {
     // StartChatStream returns immediately; response arrives via events.

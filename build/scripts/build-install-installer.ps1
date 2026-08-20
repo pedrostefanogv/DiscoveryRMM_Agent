@@ -99,7 +99,7 @@ Write-Output "  Sincronizando icones a partir de build\\*.png..."
 & $syncIconsScript -ProjectRoot $ProjectRoot
 
 if (-not (Test-Path $nsiFile)) {
-    throw "Arquivo NSIS nÃÂ£o encontrado: $nsiFile"
+    throw "Arquivo NSIS não encontrado: $nsiFile"
 }
 
 if (-not (Test-Path $iconPath)) {
@@ -167,7 +167,7 @@ finally {
 }
 
 if (-not (Test-Path $agentExe)) {
-    throw "BinÃÂ¡rio do agente nÃÂ£o foi gerado: $agentExe"
+    throw "Binário do agente não foi gerado: $agentExe"
 }
 # Generate agent-version.json for API post-build commit resolution
 $agentVersionJson = Join-Path $binDir "agent-version.json"
@@ -229,7 +229,7 @@ if ($LASTEXITCODE -ne 0) {
 
 $installerPath = Join-Path $binDir $OutputName
 if (-not (Test-Path $installerPath)) {
-    throw "Instalador nÃÂ£o encontrado apÃÂ³s build: $installerPath"
+    throw "Instalador não encontrado após build: $installerPath"
 }
 
 Write-Output "[3/3] Concluido."

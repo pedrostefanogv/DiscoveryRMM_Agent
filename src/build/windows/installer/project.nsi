@@ -258,7 +258,7 @@ Var InstallerLogFile
 !define MUI_FINISHPAGE_RUN_FUNCTION LaunchInstalledApp
 !define MUI_ABORTWARNING # This will warn the user if they exit from the installer.
 
-# VariÃ¡veis para armazenar as configuraÃ§Ãµes
+# Variáveis para armazenar as configurações
 Var Dialog
 Var UrlLabel
 Var UrlText
@@ -285,7 +285,7 @@ Var ApiInsecure
 # !insertmacro MUI_PAGE_LICENSE "resources\eula.txt" # Adds a EULA page to the installer
 !insertmacro MUI_PAGE_DIRECTORY # In which folder install page.
 
-# PÃ¡gina customizada para configuraÃ§Ãµes do agente
+# Página customizada para configurações do agente
 Page custom AgentConfigPage AgentConfigPageLeave
 
 !insertmacro MUI_PAGE_INSTFILES # Installing page.
@@ -334,7 +334,7 @@ Function .onInit
       Abort
    ${EndIf}
 
-   # Definir valores padrÃ£o vindos do build
+   # Definir valores padrão vindos do build
    StrCpy $ServerUrl "${BUILD_DEFAULT_URL}"
    StrCpy $ServerKey "${BUILD_DEFAULT_KEY}"
    StrCpy $AutoProvisioning "${BUILD_DEFAULT_DISCOVERY}"
@@ -346,7 +346,7 @@ Function .onInit
    StrCpy $PayloadSha256 "${BUILD_PAYLOAD_SHA256}"
    StrCpy $PayloadFileName "${BUILD_PAYLOAD_FILENAME}"
 
-   # Build de update: modo silencioso por padrÃ£o e sem wizard.
+   # Build de update: modo silencioso por padrão e sem wizard.
    ${If} "${BUILD_UPDATE_INSTALL}" == "1"
       StrCpy $UpdateMode "1"
       StrCpy $MinimalMode "1"
@@ -359,7 +359,7 @@ Function .onInit
       ${EndIf}
    ${EndIf}
 
-   # Normalizar defaults invÃ¡lidos
+   # Normalizar defaults inválidos
    ${If} $AutoProvisioning != "0"
    ${AndIf} $AutoProvisioning != "1"
       StrCpy $AutoProvisioning "1"
@@ -499,14 +499,14 @@ Function .onInit
    ${GetOptions} $R0 "/M" $R1
    ${IfNot} ${Errors}
       StrCpy $MinimalMode "1"
-      # Em modo mÃ­nimo, pular wizard se tiver parÃ¢metros
+      # Em modo mínimo, pular wizard se tiver parâmetros
       ${If} $ServerUrl != ""
       ${AndIf} $ServerKey != ""
-         SetSilent normal  # Mostra sÃ³ o progresso
+         SetSilent normal  # Mostra só o progresso
       ${EndIf}
    ${EndIf}
 
-   # Modo genÃ©rico: sem URL/KEY â€” agente entra em auto-provisioning via P2P
+   # Modo genérico: sem URL/KEY — agente entra em auto-provisioning via P2P
    # Short form: /G
    ${GetOptions} $R0 "/GENERIC" $R1
    ${IfNot} ${Errors}
@@ -518,20 +518,20 @@ Function .onInit
    ${EndIf}
 FunctionEnd
 
-# FunÃ§Ã£o para criar a pÃ¡gina de configuraÃ§Ã£o do agente
+# Função para criar a página de configuração do agente
 Function AgentConfigPage
-   # Modo genÃ©rico: sem wizard, agente entra em auto-provisioning via P2P
+   # Modo genérico: sem wizard, agente entra em auto-provisioning via P2P
    ${If} $GenericMode == "1"
       Abort
    ${EndIf}
 
-   # Pular a pÃ¡gina se estiver em modo silencioso ou mÃ­nimo
+   # Pular a página se estiver em modo silencioso ou mínimo
    ${If} ${Silent}
    ${OrIf} $MinimalMode == "1"
       Abort
    ${EndIf}
 
-   # Se jÃ¡ temos URL e KEY via CLI, pular o wizard
+   # Se já temos URL e KEY via CLI, pular o wizard
    ${If} $ServerUrl != ""
    ${AndIf} $ServerKey != ""
       Abort
@@ -543,8 +543,8 @@ Function AgentConfigPage
       Abort
    ${EndIf}
 
-   # TÃ­tulo da pÃ¡gina
-   !insertmacro MUI_HEADER_TEXT "ConfiguraÃ§Ã£o do Agente Discovery" "Configure a conexÃ£o com o servidor"
+   # Título da página
+   !insertmacro MUI_HEADER_TEXT "Configuração do Agente Discovery" "Configure a conexão com o servidor"
 
    # Label e campo de texto para URL
    ${NSD_CreateLabel} 0 10u 100% 12u "URL do Servidor:"
@@ -568,7 +568,7 @@ Function AgentConfigPage
    nsDialogs::Show
 FunctionEnd
 
-# FunÃ§Ã£o para capturar os valores da pÃ¡gina customizada
+# Função para capturar os valores da página customizada
 Function AgentConfigPageLeave
    ${NSD_GetText} $UrlText $ServerUrl
    ${NSD_GetText} $KeyText $ServerKey
@@ -648,7 +648,7 @@ Section
          # Derivar campos canonicos (apiServer, apiInsecure) a partir de serverUrl
          Call DeriveApiFields
 
-         # Salvar configuraÃ§Ãµes do agente
+         # Salvar configurações do agente
          Call SaveAgentConfig
 
          # Registrar regra de firewall para runtime local/P2P.
@@ -744,7 +744,7 @@ decommission_done:
     !insertmacro wails.deleteUninstaller
 SectionEnd
 
-# FunÃ§Ã£o para salvar as configuraÃ§Ãµes do agente
+# Função para salvar as configurações do agente
 # Deriva campos canonicos (apiServer, apiInsecure) a partir de serverUrl.
 # Ex: "https://tngplacas.com.br/api/" -> apiServer="tngplacas.com.br", apiInsecure="0"
 Function DeriveApiFields
@@ -777,19 +777,19 @@ Function DeriveApiFields
 FunctionEnd
 
 Function SaveAgentConfig
-   # Build de update nÃ£o altera configuraÃ§Ã£o local existente.
+   # Build de update não altera configuração local existente.
    ${If} "${BUILD_UPDATE_INSTALL}" == "1"
-      DetailPrint "Update build: mantendo configuraÃ§Ã£o existente sem sobrescrita"
+      DetailPrint "Update build: mantendo configuração existente sem sobrescrita"
       Return
    ${EndIf}
 
-   # Runtime update (/UPDATE) tambÃ©m nÃ£o altera configuraÃ§Ã£o local existente.
+   # Runtime update (/UPDATE) também não altera configuração local existente.
    ${If} $UpdateMode == "1"
-      DetailPrint "Update mode (/UPDATE): mantendo configuraÃ§Ã£o existente sem sobrescrita"
+      DetailPrint "Update mode (/UPDATE): mantendo configuração existente sem sobrescrita"
       Return
    ${EndIf}
 
-   # Config compartilhada em ProgramData para suportar mÃºltiplos usuÃ¡rios.
+   # Config compartilhada em ProgramData para suportar múltiplos usuários.
    ReadEnvStr $R0 "ProgramData"
    ${If} $R0 == ""
       MessageBox MB_ICONSTOP "Pasta ProgramData nao encontrada. Nao foi possivel gravar a configuracao do agente."

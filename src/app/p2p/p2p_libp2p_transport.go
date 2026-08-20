@@ -223,6 +223,14 @@ func handleStreamArtifactManifest(s network.Stream, transfer *TransferServer) {
 	deps := transfer.deps
 	transfer.mu.RUnlock()
 
+	// Rejeitar arquivos .importing (ainda sendo copiados) — não devem gerar
+	// nem servir manifest, assim como o /artifact/get rejeita. Evita servir
+	// um manifest com offsets/hashes de um arquivo parcial.
+	if strings.HasSuffix(req.ArtifactName, ".importing") {
+		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "artifact em andamento"})
+		return
+	}
+
 	path := filepath.Join(tempDir, req.ArtifactName)
 	info, err := os.Stat(path)
 	if err != nil || info.IsDir() {
@@ -230,11 +238,19 @@ func handleStreamArtifactManifest(s network.Stream, transfer *TransferServer) {
 		return
 	}
 
-	// Tentar cache de manifest primeiro.
+	// Tentar cache de manifest primeiro. Valida com manifestMatchesFile para
+	// garantir que o manifest corresponde ao arquivo atual em disco (tamanho +
+	// mtime). Sem essa validação, um artifact republicado com o mesmo nome
+	// serviria um manifest stale com offsets/hashes da versão antiga, fazendo
+	// o receiver validar chunks contra hashes errados (checksum divergente).
 	manifestDir := filepath.Join(tempDir, manifestDirName)
 	if cached := loadCachedManifest(manifestDir, req.ArtifactName, path); cached != nil {
-		_ = json.NewEncoder(s).Encode(cached)
-		return
+		if manifestMatchesFile(cached, path) {
+			_ = json.NewEncoder(s).Encode(cached)
+			return
+		}
+		// Cache stale: invalida e regenera abaixo.
+		_ = os.Remove(cachedManifestPath(manifestDir, req.ArtifactName))
 	}
 
 	// Reajustar deadline: buildChunkManifest l o arquivo inteiro.
@@ -322,6 +338,16 @@ func handleStreamArtifactGet(s network.Stream, transfer *TransferServer) {
 	if rangeStart > rangeEnd {
 		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "range inválido"})
 		return
+	}
+	// Diagnóstico: se o range solicitado difere do que será servido, é forte
+	// indício de manifest stale (o cliente pediu offsets de uma versão antiga
+	// do artifact). Loga para facilitar a depuração de checksum divergente.
+	if req.RangeEnd != rangeEnd || req.RangeStart != rangeStart {
+		if transfer != nil && transfer.coord != nil && transfer.coord.deps != nil {
+			transfer.coord.deps.Log(fmt.Sprintf(
+				"[p2p][serve] range ajustado artifact=%s solicitado=%d-%d servido=%d-%d (totalSize=%d) — possível manifest stale",
+				req.ArtifactName, req.RangeStart, req.RangeEnd, rangeStart, rangeEnd, totalSize))
+		}
 	}
 	chunkLen := rangeEnd - rangeStart + 1
 
@@ -427,9 +453,15 @@ func handleStreamArtifactGet(s network.Stream, transfer *TransferServer) {
 		sessionKey := req.ArtifactName + "|" + requesterID
 		coord.servingSessionsMu.Lock()
 		sess, ok := coord.servingSessions[sessionKey]
+		// Snapshot dos valores DENTRO do lock para evitar data race: a sessão
+		// pode ser deletada por outra goroutine (mesmo artifact+requester) logo
+		// após o Unlock, então não podemos ler sess.servedBytes/totalSize fora.
+		var snapshotServedBytes, snapshotTotalSize int64
 		if ok {
 			sess.servedBytes += written
 			sess.lastReported = sess.servedBytes
+			snapshotServedBytes = sess.servedBytes
+			snapshotTotalSize = sess.totalSize
 		}
 		isComplete := ok && sess.servedBytes >= sess.totalSize
 		// Se deu erro ou a sesso no existe, tambm encerra.
@@ -448,8 +480,8 @@ func handleStreamArtifactGet(s network.Stream, transfer *TransferServer) {
 		// BytesRead/TotalBytes so sempre relativos ao arquivo completo
 		// para uma barra de progresso monotnica.
 		if ok {
-			done.BytesRead = sess.servedBytes
-			done.TotalBytes = sess.totalSize
+			done.BytesRead = snapshotServedBytes
+			done.TotalBytes = snapshotTotalSize
 		} else {
 			done.BytesRead = written
 			done.TotalBytes = chunkLen
@@ -550,9 +582,23 @@ func libp2pFetchManifest(ctx context.Context, h host.Host, peerID peer.ID, artif
 }
 
 func decodeLibp2pGetHeaderAndPayload(stream io.Reader) (libp2pGetResponse, io.Reader, error) {
-	dec := json.NewDecoder(stream)
+	// O header é enviado via json.Encoder.Encode, que grava `{...}\n` (uma
+	// única linha JSON seguida de newline). Lemos a linha inteira até o
+	// primeiro '\n', que é o delimitador do Encoder. Todo o resto do stream é
+	// o payload binário.
+	//
+	// IMPORTANTE: abordagens anteriores usavam json.Decoder + Peek/ReadByte
+	// para remover o '\n' do header, o que era frágil: o payload binário pode
+	// começar com 0x0A e o decoder pode ter consumido (ou não) o delimitador,
+	// fazendo um byte legítimo do payload ser removido (checksum divergente).
+	// Ler a linha do header e tratar o restante como payload puro é robusto.
+	br := bufio.NewReader(stream)
+	headerLine, err := br.ReadBytes('\n')
+	if err != nil {
+		return libp2pGetResponse{}, nil, fmt.Errorf("decode get hdr: %w", err)
+	}
 	var hdr libp2pGetResponse
-	if err := dec.Decode(&hdr); err != nil {
+	if err := json.Unmarshal(headerLine, &hdr); err != nil {
 		return libp2pGetResponse{}, nil, fmt.Errorf("decode get hdr: %w", err)
 	}
 	if strings.TrimSpace(hdr.ArtifactName) == "" {
@@ -565,14 +611,11 @@ func decodeLibp2pGetHeaderAndPayload(stream io.Reader) (libp2pGetResponse, io.Re
 		return libp2pGetResponse{}, nil, fmt.Errorf("payload vazio")
 	}
 
-	// Mantem uma trilha unica de leitura: bytes que ja estao no buffer do decoder
-	// + bytes restantes no mesmo reader subjacente.
-	payloadReader := bufio.NewReader(io.MultiReader(dec.Buffered(), stream))
-	// /artifact/get envia o header via json.Encoder.Encode, que adiciona um '\n'
-	// antes dos bytes binarios do payload.
-	if first, err := payloadReader.Peek(1); err == nil && len(first) == 1 && first[0] == '\n' {
-		_, _ = payloadReader.ReadByte()
-	}
+	// Retorna um reader limitado ao tamanho EXATO do payload (conhecido no
+	// header). Assim o caller lê exatamente payloadLen bytes do payload binário,
+	// sem depender de nenhum delimitador entre header e payload.
+	payloadLen := hdr.RangeEnd - hdr.RangeStart + 1
+	payloadReader := io.LimitReader(br, payloadLen)
 	return hdr, payloadReader, nil
 }
 

@@ -330,21 +330,29 @@ func TestCompletedChunksBytes(t *testing.T) {
 			{Index: 2, Size: 3}, // último chunk menor
 		},
 	}
-	if got := completedChunksBytes(manifest, 0); got != 0 {
-		t.Fatalf("completed=0: got %d, want 0", got)
+	// Nenhum chunk concluído.
+	if got := completedChunksBytes(manifest, map[int]bool{}); got != 0 {
+		t.Fatalf("empty: got %d, want 0", got)
 	}
-	if got := completedChunksBytes(manifest, 1); got != 8 {
-		t.Fatalf("completed=1: got %d, want 8", got)
+	// Apenas chunk 0.
+	if got := completedChunksBytes(manifest, map[int]bool{0: true}); got != 8 {
+		t.Fatalf("chunk0: got %d, want 8", got)
 	}
-	if got := completedChunksBytes(manifest, 2); got != 16 {
-		t.Fatalf("completed=2: got %d, want 16", got)
+	// Chunks 0 e 1.
+	if got := completedChunksBytes(manifest, map[int]bool{0: true, 1: true}); got != 16 {
+		t.Fatalf("chunks0,1: got %d, want 16", got)
 	}
-	if got := completedChunksBytes(manifest, 3); got != 19 {
-		t.Fatalf("completed=3: got %d, want 19", got)
+	// Todos os chunks (0,1,2).
+	if got := completedChunksBytes(manifest, map[int]bool{0: true, 1: true, 2: true}); got != 19 {
+		t.Fatalf("all: got %d, want 19", got)
 	}
-	// completed maior que o número de chunks não deve estourar.
-	if got := completedChunksBytes(manifest, 99); got != 19 {
-		t.Fatalf("completed=99: got %d, want 19", got)
+	// Fora de ordem: chunk 2 (último, menor) concluído antes do 0.
+	if got := completedChunksBytes(manifest, map[int]bool{2: true}); got != 3 {
+		t.Fatalf("chunk2 only: got %d, want 3", got)
+	}
+	// Índice fora do range não deve estourar.
+	if got := completedChunksBytes(manifest, map[int]bool{99: true}); got != 0 {
+		t.Fatalf("chunk99: got %d, want 0", got)
 	}
 }
 

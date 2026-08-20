@@ -546,7 +546,7 @@ func (s *Service) sendOrQueueCallback(ctx context.Context, agentID, executionID,
 	return callbackErr
 }
 
-// loadCustomFieldsForExecution consulta o endpoint de runtime e armazena o contexto em memÃ³ria
+// loadCustomFieldsForExecution consulta o endpoint de runtime e armazena o contexto em memória
 // escopado ao executionID. Em caso de erro, retorna um contexto vazio (não bloqueia a execução).
 func (s *Service) loadCustomFieldsForExecution(ctx context.Context, cfg RuntimeConfig, executionID, taskID, scriptID, correlationID string) *ExecutionCustomFieldCtx {
 	fields, err := s.client.GetRuntimeCustomFields(ctx, cfg, taskID, scriptID, correlationID)
@@ -567,7 +567,7 @@ func (s *Service) loadCustomFieldsForExecution(ctx context.Context, cfg RuntimeC
 	return cfCtx
 }
 
-// clearCustomFieldCtx remove o contexto de custom fields da execução da memÃ³ria.
+// clearCustomFieldCtx remove o contexto de custom fields da execução da memória.
 func (s *Service) clearCustomFieldCtx(executionID string) {
 	s.cfMu.Lock()
 	delete(s.cfCache, executionID)
@@ -591,7 +591,7 @@ func (s *Service) postCollectedValues(ctx context.Context, cfg RuntimeConfig, ex
 			id := scriptID
 			items[i].ScriptID = &id
 		}
-		// ValidaÃ§Ã£o local fail-fast.
+		// Validação local fail-fast.
 		if err := validateCollectedWrite(cfCtx, items[i]); err != nil {
 			s.logf("automacao: campo coletado bloqueado (execucao=%s): %s", executionID, sanitizeCustomFieldErrForLog(err))
 			continue

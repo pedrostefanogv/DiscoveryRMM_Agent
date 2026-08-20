@@ -24,10 +24,11 @@ const (
 	MaxPeerArtifactEntries          = 500
 
 	// Chunking
-	DefaultChunkSizeBytes = 8 * 1024 * 1024 // 8 MB
-	MinChunkSizeBytes     = 1 * 1024 * 1024 // 1 MB
-	MinParallelChunks     = 2               // piso do paralelismo adaptativo
-	MaxParallelChunks     = 4               // teto padrão (pode ser elevado dinamicamente até 8)
-	MaxChunkRetries       = 3               // tentativas por chunk antes de desistir
-	ChunkRetryBaseDelay   = 1 * time.Second // backoff inicial entre retries
+	DefaultChunkSizeBytes = 8 * 1024 * 1024  // 8 MB
+	MinChunkSizeBytes     = 1 * 1024 * 1024  // 1 MB
+	MaxChunkSizeBytes     = 64 * 1024 * 1024 // 64 MB teto seguro (evita OOM com config malformada)
+	MinParallelChunks     = 2                // piso do paralelismo adaptativo
+	MaxParallelChunks     = 4                // teto padrão (pode ser elevado dinamicamente até 8)
+	MaxChunkRetries       = 3                // tentativas por chunk antes de desistir
+	ChunkRetryBaseDelay   = 1 * time.Second  // backoff inicial entre retries
 )

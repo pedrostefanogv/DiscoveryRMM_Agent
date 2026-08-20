@@ -191,7 +191,7 @@ const (
 // Goroutines que já adquiriram slot não são abortadas se o teto reduzir depois —
 // apenas novas goroutines esperam. Usa minParallelChunks como piso.
 // onChunkProgress é opcional — quando != nil, chamado com (chunkIndex, bytesLidos, totalChunk, totalChunks).
-// onChunkComplete é opcional — quando != nil, chamado com (completed, total) após cada chunk concluído.
+// onChunkComplete é opcional — quando != nil, chamado com (chunkIndex, completed, total) após cada chunk concluído.
 // onPhase é opcional — quando != nil, chamado com fases ("assembling", "verifying") durante a remontagem.
 // logf é opcional — quando != nil, chamado para logging de progresso e erros de chunks.
 func downloadChunkedLibp2p(
@@ -203,7 +203,7 @@ func downloadChunkedLibp2p(
 	sched *p2pChunkScheduler,
 	maxParallel int,
 	onChunkProgress func(chunkIdx int, readSoFar, chunkSize int64, totalChunks int),
-	onChunkComplete func(completed, total int),
+	onChunkComplete func(chunkIdx, completed, total int),
 	onPhase func(phase string),
 	logf func(string),
 ) (string, int64, error) {
@@ -314,7 +314,9 @@ func downloadChunkedLibp2p(
 		} else {
 			completedChunks++
 			if onChunkComplete != nil {
-				onChunkComplete(completedChunks, totalChunks)
+				// Passa o índice do chunk concluído para que o progresso some
+				// os tamanhos reais (chunks completam fora de ordem em paralelo).
+				onChunkComplete(res.index, completedChunks, totalChunks)
 			}
 		}
 	}
@@ -405,4 +407,49 @@ func chunkFileHashMatches(path, expectedSHA256 string) bool {
 		return false
 	}
 	return strings.EqualFold(hex.EncodeToString(h.Sum(nil)), expectedSHA256)
+}
+
+// validateDownloadManifest valida a consistência interna de um manifest ANTES
+// do download. Detecta manifests stale (offsets/hashes de uma versão antiga de
+// um artifact republicado com o mesmo nome) que causariam checksum divergente.
+//
+// Verifica:
+//   - TotalChunks == len(Chunks)
+//   - TotalSize == ΣChunk.Size
+//   - Offsets monótonos e não sobrepostos (offset[0]==0, offset[i]==offset[i-1]+size[i-1])
+//   - Index monotônico (0..N-1)
+//   - ChunkSize uniforme (todos os chunks exceto o último == manifest.ChunkSize)
+func validateDownloadManifest(m *P2PChunkManifest) error {
+	if m == nil {
+		return fmt.Errorf("manifest nil")
+	}
+	if m.TotalChunks != len(m.Chunks) {
+		return fmt.Errorf("manifest inconsistente: TotalChunks=%d mas len(Chunks)=%d", m.TotalChunks, len(m.Chunks))
+	}
+	var sum int64
+	var expectedOffset int64
+	for i, c := range m.Chunks {
+		if c.Index != i {
+			return fmt.Errorf("manifest inconsistente: chunk[%d].Index=%d esperado %d", i, c.Index, i)
+		}
+		if c.Offset != expectedOffset {
+			return fmt.Errorf("manifest inconsistente: chunk[%d].Offset=%d esperado %d", i, c.Offset, expectedOffset)
+		}
+		if c.Size <= 0 {
+			return fmt.Errorf("manifest inconsistente: chunk[%d].Size=%d deve ser > 0", i, c.Size)
+		}
+		// Todos os chunks exceto o último devem ter o tamanho de chunk completo.
+		if i < len(m.Chunks)-1 && c.Size != m.ChunkSize {
+			return fmt.Errorf("manifest inconsistente: chunk[%d].Size=%d esperado ChunkSize=%d (apenas o último pode ser menor)", i, c.Size, m.ChunkSize)
+		}
+		sum += c.Size
+		expectedOffset = c.Offset + c.Size
+	}
+	if sum != m.TotalSize {
+		return fmt.Errorf("manifest inconsistente: soma dos chunks=%d != TotalSize=%d", sum, m.TotalSize)
+	}
+	if m.TotalSize <= 0 {
+		return fmt.Errorf("manifest inconsistente: TotalSize=%d deve ser > 0", m.TotalSize)
+	}
+	return nil
 }

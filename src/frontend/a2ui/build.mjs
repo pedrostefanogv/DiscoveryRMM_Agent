@@ -29,6 +29,13 @@ const options = {
   minify: false,
   sourcemap: false,
   logLevel: "info",
+  // Garante que o bundle expõe window.A2uiChat. Com format:"iife" +
+  // globalName, o esbuild gera `var A2uiChat = (()=>{...})()` (variável
+  // local), que NÃO cria window.A2uiChat. O footer abaixo força a atribuição
+  // global, necessária para o app-chat.js consumir window.A2uiChat.
+  footer: {
+    js: "window.A2uiChat = A2uiChat;",
+  },
 };
 
 const watch = process.argv.includes("--watch");

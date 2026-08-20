@@ -53,13 +53,13 @@ func (r *Runtime) runNATSSession(ctx context.Context, cfg Config, server, transp
 		nats.ReconnectWait(reconnectBase),
 		nats.MaxReconnects(-1),
 		nats.DisconnectErrHandler(func(_ *nats.Conn, err error) {
-			r.logf("[heartbeat][nats] NATS desconectado: %v â€” heartbeats suspensos ate reconexao", err)
+			r.logf("[heartbeat][nats] NATS desconectado: %v — heartbeats suspensos ate reconexao", err)
 		}),
 		nats.ReconnectHandler(func(_ *nats.Conn) {
-			r.logf("[heartbeat][nats] NATS reconectado â€” heartbeats retomados")
+			r.logf("[heartbeat][nats] NATS reconectado — heartbeats retomados")
 		}),
 		nats.ClosedHandler(func(_ *nats.Conn) {
-			r.logf("[heartbeat][nats] conexao NATS encerrada permanentemente â€” heartbeats nao serao mais enviados")
+			r.logf("[heartbeat][nats] conexao NATS encerrada permanentemente — heartbeats nao serao mais enviados")
 		}),
 		nats.ErrorHandler(func(_ *nats.Conn, _ *nats.Subscription, err error) {
 			// Erros assíncronos do NATS (ex: Permissions Violation em subscribes
@@ -590,9 +590,9 @@ func (r *Runtime) runNATSEventLoop(ctx context.Context, nc *nats.Conn, cfg Confi
 			if reconnect, age := shouldReconnectForMissingGlobalPong(now, connectedAt, lastGlobalPongAt); reconnect {
 				roundedAge := age.Round(time.Second)
 				if lastGlobalPongAt.IsZero() {
-					r.logf("[heartbeat][nats] watchdog de global pong: sem tenant.global.pong desde conexao (%s) â€” forÃ§ando reconexao", roundedAge)
+					r.logf("[heartbeat][nats] watchdog de global pong: sem tenant.global.pong desde conexao (%s) — forçando reconexao", roundedAge)
 				} else {
-					r.logf("[heartbeat][nats] watchdog de global pong: sem tenant.global.pong ha %s â€” forÃ§ando reconexao", roundedAge)
+					r.logf("[heartbeat][nats] watchdog de global pong: sem tenant.global.pong ha %s — forçando reconexao", roundedAge)
 				}
 				return fmt.Errorf("watchdog global pong: sem sinal recente (%s)", roundedAge)
 			}
@@ -692,7 +692,7 @@ func resolveNATSSubjects(cfg Config) (natsSubjects, error) {
 
 func validateCanonicalNATSContext(cfg Config) error {
 	if !guidPattern.MatchString(strings.TrimSpace(cfg.AgentID)) {
-		return fmt.Errorf("agentId ausente ou invalido para NATS canÃ´nico")
+		return fmt.Errorf("agentId ausente ou invalido para NATS canônico")
 	}
 	if _, err := canonicalSubjectSegment("clientId", cfg.ClientID); err != nil {
 		return err
@@ -706,10 +706,10 @@ func validateCanonicalNATSContext(cfg Config) error {
 func canonicalSubjectSegment(name, value string) (string, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
-		return "", fmt.Errorf("%s ausente para subject NATS canÃ´nico", name)
+		return "", fmt.Errorf("%s ausente para subject NATS canônico", name)
 	}
 	if strings.ContainsAny(value, ".*> \t\r\n") {
-		return "", fmt.Errorf("%s invalido para subject NATS canÃ´nico", name)
+		return "", fmt.Errorf("%s invalido para subject NATS canônico", name)
 	}
 	return value, nil
 }
