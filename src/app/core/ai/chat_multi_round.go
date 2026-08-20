@@ -450,12 +450,12 @@ func (s *Service) parseMultiRoundSSE(body io.Reader, onToken func(string), pendi
 		case "a2ui":
 			// Mensagem A2UI (interface rica) emitida pelo servidor. Repassa ao
 			// frontend via callback onA2ui (que emite o evento Wails "chat:a2ui").
-			if len(evt.A2UI) > 0 {
-				msg := strings.TrimSpace(string(evt.A2UI))
-				if msg != "" && msg != "null" {
-					if len(onA2ui) > 0 && onA2ui[0] != nil {
-						onA2ui[0](msg)
-					}
+			// O servidor serializa A2uiJson como string; aqui já chega como o
+			// JSON cru (sem aspas duplas), pronto para o frontend parsear.
+			msg := strings.TrimSpace(evt.A2UI)
+			if msg != "" && msg != "null" {
+				if len(onA2ui) > 0 && onA2ui[0] != nil {
+					onA2ui[0](msg)
 				}
 			}
 		case "tool_call":

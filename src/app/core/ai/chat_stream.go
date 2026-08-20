@@ -36,7 +36,12 @@ type agentChatStreamEvent struct {
 	// A2UI carrega uma mensagem A2UI (createSurface/updateComponents/updateDataModel/deleteSurface)
 	// emitida pelo servidor quando o LLM gera uma interface rica. O agent repassa
 	// ao frontend via evento "chat:a2ui".
-	A2UI json.RawMessage `json:"a2uiJson"`
+	//
+	// IMPORTANTE: o servidor C# serializa AiChatStreamChunk.A2uiJson como string
+	// (ex.: "{\"version\":\"v0.9\",...}"). Declarar como string (e não
+	// json.RawMessage) evita a dupla codificação que fazia o frontend receber o
+	// JSON com aspas literais e descartar a mensagem (parsed.version undefined).
+	A2UI string `json:"a2uiJson"`
 }
 
 // toolArgsString normaliza toolArguments (pode ser string JSON ou objeto JSON).

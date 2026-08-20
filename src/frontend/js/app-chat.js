@@ -9,6 +9,77 @@ var streamingBubble = null;
 var streamingRawContent = "";
 var streamingRafPending = false;
 
+// Estado do filtro de blocos A2UI nos tokens visíveis.
+// O servidor emite os tokens em tempo real e só extrai o bloco ```a2ui no
+// final do stream. Para o usuário não ver o JSON cru, filtramos o conteúdo
+// entre ```a2ui e ``` conforme os tokens chegam (de forma incremental).
+var a2uiTokenFilter = {
+  inBlock: false,
+  buffer: "",
+};
+
+// Filtra um fragmento de token, removendo qualquer bloco ```a2ui ... ```.
+// Retorna o texto "limpo" que deve ser exibido ao usuário.
+//
+// Estratégia: mantém um buffer pequeno (sufixo potencial de um marcador) e só
+// emite texto quando temos certeza de que ele não faz parte de um bloco a2ui.
+function filterA2uiTokens(token) {
+  var f = a2uiTokenFilter;
+  f.buffer += token;
+
+  var out = "";
+  var i = 0;
+  while (i < f.buffer.length) {
+    if (!f.inBlock) {
+      // Procura a abertura do bloco a2ui.
+      var openIdx = f.buffer.indexOf("```a2ui", i);
+      if (openIdx === -1) {
+        // Sem abertura: emite tudo até o fim, mantendo os últimos 6 chars no
+        // buffer (pode ser o início de ```a2ui). Não limpa o buffer aqui.
+        var keep = Math.min(6, f.buffer.length - i);
+        out += f.buffer.slice(i, f.buffer.length - keep);
+        f.buffer = f.buffer.slice(f.buffer.length - keep);
+        break;
+      }
+      // Texto antes da abertura é visível.
+      out += f.buffer.slice(i, openIdx);
+      f.inBlock = true;
+      i = openIdx + 6; // pula "```a2ui"
+    } else {
+      // Dentro do bloco: procura o fechamento ```.
+      var closeIdx = f.buffer.indexOf("```", i);
+      if (closeIdx === -1) {
+        // Sem fechamento ainda: descarta tudo até o fim, mantendo os últimos
+        // 3 chars no buffer (pode ser o início de ```).
+        var keepClose = Math.min(3, f.buffer.length - i);
+        f.buffer = f.buffer.slice(f.buffer.length - keepClose);
+        break;
+      }
+      // Fecha o bloco e descarta o conteúdo.
+      f.inBlock = false;
+      i = closeIdx + 3; // pula "```"
+    }
+  }
+
+  return out;
+}
+
+function resetA2uiTokenFilter() {
+  a2uiTokenFilter.inBlock = false;
+  a2uiTokenFilter.buffer = "";
+}
+
+function onStreamToken(token) {
+  streamingRawContent += filterA2uiTokens(token);
+  if (document.hidden || window.__discoveryUISuspended) {
+    return;
+  }
+  if (!streamingRafPending) {
+    streamingRafPending = true;
+    requestAnimationFrame(flushStreamingContent);
+  }
+}
+
 function flushStreamingContent() {
   streamingRafPending = false;
   if (!streamingBubble) return;
@@ -60,17 +131,6 @@ function requestStopChatStream() {
   }
 }
 
-function onStreamToken(token) {
-  streamingRawContent += token;
-  if (document.hidden || window.__discoveryUISuspended) {
-    return;
-  }
-  if (!streamingRafPending) {
-    streamingRafPending = true;
-    requestAnimationFrame(flushStreamingContent);
-  }
-}
-
 function onStreamThinking(status) {
   if (document.hidden || window.__discoveryUISuspended) return;
   if (!streamingBubble) return;
@@ -85,6 +145,16 @@ function onStreamThinking(status) {
 
 function finaliseStreamingBubble() {
   if (!streamingBubble) return;
+  // Libera qualquer texto residual que ficou retido no buffer do filtro A2UI
+  // (ex.: os últimos caracteres de uma resposta sem bloco a2ui). Se ainda
+  // estivermos DENTRO de um bloco a2ui (stream interrompido no meio do JSON),
+  // o residual é JSON truncado e deve ser descartado, não exibido.
+  if (!a2uiTokenFilter.inBlock) {
+    streamingRawContent += a2uiTokenFilter.buffer;
+  }
+  a2uiTokenFilter.buffer = "";
+  a2uiTokenFilter.inBlock = false;
+
   // Flush any remaining buffered content immediately.
   streamingRafPending = false;
   flushStreamingContent();
@@ -282,7 +352,16 @@ function onChatA2ui(data) {
 
   try {
     var parsed = JSON.parse(msg);
-    if (!parsed || !parsed.version) return;
+    // Defensivo contra dupla codificação: se o JSON veio como string aninhada
+    // (ex.: "{\"version\":...}"), parseia novamente. Isso garante robustez
+    // mesmo que o agente/servidor mude a serialização no futuro.
+    if (typeof parsed === "string") {
+      parsed = JSON.parse(parsed);
+    }
+    if (!parsed || !parsed.version) {
+      console.warn("[a2ui] mensagem sem version; ignorando:", msg);
+      return;
+    }
 
     // Determina o surfaceId da mensagem (createSurface/updateComponents/...).
     var msgSurfaceId = null;
@@ -326,7 +405,42 @@ function onChatA2ui(data) {
     }
     scheduleChatScrollToBottom();
   } catch (e) {
+    // Fallback: se o A2UI falhar (JSON inválido, catalog/surface error, etc.),
+    // não deixamos o usuário sem resposta. Renderiza o conteúdo bruto como
+    // markdown normal e limpa a surface parcial, se houver.
     console.error("[a2ui] erro ao processar mensagem:", e);
+    fallbackA2uiToMarkdown(msg);
+  }
+}
+
+// fallbackA2uiToMarkdown é chamado quando o renderer A2UI falha. Em vez de
+// exibir o JSON cru (lixo para o usuário), remove a surface parcial e mostra
+// uma mensagem amigável. O texto markdown normal (fora do bloco a2ui) já foi
+// exibido pelo streaming, então não há perda de conteúdo relevante.
+function fallbackA2uiToMarkdown(rawMsg) {
+  try {
+    if (a2uiSurfaceHandle) {
+      try { a2uiSurfaceHandle.destroy(); } catch (_) {}
+      a2uiSurfaceHandle = null;
+    }
+    if (a2uiSurfaceBubble) {
+      a2uiSurfaceBubble.remove();
+      a2uiSurfaceBubble = null;
+    }
+    // Loga o payload bruto para diagnóstico, mas não o exibe ao usuário.
+    console.warn("[a2ui] payload que falhou:", String(rawMsg || ""));
+    if (!chatMessagesEl) return;
+    var div = document.createElement("div");
+    div.className = "chat-msg assistant";
+    div.innerHTML = renderAssistantMarkdown(
+      "Não foi possível exibir a interface interativa gerada.",
+    );
+    syncColorMode();
+    bindInternalChatLinks(div);
+    chatMessagesEl.appendChild(div);
+    scheduleChatScrollToBottom();
+  } catch (_) {
+    // Nunca lançar a partir de um handler de evento.
   }
 }
 
@@ -400,6 +514,7 @@ function sendChatMessageWithA2uiAction() {
 
   chatStopRequested = false;
   setChatBusy(true);
+  resetA2uiTokenFilter();
 
   // Cria a bolha de streaming para a resposta do agent à ação.
   streamingRawContent = "";
@@ -1062,6 +1177,7 @@ async function sendChatMessage() {
 
   chatStopRequested = false;
   setChatBusy(true);
+  resetA2uiTokenFilter();
 
   // Create the streaming bubble immediately.
   streamingRawContent = "";
