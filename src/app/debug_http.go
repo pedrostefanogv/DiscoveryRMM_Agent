@@ -221,6 +221,40 @@ func (a *App) resolveDebugCORSOrigin() string {
 	return "http://localhost"
 }
 
+// setSSECORSOrigin define o header Access-Control-Allow-Origin do endpoint SSE
+// de chat. O navegador (modo debug HTTP) já era atendido por resolveDebugCORSOrigin.
+// Para permitir que o webview nativo Wails consuma o mesmo broker SSE, ecoamos o
+// Origin da requisição quando ele for seguro (loopback, host vazio/paginado ou
+// igual ao origin do debug HTTP). Nunca ecoamos um Origin arbitrário de rede.
+func (a *App) setSSECORSOrigin(w http.ResponseWriter, r *http.Request) {
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin == "" {
+		// Sem Origin (curl, EventSource local de mesma origem): reflete o padrão.
+		w.Header().Set("Access-Control-Allow-Origin", a.resolveDebugCORSOrigin())
+		return
+	}
+
+	// Loopback, host "localhost" (inclui o origin do webview nativo Wails v3,
+	// que usa "http://wails.localhost" — que resolve para 127.0.0.1) e
+	// null-origin são sempre seguros para ecoar (fetch/EventSource de arquivos
+	// locais ou do webview nativo podem usar "null"/"wails.localhost").
+	lower := strings.ToLower(origin)
+	if strings.HasPrefix(lower, "http://127.0.0.1:") ||
+		strings.HasPrefix(lower, "http://localhost:") ||
+		strings.HasPrefix(lower, "http://[::1]:") ||
+		strings.HasSuffix(origin, "://wails.localhost") ||
+		lower == "wails://app" ||
+		lower == "null" {
+		w.Header().Set("Access-Control-Allow-Origin", origin)
+		w.Header().Set("Vary", "Origin")
+		return
+	}
+
+	// Se a origem for idêntica à autoridade do debug HTTP (ex.: outro origin
+	// loopback da mesma máquina), ecoa. Caso contrário, recua para o padrão.
+	w.Header().Set("Access-Control-Allow-Origin", a.resolveDebugCORSOrigin())
+}
+
 // serveDebugAPI handles /api/<method> requests, dispatching to the corresponding App method.
 func (a *App) serveDebugAPI(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", a.resolveDebugCORSOrigin())
@@ -377,7 +411,14 @@ func (a *App) serveChatEventsSSE(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("Access-Control-Allow-Origin", a.resolveDebugCORSOrigin())
+	// Um webview nativo Wails pode obter eventos de chat reutilizando o mesmo
+	// broker SSE do navegador. Como o Origin do webview é um scheme custom
+	// (ex.: http://wails.localhost), ecoamos o Origin da requisição quando a
+	// origem é confiável (loopback/identical), em vez de só aceitar o origin
+	// fixo do debug HTTP. EventSource cross-origin sem esta header é bloqueado
+	// pelo navegador e o chat nativo mostraria "Tempo limite" (com o backend
+	// completando normalmente — ver chat-native-event-loss.md).
+	a.setSSECORSOrigin(w, r)
 
 	if a.chatEvents == nil {
 		http.Error(w, "chat events indisponivel", http.StatusServiceUnavailable)

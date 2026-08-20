@@ -593,18 +593,114 @@ function clearA2uiSurface() {
 }
 
 // Register Wails event listeners once the runtime is ready.
+//
+// IMPORTANTE sobre a entrega de eventos no app NÃO-vivo (Wails v3 beta patchado):
+// ver chat-native-event-loss.md. No runtime nativo, `a.app.Event.Emit` não
+// entrega `chat:done`/tokens ao WebView de forma confiável (o backend completa
+// o stream, mas o frontend nunca recebe e o timer de 60s dispara "chat.timeout").
+// O caminho COMPROVADO é o broker SSE (`/api/chat-events`), usado no navegador
+// e que emite os MESMOS eventos. Por isso, no runtime nativo, quando o servidor
+// HTTP de debug está ativo (GetDebugHTTPPort > 0), conectamos ao SSE e usamos os
+// mesmos handlers; só registramos os listeners nativos se o SSE não estiver.
 (function registerChatStreamEvents() {
-  function doRegister() {
-    if (window.wails && typeof window.wails.on === 'function') {
-      window.wails.on("chat:token", onStreamToken);
-      window.wails.on("chat:thinking", onStreamThinking);
-      window.wails.on("chat:done", onStreamDone);
-      window.wails.on("chat:error", onStreamError);
-      window.wails.on("chat:stopped", onStreamStopped);
-      window.wails.on("chat:question", onChatQuestion);
-      window.wails.on("chat:a2ui", onChatA2ui);
+  // Mapeia cada evento de chat ao seu handler.
+  var CHAT_EVENT_HANDLERS = {
+    "chat:token": onStreamToken,
+    "chat:thinking": onStreamThinking,
+    "chat:done": onStreamDone,
+    "chat:error": onStreamError,
+    "chat:stopped": onStreamStopped,
+    "chat:question": onChatQuestion,
+    "chat:a2ui": onChatA2ui,
+  };
+
+  var nativeSSE = null;
+
+  function routeChatEvent(evt) {
+    var cb = CHAT_EVENT_HANDLERS[evt && evt.event];
+    if (!cb) return;
+    try {
+      cb(evt.data);
+    } catch (e) {
+      console.error("[chat] erro no handler " + (evt && evt.event) + ":", e);
     }
   }
+
+  // Conecta ao broker SSE do debug HTTP (mesmo endpoint do navegador). O
+  // EventSource reconecta automaticamente. Eventos são roteados aos mesmos
+  // handlers de chat. Se o SSE falhar de forma persistente (ex.: servidor de
+  // debug foi encerrado), registra os listeners nativos como fallback para o
+  // chat:done nunca ficar preso no "chat.timeout".
+  function connectChatSSE(port) {
+    if (!port || nativeSSE) return nativeSSE;
+    var url = "http://127.0.0.1:" + port + "/api/chat-events";
+    var ss = new EventSource(url);
+    nativeSSE = ss;
+    ss.onmessage = function (msg) {
+      try {
+        routeChatEvent(JSON.parse(msg.data));
+      } catch (e) {
+        // ignora mensagens não-JSON
+      }
+    };
+    ss.onerror = function () {
+      // EventSource fecha e reconecta sozinho; se cair permanentemente o
+      // fallback nativo é registrado abaixo.
+      if (ss.readyState === EventSource.CLOSED) {
+        registerNativeListeners();
+      }
+    };
+    ss.onopen = function () {
+      console.log("[chat] SSE nativo conectado: " + url);
+    };
+    return nativeSSE;
+  }
+
+  // Registra os listeners nativos do Wails (fallback quando não há SSE).
+  function registerNativeListeners() {
+    if (window.wails && typeof window.wails.on === "function") {
+      Object.keys(CHAT_EVENT_HANDLERS).forEach(function (name) {
+        window.wails.on(name, CHAT_EVENT_HANDLERS[name]);
+      });
+    }
+  }
+
+  function doRegister() {
+    var isNative = !!window.__wailsV3Bridge;
+
+    // No navegador, o próprio debug-http-bridge já conecta ao SSE via window.wails.on.
+    if (!isNative) {
+      registerNativeListeners();
+      return;
+    }
+
+    // Runtime nativo: tenta primeiro o SSE (caminho que funciona). O
+    // GetDebugHTTPPort é um binding async que resolve para o port do servidor
+    // HTTP de debug (0 se não estiver rodando).
+    if (appApi() && typeof appApi().GetDebugHTTPPort === "function") {
+      appApi()
+        .GetDebugHTTPPort()
+        .then(function (port) {
+          var p = Number(port) || 0;
+          if (p > 0) {
+            connectChatSSE(p);
+          } else {
+            // Sem servidor HTTP de debug: usa os listeners nativos (única via).
+            registerNativeListeners();
+          }
+        })
+        .catch(function () {
+          registerNativeListeners();
+        });
+    } else {
+      registerNativeListeners();
+    }
+
+    // Segurança: mesmo que o SSE esteja conectado, ao pedir um stream o map de
+    // eventos fica funcional; se o SSE cair e nunca reconectar, o fallback
+    // nativo garante o chat:done (evita o "chat.timeout" falso).
+  }
+
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", doRegister);
   } else {

@@ -77,6 +77,10 @@ func (a *App) AskUser(question, optionsJSON, allowTextRaw string) (string, error
 	// Emit event to the frontend
 	qJSON, _ := json.Marshal(q)
 	a.EmitEvent("chat:question", string(qJSON))
+	// Também publica via broker SSE, para que o evento chegue tanto ao
+	// navegador (debug HTTP) quanto ao webview nativo quando este consome os
+	// eventos de chat pelo endpoint SSE (ver chat-native-event-loss.md).
+	a.PublishChatEvent("chat:question", string(qJSON))
 
 	// Wait for answer with timeout
 	select {

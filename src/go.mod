@@ -13,18 +13,18 @@ require (
 	github.com/klauspost/cpuid/v2 v2.4.0
 	github.com/libp2p/go-libp2p v0.49.0
 	github.com/multiformats/go-multiaddr v0.16.1
-	github.com/nats-io/nats-server/v2 v2.14.4
-	github.com/nats-io/nats.go v1.52.0
+	github.com/nats-io/nats-server/v2 v2.14.5
+	github.com/nats-io/nats.go v1.53.1
 	github.com/osquery/osquery-go v0.0.0-20260630173615-eb39ad3443df
 	github.com/pedrostefanogv/go-psadt v0.0.0-20260724000345-4f8011207c09
 	github.com/pion/webrtc/v4 v4.2.18
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/samber/lo v1.53.0
 	github.com/vmihailenco/msgpack/v5 v5.4.1
-	github.com/wailsapp/wails/v3 v3.0.0-beta.6
+	github.com/wailsapp/wails/v3 v3.0.0-beta.11
 	golang.org/x/sys v0.47.0
-	golang.org/x/text v0.40.0
-	modernc.org/sqlite v1.56.0
+	golang.org/x/text v0.41.0
+	modernc.org/sqlite v1.57.0
 )
 
 require (
@@ -122,7 +122,7 @@ require (
 	go.uber.org/mock v0.6.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.28.0 // indirect
-	golang.org/x/crypto v0.54.0 // indirect
+	golang.org/x/crypto v0.55.0 // indirect
 	golang.org/x/exp v0.0.0-20260810151157-a8b543ca52da // indirect
 	golang.org/x/mod v0.39.0 // indirect
 	golang.org/x/net v0.57.0 // indirect
