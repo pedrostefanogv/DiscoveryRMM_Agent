@@ -553,12 +553,20 @@ func (m *Manager) runTerminalSession(ctx context.Context, session *Session) {
 			availableShells = append(availableShells, "wsl:"+d)
 		}
 	}
+	readyPayload, _ := json.Marshal(map[string]any{
+		"shells":    availableShells,
+		"consoleId": console.ID,
+		"termCols":  cols,
+		"termRows":  rows,
+	})
 	m.natsStream.PublishTermReady(session.ID, map[string]any{
 		"shells":    availableShells,
 		"consoleId": console.ID,
 		"termCols":  cols,
 		"termRows":  rows,
 	})
+	// Guarda o payload para republicar no primeiro term.in (handshake).
+	sessTerm.SetReadyPayload(readyPayload)
 	log.Printf("[remote-session-term] console pronto para sessao %s (consoleId=%s, shells=%v)\n",
 		session.ID, console.ID, availableShells)
 

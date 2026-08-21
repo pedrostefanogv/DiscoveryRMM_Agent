@@ -302,7 +302,11 @@ func (s *ConPTYShell) Close() error {
 
 	if s.cmd != nil && s.cmd.Process != nil {
 		_ = s.cmd.Process.Kill()
-		_, _ = s.cmd.Process.Wait()
+		// Reaproveita o mesmo sync.Once do Wait() para não chamar
+		// Process.Wait() duas vezes (a goroutine de exit já pode tê-lo feito).
+		s.waitOnce.Do(func() {
+			_, _ = s.cmd.Process.Wait()
+		})
 	}
 
 	s.stdoutPipe.Close()
@@ -310,7 +314,7 @@ func (s *ConPTYShell) Close() error {
 }
 
 func (s *ConPTYShell) readLoop(r io.Reader) {
-	buf := make([]byte, 4096)
+	buf := make([]byte, 32*1024) // 32KB — menos syscalls e menos mensagens NATS
 	for {
 		n, err := r.Read(buf)
 		if n > 0 {

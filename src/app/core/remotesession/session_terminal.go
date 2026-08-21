@@ -80,10 +80,18 @@ func (oc *outputCoalescer) flush() {
 	if oc.buf.Len() > 0 {
 		if oc.allowMessage() {
 			oc.onFlush(oc.buf.String())
+			oc.buf.Reset()
 		}
-		oc.buf.Reset()
+		// Se o rate limit foi atingido, NÃO descarta o buffer: mantém o
+		// conteúdo acumulado para ser enviado no próximo flush (o timer
+		// é re-agendado abaixo). Isso evita perda de output em comandos
+		// com saída volumosa (dir /s, Get-ChildItem -Recurse, logs).
 	}
 	oc.timer = nil
+	// Re-agenda o flush se ainda há dados pendentes (rate limit bloqueou).
+	if oc.buf.Len() > 0 {
+		oc.timer = time.AfterFunc(oc.interval, oc.flush)
+	}
 }
 
 // allowMessage verifica rate limit via janela deslizante.
@@ -178,6 +186,10 @@ type SessionTerminal struct {
 	// onExit é chamado quando o console/shell encerra (para o manager encerrar a sessão).
 	onExit func(reason string)
 
+	// readyPayload é republicado no primeiro term.in (handshake) para o viewer
+	// não perder o term.ready (NATS core é fire-and-forget).
+	readyPayload []byte
+
 	stopCh chan struct{}
 	doneCh chan struct{}
 	mu     sync.RWMutex
@@ -188,6 +200,14 @@ func (st *SessionTerminal) SetOnExit(cb func(reason string)) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	st.onExit = cb
+}
+
+// SetReadyPayload guarda o payload do term.ready para republicar no primeiro
+// term.in (handshake) — evita que o viewer perca o ready (NATS fire-and-forget).
+func (st *SessionTerminal) SetReadyPayload(payload []byte) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.readyPayload = payload
 }
 
 // NewSessionTerminal cria um novo gerenciador de sessao de terminal (console unico).
@@ -340,6 +360,18 @@ func (st *SessionTerminal) Start(ctx context.Context, shellKind terminal.ShellKi
 		if err := json.Unmarshal(data, &req); err != nil {
 			log.Printf("[session-terminal] term.in JSON invalido: %v\n", err)
 			return
+		}
+
+		// Handshake: republica o term.ready no primeiro term.in (qualquer tipo),
+		// para o viewer não perder o ready (NATS core é fire-and-forget).
+		st.mu.RLock()
+		rp := st.readyPayload
+		st.mu.RUnlock()
+		if len(rp) > 0 {
+			_ = st.natsStream.PublishTermOut(st.sessionID, string(rp))
+			st.mu.Lock()
+			st.readyPayload = nil // só republica uma vez
+			st.mu.Unlock()
 		}
 
 		// Resize se dimensoes informadas
