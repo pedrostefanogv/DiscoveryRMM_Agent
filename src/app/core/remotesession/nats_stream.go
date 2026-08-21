@@ -287,6 +287,34 @@ func (h *NatsStreamHandler) PublishFilesProgress(sessionID string, data any) err
 	return h.nc.Publish(subject, payload)
 }
 
+// SubscribeToProcReq subscreve a requisicoes de processos/servicos
+// (listProcesses/killProcess/listServices/startService/stopService/restartService).
+// O handler retorna o payload de resposta, publicado em .proc.resp.
+func (h *NatsStreamHandler) SubscribeToProcReq(sessionID string, handler func(reqData []byte) []byte) (*nats.Subscription, error) {
+	pattern := h.subscribePattern(sessionID, "proc.req")
+	sub, err := h.nc.Subscribe(pattern, func(msg *nats.Msg) {
+		resp := handler(msg.Data)
+		if resp != nil {
+			_ = h.nc.Publish(h.publishSubject(sessionID, "proc.resp"), resp)
+		}
+	})
+	if err != nil {
+		log.Printf("[remote-session-nats] SubscribeToProcReq erro: pattern=%s err=%v\n", pattern, err)
+	} else {
+		log.Printf("[remote-session-nats] SubscribeToProcReq ok: pattern=%s\n", pattern)
+	}
+	return sub, err
+}
+
+// PublishProcReady notifica o viewer que a sessão de processos/serviços está
+// pronta (subscribe em proc.req ativo). Mesmo padrão anti-race de files.ready.
+func (h *NatsStreamHandler) PublishProcReady(sessionID string, data any) error {
+	payload, _ := json.Marshal(data)
+	subject := h.publishSubject(sessionID, "proc.ready")
+	log.Printf("[remote-session-nats] PublishProcReady: subject=%s\n", subject)
+	return h.nc.Publish(subject, payload)
+}
+
 // SubscribeToProxyReq subscreve a requisicoes de proxy HTTP.
 func (h *NatsStreamHandler) SubscribeToProxyReq(sessionID string, handler func(reqData []byte) []byte) (*nats.Subscription, error) {
 	return h.nc.Subscribe(h.subscribePattern(sessionID, "proxy.req"), func(msg *nats.Msg) {
@@ -317,6 +345,7 @@ type SessionSubscriptions struct {
 	TermIn   *nats.Subscription
 	FilesReq *nats.Subscription
 	ProxyReq *nats.Subscription
+	ProcReq  *nats.Subscription
 	Signal   *nats.Subscription
 }
 
@@ -336,6 +365,9 @@ func (ss *SessionSubscriptions) UnsubscribeAll() {
 	}
 	if ss.ProxyReq != nil {
 		_ = ss.ProxyReq.Unsubscribe()
+	}
+	if ss.ProcReq != nil {
+		_ = ss.ProcReq.Unsubscribe()
 	}
 	if ss.Signal != nil {
 		_ = ss.Signal.Unsubscribe()
@@ -385,6 +417,14 @@ func (h *NatsStreamHandler) SubscribeAll(ctx context.Context, sessionID string, 
 		}
 	}
 
+	if handlers.OnProcReq != nil {
+		subs.ProcReq, err = h.SubscribeToProcReq(sessionID, handlers.OnProcReq)
+		if err != nil {
+			subs.UnsubscribeAll()
+			return nil, fmt.Errorf("subscribe proc.req: %w", err)
+		}
+	}
+
 	if handlers.OnSignal != nil {
 		subs.Signal, err = h.SubscribeToSignal(sessionID, handlers.OnSignal)
 		if err != nil {
@@ -403,5 +443,6 @@ type SessionHandlers struct {
 	OnTermIn   func(data []byte)
 	OnFilesReq func(reqData []byte) []byte
 	OnProxyReq func(reqData []byte) []byte
+	OnProcReq  func(reqData []byte) []byte
 	OnSignal   func(signalData []byte)
 }

@@ -186,6 +186,12 @@ func (m *Manager) handleStart(ctx context.Context, payload map[string]any) (bool
 		}, func(line string) {
 			fmt.Printf("[remote-session-files] %s\n", line)
 		})
+	case "processes":
+		safego.Go(func() {
+			m.runProcessesSession(ctx, session)
+		}, func(line string) {
+			fmt.Printf("[remote-session-processes] %s\n", line)
+		})
 	case "proxy":
 		safego.Go(func() {
 			m.runProxySession(ctx, session)
@@ -677,6 +683,35 @@ func (m *Manager) runProxySession(ctx context.Context, session *Session) {
 	select {
 	case <-ctx.Done():
 	case <-session.stopCh:
+	}
+}
+
+// runProcessesSession inicia a sessão de processos/serviços remota.
+func (m *Manager) runProcessesSession(ctx context.Context, session *Session) {
+	defer close(session.doneCh)
+
+	if m.natsStream == nil {
+		return
+	}
+
+	sp := NewSessionProcesses(session.ID, m.natsStream)
+	log.Printf("[remote-session-processes] sessão de processos/serviços iniciada para %s", session.ID)
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	go func() {
+		select {
+		case <-session.stopCh:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+
+	if err := sp.Start(ctx); err != nil {
+		log.Printf("[remote-session-processes] sessão encerrada: %v", err)
+	} else {
+		log.Printf("[remote-session-processes] sessão encerrada normalmente para %s", session.ID)
 	}
 }
 
