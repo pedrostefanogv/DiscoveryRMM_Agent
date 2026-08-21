@@ -1,8 +1,10 @@
 package fileserver
 
 import (
+	"archive/zip"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -180,6 +182,33 @@ func TestHandleRequest_ZipUnzip(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(tmp, "a.zip")); err != nil {
 		t.Fatalf("zip arquivo: a.zip nao existe: %v", err)
+	}
+
+	// ── zip múltiplo (a.txt + pasta) ──
+	zm := srv.HandleRequest(mustJSON(t, map[string]any{
+		"version": 1, "requestId": "z4", "action": "zip",
+		"newPath": "multiplo.zip", "paths": []string{"a.txt", "pasta"},
+	}))
+	if !okResp(t, zm, "zip multiplo") {
+		t.Fatal()
+	}
+	// Verifica que o zip multiplo contém as duas entradas.
+	if err := func() error {
+		zr, err := zip.OpenReader(filepath.Join(tmp, "multiplo.zip"))
+		if err != nil {
+			return err
+		}
+		defer zr.Close()
+		names := map[string]bool{}
+		for _, f := range zr.File {
+			names[f.Name] = true
+		}
+		if !names["a.txt"] || !names["pasta/b.txt"] {
+			return fmt.Errorf("zip multiplo: entradas inesperadas: %v", names)
+		}
+		return nil
+	}(); err != nil {
+		t.Fatalf("zip multiplo: %v", err)
 	}
 }
 

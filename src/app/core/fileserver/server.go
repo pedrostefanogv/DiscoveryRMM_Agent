@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 )
 
 // FileInfo representa metadados de um arquivo/diretorio.
@@ -25,9 +26,10 @@ type FileInfo struct {
 type FileSessionRequest struct {
 	Version     int    `json:"version"`
 	RequestID   string `json:"requestId"`
-	Action      string `json:"action"` // list|get|put|delete|rename|mkdir|move|copy|stat
+	Action      string `json:"action"` // list|get|put|delete|rename|mkdir|move|copy|stat|zip|unzip
 	Path        string `json:"path"`
-	NewPath     string `json:"newPath,omitempty"` // rename/move/copy destino
+	NewPath     string `json:"newPath,omitempty"` // rename/move/copy destino / zip destino / unzip destino
+	Paths       []string `json:"paths,omitempty"` // zip múltiplo (origens)
 	Data        []byte `json:"data,omitempty"`
 	ChunkIndex  *int   `json:"chunkIndex,omitempty"` // nil = sem chunk (arquivo inteiro)
 	ChunkSize   int    `json:"chunkSize,omitempty"`
@@ -67,11 +69,26 @@ type FileResponse struct {
 // Server gerencia transferencia de arquivos com sandboxing.
 type Server struct {
 	basePath string // diretorio raiz permitido
+	// progressFn é chamado durante operações longas (copy/move/zip) para
+	// reportar progresso (bytes processados / total). Pode ser nil.
+	progressFn func(loaded, total int64)
 }
 
 // NewServer cria um novo servidor de arquivos.
 func NewServer(basePath string) *Server {
 	return &Server{basePath: filepath.Clean(basePath)}
+}
+
+// SetProgressCallback define o callback de progresso para operações longas.
+func (s *Server) SetProgressCallback(fn func(loaded, total int64)) {
+	s.progressFn = fn
+}
+
+// reportProgress invoca o callback de progresso, se definido.
+func (s *Server) reportProgress(loaded, total int64) {
+	if s.progressFn != nil {
+		s.progressFn(loaded, total)
+	}
 }
 
 // RootPath retorna o diretório raiz (sandbox) do servidor.
@@ -93,17 +110,17 @@ func (s *Server) HandleRequest(raw []byte) []byte {
 		if err := json.Unmarshal(raw, &legacy); err != nil {
 			return s.marshal(s.errorResponse("", "payload json invalido: "+err.Error()))
 		}
-		resp := s.dispatch(legacy.Action, legacy.Path, "", legacy.Data, nil, 0, 0)
+		resp := s.dispatch(legacy.Action, legacy.Path, "", legacy.Data, nil, 0, 0, nil)
 		// Converte para FileResponse legado
 		legacyResp := FileResponse{Success: resp.Success, Error: resp.Error, Files: resp.Entries, Data: resp.Data, Size: resp.Size}
 		b, _ := json.Marshal(legacyResp)
 		return b
 	}
 
-	return s.marshal(s.dispatch(req.Action, req.Path, req.NewPath, req.Data, req.ChunkIndex, req.ChunkSize, req.TotalChunks))
+	return s.marshal(s.dispatch(req.Action, req.Path, req.NewPath, req.Data, req.ChunkIndex, req.ChunkSize, req.TotalChunks, req.Paths))
 }
 
-func (s *Server) dispatch(action, path, newPath string, data []byte, chunkIndex *int, chunkSize, totalChunks int) FileSessionResponse {
+func (s *Server) dispatch(action, path, newPath string, data []byte, chunkIndex *int, chunkSize, totalChunks int, paths []string) FileSessionResponse {
 	var resp FileSessionResponse
 	switch action {
 	case "list":
@@ -125,7 +142,7 @@ func (s *Server) dispatch(action, path, newPath string, data []byte, chunkIndex 
 	case "stat":
 		resp = s.handleStat(path)
 	case "zip":
-		resp = s.handleZip(path, newPath)
+		resp = s.handleZipMany(path, newPath, paths)
 	case "unzip":
 		resp = s.handleUnzip(path, newPath)
 	default:
@@ -358,9 +375,64 @@ func (s *Server) handleMove(path, newPath string) FileSessionResponse {
 		return s.errorResponse("", "criar diretorio destino: "+err.Error())
 	}
 	if err := os.Rename(oldFull, newFull); err != nil {
+		// Fallback cross-volume (EXDEV): copia e remove a origem. Em Windows,
+		// os.Rename usa MoveFileEx (já suporta cross-volume), mas este fallback
+		// cobre volumes/montagens onde MoveFileEx falha.
+		if isCrossDeviceError(err) {
+			info, statErr := os.Stat(oldFull)
+			if statErr != nil {
+				return s.errorResponse("", "mover: "+err.Error())
+			}
+			var total int64
+			if info.IsDir() {
+				total = dirSize(oldFull)
+			} else {
+				total = info.Size()
+			}
+			var loaded int64
+			if info.IsDir() {
+				if copyErr := copyDir(oldFull, newFull, &loaded, total, s.reportProgress); copyErr != nil {
+					return s.errorResponse("", "mover (copiar): "+copyErr.Error())
+				}
+			} else {
+				if copyErr := copyFile(oldFull, newFull, &loaded, total, s.reportProgress); copyErr != nil {
+					return s.errorResponse("", "mover (copiar): "+copyErr.Error())
+				}
+			}
+			s.reportProgress(total, total)
+			if info.IsDir() {
+				if rmErr := os.RemoveAll(oldFull); rmErr != nil {
+					return s.errorResponse("", "mover (remover origem): "+rmErr.Error())
+				}
+			} else {
+				if rmErr := os.Remove(oldFull); rmErr != nil {
+					return s.errorResponse("", "mover (remover origem): "+rmErr.Error())
+				}
+			}
+			return s.okResponse(nil, nil, 0, 0, 0)
+		}
 		return s.errorResponse("", "mover: "+err.Error())
 	}
 	return s.okResponse(nil, nil, 0, 0, 0)
+}
+
+// isCrossDeviceError detecta erro de cross-device (EXDEV) em os.Rename.
+// Em Windows, MoveFileEx normalmente resolve; em Unix, EXDEV é o sinal típico.
+func isCrossDeviceError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errno, ok := err.(interface{ Is(error) bool }); ok {
+		// Erros syscall modernos (Go 1.13+) expõem Is.
+		return errno.Is(syscall.EXDEV)
+	}
+	// Fallback por string (portável entre plataformas).
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "cross-device") ||
+		strings.Contains(msg, "different device") ||
+		strings.Contains(msg, "cannot move") ||
+		strings.Contains(msg, "no está permitido") ||
+		strings.Contains(msg, "invalid cross-device")
 }
 
 func (s *Server) handleCopy(path, newPath string) FileSessionResponse {
@@ -381,15 +453,25 @@ func (s *Server) handleCopy(path, newPath string) FileSessionResponse {
 		return s.errorResponse("", "copiar: "+err.Error())
 	}
 
+	// Total de bytes a copiar (para progresso).
+	var total int64
 	if info.IsDir() {
-		if err := copyDir(src, dst); err != nil {
+		total = dirSize(src)
+	} else {
+		total = info.Size()
+	}
+	var loaded int64
+
+	if info.IsDir() {
+		if err := copyDir(src, dst, &loaded, total, s.reportProgress); err != nil {
 			return s.errorResponse("", "copiar diretorio: "+err.Error())
 		}
 	} else {
-		if err := copyFile(src, dst); err != nil {
+		if err := copyFile(src, dst, &loaded, total, s.reportProgress); err != nil {
 			return s.errorResponse("", "copiar arquivo: "+err.Error())
 		}
 	}
+	s.reportProgress(total, total)
 	return s.okResponse(nil, nil, 0, 0, 0)
 }
 
@@ -412,29 +494,48 @@ func (s *Server) handleStat(path string) FileSessionResponse {
 	return s.okResponse(entries, nil, info.Size(), 0, 0)
 }
 
-// handleZip compacta um arquivo ou diretorio em um arquivo .zip.
-// path = origem (arquivo ou pasta); newPath = destino do .zip (ex: C:\x\foo.zip).
-func (s *Server) handleZip(path, newPath string) FileSessionResponse {
+// handleZipMany compacta um ou mais arquivos/diretorios em um arquivo .zip.
+// path = origem (compat. legada, quando paths estiver vazio).
+// paths = origens (suporta múltiplas).
+// newPath = destino do .zip (ex: C:\x\foo.zip).
+func (s *Server) handleZipMany(path, newPath string, paths []string) FileSessionResponse {
 	if newPath == "" {
 		return s.errorResponse("", "zip requer newPath (destino .zip)")
 	}
-	src, err := s.safePath(path)
-	if err != nil {
-		return s.errorResponse("", err.Error())
+	if len(paths) == 0 && path != "" {
+		paths = []string{path}
 	}
+	if len(paths) == 0 {
+		return s.errorResponse("", "zip requer ao menos uma origem")
+	}
+
 	dst, err := s.safePath(newPath)
 	if err != nil {
 		return s.errorResponse("", err.Error())
 	}
 
-	info, err := os.Stat(src)
-	if err != nil {
-		return s.errorResponse("", "zip: "+err.Error())
-	}
-
 	// Garante extensão .zip no destino.
 	if !strings.HasSuffix(strings.ToLower(dst), ".zip") {
 		dst += ".zip"
+	}
+
+	// Resolve todas as origens antes de criar o zip.
+	type srcEntry struct {
+		full string
+		name string
+	}
+	var srcs []srcEntry
+	for _, p := range paths {
+		full, err := s.safePath(p)
+		if err != nil {
+			return s.errorResponse("", err.Error())
+		}
+		if _, err := os.Stat(full); err != nil {
+			return s.errorResponse("", "zip: "+err.Error())
+		}
+		// Nome dentro do zip: para múltiplos itens, usa apenas o base (achata),
+		// preservando a hierarquia interna de cada pasta.
+		srcs = append(srcs, srcEntry{full: full, name: filepath.Base(full)})
 	}
 
 	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
@@ -448,20 +549,51 @@ func (s *Server) handleZip(path, newPath string) FileSessionResponse {
 	defer f.Close()
 
 	zw := zip.NewWriter(f)
-	if info.IsDir() {
-		err = zipDir(zw, src, filepath.Base(src))
-	} else {
-		err = zipFile(zw, src, filepath.Base(src))
+	var totalBytes int64
+	for _, src := range srcs {
+		info, err := os.Stat(src.full)
+		if err != nil {
+			_ = zw.Close()
+			_ = os.Remove(dst)
+			return s.errorResponse("", "zip: "+err.Error())
+		}
+		if info.IsDir() {
+			totalBytes += dirSize(src.full)
+		} else {
+			totalBytes += info.Size()
+		}
 	}
-	if err != nil {
-		_ = zw.Close()
-		_ = os.Remove(dst) // remove zip parcial em caso de erro
-		return s.errorResponse("", "zip: "+err.Error())
+	var loadedBytes int64
+	for _, src := range srcs {
+		info, err := os.Stat(src.full)
+		if err != nil {
+			_ = zw.Close()
+			_ = os.Remove(dst)
+			return s.errorResponse("", "zip: "+err.Error())
+		}
+		if info.IsDir() {
+			n, err := zipDirProgress(zw, src.full, src.name, &loadedBytes, totalBytes, s.reportProgress)
+			loadedBytes = n
+			if err != nil {
+				_ = zw.Close()
+				_ = os.Remove(dst)
+				return s.errorResponse("", "zip: "+err.Error())
+			}
+		} else {
+			n, err := zipFileProgress(zw, src.full, src.name, &loadedBytes, totalBytes, s.reportProgress)
+			loadedBytes = n
+			if err != nil {
+				_ = zw.Close()
+				_ = os.Remove(dst)
+				return s.errorResponse("", "zip: "+err.Error())
+			}
+		}
 	}
 	if err := zw.Close(); err != nil {
 		_ = os.Remove(dst)
 		return s.errorResponse("", "zip: fechar: "+err.Error())
 	}
+	s.reportProgress(totalBytes, totalBytes)
 
 	return s.okResponse(nil, nil, 0, 0, 0)
 }
@@ -490,6 +622,13 @@ func (s *Server) handleUnzip(path, newPath string) FileSessionResponse {
 	if err := os.MkdirAll(dst, 0755); err != nil {
 		return s.errorResponse("", "unzip: criar destino: "+err.Error())
 	}
+
+	// Total de bytes a extrair (soma dos tamanhos não-compactados).
+	var totalBytes int64
+	for _, zf := range zr.File {
+		totalBytes += int64(zf.UncompressedSize64)
+	}
+	var loadedBytes int64
 
 	for _, zf := range zr.File {
 		// Previne path traversal dentro do zip (zip-slip).
@@ -522,63 +661,84 @@ func (s *Server) handleUnzip(path, newPath string) FileSessionResponse {
 			_ = rc.Close()
 			return s.errorResponse("", "unzip: criar arquivo: "+err.Error())
 		}
-		if _, err := io.Copy(out, rc); err != nil {
-			_ = rc.Close()
-			_ = out.Close()
-			return s.errorResponse("", "unzip: extrair: "+err.Error())
-		}
+		n, err := io.Copy(out, rc)
 		_ = rc.Close()
 		_ = out.Close()
+		if err != nil {
+			return s.errorResponse("", "unzip: extrair: "+err.Error())
+		}
+		loadedBytes += n
+		s.reportProgress(loadedBytes, totalBytes)
 	}
+	s.reportProgress(totalBytes, totalBytes)
 
 	return s.okResponse(nil, nil, 0, 0, 0)
 }
 
-// zipFile adiciona um arquivo ao zip.
-func zipFile(zw *zip.Writer, src, name string) error {
+// zipFile adiciona um arquivo ao zip, reportando progresso.
+func zipFileProgress(zw *zip.Writer, src, name string, loaded *int64, total int64, report func(int64, int64)) (int64, error) {
 	info, err := os.Stat(src)
 	if err != nil {
-		return err
+		return *loaded, err
 	}
 	hdr, err := zip.FileInfoHeader(info)
 	if err != nil {
-		return err
+		return *loaded, err
 	}
 	hdr.Name = filepath.ToSlash(name)
 	hdr.Method = zip.Deflate
 	w, err := zw.CreateHeader(hdr)
 	if err != nil {
-		return err
+		return *loaded, err
 	}
 	f, err := os.Open(src)
 	if err != nil {
-		return err
+		return *loaded, err
 	}
 	defer f.Close()
-	_, err = io.Copy(w, f)
-	return err
+	n, err := io.Copy(w, f)
+	*loaded += n
+	if report != nil {
+		report(*loaded, total)
+	}
+	return *loaded, err
 }
 
-// zipDir adiciona um diretorio (recursivo) ao zip.
-func zipDir(zw *zip.Writer, dir, base string) error {
+// zipDir adiciona um diretorio (recursivo) ao zip, reportando progresso.
+func zipDirProgress(zw *zip.Writer, dir, base string, loaded *int64, total int64, report func(int64, int64)) (int64, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return err
+		return *loaded, err
 	}
 	for _, entry := range entries {
 		srcPath := filepath.Join(dir, entry.Name())
 		name := filepath.Join(base, entry.Name())
 		if entry.IsDir() {
-			if err := zipDir(zw, srcPath, name); err != nil {
-				return err
+			if _, err := zipDirProgress(zw, srcPath, name, loaded, total, report); err != nil {
+				return *loaded, err
 			}
 		} else {
-			if err := zipFile(zw, srcPath, name); err != nil {
-				return err
+			if _, err := zipFileProgress(zw, srcPath, name, loaded, total, report); err != nil {
+				return *loaded, err
 			}
 		}
 	}
-	return nil
+	return *loaded, nil
+}
+
+// dirSize soma o tamanho de todos os arquivos dentro de um diretorio (recursivo).
+func dirSize(dir string) int64 {
+	var total int64
+	_ = filepath.Walk(dir, func(_ string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if !info.IsDir() {
+			total += info.Size()
+		}
+		return nil
+	})
+	return total
 }
 
 // safePath resolve o caminho e previne path traversal.
@@ -644,8 +804,8 @@ func (s *Server) errorResponse(requestID, msg string) FileSessionResponse {
 	}
 }
 
-// copyFile copia um arquivo preservando permissões.
-func copyFile(src, dst string) error {
+// copyFile copia um arquivo preservando permissões, reportando progresso.
+func copyFile(src, dst string, loaded *int64, total int64, report func(int64, int64)) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
 		return err
 	}
@@ -661,8 +821,13 @@ func copyFile(src, dst string) error {
 	}
 	defer out.Close()
 
-	if _, err := io.Copy(out, in); err != nil {
+	n, err := io.Copy(out, in)
+	if err != nil {
 		return err
+	}
+	*loaded += n
+	if report != nil {
+		report(*loaded, total)
 	}
 	info, err := in.Stat()
 	if err == nil {
@@ -671,8 +836,8 @@ func copyFile(src, dst string) error {
 	return out.Sync()
 }
 
-// copyDir copia um diretorio recursivamente.
-func copyDir(src, dst string) error {
+// copyDir copia um diretorio recursivamente, reportando progresso.
+func copyDir(src, dst string, loaded *int64, total int64, report func(int64, int64)) error {
 	info, err := os.Stat(src)
 	if err != nil {
 		return err
@@ -689,11 +854,11 @@ func copyDir(src, dst string) error {
 		srcPath := filepath.Join(src, entry.Name())
 		dstPath := filepath.Join(dst, entry.Name())
 		if entry.IsDir() {
-			if err := copyDir(srcPath, dstPath); err != nil {
+			if err := copyDir(srcPath, dstPath, loaded, total, report); err != nil {
 				return err
 			}
 		} else {
-			if err := copyFile(srcPath, dstPath); err != nil {
+			if err := copyFile(srcPath, dstPath, loaded, total, report); err != nil {
 				return err
 			}
 		}

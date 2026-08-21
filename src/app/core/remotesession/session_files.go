@@ -86,6 +86,18 @@ func (sf *SessionFiles) handleRequest(reqData []byte) []byte {
 		return sf.errorResponse(req.RequestID, "versão não suportada")
 	}
 
+	// Conecta o callback de progresso do server ao NATS (files.progress).
+	// Só para operações longas (copy/move/zip/unzip) — list/get/put são rápidas.
+	reqID := req.RequestID
+	sf.server.SetProgressCallback(func(loaded, total int64) {
+		_ = sf.natsStream.PublishFilesProgress(sf.sessionID, map[string]any{
+			"requestId": reqID,
+			"loaded":    loaded,
+			"total":     total,
+		})
+	})
+	defer sf.server.SetProgressCallback(nil)
+
 	start := time.Now()
 	result := sf.server.HandleRequest(reqData)
 	elapsed := time.Since(start)

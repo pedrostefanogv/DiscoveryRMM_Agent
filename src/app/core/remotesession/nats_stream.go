@@ -279,6 +279,14 @@ func (h *NatsStreamHandler) PublishFilesReady(sessionID string, data any) error 
 	return h.nc.Publish(subject, payload)
 }
 
+// PublishFilesProgress publica progresso de uma operação longa (copy/move/zip/unzip)
+// para o viewer. O viewer correlaciona pelo requestId.
+func (h *NatsStreamHandler) PublishFilesProgress(sessionID string, data any) error {
+	payload, _ := json.Marshal(data)
+	subject := h.publishSubject(sessionID, "files.progress")
+	return h.nc.Publish(subject, payload)
+}
+
 // SubscribeToProxyReq subscreve a requisicoes de proxy HTTP.
 func (h *NatsStreamHandler) SubscribeToProxyReq(sessionID string, handler func(reqData []byte) []byte) (*nats.Subscription, error) {
 	return h.nc.Subscribe(h.subscribePattern(sessionID, "proxy.req"), func(msg *nats.Msg) {
