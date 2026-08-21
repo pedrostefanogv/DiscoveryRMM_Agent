@@ -125,6 +125,64 @@ func TestHandleRequest_PathTraversal(t *testing.T) {
 	}
 }
 
+// TestHandleRequest_ZipUnzip valida compactar (zip) e descompactar (unzip).
+func TestHandleRequest_ZipUnzip(t *testing.T) {
+	tmp := t.TempDir()
+	srv := NewServer(tmp)
+
+	// Cria arquivo e pasta para compactar.
+	if err := os.WriteFile(filepath.Join(tmp, "a.txt"), []byte("conteudo-a"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(tmp, "pasta"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, "pasta", "b.txt"), []byte("conteudo-b"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// ── zip da pasta ──
+	z := srv.HandleRequest(mustJSON(t, map[string]any{
+		"version": 1, "requestId": "z1", "action": "zip",
+		"path": "pasta", "newPath": "pasta.zip",
+	}))
+	if !okResp(t, z, "zip") {
+		t.Fatal()
+	}
+	if _, err := os.Stat(filepath.Join(tmp, "pasta.zip")); err != nil {
+		t.Fatalf("zip: pasta.zip nao existe: %v", err)
+	}
+
+	// ── unzip para destino ──
+	u := srv.HandleRequest(mustJSON(t, map[string]any{
+		"version": 1, "requestId": "z2", "action": "unzip",
+		"path": "pasta.zip", "newPath": "extraido",
+	}))
+	if !okResp(t, u, "unzip") {
+		t.Fatal()
+	}
+	// Verifica conteúdo extraído.
+	data, err := os.ReadFile(filepath.Join(tmp, "extraido", "b.txt"))
+	if err != nil {
+		t.Fatalf("unzip: b.txt nao extraido: %v", err)
+	}
+	if string(data) != "conteudo-b" {
+		t.Fatalf("unzip: conteudo b.txt = %q", data)
+	}
+
+	// ── zip de arquivo individual ──
+	zf := srv.HandleRequest(mustJSON(t, map[string]any{
+		"version": 1, "requestId": "z3", "action": "zip",
+		"path": "a.txt", "newPath": "a.zip",
+	}))
+	if !okResp(t, zf, "zip arquivo") {
+		t.Fatal()
+	}
+	if _, err := os.Stat(filepath.Join(tmp, "a.zip")); err != nil {
+		t.Fatalf("zip arquivo: a.zip nao existe: %v", err)
+	}
+}
+
 // TestHandleRequest_LegacyFallback garante compatibilidade com o protocolo legado.
 func TestHandleRequest_LegacyFallback(t *testing.T) {
 	tmp := t.TempDir()

@@ -1,6 +1,7 @@
 package fileserver
 
 import (
+	"archive/zip"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -123,6 +124,10 @@ func (s *Server) dispatch(action, path, newPath string, data []byte, chunkIndex 
 		resp = s.handleCopy(path, newPath)
 	case "stat":
 		resp = s.handleStat(path)
+	case "zip":
+		resp = s.handleZip(path, newPath)
+	case "unzip":
+		resp = s.handleUnzip(path, newPath)
 	default:
 		resp = s.errorResponse("", "acao desconhecida: "+action)
 	}
@@ -405,6 +410,175 @@ func (s *Server) handleStat(path string) FileSessionResponse {
 		ModTime: info.ModTime().UTC().Format("2006-01-02T15:04:05Z"),
 	}}
 	return s.okResponse(entries, nil, info.Size(), 0, 0)
+}
+
+// handleZip compacta um arquivo ou diretorio em um arquivo .zip.
+// path = origem (arquivo ou pasta); newPath = destino do .zip (ex: C:\x\foo.zip).
+func (s *Server) handleZip(path, newPath string) FileSessionResponse {
+	if newPath == "" {
+		return s.errorResponse("", "zip requer newPath (destino .zip)")
+	}
+	src, err := s.safePath(path)
+	if err != nil {
+		return s.errorResponse("", err.Error())
+	}
+	dst, err := s.safePath(newPath)
+	if err != nil {
+		return s.errorResponse("", err.Error())
+	}
+
+	info, err := os.Stat(src)
+	if err != nil {
+		return s.errorResponse("", "zip: "+err.Error())
+	}
+
+	// Garante extensão .zip no destino.
+	if !strings.HasSuffix(strings.ToLower(dst), ".zip") {
+		dst += ".zip"
+	}
+
+	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+		return s.errorResponse("", "zip: criar destino: "+err.Error())
+	}
+
+	f, err := os.Create(dst)
+	if err != nil {
+		return s.errorResponse("", "zip: criar arquivo: "+err.Error())
+	}
+	defer f.Close()
+
+	zw := zip.NewWriter(f)
+	if info.IsDir() {
+		err = zipDir(zw, src, filepath.Base(src))
+	} else {
+		err = zipFile(zw, src, filepath.Base(src))
+	}
+	if err != nil {
+		_ = zw.Close()
+		_ = os.Remove(dst) // remove zip parcial em caso de erro
+		return s.errorResponse("", "zip: "+err.Error())
+	}
+	if err := zw.Close(); err != nil {
+		_ = os.Remove(dst)
+		return s.errorResponse("", "zip: fechar: "+err.Error())
+	}
+
+	return s.okResponse(nil, nil, 0, 0, 0)
+}
+
+// handleUnzip extrai um arquivo .zip para um diretorio destino.
+// path = arquivo .zip; newPath = diretorio destino (criado se nao existir).
+func (s *Server) handleUnzip(path, newPath string) FileSessionResponse {
+	if newPath == "" {
+		return s.errorResponse("", "unzip requer newPath (diretorio destino)")
+	}
+	src, err := s.safePath(path)
+	if err != nil {
+		return s.errorResponse("", err.Error())
+	}
+	dst, err := s.safePath(newPath)
+	if err != nil {
+		return s.errorResponse("", err.Error())
+	}
+
+	zr, err := zip.OpenReader(src)
+	if err != nil {
+		return s.errorResponse("", "unzip: abrir: "+err.Error())
+	}
+	defer zr.Close()
+
+	if err := os.MkdirAll(dst, 0755); err != nil {
+		return s.errorResponse("", "unzip: criar destino: "+err.Error())
+	}
+
+	for _, zf := range zr.File {
+		// Previne path traversal dentro do zip (zip-slip).
+		cleanName := filepath.Clean(zf.Name)
+		if cleanName == ".." || strings.HasPrefix(cleanName, ".."+string(filepath.Separator)) || filepath.IsAbs(cleanName) {
+			return s.errorResponse("", "unzip: entrada invalida no zip: "+zf.Name)
+		}
+		target := filepath.Join(dst, cleanName)
+		// Garante que o destino permanece dentro de dst.
+		if rel, err := filepath.Rel(dst, target); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return s.errorResponse("", "unzip: entrada fora do destino: "+zf.Name)
+		}
+
+		if zf.FileInfo().IsDir() {
+			if err := os.MkdirAll(target, 0755); err != nil {
+				return s.errorResponse("", "unzip: criar dir: "+err.Error())
+			}
+			continue
+		}
+
+		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+			return s.errorResponse("", "unzip: criar dir pai: "+err.Error())
+		}
+		rc, err := zf.Open()
+		if err != nil {
+			return s.errorResponse("", "unzip: abrir entrada: "+err.Error())
+		}
+		out, err := os.Create(target)
+		if err != nil {
+			_ = rc.Close()
+			return s.errorResponse("", "unzip: criar arquivo: "+err.Error())
+		}
+		if _, err := io.Copy(out, rc); err != nil {
+			_ = rc.Close()
+			_ = out.Close()
+			return s.errorResponse("", "unzip: extrair: "+err.Error())
+		}
+		_ = rc.Close()
+		_ = out.Close()
+	}
+
+	return s.okResponse(nil, nil, 0, 0, 0)
+}
+
+// zipFile adiciona um arquivo ao zip.
+func zipFile(zw *zip.Writer, src, name string) error {
+	info, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+	hdr, err := zip.FileInfoHeader(info)
+	if err != nil {
+		return err
+	}
+	hdr.Name = filepath.ToSlash(name)
+	hdr.Method = zip.Deflate
+	w, err := zw.CreateHeader(hdr)
+	if err != nil {
+		return err
+	}
+	f, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = io.Copy(w, f)
+	return err
+}
+
+// zipDir adiciona um diretorio (recursivo) ao zip.
+func zipDir(zw *zip.Writer, dir, base string) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		srcPath := filepath.Join(dir, entry.Name())
+		name := filepath.Join(base, entry.Name())
+		if entry.IsDir() {
+			if err := zipDir(zw, srcPath, name); err != nil {
+				return err
+			}
+		} else {
+			if err := zipFile(zw, srcPath, name); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // safePath resolve o caminho e previne path traversal.
