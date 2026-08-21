@@ -19,6 +19,10 @@ var (
 	procCreatePseudoConsole = kernel32.NewProc("CreatePseudoConsole")
 	procResizePseudoConsole = kernel32.NewProc("ResizePseudoConsole")
 	procClosePseudoConsole  = kernel32.NewProc("ClosePseudoConsole")
+
+	procInitializeProcThreadAttributeList = kernel32.NewProc("InitializeProcThreadAttributeList")
+	procUpdateProcThreadAttribute         = kernel32.NewProc("UpdateProcThreadAttribute")
+	procDeleteProcThreadAttributeList     = kernel32.NewProc("DeleteProcThreadAttributeList")
 )
 
 // HPCON é um handle de pseudo console (opaco).
@@ -84,9 +88,50 @@ func ClosePseudoConsole(hpc HPCON) {
 	procClosePseudoConsole.Call(uintptr(hpc))
 }
 
+// initializeProcThreadAttributeList envolve InitializeProcThreadAttributeList.
+// A primeira chamada (list == nil) retorna false e preenche *size com o tamanho
+// necessário — comportamento esperado (ERROR_INSUFFICIENT_BUFFER).
+func initializeProcThreadAttributeList(list unsafe.Pointer, count, flags uint32, size *uintptr) error {
+	r1, _, e1 := procInitializeProcThreadAttributeList.Call(
+		uintptr(list),
+		uintptr(count),
+		uintptr(flags),
+		uintptr(unsafe.Pointer(size)),
+	)
+	if r1 == 0 {
+		return e1
+	}
+	return nil
+}
+
+// updateProcThreadAttribute envolve UpdateProcThreadAttribute.
+func updateProcThreadAttribute(list unsafe.Pointer, flags, attr, value, size uintptr, prevValue unsafe.Pointer, returnedSize *uintptr) error {
+	r1, _, e1 := procUpdateProcThreadAttribute.Call(
+		uintptr(list),
+		flags,
+		attr,
+		value,
+		size,
+		uintptr(prevValue),
+		uintptr(unsafe.Pointer(returnedSize)),
+	)
+	if r1 == 0 {
+		return e1
+	}
+	return nil
+}
+
+// deleteProcThreadAttributeList envolve DeleteProcThreadAttributeList.
+func deleteProcThreadAttributeList(list unsafe.Pointer) {
+	procDeleteProcThreadAttributeList.Call(uintptr(list))
+}
+
 // IsConPTYAvailable verifica se a API ConPTY está disponível no sistema.
 // Requer Windows 10 1809 (build 17763) ou superior.
 func IsConPTYAvailable() bool {
-	err := procCreatePseudoConsole.Find()
-	return err == nil
+	return procCreatePseudoConsole.Find() == nil &&
+		procResizePseudoConsole.Find() == nil &&
+		procClosePseudoConsole.Find() == nil &&
+		procInitializeProcThreadAttributeList.Find() == nil &&
+		procUpdateProcThreadAttribute.Find() == nil
 }

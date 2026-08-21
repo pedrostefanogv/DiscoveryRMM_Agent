@@ -156,18 +156,45 @@ type procInfo struct {
 func createProcessConPTY(cmdLine *uint16, hpc HPCON, pi *procInfo) error {
 	si := startupInfoExPool.Get().(*startupInfoEx)
 	defer startupInfoExPool.Put(si)
+
 	// cb deve ser o tamanho de STARTUPINFOEXW (STARTUPINFOW + lpAttributeList),
 	// ou seja 112 bytes em 64-bit. Usar 104 (só STARTUPINFOW) faz o
 	// CreateProcessW falhar com ERROR_INVALID_PARAMETER.
 	si.cb = sizeOfStartupInfoEx
 	si.lpAttributeList = nil
 
-	buf := make([]byte, 2*sizeOfAttributeEntry+sizeOfPtr)
-	*(*uintptr)(unsafe.Pointer(&buf[0])) = PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE
-	*(*uintptr)(unsafe.Pointer(&buf[sizeOfPtr])) = sizeOfPtr
-	*(*uintptr)(unsafe.Pointer(&buf[2*sizeOfPtr])) = uintptr(hpc)
+	// Monta a PROC_THREAD_ATTRIBUTE_LIST via API oficial. A estrutura possui um
+	// cabeçalho interno (Flags/Size/Count/Reserved) que o CreateProcessW valida;
+	// montá-la manualmente (como na implementação anterior) produz
+	// ERROR_INVALID_PARAMETER mesmo com cb correto.
+	var attrSize uintptr
+	// 1) Descobre o tamanho necessário (espera-se retorno false com *size preenchido).
+	_ = initializeProcThreadAttributeList(nil, 1, 0, &attrSize)
+	if attrSize == 0 {
+		return fmt.Errorf("InitializeProcThreadAttributeList (tamanho) retornou 0")
+	}
 
-	si.lpAttributeList = unsafe.Pointer(&buf[0])
+	attrBuf := make([]byte, attrSize)
+	// 2) Inicializa a lista no buffer.
+	if err := initializeProcThreadAttributeList(unsafe.Pointer(&attrBuf[0]), 1, 0, &attrSize); err != nil {
+		return fmt.Errorf("InitializeProcThreadAttributeList: %v", err)
+	}
+	defer deleteProcThreadAttributeList(unsafe.Pointer(&attrBuf[0]))
+
+	// 3) Adiciona o atributo PSEUDOCONSOLE (lpValue = HPCON, cbSize = sizeof(HPCON)).
+	if err := updateProcThreadAttribute(
+		unsafe.Pointer(&attrBuf[0]),
+		0,
+		PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
+		uintptr(hpc),
+		unsafe.Sizeof(hpc),
+		nil,
+		nil,
+	); err != nil {
+		return fmt.Errorf("UpdateProcThreadAttribute: %v", err)
+	}
+
+	si.lpAttributeList = unsafe.Pointer(&attrBuf[0])
 
 	var piNative procInfoNative
 	err := createProcessW(
@@ -191,10 +218,8 @@ func createProcessConPTY(cmdLine *uint16, hpc HPCON, pi *procInfo) error {
 const (
 	// STARTUPINFOW tem 104 bytes (64-bit). STARTUPINFOEXW adiciona o campo
 	// lpAttributeList (8 bytes), totalizando 112 bytes.
-	sizeOfStartupInfo    = 104
-	sizeOfStartupInfoEx  = 112
-	sizeOfAttributeEntry = 24
-	sizeOfPtr            = 8
+	sizeOfStartupInfo   = 104
+	sizeOfStartupInfoEx = 112
 
 	// EXTENDED_STARTUPINFO_PRESENT not in Go's syscall package
 	extendedStartupinfoPresent = 0x00080000

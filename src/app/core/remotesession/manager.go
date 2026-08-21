@@ -541,7 +541,8 @@ func (m *Manager) runTerminalSession(ctx context.Context, session *Session) {
 	// Console único — cria o terminal (subjects fixos term.out / term.in)
 	console, err := sessTerm.Start(ctx, defaultShell, cols, rows)
 	if err != nil {
-		log.Printf("[remote-session-term] ERRO ao iniciar console: %v", err)
+		log.Printf("[remote-session-term] ERRO ao iniciar console (conptyDisponivel=%v): %v",
+			terminal.IsConPTYAvailable(), err)
 		m.publishEvent(session.ID, "error", map[string]string{"error": err.Error()})
 		return
 	}
