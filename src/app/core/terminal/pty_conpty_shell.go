@@ -377,6 +377,3 @@ func (s *ConPTYShell) Wait() error {
 	})
 	return waitErr
 }
-
-var _ io.Reader
-var _ fmt.Stringer
