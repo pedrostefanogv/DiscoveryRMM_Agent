@@ -92,12 +92,17 @@ func NewConPTYShell(shell ShellKind, cols, rows int, onOutput func(string)) (*Co
 
 	syscall.CloseHandle(syscall.Handle(pi.Thread))
 
-	process, err := os.FindProcess(int(pi.Process))
+	// os.FindProcess espera um PID, nao um HANDLE. pi.Process guarda o HANDLE
+	// retornado pelo CreateProcessW; o PID correto esta em pi.ProcessId.
+	process, err := os.FindProcess(int(pi.ProcessId))
+	// O os.FindProcess abre um handle proprio (OpenProcess) a partir do PID,
+	// portanto o handle original do CreateProcessW pode (e deve) ser fechado
+	// aqui para evitar vazamento.
+	syscall.CloseHandle(syscall.Handle(pi.Process))
 	if err != nil {
 		ClosePseudoConsole(hpc)
 		stdinWrite.Close()
 		stdoutRead.Close()
-		syscall.CloseHandle(syscall.Handle(pi.Process))
 		return nil, fmt.Errorf("FindProcess: %w", err)
 	}
 
@@ -149,8 +154,9 @@ func buildCommandLine(exePath string, args []string) *uint16 {
 // ── CreateProcess via CreateProcessW ──
 
 type procInfo struct {
-	Process uintptr
-	Thread  uintptr
+	Process   uintptr
+	Thread    uintptr
+	ProcessId uint32
 }
 
 func createProcessConPTY(cmdLine *uint16, hpc HPCON, pi *procInfo) error {
@@ -212,6 +218,7 @@ func createProcessConPTY(cmdLine *uint16, hpc HPCON, pi *procInfo) error {
 
 	pi.Process = uintptr(piNative.Process)
 	pi.Thread = uintptr(piNative.Thread)
+	pi.ProcessId = piNative.ProcessId
 	return nil
 }
 
