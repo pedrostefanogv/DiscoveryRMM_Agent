@@ -1160,7 +1160,7 @@ Function RegisterUIStartupTask
    FileWrite $R8 "  $$action = New-ScheduledTaskAction -Execute '$INSTDIR\${PRODUCT_EXECUTABLE}' -Argument '--startup-minimized --startup-source=task-scheduler'$\r$\n"
    FileWrite $R8 "  $$trigger = New-ScheduledTaskTrigger -AtLogOn$\r$\n"
    FileWrite $R8 "  $$trigger.Delay = 'PT30S'$\r$\n"
-   FileWrite $R8 "  $$principal = New-ScheduledTaskPrincipal -GroupId 'S-1-5-32-545' -RunLevel Limited$\r$\n"
+   FileWrite $R8 "  $$principal = New-ScheduledTaskPrincipal -GroupId 'S-1-5-32-545' -RunLevel Highest$\r$\n"
    FileWrite $R8 "  Register-ScheduledTask -TaskName '${DISCOVERY_UI_TASK_NAME}' -Action $$action -Trigger $$trigger -Principal $$principal -Description 'Discovery UI autostart for any logged-on user' -Force | Out-Null$\r$\n"
    FileWrite $R8 "  exit 0$\r$\n"
    FileWrite $R8 "} catch {$\r$\n"
@@ -1180,6 +1180,11 @@ Function RegisterUIStartupTask
 ui_startup_fallback:
    DetailPrint "Aviso: falha ao registrar Scheduled Task (${DISCOVERY_UI_TASK_NAME}). Aplicando fallback via Startup folder."
    ClearErrors
+   ; NOTA: com o manifest requireAdministrator, um atalho no Startup folder
+   ; (Startup folder) disparará o prompt de UAC a cada login do usuário.
+   ; O caminho preferido é o Scheduled Task com -RunLevel Highest (que também
+   ; pede elevação, mas de forma mais silenciosa no login). Este fallback é
+   ; mantido apenas para casos onde o Task Scheduler está indisponível.
    CreateShortCut "$SMSTARTUP\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}" "--startup-minimized --startup-source=startup-link" "$INSTDIR\${PRODUCT_EXECUTABLE}" 0
    ${If} ${Errors}
       MessageBox MB_ICONSTOP "Falha ao registrar autostart da UI (${DISCOVERY_UI_TASK_NAME}) em Scheduled Task e Startup folder."

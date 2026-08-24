@@ -80,9 +80,11 @@ func InjectMouseMove(x, y int32) error {
 	var inputs [1]winInput
 	inputs[0].inputType = INPUT_MOUSE
 	*(*mouseInput)(unsafePtr(&inputs[0].union)) = mi
-	ret, _, _ := procSendInput.Call(1, uintptr(unsafe.Pointer(&inputs[0])), uintptr(unsafe.Sizeof(winInput{})))
+	ret, _, callErr := procSendInput.Call(1, uintptr(unsafe.Pointer(&inputs[0])), uintptr(unsafe.Sizeof(winInput{})))
 	if ret == 0 {
-		return fmt.Errorf("SendInput mouse move falhou")
+		// Diagnóstico UIPI: SendInput falha com ERROR_ACCESS_DENIED (5) quando o
+		// processo NÃO é elevado e tenta injetar em janela de integridade maior.
+		return fmt.Errorf("SendInput mouse move falhou: %v (errno=%d)", describeErr(callErr), errnoOf(callErr))
 	}
 	return nil
 }
@@ -98,9 +100,9 @@ func InjectMouseClickLeft(down bool) error {
 	var inputs [1]winInput
 	inputs[0].inputType = INPUT_MOUSE
 	*(*mouseInput)(unsafePtr(&inputs[0].union)) = mi
-	ret, _, _ := procSendInput.Call(1, uintptr(unsafe.Pointer(&inputs[0])), uintptr(unsafe.Sizeof(winInput{})))
+	ret, _, callErr := procSendInput.Call(1, uintptr(unsafe.Pointer(&inputs[0])), uintptr(unsafe.Sizeof(winInput{})))
 	if ret == 0 {
-		return fmt.Errorf("SendInput mouse click falhou")
+		return fmt.Errorf("SendInput mouse click falhou: %v (errno=%d)", describeErr(callErr), errnoOf(callErr))
 	}
 	return nil
 }
@@ -116,9 +118,9 @@ func InjectMouseClickRight(down bool) error {
 	var inputs [1]winInput
 	inputs[0].inputType = INPUT_MOUSE
 	*(*mouseInput)(unsafePtr(&inputs[0].union)) = mi
-	ret, _, _ := procSendInput.Call(1, uintptr(unsafe.Pointer(&inputs[0])), uintptr(unsafe.Sizeof(winInput{})))
+	ret, _, callErr := procSendInput.Call(1, uintptr(unsafe.Pointer(&inputs[0])), uintptr(unsafe.Sizeof(winInput{})))
 	if ret == 0 {
-		return fmt.Errorf("SendInput mouse right click falhou")
+		return fmt.Errorf("SendInput mouse right click falhou: %v (errno=%d)", describeErr(callErr), errnoOf(callErr))
 	}
 	return nil
 }
@@ -132,9 +134,9 @@ func InjectMouseWheel(delta int16) error {
 	var inputs [1]winInput
 	inputs[0].inputType = INPUT_MOUSE
 	*(*mouseInput)(unsafePtr(&inputs[0].union)) = mi
-	ret, _, _ := procSendInput.Call(1, uintptr(unsafe.Pointer(&inputs[0])), uintptr(unsafe.Sizeof(winInput{})))
+	ret, _, callErr := procSendInput.Call(1, uintptr(unsafe.Pointer(&inputs[0])), uintptr(unsafe.Sizeof(winInput{})))
 	if ret == 0 {
-		return fmt.Errorf("SendInput mouse wheel falhou")
+		return fmt.Errorf("SendInput mouse wheel falhou: %v (errno=%d)", describeErr(callErr), errnoOf(callErr))
 	}
 	return nil
 }
@@ -148,9 +150,9 @@ func InjectKeyDown(vkCode uint16) error {
 	var inputs [1]winInput
 	inputs[0].inputType = INPUT_KEYBOARD
 	*(*keybdInput)(unsafePtr(&inputs[0].union)) = ki
-	ret, _, _ := procSendInput.Call(1, uintptr(unsafe.Pointer(&inputs[0])), uintptr(unsafe.Sizeof(winInput{})))
+	ret, _, callErr := procSendInput.Call(1, uintptr(unsafe.Pointer(&inputs[0])), uintptr(unsafe.Sizeof(winInput{})))
 	if ret == 0 {
-		return fmt.Errorf("SendInput key down falhou para VK=0x%X", vkCode)
+		return fmt.Errorf("SendInput key down falhou para VK=0x%X: %v (errno=%d)", vkCode, describeErr(callErr), errnoOf(callErr))
 	}
 	return nil
 }
@@ -165,9 +167,9 @@ func InjectKeyUp(vkCode uint16) error {
 	var inputs [1]winInput
 	inputs[0].inputType = INPUT_KEYBOARD
 	*(*keybdInput)(unsafePtr(&inputs[0].union)) = ki
-	ret, _, _ := procSendInput.Call(1, uintptr(unsafe.Pointer(&inputs[0])), uintptr(unsafe.Sizeof(winInput{})))
+	ret, _, callErr := procSendInput.Call(1, uintptr(unsafe.Pointer(&inputs[0])), uintptr(unsafe.Sizeof(winInput{})))
 	if ret == 0 {
-		return fmt.Errorf("SendInput key up falhou para VK=0x%X", vkCode)
+		return fmt.Errorf("SendInput key up falhou para VK=0x%X: %v (errno=%d)", vkCode, describeErr(callErr), errnoOf(callErr))
 	}
 	return nil
 }
@@ -194,9 +196,9 @@ func InjectKeyPress(vkCode uint16) error {
 
 // SetCursorPosAbsolute move o cursor para posicao absoluta em pixels.
 func SetCursorPosAbsolute(x, y int32) error {
-	ret, _, _ := procSetCursorPos.Call(uintptr(x), uintptr(y))
+	ret, _, callErr := procSetCursorPos.Call(uintptr(x), uintptr(y))
 	if ret == 0 {
-		return fmt.Errorf("SetCursorPos falhou")
+		return fmt.Errorf("SetCursorPos falhou: %v (errno=%d)", describeErr(callErr), errnoOf(callErr))
 	}
 	return nil
 }
@@ -231,3 +233,24 @@ const (
 
 // Placeholder
 var _ = syscall.EINVAL
+
+// describeErr retorna a descrição amigável do errno do Windows.
+func describeErr(err error) string {
+	if err == nil {
+		return "sem detalhes"
+	}
+	// Proc.Call retorna o último errno (win32) como error no 3º valor.
+	return err.Error()
+}
+
+// errnoOf extrai o código numérico do erro Win32, útil para correlacionar com
+// ERROR_ACCESS_DENIED (5) em caso de bloqueio UIPI.
+func errnoOf(err error) uint32 {
+	if err == nil {
+		return 0
+	}
+	if errno, ok := err.(syscall.Errno); ok {
+		return uint32(errno)
+	}
+	return 0
+}

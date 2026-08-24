@@ -1018,6 +1018,14 @@ func (a *App) startup(ctx context.Context) {
 
 	captureStdLog(&a.logs)
 
+	// Diagnóstico de elevação/integridade — importante para o controle remoto
+	// (SendInput via UIPI) e gerenciamento de serviços (SCM). Colocado após
+	// captureStdLog para que o log seja capturado no buffer da UI/support.
+	// Com o manifest requireAdministrator, espera-se elevated=true integrity=High.
+	if ev := platform.ElevationReport(); ev != "" {
+		log.Printf("[startup] elevação: %s", ev)
+	}
+
 	if a.runtimeFlags.DebugMode {
 		if a.debugHTTP == nil {
 			if err := a.StartDebugHTTPServer(); err != nil {

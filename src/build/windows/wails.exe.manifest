@@ -6,6 +6,19 @@
             <assemblyIdentity type="win32" name="Microsoft.Windows.Common-Controls" version="6.0.0.0" processorArchitecture="*" publicKeyToken="6595b64144ccf1df" language="*"/>
         </dependentAssembly>
     </dependency>
+    <!--
+        Controle remoto (SendInput/UIPI) e gerenciamento de serviços exigem
+        privilégio de administrador. Sem elevação, o input é bloqueado
+        silenciosamente pelo UIPI em janelas elevadas e o SCM nega o acesso.
+        requestExecutionLevel=requireAdministrator garante High IL no launch.
+    -->
+    <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+        <security>
+            <requestedPrivileges>
+                <requestedExecutionLevel level="requireAdministrator" uiAccess="false"/>
+            </requestedPrivileges>
+        </security>
+    </trustInfo>
     <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
         <application>
             <!-- Windows 10 e Windows 11: declara app como aplicativo desktop moderno, nao jogo -->
