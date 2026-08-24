@@ -41,6 +41,12 @@ type QualityManager struct {
 	profile string
 	current QualityConfig
 
+	// manualMode: quando true, o usuário definiu qualidade/FPS/codec manualmente
+	// e a adaptação automática (adapt/downgrade) fica DESABILITADA. O valor
+	// definido permanece fixo — a partir do momento em que o viewer envia um
+	// override explícito, o agente NÃO deve rebaixar por conta própria.
+	manualMode bool
+
 	// Metricas para adaptacao
 	frameCount    int
 	bytesLastSec  int
@@ -109,10 +115,12 @@ func (qm *QualityManager) Profile() string {
 }
 
 // SetImageQuality define override de compressão (1-100). 0 = usar perfil.
+// Um override manual desabilita a adaptação automática.
 func (qm *QualityManager) SetImageQuality(q int) {
 	qm.mu.Lock()
 	defer qm.mu.Unlock()
 	qm.current.overrideImageQ = q
+	qm.manualMode = true
 }
 
 // ClearImageQuality remove o override de qualidade de imagem (volta ao perfil).
@@ -120,18 +128,22 @@ func (qm *QualityManager) ClearImageQuality() {
 	qm.mu.Lock()
 	defer qm.mu.Unlock()
 	qm.current.overrideImageQ = 0
+	qm.manualMode = false
 }
 
 // SetMaxFps define override de FPS. 0 = sem limite (captura o mais rápido
 // possível); -1 = limpar override (voltar ao perfil).
+// Um override manual desabilita a adaptação automática.
 func (qm *QualityManager) SetMaxFps(fps int) {
 	qm.mu.Lock()
 	defer qm.mu.Unlock()
 	if fps < 0 {
 		qm.current.overrideMaxFps = -1
+		qm.manualMode = false
 		return
 	}
 	qm.current.overrideMaxFps = fps
+	qm.manualMode = true
 }
 
 // ClearMaxFps remove o override de FPS (volta ao perfil).
@@ -167,6 +179,11 @@ func (qm *QualityManager) UpdateNetworkMetrics(rttMs, lossPercent float64) {
 }
 
 func (qm *QualityManager) adapt() {
+	// NUNCA adapta automaticamente quando o usuário está em modo manual.
+	if qm.manualMode {
+		return
+	}
+
 	// Adaptacao baseada em RTT e perda
 	if qm.rttMs > 300 || qm.lossPercent > 10 {
 		qm.downgrade()

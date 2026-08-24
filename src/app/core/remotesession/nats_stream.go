@@ -237,6 +237,37 @@ func (h *NatsStreamHandler) SubscribeToInput(sessionID string, handler func(inpu
 	return sub, err
 }
 
+// PublishClipboard envia o conteúdo do clipboard da máquina remota para o
+// viewer (subject .clipboard — agent→viewer).
+func (h *NatsStreamHandler) PublishClipboard(sessionID string, text string) error {
+	payload, _ := json.Marshal(map[string]any{"text": text})
+	subject := h.publishSubject(sessionID, "clipboard")
+	return h.nc.Publish(subject, payload)
+}
+
+// SubscribeToClipboardReq subscreve a pedidos de set/clipboard do viewer
+// (subject .clipboard.req — viewer→agent). O handler recebe o texto e é
+// responsável por aplicá-lo no clipboard do Windows.
+func (h *NatsStreamHandler) SubscribeToClipboardReq(sessionID string, handler func(text string)) (*nats.Subscription, error) {
+	pattern := h.subscribePattern(sessionID, "clipboard.req")
+	sub, err := h.nc.Subscribe(pattern, func(msg *nats.Msg) {
+		var req struct {
+			Text string `json:"text"`
+		}
+		if err := json.Unmarshal(msg.Data, &req); err != nil {
+			log.Printf("[remote-session-nats] clipboard.req inválido: %v", err)
+			return
+		}
+		handler(req.Text)
+	})
+	if err != nil {
+		log.Printf("[remote-session-nats] SubscribeToClipboardReq erro: pattern=%s err=%v\n", pattern, err)
+	} else {
+		log.Printf("[remote-session-nats] SubscribeToClipboardReq ok: pattern=%s\n", pattern)
+	}
+	return sub, err
+}
+
 // SubscribeToTermIn subscreve a stdin do terminal enviado pelo viewer.
 func (h *NatsStreamHandler) SubscribeToTermIn(sessionID string, handler func(data []byte)) (*nats.Subscription, error) {
 	pattern := h.subscribePattern(sessionID, "term.in")
@@ -340,13 +371,14 @@ func (h *NatsStreamHandler) Close() error {
 // Subscription helpers para gerenciar subscricoes
 
 type SessionSubscriptions struct {
-	Control  *nats.Subscription
-	Input    *nats.Subscription
-	TermIn   *nats.Subscription
-	FilesReq *nats.Subscription
-	ProxyReq *nats.Subscription
-	ProcReq  *nats.Subscription
-	Signal   *nats.Subscription
+	Control      *nats.Subscription
+	Input        *nats.Subscription
+	TermIn       *nats.Subscription
+	FilesReq     *nats.Subscription
+	ProxyReq     *nats.Subscription
+	ProcReq      *nats.Subscription
+	Signal       *nats.Subscription
+	ClipboardReq *nats.Subscription
 }
 
 // UnsubscribeAll cancela todas as subscricoes.
@@ -371,6 +403,9 @@ func (ss *SessionSubscriptions) UnsubscribeAll() {
 	}
 	if ss.Signal != nil {
 		_ = ss.Signal.Unsubscribe()
+	}
+	if ss.ClipboardReq != nil {
+		_ = ss.ClipboardReq.Unsubscribe()
 	}
 }
 
@@ -433,16 +468,25 @@ func (h *NatsStreamHandler) SubscribeAll(ctx context.Context, sessionID string, 
 		}
 	}
 
+	if handlers.OnClipboardReq != nil {
+		subs.ClipboardReq, err = h.SubscribeToClipboardReq(sessionID, handlers.OnClipboardReq)
+		if err != nil {
+			subs.UnsubscribeAll()
+			return nil, fmt.Errorf("subscribe clipboard.req: %w", err)
+		}
+	}
+
 	return subs, nil
 }
 
 // SessionHandlers define os handlers de eventos para uma sessao.
 type SessionHandlers struct {
-	OnControl  func(action string, payload json.RawMessage)
-	OnInput    func(data []byte)
-	OnTermIn   func(data []byte)
-	OnFilesReq func(reqData []byte) []byte
-	OnProxyReq func(reqData []byte) []byte
-	OnProcReq  func(reqData []byte) []byte
-	OnSignal   func(signalData []byte)
+	OnControl      func(action string, payload json.RawMessage)
+	OnInput        func(data []byte)
+	OnTermIn       func(data []byte)
+	OnFilesReq     func(reqData []byte) []byte
+	OnProxyReq     func(reqData []byte) []byte
+	OnProcReq      func(reqData []byte) []byte
+	OnSignal       func(signalData []byte)
+	OnClipboardReq func(text string)
 }

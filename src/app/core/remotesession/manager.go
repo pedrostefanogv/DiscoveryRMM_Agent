@@ -490,6 +490,64 @@ func (m *Manager) runScreenSession(ctx context.Context, session *Session) {
 		defer inputSub.Unsubscribe()
 	}
 
+	// ── Clipboard (somente texto, bidirecional) ──
+	// viewer→agent: o viewer publica o texto em .clipboard.req; o agent aplica
+	//   no clipboard do Windows (SetClipboardText) e injeta Ctrl+V para colar.
+	// agent→viewer: um monitor detecta mudança no clipboard da máquina remota e
+	//   publica em .clipboard; o viewer escreve no clipboard local do usuário.
+	var clipboardMu sync.Mutex
+	lastPublished := "" // último texto publicado ao viewer (evita eco)
+	lastSetByViewer := "" // último texto aplicado a partir do viewer (evita re-publicar)
+
+	clipSub, clipErr := m.natsStream.SubscribeToClipboardReq(session.ID, func(text string) {
+		if err := screen.SetClipboardText(text); err != nil {
+			log.Printf("[remote-session-screen] SetClipboardText falhou: %v", err)
+			return
+		}
+		clipboardMu.Lock()
+		lastSetByViewer = text
+		lastPublished = text
+		clipboardMu.Unlock()
+		// Injeta Ctrl+V para colar imediatamente no app remoto focado.
+		_ = screen.InjectKeyDown(screen.VK_CONTROL)
+		_ = screen.InjectKeyPress('V')
+		_ = screen.InjectKeyUp(screen.VK_CONTROL)
+	})
+	if clipErr != nil {
+		log.Printf("[remote-session-screen] ERRO ao subscrever clipboard.req: %v", clipErr)
+	} else {
+		defer clipSub.Unsubscribe()
+	}
+
+	// Monitor do clipboard da máquina remota (1s): publica ao viewer quando muda.
+	go func() {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				text, err := screen.GetClipboardText()
+				if err != nil {
+					continue
+				}
+				clipboardMu.Lock()
+				if text != "" && text != lastPublished && text != lastSetByViewer {
+					lastPublished = text
+					clipboardMu.Unlock()
+					if err := m.natsStream.PublishClipboard(session.ID, text); err != nil {
+						log.Printf("[remote-session-screen] PublishClipboard falhou: %v", err)
+					}
+				} else {
+					clipboardMu.Unlock()
+				}
+			case <-session.stopCh:
+				return
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
 	// Context que encerra quando stopCh fecha ou expires
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
