@@ -31,7 +31,7 @@ const (
 // usando subjects fixos (term.out / term.in), similar ao MeshCentral.
 type TerminalSession struct {
 	ID        string
-	Shell     *terminal.ConPTYShell
+	Shell     terminal.IShell
 	ShellKind terminal.ShellKind
 	Cols      int
 	Rows      int
@@ -306,7 +306,7 @@ func (st *SessionTerminal) Start(ctx context.Context, shellKind terminal.ShellKi
 		}
 	}, termOutputCoalesceMs*time.Millisecond)
 
-	shell, err := terminal.NewConPTYShell(shellKind, cols, rows, func(output string) {
+	shell, err := terminal.NewShellInteractive(shellKind, cols, rows, func(output string) {
 		coalescer.Write(output)
 	})
 	if err != nil {
@@ -331,8 +331,15 @@ func (st *SessionTerminal) Start(ctx context.Context, shellKind terminal.ShellKi
 		exitSeq := seq
 		seqMu.Unlock()
 
-		log.Printf("[session-terminal] shell saiu: shell=%s motivo=%s hasOutput=%v",
-			shellKind, exitMsg, hasOutput)
+		// P2: loga o exit code também em hexadecimal (0xC0000142 =
+		// STATUS_DLL_INIT_FAILED) para diagnóstico imediato.
+		if exitCode, ok := terminal.ExitCodeOf(err); ok {
+			log.Printf("[session-terminal] shell saiu: shell=%s exitCode=0x%08X (%d) hasOutput=%v",
+				shellKind, uint32(exitCode), exitCode, hasOutput)
+		} else {
+			log.Printf("[session-terminal] shell saiu: shell=%s motivo=%s hasOutput=%v",
+				shellKind, exitMsg, hasOutput)
+		}
 		exitPayload, _ := json.Marshal(map[string]any{
 			"data":   "",
 			"seq":    exitSeq,
@@ -408,8 +415,8 @@ func (st *SessionTerminal) Start(ctx context.Context, shellKind terminal.ShellKi
 		_ = sub.Unsubscribe()
 	}()
 
-	log.Printf("[session-terminal] console criado: shell=%s cols=%d rows=%d coalesce=%dms",
-		shellKind, cols, rows, termOutputCoalesceMs)
+	log.Printf("[session-terminal] console criado: shell=%s backend=%s cols=%d rows=%d coalesce=%dms",
+		shellKind, terminal.ShellBackendName(shell), cols, rows, termOutputCoalesceMs)
 
 	return term, nil
 }

@@ -45,7 +45,14 @@ func NewConPTYShell(shell ShellKind, cols, rows int, onOutput func(string)) (*Co
 	exePath, exeArgs := resolveShellCommand(shell)
 	fullPath, err := exec.LookPath(exePath)
 	if err != nil {
-		return nil, fmt.Errorf("shell %q nao encontrado: %w", exePath, err)
+		// Shell inexistente (ex.: PowerShell ausente) — tenta o shell
+		// alternativo (cmd) antes de falhar.
+		resolvedKind, resolvedPath := ResolveShell(shell)
+		if resolvedKind == shell || resolvedPath == "" {
+			return nil, fmt.Errorf("shell %q nao encontrado: %w", exePath, err)
+		}
+		exePath, exeArgs = resolveShellCommand(resolvedKind)
+		fullPath = resolvedPath
 	}
 
 	stdinRead, stdinWrite, err := os.Pipe()
@@ -319,6 +326,21 @@ func (s *ConPTYShell) Dimensions() (cols, rows int) {
 
 func (s *ConPTYShell) ShellKind() ShellKind {
 	return s.shell
+}
+
+// Alive reporta se o processo shell ainda está em execução, sem consumir o
+// Wait() (que é guardado por sync.Once e reservado ao monitor de exit da
+// sessão). Usado para detecção de morte prematura no startup.
+func (s *ConPTYShell) Alive() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return false
+	}
+	if s.cmd == nil || s.cmd.Process == nil {
+		return false
+	}
+	return processAlive(s.cmd.Process.Pid)
 }
 
 func (s *ConPTYShell) Close() error {

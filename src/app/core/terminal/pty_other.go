@@ -87,4 +87,26 @@ func (s *Shell) Close() error {
 	return nil
 }
 
+// ShellKind retorna o tipo de shell em uso (conformidade com IShell).
+func (s *Shell) ShellKind() ShellKind {
+	return ShellKind(s.shell)
+}
+
+// Alive reporta se o processo shell ainda está em execução (conformidade com
+// IShell), sem consumir o Wait().
+func (s *Shell) Alive() bool {
+	if s.cmd == nil || s.cmd.Process == nil {
+		return false
+	}
+	return processAlive(s.cmd.Process.Pid)
+}
+
+// Wait aguarda o processo do shell terminar (conformidade com IShell).
+func (s *Shell) Wait() error {
+	if s.cmd == nil || s.cmd.Process == nil {
+		return fmt.Errorf("processo nao inicializado")
+	}
+	return s.cmd.Wait()
+}
+
 var _ io.ReadCloser

@@ -27,15 +27,20 @@ type Shell struct {
 	onOutput func(string) // callback para saida
 }
 
-// NewShell cria um novo shell interativo.
-// shell: "cmd" ou "powershell".
+// NewShell cria um novo shell interativo (console real oculto, via pipes).
+// Este é o caminho LEGADO/fallback usado quando ConPTY se mostra instável
+// (ex.: injetor/AV mata o processo ConPTY com 0xC0000142). Usa
+// CREATE_NEW_CONSOLE (console real) + HideWindow, semelhante ao terminal
+// legado do MeshCentral — mais resistente a injetores/AV do que ConPTY.
+// shell: "powershell" ou "cmd".
 func NewShell(shell string, onOutput func(string)) (*Shell, error) {
+	resolvedKind, _ := ResolveShell(ShellKind(shell))
+	shell = string(resolvedKind)
+
 	var cmd *exec.Cmd
-	switch shell {
-	case "powershell", "ps":
-		cmd = exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "-")
-	case "cmd", "shell", "":
-		cmd = exec.Command("cmd.exe")
+	switch resolvedKind {
+	case ShellPowerShell:
+		cmd = exec.Command("powershell.exe", "-NoLogo", "-NoExit")
 	default:
 		cmd = exec.Command("cmd.exe")
 	}
@@ -85,6 +90,32 @@ func NewShell(shell string, onOutput func(string)) (*Shell, error) {
 	go s.readLoop(stderrPipe)
 
 	return s, nil
+}
+
+// ShellKind retorna o tipo de shell em uso (conformidade com IShell).
+func (s *Shell) ShellKind() ShellKind {
+	return ShellKind(s.shell)
+}
+
+// Alive reporta se o processo shell ainda está em execução (conformidade com
+// IShell), sem consumir o Wait().
+func (s *Shell) Alive() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.cmd == nil || s.cmd.Process == nil {
+		return false
+	}
+	return processAlive(s.cmd.Process.Pid)
+}
+
+// Wait aguarda o processo do shell terminar (conformidade com IShell).
+// Útil para o gerenciador de sessão detectar falha prematura (ex.:
+// 0xC0000142 quando um injetor/AV mata o processo no DllMain).
+func (s *Shell) Wait() error {
+	if s.cmd == nil || s.cmd.Process == nil {
+		return fmt.Errorf("processo nao inicializado")
+	}
+	return s.cmd.Wait()
 }
 
 func (s *Shell) readLoop(r io.Reader) {
