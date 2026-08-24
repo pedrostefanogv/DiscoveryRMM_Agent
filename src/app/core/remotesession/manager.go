@@ -259,8 +259,11 @@ func (m *Manager) handleQuality(_ context.Context, payload map[string]any) (bool
 		if codec != "" {
 			screen.SetCodec(codec)
 		}
-		// Em modo Auto: limpa TODOS os overrides (volta ao perfil) e,
-		// se o codec for webp, o backend já envia a qualidade do perfil webp.
+		// Fonte da verdade para o modo auto: o viewer envia `auto`. Manual
+		// desabilita a adaptação; auto volta a adaptar. Independente dos
+		// overrides de imagem/FPS (que podem ser aplicados no start).
+		screen.SetManualMode(!autoMode)
+		// Em modo Auto: limpa TODOS os overrides (volta ao perfil).
 		// Em Manual: aplica overrides explícitos.
 		if autoMode {
 			s.ImageQuality = 0

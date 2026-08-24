@@ -115,12 +115,10 @@ func (qm *QualityManager) Profile() string {
 }
 
 // SetImageQuality define override de compressão (1-100). 0 = usar perfil.
-// Um override manual desabilita a adaptação automática.
 func (qm *QualityManager) SetImageQuality(q int) {
 	qm.mu.Lock()
 	defer qm.mu.Unlock()
 	qm.current.overrideImageQ = q
-	qm.manualMode = true
 }
 
 // ClearImageQuality remove o override de qualidade de imagem (volta ao perfil).
@@ -128,22 +126,18 @@ func (qm *QualityManager) ClearImageQuality() {
 	qm.mu.Lock()
 	defer qm.mu.Unlock()
 	qm.current.overrideImageQ = 0
-	qm.manualMode = false
 }
 
 // SetMaxFps define override de FPS. 0 = sem limite (captura o mais rápido
 // possível); -1 = limpar override (voltar ao perfil).
-// Um override manual desabilita a adaptação automática.
 func (qm *QualityManager) SetMaxFps(fps int) {
 	qm.mu.Lock()
 	defer qm.mu.Unlock()
 	if fps < 0 {
 		qm.current.overrideMaxFps = -1
-		qm.manualMode = false
 		return
 	}
 	qm.current.overrideMaxFps = fps
-	qm.manualMode = true
 }
 
 // ClearMaxFps remove o override de FPS (volta ao perfil).
@@ -151,6 +145,17 @@ func (qm *QualityManager) ClearMaxFps() {
 	qm.mu.Lock()
 	defer qm.mu.Unlock()
 	qm.current.overrideMaxFps = -1
+}
+
+// SetManualMode liga/desliga o modo manual. Quando manual, a adaptação
+// automática (adapt/downgrade) fica desabilitada e o valor definido
+// permanece fixo. É a fonte da verdade para o flag `auto` enviado pelo
+// viewer — separado dos overrides de qualidade/FPS, que podem ser aplicados
+// no start (defaults) sem desligar a adaptação automática.
+func (qm *QualityManager) SetManualMode(mode bool) {
+	qm.mu.Lock()
+	defer qm.mu.Unlock()
+	qm.manualMode = mode
 }
 
 // RecordFrame registra metricas de um frame para adaptacao.

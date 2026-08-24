@@ -559,6 +559,12 @@ func (s *SessionScreen) ClearMaxFps() {
 	s.quality.ClearMaxFps()
 }
 
+// SetManualMode liga/desliga o modo manual (desabilita a adaptação automática).
+// Reflete o flag `auto` enviado pelo viewer.
+func (s *SessionScreen) SetManualMode(manual bool) {
+	s.quality.SetManualMode(manual)
+}
+
 // publishMetrics publica metricas de streaming no subject .event para o viewer.
 func (s *SessionScreen) publishMetrics(width, height int, framesSent, framesSkipped int64, rawBytes, encBytes int64, encodeTimeTotal time.Duration) {
 	q := s.quality.Current()
