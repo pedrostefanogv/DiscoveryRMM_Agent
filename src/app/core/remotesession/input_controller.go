@@ -247,7 +247,12 @@ func (c *InputController) handleLegacyInput(data []byte) {
 	}
 
 	typ, _ := raw["type"].(string)
-	log.Printf("[input-controller] legado: type=%s raw=%s", typ, string(data))
+	// Loga apenas eventos de clique/teclado/scroll — mousemove é muito
+	// frequente (~60/s) e inundaria o log com dezenas de milhares de linhas.
+	// O payload completo também é omitido (só o tipo), para reduzir I/O.
+	if typ != "mousemove" {
+		log.Printf("[input-controller] legado: type=%s", typ)
+	}
 
 	// O viewer envia frameWidth/frameHeight no payload. Usa-os para
 	// normalização quando presentes (mais preciso que o default interno),
