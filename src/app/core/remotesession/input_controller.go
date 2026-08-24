@@ -160,11 +160,15 @@ func (c *InputController) handleMouseMove(evt *InputEvent) {
 func (c *InputController) handleMouseClick(evt *InputEvent, down bool) {
 	switch evt.Button {
 	case 0:
-		_ = screen.InjectMouseClickLeft(down)
+		if err := screen.InjectMouseClickLeft(down); err != nil {
+			log.Printf("[input-controller] InjectMouseClickLeft falhou (down=%t): %v", down, err)
+		}
 	case 1:
 		// Botão do meio — não implementado ainda
 	case 2:
-		_ = screen.InjectMouseClickRight(down)
+		if err := screen.InjectMouseClickRight(down); err != nil {
+			log.Printf("[input-controller] InjectMouseClickRight falhou (down=%t): %v", down, err)
+		}
 	}
 }
 
@@ -173,7 +177,9 @@ func (c *InputController) handleMouseWheel(evt *InputEvent) {
 	if delta == 0 {
 		delta = int16(evt.DeltaX)
 	}
-	_ = screen.InjectMouseWheel(delta)
+	if err := screen.InjectMouseWheel(delta); err != nil {
+		log.Printf("[input-controller] InjectMouseWheel falhou: %v", err)
+	}
 }
 
 func (c *InputController) handleKey(code, key string, down bool, mods InputModifiers) {
@@ -274,16 +280,24 @@ func (c *InputController) handleLegacyInput(data []byte) {
 			c.handleMouseMoveNormalized(int(x), int(y))
 		}
 		if int(btn) == 2 {
-			_ = screen.InjectMouseClickRight(true)
+			if err := screen.InjectMouseClickRight(true); err != nil {
+				log.Printf("[input-controller] mousedown (botao direito) falhou: %v", err)
+			}
 		} else {
-			_ = screen.InjectMouseClickLeft(true)
+			if err := screen.InjectMouseClickLeft(true); err != nil {
+				log.Printf("[input-controller] mousedown falhou (btn=%d x=%d y=%d): %v", int(btn), int(x), int(y), err)
+			}
 		}
 	case "mouseup":
 		btn, _ := toFloat64(raw["button"])
 		if int(btn) == 2 {
-			_ = screen.InjectMouseClickRight(false)
+			if err := screen.InjectMouseClickRight(false); err != nil {
+				log.Printf("[input-controller] mouseup (botao direito) falhou: %v", err)
+			}
 		} else {
-			_ = screen.InjectMouseClickLeft(false)
+			if err := screen.InjectMouseClickLeft(false); err != nil {
+				log.Printf("[input-controller] mouseup falhou (btn=%d): %v", int(btn), err)
+			}
 		}
 	case "mousemove":
 		x, _ := toFloat64(raw["x"])
@@ -293,9 +307,13 @@ func (c *InputController) handleLegacyInput(data []byte) {
 		dx, _ := toFloat64(raw["deltaX"])
 		dy, _ := toFloat64(raw["deltaY"])
 		if dy != 0 {
-			_ = screen.InjectMouseWheel(int16(dy))
+			if err := screen.InjectMouseWheel(int16(dy)); err != nil {
+				log.Printf("[input-controller] wheel falhou (dy=%d): %v", int(dy), err)
+			}
 		} else if dx != 0 {
-			_ = screen.InjectMouseWheel(int16(dx))
+			if err := screen.InjectMouseWheel(int16(dx)); err != nil {
+				log.Printf("[input-controller] wheel falhou (dx=%d): %v", int(dx), err)
+			}
 		}
 	case "keydown":
 		code, _ := raw["code"].(string)
@@ -350,7 +368,9 @@ func (c *InputController) handleMouseMoveNormalized(x, y int) {
 	if absY > 65535 {
 		absY = 65535
 	}
-	_ = screen.InjectMouseMove(absX, absY)
+	if err := screen.InjectMouseMove(absX, absY); err != nil {
+		log.Printf("[input-controller] InjectMouseMove falhou (absX=%d absY=%d): %v", absX, absY, err)
+	}
 }
 
 func (c *InputController) checkRateLimit() bool {

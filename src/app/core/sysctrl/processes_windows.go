@@ -45,11 +45,17 @@ type processEntry32W struct {
 
 // ProcessInfo representa um processo em execução.
 type ProcessInfo struct {
-	PID           uint32 `json:"pid"`
-	ParentPID     uint32 `json:"parentPid"`
-	Name          string `json:"name"`
-	Threads       uint32 `json:"threads"`
-	PriorityBasis int32  `json:"priorityBase"`
+	PID           uint32  `json:"pid"`
+	ParentPID     uint32  `json:"parentPid"`
+	Name          string  `json:"name"`
+	Threads       uint32  `json:"threads"`
+	PriorityBasis int32   `json:"priorityBase"`
+	// Métricas de consumo (coletadas em process_metrics_windows.go).
+	CpuPercent  float64 `json:"cpuPercent"`
+	MemoryBytes uint64  `json:"memoryBytes"`
+	IoReadBps   float64 `json:"ioReadBps"` // taxa de leitura (bytes/s)
+	IoWriteBps  float64 `json:"ioWriteBps"`
+	Connections uint32  `json:"connections"`
 }
 
 // ListProcesses lista todos os processos em execução via CreateToolhelp32Snapshot.
@@ -76,7 +82,9 @@ func ListProcesses() ([]ProcessInfo, error) {
 		pe = processEntry32W{dwSize: uint32(unsafe.Sizeof(pe))}
 		r, _, _ = procProcess32NextW.Call(handle, uintptr(unsafe.Pointer(&pe)))
 	}
-	return procs, nil
+	// Enriquecimento com métricas (CPU/RAM/disco/rede). Processos
+	// protegidos ficam com valores zerados — não interrompe a listagem.
+	return enrichProcessMetrics(procs), nil
 }
 
 // KillProcess encerra um processo pelo PID via TerminateProcess.

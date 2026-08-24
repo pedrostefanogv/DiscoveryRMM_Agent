@@ -21,6 +21,13 @@ type ServiceInfo struct {
 	StartType   string `json:"startType"` // auto, demand, disabled, ...
 	BinaryPath  string `json:"binaryPath,omitempty"`
 	PID         uint32 `json:"pid,omitempty"`
+	// Métricas de consumo do processo do serviço (quando PID > 0).
+	// Coletadas em process_metrics_windows.go; vazias para serviços parados.
+	CpuPercent  float64 `json:"cpuPercent"`
+	MemoryBytes uint64  `json:"memoryBytes"`
+	IoReadBps   float64 `json:"ioReadBps"` // taxa de leitura (bytes/s)
+	IoWriteBps  float64 `json:"ioWriteBps"`
+	Connections uint32  `json:"connections"`
 }
 
 func stateName(state svc.State) string {
@@ -94,7 +101,9 @@ func ListServices() ([]ServiceInfo, error) {
 		}
 		services = append(services, si)
 	}
-	return services, nil
+	// Enriquecimento com métricas do processo do serviço (CPU/RAM/disco/
+	// rede) quando o serviço está em execução (PID > 0).
+	return enrichServiceMetrics(services), nil
 }
 
 // enumServicesStatus enumera serviços via EnumServicesStatusEx (SC_ENUM_PROCESS_INFO),

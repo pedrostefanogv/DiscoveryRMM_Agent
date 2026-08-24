@@ -49,20 +49,28 @@ type keybdInput struct {
 	dwExtraInfo uintptr
 }
 
-type hardwareInput struct {
-	uMsg    uint32
-	wParamL uint16
-	wParamH uint16
-}
-
+// inputUnion modela a UNION C do tagINPUT do Windows. Em C, os membros
+// MOUSEINPUT/KEYBDINPUT/HARDWAREINPUT compartilham o MESMO espaço de memória;
+// o tamanho da union é o do MAIOR membro (MOUSEINPUT = 32 bytes em 64-bit),
+// NÃO a soma dos três. Modelar a union como uma struct Go com três campos
+// (64 bytes) fazia o SendInput receber um INPUT de 72 bytes em vez de 40 e
+// falhar silenciosamente com ERROR_INVALID_PARAMETER — o input do controle
+// remoto NUNCA funcionava, independentemente de elevação.
+//
+// O armazenamento é [4]uint64 (32 bytes) em vez de [32]byte de propósito:
+// uint64 força ALINHAMENTO de 8 bytes na union, que é obrigatório pois o
+// caller reinterpreta este ponteiro como *mouseInput/*keybdInput, ambos com
+// uintptr (8-byte). Com [32]byte a union teria alinhamento 1 e a escrita via
+// unsafe.Pointer seria UB em Go (panic com -checkptr/-race; fault em ARM64).
 type inputUnion struct {
-	mi mouseInput
-	ki keybdInput
-	hi hardwareInput
+	words [4]uint64
 }
 
+// winInput é o tagINPUT (INPUT) do Windows. Layout (64-bit):
+//   DWORD type (4) + padding (4, alinhamento da union a 8) + union (32) = 40.
 type winInput struct {
 	inputType uint32
+	padding   uint32
 	union     inputUnion
 }
 
@@ -203,11 +211,11 @@ func SetCursorPosAbsolute(x, y int32) error {
 	return nil
 }
 
-// unsafePtr converte *inputUnion para unsafe.Pointer para escrita na union.
-// mouseInput e keybdInput são os primeiros campos de inputUnion,
-// então o ponteiro da struct coincide com o ponteiro do primeiro campo.
+// unsafePtr retorna o ponteiro para a área da union (membro compartilhado).
+// O caller reinterpreta esse ponteiro como *mouseInput ou *keybdInput.
+// O alinhamento de 8 bytes é garantido pelo [4]uint64 da union.
 func unsafePtr(v any) unsafe.Pointer {
-	return unsafe.Pointer(v.(*inputUnion))
+	return unsafe.Pointer(&v.(*inputUnion).words[0])
 }
 
 // VK constants

@@ -87,6 +87,7 @@ type procResponse struct {
 	RequestID string                `json:"requestId,omitempty"`
 	Processes []sysctrl.ProcessInfo `json:"processes,omitempty"`
 	Services  []sysctrl.ServiceInfo `json:"services,omitempty"`
+	System    *sysctrl.SystemInfo   `json:"system,omitempty"`
 }
 
 func (sp *SessionProcesses) handleRequest(reqData []byte) []byte {
@@ -126,6 +127,9 @@ func (sp *SessionProcesses) handleRequest(reqData []byte) []byte {
 			svcs = []sysctrl.ServiceInfo{}
 		}
 		return sp.encode(procResponse{RequestID: req.RequestID, Success: true, Services: svcs})
+	case "getSystemInfo":
+		info := sysctrl.GetSystemInfo()
+		return sp.encode(procResponse{RequestID: req.RequestID, Success: true, System: &info})
 	case "startService":
 		return sp.serviceAction(req, sysctrl.StartService)
 	case "stopService":
