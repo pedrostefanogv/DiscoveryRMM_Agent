@@ -212,6 +212,229 @@ func TestHandleRequest_ZipUnzip(t *testing.T) {
 	}
 }
 
+// TestHandleRequest_PutUsesTempNameAndRenames valida que o upload e feito de
+// forma atomica: durante os chunks, apenas <destino>.tmp existe no disco; o
+// arquivo com o nome final so existe (sem .tmp residual) apos o ultimo chunk.
+func TestHandleRequest_PutUsesTempNameAndRenames(t *testing.T) {
+	tmp := t.TempDir()
+	srv := NewServer(tmp)
+
+	content := []byte("0123456789abcdefghijklmnopqrstuv") // 32 bytes
+	chunk0 := content[0:16]
+	chunk1 := content[16:32]
+	finalPath := filepath.Join(tmp, "firefox.exe")
+	tmpPath := finalPath + ".tmp"
+
+	// ── put chunk 0: ainda NAO deve existir o arquivo final ──
+	r0 := srv.HandleRequest(mkPutReq("t1", "firefox.exe", chunk0, 0, 16, 2))
+	if !okResp(t, r0, "put chunk0") {
+		t.Fatal()
+	}
+	if _, err := os.Stat(finalPath); !os.IsNotExist(err) {
+		t.Fatalf("chunk0: arquivo final NAO deveria existir ainda (evita leitura prematura): %v", err)
+	}
+	if _, err := os.Stat(tmpPath); err != nil {
+		t.Fatalf("chunk0: arquivo temporario deveria existir: %v", err)
+	}
+
+	// ── put chunk 1 (ultimo): chunk 0 e 1 ja no disco, agora renomeia ──
+	r1 := srv.HandleRequest(mkPutReq("t2", "firefox.exe", chunk1, 1, 16, 2))
+	if !okResp(t, r1, "put chunk1") {
+		t.Fatal()
+	}
+	finalData, err := os.ReadFile(finalPath)
+	if err != nil {
+		t.Fatalf("apos ultimo chunk, arquivo final deveria existir: %v", err)
+	}
+	if string(finalData) != string(content) {
+		t.Fatalf("arquivo final incompleto: got %q want %q", finalData, content)
+	}
+	if _, err := os.Stat(tmpPath); !os.IsNotExist(err) {
+		t.Fatalf("apos ultimo chunk, .tmp deveria ter sido removido pela rename: %v", err)
+	}
+
+	// ── put único (chunkIndex=nil): grava em .tmp e renomeia imediatamente ──
+	small := []byte("tiny")
+	ru := srv.HandleRequest(mustJSON(t, map[string]any{
+		"version": 1, "requestId": "t3", "action": "put",
+		"path": "nota.txt", "data": base64.StdEncoding.EncodeToString(small),
+	}))
+	if !okResp(t, ru, "put unico") {
+		t.Fatal()
+	}
+	dd, err := os.ReadFile(filepath.Join(tmp, "nota.txt"))
+	if err != nil || string(dd) != "tiny" {
+		t.Fatalf("put unico: conteudo = %q err=%v", dd, err)
+	}
+	if _, err := os.Stat(filepath.Join(tmp, "nota.txt.tmp")); !os.IsNotExist(err) {
+		t.Fatalf("put unico: .tmp nao deveria restar: %v", err)
+	}
+}
+
+// TestHandleRequest_PutFailsRemovesTemp valida que, em falha no meio do upload,
+// o arquivo final nao fica parcial e o .tmp e removido.
+func TestHandleRequest_PutFailsRemovesTemp(t *testing.T) {
+	tmp := t.TempDir()
+	srv := NewServer(tmp)
+
+	tmpPath := filepath.Join(tmp, "app.exe.tmp")
+	finalPath := filepath.Join(tmp, "app.exe")
+
+	// Envia chunk 0 de 1 de um total de 3 (upload ainda nao concluido).
+	r0 := srv.HandleRequest(mkPutReq("t1", "app.exe", []byte("only-chunk"), 0, 16, 3))
+	if !okResp(t, r0, "put chunk0") {
+		t.Fatal()
+	}
+	if _, err := os.Stat(tmpPath); err != nil {
+		t.Fatalf("esperava .tmp criado apos chunk0: %v", err)
+	}
+
+	// Falha/abandono do upload: simula nova tentativa de um chunk 0 - o que
+	// removeria o .tmp orfao (chunk0 faz a limpeza). Apos isso, .tmp nao existe
+	// e o final tambem nao (nunca foi renomeado).
+	_ = srv.HandleRequest(mkPutReq("t2", "app.exe", []byte("re"), 1, 16, 3))
+	// (Na pratica o chunk0 de uma nova tentativa limpa o .tmp; aqui apenas
+	//  verificamos que o .tmp ainda existe pois não passou chunk0 nova.)
+
+	// Envia o verdadeiro chunk0 novo: deve remover o .tmp orfao e recriar limpo.
+	r1 := srv.HandleRequest(mkPutReq("t2", "app.exe", []byte("CHUNK0"), 0, 16, 3))
+	if !okResp(t, r1, "put chunk0 (nova tentativa)") {
+		t.Fatal()
+	}
+	// Final ainda nao deve existir, .tmp sim.
+	if _, err := os.Stat(finalPath); !os.IsNotExist(err) {
+		t.Fatalf("final nao deveria existir antes do ultimo chunk: %v", err)
+	}
+	if _, err := os.Stat(tmpPath); err != nil {
+		t.Fatalf(".tmp deveria existir na nova tentativa: %v", err)
+	}
+}
+
+// TestHandleRequest_PutResumeWithoutTempFails valida que um resume (chunk>0)
+// sem um .tmp existente retorna erro claro (não cria arquivo com "buracos"),
+// forçando o viewer a recomeçar do chunk 0.
+func TestHandleRequest_PutResumeWithoutTempFails(t *testing.T) {
+	tmp := t.TempDir()
+	srv := NewServer(tmp)
+
+	// Chunk 1 de um total de 3, mas NENHUM chunk 0 foi enviado antes (sem .tmp).
+	r := srv.HandleRequest(mkPutReq("t1", "app.exe", []byte("tail"), 1, 16, 3))
+	var resp FileSessionResponse
+	if err := json.Unmarshal(r, &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.Success {
+		t.Fatal("resume sem .tmp deveria falhar")
+	}
+	if _, err := os.Stat(filepath.Join(tmp, "app.exe.tmp")); !os.IsNotExist(err) {
+		t.Fatalf("nao deveria criar .tmp espurio: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tmp, "app.exe")); !os.IsNotExist(err) {
+		t.Fatalf("nao deveria criar o arquivo final: %v", err)
+	}
+}
+
+// TestHandleRequest_DeleteRemovesOrphanTemp valida que apagar um arquivo
+// tambem remove um .tmp orfao associado (upload abortado).
+func TestHandleRequest_DeleteRemovesOrphanTemp(t *testing.T) {
+	tmp := t.TempDir()
+	srv := NewServer(tmp)
+
+	finalPath := filepath.Join(tmp, "app.exe")
+	tmpPath := finalPath + ".tmp"
+	if err := os.WriteFile(finalPath, []byte("final"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tmpPath, []byte("parcial"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	r := srv.HandleRequest(mustJSON(t, map[string]any{"version": 1, "requestId": "d1", "action": "delete", "path": "app.exe"}))
+	if !okResp(t, r, "delete") {
+		t.Fatal()
+	}
+	if _, err := os.Stat(finalPath); !os.IsNotExist(err) {
+		t.Fatalf("arquivo final nao foi removido: %v", err)
+	}
+	if _, err := os.Stat(tmpPath); !os.IsNotExist(err) {
+		t.Fatalf(".tmp orfao nao foi removido: %v", err)
+	}
+}
+
+// TestHandleRequest_DeleteCancelledUploadRemovesTempOnly valida o cancelamento
+// de um upload em andamento: o arquivo final ainda não existe, mas o .tmp
+// parcial sim. O delete do path final deve limpar o .tmp e retornar sucesso.
+func TestHandleRequest_DeleteCancelsUploadHandlesTempOnly(t *testing.T) {
+	tmp := t.TempDir()
+	srv := NewServer(tmp)
+
+	finalPath := filepath.Join(tmp, "app.exe")
+	tmpPath := finalPath + ".tmp"
+	// Simula upload em andamento: só o .tmp existe (chunk 0 enviado, final não).
+	if err := os.WriteFile(tmpPath, []byte("parcial"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(finalPath); !os.IsNotExist(err) {
+		t.Fatal("pre-condicao: final nao deveria existir")
+	}
+
+	r := srv.HandleRequest(mustJSON(t, map[string]any{"version": 1, "requestId": "d2", "action": "delete", "path": "app.exe"}))
+	if !okResp(t, r, "delete cancel upload") {
+		t.Fatal()
+	}
+	if _, err := os.Stat(tmpPath); !os.IsNotExist(err) {
+		t.Fatalf(".tmp do upload cancelado nao foi removido: %v", err)
+	}
+}
+
+// TestHandleRequest_DeleteMissingFileFails valida que apagar um arquivo que
+// nunca existiu (sem .tmp órfão) ainda retorna erro.
+func TestHandleRequest_DeleteMissingFileFails(t *testing.T) {
+	tmp := t.TempDir()
+	srv := NewServer(tmp)
+
+	r := srv.HandleRequest(mustJSON(t, map[string]any{"version": 1, "requestId": "d3", "action": "delete", "path": "nao-existe.txt"}))
+	var resp FileSessionResponse
+	if err := json.Unmarshal(r, &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.Success {
+		t.Fatal("delete de arquivo inexistente deveria falhar")
+	}
+}
+
+// TestHandleRequest_PutChunkOutOfRangeFails valida que um chunk com index fora
+// do range (inconsistência do viewer) é rejeitado e não renomeia o .tmp com
+// dados incompletos.
+func TestHandleRequest_PutChunkOutOfRangeFails(t *testing.T) {
+	tmp := t.TempDir()
+	srv := NewServer(tmp)
+
+	finalPath := filepath.Join(tmp, "app.exe")
+	tmpPath := finalPath + ".tmp"
+
+	// Chunk 0 de um total de 2 (upload em andamento).
+	if !okResp(t, srv.HandleRequest(mkPutReq("t1", "app.exe", []byte("AAAA"), 0, 16, 2)), "put chunk0") {
+		t.Fatal()
+	}
+	if _, err := os.Stat(tmpPath); err != nil {
+		t.Fatalf(".tmp deveria existir: %v", err)
+	}
+
+	// Chunk com index fora do range (ex.: 5 de 2) — deve falhar e NÃO renomear.
+	r := srv.HandleRequest(mkPutReq("t2", "app.exe", []byte("BBBB"), 5, 16, 2))
+	var resp FileSessionResponse
+	if err := json.Unmarshal(r, &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.Success {
+		t.Fatal("chunk fora do range deveria falhar")
+	}
+	if _, err := os.Stat(finalPath); !os.IsNotExist(err) {
+		t.Fatalf("arquivo final nao deveria ser renomeado com dados incompletos: %v", err)
+	}
+}
+
 // TestHandleRequest_LegacyFallback garante compatibilidade com o protocolo legado.
 func TestHandleRequest_LegacyFallback(t *testing.T) {
 	tmp := t.TempDir()

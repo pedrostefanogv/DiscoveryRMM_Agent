@@ -257,6 +257,15 @@ func (s *Server) handleGet(path string, chunkIndex *int, chunkSize int) FileSess
 // handlePut escreve um arquivo. Com chunkIndex != nil, escreve o chunk na
 // posicao correta (upload chunked com resume). Sem chunkIndex (nil), escreve
 // o arquivo inteiro de uma vez.
+//
+// O upload é feito de forma "atomica": todo o conteudo e gravado num arquivo
+// temporario (<destino>.tmp) na mesma pasta do destino. Somente quando o
+// ultimo chunk e recebido (chunkIndex+1 >= totalChunks) ou em uploads de um
+// unico chunk (chunkIndex == nil) o arquivo e renomeado para o nome final.
+// Isso evita que ferramentas (Defender, Explorer, instaladores, etc.) abram
+// um arquivo parcial com o nome definitivo (.exe) durante a transferencia,
+// e tambem impede que um upload novo menor deixe restos de um arquivo
+// anterior maior (o truncamento agora ocorre somente no .tmp).
 func (s *Server) handlePut(path string, data []byte, chunkIndex *int, chunkSize, totalChunks int) FileSessionResponse {
 	fullPath, err := s.safePath(path)
 	if err != nil {
@@ -269,9 +278,27 @@ func (s *Server) handlePut(path string, data []byte, chunkIndex *int, chunkSize,
 		return s.errorResponse("", "criar diretorio: "+err.Error())
 	}
 
+	// Destino temporario na mesma pasta do destino final (rename atômico e
+	// sem cruzar volume). Derivado apenas do caminho (nao do requestId, que
+	// muda a cada chunk no viewer) para que chunks do mesmo upload reusem o
+	// mesmo .tmp. O frontend envia o `path` final real; o .tmp e interno.
+	tmpPath := fullPath + ".tmp"
+
+	// Garante que um .tmp orfão de um upload anterior abortado seja removido
+	// quando um novo upload do mesmo arquivo começar pelo chunk 0.
+	if chunkIndex != nil && *chunkIndex == 0 {
+		_ = os.Remove(tmpPath)
+	}
+
 	if chunkIndex == nil {
-		if err := os.WriteFile(fullPath, data, 0644); err != nil {
+		// Upload único (arquivo pequeno): escreve no .tmp e renomeia.
+		if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+			_ = os.Remove(tmpPath)
 			return s.errorResponse("", "escrever arquivo: "+err.Error())
+		}
+		if err := os.Rename(tmpPath, fullPath); err != nil {
+			_ = os.Remove(tmpPath)
+			return s.errorResponse("", "finalizar upload: "+err.Error())
 		}
 		return s.okResponse(nil, nil, int64(len(data)), 0, 1)
 	}
@@ -280,31 +307,59 @@ func (s *Server) handlePut(path string, data []byte, chunkIndex *int, chunkSize,
 		chunkSize = 256 << 10
 	}
 
-	// Chunk 0: trunca o arquivo (remove restos de uploads anteriores).
-	// Chunks seguintes: append/seek sem truncar.
-	flags := os.O_CREATE | os.O_WRONLY
-	if *chunkIndex == 0 {
-		flags |= os.O_TRUNC
+	// Validação defensiva: totalChunks zerado é tratado como 1 (chamadores
+	// legados); um chunkIndex fora do range indica inconsistência do viewer e
+	// deve ser rejeitado — renomear aqui renomearia um arquivo incompleto.
+	if totalChunks <= 0 {
+		totalChunks = 1
+	}
+	if *chunkIndex >= totalChunks {
+		return s.errorResponse("", fmt.Sprintf("chunk %d fora do range (0-%d)", *chunkIndex, totalChunks-1))
 	}
 
-	f, err := os.OpenFile(fullPath, flags, 0644)
+	// Chunk 0: trunca o .tmp (remove restos de uploads anteriores).
+	// Chunk > 0 (resume): abre o .tmp que ja existe SEM O_CREATE — se o .tmp
+	// nao existir, significa que o upload anterior foi abortado/limpo; cria-lo
+	// do zero aqui geraria um arquivo com "buracos" no disco. Forcar o viewer
+	// a recomecar do chunk 0 e o comportamento correto.
+	flags := os.O_WRONLY
+	if *chunkIndex == 0 {
+		flags |= os.O_CREATE | os.O_TRUNC
+	}
+
+	f, err := os.OpenFile(tmpPath, flags, 0644)
 	if err != nil {
+		if *chunkIndex > 0 && os.IsNotExist(err) {
+			return s.errorResponse("", "upload interrompido: recomece do chunk 0")
+		}
 		return s.errorResponse("", "abrir arquivo: "+err.Error())
 	}
-	defer f.Close()
 
 	offset := int64(*chunkIndex * chunkSize)
 	if _, err := f.Seek(offset, 0); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmpPath)
 		return s.errorResponse("", "seek: "+err.Error())
 	}
 
 	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmpPath)
 		return s.errorResponse("", "escrever chunk: "+err.Error())
 	}
-
-	if totalChunks <= 0 {
-		totalChunks = 1
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return s.errorResponse("", "fechar arquivo: "+err.Error())
 	}
+
+	// Ultimo chunk: renomeia o .tmp para o nome final (arquivo completo).
+	if *chunkIndex+1 >= totalChunks {
+		if err := os.Rename(tmpPath, fullPath); err != nil {
+			_ = os.Remove(tmpPath)
+			return s.errorResponse("", "finalizar upload: "+err.Error())
+		}
+	}
+
 	return s.okResponse(nil, nil, int64(len(data)), *chunkIndex, totalChunks)
 }
 
@@ -313,8 +368,25 @@ func (s *Server) handleDelete(path string) FileSessionResponse {
 	if err != nil {
 		return s.errorResponse("", err.Error())
 	}
+
+	// Limpa um eventual .tmp órfão (upload cancelado/abortado) associado ao
+	// arquivo. Se o .tmp estiver a ser escrito por um upload concorrente, o
+	// os.Remove falha silenciosamente (arquivo em uso no Windows) — aceitável.
+	removedTmp := false
+	if _, terr := os.Stat(fullPath + ".tmp"); terr == nil {
+		if err := os.Remove(fullPath + ".tmp"); err == nil {
+			removedTmp = true
+		}
+	}
+
 	info, err := os.Stat(fullPath)
 	if err != nil {
+		// Arquivo final não existe. Se havia um .tmp órfão (upload cancelado no
+		// meio, onde o arquivo final ainda não foi criado) e ele foi removido,
+		// o objetivo — não deixar resíduo — foi atingido: retorna sucesso.
+		if removedTmp {
+			return s.okResponse(nil, nil, 0, 0, 0)
+		}
 		return s.errorResponse("", "remover: "+err.Error())
 	}
 	if info.IsDir() {
