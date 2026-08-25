@@ -213,11 +213,22 @@ func waitForProcess(hProcess windows.Handle, timeout time.Duration) (uint32, err
 
 // launchInstallerFallback decide o caminho de fallback quando ShellExecuteEx("runas")
 // falha por um motivo que não seja UAC negado:
+//   - Se o erro original indica que elevação é requerida (ERROR_ELEVATION_REQUIRED),
+//     tenta ShellExecuteEx("runas") novamente (não CreateProcess, que falharia).
 //   - Se o processo atual já está elevado (SYSTEM/admin), usa CreateProcess direto.
-//   - Caso contrário, tenta ShellExecuteEx("runas") uma segunda vez. Se essa
-//     segunda tentativa também falhar, reporta erro claro (não tenta CreateProcess
-//     sem elevação, que falharia com Access Denied ao escrever em Program Files).
+//   - Caso contrário, tenta ShellExecuteEx("runas") uma segunda vez.
 func (u *Updater) launchInstallerFallback(exePath string, previousErr error) error {
+	// Erro de elevação requerida: CreateProcess sem elevação falharia com
+	// Access Denied ao escrever em Program Files. Tenta runas de novo.
+	if isElevationRequiredError(previousErr) {
+		u.logf("[selfupdate] erro indica elevacao requerida — tentando ShellExecuteEx(runas) novamente")
+		pid, hProcess, err := LaunchInstallerElevated(exePath, "/S /UPDATE")
+		if err != nil {
+			return fmt.Errorf("instalador requer elevacao administrativa (fallback runas falhou): %w (erro anterior: %v)", err, previousErr)
+		}
+		return u.finishLaunchInstaller(exePath, pid, hProcess)
+	}
+
 	if isProcessElevated() {
 		u.logf("[selfupdate] processo atual elevado — usando CreateProcess direto")
 		return u.launchInstallerCreateProcess(exePath, previousErr)

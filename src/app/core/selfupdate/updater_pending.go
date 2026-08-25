@@ -272,6 +272,9 @@ func (u *Updater) correlateInstallerLog(recordedAtUTC string) (foundSuccess bool
 			}
 		}
 	}
+	if err := scanner.Err(); err != nil {
+		u.logf("aviso: erro ao ler installer.log durante correlacao: %v", err)
+	}
 
 	for _, line := range recentLines {
 		if strings.Contains(line, installerLogSuccessMarker) {
