@@ -50,7 +50,13 @@ var (
 	procFreeConsole                    = kernel32.NewProc("FreeConsole")
 	procGetStdHandle                = kernel32.NewProc("GetStdHandle")
 	procGetLargestConsoleWindowSize = kernel32.NewProc("GetLargestConsoleWindowSize")
+	procSetConsoleOutputCP           = kernel32.NewProc("SetConsoleOutputCP")
 )
+
+// CP_UTF8 é a code page UTF-8 (65001) usada para tornar a saída do console
+// legado compatível com o pipeline UTF-8 de ponta a ponta (readLoop string()
+// e frontend TextDecoder('utf-8')).
+const CP_UTF8 = uint32(65001)
 
 const invalidHandleValue = ^uintptr(0) // (HANDLE)-1
 
@@ -112,6 +118,13 @@ func enableVtOnChildConsole(childPid uint32) {
 	}
 	newMode := mode | enableVirtualTerminalProcessing | enableProcessedOutput
 	_, _, _ = procSetConsoleMode.Call(uintptr(hOut), uintptr(newMode))
+
+	// Garante que o console real emita UTF-8 (CP_UTF8/65001). Por padrão o
+	// console real usa a code page OEM (ex.: CP850 em pt-BR), o que quebrava
+	// os acentos no pipeline (o readLoop faz string(buf) assumindo UTF-8 e o
+	// frontend decodifica UTF-8). Forçando a saída em UTF-8 aqui, o texto
+	// viaja correto de ponta a ponta sem conversão adicional.
+	_, _, _ = procSetConsoleOutputCP.Call(uintptr(CP_UTF8))
 }
 
 // ── Estrutura COORD/SMALL_RECT (já usada para outros fins) ──

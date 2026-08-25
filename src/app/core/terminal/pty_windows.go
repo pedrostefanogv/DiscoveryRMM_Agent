@@ -10,8 +10,10 @@ import (
 	"os/exec"
 	"sync"
 	"syscall"
+	"unicode/utf8"
 
 	"golang.org/x/sys/windows"
+	"golang.org/x/text/encoding/charmap"
 )
 
 // Shell representa um terminal interativo (cmd.exe ou powershell.exe).
@@ -135,7 +137,7 @@ func (s *Shell) readLoop(r io.Reader) {
 	for {
 		n, err := r.Read(buf)
 		if n > 0 {
-			output := string(buf[:n])
+			output := normalizeToUtf8(buf[:n])
 			s.mu.Lock()
 			if s.onOutput != nil && !s.closed {
 				s.onOutput(output)
@@ -146,6 +148,30 @@ func (s *Shell) readLoop(r io.Reader) {
 			return
 		}
 	}
+}
+
+// normalizeToUtf8 garante que a saída lida da pipe esteja em UTF-8 antes de
+// seguir para o pipeline (base64 → frontend TextDecoder('utf-8')).
+//
+// No backend legacy (CREATE_NEW_CONSOLE + pipes), o stdout/stderr do processo
+// filho é redirecionado para um pipe. Nativos Windows (CRT) que escrevem em
+// uma pipe usam a code page ANSI do sistema (CP1252 em pt-BR) — NÃO UTF-8.
+// Sem intervenção, bytes como 0xED ("í" em CP1252) viram U+FFFD ('')
+// quando interpretados como UTF-8, quebrando os acentos ("Estatísticas" →
+// "Estat�sticas").
+//
+// Se o trecho já for UTF-8 válido (ex.: ConPTY normaliza para UTF-8, ou o
+// shell já emite UTF-8 após SetConsoleOutputCP(65001)), usamos direto; caso
+// contrário, decodificamos de Windows-1252 (ANSI) e re-encodamos em UTF-8.
+func normalizeToUtf8(b []byte) string {
+	if utf8.Valid(b) {
+		return string(b)
+	}
+	// CP1252 é aproximação da ANSI (cp_ACP) do Windows para pt-BR; cobre os
+	// acentos comuns (á, é, í, ó, ú, ã, õ, ç). Falhas de decodificação viram
+	// "\uFFFD" localmente em vez de propagar bytes inválidos.
+	decoded, _ := charmap.Windows1252.NewDecoder().String(string(b))
+	return decoded
 }
 
 // WriteStdin escreve dados no stdin do shell.
