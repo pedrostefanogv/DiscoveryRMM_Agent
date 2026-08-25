@@ -53,6 +53,11 @@ type outputCoalescer struct {
 	msgTimestamps []time.Time
 	maxPerWindow  int
 	windowMs      time.Duration
+
+	// Segmentation ANSI — número de ticks consecutivos adiados por sequência
+	// ANSI incompleta. Limita a retenção do buffer a poucos intervalos.
+	deferCount     int
+	maxAnsiDefer   int
 }
 
 func newOutputCoalescer(onFlush func(string), interval time.Duration) *outputCoalescer {
@@ -62,6 +67,7 @@ func newOutputCoalescer(onFlush func(string), interval time.Duration) *outputCoa
 		maxPerWindow:  termMaxMsgPerSec * termRateWindowMs / 1000,
 		windowMs:      termRateWindowMs,
 		msgTimestamps: make([]time.Time, 0, 16),
+		maxAnsiDefer:  4,
 	}
 }
 
@@ -74,24 +80,104 @@ func (oc *outputCoalescer) Write(s string) {
 	oc.mu.Unlock()
 }
 
+// flush é agendado a cada interval enquanto houver dados. Para reduzir
+// artefatos visuais de sequências ANSI/VT cortadas no meio, só despacha quando
+// o buffer não termina em uma sequência de escape possivelmente incompleta
+// (ex.: ESC [ com parâmetros sem o byte final). Se estiver incompleto,
+// re-agenda por mais um intervalo (timeout efetivo) até o resto chegar.
 func (oc *outputCoalescer) flush() {
 	oc.mu.Lock()
-	defer oc.mu.Unlock()
+	oc.mustDispatchLocked()
+	oc.mu.Unlock()
+}
+
+// mustDispatchLocked evita dupla checagem de rate limit: se o buffer está
+// "incompleto" (provavelmente meio de uma sequência ANSI), ainda despacha se o
+// rate limit permitir; caso contrário segura mais um tick. Mesmo assim, há um
+// teto implícito: a cada tick o buffer que acumulou é enviado inteiro, então
+// nunca fica retido para sempre.
+func (oc *outputCoalescer) mustDispatchLocked() {
+	// Se ainda há dados a enviar porém o buffer termina numa sequência ANSI
+	// incompleta e há um próximo dado esperado, segura por mais um tick.
+	// readFullLinearAnsi e o timeout garantem que isso não travou.
+	if oc.buf.Len() > 0 && endsWithIncompleteAnsi(oc.buf.String()) && oc.deferCount < oc.maxAnsiDefer {
+		oc.deferCount++
+		oc.timer = nil
+		oc.timer = time.AfterFunc(oc.interval, oc.flush)
+		return
+	}
+
+	oc.dispatchLocked()
+}
+
+func (oc *outputCoalescer) dispatchLocked() {
+	oc.deferCount = 0 // reset ao despachar
 	if oc.buf.Len() > 0 {
 		if oc.allowMessage() {
 			oc.onFlush(oc.buf.String())
 			oc.buf.Reset()
 		}
-		// Se o rate limit foi atingido, NÃO descarta o buffer: mantém o
-		// conteúdo acumulado para ser enviado no próximo flush (o timer
-		// é re-agendado abaixo). Isso evita perda de output em comandos
-		// com saída volumosa (dir /s, Get-ChildItem -Recurse, logs).
 	}
 	oc.timer = nil
 	// Re-agenda o flush se ainda há dados pendentes (rate limit bloqueou).
 	if oc.buf.Len() > 0 {
 		oc.timer = time.AfterFunc(oc.interval, oc.flush)
 	}
+}
+
+// endsWithIncompleteAnsi reporta se a string termina no meio de uma sequência
+// de escape ANSI/VT (EJ.: "ESC [" ou "ESC [2;3" sem o byte final em [0-9;<>]?
+// [a-zA-Z]). Nesse caso esperamos mais um tick para completar, evitando que o
+// xterm.js desenhe artefatos (linhas/colunas com início de cor cortado).
+func endsWithIncompleteAnsi(s string) bool {
+	if len(s) == 0 {
+		return false
+	}
+	// Encontra o último byte ESC (0x1B).
+	lastESC := -1
+	for i := len(s) - 1; i >= 0; i-- {
+		if s[i] == 0x1B {
+			lastESC = i
+			break
+		}
+	}
+	if lastESC < 0 {
+		return false
+	}
+
+	rest := s[lastESC+1:]
+	if len(rest) == 0 {
+		// "ESC" sozinho no fim — pode ser início de uma sequência.
+		return true
+	}
+
+	// Sequências CSI (ESC [ ... final em 0x40–0x7E) e OSC (ESC ] ... até BEL
+	// ou ESC \) podem ficar truncadas. Importante testar '[' ANTES do bloco
+	// de two-character escape (0x40–0x5F), pois '[' = 0x5B cairia nesse bloco
+	// e seria tratado como "completo" erroneamente — deixando o CSI cortado.
+	if rest[0] == '[' {
+		// Estados: parâmetros/bytes intermediários em 0x20–0x3F, final em 0x40–0x7E.
+		for i := 1; i < len(rest); i++ {
+			c := rest[i]
+			if c >= 0x40 && c <= 0x7E {
+				return false // sequência CSI completa → ok despachar
+			}
+			if c < 0x20 || c > 0x3F {
+				return true // byte estranho fora do esperado → incompleto/inválido
+			}
+		}
+		return true // só parâmetros até o fim → incompleto
+	}
+
+	// Two-character escape (ESC <letra>): completa. Exclui ']' (0x5D, OSC) que
+	// requer término por BEL (0x07) ou ESC '\' — tratamos um ']' truncado como
+	// incompleto para não cortar uma OSC no meio.
+	if rest[0] != ']' && rest[0] >= 0x40 && rest[0] <= 0x5F {
+		return false
+	}
+
+	// OSC (ESC ] ...) truncada ou ESC seguido de byte fora de faixa → mantém.
+	return true
 }
 
 // allowMessage verifica rate limit via janela deslizante.

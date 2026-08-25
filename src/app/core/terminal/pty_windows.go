@@ -22,6 +22,10 @@ type Shell struct {
 	stdout io.ReadCloser
 	stderr io.ReadCloser
 
+	childPid uint32 // PID do processo filho (para AttachConsole em VT/resize)
+	cols     int
+	rows     int
+
 	mu       sync.Mutex
 	closed   bool
 	onOutput func(string) // callback para saida
@@ -84,10 +88,18 @@ func NewShell(shell string, onOutput func(string)) (*Shell, error) {
 		stderr:   stderrPipe,
 		onOutput: onOutput,
 	}
+	if cmd.Process != nil {
+		s.childPid = uint32(cmd.Process.Pid)
+	}
 
 	// Leitura assincrona da saida
 	go s.readLoop(stdoutPipe)
 	go s.readLoop(stderrPipe)
+
+	// Habilita VT/ANSI no console real do filho (apos o start) para que
+	// cores/sequencias ANSI sejam processadas sempre que o host suportar.
+	// O resize inicial é feito pelo chamador (NewLegacyShell → s.Resize).
+	enableVtOnChildConsole(s.childPid)
 
 	return s, nil
 }
@@ -147,10 +159,29 @@ func (s *Shell) WriteStdin(data string) error {
 	return err
 }
 
-// Resize notifica o terminal sobre mudanca de tamanho.
-// Placeholder: ConPTY resize requer CreatePseudoConsole (Fase 5).
+// Resize redimensiona o console real do processo filho (backend legacy) para
+// as dimensoes cols×rows. Como o ConPTY não está envolvido, usamos
+// AttachConsole + SetConsoleScreenBufferSize/SetConsoleWindowInfo no console
+// real do filho. É o equivalente a um resize real — corrige quebra de linha e
+// alinhamento com o xterm.js.
 func (s *Shell) Resize(cols, rows int) error {
-	return nil
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("shell fechado")
+	}
+	if cols <= 0 || rows <= 0 {
+		return fmt.Errorf("dimensoes invalidas: %dx%d", cols, rows)
+	}
+	if s.childPid == 0 {
+		return nil // sem PID (ex.: shell não iniciado) — no-op seguro
+	}
+	err := resizeChildConsole(s.childPid, cols, rows)
+	if err == nil {
+		s.cols = cols
+		s.rows = rows
+	}
+	return err
 }
 
 // Close encerra o shell.

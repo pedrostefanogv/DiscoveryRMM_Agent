@@ -3,6 +3,7 @@
 package terminal
 
 import (
+	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -11,34 +12,56 @@ import (
 // conptyProbeTimeout é o tempo de observação do ConPTY logo após o spawn. Se o
 // processo filho morre dentro dessa janela (sintoma de 0xC0000142 /
 // STATUS_DLL_INIT_FAILED), considera-se ConPTY instável e faz-se fallback.
-const conptyProbeTimeout = 300 * time.Millisecond
+const conptyProbeTimeout = 500 * time.Millisecond
+
+// conptyMaxRetries define quantas tentativas extras de ConPTY são feitas após
+// uma morte prematura antes de desistir e cair para o console real (legacy).
+// Como o 0xC0000142 é intermitente (injeção de DLL de AV/antivírus), uma
+// segunda tentativa costuma estabilizar — preservando TUI/ANSI completos.
+const conptyMaxRetries = 2
 
 // NewShellInteractive cria um shell do melhor backend disponível:
 // ConPTY primeiro; se o processo morre prematuramente (com 0xC0000142 /
-// STATUS_DLL_INIT_FAILED) no boot de DLL, faz fallback para o console real
-// (pipes + CREATE_NEW_CONSOLE), que é mais resistente a injetores/AV (como o
-// terminal legado do MeshCentral).
+// STATUS_DLL_INIT_FAILED) no boot de DLL, tenta novamente (até conptyMaxRetries)
+// e só então faz fallback para o console real (pipes + CREATE_NEW_CONSOLE), que
+// é mais resistente a injetores/AV (como o terminal legado do MeshCentral).
 func NewShellInteractive(shell ShellKind, cols, rows int, onOutput func(string)) (IShell, error) {
 	// 1ª tentativa: ConPTY (contribui com TUI/ANSI quando estável).
 	if IsConPTYAvailable() {
-		s, err := NewConPTYShell(shell, cols, rows, onOutput)
-		if err == nil {
+		var lastErr error
+		for attempt := 0; attempt <= conptyMaxRetries; attempt++ {
+			s, err := NewConPTYShell(shell, cols, rows, onOutput)
+			if err != nil {
+				lastErr = err
+				log.Printf("[terminal] ConPTY falhou no spawn (tentativa %d/%d): %v", attempt+1, conptyMaxRetries+1, err)
+				continue
+			}
 			// O 0xC0000142 termina em milissegundos. Observamos por uma janela
 			// curta usando Alive() (não-bloqueante, não consome Wait): se o
 			// processo segui vivo, aceitamos ConPTY; se morreu prematuramente,
-			// partimos para o console real oculto.
+			// tentamos novamente antes de partir para o console real oculto.
 			if dead := probeForEarlyDeath(s, conptyProbeTimeout); dead {
-				log.Printf("[terminal] ConPTY morreu prematuramente no startup; usando console real")
+				lastErr = fmt.Errorf("ConPTY morreu prematuramente no startup")
+				log.Printf("[terminal] ConPTY morreu prematuramente (tentativa %d/%d); %s",
+					attempt+1, conptyMaxRetries+1, retryLabel(attempt))
 				_ = s.Close()
-				return NewLegacyShell(shell, cols, rows, onOutput)
+				continue
 			}
 			return s, nil
 		}
-		log.Printf("[terminal] ConPTY indisponivel/falhou no spawn (%v); usando console real", err)
+		log.Printf("[terminal] ConPTY instável após %d tentativas (último: %v); usando console real", conptyMaxRetries+1, lastErr)
 	}
 
 	// 2ª: ConPTY indisponível ou falhou no spawn — usa console real.
 	return NewLegacyShell(shell, cols, rows, onOutput)
+}
+
+// retryLabel devolve o texto de reação para o log conforme a tentativa restante.
+func retryLabel(attempt int) string {
+	if attempt < conptyMaxRetries {
+		return "tentando novamente"
+	}
+	return "usando console real"
 }
 
 // probeForEarlyDeath observa o shell por um curto intervalo de startup,

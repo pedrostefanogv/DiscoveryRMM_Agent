@@ -626,12 +626,14 @@ func (m *Manager) runTerminalSession(ctx context.Context, session *Session) {
 		"consoleId": console.ID,
 		"termCols":  cols,
 		"termRows":  rows,
+		"backend":   terminal.ShellBackendName(console.Shell),
 	})
 	m.natsStream.PublishTermReady(session.ID, map[string]any{
 		"shells":    availableShells,
 		"consoleId": console.ID,
 		"termCols":  cols,
 		"termRows":  rows,
+		"backend":   terminal.ShellBackendName(console.Shell),
 	})
 	// Guarda o payload para republicar no primeiro term.in (handshake).
 	sessTerm.SetReadyPayload(readyPayload)
