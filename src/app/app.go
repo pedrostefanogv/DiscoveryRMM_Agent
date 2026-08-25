@@ -664,6 +664,9 @@ func NewApp(opts AppStartupOptions) *App {
 		TempDir:      a.p2pTempDir(),
 		Logf:         func(format string, args ...any) { a.logs.append("[selfupdate] " + fmt.Sprintf(format, args...)) },
 		InvalidateCh: a.selfUpdaterCh,
+		// InstallerLogPath: caminho para o log do NSIS, usado pelo
+		// ResumePendingInstallReport para correlacionar execuções.
+		InstallerLogPath: platform.InstallerLogPath(),
 		// OnSelfUpdateInstall: PSADT desabilitado para selfupdate.
 		// O ShellExecuteEx("runas") em LaunchInstallerElevated já lança
 		// o instalador como processo independente (não filho), garantindo

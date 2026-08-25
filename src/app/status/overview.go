@@ -34,9 +34,17 @@ type Overview struct {
 	PendingCommandResults int `json:"pendingCommandResults"`
 	PendingP2PTelemetry   int `json:"pendingP2pTelemetry"`
 	// Update do agente (self-update)
-	UpdateCheckEnabled    bool   `json:"updateCheckEnabled"`
-	UpdateCheckInProgress bool   `json:"updateCheckInProgress"`
-	LastUpdateCheckAtUTC  string `json:"lastUpdateCheckAtUtc,omitempty"`
+	UpdateCheckEnabled          bool   `json:"updateCheckEnabled"`
+	UpdateCheckInProgress       bool   `json:"updateCheckInProgress"`
+	LastUpdateCheckAtUTC        string `json:"lastUpdateCheckAtUtc,omitempty"`
+	UpdateLastError             string `json:"updateLastError,omitempty"`
+	UpdateLastInstallerExitCode int32  `json:"updateLastInstallerExitCode"`
+	UpdatePendingTargetVersion  string `json:"updatePendingTargetVersion,omitempty"`
+	// Contadores de telemetria do self-update
+	UpdateDownloadOKCount      int64 `json:"updateDownloadOkCount"`
+	UpdateLaunchOKCount        int64 `json:"updateLaunchOkCount"`
+	UpdateLaunchFailCount      int64 `json:"updateLaunchFailCount"`
+	UpdateInstallCompleteCount int64 `json:"updateInstallCompleteCount"`
 }
 
 // RealtimeStatus é uma visão mínima do status realtime.

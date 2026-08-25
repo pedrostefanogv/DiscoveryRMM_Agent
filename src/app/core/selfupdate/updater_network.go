@@ -15,9 +15,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"discovery/app/netutil"
 	"discovery/app/core/buildinfo"
 	"discovery/app/core/errutil"
+	"discovery/app/netutil"
 )
 
 func (u *Updater) ResumePendingInstallReport(ctx context.Context) {
@@ -29,7 +29,8 @@ func (u *Updater) ResumePendingInstallReport(ctx context.Context) {
 	u.installing.Store(false)
 
 	// Limpa downloads antigos na pasta de updates no startup.
-	// Arquivos discovery-update-*.exe com mais de 6h são removidos.
+	// Arquivos discovery-update-*.exe com mais de 6h são removidos,
+	// exceto o arquivo referenciado no pending state ativo.
 	u.cleanupOldDownloads()
 
 	state, err := u.loadPendingInstallState()
@@ -45,6 +46,21 @@ func (u *Updater) ResumePendingInstallReport(ctx context.Context) {
 		currentVersion = "0.0.0"
 	}
 	currentCommit := strings.TrimSpace(buildinfo.Commit)
+
+	// ── Correlação com installer.log do NSIS ──
+	// Antes de decidir se o update falhou, verificamos o log do instalador
+	// para confirmar se ele rodou e qual foi o resultado.
+	if state.RecordedAtUTC != "" {
+		foundSuccess, foundError := u.correlateInstallerLog(state.RecordedAtUTC)
+		if foundSuccess {
+			u.logf("estado pendente de install resolvido: installer.log confirma sucesso (recordedAt=%s)", state.RecordedAtUTC)
+			u.clearPendingInstallState()
+			return
+		}
+		if foundError {
+			u.logf("estado pendente de install: installer.log contem erros (recordedAt=%s)", state.RecordedAtUTC)
+		}
+	}
 
 	// ── Early exit: target mais antigo que versão atual ──
 	// Se o targetVersion registrado é inferior à versão atual, o estado pendente
@@ -334,6 +350,7 @@ func (u *Updater) downloadFromURL(ctx context.Context, downloadURL string) (stri
 	}
 
 	u.logf("[selfupdate] download concluido: path=%s sha256=%s", path, sha[:12])
+	u.incDownloadOK()
 	return path, sha, nil
 }
 

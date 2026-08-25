@@ -33,6 +33,10 @@ const (
 	newProcessGroupFlag   = 0x00000200 // CREATE_NEW_PROCESS_GROUP
 	pendingInstallFile    = "pending-install.json"
 	maxInstallAttempts    = 3
+	// installRetryDelay é o intervalo entre tentativas de launch do instalador
+	// quando a falha é recuperável (estado pendente preservado). Mais curto que
+	// o backoff de falhas de rede para permitir retry rápido do instalador.
+	installRetryDelay = 30 * time.Second
 )
 
 type Policy struct {
@@ -77,6 +81,11 @@ type Updater struct {
 	Logf         func(string, ...any)
 	InvalidateCh <-chan bool
 
+	// InstallerLogPath é o caminho para o log do instalador NSIS.
+	// Ex.: C:\ProgramData\Discovery\logs\installer.log
+	// Usado pelo ResumePendingInstallReport para correlacionar execuções.
+	InstallerLogPath string
+
 	// OnSelfUpdateInstall é um callback opcional que, se definido, é chamado
 	// ANTES do launchInstaller para mostrar UI (ex.: PSADT Welcome + Progress)
 	// e executar o instalador de forma controlada (sem defer, sem cancelar).
@@ -110,6 +119,28 @@ type Updater struct {
 	// lastCheckAtUTC armazena o timestamp da última verificação de update
 	// concluída (UTC). Usado pelo frontend para exibir ao usuário.
 	lastCheckAtUTC atomic.Value // time.Time
+
+	// ── Telemetria ──
+	// lastError armazena a última mensagem de erro do ciclo de update.
+	lastError atomic.Value // string
+	// lastInstallerExitCode armazena o exit code do último instalador (watchdog).
+	lastInstallerExitCode atomic.Int32
+	// hasInstallerRun é true após o watchdog capturar pelo menos um exit code.
+	hasInstallerRun atomic.Bool
+	// lastLaunchedPID armazena o PID do último instalador lançado (watchdog).
+	lastLaunchedPID atomic.Uint32
+	// pendingTargetVersion armazena a versão alvo do pending state atual.
+	pendingTargetVersion atomic.Value // string
+
+	// ── Contadores de telemetria (Fase 3.1) ──
+	// downloadOK: downloads concluídos com sucesso.
+	// launchOK: instalador lançado com sucesso (sobreviveu ao startup).
+	// launchFail: falha ao lançar o instalador.
+	// installComplete: instalador terminou com exit code 0 (watchdog).
+	downloadOK      atomic.Int64
+	launchOK        atomic.Int64
+	launchFail      atomic.Int64
+	installComplete atomic.Int64
 }
 
 // IsChecking retorna true se há uma verificação de update em andamento.
@@ -125,6 +156,59 @@ func (u *Updater) LastCheckAt() time.Time {
 	}
 	return time.Time{}
 }
+
+// LastError retorna a última mensagem de erro do ciclo de update.
+// Retorna string vazia se não houve erro.
+func (u *Updater) LastError() string {
+	if v := u.lastError.Load(); v != nil {
+		return v.(string)
+	}
+	return ""
+}
+
+// LastInstallerExitCode retorna o exit code do último instalador executado.
+// Retorna -1 se nunca houve instalação.
+func (u *Updater) LastInstallerExitCode() int32 {
+	if !u.hasInstallerRun.Load() {
+		return -1
+	}
+	return u.lastInstallerExitCode.Load()
+}
+
+// PendingTargetVersion retorna a versão alvo do pending state atual.
+// Retorna string vazia se não há update pendente.
+func (u *Updater) PendingTargetVersion() string {
+	if v := u.pendingTargetVersion.Load(); v != nil {
+		return v.(string)
+	}
+	return ""
+}
+
+// ── Contadores de telemetria ──
+
+// DownloadOKCount retorna o número de downloads concluídos com sucesso.
+func (u *Updater) DownloadOKCount() int64 { return u.downloadOK.Load() }
+
+// LaunchOKCount retorna o número de instaladores lançados com sucesso.
+func (u *Updater) LaunchOKCount() int64 { return u.launchOK.Load() }
+
+// LaunchFailCount retorna o número de falhas ao lançar o instalador.
+func (u *Updater) LaunchFailCount() int64 { return u.launchFail.Load() }
+
+// InstallCompleteCount retorna o número de instalações concluídas (exit 0).
+func (u *Updater) InstallCompleteCount() int64 { return u.installComplete.Load() }
+
+// incDownloadOK incrementa o contador de downloads concluídos.
+func (u *Updater) incDownloadOK() { u.downloadOK.Add(1) }
+
+// incLaunchOK incrementa o contador de launches bem-sucedidos.
+func (u *Updater) incLaunchOK() { u.launchOK.Add(1) }
+
+// incLaunchFail incrementa o contador de falhas de launch.
+func (u *Updater) incLaunchFail() { u.launchFail.Add(1) }
+
+// incInstallComplete incrementa o contador de instalações concluídas.
+func (u *Updater) incInstallComplete() { u.installComplete.Add(1) }
 
 type UpdateManifest struct {
 	ReleaseID              *string `json:"releaseId"`
@@ -180,6 +264,8 @@ type pendingInstallState struct {
 	RecordedAtUTC   string  `json:"recordedAtUtc"`
 	InstallAttempts int     `json:"installAttempts"`
 	InstalledCommit string  `json:"installedCommit"`
+	InstallerPath   string  `json:"installerPath,omitempty"`
+	InstallerPID    uint32  `json:"installerPid,omitempty"`
 }
 
 func (u *Updater) Run(ctx context.Context, checkInterval time.Duration) {
@@ -218,6 +304,11 @@ func (u *Updater) Run(ctx context.Context, checkInterval time.Duration) {
 				failures++
 				delay = backoffForFailures(failures)
 				u.logf("ciclo self-update com falha (consecutivas=%d, proximo em %s): %v", failures, delay, err)
+			} else if u.hasPendingInstallRetry() {
+				// Falha de launch recuperável: agenda retry rápido do instalador.
+				failures = 0
+				delay = installRetryDelay
+				u.logf("retry de instalador pendente agendado em %s", delay)
 			} else {
 				failures = 0
 				delay = u.nextDelay(checkInterval, false)
@@ -243,6 +334,10 @@ func (u *Updater) Run(ctx context.Context, checkInterval time.Duration) {
 					failures++
 					delay = backoffForFailures(failures)
 					u.logf("ciclo antecipado com falha (consecutivas=%d, proximo em %s): %v", failures, delay, err)
+				} else if u.hasPendingInstallRetry() {
+					failures = 0
+					delay = installRetryDelay
+					u.logf("retry de instalador pendente agendado em %s", delay)
 				} else {
 					failures = 0
 					delay = u.nextDelay(checkInterval, false)
@@ -289,6 +384,26 @@ func (u *Updater) CheckAndUpdate(ctx context.Context, force bool) error {
 	if !force && u.installing.Load() {
 		u.logf("[selfupdate] check ignorado: instalador ja em andamento")
 		return nil
+	}
+
+	// ── Retry de instalador pendente ──
+	// Se um launch anterior falhou mas o estado pendente foi preservado (com
+	// tentativas restantes), re-lança o instalador já baixado em vez de baixar
+	// de novo. Isso implementa o retry com backoff de 30s (Fase 2.3).
+	if !force && u.hasPendingInstallRetry() {
+		state, err := u.loadPendingInstallState()
+		if err == nil && state.InstallerPath != "" {
+			u.logf("[selfupdate] retry de instalador pendente (tentativa %d/%d target=%s)",
+				state.InstallAttempts, maxInstallAttempts, state.TargetVersion)
+			u.installing.Store(true)
+			launchErr := u.launchInstallerWithUI(ctx, state.InstallerPath, state.TargetVersion)
+			if launchErr != nil {
+				u.installing.Store(false)
+				return u.handleLaunchFailure(ctx, state.InstallerPath, state.TargetVersion, launchErr)
+			}
+			u.logf("[selfupdate] retry de instalador iniciado em background: %s", state.InstallerPath)
+			return nil
+		}
 	}
 
 	// Registra timestamp de verificação concluída (exceto quando ignorado por
@@ -363,6 +478,7 @@ func (u *Updater) CheckAndUpdate(ctx context.Context, force bool) error {
 		tempPath, fileSha256, fromP2P, err := u.downloadFromCacheOrPublic(ctx, publicSHA256)
 		if err != nil {
 			u.logf("[selfupdate] download falhou: %v", err)
+			u.lastError.Store(err.Error())
 			u.installing.Store(false)
 			return err
 		}
@@ -424,16 +540,18 @@ func (u *Updater) CheckAndUpdate(ctx context.Context, force bool) error {
 			CorrelationID:   correlationID,
 			RecordedAtUTC:   time.Now().UTC().Format(time.RFC3339),
 			InstalledCommit: currentCommit,
+			InstallerPath:   tempPath,
 		}); err != nil {
 			u.installing.Store(false)
+			u.lastError.Store("persistencia falhou: " + err.Error())
 			errutil.LogIfErr(os.Remove(tempPath), "selfupdate: limpar temp apos falha de persistencia")
 			return err
 		}
 
+		u.pendingTargetVersion.Store(targetVersion)
+
 		if err := u.launchInstallerWithUI(ctx, tempPath, targetVersion); err != nil {
-			u.clearPendingInstallState()
-			errutil.LogIfErr(os.Remove(tempPath), "selfupdate: limpar temp apos falha de launch")
-			return err
+			return u.handleLaunchFailure(ctx, tempPath, targetVersion, err)
 		}
 
 		u.logf("installer iniciado em background: %s", tempPath)
@@ -460,6 +578,7 @@ func (u *Updater) checkAndUpdateFallback(ctx context.Context, force bool, curren
 	tempPath, fileSha256, fromP2P, err := u.downloadFromCacheOrPublic(ctx, publicSHA256)
 	if err != nil {
 		u.logf("[selfupdate] download falhou: %v", err)
+		u.lastError.Store(err.Error())
 		u.installing.Store(false)
 		return err
 	}
@@ -510,16 +629,18 @@ func (u *Updater) checkAndUpdateFallback(ctx context.Context, force bool, curren
 		CorrelationID:   correlationID,
 		RecordedAtUTC:   time.Now().UTC().Format(time.RFC3339),
 		InstalledCommit: currentCommit,
+		InstallerPath:   tempPath,
 	}); err != nil {
 		u.installing.Store(false)
+		u.lastError.Store("persistencia falhou: " + err.Error())
 		errutil.LogIfErr(os.Remove(tempPath), "selfupdate: limpar temp apos falha de persistencia")
 		return err
 	}
 
+	u.pendingTargetVersion.Store(targetVersion)
+
 	if err := u.launchInstallerWithUI(ctx, tempPath, targetVersion); err != nil {
-		u.clearPendingInstallState()
-		errutil.LogIfErr(os.Remove(tempPath), "selfupdate: limpar temp apos falha de launch")
-		return err
+		return u.handleLaunchFailure(ctx, tempPath, targetVersion, err)
 	}
 
 	u.logf("installer iniciado em background: %s", tempPath)
@@ -565,4 +686,17 @@ func (u *Updater) logf(format string, args ...any) {
 	if u.Logf != nil {
 		u.Logf(format, args...)
 	}
+}
+
+// safeGo dispara uma goroutine com recover para evitar crash do processo
+// principal em goroutines de watchdog/monitoramento.
+func (u *Updater) safeGo(fn func()) {
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				u.logf("[selfupdate] PANIC em goroutine: %v", r)
+			}
+		}()
+		fn()
+	}()
 }

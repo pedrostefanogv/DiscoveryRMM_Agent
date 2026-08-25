@@ -120,6 +120,13 @@ func (a *App) GetStatusOverview() StatusOverview {
 		if t := a.selfUpdater.LastCheckAt(); !t.IsZero() {
 			out.LastUpdateCheckAtUTC = t.UTC().Format(time.RFC3339)
 		}
+		out.UpdateLastError = a.selfUpdater.LastError()
+		out.UpdateLastInstallerExitCode = a.selfUpdater.LastInstallerExitCode()
+		out.UpdatePendingTargetVersion = a.selfUpdater.PendingTargetVersion()
+		out.UpdateDownloadOKCount = a.selfUpdater.DownloadOKCount()
+		out.UpdateLaunchOKCount = a.selfUpdater.LaunchOKCount()
+		out.UpdateLaunchFailCount = a.selfUpdater.LaunchFailCount()
+		out.UpdateInstallCompleteCount = a.selfUpdater.InstallCompleteCount()
 	}
 
 	return out

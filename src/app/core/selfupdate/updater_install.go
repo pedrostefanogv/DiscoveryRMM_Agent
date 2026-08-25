@@ -3,7 +3,9 @@ package selfupdate
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -79,15 +81,17 @@ func (u *Updater) finishInstall(ctx context.Context, tempPath, targetVersion, cu
 		CorrelationID:   correlationID,
 		RecordedAtUTC:   time.Now().UTC().Format(time.RFC3339),
 		InstalledCommit: currentCommit,
+		InstallerPath:   tempPath,
 	}); err != nil {
+		u.lastError.Store("persistencia falhou: " + err.Error())
 		errutil.LogIfErr(os.Remove(tempPath), "selfupdate: limpar temp apos falha de persistencia")
 		return err
 	}
 
+	u.pendingTargetVersion.Store(targetVersion)
+
 	if err := u.launchInstallerWithUI(ctx, tempPath, targetVersion); err != nil {
-		u.clearPendingInstallState()
-		errutil.LogIfErr(os.Remove(tempPath), "selfupdate: limpar temp apos falha de launch")
-		return err
+		return u.handleLaunchFailure(ctx, tempPath, targetVersion, err)
 	}
 
 	u.logf("installer iniciado em background: %s", tempPath)
@@ -100,6 +104,10 @@ func (u *Updater) finishInstall(ctx context.Context, tempPath, targetVersion, cu
 // O rename .old (truque para liberar path no Windows) é feito pelo NSIS
 // (PrepareForInPlaceUpdate), que roda elevado via ShellExecuteEx(runas).
 func (u *Updater) launchInstallerWithUI(ctx context.Context, exePath, targetVersion string) error {
+	// Escreve marcador no installer.log antes de lançar o instalador, criando
+	// a linha do tempo agente→instalador (Fase 3.2).
+	u.writeInstallerLogMarker(fmt.Sprintf("agente iniciou update para versao %s (installer=%s)", targetVersion, exePath))
+
 	if u.OnSelfUpdateInstall != nil {
 		u.logf("[selfupdate] usando callback OnSelfUpdateInstall para %s", targetVersion)
 		if err := u.OnSelfUpdateInstall(ctx, exePath, targetVersion); err != nil {
@@ -110,4 +118,52 @@ func (u *Updater) launchInstallerWithUI(ctx context.Context, exePath, targetVers
 	}
 	u.logf("[selfupdate] executando instalador via ShellExecuteEx runas: %s", exePath)
 	return u.launchInstaller(exePath)
+}
+
+// handleLaunchFailure trata uma falha ao lançar o instalador. Diferente do
+// comportamento anterior (que apagava o pending state), aqui o estado pendente
+// é PRESERVADO para que o contador InstallAttempts acumule e o retry aconteça
+// no próximo ciclo do Run loop (ou no próximo startup via ResumePendingInstallReport).
+//
+// O arquivo .exe baixado também é preservado (não removido) — o cleanupOldDownloads
+// protege o InstallerPath do pending state ativo, então ele não será limpo.
+//
+// Retorna o erro original para o caller reportar.
+func (u *Updater) handleLaunchFailure(ctx context.Context, tempPath, targetVersion string, launchErr error) error {
+	u.lastError.Store("launch falhou: " + launchErr.Error())
+	u.incLaunchFail()
+
+	// Carrega o estado pendente para incrementar o contador de tentativas.
+	// Se não conseguir carregar (ex.: já foi limpo), persiste um novo estado
+	// mínimo para que o retry tenha referência.
+	if state, err := u.loadPendingInstallState(); err == nil {
+		state.InstallAttempts++
+		u.logf("[selfupdate] launch falhou (tentativa %d/%d para target=%s): %v",
+			state.InstallAttempts, maxInstallAttempts, targetVersion, launchErr)
+		if state.InstallAttempts >= maxInstallAttempts {
+			u.logf("[selfupdate] maximo de %d tentativas de launch atingido para target=%s — abortando",
+				maxInstallAttempts, targetVersion)
+			u.clearPendingInstallState()
+			u.reportInstallFailed(ctx, state, "launch-failed: "+strconv.Itoa(state.InstallAttempts)+" tentativas")
+			return launchErr
+		}
+		// Mantém o estado pendente (com contador incrementado) para retry.
+		if persistErr := u.persistPendingInstallState(state); persistErr != nil {
+			u.logf("[selfupdate] aviso: nao foi possivel persistir contador de tentativas: %v", persistErr)
+		}
+		return launchErr
+	}
+
+	// Sem estado pendente prévio: persiste um novo para permitir retry.
+	u.logf("[selfupdate] launch falhou sem estado pendente previo: %v", launchErr)
+	_ = u.persistPendingInstallState(pendingInstallState{
+		CurrentVersion:  strings.TrimSpace(buildinfo.Version),
+		TargetVersion:   targetVersion,
+		CorrelationID:   uuid.NewString(),
+		RecordedAtUTC:   time.Now().UTC().Format(time.RFC3339),
+		InstalledCommit: strings.TrimSpace(buildinfo.Commit),
+		InstallerPath:   tempPath,
+		InstallAttempts: 1,
+	})
+	return launchErr
 }

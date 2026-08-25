@@ -91,6 +91,18 @@ func LogFilePath() string {
 	return ""
 }
 
+// InstallerLogPath retorna o caminho para o log do instalador NSIS.
+// Usado pelo self-updater para correlacionar execuções do instalador.
+// Retorna vazio em plataformas não-Windows.
+func InstallerLogPath() string {
+	if runtime.GOOS == "windows" {
+		if pd := envutil.ProgramData(); pd != "" {
+			return filepath.Join(pd, "Discovery", "logs", "installer.log")
+		}
+	}
+	return ""
+}
+
 // ─── Caminhos do Chat Config ────────────────────────────────────────
 
 // ChatConfigPathCandidates retorna caminhos candidatos para o arquivo de config do chat.
