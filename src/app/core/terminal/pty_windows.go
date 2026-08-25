@@ -175,6 +175,17 @@ func normalizeToUtf8(b []byte) string {
 }
 
 // WriteStdin escreve dados no stdin do shell.
+//
+// NOTA: no backend legacy (`CREATE_NEW_CONSOLE` + pipes), o stdin do processo
+// filho é uma PIPE (cmd.StdinPipe). O processo filho (powershell/cmd) lê o
+// input DESSA pipe — e a "edição de linha" (Backspace/Delete) só é feita pela
+// API de console quando o input chega via console input, o que não acontece
+// aqui. Escrevemos, portanto, na pipe normalmente.
+//
+// A correção REAL do Backspace/Delete vem do **ConPTY** (in-process ou via
+// dispatcher F4), que injeta o input no console de forma nativa. Não usamos
+// `WriteConsoleInput` no legacy porque o filho (stdin=pipe) não consome o
+// console input — seria uma falsa correção. Ver também console_input_windows.go.
 func (s *Shell) WriteStdin(data string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

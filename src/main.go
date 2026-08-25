@@ -64,6 +64,15 @@ func main() {
 		return
 	}
 
+	// ── Modo dispatcher do terminal ──
+	// Lançado como subprocesso pelo agente (quando DISCOVERY_TERM_DISPATCHER
+	// está ativo) para executar o ConPTY num processo filho isolado, reduzindo
+	// a janela de injeção de DLL que causa o 0xC0000142. Não inicializa a GUI.
+	if hasStartupArg("--terminal-dispatcher") || hasStartupArg("/terminal-dispatcher") || hasStartupArg("-terminal-dispatcher") {
+		appkg.TerminalRunDispatcher()
+		return
+	}
+
 	if startupDebugMode {
 		log.Println("[startup] modo debug detectado: inicializando com servidor HTTP de debug (transitorio)")
 	}

@@ -26,6 +26,19 @@ const conptyMaxRetries = 2
 // e só então faz fallback para o console real (pipes + CREATE_NEW_CONSOLE), que
 // é mais resistente a injetores/AV (como o terminal legado do MeshCentral).
 func NewShellInteractive(shell ShellKind, cols, rows int, onOutput func(string)) (IShell, error) {
+	// 0ª tentativa: dispatcher (ConPTY num processo filho isolado) quando
+	// habilitado via DISCOVERY_TERM_DISPATCHER=1. Isola o ConPTY do processo
+	// GUI do agente, reduzindo o 0xC0000142. Se falhar ou não habilitado,
+	// segue para ConPTY in-process → legacy.
+	if DispatchersAvailable() {
+		ds, err := NewDispatcherShell(shell, cols, rows, onOutput)
+		if err == nil {
+			log.Printf("[terminal] usando dispatcher (ConPTY remoto isolado)")
+			return ds, nil
+		}
+		log.Printf("[terminal] dispatcher indisponível (%v); usando ConPTY in-process ou legacy", err)
+	}
+
 	// 1ª tentativa: ConPTY (contribui com TUI/ANSI quando estável).
 	if IsConPTYAvailable() {
 		var lastErr error
