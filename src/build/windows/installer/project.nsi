@@ -1078,7 +1078,13 @@ Function PrepareForInPlaceUpdate
    Call UnregisterUIStartupTask
 
    # Garantir que nenhuma instancia do app permaneceu em execucao.
-   nsExec::ExecToLog /OEM '"$SYSDIR\taskkill.exe" /IM "${PRODUCT_EXECUTABLE}" /F /T'
+   # IMPORTANTE: NAO usar /T (tree kill) para o agente. O instalador NSIS roda
+   # como processo filho do agente (lancado via ShellExecuteEx/CreateProcess).
+   # `taskkill /T` mataria o agente E o proprio instalador (filho), abortando
+   # o update no meio da copia. Sem /T, apenas o agente e encerrado e o
+   # instalador, que ja foi destacado como processo independente, sobrevive
+   # para concluir a instalacao e reiniciar o agente.
+   nsExec::ExecToLog /OEM '"$SYSDIR\taskkill.exe" /IM "${PRODUCT_EXECUTABLE}" /F'
    Pop $R0
    ${If} $R0 != 0
       ${InstallerLog} "taskkill ${PRODUCT_EXECUTABLE}: codigo $R0 (pode nao haver processo)"

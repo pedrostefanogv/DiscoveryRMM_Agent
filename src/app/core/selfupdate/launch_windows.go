@@ -126,6 +126,39 @@ func (u *Updater) launchInstaller(exePath string) error {
 	// ShellExecuteEx("runas") silenciosamente via SmartScreen/Defender.
 	u.removeMarkOfTheWeb(exePath)
 
+	// ── Independência do processo instalador ──
+	// O instalador DEVE sobreviver ao encerramento do agente durante o update
+	// (o NSIS executa `taskkill /IM ${PRODUCT_EXECUTABLE}` para liberar o lock
+	// do binário). Se o agente roda dentro de um job object com
+	// KILL_ON_JOB_CLOSE, um instalador que permaneça como filho no mesmo job
+	// seria morto junto com a fila do job.
+	//
+	// Se o processo atual já é elevado, lançamos o instalador via CreateProcess
+	// com CREATE_BREAKAWAY_FROM_JOB + DETACHED_PROCESS — criando-o como processo
+	// independente, fora do job object e da árvore de processos do agente.
+	// CreateProcess NÃO eleva privilégios, então para agente não-elevado o
+	// caminho é ShellExecuteEx("runas"); nesse caso a sobrevivência é garantida
+	// pela remoção do /T no taskkill do NSIS (não mata a árvore de processos).
+	if isProcessElevated() {
+		u.logf("[selfupdate] processo atual elevado — lançando via CreateProcess (breakaway) para independência")
+		if err := u.launchInstallerCreateProcess(exePath, fmt.Errorf("agente elevado — tentando instalador independente")); err != nil {
+			// Agente já elevado: ShellExecuteEx(runas) é redundante (não eleva) e
+			// colocaria o instalador de volta na árvore do agente. Preferimos
+			// tentar ShellExecuteEx(runas) apenas como último recurso.
+			u.logf("[selfupdate] CreateProcess independente falhou (%v) — tentando ShellExecuteEx(runas) como ultimo recurso", err)
+			return u.launchInstallerShellExecute(exePath)
+		}
+		return nil
+	}
+
+	// ── ShellExecuteEx("runas") com SEE_MASK_NOCLOSEPROCESS (agente não-elevado) ──
+	return u.launchInstallerShellExecute(exePath)
+}
+
+// launchInstallerShellExecute lanca o instalador via ShellExecuteEx("runas")
+// com verificação de startup e fallback. Usado quando o agente NÃO é elevado,
+// ou como último recurso quando o CreateProcess independente falha.
+func (u *Updater) launchInstallerShellExecute(exePath string) error {
 	// ── ShellExecuteEx("runas") com SEE_MASK_NOCLOSEPROCESS ──
 	pid, hProcess, elevateErr := LaunchInstallerElevated(exePath, "/S /UPDATE")
 	if elevateErr != nil {
@@ -254,6 +287,12 @@ func (u *Updater) finishLaunchInstaller(exePath string, pid uint32, hProcess win
 	if !u.verifyInstallerStarted(pid, hProcess) {
 		windows.CloseHandle(hProcess)
 		u.logf("[selfupdate] instalador PID=%d nao sobreviveu ao startup — tentando CreateProcess fallback", pid)
+		// Só vale a pena o fallback via CreateProcess se o agente já é elevado;
+		// caso contrário, CreateProcess sem elevação falharia com Access Denied
+		// ao escrever em Program Files. Retorna o erro para acionar retry.
+		if !isProcessElevated() {
+			return fmt.Errorf("instalador PID=%d terminou durante startup e agente nao elevado (sem fallback)", pid)
+		}
 		return u.launchInstallerCreateProcess(exePath, fmt.Errorf("instalador PID=%d terminou durante startup (ShellExecuteEx retornou sucesso mas processo morreu)", pid))
 	}
 
@@ -308,7 +347,9 @@ func isProcessElevated() bool {
 	return elevation.TokenIsElevated != 0
 }
 
-// launchInstallerCreateProcess é o fallback via CreateProcess para quando
+// launchInstallerCreateProcess lanca o instalador via CreateProcess.
+// Caminho PRIMÁRIO quando o agente já é elevado (independência via
+// CREATE_BREAKAWAY_FROM_JOB + DETACHED_PROCESS) e fallback quando
 // ShellExecuteEx("runas") falha. Só funciona se o processo atual já tem
 // privilégios de admin (ex.: Task Scheduler rodando como SYSTEM).
 func (u *Updater) launchInstallerCreateProcess(exePath string, previousErr error) error {
@@ -344,13 +385,13 @@ func (u *Updater) launchInstallerCreateProcess(exePath string, previousErr error
 		return fmt.Errorf("CreateProcess falhou: %w (erro anterior: %v)", err, previousErr)
 	}
 
-	u.logf("[selfupdate] instalador iniciado via CreateProcess fallback (PID=%d)", pi.ProcessId)
+	u.logf("[selfupdate] instalador iniciado via CreateProcess (independente, PID=%d)", pi.ProcessId)
 
 	// ── Verifica que o processo não morreu imediatamente ──
 	if !u.verifyInstallerStarted(pi.ProcessId, pi.Process) {
 		windows.CloseHandle(pi.Thread)
 		windows.CloseHandle(pi.Process)
-		return fmt.Errorf("CreateProcess fallback: instalador PID=%d nao sobreviveu ao startup", pi.ProcessId)
+		return fmt.Errorf("CreateProcess: instalador PID=%d nao sobreviveu ao startup", pi.ProcessId)
 	}
 
 	// Persiste o PID no pending state para correlação entre reinícios.
