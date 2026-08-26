@@ -445,6 +445,17 @@ export function EmitPSADTDebugNotification(req) {
 }
 
 /**
+ * EnsureChatSSEServer starts a minimal SSE-only HTTP server on 127.0.0.1 that
+ * serves only /api/chat-events. This is always active (even outside debug mode)
+ * so the native webview can reliably receive chat streaming events via SSE when
+ * Wails v3 native event delivery is unreliable.
+ * @returns {$CancellablePromise<void>}
+ */
+export function EnsureChatSSEServer() {
+    return $Call.ByID(3590776436);
+}
+
+/**
  * ExecuteCustomPSADTScript executa um script PSADT customizado fornecido pelo usuário
  * @param {string} scriptContent
  * @returns {$CancellablePromise<$models.PSADTScriptResult>}
@@ -633,6 +644,15 @@ export function GetChatHistory() {
 }
 
 /**
+ * GetChatSSEPort returns the port of the dedicated chat SSE server (always on
+ * loopback), or 0 if it could not be started.
+ * @returns {$CancellablePromise<number>}
+ */
+export function GetChatSSEPort() {
+    return $Call.ByID(4280687066);
+}
+
+/**
  * GetDataDir expõe GetDataDir via interface.
  * @returns {$CancellablePromise<string>}
  */
@@ -650,7 +670,8 @@ export function GetDebugConfig() {
 }
 
 /**
- * GetDebugHTTPPort returns the port the debug HTTP server is listening on, or 0 if not running.
+ * GetDebugHTTPPort returns the port the debug HTTP server is listening on, or
+ * falls back to the dedicated chat SSE server port. Returns 0 if neither is running.
  * @returns {$CancellablePromise<number>}
  */
 export function GetDebugHTTPPort() {
@@ -1727,6 +1748,14 @@ export function StartDebugHTTPServer() {
  */
 export function StartP2PTelemetryLoop() {
     return $Call.ByID(2627777121);
+}
+
+/**
+ * StopChatSSEServer gracefully shuts down the dedicated chat SSE server.
+ * @returns {$CancellablePromise<void>}
+ */
+export function StopChatSSEServer() {
+    return $Call.ByID(3414795050);
 }
 
 /**

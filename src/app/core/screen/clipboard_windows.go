@@ -17,6 +17,7 @@ var (
 	kernel32Clip = syscall.NewLazyDLL("kernel32.dll")
 
 	procGlobalAlloc  = kernel32Clip.NewProc("GlobalAlloc")
+	procGlobalFree   = kernel32Clip.NewProc("GlobalFree")
 	procGlobalLock   = kernel32Clip.NewProc("GlobalLock")
 	procGlobalUnlock = kernel32Clip.NewProc("GlobalUnlock")
 
@@ -74,6 +75,7 @@ func SetClipboardText(text string) error {
 	syscall.Syscall(procGlobalUnlock.Addr(), 1, hMem, 0, 0)
 
 	if r, _, _ := procSetClipboardData.Call(cfUnicodeText, hMem); r == 0 {
+		procGlobalFree.Call(hMem)
 		return fmt.Errorf("SetClipboardData falhou")
 	}
 	return nil

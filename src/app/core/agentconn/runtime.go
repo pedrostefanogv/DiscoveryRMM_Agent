@@ -794,15 +794,13 @@ func extractHostFromServer(server string) string {
 // autoDeriveNATSEndpoints derives NATS endpoints from NatsServerHost and NatsServerHostInternal.
 //
 // Regras de derivação:
+//   - NATS nativo (nats://host:4222): sempre derivado a partir do host disponível
+//     (interno primeiro, externo como fallback), independente de público/privado.
+//     O agente tenta conectar via nativo primeiro; se falhar (DNS, porta bloqueada),
+//     o fallback para WSS ocorre naturalmente via runSession.
 //   - WSS é sempre derivável a partir do host externo (NatsServerHost) quando NatsWsServer
-//     estiver vazio, já que o servidor central normalmente expõe NATS sobre WebSocket na
-//     porta 443. Se não houver host externo, usa o interno como fallback.
-//   - NATS nativo (nats://host:4222):
-//     1. Se houver host interno (LAN), ele é o caminho canônico para NATS nativo — deriva
-//     sempre, independente de NatsUseWssExternal (que governa apenas o WSS externo).
-//     2. Caso contrário, só deriva para host local/privado quando NatsUseWssExternal=false.
-//     Em hosts remotos públicos, o NATS nativo na porta 4222 raramente é exposto — WSS é
-//     o caminho canônico.
+//     estiver vazio. Se não houver host externo, usa o interno como fallback
+//     (retrocompatibilidade).
 func autoDeriveNATSEndpoints(cfg *Config) (derivedNATS bool, derivedWSS bool) {
 	if cfg == nil {
 		return false, false
@@ -813,8 +811,7 @@ func autoDeriveNATSEndpoints(cfg *Config) (derivedNATS bool, derivedWSS bool) {
 		return false, false
 	}
 
-	// WSS é sempre derivável a partir do host externo (quando NatsWsServer vazio).
-	// Se não houver host externo, usa o interno como fallback (retrocompatibilidade).
+	// WSS: deriva do host externo (fallback interno).
 	wssHost := host
 	if wssHost == "" {
 		wssHost = internalHost
@@ -826,24 +823,16 @@ func autoDeriveNATSEndpoints(cfg *Config) (derivedNATS bool, derivedWSS bool) {
 		}
 	}
 
-	// NATS nativo (nats://host:4222):
-	//   - Se houver host interno (LAN), ele é o caminho canônico para NATS nativo —
-	//     deriva sempre, independente de NatsUseWssExternal (que governa apenas o WSS).
-	//   - Caso contrário, só deriva para host local/privado quando NatsUseWssExternal=false.
+	// NATS nativo: sempre deriva, independente de público/privado.
+	// O runSession já tenta nats:// primeiro; se falhar, cai para WSS.
 	nativeHost := internalHost
 	if nativeHost == "" {
 		nativeHost = host
 	}
 	if cfg.NatsServer == "" && nativeHost != "" {
-		deriveNative := internalHost != ""
-		if !deriveNative {
-			deriveNative = !cfg.NatsUseWssExternal && isLocalOrPrivateHost(nativeHost)
-		}
-		if deriveNative {
-			if nativeURL := deriveNativeNATSServerFromHost(nativeHost); nativeURL != "" {
-				cfg.NatsServer = nativeURL
-				derivedNATS = true
-			}
+		if nativeURL := deriveNativeNATSServerFromHost(nativeHost); nativeURL != "" {
+			cfg.NatsServer = nativeURL
+			derivedNATS = true
 		}
 	}
 

@@ -211,6 +211,13 @@ export class Config {
         if (/** @type {any} */(false)) {
             /**
              * @member
+             * @type {string | undefined}
+             */
+            this["natsServerHostInternal"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
              * @type {boolean | undefined}
              */
             this["natsUseWssExternal"] = undefined;

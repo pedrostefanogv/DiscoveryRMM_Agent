@@ -146,12 +146,83 @@ func (a *App) StopDebugHTTPServer() {
 	log.Println("[debug-http] servidor parado")
 }
 
-// GetDebugHTTPPort returns the port the debug HTTP server is listening on, or 0 if not running.
+// GetDebugHTTPPort returns the port the debug HTTP server is listening on, or
+// falls back to the dedicated chat SSE server port. Returns 0 if neither is running.
 func (a *App) GetDebugHTTPPort() int {
-	if a.debugHTTP == nil {
+	if a.debugHTTP != nil {
+		return a.debugHTTP.Port
+	}
+	return a.GetChatSSEPort()
+}
+
+// GetChatSSEPort returns the port of the dedicated chat SSE server (always on
+// loopback), or 0 if it could not be started.
+func (a *App) GetChatSSEPort() int {
+	if a.chatSSE == nil {
 		return 0
 	}
-	return a.debugHTTP.Port
+	return a.chatSSE.Port
+}
+
+// EnsureChatSSEServer starts a minimal SSE-only HTTP server on 127.0.0.1 that
+// serves only /api/chat-events. This is always active (even outside debug mode)
+// so the native webview can reliably receive chat streaming events via SSE when
+// Wails v3 native event delivery is unreliable.
+func (a *App) EnsureChatSSEServer() error {
+	if a.chatSSE != nil {
+		return nil // already running
+	}
+	if a.chatEvents == nil {
+		a.chatEvents = debughttp.NewChatEventBroker()
+	}
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return fmt.Errorf("chat-sse: falha ao criar listener: %w", err)
+	}
+
+	port := listener.Addr().(*net.TCPAddr).Port
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/chat-events", func(w http.ResponseWriter, r *http.Request) {
+		a.serveChatEventsSSE(w, r)
+	})
+
+	srv := debughttp.NewServer(
+		&http.Server{
+			Handler:      mux,
+			ReadTimeout:  30 * time.Second,
+			WriteTimeout: 60 * time.Second,
+			IdleTimeout:  120 * time.Second,
+		},
+		listener,
+		port,
+		false, // sempre loopback-only
+	)
+	a.chatSSE = srv
+
+	go func() {
+		log.Printf("[chat-sse] servidor SSE dedicado iniciado em http://127.0.0.1:%d", port)
+		if err := srv.HTTP.Serve(listener); err != nil && err != http.ErrServerClosed {
+			log.Printf("[chat-sse] erro no servidor: %v", err)
+		}
+	}()
+
+	return nil
+}
+
+// StopChatSSEServer gracefully shuts down the dedicated chat SSE server.
+func (a *App) StopChatSSEServer() {
+	if a.chatSSE == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := a.chatSSE.HTTP.Shutdown(ctx); err != nil {
+		log.Printf("[chat-sse] erro ao parar servidor: %v", err)
+	}
+	a.chatSSE.Listener.Close()
+	a.chatSSE = nil
+	log.Println("[chat-sse] servidor parado")
 }
 
 // IsDebugHTTPBoundToAllInterfaces returns whether the debug HTTP server is bound

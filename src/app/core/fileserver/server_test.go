@@ -164,7 +164,7 @@ func TestHandleRequest_ZipUnzip(t *testing.T) {
 		t.Fatal()
 	}
 	// Verifica conteúdo extraído.
-	data, err := os.ReadFile(filepath.Join(tmp, "extraido", "b.txt"))
+	data, err := os.ReadFile(filepath.Join(tmp, "extraido", "pasta", "b.txt"))
 	if err != nil {
 		t.Fatalf("unzip: b.txt nao extraido: %v", err)
 	}

@@ -120,6 +120,7 @@ type App struct {
 	consolEngine *consolidation.Engine
 
 	debugHTTP  *debughttp.Server
+	chatSSE    *debughttp.Server
 	chatEvents *debughttp.ChatEventBroker
 
 	// hardwareIDSvc encapsula a coleta e cache de identidade de hardware
@@ -1041,6 +1042,13 @@ func (a *App) startup(ctx context.Context) {
 		}
 	}
 
+	// O servidor SSE dedicado de chat é SEMPRE iniciado (mesmo fora do modo
+	// debug) para que o webview nativo possa receber eventos de streaming
+	// de forma confiável via SSE quando a entrega nativa do Wails v3 falha.
+	if err := a.EnsureChatSSEServer(); err != nil {
+		log.Printf("[chat-sse] falha ao iniciar servidor SSE dedicado: %v", err)
+	}
+
 	a.safeGo(func() { a.StartP2PTelemetryLoop(ctx) })
 
 	a.startTray()
@@ -1499,6 +1507,7 @@ func (a *App) shutdown() {
 	a.applyIdleMode(false)
 
 	a.StopDebugHTTPServer()
+	a.StopChatSSEServer()
 
 	// NOTA: remoteDebug e remoteSessionMgr agora são Services Wails v3
 	// separados (adapters thin em remote_services.go). Seus ciclos de vida

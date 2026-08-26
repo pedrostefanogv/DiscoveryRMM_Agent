@@ -31,3 +31,12 @@ func (a *App) SetDebugHTTPBindAllInterfaces(enabled bool) error {
 
 // PublishChatEvent is a no-op stub for non-Windows platforms.
 func (a *App) PublishChatEvent(eventType, data string) {}
+
+// EnsureChatSSEServer is a no-op stub for non-Windows platforms.
+func (a *App) EnsureChatSSEServer() error { return nil }
+
+// StopChatSSEServer is a no-op stub for non-Windows platforms.
+func (a *App) StopChatSSEServer() {}
+
+// GetChatSSEPort returns 0 on non-Windows platforms.
+func (a *App) GetChatSSEPort() int { return 0 }

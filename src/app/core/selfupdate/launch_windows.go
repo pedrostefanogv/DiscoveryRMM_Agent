@@ -141,7 +141,7 @@ func (u *Updater) launchInstaller(exePath string) error {
 	// pela remoção do /T no taskkill do NSIS (não mata a árvore de processos).
 	if isProcessElevated() {
 		u.logf("[selfupdate] processo atual elevado — lançando via CreateProcess (breakaway) para independência")
-		if err := u.launchInstallerCreateProcess(exePath, fmt.Errorf("agente elevado — tentando instalador independente")); err != nil {
+		if err := u.launchInstallerCreateProcess(exePath, "agente elevado — tentando instalador independente"); err != nil {
 			// Agente já elevado: ShellExecuteEx(runas) é redundante (não eleva) e
 			// colocaria o instalador de volta na árvore do agente. Preferimos
 			// tentar ShellExecuteEx(runas) apenas como último recurso.
@@ -264,7 +264,7 @@ func (u *Updater) launchInstallerFallback(exePath string, previousErr error) err
 
 	if isProcessElevated() {
 		u.logf("[selfupdate] processo atual elevado — usando CreateProcess direto")
-		return u.launchInstallerCreateProcess(exePath, previousErr)
+		return u.launchInstallerCreateProcess(exePath, previousErr.Error())
 	}
 
 	u.logf("[selfupdate] processo atual NAO elevado — tentando ShellExecuteEx(runas) novamente")
@@ -293,7 +293,7 @@ func (u *Updater) finishLaunchInstaller(exePath string, pid uint32, hProcess win
 		if !isProcessElevated() {
 			return fmt.Errorf("instalador PID=%d terminou durante startup e agente nao elevado (sem fallback)", pid)
 		}
-		return u.launchInstallerCreateProcess(exePath, fmt.Errorf("instalador PID=%d terminou durante startup (ShellExecuteEx retornou sucesso mas processo morreu)", pid))
+		return u.launchInstallerCreateProcess(exePath, fmt.Sprintf("instalador PID=%d terminou durante startup (ShellExecuteEx retornou sucesso mas processo morreu)", pid))
 	}
 
 	// Persiste o PID no pending state para correlação entre reinícios.
@@ -352,10 +352,10 @@ func isProcessElevated() bool {
 // CREATE_BREAKAWAY_FROM_JOB + DETACHED_PROCESS) e fallback quando
 // ShellExecuteEx("runas") falha. Só funciona se o processo atual já tem
 // privilégios de admin (ex.: Task Scheduler rodando como SYSTEM).
-func (u *Updater) launchInstallerCreateProcess(exePath string, previousErr error) error {
+func (u *Updater) launchInstallerCreateProcess(exePath string, context string) error {
 	argv0, argvErr := windows.UTF16PtrFromString(exePath)
 	if argvErr != nil {
-		return fmt.Errorf("UTF16PtrFromString: %w (erro anterior: %v)", argvErr, previousErr)
+		return fmt.Errorf("UTF16PtrFromString: %w (contexto: %s)", argvErr, context)
 	}
 
 	cmdLine := windows.StringToUTF16Ptr(fmt.Sprintf(`"%s" /S /UPDATE`, exePath))
@@ -382,7 +382,7 @@ func (u *Updater) launchInstallerCreateProcess(exePath string, previousErr error
 		&pi,
 	)
 	if err != nil {
-		return fmt.Errorf("CreateProcess falhou: %w (erro anterior: %v)", err, previousErr)
+		return fmt.Errorf("CreateProcess falhou: %w (contexto: %s)", err, context)
 	}
 
 	u.logf("[selfupdate] instalador iniciado via CreateProcess (independente, PID=%d)", pi.ProcessId)

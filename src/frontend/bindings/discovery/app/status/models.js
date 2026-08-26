@@ -213,6 +213,56 @@ export class Overview {
              */
             this["lastUpdateCheckAtUtc"] = undefined;
         }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["updateLastError"] = undefined;
+        }
+        if (!("updateLastInstallerExitCode" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["updateLastInstallerExitCode"] = 0;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["updatePendingTargetVersion"] = undefined;
+        }
+        if (!("updateDownloadOkCount" in $$source)) {
+            /**
+             * Contadores de telemetria do self-update
+             * @member
+             * @type {number}
+             */
+            this["updateDownloadOkCount"] = 0;
+        }
+        if (!("updateLaunchOkCount" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["updateLaunchOkCount"] = 0;
+        }
+        if (!("updateLaunchFailCount" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["updateLaunchFailCount"] = 0;
+        }
+        if (!("updateInstallCompleteCount" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["updateInstallCompleteCount"] = 0;
+        }
 
         Object.assign(this, $$source);
     }

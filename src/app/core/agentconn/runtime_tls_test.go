@@ -61,17 +61,19 @@ func TestBuildExternalNATSWSSURL(t *testing.T) {
 }
 
 func TestAutoDeriveNATSEndpoints_RemoteHostPrefersWSS(t *testing.T) {
+	// Agora o NATS nativo SEMPRE é derivado (runSession tenta nativo primeiro).
+	// Se a porta 4222 estiver fechada, o fallback natural vai para WSS.
 	cfg := &Config{NatsServerHost: "tngplacas.com.br"}
 	derivedNATS, derivedWSS := autoDeriveNATSEndpoints(cfg)
 
-	if derivedNATS {
-		t.Fatal("nao deveria derivar nats:// para host remoto")
+	if !derivedNATS {
+		t.Fatal("deveria derivar nats:// mesmo para host remoto")
 	}
 	if !derivedWSS {
 		t.Fatal("deveria derivar endpoint wss para host remoto")
 	}
-	if cfg.NatsServer != "" {
-		t.Fatalf("NatsServer = %q, esperado vazio", cfg.NatsServer)
+	if cfg.NatsServer != "nats://tngplacas.com.br:4222" {
+		t.Fatalf("NatsServer = %q", cfg.NatsServer)
 	}
 	if cfg.NatsWsServer != "wss://tngplacas.com.br:443/nats/" {
 		t.Fatalf("NatsWsServer = %q", cfg.NatsWsServer)
@@ -96,18 +98,20 @@ func TestAutoDeriveNATSEndpoints_LocalHostDerivesNATSAndWSS(t *testing.T) {
 	}
 }
 
-func TestAutoDeriveNATSEndpoints_WSSExternalSkipsNATS(t *testing.T) {
+func TestAutoDeriveNATSEndpoints_WSSExternalDerivesBothNATSAndWSS(t *testing.T) {
+	// Agora o NATS nativo sempre é derivado, mesmo com NatsUseWssExternal=true.
+	// NatsUseWssExternal governa apenas a preferência do WSS externo, não bloqueia o nativo.
 	cfg := &Config{NatsServerHost: "nats.example.com", NatsUseWssExternal: true}
 	derivedNATS, derivedWSS := autoDeriveNATSEndpoints(cfg)
 
-	if derivedNATS {
-		t.Fatal("nao deveria derivar nats:// quando NatsUseWssExternal=true")
+	if !derivedNATS {
+		t.Fatal("deveria derivar nats:// mesmo com NatsUseWssExternal=true")
 	}
 	if !derivedWSS {
 		t.Fatal("deveria derivar endpoint wss quando host estiver presente")
 	}
-	if cfg.NatsServer != "" {
-		t.Fatalf("NatsServer = %q, esperado vazio", cfg.NatsServer)
+	if cfg.NatsServer != "nats://nats.example.com:4222" {
+		t.Fatalf("NatsServer = %q", cfg.NatsServer)
 	}
 }
 
