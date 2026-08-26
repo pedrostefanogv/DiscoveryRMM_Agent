@@ -164,6 +164,32 @@ func (a *App) GetChatSSEPort() int {
 	return a.chatSSE.Port
 }
 
+// PollChatEvents retorna todos os eventos de chat pendentes no buffer de
+// polling e os remove. Usado pelo frontend nativo (WebView2) como alternativa
+// ao EventSource quando o SSE é bloqueado por mixed-content.
+// Retorna um array JSON de strings (cada string é um evento JSON no formato
+// {"event":"chat:token","data":"..."}), ou array vazio se não houver eventos.
+//
+// O frontend deve chamar este método em polling (ex.: a cada 100ms) enquanto
+// houver um stream ativo (chatSending=true). O polling é interrompido quando
+// recebe chat:done/chat:error/chat:stopped.
+func (a *App) PollChatEvents() string {
+	if a.chatEvents == nil {
+		return "[]"
+	}
+	events := a.chatEvents.DrainPollBuffer()
+	if len(events) == 0 {
+		return "[]"
+	}
+	// Usa encoding/json para serialização segura (evita concatenação manual de
+	// JSON que quebraria com strings contendo aspas/barras).
+	b, err := json.Marshal(events)
+	if err != nil {
+		return "[]"
+	}
+	return string(b)
+}
+
 // EnsureChatSSEServer starts a minimal SSE-only HTTP server on 127.0.0.1 that
 // serves only /api/chat-events. This is always active (even outside debug mode)
 // so the native webview can reliably receive chat streaming events via SSE when

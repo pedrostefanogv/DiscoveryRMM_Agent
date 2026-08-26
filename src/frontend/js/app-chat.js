@@ -205,6 +205,7 @@ function finaliseStreamingBubble() {
 }
 
 function onStreamDone() {
+  stopPollingLoop();
   stopThinkingStatusUpdates();
   clearChatStreamTimeout();
   finaliseStreamingBubble();
@@ -214,6 +215,7 @@ function onStreamDone() {
 }
 
 function onStreamError(errMsg) {
+  stopPollingLoop();
   stopThinkingStatusUpdates();
   clearChatStreamTimeout();
 
@@ -249,6 +251,7 @@ function onStreamError(errMsg) {
 }
 
 function onStreamStopped() {
+  stopPollingLoop();
   stopThinkingStatusUpdates();
   clearChatStreamTimeout();
   if (streamingBubble && !streamingRawContent) {
@@ -575,6 +578,11 @@ function sendChatMessageWithA2uiAction() {
   try {
     appApi()
       .StartChatStream("__a2ui_action__")
+      .then(function () {
+        if (window.__wailsV3Bridge) {
+          startPollingLoop();
+        }
+      })
       .catch(function (err) {
         onStreamError(String(err));
       });
@@ -600,12 +608,16 @@ function clearA2uiSurface() {
 // no backend (não só em modo debug). O GetDebugHTTPPort retorna a porta do
 // SSE dedicado mesmo fora do modo debug.
 //
-// Estratégia:
+// Estratégia (2026-08-26 #2):
+//   EventSource SSE é bloqueado pelo WebView2 como mixed-content
+//   (https://wails.localhost → http://127.0.0.1). O Wails v3 beta.11 NÃO lê
+//   WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS. Portanto, no runtime nativo usamos
+//   POLLING via bindings Wails (PollChatEvents) — transporte IPC confiável.
+//
 //   1. Aguardar __wailsV3Bridge ser definido (race condition do carregamento).
-//   2. No runtime nativo, sempre tentar SSE primeiro (porta do SSE dedicado).
-//   3. SSE com reconexão automática + backoff; fallback nativo só após falha
-//      persistente (3 tentativas em 10s).
-//   4. No navegador, o debug-http-bridge já conecta ao SSE via window.wails.on.
+//   2. No runtime nativo: polling via appApi().PollChatEvents() a cada 100ms.
+//   3. No navegador: o debug-http-bridge conecta ao SSE via window.wails.on.
+//   4. Fallback: listeners nativos (Events.On) se polling/bindings falharem.
 (function registerChatStreamEvents() {
   // Mapeia cada evento de chat ao seu handler.
   var CHAT_EVENT_HANDLERS = {
@@ -618,17 +630,17 @@ function clearA2uiSurface() {
     "chat:a2ui": onChatA2ui,
   };
 
-  var nativeSSE = null;
-  var sseReconnectTimer = null;
-  var sseReconnectAttempts = 0;
-  var sseReconnectDelay = 500;
-  var SSE_MAX_RECONNECT_ATTEMPTS = 4; // 500ms → 1s → 2s → 4s ≈ 7.5s total
   var nativeListenersRegistered = false;
-  // ID do indicador visual de transporte no DOM, para diagnóstico.
+  // Transport indicator
   var transportIndicatorId = null;
+  // Polling state
+  var pollTimerId = null;
+  var POLL_INTERVAL_MS = 80; // ~12 polls/segundo — baixa latência, baixo overhead
+  // Stream terminal events — paramos o polling ao receber qualquer um deles.
+  var STREAM_TERMINAL_EVENTS = { "chat:done": true, "chat:error": true, "chat:stopped": true };
 
   // Exibe/atualiza um indicador visual de qual transporte de chat está ativo.
-  // Modos: "sse" (verde), "native" (amarelo), "error" (vermelho), "none" (cinza).
+  // Modos: "poll" (verde), "sse" (verde), "native" (amarelo), "error" (vermelho), "none" (cinza).
   function updateTransportIndicator(mode, detail) {
     var el = document.getElementById("chatTransportIndicator");
     if (!el) {
@@ -640,7 +652,7 @@ function clearA2uiSurface() {
         "font-family:monospace;opacity:0.85;pointer-events:none;";
       document.body.appendChild(el);
     }
-    var colors = { sse: "#22c55e", native: "#eab308", error: "#ef4444", none: "#6b7280" };
+    var colors = { poll: "#22c55e", sse: "#22c55e", native: "#eab308", error: "#ef4444", none: "#6b7280" };
     el.style.background = colors[mode] || colors.none;
     el.style.color = "#fff";
     el.textContent = "chat:" + mode + (detail ? " " + detail : "");
@@ -661,81 +673,75 @@ function clearA2uiSurface() {
     }
   }
 
-  // Conecta ao broker SSE dedicado (127.0.0.1:<port>/api/chat-events).
-  // Reconecta com backoff; só ativa o fallback nativo após exceder o limite
-  // de tentativas (evita cair no caminho nativo quebrado à primeira falha).
-  function connectChatSSE(port) {
-    if (nativeSSE) {
-      // Já conectado ou em processo de reconexão pelo próprio EventSource.
-      if (nativeSSE.readyState !== EventSource.CLOSED) return nativeSSE;
-      // CLOSED: fecha de vez e tenta criar um novo.
-      try { nativeSSE.close(); } catch (_) {}
-      nativeSSE = null;
+  // ── Polling via bindings Wails (transporte IPC confiável) ──
+  // Alternativa ao EventSource quando o WebView2 bloqueia SSE por mixed-content.
+  // PollChatEvents() retorna um array JSON de eventos pendentes no backend.
+  function startPollingLoop() {
+    if (pollTimerId) return; // já rodando
+    console.log("[chat] polling via PollChatEvents iniciado (intervalo=" + POLL_INTERVAL_MS + "ms)");
+    updateTransportIndicator("poll", POLL_INTERVAL_MS + "ms");
+
+    function poll() {
+      if (!chatSending) {
+        // Stream não está mais ativo — para o polling
+        stopPollingLoop();
+        return;
+      }
+
+      appApi()
+        .PollChatEvents()
+        .then(function (result) {
+          var events;
+          if (typeof result === "string") {
+            try { events = JSON.parse(result); } catch (_) { events = []; }
+          } else if (Array.isArray(result)) {
+            events = result;
+          } else {
+            events = [];
+          }
+
+          var foundTerminal = false;
+          for (var i = 0; i < events.length; i++) {
+            var raw = events[i];
+            var evt;
+            if (typeof raw === "string") {
+              try { evt = JSON.parse(raw); } catch (_) { continue; }
+            } else {
+              evt = raw;
+            }
+            if (!evt || !evt.event) continue;
+            routeChatEvent(evt);
+            if (STREAM_TERMINAL_EVENTS[evt.event]) {
+              foundTerminal = true;
+            }
+          }
+
+          if (foundTerminal) {
+            stopPollingLoop();
+            return;
+          }
+
+          // Agenda próxima iteração
+          pollTimerId = setTimeout(poll, POLL_INTERVAL_MS);
+        })
+        .catch(function (err) {
+          console.warn("[chat] PollChatEvents falhou:", err);
+          // Agenda próxima iteração mesmo com erro (pode ser transitório)
+          pollTimerId = setTimeout(poll, POLL_INTERVAL_MS);
+        });
     }
 
-    if (!port) return null;
-
-    var url = "http://127.0.0.1:" + port + "/api/chat-events";
-    console.log("[chat] SSE nativo: conectando a " + url + " (tentativa " + (sseReconnectAttempts + 1) + ", origin=" + location.origin + ")");
-
-    var ss = new EventSource(url);
-    nativeSSE = ss;
-
-    ss.onopen = function () {
-      console.log("[chat] SSE nativo CONECTADO: " + url + " ✓");
-      updateTransportIndicator("sse", "port " + port);
-      sseReconnectAttempts = 0;
-      sseReconnectDelay = 500;
-    };
-
-    ss.onmessage = function (msg) {
-      try {
-        routeChatEvent(JSON.parse(msg.data));
-      } catch (e) {
-        console.warn("[chat] SSE: mensagem não-JSON ignorada:", String(msg.data).slice(0, 80));
-      }
-    };
-
-    ss.onerror = function (ev) {
-      // Diagnóstico detalhado do erro de conexão SSE.
-      // readyState: 0=CONNECTING, 1=OPEN, 2=CLOSED
-      var stateLabels = { 0: "CONNECTING", 1: "OPEN", 2: "CLOSED" };
-      var state = ss.readyState;
-      var stateLabel = stateLabels[state] || "UNKNOWN(" + state + ")";
-      console.error(
-        "[chat] SSE ERRO: readyState=" + stateLabel +
-          " url=" + url +
-          " origin=" + location.origin +
-          " (provavel mixed-content: origem '" + location.protocol + "' bloqueando conexão para '" + url + "')"
-      );
-      updateTransportIndicator("error", stateLabel);
-
-      // EventSource tenta reconectar sozinho (readyState = CONNECTING).
-      // Se fechou permanentemente (CLOSED), tentamos reconexão manual com
-      // backoff. Só ativamos o fallback nativo após várias tentativas.
-      if (state === EventSource.CLOSED) {
-        console.warn("[chat] SSE nativo fechado permanentemente após " + (sseReconnectAttempts + 1) + " falha(s)");
-        nativeSSE = null;
-        sseReconnectAttempts++;
-        if (sseReconnectAttempts >= SSE_MAX_RECONNECT_ATTEMPTS) {
-          console.warn("[chat] SSE nativo: " + sseReconnectAttempts + " falhas; ativando fallback nativo");
-          updateTransportIndicator("native", "fallback");
-          registerNativeListeners();
-          return;
-        }
-        if (sseReconnectTimer) clearTimeout(sseReconnectTimer);
-        sseReconnectTimer = setTimeout(function () {
-          sseReconnectTimer = null;
-          connectChatSSE(port);
-        }, sseReconnectDelay);
-        sseReconnectDelay = Math.min(sseReconnectDelay * 2, 8000);
-      }
-    };
-
-    return nativeSSE;
+    poll();
   }
 
-  // Registra os listeners nativos do Wails (fallback quando não há SSE).
+  function stopPollingLoop() {
+    if (pollTimerId) {
+      clearTimeout(pollTimerId);
+      pollTimerId = null;
+    }
+  }
+
+  // Registra os listeners nativos do Wails (fallback quando polling não está disponível).
   function registerNativeListeners() {
     if (nativeListenersRegistered) return;
     if (window.wails && typeof window.wails.on === "function") {
@@ -760,26 +766,14 @@ function clearA2uiSurface() {
       return;
     }
 
-    // Runtime nativo: sempre tenta SSE primeiro (agora o servidor SSE dedicado
-    // está sempre ativo, não apenas em modo debug). GetDebugHTTPPort resolve
-    // para a porta do SSE dedicado mesmo fora do modo debug.
-    if (appApi() && typeof appApi().GetDebugHTTPPort === "function") {
-      appApi()
-        .GetDebugHTTPPort()
-        .then(function (port) {
-          var p = Number(port) || 0;
-          if (p > 0) {
-            connectChatSSE(p);
-          } else {
-            console.warn("[chat] GetDebugHTTPPort retornou 0; usando listeners nativos");
-            registerNativeListeners();
-          }
-        })
-        .catch(function (err) {
-          console.warn("[chat] GetDebugHTTPPort falhou:", err, "; usando listeners nativos");
-          registerNativeListeners();
-        });
+    // Runtime nativo (WebView2): usar POLLING via bindings Wails em vez de
+    // EventSource (bloqueado por mixed-content). O polling é iniciado sob
+    // demanda em sendChatMessage / sendChatMessageWithA2uiAction.
+    if (appApi() && typeof appApi().PollChatEvents === "function") {
+      console.log("[chat] transporte: polling via PollChatEvents (IPC nativo)");
+      updateTransportIndicator("poll", "ready");
     } else {
+      console.warn("[chat] PollChatEvents indisponível; usando listeners nativos como fallback");
       registerNativeListeners();
     }
   }
@@ -1448,6 +1442,13 @@ async function sendChatMessage() {
     // StartChatStream returns immediately; response arrives via events.
     appApi()
       .StartChatStream(text)
+      .then(function () {
+        // Inicia o polling loop APENAS no runtime nativo (WebView2).
+        // No navegador, o debug-http-bridge já conecta ao SSE via window.wails.on.
+        if (window.__wailsV3Bridge) {
+          startPollingLoop();
+        }
+      })
       .catch(function (err) {
         onStreamError(String(err));
       });

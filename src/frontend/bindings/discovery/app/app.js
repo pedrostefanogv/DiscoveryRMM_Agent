@@ -1332,6 +1332,22 @@ export function P2PTempDir() {
 }
 
 /**
+ * PollChatEvents retorna todos os eventos de chat pendentes no buffer de
+ * polling e os remove. Usado pelo frontend nativo (WebView2) como alternativa
+ * ao EventSource quando o SSE é bloqueado por mixed-content.
+ * Retorna um array JSON de strings (cada string é um evento JSON no formato
+ * {"event":"chat:token","data":"..."}), ou array vazio se não houver eventos.
+ * 
+ * O frontend deve chamar este método em polling (ex.: a cada 100ms) enquanto
+ * houver um stream ativo (chatSending=true). O polling é interrompido quando
+ * recebe chat:done/chat:error/chat:stopped.
+ * @returns {$CancellablePromise<string>}
+ */
+export function PollChatEvents() {
+    return $Call.ByID(292882956);
+}
+
+/**
  * PostP2PTelemetry sends runtime P2P metrics to server for observability.
  * @returns {$CancellablePromise<void>}
  */

@@ -40,3 +40,6 @@ func (a *App) StopChatSSEServer() {}
 
 // GetChatSSEPort returns 0 on non-Windows platforms.
 func (a *App) GetChatSSEPort() int { return 0 }
+
+// PollChatEvents returns an empty JSON array on non-Windows platforms.
+func (a *App) PollChatEvents() string { return "[]" }
