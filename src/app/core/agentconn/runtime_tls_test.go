@@ -111,6 +111,76 @@ func TestAutoDeriveNATSEndpoints_WSSExternalSkipsNATS(t *testing.T) {
 	}
 }
 
+func TestAutoDeriveNATSEndpoints_InternalHostDerivesNATS_EvenWithWSSExternal(t *testing.T) {
+	// Host interno presente: NATS nativo deve ser derivado mesmo com
+	// NatsUseWssExternal=true (que governa apenas o WSS externo).
+	cfg := &Config{NatsServerHost: "nats.example.com", NatsServerHostInternal: "nats.internal.local", NatsUseWssExternal: true}
+	derivedNATS, derivedWSS := autoDeriveNATSEndpoints(cfg)
+
+	if !derivedNATS {
+		t.Fatal("deveria derivar nats:// a partir do host interno")
+	}
+	if !derivedWSS {
+		t.Fatal("deveria derivar wss:// a partir do host externo")
+	}
+	if cfg.NatsServer != "nats://nats.internal.local:4222" {
+		t.Fatalf("NatsServer = %q", cfg.NatsServer)
+	}
+	if cfg.NatsWsServer != "wss://nats.example.com:443/nats/" {
+		t.Fatalf("NatsWsServer = %q", cfg.NatsWsServer)
+	}
+}
+
+func TestAutoDeriveNATSEndpoints_InternalHostOnly(t *testing.T) {
+	// Sem host externo, o interno é usado tanto para nativo quanto para WSS.
+	cfg := &Config{NatsServerHostInternal: "nats.internal.local"}
+	derivedNATS, derivedWSS := autoDeriveNATSEndpoints(cfg)
+
+	if !derivedNATS {
+		t.Fatal("deveria derivar nats:// a partir do host interno")
+	}
+	if !derivedWSS {
+		t.Fatal("deveria derivar wss:// a partir do host interno")
+	}
+	if cfg.NatsServer != "nats://nats.internal.local:4222" {
+		t.Fatalf("NatsServer = %q", cfg.NatsServer)
+	}
+	if cfg.NatsWsServer != "wss://nats.internal.local:443/nats/" {
+		t.Fatalf("NatsWsServer = %q", cfg.NatsWsServer)
+	}
+}
+
+func TestIsPrivate172Range(t *testing.T) {
+	cases := []struct {
+		host string
+		want bool
+	}{
+		{"172.16.0.1", true},
+		{"172.31.255.255", true},
+		{"172.20.10.5", true},
+		{"172.32.0.1", false}, // público
+		{"172.40.1.1", false}, // público
+		{"172.15.0.1", false}, // público
+		{"192.168.1.1", false},
+		{"10.0.0.1", false},
+		{"nats.internal.local", false},
+	}
+	for _, c := range cases {
+		if got := isPrivate172Range(c.host); got != c.want {
+			t.Errorf("isPrivate172Range(%q) = %v, esperado %v", c.host, got, c.want)
+		}
+	}
+}
+
+func TestIsLocalOrPrivateHost_172Range(t *testing.T) {
+	if !isLocalOrPrivateHost("172.16.0.1") {
+		t.Fatal("172.16.0.1 deveria ser privado")
+	}
+	if isLocalOrPrivateHost("172.32.0.1") {
+		t.Fatal("172.32.0.1 nao deveria ser privado")
+	}
+}
+
 func TestNATSWebSocketProxyPath(t *testing.T) {
 	tests := []struct {
 		name   string

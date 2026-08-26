@@ -515,6 +515,7 @@ func NewApp(opts AppStartupOptions) *App {
 				NatsServer:               cfg.NatsServer,
 				NatsWsServer:             cfg.NatsWsServer,
 				NatsServerHost:           cfg.NatsServerHost,
+				NatsServerHostInternal:   cfg.NatsServerHostInternal,
 				NatsUseWssExternal:       cfg.NatsUseWssExternal,
 				EnforceTLSHashValidation: cfg.EnforceTlsHashValidation,
 				HandshakeEnabled:         cfg.HandshakeEnabled,

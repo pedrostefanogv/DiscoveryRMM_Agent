@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"discovery/app/p2pmeta"
 	"discovery/app/core/selfupdate"
+	"discovery/app/p2pmeta"
 )
 
 // Config holds server connection settings for the debug page.
@@ -20,6 +20,7 @@ type Config struct {
 	NatsWsServer                      string `json:"natsWsServer"`
 	AllowInsecureTLS                  bool   `json:"allowInsecureTls,omitempty"`
 	NatsServerHost                    string `json:"natsServerHost,omitempty"`
+	NatsServerHostInternal            string `json:"natsServerHostInternal,omitempty"`
 	NatsUseWssExternal                bool   `json:"natsUseWssExternal,omitempty"`
 	EnforceTlsHashValidation          bool   `json:"enforceTlsHashValidation,omitempty"`
 	HandshakeEnabled                  bool   `json:"handshakeEnabled,omitempty"`

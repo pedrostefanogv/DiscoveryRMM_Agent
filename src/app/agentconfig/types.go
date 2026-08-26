@@ -109,6 +109,7 @@ type AgentConfiguration struct {
 	P2PFilesEnabled               *bool                           `json:"p2pFilesEnabled"`
 	SupportEnabled                *bool                           `json:"supportEnabled"`
 	NatsServerHost                string                          `json:"natsServerHost"`
+	NatsServerHostInternal        string                          `json:"natsServerHostInternal"`
 	NatsUseWssExternal            *bool                           `json:"natsUseWssExternal"`
 	EnforceTlsHashValidation      *bool                           `json:"enforceTlsHashValidation"`
 	HandshakeEnabled              *bool                           `json:"handshakeEnabled"`

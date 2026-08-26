@@ -76,6 +76,7 @@ func parseLegacyAgentConfiguration(data []byte) (AgentConfiguration, error) {
 		P2PFilesEnabled:               getBoolPtr("p2pFilesEnabled"),
 		SupportEnabled:                getBoolPtr("supportEnabled"),
 		NatsServerHost:                getString("natsServerHost"),
+		NatsServerHostInternal:        getString("natsServerHostInternal"),
 		NatsUseWssExternal:            getBoolPtr("natsUseWssExternal"),
 		EnforceTlsHashValidation:      getBoolPtr("enforceTlsHashValidation"),
 		HandshakeEnabled:              getBoolPtr("handshakeEnabled"),
@@ -327,8 +328,12 @@ func mergeAgentConfigResponse(resp *AgentConfigResponse) AgentConfiguration {
 	)
 
 	// String fields
+	// NatsServerHost (externo) é o host público usado para WSS; o host interno
+	// (LAN) é preservado separadamente para permitir NATS nativo quando o agente
+	// está na mesma rede do servidor.
 	cfg.NatsServerHost = srv.NatsServerHostExternal
-	if srv.NatsServerHostExternal == "" {
+	cfg.NatsServerHostInternal = srv.NatsServerHostInternal
+	if cfg.NatsServerHost == "" {
 		cfg.NatsServerHost = srv.NatsServerHostInternal
 	}
 	cfg.NatsUseWssExternal = boolPtr(srv.NatsUseWssExternal)

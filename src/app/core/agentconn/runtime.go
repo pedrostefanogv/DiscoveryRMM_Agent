@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -190,6 +191,7 @@ type Config struct {
 	NatsServer               string
 	NatsWsServer             string
 	NatsServerHost           string
+	NatsServerHostInternal   string
 	NatsUseWssExternal       bool
 	EnforceTLSHashValidation bool
 	HandshakeEnabled         bool
@@ -608,6 +610,7 @@ func (r *Runtime) Run(ctx context.Context) {
 		cfg.NatsServer = strings.TrimSpace(cfg.NatsServer)
 		cfg.NatsWsServer = strings.TrimSpace(cfg.NatsWsServer)
 		cfg.NatsServerHost = strings.TrimSpace(cfg.NatsServerHost)
+		cfg.NatsServerHostInternal = strings.TrimSpace(cfg.NatsServerHostInternal)
 		cfg.ApiTLSCertHash = normalizeTLSCertHash(cfg.ApiTLSCertHash)
 		cfg.NatsTLSCertHash = normalizeTLSCertHash(cfg.NatsTLSCertHash)
 		cfg.AuthToken = strings.TrimSpace(cfg.AuthToken)
@@ -615,10 +618,17 @@ func (r *Runtime) Run(ctx context.Context) {
 		cfg.ClientID = strings.TrimSpace(cfg.ClientID)
 		cfg.SiteID = strings.TrimSpace(cfg.SiteID)
 
-		// Aplica NatsServerHost como override no host do endpoint NATS nativo.
-		if cfg.NatsServerHost != "" {
-			if overridden, err := rewriteNATSHost(cfg.NatsServer, cfg.NatsServerHost); err != nil {
-				r.logf("[transport][nats] host override invalido (natsServerHost=%s): %v", cfg.NatsServerHost, err)
+		// Aplica o host interno (LAN) como override no host do endpoint NATS nativo.
+		// O host interno é o caminho canônico para NATS nativo quando o agente está
+		// na mesma rede do servidor. O host externo (NatsServerHost) é usado apenas
+		// para WSS e não deve sobrescrever o endpoint nativo.
+		nativeHostOverride := cfg.NatsServerHostInternal
+		if nativeHostOverride == "" {
+			nativeHostOverride = cfg.NatsServerHost
+		}
+		if nativeHostOverride != "" {
+			if overridden, err := rewriteNATSHost(cfg.NatsServer, nativeHostOverride); err != nil {
+				r.logf("[transport][nats] host override invalido (natsServerHost=%s): %v", nativeHostOverride, err)
 			} else if overridden != "" && overridden != cfg.NatsServer {
 				r.logf("[transport][nats] host override aplicado para nats://")
 				cfg.NatsServer = overridden
@@ -781,38 +791,59 @@ func extractHostFromServer(server string) string {
 	return strings.Trim(strings.TrimSpace(server), "[]")
 }
 
-// autoDeriveNATSEndpoints derives NATS endpoints from NatsServerHost.
+// autoDeriveNATSEndpoints derives NATS endpoints from NatsServerHost and NatsServerHostInternal.
 //
 // Regras de derivação:
-//   - WSS é sempre derivável a partir de NatsServerHost (quando NatsWsServer estiver vazio),
-//     já que o servidor central normalmente expõe NATS sobre WebSocket na porta 443.
-//   - NATS nativo (nats://host:4222) só é derivado quando:
-//     1. NatsUseWssExternal=false (servidor não exige WSS externo), E
-//     2. host é local/privado (LAN/lab). Em hosts remotos públicos, o NATS nativo
-//     na porta 4222 raramente é exposto diretamente — WSS é o caminho canônico.
+//   - WSS é sempre derivável a partir do host externo (NatsServerHost) quando NatsWsServer
+//     estiver vazio, já que o servidor central normalmente expõe NATS sobre WebSocket na
+//     porta 443. Se não houver host externo, usa o interno como fallback.
+//   - NATS nativo (nats://host:4222):
+//     1. Se houver host interno (LAN), ele é o caminho canônico para NATS nativo — deriva
+//     sempre, independente de NatsUseWssExternal (que governa apenas o WSS externo).
+//     2. Caso contrário, só deriva para host local/privado quando NatsUseWssExternal=false.
+//     Em hosts remotos públicos, o NATS nativo na porta 4222 raramente é exposto — WSS é
+//     o caminho canônico.
 func autoDeriveNATSEndpoints(cfg *Config) (derivedNATS bool, derivedWSS bool) {
 	if cfg == nil {
 		return false, false
 	}
 	host := strings.TrimSpace(cfg.NatsServerHost)
-	if host == "" {
+	internalHost := strings.TrimSpace(cfg.NatsServerHostInternal)
+	if host == "" && internalHost == "" {
 		return false, false
 	}
 
-	if cfg.NatsWsServer == "" {
-		if wssURL, err := buildExternalNATSWSSURL(host); err == nil {
+	// WSS é sempre derivável a partir do host externo (quando NatsWsServer vazio).
+	// Se não houver host externo, usa o interno como fallback (retrocompatibilidade).
+	wssHost := host
+	if wssHost == "" {
+		wssHost = internalHost
+	}
+	if cfg.NatsWsServer == "" && wssHost != "" {
+		if wssURL, err := buildExternalNATSWSSURL(wssHost); err == nil {
 			cfg.NatsWsServer = wssURL
 			derivedWSS = true
 		}
 	}
 
-	// Só deriva nats:// nativo quando o servidor não exige WSS externo E
-	// o host é local/privado (LAN/lab). Em hosts remotos públicos, o NATS
-	// nativo na porta 4222 normalmente não é exposto — WSS é o caminho canônico.
-	if cfg.NatsServer == "" && !cfg.NatsUseWssExternal && isLocalOrPrivateHost(host) {
-		if nativeURL := deriveNativeNATSServerFromHost(host); nativeURL != "" {
-			cfg.NatsServer = nativeURL
-			derivedNATS = true
+	// NATS nativo (nats://host:4222):
+	//   - Se houver host interno (LAN), ele é o caminho canônico para NATS nativo —
+	//     deriva sempre, independente de NatsUseWssExternal (que governa apenas o WSS).
+	//   - Caso contrário, só deriva para host local/privado quando NatsUseWssExternal=false.
+	nativeHost := internalHost
+	if nativeHost == "" {
+		nativeHost = host
+	}
+	if cfg.NatsServer == "" && nativeHost != "" {
+		deriveNative := internalHost != ""
+		if !deriveNative {
+			deriveNative = !cfg.NatsUseWssExternal && isLocalOrPrivateHost(nativeHost)
+		}
+		if deriveNative {
+			if nativeURL := deriveNativeNATSServerFromHost(nativeHost); nativeURL != "" {
+				cfg.NatsServer = nativeURL
+				derivedNATS = true
+			}
 		}
 	}
 
@@ -836,10 +867,10 @@ func isLocalOrPrivateHost(rawHost string) bool {
 	if strings.HasPrefix(lower, "127.") || lower == "::1" {
 		return true
 	}
-	// Ranges privados IPv4 (RFC 1918)
+	// Ranges privados IPv4 (RFC 1918): 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
 	if strings.HasPrefix(lower, "10.") ||
 		strings.HasPrefix(lower, "192.168.") ||
-		strings.HasPrefix(lower, "172.") {
+		isPrivate172Range(lower) {
 		return true
 	}
 	// Link-local APIPA (169.254.x.x) — não é roteável, mas pode ser lab local
@@ -849,6 +880,25 @@ func isLocalOrPrivateHost(rawHost string) bool {
 	// Sem suporte a DNS reverso aqui: hostnames como "tngplacas.com.br"
 	// são tratados como remotos públicos por padrão.
 	return false
+}
+
+// isPrivate172Range reports whether an IPv4 address falls within the RFC 1918
+// private block 172.16.0.0/12 (172.16.0.0 – 172.31.255.255). Addresses in
+// 172.32.0.0/12 and beyond are public and must NOT be treated as private.
+func isPrivate172Range(host string) bool {
+	rest := strings.TrimPrefix(strings.TrimSpace(host), "172.")
+	if rest == host {
+		return false
+	}
+	firstOctetStr, _, ok := strings.Cut(rest, ".")
+	if !ok {
+		return false
+	}
+	firstOctet, err := strconv.Atoi(firstOctetStr)
+	if err != nil {
+		return false
+	}
+	return firstOctet >= 16 && firstOctet <= 31
 }
 
 func deriveNativeNATSServerFromHost(rawHost string) string {

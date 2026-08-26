@@ -45,6 +45,7 @@ func (a *App) refreshAgentConfiguration(ctx context.Context) error {
 	if a.debugSvc != nil {
 		changed, applyErr := a.debugSvc.ApplyRemoteConnectionSecurity(
 			result.Config.NatsServerHost,
+			result.Config.NatsServerHostInternal,
 			result.Config.NatsUseWssExternal,
 			result.Config.EnforceTlsHashValidation,
 			result.Config.HandshakeEnabled,

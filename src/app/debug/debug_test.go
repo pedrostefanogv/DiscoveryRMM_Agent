@@ -364,7 +364,7 @@ func TestApplyRemoteConnectionSecurity_UpdatesConfigAndReloads(t *testing.T) {
 	enforce := true
 	natsWssExternal := true
 	handshake := true
-	changed, err := svc.ApplyRemoteConnectionSecurity("nats.example.local", &natsWssExternal, &enforce, &handshake, "aa:bb", "11 22")
+	changed, err := svc.ApplyRemoteConnectionSecurity("nats.example.local", "nats.internal.local", &natsWssExternal, &enforce, &handshake, "aa:bb", "11 22")
 	if err != nil {
 		t.Fatalf("ApplyRemoteConnectionSecurity retornou erro: %v", err)
 	}
@@ -375,6 +375,9 @@ func TestApplyRemoteConnectionSecurity_UpdatesConfigAndReloads(t *testing.T) {
 	cfg := svc.GetConfig()
 	if cfg.NatsServerHost != "nats.example.local" {
 		t.Fatalf("NatsServerHost = %q", cfg.NatsServerHost)
+	}
+	if cfg.NatsServerHostInternal != "nats.internal.local" {
+		t.Fatalf("NatsServerHostInternal = %q", cfg.NatsServerHostInternal)
 	}
 	if !cfg.NatsUseWssExternal {
 		t.Fatal("NatsUseWssExternal deveria ser true")

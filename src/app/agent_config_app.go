@@ -63,6 +63,7 @@ func (a *App) applyAgentConfiguration(cfg agentconfig.AgentConfiguration) {
 	if a.debugSvc != nil {
 		changed, err := a.debugSvc.ApplyRemoteConnectionSecurity(
 			cfg.NatsServerHost,
+			cfg.NatsServerHostInternal,
 			cfg.NatsUseWssExternal,
 			cfg.EnforceTlsHashValidation,
 			cfg.HandshakeEnabled,

@@ -19,10 +19,10 @@ import (
 
 	"github.com/samber/lo"
 
-	"discovery/app/netutil"
-	"discovery/app/p2pmeta"
 	"discovery/app/core/agentconn"
 	"discovery/app/core/tlsutil"
+	"discovery/app/netutil"
+	"discovery/app/p2pmeta"
 	"discovery/app/services/hardwareid"
 )
 
@@ -266,17 +266,22 @@ func (s *Service) ApplyRuntimeConnectionConfig(apiScheme, apiServer, authToken, 
 
 // ApplyRemoteConnectionSecurity updates TLS pinning and transport hardening values from /me/configuration.
 // It persists the updated runtime config and forces reconnect so new policies apply immediately.
-func (s *Service) ApplyRemoteConnectionSecurity(natsServerHost string, natsUseWssExternal, enforceTLSHashValidation, handshakeEnabled *bool, apiTLSCertHash, natsTLSCertHash string) (bool, error) {
+func (s *Service) ApplyRemoteConnectionSecurity(natsServerHost, natsServerHostInternal string, natsUseWssExternal, enforceTLSHashValidation, handshakeEnabled *bool, apiTLSCertHash, natsTLSCertHash string) (bool, error) {
 	s.mu.Lock()
 	cfg := s.config
 
 	nextNatsServerHost := strings.TrimSpace(natsServerHost)
+	nextNatsServerHostInternal := strings.TrimSpace(natsServerHostInternal)
 	nextApiTLSCertHash := strings.ToUpper(strings.TrimSpace(apiTLSCertHash))
 	nextNatsTLSCertHash := strings.ToUpper(strings.TrimSpace(natsTLSCertHash))
 
 	changed := false
 	if cfg.NatsServerHost != nextNatsServerHost {
 		cfg.NatsServerHost = nextNatsServerHost
+		changed = true
+	}
+	if cfg.NatsServerHostInternal != nextNatsServerHostInternal {
+		cfg.NatsServerHostInternal = nextNatsServerHostInternal
 		changed = true
 	}
 	if natsUseWssExternal != nil && cfg.NatsUseWssExternal != *natsUseWssExternal {
