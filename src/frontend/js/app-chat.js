@@ -624,6 +624,32 @@ function clearA2uiSurface() {
   var sseReconnectDelay = 500;
   var SSE_MAX_RECONNECT_ATTEMPTS = 4; // 500ms → 1s → 2s → 4s ≈ 7.5s total
   var nativeListenersRegistered = false;
+  // ID do indicador visual de transporte no DOM, para diagnóstico.
+  var transportIndicatorId = null;
+
+  // Exibe/atualiza um indicador visual de qual transporte de chat está ativo.
+  // Modos: "sse" (verde), "native" (amarelo), "error" (vermelho), "none" (cinza).
+  function updateTransportIndicator(mode, detail) {
+    var el = document.getElementById("chatTransportIndicator");
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "chatTransportIndicator";
+      el.style.cssText =
+        "position:fixed;bottom:4px;right:4px;z-index:9999;" +
+        "padding:2px 8px;border-radius:4px;font-size:10px;" +
+        "font-family:monospace;opacity:0.85;pointer-events:none;";
+      document.body.appendChild(el);
+    }
+    var colors = { sse: "#22c55e", native: "#eab308", error: "#ef4444", none: "#6b7280" };
+    el.style.background = colors[mode] || colors.none;
+    el.style.color = "#fff";
+    el.textContent = "chat:" + mode + (detail ? " " + detail : "");
+    if (transportIndicatorId) clearTimeout(transportIndicatorId);
+    transportIndicatorId = setTimeout(function () {
+      var e = document.getElementById("chatTransportIndicator");
+      if (e) e.style.opacity = "0.3";
+    }, 5000);
+  }
 
   function routeChatEvent(evt) {
     var cb = CHAT_EVENT_HANDLERS[evt && evt.event];
@@ -650,13 +676,14 @@ function clearA2uiSurface() {
     if (!port) return null;
 
     var url = "http://127.0.0.1:" + port + "/api/chat-events";
-    console.log("[chat] SSE nativo: conectando a " + url + " (tentativa " + (sseReconnectAttempts + 1) + ")");
+    console.log("[chat] SSE nativo: conectando a " + url + " (tentativa " + (sseReconnectAttempts + 1) + ", origin=" + location.origin + ")");
 
     var ss = new EventSource(url);
     nativeSSE = ss;
 
     ss.onopen = function () {
-      console.log("[chat] SSE nativo conectado: " + url);
+      console.log("[chat] SSE nativo CONECTADO: " + url + " ✓");
+      updateTransportIndicator("sse", "port " + port);
       sseReconnectAttempts = 0;
       sseReconnectDelay = 500;
     };
@@ -665,20 +692,34 @@ function clearA2uiSurface() {
       try {
         routeChatEvent(JSON.parse(msg.data));
       } catch (e) {
-        // ignora mensagens não-JSON
+        console.warn("[chat] SSE: mensagem não-JSON ignorada:", String(msg.data).slice(0, 80));
       }
     };
 
-    ss.onerror = function () {
+    ss.onerror = function (ev) {
+      // Diagnóstico detalhado do erro de conexão SSE.
+      // readyState: 0=CONNECTING, 1=OPEN, 2=CLOSED
+      var stateLabels = { 0: "CONNECTING", 1: "OPEN", 2: "CLOSED" };
+      var state = ss.readyState;
+      var stateLabel = stateLabels[state] || "UNKNOWN(" + state + ")";
+      console.error(
+        "[chat] SSE ERRO: readyState=" + stateLabel +
+          " url=" + url +
+          " origin=" + location.origin +
+          " (provavel mixed-content: origem '" + location.protocol + "' bloqueando conexão para '" + url + "')"
+      );
+      updateTransportIndicator("error", stateLabel);
+
       // EventSource tenta reconectar sozinho (readyState = CONNECTING).
       // Se fechou permanentemente (CLOSED), tentamos reconexão manual com
       // backoff. Só ativamos o fallback nativo após várias tentativas.
-      if (ss.readyState === EventSource.CLOSED) {
-        console.warn("[chat] SSE nativo fechado permanentemente");
+      if (state === EventSource.CLOSED) {
+        console.warn("[chat] SSE nativo fechado permanentemente após " + (sseReconnectAttempts + 1) + " falha(s)");
         nativeSSE = null;
         sseReconnectAttempts++;
         if (sseReconnectAttempts >= SSE_MAX_RECONNECT_ATTEMPTS) {
           console.warn("[chat] SSE nativo: " + sseReconnectAttempts + " falhas; ativando fallback nativo");
+          updateTransportIndicator("native", "fallback");
           registerNativeListeners();
           return;
         }
@@ -698,11 +739,15 @@ function clearA2uiSurface() {
   function registerNativeListeners() {
     if (nativeListenersRegistered) return;
     if (window.wails && typeof window.wails.on === "function") {
-      console.log("[chat] registrando listeners nativos (fallback)");
+      console.log("[chat] registrando listeners nativos Wails (fallback via Events.On)");
+      updateTransportIndicator("native", "Events.On");
       Object.keys(CHAT_EVENT_HANDLERS).forEach(function (name) {
         window.wails.on(name, CHAT_EVENT_HANDLERS[name]);
       });
       nativeListenersRegistered = true;
+    } else {
+      console.error("[chat] fallback nativo indisponível: window.wails.on não é uma função");
+      updateTransportIndicator("error", "no-transport");
     }
   }
 

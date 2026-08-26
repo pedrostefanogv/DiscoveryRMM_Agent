@@ -24,6 +24,18 @@ var assets embed.FS
 func main() {
 	logger.RedirectStdLog(logger.LevelInfo)
 
+	// ── WebView2: permitir conteúdo misto (HTTPS → HTTP) para o SSE de chat ──
+	// O WebView2 carrega a página em https://wails.localhost (origem segura) e o
+	// servidor SSE dedicado de chat escuta em http://127.0.0.1 (origem não-segura).
+	// Sem esta flag, o Chromium bloqueia a conexão EventSource como "mixed content"
+	// e o chat nativo mostra "Tempo limite da resposta excedido".
+	// O servidor SSE é loopback-only (127.0.0.1), portanto o risco é mínimo.
+	// Deve ser definida ANTES de qualquer criação de WebView2 (antes de appInstance.Run()).
+	if os.Getenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS") == "" {
+		os.Setenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "--allow-running-insecure-content")
+		log.Println("[webview2] flag --allow-running-insecure-content ativada para SSE de chat")
+	}
+
 	// ── Cleanup de .bak_update de self-update ──
 	// O NSIS renomeia discovery-agent.exe -> discovery-agent.exe.bak_update
 	// antes de copiar o novo binário. Após update bem-sucedido, o .bak_update

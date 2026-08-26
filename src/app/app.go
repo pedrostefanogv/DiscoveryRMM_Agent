@@ -1047,6 +1047,10 @@ func (a *App) startup(ctx context.Context) {
 	// de forma confiável via SSE quando a entrega nativa do Wails v3 falha.
 	if err := a.EnsureChatSSEServer(); err != nil {
 		log.Printf("[chat-sse] falha ao iniciar servidor SSE dedicado: %v", err)
+	} else if port := a.GetChatSSEPort(); port > 0 {
+		log.Printf("[chat-sse] servidor SSE dedicado ativo em http://127.0.0.1:%d/api/chat-events", port)
+	} else {
+		log.Printf("[chat-sse] AVISO: servidor SSE dedicado retornou porta 0 — chat nativo pode falhar!")
 	}
 
 	a.safeGo(func() { a.StartP2PTelemetryLoop(ctx) })
