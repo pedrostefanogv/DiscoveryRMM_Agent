@@ -1492,7 +1492,7 @@ function renderMarkdown(markdown) {
       continue;
     }
 
-    var heading = trimmed.match(/^(#{1,6})\s+(.+)$/);
+    var heading = trimmed.match(/^(#{1,6})\s*(.+)$/);
     if (heading) {
       flushParagraph();
       closeList();

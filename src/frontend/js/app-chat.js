@@ -1275,7 +1275,9 @@ function renderAssistantMarkdown(content) {
       continue;
     }
 
-    var heading = line.match(/^(#{1,6})\s+(.+)$/);
+    // Aceita headings com ou sem espaco apos os # (ex.: "##📊 Titulo" ou "## Titulo").
+    // Modelos LLM frequentemente geram headings sem espaco quando seguidos de emoji.
+    var heading = line.match(/^(#{1,6})\s*(.+)$/);
     if (heading) {
       closeLists();
       var level = heading[1].length;

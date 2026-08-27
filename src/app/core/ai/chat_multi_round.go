@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"discovery/app/netutil"
 	"discovery/app/core/tlsutil"
+	"discovery/app/netutil"
 )
 
 func (s *Service) SendStreamMultiRound(
@@ -132,6 +132,14 @@ func (s *Service) SendStreamMultiRound(
 	var err error
 	totalToolCalls := 0
 	allCalledTools := make([]string, 0)
+
+	// Salva o tamanho do historico ANTES de iniciar o loop multi-round.
+	// Isso garante que lastAssistantContentSince() so retorne respostas
+	// geradas NESTA chamada, evitando repetir conteudo de conversas anteriores
+	// quando o LLM nao produz tokens novos (resposta vazia).
+	s.mu.RLock()
+	historyBeforeLen := len(s.history)
+	s.mu.RUnlock()
 
 	for round := 0; round < 5; round++ {
 		roundStart := time.Now()
@@ -287,9 +295,16 @@ func (s *Service) SendStreamMultiRound(
 	}
 
 	totalElapsed := time.Since(startTime)
-	assistant := s.lastAssistantContent()
+	assistant := s.lastAssistantContentSince(historyBeforeLen)
 	if assistant == "" {
-		assistant = "(sem resposta)"
+		// Se o LLM nao produziu resposta textual (ex.: tool calls sem texto,
+		// ou stream vazio), informa o usuario de forma util em vez de mostrar
+		// "(sem resposta)".
+		if totalToolCalls > 0 {
+			assistant = "Ações executadas. Se precisar de mais alguma coisa, é só pedir!"
+		} else {
+			assistant = "Não consegui processar sua solicitação. Pode reformular a pergunta?"
+		}
 	}
 	s.mu.Lock()
 	if currentSessionID != "" {
@@ -313,15 +328,24 @@ func (s *Service) SendStreamMultiRound(
 	return assistant, nil
 }
 
-func (s *Service) lastAssistantContent() string {
+// lastAssistantContentSince retorna o conteudo da ultima resposta do assistant
+// adicionada ao historico a partir do indice historySince (exclusivo).
+// Isso evita retornar conteudo stale de conversas anteriores quando o LLM
+// nao produz tokens novos no round atual.
+func (s *Service) lastAssistantContentSince(historySince int) string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	for i := len(s.history) - 1; i >= 0; i-- {
+	for i := len(s.history) - 1; i >= historySince; i-- {
 		if s.history[i].Role == "assistant" && s.history[i].Content != "" {
 			return s.history[i].Content
 		}
 	}
 	return ""
+}
+
+// lastAssistantContent mantido para compatibilidade com outros chamadores.
+func (s *Service) lastAssistantContent() string {
+	return s.lastAssistantContentSince(0)
 }
 
 func (s *Service) executeRound(ctx context.Context, cfg Config, req agentStreamRequest, onToken func(string), pendingCalls *[]pendingToolCall, onA2ui ...func(string)) (string, error) {
@@ -553,7 +577,7 @@ func (s *Service) fallbackToSync(ctx context.Context, cfg Config, message, sessi
 	}
 	assistant := strings.TrimSpace(resp.AssistantMessage)
 	if assistant == "" {
-		assistant = "(sem resposta)"
+		assistant = "Não foi possível obter uma resposta do servidor. Tente novamente."
 	}
 	if onToken != nil {
 		onToken(assistant)
@@ -604,19 +628,27 @@ func diagnoseMissingToolCall(s *Service, userMessage string) {
 		"windows":        "get_inventory",
 		"impressora":     "list_printers",
 		"imprimir":       "list_printers / list_print_jobs",
-		"chamado":        "list_tickets",
-		"ticket":         "list_tickets",
-		"suporte":        "list_tickets",
+		"chamado":        "list_tickets / create_ticket",
+		"ticket":         "list_tickets / create_ticket",
+		"suporte":        "list_tickets / create_ticket",
+		"abrir":          "create_ticket",
+		"criar":          "create_ticket",
 		"ping":           "ping_host",
 		"dns":            "flush_dns",
 		"firewall":       "get_inventory",
 		"antivirus":      "get_inventory",
+		"virus":          "get_top_processes / get_recent_errors / get_inventory",
+		"malware":        "get_top_processes / get_recent_errors / get_inventory",
 		"bateria":        "get_inventory",
 		"bitlocker":      "get_inventory",
 		"usuarios":       "get_inventory",
 		"logados":        "get_inventory",
-		"exportar":       "export_inventory_markdown / export_inventory_pdf",
-		"relatorio":      "export_inventory_markdown / export_inventory_pdf",
+		"exportar":       "export_inventory_markdown",
+		"relatorio":      "export_inventory_markdown",
+		"lento":          "get_top_processes / get_inventory",
+		"lentid":         "get_top_processes / get_inventory",
+		"travando":       "get_top_processes",
+		"travado":        "get_top_processes",
 	}
 	hits := make([]string, 0)
 	for keyword, tool := range hints {
