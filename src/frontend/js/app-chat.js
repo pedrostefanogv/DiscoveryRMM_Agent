@@ -13,6 +13,15 @@ var streamingBubble = null;
 var streamingRawContent = "";
 var streamingRafPending = false;
 
+// Funções de polling do chat. São DECLARADAS aqui (escopo global) e
+// ATRIBUÍDAS dentro do IIFE registerChatStreamEvents, pois dependem do estado
+// interno daquele IIFE (pollTimerId, POLL_INTERVAL_MS, routeChatEvent, etc.).
+// Os handlers globais (onStreamDone/onStreamError/onStreamStopped/sendChatMessage)
+// precisam chamá-las — se ficassem só dentro do IIFE, o "use strict" lançaria
+// ReferenceError e o polling nunca iniciaria (bug corrigido em 2026-08-27).
+var startPollingLoop;
+var stopPollingLoop;
+
 // Estado do filtro de blocos A2UI nos tokens visíveis.
 // O servidor emite os tokens em tempo real e só extrai o bloco ```a2ui no
 // final do stream. Para o usuário não ver o JSON cru, filtramos o conteúdo
@@ -676,7 +685,7 @@ function clearA2uiSurface() {
   // ── Polling via bindings Wails (transporte IPC confiável) ──
   // Alternativa ao EventSource quando o WebView2 bloqueia SSE por mixed-content.
   // PollChatEvents() retorna um array JSON de eventos pendentes no backend.
-  function startPollingLoop() {
+  startPollingLoop = function () {
     if (pollTimerId) return; // já rodando
     console.log("[chat] polling via PollChatEvents iniciado (intervalo=" + POLL_INTERVAL_MS + "ms)");
     updateTransportIndicator("poll", POLL_INTERVAL_MS + "ms");
@@ -734,12 +743,12 @@ function clearA2uiSurface() {
     poll();
   }
 
-  function stopPollingLoop() {
+  stopPollingLoop = function () {
     if (pollTimerId) {
       clearTimeout(pollTimerId);
       pollTimerId = null;
     }
-  }
+  };
 
   // Registra os listeners nativos do Wails (fallback quando polling não está disponível).
   function registerNativeListeners() {
