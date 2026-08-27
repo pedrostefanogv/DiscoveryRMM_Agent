@@ -640,37 +640,11 @@ function clearA2uiSurface() {
   };
 
   var nativeListenersRegistered = false;
-  // Transport indicator
-  var transportIndicatorId = null;
   // Polling state
   var pollTimerId = null;
   var POLL_INTERVAL_MS = 80; // ~12 polls/segundo — baixa latência, baixo overhead
   // Stream terminal events — paramos o polling ao receber qualquer um deles.
   var STREAM_TERMINAL_EVENTS = { "chat:done": true, "chat:error": true, "chat:stopped": true };
-
-  // Exibe/atualiza um indicador visual de qual transporte de chat está ativo.
-  // Modos: "poll" (verde), "sse" (verde), "native" (amarelo), "error" (vermelho), "none" (cinza).
-  function updateTransportIndicator(mode, detail) {
-    var el = document.getElementById("chatTransportIndicator");
-    if (!el) {
-      el = document.createElement("div");
-      el.id = "chatTransportIndicator";
-      el.style.cssText =
-        "position:fixed;bottom:4px;right:4px;z-index:9999;" +
-        "padding:2px 8px;border-radius:4px;font-size:10px;" +
-        "font-family:monospace;opacity:0.85;pointer-events:none;";
-      document.body.appendChild(el);
-    }
-    var colors = { poll: "#22c55e", sse: "#22c55e", native: "#eab308", error: "#ef4444", none: "#6b7280" };
-    el.style.background = colors[mode] || colors.none;
-    el.style.color = "#fff";
-    el.textContent = "chat:" + mode + (detail ? " " + detail : "");
-    if (transportIndicatorId) clearTimeout(transportIndicatorId);
-    transportIndicatorId = setTimeout(function () {
-      var e = document.getElementById("chatTransportIndicator");
-      if (e) e.style.opacity = "0.3";
-    }, 5000);
-  }
 
   function routeChatEvent(evt) {
     var cb = CHAT_EVENT_HANDLERS[evt && evt.event];
@@ -688,7 +662,6 @@ function clearA2uiSurface() {
   startPollingLoop = function () {
     if (pollTimerId) return; // já rodando
     console.log("[chat] polling via PollChatEvents iniciado (intervalo=" + POLL_INTERVAL_MS + "ms)");
-    updateTransportIndicator("poll", POLL_INTERVAL_MS + "ms");
 
     function poll() {
       if (!chatSending) {
@@ -755,14 +728,12 @@ function clearA2uiSurface() {
     if (nativeListenersRegistered) return;
     if (window.wails && typeof window.wails.on === "function") {
       console.log("[chat] registrando listeners nativos Wails (fallback via Events.On)");
-      updateTransportIndicator("native", "Events.On");
       Object.keys(CHAT_EVENT_HANDLERS).forEach(function (name) {
         window.wails.on(name, CHAT_EVENT_HANDLERS[name]);
       });
       nativeListenersRegistered = true;
     } else {
       console.error("[chat] fallback nativo indisponível: window.wails.on não é uma função");
-      updateTransportIndicator("error", "no-transport");
     }
   }
 
@@ -780,7 +751,6 @@ function clearA2uiSurface() {
     // demanda em sendChatMessage / sendChatMessageWithA2uiAction.
     if (appApi() && typeof appApi().PollChatEvents === "function") {
       console.log("[chat] transporte: polling via PollChatEvents (IPC nativo)");
-      updateTransportIndicator("poll", "ready");
     } else {
       console.warn("[chat] PollChatEvents indisponível; usando listeners nativos como fallback");
       registerNativeListeners();
