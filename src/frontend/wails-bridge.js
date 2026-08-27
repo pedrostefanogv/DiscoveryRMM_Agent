@@ -65,14 +65,20 @@ import { Events, Browser, Window } from "/wails/runtime.js";
 
   window.wails = window.wails || {};
 
-  // Garante os módulos nativos (já presentes quando o runtime nativo rodou).
-  window.wails.Events = window.wails.Events || Events;
-  window.wails.Browser = window.wails.Browser || Browser;
-  window.wails.Window = window.wails.Window || Window;
+  // IMPORTANTE (Wails v3 beta.11): `window.wails` é um namespace getter-only.
+  // O runtime define Events/Browser/Window (e demais módulos) via
+  // Object.defineProperty({get, enumerable}) — SEM setter e SEM configurable.
+  // Como ES modules são sempre strict, ATRIBUIR a window.wails.Events/Browser/
+  // Window lança TypeError e aborta o módulo ANTES de definir __wailsV3Bridge,
+  // quebrando TODA a entrega de eventos nativos (chat "no-transport",
+  // notificações, progresso P2P, atualizações de catálogo). Portanto NÃO
+  // atribuímos a essas propriedades: elas já existem via getter e os helpers
+  // abaixo usam os imports locais (Events/Browser/Window) diretamente.
 
   // Helpers de conveniência (API simplificada usada pelos scripts clássicos).
   // `||` preserva implementações já existentes (ex.: do debug-http-bridge
-  // no modo navegador), se houver.
+  // no modo navegador), se houver. São propriedades NOVAS (não existem no
+  // namespace getter-only), então a atribuição é segura.
   window.wails.on = window.wails.on || on;
   window.wails.emit = window.wails.emit || function (name) {
     return Events.Emit.apply(Events, arguments);
