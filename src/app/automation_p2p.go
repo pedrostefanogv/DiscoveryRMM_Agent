@@ -43,7 +43,20 @@ func (m *automationPackageManagerRouter) Uninstall(ctx context.Context, id strin
 }
 
 func (m *automationPackageManagerRouter) Upgrade(ctx context.Context, id string) (string, error) {
-	return m.fallback.Upgrade(ctx, id)
+	if !m.shouldUseP2PForWingetInstall() {
+		return m.fallback.Upgrade(ctx, id)
+	}
+
+	output, err := m.installViaP2P(ctx, id)
+	if err == nil {
+		return output, nil
+	}
+	m.logf("[automation][p2p] fallback para winget upgrade packageId=%s motivo=%v", strings.TrimSpace(id), err)
+	fallbackOut, fallbackErr := m.fallback.Upgrade(ctx, id)
+	if fallbackErr != nil {
+		return fallbackOut, fmt.Errorf("p2p e winget falharam: p2p=%v; winget=%w", err, fallbackErr)
+	}
+	return fallbackOut, nil
 }
 
 func (m *automationPackageManagerRouter) UpgradeAll(ctx context.Context) (string, error) {
@@ -62,11 +75,7 @@ func (m *automationPackageManagerRouter) shouldUseP2PForWingetInstall() bool {
 	if m == nil || m.app == nil || m.fallback == nil {
 		return false
 	}
-	cfg := m.app.GetDebugConfig()
-	if !cfg.AutomationP2PWingetInstallEnabled {
-		return false
-	}
-	if !m.app.runtimeFlags.DebugMode {
+	if !m.app.GetDebugConfig().P2PWingetInstallEnabled() {
 		return false
 	}
 	p2pCfg := m.app.GetP2PConfig()

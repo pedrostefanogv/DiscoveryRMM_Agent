@@ -79,14 +79,15 @@ func GetDataDir() string {
 }
 
 type App struct {
-	ctx           context.Context
-	cancel        context.CancelFunc
-	runtimeFlags  RuntimeFlags
-	catalogSvc    *services.CatalogService
-	catalogClient *data.HTTPClient
-	appsSvc       *services.AppsService
-	invSvc        *services.InventoryService
-	printerSvc    *services.PrinterService
+	ctx                  context.Context
+	cancel               context.CancelFunc
+	runtimeFlags         RuntimeFlags
+	catalogSvc           *services.CatalogService
+	catalogClient        *data.HTTPClient
+	appsSvc              *services.AppsService
+	packageManagerRouter *automationPackageManagerRouter
+	invSvc               *services.InventoryService
+	printerSvc           *services.PrinterService
 
 	db        *database.DB
 	invCache  inventoryCache
@@ -408,7 +409,8 @@ func NewApp(opts AppStartupOptions) *App {
 	}, func(line string) {
 		a.logs.append("[automation] " + line)
 	})
-	a.automationSvc.SetPackageManager(newAutomationPackageManagerRouter(a, a.appsSvc))
+	a.packageManagerRouter = newAutomationPackageManagerRouter(a, a.appsSvc)
+	a.automationSvc.SetPackageManager(a.packageManagerRouter)
 	a.automationSvc.SetPackageAuthorization(func(ctx context.Context, installationType automation.AppInstallationType, packageID, operation string) error {
 		return a.authorizeAutomationPackage(ctx, string(installationType), packageID, operation)
 	})
@@ -582,7 +584,7 @@ func NewApp(opts AppStartupOptions) *App {
 		a.logs.append("[chat] " + line)
 	})
 	a.inventorySvc = appinventory.NewService(appinventory.Options{
-		Apps:           a.appsSvc,
+		Apps:           a.packageManagerRouter,
 		Inventory:      a.invSvc,
 		Cache:          &a.invCache,
 		ResolveAllowed: a.resolveAllowedPackage,

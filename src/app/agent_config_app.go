@@ -60,6 +60,16 @@ func (a *App) applyAgentConfiguration(cfg agentconfig.AgentConfiguration) {
 		p2pCfg.Enabled = *cfg.P2PFilesEnabled
 		a.applyP2PConfig(p2pCfg)
 	}
+	// Instalação de winget via P2P-first — quando a API remota envia o campo,
+	// ele sobrescreve o valor local. Quando ausente, mantém o default do agente (true).
+	if a.debugSvc != nil {
+		changed, applyErr := a.debugSvc.ApplyP2PWingetInstallEnabledRemote(cfg.AutomationP2PWingetInstallEnabled)
+		if applyErr != nil {
+			a.logs.append("[config] falha ao aplicar automationP2pWingetInstallEnabled remota: " + applyErr.Error())
+		} else if changed {
+			a.logs.append("[config] automationP2pWingetInstallEnabled atualizado pela API")
+		}
+	}
 	if a.debugSvc != nil {
 		changed, err := a.debugSvc.ApplyRemoteConnectionSecurity(
 			cfg.NatsServerHost,

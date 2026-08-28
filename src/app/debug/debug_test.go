@@ -395,3 +395,94 @@ func TestApplyRemoteConnectionSecurity_UpdatesConfigAndReloads(t *testing.T) {
 		t.Fatalf("reloadCount = %d, want 1", agentConn.reloadCount)
 	}
 }
+
+func TestP2PWingetInstallEnabledDefaultsTrue(t *testing.T) {
+	if !(Config{}).P2PWingetInstallEnabled() {
+		t.Fatal("Config vazio deveria ter P2PWingetInstallEnabled()==true por padrão")
+	}
+
+	f := false
+	falseCfg := Config{AutomationP2PWingetInstallEnabled: &f}
+	if falseCfg.P2PWingetInstallEnabled() {
+		t.Fatal("Config com false explícito deveria retornar false")
+	}
+
+	tru := true
+	trueCfg := Config{AutomationP2PWingetInstallEnabled: &tru}
+	if !trueCfg.P2PWingetInstallEnabled() {
+		t.Fatal("Config com true explícito deveria retornar true")
+	}
+}
+
+func TestApplyP2PWingetInstallEnabledRemote_AppliesAndPersists(t *testing.T) {
+	oldWriteFile := osWriteFile
+	oldMkdirAll := osMkdirAll
+	oldExecutable := osExecutable
+	oldUserHomeDir := osUserHomeDir
+	defer func() {
+		osWriteFile = oldWriteFile
+		osMkdirAll = oldMkdirAll
+		osExecutable = oldExecutable
+		osUserHomeDir = oldUserHomeDir
+	}()
+
+	osWriteFile = func(string, []byte, os.FileMode) error { return nil }
+	osMkdirAll = func(string, os.FileMode) error { return nil }
+	osExecutable = func() (string, error) { return "", errors.New("sem executavel") }
+	osUserHomeDir = func() (string, error) { return "", errors.New("sem home") }
+
+	agentConn := &fakeAgentConn{}
+	svc := NewService(Options{AgentConn: agentConn})
+
+	// Default true quando ausente.
+	if !svc.GetConfig().P2PWingetInstallEnabled() {
+		t.Fatal("config inicial deveria default true")
+	}
+
+	// Aplica false vindo da API.
+	falseVal := false
+	changed, err := svc.ApplyP2PWingetInstallEnabledRemote(&falseVal)
+	if err != nil {
+		t.Fatalf("ApplyP2PWingetInstallEnabledRemote: %v", err)
+	}
+	if !changed {
+		t.Fatal("esperava changed=true ao desativar")
+	}
+	if svc.GetConfig().P2PWingetInstallEnabled() {
+		t.Fatal("deveria estar false após aplicar false")
+	}
+	if agentConn.reloadCount != 0 {
+		t.Fatalf("reload não deveria ocorrer para flag de comportamento; reloadCount=%d", agentConn.reloadCount)
+	}
+
+	// Aplica o mesmo valor de novo — não muda.
+	changed, err = svc.ApplyP2PWingetInstallEnabledRemote(&falseVal)
+	if err != nil {
+		t.Fatalf("ApplyP2PWingetInstallEnabledRemote (2a): %v", err)
+	}
+	if changed {
+		t.Fatal("esperava changed=false ao reaplicar o mesmo valor")
+	}
+
+	// Reaplica true.
+	trueVal := true
+	changed, err = svc.ApplyP2PWingetInstallEnabledRemote(&trueVal)
+	if err != nil {
+		t.Fatalf("ApplyP2PWingetInstallEnabledRemote (3a): %v", err)
+	}
+	if !changed {
+		t.Fatal("esperava changed=true ao reativar")
+	}
+	if !svc.GetConfig().P2PWingetInstallEnabled() {
+		t.Fatal("deveria estar true após reativar")
+	}
+
+	// nil não altera nada.
+	changed, err = svc.ApplyP2PWingetInstallEnabledRemote(nil)
+	if err != nil || changed {
+		t.Fatalf("nil deveria ser no-op: changed=%v err=%v", changed, err)
+	}
+	if !svc.GetConfig().P2PWingetInstallEnabled() {
+		t.Fatal("nil não deveria alterar o valor atual")
+	}
+}

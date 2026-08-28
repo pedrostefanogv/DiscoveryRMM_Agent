@@ -29,7 +29,7 @@ type Config struct {
 	AgentID                           string `json:"agentId"`
 	Scheme                            string `json:"scheme,omitempty"`
 	Server                            string `json:"server,omitempty"`
-	AutomationP2PWingetInstallEnabled bool   `json:"automationP2pWingetInstallEnabled,omitempty"`
+	AutomationP2PWingetInstallEnabled *bool  `json:"automationP2pWingetInstallEnabled,omitempty"`
 	// ApiInsecure quando true indica que o servidor usa HTTP simples (sem TLS).
 	// O padrão (false/ausente) é HTTPS. Substitui o campo legado apiScheme.
 	ApiInsecure bool `json:"apiInsecure,omitempty"`
@@ -42,6 +42,13 @@ func (c Config) APIScheme() string {
 		return "http"
 	}
 	return "https"
+}
+
+// P2PWingetInstallEnabled retorna o estado efetivo da flag de instalação P2P-first
+// para winget. Quando o campo está ausente (nil), o padrão é habilitado (true).
+// O valor só é desabilitado quando explicitamente definido como false.
+func (c Config) P2PWingetInstallEnabled() bool {
+	return c.AutomationP2PWingetInstallEnabled == nil || *c.AutomationP2PWingetInstallEnabled
 }
 
 // normalizeApiScheme sincroniza o campo legado ApiScheme com ApiInsecure

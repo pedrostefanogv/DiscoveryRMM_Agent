@@ -329,6 +329,45 @@ func (s *Service) ApplyRemoteConnectionSecurity(natsServerHost, natsServerHostIn
 	return true, nil
 }
 
+// ApplyP2PWingetInstallEnabledRemote aplica o toggle de instalação winget via
+// P2P vindo da API remota. Só persiste e persiste se houver mudança real de
+// valor, evitando reload desnecessário da conexão a cada sync. Quando o valor
+// é nil, mantém o valor atual (e o default true do agente).
+func (s *Service) ApplyP2PWingetInstallEnabledRemote(enabled *bool) (bool, error) {
+	if s == nil {
+		return false, nil
+	}
+	s.mu.Lock()
+	cfg := s.config
+	if enabled == nil {
+		s.mu.Unlock()
+		return false, nil
+	}
+
+	changed := false
+	current := cfg.P2PWingetInstallEnabled()
+	if current != *enabled {
+		v := *enabled
+		cfg.AutomationP2PWingetInstallEnabled = &v
+		changed = true
+	}
+	normalizeSecurityConfig(&cfg)
+	s.config = cfg
+	s.mu.Unlock()
+
+	if !changed {
+		return false, nil
+	}
+
+	if err := s.PersistConfig(cfg); err != nil {
+		s.logf("[p2p-winget] falha ao persistir atualização remota: " + err.Error())
+		return true, err
+	}
+	// Não força reload: é uma flag local de comportamento, não de transporte.
+	s.logf(fmt.Sprintf("[p2p-winget] automationP2pWingetInstallEnabled=%t aplicado pela API", *enabled))
+	return true, nil
+}
+
 func (s *Service) testAgentAPIConnectivity(ctx context.Context, apiScheme, apiServer, authToken, agentID string) error {
 	apiScheme = strings.TrimSpace(strings.ToLower(apiScheme))
 	apiServer = strings.TrimSpace(apiServer)
@@ -778,6 +817,12 @@ func normalizeSecurityConfig(cfg *Config) {
 	if !cfg.HandshakeEnabled {
 		// Mantemos handshake seguro ativo por padrao para evitar downgrade silencioso.
 		cfg.HandshakeEnabled = true
+	}
+	if cfg.AutomationP2PWingetInstallEnabled == nil {
+		// Instalação de winget via P2P habilitada por padrão; pode ser desligada
+		// explicitamente ou sobrescrita pela configuração remota da API.
+		enabled := true
+		cfg.AutomationP2PWingetInstallEnabled = &enabled
 	}
 }
 

@@ -58,7 +58,7 @@ function loadDebugConfig() {
       if (natsServerEl) natsServerEl.value = cfg.natsServer || '';
       if (debugAuthTokenEl) debugAuthTokenEl.value = cfg.authToken || '';
       if (debugAgentIDEl) debugAgentIDEl.value = cfg.agentId || '';
-      if (automationP2PWingetInstallEnabledEl) automationP2PWingetInstallEnabledEl.value = String(!!cfg.automationP2pWingetInstallEnabled);
+      if (automationP2PWingetInstallEnabledEl) automationP2PWingetInstallEnabledEl.value = String(cfg.automationP2pWingetInstallEnabled !== false);
       // Avancado
       if (natsWsServerEl) natsWsServerEl.value = cfg.natsWsServer || '';
       if (natsServerHostEl) natsServerHostEl.value = cfg.natsServerHost || '';

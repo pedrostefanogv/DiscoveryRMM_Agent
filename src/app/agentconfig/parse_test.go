@@ -258,5 +258,47 @@ func TestAgentConfig_MarshalRoundtrip(t *testing.T) {
 	}
 }
 
+func TestParseAgentConfiguration_P2PWingetInstallDefaultsTrue(t *testing.T) {
+	// Sem o campo na resposta da API → default true.
+	cfg, err := ParseAgentConfiguration([]byte(`{"siteId":"s1"}`))
+	if err != nil {
+		t.Fatalf("expected parse, got %v", err)
+	}
+	if cfg.AutomationP2PWingetInstallEnabled == nil || !*cfg.AutomationP2PWingetInstallEnabled {
+		t.Fatal("expected automationP2pWingetInstallEnabled default true quando ausente")
+	}
+}
+
+func TestParseAgentConfiguration_P2PWingetInstallHierarchicalOverride(t *testing.T) {
+	payload := []byte(`{
+		"server": {"automationP2pWingetInstallEnabled": false},
+		"client": {"automationP2pWingetInstallEnabled": true},
+		"site": {"automationP2pWingetInstallEnabled": false}
+	}`)
+	cfg, err := ParseAgentConfiguration(payload)
+	if err != nil {
+		t.Fatalf("expected hierarchical parse, got %v", err)
+	}
+	// Precedência: site > client > server → site=false vence.
+	if cfg.AutomationP2PWingetInstallEnabled == nil || *cfg.AutomationP2PWingetInstallEnabled {
+		t.Fatal("expected site override to disable (false) o P2P winget")
+	}
+}
+
+func TestParseAgentConfiguration_P2PWingetInstallServerOnly(t *testing.T) {
+	payload := []byte(`{
+		"server": {"automationP2pWingetInstallEnabled": true},
+		"client": {},
+		"site": {}
+	}`)
+	cfg, err := ParseAgentConfiguration(payload)
+	if err != nil {
+		t.Fatalf("expected parse, got %v", err)
+	}
+	if cfg.AutomationP2PWingetInstallEnabled == nil || !*cfg.AutomationP2PWingetInstallEnabled {
+		t.Fatal("expected server-provided true ao não haver override de client/site")
+	}
+}
+
 func ptrBool(v bool) *bool { return &v }
 func ptrInt(v int) *int    { return &v }

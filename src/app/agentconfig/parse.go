@@ -14,13 +14,27 @@ import (
 //   - Old flat format: {"chatAIEnabled": true, "appStoreEnabled": true, ...}
 //   - New API v1 hierarchical format: {"server": {...}, "client": {...}, "site": {...}}
 func ParseAgentConfiguration(data []byte) (AgentConfiguration, error) {
+	var cfg AgentConfiguration
+	var err error
+
 	// Try new API v1 format first (has "server" key at top level)
 	if newCfg, ok := tryParseAgentConfigV1(data); ok {
-		return newCfg, nil
+		cfg = newCfg
+	} else {
+		// Fallback to legacy flat format
+		cfg, err = parseLegacyAgentConfiguration(data)
+		if err != nil {
+			return AgentConfiguration{}, err
+		}
 	}
 
-	// Fallback to legacy flat format
-	return parseLegacyAgentConfiguration(data)
+	// Default: instalação de winget via P2P habilitada quando o campo não foi
+	// fornecido pela API (valor ausente/nil). Pode ser desligado explicitamente.
+	if cfg.AutomationP2PWingetInstallEnabled == nil {
+		enabled := true
+		cfg.AutomationP2PWingetInstallEnabled = &enabled
+	}
+	return cfg, nil
 }
 
 // tryParseAgentConfigV1 tenta parsear o formato hierárquico novo (API v1).
@@ -71,26 +85,27 @@ func parseLegacyAgentConfiguration(data []byte) (AgentConfiguration, error) {
 		return strings.TrimSpace(fmt.Sprint(v))
 	}
 	cfg := AgentConfiguration{
-		RecoveryEnabled:               getBoolPtr("recoveryEnabled"),
-		DiscoveryEnabled:              getBoolPtr("discoveryEnabled"),
-		P2PFilesEnabled:               getBoolPtr("p2pFilesEnabled"),
-		SupportEnabled:                getBoolPtr("supportEnabled"),
-		NatsServerHost:                getString("natsServerHost"),
-		NatsServerHostInternal:        getString("natsServerHostInternal"),
-		NatsUseWssExternal:            getBoolPtr("natsUseWssExternal"),
-		EnforceTlsHashValidation:      getBoolPtr("enforceTlsHashValidation"),
-		HandshakeEnabled:              getBoolPtr("handshakeEnabled"),
-		ApiTlsCertHash:                strings.ToUpper(getString("apiTlsCertHash")),
-		NatsTlsCertHash:               strings.ToUpper(getString("natsTlsCertHash")),
-		ChatAIEnabled:                 getBoolPtr("chatAIEnabled"),
-		KnowledgeBaseEnabled:          getBoolPtr("knowledgeBaseEnabled"),
-		AppStoreEnabled:               getBoolPtr("appStoreEnabled"),
-		InventoryIntervalHours:        getIntPtr("inventoryIntervalHours"),
-		AgentHeartbeatIntervalSeconds: getIntPtr("agentHeartbeatIntervalSeconds"),
-		SiteID:                        getString("siteId"),
-		ClientID:                      getString("clientId"),
-		ResolvedAt:                    getString("resolvedAt"),
-		AgentUpdate:                   selfupdate.DefaultPolicy(),
+		RecoveryEnabled:                   getBoolPtr("recoveryEnabled"),
+		DiscoveryEnabled:                  getBoolPtr("discoveryEnabled"),
+		P2PFilesEnabled:                   getBoolPtr("p2pFilesEnabled"),
+		SupportEnabled:                    getBoolPtr("supportEnabled"),
+		NatsServerHost:                    getString("natsServerHost"),
+		NatsServerHostInternal:            getString("natsServerHostInternal"),
+		NatsUseWssExternal:                getBoolPtr("natsUseWssExternal"),
+		EnforceTlsHashValidation:          getBoolPtr("enforceTlsHashValidation"),
+		HandshakeEnabled:                  getBoolPtr("handshakeEnabled"),
+		ApiTlsCertHash:                    strings.ToUpper(getString("apiTlsCertHash")),
+		NatsTlsCertHash:                   strings.ToUpper(getString("natsTlsCertHash")),
+		ChatAIEnabled:                     getBoolPtr("chatAIEnabled"),
+		KnowledgeBaseEnabled:              getBoolPtr("knowledgeBaseEnabled"),
+		AppStoreEnabled:                   getBoolPtr("appStoreEnabled"),
+		AutomationP2PWingetInstallEnabled: getBoolPtr("automationP2pWingetInstallEnabled"),
+		InventoryIntervalHours:            getIntPtr("inventoryIntervalHours"),
+		AgentHeartbeatIntervalSeconds:     getIntPtr("agentHeartbeatIntervalSeconds"),
+		SiteID:                            getString("siteId"),
+		ClientID:                          getString("clientId"),
+		ResolvedAt:                        getString("resolvedAt"),
+		AgentUpdate:                       selfupdate.DefaultPolicy(),
 	}
 	// Parse nested autoUpdate object if present.
 	hasAutoUpdate := false
@@ -309,6 +324,18 @@ func mergeAgentConfigResponse(resp *AgentConfigResponse) AgentConfiguration {
 			return nil
 		}),
 		strings.ToLower(srv.AppStorePolicy) != "disabled",
+	))
+	// Instalação de winget via P2P-first. Precedência: site > client > server.
+	// Se o servidor não enviar o campo (nil), o padrão é habilitado (true) para
+	// que a ausência no /me/configuration não desligue o comportamento.
+	serverP2PWinget := true
+	if srv.AutomationP2PWingetInstallEnabled != nil {
+		serverP2PWinget = *srv.AutomationP2PWingetInstallEnabled
+	}
+	cfg.AutomationP2PWingetInstallEnabled = boolPtr(resolveBool(
+		boolFromPtr(site, func(s *SiteConfiguration) *bool { return s.AutomationP2PWingetInstallEnabled }),
+		boolFromPtr(cli, func(c *ClientConfiguration) *bool { return c.AutomationP2PWingetInstallEnabled }),
+		serverP2PWinget,
 	))
 
 	// Int fields
