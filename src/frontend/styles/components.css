@@ -544,11 +544,18 @@
   line-height: 1.25;
 }
 
+#storeView.page-content {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
 .store-layout {
   display: flex;
   flex-direction: column;
   gap: 14px;
   min-height: 0;
+  flex: 1;
 }
 
 .store-toolbar {
@@ -619,10 +626,14 @@
   flex-direction: column;
   gap: 12px;
   min-height: 0;
+  flex: 1;
 }
 
 .store-cards-wrap {
   min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 #inventoryContent {
@@ -919,6 +930,7 @@ input[type="search"] {
 
 .catalog-pagination {
   margin-top: auto;
+  flex-shrink: 0;
   padding-top: 12px;
   display: flex;
   align-items: center;
