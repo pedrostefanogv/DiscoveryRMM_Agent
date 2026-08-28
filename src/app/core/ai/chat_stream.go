@@ -89,6 +89,11 @@ type agentStreamRequest struct {
 	ToolResults []toolResultItem `json:"toolResults,omitempty"`
 	MaxTokens   int              `json:"maxTokens,omitempty"`
 	Tools       []map[string]any `json:"tools,omitempty"`
+	// SystemNote é uma instrução extra enviada pelo agente (ex.: retry forçado)
+	// que o servidor injeta como mensagem `system` separada — em vez de ser
+	// concatenada à mensagem do usuário. Evita injeção de instruções no papel
+	// "user" e mantém a separação semântica dos papéis.
+	SystemNote string `json:"systemNote,omitempty"`
 }
 
 // pendingToolCall collects a tool_call event before execution.

@@ -132,6 +132,7 @@ func (s *Service) SendStreamMultiRound(
 	var err error
 	totalToolCalls := 0
 	allCalledTools := make([]string, 0)
+	forcedRetries := 0
 
 	// Salva o tamanho do historico ANTES de iniciar o loop multi-round.
 	// Isso garante que lastAssistantContentSince() so retorne respostas
@@ -165,7 +166,7 @@ func (s *Service) SendStreamMultiRound(
 			MessageLen: len(req.Message),
 		})
 
-		currentSessionID, err = s.executeRound(streamCtx, cfg, req, onToken, &pendingCalls, onA2ui...)
+		currentSessionID, err = s.executeRound(streamCtx, cfg, req, round, onToken, &pendingCalls, onA2ui...)
 		roundElapsed := time.Since(roundStart)
 
 		if err != nil {
@@ -196,9 +197,50 @@ func (s *Service) SendStreamMultiRound(
 				HasToolCalls: false,
 				LatencyMs:    int(roundElapsed.Milliseconds()),
 			})
-			// Diagnóstico: detectar perguntas que provavelmente precisariam de tools
-			if round == 0 {
-				diagnoseMissingToolCall(s, userMessage)
+			// Diagnóstico: detectar perguntas que provavelmente precisariam de tools.
+			// Para ações explícitas de chamados (abrir/consultar), reenvia UMA vez com
+			// instrução imperativa para forçar o uso da function call nativa.
+			//
+			// Também detecta quando o LLM "parou sem concluir": a resposta é apenas
+			// uma promessa de ação (ex.: "vou abrir", "só um instante", "deixa eu
+			// verificar") sem executar a tool call. Nesse caso reenvia com instrução
+			// de conclusão, evitando que o usuário precise digitar "prossiga".
+			// Limitado a 1 retry forçado por chamada (fora do round 0) para não
+			// causar loop; em rounds > 0 o retry cobre também o caso em que o LLM
+			// prometeu agir APÓS executar uma tool.
+			if forcedRetries < 1 {
+				assistantText := s.lastAssistantContentSince(historyBeforeLen)
+				var retry string
+				if r := diagnoseMissingToolCall(s, userMessage); r != "" {
+					retry = r
+				} else if detectIncompleteResponse(assistantText) {
+					retry = "A sua resposta anterior terminou sem concluir a ação — você apenas prometeu fazer algo sem executar. Se existe uma ferramenta para a ação que o usuário pediu, EXECUTE-A agora via function call nativa. Caso contrário, dê uma resposta final completa e direta respondendo à solicitação, sem promessas como \"vou fazer\" ou \"só um instante\"."
+				}
+				if retry != "" {
+					forcedRetries++
+					var tools []map[string]any
+					s.mu.RLock()
+					if s.registry != nil {
+						tools = s.registry.OpenAIFunctions()
+					}
+					s.mu.RUnlock()
+					s.logChatEntry(ChatLogEntry{
+						Type:      "tool_force_retry",
+						Method:    "multi_round",
+						SessionID: currentSessionID,
+						Error:     retry,
+					})
+					req = agentStreamRequest{
+						Message:    userMessage,
+						SessionID:  currentSessionID,
+						Tools:      tools,
+						SystemNote: retry,
+					}
+					if onStatus != nil {
+						onStatus("Concluindo ação solicitada...")
+					}
+					continue
+				}
 			}
 			break
 		}
@@ -348,7 +390,7 @@ func (s *Service) lastAssistantContent() string {
 	return s.lastAssistantContentSince(0)
 }
 
-func (s *Service) executeRound(ctx context.Context, cfg Config, req agentStreamRequest, onToken func(string), pendingCalls *[]pendingToolCall, onA2ui ...func(string)) (string, error) {
+func (s *Service) executeRound(ctx context.Context, cfg Config, req agentStreamRequest, round int, onToken func(string), pendingCalls *[]pendingToolCall, onA2ui ...func(string)) (string, error) {
 	startTime := time.Now()
 	baseURL, err := normalizeAgentChatBaseURL(cfg.Endpoint)
 	if err != nil {
@@ -362,7 +404,8 @@ func (s *Service) executeRound(ctx context.Context, cfg Config, req agentStreamR
 		return "", err
 	}
 	payload, _ := json.Marshal(req)
-	reqCtx, cancel := context.WithTimeout(ctx, 130*time.Second)
+	timeout := roundTimeout(round)
+	reqCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	endpoint := baseURL + "/api/v1/agent-auth/me/ai-chat/stream"
@@ -382,7 +425,7 @@ func (s *Service) executeRound(ctx context.Context, cfg Config, req agentStreamR
 	httpReq.Header.Set("Accept", "text/event-stream")
 	netutil.SetAgentAuthHeadersWithAgentID(httpReq, cfg.APIKey, cfg.AgentID)
 
-	resp, err := tlsutil.NewHTTPClient(130 * time.Second).Do(httpReq)
+	resp, err := tlsutil.NewHTTPClient(timeout).Do(httpReq)
 	if err != nil {
 		s.logChatEntry(ChatLogEntry{
 			Type:      "round_http_error",
@@ -544,6 +587,21 @@ func (s *Service) parseMultiRoundSSE(body io.Reader, onToken func(string), pendi
 	return currentSessionID, done, nil
 }
 
+// roundTimeout retorna um timeout progressivo por round: round 0 = 60s,
+// round 1 = 90s, rounds 2+ = 130s. Reduz a espera do usuário quando o
+// servidor está lento e dá folga extra para tool chains longas em rounds
+// intermediários.
+func roundTimeout(round int) time.Duration {
+	switch round {
+	case 0:
+		return 60 * time.Second
+	case 1:
+		return 90 * time.Second
+	default:
+		return 130 * time.Second
+	}
+}
+
 // toolArgsForLog extrai os argumentos de pendingToolCalls para logging (truncados 300 chars cada).
 func toolArgsForLog(calls []pendingToolCall) []string {
 	if len(calls) == 0 {
@@ -602,8 +660,26 @@ func (s *Service) fallbackToSync(ctx context.Context, cfg Config, message, sessi
 // diagnoseMissingToolCall verifica se a pergunta do usuario contem palavras-chave
 // que sugerem que o LLM deveria ter usado uma ferramenta MCP, e emite um warning
 // no log para facilitar o diagnostico de System Prompts ineficazes.
-func diagnoseMissingToolCall(s *Service, userMessage string) {
+//
+// Retorna uma string de instrucao (retry forcado) quando a acao solicitada e
+// explicita o suficiente para o agente reenviar com uma ordem imperativa —
+// atualmente cobre abrir chamado e consultar chamados. Retorna "" quando apenas
+// registra o diagnostico sem reenvio.
+func diagnoseMissingToolCall(s *Service, userMessage string) string {
 	msg := strings.ToLower(userMessage)
+	for _, pattern := range ticketIntentPatterns {
+		if !patternsMatch(msg, pattern.keywords) {
+			continue
+		}
+		if pattern.kind == ticketOpen {
+			if hasConfirmedAction(msg) {
+				return "O usuario ja confirmou a abertura do chamado. Emita AGORA uma unica function call nativa `create_ticket` com os dados ja coletados (title, description, priority, category). NAO responda com texto, NAO prometa abrir, NAO chame outras ferramentas. Envie apenas a function call create_ticket."
+			}
+			continue
+		}
+		// ticketList: perguntou se ha chamados abertos
+		return "O usuario perguntou sobre os chamados da maquina. Emita AGORA a function call nativa `list_tickets` e responda com base no resultado. NAO responda com texto, NAO prometa verificar. Envie apenas a function call list_tickets."
+	}
 	hints := map[string]string{
 		"instalado":      "list_installed_packages",
 		"instalada":      "list_installed_packages",
@@ -666,4 +742,128 @@ func diagnoseMissingToolCall(s *Service, userMessage string) {
 			Error:     "LLM nao usou tools nesta pergunta. Ferramentas sugeridas: " + strings.Join(hits, ", "),
 		})
 	}
+	return ""
+}
+
+// ticketIntentKind classifica a intenção de chamado detectada.
+type ticketIntentKind int
+
+const (
+	ticketOpen ticketIntentKind = iota // "abra/abre um chamado"
+	ticketList                          // "tem algum chamado aberto?"
+)
+
+type ticketIntentPattern struct {
+	kind     ticketIntentKind
+	keywords []string
+}
+
+// ticketIntentPatterns são padrões de intenção de chamados que disparam o
+// retry forçado (evita o loop de "vou abrir" sem tool call).
+var ticketIntentPatterns = []ticketIntentPattern{
+	{kind: ticketList, keywords: []string{"chamado", "aberto", "minha", "maquina", "tem"}},
+	{kind: ticketList, keywords: []string{"ticket", "aberto"}},
+	{kind: ticketList, keywords: []string{"chamados", "abertos", "para"}},
+	{kind: ticketList, keywords: []string{"meus", "chamados"}},
+	{kind: ticketOpen, keywords: []string{"abra", "chamado"}},
+	{kind: ticketOpen, keywords: []string{"abre", "chamado"}},
+	{kind: ticketOpen, keywords: []string{"abrir", "chamado"}},
+	{kind: ticketOpen, keywords: []string{"abrir", "ticket"}},
+	{kind: ticketOpen, keywords: []string{"abra", "ticket"}},
+	{kind: ticketOpen, keywords: []string{"criar", "chamado"}},
+	{kind: ticketOpen, keywords: []string{"crie", "chamado"}},
+}
+
+// patternsMatch verifica se TODAS as palavras-chave do padrão aparecem na mensagem.
+// A comparação é case-insensitive (normaliza internamente para minúsculas).
+func patternsMatch(msg string, keywords []string) bool {
+	msg = strings.ToLower(msg)
+	for _, kw := range keywords {
+		if !strings.Contains(msg, kw) {
+			return false
+		}
+	}
+	return true
+}
+
+// hasConfirmedAction detecta confirmações curtas do usuário ("abra", "pode abrir",
+// "sim", "prossiga", etc.) que seguem uma proposta de chamado.
+// A comparação é case-insensitive (normaliza internamente para minúsculas).
+func hasConfirmedAction(msg string) bool {
+	msg = strings.ToLower(strings.TrimSpace(msg))
+	if len(msg) > 60 {
+		return false
+	}
+	for _, kw := range []string{"abra", "abre", "pode abrir", "sim", "prossiga", "pode", "ok", "confirma", "confirmado", "já", "ja"} {
+		if strings.Contains(msg, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+// incompleteResponseMarkers são frases que indicam que o LLM prometeu executar
+// uma ação mas encerrou o turno sem concluir (sem tool call e sem resposta final).
+// Usado para detectar "LLM parou sem concluir" e reenviar automaticamente.
+var incompleteResponseMarkers = []string{
+	"vou fazer", "vou abrir", "vou verificar", "vou pegar", "vou coletar",
+	"vou consultar", "vou tentar", "vou executar", "vou analisar", "vou buscar",
+	"estou verificando", "estou consultando", "estou analisando", "estou buscando",
+	"só um instante", "so um instante", "um instante", "um momento", "aguarde",
+	"deixa eu", "deixe eu", "deixa-me", "permita-me", "vou montar", "vou registrar",
+	"me deixe", "espere",
+}
+
+// detectIncompleteResponse retorna true quando a resposta do assistant terminou
+// sem concluir de fato: é uma promessa de ação ("vou fazer...", "só um instante")
+// sem uma resposta final substantiva. O texto é curto e termina sugerindo que
+// algo ainda será feito. Limitado a respostas curtas (<= 300 chars) para evitar
+// falso positivo em respostas longas e legítimas que contenham "vou verificar..."
+// como parte de um diagnóstico completo.
+func detectIncompleteResponse(assistant string) bool {
+	if assistant == "" {
+		return false
+	}
+	text := strings.ToLower(strings.TrimSpace(assistant))
+
+	// Respostas longas são tratadas como completas: uma análise detalhada não é
+	// uma "promessa pendente" só por conter "vou verificar" em algum ponto.
+	if len([]rune(text)) > 300 {
+		return false
+	}
+
+	// Se a resposta contém um job concluído ou evidência de ação já realizada,
+	// não é considerada incompleta. Estas respostas costumam ser mais longas e
+	// afirmativas; exigimos uma pista de promessa pendente.
+	hasPromise := false
+	for _, m := range incompleteResponseMarkers {
+		if strings.Contains(text, m) {
+			hasPromise = true
+			break
+		}
+	}
+	if !hasPromise {
+		return false
+	}
+
+	// Evita falso positivo quando a resposta já contém uma conclusão clara
+	// (ex.: "Feito! desinstalei o programa"). Palavras de conclusão anulam a
+	// detecção de resposta incompleta.
+	for _, done := range completionMarkers {
+		if strings.Contains(text, done) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// completionMarkers são palavras/frases que indicam que o assistant já concluiu
+// a ação ou deu uma resposta final — anulam a detecção de "resposta incompleta".
+var completionMarkers = []string{
+	"pronto", "concluí", "conclui", "finalizado", "finalizei", "feito",
+	"instalado", "desinstalado", "atualizado", "criado", "aberto com sucesso",
+	"chamado criado", "ticket criado", "reiniciei", "reiniciado",
+	"resolvido", "solucionado", "tudo certo", "tudo pronto", "é isso",
+	"isso é tudo", "mais alguma", "posso ajudar", "em que mais",
 }
