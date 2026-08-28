@@ -170,6 +170,7 @@ const openSocketsTableEl = document.getElementById('openSocketsTable');
 const catalogPrevBtn = document.getElementById('catalogPrevBtn');
 const catalogNextBtn = document.getElementById('catalogNextBtn');
 const catalogPageInfoEl = document.getElementById('catalogPageInfo');
+const catalogPaginationEl = document.getElementById('catalogPagination');
 const sidebarEl = document.getElementById('sidebar');
 const sidebarToggleBtn = document.getElementById('sidebarToggle');
 const categorySearchEl = document.getElementById('categorySearch');

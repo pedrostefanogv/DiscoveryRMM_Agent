@@ -224,9 +224,18 @@ function renderCards() {
 
 function updateCatalogPagination() {
   var pg = getPaginationState(state.filtered, catalogPage, catalogPageSize);
-  if (catalogPageInfoEl) catalogPageInfoEl.textContent = translate('pagination.page', { page: catalogPage, total: pg.totalPages });
-  if (catalogPrevBtn) catalogPrevBtn.disabled = catalogPage <= 1;
-  if (catalogNextBtn) catalogNextBtn.disabled = catalogPage >= pg.totalPages;
+  var singlePage = pg.totalPages <= 1;
+
+  // Esconde todo o footer de paginação quando ha apenas uma pagina:
+  // nao faz sentido mostrar botões Anterior/Proxima sem outra pagina.
+  if (catalogPaginationEl) catalogPaginationEl.classList.toggle('hidden', singlePage);
+
+  if (!singlePage) {
+    if (catalogPageInfoEl) catalogPageInfoEl.textContent = translate('pagination.page', { page: catalogPage, total: pg.totalPages });
+    if (catalogPrevBtn) catalogPrevBtn.disabled = catalogPage <= 1;
+    if (catalogNextBtn) catalogNextBtn.disabled = catalogPage >= pg.totalPages;
+  }
+
   updateHomeBtn();
 }
 
