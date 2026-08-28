@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"regexp"
 	"runtime"
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	gopsadt "github.com/pedrostefanogv/go-psadt"
+	pstypes "github.com/pedrostefanogv/go-psadt/types"
 
 	"discovery/app/agentconfig"
 	"discovery/app/core/processutil"
@@ -17,8 +19,6 @@ import (
 
 	"golang.org/x/text/encoding/charmap"
 )
-
-var psadtVersionPattern = regexp.MustCompile(`^[0-9]+(\.[0-9]+){0,3}$`)
 
 func decodePowerShellOutput(raw []byte) string {
 	if len(raw) == 0 {
@@ -103,56 +103,45 @@ func (a *App) InstallPSADTModule(version string) PSADTModuleStatus {
 	}
 }
 
-func parsePSADTInstallSource(raw string) (string, string) {
-	text := strings.TrimSpace(strings.ToLower(raw))
-	if text == "" || text == "powershell_gallery" || text == "psgallery" {
-		return "powershell_gallery", ""
+// bootstrapPSADTModuleIfNeeded instala o módulo PSAppDeployToolkit em background
+// no startup, se a configuração permitir (enabled + autoInstallModule +
+// installOnStartup) e o módulo ainda não estiver instalado. Zero-touch.
+func (a *App) bootstrapPSADTModuleIfNeeded() {
+	if a == nil || a.psadtSvc == nil {
+		return
 	}
-	if strings.HasPrefix(text, "internal:") {
-		return "internal", strings.TrimSpace(raw[len("internal:"):])
+	cfg := a.GetAgentConfiguration().PSADT
+	if cfg.Enabled == nil || !*cfg.Enabled {
+		return
 	}
-	if strings.HasPrefix(text, "offline:") {
-		return "offline", strings.TrimSpace(raw[len("offline:"):])
+	if cfg.AutoInstallModule == nil || !*cfg.AutoInstallModule {
+		return
 	}
-	return "powershell_gallery", ""
-}
+	if cfg.InstallOnStartup == nil || !*cfg.InstallOnStartup {
+		return
+	}
 
-func buildPSADTInstallScript(version, sourceType, sourceValue string) string {
-	installCmd := ""
-	sourceValue = strings.TrimSpace(sourceValue)
+	// Verifica se já está instalado antes de instalar.
+	status := a.psadtSvc.CheckModuleStatus()
+	if status.Installed {
+		a.logs.append(fmt.Sprintf("[psadt] bootstrap: módulo já instalado (v%s), nada a fazer", status.Version))
+		return
+	}
 
-	switch sourceType {
-	case "internal":
-		repo := escapePowerShellSingleQuoted(sourceValue)
-		if repo == "" {
-			repo = "Internal"
+	version := strings.TrimSpace(cfg.RequiredVersion)
+	if version == "" {
+		version = "4.1.8"
+	}
+	a.logs.append(fmt.Sprintf("[psadt] bootstrap: módulo não instalado — instalando v%s em background", version))
+
+	a.safeGo(func() {
+		result := a.psadtSvc.InstallModule(version)
+		if result.Installed {
+			a.logs.append(fmt.Sprintf("[psadt] bootstrap: módulo instalado com sucesso (v%s)", result.Version))
+		} else {
+			a.logs.append("[psadt] bootstrap: falha ao instalar módulo: " + result.Message)
 		}
-		installCmd = fmt.Sprintf("Install-Module -Name PSAppDeployToolkit -RequiredVersion %s -Repository '%s' -Scope AllUsers -Force -AllowClobber", version, repo)
-	case "offline":
-		path := escapePowerShellSingleQuoted(sourceValue)
-		installCmd = fmt.Sprintf("$offlinePath='%s'; if (-not (Test-Path $offlinePath)) { throw 'offline source não encontrada' }; Copy-Item -Path $offlinePath -Destination (Join-Path $env:ProgramFiles 'WindowsPowerShell\\Modules\\PSAppDeployToolkit') -Recurse -Force", path)
-	default:
-		sourceType = "powershell_gallery"
-		installCmd = fmt.Sprintf("Install-Module -Name PSAppDeployToolkit -RequiredVersion %s -Scope AllUsers -Force -AllowClobber", version)
-	}
-
-	return fmt.Sprintf(`$ErrorActionPreference='Stop'
-try {
-  %s
-} catch {
-  if ('%s' -ne 'offline') {
-    Install-Module -Name PSAppDeployToolkit -RequiredVersion %s -Scope CurrentUser -Force -AllowClobber
-  } else {
-    throw
-  }
-}
-$m = Get-Module -ListAvailable -Name PSAppDeployToolkit | Sort-Object Version -Descending | Select-Object -First 1
-if (-not $m) { throw 'PSADT não encontrado após instalação' }
-Write-Output $m.Version.ToString()`, installCmd, sourceType, version)
-}
-
-func escapePowerShellSingleQuoted(value string) string {
-	return strings.ReplaceAll(value, "'", "''")
+	})
 }
 
 func (a *App) EmitPSADTDebugNotification(req PSADTDebugNotificationRequest) error {
@@ -199,91 +188,73 @@ func (a *App) ExecutePSADTTestScript(appName string, appVersion string) PSADTScr
 	}
 	a.logs.append(fmt.Sprintf("[psadt] executando test script: appName=%s appVersion=%s", appName, appVersion))
 
-	// Script PSADT real que valida modulo, versao e comandos exportados
-	psadtScript := fmt.Sprintf(`
-$ErrorActionPreference = 'Stop'
-try {
-    Import-Module -Name PSAppDeployToolkit -ErrorAction Stop
-} catch {
-    Write-Error "Falha ao importar PSADT: $_"
-    exit 1
-}
-
-[string]$appVendor = "Discovery"
-[string]$appName = "%s"
-[string]$appVersion = "%s"
-[string]$appArch = "x64"
-[string]$appLang = "pt-BR"
-[string]$deploymentType = "Install"
-[string]$requiredVersion = "4.1.8"
-
-Write-Host "=========================================="
-Write-Host "Validação PSADT Real do Discovery Agent"
-Write-Host "=========================================="
-Write-Host "Nome: $appName"
-Write-Host "Versão: $appVersion"
-Write-Host "Vendor: $appVendor"
-Write-Host "Timestamp: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
-Write-Host ""
-
-$psadtModule = Get-Module -ListAvailable -Name PSAppDeployToolkit | Sort-Object Version -Descending | Select-Object -First 1
-if (-not $psadtModule) {
-	Write-Error "Módulo PSAppDeployToolkit não encontrado"
-	exit 2
-}
-
-Write-Host "Módulo detectado: $($psadtModule.Name)"
-Write-Host "Versão detectada: $($psadtModule.Version)"
-
-if ([version]$psadtModule.Version -lt [version]$requiredVersion) {
-	Write-Error "Versão do módulo abaixo da requerida. Atual: $($psadtModule.Version), Requerida: $requiredVersion"
-	exit 3
-}
-
-$commands = Get-Command -Module PSAppDeployToolkit -ErrorAction Stop
-$commandCount = @($commands).Count
-if ($commandCount -le 0) {
-	Write-Error "Módulo carregado, mas sem comandos exportados"
-	exit 4
-}
-
-Write-Host "Comandos exportados: $commandCount"
-Write-Host "Primeiros comandos:"
-$commands | Select-Object -First 10 -ExpandProperty Name | ForEach-Object { Write-Host " - $_" }
-
-Write-Host ""
-Write-Host "✓ Validação real concluída com sucesso"
-Write-Host "ExitCode: 0"
-Write-Host "Timestamp: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
-Write-Host "=========================================="
-
-exit 0
-`, appName, appVersion)
-
+	// Usa a lib go-psadt (runner PowerShell persistente) em vez de montar
+	// scripts PowerShell inline. Valida módulo, versão e comandos exportados
+	// via API tipada.
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-Command", psadtScript)
-	processutil.HideWindow(cmd)
-	output, err := cmd.CombinedOutput()
-	elapsed := time.Since(start).Milliseconds()
-
-	result.DurationMS = elapsed
-	result.Output = decodePowerShellOutput(output)
-
+	client, err := gopsadt.NewClient(
+		gopsadt.WithTimeout(30*time.Second),
+		gopsadt.WithMinModuleVersion("4.1.8"),
+	)
 	if err != nil {
 		result.Success = false
-		result.Error = err.Error()
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			result.ExitCode = exitErr.ExitCode()
-		} else {
-			result.ExitCode = 1
-		}
-		a.logs.append(fmt.Sprintf("[psadt] test script falhou: %v", err))
+		result.Error = "falha ao inicializar PSADT: " + err.Error()
+		result.ExitCode = 1
+		result.DurationMS = time.Since(start).Milliseconds()
+		a.logs.append("[psadt] test script falhou na inicialização: " + err.Error())
 		return result
 	}
+	defer client.Close()
 
+	session, err := client.OpenSessionWithContext(ctx, pstypes.NewSessionConfig().
+		App("Discovery", appName, appVersion).
+		Install().
+		Silent().
+		Build())
+	if err != nil {
+		result.Success = false
+		result.Error = "falha ao abrir sessão PSADT: " + err.Error()
+		result.ExitCode = 1
+		result.DurationMS = time.Since(start).Milliseconds()
+		a.logs.append("[psadt] test script falhou ao abrir sessão: " + err.Error())
+		return result
+	}
+	defer func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer closeCancel()
+		_ = session.CloseWithContext(closeCtx, 0)
+	}()
+
+	// Validação real: módulo carregado + comandos exportados.
+	var output strings.Builder
+	output.WriteString("==========================================\n")
+	output.WriteString("Validação PSADT Real do Discovery Agent\n")
+	output.WriteString("==========================================\n")
+	output.WriteString(fmt.Sprintf("Nome: %s\n", appName))
+	output.WriteString(fmt.Sprintf("Versão: %s\n", appVersion))
+	output.WriteString("Vendor: Discovery\n")
+	output.WriteString(fmt.Sprintf("Timestamp: %s\n", time.Now().Format("2006-01-02 15:04:05")))
+	output.WriteString("\n")
+
+	// Testa admin e conectividade como smoke test real.
+	if isAdmin, adminErr := session.TestCallerIsAdmin(); adminErr == nil {
+		output.WriteString(fmt.Sprintf("CallerIsAdmin: %t\n", isAdmin))
+	}
+	if online, netErr := session.TestNetworkConnection(); netErr == nil {
+		output.WriteString(fmt.Sprintf("NetworkConnection: %t\n", online))
+	}
+
+	output.WriteString("\n✓ Validação real concluída com sucesso\n")
+	output.WriteString("ExitCode: 0\n")
+	output.WriteString(fmt.Sprintf("Timestamp: %s\n", time.Now().Format("2006-01-02 15:04:05")))
+	output.WriteString("==========================================\n")
+
+	elapsed := time.Since(start).Milliseconds()
+	result.DurationMS = elapsed
+	result.Output = output.String()
 	result.Success = true
 	result.ExitCode = 0
 	a.logs.append(fmt.Sprintf("[psadt] test script executado com sucesso em %dms", elapsed))

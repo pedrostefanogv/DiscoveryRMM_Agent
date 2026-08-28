@@ -17,7 +17,7 @@ require (
 	github.com/nats-io/nats-server/v2 v2.14.5
 	github.com/nats-io/nats.go v1.53.1
 	github.com/osquery/osquery-go v0.0.0-20260630173615-eb39ad3443df
-	github.com/pedrostefanogv/go-psadt v0.0.0-20260724000345-4f8011207c09
+	github.com/pedrostefanogv/go-psadt v0.0.0-20260826183638-2107ccb29b2c
 	github.com/pion/webrtc/v4 v4.2.18
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/samber/lo v1.53.0

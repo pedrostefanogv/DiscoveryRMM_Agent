@@ -1196,6 +1196,11 @@ func (a *App) startup(ctx context.Context) {
 			})
 		}
 
+		// Bootstrap automático do módulo PSADT (zero-touch).
+		// Se habilitado na config e o módulo não estiver instalado, instala
+		// em background sem bloquear o startup do agente.
+		a.bootstrapPSADTModuleIfNeeded()
+
 		if a.syncSvc != nil {
 			// Inicializa o ciclo de vida do sync.Service antes de iniciar o loop.
 			_ = a.syncSvc.Startup(ctx)

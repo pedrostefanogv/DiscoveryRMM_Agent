@@ -81,6 +81,24 @@ func normalizePsadtAlertIcon(raw string) string {
 	}
 }
 
+// registerPSADTSessionHooks registra hooks de lifecycle (OnClose/OnError) na
+// sessão para logging padronizado e consistente em todos os fluxos PSADT.
+func (a *App) registerPSADTSessionHooks(session *psadt.Session, tag string) {
+	if session == nil {
+		return
+	}
+	session.OnClose(func(exitCode int) {
+		if a != nil {
+			a.logs.append(fmt.Sprintf("[agent] psadt-%s [OK] sessão fechada exitCode=%d", tag, exitCode))
+		}
+	})
+	session.OnError(func(err error) {
+		if a != nil {
+			a.logs.append(fmt.Sprintf("[agent] psadt-%s [ERRO] %v", tag, err))
+		}
+	})
+}
+
 // handlePsadtAlert executa o alerta PSADT usando a lib go-psadt nativa,
 // eliminando concatenação manual de scripts PowerShell.
 func (a *App) handlePsadtAlert(ctx context.Context, p PsadtAlertPayload) (int, string, string) {
@@ -124,13 +142,11 @@ func (a *App) handlePsadtAlert(ctx context.Context, p PsadtAlertPayload) (int, s
 	}
 	defer client.Close()
 
-	session, err := client.OpenSessionWithContext(execCtx, pstypes.SessionConfig{
-		AppVendor:      "Discovery",
-		AppName:        "Discovery Agent",
-		AppVersion:     "1.0",
-		DeploymentType: pstypes.DeployInstall,
-		DeployMode:     pstypes.DeployModeInteractive,
-	})
+	session, err := client.OpenSessionWithContext(execCtx, pstypes.NewSessionConfig().
+		App("Discovery", "Discovery Agent", "1.0").
+		Install().
+		Interactive().
+		Build())
 	if err != nil {
 		errMsg := fmt.Sprintf("psadt.OpenSession: %v", err)
 		if a != nil {
@@ -138,6 +154,7 @@ func (a *App) handlePsadtAlert(ctx context.Context, p PsadtAlertPayload) (int, s
 		}
 		return 1, "", errMsg
 	}
+	a.registerPSADTSessionHooks(session, "alert")
 	defer func() {
 		closeCtx, closeCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer closeCancel()
@@ -376,17 +393,16 @@ func (a *App) showForceRestartBalloon(action string, delaySeconds int, message s
 	}
 	defer client.Close()
 
-	session, err := client.OpenSessionWithContext(initCtx, pstypes.SessionConfig{
-		AppVendor:      "Discovery",
-		AppName:        "Discovery Agent",
-		AppVersion:     "1.0",
-		DeploymentType: pstypes.DeployInstall,
-		DeployMode:     pstypes.DeployModeInteractive,
-	})
+	session, err := client.OpenSessionWithContext(initCtx, pstypes.NewSessionConfig().
+		App("Discovery", "Discovery Agent", "1.0").
+		Install().
+		Interactive().
+		Build())
 	if err != nil {
 		a.logs.append(fmt.Sprintf("[agent] psadt-%s-force [ERRO] OpenSession: %v", action, err))
 		return "skipped"
 	}
+	a.registerPSADTSessionHooks(session, action+"-force")
 	defer func() {
 		closeCtx, closeCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer closeCancel()
@@ -478,17 +494,16 @@ func (a *App) showDeferrableRestartPrompt(action string, delaySeconds int, messa
 
 	a.logs.append(fmt.Sprintf("[agent] psadt-%s-defer [DIAG] PSADT client inicializado, abrindo sessão interativa", action))
 
-	session, err := client.OpenSessionWithContext(initCtx, pstypes.SessionConfig{
-		AppVendor:      "Discovery",
-		AppName:        "Discovery Agent",
-		AppVersion:     "1.0",
-		DeploymentType: pstypes.DeployInstall,
-		DeployMode:     pstypes.DeployModeInteractive,
-	})
+	session, err := client.OpenSessionWithContext(initCtx, pstypes.NewSessionConfig().
+		App("Discovery", "Discovery Agent", "1.0").
+		Install().
+		Interactive().
+		Build())
 	if err != nil {
 		a.logs.append(fmt.Sprintf("[agent] psadt-%s-defer [ERRO] OpenSession: %v — fallback", action, err))
 		return "fallback"
 	}
+	a.registerPSADTSessionHooks(session, action+"-defer")
 	defer func() {
 		closeCtx, c := context.WithTimeout(context.Background(), 10*time.Second)
 		defer c()

@@ -3,6 +3,8 @@ package app
 import (
 	"strings"
 	"testing"
+
+	"discovery/app/services/psadt"
 )
 
 func TestParsePSADTInstallSource(t *testing.T) {
@@ -19,7 +21,7 @@ func TestParsePSADTInstallSource(t *testing.T) {
 	}
 
 	for _, item := range cases {
-		gotType, gotValue := parsePSADTInstallSource(item.in)
+		gotType, gotValue := psadt.ParseInstallSource(item.in)
 		if gotType != item.wantType || gotValue != item.wantValue {
 			t.Fatalf("parse source %q => (%q, %q), expected (%q, %q)", item.in, gotType, gotValue, item.wantType, item.wantValue)
 		}
@@ -27,19 +29,19 @@ func TestParsePSADTInstallSource(t *testing.T) {
 }
 
 func TestBuildPSADTInstallScript_BySource(t *testing.T) {
-	internalScript := buildPSADTInstallScript("4.1.8", "internal", "CorpRepo")
+	internalScript := psadt.BuildInstallScript("4.1.8", "internal", "CorpRepo")
 	if !strings.Contains(internalScript, "-Repository 'CorpRepo'") {
 		t.Fatalf("expected internal source script to include repository")
 	}
 
-	offlineScript := buildPSADTInstallScript("4.1.8", "offline", "C:/repo/PSAppDeployToolkit")
+	offlineScript := psadt.BuildInstallScript("4.1.8", "offline", "C:/repo/PSAppDeployToolkit")
 	// Substring sem acento para evitar dependência de locale/encoding.
 	if !strings.Contains(strings.ToLower(offlineScript), "source nao encontrada") &&
 		!strings.Contains(offlineScript, "source não encontrada") {
 		t.Fatalf("expected offline source script validation")
 	}
 
-	galleryScript := buildPSADTInstallScript("4.1.8", "powershell_gallery", "")
+	galleryScript := psadt.BuildInstallScript("4.1.8", "powershell_gallery", "")
 	if !strings.Contains(galleryScript, "Install-Module -Name PSAppDeployToolkit") {
 		t.Fatalf("expected PSGallery script to install module")
 	}

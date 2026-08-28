@@ -223,9 +223,9 @@ func (s *Service) InstallModule(version string) ModuleStatus {
 	if s.getAgentConfiguration != nil {
 		installSource = strings.TrimSpace(s.getAgentConfiguration().PSADT.InstallSource)
 	}
-	sourceType, sourceValue := parseInstallSource(installSource)
+	sourceType, sourceValue := ParseInstallSource(installSource)
 	s.logf("[psadt] iniciando instalação do módulo versão " + version + " via source=" + sourceType)
-	script := buildInstallScript(version, sourceType, sourceValue)
+	script := BuildInstallScript(version, sourceType, sourceValue)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-Command", script)
@@ -242,7 +242,7 @@ func (s *Service) InstallModule(version string) ModuleStatus {
 		}
 		if sourceType != "powershell_gallery" {
 			s.logf("[psadt] source " + sourceType + " falhou; fallback para powershell_gallery")
-			fallbackScript := buildInstallScript(version, "powershell_gallery", "")
+			fallbackScript := BuildInstallScript(version, "powershell_gallery", "")
 			fallbackCmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-Command", fallbackScript)
 			hideWindow(fallbackCmd)
 			fallbackOut, fallbackErr := fallbackCmd.CombinedOutput()
@@ -265,7 +265,8 @@ func (s *Service) InstallModule(version string) ModuleStatus {
 	return status
 }
 
-func parseInstallSource(raw string) (string, string) {
+// ParseInstallSource classifica a origem de instalação do módulo PSADT.
+func ParseInstallSource(raw string) (string, string) {
 	text := strings.TrimSpace(strings.ToLower(raw))
 	if text == "" || text == "powershell_gallery" || text == "psgallery" {
 		return "powershell_gallery", ""
@@ -279,18 +280,19 @@ func parseInstallSource(raw string) (string, string) {
 	return "powershell_gallery", ""
 }
 
-func buildInstallScript(version, sourceType, sourceValue string) string {
+// BuildInstallScript monta o script PowerShell de instalação do módulo PSADT.
+func BuildInstallScript(version, sourceType, sourceValue string) string {
 	installCmd := ""
 	sourceValue = strings.TrimSpace(sourceValue)
 	switch sourceType {
 	case "internal":
-		repo := escapeSingleQuoted(sourceValue)
+		repo := EscapeSingleQuoted(sourceValue)
 		if repo == "" {
 			repo = "Internal"
 		}
 		installCmd = fmt.Sprintf("Install-Module -Name PSAppDeployToolkit -RequiredVersion %s -Repository '%s' -Scope AllUsers -Force -AllowClobber", version, repo)
 	case "offline":
-		path := escapeSingleQuoted(sourceValue)
+		path := EscapeSingleQuoted(sourceValue)
 		installCmd = fmt.Sprintf("$offlinePath='%s'; if (-not (Test-Path $offlinePath)) { throw 'offline source não encontrada' }; Copy-Item -Path $offlinePath -Destination (Join-Path $env:ProgramFiles 'WindowsPowerShell\\Modules\\PSAppDeployToolkit') -Recurse -Force", path)
 	default:
 		sourceType = "powershell_gallery"
@@ -311,7 +313,8 @@ if (-not $m) { throw 'PSADT não encontrado após instalação' }
 Write-Output $m.Version.ToString()`, installCmd, sourceType, version)
 }
 
-func escapeSingleQuoted(value string) string {
+// EscapeSingleQuoted escapa aspas simples para uso em strings PowerShell.
+func EscapeSingleQuoted(value string) string {
 	return strings.ReplaceAll(value, "'", "''")
 }
 
@@ -430,6 +433,9 @@ func (s *Service) ExecuteCustomScript(scriptContent string) ScriptResult {
 	}
 	s.logf(fmt.Sprintf("[psadt] executando script customizado (%d bytes)...", len(strings.TrimSpace(scriptContent))))
 	start := time.Now()
+	// Executa via powershell.exe com o script fornecido pelo usuário. Isso permite
+	// que o script chame Open-ADTSession/Close-ADTSession por conta própria sem
+	// conflito. Mantém o método de execução simples e determinístico.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-Command", scriptContent)
