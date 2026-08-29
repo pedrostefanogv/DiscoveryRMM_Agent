@@ -42,6 +42,10 @@ func (m *mockWingetProvider) ListUpgradable(ctx context.Context) (string, error)
 	return m.listUpgradable, nil
 }
 
+func (m *mockWingetProvider) Download(ctx context.Context, id, downloadDir string) (string, error) {
+	return "winget-download", nil
+}
+
 type mockChocolateyProvider struct {
 	installID      string
 	uninstallID    string

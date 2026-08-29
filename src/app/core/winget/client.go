@@ -86,6 +86,21 @@ func (c *Client) ListUpgradable(ctx context.Context) (string, error) {
 	)
 }
 
+// Download baixa o instalador sem executá-lo, retornando a saída do winget.
+// O diretório de download é controlado por --download-directory.
+func (c *Client) Download(ctx context.Context, id, downloadDir string) (string, error) {
+	if err := validateID(id); err != nil {
+		return "", err
+	}
+	return c.run(ctx,
+		"download",
+		"--id", id,
+		"--download-directory", downloadDir,
+		"--accept-source-agreements",
+		"--accept-package-agreements",
+	)
+}
+
 func (c *Client) run(ctx context.Context, args ...string) (string, error) {
 	runCtx, cancel := ctxutil.WithTimeout(ctx, c.timeout)
 	defer cancel()

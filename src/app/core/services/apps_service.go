@@ -20,6 +20,7 @@ type WingetProvider interface {
 	UpgradeAll(ctx context.Context) (string, error)
 	ListInstalled(ctx context.Context) (string, error)
 	ListUpgradable(ctx context.Context) (string, error)
+	Download(ctx context.Context, id, downloadDir string) (string, error)
 }
 
 type ChocolateyProvider interface {
@@ -36,6 +37,11 @@ type AppsService struct {
 
 func NewAppsService(winget WingetProvider, chocolatey ChocolateyProvider) *AppsService {
 	return &AppsService{winget: winget, chocolatey: chocolatey}
+}
+
+// Winget retorna o provider winget para operações diretas (ex.: download sem instalar).
+func (s *AppsService) Winget() WingetProvider {
+	return s.winget
 }
 
 func (s *AppsService) Install(ctx context.Context, id string) (string, error) {

@@ -3,6 +3,8 @@ package app
 import (
 	"context"
 	"fmt"
+	"io/fs"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -26,14 +28,21 @@ func (m *automationPackageManagerRouter) Install(ctx context.Context, id string)
 		return m.fallback.Install(ctx, id)
 	}
 
-	output, err := m.installViaP2P(ctx, id)
-	if err == nil {
+	output, p2pErr := m.installViaP2P(ctx, id)
+	if p2pErr == nil {
 		return output, nil
 	}
-	m.logf("[automation][p2p] fallback para winget install packageId=%s motivo=%v", strings.TrimSpace(id), err)
+	m.logf("[automation][p2p] artifact nao encontrado na rede P2P, tentando download+cache packageId=%s", strings.TrimSpace(id))
+
+	output, dlErr := m.downloadAndCacheForP2P(ctx, id)
+	if dlErr == nil {
+		return output, nil
+	}
+	m.logf("[automation][p2p] download+cache falhou, fallback para winget direto packageId=%s motivo=%v", strings.TrimSpace(id), dlErr)
+
 	fallbackOut, fallbackErr := m.fallback.Install(ctx, id)
 	if fallbackErr != nil {
-		return fallbackOut, fmt.Errorf("p2p e winget falharam: p2p=%v; winget=%w", err, fallbackErr)
+		return fallbackOut, fmt.Errorf("p2p e winget falharam: p2p=%v; download+cache=%v; winget=%w", p2pErr, dlErr, fallbackErr)
 	}
 	return fallbackOut, nil
 }
@@ -47,14 +56,21 @@ func (m *automationPackageManagerRouter) Upgrade(ctx context.Context, id string)
 		return m.fallback.Upgrade(ctx, id)
 	}
 
-	output, err := m.installViaP2P(ctx, id)
-	if err == nil {
+	output, p2pErr := m.installViaP2P(ctx, id)
+	if p2pErr == nil {
 		return output, nil
 	}
-	m.logf("[automation][p2p] fallback para winget upgrade packageId=%s motivo=%v", strings.TrimSpace(id), err)
+	m.logf("[automation][p2p] artifact nao encontrado na rede P2P, tentando download+cache packageId=%s", strings.TrimSpace(id))
+
+	output, dlErr := m.downloadAndCacheForP2P(ctx, id)
+	if dlErr == nil {
+		return output, nil
+	}
+	m.logf("[automation][p2p] download+cache falhou, fallback para winget direto packageId=%s motivo=%v", strings.TrimSpace(id), dlErr)
+
 	fallbackOut, fallbackErr := m.fallback.Upgrade(ctx, id)
 	if fallbackErr != nil {
-		return fallbackOut, fmt.Errorf("p2p e winget falharam: p2p=%v; winget=%w", err, fallbackErr)
+		return fallbackOut, fmt.Errorf("p2p e winget falharam: p2p=%v; download+cache=%v; winget=%w", p2pErr, dlErr, fallbackErr)
 	}
 	return fallbackOut, nil
 }
@@ -141,6 +157,90 @@ func (m *automationPackageManagerRouter) resolveArtifactSource(ctx context.Conte
 	}
 
 	return "", "", fmt.Errorf("nenhum artifact P2P encontrado para packageId=%s (artifactID=%s)", packageID, artifactLookupID)
+}
+
+// downloadAndCacheForP2P baixa o instalador via winget download, publica no cache
+// P2P e executa a instalação a partir do arquivo local. Isso garante que o primeiro
+// agente que instalar um app se torne seed automaticamente para os demais.
+func (m *automationPackageManagerRouter) downloadAndCacheForP2P(ctx context.Context, packageID string) (string, error) {
+	packageID = strings.TrimSpace(packageID)
+	if packageID == "" {
+		return "", fmt.Errorf("packageId vazio")
+	}
+
+	artifactID := "winget:" + normalizePackageLookupKey(packageID)
+	if artifactID == "winget:" {
+		return "", fmt.Errorf("packageId invalido: %s", packageID)
+	}
+
+	wingetClient := m.fallback.Winget()
+	if wingetClient == nil {
+		return "", fmt.Errorf("winget client indisponivel")
+	}
+
+	// 1. Criar diretório temporário para o download
+	tmpDir, err := os.MkdirTemp("", "p2p-winget-download-*")
+	if err != nil {
+		return "", fmt.Errorf("falha ao criar diretorio temporario: %w", err)
+	}
+	defer func() {
+		if removeErr := os.RemoveAll(tmpDir); removeErr != nil {
+			m.logf("[automation][p2p] aviso: falha ao limpar diretorio temporario %s: %v", tmpDir, removeErr)
+		}
+	}()
+
+	// 2. Baixar o instalador via winget download
+	m.logf("[automation][p2p] baixando instalador via winget download packageId=%s", packageID)
+	if _, err := wingetClient.Download(ctx, packageID, tmpDir); err != nil {
+		return "", fmt.Errorf("winget download falhou: %w", err)
+	}
+
+	// 3. Encontrar o instalador (.exe ou .msi) no diretório de download
+	installerPath, err := findInstallerInDir(tmpDir)
+	if err != nil {
+		return "", fmt.Errorf("instalador nao encontrado no diretorio de download: %w", err)
+	}
+	m.logf("[automation][p2p] instalador encontrado: %s", installerPath)
+
+	// 4. Publicar no cache P2P para que outros agentes possam baixar
+	published, pubErr := m.app.p2pCoord.PublishFileWithID(installerPath, artifactID)
+	if pubErr != nil {
+		m.logf("[automation][p2p] aviso: falha ao publicar artifact no cache P2P: %v (instalacao continua)", pubErr)
+		// Fallback: instalar direto do tmpDir se a publicação falhar
+		return runLocalInstaller(ctx, installerPath)
+	}
+	m.logf("[automation][p2p] artifact publicado no cache P2P artifactID=%s artifactName=%s", artifactID, published.ArtifactName)
+
+	// 5. Instalar a partir da cópia persistente no P2P_Temp (não do tmpDir efêmero)
+	p2pInstallerPath := filepath.Join(m.app.p2pTempDir(), published.ArtifactName)
+	return runLocalInstaller(ctx, p2pInstallerPath)
+}
+
+// findInstallerInDir percorre recursivamente um diretório e retorna o caminho
+// do primeiro arquivo .exe ou .msi encontrado.
+func findInstallerInDir(dir string) (string, error) {
+	var found string
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		ext := strings.ToLower(filepath.Ext(path))
+		if ext == ".exe" || ext == ".msi" {
+			found = path
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	if found == "" {
+		return "", fmt.Errorf("nenhum .exe ou .msi encontrado em %s", dir)
+	}
+	return found, nil
 }
 
 func normalizePackageLookupKey(value string) string {
