@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -268,10 +269,87 @@ func runLocalInstaller(ctx context.Context, artifactPath string) (string, error)
 	case ".msi":
 		return executeHiddenProcess(ctx, timeout, "msiexec", []string{"/i", artifactPath, "/qn", "/norestart"})
 	case ".exe":
-		return executeHiddenProcess(ctx, timeout, artifactPath, []string{"/quiet", "/norestart"})
+		return runExeInstallerSilent(ctx, timeout, artifactPath)
 	default:
 		return "", fmt.Errorf("formato de instalador não suportado para P2P: %s", ext)
 	}
+}
+
+// installerType classifica o tipo de instalador .exe para aplicar os flags
+// silenciosos corretos. Cada framework de instalação tem sua própria sintaxe:
+//
+//	NSIS       → /S
+//	Inno Setup → /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+//	WiX Burn   → /quiet /norestart
+type installerType int
+
+const (
+	installerUnknown installerType = iota
+	installerNSIS
+	installerInno
+	installerWiX
+)
+
+// detectInstallerType inspeciona os primeiros 64 KB do binário em busca de
+// strings características de cada framework de instalação.
+func detectInstallerType(path string) installerType {
+	f, err := os.Open(path)
+	if err != nil {
+		return installerUnknown
+	}
+	defer f.Close()
+
+	// Lê até 64 KB — suficiente para cobrir headers e stubs de todos os frameworks.
+	buf := make([]byte, 64<<10)
+	n, readErr := f.Read(buf)
+	// io.EOF com n > 0 é sucesso: leu o arquivo inteiro (arquivo < 64 KB).
+	if readErr != nil && readErr != io.EOF {
+		return installerUnknown
+	}
+	if n == 0 {
+		return installerUnknown
+	}
+	content := string(buf[:n])
+
+	// NSIS: "Nullsoft" aparece no stub do instalador.
+	if strings.Contains(content, "Nullsoft") {
+		return installerNSIS
+	}
+	// Inno Setup: "Inno" + "Setup" aparecem no overlay.
+	if strings.Contains(content, "Inno") && strings.Contains(content, "Setup") {
+		return installerInno
+	}
+	// WiX Burn: "wixstdba" ou "WiX Burn" no bundle.
+	if strings.Contains(content, "wixstdba") || strings.Contains(content, "WiX Burn") {
+		return installerWiX
+	}
+	return installerUnknown
+}
+
+// runExeInstallerSilent executa um .exe com os flags silenciosos adequados
+// ao framework de instalação detectado.
+func runExeInstallerSilent(ctx context.Context, timeout time.Duration, artifactPath string) (string, error) {
+	kind := detectInstallerType(artifactPath)
+
+	var args []string
+	switch kind {
+	case installerNSIS:
+		args = []string{"/S"}
+	case installerInno:
+		args = []string{"/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"}
+	case installerWiX:
+		args = []string{"/quiet", "/norestart"}
+	default:
+		// Fallback: tenta /S (NSIS é o mais comum em installers Windows),
+		// depois /quiet se falhar.
+		output, err := executeHiddenProcess(ctx, timeout, artifactPath, []string{"/S"})
+		if err == nil {
+			return output, nil
+		}
+		return executeHiddenProcess(ctx, timeout, artifactPath, []string{"/quiet", "/norestart"})
+	}
+
+	return executeHiddenProcess(ctx, timeout, artifactPath, args)
 }
 
 func executeHiddenProcess(parent context.Context, timeout time.Duration, executable string, args []string) (string, error) {
