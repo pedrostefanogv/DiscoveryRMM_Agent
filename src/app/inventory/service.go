@@ -302,9 +302,33 @@ func (s *Service) Uninstall(id string) (string, error) {
 	if done != nil {
 		defer done()
 	}
-	s.logf("[uninstall " + id + "] " + time.Now().Format("15:04:05"))
-	out, err := s.apps.Uninstall(s.ctx(), id)
+
+	packageID := strings.TrimSpace(id)
+	if packageID == "" {
+		return "", fmt.Errorf("id do pacote é obrigatório")
+	}
+
+	s.logf("[uninstall " + packageID + "] " + time.Now().Format("15:04:05"))
+
+	allowed, err := s.resolveAllowed(s.ctx(), packageID)
+	if err != nil {
+		s.logf("[uninstall blocked] " + err.Error())
+		return "", err
+	}
+
+	var out string
+	switch normalizeAppStoreInstallationType(allowed.InstallationType) {
+	case string(appstore.InstallationWinget):
+		out, err = s.apps.Uninstall(s.ctx(), packageID)
+	case string(appstore.InstallationChocolatey):
+		out, err = s.runChocolatey(s.ctx(), "uninstall", packageID)
+	default:
+		err = fmt.Errorf("installationType %q não suportado", allowed.InstallationType)
+	}
 	s.logf(out)
+	if err == nil {
+		s.scheduleInventoryRefreshAfterPackageChange("uninstall", packageID)
+	}
 	return out, err
 }
 
@@ -645,6 +669,9 @@ func (s *Service) runChocolatey(ctx context.Context, operation, packageID string
 	}
 	if operation == "upgrade" {
 		args = []string{"upgrade", packageID, "-y", "--no-progress"}
+	}
+	if operation == "uninstall" {
+		args = []string{"uninstall", packageID, "-y", "--no-progress"}
 	}
 
 	runCtx := ctx
