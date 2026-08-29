@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -20,7 +21,42 @@ const (
 	// para não saturar o disco. 100 MB/s mantém throughput razoável com
 	// ~20-30% de headroom para outros processos.
 	p2pImportMaxBytesPerSec = 100 << 20 // 100 MB/s
+
+	// artifactMetaSuffix é a extensão do sidecar de metadata que armazena
+	// o artifactID original de um artifact publicado via PublishFileWithID.
+	// Ex.: "winget-mozillathunderbirdptbr.exe.meta" contém {"artifactId":"winget:mozillathunderbirdptbr"}.
+	artifactMetaSuffix = ".meta"
 )
+
+// artifactMeta representa o conteúdo do sidecar .meta.
+type artifactMeta struct {
+	ArtifactID string `json:"artifactId"`
+}
+
+// saveArtifactMeta persiste o artifactID original como sidecar .meta.
+func saveArtifactMeta(dir, targetName, artifactID string) error {
+	metaPath := filepath.Join(dir, targetName+artifactMetaSuffix)
+	data, err := json.Marshal(artifactMeta{ArtifactID: artifactID})
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(metaPath, data, 0o644)
+}
+
+// loadArtifactMeta lê o sidecar .meta e retorna o artifactID original.
+// Retorna "" se o sidecar não existir ou estiver corrompido.
+func loadArtifactMeta(dir, targetName string) string {
+	metaPath := filepath.Join(dir, targetName+artifactMetaSuffix)
+	data, err := os.ReadFile(metaPath)
+	if err != nil {
+		return ""
+	}
+	var m artifactMeta
+	if err := json.Unmarshal(data, &m); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(m.ArtifactID)
+}
 
 func (c *Coordinator) ListArtifacts() ([]P2PArtifactView, error) {
 	dir := c.deps.P2PTempDir()
@@ -44,6 +80,10 @@ func (c *Coordinator) ListArtifacts() ([]P2PArtifactView, error) {
 		if strings.HasSuffix(name, ".importing") {
 			continue
 		}
+		// Ignorar sidecars .meta — são metadados, não artifacts.
+		if strings.HasSuffix(name, artifactMetaSuffix) {
+			continue
+		}
 		path := filepath.Join(dir, name)
 		info, err := entry.Info()
 		if err != nil {
@@ -53,8 +93,15 @@ func (c *Coordinator) ListArtifacts() ([]P2PArtifactView, error) {
 		if err != nil {
 			continue
 		}
+		// Tenta recuperar o artifactID original do sidecar .meta.
+		// Se existir, usa o ID persistido (ex.: "winget:mozillathunderbirdptbr");
+		// caso contrário, deriva do nome do arquivo (fallback compatível).
+		artifactID := loadArtifactMeta(dir, name)
+		if artifactID == "" {
+			artifactID = CanonicalArtifactID("", name, "")
+		}
 		artifacts = append(artifacts, P2PArtifactView{
-			ArtifactID:       CanonicalArtifactID("", name, ""),
+			ArtifactID:       artifactID,
 			ArtifactName:     name,
 			Version:          "",
 			SizeBytes:        info.Size(),
@@ -82,6 +129,9 @@ func (c *Coordinator) DeleteArtifact(artifactName string) error {
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("falha ao remover arquivo: %w", err)
 	}
+
+	// Remove o sidecar .meta (metadados do artifactID original).
+	_ = os.Remove(path + artifactMetaSuffix)
 
 	// Remove o manifest cacheado.
 	if c.transferServer != nil {
@@ -250,6 +300,13 @@ func (c *Coordinator) PublishFileWithIDAndVersion(sourcePath string, artifactID 
 	c.mu.Lock()
 	c.metrics.PublishedArtifacts++
 	c.mu.Unlock()
+
+	// Salva sidecar .meta com o artifactID original para que ListArtifacts
+	// possa recuperar o ID correto (ex.: "winget:mozillathunderbirdptbr") em
+	// vez de derivar do nome do arquivo ("name:winget-mozillathunderbirdptbr.exe").
+	if err := saveArtifactMeta(dir, targetName, artifactID); err != nil {
+		c.deps.Log(fmt.Sprintf("[p2p] aviso: falha ao salvar sidecar .meta para %s: %v", targetName, err))
+	}
 
 	// Cacheia o manifest gerado durante a cópia (evita rebuildChunkManifest).
 	c.cacheManifestAfterSinglePass(targetName, manifest)
