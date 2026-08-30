@@ -254,11 +254,14 @@ func (s *Service) Install(id string) (string, error) {
 	s.logf("[install " + packageID + "] " + time.Now().Format("15:04:05"))
 	correlationID := fmt.Sprintf("appstore-install-%s-%d", sanitizeNotificationIDPart(packageID), time.Now().UnixNano())
 
-	s.emitInstallNotification(correlationID, packageID, "install_start", "download", "in_progress", "Instalação em andamento", "Baixando aplicativo...", nil)
-
+	// Um único install_start: emitir um evento por fase (download + instalacao)
+	// gerava dois toasts idênticos para o usuário. A fase de download é coberta
+	// pela própria execução do instalador (winget/chocolatey baixam e instalam
+	// em uma chamada), então consolidamos em uma notificação.
 	allowed, err := s.resolveAllowed(s.ctx(), packageID)
 	if err != nil {
 		s.logf("[install blocked] " + err.Error())
+		s.emitInstallNotification(correlationID, packageID, "install_start", "download", "in_progress", "Instalação em andamento", "Baixando aplicativo...", nil)
 		s.emitInstallNotification(correlationID, packageID, "install_failed", "precheck", "failed", "Instalação bloqueada", "Pacote não autorizado para este agente.", map[string]any{
 			"error": err.Error(),
 		})
@@ -267,7 +270,7 @@ func (s *Service) Install(id string) (string, error) {
 
 	// phase é um identifier técnico (não exibido ao usuário) — padronizado sem acento
 	// para evitar dependência de locale em comparações e logs.
-	s.emitInstallNotification(correlationID, packageID, "install_start", "instalacao", "in_progress", "Instalação em andamento", "Executando instalador...", nil)
+	s.emitInstallNotification(correlationID, packageID, "install_start", "instalacao", "in_progress", "Instalação em andamento", "Baixando e executando instalador...", nil)
 
 	var out string
 	switch normalizeAppStoreInstallationType(allowed.InstallationType) {

@@ -77,11 +77,12 @@ func loadCachedManifest(manifestDir, artifactName, artifactPath string) *P2PChun
 }
 
 // manifestMatchesFile verifica se um manifest é consistente com o arquivo em disco.
-// Valida tamanho, mtime e SHA256 do primeiro, do meio e do último chunk para detectar
-// arquivos sobrescritos com mesmo tamanho (ex.: robocopy /COPY:T, extratores que
-// preservam mtime). A validação por chunk é rápida (lê apenas 3 chunks) e cobre
-// o caso mais comum de stale cache: arquivo substituído por versão diferente.
-// Verificar 3 chunks (bordas + meio) reduz falsos positivos em instaladores
+// Valida tamanho, mtime e SHA256 de uma amostra de chunks (bordas, meio e
+// quartis) para detectar arquivos sobrescritos com mesmo tamanho (ex.:
+// robocopy /COPY:T, extratores que preservam mtime). A validação por chunk é
+// rápida (lê apenas ~5 chunks) e cobre o caso mais comum de stale cache:
+// arquivo substituído por versão diferente.
+// Verificar 5 chunks (bordas + quartis) reduz falsos positivos em instaladores
 // NSIS/Inno/WiX que frequentemente têm headers e footers idênticos entre
 // versões diferentes (ex.: stub Nullsoft, overlay Inno, bundle WiX).
 func manifestMatchesFile(manifest *P2PChunkManifest, path string) bool {
@@ -99,32 +100,21 @@ func manifestMatchesFile(manifest *P2PChunkManifest, path string) bool {
 	if manifest.SourceMTime > 0 && info.ModTime().UnixNano() != manifest.SourceMTime {
 		return false
 	}
-	// Validação rápida por chunk: verifica SHA256 do primeiro, do meio e do último chunk.
+	// Validação por amostragem de chunks: primeiro, último, meio e quartis.
 	// Se o arquivo foi substituído por outro de mesmo tamanho e mtime, os hashes
 	// dos chunks serão diferentes. Isso evita servir manifest stale que causa
 	// "checksum divergente" em 100% dos chunks no receiver.
-	// Verificar 3 chunks (bordas + meio) reduz falsos positivos em instaladores
-	// NSIS/Inno/WiX que frequentemente têm headers e footers idênticos entre
-	// versões diferentes (ex.: stub Nullsoft, overlay Inno, bundle WiX).
-	if len(manifest.Chunks) > 0 {
-		if !chunkFileHashMatchesRange(path, manifest.Chunks[0]) {
-			return false
-		}
-		// Último chunk (pode ser o mesmo que o primeiro se TotalChunks == 1).
-		last := manifest.Chunks[len(manifest.Chunks)-1]
-		if last.Index != manifest.Chunks[0].Index {
-			if !chunkFileHashMatchesRange(path, last) {
-				return false
+	if n := len(manifest.Chunks); n > 0 {
+		// Índices candidatos: primeiro, 25%, 50%, 75%, último (dedup).
+		candidateIdx := []int{0, n / 4, n / 2, (3 * n) / 4, n - 1}
+		seen := make(map[int]bool, len(candidateIdx))
+		for _, ci := range candidateIdx {
+			if ci < 0 || ci >= n || seen[ci] {
+				continue
 			}
-		}
-		// Chunk do meio: cobre o caso de instaladores com headers/footers
-		// idênticos mas payload diferente (ex.: versões diferentes do mesmo app).
-		if len(manifest.Chunks) > 2 {
-			mid := manifest.Chunks[len(manifest.Chunks)/2]
-			if mid.Index != manifest.Chunks[0].Index && mid.Index != last.Index {
-				if !chunkFileHashMatchesRange(path, mid) {
-					return false
-				}
+			seen[ci] = true
+			if !chunkFileHashMatchesRange(path, manifest.Chunks[ci]) {
+				return false
 			}
 		}
 	}

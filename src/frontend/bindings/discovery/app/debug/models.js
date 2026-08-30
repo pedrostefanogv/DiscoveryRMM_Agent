@@ -274,7 +274,7 @@ export class Config {
         if (/** @type {any} */(false)) {
             /**
              * @member
-             * @type {boolean | undefined}
+             * @type {boolean | null | undefined}
              */
             this["automationP2pWingetInstallEnabled"] = undefined;
         }

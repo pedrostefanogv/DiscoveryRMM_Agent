@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -322,13 +323,19 @@ func downloadChunkedLibp2p(
 						chunkIdx, totalChunks, attempt+1, maxChunkRetries, artifactName, peerShort, lastErr))
 				}
 
-				// Early abort: se o chunk 0 falhou em TODOS os peers disponíveis,
-				// o manifest está stale e todos os outros chunks também falharão.
-				// Cancela o contexto para abortar as demais goroutines imediatamente.
-				if chunkIdx == 0 && len(failedPeers) >= len(peers) {
+				// Early abort: se o chunk 0 falhou em TODOS os peers disponíveis
+				// com checksum divergente (assinatura inequívoca de manifest
+				// stale), todos os outros chunks também falharão. Cancela o
+				// contexto para abortar as demais goroutines imediatamente.
+				// Falhas transitórias (conexão fechada, timeout) NÃO disparam
+				// o abort — elas podem se resolver no retry ou no backoff, e
+				// abortar cedo demais mata downloads que só precisavam de
+				// outra tentativa (com 1 peer, a 1ª falha abortava tudo).
+				isChecksumMismatch := strings.Contains(lastErr.Error(), "checksum divergente")
+				if chunkIdx == 0 && isChecksumMismatch && len(failedPeers) >= len(peers) {
 					earlyAbortOnce.Do(func() {
 						if logf != nil {
-							logf(fmt.Sprintf("[p2p][chunk] EARLY ABORT: chunk 0 falhou em todos os %d peers para artifact=%s — manifest stale, cancelando download",
+							logf(fmt.Sprintf("[p2p][chunk] EARLY ABORT: chunk 0 falhou com checksum divergente em todos os %d peers para artifact=%s — manifest stale, cancelando download",
 								len(peers), artifactName))
 						}
 						abortCancel()
@@ -359,10 +366,18 @@ func downloadChunkedLibp2p(
 	var failedChunks int
 	var completedChunks int
 	totalChunks := len(manifest.Chunks)
+	// canceledCount rastreia chunks que falharam apenas por cancelamento do
+	// contexto (consequência do early abort ou do caller cancelar). São ruído:
+	// logar todos como ERROR gera dezenas de linhas que mascaram o erro real.
+	var canceledCount int
 	for res := range results {
 		if res.err != nil {
 			failedChunks++
-			if logf != nil {
+			isCanceled := errors.Is(res.err, context.Canceled) ||
+				strings.Contains(res.err.Error(), "context canceled")
+			if isCanceled {
+				canceledCount++
+			} else if logf != nil {
 				logf(fmt.Sprintf("[p2p][chunk] chunk %d/%d falhou para artifact=%s: %v", res.index, len(manifest.Chunks), artifactName, res.err))
 			}
 			if firstErr == nil {
@@ -381,6 +396,12 @@ func downloadChunkedLibp2p(
 		// Limpa o diretório de partes em falha para não acumular lixo
 		// (o GC de 1h só limparia depois).
 		_ = os.RemoveAll(partsDir)
+		// Resumo compacto: chunks cancelados são consequência do erro real
+		// (early abort ou cancelamento do caller), não falhas independentes.
+		if canceledCount > 0 && logf != nil {
+			logf(fmt.Sprintf("[p2p][chunk] %d/%d chunks cancelados (consequência do abort/cancelamento) para artifact=%s",
+				canceledCount, len(manifest.Chunks), artifactName))
+		}
 		return "", 0, fmt.Errorf("%d/%d chunks falharam; primeiro erro: %w",
 			failedChunks, len(manifest.Chunks), firstErr)
 	}

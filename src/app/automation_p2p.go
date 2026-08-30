@@ -174,6 +174,17 @@ func (m *automationPackageManagerRouter) downloadAndCacheForP2P(ctx context.Cont
 		return "", fmt.Errorf("packageId invalido: %s", packageID)
 	}
 
+	// Guarda anti-tempestade: se o artifact já existe no cache local com
+	// manifest válido, instala direto dele SEM republicar. Republicar o mesmo
+	// arquivo durante transferências de outros peers causa corrida
+	// (manifest substituído no meio do download → checksum divergente) e
+	// gera tempestade de publish/pull na rede quando a instalação falha e o
+	// ciclo se repete.
+	if existing := m.findLocalArtifactByID(artifactID); existing != "" {
+		m.logf("[automation][p2p] artifact já presente no cache local, instalando sem republicar artifactID=%s artifact=%s", artifactID, existing)
+		return runLocalInstaller(ctx, existing)
+	}
+
 	wingetClient := m.fallback.Winget()
 	if wingetClient == nil {
 		return "", fmt.Errorf("winget client indisponivel")
@@ -215,6 +226,33 @@ func (m *automationPackageManagerRouter) downloadAndCacheForP2P(ctx context.Cont
 	// 5. Instalar a partir da cópia persistente no P2P_Temp (não do tmpDir efêmero)
 	p2pInstallerPath := filepath.Join(m.app.p2pTempDir(), published.ArtifactName)
 	return runLocalInstaller(ctx, p2pInstallerPath)
+}
+
+// findLocalArtifactByID procura um artifact no cache P2P local pelo artifactID
+// e retorna o caminho completo do arquivo se ele existir com manifest válido.
+// Retorna "" se não encontrado ou inválido.
+func (m *automationPackageManagerRouter) findLocalArtifactByID(artifactID string) string {
+	if m.app == nil || m.app.p2pCoord == nil {
+		return ""
+	}
+	artifacts, err := m.app.ListP2PArtifacts()
+	if err != nil {
+		return ""
+	}
+	for _, a := range artifacts {
+		if !strings.EqualFold(strings.TrimSpace(a.ArtifactID), artifactID) {
+			continue
+		}
+		if !a.Available {
+			continue
+		}
+		path := filepath.Join(m.app.p2pTempDir(), a.ArtifactName)
+		if info, statErr := os.Stat(path); statErr != nil || info.IsDir() || info.Size() == 0 {
+			continue
+		}
+		return path
+	}
+	return ""
 }
 
 // findInstallerInDir percorre recursivamente um diretório e retorna o caminho

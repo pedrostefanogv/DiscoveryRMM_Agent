@@ -949,6 +949,13 @@ export class Metrics {
              */
             this["chunksDownloaded"] = 0;
         }
+        if (!("staleManifestDetected" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["staleManifestDetected"] = 0;
+        }
 
         Object.assign(this, $$source);
     }

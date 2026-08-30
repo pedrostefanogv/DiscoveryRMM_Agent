@@ -17,6 +17,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -327,11 +328,28 @@ func handleStreamArtifactGet(s network.Stream, transfer *TransferServer) {
 	}
 
 	// Reusa SHA256 do manifest cacheado em vez de recalcular o arquivo inteiro.
+	// IMPORTANTE: valida o manifest contra o arquivo atual (tamanho + mtime +
+	// hash de chunks de borda) antes de servir. Sem isso, um arquivo substituído
+	// (republicado) durante transferências em andamento faria o servidor servir
+	// bytes da versão nova enquanto o cliente valida contra hashes da versão
+	// antiga → checksum divergente em chunks aleatórios.
 	checksum := ""
 	if transfer != nil {
 		manifestDir := transfer.manifestDir()
 		if cached := loadCachedManifest(manifestDir, req.ArtifactName, path); cached != nil {
-			checksum = cached.SHA256
+			if manifestMatchesFile(cached, path) {
+				checksum = cached.SHA256
+			} else {
+				// Manifest stale: invalida para forçar regeneração no próximo
+				// serve-manifest e recalcula o checksum do arquivo atual.
+				if transfer.coord != nil && transfer.coord.deps != nil {
+					transfer.coord.deps.Log(fmt.Sprintf(
+						"[p2p][serve] manifest stale detectado no GET artifact=%s (mtime arquivo=%d) — invalidando cache",
+						req.ArtifactName, info.ModTime().UnixNano()))
+					transfer.coord.recordStaleManifest()
+				}
+				_ = os.Remove(cachedManifestPath(manifestDir, req.ArtifactName))
+			}
 		}
 	}
 	if checksum == "" {
@@ -731,7 +749,17 @@ func libp2pDownloadChunk(ctx context.Context, h host.Host, peerID peer.ID, artif
 	// Verificar hash do chunk.
 	if !verifySHA256(hasher.Sum(nil), chunk.SHA256) {
 		_ = os.Remove(tmpFile)
-		return fmt.Errorf("chunk %d: checksum divergente", chunk.Index)
+		// Diagnóstico: loga os prefixos dos hashes para identificar manifest
+		// stale (cliente valida contra hashes de versão antiga do arquivo).
+		gotShort := hex.EncodeToString(hasher.Sum(nil))
+		if len(gotShort) > 12 {
+			gotShort = gotShort[:12]
+		}
+		wantShort := chunk.SHA256
+		if len(wantShort) > 12 {
+			wantShort = wantShort[:12]
+		}
+		return fmt.Errorf("chunk %d: checksum divergente (esperado=%s obtido=%s)", chunk.Index, wantShort, gotShort)
 	}
 
 	if err := os.Rename(tmpFile, destFile); err != nil {

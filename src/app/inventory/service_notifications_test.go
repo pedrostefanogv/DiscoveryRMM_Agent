@@ -57,17 +57,14 @@ func TestInstall_NotificationsSuccessSequence(t *testing.T) {
 		t.Fatalf("unexpected output: %q", out)
 	}
 
-	if len(notifications) != 3 {
-		t.Fatalf("expected 3 notifications, got %d", len(notifications))
+	if len(notifications) != 2 {
+		t.Fatalf("expected 2 notifications, got %d", len(notifications))
 	}
-	if notifications[0].EventType != "install_start" || notifications[0].Metadata["phase"] != "download" {
-		t.Fatalf("expected first event install_start/download, got %q/%v", notifications[0].EventType, notifications[0].Metadata["phase"])
+	if notifications[0].EventType != "install_start" || notifications[0].Metadata["phase"] != "instalacao" {
+		t.Fatalf("expected first event install_start/instalacao, got %q/%v", notifications[0].EventType, notifications[0].Metadata["phase"])
 	}
-	if notifications[1].EventType != "install_start" || notifications[1].Metadata["phase"] != "instalacao" {
-		t.Fatalf("expected second event install_start/instalacao, got %q/%v", notifications[1].EventType, notifications[1].Metadata["phase"])
-	}
-	if notifications[2].EventType != "install_end" || notifications[2].Metadata["phase"] != "validacao" {
-		t.Fatalf("expected third event install_end/validacao, got %q/%v", notifications[2].EventType, notifications[2].Metadata["phase"])
+	if notifications[1].EventType != "install_end" || notifications[1].Metadata["phase"] != "validacao" {
+		t.Fatalf("expected second event install_end/validacao, got %q/%v", notifications[1].EventType, notifications[1].Metadata["phase"])
 	}
 }
 
@@ -123,8 +120,8 @@ func TestInstall_NotificationOnExecutionFailure(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error")
 	}
-	if len(notifications) != 3 {
-		t.Fatalf("expected 3 notifications, got %d", len(notifications))
+	if len(notifications) != 2 {
+		t.Fatalf("expected 2 notifications, got %d", len(notifications))
 	}
 	last := notifications[len(notifications)-1]
 	if last.EventType != "install_failed" {
