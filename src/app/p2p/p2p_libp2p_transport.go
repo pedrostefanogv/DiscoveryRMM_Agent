@@ -747,7 +747,10 @@ func libp2pDownloadChunk(ctx context.Context, h host.Host, peerID peer.ID, artif
 	}
 
 	// Verificar hash do chunk.
-	if !verifySHA256(hasher.Sum(nil), chunk.SHA256) {
+	// hasher.Sum(nil) já é o SHA256 do chunk — verifySHA256Hex compara o digest
+	// diretamente (a versão anterior re-hasheava o digest, causando falha em
+	// 100% dos chunks mesmo com dados íntegros).
+	if !verifySHA256Hex(hasher.Sum(nil), chunk.SHA256) {
 		_ = os.Remove(tmpFile)
 		// Diagnóstico: loga os prefixos dos hashes para identificar manifest
 		// stale (cliente valida contra hashes de versão antiga do arquivo).
@@ -852,5 +855,3 @@ func libp2pDownloadArtifact(ctx context.Context, h host.Host, peerID peer.ID, ac
 	_ = platform.EnsureWorldReadable(targetPath)
 	return targetPath, size, nil
 }
-
-// verifySHA256 verifica se data bate com o hex SHA256 esperado.

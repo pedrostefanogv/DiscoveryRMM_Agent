@@ -1,7 +1,6 @@
 package p2p
 
 import (
-	"crypto/sha256"
 	"encoding/hex"
 	"strings"
 	"sync"
@@ -9,10 +8,15 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
-// verifySHA256 verifica se data bate com o hex SHA256 esperado.
-func verifySHA256(data []byte, expected string) bool {
-	sum := sha256.Sum256(data)
-	got := hex.EncodeToString(sum[:])
+// verifySHA256Hex verifica se um digest SHA256 (já calculado, em bytes)
+// bate com o hex SHA256 esperado.
+//
+// IMPORTANTE: o caller em libp2pDownloadChunk passa hasher.Sum(nil) — o digest
+// já calculado do chunk. A versão anterior fazia sha256.Sum256(data), ou seja,
+// um DOUBLE-HASH (sha256 do sha256), fazendo 100% dos chunks falharem com
+// "checksum divergente" mesmo com dados íntegros (esperado == obtido no log).
+func verifySHA256Hex(digest []byte, expected string) bool {
+	got := hex.EncodeToString(digest)
 	return strings.EqualFold(got, strings.TrimSpace(expected))
 }
 
