@@ -479,6 +479,20 @@ func (c *Coordinator) publishFileSinglePass(sourcePath, targetPath, artifactName
 	// Emitir progresso final (100%).
 	c.emitPublishProgress(artifactName, totalSize, totalSize, true, "")
 
+	// Obtém o mtime do arquivo de DESTINO (após RenameAtomic), não do fonte.
+	// O SourceMTime deve refletir o arquivo que será servido, caso contrário
+	// manifestMatchesFile invalida o cache corretamente, mas se o mtime for 0
+	// (manifest antigo) ou coincidir por acaso, a validação cai para o check
+	// de primeiro/último chunk — que pode dar falso positivo em instaladores
+	// NSIS/Inno/WiX com headers e footers idênticos entre versões diferentes.
+	destInfo, statErr := os.Stat(targetPath)
+	if statErr != nil {
+		return "", P2PChunkManifest{}, fmt.Errorf("stat do arquivo destino apos rename: %w", statErr)
+	}
+	if destInfo.Size() != totalSize {
+		return "", P2PChunkManifest{}, fmt.Errorf("tamanho do arquivo destino divergente: esperado=%d obtido=%d", totalSize, destInfo.Size())
+	}
+
 	manifest = P2PChunkManifest{
 		ArtifactID:   CanonicalArtifactID("", artifactName, ""),
 		ArtifactName: artifactName,
@@ -486,7 +500,7 @@ func (c *Coordinator) publishFileSinglePass(sourcePath, targetPath, artifactName
 		ChunkSize:    chunkSize,
 		TotalChunks:  len(chunks),
 		SHA256:       hex.EncodeToString(fullHash.Sum(nil)),
-		SourceMTime:  srcInfo.ModTime().UnixNano(),
+		SourceMTime:  destInfo.ModTime().UnixNano(),
 		Chunks:       chunks,
 	}
 
