@@ -23,6 +23,11 @@ type Item struct {
 	Publisher           string            `json:"publisher"`
 	Version             string            `json:"version"`
 	InstallCommand      string            `json:"installCommand"`
+	// SilentCommand contém os switches silenciosos do manifesto winget
+	// (ex.: "/S /PreventRebootRequired=true"). Fallback: SilentWithProgress.
+	SilentCommand       string            `json:"silent"`
+	// SilentWithProgress contém os switches silenciosos com progresso (fallback de SilentCommand).
+	SilentWithProgress  string            `json:"silentWithProgress"`
 	InstallerURLsByArch map[string]string `json:"installerUrlsByArch"`
 	AutoUpdateEnabled   bool              `json:"autoUpdateEnabled"`
 	SourceScope         string            `json:"sourceScope"`

@@ -45,12 +45,24 @@ func (s *AppsService) Winget() WingetProvider {
 }
 
 func (s *AppsService) Install(ctx context.Context, id string) (string, error) {
+	return s.InstallWithSwitches(ctx, id, "", "")
+}
+
+// InstallWithSwitches instala usando os switches silenciosos do catálogo
+// (silent → silentWithProgress) quando o pacote é winget. Chocolatey ignora
+// os switches (usa -y próprio).
+func (s *AppsService) InstallWithSwitches(ctx context.Context, id, silent, silentWithProgress string) (string, error) {
 	manager, packageID, err := s.resolvePackageTarget(id)
 	if err != nil {
 		return "", err
 	}
 	if manager == packageManagerChocolatey {
 		return s.chocolatey.Install(ctx, packageID)
+	}
+	if wp, ok := s.winget.(interface {
+		InstallWithSwitches(context.Context, string, string, string) (string, error)
+	}); ok {
+		return wp.InstallWithSwitches(ctx, packageID, silent, silentWithProgress)
 	}
 	return s.winget.Install(ctx, packageID)
 }

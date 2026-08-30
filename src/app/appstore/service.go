@@ -291,8 +291,14 @@ func (s *Service) GetCatalogFromAppStore(ctx context.Context) (models.Catalog, e
 			Version:        strings.TrimSpace(item.Version),
 			Description:    strings.TrimSpace(item.Description),
 			InstallCommand: strings.TrimSpace(item.InstallCommand),
-			Category:       category,
-			Icon:           strings.TrimSpace(item.IconURL),
+			SilentCommand:  strings.TrimSpace(item.SilentCommand),
+			// Fallback: se Silent não veio do feed, usa SilentWithProgress.
+			SilentWithProgress: strings.TrimSpace(item.SilentWithProgress),
+			Category:           category,
+			Icon:               strings.TrimSpace(item.IconURL),
+		}
+		if appItem.SilentCommand == "" {
+			appItem.SilentCommand = appItem.SilentWithProgress
 		}
 		if appItem.Name == "" {
 			appItem.Name = appItem.ID

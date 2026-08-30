@@ -25,17 +25,33 @@ func NewClient(timeout time.Duration) *Client {
 }
 
 func (c *Client) Install(ctx context.Context, id string) (string, error) {
+	return c.InstallWithSwitches(ctx, id, "", "")
+}
+
+// InstallWithSwitches instala via winget anexando os switches silenciosos do
+// catálogo (campo "silent", fallback "silentWithProgress") via --custom.
+// --custom ADICIONA aos switches padrão do winget (preserva --accept-*-agreements),
+// ao contrário de --override que os substituiria. Switches vazios = comportamento padrão.
+func (c *Client) InstallWithSwitches(ctx context.Context, id, silent, silentWithProgress string) (string, error) {
 	if err := validateID(id); err != nil {
 		return "", err
 	}
-	return c.run(ctx,
+	sw := strings.TrimSpace(silent)
+	if sw == "" {
+		sw = strings.TrimSpace(silentWithProgress)
+	}
+	args := []string{
 		"install",
 		"--id", id,
 		"--silent",
 		"--scope", "machine",
 		"--accept-source-agreements",
 		"--accept-package-agreements",
-	)
+	}
+	if sw != "" {
+		args = append(args, "--custom", sw)
+	}
+	return c.run(ctx, args...)
 }
 
 func (c *Client) Uninstall(ctx context.Context, id string) (string, error) {

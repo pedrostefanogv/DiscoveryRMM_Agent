@@ -43,8 +43,12 @@ func newAutomationPackageManagerRouter(app *App, fallback *services.AppsService)
 }
 
 func (m *automationPackageManagerRouter) Install(ctx context.Context, id string) (string, error) {
+	// Switches silenciosos do catálogo da loja (silent → silentWithProgress).
+	// Usados tanto no instalador local (P2P) quanto no winget direto (--custom).
+	catSilent, catSilentWithProgress := m.catalogSilentSwitches(id)
+
 	if !m.shouldUseP2PForWingetInstall() {
-		return m.fallback.Install(ctx, id)
+		return m.fallback.InstallWithSwitches(ctx, id, catSilent, catSilentWithProgress)
 	}
 
 	output, p2pErr := m.installViaP2P(ctx, id)
@@ -55,7 +59,7 @@ func (m *automationPackageManagerRouter) Install(ctx context.Context, id string)
 		// O instalador já está em disco — re-baixar seria desperdício de banda.
 		// Vai direto ao winget install, que aplica as flags corretas do manifesto.
 		m.logf("[automation][p2p] instalador adquirido mas execução falhou, fallback para winget direto packageId=%s motivo=%v", strings.TrimSpace(id), p2pErr)
-		fallbackOut, fallbackErr := m.fallback.Install(ctx, id)
+		fallbackOut, fallbackErr := m.fallback.InstallWithSwitches(ctx, id, catSilent, catSilentWithProgress)
 		if fallbackErr != nil {
 			return fallbackOut, fmt.Errorf("p2p e winget falharam: p2p=%v; winget=%w", p2pErr, fallbackErr)
 		}
@@ -69,7 +73,7 @@ func (m *automationPackageManagerRouter) Install(ctx context.Context, id string)
 	}
 	m.logf("[automation][p2p] download+cache falhou, fallback para winget direto packageId=%s motivo=%v", strings.TrimSpace(id), dlErr)
 
-	fallbackOut, fallbackErr := m.fallback.Install(ctx, id)
+	fallbackOut, fallbackErr := m.fallback.InstallWithSwitches(ctx, id, catSilent, catSilentWithProgress)
 	if fallbackErr != nil {
 		return fallbackOut, fmt.Errorf("p2p e winget falharam: p2p=%v; download+cache=%v; winget=%w", p2pErr, dlErr, fallbackErr)
 	}
@@ -173,7 +177,8 @@ func (m *automationPackageManagerRouter) installViaP2P(ctx context.Context, pack
 	}
 
 	artifactPath := filepath.Join(m.app.p2pTempDir(), artifact)
-	output, err := runLocalInstaller(ctx, artifactPath)
+	catSilent, catSilentWithProgress := m.catalogSilentSwitches(packageID)
+	output, err := runLocalInstallerWithSwitches(ctx, artifactPath, catSilent, catSilentWithProgress)
 	if err != nil {
 		// Erro tipado: o artifact está em disco, apenas a execução falhou.
 		// O caller NÃO deve re-baixar — deve ir direto ao winget install.
@@ -235,7 +240,8 @@ func (m *automationPackageManagerRouter) downloadAndCacheForP2P(ctx context.Cont
 	// ciclo se repete.
 	if existing := m.findLocalArtifactByID(artifactID); existing != "" {
 		m.logf("[automation][p2p] artifact já presente no cache local, instalando sem republicar artifactID=%s artifact=%s", artifactID, existing)
-		output, err := runLocalInstaller(ctx, existing)
+		catSilent, catSilentWithProgress := m.catalogSilentSwitches(packageID)
+		output, err := runLocalInstallerWithSwitches(ctx, existing, catSilent, catSilentWithProgress)
 		if err != nil {
 			// Erro tipado: artifact em disco, execução falhou. O caller
 			// (Install/Upgrade) vai direto ao winget install sem re-baixar.
@@ -280,7 +286,8 @@ func (m *automationPackageManagerRouter) downloadAndCacheForP2P(ctx context.Cont
 		// Fallback: instalar direto do tmpDir se a publicação falhar.
 		// Erro tipado: instalador em disco, execução falhou → caller vai
 		// direto ao winget install sem re-baixar.
-		output, err := runLocalInstaller(ctx, installerPath)
+		catSilent, catSilentWithProgress := m.catalogSilentSwitches(packageID)
+		output, err := runLocalInstallerWithSwitches(ctx, installerPath, catSilent, catSilentWithProgress)
 		if err != nil {
 			return "", fmt.Errorf("%w: %v", errInstallerExec, err)
 		}
@@ -290,11 +297,37 @@ func (m *automationPackageManagerRouter) downloadAndCacheForP2P(ctx context.Cont
 
 	// 5. Instalar a partir da cópia persistente no P2P_Temp (não do tmpDir efêmero)
 	p2pInstallerPath := filepath.Join(m.app.p2pTempDir(), published.ArtifactName)
-	output, err := runLocalInstaller(ctx, p2pInstallerPath)
+	catSilent, catSilentWithProgress := m.catalogSilentSwitches(packageID)
+	output, err := runLocalInstallerWithSwitches(ctx, p2pInstallerPath, catSilent, catSilentWithProgress)
 	if err != nil {
 		return "", fmt.Errorf("%w: %v", errInstallerExec, err)
 	}
 	return output, nil
+}
+
+// catalogSilentSwitches busca os switches silenciosos do pacote no cache da
+// loja de aplicativos (silent → silentWithProgress). Retorna strings vazias
+// quando o pacote não está no catálogo ou não tem switches — nesse caso o
+// instalador cai na cascata heurística (comportamento anterior).
+// Nunca falha: erro de cache/loja é tratado como "sem switches".
+func (m *automationPackageManagerRouter) catalogSilentSwitches(packageID string) (string, string) {
+	if m.app == nil || m.app.appStoreSvc == nil {
+		return "", ""
+	}
+	item, err := m.app.appStoreSvc.ResolveAllowedPackage(m.app.ctx, packageID)
+	if err != nil {
+		// Pacote fora da política/loja: sem switches, usa cascata heurística.
+		return "", ""
+	}
+	silent := strings.TrimSpace(item.SilentCommand)
+	silentWithProgress := strings.TrimSpace(item.SilentWithProgress)
+	if silent == "" {
+		silent = silentWithProgress
+	}
+	if silent != "" {
+		m.logf("[automation][p2p] switches do catálogo disponíveis packageId=%s silent=%q silentWithProgress=%q", packageID, silent, silentWithProgress)
+	}
+	return silent, silentWithProgress
 }
 
 // findLocalArtifactByID procura um artifact no cache P2P local pelo artifactID
@@ -366,9 +399,18 @@ func normalizePackageLookupKey(value string) string {
 }
 
 // runLocalInstaller executa o instalador local (.msi/.exe) com flags silenciosas.
+// catalogSilent contém os switches vindos do catálogo da loja (campo "silent"),
+// que têm PRIORIDADE sobre a detecção heurística — elimina o "adivinhar".
 // Tenta uma cascata de flags conhecidas para .exe (NSIS, Inno Setup, WiX Burn,
 // InstallShield) até que uma tenha sucesso, logando qual funcionou.
 func runLocalInstaller(ctx context.Context, artifactPath string) (string, error) {
+	return runLocalInstallerWithSwitches(ctx, artifactPath, "", "")
+}
+
+// runLocalInstallerWithSwitches executa o instalador local (.msi/.exe) usando
+// os switches do catálogo como primeira tentativa (silent → silentWithProgress),
+// com fallback para a cascata heurística quando não houver switches ou falharem.
+func runLocalInstallerWithSwitches(ctx context.Context, artifactPath, silent, silentWithProgress string) (string, error) {
 	artifactPath = strings.TrimSpace(artifactPath)
 	if artifactPath == "" {
 		return "", fmt.Errorf("artifact path vazio")
@@ -377,9 +419,13 @@ func runLocalInstaller(ctx context.Context, artifactPath string) (string, error)
 	timeout := 20 * time.Minute
 	switch ext {
 	case ".msi":
+		// MSI: switches do catálogo substituem o padrão /qn /norestart quando presentes.
+		if sw := firstNonEmpty(silent, silentWithProgress); sw != "" {
+			return executeHiddenProcess(ctx, timeout, "msiexec", append([]string{"/i", artifactPath}, splitInstallerSwitches(sw)...))
+		}
 		return executeHiddenProcess(ctx, timeout, "msiexec", []string{"/i", artifactPath, "/qn", "/norestart"})
 	case ".exe":
-		return runExeInstallerSilent(ctx, timeout, artifactPath)
+		return runExeInstallerSilent(ctx, timeout, artifactPath, silent, silentWithProgress)
 	default:
 		return "", fmt.Errorf("formato de instalador não suportado para P2P: %s", ext)
 	}
@@ -458,24 +504,43 @@ func installerFlagCascade(kind installerType) [][]string {
 	}
 }
 
-// runExeInstallerSilent executa um .exe tentando a cascata de flags silenciosas
-// adequadas ao framework detectado (ou à cascata completa se desconhecido).
-// Para tipos detectados, tenta primeiro as flags do framework e depois as demais
-// da cascata completa — instaladores customizados às vezes contêm strings
-// enganosas (ex.: "Nullsoft" embutido) que fazem a detecção errar.
+// runExeInstallerSilent executa um .exe tentando, nesta ordem:
+// 1. switches silenciosos do catálogo (silent → silentWithProgress) — dados
+//    oficiais do manifesto winget, sem adivinhação;
+// 2. cascata heurística por framework detectado (NSIS/Inno/WiX/InstallShield);
+// 3. cascata completa.
 // Retorna a saída do primeiro conjunto de flags que teve sucesso.
-func runExeInstallerSilent(ctx context.Context, timeout time.Duration, artifactPath string) (string, error) {
+func runExeInstallerSilent(ctx context.Context, timeout time.Duration, artifactPath, silent, silentWithProgress string) (string, error) {
+	var lastOutput string
+	var lastErr error
+
+	// Prioridade 1: switches oficiais do catálogo (silent → silentWithProgress).
+	// São divididos em campos antes de passar ao processo (ex.: "/S /PreventReboot=true").
+	for _, candidate := range []struct {
+		name string
+		args string
+	}{{"silent", silent}, {"silentWithProgress", silentWithProgress}} {
+		sw := strings.TrimSpace(candidate.args)
+		if sw == "" {
+			continue
+		}
+		output, err := executeHiddenProcess(ctx, timeout, artifactPath, splitInstallerSwitches(sw))
+		if err == nil {
+			return fmt.Sprintf("[p2p-installer] switches do catálogo (%s) bem-sucedidos: %s\n%s", candidate.name, sw, output), nil
+		}
+		lastOutput, lastErr = output, err
+	}
+
+	// Fallback: cascata heurística por framework detectado (comportamento anterior).
 	kind := detectInstallerType(artifactPath)
 	cascade := installerFlagCascade(kind)
 
-	var lastOutput string
-	var lastErr error
 	for i, args := range cascade {
 		output, err := executeHiddenProcess(ctx, timeout, artifactPath, args)
 		if err == nil {
 			if i > 0 {
 				// Loga qual conjunto de flags funcionou (facilita diagnóstico).
-				return fmt.Sprintf("[p2p-installer] flags silenciosas bem-sucedidas: %s\n%s", strings.Join(args, " "), output), nil
+				return fmt.Sprintf("[p2p-installer] flags heurísticas bem-sucedidas: %s\n%s", strings.Join(args, " "), output), nil
 			}
 			return output, nil
 		}
@@ -483,6 +548,45 @@ func runExeInstallerSilent(ctx context.Context, timeout time.Duration, artifactP
 		lastErr = err
 	}
 	return lastOutput, fmt.Errorf("nenhum conjunto de flags silenciosas funcionou (último: %v): %w", cascade[len(cascade)-1], lastErr)
+}
+
+// splitInstallerSwitches divide a string de switches respeitando aspas
+// (ex.: INSTALLDIR="C:/Program Files/App" vira um único argumento).
+func splitInstallerSwitches(s string) []string {
+	var args []string
+	var cur strings.Builder
+	inQuote := false
+	hasToken := false
+	for _, r := range s {
+		switch {
+		case r == '"':
+			inQuote = !inQuote
+			hasToken = true
+		case r == ' ' && !inQuote:
+			if hasToken {
+				args = append(args, cur.String())
+				cur.Reset()
+				hasToken = false
+			}
+		default:
+			cur.WriteRune(r)
+			hasToken = true
+		}
+	}
+	if hasToken {
+		args = append(args, cur.String())
+	}
+	return args
+}
+
+// firstNonEmpty retorna a primeira string não vazia (após TrimSpace).
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if t := strings.TrimSpace(v); t != "" {
+			return t
+		}
+	}
+	return ""
 }
 
 // executeHiddenProcess executa um processo em background com janela oculta.

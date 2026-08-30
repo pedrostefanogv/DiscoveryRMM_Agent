@@ -17,9 +17,13 @@ type AppItem struct {
 	License        string   `json:"license"`
 	Tags           []string `json:"tags"`
 	InstallCommand string   `json:"installCommand"`
-	Category       string   `json:"category"`
-	Icon           string   `json:"icon"`
-	LastUpdated    string   `json:"lastUpdated"`
+	// SilentCommand contém os switches silenciosos vindos do catálogo
+	// (ex.: "/S /PreventRebootRequired=true"). Fallback: SilentWithProgress.
+	SilentCommand      string   `json:"silent,omitempty"`
+	SilentWithProgress string   `json:"silentWithProgress"`
+	Category           string   `json:"category"`
+	Icon               string   `json:"icon"`
+	LastUpdated        string   `json:"lastUpdated"`
 }
 
 // UpgradeItem represents a single package with a pending update.
