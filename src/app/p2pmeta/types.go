@@ -171,6 +171,7 @@ type Metrics struct {
 	CatalogRefreshRuns    int   `json:"catalogRefreshRuns"`
 	ChunkedDownloads      int   `json:"chunkedDownloads"`
 	ChunksDownloaded      int64 `json:"chunksDownloaded"`
+	StaleManifestDetected int   `json:"staleManifestDetected"`
 }
 
 // HostLoad descreve capacidade e carga atual do host para eleição de fetcher e paralelismo dinâmico.

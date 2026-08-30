@@ -100,6 +100,25 @@ func (c *Coordinator) ListArtifacts() ([]P2PArtifactView, error) {
 		if artifactID == "" {
 			artifactID = CanonicalArtifactID("", name, "")
 		}
+
+		// Health check do manifest cacheado: se o manifest existe mas não
+		// corresponde mais ao arquivo (ex.: arquivo substituído por versão
+		// diferente com mesmo nome/tamanho), invalida o cache para forçar
+		// regeneração no próximo serve. Evita anunciar artifact com manifest
+		// stale que causaria "checksum divergente" nos peers.
+		if c.transferServer != nil {
+			manifestDir := c.transferServer.manifestDir()
+			if manifestDir != "" {
+				if cached := loadCachedManifest(manifestDir, name, path); cached != nil {
+					if !manifestMatchesFile(cached, path) {
+						_ = os.Remove(cachedManifestPath(manifestDir, name))
+						c.recordStaleManifest()
+						c.deps.Log(fmt.Sprintf("[p2p][health] manifest stale detectado em ListArtifacts: %s — cache invalidado", name))
+					}
+				}
+			}
+		}
+
 		artifacts = append(artifacts, P2PArtifactView{
 			ArtifactID:       artifactID,
 			ArtifactName:     name,

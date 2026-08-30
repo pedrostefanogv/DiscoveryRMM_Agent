@@ -65,6 +65,78 @@ func (c *Coordinator) DownloadArtifactFromPeer(ctx context.Context, artifactName
 			return P2PArtifactView{}, err
 		}
 
+		// Cross-peer validation: busca manifest de outros peers que possuem o
+		// mesmo artifact e compara SHA256. Se houver divergência, usa o
+		// majoritário e invalida os peers com versão divergente (manifest stale).
+		// Isso evita baixar chunks de um peer com arquivo corrompido/substituído.
+		avail := c.FindArtifactPeers(artifactName)
+		if avail.Found && len(avail.PeerAgentIDs) > 1 {
+			manifestVotes := map[string]int{manifest.SHA256: 1}
+			manifestByPeer := map[string]P2PChunkManifest{sourcePeerID: manifest}
+			for _, otherPeerID := range avail.PeerAgentIDs {
+				if otherPeerID == sourcePeerID {
+					continue
+				}
+				otherPID, ok := registry.Lookup(otherPeerID)
+				if !ok {
+					continue
+				}
+				otherManifest, otherErr := libp2pFetchManifest(ctx, h, otherPID, artifactName, requesterID)
+				if otherErr != nil || otherManifest.TotalChunks == 0 {
+					c.InvalidatePeerArtifact(otherPeerID, artifactName)
+					continue
+				}
+				if vErr := validateDownloadManifest(&otherManifest); vErr != nil {
+					c.InvalidatePeerArtifact(otherPeerID, artifactName)
+					continue
+				}
+				manifestVotes[otherManifest.SHA256]++
+				manifestByPeer[otherPeerID] = otherManifest
+			}
+			// Encontra o SHA256 majoritário.
+			var majoritySHA string
+			var maxVotes int
+			for sha, votes := range manifestVotes {
+				if votes > maxVotes {
+					maxVotes = votes
+					majoritySHA = sha
+				}
+			}
+			// Se o manifest do peer principal diverge do majoritário, troca.
+			if majoritySHA != "" && !strings.EqualFold(manifest.SHA256, majoritySHA) {
+				shaShort := manifest.SHA256
+				majShort := majoritySHA
+				if len(shaShort) > 16 {
+					shaShort = shaShort[:16]
+				}
+				if len(majShort) > 16 {
+					majShort = majShort[:16]
+				}
+				c.deps.Log(fmt.Sprintf("[p2p][cross-peer] manifest divergente artifact=%s peer=%s sha=%s majority=%s votes=%d — usando majoritario",
+					artifactName, sourcePeerID, shaShort, majShort, maxVotes))
+				c.InvalidatePeerArtifact(sourcePeerID, artifactName)
+				c.recordStaleManifest()
+				// Encontra um peer com o manifest majoritário.
+				for agentID, m := range manifestByPeer {
+					if strings.EqualFold(m.SHA256, majoritySHA) {
+						manifest = m
+						sourcePeerID = agentID
+						if lpID, ok := registry.Lookup(agentID); ok {
+							peerID = lpID
+						}
+						break
+					}
+				}
+			}
+			// Invalida peers com versão divergente.
+			for pid, m := range manifestByPeer {
+				if !strings.EqualFold(m.SHA256, majoritySHA) {
+					c.InvalidatePeerArtifact(pid, artifactName)
+					c.recordStaleManifest()
+				}
+			}
+		}
+
 		destDir := c.deps.P2PTempDir()
 		sched := newP2PChunkScheduler()
 		lp2pPeers := []libp2pPeer{{agentID: sourcePeerID, peerID: peerID}}
@@ -104,6 +176,16 @@ func (c *Coordinator) DownloadArtifactFromPeer(ctx context.Context, artifactName
 			})
 		unlock()
 		if err != nil {
+			// Se o erro for de checksum divergente, o peer está servindo um
+			// manifest stale (arquivo substituído por versão diferente com
+			// mesmo nome/tamanho). Invalida o artifact do peer para forçar
+			// re-fetch do manifest em futuras tentativas.
+			if strings.Contains(err.Error(), "checksum divergente") {
+				c.InvalidatePeerArtifact(sourcePeerID, artifactName)
+				c.recordStaleManifest()
+				c.deps.Log(fmt.Sprintf("[p2p][audit] status=stale-cache action=pull artifact=%s peer=%s source=libp2p msg=manifest stale detectado por checksum divergente; peer invalidado",
+					artifactName, sourcePeerID))
+			}
 			c.appendAudit("pull", artifactName, sourcePeerID, "libp2p", false, err.Error())
 			c.emitTransferDone(artifactName, sourcePeerID, "pull", err)
 			return P2PArtifactView{}, err
@@ -289,6 +371,16 @@ func (c *Coordinator) DownloadArtifactSwarm(ctx context.Context, artifactName st
 		})
 	unlock()
 	if err != nil {
+		// Se o erro for de checksum divergente, invalida todos os peers do swarm
+		// que podem estar servindo manifest stale.
+		if strings.Contains(err.Error(), "checksum divergente") {
+			for _, pe := range peerEntries {
+				c.InvalidatePeerArtifact(pe.peerID, artifactName)
+			}
+			c.recordStaleManifest()
+			c.deps.Log(fmt.Sprintf("[p2p][audit] status=stale-cache action=swarm-pull artifact=%s peers=%d source=automation msg=manifest stale detectado por checksum divergente; %d peers invalidados",
+				artifactName, len(peerEntries), len(peerEntries)))
+		}
 		c.appendAudit("swarm-pull", artifactName, "", "automation", false, err.Error())
 		c.emitTransferDone(artifactName, fmt.Sprintf("%d peers", len(peerEntries)), "swarm-pull", err)
 		return P2PArtifactView{}, err

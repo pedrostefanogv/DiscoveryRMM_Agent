@@ -240,16 +240,33 @@ func handleStreamArtifactManifest(s network.Stream, transfer *TransferServer) {
 
 	// Tentar cache de manifest primeiro. Valida com manifestMatchesFile para
 	// garantir que o manifest corresponde ao arquivo atual em disco (tamanho +
-	// mtime). Sem essa validação, um artifact republicado com o mesmo nome
-	// serviria um manifest stale com offsets/hashes da versão antiga, fazendo
-	// o receiver validar chunks contra hashes errados (checksum divergente).
+	// mtime + hash dos chunks de borda). Sem essa validação, um artifact
+	// republicado com o mesmo nome serviria um manifest stale com offsets/hashes
+	// da versão antiga, fazendo o receiver validar chunks contra hashes errados
+	// (checksum divergente).
 	manifestDir := filepath.Join(tempDir, manifestDirName)
 	if cached := loadCachedManifest(manifestDir, req.ArtifactName, path); cached != nil {
 		if manifestMatchesFile(cached, path) {
+			if transfer != nil && transfer.coord != nil && transfer.coord.deps != nil {
+				shaShort := cached.SHA256
+				if len(shaShort) > 16 {
+					shaShort = shaShort[:16]
+				}
+				transfer.coord.deps.Log(fmt.Sprintf(
+					"[p2p][serve-manifest] cache hit artifact=%s chunks=%d size=%d mtime=%d sha256=%s",
+					req.ArtifactName, cached.TotalChunks, cached.TotalSize, cached.SourceMTime, shaShort))
+			}
 			_ = json.NewEncoder(s).Encode(cached)
 			return
 		}
 		// Cache stale: invalida e regenera abaixo.
+		if transfer != nil && transfer.coord != nil && transfer.coord.deps != nil {
+			transfer.coord.deps.Log(fmt.Sprintf(
+				"[p2p][serve-manifest] cache stale artifact=%s — invalidando e regenerando", req.ArtifactName))
+		}
+		if transfer != nil && transfer.coord != nil {
+			transfer.coord.recordStaleManifest()
+		}
 		_ = os.Remove(cachedManifestPath(manifestDir, req.ArtifactName))
 	}
 

@@ -48,14 +48,38 @@ func newP2PChunkScheduler() *p2pChunkScheduler {
 // pickPeer selects the peer with the fewest recorded errors.
 // Falls back to round-robin when error counts are equal (e.g. first request).
 func (s *p2pChunkScheduler) pickPeer(chunkIdx int, peers []libp2pPeer) libp2pPeer {
+	return s.pickPeerExcluding(chunkIdx, peers, nil)
+}
+
+// pickPeerExcluding selects the peer with the fewest recorded errors,
+// excluding peers whose peerID is in the exclude set. This ensures retries
+// try a different peer instead of repeating against the same failing peer.
+// If all peers are excluded, falls back to the original pickPeer behavior.
+func (s *p2pChunkScheduler) pickPeerExcluding(chunkIdx int, peers []libp2pPeer, exclude map[string]bool) libp2pPeer {
 	if len(peers) == 1 {
 		return peers[0]
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	best := peers[chunkIdx%len(peers)]
+
+	// Filtra peers não excluídos.
+	candidates := peers
+	if len(exclude) > 0 {
+		filtered := make([]libp2pPeer, 0, len(peers))
+		for _, p := range peers {
+			if !exclude[p.peerID.String()] {
+				filtered = append(filtered, p)
+			}
+		}
+		if len(filtered) > 0 {
+			candidates = filtered
+		}
+		// Se todos foram excluídos, usa a lista original (fallback).
+	}
+
+	best := candidates[chunkIdx%len(candidates)]
 	bestErr := s.errorCounts[best.peerID.String()]
-	for _, p := range peers {
+	for _, p := range candidates {
 		if e := s.errorCounts[p.peerID.String()]; e < bestErr {
 			bestErr = e
 			best = p
@@ -214,6 +238,12 @@ func downloadChunkedLibp2p(
 		maxParallel = minParallelChunks
 	}
 
+	// Contexto derivado para early abort: se o chunk 0 falhar em TODOS os peers,
+	// o manifest está stale e todos os outros chunks também falharão. Cancelar
+	// imediatamente evita dezenas de tentativas inúteis.
+	abortCtx, abortCancel := context.WithCancel(ctx)
+	defer abortCancel()
+
 	partsDir := filepath.Join(destDir, manifest.ArtifactName+".parts")
 	if err := os.MkdirAll(partsDir, 0o755); err != nil {
 		return "", 0, err
@@ -223,6 +253,10 @@ func downloadChunkedLibp2p(
 		index int
 		err   error
 	}
+
+	// earlyAbortOnce garante que o cancelamento seja disparado uma única vez
+	// quando o chunk 0 falhar em todos os peers.
+	var earlyAbortOnce sync.Once
 
 	sem := make(chan struct{}, maxParallel)
 	results := make(chan chunkResult, len(manifest.Chunks))
@@ -236,8 +270,8 @@ func downloadChunkedLibp2p(
 			// for cancelado enquanto espera (cancelamento imediato).
 			select {
 			case sem <- struct{}{}:
-			case <-ctx.Done():
-				results <- chunkResult{index: i, err: ctx.Err()}
+			case <-abortCtx.Done():
+				results <- chunkResult{index: i, err: abortCtx.Err()}
 				return
 			}
 			defer func() { <-sem }()
@@ -259,11 +293,15 @@ func downloadChunkedLibp2p(
 
 			// Retry loop: tenta o chunk até maxChunkRetries vezes com backoff.
 			var lastErr error
+			// Rastreia peers que já falharam para este chunk específico,
+			// forçando round-robin entre peers disponíveis nos retries.
+			failedPeers := make(map[string]bool)
 			for attempt := 0; attempt < maxChunkRetries; attempt++ {
-				// Pick peer considerando erros acumulados em tentativas anteriores.
-				lp := sched.pickPeer(i, peers)
+				// Pick peer considerando erros acumulados em tentativas anteriores
+				// e excluindo peers que já falharam para este chunk.
+				lp := sched.pickPeerExcluding(i, peers, failedPeers)
 
-				lastErr = libp2pDownloadChunk(ctx, h, lp.peerID, artifactName, requesterID, chunk, chunkFile, func(readSoFar, total int64) {
+				lastErr = libp2pDownloadChunk(abortCtx, h, lp.peerID, artifactName, requesterID, chunk, chunkFile, func(readSoFar, total int64) {
 					if onChunkProgress != nil {
 						onChunkProgress(chunkIdx, readSoFar, chunkSize, totalChunks)
 					}
@@ -274,16 +312,35 @@ func downloadChunkedLibp2p(
 					return
 				}
 				sched.recordError(lp.peerID)
+				failedPeers[lp.peerID.String()] = true
 				if logf != nil {
-					logf(fmt.Sprintf("[p2p][chunk] chunk %d/%d tentativa %d/%d falhou para artifact=%s: %v",
-						chunkIdx, totalChunks, attempt+1, maxChunkRetries, artifactName, lastErr))
+					peerShort := lp.peerID.String()
+					if len(peerShort) > 12 {
+						peerShort = peerShort[:12]
+					}
+					logf(fmt.Sprintf("[p2p][chunk] chunk %d/%d tentativa %d/%d falhou para artifact=%s peer=%s: %v",
+						chunkIdx, totalChunks, attempt+1, maxChunkRetries, artifactName, peerShort, lastErr))
 				}
+
+				// Early abort: se o chunk 0 falhou em TODOS os peers disponíveis,
+				// o manifest está stale e todos os outros chunks também falharão.
+				// Cancela o contexto para abortar as demais goroutines imediatamente.
+				if chunkIdx == 0 && len(failedPeers) >= len(peers) {
+					earlyAbortOnce.Do(func() {
+						if logf != nil {
+							logf(fmt.Sprintf("[p2p][chunk] EARLY ABORT: chunk 0 falhou em todos os %d peers para artifact=%s — manifest stale, cancelando download",
+								len(peers), artifactName))
+						}
+						abortCancel()
+					})
+				}
+
 				// Backoff: 1s, 2s, 4s entre tentativas.
 				if attempt < maxChunkRetries-1 {
 					delay := chunkRetryBaseDelay * (1 << attempt)
 					select {
-					case <-ctx.Done():
-						results <- chunkResult{index: i, err: ctx.Err()}
+					case <-abortCtx.Done():
+						results <- chunkResult{index: i, err: abortCtx.Err()}
 						return
 					case <-time.After(delay):
 					}
@@ -407,6 +464,33 @@ func chunkFileHashMatches(path, expectedSHA256 string) bool {
 		return false
 	}
 	return strings.EqualFold(hex.EncodeToString(h.Sum(nil)), expectedSHA256)
+}
+
+// chunkFileHashMatchesRange verifica se o range [chunk.Offset, chunk.Offset+chunk.Size)
+// de um arquivo em disco tem o SHA256 esperado. Usado pelo manifestMatchesFile para
+// validar que o manifest cacheado ainda corresponde ao arquivo (detecta stale cache
+// quando o arquivo foi substituído por outro de mesmo tamanho e mtime).
+// Lê apenas o range do chunk, não o arquivo inteiro — rápido mesmo para arquivos grandes.
+func chunkFileHashMatchesRange(path string, chunk P2PChunk) bool {
+	if strings.TrimSpace(chunk.SHA256) == "" {
+		return false
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	if chunk.Offset > 0 {
+		if _, err := f.Seek(chunk.Offset, io.SeekStart); err != nil {
+			return false
+		}
+	}
+	h := sha256.New()
+	written, err := io.CopyN(h, f, chunk.Size)
+	if err != nil || written != chunk.Size {
+		return false
+	}
+	return strings.EqualFold(hex.EncodeToString(h.Sum(nil)), chunk.SHA256)
 }
 
 // validateDownloadManifest valida a consistência interna de um manifest ANTES

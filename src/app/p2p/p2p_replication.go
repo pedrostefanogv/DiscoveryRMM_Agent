@@ -89,6 +89,15 @@ func (c *Coordinator) recordBytesDownloaded(size int64) {
 	c.mu.Unlock()
 }
 
+// recordStaleManifest incrementa o contador de manifests stale detectados.
+// Usado para monitorar a frequência do problema em produção e avaliar a
+// eficácia das correções de validação de cache.
+func (c *Coordinator) recordStaleManifest() {
+	c.mu.Lock()
+	c.metrics.StaleManifestDetected++
+	c.mu.Unlock()
+}
+
 func (c *Coordinator) enqueueReplicationJob(job p2pReplicationJob) error {
 	job.ArtifactName = SanitizeArtifactName(job.ArtifactName)
 	job.Checksum = strings.TrimSpace(job.Checksum)
