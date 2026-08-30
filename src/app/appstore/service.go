@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"discovery/app/core/database"
@@ -18,9 +19,14 @@ import (
 )
 
 const (
-	CacheKey       = "app_store_effective"
-	MemoryCacheTTL = 2 * time.Minute
-	SQLiteCacheTTL = 30 * 24 * time.Hour
+	CacheKey = "app_store_effective"
+	// MemoryCacheTTL define por quanto tempo a política fica válida em memória.
+	// 30 minutos evita sobrecarregar o servidor com fetches frequentes; o cache
+	// persistido em SQLite cobre o período entre expirações e reinícios.
+	MemoryCacheTTL = 30 * time.Minute
+	// SQLiteCacheTTL define por quanto tempo a política persistida no SQLite
+	// permanece válida (7 dias). Após expirar, um novo fetch é feito.
+	SQLiteCacheTTL = 7 * 24 * time.Hour
 )
 
 // DebugConfig é uma visão mínima da configuração de debug usada pela app-store.
@@ -60,6 +66,12 @@ type Service struct {
 	logf                  func(string)
 	db                    func() *database.DB
 	cache                 *PolicyCache
+
+	// fetchMu serializa o fetch remoto: quando o cache expira, múltiplas
+	// goroutines (catálogo, validação de pacote, etc.) podem disparar
+	// LoadEffectivePolicy ao mesmo tempo. Sem serialização, cada uma faria
+	// seu próprio download (stampede), sobrecarregando o servidor API.
+	fetchMu sync.Mutex
 }
 
 // New cria um AppStoreService.
@@ -218,6 +230,18 @@ func (s *Service) LoadEffectivePolicy(ctx context.Context, forceRefresh bool) (E
 				s.cache.Set(persisted)
 				return persisted, nil
 			}
+		}
+	}
+
+	// Singleflight: apenas uma goroutine faz o fetch remoto por vez. As demais
+	// esperam e reavaliam o cache — se a primeira já populou, retornam dela
+	// sem tocar no servidor.
+	s.fetchMu.Lock()
+	defer s.fetchMu.Unlock()
+
+	if !forceRefresh {
+		if cached, ok := s.cache.Get(MemoryCacheTTL); ok {
+			return cached, nil
 		}
 	}
 
