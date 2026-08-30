@@ -32,6 +32,11 @@ type rpcError struct {
 
 // ----- Server ---------------------------------------------------------------
 
+// maxConcurrentToolCalls limita quantas tools podem executar simultaneamente
+// no servidor stdio MCP. Tools pesadas (install_package, upgrade_all) não
+// devem rodar em paralelo no mesmo host.
+const maxConcurrentToolCalls = 2
+
 // Server is a stdio-based MCP server.
 type Server struct {
 	registry *Registry
@@ -55,6 +60,8 @@ func NewServer(reg *Registry, info ServerInfo) *Server {
 // Cada request é processado em uma goroutine própria para que uma tool lenta
 // (ex.: install_package) não bloqueie requisições subsequentes (ex.: ping).
 // As respostas são serializadas por um canal para não intercalar writes em w.
+// Um semáforo limita as tools executando simultaneamente (evita, por exemplo,
+// dois install_package pesados rodando em paralelo no mesmo host).
 func (s *Server) Run(ctx context.Context, r io.Reader, w io.Writer) error {
 	scanner := bufio.NewScanner(r)
 	// Allow lines up to 10 MB for large results.
@@ -69,12 +76,22 @@ func (s *Server) Run(ctx context.Context, r io.Reader, w io.Writer) error {
 			s.writeJSON(w, resp)
 		}
 	}()
-	defer close(respCh)
+
+	// runDone é cancelado quando Run sai, garantindo que goroutines de request
+	// pendentes não façam send em respCh já fechado (panic "send on closed").
+	runCtx, cancelRun := context.WithCancel(ctx)
+	defer cancelRun()
+
+	// Semáforo: máximo de tools em execução simultânea. Requests além do limite
+	// esperam sua vez antes de executar o handler (o loop de leitura continua).
+	sem := make(chan struct{}, maxConcurrentToolCalls)
 
 	for scanner.Scan() {
 		select {
-		case <-ctx.Done():
-			return ctx.Err()
+		case <-runCtx.Done():
+			close(respCh)
+			<-writerDone
+			return runCtx.Err()
 		default:
 		}
 
@@ -91,7 +108,7 @@ func (s *Server) Run(ctx context.Context, r io.Reader, w io.Writer) error {
 
 		// Notificações não têm resposta — processa inline (baratas).
 		if req.ID == nil {
-			if resp := s.handle(ctx, req); resp != nil {
+			if resp := s.handle(runCtx, req); resp != nil {
 				respCh <- resp
 			}
 			continue
@@ -99,17 +116,30 @@ func (s *Server) Run(ctx context.Context, r io.Reader, w io.Writer) error {
 
 		// Request real: executa em goroutine para não bloquear o loop de leitura.
 		go func(req jsonrpcRequest) {
-			resp := s.handle(ctx, req)
+			defer func() {
+				<-sem // libera a vaga (no-op se não adquiriu)
+			}()
+			// Adquire vaga antes de executar o handler; desiste se Run sair.
+			select {
+			case sem <- struct{}{}:
+			case <-runCtx.Done():
+				return
+			}
+			resp := s.handle(runCtx, req)
 			if resp == nil {
 				return // notification — no response
 			}
 			select {
 			case respCh <- resp:
-			case <-ctx.Done():
+			case <-runCtx.Done():
 			}
 		}(req)
 	}
 	err := scanner.Err()
+	// Fecha o canal ANTES de esperar o writer (fechar via defer causaria
+	// deadlock: writerDone só fecha depois de close(respCh), que só rodaria
+	// após o return — bloqueado aqui).
+	close(respCh)
 	<-writerDone
 	return err
 }

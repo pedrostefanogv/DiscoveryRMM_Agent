@@ -243,6 +243,9 @@ function onStreamError(errMsg) {
     chatStopRequested = false;
     setChatBusy(false);
     if (chatInputEl) chatInputEl.focus();
+    // Ação A2UI pendente não deve "vazar" para a próxima mensagem digitada:
+    // processa agora que o chat está livre (mesmo após stop).
+    maybeProcessPendingA2uiAction();
     return;
   }
 
@@ -264,6 +267,9 @@ function onStreamError(errMsg) {
   }
   setChatBusy(false);
   if (chatInputEl) chatInputEl.focus();
+  // Processa ação A2UI pendente também após erro de stream (evita vazamento
+  // da ação para a próxima mensagem digitada).
+  maybeProcessPendingA2uiAction();
 }
 
 function onStreamStopped() {
@@ -277,6 +283,8 @@ function onStreamStopped() {
   chatStopRequested = false;
   setChatBusy(false);
   if (chatInputEl) chatInputEl.focus();
+  // Processa ação A2UI pendente também após stop manual.
+  maybeProcessPendingA2uiAction();
 }
 
 // ─── Mini-Questionário Interativo (ask_user MCP) ───

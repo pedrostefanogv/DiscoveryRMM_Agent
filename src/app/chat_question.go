@@ -3,6 +3,7 @@ package app
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -90,11 +91,6 @@ func (a *App) AskUser(question, optionsJSON, allowTextRaw string) (string, error
 
 	answerCh := registerQuestionChannel(id)
 
-	// Lock to prevent concurrent questions
-	pendingQuestionsMu.Lock()
-	pendingQuestions[id] = answerCh
-	pendingQuestionsMu.Unlock()
-
 	// Emit event to the frontend
 	qJSON, _ := json.Marshal(q)
 	a.EmitEvent("chat:question", string(qJSON))
@@ -121,7 +117,10 @@ func (a *App) AskUser(question, optionsJSON, allowTextRaw string) (string, error
 func (a *App) AnswerChatQuestion(questionID, answer string) {
 	ch := takeQuestionChannel(questionID)
 	if ch == nil {
-		// Pergunta desconhecida ou já expirada — ignora sem afetar outras perguntas.
+		// Pergunta desconhecida ou já expirada — ignora sem afetar outras
+		// perguntas, mas registra para diagnóstico (expiração de 120s vs. bug
+		// de ID no frontend).
+		log.Printf("[chat] AnswerChatQuestion: pergunta %s não encontrada (expirada ou já respondida)", questionID)
 		return
 	}
 	select {

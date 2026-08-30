@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"discovery/app/core/tlsutil"
 	"discovery/app/netutil"
@@ -632,21 +633,25 @@ func roundTimeout(round int) time.Duration {
 
 // maxToolResultBytes limita o tamanho de cada tool result enviado ao servidor.
 // Resultados gigantes (get_inventory, list_installed_packages) podem estourar
-// limites do servidor e degradar o contexto do LLM. O JSON truncado é fechado
-// de forma segura e marcado com "truncated": true para o LLM saber.
+// limites do servidor e degradar o contexto do LLM.
 const maxToolResultBytes = 16 * 1024
 
 // truncateToolResult trunca o resultado de uma tool para maxToolResultBytes.
-// Se o resultado for JSON válido, tenta fechar o objeto/array truncado de
-// forma estruturalmente aceitável; caso contrário, corta como texto.
+// Tenta fechar estruturas JSON abertas de forma estruturalmente válida; se o
+// resultado truncado não for JSON válido (ex.: corte no meio de uma chave ou
+// de um rune multibyte), cai para texto cru com marcador — nunca devolve JSON
+// quebrado que faria o parse falhar no servidor.
 func truncateToolResult(result string) string {
 	if len(result) <= maxToolResultBytes {
 		return result
 	}
 	cut := result[:maxToolResultBytes]
+	// Não partir rune UTF-8 no meio: recua bytes até o corte ser string válida.
+	for len(cut) > 0 && !utf8.ValidString(cut) {
+		cut = cut[:len(cut)-1]
+	}
 	trimmed := strings.TrimRight(cut, " \t\r\n,")
-	// Fecha estruturas JSON abertas de forma simples (contagem de delimitadores
-	// fora de strings) para o LLM receber JSON parseável.
+	// Fecha estruturas JSON abertas (contagem de delimitadores fora de strings).
 	var stack []byte
 	inStr := false
 	esc := false
@@ -682,9 +687,12 @@ func truncateToolResult(result string) string {
 	if inStr {
 		closed += `"`
 	}
-	// Nota de truncamento como campo extra (pode falhar se o corte cair no
-	// meio de uma chave; nesse caso o fallback em texto cru é aceitável).
-	return closed
+	// Só usa a versão fechada se for JSON válido; caso contrário, texto cru
+	// com marcador (o LLM entende ambos, mas JSON quebrado quebraria o parse).
+	if json.Valid([]byte(closed)) {
+		return closed
+	}
+	return cut + "\n...[resultado truncado pela limitação de tamanho]"
 }
 
 // toolArgsForLog extrai os argumentos de pendingToolCalls para logging (truncados 300 chars cada).
