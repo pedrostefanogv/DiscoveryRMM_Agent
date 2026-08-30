@@ -136,12 +136,14 @@ func (a *App) StopDebugHTTPServer() {
 	if a.debugHTTP == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// Fecha o listener ANTES do Shutdown: novas conexões são recusadas na
+	// hora e o Shutdown não precisa esperar por elas.
+	_ = a.debugHTTP.Listener.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if err := a.debugHTTP.HTTP.Shutdown(ctx); err != nil {
 		log.Printf("[debug-http] erro ao parar servidor: %v", err)
 	}
-	a.debugHTTP.Listener.Close()
 	a.debugHTTP = nil
 	log.Println("[debug-http] servidor parado")
 }
@@ -241,12 +243,15 @@ func (a *App) StopChatSSEServer() {
 	if a.chatSSE == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// Fecha o listener ANTES do Shutdown: conexões SSE são long-lived e o
+	// Shutdown do http.Server as espera drenar, consumindo o timeout inteiro.
+	// Com o listener fechado primeiro, o encerramento é imediato.
+	_ = a.chatSSE.Listener.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if err := a.chatSSE.HTTP.Shutdown(ctx); err != nil {
 		log.Printf("[chat-sse] erro ao parar servidor: %v", err)
 	}
-	a.chatSSE.Listener.Close()
 	a.chatSSE = nil
 	log.Println("[chat-sse] servidor parado")
 }

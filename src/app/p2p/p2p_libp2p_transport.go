@@ -67,6 +67,34 @@ func computeTransferDeadline(dataSize int64) time.Time {
 	return time.Now().Add(estimated)
 }
 
+// rollingDeadlineInterval define a cada quantos bytes lidos/escritos o deadline
+// do stream é renovado. 512KB equilibra granularidade e custo de SetDeadline.
+const rollingDeadlineInterval = 512 * 1024
+
+// rollingDeadlineStreamReader renova o deadline do stream conforme bytes fluem.
+// Problema que resolve: com N chunks paralelos sobre a mesma conexão libp2p em
+// redes lentas, a vazão por stream cai e o deadline FIXO (piso de 2min) expira
+// no meio do chunk, matando todos os streams de uma vez ("Application error
+// 0x0" simultâneo em seed e cliente). Com renovação rolante, o timeout passa a
+// valer apenas para inatividade real (stall), não para duração total.
+type rollingDeadlineStreamReader struct {
+	r        io.Reader
+	stream   network.Stream
+	interval int64
+	read     int64
+	next     int64
+}
+
+func (rr *rollingDeadlineStreamReader) Read(p []byte) (int, error) {
+	n, err := rr.r.Read(p)
+	rr.read += int64(n)
+	if rr.read >= rr.next {
+		_ = rr.stream.SetDeadline(time.Now().Add(libp2pTransferTimeout))
+		rr.next = rr.read + rr.interval
+	}
+	return n, err
+}
+
 // "—"— Request / Response types "—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—"—
 
 type libp2pPeersResponse struct {
@@ -473,7 +501,10 @@ func handleStreamArtifactGet(s network.Stream, transfer *TransferServer) {
 
 	// Deadline para o lado servidor: evita que o libp2p encerre a conexo
 	// por timeout enquanto o chunk est sendo enviado (especialmente em redes lentas).
+	// Deadline ROLANTE: renovado a cada 512KB enviados — só expira em stall real,
+	// não em transferência lenta (vazão baixa com chunks paralelos).
 	_ = s.SetDeadline(computeTransferDeadline(chunkLen))
+	reader = &rollingDeadlineStreamReader{r: reader, stream: s, interval: rollingDeadlineInterval}
 
 	written, copyErr := io.Copy(s, reader)
 	if coord != nil && written > 0 {
@@ -716,6 +747,10 @@ func libp2pDownloadChunk(ctx context.Context, h host.Host, peerID peer.ID, artif
 		return fmt.Errorf("chunk %d: tamanho divergente (esperado=%d recebido=%d)", chunk.Index, chunk.Size, chunkLen)
 	}
 	var dataReader io.Reader = payloadReader
+	// Deadline ROLANTE no cliente: renova a cada 512KB recebidos para que o
+	// piso de 2min não expire em transferências lentas (paralelismo alto /
+	// rede WiFi congestionada), apenas em stall real do peer.
+	dataReader = &rollingDeadlineStreamReader{r: payloadReader, stream: s, interval: rollingDeadlineInterval}
 	if onProgress != nil {
 		dataReader = newProgressReader(payloadReader, chunkLen, func(readSoFar int64) {
 			onProgress(readSoFar, chunkLen)

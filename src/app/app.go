@@ -906,7 +906,13 @@ func (a *App) getHeartbeatMetrics() agentconn.AgentHeartbeatMetrics {
 	// CollectHeartbeatMetrics usa APIs nativas no Windows (zero subprocessos)
 	// e osquery socket no Linux/macOS. Todos os fallbacks de CPU/memória/disco
 	// estão internalizados — não precisa de fallback adicional aqui.
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// Deriva do contexto de ciclo de vida quando disponível para que a coleta
+	// aborte imediatamente durante o shutdown (não segura o encerramento).
+	hbCtx := context.Background()
+	if a.ctx != nil {
+		hbCtx = a.ctx
+	}
+	ctx, cancel := context.WithTimeout(hbCtx, 5*time.Second)
 	defer cancel()
 	if m := inventory.CollectHeartbeatMetrics(ctx); m != nil {
 		mergeHeartbeatMetrics(&metrics, m)
@@ -1518,6 +1524,16 @@ func (a *App) hideWindowOnStartup() {
 }
 
 func (a *App) shutdown() {
+	// Cancela o contexto de ciclo de vida PRIMEIRO: os loops de longa duração
+	// (agentconn/NATS, sync, P2P, automation) começam a desmontar em paralelo
+	// com o cleanup abaixo. Sem isso, quando o agente está online o shutdown
+	// serializa os timeouts dos servidores HTTP/SSE (até 10s) antes mesmo de
+	// sinalizar o cancelamento — era a principal causa da demora ao sair via
+	// tray com o agente conectado.
+	if a.cancel != nil {
+		a.cancel()
+	}
+
 	a.applyIdleMode(false)
 
 	a.StopDebugHTTPServer()
@@ -1544,9 +1560,8 @@ func (a *App) shutdown() {
 		_ = a.inventorySvc.Shutdown()
 	}
 
-	if a.cancel != nil {
-		a.cancel()
-	}
+	// NOTA: a.cancel() já foi chamado no topo do shutdown para desmontar os
+	// loops em paralelo com o cleanup.
 
 	// Aguarda as goroutines de startup com timeout. Quando o agente está
 	// offline, o loop de reconexão do agentconn pode ficar preso numa
@@ -1555,6 +1570,8 @@ func (a *App) shutdown() {
 	// travariam permanentemente — dando a impressão de que o agente "não
 	// fecha e não abre mais". Um timeout razoável garante que o processo
 	// sempre encerre, mesmo que alguma goroutine não responda a tempo.
+	// 3s é suficiente: com o cancelamento antecipado (topo do shutdown),
+	// os loops já foram sinalizados bem antes de chegarmos aqui.
 	startupDone := make(chan struct{})
 	go func() {
 		a.startupWg.Wait()
@@ -1562,7 +1579,7 @@ func (a *App) shutdown() {
 	}()
 	select {
 	case <-startupDone:
-	case <-time.After(8 * time.Second):
+	case <-time.After(3 * time.Second):
 		log.Printf("[shutdown] timeout aguardando goroutines de startup; forçando encerramento")
 	}
 
