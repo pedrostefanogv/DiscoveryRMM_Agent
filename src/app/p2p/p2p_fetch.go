@@ -144,9 +144,19 @@ func decideDownloadParallelism(load TransferLoadSnapshot) int {
 }
 
 // dynamicMaxParallelChunks retorna o número de chunks paralelos com base na carga atual do host.
+// Se MaxParallelChunks estiver configurado (>0), ele sobrescreve o valor adaptativo
+// (respeitando o piso minParallelChunks).
 func (c *Coordinator) dynamicMaxParallelChunks() int {
 	if c.deps == nil {
 		return maxParallelChunks
+	}
+	// Sobrescrita por config: valor fixo, ignorando carga adaptativa.
+	if cfg := c.deps.GetP2PConfig(); cfg.MaxParallelChunks > 0 {
+		v := cfg.MaxParallelChunks
+		if v < minParallelChunks {
+			v = minParallelChunks
+		}
+		return v
 	}
 	metrics := c.deps.GetHeartbeatMetrics()
 	snapshot := TransferLoadSnapshot{

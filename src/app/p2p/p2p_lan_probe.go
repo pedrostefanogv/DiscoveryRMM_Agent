@@ -389,8 +389,8 @@ func connectLANProbePeer(ctx context.Context, h host.Host, registry *libp2pPeerR
 	}
 	var lastErr error
 	for _, info := range addrInfos {
-		connectCtx, cancel := context.WithTimeout(ctx, p2pLibP2PHandshakeTimeout)
-		err = h.Connect(connectCtx, info)
+		connectCtx, cancel := context.WithTimeout(ctx, p2pLibP2PHandshakeTimeout+discoveryDialJitter)
+		err = connectPeerIfNotConnected(connectCtx, h, info, discoveryDialJitter)
 		cancel()
 		if err != nil {
 			lastErr = err

@@ -49,6 +49,12 @@ type p2pLibP2PProvider struct {
 	// to connect to at startup, enabling discovery in non-multicast networks.
 	bootstrapPeers []string
 
+	// tcpOnly restringe o host ao transporte TCP (desativa QUIC). QUIC/UDP no
+	// Windows é suspeito recorrente de quedas de conexão durante transferências
+	// ("Application error 0x0"); com TCP-only eliminamos o par TCP+QUIC que
+	// amplia corridas de dial/dedup. Default: true (via TCPOnlyEnabled()).
+	tcpOnly bool
+
 	// coord and transfer are injected by startDiscovery so the host can serve
 	// the libp2p transport protocols (peers/access/manifest/get/replicate).
 	coord    *Coordinator
@@ -115,13 +121,18 @@ func (p *p2pLibP2PProvider) Start(
 	gater := newP2PConnectionGater()
 	p.gater = gater
 
+	// Transportes: TCP sempre; QUIC/v1 apenas quando tcpOnly=false.
+	// QUIC/UDP no Windows tem histórico de quedas durante transferências
+	// paralelas; a flag permite A/B test e rollback rápido.
+	listenAddrs := []string{"/ip4/0.0.0.0/tcp/0"}
+	if !p.tcpOnly {
+		listenAddrs = append(listenAddrs, "/ip4/0.0.0.0/udp/0/quic-v1")
+	}
+
 	// TCP + QUIC/v1 sobre IPv4 apenas (IPv6 desativado).
 	// Segurança declarada explicitamente: Noise (preferido) e TLS 1.3.
 	h, err := libp2p.New(
-		libp2p.ListenAddrStrings(
-			"/ip4/0.0.0.0/tcp/0",
-			"/ip4/0.0.0.0/udp/0/quic-v1",
-		),
+		libp2p.ListenAddrStrings(listenAddrs...),
 		libp2p.Security(noise.ID, noise.New),
 		libp2p.Security(libp2ptls.ID, libp2ptls.New),
 		libp2p.ConnectionManager(cm),
@@ -129,6 +140,12 @@ func (p *p2pLibP2PProvider) Start(
 	)
 	if err != nil {
 		return fmt.Errorf("libp2p host: %w", err)
+	}
+
+	// Notifiee de diagnóstico: registra desconexões (com transporte e se havia
+	// streams ativos) para correlacionar quedas com ticks de descoberta.
+	if p.coord != nil && p.coord.deps != nil {
+		h.Network().Notify(newP2PConnTraceNotifiee(p.coord.deps.Log))
 	}
 
 	// Stream handler (responder side): when a peer opens a stream to us,
@@ -296,15 +313,15 @@ func (n *libp2pMDNSNotifee) HandlePeerFound(pi peer.AddrInfo) {
 	}
 	pi.Addrs = filteredAddrs
 
-	ctx, cancel := context.WithTimeout(context.Background(), p2pLibP2PHandshakeTimeout)
-	defer cancel()
-
-	if err := n.h.Connect(ctx, pi); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), p2pLibP2PHandshakeTimeout+discoveryDialJitter)
+	if err := connectPeerIfNotConnected(ctx, n.h, pi, discoveryDialJitter); err != nil {
+		cancel()
 		if n.onTrace != nil {
 			n.onTrace(fmt.Sprintf("libp2p connect falhou peer=%s: %v", pi.ID, err))
 		}
 		return
 	}
+	cancel()
 
 	// Remove do peerstore quaisquer endereços link-local que ainda estejam
 	// armazenados de descobertas anteriores — eles não são roteáveis.
@@ -402,6 +419,7 @@ func pickDiscoveryProvider(cfg P2PConfig, coord *Coordinator, transfer *Transfer
 	registry := newLibp2pPeerRegistry()
 	return &p2pLibP2PProvider{
 		bootstrapPeers: cfg.BootstrapConfig.BootstrapPeers,
+		tcpOnly:        cfg.TCPOnlyEnabled(),
 		coord:          coord,
 		transfer:       transfer,
 		registry:       registry,

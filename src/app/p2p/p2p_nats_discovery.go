@@ -61,8 +61,8 @@ func (c *Coordinator) HandlePeerOnlineEvent(event agentconn.PeerEventMessage) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), p2pLibP2PHandshakeTimeout)
-	err = h.Connect(ctx, addrInfo)
+	ctx, cancel := context.WithTimeout(context.Background(), p2pLibP2PHandshakeTimeout+discoveryDialJitter)
+	err = connectPeerIfNotConnected(ctx, h, addrInfo, discoveryDialJitter)
 	cancel()
 	if err != nil {
 		c.deps.Log(fmt.Sprintf("[p2p][events] connect falhou agentId=%s peerId=%s: %v",
@@ -183,8 +183,8 @@ func (c *Coordinator) connectP2PDiscoveryPeer(peer agentconn.P2PDiscoveryPeer) {
 		c.deps.Log(fmt.Sprintf("[p2p][nats-discovery] peer ignorado (addr inválido) agentId=%s: %v", strings.TrimSpace(peer.AgentID), err))
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), p2pLibP2PHandshakeTimeout)
-	err = h.Connect(ctx, addrInfo)
+	ctx, cancel := context.WithTimeout(context.Background(), p2pLibP2PHandshakeTimeout+discoveryDialJitter)
+	err = connectPeerIfNotConnected(ctx, h, addrInfo, discoveryDialJitter)
 	cancel()
 	if err != nil {
 		c.deps.Log(fmt.Sprintf("[p2p][nats-discovery] connect falhou agentId=%s peerId=%s: %v", strings.TrimSpace(peer.AgentID), strings.TrimSpace(peer.PeerID), err))

@@ -19,19 +19,35 @@ type BootstrapConfig struct {
 }
 
 type Config struct {
-	Enabled                  bool            `json:"enabled"`
-	DiscoveryMode            string          `json:"discoveryMode"`
-	P2PMode                  string          `json:"p2pMode,omitempty"`
-	TempTTLHours             int             `json:"tempTtlHours"`
-	SeedPercent              int             `json:"seedPercent"`
-	MinSeeds                 int             `json:"minSeeds"`
-	HTTPListenPortRangeStart int             `json:"httpListenPortRangeStart"`
-	HTTPListenPortRangeEnd   int             `json:"httpListenPortRangeEnd"`
-	AuthTokenRotationMinutes int             `json:"authTokenRotationMinutes"`
-	SharedSecret             string          `json:"sharedSecret,omitempty"`
-	ChunkSizeBytes           int64           `json:"chunkSizeBytes,omitempty"`
-	MaxBandwidthBytesPerSec  int64           `json:"maxBandwidthBytesPerSec,omitempty"`
-	BootstrapConfig          BootstrapConfig `json:"bootstrapConfig,omitempty"`
+	Enabled                  bool   `json:"enabled"`
+	DiscoveryMode            string `json:"discoveryMode"`
+	P2PMode                  string `json:"p2pMode,omitempty"`
+	TempTTLHours             int    `json:"tempTtlHours"`
+	SeedPercent              int    `json:"seedPercent"`
+	MinSeeds                 int    `json:"minSeeds"`
+	HTTPListenPortRangeStart int    `json:"httpListenPortRangeStart"`
+	HTTPListenPortRangeEnd   int    `json:"httpListenPortRangeEnd"`
+	AuthTokenRotationMinutes int    `json:"authTokenRotationMinutes"`
+	SharedSecret             string `json:"sharedSecret,omitempty"`
+	ChunkSizeBytes           int64  `json:"chunkSizeBytes,omitempty"`
+	MaxBandwidthBytesPerSec  int64  `json:"maxBandwidthBytesPerSec,omitempty"`
+	// TCPOnly restringe o transporte libp2p ao TCP (desativa QUIC). Default
+	// true: QUIC/UDP no Windows apresentou quedas de conexão durante
+	// transferências paralelas ("Application error 0x0"). Ponteiro para
+	// distinguir "ausente no JSON" (configs antigos → default true) de
+	// "explicitamente false" (QUIC reativado). Reativável com false.
+	TCPOnly *bool `json:"tcpOnly,omitempty"`
+	// MaxParallelChunks sobrescreve o teto de chunks paralelos por download
+	// (0 = usa o valor adaptativo padrão, teto 8).
+	MaxParallelChunks int             `json:"maxParallelChunks,omitempty"`
+	BootstrapConfig   BootstrapConfig `json:"bootstrapConfig,omitempty"`
+}
+
+// TCPOnlyEnabled retorna true quando o transporte deve ser restrito ao TCP.
+// Default true quando o campo está ausente (nil) — configs antigos sem o
+// campo ganham o comportamento seguro automaticamente.
+func (c Config) TCPOnlyEnabled() bool {
+	return c.TCPOnly == nil || *c.TCPOnly
 }
 
 type SeedPlan struct {

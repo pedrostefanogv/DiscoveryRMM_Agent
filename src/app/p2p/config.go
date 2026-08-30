@@ -59,6 +59,9 @@ func DefaultConfig() Config {
 		HTTPListenPortRangeStart: DefaultP2PPortRangeStart,
 		HTTPListenPortRangeEnd:   DefaultP2PPortRangeEnd,
 		AuthTokenRotationMinutes: DefaultP2PTokenRotationMinutes,
+		// TCPOnly default true (ponteiro nil = true via TCPOnlyEnabled()).
+		// Não setar aqui: o default é aplicado pelo helper, e configs
+		// persistidos sem o campo também devem herdar true.
 	}
 }
 
@@ -77,6 +80,7 @@ func NormalizeConfig(cfg Config) Config {
 	out.HTTPListenPortRangeEnd = defaultInt(out.HTTPListenPortRangeEnd, d.HTTPListenPortRangeEnd)
 	out.ChunkSizeBytes = clampInt64(defaultInt64(out.ChunkSizeBytes, DefaultChunkSizeBytes), MinChunkSizeBytes, MaxChunkSizeBytes)
 	out.MaxBandwidthBytesPerSec = defaultInt64(out.MaxBandwidthBytesPerSec, 0)
+	out.MaxParallelChunks = clampInt(defaultInt(out.MaxParallelChunks, 0), 0, 16) // 0 = adaptativo
 
 	if out.P2PMode == "" {
 		out.P2PMode = p2pmeta.ModeLibp2pOnly

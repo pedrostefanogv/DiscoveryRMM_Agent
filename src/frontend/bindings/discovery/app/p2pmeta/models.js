@@ -523,6 +523,27 @@ export class Config {
         }
         if (/** @type {any} */(false)) {
             /**
+             * TCPOnly restringe o transporte libp2p ao TCP (desativa QUIC). Default
+             * true: QUIC/UDP no Windows apresentou quedas de conexão durante
+             * transferências paralelas ("Application error 0x0"). Ponteiro para
+             * distinguir "ausente no JSON" (configs antigos → default true) de
+             * "explicitamente false" (QUIC reativado). Reativável com false.
+             * @member
+             * @type {boolean | null | undefined}
+             */
+            this["tcpOnly"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * MaxParallelChunks sobrescreve o teto de chunks paralelos por download
+             * (0 = usa o valor adaptativo padrão, teto 8).
+             * @member
+             * @type {number | undefined}
+             */
+            this["maxParallelChunks"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
              * @member
              * @type {BootstrapConfig | undefined}
              */
@@ -538,10 +559,10 @@ export class Config {
      * @returns {Config}
      */
     static createFrom($$source = {}) {
-        const $$createField12_0 = $$createType3;
+        const $$createField14_0 = $$createType3;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("bootstrapConfig" in $$parsedSource) {
-            $$parsedSource["bootstrapConfig"] = $$createField12_0($$parsedSource["bootstrapConfig"]);
+            $$parsedSource["bootstrapConfig"] = $$createField14_0($$parsedSource["bootstrapConfig"]);
         }
         return new Config(/** @type {Partial<Config>} */($$parsedSource));
     }
