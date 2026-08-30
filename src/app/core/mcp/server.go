@@ -51,10 +51,25 @@ func NewServer(reg *Registry, info ServerInfo) *Server {
 
 // Run reads JSON-RPC messages from r (one per line) and writes responses to w.
 // It blocks until r is closed or ctx is cancelled.
+//
+// Cada request é processado em uma goroutine própria para que uma tool lenta
+// (ex.: install_package) não bloqueie requisições subsequentes (ex.: ping).
+// As respostas são serializadas por um canal para não intercalar writes em w.
 func (s *Server) Run(ctx context.Context, r io.Reader, w io.Writer) error {
 	scanner := bufio.NewScanner(r)
 	// Allow lines up to 10 MB for large results.
 	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+
+	// Serializa escrita de respostas (goroutines concorrentes).
+	respCh := make(chan *jsonrpcResponse, 16)
+	writerDone := make(chan struct{})
+	go func() {
+		defer close(writerDone)
+		for resp := range respCh {
+			s.writeJSON(w, resp)
+		}
+	}()
+	defer close(respCh)
 
 	for scanner.Scan() {
 		select {
@@ -74,16 +89,32 @@ func (s *Server) Run(ctx context.Context, r io.Reader, w io.Writer) error {
 			continue
 		}
 
-		resp := s.handle(req)
-		if resp == nil {
-			continue // notification — no response
+		// Notificações não têm resposta — processa inline (baratas).
+		if req.ID == nil {
+			if resp := s.handle(ctx, req); resp != nil {
+				respCh <- resp
+			}
+			continue
 		}
-		s.writeJSON(w, resp)
+
+		// Request real: executa em goroutine para não bloquear o loop de leitura.
+		go func(req jsonrpcRequest) {
+			resp := s.handle(ctx, req)
+			if resp == nil {
+				return // notification — no response
+			}
+			select {
+			case respCh <- resp:
+			case <-ctx.Done():
+			}
+		}(req)
 	}
-	return scanner.Err()
+	err := scanner.Err()
+	<-writerDone
+	return err
 }
 
-func (s *Server) handle(req jsonrpcRequest) *jsonrpcResponse {
+func (s *Server) handle(ctx context.Context, req jsonrpcRequest) *jsonrpcResponse {
 	switch req.Method {
 	case "initialize":
 		return s.handleInitialize(req)
@@ -92,7 +123,7 @@ func (s *Server) handle(req jsonrpcRequest) *jsonrpcResponse {
 	case "tools/list":
 		return s.handleToolsList(req)
 	case "tools/call":
-		return s.handleToolsCall(req)
+		return s.handleToolsCall(ctx, req)
 	case "ping":
 		return &jsonrpcResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{}}
 	default:
@@ -130,7 +161,7 @@ func (s *Server) handleToolsList(req jsonrpcRequest) *jsonrpcResponse {
 	}
 }
 
-func (s *Server) handleToolsCall(req jsonrpcRequest) *jsonrpcResponse {
+func (s *Server) handleToolsCall(ctx context.Context, req jsonrpcRequest) *jsonrpcResponse {
 	var params struct {
 		Name      string          `json:"name"`
 		Arguments json.RawMessage `json:"arguments"`
@@ -143,7 +174,7 @@ func (s *Server) handleToolsCall(req jsonrpcRequest) *jsonrpcResponse {
 		}
 	}
 
-	result, err := s.registry.Call(params.Name, params.Arguments)
+	result, err := s.registry.Call(ctx, params.Name, params.Arguments)
 	if err != nil {
 		return &jsonrpcResponse{
 			JSONRPC: "2.0",

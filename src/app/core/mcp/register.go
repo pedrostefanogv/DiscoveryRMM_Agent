@@ -58,7 +58,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 	reg.Register(Tool{
 		Name:        "get_inventory",
 		Description: "Retorna o inventario completo do computador: hardware, SO, discos, rede, usuarios logados, bateria, CPU, GPU, memoria, BitLocker, software instalado, startup items.",
-		Handler: func(args map[string]any) (any, error) {
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			return app.GetInventoryJSON()
 		},
 	})
@@ -66,7 +66,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 	reg.Register(Tool{
 		Name:        "export_inventory_markdown",
 		Description: "Exporta o relatorio de inventario em formato Markdown e retorna o caminho do arquivo gerado.",
-		Handler: func(args map[string]any) (any, error) {
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			path, err := app.ExportMarkdown()
 			return map[string]string{"path": path}, err
 		},
@@ -75,7 +75,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 	reg.Register(Tool{
 		Name:        "export_inventory_pdf",
 		Description: "Exporta o relatorio de inventario em formato PDF e retorna o caminho do arquivo gerado.",
-		Handler: func(args map[string]any) (any, error) {
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			path, err := app.ExportPDF()
 			return map[string]string{"path": path}, err
 		},
@@ -88,7 +88,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 		Params: []ToolParam{
 			{Name: "query", Type: "string", Description: "Termo de busca (nome, ID ou publisher do pacote)", Required: true},
 		},
-		Handler: func(args map[string]any) (any, error) {
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			q, _ := args["query"].(string)
 			if strings.TrimSpace(q) == "" {
 				return nil, fmt.Errorf("query nao pode ser vazia")
@@ -103,7 +103,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 		Params: []ToolParam{
 			{Name: "id", Type: "string", Description: "ID do pacote winget (ex: Google.Chrome)", Required: true},
 		},
-		Handler: func(args map[string]any) (any, error) {
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			id, _ := args["id"].(string)
 			if strings.TrimSpace(id) == "" {
 				return nil, fmt.Errorf("id do pacote nao pode ser vazio")
@@ -117,7 +117,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 	reg.Register(Tool{
 		Name:        "list_installed_packages",
 		Description: "Lista todos os pacotes (programas) atualmente instalados na maquina, detectados pelo winget.",
-		Handler: func(args map[string]any) (any, error) {
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			out, err := app.ListInstalled()
 			return map[string]string{"output": out}, err
 		},
@@ -129,7 +129,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 		Params: []ToolParam{
 			{Name: "id", Type: "string", Description: "ID do pacote winget", Required: true},
 		},
-		Handler: func(args map[string]any) (any, error) {
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			id, _ := args["id"].(string)
 			if strings.TrimSpace(id) == "" {
 				return nil, fmt.Errorf("id do pacote nao pode ser vazio")
@@ -145,7 +145,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 		Params: []ToolParam{
 			{Name: "id", Type: "string", Description: "ID do pacote winget", Required: true},
 		},
-		Handler: func(args map[string]any) (any, error) {
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			id, _ := args["id"].(string)
 			if strings.TrimSpace(id) == "" {
 				return nil, fmt.Errorf("id do pacote nao pode ser vazio")
@@ -158,7 +158,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 	reg.Register(Tool{
 		Name:        "get_pending_updates",
 		Description: "Lista todos os pacotes que possuem atualizacoes disponiveis, com versao atual e versao disponivel.",
-		Handler: func(args map[string]any) (any, error) {
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			return app.GetPendingUpdatesJSON()
 		},
 	})
@@ -166,7 +166,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 	reg.Register(Tool{
 		Name:        "get_package_actions",
 		Description: "Retorna o mapa de acao contextual por pacote (install, uninstall, upgrade).",
-		Handler: func(args map[string]any) (any, error) {
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			return app.GetPackageActionsJSON()
 		},
 	})
@@ -174,7 +174,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 	reg.Register(Tool{
 		Name:        "upgrade_all_packages",
 		Description: "Atualiza todos os pacotes que possuem atualizacao disponivel via winget.",
-		Handler: func(args map[string]any) (any, error) {
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			out, err := app.UpgradeAllPackages()
 			return map[string]string{"output": out}, err
 		},
@@ -184,7 +184,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 	reg.Register(Tool{
 		Name:        "get_osquery_status",
 		Description: "Verifica se o osquery esta instalado no computador e retorna o caminho do binario.",
-		Handler: func(args map[string]any) (any, error) {
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			return app.GetOsqueryStatusJSON()
 		},
 	})
@@ -193,7 +193,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 	reg.Register(Tool{
 		Name:        "memory/list",
 		Description: "Lista as memorias/anotacoes locais gravadas pelo agente.",
-		Handler: func(args map[string]any) (any, error) {
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			return app.GetLocalMemories()
 		},
 	})
@@ -204,7 +204,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 		Params: []ToolParam{
 			{Name: "content", Type: "string", Description: "Conteudo da anotacao", Required: true},
 		},
-		Handler: func(args map[string]any) (any, error) {
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			content, err := requiredStringArg(args, "content")
 			if err != nil {
 				return nil, err
@@ -219,7 +219,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 		Params: []ToolParam{
 			{Name: "id", Type: "integer", Description: "ID da anotacao", Required: true},
 		},
-		Handler: func(args map[string]any) (any, error) {
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			id, err := requiredIntArg(args, "id")
 			if err != nil {
 				return nil, err
@@ -232,7 +232,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 	reg.Register(Tool{
 		Name:        "list_printers",
 		Description: "Lista as impressoras instaladas no Windows com driver, porta e status.",
-		Handler: func(args map[string]any) (any, error) {
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			return app.ListPrintersJSON()
 		},
 	})
@@ -246,7 +246,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 			{Name: "portName", Type: "string", Description: "Nome da porta local ou TCP/IP", Required: true},
 			{Name: "portAddress", Type: "string", Description: "IP ou hostname para criar a porta, se ela ainda nao existir", Required: false},
 		},
-		Handler: func(args map[string]any) (any, error) {
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			name, err := requiredStringArg(args, "name")
 			if err != nil {
 				return nil, err
@@ -271,7 +271,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 			{Name: "connectionPath", Type: "string", Description: "Caminho UNC da impressora compartilhada (ex: \\\\servidor\\impressora)", Required: true},
 			{Name: "setDefault", Type: "boolean", Description: "Se true, define a impressora instalada como padrao", Required: false},
 		},
-		Handler: func(args map[string]any) (any, error) {
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			connectionPath, err := requiredStringArg(args, "connectionPath")
 			if err != nil {
 				return nil, err
@@ -290,7 +290,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 		Params: []ToolParam{
 			{Name: "name", Type: "string", Description: "Nome da impressora", Required: true},
 		},
-		Handler: func(args map[string]any) (any, error) {
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			name, err := requiredStringArg(args, "name")
 			if err != nil {
 				return nil, err
@@ -305,7 +305,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 		Params: []ToolParam{
 			{Name: "printerName", Type: "string", Description: "Nome da impressora", Required: true},
 		},
-		Handler: func(args map[string]any) (any, error) {
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			printerName, err := requiredStringArg(args, "printerName")
 			if err != nil {
 				return nil, err
@@ -320,7 +320,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 		Params: []ToolParam{
 			{Name: "printerName", Type: "string", Description: "Nome da impressora", Required: true},
 		},
-		Handler: func(args map[string]any) (any, error) {
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			printerName, err := requiredStringArg(args, "printerName")
 			if err != nil {
 				return nil, err
@@ -336,7 +336,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 			{Name: "printerName", Type: "string", Description: "Nome da impressora", Required: true},
 			{Name: "jobId", Type: "integer", Description: "ID numerico do job de impressao", Required: true},
 		},
-		Handler: func(args map[string]any) (any, error) {
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			printerName, err := requiredStringArg(args, "printerName")
 			if err != nil {
 				return nil, err
@@ -352,7 +352,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 	reg.Register(Tool{
 		Name:        "spooler_status",
 		Description: "Consulta o status atual do servico Spooler de impressao.",
-		Handler: func(args map[string]any) (any, error) {
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			return app.GetSpoolerStatusJSON()
 		},
 	})
@@ -360,7 +360,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 	reg.Register(Tool{
 		Name:        "restart_spooler",
 		Description: "Reinicia o servico Spooler e retorna o status apos o restart.",
-		Handler: func(args map[string]any) (any, error) {
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			return app.RestartSpoolerJSON()
 		},
 	})
@@ -371,7 +371,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 		Params: []ToolParam{
 			{Name: "printerName", Type: "string", Description: "Nome da impressora", Required: true},
 		},
-		Handler: func(args map[string]any) (any, error) {
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			printerName, err := requiredStringArg(args, "printerName")
 			if err != nil {
 				return nil, err
@@ -383,7 +383,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 	reg.Register(Tool{
 		Name:        "list_drivers",
 		Description: "Lista os drivers de impressora instalados no Windows.",
-		Handler: func(args map[string]any) (any, error) {
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			return app.ListPrinterDriversJSON()
 		},
 	})
@@ -391,7 +391,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 	reg.Register(Tool{
 		Name:        "get_logs",
 		Description: "Retorna os logs recentes de operacoes do winget (instalacao, atualizacao, etc).",
-		Handler: func(args map[string]any) (any, error) {
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			return map[string]string{"logs": app.GetLogsText()}, nil
 		},
 	})
@@ -404,7 +404,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 			{Name: "count", Type: "integer", Description: "Numero de pacotes ping (padrao 1)", Required: false},
 			{Name: "timeoutSeconds", Type: "integer", Description: "Timeout em segundos (padrao 5)", Required: false},
 		},
-		Handler: func(args map[string]any) (any, error) {
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			host, err := requiredStringArg(args, "host")
 			if err != nil {
 				return nil, err
@@ -427,15 +427,15 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 					timeout = n
 				}
 			}
-			return PingHost(context.Background(), host, count, timeout)
+			return PingHost(ctx, host, count, timeout)
 		},
 	})
 
 	reg.Register(Tool{
 		Name:        "flush_dns",
 		Description: "Limpa o cache DNS do sistema (ipconfig /flushdns no Windows).",
-		Handler: func(args map[string]any) (any, error) {
-			return FlushDNS(context.Background())
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
+			return FlushDNS(ctx)
 		},
 	})
 
@@ -443,7 +443,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 	reg.Register(Tool{
 		Name:        "get_internal_navigation_routes",
 		Description: "Lista as rotas internas disponiveis no app para construir links discovery:// clicaveis no chat.",
-		Handler: func(args map[string]any) (any, error) {
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			return []map[string]string{
 				{"target": "support_tickets", "url": "discovery://support/tickets", "description": "Abre a tela de chamados"},
 				{"target": "support_ticket", "url": "discovery://support/ticket/{ticketId}", "description": "Abre chamado especifico"},
@@ -468,7 +468,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 			{Name: "subtitle", Type: "string", Description: "Subtitulo do card", Required: false},
 			{Name: "meta", Type: "string", Description: "Meta adicional do card", Required: false},
 		},
-		Handler: func(args map[string]any) (any, error) {
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			target, _ := args["target"].(string)
 			target = strings.TrimSpace(strings.ToLower(target))
 			if target == "" {
@@ -536,7 +536,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 	reg.Register(Tool{
 		Name:        "get_agent_info",
 		Description: "Retorna dados de identificacao do agente: agentId, clientId, siteId, hostname, IP, SO e versao. Use ANTES de criar qualquer chamado (create_ticket) para enriquecer a descricao com informacoes da maquina.",
-		Handler: func(args map[string]any) (any, error) {
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			return app.GetAgentInfoJSON()
 		},
 	})
@@ -544,7 +544,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 	reg.Register(Tool{
 		Name:        "list_tickets",
 		Description: "Lista os chamados de suporte abertos para este agente/maquina.",
-		Handler: func(args map[string]any) (any, error) {
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			return app.ListAgentTickets()
 		},
 	})
@@ -555,7 +555,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 		Params: []ToolParam{
 			{Name: "ticketId", Type: "string", Description: "GUID do chamado", Required: true},
 		},
-		Handler: func(args map[string]any) (any, error) {
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			ticketID, _ := args["ticketId"].(string)
 			if strings.TrimSpace(ticketID) == "" {
 				return nil, fmt.Errorf("ticketId nao pode ser vazio")
@@ -572,7 +572,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 			{Name: "content", Type: "string", Description: "Conteudo do comentario", Required: true},
 			{Name: "isInternal", Type: "boolean", Description: "Se true, cria comentario interno", Required: false},
 		},
-		Handler: func(args map[string]any) (any, error) {
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			ticketID, _ := args["ticketId"].(string)
 			if strings.TrimSpace(ticketID) == "" {
 				return nil, fmt.Errorf("ticketId nao pode ser vazio")
@@ -600,7 +600,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 			{Name: "priority", Type: "integer", Description: "Prioridade: 1=Baixa, 2=Media, 3=Alta, 4=Critica", Required: false},
 			{Name: "category", Type: "string", Description: "Categoria (Hardware, Software, Rede, Acesso, Email, Impressora, VPN, Outro)", Required: false},
 		},
-		Handler: func(args map[string]any) (any, error) {
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			title, _ := args["title"].(string)
 			if strings.TrimSpace(title) == "" {
 				return nil, fmt.Errorf("title nao pode ser vazio")
@@ -634,7 +634,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 			{Name: "maxEvents", Type: "integer", Description: "Maximo de eventos retornados (padrao 50, max 100)", Required: false},
 			{Name: "lastHours", Type: "integer", Description: "Janela de tempo em horas (padrao 24, max 168)", Required: false},
 		},
-		Handler: func(args map[string]any) (any, error) {
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			logName, _ := args["logName"].(string)
 			level, _ := args["level"].(string)
 			source, _ := args["source"].(string)
@@ -656,7 +656,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 					lastHours = n
 				}
 			}
-			return QueryEventLog(context.Background(), logName, level, source, maxEvents, lastHours)
+			return QueryEventLog(ctx, logName, level, source, maxEvents, lastHours)
 		},
 	})
 
@@ -666,7 +666,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 		Params: []ToolParam{
 			{Name: "lastHours", Type: "integer", Description: "Janela de tempo em horas (padrao 24, max 168)", Required: false},
 		},
-		Handler: func(args map[string]any) (any, error) {
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			lastHours := 0
 			if v, ok := args["lastHours"]; ok {
 				switch n := v.(type) {
@@ -676,7 +676,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 					lastHours = n
 				}
 			}
-			return GetRecentErrors(context.Background(), lastHours)
+			return GetRecentErrors(ctx, lastHours)
 		},
 	})
 
@@ -686,7 +686,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 		Params: []ToolParam{
 			{Name: "lastHours", Type: "integer", Description: "Janela de tempo em horas (padrao 168 = 7 dias, max 168)", Required: false},
 		},
-		Handler: func(args map[string]any) (any, error) {
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			lastHours := 0
 			if v, ok := args["lastHours"]; ok {
 				switch n := v.(type) {
@@ -696,7 +696,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 					lastHours = n
 				}
 			}
-			return GetRecentCrashes(context.Background(), lastHours)
+			return GetRecentCrashes(ctx, lastHours)
 		},
 	})
 
@@ -704,8 +704,8 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 	reg.Register(Tool{
 		Name:        "get_performance_snapshot",
 		Description: "Retorna um snapshot instantaneo de desempenho: uso de CPU (%), memoria (total/usada/livre em GB e %) e uso de disco por volume logico.",
-		Handler: func(args map[string]any) (any, error) {
-			return GetPerformanceSnapshot(context.Background())
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
+			return GetPerformanceSnapshot(ctx)
 		},
 	})
 
@@ -716,7 +716,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 			{Name: "top", Type: "integer", Description: "Numero de processos a retornar (1-50, padrao 10)", Required: false},
 			{Name: "orderBy", Type: "string", Description: "Criterio de ordenacao: cpu ou memory (padrao cpu)", Required: false},
 		},
-		Handler: func(args map[string]any) (any, error) {
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			top := 0
 			if v, ok := args["top"]; ok {
 				switch n := v.(type) {
@@ -727,15 +727,15 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 				}
 			}
 			orderBy, _ := args["orderBy"].(string)
-			return GetTopProcesses(context.Background(), top, orderBy)
+			return GetTopProcesses(ctx, top, orderBy)
 		},
 	})
 
 	reg.Register(Tool{
 		Name:        "get_disk_health",
 		Description: "Retorna o status de saude dos discos fisicos via WMI (Win32_DiskDrive). Inclui modelo, fabricante, serial, interface, tamanho e status (OK / Pred Fail / Unknown). Util para identificar discos com falha iminente.",
-		Handler: func(args map[string]any) (any, error) {
-			return GetDiskHealth(context.Background())
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
+			return GetDiskHealth(ctx)
 		},
 	})
 
@@ -751,7 +751,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 			{Name: "options", Type: "string", Description: "JSON array de opcoes clicaveis. Ex: '[\"Google Chrome\",\"Firefox\",\"Outro\"]'. Maximo 6. Use [] para so texto livre.", Required: false},
 			{Name: "allowText", Type: "string", Description: "Se 'true', mostra campo de texto livre para o usuario digitar uma resposta personalizada", Required: false},
 		},
-		Handler: func(args map[string]any) (any, error) {
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			question, err := requiredStringArg(args, "question")
 			if err != nil {
 				return nil, err

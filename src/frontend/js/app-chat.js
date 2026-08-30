@@ -186,6 +186,11 @@ function finaliseStreamingBubble() {
   // o residual é JSON truncado e deve ser descartado, não exibido.
   if (!a2uiTokenFilter.inBlock) {
     streamingRawContent += a2uiTokenFilter.buffer;
+  } else if (!streamingRawContent.trim()) {
+    // Stream morreu no meio de um bloco a2ui e não há texto visível: o evento
+    // chat:a2ui nunca chegará (o servidor só extrai o bloco no fim). Mostra um
+    // aviso em vez de deixar o usuário sem resposta.
+    streamingRawContent = translate("chat.responseInterrupted");
   }
   a2uiTokenFilter.buffer = "";
   a2uiTokenFilter.inBlock = false;
@@ -221,6 +226,8 @@ function onStreamDone() {
   chatStopRequested = false;
   setChatBusy(false);
   if (chatInputEl) chatInputEl.focus();
+  // Ação A2UI que chegou durante o stream: processa agora que o chat está livre.
+  maybeProcessPendingA2uiAction();
 }
 
 function onStreamError(errMsg) {
@@ -377,6 +384,17 @@ function disableQuestionButtons(container) {
 // Estado da surface A2UI ativa no chat.
 var a2uiSurfaceHandle = null;
 var a2uiSurfaceBubble = null;
+// True quando uma ação A2UI foi submetida durante um stream ativo e precisa
+// ser processada (novo StartChatStream) assim que o stream atual terminar.
+var pendingA2uiAction = false;
+
+// maybeProcessPendingA2uiAction dispara o processamento de uma ação A2UI que
+// ficou pendente durante um stream. Chamado nos eventos terminais do stream.
+function maybeProcessPendingA2uiAction() {
+  if (!pendingA2uiAction || chatSending) return;
+  pendingA2uiAction = false;
+  sendChatMessageWithA2uiAction();
+}
 
 // onChatA2ui recebe uma mensagem A2UI (JSON) emitida pelo agent via "chat:a2ui".
 // A primeira mensagem (createSurface) cria a bolha/surface; as demais
@@ -495,10 +513,15 @@ function ensureA2uiSurface(surfaceId) {
   if (a2uiSurfaceHandle && a2uiSurfaceHandle.surfaceId === surfaceId) return;
   if (!chatMessagesEl) return;
 
-  // Destrói surface anterior, se houver.
+  // Destrói surface anterior e REMOVE a bolha antiga do DOM — sem isso a
+  // bolha antiga ficava órfã (sem handle) e se acumulava a cada nova surface.
   if (a2uiSurfaceHandle) {
     try { a2uiSurfaceHandle.destroy(); } catch (_) {}
     a2uiSurfaceHandle = null;
+  }
+  if (a2uiSurfaceBubble) {
+    a2uiSurfaceBubble.remove();
+    a2uiSurfaceBubble = null;
   }
 
   var div = document.createElement("div");
@@ -532,6 +555,11 @@ function ensureA2uiSurface(surfaceId) {
 // Registra a ação via AnswerA2uiAction e dispara um novo StartStream para que
 // o agent processe a ação como um tool result no próximo round (resposta
 // imediata ao clique, sem exigir que o usuário digite outra mensagem).
+//
+// Se já houver um stream ativo, a ação fica PENDENTE no agent e é processada
+// assim que o stream atual terminar (pendingA2uiAction). Antes, a ação ficava
+// solta e era consumida pela PRÓXIMA mensagem digitada — podendo "vazar" para
+// um turno sobre outro assunto.
 function handleA2uiUserAction(surfaceId, action) {
   if (!action || !action.name) return;
   try {
@@ -541,12 +569,12 @@ function handleA2uiUserAction(surfaceId, action) {
       context: action.context || {},
     };
     appApi().AnswerA2uiAction(JSON.stringify(payload));
-    // Dispara o processamento da ação. Usa uma mensagem-sentinela que o agent
-    // reconhece como "ação A2UI" (a mensagem em si é ignorada; o que importa é
-    // o tool result injetado). Evita duplicar se já houver um stream ativo.
-    if (!chatSending) {
-      sendChatMessageWithA2uiAction();
+    if (chatSending) {
+      // Stream ativo: guarda a ação para disparar o processamento no chat:done.
+      pendingA2uiAction = true;
+      return;
     }
+    sendChatMessageWithA2uiAction();
   } catch (e) {
     console.error("[a2ui] falha ao enviar userAction:", e);
   }
@@ -556,7 +584,7 @@ function handleA2uiUserAction(surfaceId, action) {
 // Não adiciona uma bolha de usuário (a ação não é uma mensagem digitada) e
 // usa uma sentinela interna que o agent converte em tool result.
 function sendChatMessageWithA2uiAction() {
-  if (chatSending || !chatInputEl) return;
+  if (chatSending) return;
 
   chatStopRequested = false;
   setChatBusy(true);
@@ -606,7 +634,11 @@ function clearA2uiSurface() {
     try { a2uiSurfaceHandle.destroy(); } catch (_) {}
     a2uiSurfaceHandle = null;
   }
-  a2uiSurfaceBubble = null;
+  if (a2uiSurfaceBubble) {
+    a2uiSurfaceBubble.remove();
+    a2uiSurfaceBubble = null;
+  }
+  pendingA2uiAction = false;
 }
 
 // Register Wails event listeners once the runtime is ready.

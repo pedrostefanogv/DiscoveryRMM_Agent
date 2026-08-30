@@ -23,10 +23,29 @@ type ChatQuestionAnswer struct {
 }
 
 var (
-	pendingQuestion   *ChatQuestion
-	pendingQuestionMu sync.Mutex
-	questionAnswerCh  = make(chan ChatQuestionAnswer, 1)
+	pendingQuestionsMu sync.Mutex
+	pendingQuestions   = make(map[string]chan ChatQuestionAnswer)
 )
+
+// registerQuestionChannel cria e registra o canal de resposta de uma pergunta.
+func registerQuestionChannel(id string) chan ChatQuestionAnswer {
+	pendingQuestionsMu.Lock()
+	defer pendingQuestionsMu.Unlock()
+	ch := make(chan ChatQuestionAnswer, 1)
+	pendingQuestions[id] = ch
+	return ch
+}
+
+// takeQuestionChannel remove e retorna o canal da pergunta (nil se inexistente).
+func takeQuestionChannel(id string) chan ChatQuestionAnswer {
+	pendingQuestionsMu.Lock()
+	defer pendingQuestionsMu.Unlock()
+	ch, ok := pendingQuestions[id]
+	if ok {
+		delete(pendingQuestions, id)
+	}
+	return ch
+}
 
 // AskUser displays a question to the user and waits for their answer.
 // This blocks the calling goroutine until the user responds or timeout is reached.
@@ -69,10 +88,12 @@ func (a *App) AskUser(question, optionsJSON, allowTextRaw string) (string, error
 		AllowText: allowText || len(options) == 0,
 	}
 
+	answerCh := registerQuestionChannel(id)
+
 	// Lock to prevent concurrent questions
-	pendingQuestionMu.Lock()
-	pendingQuestion = q
-	pendingQuestionMu.Unlock()
+	pendingQuestionsMu.Lock()
+	pendingQuestions[id] = answerCh
+	pendingQuestionsMu.Unlock()
 
 	// Emit event to the frontend
 	qJSON, _ := json.Marshal(q)
@@ -84,38 +105,28 @@ func (a *App) AskUser(question, optionsJSON, allowTextRaw string) (string, error
 
 	// Wait for answer with timeout
 	select {
-	case answer := <-questionAnswerCh:
-		if answer.QuestionID != id {
-			// Answer for a different question, put it back
-			select {
-			case questionAnswerCh <- answer:
-			default:
-			}
-			return "", fmt.Errorf("resposta inválida para questionID %s", id)
-		}
-		pendingQuestionMu.Lock()
-		pendingQuestion = nil
-		pendingQuestionMu.Unlock()
+	case answer := <-answerCh:
+		takeQuestionChannel(id) // limpeza defensiva
 		return answer.Answer, nil
 	case <-time.After(120 * time.Second):
-		pendingQuestionMu.Lock()
-		pendingQuestion = nil
-		pendingQuestionMu.Unlock()
+		takeQuestionChannel(id)
 		return "", fmt.Errorf("tempo esgotado aguardando resposta do usuário")
 	case <-a.ctx.Done():
-		pendingQuestionMu.Lock()
-		pendingQuestion = nil
-		pendingQuestionMu.Unlock()
+		takeQuestionChannel(id)
 		return "", fmt.Errorf("aplicação encerrada")
 	}
 }
 
 // AnswerChatQuestion is the Wails binding called by the frontend when the user clicks an option.
 func (a *App) AnswerChatQuestion(questionID, answer string) {
+	ch := takeQuestionChannel(questionID)
+	if ch == nil {
+		// Pergunta desconhecida ou já expirada — ignora sem afetar outras perguntas.
+		return
+	}
 	select {
-	case questionAnswerCh <- ChatQuestionAnswer{QuestionID: questionID, Answer: answer}:
+	case ch <- ChatQuestionAnswer{QuestionID: questionID, Answer: answer}:
 	default:
-		// Channel full, discard
 	}
 }
 

@@ -3,10 +3,12 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 )
 
 // ToolParam describes a single parameter of a tool.
@@ -23,7 +25,8 @@ type Tool struct {
 	Description string      `json:"description"`
 	Params      []ToolParam `json:"params,omitempty"`
 	// Handler is called when the tool is invoked. args is the JSON object of params.
-	Handler func(args map[string]any) (any, error) `json:"-"`
+	// ctx permite cancelamento/timeout (StopStream, timeouts por tool).
+	Handler func(ctx context.Context, args map[string]any) (any, error) `json:"-"`
 }
 
 // InputSchema builds the JSON-Schema object expected by the MCP spec and also
@@ -72,8 +75,11 @@ func (t Tool) MCPToolEntry() map[string]any {
 	}
 }
 
-// Registry holds all registered tools.
+// Registry holds all registered tools. Thread-safe: Register/Tools/Find/Call
+// podem ser chamados concorrentemente (o chat multi-round executa tools
+// enquanto o servidor stdio MCP e o re-registro periodico rodam).
 type Registry struct {
+	mu    sync.RWMutex
 	tools []Tool
 }
 
@@ -81,23 +87,39 @@ type Registry struct {
 func NewRegistry() *Registry { return &Registry{} }
 
 // Register adds a tool to the registry.
-func (r *Registry) Register(t Tool) { r.tools = append(r.tools, t) }
+func (r *Registry) Register(t Tool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.tools = append(r.tools, t)
+}
 
-// Tools returns all registered tools.
-func (r *Registry) Tools() []Tool { return r.tools }
+// Tools returns a snapshot of all registered tools.
+func (r *Registry) Tools() []Tool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]Tool, len(r.tools))
+	copy(out, r.tools)
+	return out
+}
 
-// Find returns the named tool or nil.
+// Find returns a copy of the named tool or nil.
 func (r *Registry) Find(name string) *Tool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	for i := range r.tools {
 		if r.tools[i].Name == name {
-			return &r.tools[i]
+			t := r.tools[i]
+			return &t
 		}
 	}
 	return nil
 }
 
 // Call invokes a tool by name with the given JSON argument object.
-func (r *Registry) Call(name string, argsJSON json.RawMessage) (any, error) {
+//
+// O ctx é propagado ao handler, permitindo cancelamento (StopStream) e
+// timeouts por tool. Handlers antigos que ignoram ctx continuam funcionando.
+func (r *Registry) Call(ctx context.Context, name string, argsJSON json.RawMessage) (any, error) {
 	tool := r.Find(name)
 	if tool == nil {
 		return nil, &ToolNotFoundError{Name: name}
@@ -105,12 +127,17 @@ func (r *Registry) Call(name string, argsJSON json.RawMessage) (any, error) {
 	var args map[string]any
 	if len(argsJSON) > 0 {
 		if err := json.Unmarshal(argsJSON, &args); err != nil {
+			// NÃO fazer fallback silencioso para {}: o LLM precisa saber que
+			// os argumentos são inválidos para se autocorrigir no próximo round.
 			log.Printf("[mcp] Registry.Call(%q): unmarshal args falhou (argsJSON=%s): %v", name, string(argsJSON), err)
-			args = map[string]any{}
+			return nil, fmt.Errorf("argumentos invalidos para '%s': JSON malformado (%v) — reenvie a chamada com um objeto JSON valido contendo: %s", name, err, tool.ParamsDesc())
 		}
 	}
 	if args == nil {
 		args = map[string]any{}
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 
 	// Validar parametros obrigatorios ANTES de chamar o handler.
@@ -134,7 +161,7 @@ func (r *Registry) Call(name string, argsJSON json.RawMessage) (any, error) {
 		}
 	}
 
-	return tool.Handler(args)
+	return tool.Handler(ctx, args)
 }
 
 // OpenAIFunctions returns all tools in OpenAI function-calling format.

@@ -25,8 +25,14 @@ func (s *Service) SendStreamMultiRound(
 	onA2ui ...func(string),
 ) (string, error) {
 	streamCtx, streamCancel := context.WithCancel(ctx)
-	defer streamCancel()
-
+    // Registra o cancel para que StopStream() (botão "Parar" do frontend)
+    // interrompa também o loop multi-round — antes, só o stream single-round
+    // era cancelável e o botão não tinha efeito aqui.
+    streamID := s.registerStreamCancel(streamCancel)
+    defer func() {
+        s.unregisterStreamCancel(streamID)
+        streamCancel()
+    }()
 	startTime := time.Now()
 
 	s.mu.Lock()
@@ -96,11 +102,14 @@ func (s *Service) SendStreamMultiRound(
 	pendingCalls := make([]pendingToolCall, 0)
 	// Se há ação A2UI, Message fica vazio (null) para o servidor usar o fluxo
 	// multi-round com ToolResults. Caso contrário, envia a mensagem do usuário.
+	// Mode explícito elimina a dependência da convenção "Message == null".
 	reqMessage := userMessage
+	reqMode := "user_message"
 	if hasA2uiAction {
 		reqMessage = ""
+		reqMode = "a2ui_action"
 	}
-	req := agentStreamRequest{Message: reqMessage, SessionID: sessionID, ToolResults: initialToolResults}
+	req := agentStreamRequest{Message: reqMessage, SessionID: sessionID, ToolResults: initialToolResults, Mode: reqMode}
 	// Injetar tools MCP no primeiro round (round 0).
 	s.mu.RLock()
 	toolCount := 0
@@ -178,7 +187,14 @@ func (s *Service) SendStreamMultiRound(
 				Error:     err.Error(),
 				LatencyMs: int(roundElapsed.Milliseconds()),
 			})
-			return s.fallbackToSync(streamCtx, cfg, userMessage, sessionID, onToken)
+			// Em turnos iniciados por ação A2UI, a sentinela não deve ir ao
+			// servidor como mensagem de usuário (o contexto real da ação já
+			// está na sessão do servidor). Envia string vazia.
+			fallbackMsg := userMessage
+			if hasA2uiAction {
+				fallbackMsg = ""
+			}
+			return s.fallbackToSync(streamCtx, cfg, fallbackMsg, sessionID, onToken)
 		}
 
 		hasToolCalls := len(pendingCalls) > 0
@@ -224,6 +240,16 @@ func (s *Service) SendStreamMultiRound(
 						tools = s.registry.OpenAIFunctions()
 					}
 					s.mu.RUnlock()
+					// Quando o turno foi iniciado por uma ação A2UI, a sentinela
+					// "__a2ui_action__" NÃO pode ser reenviada como Message —
+					// isso faria o servidor chamar StreamAsync e a ação A2UI
+					// (já consumida via takeA2uiAction) seria perdida. Nesse
+					// caso Message fica vazio (null) e apenas o SystemNote
+					// orienta o LLM a concluir.
+					retryMessage := userMessage
+					if hasA2uiAction {
+						retryMessage = ""
+					}
 					s.logChatEntry(ChatLogEntry{
 						Type:      "tool_force_retry",
 						Method:    "multi_round",
@@ -231,10 +257,11 @@ func (s *Service) SendStreamMultiRound(
 						Error:     retry,
 					})
 					req = agentStreamRequest{
-						Message:    userMessage,
+						Message:    retryMessage,
 						SessionID:  currentSessionID,
 						Tools:      tools,
 						SystemNote: retry,
+						Mode:       "user_message",
 					}
 					if onStatus != nil {
 						onStatus("Concluindo ação solicitada...")
@@ -308,7 +335,7 @@ func (s *Service) SendStreamMultiRound(
 				toolResultNames = append(toolResultNames, fmt.Sprintf("%s=ok", tc.Name))
 			}
 
-			toolResults = append(toolResults, toolResultItem{CallID: tc.CallID, Name: tc.Name, Result: result})
+			toolResults = append(toolResults, toolResultItem{CallID: tc.CallID, Name: tc.Name, Result: truncateToolResult(result)})
 		}
 
 		s.logChatEntry(ChatLogEntry{
@@ -333,6 +360,7 @@ func (s *Service) SendStreamMultiRound(
 			SessionID:   currentSessionID,
 			ToolResults: toolResults,
 			Tools:       tools,
+			Mode:        "tool_results",
 		}
 	}
 
@@ -600,6 +628,63 @@ func roundTimeout(round int) time.Duration {
 	default:
 		return 130 * time.Second
 	}
+}
+
+// maxToolResultBytes limita o tamanho de cada tool result enviado ao servidor.
+// Resultados gigantes (get_inventory, list_installed_packages) podem estourar
+// limites do servidor e degradar o contexto do LLM. O JSON truncado é fechado
+// de forma segura e marcado com "truncated": true para o LLM saber.
+const maxToolResultBytes = 16 * 1024
+
+// truncateToolResult trunca o resultado de uma tool para maxToolResultBytes.
+// Se o resultado for JSON válido, tenta fechar o objeto/array truncado de
+// forma estruturalmente aceitável; caso contrário, corta como texto.
+func truncateToolResult(result string) string {
+	if len(result) <= maxToolResultBytes {
+		return result
+	}
+	cut := result[:maxToolResultBytes]
+	trimmed := strings.TrimRight(cut, " \t\r\n,")
+	// Fecha estruturas JSON abertas de forma simples (contagem de delimitadores
+	// fora de strings) para o LLM receber JSON parseável.
+	var stack []byte
+	inStr := false
+	esc := false
+	for i := 0; i < len(trimmed); i++ {
+		c := trimmed[i]
+		if inStr {
+			if esc {
+				esc = false
+			} else if c == '\\' {
+				esc = true
+			} else if c == '"' {
+				inStr = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inStr = true
+		case '{':
+			stack = append(stack, '}')
+		case '[':
+			stack = append(stack, ']')
+		case '}', ']':
+			if len(stack) > 0 {
+				stack = stack[:len(stack)-1]
+			}
+		}
+	}
+	closed := trimmed
+	for i := len(stack) - 1; i >= 0; i-- {
+		closed += string(stack[i])
+	}
+	if inStr {
+		closed += `"`
+	}
+	// Nota de truncamento como campo extra (pode falhar se o corte cair no
+	// meio de uma chave; nesse caso o fallback em texto cru é aceitável).
+	return closed
 }
 
 // toolArgsForLog extrai os argumentos de pendingToolCalls para logging (truncados 300 chars cada).

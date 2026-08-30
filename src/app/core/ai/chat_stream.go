@@ -94,6 +94,15 @@ type agentStreamRequest struct {
 	// concatenada à mensagem do usuário. Evita injeção de instruções no papel
 	// "user" e mantém a separação semântica dos papéis.
 	SystemNote string `json:"systemNote,omitempty"`
+	// Mode discrimina explicitamente o fluxo no servidor, eliminando a
+	// dependência da convenção frágil "Message == null → multi-round" (que
+	// dependia do omitempty omitir o campo no JSON). Valores:
+	//   "user_message" — round 1, mensagem digitada pelo usuário.
+	//   "tool_results" — rounds 2+, ToolResults de tools executadas.
+	//   "a2ui_action"  — turno iniciado por ação A2UI (ToolResults com a ação).
+	// Agentes antigos não enviam o campo; o servidor faz fallback para a
+	// convenção legada.
+	Mode string `json:"mode,omitempty"`
 }
 
 // pendingToolCall collects a tool_call event before execution.

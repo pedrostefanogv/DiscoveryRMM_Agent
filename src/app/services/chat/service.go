@@ -347,7 +347,7 @@ func (s *Service) GetAvailableTools() []map[string]string {
 }
 
 func (s *Service) mcpExecuteForChat(ctx context.Context, toolName, argsJSON string) (string, error) {
-	result, err := s.mcpRegistry.Call(toolName, json.RawMessage(argsJSON))
+	result, err := s.mcpRegistry.Call(ctx, toolName, json.RawMessage(argsJSON))
 	if err != nil {
 		return "", err
 	}

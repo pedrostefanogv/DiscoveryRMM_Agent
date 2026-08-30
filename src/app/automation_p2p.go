@@ -12,7 +12,10 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/sys/windows"
+
 	"discovery/app/core/processutil"
+	"discovery/app/core/selfupdate"
 	"discovery/app/core/services"
 )
 
@@ -26,10 +29,17 @@ var errInstallerExec = errors.New("installer execution failed")
 type automationPackageManagerRouter struct {
 	app      *App
 	fallback *services.AppsService
+	logf     func(format string, args ...any)
 }
 
 func newAutomationPackageManagerRouter(app *App, fallback *services.AppsService) *automationPackageManagerRouter {
-	return &automationPackageManagerRouter{app: app, fallback: fallback}
+	return &automationPackageManagerRouter{
+		app:      app,
+		fallback: fallback,
+		logf: func(format string, args ...any) {
+			app.logs.append("[automation][p2p] " + fmt.Sprintf(format, args...))
+		},
+	}
 }
 
 func (m *automationPackageManagerRouter) Install(ctx context.Context, id string) (string, error) {
@@ -375,6 +385,53 @@ func runLocalInstaller(ctx context.Context, artifactPath string) (string, error)
 	}
 }
 
+// installerType identifica o framework do instalador .exe, usado para ordenar
+// a cascata de flags silenciosas.
+type installerType int
+
+const (
+	installerUnknown installerType = iota
+	installerNSIS
+	installerInno
+	installerWiX
+	installerInstallShield
+)
+
+// detectInstallerType faz uma detecção best-effort do framework do instalador
+// lendo strings do binário. Instaladores customizados às vezes contêm strings
+// enganosas (ex.: "Nullsoft" embutido num bundle WiX), por isso o resultado é
+// apenas uma dica de ordenação — a cascata completa cobre os demais casos.
+func detectInstallerType(artifactPath string) installerType {
+	f, err := os.Open(artifactPath)
+	if err != nil {
+		return installerUnknown
+	}
+	defer f.Close()
+
+	// Lê no máximo os primeiros 512KB — as assinaturas dos frameworks ficam
+	// nas tabelas de strings do PE, tipicamente no início do arquivo.
+	const maxScan = 512 * 1024
+	buf := make([]byte, maxScan)
+	n, _ := io.ReadFull(f, buf)
+	if n <= 0 {
+		return installerUnknown
+	}
+	s := strings.ToLower(string(buf[:n]))
+
+	switch {
+	case strings.Contains(s, "nullsoft"):
+		return installerNSIS
+	case strings.Contains(s, "inno setup"):
+		return installerInno
+	case strings.Contains(s, "wixburn") || strings.Contains(s, "burn engine"):
+		return installerWiX
+	case strings.Contains(s, "installshield"):
+		return installerInstallShield
+	default:
+		return installerUnknown
+	}
+}
+
 // installerFlagCascade retorna a lista ordenada de conjuntos de flags silenciosos
 // a tentar para um .exe. Para o tipo detectado, as flags do framework vêm
 // PRIMEIRO, seguidas das demais da cascata completa — instaladores customizados
@@ -432,6 +489,13 @@ func runExeInstallerSilent(ctx context.Context, timeout time.Duration, artifactP
 // Exit codes de SUCESSO com reboot pendente (3010 MSI/NSIS, 1641) são tratados
 // como sucesso — a instalação foi concluída; tentar de novo com outras flags
 // reinstalaria o produto desnecessariamente.
+//
+// Fallback de elevação: se o CreateProcess falhar com ERROR_ELEVATION_REQUIRED
+// ("A operação solicitada requer elevação"), o instalador exige admin e o
+// agente não está elevado. Nesse caso tentamos ShellExecuteEx("runas") via
+// selfupdate.LaunchInstallerElevated, que dispara o prompt UAC na sessão do
+// usuário. Se o usuário aceitar, a instalação prossegue; se negar, retornamos
+// o erro original (o router cai para o fallback winget).
 func executeHiddenProcess(parent context.Context, timeout time.Duration, executable string, args []string) (string, error) {
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
@@ -454,75 +518,78 @@ func executeHiddenProcess(parent context.Context, timeout time.Duration, executa
 		}
 		return text, nil
 	}
-	if text == "" {
-		text = err.Error()
-	}
 	if ctx.Err() == context.DeadlineExceeded {
 		return text, fmt.Errorf("timeout na execução do instalador")
 	}
+	// ── Fallback de elevação (Windows) ──
+	// fork/exec falhou porque o binário exige elevação e o agente não é admin.
+	// Tentamos ShellExecuteEx("runas") — dispara UAC na sessão do usuário.
+	if isElevationRequiredExecError(err) {
+		if elevOut, elevErr := launchInstallerViaUAC(executable, args); elevErr == nil {
+			return elevOut, nil
+		}
+		// UAC negado/indisponível: retorna o erro original para o router
+		// seguir o fluxo de fallback (winget direto).
+	}
 	return text, err
+}
+
+// isElevationRequiredExecError detecta falha de CreateProcess por exigência de
+// elevação (ERROR_ELEVATION_REQUIRED 740 / "requer elevação" / "requested
+// operation requires elevation"). Só faz sentido em Windows; em outros SO o
+// erro nunca contém essas strings, então a checagem por texto é suficiente.
+//
+// NOTA: NÃO usamos match solto por "740" — qualquer mensagem contendo esse
+// número (caminho, exit code de outra natureza, tamanho em bytes) dispararia
+// um prompt UAC indevido. O texto do erro do Windows para o erro 740 é
+// "A operação solicitada requer elevação" / "The requested operation requires
+// elevation", que já é coberto pelos matches de texto abaixo.
+func isElevationRequiredExecError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "requer elevação") ||
+		strings.Contains(msg, "requires elevation") ||
+		strings.Contains(msg, "elevation required") ||
+		strings.Contains(msg, "elevação é necessária") ||
+		strings.Contains(msg, "elevation is required")
+}
+
+// launchInstallerViaUAC lança o instalador com elevação UAC via
+// ShellExecuteEx("runas") e aguarda a conclusão (com timeout) para capturar o
+// exit code. Reaproveita LaunchInstallerElevated do selfupdate.
+//
+// O handle retornado é windows.Handle (raw). Não há Close/Wait nele — usamos
+// WaitForSingleObject via syscall e fechamos com CloseHandle explicitamente.
+func launchInstallerViaUAC(executable string, args []string) (string, error) {
+	_, handle, err := selfupdate.LaunchInstallerElevated(executable, strings.Join(args, " "))
+	if err != nil {
+		return "", fmt.Errorf("elevação UAC falhou: %w", err)
+	}
+	defer windows.CloseHandle(handle)
+
+	const waitTimeout = 20 * time.Minute
+	event, err := windows.WaitForSingleObject(handle, uint32(waitTimeout.Milliseconds()))
+	if err != nil {
+		return "", fmt.Errorf("espera do instalador elevado falhou: %w", err)
+	}
+	const waitTimeoutConst = 0x00000102 // WAIT_TIMEOUT
+	if event == waitTimeoutConst {
+		return "", fmt.Errorf("timeout aguardando instalador elevado")
+	}
+	var exitCode uint32
+	if err := windows.GetExitCodeProcess(handle, &exitCode); err != nil {
+		return "", fmt.Errorf("obtendo exit code do instalador elevado: %w", err)
+	}
+	if exitCode == 0 || exitCode == 3010 || exitCode == 1641 {
+		return "instalação concluída via UAC (elevação aceita)", nil
+	}
+	return "", fmt.Errorf("instalador elevado saiu com código %d", exitCode)
 }
 
 // isRebootSuccessExitCode retorna true para exit codes que indicam instalação
 // bem-sucedida com reboot pendente/iniciado.
 func isRebootSuccessExitCode(code int) bool {
 	return code == 3010 || code == 1641
-}
-
-// installerType classifica o tipo de instalador .exe para aplicar os flags
-// silenciosos corretos. Cada framework de instalação tem sua própria sintaxe:
-//
-//	NSIS       → /S
-//	Inno Setup → /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
-//	WiX Burn   → /quiet /norestart
-type installerType int
-
-const (
-	installerUnknown installerType = iota
-	installerNSIS
-	installerInno
-	installerWiX
-)
-
-// detectInstallerType inspeciona os primeiros 64 KB do binário em busca de
-// strings características de cada framework de instalação.
-func detectInstallerType(path string) installerType {
-	f, err := os.Open(path)
-	if err != nil {
-		return installerUnknown
-	}
-	defer f.Close()
-
-	// Lê até 64 KB — suficiente para cobrir headers e stubs de todos os frameworks.
-	buf := make([]byte, 64<<10)
-	n, readErr := f.Read(buf)
-	// io.EOF com n > 0 é sucesso: leu o arquivo inteiro (arquivo < 64 KB).
-	if readErr != nil && readErr != io.EOF {
-		return installerUnknown
-	}
-	if n == 0 {
-		return installerUnknown
-	}
-	content := string(buf[:n])
-
-	// NSIS: "Nullsoft" aparece no stub do instalador.
-	if strings.Contains(content, "Nullsoft") {
-		return installerNSIS
-	}
-	// Inno Setup: "Inno" + "Setup" aparecem no overlay.
-	if strings.Contains(content, "Inno") && strings.Contains(content, "Setup") {
-		return installerInno
-	}
-	// WiX Burn: "wixstdba" ou "WiX Burn" no bundle.
-	if strings.Contains(content, "wixstdba") || strings.Contains(content, "WiX Burn") {
-		return installerWiX
-	}
-	return installerUnknown
-}
-
-func (m *automationPackageManagerRouter) logf(format string, args ...any) {
-	if m == nil || m.app == nil {
-		return
-	}
-	m.app.logs.append(fmt.Sprintf(format, args...))
 }
