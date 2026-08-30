@@ -14,6 +14,11 @@ const (
 	// DefaultPollSeconds é o intervalo padrão de polling do sync-manifest.
 	DefaultPollSeconds = 900
 
+	// MinPollSeconds é o piso mínimo de segurança para o intervalo de polling
+	// recomendado pelo servidor. Evita que um manifesto mal configurado cause
+	// polling excessivo (ex.: recommendedPollSeconds=60 → 7200 chamadas/dia).
+	MinPollSeconds = 300
+
 	// ProcessedEventTTL é o TTL de eventos processados (deduplicação de ping).
 	ProcessedEventTTL = 30 * time.Minute
 

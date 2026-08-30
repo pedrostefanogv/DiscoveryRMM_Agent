@@ -1082,6 +1082,9 @@ func (a *App) startup(ctx context.Context) {
 			// Inicializa o ciclo de vida do inventory.Service após o DB estar disponível.
 			_ = a.inventorySvc.Startup(ctx)
 		}
+		if a.supportSvc != nil {
+			a.supportSvc.SetDB(db)
+		}
 		agentIDForEngine := strings.TrimSpace(a.GetDebugConfig().AgentID)
 		a.consolEngine = consolidation.New(db, agentIDForEngine)
 	}

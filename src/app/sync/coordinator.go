@@ -282,7 +282,12 @@ func (c *Coordinator) ReconcileFromManifest(ctx context.Context, source string) 
 	}
 
 	if manifest.RecommendedPollSeconds > 0 {
-		c.setPollEvery(time.Duration(manifest.RecommendedPollSeconds) * time.Second)
+		pollSeconds := manifest.RecommendedPollSeconds
+		if pollSeconds < syncmeta.MinPollSeconds {
+			c.deps.Log(fmt.Sprintf("[sync] servidor recomendou poll=%ds, aplicando piso mínimo de %ds", pollSeconds, syncmeta.MinPollSeconds))
+			pollSeconds = syncmeta.MinPollSeconds
+		}
+		c.setPollEvery(time.Duration(pollSeconds) * time.Second)
 	}
 
 	for _, resource := range manifest.Resources {

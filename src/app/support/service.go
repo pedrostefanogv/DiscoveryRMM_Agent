@@ -14,10 +14,10 @@ import (
 	"sync"
 	"time"
 
+	"discovery/app/core/tlsutil"
 	"discovery/app/debug"
 	"discovery/app/netutil"
 	"discovery/app/supportmeta"
-	"discovery/app/core/tlsutil"
 )
 
 var guidPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
@@ -117,6 +117,13 @@ func NewService(opts Options) *Service {
 		supportEnabled:   supportEnabled,
 		knowledgeEnabled: knowledgeEnabled,
 	}
+}
+
+// SetDB atualiza a referência ao banco de dados de cache.
+// Deve ser chamado após a abertura do SQLite, já que o Service
+// pode ser construído antes do banco estar disponível.
+func (s *Service) SetDB(db CacheDB) {
+	s.db = db
 }
 
 func (s *Service) supportLogf(format string, args ...any) {
