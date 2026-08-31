@@ -22,64 +22,177 @@ var streamingRafPending = false;
 var startPollingLoop;
 var stopPollingLoop;
 
-// Estado do filtro de blocos A2UI nos tokens visíveis.
+// Estado do filtro de blocos A2UI e vazamentos de tool calls nos tokens visíveis.
 // O servidor emite os tokens em tempo real e só extrai o bloco ```a2ui no
 // final do stream. Para o usuário não ver o JSON cru, filtramos o conteúdo
 // entre ```a2ui e ``` conforme os tokens chegam (de forma incremental).
+// Além disso, o LLM às vezes emite tool calls como TEXTO (blocos ```json com
+// invokes, marcação DSML <｜DSML｜tool_invokes>...) — esses vazamentos também
+// são filtrados durante o streaming.
+//
+// Estados da máquina:
+//   ""        — texto normal (visível)
+//   "a2ui"    — dentro de bloco ```a2ui ... ``` (descartado)
+//   "json"    — dentro de bloco ```json ... ``` (retido até saber se é vazamento)
+//   "dsml"    — dentro de marcação DSML (descartado)
 var a2uiTokenFilter = {
-  inBlock: false,
+  state: "",
   buffer: "",
+  jsonBody: "",
 };
 
-// Filtra um fragmento de token, removendo qualquer bloco ```a2ui ... ```.
-// Retorna o texto "limpo" que deve ser exibido ao usuário.
+// Aberturas reconhecidas (prefixo mais longo primeiro).
+var LEAK_OPEN_A2UI = "```a2ui";
+var LEAK_OPEN_JSON = "```json";
+var LEAK_OPEN_FENCE = "```";
+var DSML_OPEN_RE = /<[｜|]DSML[｜|][a-z_]*>/;
+var DSML_CLOSE_RE = /<\/[｜|]DSML[｜|][a-z_]*>/;
+// Padrões de vazamento dentro de blocos ```json (usados pelo filtro e pela
+// sanitização final).
+var INVOKE_ARRAY_RE = /^\s*\[\s*\{\s*"name"\s*:/;
+var A2UI_ACTION_RE = /^\s*\{\s*"version"\s*:\s*"a2ui"/;
+
+// Filtra um fragmento de token, removendo blocos ```a2ui ... ```, blocos
+// ```json que contenham invokes/A2UI (vazamentos de tool call) e marcação
+// DSML. Retorna o texto "limpo" que deve ser exibido ao usuário.
 //
 // Estratégia: mantém um buffer pequeno (sufixo potencial de um marcador) e só
-// emite texto quando temos certeza de que ele não faz parte de um bloco a2ui.
+// emite texto quando temos certeza de que ele não faz parte de um vazamento.
+// Blocos ```json são retidos até o fechamento: se o corpo for um array de
+// invokes ou ação A2UI, é descartado; caso contrário, é liberado como texto
+// legítimo (o usuário vê o bloco json aparecer de uma vez no fim).
 function filterA2uiTokens(token) {
   var f = a2uiTokenFilter;
   f.buffer += token;
 
   var out = "";
-  var i = 0;
-  while (i < f.buffer.length) {
-    if (!f.inBlock) {
-      // Procura a abertura do bloco a2ui.
-      var openIdx = f.buffer.indexOf("```a2ui", i);
-      if (openIdx === -1) {
-        // Sem abertura: emite tudo até o fim, mantendo os últimos 6 chars no
-        // buffer (pode ser o início de ```a2ui). Não limpa o buffer aqui.
-        var keep = Math.min(6, f.buffer.length - i);
-        out += f.buffer.slice(i, f.buffer.length - keep);
+  var progress = true;
+  while (progress) {
+    progress = false;
+    if (f.state === "") {
+      // Procura a abertura de bloco a2ui/json/fence ou tag DSML.
+      var openA2ui = f.buffer.indexOf(LEAK_OPEN_A2UI);
+      var openJson = f.buffer.indexOf(LEAK_OPEN_JSON);
+      var openDsml = f.buffer.search(DSML_OPEN_RE);
+      // Escolhe a abertura mais próxima do início.
+      var candidates = [];
+      if (openA2ui !== -1) candidates.push({ idx: openA2ui, kind: "a2ui", len: LEAK_OPEN_A2UI.length });
+      if (openJson !== -1) candidates.push({ idx: openJson, kind: "json", len: LEAK_OPEN_JSON.length });
+      if (openDsml !== -1) candidates.push({ idx: openDsml, kind: "dsml", len: f.buffer.match(DSML_OPEN_RE)[0].length });
+      candidates.sort(function (a, b) { return a.idx - b.idx; });
+
+      if (candidates.length === 0) {
+        // Sem abertura: emite tudo até o fim, mantendo os últimos 24 chars no
+        // buffer (sufixo potencial da maior abertura: <｜DSML｜tool_invokes>
+        // tem ~21 chars; ```a2ui/```json têm 7). O retido é liberado conforme
+        // novos tokens chegam e na finalização da bolha.
+        var keep = Math.min(24, f.buffer.length);
+        out += f.buffer.slice(0, f.buffer.length - keep);
         f.buffer = f.buffer.slice(f.buffer.length - keep);
         break;
       }
+      var c = candidates[0];
       // Texto antes da abertura é visível.
-      out += f.buffer.slice(i, openIdx);
-      f.inBlock = true;
-      i = openIdx + 6; // pula "```a2ui"
-    } else {
-      // Dentro do bloco: procura o fechamento ```.
-      var closeIdx = f.buffer.indexOf("```", i);
+      out += f.buffer.slice(0, c.idx);
+      f.buffer = f.buffer.slice(c.idx + c.len);
+      f.state = c.kind;
+      f.jsonBody = "";
+      progress = true;
+    } else if (f.state === "a2ui") {
+      // Dentro do bloco a2ui: procura o fechamento ```.
+      var closeIdx = f.buffer.indexOf(LEAK_OPEN_FENCE);
       if (closeIdx === -1) {
-        // Sem fechamento ainda: descarta tudo até o fim, mantendo os últimos
-        // 3 chars no buffer (pode ser o início de ```).
-        var keepClose = Math.min(3, f.buffer.length - i);
+        // Sem fechamento ainda: descarta tudo, mantendo os últimos 3 chars.
+        var keepClose = Math.min(3, f.buffer.length);
         f.buffer = f.buffer.slice(f.buffer.length - keepClose);
         break;
       }
-      // Fecha o bloco e descarta o conteúdo.
-      f.inBlock = false;
-      i = closeIdx + 3; // pula "```"
+      f.buffer = f.buffer.slice(closeIdx + 3);
+      f.state = "";
+      progress = true;
+    } else if (f.state === "json") {
+      // Dentro de bloco ```json: retém o corpo até o fechamento para decidir.
+      var closeJ = f.buffer.indexOf(LEAK_OPEN_FENCE);
+      if (closeJ === -1) {
+        f.jsonBody += f.buffer;
+        f.buffer = "";
+        break;
+      }
+      f.jsonBody += f.buffer.slice(0, closeJ);
+      f.buffer = f.buffer.slice(closeJ + 3);
+      // Decide: vazamento (invokes/A2UI) é descartado; json legítimo é liberado.
+      var body = f.jsonBody.trim();
+      if (INVOKE_ARRAY_RE.test(body) || A2UI_ACTION_RE.test(body)) {
+        // Vazamento — descarta silenciosamente.
+      } else {
+        // JSON legítimo — devolve o bloco completo ao texto visível.
+        out += "```json" + f.jsonBody + "```";
+      }
+      f.jsonBody = "";
+      f.state = "";
+      progress = true;
+    } else if (f.state === "dsml") {
+      // Dentro de marcação DSML: procura o fechamento </｜DSML｜...>.
+      var closeD = f.buffer.search(DSML_CLOSE_RE);
+      if (closeD === -1) {
+        // Sem fechamento ainda: descarta tudo, mantendo os últimos 24 chars
+        // (sufixo potencial de "</｜DSML｜tool_invokes>", ~21 chars).
+        var keepD = Math.min(24, f.buffer.length);
+        f.buffer = f.buffer.slice(f.buffer.length - keepD);
+        break;
+      }
+      var matchD = f.buffer.match(DSML_CLOSE_RE)[0];
+      f.buffer = f.buffer.slice(closeD + matchD.length);
+      f.state = "";
+      progress = true;
     }
   }
 
   return out;
 }
 
+// Padrões de vazamento de tool calls emitidos como TEXTO pelo LLM.
+// 1. Marcação DSML nativa do modelo: <｜DSML｜tool_invokes>... (separador
+//    ｜ fullwidth ou | ASCII).
+var DSML_TAG_RE = /<\/?[｜|]DSML[｜|][a-z_]*>/g;
+// 2. Tags <invoke>/<parameter>/<tool_invokes> soltas.
+var INVOKE_TAG_RE = /<\/?[｜|]?(?:invoke|parameter|tool_invokes)[｜|]?(?:\s[^>]*)?>/g;
+// 3. Bloco ```json cujo corpo é array de invokes ou ação A2UI.
+var JSON_FENCE_RE = /```(?:json)?\s*([\s\S]*?)```/g;
+
+// sanitizeLeakedToolCalls remove vazamentos de tool calls/marcações internas
+// de um texto COMPLETO (não-streaming). Usado na finalização da bolha e em
+// respostas que chegam de uma vez (fallback sync, etc.).
+function sanitizeLeakedToolCalls(text) {
+  if (!text) return text;
+  var clean = text;
+  // Remove tags DSML e invoke/parameter soltas (o conteúdo entre elas em
+  // streaming é filtrado pelo buffer; aqui removemos o que sobrou).
+  clean = clean.replace(DSML_TAG_RE, "");
+  clean = clean.replace(INVOKE_TAG_RE, "");
+  // Remove blocos ```json com invokes/A2UI.
+  clean = clean.replace(JSON_FENCE_RE, function (m, body) {
+    if (INVOKE_ARRAY_RE.test(body) || A2UI_ACTION_RE.test(body)) return "";
+    return m;
+  });
+  // Remove linhas de parâmetro soltas tipo <parameter name="agentId">...</parameter>
+  // já cobertas acima; colapsa linhas vazias em excesso.
+  clean = clean.replace(/\n{3,}/g, "\n\n").trim();
+  return clean;
+}
+
+// stripLeakMarkersFromBuffer remove marcadores de vazamento de um buffer de
+// streaming parcial. Como os vazamentos podem chegar fragmentados entre
+// tokens, aplicamos de forma tolerante: removemos tags completas e mantemos
+// sufixos parciais no buffer (o chamador já gerencia o buffer).
+function stripLeakMarkersFromBuffer(buf) {
+  return buf.replace(DSML_TAG_RE, "").replace(INVOKE_TAG_RE, "");
+}
+
 function resetA2uiTokenFilter() {
-  a2uiTokenFilter.inBlock = false;
+  a2uiTokenFilter.state = "";
   a2uiTokenFilter.buffer = "";
+  a2uiTokenFilter.jsonBody = "";
 }
 
 function onStreamToken(token) {
@@ -180,20 +293,35 @@ function onStreamThinking(status) {
 
 function finaliseStreamingBubble() {
   if (!streamingBubble) return;
-  // Libera qualquer texto residual que ficou retido no buffer do filtro A2UI
-  // (ex.: os últimos caracteres de uma resposta sem bloco a2ui). Se ainda
-  // estivermos DENTRO de um bloco a2ui (stream interrompido no meio do JSON),
-  // o residual é JSON truncado e deve ser descartado, não exibido.
-  if (!a2uiTokenFilter.inBlock) {
+  // Libera qualquer texto residual que ficou retido no buffer do filtro
+  // (ex.: os últimos caracteres de uma resposta sem vazamentos). Se o stream
+  // morreu DENTRO de um bloco a2ui/json/DSML, o residual é conteúdo truncado
+  // e deve ser descartado, não exibido — exceto json legítimo já validado.
+  if (a2uiTokenFilter.state === "") {
     streamingRawContent += a2uiTokenFilter.buffer;
+  } else if (a2uiTokenFilter.state === "json") {
+    // Bloco ```json não fechado: se o corpo parcial já é claramente um
+    // vazamento (invokes/A2UI), descarta; caso contrário, libera como texto
+    // legítimo truncado (o usuário merece ver o que o LLM escreveu).
+    var partialBody = a2uiTokenFilter.jsonBody.trim();
+    if (!INVOKE_ARRAY_RE.test(partialBody) && !A2UI_ACTION_RE.test(partialBody)) {
+      streamingRawContent += "```json" + a2uiTokenFilter.jsonBody;
+    }
   } else if (!streamingRawContent.trim()) {
-    // Stream morreu no meio de um bloco a2ui e não há texto visível: o evento
-    // chat:a2ui nunca chegará (o servidor só extrai o bloco no fim). Mostra um
-    // aviso em vez de deixar o usuário sem resposta.
+    // Stream morreu no meio de um bloco a2ui/DSML e não há texto visível:
+    // o evento chat:a2ui nunca chegará (o servidor só extrai o bloco no fim).
+    // Mostra um aviso em vez de deixar o usuário sem resposta.
     streamingRawContent = translate("chat.responseInterrupted");
   }
   a2uiTokenFilter.buffer = "";
-  a2uiTokenFilter.inBlock = false;
+  a2uiTokenFilter.state = "";
+  a2uiTokenFilter.jsonBody = "";
+
+  // Sanitiza vazamentos de tool calls emitidos como texto (DSML, blocos
+  // ```json com invokes, ações A2UI cruas). O filtro incremental cobre os
+  // casos comuns, mas vazamentos fragmentados entre tokens podem escapar —
+  // a sanitização final garante que nada cru chegue ao usuário.
+  streamingRawContent = sanitizeLeakedToolCalls(streamingRawContent);
 
   // Flush any remaining buffered content immediately.
   streamingRafPending = false;

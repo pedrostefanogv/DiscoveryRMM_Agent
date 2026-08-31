@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"discovery/app/netutil"
 	"discovery/app/core/tlsutil"
+	"discovery/app/netutil"
 )
 
 // ─── Stream Types ──────────────────────────────────────────────────
@@ -386,6 +386,15 @@ func (s *Service) SendStream(ctx context.Context, userMessage string, onToken fu
 		assistant := strings.TrimSpace(syncResp.AssistantMessage)
 		if assistant == "" {
 			assistant = "(sem resposta)"
+		}
+		// O endpoint sync não suporta function calling: sanitiza vazamentos
+		// de tool calls emitidos como texto antes de exibir ao usuário.
+		if clean, removed := sanitizeAssistantText(assistant); removed {
+			s.logf("[chat] stream fallback sync: sanitização removeu vazamentos de tool call (%d -> %d chars)", len(assistant), len(clean))
+			assistant = clean
+		}
+		if assistant == "" {
+			assistant = "Não consegui concluir a ação solicitada. Tente reformular o pedido."
 		}
 		if onToken != nil {
 			onToken(assistant)

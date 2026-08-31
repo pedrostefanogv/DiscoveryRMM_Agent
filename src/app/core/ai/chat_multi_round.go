@@ -26,14 +26,14 @@ func (s *Service) SendStreamMultiRound(
 	onA2ui ...func(string),
 ) (string, error) {
 	streamCtx, streamCancel := context.WithCancel(ctx)
-    // Registra o cancel para que StopStream() (botão "Parar" do frontend)
-    // interrompa também o loop multi-round — antes, só o stream single-round
-    // era cancelável e o botão não tinha efeito aqui.
-    streamID := s.registerStreamCancel(streamCancel)
-    defer func() {
-        s.unregisterStreamCancel(streamID)
-        streamCancel()
-    }()
+	// Registra o cancel para que StopStream() (botão "Parar" do frontend)
+	// interrompa também o loop multi-round — antes, só o stream single-round
+	// era cancelável e o botão não tinha efeito aqui.
+	streamID := s.registerStreamCancel(streamCancel)
+	defer func() {
+		s.unregisterStreamCancel(streamID)
+		streamCancel()
+	}()
 	startTime := time.Now()
 
 	s.mu.Lock()
@@ -376,6 +376,18 @@ func (s *Service) SendStreamMultiRound(
 		} else {
 			assistant = "Não consegui processar sua solicitação. Pode reformular a pergunta?"
 		}
+	}
+	// Sanitiza vazamentos de tool calls / marcações internas do LLM (DSML,
+	// blocos ```json com invokes, ações A2UI cruas) antes de exibir ao usuário.
+	if clean, removed := sanitizeAssistantText(assistant); removed {
+		s.logf("[chat] sanitização: removidos vazamentos de tool call/marcação interna da resposta (%d -> %d chars)", len(assistant), len(clean))
+		s.logChatEntry(ChatLogEntry{
+			Type:        "assistant_sanitized",
+			Method:      "multi_round",
+			SessionID:   currentSessionID,
+			ResponseLen: len(clean),
+		})
+		assistant = clean
 	}
 	s.mu.Lock()
 	if currentSessionID != "" {
@@ -730,6 +742,23 @@ func (s *Service) fallbackToSync(ctx context.Context, cfg Config, message, sessi
 	if assistant == "" {
 		assistant = "Não foi possível obter uma resposta do servidor. Tente novamente."
 	}
+	// O endpoint sync NÃO suporta function calling: o LLM tende a emitir as
+	// tool calls como texto (blocos ```json com invokes, marcação DSML).
+	// Sanitiza antes de exibir para o usuário não ver JSON/marcações cruas.
+	if clean, removed := sanitizeAssistantText(assistant); removed {
+		s.logf("[chat] fallback sync: sanitização removeu vazamentos de tool call da resposta (%d -> %d chars)", len(assistant), len(clean))
+		s.logChatEntry(ChatLogEntry{
+			Type:        "assistant_sanitized",
+			Method:      "fallback_sync",
+			SessionID:   resp.SessionID,
+			ResponseLen: len(clean),
+		})
+		assistant = clean
+	}
+	if assistant == "" {
+		// A resposta era SÓ tool calls vazadas — nada de texto útil restou.
+		assistant = "Não consegui concluir a ação solicitada. Tente reformular o pedido."
+	}
 	if onToken != nil {
 		onToken(assistant)
 	}
@@ -843,7 +872,7 @@ type ticketIntentKind int
 
 const (
 	ticketOpen ticketIntentKind = iota // "abra/abre um chamado"
-	ticketList                          // "tem algum chamado aberto?"
+	ticketList                         // "tem algum chamado aberto?"
 )
 
 type ticketIntentPattern struct {

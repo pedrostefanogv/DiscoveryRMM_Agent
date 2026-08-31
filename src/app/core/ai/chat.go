@@ -16,9 +16,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"discovery/app/netutil"
 	"discovery/app/core/mcp"
 	"discovery/app/core/tlsutil"
+	"discovery/app/netutil"
 )
 
 // Config holds the LLM API settings.
@@ -422,6 +422,16 @@ func (s *Service) Send(ctx context.Context, userMessage string) (string, error) 
 	assistant := strings.TrimSpace(resp.AssistantMessage)
 	if assistant == "" {
 		assistant = "(sem resposta)"
+	}
+	// O endpoint sync não suporta function calling: o LLM pode emitir tool
+	// calls como texto (blocos ```json com invokes, marcação DSML). Sanitiza
+	// antes de devolver ao chamador/frontend.
+	if clean, removed := sanitizeAssistantText(assistant); removed {
+		s.logf("[chat] sync: sanitização removeu vazamentos de tool call da resposta (%d -> %d chars)", len(assistant), len(clean))
+		assistant = clean
+	}
+	if assistant == "" {
+		assistant = "Não consegui concluir a ação solicitada. Tente reformular o pedido."
 	}
 
 	s.mu.Lock()
