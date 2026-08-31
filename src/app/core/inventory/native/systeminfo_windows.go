@@ -82,7 +82,8 @@ func collectSystemInfoNative(ctx context.Context) (models.HardwareInfo, models.O
 	// Nome comercial/edição do Windows via registry (ex.: "Windows 11 Pro").
 	// Sobrescreve o genérico "Windows" quando disponível.
 	if productName, displayVersion, ubr := getWindowsEdition(); productName != "" {
-		osInfo.Name = productName
+		// Corrige "Windows 10 ..." em builds 11 (bug do registry).
+		osInfo.Name = fixWindows11ProductName(productName, osInfo.Build)
 		// Complementa o build com UBR (ex.: build 22631 -> 22631.4460).
 		if ubr != "" && osInfo.Build != "" {
 			osInfo.Build = osInfo.Build + "." + ubr
@@ -92,7 +93,9 @@ func collectSystemInfoNative(ctx context.Context) (models.HardwareInfo, models.O
 			osInfo.Version = osInfo.Version + " (" + displayVersion + ")"
 		}
 	}
-
+	// Edition: nome completo da edição (ex.: "Windows 11 Pro Insider Preview").
+	// Igual ao Name quando derivado do registry; vazio em fallbacks.
+	osInfo.Edition = osInfo.Name
 	// Architecture via GetNativeSystemInfo.
 	osInfo.Architecture = getArchitecture()
 
@@ -169,6 +172,24 @@ func getWindowsEdition() (productName, displayVersion, ubr string) {
 		ubr = fmt.Sprintf("%d", v)
 	}
 	return productName, displayVersion, ubr
+}
+
+// fixWindows11ProductName corrige o bug conhecido do Windows: o valor
+// ProductName do registry continua "Windows 10 ..." mesmo em Windows 11
+// (a Microsoft nunca atualizou o valor). Builds >= 22000 são Windows 11.
+func fixWindows11ProductName(productName string, build string) string {
+	if productName == "" || build == "" {
+		return productName
+	}
+	// build pode ser "26220" ou "26220.9223" — pega a parte antes do ponto.
+	majorBuild := build
+	if idx := strings.IndexByte(build, '.'); idx >= 0 {
+		majorBuild = build[:idx]
+	}
+	if majorBuild >= "22000" && strings.HasPrefix(productName, "Windows 10 ") {
+		return "Windows 11 " + strings.TrimPrefix(productName, "Windows 10 ")
+	}
+	return productName
 }
 
 func getArchitecture() string {

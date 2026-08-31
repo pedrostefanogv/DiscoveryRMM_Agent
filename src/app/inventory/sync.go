@@ -74,6 +74,7 @@ type agentHardwareInfo struct {
 	MachineScore            int     `json:"machineScore"`
 	OSName                  string  `json:"osName"`
 	OSVersion               string  `json:"osVersion"`
+	OSEdition               string  `json:"osEdition,omitempty"`
 	OSBuild                 string  `json:"osBuild"`
 	OSArchitecture          string  `json:"osArchitecture"`
 	TpmEkHash               string  `json:"tpmEk,omitempty"`
@@ -683,6 +684,7 @@ func buildAgentHardwareEnvelope(report models.InventoryReport, version, commitHa
 		MachineScore:            machineScore,
 		OSName:                  osName,
 		OSVersion:               osVersion,
+		OSEdition:               trimToMaxLen(strings.TrimSpace(report.OS.Edition), 100),
 		OSBuild:                 trimToMaxLen(strings.TrimSpace(report.OS.Build), 100),
 		OSArchitecture:          trimToMaxLen(strings.TrimSpace(report.OS.Architecture), 100),
 		CollectedAt:             collected,

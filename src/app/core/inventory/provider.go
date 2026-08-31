@@ -559,6 +559,7 @@ func (p *Provider) collectWithOsquery(ctx context.Context) (models.InventoryRepo
 		},
 		OS: models.OperatingSystem{
 			Name:         getString(osInfo, "name"),
+			Edition:      getString(osInfo, "name"),
 			Version:      getString(osInfo, "version"),
 			Build:        getString(osInfo, "build"),
 			Architecture: getString(osInfo, "arch"),

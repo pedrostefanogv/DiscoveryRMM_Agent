@@ -11,6 +11,7 @@ const statusAppCommitEl = document.getElementById('statusAppCommit');
 const statusBuildDateEl = document.getElementById('statusBuildDate');
 const statusOSNameEl = document.getElementById('statusOSName');
 const statusOSVersionEl = document.getElementById('statusOSVersion');
+const statusOSEditionEl = document.getElementById('statusOSEdition');
 const statusRealtimeEl = document.getElementById('statusRealtime');
 const statusRealtimeAgentsEl = document.getElementById('statusRealtimeAgents');
 const statusServerPongAtEl = document.getElementById('statusServerPongAt');
@@ -144,6 +145,14 @@ function renderStatusOverview(data) {
   }
   if (statusOSNameEl) statusOSNameEl.textContent = statusSafe(data && data.osName, '-');
   if (statusOSVersionEl) statusOSVersionEl.textContent = statusSafe(data && data.osVersion, '-');
+  if (statusOSEditionEl) {
+    var edition = data && data.osEdition ? String(data.osEdition) : '';
+    if (!edition && data && data.osName) {
+      // Fallback: usa o nome do SO quando a edição não veio do backend.
+      edition = String(data.osName);
+    }
+    statusOSEditionEl.textContent = statusSafe(edition, '-');
+  }
 
   if (statusRealtimeEl) {
     if (data && data.realtimeAvailable) {

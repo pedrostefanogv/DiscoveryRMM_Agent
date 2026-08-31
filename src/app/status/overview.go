@@ -24,6 +24,7 @@ type Overview struct {
 	BuildDateUTC              string    `json:"buildDateUtc,omitempty"`
 	OSName                    string    `json:"osName"`
 	OSVersion                 string    `json:"osVersion"`
+	OSEdition                 string    `json:"osEdition,omitempty"`
 	LastInventoryCollected    string    `json:"lastInventoryCollected"`
 	RealtimeAvailable         bool      `json:"realtimeAvailable"`
 	RealtimeNATSConnected     bool      `json:"realtimeNatsConnected"`

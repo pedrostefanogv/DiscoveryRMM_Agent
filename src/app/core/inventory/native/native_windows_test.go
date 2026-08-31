@@ -41,6 +41,30 @@ func TestCollectSystemInfo(t *testing.T) {
 	}
 }
 
+// TestFixWindows11ProductName verifica a correção do bug do registry:
+// ProductName continua "Windows 10 ..." mesmo em Windows 11 (build >= 22000).
+func TestFixWindows11ProductName(t *testing.T) {
+	cases := []struct {
+		productName string
+		build       string
+		want        string
+	}{
+		{"Windows 10 Pro", "26220", "Windows 11 Pro"},
+		{"Windows 10 Pro", "26220.9223", "Windows 11 Pro"},
+		{"Windows 10 Home", "22000", "Windows 11 Home"},
+		{"Windows 10 Pro", "19045", "Windows 10 Pro"}, // build 10 real
+		{"Windows 10 Pro", "21999", "Windows 10 Pro"}, // abaixo de 22000
+		{"Windows 11 Pro", "26220", "Windows 11 Pro"}, // já correto
+		{"", "26220", ""},                        // vazio permanece vazio
+		{"Windows 10 Pro", "", "Windows 10 Pro"}, // sem build, não mexe
+	}
+	for _, tc := range cases {
+		if got := fixWindows11ProductName(tc.productName, tc.build); got != tc.want {
+			t.Errorf("fixWindows11ProductName(%q, %q) = %q, want %q", tc.productName, tc.build, got, tc.want)
+		}
+	}
+}
+
 // TestCollectDisks verifies that logical volumes are enumerated.
 func TestCollectDisks(t *testing.T) {
 	volumes, physical, err := collectDisksNative(context.Background())

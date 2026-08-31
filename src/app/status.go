@@ -31,7 +31,7 @@ func (a *App) GetStatusOverview() StatusOverview {
 		AppVersion:          strings.TrimSpace(Version),
 		AppCommit:           strings.TrimSpace(buildinfo.Commit),
 		BuildDateUTC:        resolveAgentBuildDateUTC(),
-		OSName:              runtime.GOOS,
+		OSName:              normalizeOSDisplayName(runtime.GOOS),
 		OSVersion:           runtime.GOARCH,
 		CheckedAtUTC:        time.Now().UTC(),
 	}
@@ -69,6 +69,9 @@ func (a *App) GetStatusOverview() StatusOverview {
 		}
 		if name := strings.TrimSpace(inv.OS.Name); name != "" {
 			out.OSName = name
+		}
+		if edition := strings.TrimSpace(inv.OS.Edition); edition != "" {
+			out.OSEdition = edition
 		}
 		versionParts := []string{}
 		if version := strings.TrimSpace(inv.OS.Version); version != "" {
@@ -137,6 +140,21 @@ func (a *App) GetStatusOverview() StatusOverview {
 	}
 
 	return out
+}
+
+// normalizeOSDisplayName converte runtime.GOOS para um nome amigável.
+// Usado como fallback antes do inventário estar disponível no cache.
+func normalizeOSDisplayName(goos string) string {
+	switch goos {
+	case "windows":
+		return "Windows"
+	case "darwin":
+		return "macOS"
+	case "linux":
+		return "Linux"
+	default:
+		return goos
+	}
 }
 
 func resolveAgentBuildDateUTC() string {

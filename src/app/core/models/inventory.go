@@ -165,6 +165,7 @@ type GPUInfo struct {
 
 type OperatingSystem struct {
 	Name         string `json:"name"`
+	Edition      string `json:"edition,omitempty"`
 	Version      string `json:"version"`
 	Build        string `json:"build"`
 	Architecture string `json:"architecture"`
