@@ -90,7 +90,9 @@ func collectSystemInfoNative(ctx context.Context) (models.HardwareInfo, models.O
 		}
 		// Guarda o feature update (ex.: "25H2") em campo próprio.
 		osInfo.DisplayVersion = displayVersion
-		osInfo.Version = osInfo.Version + " (" + displayVersion + ")"
+		if displayVersion != "" {
+			osInfo.Version = osInfo.Version + " (" + displayVersion + ")"
+		}
 	}
 	// Edition: nome completo da edição (ex.: "Windows 11 Pro Insider Preview").
 	// Igual ao Name quando derivado do registry; vazio em fallbacks.

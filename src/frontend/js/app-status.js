@@ -117,14 +117,42 @@ async function fetchConnectedP2PAgents() {
 }
 
 // Busca indicadores extras (Zero Touch provisionados + bytes P2P).
-// Best-effort: retorna null em caso de falha para nao impactar o status.
+// Best-effort: nunca lança e nunca bloqueia o render principal — cada chamada
+// tem timeout próprio porque no agent nativo essas APIs podem demorar
+// (locks do subsistema P2P) e não podem travar a página de status.
+function withTimeout(promise, ms) {
+  var timerId;
+  var timeoutPromise = new Promise(function (_resolve, reject) {
+    timerId = setTimeout(function () { reject(new Error('timeout')); }, ms);
+  });
+  // Limpa o timer quando a promise original resolve/rejeita primeiro,
+  // evitando acumulo de timers pendentes com o polling de 4s.
+  promise.then(
+    function () { clearTimeout(timerId); },
+    function () { clearTimeout(timerId); }
+  );
+  return Promise.race([promise, timeoutPromise]);
+}
+
+var p2pFactsInFlight = false;
+
 async function fetchP2PIntegrationFacts() {
+  if (p2pFactsInFlight) return null; // evita chamadas concorrentes
+  p2pFactsInFlight = true;
+  try {
+    return await doFetchP2PIntegrationFacts();
+  } finally {
+    p2pFactsInFlight = false;
+  }
+}
+
+async function doFetchP2PIntegrationFacts() {
   var api = appApi();
   if (!api) return null;
   var facts = {};
   try {
     if (typeof api.GetAutoProvisioningStats === 'function') {
-      var ztc = await api.GetAutoProvisioningStats();
+      var ztc = await withTimeout(api.GetAutoProvisioningStats(), 3000);
       facts.ztcProvisioned = ztc && ztc.totalProvisioned != null ? Number(ztc.totalProvisioned) : 0;
     }
   } catch (_error) {
@@ -132,7 +160,7 @@ async function fetchP2PIntegrationFacts() {
   }
   try {
     if (typeof api.GetP2PDebugStatus === 'function') {
-      var p2p = await api.GetP2PDebugStatus();
+      var p2p = await withTimeout(api.GetP2PDebugStatus(), 3000);
       var metrics = (p2p && p2p.metrics) || {};
       facts.p2pActive = !!(p2p && p2p.active);
       facts.p2pBytesUp = Number(metrics.bytesServed || 0);
@@ -287,22 +315,40 @@ async function loadStatusOverview() {
   }
   try {
     var api = appApi();
+    // Render principal não depende dos fatos P2P/ZTC: no agent nativo essas
+    // chamadas podem ser lentas e não podem atrasar o status básico.
     var result = await Promise.all([
       api.GetStatusOverview(),
       fetchConnectedP2PAgents(),
-      fetchP2PIntegrationFacts(),
     ]);
     var data = result[0] || {};
     if (result[1] !== null) {
       data.p2pConnectedAgents = result[1];
     }
-    if (result[2]) {
-      Object.assign(data, result[2]);
-    }
     renderStatusOverview(data);
+    window.__lastStatusData = data;
   } catch (error) {
     renderStatusError(error && error.message ? error.message : String(error));
+    return;
   }
+  // Fatos de integração carregam em segundo plano e atualizam SOMENTE os
+  // campos deles, sem re-renderizar o restante (evita sobrescrever dados
+  // mais novos que o polling de 4s possa ter trazido enquanto isso).
+  fetchP2PIntegrationFacts().then(function (facts) {
+    if (!facts) return;
+    if (window.__lastStatusData) {
+      Object.assign(window.__lastStatusData, facts);
+    }
+    if (statusZtcProvisionedEl && facts.ztcProvisioned != null) {
+      statusZtcProvisionedEl.textContent = String(facts.ztcProvisioned);
+    }
+    if (statusP2PBytesEl && facts.p2pBytesUp != null && facts.p2pBytesDown != null) {
+      statusP2PBytesEl.textContent = formatP2PBytesStatus(facts.p2pBytesUp) + ' / ' + formatP2PBytesStatus(facts.p2pBytesDown);
+    }
+    if (statusP2PActiveEl && facts.p2pActive != null) {
+      statusP2PActiveEl.textContent = facts.p2pActive ? translate('common.online') : translate('common.offline');
+    }
+  }).catch(function () { /* best-effort */ });
 }
 
 function startStatusPoll() {
@@ -341,7 +387,6 @@ function initStatusPage() {
       }
     });
   }
-  if (agentUpdateInstallBtnEl) {
 }
 
 initStatusPage();
