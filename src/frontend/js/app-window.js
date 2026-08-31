@@ -124,6 +124,59 @@
     });
   }
 
+  // ── Fallback de acessibilidade (DPI scaling / janela cortada) ──
+  // Em telas 1080p com escala 125%/150% a janela pode abrir com o chrome
+  // (min/max/close) fora da área visível. O backend já aplica clamp via
+  // FitWindowToWorkArea, mas estes atalhos servem como rede de segurança:
+  //   Ctrl+Alt+M  → maximizar/restaurar
+  //   Ctrl+Alt+W  → fechar para tray
+  //   Ctrl+Alt+D  → diagnóstico no console (tamanho da janela vs viewport)
+  function registerKeyboardFallback() {
+    document.addEventListener('keydown', function (e) {
+      if (!(e.ctrlKey && e.altKey)) return;
+      var key = (e.key || '').toLowerCase();
+      if (key === 'm') {
+        e.preventDefault();
+        toggleMaximise();
+      } else if (key === 'w') {
+        e.preventDefault();
+        hideToTray();
+      } else if (key === 'd') {
+        e.preventDefault();
+        console.log('[app-window] diagnostico janela:', {
+          innerWidth: window.innerWidth,
+          innerHeight: window.innerHeight,
+          outerWidth: window.outerWidth,
+          outerHeight: window.outerHeight,
+          devicePixelRatio: window.devicePixelRatio,
+          chromeVisible: isChromeVisible()
+        });
+      }
+    });
+  }
+
+  // Detecta se o chrome da janela está fora da área visível (ex.: janela
+  // posicionada acima do topo do monitor). Se detectado, maximiza como
+  // recuperação automática — o usuário recupera o controle dos botões.
+  function isChromeVisible() {
+    var chrome = document.getElementById('windowChrome');
+    if (!chrome) return true;
+    var rect = chrome.getBoundingClientRect();
+    return rect.bottom > 0 && rect.top < window.innerHeight && rect.width > 0;
+  }
+
+  function ensureChromeAccessible() {
+    if (isChromeVisible()) return;
+    console.warn('[app-window] chrome fora da area visivel; maximizando como recuperacao');
+    var fn = windowMethod('Maximise', 'maximiseWindow');
+    if (fn) callWindow(fn, 'maximise');
+  }
+
+  registerKeyboardFallback();
+  // Verifica após o primeiro layout e novamente após 1.5s (o clamp do
+  // backend roda no WindowShow; esta verificação cobre o caso residual).
+  setTimeout(ensureChromeAccessible, 1500);
+
   console.log('[app-window] init: max=', !!maxBtn, 'close=', !!closeBtn,
     'runtimeReady=', runtimeReady(),
     'toggleMaximise=', window.wails && typeof window.wails.toggleMaximise,

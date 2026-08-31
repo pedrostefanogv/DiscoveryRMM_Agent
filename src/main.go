@@ -164,6 +164,24 @@ func main() {
 		event.Cancel()
 	})
 
+	// ── Ajuste de janela para área visível (DPI scaling) ──
+	// Em telas com escala 125%/150% a janela padrão pode ultrapassar a área
+	// de trabalho, escondendo o chrome (min/max/close). O clamp é aplicado:
+	//   - no primeiro show da janela (WindowShow);
+	//   - a cada resize (WindowDidResize) — cobre maximizar/restaurar;
+	//   - quando o DPI muda (WindowDPIChanged) — cobre arrastar entre
+	//     monitores com escalas diferentes.
+	// A lógica é idempotente: se a janela já cabe na WorkArea, nada é feito.
+	fitHook := func(event *application.WindowEvent) {
+		if window.IsMaximised() || window.IsFullscreen() {
+			return
+		}
+		app.FitWindowToWorkArea()
+	}
+	window.RegisterHook(events.Common.WindowShow, fitHook)
+	window.RegisterHook(events.Common.WindowDidResize, fitHook)
+	window.RegisterHook(events.Common.WindowDPIChanged, fitHook)
+
 	app.SetMainWindow(window)
 
 	if err := appInstance.Run(); err != nil {

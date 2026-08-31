@@ -92,6 +92,9 @@ import { Events, Browser, Window } from "/wails/runtime.js";
   window.wails.hideWindow = window.wails.hideWindow || function () {
     return Window.Hide();
   };
+  window.wails.maximiseWindow = window.wails.maximiseWindow || function () {
+    return Window.Maximise();
+  };
 })();
 
 // Sinaliza que o bridge v3 foi carregado (útil para debug).

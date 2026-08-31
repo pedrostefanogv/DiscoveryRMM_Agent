@@ -787,6 +787,8 @@ func (a *App) SetMainWindow(window application.Window) {
 }
 
 // ShowMainWindow restaura e mostra a janela principal (usado no single-instance).
+// Também garante que a janela fique dentro da área de trabalho visível
+// (proteção contra DPI scaling 125%/150% que esconde o chrome da janela).
 //
 //wails:ignore
 func (a *App) ShowMainWindow() {
@@ -797,6 +799,7 @@ func (a *App) ShowMainWindow() {
 	a.mainWindow.Show()
 	a.mainWindow.SetAlwaysOnTop(true)
 	a.mainWindow.SetAlwaysOnTop(false)
+	a.FitWindowToWorkArea()
 }
 
 // EmitEvent emite um evento customizado para o frontend (v3).
