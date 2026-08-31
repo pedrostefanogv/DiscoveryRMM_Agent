@@ -78,13 +78,13 @@ janela (botões minimizar/maximizar/fechar, localizado no topo via
 
 ## 3. Fase 3 (opcional) — Melhorias futuras
 
-| #   | Melhoria                        | Descrição                                                                                                                                                                     | Esforço |
-| --- | ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
-| 1   | Tamanho inicial adaptativo      | Calcular `WindowWidth/Height` no startup a partir da WorkArea da screen primária (ex.: `min(1280, workW-32)`), evitando o resize visível pós-show.                            | Médio   |
-| 2   | Persistir geometria             | Salvar tamanho/posição da janela (config local) e restaurar com clamp na abertura.                                                                                            | Médio   |
-| 3   | Menu do tray "Restaurar janela" | Item no menu do tray que chama `ShowMainWindow` + `FitWindowToWorkArea` (já coberto pelo `ShowMainWindow`, mas vale item explícito "Redefinir janela" que também centraliza). | Baixo   |
-| 4   | Flag CLI `--reset-window`       | Reseta geometria persistida (útil para suporte remoto).                                                                                                                       | Baixo   |
-| 5   | Teste automatizado              | ✅ **Concluído na revisão** — `src/app/window_fit_test.go` cobre: janela que cabe (no-op), clamp em tela pequena (1080p@150%), restauração de MinSize, reposicionamento (topo negativo e overflow à direita), WorkArea inválida e args nulos. | ✅ |
+| #   | Melhoria                        | Descrição                                                                                                                                                                                                                                     | Esforço |
+| --- | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| 1   | Tamanho inicial adaptativo      | Calcular `WindowWidth/Height` no startup a partir da WorkArea da screen primária (ex.: `min(1280, workW-32)`), evitando o resize visível pós-show.                                                                                            | Médio   |
+| 2   | Persistir geometria             | Salvar tamanho/posição da janela (config local) e restaurar com clamp na abertura.                                                                                                                                                            | Médio   |
+| 3   | Menu do tray "Restaurar janela" | Item no menu do tray que chama `ShowMainWindow` + `FitWindowToWorkArea` (já coberto pelo `ShowMainWindow`, mas vale item explícito "Redefinir janela" que também centraliza).                                                                 | Baixo   |
+| 4   | Flag CLI `--reset-window`       | Reseta geometria persistida (útil para suporte remoto).                                                                                                                                                                                       | Baixo   |
+| 5   | Teste automatizado              | ✅ **Concluído na revisão** — `src/app/window_fit_test.go` cobre: janela que cabe (no-op), clamp em tela pequena (1080p@150%), restauração de MinSize, reposicionamento (topo negativo e overflow à direita), WorkArea inválida e args nulos. | ✅      |
 
 ---
 

@@ -673,7 +673,10 @@ Section
             ${InstallerLog} "Update mode: verificando binario antes de reiniciar..."
             IfFileExists "$INSTDIR\${PRODUCT_EXECUTABLE}" 0 update_binary_missing
             ${InstallerLog} "Update mode: binario encontrado — reiniciando agente..."
-            Exec '"$INSTDIR\${PRODUCT_EXECUTABLE}"'
+            ; IMPORTANTE: reiniciar com --startup-minimized para o agente voltar
+            ; direto ao tray (mesmo comportamento do autostart no logon), e nao
+            ; abrir janela cheia na sessao do usuario apos o update.
+            Exec '"$INSTDIR\${PRODUCT_EXECUTABLE}" --startup-minimized --startup-source=update-restart'
             Goto update_restart_done
             update_binary_missing:
             ${InstallerLogError} "Update mode: binario NAO encontrado em $INSTDIR\${PRODUCT_EXECUTABLE} — agente nao reiniciado"

@@ -86,6 +86,7 @@ func main() {
 		log.Fatalf("[startup] falha ao resolver frontend assets: %v", subErr)
 	}
 	appkg.SetDebugFrontendAssets(http.FS(frontendSub))
+	startupSource = strings.ToLower(strings.TrimSpace(startupSource))
 	if startupSource == "" {
 		if startupMinimized {
 			startupSource = "autostart"
@@ -93,6 +94,14 @@ func main() {
 			startupSource = "manual"
 		}
 	}
+
+	// ── Defesa: origens automáticas SEMPRE iniciam minimizadas no tray ──
+	// O instalador NSIS reinicia o agente após update silencioso com
+	// --startup-source=update-restart. Se por qualquer motivo a flag
+	// --startup-minimized se perder (instalador antigo, script externo,
+	// atalho editado), a origem garante o comportamento correto: tray,
+	// nunca janela cheia na sessão do usuário.
+	startupSource, startupMinimized = enforceStartupMinimized(startupSource, startupMinimized)
 	log.Printf("[startup] origem da execucao: %s", startupSource)
 	if startupMinimized {
 		log.Println("[startup] execucao automatica detectada: iniciar minimizado no tray")
@@ -218,6 +227,20 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// enforceStartupMinimized garante que origens automáticas (update-restart,
+// autostart, task-scheduler, startup-link) sempre iniciem minimizadas no tray.
+// Retorna a origem normalizada e o estado final de startMinimized.
+func enforceStartupMinimized(source string, minimized bool) (string, bool) {
+	switch source {
+	case "update-restart", "autostart", "task-scheduler", "startup-link":
+		if !minimized {
+			log.Printf("[startup] origem '%s' sem --startup-minimized: forçando start minimizado no tray", source)
+			return source, true
+		}
+	}
+	return source, minimized
 }
 
 func hasStartupArg(arg string) bool {
