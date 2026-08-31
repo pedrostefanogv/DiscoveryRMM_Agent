@@ -2,6 +2,7 @@ package selfupdate
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -37,7 +38,16 @@ const (
 	// quando a falha é recuperável (estado pendente preservado). Mais curto que
 	// o backoff de falhas de rede para permitir retry rápido do instalador.
 	installRetryDelay = 30 * time.Second
+	// windowBusyRetryDelay é o intervalo de retry quando o update é adiado
+	// porque a janela do agente está aberta/em uso (não minimizada). Evita
+	// fechar/reabrir o agente enquanto o usuário está interagindo com ele.
+	windowBusyRetryDelay = 5 * time.Minute
 )
+
+// ErrWindowBusy indica que o update foi adiado porque a janela do agente
+// está aberta e em uso (não minimizada/oculta no tray). O ciclo periódico
+// retenta automaticamente quando a janela for minimizada.
+var ErrWindowBusy = errors.New("janela do agente em uso — update adiado até minimizar/ocultar")
 
 type Policy struct {
 	Enabled                    bool   `json:"enabled"`
@@ -110,6 +120,13 @@ type Updater struct {
 	// Retorna o path do arquivo baixado.
 	DownloadFromPeer func(ctx context.Context, artifactID, peerID string) (string, error)
 
+	// CanInstallNow é um callback opcional que indica se é seguro lançar o
+	// instalador agora. Deve retornar false quando a janela do agente está
+	// aberta e possivelmente em uso pelo usuário (visível e não minimizada).
+	// Quando retorna false, o update é adiado (ErrWindowBusy) e retentado no
+	// próximo ciclo. Se nil, o update nunca é adiado por estado de janela.
+	CanInstallNow func() bool
+
 	// installing é um flag atômico que previne execuções concorrentes de
 	// CheckAndUpdate. Quando true, um instalador já foi lançado e o processo
 	// está aguardando o NSIS fazer taskkill. Chamadas concorrentes (ex.:
@@ -132,6 +149,13 @@ type Updater struct {
 	// pendingTargetVersion armazena a versão alvo do pending state atual.
 	pendingTargetVersion atomic.Value // string
 
+	// ── Estado de adiamento (janela em uso) ──
+	// deferred é true quando o último check foi adiado porque a janela do
+	// agente estava aberta/em uso. Exposto no status para o frontend e admin.
+	deferred         atomic.Bool
+	deferredReason   atomic.Value // string
+	deferredSinceUTC atomic.Value // time.Time
+
 	// ── Contadores de telemetria (Fase 3.1) ──
 	// downloadOK: downloads concluídos com sucesso.
 	// launchOK: instalador lançado com sucesso (sobreviveu ao startup).
@@ -141,6 +165,47 @@ type Updater struct {
 	launchOK        atomic.Int64
 	launchFail      atomic.Int64
 	installComplete atomic.Int64
+}
+
+// windowBusy retorna true se a janela do agente está aberta/em uso e o
+// update deve ser adiado. Sem callback configurado, nunca adia.
+func (u *Updater) windowBusy() bool {
+	return u.CanInstallNow != nil && !u.CanInstallNow()
+}
+
+// markDeferred registra que o update foi adiado por janela em uso.
+func (u *Updater) markDeferred() {
+	if !u.deferred.Swap(true) {
+		u.deferredSinceUTC.Store(time.Now().UTC())
+		u.logf("[selfupdate] update adiado: janela do agente em uso (visivel e nao minimizada)")
+	}
+	u.deferredReason.Store(ErrWindowBusy.Error())
+}
+
+// clearDeferred limpa o estado de adiamento (janela liberada).
+func (u *Updater) clearDeferred() {
+	if u.deferred.Swap(false) {
+		u.logf("[selfupdate] janela liberada — update volta a ser elegivel")
+	}
+}
+
+// IsDeferred retorna true se o último check foi adiado por janela em uso.
+func (u *Updater) IsDeferred() bool { return u.deferred.Load() }
+
+// DeferredReason retorna o motivo do adiamento (string vazia se não adiado).
+func (u *Updater) DeferredReason() string {
+	if v := u.deferredReason.Load(); v != nil {
+		return v.(string)
+	}
+	return ""
+}
+
+// DeferredSince retorna o timestamp UTC desde quando o update está adiado.
+func (u *Updater) DeferredSince() time.Time {
+	if v := u.deferredSinceUTC.Load(); v != nil {
+		return v.(time.Time)
+	}
+	return time.Time{}
 }
 
 // IsChecking retorna true se há uma verificação de update em andamento.
@@ -286,21 +351,22 @@ func (u *Updater) Run(ctx context.Context, checkInterval time.Duration) {
 			return
 		case <-timer.C:
 			policy := u.policy()
-			ran := false
 			var err error
 			if !policy.Enabled {
 				u.logf("self-update agendado ignorado: policy disabled")
 			} else if startupPending {
-				ran = true
 				err = u.CheckAndUpdate(ctx, false)
 			} else if policy.CheckPeriodically {
-				ran = true
 				err = u.CheckAndUpdate(ctx, false)
 			} else {
 				u.logf("self-update agendado ignorado: periodic check disabled")
 			}
 			startupPending = false
-			if ran && err != nil {
+			if errors.Is(err, ErrWindowBusy) {
+				failures = 0
+				delay = windowBusyRetryDelay
+				u.logf("update adiado (janela em uso); retry em %s", delay)
+			} else if err != nil {
 				failures++
 				delay = backoffForFailures(failures)
 				u.logf("ciclo self-update com falha (consecutivas=%d, proximo em %s): %v", failures, delay, err)
@@ -330,7 +396,13 @@ func (u *Updater) Run(ctx context.Context, checkInterval time.Duration) {
 				}
 				err := u.CheckAndUpdate(ctx, force)
 				startupPending = false
-				if err != nil {
+				if errors.Is(err, ErrWindowBusy) {
+					// Janela em uso: não conta como falha (sem backoff progressivo).
+					// Retenta em intervalo curto até a janela ser minimizada.
+					failures = 0
+					delay = windowBusyRetryDelay
+					u.logf("update adiado (janela em uso); retry em %s", delay)
+				} else if err != nil {
 					failures++
 					delay = backoffForFailures(failures)
 					u.logf("ciclo antecipado com falha (consecutivas=%d, proximo em %s): %v", failures, delay, err)
@@ -385,6 +457,17 @@ func (u *Updater) CheckAndUpdate(ctx context.Context, force bool) error {
 		u.logf("[selfupdate] check ignorado: instalador ja em andamento")
 		return nil
 	}
+
+	// ── Gate: janela do agente em uso ──
+	// Se a janela está aberta (visível e não minimizada), o usuário pode estar
+	// interagindo com o agente. Adia o update para não fechar/reabrir a janela
+	// em uso. O ciclo periódico retenta quando a janela for minimizada/oculta.
+	// force=true (comando explícito do servidor/admin) ignora o gate.
+	if !force && u.windowBusy() {
+		u.markDeferred()
+		return ErrWindowBusy
+	}
+	u.clearDeferred()
 
 	// ── Retry de instalador pendente ──
 	// Se um launch anterior falhou mas o estado pendente foi preservado (com

@@ -39,6 +39,25 @@
       </article>
 
       <article class="card status-kpi-card">
+        <h3 data-i18n="status.agentUpdateTitle">Atualização do Agente</h3>
+        <div class="status-facts">
+          <div class="fact">
+            <div class="k" data-i18n="field.updateState">Estado</div>
+            <div id="statusUpdateState" class="v">-</div>
+          </div>
+          <div class="fact">
+            <div class="k" data-i18n="field.lastUpdateCheck">Última verificação</div>
+            <div id="statusLastUpdateCheck" class="v">-</div>
+          </div>
+          <div class="fact">
+            <div class="k" data-i18n="field.pendingVersion">Versão pendente</div>
+            <div id="statusUpdatePendingVersion" class="v mono">-</div>
+          </div>
+        </div>
+        <div id="statusUpdateDeferredBanner" class="meta" hidden></div>
+      </article>
+
+      <article class="card status-kpi-card">
         <h3 data-i18n="status.systemTitle">Sistema</h3>
         <div class="status-facts">
           <div class="fact">

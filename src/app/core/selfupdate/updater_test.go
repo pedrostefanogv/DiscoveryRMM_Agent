@@ -148,6 +148,57 @@ func TestResumePendingInstallReport_ClearsStateOnVersionMatch(t *testing.T) {
 	}
 }
 
+func TestWindowBusy(t *testing.T) {
+	// Sem callback: nunca adia.
+	u := &Updater{}
+	if u.windowBusy() {
+		t.Fatal("windowBusy = true sem CanInstallNow configurado")
+	}
+
+	// Callback retorna true (janela minimizada/oculta): não adia.
+	allowed := &Updater{CanInstallNow: func() bool { return true }}
+	if allowed.windowBusy() {
+		t.Fatal("windowBusy = true com CanInstallNow retornando true")
+	}
+
+	// Callback retorna false (janela aberta em uso): adia.
+	busy := &Updater{CanInstallNow: func() bool { return false }}
+	if !busy.windowBusy() {
+		t.Fatal("windowBusy = false com CanInstallNow retornando false")
+	}
+}
+
+func TestCheckAndUpdate_DeferredWhenWindowBusy(t *testing.T) {
+	updater := &Updater{
+		GetToken:      func() string { return "token" },
+		GetAgentID:    func() string { return "agent-1" },
+		CanInstallNow: func() bool { return false }, // janela aberta em uso
+		Logf:          func(string, ...any) {},
+	}
+
+	err := updater.CheckAndUpdate(context.Background(), false)
+	if !errors.Is(err, ErrWindowBusy) {
+		t.Fatalf("err = %v, want ErrWindowBusy", err)
+	}
+}
+
+func TestCheckAndUpdate_ForceBypassesWindowBusy(t *testing.T) {
+	// force=true ignora o gate de janela (comando explícito do servidor).
+	// Sem token válido o check falha antes de qualquer rede, mas NÃO deve
+	// retornar ErrWindowBusy — prova que o gate foi ignorado.
+	updater := &Updater{
+		GetToken:      func() string { return "" },
+		GetAgentID:    func() string { return "agent-1" },
+		CanInstallNow: func() bool { return false },
+		Logf:          func(string, ...any) {},
+	}
+
+	err := updater.CheckAndUpdate(context.Background(), true)
+	if errors.Is(err, ErrWindowBusy) {
+		t.Fatal("force=true não deveria ser bloqueado pelo gate de janela")
+	}
+}
+
 func TestCompareVersions_SemverSegments(t *testing.T) {
 	if got := compareVersions("1.10.0", "1.2.9"); got <= 0 {
 		t.Fatalf("compareVersions should treat 1.10.0 > 1.2.9, got %d", got)

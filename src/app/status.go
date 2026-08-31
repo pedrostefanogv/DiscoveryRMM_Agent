@@ -127,6 +127,13 @@ func (a *App) GetStatusOverview() StatusOverview {
 		out.UpdateLaunchOKCount = a.selfUpdater.LaunchOKCount()
 		out.UpdateLaunchFailCount = a.selfUpdater.LaunchFailCount()
 		out.UpdateInstallCompleteCount = a.selfUpdater.InstallCompleteCount()
+		out.UpdateDeferred = a.selfUpdater.IsDeferred()
+		if out.UpdateDeferred {
+			out.UpdateDeferredReason = a.selfUpdater.DeferredReason()
+			if t := a.selfUpdater.DeferredSince(); !t.IsZero() {
+				out.UpdateDeferredSinceUTC = t.UTC().Format(time.RFC3339)
+			}
+		}
 	}
 
 	return out

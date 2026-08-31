@@ -671,6 +671,15 @@ func NewApp(opts AppStartupOptions) *App {
 		// InstallerLogPath: caminho para o log do NSIS, usado pelo
 		// ResumePendingInstallReport para correlacionar execuções.
 		InstallerLogPath: platform.InstallerLogPath(),
+		// CanInstallNow: só permite lançar o instalador quando a janela do
+		// agente NÃO está visível em tela (minimizada ou oculta no tray).
+		// Evita fechar/reabrir o agente enquanto o usuário o está usando.
+		CanInstallNow: func() bool {
+			if a.mainWindow == nil {
+				return true
+			}
+			return !a.mainWindow.IsVisible() || a.mainWindow.IsMinimised()
+		},
 		// OnSelfUpdateInstall: PSADT desabilitado para selfupdate.
 		// O ShellExecuteEx("runas") em LaunchInstallerElevated já lança
 		// o instalador como processo independente (não filho), garantindo

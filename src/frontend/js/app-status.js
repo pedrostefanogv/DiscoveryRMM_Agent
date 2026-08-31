@@ -18,6 +18,8 @@ const statusNonCriticalTrafficEl = document.getElementById('statusNonCriticalTra
 const statusMessageEl = document.getElementById('statusMessage');
 const statusLastUpdateCheckEl = document.getElementById('statusLastUpdateCheck');
 const statusUpdateStateEl = document.getElementById('statusUpdateState');
+const statusUpdatePendingVersionEl = document.getElementById('statusUpdatePendingVersion');
+const statusUpdateDeferredBannerEl = document.getElementById('statusUpdateDeferredBanner');
 const agentUpdateCheckBtnEl = document.getElementById('agentUpdateCheckBtn');
 
 function statusSafe(value, fallback) {
@@ -178,8 +180,29 @@ function renderStatusOverview(data) {
       statusUpdateStateEl.textContent = translate('common.disabled');
     } else if (data && data.updateCheckInProgress) {
       statusUpdateStateEl.textContent = translate('status.checkingUpdate');
+    } else if (data && data.updateDeferred) {
+      statusUpdateStateEl.textContent = translate('status.updateDeferred');
+    } else if (data && data.updatePendingTargetVersion) {
+      statusUpdateStateEl.textContent = translate('status.updatePendingInstall');
     } else {
       statusUpdateStateEl.textContent = translate('common.idle');
+    }
+  }
+
+  if (statusUpdatePendingVersionEl) {
+    statusUpdatePendingVersionEl.textContent = statusSafe(data && data.updatePendingTargetVersion, '-');
+  }
+
+  if (statusUpdateDeferredBannerEl) {
+    if (data && data.updateDeferred) {
+      var sinceLabel = data.updateDeferredSinceUtc
+        ? formatStatusRelativeDate(data.updateDeferredSinceUtc)
+        : '-';
+      statusUpdateDeferredBannerEl.textContent = translate('status.updateDeferredDetail', { since: sinceLabel });
+      statusUpdateDeferredBannerEl.hidden = false;
+    } else {
+      statusUpdateDeferredBannerEl.hidden = true;
+      statusUpdateDeferredBannerEl.textContent = '';
     }
   }
 

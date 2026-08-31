@@ -40,6 +40,10 @@ type Overview struct {
 	UpdateLastError             string `json:"updateLastError,omitempty"`
 	UpdateLastInstallerExitCode int32  `json:"updateLastInstallerExitCode"`
 	UpdatePendingTargetVersion  string `json:"updatePendingTargetVersion,omitempty"`
+	// Estado de adiamento: update pronto mas aguardando janela minimizada/oculta.
+	UpdateDeferred         bool   `json:"updateDeferred"`
+	UpdateDeferredReason   string `json:"updateDeferredReason,omitempty"`
+	UpdateDeferredSinceUTC string `json:"updateDeferredSinceUtc,omitempty"`
 	// Contadores de telemetria do self-update
 	UpdateDownloadOKCount      int64 `json:"updateDownloadOkCount"`
 	UpdateLaunchOKCount        int64 `json:"updateLaunchOkCount"`
