@@ -30,6 +30,23 @@ function statusSafe(value, fallback) {
   return String(value);
 }
 
+// Escreve textContent apenas quando o valor muda. Reescrever o mesmo texto a
+// cada ciclo de polling (4s) força reflow e causa a "piscada" percebida nos
+// cards da página de status.
+function statusSetText(el, value) {
+  if (!el) return;
+  var text = value === null || value === undefined ? '' : String(value);
+  if (el.textContent !== text) {
+    el.textContent = text;
+  }
+}
+
+// Mostra/esconde elemento apenas quando o estado muda (evita reflow redundante).
+function statusSetHidden(el, hidden) {
+  if (!el || el.hidden === hidden) return;
+  el.hidden = hidden;
+}
+
 
 function formatConnectionTypeLabel(value) {
   var normalized = String(value || '').trim().toLowerCase();
@@ -192,56 +209,60 @@ function renderStatusOverview(data) {
   var connected = !!(data && (data.transportConnected || data.connected));
 
   if (statusConnectionDotEl) {
-    statusConnectionDotEl.className = 'agent-status-indicator ' + (connected ? 'online' : 'offline');
+    var dotClass = 'agent-status-indicator ' + (connected ? 'online' : 'offline');
+    // Não reatribuir a mesma classe: reiniciaria a animação pulse a cada poll.
+    if (statusConnectionDotEl.className !== dotClass) {
+      statusConnectionDotEl.className = dotClass;
+    }
   }
   if (statusConnectionLabelEl) {
-    statusConnectionLabelEl.textContent = connected ? translate('common.online') : translate('common.offline');
+    statusSetText(statusConnectionLabelEl, connected ? translate('common.online') : translate('common.offline'));
   }
 
   var line1 = translate('window.meta.server') + ': ' + statusSafe(data && data.server, '-');
   var line2 = translate('status.transportState') + ': ' + formatConnectionTypeLabel(data && data.connectionType);
 
   if (statusConnectionDetailEl) {
-    statusConnectionDetailEl.textContent = line1 + '\n' + line2;
+    statusSetText(statusConnectionDetailEl, line1 + '\n' + line2);
   }
 
-  if (statusAppVersionEl) statusAppVersionEl.textContent = statusSafe(data && data.appVersion, 'dev');
+  if (statusAppVersionEl) statusSetText(statusAppVersionEl, statusSafe(data && data.appVersion, 'dev'));
   var sidebarVersionEl = document.querySelector('.sidebar-version');
-  if (sidebarVersionEl) sidebarVersionEl.textContent = 'v' + statusSafe(data && data.appVersion, 'dev');
-  if (statusAppCommitEl) statusAppCommitEl.textContent = statusSafe(data && data.appCommit, '-');
+  if (sidebarVersionEl) statusSetText(sidebarVersionEl, 'v' + statusSafe(data && data.appVersion, 'dev'));
+  if (statusAppCommitEl) statusSetText(statusAppCommitEl, statusSafe(data && data.appCommit, '-'));
   if (statusBuildDateEl) {
     var buildDateUtc = data && data.buildDateUtc;
-    statusBuildDateEl.textContent = buildDateUtc ? formatDate(buildDateUtc, '-') : translate('common.unavailable');
+    statusSetText(statusBuildDateEl, buildDateUtc ? formatDate(buildDateUtc, '-') : translate('common.unavailable'));
   }
-  if (statusOSNameEl) statusOSNameEl.textContent = statusSafe(data && (data.osDisplayVersion || data.osVersion), '-');
-  if (statusOSVersionEl) statusOSVersionEl.textContent = statusSafe(data && data.osVersion, '-');
+  if (statusOSNameEl) statusSetText(statusOSNameEl, statusSafe(data && (data.osDisplayVersion || data.osVersion), '-'));
+  if (statusOSVersionEl) statusSetText(statusOSVersionEl, statusSafe(data && data.osVersion, '-'));
   if (statusOSEditionEl) {
     var edition = data && data.osEdition ? String(data.osEdition) : '';
     if (!edition && data && data.osName) {
       // Fallback: usa o nome do SO quando a edição não veio do backend.
       edition = String(data.osName);
     }
-    statusOSEditionEl.textContent = statusSafe(edition, '-');
+    statusSetText(statusOSEditionEl, statusSafe(edition, '-'));
   }
 
   if (statusRealtimeEl) {
     if (data && data.realtimeAvailable) {
-      statusRealtimeEl.textContent = data.realtimeNatsConnected ? translate('common.online') : translate('common.degraded');
+      statusSetText(statusRealtimeEl, data.realtimeNatsConnected ? translate('common.online') : translate('common.degraded'));
     } else {
-      statusRealtimeEl.textContent = translate('common.unavailable');
+      statusSetText(statusRealtimeEl, translate('common.unavailable'));
     }
   }
 
   if (statusRealtimeAgentsEl) {
-    statusRealtimeAgentsEl.textContent = resolveConnectedP2PAgents(data);
+    statusSetText(statusRealtimeAgentsEl, resolveConnectedP2PAgents(data));
   }
 
   if (statusServerPongAtEl) {
-    statusServerPongAtEl.textContent = formatStatusRelativeDate(data && data.lastGlobalPongAtUtc);
+    statusSetText(statusServerPongAtEl, formatStatusRelativeDate(data && data.lastGlobalPongAtUtc));
   }
 
   if (statusNonCriticalTrafficEl) {
-    statusNonCriticalTrafficEl.textContent = formatNonCriticalTrafficStatus(data);
+    statusSetText(statusNonCriticalTrafficEl, formatNonCriticalTrafficStatus(data));
   }
 
   // Indicador de update pendente/adiado no card Status do Agente.
@@ -251,18 +272,20 @@ function renderStatusOverview(data) {
     if (hasPending) {
       var versionLabel = statusSafe(data.updatePendingTargetVersion, '?');
       if (isDeferred) {
-        statusUpdatePendingBannerEl.textContent = translate('status.updatePendingDeferred', { version: versionLabel });
+        statusSetText(statusUpdatePendingBannerEl, translate('status.updatePendingDeferred', { version: versionLabel }));
       } else {
-        statusUpdatePendingBannerEl.textContent = translate('status.updatePendingReady', { version: versionLabel });
+        statusSetText(statusUpdatePendingBannerEl, translate('status.updatePendingReady', { version: versionLabel }));
       }
-      statusUpdatePendingBannerEl.hidden = false;
+      statusSetHidden(statusUpdatePendingBannerEl, false);
     } else {
-      statusUpdatePendingBannerEl.hidden = true;
-      statusUpdatePendingBannerEl.textContent = '';
+      statusSetHidden(statusUpdatePendingBannerEl, true);
+      statusSetText(statusUpdatePendingBannerEl, '');
     }
   }
   if (agentUpdateInstallBtnEl) {
-    agentUpdateInstallBtnEl.hidden = !(data && data.updatePendingTargetVersion);
+    // Botão "Atualizar agora" só aparece com update pendente de instalação
+    // (janela aberta → aguardando ir ao tray). Permite forçar a instalação.
+    statusSetHidden(agentUpdateInstallBtnEl, !(data && data.updatePendingTargetVersion));
   }
 
   if (statusMessageEl) {
@@ -270,42 +293,45 @@ function renderStatusOverview(data) {
     if (data && data.nonCriticalDeferred && data.nonCriticalDeferredReason) {
       message += ' | ' + translate('status.nonCriticalReason') + ': ' + data.nonCriticalDeferredReason;
     }
-    statusMessageEl.textContent = message;
+    statusSetText(statusMessageEl, message);
   }
 
   // Indicadores de integracao (Zero Touch + P2P).
   if (statusZtcProvisionedEl) {
-    statusZtcProvisionedEl.textContent = data && data.ztcProvisioned != null && data.ztcProvisioned >= 0
+    statusSetText(statusZtcProvisionedEl, data && data.ztcProvisioned != null && data.ztcProvisioned >= 0
       ? String(data.ztcProvisioned)
-      : '-';
+      : '-');
   }
   if (statusP2PBytesEl) {
     if (data && data.p2pBytesUp != null && data.p2pBytesDown != null) {
-      statusP2PBytesEl.textContent = formatP2PBytesStatus(data.p2pBytesUp) + ' / ' + formatP2PBytesStatus(data.p2pBytesDown);
+      statusSetText(statusP2PBytesEl, formatP2PBytesStatus(data.p2pBytesUp) + ' / ' + formatP2PBytesStatus(data.p2pBytesDown));
     } else {
-      statusP2PBytesEl.textContent = '-';
+      statusSetText(statusP2PBytesEl, '-');
     }
   }
   if (statusP2PActiveEl) {
     if (data && data.p2pActive === true) {
-      statusP2PActiveEl.textContent = translate('common.online');
+      statusSetText(statusP2PActiveEl, translate('common.online'));
     } else if (data && data.p2pActive === false) {
-      statusP2PActiveEl.textContent = translate('common.offline');
+      statusSetText(statusP2PActiveEl, translate('common.offline'));
     } else {
-      statusP2PActiveEl.textContent = '-';
+      statusSetText(statusP2PActiveEl, '-');
     }
   }
 }
 
 function renderStatusError(message) {
   if (statusConnectionDotEl) {
-    statusConnectionDotEl.className = 'agent-status-indicator offline';
+    var dotClass = 'agent-status-indicator offline';
+    if (statusConnectionDotEl.className !== dotClass) {
+      statusConnectionDotEl.className = dotClass;
+    }
   }
   if (statusConnectionLabelEl) {
-    statusConnectionLabelEl.textContent = translate('status.failedRead');
+    statusSetText(statusConnectionLabelEl, translate('status.failedRead'));
   }
   if (statusConnectionDetailEl) {
-    statusConnectionDetailEl.textContent = statusSafe(message, translate('status.couldNotLoadAgentStatus'));
+    statusSetText(statusConnectionDetailEl, statusSafe(message, translate('status.couldNotLoadAgentStatus')));
   }
 }
 
@@ -340,13 +366,13 @@ async function loadStatusOverview() {
       Object.assign(window.__lastStatusData, facts);
     }
     if (statusZtcProvisionedEl && facts.ztcProvisioned != null) {
-      statusZtcProvisionedEl.textContent = String(facts.ztcProvisioned);
+      statusSetText(statusZtcProvisionedEl, String(facts.ztcProvisioned));
     }
     if (statusP2PBytesEl && facts.p2pBytesUp != null && facts.p2pBytesDown != null) {
-      statusP2PBytesEl.textContent = formatP2PBytesStatus(facts.p2pBytesUp) + ' / ' + formatP2PBytesStatus(facts.p2pBytesDown);
+      statusSetText(statusP2PBytesEl, formatP2PBytesStatus(facts.p2pBytesUp) + ' / ' + formatP2PBytesStatus(facts.p2pBytesDown));
     }
     if (statusP2PActiveEl && facts.p2pActive != null) {
-      statusP2PActiveEl.textContent = facts.p2pActive ? translate('common.online') : translate('common.offline');
+      statusSetText(statusP2PActiveEl, facts.p2pActive ? translate('common.online') : translate('common.offline'));
     }
   }).catch(function () { /* best-effort */ });
 }
@@ -396,10 +422,13 @@ initStatusPage();
 // da página de Status, sem depender do polling.
 window.__connectivityEventPing = function (connected, transport, source) {
   if (statusConnectionDotEl) {
-    statusConnectionDotEl.className = 'agent-status-indicator ' + (connected ? 'online' : 'offline');
+    var dotClass = 'agent-status-indicator ' + (connected ? 'online' : 'offline');
+    if (statusConnectionDotEl.className !== dotClass) {
+      statusConnectionDotEl.className = dotClass;
+    }
   }
   if (statusConnectionLabelEl) {
-    statusConnectionLabelEl.textContent = connected ? translate('common.online') : translate('common.offline');
+    statusSetText(statusConnectionLabelEl, connected ? translate('common.online') : translate('common.offline'));
   }
 };
 

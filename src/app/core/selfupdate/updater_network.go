@@ -36,6 +36,10 @@ func (u *Updater) ResumePendingInstallReport(ctx context.Context) {
 	state, err := u.loadPendingInstallState()
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
+			// Sem pending em disco: garante que a versão alvo exposta ao
+			// frontend também fique limpa (evita botão "Atualizar agora"
+			// fantasma vindo de estado stale do processo anterior).
+			u.pendingTargetVersion.Store("")
 			return
 		}
 		u.logf("falha ao carregar estado pendente de install: %v", err)

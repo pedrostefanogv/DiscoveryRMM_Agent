@@ -12,7 +12,10 @@ import (
 func (c *Coordinator) GetStatus() P2PDebugStatus {
 	cfg := c.deps.GetP2PConfig()
 	c.mu.RLock()
-	active := c.deps.DebugMode() && cfg.Enabled
+	// Active reflete o estado real do coordinator: config habilitada + Run()
+	// em execução (started). Não depende de DebugMode — em produção o P2P
+	// fica ativo por padrão e a página de status deve refletir isso.
+	active := cfg.Enabled && c.started
 	listenAddress := c.listenAddress
 	if strings.TrimSpace(listenAddress) == "" && c.transferServer != nil {
 		listenAddress = c.transferServer.BaseURL()

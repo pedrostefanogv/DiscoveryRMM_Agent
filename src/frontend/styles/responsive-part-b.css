@@ -809,6 +809,10 @@
 
 .status-kpi-card {
   min-height: 170px;
+  /* Sem animação de entrada: o polling de 4s re-renderiza os cards e a
+     animação "rise" (herdada de .card) reiniciaria a cada ciclo, causando
+     a "piscada" percebida na página de status. */
+  animation: none;
 }
 
 .status-kpi-card.wide {
@@ -871,7 +875,9 @@
 .agent-status-indicator.online {
   background: var(--status-indicator-online);
   box-shadow: 0 0 0 3px var(--status-indicator-online-ring);
-  animation: pulse-green 2s infinite;
+  /* Pulse sutil e lento: mudanças de box-shadow grandes a cada 2s eram
+     percebidas como piscada junto com o polling de status. */
+  animation: pulse-green 4s ease-in-out infinite;
 }
 
 .agent-status-indicator.offline {

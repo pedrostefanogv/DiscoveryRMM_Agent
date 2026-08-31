@@ -89,6 +89,10 @@ func (u *Updater) clearPendingInstallState() {
 		return
 	}
 	u.installing.Store(false) // libera trava de concorrência
+	// Limpa também a versão alvo exposta ao frontend — sem isso o botão
+	// "Atualizar agora" na página de status continuaria visível mesmo
+	// depois do estado pendente ser descartado.
+	u.pendingTargetVersion.Store("")
 	errutil.LogIfErr(os.Remove(path), "selfupdate: limpar estado de instalacao pendente")
 }
 
