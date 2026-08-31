@@ -84,7 +84,7 @@ janela (botões minimizar/maximizar/fechar, localizado no topo via
 | 2   | Persistir geometria             | Salvar tamanho/posição da janela (config local) e restaurar com clamp na abertura.                                                                                            | Médio   |
 | 3   | Menu do tray "Restaurar janela" | Item no menu do tray que chama `ShowMainWindow` + `FitWindowToWorkArea` (já coberto pelo `ShowMainWindow`, mas vale item explícito "Redefinir janela" que também centraliza). | Baixo   |
 | 4   | Flag CLI `--reset-window`       | Reseta geometria persistida (útil para suporte remoto).                                                                                                                       | Baixo   |
-| 5   | Teste automatizado              | Teste unitário de `fitWindowToScreen` com screens sintéticas (WorkArea menor que a janela, origem negativa, etc.).                                                            | Baixo   |
+| 5   | Teste automatizado              | ✅ **Concluído na revisão** — `src/app/window_fit_test.go` cobre: janela que cabe (no-op), clamp em tela pequena (1080p@150%), restauração de MinSize, reposicionamento (topo negativo e overflow à direita), WorkArea inválida e args nulos. | ✅ |
 
 ---
 
@@ -113,3 +113,55 @@ janela (botões minimizar/maximizar/fechar, localizado no topo via
 - **Monitores múltiplos:** `GetScreen()` retorna a screen onde a janela está;
   o clamp usa a WorkArea correta por monitor (DIP já convertido).
 - **Fullscreen/maximizado:** protegido por check explícito no hook.
+
+---
+
+## 6. Revisão (2026-08-30) — bugs corrigidos e melhorias
+
+### Bugs encontrados e corrigidos
+
+1. **`SetSize` rebaixava o `MinSize` permanentemente** (crítico)
+   - O Wails v3, ao receber `SetSize(w,h)` com `h < MinHeight`, **rebaixa o
+     MinSize da janela** para o novo tamanho (`webview_window.go` →
+     `SetMinSize`). No cenário 1080p@150% (clamp para ~656 de altura <
+     MinHeight 700), o mínimo original (980x700) ficava permanentemente
+     reduzido — em um monitor maior, o usuário não conseguiria redimensionar
+     abaixo/acima corretamente.
+   - **Correção:** após o clamp, se o novo tamanho respeita o mínimo
+     original, `SetMinSize(WindowMinWidth, WindowMinHeight)` é restaurado.
+     Quando o clamp é menor que o mínimo (tela pequena), não restauramos —
+     `SetMinSize` redimensionaria de volta e desfaria o clamp.
+
+2. **Reposicionamento usava tamanho antigo em cenários de clamp**
+   - O cálculo de posição agora usa explicitamente `newW/newH` (tamanho
+     pós-clamp), evitando posição incorreta quando `SetSize` acabou de ser
+     chamado.
+
+3. **`WindowDidResize` sem debounce**
+   - O evento dispara dezenas de vezes durante resize interativo;
+     `SetSize`/`SetPosition` usam `InvokeSync` (dispatch + wait na main
+     thread), então o clamp "brigaria" com o arraste do usuário.
+   - **Correção:** debounce de 150ms (`time.AfterFunc` + mutex) — o clamp só
+     roda quando o resize estabiliza.
+
+4. **Frontend: recuperação automática sem retry nem guard**
+   - `ensureChromeAccessible` rodava uma única vez e podia maximizar
+     indevidamente se o clamp do backend ainda não tivesse chegado, ou em
+     modo navegador (sem métodos nativos).
+   - **Correção:** retry com backoff (até 3 tentativas), guard para modo
+     navegador e re-verificação após cada maximização.
+
+### Melhorias estruturais
+
+- **Interface `windowGeometry`** (`window_fit.go`): subconjunto testável da
+  API de janela (assina como `application.Window`: `SetSize` retorna
+  `Window`, `SetPosition` não retorna). Permite os testes unitários sem
+  mockar a interface completa.
+- **Testes:** `src/app/window_fit_test.go` — 7 casos, todos passando
+  (`go test ./app/ -run TestFitWindow`).
+
+### Verificação
+
+- `go vet ./app/ ./` — limpo.
+- `go test ./app/ -run TestFitWindow` — 7/7 PASS.
+- `node --check frontend/js/app-window.js` — sintaxe OK.

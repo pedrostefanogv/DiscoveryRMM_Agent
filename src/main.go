@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -172,11 +173,32 @@ func main() {
 	//   - quando o DPI muda (WindowDPIChanged) — cobre arrastar entre
 	//     monitores com escalas diferentes.
 	// A lógica é idempotente: se a janela já cabe na WorkArea, nada é feito.
+	//
+	// Debounce: WindowDidResize dispara dezenas de vezes durante um resize
+	// interativo. SetSize/SetPosition usam InvokeSync (dispatch para a main
+	// thread + wait), então aplicar o clamp a cada evento "brigaria" com o
+	// arraste do usuário. O debounce de 150ms aplica o clamp só quando o
+	// resize estabiliza.
+	var fitDebounce *time.Timer
+	var fitMu sync.Mutex
+	scheduleFit := func() {
+		fitMu.Lock()
+		defer fitMu.Unlock()
+		if fitDebounce != nil {
+			fitDebounce.Stop()
+		}
+		fitDebounce = time.AfterFunc(150*time.Millisecond, func() {
+			if window.IsMaximised() || window.IsFullscreen() {
+				return
+			}
+			app.FitWindowToWorkArea()
+		})
+	}
 	fitHook := func(event *application.WindowEvent) {
 		if window.IsMaximised() || window.IsFullscreen() {
 			return
 		}
-		app.FitWindowToWorkArea()
+		scheduleFit()
 	}
 	window.RegisterHook(events.Common.WindowShow, fitHook)
 	window.RegisterHook(events.Common.WindowDidResize, fitHook)

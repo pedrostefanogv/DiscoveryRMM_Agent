@@ -165,17 +165,33 @@
     return rect.bottom > 0 && rect.top < window.innerHeight && rect.width > 0;
   }
 
-  function ensureChromeAccessible() {
+  function ensureChromeAccessible(attempt) {
+    attempt = attempt || 0;
     if (isChromeVisible()) return;
-    console.warn('[app-window] chrome fora da area visivel; maximizando como recuperacao');
-    var fn = windowMethod('Maximise', 'maximiseWindow');
-    if (fn) callWindow(fn, 'maximise');
+    // Modo navegador (debug HTTP): sem métodos de janela nativos — nada a
+    // fazer além de logar. Evita tentativas inúteis em loop.
+    var maximiseFn = windowMethod('Maximise', 'maximiseWindow');
+    if (!maximiseFn) {
+      if (attempt === 0) {
+        console.warn('[app-window] chrome fora da area visivel, mas sem metodo de janela (modo navegador?)');
+      }
+      return;
+    }
+    console.warn('[app-window] chrome fora da area visivel; maximizando como recuperacao (tentativa ' + (attempt + 1) + ')');
+    callWindow(maximiseFn, 'maximise');
+    // Re-verifica: se o chrome ainda estiver invisível (ex.: maximise falhou
+    // ou o clamp do backend reposicionou depois), tenta mais 2 vezes com
+    // backoff. O clamp do backend roda no WindowShow e pode chegar depois
+    // desta verificação — o retry evita maximizar indevidamente nesse caso.
+    if (attempt < 2) {
+      setTimeout(function () { ensureChromeAccessible(attempt + 1); }, 1000 * (attempt + 1));
+    }
   }
 
   registerKeyboardFallback();
-  // Verifica após o primeiro layout e novamente após 1.5s (o clamp do
-  // backend roda no WindowShow; esta verificação cobre o caso residual).
-  setTimeout(ensureChromeAccessible, 1500);
+  // Verifica após o primeiro layout (o clamp do backend roda no WindowShow;
+  // esta verificação cobre o caso residual com retries espaçados).
+  setTimeout(function () { ensureChromeAccessible(0); }, 1500);
 
   console.log('[app-window] init: max=', !!maxBtn, 'close=', !!closeBtn,
     'runtimeReady=', runtimeReady(),

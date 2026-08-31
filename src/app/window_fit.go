@@ -10,6 +10,17 @@ import (
 // ela precisa ser reduzida para caber na área de trabalho visível.
 const windowFitMargin = 16
 
+// windowGeometry é o subconjunto da API de janela necessário para o clamp.
+// Existe para permitir testes unitários com um fake (application.Window é
+// uma interface grande demais para mockar). As assinaturas espelham
+// application.Window (SetSize retorna Window; SetPosition não retorna).
+type windowGeometry interface {
+	Size() (width int, height int)
+	Position() (x int, y int)
+	SetSize(width, height int) application.Window
+	SetPosition(x, y int)
+}
+
 // FitWindowToWorkArea garante que a janela principal fique totalmente visível
 // na área de trabalho (excluindo taskbar), independentemente da escala de DPI
 // do Windows (125%, 150%, etc.).
@@ -22,7 +33,7 @@ const windowFitMargin = 16
 //  1. Obtém a screen onde a janela está (via GetScreen, que retorna WorkArea
 //     em unidades lógicas/DIP já convertidas por applyDPIScaling).
 //  2. Se a janela excede a WorkArea, reduz o tamanho para caber (com margem).
-//  3. Reposiciona a janela para que a origem fique dentro da WorkArea.
+//  3. Reposiciona a janela para que fique totalmente dentro da WorkArea.
 //
 //wails:ignore
 func (a *App) FitWindowToWorkArea() {
@@ -40,7 +51,7 @@ func (a *App) FitWindowToWorkArea() {
 // fitWindowToScreen aplica o clamp de tamanho/posição usando a screen dada.
 // Ambos WorkArea e SetSize/SetPosition operam em unidades lógicas (DIP),
 // então nenhuma conversão manual de DPI é necessária.
-func fitWindowToScreen(window application.Window, screen *application.Screen) {
+func fitWindowToScreen(window windowGeometry, screen *application.Screen) {
 	if window == nil || screen == nil {
 		return
 	}
@@ -74,9 +85,26 @@ func fitWindowToScreen(window application.Window, screen *application.Screen) {
 		log.Printf("[window-fit] redimensionando janela %dx%d -> %dx%d (work area %dx%d @ scale %.2f)",
 			width, height, newW, newH, work.Width, work.Height, screen.ScaleFactor)
 		window.SetSize(newW, newH)
+		// BUG FIX (MinSize): o Wails v3, ao receber SetSize menor que o MinSize
+		// configurado, REBAIXA o MinSize da janela para o novo tamanho
+		// (webview_window.go SetSize -> SetMinSize). Sem a restauração abaixo,
+		// o mínimo original (980x700) ficaria permanentemente reduzido depois
+		// de um clamp em tela pequena. Só restauramos quando o tamanho atual
+		// já respeita o mínimo original — caso contrário o SetMinSize
+		// redimensionaria a janela de volta e desfaria o clamp.
+		if newW >= WindowMinWidth && newH >= WindowMinHeight {
+			if r, ok := window.(interface {
+				SetMinSize(minWidth, minHeight int)
+			}); ok {
+				r.SetMinSize(WindowMinWidth, WindowMinHeight)
+			}
+		}
 	}
 
-	// Reposiciona se a origem estiver fora da área visível (janela "cortada").
+	// Reposiciona para que a janela fique totalmente dentro da WorkArea.
+	// Usa newW/newH (tamanho pós-clamp) — se SetSize foi chamado, Position()
+	// lido aqui reflete a posição antiga com o tamanho novo ainda não
+	// aplicado de forma síncrona, então calculamos com newW/newH.
 	x, y := window.Position()
 	newX, newY := x, y
 	if newX < work.X {
