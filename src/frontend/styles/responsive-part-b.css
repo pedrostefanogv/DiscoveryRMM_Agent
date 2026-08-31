@@ -815,6 +815,12 @@
   animation: none;
 }
 
+/* O pulse infinito do indicador é percebido como piscada mesmo sem mudança
+   de dados. Na página de status o dot fica estático (verde/vermelho). */
+#statusConnectionDot.agent-status-indicator.online {
+  animation: none;
+}
+
 .status-kpi-card.wide {
   grid-column: 1 / -1;
 }

@@ -351,10 +351,31 @@ async function loadStatusOverview() {
     if (result[1] !== null) {
       data.p2pConnectedAgents = result[1];
     }
+    // Preserva os fatos de integração (ZTC/P2P) obtidos assincronamente em
+    // ciclos anteriores: GetStatusOverview não os inclui, e sem este merge o
+    // render escreveria '-' a cada poll até o callback dos facts restaurar —
+    // exatamente a piscada percebida nos cards.
+    var prev = window.__lastStatusData;
+    if (prev) {
+      if (data.ztcProvisioned == null && prev.ztcProvisioned != null) {
+        data.ztcProvisioned = prev.ztcProvisioned;
+      }
+      if (data.p2pBytesUp == null && prev.p2pBytesUp != null) {
+        data.p2pBytesUp = prev.p2pBytesUp;
+        data.p2pBytesDown = prev.p2pBytesDown;
+      }
+      if (data.p2pActive == null && prev.p2pActive != null) {
+        data.p2pActive = prev.p2pActive;
+      }
+    }
     renderStatusOverview(data);
     window.__lastStatusData = data;
   } catch (error) {
-    renderStatusError(error && error.message ? error.message : String(error));
+    // Erro transitório de polling não deve apagar dados válidos já exibidos:
+    // isso causava alternância "Falha na leitura" ↔ "Online" a cada 4s.
+    if (!window.__lastStatusData) {
+      renderStatusError(error && error.message ? error.message : String(error));
+    }
     return;
   }
   // Fatos de integração carregam em segundo plano e atualizam SOMENTE os
