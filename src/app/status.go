@@ -73,12 +73,13 @@ func (a *App) GetStatusOverview() StatusOverview {
 		if edition := strings.TrimSpace(inv.OS.Edition); edition != "" {
 			out.OSEdition = edition
 		}
-		versionParts := []string{}
-		if version := strings.TrimSpace(inv.OS.Version); version != "" {
-			versionParts = append(versionParts, version)
+		if displayVersion := strings.TrimSpace(inv.OS.DisplayVersion); displayVersion != "" {
+			out.OSDisplayVersion = displayVersion
 		}
+		// Versão do SO: build + plataforma (ex.: "26220.9223 | x86_64").
+		versionParts := []string{}
 		if build := strings.TrimSpace(inv.OS.Build); build != "" {
-			versionParts = append(versionParts, "build "+build)
+			versionParts = append(versionParts, build)
 		}
 		if arch := strings.TrimSpace(inv.OS.Architecture); arch != "" {
 			versionParts = append(versionParts, arch)

@@ -164,11 +164,12 @@ type GPUInfo struct {
 }
 
 type OperatingSystem struct {
-	Name         string `json:"name"`
-	Edition      string `json:"edition,omitempty"`
-	Version      string `json:"version"`
-	Build        string `json:"build"`
-	Architecture string `json:"architecture"`
+	Name           string `json:"name"`
+	Edition        string `json:"edition,omitempty"`
+	Version        string `json:"version"`
+	DisplayVersion string `json:"displayVersion,omitempty"`
+	Build          string `json:"build"`
+	Architecture   string `json:"architecture"`
 }
 
 type SoftwareItem struct {

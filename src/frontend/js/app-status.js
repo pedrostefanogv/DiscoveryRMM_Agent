@@ -17,9 +17,11 @@ const statusRealtimeAgentsEl = document.getElementById('statusRealtimeAgents');
 const statusServerPongAtEl = document.getElementById('statusServerPongAt');
 const statusNonCriticalTrafficEl = document.getElementById('statusNonCriticalTraffic');
 const statusMessageEl = document.getElementById('statusMessage');
+const statusZtcProvisionedEl = document.getElementById('statusZtcProvisioned');
+const statusP2PBytesEl = document.getElementById('statusP2PBytes');
+const statusP2PActiveEl = document.getElementById('statusP2PActive');
 const statusUpdatePendingBannerEl = document.getElementById('statusUpdatePendingBanner');
 const agentUpdateInstallBtnEl = document.getElementById('agentUpdateInstallBtn');
-const agentUpdateCheckBtnEl = document.getElementById('agentUpdateCheckBtn');
 
 function statusSafe(value, fallback) {
   if (value === null || value === undefined || String(value).trim() === '') {
@@ -114,6 +116,46 @@ async function fetchConnectedP2PAgents() {
   }
 }
 
+// Busca indicadores extras (Zero Touch provisionados + bytes P2P).
+// Best-effort: retorna null em caso de falha para nao impactar o status.
+async function fetchP2PIntegrationFacts() {
+  var api = appApi();
+  if (!api) return null;
+  var facts = {};
+  try {
+    if (typeof api.GetAutoProvisioningStats === 'function') {
+      var ztc = await api.GetAutoProvisioningStats();
+      facts.ztcProvisioned = ztc && ztc.totalProvisioned != null ? Number(ztc.totalProvisioned) : 0;
+    }
+  } catch (_error) {
+    facts.ztcProvisioned = null;
+  }
+  try {
+    if (typeof api.GetP2PDebugStatus === 'function') {
+      var p2p = await api.GetP2PDebugStatus();
+      var metrics = (p2p && p2p.metrics) || {};
+      facts.p2pActive = !!(p2p && p2p.active);
+      facts.p2pBytesUp = Number(metrics.bytesServed || 0);
+      facts.p2pBytesDown = Number(metrics.bytesDownloaded || 0);
+    }
+  } catch (_error) {
+    facts.p2pActive = null;
+  }
+  return facts;
+}
+
+function formatP2PBytesStatus(bytes) {
+  var n = Number(bytes || 0);
+  var units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  var i = 0;
+  while (n >= 1024 && i < units.length - 1) {
+    n /= 1024;
+    i++;
+  }
+  var label = (i === 0 ? String(n) : n.toFixed(1)) + ' ' + units[i];
+  return label;
+}
+
 function renderStatusOverview(data) {
   // "Online" reflete o transporte conectado (fonte confiável do agentconn),
   // com fallback para o campo connected consolidado. Consistente com a bolinha
@@ -143,7 +185,7 @@ function renderStatusOverview(data) {
     var buildDateUtc = data && data.buildDateUtc;
     statusBuildDateEl.textContent = buildDateUtc ? formatDate(buildDateUtc, '-') : translate('common.unavailable');
   }
-  if (statusOSNameEl) statusOSNameEl.textContent = statusSafe(data && data.osName, '-');
+  if (statusOSNameEl) statusOSNameEl.textContent = statusSafe(data && (data.osDisplayVersion || data.osVersion), '-');
   if (statusOSVersionEl) statusOSVersionEl.textContent = statusSafe(data && data.osVersion, '-');
   if (statusOSEditionEl) {
     var edition = data && data.osEdition ? String(data.osEdition) : '';
@@ -202,6 +244,29 @@ function renderStatusOverview(data) {
     }
     statusMessageEl.textContent = message;
   }
+
+  // Indicadores de integracao (Zero Touch + P2P).
+  if (statusZtcProvisionedEl) {
+    statusZtcProvisionedEl.textContent = data && data.ztcProvisioned != null && data.ztcProvisioned >= 0
+      ? String(data.ztcProvisioned)
+      : '-';
+  }
+  if (statusP2PBytesEl) {
+    if (data && data.p2pBytesUp != null && data.p2pBytesDown != null) {
+      statusP2PBytesEl.textContent = formatP2PBytesStatus(data.p2pBytesUp) + ' / ' + formatP2PBytesStatus(data.p2pBytesDown);
+    } else {
+      statusP2PBytesEl.textContent = '-';
+    }
+  }
+  if (statusP2PActiveEl) {
+    if (data && data.p2pActive === true) {
+      statusP2PActiveEl.textContent = translate('common.online');
+    } else if (data && data.p2pActive === false) {
+      statusP2PActiveEl.textContent = translate('common.offline');
+    } else {
+      statusP2PActiveEl.textContent = '-';
+    }
+  }
 }
 
 function renderStatusError(message) {
@@ -225,10 +290,14 @@ async function loadStatusOverview() {
     var result = await Promise.all([
       api.GetStatusOverview(),
       fetchConnectedP2PAgents(),
+      fetchP2PIntegrationFacts(),
     ]);
     var data = result[0] || {};
     if (result[1] !== null) {
       data.p2pConnectedAgents = result[1];
+    }
+    if (result[2]) {
+      Object.assign(data, result[2]);
     }
     renderStatusOverview(data);
   } catch (error) {
@@ -272,26 +341,7 @@ function initStatusPage() {
       }
     });
   }
-  if (agentUpdateCheckBtnEl) {
-    agentUpdateCheckBtnEl.addEventListener('click', async function () {
-      agentUpdateCheckBtnEl.disabled = true;
-      var originalText = agentUpdateCheckBtnEl.textContent;
-      agentUpdateCheckBtnEl.textContent = translate('status.checkingUpdate');
-      try {
-        var api = appApi();
-        if (api && typeof api.CheckAgentUpdate === 'function') {
-          await api.CheckAgentUpdate();
-        }
-      } catch (e) {
-        console.error('CheckAgentUpdate error:', e);
-      } finally {
-        agentUpdateCheckBtnEl.disabled = false;
-        agentUpdateCheckBtnEl.textContent = originalText;
-        // Força refresh do status para mostrar timestamp atualizado.
-        loadStatusOverview();
-      }
-    });
-  }
+  if (agentUpdateInstallBtnEl) {
 }
 
 initStatusPage();

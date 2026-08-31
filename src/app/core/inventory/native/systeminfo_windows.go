@@ -88,14 +88,16 @@ func collectSystemInfoNative(ctx context.Context) (models.HardwareInfo, models.O
 		if ubr != "" && osInfo.Build != "" {
 			osInfo.Build = osInfo.Build + "." + ubr
 		}
-		// Guarda o feature update (ex.: "24H2") concatenado na versão.
-		if displayVersion != "" && osInfo.Version != "" {
-			osInfo.Version = osInfo.Version + " (" + displayVersion + ")"
-		}
+		// Guarda o feature update (ex.: "25H2") em campo próprio.
+		osInfo.DisplayVersion = displayVersion
+		osInfo.Version = osInfo.Version + " (" + displayVersion + ")"
 	}
 	// Edition: nome completo da edição (ex.: "Windows 11 Pro Insider Preview").
 	// Igual ao Name quando derivado do registry; vazio em fallbacks.
 	osInfo.Edition = osInfo.Name
+	if isWindowsInsiderPreview() && !strings.Contains(strings.ToLower(osInfo.Edition), "insider") {
+		osInfo.Edition = osInfo.Edition + " Insider Preview"
+	}
 	// Architecture via GetNativeSystemInfo.
 	osInfo.Architecture = getArchitecture()
 
@@ -172,6 +174,28 @@ func getWindowsEdition() (productName, displayVersion, ubr string) {
 		ubr = fmt.Sprintf("%d", v)
 	}
 	return productName, displayVersion, ubr
+}
+
+// isWindowsInsiderPreview detecta se a máquina está inscrita no programa
+// Windows Insider via WindowsSelfHost (BranchReadinessLevel).
+// Best-effort: retorna false se o registry não estiver disponível.
+func isWindowsInsiderPreview() bool {
+	key, err := registry.OpenKey(
+		registry.LOCAL_MACHINE,
+		`SOFTWARE\Microsoft\WindowsSelfHost\Applicability`,
+		registry.QUERY_VALUE,
+	)
+	if err != nil {
+		return false
+	}
+	defer key.Close()
+
+	branch, _, err := key.GetStringValue("BranchReadinessLevel")
+	if err != nil {
+		return false
+	}
+	branch = strings.ToLower(strings.TrimSpace(branch))
+	return branch != "" && branch != "external"
 }
 
 // fixWindows11ProductName corrige o bug conhecido do Windows: o valor

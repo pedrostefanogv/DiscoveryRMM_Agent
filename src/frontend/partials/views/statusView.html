@@ -3,8 +3,6 @@
     <div class="statusbar page-bar">
       <span class="meta" data-i18n="status.summary">Resumo rapido de saude do agente</span>
       <div class="actions">
-        <button id="agentUpdateCheckBtn" class="btn primary" data-i18n="action.checkAgentUpdate">Verificar
-          Atualizacao</button>
         <button id="statusRefreshBtn" class="btn primary" data-i18n="action.refreshStatus">Atualizar Status</button>
       </div>
     </div>
@@ -49,11 +47,11 @@
             <div id="statusOSEdition" class="v">-</div>
           </div>
           <div class="fact">
-            <div class="k" data-i18n="field.os">SO</div>
+            <div class="k" data-i18n="field.osVersion">Versão</div>
             <div id="statusOSName" class="v">-</div>
           </div>
           <div class="fact">
-            <div class="k" data-i18n="field.osVersion">Versao do SO</div>
+            <div class="k" data-i18n="field.osBuildPlatform">Build e plataforma</div>
             <div id="statusOSVersion" class="v">-</div>
           </div>
         </div>
@@ -67,10 +65,6 @@
             <div id="statusRealtime" class="v">-</div>
           </div>
           <div class="fact">
-            <div class="k" data-i18n="field.connectedAgents">Agentes P2P conectados</div>
-            <div id="statusRealtimeAgents" class="v">-</div>
-          </div>
-          <div class="fact">
             <div class="k" data-i18n="field.serverPong">Ultimo ping do servidor</div>
             <div id="statusServerPongAt" class="v">-</div>
           </div>
@@ -78,8 +72,29 @@
             <div class="k" data-i18n="field.nonCriticalTraffic">Trafego nao critico</div>
             <div id="statusNonCriticalTraffic" class="v">-</div>
           </div>
+          <div class="fact">
+            <div class="k" data-i18n="field.realtimeMessage">Mensagem</div>
+            <div id="statusMessage" class="v">-</div>
+          </div>
         </div>
-        <div id="statusMessage" class="meta" data-i18n="common.noAdditionalInfo">Sem informacoes adicionais.</div>
+        <div class="status-facts">
+          <div class="fact">
+            <div class="k" data-i18n="field.connectedAgents">Agentes P2P conectados</div>
+            <div id="statusRealtimeAgents" class="v">-</div>
+          </div>
+          <div class="fact">
+            <div class="k" data-i18n="field.provisionedAgents">Agentes provisionados (Zero Touch)</div>
+            <div id="statusZtcProvisioned" class="v">-</div>
+          </div>
+          <div class="fact">
+            <div class="k" data-i18n="field.p2pBytes">Bytes P2P (up / down)</div>
+            <div id="statusP2PBytes" class="v">-</div>
+          </div>
+          <div class="fact">
+            <div class="k" data-i18n="field.p2pActive">P2P ativo</div>
+            <div id="statusP2PActive" class="v">-</div>
+          </div>
+        </div>
       </article>
     </div>
   </section>
