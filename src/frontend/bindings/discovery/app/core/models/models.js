@@ -1890,12 +1890,26 @@ export class OperatingSystem {
              */
             this["name"] = "";
         }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["edition"] = undefined;
+        }
         if (!("version" in $$source)) {
             /**
              * @member
              * @type {string}
              */
             this["version"] = "";
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["displayVersion"] = undefined;
         }
         if (!("build" in $$source)) {
             /**

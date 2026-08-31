@@ -1378,6 +1378,11 @@ func (a *App) runPeriodicInventorySync(ctx context.Context) {
 		a.logs.append("[inventory] coleta periodica concluida; sincronizando com servidor")
 		a.inventorySvc.SyncInventoryOnStartup(ctx, report)
 	}
+
+	// TriggerOnAgentCheckIn: dispara a cada ciclo de inventario completo (~6h).
+	if a.automationSvc != nil {
+		a.automationSvc.TriggerAgentCheckInTasks(ctx)
+	}
 }
 
 func (a *App) SendTestHeartbeat() string {

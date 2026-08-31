@@ -1,4 +1,4 @@
-//go:build windows
+﻿//go:build windows
 
 package native
 
@@ -15,12 +15,14 @@ import (
 )
 
 var procGetAdaptersAddresses = modiphlpapi.NewProc("GetAdaptersAddresses")
+var procGetBestRoute2 = modiphlpapi.NewProc("GetBestRoute2")
 
 // IP adapter address flags.
 const (
 	gaaFlagIncludePrefix = 0x00000010
 	gaaFlagSkipAnycast   = 0x00000002
 	gaaFlagSkipMulticast = 0x00000004
+	gaaFlagIncludeGateways = 0x00000040
 )
 
 // ipAdapterAddresses mirrors the IP_ADAPTER_ADDRESSES structure (partial).
@@ -68,7 +70,7 @@ type ipAdapterUnicastAddress struct {
 	Length             uint32
 	Flags              uint32
 	Next               *ipAdapterUnicastAddress
-	Address            sockaddrStorage
+	Address            socketAddress
 	PrefixOrigin       int32
 	SuffixOrigin       int32
 	DadState           int32
@@ -82,14 +84,19 @@ type ipAdapterDnsServerAdapter struct {
 	Length   uint32
 	Reserved uint32
 	Next     *ipAdapterDnsServerAdapter
-	Address  sockaddrStorage
+	Address  socketAddress
 }
 
 type ipAdapterGatewayAddress struct {
 	Length   uint32
 	Reserved uint32
 	Next     *ipAdapterGatewayAddress
-	Address  sockaddrStorage
+	Address  socketAddress
+}
+
+type socketAddress struct {
+	lpSockaddr *sockaddrStorage
+	iSockaddrLength int32
 }
 
 type sockaddrStorage struct {
@@ -106,7 +113,7 @@ func collectNetworksNative(ctx context.Context) ([]models.NetworkInfo, error) {
 	size := uint32(0)
 	r, _, _ := procGetAdaptersAddresses.Call(
 		uintptr(windows.AF_UNSPEC),
-		uintptr(gaaFlagIncludePrefix|gaaFlagSkipAnycast|gaaFlagSkipMulticast),
+		uintptr(gaaFlagIncludePrefix|gaaFlagSkipAnycast|gaaFlagSkipMulticast|gaaFlagIncludeGateways),
 		0,
 		0,
 		uintptr(unsafe.Pointer(&size)),
@@ -118,7 +125,7 @@ func collectNetworksNative(ctx context.Context) ([]models.NetworkInfo, error) {
 	buf := make([]byte, size)
 	r, _, _ = procGetAdaptersAddresses.Call(
 		uintptr(windows.AF_UNSPEC),
-		uintptr(gaaFlagIncludePrefix|gaaFlagSkipAnycast|gaaFlagSkipMulticast),
+		uintptr(gaaFlagIncludePrefix|gaaFlagSkipAnycast|gaaFlagSkipMulticast|gaaFlagIncludeGateways),
 		0,
 		uintptr(unsafe.Pointer(&buf[0])),
 		uintptr(unsafe.Pointer(&size)),
@@ -165,6 +172,20 @@ func collectNetworksNative(ctx context.Context) ([]models.NetworkInfo, error) {
 				gateways = append(gateways, ip.String())
 			}
 		}
+		// Fallback: FirstGatewayAddress pode vir NULL mesmo com GAA_FLAG_INCLUDE_GATEWAYS.
+		// Usa GetBestRoute para descobrir o gateway do primeiro IP unicast do adaptador.
+		if len(gateways) == 0 {
+			for ua := adapter.FirstUnicastAddress; ua != nil; ua = ua.Next {
+				ip := sockaddrToIP(&ua.Address)
+				if ip == nil || ip.To4() == nil || ip.IsLinkLocalUnicast() || ip.IsLoopback() {
+					continue
+				}
+				if gwIP := bestRouteGateway(ip); gwIP != "" {
+					gateways = append(gateways, gwIP)
+					break
+				}
+			}
+		}
 		info.Gateway = strings.Join(gateways, ", ")
 
 		// DNS servers.
@@ -207,24 +228,62 @@ func formatMAC(b []byte) string {
 	return strings.Join(parts, ":")
 }
 
-func sockaddrToIP(sa *sockaddrStorage) net.IP {
-	if sa == nil {
+func sockaddrToIP(sa *socketAddress) net.IP {
+	if sa == nil || sa.lpSockaddr == nil {
 		return nil
 	}
-	switch sa.Family {
+	ss := sa.lpSockaddr
+	switch ss.Family {
 	case windows.AF_INET:
 		// sockaddr_in: family(2) + port(2) + addr(4)
-		addr := sa.Data[2:6]
+		addr := ss.Data[2:6]
 		return net.IPv4(addr[0], addr[1], addr[2], addr[3])
 	case windows.AF_INET6:
 		// sockaddr_in6: family(2) + port(2) + flowinfo(4) + addr(16)
-		addr := sa.Data[6:22]
+		addr := ss.Data[6:22]
 		ip := make(net.IP, 16)
 		copy(ip, addr)
 		return ip
 	default:
 		return nil
 	}
+}
+
+// bestRouteGateway resolves the next-hop gateway for the given source IP via GetBestRoute2.
+// A row é lida como buffer bruto pois o layout de MIB_IPFORWARD_ROW2 varia com alinhamento;
+// os offsets do NextHop (family=44, addr=48) foram validados empiricamente no Windows x64.
+func bestRouteGateway(src net.IP) string {
+	src4 := src.To4()
+	if src4 == nil {
+		return ""
+	}
+	srcAddr := &windows.RawSockaddrInet4{Family: windows.AF_INET}
+	copy(srcAddr.Addr[:], src4)
+	dst := &windows.RawSockaddrInet4{Family: windows.AF_INET} // rota default
+	var row [128]byte
+	var luid uint64
+	var path [512]byte
+	r, _, _ := procGetBestRoute2.Call(
+		uintptr(unsafe.Pointer(&luid)),
+		0,
+		uintptr(unsafe.Pointer(srcAddr)),
+		uintptr(unsafe.Pointer(dst)),
+		0,
+		uintptr(unsafe.Pointer(&row[0])),
+		uintptr(unsafe.Pointer(&path[0])),
+	)
+	if r != 0 {
+		return ""
+	}
+	family := uint16(row[44]) | uint16(row[45])<<8
+	if family != windows.AF_INET {
+		return ""
+	}
+	nh := net.IPv4(row[48], row[49], row[50], row[51])
+	if nh.IsUnspecified() {
+		return "" // rota on-link, sem gateway
+	}
+	return nh.String()
 }
 
 func operStatusString(status uint32) string {

@@ -134,6 +134,20 @@ export class Overview {
              */
             this["osVersion"] = "";
         }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["osDisplayVersion"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["osEdition"] = undefined;
+        }
         if (!("lastInventoryCollected" in $$source)) {
             /**
              * @member
@@ -233,6 +247,28 @@ export class Overview {
              * @type {string | undefined}
              */
             this["updatePendingTargetVersion"] = undefined;
+        }
+        if (!("updateDeferred" in $$source)) {
+            /**
+             * Estado de adiamento: update pronto mas aguardando janela minimizada/oculta.
+             * @member
+             * @type {boolean}
+             */
+            this["updateDeferred"] = false;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["updateDeferredReason"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["updateDeferredSinceUtc"] = undefined;
         }
         if (!("updateDownloadOkCount" in $$source)) {
             /**

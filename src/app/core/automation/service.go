@@ -124,6 +124,12 @@ func (s *Service) SetNotificationDispatcher(dispatcher func(AutomationNotificati
 }
 
 func (s *Service) Run(ctx context.Context, onBeat func()) {
+	// Watcher de logon real (Windows/WTS). Se indisponivel, mantem fallback
+	// 'uma vez por processo' no reconcilePolicy.
+	loginEvents, stopLoginWatcher := startUserLoginWatcher(ctx)
+	defer stopLoginWatcher()
+	go s.consumeUserLoginEvents(ctx, loginEvents)
+
 	s.startCron()
 	defer s.stopCron()
 
@@ -148,6 +154,50 @@ func (s *Service) Run(ctx context.Context, onBeat func()) {
 	}
 }
 
+// consumeUserLoginEvents consome eventos de logon do watcher WTS (Windows) e dispara
+// tasks TriggerOnUserLogin por evento real, com dedup por sessão+janela de 60s.
+// Canal nil (não-Windows ou falha no registro) → fallback "uma vez por processo" no reconcile.
+func (s *Service) consumeUserLoginEvents(ctx context.Context, events <-chan userLoginEvent) {
+	if events == nil {
+		return
+	}
+	lastBySession := make(map[uint32]time.Time)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case ev := <-events:
+			if last, ok := lastBySession[ev.SessionID]; ok && time.Since(last) < 60*time.Second {
+				continue
+			}
+			lastBySession[ev.SessionID] = time.Now()
+			s.logf("automacao: logon detectado (sessionId=%d) - disparando tasks TriggerOnUserLogin", ev.SessionID)
+			s.triggerUserLoginTasks(ctx, ev.SessionID)
+		}
+	}
+}
+
+// triggerUserLoginTasks executa todas as tasks TriggerOnUserLogin ativas para um evento de logon.
+func (s *Service) triggerUserLoginTasks(ctx context.Context, sessionID uint32) {
+	cfg := s.getConfig()
+	agentID := strings.TrimSpace(cfg.AgentID)
+	if agentID == "" {
+		return
+	}
+	s.mu.RLock()
+	state := cloneState(s.state)
+	s.mu.RUnlock()
+	for _, task := range state.Tasks {
+		if !task.TriggerOnUserLogin {
+			continue
+		}
+		if task.RequiresApproval {
+			s.logf("automacao: tarefa %s requer aprovacao - trigger userlogin ignorado", strings.TrimSpace(task.TaskID))
+			continue
+		}
+		s.executeTaskAsync(ctx, agentID, task, sourceForTrigger(TriggerTypeUserLogin), TriggerTypeUserLogin, nil)
+	}
+}
 func (s *Service) RefreshPolicy(ctx context.Context, includeScriptContent bool) (State, error) {
 	return s.refreshPolicy(ctx, includeScriptContent)
 }
@@ -296,6 +346,10 @@ func (s *Service) reconcilePolicy(ctx context.Context, previous State, current S
 		triggered := false
 		for _, task := range current.Tasks {
 			if task.TriggerOnUserLogin {
+				if task.RequiresApproval {
+					s.logf("automacao: tarefa %s requer aprovacao - trigger userlogin ignorado", strings.TrimSpace(task.TaskID))
+					continue
+				}
 				triggered = true
 				s.executeTaskAsync(ctx, agentID, task, sourceForTrigger(TriggerTypeUserLogin), TriggerTypeUserLogin, nil)
 			}
@@ -322,6 +376,10 @@ func (s *Service) triggerImmediate(ctx context.Context, agentID, fingerprint str
 		s.executeTaskAsync(ctx, agentID, task, sourceForTrigger(TriggerTypeImmediate), TriggerTypeImmediate, nil)
 		return
 	}
+	if task.RequiresApproval {
+		s.logf("automacao: tarefa %s requer aprovacao - trigger immediate ignorado", strings.TrimSpace(task.TaskID))
+		return
+	}
 	markerKey := "immediate:" + fingerprint + ":" + strings.TrimSpace(task.TaskID)
 	if _, found, err := s.db.GetAutomationMarker(agentID, markerKey); err == nil && found {
 		return
@@ -334,9 +392,54 @@ func (s *Service) triggerImmediate(ctx context.Context, agentID, fingerprint str
 // O marcador é atrelado ao fingerprint da política, assim como no triggerImmediate.
 // Diferente do immediate, o marcador é resetado quando a política muda (novo fingerprint),
 // permitindo que a tarefa seja reexecutada após alteração no servidor.
+// TriggerAgentCheckInTasks dispara tasks TriggerOnAgentCheckIn a cada ciclo de inventário
+// completo do agent (periodicInventorySync, ~6h). Dedup por janela mínima de 1h via
+// marcador SQLite — protege contra chamadas repetidas em pouco tempo (ex.: restarts).
+// Chamado pelo App quando o inventário completo é coletado e sincronizado.
+func (s *Service) TriggerAgentCheckInTasks(ctx context.Context) {
+	cfg := s.getConfig()
+	agentID := strings.TrimSpace(cfg.AgentID)
+	if agentID == "" {
+		return
+	}
+	s.mu.RLock()
+	state := cloneState(s.state)
+	s.mu.RUnlock()
+	if len(state.Tasks) == 0 {
+		return
+	}
+
+	const checkInWindow = time.Hour
+	now := time.Now().UTC()
+	for _, task := range state.Tasks {
+		if !task.TriggerOnAgentCheckIn {
+			continue
+		}
+		if task.RequiresApproval {
+			s.logf("automacao: tarefa %s requer aprovacao - trigger checkin ignorado", strings.TrimSpace(task.TaskID))
+			continue
+		}
+		taskID := strings.TrimSpace(task.TaskID)
+		if s.db != nil {
+			markerKey := "checkin:cycle:" + taskID
+			if raw, found, err := s.db.GetAutomationMarker(agentID, markerKey); err == nil && found {
+				if last, perr := time.Parse(time.RFC3339, raw); perr == nil && now.Sub(last) < checkInWindow {
+					continue
+				}
+			}
+			errutil.LogIfErr(s.db.SetAutomationMarker(agentID, markerKey, now.Format(time.RFC3339)), "automation: definir marker checkin-cycle")
+		}
+		s.logf("automacao: check-in cycle — disparando tarefa %s", taskID)
+		s.executeTaskAsync(ctx, agentID, task, sourceForTrigger(TriggerTypeAgentCheckIn), TriggerTypeAgentCheckIn, nil)
+	}
+}
 func (s *Service) triggerOnAgentCheckIn(ctx context.Context, agentID, fingerprint string, task AutomationTask) {
 	if s.db == nil || agentID == "" || fingerprint == "" {
 		s.executeTaskAsync(ctx, agentID, task, sourceForTrigger(TriggerTypeAgentCheckIn), TriggerTypeAgentCheckIn, nil)
+		return
+	}
+	if task.RequiresApproval {
+		s.logf("automacao: tarefa %s requer aprovacao - trigger checkin ignorado", strings.TrimSpace(task.TaskID))
 		return
 	}
 	markerKey := "checkin:" + fingerprint + ":" + strings.TrimSpace(task.TaskID)
@@ -657,7 +760,7 @@ func (s *Service) rebuildRecurringSchedules(ctx context.Context, previous, curre
 			agentID := strings.TrimSpace(s.getConfig().AgentID)
 			taskID := strings.TrimSpace(taskCopy.TaskID)
 			// Dedup persistente: evita reexecucao apos crash do agente no mesmo intervalo do cron.
-			// Verifica cooldown de 60s — se a ultima execucao foi ha menos de 60s, pula.
+			// Verifica cooldown de 60s - se a ultima execucao foi ha menos de 60s, pula.
 			s.mu.RLock()
 			db := s.db
 			s.mu.RUnlock()
@@ -666,7 +769,7 @@ func (s *Service) rebuildRecurringSchedules(ctx context.Context, previous, curre
 				if lastRun, found, err := db.GetAutomationMarker(agentID, markerKey); err == nil && found {
 					if lastTS, parseErr := time.Parse(time.RFC3339, lastRun); parseErr == nil {
 						if time.Since(lastTS) < 60*time.Second {
-							s.logf("automacao: tarefa recorrente %s pulada — ultima execucao em %s (cooldown)", taskID, lastTS.UTC().Format(time.RFC3339))
+							s.logf("automacao: tarefa recorrente %s pulada - ultima execucao em %s (cooldown)", taskID, lastTS.UTC().Format(time.RFC3339))
 							return
 						}
 					}
