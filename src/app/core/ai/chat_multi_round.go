@@ -531,8 +531,9 @@ func (s *Service) parseMultiRoundSSE(body io.Reader, onToken func(string), pendi
 		// IMPORTANTE: NÃO usar TrimSpace na linha nem no conteúdo do token.
 		// O TrimSpace apagava espaços/quebras de linha legítimos nas fronteiras
 		// dos tokens (ex.: "apenas23 MB", "de1 GB", linhas de tabela markdown
-		// coladas), quebrando a renderização. Apenas o prefixo "data: " é
-		// removido, preservando o restante.
+		// coladas), quebrando a renderização. Apenas o prefixo "data: " e o
+		// \r residual de streams CRLF são removidos, preservando o restante.
+		line = strings.TrimSuffix(line, "\r")
 		if !strings.HasPrefix(line, "data:") {
 			continue
 		}

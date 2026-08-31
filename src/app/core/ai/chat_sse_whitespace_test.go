@@ -108,3 +108,58 @@ func TestParseMultiRoundSSE_TrailingSpaceInToken(t *testing.T) {
 		t.Fatalf("esperado %q, obteve %q", "Olá mundo !", got)
 	}
 }
+
+// TestParseMultiRoundSSE_CRLF garante que streams com line endings CRLF não
+// geram sse_parse_error falso (o \r residual do Scanner é removido) nem
+// corrompem o conteúdo dos tokens.
+//
+// Regressão: antes do TrimSpace, o \r era removido acidentalmente; após a
+// correção de whitespace, o \r sobrava no payload e um evento "data:\r"
+// (vazio) virava parse error no log.
+func TestParseMultiRoundSSE_CRLF(t *testing.T) {
+	const sse = "data: {\"type\":\"token\",\"content\":\"linha 1 \"}\r\n" +
+		"data: {\"type\":\"token\",\"content\":\"e linha 2\"}\r\n" +
+		"data:\r\n" +
+		"data: {\"type\":\"done\",\"sessionId\":\"s-crlf\"}\r\n"
+
+	var collected strings.Builder
+	var pending []pendingToolCall
+
+	sessionID, done, err := (&Service{}).parseMultiRoundSSE(
+		strings.NewReader(sse),
+		func(tok string) { collected.WriteString(tok) },
+		&pending,
+	)
+	if err != nil {
+		t.Fatalf("parseMultiRoundSSE erro: %v", err)
+	}
+	if !done {
+		t.Errorf("esperado done=true")
+	}
+	if sessionID != "s-crlf" {
+		t.Errorf("sessionID: esperado s-crlf, obteve %q", sessionID)
+	}
+	if got := collected.String(); got != "linha 1 e linha 2" {
+		t.Fatalf("conteúdo corrompido com CRLF: %q", got)
+	}
+}
+
+// TestParseSSEStream_CRLF cobre o mesmo cenário no parser single-round.
+func TestParseSSEStream_CRLF(t *testing.T) {
+	const sse = "data: {\"type\":\"token\",\"content\":\"espaço \"}\r\n" +
+		"data: {\"type\":\"token\",\"content\":\"preservado\"}\r\n" +
+		"data: {\"type\":\"done\",\"sessionId\":\"s-crlf2\"}\r\n"
+
+	var collected strings.Builder
+
+	_, _, _, err := (&Service{}).parseSSEStream(
+		strings.NewReader(sse),
+		func(tok string) { collected.WriteString(tok) },
+	)
+	if err != nil {
+		t.Fatalf("parseSSEStream erro: %v", err)
+	}
+	if got := collected.String(); got != "espaço preservado" {
+		t.Fatalf("conteúdo corrompido com CRLF: %q", got)
+	}
+}
