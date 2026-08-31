@@ -312,6 +312,10 @@ var APP_I18N_DICTIONARY = {
     "support.noTicketsPrompt":
       'Nenhum chamado no momento. Clique em "+ Novo Chamado" para abrir um.',
     "support.defaultOpenStatus": "Aberto",
+    "support.untitledTicket": "(Sem titulo)",
+    "support.openedAtShort": "Aberto {date}",
+    "support.updatedAt": "Atualizado {date}",
+    "support.closedAt": "Fechado {date}",
     "support.ticketOpenedAt": "Aberto em: {date}",
     "support.ratingDisplay": "Avaliacao: {rating}",
     "support.ratedAt": "Avaliado em: {date}",
@@ -823,6 +827,10 @@ var APP_I18N_DICTIONARY = {
     "support.noTicketsPrompt":
       'No tickets at the moment. Click "+ New Ticket" to open one.',
     "support.defaultOpenStatus": "Open",
+    "support.untitledTicket": "(Untitled)",
+    "support.openedAtShort": "Opened {date}",
+    "support.updatedAt": "Updated {date}",
+    "support.closedAt": "Closed {date}",
     "support.ticketOpenedAt": "Opened at: {date}",
     "support.ratingDisplay": "Rating: {rating}",
     "support.ratedAt": "Rated at: {date}",

@@ -9,6 +9,23 @@ var WORKFLOW_STATES_CACHE_TTL_MS = 10 * 60 * 1000;
 var priorityLabels = { 1: 'Baixa', 2: 'Media', 3: 'Alta', 4: 'Critica' };
 var priorityClasses = { 1: 'p-baixa', 2: 'p-media', 3: 'p-alta', 4: 'p-critica' };
 
+function ticketStatusInfo(t) {
+  var rootStyles = getComputedStyle(document.documentElement);
+  var fallbackColor = rootStyles.getPropertyValue('--success').trim() || '#2d7a44';
+  var ws = (t && t.workflowState) ? t.workflowState : null;
+  return {
+    name: (ws && ws.name) ? ws.name : translate('support.defaultOpenStatus'),
+    color: (ws && ws.color) ? ws.color : fallbackColor,
+    isFinal: ticketHasFinalState(t)
+  };
+}
+
+function ticketLastActivityText(t) {
+  if (t.closedAt) return translate('support.closedAt', { date: formatDate(t.closedAt, '') });
+  if (t.updatedAt && t.updatedAt !== t.createdAt) return translate('support.updatedAt', { date: formatDate(t.updatedAt, '') });
+  return '';
+}
+
 function showCloseTicketModal() {
   if (closeTicketModalEl) closeTicketModalEl.classList.remove('hidden');
   resetRating();
@@ -43,21 +60,12 @@ function ticketPriorityLabel(p) { return priorityLabels[p] || 'N/A'; }
 function ticketPriorityClass(p) { return priorityClasses[p] || 'p-media'; }
 
 function renderStars(rating) {
-  if (rating === null || rating === undefined || rating === '') return 'Sem avaliacao';
+  if (rating === null || rating === undefined || rating === '') return '';
   var value = Number(rating);
-  if (!Number.isFinite(value) || value < 0) return 'Sem avaliacao';
+  if (!Number.isFinite(value) || value < 0) return '';
   var stars = '*****'.slice(0, Math.min(5, Math.floor(value)));
   var empty = '-----'.slice(0, 5 - Math.min(5, Math.floor(value)));
   return stars + empty + ' (' + value + '/5)';
-}
-
-function workflowMetaText(state) {
-  if (!state) return '';
-  var flags = [];
-  if (state.isInitial) flags.push('Inicial');
-  if (state.isFinal) flags.push('Final');
-  if (state.displayOrder || state.displayOrder === 0) flags.push('Ordem ' + state.displayOrder);
-  return flags.join(' - ');
 }
 
 function ticketHasFinalState(ticket) {
@@ -249,23 +257,17 @@ function initSupport() {
     backFromNewBtnEl.addEventListener('click', function () { showSupportList(); });
   }
   if (backToListBtnEl) {
-    backToListBtnEl.addEventListener('click', function () { showSupportList(); });
+    backToListBtnEl.addEventListener('click', function () { closeTicketDetail(); });
   }
   if (submitCommentBtnEl) {
-    submitCommentBtnEl.addEventListener('click', async function () {
-      if (!currentTicketId || !commentInputEl) return;
-      var content = commentInputEl.value.trim();
-      if (!content) { showToast(translate('support.enterComment'), 'error'); return; }
-      submitCommentBtnEl.disabled = true;
-      try {
-        await appApi().AddTicketComment(currentTicketId, '', content);
-        commentInputEl.value = '';
-        showToast(translate('support.commentSent'), 'success');
-        loadTicketComments(currentTicketId);
-      } catch (err) {
-        showToast(translate('support.commentSendError', { error: String(err) }), 'error');
-      } finally {
-        submitCommentBtnEl.disabled = false;
+    submitCommentBtnEl.addEventListener('click', submitTicketComment);
+  }
+  if (commentInputEl) {
+    // Ctrl+Enter envia o comentario (Enter livre para quebras de linha)
+    commentInputEl.addEventListener('keydown', function (e) {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        e.preventDefault();
+        submitTicketComment();
       }
     });
   }
@@ -282,7 +284,9 @@ function initSupport() {
       closeTicketBtnEl.textContent = translate('support.closing');
 
       try {
-        var payload = { comment: comment, workflowStateId: workflowStateId };
+        var payload = {};
+        if (comment) payload.comment = comment;
+        if (workflowStateId) payload.workflowStateId = workflowStateId;
         if (rating !== null) payload.rating = rating;
         var ticket = await appApi().CloseSupportTicket(currentTicketId, payload);
         showToast(translate('support.ticketClosedSuccess'), 'success');
@@ -356,7 +360,7 @@ async function loadSupportTickets() {
   showSupportList();
 
   // show loading
-  supportTicketsListEl.innerHTML = '';
+  supportTicketsListEl.innerHTML = '<div class="meta">' + escapeHtml(translate('common.loading')) + '</div>';
 
   try {
     var tickets = await appApi().GetSupportTickets();
@@ -367,27 +371,25 @@ async function loadSupportTickets() {
     }
     showSupportList();
     supportTicketsListEl.innerHTML = tickets.map(function (t) {
-      var statusName = (t.workflowState && t.workflowState.name) ? t.workflowState.name : translate('support.defaultOpenStatus');
-      var rootStyles = getComputedStyle(document.documentElement);
-      var statusColor = (t.workflowState && t.workflowState.color) ? t.workflowState.color : (rootStyles.getPropertyValue('--success').trim() || '#2d7a44');
-      var statusMeta = workflowMetaText(t.workflowState);
+      var status = ticketStatusInfo(t);
       var priLabel = ticketPriorityLabel(t.priority);
       var priClass = ticketPriorityClass(t.priority);
       var cat = t.category || '';
       var date = formatDate(t.createdAt, '');
+      var lastActivity = ticketLastActivityText(t);
       var ratingText = renderStars(t.rating);
       return '<button class="support-ticket-card" data-id="' + escapeHtml(t.id) + '" data-ticket=\'' + escapeAttr(t) + '\'>' +
+        '<div class="ticket-subject">' + escapeHtml(t.title || translate('support.untitledTicket')) + '</div>' +
         '<div class="ticket-header">' +
           '<span class="ticket-id-badge">#' + escapeHtml(t.id.substring(0, 8)) + '</span>' +
-          '<span class="ticket-status-badge" style="background:' + escapeHtml(statusColor) + '20;color:' + escapeHtml(statusColor) + '">' + escapeHtml(statusName) + '</span>' +
+          '<span class="ticket-status-badge" style="background:' + escapeHtml(status.color) + '20;color:' + escapeHtml(status.color) + '">' + escapeHtml(status.name) + '</span>' +
           '<span class="ticket-priority-badge ' + priClass + '">' + escapeHtml(priLabel) + '</span>' +
         '</div>' +
-        '<div class="ticket-subject">' + escapeHtml(t.title) + '</div>' +
         '<div class="ticket-meta">' +
           (cat ? '<span>' + escapeHtml(cat) + '</span>' : '') +
-          (date ? '<span>' + escapeHtml(date) + '</span>' : '') +
-          (statusMeta ? '<span>' + escapeHtml(statusMeta) + '</span>' : '') +
-          '<span>' + escapeHtml(ratingText) + '</span>' +
+          (date ? '<span>' + escapeHtml(translate('support.openedAtShort', { date: date })) + '</span>' : '') +
+          (lastActivity ? '<span>' + escapeHtml(lastActivity) + '</span>' : '') +
+          (ratingText ? '<span>' + escapeHtml(ratingText) + '</span>' : '') +
         '</div>' +
       '</button>';
     }).join('');
@@ -402,7 +404,6 @@ async function loadSupportTickets() {
       });
     });
   } catch (err) {
-    if (ticketsLoadingEl) ticketsLoadingEl.classList.add('hidden');
     supportTicketsListEl.innerHTML = '<div class="meta">' + escapeHtml(translate('support.ticketListLoadError', { error: String(err) })) + '</div>';
   }
 }
@@ -426,16 +427,12 @@ function showTicketDetail(t) {
       currentTicket = fresh;
       renderTicketDetail(fresh);
       loadWorkflowStatesForClose(fresh);
-      loadTicketComments(t.id);
     })
     .catch(function () { /* mantem dados ja exibidos */ });
 }
 
 function renderTicketDetail(t) {
-  var statusName = (t.workflowState && t.workflowState.name) ? t.workflowState.name : translate('support.defaultOpenStatus');
-  var rootStylesDS = getComputedStyle(document.documentElement);
-  var statusColor = (t.workflowState && t.workflowState.color) ? t.workflowState.color : (rootStylesDS.getPropertyValue('--success').trim() || '#2d7a44');
-  var statusMeta = workflowMetaText(t.workflowState);
+  var status = ticketStatusInfo(t);
   var priLabel = ticketPriorityLabel(t.priority);
   var priClass = ticketPriorityClass(t.priority);
   var date = formatDate(t.createdAt, '');
@@ -443,24 +440,25 @@ function renderTicketDetail(t) {
   var ratedAt = formatDate(t.ratedAt, '');
   var ratedBy = t.ratedBy || '';
   var isFinal = ticketHasFinalState(t);
+  var lastActivity = ticketLastActivityText(t);
 
   if (ticketDetailIdEl) ticketDetailIdEl.textContent = '#' + t.id.substring(0, 8);
   if (ticketDetailStatusEl) {
-    ticketDetailStatusEl.textContent = statusName;
-    ticketDetailStatusEl.style.background = statusColor + '20';
-    ticketDetailStatusEl.style.color = statusColor;
+    ticketDetailStatusEl.textContent = status.name;
+    ticketDetailStatusEl.style.background = status.color + '20';
+    ticketDetailStatusEl.style.color = status.color;
   }
   if (ticketDetailPriorityEl) {
     ticketDetailPriorityEl.textContent = priLabel;
     ticketDetailPriorityEl.className = 'ticket-priority-badge ' + priClass;
   }
-  if (ticketDetailTitleEl) ticketDetailTitleEl.textContent = t.title || '';
+  if (ticketDetailTitleEl) ticketDetailTitleEl.textContent = t.title || translate('support.untitledTicket');
   if (ticketDetailMetaEl) {
     ticketDetailMetaEl.innerHTML =
       (cat ? '<span>' + escapeHtml(cat) + '</span>' : '') +
       (date ? '<span>' + escapeHtml(translate('support.ticketOpenedAt', { date: date })) + '</span>' : '') +
-      (statusMeta ? '<span>' + escapeHtml(statusMeta) + '</span>' : '') +
-      '<span>' + escapeHtml(translate('support.ratingDisplay', { rating: renderStars(t.rating) })) + '</span>' +
+      (lastActivity ? '<span>' + escapeHtml(lastActivity) + '</span>' : '') +
+      (t.rating !== null && t.rating !== undefined ? '<span>' + escapeHtml(translate('support.ratingDisplay', { rating: renderStars(t.rating) })) + '</span>' : '') +
       (ratedAt ? '<span>' + escapeHtml(translate('support.ratedAt', { date: ratedAt })) + '</span>' : '') +
       (ratedBy ? '<span>' + escapeHtml(translate('support.ratedBy', { name: ratedBy })) + '</span>' : '');
   }
@@ -480,6 +478,23 @@ function closeTicketDetail() {
   resetRating();
   if (closeTicketWorkflowStateSelectEl) closeTicketWorkflowStateSelectEl.value = '';
   if (closeTicketCommentEl) closeTicketCommentEl.value = '';
+}
+
+async function submitTicketComment() {
+  if (!currentTicketId || !commentInputEl || !submitCommentBtnEl) return;
+  var content = commentInputEl.value.trim();
+  if (!content) { showToast(translate('support.enterComment'), 'error'); return; }
+  submitCommentBtnEl.disabled = true;
+  try {
+    await appApi().AddTicketComment(currentTicketId, '', content);
+    commentInputEl.value = '';
+    showToast(translate('support.commentSent'), 'success');
+    await loadTicketComments(currentTicketId);
+  } catch (err) {
+    showToast(translate('support.commentSendError', { error: String(err) }), 'error');
+  } finally {
+    submitCommentBtnEl.disabled = false;
+  }
 }
 
 async function loadTicketComments(ticketId) {
@@ -502,6 +517,8 @@ async function loadTicketComments(ticketId) {
         '<div class="comment-content">' + escapeHtml(c.content) + '</div>' +
       '</div>';
     }).join('');
+    // Rola para o comentario mais recente
+    commentsListEl.scrollTop = commentsListEl.scrollHeight;
   } catch (err) {
     commentsListEl.innerHTML = '<div class="meta">' + escapeHtml(translate('support.commentLoadError', { error: String(err) })) + '</div>';
   }

@@ -530,8 +530,25 @@
 .p-critica { background: var(--priority-critical-bg); color: var(--priority-critical-text); font-weight: 800; }
 
 .ticket-subject {
-  font-size: 0.92rem;
-  font-weight: 600;
+  font-size: 0.95rem;
+  font-weight: 700;
+  line-height: 1.35;
+  color: var(--text);
+}
+
+.support-ticket-card .ticket-header {
+  order: 1;
+}
+
+.support-ticket-card .ticket-subject {
+  order: -1;
+  margin-bottom: 2px;
+}
+
+/* Card de chamado: foco visivel para navegacao por teclado */
+.support-ticket-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .ticket-meta {
