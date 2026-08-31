@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"strings"
 	"syscall"
 	"unsafe"
 
@@ -16,11 +17,11 @@ import (
 )
 
 const (
-	logicalProcessorRelationshipCore       = 0 // RelationProcessorCore
-	logicalProcessorRelationshipPackage    = 3 // RelationProcessorPackage
-	processorArchitectureAmd64            = 9
-	processorArchitectureIntel            = 0
-	processorArchitectureArm64            = 12
+	logicalProcessorRelationshipCore    = 0 // RelationProcessorCore
+	logicalProcessorRelationshipPackage = 3 // RelationProcessorPackage
+	processorArchitectureAmd64          = 9
+	processorArchitectureIntel          = 0
+	processorArchitectureArm64          = 12
 
 	computerNamePhysicalDnsFullyQualified = 5
 	allProcessorGroups                    = 0xffff
@@ -78,6 +79,20 @@ func collectSystemInfoNative(ctx context.Context) (models.HardwareInfo, models.O
 	osInfo.Name = "Windows"
 	osInfo.Version, osInfo.Build = getOSVersion()
 
+	// Nome comercial/edição do Windows via registry (ex.: "Windows 11 Pro").
+	// Sobrescreve o genérico "Windows" quando disponível.
+	if productName, displayVersion, ubr := getWindowsEdition(); productName != "" {
+		osInfo.Name = productName
+		// Complementa o build com UBR (ex.: build 22631 -> 22631.4460).
+		if ubr != "" && osInfo.Build != "" {
+			osInfo.Build = osInfo.Build + "." + ubr
+		}
+		// Guarda o feature update (ex.: "24H2") concatenado na versão.
+		if displayVersion != "" && osInfo.Version != "" {
+			osInfo.Version = osInfo.Version + " (" + displayVersion + ")"
+		}
+	}
+
 	// Architecture via GetNativeSystemInfo.
 	osInfo.Architecture = getArchitecture()
 
@@ -124,6 +139,36 @@ func getOSVersion() (version, build string) {
 	version = fmt.Sprintf("%d.%d", info.MajorVersion, info.MinorVersion)
 	build = fmt.Sprintf("%d", info.BuildNumber)
 	return version, build
+}
+
+// getWindowsEdition retorna o nome comercial do Windows (ex.: "Windows 11 Pro
+// Insider Preview") lendo o registry:
+//   - ProductName de HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion
+//     (ex.: "Windows 11 Pro"; em Insider Preview pode ser "Windows 11 Home" etc.)
+//   - DisplayVersion (ex.: "24H2") e UBR (build revision) para complementar.
+//
+// Best-effort: retorna strings vazias se o registry não estiver disponível.
+func getWindowsEdition() (productName, displayVersion, ubr string) {
+	key, err := registry.OpenKey(
+		registry.LOCAL_MACHINE,
+		`SOFTWARE\Microsoft\Windows NT\CurrentVersion`,
+		registry.QUERY_VALUE,
+	)
+	if err != nil {
+		return "", "", ""
+	}
+	defer key.Close()
+
+	if v, _, err := key.GetStringValue("ProductName"); err == nil {
+		productName = strings.TrimSpace(v)
+	}
+	if v, _, err := key.GetStringValue("DisplayVersion"); err == nil {
+		displayVersion = strings.TrimSpace(v)
+	}
+	if v, _, err := key.GetIntegerValue("UBR"); err == nil {
+		ubr = fmt.Sprintf("%d", v)
+	}
+	return productName, displayVersion, ubr
 }
 
 func getArchitecture() string {

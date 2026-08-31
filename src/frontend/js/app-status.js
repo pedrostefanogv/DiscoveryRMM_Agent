@@ -16,10 +16,8 @@ const statusRealtimeAgentsEl = document.getElementById('statusRealtimeAgents');
 const statusServerPongAtEl = document.getElementById('statusServerPongAt');
 const statusNonCriticalTrafficEl = document.getElementById('statusNonCriticalTraffic');
 const statusMessageEl = document.getElementById('statusMessage');
-const statusLastUpdateCheckEl = document.getElementById('statusLastUpdateCheck');
-const statusUpdateStateEl = document.getElementById('statusUpdateState');
-const statusUpdatePendingVersionEl = document.getElementById('statusUpdatePendingVersion');
-const statusUpdateDeferredBannerEl = document.getElementById('statusUpdateDeferredBanner');
+const statusUpdatePendingBannerEl = document.getElementById('statusUpdatePendingBanner');
+const agentUpdateInstallBtnEl = document.getElementById('agentUpdateInstallBtn');
 const agentUpdateCheckBtnEl = document.getElementById('agentUpdateCheckBtn');
 
 function statusSafe(value, fallback) {
@@ -167,43 +165,25 @@ function renderStatusOverview(data) {
     statusNonCriticalTrafficEl.textContent = formatNonCriticalTrafficStatus(data);
   }
 
-  // Renderiza status de self-update do agente.
-  if (statusLastUpdateCheckEl) {
-    if (data && data.lastUpdateCheckAtUtc) {
-      statusLastUpdateCheckEl.textContent = formatStatusRelativeDate(data.lastUpdateCheckAtUtc);
+  // Indicador de update pendente/adiado no card Status do Agente.
+  if (statusUpdatePendingBannerEl) {
+    var hasPending = !!(data && data.updatePendingTargetVersion);
+    var isDeferred = !!(data && data.updateDeferred);
+    if (hasPending) {
+      var versionLabel = statusSafe(data.updatePendingTargetVersion, '?');
+      if (isDeferred) {
+        statusUpdatePendingBannerEl.textContent = translate('status.updatePendingDeferred', { version: versionLabel });
+      } else {
+        statusUpdatePendingBannerEl.textContent = translate('status.updatePendingReady', { version: versionLabel });
+      }
+      statusUpdatePendingBannerEl.hidden = false;
     } else {
-      statusLastUpdateCheckEl.textContent = translate('status.notCheckedYet');
+      statusUpdatePendingBannerEl.hidden = true;
+      statusUpdatePendingBannerEl.textContent = '';
     }
   }
-  if (statusUpdateStateEl) {
-    if (!(data && data.updateCheckEnabled)) {
-      statusUpdateStateEl.textContent = translate('common.disabled');
-    } else if (data && data.updateCheckInProgress) {
-      statusUpdateStateEl.textContent = translate('status.checkingUpdate');
-    } else if (data && data.updateDeferred) {
-      statusUpdateStateEl.textContent = translate('status.updateDeferred');
-    } else if (data && data.updatePendingTargetVersion) {
-      statusUpdateStateEl.textContent = translate('status.updatePendingInstall');
-    } else {
-      statusUpdateStateEl.textContent = translate('common.idle');
-    }
-  }
-
-  if (statusUpdatePendingVersionEl) {
-    statusUpdatePendingVersionEl.textContent = statusSafe(data && data.updatePendingTargetVersion, '-');
-  }
-
-  if (statusUpdateDeferredBannerEl) {
-    if (data && data.updateDeferred) {
-      var sinceLabel = data.updateDeferredSinceUtc
-        ? formatStatusRelativeDate(data.updateDeferredSinceUtc)
-        : '-';
-      statusUpdateDeferredBannerEl.textContent = translate('status.updateDeferredDetail', { since: sinceLabel });
-      statusUpdateDeferredBannerEl.hidden = false;
-    } else {
-      statusUpdateDeferredBannerEl.hidden = true;
-      statusUpdateDeferredBannerEl.textContent = '';
-    }
+  if (agentUpdateInstallBtnEl) {
+    agentUpdateInstallBtnEl.hidden = !(data && data.updatePendingTargetVersion);
   }
 
   if (statusMessageEl) {
@@ -263,6 +243,25 @@ function stopStatusPoll() {
 function initStatusPage() {
   if (statusRefreshBtnEl) {
     statusRefreshBtnEl.addEventListener('click', loadStatusOverview);
+  }
+  if (agentUpdateInstallBtnEl) {
+    agentUpdateInstallBtnEl.addEventListener('click', async function () {
+      agentUpdateInstallBtnEl.disabled = true;
+      var originalText = agentUpdateInstallBtnEl.textContent;
+      agentUpdateInstallBtnEl.textContent = translate('status.installingUpdate');
+      try {
+        var api = appApi();
+        if (api && typeof api.CheckAgentUpdate === 'function') {
+          await api.CheckAgentUpdate();
+        }
+      } catch (e) {
+        console.error('CheckAgentUpdate (install now) error:', e);
+      } finally {
+        agentUpdateInstallBtnEl.disabled = false;
+        agentUpdateInstallBtnEl.textContent = originalText;
+        loadStatusOverview();
+      }
+    });
   }
   if (agentUpdateCheckBtnEl) {
     agentUpdateCheckBtnEl.addEventListener('click', async function () {

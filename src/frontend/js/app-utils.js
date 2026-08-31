@@ -19,6 +19,7 @@ var APP_I18N_DICTIONARY = {
     "action.home": "Inicio",
     "action.checkUpdates": "Verificar Atualizacoes",
     "action.checkAgentUpdate": "Verificar Atualizacao do Agente",
+    "action.installUpdateNow": "Atualizar agora",
     "action.upgradeSelected": "Atualizar Selecionados",
     "action.selectAll": "Selecionar todos",
     "action.previous": "Anterior",
@@ -172,6 +173,10 @@ var APP_I18N_DICTIONARY = {
     "status.nonCriticalReason": "Motivo do adiamento",
     "status.checkingUpdate": "Verificando atualização...",
     "status.notCheckedYet": "Nunca verificado",
+    "status.updatePendingReady": "Atualização {version} pronta para instalação.",
+    "status.updatePendingDeferred":
+      "Atualização {version} pronta — será instalada quando a janela estiver minimizada/no tray.",
+    "status.installingUpdate": "Iniciando atualização...",
     "status.updateDeferred": "Aguardando janela livre",
     "status.updatePendingInstall": "Atualização pendente de instalação",
     "status.updateDeferredDetail":
@@ -538,6 +543,7 @@ var APP_I18N_DICTIONARY = {
     "action.home": "Home",
     "action.checkUpdates": "Check Updates",
     "action.checkAgentUpdate": "Check Agent Update",
+    "action.installUpdateNow": "Update now",
     "action.upgradeSelected": "Upgrade Selected",
     "action.selectAll": "Select all",
     "action.previous": "Previous",
@@ -689,6 +695,10 @@ var APP_I18N_DICTIONARY = {
     "status.nonCriticalReason": "Deferred reason",
     "status.checkingUpdate": "Checking for updates...",
     "status.notCheckedYet": "Never checked",
+    "status.updatePendingReady": "Update {version} ready to install.",
+    "status.updatePendingDeferred":
+      "Update {version} ready — will install when the window is minimized/in tray.",
+    "status.installingUpdate": "Starting update...",
     "status.updateDeferred": "Waiting for idle window",
     "status.updatePendingInstall": "Update pending installation",
     "status.updateDeferredDetail":
