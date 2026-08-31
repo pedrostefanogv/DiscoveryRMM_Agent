@@ -151,29 +151,50 @@ func (m *automationPackageManagerRouter) installViaP2P(ctx context.Context, pack
 		return "", fmt.Errorf("packageId vazio")
 	}
 
-	artifact, peerID, err := m.resolveArtifactSource(ctx, packageID)
+	artifact, peerIDs, err := m.resolveArtifactSources(ctx, packageID)
 	if err != nil {
 		return "", err
 	}
 
-	if peerID != "" {
+	if len(peerIDs) == 0 {
+		// Artifact disponível apenas localmente (cache).
+		m.logf("[automation][p2p] usando artifact local artifact=%s", artifact)
+	} else {
 		// Swarm quando houver múltiplos peers com o artifact: distribui os
 		// chunks entre todos, aumentando throughput e resiliência. Com um
 		// único peer, o swarm degrada para o mesmo caminho chunked single-peer.
-		if avail := m.app.p2pCoord.FindArtifactPeers(artifact); avail.Found && len(avail.PeerAgentIDs) > 1 {
-			m.logf("[automation][p2p] baixando via swarm peers=%d artifact=%s", len(avail.PeerAgentIDs), artifact)
-			if _, err := m.app.p2pCoord.DownloadArtifactSwarm(ctx, artifact); err != nil {
-				return "", fmt.Errorf("falha ao baixar artifact via swarm (%d peers): %w", len(avail.PeerAgentIDs), err)
+		swarmTried := false
+		if len(peerIDs) > 1 {
+			if avail := m.app.p2pCoord.FindArtifactPeersByID(artifact); avail.Found && len(avail.PeerAgentIDs) > 1 {
+				m.logf("[automation][p2p] baixando via swarm peers=%d artifact=%s", len(avail.PeerAgentIDs), artifact)
+				if _, err := m.app.p2pCoord.DownloadArtifactSwarm(ctx, artifact); err != nil {
+					m.logf("[automation][p2p] swarm falhou, tentando peers individualmente artifact=%s motivo=%v", artifact, err)
+				} else {
+					m.logf("[automation][p2p] artifact baixado via swarm peers=%d artifact=%s", len(avail.PeerAgentIDs), artifact)
+					swarmTried = true
+				}
 			}
-			m.logf("[automation][p2p] artifact baixado via swarm peers=%d artifact=%s", len(avail.PeerAgentIDs), artifact)
-		} else {
-			if _, err := m.app.p2pCoord.DownloadArtifactFromPeer(ctx, artifact, peerID); err != nil {
-				return "", fmt.Errorf("falha ao baixar artifact de peer %s: %w", peerID, err)
-			}
-			m.logf("[automation][p2p] artifact baixado via peer=%s artifact=%s", peerID, artifact)
 		}
-	} else {
-		m.logf("[automation][p2p] usando artifact local artifact=%s", artifact)
+		if !swarmTried {
+			// Tenta cada peer candidato em ordem. Cache stale (peer não tem
+			// mais o arquivo) invalida a entrada e segue para o próximo peer —
+			// só cai no fallback winget depois de esgotar todos os peers.
+			var lastErr error
+			downloaded := false
+			for i, peerID := range peerIDs {
+				if _, err := m.app.p2pCoord.DownloadArtifactFromPeer(ctx, artifact, peerID); err != nil {
+					lastErr = err
+					m.logf("[automation][p2p] download falhou via peer=%s (%d/%d), tentando próximo artifact=%s motivo=%v", peerID, i+1, len(peerIDs), artifact, err)
+					continue
+				}
+				m.logf("[automation][p2p] artifact baixado via peer=%s artifact=%s", peerID, artifact)
+				downloaded = true
+				break
+			}
+			if !downloaded {
+				return "", fmt.Errorf("falha ao baixar artifact de %d peer(s): %w", len(peerIDs), lastErr)
+			}
+		}
 	}
 
 	artifactPath := filepath.Join(m.app.p2pTempDir(), artifact)
@@ -187,11 +208,15 @@ func (m *automationPackageManagerRouter) installViaP2P(ctx context.Context, pack
 	return output, nil
 }
 
-func (m *automationPackageManagerRouter) resolveArtifactSource(ctx context.Context, packageID string) (artifactName string, sourcePeerID string, err error) {
+// resolveArtifactSources localiza o artifact do pacote e retorna TODOS os
+// peers que o anunciam (ordenados), além do nome do arquivo. Tenta primeiro o
+// cache local, depois o índice de artifacts dos peers (gossip/live).
+// Retorna peerIDs vazio quando o artifact está disponível apenas localmente.
+func (m *automationPackageManagerRouter) resolveArtifactSources(ctx context.Context, packageID string) (artifactName string, peerIDs []string, err error) {
 	// artifactID exato: "winget:<packageId>" — lookup deterministico, nao fuzzy.
 	artifactLookupID := "winget:" + normalizePackageLookupKey(packageID)
 	if artifactLookupID == "winget:" {
-		return "", "", fmt.Errorf("packageId invalido: %s", packageID)
+		return "", nil, fmt.Errorf("packageId invalido: %s", packageID)
 	}
 
 	// 1. Tenta local primeiro (cache)
@@ -199,23 +224,30 @@ func (m *automationPackageManagerRouter) resolveArtifactSource(ctx context.Conte
 	if listErr == nil {
 		for _, a := range artifacts {
 			if strings.EqualFold(strings.TrimSpace(a.ArtifactID), artifactLookupID) {
-				return a.ArtifactName, "", nil
+				return a.ArtifactName, nil, nil
 			}
 		}
 	}
 
-	// 2. Busca em peers via gossip
+	// 2. Busca em TODOS os peers via gossip (não apenas o primeiro match).
 	m.app.p2pCoord.RefreshPeerArtifactIndex(ctx, "automation-install")
 	index := m.app.GetP2PPeerArtifactIndex()
 	for _, peer := range index {
 		for _, a := range peer.Artifacts {
 			if strings.EqualFold(strings.TrimSpace(a.ArtifactID), artifactLookupID) {
-				return a.ArtifactName, strings.TrimSpace(peer.PeerAgentID), nil
+				peerIDs = append(peerIDs, strings.TrimSpace(peer.PeerAgentID))
+				if artifactName == "" {
+					artifactName = a.ArtifactName
+				}
+				break
 			}
 		}
 	}
+	if artifactName != "" && len(peerIDs) > 0 {
+		return artifactName, peerIDs, nil
+	}
 
-	return "", "", fmt.Errorf("nenhum artifact P2P encontrado para packageId=%s (artifactID=%s)", packageID, artifactLookupID)
+	return "", nil, fmt.Errorf("nenhum artifact P2P encontrado para packageId=%s (artifactID=%s)", packageID, artifactLookupID)
 }
 
 // downloadAndCacheForP2P baixa o instalador via winget download, publica no cache
@@ -505,10 +537,11 @@ func installerFlagCascade(kind installerType) [][]string {
 }
 
 // runExeInstallerSilent executa um .exe tentando, nesta ordem:
-// 1. switches silenciosos do catálogo (silent → silentWithProgress) — dados
-//    oficiais do manifesto winget, sem adivinhação;
-// 2. cascata heurística por framework detectado (NSIS/Inno/WiX/InstallShield);
-// 3. cascata completa.
+//  1. switches silenciosos do catálogo (silent → silentWithProgress) — dados
+//     oficiais do manifesto winget, sem adivinhação;
+//  2. cascata heurística por framework detectado (NSIS/Inno/WiX/InstallShield);
+//  3. cascata completa.
+//
 // Retorna a saída do primeiro conjunto de flags que teve sucesso.
 func runExeInstallerSilent(ctx context.Context, timeout time.Duration, artifactPath, silent, silentWithProgress string) (string, error) {
 	var lastOutput string

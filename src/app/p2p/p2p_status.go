@@ -252,6 +252,84 @@ func (c *Coordinator) resolveArtifactNameByID(artifactID string) string {
 	return ""
 }
 
+// FindArtifactPeersByID busca peers que anunciam um artifact pelo artifactID
+// canônico exato (ex.: "winget:foxitfoxitreader" ou "sha256:<hex>").
+// Diferente de FindArtifactPeers (que casa por nome sanitizado), este método
+// compara diretamente o campo ArtifactID — necessário para artifacts winget,
+// cujo ID canônico não é derivável do nome do arquivo.
+// Consulta o cache primeiro; em cache miss total, faz fetch live via libp2p.
+func (c *Coordinator) FindArtifactPeersByID(artifactID string) P2PArtifactAvailabilityView {
+	artifactID = strings.TrimSpace(artifactID)
+	result := P2PArtifactAvailabilityView{
+		ArtifactID:   artifactID,
+		ArtifactName: "",
+		PeerAgentIDs: []string{},
+	}
+	if artifactID == "" {
+		return result
+	}
+
+	// 1. Cache primeiro (rápido, sem rede).
+	cacheHadEntry := false
+	c.mu.RLock()
+	for peerKey, state := range c.peerArtifacts {
+		for _, artifact := range state.Artifacts {
+			if strings.EqualFold(strings.TrimSpace(artifact.ArtifactID), artifactID) {
+				result.PeerAgentIDs = append(result.PeerAgentIDs, peerKey)
+				if result.ArtifactName == "" {
+					result.ArtifactName = strings.TrimSpace(artifact.ArtifactName)
+				}
+				cacheHadEntry = true
+				break
+			}
+		}
+	}
+	c.mu.RUnlock()
+	if cacheHadEntry {
+		sort.Strings(result.PeerAgentIDs)
+		result.PeerCount = len(result.PeerAgentIDs)
+		result.Found = result.PeerCount > 0
+		return result
+	}
+
+	// 2. Cache miss → fetch live via libp2p para cada peer conhecido.
+	h, registry := c.libp2pHostAndRegistry()
+	if h != nil && registry != nil {
+		c.mu.RLock()
+		peers := make([]p2pPeerState, 0, len(c.peers))
+		for _, p := range c.peers {
+			peers = append(peers, p)
+		}
+		c.mu.RUnlock()
+
+		for _, peer := range peers {
+			if lpID, ok := registry.Lookup(peer.Peer.AgentID); ok {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				resp, err := libp2pFetchPeers(ctx, h, lpID)
+				cancel()
+				if err != nil {
+					continue
+				}
+				c.upsertPeerArtifacts(peer.Peer.AgentID, resp.Artifacts, "on-demand")
+				for _, a := range resp.Artifacts {
+					if strings.EqualFold(strings.TrimSpace(a.ArtifactID), artifactID) {
+						result.PeerAgentIDs = append(result.PeerAgentIDs, strings.TrimSpace(peer.Peer.AgentID))
+						if result.ArtifactName == "" {
+							result.ArtifactName = strings.TrimSpace(a.ArtifactName)
+						}
+						break
+					}
+				}
+			}
+		}
+	}
+
+	sort.Strings(result.PeerAgentIDs)
+	result.PeerCount = len(result.PeerAgentIDs)
+	result.Found = result.PeerCount > 0
+	return result
+}
+
 // InvalidatePeerArtifact remove um artifact específico do cache de um peer.
 // Usado quando o cache diz que o peer tem o artifact mas o download falha
 // (peer não tem mais o arquivo).
