@@ -523,11 +523,6 @@ func (s *Service) parseMultiRoundSSE(body io.Reader, onToken func(string), pendi
 	done := false
 	parsedEvents := 0
 
-	// pendingTokenContent acumula o conteúdo de tokens cujo JSON veio
-	// fragmentado entre múltiplos eventos "token" (streaming char-a-char do
-	// servidor). Só é liberado quando o JSON fecha de fato.
-	pendingTokenContent := ""
-
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
 
@@ -563,17 +558,10 @@ func (s *Service) parseMultiRoundSSE(body io.Reader, onToken func(string), pendi
 		switch strings.ToLower(evt.Type) {
 		case "token":
 			if evt.Content != "" {
-				// O JSON do token pode chegar fragmentado entre eventos (o
-				// servidor emite char-a-char). Acumula até o JSON fechar para
-				// não emitir conteúdo parcial/inválido ao frontend.
-				pendingTokenContent += evt.Content
-				if json.Valid([]byte(pendingTokenContent)) {
-					if onToken != nil {
-						onToken(pendingTokenContent)
-					}
-					pendingTokenContent = ""
-				}
 				contentBuf.WriteString(evt.Content)
+				if onToken != nil {
+					onToken(evt.Content)
+				}
 			}
 		case "a2ui":
 			// Mensagem A2UI (interface rica) emitida pelo servidor. Repassa ao

@@ -344,6 +344,7 @@ Voce pode usar Markdown para enriquecer suas respostas:
   | Nome | Versao | Status |
   |------|--------|--------|
   | App  | 1.0    | OK     |
+  REGRA CRITICA para tabelas: cada celula DEVE comecar com "| " (pipe + ESPACO) e terminar com " |" (espaco + pipe). NUNCA cole o pipe na palavra (errado: "|6307s|"; correto: "| 6307s |"). Cada linha da tabela deve estar em sua propria linha, sem quebras internas. Se nao puder garantir esse formato, NAO use tabela — use lista com bullets.
 Use a formatacao com moderacao; mantenha a resposta legivel e natural.
 
 === BOTOES INTERATIVOS ===

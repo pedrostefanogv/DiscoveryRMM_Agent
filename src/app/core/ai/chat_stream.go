@@ -270,11 +270,19 @@ func (s *Service) parseSSEStream(body io.Reader, onToken func(string)) (string, 
 	scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
 
 	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
+		line := scanner.Text()
+		// IMPORTANTE: NÃO usar TrimSpace na linha nem no conteúdo do token.
+		// O TrimSpace apagava espaços/quebras de linha legítimos nas fronteiras
+		// dos tokens (ex.: "apenas23 MB", "de1 GB", linhas de tabela markdown
+		// coladas), quebrando a renderização. Apenas o prefixo "data: " é
+		// removido, preservando o restante.
 		if !strings.HasPrefix(line, "data:") {
 			continue
 		}
-		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		data := strings.TrimPrefix(line, "data:")
+		if strings.HasPrefix(data, " ") {
+			data = data[1:]
+		}
 		if data == "" {
 			continue
 		}
