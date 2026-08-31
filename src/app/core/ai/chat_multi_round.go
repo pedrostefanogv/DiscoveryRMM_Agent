@@ -17,6 +17,18 @@ import (
 	"discovery/app/netutil"
 )
 
+// maxMultiRounds limita o número de rounds do loop multi-round no agent.
+// Alinhado com o orçamento do servidor (MaxToolCallIterations, default 10,
+// clamp 1-20): o agent não deve desistir antes do servidor.
+const maxMultiRounds = 20
+
+// maxMultiRoundTotal limita o tempo TOTAL do loop multi-round (todos os
+// rounds + execução de tools). Com 20 rounds × timeout progressivo por round
+// (até 130s) + 60s por tool, o pior caso sem deadline passaria de 40min.
+// 10min é folga suficiente para tool chains longas sem deixar o usuário
+// esperando indefinidamente.
+const maxMultiRoundTotal = 10 * time.Minute
+
 func (s *Service) SendStreamMultiRound(
 	ctx context.Context,
 	userMessage string,
@@ -25,8 +37,22 @@ func (s *Service) SendStreamMultiRound(
 	mcpExecutor func(ctx context.Context, toolName, argsJSON string) (string, error),
 	onA2ui ...func(string),
 ) (string, error) {
-	streamCtx, streamCancel := context.WithCancel(ctx)
-	// Registra o cancel para que StopStream() (botão "Parar" do frontend)
+	return s.SendStreamMultiRoundWithProgress(ctx, userMessage, onToken, onStatus, nil, mcpExecutor, onA2ui...)
+}
+
+// SendStreamMultiRoundWithProgress é a versão estendida do multi-round que
+// recebe callback de progresso do agent loop (chunk "loop_progress" do
+// servidor: round atual / máximo). onLoopProgress pode ser nil.
+func (s *Service) SendStreamMultiRoundWithProgress(
+	ctx context.Context,
+	userMessage string,
+	onToken func(string),
+	onStatus func(string),
+	onLoopProgress func(round, maxRounds int),
+	mcpExecutor func(ctx context.Context, toolName, argsJSON string) (string, error),
+	onA2ui ...func(string),
+) (string, error) {
+	streamCtx, streamCancel := context.WithCancel(ctx)	// Registra o cancel para que StopStream() (botão "Parar" do frontend)
 	// interrompa também o loop multi-round — antes, só o stream single-round
 	// era cancelável e o botão não tinha efeito aqui.
 	streamID := s.registerStreamCancel(streamCancel)
@@ -152,7 +178,19 @@ func (s *Service) SendStreamMultiRound(
 	historyBeforeLen := len(s.history)
 	s.mu.RUnlock()
 
-	for round := 0; round < 5; round++ {
+	for round := 0; round < maxMultiRounds; round++ {
+		// Deadline total do loop: encerra com resposta parcial em vez de
+		// continuar indefinidamente (o servidor também tem seu orçamento).
+		if time.Since(startTime) >= maxMultiRoundTotal {
+			s.logChatEntry(ChatLogEntry{
+				Type:      "multi_round_total_timeout",
+				Method:    "multi_round",
+				SessionID: currentSessionID,
+				Round:     round,
+				Error:     "deadline total do loop atingido",
+			})
+			break
+		}
 		roundStart := time.Now()
 		if onStatus != nil {
 			if round == 0 {
@@ -176,7 +214,7 @@ func (s *Service) SendStreamMultiRound(
 			MessageLen: len(req.Message),
 		})
 
-		currentSessionID, err = s.executeRound(streamCtx, cfg, req, round, onToken, &pendingCalls, onA2ui...)
+		currentSessionID, err = s.executeRound(streamCtx, cfg, req, round, onToken, &pendingCalls, onLoopProgress, onA2ui...)
 		roundElapsed := time.Since(roundStart)
 
 		if err != nil {
@@ -305,7 +343,14 @@ func (s *Service) SendStreamMultiRound(
 				result = `{"error":"MCP indisponivel"}`
 				execErr = fmt.Errorf("MCP indisponivel")
 			} else {
-				result, execErr = mcpExecutor(streamCtx, tc.Name, tc.Args)
+				// Timer de 60s por tool: se a execução travar (ex.: comando
+				// remoto pendurado), devolve erro estruturado em vez de
+				// bloquear o loop para sempre — o LLM pode informar o usuário
+				// e sugerir alternativas. O streamCtx (cancelável via botão
+				// Parar) prevalece sobre o timer.
+				execCtx, execCancel := context.WithTimeout(streamCtx, 60*time.Second)
+				result, execErr = mcpExecutor(execCtx, tc.Name, tc.Args)
+				execCancel()
 			}
 			toolElapsed := time.Since(toolExecStart)
 
@@ -431,7 +476,7 @@ func (s *Service) lastAssistantContent() string {
 	return s.lastAssistantContentSince(0)
 }
 
-func (s *Service) executeRound(ctx context.Context, cfg Config, req agentStreamRequest, round int, onToken func(string), pendingCalls *[]pendingToolCall, onA2ui ...func(string)) (string, error) {
+func (s *Service) executeRound(ctx context.Context, cfg Config, req agentStreamRequest, round int, onToken func(string), pendingCalls *[]pendingToolCall, onLoopProgress func(round, maxRounds int), onA2ui ...func(string)) (string, error) {
 	startTime := time.Now()
 	baseURL, err := normalizeAgentChatBaseURL(cfg.Endpoint)
 	if err != nil {
@@ -503,7 +548,7 @@ func (s *Service) executeRound(ctx context.Context, cfg Config, req agentStreamR
 		LatencyMs:  int(time.Since(startTime).Milliseconds()),
 	})
 
-	sessionID, _, err := s.parseMultiRoundSSE(resp.Body, onToken, pendingCalls, onA2ui...)
+	sessionID, _, err := s.parseMultiRoundSSEWithProgress(resp.Body, onToken, pendingCalls, onLoopProgress, onA2ui...)
 	if err != nil {
 		s.logChatEntry(ChatLogEntry{
 			Type:      "round_sse_error",
@@ -518,6 +563,14 @@ func (s *Service) executeRound(ctx context.Context, cfg Config, req agentStreamR
 }
 
 func (s *Service) parseMultiRoundSSE(body io.Reader, onToken func(string), pendingCalls *[]pendingToolCall, onA2ui ...func(string)) (string, bool, error) {
+	return s.parseMultiRoundSSEWithProgress(body, onToken, pendingCalls, nil, onA2ui...)
+}
+
+// parseMultiRoundSSEWithProgress é a versão estendida do parser SSE que
+// também recebe callback de progresso do agent loop (chunk "loop_progress"
+// do servidor: round atual / máximo de rounds). Permite ao frontend exibir
+// "Processando… round X/Y" em vez de parecer travado durante tool chains.
+func (s *Service) parseMultiRoundSSEWithProgress(body io.Reader, onToken func(string), pendingCalls *[]pendingToolCall, onLoopProgress func(round, maxRounds int), onA2ui ...func(string)) (string, bool, error) {
 	var contentBuf strings.Builder
 	currentSessionID := ""
 	done := false
@@ -557,6 +610,12 @@ func (s *Service) parseMultiRoundSSE(body io.Reader, onToken func(string), pendi
 		}
 		parsedEvents++
 		switch strings.ToLower(evt.Type) {
+		case "loop_progress":
+			// Heartbeat de progresso do agent loop emitido pelo servidor.
+			// Não altera o estado do loop — apenas informa o frontend.
+			if onLoopProgress != nil && evt.LoopMaxRounds > 0 {
+				onLoopProgress(evt.LoopRound, evt.LoopMaxRounds)
+			}
 		case "token":
 			if evt.Content != "" {
 				contentBuf.WriteString(evt.Content)

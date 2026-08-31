@@ -42,6 +42,11 @@ type agentChatStreamEvent struct {
 	// json.RawMessage) evita a dupla codificação que fazia o frontend receber o
 	// JSON com aspas literais e descartar a mensagem (parsed.version undefined).
 	A2UI string `json:"a2uiJson"`
+	// LoopRound/LoopMaxRounds: progresso do agent loop emitido pelo servidor
+	// (chunk tipo "loop_progress"). Campos opcionais — versões antigas do
+	// servidor não os enviam e o valor zero é simplesmente ignorado.
+	LoopRound     int `json:"loopRound"`
+	LoopMaxRounds int `json:"loopMaxRounds"`
 }
 
 // toolArgsString normaliza toolArguments (pode ser string JSON ou objeto JSON).

@@ -270,7 +270,7 @@ func (s *Service) StartStream(message string) {
 		}
 		s.chatSvc.SetConfig(runtimeCfg)
 
-		_, err := s.chatSvc.SendStreamMultiRound(
+		_, err := s.chatSvc.SendStreamMultiRoundWithProgress(
 			s.ctx(),
 			message,
 			func(token string) {
@@ -280,6 +280,11 @@ func (s *Service) StartStream(message string) {
 			func(status string) {
 				s.emitEvent("chat:thinking", status)
 				s.publishChatEvent("chat:thinking", status)
+			},
+			func(round, maxRounds int) {
+				s.emitEvent("chat:loop_progress", map[string]int{"round": round, "maxRounds": maxRounds})
+				progressJSON, _ := json.Marshal(map[string]int{"round": round, "maxRounds": maxRounds})
+				s.publishChatEvent("chat:loop_progress", string(progressJSON))
 			},
 			s.mcpExecuteForChat,
 			func(a2uiMsg string) {

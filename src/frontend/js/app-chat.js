@@ -291,6 +291,31 @@ function onStreamThinking(status) {
   }
 }
 
+// onChatLoopProgress recebe o progresso do agent loop emitido pelo servidor
+// (chunk "loop_progress": round atual / máximo de rounds). Atualiza o
+// indicador "Pensando..." para "Processando… round X/Y", eliminando a
+// sensação de travamento durante tool chains longas. Payload pode chegar
+// como objeto {round, maxRounds} (Wails) ou string JSON (SSE/publish).
+function onChatLoopProgress(data) {
+  if (document.hidden || window.__discoveryUISuspended) return;
+  if (!streamingBubble) return;
+  var payload = data;
+  if (typeof data === "string") {
+    try { payload = JSON.parse(data); } catch (e) { return; }
+  }
+  if (!payload || typeof payload !== "object") return;
+  var round = Number(payload.round) || 0;
+  var maxRounds = Number(payload.maxRounds) || 0;
+  if (maxRounds <= 0) return;
+  var thinkingEl = streamingBubble.querySelector(".stream-thinking");
+  if (!thinkingEl) return;
+  if (!streamingRawContent) {
+    thinkingEl.style.display = "";
+    thinkingEl.textContent = translate("chat.thinking") + " (round " + round + "/" + maxRounds + ")";
+    scheduleChatScrollToBottom();
+  }
+}
+
 function finaliseStreamingBubble() {
   if (!streamingBubble) return;
   // Libera qualquer texto residual que ficou retido no buffer do filtro
@@ -800,6 +825,7 @@ function clearA2uiSurface() {
   var CHAT_EVENT_HANDLERS = {
     "chat:token": onStreamToken,
     "chat:thinking": onStreamThinking,
+    "chat:loop_progress": onChatLoopProgress,
     "chat:done": onStreamDone,
     "chat:error": onStreamError,
     "chat:stopped": onStreamStopped,
