@@ -113,6 +113,23 @@ export class Item {
              */
             this["installCommand"] = "";
         }
+        if (!("silent" in $$source)) {
+            /**
+             * SilentCommand contém os switches silenciosos do manifesto winget
+             * (ex.: "/S /PreventRebootRequired=true"). Fallback: SilentWithProgress.
+             * @member
+             * @type {string}
+             */
+            this["silent"] = "";
+        }
+        if (!("silentWithProgress" in $$source)) {
+            /**
+             * SilentWithProgress contém os switches silenciosos com progresso (fallback de SilentCommand).
+             * @member
+             * @type {string}
+             */
+            this["silentWithProgress"] = "";
+        }
         if (!("installerUrlsByArch" in $$source)) {
             /**
              * @member
@@ -144,10 +161,10 @@ export class Item {
      * @returns {Item}
      */
     static createFrom($$source = {}) {
-        const $$createField8_0 = $$createType2;
+        const $$createField10_0 = $$createType2;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("installerUrlsByArch" in $$parsedSource) {
-            $$parsedSource["installerUrlsByArch"] = $$createField8_0($$parsedSource["installerUrlsByArch"]);
+            $$parsedSource["installerUrlsByArch"] = $$createField10_0($$parsedSource["installerUrlsByArch"]);
         }
         return new Item(/** @type {Partial<Item>} */($$parsedSource));
     }

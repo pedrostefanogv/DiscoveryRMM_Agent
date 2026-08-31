@@ -214,15 +214,30 @@ func (u *Updater) downloadFromCacheOrPublic(ctx context.Context, expectedSHA256 
 	}
 
 	// ── P2P-first ──
+	// Tenta o artifactID canônico ("selfupdate:<sha256>", registrado via sidecar
+	// .meta) e, como fallback, o ID derivado do nome do arquivo
+	// ("name:selfupdate-<sha256>.exe") para compatibilidade com peers que
+	// baixaram o update antes do registro de sidecar existir.
 	if u.FindPeersByReleaseID != nil && u.DownloadFromPeer != nil {
-		peers, findErr := u.FindPeersByReleaseID(ctx, artifactID)
-		if findErr != nil {
-			u.logf("[selfupdate] consulta P2P falhou (nao-critico): %v", findErr)
+		artifactIDs := []string{artifactID}
+		if expectedSHA256 != "" {
+			legacyID := "name:selfupdate-" + strings.ToLower(expectedSHA256) + ".exe"
+			if !strings.EqualFold(legacyID, artifactID) {
+				artifactIDs = append(artifactIDs, legacyID)
+			}
 		}
-		if len(peers) > 0 {
-			u.logf("[selfupdate] P2P: %d peer(s) encontrados para artifactID=%s", len(peers), artifactID)
+		for _, tryID := range artifactIDs {
+			peers, findErr := u.FindPeersByReleaseID(ctx, tryID)
+			if findErr != nil {
+				u.logf("[selfupdate] consulta P2P falhou (nao-critico): %v", findErr)
+			}
+			if len(peers) == 0 {
+				u.logf("[selfupdate] P2P: nenhum peer com artifactID=%s", tryID)
+				continue
+			}
+			u.logf("[selfupdate] P2P: %d peer(s) encontrados para artifactID=%s", len(peers), tryID)
 			for _, peerID := range peers {
-				path, dlErr := u.DownloadFromPeer(ctx, artifactID, peerID)
+				path, dlErr := u.DownloadFromPeer(ctx, tryID, peerID)
 				if dlErr != nil {
 					u.logf("[selfupdate] P2P download do peer %s falhou: %v", peerID, dlErr)
 					continue
@@ -238,13 +253,12 @@ func (u *Updater) downloadFromCacheOrPublic(ctx context.Context, expectedSHA256 
 					_ = os.Remove(path)
 					continue
 				}
-				u.logf("[selfupdate] download P2P concluido: peer=%s artifactID=%s sha256=%s", peerID, artifactID, actual[:12])
+				u.logf("[selfupdate] download P2P concluido: peer=%s artifactID=%s sha256=%s", peerID, tryID, actual[:12])
 				return path, actual, true, nil
 			}
-			u.logf("[selfupdate] P2P exaurido (%d peers tentados), fallback para HTTP", len(peers))
-		} else {
-			u.logf("[selfupdate] P2P: nenhum peer com artifactID=%s, usando HTTP", artifactID)
+			u.logf("[selfupdate] P2P exaurido (%d peers tentados) para artifactID=%s", len(peers), tryID)
 		}
+		u.logf("[selfupdate] P2P: nenhum peer com o artifact, usando HTTP")
 	}
 
 	// ── HTTP download do endpoint publico ──

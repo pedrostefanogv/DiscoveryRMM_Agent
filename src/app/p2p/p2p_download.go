@@ -412,20 +412,22 @@ func (c *Coordinator) DownloadArtifactByID(ctx context.Context, artifactID, sour
 		return P2PArtifactView{}, fmt.Errorf("sourcePeerID invalido")
 	}
 
-	// Resolve o artifactName a partir do índice de artifacts do peer
-	var artifactName string
-	for _, peer := range c.GetPeerArtifactIndex() {
-		if !strings.EqualFold(strings.TrimSpace(peer.PeerAgentID), sourcePeerID) {
-			continue
-		}
-		for _, art := range peer.Artifacts {
-			if strings.EqualFold(strings.TrimSpace(art.ArtifactID), artifactID) {
-				artifactName = strings.TrimSpace(art.ArtifactName)
+	// Resolve o artifactName: cache primeiro (rápido), live fetch como fallback.
+	artifactName := c.resolveArtifactNameByID(artifactID)
+	if artifactName == "" {
+		for _, peer := range c.GetPeerArtifactIndex() {
+			if !strings.EqualFold(strings.TrimSpace(peer.PeerAgentID), sourcePeerID) {
+				continue
+			}
+			for _, art := range peer.Artifacts {
+				if strings.EqualFold(strings.TrimSpace(art.ArtifactID), artifactID) {
+					artifactName = strings.TrimSpace(art.ArtifactName)
+					break
+				}
+			}
+			if artifactName != "" {
 				break
 			}
-		}
-		if artifactName != "" {
-			break
 		}
 	}
 	if artifactName == "" {
@@ -433,6 +435,41 @@ func (c *Coordinator) DownloadArtifactByID(ctx context.Context, artifactID, sour
 	}
 
 	return c.DownloadArtifactFromPeer(ctx, artifactName, sourcePeerID)
+}
+
+// DownloadArtifactByIDSwarm faz download de um artifact via libp2p usando o
+// artifactID (ex.: "selfupdate:<sha256>" ou GUID de release), coletando chunks
+// de TODOS os peers que anunciam o artifact (swarm download).
+//
+// Usado pelo selfupdate: quando múltiplos peers já têm o instalador, o download
+// é distribuído entre eles — mais rápido e resiliente que peer único.
+// Resolve o artifactName a partir do índice de artifacts dos peers.
+func (c *Coordinator) DownloadArtifactByIDSwarm(ctx context.Context, artifactID string) (P2PArtifactView, error) {
+	artifactID = strings.TrimSpace(artifactID)
+	if artifactID == "" {
+		return P2PArtifactView{}, fmt.Errorf("artifactID invalido")
+	}
+
+	// Resolve o artifactName: cache primeiro (rápido), live fetch como fallback.
+	artifactName := c.resolveArtifactNameByID(artifactID)
+	if artifactName == "" {
+		for _, peer := range c.GetPeerArtifactIndex() {
+			for _, art := range peer.Artifacts {
+				if strings.EqualFold(strings.TrimSpace(art.ArtifactID), artifactID) {
+					artifactName = strings.TrimSpace(art.ArtifactName)
+					break
+				}
+			}
+			if artifactName != "" {
+				break
+			}
+		}
+	}
+	if artifactName == "" {
+		return P2PArtifactView{}, fmt.Errorf("artifact nao encontrado no indice dos peers para artifactID=%s", artifactID)
+	}
+
+	return c.DownloadArtifactSwarm(ctx, artifactName)
 }
 
 // buildArtifactView reads stat + checksum for a file and returns a P2PArtifactView.

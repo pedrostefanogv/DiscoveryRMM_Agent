@@ -523,15 +523,28 @@ func (s *Service) parseMultiRoundSSE(body io.Reader, onToken func(string), pendi
 	done := false
 	parsedEvents := 0
 
+	// pendingTokenContent acumula o conteúdo de tokens cujo JSON veio
+	// fragmentado entre múltiplos eventos "token" (streaming char-a-char do
+	// servidor). Só é liberado quando o JSON fecha de fato.
+	pendingTokenContent := ""
+
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
 
 	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
+		line := scanner.Text()
+		// IMPORTANTE: NÃO usar TrimSpace na linha nem no conteúdo do token.
+		// O TrimSpace apagava espaços/quebras de linha legítimos nas fronteiras
+		// dos tokens (ex.: "apenas23 MB", "de1 GB", linhas de tabela markdown
+		// coladas), quebrando a renderização. Apenas o prefixo "data: " é
+		// removido, preservando o restante.
 		if !strings.HasPrefix(line, "data:") {
 			continue
 		}
-		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		data := strings.TrimPrefix(line, "data:")
+		if strings.HasPrefix(data, " ") {
+			data = data[1:]
+		}
 		if data == "" {
 			continue
 		}
@@ -550,10 +563,17 @@ func (s *Service) parseMultiRoundSSE(body io.Reader, onToken func(string), pendi
 		switch strings.ToLower(evt.Type) {
 		case "token":
 			if evt.Content != "" {
-				contentBuf.WriteString(evt.Content)
-				if onToken != nil {
-					onToken(evt.Content)
+				// O JSON do token pode chegar fragmentado entre eventos (o
+				// servidor emite char-a-char). Acumula até o JSON fechar para
+				// não emitir conteúdo parcial/inválido ao frontend.
+				pendingTokenContent += evt.Content
+				if json.Valid([]byte(pendingTokenContent)) {
+					if onToken != nil {
+						onToken(pendingTokenContent)
+					}
+					pendingTokenContent = ""
 				}
+				contentBuf.WriteString(evt.Content)
 			}
 		case "a2ui":
 			// Mensagem A2UI (interface rica) emitida pelo servidor. Repassa ao

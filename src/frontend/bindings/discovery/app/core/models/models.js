@@ -75,6 +75,22 @@ export class AppItem {
              */
             this["installCommand"] = "";
         }
+        if (/** @type {any} */(false)) {
+            /**
+             * SilentCommand contém os switches silenciosos vindos do catálogo
+             * (ex.: "/S /PreventRebootRequired=true"). Fallback: SilentWithProgress.
+             * @member
+             * @type {string | undefined}
+             */
+            this["silent"] = undefined;
+        }
+        if (!("silentWithProgress" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["silentWithProgress"] = "";
+        }
         if (!("category" in $$source)) {
             /**
              * @member

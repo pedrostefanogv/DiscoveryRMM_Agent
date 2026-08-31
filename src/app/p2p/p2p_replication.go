@@ -199,6 +199,13 @@ func (c *Coordinator) processReplicationJob(ctx context.Context, job p2pReplicat
 }
 
 func (c *Coordinator) appendAudit(action, artifactName, peerAgentID, source string, success bool, message string) {
+	// Artifacts do selfupdate (selfupdate-<sha256>.exe) são rotulados com
+	// source "selfupdate" para distinguir no audit/telemetria das transferências
+	// de automação de apps de terceiros — sem propagar o source por todas as
+	// assinaturas de download.
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(artifactName)), "selfupdate-") {
+		source = "selfupdate"
+	}
 	event := P2PAuditEvent{
 		TimestampUTC: formatTimeRFC3339(time.Now().UTC()),
 		Action:       strings.TrimSpace(action),

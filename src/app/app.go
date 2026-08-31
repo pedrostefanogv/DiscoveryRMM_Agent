@@ -682,12 +682,32 @@ func NewApp(opts AppStartupOptions) *App {
 			if a.p2pCoord == nil {
 				return nil, nil
 			}
-			result := a.p2pCoord.FindArtifactPeersByReleaseID(artifactID, "")
+			// expectedSHA256 extraído do artifactID "selfupdate:<sha256>" para
+			// validação cross-peer (rejeita peers com artifact stale).
+			expectedSHA := ""
+			if sha, ok := strings.CutPrefix(artifactID, "selfupdate:"); ok {
+				expectedSHA = strings.ToLower(strings.TrimSpace(sha))
+			}
+			result := a.p2pCoord.FindArtifactPeersByReleaseID(artifactID, expectedSHA)
 			return result.PeerAgentIDs, nil
 		},
 		DownloadFromPeer: func(ctx context.Context, artifactID, peerID string) (string, error) {
 			if a.p2pCoord == nil {
 				return "", errors.New("p2p indisponível")
+			}
+			// Swarm download quando >1 peer tem o artifact (chunks de múltiplos
+			// peers); peer único cai no download direto do peer informado.
+			avail := a.p2pCoord.FindArtifactPeersByReleaseID(artifactID, "")
+			if avail.PeerCount > 1 {
+				view, err := a.p2pCoord.DownloadArtifactByIDSwarm(ctx, artifactID)
+				if err != nil {
+					// Swarm falhou — tenta peer único como fallback.
+					view, err = a.p2pCoord.DownloadArtifactByID(ctx, artifactID, peerID)
+				}
+				if err != nil {
+					return "", err
+				}
+				return filepath.Join(a.p2pTempDir(), view.ArtifactName), nil
 			}
 			view, err := a.p2pCoord.DownloadArtifactByID(ctx, artifactID, peerID)
 			if err != nil {
@@ -696,12 +716,17 @@ func NewApp(opts AppStartupOptions) *App {
 			return filepath.Join(a.p2pTempDir(), view.ArtifactName), nil
 		},
 		// OnArtifactReady é chamado apenas para downloads HTTP (P2P já está
-		// indexado). Como o arquivo já está no P2P_Temp com nome canônico
-		// (selfupdate-<sha256>.exe), o gossip scanner faz o registro automaticamente.
-		// Aqui apenas confirmamos no log — sem cópia redundante.
+		// indexado). O arquivo já está no P2P_Temp com nome canônico
+		// (selfupdate-<sha256>.exe); aqui registramos o artifactID canônico
+		// ("selfupdate:<sha256>") via sidecar .meta para que o gossip anuncie
+		// o ID que outros agentes procuram — sem recopiar o arquivo.
 		OnArtifactReady: func(ctx context.Context, path, artifactID, sha256, version string) error {
 			if a.p2pCoord == nil || artifactID == "" {
 				return nil
+			}
+			if _, err := a.p2pCoord.RegisterArtifactIDForFile(path, artifactID); err != nil {
+				a.logs.append(fmt.Sprintf("[selfupdate] aviso: falha ao registrar artifactID no P2P: %v", err))
+				return err
 			}
 			a.logs.append(fmt.Sprintf("[selfupdate] artifact disponivel no P2P: artifactID=%s sha256=%s path=%s",
 				artifactID, sha256[:12], filepath.Base(path)))

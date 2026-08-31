@@ -369,6 +369,9 @@ func (c *Coordinator) InvalidatePeerArtifact(peerAgentID, artifactName string) {
 // com o artifactID (GUID de release) especificado e, opcionalmente,
 // filtra por SHA256 para garantir integridade cross-peer.
 // Se expectedSHA256 for vazia, retorna todos os peers com o artifactID.
+// Consulta o cache peerArtifacts primeiro (rápido, sem rede); em cache miss
+// total, faz fetch live via libp2p — mesmo padrão de FindArtifactPeersByID.
+// Isso evita 1 fetch live (5s/peer) por consulta no hot path do selfupdate.
 func (c *Coordinator) FindArtifactPeersByReleaseID(artifactID string, expectedSHA256 string) P2PArtifactAvailabilityView {
 	artifactID = strings.TrimSpace(artifactID)
 	result := P2PArtifactAvailabilityView{
@@ -381,19 +384,70 @@ func (c *Coordinator) FindArtifactPeersByReleaseID(artifactID string, expectedSH
 	}
 	expectedSHA256 = strings.TrimSpace(expectedSHA256)
 
-	for _, peer := range c.GetPeerArtifactIndex() {
-		for _, artifact := range peer.Artifacts {
+	// 1. Cache primeiro (rápido, sem rede).
+	cacheHadEntry := false
+	c.mu.RLock()
+	for peerKey, state := range c.peerArtifacts {
+		for _, artifact := range state.Artifacts {
 			if !strings.EqualFold(strings.TrimSpace(artifact.ArtifactID), artifactID) {
 				continue
 			}
-			// Se esperadoSHA256 foi informado, só aceita peer com checksum correspondente
+			// Se expectedSHA256 foi informado, só aceita peer com checksum correspondente
 			if expectedSHA256 != "" && !strings.EqualFold(strings.TrimSpace(artifact.ChecksumSHA256), expectedSHA256) {
 				continue
 			}
-			result.PeerAgentIDs = append(result.PeerAgentIDs, strings.TrimSpace(peer.PeerAgentID))
+			result.PeerAgentIDs = append(result.PeerAgentIDs, peerKey)
+			if result.ArtifactName == "" {
+				result.ArtifactName = strings.TrimSpace(artifact.ArtifactName)
+			}
+			cacheHadEntry = true
 			break
 		}
 	}
+	c.mu.RUnlock()
+	if cacheHadEntry {
+		sort.Strings(result.PeerAgentIDs)
+		result.PeerCount = len(result.PeerAgentIDs)
+		result.Found = result.PeerCount > 0
+		return result
+	}
+
+	// 2. Cache miss → fetch live via libp2p para cada peer conhecido.
+	h, registry := c.libp2pHostAndRegistry()
+	if h != nil && registry != nil {
+		c.mu.RLock()
+		peers := make([]p2pPeerState, 0, len(c.peers))
+		for _, p := range c.peers {
+			peers = append(peers, p)
+		}
+		c.mu.RUnlock()
+
+		for _, peer := range peers {
+			if lpID, ok := registry.Lookup(peer.Peer.AgentID); ok {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				resp, err := libp2pFetchPeers(ctx, h, lpID)
+				cancel()
+				if err != nil {
+					continue
+				}
+				c.upsertPeerArtifacts(peer.Peer.AgentID, resp.Artifacts, "on-demand")
+				for _, a := range resp.Artifacts {
+					if !strings.EqualFold(strings.TrimSpace(a.ArtifactID), artifactID) {
+						continue
+					}
+					if expectedSHA256 != "" && !strings.EqualFold(strings.TrimSpace(a.ChecksumSHA256), expectedSHA256) {
+						continue
+					}
+					result.PeerAgentIDs = append(result.PeerAgentIDs, strings.TrimSpace(peer.Peer.AgentID))
+					if result.ArtifactName == "" {
+						result.ArtifactName = strings.TrimSpace(a.ArtifactName)
+					}
+					break
+				}
+			}
+		}
+	}
+
 	sort.Strings(result.PeerAgentIDs)
 	result.PeerCount = len(result.PeerAgentIDs)
 	result.Found = result.PeerCount > 0

@@ -213,6 +213,10 @@ func (u *Updater) cleanupOldDownloads() {
 			}
 			removed++
 			removedBytes += info.Size()
+			// Remove o sidecar .meta correspondente (registro P2P do artifactID).
+			// Sem isso, sidecars órfãos se acumulam no P2P_Temp e o gossip
+			// continuaria anunciando um artifact que não existe mais.
+			_ = os.Remove(fullPath + ".meta")
 		}
 	}
 

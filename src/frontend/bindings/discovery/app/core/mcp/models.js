@@ -7,7 +7,9 @@
 import { Create as $Create } from "/wails/runtime.js";
 
 /**
- * Registry holds all registered tools.
+ * Registry holds all registered tools. Thread-safe: Register/Tools/Find/Call
+ * podem ser chamados concorrentemente (o chat multi-round executa tools
+ * enquanto o servidor stdio MCP e o re-registro periodico rodam).
  */
 export class Registry {
     /**
