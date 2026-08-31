@@ -92,6 +92,19 @@ func ApplyRealtimeFallbackFromAgentStatus(out *Overview, agent AgentStatus, err 
 	if out == nil || err == nil {
 		return
 	}
+	// Erros de rede (DNS indisponível, conexão recusada, timeout etc.) não devem
+	// vazar texto técnico bruto para a página de status. Exibimos uma mensagem
+	// amigável e preservamos o estado do realtime conforme o transporte local.
+	if IsRealtimeNetworkError(err) {
+		out.RealtimeAvailable = agent.TransportConnected || agent.Connected
+		out.RealtimeNATSConnected = out.RealtimeAvailable
+		if out.RealtimeAvailable {
+			out.RealtimeMessage = "Realtime ativo via transporte local; servidor inacessível para verificação detalhada"
+		} else {
+			out.RealtimeMessage = "Servidor inacessível — não foi possível verificar o realtime"
+		}
+		return
+	}
 	out.RealtimeMessage = err.Error()
 	if !IsRealtimeUnauthorizedError(err) {
 		return
@@ -112,6 +125,37 @@ func ApplyRealtimeFallbackFromAgentStatus(out *Overview, agent AgentStatus, err 
 	default:
 		out.RealtimeMessage = "sessao remota ativa; endpoint /api/v1/agent-auth/me/realtime/status indisponivel ou token rejeitado"
 	}
+}
+
+// IsRealtimeNetworkError verifica se o erro é de rede/DNS (servidor inacessível),
+// e não um problema de autenticação ou resposta inválida da API.
+func IsRealtimeNetworkError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	patterns := []string{
+		"no such host",
+		"dial tcp",
+		"dial udp",
+		"connectex",
+		"connection refused",
+		"connection reset",
+		"i/o timeout",
+		"context deadline exceeded",
+		"tls: handshake failure",
+		"network is unreachable",
+		"no route to host",
+		"temporary failure in name resolution",
+		"servidor inacessível",
+		"servidor inacessivel",
+	}
+	for _, p := range patterns {
+		if strings.Contains(msg, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // IsRealtimeUnauthorizedError verifica se o erro é de não autorização.

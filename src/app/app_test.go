@@ -112,3 +112,57 @@ func TestApplyRealtimeFallbackFromAgentStatus_UsesLocalConnectionOnUnauthorized(
 		t.Fatalf("unexpected RealtimeMessage = %q", out.RealtimeMessage)
 	}
 }
+
+func TestApplyRealtimeFallbackFromAgentStatus_NetworkErrorShowsFriendlyMessage(t *testing.T) {
+	out := StatusOverview{}
+	status.ApplyRealtimeFallbackFromAgentStatus(&out, status.AgentStatus{
+		Connected:          true,
+		TransportConnected: true,
+		Transport:          "nats",
+	}, fmt.Errorf("falha ao conectar em https://tngplacas.com.br/api/v1/agent-auth/me/realtime/status: Get \"https://tngplacas.com.br/api/v1/agent-auth/me/realtime/status\": dial tcp: lookup tngplacas.com.br: no such host"))
+
+	if !out.RealtimeAvailable {
+		t.Fatal("expected realtimeAvailable=true when transport is connected")
+	}
+	if !out.RealtimeNATSConnected {
+		t.Fatal("expected realtimeNatsConnected=true when transport is connected")
+	}
+	if strings.Contains(strings.ToLower(out.RealtimeMessage), "dial tcp") ||
+		strings.Contains(strings.ToLower(out.RealtimeMessage), "no such host") {
+		t.Fatalf("raw network error leaked to RealtimeMessage = %q", out.RealtimeMessage)
+	}
+	if !strings.Contains(out.RealtimeMessage, "inacessível") {
+		t.Fatalf("unexpected friendly RealtimeMessage = %q", out.RealtimeMessage)
+	}
+}
+
+func TestApplyRealtimeFallbackFromAgentStatus_NetworkErrorOffline(t *testing.T) {
+	out := StatusOverview{}
+	status.ApplyRealtimeFallbackFromAgentStatus(&out, status.AgentStatus{}, fmt.Errorf("dial tcp: lookup tngplacas.com.br: no such host"))
+
+	if out.RealtimeAvailable {
+		t.Fatal("expected realtimeAvailable=false when transport is offline")
+	}
+	if strings.Contains(strings.ToLower(out.RealtimeMessage), "dial tcp") {
+		t.Fatalf("raw network error leaked to RealtimeMessage = %q", out.RealtimeMessage)
+	}
+}
+
+func TestIsRealtimeNetworkError(t *testing.T) {
+	cases := []struct {
+		err  error
+		want bool
+	}{
+		{nil, false},
+		{fmt.Errorf("dial tcp: lookup tngplacas.com.br: no such host"), true},
+		{fmt.Errorf("dial tcp 127.0.0.1:4222: connectex: No connection could be made"), true},
+		{fmt.Errorf("Get \"https://x\": context deadline exceeded"), true},
+		{fmt.Errorf("HTTP 401 Unauthorized"), false},
+		{fmt.Errorf("resposta invalida de /api/v1/agent-auth/me/realtime/status: unexpected end of JSON input"), false},
+	}
+	for _, c := range cases {
+		if got := status.IsRealtimeNetworkError(c.err); got != c.want {
+			t.Fatalf("IsRealtimeNetworkError(%v) = %v, want %v", c.err, got, c.want)
+		}
+	}
+}
