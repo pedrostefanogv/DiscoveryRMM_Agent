@@ -33,10 +33,23 @@ func executeTask(ctx context.Context, packages PackageManager, authorize Package
 	case ActionRemovePackage:
 		return executePackageAction(ctx, packages, authorize, task, "uninstall", psadtPolicy)
 	case ActionUpdateOrInstallPackage:
-		if result := executePackageAction(ctx, packages, authorize, task, "upgrade", psadtPolicy); result.Success {
-			return result
+		upgradeResult := executePackageAction(ctx, packages, authorize, task, "upgrade", psadtPolicy)
+		// Skip do upgrade com exit 0 pode significar duas coisas:
+		//   a) pacote ja atualizado  -> nada a fazer, sucesso real
+		//   b) pacote NAO instalado  -> precisa cair para o install
+		// Diferencia pela mensagem do skip: "nao encontrado" indica ausencia.
+		if upgradeResult.Success && !strings.Contains(upgradeResult.Output, "nao encontrado") {
+			return upgradeResult
 		}
-		return executePackageAction(ctx, packages, authorize, task, "install", psadtPolicy)
+		installResult := executePackageAction(ctx, packages, authorize, task, "install", psadtPolicy)
+		if installResult.Success {
+			return installResult
+		}
+		// Install tambem falhou/pulou: preserva skip benigno do upgrade, senao falha do install.
+		if upgradeResult.Success {
+			return upgradeResult
+		}
+		return installResult
 	case ActionRunScript:
 		return executeScript(ctx, task, customFields)
 	case ActionCustomCommand:
