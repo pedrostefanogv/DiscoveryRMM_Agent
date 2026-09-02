@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"os"
-	"runtime"
+        "runtime"
+        "os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -411,6 +411,10 @@ func NewApp(opts AppStartupOptions) *App {
 	})
 	a.packageManagerRouter = newAutomationPackageManagerRouter(a, a.appsSvc)
 	a.automationSvc.SetPackageManager(a.packageManagerRouter)
+        // Resolvedor de versão P2P para a decisão versionada do executor (anti-loop).
+        automation.SetP2PVersionResolver(func(packageID string) string {
+                return a.packageManagerRouter.resolveP2PPackageVersion(packageID)
+        })
 	a.automationSvc.SetPackageAuthorization(func(ctx context.Context, installationType automation.AppInstallationType, packageID, operation string) error {
 		return a.authorizeAutomationPackage(ctx, string(installationType), packageID, operation)
 	})

@@ -586,11 +586,15 @@ func (s *Service) executeTaskAsync(ctx context.Context, agentID string, task Aut
 			}
 			_ = s.sendOrQueueCallback(ctx, agentID, executionID, entry.CommandID, CallbackTypeResult, payload, correlationID)
 		}
-
 		// Notifica o chamador do resultado (ex: marcador recurring:last).
 		if onComplete != nil {
 			onComplete(result.Success)
 		}
+
+		// Anti-loop (Fase 1): atualiza backoff de skips e circuit breaker
+		// para tasks winget recorrentes. Skips benignos consecutivos ativam
+		// backoff; falhas consecutivas idênticas abrem o circuit breaker.
+		s.updateAntiLoopState(agentID, task, result)
 
 		s.dispatchExecutionNotification(notifyDispatcher, task, entry, &result, s.deferByTask[strings.TrimSpace(task.TaskID)], welcome)
 		s.clearDeferState(agentID, task.TaskID, entry.Status)
@@ -773,6 +777,21 @@ func (s *Service) rebuildRecurringSchedules(ctx context.Context, previous, curre
 							return
 						}
 					}
+				}
+			}
+			// Circuit breaker: falhas consecutivas pausam a task por failureCooldown.
+			if cbRaw, found, err := db.GetAutomationMarker(agentID, "circuit:fail:"+taskID); err == nil && found {
+				if cb, ok := parseCircuitBreakerState(cbRaw); ok && circuitBreakerOpen(cb, time.Now().UTC()) {
+					s.logf("automacao: tarefa recorrente %s pausada por falhas repetidas (%d) - retoma em %s", taskID, cb.Failures, cb.OpenUntil.UTC().Format(time.RFC3339))
+					return
+				}
+			}
+			// Backoff de skips benignos: após consecutiveSkipThreshold skips idênticos,
+			// pula slots até SkipUntil (marker skipbackoff).
+			if skipRaw, found, err := db.GetAutomationMarker(agentID, "skipbackoff:"+taskID); err == nil && found {
+				if st, ok := parseSkipBackoffState(skipRaw); ok && time.Now().UTC().Before(st.SkipUntil) {
+					s.logf("automacao: tarefa recorrente %s em backoff de skips (%d consecutivos) - retoma em %s", taskID, st.Count, st.SkipUntil.UTC().Format(time.RFC3339))
+					return
 				}
 			}
 			// O marcador é atualizado APÓS a execução via callback onComplete,

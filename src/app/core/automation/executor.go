@@ -81,10 +81,12 @@ func executePackageAction(ctx context.Context, packages PackageManager, authoriz
 		if packages == nil {
 			return ExecutionResult{Success: false, ExitCode: 2, ExitCodeSet: true, ErrorMessage: "gerenciador Winget indisponivel"}
 		}
-		// Verifica se o pacote já está instalado (install) ou se há update disponível (upgrade).
-		skip, skipMsg := shouldSkipWingetAction(ctx, packages, operation, packageID)
-		if skip {
-			return ExecutionResult{Success: true, ExitCode: 0, ExitCodeSet: true, Output: skipMsg}
+		// Decisão versionada: combina winget local (list/upgrade) com a versão
+		// do artifact P2P quando disponível. Preserva as mensagens de skip
+		// originais (consumidas pelo anti-loop / classifyPackageResult).
+		decision := decideWingetAction(ctx, packages, operation, packageID)
+		if decision.Skip {
+			return ExecutionResult{Success: true, ExitCode: 0, ExitCodeSet: true, Output: decision.Reason}
 		}
 		var out string
 		var err error
@@ -98,7 +100,14 @@ func executePackageAction(ctx context.Context, packages PackageManager, authoriz
 		default:
 			return ExecutionResult{Success: false, ExitCode: 2, ExitCodeSet: true, ErrorMessage: "operacao de pacote invalida"}
 		}
-		return resultFromCommand(out, err)
+		result := resultFromCommand(out, err)
+		// Anexa as versões observadas na decisão — usado pelo metadata de
+		// execução (visibilidade no servidor) e no versionamento do artifact.
+		if decision.AvailableVersion != "" || decision.InstalledVersion != "" {
+			info := fmt.Sprintf("[versions] installed=%s available=%s", decision.InstalledVersion, decision.AvailableVersion)
+			result.Output = strings.TrimSpace(result.Output + "\n" + info)
+		}
+		return result
 	case InstallationChocolatey:
 		return executeChocolatey(ctx, packageID, operation)
 	case InstallationPSAppDeployToolkit:
@@ -261,43 +270,6 @@ func truncateOutput(output string) string {
 		return strings.TrimSpace(output)
 	}
 	return strings.TrimSpace(output[:maxStoredOutputBytes]) + "\n... output truncado ..."
-}
-
-// shouldSkipWingetAction verifica se a operação é desnecessária porque o pacote
-// já está instalado (para install) ou porque não há atualização pendente (para upgrade).
-// Retorna (skip=true, mensagem) quando a ação deve ser pulada.
-func shouldSkipWingetAction(ctx context.Context, packages PackageManager, operation, packageID string) (bool, string) {
-	packageID = strings.TrimSpace(packageID)
-	if packageID == "" {
-		return false, ""
-	}
-
-	switch operation {
-	case "install":
-		installed, err := packages.ListInstalled(ctx)
-		if err != nil {
-			return false, "" // erro na verificação — prossegue com install (fail-safe)
-		}
-		if isPackageInOutput(installed, packageID) {
-			return true, fmt.Sprintf("pacote %s ja instalado — pulando install", packageID)
-		}
-
-	case "upgrade":
-		upgradable, err := packages.ListUpgradable(ctx)
-		if err != nil {
-			return false, "" // erro na verificação — prossegue com upgrade (fail-safe)
-		}
-		if !isPackageInOutput(upgradable, packageID) {
-			// Verifica se ao menos está instalado; se nem instalado estiver, não faz sentido fazer upgrade.
-			installed, instErr := packages.ListInstalled(ctx)
-			if instErr == nil && !isPackageInOutput(installed, packageID) {
-				return true, fmt.Sprintf("pacote %s nao encontrado — pulando upgrade", packageID)
-			}
-			return true, fmt.Sprintf("pacote %s ja atualizado — pulando upgrade", packageID)
-		}
-	}
-
-	return false, ""
 }
 
 // isPackageInOutput verifica se o packageID aparece na saída do winget list/upgrade.

@@ -14,9 +14,11 @@ import (
 
 	"golang.org/x/sys/windows"
 
+	"discovery/app/core/automation"
 	"discovery/app/core/processutil"
 	"discovery/app/core/selfupdate"
 	"discovery/app/core/services"
+	p2pmeta "discovery/app/p2pmeta"
 )
 
 // errInstallerExec indica que o artifact foi adquirido com sucesso (download
@@ -311,8 +313,30 @@ func (m *automationPackageManagerRouter) downloadAndCacheForP2P(ctx context.Cont
 	}
 	m.logf("[automation][p2p] instalador encontrado: %s", installerPath)
 
-	// 4. Publicar no cache P2P para que outros agentes possam baixar
-	published, pubErr := m.app.p2pCoord.PublishFileWithID(installerPath, artifactID)
+	// 3b. Extrair a versão real do instalador (nome do arquivo ou output do
+	// winget upgrade) para versionar o artifact no P2P — permite que outros
+	// agents comparem "versão disponível na rede" vs "versão instalada" e
+	// evitem loops de update por catálogo defasado.
+	installerVersion := automation.VersionFromInstallerFilename(filepath.Base(installerPath))
+	if installerVersion == "" {
+		if wc := m.fallback.Winget(); wc != nil {
+			if upOut, upErr := wc.ListUpgradable(ctx); upErr == nil {
+				installerVersion = automation.FindVersionInOutput(upOut, packageID, "available")
+			}
+		}
+	}
+	if installerVersion != "" {
+		m.logf("[automation][p2p] versão real do instalador: %s packageId=%s", installerVersion, packageID)
+	}
+
+	// 4. Publicar no cache P2P (com versão quando conhecida)
+	var published p2pmeta.ArtifactView
+	var pubErr error
+	if installerVersion != "" {
+		published, pubErr = m.app.p2pCoord.PublishFileWithIDAndVersion(installerPath, artifactID, installerVersion)
+	} else {
+		published, pubErr = m.app.p2pCoord.PublishFileWithID(installerPath, artifactID)
+	}
 	if pubErr != nil {
 		m.logf("[automation][p2p] aviso: falha ao publicar artifact no cache P2P: %v (instalacao continua)", pubErr)
 		// Fallback: instalar direto do tmpDir se a publicação falhar.
@@ -729,4 +753,48 @@ func launchInstallerViaUAC(executable string, args []string) (string, error) {
 // bem-sucedida com reboot pendente/iniciado.
 func isRebootSuccessExitCode(code int) bool {
 	return code == 3010 || code == 1641
+}
+
+// resolveP2PPackageVersion retorna a versão do artifact "winget:<packageId>"
+// consultando (1) o cache local e (2) o índice de artifacts dos peers.
+// Usado pela decisão versionada do executor (evitar loop por catálogo defasado).
+// Retorna "" quando o artifact não existe ou não tem versão.
+func (m *automationPackageManagerRouter) resolveP2PPackageVersion(packageID string) string {
+	if m == nil || m.app == nil || m.app.p2pCoord == nil {
+		return ""
+	}
+	packageID = strings.TrimSpace(packageID)
+	if packageID == "" {
+		return ""
+	}
+	artifactLookupID := "winget:" + normalizePackageLookupKey(packageID)
+
+	// 1. Cache local.
+	if artifacts, err := m.app.ListP2PArtifacts(); err == nil {
+		for _, a := range artifacts {
+			if strings.EqualFold(strings.TrimSpace(a.ArtifactID), artifactLookupID) {
+				if v := strings.TrimSpace(a.Version); v != "" {
+					return v
+				}
+			}
+		}
+	}
+
+	// 2. Índice de peers (gossip/live). Pega a maior versão anunciada.
+	best := ""
+	for _, peer := range m.app.GetP2PPeerArtifactIndex() {
+		for _, a := range peer.Artifacts {
+			if !strings.EqualFold(strings.TrimSpace(a.ArtifactID), artifactLookupID) {
+				continue
+			}
+			v := strings.TrimSpace(a.Version)
+			if v == "" {
+				continue
+			}
+			if best == "" || automation.CompareVersions(v, best) > 0 {
+				best = v
+			}
+		}
+	}
+	return best
 }
