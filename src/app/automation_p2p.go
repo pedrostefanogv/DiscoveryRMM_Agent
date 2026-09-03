@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -200,8 +201,8 @@ func (m *automationPackageManagerRouter) installViaP2P(ctx context.Context, pack
 	}
 
 	artifactPath := filepath.Join(m.app.p2pTempDir(), artifact)
-	catSilent, catSilentWithProgress := m.catalogSilentSwitches(packageID)
-	output, err := runLocalInstallerWithSwitches(ctx, artifactPath, catSilent, catSilentWithProgress)
+	catSilent, catSilentWithProgress, catInstallerType := m.catalogInstallerInfo(packageID)
+	output, err := runLocalInstallerFull(ctx, artifactPath, catSilent, catSilentWithProgress, catInstallerType)
 	if err != nil {
 		// Erro tipado: o artifact está em disco, apenas a execução falhou.
 		// O caller NÃO deve re-baixar — deve ir direto ao winget install.
@@ -274,8 +275,8 @@ func (m *automationPackageManagerRouter) downloadAndCacheForP2P(ctx context.Cont
 	// ciclo se repete.
 	if existing := m.findLocalArtifactByID(artifactID); existing != "" {
 		m.logf("[automation][p2p] artifact já presente no cache local, instalando sem republicar artifactID=%s artifact=%s", artifactID, existing)
-		catSilent, catSilentWithProgress := m.catalogSilentSwitches(packageID)
-		output, err := runLocalInstallerWithSwitches(ctx, existing, catSilent, catSilentWithProgress)
+		catSilent, catSilentWithProgress, catInstallerType := m.catalogInstallerInfo(packageID)
+		output, err := runLocalInstallerFull(ctx, existing, catSilent, catSilentWithProgress, catInstallerType)
 		if err != nil {
 			// Erro tipado: artifact em disco, execução falhou. O caller
 			// (Install/Upgrade) vai direto ao winget install sem re-baixar.
@@ -342,8 +343,8 @@ func (m *automationPackageManagerRouter) downloadAndCacheForP2P(ctx context.Cont
 		// Fallback: instalar direto do tmpDir se a publicação falhar.
 		// Erro tipado: instalador em disco, execução falhou → caller vai
 		// direto ao winget install sem re-baixar.
-		catSilent, catSilentWithProgress := m.catalogSilentSwitches(packageID)
-		output, err := runLocalInstallerWithSwitches(ctx, installerPath, catSilent, catSilentWithProgress)
+		catSilent, catSilentWithProgress, catInstallerType := m.catalogInstallerInfo(packageID)
+		output, err := runLocalInstallerFull(ctx, installerPath, catSilent, catSilentWithProgress, catInstallerType)
 		if err != nil {
 			return "", fmt.Errorf("%w: %v", errInstallerExec, err)
 		}
@@ -353,8 +354,8 @@ func (m *automationPackageManagerRouter) downloadAndCacheForP2P(ctx context.Cont
 
 	// 5. Instalar a partir da cópia persistente no P2P_Temp (não do tmpDir efêmero)
 	p2pInstallerPath := filepath.Join(m.app.p2pTempDir(), published.ArtifactName)
-	catSilent, catSilentWithProgress := m.catalogSilentSwitches(packageID)
-	output, err := runLocalInstallerWithSwitches(ctx, p2pInstallerPath, catSilent, catSilentWithProgress)
+	catSilent, catSilentWithProgress, catInstallerType := m.catalogInstallerInfo(packageID)
+	output, err := runLocalInstallerFull(ctx, p2pInstallerPath, catSilent, catSilentWithProgress, catInstallerType)
 	if err != nil {
 		return "", fmt.Errorf("%w: %v", errInstallerExec, err)
 	}
@@ -367,23 +368,59 @@ func (m *automationPackageManagerRouter) downloadAndCacheForP2P(ctx context.Cont
 // instalador cai na cascata heurística (comportamento anterior).
 // Nunca falha: erro de cache/loja é tratado como "sem switches".
 func (m *automationPackageManagerRouter) catalogSilentSwitches(packageID string) (string, string) {
+	silent, silentWithProgress, _ := m.catalogInstallerInfo(packageID)
+	return silent, silentWithProgress
+}
+
+// catalogInstallerInfo estende catalogSilentSwitches retornando também o
+// InstallerType do manifesto winget para a arquitetura preferida (x64 → x86 →
+// arm64 → arm → neutral). InstallerType permite decidir a estratégia de
+// execução (msiexec vs exe vs portable) sem adivinhar pela extensão.
+// Retorna "" quando o pacote não está no catálogo ou o manifesto não tem tipo.
+func (m *automationPackageManagerRouter) catalogInstallerInfo(packageID string) (silent, silentWithProgress, installerType string) {
 	if m.app == nil || m.app.appStoreSvc == nil {
-		return "", ""
+		return "", "", ""
 	}
 	item, err := m.app.appStoreSvc.ResolveAllowedPackage(m.app.ctx, packageID)
 	if err != nil {
 		// Pacote fora da política/loja: sem switches, usa cascata heurística.
-		return "", ""
+		return "", "", ""
 	}
-	silent := strings.TrimSpace(item.SilentCommand)
-	silentWithProgress := strings.TrimSpace(item.SilentWithProgress)
+	silent = strings.TrimSpace(item.SilentCommand)
+	silentWithProgress = strings.TrimSpace(item.SilentWithProgress)
 	if silent == "" {
 		silent = silentWithProgress
 	}
-	if silent != "" {
-		m.logf("[automation][p2p] switches do catálogo disponíveis packageId=%s silent=%q silentWithProgress=%q", packageID, silent, silentWithProgress)
+	installerType = resolveInstallerTypeForHost(item.InstallerTypesByArch)
+	if silent != "" || installerType != "" {
+		m.logf("[automation][p2p] dados do catálogo packageId=%s silent=%q silentWithProgress=%q installerType=%q", packageID, silent, silentWithProgress, installerType)
 	}
-	return silent, silentWithProgress
+	return silent, silentWithProgress, installerType
+}
+
+// resolveInstallerTypeForHost escolhe o InstallerType da arquitetura do host
+// (mesma ordem de preferência do servidor: x64 → x86 → arm64 → arm → neutral).
+func resolveInstallerTypeForHost(typesByArch map[string]string) string {
+	if len(typesByArch) == 0 {
+		return ""
+	}
+	archOrder := []string{"x64", "x86", "arm64", "arm", "neutral"}
+	switch runtime.GOARCH {
+	case "amd64":
+		archOrder = []string{"x64", "x86", "arm64", "arm", "neutral"}
+	case "386":
+		archOrder = []string{"x86", "x64", "arm", "arm64", "neutral"}
+	case "arm64":
+		archOrder = []string{"arm64", "x64", "x86", "arm", "neutral"}
+	case "arm":
+		archOrder = []string{"arm", "arm64", "x86", "x64", "neutral"}
+	}
+	for _, arch := range archOrder {
+		if t, ok := typesByArch[arch]; ok && strings.TrimSpace(t) != "" {
+			return strings.ToLower(strings.TrimSpace(t))
+		}
+	}
+	return ""
 }
 
 // findLocalArtifactByID procura um artifact no cache P2P local pelo artifactID
@@ -466,25 +503,78 @@ func runLocalInstaller(ctx context.Context, artifactPath string) (string, error)
 // runLocalInstallerWithSwitches executa o instalador local (.msi/.exe) usando
 // os switches do catálogo como primeira tentativa (silent → silentWithProgress),
 // com fallback para a cascata heurística quando não houver switches ou falharem.
+// installerType (do manifesto winget: "wix", "burn", "msi", "nullsoft", "inno",
+// "zip", "portable", ...) tem prioridade sobre a extensão do arquivo — um
+// instalador "wix" empacotado como .exe precisa de msiexec, e "portable"/"zip"
+// não são instaladores executáveis.
 func runLocalInstallerWithSwitches(ctx context.Context, artifactPath, silent, silentWithProgress string) (string, error) {
+	return runLocalInstallerFull(ctx, artifactPath, silent, silentWithProgress, "")
+}
+
+func runLocalInstallerFull(ctx context.Context, artifactPath, silent, silentWithProgress, installerType string) (string, error) {
 	artifactPath = strings.TrimSpace(artifactPath)
 	if artifactPath == "" {
 		return "", fmt.Errorf("artifact path vazio")
 	}
 	ext := strings.ToLower(filepath.Ext(artifactPath))
 	timeout := 20 * time.Minute
-	switch ext {
-	case ".msi":
-		// MSI: switches do catálogo substituem o padrão /qn /norestart quando presentes.
-		if sw := firstNonEmpty(silent, silentWithProgress); sw != "" {
-			return executeHiddenProcess(ctx, timeout, "msiexec", append([]string{"/i", artifactPath}, splitInstallerSwitches(sw)...))
+	it := strings.ToLower(strings.TrimSpace(installerType))
+
+	// InstallerType do manifesto tem prioridade sobre a extensão: decide a
+	// família de instalador de forma confiável (ex.: 7-Zip x64 é "wix" — o
+	// winget download entrega o .msi, mas um burn/baixado como .exe também
+	// precisa de msiexec).
+	isMSIFamily := ext == ".msi" ||
+		it == "wix" || it == "msi" || it == "burn"
+	isPortable := it == "zip" || it == "portable"
+
+	switch {
+	case isPortable:
+		// Portable/zip não é instalável via execução direta — winget install
+		// cuida da extração/portable install. Não desperdiça tentativa.
+		return "", fmt.Errorf("instalador portable/zip não suportado para execução direta P2P (installerType=%q): use winget install", it)
+	case isMSIFamily:
+		// C6: switches do catálogo são para o instalador .exe original (ex.: /S
+		// do NSIS) e NÃO são argumentos válidos do msiexec — aplicá-los a um
+		// .msi causa "exit status 1" imediato. MSI sempre usa as flags nativas
+		// do msiexec; propriedades extras do catálogo só entram se forem pares
+		// KEY=VALUE (formato msiexec).
+		args := []string{"/i", artifactPath, "/qn", "/norestart"}
+		for _, sw := range splitInstallerSwitches(firstNonEmpty(silent, silentWithProgress)) {
+			if isMSIExecArgument(sw) {
+				args = append(args, sw)
+			}
 		}
-		return executeHiddenProcess(ctx, timeout, "msiexec", []string{"/i", artifactPath, "/qn", "/norestart"})
-	case ".exe":
+		return executeHiddenProcess(ctx, timeout, "msiexec", args)
+	case ext == ".exe":
 		return runExeInstallerSilent(ctx, timeout, artifactPath, silent, silentWithProgress)
 	default:
-		return "", fmt.Errorf("formato de instalador não suportado para P2P: %s", ext)
+		return "", fmt.Errorf("formato de instalador não suportado para P2P: %s (installerType=%q)", ext, it)
 	}
+}
+
+// isMSIExecArgument reporta se um switch do catálogo é um argumento válido do
+// msiexec: opções nativas (/qn, /norestart, /l*v, etc.) ou propriedades
+// KEY=VALUE. Switches de instaladores .exe (ex.: /S, /SILENT, /VERYSILENT)
+// são rejeitados — não significam nada para msiexec e causam falha imediata.
+func isMSIExecArgument(sw string) bool {
+	sw = strings.TrimSpace(sw)
+	if sw == "" {
+		return false
+	}
+	lower := strings.ToLower(sw)
+	if strings.HasPrefix(lower, "/") {
+		// Opções nativas conhecidas do msiexec.
+		native := []string{"/i", "/a", "/x", "/qn", "/qb", "/qr", "/qf", "/qn+", "/qb+", "/norestart", "/forcerestart", "/l", "/le", "/lw", "/li", "/lu", "/m", "/p", "/j", "/y", "/z", "/update"}
+		for _, n := range native {
+			if lower == n || strings.HasPrefix(lower, n+" ") || strings.HasPrefix(lower, n+"+") {
+				return true
+			}
+		}
+		return false
+	}
+	// Propriedades públicas no formato KEY=VALUE (ex.: INSTALLDIR="C:\x").
+	return strings.Contains(sw, "=")
 }
 
 // installerType identifica o framework do instalador .exe, usado para ordenar
@@ -683,9 +773,14 @@ func executeHiddenProcess(parent context.Context, timeout time.Duration, executa
 		return text, fmt.Errorf("timeout na execução do instalador")
 	}
 	// ── Fallback de elevação (Windows) ──
-	// fork/exec falhou porque o binário exige elevação e o agente não é admin.
-	// Tentamos ShellExecuteEx("runas") — dispara UAC na sessão do usuário.
-	if isElevationRequiredExecError(err) {
+	// Caso 1: fork/exec falhou porque o binário exige elevação (erro 740).
+	// Caso 2 (C8): msiexec iniciou mas falhou com código de "requer elevação"
+	// (1730 ERROR_INSTALL_SOURCE_ABSENT? não — 1730 é outra coisa; usamos os
+	// códigos MSI reais: 1603 com "requer elevação" no log, 1925/"you must be
+	// admin", e principalmente o padrão observado: msiexec de Machine-scope sem
+	// admin sai com 1603/1730 sem mensagem útil). O caso mais confiável é o
+	// exit code 1603 combinado com agente não-elevado — tentamos UAC direto.
+	if isElevationRequiredExecError(err) || isMSIElevationExitCode(executable, err) {
 		if elevOut, elevErr := launchInstallerViaUAC(executable, args); elevErr == nil {
 			return elevOut, nil
 		}
@@ -693,6 +788,31 @@ func executeHiddenProcess(parent context.Context, timeout time.Duration, executa
 		// seguir o fluxo de fallback (winget direto).
 	}
 	return text, err
+}
+
+// isMSIElevationExitCode detecta o padrão C8: msiexec executado por um agente
+// não-elevado em instalação Machine-scope. O msiexec inicia normalmente (sem
+// erro 740 de fork/exec), mas falha com exit codes de MSI que indicam falta de
+// privilégio: 1603 (fatal, tipicamente sem admin), 1730 (ERROR_INSTALL_REMOTE
+// _DISALLOWED? não — 1730 é "installation forbidden by policy"... na prática o
+// par observado em campo é 1603/1619/1620). Sendo conservador: só tentamos UAC
+// quando o executável é msiexec e o exit code é 1603 — o caso clássico de
+// "instalação Machine-scope sem admin".
+func isMSIElevationExitCode(executable string, err error) bool {
+	if runtime.GOOS != "windows" {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(filepath.Base(executable)), "msiexec.exe") &&
+		!strings.EqualFold(strings.TrimSpace(executable), "msiexec") {
+		return false
+	}
+	exitErr, ok := err.(*exec.ExitError)
+	if !ok {
+		return false
+	}
+	// 1603 = ERROR_INSTALL_FAILURE (fatal durante a instalação). Sem admin,
+	// instalações Machine-scope falham exatamente aqui.
+	return exitErr.ExitCode() == 1603
 }
 
 // isElevationRequiredExecError detecta falha de CreateProcess por exigência de

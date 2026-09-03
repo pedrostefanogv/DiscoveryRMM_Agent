@@ -29,6 +29,11 @@ type Item struct {
 	// SilentWithProgress contém os switches silenciosos com progresso (fallback de SilentCommand).
 	SilentWithProgress  string            `json:"silentWithProgress"`
 	InstallerURLsByArch map[string]string `json:"installerUrlsByArch"`
+	// InstallerTypesByArch contém o InstallerType do manifesto winget por
+	// arquitetura (ex.: "wix", "burn", "nullsoft", "inno", "zip", "portable").
+	// Permite executar o instalador baixado com a estratégia correta sem
+	// adivinhar pela extensão do arquivo.
+	InstallerTypesByArch map[string]string `json:"installerTypesByArch"`
 	AutoUpdateEnabled   bool              `json:"autoUpdateEnabled"`
 	SourceScope         string            `json:"sourceScope"`
 }

@@ -48,10 +48,37 @@ func (c *Client) InstallWithSwitches(ctx context.Context, id, silent, silentWith
 		"--accept-source-agreements",
 		"--accept-package-agreements",
 	}
-	if sw != "" {
+	// C7: só repassamos switches do catálogo via --custom quando eles são
+	// argumentos válidos para o instalador do pacote. Switches de .exe (ex.:
+	// /S do NSIS) aplicados a pacotes MSI causam "0x8a15004a: Arguments for
+	// msiexec are invalid" — o winget já sabe as flags corretas do manifesto
+	// quando usamos apenas --silent, então --custom só entra com switches
+	// explícitos de MSI (KEY=VALUE) ou quando o pacote não é MSI.
+	if sw != "" && !looksLikeExeOnlySwitch(sw) {
 		args = append(args, "--custom", sw)
 	}
 	return c.run(ctx, args...)
+}
+
+// looksLikeExeOnlySwitch detecta switches que só fazem sentido para
+// instaladores .exe (NSIS/Inno/etc.) e quebram o msiexec quando repassados
+// via --custom. MSI aceita apenas opções nativas (/qn...) e KEY=VALUE.
+func looksLikeExeOnlySwitch(sw string) bool {
+	fields := strings.Fields(strings.ToLower(strings.TrimSpace(sw)))
+	if len(fields) == 0 {
+		return false
+	}
+	for _, f := range fields {
+		switch f {
+		case "/s", "/silent", "/verysilent", "/sp-", "/norestart", "/supmsg", "/noicons", "/currentuser", "/allusers", "/dir", "/group", "/no space", "/type", "/components", "/tasks":
+			if f == "/norestart" {
+				// /norestart também é válido no msiexec — não é exe-only.
+				continue
+			}
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Client) Uninstall(ctx context.Context, id string) (string, error) {
