@@ -300,6 +300,13 @@ func BuildInstallScript(version, sourceType, sourceValue string) string {
 	}
 	return fmt.Sprintf(`$ErrorActionPreference='Stop'
 try {
+  # C4: PowerShellGet 1.0.0.1 pede prompt interativo para instalar o provedor
+  # NuGet em modo NonInteractive (Install-NuGetClientBinaries/ShouldContinue).
+  # Instalar o provedor com -Force evita o prompt e permite Install-Module.
+  $nuget = Get-PackageProvider -ListAvailable | Where-Object { $_.Name -eq 'NuGet' } | Select-Object -First 1
+  if (-not $nuget -or $nuget.Version -lt [version]'2.8.5.201') {
+    Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope AllUsers -ErrorAction SilentlyContinue | Out-Null
+  }
   %s
 } catch {
   if ('%s' -ne 'offline') {

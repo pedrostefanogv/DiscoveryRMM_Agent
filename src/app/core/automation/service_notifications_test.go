@@ -20,6 +20,7 @@ func TestDispatchExecutionNotification_PackageTaskStart(t *testing.T) {
 		ActionType:       ActionInstallPackage,
 		PackageID:        "Test.App",
 		InstallationType: InstallationPSAppDeployToolkit,
+		RequiresApproval: true,
 	}
 	entry := database.AutomationExecutionEntry{
 		ExecutionID:      "exec-1",
@@ -42,6 +43,73 @@ func TestDispatchExecutionNotification_PackageTaskStart(t *testing.T) {
 	}
 	if dispatched[0].Mode != "require_confirmation" {
 		t.Fatalf("expected mode require_confirmation, got %q", dispatched[0].Mode)
+	}
+}
+
+// C1: sem RequiresApproval, install_start não deve pedir confirmação.
+func TestDispatchExecutionNotification_PackageTaskStartNoApproval(t *testing.T) {
+	svc := &Service{}
+	var dispatched []AutomationNotificationRequest
+	dispatcher := func(req AutomationNotificationRequest) AutomationNotificationResponse {
+		dispatched = append(dispatched, req)
+		return AutomationNotificationResponse{Accepted: true, Result: "approved"}
+	}
+
+	task := AutomationTask{
+		TaskID:     "task-noapproval",
+		Name:       "Install TestApp",
+		ActionType: ActionInstallPackage,
+		PackageID:  "Test.App",
+	}
+	entry := database.AutomationExecutionEntry{
+		ExecutionID:   "exec-noapproval",
+		TaskID:        "task-noapproval",
+		ActionType:    string(ActionInstallPackage),
+		Status:        string(ExecutionStatusDispatched),
+		CorrelationID: "corr-na",
+	}
+
+	svc.dispatchExecutionNotification(dispatcher, task, entry, nil, deferState{}, resolvePSADTWelcomeOptions(task))
+	if len(dispatched) != 1 {
+		t.Fatalf("expected 1 notification, got %d", len(dispatched))
+	}
+	if dispatched[0].Mode != "notify_only" {
+		t.Fatalf("expected mode notify_only, got %q", dispatched[0].Mode)
+	}
+}
+
+// C1: resultados (install_end/failed/reboot) nunca pedem confirmação,
+// mesmo quando RequiresApproval=true.
+func TestDispatchExecutionNotification_ResultAlwaysNotifyOnly(t *testing.T) {
+	svc := &Service{}
+	var dispatched []AutomationNotificationRequest
+	dispatcher := func(req AutomationNotificationRequest) AutomationNotificationResponse {
+		dispatched = append(dispatched, req)
+		return AutomationNotificationResponse{Accepted: true, Result: "approved"}
+	}
+
+	task := AutomationTask{
+		TaskID:           "task-result",
+		Name:             "Install TestApp",
+		ActionType:       ActionInstallPackage,
+		PackageID:        "Test.App",
+		RequiresApproval: true,
+	}
+	entry := database.AutomationExecutionEntry{
+		ExecutionID:   "exec-result",
+		TaskID:        "task-result",
+		ActionType:    string(ActionInstallPackage),
+		Status:        string(ExecutionStatusCompleted),
+		CorrelationID: "corr-r",
+	}
+
+	success := ExecutionResult{Success: true, ExitCodeSet: true, ExitCode: 0}
+	svc.dispatchExecutionNotification(dispatcher, task, entry, &success, deferState{}, resolvePSADTWelcomeOptions(task))
+	if len(dispatched) != 1 || dispatched[0].EventType != "install_end" {
+		t.Fatalf("expected success notification install_end")
+	}
+	if dispatched[0].Mode != "notify_only" {
+		t.Fatalf("expected result mode notify_only, got %q", dispatched[0].Mode)
 	}
 }
 

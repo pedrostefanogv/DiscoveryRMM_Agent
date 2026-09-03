@@ -380,7 +380,11 @@ func (s *Service) triggerImmediate(ctx context.Context, agentID, fingerprint str
 		s.logf("automacao: tarefa %s requer aprovacao - trigger immediate ignorado", strings.TrimSpace(task.TaskID))
 		return
 	}
-	markerKey := "immediate:" + fingerprint + ":" + strings.TrimSpace(task.TaskID)
+	// C2: a chave inclui LastUpdatedAt — se a task for atualizada no servidor,
+	// o marcador antigo (com updatedAt anterior) não existe e o trigger dispara
+	// novamente. Antes a chave era só immediate:<fp>:<taskId> e persistia para
+	// sempre, bloqueando silenciosamente tasks recriadas/enviadas offline.
+	markerKey := "immediate:" + fingerprint + ":" + strings.TrimSpace(task.TaskID) + ":" + task.LastUpdatedAt
 	if _, found, err := s.db.GetAutomationMarker(agentID, markerKey); err == nil && found {
 		return
 	}
@@ -442,7 +446,8 @@ func (s *Service) triggerOnAgentCheckIn(ctx context.Context, agentID, fingerprin
 		s.logf("automacao: tarefa %s requer aprovacao - trigger checkin ignorado", strings.TrimSpace(task.TaskID))
 		return
 	}
-	markerKey := "checkin:" + fingerprint + ":" + strings.TrimSpace(task.TaskID)
+	// C2: mesma correção do triggerImmediate — LastUpdatedAt na chave.
+	markerKey := "checkin:" + fingerprint + ":" + strings.TrimSpace(task.TaskID) + ":" + task.LastUpdatedAt
 	if _, found, err := s.db.GetAutomationMarker(agentID, markerKey); err == nil && found {
 		return
 	}
@@ -834,14 +839,23 @@ func (s *Service) collectValidMarkerKeys(current State) []string {
 			continue
 		}
 		if task.TriggerImmediate {
-			keys = append(keys, "immediate:"+fingerprint+":"+taskID)
+			// C2: chave inclui LastUpdatedAt (mesmo formato do triggerImmediate).
+			keys = append(keys, "immediate:"+fingerprint+":"+taskID+":"+task.LastUpdatedAt)
 		}
 		if task.TriggerOnAgentCheckIn {
-			keys = append(keys, "checkin:"+fingerprint+":"+taskID)
+			keys = append(keys, "checkin:"+fingerprint+":"+taskID+":"+task.LastUpdatedAt)
 		}
 		if task.TriggerRecurring {
 			keys = append(keys, "recurring:last:"+taskID)
 		}
+		// Estado do anti-loop (Fase 1) e do check-in cycle — sem estas chaves,
+		// cleanupOrphanedMarkers apagava o backoff/circuit breaker a cada
+		// policy-sync, desativando a proteção anti-loop.
+		keys = append(keys,
+			"skipbackoff:"+taskID,
+			"circuit:fail:"+taskID,
+			"checkin:cycle:"+taskID,
+		)
 	}
 	// Marcador de sistema: userLoginHandled da sessão atual.
 	keys = append(keys, "_sys:userlogin:handled:"+s.processStartAt.Format(time.RFC3339))
@@ -1041,12 +1055,20 @@ func (s *Service) dispatchExecutionNotification(dispatcher func(AutomationNotifi
 	}
 
 	notificationID := fmt.Sprintf("automation-%s-%s", strings.TrimSpace(entry.ExecutionID), eventType)
+	// C1: apenas install_start de tasks com RequiresApproval pede confirmação.
+	// Resultados (install_end/install_failed/reboot_required) nunca pedem —
+	// antes usavam require_confirmation e geravam modal de "concluído" que
+	// exigia interação do usuário (e timeout registrava "deferred").
+	mode := "notify_only"
+	if result == nil && task.RequiresApproval {
+		mode = "require_confirmation"
+	}
 	return dispatcher(AutomationNotificationRequest{
 		NotificationID: notificationID,
 		IdempotencyKey: notificationID,
 		Title:          title,
 		Message:        message,
-		Mode:           "require_confirmation",
+		Mode:           mode,
 		Severity:       severity,
 		EventType:      eventType,
 		Layout:         "toast",

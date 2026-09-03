@@ -91,10 +91,16 @@ if ($result.Count -eq 0) { '[]' } else { $result | ConvertTo-Json -Depth 2 -Comp
 		WriteErrorsTotal any `json:"WriteErrorsTotal"`
 	}
 
+	// C5: o coletor pode retornar um objeto único (ex.: um disco só) ou um array.
+	// Aceitar ambos — antes só array era aceito e objeto único quebrava o parse.
 	var raw []rawDisk
 	if err := json.Unmarshal([]byte(trimmed), &raw); err != nil {
-		log.Printf("[inventory] falha ao parsear saida SMART: %v", err)
-		return nil
+		var single rawDisk
+		if err2 := json.Unmarshal([]byte(trimmed), &single); err2 != nil {
+			log.Printf("[inventory] falha ao parsear saida SMART: %v", err)
+			return nil
+		}
+		raw = []rawDisk{single}
 	}
 
 	result := make(map[string]SmartHealth, len(raw))
