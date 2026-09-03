@@ -18,11 +18,16 @@ import (
 //   - restart/reboot/shutdown  → agent_commands_power.go
 //   - remote session           → agent_commands_remotesession.go
 //   - remote debug             → core/remotedebug
+//   - nats.reconnect           → agent_commands_natsreconnect.go (transferência de site)
 //
 // Retorna (handled, exitCode, output, errText) no contrato do agentconn.
 func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, payload any) (bool, int, string, string) {
 	cmdType = strings.ToLower(strings.TrimSpace(cmdType))
 	a.logs.append(fmt.Sprintf("[cmd] recebido: cmdType=%q payload=%v", cmdType, remotedebug.TruncatePayloadForLog(payload)))
+
+	if cmdType == "nats.reconnect" {
+		return a.handleNatsReconnectCommand(parent, payload)
+	}
 
 	if cmdType == "update" || cmdType == "selfupdate" {
 		if a.selfUpdater != nil {
