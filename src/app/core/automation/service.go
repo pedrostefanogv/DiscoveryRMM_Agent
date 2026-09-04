@@ -70,6 +70,13 @@ type Service struct {
 	cronEntries      map[string]cron.EntryID
 	activeTasks      map[string]bool
 	userLoginHandled bool
+	// startupReadinessWaiter, quando configurado, é chamado uma única vez antes
+	// do PRIMEIRO refreshPolicy do processo. Permite que o App atrase o primeiro
+	// policy-sync (e os triggers immediate/checkin de startup) até uma
+	// dependência local estar pronta — ex.: discovery inicial do P2P, para que
+	// tasks de instalação de pacotes encontrem artifacts em peers da LAN em
+	// vez de cair no fallback winget/internet.
+	startupReadinessWaiter func(ctx context.Context)
 	// processStartAt identifica a sessão atual do processo. Usado como parte da chave
 	// do marcador userLogin para que TriggerOnUserLogin dispare uma vez por sessão
 	// (não uma vez para sempre). Sobrevive a crashes curtos, mas expira em reboot
@@ -123,6 +130,16 @@ func (s *Service) SetNotificationDispatcher(dispatcher func(AutomationNotificati
 	s.notifyDispatcher = dispatcher
 }
 
+// SetStartupReadinessWaiter configura um callback chamado uma única vez, antes
+// do primeiro refreshPolicy do processo. O callback deve respeitar o ctx e
+// retornar dentro de um teto de tempo (não bloquear indefinidamente). Caso o
+// waiter não seja configurado, o comportamento é idêntico ao anterior.
+func (s *Service) SetStartupReadinessWaiter(waiter func(ctx context.Context)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.startupReadinessWaiter = waiter
+}
+
 func (s *Service) Run(ctx context.Context, onBeat func()) {
 	// Watcher de logon real (Windows/WTS). Se indisponivel, mantem fallback
 	// 'uma vez por processo' no reconcilePolicy.
@@ -136,6 +153,18 @@ func (s *Service) Run(ctx context.Context, onBeat func()) {
 	go s.runCallbackLoop(ctx, onBeat)
 
 	s.loadPersistedForCurrentAgent()
+
+	// Warmup (uma vez por processo): atrai o primeiro policy-sync para depois
+	// de uma dependência local estar pronta (ex.: discovery P2P). Os triggers
+	// immediate/checkin do startup passam a rodar com a rede P2P conhecida,
+	// evitando downloads da internet quando peers da LAN têm o artifact.
+	s.mu.RLock()
+	waiter := s.startupReadinessWaiter
+	s.mu.RUnlock()
+	if waiter != nil {
+		waiter(ctx)
+	}
+
 	state, _ := s.refreshPolicy(ctx, false)
 	timer := time.NewTimer(nextRunInterval(state))
 	defer timer.Stop()

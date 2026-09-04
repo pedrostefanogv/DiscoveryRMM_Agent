@@ -106,6 +106,56 @@ type Coordinator struct {
 	cancel context.CancelFunc
 	// started indica se Startup foi chamado com sucesso.
 	started bool
+
+	// ── Readiness (warmup) ──
+	// readyCh é fechado quando o discovery inicial completa: a primeira rodada
+	// de lan-probe (startup) termina, OU um peer é confirmado antes disso.
+	// Consumidores (ex.: router de automação) esperam este sinal antes de
+	// declarar "artifact não encontrado na rede P2P" — evita fallback
+	// desnecessário para winget/internet enquanto o discovery ainda não viu
+	// os peers da LAN.
+	readyOnce sync.Once
+	readyCh   chan struct{}
+}
+
+// ReadyCh retorna um canal fechado quando o discovery inicial do P2P
+// (primeira rodada de lan-probe) foi concluído. Nunca retorna nil.
+// Fechado imediatamente se o Coordinator nunca subiu (consumidores não
+// devem bloquear quando P2P está desabilitado).
+func (c *Coordinator) ReadyCh() <-chan struct{} {
+	if c == nil {
+		never := make(chan struct{})
+		close(never)
+		return never
+	}
+	c.mu.Lock()
+	if c.readyCh == nil {
+		c.readyCh = make(chan struct{})
+	}
+	ch := c.readyCh
+	c.mu.Unlock()
+	return ch
+}
+
+// IsReady informa se o discovery inicial já foi concluído.
+func (c *Coordinator) IsReady() bool {
+	select {
+	case <-c.ReadyCh():
+		return true
+	default:
+		return false
+	}
+}
+
+// markReady fecha o canal de readiness exatamente uma vez (idempotente).
+func (c *Coordinator) markReady() {
+	c.mu.Lock()
+	if c.readyCh == nil {
+		c.readyCh = make(chan struct{})
+	}
+	ch := c.readyCh
+	c.mu.Unlock()
+	c.readyOnce.Do(func() { close(ch) })
 }
 
 // downloadLockEntry guarda o mutex de um artifact e o número de esperadores
@@ -306,6 +356,8 @@ func (c *Coordinator) Run(ctx context.Context) {
 	for workerIndex := 0; workerIndex < p2pReplicationWorkers; workerIndex++ {
 		go c.replicationWorker(runCtx)
 	}
+	// Re-seed automático: mantém cobertura de artifacts em todos os peers.
+	go c.startReseedLoop(runCtx)
 	_ = c.discoveryTick(time.Now())
 
 	discoveryTicker := time.NewTicker(CoordinatorDiscoveryTickSeconds * time.Second)
@@ -327,6 +379,9 @@ func (c *Coordinator) Run(ctx context.Context) {
 
 	go func() {
 		_, _ = c.RunLANDiscoveryProbe(runCtx, "startup")
+		// Discovery inicial concluído: libera consumidores que aguardam
+		// readiness (ex.: router de automação antes do fallback winget).
+		c.markReady()
 	}()
 
 	lanProbeSem := make(chan struct{}, 2)

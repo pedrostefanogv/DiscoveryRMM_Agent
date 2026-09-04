@@ -148,10 +148,56 @@ func (m *automationPackageManagerRouter) shouldUseP2PForWingetInstall() bool {
 	return true
 }
 
+// p2pReadinessWaitTimeout é o teto de espera pelo discovery inicial do P2P
+// antes de prosseguir com o fluxo normal (fallback winget preservado).
+// O probe de startup varre a LAN em segundos; 45s cobre redes grandes
+// (probe de /24 inteiro) e hosts lentos sem atrasar tasks indefinidamente.
+const p2pReadinessWaitTimeout = 45 * time.Second
+
+// waitForP2PReadiness bloqueia até o discovery inicial do P2P concluir
+// (primeiro lan-probe terminado OU primeiro peer confirmado), respeitando
+// o ctx do caller e o timeout global. Retorna false quando o prazo
+// expirou — o caller prossegue com o comportamento normal (o resolve pode
+// ainda encontrar artifacts via gossip/index já populado, ou cair no
+// fallback winget, exatamente como antes).
+func (m *automationPackageManagerRouter) waitForP2PReadiness(ctx context.Context) bool {
+	if m == nil || m.app == nil || m.app.p2pCoord == nil {
+		return true // sem coordinator: nada a esperar, não bloqueia
+	}
+	readyCh := m.app.p2pCoord.ReadyCh()
+	select {
+	case <-readyCh:
+		return true
+	default:
+		m.logf("[automation][p2p] aguardando discovery inicial do P2P (teto %s)", p2pReadinessWaitTimeout)
+	}
+	timer := time.NewTimer(p2pReadinessWaitTimeout)
+	defer timer.Stop()
+	select {
+	case <-readyCh:
+		m.logf("[automation][p2p] discovery inicial concluído, consultando rede P2P")
+		return true
+	case <-timer.C:
+		return false
+	case <-ctx.Done():
+		return false
+	}
+}
+
 func (m *automationPackageManagerRouter) installViaP2P(ctx context.Context, packageID string) (string, error) {
 	packageID = strings.TrimSpace(packageID)
 	if packageID == "" {
 		return "", fmt.Errorf("packageId vazio")
+	}
+
+	// Warmup: se o P2P ainda não concluiu o discovery inicial (comum no
+	// startup do agent, quando a automação dispara antes do lan-probe),
+	// espera com timeout antes de resolver fontes. Sem isso, o resolve
+	// reporta "artifact não encontrado" enquanto os peers da LAN ainda
+	// não foram descobertos — e o fallback baixa da internet
+	// desnecessariamente (mesmos MB que peers vizinhos têm em cache).
+	if !m.waitForP2PReadiness(ctx) {
+		m.logf("[automation][p2p] P2P discovery não concluiu no prazo, prosseguindo sem espera packageId=%s", packageID)
 	}
 
 	artifact, peerIDs, err := m.resolveArtifactSources(ctx, packageID)
@@ -179,6 +225,26 @@ func (m *automationPackageManagerRouter) installViaP2P(ctx context.Context, pack
 			}
 		}
 		if !swarmTried {
+			// Ordena fontes por score (peer ativo + conectado via libp2p +
+			// anúncio fresco primeiro). Assim, entre os agentes que possuem
+			// o mesmo artifact, a transferência prefere o melhor provedor.
+			if lookupID := "winget:" + normalizePackageLookupKey(packageID); lookupID != "winget:" {
+				if scored := m.app.p2pCoord.PeersWithArtifactScored(lookupID); len(scored) > 0 {
+					ordered := make([]string, 0, len(scored))
+					for _, cand := range scored {
+						for _, id := range peerIDs {
+							if strings.EqualFold(strings.TrimSpace(id), strings.TrimSpace(cand.AgentID)) {
+								ordered = append(ordered, id)
+								break
+							}
+						}
+					}
+					if len(ordered) == len(peerIDs) {
+						peerIDs = ordered
+						m.logf("[automation][p2p] fontes ordenadas por score artifact=%s melhor_peer=%s score=%.2f", artifact, peerIDs[0], scored[0].Score)
+					}
+				}
+			}
 			// Tenta cada peer candidato em ordem. Cache stale (peer não tem
 			// mais o arquivo) invalida a entrada e segue para o próximo peer —
 			// só cai no fallback winget depois de esgotar todos os peers.
@@ -251,6 +317,104 @@ func (m *automationPackageManagerRouter) resolveArtifactSources(ctx context.Cont
 	}
 
 	return "", nil, fmt.Errorf("nenhum artifact P2P encontrado para packageId=%s (artifactID=%s)", packageID, artifactLookupID)
+}
+
+// PreloadPackageForP2P faz fetch proativo de um instalador: baixa via winget
+// download e publica no cache P2P — SEM instalar. Usado quando o servidor
+// pede pré-carga de packageIds (policy-sync → PreloadPackageIds), para que
+// sites em deploy tenham os instaladores já na rede P2P quando as tasks de
+// instalação executarem. Não retorna erro ao caller (best-effort, só log):
+// falha aqui não deve afetar o ciclo de automação.
+func (m *automationPackageManagerRouter) PreloadPackageForP2P(ctx context.Context, packageID string) {
+	packageID = strings.TrimSpace(packageID)
+	if packageID == "" || m.app.p2pCoord == nil {
+		return
+	}
+	artifactID := "winget:" + normalizePackageLookupKey(packageID)
+	if artifactID == "winget:" {
+		return
+	}
+
+	// Já temos o artifact localmente — nada a fazer.
+	if existing := m.findLocalArtifactByID(artifactID); existing != "" {
+		m.logf("[automation][p2p] preload: artifact já presente localmente packageId=%s", packageID)
+		return
+	}
+
+	// Já existe na rede? Baixa dos peers (swarm) em vez da internet.
+	m.app.p2pCoord.RefreshPeerArtifactIndex(ctx, "preload")
+	index := m.app.GetP2PPeerArtifactIndex()
+	for _, peer := range index {
+		for _, a := range peer.Artifacts {
+			if !strings.EqualFold(strings.TrimSpace(a.ArtifactID), artifactID) {
+				continue
+			}
+			artifactName := strings.TrimSpace(a.ArtifactName)
+			if artifactName == "" {
+				continue
+			}
+			if scored := m.app.p2pCoord.PeersWithArtifactScored(artifactID); len(scored) > 0 {
+				if _, err := m.app.p2pCoord.DownloadArtifactSwarm(ctx, artifactName); err == nil {
+					m.logf("[automation][p2p] preload: artifact baixado da rede packageId=%s artifact=%s", packageID, artifactName)
+					return
+				}
+				// Swarm falhou — tenta peers individualmente na ordem de score.
+				downloaded := false
+				for _, cand := range scored {
+					if _, err := m.app.p2pCoord.DownloadArtifactFromPeer(ctx, artifactName, cand.AgentID); err == nil {
+						m.logf("[automation][p2p] preload: artifact baixado via peer packageId=%s peer=%s", packageID, cand.AgentID)
+						downloaded = true
+						break
+					}
+				}
+				if downloaded {
+					return
+				}
+			}
+		}
+	}
+
+	// Não existe na rede: baixa via winget download e publica (vira seed).
+	wingetClient := m.fallback.Winget()
+	if wingetClient == nil {
+		m.logf("[automation][p2p] preload: winget client indisponivel packageId=%s", packageID)
+		return
+	}
+	tmpDir, err := os.MkdirTemp("", "p2p-winget-preload-*")
+	if err != nil {
+		m.logf("[automation][p2p] preload: falha ao criar diretorio temporario packageId=%s: %v", packageID, err)
+		return
+	}
+	defer func() {
+		if removeErr := os.RemoveAll(tmpDir); removeErr != nil {
+			m.logf("[automation][p2p] preload: aviso: falha ao limpar diretorio temporario %s: %v", tmpDir, removeErr)
+		}
+	}()
+
+	m.logf("[automation][p2p] preload: baixando via winget download packageId=%s", packageID)
+	if _, err := wingetClient.Download(ctx, packageID, tmpDir); err != nil {
+		m.logf("[automation][p2p] preload: winget download falhou packageId=%s: %v", packageID, err)
+		return
+	}
+	installerPath, err := findInstallerInDir(tmpDir)
+	if err != nil {
+		m.logf("[automation][p2p] preload: instalador nao encontrado packageId=%s: %v", packageID, err)
+		return
+	}
+
+	installerVersion := automation.VersionFromInstallerFilename(filepath.Base(installerPath))
+	var published p2pmeta.ArtifactView
+	var pubErr error
+	if installerVersion != "" {
+		published, pubErr = m.app.p2pCoord.PublishFileWithIDAndVersion(installerPath, artifactID, installerVersion)
+	} else {
+		published, pubErr = m.app.p2pCoord.PublishFileWithID(installerPath, artifactID)
+	}
+	if pubErr != nil {
+		m.logf("[automation][p2p] preload: falha ao publicar packageId=%s: %v", packageID, pubErr)
+		return
+	}
+	m.logf("[automation][p2p] preload: artifact publicado no cache P2P packageId=%s artifactID=%s artifactName=%s", packageID, artifactID, published.ArtifactName)
 }
 
 // downloadAndCacheForP2P baixa o instalador via winget download, publica no cache

@@ -376,6 +376,10 @@ func (c *Coordinator) probeLANPeer(ctx context.Context, client *http.Client, h h
 		c.deps.Log(fmt.Sprintf("[p2p][lan-probe] peer confirmado: agentId=%s addr=%s:%d source=%s",
 			peerView.AgentID, peerView.Address, peerView.Port, strings.TrimSpace(source)))
 	}
+	// Peer confirmado com sucesso: o discovery já provou que a LAN tem
+	// agentes P2P. Acelera o readiness sem esperar o fim do probe completo
+	// (que pode varrer /24 inteira). Idempotente via markReady.
+	c.markReady()
 	return true, inserted
 }
 

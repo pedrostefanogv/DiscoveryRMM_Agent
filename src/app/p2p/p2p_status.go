@@ -3,6 +3,7 @@ package p2p
 import (
 	"context"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"sync"
@@ -64,6 +65,83 @@ func (c *Coordinator) GetPeers() []P2PPeerView {
 			return hi < hj
 		}
 		return strings.ToLower(strings.TrimSpace(out[i].AgentID)) < strings.ToLower(strings.TrimSpace(out[j].AgentID))
+	})
+	return out
+}
+
+// P2PArtifactSourceCandidate é um peer que possui um artifact, com o score
+// usado para ordenar as fontes de download. Score maior = fonte preferida.
+type P2PArtifactSourceCandidate struct {
+	AgentID string
+	Host    string
+	Score   float64
+}
+
+// PeersWithArtifactScored retorna os peers conhecidos que possuem o artifact
+// (cache de gossip), ordenados pela melhor fonte de download primeiro.
+//
+// Score da fonte (maior = melhor):
+//   - +1.0 por peer ATIVO (visto nos últimos 2 minutos — menos chance de stale);
+//   - +0.5 por peer conectado via libp2p (transferência mais robusta que HTTP puro);
+//   - + frescor do anúncio: até +0.5, decaindo linearmente até 24h (LastUpdatedUTC).
+//
+// O desempate final é determinístico (AgentID) para que agentes diferentes
+// concordem aproximadamente sobre a ordem de preferência.
+//
+// Nota: não reflete carga de CPU/RAM em tempo real do peer remoto (o gossip
+// não carrega essa métrica por peer hoje) — quando a eleição de fetcher roda
+// (re-seed proativo), aí sim o score de capacidade (computeScore) decide.
+func (c *Coordinator) PeersWithArtifactScored(artifactID string) []P2PArtifactSourceCandidate {
+	artifactID = strings.TrimSpace(artifactID)
+	if artifactID == "" {
+		return nil
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	now := time.Now()
+	var out []P2PArtifactSourceCandidate
+	for peerKey, state := range c.peerArtifacts {
+		hasArtifact := false
+		for _, artifact := range state.Artifacts {
+			if strings.EqualFold(strings.TrimSpace(artifact.ArtifactID), artifactID) {
+				hasArtifact = true
+				break
+			}
+		}
+		if !hasArtifact {
+			continue
+		}
+
+		peerState, peerKnown := c.peers[peerKey]
+		score := 0.0
+		if peerKnown && now.Sub(peerState.LastSeenUTC) <= 2*time.Minute {
+			score += 1.0
+		}
+		if peerKnown && peerState.Peer.ConnectedVia == p2pDiscoveryLibP2P {
+			score += 0.5
+		}
+		if age := now.Sub(state.LastUpdatedUTC); age >= 0 && age <= 24*time.Hour {
+			score += 0.5 * (1 - age.Hours()/24)
+		}
+
+		host := ""
+		if peerKnown {
+			host = strings.TrimSpace(peerState.Peer.Host)
+		}
+		out = append(out, P2PArtifactSourceCandidate{
+			AgentID: peerKey,
+			Host:    host,
+			Score:   score,
+		})
+	}
+
+	sort.SliceStable(out, func(i, j int) bool {
+		if math.Abs(out[i].Score-out[j].Score) > 0.001 {
+			return out[i].Score > out[j].Score
+		}
+		// Desempate determinístico: prefere peer ativo recente e depois AgentID.
+		return out[i].AgentID < out[j].AgentID
 	})
 	return out
 }

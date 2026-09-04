@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
-        "runtime"
-        "os"
+	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -411,10 +411,39 @@ func NewApp(opts AppStartupOptions) *App {
 	})
 	a.packageManagerRouter = newAutomationPackageManagerRouter(a, a.appsSvc)
 	a.automationSvc.SetPackageManager(a.packageManagerRouter)
-        // Resolvedor de versão P2P para a decisão versionada do executor (anti-loop).
-        automation.SetP2PVersionResolver(func(packageID string) string {
-                return a.packageManagerRouter.resolveP2PPackageVersion(packageID)
-        })
+	// Warmup P2P (uma vez por processo): atrasa o primeiro policy-sync (e os
+	// triggers immediate/checkin de startup) até o discovery inicial do P2P
+	// concluir OU o teto de 120s — evita que tasks de instalação baixem da
+	// internet enquanto os peers da LAN ainda estão sendo descobertos.
+	a.automationSvc.SetStartupReadinessWaiter(func(ctx context.Context) {
+		if a.p2pCoord == nil {
+			return
+		}
+		cfg := a.GetP2PConfig()
+		if !cfg.Enabled {
+			return
+		}
+		readyCh := a.p2pCoord.ReadyCh()
+		select {
+		case <-readyCh:
+			return
+		default:
+		}
+		a.logs.append("[automation] aguardando discovery inicial do P2P antes do primeiro policy-sync (teto 120s)")
+		timer := time.NewTimer(120 * time.Second)
+		defer timer.Stop()
+		select {
+		case <-readyCh:
+			a.logs.append("[automation] discovery P2P concluído, prosseguindo com policy-sync")
+		case <-timer.C:
+			a.logs.append("[automation] teto de 120s aguardando discovery P2P atingido, prosseguindo com policy-sync")
+		case <-ctx.Done():
+		}
+	})
+	// Resolvedor de versão P2P para a decisão versionada do executor (anti-loop).
+	automation.SetP2PVersionResolver(func(packageID string) string {
+		return a.packageManagerRouter.resolveP2PPackageVersion(packageID)
+	})
 	a.automationSvc.SetPackageAuthorization(func(ctx context.Context, installationType automation.AppInstallationType, packageID, operation string) error {
 		return a.authorizeAutomationPackage(ctx, string(installationType), packageID, operation)
 	})

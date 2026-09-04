@@ -29,6 +29,10 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 		return a.handleNatsReconnectCommand(parent, payload)
 	}
 
+	if cmdType == "p2ppreload" {
+		return a.handleP2pPreloadCommand(parent, payload)
+	}
+
 	if cmdType == "update" || cmdType == "selfupdate" {
 		if a.selfUpdater != nil {
 			updateCmd, parseErr := parseAgentUpdateCommand(payload)

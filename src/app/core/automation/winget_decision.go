@@ -194,3 +194,48 @@ func indexOfField(fields []string, packageID string) int {
 	}
 	return -1
 }
+
+// ShouldPreloadPackage decide se o pacote precisa de pré-carga P2P com base
+// no estado REAL da máquina — evita re-baixar instaladores sem necessidade:
+//
+//   - InstallPackage: só pré-carrega se o pacote NÃO está instalado.
+//     (Instalado → nada a fazer; o TTL local limpa o arquivo e ele não volta.)
+//   - UpdatePackage: só pré-carrega se há update pendente no winget upgrade.
+//     (Sem pendente → nada a fazer.)
+//   - UpdateOrInstallPackage: pré-carrega se não instalado OU há update pendente.
+//   - Erro na verificação: fail-safe, retorna true (pré-carga conservadora,
+//     mesmo comportamento de decideWingetAction quando winget falha).
+//
+// A decisão usa os mesmos outputs de winget list/upgrade (cacheados pelos
+// chamadores quando possível) que a execução real usará — pré-carga e
+// execução nunca divergem.
+func ShouldPreloadPackage(ctx context.Context, packages PackageManager, actionType AutomationTaskActionType, packageID string) bool {
+	packageID = strings.TrimSpace(packageID)
+	if packageID == "" {
+		return false
+	}
+	switch actionType {
+	case ActionInstallPackage:
+		d := decideWingetAction(ctx, packages, "install", packageID)
+		return !d.Skip // instalado → skip benigno → não pré-carrega
+	case ActionUpdatePackage:
+		d := decideWingetAction(ctx, packages, "upgrade", packageID)
+		return !d.Skip // sem update pendente → não pré-carrega
+	case ActionUpdateOrInstallPackage:
+		// Precisa se (não instalado) OU (há update pendente).
+		inst, instErr := packages.ListInstalled(ctx)
+		if instErr != nil {
+			return true // fail-safe
+		}
+		if !isPackageInOutput(inst, packageID) {
+			return true // não instalado → install futuro precisará do instalador
+		}
+		up, upErr := packages.ListUpgradable(ctx)
+		if upErr != nil {
+			return true // fail-safe
+		}
+		return isPackageInOutput(up, packageID)
+	default:
+		return false
+	}
+}
