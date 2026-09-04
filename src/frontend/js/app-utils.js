@@ -136,7 +136,7 @@ var APP_I18N_DICTIONARY = {
     "field.lastUpdateCheck": "Última verificação",
     "field.pendingVersion": "Versão pendente",
     "field.osEdition": "Edição",
-    "field.provisionedAgents": "Agentes provisionados (Zero Touch)",
+    "field.provisionedAgents": "Zero Touch",
     "field.p2pBytes": "Bytes P2P (up / down)",
     "field.p2pActive": "P2P ativo",
     "field.realtimeMessage": "Mensagem",
