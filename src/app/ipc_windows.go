@@ -41,6 +41,11 @@ const (
 	IPCMsgEvent               IPCMessageType = "event"
 	IPCMsgNotificationRespond IPCMessageType = "notification:respond"
 	IPCMsgCommandResult       IPCMessageType = "command_result"
+	// IPCMsgRemoteSession encaminha um comando de remote session (screen/terminal/
+	// files) recebido via NATS no serviço para a UI companion executar na sessão
+	// interativa do usuário. A sessão 0 (SYSTEM) não tem desktop: captura de tela
+	// falha (0 frames) e SendInput é bloqueado por UIPI — ver PLANO_AGENT_SERVICE_SYSTEM.md §2.2.
+	IPCMsgRemoteSession IPCMessageType = "remote_session"
 )
 
 // IPCMessage é o envelope do contrato JSON-lines.

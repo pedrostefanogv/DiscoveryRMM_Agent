@@ -245,3 +245,85 @@ Fase 5 (testes + checklist)           → 1 dia
 ```
 
 Cada fase termina com `go test ./app/...` verde e build via `wails build` validado.
+
+## 7. Fase futura — Remote session sem usuário logado (base: MeshAgent)
+
+> Análise 2026-09-04 contra `Ylianst/MeshAgent` (kvm.c + ILibProcessPipe). Estado atual
+> (pós-correção da sessão 4): remote session roda na **UI companion** — funciona com
+> usuário logado, mas **não** cobre tela de logon (sem usuário) nem secure desktop (UAC).
+>
+> **IMPLEMENTADO 2026-09-04 (Fase 7)** — ver §7.4. Build/testes verdes. Pendente:
+> validação em VM (logon screen, UAC, lock, multi-sessão RDP).
+
+### 7.1 Como o MeshAgent resolve (referência)
+
+```
+Serviço SYSTEM (sessão 0)                    Processo filho KVM (sessão interativa)
+  kvm_relay_setup / kvm_relay_feeddata          kvm_server_mainloop_ex
+  ├─ rede ↔ stdin/stdout do filho (bridge)  ←→    ├─ CheckDesktopSwitch(): OpenInputDesktop
+  ├─ gProcessSpawnType:                          │   + SetThreadDesktop (anexa ao desktop ativo)
+  │   • SpawnTypes_USER → WTSQueryUserToken      ├─ GetUserObjectInformationA detecta troca
+  │     + CreateProcessAsUser (sessão console)   │   de desktop (logon/UAC/lock) → refresh
+  │   • SpawnTypes_WINLOGON → spawn em           ├─ Captura (funciona no secure desktop)
+  │     winsta0\winlogon (tela de logon!)        └─ KeyAction/MouseAction (SendInput) —
+  └─ kvm_relay_restart (relança se filho morre)      funciona pois o thread está anexado
+```
+
+Pontos-chave: (1) spawn em `winsta0\winlogon` quando não há usuário — captura a tela
+de logon; (2) `CheckDesktopSwitch` no loop de captura resolve UAC/lock screen;
+(3) serviço fica só com a rede e faz bridge stdin/stdout com o processo da sessão.
+
+### 7.2 Design proposto para o Discovery
+
+1. **Worker de remote session**: serviço recebe `remotesessionstart` →
+   `WTSQueryUserToken` (sessão do console) + `CreateProcessAsUser` lançando
+   `discovery-agent.exe --remote-session-worker <sessionId>` na sessão interativa.
+   Sem usuário logado → spawn no `winsta0\winlogon` (token do winlogon — mais complexo,
+   requer `WTSGetActiveConsoleSessionId` + token do processo winlogon).
+2. **Comunicação serviço↔worker**: stdin/stdout framed (padrão MeshAgent) ou named
+   pipe dedicado por sessão. O worker publica frames no NATS diretamente (reusar
+   `ensureCompanionNats` como base).
+3. **`CheckDesktopSwitch` no loop de captura** (`session_screen.go`):
+   `OpenInputDesktop` + `SetThreadDesktop` a cada iteração; nome do desktop mudou →
+   força refresh. Resolve UAC e lock screen também na UI companion atual.
+4. **Fallback atual mantido**: UI companion presente → comando via IPC (implementado
+   na sessão 4); worker só é necessário quando não há UI (logon screen) ou para
+   secure desktop.
+
+### 7.3 Esforço estimado
+
+| Item                                               | Esforço                                  |
+| -------------------------------------------------- | ---------------------------------------- |
+| Spawn `CreateProcessAsUser` na sessão do console   | ~1 dia                                   |
+| Spawn em winlogon (sem usuário)                    | ~2-3 dias (token winlogon, testes em VM) |
+| Bridge stdin/stdout framed serviço↔worker          | ~1 dia                                   |
+| `CheckDesktopSwitch` no loop de captura            | ~meio dia                                |
+| Testes (VM sem login, UAC, lock, multi-sessão RDP) | ~1 dia                                   |
+
+### 7.4 Implementação (2026-09-04) — build/testes verdes
+
+| Item do §7.2                               | Arquivo(s)                                                                                                                                                                                                                                                                           | Status |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------ |
+| 3. `CheckDesktopSwitch` no loop de captura | `core/screen/desktop_switch.go` (novo: `OpenInputDesktop`+`SetThreadDesktop`+`GetUserObjectInformationW`, `CurrentDesktopName`); `DirtyDetector.Reset()` (dirty_rects.go); integração no loop de captura (`session_screen.go` — troca de desktop → reset dirty detector + key frame) | ✅     |
+| 1. Worker `--remote-session-worker`        | `remote_session_worker.go` (payload via stdin framed 4B+JSON, NATS dedicado, monitor de stdin EOF/"stop"); `remote_session_worker_config.go` (lê debug_config.json + config.json sem App); modo registrado no `main.go`                                                              | ✅     |
+| 2. Bridge serviço↔worker                   | stdin framed (4B len + JSON) — payload nunca na linha de comando; stop via stdin `"stop"` ou EOF                                                                                                                                                                                     | ✅     |
+| Spawn na sessão do console                 | `remote_session_worker_spawn.go`: `WTSGetActiveConsoleSessionId` + `WTSQueryUserToken` + `CreateProcessAsUser` (via `SysProcAttr.Token`), `CREATE_BREAKAWAY_FROM_JOB`                                                                                                                | ✅     |
+| Spawn em winlogon (sem usuário)            | `tokenFromWinlogon`: enumera winlogon.exe da sessão do console (Toolhelp32 + ProcessIdToSessionId), `OpenProcessToken` + `DuplicateTokenEx(TokenPrimary)`                                                                                                                            | ✅     |
+| 4. Integração no dispatch                  | `remote_debug_commands.go`: ServiceMode → UI conectada? IPC : (stop→worker, start→`spawnRemoteSessionWorker`); erro claro se sem sessão interativa                                                                                                                                   | ✅     |
+
+**Fluxo final:**
+
+```
+remotesessionstart via NATS → serviço (sessão 0)
+  ├─ UI companion conectada → IPC remote_session → UI executa (sessão usuário)
+  └─ Sem UI → spawnRemoteSessionWorker:
+       ├─ usuário logado → WTSQueryUserToken(console) + CreateProcessAsUser
+       └─ sem usuário    → token do winlogon(console) + CreateProcessAsUser
+                            (worker captura a tela de logon)
+       worker: stdin(payload) → NATS dedicado → Manager.HandleCommand
+       stop: stdin "stop" / EOF / expiração do manager
+```
+
+**Pendente (validação em VM):** tela de logon sem usuário, prompt UAC (secure
+desktop via CheckDesktopSwitch), lock screen, sessão RDP múltipla, kill do
+worker (relançamento pelo serviço em novo start).

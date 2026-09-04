@@ -194,6 +194,13 @@ type App struct {
 	ipcServer *IPCServer
 	ipcClient *IPCClient
 
+	// Último snapshot de conectividade recebido do serviço via IPC
+	// (agente:status_snapshot). Em companion mode o agentConn local não roda,
+	// então o tray/status usam este snapshot para refletir o estado real do
+	// core que roda no serviço.
+	companionStatusMu sync.Mutex
+	companionStatus   *AgentStatus
+
 	// Itens de status do menu do tray (atualizados dinamicamente).
 	trayStatusHostname   *application.MenuItem
 	trayStatusVersion    *application.MenuItem

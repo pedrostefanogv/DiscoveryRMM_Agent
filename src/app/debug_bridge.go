@@ -32,6 +32,18 @@ func (a *App) GetAgentStatus() AgentStatus {
 	if a == nil {
 		return AgentStatus{}
 	}
+	// Companion mode: o core (agentConn) roda no serviço — o agentConn local
+	// nunca conecta nesta UI, então GetAgentStatus() local retornaria sempre
+	// offline (tray cinza/status offline mesmo com heartbeat no site). Usa o
+	// último snapshot recebido via IPC (agent:status_snapshot) quando houver.
+	if a.ipcClient != nil {
+		a.companionStatusMu.Lock()
+		snap := a.companionStatus
+		a.companionStatusMu.Unlock()
+		if snap != nil {
+			return *snap
+		}
+	}
 	if a.debugSvc == nil {
 		return AgentStatus{}
 	}

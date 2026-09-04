@@ -333,6 +333,18 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 		q := s.quality.Current()
 		curFps = q.EffectiveFps()
 
+		// ── Desktop switch (base: MeshAgent CheckDesktopSwitch) ──
+		// Anexa o thread ao input desktop ativo e detecta troca (logon screen,
+		// lock screen, UAC/secure desktop). Sem isso, a captura continua no
+		// desktop antigo (tela congelada) e o SendInput falha no secure desktop.
+		if switched, derr := screen.CheckDesktopSwitch(); derr == nil && switched {
+			log.Printf("[remote-session-screen] troca de desktop detectada (%s) — forçando key frame\n", screen.CurrentDesktopName())
+			// Força key frame: reseta o dirty detector e desativa tile-mode
+			// temporariamente para o próximo frame ir COMPLETO ao viewer.
+			s.dirtyDetector.Reset()
+			s.useDirtyRect = false
+		}
+
 		// Backpressure: nao captura se encoder estiver ocupado (buffer=1 cheio)
 		if len(encodeChan) >= 1 {
 			time.Sleep(time.Millisecond)

@@ -88,6 +88,15 @@ func main() {
 		return
 	}
 
+	// ── Modo worker de remote session (PLANO_AGENT_SERVICE_SYSTEM.md §7.2) ──
+	// Spawnado pelo serviço na sessão interativa (CreateProcessAsUser) ou no
+	// winsta0\winlogon quando não há usuário logado. Executa a sessão remota
+	// (captura/input) e publica frames no NATS diretamente. Payload via stdin.
+	if hasStartupArg("--remote-session-worker") || hasStartupArg("/remote-session-worker") || hasStartupArg("-remote-session-worker") {
+		appkg.RunRemoteSessionWorker()
+		return
+	}
+
 	if startupDebugMode {
 		log.Println("[startup] modo debug detectado: inicializando com servidor HTTP de debug (transitorio)")
 	}

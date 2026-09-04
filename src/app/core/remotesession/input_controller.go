@@ -83,6 +83,15 @@ func (c *InputController) UpdateFrameMetrics(frameW, frameH, capW, capH int) {
 
 // HandleInput processa um evento de input raw do viewer.
 func (c *InputController) HandleInput(data []byte) {
+	// Anexa o thread ao input desktop ativo ANTES de injetar. Sem isso, o
+	// SendInput falha com Acesso negado (UIPI) quando o desktop mudou desde a
+	// criação do thread (UAC/secure desktop, lock screen, logon) — o thread
+	// continua preso no desktop antigo. Padrão MeshAgent CheckDesktopSwitch.
+	// Erro é não-fatal: em desktop normal o thread já está no desktop certo.
+	if _, err := screen.CheckDesktopSwitch(); err != nil {
+		log.Printf("[input-controller] aviso desktop switch: %v", err)
+	}
+
 	// Rate limit
 	if !c.checkRateLimit() {
 		return

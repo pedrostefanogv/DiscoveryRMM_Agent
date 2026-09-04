@@ -31,6 +31,12 @@ func (a *App) handleIPCMessage(msg IPCMessage) {
 			"connected": agent.Connected,
 			"transport": agent.Transport,
 		})
+	case IPCMsgRemoteSession:
+		// Remote session DEVE rodar na sessão interativa do usuário (a sessão 0
+		// do serviço SYSTEM não tem desktop — captura falha e SendInput é
+		// bloqueado por UIPI). Encaminha o comando à UI companion conectada.
+		a.logs.append("[ipc] encaminhando remote session à UI (sessão interativa)")
+		a.ipcServer.Broadcast(NewIPCMessage(IPCMsgRemoteSession, msg.Payload))
 	case IPCMsgNotificationRespond:
 		if a.handleIPCNotificationRespond(msg.Payload) {
 			return
@@ -77,12 +83,43 @@ func (a *App) broadcastIPCEvent(name string, data ...any) {
 	a.ipcServer.Broadcast(NewIPCMessage(IPCMsgEvent, payload))
 }
 
+// storeCompanionStatus guarda o último snapshot de conectividade recebido do
+// serviço via IPC. É usado por GetAgentStatus() na UI companion (o agentConn
+// local não roda lá), mantendo tray e página de status consistentes com o
+// core que roda no serviço.
+func (a *App) storeCompanionStatus(connected bool, transport string) {
+	if a == nil {
+		return
+	}
+	a.companionStatusMu.Lock()
+	defer a.companionStatusMu.Unlock()
+	st := a.companionStatus
+	if st == nil {
+		st = &AgentStatus{}
+		a.companionStatus = st
+	}
+	st.Connected = connected
+	st.TransportConnected = connected
+	st.Transport = transport
+	st.LastEvent = "snapshot do serviço via IPC"
+	if connected {
+		st.LastEvent = "conectado (via serviço)"
+	}
+}
+
 // startIPCClient inicia o cliente IPC da UI (companion mode) e envia o hello.
 // Chamado no startup da UI quando IsServicePresent detectou o serviço.
 func (a *App) startIPCClient() {
 	a.ipcClient = NewIPCClient(
 		func(msg IPCMessage) {
 			switch msg.Type {
+			case IPCMsgRemoteSession:
+				// Comando de remote session encaminhado pelo serviço: executa NESTA
+				// UI (sessão interativa do usuário). A captura de tela e o input
+				// exigem um desktop; a sessão 0 do serviço não o tem (captura sem
+				// frames e SendInput bloqueado por UIPI).
+				a.handleCompanionRemoteSession(msg.Payload)
+
 			case IPCMsgEvent:
 				// Repassa eventos do serviço (notification:new, agent:connectivity,
 				// chat:question, ...) para o frontend da UI companion. O payload
@@ -90,6 +127,16 @@ func (a *App) startIPCClient() {
 				name, _ := msg.Payload["name"].(string)
 				if name == "" {
 					return
+				}
+				// Guarda o snapshot de conectividade para o tray/status Go-side
+				// (GetAgentStatus) refletirem o core que roda no serviço.
+				if name == "agent:status_snapshot" || name == "agent:connectivity" {
+					connected, _ := msg.Payload["connected"].(bool)
+					transport, _ := msg.Payload["transport"].(string)
+					a.storeCompanionStatus(connected, transport)
+					a.syncTrayVisualState()
+					a.updateTrayMenu()
+					a.updateTrayTooltip()
 				}
 				data := make([]any, 0, len(msg.Payload))
 				for k, v := range msg.Payload {

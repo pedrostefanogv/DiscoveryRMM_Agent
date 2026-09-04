@@ -1,11 +1,11 @@
 package screen
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"image"
 	"image/jpeg"
-	"bytes"
 	"sort"
 )
 
@@ -34,6 +34,15 @@ func NewDirtyDetector(tileSize int) *DirtyDetector {
 	return &DirtyDetector{
 		tileSize: tileSize,
 	}
+}
+
+// Reset limpa o frame anterior — a próxima chamada a Detect retorna um rect
+// cobrindo toda a tela (key frame). Usado após troca de desktop (logon/UAC/
+// lock screen): o conteúdo mudou completamente e o viewer precisa da base.
+func (d *DirtyDetector) Reset() {
+	d.lastFrame = nil
+	d.lastWidth = 0
+	d.lastHeight = 0
 }
 
 // Detect compara o frame atual com o anterior e retorna as regioes alteradas.
@@ -169,10 +178,11 @@ func (d *DirtyDetector) mergeTiles(changed [][]bool, width, height, cols, rows i
 
 // EncodeDirtyRects codifica apenas as regioes alteradas como tiles JPEG.
 // Formato de saída:
-//   Header (4B): numRects (uint16) | flags (uint16)
-//   Para cada tile:
-//     Tile header (12B): x(uint16) y(uint16) w(uint16) h(uint16) size(uint32)
-//     JPEG data (size bytes)
+//
+//	Header (4B): numRects (uint16) | flags (uint16)
+//	Para cada tile:
+//	  Tile header (12B): x(uint16) y(uint16) w(uint16) h(uint16) size(uint32)
+//	  JPEG data (size bytes)
 func EncodeDirtyRects(frame *Frame, rects []DirtyRect, quality int) ([]byte, error) {
 	var buf bytes.Buffer
 

@@ -229,10 +229,6 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 
 	// ── Remote Session Commands (acesso remoto nativo) ──
 	if isRemoteSessionCommandType(cmdType) {
-		if a.remoteSessionMgr == nil {
-			log.Printf("[remote-session] ERRO: remoteSessionMgr nil — nao inicializado\n")
-			return true, 1, "", "remote session manager nao inicializado"
-		}
 		parsedPayload := parseAnyMap(payload)
 		if parsedPayload == nil {
 			log.Printf("[remote-session] ERRO: parseAnyMap retornou nil para cmdType=%s\n", cmdType)
@@ -240,6 +236,35 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 		}
 		sid, _ := parsedPayload["sessionId"].(string)
 		act, _ := parsedPayload["action"].(string)
+
+		// Modo serviço (SYSTEM, sessão 0): a captura de tela e a injeção de
+		// input exigem um desktop interativo — a sessão 0 não o tem (captura
+		// sem frames, SendInput bloqueado por UIPI/errno=5). Preferência:
+		//   1. UI companion conectada → encaminha via IPC (sessão do usuário).
+		//   2. Sem UI (ex.: tela de logon) → spawn worker na sessão interativa
+		//      (CreateProcessAsUser) ou no winsta0\winlogon (PLANO §7.2).
+		if a.runtimeFlags.ServiceMode {
+			if a.ipcServer != nil && a.ipcServer.ClientCount() > 0 {
+				log.Printf("[remote-session] dispatch (serviço→UI): cmdType=%s sessionId=%s action=%s\n",
+					cmdType, sid, act)
+				a.ipcServer.Broadcast(NewIPCMessage(IPCMsgRemoteSession, parsedPayload))
+				return true, 0, "ok", ""
+			}
+			if act == "stop" {
+				stopRemoteSessionWorker(sid)
+				return true, 0, "ok", ""
+			}
+			if err := spawnRemoteSessionWorker(parent, parsedPayload); err != nil {
+				log.Printf("[remote-session] ERRO: worker não spawnado — sessao %s (%s): %v\n", sid, act, err)
+				return true, 1, "", "remote session sem UI e sem sessão interativa: " + err.Error()
+			}
+			return true, 0, "ok", ""
+		}
+
+		if a.remoteSessionMgr == nil {
+			log.Printf("[remote-session] ERRO: remoteSessionMgr nil — nao inicializado\n")
+			return true, 1, "", "remote session manager nao inicializado"
+		}
 		log.Printf("[remote-session] dispatch: cmdType=%s sessionId=%s action=%s\n",
 			cmdType, sid, act)
 		handled, errMsg := a.remoteSessionMgr.HandleCommand(parent, parsedPayload)
