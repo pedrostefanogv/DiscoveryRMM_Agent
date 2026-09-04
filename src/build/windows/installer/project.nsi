@@ -53,6 +53,7 @@ Unicode true
 !define LEGACY_PRODUCT_EXECUTABLE "discovery.exe"
 !define UNINST_KEY_NAME     "Discovery.RMM"
 !define DISCOVERY_UI_TASK_NAME "DiscoveryAgentUI"
+!define DISCOVERY_SERVICE_NAME "DiscoveryAgent"
 !define DISCOVERY_FIREWALL_RULE_NAME "Discovery Agent Network Access"
 
 !ifndef ARG_WAILS_AMD64_BINARY
@@ -654,8 +655,10 @@ Section
          # Registrar regra de firewall para runtime local/P2P.
          Call RegisterWindowsFirewallRule
 
-         # Modo de execucao: apenas Task Scheduler (tray icon no logon de qualquer usuario).
-         # Nao usamos mais Windows Service mode.
+         # Modo de execucao: serviço Windows (core SYSTEM) + Task Scheduler
+         # (UI companion no logon de qualquer usuario).
+         # PLANO_AGENT_SERVICE_SYSTEM.md, Fase 3.
+         Call RegisterAgentService
 
          # Registrar autostart da UI via Task Scheduler (At log on of any user)
          Call RegisterUIStartupTask
@@ -676,6 +679,12 @@ Section
             ; IMPORTANTE: reiniciar com --startup-minimized para o agente voltar
             ; direto ao tray (mesmo comportamento do autostart no logon), e nao
             ; abrir janela cheia na sessao do usuario apos o update.
+            ;
+            ; PLANO_AGENT_SERVICE_SYSTEM.md Fase 3 (revisão): sobe o serviço
+            ; primeiro (core SYSTEM); o Exec da UI cobre o fallback standalone
+            ; quando o serviço não existe (sc start falha silenciosamente).
+            nsExec::ExecToLog /OEM '"$SYSDIR\sc.exe" start ${DISCOVERY_SERVICE_NAME}'
+            Pop $R4
             Exec '"$INSTDIR\${PRODUCT_EXECUTABLE}" --startup-minimized --startup-source=update-restart'
             Goto update_restart_done
             update_binary_missing:
@@ -691,6 +700,10 @@ Section "uninstall"
 
    # Encerrar processo antes de limpar binarios
    Call un.UnregisterWindowsFirewallRule
+
+   # Parar serviço ANTES do taskkill (ordem obrigatória, Fase 3/revisão —
+   # sem sc stop o SCM reinicia o serviço em ~5s no meio do uninstall).
+   Call un.StopAndWaitAgentService
 
    # Garantir encerramento de qualquer instancia em modo UI/headless.
    nsExec::ExecToLog /OEM '"$SYSDIR\taskkill.exe" /IM "${PRODUCT_EXECUTABLE}" /F /T'
@@ -716,6 +729,9 @@ Section "uninstall"
          DetailPrint "Aviso: decommission retornou codigo $R3."
       ${EndIf}
 decommission_done:
+
+   # Remover serviço Windows (PLANO_AGENT_SERVICE_SYSTEM.md, Fase 3).
+   Call un.UnregisterAgentService
 
    # Remover task agendada de autostart da UI
    Call un.UnregisterUIStartupTask
@@ -1076,6 +1092,13 @@ Function PrepareForInPlaceUpdate
    ${InstallerLog} "PrepareForInPlaceUpdate: iniciando"
    DetailPrint "Preparando atualizacao in-place (encerrando instancias em execucao)..."
 
+   ; ── Serviço Windows: parar ANTES do taskkill (ordem obrigatória,
+   ; PLANO_AGENT_SERVICE_SYSTEM.md Fase 3/revisão). Sem `sc stop` antes,
+   ; o SCM interpreta o taskkill como crash e as failure actions reiniciam
+   ; o serviço em ~5s, no meio da cópia dos binários (race).
+   ${InstallerLog} "Parando servico ${DISCOVERY_SERVICE_NAME} (antes do taskkill)..."
+   Call StopAndWaitAgentService
+
    ; Tentar remover startup task antiga antes de atualizar binarios.
    ${InstallerLog} "Removendo startup task antiga..."
    Call UnregisterUIStartupTask
@@ -1227,6 +1250,90 @@ Function un.UnregisterUIStartupTask
    nsExec::ExecToLog /OEM '"$SYSDIR\schtasks.exe" /Delete /TN "${DISCOVERY_UI_TASK_NAME}" /F'
    Pop $R0
    Delete "$SMSTARTUP\${INFO_PRODUCTNAME}.lnk"
+FunctionEnd
+
+# ── Windows Service (PLANO_AGENT_SERVICE_SYSTEM.md, Fase 3) ────────────────
+
+# StopAndWaitAgentService: para o serviço (desarma failure recovery do SCM)
+# e aguarda STOPPED antes de retornar (revisão 2026-09-04: `sc stop` retorna
+# antes do serviço parar de fato — sem wait, o rename .bak_update falha com
+# o .exe carregado e o taskkill sem sc stop dispara o restart em ~5s).
+Function StopAndWaitAgentService
+   nsExec::ExecToLog /OEM '"$SYSDIR\sc.exe" stop ${DISCOVERY_SERVICE_NAME}'
+   Pop $R0
+
+   StrCpy $R1 0
+   svc_wait_stopped:
+      ${If} $R1 >= 30
+         DetailPrint "Aviso: serviço ${DISCOVERY_SERVICE_NAME} não parou em 30s — prosseguindo"
+         Goto svc_wait_done
+      ${EndIf}
+      nsExec::ExecToLog /OEM '"$SYSDIR\sc.exe" query ${DISCOVERY_SERVICE_NAME} | "$SYSDIR\find.exe" "STOPPED"'
+      Pop $R2
+      ${If} $R2 == 0
+         DetailPrint "Serviço ${DISCOVERY_SERVICE_NAME} STOPPED"
+         Goto svc_wait_done
+      ${EndIf}
+      Sleep 1000
+      IntOp $R1 $R1 + 1
+      Goto svc_wait_stopped
+   svc_wait_done:
+FunctionEnd
+
+# RegisterAgentService: cria/inicia o serviço do core do agent.
+Function RegisterAgentService
+   DetailPrint "Registrando serviço ${DISCOVERY_SERVICE_NAME}..."
+
+   # Idempotente: remove definição anterior se existir.
+   nsExec::ExecToLog /OEM '"$SYSDIR\sc.exe" stop ${DISCOVERY_SERVICE_NAME}'
+   Pop $R0
+   nsExec::ExecToLog /OEM '"$SYSDIR\sc.exe" delete ${DISCOVERY_SERVICE_NAME}'
+   Pop $R0
+   Sleep 1500
+
+   nsExec::ExecToLog /OEM '"$SYSDIR\sc.exe" create ${DISCOVERY_SERVICE_NAME} binPath= "\"$INSTDIR\${PRODUCT_EXECUTABLE}\" --service" start= delayed-auto obj= LocalSystem DisplayName= "Discovery Agent Service"'
+   Pop $R0
+   ${If} $R0 != 0
+      DetailPrint "Aviso: sc create falhou (codigo $R0) — agente seguirá em modo standalone via Task"
+   ${EndIf}
+
+   # Recuperação de falha: crash → restart em 5s (3 vezes, reset diário).
+   nsExec::ExecToLog /OEM '"$SYSDIR\sc.exe" failure ${DISCOVERY_SERVICE_NAME} reset= 86400 actions= restart/5000/restart/5000/restart/5000'
+   Pop $R0
+
+   nsExec::ExecToLog /OEM '"$SYSDIR\sc.exe" description ${DISCOVERY_SERVICE_NAME} "Discovery Agent core service (NATS, inventory, automation, P2P)"'
+   Pop $R0
+
+   nsExec::ExecToLog /OEM '"$SYSDIR\sc.exe" start ${DISCOVERY_SERVICE_NAME}'
+   Pop $R0
+FunctionEnd
+
+# un.UnregisterAgentService: para e remove o serviço no uninstall.
+Function un.UnregisterAgentService
+   DetailPrint "Removendo serviço ${DISCOVERY_SERVICE_NAME}..."
+   Call un.StopAndWaitAgentService
+   nsExec::ExecToLog /OEM '"$SYSDIR\sc.exe" delete ${DISCOVERY_SERVICE_NAME}'
+   Pop $R0
+FunctionEnd
+
+# un.StopAndWaitAgentService: variante uninstaller de StopAndWaitAgentService.
+Function un.StopAndWaitAgentService
+   nsExec::ExecToLog /OEM '"$SYSDIR\sc.exe" stop ${DISCOVERY_SERVICE_NAME}'
+   Pop $R0
+   StrCpy $R1 0
+   un_svc_wait_stopped:
+      ${If} $R1 >= 30
+         Goto un_svc_wait_done
+      ${EndIf}
+      nsExec::ExecToLog /OEM '"$SYSDIR\sc.exe" query ${DISCOVERY_SERVICE_NAME} | "$SYSDIR\find.exe" "STOPPED"'
+      Pop $R2
+      ${If} $R2 == 0
+         Goto un_svc_wait_done
+      ${EndIf}
+      Sleep 1000
+      IntOp $R1 $R1 + 1
+      Goto un_svc_wait_stopped
+   un_svc_wait_done:
 FunctionEnd
 
 # ── Help: exibe MessageBox com todos os parametros disponiveis e sai ──

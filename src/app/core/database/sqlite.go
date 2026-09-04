@@ -162,15 +162,19 @@ type ActionHistoryEntry struct {
 func Open(dataDir string) (*DB, error) {
 	dbPath := filepath.Join(dataDir, "discovery.db")
 
-	conn, err := sql.Open("sqlite", dbPath)
+	// Pragmas via DSN (modernc.org/sqlite): garantem que busy_timeout, WAL e
+	// synchronous sejam aplicados a TODAS as conexões do pool, não apenas à
+	// primeira. Crítico para o modo serviço (SYSTEM) + UI companion
+	// (PLANO_AGENT_SERVICE_SYSTEM.md, Fase 0): dois processos escrevendo no
+	// mesmo discovery.db — sem busy_timeout, SQLITE_BUSY vira erro intermitente.
+	dsn := "file:" + dbPath + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)"
+	conn, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("erro ao abrir database: %w", err)
 	}
 
 	// Configurações de performance
 	conn.SetMaxOpenConns(1) // SQLite funciona melhor com single connection
-	conn.Exec("PRAGMA journal_mode=WAL")
-	conn.Exec("PRAGMA synchronous=NORMAL")
 	conn.Exec("PRAGMA cache_size=-64000") // 64MB cache
 
 	db := &DB{conn: conn}

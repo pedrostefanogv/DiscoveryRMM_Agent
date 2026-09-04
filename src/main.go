@@ -74,6 +74,20 @@ func main() {
 		return
 	}
 
+	// ── Modo serviço Windows (PLANO_AGENT_SERVICE_SYSTEM.md, Fase 1) ──
+	// SCM lança o binário com --service. Auto-detecção (svc.IsWindowsService)
+	// cobre o caso do SCM sem a flag; UI do usuário nunca é detectada como
+	// serviço (o SCM é o parent apenas para processos de serviço).
+	if hasStartupArg("--service") || hasStartupArg("/service") || hasStartupArg("-service") {
+		appkg.RunServiceMode()
+		return
+	}
+	if appkg.IsWindowsServiceProcess() {
+		log.Println("[startup] processo detectado como serviço SCM sem --service — roteando ao modo serviço")
+		appkg.RunServiceMode()
+		return
+	}
+
 	if startupDebugMode {
 		log.Println("[startup] modo debug detectado: inicializando com servidor HTTP de debug (transitorio)")
 	}

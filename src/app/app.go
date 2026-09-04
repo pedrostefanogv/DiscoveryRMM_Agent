@@ -188,6 +188,12 @@ type App struct {
 	mainWindow application.Window
 	systemTray *application.SystemTray
 
+	// ── IPC serviço ↔ UI (PLANO_AGENT_SERVICE_SYSTEM.md, Fase 2) ──
+	// No serviço: ipcServer distribui eventos para as UIs conectadas.
+	// Na UI: ipcClient conecta ao serviço (modo companion) com reconexão.
+	ipcServer *IPCServer
+	ipcClient *IPCClient
+
 	// Itens de status do menu do tray (atualizados dinamicamente).
 	trayStatusHostname   *application.MenuItem
 	trayStatusVersion    *application.MenuItem
@@ -215,7 +221,7 @@ func NewApp(opts AppStartupOptions) *App {
 
 	a := &App{
 		ctx:              context.Background(),
-		runtimeFlags:     RuntimeFlags{DebugMode: opts.DebugMode},
+		runtimeFlags:     RuntimeFlags{DebugMode: opts.DebugMode, ServiceMode: opts.ServiceMode},
 		trayIcon:         opts.TrayIcon,
 		trayProvisioning: opts.TrayProvisioningIcon,
 		trayOffline:      opts.TrayOfflineIcon,
@@ -783,7 +789,14 @@ func NewApp(opts AppStartupOptions) *App {
 		GetRedact: a.getRedact,
 		SetRedact: a.exportCfg.set,
 	})
-	if logPath := platform.LogFilePath(); logPath != "" {
+	// Persistência de logs: serviço usa agent-service.log (Fase 0.2 do plano);
+	// UI usa agent.log padrão. O log file do modo serviço também é configurado
+	// via logger.SetFileOutput em RunServiceMode (para o stdlib log).
+	logPath := platform.LogFilePath()
+	if a.runtimeFlags.ServiceMode {
+		logPath = platform.ServiceLogFilePath()
+	}
+	if logPath != "" {
 		if err := a.logs.enableFilePersistence(logPath); err != nil {
 			log.Printf("[startup] aviso: falha ao habilitar persistência de logs em arquivo: %v", err)
 		} else {
@@ -871,9 +884,16 @@ func (a *App) ShowMainWindow() {
 
 // EmitEvent emite um evento customizado para o frontend (v3).
 //
+// No modo serviço (SYSTEM) não existe frontend — o evento é repassado às
+// UIs companion conectadas via IPC named pipe (PLANO_AGENT_SERVICE_SYSTEM.md,
+// Fase 2). Notificações "notification:new", connectivity, chat:question etc.
+// chegam à UI renderizada na sessão do usuário sem acoplamento extra.
+//
 //wails:ignore
 func (a *App) EmitEvent(name string, data ...any) {
 	if a.app == nil {
+		// Sem app Wails (serviço ou headless): repassa via IPC se houver UI.
+		a.broadcastIPCEvent(name, data...)
 		return
 	}
 	a.app.Event.Emit(name, data...)
@@ -1120,9 +1140,29 @@ func (a *App) startup(ctx context.Context) {
 		}
 	}
 
-	// O servidor SSE dedicado de chat é SEMPRE iniciado (mesmo fora do modo
-	// debug) para que o webview nativo possa receber eventos de streaming
-	// de forma confiável via SSE quando a entrega nativa do Wails v3 falha.
+	// ── Modo serviço (PLANO_AGENT_SERVICE_SYSTEM.md, Fase 1) ──
+	// O serviço SYSTEM não tem sessão de usuário: pula SSE de chat, tray,
+	// janela e idle-mode. O core (DB, inventory, agentConn, automation, sync,
+	// P2P, self-update) roda igual ao standalone via staged startup abaixo.
+	if a.runtimeFlags.ServiceMode {
+		log.Println("[service] startup do core (sem UI)")
+		a.ipcServer = StartIPCServer(a.handleIPCMessage)
+		a.runCoreStartup(ctx)
+		return
+	}
+
+	// ── Companion mode (PLANO_AGENT_SERVICE_SYSTEM.md, Fase 2) ──
+	// Se o serviço DiscoveryAgent está ativo, a UI conecta via IPC e roda
+	// apenas UI/tray/chat/notificações; o core (agentConn, automation, sync,
+	// P2P, self-update, inventory) permanece NO SERVIÇO. Sem serviço → modo
+	// standalone (core completo na UI, como hoje).
+	companion := a.decideCompanionMode()
+	if companion {
+		a.startIPCClient()
+	} else {
+		a.safeGo(func() { a.StartP2PTelemetryLoop(ctx) })
+	}
+
 	if err := a.EnsureChatSSEServer(); err != nil {
 		log.Printf("[chat-sse] falha ao iniciar servidor SSE dedicado: %v", err)
 	} else if port := a.GetChatSSEPort(); port > 0 {
@@ -1130,8 +1170,6 @@ func (a *App) startup(ctx context.Context) {
 	} else {
 		log.Printf("[chat-sse] AVISO: servidor SSE dedicado retornou porta 0 — chat nativo pode falhar!")
 	}
-
-	a.safeGo(func() { a.StartP2PTelemetryLoop(ctx) })
 
 	a.startTray()
 	if a.runtimeFlags.StartMinimized {
@@ -1165,6 +1203,15 @@ func (a *App) startup(ctx context.Context) {
 		a.consolEngine = consolidation.New(db, agentIDForEngine)
 	}
 
+	if companion {
+		// Companion: DB local aberto acima (leitura p/ bridges de UI), mas o
+		// core NÃO roda nesta UI — staged startup fica no serviço. Sem NATS
+		// duplicado, sem automation/sync/P2P/self-update duplicados.
+		log.Println("[startup] modo companion: core no serviço DiscoveryAgent — staged startup pulado nesta UI")
+		a.applyStartupThrottleConfig()
+		return
+	}
+
 	log.Println("[startup] runtime local (tray) ativo — todos os workers locais iniciados")
 
 	// ── Phase 1: Staged startup ────────────────────────────────────────
@@ -1177,6 +1224,50 @@ func (a *App) startup(ctx context.Context) {
 	//   Phase 4 (+12s):       self-update, cleanup ticker
 	// ────────────────────────────────────────────────────────────────────
 
+	a.runStagedStartup(ctx)
+
+	// Apply startup throttle config from agent configuration (if already loaded).
+	a.applyStartupThrottleConfig()
+}
+
+// runCoreStartup é o startup do modo serviço: DB + staged startup, sem os
+// itens acoplados à sessão do usuário (SSE chat, tray, janela, idle mode).
+func (a *App) runCoreStartup(ctx context.Context) {
+	dataDir := GetDataDir()
+	db, err := database.Open(dataDir)
+	if err != nil {
+		log.Printf("[service] AVISO: falha ao abrir database: %v", err)
+	} else {
+		a.db = db
+		log.Printf("[service] database SQLite inicializado em %s", dataDir)
+
+		if a.catalogClient != nil {
+			a.catalogClient.SetDatabase(db)
+		}
+		if a.automationSvc != nil {
+			a.automationSvc.SetDB(db)
+		}
+		if a.inventorySvc != nil {
+			a.inventorySvc.SetDB(db)
+			_ = a.inventorySvc.Startup(ctx)
+		}
+		if a.supportSvc != nil {
+			a.supportSvc.SetDB(db)
+		}
+		agentIDForEngine := strings.TrimSpace(a.GetDebugConfig().AgentID)
+		a.consolEngine = consolidation.New(db, agentIDForEngine)
+	}
+
+	log.Println("[service] core ativo — staged startup iniciando")
+
+	a.runStagedStartup(ctx)
+	a.applyStartupThrottleConfig()
+}
+
+// runStagedStartup contém as fases com delays do startup (inventory, agentConn,
+// automation/sync/P2P, self-update/cleanup) — compartilhado entre UI standalone
+// e serviço SYSTEM (revisão 2026-09-04: os delays acompanham o core).
+func (a *App) runStagedStartup(ctx context.Context) {
 	const (
 		startupPhaseInventory   = 2 * time.Second
 		startupPhaseAgentConn   = 8 * time.Second
@@ -1611,9 +1702,18 @@ func (a *App) shutdown() {
 
 	a.applyIdleMode(false)
 
-	a.StopDebugHTTPServer()
-	a.StopChatSSEServer()
+	if !a.runtimeFlags.ServiceMode {
+		a.StopDebugHTTPServer()
+		a.StopChatSSEServer()
+	}
 
+	// Encerra IPC (serviço ou cliente companion).
+	if a.ipcServer != nil {
+		a.ipcServer.Close()
+	}
+	if a.ipcClient != nil {
+		a.ipcClient.Close()
+	}
 	// NOTA: remoteDebug e remoteSessionMgr agora são Services Wails v3
 	// separados (adapters thin em remote_services.go). Seus ciclos de vida
 	// (Startup/Shutdown) são gerenciados pelo Wails, que encerra os services

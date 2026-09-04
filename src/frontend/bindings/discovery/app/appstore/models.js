@@ -137,6 +137,17 @@ export class Item {
              */
             this["installerUrlsByArch"] = {};
         }
+        if (!("installerTypesByArch" in $$source)) {
+            /**
+             * InstallerTypesByArch contém o InstallerType do manifesto winget por
+             * arquitetura (ex.: "wix", "burn", "nullsoft", "inno", "zip", "portable").
+             * Permite executar o instalador baixado com a estratégia correta sem
+             * adivinhar pela extensão do arquivo.
+             * @member
+             * @type {{ [_ in string]?: string }}
+             */
+            this["installerTypesByArch"] = {};
+        }
         if (!("autoUpdateEnabled" in $$source)) {
             /**
              * @member
@@ -162,9 +173,13 @@ export class Item {
      */
     static createFrom($$source = {}) {
         const $$createField10_0 = $$createType2;
+        const $$createField11_0 = $$createType2;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("installerUrlsByArch" in $$parsedSource) {
             $$parsedSource["installerUrlsByArch"] = $$createField10_0($$parsedSource["installerUrlsByArch"]);
+        }
+        if ("installerTypesByArch" in $$parsedSource) {
+            $$parsedSource["installerTypesByArch"] = $$createField11_0($$parsedSource["installerTypesByArch"]);
         }
         return new Item(/** @type {Partial<Item>} */($$parsedSource));
     }

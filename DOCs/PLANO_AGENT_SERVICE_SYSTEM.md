@@ -1,7 +1,7 @@
 # Plano: Agent como Serviço Windows (SYSTEM) + UI Companion no Usuário
 
-> Status: **PROPOSTA — aguardando revisão antes da implementação**
-> Data: 2026-08-30
+> Status: **REVISADO 2026-09-04 — plano se aplica ao código atual; ajustes incorporados e marcados com ⚠️**
+> Data: 2026-08-30 (revisão: 2026-09-04)
 > Escopo: instalação e execução do Discovery Agent em dois processos:
 >
 > 1. **Serviço Windows** rodando como `LocalSystem` (ativo desde o boot, sem login)
@@ -71,8 +71,10 @@ O objetivo é garantir que o **core do agent** (conexão NATS, comandos, invent�
 
 ### Fase 0 — Pré-requisitos (pequenas correções)
 
-1. **SQLite multi-processo**: adicionar `PRAGMA busy_timeout=5000` em `database.Open()` (`src/app/core/database/sqlite.go`). Hoje serviço e UI vão abrir o mesmo `discovery.db` em `C:\ProgramData\Discovery` — sem busy_timeout, `SQLITE_BUSY` vira erro intermitente.
-2. **Log do serviço**: garantir que `logger` escreve em `%ProgramData%\Discovery\logs\agent-service.log` quando em modo serviço (hoje `LogFilePath()` já aponta para `agent.log`; separar arquivo por modo facilita diagnóstico).
+1. **SQLite multi-processo**: adicionar `busy_timeout=5000` em `database.Open()` (`src/app/core/database/sqlite.go`). Hoje serviço e UI vão abrir o mesmo `discovery.db` em `C:\ProgramData\Discovery` — sem busy_timeout, `SQLITE_BUSY` vira erro intermitente.
+   - ⚠️ **Ajuste (revisão)**: `conn.Exec("PRAGMA busy_timeout=5000")` não é garantido no pool do `database/sql` — a pragma aplica-se a uma conexão e pode se perder no recycle. Com `modernc.org/sqlite`, preferir pragmas via DSN: `sql.Open("sqlite", "file:"+dbPath+"?_pragma=busy_timeout(5000)")` e migrar `journal_mode=WAL`/`synchronous=NORMAL` para o DSN também. Verificado: hoje só existem `journal_mode=WAL`, `synchronous=NORMAL`, `cache_size=-64000` via `Exec` (sqlite.go:172-174), sem busy_timeout.
+   - ⚠️ Nota: `cache_size=-64000` (64MB) por processo × 2 processos = 128MB só de cache — considerar reduzir no serviço (ex.: `-8000`).
+2. **Log do serviço**: garantir que `logger` escreve em `%ProgramData%\Discovery\logs\agent-service.log` quando em modo serviço (hoje `LogFilePath()` já aponta para `agent.log`; separar arquivo por modo facilita diagnóstico). Verificado: `logger.SetFileOutput()` (core/logger/logger.go) já existe e aceita path arbitrário — basta chamar com o path do serviço no modo `--service`.
 3. Confirmar que `EmitEvent`/`DispatchNotification` já toleram ausência de UI (verificado: `headless_no_context` já existe em `services/notifications/service.go` — apenas garantir que o serviço injeta `ctx` não-nil mas sem `EmitEvent` real, caindo no caminho headless).
 
 ### Fase 1 — Modo serviço no binário (`--service`)
@@ -80,20 +82,25 @@ O objetivo é garantir que o **core do agent** (conexão NATS, comandos, invent�
 **Arquivos novos:**
 
 - `src/app/servicemode/service_windows.go` — implementação `svc.Handler`:
+
   ```go
   type discoveryService struct{ app *app.CoreAgent }
   func (s *discoveryService) Execute(args []string, r <-chan svc.ChangeRequest, changes chan<- svc.Status) (bool, uint32)
   ```
 
-  - Aceita `Start`, `Stop`, `Shutdown`, `Interrogate` (preenchendo `svc.Accepted` com `svc.AcceptStop|svc.AcceptShutdown`).
+  - Aceita `Start`, `Stop`, `Shutdown`, `Interrogate` (⚠️ o campo é `svc.Status.Accepts`, não `Accepted`: `changes <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown}`).
   - No `Start`: monta o **core do agent** (sem Wails) e roda o mesmo pipeline de `startup()` — porém **sem** tray, sem janela, sem debug HTTP de UI.
+
 - `src/app/servicemode/service_other.go` — stub não-Windows.
 - `src/app/servicemode/ipc_windows.go` — servidor named pipe `\\.\pipe\discovery-agent-ipc` (DACL permitindo Users + SYSTEM; padrão já usado no projeto em `core/terminal/dispatcher_windows.go`).
+  - ⚠️ **Ajuste (revisão)**: o padrão atual do projeto usa `winio.ListenPipe(path, nil)` com DACL `nil` (dispatcher_windows.go:66-72) — default restrito, **não** serve para serviço→UI. O pipe do serviço precisa de SDDL explícito (ex.: `winio.Sddl` com `D:(A;;GA;;;SY)(A;;GA;;;BU)` para SYSTEM + Users builtin), senão a UI do usuário não conecta.
 
 **Refactor necessário (o ponto mais delicado do plano):**
 
-- `App.startup()` (`src/app/app.go:1027`) hoje mistura core + UI. Extrair para `CoreAgent` reutilizável:
+- `App.startup()` (⚠️ linha atual: `src/app/app.go:1097`) hoje mistura core + UI. Extrair para `CoreAgent` reutilizável:
   - `agentConn.Run`, `inventorySvc`, `automationSvc`, `syncSvc`, `p2pCoord`, `selfUpdater`, outboxes, consolidation engine, DB — movidos para um struct `CoreAgent` com método `Run(ctx)`.
+  - ⚠️ **Preservar o staged startup** (revisão): `startup()` usa fases com delays — inventory +2s, agentConn +8s, automation/sync/P2P +10s, self-update/cleanup +12s — e guards como `isInventoryProvisioned()`/`beginActivity()`. A extração deve levar os delays junto do core, senão o serviço satura CPUs modestas no boot.
+  - ⚠️ Itens UI-coupled que ficam na `App`: `captureStdLog`, `EnsureChatSSEServer`, `startTray`, `hideWindowOnStartup`, `applyIdleMode`, `StartDebugHTTPServer` (debug de UI).
   - `App` (UI) passa a **compor** `CoreAgent` quando standalone, ou **conectar via IPC** quando companion.
 - Alternativa mais conservadora (se revisão preferir): manter `App` intacto e criar flag `runtimeFlags.ServiceMode` que pula `startTray`, `hideWindowOnStartup`, `EnsureChatSSEServer`, `StartDebugHTTPServer` e o registro Wails. **Menos código, mas acoplamento permanece** — recomendo a extração.
 
@@ -144,12 +151,15 @@ FunctionEnd
 
 - `delayed-auto`: evita competir com serviços críticos no boot; o agent reconecta NATS com jitter infinito, então 30-60s de atraso pós-boot é aceitável.
 - **Uninstall**: `un.UnregisterAgentService` — `sc.exe stop` + `sc.exe delete` antes do decommission.
-- **Update (`/UPDATE`)**: `PrepareForInPlaceUpdate` precisa também parar o serviço (`sc stop DiscoveryAgent` + aguardar) antes do rename `.bak_update`; ao final, `sc start DiscoveryAgent` em vez de (ou além de) `Exec` da UI.
+- **Update (`/UPDATE`)**: `PrepareForInPlaceUpdate` precisa também parar o serviço — ⚠️ **ordem obrigatória (revisão)**: `sc stop DiscoveryAgent` (desarma o failure recovery) → aguardar STOPPED → taskkill residual → rename `.bak_update`. Se o taskkill matar o processo do serviço sem `sc stop` antes, o SCM entende como crash e as failure actions reiniciam o serviço em ~5s, correndo no meio da cópia dos binários (race). Nota: o `taskkill /IM discovery-agent.exe` mata serviço E UI (mesmo exe) — esperado no update.
+  - ⚠️ **Ajuste (revisão)**: `sc stop` retorna antes do serviço estar efetivamente STOPPED. O NSIS precisa de loop de espera (`sc query DiscoveryAgent` até `STOPPED`, com timeout ~30s) entre o stop e o taskkill/rename — senão o rename `.bak_update` falha com o .exe ainda carregado. O helper Go `sysctrl.StopService` (services_windows.go:193) também não aguarda; se usado pelo serviço para self-stop, adicionar wait de estado.
+- Ao final do update: `sc start DiscoveryAgent` **e** manter o `Exec` da UI companion com `--startup-minimized --startup-source=update-restart` (o `Exec` cobre o fallback standalone quando o serviço não existe).
 - Mantém a Scheduled Task `DiscoveryAgentUI` existente (agora ela só sobe a UI companion).
 
 ### Fase 4 — Self-update ciente do serviço
 
 - `selfupdate/launch_windows.go`: quando em modo serviço (SYSTEM), o instalador `/S /UPDATE` já roda elevado — sem prompt UAC. Ajustar:
+  - ⚠️ **Ajuste (revisão)**: verificado em `core/selfupdate/launch_windows.go` — `isProcessElevated()` (linha 334) já existe e o caminho `CreateProcess` com `CREATE_BREAKAWAY_FROM_JOB` (linha 142) já cobre o serviço SYSTEM. **Porém**, garantir que o serviço NUNCA caia no caminho `ShellExecuteEx("runas")` (`LaunchInstallerElevated`, linha 76): em sessão 0 não há desktop para o prompt UAC — o `runas` falha ou pende. O serviço SYSTEM é sempre elevado, então o caminho `CreateProcess` breakaway é o correto; basta assegurar que `isProcessElevated()` retorna `true` para SYSTEM (token de integridade System) e que o fallback `launchInstallerShellExecute` não é alcançado no modo serviço.
   - `PrepareForInPlaceUpdate` para/sobe o serviço (Fase 3).
   - Após update, o serviço reinicia a si mesmo via SCM; a UI companion detecta pipe caindo e reconecta (Fase 2 já cobre).
 - `ResumePendingInstallReport` inalterado (correlação com installer.log continua válida).
@@ -164,19 +174,56 @@ FunctionEnd
    - Self-update com serviço ativo → serviço para, binário troca, serviço volta.
    - Uninstall limpa serviço + task + ProgramData.
 3. **Regressão**: modo standalone (serviço desativado manualmente) deve se comportar como hoje.
+4. ⚠️ **Inventário como SYSTEM vs usuário** (revisão): coletas rodando como `LocalSystem` podem divergir das atuais (sessão de usuário elevado) — ex.: apps per-user, contexto WMI. Comparar um inventário coletado pelo serviço com um coletado pela UI standalone e validar o delta aceitável no servidor.
 
 ## 4. Riscos e Mitigações
 
-| Risco                                                  | Impacto  | Mitigação                                                                                                                          |
-| ------------------------------------------------------ | -------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| Refactor de `App.startup()` quebrar UI                 | Alto     | Extração incremental com testes `go test ./app/...` após cada passo; manter `App` como wrapper de `CoreAgent`                      |
-| Comandos duplicados (UI standalone + serviço)          | Médio    | Handshake IPC define dono único do core; UI só assume core se serviço ausente por N segundos                                       |
-| `SQLITE_BUSY` entre processos                          | Médio    | `busy_timeout=5000` + WAL (já ativo)                                                                                               |
-| Notificações `require_confirmation` sem usuário logado | Médio    | Caminho headless já existe (`timeout_policy_applied`); documentar comportamento                                                    |
-| Remote session/terminal não funcionam sem login        | Esperado | Por design (exige sessão interativa); opcionalmente serviço pode lançar UI via `CreateProcessAsUser` (fase futura, fora do escopo) |
-| `mgr.Connect` com SC_MANAGER_ALL_ACCESS no serviço     | Nenhum   | Serviço roda como SYSTEM — acesso garantido                                                                                        |
-| Manifest `requireAdministrator` vs SCM                 | Nenhum   | SCM ignora `requestedExecutionLevel` ao lançar serviços                                                                            |
-| SingleInstance Wails `com.discovery.app`               | Nenhum   | Serviço nunca cria `application.New`                                                                                               |
+| Risco                                                  | Impacto  | Mitigação                                                                                                                                                                                                   |
+| ------------------------------------------------------ | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Refactor de `App.startup()` quebrar UI                 | Alto     | Extração incremental com testes `go test ./app/...` após cada passo; manter `App` como wrapper de `CoreAgent`                                                                                               |
+| Comandos duplicados (UI standalone + serviço)          | Médio    | Handshake IPC define dono único do core; UI só assume core se serviço ausente por N segundos                                                                                                                |
+| `SQLITE_BUSY` entre processos                          | Médio    | `busy_timeout=5000` + WAL (já ativo)                                                                                                                                                                        |
+| Notificações `require_confirmation` sem usuário logado | Médio    | Caminho headless já existe (`timeout_policy_applied`); documentar comportamento                                                                                                                             |
+| Remote session/terminal não funcionam sem login        | Esperado | Por design (exige sessão interativa); opcionalmente serviço pode lançar UI via `CreateProcessAsUser` (fase futura, fora do escopo)                                                                          |
+| `mgr.Connect` com SC_MANAGER_ALL_ACCESS no serviço     | Nenhum   | Serviço roda como SYSTEM — acesso garantido (verificado: `StartService`/`StopService` em sysctrl usam `mgr.Connect`; `ListServices` já usa direitos mínimos)                                                |
+| Manifest `requireAdministrator` vs SCM                 | Nenhum   | SCM ignora `requestedExecutionLevel` ao lançar serviços                                                                                                                                                     |
+| SingleInstance Wails `com.discovery.app`               | Nenhum   | Serviço nunca cria `application.New`                                                                                                                                                                        |
+| `ShellExecuteEx("runas")` na sessão 0 (serviço)        | Alto     | Serviço SYSTEM sempre elevado → caminho `CreateProcess` breakaway (launch_windows.go:142); garantir que `isProcessElevated()` = true para SYSTEM e que o fallback `runas` nunca é alcançado no modo serviço |
+| Pipe IPC com DACL default                              | Médio    | `winio.ListenPipe(path, nil)` restringe acesso; usar SDDL explícito `(A;;GA;;;SY)(A;;GA;;;BU)` no pipe do serviço                                                                                           |
+| `sc stop` sem aguardar STOPPED                         | Médio    | Loop `sc query` até STOPPED (timeout 30s) antes de taskkill/rename; `sysctrl.StopService` também não aguarda                                                                                                |
+
+## 4.1 Resultado da revisão contra o código (2026-09-04)
+
+**Verificado — plano se aplica:**
+
+| Afirmação do plano                       | Verificação no código                                                                                                       |
+| ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `busy_timeout` ausente                   | ✅ `sqlite.go:171-174` — só WAL/synchronous/cache_size via `Exec`                                                           |
+| Caminho headless de notificações         | ✅ `services/notifications/service.go:256-260` (`headless_no_context`/`headless_logged`/`timeout_policy_applied`)           |
+| Padrão "modo por argumento" no `main.go` | ✅ `--agent-delete-cleanup`, `--terminal-dispatcher` (main.go:57-84)                                                        |
+| `svc`/`mgr` já usados no projeto         | ✅ `core/sysctrl/services_windows.go`                                                                                       |
+| Named pipes já usados (padrão IPC)       | ✅ `core/terminal/dispatcher_windows.go`                                                                                    |
+| NSIS sem service mode hoje               | ✅ `project.nsi:658` ("Nao usamos mais Windows Service mode"), `RegisterUIStartupTask:1154`, `PrepareForInPlaceUpdate:1075` |
+| `EmitEvent` no-op sem UI                 | ✅ `app.go:876/909` (`a.app == nil`)                                                                                        |
+| Manifest `requireAdministrator`          | ✅ SCM ignora `requestedExecutionLevel` ao lançar serviços                                                                  |
+
+**Ajustes incorporados nesta revisão (⚠️ no texto):**
+
+1. Fase 0.1: pragmas via DSN (não `conn.Exec`) — garantia em todas as conexões do pool.
+2. Fase 1: linha de `startup()` corrigida para 1097; staged startup deve ser preservado na extração `CoreAgent`.
+3. Fase 1: campo `svc.Status.Accepts` (não `Accepted`).
+4. Fase 2: pipe do serviço exige SDDL explícito — o padrão `winio.ListenPipe(path, nil)` do projeto (DACL default) não permite conexão da UI do usuário.
+5. Fase 3: ordem `sc stop` → aguardar STOPPED (loop `sc query`, timeout 30s) → taskkill no update (evita race com failure recovery do SCM e rename com .exe carregado).
+6. Fase 4: serviço SYSTEM deve usar sempre o caminho `CreateProcess` breakaway (`launch_windows.go:142`); `ShellExecuteEx("runas")` falha na sessão 0 (sem desktop para UAC).
+7. Fase 5: validação de inventário SYSTEM vs usuário (divergência de apps per-user/WMI).
+
+**Verificações adicionais (Fases 2 e 4):**
+
+| Afirmação do plano                     | Verificação no código                                                                                                                            |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Named pipes via `winio` (padrão IPC)   | ✅ `dispatcher_windows.go:66-72`, `pty_windows_dispatcher_client.go` — mas com DACL `nil` (ver ajuste 4)                                         |
+| Self-update elevado sem UAC no serviço | ✅ `isProcessElevated()` (launch_windows.go:334) + `CreateProcess` breakaway (linha 142) já existem; risco apenas no fallback `runas` (ajuste 6) |
+| `mgr.Connect` no sysctrl               | ✅ `StartService`/`StopService` usam `mgr.Connect` (services_windows.go:173/193); `ListServices` já corrigido para direitos mínimos              |
 
 ## 5. Pontos em aberto para decisão do revisor
 

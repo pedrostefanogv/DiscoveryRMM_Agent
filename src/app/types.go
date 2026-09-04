@@ -23,6 +23,10 @@ type inventoryCache struct {
 type AppStartupOptions struct {
 	DebugMode      bool
 	StartMinimized bool
+	// ServiceMode (PLANO_AGENT_SERVICE_SYSTEM.md, Fase 1): roda o core do
+	// agent como serviço SYSTEM — pula tray, janela, SSE de chat, debug HTTP
+	// e persistência de logs da UI (usa agent-service.log).
+	ServiceMode bool
 	// TrayIcon holds the embedded ICO bytes for the system tray icon.
 	// Pass the icon from the root package where //go:embed is allowed.
 	TrayIcon []byte
@@ -36,6 +40,10 @@ type AppStartupOptions struct {
 type RuntimeFlags struct {
 	DebugMode      bool `json:"debugMode"`
 	StartMinimized bool `json:"startMinimized"`
+	// ServiceMode indica processo de serviço (SYSTEM, sem UI). Não exposto
+	// ao frontend (serviço não tem frontend), mas segue no struct por
+	// simplicidade de propagação.
+	ServiceMode bool `json:"-"`
 }
 
 const (

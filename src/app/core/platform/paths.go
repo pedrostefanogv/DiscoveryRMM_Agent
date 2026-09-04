@@ -103,6 +103,19 @@ func InstallerLogPath() string {
 	return ""
 }
 
+// ServiceLogFilePath retorna o caminho para o log do agente em modo serviço
+// (PLANO_AGENT_SERVICE_SYSTEM.md, Fase 0). Separado do agent.log da UI para
+// facilitar diagnóstico do processo SYSTEM.
+// Retorna vazio em plataformas não-Windows.
+func ServiceLogFilePath() string {
+	if runtime.GOOS == "windows" {
+		if pd := envutil.ProgramData(); pd != "" {
+			return filepath.Join(pd, "Discovery", "logs", "agent-service.log")
+		}
+	}
+	return ""
+}
+
 // ─── Caminhos do Chat Config ────────────────────────────────────────
 
 // ChatConfigPathCandidates retorna caminhos candidatos para o arquivo de config do chat.

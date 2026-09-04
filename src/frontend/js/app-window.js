@@ -257,5 +257,21 @@
 
   if (wailsMod.on && typeof wailsMod.on === 'function') {
     wailsMod.on('agent:connectivity', applyConnectivityEvent);
+    // Companion mode: snapshot de conectividade vindo do serviço via IPC
+    // (o core roda no DiscoveryAgent Service; a UI não tem agentConn).
+    // Mesmo formato do agent:connectivity — reaproveita o mesmo handler.
+    wailsMod.on('agent:status_snapshot', applyConnectivityEvent);
+    // Estado do serviço Windows (companion mode): a UI é notificada quando o
+    // IPC com o DiscoveryAgent Service conecta/cai (PLANO_AGENT_SERVICE_SYSTEM,
+    // Fase 2). Em companion, o core roda no serviço — o agente pode estar
+    // operacional mesmo que a UI perca a conexão IPC temporariamente.
+    wailsMod.on('service:ipc_state', function (data) {
+      try {
+        var connected = !!(data && data.connected);
+        window.__agentServiceMode = connected;
+        console.log('[status] serviço DiscoveryAgent ' + (connected ? 'conectado (companion)' : 'desconectado'));
+        try { window.dispatchEvent(new CustomEvent('agent-service-state-changed', { detail: { connected: connected } })); } catch (e) { /* não crítico */ }
+      } catch (e) { /* não crítico */ }
+    });
   }
 })();
