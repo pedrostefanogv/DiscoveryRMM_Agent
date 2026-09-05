@@ -92,28 +92,28 @@ func (s *discoveryService) Execute(_ []string, r <-chan svc.ChangeRequest, chang
 	changes <- svc.Status{State: svc.Running, Accepts: cmdsAccepted}
 	log.Printf("[service] core do agent em execução (SYSTEM)")
 
-	for {
-		select {
-		case c := <-r:
-			switch c.Cmd {
-			case svc.Interrogate:
-				changes <- c.CurrentStatus
-				time.Sleep(100 * time.Millisecond)
-				changes <- c.CurrentStatus
-			case svc.Stop, svc.Shutdown:
-				log.Printf("[service] SCM %s recebido — encerrando core", svcCmdName(c.Cmd))
-				changes <- svc.Status{State: svc.StopPending, Accepts: cmdsAccepted}
-				app.ServiceShutdown()
-				changes <- svc.Status{State: svc.Stopped, Accepts: cmdsAccepted}
-				// Exit code 0: encerramento limpo — NÃO conta como crash para
-				// as failure actions do SCM (restart/5000 só dispara em código
-				// não-zero).
-				return false, 0
-			default:
-				log.Printf("[service] comando SCM não suportado ignorado: %d", c.Cmd)
-			}
+	// Loop de comandos do SCM. Termina quando o handler retorna via Stop/Shutdown
+	// (return false, 0 abaixo).
+	for c := range r {
+		switch c.Cmd {
+		case svc.Interrogate:
+			changes <- c.CurrentStatus
+			time.Sleep(100 * time.Millisecond)
+			changes <- c.CurrentStatus
+		case svc.Stop, svc.Shutdown:
+			log.Printf("[service] SCM %s recebido — encerrando core", svcCmdName(c.Cmd))
+			changes <- svc.Status{State: svc.StopPending, Accepts: cmdsAccepted}
+			app.ServiceShutdown()
+			changes <- svc.Status{State: svc.Stopped, Accepts: cmdsAccepted}
+			// Exit code 0: encerramento limpo — NÃO conta como crash para
+			// as failure actions do SCM (restart/5000 só dispara em código
+			// não-zero).
+			return false, 0
+		default:
+			log.Printf("[service] comando SCM não suportado ignorado: %d", c.Cmd)
 		}
 	}
+	return false, 0
 }
 
 func svcCmdName(cmd svc.Cmd) string {

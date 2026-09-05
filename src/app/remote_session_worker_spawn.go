@@ -19,21 +19,19 @@ package app
 // diretamente; o serviço apenas monitora o processo (stop via stdin "stop").
 
 import (
+	"bufio"
 	"context"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
-	"os/exec"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
-
-	"discovery/app/core/processutil"
 )
 
 // remoteSessionWorkerState guarda os workers ativos por sessionId.
@@ -47,9 +45,11 @@ func init() { remoteSessionWorkers.byID = make(map[string]*remoteSessionWorkerPr
 // remoteSessionWorkerProc representa um worker spawnado para uma sessão.
 type remoteSessionWorkerProc struct {
 	sessionID string
-	cmd       *exec.Cmd
-	stdin     interface{ Write([]byte) (int, error) }
-	done      chan struct{}
+	proc      *os.Process
+	stdin     *os.File
+	// stderrDrainDone é fechado quando a goroutine de dreno do stderr termina.
+	stderrDrainDone chan struct{}
+	done            chan struct{}
 }
 
 // spawnRemoteSessionWorker lança o worker na sessão interativa (ou winlogon
@@ -80,46 +80,49 @@ func spawnRemoteSessionWorker(parent context.Context, payload map[string]any) er
 		return fmt.Errorf("resolvendo executável: %w", err)
 	}
 
-	cmd := exec.Command(exe, "--remote-session-worker")
-	processutil.HideWindow(cmd)
-	cmd.Stderr = nil // worker loga em stderr; serviço não precisa capturar
-
-	stdinPipe, err := cmd.StdinPipe()
-	if err != nil {
-		return fmt.Errorf("stdin pipe: %w", err)
-	}
-
 	// ── Token da sessão interativa ──
 	// 1) Usuário logado: token da sessão do console.
 	// 2) Sem usuário: token do winlogon da sessão do console (tela de logon).
 	tok, source, tokErr := acquireInteractiveSessionToken()
 	if tokErr != nil {
-		stdinPipe.Close()
 		return fmt.Errorf("sem sessão interativa: %w", tokErr)
 	}
 	defer tok.Close()
 
-	if cmd.SysProcAttr == nil {
-		cmd.SysProcAttr = &syscall.SysProcAttr{}
-	}
-	cmd.SysProcAttr.Token = syscall.Token(tok)
-	cmd.SysProcAttr.CreationFlags |= windows.CREATE_BREAKAWAY_FROM_JOB
-
-	if err := cmd.Start(); err != nil {
-		stdinPipe.Close()
-		return fmt.Errorf("CreateProcessAsUser (%s): %w", source, err)
+	proc, stdin, stderr, err := spawnWorkerInSession(exe, tok, source)
+	if err != nil {
+		return err
 	}
 
 	w := &remoteSessionWorkerProc{
-		sessionID: sessionID,
-		cmd:       cmd,
-		stdin:     stdinPipe,
-		done:      make(chan struct{}),
+		sessionID:       sessionID,
+		proc:            proc,
+		stdin:           stdin,
+		stderrDrainDone: make(chan struct{}),
+		done:            make(chan struct{}),
 	}
 	remoteSessionWorkers.byID[sessionID] = w
 
+	// Dreno do stderr: as mensagens do worker ([remote-session-worker] ...)
+	// vão para o log do serviço. Antes (cmd.Stderr = nil) eram descartadas e
+	// falhas de startup do worker eram invisíveis.
 	go func() {
-		_ = cmd.Wait()
+		defer close(w.stderrDrainDone)
+		scanner := bufio.NewScanner(stderr)
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line != "" {
+				log.Printf("[remote-session-worker] %s", line)
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			log.Printf("[remote-session-worker] stderr interrompido: %v", err)
+		}
+		_ = stderr.Close()
+	}()
+
+	go func() {
+		_, _ = proc.Wait()
 		close(w.done)
 		remoteSessionWorkers.mu.Lock()
 		if cur, ok := remoteSessionWorkers.byID[sessionID]; ok && cur == w {
@@ -149,9 +152,146 @@ func spawnRemoteSessionWorker(parent context.Context, payload map[string]any) er
 		// worker vivo após 3s — sessão presumivelmente ativa
 	}
 
-	fmt.Printf("[remote-session] worker spawnado na sessão interativa (%s): sessionId=%s pid=%d\n",
-		source, sessionID, cmd.Process.Pid)
+	fmt.Printf("[remote-session] worker spawnado na sessão interativa (%s, desktop=%s): sessionId=%s pid=%d\n",
+		source, workerDesktopName(source), sessionID, proc.Pid)
 	return nil
+}
+
+// workerDesktopName retorna o desktop alvo do spawn (log/diagnóstico).
+// Padrão MeshAgent (ILibProcessPipe.c): SpawnTypes_WINLOGON → "Winsta0\\Winlogon";
+// sessão de usuário → "Winsta0\\Default".
+func workerDesktopName(source string) string {
+	if source == "winlogon" {
+		return `winsta0\winlogon`
+	}
+	return `winsta0\default`
+}
+
+// spawnWorkerInSession lança o binário com CreateProcessAsUser no token da
+// sessão interativa, definindo STARTUPINFOW.lpDesktop explicitamente.
+//
+// POR QUÊ (bug 2026-09-05): o syscall.SysProcAttr do Go NÃO expõe lpDesktop —
+// com exec.Command + SysProcAttr.Token o filho herda a window station do
+// serviço (sessão 0, sem desktop) e a captura/input falham SEMPRE, inclusive
+// na tela de logon. O MeshAgent resolve isso com info.lpDesktop no spawn
+// (ILibProcessPipe.c: SpawnTypes_WINLOGON → "Winsta0\\Winlogon").
+//
+// Retorna (processo, stdin do filho, stderr do filho, erro). O stdin é um
+// pipe anônimo herdado (payload framed via STARTF_USESTDHANDLES); o stderr é
+// drenado pelo serviço para o log.
+func spawnWorkerInSession(exe string, tok windows.Token, source string) (*os.Process, *os.File, *os.File, error) {
+	// ── Pipes anônimos herdados (stdin e stderr do filho) ──
+	// stdin: serviço escreve → filho lê (read end herdado).
+	stdinR, stdinW, err := os.Pipe()
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("stdin pipe: %w", err)
+	}
+	// Torna o read end herdável pelo filho.
+	if err := setHandleInheritable(stdinR.Fd()); err != nil {
+		stdinR.Close()
+		stdinW.Close()
+		return nil, nil, nil, fmt.Errorf("stdin inheritable: %w", err)
+	}
+	// stderr: filho escreve → serviço lê (write end herdado).
+	serrR, serrW, err := os.Pipe()
+	if err != nil {
+		stdinR.Close()
+		stdinW.Close()
+		return nil, nil, nil, fmt.Errorf("stderr pipe: %w", err)
+	}
+	if err := setHandleInheritable(serrW.Fd()); err != nil {
+		stdinR.Close()
+		stdinW.Close()
+		serrR.Close()
+		serrW.Close()
+		return nil, nil, nil, fmt.Errorf("stderr inheritable: %w", err)
+	}
+
+	// Evita que o filho herde os ends que não são dele.
+	_ = setHandleNonInheritable(windows.Handle(stdinW.Fd()))
+	_ = setHandleNonInheritable(windows.Handle(serrR.Fd()))
+
+	argv0, err := windows.UTF16PtrFromString(exe)
+	if err != nil {
+		cleanupSpawnPipes(stdinR, stdinW, serrR, serrW)
+		return nil, nil, nil, fmt.Errorf("caminho do exe inválido: %w", err)
+	}
+	cmdline, err := windows.UTF16PtrFromString(`"` + exe + `" --remote-session-worker`)
+	if err != nil {
+		cleanupSpawnPipes(stdinR, stdinW, serrR, serrW)
+		return nil, nil, nil, fmt.Errorf("cmdline inválida: %w", err)
+	}
+	desktop, err := windows.UTF16PtrFromString(workerDesktopName(source))
+	if err != nil {
+		cleanupSpawnPipes(stdinR, stdinW, serrR, serrW)
+		return nil, nil, nil, fmt.Errorf("desktop inválido: %w", err)
+	}
+
+	si := &windows.StartupInfo{
+		Desktop:    desktop, // CRÍTICO: sem isso o filho fica na window station da sessão 0
+		Flags:      windows.STARTF_USESTDHANDLES | windows.STARTF_USESHOWWINDOW,
+		ShowWindow: windows.SW_HIDE,
+		StdInput:   windows.Handle(stdinR.Fd()),
+		StdOutput:  windows.Handle(serrW.Fd()),
+		StdErr:     windows.Handle(serrW.Fd()),
+	}
+	pi := new(windows.ProcessInformation)
+
+	err = windows.CreateProcessAsUser(
+		tok,
+		argv0,
+		cmdline,
+		nil,  // process attributes
+		nil,  // thread attributes
+		true, // inheritHandles (pipes stdin/stderr)
+		windows.CREATE_BREAKAWAY_FROM_JOB|windows.CREATE_NO_WINDOW,
+		nil, // environment (herda do SYSTEM — worker não usa vars custom)
+		nil, // current directory
+		si,
+		pi,
+	)
+	// O pai não precisa mais dos ends herdados pelo filho.
+	stdinR.Close()
+	serrW.Close()
+	if err != nil {
+		stdinW.Close()
+		serrR.Close()
+		return nil, nil, nil, fmt.Errorf("CreateProcessAsUser (%s, desktop=%s): %w", source, workerDesktopName(source), err)
+	}
+
+	// Fecha o handle do thread primário (não usado).
+	_ = windows.CloseHandle(pi.Thread)
+
+	proc, err := os.FindProcess(int(pi.ProcessId))
+	if err != nil {
+		_ = windows.CloseHandle(pi.Process)
+		stdinW.Close()
+		serrR.Close()
+		return nil, nil, nil, fmt.Errorf("FindProcess(%d): %w", pi.ProcessId, err)
+	}
+	// NOTA: proc.Wait() do Go usa o handle do Process — repõe o handle que o
+	// FindProcess duplicou internamente a partir do pid (OpenProcess). O
+	// pi.Process original é fechado para não vazar handle.
+	_ = windows.CloseHandle(pi.Process)
+
+	return proc, stdinW, serrR, nil
+}
+
+func cleanupSpawnPipes(pipes ...*os.File) {
+	for _, p := range pipes {
+		_ = p.Close()
+	}
+}
+
+// setHandleInheritable marca o handle como herdável (SetHandleInformation
+// HANDLE_FLAG_INHERIT).
+func setHandleInheritable(h uintptr) error {
+	return windows.SetHandleInformation(windows.Handle(h), windows.HANDLE_FLAG_INHERIT, windows.HANDLE_FLAG_INHERIT)
+}
+
+// setHandleNonInheritable remove a flag de herança do handle.
+func setHandleNonInheritable(h windows.Handle) error {
+	return windows.SetHandleInformation(h, windows.HANDLE_FLAG_INHERIT, 0)
 }
 
 // writeWorkerPayload envia um comando framed ao stdin do worker.
@@ -286,6 +426,6 @@ func stopRemoteSessionWorker(sessionID string) {
 	select {
 	case <-w.done:
 	case <-time.After(5 * time.Second):
-		_ = w.cmd.Process.Kill()
+		_ = w.proc.Kill()
 	}
 }

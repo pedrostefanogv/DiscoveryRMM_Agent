@@ -7,14 +7,16 @@ package app
 import (
 	"fmt"
 	"log"
+	"net"
 	"strings"
 	"time"
 )
 
 // handleIPCMessage processa mensagens recebidas de UIs conectadas (lado do
 // serviço). Responde hello_ack e encaminha notification:respond / command_result
-// para os domínios correspondentes.
-func (a *App) handleIPCMessage(msg IPCMessage) {
+// para os domínios correspondentes. A conn de origem é fornecida para replies
+// diretos (status_snapshot vai só à UI que pediu, não em broadcast).
+func (a *App) handleIPCMessage(conn net.Conn, msg IPCMessage) {
 	if a == nil || msg.Type == "" {
 		return
 	}
@@ -26,11 +28,17 @@ func (a *App) handleIPCMessage(msg IPCMessage) {
 	case IPCMsgStatus:
 		// Snapshot de status solicitado pela UI companion (contrato Fase 2):
 		// conectividade real do core que roda no serviço.
+		// Revisão 2026-09-05: reply DIRETO na conn de origem (antes era
+		// broadcast — com uma conn zumbi no map, o snapshot nunca chegava à UI
+		// viva e o tray ficava offline).
 		agent := a.GetAgentStatus()
-		a.broadcastIPCEvent("agent:status_snapshot", map[string]any{
-			"connected": agent.Connected,
-			"transport": agent.Transport,
-		})
+		if a.ipcServer != nil {
+			a.ipcServer.RespondTo(conn, NewIPCMessage(IPCMsgEvent, map[string]any{
+				"name":      "agent:status_snapshot",
+				"connected": agent.Connected,
+				"transport": agent.Transport,
+			}))
+		}
 	case IPCMsgRemoteSession:
 		// Remote session DEVE rodar na sessão interativa do usuário (a sessão 0
 		// do serviço SYSTEM não tem desktop — captura falha e SendInput é

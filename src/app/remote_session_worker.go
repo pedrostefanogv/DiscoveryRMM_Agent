@@ -93,6 +93,9 @@ func RunRemoteSessionWorker() {
 				return
 			}
 		}
+		if err := scanner.Err(); err != nil {
+			fmt.Fprintf(os.Stderr, "[remote-session-worker] stdin interrompido: %v\n", err)
+		}
 		cancel() // EOF — serviço encerrou o pipe
 	}()
 

@@ -95,13 +95,16 @@ type IPCServer struct {
 	conns    map[net.Conn]*bufio.Reader
 	closed   atomic.Bool
 
-	// OnMessage é chamado para cada mensagem recebida da UI.
-	OnMessage func(msg IPCMessage)
+	// OnMessage é chamado para cada mensagem recebida da UI. A conn é
+	// fornecida para que o handler possa responder DIRETAMENTE ao cliente de
+	// origem (ex.: status_snapshot) sem depender do broadcast — que pode estar
+	// bloqueado por conns zumbis de outras UIs.
+	OnMessage func(conn net.Conn, msg IPCMessage)
 }
 
 // StartIPCServer inicia o listener do pipe do serviço (chamado no modo
 // --service). Roda em goroutine própria; erros vão para o log.
-func StartIPCServer(onMessage func(IPCMessage)) *IPCServer {
+func StartIPCServer(onMessage func(net.Conn, IPCMessage)) *IPCServer {
 	l, err := winio.ListenPipe(IPCPipeName, &winio.PipeConfig{
 		SecurityDescriptor: ipcPipeSDDL,
 		MessageMode:        false,
@@ -172,12 +175,16 @@ func (s *IPCServer) handleConn(conn net.Conn) {
 			}
 		}
 		if s.OnMessage != nil {
-			s.OnMessage(msg)
+			s.OnMessage(conn, msg)
 		}
 	}
 }
 
 // Broadcast envia uma mensagem para todos os clientes UI conectados.
+// Revisão 2026-09-05: conns que falham na escrita são REMOVIDAS do map — antes
+// ficavam para sempre como zumbis, e cada broadcast subsequente gastava o
+// deadline de 3s tentando escrever nelas (log "broadcast falhou: i/o timeout"
+// em loop), atrasando a entrega às UIs vivas.
 func (s *IPCServer) Broadcast(msg IPCMessage) {
 	data := EncodeIPCMessage(msg)
 	if data == nil {
@@ -188,8 +195,26 @@ func (s *IPCServer) Broadcast(msg IPCMessage) {
 	for conn := range s.conns {
 		conn.SetWriteDeadline(time.Now().Add(3 * time.Second))
 		if _, err := conn.Write(data); err != nil {
-			log.Printf("[ipc] broadcast falhou para %s: %v", conn.RemoteAddr(), err)
+			log.Printf("[ipc] broadcast falhou para %s (removendo): %v", conn.RemoteAddr(), err)
+			delete(s.conns, conn)
+			go conn.Close()
 		}
+	}
+}
+
+// RespondTo envia uma mensagem diretamente a UM cliente (reply na conn de
+// origem). Usado pelo handler de status para responder à UI que pediu.
+func (s *IPCServer) RespondTo(conn net.Conn, msg IPCMessage) {
+	if conn == nil {
+		return
+	}
+	data := EncodeIPCMessage(msg)
+	if data == nil {
+		return
+	}
+	conn.SetWriteDeadline(time.Now().Add(3 * time.Second))
+	if _, err := conn.Write(data); err != nil {
+		log.Printf("[ipc] reply falhou para %s: %v", conn.RemoteAddr(), err)
 	}
 }
 
@@ -231,6 +256,14 @@ type IPCClient struct {
 	// polling (busy-wait) no RunConnectLoop.
 	downCh chan struct{}
 
+	// lastRx guarda o timestamp da última mensagem/recebimento — usado pelo
+	// watchdog para detectar pipe travado sem EOF (WinAPI pode não devolver
+	// erro numa conn zumbi de named pipe).
+	lastRx atomic.Int64
+
+	// closedCh é fechado no Close() para encerrar o watchdog.
+	closedCh chan struct{}
+
 	// OnMessage é chamado para cada mensagem do serviço (event, hello_ack).
 	OnMessage func(msg IPCMessage)
 	// OnStateChange é chamado quando a conexão abre (true) ou cai (false).
@@ -244,6 +277,7 @@ func NewIPCClient(onMessage func(IPCMessage), onStateChange func(bool)) *IPCClie
 		OnMessage:     onMessage,
 		OnStateChange: onStateChange,
 		downCh:        make(chan struct{}, 1),
+		closedCh:      make(chan struct{}),
 	}
 }
 
@@ -253,26 +287,43 @@ func (c *IPCClient) Connect(timeout time.Duration) bool {
 	if err != nil {
 		return false
 	}
+	// Fecha qualquer conexão anterior ainda viva (nunca deveria acontecer — o
+	// readLoop fecha ao sair — mas protege contra vazamento de conns zumbis).
+	c.mu.Lock()
+	old := c.conn
+	c.conn = conn
+	c.rx = bufio.NewReader(conn)
+	c.lastRx.Store(time.Now().UnixMilli())
+	c.mu.Unlock()
+	if old != nil {
+		old.Close()
+	}
 	// Consome sinal down residual de uma conexão anterior.
 	select {
 	case <-c.downCh:
 	default:
 	}
-	c.mu.Lock()
-	c.conn = conn
-	c.rx = bufio.NewReader(conn)
-	c.mu.Unlock()
 	if c.OnStateChange != nil {
 		c.OnStateChange(true)
 	}
-	go c.readLoop()
+	// readLoop recebe conn/reader LOCAIS — nunca lê c.rx compartilhado. Isso
+	// elimina a data race em que dois readLoops liam o mesmo bufio.Reader
+	// (bufio não é thread-safe) quando a conexão era substituída.
+	go c.readLoop(conn, c.rx)
 	return true
 }
 
 // RunConnectLoop mantém a conexão com backoff exponencial (2s→60s), padrão
 // do agentconn. Bloqueia; chamar em goroutine. Encerra com Close().
+//
+// NOTA (revisão 2026-09-05): o safety-net anterior de 90s foi REMOVIDO — ele
+// disparava sempre em conexões saudáveis e substituía a conn sem fechar a
+// antiga, criando zumbis no servidor e duas readLoops lendo o mesmo reader
+// (data race → crash da UI). A detecção de queda agora é: EOF/erro no
+// readLoop + watchdog de inatividade (ver runRxWatchdog).
 func (c *IPCClient) RunConnectLoop() {
 	backoff := 2 * time.Second
+	go c.runRxWatchdog()
 	for {
 		if c.closed.Load() {
 			return
@@ -282,18 +333,7 @@ func (c *IPCClient) RunConnectLoop() {
 			log.Printf("[ipc] conectado ao serviço (tentativa %d)", n)
 			backoff = 2 * time.Second
 			// Bloqueia até o readLoop sinalizar a queda da conexão.
-			select {
-			case <-c.downCh:
-			case <-time.After(90 * time.Second):
-				// Safety-net: se nenhum sinal chegar (ex.: pipe travado sem
-				// EOF), força verificação do estado da conexão.
-				c.mu.Lock()
-				conn := c.conn
-				c.mu.Unlock()
-				if conn == nil {
-					continue
-				}
-			}
+			<-c.downCh
 		} else {
 			n := c.reconnectN.Add(1)
 			log.Printf("[ipc] serviço indisponível (tentativa %d)", n)
@@ -309,16 +349,54 @@ func (c *IPCClient) RunConnectLoop() {
 	}
 }
 
-// readLoop consome mensagens do serviço até a conexão cair.
-func (c *IPCClient) readLoop() {
+// rxWatchdogInterval e rxWatchdogTimeout definem o heartbeat de inatividade:
+// o serviço responde ao polling de status a cada 5s, então 30s sem nenhum
+// recebimento indica pipe travado (sem EOF) — fecha e reconecta.
+const (
+	rxWatchdogInterval = 10 * time.Second
+	rxWatchdogTimeout  = 30 * time.Second
+)
+
+// runRxWatchdog fecha a conexão quando não há recebimento há rxWatchdogTimeout.
+// O Close() faz o readLoop sair com erro → downCh → reconexão limpa.
+func (c *IPCClient) runRxWatchdog() {
+	ticker := time.NewTicker(rxWatchdogInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-c.closedCh:
+			return
+		case <-ticker.C:
+			if c.closed.Load() {
+				return
+			}
+			c.mu.Lock()
+			conn := c.conn
+			last := c.lastRx.Load()
+			c.mu.Unlock()
+			if conn != nil && time.Since(time.UnixMilli(last)) > rxWatchdogTimeout {
+				log.Printf("[ipc] watchdog: sem mensagens há %s — fechando conexão para reconectar", rxWatchdogTimeout)
+				conn.Close()
+			}
+		}
+	}
+}
+
+// readLoop consome mensagens do serviço até a conexão cair. Recebe conn e
+// reader como parâmetros LOCAIS: nunca acessa c.conn/c.rx (que podem ter sido
+// substituídos por uma reconexão), eliminando a race de dois readLooms lendo
+// o mesmo bufio.Reader.
+func (c *IPCClient) readLoop(conn net.Conn, rx *bufio.Reader) {
 	defer func() {
 		c.mu.Lock()
-		if c.conn != nil {
-			c.conn.Close()
+		// Só limpa c.conn se ainda aponta para ESTA conexão (evita apagar a
+		// referência de uma reconexão mais recente).
+		if c.conn == conn {
 			c.conn = nil
 			c.rx = nil
 		}
 		c.mu.Unlock()
+		conn.Close()
 		if c.OnStateChange != nil {
 			c.OnStateChange(false)
 		}
@@ -330,13 +408,10 @@ func (c *IPCClient) readLoop() {
 	}()
 
 	for {
-		c.mu.Lock()
-		rx := c.rx
-		c.mu.Unlock()
-		if rx == nil {
-			return
-		}
 		msg, err := DecodeIPCMessage(rx)
+		c.mu.Lock()
+		c.lastRx.Store(time.Now().UnixMilli())
+		c.mu.Unlock()
 		if err != nil {
 			return
 		}
@@ -362,7 +437,10 @@ func (c *IPCClient) Send(msg IPCMessage) error {
 
 // Close encerra o cliente e o loop de reconexão.
 func (c *IPCClient) Close() {
-	c.closed.Store(true)
+	if !c.closed.CompareAndSwap(false, true) {
+		return
+	}
+	close(c.closedCh) // encerra o watchdog
 	c.mu.Lock()
 	if c.conn != nil {
 		c.conn.Close()
