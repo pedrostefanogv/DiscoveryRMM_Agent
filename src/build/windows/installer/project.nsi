@@ -1292,10 +1292,24 @@ Function RegisterAgentService
    Pop $R0
    Sleep 1500
 
-   nsExec::ExecToLog /OEM '"$SYSDIR\sc.exe" create ${DISCOVERY_SERVICE_NAME} binPath= "\"$INSTDIR\${PRODUCT_EXECUTABLE}\" --service" start= delayed-auto obj= LocalSystem DisplayName= "Discovery Agent Service"'
+   # start= auto: inicia o mais cedo possível no boot (SCM inicia todos os
+   # serviços auto em paralelo). Antes era delayed-auto (~2min de atraso),
+   # o que fazia a UI (Task AtLogOn) abrir antes do serviço — problema
+   # relatado em produção: agente em modo interface primeiro, serviço depois.
+   # O startup interno do agente é staged/desacoplado, então não há risco de
+   # competir com serviços críticos do Windows.
+   nsExec::ExecToLog /OEM '"$SYSDIR\sc.exe" create ${DISCOVERY_SERVICE_NAME} binPath= "\"$INSTDIR\${PRODUCT_EXECUTABLE}\" --service" start= auto obj= LocalSystem DisplayName= "Discovery Agent Service"'
    Pop $R0
    ${If} $R0 != 0
-      DetailPrint "Aviso: sc create falhou (codigo $R0) — agente seguirá em modo standalone via Task"
+      # Se o create falhar porque o serviço ainda existe (delete pendente do
+      # stop acima, ou serviço já instalado em versão anterior), garantir que
+      # o start type seja auto via config — corrige instalações antigas que
+      # foram criadas com delayed-auto (anterior ao ajuste de 2026-09-07).
+      nsExec::ExecToLog /OEM '"$SYSDIR\sc.exe" config ${DISCOVERY_SERVICE_NAME} start= auto'
+      Pop $R0
+      ${If} $R0 != 0
+         DetailPrint "Aviso: sc create/config falhou (codigo $R0) — agente seguirá em modo standalone via Task"
+      ${EndIf}
    ${EndIf}
 
    # Recuperação de falha: crash → restart em 5s (3 vezes, reset diário).

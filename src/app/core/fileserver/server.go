@@ -19,6 +19,13 @@ type FileInfo struct {
 	IsDir   bool   `json:"isDir"`
 	Size    int64  `json:"size"`
 	ModTime string `json:"modTime"`
+	// IsLink indica que a entrada é um symlink/junction (reparse point do
+	// Windows). No NTFS, esses itens aparecem no ReadDir como ModeSymlink com
+	// IsDir()=false mesmo quando apontam para uma pasta — sem resolver, a UI
+	// os exibe como arquivo e não permite navegar (ex.: C:\Users\All Users).
+	IsLink bool `json:"isLink,omitempty"`
+	// LinkTarget é o alvo do link quando legível (pode ser vazio).
+	LinkTarget string `json:"linkTarget,omitempty"`
 }
 
 // FileSessionRequest representa uma requisicao de arquivo versionada (v1).
@@ -174,12 +181,32 @@ func (s *Server) handleList(path string) FileSessionResponse {
 		if err != nil {
 			continue
 		}
+		isDir := entry.IsDir()
+		isLink := false
+		linkTarget := ""
+		// Symlinks e junctions (reparse points) chegam com IsDir()=false mesmo
+		// apontando para pastas. Resolve o alvo com os.Stat (segue o link) para
+		// classificar corretamente e permitir navegação na UI.
+		if !isDir && entry.Type()&os.ModeSymlink != 0 {
+			full := filepath.Join(dir, entry.Name())
+			if resolved, serr := os.Stat(full); serr == nil {
+				isDir = resolved.IsDir()
+				isLink = true
+				if target, lerr := os.Readlink(full); lerr == nil {
+					linkTarget = target
+				}
+				// Tamanho/data do alvo (o Lstat do link retorna 0).
+				info = resolved
+			}
+		}
 		files = append(files, FileInfo{
-			Name:    entry.Name(),
-			Path:    filepath.Join(path, entry.Name()),
-			IsDir:   entry.IsDir(),
-			Size:    info.Size(),
-			ModTime: info.ModTime().UTC().Format("2006-01-02T15:04:05Z"),
+			Name:       entry.Name(),
+			Path:       filepath.Join(path, entry.Name()),
+			IsDir:      isDir,
+			Size:       info.Size(),
+			ModTime:    info.ModTime().UTC().Format("2006-01-02T15:04:05Z"),
+			IsLink:     isLink,
+			LinkTarget: linkTarget,
 		})
 	}
 

@@ -139,7 +139,7 @@ Contrato mínimo (JSON lines sobre pipe duplex):
 Function RegisterAgentService
    ; 1. Parar taskkill de instâncias em execução (PrepareForInPlaceUpdate já faz)
    ; 2. Criar serviço
-   nsExec::ExecToLog /OEM '"$SYSDIR\sc.exe" create DiscoveryAgent binPath= "\"$INSTDIR\${PRODUCT_EXECUTABLE}\" --service" start= delayed-auto obj= LocalSystem DisplayName= "Discovery Agent Service"'
+   nsExec::ExecToLog /OEM '"$SYSDIR\sc.exe" create DiscoveryAgent binPath= "\"$INSTDIR\${PRODUCT_EXECUTABLE}\" --service" start= auto obj= LocalSystem DisplayName= "Discovery Agent Service"'
    ; 3. Recuperação de falha (crash → restart)
    nsExec::ExecToLog /OEM '"$SYSDIR\sc.exe" failure DiscoveryAgent reset= 86400 actions= restart/5000/restart/5000/restart/5000'
    ; 4. Descrição
@@ -149,7 +149,7 @@ Function RegisterAgentService
 FunctionEnd
 ```
 
-- `delayed-auto`: evita competir com serviços críticos no boot; o agent reconecta NATS com jitter infinito, então 30-60s de atraso pós-boot é aceitável.
+- `auto` (ajuste 2026-09-07, antes era `delayed-auto`): SCM inicia todos os serviços auto em paralelo no boot, o mais cedo possível. Com `delayed-auto` o serviço só subia ~2min depois do boot, e a Task `AtLogOn` da UI abria ANTES do serviço — a UI virava standalone (core completo) e depois o serviço chegava atrasado. O startup interno do agente é staged (inventory +2s, agentConn +8s, automation/P2P +10s), então não há competição problemática com serviços críticos do Windows.
 - **Uninstall**: `un.UnregisterAgentService` — `sc.exe stop` + `sc.exe delete` antes do decommission.
 - **Update (`/UPDATE`)**: `PrepareForInPlaceUpdate` precisa também parar o serviço — ⚠️ **ordem obrigatória (revisão)**: `sc stop DiscoveryAgent` (desarma o failure recovery) → aguardar STOPPED → taskkill residual → rename `.bak_update`. Se o taskkill matar o processo do serviço sem `sc stop` antes, o SCM entende como crash e as failure actions reiniciam o serviço em ~5s, correndo no meio da cópia dos binários (race). Nota: o `taskkill /IM discovery-agent.exe` mata serviço E UI (mesmo exe) — esperado no update.
   - ⚠️ **Ajuste (revisão)**: `sc stop` retorna antes do serviço estar efetivamente STOPPED. O NSIS precisa de loop de espera (`sc query DiscoveryAgent` até `STOPPED`, com timeout ~30s) entre o stop e o taskkill/rename — senão o rename `.bak_update` falha com o .exe ainda carregado. O helper Go `sysctrl.StopService` (services_windows.go:193) também não aguarda; se usado pelo serviço para self-stop, adicionar wait de estado.
