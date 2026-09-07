@@ -163,6 +163,25 @@ func (s *Server) marshal(resp FileSessionResponse) []byte {
 	return b
 }
 
+const (
+	// FILE_ATTRIBUTE_REPARSE_POINT (0x400) — junctions (IO_REPARSE_TAG_MOUNT_POINT),
+	// symlinks e OneDrive placeholders têm este atributo. O Go nem sempre reporta
+	// junctions como os.ModeSymlink (depende da tag de reparse), então a detecção
+	// confiável é via atributos nativos do Windows em info.Sys().
+	fileAttributeReparsePoint = 0x400
+)
+
+// isReparsePoint informa se a entrada tem o atributo REPARSE_POINT do Windows
+// (junction, symlink, OneDrive etc.). Retorna false em plataformas/valores
+// inesperados — chame só quando tem a garantia de estar no Windows.
+func isReparsePoint(info os.FileInfo) bool {
+	attrs, ok := info.Sys().(*syscall.Win32FileAttributeData)
+	if !ok || attrs == nil {
+		return false
+	}
+	return attrs.FileAttributes&fileAttributeReparsePoint != 0
+}
+
 func (s *Server) handleList(path string) FileSessionResponse {
 	dir, err := s.safePath(path)
 	if err != nil {
@@ -184,10 +203,12 @@ func (s *Server) handleList(path string) FileSessionResponse {
 		isDir := entry.IsDir()
 		isLink := false
 		linkTarget := ""
-		// Symlinks e junctions (reparse points) chegam com IsDir()=false mesmo
-		// apontando para pastas. Resolve o alvo com os.Stat (segue o link) para
-		// classificar corretamente e permitir navegação na UI.
-		if !isDir && entry.Type()&os.ModeSymlink != 0 {
+		// Junctions e symlinks (reparse points) chegam com IsDir()=false mesmo
+		// apontando para pastas (ex.: C:\Users\All Users, "Arquivos de Programas",
+		// "Menu Iniciar"). Detecta via atributo REPARSE_POINT do Windows (o Go
+		// nem sempre mapeia junctions para os.ModeSymlink) e resolve o alvo com
+		// os.Stat para classificar corretamente e permitir navegação na UI.
+		if !isDir && isReparsePoint(info) {
 			full := filepath.Join(dir, entry.Name())
 			if resolved, serr := os.Stat(full); serr == nil {
 				isDir = resolved.IsDir()
