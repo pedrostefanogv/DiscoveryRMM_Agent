@@ -114,10 +114,50 @@ func (qm *QualityManager) Profile() string {
 	return qm.profile
 }
 
-// SetImageQuality define override de compressão (1-100). 0 = usar perfil.
+// imageQualityMin/imageQualityMax definem o range aceito para o override
+// MANUAL de qualidade de imagem (via UI do viewer). Fora desse range o valor
+// é rejeitado — evita JPEG 1% (inútil) e 100% (banda explosiva). A adaptação
+// AUTOMÁTICA (adapt/downgrade) continua com os perfis padrão, sem este teto.
+const (
+	imageQualityMin = 10
+	imageQualityMax = 90
+)
+
+// SetImageQuality define override de compressão MANUAL (viewer). Aceita
+// 10-90 — valores fora do range são clampeados (evita JPEG 1% inútil e
+// 100% com banda explosiva). 0/negativo = limpar override (voltar ao perfil).
+// NÃO use para aplicar valores de perfil no modo automático: use
+// SetImageQualityAuto, que não clampa (perfis vão de 25 a 92).
 func (qm *QualityManager) SetImageQuality(q int) {
 	qm.mu.Lock()
 	defer qm.mu.Unlock()
+	if q <= 0 {
+		// 0/negativo = limpar override (voltar ao perfil)
+		qm.current.overrideImageQ = 0
+		return
+	}
+	if q < imageQualityMin {
+		q = imageQualityMin
+	}
+	if q > imageQualityMax {
+		q = imageQualityMax
+	}
+	qm.current.overrideImageQ = q
+}
+
+// SetImageQualityAuto aplica a qualidade do perfil em modo AUTOMÁTICO, sem
+// o clamp manual de 10-90 (perfis legítimos: ultralow=25 … ultra=92).
+// NÃO altera o modo manual — o caller controla isso via SetManualMode.
+func (qm *QualityManager) SetImageQualityAuto(q int) {
+	qm.mu.Lock()
+	defer qm.mu.Unlock()
+	if q <= 0 {
+		qm.current.overrideImageQ = 0
+		return
+	}
+	if q > 100 {
+		q = 100
+	}
 	qm.current.overrideImageQ = q
 }
 

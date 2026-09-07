@@ -736,13 +736,14 @@ decommission_done:
    # Remover task agendada de autostart da UI
    Call un.UnregisterUIStartupTask
 
-    RMDir /r "$AppData\${PRODUCT_EXECUTABLE}" # Remove the WebView2 DataPath
+    RMDir /r "$AppData\${PRODUCT_EXECUTABLE}" # Remove the WebView2 DataPath (legacy)
    ${If} "${LEGACY_PRODUCT_EXECUTABLE}" != "${PRODUCT_EXECUTABLE}"
       RMDir /r "$AppData\${LEGACY_PRODUCT_EXECUTABLE}"
    ${EndIf}
 
    ReadEnvStr $R2 "ProgramData"
    ${If} $R2 != ""
+      RMDir /r "$R2\Discovery\WebView2" # Remove the WebView2 User Data Folder (fixo)
       RMDir /r "$R2\Discovery"
    ${EndIf}
 

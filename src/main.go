@@ -149,6 +149,16 @@ func main() {
 	// ordem inversa.
 	appInstance := application.New(application.Options{
 		Name: "Discovery",
+		Windows: application.WindowsOptions{
+			// ── WebView2 User Data Folder fixo ──
+			// Sem isso, o Wails usa %APPDATA%\discovery-agent.exe\EBWebView.
+			// Quando a UI é lançada elevada/SYSTEM (Task Scheduler, restart pós-
+			// update via instalador), %APPDATA% resolve para o systemprofile e o
+			// WebView2 falha com "não pode ler e gravar o diretório de dados".
+			// ProgramData\Discovery é gravável em qualquer contexto de execução
+			// do agente (admin/SYSTEM) e já concentra config/logs/DB.
+			WebviewUserDataPath: appkg.WebView2UserDataPath(),
+		},
 		Services: []application.Service{
 			application.NewService(app),
 			application.NewService(app.RemoteDebugService()),
@@ -168,6 +178,14 @@ func main() {
 
 	// Guarda a referência da aplicação no App para acesso a eventos/janela/tray.
 	app.SetApplication(appInstance)
+
+	// Garante que o diretório de dados do WebView2 existe antes da janela
+	// ser criada (evita falha de criação do EBWebView em contexto SYSTEM).
+	if p := appkg.WebView2UserDataPath(); p != "" {
+		if err := os.MkdirAll(p, 0o755); err != nil {
+			log.Printf("[startup] aviso: falha ao criar diretorio de dados do WebView2 %s: %v", p, err)
+		}
+	}
 
 	window := appInstance.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:     "Discovery",

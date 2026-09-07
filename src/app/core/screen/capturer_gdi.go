@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"runtime"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -37,17 +38,27 @@ const (
 )
 
 type gdiCapturer struct {
-	// NÃO guardamos DC/bitmap entre frames: o MeshAgent (tile.cpp
+	// NÃO guardamos o screenDC entre frames: o MeshAgent (tile.cpp
 	// get_desktop_buffer) faz ReleaseDC+GetDC(NULL) a CADA frame justamente
 	// porque o DC fica inválido quando o desktop ativo muda (logon, UAC,
 	// lock). Guardar o DC da criação produzia tela congelada após a troca.
-	// Aqui mantemos apenas a geometria; os GDI objects são criados/liberados
-	// por frame (custo desprezível perto do BitBlt).
 	width        int
 	height       int
 	offsetX      int // origem do monitor no desktop virtual (multi-monitor)
 	offsetY      int
 	monitorIndex int
+
+	// Cache de GDI objects (memDC/memBitmap): recriados apenas quando a
+	// geometria muda. Não referenciam o desktop — apenas o screenDC obtido
+	// por frame importa para o BitBlt.
+	memDC     uintptr
+	memBitmap uintptr
+
+	// Throttle da re-detecção de geometria. GetMonitors() usa
+	// syscall.NewCallback, que registra um callback PERMANENTE no runtime
+	// (limite ~2000 por processo) — chamar a cada frame esgotaria os slots
+	// em ~1 minuto e crashearia o processo. Re-detecta a cada 5s.
+	lastGeoCheck time.Time
 }
 
 // NewGDICapturer cria um capturador GDI do monitor primário.
@@ -123,35 +134,46 @@ func (c *gdiCapturer) AcquireNextFrame() (*Frame, error) {
 	}
 	defer procReleaseDC.Call(0, screenDC)
 
-	// Re-detecta a geometria do monitor a cada frame: a resolução pode
+	// Re-detecta a geometria do monitor COM THROTTLE (5s): a resolução pode
 	// mudar (rotação, DPI, monitor reconectado) e o desktop de logon pode
-	// ter geometria diferente do desktop do usuário.
-	if c.monitorIndex >= 0 {
+	// ter geometria diferente do desktop do usuário. NÃO chamar GetMonitors
+	// por frame — syscall.NewCallback vaza slots de callback e crasha o
+	// processo (ver comentário na struct).
+	if c.monitorIndex >= 0 && time.Since(c.lastGeoCheck) >= 5*time.Second {
+		c.lastGeoCheck = time.Now()
 		if mons, err := GetMonitors(); err == nil && len(mons) > c.monitorIndex {
 			m := mons[c.monitorIndex]
 			if m.Width != c.width || m.Height != c.height || m.X != c.offsetX || m.Y != c.offsetY {
 				c.width, c.height, c.offsetX, c.offsetY = m.Width, m.Height, m.X, m.Y
+				// Geometria mudou → descarta cache de GDI objects.
+				c.releaseCached()
 			}
 		}
 	}
 
-	memDC, _, _ := procCreateCompatibleDC.Call(screenDC)
-	if memDC == 0 {
-		return nil, fmt.Errorf("CreateCompatibleDC falhou")
+	// Cache de memDC/memBitmap: cria uma vez e reusa (recria quando a
+	// geometria muda via releaseCached acima). O bitmap NÃO referencia o
+	// desktop — a origem (screenDC) é re-adquirida por frame.
+	if c.memDC == 0 {
+		memDC, _, _ := procCreateCompatibleDC.Call(screenDC)
+		if memDC == 0 {
+			return nil, fmt.Errorf("CreateCompatibleDC falhou")
+		}
+		memBitmap, _, _ := procCreateCompatibleBitmap.Call(screenDC, uintptr(c.width), uintptr(c.height))
+		if memBitmap == 0 {
+			procDeleteDC.Call(memDC)
+			return nil, fmt.Errorf("CreateCompatibleBitmap falhou")
+		}
+		procSelectObject.Call(memDC, memBitmap)
+		c.memDC = memDC
+		c.memBitmap = memBitmap
 	}
-	defer procDeleteDC.Call(memDC)
 
-	memBitmap, _, _ := procCreateCompatibleBitmap.Call(screenDC, uintptr(c.width), uintptr(c.height))
-	if memBitmap == 0 {
-		return nil, fmt.Errorf("CreateCompatibleBitmap falhou")
-	}
-	defer procDeleteObject.Call(memBitmap)
-
-	oldObj, _, _ := procSelectObject.Call(memDC, memBitmap)
-	defer procSelectObject.Call(memDC, oldObj)
-
-	r, _, _ := procBitBlt.Call(memDC, 0, 0, uintptr(c.width), uintptr(c.height), screenDC, uintptr(c.offsetX), uintptr(c.offsetY), SRCCOPY)
+	r, _, _ := procBitBlt.Call(c.memDC, 0, 0, uintptr(c.width), uintptr(c.height), screenDC, uintptr(c.offsetX), uintptr(c.offsetY), SRCCOPY)
 	if r == 0 {
+		// BitBlt pode falhar em troca de desktop — descarta o cache para
+		// recriar os objetos no próximo frame (possível geometria nova).
+		c.releaseCached()
 		return nil, fmt.Errorf("BitBlt falhou")
 	}
 
@@ -167,7 +189,7 @@ func (c *gdiCapturer) AcquireNextFrame() (*Frame, error) {
 	*(*uint16)(unsafe.Pointer(&bi[14])) = 32             // biBitCount
 	*(*uint32)(unsafe.Pointer(&bi[16])) = BI_RGB
 
-	r, _, _ = procGetDIBits.Call(memDC, memBitmap, 0, uintptr(c.height),
+	r, _, _ = procGetDIBits.Call(screenDC, c.memBitmap, 0, uintptr(c.height),
 		uintptr(unsafe.Pointer(&frameData[0])),
 		uintptr(unsafe.Pointer(&bi[0])),
 		DIB_RGB_COLORS)
@@ -175,12 +197,35 @@ func (c *gdiCapturer) AcquireNextFrame() (*Frame, error) {
 		return nil, fmt.Errorf("GetDIBits falhou")
 	}
 
+	// NOTA (cores invertidas, bug 2026-09-07): o 1º parâmetro de GetDIBits
+	// DEVE ser o DC da tela (screenDC), NÃO o memDC. A documentação exige que
+	// o bitmap NÃO esteja selecionado no DC passado — e o memBitmap está
+	// selecionado no memDC. Passar memDC é comportamento indefinido: em
+	// vários drivers o resultado sai com canais R/B corrompidos/invertidos.
+	// O MeshAgent (tile.cpp get_desktop_buffer) passa hDesktopDC exatamente
+	// por isso. Com screenDC, GetDIBits entrega BGRA canônico (B,G,R,A),
+	// que é o contrato esperado pelos encoders (jpeg/webp/tiles).
+
 	return &Frame{Data: frameData, Width: c.width, Height: c.height, Stride: c.width * 4}, nil
 }
 
 func (c *gdiCapturer) ReleaseFrame() {}
 
+// releaseCached descarta o cache de GDI objects (uso interno — chamado na
+// troca de geometria/falha de BitBlt; o thread já é o do capturador).
+func (c *gdiCapturer) releaseCached() {
+	if c.memBitmap != 0 {
+		procDeleteObject.Call(c.memBitmap)
+		c.memBitmap = 0
+	}
+	if c.memDC != 0 {
+		procDeleteDC.Call(c.memDC)
+		c.memDC = 0
+	}
+}
+
 func (c *gdiCapturer) Close() error {
+	c.releaseCached()
 	runtime.UnlockOSThread()
 	return nil
 }

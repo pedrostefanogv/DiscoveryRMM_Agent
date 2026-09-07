@@ -263,16 +263,18 @@ func (m *Manager) handleQuality(_ context.Context, payload map[string]any) (bool
 		// desabilita a adaptação; auto volta a adaptar. Independente dos
 		// overrides de imagem/FPS (que podem ser aplicados no start).
 		screen.SetManualMode(!autoMode)
-		// Em modo Auto: limpa TODOS os overrides (volta ao perfil).
-		// Em Manual: aplica overrides explícitos.
+		// Em modo Auto: limpa TODOS os overrides manuais e aplica a qualidade
+		// do perfil SEM o clamp manual (perfis vão de 25 a 92) — a adaptação
+		// automática continua ativa (adapt/downgrade).
+		// Em Manual: aplica overrides explícitos com clamp 10-90.
 		if autoMode {
 			s.ImageQuality = 0
 			screen.ClearImageQuality()
 			s.MaxFps = 0
 			screen.ClearMaxFps()
-			// Aplica a qualidade do perfil do codec efetivo
+			// Aplica a qualidade do perfil do codec efetivo (sem clamp manual)
 			if iq, ok := toFloat64(imageQuality); ok {
-				screen.SetImageQuality(int(iq))
+				screen.SetImageQualityAuto(int(iq))
 			}
 			if mf, ok := toFloat64(maxFpsVal); ok {
 				screen.SetMaxFps(int(mf))
@@ -451,10 +453,20 @@ func (m *Manager) runScreenSession(ctx context.Context, session *Session) {
 		m.mu.Unlock()
 	}()
 
-	// Configura qualidade, codec, imagem e FPS
+	// Configura qualidade, codec, imagem e FPS.
+	// NOTA (qualidade): o payload do start tem imageQuality default 70, mas
+	// isso NÃO deve virar override manual quando o perfil é automático —
+	// senão o perfil (ex.: ultra=92, ultralow=25) ficava travado em 70 e a
+	// adaptação automática perdia o efeito. Override manual só quando o
+	// payload traz imageQuality EXPLÍCITO (>0) E modo manual (auto=false).
+	autoStart := false
+	if a, ok := session.Meta["auto"].(bool); ok {
+		autoStart = a
+	}
 	screenSession.SetQuality(session.Quality)
 	screenSession.SetCodec(session.Codec)
-	if session.ImageQuality > 0 {
+	screenSession.SetManualMode(!autoStart)
+	if session.ImageQuality > 0 && !autoStart {
 		screenSession.SetImageQuality(session.ImageQuality)
 	}
 	// FPS: >0 = máximo; 0 = sem limite (perfil "unlimited").
@@ -499,7 +511,7 @@ func (m *Manager) runScreenSession(ctx context.Context, session *Session) {
 	// agent→viewer: um monitor detecta mudança no clipboard da máquina remota e
 	//   publica em .clipboard; o viewer escreve no clipboard local do usuário.
 	var clipboardMu sync.Mutex
-	lastPublished := "" // último texto publicado ao viewer (evita eco)
+	lastPublished := ""   // último texto publicado ao viewer (evita eco)
 	lastSetByViewer := "" // último texto aplicado a partir do viewer (evita re-publicar)
 
 	clipSub, clipErr := m.natsStream.SubscribeToClipboardReq(session.ID, func(text string) {

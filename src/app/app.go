@@ -78,6 +78,19 @@ func GetDataDir() string {
 	return platform.DataDir()
 }
 
+// WebView2UserDataPath retorna o diretório de dados do WebView2 da UI.
+// Fixo em %ProgramData%\Discovery\WebView2 (Windows) para evitar o erro
+// "Microsoft Edge WebView2 não pode ler e gravar o diretório de dados":
+// o default do Wails (%APPDATA%\<exe>\EBWebView) quebra quando a UI roda
+// elevada/SYSTEM (Task Scheduler, restart pós-update), pois %APPDATA%
+// resolve para o systemprofile. ProgramData é gravável em qualquer contexto.
+func WebView2UserDataPath() string {
+	if runtime.GOOS != "windows" {
+		return ""
+	}
+	return filepath.Join(platform.DataDir(), "WebView2")
+}
+
 type App struct {
 	ctx                  context.Context
 	cancel               context.CancelFunc
