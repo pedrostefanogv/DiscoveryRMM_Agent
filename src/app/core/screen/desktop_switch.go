@@ -138,3 +138,23 @@ func CurrentDesktopName() string {
 	}
 	return windows.UTF16ToString(buf)
 }
+
+// IsSecureDesktop indica se o input desktop ativo é um desktop seguro —
+// tela de logon ("Winlogon"), lock screen ou prompt UAC ("Winlogon" ou
+// nomes como "Winlogon"/"Screen-saver"). Nestes desktops a Desktop
+// Duplication API (DXGI) NÃO entrega conteúdo confiável (frames congelados,
+// timeout eterno ou preto) — o MeshAgent usa captura GDI pura por isso.
+// O caller usa isso para trocar o capturer DXGI→GDI enquanto o desktop
+// seguro estiver ativo.
+func IsSecureDesktop() bool {
+	name := strings.ToLower(CurrentDesktopName())
+	if name == "" {
+		// Sem input desktop acessível (ex.: sessão 0) — assume seguro para
+		// forçar GDI, que é o caminho que funciona via BitBlt no desktop
+		// anexado por SetThreadDesktop.
+		return true
+	}
+	// "default" é o desktop normal do usuário. Qualquer outro nome
+	// (winlogon, screen-saver, etc.) é um desktop seguro.
+	return name != "default"
+}

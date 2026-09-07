@@ -34,6 +34,16 @@ type SessionScreen struct {
 	dirtyDetector *screen.DirtyDetector
 	useDirtyRect  bool // ativado apos primeiro frame completo
 
+	// Troca dinâmica de capturer (padrão MeshAgent): DXGI não captura o
+	// secure desktop (tela de logon/UAC/lock) — entrega frames congelados
+	// ou timeout eterno. Quando o desktop ativo não é o "Default", troca
+	// para GDI (BitBlt funciona em qualquer desktop anexado via
+	// SetThreadDesktop); ao voltar ao Default, restaura DXGI.
+	capturerMu       sync.Mutex
+	monitorIndex     int
+	drawCursor       bool
+	usingGDIFallback bool
+
 	tileMode bool // quando true, envia apenas os tiles alterados (EncodeDirtyRects)
 
 	// Cursor separado: frame não contém cursor; posição/estado via subject .cursor
@@ -87,6 +97,7 @@ func NewSessionScreenMonitor(sessionID string, natsStream *NatsStreamHandler, mo
 	return &SessionScreen{
 		sessionID:       sessionID,
 		capturer:        capturer,
+		monitorIndex:    monitorIndex,
 		encoder:         encoder,
 		natsStream:      natsStream,
 		quality:         &quality,
@@ -108,7 +119,17 @@ func NewSessionScreenMonitor(sessionID string, natsStream *NatsStreamHandler, mo
 // Encode roda em goroutine separada (overlap com captura do proximo frame).
 func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 	defer close(s.doneCh)
-	defer s.capturer.Close()
+	// NOTA: captura o capturer ATUAL no defer — se o loop trocar o capturer
+	// (DXGI↔GDI em troca de desktop), o defer fecharia o capturer ANTIGO e
+	// vazaria o novo. Fecha o capturer vigente no fim do Start.
+	defer func() {
+		s.capturerMu.Lock()
+		c := s.capturer
+		s.capturerMu.Unlock()
+		if c != nil {
+			_ = c.Close()
+		}
+	}()
 
 	_ = screen.DetectGPU()
 
@@ -117,7 +138,7 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 		fps = s.quality.Current().EffectiveFps()
 	}
 
-	log.Printf("[remote-session-screen] Start: fps=%d capturer=%s\n", fps, s.capturer.Name())
+	log.Printf("[remote-session-screen] Start: fps=%d capturer=%s\n", fps, s.currentCapturer().Name())
 
 	// ── Cursor separado (P2): publica posição/estado do cursor quando muda ──
 	if s.cursorSeparate && s.cursorSender != nil {
@@ -245,6 +266,7 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 	var encodeTimeTotal time.Duration
 	var captureMsTotal, dirtyMsTotal, copyMsTotal float64
 	consecutiveIdle := 0
+	consecutiveCaptureFailures := 0
 	curFps := fps
 	loopStart := time.Now()
 
@@ -345,6 +367,14 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 			s.useDirtyRect = false
 		}
 
+		// ── Troca dinâmica DXGI↔GDI (padrão MeshAgent) ──
+		// A Desktop Duplication API (DXGI) NÃO captura o secure desktop
+		// (tela de logon, UAC, lock): entrega frames congelados, timeout
+		// eterno ou preto. O MeshAgent usa GDI puro (GetDC+BitBlt) por isso.
+		// Quando o desktop ativo não é o "Default", troca para GDI; ao
+		// voltar ao Default, restaura o capturer de alta performance.
+		s.ensureCapturerForDesktop()
+
 		// Backpressure: nao captura se encoder estiver ocupado (buffer=1 cheio)
 		if len(encodeChan) >= 1 {
 			time.Sleep(time.Millisecond)
@@ -352,15 +382,33 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 		}
 
 		// ── Capture (timing) ──
+		cap := s.currentCapturer()
 		capStart := time.Now()
-		frame, err := s.capturer.AcquireNextFrame()
+		frame, err := cap.AcquireNextFrame()
 		capMs := float64(time.Since(capStart).Microseconds()) / 1000.0
 		if err != nil {
 			skipped++
 			totalSkipped++
+			// Falhas consecutivas do DXGI (ACCESS_LOST, timeout eterno no
+			// secure desktop): após ~2s sem frame, força fallback para GDI
+			// mesmo que IsSecureDesktop não tenha detectado (ex.: desktop
+			// de logon onde OpenInputDesktop pode falhar).
+			s.capturerMu.Lock()
+			usingGDI := s.usingGDIFallback
+			s.capturerMu.Unlock()
+			if !usingGDI && cap.Name() != "gdi" {
+				consecutiveCaptureFailures++
+				if consecutiveCaptureFailures >= 40 { // ~2s com idleDelay 50ms
+					log.Printf("[remote-session-screen] %d falhas consecutivas de captura (%v) — forçando fallback GDI\n",
+						consecutiveCaptureFailures, err)
+					s.swapCapturer("gdi", "falhas consecutivas de captura")
+					consecutiveCaptureFailures = 0
+				}
+			}
 			time.Sleep(idleDelay)
 			continue
 		}
+		consecutiveCaptureFailures = 0
 		captureMsTotal += capMs
 
 		// ownsFrame indica se o frame atual é um buffer alocado por nós
@@ -375,7 +423,7 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 		if frame.ColorSpace != 0 {
 			tonemapped := screen.ToneMapHDRToSDR(frame)
 			if !ownsFrame {
-				s.capturer.ReleaseFrame()
+				cap.ReleaseFrame()
 			}
 			frame = tonemapped
 			ownsFrame = true
@@ -386,7 +434,7 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 		if scaleFactor > 0 && scaleFactor < 1.0 {
 			resized := screen.ResizeBGRA(frame, scaleFactor)
 			if !ownsFrame {
-				s.capturer.ReleaseFrame()
+				cap.ReleaseFrame()
 			}
 			frame = resized
 			ownsFrame = true
@@ -405,7 +453,7 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 		if len(rects) == 0 && s.useDirtyRect {
 			// Idle: nada mudou
 			if !ownsFrame {
-				s.capturer.ReleaseFrame()
+				cap.ReleaseFrame()
 			}
 			totalIdle++
 			consecutiveIdle++
@@ -429,7 +477,7 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 				Stride: frame.Stride,
 			}
 			copy(frameCopy.Data, frame.Data)
-			s.capturer.ReleaseFrame()
+			cap.ReleaseFrame()
 			frame = frameCopy
 		}
 		copyMs := float64(time.Since(copyStart).Microseconds()) / 1000.0
@@ -491,6 +539,74 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 		}
 		loopStart = time.Now()
 	}
+}
+
+// ensureCapturerForDesktop troca o capturer conforme o desktop ativo:
+//   - Desktop seguro (logon/UAC/lock) → GDI (BitBlt captura qualquer desktop
+//     anexado via SetThreadDesktop; DXGI não captura secure desktop).
+//   - Desktop normal ("Default") → DXGI/go-d3d (dirty rects por hardware,
+//     cursor, performance) — restaurado ao voltar do secure desktop.
+//
+// Base: MeshAgent usa GDI puro (kvm.c) para TODOS os desktops; aqui
+// mantemos DXGI como caminho de performance no desktop normal.
+// Chamar APÓS CheckDesktopSwitch (thread já anexado ao desktop ativo).
+func (s *SessionScreen) ensureCapturerForDesktop() {
+	secure := screen.IsSecureDesktop()
+
+	s.capturerMu.Lock()
+	usingGDI := s.usingGDIFallback
+	s.capturerMu.Unlock()
+
+	if secure && !usingGDI {
+		s.swapCapturer("gdi", "desktop seguro detectado (logon/UAC/lock)")
+	} else if !secure && usingGDI {
+		s.swapCapturer("dxgi", "desktop normal restaurado")
+	}
+}
+
+// swapCapturer troca o capturer ativo fechando o anterior. O novo capturer
+// é criado no thread atual (já anexado ao desktop alvo pelo
+// CheckDesktopSwitch) — LockOSThread dos construtores respeita isso.
+func (s *SessionScreen) swapCapturer(kind, reason string) {
+	s.capturerMu.Lock()
+	old := s.capturer
+	s.capturerMu.Unlock()
+
+	var newCap screen.Capturer
+	var err error
+	if kind == "gdi" {
+		newCap, err = screen.NewGDICapturerMonitor(s.monitorIndex)
+	} else {
+		newCap, err = screen.NewCapturerMode(s.monitorIndex, false)
+	}
+	if err != nil {
+		// Mantém o capturer atual — tenta de novo no próximo ciclo.
+		log.Printf("[remote-session-screen] falha ao trocar capturer para %s (%s): %v\n", kind, reason, err)
+		return
+	}
+
+	if old != nil {
+		_ = old.Close()
+	}
+
+	s.capturerMu.Lock()
+	s.capturer = newCap
+	s.usingGDIFallback = kind == "gdi"
+	s.capturerMu.Unlock()
+
+	// Troca de capturer ⇒ possível mudança de resolução/formato: força key
+	// frame completo para o viewer re-sincronizar.
+	s.dirtyDetector.Reset()
+	s.useDirtyRect = false
+
+	log.Printf("[remote-session-screen] capturer trocado para %s (%s)\n", newCap.Name(), reason)
+}
+
+// currentCapturer retorna o capturer ativo (thread-safe).
+func (s *SessionScreen) currentCapturer() screen.Capturer {
+	s.capturerMu.Lock()
+	defer s.capturerMu.Unlock()
+	return s.capturer
 }
 
 // Stop encerra o loop de captura.

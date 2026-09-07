@@ -29,21 +29,25 @@ var (
 )
 
 const (
-	SM_CXSCREEN = 0
-	SM_CYSCREEN = 1
-	SRCCOPY     = 0x00CC0020
+	SM_CXSCREEN    = 0
+	SM_CYSCREEN    = 1
+	SRCCOPY        = 0x00CC0020
 	DIB_RGB_COLORS = 0
 	BI_RGB         = 0
 )
 
 type gdiCapturer struct {
-	screenDC  uintptr
-	memDC     uintptr
-	memBitmap uintptr
-	width     int
-	height    int
-	offsetX   int // origem do monitor no desktop virtual (multi-monitor)
-	offsetY   int
+	// NÃO guardamos DC/bitmap entre frames: o MeshAgent (tile.cpp
+	// get_desktop_buffer) faz ReleaseDC+GetDC(NULL) a CADA frame justamente
+	// porque o DC fica inválido quando o desktop ativo muda (logon, UAC,
+	// lock). Guardar o DC da criação produzia tela congelada após a troca.
+	// Aqui mantemos apenas a geometria; os GDI objects são criados/liberados
+	// por frame (custo desprezível perto do BitBlt).
+	width        int
+	height       int
+	offsetX      int // origem do monitor no desktop virtual (multi-monitor)
+	offsetY      int
+	monitorIndex int
 }
 
 // NewGDICapturer cria um capturador GDI do monitor primário.
@@ -59,7 +63,6 @@ func NewGDICapturerMonitor(monitorIndex int) (Capturer, error) {
 	// Localiza a região do monitor desejado (0 = primário).
 	mons, err := GetMonitors()
 	if err != nil || len(mons) == 0 {
-		runtime.UnlockOSThread()
 		// Fallback: desktop virtual inteiro
 		return newGDICapturerRegion(0, 0, 0, 0)
 	}
@@ -69,17 +72,18 @@ func NewGDICapturerMonitor(monitorIndex int) (Capturer, error) {
 	}
 	m := mons[monitorIndex]
 
-	c, err := newGDICapturerRegion(m.X, m.Y, m.Width, m.Height)
-	if err != nil {
-		runtime.UnlockOSThread()
-		return nil, err
-	}
-	return c, nil
+	return newGDICapturerRegionIdx(m.X, m.Y, m.Width, m.Height, monitorIndex)
 }
 
 // newGDICapturerRegion cria o capturer GDI capturando a região (offsetX, offsetY, width, height).
 // Se width/height == 0, captura o desktop virtual inteiro.
 func newGDICapturerRegion(offsetX, offsetY, width, height int) (Capturer, error) {
+	return newGDICapturerRegionIdx(offsetX, offsetY, width, height, -1)
+}
+
+// newGDICapturerRegionIdx cria o capturer GDI com índice de monitor para
+// re-detectar a geometria a cada frame (resolução pode mudar).
+func newGDICapturerRegionIdx(offsetX, offsetY, width, height, monitorIndex int) (Capturer, error) {
 	if width <= 0 || height <= 0 {
 		w, _, _ := procGetSystemMetrics.Call(SM_CXSCREEN)
 		h, _, _ := procGetSystemMetrics.Call(SM_CYSCREEN)
@@ -87,39 +91,66 @@ func newGDICapturerRegion(offsetX, offsetY, width, height int) (Capturer, error)
 		offsetX, offsetY = 0, 0
 	}
 
+	// Valida que o DC do desktop é acessível já na criação (erro cedo e
+	// claro em vez de falhar silenciosamente a cada frame).
 	screenDC, _, _ := procGetDC.Call(0)
 	if screenDC == 0 {
+		runtime.UnlockOSThread()
 		return nil, fmt.Errorf("GetDC falhou")
 	}
-
-	memDC, _, _ := procCreateCompatibleDC.Call(screenDC)
-	if memDC == 0 {
-		procReleaseDC.Call(0, screenDC)
-		return nil, fmt.Errorf("CreateCompatibleDC falhou")
-	}
-
-	memBitmap, _, _ := procCreateCompatibleBitmap.Call(screenDC, uintptr(width), uintptr(height))
-	if memBitmap == 0 {
-		procDeleteDC.Call(memDC)
-		procReleaseDC.Call(0, screenDC)
-		return nil, fmt.Errorf("CreateCompatibleBitmap falhou")
-	}
-
-	procSelectObject.Call(memDC, memBitmap)
+	procReleaseDC.Call(0, screenDC)
 
 	return &gdiCapturer{
-		screenDC:  screenDC,
-		memDC:     memDC,
-		memBitmap: memBitmap,
-		width:     width,
-		height:    height,
-		offsetX:   offsetX,
-		offsetY:   offsetY,
+		width:        width,
+		height:       height,
+		offsetX:      offsetX,
+		offsetY:      offsetY,
+		monitorIndex: monitorIndex,
 	}, nil
 }
 
 func (c *gdiCapturer) AcquireNextFrame() (*Frame, error) {
-	r, _, _ := procBitBlt.Call(c.memDC, 0, 0, uintptr(c.width), uintptr(c.height), c.screenDC, uintptr(c.offsetX), uintptr(c.offsetY), SRCCOPY)
+	// ── Padrão MeshAgent (tile.cpp get_desktop_buffer) ──
+	// O DC do desktop é re-adquirido A CADA frame: "We need to do this in
+	// case the current desktop changes". Quando o desktop ativo muda
+	// (logon/UAC/lock), o DC antigo referencia o desktop anterior — BitBlt
+	// continuaria lendo a tela congelada. Com GetDC(NULL) por frame (após o
+	// SetThreadDesktop do CheckDesktopSwitch no loop de captura), o DC
+	// referencia sempre o desktop ATUAL.
+	screenDC, _, _ := procGetDC.Call(0)
+	if screenDC == 0 {
+		return nil, fmt.Errorf("GetDC falhou")
+	}
+	defer procReleaseDC.Call(0, screenDC)
+
+	// Re-detecta a geometria do monitor a cada frame: a resolução pode
+	// mudar (rotação, DPI, monitor reconectado) e o desktop de logon pode
+	// ter geometria diferente do desktop do usuário.
+	if c.monitorIndex >= 0 {
+		if mons, err := GetMonitors(); err == nil && len(mons) > c.monitorIndex {
+			m := mons[c.monitorIndex]
+			if m.Width != c.width || m.Height != c.height || m.X != c.offsetX || m.Y != c.offsetY {
+				c.width, c.height, c.offsetX, c.offsetY = m.Width, m.Height, m.X, m.Y
+			}
+		}
+	}
+
+	memDC, _, _ := procCreateCompatibleDC.Call(screenDC)
+	if memDC == 0 {
+		return nil, fmt.Errorf("CreateCompatibleDC falhou")
+	}
+	defer procDeleteDC.Call(memDC)
+
+	memBitmap, _, _ := procCreateCompatibleBitmap.Call(screenDC, uintptr(c.width), uintptr(c.height))
+	if memBitmap == 0 {
+		return nil, fmt.Errorf("CreateCompatibleBitmap falhou")
+	}
+	defer procDeleteObject.Call(memBitmap)
+
+	oldObj, _, _ := procSelectObject.Call(memDC, memBitmap)
+	defer procSelectObject.Call(memDC, oldObj)
+
+	r, _, _ := procBitBlt.Call(memDC, 0, 0, uintptr(c.width), uintptr(c.height), screenDC, uintptr(c.offsetX), uintptr(c.offsetY), SRCCOPY)
 	if r == 0 {
 		return nil, fmt.Errorf("BitBlt falhou")
 	}
@@ -130,13 +161,13 @@ func (c *gdiCapturer) AcquireNextFrame() (*Frame, error) {
 	// BITMAPINFO header
 	var bi [40]byte
 	bi[0] = 40 // biSize
-	*(*int32)(unsafe.Pointer(&bi[4]))  = int32(c.width)
-	*(*int32)(unsafe.Pointer(&bi[8]))  = -int32(c.height) // negativo = top-down
-	*(*uint16)(unsafe.Pointer(&bi[12])) = 1               // biPlanes
-	*(*uint16)(unsafe.Pointer(&bi[14])) = 32              // biBitCount
+	*(*int32)(unsafe.Pointer(&bi[4])) = int32(c.width)
+	*(*int32)(unsafe.Pointer(&bi[8])) = -int32(c.height) // negativo = top-down
+	*(*uint16)(unsafe.Pointer(&bi[12])) = 1              // biPlanes
+	*(*uint16)(unsafe.Pointer(&bi[14])) = 32             // biBitCount
 	*(*uint32)(unsafe.Pointer(&bi[16])) = BI_RGB
 
-	r, _, _ = procGetDIBits.Call(c.memDC, c.memBitmap, 0, uintptr(c.height),
+	r, _, _ = procGetDIBits.Call(memDC, memBitmap, 0, uintptr(c.height),
 		uintptr(unsafe.Pointer(&frameData[0])),
 		uintptr(unsafe.Pointer(&bi[0])),
 		DIB_RGB_COLORS)
@@ -150,12 +181,10 @@ func (c *gdiCapturer) AcquireNextFrame() (*Frame, error) {
 func (c *gdiCapturer) ReleaseFrame() {}
 
 func (c *gdiCapturer) Close() error {
-	procDeleteObject.Call(c.memBitmap)
-	procDeleteDC.Call(c.memDC)
-	procReleaseDC.Call(0, c.screenDC)
 	runtime.UnlockOSThread()
 	return nil
 }
 
 func (c *gdiCapturer) Name() string { return "gdi" }
+
 var _ Capturer = (*gdiCapturer)(nil)

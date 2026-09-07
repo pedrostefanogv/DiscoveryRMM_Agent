@@ -327,3 +327,27 @@ remotesessionstart via NATS → serviço (sessão 0)
 **Pendente (validação em VM):** tela de logon sem usuário, prompt UAC (secure
 desktop via CheckDesktopSwitch), lock screen, sessão RDP múltipla, kill do
 worker (relançamento pelo serviço em novo start).
+
+### 7.5 Correções de captura no secure desktop (2026-09-07) — base MeshAgent
+
+> Análise direta do código do MeshAgent (`meshcore/KVM/Windows/kvm.c`,
+> `tile.cpp`, `microstack/ILibProcessPipe.c`) revelou 4 divergências que
+> quebravam a captura na tela de logon. Corrigidas e build/testes verdes.
+
+| Problema                                         | Causa raiz                                                                                                                                                                                                                      | Correção                                                                                                                                                                                                                                              |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| DXGI congela/preto na tela de logon              | Desktop Duplication API não captura secure desktop (logon/UAC/lock) — MeshAgent usa **GDI puro** por isso                                                                                                                       | Troca dinâmica DXGI↔GDI no loop de captura (`session_screen.go`): `IsSecureDesktop()` detecta desktop ≠ "Default" → troca para GDI; volta ao "Default" → restaura DXGI. Fallback adicional: 40 falhas consecutivas de captura (~2s) também forçam GDI |
+| Tela congelada após troca de desktop (GDI)       | DC obtido uma única vez na criação do capturer — MeshAgent faz `ReleaseDC`+`GetDC(NULL)` **a cada frame** ("in case the current desktop changes", tile.cpp `get_desktop_buffer`)                                                | `capturer_gdi.go` re-adquire DC + GDI objects por frame; re-detecta geometria do monitor por frame (resolução pode mudar no logon)                                                                                                                    |
+| Spawn winlogon frágil                            | Duplicação do token do processo winlogon depende de direitos que podem falhar; MeshAgent usa o **próprio token SYSTEM do serviço** + `SetTokenInformation(TokenSessionId)` + `lpDesktop="Winsta0\Winlogon"` (ILibProcessPipe.c) | `remote_session_worker_spawn.go`: `systemTokenForSession()` duplica o token do serviço com `MAXIMUM_ALLOWED`, ajusta a sessão via `SetTokenInformation(TokenSessionId)`, e o spawn usa `lpDesktop` explícito. Token do winlogon mantido como fallback |
+| Vazamento de `LockOSThread` na troca de capturer | `dxgiGoD3dCapturer.Close()` não balanceava o `LockOSThread` do construtor — inofensivo antes (capturer único), acumula com trocas dinâmicas                                                                                     | `Close()` agora chama `UnlockOSThread()`; `Start` fecha o capturer **vigente** no fim (defer avaliava o capturer antigo)                                                                                                                              |
+
+**Arquivos alterados:**
+
+- `src/app/core/screen/desktop_switch.go` — novo `IsSecureDesktop()`
+- `src/app/core/screen/capturer_gdi.go` — DC por frame + geometria dinâmica
+- `src/app/core/screen/capturer_dxgi_god3d.go` — `Close()` balanceia OSThread lock
+- `src/app/core/remotesession/session_screen.go` — troca dinâmica DXGI↔GDI
+  (`ensureCapturerForDesktop`/`swapCapturer`), fallback por falhas
+  consecutivas, acesso thread-safe ao capturer
+- `src/app/remote_session_worker_spawn.go` — `systemTokenForSession()`
+  (padrão MeshAgent SpawnTypes_WINLOGON)

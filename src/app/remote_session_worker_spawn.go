@@ -309,7 +309,11 @@ func writeWorkerPayload(w *remoteSessionWorkerProc, payload map[string]any) erro
 
 // acquireInteractiveSessionToken obtém um token primário da sessão interativa:
 // primeiro tenta o usuário logado (WTSQueryUserToken da sessão do console);
-// sem usuário, usa o token do processo winlogon dessa sessão (tela de logon).
+// sem usuário, usa o token do próprio serviço (SYSTEM) com a sessão ajustada
+// via SetTokenInformation(TokenSessionId) — padrão MeshAgent
+// (ILibProcessPipe.c SpawnTypes_WINLOGON), que NÃO duplica o token do
+// processo winlogon: o token SYSTEM do serviço já tem acesso ao desktop
+// winsta0\winlogon, e o lpDesktop do STARTUPINFO direciona o filho para lá.
 func acquireInteractiveSessionToken() (windows.Token, string, error) {
 	consoleSession := windows.WTSGetActiveConsoleSessionId()
 	if consoleSession == 0xFFFFFFFF {
@@ -321,11 +325,67 @@ func acquireInteractiveSessionToken() (windows.Token, string, error) {
 		return tok, "user-session", nil
 	}
 
-	// 2) Sem usuário: token do winlogon da sessão do console (desktop de logon).
+	// 2) Sem usuário: token do próprio serviço (SYSTEM) com sessão do
+	// console (padrão MeshAgent SpawnTypes_WINLOGON). O filho roda como
+	// SYSTEM na sessão do console com lpDesktop="winsta0\winlogon" —
+	// captura a tela de logon e injeta input no desktop de logon.
+	if tok, err := systemTokenForSession(consoleSession); err == nil {
+		return tok, "winlogon", nil
+	}
+
+	// 3) Fallback: token do processo winlogon da sessão do console (caminho
+	// anterior — menos confiável: depende de direitos de duplicação sobre o
+	// processo winlogon, mas cobre casos onde SetTokenInformation falha).
 	if tok, err := tokenFromWinlogon(consoleSession); err == nil {
 		return tok, "winlogon", nil
 	}
-	return 0, "", fmt.Errorf("sessão %d sem usuário e sem token winlogon", consoleSession)
+	return 0, "", fmt.Errorf("sessão %d sem usuário e sem token SYSTEM disponível", consoleSession)
+}
+
+// systemTokenForSession duplica o token do processo atual (SYSTEM, quando
+// chamado pelo serviço) e ajusta a sessão via SetTokenInformation —
+// equivalente ao caminho WINLOGON do ILibProcessPipe.c do MeshAgent:
+//
+//	OpenProcessToken(GetCurrentProcess(), TOKEN_DUPLICATE, &token)
+//	DuplicateTokenEx(token, MAXIMUM_ALLOWED, ..., TokenPrimary, &userToken)
+//	SetTokenInformation(userToken, TokenSessionId, &sessionId, ...)
+//	info.lpDesktop = L"Winsta0\\Winlogon"
+//	CreateProcessAsUserW(userToken, ...)
+func systemTokenForSession(sessionID uint32) (windows.Token, error) {
+	cur, err := windows.GetCurrentProcess()
+	if err != nil {
+		return 0, fmt.Errorf("GetCurrentProcess: %w", err)
+	}
+	defer windows.CloseHandle(cur)
+
+	var tok windows.Token
+	if err := windows.OpenProcessToken(cur, windows.TOKEN_DUPLICATE|windows.TOKEN_QUERY, &tok); err != nil {
+		return 0, fmt.Errorf("OpenProcessToken(self): %w", err)
+	}
+	defer tok.Close()
+
+	var dup windows.Token
+	if err := windows.DuplicateTokenEx(tok,
+		windows.MAXIMUM_ALLOWED,
+		nil, windows.SecurityImpersonation, windows.TokenPrimary, &dup); err != nil {
+		return 0, fmt.Errorf("DuplicateTokenEx(self): %w", err)
+	}
+
+	// Ajusta a sessão do token duplicado para a sessão do console. Requer
+	// TOKEN_ADJUST_SESSIONID (incluído em MAXIMUM_ALLOWED) — disponível para
+	// SYSTEM. Sem isso o filho rodaria na sessão 0 (sem desktop).
+	sid := sessionID
+	var sidBytes [4]byte
+	sidBytes[0] = byte(sid)
+	sidBytes[1] = byte(sid >> 8)
+	sidBytes[2] = byte(sid >> 16)
+	sidBytes[3] = byte(sid >> 24)
+	if err := windows.SetTokenInformation(dup, windows.TokenSessionId,
+		(*byte)(unsafe.Pointer(&sidBytes[0])), uint32(len(sidBytes))); err != nil {
+		dup.Close()
+		return 0, fmt.Errorf("SetTokenInformation(TokenSessionId=%d): %w", sessionID, err)
+	}
+	return dup, nil
 }
 
 // wtsQueryUserToken via wtsapi32.WTSQueryUserToken.

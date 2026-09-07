@@ -234,6 +234,10 @@ func (c *dxgiGoD3dCapturer) Close() error {
 		c.deviceCtx.Release()
 		c.deviceCtx = nil
 	}
+	// Balanceia o LockOSThread do construtor — essencial quando o capturer
+	// é trocado dinamicamente (DXGI↔GDI em troca de desktop): sem isso, cada
+	// troca deixaria um lock residual no thread do loop de captura.
+	runtime.UnlockOSThread()
 	return nil
 }
 
