@@ -445,7 +445,14 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 		dirtyMs := float64(time.Since(dirtyStart).Microseconds()) / 1000.0
 		dirtyMsTotal += dirtyMs
 
-		if len(rects) == 0 && s.useDirtyRect {
+		// Keyframe solicitado (viewer voltou a ficar visível): NÃO pula o frame
+		// mesmo com dirty rects vazio — se a tela remota estiver parada, é o
+		// único jeito de redesenhar o canvas do viewer (que pode ter sido
+		// descartado pelo browser). O flag é consumido mais abaixo, ao montar
+		// o job de encode como frame completo.
+		keyframePending := s.forceKeyFrame.Load()
+
+		if len(rects) == 0 && s.useDirtyRect && !keyframePending {
 			// Idle: nada mudou
 			if !ownsFrame {
 				cap.ReleaseFrame()
