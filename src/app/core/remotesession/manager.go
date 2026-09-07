@@ -505,6 +505,22 @@ func (m *Manager) runScreenSession(ctx context.Context, session *Session) {
 		defer inputSub.Unsubscribe()
 	}
 
+	// Subscreve canal de controle do viewer (.control): ações como
+	// "keyframe" (viewer voltou a ficar visível e precisa da tela completa).
+	controlSub, cerr := m.natsStream.SubscribeToControl(session.ID, func(action string, _ json.RawMessage) {
+		switch action {
+		case "keyframe":
+			screenSession.RequestKeyFrame()
+		default:
+			log.Printf("[remote-session-screen] ação de controle desconhecida: %s", action)
+		}
+	})
+	if cerr != nil {
+		log.Printf("[remote-session-screen] ERRO ao subscrever control: %v", cerr)
+	} else {
+		defer controlSub.Unsubscribe()
+	}
+
 	// ── Clipboard (somente texto, bidirecional) ──
 	// viewer→agent: o viewer publica o texto em .clipboard.req; o agent aplica
 	//   no clipboard do Windows (SetClipboardText) e injeta Ctrl+V para colar.

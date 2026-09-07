@@ -19,11 +19,20 @@ type QualityConfig struct {
 }
 
 // EffectiveJpegQuality retorna a qualidade JPEG efetiva (override ou perfil).
+// Sempre dentro do range 10-90: perfis que excedem o teto (ultra=92) são
+// reportados como 90, alinhando o valor exibido/efetivo às opções da UI.
 func (qc QualityConfig) EffectiveJpegQuality() int {
-	if qc.overrideImageQ > 0 {
-		return qc.overrideImageQ
+	q := qc.overrideImageQ
+	if q <= 0 {
+		q = qc.JpegQuality
 	}
-	return qc.JpegQuality
+	if q > imageQualityMax {
+		q = imageQualityMax
+	}
+	if q < imageQualityMin {
+		q = imageQualityMin
+	}
+	return q
 }
 
 // EffectiveFps retorna o FPS efetivo (override ou perfil).
@@ -145,8 +154,9 @@ func (qm *QualityManager) SetImageQuality(q int) {
 	qm.current.overrideImageQ = q
 }
 
-// SetImageQualityAuto aplica a qualidade do perfil em modo AUTOMÁTICO, sem
-// o clamp manual de 10-90 (perfis legítimos: ultralow=25 … ultra=92).
+// SetImageQualityAuto aplica a qualidade do perfil em modo AUTOMÁTICO,
+// clampeada ao MESMO range das opções manuais (10-90). Perfis que excedem o
+// teto (ex.: ultra=92) são ajustados para 90 — mantém consistência com a UI.
 // NÃO altera o modo manual — o caller controla isso via SetManualMode.
 func (qm *QualityManager) SetImageQualityAuto(q int) {
 	qm.mu.Lock()
@@ -155,8 +165,11 @@ func (qm *QualityManager) SetImageQualityAuto(q int) {
 		qm.current.overrideImageQ = 0
 		return
 	}
-	if q > 100 {
-		q = 100
+	if q > imageQualityMax {
+		q = imageQualityMax
+	}
+	if q < imageQualityMin {
+		q = imageQualityMin
 	}
 	qm.current.overrideImageQ = q
 }

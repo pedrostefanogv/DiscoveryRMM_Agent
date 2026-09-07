@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"discovery/app/core/screen"
@@ -33,6 +34,12 @@ type SessionScreen struct {
 	// Dirty rect detection
 	dirtyDetector *screen.DirtyDetector
 	useDirtyRect  bool // ativado apos primeiro frame completo
+
+	// forceKeyFrame: quando true, o próximo frame capturado é enviado COMPLETO
+	// (key frame), ignorando dirty rects/tiles. Usado quando o viewer volta a
+	// ficar visível (troca de aba do navegador) — o canvas pode ter sido limpo
+	// e o viewer precisa da tela inteira para redesenhar sem esperar mudanças.
+	forceKeyFrame atomic.Bool
 
 	// Capturer: GDI é o PRIMÁRIO (padrão MeshAgent — funciona em qualquer
 	// desktop, incluindo logon/UAC/lock, e em VMs sem GPU). DXGI é apenas
@@ -476,8 +483,14 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 		// KEY FRAME: o primeiro frame (ou quando o rect cobre a tela toda)
 		// é enviado como frame COMPLETO (não tile) para o viewer ter a base.
 		// Sem isso, o viewer fica com tela preta até a primeira mudança.
+		// RequestKeyFrame (viewer voltou a ficar visível) também força completo.
 		var jobRects []screen.DirtyRect
 		fullFrame := !s.useDirtyRect // primeiro frame = key frame
+		if s.forceKeyFrame.CompareAndSwap(true, false) {
+			fullFrame = true
+			// Remove tiles/dirty rects pendentes — o frame vai inteiro.
+			jobRects = nil
+		}
 		if s.tileMode && len(rects) > 0 && !fullFrame {
 			// Tile-mode: envia apenas os rects alterados (economia de banda).
 			// Se o rect cobre ~100% da tela, envia como frame completo também
@@ -585,6 +598,15 @@ func (s *SessionScreen) swapCapturer(kind, reason string) {
 	s.useDirtyRect = false
 
 	log.Printf("[remote-session-screen] capturer trocado para %s (%s)\n", newCap.Name(), reason)
+}
+
+// RequestKeyFrame força o próximo frame a ser enviado completo (key frame).
+// Chamado quando o viewer volta a ficar visível (ex.: usuário retorna à aba
+// do navegador) — o canvas pode ter sido descartado pelo browser e sem isso
+// a tela ficaria preta até a próxima mudança de pixels na máquina remota.
+func (s *SessionScreen) RequestKeyFrame() {
+	s.forceKeyFrame.Store(true)
+	log.Printf("[remote-session-screen] keyframe solicitado pelo viewer (sessionId=%s)\n", s.sessionID)
 }
 
 // currentCapturer retorna o capturer ativo (thread-safe).
