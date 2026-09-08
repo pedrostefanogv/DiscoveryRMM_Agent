@@ -49,21 +49,32 @@ func collectPhysicalDisksWMI() []models.DiskInfo {
 // (SSD/HDD) by joining Win32_DiskDrive with Win32_LogicalDiskToPartition
 // and Win32_LogicalDisk.
 func collectDiskMediaTypesWMI() map[string]string {
-	// Map physical disk index -> media type.
+	mediaByIndex := make(map[string]string)
 	diskRows, err := wmiQuery(wmiNamespace, "SELECT Index, MediaType FROM Win32_DiskDrive")
-	if err != nil {
-		return nil
-	}
-	mediaByIndex := make(map[string]string, len(diskRows))
-	for _, row := range diskRows {
-		idx := wmiString(row, "Index")
-		mt := wmiString(row, "MediaType")
-		if idx != "" && mt != "" {
-			mediaByIndex[idx] = mt
+	if err == nil {
+		for _, row := range diskRows {
+			idx := wmiString(row, "Index")
+			mt := wmiString(row, "MediaType")
+			if idx != "" && mt != "" {
+				mediaByIndex[idx] = mt
+			}
 		}
 	}
 
-	// Map drive letter -> disk index via Win32_LogicalDiskToPartition.
+	letterToIndex := driveLetterToDiskIndexWMI()
+
+	result := make(map[string]string)
+	for letter, idx := range letterToIndex {
+		if mt, ok := mediaByIndex[idx]; ok {
+			result[letter] = mt
+		}
+	}
+	return result
+}
+
+// driveLetterToDiskIndexWMI returns a map of drive letter (e.g. "C:") ->
+// physical disk index (as string, e.g. "0") via Win32_LogicalDiskToPartition.
+func driveLetterToDiskIndexWMI() map[string]string {
 	partRows, err := wmiQuery(wmiNamespace, "SELECT Antecedent, Dependent FROM Win32_LogicalDiskToPartition")
 	if err != nil {
 		return nil
@@ -80,14 +91,7 @@ func collectDiskMediaTypesWMI() map[string]string {
 			letterToIndex[letter] = diskIdx
 		}
 	}
-
-	result := make(map[string]string)
-	for letter, idx := range letterToIndex {
-		if mt, ok := mediaByIndex[idx]; ok {
-			result[letter] = mt
-		}
-	}
-	return result
+	return letterToIndex
 }
 
 // extractDiskIndex parses a WMI reference like

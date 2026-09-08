@@ -123,5 +123,44 @@ if ($result.Count -eq 0) { '[]' } else { $result | ConvertTo-Json -Depth 2 -Comp
 		}
 	}
 
-	return result
+        // Fallback: Get-StorageReliabilityCounter requer privilégios admin/CIM e
+        // falha silenciosamente quando o agente roda sem elevação, deixando
+        // PowerOnHours zerado. Nesse caso, ler o atributo SMART 9 (power-on
+        // hours) diretamente via DeviceIoControl em \\.\PhysicalDriveN, que
+        // funciona sem admin na maioria das configurações.
+        needIoctlFallback := false
+        for _, sh := range result {
+                if sh.PowerOnHours <= 0 {
+                        needIoctlFallback = true
+                        break
+                }
+        }
+        if needIoctlFallback {
+                letterToIndex := driveLetterToDiskIndexWMI()
+                hoursByIndex := collectSmartPowerOnHoursWMICompat()
+                for letter, sh := range result {
+                        if sh.PowerOnHours > 0 {
+                                continue
+                        }
+                        if idxStr, ok := letterToIndex[letter]; ok {
+                                idx := 0
+                                for _, c := range idxStr {
+                                        if c < '0' || c > '9' {
+                                                idx = -1
+                                                break
+                                        }
+                                        idx = idx*10 + int(c-'0')
+                                }
+                                if idx >= 0 {
+                                        if h, ok := hoursByIndex[idx]; ok && h > 0 {
+                                                sh.PowerOnHours = h
+                                                result[letter] = sh
+                                        }
+                                }
+                        }
+                }
+        }
+
+        return result
 }
+
