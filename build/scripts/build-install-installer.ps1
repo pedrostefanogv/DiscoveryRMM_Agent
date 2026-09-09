@@ -155,6 +155,32 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "Falha no go build (exit code: $LASTEXITCODE)"
     }
+
+    # Build do binário dedicado do serviço Windows
+    # (PLANO_SEPARACAO_SERVICO_UI.md, Fase B/D1 — cmd/discovery-service).
+    # Sem este binário o instalador NSIS registra um serviço apontando para
+    # discovery-service.exe inexistente e o `sc start` falha com erro 2.
+    Write-Output "  Build do binário do serviço (discovery-service.exe)..."
+    $serviceExe = Join-Path $binDir "discovery-service.exe"
+    $serviceLdflags = @("-w", "-s")
+    if ($Version -ne "") {
+        $serviceLdflags += "-X discovery/app/core/buildinfo.Version=$Version"
+    }
+    if ($gitCommit) {
+        $serviceLdflags += "-X discovery/app/core/buildinfo.Commit=$gitCommit"
+    }
+    $serviceBuildArgs = @(
+        "build",
+        "-trimpath",
+        "-buildvcs=false",
+        "-ldflags", ($serviceLdflags -join ' '),
+        "-o", $serviceExe,
+        "./cmd/discovery-service"
+    )
+    & go @serviceBuildArgs
+    if ($LASTEXITCODE -ne 0) {
+        throw "Falha no go build do discovery-service (exit code: $LASTEXITCODE)"
+    }
 }
 finally {
     if ($rcPath -and (Test-Path $rcPath)) {
@@ -168,6 +194,9 @@ finally {
 
 if (-not (Test-Path $agentExe)) {
     throw "Binário do agente não foi gerado: $agentExe"
+}
+if (-not (Test-Path $serviceExe)) {
+    throw "Binário do serviço não foi gerado: $serviceExe"
 }
 # Generate agent-version.json for API post-build commit resolution
 $agentVersionJson = Join-Path $binDir "agent-version.json"
@@ -195,6 +224,7 @@ $nsisArgs = @(
     "/INPUTCHARSET",
     "UTF8",
     "/DARG_WAILS_AMD64_BINARY=$agentExe",
+    "/DARG_SERVICE_AMD64_BINARY=$serviceExe",
     "/DARG_OUTFILE_NAME=$OutputName",
     "/DARG_DEFAULT_DISCOVERY=$AutoProvisioning"
 )

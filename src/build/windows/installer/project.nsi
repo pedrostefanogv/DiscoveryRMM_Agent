@@ -1257,15 +1257,27 @@ FunctionEnd
 
 Function UnregisterUIStartupTask
    DetailPrint "Removendo tarefa de autostart da UI (${DISCOVERY_UI_TASK_NAME})"
-   nsExec::ExecToLog /OEM '"$SYSDIR\schtasks.exe" /Delete /TN "${DISCOVERY_UI_TASK_NAME}" /F'
+   # Só deleta se a task existir (schtasks /Delete em task inexistente imprime
+   # "ERRO: O sistema não pode encontrar o arquivo especificado").
+   # nsExec::Exec (sem ToLog) suprime a saída do Query.
+   nsExec::Exec '"$SYSDIR\schtasks.exe" /Query /TN "${DISCOVERY_UI_TASK_NAME}"'
    Pop $R0
+   ${If} $R0 == 0
+      nsExec::ExecToLog /OEM '"$SYSDIR\schtasks.exe" /Delete /TN "${DISCOVERY_UI_TASK_NAME}" /F'
+      Pop $R0
+   ${EndIf}
    Delete "$SMSTARTUP\${INFO_PRODUCTNAME}.lnk"
 FunctionEnd
 
 Function un.UnregisterUIStartupTask
    DetailPrint "Removendo tarefa de autostart da UI (${DISCOVERY_UI_TASK_NAME})"
-   nsExec::ExecToLog /OEM '"$SYSDIR\schtasks.exe" /Delete /TN "${DISCOVERY_UI_TASK_NAME}" /F'
+   # Só deleta se a task existir (mesma proteção da variante install).
+   nsExec::Exec '"$SYSDIR\schtasks.exe" /Query /TN "${DISCOVERY_UI_TASK_NAME}"'
    Pop $R0
+   ${If} $R0 == 0
+      nsExec::ExecToLog /OEM '"$SYSDIR\schtasks.exe" /Delete /TN "${DISCOVERY_UI_TASK_NAME}" /F'
+      Pop $R0
+   ${EndIf}
    Delete "$SMSTARTUP\${INFO_PRODUCTNAME}.lnk"
 FunctionEnd
 
@@ -1276,6 +1288,16 @@ FunctionEnd
 # antes do serviço parar de fato — sem wait, o rename .bak_update falha com
 # o .exe carregado e o taskkill sem sc stop dispara o restart em ~5s).
 Function StopAndWaitAgentService
+   # Fast-path: se o serviço não existe (sc query -> 1060), sai sem esperar.
+   # Instalação sem o binário do serviço não deve gastar 30s no loop nem
+   # poluir o log com o dump do help do sc ("opção inválida").
+   nsExec::ExecToLog /OEM '"$SYSDIR\sc.exe" query ${DISCOVERY_SERVICE_NAME}'
+   Pop $R2
+   ${If} $R2 == 1060
+      DetailPrint "Serviço ${DISCOVERY_SERVICE_NAME} não existe — nada a parar"
+      Goto svc_wait_done
+   ${EndIf}
+
    nsExec::ExecToLog /OEM '"$SYSDIR\sc.exe" stop ${DISCOVERY_SERVICE_NAME}'
    Pop $R0
 
@@ -1285,7 +1307,9 @@ Function StopAndWaitAgentService
          DetailPrint "Aviso: serviço ${DISCOVERY_SERVICE_NAME} não parou em 30s — prosseguindo"
          Goto svc_wait_done
       ${EndIf}
-      nsExec::ExecToLog /OEM '"$SYSDIR\sc.exe" query ${DISCOVERY_SERVICE_NAME} | "$SYSDIR\find.exe" "STOPPED"'
+      # O pipe precisa do cmd.exe: nsExec não interpreta pipes de shell e o sc
+      # receberia "|" como opção inválida (dump do help no log a cada iteração).
+      nsExec::ExecToLog /OEM '"$SYSDIR\cmd.exe" /c sc.exe query ${DISCOVERY_SERVICE_NAME} | "$SYSDIR\find.exe" "STOPPED"'
       Pop $R2
       ${If} $R2 == 0
          DetailPrint "Serviço ${DISCOVERY_SERVICE_NAME} STOPPED"
@@ -1300,6 +1324,14 @@ FunctionEnd
 # RegisterAgentService: cria/inicia o serviço do core do agent.
 Function RegisterAgentService
    DetailPrint "Registrando serviço ${DISCOVERY_SERVICE_NAME}..."
+
+   # Guarda: só registra se o binário dedicado do serviço foi copiado para
+   # $INSTDIR. Builds do pipeline PS (sem /DARG_SERVICE_AMD64_BINARY) não
+   # embutem discovery-service.exe — registrar um serviço apontando para
+   # binário inexistente faz o `sc start` falhar com erro 2 (file not found)
+   # e deixa um serviço quebrado no SCM. Sem o serviço, a UI sobe standalone
+   # via Task Scheduler (fallback já existente).
+   IfFileExists "$INSTDIR\${SERVICE_EXECUTABLE}" 0 register_agent_svc_skip
 
    # Idempotente: remove definição anterior se existir.
    nsExec::ExecToLog /OEM '"$SYSDIR\sc.exe" stop ${DISCOVERY_SERVICE_NAME}'
@@ -1335,6 +1367,14 @@ Function RegisterAgentService
 
    nsExec::ExecToLog /OEM '"$SYSDIR\sc.exe" start ${DISCOVERY_SERVICE_NAME}'
    Pop $R0
+   ${If} $R0 != 0
+      ${InstallerLog} "Aviso: sc start ${DISCOVERY_SERVICE_NAME} falhou (codigo $R0) — serviço iniciara no proximo boot; UI segue via Task Scheduler"
+   ${EndIf}
+
+   Goto register_agent_svc_done
+   register_agent_svc_skip:
+      ${InstallerLog} "Aviso: $INSTDIR\${SERVICE_EXECUTABLE} ausente — serviço não registrado; agente seguirá em modo standalone via Task Scheduler"
+   register_agent_svc_done:
 FunctionEnd
 
 # un.UnregisterAgentService: para e remove o serviço no uninstall.
@@ -1347,6 +1387,13 @@ FunctionEnd
 
 # un.StopAndWaitAgentService: variante uninstaller de StopAndWaitAgentService.
 Function un.StopAndWaitAgentService
+   # Fast-path: serviço inexistente (sc query -> 1060) sai sem esperar.
+   nsExec::ExecToLog /OEM '"$SYSDIR\sc.exe" query ${DISCOVERY_SERVICE_NAME}'
+   Pop $R2
+   ${If} $R2 == 1060
+      Goto un_svc_wait_done
+   ${EndIf}
+
    nsExec::ExecToLog /OEM '"$SYSDIR\sc.exe" stop ${DISCOVERY_SERVICE_NAME}'
    Pop $R0
    StrCpy $R1 0
@@ -1354,7 +1401,8 @@ Function un.StopAndWaitAgentService
       ${If} $R1 >= 30
          Goto un_svc_wait_done
       ${EndIf}
-      nsExec::ExecToLog /OEM '"$SYSDIR\sc.exe" query ${DISCOVERY_SERVICE_NAME} | "$SYSDIR\find.exe" "STOPPED"'
+      # Pipe precisa de cmd.exe (nsExec não interpreta pipes de shell).
+      nsExec::ExecToLog /OEM '"$SYSDIR\cmd.exe" /c sc.exe query ${DISCOVERY_SERVICE_NAME} | "$SYSDIR\find.exe" "STOPPED"'
       Pop $R2
       ${If} $R2 == 0
          Goto un_svc_wait_done
