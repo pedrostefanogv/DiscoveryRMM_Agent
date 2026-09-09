@@ -22,7 +22,7 @@ func (a *App) CleanupExpiredP2PTempArtifacts(now time.Time) (int, error) {
 
 // Log expõe logs.append via interface.
 func (a *App) Log(line string) {
-	a.logs.append(line)
+	a.Logs.Append(line)
 }
 
 // GetHeartbeatMetrics expõe getHeartbeatMetrics via interface.
@@ -37,7 +37,7 @@ func (a *App) Context() context.Context {
 
 // DebugMode expõe runtimeFlags.DebugMode via interface.
 func (a *App) DebugMode() bool {
-	return a.runtimeFlags.DebugMode
+	return a.RuntimeFlags.DebugMode
 }
 
 // RequestProvisioningToken expõe requestProvisioningToken via interface.

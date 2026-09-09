@@ -50,6 +50,7 @@ Unicode true
 !endif
 !define INFO_COPYRIGHT      "Copyright (c) 2026 Discovery"
 !define PRODUCT_EXECUTABLE  "discovery-agent.exe"
+!define SERVICE_EXECUTABLE  "discovery-service.exe"
 !define LEGACY_PRODUCT_EXECUTABLE "discovery.exe"
 !define UNINST_KEY_NAME     "Discovery.RMM"
 !define DISCOVERY_UI_TASK_NAME "DiscoveryAgentUI"
@@ -712,6 +713,13 @@ Section "uninstall"
       DetailPrint "Aviso: taskkill retornou codigo $R0 (pode nao haver processo em execucao)."
    ${EndIf}
 
+   ; Binário dedicado do serviço (Fase B/D1) — após un.StopAndWaitAgentService.
+   nsExec::ExecToLog /OEM '"$SYSDIR\taskkill.exe" /IM "${SERVICE_EXECUTABLE}" /F /T'
+   Pop $R6
+   ${If} $R6 != 0
+      DetailPrint "Aviso: taskkill do serviço retornou codigo $R6 (pode nao haver processo)."
+   ${EndIf}
+
    ${If} "${LEGACY_PRODUCT_EXECUTABLE}" != "${PRODUCT_EXECUTABLE}"
       nsExec::ExecToLog /OEM '"$SYSDIR\taskkill.exe" /IM "${LEGACY_PRODUCT_EXECUTABLE}" /F /T'
       Pop $R1
@@ -1119,6 +1127,14 @@ Function PrepareForInPlaceUpdate
       ${InstallerLog} "taskkill ${PRODUCT_EXECUTABLE}: processo encerrado"
    ${EndIf}
 
+   ; Binário dedicado do serviço (Fase B/D1): após sc stop + wait STOPPED,
+   ; mata qualquer residual do discovery-service.exe antes de sobrescrever.
+   nsExec::ExecToLog /OEM '"$SYSDIR\taskkill.exe" /IM "${SERVICE_EXECUTABLE}" /F'
+   Pop $R5
+   ${If} $R5 != 0
+      ${InstallerLog} "taskkill ${SERVICE_EXECUTABLE}: codigo $R5 (pode nao haver processo)"
+   ${EndIf}
+
    ${If} "${LEGACY_PRODUCT_EXECUTABLE}" != "${PRODUCT_EXECUTABLE}"
       nsExec::ExecToLog /OEM '"$SYSDIR\taskkill.exe" /IM "${LEGACY_PRODUCT_EXECUTABLE}" /F /T'
       Pop $R1
@@ -1298,14 +1314,12 @@ Function RegisterAgentService
    # relatado em produção: agente em modo interface primeiro, serviço depois.
    # O startup interno do agente é staged/desacoplado, então não há risco de
    # competir com serviços críticos do Windows.
-   nsExec::ExecToLog /OEM '"$SYSDIR\sc.exe" create ${DISCOVERY_SERVICE_NAME} binPath= "\"$INSTDIR\${PRODUCT_EXECUTABLE}\" --service" start= auto obj= LocalSystem DisplayName= "Discovery Agent Service"'
+   nsExec::ExecToLog /OEM '"$SYSDIR\sc.exe" create ${DISCOVERY_SERVICE_NAME} binPath= "\"$INSTDIR\${SERVICE_EXECUTABLE}\"" start= auto obj= LocalSystem DisplayName= "Discovery Agent Service"'
    Pop $R0
    ${If} $R0 != 0
-      # Se o create falhar porque o serviço ainda existe (delete pendente do
-      # stop acima, ou serviço já instalado em versão anterior), garantir que
-      # o start type seja auto via config — corrige instalações antigas que
-      # foram criadas com delayed-auto (anterior ao ajuste de 2026-09-07).
-      nsExec::ExecToLog /OEM '"$SYSDIR\sc.exe" config ${DISCOVERY_SERVICE_NAME} start= auto'
+      # Serviço legado apontando para o binário UI (--service): atualiza o
+      # binPath para o binário dedicado do serviço (Fase B/D1 do plano).
+      nsExec::ExecToLog /OEM '"$SYSDIR\sc.exe" config ${DISCOVERY_SERVICE_NAME} binPath= "\"$INSTDIR\${SERVICE_EXECUTABLE}\"" start= auto'
       Pop $R0
       ${If} $R0 != 0
          DetailPrint "Aviso: sc create/config falhou (codigo $R0) — agente seguirá em modo standalone via Task"

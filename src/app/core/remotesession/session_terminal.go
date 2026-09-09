@@ -56,8 +56,8 @@ type outputCoalescer struct {
 
 	// Segmentation ANSI — número de ticks consecutivos adiados por sequência
 	// ANSI incompleta. Limita a retenção do buffer a poucos intervalos.
-	deferCount     int
-	maxAnsiDefer   int
+	deferCount   int
+	maxAnsiDefer int
 }
 
 func newOutputCoalescer(onFlush func(string), interval time.Duration) *outputCoalescer {

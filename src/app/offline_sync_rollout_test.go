@@ -10,6 +10,7 @@ import (
 
 	"discovery/app/agentconfig"
 	"discovery/app/core/database"
+	"discovery/app/coreagent"
 	debugsvc "discovery/app/debug"
 	"discovery/app/p2p"
 	syncsvc "discovery/app/sync"
@@ -27,12 +28,12 @@ func newOfflineSyncTestApp(t *testing.T, rollout agentconfig.AgentRolloutConfig)
 	})
 
 	a := &App{
-		db:          db,
-		agentConfig: agentconfig.AgentConfiguration{Rollout: rollout},
+		CoreAgent: coreagent.CoreAgent{DB: db},
 	}
-	a.debugSvc = debugsvc.NewService(debugsvc.Options{})
-	a.debugSvc.ApplyRuntimeConnectionConfig("https", "example.local", "token", "agent-1", "", "")
-	a.syncSvc = syncsvc.NewService(a)
+	a.CoreAgent.AgentConfig = agentconfig.AgentConfiguration{Rollout: rollout}
+	a.DebugSvc = debugsvc.NewService(debugsvc.Options{})
+	a.DebugSvc.ApplyRuntimeConnectionConfig("https", "example.local", "token", "agent-1", "", "")
+	a.SyncSvc = syncsvc.NewService(a)
 	return a
 }
 
@@ -42,7 +43,7 @@ func TestCommandResultOutboxLoggingOnlySkipsEnqueue(t *testing.T) {
 	if err := a.enqueueCommandResultOutbox("nats-wss", "", "cmd-1", 0, "ok", "", "network error"); err != nil {
 		t.Fatalf("enqueue command result outbox: %v", err)
 	}
-	pending, err := a.db.CountPendingCommandResultOutbox("agent-1")
+	pending, err := a.CoreAgent.DB.CountPendingCommandResultOutbox("agent-1")
 	if err != nil {
 		t.Fatalf("count pending command results: %v", err)
 	}
@@ -57,7 +58,7 @@ func TestCommandResultOutboxEnqueueOnlySkipsDrain(t *testing.T) {
 	if err := a.enqueueCommandResultOutbox("nats-wss", "", "cmd-1", 0, "ok", "", "network error"); err != nil {
 		t.Fatalf("enqueue command result outbox: %v", err)
 	}
-	pending, err := a.db.CountPendingCommandResultOutbox("agent-1")
+	pending, err := a.CoreAgent.DB.CountPendingCommandResultOutbox("agent-1")
 	if err != nil {
 		t.Fatalf("count pending command results: %v", err)
 	}
@@ -80,7 +81,7 @@ func TestP2PTelemetryOutboxLoggingOnlySkipsEnqueue(t *testing.T) {
 	if err := a.enqueueP2PTelemetryOutbox(payload, errors.New("offline")); err != nil {
 		t.Fatalf("enqueue p2p telemetry outbox: %v", err)
 	}
-	pending, err := a.db.CountPendingP2PTelemetryOutbox("agent-1")
+	pending, err := a.CoreAgent.DB.CountPendingP2PTelemetryOutbox("agent-1")
 	if err != nil {
 		t.Fatalf("count pending telemetry: %v", err)
 	}
@@ -96,7 +97,7 @@ func TestP2PTelemetryOutboxEnqueueOnlySkipsDrain(t *testing.T) {
 	if err := a.enqueueP2PTelemetryOutbox(payload, errors.New("offline")); err != nil {
 		t.Fatalf("enqueue p2p telemetry outbox: %v", err)
 	}
-	pending, err := a.db.CountPendingP2PTelemetryOutbox("agent-1")
+	pending, err := a.CoreAgent.DB.CountPendingP2PTelemetryOutbox("agent-1")
 	if err != nil {
 		t.Fatalf("count pending telemetry: %v", err)
 	}
@@ -106,7 +107,7 @@ func TestP2PTelemetryOutboxEnqueueOnlySkipsDrain(t *testing.T) {
 	if err := a.drainP2PTelemetryOutbox(context.Background(), 10); err != nil {
 		t.Fatalf("drain p2p telemetry outbox: %v", err)
 	}
-	pending, err = a.db.CountPendingP2PTelemetryOutbox("agent-1")
+	pending, err = a.CoreAgent.DB.CountPendingP2PTelemetryOutbox("agent-1")
 	if err != nil {
 		t.Fatalf("count pending telemetry after drain: %v", err)
 	}

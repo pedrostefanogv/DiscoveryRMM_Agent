@@ -34,21 +34,21 @@ func (a *App) requestAgentUpdateCheck(_ context.Context, source string) error {
 		source = "manual"
 	}
 
-	if a.selfUpdater != nil {
+	if a.SelfUpdater != nil {
 		select {
-		case a.selfUpdaterCh <- false:
-			a.logs.append("[selfupdate] check disparado via InvalidateCh: source=" + source)
+		case a.SelfUpdaterCh <- false:
+			a.Logs.Append("[selfupdate] check disparado via InvalidateCh: source=" + source)
 			return nil
 		default:
-			a.logs.append("[selfupdate] InvalidateCh cheio, ignorando duplicado: source=" + source)
+			a.Logs.Append("[selfupdate] InvalidateCh cheio, ignorando duplicado: source=" + source)
 			return nil
 		}
 	}
 
 	// Fallback para o legacy updateTrigger
 	select {
-	case a.updateTrigger <- struct{}{}:
-		a.logs.append("[update] force-check de update disparado localmente: source=" + source)
+	case a.UpdateTrigger <- struct{}{}:
+		a.Logs.Append("[update] force-check de update disparado localmente: source=" + source)
 		return nil
 	default:
 		return fmt.Errorf("update check ja pendente")

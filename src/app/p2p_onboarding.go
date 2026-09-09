@@ -73,7 +73,7 @@ func (a *App) zeroTouchConfigRegistrationAllowed() bool {
 	}
 	allowed := *cfg.AutoProvisioning
 	if !allowed {
-		a.logs.append("[zero-touch] autoProvisioning=false em config.json: zero-touch config registration desabilitado localmente")
+		a.Logs.Append("[zero-touch] autoProvisioning=false em config.json: zero-touch config registration desabilitado localmente")
 	}
 	return allowed
 }
@@ -103,7 +103,7 @@ func (a *App) tryZeroTouchConfigRegistration(ctx context.Context, state *p2pOnbo
 		attemptNumber = state.attempts + 1
 		state.mu.Unlock()
 	}
-	a.logs.append(fmt.Sprintf("[zero-touch] tentativa %d (%s)", attemptNumber, strings.TrimSpace(reason)))
+	a.Logs.Append(fmt.Sprintf("[zero-touch] tentativa %d (%s)", attemptNumber, strings.TrimSpace(reason)))
 
 	attemptCtx, cancel := context.WithTimeout(ctx, onboardingAttemptTimeout)
 	defer cancel()
@@ -123,7 +123,7 @@ func (a *App) tryZeroTouchConfigRegistration(ctx context.Context, state *p2pOnbo
 // Exits when configured, max attempts reached, or ctx cancelled.
 func (a *App) RunOnboardingLoop(ctx context.Context) {
 	if isAgentConfigured() {
-		a.logs.append("[zero-touch] agente já configurado, loop de zero-touch config registration não iniciado")
+		a.Logs.Append("[zero-touch] agente já configurado, loop de zero-touch config registration não iniciado")
 		return
 	}
 	if !a.zeroTouchConfigRegistrationAllowed() {
@@ -134,28 +134,28 @@ func (a *App) RunOnboardingLoop(ctx context.Context) {
 	}
 
 	state := &p2pOnboardingState{}
-	a.logs.append("[zero-touch] agente genérico detectado: aguardando Zero-Touch Config Registration")
+	a.Logs.Append("[zero-touch] agente genérico detectado: aguardando Zero-Touch Config Registration")
 
 	tryAttempt := func(reason string) bool {
 		if isAgentConfigured() {
-			a.logs.append("[zero-touch] configuração recebida com sucesso, loop encerrado")
+			a.Logs.Append("[zero-touch] configuração recebida com sucesso, loop encerrado")
 			return true
 		}
 		state.mu.Lock()
 		attempts := state.attempts
 		state.mu.Unlock()
 		if onboardingMaxAttempts > 0 && attempts >= onboardingMaxAttempts {
-			a.logs.append("[zero-touch] limite de tentativas atingido, loop encerrado")
+			a.Logs.Append("[zero-touch] limite de tentativas atingido, loop encerrado")
 			return true
 		}
 		attempted, err := a.tryZeroTouchConfigRegistration(ctx, state, reason)
 		if err != nil {
-			a.logs.append("[zero-touch] falha: " + err.Error())
+			a.Logs.Append("[zero-touch] falha: " + err.Error())
 		} else if !attempted {
-			a.logs.append("[zero-touch] tentativa ignorada: outra tentativa em andamento")
+			a.Logs.Append("[zero-touch] tentativa ignorada: outra tentativa em andamento")
 		}
 		if isAgentConfigured() {
-			a.logs.append("[zero-touch] configuração recebida com sucesso, loop encerrado")
+			a.Logs.Append("[zero-touch] configuração recebida com sucesso, loop encerrado")
 			return true
 		}
 		return false
@@ -190,9 +190,9 @@ func (a *App) triggerZeroTouchConfigRegistrationOnPeerDiscovery(ctx context.Cont
 	}
 
 	if attempted, err := a.tryZeroTouchConfigRegistration(ctx, nil, "peer-novo:"+peerID); err != nil {
-		a.logs.append("[zero-touch] falha na tentativa imediata após peer novo " + peerID + ": " + err.Error())
+		a.Logs.Append("[zero-touch] falha na tentativa imediata após peer novo " + peerID + ": " + err.Error())
 	} else if attempted {
-		a.logs.append("[zero-touch] tentativa imediata executada após descobrir peer=" + peerID)
+		a.Logs.Append("[zero-touch] tentativa imediata executada após descobrir peer=" + peerID)
 	}
 
 	timer := time.NewTimer(onboardingPeerRecheckDelay)
@@ -207,17 +207,17 @@ func (a *App) triggerZeroTouchConfigRegistrationOnPeerDiscovery(ctx context.Cont
 		return
 	}
 	if attempted, err := a.tryZeroTouchConfigRegistration(ctx, nil, "recheck-60s:"+peerID); err != nil {
-		a.logs.append("[zero-touch] falha no recheck de 60s apos peer " + peerID + ": " + err.Error())
+		a.Logs.Append("[zero-touch] falha no recheck de 60s apos peer " + peerID + ": " + err.Error())
 	} else if attempted {
-		a.logs.append("[zero-touch] recheck de 60s executado para peers conhecidos (peer inicial=" + peerID + ")")
+		a.Logs.Append("[zero-touch] recheck de 60s executado para peers conhecidos (peer inicial=" + peerID + ")")
 	}
 }
 
 func (a *App) requestOnboardingFromPeers(ctx context.Context, state *p2pOnboardingState) error {
-	if a.p2pCoord == nil {
+	if a.P2PCoord == nil {
 		return fmt.Errorf("coordinator P2P indisponível")
 	}
-	peers := a.p2pCoord.GetPeers()
+	peers := a.P2PCoord.GetPeers()
 	if len(peers) == 0 {
 		return fmt.Errorf("nenhum peer conhecido na rede")
 	}
@@ -255,11 +255,11 @@ func (a *App) requestOnboardingFromPeers(ctx context.Context, state *p2pOnboardi
 		}
 		if applyErr != nil {
 			event.Message = applyErr.Error()
-			a.logs.append("[zero-touch] oferta rejeitada de " + peer.AgentID + ": " + applyErr.Error())
+			a.Logs.Append("[zero-touch] oferta rejeitada de " + peer.AgentID + ": " + applyErr.Error())
 		} else {
 			event.Message = "configurado com sucesso"
 			event.TargetAgentID = result.AgentID
-			a.logs.append("[zero-touch] configurado via peer=" + peer.AgentID + " agentId=" + result.AgentID)
+			a.Logs.Append("[zero-touch] configurado via peer=" + peer.AgentID + " agentId=" + result.AgentID)
 		}
 		if state != nil {
 			state.mu.Lock()
@@ -333,8 +333,8 @@ func (a *App) registerWithDeployKey(serverURL, deployKey string) (P2POnboardingR
 	}
 
 	// Fingerprint de hardware (Recuperação de Dispositivos): TPM EK + SMBIOS UUID.
-	if a.hardwareIDSvc != nil {
-		hw := a.hardwareIDSvc.Get()
+	if a.HardwareIDSvc != nil {
+		hw := a.HardwareIDSvc.Get()
 		if strings.TrimSpace(hw.TPMEK) != "" {
 			payloadMap["tpmEkHash"] = strings.TrimSpace(hw.TPMEK)
 		}
@@ -454,7 +454,7 @@ func (a *App) persistZeroTouchCredentials(credentials zeroTouchRegisterCredentia
 	if len(tokenPreview) > 12 {
 		tokenPreview = tokenPreview[:12] + "..."
 	}
-	a.logs.append(fmt.Sprintf("[zero-touch] credenciais persistidas em %s agentId=%s clientId=%s siteId=%s apiServer=%s authToken=%s",
+	a.Logs.Append(fmt.Sprintf("[zero-touch] credenciais persistidas em %s agentId=%s clientId=%s siteId=%s apiServer=%s authToken=%s",
 		strings.TrimSpace(writePath), inst.AgentID, inst.ClientID, inst.SiteID, inst.ApiServer, tokenPreview))
 	return P2POnboardingResult{
 		AgentID:    inst.AgentID,
@@ -505,21 +505,21 @@ func (a *App) applyZeroTouchRuntimeConnection(inst InstallerConfig) {
 	if a == nil {
 		return
 	}
-	if a.debugSvc != nil {
-		a.debugSvc.ApplyRuntimeConnectionConfig(inst.APIScheme(), inst.ApiServer, inst.AuthToken, inst.AgentID, inst.NatsServer, inst.NatsWsServer)
+	if a.DebugSvc != nil {
+		a.DebugSvc.ApplyRuntimeConnectionConfig(inst.APIScheme(), inst.ApiServer, inst.AuthToken, inst.AgentID, inst.NatsServer, inst.NatsWsServer)
 	}
 
-	if a.agentConn != nil {
-		a.agentConn.Reload()
+	if a.AgentConn != nil {
+		a.AgentConn.Reload()
 	}
 
 	// Após zero-touch, reinicia o provider P2P com o clientId recém-obtido.
 	// Isso acelera a entrada na malha correta sem esperar o próximo ciclo.
-	if a.p2pCoord != nil {
+	if a.P2PCoord != nil {
 		agentCfg := a.GetAgentConfiguration()
 		if strings.TrimSpace(agentCfg.ClientID) != "" {
-			a.p2pCoord.RestartProvider()
-			a.logs.append(fmt.Sprintf("[zero-touch] coordinator P2P reiniciado com clientId=%s", agentCfg.ClientID))
+			a.P2PCoord.RestartProvider()
+			a.Logs.Append(fmt.Sprintf("[zero-touch] coordinator P2P reiniciado com clientId=%s", agentCfg.ClientID))
 		}
 	}
 }

@@ -41,16 +41,16 @@ func mapNotificationPolicies(policies []agentconfig.AgentNotificationPolicy) []n
 
 // DispatchNotification processa e despacha uma notificação.
 func (a *App) DispatchNotification(req NotificationDispatchRequest) NotificationDispatchResponse {
-	if a == nil || a.notificationSvc == nil {
+	if a == nil || a.NotificationSvc == nil {
 		return NotificationDispatchResponse{Accepted: false, Message: "serviço de notificações indisponível"}
 	}
-	return a.notificationSvc.Dispatch(req)
+	return a.NotificationSvc.Dispatch(req)
 }
 
 // RespondToNotification processa a resposta do usuário a uma notificação.
 func (a *App) RespondToNotification(notificationID, result string) bool {
-	if a == nil || a.notificationSvc == nil {
+	if a == nil || a.NotificationSvc == nil {
 		return false
 	}
-	return a.notificationSvc.Respond(notificationID, result)
+	return a.NotificationSvc.Respond(notificationID, result)
 }

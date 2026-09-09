@@ -8,15 +8,15 @@ import (
 )
 
 func (a *App) applyP2PConfig(cfg P2PConfig) {
-	a.p2pMu.Lock()
-	a.p2pConfig = normalizeP2PConfig(cfg)
-	a.p2pMu.Unlock()
+	a.P2PMu.Lock()
+	a.P2PConfig = normalizeP2PConfig(cfg)
+	a.P2PMu.Unlock()
 }
 
 func (a *App) GetP2PConfig() P2PConfig {
-	a.p2pMu.RLock()
-	cfg := a.p2pConfig
-	a.p2pMu.RUnlock()
+	a.P2PMu.RLock()
+	cfg := a.P2PConfig
+	a.P2PMu.RUnlock()
 	return normalizeP2PConfig(cfg)
 }
 
@@ -31,38 +31,38 @@ func (a *App) SetP2PConfig(cfg P2PConfig) error {
 	}
 	inst.P2P = cfg
 	if _, err := persistInstallerConfig(path, inst); err != nil {
-		a.logs.append("[p2p] falha ao persistir configuração em config.json: " + err.Error())
+		a.Logs.Append("[p2p] falha ao persistir configuração em config.json: " + err.Error())
 		return err
 	}
 
-	a.logs.append(fmt.Sprintf("[p2p] configuração atualizada: enabled=%t mode=%s ttlHours=%d seedPercent=%d minSeeds=%d",
+	a.Logs.Append(fmt.Sprintf("[p2p] configuração atualizada: enabled=%t mode=%s ttlHours=%d seedPercent=%d minSeeds=%d",
 		cfg.Enabled, cfg.DiscoveryMode, cfg.TempTTLHours, cfg.SeedPercent, cfg.MinSeeds))
 	return nil
 }
 
 func (a *App) GetP2PDebugStatus() P2PDebugStatus {
-	if a.p2pCoord == nil {
+	if a.P2PCoord == nil {
 		return P2PDebugStatus{}
 	}
-	return a.p2pCoord.GetStatus()
+	return a.P2PCoord.GetStatus()
 }
 
 func (a *App) GetP2PPeers() []P2PPeerView {
-	if a.p2pCoord == nil {
+	if a.P2PCoord == nil {
 		return []P2PPeerView{}
 	}
-	return a.p2pCoord.GetPeers()
+	return a.P2PCoord.GetPeers()
 }
 
 func (a *App) RefreshP2PPeerCatalog() {
-	if a.p2pCoord == nil {
+	if a.P2PCoord == nil {
 		return
 	}
-	a.p2pCoord.RefreshPeerArtifactIndex(context.Background(), "manual")
+	a.P2PCoord.RefreshPeerArtifactIndex(context.Background(), "manual")
 }
 
 func (a *App) SyncP2PBootstrapNow() (string, error) {
-	if a.p2pCoord == nil {
+	if a.P2PCoord == nil {
 		return "", fmt.Errorf("coordinator P2P indisponível")
 	}
 	ctx := a.ctx
@@ -71,7 +71,7 @@ func (a *App) SyncP2PBootstrapNow() (string, error) {
 	}
 	bootstrapCtx, cancel := context.WithTimeout(ctx, p2pCloudBootstrapTimeout+5*time.Second)
 	defer cancel()
-	localPeers, localErr := a.p2pCoord.RunLANDiscoveryProbe(bootstrapCtx, "manual")
+	localPeers, localErr := a.P2PCoord.RunLANDiscoveryProbe(bootstrapCtx, "manual")
 	cloudEnabled := a.GetP2PConfig().BootstrapConfig.CloudBootstrapEnabled
 
 	parts := make([]string, 0, 2)
@@ -82,7 +82,7 @@ func (a *App) SyncP2PBootstrapNow() (string, error) {
 	cloudPeers := 0
 	cloudErr := error(nil)
 	if cloudEnabled {
-		cloudPeers, cloudErr = a.p2pCoord.RunCloudBootstrap(bootstrapCtx)
+		cloudPeers, cloudErr = a.P2PCoord.RunCloudBootstrap(bootstrapCtx)
 		if cloudErr == nil {
 			parts = append(parts, fmt.Sprintf("cloud: %d peer(s)", cloudPeers))
 		}
@@ -107,19 +107,19 @@ func (a *App) SyncP2PBootstrapNow() (string, error) {
 }
 
 func (a *App) GetP2PPeerArtifactIndex() []P2PPeerArtifactIndexView {
-	if a.p2pCoord == nil {
+	if a.P2PCoord == nil {
 		return []P2PPeerArtifactIndexView{}
 	}
-	return a.p2pCoord.GetPeerArtifactIndex()
+	return a.P2PCoord.GetPeerArtifactIndex()
 }
 
 // FindP2PArtifactPeers returns availability of an artifact across known peers.
 // Lookup is performed exclusively by canonical ArtifactID.
 func (a *App) FindP2PArtifactPeers(artifactName string) P2PArtifactAvailabilityView {
-	if a.p2pCoord == nil {
+	if a.P2PCoord == nil {
 		return P2PArtifactAvailabilityView{ArtifactName: sanitizeArtifactName(artifactName), PeerAgentIDs: []string{}}
 	}
-	return a.p2pCoord.FindArtifactPeers(artifactName)
+	return a.P2PCoord.FindArtifactPeers(artifactName)
 }
 
 func (a *App) GetP2PTempDir() string {
@@ -144,10 +144,10 @@ func (a *App) ClearAllP2PArtifacts() (string, error) {
 
 // DeleteP2PArtifact remove um único artifact (arquivo + manifest + cache SHA256) do diretório P2P.
 func (a *App) DeleteP2PArtifact(artifactName string) (string, error) {
-	if a.p2pCoord == nil {
+	if a.P2PCoord == nil {
 		return "", fmt.Errorf("coordinator P2P indisponível")
 	}
-	if err := a.p2pCoord.DeleteArtifact(artifactName); err != nil {
+	if err := a.P2PCoord.DeleteArtifact(artifactName); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("artifact %q apagado", artifactName), nil
@@ -159,28 +159,28 @@ func (a *App) ComputeP2PSeedPlan(totalAgents int) P2PSeedPlan {
 }
 
 func (a *App) GetP2PArtifactAccess(artifactName, targetPeerID string) (P2PArtifactAccess, error) {
-	if a.p2pCoord == nil {
+	if a.P2PCoord == nil {
 		return P2PArtifactAccess{}, fmt.Errorf("coordinator P2P indisponível")
 	}
-	return a.p2pCoord.GetArtifactAccess(artifactName, targetPeerID)
+	return a.P2PCoord.GetArtifactAccess(artifactName, targetPeerID)
 }
 
 func (a *App) ListP2PArtifacts() ([]P2PArtifactView, error) {
-	if a.p2pCoord == nil {
+	if a.P2PCoord == nil {
 		return []P2PArtifactView{}, nil
 	}
-	return a.p2pCoord.ListArtifacts()
+	return a.P2PCoord.ListArtifacts()
 }
 
 func (a *App) PublishP2PTestArtifact(artifactName, content string) (P2PArtifactView, error) {
-	if a.p2pCoord == nil {
+	if a.P2PCoord == nil {
 		return P2PArtifactView{}, fmt.Errorf("coordinator P2P indisponível")
 	}
-	return a.p2pCoord.PublishTestArtifact(artifactName, content)
+	return a.P2PCoord.PublishTestArtifact(artifactName, content)
 }
 
 func (a *App) SelectAndPublishP2PArtifact() (P2PArtifactView, error) {
-	if a.p2pCoord == nil {
+	if a.P2PCoord == nil {
 		return P2PArtifactView{}, fmt.Errorf("coordinator P2P indisponível")
 	}
 	if a.app == nil {
@@ -194,7 +194,7 @@ func (a *App) SelectAndPublishP2PArtifact() (P2PArtifactView, error) {
 	if selectedPath == "" {
 		return P2PArtifactView{}, fmt.Errorf("selecao cancelada")
 	}
-	return a.p2pCoord.PublishFile(selectedPath)
+	return a.P2PCoord.PublishFile(selectedPath)
 }
 
 func (a *App) ReplicateP2PArtifactToPeer(artifactName, targetPeerID string) (string, error) {
@@ -202,42 +202,42 @@ func (a *App) ReplicateP2PArtifactToPeer(artifactName, targetPeerID string) (str
 }
 
 func (a *App) PullP2PArtifactFromPeer(artifactName, sourcePeerID string) (P2PArtifactView, error) {
-	if a.p2pCoord == nil {
+	if a.P2PCoord == nil {
 		return P2PArtifactView{}, fmt.Errorf("coordinator P2P indisponível")
 	}
 	ctx := a.ctx
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return a.p2pCoord.DownloadArtifactFromPeer(ctx, artifactName, sourcePeerID)
+	return a.P2PCoord.DownloadArtifactFromPeer(ctx, artifactName, sourcePeerID)
 }
 
 // DownloadP2PArtifactSwarm finds all peers that have the artifact and performs
 // a chunked swarm download when ≥2 peers are available; otherwise falls back
 // to the single-peer path.
 func (a *App) DownloadP2PArtifactSwarm(artifactName string) (P2PArtifactView, error) {
-	if a.p2pCoord == nil {
+	if a.P2PCoord == nil {
 		return P2PArtifactView{}, fmt.Errorf("coordinator P2P indisponivel")
 	}
 	ctx := a.ctx
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return a.p2pCoord.DownloadArtifactSwarm(ctx, artifactName)
+	return a.P2PCoord.DownloadArtifactSwarm(ctx, artifactName)
 }
 
 func (a *App) ListP2PAuditEvents() []P2PAuditEvent {
-	if a.p2pCoord == nil {
+	if a.P2PCoord == nil {
 		return []P2PAuditEvent{}
 	}
-	return a.p2pCoord.ListAuditEvents()
+	return a.P2PCoord.ListAuditEvents()
 }
 
 func (a *App) ListP2PAuditEventsFiltered(action, peerAgentID, status string) []P2PAuditEvent {
-	if a.p2pCoord == nil {
+	if a.P2PCoord == nil {
 		return []P2PAuditEvent{}
 	}
-	return a.p2pCoord.ListAuditEventsFiltered(action, peerAgentID, status)
+	return a.P2PCoord.ListAuditEventsFiltered(action, peerAgentID, status)
 }
 
 // GetAutoProvisioningStats retorna estatísticas de auto-provisioning do lado
@@ -247,11 +247,11 @@ func (a *App) GetAutoProvisioningStats() P2PAutoProvisioningStats {
 	agentCfg := a.GetAgentConfiguration()
 	enabled := agentCfg.DiscoveryEnabled == nil || *agentCfg.DiscoveryEnabled
 
-	if a.p2pCoord == nil {
+	if a.P2PCoord == nil {
 		return P2PAutoProvisioningStats{Enabled: enabled, RecentEvents: []P2POnboardingAuditEvent{}}
 	}
 
-	c := a.p2pCoord
+	c := a.P2PCoord
 	total, events := c.GetAutoProvisioningStats()
 
 	// Retornar os eventos mais recentes primeiro.

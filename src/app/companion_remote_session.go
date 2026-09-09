@@ -35,29 +35,29 @@ var companionNats struct {
 // via IPC do serviço, garantindo que o remoteSessionMgr local tenha uma
 // conexão NATS configurada (aberta sob demanda, uma única vez).
 func (a *App) handleCompanionRemoteSession(payload map[string]any) {
-	if a == nil || a.remoteSessionMgr == nil {
+	if a == nil || a.RemoteSessionMgr == nil {
 		return
 	}
 	if err := a.ensureCompanionNats(); err != nil {
-		a.logs.append("[remote-session][companion] sem NATS de streaming: " + err.Error())
+		a.Logs.Append("[remote-session][companion] sem NATS de streaming: " + err.Error())
 		return
 	}
-	a.logs.append("[remote-session][companion] executando comando na sessão do usuário")
+	a.Logs.Append("[remote-session][companion] executando comando na sessão do usuário")
 	parsedPayload := parseAnyMap(payload)
 	if parsedPayload == nil {
-		a.logs.append("[remote-session][companion] payload inválido")
+		a.Logs.Append("[remote-session][companion] payload inválido")
 		return
 	}
-	handled, errMsg := a.remoteSessionMgr.HandleCommand(a.ctx, parsedPayload)
+	handled, errMsg := a.RemoteSessionMgr.HandleCommand(a.ctx, parsedPayload)
 	if handled && errMsg != "" {
-		a.logs.append("[remote-session][companion] mensagem: " + errMsg)
+		a.Logs.Append("[remote-session][companion] mensagem: " + errMsg)
 	}
 }
 
 // ensureCompanionNats abre (uma vez) a conexão NATS dedicada da UI companion
 // para o streaming de remote session, injetando-a no remoteSessionMgr local.
 func (a *App) ensureCompanionNats() error {
-	if a.remoteSessionMgr == nil {
+	if a.RemoteSessionMgr == nil {
 		return fmt.Errorf("remoteSessionMgr não inicializado")
 	}
 	companionNats.mu.Lock()
@@ -122,8 +122,8 @@ func (a *App) ensureCompanionNats() error {
 		}
 		companionNats.nc = nc
 		companionNats.started = true
-		a.remoteSessionMgr.SetNatsConn(nc, clientID, siteID, agentID)
-		a.logs.append("[remote-session][companion] NATS de streaming conectado em " + server)
+		a.RemoteSessionMgr.SetNatsConn(nc, clientID, siteID, agentID)
+		a.Logs.Append("[remote-session][companion] NATS de streaming conectado em " + server)
 		return nil
 	}
 	if lastErr != nil {

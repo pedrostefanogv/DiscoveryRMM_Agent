@@ -5,6 +5,7 @@ package app
 // UI (companion mode: handshake + fallback standalone).
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net"
@@ -22,7 +23,7 @@ func (a *App) handleIPCMessage(conn net.Conn, msg IPCMessage) {
 	}
 	switch msg.Type {
 	case IPCMsgHello:
-		a.logs.append("[ipc] handshake recebido da UI")
+		a.Logs.Append("[ipc] handshake recebido da UI")
 		// hello_ack é respondido diretamente na conexão via Broadcast — o
 		// cliente faz probe com IsServicePresent antes de conectar de fato.
 	case IPCMsgStatus:
@@ -43,15 +44,25 @@ func (a *App) handleIPCMessage(conn net.Conn, msg IPCMessage) {
 		// Remote session DEVE rodar na sessão interativa do usuário (a sessão 0
 		// do serviço SYSTEM não tem desktop — captura falha e SendInput é
 		// bloqueado por UIPI). Encaminha o comando à UI companion conectada.
-		a.logs.append("[ipc] encaminhando remote session à UI (sessão interativa)")
+		a.Logs.Append("[ipc] encaminhando remote session à UI (sessão interativa)")
 		a.ipcServer.Broadcast(NewIPCMessage(IPCMsgRemoteSession, msg.Payload))
 	case IPCMsgNotificationRespond:
 		if a.handleIPCNotificationRespond(msg.Payload) {
 			return
 		}
-		a.logs.append("[ipc] resposta de notificação sem payload válido")
+		a.Logs.Append("[ipc] resposta de notificação sem payload válido")
 	case IPCMsgCommandResult:
-		a.logs.append("[ipc] resultado de comando interativo recebido da UI (encaminhamento é extensão futura)")
+		a.Logs.Append("[ipc] resultado de comando interativo recebido da UI (encaminhamento é extensão futura)")
+	case IPCMsgRequest:
+		// Request/response RPC (PLANO_SEPARACAO_SERVICO_UI.md, Fase C): a UI
+		// companion consulta o core do serviço (status, config, inventário,
+		// memory) sem abrir o SQLite do serviço (decisão D3).
+		resp := a.handleIPCRequest(context.Background(), msg.Payload)
+		if a.ipcServer != nil {
+			reply := NewIPCMessage(IPCMsgResponse, resp)
+			reply.CorrelationID = msg.CorrelationID
+			a.ipcServer.RespondTo(conn, reply)
+		}
 	default:
 		log.Printf("[ipc] mensagem não tratada do tipo %s", msg.Type)
 	}
@@ -61,7 +72,7 @@ func (a *App) handleIPCMessage(conn net.Conn, msg IPCMessage) {
 // IPC (UI companion) e injeta no notificationSvc (pendingNotifyResult) —
 // fecha o ciclo serviço→UI→resposta→NATS do plano (Fase 2).
 func (a *App) handleIPCNotificationRespond(payload map[string]any) bool {
-	if a == nil || a.notificationSvc == nil || payload == nil {
+	if a == nil || a.NotificationSvc == nil || payload == nil {
 		return false
 	}
 	notificationID, _ := payload["notificationId"].(string)
@@ -69,8 +80,8 @@ func (a *App) handleIPCNotificationRespond(payload map[string]any) bool {
 	if strings.TrimSpace(notificationID) == "" || strings.TrimSpace(result) == "" {
 		return false
 	}
-	ok := a.notificationSvc.Respond(notificationID, result)
-	a.logs.append(fmt.Sprintf("[ipc] resposta de notificação %s -> %s (injetada=%t)", notificationID, result, ok))
+	ok := a.NotificationSvc.Respond(notificationID, result)
+	a.Logs.Append(fmt.Sprintf("[ipc] resposta de notificação %s -> %s (injetada=%t)", notificationID, result, ok))
 	return ok
 }
 
@@ -161,43 +172,21 @@ func (a *App) startIPCClient() {
 			if connected {
 				state = "conectado"
 			}
-			a.logs.append("[ipc] " + state + " ao serviço")
+			a.Logs.Append("[ipc] " + state + " ao serviço")
 			a.EmitEvent("service:ipc_state", map[string]any{"connected": connected})
 		},
 	)
 	go a.ipcClient.RunConnectLoop()
 
-	// Polling de status: pede snapshot de conectividade ao serviço a cada 5s
-	// (o core roda lá; o GetAgentStatus local da UI companion não o conhece).
-	// O snapshot chega como evento "agent:status_snapshot" e é repassado ao
-	// frontend pelo handler de eventos acima.
-	//
-	// Fallback de segurança: se o serviço sumir por tempo prolongado
-	// (desinstalado/corrompido), a UI assume o core standalone após 5 min
-	// de falhas contínuas — evita máquina sem agente por falha do serviço.
+	// Polling de status + fallback standalone via CompanionController
+	// (PLANO_SEPARACAO_SERVICO_UI.md §0.4 — máquina de estados extraída para
+	// struct testável). Pede snapshot de conectividade ao serviço a cada 5s;
+	// falha contínua por 5min → assume core standalone.
+	ticker := time.NewTicker(DefaultCompanionConfig().PollInterval)
+	controller := NewDefaultCompanionController(companionTunerAdapter{a: a})
 	go func() {
-		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
-		const maxFailures = 60 // 60 × 5s = 5 min
-		failures := 0
-		for {
-			select {
-			case <-a.ctx.Done():
-				return
-			case <-ticker.C:
-				if err := a.ipcClient.Send(NewIPCMessage(IPCMsgStatus, nil)); err != nil {
-					failures++
-					if failures >= maxFailures {
-						a.logs.append("[ipc] serviço ausente por 5min — assumindo core standalone (fallback)")
-						a.EmitEvent("service:companion_lost", map[string]any{"reason": "service_unreachable"})
-						a.runStagedStartup(a.ctx)
-						return
-					}
-					continue
-				}
-				failures = 0
-			}
-		}
+		controller.Run(a.ctx, ticker.C)
 	}()
 }
 
@@ -206,10 +195,16 @@ func (a *App) startIPCClient() {
 // pipe inexistente falha imediatamente no Windows; 500ms cobre o caso
 // do serviço em startup (listener já criado antes do core).
 func (a *App) decideCompanionMode() bool {
-	if IsServicePresent(500 * time.Millisecond) {
-		a.logs.append("[startup] serviço DiscoveryAgent ativo — modo companion (UI sem core)")
+	ack, ok := probeServiceHello(500 * time.Millisecond)
+	if ok {
+		if !IsServiceProtocolCompatible(ack.Protocol) {
+			a.Logs.Append(fmt.Sprintf("[startup] serviço com protocolo IPC incompatível (serviço=%d UI=%d) — modo standalone até o update",
+				ack.Protocol, IPCProtocolVersion))
+			return false
+		}
+		a.Logs.Append("[startup] serviço DiscoveryAgent ativo — modo companion (UI sem core)")
 		return true
 	}
-	a.logs.append("[startup] serviço ausente — modo standalone (core completo na UI)")
+	a.Logs.Append("[startup] serviço ausente — modo standalone (core completo na UI)")
 	return false
 }

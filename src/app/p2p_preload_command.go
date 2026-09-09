@@ -62,7 +62,7 @@ func (a *App) handleP2pPreloadCommand(parent context.Context, payload any) (bool
 	if len(req.Packages) == 0 {
 		return true, 2, "", "p2ppreload: payload sem packages"
 	}
-	if a.packageManagerRouter == nil || a.p2pCoord == nil {
+	if a.packageManagerRouter == nil || a.P2PCoord == nil {
 		return true, 2, "", "p2ppreload: P2P indisponivel neste agent"
 	}
 
@@ -90,7 +90,7 @@ func (a *App) runP2pPreload(parent context.Context, packages []p2pPreloadPackage
 
 		// 1. Estado real da máquina: pacote em estado final → nada a fazer.
 		if !automation.ShouldPreloadPackage(ctx, a.packageManagerRouter, automation.AutomationTaskActionType(strings.TrimSpace(pkg.ActionType)), packageID) {
-			a.logs.append(fmt.Sprintf("[p2p][preload] pacote em estado final, ignorando packageId=%s action=%s", packageID, pkg.ActionType))
+			a.Logs.Append(fmt.Sprintf("[p2p][preload] pacote em estado final, ignorando packageId=%s action=%s", packageID, pkg.ActionType))
 			continue
 		}
 
@@ -116,7 +116,7 @@ func (a *App) waitPreloadTurn(ctx context.Context, packageID string) bool {
 	}
 
 	delay := preloadStaggerDelay(score)
-	a.logs.append(fmt.Sprintf("[p2p][preload] aguardando vez (score=%.2f delay=%s) packageId=%s", score, delay.Round(time.Second), packageID))
+	a.Logs.Append(fmt.Sprintf("[p2p][preload] aguardando vez (score=%.2f delay=%s) packageId=%s", score, delay.Round(time.Second), packageID))
 
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
@@ -133,7 +133,7 @@ func (a *App) waitPreloadTurn(ctx context.Context, packageID string) bool {
 			// O agent de maior score já publicou? Então nossa vez chegou —
 			// baixando da LAN em vez da internet.
 			if a.artifactAvailableOnNetwork(packageID) {
-				a.logs.append(fmt.Sprintf("[p2p][preload] artifact disponível na rede, antecipando download packageId=%s", packageID))
+				a.Logs.Append(fmt.Sprintf("[p2p][preload] artifact disponível na rede, antecipando download packageId=%s", packageID))
 				return true
 			}
 		}
@@ -143,10 +143,10 @@ func (a *App) waitPreloadTurn(ctx context.Context, packageID string) bool {
 // localPreloadScore calcula o score de capacidade local (mesma fórmula da
 // eleição de fetcher: CPU/RAM livres normalizados). Retorna (score, ok).
 func (a *App) localPreloadScore() (float64, bool) {
-	if a.p2pCoord == nil {
+	if a.P2PCoord == nil {
 		return 0, false
 	}
-	load := a.p2pCoord.CollectHostLoad()
+	load := a.P2PCoord.CollectHostLoad()
 	if load.CPUCores <= 0 {
 		load.CPUCores = 1
 	}
@@ -175,9 +175,9 @@ func preloadStaggerDelay(score float64) time.Duration {
 // artifactAvailableOnNetwork verifica se algum peer já anunciou o artifact.
 func (a *App) artifactAvailableOnNetwork(packageID string) bool {
 	artifactID := "winget:" + normalizePackageLookupKey(packageID)
-	if a.p2pCoord == nil || artifactID == "winget:" {
+	if a.P2PCoord == nil || artifactID == "winget:" {
 		return false
 	}
-	peers := a.p2pCoord.PeersWithArtifactScored(artifactID)
+	peers := a.P2PCoord.PeersWithArtifactScored(artifactID)
 	return len(peers) > 0
 }

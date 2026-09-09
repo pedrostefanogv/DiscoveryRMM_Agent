@@ -23,7 +23,7 @@ import (
 // Retorna (handled, exitCode, output, errText) no contrato do agentconn.
 func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, payload any) (bool, int, string, string) {
 	cmdType = strings.ToLower(strings.TrimSpace(cmdType))
-	a.logs.append(fmt.Sprintf("[cmd] recebido: cmdType=%q payload=%v", cmdType, remotedebug.TruncatePayloadForLog(payload)))
+	a.Logs.Append(fmt.Sprintf("[cmd] recebido: cmdType=%q payload=%v", cmdType, remotedebug.TruncatePayloadForLog(payload)))
 
 	if cmdType == "nats.reconnect" {
 		return a.handleNatsReconnectCommand(parent, payload)
@@ -34,24 +34,24 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 	}
 
 	if cmdType == "update" || cmdType == "selfupdate" {
-		if a.selfUpdater != nil {
+		if a.SelfUpdater != nil {
 			updateCmd, parseErr := parseAgentUpdateCommand(payload)
 			if parseErr != nil {
-				a.logs.append(fmt.Sprintf("[selfupdate] erro ao parsear payload: %v — fallback para check forcado", parseErr))
+				a.Logs.Append(fmt.Sprintf("[selfupdate] erro ao parsear payload: %v — fallback para check forcado", parseErr))
 			}
 
 			// Se o servidor enviou action=install com URL direta, faz download e instala imediatamente.
 			if updateCmd.Action == "install" && updateCmd.DownloadURL() != "" {
-				a.logs.append(fmt.Sprintf("[selfupdate] install direto: version=%s url=%s", updateCmd.VersionValue(), updateCmd.DownloadURL()))
-				if err := a.selfUpdater.InstallFromURL(parent, updateCmd.VersionValue(), updateCmd.DownloadURL()); err != nil {
+				a.Logs.Append(fmt.Sprintf("[selfupdate] install direto: version=%s url=%s", updateCmd.VersionValue(), updateCmd.DownloadURL()))
+				if err := a.SelfUpdater.InstallFromURL(parent, updateCmd.VersionValue(), updateCmd.DownloadURL()); err != nil {
 					return true, 1, "", fmt.Sprintf("self-update install direto falhou: %v", err)
 				}
 				return true, 0, "self-update install direto iniciado com sucesso", ""
 			}
 
 			// Fallback: check-update ou install sem URL → usa manifest da API.
-			a.logs.append("[selfupdate] comando update recebido via NATS — iniciando check forcado")
-			if err := a.selfUpdater.CheckAndUpdate(parent, true); err != nil {
+			a.Logs.Append("[selfupdate] comando update recebido via NATS — iniciando check forcado")
+			if err := a.SelfUpdater.CheckAndUpdate(parent, true); err != nil {
 				return true, 1, "", fmt.Sprintf("self-update falhou: %v", err)
 			}
 			return true, 0, "self-update iniciado com sucesso", ""
@@ -99,19 +99,19 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 
 		switch updateCmd.Action {
 		case "install":
-			if a.selfUpdater == nil {
+			if a.SelfUpdater == nil {
 				return true, 2, "", "self-updater nao inicializado"
 			}
 			if updateCmd.DownloadURL() == "" {
 				// Sem URL: tenta via manifest
-				a.logs.append("[selfupdate] install sem URL — usando manifest da API")
-				if err := a.selfUpdater.CheckAndUpdate(parent, true); err != nil {
+				a.Logs.Append("[selfupdate] install sem URL — usando manifest da API")
+				if err := a.SelfUpdater.CheckAndUpdate(parent, true); err != nil {
 					return true, 1, "", fmt.Sprintf("self-update falhou: %v", err)
 				}
 				return true, 0, "self-update iniciado com sucesso (via manifest)", ""
 			}
-			a.logs.append(fmt.Sprintf("[selfupdate] install direto (alias): version=%s url=%s", updateCmd.VersionValue(), updateCmd.DownloadURL()))
-			if err := a.selfUpdater.InstallFromURL(parent, updateCmd.VersionValue(), updateCmd.DownloadURL()); err != nil {
+			a.Logs.Append(fmt.Sprintf("[selfupdate] install direto (alias): version=%s url=%s", updateCmd.VersionValue(), updateCmd.DownloadURL()))
+			if err := a.SelfUpdater.InstallFromURL(parent, updateCmd.VersionValue(), updateCmd.DownloadURL()); err != nil {
 				return true, 1, "", fmt.Sprintf("self-update install direto falhou: %v", err)
 			}
 			return true, 0, "self-update install direto iniciado com sucesso", ""
@@ -167,7 +167,7 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 
 		if pp.Force {
 			// ── FORCE: balloon informativo + delay + shutdown imediato ──
-			a.logs.append(fmt.Sprintf("[agent] %s-action [FORCE] delay=%ds force=true — modo balloon", action, pp.DelaySeconds))
+			a.Logs.Append(fmt.Sprintf("[agent] %s-action [FORCE] delay=%ds force=true — modo balloon", action, pp.DelaySeconds))
 			a.showForceRestartBalloon(action, pp.DelaySeconds, pp.Message)
 
 			// Aguarda o delay no agent para dar tempo do usuário ver o balloon
@@ -184,7 +184,7 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 
 		// ── NORMAL: diálogo com opção de adiar ──
 		result := a.showDeferrableRestartPrompt(action, pp.DelaySeconds, pp.Message, pp.DeferMinutes)
-		a.logs.append(fmt.Sprintf("[agent] %s-action [NORMAL] psadt-result=%s", action, result))
+		a.Logs.Append(fmt.Sprintf("[agent] %s-action [NORMAL] psadt-result=%s", action, result))
 
 		switch result {
 		case "restart_now":
@@ -197,7 +197,7 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 
 		default:
 			// "fallback" — PSADT indisponível, usar DispatchNotification
-			a.logs.append(fmt.Sprintf("[agent] %s-action [FALLBACK] PSADT indisponível — usando DispatchNotification", action))
+			a.Logs.Append(fmt.Sprintf("[agent] %s-action [FALLBACK] PSADT indisponível — usando DispatchNotification", action))
 			// Timeout mínimo de 60s para o fallback de confirmação,
 			// independente do delaySeconds recebido do servidor.
 			notifTimeout := pp.DelaySeconds
@@ -223,7 +223,7 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 		}
 	}
 
-	if a == nil || a.remoteDebug == nil {
+	if a == nil || a.RemoteDebug == nil {
 		return false, 0, "", ""
 	}
 
@@ -243,7 +243,7 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 		//   1. UI companion conectada → encaminha via IPC (sessão do usuário).
 		//   2. Sem UI (ex.: tela de logon) → spawn worker na sessão interativa
 		//      (CreateProcessAsUser) ou no winsta0\winlogon (PLANO §7.2).
-		if a.runtimeFlags.ServiceMode {
+		if a.RuntimeFlags.ServiceMode {
 			if a.ipcServer != nil && a.ipcServer.ClientCount() > 0 {
 				log.Printf("[remote-session] dispatch (serviço→UI): cmdType=%s sessionId=%s action=%s\n",
 					cmdType, sid, act)
@@ -261,13 +261,13 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 			return true, 0, "ok", ""
 		}
 
-		if a.remoteSessionMgr == nil {
+		if a.RemoteSessionMgr == nil {
 			log.Printf("[remote-session] ERRO: remoteSessionMgr nil — nao inicializado\n")
 			return true, 1, "", "remote session manager nao inicializado"
 		}
 		log.Printf("[remote-session] dispatch: cmdType=%s sessionId=%s action=%s\n",
 			cmdType, sid, act)
-		handled, errMsg := a.remoteSessionMgr.HandleCommand(parent, parsedPayload)
+		handled, errMsg := a.RemoteSessionMgr.HandleCommand(parent, parsedPayload)
 		if handled {
 			if errMsg != "" {
 				log.Printf("[remote-session] comando processado com mensagem: %s\n", errMsg)
@@ -285,12 +285,12 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 		return a.handleSystemInfoCommand(parent, payload)
 	}
 
-	return a.remoteDebug.HandleCommand(parent, cmdType, payload)
+	return a.RemoteDebug.HandleCommand(parent, cmdType, payload)
 }
 
 func (a *App) onAgentCommandOutput(cmdType, output, errText string) {
-	if a == nil || a.remoteDebug == nil {
+	if a == nil || a.RemoteDebug == nil {
 		return
 	}
-	a.remoteDebug.OnCommandOutput(cmdType, output, errText)
+	a.RemoteDebug.OnCommandOutput(cmdType, output, errText)
 }

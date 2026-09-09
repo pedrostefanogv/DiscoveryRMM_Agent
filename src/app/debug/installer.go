@@ -16,10 +16,10 @@ import (
 	"strings"
 	"time"
 
-	"discovery/app/netutil"
-	"discovery/app/p2pmeta"
 	"discovery/app/core/platform"
 	"discovery/app/core/tlsutil"
+	"discovery/app/netutil"
+	"discovery/app/p2pmeta"
 
 	"github.com/samber/lo"
 )

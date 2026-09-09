@@ -77,18 +77,18 @@ var (
 // ── VTable slots (verificados) ──
 
 const (
-	slotQueryInterface        = 0
-	slotFactoryEnumAdapters1  = 12
-	slotAdapterEnumOutputs    = 7
-	slotOutputGetDesc         = 7
-	slotOutput1DuplicateOutput = 22
+	slotQueryInterface          = 0
+	slotFactoryEnumAdapters1    = 12
+	slotAdapterEnumOutputs      = 7
+	slotOutputGetDesc           = 7
+	slotOutput1DuplicateOutput  = 22
 	slotOutput1DuplicateOutput1 = 23
-	slotDupAcquireNextFrame   = 8
-	slotDupReleaseFrame       = 14
-	slotDevCreateTexture2D    = 5
-	slotCtxMap                = 14
-	slotCtxUnmap              = 15
-	slotCtxCopyResource       = 47
+	slotDupAcquireNextFrame     = 8
+	slotDupReleaseFrame         = 14
+	slotDevCreateTexture2D      = 5
+	slotCtxMap                  = 14
+	slotCtxUnmap                = 15
+	slotCtxCopyResource         = 47
 )
 
 // ── Structs ──
@@ -112,19 +112,19 @@ type dxgiOutduplPointerPosition struct {
 type point struct{ X, Y int32 }
 
 type dxgiOutputDesc struct {
-	DeviceName        [32]uint16
+	DeviceName         [32]uint16
 	DesktopCoordinates rect
-	AttachedToDesktop int32
-	Rotation          uint32
-	Monitor           syscall.Handle
+	AttachedToDesktop  int32
+	Rotation           uint32
+	Monitor            syscall.Handle
 }
 
 type rect struct{ Left, Top, Right, Bottom int32 }
 
 type d3d11Texture2DDesc struct {
-	Width, Height, MipLevels, ArraySize   uint32
-	Format                                uint32
-	SampleCount, SampleQuality            uint32
+	Width, Height, MipLevels, ArraySize         uint32
+	Format                                      uint32
+	SampleCount, SampleQuality                  uint32
 	Usage, BindFlags, CPUAccessFlags, MiscFlags uint32
 }
 
@@ -147,28 +147,28 @@ const (
 	D3D_DRIVER_TYPE_WARP     = 5
 	D3D11_SDK_VERSION        = 7
 
-	D3D11_USAGE_STAGING     = 3
-	D3D11_CPU_ACCESS_READ   = 1
-	D3D11_MAP_READ          = 3
+	D3D11_USAGE_STAGING        = 3
+	D3D11_CPU_ACCESS_READ      = 1
+	D3D11_MAP_READ             = 3
 	D3D11_MAP_FLAG_DO_NOT_WAIT = 0x100000
 )
 
 // ── Capturer ──
 
 type dxgiCapturer struct {
-	factory, adapter, output, output1 unsafe.Pointer
+	factory, adapter, output, output1  unsafe.Pointer
 	duplication, d3dDevice, d3dContext unsafe.Pointer
 
 	width, height int
 
 	// HDR / Advanced Color: quando o monitor é HDR, captura em scRGB
 	// (R16G16B16A16_FLOAT, 8 bytes/px) e o pipeline aplica tone mapping.
-	hdr          bool
-	colorSpace   uint32
+	hdr           bool
+	colorSpace    uint32
 	bytesPerPixel int
 
-	lastResource unsafe.Pointer
-	stagingTex   unsafe.Pointer
+	lastResource  unsafe.Pointer
+	stagingTex    unsafe.Pointer
 	stagingMapped bool
 
 	mu     sync.Mutex
@@ -221,8 +221,12 @@ func NewDXGICapturer(monitorIndex int) (Capturer, error) {
 	_, _, _ = comCall(c.output, slotOutputGetDesc, uintptr(unsafe.Pointer(&desc)))
 	c.width = int(desc.DesktopCoordinates.Right - desc.DesktopCoordinates.Left)
 	c.height = int(desc.DesktopCoordinates.Bottom - desc.DesktopCoordinates.Top)
-	if c.width <= 0 { c.width = 1920 }
-	if c.height <= 0 { c.height = 1080 }
+	if c.width <= 0 {
+		c.width = 1920
+	}
+	if c.height <= 0 {
+		c.height = 1080
+	}
 
 	// 5b. Detecta Advanced Color / HDR (IDXGIOutput6::GetDesc1).
 	// Se o monitor é HDR, capturamos em scRGB (R16G16B16A16_FLOAT) e o
@@ -258,7 +262,10 @@ func NewDXGICapturer(monitorIndex int) (Capturer, error) {
 		)
 	}
 	if hr != 0 || d3dDevice == nil || d3dContext == nil {
-		comRelease(c.output1); comRelease(c.output); comRelease(c.adapter); comRelease(c.factory)
+		comRelease(c.output1)
+		comRelease(c.output)
+		comRelease(c.adapter)
+		comRelease(c.factory)
 		runtime.UnlockOSThread()
 		return nil, fmt.Errorf("D3D11CreateDevice: HRESULT 0x%X", uint64(hr))
 	}
@@ -274,15 +281,19 @@ func NewDXGICapturer(monitorIndex int) (Capturer, error) {
 	sd := d3d11Texture2DDesc{
 		Width: uint32(c.width), Height: uint32(c.height),
 		MipLevels: 1, ArraySize: 1,
-		Format: stagingFormat,
+		Format:      stagingFormat,
 		SampleCount: 1, SampleQuality: 0,
-		Usage: D3D11_USAGE_STAGING,
+		Usage:     D3D11_USAGE_STAGING,
 		BindFlags: 0, CPUAccessFlags: D3D11_CPU_ACCESS_READ, MiscFlags: 0,
 	}
 	hr, _, _ = comCall(c.d3dDevice, slotDevCreateTexture2D, uintptr(unsafe.Pointer(&sd)), 0, uintptr(unsafe.Pointer(&c.stagingTex)))
 	if hr != 0 || c.stagingTex == nil {
-		comRelease(c.d3dContext); comRelease(c.d3dDevice)
-		comRelease(c.output1); comRelease(c.output); comRelease(c.adapter); comRelease(c.factory)
+		comRelease(c.d3dContext)
+		comRelease(c.d3dDevice)
+		comRelease(c.output1)
+		comRelease(c.output)
+		comRelease(c.adapter)
+		comRelease(c.factory)
 		runtime.UnlockOSThread()
 		return nil, fmt.Errorf("CreateTexture2D staging: HRESULT 0x%X", uint64(hr))
 	}
@@ -313,8 +324,13 @@ func NewDXGICapturer(monitorIndex int) (Capturer, error) {
 		}
 	}
 	if hr != 0 || c.duplication == nil {
-		comRelease(c.stagingTex); comRelease(c.d3dContext); comRelease(c.d3dDevice)
-		comRelease(c.output1); comRelease(c.output); comRelease(c.adapter); comRelease(c.factory)
+		comRelease(c.stagingTex)
+		comRelease(c.d3dContext)
+		comRelease(c.d3dDevice)
+		comRelease(c.output1)
+		comRelease(c.output)
+		comRelease(c.adapter)
+		comRelease(c.factory)
 		runtime.UnlockOSThread()
 		return nil, fmt.Errorf("DuplicateOutput1: HRESULT 0x%X", uint64(hr))
 	}
@@ -424,15 +440,20 @@ func (c *dxgiCapturer) releaseLocked() {
 func (c *dxgiCapturer) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.closed { return nil }
+	if c.closed {
+		return nil
+	}
 	c.closed = true
 	c.releaseLocked()
 	for _, p := range []unsafe.Pointer{c.duplication, c.stagingTex, c.d3dContext, c.d3dDevice, c.output1, c.output, c.adapter, c.factory} {
-		if p != nil { comRelease(p) }
+		if p != nil {
+			comRelease(p)
+		}
 	}
 	runtime.UnlockOSThread()
 	return nil
 }
 
 func (c *dxgiCapturer) Name() string { return "dxgi" }
+
 var _ Capturer = (*dxgiCapturer)(nil)

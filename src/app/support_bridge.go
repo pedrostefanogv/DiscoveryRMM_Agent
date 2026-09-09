@@ -6,63 +6,63 @@ func (a *App) GetAgentInfo() (AgentInfo, error) {
 	if err := a.requireSupportSvc(); err != nil {
 		return AgentInfo{}, err
 	}
-	return a.supportSvc.GetAgentInfo()
+	return a.SupportSvc.GetAgentInfo()
 }
 
 func (a *App) GetSupportTickets() ([]APITicket, error) {
 	if err := a.requireSupportSvc(); err != nil {
 		return []APITicket{}, err
 	}
-	return a.supportSvc.GetSupportTickets()
+	return a.SupportSvc.GetSupportTickets()
 }
 
 func (a *App) CreateSupportTicket(input CreateTicketInput) (APITicket, error) {
 	if err := a.requireSupportSvc(); err != nil {
 		return APITicket{}, err
 	}
-	return a.supportSvc.CreateSupportTicket(input)
+	return a.SupportSvc.CreateSupportTicket(input)
 }
 
 func (a *App) GetSupportTicketDetails(ticketID string) (APITicket, error) {
 	if err := a.requireSupportSvc(); err != nil {
 		return APITicket{}, err
 	}
-	return a.supportSvc.GetSupportTicketDetails(ticketID)
+	return a.SupportSvc.GetSupportTicketDetails(ticketID)
 }
 
 func (a *App) GetTicketWorkflowStates() ([]APIWorkflowState, error) {
 	if err := a.requireSupportSvc(); err != nil {
 		return []APIWorkflowState{}, err
 	}
-	return a.supportSvc.GetTicketWorkflowStates()
+	return a.SupportSvc.GetTicketWorkflowStates()
 }
 
 func (a *App) GetTicketComments(ticketID string) ([]TicketComment, error) {
 	if err := a.requireSupportSvc(); err != nil {
 		return []TicketComment{}, err
 	}
-	return a.supportSvc.GetTicketComments(ticketID)
+	return a.SupportSvc.GetTicketComments(ticketID)
 }
 
 func (a *App) AddTicketCommentWithOptions(ticketID, content string, isInternal bool) (TicketComment, error) {
 	if err := a.requireSupportSvc(); err != nil {
 		return TicketComment{}, err
 	}
-	return a.supportSvc.AddTicketCommentWithOptions(ticketID, content, isInternal)
+	return a.SupportSvc.AddTicketCommentWithOptions(ticketID, content, isInternal)
 }
 
 func (a *App) AddTicketComment(ticketID, author, content string) error {
 	if err := a.requireSupportSvc(); err != nil {
 		return err
 	}
-	return a.supportSvc.AddTicketComment(ticketID, author, content)
+	return a.SupportSvc.AddTicketComment(ticketID, author, content)
 }
 
 func (a *App) GetKnowledgeBaseArticles() []KnowledgeArticle {
 	if err := a.requireSupportSvc(); err != nil {
 		return []KnowledgeArticle{}
 	}
-	return a.supportSvc.GetKnowledgeBaseArticles()
+	return a.SupportSvc.GetKnowledgeBaseArticles()
 }
 
 // RefreshKnowledgeBase limpa o cache local e recarrega os artigos da API.
@@ -70,75 +70,75 @@ func (a *App) RefreshKnowledgeBase() error {
 	if err := a.requireSupportSvc(); err != nil {
 		return err
 	}
-	return a.supportSvc.RefreshKnowledgeBase()
+	return a.SupportSvc.RefreshKnowledgeBase()
 }
 
 func (a *App) CloseSupportTicket(ticketID string, input CloseTicketInput) (APITicket, error) {
 	if err := a.requireSupportSvc(); err != nil {
 		return APITicket{}, err
 	}
-	return a.supportSvc.CloseSupportTicket(ticketID, input)
+	return a.SupportSvc.CloseSupportTicket(ticketID, input)
 }
 
 func (a *App) CloseAgentTicket(ticketID string, rating *int, comment, workflowStateID string) (json.RawMessage, error) {
 	if err := a.requireSupportSvc(); err != nil {
 		return nil, err
 	}
-	return a.supportSvc.CloseAgentTicket(ticketID, rating, comment, workflowStateID)
+	return a.SupportSvc.CloseAgentTicket(ticketID, rating, comment, workflowStateID)
 }
 
 func (a *App) GetAgentInfoJSON() (json.RawMessage, error) {
 	if err := a.requireSupportSvc(); err != nil {
 		return nil, err
 	}
-	return a.supportSvc.GetAgentInfoJSON()
+	return a.SupportSvc.GetAgentInfoJSON()
 }
 
 func (a *App) ListAgentTickets() (json.RawMessage, error) {
 	if err := a.requireSupportSvc(); err != nil {
 		return nil, err
 	}
-	return a.supportSvc.ListAgentTickets()
+	return a.SupportSvc.ListAgentTickets()
 }
 
 func (a *App) GetAgentTicketDetails(ticketID string) (json.RawMessage, error) {
 	if err := a.requireSupportSvc(); err != nil {
 		return nil, err
 	}
-	return a.supportSvc.GetAgentTicketDetails(ticketID)
+	return a.SupportSvc.GetAgentTicketDetails(ticketID)
 }
 
 func (a *App) AddAgentTicketComment(ticketID, content string, isInternal bool) (json.RawMessage, error) {
 	if err := a.requireSupportSvc(); err != nil {
 		return nil, err
 	}
-	return a.supportSvc.AddAgentTicketComment(ticketID, content, isInternal)
+	return a.SupportSvc.AddAgentTicketComment(ticketID, content, isInternal)
 }
 
 func (a *App) CreateAgentTicket(title, description string, priority int, category string) (json.RawMessage, error) {
 	if err := a.requireSupportSvc(); err != nil {
 		return nil, err
 	}
-	return a.supportSvc.CreateAgentTicket(title, description, priority, category)
+	return a.SupportSvc.CreateAgentTicket(title, description, priority, category)
 }
 
 func (a *App) GetKnowledgeArticles(category string) ([]KnowledgeArticle, error) {
 	if err := a.requireSupportSvc(); err != nil {
 		return []KnowledgeArticle{}, err
 	}
-	return a.supportSvc.GetKnowledgeArticles(category)
+	return a.SupportSvc.GetKnowledgeArticles(category)
 }
 
 func (a *App) GetKnowledgeArticleDetails(articleID string) (KnowledgeArticle, error) {
 	if err := a.requireSupportSvc(); err != nil {
 		return KnowledgeArticle{}, err
 	}
-	return a.supportSvc.GetKnowledgeArticleDetails(articleID)
+	return a.SupportSvc.GetKnowledgeArticleDetails(articleID)
 }
 
 func (a *App) GetKnowledgeArticlePages(articleID string) ([]KnowledgePage, error) {
 	if err := a.requireSupportSvc(); err != nil {
 		return []KnowledgePage{}, err
 	}
-	return a.supportSvc.GetKnowledgeArticlePages(articleID)
+	return a.SupportSvc.GetKnowledgeArticlePages(articleID)
 }

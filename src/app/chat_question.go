@@ -148,7 +148,7 @@ func (a *App) AnswerA2uiAction(payloadJSON string) {
 	}
 	var payload A2uiActionPayload
 	if err := json.Unmarshal([]byte(payloadJSON), &payload); err != nil {
-		a.logs.append("[chat] AnswerA2uiAction: payload inválido: " + err.Error())
+		a.Logs.Append("[chat] AnswerA2uiAction: payload inválido: " + err.Error())
 		return
 	}
 	if strings.TrimSpace(payload.Name) == "" {

@@ -6,5 +6,5 @@ func (a *App) supportLogf(format string, args ...any) {
 	if a == nil {
 		return
 	}
-	a.logs.append("[support] " + fmt.Sprintf(format, args...))
+	a.Logs.Append("[support] " + fmt.Sprintf(format, args...))
 }

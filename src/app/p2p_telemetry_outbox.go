@@ -16,7 +16,7 @@ const (
 // buildP2PTelemetryPayload monta o payload de telemetria P2P a partir do
 // estado do coordinator. Permanece no *App porque depende de p2pCoord.
 func (a *App) buildP2PTelemetryPayload() (P2PTelemetryPayload, error) {
-	if a.p2pCoord == nil {
+	if a.P2PCoord == nil {
 		return P2PTelemetryPayload{}, fmt.Errorf("coordinator P2P indisponível")
 	}
 	status := a.GetP2PDebugStatus()
@@ -25,15 +25,15 @@ func (a *App) buildP2PTelemetryPayload() (P2PTelemetryPayload, error) {
 		CollectedAtUTC:  time.Now().UTC().Format(time.RFC3339),
 		Metrics:         status.Metrics,
 		CurrentSeedPlan: status.CurrentSeedPlan,
-		KnownPeers:      a.p2pCoord.CountKnownPeers(),
-		ConnectedPeers:  a.p2pCoord.CountConnectedLibp2pPeers(),
+		KnownPeers:      a.P2PCoord.CountKnownPeers(),
+		ConnectedPeers:  a.P2PCoord.CountConnectedLibp2pPeers(),
 	}
 	if info, err := a.GetAgentInfo(); err == nil {
 		payload.SiteID = strings.TrimSpace(info.SiteID)
 	}
 
 	// Artifacts locais (truncado a 500 itens)
-	artifacts, _ := a.p2pCoord.ListArtifacts()
+	artifacts, _ := a.P2PCoord.ListArtifacts()
 	if len(artifacts) > 500 {
 		artifacts = artifacts[:500]
 	}
@@ -50,7 +50,7 @@ func (a *App) buildP2PTelemetryPayload() (P2PTelemetryPayload, error) {
 	// Carga do host: reusa coleta de métricas existente do heartbeat
 	cfg := a.GetP2PConfig()
 	if cfg.Enabled {
-		load := a.p2pCoord.CollectHostLoad()
+		load := a.P2PCoord.CollectHostLoad()
 		payload.HostLoad = &load
 	}
 
@@ -59,18 +59,18 @@ func (a *App) buildP2PTelemetryPayload() (P2PTelemetryPayload, error) {
 
 // enqueueP2PTelemetryOutbox delega para o outbox do pacote sync.
 func (a *App) enqueueP2PTelemetryOutbox(payload P2PTelemetryPayload, sendErr error) error {
-	if a.syncSvc == nil {
+	if a.SyncSvc == nil {
 		return nil
 	}
-	return a.syncSvc.EnqueueP2PTelemetryOutbox(payload, sendErr)
+	return a.SyncSvc.EnqueueP2PTelemetryOutbox(payload, sendErr)
 }
 
 // drainP2PTelemetryOutbox delega para o outbox do pacote sync.
 func (a *App) drainP2PTelemetryOutbox(ctx context.Context, limit int) error {
-	if a.syncSvc == nil {
+	if a.SyncSvc == nil {
 		return nil
 	}
-	return a.syncSvc.DrainP2PTelemetryOutbox(ctx, limit)
+	return a.SyncSvc.DrainP2PTelemetryOutbox(ctx, limit)
 }
 
 // marshalP2PTelemetryPayload delega a serialização (com limite de tamanho)

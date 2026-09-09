@@ -9,8 +9,8 @@ import (
 	"os"
 	"testing"
 
-	"discovery/app/debug"
 	"discovery/app/core/agentconn"
+	"discovery/app/debug"
 )
 
 type syncTestAgentConn struct {
@@ -70,7 +70,8 @@ func TestRefreshAgentConfiguration_AppliesRemoteSecurityAndReloads(t *testing.T)
 	debugSvc := debug.NewService(debug.Options{AgentConn: fakeConn})
 	debugSvc.ApplyRuntimeConnectionConfig("http", u.Host, "mdz_token_123", "8f6d6d72-4a8a-4c87-bffa-34ba29dc0bb7", "", "")
 
-	a := &App{debugSvc: debugSvc}
+	a := &App{}
+	a.CoreAgent.DebugSvc = debugSvc
 	if err := a.refreshAgentConfiguration(context.Background()); err != nil {
 		t.Fatalf("refreshAgentConfiguration: %v", err)
 	}
@@ -136,7 +137,8 @@ func TestRefreshAgentConfiguration_ZeroTouchPendingSkipsRemoteApply(t *testing.T
 	debugSvc := debug.NewService(debug.Options{AgentConn: fakeConn})
 	debugSvc.ApplyRuntimeConnectionConfig("http", u.Host, "mdz_token_123", "8f6d6d72-4a8a-4c87-bffa-34ba29dc0bb7", "", "")
 
-	a := &App{debugSvc: debugSvc}
+	a := &App{}
+	a.CoreAgent.DebugSvc = debugSvc
 	if err := a.refreshAgentConfiguration(context.Background()); err != nil {
 		t.Fatalf("refreshAgentConfiguration: %v", err)
 	}
@@ -189,7 +191,8 @@ func TestRefreshAgentConfiguration_ClearsZeroTouchPendingAfterApproval(t *testin
 	debugSvc := debug.NewService(debug.Options{AgentConn: fakeConn})
 	debugSvc.ApplyRuntimeConnectionConfig("http", u.Host, "mdz_token_123", "8f6d6d72-4a8a-4c87-bffa-34ba29dc0bb7", "", "")
 
-	a := &App{debugSvc: debugSvc}
+	a := &App{}
+	a.CoreAgent.DebugSvc = debugSvc
 	a.setZeroTouchApprovalPending(true)
 
 	if err := a.refreshAgentConfiguration(context.Background()); err != nil {

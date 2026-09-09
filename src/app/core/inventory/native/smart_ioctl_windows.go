@@ -23,12 +23,12 @@ const (
 
 // SENDCMDINPARAMS structure for SMART_RCV_DRIVE_DATA (values identical to x86/x64 packing).
 type sendCmdInParams struct {
-	BufferSize     uint32
-	DriveNumber    byte
-	Reserved       [3]byte
-	Reserved2      [4]uint32
-	IDERegs        [8]byte // IDEREGS: features, sectorCount, sectorNumber, cylLow, cylHigh, driveHead, command, reserved
-	Buffer         [1]byte // variable
+	BufferSize  uint32
+	DriveNumber byte
+	Reserved    [3]byte
+	Reserved2   [4]uint32
+	IDERegs     [8]byte // IDEREGS: features, sectorCount, sectorNumber, cylLow, cylHigh, driveHead, command, reserved
+	Buffer      [1]byte // variable
 }
 
 // sendCmdOutParams / SENDCMDOUTPARAMS layout: cBufferSize(4) + DRIVERSTATUS(12) + bBuffer(512)

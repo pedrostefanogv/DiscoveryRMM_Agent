@@ -63,7 +63,7 @@ func (a *App) GetStatusOverview() StatusOverview {
 		out.AppVersion = "dev"
 	}
 
-	if inv, ok := a.invCache.get(); ok {
+	if inv, ok := a.InvCache.Get(); ok {
 		if host := strings.TrimSpace(inv.Hardware.Hostname); host != "" {
 			out.Hostname = host
 		}
@@ -104,37 +104,49 @@ func (a *App) GetStatusOverview() StatusOverview {
 		})
 	}
 
-	if a.db != nil {
+	if a.CoreAgent.DB != nil {
 		agentID := strings.TrimSpace(a.GetDebugConfig().AgentID)
 		if agentID != "" {
-			if n, err := a.db.CountPendingCommandResultOutbox(agentID); err == nil {
+			if n, err := a.CoreAgent.DB.CountPendingCommandResultOutbox(agentID); err == nil {
 				out.PendingCommandResults = n
 			}
-			if n, err := a.db.CountPendingP2PTelemetryOutbox(agentID); err == nil {
+			if n, err := a.CoreAgent.DB.CountPendingP2PTelemetryOutbox(agentID); err == nil {
 				out.PendingP2PTelemetry = n
+			}
+		}
+	} else if a.ipcClient != nil {
+		// Companion (D3): DB pertence ao serviço — contadores via IPC RPC.
+		if resp, ok := a.ipcRequest("status:pending_counts", nil); ok {
+			if data, ok := resp["data"].(map[string]any); ok {
+				if v, ok := data["pendingCommandResults"].(float64); ok {
+					out.PendingCommandResults = int(v)
+				}
+				if v, ok := data["pendingP2PTelemetry"].(float64); ok {
+					out.PendingP2PTelemetry = int(v)
+				}
 			}
 		}
 	}
 
 	// Status de self-update do agente.
-	if a.selfUpdater != nil {
-		policy := a.selfUpdater.GetPolicy()
+	if a.SelfUpdater != nil {
+		policy := a.SelfUpdater.GetPolicy()
 		out.UpdateCheckEnabled = policy.Enabled
-		out.UpdateCheckInProgress = a.selfUpdater.IsChecking()
-		if t := a.selfUpdater.LastCheckAt(); !t.IsZero() {
+		out.UpdateCheckInProgress = a.SelfUpdater.IsChecking()
+		if t := a.SelfUpdater.LastCheckAt(); !t.IsZero() {
 			out.LastUpdateCheckAtUTC = t.UTC().Format(time.RFC3339)
 		}
-		out.UpdateLastError = a.selfUpdater.LastError()
-		out.UpdateLastInstallerExitCode = a.selfUpdater.LastInstallerExitCode()
-		out.UpdatePendingTargetVersion = a.selfUpdater.PendingTargetVersion()
-		out.UpdateDownloadOKCount = a.selfUpdater.DownloadOKCount()
-		out.UpdateLaunchOKCount = a.selfUpdater.LaunchOKCount()
-		out.UpdateLaunchFailCount = a.selfUpdater.LaunchFailCount()
-		out.UpdateInstallCompleteCount = a.selfUpdater.InstallCompleteCount()
-		out.UpdateDeferred = a.selfUpdater.IsDeferred()
+		out.UpdateLastError = a.SelfUpdater.LastError()
+		out.UpdateLastInstallerExitCode = a.SelfUpdater.LastInstallerExitCode()
+		out.UpdatePendingTargetVersion = a.SelfUpdater.PendingTargetVersion()
+		out.UpdateDownloadOKCount = a.SelfUpdater.DownloadOKCount()
+		out.UpdateLaunchOKCount = a.SelfUpdater.LaunchOKCount()
+		out.UpdateLaunchFailCount = a.SelfUpdater.LaunchFailCount()
+		out.UpdateInstallCompleteCount = a.SelfUpdater.InstallCompleteCount()
+		out.UpdateDeferred = a.SelfUpdater.IsDeferred()
 		if out.UpdateDeferred {
-			out.UpdateDeferredReason = a.selfUpdater.DeferredReason()
-			if t := a.selfUpdater.DeferredSince(); !t.IsZero() {
+			out.UpdateDeferredReason = a.SelfUpdater.DeferredReason()
+			if t := a.SelfUpdater.DeferredSince(); !t.IsZero() {
 				out.UpdateDeferredSinceUTC = t.UTC().Format(time.RFC3339)
 			}
 		}

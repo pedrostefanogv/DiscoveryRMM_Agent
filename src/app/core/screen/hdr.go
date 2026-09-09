@@ -27,29 +27,29 @@ var IID_IDXGIOutput6 = windowsGUID{0x068346e8, 0xaaec, 0x4b84, [8]byte{0xad, 0xd
 
 // DXGI_COLOR_SPACE_TYPE (valores oficiais dxgi1_4.h / dxgi1_6.h).
 const (
-	DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709              = 0
-	DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709              = 1  // scRGB (HDR)
-	DXGI_COLOR_SPACE_RGB_STUDIO_G22_NONE_P709            = 2
-	DXGI_COLOR_SPACE_RGB_STUDIO_G22_NONE_P2020           = 3
-	DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020           = 6  // HDR10 (PQ)
-	DXGI_COLOR_SPACE_YCBCR_STUDIO_G2084_LEFT_P2020       = 7
-	DXGI_COLOR_SPACE_RGB_STUDIO_G2084_NONE_P2020         = 8  // HDR10 (PQ studio)
-	DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709          = 9
-	DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P2020         = 10
-	DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_TOPLEFT_P2020      = 11
-	DXGI_COLOR_SPACE_YCBCR_STUDIO_G2084_TOPLEFT_P2020    = 12
-	DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P2020             = 13 // Wide gamut (P2020)
-	DXGI_COLOR_SPACE_YCBCR_STUDIO_G2084_LEFT_P2020_FIXED_POINT = 14
-	DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020_FIXED_POINT = 15
-	DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_TOPLEFT_P2020_FIXED_POINT = 16
+	DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709                       = 0
+	DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709                       = 1 // scRGB (HDR)
+	DXGI_COLOR_SPACE_RGB_STUDIO_G22_NONE_P709                     = 2
+	DXGI_COLOR_SPACE_RGB_STUDIO_G22_NONE_P2020                    = 3
+	DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020                    = 6 // HDR10 (PQ)
+	DXGI_COLOR_SPACE_YCBCR_STUDIO_G2084_LEFT_P2020                = 7
+	DXGI_COLOR_SPACE_RGB_STUDIO_G2084_NONE_P2020                  = 8 // HDR10 (PQ studio)
+	DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709                   = 9
+	DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P2020                  = 10
+	DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_TOPLEFT_P2020               = 11
+	DXGI_COLOR_SPACE_YCBCR_STUDIO_G2084_TOPLEFT_P2020             = 12
+	DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P2020                      = 13 // Wide gamut (P2020)
+	DXGI_COLOR_SPACE_YCBCR_STUDIO_G2084_LEFT_P2020_FIXED_POINT    = 14
+	DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020_FIXED_POINT        = 15
+	DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_TOPLEFT_P2020_FIXED_POINT   = 16
 	DXGI_COLOR_SPACE_YCBCR_STUDIO_G2084_TOPLEFT_P2020_FIXED_POINT = 17
-	DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P2020_FIXED_POINT = 18
-	DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_NONE_P2020_FIXED_POINT = 19
+	DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P2020_FIXED_POINT          = 18
+	DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_NONE_P2020_FIXED_POINT      = 19
 	// NOTA: o SDK oficial repete os nomes *_FIXED_POINT com valores 20-22
 	// (quirk do DXGI_COLOR_SPACE_TYPE). Em Go não podemos ter nomes duplicados,
 	// então omitimos os valores 20-22 (não usados na detecção de HDR).
-	DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709_FIXED_POINT  = 23 // scRGB fixed-point (HDR)
-	DXGI_COLOR_SPACE_CUSTOM                              = 0xFFFFFFFF
+	DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709_FIXED_POINT = 23 // scRGB fixed-point (HDR)
+	DXGI_COLOR_SPACE_CUSTOM                             = 0xFFFFFFFF
 )
 
 // DXGI_FORMAT_R16G16B16A16_FLOAT (scRGB) — 8 bytes/pixel (4 × half-float).
@@ -60,31 +60,31 @@ const slotOutput6GetDesc1 = 27
 
 // DXGI_OUTPUT_DESC1 (layout x64 verificado contra dxgi1_6.h).
 type dxgiOutputDesc1 struct {
-	DeviceName          [32]uint16
-	DesktopCoordinates  rect
-	AttachedToDesktop   int32
-	Rotation            uint32
-	Monitor             syscall.Handle
-	BitsPerColor        uint32
-	ColorSpace          uint32
-	RedPrimary          [2]float32
-	GreenPrimary        [2]float32
-	BluePrimary         [2]float32
-	WhitePoint          [2]float32
-	MinLuminance        float32
-	MaxLuminance        float32
+	DeviceName            [32]uint16
+	DesktopCoordinates    rect
+	AttachedToDesktop     int32
+	Rotation              uint32
+	Monitor               syscall.Handle
+	BitsPerColor          uint32
+	ColorSpace            uint32
+	RedPrimary            [2]float32
+	GreenPrimary          [2]float32
+	BluePrimary           [2]float32
+	WhitePoint            [2]float32
+	MinLuminance          float32
+	MaxLuminance          float32
 	MaxFullFrameLuminance float32
 }
 
 // AdvancedColorInfo descreve o estado de Advanced Color/HDR de um monitor.
 type AdvancedColorInfo struct {
-	Supported            bool
-	IsHDR                bool
-	ColorSpace           uint32
-	ColorSpaceName       string
-	BitsPerColor         uint32
-	MaxLuminance         float64
-	MinLuminance         float64
+	Supported             bool
+	IsHDR                 bool
+	ColorSpace            uint32
+	ColorSpaceName        string
+	BitsPerColor          uint32
+	MaxLuminance          float64
+	MinLuminance          float64
 	MaxFullFrameLuminance float64
 }
 
@@ -170,12 +170,12 @@ func DetectAdvancedColor(monitorIndex int) (*AdvancedColorInfo, error) {
 	}
 
 	info := &AdvancedColorInfo{
-		Supported:            true,
-		ColorSpace:           desc.ColorSpace,
-		ColorSpaceName:       colorSpaceName(desc.ColorSpace),
-		BitsPerColor:         desc.BitsPerColor,
-		MaxLuminance:         float64(desc.MaxLuminance),
-		MinLuminance:         float64(desc.MinLuminance),
+		Supported:             true,
+		ColorSpace:            desc.ColorSpace,
+		ColorSpaceName:        colorSpaceName(desc.ColorSpace),
+		BitsPerColor:          desc.BitsPerColor,
+		MaxLuminance:          float64(desc.MaxLuminance),
+		MinLuminance:          float64(desc.MinLuminance),
 		MaxFullFrameLuminance: float64(desc.MaxFullFrameLuminance),
 	}
 	info.IsHDR = isHDRColorSpace(desc.ColorSpace)

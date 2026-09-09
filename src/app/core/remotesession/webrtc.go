@@ -15,13 +15,13 @@ import (
 
 // WebRTCSession gerencia uma conexao WebRTC P2P com o browser.
 type WebRTCSession struct {
-	sessionID     string
-	peerConn      *webrtc.PeerConnection
-	videoTrack    *webrtc.TrackLocalStaticSample
-	natsStream    *NatsStreamHandler
-	stunURLs      []string
-	turnURLs      []string
-	turnUsername  string
+	sessionID      string
+	peerConn       *webrtc.PeerConnection
+	videoTrack     *webrtc.TrackLocalStaticSample
+	natsStream     *NatsStreamHandler
+	stunURLs       []string
+	turnURLs       []string
+	turnUsername   string
 	turnCredential string
 }
 
@@ -69,13 +69,13 @@ func NewWebRTCSession(
 	}
 
 	return &WebRTCSession{
-		sessionID:     sessionID,
-		peerConn:      peerConn,
-		videoTrack:    videoTrack,
-		natsStream:    natsStream,
-		stunURLs:      stunURLs,
-		turnURLs:      turnURLs,
-		turnUsername:  turnUsername,
+		sessionID:      sessionID,
+		peerConn:       peerConn,
+		videoTrack:     videoTrack,
+		natsStream:     natsStream,
+		stunURLs:       stunURLs,
+		turnURLs:       turnURLs,
+		turnUsername:   turnUsername,
 		turnCredential: turnCredential,
 	}, nil
 }

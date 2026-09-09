@@ -19,56 +19,56 @@ func appStoreLookupKey(installationType, packageID string) string {
 
 // fetchAppStoreByInstallationType coleta todas as páginas via cursor pagination (CQRS).
 func (a *App) fetchAppStoreByInstallationType(ctx context.Context, installationType AppStoreInstallationType) (AppStoreResponse, error) {
-	if a == nil || a.appStoreSvc == nil {
+	if a == nil || a.AppStoreSvc == nil {
 		return AppStoreResponse{}, nil
 	}
-	return a.appStoreSvc.FetchByInstallationType(ctx, installationType)
+	return a.AppStoreSvc.FetchByInstallationType(ctx, installationType)
 }
 
 // fetchAppStorePage faz uma única requisição ao endpoint app-store com cursor opcional.
 func (a *App) fetchAppStorePage(ctx context.Context, installationType AppStoreInstallationType, cursor, token, agentID string) (AppStoreResponse, error) {
-	if a == nil || a.appStoreSvc == nil {
+	if a == nil || a.AppStoreSvc == nil {
 		return AppStoreResponse{}, nil
 	}
-	return a.appStoreSvc.FetchPage(ctx, installationType, cursor, token, agentID)
+	return a.AppStoreSvc.FetchPage(ctx, installationType, cursor, token, agentID)
 }
 
 // loadEffectiveAppStorePolicy carrega a política efetiva da app-store.
 func (a *App) loadEffectiveAppStorePolicy(ctx context.Context, forceRefresh bool) (AppStoreEffectivePolicy, error) {
-	if a == nil || a.appStoreSvc == nil {
+	if a == nil || a.AppStoreSvc == nil {
 		return AppStoreEffectivePolicy{}, nil
 	}
-	return a.appStoreSvc.LoadEffectivePolicy(ctx, forceRefresh)
+	return a.AppStoreSvc.LoadEffectivePolicy(ctx, forceRefresh)
 }
 
 // getCatalogFromAppStore converte a política efetiva em um catálogo.
 func (a *App) getCatalogFromAppStore(ctx context.Context) (models.Catalog, error) {
-	if a == nil || a.appStoreSvc == nil {
+	if a == nil || a.AppStoreSvc == nil {
 		return models.Catalog{}, nil
 	}
-	return a.appStoreSvc.GetCatalogFromAppStore(ctx)
+	return a.AppStoreSvc.GetCatalogFromAppStore(ctx)
 }
 
 // findAllowedPackage valida se um pacote está autorizado para o agent.
 func (a *App) findAllowedPackage(ctx context.Context, installationType, packageID string) (AppStoreItem, error) {
-	if a == nil || a.appStoreSvc == nil {
+	if a == nil || a.AppStoreSvc == nil {
 		return AppStoreItem{}, nil
 	}
-	return a.appStoreSvc.FindAllowedPackage(ctx, installationType, packageID)
+	return a.AppStoreSvc.FindAllowedPackage(ctx, installationType, packageID)
 }
 
 // resolveAllowedPackage resolve um pacote autorizado, detectando ambiguidade.
 func (a *App) resolveAllowedPackage(ctx context.Context, packageID string) (AppStoreItem, error) {
-	if a == nil || a.appStoreSvc == nil {
+	if a == nil || a.AppStoreSvc == nil {
 		return AppStoreItem{}, nil
 	}
-	return a.appStoreSvc.ResolveAllowedPackage(ctx, packageID)
+	return a.AppStoreSvc.ResolveAllowedPackage(ctx, packageID)
 }
 
 // authorizeAutomationPackage autoriza um pacote para automação.
 func (a *App) authorizeAutomationPackage(ctx context.Context, installationType, packageID, operation string) error {
-	if a == nil || a.appStoreSvc == nil {
+	if a == nil || a.AppStoreSvc == nil {
 		return nil
 	}
-	return a.appStoreSvc.AuthorizeAutomationPackage(ctx, installationType, packageID, operation)
+	return a.AppStoreSvc.AuthorizeAutomationPackage(ctx, installationType, packageID, operation)
 }

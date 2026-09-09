@@ -62,7 +62,7 @@ type PSADTDebugNotificationRequest struct {
 }
 
 func (a *App) GetPSADTDebugState() PSADTDebugState {
-	a.logs.append("[psadt] GetPSADTDebugState chamado")
+	a.Logs.Append("[psadt] GetPSADTDebugState chamado")
 	cfg := a.GetAgentConfiguration()
 	module := a.CheckPSADTModuleStatus()
 	enabledStr := "nil"
@@ -73,10 +73,10 @@ func (a *App) GetPSADTDebugState() PSADTDebugState {
 			enabledStr = "false"
 		}
 	}
-	a.logs.append(fmt.Sprintf("[psadt] estado: enabled=%s version=%s moduleInstalled=%t moduleVersion=%s",
+	a.Logs.Append(fmt.Sprintf("[psadt] estado: enabled=%s version=%s moduleInstalled=%t moduleVersion=%s",
 		enabledStr, cfg.PSADT.RequiredVersion, module.Installed, module.Version))
 	return PSADTDebugState{
-		RuntimeDebugMode:     a.runtimeFlags.DebugMode,
+		RuntimeDebugMode:     a.RuntimeFlags.DebugMode,
 		Configuration:        cfg,
 		ModuleStatus:         module,
 		NotificationBranding: cfg.NotificationBranding, NotificationPolicies: cfg.NotificationPolicies,
@@ -124,7 +124,7 @@ func (a *App) bootstrapPSADTModuleIfNeeded() {
 	// Verifica se já está instalado antes de instalar.
 	status := a.psadtSvc.CheckModuleStatus()
 	if status.Installed {
-		a.logs.append(fmt.Sprintf("[psadt] bootstrap: módulo já instalado (v%s), nada a fazer", status.Version))
+		a.Logs.Append(fmt.Sprintf("[psadt] bootstrap: módulo já instalado (v%s), nada a fazer", status.Version))
 		return
 	}
 
@@ -132,14 +132,14 @@ func (a *App) bootstrapPSADTModuleIfNeeded() {
 	if version == "" {
 		version = "4.1.8"
 	}
-	a.logs.append(fmt.Sprintf("[psadt] bootstrap: módulo não instalado — instalando v%s em background", version))
+	a.Logs.Append(fmt.Sprintf("[psadt] bootstrap: módulo não instalado — instalando v%s em background", version))
 
 	a.safeGo(func() {
 		result := a.psadtSvc.InstallModule(version)
 		if result.Installed {
-			a.logs.append(fmt.Sprintf("[psadt] bootstrap: módulo instalado com sucesso (v%s)", result.Version))
+			a.Logs.Append(fmt.Sprintf("[psadt] bootstrap: módulo instalado com sucesso (v%s)", result.Version))
 		} else {
-			a.logs.append("[psadt] bootstrap: falha ao instalar módulo: " + result.Message)
+			a.Logs.Append("[psadt] bootstrap: falha ao instalar módulo: " + result.Message)
 		}
 	})
 }
@@ -176,7 +176,7 @@ func (a *App) ExecutePSADTTestScript(appName string, appVersion string) PSADTScr
 		result.Success = false
 		result.Error = "PSADT suportado apenas em Windows"
 		result.ExitCode = 1
-		a.logs.append("[psadt] test script ignorado: não é Windows")
+		a.Logs.Append("[psadt] test script ignorado: não é Windows")
 		return result
 	}
 
@@ -186,7 +186,7 @@ func (a *App) ExecutePSADTTestScript(appName string, appVersion string) PSADTScr
 	if appVersion == "" {
 		appVersion = "1.0.0"
 	}
-	a.logs.append(fmt.Sprintf("[psadt] executando test script: appName=%s appVersion=%s", appName, appVersion))
+	a.Logs.Append(fmt.Sprintf("[psadt] executando test script: appName=%s appVersion=%s", appName, appVersion))
 
 	// Usa a lib go-psadt (runner PowerShell persistente) em vez de montar
 	// scripts PowerShell inline. Valida módulo, versão e comandos exportados
@@ -204,7 +204,7 @@ func (a *App) ExecutePSADTTestScript(appName string, appVersion string) PSADTScr
 		result.Error = "falha ao inicializar PSADT: " + err.Error()
 		result.ExitCode = 1
 		result.DurationMS = time.Since(start).Milliseconds()
-		a.logs.append("[psadt] test script falhou na inicialização: " + err.Error())
+		a.Logs.Append("[psadt] test script falhou na inicialização: " + err.Error())
 		return result
 	}
 	defer client.Close()
@@ -219,7 +219,7 @@ func (a *App) ExecutePSADTTestScript(appName string, appVersion string) PSADTScr
 		result.Error = "falha ao abrir sessão PSADT: " + err.Error()
 		result.ExitCode = 1
 		result.DurationMS = time.Since(start).Milliseconds()
-		a.logs.append("[psadt] test script falhou ao abrir sessão: " + err.Error())
+		a.Logs.Append("[psadt] test script falhou ao abrir sessão: " + err.Error())
 		return result
 	}
 	defer func() {
@@ -257,7 +257,7 @@ func (a *App) ExecutePSADTTestScript(appName string, appVersion string) PSADTScr
 	result.Output = output.String()
 	result.Success = true
 	result.ExitCode = 0
-	a.logs.append(fmt.Sprintf("[psadt] test script executado com sucesso em %dms", elapsed))
+	a.Logs.Append(fmt.Sprintf("[psadt] test script executado com sucesso em %dms", elapsed))
 	return result
 }
 
@@ -304,7 +304,7 @@ func (a *App) ExecutePSADTVisualNotification(req PSADTVisualNotificationRequest)
 	if runtime.GOOS != "windows" {
 		result.Error = "PSADT suportado apenas em Windows"
 		result.ExitCode = 1
-		a.logs.append("[psadt] visual notification ignorada: nao e Windows")
+		a.Logs.Append("[psadt] visual notification ignorada: nao e Windows")
 		return result
 	}
 
@@ -330,7 +330,7 @@ func (a *App) ExecutePSADTVisualNotification(req PSADTVisualNotificationRequest)
 	if req.DialogTimeout < 0 {
 		req.DialogTimeout = 0
 	}
-	a.logs.append(fmt.Sprintf("[psadt] notificacao visual nativa: tipo=%s titulo=%q", req.NotifType, req.Title))
+	a.Logs.Append(fmt.Sprintf("[psadt] notificacao visual nativa: tipo=%s titulo=%q", req.NotifType, req.Title))
 
 	script, timeout := buildPSADTVisualScript(req)
 
@@ -338,7 +338,7 @@ func (a *App) ExecutePSADTVisualNotification(req PSADTVisualNotificationRequest)
 	if err != nil {
 		result.Error = "falha ao criar arquivo temporario: " + err.Error()
 		result.ExitCode = 1
-		a.logs.append("[psadt] " + result.Error)
+		a.Logs.Append("[psadt] " + result.Error)
 		return result
 	}
 	tmpPath := tmpFile.Name()
@@ -348,7 +348,7 @@ func (a *App) ExecutePSADTVisualNotification(req PSADTVisualNotificationRequest)
 		tmpFile.Close()
 		result.Error = "falha ao escrever script temporario: " + err.Error()
 		result.ExitCode = 1
-		a.logs.append("[psadt] " + result.Error)
+		a.Logs.Append("[psadt] " + result.Error)
 		return result
 	}
 	tmpFile.Close()
@@ -388,13 +388,13 @@ func (a *App) ExecutePSADTVisualNotification(req PSADTVisualNotificationRequest)
 		} else {
 			result.ExitCode = 1
 		}
-		a.logs.append(fmt.Sprintf("[psadt] notificacao visual falhou (tipo=%s): %v", req.NotifType, err))
+		a.Logs.Append(fmt.Sprintf("[psadt] notificacao visual falhou (tipo=%s): %v", req.NotifType, err))
 		return result
 	}
 
 	result.Success = true
 	result.ExitCode = 0
-	a.logs.append(fmt.Sprintf("[psadt] notificacao visual concluida (tipo=%s) em %dms", req.NotifType, elapsed))
+	a.Logs.Append(fmt.Sprintf("[psadt] notificacao visual concluida (tipo=%s) em %dms", req.NotifType, elapsed))
 	return result
 }
 

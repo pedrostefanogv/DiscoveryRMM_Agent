@@ -21,7 +21,7 @@ func (a *App) handleSystemInfoCommand(ctx context.Context, payload any) (bool, i
 	operation := agentcommands.GetStringField(payloadJSON, "Operation")
 	operation = strings.ToLower(strings.TrimSpace(operation))
 
-	a.logs.append(fmt.Sprintf("[agent] processando systeminfo: operation=%s", operation))
+	a.Logs.Append(fmt.Sprintf("[agent] processando systeminfo: operation=%s", operation))
 
 	switch operation {
 	case "refresh-on-demand":
@@ -55,17 +55,17 @@ func (a *App) handleRefreshOnDemand(_ context.Context, payloadJSON map[string]an
 
 	if flags.Ports || flags.Connections {
 		if err := a.requireInventorySvc(); err != nil {
-			a.logs.append("[agent] refresh-on-demand: inventory não provisionado: " + err.Error())
+			a.Logs.Append("[agent] refresh-on-demand: inventory não provisionado: " + err.Error())
 			return true, 1, "", err.Error()
 		}
 
 		// Coleta e faz upload das conexões de rede para a API
 		if err := a.SyncNetworkConnections(); err != nil {
-			a.logs.append("[agent] refresh-on-demand: falha ao coletar/enviar conexoes de rede: " + err.Error())
+			a.Logs.Append("[agent] refresh-on-demand: falha ao coletar/enviar conexoes de rede: " + err.Error())
 			return true, 1, "", err.Error()
 		}
 		// Obtém os dados do cache para o log
-		if cached, ok := a.invCache.Get(); ok {
+		if cached, ok := a.InvCache.Get(); ok {
 			results = append(results, fmt.Sprintf("ports=%d", len(cached.ListeningPorts)))
 			results = append(results, fmt.Sprintf("connections=%d", len(cached.OpenSockets)))
 		} else {
@@ -74,18 +74,18 @@ func (a *App) handleRefreshOnDemand(_ context.Context, payloadJSON map[string]an
 	}
 
 	if flags.Software {
-		software, err := a.inventorySvc.RefreshSoftware()
+		software, err := a.InventorySvc.RefreshSoftware()
 		if err != nil {
-			a.logs.append("[agent] refresh-on-demand: falha ao coletar software: " + err.Error())
+			a.Logs.Append("[agent] refresh-on-demand: falha ao coletar software: " + err.Error())
 		} else {
 			results = append(results, fmt.Sprintf("software=%d", len(software)))
 		}
 	}
 
 	if flags.Printers || flags.Hardware {
-		report, err := a.inventorySvc.RefreshInventory()
+		report, err := a.InventorySvc.RefreshInventory()
 		if err != nil {
-			a.logs.append("[agent] refresh-on-demand: falha ao coletar inventario: " + err.Error())
+			a.Logs.Append("[agent] refresh-on-demand: falha ao coletar inventario: " + err.Error())
 		} else {
 			if flags.Printers {
 				results = append(results, fmt.Sprintf("printers=%d", len(report.Printers)))
@@ -96,7 +96,7 @@ func (a *App) handleRefreshOnDemand(_ context.Context, payloadJSON map[string]an
 		}
 	}
 
-	a.logs.append("[agent] refresh-on-demand concluido: " + strings.Join(results, ", "))
+	a.Logs.Append("[agent] refresh-on-demand concluido: " + strings.Join(results, ", "))
 	return true, 0, "refresh-on-demand: " + strings.Join(results, ", "), ""
 }
 
@@ -115,9 +115,9 @@ func (a *App) handleForceSync(_ context.Context, payloadJSON map[string]any) (bo
 	var results []string
 
 	if inventory {
-		report, err := a.inventorySvc.RefreshInventory()
+		report, err := a.InventorySvc.RefreshInventory()
 		if err != nil {
-			a.logs.append("[agent] force-sync: falha ao coletar inventario: " + err.Error())
+			a.Logs.Append("[agent] force-sync: falha ao coletar inventario: " + err.Error())
 			results = append(results, "inventory=failed")
 		} else {
 			results = append(results, fmt.Sprintf("inventory=ok(ports=%d,conn=%d)", len(report.ListeningPorts), len(report.OpenSockets)))
@@ -125,20 +125,20 @@ func (a *App) handleForceSync(_ context.Context, payloadJSON map[string]any) (bo
 	}
 
 	if software {
-		sw, err := a.inventorySvc.RefreshSoftware()
+		sw, err := a.InventorySvc.RefreshSoftware()
 		if err != nil {
-			a.logs.append("[agent] force-sync: falha ao coletar software: " + err.Error())
+			a.Logs.Append("[agent] force-sync: falha ao coletar software: " + err.Error())
 		} else {
 			results = append(results, fmt.Sprintf("software=%d", len(sw)))
 		}
 	}
 
 	if policies {
-		a.logs.append("[agent] force-sync: policies sync triggered")
+		a.Logs.Append("[agent] force-sync: policies sync triggered")
 		results = append(results, "policies=triggered")
 	}
 
-	a.logs.append("[agent] force-sync concluido: " + strings.Join(results, ", "))
+	a.Logs.Append("[agent] force-sync concluido: " + strings.Join(results, ", "))
 	return true, 0, "force-sync: " + strings.Join(results, ", "), ""
 }
 

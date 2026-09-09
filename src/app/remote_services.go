@@ -80,12 +80,12 @@ func (s *remoteSessionService) ServiceShutdown() error {
 //
 //wails:ignore
 func (a *App) RemoteDebugService() *remoteDebugService {
-	return &remoteDebugService{mgr: a.remoteDebug}
+	return &remoteDebugService{mgr: a.RemoteDebug}
 }
 
 // RemoteSessionService retorna o adapter Wails v3 para o domínio de acesso remoto.
 //
 //wails:ignore
 func (a *App) RemoteSessionService() *remoteSessionService {
-	return &remoteSessionService{mgr: a.remoteSessionMgr}
+	return &remoteSessionService{mgr: a.RemoteSessionMgr}
 }

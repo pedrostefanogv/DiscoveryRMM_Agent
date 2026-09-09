@@ -3,11 +3,16 @@ package app
 import "discovery/app/core/models"
 
 // GetPendingUpdates runs `winget upgrade` and parses the output into structured items.
+// Companion mode: o scan roda NO serviço via RPC updates:scan (decisão D2 —
+// winget/updates no serviço; a UI só exibe). Standalone: executa localmente.
 func (a *App) GetPendingUpdates() ([]models.UpgradeItem, error) {
+	if items, ok := a.getPendingUpdatesCompanion(); ok {
+		return items, nil
+	}
 	if err := a.requireUpdatesSvc(); err != nil {
 		return nil, err
 	}
-	return a.updatesSvc.GetPendingUpdates()
+	return a.UpdatesSvc.GetPendingUpdates()
 }
 
 // GetPackageActions returns a contextual action map keyed by package id.
@@ -16,15 +21,15 @@ func (a *App) GetPackageActions() (map[string]string, error) {
 	if err := a.requireUpdatesSvc(); err != nil {
 		return map[string]string{}, err
 	}
-	return a.updatesSvc.GetPackageActions()
+	return a.UpdatesSvc.GetPackageActions()
 }
 
 // SetExportRedaction toggles redaction for export.
 func (a *App) SetExportRedaction(redact bool) {
-	if a == nil || a.exporter == nil {
+	if a == nil || a.Exporter == nil {
 		return
 	}
-	a.exporter.SetRedaction(redact)
+	a.Exporter.SetRedaction(redact)
 }
 
 // ExportInventoryMarkdown exports inventory data in Markdown format.
@@ -32,7 +37,7 @@ func (a *App) ExportInventoryMarkdown() (string, error) {
 	if err := a.requireExporter(); err != nil {
 		return "", err
 	}
-	return a.exporter.ExportInventoryMarkdown()
+	return a.Exporter.ExportInventoryMarkdown()
 }
 
 // ExportInventoryPDF exports inventory data in PDF format.
@@ -40,5 +45,5 @@ func (a *App) ExportInventoryPDF() (string, error) {
 	if err := a.requireExporter(); err != nil {
 		return "", err
 	}
-	return a.exporter.ExportInventoryPDF()
+	return a.Exporter.ExportInventoryPDF()
 }

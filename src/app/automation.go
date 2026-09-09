@@ -1,6 +1,7 @@
 package app
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -9,18 +10,26 @@ import (
 )
 
 func (a *App) GetAutomationState() AutomationStateView {
-	if a.automationSvc == nil {
+	// Companion mode: o motor de automação roda no serviço — busca o estado
+	// via RPC automation:state (§0.5). Standalone: serviço local.
+	if raw, ok := a.getAutomationStateCompanion(); ok {
+		var view AutomationStateView
+		if err := json.Unmarshal(raw, &view); err == nil {
+			return view
+		}
+	}
+	if a.AutomationSvc == nil {
 		return AutomationStateView{}
 	}
-	return mapAutomationState(a.automationSvc.GetState())
+	return mapAutomationState(a.AutomationSvc.GetState())
 }
 
 func (a *App) RefreshAutomationPolicy(includeScriptContent bool) (AutomationStateView, error) {
-	if a.automationSvc == nil {
+	if a.AutomationSvc == nil {
 		return AutomationStateView{}, nil
 	}
 	ctx := a.ctx
-	state, err := a.automationSvc.RefreshPolicy(ctx, includeScriptContent)
+	state, err := a.AutomationSvc.RefreshPolicy(ctx, includeScriptContent)
 	return mapAutomationState(state), err
 }
 

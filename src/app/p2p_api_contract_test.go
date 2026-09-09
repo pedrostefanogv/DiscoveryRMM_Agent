@@ -15,8 +15,8 @@ import (
 func newP2PAPIContractTestApp(t *testing.T, serverURL, token string) *App {
 	t.Helper()
 	a := &App{ctx: context.Background()}
-	a.debugSvc = debugsvc.NewService(debugsvc.Options{})
-	a.debugSvc.ApplyRuntimeConnectionConfig("http", strings.TrimPrefix(serverURL, "http://"), token, "8f6d6d72-4a8a-4c87-bffa-34ba29dc0bb7", "", "")
+	a.DebugSvc = debugsvc.NewService(debugsvc.Options{})
+	a.DebugSvc.ApplyRuntimeConnectionConfig("http", strings.TrimPrefix(serverURL, "http://"), token, "8f6d6d72-4a8a-4c87-bffa-34ba29dc0bb7", "", "")
 	return a
 }
 

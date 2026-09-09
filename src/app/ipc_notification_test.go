@@ -34,7 +34,7 @@ func TestHandleIPCNotificationRespondPayloadValidation(t *testing.T) {
 
 func TestBroadcastIPCEventNilSafe(t *testing.T) {
 	var aNil *App
-	aNil.broadcastIPCEvent("test")        // não pode panic
+	aNil.broadcastIPCEvent("test") // não pode panic
 	a := &App{}
 	a.broadcastIPCEvent("test", "k", "v") // ipcServer nil — não pode panic
 }

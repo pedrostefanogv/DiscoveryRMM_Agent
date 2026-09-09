@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"discovery/app/appstore"
-	"discovery/app/debug"
 	"discovery/app/core/models"
+	"discovery/app/debug"
 )
 
 type delayedRefreshAppsService struct {

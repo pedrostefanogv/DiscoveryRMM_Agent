@@ -37,6 +37,7 @@ import (
 	"discovery/app/core/selfupdate"
 	"discovery/app/core/services"
 	"discovery/app/core/winget"
+	"discovery/app/coreagent"
 	"discovery/app/customfields"
 	"discovery/app/debug"
 	"discovery/app/debughttp"
@@ -92,74 +93,33 @@ func WebView2UserDataPath() string {
 }
 
 type App struct {
+	// coreagent.CoreAgent embutido (migração física lote 1 — Fase A):
+	// serviços de domínio/infra do core com tipos em pacotes externos.
+	// A promoção de campos mantém `a.AgentConn`, `a.NotificationSvc`, etc.
+	// funcionando — refactor mecânico sem mudança de comportamento. O acesso
+	// explícito ao embed é `a.CoreAgent`; `Core` é um alias curto para o
+	// mesmo struct (usado onde um método/promoted field colide, ex. DB()).
+	// Alias declarado após o struct: ver func (a *App) core() abaixo — não,
+	// Go não tem alias de embed; o acesso é via a.CoreAgent.<Campo>.
+	coreagent.CoreAgent
+
 	ctx                  context.Context
 	cancel               context.CancelFunc
-	runtimeFlags         RuntimeFlags
-	catalogSvc           *services.CatalogService
-	catalogClient        *data.HTTPClient
-	appsSvc              *services.AppsService
 	packageManagerRouter *automationPackageManagerRouter
-	invSvc               *services.InventoryService
-	printerSvc           *services.PrinterService
 
-	db        *database.DB
-	invCache  inventoryCache
-	exportCfg exportConfig
-	logs      logBuffer
-
-	mcpRegistry   *mcp.Registry
-	chatSvc       *chat.Service
-	psadtSvc      *psadt.Service
-	automationSvc *automation.Service
+	mcpRegistry *mcp.Registry
+	chatSvc     *chat.Service
+	psadtSvc    *psadt.Service
 
 	// toolsRegistration guarda o timestamp do último registro bem-sucedido de tools.
 	// Usado para re-registrar se o cache do servidor expirou (TTL 5min por padrão no servidor).
 	toolsRegistrationMu   sync.RWMutex
 	lastToolsRegistration time.Time
-	agentConn             *agentconn.Runtime
-	remoteDebug           *remotedebug.Manager
-	syncSvc               *syncsvc.Service
-	p2pCoord              *p2pCoordinator
-	updateTrigger         chan struct{}
-	agentInfo             agentInfoCache
-	appStorePolicy        appStorePolicyCache
-	debugSvc              *debug.Service
-	agentConfigSvc        *agentconfig.Service
-	ticketsSvc            *tickets.Service
-	updatesSvc            *updates.Service
-	exporter              *updates.Exporter
-	inventorySvc          *appinventory.Service
-	supportSvc            *appsupport.Service
-
-	consolEngine *consolidation.Engine
 
 	debugHTTP  *debughttp.Server
 	chatSSE    *debughttp.Server
 	chatEvents *debughttp.ChatEventBroker
 
-	// hardwareIDSvc encapsula a coleta e cache de identidade de hardware
-	// (TPM EK + SMBIOS UUID).
-	hardwareIDSvc *hardwareid.Service
-
-	// memorySvc encapsula as memórias/anotações locais persistidas.
-	memorySvc *memory.Service
-
-	p2pMu                      sync.RWMutex
-	p2pConfig                  P2PConfig
-	p2pSeedPlanCache           cachedP2PSeedPlan
-	p2pTelemetryRateLimitUntil time.Time
-
-	agentConfigMu sync.RWMutex
-	agentConfig   agentconfig.AgentConfiguration
-
-	startupMu                sync.RWMutex
-	startupErr               error
-	startupWg                sync.WaitGroup
-	activityMu               sync.Mutex
-	activeOps                int
-	lastIdle                 bool
-	idleKnown                bool
-	idleCapable              bool
 	closeMu                  sync.RWMutex
 	allowClose               bool
 	trayReady                atomic.Bool
@@ -167,31 +127,15 @@ type App struct {
 	trayIcon                 []byte
 	trayProvisioning         []byte
 	trayOffline              []byte
-	remoteSessionMgr         *remotesession.Manager
 	activeRemoteSessions     atomic.Int32
 	zeroTouchAttemptInFlight atomic.Bool
 	zeroTouchApprovalPending atomic.Bool
 
 	startupTime time.Time
 
-	// notificationSvc encapsula o centro de notificações.
-	notificationSvc *notifications.Service
-
-	// apiClientSvc encapsula a detecção de features da API.
-	apiClientSvc *apiclient.Service
-
-	// customFieldsSvc encapsula o envio de campos customizados.
-	customFieldsSvc *customfields.Service
-
-	// appStoreSvc encapsula a lógica de app-store (fetch, cache e política).
-	appStoreSvc *appstore.Service
-
-	queuedForceHeartbeat atomic.Bool
-	quitRequested        atomic.Bool
-
-	selfUpdater   *selfupdate.Updater
-	selfUpdaterCh chan bool
-
+	// deferredRestart fica no App (não core): estado do power-command de
+	// restart adiado — usa campos minúsculos intensivamente e é acionado
+	// pela sessão de UI (powerCommandPayload). Revisão da migração lote 2.
 	deferredRestart *deferredRestartState
 
 	// ── Wails v3 ──
@@ -241,21 +185,22 @@ func NewApp(opts AppStartupOptions) *App {
 
 	a := &App{
 		ctx:              context.Background(),
-		runtimeFlags:     RuntimeFlags{DebugMode: opts.DebugMode, ServiceMode: opts.ServiceMode},
-		trayIcon:         opts.TrayIcon,
-		trayProvisioning: opts.TrayProvisioningIcon,
-		trayOffline:      opts.TrayOfflineIcon,
-		updateTrigger:    make(chan struct{}, 1),
-		catalogSvc:       services.NewCatalogService(catalogClient),
-		catalogClient:    catalogClient,
-		appsSvc:          services.NewAppsService(wingetClient, chocolateyClient),
-		invSvc:           services.NewInventoryService(inventoryProvider),
-		printerSvc:       services.NewPrinterService(printerManager),
 		mcpRegistry:      reg,
 		chatEvents:       debughttp.NewChatEventBroker(),
 		startupTime:      time.Now(),
+		trayIcon:         opts.TrayIcon,
+		trayProvisioning: opts.TrayProvisioningIcon,
+		trayOffline:      opts.TrayOfflineIcon,
 	}
-	a.logs.Buffer = logs.New()
+	a.RuntimeFlags = coreagent.RuntimeFlags{DebugMode: opts.DebugMode, ServiceMode: opts.ServiceMode}
+	// Campos do core (migração lote 1 — embed coreagent.CoreAgent).
+	a.CoreAgent.UpdateTrigger = make(chan struct{}, 1)
+	a.CoreAgent.CatalogSvc = services.NewCatalogService(catalogClient)
+	a.CoreAgent.CatalogClient = catalogClient
+	a.CoreAgent.AppsSvc = services.NewAppsService(wingetClient, chocolateyClient)
+	a.CoreAgent.InvSvc = services.NewInventoryService(inventoryProvider)
+	a.CoreAgent.PrinterSvc = services.NewPrinterService(printerManager)
+	a.Logs.Buffer = logs.New()
 	installerSvc = installer.New(installer.Deps{
 		NormalizeP2PConfig: normalizeP2PConfig,
 	})
@@ -278,7 +223,7 @@ func NewApp(opts AppStartupOptions) *App {
 	a.chatSvc = chat.New(reg, chat.Deps{
 		Ctx: func() context.Context { return a.ctx },
 		Logf: func(line string) {
-			a.logs.append(line)
+			a.Logs.Append(line)
 		},
 		GetDebugConfig: func() chat.DebugConfig {
 			cfg := a.GetDebugConfig()
@@ -301,7 +246,7 @@ func NewApp(opts AppStartupOptions) *App {
 	})
 	a.psadtSvc = psadt.New(psadt.Deps{
 		Logf: func(line string) {
-			a.logs.append(line)
+			a.Logs.Append(line)
 		},
 		GetAgentConfiguration: func() psadt.AgentConfiguration {
 			cfg := a.GetAgentConfiguration()
@@ -314,7 +259,7 @@ func NewApp(opts AppStartupOptions) *App {
 			}
 		},
 		RuntimeDebugMode: func() bool {
-			return a.runtimeFlags.DebugMode
+			return a.RuntimeFlags.DebugMode
 		},
 		DispatchNotification: func(req psadt.NotificationRequest) psadt.NotificationResponse {
 			resp := a.DispatchNotification(NotificationDispatchRequest{
@@ -334,26 +279,33 @@ func NewApp(opts AppStartupOptions) *App {
 			}
 		},
 	})
-	a.hardwareIDSvc = hardwareid.New(hardwareid.Deps{
+	a.HardwareIDSvc = hardwareid.New(hardwareid.Deps{
 		Logf: func(line string) {
-			a.logs.append(line)
+			a.Logs.Append(line)
 		},
 	})
-	a.memorySvc = memory.New(memory.Deps{
-		DB: func() *database.DB {
-			return a.db
-		},
+	a.MemorySvc = memory.New(memory.Deps{
+		DB: func() *database.DB { return a.CoreAgent.DB },
 	})
-	a.notificationSvc = notifications.New(notifications.Deps{
+	a.NotificationSvc = notifications.New(notifications.Deps{
 		Logf: func(line string) {
-			a.logs.append(line)
+			a.Logs.Append(line)
 		},
+		// Ctx reflete a presença de uma UI para renderizar notificações
+		// (revisão 2 — bug B4): no serviço, a.ctx nunca é nil, então o
+		// caminho headless (toast nativo) nunca dispararia. Retorna nil
+		// quando não há UI Wails nem UI companion conectada via IPC —
+		// nesses casos o Dispatch cai no fallback nativo (Fase C2/D4).
 		Ctx: func() interface{ Done() <-chan struct{} } {
+			if a.RuntimeFlags.ServiceMode {
+				if a.ipcServer != nil && a.ipcServer.ClientCount() > 0 {
+					return a.ctx
+				}
+				return nil
+			}
 			return a.ctx
 		},
-		DB: func() *database.DB {
-			return a.db
-		},
+		DB:        func() *database.DB { return a.CoreAgent.DB },
 		EmitEvent: a.EmitEvent,
 		GetAgentConfiguration: func() notifications.AgentConfiguration {
 			cfg := a.GetAgentConfiguration()
@@ -372,8 +324,16 @@ func NewApp(opts AppStartupOptions) *App {
 				},
 			}
 		},
+		// Toast nativo do Windows quando o serviço não tem UI conectada
+		// (PLANO_SEPARACAO_SERVICO_UI.md, Fase C2 — decisão D4). No modo UI
+		// (standalone/companion) o fallback fica nil: a UI renderiza via Wails.
+		NativeFallback: func(req notifications.DispatchRequest) {
+			if a.RuntimeFlags.ServiceMode {
+				dispatchNativeToastWhenHeadless(req)
+			}
+		},
 	})
-	a.apiClientSvc = apiclient.New(apiclient.Deps{
+	a.ApiClientSvc = apiclient.New(apiclient.Deps{
 		GetDebugConfig: func() apiclient.DebugConfig {
 			cfg := a.GetDebugConfig()
 			return apiclient.DebugConfig{
@@ -384,10 +344,10 @@ func NewApp(opts AppStartupOptions) *App {
 			}
 		},
 		Logf: func(line string) {
-			a.logs.append(line)
+			a.Logs.Append(line)
 		},
 	})
-	a.customFieldsSvc = customfields.New(customfields.Deps{
+	a.CustomFieldsSvc = customfields.New(customfields.Deps{
 		GetDebugConfig: func() customfields.DebugConfig {
 			cfg := a.GetDebugConfig()
 			return customfields.DebugConfig{
@@ -398,7 +358,7 @@ func NewApp(opts AppStartupOptions) *App {
 			}
 		},
 	})
-	a.appStoreSvc = appstore.New(appstore.Deps{
+	a.AppStoreSvc = appstore.New(appstore.Deps{
 		GetDebugConfig: func() appstore.DebugConfig {
 			cfg := a.GetDebugConfig()
 			return appstore.DebugConfig{
@@ -414,14 +374,12 @@ func NewApp(opts AppStartupOptions) *App {
 		},
 		FeatureEnabled: a.featureEnabled,
 		Logf: func(line string) {
-			a.logs.append(line)
+			a.Logs.Append(line)
 		},
-		DB: func() *database.DB {
-			return a.db
-		},
-		Cache: &a.appStorePolicy.inner,
+		DB:    func() *database.DB { return a.CoreAgent.DB },
+		Cache: a.AppStorePolicy.CachePointer(),
 	})
-	a.automationSvc = automation.NewService(func() automation.RuntimeConfig {
+	a.AutomationSvc = automation.NewService(func() automation.RuntimeConfig {
 		cfg := a.GetDebugConfig()
 		baseURL := strings.TrimSpace(cfg.ApiScheme) + "://" + strings.TrimSpace(cfg.ApiServer)
 		if strings.TrimSpace(cfg.ApiScheme) == "" || strings.TrimSpace(cfg.ApiServer) == "" {
@@ -433,36 +391,36 @@ func NewApp(opts AppStartupOptions) *App {
 			AgentID: strings.TrimSpace(cfg.AgentID),
 		}
 	}, func(line string) {
-		a.logs.append("[automation] " + line)
+		a.Logs.Append("[automation] " + line)
 	})
-	a.packageManagerRouter = newAutomationPackageManagerRouter(a, a.appsSvc)
-	a.automationSvc.SetPackageManager(a.packageManagerRouter)
+	a.packageManagerRouter = newAutomationPackageManagerRouter(a, a.AppsSvc)
+	a.AutomationSvc.SetPackageManager(a.packageManagerRouter)
 	// Warmup P2P (uma vez por processo): atrasa o primeiro policy-sync (e os
 	// triggers immediate/checkin de startup) até o discovery inicial do P2P
 	// concluir OU o teto de 120s — evita que tasks de instalação baixem da
 	// internet enquanto os peers da LAN ainda estão sendo descobertos.
-	a.automationSvc.SetStartupReadinessWaiter(func(ctx context.Context) {
-		if a.p2pCoord == nil {
+	a.AutomationSvc.SetStartupReadinessWaiter(func(ctx context.Context) {
+		if a.P2PCoord == nil {
 			return
 		}
 		cfg := a.GetP2PConfig()
 		if !cfg.Enabled {
 			return
 		}
-		readyCh := a.p2pCoord.ReadyCh()
+		readyCh := a.P2PCoord.ReadyCh()
 		select {
 		case <-readyCh:
 			return
 		default:
 		}
-		a.logs.append("[automation] aguardando discovery inicial do P2P antes do primeiro policy-sync (teto 120s)")
+		a.Logs.Append("[automation] aguardando discovery inicial do P2P antes do primeiro policy-sync (teto 120s)")
 		timer := time.NewTimer(120 * time.Second)
 		defer timer.Stop()
 		select {
 		case <-readyCh:
-			a.logs.append("[automation] discovery P2P concluído, prosseguindo com policy-sync")
+			a.Logs.Append("[automation] discovery P2P concluído, prosseguindo com policy-sync")
 		case <-timer.C:
-			a.logs.append("[automation] teto de 120s aguardando discovery P2P atingido, prosseguindo com policy-sync")
+			a.Logs.Append("[automation] teto de 120s aguardando discovery P2P atingido, prosseguindo com policy-sync")
 		case <-ctx.Done():
 		}
 	})
@@ -470,10 +428,10 @@ func NewApp(opts AppStartupOptions) *App {
 	automation.SetP2PVersionResolver(func(packageID string) string {
 		return a.packageManagerRouter.resolveP2PPackageVersion(packageID)
 	})
-	a.automationSvc.SetPackageAuthorization(func(ctx context.Context, installationType automation.AppInstallationType, packageID, operation string) error {
+	a.AutomationSvc.SetPackageAuthorization(func(ctx context.Context, installationType automation.AppInstallationType, packageID, operation string) error {
 		return a.authorizeAutomationPackage(ctx, string(installationType), packageID, operation)
 	})
-	a.automationSvc.SetPSADTPolicyResolver(func() automation.PSADTPolicy {
+	a.AutomationSvc.SetPSADTPolicyResolver(func() automation.PSADTPolicy {
 		cfg := a.GetAgentConfiguration().PSADT
 		policy := automation.PSADTPolicy{
 			RequiredVersion:       strings.TrimSpace(cfg.RequiredVersion),
@@ -489,7 +447,7 @@ func NewApp(opts AppStartupOptions) *App {
 		}
 		return policy
 	})
-	a.automationSvc.SetNotificationDispatcher(func(req automation.AutomationNotificationRequest) automation.AutomationNotificationResponse {
+	a.AutomationSvc.SetNotificationDispatcher(func(req automation.AutomationNotificationRequest) automation.AutomationNotificationResponse {
 		resp := a.DispatchNotification(NotificationDispatchRequest{
 			NotificationID: req.NotificationID,
 			IdempotencyKey: req.IdempotencyKey,
@@ -503,7 +461,7 @@ func NewApp(opts AppStartupOptions) *App {
 			Metadata:       req.Metadata,
 		})
 		if !resp.Accepted {
-			a.logs.append("[automation] notificação não aceita: " + strings.TrimSpace(resp.AgentAction))
+			a.Logs.Append("[automation] notificação não aceita: " + strings.TrimSpace(resp.AgentAction))
 		}
 		return automation.AutomationNotificationResponse{
 			Accepted:    resp.Accepted,
@@ -512,8 +470,8 @@ func NewApp(opts AppStartupOptions) *App {
 			Message:     resp.Message,
 		}
 	})
-	a.remoteDebug = remotedebug.New(remotedebug.Deps{
-		Logf: a.logs.append,
+	a.RemoteDebug = remotedebug.New(remotedebug.Deps{
+		Logf: a.Logs.Append,
 		GetConfig: func() remotedebug.Config {
 			cfg := a.GetDebugConfig()
 			return remotedebug.Config{
@@ -530,26 +488,26 @@ func NewApp(opts AppStartupOptions) *App {
 				SiteID:   cfg.SiteID,
 			}
 		},
-		SubscribeLogs: a.logs.subscribe,
-		ReplayLogs:    a.logs.snapshotAndSubscribe,
+		SubscribeLogs: a.Logs.Subscribe,
+		ReplayLogs:    a.Logs.SnapshotAndSubscribe,
 	})
-	a.remoteSessionMgr = remotesession.NewManager(nil) // NATS sera injetado quando conectado; Fase 1 opera via commandos apenas
-	a.remoteSessionMgr.SetCallbacks(
+	a.RemoteSessionMgr = remotesession.NewManager(nil) // NATS sera injetado quando conectado; Fase 1 opera via commandos apenas
+	a.RemoteSessionMgr.SetCallbacks(
 		func(sessionID, kind string) {
 			a.activeRemoteSessions.Add(1)
 			a.syncRemoteSessionTray()
-			a.logs.append(fmt.Sprintf("[remote-session] sessao iniciada: %s (%s) — %d ativas", sessionID, kind, a.activeRemoteSessions.Load()))
+			a.Logs.Append(fmt.Sprintf("[remote-session] sessao iniciada: %s (%s) — %d ativas", sessionID, kind, a.activeRemoteSessions.Load()))
 		},
 		func(sessionID, reason string) {
 			a.activeRemoteSessions.Add(-1)
 			a.syncRemoteSessionTray()
-			a.logs.append(fmt.Sprintf("[remote-session] sessao encerrada: %s (%s) — %d ativas", sessionID, reason, a.activeRemoteSessions.Load()))
+			a.Logs.Append(fmt.Sprintf("[remote-session] sessao encerrada: %s (%s) — %d ativas", sessionID, reason, a.activeRemoteSessions.Load()))
 		},
 	)
 	inventoryProvider.SetProgressCallback(func() {
 		a.pulseInventoryHeartbeat()
 	})
-	a.agentConn = agentconn.NewRuntime(agentconn.Options{
+	a.AgentConn = agentconn.NewRuntime(agentconn.Options{
 		LoadConfig: func() agentconn.Config {
 			cfg := a.GetDebugConfig()
 			agentCfg := a.GetAgentConfiguration()
@@ -592,11 +550,11 @@ func NewApp(opts AppStartupOptions) *App {
 			}
 		},
 		Logf: func(format string, args ...any) {
-			a.logs.append("[agent] " + fmt.Sprintf(format, args...))
+			a.Logs.Append("[agent] " + fmt.Sprintf(format, args...))
 		},
 		OnSyncPing: func(ping agentconn.SyncPing) {
-			if a.syncSvc != nil {
-				a.syncSvc.HandlePing(ping)
+			if a.SyncSvc != nil {
+				a.SyncSvc.HandlePing(ping)
 			}
 		},
 		OnGlobalPong:                  a.handleGlobalPong,
@@ -612,40 +570,40 @@ func NewApp(opts AppStartupOptions) *App {
 		MarkSentCommandResultOutbox:   a.markSentCommandResultOutbox,
 		RescheduleCommandResultOutbox: a.rescheduleCommandResultOutbox,
 	})
-	a.debugSvc = debug.NewService(debug.Options{
+	a.DebugSvc = debug.NewService(debug.Options{
 		Logf: func(line string) {
-			a.logs.append(line)
+			a.Logs.Append(line)
 		},
-		AgentConn:          a.agentConn,
-		AgentInfo:          &a.agentInfo,
-		DB:                 a.db,
+		AgentConn:          a.AgentConn,
+		AgentInfo:          &a.AgentInfo,
+		DB:                 a.CoreAgent.DB,
 		NormalizeP2PConfig: normalizeP2PConfig,
 		ApplyP2PConfig:     a.applyP2PConfig,
 		DefaultP2PConfig:   defaultP2PConfig,
 		Version:            Version,
 		HardwareIdentity: func() hardwareid.Info {
-			if a.hardwareIDSvc == nil {
+			if a.HardwareIDSvc == nil {
 				return hardwareid.Info{}
 			}
-			return a.hardwareIDSvc.Get()
+			return a.HardwareIDSvc.Get()
 		},
 	})
-	a.agentConfigSvc = agentconfig.New(agentconfig.FetchDeps{
+	a.AgentConfigSvc = agentconfig.New(agentconfig.FetchDeps{
 		GetDebugConfig: a.GetDebugConfig,
 	})
-	a.ticketsSvc = tickets.New(tickets.Deps{
+	a.TicketsSvc = tickets.New(tickets.Deps{
 		GetDebugConfig: a.GetDebugConfig,
 	})
-	a.syncSvc = syncsvc.NewService(a)
-	a.p2pConfig = defaultP2PConfig()
-	a.p2pCoord = newP2PCoordinator(a)
+	a.SyncSvc = syncsvc.NewService(a)
+	a.P2PConfig = defaultP2PConfig()
+	a.P2PCoord = newP2PCoordinator(a)
 	a.chatSvc.Service().SetLogger(func(line string) {
-		a.logs.append("[chat] " + line)
+		a.Logs.Append("[chat] " + line)
 	})
-	a.inventorySvc = appinventory.NewService(appinventory.Options{
+	a.InventorySvc = appinventory.NewService(appinventory.Options{
 		Apps:           a.packageManagerRouter,
-		Inventory:      a.invSvc,
-		Cache:          &a.invCache,
+		Inventory:      a.InvSvc,
+		Cache:          &a.InvCache,
 		ResolveAllowed: a.resolveAllowedPackage,
 		ResolveAllowedByType: func(ctx context.Context, installationType, packageID string) (appstore.Item, error) {
 			return a.findAllowedPackage(ctx, installationType, packageID)
@@ -672,7 +630,7 @@ func NewApp(opts AppStartupOptions) *App {
 				Message:     resp.Message,
 			}
 		},
-		Logf: a.logs.append,
+		Logf: a.Logs.Append,
 		Ctx: func() context.Context {
 			return a.ctx
 		},
@@ -682,17 +640,17 @@ func NewApp(opts AppStartupOptions) *App {
 		CommitHash:             buildinfo.Commit,
 		ShouldDeferNonCritical: a.nonCriticalBackoffWindow,
 		HardwareIdentity: func() hardwareid.Info {
-			if a.hardwareIDSvc == nil {
+			if a.HardwareIDSvc == nil {
 				return hardwareid.Info{}
 			}
-			return a.hardwareIDSvc.Get()
+			return a.HardwareIDSvc.Get()
 		},
 	})
-	a.supportSvc = appsupport.NewService(appsupport.Options{
-		Logf:        a.logs.append,
+	a.SupportSvc = appsupport.NewService(appsupport.Options{
+		Logf:        a.Logs.Append,
 		Ctx:         func() context.Context { return a.ctx },
-		DB:          a.db,
-		AgentInfo:   &a.agentInfo,
+		DB:          a.CoreAgent.DB,
+		AgentInfo:   &a.AgentInfo,
 		DebugConfig: a.GetDebugConfig,
 		FeatureEnabled: func(flag *bool) bool {
 			return a.featureEnabled(flag)
@@ -706,16 +664,16 @@ func NewApp(opts AppStartupOptions) *App {
 			return cfg.KnowledgeBaseEnabled
 		},
 	})
-	a.updatesSvc = updates.NewService(updates.Options{
-		Apps:          a.appsSvc,
+	a.UpdatesSvc = updates.NewService(updates.Options{
+		Apps:          a.AppsSvc,
 		BeginActivity: a.beginActivity,
-		Logf:          a.logs.append,
+		Logf:          a.Logs.Append,
 		Ctx: func() context.Context {
 			return a.ctx
 		},
 	})
-	a.selfUpdaterCh = make(chan bool, 4)
-	a.selfUpdater = &selfupdate.Updater{
+	a.SelfUpdaterCh = make(chan bool, 4)
+	a.SelfUpdater = &selfupdate.Updater{
 		GetToken:     func() string { return a.GetDebugConfig().AuthToken },
 		GetAgentID:   func() string { return a.GetDebugConfig().AgentID },
 		GetApiScheme: func() string { return a.GetDebugConfig().ApiScheme },
@@ -725,15 +683,20 @@ func NewApp(opts AppStartupOptions) *App {
 		// diretório, e o gossip scanner registra automaticamente artifacts com nome
 		// canônico (selfupdate-<sha256>.exe) no índice P2P — sem cópia extra.
 		TempDir:      a.p2pTempDir(),
-		Logf:         func(format string, args ...any) { a.logs.append("[selfupdate] " + fmt.Sprintf(format, args...)) },
-		InvalidateCh: a.selfUpdaterCh,
+		Logf:         func(format string, args ...any) { a.Logs.Append("[selfupdate] " + fmt.Sprintf(format, args...)) },
+		InvalidateCh: a.SelfUpdaterCh,
 		// InstallerLogPath: caminho para o log do NSIS, usado pelo
 		// ResumePendingInstallReport para correlacionar execuções.
 		InstallerLogPath: platform.InstallerLogPath(),
 		// CanInstallNow: só permite lançar o instalador quando a janela do
 		// agente NÃO está visível em tela (minimizada ou oculta no tray).
 		// Evita fechar/reabrir o agente enquanto o usuário o está usando.
+		// No modo serviço não há janela — sempre pode instalar (Fase A:
+		// core não consulta a UI para decidir update).
 		CanInstallNow: func() bool {
+			if a.RuntimeFlags.ServiceMode {
+				return true
+			}
 			if a.mainWindow == nil {
 				return true
 			}
@@ -747,7 +710,7 @@ func NewApp(opts AppStartupOptions) *App {
 		// falha com timeout, atrasando o update.
 		OnSelfUpdateInstall: nil,
 		FindPeersByReleaseID: func(ctx context.Context, artifactID string) ([]string, error) {
-			if a.p2pCoord == nil {
+			if a.P2PCoord == nil {
 				return nil, nil
 			}
 			// expectedSHA256 extraído do artifactID "selfupdate:<sha256>" para
@@ -756,28 +719,28 @@ func NewApp(opts AppStartupOptions) *App {
 			if sha, ok := strings.CutPrefix(artifactID, "selfupdate:"); ok {
 				expectedSHA = strings.ToLower(strings.TrimSpace(sha))
 			}
-			result := a.p2pCoord.FindArtifactPeersByReleaseID(artifactID, expectedSHA)
+			result := a.P2PCoord.FindArtifactPeersByReleaseID(artifactID, expectedSHA)
 			return result.PeerAgentIDs, nil
 		},
 		DownloadFromPeer: func(ctx context.Context, artifactID, peerID string) (string, error) {
-			if a.p2pCoord == nil {
+			if a.P2PCoord == nil {
 				return "", errors.New("p2p indisponível")
 			}
 			// Swarm download quando >1 peer tem o artifact (chunks de múltiplos
 			// peers); peer único cai no download direto do peer informado.
-			avail := a.p2pCoord.FindArtifactPeersByReleaseID(artifactID, "")
+			avail := a.P2PCoord.FindArtifactPeersByReleaseID(artifactID, "")
 			if avail.PeerCount > 1 {
-				view, err := a.p2pCoord.DownloadArtifactByIDSwarm(ctx, artifactID)
+				view, err := a.P2PCoord.DownloadArtifactByIDSwarm(ctx, artifactID)
 				if err != nil {
 					// Swarm falhou — tenta peer único como fallback.
-					view, err = a.p2pCoord.DownloadArtifactByID(ctx, artifactID, peerID)
+					view, err = a.P2PCoord.DownloadArtifactByID(ctx, artifactID, peerID)
 				}
 				if err != nil {
 					return "", err
 				}
 				return filepath.Join(a.p2pTempDir(), view.ArtifactName), nil
 			}
-			view, err := a.p2pCoord.DownloadArtifactByID(ctx, artifactID, peerID)
+			view, err := a.P2PCoord.DownloadArtifactByID(ctx, artifactID, peerID)
 			if err != nil {
 				return "", err
 			}
@@ -789,60 +752,60 @@ func NewApp(opts AppStartupOptions) *App {
 		// ("selfupdate:<sha256>") via sidecar .meta para que o gossip anuncie
 		// o ID que outros agentes procuram — sem recopiar o arquivo.
 		OnArtifactReady: func(ctx context.Context, path, artifactID, sha256, version string) error {
-			if a.p2pCoord == nil || artifactID == "" {
+			if a.P2PCoord == nil || artifactID == "" {
 				return nil
 			}
-			if _, err := a.p2pCoord.RegisterArtifactIDForFile(path, artifactID); err != nil {
-				a.logs.append(fmt.Sprintf("[selfupdate] aviso: falha ao registrar artifactID no P2P: %v", err))
+			if _, err := a.P2PCoord.RegisterArtifactIDForFile(path, artifactID); err != nil {
+				a.Logs.Append(fmt.Sprintf("[selfupdate] aviso: falha ao registrar artifactID no P2P: %v", err))
 				return err
 			}
-			a.logs.append(fmt.Sprintf("[selfupdate] artifact disponivel no P2P: artifactID=%s sha256=%s path=%s",
+			a.Logs.Append(fmt.Sprintf("[selfupdate] artifact disponivel no P2P: artifactID=%s sha256=%s path=%s",
 				artifactID, sha256[:12], filepath.Base(path)))
 			return nil
 		},
 	}
-	a.exporter = updates.NewExporter(updates.ExportOptions{
+	a.Exporter = updates.NewExporter(updates.ExportOptions{
 		BeginActivity: a.beginActivity,
 		Inventory: func() (models.InventoryReport, error) {
 			return a.getInventoryForExport()
 		},
 		GetRedact: a.getRedact,
-		SetRedact: a.exportCfg.set,
+		SetRedact: a.ExportCfg.Set,
 	})
 	// Persistência de logs: serviço usa agent-service.log (Fase 0.2 do plano);
 	// UI usa agent.log padrão. O log file do modo serviço também é configurado
 	// via logger.SetFileOutput em RunServiceMode (para o stdlib log).
 	logPath := platform.LogFilePath()
-	if a.runtimeFlags.ServiceMode {
+	if a.RuntimeFlags.ServiceMode {
 		logPath = platform.ServiceLogFilePath()
 	}
 	if logPath != "" {
-		if err := a.logs.enableFilePersistence(logPath); err != nil {
+		if err := a.Logs.EnableFilePersistence(logPath); err != nil {
 			log.Printf("[startup] aviso: falha ao habilitar persistência de logs em arquivo: %v", err)
 		} else {
-			a.logs.append("[startup] persistência de logs habilitada em " + logPath)
+			a.Logs.Append("[startup] persistência de logs habilitada em " + logPath)
 		}
 	}
 	a.chatSvc.LoadPersistedConfig()
-	a.debugSvc.LoadConnectionConfigFromProduction()
+	a.DebugSvc.LoadConnectionConfigFromProduction()
 	a.initChatLogger()
 
 	mcp.RegisterDiscoveryTools(reg, a)
 
-	a.queuedForceHeartbeat.Store(false)
+	a.QueuedForceHeartbeat.Store(false)
 
 	if opts.DebugMode {
-		a.logs.append("[startup] modo debug ativo por tecla de atalho (execução atual)")
+		a.Logs.Append("[startup] modo debug ativo por tecla de atalho (execução atual)")
 	}
 
-	agentconfig.NormalizePSADTConfigDefaults(&a.agentConfig.PSADT)
-	agentconfig.NormalizeRolloutDefaults(&a.agentConfig.Rollout)
+	agentconfig.NormalizePSADTConfigDefaults(&a.AgentConfig.PSADT)
+	agentconfig.NormalizeRolloutDefaults(&a.AgentConfig.Rollout)
 
 	return a
 }
 
 func (a *App) GetRuntimeFlags() RuntimeFlags {
-	return a.runtimeFlags
+	return RuntimeFlags{DebugMode: a.RuntimeFlags.DebugMode, StartMinimized: a.RuntimeFlags.StartMinimized, ServiceMode: a.RuntimeFlags.ServiceMode}
 }
 
 func (a *App) SetContext(ctx context.Context) {
@@ -862,6 +825,13 @@ func (a *App) ClearMemoryCaches() { a.clearMemoryCaches() }
 // ServiceStartup é chamado pelo Wails v3 durante a inicialização da aplicação.
 // Substitui o OnStartup do v2. O ctx recebido é o contexto da aplicação.
 func (a *App) ServiceStartup(ctx context.Context, options application.ServiceOptions) error {
+	return a.RunCore(ctx)
+}
+
+// RunCore inicia o ciclo de vida do App sem depender de tipos do Wails.
+// Usado pelo modo serviço (cmd/discovery-service) e pela UI (via
+// ServiceStartup). No modo serviço, startup() já pula os itens de UI.
+func (a *App) RunCore(ctx context.Context) error {
 	a.startup(ctx)
 	return nil
 }
@@ -943,7 +913,7 @@ func (a *App) MinimiseMainWindow() {
 //
 //wails:ignore
 func (a *App) QuitApp() {
-	if a.quitRequested.Swap(true) {
+	if a.QuitRequested.Swap(true) {
 		return
 	}
 	if a.app == nil {
@@ -953,9 +923,9 @@ func (a *App) QuitApp() {
 }
 
 func (a *App) GetAgentConfiguration() agentconfig.AgentConfiguration {
-	a.agentConfigMu.RLock()
-	cfg := a.agentConfig
-	a.agentConfigMu.RUnlock()
+	a.AgentConfigMu.RLock()
+	cfg := a.AgentConfig
+	a.AgentConfigMu.RUnlock()
 	return cfg
 }
 
@@ -1030,8 +1000,16 @@ func (a *App) getHeartbeatMetrics() agentconn.AgentHeartbeatMetrics {
 	}
 
 	// Enriquecer com dados de endereçamento P2P (libp2p peer ID, addrs, port)
-	if a.p2pCoord != nil {
-		metrics.PeerID, metrics.Addrs, metrics.Port = a.p2pCoord.GetP2PAddressingInfo()
+	if a.P2PCoord != nil {
+		metrics.PeerID, metrics.Addrs, metrics.Port = a.P2PCoord.GetP2PAddressingInfo()
+	}
+
+	// UI online (PLANO_SEPARACAO_SERVICO_UI.md, Fase C2): no modo serviço,
+	// informa ao servidor se há UI companion conectada via IPC. Fora do modo
+	// serviço (UI standalone) o campo permanece nil (omitido no JSON).
+	if a.RuntimeFlags.ServiceMode && a.ipcServer != nil {
+		online := a.ipcServer.ClientCount() > 0
+		metrics.UIOnline = &online
 	}
 
 	return metrics
@@ -1096,20 +1074,20 @@ func mergeHeartbeatMetrics(dst *agentconn.AgentHeartbeatMetrics, src *agentconn.
 }
 
 func (a *App) getKnownP2PPeers() int {
-	if a.p2pCoord == nil {
+	if a.P2PCoord == nil {
 		return 0
 	}
-	return len(a.p2pCoord.GetPeers())
+	return len(a.P2PCoord.GetPeers())
 }
 
 // onNatsConnected é chamado pelo agentconn após a conexão NATS ser estabelecida.
 // Injeta a conexão NATS no remoteSessionMgr para habilitar o streaming de frames.
 func (a *App) onNatsConnected(nc *nats.Conn, cfg agentconn.Config) {
-	if a.remoteSessionMgr == nil {
+	if a.RemoteSessionMgr == nil {
 		return
 	}
-	a.remoteSessionMgr.SetNatsConn(nc, cfg.ClientID, cfg.SiteID, cfg.AgentID)
-	a.logs.append(fmt.Sprintf("[remote-session] NATS conectado — streaming habilitado (tenant=%s, site=%s, agent=%s)",
+	a.RemoteSessionMgr.SetNatsConn(nc, cfg.ClientID, cfg.SiteID, cfg.AgentID)
+	a.Logs.Append(fmt.Sprintf("[remote-session] NATS conectado — streaming habilitado (tenant=%s, site=%s, agent=%s)",
 		cfg.ClientID, cfg.SiteID, cfg.AgentID))
 }
 
@@ -1122,7 +1100,7 @@ func (a *App) onConnectivityChange(connected bool, transport string) {
 	if connected {
 		state = "online"
 	}
-	a.logs.append(fmt.Sprintf("[connectivity] mudanca de estado para %s (transport=%s)", state, transport))
+	a.Logs.Append(fmt.Sprintf("[connectivity] mudanca de estado para %s (transport=%s)", state, transport))
 	a.EmitEvent("agent:connectivity", map[string]any{
 		"connected": connected,
 		"transport": transport,
@@ -1139,7 +1117,7 @@ func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	a.cancel = cancel
 
-	captureStdLog(&a.logs)
+	captureStdLog(a.Logs.Buffer)
 
 	// Diagnóstico de elevação/integridade — importante para o controle remoto
 	// (SendInput via UIPI) e gerenciamento de serviços (SCM). Colocado após
@@ -1149,14 +1127,14 @@ func (a *App) startup(ctx context.Context) {
 		log.Printf("[startup] elevação: %s", ev)
 	}
 
-	if a.runtimeFlags.DebugMode {
+	if a.RuntimeFlags.DebugMode {
 		if a.debugHTTP == nil {
 			if err := a.StartDebugHTTPServer(); err != nil {
 				log.Printf("[debug-http] falha ao iniciar servidor HTTP local: %v", err)
 			}
 		}
 		if port := a.GetDebugHTTPPort(); port > 0 {
-			a.logs.append(fmt.Sprintf("[debug-http] servidor HTTP local iniciado em http://127.0.0.1:%d", port))
+			a.Logs.Append(fmt.Sprintf("[debug-http] servidor HTTP local iniciado em http://127.0.0.1:%d", port))
 		}
 	}
 
@@ -1164,9 +1142,15 @@ func (a *App) startup(ctx context.Context) {
 	// O serviço SYSTEM não tem sessão de usuário: pula SSE de chat, tray,
 	// janela e idle-mode. O core (DB, inventory, agentConn, automation, sync,
 	// P2P, self-update) roda igual ao standalone via staged startup abaixo.
-	if a.runtimeFlags.ServiceMode {
+	if a.RuntimeFlags.ServiceMode {
 		log.Println("[service] startup do core (sem UI)")
 		a.ipcServer = StartIPCServer(a.handleIPCMessage)
+		// Toast nativo (Fase C2/D4): cliques nos botões de ação do toast
+		// (quando o WinRT entrega o callback) injetam a resposta no
+		// notificationSvc — fecha o ciclo require_confirmation sem UI.
+		setToastActivationHook(func(notificationID, result string) {
+			a.NotificationSvc.Respond(notificationID, result)
+		})
 		a.runCoreStartup(ctx)
 		return
 	}
@@ -1192,41 +1176,48 @@ func (a *App) startup(ctx context.Context) {
 	}
 
 	a.startTray()
-	if a.runtimeFlags.StartMinimized {
+	if a.RuntimeFlags.StartMinimized {
 		a.hideWindowOnStartup()
 	}
 	a.applyIdleMode(true)
 
-	dataDir := GetDataDir()
-	db, err := database.Open(dataDir)
-	if err != nil {
-		log.Printf("[startup] AVISO: falha ao abrir database: %v", err)
-	} else {
-		a.db = db
-		log.Printf("[startup] database SQLite inicializado em %s", dataDir)
+	// ── DB (decisão D3, PLANO_SEPARACAO_SERVICO_UI.md §2.3) ──
+	// DB único, dono = serviço: no modo companion a UI NÃO abre o SQLite do
+	// serviço — dados que os bridges da UI consultam (config, inventário,
+	// pending counts, Memory Notes) chegam via IPC RPC (companion_rpc.go).
+	// No standalone a UI abre o DB normalmente (CoreAgent local é o dono).
+	if !companion {
+		dataDir := GetDataDir()
+		db, err := database.Open(dataDir)
+		if err != nil {
+			log.Printf("[startup] AVISO: falha ao abrir database: %v", err)
+		} else {
+			a.CoreAgent.DB = db
+			log.Printf("[startup] database SQLite inicializado em %s", dataDir)
 
-		if a.catalogClient != nil {
-			a.catalogClient.SetDatabase(db)
+			if a.CatalogClient != nil {
+				a.CatalogClient.SetDatabase(db)
+			}
+			if a.AutomationSvc != nil {
+				a.AutomationSvc.SetDB(db)
+			}
+			if a.InventorySvc != nil {
+				a.InventorySvc.SetDB(db)
+				// Inicializa o ciclo de vida do inventory.Service após o DB estar disponível.
+				_ = a.InventorySvc.Startup(ctx)
+			}
+			if a.SupportSvc != nil {
+				a.SupportSvc.SetDB(db)
+			}
+			agentIDForEngine := strings.TrimSpace(a.GetDebugConfig().AgentID)
+			a.ConsolEngine = consolidation.New(db, agentIDForEngine)
 		}
-		if a.automationSvc != nil {
-			a.automationSvc.SetDB(db)
-		}
-		if a.inventorySvc != nil {
-			a.inventorySvc.SetDB(db)
-			// Inicializa o ciclo de vida do inventory.Service após o DB estar disponível.
-			_ = a.inventorySvc.Startup(ctx)
-		}
-		if a.supportSvc != nil {
-			a.supportSvc.SetDB(db)
-		}
-		agentIDForEngine := strings.TrimSpace(a.GetDebugConfig().AgentID)
-		a.consolEngine = consolidation.New(db, agentIDForEngine)
 	}
 
 	if companion {
-		// Companion: DB local aberto acima (leitura p/ bridges de UI), mas o
-		// core NÃO roda nesta UI — staged startup fica no serviço. Sem NATS
-		// duplicado, sem automation/sync/P2P/self-update duplicados.
+		// Companion: SEM DB local (decisão D3) e sem core nesta UI — staged
+		// startup fica no serviço. Sem NATS duplicado, sem automation/sync/
+		// P2P/self-update duplicados. Bridges consultam o serviço via IPC RPC.
 		log.Println("[startup] modo companion: core no serviço DiscoveryAgent — staged startup pulado nesta UI")
 		a.applyStartupThrottleConfig()
 		return
@@ -1258,24 +1249,24 @@ func (a *App) runCoreStartup(ctx context.Context) {
 	if err != nil {
 		log.Printf("[service] AVISO: falha ao abrir database: %v", err)
 	} else {
-		a.db = db
+		a.CoreAgent.DB = db
 		log.Printf("[service] database SQLite inicializado em %s", dataDir)
 
-		if a.catalogClient != nil {
-			a.catalogClient.SetDatabase(db)
+		if a.CatalogClient != nil {
+			a.CatalogClient.SetDatabase(db)
 		}
-		if a.automationSvc != nil {
-			a.automationSvc.SetDB(db)
+		if a.AutomationSvc != nil {
+			a.AutomationSvc.SetDB(db)
 		}
-		if a.inventorySvc != nil {
-			a.inventorySvc.SetDB(db)
-			_ = a.inventorySvc.Startup(ctx)
+		if a.InventorySvc != nil {
+			a.InventorySvc.SetDB(db)
+			_ = a.InventorySvc.Startup(ctx)
 		}
-		if a.supportSvc != nil {
-			a.supportSvc.SetDB(db)
+		if a.SupportSvc != nil {
+			a.SupportSvc.SetDB(db)
 		}
 		agentIDForEngine := strings.TrimSpace(a.GetDebugConfig().AgentID)
-		a.consolEngine = consolidation.New(db, agentIDForEngine)
+		a.ConsolEngine = consolidation.New(db, agentIDForEngine)
 	}
 
 	log.Println("[service] core ativo — staged startup iniciando")
@@ -1296,9 +1287,9 @@ func (a *App) runStagedStartup(ctx context.Context) {
 	)
 
 	// Phase 1: Inventory collection (heaviest operation — delayed 2s).
-	a.startupWg.Add(1)
+	a.StartupWg.Add(1)
 	a.safeGo(func() {
-		defer a.startupWg.Done()
+		defer a.StartupWg.Done()
 
 		select {
 		case <-ctx.Done():
@@ -1319,21 +1310,21 @@ func (a *App) runStagedStartup(ctx context.Context) {
 		report, err := a.collectInventoryWithHeartbeat(ctx)
 		if err != nil {
 			log.Printf("[startup] falha ao coletar inventario em background: %v", err)
-			a.startupMu.Lock()
-			a.startupErr = err
-			a.startupMu.Unlock()
+			a.StartupMu.Lock()
+			a.StartupErr = err
+			a.StartupMu.Unlock()
 			return
 		}
-		a.invCache.set(report)
-		if a.inventorySvc != nil {
-			a.inventorySvc.SyncInventoryOnStartup(ctx, report)
+		a.InvCache.Set(report)
+		if a.InventorySvc != nil {
+			a.InventorySvc.SyncInventoryOnStartup(ctx, report)
 		}
 	})
 
 	// Phase 2: Agent connection (bootstrap + heartbeat).
-	a.startupWg.Add(1)
+	a.StartupWg.Add(1)
 	a.safeGo(func() {
-		defer a.startupWg.Done()
+		defer a.StartupWg.Done()
 
 		select {
 		case <-ctx.Done():
@@ -1341,8 +1332,8 @@ func (a *App) runStagedStartup(ctx context.Context) {
 		case <-time.After(startupPhaseAgentConn):
 		}
 
-		if a.debugSvc != nil {
-			a.debugSvc.BootstrapAgentCredentialsFromInstallerConfig(ctx)
+		if a.DebugSvc != nil {
+			a.DebugSvc.BootstrapAgentCredentialsFromInstallerConfig(ctx)
 		}
 
 		// Após bootstrap bem-sucedido, dispara reconciliação de
@@ -1353,13 +1344,13 @@ func (a *App) runStagedStartup(ctx context.Context) {
 			_ = a.onPostBootstrapProvisioned(ctx)
 		}()
 
-		a.agentConn.Run(ctx)
+		a.AgentConn.Run(ctx)
 	})
 
 	// Phase 3: Automation, sync coordinator, P2P bootstrap.
-	a.startupWg.Add(1)
+	a.StartupWg.Add(1)
 	a.safeGo(func() {
-		defer a.startupWg.Done()
+		defer a.StartupWg.Done()
 
 		select {
 		case <-ctx.Done():
@@ -1382,9 +1373,9 @@ func (a *App) runStagedStartup(ctx context.Context) {
 			}
 		})
 
-		if a.automationSvc != nil {
+		if a.AutomationSvc != nil {
 			a.safeGo(func() {
-				a.automationSvc.Run(ctx, func() {})
+				a.AutomationSvc.Run(ctx, func() {})
 			})
 		}
 
@@ -1393,32 +1384,32 @@ func (a *App) runStagedStartup(ctx context.Context) {
 		// em background sem bloquear o startup do agente.
 		a.bootstrapPSADTModuleIfNeeded()
 
-		if a.syncSvc != nil {
+		if a.SyncSvc != nil {
 			// Inicializa o ciclo de vida do sync.Service antes de iniciar o loop.
-			_ = a.syncSvc.Startup(ctx)
+			_ = a.SyncSvc.Startup(ctx)
 			a.safeGo(func() {
-				a.syncSvc.Run(ctx)
+				a.SyncSvc.Run(ctx)
 			})
 		}
 
-		if a.p2pCoord != nil {
+		if a.P2PCoord != nil {
 			// Inicializa o ciclo de vida do p2p.Coordinator antes de iniciar o loop.
-			_ = a.p2pCoord.Startup(ctx)
+			_ = a.P2PCoord.Startup(ctx)
 			if !isAgentConfigured() && a.zeroTouchConfigRegistrationAllowed() {
 				a.safeGo(func() {
 					a.RunOnboardingLoop(ctx)
 				})
 			}
 			a.safeGo(func() {
-				a.p2pCoord.Run(ctx)
+				a.P2PCoord.Run(ctx)
 			})
 		}
 	})
 
 	// Phase 4: Self-updater + DB cleanup ticker (lowest priority).
-	a.startupWg.Add(1)
+	a.StartupWg.Add(1)
 	a.safeGo(func() {
-		defer a.startupWg.Done()
+		defer a.StartupWg.Done()
 
 		select {
 		case <-ctx.Done():
@@ -1426,10 +1417,10 @@ func (a *App) runStagedStartup(ctx context.Context) {
 		case <-time.After(startupPhaseMaintenance):
 		}
 
-		if a.selfUpdater != nil {
+		if a.SelfUpdater != nil {
 			a.safeGo(func() {
-				a.selfUpdater.ResumePendingInstallReport(a.ctx)
-				a.selfUpdater.Run(a.ctx, 0)
+				a.SelfUpdater.ResumePendingInstallReport(a.ctx)
+				a.SelfUpdater.Run(a.ctx, 0)
 			})
 		}
 
@@ -1442,11 +1433,11 @@ func (a *App) runStagedStartup(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				if a.db == nil {
+				if a.CoreAgent.DB == nil {
 					continue
 				}
-				n1, err1 := a.db.CleanupExpiredCommandResultOutbox(time.Now(), cleanupBatchSize)
-				n2, err2 := a.db.CleanupExpiredP2PTelemetryOutbox(time.Now(), cleanupBatchSize)
+				n1, err1 := a.CoreAgent.DB.CleanupExpiredCommandResultOutbox(time.Now(), cleanupBatchSize)
+				n2, err2 := a.CoreAgent.DB.CleanupExpiredP2PTelemetryOutbox(time.Now(), cleanupBatchSize)
 				if err1 != nil {
 					log.Printf("[outbox][cleanup] erro command_result: %v", err1)
 				}
@@ -1516,47 +1507,47 @@ func (a *App) runPeriodicInventorySync(ctx context.Context) {
 		log.Printf("[inventory] coleta periodica falhou: %v", err)
 		return
 	}
-	a.invCache.set(report)
+	a.InvCache.Set(report)
 
-	if a.inventorySvc != nil {
-		a.logs.append("[inventory] coleta periodica concluida; sincronizando com servidor")
-		a.inventorySvc.SyncInventoryOnStartup(ctx, report)
+	if a.InventorySvc != nil {
+		a.Logs.Append("[inventory] coleta periodica concluida; sincronizando com servidor")
+		a.InventorySvc.SyncInventoryOnStartup(ctx, report)
 	}
 
 	// TriggerOnAgentCheckIn: dispara a cada ciclo de inventario completo (~6h).
-	if a.automationSvc != nil {
-		a.automationSvc.TriggerAgentCheckInTasks(ctx)
+	if a.AutomationSvc != nil {
+		a.AutomationSvc.TriggerAgentCheckInTasks(ctx)
 	}
 }
 
 func (a *App) SendTestHeartbeat() string {
-	if !a.queuedForceHeartbeat.CompareAndSwap(false, true) {
+	if !a.QueuedForceHeartbeat.CompareAndSwap(false, true) {
 		return "erro: heartbeat manual ja em andamento"
 	}
-	defer a.queuedForceHeartbeat.Store(false)
+	defer a.QueuedForceHeartbeat.Store(false)
 
-	a.logs.append("[heartbeat][manual] enviando heartbeat manual...")
-	if a.agentConn == nil {
-		a.logs.append("[heartbeat][manual] falha ao enviar heartbeat manual: agent runtime nao inicializado")
+	a.Logs.Append("[heartbeat][manual] enviando heartbeat manual...")
+	if a.AgentConn == nil {
+		a.Logs.Append("[heartbeat][manual] falha ao enviar heartbeat manual: agent runtime nao inicializado")
 		return "erro: agent runtime nao inicializado"
 	}
-	if a.agentConn.ForceHeartbeat() {
-		a.logs.append("[heartbeat][manual] heartbeat manual enviado com sucesso")
+	if a.AgentConn.ForceHeartbeat() {
+		a.Logs.Append("[heartbeat][manual] heartbeat manual enviado com sucesso")
 		return "heartbeat manual enviado com sucesso"
 	}
-	a.logs.append("[heartbeat][manual] falha ao enviar heartbeat manual: timeout ou nenhuma conexão ativa")
+	a.Logs.Append("[heartbeat][manual] falha ao enviar heartbeat manual: timeout ou nenhuma conexão ativa")
 	return "falha ao enviar heartbeat manual: timeout ou nenhuma conexão ativa"
 }
 
 func (a *App) startupLogf(format string, args ...any) {
 	line := fmt.Sprintf(format, args...)
 	log.Print(line)
-	a.logs.append(line)
+	a.Logs.Append(line)
 }
 
 func (a *App) safeGo(fn func()) {
 	safego.Go(fn, func(line string) {
-		a.logs.append(line)
+		a.Logs.Append(line)
 	})
 }
 
@@ -1599,38 +1590,38 @@ func (a *App) onPostBootstrapProvisioned(ctx context.Context) error {
 	}
 
 	if !a.isInventoryProvisioned() {
-		a.logs.append("[startup] post-bootstrap: timeout aguardando provisionamento")
+		a.Logs.Append("[startup] post-bootstrap: timeout aguardando provisionamento")
 		return nil
 	}
 
-	a.logs.append("[startup] post-bootstrap: agente provisionado — reconciliando recursos")
+	a.Logs.Append("[startup] post-bootstrap: agente provisionado — reconciliando recursos")
 
 	// 1. osquery + inventário inicial (não executou no goroutine #2 porque
 	//    ainda não estava provisionado).
 	a.ensureOsqueryInstalled()
-	if !a.invCache.has() {
+	if !a.InvCache.Has() {
 		a.startupLogf("[startup] post-bootstrap: executando inventario inicial")
 		report, err := a.collectInventoryWithHeartbeat(ctx)
 		if err != nil {
 			a.startupLogf("[startup] post-bootstrap: falha ao coletar inventario: %v", err)
 		} else {
-			a.invCache.set(report)
-			if a.inventorySvc != nil {
-				a.inventorySvc.SyncInventoryOnStartup(ctx, report)
+			a.InvCache.Set(report)
+			if a.InventorySvc != nil {
+				a.InventorySvc.SyncInventoryOnStartup(ctx, report)
 			}
 		}
 	}
 
 	// 2. Refresh da configuração do agent (clientId/siteId, políticas).
-	if a.syncSvc != nil {
+	if a.SyncSvc != nil {
 		_ = a.refreshAgentConfiguration(ctx)
-		a.syncSvc.ReconcileFromManifest(ctx, "post-bootstrap")
+		a.SyncSvc.ReconcileFromManifest(ctx, "post-bootstrap")
 	}
 
 	// 3. Automação — carrega políticas iniciais.
-	if a.automationSvc != nil {
-		if _, err := a.automationSvc.RefreshPolicy(ctx, false); err != nil {
-			a.logs.append("[startup] post-bootstrap: falha ao carregar politicas de automacao: " + err.Error())
+	if a.AutomationSvc != nil {
+		if _, err := a.AutomationSvc.RefreshPolicy(ctx, false); err != nil {
+			a.Logs.Append("[startup] post-bootstrap: falha ao carregar politicas de automacao: " + err.Error())
 		}
 	}
 
@@ -1642,20 +1633,20 @@ func (a *App) onPostBootstrapProvisioned(ctx context.Context) error {
 		case <-time.After(30 * time.Second):
 		}
 		if _, err := a.loadEffectiveAppStorePolicy(a.ctx, true); err != nil {
-			a.logs.append("[startup] post-bootstrap: falha ao carregar app-store: " + err.Error())
+			a.Logs.Append("[startup] post-bootstrap: falha ao carregar app-store: " + err.Error())
 		}
-		if a.supportSvc != nil && a.featureEnabled(a.GetAgentConfiguration().KnowledgeBaseEnabled) {
-			if err := a.supportSvc.RefreshKnowledgeBase(); err != nil {
-				a.logs.append("[startup] post-bootstrap: falha ao atualizar knowledge base: " + err.Error())
+		if a.SupportSvc != nil && a.featureEnabled(a.GetAgentConfiguration().KnowledgeBaseEnabled) {
+			if err := a.SupportSvc.RefreshKnowledgeBase(); err != nil {
+				a.Logs.Append("[startup] post-bootstrap: falha ao atualizar knowledge base: " + err.Error())
 			}
 		}
 		// Registra tools MCP do agent na API para o fluxo multi-round do chat
 		if err := a.RegisterAgentToolsOnServer(); err != nil {
-			a.logs.append("[startup] post-bootstrap: falha ao registrar agent tools: " + err.Error())
+			a.Logs.Append("[startup] post-bootstrap: falha ao registrar agent tools: " + err.Error())
 		}
 	})
 
-	a.logs.append("[startup] post-bootstrap: reconciliacao concluida")
+	a.Logs.Append("[startup] post-bootstrap: reconciliacao concluida")
 	return nil
 }
 
@@ -1670,7 +1661,7 @@ func (a *App) ensureOsqueryInstalled() {
 	if !a.isInventoryProvisioned() {
 		return
 	}
-	if a.appsSvc == nil {
+	if a.AppsSvc == nil {
 		return
 	}
 
@@ -1722,7 +1713,7 @@ func (a *App) shutdown() {
 
 	a.applyIdleMode(false)
 
-	if !a.runtimeFlags.ServiceMode {
+	if !a.RuntimeFlags.ServiceMode {
 		a.StopDebugHTTPServer()
 		a.StopChatSSEServer()
 	}
@@ -1741,18 +1732,18 @@ func (a *App) shutdown() {
 	// encerrados aqui.
 
 	// Desliga o domínio Sync (cancela contexto, aguarda goroutines).
-	if a.syncSvc != nil {
-		_ = a.syncSvc.Shutdown()
+	if a.SyncSvc != nil {
+		_ = a.SyncSvc.Shutdown()
 	}
 
 	// Desliga o domínio P2P (cancela contexto do Coordinator).
-	if a.p2pCoord != nil {
-		_ = a.p2pCoord.Shutdown()
+	if a.P2PCoord != nil {
+		_ = a.P2PCoord.Shutdown()
 	}
 
 	// Desliga o domínio Inventory (para timer de refresh pós-instalação).
-	if a.inventorySvc != nil {
-		_ = a.inventorySvc.Shutdown()
+	if a.InventorySvc != nil {
+		_ = a.InventorySvc.Shutdown()
 	}
 
 	// NOTA: a.cancel() já foi chamado no topo do shutdown para desmontar os
@@ -1769,7 +1760,7 @@ func (a *App) shutdown() {
 	// os loops já foram sinalizados bem antes de chegarmos aqui.
 	startupDone := make(chan struct{})
 	go func() {
-		a.startupWg.Wait()
+		a.StartupWg.Wait()
 		close(startupDone)
 	}()
 	select {
@@ -1778,12 +1769,12 @@ func (a *App) shutdown() {
 		log.Printf("[shutdown] timeout aguardando goroutines de startup; forçando encerramento")
 	}
 
-	if a.db != nil {
-		if err := a.db.Close(); err != nil {
+	if a.CoreAgent.DB != nil {
+		if err := a.CoreAgent.DB.Close(); err != nil {
 			log.Printf("[shutdown] erro ao fechar database: %v", err)
 		}
 	}
-	a.logs.closeFile()
+	a.Logs.CloseFile()
 }
 
 // cancelDeferredRestart cancela qualquer restart adiado pendente.
@@ -1827,7 +1818,7 @@ func (a *App) scheduleDeferredRestart(action string, pp powerCommandPayload) {
 
 	if ds.deferCount >= ds.maxDefers {
 		ds.mu.Unlock()
-		a.logs.append(fmt.Sprintf("[agent] %s-defer [FORCE] maxDefers=%d atingido — restart forçado", action, ds.maxDefers))
+		a.Logs.Append(fmt.Sprintf("[agent] %s-defer [FORCE] maxDefers=%d atingido — restart forçado", action, ds.maxDefers))
 		go func() {
 			a.executeSystemPowerAction(context.Background(), action, 0, true, ds.message)
 		}()
@@ -1847,7 +1838,7 @@ func (a *App) scheduleDeferredRestart(action string, pp powerCommandPayload) {
 	}
 
 	ds.timer = time.AfterFunc(time.Duration(deferMinutes)*time.Minute, func() {
-		a.logs.append(fmt.Sprintf("[agent] %s-defer [RETRY] defer=%d/%d — re-exibindo prompt", action, ds.deferCount, ds.maxDefers))
+		a.Logs.Append(fmt.Sprintf("[agent] %s-defer [RETRY] defer=%d/%d — re-exibindo prompt", action, ds.deferCount, ds.maxDefers))
 		result := a.showDeferrableRestartPrompt(action, delaySeconds, msg, deferMinutes)
 		if result == "restart_now" || result == "fallback" {
 			a.executeSystemPowerAction(context.Background(), action, delaySeconds, false, msg)
@@ -1859,7 +1850,7 @@ func (a *App) scheduleDeferredRestart(action string, pp powerCommandPayload) {
 
 	ds.mu.Unlock()
 
-	a.logs.append(fmt.Sprintf("[agent] %s-defer [SCHED] adiado para daqui %dmin (defer=%d/%d)", action, deferMinutes, ds.deferCount, ds.maxDefers))
+	a.Logs.Append(fmt.Sprintf("[agent] %s-defer [SCHED] adiado para daqui %dmin (defer=%d/%d)", action, deferMinutes, ds.deferCount, ds.maxDefers))
 }
 
 func (a *App) RequestAppClose() {
@@ -1879,51 +1870,48 @@ func (a *App) IsTrayReady() bool {
 }
 
 func (a *App) clearMemoryCaches() {
-	a.agentInfo.invalidate()
-	a.appStorePolicy.Invalidate()
+	a.AgentInfo.Invalidate()
+	a.AppStorePolicy.Invalidate()
 
-	a.invCache.mu.Lock()
-	a.invCache.loaded = false
-	a.invCache.report = models.InventoryReport{}
-	a.invCache.mu.Unlock()
+	a.InvCache.Reset()
 
 	log.Println("[tray] caches em memória limpos para economizar recursos")
 }
 
 func (a *App) GetStartupError() string {
-	a.startupMu.RLock()
-	defer a.startupMu.RUnlock()
-	if a.startupErr != nil {
-		return a.startupErr.Error()
+	a.StartupMu.RLock()
+	defer a.StartupMu.RUnlock()
+	if a.StartupErr != nil {
+		return a.StartupErr.Error()
 	}
 	return ""
 }
 
 func (a *App) beginActivity(activity string) func() {
-	a.activityMu.Lock()
-	a.activeOps++
-	shouldLeaveIdle := a.activeOps == 1
-	a.activityMu.Unlock()
+	a.ActivityMu.Lock()
+	a.ActiveOps++
+	shouldLeaveIdle := a.ActiveOps == 1
+	a.ActivityMu.Unlock()
 
 	if shouldLeaveIdle {
 		supported := a.applyIdleMode(false)
 		if supported {
-			a.logs.append("[efficiency] modo eficiencia desativado: " + activity)
+			a.Logs.Append("[efficiency] modo eficiencia desativado: " + activity)
 		}
 	}
 
 	return func() {
-		a.activityMu.Lock()
-		if a.activeOps > 0 {
-			a.activeOps--
+		a.ActivityMu.Lock()
+		if a.ActiveOps > 0 {
+			a.ActiveOps--
 		}
-		shouldEnterIdle := a.activeOps == 0
-		a.activityMu.Unlock()
+		shouldEnterIdle := a.ActiveOps == 0
+		a.ActivityMu.Unlock()
 
 		if shouldEnterIdle {
 			supported := a.applyIdleMode(true)
 			if supported {
-				a.logs.append("[efficiency] modo eficiencia ativado (aguardo)")
+				a.Logs.Append("[efficiency] modo eficiencia ativado (aguardo)")
 			}
 		}
 	}
@@ -1931,38 +1919,38 @@ func (a *App) beginActivity(activity string) func() {
 
 func (a *App) applyIdleMode(idle bool) bool {
 	if !efficiencyModeEnabled {
-		a.activityMu.Lock()
-		a.idleKnown = true
-		a.idleCapable = false
-		a.lastIdle = false
-		a.activityMu.Unlock()
+		a.ActivityMu.Lock()
+		a.IdleKnown = true
+		a.IdleCapable = false
+		a.LastIdle = false
+		a.ActivityMu.Unlock()
 		a.updateTrayIdleState(false, false)
 		return false
 	}
 
-	a.activityMu.Lock()
-	sameState := a.lastIdle == idle && a.idleKnown
+	a.ActivityMu.Lock()
+	sameState := a.LastIdle == idle && a.IdleKnown
 	if sameState {
-		supported := a.idleCapable
-		a.activityMu.Unlock()
+		supported := a.IdleCapable
+		a.ActivityMu.Unlock()
 		return supported
 	}
-	a.lastIdle = idle
-	a.activityMu.Unlock()
+	a.LastIdle = idle
+	a.ActivityMu.Unlock()
 
 	supported, err := processutil.SetEfficiencyMode(idle)
-	a.activityMu.Lock()
-	a.idleKnown = true
-	a.idleCapable = supported
-	a.activityMu.Unlock()
+	a.ActivityMu.Lock()
+	a.IdleKnown = true
+	a.IdleCapable = supported
+	a.ActivityMu.Unlock()
 
 	if err != nil {
-		a.logs.append("[efficiency] erro ao alterar modo: " + err.Error())
+		a.Logs.Append("[efficiency] erro ao alterar modo: " + err.Error())
 	}
 
 	if idle {
 		if trimErr := processutil.TrimCurrentProcessWorkingSet(); trimErr != nil {
-			a.logs.append("[efficiency] erro ao reduzir memoria: " + trimErr.Error())
+			a.Logs.Append("[efficiency] erro ao reduzir memoria: " + trimErr.Error())
 		}
 	}
 

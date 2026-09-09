@@ -45,11 +45,11 @@ type processEntry32W struct {
 
 // ProcessInfo representa um processo em execução.
 type ProcessInfo struct {
-	PID           uint32  `json:"pid"`
-	ParentPID     uint32  `json:"parentPid"`
-	Name          string  `json:"name"`
-	Threads       uint32  `json:"threads"`
-	PriorityBasis int32   `json:"priorityBase"`
+	PID           uint32 `json:"pid"`
+	ParentPID     uint32 `json:"parentPid"`
+	Name          string `json:"name"`
+	Threads       uint32 `json:"threads"`
+	PriorityBasis int32  `json:"priorityBase"`
 	// Métricas de consumo (coletadas em process_metrics_windows.go).
 	CpuPercent  float64 `json:"cpuPercent"`
 	MemoryBytes uint64  `json:"memoryBytes"`

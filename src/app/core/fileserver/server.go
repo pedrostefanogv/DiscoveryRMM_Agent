@@ -31,16 +31,16 @@ type FileInfo struct {
 // FileSessionRequest representa uma requisicao de arquivo versionada (v1).
 // O requestId permite ao viewer correlacionar a resposta com a requisicao.
 type FileSessionRequest struct {
-	Version     int    `json:"version"`
-	RequestID   string `json:"requestId"`
-	Action      string `json:"action"` // list|get|put|delete|rename|mkdir|move|copy|stat|zip|unzip
-	Path        string `json:"path"`
-	NewPath     string `json:"newPath,omitempty"` // rename/move/copy destino / zip destino / unzip destino
-	Paths       []string `json:"paths,omitempty"` // zip múltiplo (origens)
-	Data        []byte `json:"data,omitempty"`
-	ChunkIndex  *int   `json:"chunkIndex,omitempty"` // nil = sem chunk (arquivo inteiro)
-	ChunkSize   int    `json:"chunkSize,omitempty"`
-	TotalChunks int    `json:"totalChunks,omitempty"`
+	Version     int      `json:"version"`
+	RequestID   string   `json:"requestId"`
+	Action      string   `json:"action"` // list|get|put|delete|rename|mkdir|move|copy|stat|zip|unzip
+	Path        string   `json:"path"`
+	NewPath     string   `json:"newPath,omitempty"` // rename/move/copy destino / zip destino / unzip destino
+	Paths       []string `json:"paths,omitempty"`   // zip múltiplo (origens)
+	Data        []byte   `json:"data,omitempty"`
+	ChunkIndex  *int     `json:"chunkIndex,omitempty"` // nil = sem chunk (arquivo inteiro)
+	ChunkSize   int      `json:"chunkSize,omitempty"`
+	TotalChunks int      `json:"totalChunks,omitempty"`
 }
 
 // FileSessionResponse representa uma resposta versionada (v1).
@@ -59,8 +59,8 @@ type FileSessionResponse struct {
 // FileRequest representa uma requisicao de arquivo legada (list/get/put/delete).
 // Mantido para compatibilidade com chamadores antigos.
 type FileRequest struct {
-	Action string `json:"action"` // list, get, put, delete
-	Path   string `json:"path"`   // caminho relativo ao diretorio base
+	Action string `json:"action"`         // list, get, put, delete
+	Path   string `json:"path"`           // caminho relativo ao diretorio base
 	Data   []byte `json:"data,omitempty"` // conteudo para upload
 }
 

@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"discovery/app/debug"
 	"discovery/app/core/models"
+	"discovery/app/debug"
 )
 
 type mockSyncDB struct {

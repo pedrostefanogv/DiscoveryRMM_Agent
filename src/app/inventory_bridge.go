@@ -1,4 +1,4 @@
-﻿package app
+package app
 
 import (
 	"context"
@@ -10,105 +10,105 @@ func (a *App) GetCatalog() (models.Catalog, error) {
 	if err := a.requireInventorySvc(); err != nil {
 		return models.Catalog{}, err
 	}
-	return a.inventorySvc.GetCatalog()
+	return a.InventorySvc.GetCatalog()
 }
 
 func (a *App) Install(id string) (string, error) {
 	if err := a.requireInventorySvc(); err != nil {
 		return "", err
 	}
-	return a.inventorySvc.Install(id)
+	return a.InventorySvc.Install(id)
 }
 
 func (a *App) Uninstall(id string) (string, error) {
 	if err := a.requireInventorySvc(); err != nil {
 		return "", err
 	}
-	return a.inventorySvc.Uninstall(id)
+	return a.InventorySvc.Uninstall(id)
 }
 
 func (a *App) Upgrade(id string) (string, error) {
 	if err := a.requireInventorySvc(); err != nil {
 		return "", err
 	}
-	return a.inventorySvc.Upgrade(id)
+	return a.InventorySvc.Upgrade(id)
 }
 
 func (a *App) UpgradeAll() (string, error) {
 	if err := a.requireInventorySvc(); err != nil {
 		return "", err
 	}
-	return a.inventorySvc.UpgradeAll()
+	return a.InventorySvc.UpgradeAll()
 }
 
 func (a *App) ListInstalled() (string, error) {
 	if err := a.requireInventorySvc(); err != nil {
 		return "", err
 	}
-	return a.inventorySvc.ListInstalled()
+	return a.InventorySvc.ListInstalled()
 }
 
 func (a *App) GetInventory() (models.InventoryReport, error) {
 	if err := a.requireInventorySvc(); err != nil {
 		return models.InventoryReport{}, err
 	}
-	return a.inventorySvc.GetInventory()
+	return a.InventorySvc.GetInventory()
 }
 
 func (a *App) RefreshInventory() (models.InventoryReport, error) {
 	if err := a.requireInventorySvc(); err != nil {
 		return models.InventoryReport{}, err
 	}
-	return a.inventorySvc.RefreshInventory()
+	return a.InventorySvc.RefreshInventory()
 }
 
 func (a *App) RefreshNetworkConnections() (models.NetworkConnectionsReport, error) {
 	if err := a.requireInventorySvc(); err != nil {
 		return models.NetworkConnectionsReport{}, err
 	}
-	return a.inventorySvc.RefreshNetworkConnections()
+	return a.InventorySvc.RefreshNetworkConnections()
 }
 
 func (a *App) SyncNetworkConnections() error {
 	if err := a.requireInventorySvc(); err != nil {
 		return err
 	}
-	return a.inventorySvc.SyncNetworkConnections(context.Background())
+	return a.InventorySvc.SyncNetworkConnections(context.Background())
 }
 
 func (a *App) RefreshSoftware() ([]models.SoftwareItem, error) {
 	if err := a.requireInventorySvc(); err != nil {
 		return []models.SoftwareItem{}, err
 	}
-	return a.inventorySvc.RefreshSoftware()
+	return a.InventorySvc.RefreshSoftware()
 }
 
 func (a *App) RefreshStartupItems() ([]models.StartupItem, error) {
 	if err := a.requireInventorySvc(); err != nil {
 		return []models.StartupItem{}, err
 	}
-	return a.inventorySvc.RefreshStartupItems()
+	return a.InventorySvc.RefreshStartupItems()
 }
 
 func (a *App) RefreshListeningPorts() ([]models.ListeningPortInfo, error) {
 	if err := a.requireInventorySvc(); err != nil {
 		return []models.ListeningPortInfo{}, err
 	}
-	return a.inventorySvc.RefreshListeningPorts()
+	return a.InventorySvc.RefreshListeningPorts()
 }
 
 func (a *App) GetOsqueryStatus() (models.OsqueryStatus, error) {
 	if err := a.requireInventorySvc(); err != nil {
 		return models.OsqueryStatus{}, err
 	}
-	return a.inventorySvc.GetOsqueryStatus()
+	return a.InventorySvc.GetOsqueryStatus()
 }
 
 func (a *App) InstallOsquery() (string, error) {
 	if err := a.requireInventorySvc(); err != nil {
 		return "", err
 	}
-	return a.inventorySvc.InstallOsquery()
+	return a.InventorySvc.InstallOsquery()
 }
 
 func (a *App) collectInventoryWithHeartbeat(ctx context.Context) (models.InventoryReport, error) {
@@ -116,7 +116,7 @@ func (a *App) collectInventoryWithHeartbeat(ctx context.Context) (models.Invento
 		return models.InventoryReport{}, err
 	}
 	_ = ctx
-	return a.inventorySvc.GetInventory()
+	return a.InventorySvc.GetInventory()
 }
 
 func (a *App) pulseInventoryHeartbeat() {

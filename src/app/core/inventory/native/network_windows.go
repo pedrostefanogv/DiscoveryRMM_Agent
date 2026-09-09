@@ -1,4 +1,4 @@
-﻿//go:build windows
+//go:build windows
 
 package native
 
@@ -19,9 +19,9 @@ var procGetBestRoute2 = modiphlpapi.NewProc("GetBestRoute2")
 
 // IP adapter address flags.
 const (
-	gaaFlagIncludePrefix = 0x00000010
-	gaaFlagSkipAnycast   = 0x00000002
-	gaaFlagSkipMulticast = 0x00000004
+	gaaFlagIncludePrefix   = 0x00000010
+	gaaFlagSkipAnycast     = 0x00000002
+	gaaFlagSkipMulticast   = 0x00000004
 	gaaFlagIncludeGateways = 0x00000040
 )
 
@@ -95,7 +95,7 @@ type ipAdapterGatewayAddress struct {
 }
 
 type socketAddress struct {
-	lpSockaddr *sockaddrStorage
+	lpSockaddr      *sockaddrStorage
 	iSockaddrLength int32
 }
 

@@ -174,7 +174,7 @@ func Open(dataDir string) (*DB, error) {
 	}
 
 	// Configurações de performance
-	conn.SetMaxOpenConns(1) // SQLite funciona melhor com single connection
+	conn.SetMaxOpenConns(1)               // SQLite funciona melhor com single connection
 	conn.Exec("PRAGMA cache_size=-64000") // 64MB cache
 
 	db := &DB{conn: conn}

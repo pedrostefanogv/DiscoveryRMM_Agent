@@ -37,3 +37,15 @@ func (*IPCClient) Close()                {}
 
 // IsServicePresent é um stub não-Windows.
 func IsServicePresent(time.Duration) bool { return false }
+
+// IPCProtocolVersion é a versão do contrato IPC (stub não-Windows).
+const IPCProtocolVersion = 2
+
+// IPCServiceHelloAck é um stub não-Windows.
+type IPCServiceHelloAck struct{}
+
+// probeServiceHello é um stub não-Windows.
+func probeServiceHello(time.Duration) (IPCServiceHelloAck, bool) { return IPCServiceHelloAck{}, false }
+
+// IsServiceProtocolCompatible é um stub não-Windows.
+func IsServiceProtocolCompatible(int) bool { return true }

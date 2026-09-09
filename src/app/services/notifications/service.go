@@ -107,6 +107,10 @@ type Deps struct {
 	EmitEvent func(string, ...any)
 	// GetAgentConfiguration retorna a configuração do agente.
 	GetAgentConfiguration func() AgentConfiguration
+	// NativeFallback é chamado quando não há UI para renderizar a notificação
+	// (headless). Usado pelo serviço para disparar toast nativo do Windows
+	// (PLANO_SEPARACAO_SERVICO_UI.md, Fase C2/D4). Pode ser nil.
+	NativeFallback func(req DispatchRequest)
 }
 
 // Service encapsula o centro de notificações.
@@ -116,6 +120,7 @@ type Service struct {
 	db                    func() *database.DB
 	emitEvent             func(string, ...any)
 	getAgentConfiguration func() AgentConfiguration
+	nativeFallback        func(req DispatchRequest)
 
 	mu                  sync.Mutex
 	notificationByKey   map[string]idempotencyEntry
@@ -134,6 +139,7 @@ func New(deps Deps) *Service {
 		db:                    deps.DB,
 		emitEvent:             deps.EmitEvent,
 		getAgentConfiguration: deps.GetAgentConfiguration,
+		nativeFallback:        deps.NativeFallback,
 		notificationByKey:     make(map[string]idempotencyEntry),
 		pendingNotifyResult:   make(map[string]chan string),
 	}
@@ -253,11 +259,64 @@ func (s *Service) Dispatch(req DispatchRequest) DispatchResponse {
 	}
 
 	if s.ctx == nil || s.ctx() == nil {
-		result := "timeout_policy_applied"
-		agentAction := "headless_no_context"
-		if req.Mode != "require_confirmation" {
-			result = "approved"
-			agentAction = "headless_logged"
+		// Sem UI para renderizar (nem Wails nem companion via IPC): dispara
+		// o fallback nativo (toast do Windows no serviço — Fase C2/D4) e, para
+		// require_confirmation, aguarda a resposta do usuário no toast pelo
+		// mesmo timeout do caminho com UI (revisão 2 — bug B5: antes o
+		// retorno era imediato, sem janela para o clique).
+		if s.nativeFallback != nil {
+			s.nativeFallback(req)
+		}
+		if req.Mode == "require_confirmation" {
+			resultCh := make(chan string, 1)
+			s.mu.Lock()
+			s.pendingNotifyResult[req.NotificationID] = resultCh
+			s.mu.Unlock()
+			defer func() {
+				s.mu.Lock()
+				delete(s.pendingNotifyResult, req.NotificationID)
+				s.mu.Unlock()
+			}()
+
+			select {
+			case result := <-resultCh:
+				result = normalizeResult(result)
+				s.logf("[notification] confirmação (toast) id=" + req.NotificationID + " result=" + result)
+				s.persist(database.NotificationEventEntry{
+					NotificationID: req.NotificationID,
+					Mode:           req.Mode,
+					Severity:       req.Severity,
+					EventType:      req.EventType,
+					Title:          req.Title,
+					Result:         result,
+					AgentAction:    "user_decision",
+					MetadataJSON:   mustMarshalJSON(req.Metadata),
+				})
+				return DispatchResponse{
+					Accepted:       true,
+					NotificationID: req.NotificationID,
+					AgentAction:    "user_decision",
+					Result:         result,
+				}
+			case <-time.After(time.Duration(req.TimeoutSeconds) * time.Second):
+				s.logf("[notification] confirmação (toast) timeout id=" + req.NotificationID)
+				s.persist(database.NotificationEventEntry{
+					NotificationID: req.NotificationID,
+					Mode:           req.Mode,
+					Severity:       req.Severity,
+					EventType:      req.EventType,
+					Title:          req.Title,
+					Result:         "timeout_policy_applied",
+					AgentAction:    "timeout",
+					MetadataJSON:   mustMarshalJSON(req.Metadata),
+				})
+				return DispatchResponse{
+					Accepted:       true,
+					NotificationID: req.NotificationID,
+					AgentAction:    "timeout",
+					Result:         "timeout_policy_applied",
+				}
+			}
 		}
 		s.persist(database.NotificationEventEntry{
 			NotificationID: req.NotificationID,
@@ -265,15 +324,15 @@ func (s *Service) Dispatch(req DispatchRequest) DispatchResponse {
 			Severity:       req.Severity,
 			EventType:      req.EventType,
 			Title:          req.Title,
-			Result:         result,
-			AgentAction:    agentAction,
+			Result:         "approved",
+			AgentAction:    "headless_logged",
 			MetadataJSON:   mustMarshalJSON(req.Metadata),
 		})
 		return DispatchResponse{
 			Accepted:       true,
 			NotificationID: req.NotificationID,
-			AgentAction:    agentAction,
-			Result:         result,
+			AgentAction:    "headless_logged",
+			Result:         "approved",
 			Message:        "contexto UI indisponivel",
 		}
 	}

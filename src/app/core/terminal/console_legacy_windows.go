@@ -41,16 +41,16 @@ const (
 )
 
 var (
-	procGetConsoleMode                 = kernel32.NewProc("GetConsoleMode")
-	procSetConsoleMode                 = kernel32.NewProc("SetConsoleMode")
-	procGetConsoleScreenBufferInfo     = kernel32.NewProc("GetConsoleScreenBufferInfo")
-	procSetConsoleScreenBufferSize     = kernel32.NewProc("SetConsoleScreenBufferSize")
-	procSetConsoleWindowInfo           = kernel32.NewProc("SetConsoleWindowInfo")
-	procAttachConsole                  = kernel32.NewProc("AttachConsole")
-	procFreeConsole                    = kernel32.NewProc("FreeConsole")
+	procGetConsoleMode              = kernel32.NewProc("GetConsoleMode")
+	procSetConsoleMode              = kernel32.NewProc("SetConsoleMode")
+	procGetConsoleScreenBufferInfo  = kernel32.NewProc("GetConsoleScreenBufferInfo")
+	procSetConsoleScreenBufferSize  = kernel32.NewProc("SetConsoleScreenBufferSize")
+	procSetConsoleWindowInfo        = kernel32.NewProc("SetConsoleWindowInfo")
+	procAttachConsole               = kernel32.NewProc("AttachConsole")
+	procFreeConsole                 = kernel32.NewProc("FreeConsole")
 	procGetStdHandle                = kernel32.NewProc("GetStdHandle")
 	procGetLargestConsoleWindowSize = kernel32.NewProc("GetLargestConsoleWindowSize")
-	procSetConsoleOutputCP           = kernel32.NewProc("SetConsoleOutputCP")
+	procSetConsoleOutputCP          = kernel32.NewProc("SetConsoleOutputCP")
 )
 
 // CP_UTF8 é a code page UTF-8 (65001) usada para tornar a saída do console

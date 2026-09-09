@@ -169,8 +169,8 @@ func TestRequestOnboardingFromPeersNilStateDoesNotPanic(t *testing.T) {
 	}
 
 	a := &App{}
-	a.p2pCoord = newP2PCoordinator(a)
-	a.p2pCoord.UpsertPeer(p2pDiscoveredPeer{AgentID: "peer-a", Address: host, Port: port})
+	a.P2PCoord = newP2PCoordinator(a)
+	a.P2PCoord.UpsertPeer(p2pDiscoveredPeer{AgentID: "peer-a", Address: host, Port: port})
 
 	panicObserved := false
 	func() {

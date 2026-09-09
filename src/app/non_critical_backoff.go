@@ -12,31 +12,31 @@ import (
 // delegam para a instância do *App e são usados como callbacks do agentconn
 // e por status.go.
 func (a *App) handleGlobalPong(pong agentconn.GlobalPongMessage) {
-	if a.syncSvc == nil {
+	if a.SyncSvc == nil {
 		return
 	}
-	a.syncSvc.HandleGlobalPong(pong)
+	a.SyncSvc.HandleGlobalPong(pong)
 }
 
 func (a *App) nonCriticalBackoffWindow() (time.Duration, bool, string) {
-	if a.syncSvc == nil {
+	if a.SyncSvc == nil {
 		return 0, false, ""
 	}
-	return a.syncSvc.NonCriticalBackoffWindow()
+	return a.SyncSvc.NonCriticalBackoffWindow()
 }
 
 func (a *App) nonCriticalBackoffStatus() (time.Time, bool, string) {
-	if a.syncSvc == nil {
+	if a.SyncSvc == nil {
 		return time.Time{}, false, ""
 	}
-	return a.syncSvc.NonCriticalBackoffStatus()
+	return a.SyncSvc.NonCriticalBackoffStatus()
 }
 
 func (a *App) resolveAgentConnectivity(status AgentStatus) AgentStatus {
-	if a.syncSvc == nil {
+	if a.SyncSvc == nil {
 		return status
 	}
-	return a.syncSvc.ResolveAgentConnectivity(status)
+	return a.SyncSvc.ResolveAgentConnectivity(status)
 }
 
 // parseRFC3339Time delega para o pacote sync.

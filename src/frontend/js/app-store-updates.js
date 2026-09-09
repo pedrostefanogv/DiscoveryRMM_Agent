@@ -34,6 +34,19 @@ function onStoreCatalogUpdated(data) {
   function doRegister() {
     if (window.wails && typeof window.wails.on === 'function') {
       window.wails.on('store:catalog-updated', onStoreCatalogUpdated);
+      // Entrega tardia do updates:scan (revisão 4 — bug B8): quando o scan
+      // winget/choco no serviço passa do timeout do RPC (10s), o resultado
+      // chega por este evento em vez da resposta do GetPendingUpdates.
+      window.wails.on('updates:list', function (data) {
+        try {
+          var items = (data && data.updates) || [];
+          if (!Array.isArray(items) || !items.length) return;
+          pendingUpdates = items;
+          updatesInfoEl.textContent = translate('updates.availableCount', { count: pendingUpdates.length });
+          renderUpdatesTable();
+          showToast(translate('updates.foundCount', { count: pendingUpdates.length }), 'success');
+        } catch (e) { /* best-effort: entrega tardia não deve quebrar a página */ }
+      });
     }
   }
 

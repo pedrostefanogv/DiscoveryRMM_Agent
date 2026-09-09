@@ -1,23 +1,18 @@
 package app
 
 import (
-	"sync"
-	"time"
-
 	appstore "discovery/app/appstore"
 	appautomation "discovery/app/automation"
-	"discovery/app/core/models"
+	"discovery/app/coreagent"
 	debug "discovery/app/debug"
 	p2pmeta "discovery/app/p2pmeta"
 	supportmeta "discovery/app/supportmeta"
 )
 
-// inventoryCache manages thread-safe caching of the last inventory report.
-type inventoryCache struct {
-	mu     sync.RWMutex
-	report models.InventoryReport
-	loaded bool
-}
+// inventoryCache/exportConfig/agentInfoCache/appStorePolicyCache/logBuffer/
+// RuntimeFlags movidos para coreagent (lote 2, §0.8). RuntimeFlags mantém
+// alias local com as mesmas tags json (exposto ao frontend).
+type RuntimeFlags = coreagent.RuntimeFlags
 
 // AppStartupOptions controls transient runtime behavior for each execution.
 type AppStartupOptions struct {
@@ -36,15 +31,7 @@ type AppStartupOptions struct {
 	TrayOfflineIcon []byte
 }
 
-// RuntimeFlags are exposed to the frontend to control runtime-only UI behavior.
-type RuntimeFlags struct {
-	DebugMode      bool `json:"debugMode"`
-	StartMinimized bool `json:"startMinimized"`
-	// ServiceMode indica processo de serviço (SYSTEM, sem UI). Não exposto
-	// ao frontend (serviço não tem frontend), mas segue no struct por
-	// simplicidade de propagação.
-	ServiceMode bool `json:"-"`
-}
+// RuntimeFlags movido para coreagent.RuntimeFlags (alias acima, mesmas tags json).
 
 const (
 	P2PModeLibp2pOnly = p2pmeta.ModeLibp2pOnly
@@ -134,50 +121,20 @@ type PsadtAlertPayload struct {
 	Subtitle        string             `json:"subtitle"`        // subtítulo para update-progress
 }
 
-func (c *inventoryCache) get() (models.InventoryReport, bool) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.report, c.loaded
-}
-
-func (c *inventoryCache) set(r models.InventoryReport) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.report = r
-	c.loaded = true
-}
-
-func (c *inventoryCache) has() bool {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.loaded
-}
-
-func (c *inventoryCache) Get() (models.InventoryReport, bool) {
-	return c.get()
-}
-
-func (c *inventoryCache) Set(r models.InventoryReport) {
-	c.set(r)
-}
-
 // exportConfig holds the current export options.
-type exportConfig struct {
-	mu     sync.RWMutex
-	redact bool
-}
+// AppStore* aliases (mantidos do app — movidos para appstore; usados por store.go).
+type AppStoreInstallationType = appstore.InstallationType
 
-func (e *exportConfig) get() bool {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	return e.redact
-}
+const (
+	AppStoreInstallationWinget     = appstore.InstallationWinget
+	AppStoreInstallationChocolatey = appstore.InstallationChocolatey
+)
 
-func (e *exportConfig) set(v bool) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.redact = v
-}
+type AppStoreItem = appstore.Item
+
+type AppStoreResponse = appstore.Response
+
+type AppStoreEffectivePolicy = appstore.EffectivePolicy
 
 type AgentInfo = supportmeta.AgentInfo
 
@@ -204,74 +161,3 @@ type AutomationExecutionView = appautomation.ExecutionView
 
 // AutomationStateView represents the current automation policy state in the UI.
 type AutomationStateView = appautomation.StateView
-
-// agentInfoCache caches the agent identifiers resolved from /api/v1/agent-auth/me.
-type agentInfoCache struct {
-	inner supportmeta.AgentInfoCache
-}
-
-// AppStore* aliases keep the app surface stable while types move into a dedicated subpackage.
-type AppStoreInstallationType = appstore.InstallationType
-
-const (
-	AppStoreInstallationWinget     = appstore.InstallationWinget
-	AppStoreInstallationChocolatey = appstore.InstallationChocolatey
-)
-
-type AppStoreItem = appstore.Item
-
-type AppStoreResponse = appstore.Response
-
-type AppStoreEffectivePolicy = appstore.EffectivePolicy
-
-type appStorePolicyCache struct {
-	inner appstore.PolicyCache
-}
-
-func (c *appStorePolicyCache) get(maxAge time.Duration) (AppStoreEffectivePolicy, bool) {
-	return c.inner.Get(maxAge)
-}
-
-func (c *appStorePolicyCache) set(policy AppStoreEffectivePolicy) {
-	c.inner.Set(policy)
-}
-
-func (c *appStorePolicyCache) invalidate() {
-	c.inner.Invalidate()
-}
-
-func (c *appStorePolicyCache) Get(maxAge time.Duration) (AppStoreEffectivePolicy, bool) {
-	return c.inner.Get(maxAge)
-}
-
-func (c *appStorePolicyCache) Set(policy AppStoreEffectivePolicy) {
-	c.inner.Set(policy)
-}
-
-func (c *appStorePolicyCache) Invalidate() {
-	c.inner.Invalidate()
-}
-
-func (c *agentInfoCache) get() (AgentInfo, bool) {
-	return c.inner.Get()
-}
-
-func (c *agentInfoCache) set(info AgentInfo) {
-	c.inner.Set(info)
-}
-
-func (c *agentInfoCache) invalidate() {
-	c.inner.Invalidate()
-}
-
-func (c *agentInfoCache) Get() (AgentInfo, bool) {
-	return c.inner.Get()
-}
-
-func (c *agentInfoCache) Set(info AgentInfo) {
-	c.inner.Set(info)
-}
-
-func (c *agentInfoCache) Invalidate() {
-	c.inner.Invalidate()
-}

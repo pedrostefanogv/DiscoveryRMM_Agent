@@ -4,10 +4,10 @@ import (
 	"os"
 	"path/filepath"
 
-	"discovery/app/services/chat"
 	"discovery/app/core/ai"
 	"discovery/app/core/mcp"
 	"discovery/app/core/platform"
+	"discovery/app/services/chat"
 )
 
 // ChatConfig is the frontend-facing AI configuration.
@@ -43,10 +43,10 @@ func (a *App) initChatLogger() {
 
 	if shouldEnable {
 		a.chatSvc.Service().SetChatLogger(chatLogger)
-		a.logs.append("[chat] log detalhado de chat ativado em " + filepath.Join(platform.DataDir(), "logs", "chat_logs.jsonl"))
+		a.Logs.Append("[chat] log detalhado de chat ativado em " + filepath.Join(platform.DataDir(), "logs", "chat_logs.jsonl"))
 	} else {
 		chatLogger.Disable()
-		a.logs.append("[chat] log detalhado de chat desativado pela configuração")
+		a.Logs.Append("[chat] log detalhado de chat desativado pela configuração")
 	}
 }
 
@@ -69,9 +69,9 @@ func (a *App) ensureChatLogConfigEnabled(inst *InstallerConfig) {
 		}
 	}
 	if _, err := persistInstallerConfig(basePath, *inst); err != nil {
-		a.logs.append("[chat] aviso: falha ao persistir chatLog.enabled no config.json: " + err.Error())
+		a.Logs.Append("[chat] aviso: falha ao persistir chatLog.enabled no config.json: " + err.Error())
 	} else {
-		a.logs.append("[chat] chatLog.enabled = true adicionado ao config.json")
+		a.Logs.Append("[chat] chatLog.enabled = true adicionado ao config.json")
 	}
 }
 

@@ -142,7 +142,7 @@ func (a *App) startTray() {
 
 	// Debug-only: "Abrir no navegador" menu item.
 	// Only shown when the debug HTTP server is running.
-	if a.runtimeFlags.DebugMode && a.GetDebugHTTPPort() > 0 {
+	if a.RuntimeFlags.DebugMode && a.GetDebugHTTPPort() > 0 {
 		url := fmt.Sprintf("http://127.0.0.1:%d", a.GetDebugHTTPPort())
 		menu.Add("Abrir no navegador").OnClick(func(_ *application.Context) {
 			a.safeTrayAction("tray-menu-browser", func() {
@@ -151,7 +151,7 @@ func (a *App) startTray() {
 				_ = cmd.Start()
 
 				// Log na UI
-				a.logs.append("[debug-http] abrindo " + url + " no navegador")
+				a.Logs.Append("[debug-http] abrindo " + url + " no navegador")
 			})
 		})
 	}

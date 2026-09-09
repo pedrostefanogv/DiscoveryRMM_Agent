@@ -17,12 +17,32 @@ tasks:
     cmds:
       - task: generate:syso
       - go build {{.BUILD_FLAGS}} -o {{.BIN_DIR}}/{{.APP_NAME}}.exe .
+      - task: build:service
+        vars:
+          PRODUCTION:
+            ref: .PRODUCTION
       - cmd: powershell Remove-item *.syso
         platforms: [windows]
       - cmd: rm -f *.syso
         platforms: [linux, darwin]
     vars:
       BUILD_FLAGS: '{{if eq .PRODUCTION "true"}}-tags "desktop,production" -trimpath -buildvcs=false -ldflags="-w -s -H windowsgui"{{else}}-buildvcs=false -gcflags=all="-l"{{end}}'
+    env:
+      GOOS: windows
+      CGO_ENABLED: '1'
+      GOARCH: '{{.ARCH | default ARCH}}'
+      PRODUCTION: '{{.PRODUCTION | default "false"}}'
+
+  build:service:
+    summary: Builds the Windows service binary (discovery-service.exe)
+    # Binário do serviço (PLANO_SEPARACAO_SERVICO_UI.md, Fase B/D1): SEM syso
+    # Wails, SEM frontend embedado, SEM manifest requireAdministrator (SCM
+    # ignora requestedExecutionLevel, mas o build limpo evita linkar WebView2).
+    # CGO_ENABLED=1 preservado (mesmos requisitos de runtime do core).
+    cmds:
+      - go build {{.SERVICE_FLAGS}} -o {{.BIN_DIR}}/discovery-service.exe ./cmd/discovery-service
+    vars:
+      SERVICE_FLAGS: '{{if eq .PRODUCTION "true"}}-trimpath -buildvcs=false -ldflags="-w -s"{{else}}-buildvcs=false{{end}}'
     env:
       GOOS: windows
       CGO_ENABLED: '1'
@@ -44,14 +64,14 @@ tasks:
 
   create:nsis:installer:
     summary: Creates an NSIS installer
-    dir: build/windows/nsis
+    dir: build/windows/installer
     deps:
       - task: build
         vars:
           PRODUCTION: "true"
     cmds:
-      - wails3 generate webview2bootstrapper -dir "{{.ROOT_DIR}}/build/windows/nsis"
-      - makensis -DARG_WAILS_{{.ARG_FLAG}}_BINARY="{{.ROOT_DIR}}/{{.BIN_DIR}}/{{.APP_NAME}}.exe" project.nsi
+      - wails3 generate webview2bootstrapper -dir "{{.ROOT_DIR}}/build/windows/installer"
+      - makensis -DARG_WAILS_{{.ARG_FLAG}}_BINARY="{{.ROOT_DIR}}/{{.BIN_DIR}}/{{.APP_NAME}}.exe" -DARG_SERVICE_{{.ARG_FLAG}}_BINARY="{{.ROOT_DIR}}/{{.BIN_DIR}}/discovery-service.exe" project.nsi
     vars:
       ARCH: '{{.ARCH | default ARCH}}'
       ARG_FLAG: '{{if eq .ARCH "amd64"}}AMD64{{else}}ARM64{{end}}'

@@ -91,6 +91,10 @@ type AgentHeartbeat struct {
 	PeerID string   `json:"peerId,omitempty"` // libp2p peer ID
 	Addrs  []string `json:"addrs,omitempty"`  // IPs roteáveis
 	Port   int      `json:"port,omitempty"`   // porta libp2p (41080-41120)
+	// UIOnline indica que existe uma UI (companion) conectada ao serviço via
+	// IPC — útil para o servidor decidir roteamento de notificações interativas
+	// e remote session. Omitido quando o processo não é serviço (UI standalone).
+	UIOnline *bool `json:"uiOnline,omitempty"`
 }
 
 // AgentHeartbeatMetrics is a lightweight struct for collecting
@@ -115,6 +119,8 @@ type AgentHeartbeatMetrics struct {
 	PeerID string
 	Addrs  []string
 	Port   int
+	// UIOnline: nil = não aplicável (não é serviço); true/false = estado IPC
+	UIOnline *bool
 }
 
 type natsResultEnvelope struct {
@@ -426,6 +432,10 @@ func (r *Runtime) collectHeartbeat(cfg Config, ipAddr string) AgentHeartbeat {
 		}
 		if m.Port > 0 {
 			hb.Port = m.Port
+		}
+		// UI online (companion conectada via IPC) — apenas no modo serviço.
+		if m.UIOnline != nil {
+			hb.UIOnline = m.UIOnline
 		}
 	}
 	return hb

@@ -156,7 +156,7 @@ func (s *Shell) readLoop(r io.Reader) {
 // No backend legacy (CREATE_NEW_CONSOLE + pipes), o stdout/stderr do processo
 // filho é redirecionado para um pipe. Nativos Windows (CRT) que escrevem em
 // uma pipe usam a code page ANSI do sistema (CP1252 em pt-BR) — NÃO UTF-8.
-// Sem intervenção, bytes como 0xED ("í" em CP1252) viram U+FFFD ('')
+// Sem intervenção, bytes como 0xED ("í" em CP1252) viram U+FFFD (”)
 // quando interpretados como UTF-8, quebrando os acentos ("Estatísticas" →
 // "Estat�sticas").
 //

@@ -19,11 +19,11 @@ type AppItem struct {
 	InstallCommand string   `json:"installCommand"`
 	// SilentCommand contém os switches silenciosos vindos do catálogo
 	// (ex.: "/S /PreventRebootRequired=true"). Fallback: SilentWithProgress.
-	SilentCommand      string   `json:"silent,omitempty"`
-	SilentWithProgress string   `json:"silentWithProgress"`
-	Category           string   `json:"category"`
-	Icon               string   `json:"icon"`
-	LastUpdated        string   `json:"lastUpdated"`
+	SilentCommand      string `json:"silent,omitempty"`
+	SilentWithProgress string `json:"silentWithProgress"`
+	Category           string `json:"category"`
+	Icon               string `json:"icon"`
+	LastUpdated        string `json:"lastUpdated"`
 }
 
 // UpgradeItem represents a single package with a pending update.

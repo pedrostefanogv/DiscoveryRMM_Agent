@@ -9,12 +9,12 @@ import (
 
 // InputEvent representa um evento de input comprimido.
 type InputEvent struct {
-	Type      byte   // 0=mouse, 1=key, 2=wheel, 3=clipboard
-	Flags     byte   // mouse: left/right/middle, key: down/up
-	DX        int16  // delta X (mouse)
-	DY        int16  // delta Y (mouse)
-	KeyCode   uint16 // virtual key code
-	WheelDelta int16 // scroll delta
+	Type       byte   // 0=mouse, 1=key, 2=wheel, 3=clipboard
+	Flags      byte   // mouse: left/right/middle, key: down/up
+	DX         int16  // delta X (mouse)
+	DY         int16  // delta Y (mouse)
+	KeyCode    uint16 // virtual key code
+	WheelDelta int16  // scroll delta
 }
 
 // DeltaInputEncoder comprime eventos de input consecutivos.
@@ -51,7 +51,7 @@ func (e *DeltaInputEncoder) EncodeMouseMove(x, y int16) []byte {
 // EncodeMouseClick codifica clique de mouse.
 func (e *DeltaInputEncoder) EncodeMouseClick(button byte, down bool) []byte {
 	evt := InputEvent{
-		Type: 0,
+		Type:  0,
 		Flags: button | boolToFlag(down, 7),
 	}
 	return e.encodeEvent(evt)

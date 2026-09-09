@@ -34,32 +34,32 @@ type CloseTicketRequest = tickets.CloseTicketRequest
 
 // GetMyTickets lista tickets do agente.
 func (a *App) GetMyTickets(ctx context.Context, workflowStateID string) ([]TicketSummary, error) {
-	if a.ticketsSvc == nil {
+	if a.TicketsSvc == nil {
 		return nil, errTicketsSvcUnavailable
 	}
-	return a.ticketsSvc.GetMyTickets(ctx, workflowStateID)
+	return a.TicketsSvc.GetMyTickets(ctx, workflowStateID)
 }
 
 // CreateMyTicket cria um novo ticket.
 func (a *App) CreateMyTicket(ctx context.Context, reqBody CreateTicketRequest) (*TicketSummary, error) {
-	if a.ticketsSvc == nil {
+	if a.TicketsSvc == nil {
 		return nil, errTicketsSvcUnavailable
 	}
-	return a.ticketsSvc.CreateMyTicket(ctx, reqBody)
+	return a.TicketsSvc.CreateMyTicket(ctx, reqBody)
 }
 
 // AddMyTicketComment adiciona um comentário ao ticket.
 func (a *App) AddMyTicketComment(ctx context.Context, ticketID string, content string) error {
-	if a.ticketsSvc == nil {
+	if a.TicketsSvc == nil {
 		return errTicketsSvcUnavailable
 	}
-	return a.ticketsSvc.AddMyTicketComment(ctx, ticketID, content)
+	return a.TicketsSvc.AddMyTicketComment(ctx, ticketID, content)
 }
 
 // CloseMyTicket fecha e avalia um ticket.
 func (a *App) CloseMyTicket(ctx context.Context, ticketID string, rating int, notes string) error {
-	if a.ticketsSvc == nil {
+	if a.TicketsSvc == nil {
 		return errTicketsSvcUnavailable
 	}
-	return a.ticketsSvc.CloseMyTicket(ctx, ticketID, rating, notes)
+	return a.TicketsSvc.CloseMyTicket(ctx, ticketID, rating, notes)
 }

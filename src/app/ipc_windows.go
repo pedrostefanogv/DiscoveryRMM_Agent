@@ -12,6 +12,7 @@ package app
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -46,13 +47,32 @@ const (
 	// interativa do usuário. A sessão 0 (SYSTEM) não tem desktop: captura de tela
 	// falha (0 frames) e SendInput é bloqueado por UIPI — ver PLANO_AGENT_SERVICE_SYSTEM.md §2.2.
 	IPCMsgRemoteSession IPCMessageType = "remote_session"
+
+	// IPCMsgRequest / IPCMsgResponse (PLANO_SEPARACAO_SERVICO_UI.md, Fase C):
+	// request/response com correlation-id para métodos que a UI companion
+	// consulta no serviço (status, config, inventário, memory, updates).
+	// O request usa Payload["method"] + CorrelationID; a resposta ecoa o
+	// mesmo CorrelationID com Payload["ok"]/Payload["data"]/Payload["error"].
+	IPCMsgRequest  IPCMessageType = "request"
+	IPCMsgResponse IPCMessageType = "response"
 )
+
+// IPCRequestTimeout é o teto de espera por resposta no cliente.
+const IPCRequestTimeout = 10 * time.Second
+
+// IPCProtocolVersion é a versão do contrato JSON-lines (handshake hello/
+// hello_ack, PLANO_SEPARACAO_SERVICO_UI.md §0.4 — item "versionar handshake").
+// Diferenças em compatibilidade de mensagens devem incrementar este número;
+// a UI compara com a versão informada pelo serviço para decidir entre
+// operar em modo compatível ou reclamar (drift durante updates).
+const IPCProtocolVersion = 2
 
 // IPCMessage é o envelope do contrato JSON-lines.
 type IPCMessage struct {
-	Type      IPCMessageType `json:"type"`
-	Payload   map[string]any `json:"payload,omitempty"`
-	Timestamp int64          `json:"ts,omitempty"`
+	Type          IPCMessageType `json:"type"`
+	Payload       map[string]any `json:"payload,omitempty"`
+	CorrelationID string         `json:"cid,omitempty"`
+	Timestamp     int64          `json:"ts,omitempty"`
 }
 
 // NewIPCMessage cria um envelope com timestamp atual.
@@ -169,7 +189,8 @@ func (s *IPCServer) handleConn(conn net.Conn) {
 		if msg.Type == IPCMsgHello {
 			conn.SetWriteDeadline(time.Now().Add(3 * time.Second))
 			if _, err := conn.Write(EncodeIPCMessage(NewIPCMessage(IPCMsgHelloAck, map[string]any{
-				"service": ServiceName,
+				"service":  ServiceName,
+				"protocol": IPCProtocolVersion,
 			}))); err != nil {
 				log.Printf("[ipc] falha ao responder hello_ack: %v", err)
 			}
@@ -186,6 +207,9 @@ func (s *IPCServer) handleConn(conn net.Conn) {
 // deadline de 3s tentando escrever nelas (log "broadcast falhou: i/o timeout"
 // em loop), atrasando a entrega às UIs vivas.
 func (s *IPCServer) Broadcast(msg IPCMessage) {
+	if s == nil {
+		return
+	}
 	data := EncodeIPCMessage(msg)
 	if data == nil {
 		return
@@ -252,6 +276,12 @@ type IPCClient struct {
 	closed     atomic.Bool
 	reconnectN atomic.Int32
 
+	// pendingRequests guarda canais de resposta por correlation-id
+	// (PLANO_SEPARACAO_SERVICO_UI.md, Fase C — request/response).
+	pendingRequests   map[string]chan IPCMessage
+	pendingRequestsMu sync.Mutex
+	requestSeq        atomic.Int64
+
 	// downCh é sinalizado pelo readLoop quando a conexão cai — substitui
 	// polling (busy-wait) no RunConnectLoop.
 	downCh chan struct{}
@@ -273,11 +303,12 @@ type IPCClient struct {
 // NewIPCClient cria um cliente apontando ao pipe do serviço.
 func NewIPCClient(onMessage func(IPCMessage), onStateChange func(bool)) *IPCClient {
 	return &IPCClient{
-		pipeName:      IPCPipeName,
-		OnMessage:     onMessage,
-		OnStateChange: onStateChange,
-		downCh:        make(chan struct{}, 1),
-		closedCh:      make(chan struct{}),
+		pipeName:        IPCPipeName,
+		OnMessage:       onMessage,
+		OnStateChange:   onStateChange,
+		downCh:          make(chan struct{}, 1),
+		closedCh:        make(chan struct{}),
+		pendingRequests: make(map[string]chan IPCMessage),
 	}
 }
 
@@ -415,6 +446,23 @@ func (c *IPCClient) readLoop(conn net.Conn, rx *bufio.Reader) {
 		if err != nil {
 			return
 		}
+		// Request/response (Fase C): respostas com correlation-id são roteadas
+		// para o canal pendente correspondente, não ao OnMessage geral.
+		if msg.Type == IPCMsgResponse && msg.CorrelationID != "" {
+			c.pendingRequestsMu.Lock()
+			ch, ok := c.pendingRequests[msg.CorrelationID]
+			if ok {
+				delete(c.pendingRequests, msg.CorrelationID)
+			}
+			c.pendingRequestsMu.Unlock()
+			if ok {
+				select {
+				case ch <- msg:
+				default:
+				}
+			}
+			continue
+		}
 		if c.OnMessage != nil {
 			c.OnMessage(msg)
 		}
@@ -435,6 +483,60 @@ func (c *IPCClient) Send(msg IPCMessage) error {
 	return err
 }
 
+// Request envia um request ao serviço e aguarda a resposta com timeout
+// (PLANO_SEPARACAO_SERVICO_UI.md, Fase C). method identifica o RPC
+// (ex.: "status:pending_counts"); payload é enviado junto. Retorna
+// (payload da resposta, nil) quando ok=true; erro caso contrário.
+func (c *IPCClient) Request(ctx context.Context, method string, payload map[string]any) (map[string]any, error) {
+	if payload == nil {
+		payload = map[string]any{}
+	}
+	// Cópia defensiva (revisão 2 — bug B6): não mutar o map do caller
+	// ao injetar "method"; callers podem reutilizar o payload.
+	payload = func() map[string]any {
+		cp := make(map[string]any, len(payload)+1)
+		for k, v := range payload {
+			cp[k] = v
+		}
+		cp["method"] = method
+		return cp
+	}()
+	cid := fmt.Sprintf("r-%d-%d", time.Now().UnixNano(), c.requestSeq.Add(1))
+
+	ch := make(chan IPCMessage, 1)
+	c.pendingRequestsMu.Lock()
+	c.pendingRequests[cid] = ch
+	c.pendingRequestsMu.Unlock()
+	defer func() {
+		c.pendingRequestsMu.Lock()
+		delete(c.pendingRequests, cid)
+		c.pendingRequestsMu.Unlock()
+	}()
+
+	if err := c.Send(IPCMessage{Type: IPCMsgRequest, Payload: payload, CorrelationID: cid, Timestamp: time.Now().UnixMilli()}); err != nil {
+		return nil, err
+	}
+
+	timeout := IPCRequestTimeout
+	if deadline, ok := ctx.Deadline(); ok {
+		if d := time.Until(deadline); d < timeout {
+			timeout = d
+		}
+	}
+	select {
+	case resp := <-ch:
+		if ok, _ := resp.Payload["ok"].(bool); !ok {
+			errMsg, _ := resp.Payload["error"].(string)
+			return resp.Payload, fmt.Errorf("ipc request %s falhou: %s", method, errMsg)
+		}
+		return resp.Payload, nil
+	case <-time.After(timeout):
+		return nil, fmt.Errorf("ipc request %s timeout (%s)", method, timeout)
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
 // Close encerra o cliente e o loop de reconexão.
 func (c *IPCClient) Close() {
 	if !c.closed.CompareAndSwap(false, true) {
@@ -449,19 +551,54 @@ func (c *IPCClient) Close() {
 	c.mu.Unlock()
 }
 
+// IPCServiceHelloAck carrega a resposta do handshake do serviço.
+type IPCServiceHelloAck struct {
+	Service  string `json:"service"`
+	Protocol int    `json:"protocol"`
+}
+
 // IsServicePresent faz um probe rápido de handshake ("serviço ativo?") —
-// usado pela UI no startup para decidir companion vs standalone.
+// usado pela UI no startup para decidir companion vs standalone. Retorna
+// true quando o serviço responde hello_ack com protocolo compatível
+// (revisão 3 — handshake versionado: drift serviço/UI durante updates).
 func IsServicePresent(timeout time.Duration) bool {
+	_, ok := probeServiceHello(timeout)
+	return ok
+}
+
+// probeServiceHello envia hello e devolve o hello_ack decodificado.
+// ok=false quando o serviço não responde ou o payload é inválido.
+func probeServiceHello(timeout time.Duration) (IPCServiceHelloAck, bool) {
+	var ack IPCServiceHelloAck
 	conn, err := winio.DialPipe(IPCPipeName, &timeout)
 	if err != nil {
-		return false
+		return ack, false
 	}
 	defer conn.Close()
 	conn.SetDeadline(time.Now().Add(timeout))
-	if _, err := conn.Write(EncodeIPCMessage(NewIPCMessage(IPCMsgHello, map[string]any{"pid": os.Getpid()}))); err != nil {
-		return false
+	if _, err := conn.Write(EncodeIPCMessage(NewIPCMessage(IPCMsgHello, map[string]any{
+		"pid":      os.Getpid(),
+		"protocol": IPCProtocolVersion,
+	}))); err != nil {
+		return ack, false
 	}
 	reader := bufio.NewReader(conn)
 	msg, err := DecodeIPCMessage(reader)
-	return err == nil && msg.Type == IPCMsgHelloAck
+	if err != nil || msg.Type != IPCMsgHelloAck {
+		return ack, false
+	}
+	ack.Service, _ = msg.Payload["service"].(string)
+	// Serviços antigos (sem "protocol") = protocolo 1.
+	ack.Protocol = 1
+	if v, ok := msg.Payload["protocol"].(float64); ok {
+		ack.Protocol = int(v)
+	}
+	return ack, true
+}
+
+// IsServiceProtocolCompatible informa se o protocolo do serviço é compatível
+// com a versão desta build. UI antiga + serviço novo: compatível enquanto o
+// serviço não abandonar a versão 1/2 (regras de compat por faixa).
+func IsServiceProtocolCompatible(protocol int) bool {
+	return protocol >= 1 && protocol <= IPCProtocolVersion
 }

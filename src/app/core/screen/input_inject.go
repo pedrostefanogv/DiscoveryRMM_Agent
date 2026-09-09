@@ -67,7 +67,8 @@ type inputUnion struct {
 }
 
 // winInput é o tagINPUT (INPUT) do Windows. Layout (64-bit):
-//   DWORD type (4) + padding (4, alinhamento da union a 8) + union (32) = 40.
+//
+//	DWORD type (4) + padding (4, alinhamento da union a 8) + union (32) = 40.
 type winInput struct {
 	inputType uint32
 	padding   uint32

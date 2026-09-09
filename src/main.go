@@ -74,18 +74,16 @@ func main() {
 		return
 	}
 
-	// ── Modo serviço Windows (PLANO_AGENT_SERVICE_SYSTEM.md, Fase 1) ──
-	// SCM lança o binário com --service. Auto-detecção (svc.IsWindowsService)
-	// cobre o caso do SCM sem a flag; UI do usuário nunca é detectada como
-	// serviço (o SCM é o parent apenas para processos de serviço).
-	if hasStartupArg("--service") || hasStartupArg("/service") || hasStartupArg("-service") {
-		appkg.RunServiceMode()
-		return
-	}
+	// ── Modo serviço removido do binário UI (PLANO_SEPARACAO_SERVICO_UI.md,
+	// Fase B — decisão D1) ──
+	// O serviço Windows agora é o binário dedicado discovery-service.exe
+	// (cmd/discovery-service). Este binário é EXCLUSIVAMENTE UI: janela Wails,
+	// tray, chat, notificações interativas. Se o SCM lançar este executável por
+	// engano (config antiga), registra e sai com erro — nunca rodar core+UI na
+	// sessão 0.
 	if appkg.IsWindowsServiceProcess() {
-		log.Println("[startup] processo detectado como serviço SCM sem --service — roteando ao modo serviço")
-		appkg.RunServiceMode()
-		return
+		log.Println("[startup] ERRO: binário UI lançado como serviço SCM — use discovery-service.exe (cmd/discovery-service)")
+		os.Exit(1)
 	}
 
 	// ── Modo worker de remote session (PLANO_AGENT_SERVICE_SYSTEM.md §7.2) ──

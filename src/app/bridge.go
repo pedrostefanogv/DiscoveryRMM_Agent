@@ -13,35 +13,35 @@ import (
 // repetido nas bridges.
 
 func (a *App) requireInventorySvc() error {
-	if a == nil || a.inventorySvc == nil {
+	if a == nil || a.InventorySvc == nil {
 		return fmt.Errorf("inventory service indisponível")
 	}
 	return nil
 }
 
 func (a *App) requireSupportSvc() error {
-	if a == nil || a.supportSvc == nil {
+	if a == nil || a.SupportSvc == nil {
 		return fmt.Errorf("support service indisponível")
 	}
 	return nil
 }
 
 func (a *App) requireDebugSvc() error {
-	if a == nil || a.debugSvc == nil {
+	if a == nil || a.DebugSvc == nil {
 		return fmt.Errorf("debug service indisponível")
 	}
 	return nil
 }
 
 func (a *App) requireUpdatesSvc() error {
-	if a == nil || a.updatesSvc == nil {
+	if a == nil || a.UpdatesSvc == nil {
 		return fmt.Errorf("updates service indisponível")
 	}
 	return nil
 }
 
 func (a *App) requireExporter() error {
-	if a == nil || a.exporter == nil {
+	if a == nil || a.Exporter == nil {
 		return fmt.Errorf("export service indisponível")
 	}
 	return nil
@@ -82,8 +82,8 @@ func (a *App) SearchCatalog(query string) (json.RawMessage, error) {
 func (a *App) InstallPackage(id string) (string, error) {
 	// Valida se o pacote existe no catálogo da loja (App Store).
 	// Só permite instalar apps aprovados/cadastrados pela empresa.
-	if id != "" && a.inventorySvc != nil {
-		catalog, catErr := a.inventorySvc.GetCatalog()
+	if id != "" && a.InventorySvc != nil {
+		catalog, catErr := a.InventorySvc.GetCatalog()
 		if catErr == nil {
 			found := false
 			for _, item := range catalog.Packages {
@@ -135,7 +135,7 @@ func (a *App) CheckAgentUpdate() error {
 }
 
 func (a *App) GetLogsText() string {
-	return strings.Join(a.logs.getAll(), "\n")
+	return strings.Join(a.Logs.GetAll(), "\n")
 }
 
 // AskUserChat exibe uma pergunta interativa ao usuário e aguarda a resposta.

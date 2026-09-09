@@ -40,16 +40,16 @@ func cleanupAgentDecommissionPaths(paths []string) error {
 }
 
 func (a *App) drainAgentDecommissionOutbox(ctx context.Context, reason string) {
-	if a == nil || a.db == nil {
+	if a == nil || a.CoreAgent.DB == nil {
 		return
 	}
-	sent, err := decommission.DrainOutbox(a.db, ctx)
+	sent, err := decommission.DrainOutbox(a.CoreAgent.DB, ctx)
 	if err != nil {
-		a.logs.append("[agent][decommission] erro ao drenar outbox (" + strings.TrimSpace(reason) + "): " + err.Error())
+		a.Logs.Append("[agent][decommission] erro ao drenar outbox (" + strings.TrimSpace(reason) + "): " + err.Error())
 		return
 	}
 	if sent {
-		a.logs.append("[agent][decommission] outbox de delete processado com sucesso")
+		a.Logs.Append("[agent][decommission] outbox de delete processado com sucesso")
 	}
 }
 

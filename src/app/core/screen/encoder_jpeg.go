@@ -93,8 +93,12 @@ func ResizeBGRA(src *Frame, scaleFactor float64) *Frame {
 
 	newW := int(float64(src.Width) * scaleFactor)
 	newH := int(float64(src.Height) * scaleFactor)
-	if newW < 1 { newW = 1 }
-	if newH < 1 { newH = 1 }
+	if newW < 1 {
+		newW = 1
+	}
+	if newH < 1 {
+		newH = 1
+	}
 
 	newStride := newW * 4
 	dst := &Frame{
@@ -113,9 +117,13 @@ func ResizeBGRA(src *Frame, scaleFactor float64) *Frame {
 		// Posição em float na imagem original
 		srcYf := float64(y) * inv
 		y0 := int(srcYf)
-		if y0 > srcH-1 { y0 = srcH - 1 }
+		if y0 > srcH-1 {
+			y0 = srcH - 1
+		}
 		y1 := y0 + 1
-		if y1 > srcH-1 { y1 = srcH - 1 }
+		if y1 > srcH-1 {
+			y1 = srcH - 1
+		}
 		fy := srcYf - float64(y0)
 
 		rowDst := y * newStride
@@ -125,9 +133,13 @@ func ResizeBGRA(src *Frame, scaleFactor float64) *Frame {
 		for x := 0; x < newW; x++ {
 			srcXf := float64(x) * inv
 			x0 := int(srcXf)
-			if x0 > srcW-1 { x0 = srcW - 1 }
+			if x0 > srcW-1 {
+				x0 = srcW - 1
+			}
 			x1 := x0 + 1
-			if x1 > srcW-1 { x1 = srcW - 1 }
+			if x1 > srcW-1 {
+				x1 = srcW - 1
+			}
 			fx := srcXf - float64(x0)
 
 			offsetDst := rowDst + x*4
@@ -143,8 +155,12 @@ func ResizeBGRA(src *Frame, scaleFactor float64) *Frame {
 				top := float64(src.Data[o00+c])*(1-fx) + float64(src.Data[o10+c])*fx
 				bot := float64(src.Data[o01+c])*(1-fx) + float64(src.Data[o11+c])*fx
 				val := top*(1-fy) + bot*fy
-				if val < 0 { val = 0 }
-				if val > 255 { val = 255 }
+				if val < 0 {
+					val = 0
+				}
+				if val > 255 {
+					val = 255
+				}
 				dst.Data[offsetDst+c] = byte(val)
 			}
 		}

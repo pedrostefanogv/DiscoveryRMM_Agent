@@ -9,10 +9,10 @@ import (
 // Allowlist controla quais hosts/portas podem ser acessados via proxy.
 // Vazia por padrao = bloqueio total.
 type Allowlist struct {
-	mu       sync.RWMutex
-	cidrs    []*net.IPNet
-	ports    map[int]bool
-	enabled  bool
+	mu      sync.RWMutex
+	cidrs   []*net.IPNet
+	ports   map[int]bool
+	enabled bool
 }
 
 // NewAllowlist cria uma allowlist vazia (bloqueio total).

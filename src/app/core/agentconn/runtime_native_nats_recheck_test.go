@@ -75,4 +75,3 @@ func TestRunNATSEventLoop_NativeTransport_NoPanic(t *testing.T) {
 		t.Fatal("runNATSEventLoop nao retornou apos cancelamento do contexto (possivel deadlock)")
 	}
 }
-

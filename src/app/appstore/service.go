@@ -223,7 +223,7 @@ func (s *Service) LoadEffectivePolicy(ctx context.Context, forceRefresh bool) (E
 		if cached, ok := s.cache.Get(MemoryCacheTTL); ok {
 			return cached, nil
 		}
-		if s.db != nil {
+		if s.db != nil && s.db() != nil {
 			var persisted EffectivePolicy
 			found, err := s.db().CacheGetJSON(CacheKey, &persisted)
 			if err == nil && found {
@@ -284,7 +284,7 @@ func (s *Service) LoadEffectivePolicy(ctx context.Context, forceRefresh bool) (E
 		FetchedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 	s.cache.Set(policy)
-	if s.db != nil {
+	if s.db != nil && s.db() != nil {
 		if err := s.db().CacheSetJSON(CacheKey, policy, SQLiteCacheTTL); err != nil {
 			s.logf(fmt.Sprintf("aviso: falha ao salvar cache da app-store: %v", err))
 		}

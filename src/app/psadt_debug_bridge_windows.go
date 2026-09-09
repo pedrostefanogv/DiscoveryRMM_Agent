@@ -42,7 +42,7 @@ func extractPSADTDataField(raw []byte) []byte {
 // RunPSADTPreflightChecks executa verificacoes pre-flight usando a lib go-psadt.
 func (a *App) RunPSADTPreflightChecks() PSADTPreflightResult {
 	result := PSADTPreflightResult{CheckedAtUTC: time.Now().UTC().Format(time.RFC3339)}
-	a.logs.append("[psadt] executando preflight checks via go-psadt...")
+	a.Logs.Append("[psadt] executando preflight checks via go-psadt...")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -52,7 +52,7 @@ func (a *App) RunPSADTPreflightChecks() PSADTPreflightResult {
 	)
 	if err != nil {
 		result.Error = fmt.Sprintf("psadt.NewClient: %v", err)
-		a.logs.append("[psadt] preflight [ERRO] " + result.Error)
+		a.Logs.Append("[psadt] preflight [ERRO] " + result.Error)
 		return result
 	}
 	defer client.Close()
@@ -60,7 +60,7 @@ func (a *App) RunPSADTPreflightChecks() PSADTPreflightResult {
 	env, err := client.GetEnvironment()
 	if err != nil {
 		result.Error = fmt.Sprintf("GetEnvironment: %v", err)
-		a.logs.append("[psadt] preflight [ERRO] " + result.Error)
+		a.Logs.Append("[psadt] preflight [ERRO] " + result.Error)
 		return result
 	}
 
@@ -78,7 +78,7 @@ func (a *App) RunPSADTPreflightChecks() PSADTPreflightResult {
 		Build())
 	if err != nil {
 		result.Error = fmt.Sprintf("OpenSession: %v", err)
-		a.logs.append("[psadt] preflight [AVISO] " + result.Error)
+		a.Logs.Append("[psadt] preflight [AVISO] " + result.Error)
 		result.Success = true
 		return result
 	}
@@ -121,10 +121,10 @@ $r | ConvertTo-Json -Compress
 			result.NetworkAvailable = parsed.Online
 			result.UserInFocusMode = parsed.Focus
 		} else {
-			a.logs.append("[psadt] preflight [AVISO] falha ao parsear batch: " + rawErr.Error())
+			a.Logs.Append("[psadt] preflight [AVISO] falha ao parsear batch: " + rawErr.Error())
 		}
 	} else {
-		a.logs.append("[psadt] preflight [AVISO] batch falhou, tentando individual: " + rawErr.Error())
+		a.Logs.Append("[psadt] preflight [AVISO] batch falhou, tentando individual: " + rawErr.Error())
 		if isAdmin, err := session.TestCallerIsAdmin(); err == nil {
 			result.IsAdmin = isAdmin
 		}
@@ -140,7 +140,7 @@ $r | ConvertTo-Json -Compress
 	}
 
 	result.Success = true
-	a.logs.append(fmt.Sprintf("[psadt] preflight concluído: os=%s %s admin=%t reboot=%t net=%t focus=%t",
+	a.Logs.Append(fmt.Sprintf("[psadt] preflight concluído: os=%s %s admin=%t reboot=%t net=%t focus=%t",
 		result.OSName, result.OSVersion, result.IsAdmin, result.RebootPending, result.NetworkAvailable, result.UserInFocusMode))
 	return result
 }

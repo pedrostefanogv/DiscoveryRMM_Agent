@@ -61,7 +61,7 @@ func (a *App) cleanupExpiredP2PTempArtifacts(now time.Time) (int, error) {
 			}
 			if err := os.RemoveAll(path); err == nil {
 				removed++
-				a.logs.append(fmt.Sprintf("[p2p] limpeza: diretorio de chunks orfao removido: %s", d.Name()))
+				a.Logs.Append(fmt.Sprintf("[p2p] limpeza: diretorio de chunks orfao removido: %s", d.Name()))
 			}
 			return nil
 		}
@@ -80,7 +80,7 @@ func (a *App) cleanupExpiredP2PTempArtifacts(now time.Time) (int, error) {
 			}
 			if err := os.Remove(path); err == nil {
 				removed++
-				a.logs.append(fmt.Sprintf("[p2p] limpeza: partial orfao removido: %s", d.Name()))
+				a.Logs.Append(fmt.Sprintf("[p2p] limpeza: partial orfao removido: %s", d.Name()))
 			}
 			return nil
 		}
@@ -93,7 +93,7 @@ func (a *App) cleanupExpiredP2PTempArtifacts(now time.Time) (int, error) {
 			}
 			if err := os.Remove(path); err == nil {
 				removed++
-				a.logs.append(fmt.Sprintf("[p2p] limpeza: importing orfao removido: %s", d.Name()))
+				a.Logs.Append(fmt.Sprintf("[p2p] limpeza: importing orfao removido: %s", d.Name()))
 			}
 			return nil
 		}
@@ -125,12 +125,12 @@ func (a *App) cleanupExpiredP2PTempArtifacts(now time.Time) (int, error) {
 		}
 	}
 
-	if a.p2pCoord != nil {
-		a.p2pCoord.SetLastCleanupUTC(now)
+	if a.P2PCoord != nil {
+		a.P2PCoord.SetLastCleanupUTC(now)
 	}
 
 	if removed > 0 {
-		a.logs.append(fmt.Sprintf("[p2p] limpeza de temp concluida: %d item(ns) removido(s)", removed))
+		a.Logs.Append(fmt.Sprintf("[p2p] limpeza de temp concluida: %d item(ns) removido(s)", removed))
 	}
 	return removed, nil
 }
@@ -156,17 +156,17 @@ func (a *App) clearAllP2PTempArtifacts(now time.Time) (int, error) {
 		removed++
 	}
 
-	if a.p2pCoord != nil {
-		a.p2pCoord.SetLastCleanupUTC(now)
+	if a.P2PCoord != nil {
+		a.P2PCoord.SetLastCleanupUTC(now)
 
-		a.p2pCoord.ResetSHA256Cache()
+		a.P2PCoord.ResetSHA256Cache()
 
 		// Remove manifests órfãos após limpeza total.
-		a.p2pCoord.CollectOrphanArtifacts()
+		a.P2PCoord.CollectOrphanArtifacts()
 	}
 
 	if removed > 0 {
-		a.logs.append(fmt.Sprintf("[p2p] limpeza total de artifacts locais: %d item(ns) removido(s)", removed))
+		a.Logs.Append(fmt.Sprintf("[p2p] limpeza total de artifacts locais: %d item(ns) removido(s)", removed))
 	}
 
 	return removed, nil

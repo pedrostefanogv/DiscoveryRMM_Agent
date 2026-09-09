@@ -13,12 +13,12 @@ import (
 // zero-touch, persistência). O coordinator (src/app/sync) delega para cá
 // via sync.SyncDeps.RefreshAgentConfiguration.
 func (a *App) refreshAgentConfiguration(ctx context.Context) error {
-	if a.agentConfigSvc == nil {
-		a.agentConfigSvc = agentconfig.New(agentconfig.FetchDeps{
+	if a.AgentConfigSvc == nil {
+		a.AgentConfigSvc = agentconfig.New(agentconfig.FetchDeps{
 			GetDebugConfig: a.GetDebugConfig,
 		})
 	}
-	result, err := a.agentConfigSvc.Fetch(ctx)
+	result, err := a.AgentConfigSvc.Fetch(ctx)
 	if err != nil {
 		// fallback to cached config when request fails
 		_ = a.loadCachedAgentConfiguration()
@@ -27,23 +27,23 @@ func (a *App) refreshAgentConfiguration(ctx context.Context) error {
 
 	if result.HasZeroTouchPendingFlag && result.ZeroTouchPending {
 		if a.setZeroTouchApprovalPending(true) {
-			a.logs.append("[sync] dispositivo provisionado e aguardando aprovacao da equipe de TI para integracao com o servidor")
+			a.Logs.Append("[sync] dispositivo provisionado e aguardando aprovacao da equipe de TI para integracao com o servidor")
 		}
 		return nil
 	}
 
 	if a.setZeroTouchApprovalPending(false) {
-		a.logs.append("[sync] aprovacao recebida; integracao com o servidor liberada")
+		a.Logs.Append("[sync] aprovacao recebida; integracao com o servidor liberada")
 	}
 
-	if a.db != nil {
-		_ = a.db.CacheSet("agent_configuration_raw", result.RawBody, 30*24*time.Hour)
+	if a.CoreAgent.DB != nil {
+		_ = a.CoreAgent.DB.CacheSet("agent_configuration_raw", result.RawBody, 30*24*time.Hour)
 	}
 
 	a.setAgentConfiguration(result.Config)
 	a.applyStartupThrottleConfig()
-	if a.debugSvc != nil {
-		changed, applyErr := a.debugSvc.ApplyRemoteConnectionSecurity(
+	if a.DebugSvc != nil {
+		changed, applyErr := a.DebugSvc.ApplyRemoteConnectionSecurity(
 			result.Config.NatsServerHost,
 			result.Config.NatsServerHostInternal,
 			result.Config.NatsUseWssExternal,
@@ -53,11 +53,11 @@ func (a *App) refreshAgentConfiguration(ctx context.Context) error {
 			result.Config.NatsTlsCertHash,
 		)
 		if applyErr != nil {
-			a.logs.append("[sync] falha ao aplicar seguranca remota de transporte: " + applyErr.Error())
+			a.Logs.Append("[sync] falha ao aplicar seguranca remota de transporte: " + applyErr.Error())
 		} else if changed {
-			a.logs.append("[sync] segurança de transporte aplicada e reconexão solicitada")
+			a.Logs.Append("[sync] segurança de transporte aplicada e reconexão solicitada")
 		}
 	}
-	a.logs.append("[sync] configuração do agent atualizada")
+	a.Logs.Append("[sync] configuração do agent atualizada")
 	return nil
 }

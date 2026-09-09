@@ -89,12 +89,12 @@ func (a *App) registerPSADTSessionHooks(session *psadt.Session, tag string) {
 	}
 	session.OnClose(func(exitCode int) {
 		if a != nil {
-			a.logs.append(fmt.Sprintf("[agent] psadt-%s [OK] sessão fechada exitCode=%d", tag, exitCode))
+			a.Logs.Append(fmt.Sprintf("[agent] psadt-%s [OK] sessão fechada exitCode=%d", tag, exitCode))
 		}
 	})
 	session.OnError(func(err error) {
 		if a != nil {
-			a.logs.append(fmt.Sprintf("[agent] psadt-%s [ERRO] %v", tag, err))
+			a.Logs.Append(fmt.Sprintf("[agent] psadt-%s [ERRO] %v", tag, err))
 		}
 	})
 }
@@ -105,7 +105,7 @@ func (a *App) handlePsadtAlert(ctx context.Context, p PsadtAlertPayload) (int, s
 	if runtime.GOOS != "windows" {
 		body, _ := json.Marshal(map[string]string{"action": "skipped_non_windows"})
 		if a != nil {
-			a.logs.append("[agent] psadt-alert ignorado: não é windows type=" + p.Type + " alertId=" + p.AlertID)
+			a.Logs.Append("[agent] psadt-alert ignorado: não é windows type=" + p.Type + " alertId=" + p.AlertID)
 		}
 		return 0, string(body), ""
 	}
@@ -114,13 +114,13 @@ func (a *App) handlePsadtAlert(ctx context.Context, p PsadtAlertPayload) (int, s
 	if psadtCfg.Enabled == nil || !*psadtCfg.Enabled {
 		body, _ := json.Marshal(map[string]string{"action": "skipped_disabled"})
 		if a != nil {
-			a.logs.append("[agent] psadt-alert ignorado: psadt.enabled=false type=" + p.Type + " alertId=" + p.AlertID)
+			a.Logs.Append("[agent] psadt-alert ignorado: psadt.enabled=false type=" + p.Type + " alertId=" + p.AlertID)
 		}
 		return 0, string(body), ""
 	}
 
 	if a != nil {
-		a.logs.append(fmt.Sprintf("[agent] psadt-alert iniciando type=%s alertId=%s timeout=%ds via go-psadt", p.Type, p.AlertID, p.TimeoutSeconds))
+		a.Logs.Append(fmt.Sprintf("[agent] psadt-alert iniciando type=%s alertId=%s timeout=%ds via go-psadt", p.Type, p.AlertID, p.TimeoutSeconds))
 	}
 
 	// Init timeout: Import-Module + Get-Module -ListAvailable pode demorar.
@@ -136,7 +136,7 @@ func (a *App) handlePsadtAlert(ctx context.Context, p PsadtAlertPayload) (int, s
 	if err != nil {
 		errMsg := fmt.Sprintf("psadt.NewClient: %v", err)
 		if a != nil {
-			a.logs.append("[agent] psadt-alert [ERRO] " + errMsg)
+			a.Logs.Append("[agent] psadt-alert [ERRO] " + errMsg)
 		}
 		return 1, "", errMsg
 	}
@@ -150,7 +150,7 @@ func (a *App) handlePsadtAlert(ctx context.Context, p PsadtAlertPayload) (int, s
 	if err != nil {
 		errMsg := fmt.Sprintf("psadt.OpenSession: %v", err)
 		if a != nil {
-			a.logs.append("[agent] psadt-alert [ERRO] " + errMsg)
+			a.Logs.Append("[agent] psadt-alert [ERRO] " + errMsg)
 		}
 		return 1, "", errMsg
 	}
@@ -216,13 +216,13 @@ func (a *App) showPSADTToast(session *psadt.Session, p PsadtAlertPayload) (strin
 	if err != nil {
 		errMsg := fmt.Sprintf("ShowBalloonTip: %v", err)
 		if a != nil {
-			a.logs.append("[agent] psadt-alert [ERRO] type=toast alertId=" + p.AlertID + " " + errMsg)
+			a.Logs.Append("[agent] psadt-alert [ERRO] type=toast alertId=" + p.AlertID + " " + errMsg)
 		}
 		return "", errMsg
 	}
 
 	if a != nil {
-		a.logs.append(fmt.Sprintf("[agent] psadt-alert [OK] type=toast alertId=%s action=shown", p.AlertID))
+		a.Logs.Append(fmt.Sprintf("[agent] psadt-alert [OK] type=toast alertId=%s action=shown", p.AlertID))
 	}
 	return "shown", ""
 }
@@ -266,14 +266,14 @@ func (a *App) showPSADTModal(_ context.Context, session *psadt.Session, p PsadtA
 	if err != nil {
 		errMsg := fmt.Sprintf("ShowDialogBox: %v", err)
 		if a != nil {
-			a.logs.append("[agent] psadt-alert [ERRO] type=modal alertId=" + p.AlertID + " " + errMsg)
+			a.Logs.Append("[agent] psadt-alert [ERRO] type=modal alertId=" + p.AlertID + " " + errMsg)
 		}
 		return "", errMsg
 	}
 
 	action := mapPSADTDialogResult(result, p)
 	if a != nil {
-		a.logs.append(fmt.Sprintf("[agent] psadt-alert [OK] type=modal alertId=%s action=%s", p.AlertID, action))
+		a.Logs.Append(fmt.Sprintf("[agent] psadt-alert [OK] type=modal alertId=%s action=%s", p.AlertID, action))
 	}
 	return action, ""
 }
@@ -300,13 +300,13 @@ func (a *App) showPSADTProgress(session *psadt.Session, p PsadtAlertPayload) (st
 	if err != nil {
 		errMsg := fmt.Sprintf("ShowInstallationProgress: %v", err)
 		if a != nil {
-			a.logs.append("[agent] psadt-alert [ERRO] type=update-progress alertId=" + p.AlertID + " " + errMsg)
+			a.Logs.Append("[agent] psadt-alert [ERRO] type=update-progress alertId=" + p.AlertID + " " + errMsg)
 		}
 		return "", errMsg
 	}
 
 	if a != nil {
-		a.logs.append(fmt.Sprintf("[agent] psadt-alert [OK] type=update-progress alertId=%s action=shown", p.AlertID))
+		a.Logs.Append(fmt.Sprintf("[agent] psadt-alert [OK] type=update-progress alertId=%s action=shown", p.AlertID))
 	}
 	return "shown", ""
 }
@@ -373,7 +373,7 @@ func (a *App) showForceRestartBalloon(action string, delaySeconds int, message s
 
 	psadtCfg := a.GetAgentConfiguration().PSADT
 	if psadtCfg.Enabled == nil || !*psadtCfg.Enabled {
-		a.logs.append(fmt.Sprintf("[agent] psadt-%s-force [SKIP] psadt.enabled=false", action))
+		a.Logs.Append(fmt.Sprintf("[agent] psadt-%s-force [SKIP] psadt.enabled=false", action))
 		return "skipped"
 	}
 
@@ -388,7 +388,7 @@ func (a *App) showForceRestartBalloon(action string, delaySeconds int, message s
 		psadt.WithMinModuleVersion(strings.TrimSpace(psadtCfg.RequiredVersion)),
 	)
 	if err != nil {
-		a.logs.append(fmt.Sprintf("[agent] psadt-%s-force [ERRO] NewClient: %v", action, err))
+		a.Logs.Append(fmt.Sprintf("[agent] psadt-%s-force [ERRO] NewClient: %v", action, err))
 		return "skipped"
 	}
 	defer client.Close()
@@ -399,7 +399,7 @@ func (a *App) showForceRestartBalloon(action string, delaySeconds int, message s
 		Interactive().
 		Build())
 	if err != nil {
-		a.logs.append(fmt.Sprintf("[agent] psadt-%s-force [ERRO] OpenSession: %v", action, err))
+		a.Logs.Append(fmt.Sprintf("[agent] psadt-%s-force [ERRO] OpenSession: %v", action, err))
 		return "skipped"
 	}
 	a.registerPSADTSessionHooks(session, action+"-force")
@@ -421,11 +421,11 @@ func (a *App) showForceRestartBalloon(action string, delaySeconds int, message s
 		NoWait:          true,
 	})
 	if err != nil {
-		a.logs.append(fmt.Sprintf("[agent] psadt-%s-force [ERRO] ShowBalloonTip: %v", action, err))
+		a.Logs.Append(fmt.Sprintf("[agent] psadt-%s-force [ERRO] ShowBalloonTip: %v", action, err))
 		return "skipped"
 	}
 
-	a.logs.append(fmt.Sprintf("[agent] psadt-%s-force [OK] balloon exibido delay=%ds", action, delaySeconds))
+	a.Logs.Append(fmt.Sprintf("[agent] psadt-%s-force [OK] balloon exibido delay=%ds", action, delaySeconds))
 	return "shown"
 }
 
@@ -447,7 +447,7 @@ func (a *App) showDeferrableRestartPrompt(action string, delaySeconds int, messa
 
 	psadtCfg := a.GetAgentConfiguration().PSADT
 	if psadtCfg.Enabled == nil || !*psadtCfg.Enabled {
-		a.logs.append(fmt.Sprintf("[agent] psadt-%s-defer [SKIP] psadt.enabled=false — fallback notification", action))
+		a.Logs.Append(fmt.Sprintf("[agent] psadt-%s-defer [SKIP] psadt.enabled=false — fallback notification", action))
 		return "fallback"
 	}
 
@@ -480,19 +480,19 @@ func (a *App) showDeferrableRestartPrompt(action string, delaySeconds int, messa
 	initCtx, initCancel := context.WithTimeout(context.Background(), initTimeout)
 	defer initCancel()
 
-	a.logs.append(fmt.Sprintf("[agent] psadt-%s-defer [DIAG] inicializando PSADT client (initTimeout=%v delaySeconds=%d deferMinutes=%d)", action, initTimeout, delaySeconds, deferMinutes))
+	a.Logs.Append(fmt.Sprintf("[agent] psadt-%s-defer [DIAG] inicializando PSADT client (initTimeout=%v delaySeconds=%d deferMinutes=%d)", action, initTimeout, delaySeconds, deferMinutes))
 
 	client, err := psadt.NewClient(
 		psadt.WithTimeout(initTimeout),
 		psadt.WithMinModuleVersion(strings.TrimSpace(psadtCfg.RequiredVersion)),
 	)
 	if err != nil {
-		a.logs.append(fmt.Sprintf("[agent] psadt-%s-defer [ERRO] NewClient: %v — fallback", action, err))
+		a.Logs.Append(fmt.Sprintf("[agent] psadt-%s-defer [ERRO] NewClient: %v — fallback", action, err))
 		return "fallback"
 	}
 	defer client.Close()
 
-	a.logs.append(fmt.Sprintf("[agent] psadt-%s-defer [DIAG] PSADT client inicializado, abrindo sessão interativa", action))
+	a.Logs.Append(fmt.Sprintf("[agent] psadt-%s-defer [DIAG] PSADT client inicializado, abrindo sessão interativa", action))
 
 	session, err := client.OpenSessionWithContext(initCtx, pstypes.NewSessionConfig().
 		App("Discovery", "Discovery Agent", "1.0").
@@ -500,7 +500,7 @@ func (a *App) showDeferrableRestartPrompt(action string, delaySeconds int, messa
 		Interactive().
 		Build())
 	if err != nil {
-		a.logs.append(fmt.Sprintf("[agent] psadt-%s-defer [ERRO] OpenSession: %v — fallback", action, err))
+		a.Logs.Append(fmt.Sprintf("[agent] psadt-%s-defer [ERRO] OpenSession: %v — fallback", action, err))
 		return "fallback"
 	}
 	a.registerPSADTSessionHooks(session, action+"-defer")
@@ -510,7 +510,7 @@ func (a *App) showDeferrableRestartPrompt(action string, delaySeconds int, messa
 		_ = session.CloseWithContext(closeCtx, 0)
 	}()
 
-	a.logs.append(fmt.Sprintf("[agent] psadt-%s-defer [EXEC] delay=%ds deferMinutes=%d via ShowDialogBox", action, delaySeconds, deferMinutes))
+	a.Logs.Append(fmt.Sprintf("[agent] psadt-%s-defer [EXEC] delay=%ds deferMinutes=%d via ShowDialogBox", action, delaySeconds, deferMinutes))
 
 	// Usa ShowDialogBox com Yes/No para oferecer escolha clara.
 	// Yes = reiniciar agora, No = adiar.
@@ -524,18 +524,18 @@ func (a *App) showDeferrableRestartPrompt(action string, delaySeconds int, messa
 		ExitOnTimeout: true,
 	})
 	if err != nil {
-		a.logs.append(fmt.Sprintf("[agent] psadt-%s-defer [ERRO] ShowDialogBox: %v — fallback", action, err))
+		a.Logs.Append(fmt.Sprintf("[agent] psadt-%s-defer [ERRO] ShowDialogBox: %v — fallback", action, err))
 		return "fallback"
 	}
 
 	resultStr := strings.ToLower(strings.TrimSpace(string(result)))
-	a.logs.append(fmt.Sprintf("[agent] psadt-%s-defer [OK] result=%s", action, resultStr))
+	a.Logs.Append(fmt.Sprintf("[agent] psadt-%s-defer [OK] result=%s", action, resultStr))
 
 	switch resultStr {
 	case "yes":
 		return "restart_now"
 	case "timeout":
-		a.logs.append(fmt.Sprintf("[agent] psadt-%s-defer timeout após %ds — restart forçado", action, delaySeconds))
+		a.Logs.Append(fmt.Sprintf("[agent] psadt-%s-defer timeout após %ds — restart forçado", action, delaySeconds))
 		return "restart_now"
 	default:
 		// "no" ou qualquer outro resultado → adiar
@@ -603,7 +603,7 @@ func (a *App) executeSystemPowerAction(_ context.Context, action string, delaySe
 			shutdownExe = resolved
 		} else {
 			if a != nil {
-				a.logs.append(fmt.Sprintf("[agent] %s-action [FATAL] shutdown.exe nao encontrado: Stat=%v LookPath=%v", label, statErr, lookErr))
+				a.Logs.Append(fmt.Sprintf("[agent] %s-action [FATAL] shutdown.exe nao encontrado: Stat=%v LookPath=%v", label, statErr, lookErr))
 			}
 			return 1, fmt.Sprintf("shutdown.exe nao encontrado: %v", statErr), fmt.Sprintf("falha ao localizar shutdown.exe: %v / PATH: %v", statErr, lookErr)
 		}
@@ -624,7 +624,7 @@ func (a *App) executeSystemPowerAction(_ context.Context, action string, delaySe
 	}
 
 	if a != nil {
-		a.logs.append(fmt.Sprintf("[agent] %s-action [EXEC] exe=%s args=%s (modo=delay %ds force=%t)", label, shutdownExe, strings.Join(args, " "), delaySeconds, force))
+		a.Logs.Append(fmt.Sprintf("[agent] %s-action [EXEC] exe=%s args=%s (modo=delay %ds force=%t)", label, shutdownExe, strings.Join(args, " "), delaySeconds, force))
 	}
 
 	cmd := exec.Command(shutdownExe, args...)
@@ -634,13 +634,13 @@ func (a *App) executeSystemPowerAction(_ context.Context, action string, delaySe
 
 	if err != nil {
 		if a != nil {
-			a.logs.append(fmt.Sprintf("[agent] %s-action [ERRO] exe=%s err=%v output=%q", label, shutdownExe, err, output))
+			a.Logs.Append(fmt.Sprintf("[agent] %s-action [ERRO] exe=%s err=%v output=%q", label, shutdownExe, err, output))
 		}
 		return 1, output, fmt.Sprintf("falha ao executar %s (%s): %v", label, shutdownExe, err)
 	}
 
 	if a != nil {
-		a.logs.append(fmt.Sprintf("[agent] %s-action [OK] exe=%s (modo=delay %ds)", label, shutdownExe, delaySeconds))
+		a.Logs.Append(fmt.Sprintf("[agent] %s-action [OK] exe=%s (modo=delay %ds)", label, shutdownExe, delaySeconds))
 	}
 	return 0, fmt.Sprintf("%s agendado com sucesso (delay=%ds)", label, delaySeconds), ""
 }

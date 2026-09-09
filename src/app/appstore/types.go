@@ -15,17 +15,17 @@ const (
 
 // Item representa um item permitido retornado por /api/v1/agent-auth/me/app-store.
 type Item struct {
-	InstallationType    string            `json:"installationType"`
-	PackageID           string            `json:"packageId"`
-	Name                string            `json:"name"`
-	Description         string            `json:"description"`
-	IconURL             string            `json:"iconUrl"`
-	Publisher           string            `json:"publisher"`
-	Version             string            `json:"version"`
-	InstallCommand      string            `json:"installCommand"`
+	InstallationType string `json:"installationType"`
+	PackageID        string `json:"packageId"`
+	Name             string `json:"name"`
+	Description      string `json:"description"`
+	IconURL          string `json:"iconUrl"`
+	Publisher        string `json:"publisher"`
+	Version          string `json:"version"`
+	InstallCommand   string `json:"installCommand"`
 	// SilentCommand contém os switches silenciosos do manifesto winget
 	// (ex.: "/S /PreventRebootRequired=true"). Fallback: SilentWithProgress.
-	SilentCommand       string            `json:"silent"`
+	SilentCommand string `json:"silent"`
 	// SilentWithProgress contém os switches silenciosos com progresso (fallback de SilentCommand).
 	SilentWithProgress  string            `json:"silentWithProgress"`
 	InstallerURLsByArch map[string]string `json:"installerUrlsByArch"`
@@ -34,8 +34,8 @@ type Item struct {
 	// Permite executar o instalador baixado com a estratégia correta sem
 	// adivinhar pela extensão do arquivo.
 	InstallerTypesByArch map[string]string `json:"installerTypesByArch"`
-	AutoUpdateEnabled   bool              `json:"autoUpdateEnabled"`
-	SourceScope         string            `json:"sourceScope"`
+	AutoUpdateEnabled    bool              `json:"autoUpdateEnabled"`
+	SourceScope          string            `json:"sourceScope"`
 }
 
 // Response representa o envelope do endpoint /api/v1/agent-auth/me/app-store.

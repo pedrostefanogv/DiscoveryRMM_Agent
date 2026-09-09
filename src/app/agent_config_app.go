@@ -11,20 +11,20 @@ import (
 
 // setAgentConfiguration stores the parsed configuration and applies relevant settings.
 func (a *App) setAgentConfiguration(cfg agentconfig.AgentConfiguration) {
-	a.agentConfigMu.RLock()
-	previous := a.agentConfig
-	a.agentConfigMu.RUnlock()
-	a.agentConfigMu.Lock()
-	a.agentConfig = cfg
-	a.agentConfigMu.Unlock()
+	a.AgentConfigMu.RLock()
+	previous := a.AgentConfig
+	a.AgentConfigMu.RUnlock()
+	a.AgentConfigMu.Lock()
+	a.AgentConfig = cfg
+	a.AgentConfigMu.Unlock()
 	a.persistAgentRoutingContext(cfg)
 	a.applyAgentConfiguration(cfg)
-	if a.agentConn != nil {
+	if a.AgentConn != nil {
 		clientChanged := strings.TrimSpace(previous.ClientID) != strings.TrimSpace(cfg.ClientID)
 		siteChanged := strings.TrimSpace(previous.SiteID) != strings.TrimSpace(cfg.SiteID)
 		if clientChanged || siteChanged {
-			a.logs.append("[config] contexto NATS canônico atualizado; reconexão solicitada")
-			a.agentConn.Reload()
+			a.Logs.Append("[config] contexto NATS canônico atualizado; reconexão solicitada")
+			a.AgentConn.Reload()
 		}
 	}
 }
@@ -37,7 +37,7 @@ func (a *App) persistAgentRoutingContext(cfg agentconfig.AgentConfiguration) {
 	}
 	inst, path, err := loadInstallerConfig()
 	if err != nil {
-		a.logs.append("[config] falha ao carregar config compartilhada para clientId/siteId: " + err.Error())
+		a.Logs.Append("[config] falha ao carregar config compartilhada para clientId/siteId: " + err.Error())
 		return
 	}
 	if strings.TrimSpace(inst.ClientID) == clientID && strings.TrimSpace(inst.SiteID) == siteID {
@@ -46,10 +46,10 @@ func (a *App) persistAgentRoutingContext(cfg agentconfig.AgentConfiguration) {
 	inst.ClientID = clientID
 	inst.SiteID = siteID
 	if _, err := persistInstallerConfig(path, inst); err != nil {
-		a.logs.append("[config] falha ao persistir clientId/siteId: " + err.Error())
+		a.Logs.Append("[config] falha ao persistir clientId/siteId: " + err.Error())
 		return
 	}
-	a.logs.append(fmt.Sprintf("[config] contexto canônico persistido: clientId=%s siteId=%s", clientID, siteID))
+	a.Logs.Append(fmt.Sprintf("[config] contexto canônico persistido: clientId=%s siteId=%s", clientID, siteID))
 }
 
 // applyAgentConfiguration adjusts runtime behavior based on the agent configuration.
@@ -62,16 +62,16 @@ func (a *App) applyAgentConfiguration(cfg agentconfig.AgentConfiguration) {
 	}
 	// Instalação de winget via P2P-first — quando a API remota envia o campo,
 	// ele sobrescreve o valor local. Quando ausente, mantém o default do agente (true).
-	if a.debugSvc != nil {
-		changed, applyErr := a.debugSvc.ApplyP2PWingetInstallEnabledRemote(cfg.AutomationP2PWingetInstallEnabled)
+	if a.DebugSvc != nil {
+		changed, applyErr := a.DebugSvc.ApplyP2PWingetInstallEnabledRemote(cfg.AutomationP2PWingetInstallEnabled)
 		if applyErr != nil {
-			a.logs.append("[config] falha ao aplicar automationP2pWingetInstallEnabled remota: " + applyErr.Error())
+			a.Logs.Append("[config] falha ao aplicar automationP2pWingetInstallEnabled remota: " + applyErr.Error())
 		} else if changed {
-			a.logs.append("[config] automationP2pWingetInstallEnabled atualizado pela API")
+			a.Logs.Append("[config] automationP2pWingetInstallEnabled atualizado pela API")
 		}
 	}
-	if a.debugSvc != nil {
-		changed, err := a.debugSvc.ApplyRemoteConnectionSecurity(
+	if a.DebugSvc != nil {
+		changed, err := a.DebugSvc.ApplyRemoteConnectionSecurity(
 			cfg.NatsServerHost,
 			cfg.NatsServerHostInternal,
 			cfg.NatsUseWssExternal,
@@ -80,27 +80,27 @@ func (a *App) applyAgentConfiguration(cfg agentconfig.AgentConfiguration) {
 			cfg.ApiTlsCertHash,
 			cfg.NatsTlsCertHash)
 		if err != nil {
-			a.logs.append("[config] falha ao aplicar seguranca remota: " + err.Error())
+			a.Logs.Append("[config] falha ao aplicar seguranca remota: " + err.Error())
 		} else if changed {
-			a.logs.append("[config] segurança remota aplicada; reconexão solicitada")
+			a.Logs.Append("[config] segurança remota aplicada; reconexão solicitada")
 		}
 	}
 	a.persistAgentUpdatePolicy(cfg.AgentUpdate)
 	// Discovery onboarding toggle — governs whether this agent participates in P2P onboarding.
 	if cfg.DiscoveryEnabled != nil {
-		a.logs.append(fmt.Sprintf("[config] discoveryEnabled=%t", *cfg.DiscoveryEnabled))
+		a.Logs.Append(fmt.Sprintf("[config] discoveryEnabled=%t", *cfg.DiscoveryEnabled))
 	}
 	// Sync interval (if specified).
-	if cfg.InventoryIntervalHours != nil && a.syncSvc != nil {
+	if cfg.InventoryIntervalHours != nil && a.SyncSvc != nil {
 		if *cfg.InventoryIntervalHours > 0 {
-			a.syncSvc.SetPollEvery(time.Duration(*cfg.InventoryIntervalHours) * time.Hour)
+			a.SyncSvc.SetPollEvery(time.Duration(*cfg.InventoryIntervalHours) * time.Hour)
 		}
 	}
 
 	// Consolidation engine: propagar políticas de janela quando disponíveis.
-	if a.consolEngine != nil {
-		a.consolEngine.SetAgentID(strings.TrimSpace(a.GetDebugConfig().AgentID))
-		a.consolEngine.ApplyAgentConfig(cfg)
+	if a.ConsolEngine != nil {
+		a.ConsolEngine.SetAgentID(strings.TrimSpace(a.GetDebugConfig().AgentID))
+		a.ConsolEngine.ApplyAgentConfig(cfg)
 	}
 }
 
@@ -108,7 +108,7 @@ func (a *App) persistAgentUpdatePolicy(policy selfupdate.Policy) {
 	policy = selfupdate.NormalizePolicy(policy)
 	inst, path, err := loadInstallerConfig()
 	if err != nil {
-		a.logs.append("[config] falha ao carregar config compartilhada para agentUpdate: " + err.Error())
+		a.Logs.Append("[config] falha ao carregar config compartilhada para agentUpdate: " + err.Error())
 		return
 	}
 	if inst.AgentUpdate != nil && *inst.AgentUpdate == policy {
@@ -116,17 +116,17 @@ func (a *App) persistAgentUpdatePolicy(policy selfupdate.Policy) {
 	}
 	inst.AgentUpdate = &policy
 	if _, err := persistInstallerConfig(path, inst); err != nil {
-		a.logs.append("[config] falha ao persistir agentUpdate em config compartilhada: " + err.Error())
+		a.Logs.Append("[config] falha ao persistir agentUpdate em config compartilhada: " + err.Error())
 		return
 	}
-	a.logs.append("[config] policy de agentUpdate persistida em config compartilhada")
+	a.Logs.Append("[config] policy de agentUpdate persistida em config compartilhada")
 }
 
 func (a *App) loadCachedAgentConfiguration() error {
-	if a.db == nil {
+	if a.CoreAgent.DB == nil {
 		return fmt.Errorf("cache nao disponivel")
 	}
-	raw, err := a.db.CacheGet("agent_configuration_raw")
+	raw, err := a.CoreAgent.DB.CacheGet("agent_configuration_raw")
 	if err != nil {
 		return err
 	}
@@ -138,6 +138,6 @@ func (a *App) loadCachedAgentConfiguration() error {
 		return err
 	}
 	a.setAgentConfiguration(cfg)
-	a.logs.append("[sync] configuração do agent carregada do cache")
+	a.Logs.Append("[sync] configuração do agent carregada do cache")
 	return nil
 }

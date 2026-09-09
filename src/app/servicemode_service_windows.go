@@ -16,7 +16,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/wailsapp/wails/v3/pkg/application"
 	"golang.org/x/sys/windows/svc"
 
 	"discovery/app/core/logger"
@@ -86,7 +85,7 @@ func (s *discoveryService) Execute(_ []string, r <-chan svc.ChangeRequest, chang
 
 	// Roda o core em goroutine; o ctx interno da App controla o ciclo.
 	go func() {
-		app.ServiceStartup(context.Background(), application.ServiceOptions{})
+		_ = app.RunCore(context.Background())
 	}()
 
 	changes <- svc.Status{State: svc.Running, Accepts: cmdsAccepted}
@@ -133,6 +132,6 @@ func svcCmdName(cmd svc.Cmd) string {
 // processo ser encerrado (SIGINT/KILL).
 func runServiceCore() {
 	app := NewApp(AppStartupOptions{ServiceMode: true})
-	app.ServiceStartup(context.Background(), application.ServiceOptions{})
+	_ = app.RunCore(context.Background())
 	select {}
 }

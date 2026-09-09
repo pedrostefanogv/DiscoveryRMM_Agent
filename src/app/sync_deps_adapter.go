@@ -12,22 +12,23 @@ import (
 // Compile-time check: *App implementa sync.SyncDeps.
 var _ sync.SyncDeps = (*App)(nil)
 
-// DB expõe a.db via interface.
+// DB expõe a.CoreAgent.DB via interface (migração lote 1: campo promovido do
+// coreagent.CoreAgent embutido; método mantém a interface sync.SyncDeps).
 func (a *App) DB() *database.DB {
-	return a.db
+	return a.CoreAgent.DB
 }
 
 // RefreshPeerArtifactIndex expõe p2pCoord.RefreshPeerArtifactIndex via interface.
 func (a *App) RefreshPeerArtifactIndex(ctx context.Context, source string) {
-	if a.p2pCoord != nil {
-		a.p2pCoord.RefreshPeerArtifactIndex(ctx, source)
+	if a.P2PCoord != nil {
+		a.P2PCoord.RefreshPeerArtifactIndex(ctx, source)
 	}
 }
 
 // OnResourceSynced expõe p2pCoord.OnResourceSynced via interface.
 func (a *App) OnResourceSynced(resource, variant, revision string) {
-	if a.p2pCoord != nil {
-		a.p2pCoord.OnResourceSynced(resource, variant, revision)
+	if a.P2PCoord != nil {
+		a.P2PCoord.OnResourceSynced(resource, variant, revision)
 	}
 }
 

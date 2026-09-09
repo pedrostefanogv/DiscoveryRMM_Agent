@@ -1,31 +1,31 @@
-﻿package app
+package app
 
 func (a *App) GetDebugConfig() DebugConfig {
-	if a == nil || a.debugSvc == nil {
+	if a == nil || a.DebugSvc == nil {
 		return DebugConfig{}
 	}
-	return a.debugSvc.GetConfig()
+	return a.DebugSvc.GetConfig()
 }
 
 func (a *App) SetDebugConfig(cfg DebugConfig) error {
 	if err := a.requireDebugSvc(); err != nil {
 		return err
 	}
-	return a.debugSvc.SetConfig(cfg)
+	return a.DebugSvc.SetConfig(cfg)
 }
 
 func (a *App) TestDebugConnection(cfg DebugConfig) (string, error) {
 	if err := a.requireDebugSvc(); err != nil {
 		return "", err
 	}
-	return a.debugSvc.TestConnection(cfg)
+	return a.DebugSvc.TestConnection(cfg)
 }
 
 func (a *App) GetRealtimeStatus() (RealtimeStatus, error) {
 	if err := a.requireDebugSvc(); err != nil {
 		return RealtimeStatus{}, err
 	}
-	return a.debugSvc.GetRealtimeStatus()
+	return a.DebugSvc.GetRealtimeStatus()
 }
 
 func (a *App) GetAgentStatus() AgentStatus {
@@ -44,8 +44,8 @@ func (a *App) GetAgentStatus() AgentStatus {
 			return *snap
 		}
 	}
-	if a.debugSvc == nil {
+	if a.DebugSvc == nil {
 		return AgentStatus{}
 	}
-	return a.resolveAgentConnectivity(a.debugSvc.GetAgentStatus())
+	return a.resolveAgentConnectivity(a.DebugSvc.GetAgentStatus())
 }

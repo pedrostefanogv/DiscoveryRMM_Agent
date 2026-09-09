@@ -17,11 +17,11 @@ type IntegrityLevel string
 
 const (
 	IntegrityUntrusted IntegrityLevel = "Untrusted"
-	IntegrityLow      IntegrityLevel = "Low"
-	IntegrityMedium   IntegrityLevel = "Medium"
-	IntegrityHigh     IntegrityLevel = "High"
-	IntegritySystem   IntegrityLevel = "System"
-	IntegrityUnknown  IntegrityLevel = "Unknown"
+	IntegrityLow       IntegrityLevel = "Low"
+	IntegrityMedium    IntegrityLevel = "Medium"
+	IntegrityHigh      IntegrityLevel = "High"
+	IntegritySystem    IntegrityLevel = "System"
+	IntegrityUnknown   IntegrityLevel = "Unknown"
 )
 
 // Related well-known integrity RIDs (SID SECURITY_MANDATORY_LABEL).

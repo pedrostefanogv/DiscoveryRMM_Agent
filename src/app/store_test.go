@@ -15,7 +15,7 @@ import (
 // newTestAppStoreApp cria um App com o appStoreSvc inicializado para testes.
 func newTestAppStoreApp() *App {
 	app := &App{ctx: context.Background()}
-	app.appStoreSvc = appstore.New(appstore.Deps{
+	app.AppStoreSvc = appstore.New(appstore.Deps{
 		GetDebugConfig: func() appstore.DebugConfig {
 			cfg := app.GetDebugConfig()
 			return appstore.DebugConfig{
@@ -31,12 +31,12 @@ func newTestAppStoreApp() *App {
 		},
 		FeatureEnabled: app.featureEnabled,
 		Logf: func(line string) {
-			app.logs.append(line)
+			app.Logs.Append(line)
 		},
 		DB: func() *database.DB {
-			return app.db
+			return app.CoreAgent.DB
 		},
-		Cache: &app.appStorePolicy.inner,
+		Cache: app.AppStorePolicy.CachePointer(),
 	})
 	return app
 }
@@ -68,8 +68,8 @@ func TestLoadEffectiveAppStorePolicyMergesWingetAndChocolatey(t *testing.T) {
 	defer server.Close()
 
 	app := newTestAppStoreApp()
-	app.debugSvc = debug.NewService(debug.Options{})
-	app.debugSvc.ApplyRuntimeConnectionConfig("http", strings.TrimPrefix(server.URL, "http://"), token, "8f6d6d72-4a8a-4c87-bffa-34ba29dc0bb7", "", "")
+	app.DebugSvc = debug.NewService(debug.Options{})
+	app.DebugSvc.ApplyRuntimeConnectionConfig("http", strings.TrimPrefix(server.URL, "http://"), token, "8f6d6d72-4a8a-4c87-bffa-34ba29dc0bb7", "", "")
 
 	policy, err := app.loadEffectiveAppStorePolicy(context.Background(), true)
 	if err != nil {
@@ -85,7 +85,7 @@ func TestLoadEffectiveAppStorePolicyMergesWingetAndChocolatey(t *testing.T) {
 
 func TestResolveAllowedPackageDetectsAmbiguousPackageID(t *testing.T) {
 	app := newTestAppStoreApp()
-	app.appStorePolicy.set(AppStoreEffectivePolicy{
+	app.AppStorePolicy.Set(AppStoreEffectivePolicy{
 		Items: []AppStoreItem{
 			{InstallationType: "Winget", PackageID: "Duplicate.Package"},
 			{InstallationType: "Chocolatey", PackageID: "duplicate.package"},

@@ -40,7 +40,7 @@ func newAutomationPackageManagerRouter(app *App, fallback *services.AppsService)
 		app:      app,
 		fallback: fallback,
 		logf: func(format string, args ...any) {
-			app.logs.append("[automation][p2p] " + fmt.Sprintf(format, args...))
+			app.Logs.Append("[automation][p2p] " + fmt.Sprintf(format, args...))
 		},
 	}
 }
@@ -142,7 +142,7 @@ func (m *automationPackageManagerRouter) shouldUseP2PForWingetInstall() bool {
 	if !p2pCfg.Enabled {
 		return false
 	}
-	if m.app.p2pCoord == nil {
+	if m.app.P2PCoord == nil {
 		return false
 	}
 	return true
@@ -161,10 +161,10 @@ const p2pReadinessWaitTimeout = 45 * time.Second
 // ainda encontrar artifacts via gossip/index já populado, ou cair no
 // fallback winget, exatamente como antes).
 func (m *automationPackageManagerRouter) waitForP2PReadiness(ctx context.Context) bool {
-	if m == nil || m.app == nil || m.app.p2pCoord == nil {
+	if m == nil || m.app == nil || m.app.P2PCoord == nil {
 		return true // sem coordinator: nada a esperar, não bloqueia
 	}
-	readyCh := m.app.p2pCoord.ReadyCh()
+	readyCh := m.app.P2PCoord.ReadyCh()
 	select {
 	case <-readyCh:
 		return true
@@ -214,9 +214,9 @@ func (m *automationPackageManagerRouter) installViaP2P(ctx context.Context, pack
 		// único peer, o swarm degrada para o mesmo caminho chunked single-peer.
 		swarmTried := false
 		if len(peerIDs) > 1 {
-			if avail := m.app.p2pCoord.FindArtifactPeersByID(artifact); avail.Found && len(avail.PeerAgentIDs) > 1 {
+			if avail := m.app.P2PCoord.FindArtifactPeersByID(artifact); avail.Found && len(avail.PeerAgentIDs) > 1 {
 				m.logf("[automation][p2p] baixando via swarm peers=%d artifact=%s", len(avail.PeerAgentIDs), artifact)
-				if _, err := m.app.p2pCoord.DownloadArtifactSwarm(ctx, artifact); err != nil {
+				if _, err := m.app.P2PCoord.DownloadArtifactSwarm(ctx, artifact); err != nil {
 					m.logf("[automation][p2p] swarm falhou, tentando peers individualmente artifact=%s motivo=%v", artifact, err)
 				} else {
 					m.logf("[automation][p2p] artifact baixado via swarm peers=%d artifact=%s", len(avail.PeerAgentIDs), artifact)
@@ -229,7 +229,7 @@ func (m *automationPackageManagerRouter) installViaP2P(ctx context.Context, pack
 			// anúncio fresco primeiro). Assim, entre os agentes que possuem
 			// o mesmo artifact, a transferência prefere o melhor provedor.
 			if lookupID := "winget:" + normalizePackageLookupKey(packageID); lookupID != "winget:" {
-				if scored := m.app.p2pCoord.PeersWithArtifactScored(lookupID); len(scored) > 0 {
+				if scored := m.app.P2PCoord.PeersWithArtifactScored(lookupID); len(scored) > 0 {
 					ordered := make([]string, 0, len(scored))
 					for _, cand := range scored {
 						for _, id := range peerIDs {
@@ -251,7 +251,7 @@ func (m *automationPackageManagerRouter) installViaP2P(ctx context.Context, pack
 			var lastErr error
 			downloaded := false
 			for i, peerID := range peerIDs {
-				if _, err := m.app.p2pCoord.DownloadArtifactFromPeer(ctx, artifact, peerID); err != nil {
+				if _, err := m.app.P2PCoord.DownloadArtifactFromPeer(ctx, artifact, peerID); err != nil {
 					lastErr = err
 					m.logf("[automation][p2p] download falhou via peer=%s (%d/%d), tentando próximo artifact=%s motivo=%v", peerID, i+1, len(peerIDs), artifact, err)
 					continue
@@ -299,7 +299,7 @@ func (m *automationPackageManagerRouter) resolveArtifactSources(ctx context.Cont
 	}
 
 	// 2. Busca em TODOS os peers via gossip (não apenas o primeiro match).
-	m.app.p2pCoord.RefreshPeerArtifactIndex(ctx, "automation-install")
+	m.app.P2PCoord.RefreshPeerArtifactIndex(ctx, "automation-install")
 	index := m.app.GetP2PPeerArtifactIndex()
 	for _, peer := range index {
 		for _, a := range peer.Artifacts {
@@ -327,7 +327,7 @@ func (m *automationPackageManagerRouter) resolveArtifactSources(ctx context.Cont
 // falha aqui não deve afetar o ciclo de automação.
 func (m *automationPackageManagerRouter) PreloadPackageForP2P(ctx context.Context, packageID string) {
 	packageID = strings.TrimSpace(packageID)
-	if packageID == "" || m.app.p2pCoord == nil {
+	if packageID == "" || m.app.P2PCoord == nil {
 		return
 	}
 	artifactID := "winget:" + normalizePackageLookupKey(packageID)
@@ -342,7 +342,7 @@ func (m *automationPackageManagerRouter) PreloadPackageForP2P(ctx context.Contex
 	}
 
 	// Já existe na rede? Baixa dos peers (swarm) em vez da internet.
-	m.app.p2pCoord.RefreshPeerArtifactIndex(ctx, "preload")
+	m.app.P2PCoord.RefreshPeerArtifactIndex(ctx, "preload")
 	index := m.app.GetP2PPeerArtifactIndex()
 	for _, peer := range index {
 		for _, a := range peer.Artifacts {
@@ -353,15 +353,15 @@ func (m *automationPackageManagerRouter) PreloadPackageForP2P(ctx context.Contex
 			if artifactName == "" {
 				continue
 			}
-			if scored := m.app.p2pCoord.PeersWithArtifactScored(artifactID); len(scored) > 0 {
-				if _, err := m.app.p2pCoord.DownloadArtifactSwarm(ctx, artifactName); err == nil {
+			if scored := m.app.P2PCoord.PeersWithArtifactScored(artifactID); len(scored) > 0 {
+				if _, err := m.app.P2PCoord.DownloadArtifactSwarm(ctx, artifactName); err == nil {
 					m.logf("[automation][p2p] preload: artifact baixado da rede packageId=%s artifact=%s", packageID, artifactName)
 					return
 				}
 				// Swarm falhou — tenta peers individualmente na ordem de score.
 				downloaded := false
 				for _, cand := range scored {
-					if _, err := m.app.p2pCoord.DownloadArtifactFromPeer(ctx, artifactName, cand.AgentID); err == nil {
+					if _, err := m.app.P2PCoord.DownloadArtifactFromPeer(ctx, artifactName, cand.AgentID); err == nil {
 						m.logf("[automation][p2p] preload: artifact baixado via peer packageId=%s peer=%s", packageID, cand.AgentID)
 						downloaded = true
 						break
@@ -406,9 +406,9 @@ func (m *automationPackageManagerRouter) PreloadPackageForP2P(ctx context.Contex
 	var published p2pmeta.ArtifactView
 	var pubErr error
 	if installerVersion != "" {
-		published, pubErr = m.app.p2pCoord.PublishFileWithIDAndVersion(installerPath, artifactID, installerVersion)
+		published, pubErr = m.app.P2PCoord.PublishFileWithIDAndVersion(installerPath, artifactID, installerVersion)
 	} else {
-		published, pubErr = m.app.p2pCoord.PublishFileWithID(installerPath, artifactID)
+		published, pubErr = m.app.P2PCoord.PublishFileWithID(installerPath, artifactID)
 	}
 	if pubErr != nil {
 		m.logf("[automation][p2p] preload: falha ao publicar packageId=%s: %v", packageID, pubErr)
@@ -498,9 +498,9 @@ func (m *automationPackageManagerRouter) downloadAndCacheForP2P(ctx context.Cont
 	var published p2pmeta.ArtifactView
 	var pubErr error
 	if installerVersion != "" {
-		published, pubErr = m.app.p2pCoord.PublishFileWithIDAndVersion(installerPath, artifactID, installerVersion)
+		published, pubErr = m.app.P2PCoord.PublishFileWithIDAndVersion(installerPath, artifactID, installerVersion)
 	} else {
-		published, pubErr = m.app.p2pCoord.PublishFileWithID(installerPath, artifactID)
+		published, pubErr = m.app.P2PCoord.PublishFileWithID(installerPath, artifactID)
 	}
 	if pubErr != nil {
 		m.logf("[automation][p2p] aviso: falha ao publicar artifact no cache P2P: %v (instalacao continua)", pubErr)
@@ -542,10 +542,10 @@ func (m *automationPackageManagerRouter) catalogSilentSwitches(packageID string)
 // execução (msiexec vs exe vs portable) sem adivinhar pela extensão.
 // Retorna "" quando o pacote não está no catálogo ou o manifesto não tem tipo.
 func (m *automationPackageManagerRouter) catalogInstallerInfo(packageID string) (silent, silentWithProgress, installerType string) {
-	if m.app == nil || m.app.appStoreSvc == nil {
+	if m.app == nil || m.app.AppStoreSvc == nil {
 		return "", "", ""
 	}
-	item, err := m.app.appStoreSvc.ResolveAllowedPackage(m.app.ctx, packageID)
+	item, err := m.app.AppStoreSvc.ResolveAllowedPackage(m.app.ctx, packageID)
 	if err != nil {
 		// Pacote fora da política/loja: sem switches, usa cascata heurística.
 		return "", "", ""
@@ -591,7 +591,7 @@ func resolveInstallerTypeForHost(typesByArch map[string]string) string {
 // e retorna o caminho completo do arquivo se ele existir com manifest válido.
 // Retorna "" se não encontrado ou inválido.
 func (m *automationPackageManagerRouter) findLocalArtifactByID(artifactID string) string {
-	if m.app == nil || m.app.p2pCoord == nil {
+	if m.app == nil || m.app.P2PCoord == nil {
 		return ""
 	}
 	artifacts, err := m.app.ListP2PArtifacts()
@@ -1044,7 +1044,7 @@ func isRebootSuccessExitCode(code int) bool {
 // Usado pela decisão versionada do executor (evitar loop por catálogo defasado).
 // Retorna "" quando o artifact não existe ou não tem versão.
 func (m *automationPackageManagerRouter) resolveP2PPackageVersion(packageID string) string {
-	if m == nil || m.app == nil || m.app.p2pCoord == nil {
+	if m == nil || m.app == nil || m.app.P2PCoord == nil {
 		return ""
 	}
 	packageID = strings.TrimSpace(packageID)

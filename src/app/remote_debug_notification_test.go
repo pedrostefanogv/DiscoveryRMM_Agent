@@ -2,13 +2,14 @@ package app
 
 import (
 	"context"
+	"discovery/app/coreagent"
 	"discovery/app/services/notifications"
 	"strings"
 	"testing"
 )
 
 func TestHandleAgentRuntimeCommand_NotificationDispatchApproved(t *testing.T) {
-	a := &App{notificationSvc: notifications.New(notifications.Deps{})}
+	a := &App{CoreAgent: coreagent.CoreAgent{NotificationSvc: notifications.New(notifications.Deps{})}}
 	handled, code, output, errText := a.handleAgentRuntimeCommand(context.Background(), "notification", map[string]any{
 		"notificationId": "n1",
 		"mode":           "notify_only",

@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
+	"discovery/app/core/tlsutil"
 	"discovery/app/debug"
 	"discovery/app/netutil"
-	"discovery/app/core/tlsutil"
 )
 
 const (

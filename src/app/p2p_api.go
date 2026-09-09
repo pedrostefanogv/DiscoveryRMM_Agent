@@ -97,7 +97,7 @@ func (a *App) PostP2PTelemetry(ctx context.Context) error {
 	}
 	if err := a.postP2PTelemetryPayload(ctx, payload, ""); err != nil {
 		if qErr := a.enqueueP2PTelemetryOutbox(payload, err); qErr != nil {
-			a.logs.append("[p2p][api] falha ao enfileirar telemetria offline: " + qErr.Error())
+			a.Logs.Append("[p2p][api] falha ao enfileirar telemetria offline: " + qErr.Error())
 		}
 		return err
 	}
@@ -200,9 +200,9 @@ func (a *App) GetP2PDistributionStatusWithOptions(ctx context.Context, opts P2PD
 }
 
 func (a *App) getP2PTelemetryRateLimitUntil() (time.Time, bool) {
-	a.p2pMu.RLock()
-	until := a.p2pTelemetryRateLimitUntil
-	a.p2pMu.RUnlock()
+	a.P2PMu.RLock()
+	until := a.P2PTelemetryRateLimitUntil
+	a.P2PMu.RUnlock()
 	if until.IsZero() {
 		return time.Time{}, false
 	}
@@ -213,11 +213,11 @@ func (a *App) getP2PTelemetryRateLimitUntil() (time.Time, bool) {
 }
 
 func (a *App) setP2PTelemetryRateLimitUntil(until time.Time) {
-	a.p2pMu.Lock()
-	if until.After(a.p2pTelemetryRateLimitUntil) {
-		a.p2pTelemetryRateLimitUntil = until
+	a.P2PMu.Lock()
+	if until.After(a.P2PTelemetryRateLimitUntil) {
+		a.P2PTelemetryRateLimitUntil = until
 	}
-	a.p2pMu.Unlock()
+	a.P2PMu.Unlock()
 }
 
 // StartP2PTelemetryLoop periodically refreshes seed-plan cache and sends telemetry.
@@ -235,33 +235,33 @@ func (a *App) StartP2PTelemetryLoop(ctx context.Context) {
 		case <-ticker.C:
 			if remaining, deferred, reason := a.nonCriticalBackoffWindow(); deferred {
 				if reason != "" {
-					a.logs.append(fmt.Sprintf("[p2p][api] envio adiado por sobrecarga do servidor: restante=%s motivo=%s", remaining.Round(time.Second), reason))
+					a.Logs.Append(fmt.Sprintf("[p2p][api] envio adiado por sobrecarga do servidor: restante=%s motivo=%s", remaining.Round(time.Second), reason))
 				} else {
-					a.logs.append(fmt.Sprintf("[p2p][api] envio adiado por sobrecarga do servidor: restante=%s", remaining.Round(time.Second)))
+					a.Logs.Append(fmt.Sprintf("[p2p][api] envio adiado por sobrecarga do servidor: restante=%s", remaining.Round(time.Second)))
 				}
 				continue
 			}
 			if _, err := a.GetP2PSeedPlanRecommendation(ctx); err != nil {
-				a.logs.append("[p2p][api] falha ao atualizar seed-plan: " + err.Error())
+				a.Logs.Append("[p2p][api] falha ao atualizar seed-plan: " + err.Error())
 			}
 			// ConsolidationEngine gate: skip telemetry send if window hasn't elapsed.
 			shouldFlush := true
-			if a.consolEngine != nil {
-				ok, err := a.consolEngine.ShouldFlush("p2p_telemetry", time.Now())
+			if a.ConsolEngine != nil {
+				ok, err := a.ConsolEngine.ShouldFlush("p2p_telemetry", time.Now())
 				if err != nil {
-					a.logs.append("[p2p][api] consolidation engine erro: " + err.Error())
+					a.Logs.Append("[p2p][api] consolidation engine erro: " + err.Error())
 				}
 				shouldFlush = ok
 			}
 			if shouldFlush {
 				if err := a.PostP2PTelemetry(ctx); err != nil {
-					a.logs.append("[p2p][api] falha ao enviar telemetria: " + err.Error())
-				} else if a.consolEngine != nil {
-					_ = a.consolEngine.RecordFlush("p2p_telemetry", time.Now())
+					a.Logs.Append("[p2p][api] falha ao enviar telemetria: " + err.Error())
+				} else if a.ConsolEngine != nil {
+					_ = a.ConsolEngine.RecordFlush("p2p_telemetry", time.Now())
 				}
 			}
 			if err := a.drainP2PTelemetryOutbox(ctx, p2pTelemetryDrainLimit); err != nil {
-				a.logs.append("[p2p][api] falha ao drenar backlog de telemetria: " + err.Error())
+				a.Logs.Append("[p2p][api] falha ao drenar backlog de telemetria: " + err.Error())
 			}
 		}
 	}
@@ -295,9 +295,9 @@ func (a *App) p2pAPIAuthEndpoint(path string) (string, string, string, error) {
 }
 
 func (a *App) getCachedSeedPlan() (P2PSeedPlanRecommendation, bool) {
-	a.p2pMu.RLock()
-	defer a.p2pMu.RUnlock()
-	plan := a.p2pSeedPlanCache
+	a.P2PMu.RLock()
+	defer a.P2PMu.RUnlock()
+	plan := a.P2PSeedPlanCache
 	if plan.FetchedAtUTC.IsZero() {
 		return P2PSeedPlanRecommendation{}, false
 	}
@@ -308,7 +308,7 @@ func (a *App) getCachedSeedPlan() (P2PSeedPlanRecommendation, bool) {
 }
 
 func (a *App) setCachedSeedPlan(plan P2PSeedPlanRecommendation) {
-	a.p2pMu.Lock()
-	a.p2pSeedPlanCache = cachedP2PSeedPlan{Plan: plan, FetchedAtUTC: time.Now().UTC()}
-	a.p2pMu.Unlock()
+	a.P2PMu.Lock()
+	a.P2PSeedPlanCache = cachedP2PSeedPlan{Plan: plan, FetchedAtUTC: time.Now().UTC()}
+	a.P2PMu.Unlock()
 }

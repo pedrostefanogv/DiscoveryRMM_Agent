@@ -52,7 +52,7 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 	mcpExecutor func(ctx context.Context, toolName, argsJSON string) (string, error),
 	onA2ui ...func(string),
 ) (string, error) {
-	streamCtx, streamCancel := context.WithCancel(ctx)	// Registra o cancel para que StopStream() (botão "Parar" do frontend)
+	streamCtx, streamCancel := context.WithCancel(ctx) // Registra o cancel para que StopStream() (botão "Parar" do frontend)
 	// interrompa também o loop multi-round — antes, só o stream single-round
 	// era cancelável e o botão não tinha efeito aqui.
 	streamID := s.registerStreamCancel(streamCancel)
