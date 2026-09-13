@@ -51,6 +51,12 @@ func (u *Updater) ResumePendingInstallReport(ctx context.Context) {
 	}
 	currentCommit := strings.TrimSpace(buildinfo.Commit)
 
+	// M-fix loop: versão/commit EFETIVOS — com buildinfo "0.0.0"/"unknown" (build
+	// sem -X buildinfo), usa o marker do último install confirmado. Sem isso o
+	// estado pendente nunca resolvia (0.0.0 < 1.2.1 para sempre) e o update
+	// reinstalava em loop.
+	effVersion, effCommit := u.effectiveCurrent(currentVersion, currentCommit)
+
 	// ── Correlação com installer.log do NSIS ──
 	// Antes de decidir se o update falhou, verificamos o log do instalador
 	// para confirmar se ele rodou e qual foi o resultado.
@@ -58,6 +64,9 @@ func (u *Updater) ResumePendingInstallReport(ctx context.Context) {
 		foundSuccess, foundError := u.correlateInstallerLog(state.RecordedAtUTC)
 		if foundSuccess {
 			u.logf("estado pendente de install resolvido: installer.log confirma sucesso (recordedAt=%s)", state.RecordedAtUTC)
+			// M-fix loop: grava o marker do install CONFIRMADO (versão/commit que
+			// estão deployados) — é o que quebra o loop de reinstalação.
+			u.saveInstalledMarker(state.TargetVersion, state.InstalledCommit)
 			u.clearPendingInstallState()
 			return
 		}
@@ -71,9 +80,10 @@ func (u *Updater) ResumePendingInstallReport(ctx context.Context) {
 	// foi criado por um check defeituoso (ex.: extractFileVersion do PE divergente
 	// do buildinfo.Version real). Neste caso, limpa imediatamente sem reportar
 	// falha — o agente já está em versão superior.
-	if compareVersions(state.TargetVersion, currentVersion) < 0 {
-		u.logf("estado pendente de install descartado: target=%s inferior a current=%s (estado invalido)",
-			state.TargetVersion, currentVersion)
+	if compareVersions(state.TargetVersion, effVersion) < 0 {
+		u.logf("estado pendente de install descartado: target=%s inferior a eff=%s (estado invalido)",
+			state.TargetVersion, effVersion)
+		u.saveInstalledMarker(effVersion, effCommit)
 		u.clearPendingInstallState()
 		return
 	}
@@ -81,16 +91,17 @@ func (u *Updater) ResumePendingInstallReport(ctx context.Context) {
 	// ── Decisao baseada em commit (preferencial) ──
 	// Se o estado pendente tem installedCommit, comparamos commits ao inves
 	// de versoes. Isso funciona mesmo quando a versao nao muda (rebuilds em dev).
-	if state.InstalledCommit != "" && currentCommit != "" && currentCommit != "unknown" {
-		if !strings.EqualFold(currentCommit, state.InstalledCommit) {
+	if state.InstalledCommit != "" && effCommit != "" && !strings.EqualFold(effCommit, "unknown") {
+		if !strings.EqualFold(effCommit, state.InstalledCommit) {
 			u.logf("estado pendente de install resolvido: commit mudou de %s para %s (instalacao OK)",
-				state.InstalledCommit, currentCommit)
+				state.InstalledCommit, effCommit)
+			u.saveInstalledMarker(state.TargetVersion, effCommit)
 			u.clearPendingInstallState()
 			return
 		}
 		// Mesmo commit → binario nao mudou → falhou
 		u.logf("estado pendente de install: commit nao mudou (%s) — instalacao falhou? tentativas=%d/%d",
-			currentCommit, state.InstallAttempts, maxInstallAttempts)
+			effCommit, state.InstallAttempts, maxInstallAttempts)
 		if state.InstallAttempts >= maxInstallAttempts {
 			u.logf("estado pendente de install: maximo de %d tentativas excedido (commit=%s target=%s). Possivel loop de instalacao.",
 				maxInstallAttempts, currentCommit, state.TargetVersion)
@@ -113,12 +124,14 @@ func (u *Updater) ResumePendingInstallReport(ctx context.Context) {
 		return
 	}
 
-	if compareVersions(currentVersion, state.TargetVersion) < 0 {
-		u.logf("estado pendente de install mantido: versao atual=%s target=%s tentativas=%d/%d",
-			currentVersion, state.TargetVersion, state.InstallAttempts, maxInstallAttempts)
+	if compareVersions(effVersion, state.TargetVersion) < 0 {
+		u.logf("estado pendente de install mantido: versao efetiva=%s target=%s tentativas=%d/%d",
+			effVersion, state.TargetVersion, state.InstallAttempts, maxInstallAttempts)
 		return
 	}
-	u.logf("estado pendente de install resolvido: versao atual=%s >= target=%s (limpo)", currentVersion, state.TargetVersion)
+	// M-fix loop: resolvido pela versão — grava o marker (commit pode ser unknown).
+	u.logf("estado pendente de install resolvido: versao efetiva=%s >= target=%s (limpo)", effVersion, state.TargetVersion)
+	u.saveInstalledMarker(state.TargetVersion, state.InstalledCommit)
 	u.clearPendingInstallState()
 }
 

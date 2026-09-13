@@ -522,6 +522,11 @@ func (u *Updater) CheckAndUpdate(ctx context.Context, force bool) error {
 	}
 	u.logf("[selfupdate] iniciando check (mode=%s current=%s commit=%s correlationId=%s)", mode, currentVersion, currentCommit, correlationID)
 
+	// M-fix loop: versão/commit EFETIVOS — buildinfo "0.0.0"/"unknown" (build
+	// sem -X buildinfo) é substituído pelo último install confirmado (marker),
+	// para que o contrato version+commit do dono funcione.
+	effVersion, effCommit := u.effectiveCurrent(currentVersion, currentCommit)
+
 	// ── Fase 1: Consulta versao/commit do servidor (leve, ~200 bytes) ──
 	// Se o servidor nao tiver o endpoint /version, faz fallback para o fluxo
 	// antigo (download direto sem pre-check).
@@ -530,7 +535,7 @@ func (u *Updater) CheckAndUpdate(ctx context.Context, force bool) error {
 		if err != nil {
 			u.logf("[selfupdate] aviso: endpoint /version indisponivel (%v) — usando fluxo sem pre-check", err)
 			// Fallback: usa fluxo antigo sem decisao version+commit.
-			return u.checkAndUpdateFallback(ctx, force, currentVersion, correlationID)
+			return u.checkAndUpdateFallback(ctx, force, effVersion, correlationID)
 		}
 		serverVersion := strings.TrimSpace(serverInfo.Version)
 		serverCommit := strings.TrimSpace(serverInfo.CommitHash)
@@ -541,22 +546,20 @@ func (u *Updater) CheckAndUpdate(ctx context.Context, force bool) error {
 		// Circuit breaker (fix loop homologação): limpa o guard se a situação se
 		// resolveu e pausa o check quando o binário instalado não reporta a
 		// versão (build sem -X buildinfo) — evita loop infinito de instalação.
-		u.clearGuardIfResolved(currentVersion, serverVersion)
-		if blocked, msg := u.guardBlocksCheck(currentVersion, serverVersion); blocked {
+		u.clearGuardIfResolved(effVersion, serverVersion)
+		if blocked, msg := u.guardBlocksCheck(effVersion, serverVersion); blocked {
 			u.logf("[selfupdate] CRITICO: %s", msg)
 			u.lastError.Store(msg)
 			return nil
 		}
 
-		// Decisao version+commit:
-		// - Versoes diferentes → download (update normal)
-		// - Mesma versao, commit diferente → download (rebuild)
-		// - Mesma versao E mesmo commit → skip (mesmo build)
-		if compareVersions(serverVersion, currentVersion) == 0 &&
-			currentCommit != "" && currentCommit != "unknown" &&
-			serverCommit != "" && serverCommit != "unknown" &&
-			strings.EqualFold(currentCommit, serverCommit) {
-			u.logf("[selfupdate] skip: mesmo build (version=%s commit=%s)", currentVersion, currentCommit)
+		// Contrato do dono (M-fix loop): versão diferente → update; versão
+		// igual com commit diferente → update (rebuild); ambos iguais → skip.
+		// A comparação usa a versão/commit EFETIVOS (marker quando o buildinfo
+		// não é confiável).
+		if sameBuildInstalled(serverVersion, serverCommit, effVersion, effCommit) {
+			u.logf("[selfupdate] skip: mesmo build (server=%s/%s eff=%s/%s currentBuildinfo=%s/%s)",
+				serverVersion, serverCommit, effVersion, effCommit, currentVersion, currentCommit)
 			return nil
 		}
 
@@ -632,7 +635,10 @@ func (u *Updater) CheckAndUpdate(ctx context.Context, force bool) error {
 			TargetVersion:   targetVersion,
 			CorrelationID:   correlationID,
 			RecordedAtUTC:   time.Now().UTC().Format(time.RFC3339),
-			InstalledCommit: currentCommit,
+			// M-fix loop: grava o commit que está sendo INSTALADO (oferecido
+			// pelo servidor) — antes gravava o commit do processo antigo
+			// ("unknown" em builds sem -X), o que impedia a detecção de sucesso.
+			InstalledCommit: serverCommit,
 			InstallerPath:   tempPath,
 		}); err != nil {
 			u.installing.Store(false)
@@ -656,11 +662,12 @@ func (u *Updater) CheckAndUpdate(ctx context.Context, force bool) error {
 	}
 
 	// ── Forced mode: ignora version+commit check, sempre baixa ──
-	return u.checkAndUpdateFallback(ctx, force, currentVersion, correlationID)
+	return u.checkAndUpdateFallback(ctx, force, effVersion, correlationID)
 }
 
 // checkAndUpdateFallback executa o fluxo antigo de download+install sem pre-check
 // version+commit. Usado em modo forcado ou quando o endpoint /version nao existe.
+// currentVersion aqui é a versão EFETIVA (marker quando buildinfo não confiável).
 func (u *Updater) checkAndUpdateFallback(ctx context.Context, force bool, currentVersion, correlationID string) error {
 	u.logf("[selfupdate] usando fluxo fallback (mode=forcado=%v current=%s)", force, currentVersion)
 

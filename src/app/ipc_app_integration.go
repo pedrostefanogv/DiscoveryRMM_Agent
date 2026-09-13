@@ -43,9 +43,25 @@ func (a *App) handleIPCMessage(conn net.Conn, msg IPCMessage) {
 	case IPCMsgRemoteSession:
 		// Remote session DEVE rodar na sessão interativa do usuário (a sessão 0
 		// do serviço SYSTEM não tem desktop — captura falha e SendInput é
-		// bloqueado por UIPI). Encaminha o comando à UI companion conectada.
-		a.Logs.Append("[ipc] encaminhando remote session à UI (sessão interativa)")
-		a.ipcServer.Broadcast(NewIPCMessage(IPCMsgRemoteSession, msg.Payload))
+		// bloqueado por UIPI).
+		// M-fix (decisão do dono — M5): a sessão roda NO WORKER spawnado pelo
+		// serviço (SYSTEM na sessão interativa) — nunca na UI (Medium integrity:
+		// UIPI bloqueia input em janelas elevadas e sem acesso ao desktop de
+		// logon).
+		a.Logs.Append("[ipc] remote session via IPC → spawn worker (sessão interativa)")
+		if parsed := parseAnyMap(msg.Payload); parsed != nil {
+			sid, _ := parsed["sessionId"].(string)
+			act, _ := parsed["action"].(string)
+			if act == "stop" {
+				stopRemoteSessionWorker(sid)
+			} else {
+				go func() {
+					if err := spawnRemoteSessionWorker(context.Background(), parsed); err != nil {
+						a.Logs.Append("[ipc] erro ao spawnar remote session worker: " + err.Error())
+					}
+				}()
+			}
+		}
 	case IPCMsgNotificationRespond:
 		if a.handleIPCNotificationRespond(msg.Payload) {
 			return

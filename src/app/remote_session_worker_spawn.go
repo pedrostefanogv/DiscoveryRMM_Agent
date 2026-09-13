@@ -159,7 +159,7 @@ func spawnRemoteSessionWorker(parent context.Context, payload map[string]any) er
 
 // workerDesktopName retorna o desktop alvo do spawn (log/diagnóstico).
 // Padrão MeshAgent (ILibProcessPipe.c): SpawnTypes_WINLOGON → "Winsta0\\Winlogon";
-// sessão de usuário → "Winsta0\\Default".
+// sessão de usuário (user-session ou system-session) → "Winsta0\\Default".
 func workerDesktopName(source string) string {
 	if source == "winlogon" {
 		return `winsta0\winlogon`
@@ -320,17 +320,23 @@ func acquireInteractiveSessionToken() (windows.Token, string, error) {
 		return 0, "", fmt.Errorf("nenhuma sessão de console ativa")
 	}
 
-	// 1) Usuário logado na sessão do console.
-	if tok, err := wtsQueryUserToken(consoleSession); err == nil {
-		return tok, "user-session", nil
+	// 1) M-fix: token SYSTEM com a sessão ajustada para a do console — o
+	// worker roda como SYSTEM na SESSÃO INTERATIVA. SendInput de um processo
+	// SYSTEM não é bloqueado por UIPI: o input funciona em TODAS as janelas,
+	// incluindo elevadas (Gerenciador de Tarefas). Com usuário logado o desktop
+	// é winsta0\default; sem usuário (tela de logon), winsta0\winlogon.
+	if tok, err := systemTokenForSession(consoleSession); err == nil {
+		source := "system-session"
+		if _, userErr := wtsQueryUserToken(consoleSession); userErr != nil {
+			source = "winlogon" // sem usuário logado → desktop de logon
+		}
+		return tok, source, nil
 	}
 
-	// 2) Sem usuário: token do próprio serviço (SYSTEM) com sessão do
-	// console (padrão MeshAgent SpawnTypes_WINLOGON). O filho roda como
-	// SYSTEM na sessão do console com lpDesktop="winsta0\winlogon" —
-	// captura a tela de logon e injeta input no desktop de logon.
-	if tok, err := systemTokenForSession(consoleSession); err == nil {
-		return tok, "winlogon", nil
+	// 2) Usuário logado na sessão do console (fallback — worker Medium:
+	// input em janelas elevadas NÃO funciona, mas captura/uso básico sim).
+	if tok, err := wtsQueryUserToken(consoleSession); err == nil {
+		return tok, "user-session", nil
 	}
 
 	// 3) Fallback: token do processo winlogon da sessão do console (caminho
