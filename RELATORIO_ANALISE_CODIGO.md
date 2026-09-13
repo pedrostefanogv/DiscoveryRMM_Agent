@@ -95,6 +95,7 @@
 | **M34** — cron na TZ local | ✅ Corrigido (UTC explícita + override DISCOVERY_AUTOMATION_TZ) |
 | **M19** — node_modules embedados (exe ~78 MB) | ✅ Otimizado — toolchain movida para `src/tools/a2ui` (funcionalidade A2UI preservada); frontend embedado 32,7 MB → 1,41 MB |
 | **Melhoria 16** — sync.Pool de buffers de frame | ✅ Implementado — `screen/frame_pool.go` + buffers reutilizáveis nos 3 capturers + copy do session_screen via pool (ver DOCs/PLANO_CORRECOES §8) |
+| **LOOP self-update** (homologação 13/09) | ✅ Mitigado — circuit breaker persistido: 3 instalações da mesma versão sem buildinfo mudar → checks pausados com log CRÍTICO. Causa raiz operacional: binário servido pela API compilado sem `-X buildinfo` (recompilar com `--version`); M25 corrige Taskfile local |
 | Demais B20-B22 (CI) | ⏸️ Postergados (parear com M22/M24 numa rodada de CI) |
 
 > **Regra de manutenção:** novos status entram aqui e no plano; o corpo dos achados permanece como estava na data da análise.

@@ -538,6 +538,16 @@ func (u *Updater) CheckAndUpdate(ctx context.Context, force bool) error {
 
 		u.logf("[selfupdate] servidor: version=%s commit=%s sha256=%s", serverVersion, serverCommit, shortHash(serverSHA256))
 
+		// Circuit breaker (fix loop homologação): limpa o guard se a situação se
+		// resolveu e pausa o check quando o binário instalado não reporta a
+		// versão (build sem -X buildinfo) — evita loop infinito de instalação.
+		u.clearGuardIfResolved(currentVersion, serverVersion)
+		if blocked, msg := u.guardBlocksCheck(currentVersion, serverVersion); blocked {
+			u.logf("[selfupdate] CRITICO: %s", msg)
+			u.lastError.Store(msg)
+			return nil
+		}
+
 		// Decisao version+commit:
 		// - Versoes diferentes → download (update normal)
 		// - Mesma versao, commit diferente → download (rebuild)
@@ -633,6 +643,10 @@ func (u *Updater) CheckAndUpdate(ctx context.Context, force bool) error {
 
 		u.pendingTargetVersion.Store(targetVersion)
 
+		// Circuit breaker (M-loop): registra a instalação lançada para esta
+		// versão do servidor — alimenta o guard anti-loop.
+		u.guardRecordInstall(serverVersion)
+
 		if err := u.launchInstallerWithUI(ctx, tempPath, targetVersion); err != nil {
 			return u.handleLaunchFailure(ctx, tempPath, targetVersion, err)
 		}
@@ -727,6 +741,9 @@ func (u *Updater) checkAndUpdateFallback(ctx context.Context, force bool, curren
 	}
 
 	u.pendingTargetVersion.Store(targetVersion)
+
+	// Circuit breaker (M-loop): registra no caminho fallback também.
+	u.guardRecordInstall(targetVersion)
 
 	if err := u.launchInstallerWithUI(ctx, tempPath, targetVersion); err != nil {
 		return u.handleLaunchFailure(ctx, tempPath, targetVersion, err)

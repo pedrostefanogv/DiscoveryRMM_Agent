@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 
 	"github.com/libp2p/go-libp2p/core/crypto"
+
+	"discovery/app/core/platform"
 )
 
 // p2pIdentityDirName / p2pIdentityFileName definem onde a identidade libp2p
@@ -53,6 +55,16 @@ func loadOrCreateLibp2PIdentity(dataDir string) (crypto.PrivKey, error) {
 	}
 	if err := os.WriteFile(keyPath, raw, 0o600); err != nil {
 		return nil, fmt.Errorf("persistir identidade ed25519: %w", err)
+	}
+	// É uma chave PRIVADA: o 0o600 é no-op no Windows e o arquivo herda
+	// Users:(M) de %ProgramData%\Discovery. Quando elevado, restringe a DACL
+	// (mesmo padrão do A3/HardenSecretFileACL) — somente SYSTEM/Admins leem; a
+	// UI não elevada precisa LER a identidade no modo standalone, por isso
+	// Everyone mantém Read.
+	if platform.IsElevated() {
+		if aclErr := platform.HardenSecretFileACL(keyPath); aclErr != nil {
+			return nil, fmt.Errorf("restringir ACL da identidade p2p: %w", aclErr)
+		}
 	}
 	return priv, nil
 }
