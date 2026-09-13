@@ -134,20 +134,48 @@ func (s *Shell) Wait() error {
 
 func (s *Shell) readLoop(r io.Reader) {
 	buf := make([]byte, 4096)
+	// carry: bytes retidos entre reads quando o chunk termina no meio de uma
+	// possível runa UTF-8 incompleta. Sem isso, a metade inicial de "í"
+	// (0xC3) era normalizada isoladamente no limite do read (utf8.Valid false
+	// → decodificava como CP1252 → mojibake intermitente em pt-BR). O tail
+	// incompleto é unido ao próximo chunk ANTES da normalização.
+	var carry []byte
 	for {
 		n, err := r.Read(buf)
 		if n > 0 {
-			output := normalizeToUtf8(buf[:n])
-			s.mu.Lock()
-			if s.onOutput != nil && !s.closed {
-				s.onOutput(output)
+			carry = append(carry, buf[:n]...)
+			tail := Utf8IncompleteTail(carry)
+			switch {
+			case tail > 0 && tail < len(carry):
+				// Despacha o prefixo válido; retém o tail para o próximo read.
+				keep := append([]byte(nil), carry[len(carry)-tail:]...)
+				s.emitChunk(carry[:len(carry)-tail])
+				carry = keep
+			case tail > 0 && tail == len(carry) && err == nil:
+				// Todo o carry é tail incompleto — aguarda o próximo read.
+			default:
+				s.emitChunk(carry)
+				carry = nil
 			}
-			s.mu.Unlock()
 		}
 		if err != nil {
+			// Fim do stream: flush do que ficou retido.
+			if len(carry) > 0 {
+				s.emitChunk(carry)
+			}
 			return
 		}
 	}
+}
+
+// emitChunk normaliza o chunk para UTF-8 e entrega ao callback da sessão.
+func (s *Shell) emitChunk(chunk []byte) {
+	output := normalizeToUtf8(chunk)
+	s.mu.Lock()
+	if s.onOutput != nil && !s.closed {
+		s.onOutput(output)
+	}
+	s.mu.Unlock()
 }
 
 // normalizeToUtf8 garante que a saída lida da pipe esteja em UTF-8 antes de

@@ -28,10 +28,15 @@ import (
 // cria o ConPTY + spawn do shell sem a GUI. O processo pai (agente) se
 // conecta a dois named pipes e troca input/output.
 //
-// Fica HABILITADO apenas quando a variável de ambiente
-// DISCOVERY_TERM_DISPATCHER=1 está presente no agente (opt-in, para não
-// alterar o caminho produtivo por padrão). Com fallback automático para o
-// caminho atual (ConPTY in-process → legacy).
+// HABILITADO POR PADRÃO (fix 13/09/2026 — terminal web sem setas/história):
+// o fallback legacy (pipes + CREATE_NEW_CONSOLE) NÃO processa sequências VT —
+// setas ↑/↓ (histórico do PSReadLine), Home/End/Delete e TAB-completação não
+// funcionam nele; só texto cru. O ConPTY é quem traduz \x1b[A em KEY_EVENT.
+// Como o ConPTY in-process morre intermitentemente com AV/EDR (0xC0000142,
+// injeção de DLL), o dispatcher isola o ConPTY num processo filho — o mesmo
+// padrão do MeshCentral — mantendo TUI/setas/história funcionando.
+// Opt-out explícito: DISCOVERY_TERM_DISPATCHER=0/false/no volta ao comportamento
+// antigo (ConPTY in-process → legacy). Opt-in continua aceito (1/true/yes).
 
 // RunDispatcher executa o modo dispatcher e bloqueia até o shell encerrar.
 // É chamado do main.go quando "--terminal-dispatcher" está presente nos args.
@@ -182,11 +187,19 @@ func RunDispatcher() {
 	}
 }
 
-// DispatchersAvailable reporta se o modo dispatcher está habilitado via
-// variável de ambiente (opt-in) no agente.
+// DispatchersAvailable reporta se o modo dispatcher está habilitado.
+// DEFAULT: habilitado (ConPTY isolado em processo filho — sem isso, quando o
+// ConPTY in-process cai no fallback legacy por AV/injetor, o terminal web
+// perde setas/história/TAB: o stdin do legacy é uma PIPE sem processamento VT).
+// Opt-out explícito: DISCOVERY_TERM_DISPATCHER=0/false/no.
 func DispatchersAvailable() bool {
 	v := strings.ToLower(strings.TrimSpace(os.Getenv("DISCOVERY_TERM_DISPATCHER")))
-	return v == "1" || v == "true" || v == "yes"
+	switch v {
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return true
+	}
 }
 
 // ── B23: monitor de morte do processo pai ──────────────────────────────────

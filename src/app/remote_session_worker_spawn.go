@@ -49,7 +49,20 @@ type remoteSessionWorkerProc struct {
 	stdin     *os.File
 	// stderrDrainDone é fechado quando a goroutine de dreno do stderr termina.
 	stderrDrainDone chan struct{}
-	done            chan struct{}
+	// handshake é fechado quando o worker confirma no stderr que entrou no
+	// MODO worker ("iniciando sessão <id>", impresso por RunRemoteSessionWorker
+	// logo após ler o payload do stdin). Um processo que IGNORA a flag — ex.:
+	// um binário de serviço sem o dispatch --remote-session-worker, que bootava
+	// uma segunda instância completa do serviço (bug do acesso remoto de
+	// 13/09/2026) — nunca imprime essa linha. O handshake troca a heurística
+	// "processo vivo após 3s" (que mascarava o bug com exitCode=0 falso) por
+	// confirmação real do modo worker.
+	handshake chan struct{}
+	// stderrMu/stderrLast guardam as últimas linhas do stderr do worker para
+	// diagnóstico quando ele morre ou não faz handshake.
+	stderrMu   sync.Mutex
+	stderrLast []string
+	done       chan struct{}
 }
 
 // spawnRemoteSessionWorker lança o worker na sessão interativa (ou winlogon
@@ -99,6 +112,7 @@ func spawnRemoteSessionWorker(parent context.Context, payload map[string]any) er
 		proc:            proc,
 		stdin:           stdin,
 		stderrDrainDone: make(chan struct{}),
+		handshake:       make(chan struct{}),
 		done:            make(chan struct{}),
 	}
 	remoteSessionWorkers.byID[sessionID] = w
@@ -111,8 +125,21 @@ func spawnRemoteSessionWorker(parent context.Context, payload map[string]any) er
 		scanner := bufio.NewScanner(stderr)
 		for scanner.Scan() {
 			line := strings.TrimSpace(scanner.Text())
-			if line != "" {
-				log.Printf("[remote-session-worker] %s", line)
+			if line == "" {
+				continue
+			}
+			log.Printf("[remote-session-worker] %s", line)
+			w.rememberStderr(line)
+			// Handshake: RunRemoteSessionWorker imprime "iniciando sessão <id>"
+			// no stderr imediatamente após ler o payload do stdin — ANTES de
+			// conectar o NATS. Se esta linha nunca chegar, o binário não está
+			// rodando o modo worker (flag não tratada / binário errado).
+			if w.handshake != nil && strings.Contains(line, "iniciando sessão ") {
+				select {
+				case <-w.handshake:
+				default:
+					close(w.handshake)
+				}
 			}
 		}
 		if err := scanner.Err(); err != nil {
@@ -141,18 +168,27 @@ func spawnRemoteSessionWorker(parent context.Context, payload map[string]any) er
 		return fmt.Errorf("enviando payload ao worker: %w", err)
 	}
 
-	// Confirma que o worker realmente iniciou (evita falso "ok" ao servidor:
-	// o spawn é assíncrono e o worker pode falhar ao ler o payload, conectar o
-	// NATS ou parsear o comando — nesse caso ele sai quase imediatamente).
-	// Teto curto: 3s cobre leitura do stdin + conexão NATS sem atrasar o start.
+	// Confirma que o filho realmente entrou no MODO worker — não basta estar
+	// vivo. Bug de referência (13/09/2026): um binário que ignora a flag
+	// --remote-session-worker (ex.: discovery-service.exe sem o dispatch no
+	// main) bootava um segundo serviço completo, ficava vivo para sempre e o
+	// spawn reportava exitCode=0 falso — o acesso remoto nunca iniciava.
+	// O handshake ("iniciando sessão <id>" no stderr) chega em <1s quando o
+	// modo worker corre; o teto de 10s cobre startup lento com segurança.
 	select {
 	case <-w.done:
-		return fmt.Errorf("worker encerrou imediatamente após o spawn (sessionId=%s)", sessionID)
-	case <-time.After(3 * time.Second):
-		// worker vivo após 3s — sessão presumivelmente ativa
+		return fmt.Errorf("worker encerrou imediatamente após o spawn (sessionId=%s): %s",
+			sessionID, w.stderrTail())
+	case <-w.handshake:
+		// worker confirmou o modo worker — payload lido, sessão iniciando
+	case <-time.After(10 * time.Second):
+		return fmt.Errorf("worker não confirmou handshake em 10s (sessionId=%s) — binário sem modo --remote-session-worker? stderr: %s",
+			sessionID, w.stderrTail())
 	}
 
-	fmt.Printf("[remote-session] worker spawnado na sessão interativa (%s, desktop=%s): sessionId=%s pid=%d\n",
+	// log.Printf (não fmt.Printf): esta linha precisa chegar ao log persistido
+	// do serviço (agent-service.log) — o stdout do serviço não é capturado.
+	log.Printf("[remote-session] worker spawnado na sessão interativa (%s, desktop=%s): sessionId=%s pid=%d\n",
 		source, workerDesktopName(source), sessionID, proc.Pid)
 	return nil
 }
@@ -305,6 +341,28 @@ func writeWorkerPayload(w *remoteSessionWorkerProc, payload map[string]any) erro
 	copy(buf[4:], data)
 	_, err = w.stdin.Write(buf)
 	return err
+}
+
+// rememberStderr guarda as últimas linhas do stderr do worker (teto 8) para
+// diagnóstico em mensagens de erro do spawn.
+func (w *remoteSessionWorkerProc) rememberStderr(line string) {
+	w.stderrMu.Lock()
+	defer w.stderrMu.Unlock()
+	w.stderrLast = append(w.stderrLast, line)
+	if len(w.stderrLast) > 8 {
+		w.stderrLast = w.stderrLast[len(w.stderrLast)-8:]
+	}
+}
+
+// stderrTail devolve as últimas linhas do stderr do worker (resumo em uma
+// linha, para compor mensagens de erro quando o worker morre sem handshake).
+func (w *remoteSessionWorkerProc) stderrTail() string {
+	w.stderrMu.Lock()
+	defer w.stderrMu.Unlock()
+	if len(w.stderrLast) == 0 {
+		return "(sem stderr)"
+	}
+	return strings.Join(w.stderrLast, " | ")
 }
 
 // acquireInteractiveSessionToken obtém um token primário da sessão interativa:

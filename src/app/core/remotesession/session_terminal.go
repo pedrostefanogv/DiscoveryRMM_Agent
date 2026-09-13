@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"strings"
 	"sync"
 	"time"
 
@@ -22,6 +21,13 @@ const (
 	termMaxMsgPerSec     = 60        // rate limit maximo de mensagens/segundo
 	termRateWindowMs     = 100       // janela deslizante para rate limit
 	termMaxInputSize     = 32 * 1024 // limite de input por mensagem (32KB — suporta paste de textos longos)
+
+	// Teto do buffer do coalescer: saída intensa (ex.: type de arquivo grande)
+	// não pode crescer sem limite entre flushes — o rate limit segura o
+	// dispatch e o buffer acumularia memória/lag indefinidamente. Ao atingir
+	// o teto, o flush é imediato (o payload resultante ~700KB após base64+
+	// JSON cabe folgado no max payload do NATS, 2MB — ver nats_stream.go).
+	maxCoalesceBufferBytes = 512 * 1024
 )
 
 // ── TerminalSession ──
@@ -44,7 +50,10 @@ type TerminalSession struct {
 
 type outputCoalescer struct {
 	mu       sync.Mutex
-	buf      strings.Builder
+	// buf acumula os chunks de output em BYTES (não string): o flush pode
+	// reter o tail de uma runa UTF-8 incompleta (ver Utf8IncompleteTail) e
+	// anexá-lo ao próximo chunk — impossível de fazer por ranhura em Builder.
+	buf      []byte
 	timer    *time.Timer
 	onFlush  func(string)
 	interval time.Duration
@@ -73,9 +82,14 @@ func newOutputCoalescer(onFlush func(string), interval time.Duration) *outputCoa
 
 func (oc *outputCoalescer) Write(s string) {
 	oc.mu.Lock()
-	oc.buf.WriteString(s)
+	oc.buf = append(oc.buf, s...)
 	if oc.timer == nil {
 		oc.timer = time.AfterFunc(oc.interval, oc.flush)
+	}
+	// Teto de buffer: acima do limite, despacha imediatamente (ignora os
+	// guards de adiamento) — memória/lag não podem crescer indefinidamente.
+	if len(oc.buf) >= maxCoalesceBufferBytes {
+		oc.dispatchLocked()
 	}
 	oc.mu.Unlock()
 }
@@ -97,30 +111,64 @@ func (oc *outputCoalescer) flush() {
 // teto implícito: a cada tick o buffer que acumulou é enviado inteiro, então
 // nunca fica retido para sempre.
 func (oc *outputCoalescer) mustDispatchLocked() {
-	// Se ainda há dados a enviar porém o buffer termina numa sequência ANSI
-	// incompleta e há um próximo dado esperado, segura por mais um tick.
-	// readFullLinearAnsi e o timeout garantem que isso não travou.
-	if oc.buf.Len() > 0 && endsWithIncompleteAnsi(oc.buf.String()) && oc.deferCount < oc.maxAnsiDefer {
+	// Guard 1: sequência ANSI/VT possivelmente incompleta no fim — segura o
+	// buffer inteiro por mais um tick (até o teto de adiamentos). Só olhamos
+	// os últimos 256 bytes: sequências CSI são curtas; sem a janela, o custo
+	// seria copiar até maxCoalesceBufferBytes para string a cada tick.
+	tail := oc.buf
+	if len(tail) > 256 {
+		tail = tail[len(tail)-256:]
+	}
+	if len(oc.buf) > 0 && endsWithIncompleteAnsi(string(tail)) && oc.deferCount < oc.maxAnsiDefer {
 		oc.deferCount++
 		oc.timer = nil
 		oc.timer = time.AfterFunc(oc.interval, oc.flush)
 		return
 	}
 
+	// Guard 2 (fix mojibake): runa UTF-8 incompleta no fim — despacha SOMENTE
+	// o prefixo válido e retém os bytes da runa parcial para o próximo flush.
+	// Sem isso, um acento dividido entre chunks chegava quebrado ao viewer
+	// (TextDecoder sem stream → U+FFFD), intermitentemente em pt-BR.
+	if t := terminal.Utf8IncompleteTail(oc.buf); t > 0 && t < len(oc.buf) {
+		oc.dispatchPrefixLocked(len(oc.buf) - t)
+		return
+	}
+
 	oc.dispatchLocked()
+}
+
+// dispatchPrefixLocked despacha os primeiros n bytes e RETÉM o restante no
+// buffer (runa UTF-8 parcial aguardando o próximo chunk). Sob rate limit,
+// mantém tudo e re-agenda — nenhum byte é perdido.
+func (oc *outputCoalescer) dispatchPrefixLocked(n int) {
+	oc.deferCount = 0
+	if n <= 0 || !oc.allowMessage() {
+		oc.timer = nil
+		oc.timer = time.AfterFunc(oc.interval, oc.flush)
+		return
+	}
+	prefix := string(oc.buf[:n])
+	rest := append([]byte(nil), oc.buf[n:]...)
+	oc.buf = rest
+	oc.onFlush(prefix)
+	oc.timer = nil
+	if len(oc.buf) > 0 {
+		oc.timer = time.AfterFunc(oc.interval, oc.flush)
+	}
 }
 
 func (oc *outputCoalescer) dispatchLocked() {
 	oc.deferCount = 0 // reset ao despachar
-	if oc.buf.Len() > 0 {
+	if len(oc.buf) > 0 {
 		if oc.allowMessage() {
-			oc.onFlush(oc.buf.String())
-			oc.buf.Reset()
+			oc.onFlush(string(oc.buf))
+			oc.buf = nil
 		}
 	}
 	oc.timer = nil
 	// Re-agenda o flush se ainda há dados pendentes (rate limit bloqueou).
-	if oc.buf.Len() > 0 {
+	if len(oc.buf) > 0 {
 		oc.timer = time.AfterFunc(oc.interval, oc.flush)
 	}
 }
@@ -210,9 +258,9 @@ func (oc *outputCoalescer) ForceFlush() {
 		oc.timer.Stop()
 		oc.timer = nil
 	}
-	if oc.buf.Len() > 0 {
-		oc.onFlush(oc.buf.String())
-		oc.buf.Reset()
+	if len(oc.buf) > 0 {
+		oc.onFlush(string(oc.buf))
+		oc.buf = nil
 	}
 }
 
@@ -272,9 +320,13 @@ type SessionTerminal struct {
 	// onExit é chamado quando o console/shell encerra (para o manager encerrar a sessão).
 	onExit func(reason string)
 
-	// readyPayload é republicado no primeiro term.in (handshake) para o viewer
-	// não perder o term.ready (NATS core é fire-and-forget).
+	// readyPayload é republicado no primeiro term.in (handshake) e em CADA
+	// term.in de resize, para o viewer não perder o term.ready — o NATS core
+	// é fire-and-forget e o viewer pode conectar/reconectar depois do publish
+	// original. Resize é raro, então republicar nele é barato; digitação
+	// (data-only) NÃO republica (evita spam por tecla).
 	readyPayload []byte
+	readySent    bool
 
 	stopCh chan struct{}
 	doneCh chan struct{}
@@ -381,10 +433,9 @@ func (st *SessionTerminal) Start(ctx context.Context, shellKind terminal.ShellKi
 		// Subject fixo term.out (console unico)
 		if err := st.natsStream.PublishTermOut(st.sessionID, string(payload)); err != nil {
 			log.Printf("[session-terminal] erro ao publicar term.out: %v", err)
-		} else {
-			log.Printf("[session-terminal] term.out publicado: session=%s seq=%d bytes=%d\n",
-				st.sessionID, currentSeq, len(output))
 		}
+		// (Log de sucesso por mensagem removido — dezenas de linhas/segundo em
+		// saída intensa; erro continua logado acima.)
 
 		// Gravação (thread-safe)
 		if st.recordingTap != nil {
@@ -455,16 +506,23 @@ func (st *SessionTerminal) Start(ctx context.Context, shellKind terminal.ShellKi
 			return
 		}
 
-		// Handshake: republica o term.ready no primeiro term.in (qualquer tipo),
-		// para o viewer não perder o ready (NATS core é fire-and-forget).
-		st.mu.RLock()
+		// Handshake: republica o term.ready no primeiro term.in (qualquer
+		// tipo) e em CADA resize. Antes era one-shot (payload nil'd após o
+		// 1º envio) — em reconexão do viewer o ready nunca mais voltava e o
+		// terminal ficava sem shells/dimensões ("morto"). Resize é raro, e o
+		// viewer sempre envia o fit logo após conectar — cobre reconexões.
+		isResize := req.Cols > 0 && req.Rows > 0
+		st.mu.Lock()
 		rp := st.readyPayload
-		st.mu.RUnlock()
+		firstIn := !st.readySent
+		if len(rp) > 0 && (firstIn || isResize) {
+			st.readySent = true
+		} else {
+			rp = nil
+		}
+		st.mu.Unlock()
 		if len(rp) > 0 {
 			_ = st.natsStream.PublishTermOut(st.sessionID, string(rp))
-			st.mu.Lock()
-			st.readyPayload = nil // só republica uma vez
-			st.mu.Unlock()
 		}
 
 		// Resize se dimensoes informadas

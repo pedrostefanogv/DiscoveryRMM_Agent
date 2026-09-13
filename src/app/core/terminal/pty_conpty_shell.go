@@ -5,6 +5,7 @@ package terminal
 import (
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"strings"
@@ -22,6 +23,12 @@ type ConPTYShell struct {
 
 	stdinPipe  *os.File // escrita: dados enviados ao processo filho
 	stdoutPipe *os.File // leitura: saida do processo filho
+
+	// Fila de input drenada por goroutine dedicada: a escrita no pipe do
+	// ConPTY pode BLOQUEAR quando o buffer de input do ConPTY enche (filho
+	// travado/não lendo). Escrever direto em WriteStdin (sob s.mu) travava
+	// Resize/Dimensions/Close da sessão inteira até o pipe destravar.
+	stdinQueue chan string
 
 	shell ShellKind
 	cols  int
@@ -118,6 +125,7 @@ func NewConPTYShell(shell ShellKind, cols, rows int, onOutput func(string)) (*Co
 		cmd:        &exec.Cmd{Process: process},
 		stdinPipe:  stdinWrite,
 		stdoutPipe: stdoutRead,
+		stdinQueue: make(chan string, 256),
 		shell:      shell,
 		cols:       cols,
 		rows:       rows,
@@ -125,8 +133,25 @@ func NewConPTYShell(shell ShellKind, cols, rows int, onOutput func(string)) (*Co
 	}
 
 	go s.readLoop(stdoutRead)
+	go s.stdinWriterLoop()
 
 	return s, nil
+}
+
+// stdinWriterLoop drena a fila de input para o pipe do ConPTY em goroutine
+// dedicada (WriteStdin apenas enfileira — nunca bloqueia o chamador).
+func (s *ConPTYShell) stdinWriterLoop() {
+	for data := range s.stdinQueue {
+		s.mu.Lock()
+		if s.closed {
+			s.mu.Unlock()
+			continue // shell fechado — descarta o restante da fila
+		}
+		s.mu.Unlock()
+		if _, err := s.stdinPipe.Write([]byte(data)); err != nil {
+			log.Printf("[terminal] stdin write falhou (shell=%s): %v", s.shell, err)
+		}
+	}
 }
 
 func resolveShellCommand(shell ShellKind) (exe string, args []string) {
@@ -325,14 +350,20 @@ var procCreateProcessW = kernel32.NewProc("CreateProcessW")
 
 // ── Metodos publicos ──
 
+// WriteStdin enfileira o input (não-bloqueante). A escrita real acontece na
+// goroutine stdinWriterLoop — ver comentário no campo stdinQueue.
 func (s *ConPTYShell) WriteStdin(data string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
 		return fmt.Errorf("shell fechado")
 	}
-	_, err := s.stdinPipe.Write([]byte(data))
-	return err
+	select {
+	case s.stdinQueue <- data:
+		return nil
+	default:
+		return fmt.Errorf("fila de input cheia (%d/%d)", len(s.stdinQueue), cap(s.stdinQueue))
+	}
 }
 
 func (s *ConPTYShell) Resize(cols, rows int) error {
@@ -385,6 +416,10 @@ func (s *ConPTYShell) Close() error {
 	}
 	s.closed = true
 
+	// Fecha a fila primeiro: a goroutine stdinWriterLoop descarta o restante
+	// (checa s.closed) e sai. Escritas em andamento/pós-close no pipe falham
+	// graciosamente (os.File.Write em handle fechado retorna erro, sem panic).
+	close(s.stdinQueue)
 	s.stdinPipe.Close()
 	ClosePseudoConsole(s.hpc)
 
