@@ -346,6 +346,8 @@ var APP_I18N_DICTIONARY = {
     "knowledge.article": "Artigo",
     "knowledge.noArticlesFound": "Nenhum artigo encontrado.",
     "knowledge.loadError": "Erro ao carregar base de conhecimento.",
+    "knowledge.retry": "Tentar novamente",
+    "knowledge.pagesTitle": "Páginas do artigo",
     "automation.title": "Automação",
     "automation.subtitle": "Policy sync local e tarefas aplicadas ao agent",
     "automation.includeScriptContent":
@@ -872,6 +874,8 @@ var APP_I18N_DICTIONARY = {
     "knowledge.article": "Article",
     "knowledge.noArticlesFound": "No articles found.",
     "knowledge.loadError": "Failed to load knowledge base.",
+    "knowledge.retry": "Retry",
+    "knowledge.pagesTitle": "Article pages",
     "automation.title": "Automation",
     "automation.subtitle": "Local policy sync and tasks applied to the agent",
     "automation.includeScriptContent": "Include script content in manual sync",

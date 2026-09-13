@@ -42,7 +42,10 @@ function renderKbPagesNav(articleTitle) {
   }
 
   kbPagesNavEl.classList.remove("hidden");
-  var html = ['<div class="kb-pages-title">Páginas do artigo</div>'];
+  var pagesTitle = (typeof translate === "function"
+    ? translate("knowledge.pagesTitle")
+    : "") || "Páginas do artigo";
+  var html = ['<div class="kb-pages-title">' + escapeHtml(pagesTitle) + '</div>'];
   html.push('<div class="kb-pages-tree">');
 
   // Home (artigo principal)
@@ -327,8 +330,11 @@ function filterKnowledgeArticles(query) {
   showKBList();
 }
 
+var kbLoading = false;
+
 async function loadKnowledgeBase() {
-  if (!kbArticlesListEl) return;
+  if (!kbArticlesListEl || kbLoading) return; // guard: evita cargas concorrentes
+  kbLoading = true;
   try {
     kbArticlesListEl.innerHTML =
       '<div class="meta">' +
@@ -341,11 +347,25 @@ async function loadKnowledgeBase() {
     showKBList();
     filterKnowledgeArticles(kbSearchInputEl ? kbSearchInputEl.value : "");
   } catch (err) {
+    // Estado de erro distinguível de 'sem artigos', com ação de retry
+    // embutida — antes o usuário via só um texto sem caminho de recuperação.
     kbArticlesListEl.innerHTML =
-      '<div class="meta">' +
+      '<div class="kb-empty-state">' +
+      '<div class="kb-empty-icon">&#9888;</div>' +
+      '<div class="kb-empty-text">' +
       escapeHtml(translate("knowledge.loadError")) +
+      "</div>" +
+      '<button type="button" class="btn subtle kb-retry-btn" id="kbRetryBtn">' +
+      escapeHtml(translate("knowledge.retry")) +
+      "</button>" +
       "</div>";
+    var retryBtn = document.getElementById("kbRetryBtn");
+    if (retryBtn) {
+      retryBtn.addEventListener("click", loadKnowledgeBase);
+    }
     renderKnowledgeArticleDetail(null);
+  } finally {
+    kbLoading = false;
   }
 }
 

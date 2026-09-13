@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"discovery/app/core/tlsutil"
@@ -19,7 +20,36 @@ const (
 	knowledgeListCacheTTL       = 6 * time.Hour
 	knowledgeDetailCacheTTL     = 6 * time.Hour
 	knowledgeMinRefreshInterval = 5 * time.Minute
+	// knowledgeBackupTTL: cópia de segurança usada quando o servidor está
+	// inacessível (stale-if-error) — a página de conhecimento continua
+	// funcionando offline/instável com o último conteúdo conhecido.
+	knowledgeBackupTTL = 30 * 24 * time.Hour
+	// knowledgeMaxBodyBytes: teto de leitura do corpo HTTP (anti-OOM para
+	// respostas gigantes/malformadas do servidor).
+	knowledgeMaxBodyBytes = 8 << 20
+	// knowledgeDetailWorkers: paralelismo máximo no enriquecimento de conteúdo.
+	knowledgeDetailWorkers = 4
 )
+
+// kbHTTPClient é reutilizado entre requisições (reuso de conexões TLS em vez
+// de um client novo por chamada, que multiplicava handshakes no N+1 antigo).
+var (
+	kbHTTPClientOnce sync.Once
+	kbHTTPClient     *http.Client
+)
+
+func kbHTTP() *http.Client {
+	kbHTTPClientOnce.Do(func() {
+		kbHTTPClient = tlsutil.NewHTTPClient(15 * time.Second)
+	})
+	return kbHTTPClient
+}
+
+// CachePurger é implementado opcionalmente pelo CacheDB (database.DB) para
+// permitir limpeza por prefixo no refresh da base de conhecimento.
+type CachePurger interface {
+	CacheDeletePrefix(prefix string) error
+}
 
 func toStringSlice(value any) []string {
 	arr, ok := value.([]any)
@@ -62,6 +92,45 @@ func estimateReadTimeMin(markdown string) int {
 	return 1
 }
 
+// truncateUTF8 corta a string em no maximo maxRunes runas, sem quebrar
+// caracteres multibyte (acentos, emojis). Antes o corte era por bytes
+// (line[:180]) e corrompia resumos com acentuacao PT-BR.
+func truncateUTF8(s string, maxRunes int) string {
+	runes := []rune(s)
+	if len(runes) <= maxRunes {
+		return s
+	}
+	return string(runes[:maxRunes]) + "..."
+}
+
+// knowledgeBackupKey converte uma chave de cache em chave de backup
+// (knowledge:list:<scope>:<cat> -> knowledge:backup:list:<scope>:<cat>).
+// Backups ficam FORA dos prefixos knowledge:list|detail|pages: e por isso
+// sobrevivem ao purge do refresh — servem como fallback offline.
+func knowledgeBackupKey(cacheKey string) string {
+	return "knowledge:backup:" + strings.TrimPrefix(cacheKey, "knowledge:")
+}
+
+// saveKnowledgeBackup grava uma copia de longa duracao (best-effort).
+func (s *Service) saveKnowledgeBackup(cacheKey string, value any) {
+	if s.db == nil {
+		return
+	}
+	if err := s.db.CacheSetJSON(knowledgeBackupKey(cacheKey), value, knowledgeBackupTTL); err != nil {
+		log.Printf("[support] aviso: falha ao salvar backup de knowledge: %v", err)
+	}
+}
+
+// readKnowledgeBackup le a copia de seguranca (stale-if-error). Retorna false
+// quando nao ha backup utilizavel.
+func (s *Service) readKnowledgeBackup(cacheKey string, out any) bool {
+	if s.db == nil {
+		return false
+	}
+	found, err := s.db.CacheGetJSON(knowledgeBackupKey(cacheKey), out)
+	return err == nil && found
+}
+
 func buildSummary(content string) string {
 	if strings.TrimSpace(content) == "" {
 		return ""
@@ -70,10 +139,9 @@ func buildSummary(content string) string {
 	for _, line := range lines {
 		line = strings.TrimSpace(strings.TrimLeft(line, "#*-0123456789. "))
 		if line != "" {
-			if len(line) > 180 {
-				return line[:180] + "..."
-			}
-			return line
+			// Corte por RUNAS (nao por bytes): cortar por byte quebrava
+			// caracteres multibyte (acentos PT-BR) gerando resumos corrompidos.
+			return truncateUTF8(line, 180)
 		}
 	}
 	return ""
@@ -281,14 +349,29 @@ func (s *Service) fetchKnowledgeListWithCache(info AgentInfo, category string, u
 		return nil, err
 	}
 
-	resp, err := tlsutil.NewHTTPClient(15 * time.Second).Do(req)
+	resp, err := kbHTTP().Do(req)
 	if err != nil {
+		// Stale-if-error: servidor inacessivel — usa o backup local da ultima
+		// carga bem-sucedida para a pagina continuar utilizavel offline.
+		var backup []KnowledgeArticle
+		if s.readKnowledgeBackup(cacheKey, &backup) {
+			s.supportLogf("servidor inacessivel (%v) — usando backup local da base de conhecimento (%d artigo(s))", err, len(backup))
+			return backup, nil
+		}
 		return nil, fmt.Errorf("falha ao buscar artigos da base de conhecimento: %w", err)
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+	// Teto de leitura: respostas gigantes/malformadas nao podem estourar memoria.
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, knowledgeMaxBodyBytes))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if resp.StatusCode >= 500 {
+			var backup []KnowledgeArticle
+			if s.readKnowledgeBackup(cacheKey, &backup) {
+				s.supportLogf("HTTP %d do servidor — usando backup local da base de conhecimento (%d artigo(s))", resp.StatusCode, len(backup))
+				return backup, nil
+			}
+		}
 		return nil, fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(body)))
 	}
 
@@ -305,6 +388,7 @@ func (s *Service) fetchKnowledgeListWithCache(info AgentInfo, category string, u
 			log.Printf("[support] aviso: falha ao salvar cache de knowledge list: %v", err)
 		}
 	}
+	s.saveKnowledgeBackup(cacheKey, articles)
 
 	return articles, nil
 }
@@ -317,6 +401,8 @@ func (s *Service) RefreshKnowledgeBase() error {
 	s.knowledgeMu.Lock()
 	if time.Since(s.lastKnowledgeRefresh) < knowledgeMinRefreshInterval {
 		s.knowledgeMu.Unlock()
+		s.supportLogf("refresh da knowledge base ignorado: intervalo mínimo de %s não decorrido (último refresh há %s)",
+			knowledgeMinRefreshInterval, time.Since(s.lastKnowledgeRefresh).Round(time.Second))
 		return nil
 	}
 	s.knowledgeMu.Unlock()
@@ -328,10 +414,23 @@ func (s *Service) RefreshKnowledgeBase() error {
 	}
 
 	cfg := s.debugConfig()
-	cacheKey := "knowledge:list:" + knowledgeCacheScope(cfg, info) + ":" + url.QueryEscape("")
+	scope := knowledgeCacheScope(cfg, info)
+	// Purge COMPLETO do escopo: antes só a lista sem categoria era limpa e
+	// listas filtradas/detalhes/páginas ficavam defasados até 6h após o refresh.
+	// Backups (knowledge:backup:...) são preservados para o fallback offline.
 	if s.db != nil {
-		if err := s.db.CacheDelete(cacheKey); err != nil {
-			log.Printf("[support] aviso: falha ao limpar cache de knowledge list: %v", err)
+		if purger, ok := s.db.(CachePurger); ok {
+			for _, prefix := range []string{"knowledge:list:", "knowledge:detail:", "knowledge:pages:"} {
+				if err := purger.CacheDeletePrefix(prefix + scope + ":"); err != nil {
+					log.Printf("[support] aviso: falha ao limpar cache %s<scope>: %v", prefix, err)
+				}
+			}
+		} else {
+			// Fallback: limpa apenas a chave conhecida (sem interface de purge).
+			cacheKey := "knowledge:list:" + scope + ":" + url.QueryEscape("")
+			if err := s.db.CacheDelete(cacheKey); err != nil {
+				log.Printf("[support] aviso: falha ao limpar cache de knowledge list: %v", err)
+			}
 		}
 	}
 
@@ -382,14 +481,26 @@ func (s *Service) fetchKnowledgeDetail(info AgentInfo, articleID string) (Knowle
 		return KnowledgeArticle{}, err
 	}
 
-	resp, err := tlsutil.NewHTTPClient(15 * time.Second).Do(req)
+	resp, err := kbHTTP().Do(req)
 	if err != nil {
+		var backup KnowledgeArticle
+		if s.readKnowledgeBackup(cacheKey, &backup) && strings.TrimSpace(backup.ID) != "" {
+			s.supportLogf("servidor inacessivel (%v) — usando backup local do artigo %s", err, articleID)
+			return backup, nil
+		}
 		return KnowledgeArticle{}, fmt.Errorf("falha ao buscar detalhe do artigo: %w", err)
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, knowledgeMaxBodyBytes))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if resp.StatusCode >= 500 {
+			var backup KnowledgeArticle
+			if s.readKnowledgeBackup(cacheKey, &backup) && strings.TrimSpace(backup.ID) != "" {
+				s.supportLogf("HTTP %d do servidor — usando backup local do artigo %s", resp.StatusCode, articleID)
+				return backup, nil
+			}
+		}
 		return KnowledgeArticle{}, fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(body)))
 	}
 
@@ -402,6 +513,9 @@ func (s *Service) fetchKnowledgeDetail(info AgentInfo, articleID string) (Knowle
 		if err := s.db.CacheSetJSON(cacheKey, article, knowledgeDetailCacheTTL); err != nil {
 			log.Printf("[support] aviso: falha ao salvar cache de knowledge detail: %v", err)
 		}
+	}
+	if strings.TrimSpace(article.ID) != "" {
+		s.saveKnowledgeBackup(cacheKey, article)
 	}
 
 	return article, nil
@@ -441,14 +555,26 @@ func (s *Service) fetchKnowledgePages(info AgentInfo, articleID string) ([]Knowl
 		return nil, err
 	}
 
-	resp, err := tlsutil.NewHTTPClient(15 * time.Second).Do(req)
+	resp, err := kbHTTP().Do(req)
 	if err != nil {
+		var backup []KnowledgePage
+		if s.readKnowledgeBackup(cacheKey, &backup) {
+			s.supportLogf("servidor inacessivel (%v) — usando backup local das páginas do artigo %s", err, articleID)
+			return backup, nil
+		}
 		return nil, fmt.Errorf("falha ao buscar páginas do artigo: %w", err)
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, knowledgeMaxBodyBytes))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if resp.StatusCode >= 500 {
+			var backup []KnowledgePage
+			if s.readKnowledgeBackup(cacheKey, &backup) {
+				s.supportLogf("HTTP %d do servidor — usando backup local das páginas do artigo %s", resp.StatusCode, articleID)
+				return backup, nil
+			}
+		}
 		return nil, fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(body)))
 	}
 
@@ -465,6 +591,7 @@ func (s *Service) fetchKnowledgePages(info AgentInfo, articleID string) ([]Knowl
 			log.Printf("[support] aviso: falha ao salvar cache de knowledge pages: %v", err)
 		}
 	}
+	s.saveKnowledgeBackup(cacheKey, pages)
 
 	return pages, nil
 }
@@ -488,24 +615,47 @@ func (s *Service) GetKnowledgeBaseArticles() []KnowledgeArticle {
 		return []KnowledgeArticle{}
 	}
 
+	// Enriquecimento de conteúdo (artigos sem 'content' no list): buscado em
+	// PARALELO com teto de concorrência — antes era sequencial (N requisições
+	// HTTP, cada uma até 15s), travando a página em 'Carregando artigos...'.
+	type detailJob struct {
+		idx int
+		id  string
+	}
+	jobs := make([]detailJob, 0, len(articles))
 	for i := range articles {
 		if strings.TrimSpace(articles[i].Content) != "" || strings.TrimSpace(articles[i].ID) == "" {
 			continue
 		}
-		detail, err := s.fetchKnowledgeDetail(info, articles[i].ID)
-		if err != nil {
-			s.supportLogf("falha ao carregar markdown do artigo %s: %v", articles[i].ID, err)
-			continue
+		jobs = append(jobs, detailJob{idx: i, id: articles[i].ID})
+	}
+	if len(jobs) > 0 {
+		sem := make(chan struct{}, knowledgeDetailWorkers)
+		var wg sync.WaitGroup
+		for _, job := range jobs {
+			wg.Add(1)
+			go func(j detailJob) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				detail, err := s.fetchKnowledgeDetail(info, j.id)
+				if err != nil {
+					s.supportLogf("falha ao carregar markdown do artigo %s: %v", j.id, err)
+					return
+				}
+				// Escrita em índices distintos do slice: seguro sem lock.
+				if strings.TrimSpace(detail.Content) != "" {
+					articles[j.idx].Content = detail.Content
+				}
+				if strings.TrimSpace(articles[j.idx].Summary) == "" {
+					articles[j.idx].Summary = detail.Summary
+				}
+				if len(articles[j.idx].Tags) == 0 {
+					articles[j.idx].Tags = detail.Tags
+				}
+			}(job)
 		}
-		if strings.TrimSpace(detail.Content) != "" {
-			articles[i].Content = detail.Content
-		}
-		if strings.TrimSpace(articles[i].Summary) == "" {
-			articles[i].Summary = detail.Summary
-		}
-		if len(articles[i].Tags) == 0 {
-			articles[i].Tags = detail.Tags
-		}
+		wg.Wait()
 	}
 
 	return articles
@@ -527,6 +677,10 @@ func (s *Service) GetKnowledgeArticles(category string) ([]KnowledgeArticle, err
 
 // GetKnowledgeArticleDetails returns a single article by ID.
 func (s *Service) GetKnowledgeArticleDetails(articleID string) (KnowledgeArticle, error) {
+	if !s.featureEnabled(s.knowledgeEnabled()) {
+		s.supportLogf("base de conhecimento desabilitada pela configuracao do agente")
+		return KnowledgeArticle{}, fmt.Errorf("base de conhecimento desabilitada pela configuração do agente")
+	}
 	info, err := s.fetchAgentContext()
 	if err != nil {
 		s.supportLogf("falha ao resolver contexto para knowledge detail: %v", err)

@@ -74,6 +74,22 @@ func (db *DB) CacheDelete(key string) error {
 	return err
 }
 
+// CacheDeletePrefix remove todas as chaves que começam com o prefixo.
+// Usado pelo refresh da base de conhecimento. O prefixo pode conter '%'
+// (gerado por url.QueryEscape), por isso o padrão LIKE é escapado com
+// ESCAPE '\' — sem isso '%' no prefixo viraria coringa e apagaria demais.
+func (db *DB) CacheDeletePrefix(prefix string) error {
+	if err := db.ensureAvailable(); err != nil {
+		return err
+	}
+	if prefix == "" {
+		return fmt.Errorf("prefixo de cache vazio")
+	}
+	escaped := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(prefix)
+	_, err := db.conn.Exec("DELETE FROM cache WHERE key LIKE ? ESCAPE '\\'", escaped+"%")
+	return err
+}
+
 // CacheSetJSON armazena um objeto JSON no cache
 func (db *DB) CacheSetJSON(key string, obj interface{}, ttl time.Duration) error {
 	data, err := json.Marshal(obj)
