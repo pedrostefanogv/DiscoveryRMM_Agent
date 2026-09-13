@@ -500,6 +500,10 @@ func (c *IPCClient) readLoop(conn net.Conn, rx *bufio.Reader) {
 		c.lastRx.Store(time.Now().UnixMilli())
 		c.mu.Unlock()
 		if err != nil {
+			// Diagnóstico: registra POR QUE a leitura terminou (EOF limpo no
+			// shutdown do serviço, pipe quebrado, timeout etc.). Sem este log
+			// não dá para distinguir queda do serviço de pipe travado.
+			log.Printf("[ipc] leitura do pipe encerrada: %v", err)
 			return
 		}
 		// Request/response (Fase C): respostas com correlation-id são roteadas

@@ -43,6 +43,18 @@ func (a *App) GetAgentStatus() AgentStatus {
 		if snap != nil {
 			return *snap
 		}
+		// Companion ainda sem snapshot (UI recém-aberta ou serviço ocupado):
+		// o fallback local seria sempre offline aqui (o agentConn local não
+		// roda na UI) e o indicador mostrava Offline até o primeiro evento do
+		// serviço. Deixa o motivo explícito para diagnóstico nos logs.
+		st := AgentStatus{}
+		if a.DebugSvc != nil {
+			st = a.resolveAgentConnectivity(a.DebugSvc.GetAgentStatus())
+		}
+		if st.OnlineReason == "" {
+			st.OnlineReason = "companion: aguardando primeiro snapshot do serviço via IPC"
+		}
+		return st
 	}
 	if a.DebugSvc == nil {
 		return AgentStatus{}

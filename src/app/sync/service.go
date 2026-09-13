@@ -177,6 +177,16 @@ func (s *Service) ResolveAgentConnectivity(status debug.AgentStatus) debug.Agent
 	return s.Backoff.ResolveAgentConnectivity(status)
 }
 
+// GlobalPongStatus expõe o estado do último tenant.global.pong recebido
+// (usado no log de conectividade para correlacionar oscilações do indicador
+// com lacunas de entrega do servidor).
+func (s *Service) GlobalPongStatus() (time.Time, string, bool, bool) {
+	if s == nil || s.Backoff == nil {
+		return time.Time{}, "", false, false
+	}
+	return s.Backoff.GlobalPongStatus()
+}
+
 // ── Delegados do CommandOutbox ──
 
 // EnqueueCommandResultOutbox persiste um resultado de comando no outbox.

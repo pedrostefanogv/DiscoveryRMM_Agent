@@ -349,6 +349,7 @@ func (r *Runtime) GetStatus() Status {
 func (r *Runtime) setStatus(connected bool, event string) {
 	r.statMu.Lock()
 	wasConnected := r.statSnap.Connected
+	prevTransport := r.statSnap.Transport
 	r.statSnap.Connected = connected
 	r.statSnap.LastEvent = event
 	if !connected {
@@ -361,7 +362,10 @@ func (r *Runtime) setStatus(connected bool, event string) {
 	// Notifica FORA do lock: o callback OnConnectivityChange pode reler o
 	// status (GetStatus()/RLock) ou chamar outras rotinas; fazê-lo com o lock
 	// segurado causaria deadlock (self-lock).
-	r.notifyConnectivityChange(wasConnected, connected, "")
+	// Em offline, reporta o transporte que ESTAVA ativo (o evento
+	// agent:connectivity passa a carregar "nats-wss" em vez de string vazia —
+	// diagnóstico do flicker do indicador em homologação).
+	r.notifyConnectivityChange(wasConnected, connected, prevTransport)
 }
 
 func (r *Runtime) setStatusConnected(agentID, server, transport string) {
@@ -390,6 +394,46 @@ func (r *Runtime) notifyConnectivityChange(wasConnected, nowConnected bool, tran
 	}
 	if r.opts.OnConnectivityChange != nil {
 		r.opts.OnConnectivityChange(nowConnected, transport)
+	}
+}
+
+// isPlannedReconnect informa se o erro que encerrou a sessão faz parte da
+// operação normal do loop de conexão: reload de configuração, troca
+// programada para o NATS nativo (recheck de 30min) ou reconexão forçada pelo
+// watchdog de global pong. Nesses casos o Run reconecta em seguida
+// (reconnectBase+jitter ≈ 10-15s) e o indicador de status NÃO deve passar
+// por offline — marcar offline aqui fazia a página de Status piscar
+// online→offline→online a cada ciclo (flicker reportado em homologação).
+func isPlannedReconnect(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	planned := []string{
+		"reload solicitado",
+		"NATS nativo disponivel",
+		"watchdog global pong",
+	}
+	for _, p := range planned {
+		if strings.Contains(msg, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// markReconnecting registra uma reconexão planejada PRESERVANDO o estado
+// Connected atual (sem emitir evento offline). Atualiza apenas LastEvent
+// para diagnóstico e loga de forma explícita quando o indicador é mantido
+// online. Se a rodada seguinte de tentativas falhar por completo, o Run
+// marca offline normalmente (setStatus(false) com o erro real).
+func (r *Runtime) markReconnecting(reason string) {
+	r.statMu.Lock()
+	wasConnected := r.statSnap.Connected
+	r.statSnap.LastEvent = "reconectando (planejado): " + reason
+	r.statMu.Unlock()
+	if wasConnected {
+		r.logf("[heartbeat][status] reconexao planejada (%s) — indicador mantido online; reconectando em seguida", reason)
 	}
 }
 
@@ -682,7 +726,16 @@ func (r *Runtime) Run(ctx context.Context) {
 		err := r.runSession(ctx, cfg)
 		if err != nil && ctx.Err() == nil {
 			r.logf("sessao encerrada: %v", err)
-			r.setStatus(false, "sessao encerrada: "+err.Error())
+			// Reconexão planejada (reload, troca para NATS nativo, watchdog de
+			// pong): mantém o indicador online — o Run reconecta imediatamente
+			// e o ciclo offline→online era o flicker da página de Status.
+			// Offline só acontece quando TODAS as tentativas falham (erro não
+			// planejado) ou o contexto é cancelado.
+			if isPlannedReconnect(err) {
+				r.markReconnecting(err.Error())
+			} else {
+				r.setStatus(false, "sessao encerrada: "+err.Error())
+			}
 		} else if ctx.Err() != nil {
 			r.setStatus(false, "contexto cancelado")
 		}

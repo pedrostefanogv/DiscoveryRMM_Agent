@@ -206,7 +206,24 @@ function renderStatusOverview(data) {
   // com fallback para o campo connected consolidado. Consistente com a bolinha
   // da barra (app-window.js) — o pong global pode ficar stale sem derrubar o
   // transporte, e não deve deixar o agente aparecendo offline.
-  var connected = !!(data && (data.transportConnected || data.connected));
+  var rawConnected = !!(data && (data.transportConnected || data.connected));
+  // Histerese anti-flicker (helper definido em app-window.js): 1 sinal
+  // offline isolado não derruba o indicador; 2 sinais consecutivos (poll 4s
+  // + evento/snapshot 5s) sim. Log do estado EXIBIDO apenas quando muda.
+  var connected = (typeof window.__statusConnectedHysteresis === 'function')
+    ? window.__statusConnectedHysteresis(rawConnected) : rawConnected;
+  if (connected !== renderStatusOverview.__lastShown) {
+    renderStatusOverview.__lastShown = connected;
+    try {
+      console.log('[status][conn] render', JSON.stringify({
+        connected: connected,
+        rawConnected: rawConnected,
+        transport: (data && data.transport) || (data && data.connectionType) || '',
+        reason: (data && data.onlineReason) || '',
+        at: new Date().toISOString()
+      }));
+    } catch (e) { /* não crítico */ }
+  }
 
   if (statusConnectionDotEl) {
     var dotClass = 'agent-status-indicator ' + (connected ? 'online' : 'offline');
@@ -459,7 +476,11 @@ if (typeof window.__lastConnectivityState === 'function') {
   try {
     var __lastConn = window.__lastConnectivityState();
     if (__lastConn && typeof window.__connectivityEventPing === 'function') {
-      window.__connectivityEventPing(__lastConn.connected, __lastConn.transport, 'replay');
+      // Replay passa pela mesma histerese do fluxo de eventos (anti-flicker).
+      var __shown = (typeof window.__statusConnectedHysteresis === 'function')
+        ? window.__statusConnectedHysteresis(!!__lastConn.connected)
+        : !!__lastConn.connected;
+      window.__connectivityEventPing(__shown, __lastConn.transport, 'replay');
     }
   } catch (e) { /* não crítico */ }
 }

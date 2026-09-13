@@ -34,10 +34,15 @@ func (a *App) handleIPCMessage(conn net.Conn, msg IPCMessage) {
 		// viva e o tray ficava offline).
 		agent := a.GetAgentStatus()
 		if a.ipcServer != nil {
+			// reason/lastEvent acompanham o snapshot para a UI logar e
+			// diagnosticar oscilações do indicador (ex.: "reconectando
+			// (planejado): watchdog global pong ...").
 			a.ipcServer.RespondTo(conn, NewIPCMessage(IPCMsgEvent, map[string]any{
 				"name":      "agent:status_snapshot",
 				"connected": agent.Connected,
 				"transport": agent.Transport,
+				"reason":    strings.TrimSpace(agent.OnlineReason),
+				"lastEvent": strings.TrimSpace(agent.LastEvent),
 			}))
 		}
 	case IPCMsgRemoteSession:
@@ -122,7 +127,7 @@ func (a *App) broadcastIPCEvent(name string, data ...any) {
 // serviço via IPC. É usado por GetAgentStatus() na UI companion (o agentConn
 // local não roda lá), mantendo tray e página de status consistentes com o
 // core que roda no serviço.
-func (a *App) storeCompanionStatus(connected bool, transport string) {
+func (a *App) storeCompanionStatus(connected bool, transport string, lastEvent ...string) {
 	if a == nil {
 		return
 	}
@@ -139,6 +144,13 @@ func (a *App) storeCompanionStatus(connected bool, transport string) {
 	st.LastEvent = "snapshot do serviço via IPC"
 	if connected {
 		st.LastEvent = "conectado (via serviço)"
+	}
+	// Motivo detalhado enviado pelo serviço (reason/lastEvent do snapshot).
+	for _, ev := range lastEvent {
+		if strings.TrimSpace(ev) != "" {
+			st.LastEvent = strings.TrimSpace(ev)
+			break
+		}
 	}
 }
 
@@ -168,7 +180,12 @@ func (a *App) startIPCClient() {
 				if name == "agent:status_snapshot" || name == "agent:connectivity" {
 					connected, _ := msg.Payload["connected"].(bool)
 					transport, _ := msg.Payload["transport"].(string)
-					a.storeCompanionStatus(connected, transport)
+					reason, _ := msg.Payload["reason"].(string)
+					lastEvent, _ := msg.Payload["lastEvent"].(string)
+					if strings.TrimSpace(reason) != "" {
+						lastEvent = reason
+					}
+					a.storeCompanionStatus(connected, transport, lastEvent)
 					a.syncTrayVisualState()
 					a.updateTrayMenu()
 					a.updateTrayTooltip()
@@ -190,6 +207,17 @@ func (a *App) startIPCClient() {
 			}
 			a.Logs.Append("[ipc] " + state + " ao serviço")
 			a.EmitEvent("service:ipc_state", map[string]any{"connected": connected})
+			if connected {
+				// Reconexão: pede um snapshot imediato de conectividade para o
+				// tray/status refletirem o estado real sem esperar o próximo
+				// tick de 5s do CompanionController (evita indicador defasado
+				// após cada reconexão do pipe).
+				go func() {
+					if err := a.ipcClient.Send(NewIPCMessage(IPCMsgStatus, nil)); err != nil {
+						a.Logs.Append("[ipc] falha ao pedir snapshot pós-reconexão: " + err.Error())
+					}
+				}()
+			}
 		},
 	)
 	go a.ipcClient.RunConnectLoop()

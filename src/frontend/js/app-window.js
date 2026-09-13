@@ -232,20 +232,53 @@
   // esse estado diretamente para refletir na hora o que o backend já sabe.
   var lastConnectivityState = null;
 
+  // ── Histerese do indicador de conectividade (anti-flicker) ──
+  // Um único sinal "offline" (evento ou poll) NÃO derruba o indicador:
+  // reconexões planejadas do core (reload de config, troca para o NATS
+  // nativo, watchdog de pong) derrubam o transporte por ~10-15s e o core
+  // emite offline→online em seguida, o que fazia o indicador piscar.
+  // Exigimos 2 sinais offline consecutivos (≈4-5s de intervalo entre o poll
+  // de 4s e o snapshot de 5s) para exibir offline; online é aplicado na hora.
+  window.__statusOfflineStrikes = 0;
+  window.__statusConnectedHysteresis = function (rawConnected) {
+    if (rawConnected) {
+      window.__statusOfflineStrikes = 0;
+      return true;
+    }
+    window.__statusOfflineStrikes += 1;
+    return window.__statusOfflineStrikes < 2;
+  };
+
   function applyConnectivityEvent(data) {
     if (!data) return;
     var connected = !!data.connected;
     var transport = (data && data.transport) || '';
     lastConnectivityState = { connected: connected, transport: transport };
 
+    // Diagnóstico do flicker: registra todo evento de conectividade com
+    // origem, motivo (quando o serviço envia) e timestamp ISO.
+    try {
+      console.log('[status][conn] evento', JSON.stringify({
+        connected: connected,
+        transport: transport,
+        reason: (data && data.reason) || (data && data.lastEvent) || '',
+        source: (data && data.source) || 'backend',
+        at: new Date().toISOString()
+      }));
+    } catch (e) { /* não crítico */ }
+
+    // Histerese: mantém online no primeiro sinal offline isolado.
+    var shown = (typeof window.__statusConnectedHysteresis === 'function')
+      ? window.__statusConnectedHysteresis(connected) : connected;
+
     if (metaDot) {
-      metaDot.classList.toggle('online', connected);
-      metaDot.classList.toggle('offline', !connected);
+      metaDot.classList.toggle('online', shown);
+      metaDot.classList.toggle('offline', !shown);
     }
 
     if (typeof window.__connectivityEventPing === 'function') {
       try {
-        window.__connectivityEventPing(connected, transport, 'event');
+        window.__connectivityEventPing(shown, transport, 'event');
       } catch (e) { /* não crítico */ }
     }
   }

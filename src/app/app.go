@@ -1104,7 +1104,15 @@ func (a *App) onConnectivityChange(connected bool, transport string) {
 	if connected {
 		state = "online"
 	}
-	a.Logs.Append(fmt.Sprintf("[connectivity] mudanca de estado para %s (transport=%s)", state, transport))
+	// Idade do último pong global: correlaciona oscilações do indicador com
+	// lacunas de entrega do servidor (watchdog de global pong / WSS).
+	pongInfo := " pongAge=never"
+	if a.SyncSvc != nil {
+		if lastPongAt, _, _, _ := a.SyncSvc.GlobalPongStatus(); !lastPongAt.IsZero() {
+			pongInfo = fmt.Sprintf(" pongAge=%s", time.Since(lastPongAt).Round(time.Second))
+		}
+	}
+	a.Logs.Append(fmt.Sprintf("[connectivity] mudanca de estado para %s (transport=%s%s)", state, transport, pongInfo))
 	a.EmitEvent("agent:connectivity", map[string]any{
 		"connected": connected,
 		"transport": transport,
