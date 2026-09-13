@@ -129,6 +129,19 @@ func (s *Service) configPathCandidates() []string {
 	return platform.ChatConfigPathCandidates(s.chatConfigFile)
 }
 
+// maskedAPIKey é o sentinel devolvido por GetConfig no lugar da chave real
+// (B2). O save com este valor (ou vazio) preserva a chave armazenada — o
+// frontend não pré-preenche o campo e enviar vazio significaria apagar.
+const maskedAPIKey = "********"
+
+// maskAPIKey retorna o sentinel quando a chave não está vazia.
+func maskAPIKey(key string) string {
+	if strings.TrimSpace(key) == "" {
+		return ""
+	}
+	return maskedAPIKey
+}
+
 // LoadPersistedConfig loads the persisted chat config.
 func (s *Service) LoadPersistedConfig() {
 	for _, path := range s.configPathCandidates() {
@@ -173,6 +186,13 @@ func (s *Service) persistConfig(cfg Config) error {
 			errs = append(errs, path+": "+err.Error())
 			continue
 		}
+		// A3: endurece a DACL do arquivo quando o processo é elevado — o
+		// 0o600 é no-op no Windows e o arquivo herda Users:(M) do diretório.
+		if platform.IsElevated() {
+			if aclErr := platform.HardenSecretFileACL(path); aclErr != nil {
+				s.logf("[chat] aviso: nao foi possivel restringir ACL de " + path + ": " + aclErr.Error())
+			}
+		}
 		s.logf("[chat] configuração salva em " + path)
 		return nil
 	}
@@ -183,9 +203,15 @@ func (s *Service) persistConfig(cfg Config) error {
 }
 
 // SetConfig updates and persists the LLM API settings.
+// B2: o frontend nunca recebe a chave real (Get mascara). Save sem redigitar
+// chega com vazio ou com o sentinel — preserva a chave atual nesses casos
+// (antes, salvar outros campos apagava a chave armazenada).
 func (s *Service) SetConfig(cfg Config) error {
 	if cfg.MaxTokens < 0 {
 		return fmt.Errorf("maxTokens invalido: use 0 ou um valor positivo")
+	}
+	if key := strings.TrimSpace(cfg.APIKey); key == "" || key == maskedAPIKey {
+		cfg.APIKey = s.chatSvc.GetConfig().APIKey
 	}
 	s.chatSvc.SetConfig(ai.Config{
 		Endpoint:     cfg.Endpoint,
@@ -200,6 +226,10 @@ func (s *Service) SetConfig(cfg Config) error {
 
 // TestConfig checks whether the informed LLM settings are valid without saving them.
 func (s *Service) TestConfig(cfg Config) (string, error) {
+	// B2: teste com o sentinel usa a chave real armazenada.
+	if strings.TrimSpace(cfg.APIKey) == maskedAPIKey {
+		cfg.APIKey = s.chatSvc.GetConfig().APIKey
+	}
 	runtimeCfg, err := s.resolveRuntimeConfig(cfg)
 	if err != nil {
 		return "", err
@@ -208,11 +238,13 @@ func (s *Service) TestConfig(cfg Config) (string, error) {
 }
 
 // GetConfig returns the current config (API key masked).
+// B2: a chave é substituída pelo sentinel — o comentário antigo dizia
+// "masked" mas devolvia a chave integral (leak para frontend/debug HTTP).
 func (s *Service) GetConfig() Config {
 	c := s.chatSvc.GetConfig()
 	return Config{
 		Endpoint:     c.Endpoint,
-		APIKey:       c.APIKey,
+		APIKey:       maskAPIKey(c.APIKey),
 		Model:        c.Model,
 		SystemPrompt: c.SystemPrompt,
 		MaxTokens:    c.MaxTokens,

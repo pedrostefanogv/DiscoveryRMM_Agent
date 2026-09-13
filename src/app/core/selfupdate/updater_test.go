@@ -74,12 +74,17 @@ func TestDownloadFromCacheOrPublic_UsesPublicEndpoint(t *testing.T) {
 	checksumHex := hex.EncodeToString(checksum[:])
 
 	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/download/agent" {
+		switch r.URL.Path {
+		case "/api/v1/download/agent/sha256":
+			// C1/C2: hash do servidor é obrigatório para qualquer download.
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(checksumHex))
+		case "/api/v1/download/agent":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(payload)
+		default:
 			http.NotFound(w, r)
-			return
 		}
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(payload)
 	}))
 	defer apiServer.Close()
 

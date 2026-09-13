@@ -16,7 +16,7 @@ on:
         required: false
         default: ""
       default_key:
-        description: Chave padrao (opcional)
+        description: "DEPRECIADO (M21): usar o secret AGENT_DEFAULT_KEY — inputs de workflow_dispatch são visíveis no histórico da run. Mantido vazio para compatibilidade."
         required: false
         default: ""
       auto_provisioning:
@@ -67,17 +67,26 @@ jobs:
 
       - name: Build installer
         shell: pwsh
+        # M20: inputs via env (previne command injection pelo formulário).
+        env:
+          WF_VERSION: "${{ github.event.inputs.version }}"
+          WF_OUTPUT_NAME: "${{ github.event.inputs.output_name }}"
+          WF_DEFAULT_URL: "${{ github.event.inputs.default_url }}"
+          # M21: chave via secret (não fica no histórico da run); input só como fallback vazio.
+          WF_DEFAULT_KEY: "${{ secrets.AGENT_DEFAULT_KEY || github.event.inputs.default_key }}"
+          WF_AUTO_PROVISIONING: "${{ github.event.inputs.auto_provisioning }}"
+          WF_GENERIC_INSTALL: "${{ github.event.inputs.generic_install }}"
         run: |
           $params = @{
             ProjectRoot = $PWD
-            Version = "${{ github.event.inputs.version }}"
-            OutputName = "${{ github.event.inputs.output_name }}"
-            DefaultUrl = "${{ github.event.inputs.default_url }}"
-            DefaultKey = "${{ github.event.inputs.default_key }}"
-            AutoProvisioning = "${{ github.event.inputs.auto_provisioning }}"
+            Version = $env:WF_VERSION
+            OutputName = $env:WF_OUTPUT_NAME
+            DefaultUrl = $env:WF_DEFAULT_URL
+            DefaultKey = $env:WF_DEFAULT_KEY
+            AutoProvisioning = $env:WF_AUTO_PROVISIONING
           }
 
-          if ('${{ github.event.inputs.generic_install }}' -eq 'true') {
+          if ($env:WF_GENERIC_INSTALL -eq 'true') {
             $params.GenericInstall = $true
           }
 

@@ -1,4 +1,6 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+/* B13: removido o @import de Google Fonts - agente enterprise nao deve fazer
+   requisicao externa a cada load (privacidade/offline/FOUT). Os stacks
+   font-family ja possuem fallbacks de sistema (Segoe UI/Consolas). */
 
 /* ================================================================
    DESIGN TOKENS

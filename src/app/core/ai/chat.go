@@ -417,6 +417,13 @@ func (s *Service) Send(ctx context.Context, userMessage string) (string, error) 
 
 	resp, err := s.callAgentChatSync(ctx, cfg, userMessage, sessionID)
 	if err != nil {
+		// B6: remove a mensagem do usuário adicionada acima quando o request
+		// falha — sem isso, o reenvio duplicava a entrada no histórico.
+		s.mu.Lock()
+		if n := len(s.history); n > 0 && s.history[n-1].Role == "user" && s.history[n-1].Content == userMessage {
+			s.history = s.history[:n-1]
+		}
+		s.mu.Unlock()
 		return "", err
 	}
 

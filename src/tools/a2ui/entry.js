@@ -9,7 +9,8 @@
 //     (cliques/inputs em componentes).
 //   - handle.destroy() → remove a surface e libera recursos.
 //
-// O bundle é gerado por esbuild (IIFE) e commitado em frontend/a2ui-bundle.js.
+// O bundle é gerado por esbuild (IIFE) e commitado em frontend/a2ui-bundle.js
+// (gere com: cd src/tools/a2ui && npm install && npm run build).
 // O runtime do agente não depende de node/npm.
 
 import { MessageProcessor } from "@a2ui/web_core/v0_9";

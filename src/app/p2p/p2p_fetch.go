@@ -21,6 +21,11 @@ type ArtifactFetchState struct {
 	OwnerPeerID string
 	LeaseUntil  time.Time
 	ProgressPct float64
+
+	// M12: backoff de re-eleição — um artifact "failed" re-elegia e baixava
+	// a cada 60s indefinidamente. NextAttemptUTC registra quando tentar de novo.
+	NextAttemptUTC time.Time
+	FailCount      int
 }
 
 // ArtifactFetchCandidate representa a candidatura de um peer para ser fetcher.
@@ -83,6 +88,41 @@ func (f *fetchStateMap) set(artifactID string, state *ArtifactFetchState) {
 	f.mu.Lock()
 	f.states[artifactID] = state
 	f.mu.Unlock()
+}
+
+// mutate executa fn sobre o estado do artifact SOB LOCK, criando o estado
+// quando não existir.
+//
+// Correção A7: os campos de ArtifactFetchState são compartilhados por
+// goroutines distintas (heartbeat de lease, eleição, reseed, heartbeat
+// libp2p recebido). Antes, getOrCreate devolvia o ponteiro e os campos eram
+// mutados FORA do lock enquanto outros loops liam/escreviam os mesmos campos
+// sob lock — data race que corrompia eleição/lease. Toda mutação deve passar
+// por este método (ou pelas funções já sincronizadas em p2p_fetch_election.go).
+func (f *fetchStateMap) mutate(artifactID, clientID string, fn func(s *ArtifactFetchState)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	s, ok := f.states[artifactID]
+	if !ok {
+		s = &ArtifactFetchState{
+			ArtifactID: artifactID,
+			ClientID:   clientID,
+			Status:     "missing",
+		}
+		f.states[artifactID] = s
+	}
+	fn(s)
+}
+
+// snapshot retorna uma CÓPIA do estado para leitura segura fora do lock (A7).
+func (f *fetchStateMap) snapshot(artifactID string) (ArtifactFetchState, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	s, ok := f.states[artifactID]
+	if !ok {
+		return ArtifactFetchState{}, false
+	}
+	return *s, true
 }
 
 // computeScore calcula o score de capacidade para eleição.

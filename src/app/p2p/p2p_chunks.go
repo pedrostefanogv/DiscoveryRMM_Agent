@@ -235,6 +235,20 @@ func downloadChunkedLibp2p(
 	if len(peers) == 0 {
 		return "", 0, fmt.Errorf("nenhum peer disponivel para download")
 	}
+
+	// A6: o manifest vem de um peer remoto — o ArtifactName pode conter
+	// traversal ("..\..\Users\...\Startup\evil.exe") e era usado direto
+	// em filepath.Join(destDir, ...). Sanitiza; rejeita manifest com nome
+	// vazio e rejeita quando diverge do nome solicitado.
+	remoteName := SanitizeArtifactName(manifest.ArtifactName)
+	if remoteName == "" {
+		return "", 0, fmt.Errorf("manifest com ArtifactName invalido: %q", manifest.ArtifactName)
+	}
+	if requestedName := SanitizeArtifactName(artifactName); requestedName != "" && !strings.EqualFold(requestedName, remoteName) {
+		return "", 0, fmt.Errorf("manifest ArtifactName %q difere do nome solicitado %q (peer inconsistente)", remoteName, requestedName)
+	}
+	manifest.ArtifactName = remoteName
+
 	if maxParallel < minParallelChunks {
 		maxParallel = minParallelChunks
 	}

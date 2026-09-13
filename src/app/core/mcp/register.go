@@ -125,11 +125,15 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 
 	reg.Register(Tool{
 		Name:        "uninstall_package",
-		Description: "Desinstala um pacote via winget pelo seu ID.",
+		Description: "Desinstala um pacote via winget pelo seu ID. DESTRUTIVA: exige confirm=true (obtido do usuario).",
 		Params: []ToolParam{
 			{Name: "id", Type: "string", Description: "ID do pacote winget", Required: true},
+			{Name: "confirm", Type: "boolean", Description: "Confirmação explícita do usuário (M31)", Required: true},
 		},
 		Handler: func(ctx context.Context, args map[string]any) (any, error) {
+			if err := requireConfirm(args); err != nil {
+				return nil, err
+			}
 			id, _ := args["id"].(string)
 			if strings.TrimSpace(id) == "" {
 				return nil, fmt.Errorf("id do pacote nao pode ser vazio")
@@ -173,8 +177,14 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 
 	reg.Register(Tool{
 		Name:        "upgrade_all_packages",
-		Description: "Atualiza todos os pacotes que possuem atualizacao disponivel via winget.",
+		Description: "Atualiza todos os pacotes que possuem atualizacao disponivel via winget. DESTRUTIVA em massa: exige confirm=true.",
+		Params: []ToolParam{
+			{Name: "confirm", Type: "boolean", Description: "Confirmação explícita do usuário (M31)", Required: true},
+		},
 		Handler: func(ctx context.Context, args map[string]any) (any, error) {
+			if err := requireConfirm(args); err != nil {
+				return nil, err
+			}
 			out, err := app.UpgradeAllPackages()
 			return map[string]string{"output": out}, err
 		},
@@ -359,19 +369,29 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 
 	reg.Register(Tool{
 		Name:        "restart_spooler",
-		Description: "Reinicia o servico Spooler e retorna o status apos o restart.",
+		Description: "Reinicia o servico Spooler de impressao. DESTRUTIVA (para jobs de impressão): exige confirm=true.",
+		Params: []ToolParam{
+			{Name: "confirm", Type: "boolean", Description: "Confirmação explícita do usuário (M31)", Required: true},
+		},
 		Handler: func(ctx context.Context, args map[string]any) (any, error) {
+			if err := requireConfirm(args); err != nil {
+				return nil, err
+			}
 			return app.RestartSpoolerJSON()
 		},
 	})
 
 	reg.Register(Tool{
 		Name:        "clear_queue",
-		Description: "Limpa todos os jobs pendentes da fila de uma impressora.",
+		Description: "Limpa todos os jobs pendentes da fila de uma impressora. DESTRUTIVA: exige confirm=true.",
 		Params: []ToolParam{
 			{Name: "printerName", Type: "string", Description: "Nome da impressora", Required: true},
+			{Name: "confirm", Type: "boolean", Description: "Confirmação explícita do usuário (M31)", Required: true},
 		},
 		Handler: func(ctx context.Context, args map[string]any) (any, error) {
+			if err := requireConfirm(args); err != nil {
+				return nil, err
+			}
 			printerName, err := requiredStringArg(args, "printerName")
 			if err != nil {
 				return nil, err
@@ -820,4 +840,17 @@ func requiredIntArg(args map[string]any, name string) (int, error) {
 	default:
 		return 0, fmt.Errorf("%s deve ser um inteiro", name)
 	}
+}
+
+// ── M31: gate de confirmação para tools destrutivas ────────────────────────
+
+// requireConfirm valida o parâmetro confirm=true nas tools destrutivas do MCP.
+// Sem isso, ações como uninstall/upgrade_all/restart_spooler dependiam do LLM
+// usar ask_user voluntariamente — agora o servidor exige a confirmação
+// explícita no payload da chamada (o LLM precisa ter obtido o ok do usuário).
+func requireConfirm(args map[string]any) error {
+	if v, ok := args["confirm"].(bool); ok && v {
+		return nil
+	}
+	return fmt.Errorf("acao destrutiva: exige confirmacao explicita do usuario — envie \"confirm\": true no payload da tool apos o usuario aprovar")
 }

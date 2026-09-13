@@ -190,21 +190,6 @@ func (a *App) startIPCClient() {
 	}()
 }
 
-// decideCompanionMode determina se a UI deve rodar em modo companion
-// (serviço ativo) ou standalone (fallback). Probe com timeout curto —
-// pipe inexistente falha imediatamente no Windows; 500ms cobre o caso
-// do serviço em startup (listener já criado antes do core).
-func (a *App) decideCompanionMode() bool {
-	ack, ok := probeServiceHello(500 * time.Millisecond)
-	if ok {
-		if !IsServiceProtocolCompatible(ack.Protocol) {
-			a.Logs.Append(fmt.Sprintf("[startup] serviço com protocolo IPC incompatível (serviço=%d UI=%d) — modo standalone até o update",
-				ack.Protocol, IPCProtocolVersion))
-			return false
-		}
-		a.Logs.Append("[startup] serviço DiscoveryAgent ativo — modo companion (UI sem core)")
-		return true
-	}
-	a.Logs.Append("[startup] serviço ausente — modo standalone (core completo na UI)")
-	return false
-}
+// M5: decideCompanionMode removida — a UI é SEMPRE interface (sem fallback
+// standalone). O cliente IPC (RunConnectLoop) aguarda o serviço aparecer e o
+// CompanionController cuida do estado "serviço ausente/voltou".

@@ -110,7 +110,10 @@ func (c *Coordinator) ListArtifacts() ([]P2PArtifactView, error) {
 			manifestDir := c.transferServer.manifestDir()
 			if manifestDir != "" {
 				if cached := loadCachedManifest(manifestDir, name, path); cached != nil {
-					if !manifestMatchesFile(cached, path) {
+					// M14: o health-check (manifestMatchesFile) lê ~5 chunks do
+					// arquivo a CADA ListArtifacts — cache do resultado por (path,
+					// mtime) evita o re-hash a cada gossip tick (45s).
+					if !c.manifestHealthOK(cached, path, info.ModTime(), info.Size()) {
 						_ = os.Remove(cachedManifestPath(manifestDir, name))
 						c.recordStaleManifest()
 						c.deps.Log(fmt.Sprintf("[p2p][health] manifest stale detectado em ListArtifacts: %s — cache invalidado", name))
@@ -167,6 +170,11 @@ func (c *Coordinator) DeleteArtifact(artifactName string) error {
 	c.sha256CacheMu.Lock()
 	delete(c.sha256Cache, path)
 	c.sha256CacheMu.Unlock()
+
+	// Remove o cache de health-check do manifest (M14).
+	c.manifestHealthMu.Lock()
+	delete(c.manifestHealth, path)
+	c.manifestHealthMu.Unlock()
 
 	c.deps.Log(fmt.Sprintf("[p2p] artifact apagado: %s", artifactName))
 	return nil

@@ -18,6 +18,7 @@ Este arquivo organiza a documentacao por tema e define a fonte canonica para red
 | P2P_SERVER_API_IMPLEMENTATION.md                 | P2P (servidor/normativo)      | Ativo                | Manter como fonte unica de validacoes backend | Este documento                        |
 | WATCHDOG_SYSTEM.md                               | Observabilidade e recuperacao | Ativo                | Manter                                        | Este documento                        |
 | PLANO_MTLS_TLS_EXECUCAO_ASSINADA.md              | Seguranca                     | Ativo parcial        | Manter como plano faseado                     | Este documento                        |
+| PLANO_CORRECOES_RELATORIO_ANALISE.md             | Correcoes da analise estatica | Ativo (fase 1 2026-09-10) | Manter e evoluir                          | RELATORIO_ANALISE_CODIGO.md + Este doc |
 | PLANO_RESILIENCIA_OFFLINE_SYNC.md                | Resiliencia offline           | Planejado            | Manter como backlog                           | Este documento                        |
 | PLANO_BUILD_MODULAR_MCP_WASM.md                  | MCP modular                   | Planejado            | Manter como roadmap                           | Este documento                        |
 

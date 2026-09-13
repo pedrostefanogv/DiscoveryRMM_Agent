@@ -12,6 +12,7 @@ import (
 
 	libp2p "github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/control"
+	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -131,13 +132,29 @@ func (p *p2pLibP2PProvider) Start(
 
 	// TCP + QUIC/v1 sobre IPv4 apenas (IPv6 desativado).
 	// Segurança declarada explicitamente: Noise (preferido) e TLS 1.3.
-	h, err := libp2p.New(
+	// A5: identidade Ed25519 persistente em <DataDir>/p2p — sem isso o
+	// peer.ID mudava a cada restart e peers conheciam conflito de identidade
+	// (BlockPeer permanente). Falha ao persistir → identidade efêmera
+	// (comportamento antigo) + log de trace.
+	var identity crypto.PrivKey
+	if p.coord != nil && p.coord.deps != nil {
+		if priv, idErr := loadOrCreateLibp2PIdentity(p.coord.deps.GetDataDir()); idErr == nil {
+			identity = priv
+		} else if onTrace != nil {
+			onTrace(fmt.Sprintf("identidade libp2p persistente indisponivel (gerando efemera): %v", idErr))
+		}
+	}
+	opts := []libp2p.Option{
 		libp2p.ListenAddrStrings(listenAddrs...),
 		libp2p.Security(noise.ID, noise.New),
 		libp2p.Security(libp2ptls.ID, libp2ptls.New),
 		libp2p.ConnectionManager(cm),
 		libp2p.ConnectionGater(gater),
-	)
+	}
+	if identity != nil {
+		opts = append(opts, libp2p.Identity(identity))
+	}
+	h, err := libp2p.New(opts...)
 	if err != nil {
 		return fmt.Errorf("libp2p host: %w", err)
 	}
@@ -428,29 +445,65 @@ func pickDiscoveryProvider(cfg P2PConfig, coord *Coordinator, transfer *Transfer
 
 // ── ConnectionGater ─────────────────────────────────────────────────────────
 
+// peerBlocklistTTL define por quanto tempo um peer permanece bloqueado após
+// um conflito de identidade. Correção A5: a blocklist era append-only e
+// permanente — um peer legítimo cuja identidade mudou (dados limpos, chave
+// corrompida) ficava bloqueado para sempre, partindo a malha. Com TTL, a
+// rotação legítima se recupera sozinha; ataques continuam bloqueados pela
+// janela.
+const peerBlocklistTTL = 15 * time.Minute
+
 // p2pConnectionGater implementa connmgr.ConnectionGater com uma blocklist de
-// peers marcados como maliciosos/defeituosos. Todos os métodos são thread-safe.
+// peers marcados como maliciosos/defeituosos, com expiração automática (A5).
+// Todos os métodos são thread-safe.
 type p2pConnectionGater struct {
 	mu        sync.RWMutex
-	blocklist map[peer.ID]struct{}
+	blocklist map[peer.ID]time.Time // expiração do bloqueio
 }
 
 func newP2PConnectionGater() *p2pConnectionGater {
-	return &p2pConnectionGater{blocklist: make(map[peer.ID]struct{})}
+	return &p2pConnectionGater{blocklist: make(map[peer.ID]time.Time)}
 }
 
-// BlockPeer adiciona um peer à blocklist; futuras conexões dele serão recusadas.
+// BlockPeer adiciona um peer à blocklist; futuras conexões dele serão
+// recusadas até expirar (peerBlocklistTTL).
 func (g *p2pConnectionGater) BlockPeer(id peer.ID) {
 	g.mu.Lock()
-	g.blocklist[id] = struct{}{}
+	g.blocklist[id] = time.Now().Add(peerBlocklistTTL)
 	g.mu.Unlock()
 }
 
-func (g *p2pConnectionGater) InterceptPeerDial(id peer.ID) bool {
+// UnblockPeer remove um peer da blocklist (ex.: registro consistente aceito
+// após expiração da janela de conflito).
+func (g *p2pConnectionGater) UnblockPeer(id peer.ID) {
+	g.mu.Lock()
+	delete(g.blocklist, id)
+	g.mu.Unlock()
+}
+
+// isBlocked verifica (e limpa) entradas expiradas. Thread-safe.
+func (g *p2pConnectionGater) isBlocked(id peer.ID) bool {
 	g.mu.RLock()
-	_, blocked := g.blocklist[id]
+	until, blocked := g.blocklist[id]
 	g.mu.RUnlock()
-	return !blocked
+	if !blocked {
+		return false
+	}
+	if time.Now().Before(until) {
+		return true
+	}
+	// Expirado: remove (re-checa sob lock de escrita para não apagar
+	// renovação feita por outra goroutine entre a leitura e o delete).
+	g.mu.Lock()
+	if cur, ok := g.blocklist[id]; ok && time.Now().After(cur) {
+		delete(g.blocklist, id)
+	}
+	g.mu.Unlock()
+	return false
+}
+
+func (g *p2pConnectionGater) InterceptPeerDial(id peer.ID) bool {
+	return !g.isBlocked(id)
 }
 
 func (g *p2pConnectionGater) InterceptAddrDial(_ peer.ID, addr multiaddr.Multiaddr) bool {
@@ -472,10 +525,7 @@ func (g *p2pConnectionGater) InterceptAccept(_ network.ConnMultiaddrs) bool {
 }
 
 func (g *p2pConnectionGater) InterceptSecured(_ network.Direction, id peer.ID, _ network.ConnMultiaddrs) bool {
-	g.mu.RLock()
-	_, blocked := g.blocklist[id]
-	g.mu.RUnlock()
-	return !blocked
+	return !g.isBlocked(id)
 }
 
 func (g *p2pConnectionGater) InterceptUpgraded(_ network.Conn) (bool, control.DisconnectReason) {

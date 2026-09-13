@@ -382,7 +382,7 @@ async function loadSupportTickets() {
         '<div class="ticket-subject">' + escapeHtml(t.title || translate('support.untitledTicket')) + '</div>' +
         '<div class="ticket-header">' +
           '<span class="ticket-id-badge">#' + escapeHtml(t.id.substring(0, 8)) + '</span>' +
-          '<span class="ticket-status-badge" style="background:' + escapeHtml(status.color) + '20;color:' + escapeHtml(status.color) + '">' + escapeHtml(status.name) + '</span>' +
+          '<span class="ticket-status-badge"' + safeStatusBadgeStyle(status.color) + '>' + escapeHtml(status.name) + '</span>' +
           '<span class="ticket-priority-badge ' + priClass + '">' + escapeHtml(priLabel) + '</span>' +
         '</div>' +
         '<div class="ticket-meta">' +
@@ -400,7 +400,14 @@ async function loadSupportTickets() {
         try {
           var t = JSON.parse(card.getAttribute('data-ticket').replace(/&apos;/g, "'"));
           showTicketDetail(t);
-        } catch (e) { /* ignore */ }
+        } catch (e) {
+          // M17: catch vazio — card clicado sem feedback algum era inaceitável
+          // quando o data-ticket não parseava (entidades/sanitização).
+          console.error('support: falha ao abrir ticket do card:', e);
+          if (typeof showFeedback === 'function') {
+            showFeedback(translate('support.ticketLoadError', { error: String(e) }), true);
+          }
+        }
       });
     });
   } catch (err) {
@@ -445,8 +452,12 @@ function renderTicketDetail(t) {
   if (ticketDetailIdEl) ticketDetailIdEl.textContent = '#' + t.id.substring(0, 8);
   if (ticketDetailStatusEl) {
     ticketDetailStatusEl.textContent = status.name;
-    ticketDetailStatusEl.style.background = status.color + '20';
-    ticketDetailStatusEl.style.color = status.color;
+    // B14: cor do servidor validada antes de aplicar no style.
+    var _statusColor = safeCssColor(status.color);
+    if (_statusColor) {
+      ticketDetailStatusEl.style.background = _statusColor + '20';
+      ticketDetailStatusEl.style.color = _statusColor;
+    }
   }
   if (ticketDetailPriorityEl) {
     ticketDetailPriorityEl.textContent = priLabel;

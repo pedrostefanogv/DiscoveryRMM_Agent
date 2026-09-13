@@ -199,23 +199,30 @@ func (u *Updater) fetchPublicSHA256(ctx context.Context) (string, error) {
 
 // downloadFromCacheOrPublic tenta baixar o artifact via P2P (se peers disponiveis)
 // e faz fallback para o endpoint publico /api/v1/download/agent.
-// expectedSHA256: se informado, monta artifactID = "selfupdate:" + sha256 e valida pos-download.
-// Retorna o path do arquivo temporario, SHA256 calculado localmente e flag indicando
-// se o download veio do P2P (true) ou HTTP (false).
+//
+// C1/C2 (integridade do self-update): o SHA256 publicado pelo servidor é
+// OBRIGATÓRIO. Sem hash de referência nenhum download é iniciado:
+//   - P2P é recusado (não há como validar o que um peer entrega);
+//   - HTTP é recusado (não há como validar o que o servidor entrega).
+// Nos dois caminhos o hash do arquivo é verificado após o download; divergência
+// ou ausência abortam com remoção do arquivo temporário, sem instalar.
+//
+// Retorna o path do arquivo temporario, SHA256 calculado localmente e flag
+// indicando se o download veio do P2P (true) ou HTTP (false).
 func (u *Updater) downloadFromCacheOrPublic(ctx context.Context, expectedSHA256 string) (path string, sha string, fromP2P bool, err error) {
-	artifactID := "selfupdate:current"
-	if expectedSHA256 != "" {
-		artifactID = "selfupdate:" + strings.ToLower(expectedSHA256)
-	} else {
-		// Sem SHA256 conhecido, tenta obter do servidor antes do P2P.
-		if sha, err := u.fetchPublicSHA256(ctx); err == nil && sha != "" {
-			expectedSHA256 = sha
-			artifactID = "selfupdate:" + sha
-			u.logf("[selfupdate] SHA256 obtido do servidor: %s (nao baixou binario)", sha[:12])
+	expectedSHA256 = strings.ToLower(strings.TrimSpace(expectedSHA256))
+
+	// ── Hash de referência obrigatório (C1/C2) ──
+	if expectedSHA256 == "" {
+		if fetched, fetchErr := u.fetchPublicSHA256(ctx); fetchErr == nil && fetched != "" {
+			expectedSHA256 = fetched
+			u.logf("[selfupdate] SHA256 obtido do servidor: %s (nao baixou binario)", shortHash(expectedSHA256))
 		} else {
-			u.logf("[selfupdate] nao foi possivel obter SHA256 do servidor: %v — P2P usara ID generico", err)
+			u.logf("[selfupdate] SHA256 do servidor indisponivel: %v — recusando download sem hash de referencia", fetchErr)
+			return "", "", false, fmt.Errorf("sha256 do servidor indisponivel (%v) — instalacao recusada sem hash de referencia", fetchErr)
 		}
 	}
+	artifactID := "selfupdate:" + expectedSHA256
 
 	// ── P2P-first ──
 	// Tenta o artifactID canônico ("selfupdate:<sha256>", registrado via sidecar
@@ -224,11 +231,9 @@ func (u *Updater) downloadFromCacheOrPublic(ctx context.Context, expectedSHA256 
 	// baixaram o update antes do registro de sidecar existir.
 	if u.FindPeersByReleaseID != nil && u.DownloadFromPeer != nil {
 		artifactIDs := []string{artifactID}
-		if expectedSHA256 != "" {
-			legacyID := "name:selfupdate-" + strings.ToLower(expectedSHA256) + ".exe"
-			if !strings.EqualFold(legacyID, artifactID) {
-				artifactIDs = append(artifactIDs, legacyID)
-			}
+		legacyID := "name:selfupdate-" + expectedSHA256 + ".exe"
+		if !strings.EqualFold(legacyID, artifactID) {
+			artifactIDs = append(artifactIDs, legacyID)
 		}
 		for _, tryID := range artifactIDs {
 			peers, findErr := u.FindPeersByReleaseID(ctx, tryID)
@@ -252,12 +257,15 @@ func (u *Updater) downloadFromCacheOrPublic(ctx context.Context, expectedSHA256 
 					_ = os.Remove(path)
 					continue
 				}
-				if expectedSHA256 != "" && !strings.EqualFold(actual, expectedSHA256) {
-					u.logf("[selfupdate] P2P sha256 mismatch do peer %s: esperado=%s obtido=%s (stale)", peerID, expectedSHA256[:12], actual[:12])
+				// C2: verificação incondicional — o caso expected=="" já foi
+				// bloqueado no início da função; aqui nunca se aceita arquivo
+				// sem conferência integral do hash.
+				if !strings.EqualFold(actual, expectedSHA256) {
+					u.logf("[selfupdate] P2P sha256 mismatch do peer %s: esperado=%s obtido=%s (stale)", peerID, shortHash(expectedSHA256), shortHash(actual))
 					_ = os.Remove(path)
 					continue
 				}
-				u.logf("[selfupdate] download P2P concluido: peer=%s artifactID=%s sha256=%s", peerID, tryID, actual[:12])
+				u.logf("[selfupdate] download P2P concluido: peer=%s artifactID=%s sha256=%s", peerID, tryID, shortHash(actual))
 				return path, actual, true, nil
 			}
 			u.logf("[selfupdate] P2P exaurido (%d peers tentados) para artifactID=%s", len(peers), tryID)
@@ -267,9 +275,47 @@ func (u *Updater) downloadFromCacheOrPublic(ctx context.Context, expectedSHA256 
 
 	// ── HTTP download do endpoint publico ──
 	downloadURL := u.apiScheme() + "://" + u.apiServer() + "/api/v1/download/agent"
-	var httpErr error
-	path, sha, httpErr = u.downloadFromURL(ctx, downloadURL)
-	return path, sha, false, httpErr
+	path, sha, err = u.downloadFromURL(ctx, downloadURL)
+	if err != nil {
+		return "", "", false, err
+	}
+	// C1: verificação obrigatória do hash do download HTTP contra o hash
+	// publicado pelo servidor. Divergência/ausência aborta com remoção.
+	if verr := u.verifyInstallerSHA256(expectedSHA256, sha); verr != nil {
+		u.logf("[selfupdate] %v — removendo download e abortando", verr)
+		_ = os.Remove(path)
+		return "", "", false, verr
+	}
+	return path, sha, false, nil
+}
+
+// shortHash retorna os primeiros 12 caracteres do hash de forma segura
+// (evita panic de slicing quando o valor é vazio/curto — A9).
+func shortHash(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) <= 12 {
+		return s
+	}
+	return s[:12]
+}
+
+// verifyInstallerSHA256 compara o hash calculado do instalador com o hash
+// esperado publicado pelo servidor (C1/C2). Ausência de qualquer um dos
+// lados ou divergência são erros fatais — o instalador nunca é executado
+// sem verificação de integridade.
+func (u *Updater) verifyInstallerSHA256(expected, actual string) error {
+	expected = strings.ToLower(strings.TrimSpace(expected))
+	actual = strings.ToLower(strings.TrimSpace(actual))
+	if expected == "" {
+		return errors.New("sha256 esperado ausente — instalador recusado sem verificação de integridade")
+	}
+	if actual == "" {
+		return errors.New("sha256 do arquivo ausente — instalador recusado sem verificação de integridade")
+	}
+	if !strings.EqualFold(expected, actual) {
+		return fmt.Errorf("sha256 divergente do servidor: esperado=%s obtido=%s", shortHash(expected), shortHash(actual))
+	}
+	return nil
 }
 
 // downloadFromURL faz o download do instalador a partir de uma URL.
@@ -367,7 +413,7 @@ func (u *Updater) downloadFromURL(ctx context.Context, downloadURL string) (stri
 		path = canonicalPath
 	}
 
-	u.logf("[selfupdate] download concluido: path=%s sha256=%s", path, sha[:12])
+	u.logf("[selfupdate] download concluido: path=%s sha256=%s", path, shortHash(sha))
 	u.incDownloadOK()
 	return path, sha, nil
 }

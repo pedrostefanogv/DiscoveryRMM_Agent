@@ -92,6 +92,32 @@ func (a *Allowlist) IsAllowed(host string, port int) bool {
 	return false
 }
 
+// ContainsIP verifica se um IP resolvido está dentro dos CIDRs permitidos
+// (ignora portas). Usado pelo dialer do proxy para fechar o DNS TOCTOU (M7):
+// o IP efetivamente dialado é o que foi validado, não uma segunda resolução.
+// Herda a semântica de IsAllowed: desativada = permite tudo; sem CIDRs =
+// permitido (restrição apenas por porta).
+func (a *Allowlist) ContainsIP(ip net.IP) bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	if !a.enabled {
+		return true
+	}
+	if len(a.cidrs) == 0 {
+		return true
+	}
+	if ip == nil {
+		return false
+	}
+	for _, cidr := range a.cidrs {
+		if cidr.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
 // IsEmpty retorna true se a allowlist esta vazia.
 func (a *Allowlist) IsEmpty() bool {
 	a.mu.RLock()

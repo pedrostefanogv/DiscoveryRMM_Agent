@@ -125,23 +125,32 @@ func (c *Coordinator) handleFetchCandidacy(ctx context.Context, msg ArtifactFetc
 	c.deps.Log(fmt.Sprintf("[p2p][election] artifact=%s winner=%s (remote=%s)",
 		artifactID, winner.AgentID, msg.AgentID))
 
-	// Atualizar estado
-	state := c.fetchStates.getOrCreate(artifactID, clientID)
-	state.OwnerPeerID = winner.AgentID
-	state.LeaseUntil = time.Now().Add(artifactFetchLeaseTTL)
+	// Atualizar estado (A7: mutações sob lock via fetchStates.mutate)
+	var startFetch bool
+	c.fetchStates.mutate(artifactID, clientID, func(state *ArtifactFetchState) {
+		state.OwnerPeerID = winner.AgentID
+		state.LeaseUntil = time.Now().Add(artifactFetchLeaseTTL)
+		if strings.EqualFold(winner.AgentID, selfAgentID) {
+			if canStartLocalElection(state, time.Now(), c.isLoadOK()) {
+				state.Status = "fetching"
+				startFetch = true
+			} else {
+				state.Status = "missing"
+			}
+		} else {
+			state.Status = "fetching"
+		}
+	})
 
 	// Se este peer venceu e está apto, iniciar fetch
 	if strings.EqualFold(winner.AgentID, selfAgentID) {
-		if canStartLocalElection(state, time.Now(), c.isLoadOK()) {
-			state.Status = "fetching"
+		if startFetch {
 			go c.executeFetch(ctx, artifactID, msg.ArtifactID)
 		} else {
-			state.Status = "missing"
 			c.deps.Log(fmt.Sprintf("[p2p][election] artifact=%s vencedor=local mas host sobrecarregado, adiando",
 				artifactID))
 		}
 	} else {
-		state.Status = "fetching"
 		c.deps.Log(fmt.Sprintf("[p2p][election] artifact=%s vencedor=remoto peer=%s",
 			artifactID, winner.AgentID))
 	}
@@ -210,15 +219,16 @@ func (c *Coordinator) runLocalElection(ctx context.Context, artifactID string) {
 // ─── Passo 5: Executar fetch quando eleito ──────────────────────────────────
 
 // executeFetch executa o download do artifact quando este peer é eleito fetcher.
+// A7: todas as mutações de estado passam por fetchStates.mutate (sob lock).
 func (c *Coordinator) executeFetch(ctx context.Context, artifactID string, artifactName string) {
 	clientID := strings.TrimSpace(c.deps.GetAgentConfiguration().ClientID)
 
 	c.deps.Log(fmt.Sprintf("[p2p][fetch] iniciando artifact=%s", artifactID))
 
-	state := c.fetchStates.getOrCreate(artifactID, clientID)
-	state.Status = "fetching"
-	state.ProgressPct = 0
-	c.fetchStates.set(artifactID, state)
+	c.fetchStates.mutate(artifactID, clientID, func(state *ArtifactFetchState) {
+		state.Status = "fetching"
+		state.ProgressPct = 0
+	})
 
 	// O artifactName pode ser um GUID de release (artifactID) em vez do nome do
 	// arquivo. Nesse caso, resolve o nome real a partir do índice de peers para
@@ -232,18 +242,31 @@ func (c *Coordinator) executeFetch(ctx context.Context, artifactID string, artif
 	// Tentar download via swarm (chunked de múltiplos peers)
 	view, err := c.DownloadArtifactSwarm(ctx, artifactName)
 
-	// Recuperar estado atualizado após o download (pode ter sido alterado por heartbeat)
-	state = c.fetchStates.getOrCreate(artifactID, clientID)
 	if err != nil {
-		state.Status = "failed"
-		c.fetchStates.set(artifactID, state)
-		c.deps.Log(fmt.Sprintf("[p2p][fetch] artifact=%s falhou: %s", artifactID, err.Error()))
+		// M12: backoff exponencial por falha consecutiva (1m, 2m, 4m, … teto 30m).
+		var failCount int
+		var next time.Time
+		c.fetchStates.mutate(artifactID, clientID, func(state *ArtifactFetchState) {
+			state.Status = "failed"
+			state.FailCount++
+			failCount = state.FailCount
+			backoff := time.Minute << (min(failCount-1, 5))
+			if backoff > 30*time.Minute {
+				backoff = 30 * time.Minute
+			}
+			state.NextAttemptUTC = time.Now().UTC().Add(backoff)
+			next = state.NextAttemptUTC
+		})
+		c.deps.Log(fmt.Sprintf("[p2p][fetch] artifact=%s falhou (tentativa %d): %s — próxima tentativa em %s", artifactID, failCount, err.Error(), next.UTC().Format(time.RFC3339)))
 		return
 	}
 
-	state.Status = "available"
-	state.ProgressPct = 100
-	c.fetchStates.set(artifactID, state)
+	c.fetchStates.mutate(artifactID, clientID, func(state *ArtifactFetchState) {
+		state.Status = "available"
+		state.ProgressPct = 100
+		state.FailCount = 0
+		state.NextAttemptUTC = time.Time{}
+	})
 
 	c.deps.Log(fmt.Sprintf("[p2p][fetch] artifact=%s concluido path=%s size=%d",
 		artifactID, view.ArtifactName, view.SizeBytes))
@@ -255,13 +278,19 @@ func (c *Coordinator) executeFetch(ctx context.Context, artifactID string, artif
 // Chamado periodicamente pelo loop principal do coordinator.
 func (c *Coordinator) runPendingElections(ctx context.Context) {
 	c.fetchStates.mu.Lock()
+	now := time.Now()
 	var pending []string
 	for artifactID, state := range c.fetchStates.states {
 		if state.Status == "missing" || state.Status == "failed" {
+			// M12: respeita o backoff de re-eleição (evita re-eleger e baixar
+			// a cada 60s indefinidamente um artifact que continua falhando).
+			if now.Before(state.NextAttemptUTC) {
+				continue
+			}
 			pending = append(pending, artifactID)
 		}
 		// Expirar leases antigos
-		if state.Status == "fetching" && time.Now().After(state.LeaseUntil) {
+		if state.Status == "fetching" && now.After(state.LeaseUntil) {
 			state.Status = "missing"
 			pending = append(pending, artifactID)
 		}

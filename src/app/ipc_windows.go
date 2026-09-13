@@ -108,11 +108,32 @@ func DecodeIPCMessage(r *bufio.Reader) (IPCMessage, error) {
 
 // ── Servidor (lado do serviço) ──────────────────────────────────────────────
 
+// ipcClientConn agrupa o estado por cliente conectado: o reader do read loop
+// e um mutex de escrita.
+//
+// B3: escritas de rede não podem competir na mesma conn (Broadcast concorrente
+// com RespondTo/hello_ack intercalaria writes parciais e corromperia o framing
+// JSON-lines). Cada conn tem seu próprio mutex de escrita — broadcasts não se
+// serializam entre conns (só writes na MESMA conn).
+type ipcClientConn struct {
+	reader  *bufio.Reader
+	writeMu sync.Mutex
+}
+
+// writeTo envia um frame para a conn com deadline, serializado por conn.
+func (c *ipcClientConn) writeTo(conn net.Conn, data []byte) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	conn.SetWriteDeadline(time.Now().Add(3 * time.Second))
+	_, err := conn.Write(data)
+	return err
+}
+
 // IPCServer escuta o pipe e distribui eventos do serviço para os clientes UI.
 type IPCServer struct {
 	listener net.Listener
 	mu       sync.Mutex
-	conns    map[net.Conn]*bufio.Reader
+	conns    map[net.Conn]*ipcClientConn
 	closed   atomic.Bool
 
 	// OnMessage é chamado para cada mensagem recebida da UI. A conn é
@@ -136,7 +157,7 @@ func StartIPCServer(onMessage func(net.Conn, IPCMessage)) *IPCServer {
 
 	s := &IPCServer{
 		listener:  l,
-		conns:     make(map[net.Conn]*bufio.Reader),
+		conns:     make(map[net.Conn]*ipcClientConn),
 		OnMessage: onMessage,
 	}
 	go s.acceptLoop()
@@ -171,24 +192,23 @@ func (s *IPCServer) handleConn(conn net.Conn) {
 		log.Printf("[ipc] UI desconectada")
 	}()
 
-	reader := bufio.NewReader(conn)
+	client := &ipcClientConn{reader: bufio.NewReader(conn)}
 	s.mu.Lock()
-	s.conns[conn] = reader
+	s.conns[conn] = client
 	s.mu.Unlock()
 
 	for {
 		if s.closed.Load() {
 			return
 		}
-		msg, err := DecodeIPCMessage(reader)
+		msg, err := DecodeIPCMessage(client.reader)
 		if err != nil {
 			return // EOF ou erro de parse — encerra a conexão
 		}
 		// hello é respondido DIRETAMENTE na conexão (o probe IsServicePresent
 		// espera hello_ack na mesma conexão antes de fechar).
 		if msg.Type == IPCMsgHello {
-			conn.SetWriteDeadline(time.Now().Add(3 * time.Second))
-			if _, err := conn.Write(EncodeIPCMessage(NewIPCMessage(IPCMsgHelloAck, map[string]any{
+			if err := client.writeTo(conn, EncodeIPCMessage(NewIPCMessage(IPCMsgHelloAck, map[string]any{
 				"service":  ServiceName,
 				"protocol": IPCProtocolVersion,
 			}))); err != nil {
@@ -206,6 +226,11 @@ func (s *IPCServer) handleConn(conn net.Conn) {
 // ficavam para sempre como zumbis, e cada broadcast subsequente gastava o
 // deadline de 3s tentando escrever nelas (log "broadcast falhou: i/o timeout"
 // em loop), atrasando a entrega às UIs vivas.
+//
+// B3: a escrita de rede acontece FORA de s.mu — antes, o lock global era
+// segurado durante todos os writes (até 3s por conn zumbi), serializando
+// broadcasts entre si e travando RespondTo/handshake. O mutex de escrita é
+// por conn (ipcClientConn.writeTo).
 func (s *IPCServer) Broadcast(msg IPCMessage) {
 	if s == nil {
 		return
@@ -214,20 +239,39 @@ func (s *IPCServer) Broadcast(msg IPCMessage) {
 	if data == nil {
 		return
 	}
+
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	for conn := range s.conns {
-		conn.SetWriteDeadline(time.Now().Add(3 * time.Second))
-		if _, err := conn.Write(data); err != nil {
+	clients := make([]*ipcClientConn, 0, len(s.conns))
+	conns := make([]net.Conn, 0, len(s.conns))
+	for conn, client := range s.conns {
+		conns = append(conns, conn)
+		clients = append(clients, client)
+	}
+	s.mu.Unlock()
+
+	var failed []net.Conn
+	for i, conn := range conns {
+		if err := clients[i].writeTo(conn, data); err != nil {
 			log.Printf("[ipc] broadcast falhou para %s (removendo): %v", conn.RemoteAddr(), err)
-			delete(s.conns, conn)
-			go conn.Close()
+			failed = append(failed, conn)
 		}
+	}
+	if len(failed) == 0 {
+		return
+	}
+	s.mu.Lock()
+	for _, conn := range failed {
+		delete(s.conns, conn)
+	}
+	s.mu.Unlock()
+	for _, conn := range failed {
+		go conn.Close()
 	}
 }
 
 // RespondTo envia uma mensagem diretamente a UM cliente (reply na conn de
 // origem). Usado pelo handler de status para responder à UI que pediu.
+// B3: serializa a escrita com broadcasts concorrentes via writeMu da conn.
 func (s *IPCServer) RespondTo(conn net.Conn, msg IPCMessage) {
 	if conn == nil {
 		return
@@ -236,8 +280,20 @@ func (s *IPCServer) RespondTo(conn net.Conn, msg IPCMessage) {
 	if data == nil {
 		return
 	}
-	conn.SetWriteDeadline(time.Now().Add(3 * time.Second))
-	if _, err := conn.Write(data); err != nil {
+	s.mu.Lock()
+	client, ok := s.conns[conn]
+	s.mu.Unlock()
+	if !ok {
+		// Conn já removida (desconectada) — write seria descartado de qualquer
+		// forma; mantemos o comportamento anterior de tentar escrever direto
+		// para não quebrar replies durante a desconexão.
+		conn.SetWriteDeadline(time.Now().Add(3 * time.Second))
+		if _, err := conn.Write(data); err != nil {
+			log.Printf("[ipc] reply falhou para %s: %v", conn.RemoteAddr(), err)
+		}
+		return
+	}
+	if err := client.writeTo(conn, data); err != nil {
 		log.Printf("[ipc] reply falhou para %s: %v", conn.RemoteAddr(), err)
 	}
 }
@@ -259,7 +315,7 @@ func (s *IPCServer) Close() {
 	for conn := range s.conns {
 		conn.Close()
 	}
-	s.conns = make(map[net.Conn]*bufio.Reader)
+	s.conns = make(map[net.Conn]*ipcClientConn)
 	s.mu.Unlock()
 }
 

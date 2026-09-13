@@ -52,10 +52,18 @@
             headers: { 'Content-Type': 'application/json' },
           };
 
-          // Se tem argumentos, faz POST com body JSON
-          if (args.length > 0 && args[0] !== undefined && args[0] !== null) {
+          // M18: bindings multi-argumento (AddTicketComment(id, author, body),
+          // AnswerChatQuestion(id, answer), CloseSupportTicket(id, ...)) tinham
+          // os argumentos além do primeiro descartados. Contrato:
+          //   1 argumento  → body = objeto direto (compat)
+          //   N argumentos → body = ARRAY com um elemento por parâmetro
+          //                  (o servidor multiparam faz o bind posicional).
+          if (args.length === 1) {
             fetchOpts.method = 'POST';
             fetchOpts.body = JSON.stringify(args[0]);
+          } else if (args.length > 1) {
+            fetchOpts.method = 'POST';
+            fetchOpts.body = JSON.stringify(args);
           }
 
           return fetch(API_BASE + methodName, fetchOpts)

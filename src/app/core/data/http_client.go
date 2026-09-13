@@ -36,6 +36,12 @@ const (
 
 // HTTPClient fetches the remote catalog with ETag/Last-Modified caching
 // and a body size limit.
+// minRevalidateInterval define a frequência mínima de revalidação remota
+// (ETag/If-Modified-Since) quando há cache em memória. Correção B9: o campo
+// cachedAt era escrito mas nunca lido — toda chamada disparava uma
+// revalidação de rede.
+const minRevalidateInterval = 5 * time.Minute
+
 type HTTPClient struct {
 	url    string
 	client *http.Client
@@ -46,6 +52,10 @@ type HTTPClient struct {
 	cachedETag string
 	cachedLM   string // Last-Modified header
 	cachedAt   time.Time
+
+	// inflightMu deduplica revalidações concorrentes (B9: sem single-flight,
+	// N chamadas simultâneas disparavam N revalidações de rede).
+	inflightMu sync.Mutex
 }
 
 func NewHTTPClient(url string, timeout time.Duration) *HTTPClient {
@@ -69,10 +79,20 @@ func (c *HTTPClient) GetCatalog(ctx context.Context) (models.Catalog, error) {
 		cached := *c.cachedData
 		etag := c.cachedETag
 		lm := c.cachedLM
+		cachedAt := c.cachedAt
 		c.mu.RUnlock()
 
-		if fresh, ok := c.tryRevalidateRemote(ctx, etag, lm); ok {
-			return fresh, nil
+		// B9: só revalida após minRevalidateInterval; chamadas dentro da
+		// janela servem o cache direto (zero rede). Revalidação concorrente
+		// é deduplicada (single-flight) — quem não conseguir o lock usa o
+		// cache em vez de enfileirar outra revalidação.
+		if time.Since(cachedAt) >= minRevalidateInterval {
+			if c.inflightMu.TryLock() {
+				defer c.inflightMu.Unlock()
+				if fresh, ok := c.tryRevalidateRemote(ctx, etag, lm); ok {
+					return fresh, nil
+				}
+			}
 		}
 		return cached, nil
 	}

@@ -397,7 +397,12 @@
   }
 
   refreshAll();
-  setInterval(function () {
+  // B17: guardava o handle — re-inicializacao da pagina (re-mount da view)
+  // acumulava intervals eternos. Limpa o anterior antes de criar o novo.
+  if (window.__p2pDebugRefreshTimer) {
+    clearInterval(window.__p2pDebugRefreshTimer);
+  }
+  window.__p2pDebugRefreshTimer = setInterval(function () {
     if (!document.hidden) {
       refreshAll();
     }

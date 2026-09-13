@@ -1,24 +1,25 @@
 package app
 
-// companion_controller.go — máquina de estados do fallback standalone da UI
-// companion (PLANO_SEPARACAO_SERVICO_UI.md §0.4 — item "companion.Controller
-// testável"). Extraída de startIPCClient (ipc_app_integration.go) para uma
-// struct independente de Wails, com dependências injetadas e clock/ticker
-// substituíveis — testável sem pipe real.
-//
-// Comportamento (inalterado):
-//   - Polling de status a cada PollInterval (5s): envia status ao serviço e
-//     zera o contador de falhas quando a escrita funciona.
-//   - Falha contínua por MaxFailures (60 × 5s = 5min) → assume core
-//     standalone (runStagedStartup) e encerra o loop — evita máquina sem
-//     agente quando o serviço é desinstalado/corrompido.
-//   - Encerra com o contexto da App (shutdown limpo).
-
 import (
 	"context"
 	"sync"
 	"time"
 )
+
+// companion_controller.go — máquina de estados do modo companion da UI
+// (PLANO_SEPARACAO_SERVICO_UI.md §0.4 — item "companion.Controller testável").
+// Extraída de startIPCClient (ipc_app_integration.go) para uma struct
+// independente de Wails, com dependências injetadas e clock/ticker
+// substituíveis — testável sem pipe real.
+//
+// Comportamento (M5 — SEM fallback standalone):
+//   - Polling de status a cada PollInterval (5s): envia status ao serviço e
+//     zera o contador de falhas quando a escrita funciona.
+//   - Falha contínua por MaxFailures (60 × 5s = 5min) → OnServiceLost UMA VEZ
+//     (estado "serviço ausente" na UI) e CONTINUA o polling — quando o
+//     serviço voltar, o SendStatus volta a funcionar e o fluxo normal retoma.
+//     A UI NUNCA assume core local (o core vive exclusivamente no serviço).
+//   - Encerra com o contexto da App (shutdown limpo).
 
 // CompanionTuner isola as ações que o Controller dispara — injetadas pela App.
 type CompanionTuner interface {
@@ -26,8 +27,8 @@ type CompanionTuner interface {
 	SendStatus() error
 	// OnServiceLost notifica a UI que o serviço sumiu (evento frontend).
 	OnServiceLost(reason string)
-	// OnFallbackStandalone assume o core na UI (runStagedStartup).
-	OnFallbackStandalone()
+	// OnServiceRecovered notifica a UI que o serviço voltou (M5: retoma estado).
+	OnServiceRecovered()
 }
 
 // CompanionConfig parametriza o Controller (defaults em DefaultCompanionConfig).
@@ -46,13 +47,14 @@ func DefaultCompanionConfig() CompanionConfig {
 	}
 }
 
-// CompanionController roda o polling de status + fallback standalone da UI
-// companion. Zero dependências de Wails/pipe: use FakeTuner em testes.
+// CompanionController roda o polling de status do modo companion.
+// Zero dependências de Wails/pipe: use FakeTuner em testes.
 type CompanionController struct {
 	tuner    CompanionTuner
 	cfg      CompanionConfig
 	mu       sync.Mutex
 	failures int
+	lost     bool // M5: evento de perda já notificado (não spamma a cada tick)
 	running  bool
 }
 
@@ -67,8 +69,9 @@ func NewDefaultCompanionController(tuner CompanionTuner) *CompanionController {
 }
 
 // Run executa o loop de polling até ctx.Done() ou stop. Bloqueante — rode em
-// goroutine. Cada tick: envia status; N falhas seguidas ≥ MaxFailures dispara
-// o fallback standalone e retorna.
+// goroutine. Cada tick: envia status; N falhas seguidas ≥ MaxFailures notifica
+// OnServiceLost (uma vez) e continua — M5: a UI espera o serviço voltar,
+// sem nunca assumir o core.
 func (c *CompanionController) Run(ctx context.Context, tickerC <-chan time.Time) {
 	c.mu.Lock()
 	if c.running {
@@ -92,17 +95,28 @@ func (c *CompanionController) Run(ctx context.Context, tickerC <-chan time.Time)
 				c.mu.Lock()
 				c.failures++
 				failed := c.failures
+				lost := c.lost
 				c.mu.Unlock()
 				if failed >= c.cfg.MaxFailures {
-					c.tuner.OnServiceLost(c.cfg.Reason)
-					c.tuner.OnFallbackStandalone()
-					return
+					if !lost {
+						c.mu.Lock()
+						c.lost = true
+						c.mu.Unlock()
+						c.tuner.OnServiceLost(c.cfg.Reason)
+					}
 				}
 				continue
 			}
 			c.mu.Lock()
+			wasLost := c.lost
 			c.failures = 0
+			c.lost = false
 			c.mu.Unlock()
+			if wasLost {
+				// Serviço voltou — a UI retoma o estado normal (o IPCClient
+				// reconecta pelo próprio RunConnectLoop; aqui apenas o evento).
+				c.tuner.OnServiceRecovered()
+			}
 		}
 	}
 }
@@ -121,9 +135,10 @@ func (t companionTunerAdapter) SendStatus() error {
 	return t.a.ipcClient.Send(NewIPCMessage(IPCMsgStatus, nil))
 }
 func (t companionTunerAdapter) OnServiceLost(reason string) {
+	t.a.Logs.Append("[ipc] serviço ausente por 5min — modo interface aguardando serviço (M5: sem fallback standalone)")
 	t.a.EmitEvent("service:companion_lost", map[string]any{"reason": reason})
 }
-func (t companionTunerAdapter) OnFallbackStandalone() {
-	t.a.Logs.Append("[ipc] serviço ausente por 5min — assumindo core standalone (fallback)")
-	t.a.runStagedStartup(t.a.ctx)
+func (t companionTunerAdapter) OnServiceRecovered() {
+	t.a.Logs.Append("[ipc] serviço voltou — modo companion retomado")
+	t.a.EmitEvent("service:companion_recovered", nil)
 }

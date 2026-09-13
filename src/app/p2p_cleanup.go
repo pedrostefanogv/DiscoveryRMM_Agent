@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"discovery/app/core/platform"
@@ -18,11 +19,19 @@ func resolveP2PTempDir(goos string) string {
 	return filepath.Join(GetDataDir(), "TempP2P")
 }
 
+// p2pTempDirEnsureOnce aplica a ACL do staging uma vez por processo (M13:
+// icacls.exe era spawnado em TODA chamada de p2pTempDir — inclusive sob
+// c.mu.RLock do GetStatus e a cada gossip tick de 45s).
+var p2pTempDirEnsureOnce sync.Once
+
 func (a *App) p2pTempDir() string {
 	dir := resolveP2PTempDir(runtime.GOOS)
-	// Garantir que o diretório exista e tenha permissão para todos os usuários
-	// da máquina (Windows: Everyone Full Control com herança; Linux: no-op).
-	_ = platform.EnsureWorldAccess(dir)
+	// Modelo seguro do staging (C7): SYSTEM/Administrators com Full Control
+	// (quem escreve/publica é o serviço) e Everyone com Read+Execute —
+	// usuários comuns podem ler/lançar instaladores, mas não alterá-los.
+	p2pTempDirEnsureOnce.Do(func() {
+		_ = platform.EnsureSharedStagingAccess(dir)
+	})
 	return dir
 }
 

@@ -406,8 +406,32 @@ func (a *App) serveDebugAPI(w http.ResponseWriter, r *http.Request) {
 		}
 		args = append(args, reflect.ValueOf(arg))
 	default:
-		a.writeAPIError(w, http.StatusBadRequest, "metodo com multiplos parametros nao suportado via API HTTP")
-		return
+		// M18: suporte a múltiplos parâmetros — o body é um ARRAY JSON com um
+		// elemento por parâmetro, na ordem de assinatura do método (o bridge
+		// HTTP do navegador envia o array completo; antes, multi-param era
+		// rejeitado e o client descartava argumentos além do primeiro).
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			a.writeAPIError(w, http.StatusBadRequest, "falha ao ler corpo da requisicao: "+err.Error())
+			return
+		}
+		var rawArgs []json.RawMessage
+		if err := json.Unmarshal(body, &rawArgs); err != nil {
+			a.writeAPIError(w, http.StatusBadRequest, "body de multi-argumentos deve ser um array JSON: "+err.Error())
+			return
+		}
+		if len(rawArgs) != mt.NumIn() {
+			a.writeAPIError(w, http.StatusBadRequest, fmt.Sprintf("numero de argumentos invalido para %s: recebido %d, esperado %d", methodName, len(rawArgs), mt.NumIn()))
+			return
+		}
+		for i, raw := range rawArgs {
+			arg, err := a.unmarshalAPIParam(string(raw), mt.In(i))
+			if err != nil {
+				a.writeAPIError(w, http.StatusBadRequest, fmt.Sprintf("parametro invalido para %s (indice %d): %s", methodName, i, err.Error()))
+				return
+			}
+			args = append(args, reflect.ValueOf(arg))
+		}
 	}
 
 	results := m.Call(args)

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -186,8 +187,73 @@ func Open(dataDir string) (*DB, error) {
 	return db, nil
 }
 
-// initialize cria as tabelas necessárias
+// currentSchemaVersion é a versão do schema do discovery.db (M8).
+//
+// Incrementar QUANDO houver mudança incompatível no schema (ALTER/DROP/tipo).
+// Mudanças puramente aditivas (tabela/índice novos via CREATE IF NOT EXISTS)
+// NÃO precisam incrementar — o schema idempotente já as aplica preservando
+// os dados.
+//
+// Política de dados (decisão do dono, M8): o discovery.db é CACHE descartável
+// (inventário, histórico de execuções, outboxes, memórias). Quando a versão
+// diverge da atual, o schema antigo é DESCARTADO e recriado do zero — o agente
+// reprocessa e repopula. Sem migrations incrementais para manter.
+const currentSchemaVersion = 2
+
+// initialize cria as tabelas necessárias, com versionamento de schema (M8).
 func (db *DB) initialize() error {
+	// ── Versionamento do schema (M8) ──
+	var schemaVersion int
+	if err := db.conn.QueryRow("PRAGMA user_version").Scan(&schemaVersion); err != nil {
+		return fmt.Errorf("erro ao ler PRAGMA user_version: %w", err)
+	}
+
+	if schemaVersion == currentSchemaVersion {
+		return db.initializeCurrent()
+	}
+
+	// Versão divergente (banco legado v1 sem user_version, ou schema anterior):
+	// os dados são cache descartável — descarta o schema antigo e recria na
+	// versão atual. O agente reprocessa/repopula o que precisa.
+	var tableCount int
+	if err := db.conn.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").Scan(&tableCount); err != nil {
+		return fmt.Errorf("erro ao inspecionar schema antigo: %w", err)
+	}
+	if tableCount > 0 {
+		rows, err := db.conn.Query("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+		if err != nil {
+			return fmt.Errorf("erro ao listar tabelas antigas: %w", err)
+		}
+		var oldTables []string
+		for rows.Next() {
+			var name string
+			if err := rows.Scan(&name); err == nil {
+				oldTables = append(oldTables, name)
+			}
+		}
+		rows.Close()
+		for _, name := range oldTables {
+			// Nomes vêm do sqlite_master (não são input de usuário); escapamos
+			// aspas duplas por rigor. O identificador não pode ser parametrizado.
+			safe := strings.ReplaceAll(name, `"`, `""`)
+			if _, err := db.conn.Exec(`DROP TABLE IF EXISTS "` + safe + `"`); err != nil {
+				return fmt.Errorf("erro ao descartar tabela antiga %s: %w", name, err)
+			}
+		}
+	}
+
+	if err := db.initializeCurrent(); err != nil {
+		return err
+	}
+	if _, err := db.conn.Exec(fmt.Sprintf("PRAGMA user_version = %d", currentSchemaVersion)); err != nil {
+		return fmt.Errorf("erro ao gravar user_version: %w", err)
+	}
+	return nil
+}
+
+// initializeCurrent cria o schema da versão atual (idempotente) e limpa o
+// cache expirado. Caller já validou a versão do schema.
+func (db *DB) initializeCurrent() error {
 	schema := `
 		CREATE TABLE IF NOT EXISTS cache (
 			key TEXT PRIMARY KEY,

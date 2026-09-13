@@ -196,6 +196,7 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 		height int
 		seq    uint64
 		rects  []screen.DirtyRect // dirty rects (modo tile); nil = frame completo
+		pooled bool               // frame veio do pool de frames (devolver após encode)
 	}
 
 	type frameResult struct {
@@ -224,6 +225,7 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 				tiles, err := screen.EncodeDirtyRects(job.frame, job.rects, quality)
 				if err != nil {
 					log.Printf("[remote-session-screen] ERRO encode tiles: %v\n", err)
+					screen.PutPooledFrame(job.frame)
 					continue
 				}
 				encoded = tiles
@@ -232,8 +234,14 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 				encoded, err = enc.Encode(job.frame, quality)
 				if err != nil {
 					log.Printf("[remote-session-screen] ERRO encode: %v\n", err)
+					screen.PutPooledFrame(job.frame)
 					continue
 				}
+			}
+			// Devolve o frame ao pool após o uso (otimização de churn de GC:
+			// o buffer ~8 MB é reciclado para o próximo copy em vez de novo make).
+			if job.pooled {
+				screen.PutPooledFrame(job.frame)
 			}
 			encMs := float64(time.Since(encStart).Microseconds()) / 1000.0
 			// Monta header binario (12 bytes) + payload (JPEG frame ou tiles)
@@ -471,14 +479,20 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 		// Precisamos copiar ANTES de enviar ao encode worker, pois o próximo
 		// AcquireNextFrame() sobrescreve c.img.Pix.
 		copyStart := time.Now()
+		jobPooled := false
 		if !ownsFrame {
-			frameCopy := &screen.Frame{
-				Data:   make([]byte, len(frame.Data)),
-				Width:  frame.Width,
-				Height: frame.Height,
-				Stride: frame.Stride,
+			// Pool de frames (otimização de churn de GC): o copy era um
+			// make([]byte, len) por frame (~8 MB @1080p a 30fps ≈ 250 MB/s).
+			// O encode worker devolve o frame ao pool após o encode.
+			frameCopy := screen.GetPooledFrame(frame.Width, frame.Height, frame.Stride)
+			if len(frameCopy.Data) != len(frame.Data) {
+				frameCopy.Data = frameCopy.Data[:len(frame.Data)]
 			}
 			copy(frameCopy.Data, frame.Data)
+			frameCopy.Width = frame.Width
+			frameCopy.Height = frame.Height
+			frameCopy.Stride = frame.Stride
+			jobPooled = true
 			cap.ReleaseFrame()
 			frame = frameCopy
 		}
@@ -521,10 +535,18 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 			height: frame.Height,
 			seq:    s.frameSeq,
 			rects:  jobRects,
+			pooled: jobPooled,
 		}:
 		case <-ctx.Done():
+			// Frame poolado não entregue: devolve ao pool.
+			if jobPooled {
+				screen.PutPooledFrame(frame)
+			}
 			return ctx.Err()
 		case <-s.stopCh:
+			if jobPooled {
+				screen.PutPooledFrame(frame)
+			}
 			return nil
 		}
 

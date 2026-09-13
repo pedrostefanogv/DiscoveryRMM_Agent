@@ -26,7 +26,13 @@ tasks:
       - cmd: rm -f *.syso
         platforms: [linux, darwin]
     vars:
-      BUILD_FLAGS: '{{if eq .PRODUCTION "true"}}-tags "desktop,production" -trimpath -buildvcs=false -ldflags="-w -s -H windowsgui"{{else}}-buildvcs=false -gcflags=all="-l"{{end}}'
+      # M25: injeta a versão/commit no buildinfo — sem isso o binário local
+      # ficava com Version "0.0.0" e o self-update podia entrar em loop
+      # (compara buildinfo.Version). Override via -a APP_VERSION=x.y.z.
+      APP_VERSION: '{{.APP_VERSION | default "0.0.0-dev"}}'
+      GIT_COMMIT:
+        sh: git rev-parse --short HEAD 2>/dev/null || echo unknown
+      BUILD_FLAGS: '{{if eq .PRODUCTION "true"}}-tags "desktop,production" -trimpath -buildvcs=false -ldflags="-w -s -H windowsgui -X discovery/app/core/buildinfo.Version={{.APP_VERSION}} -X discovery/app/core/buildinfo.Commit={{.GIT_COMMIT}}"{{else}}-buildvcs=false -gcflags=all="-l" -ldflags="-X discovery/app/core/buildinfo.Version={{.APP_VERSION}} -X discovery/app/core/buildinfo.Commit={{.GIT_COMMIT}}"{{end}}'
     env:
       GOOS: windows
       CGO_ENABLED: '1'
@@ -42,7 +48,8 @@ tasks:
     cmds:
       - go build {{.SERVICE_FLAGS}} -o {{.BIN_DIR}}/discovery-service.exe ./cmd/discovery-service
     vars:
-      SERVICE_FLAGS: '{{if eq .PRODUCTION "true"}}-trimpath -buildvcs=false -ldflags="-w -s"{{else}}-buildvcs=false{{end}}'
+      # M25: o serviço também carrega versão/commit (diagnóstico e self-update).
+      SERVICE_FLAGS: '{{if eq .PRODUCTION "true"}}-trimpath -buildvcs=false -ldflags="-w -s -X discovery/app/core/buildinfo.Version={{.APP_VERSION}} -X discovery/app/core/buildinfo.Commit={{.GIT_COMMIT}}"{{else}}-buildvcs=false{{end}}'
     env:
       GOOS: windows
       CGO_ENABLED: '1'

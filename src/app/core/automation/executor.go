@@ -2,6 +2,8 @@ package automation
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -142,6 +144,19 @@ func executeScript(ctx context.Context, task AutomationTask, customFields map[st
 	content := strings.TrimSpace(task.Script.Content)
 	if content == "" {
 		return ExecutionResult{Success: false, ExitCode: 2, ExitCodeSet: true, ErrorMessage: "conteudo do script nao disponivel; refaca o sync com IncludeScriptContent"}
+	}
+
+	// M30: verificação de integridade — o ContentHashSHA256 declarado pelo
+	// servidor era ignorado; um payload corrompido/adulterado executava igual.
+	// Algoritmo espelha o servidor (SHA256 do UTF8 do content cru, hex lower).
+	// Sem hash declarado (legado), executa e registra aviso via exit text.
+	if expected := strings.ToLower(strings.TrimSpace(task.Script.ContentHashSHA256)); expected != "" {
+		sum := sha256.Sum256([]byte(task.Script.Content))
+		actual := hex.EncodeToString(sum[:])
+		if !strings.EqualFold(actual, expected) {
+			return ExecutionResult{Success: false, ExitCode: 2, ExitCodeSet: true,
+				ErrorMessage: fmt.Sprintf("integridade do script falhou (sha256 divergente): esperado=%s... obtido=%s...", truncateHash(actual), truncateHash(expected))}
+		}
 	}
 
 	extraEnv := buildCustomFieldsEnv(customFields)
@@ -360,4 +375,13 @@ func parseTimeout(values ...any) time.Duration {
 		}
 	}
 	return 0
+}
+
+// truncateHash exibe os primeiros 12 chars de um hash em mensagens de erro
+// (helper do M30 — evita mensagem gigante e vazio/curto sem panic).
+func truncateHash(s string) string {
+	if len(s) <= 12 {
+		return s
+	}
+	return s[:12]
 }

@@ -822,8 +822,13 @@ func optionalStringPtr(value string) *string {
 
 func sanitizeToken(token string) string {
 	token = strings.TrimSpace(token)
+	if token == "" {
+		return ""
+	}
 	if len(token) <= 8 {
-		return token
+		// B1: token curto não pode ir inteiro para o log (o buffer persiste
+		// em arquivo) — mascara por completo em vez de devolver o valor.
+		return "***"
 	}
 	return token[:4] + "***" + token[len(token)-4:]
 }

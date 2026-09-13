@@ -57,6 +57,14 @@ func main() {
 	cleanupDeleteOnExit := hasStartupArg("--agent-delete-cleanup") || hasStartupArg("/agent-delete-cleanup") || hasStartupArg("-agent-delete-cleanup")
 
 	if cleanupDeleteOnExit {
+		// M6: o DELETE remoto do agente não pode ser disparado por qualquer
+		// usuário local via linha de comando (DoS de gestão — remove o agente
+		// do servidor). O fluxo legítimo é o desinstalador/NSIS elevado. A
+		// limpeza local de temps continua permitida.
+		if !platform.IsElevated() {
+			log.Printf("[decommission] ERRO: --agent-delete-cleanup requer execucao elevada (admin/SYSTEM); abortando")
+			os.Exit(1)
+		}
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 		defer cancel()
 		if err := appkg.RunAgentDecommissionCleanup(cleanupCtx); err != nil {

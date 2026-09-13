@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 )
 
@@ -76,6 +77,12 @@ type FileResponse struct {
 // Server gerencia transferencia de arquivos com sandboxing.
 type Server struct {
 	basePath string // diretorio raiz permitido
+
+	// M29: auditoria de operações mutantes (put/delete/rename/mkdir/move/copy/
+	// unzip) — injetada pela SessionFiles; log local + evento ao servidor quando
+	// habilitado (DISCOVERY_FILES_AUDIT, default on).
+	auditMu sync.RWMutex
+	audit   func(action, path, newPath string, ok bool, errMsg string)
 	// progressFn é chamado durante operações longas (copy/move/zip) para
 	// reportar progresso (bytes processados / total). Pode ser nil.
 	progressFn func(loaded, total int64)
@@ -154,6 +161,13 @@ func (s *Server) dispatch(action, path, newPath string, data []byte, chunkIndex 
 		resp = s.handleUnzip(path, newPath)
 	default:
 		resp = s.errorResponse("", "acao desconhecida: "+action)
+	}
+
+	// M29: auditoria das operações mutantes (log local + evento ao servidor via
+	// SessionFiles; gate DISCOVERY_FILES_AUDIT, default on).
+	switch action {
+	case "put", "delete", "rename", "mkdir", "move", "copy", "unzip":
+		s.auditOperation(action, path, newPath, resp)
 	}
 	return resp
 }
@@ -834,6 +848,11 @@ func zipDirProgress(zw *zip.Writer, dir, base string, loaded *int64, total int64
 		srcPath := filepath.Join(dir, entry.Name())
 		name := filepath.Join(base, entry.Name())
 		if entry.IsDir() {
+			// M28: não segue junctions/symlinks ao zipar — um junction em ciclo
+			// (ex.: C:...a -> C:...) causava recursão infinita no zip.
+			if info, err := entry.Info(); err == nil && isReparsePoint(info) {
+				continue
+			}
 			if _, err := zipDirProgress(zw, srcPath, name, loaded, total, report); err != nil {
 				return *loaded, err
 			}
@@ -847,6 +866,8 @@ func zipDirProgress(zw *zip.Writer, dir, base string, loaded *int64, total int64
 }
 
 // dirSize soma o tamanho de todos os arquivos dentro de um diretorio (recursivo).
+// M28: filepath.Walk NÃO segue symlinks para diretórios (já seguro); não usa
+// isReparsePoint porque Walk entrega info do próprio link — preservado.
 func dirSize(dir string) int64 {
 	var total int64
 	_ = filepath.Walk(dir, func(_ string, info os.FileInfo, err error) error {
@@ -974,6 +995,11 @@ func copyDir(src, dst string, loaded *int64, total int64, report func(int64, int
 		srcPath := filepath.Join(src, entry.Name())
 		dstPath := filepath.Join(dst, entry.Name())
 		if entry.IsDir() {
+			// M28: não segue junctions/symlinks ao copiar — recursão infinita
+			// em ciclos de junction (e cópia fora do sandbox via link).
+			if info, err := entry.Info(); err == nil && isReparsePoint(info) {
+				continue
+			}
 			if err := copyDir(srcPath, dstPath, loaded, total, report); err != nil {
 				return err
 			}
@@ -990,3 +1016,28 @@ func copyDir(src, dst string, loaded *int64, total int64, report func(int64, int
 var _ = fmt.Println
 var _ = os.DevNull
 var _ = filepath.Separator
+
+// SetAuditHook injeta o callback de auditoria (M29). O callback recebe a
+// ação, os caminhos e o resultado da operação. Chame com nil para desabilitar.
+func (s *Server) SetAuditHook(hook func(action, path, newPath string, ok bool, errMsg string)) {
+	s.auditMu.Lock()
+	defer s.auditMu.Unlock()
+	s.audit = hook
+}
+
+// filesAuditEnabled lê o gate DISCOVERY_FILES_AUDIT (default on).
+func filesAuditEnabled() bool {
+	v := strings.TrimSpace(strings.ToLower(os.Getenv("DISCOVERY_FILES_AUDIT")))
+	return v != "0" && v != "false" && v != "off"
+}
+
+// auditLocked/actionAudit emite a auditoria de uma operação mutante (M29).
+func (s *Server) auditOperation(action, path, newPath string, resp FileSessionResponse) {
+	s.auditMu.RLock()
+	hook := s.audit
+	s.auditMu.RUnlock()
+	if hook == nil || !filesAuditEnabled() {
+		return
+	}
+	hook(action, path, newPath, resp.Success, resp.Error)
+}

@@ -32,6 +32,9 @@ func (c *Coordinator) replicateArtifactToPeerNow(ctx context.Context, artifactNa
 			defer cancel()
 			stream, serr := h.NewStream(streamCtx, lpID, protoArtifactReplicate)
 			if serr == nil {
+				// M11: deadline do stream — antes, encode/decode podiam travar
+				// para sempre se o peer congelasse (o ctx limita só o NewStream).
+				_ = stream.SetDeadline(time.Now().Add(10 * time.Second))
 				req := libp2pReplicateRequest{
 					ArtifactName:   access.ArtifactName,
 					ChecksumSHA256: access.ChecksumSHA256,
@@ -50,6 +53,12 @@ func (c *Coordinator) replicateArtifactToPeerNow(ctx context.Context, artifactNa
 				}
 				if closeErr := stream.Close(); closeErr != nil {
 					c.deps.Log("[p2p] aviso ao fechar stream de replicação: " + closeErr.Error())
+				}
+				// M11: Gone = peer não tem mais o artifact — NÃO é sucesso.
+				// Era tratado como sucesso (métrica subia, dedup sem transferência).
+				if resp.Gone {
+					c.recordReplicationResult(false)
+					return fmt.Errorf("replicação: peer %s não possui mais o artifact (%s)", targetPeerID, strings.TrimSpace(resp.Message))
 				}
 				c.recordReplicationResult(true)
 				return nil

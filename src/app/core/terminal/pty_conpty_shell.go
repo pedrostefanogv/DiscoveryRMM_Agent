@@ -131,11 +131,24 @@ func NewConPTYShell(shell ShellKind, cols, rows int, onOutput func(string)) (*Co
 
 func resolveShellCommand(shell ShellKind) (exe string, args []string) {
 	if IsWSL(shell) {
-		distro := ShellKindToWSLDistro(shell)
-		if distro != "" {
-			return "wsl.exe", []string{"-d", distro}
+		distro := strings.TrimSpace(ShellKindToWSLDistro(shell))
+		if distro == "" {
+			return "wsl.exe", nil
 		}
-		return "wsl.exe", nil
+		// A14: distro vem do servidor (campo shell da sessão) sem validação
+		// e antes era concatenada na command line ("wsl:Ubuntu --exec cmd
+		// /c whoami" → RCE). Camadas de defesa:
+		//   1) charset restrito (IsValidWSLDistro) — rejeita flags/metas;
+		//   2) quando a lista de distros instaladas está disponível, aceita
+		//      apenas distros existentes na máquina;
+		//   3) quoting do argumento em buildCommandLine (espaços legítimos).
+		if !IsValidWSLDistro(distro) {
+			return "wsl.exe", nil // fallback seguro: distribuição default
+		}
+		if _, installed := IsWSLAvailable(); len(installed) > 0 && !containsFold(installed, distro) {
+			return "wsl.exe", nil // distro não instalada → default
+		}
+		return "wsl.exe", []string{"-d", distro}
 	}
 
 	switch shell {
@@ -150,12 +163,33 @@ func resolveShellCommand(shell ShellKind) (exe string, args []string) {
 	}
 }
 
-func buildCommandLine(exePath string, args []string) *uint16 {
-	s := fmt.Sprintf(`"%s"`, exePath)
-	if len(args) > 0 {
-		s += " " + strings.Join(args, " ")
+// containsFold compara ignorando case (helper local para a allowlist WSL).
+func containsFold(list []string, want string) bool {
+	for _, item := range list {
+		if strings.EqualFold(strings.TrimSpace(item), strings.TrimSpace(want)) {
+			return true
+		}
 	}
-	return syscall.StringToUTF16Ptr(s)
+	return false
+}
+
+// buildCommandLine monta a command line para CreateProcessW. Argumentos que
+// contêm espaço são entre aspas (A14: a distro WSL pode ter espaço legítimo,
+// ex.: "Ubuntu 22.04 LTS", e não pode virar dois argumentos).
+func buildCommandLine(exePath string, args []string) *uint16 {
+	var b strings.Builder
+	fmt.Fprintf(&b, `%s`, "\""+exePath+"\"")
+	for _, a := range args {
+		b.WriteString(" ")
+		if strings.ContainsAny(a, " \t") {
+			b.WriteString("\"")
+			b.WriteString(a)
+			b.WriteString("\"")
+		} else {
+			b.WriteString(a)
+		}
+	}
+	return syscall.StringToUTF16Ptr(b.String())
 }
 
 // ── CreateProcess via CreateProcessW ──

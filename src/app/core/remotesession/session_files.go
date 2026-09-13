@@ -27,10 +27,28 @@ func NewSessionFiles(sessionID string, natsStream *NatsStreamHandler, rootPath s
 	if rootPath == "" {
 		rootPath = "C:\\"
 	}
+	srv := fileserver.NewServer(rootPath)
+	// M29: auditoria das operações mutantes de arquivo — log local + evento ao
+	// servidor via subject de eventos da sessão (quando habilitado via
+	// DISCOVERY_FILES_AUDIT, default on).
+	srv.SetAuditHook(func(action, path, newPath string, ok bool, errMsg string) {
+		log.Printf("[session-files][audit] action=%s path=%q newPath=%q ok=%t err=%q",
+			action, path, newPath, ok, errMsg)
+		if natsStream != nil {
+			natsStream.PublishEvent(sessionID, "files_audit", map[string]any{
+				"action":   action,
+				"path":     path,
+				"newPath":  newPath,
+				"ok":       ok,
+				"error":    errMsg,
+				"auditUtc": time.Now().UTC().Format(time.RFC3339),
+			})
+		}
+	})
 	return &SessionFiles{
 		sessionID:  sessionID,
 		natsStream: natsStream,
-		server:     fileserver.NewServer(rootPath),
+		server:     srv,
 		stopCh:     make(chan struct{}),
 		doneCh:     make(chan struct{}),
 	}

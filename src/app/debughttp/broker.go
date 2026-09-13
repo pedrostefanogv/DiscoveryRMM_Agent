@@ -70,6 +70,8 @@ func (b *ChatEventBroker) Publish(eventType, data string) {
 		case ch <- line:
 		default:
 			// descarta se inscrito estiver lento (buffer cheio)
+			// B5: contabiliza a queda — antes a métrica ficava sempre em 0.
+			atomic.AddInt64(&b.pollDropped, 1)
 		}
 	}
 	b.mu.RUnlock()

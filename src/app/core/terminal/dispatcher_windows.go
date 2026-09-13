@@ -10,8 +10,10 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unsafe"
 
 	"github.com/Microsoft/go-winio"
+	"golang.org/x/sys/windows"
 )
 
 // ── Dispatcher do terminal — executa o ConPTY num processo filho ──
@@ -58,6 +60,12 @@ func RunDispatcher() {
 		log.Printf("[term-dispatcher] args invalidos: session vazio ou shell vazio (%v)", args[1:])
 		os.Exit(1)
 	}
+
+	// B23: monitor de morte do pai — sem isso, se o agente crashar ANTES de
+	// conectar nos pipes, o dispatcher fica órfão em Accept() eterno, zumbi
+	// segurando os named pipes da sessão (a cada crash do agente). Detecta o
+	// PID do pai via Toolhelp32 e encerra o processo quando o handle sinalizar.
+	startParentDeathMonitor()
 
 	inPipe := fmt.Sprintf(`\\.\pipe\discovery-term-%s-in`, session)
 	outPipe := fmt.Sprintf(`\\.\pipe\discovery-term-%s-out`, session)
@@ -179,4 +187,54 @@ func RunDispatcher() {
 func DispatchersAvailable() bool {
 	v := strings.ToLower(strings.TrimSpace(os.Getenv("DISCOVERY_TERM_DISPATCHER")))
 	return v == "1" || v == "true" || v == "yes"
+}
+
+// ── B23: monitor de morte do processo pai ──────────────────────────────────
+
+// parentPID descobre o PID do processo pai via Toolhelp32Snapshot
+// (CreateToolhelp32Snapshot + Process32First/Next). Retorna 0 se não achou.
+func parentPID() uint32 {
+	snapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
+	if err != nil {
+		return 0
+	}
+	defer windows.CloseHandle(snapshot)
+
+	self := windows.GetCurrentProcessId()
+	var entry windows.ProcessEntry32
+	entry.Size = uint32(unsafe.Sizeof(entry))
+	if err := windows.Process32First(snapshot, &entry); err != nil {
+		return 0
+	}
+	for {
+		if entry.ProcessID == self {
+			return entry.ParentProcessID
+		}
+		if err := windows.Process32Next(snapshot, &entry); err != nil {
+			return 0
+		}
+	}
+}
+
+// startParentDeathMonitor lança a goroutine que encerra o dispatcher quando
+// o processo pai morrer (B23). Best-effort: falha ao abrir o handle não
+// bloqueia o dispatcher (comportamento antigo).
+func startParentDeathMonitor() {
+	ppid := parentPID()
+	if ppid == 0 {
+		log.Printf("[term-dispatcher] aviso: PID do pai nao identificado — monitor de morte desativado")
+		return
+	}
+	h, err := windows.OpenProcess(windows.SYNCHRONIZE, false, ppid)
+	if err != nil {
+		// Pai já saiu ou sem acesso — nada a monitorar.
+		log.Printf("[term-dispatcher] pai (pid=%d) indisponivel para monitor: %v — encerrando", ppid, err)
+		os.Exit(0)
+	}
+	go func() {
+		_, _ = windows.WaitForSingleObject(h, windows.INFINITE)
+		_ = windows.CloseHandle(h)
+		log.Printf("[term-dispatcher] processo pai (pid=%d) morreu — dispatcher encerrando (B23)", ppid)
+		os.Exit(0)
+	}()
 }

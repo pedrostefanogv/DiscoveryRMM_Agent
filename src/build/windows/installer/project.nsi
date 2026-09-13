@@ -217,7 +217,11 @@ Var InstallerLogFile
          FileWrite $R9 "Date: $2/$1/$0 $4:$5:$6$\r$\n"
          FileWrite $R9 "Version: ${INFO_PRODUCTVERSION}$\r$\n"
          FileWrite $R9 "InstallDir: $INSTDIR$\r$\n"
-         FileWrite $R9 "CommandLine: $CMDLINE$\r$\n"
+         # A13: $CMDLINE pode conter /KEY=<chave do servidor> — nunca gravar
+         # em texto plano no installer.log (diretório acessível a Users).
+         # Logamos as flags estruturadas (sem segredos) para diagnóstico.
+         FileWrite $R9 "CommandLine: (oculta — A13: nunca logar /KEY em claro)$\r$\n"
+         FileWrite $R9 "Flags: URL='$ServerUrl' AP='$AutoProvisioning' MINIMAL='$MinimalMode' UPDATE='$UpdateMode' GENERIC='$GenericMode' KEY=<oculta>$\r$\n"
          FileWrite $R9 "=========================================$\r$\n"
          FileClose $R9
       ${EndIf}
@@ -424,6 +428,16 @@ Function .onInit
    ${GetOptions} $R0 "/PU=" $R1
    ${If} $R1 != ""
       StrCpy $PayloadUrl $R1
+   ${EndIf}
+
+   # A12: PAYLOAD_URL (override de runtime) aceita APENAS https:// —
+   # "bootstrap.exe /PU=http://evil/x.exe" baixava e executava como admin.
+   ${If} $PayloadUrl != ""
+      StrCpy $R2 "$PayloadUrl" 8
+      ${If} $R2 != "https://"
+         MessageBox MB_ICONSTOP "PAYLOAD_URL invalida: apenas https:// e aceito."
+         Abort
+      ${EndIf}
    ${EndIf}
 
    # Parse AUTO_PROVISIONING (0 ou 1) - chave canonica para zero-touch provisioning.
@@ -1038,7 +1052,10 @@ Function DownloadAndRunStage2
             Abort
          ${EndIf}
       ${Else}
-         DetailPrint "Aviso: nao foi possivel validar integridade (SHA256 endpoint indisponivel). Prosseguindo..."
+         # A12: sem hash válido NÃO executa o stage2 (baixado da mesma origem
+         # do payload — verificação auto-referencial não é prova de integridade).
+         MessageBox MB_ICONSTOP "Integridade do payload nao pode ser validada (endpoint SHA256 indisponivel e hash estatico ausente). Instalacao abortada por seguranca."
+         Abort
       ${EndIf}
    ${Else}
       DetailPrint "Validando integridade SHA256 do payload..."

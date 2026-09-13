@@ -1,10 +1,13 @@
 package netproxy
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -36,19 +39,61 @@ type ProxyResponse struct {
 
 // NewProxy cria um novo proxy de rede.
 func NewProxy(allowlist *Allowlist, maxBytes int64) *Proxy {
-	return &Proxy{
+	p := &Proxy{
 		allowlist: allowlist,
-		client: &http.Client{
-			Timeout: 30 * time.Second,
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				if len(via) >= 5 {
-					return fmt.Errorf("too many redirects")
-				}
-				return nil
-			},
-		},
-		maxBytes: maxBytes,
+		maxBytes:  maxBytes,
 	}
+	p.client = &http.Client{
+		Timeout: 30 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return fmt.Errorf("too many redirects")
+			}
+			// M7: cada salto de redirect é revalidado contra a allowlist —
+			// antes o redirect podia apontar para qualquer host (SSRF pivot).
+			nextHost, nextPort := extractHostPort(req.URL.String())
+			if !allowlist.IsAllowed(nextHost, nextPort) {
+				return fmt.Errorf("redirect bloqueado pela allowlist: %s:%d", nextHost, nextPort)
+			}
+			return nil
+		},
+		// M7: dialer que resolve e valida o IP efetivo ANTES de dialar — fecha
+		// o TOCTOU em que a allowlist validava o hostname e o client re-resolvia
+		// (DNS podia responder IP fora da allowlist na conexão real).
+		Transport: &http.Transport{
+			DialContext: p.dialAllowed,
+		},
+	}
+	return p
+}
+
+// dialAllowed resolve o host do endereço e diala SOMENTE um IP validado na
+// allowlist (M7: DNS TOCTOU). O hostname é preservado para Host header/SNI TLS.
+func (p *Proxy) dialAllowed(ctx context.Context, network, addr string) (net.Conn, error) {
+	host, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, fmt.Errorf("endereco invalido %q: %w", addr, err)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return nil, fmt.Errorf("porta invalida %q", portStr)
+	}
+	if !p.allowlist.IsAllowed(host, port) {
+		return nil, fmt.Errorf("acesso bloqueado pela allowlist: %s:%d", host, port)
+	}
+	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil || len(ips) == 0 {
+		return nil, fmt.Errorf("resolver %s: %v", host, err)
+	}
+	var dialer net.Dialer
+	dialer.Timeout = 10 * time.Second
+	for _, ipa := range ips {
+		if !p.allowlist.ContainsIP(ipa.IP) {
+			continue
+		}
+		return dialer.DialContext(ctx, network, net.JoinHostPort(ipa.IP.String(), portStr))
+	}
+	return nil, fmt.Errorf("nenhum IP de %s dentro da allowlist", host)
 }
 
 // HandleRequest processa uma requisicao de proxy do viewer.

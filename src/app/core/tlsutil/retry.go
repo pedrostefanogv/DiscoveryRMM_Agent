@@ -87,14 +87,16 @@ func (rt *retryRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 		resp, err := rt.base.RoundTrip(req)
 		if err != nil {
 			lastErr = err
-			if !isRetryableError(err) {
+			if !isRetryableError(err) || !isRetryableMethod(req) {
 				return nil, err
 			}
 			continue
 		}
 
-		// Retry on server errors (5xx) and 429 Too Many Requests
-		if resp.StatusCode >= 500 || resp.StatusCode == 429 {
+		// Retry on server errors (5xx) and 429 Too Many Requests.
+		// B10: apenas para métodos idempotentes — re-aplicar POST/PUT em
+		// erros transitórios podia duplicar a submissão no servidor.
+		if (resp.StatusCode >= 500 || resp.StatusCode == 429) && isRetryableMethod(req) {
 			resp.Body.Close()
 			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
 			continue
@@ -117,4 +119,19 @@ func backoffDuration(attempt int, base, max time.Duration) time.Duration {
 func isRetryableError(err error) bool {
 	// Connection errors are always retryable
 	return err != nil
+}
+
+// isRetryableMethod retorna true apenas para métodos idempotentes, nos quais
+// re-aplicar a requisição é seguro (B10). GET e HEAD são idempotentes por
+// definição; POST/PUT/PATCH/DELETE não são re-aplicados.
+func isRetryableMethod(req *http.Request) bool {
+	if req == nil {
+		return false
+	}
+	switch req.Method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return true
+	default:
+		return false
+	}
 }

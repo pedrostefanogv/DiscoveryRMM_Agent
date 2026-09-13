@@ -4,6 +4,7 @@ package screen
 
 import (
 	"fmt"
+	"sync"
 	"syscall"
 	"unsafe"
 )
@@ -36,40 +37,56 @@ var (
 	procGetMonitorInfoW     = user32.NewProc("GetMonitorInfoW")
 )
 
+// enumMonitorsCallback é criado UMA VEZ por processo (M27: syscall.NewCallback
+// registra um callback PERMANENTE no runtime, limite ~2000/processo — era
+// chamado a cada re-detecção de geometria do GDI (a cada 5s), esgotando os
+// slots em ~2-3h de sessão contínua e crashando o processo).
+var enumMonitorsCallback = syscall.NewCallback(func(hMonitor, _ uintptr, _, _ uintptr) uintptr {
+	mi := monitorInfo{cbSize: uint32(unsafe.Sizeof(monitorInfo{}))}
+	ret, _, _ := procGetMonitorInfoW.Call(hMonitor, uintptr(unsafe.Pointer(&mi)))
+	if ret == 0 {
+		return 1 // continua enumeração
+	}
+
+	m := Monitor{
+		Width:  int(mi.rcMonitor.Right - mi.rcMonitor.Left),
+		Height: int(mi.rcMonitor.Bottom - mi.rcMonitor.Top),
+		X:      int(mi.rcMonitor.Left),
+		Y:      int(mi.rcMonitor.Top),
+	}
+	if mi.dwFlags&MONITORINFOF_PRIMARY != 0 {
+		m.IsPrimary = true
+	}
+	monitorsAccumMu.Lock()
+	monitorsAccum = append(monitorsAccum, m)
+	monitorsAccumMu.Unlock()
+	return 1 // TRUE — continua
+})
+
+// monitorsAccum é o acumulador do callback único (protegido por mutex: o
+// callback pode ser chamado de goroutines distintas em momentos diferentes).
+var monitorsAccumMu sync.Mutex
+var monitorsAccum []Monitor
+
 // GetMonitors retorna a lista de monitores conectados via EnumDisplayMonitors.
 // Ordena com o primário primeiro (índice 0 = primário, compatível com o capturer).
 func GetMonitors() ([]Monitor, error) {
-	var monitors []Monitor
+	// Zera o acumulador do callback único antes da enumeração.
+	monitorsAccumMu.Lock()
+	monitorsAccum = monitorsAccum[:0]
+	monitorsAccumMu.Unlock()
 
-	// EnumDisplayMonitors chama o callback para cada monitor.
-	// callback: func(hMonitor, hdcMonitor, lprcClip, dwData) BOOL
-	callback := syscall.NewCallback(func(hMonitor, _ uintptr, _, _ uintptr) uintptr {
-		mi := monitorInfo{cbSize: uint32(unsafe.Sizeof(monitorInfo{}))}
-		ret, _, _ := procGetMonitorInfoW.Call(hMonitor, uintptr(unsafe.Pointer(&mi)))
-		if ret == 0 {
-			return 1 // continua enumeração
-		}
-
-		m := Monitor{
-			Width:  int(mi.rcMonitor.Right - mi.rcMonitor.Left),
-			Height: int(mi.rcMonitor.Bottom - mi.rcMonitor.Top),
-			X:      int(mi.rcMonitor.Left),
-			Y:      int(mi.rcMonitor.Top),
-		}
-		if mi.dwFlags&MONITORINFOF_PRIMARY != 0 {
-			m.IsPrimary = true
-		}
-		monitors = append(monitors, m)
-		return 1 // TRUE — continua
-	})
-
-	ret, _, _ := procEnumDisplayMonitors.Call(0, 0, callback, 0)
+	ret, _, _ := procEnumDisplayMonitors.Call(0, 0, enumMonitorsCallback, 0)
 	if ret == 0 {
 		return nil, fmt.Errorf("EnumDisplayMonitors falhou")
 	}
-	if len(monitors) == 0 {
+	monitorsAccumMu.Lock()
+	if len(monitorsAccum) == 0 {
+		monitorsAccumMu.Unlock()
 		return nil, fmt.Errorf("nao foi possivel detectar monitores")
 	}
+	monitors := append([]Monitor(nil), monitorsAccum...)
+	monitorsAccumMu.Unlock()
 
 	// Move o primário para o índice 0 (capturer usa índice 0 = primário por padrão).
 	sorted := make([]Monitor, 0, len(monitors))

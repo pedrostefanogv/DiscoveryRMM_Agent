@@ -18,6 +18,22 @@ type userLoginEvent struct {
 	UserName  string
 }
 
+// Constantes WTS (winuser.h / wtsapi32.h).
+// Correção A17: o registro usava NOTIFY_FOR_THIS_SESSION (0) — para um
+// serviço precisamos de NOTIFY_FOR_ALL_SESSIONS (1) — e o filtro esperava
+// WM_USER+1 (0x0401), mas notificações WTS chegam como
+// WM_WTSSESSION_CHANGE (0x02B1). Resultado: o watcher "registrava com
+// sucesso" e NUNCA disparava (TriggerOnUserLogin por evento real inoperante).
+const (
+	notifyForThisSession uint32 = 0x0
+	notifyForAllSessions uint32 = 0x1
+
+	wmWtsSessionChange uint32 = 0x02B1 // WM_WTSSESSION_CHANGE
+
+	wtsSessionLogon  uintptr = 0x1 // WTS_SESSION_LOGON (WParam)
+	wtsSessionLogoff uintptr = 0x2 // WTS_SESSION_LOGOFF (WParam)
+)
+
 // startUserLoginWatcher registra WTSRegisterSessionNotification e escuta mensagens de sessão
 // em uma message loop dedicada. Retorna um canal de eventos e uma função de cleanup.
 // Em caso de falha no registro (ex.: serviço sem acesso a winsta), retorna canal nil —
@@ -28,7 +44,9 @@ func startUserLoginWatcher(ctx context.Context) (<-chan userLoginEvent, func()) 
 		return nil, func() {}
 	}
 
-	if !wtsRegisterSessionNotification(hwnd, 0) { // NOTIFY_FOR_THIS_SESSION = 0
+	// NOTIFY_FOR_ALL_SESSIONS: o serviço (sessão 0) precisa receber eventos de
+	// TODAS as sessões, não apenas da própria (que não tem sessão interativa).
+	if !wtsRegisterSessionNotification(hwnd, notifyForAllSessions) {
 		destroyWindow(hwnd)
 		return nil, func() {}
 	}
@@ -54,9 +72,9 @@ func startUserLoginWatcher(ctx context.Context) (<-chan userLoginEvent, func()) 
 			if ret == 0 || ret == 0xFFFFFFFF {
 				return
 			}
-			if msg.Message == 0x0400+1 { // WM_USER+1 = WTS session change
+			if msg.Message == wmWtsSessionChange { // WM_WTSSESSION_CHANGE (0x02B1)
 				// wParam: WTS_SESSION_LOGON (1) / WTS_SESSION_LOGOFF (2); lParam: sessionId
-				if msg.WParam == 1 { // WTS_SESSION_LOGON
+				if msg.WParam == wtsSessionLogon { // WTS_SESSION_LOGON
 					select {
 					case events <- userLoginEvent{SessionID: uint32(msg.LParam)}:
 					default: // não bloqueia se ninguém consumir

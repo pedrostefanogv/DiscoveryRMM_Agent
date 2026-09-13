@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -61,7 +62,8 @@ func TestHTTPClient_GetCatalog_304NotModified(t *testing.T) {
 		t.Fatalf("first call: %v", err)
 	}
 
-	// Second call — should get 304
+	// Second call DENTRO da janela de revalidação (B9) — serve o cache sem
+	// tocar na rede.
 	result, err := client.GetCatalog(context.Background())
 	if err != nil {
 		t.Fatalf("second call: %v", err)
@@ -69,8 +71,23 @@ func TestHTTPClient_GetCatalog_304NotModified(t *testing.T) {
 	if result.Count != 1 {
 		t.Errorf("cached Count = %d, want 1", result.Count)
 	}
+	if calls != 1 {
+		t.Errorf("server calls = %d, want 1 (B9: cache fresco não revalida)", calls)
+	}
+
+	// Expira a janela em memória → a próxima chamada revalida (304).
+	client.mu.Lock()
+	client.cachedAt = time.Now().Add(-minRevalidateInterval - time.Second)
+	client.mu.Unlock()
+	result, err = client.GetCatalog(context.Background())
+	if err != nil {
+		t.Fatalf("third call: %v", err)
+	}
+	if result.Count != 1 {
+		t.Errorf("cached-after-304 Count = %d, want 1", result.Count)
+	}
 	if calls != 2 {
-		t.Errorf("server calls = %d, want 2", calls)
+		t.Errorf("server calls = %d, want 2 (revalidou após expirar janela)", calls)
 	}
 }
 
@@ -174,5 +191,48 @@ func TestHTTPClient_GetCatalog_NetworkError_ReturnsCached(t *testing.T) {
 	}
 	if result.Count != 3 {
 		t.Errorf("cached Count = %d, want 3", result.Count)
+	}
+}
+
+// TestHTTPClient_GetCatalog_SingleFlight valida o single-flight do B9:
+// chamadas concorrentes dentro da janela não multiplicam revalidações.
+func TestHTTPClient_GetCatalog_SingleFlight(t *testing.T) {
+	calls := 0
+	catalog := models.Catalog{Count: 3, Packages: []models.AppItem{{ID: "x", Name: "X"}}}
+	body, _ := json.Marshal(catalog)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("ETag", `"sf-etag"`)
+		w.Write(body)
+	}))
+	defer srv.Close()
+
+	client := NewHTTPClient(srv.URL, 5*time.Second)
+
+	// Primeira chamada: fetch completo (cache vazio).
+	if _, err := client.GetCatalog(context.Background()); err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+
+	// Expira a janela para forçar revalidação nas chamadas seguintes.
+	client.mu.Lock()
+	client.cachedAt = time.Now().Add(-minRevalidateInterval - time.Second)
+	client.mu.Unlock()
+
+	// Chamadas concorrentes: com single-flight, apenas 1 revalidação extra.
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = client.GetCatalog(context.Background())
+		}()
+	}
+	wg.Wait()
+
+	// 1 inicial + no máximo 1 revalidação (deduplicada).
+	if calls > 2 {
+		t.Errorf("server calls = %d, want <= 2 (single-flight B9)", calls)
 	}
 }

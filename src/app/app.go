@@ -138,6 +138,10 @@ type App struct {
 	// pela sessão de UI (powerCommandPayload). Revisão da migração lote 2.
 	deferredRestart *deferredRestartState
 
+	// M4: fases de startup em andamento — o shutdown loga quantas ficaram
+	// pendentes ao fechar o SQLite após o timeout.
+	startupPhasePending atomic.Int32
+
 	// ── Wails v3 ──
 	// Referências explícitas à aplicação/janela do Wails v3.
 	// Substituem o acesso implícito via ctx do v2.
@@ -1157,15 +1161,14 @@ func (a *App) startup(ctx context.Context) {
 
 	// ── Companion mode (PLANO_AGENT_SERVICE_SYSTEM.md, Fase 2) ──
 	// Se o serviço DiscoveryAgent está ativo, a UI conecta via IPC e roda
-	// apenas UI/tray/chat/notificações; o core (agentConn, automation, sync,
-	// P2P, self-update, inventory) permanece NO SERVIÇO. Sem serviço → modo
-	// standalone (core completo na UI, como hoje).
-	companion := a.decideCompanionMode()
-	if companion {
-		a.startIPCClient()
-	} else {
-		a.safeGo(func() { a.StartP2PTelemetryLoop(ctx) })
-	}
+	// apenas UI/tray/chat/notificações.
+	//
+	// M5: a UI NÃO roda core NEM tem fallback standalone — o core vive
+	// EXCLUSIVAMENTE no serviço (discovery-service.exe). Se o serviço não
+	// estiver presente (boot/update), a UI conecta o cliente IPC (RunConnectLoop
+	// aguarda o pipe com backoff) e o estado fica "serviço ausente" até o
+	// serviço subir. Nenhum segundo core, nenhum DB local na UI.
+	a.startIPCClient()
 
 	if err := a.EnsureChatSSEServer(); err != nil {
 		log.Printf("[chat-sse] falha ao iniciar servidor SSE dedicado: %v", err)
@@ -1181,63 +1184,9 @@ func (a *App) startup(ctx context.Context) {
 	}
 	a.applyIdleMode(true)
 
-	// ── DB (decisão D3, PLANO_SEPARACAO_SERVICO_UI.md §2.3) ──
-	// DB único, dono = serviço: no modo companion a UI NÃO abre o SQLite do
-	// serviço — dados que os bridges da UI consultam (config, inventário,
-	// pending counts, Memory Notes) chegam via IPC RPC (companion_rpc.go).
-	// No standalone a UI abre o DB normalmente (CoreAgent local é o dono).
-	if !companion {
-		dataDir := GetDataDir()
-		db, err := database.Open(dataDir)
-		if err != nil {
-			log.Printf("[startup] AVISO: falha ao abrir database: %v", err)
-		} else {
-			a.CoreAgent.DB = db
-			log.Printf("[startup] database SQLite inicializado em %s", dataDir)
-
-			if a.CatalogClient != nil {
-				a.CatalogClient.SetDatabase(db)
-			}
-			if a.AutomationSvc != nil {
-				a.AutomationSvc.SetDB(db)
-			}
-			if a.InventorySvc != nil {
-				a.InventorySvc.SetDB(db)
-				// Inicializa o ciclo de vida do inventory.Service após o DB estar disponível.
-				_ = a.InventorySvc.Startup(ctx)
-			}
-			if a.SupportSvc != nil {
-				a.SupportSvc.SetDB(db)
-			}
-			agentIDForEngine := strings.TrimSpace(a.GetDebugConfig().AgentID)
-			a.ConsolEngine = consolidation.New(db, agentIDForEngine)
-		}
-	}
-
-	if companion {
-		// Companion: SEM DB local (decisão D3) e sem core nesta UI — staged
-		// startup fica no serviço. Sem NATS duplicado, sem automation/sync/
-		// P2P/self-update duplicados. Bridges consultam o serviço via IPC RPC.
-		log.Println("[startup] modo companion: core no serviço DiscoveryAgent — staged startup pulado nesta UI")
-		a.applyStartupThrottleConfig()
-		return
-	}
-
-	log.Println("[startup] runtime local (tray) ativo — todos os workers locais iniciados")
-
-	// ── Phase 1: Staged startup ────────────────────────────────────────
-	// To avoid saturating modest CPUs, heavyweight operations are staggered
-	// instead of launching all goroutines simultaneously.
-	//   Phase 0 (immediate):  tray, DB, debug HTTP, P2P telemetry
-	//   Phase 1 (+2s):        inventory collection (osqueryi) + sync
-	//   Phase 2 (+8s):        agentConn bootstrap + heartbeat
-	//   Phase 3 (+10s):       automation, syncSvc, P2P bootstrap
-	//   Phase 4 (+12s):       self-update, cleanup ticker
-	// ────────────────────────────────────────────────────────────────────
-
-	a.runStagedStartup(ctx)
-
-	// Apply startup throttle config from agent configuration (if already loaded).
+	// M5: a UI NÃO abre DB e NÃO roda staged startup — dados que os bridges da
+	// UI consultam (config, inventário, pending counts, Memory Notes) chegam
+	// via IPC RPC (companion_rpc.go), servidos pelo core do serviço.
 	a.applyStartupThrottleConfig()
 }
 
@@ -1288,7 +1237,10 @@ func (a *App) runStagedStartup(ctx context.Context) {
 
 	// Phase 1: Inventory collection (heaviest operation — delayed 2s).
 	a.StartupWg.Add(1)
+	// M4: contador para o shutdown saber quantas fases ficaram pendentes.
+	a.startupPhasePending.Add(1)
 	a.safeGo(func() {
+		defer a.startupPhasePending.Add(-1)
 		defer a.StartupWg.Done()
 
 		select {
@@ -1323,7 +1275,10 @@ func (a *App) runStagedStartup(ctx context.Context) {
 
 	// Phase 2: Agent connection (bootstrap + heartbeat).
 	a.StartupWg.Add(1)
+	// M4: contador para o shutdown saber quantas fases ficaram pendentes.
+	a.startupPhasePending.Add(1)
 	a.safeGo(func() {
+		defer a.startupPhasePending.Add(-1)
 		defer a.StartupWg.Done()
 
 		select {
@@ -1340,16 +1295,20 @@ func (a *App) runStagedStartup(ctx context.Context) {
 		// recursos que dependem de credenciais (inventário, sync,
 		// configuração do agente). Isso garante que o agent fique
 		// plenamente operacional no primeiro boot.
-		go func() {
+		// B4: usa safeGo — panic aqui derrubava o processo sem recovery.
+		a.safeGo(func() {
 			_ = a.onPostBootstrapProvisioned(ctx)
-		}()
+		})
 
 		a.AgentConn.Run(ctx)
 	})
 
 	// Phase 3: Automation, sync coordinator, P2P bootstrap.
 	a.StartupWg.Add(1)
+	// M4: contador para o shutdown saber quantas fases ficaram pendentes.
+	a.startupPhasePending.Add(1)
 	a.safeGo(func() {
+		defer a.startupPhasePending.Add(-1)
 		defer a.StartupWg.Done()
 
 		select {
@@ -1408,7 +1367,10 @@ func (a *App) runStagedStartup(ctx context.Context) {
 
 	// Phase 4: Self-updater + DB cleanup ticker (lowest priority).
 	a.StartupWg.Add(1)
+	// M4: contador para o shutdown saber quantas fases ficaram pendentes.
+	a.startupPhasePending.Add(1)
 	a.safeGo(func() {
+		defer a.startupPhasePending.Add(-1)
 		defer a.StartupWg.Done()
 
 		select {
@@ -1673,7 +1635,8 @@ func (a *App) ensureOsqueryInstalled() {
 }
 
 func (a *App) hideWindowOnStartup() {
-	go func() {
+	// B4: safeGo em vez de goroutine crua — recovery de panic no watcher do tray.
+	a.safeGo(func() {
 		ticker := time.NewTicker(200 * time.Millisecond)
 		defer ticker.Stop()
 
@@ -1697,7 +1660,7 @@ func (a *App) hideWindowOnStartup() {
 				return
 			}
 		}
-	}()
+	})
 }
 
 func (a *App) shutdown() {
@@ -1765,11 +1728,18 @@ func (a *App) shutdown() {
 	}()
 	select {
 	case <-startupDone:
-	case <-time.After(3 * time.Second):
-		log.Printf("[shutdown] timeout aguardando goroutines de startup; forçando encerramento")
+	case <-time.After(5 * time.Second):
+		// M4: 5s (antes 3s) + contagem de fases pendentes — dá visibilidade de
+		// QUANTAS goroutines de startup não terminaram quando o SQLite é fechado.
+		log.Printf("[shutdown] timeout aguardando goroutines de startup (pendentes=%d); forçando encerramento",
+			a.startupPhasePending.Load())
 	}
 
 	if a.CoreAgent.DB != nil {
+		if a.startupPhasePending.Load() > 0 {
+			log.Printf("[shutdown] AVISO: fechando database com %d fase(s) de startup pendente(s) — queries em andamento falharão graciosamente (WAL preserva integridade)",
+				a.startupPhasePending.Load())
+		}
 		if err := a.CoreAgent.DB.Close(); err != nil {
 			log.Printf("[shutdown] erro ao fechar database: %v", err)
 		}
@@ -1831,6 +1801,11 @@ func (a *App) scheduleDeferredRestart(action string, pp powerCommandPayload) {
 	}
 	deferMinutes := ds.deferMinutes
 	msg := ds.message
+	// M3: o callback do time.AfterFunc roda em goroutine própria — captura os
+	// contadores AQUI sob lock; ler ds.deferCount/ds.maxDefers dentro do
+	// callback (fora do lock) era data race com scheduleDeferredRestart/cancel.
+	deferCount := ds.deferCount
+	maxDefers := ds.maxDefers
 
 	// Cancela timer anterior se existir
 	if ds.timer != nil {
@@ -1838,7 +1813,7 @@ func (a *App) scheduleDeferredRestart(action string, pp powerCommandPayload) {
 	}
 
 	ds.timer = time.AfterFunc(time.Duration(deferMinutes)*time.Minute, func() {
-		a.Logs.Append(fmt.Sprintf("[agent] %s-defer [RETRY] defer=%d/%d — re-exibindo prompt", action, ds.deferCount, ds.maxDefers))
+		a.Logs.Append(fmt.Sprintf("[agent] %s-defer [RETRY] defer=%d/%d — re-exibindo prompt", action, deferCount, maxDefers))
 		result := a.showDeferrableRestartPrompt(action, delaySeconds, msg, deferMinutes)
 		if result == "restart_now" || result == "fallback" {
 			a.executeSystemPowerAction(context.Background(), action, delaySeconds, false, msg)
@@ -1850,7 +1825,7 @@ func (a *App) scheduleDeferredRestart(action string, pp powerCommandPayload) {
 
 	ds.mu.Unlock()
 
-	a.Logs.Append(fmt.Sprintf("[agent] %s-defer [SCHED] adiado para daqui %dmin (defer=%d/%d)", action, deferMinutes, ds.deferCount, ds.maxDefers))
+	a.Logs.Append(fmt.Sprintf("[agent] %s-defer [SCHED] adiado para daqui %dmin (defer=%d/%d)", action, deferMinutes, deferCount, maxDefers))
 }
 
 func (a *App) RequestAppClose() {

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -630,7 +632,15 @@ func (s *Service) executeTaskAsync(ctx context.Context, agentID string, task Aut
 		// backoff; falhas consecutivas idênticas abrem o circuit breaker.
 		s.updateAntiLoopState(agentID, task, result)
 
-		s.dispatchExecutionNotification(notifyDispatcher, task, entry, &result, s.deferByTask[strings.TrimSpace(task.TaskID)], welcome)
+		// A15: leitura do deferByTask SEMPRE sob lock — loadDeferStateForAgent
+		// substitui o mapa inteiro a cada policy-sync e recordAndGetNextDefer/
+		// clearDeferState escrevem sob s.mu. Leitura concorrente de map com
+		// escrita é fatal error do runtime (derruba o processo inteiro).
+		var finalDeferState deferState
+		s.mu.Lock()
+		finalDeferState = s.deferByTask[strings.TrimSpace(task.TaskID)]
+		s.mu.Unlock()
+		s.dispatchExecutionNotification(notifyDispatcher, task, entry, &result, finalDeferState, welcome)
 		s.clearDeferState(agentID, task.TaskID, entry.Status)
 
 		s.refreshDerivedState(agentID)
@@ -814,18 +824,23 @@ func (s *Service) rebuildRecurringSchedules(ctx context.Context, previous, curre
 				}
 			}
 			// Circuit breaker: falhas consecutivas pausam a task por failureCooldown.
-			if cbRaw, found, err := db.GetAutomationMarker(agentID, "circuit:fail:"+taskID); err == nil && found {
-				if cb, ok := parseCircuitBreakerState(cbRaw); ok && circuitBreakerOpen(cb, time.Now().UTC()) {
-					s.logf("automacao: tarefa recorrente %s pausada por falhas repetidas (%d) - retoma em %s", taskID, cb.Failures, cb.OpenUntil.UTC().Format(time.RFC3339))
-					return
+			// M26: guard de nil (mesmo padrão do bloco de cooldown acima).
+			if db != nil {
+				if cbRaw, found, err := db.GetAutomationMarker(agentID, "circuit:fail:"+taskID); err == nil && found {
+					if cb, ok := parseCircuitBreakerState(cbRaw); ok && circuitBreakerOpen(cb, time.Now().UTC()) {
+						s.logf("automacao: tarefa recorrente %s pausada por falhas repetidas (%d) - retoma em %s", taskID, cb.Failures, cb.OpenUntil.UTC().Format(time.RFC3339))
+						return
+					}
 				}
 			}
 			// Backoff de skips benignos: após consecutiveSkipThreshold skips idênticos,
 			// pula slots até SkipUntil (marker skipbackoff).
-			if skipRaw, found, err := db.GetAutomationMarker(agentID, "skipbackoff:"+taskID); err == nil && found {
-				if st, ok := parseSkipBackoffState(skipRaw); ok && time.Now().UTC().Before(st.SkipUntil) {
-					s.logf("automacao: tarefa recorrente %s em backoff de skips (%d consecutivos) - retoma em %s", taskID, st.Count, st.SkipUntil.UTC().Format(time.RFC3339))
-					return
+			if db != nil {
+				if skipRaw, found, err := db.GetAutomationMarker(agentID, "skipbackoff:"+taskID); err == nil && found {
+					if st, ok := parseSkipBackoffState(skipRaw); ok && time.Now().UTC().Before(st.SkipUntil) {
+						s.logf("automacao: tarefa recorrente %s em backoff de skips (%d consecutivos) - retoma em %s", taskID, st.Count, st.SkipUntil.UTC().Format(time.RFC3339))
+						return
+					}
 				}
 			}
 			// O marcador é atualizado APÓS a execução via callback onComplete,
@@ -981,7 +996,21 @@ func (s *Service) startCron() {
 	if s.cron != nil {
 		return
 	}
-	s.cron = cron.New()
+	// M26: cron.Recover evita que um panic em um job derrube o processo inteiro
+	// (o panic da goroutine do job propagava e matava o agente).
+	// M34: timezone explícita — o cron default usa a TZ local do agente e o
+	// contrato do servidor define horários em UTC (datas ISO-8601 UTC), então
+	// tasks disparavam fora do horário em máquinas com TZ diferente de UTC.
+	// Override possível via DISCOVERY_AUTOMATION_TZ (ex.: "America/Sao_Paulo").
+	cronLoc := time.UTC
+	if tzName := strings.TrimSpace(os.Getenv("DISCOVERY_AUTOMATION_TZ")); tzName != "" {
+		if loc, err := time.LoadLocation(tzName); err == nil {
+			cronLoc = loc
+		} else {
+			log.Printf("[automation] aviso: DISCOVERY_AUTOMATION_TZ invalida (%v) — usando UTC", err)
+		}
+	}
+	s.cron = cron.New(cron.WithLocation(cronLoc), cron.WithChain(cron.Recover(cron.PrintfLogger(log.New(os.Stderr, "", 0)))))
 	s.cron.Start()
 }
 

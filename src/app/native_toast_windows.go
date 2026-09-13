@@ -25,6 +25,7 @@ import (
 
 	toast "git.sr.ht/~jackmordaunt/go-toast/v2"
 
+	"discovery/app/agentconfig"
 	"discovery/app/services/notifications"
 )
 
@@ -108,8 +109,11 @@ func pushNativeToast(notificationID, title, message string, actions [][2]string)
 // timeout_policy_applied.
 func dispatchNativeToastWhenHeadless(req notifications.DispatchRequest) {
 	// Ações vindas no metadata (label:value) — contratado pelo notificationSvc.
+	// M2: aceita []any (formato normalizado) e []agentconfig.AgentNotificationAction
+	// (tipo concreto que podia ser injetado direto no metadata).
 	var actions [][2]string
-	if md, ok := req.Metadata["actions"].([]any); ok {
+	switch md := req.Metadata["actions"].(type) {
+	case []any:
 		for _, item := range md {
 			if m, ok := item.(map[string]any); ok {
 				label, _ := m["label"].(string)
@@ -117,6 +121,12 @@ func dispatchNativeToastWhenHeadless(req notifications.DispatchRequest) {
 				if label != "" && value != "" {
 					actions = append(actions, [2]string{label, value})
 				}
+			}
+		}
+	case []agentconfig.AgentNotificationAction:
+		for _, a := range md {
+			if a.Label != "" && a.ID != "" {
+				actions = append(actions, [2]string{a.Label, a.ID})
 			}
 		}
 	}

@@ -474,7 +474,11 @@ function initAppBindings() {
   if (redactToggleEl) {
     redactToggleEl.addEventListener("change", function () {
       try {
-        appApi().SetExportRedaction(redactToggleEl.checked);
+        // B15: promise nao aguardada - try/catch sincrono nao captura a
+        // rejeicao (virava unhandledrejection). Trata com .catch.
+        appApi().SetExportRedaction(redactToggleEl.checked).catch(function (_) {
+          // API not ready; ignore.
+        });
       } catch (_) {
         // API not ready; ignore.
       }

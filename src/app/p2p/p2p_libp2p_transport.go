@@ -343,7 +343,13 @@ func handleStreamArtifactGet(s network.Stream, transfer *TransferServer) {
 	transfer.mu.RUnlock()
 
 	// Rejeitar arquivos .importing (ainda sendo copiados) - no devem ser servidos.
-	if strings.HasSuffix(req.ArtifactName, ".importing") {
+	// B12: também rejeita .partial (montagem em andamento — o peer consumiria
+	// um arquivo incompleto) e os sidecars .meta/.meta.json (metadados internos,
+	// não são payload para transferência).
+	if strings.HasSuffix(req.ArtifactName, ".importing") ||
+		strings.HasSuffix(req.ArtifactName, ".partial") ||
+		strings.HasSuffix(req.ArtifactName, ".meta") ||
+		strings.HasSuffix(req.ArtifactName, ".meta.json") {
 		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "artifact em andamento"})
 		return
 	}
@@ -505,6 +511,11 @@ func handleStreamArtifactGet(s network.Stream, transfer *TransferServer) {
 	// não em transferência lenta (vazão baixa com chunks paralelos).
 	_ = s.SetDeadline(computeTransferDeadline(chunkLen))
 	reader = &rollingDeadlineStreamReader{r: reader, stream: s, interval: rollingDeadlineInterval}
+	// M15: throttle de bandwidth no sender (bytes servidos a peers) — bucket
+	// global da máquina, configurável via servidor.
+	if bwMaxPerSec.Load() > 0 {
+		reader = newBandwidthThrottleReader(reader, context.Background())
+	}
 
 	written, copyErr := io.Copy(s, reader)
 	if coord != nil && written > 0 {
@@ -755,6 +766,11 @@ func libp2pDownloadChunk(ctx context.Context, h host.Host, peerID peer.ID, artif
 		dataReader = newProgressReader(payloadReader, chunkLen, func(readSoFar int64) {
 			onProgress(readSoFar, chunkLen)
 		})
+	}
+	// M15: throttle de bandwidth (bucket global da máquina, configurável via
+	// servidor) — consome tokens pelos bytes efetivamente baixados.
+	if bwMaxPerSec.Load() > 0 {
+		dataReader = newBandwidthThrottleReader(dataReader, ctx)
 	}
 
 	// Streaming para disco: grava o chunk em um arquivo temporário enquanto

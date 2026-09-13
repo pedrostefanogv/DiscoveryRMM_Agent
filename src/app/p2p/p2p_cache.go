@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 const (
@@ -203,4 +204,38 @@ func (c *Coordinator) updateManifestCacheAfterDownload(artifactName, path string
 	}
 	c.deps.Log(fmt.Sprintf("[p2p] manifest cacheado pos-download: %s chunks=%d sha256=%s",
 		artifactName, manifest.TotalChunks, manifest.SHA256))
+}
+
+// ── M14: cache do health-check de manifest (manifestMatchesFile) ───────────
+
+// manifestHealthEntry cacheia o resultado do health-check por mtime+tamanho.
+// Chave do mapa: path do artifact.
+type manifestHealthEntry struct {
+	mtime time.Time
+	size  int64
+	ok    bool
+}
+
+// manifestHealthOK valida o manifest contra o arquivo, com cache por (path,
+// mtime, size). O manifestMatchesFile lê ~5 chunks por chamada; o gossip chama
+// ListArtifacts a cada 45s — sem cache, re-hash constante.
+func (c *Coordinator) manifestHealthOK(manifest *P2PChunkManifest, path string, mtime time.Time, size int64) bool {
+	key := path
+	c.manifestHealthMu.Lock()
+	if e, ok := c.manifestHealth[key]; ok && e.mtime.Equal(mtime) && e.size == size {
+		okResult := e.ok
+		c.manifestHealthMu.Unlock()
+		return okResult
+	}
+	c.manifestHealthMu.Unlock()
+
+	ok := manifestMatchesFile(manifest, path)
+
+	c.manifestHealthMu.Lock()
+	if c.manifestHealth == nil {
+		c.manifestHealth = make(map[string]manifestHealthEntry)
+	}
+	c.manifestHealth[key] = manifestHealthEntry{mtime: mtime, size: size, ok: ok}
+	c.manifestHealthMu.Unlock()
+	return ok
 }

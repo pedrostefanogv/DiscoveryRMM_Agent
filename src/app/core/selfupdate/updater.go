@@ -536,7 +536,7 @@ func (u *Updater) CheckAndUpdate(ctx context.Context, force bool) error {
 		serverCommit := strings.TrimSpace(serverInfo.CommitHash)
 		serverSHA256 := strings.TrimSpace(serverInfo.Sha256)
 
-		u.logf("[selfupdate] servidor: version=%s commit=%s sha256=%s", serverVersion, serverCommit, serverSHA256[:12])
+		u.logf("[selfupdate] servidor: version=%s commit=%s sha256=%s", serverVersion, serverCommit, shortHash(serverSHA256))
 
 		// Decisao version+commit:
 		// - Versoes diferentes → download (update normal)
@@ -565,7 +565,7 @@ func (u *Updater) CheckAndUpdate(ctx context.Context, force bool) error {
 			u.installing.Store(false)
 			return err
 		}
-		u.logf("[selfupdate] download concluido: tempPath=%s sha256=%s fromP2P=%v", tempPath, fileSha256[:12], fromP2P)
+		u.logf("[selfupdate] download concluido: tempPath=%s sha256=%s fromP2P=%v", tempPath, shortHash(fileSha256), fromP2P)
 
 		targetVersion := extractFileVersion(tempPath)
 		if targetVersion == "" {
@@ -665,10 +665,16 @@ func (u *Updater) checkAndUpdateFallback(ctx context.Context, force bool, curren
 		u.installing.Store(false)
 		return err
 	}
-	u.logf("[selfupdate] download concluido: tempPath=%s sha256=%s fromP2P=%v", tempPath, fileSha256[:12], fromP2P)
+	u.logf("[selfupdate] download concluido: tempPath=%s sha256=%s fromP2P=%v", tempPath, shortHash(fileSha256), fromP2P)
 
-	if publicSHA256 != "" && !strings.EqualFold(fileSha256, publicSHA256) {
-		u.logf("[selfupdate] ALERTA: SHA256 divergente do servidor! local=%s servidor=%s", fileSha256[:12], publicSHA256[:12])
+	// C1: divergência/ausência de hash no caminho fallback é FATAL —
+	// o instalador nunca é executado sem verificação de integridade.
+	if verr := u.verifyInstallerSHA256(publicSHA256, fileSha256); verr != nil {
+		u.logf("[selfupdate] %v — removendo arquivo e abortando update", verr)
+		u.lastError.Store(verr.Error())
+		u.installing.Store(false)
+		errutil.LogIfErr(os.Remove(tempPath), "selfupdate: limpar download com sha256 divergente/ausente")
+		return verr
 	}
 
 	targetVersion := extractFileVersion(tempPath)

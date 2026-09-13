@@ -509,7 +509,19 @@ func (s *Service) executeRound(ctx context.Context, cfg Config, req agentStreamR
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "text/event-stream")
-	netutil.SetAgentAuthHeadersWithAgentID(httpReq, cfg.APIKey, cfg.AgentID)
+	// B7: o erro era engolido e o request seguia sem auth — falhava com 401
+	// opaco e sem diagnóstico. Agora falha cedo com o erro logado.
+	if err := netutil.SetAgentAuthHeadersWithAgentID(httpReq, cfg.APIKey, cfg.AgentID); err != nil {
+		s.logChatEntry(ChatLogEntry{
+			Type:      "round_http_error",
+			Method:    "multi_round",
+			Endpoint:  endpoint,
+			SessionID: req.SessionID,
+			Error:     fmt.Sprintf("auth headers: %v", err),
+			LatencyMs: int(time.Since(startTime).Milliseconds()),
+		})
+		return "", fmt.Errorf("headers de autenticacao: %w", err)
+	}
 
 	resp, err := tlsutil.NewHTTPClient(timeout).Do(httpReq)
 	if err != nil {
@@ -761,11 +773,15 @@ func truncateToolResult(result string) string {
 		}
 	}
 	closed := trimmed
-	for i := len(stack) - 1; i >= 0; i-- {
-		closed += string(stack[i])
-	}
+	// B8: fecha delimitadores na ordem LIFO correta — a string aberta é o
+	// delimitador mais interno e deve ser fechada ANTES dos brackets. Fechar
+	// colchetes primeiro produzia JSON inválido (caía sempre no fallback de
+	// texto cru mesmo quando a remontagem seria válida).
 	if inStr {
 		closed += `"`
+	}
+	for i := len(stack) - 1; i >= 0; i-- {
+		closed += string(stack[i])
 	}
 	// Só usa a versão fechada se for JSON válido; caso contrário, texto cru
 	// com marcador (o LLM entende ambos, mas JSON quebrado quebraria o parse).

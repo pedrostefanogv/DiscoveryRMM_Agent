@@ -313,6 +313,9 @@ func (m *Manager) handleQuality(_ context.Context, payload map[string]any) (bool
 	return true, ""
 }
 
+// handleRecordingStart inicia o tap REAL de gravação da sessão de tela.
+// M33: antes só setava o flag e emitia "recording_started" — nenhum frame era
+// capturado (RecordingSource.Start() nunca era chamado).
 func (m *Manager) handleRecordingStart(_ context.Context, payload map[string]any) (bool, string) {
 	sessionID := toString(payload["sessionId"])
 	if sessionID == "" {
@@ -325,6 +328,9 @@ func (m *Manager) handleRecordingStart(_ context.Context, payload map[string]any
 		return false, "sessao nao encontrada"
 	}
 	s.Recording = true
+	if ss, ok := m.screenSessions[sessionID]; ok && ss != nil && ss.recording != nil {
+		ss.recording.Start()
+	}
 	m.publishEvent(sessionID, "recording_started", nil)
 	return true, ""
 }
@@ -341,6 +347,9 @@ func (m *Manager) handleRecordingStop(_ context.Context, payload map[string]any)
 		return false, "sessao nao encontrada"
 	}
 	s.Recording = false
+	if ss, ok := m.screenSessions[sessionID]; ok && ss != nil && ss.recording != nil {
+		ss.recording.Stop()
+	}
 	m.publishEvent(sessionID, "recording_stopped", nil)
 	return true, ""
 }
@@ -613,7 +622,10 @@ func (m *Manager) runTerminalSession(ctx context.Context, session *Session) {
 	// Shell padrao: powershell
 	defaultShell := terminal.ShellPowerShell
 	if sk, ok := sessionMetaString(session, "shell"); ok && sk != "" {
-		defaultShell = terminal.ShellKind(sk)
+		// A14: campo shell vem do servidor sem validação — restringe aos
+		// ShellKind conhecidos e a distros WSL no charset permitido antes
+		// de chegar ao CreateProcessW (via ConPTY).
+		defaultShell = terminal.ValidateSessionShellKind(sk)
 	}
 
 	cols := sessionMetaInt(session, "termCols", 120)

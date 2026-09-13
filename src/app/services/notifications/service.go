@@ -13,14 +13,51 @@ import (
 
 // idempotencyEntry armazena o notificationID associado a um idempotencyKey
 // junto com o timestamp de criação, para permitir limpeza periódica.
+//
+// Correção A1: também guarda o resultado FINAL da notificação original
+// (approved/denied/deferred/timeout_policy_applied) e um canal done fechado
+// quando o resultado fica conhecido — retries com a mesma idempotencyKey
+// recebem o MESMO resultado, nunca um "approved" implícito (que fazia bypass
+// de require_confirmation em comandos remotos).
 type idempotencyEntry struct {
 	NotificationID string
 	CreatedAt      time.Time
+	Result         string
+	done           chan struct{}
+	closeOnce      sync.Once
+}
+
+// finish registra o resultado final e libera retries que estejam aguardando.
+func (e *idempotencyEntry) finish(result string) {
+	e.Result = result
+	e.closeOnce.Do(func() {
+		if e.done != nil {
+			close(e.done)
+		}
+	})
+}
+
+// waitResult aguarda até timeout pelo resultado final da notificação
+// original. Retorna "" se não concluída dentro do prazo.
+func (e *idempotencyEntry) waitResult(timeout time.Duration) string {
+	if e.done == nil {
+		return ""
+	}
+	select {
+	case <-e.done:
+		return e.Result
+	case <-time.After(timeout):
+		return ""
+	}
 }
 
 // idempotencyTTL define quanto tempo uma entrada de idempotência permanece
 // no cache antes de ser elegível para limpeza.
 const idempotencyTTL = 24 * time.Hour
+
+// maxDedupResultWait é o tempo máximo que um retry aguarda a decisão do
+// usuário sobre a notificação original antes de responder "pending".
+var maxDedupResultWait = 90 * time.Second
 
 // idempotencyPruneLimit é o número máximo de entradas removidas por chamada.
 const idempotencyPruneLimit = 200
@@ -123,7 +160,7 @@ type Service struct {
 	nativeFallback        func(req DispatchRequest)
 
 	mu                  sync.Mutex
-	notificationByKey   map[string]idempotencyEntry
+	notificationByKey   map[string]*idempotencyEntry
 	pendingNotifyResult map[string]chan string
 }
 
@@ -140,7 +177,7 @@ func New(deps Deps) *Service {
 		emitEvent:             deps.EmitEvent,
 		getAgentConfiguration: deps.GetAgentConfiguration,
 		nativeFallback:        deps.NativeFallback,
-		notificationByKey:     make(map[string]idempotencyEntry),
+		notificationByKey:     make(map[string]*idempotencyEntry),
 		pendingNotifyResult:   make(map[string]chan string),
 	}
 }
@@ -178,21 +215,33 @@ func (s *Service) Dispatch(req DispatchRequest) DispatchResponse {
 		s.pruneByKeyLocked(time.Now())
 		if existing, ok := s.notificationByKey[req.IdempotencyKey]; ok {
 			s.mu.Unlock()
+
+			// Correção A1: repassa o resultado REAL da notificação original.
+			//   - Resultado já conhecido → reflete exatamente (approved,
+			//     denied, deferred, timeout_policy_applied).
+			//   - Original ainda aguardando decisão do usuário → aguarda
+			//     (limitado por maxDedupResultWait) e, se não concluir,
+			//     responde "pending" — NUNCA "approved" implícito.
+			result := existing.waitResult(maxDedupResultWait)
+			if result == "" {
+				result = "pending"
+			}
+			accepted := result == "approved"
 			s.persist(database.NotificationEventEntry{
 				NotificationID: existing.NotificationID,
 				Mode:           req.Mode,
 				Severity:       req.Severity,
 				EventType:      req.EventType,
 				Title:          req.Title,
-				Result:         "approved",
+				Result:         result,
 				AgentAction:    "deduplicated",
 				MetadataJSON:   mustMarshalJSON(req.Metadata),
 			})
 			return DispatchResponse{
-				Accepted:       true,
+				Accepted:       accepted,
 				NotificationID: existing.NotificationID,
 				AgentAction:    "deduplicated",
-				Result:         "approved",
+				Result:         result,
 			}
 		}
 		s.mu.Unlock()
@@ -237,9 +286,10 @@ func (s *Service) Dispatch(req DispatchRequest) DispatchResponse {
 
 	if req.IdempotencyKey != "" {
 		s.mu.Lock()
-		s.notificationByKey[req.IdempotencyKey] = idempotencyEntry{
+		s.notificationByKey[req.IdempotencyKey] = &idempotencyEntry{
 			NotificationID: req.NotificationID,
 			CreatedAt:      time.Now(),
+			done:           make(chan struct{}),
 		}
 		s.mu.Unlock()
 	}
@@ -292,6 +342,7 @@ func (s *Service) Dispatch(req DispatchRequest) DispatchResponse {
 					AgentAction:    "user_decision",
 					MetadataJSON:   mustMarshalJSON(req.Metadata),
 				})
+				s.recordDispatchResult(req.IdempotencyKey, req.NotificationID, result)
 				return DispatchResponse{
 					Accepted:       true,
 					NotificationID: req.NotificationID,
@@ -310,6 +361,7 @@ func (s *Service) Dispatch(req DispatchRequest) DispatchResponse {
 					AgentAction:    "timeout",
 					MetadataJSON:   mustMarshalJSON(req.Metadata),
 				})
+				s.recordDispatchResult(req.IdempotencyKey, req.NotificationID, "timeout_policy_applied")
 				return DispatchResponse{
 					Accepted:       true,
 					NotificationID: req.NotificationID,
@@ -328,6 +380,7 @@ func (s *Service) Dispatch(req DispatchRequest) DispatchResponse {
 			AgentAction:    "headless_logged",
 			MetadataJSON:   mustMarshalJSON(req.Metadata),
 		})
+		s.recordDispatchResult(req.IdempotencyKey, req.NotificationID, "approved")
 		return DispatchResponse{
 			Accepted:       true,
 			NotificationID: req.NotificationID,
@@ -365,6 +418,7 @@ func (s *Service) Dispatch(req DispatchRequest) DispatchResponse {
 			AgentAction:    "rendered",
 			MetadataJSON:   mustMarshalJSON(req.Metadata),
 		})
+		s.recordDispatchResult(req.IdempotencyKey, req.NotificationID, "approved")
 		return DispatchResponse{
 			Accepted:       true,
 			NotificationID: req.NotificationID,
@@ -422,6 +476,27 @@ func (s *Service) Dispatch(req DispatchRequest) DispatchResponse {
 			Result:         "timeout_policy_applied",
 		}
 	}
+}
+
+// recordDispatchResult registra o resultado FINAL da notificação original
+// (correção A1) para que retries com a mesma idempotencyKey recebam o mesmo
+// resultado em vez de um "approved" implícito. Best-effort e no-op sem key.
+func (s *Service) recordDispatchResult(idempotencyKey, notificationID, result string) {
+	key := strings.TrimSpace(idempotencyKey)
+	if key == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entry, ok := s.notificationByKey[key]
+	if !ok {
+		return
+	}
+	if strings.TrimSpace(entry.NotificationID) != "" &&
+		!strings.EqualFold(entry.NotificationID, strings.TrimSpace(notificationID)) {
+		return
+	}
+	entry.finish(normalizeResult(result))
 }
 
 // Respond processa a resposta do usuário a uma notificação.
@@ -584,7 +659,19 @@ func applyPolicyByEventType(req DispatchRequest, cfg AgentConfiguration) Dispatc
 		req.Metadata = map[string]any{}
 	}
 	if len(policy.Actions) > 0 {
-		req.Metadata["actions"] = policy.Actions
+		// M2: serializa como []any de maps — o toast nativo headless faz
+		// .([]any) no metadata e o tipo concreto []AgentNotificationAction
+		// nunca casa (os botões do toast headless nunca apareciam).
+		// value = ID da ação, que volta via Respond(notificationID, value).
+		actions := make([]any, 0, len(policy.Actions))
+		for _, a := range policy.Actions {
+			actions = append(actions, map[string]any{
+				"id":    a.ID,
+				"label": a.Label,
+				"value": a.ID,
+			})
+		}
+		req.Metadata["actions"] = actions
 	}
 	if strings.TrimSpace(policy.StyleOverride.Background) != "" || strings.TrimSpace(policy.StyleOverride.Text) != "" {
 		req.Metadata["styleOverride"] = map[string]any{

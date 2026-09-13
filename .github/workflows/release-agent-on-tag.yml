@@ -5,12 +5,15 @@ on:
     tags:
       - 'v*'
 
-permissions:
-  contents: write
+# M23: permission no nível do JOB (não do workflow) — steps do job não podem
+# escalar além do necessário; o workflow raiz fica sem permissões.
+permissions: {}
 
 jobs:
   release:
     runs-on: windows-latest
+    permissions:
+      contents: write
     env:
       GOWORK: off
 

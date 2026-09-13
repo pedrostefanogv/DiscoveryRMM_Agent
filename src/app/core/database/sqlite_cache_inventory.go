@@ -284,8 +284,12 @@ func (db *DB) ShouldSyncInventory(agentID string, currentHardware, currentSoftwa
 	}
 
 	// 4. Detectar mudanças significativas
-	hwChanged := string(lastHW) != string(currentHardware)
-	swChanged := inventorySoftwareChanged(lastSW, currentSoftware)
+	// M1: os payloads carregam timestamps voláteis (updatedAt/collectedAt) que
+	// mudam a cada coleta — comparar byte-a-byte sempre detectava "mudança" e
+	// reenviava o payload completo a cada ciclo (6h). Normaliza removendo as
+	// chaves voláteis antes da comparação (fingerprint estável).
+	hwChanged := string(stripVolatileInventoryJSON(lastHW)) != string(stripVolatileInventoryJSON(currentHardware))
+	swChanged := inventorySoftwareChanged(stripVolatileInventoryJSON(lastSW), stripVolatileInventoryJSON(currentSoftware))
 
 	if hwChanged {
 		return true, "hardware modificado", nil
@@ -359,4 +363,41 @@ func normalizeInventorySoftwareJSON(raw []byte) ([]string, error) {
 	}
 	sort.Strings(items)
 	return items, nil
+}
+
+// volatileInventoryKeys são campos de timestamp que mudam a cada coleta e
+// não devem participar do diff de inventário (correção M1: o diff byte-a-byte
+// sempre detectava mudança e reenviava o payload completo a cada ciclo).
+var volatileInventoryKeys = map[string]struct{}{
+	"updatedat":            {},
+	"collectedat":          {},
+	"inventorycollectedat": {},
+}
+
+// stripVolatileInventoryJSON remove as chaves voláteis do JSON de inventário
+// (top-level, case-insensitive) para diff estável. Não-JSON ou sem chaves
+// voláteis retorna a entrada sem alteração.
+func stripVolatileInventoryJSON(data []byte) []byte {
+	if len(data) == 0 {
+		return data
+	}
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		return data
+	}
+	changed := false
+	for k := range m {
+		if _, ok := volatileInventoryKeys[strings.ToLower(k)]; ok {
+			delete(m, k)
+			changed = true
+		}
+	}
+	if !changed {
+		return data
+	}
+	out, err := json.Marshal(m)
+	if err != nil {
+		return data
+	}
+	return out
 }

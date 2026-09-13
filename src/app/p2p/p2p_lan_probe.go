@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -52,9 +51,9 @@ func (s *TransferServer) buildHealthResponse() p2pHealthResponse {
 		OK:      true,
 		AgentID: agentID,
 	}
-	if host, err := os.Hostname(); err == nil {
-		out.Host = strings.TrimSpace(host)
-	}
+	// M16: o hostname do Windows não é anunciado — a rota é pública (sem auth)
+	// e o hostname é recon puro; o peer descoberto usa o IP alvo da probe
+	// (health.Host vazio → peerHost = endereço alvo, comportamento correto).
 	if port, err := parsePortFromURL(baseURL); err == nil {
 		out.HTTPPort = port
 	}

@@ -28,7 +28,9 @@ const (
 	p2pAuditLimit                  = 100
 	p2pReplicationDedupTTL         = 24 * time.Hour
 	p2pLANProbeWarmupDelay         = 12 * time.Second
-	p2pLANProbeInterval            = 2 * time.Minute
+	// M16: sweep da LAN (/24 × portas) a cada 5min em vez de 2min — reduz o
+	// scanning contínuo da rede mantendo a descoberta em tempo razoável.
+	p2pLANProbeInterval            = 5 * time.Minute
 	peerArtifactCacheTTL           = 72 * time.Hour // cache de artifacts por peer expira em 72h
 	maxPeerArtifactEntries         = 500            // cap máximo de entries no mapa peerArtifacts
 )
@@ -69,6 +71,11 @@ type Coordinator struct {
 	// A entrada é invalidada quando a mtime do arquivo muda.
 	sha256CacheMu sync.Mutex
 	sha256Cache   map[string]artifactSHA256CacheEntry
+
+	// M14: cache do health-check de manifest (manifestMatchesFile) — evita
+	// re-hash de ~5 chunks a cada ListArtifacts do gossip (45s).
+	manifestHealthMu sync.Mutex
+	manifestHealth   map[string]manifestHealthEntry
 
 	// autoProvisioning rastreia agentes que este peer provisionou como configurador.
 	autoProvisionedMu    sync.RWMutex
@@ -203,6 +210,7 @@ func NewCoordinator(deps AppDeps) *Coordinator {
 		replicationDedup: make(map[string]time.Time),
 		replicationQueue: make(chan p2pReplicationJob, p2pReplicationQueueSize),
 		sha256Cache:      make(map[string]artifactSHA256CacheEntry),
+		manifestHealth:   make(map[string]manifestHealthEntry),
 		fetchStates:      newFetchStateMap(),
 		cpuSampler:       platform.NewCPUSampler(),
 		servingSessions:  make(map[string]*servingSession),
@@ -222,6 +230,10 @@ func (c *Coordinator) Startup(ctx context.Context) error {
 	if c == nil {
 		return nil
 	}
+	// B11: started/ctx/cancel são acessados por goroutines distintas
+	// (Startup/Shutdown/Ctx + loops de fundo) — mutações sob c.mu.
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.started {
 		return nil
 	}
@@ -237,11 +249,21 @@ func (c *Coordinator) Startup(ctx context.Context) error {
 // explicitamente o discoveryProvider (libp2p host + mDNS) e o TransferServer
 // (HTTP listener). É chamado pelo *App em seu shutdown.
 func (c *Coordinator) Shutdown() error {
-	if c == nil || !c.started {
+	if c == nil {
 		return nil
 	}
-	if c.cancel != nil {
-		c.cancel()
+	// B11: leitura/escrita de started/cancel sob c.mu (era leitura solta —
+	// race benigna mas real, detectável com -race).
+	c.mu.Lock()
+	if !c.started {
+		c.mu.Unlock()
+		return nil
+	}
+	cancel := c.cancel
+	c.started = false
+	c.mu.Unlock()
+	if cancel != nil {
+		cancel()
 	}
 	// Cleanup síncrono do discoveryProvider (libp2p host + mDNS service).
 	c.mu.Lock()
@@ -255,7 +277,6 @@ func (c *Coordinator) Shutdown() error {
 	if c.transferServer != nil {
 		c.transferServer.Close()
 	}
-	c.started = false
 	log.Println("[p2p] Shutdown concluído")
 	return nil
 }
@@ -263,10 +284,17 @@ func (c *Coordinator) Shutdown() error {
 // Ctx retorna o contexto de ciclo de vida do Coordinator.
 // Retorna context.Background() se Startup ainda não foi chamado.
 func (c *Coordinator) Ctx() context.Context {
-	if c == nil || c.ctx == nil {
+	if c == nil {
 		return context.Background()
 	}
-	return c.ctx
+	// B11: leitura sob lock.
+	c.mu.RLock()
+	ctx := c.ctx
+	c.mu.RUnlock()
+	if ctx == nil {
+		return context.Background()
+	}
+	return ctx
 }
 
 // lockDownload serializa downloads do mesmo artifact. Retorna uma função de
@@ -311,17 +339,32 @@ func (c *Coordinator) gcServingSessions(now time.Time) {
 }
 
 // cachedFileSHA256 retorna o SHA256 do arquivo, usando cache invalidado por mtime.
+// M14: o computeFileSHA256 NÃO roda mais sob sha256CacheMu — o lock global
+// durante o hash serializava todos os ListArtifacts e bloqueava leitores do
+// cache. Double-check pattern: re-verifica após o compute (outro worker pode
+// ter calculado o mesmo arquivo).
 func (c *Coordinator) cachedFileSHA256(path string, mtime time.Time) (string, error) {
 	c.sha256CacheMu.Lock()
-	defer c.sha256CacheMu.Unlock()
 	if entry, ok := c.sha256Cache[path]; ok && entry.mtime.Equal(mtime) {
-		return entry.sum, nil
+		sum := entry.sum
+		c.sha256CacheMu.Unlock()
+		return sum, nil
 	}
+	c.sha256CacheMu.Unlock()
+
 	sum, err := computeFileSHA256(path)
 	if err != nil {
 		return "", err
 	}
+
+	c.sha256CacheMu.Lock()
+	if entry, ok := c.sha256Cache[path]; ok && entry.mtime.Equal(mtime) {
+		sum = entry.sum
+		c.sha256CacheMu.Unlock()
+		return sum, nil
+	}
 	c.sha256Cache[path] = artifactSHA256CacheEntry{sum: sum, mtime: mtime}
+	c.sha256CacheMu.Unlock()
 	return sum, nil
 }
 
@@ -514,17 +557,23 @@ func (c *Coordinator) setLastError(err error) {
 	c.mu.Unlock()
 }
 
+// stagingACLOnce aplica a ACL do staging uma vez por processo (M13: o ensure
+// spawnava icacls.exe a cada touch — inclusive a cada gossip tick de 45s).
+var stagingACLOnce sync.Once
+
 func (c *Coordinator) touchP2PTempDir() error {
 	dir := c.deps.P2PTempDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		c.setLastError(err)
 		return err
 	}
-	// Garante que os diretórios temporários tenham acesso irrestrito a todos
-	// os usuários da máquina, pois arquivos podem ser escritos pelo serviço
-	// (SYSTEM) e lidos pelo agente (usuário comum).
-	_ = platform.EnsureWorldAccess(platform.TempDir())
-	_ = platform.EnsureWorldAccess(dir)
+	// Modelo seguro do staging (C7): arquivos são escritos pelo serviço
+	// (SYSTEM) e lidos/lançados pelo agente (usuário comum) — Everyone recebe
+	// Read+Execute, nunca Full Control (previne TOCTOU/LPE em instaladores).
+	stagingACLOnce.Do(func() {
+		_ = platform.EnsureSharedStagingAccess(platform.TempDir())
+		_ = platform.EnsureSharedStagingAccess(dir)
+	})
 	return nil
 }
 

@@ -171,6 +171,12 @@ type dxgiCapturer struct {
 	stagingTex    unsafe.Pointer
 	stagingMapped bool
 
+	// frameBuf é reutilizado entre frames (otimização de churn de GC: antes
+	// era um make([]byte, w*h*bpp) por frame — ~8 MB SDR / ~16 MB HDR @1080p
+	// a 30fps). c.mu protege o acesso; o consumidor copia antes do próximo
+	// acquire (mesmo contrato dos demais capturers).
+	frameBuf []byte
+
 	mu     sync.Mutex
 	closed bool
 }
@@ -390,7 +396,12 @@ func (c *dxgiCapturer) AcquireNextFrame() (*Frame, error) {
 
 	bpp := c.bytesPerPixel
 	bufSize := c.width * c.height * bpp
-	frameData := make([]byte, bufSize)
+	// Buffer reutilizável: elimina ~8-16 MB de alocação por frame (otimização
+	// de churn de GC). O consumidor copia antes do próximo acquire.
+	if cap(c.frameBuf) < bufSize {
+		c.frameBuf = make([]byte, bufSize)
+	}
+	frameData := c.frameBuf[:bufSize]
 	if mapped.Data != nil && mapped.RowPitch > 0 {
 		// mapped.Data aponta para memória GPU staging (não-GC) — o campo já é
 		// unsafe.Pointer, então unsafe.Slice/unsafe.Add operam sem conversão uintptr.

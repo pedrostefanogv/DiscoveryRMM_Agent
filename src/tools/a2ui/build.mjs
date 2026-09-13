@@ -1,4 +1,5 @@
 // build.mjs — Gera o bundle A2UI (IIFE) commitado em frontend/a2ui-bundle.js.
+// (Toolchain em src/tools/a2ui — fora de frontend/ para não entrar no embed, M19.)
 //
 // O frontend do Discovery é vanilla JS (sem bundler em runtime). O renderer
 // A2UI (@a2ui/lit + @a2ui/web_core) é distribuído como pacotes npm ESM, então
@@ -10,14 +11,17 @@
 //   node build.mjs            → build único
 //   node build.mjs --watch    → rebuild em mudanças (dev)
 //
-// Saída: ../a2ui-bundle.js (relativo a este arquivo → frontend/a2ui-bundle.js)
+// Saída: ../../frontend/a2ui-bundle.js — o bundle fica em frontend/ (embedado
+// via //go:embed e carregado pelo runtime), enquanto ESTE diretório (tools/a2ui)
+// é a toolchain de build e fica FORA do frontend para não entrar no embed:
+// node_modules tem 31 MB e inflava o executável em ~31 MB (M19).
 
 import { build, context } from "esbuild";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const outfile = path.resolve(__dirname, "..", "a2ui-bundle.js");
+const outfile = path.resolve(__dirname, "..", "..", "frontend", "a2ui-bundle.js");
 
 const options = {
   entryPoints: [path.resolve(__dirname, "entry.js")],

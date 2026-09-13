@@ -525,7 +525,10 @@ function showChatQuestion(question) {
 
 function answerChatQuestion(questionId, answer) {
   try {
-    appApi().AnswerChatQuestion(questionId, answer);
+    // B15: promise nao aguardada - captura a rejeicao com .catch.
+    appApi().AnswerChatQuestion(questionId, answer).catch(function (e) {
+      console.error("answerChatQuestion error:", e);
+    });
   } catch (e) {
     console.error("answerChatQuestion error:", e);
   }
@@ -1104,34 +1107,9 @@ function handleChatUISuspend() {
 
 document.addEventListener("ui:suspend", handleChatUISuspend);
 
-function startThinkingStatusUpdates(thinkingEl) {
-  stopThinkingStatusUpdates();
-  if (!thinkingEl) return;
-
-  var busy = false;
-  var lastStatus = "";
-  chatThinkingPollId = setInterval(async function () {
-    if (busy) return;
-    busy = true;
-    try {
-      var lines = await appApi().GetLogs();
-      var status = "";
-      for (var i = (lines || []).length - 1; i >= 0; i -= 1) {
-        status = parseChatProgressLine(lines[i]);
-        if (status) break;
-      }
-      if (status && status !== lastStatus && thinkingEl.isConnected) {
-        thinkingEl.textContent = status;
-        lastStatus = status;
-        scheduleChatScrollToBottom();
-      }
-    } catch (_) {
-      // Keep default thinking text when log polling fails.
-    } finally {
-      busy = false;
-    }
-  }, 900);
-}
+// B18: startThinkingStatusUpdates removida — era dead code (sem callers).
+// Se fosse ativada, faria GetLogs() a cada 900ms durante o "thinking".
+// stopThinkingStatusUpdates permanece (usada pelo handler ui:suspend).
 
 function formatInlineChatMarkdown(text) {
   var escaped = escapeHtml(String(text || ""));

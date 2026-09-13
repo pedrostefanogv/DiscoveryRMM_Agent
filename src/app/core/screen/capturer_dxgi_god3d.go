@@ -31,6 +31,12 @@ type dxgiGoD3dCapturer struct {
 	width      int
 	height     int
 	drawCursor bool // se true, desenha o cursor no frame (compat); false = cursor separado
+
+	// frameBuf é reutilizado entre frames (otimização de churn de GC: antes
+	// era um make([]byte, w*4*h) por frame — ~8 MB @1080p a 30fps). Contrato:
+	// o Data do Frame é válido ATÉ o próximo AcquireNextFrame; o consumidor
+	// (session_screen) copia para o encode worker antes do próximo acquire.
+	frameBuf []byte
 }
 
 // NewDXGIGoD3dCapturer cria um capturador DXGI usando go-d3d.
@@ -127,8 +133,14 @@ func (c *dxgiGoD3dCapturer) AcquireNextFrame() (*Frame, error) {
 	contentWidth := int(size.X) * 4
 	dataWidth := int(mappedRect.Pitch)
 
+	// Buffer reutilizável: elimina ~8 MB de alocação por frame (otimização
+	// de churn de GC). O consumidor copia antes do próximo acquire.
+	frameDataSize := contentWidth * int(size.Y)
+	if cap(c.frameBuf) < frameDataSize {
+		c.frameBuf = make([]byte, frameDataSize)
+	}
 	frame := &Frame{
-		Data:   make([]byte, contentWidth*int(size.Y)),
+		Data:   c.frameBuf[:frameDataSize],
 		Width:  int(size.X),
 		Height: int(size.Y),
 		Stride: contentWidth,

@@ -310,6 +310,7 @@ var APP_I18N_DICTIONARY = {
     "support.ticketCreatedSuccess": "Chamado criado com sucesso!",
     "support.ticketCreateError": "Erro ao criar chamado: {error}",
     "support.ticketListLoadError": "Erro ao carregar chamados: {error}",
+ "support.ticketLoadError": "Erro ao abrir chamado: {error}",
     "support.enterComment": "Digite um comentario",
     "support.commentSent": "Comentario enviado",
     "support.commentSendError": "Erro ao enviar comentario: {error}",
@@ -836,6 +837,7 @@ var APP_I18N_DICTIONARY = {
     "support.ticketCreatedSuccess": "Ticket created successfully!",
     "support.ticketCreateError": "Failed to create ticket: {error}",
     "support.ticketListLoadError": "Failed to load tickets: {error}",
+    "support.ticketLoadError": "Failed to open ticket: {error}",
     "support.enterComment": "Enter a comment",
     "support.commentSent": "Comment sent",
     "support.commentSendError": "Failed to send comment: {error}",
@@ -1315,7 +1317,9 @@ function escapeHtml(value) {
 }
 
 function escapeHtmlAttr(value) {
-  return escapeHtml(value).replaceAll("`", "");
+  // B19: backticks eram APAGADOS, corrompendo valores legitimos com crase.
+  // Escapa para a entidade correspondente (inofensiva em atributos HTML).
+  return escapeHtml(value).replaceAll("`", "&#96;");
 }
 
 function syncColorMode() {
@@ -1701,4 +1705,28 @@ function renderDiskOccupiedGB(disk) {
     return "indisponivel";
   var occupied = Math.max(0, size - free);
   return occupied.toFixed(2) + " GB";
+}
+
+// B14: valida cor CSS vinda do servidor antes de injetar em style inline.
+// escapeHtml neutraliza aspas/tags mas NAO neutraliza ; e : - um
+// workflowState.color malicioso podia encadear declaracoes de estilo.
+// Aceita apenas hex #rgb/#rgba e rgb()/rgba() numericos; caso contrario
+// retorna o fallback.
+function safeCssColor(value, fallback) {
+  var v = String(value || "").trim();
+  if (/^#[0-9a-fA-F]{3,8}$/.test(v)) {
+    return v;
+  }
+  if (/^rgba?\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*(,\s*(0|1|0?\.\d+)\s*)?\)$/.test(v)) {
+    return v;
+  }
+  return fallback || "";
+}
+
+// B14: monta o style inline do badge de status apenas com cor validada.
+// Retorna string vazia quando a cor e invalida (badge fica com estilo padrao).
+function safeStatusBadgeStyle(color) {
+  var c = safeCssColor(color);
+  if (!c) return '';
+  return ' style="background:' + c + '20;color:' + c + '"';
 }

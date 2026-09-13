@@ -110,7 +110,7 @@ type fakeTuner struct {
 	sendErr    error
 	sends      int
 	lostReason string
-	fellBack   bool
+	recovered  bool
 }
 
 func (f *fakeTuner) SendStatus() error {
@@ -124,10 +124,10 @@ func (f *fakeTuner) OnServiceLost(reason string) {
 	defer f.mu.Unlock()
 	f.lostReason = reason
 }
-func (f *fakeTuner) OnFallbackStandalone() {
+func (f *fakeTuner) OnServiceRecovered() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.fellBack = true
+	f.recovered = true
 }
 
 // waitSends aguarda até que o tuner acumule n envios (sincronização de teste).
@@ -184,15 +184,17 @@ func TestCompanionControllerResetsFailuresOnSuccess(t *testing.T) {
 
 	tuner.mu.Lock()
 	defer tuner.mu.Unlock()
-	if tuner.fellBack {
-		t.Fatal("fallback NÃO deve disparar quando o sucesso interrompe a sequência de falhas")
+	if tuner.recovered {
+		t.Fatal("serviço não voltou — OnServiceRecovered NÃO deve disparar")
 	}
 	if c.Failures() != 2 {
 		t.Fatalf("contador esperado 2 (resetado pelo sucesso), got %d", c.Failures())
 	}
 }
 
-func TestCompanionControllerFallbackAfterMaxFailures(t *testing.T) {
+// M5: não há mais fallback standalone — após MaxFailures o controller notifica
+// OnServiceLost (uma vez) e CONTINUA o polling esperando o serviço voltar.
+func TestCompanionControllerServiceLostAfterMaxFailures(t *testing.T) {
 	tuner := &fakeTuner{sendErr: context.DeadlineExceeded}
 	cfg := CompanionConfig{PollInterval: time.Millisecond, MaxFailures: 3, Reason: "service_unreachable"}
 	c := NewCompanionController(tuner, cfg)
@@ -202,23 +204,66 @@ func TestCompanionControllerFallbackAfterMaxFailures(t *testing.T) {
 	done := make(chan struct{})
 	go func() { c.Run(ctx, ticks); close(done) }()
 
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 4; i++ {
 		ticks <- time.Now()
 	}
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("controller não retornou após MaxFailures")
-	}
+	// Dá um respiro para o tick 4 processar (deve continuar rodando, sem fallback).
+	time.Sleep(20 * time.Millisecond)
 	cancel()
+	<-done
 
 	tuner.mu.Lock()
 	defer tuner.mu.Unlock()
 	if tuner.lostReason != "service_unreachable" {
 		t.Fatalf("lostReason esperado service_unreachable, got %q", tuner.lostReason)
 	}
-	if !tuner.fellBack {
-		t.Fatal("fallback standalone deve disparar após MaxFailures")
+	if tuner.recovered {
+		t.Fatal("recovered não deve disparar sem sucesso no SendStatus")
+	}
+}
+
+// M5: após perda notificada, o primeiro sucesso dispara OnServiceRecovered.
+func TestCompanionControllerRecoveredOnServiceReturn(t *testing.T) {
+	tuner := &fakeTuner{}
+	cfg := CompanionConfig{PollInterval: time.Millisecond, MaxFailures: 3, Reason: "service_unreachable"}
+	c := NewCompanionController(tuner, cfg)
+
+	ticks := make(chan time.Time, 16)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { c.Run(ctx, ticks); close(done) }()
+
+	// 3 falhas → notifica perda.
+	tuner.mu.Lock()
+	tuner.sendErr = context.DeadlineExceeded
+	tuner.mu.Unlock()
+	for i := 0; i < 4; i++ {
+		ticks <- time.Now()
+	}
+	waitSends(t, tuner, 4)
+	tuner.mu.Lock()
+	lostReason := tuner.lostReason
+	tuner.mu.Unlock()
+	if lostReason != "service_unreachable" {
+		t.Fatalf("lostReason = %q, want service_unreachable", lostReason)
+	}
+
+	// Serviço volta (sucesso) → recovered.
+	tuner.mu.Lock()
+	tuner.sendErr = nil
+	tuner.mu.Unlock()
+	ticks <- time.Now()
+	waitSends(t, tuner, 5)
+	ticks <- time.Now()
+	waitSends(t, tuner, 6)
+
+	tuner.mu.Lock()
+	recovered := tuner.recovered
+	tuner.mu.Unlock()
+	cancel()
+	<-done
+	if !recovered {
+		t.Fatal("OnServiceRecovered deve disparar quando o serviço volta (M5)")
 	}
 }
 

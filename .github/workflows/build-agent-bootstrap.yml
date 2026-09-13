@@ -56,18 +56,28 @@ jobs:
 
       - name: Build bootstrap installer
         shell: pwsh
+        # M20: inputs do workflow_dispatch interpolados via env (NUNCA direto no
+        # run — "${{ inputs.x }}" permite command injection pelo formulário).
+        env:
+          WF_PAYLOAD_URL: "${{ github.event.inputs.payload_url }}"
+          WF_VERSION: "${{ github.event.inputs.version }}"
+          WF_PAYLOAD_SHA256: "${{ github.event.inputs.payload_sha256 }}"
+          WF_PAYLOAD_FILENAME: "${{ github.event.inputs.payload_filename }}"
+          WF_OUTPUT_NAME: "${{ github.event.inputs.output_name }}"
+          WF_AUTO_PROVISIONING: "${{ github.event.inputs.auto_provisioning }}"
+          WF_GENERIC_INSTALL: "${{ github.event.inputs.generic_install }}"
         run: |
           $params = @{
             ProjectRoot = $PWD
-            PayloadUrl = "${{ github.event.inputs.payload_url }}"
-            Version = "${{ github.event.inputs.version }}"
-            PayloadSha256 = "${{ github.event.inputs.payload_sha256 }}"
-            PayloadFileName = "${{ github.event.inputs.payload_filename }}"
-            OutputName = "${{ github.event.inputs.output_name }}"
-            AutoProvisioning = "${{ github.event.inputs.auto_provisioning }}"
+            PayloadUrl = $env:WF_PAYLOAD_URL
+            Version = $env:WF_VERSION
+            PayloadSha256 = $env:WF_PAYLOAD_SHA256
+            PayloadFileName = $env:WF_PAYLOAD_FILENAME
+            OutputName = $env:WF_OUTPUT_NAME
+            AutoProvisioning = $env:WF_AUTO_PROVISIONING
           }
 
-          if ('${{ github.event.inputs.generic_install }}' -eq 'true') {
+          if ($env:WF_GENERIC_INSTALL -eq 'true') {
             $params.GenericInstall = $true
           }
 

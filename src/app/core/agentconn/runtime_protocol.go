@@ -67,10 +67,10 @@ func executeCommand(parent context.Context, cmdType string, payload any) (int, s
 		}
 		cmd = processutil.HideCommandContext(ctx, resolved, args...)
 	default:
-		if command == "" {
-			return 2, "", "tipo de comando desconhecido e payload sem comando"
-		}
-		cmd = processutil.HideCommandContext(ctx, "cmd", "/C", command)
+		// M32: cmdType desconhecido NÃO vira shell genérico — antes, qualquer
+		// cmdType com payload executava via cmd /C <command>, ampliando o raio
+		// de dano de um backend comprometido. Rejeita com erro claro.
+		return 2, "", fmt.Sprintf("tipo de comando desconhecido: %s", cmdType)
 	}
 
 	out, err := cmd.CombinedOutput()

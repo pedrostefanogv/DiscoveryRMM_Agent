@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"sync"
 )
 
 // ----- JSON-RPC 2.0 types --------------------------------------------------
@@ -77,8 +78,8 @@ func (s *Server) Run(ctx context.Context, r io.Reader, w io.Writer) error {
 		}
 	}()
 
-	// runDone é cancelado quando Run sai, garantindo que goroutines de request
-	// pendentes não façam send em respCh já fechado (panic "send on closed").
+	// runCtx é cancelado quando Run sai, garantindo que goroutines de request
+	// pendentes não fiquem presas em handlers longos (correção A16).
 	runCtx, cancelRun := context.WithCancel(ctx)
 	defer cancelRun()
 
@@ -86,9 +87,16 @@ func (s *Server) Run(ctx context.Context, r io.Reader, w io.Writer) error {
 	// esperam sua vez antes de executar o handler (o loop de leitura continua).
 	sem := make(chan struct{}, maxConcurrentToolCalls)
 
+	// A16: rastreia goroutines de request em voo. respCh só é fechado depois
+	// de wg.Wait() — com senders ativos, fechar o canal dispara
+	// "send on closed channel" e derruba o agente inteiro.
+	var wg sync.WaitGroup
+
 	for scanner.Scan() {
 		select {
 		case <-runCtx.Done():
+			cancelRun()
+			wg.Wait()
 			close(respCh)
 			<-writerDone
 			return runCtx.Err()
@@ -115,16 +123,18 @@ func (s *Server) Run(ctx context.Context, r io.Reader, w io.Writer) error {
 		}
 
 		// Request real: executa em goroutine para não bloquear o loop de leitura.
+		wg.Add(1)
 		go func(req jsonrpcRequest) {
-			defer func() {
-				<-sem // libera a vaga (no-op se não adquiriu)
-			}()
+			defer wg.Done()
 			// Adquire vaga antes de executar o handler; desiste se Run sair.
+			// A16: a vaga é liberada APENAS se foi adquirida — o defer antigo
+			// rodava mesmo sem adquirir e bloqueava para ever no <-sem.
 			select {
 			case sem <- struct{}{}:
 			case <-runCtx.Done():
 				return
 			}
+			defer func() { <-sem }()
 			resp := s.handle(runCtx, req)
 			if resp == nil {
 				return // notification — no response
@@ -136,6 +146,12 @@ func (s *Server) Run(ctx context.Context, r io.Reader, w io.Writer) error {
 		}(req)
 	}
 	err := scanner.Err()
+	// A16: cancela runCtx ANTES de aguardar as goroutines (destrava handlers
+	// em voo), espera TODAS terminarem (nenhum sender restante) e só então
+	// fecha o canal — ordem que elimina o panic "send on closed channel" no
+	// shutdown (cliente fechando stdin durante um tools/call longo).
+	cancelRun()
+	wg.Wait()
 	// Fecha o canal ANTES de esperar o writer (fechar via defer causaria
 	// deadlock: writerDone só fecha depois de close(respCh), que só rodaria
 	// após o return — bloqueado aqui).

@@ -423,7 +423,7 @@
       lines.push("Network: " + !!r.networkAvailable + "  FocusMode: " + !!r.userInFocusMode);
       lines.push("Module: " + (r.moduleVersion || "?") + "  UserSessions: " + (r.activeUserSessions || 0));
       lines.push("CheckedAt: " + (r.checkedAtUtc || ""));
-      if (outputEl) outputEl.textContent = lines.join("\\n");
+      if (outputEl) outputEl.textContent = lines.join("\n");
       setStatus(statusEl, "Preflight checks concluídos.", "ok");
     }).catch(function (err) {
       setStatus(statusEl, "Falha: " + (err && err.message ? err.message : String(err)), "error");

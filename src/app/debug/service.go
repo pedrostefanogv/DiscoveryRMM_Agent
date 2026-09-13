@@ -20,6 +20,7 @@ import (
 	"github.com/samber/lo"
 
 	"discovery/app/core/agentconn"
+	"discovery/app/core/platform"
 	"discovery/app/core/tlsutil"
 	"discovery/app/netutil"
 	"discovery/app/p2pmeta"
@@ -158,6 +159,13 @@ func (s *Service) PersistConfig(cfg Config) error {
 		if err := osWriteFile(path, data, 0o600); err != nil {
 			errs = append(errs, path+": "+err.Error())
 			continue
+		}
+		// A3: endurece a DACL do arquivo quando o processo é elevado — o
+		// 0o600 é no-op no Windows e o arquivo herda Users:(M) do diretório.
+		if platform.IsElevated() {
+			if aclErr := platform.HardenSecretFileACL(path); aclErr != nil {
+				s.logf("[debug] aviso: nao foi possivel restringir ACL de " + path + ": " + aclErr.Error())
+			}
 		}
 		s.logf("[debug] configuração salva em " + path)
 		return nil

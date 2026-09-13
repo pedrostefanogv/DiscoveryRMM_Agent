@@ -54,6 +54,13 @@ type gdiCapturer struct {
 	memDC     uintptr
 	memBitmap uintptr
 
+	// frameBuf é reutilizado entre frames (otimização: antes era um
+	// make([]byte, w*h*4) por frame — ~8,3 MB @1080p a 30fps ≈ 250 MB/s de
+	// churn de GC). Contrato idêntico ao go-d3d: o Data do Frame é válido
+	// ATÉ o próximo AcquireNextFrame — o consumidor (session_screen) já copia
+	// para o encode worker antes do próximo acquire.
+	frameBuf []byte
+
 	// Throttle da re-detecção de geometria. GetMonitors() usa
 	// syscall.NewCallback, que registra um callback PERMANENTE no runtime
 	// (limite ~2000 por processo) — chamar a cada frame esgotaria os slots
@@ -178,7 +185,12 @@ func (c *gdiCapturer) AcquireNextFrame() (*Frame, error) {
 	}
 
 	bufSize := c.width * c.height * 4
-	frameData := make([]byte, bufSize)
+	// Buffer reutilizável: elimina ~8 MB de alocação por frame (otimização
+	// de churn de GC). O consumidor copia antes do próximo acquire.
+	if cap(c.frameBuf) < bufSize {
+		c.frameBuf = make([]byte, bufSize)
+	}
+	frameData := c.frameBuf[:bufSize]
 
 	// BITMAPINFO header
 	var bi [40]byte
