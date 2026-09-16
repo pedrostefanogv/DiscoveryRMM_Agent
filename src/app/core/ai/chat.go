@@ -64,10 +64,17 @@ type Service struct {
 
 	chatLogger *ChatLogger
 
-	// a2uiActionMu protege a ação A2UI pendente (userAction) que será enviada
-	// ao LLM no próximo round do loop multi-round.
-	a2uiActionMu sync.Mutex
-	a2uiAction   *A2uiAction
+	// a2uiActionMu protege a fila de ações A2UI pendentes (userAction) que serão
+	// consumidas pelo próximo round do loop multi-round. Fila (não valor único):
+	// cliques rápidos em surfaces diferentes não se sobrescrevem mais.
+	a2uiActionMu   sync.Mutex
+	a2uiActions    []A2uiAction
+	maxA2uiActions int
+
+	// turnMu garante um turno de chat por vez (B-M4): dois fluxos concorrentes
+	// (ex.: usuário clicando em "enviar" duas vezes, ou webview + debug HTTP)
+	// não devem compartilhar history/sessionID em loops paralelos.
+	turnMu sync.Mutex
 }
 
 // A2uiAction representa uma ação do usuário em uma surface A2UI.
@@ -80,34 +87,66 @@ type A2uiAction struct {
 // NewService creates a chat service.
 func NewService(registry *mcp.Registry) *Service {
 	return &Service{
-		registry: registry,
-		history:  []Message{},
+		registry:       registry,
+		history:        []Message{},
+		maxA2uiActions: 4,
 	}
 }
 
 // SubmitA2uiAction registra uma ação do usuário em uma surface A2UI. A ação é
 // consumida pelo próximo round do loop multi-round (SendStreamMultiRound) e
 // enviada ao LLM como um tool result, permitindo que o agente reaja ao clique.
+//
+// B1: as ações ficam em uma fila limitada (maxA2uiActions); chamador deve
+// verificar HasActiveStream() antes de enfileirar — ação clicada sem stream
+// ativo é descartada pelo binding (app.AnswerA2uiAction) e não deve chegar aqui.
 func (s *Service) SubmitA2uiAction(surfaceID, name string, context map[string]any) {
 	s.a2uiActionMu.Lock()
 	defer s.a2uiActionMu.Unlock()
-	s.a2uiAction = &A2uiAction{SurfaceID: surfaceID, Name: name, Context: context}
+	if s.maxA2uiActions > 0 && len(s.a2uiActions) >= s.maxA2uiActions {
+		// Descarta a mais antiga para abrir espaço (a fila nunca deve crescer
+		// sem limite se um turno demorar a consumir).
+		s.a2uiActions = s.a2uiActions[1:]
+	}
+	s.a2uiActions = append(s.a2uiActions, A2uiAction{SurfaceID: surfaceID, Name: name, Context: context})
 }
 
-// takeA2uiAction consome e retorna a ação A2UI pendente (se houver).
+// takeA2uiAction consome e retorna a PRIMEIRA ação A2UI pendente (se houver).
 func (s *Service) takeA2uiAction() *A2uiAction {
 	s.a2uiActionMu.Lock()
 	defer s.a2uiActionMu.Unlock()
-	action := s.a2uiAction
-	s.a2uiAction = nil
-	return action
+	if len(s.a2uiActions) == 0 {
+		return nil
+	}
+	action := s.a2uiActions[0]
+	s.a2uiActions = s.a2uiActions[1:]
+	return &action
 }
 
-// peekA2uiAction retorna a ação A2UI pendente SEM consumi-la (se houver).
-func (s *Service) peekA2uiAction() *A2uiAction {
+// peekA2uiAction retorna true se há ação A2UI pendente SEM consumi-la.
+func (s *Service) peekA2uiAction() bool {
 	s.a2uiActionMu.Lock()
 	defer s.a2uiActionMu.Unlock()
-	return s.a2uiAction
+	return len(s.a2uiActions) > 0
+}
+
+// discardPendingA2uiActions consome e descarta todas as ações A2UI pendentes
+// (usado ao final de um turno para ações órfãs não vazarem para o próximo).
+func (s *Service) discardPendingA2uiActions() int {
+	s.a2uiActionMu.Lock()
+	defer s.a2uiActionMu.Unlock()
+	n := len(s.a2uiActions)
+	s.a2uiActions = nil
+	return n
+}
+
+// HasActiveStream retorna true se há um stream/loop multi-round em execução.
+// B1: o frontend só deve enfileirar ações A2UI enquanto existe um turno ativo
+// que as consumirá.
+func (s *Service) HasActiveStream() bool {
+	s.streamMu.Lock()
+	defer s.streamMu.Unlock()
+	return s.activeStreamCancel != nil
 }
 
 // SetLogger configures an optional callback for chat diagnostics.
@@ -141,17 +180,36 @@ func (s *Service) SetConfig(cfg Config) {
 	s.cfg = cfg
 }
 
+// maskedAPISentinel é o sentinel devolvido por GetConfig no lugar da chave
+// (H2): antes exibia prefixo+sufixo da chave (abcd...wxyz), o que vazava
+// caracteres reais do segredo para quem consultasse a config.
+const maskedAPISentinel = "********"
+
 // GetConfig returns the current configuration (API key masked).
 func (s *Service) GetConfig() Config {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	c := s.cfg
-	if len(c.APIKey) > 8 {
-		c.APIKey = c.APIKey[:4] + "..." + c.APIKey[len(c.APIKey)-4:]
-	} else if c.APIKey != "" {
-		c.APIKey = "***"
+	if c.APIKey != "" {
+		c.APIKey = maskedAPISentinel
 	}
 	return c
+}
+
+// appendHistory adiciona uma mensagem ao histórico com limite (M6): mantém no
+// máximo maxHistoryMessages entradas. O trim só roda aqui — chamado antes de
+// iniciar um turno e ao final dele — nunca no meio do loop (os índices de
+// lastAssistantContentSince ficariam deslocados).
+const (
+	maxHistoryMessages  = 80
+	trimHistoryTo       = 60
+)
+
+func appendHistoryLocked(s *Service, m Message) {
+	s.history = append(s.history, m)
+	if len(s.history) > maxHistoryMessages {
+		s.history = s.history[len(s.history)-trimHistoryTo:]
+	}
 }
 
 // ClearHistory resets the conversation.
@@ -160,10 +218,10 @@ func (s *Service) ClearHistory() {
 	defer s.mu.Unlock()
 	s.history = []Message{}
 	s.sessionID = ""
-	// Limpa também a ação A2UI pendente (se o usuário clicou num botão e depois
-	// limpou o chat, a ação não deve ser processada na próxima mensagem).
+	// Limpa também as ações A2UI pendentes (se o usuário clicou num botão e depois
+	// limpou o chat, as ações não devem ser processadas na próxima mensagem).
 	s.a2uiActionMu.Lock()
-	s.a2uiAction = nil
+	s.a2uiActions = nil
 	s.a2uiActionMu.Unlock()
 }
 
@@ -412,7 +470,7 @@ func (s *Service) Send(ctx context.Context, userMessage string) (string, error) 
 	}
 
 	s.mu.Lock()
-	s.history = append(s.history, Message{Role: "user", Content: userMessage})
+	appendHistoryLocked(s, Message{Role: "user", Content: userMessage})
 	s.mu.Unlock()
 
 	resp, err := s.callAgentChatSync(ctx, cfg, userMessage, sessionID)
@@ -446,7 +504,7 @@ func (s *Service) Send(ctx context.Context, userMessage string) (string, error) 
 	if strings.TrimSpace(resp.SessionID) != "" {
 		s.sessionID = strings.TrimSpace(resp.SessionID)
 	}
-	s.history = append(s.history, Message{Role: "assistant", Content: assistant})
+	appendHistoryLocked(s, Message{Role: "assistant", Content: assistant})
 	s.mu.Unlock()
 
 	return assistant, nil
@@ -456,7 +514,14 @@ type agentChatRequest struct {
 	Message   string           `json:"message"`
 	SessionID *string          `json:"sessionId,omitempty"`
 	MaxTokens *int             `json:"maxTokens,omitempty"`
-	Tools     []map[string]any `json:"tools,omitempty"`
+	// Model é opcional (pass-through, Fase 3): o servidor pode usar para
+	// rotear o provedor LLM (ex.: OpenRouter). Servidores antigos ignoram.
+	Model     string           `json:"model,omitempty"`
+	// Tools NÃO é populado pelo builder no sync (M7): o endpoint sync não
+	// suporta function calling e receber tools só induzia o LLM a emitir
+	// invokes como texto (vazamentos DSML). O builder do stream single-round
+	// popula o campo explicitamente.
+	Tools []map[string]any `json:"tools,omitempty"`
 }
 
 type agentChatSyncResponse struct {
@@ -480,14 +545,23 @@ func (s *Service) buildAgentChatRequest(message, sessionID string, maxTokens int
 		req.MaxTokens = &tmp
 	}
 	s.mu.RLock()
+	if m := strings.TrimSpace(s.cfg.Model); m != "" {
+		req.Model = m
+	}
+	s.mu.RUnlock()
+	return req
+}
+
+// addAgentTools popula req.Tools com as funções MCP do registry (usado apenas
+// nos fluxos de stream, que suportam function calling).
+func (s *Service) addAgentTools(req *agentStreamRequest) {
+	s.mu.RLock()
 	if s.registry != nil {
-		tools := s.registry.OpenAIFunctions()
-		if len(tools) > 0 {
+		if tools := s.registry.OpenAIFunctions(); len(tools) > 0 {
 			req.Tools = tools
 		}
 	}
 	s.mu.RUnlock()
-	return req
 }
 
 func normalizeAgentChatBaseURL(endpoint string) (string, error) {
@@ -661,7 +735,9 @@ var blockedMessagePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)<script[^>]*>`),
 	regexp.MustCompile(`(?i)javascript:`),
 	regexp.MustCompile(`(?i)eval\s*\(`),
-	regexp.MustCompile(`(?i)on[a-z]+\s*=`),
+	// M1: exige limite de palavra antes de "on..." e conteudo apos "=" —
+	// a versão antiga (on[a-z]+\s*=) bloqueava textos como "configuracao=".
+	regexp.MustCompile(`(?i)\bon[a-z]+\s*=\s*["'\w]`),
 	regexp.MustCompile(`(?i)<iframe[^>]*>`),
 	regexp.MustCompile(`(?i)<object[^>]*>`),
 	regexp.MustCompile(`(?i)<embed[^>]*>`),
@@ -672,8 +748,9 @@ func validateChatMessage(message string) error {
 	if trimmed == "" {
 		return fmt.Errorf("mensagem obrigatoria")
 	}
-	if len([]byte(trimmed)) > 2048 {
-		return fmt.Errorf("mensagem excede 2048 bytes UTF-8")
+	// M1: 8 KB — descrições detalhadas de chamados cabiam mal em 2048 bytes.
+	if len([]byte(trimmed)) > 8192 {
+		return fmt.Errorf("mensagem excede 8192 bytes UTF-8")
 	}
 	if !utf8.ValidString(trimmed) {
 		return fmt.Errorf("mensagem invalida: UTF-8 incorreto")
@@ -708,26 +785,6 @@ func (s *Service) logChatEntry(entry ChatLogEntry) {
 // LogChatEntry é a versão pública de logChatEntry para uso externo (ex.: chat_bridge).
 func (s *Service) LogChatEntry(entry ChatLogEntry) {
 	s.logChatEntry(entry)
-}
-
-func (s *Service) buildMessages(systemPrompt string) []map[string]any {
-	msgs := make([]map[string]any, 0, len(s.history)+1)
-	msgs = append(msgs, map[string]any{"role": "system", "content": systemPrompt})
-
-	for _, m := range s.history {
-		entry := map[string]any{"role": m.Role}
-		if m.Content != "" {
-			entry["content"] = m.Content
-		}
-		if m.ToolCallID != "" {
-			entry["tool_call_id"] = m.ToolCallID
-		}
-		if len(m.ToolCalls) > 0 {
-			entry["tool_calls"] = m.ToolCalls
-		}
-		msgs = append(msgs, entry)
-	}
-	return msgs
 }
 
 // SendStream está definida em chat_stream.go

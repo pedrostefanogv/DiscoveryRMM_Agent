@@ -1,7 +1,6 @@
 package app
 
 import (
-	"os"
 	"path/filepath"
 
 	"discovery/app/core/ai"
@@ -28,17 +27,14 @@ func (a *App) initChatLogger() {
 	chatLogger := ai.NewChatLogger("")
 	chatLogger.Enable(filepath.Join(platform.DataDir(), "logs"))
 
-	// Verificar config do installer para decidir se ativa ou não
-	shouldEnable := true // padrão: ativado
+	// Verificar config do installer para decidir se ativa ou não.
+	// M8 (privacidade): o log de chat persiste a conversa completa em disco;
+	// agora é opt-in — campo ausente no config.json significa DESATIVADO.
+	shouldEnable := false
 
 	inst, _, err := loadInstallerConfig()
-	if err == nil {
-		if inst.ChatLog.Enabled != nil {
-			shouldEnable = *inst.ChatLog.Enabled
-		} else {
-			// Campo ausente: ativar por padrão e persistir
-			go a.ensureChatLogConfigEnabled(&inst)
-		}
+	if err == nil && inst.ChatLog.Enabled != nil {
+		shouldEnable = *inst.ChatLog.Enabled
 	}
 
 	if shouldEnable {
@@ -47,31 +43,6 @@ func (a *App) initChatLogger() {
 	} else {
 		chatLogger.Disable()
 		a.Logs.Append("[chat] log detalhado de chat desativado pela configuração")
-	}
-}
-
-// ensureChatLogConfigEnabled persiste o campo chatLog.enabled = true
-// no config.json quando ele está ausente, garantindo que o log fique
-// ativo por padrão.
-func (a *App) ensureChatLogConfigEnabled(inst *InstallerConfig) {
-	if inst == nil {
-		return
-	}
-	enabled := true
-	inst.ChatLog.Enabled = &enabled
-
-	// Persistir usando a mesma lógica de persistInstallerConfig
-	basePath := ""
-	for _, path := range installerConfigPathCandidates() {
-		if _, err := os.Stat(path); err == nil {
-			basePath = path
-			break
-		}
-	}
-	if _, err := persistInstallerConfig(basePath, *inst); err != nil {
-		a.Logs.Append("[chat] aviso: falha ao persistir chatLog.enabled no config.json: " + err.Error())
-	} else {
-		a.Logs.Append("[chat] chatLog.enabled = true adicionado ao config.json")
 	}
 }
 

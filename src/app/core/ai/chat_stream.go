@@ -107,6 +107,9 @@ type agentStreamRequest struct {
 	//   "a2ui_action"  — turno iniciado por ação A2UI (ToolResults com a ação).
 	// Agentes antigos não enviam o campo; o servidor faz fallback para a
 	// convenção legada.
+	// Model é opcional (pass-through, Fase 3): o servidor pode usar para
+	// rotear o provedor LLM (ex.: OpenRouter). Servidores antigos ignoram.
+	Model string `json:"model,omitempty"`
 	Mode string `json:"mode,omitempty"`
 }
 
@@ -139,6 +142,14 @@ func (s *Service) callAgentChatStream(
 	}
 
 	requestBody := s.buildAgentChatRequest(message, sessionID, cfg.MaxTokens)
+	// M7: tools só vão nos fluxos de stream (function calling).
+	s.mu.RLock()
+	if s.registry != nil {
+		if tools := s.registry.OpenAIFunctions(); len(tools) > 0 {
+			requestBody.Tools = tools
+		}
+	}
+	s.mu.RUnlock()
 	payload, err := json.Marshal(requestBody)
 	if err != nil {
 		s.logChatEntry(ChatLogEntry{
@@ -371,7 +382,7 @@ func (s *Service) SendStream(ctx context.Context, userMessage string, onToken fu
 	}
 
 	s.mu.Lock()
-	s.history = append(s.history, Message{Role: "user", Content: userMessage})
+	appendHistoryLocked(s, Message{Role: "user", Content: userMessage})
 	s.mu.Unlock()
 
 	if onStatus != nil {
@@ -391,7 +402,7 @@ func (s *Service) SendStream(ctx context.Context, userMessage string, onToken fu
 		if syncErr != nil {
 			if hasToken && strings.TrimSpace(content) != "" {
 				s.mu.Lock()
-				s.history = append(s.history, Message{Role: "assistant", Content: content})
+				appendHistoryLocked(s, Message{Role: "assistant", Content: content})
 				s.mu.Unlock()
 				return content, nil
 			}
@@ -417,7 +428,7 @@ func (s *Service) SendStream(ctx context.Context, userMessage string, onToken fu
 		if strings.TrimSpace(syncResp.SessionID) != "" {
 			s.sessionID = strings.TrimSpace(syncResp.SessionID)
 		}
-		s.history = append(s.history, Message{Role: "assistant", Content: assistant})
+		appendHistoryLocked(s, Message{Role: "assistant", Content: assistant})
 		s.mu.Unlock()
 		return assistant, nil
 	}
@@ -431,7 +442,7 @@ func (s *Service) SendStream(ctx context.Context, userMessage string, onToken fu
 	if strings.TrimSpace(streamSessionID) != "" {
 		s.sessionID = strings.TrimSpace(streamSessionID)
 	}
-	s.history = append(s.history, Message{Role: "assistant", Content: assistant})
+	appendHistoryLocked(s, Message{Role: "assistant", Content: assistant})
 	s.mu.Unlock()
 
 	return assistant, nil

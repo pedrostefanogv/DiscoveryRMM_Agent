@@ -52,6 +52,13 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 	mcpExecutor func(ctx context.Context, toolName, argsJSON string) (string, error),
 	onA2ui ...func(string),
 ) (string, error) {
+	// M4: um turno por vez. Dois fluxos concorrentes (webview + debug HTTP,
+	// duplo clique em enviar) não devem compartilhar history/sessionID.
+	if !s.turnMu.TryLock() {
+		return "", fmt.Errorf("já existe uma resposta em andamento — aguarde ou clique em Parar")
+	}
+	defer s.turnMu.Unlock()
+
 	streamCtx, streamCancel := context.WithCancel(ctx) // Registra o cancel para que StopStream() (botão "Parar" do frontend)
 	// interrompa também o loop multi-round — antes, só o stream single-round
 	// era cancelável e o botão não tinha efeito aqui.
@@ -59,6 +66,11 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 	defer func() {
 		s.unregisterStreamCancel(streamID)
 		streamCancel()
+		// B1: ações A2UI remanescentes ao final do turno são órfãs — descarta
+		// para não contaminarem a próxima mensagem do usuário.
+		if n := s.discardPendingA2uiActions(); n > 0 {
+			s.logf("[chat] %d ação(ões) A2UI pendente(s) descartada(s) ao final do turno", n)
+		}
 	}()
 	startTime := time.Now()
 
@@ -80,7 +92,7 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 	// Verifica se há ação A2UI pendente ANTES de validar a mensagem. Quando o
 	// usuário clica num botão A2UI, a mensagem pode ser vazia (a ação é enviada
 	// como tool result). Nesse caso, pulamos a validação de mensagem.
-	hasPendingA2ui := s.peekA2uiAction() != nil
+	hasPendingA2ui := s.peekA2uiAction()
 	if !hasPendingA2ui {
 		if err := validateChatMessage(userMessage); err != nil {
 			s.logChatEntry(ChatLogEntry{
@@ -99,7 +111,7 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 	// for uma mensagem real do usuário.
 	if !hasPendingA2ui {
 		s.mu.Lock()
-		s.history = append(s.history, Message{Role: "user", Content: userMessage})
+		appendHistoryLocked(s, Message{Role: "user", Content: userMessage})
 		s.mu.Unlock()
 	}
 
@@ -137,6 +149,9 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 		reqMode = "a2ui_action"
 	}
 	req := agentStreamRequest{Message: reqMessage, SessionID: sessionID, ToolResults: initialToolResults, Mode: reqMode}
+	// Model pass-through (Fase 3): campo opcional, servidores antigos ignoram.
+	reqModel := strings.TrimSpace(cfg.Model)
+	req.Model = reqModel
 	// Injetar tools MCP no primeiro round (round 0).
 	s.mu.RLock()
 	toolCount := 0
@@ -169,6 +184,38 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 	totalToolCalls := 0
 	allCalledTools := make([]string, 0)
 	forcedRetries := 0
+	// B3: tool results já executadas mas ainda não processadas pelo LLM em um
+	// round concluído. Se o round seguinte falhar por erro de rede/HTTP,
+	// tentamos reenviá-las uma vez (mode tool_results) antes de degradar.
+	undeliveredResults := make([]toolResultItem, 0)
+	rescueAttempted := false
+
+	// Guardrails A2UI client-side (Fase 3): maximo de 6 mensagens de surface
+	// por turno e descarte de payloads identicos reenviados. Sem isso, um
+	// modelo exagerado podia inundar a UI com surfaces.
+	a2uiMsgCount := 0
+	seenA2ui := make(map[string]bool, 4)
+	var a2uiCb func(string)
+	if len(onA2ui) > 0 && onA2ui[0] != nil {
+		base := onA2ui[0]
+		a2uiCb = func(msg string) {
+			m := strings.TrimSpace(msg)
+			if m == "" {
+				return
+			}
+			if seenA2ui[m] {
+				s.logf("[chat] a2ui: payload duplicado descartado (%d chars)", len(m))
+				return
+			}
+			if a2uiMsgCount >= 6 {
+				s.logf("[chat] a2ui: limite de 6 mensagens por turno atingido — mensagem descartada")
+				return
+			}
+			seenA2ui[m] = true
+			a2uiMsgCount++
+			base(m)
+		}
+	}
 
 	// Salva o tamanho do historico ANTES de iniciar o loop multi-round.
 	// Isso garante que lastAssistantContentSince() so retorne respostas
@@ -214,8 +261,14 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 			MessageLen: len(req.Message),
 		})
 
-		currentSessionID, err = s.executeRound(streamCtx, cfg, req, round, onToken, &pendingCalls, onLoopProgress, onA2ui...)
+		currentSessionID, err = s.executeRound(streamCtx, cfg, req, round, onToken, &pendingCalls, onLoopProgress, a2uiCb)
 		roundElapsed := time.Since(roundStart)
+
+		if err == nil {
+			// B3: o round anterior entregou seus tool results ao servidor
+			// (o request atual os carregou) — limpa o buffer de resgate.
+			undeliveredResults = nil
+		}
 
 		if err != nil {
 			s.logChatEntry(ChatLogEntry{
@@ -226,9 +279,45 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 				Error:     err.Error(),
 				LatencyMs: int(roundElapsed.Milliseconds()),
 			})
+			// B3: em rounds > 0 com tool results já executadas mas ainda não
+			// processadas pelo LLM, tenta reenviá-las UMA vez (mode
+			// tool_results) em vez de degradar direto para o sync — que não
+			// suporta function calling e perderia todo o contexto das tools.
+			// O fallback sync fica apenas para falha no round 0.
+			if round > 0 && !rescueAttempted && len(undeliveredResults) > 0 {
+				rescueAttempted = true
+				s.logChatEntry(ChatLogEntry{
+					Type:      "round_error_rescue",
+					Method:    "multi_round",
+					SessionID: currentSessionID,
+					Round:     round,
+					ToolCalls: []string{"rescue:" + fmt.Sprint(len(undeliveredResults)) + " results"},
+					Error:     err.Error(),
+				})
+				if onStatus != nil {
+					onStatus("Reconectando — reenviando resultados das ferramentas...")
+				}
+				s.mu.RLock()
+				tools := make([]map[string]any, 0)
+				if s.registry != nil {
+					tools = s.registry.OpenAIFunctions()
+				}
+				s.mu.RUnlock()
+				req = agentStreamRequest{
+					SessionID:   currentSessionID,
+					ToolResults: undeliveredResults,
+					Tools:       tools,
+					Model:       reqModel,
+					Mode:        "tool_results",
+				}
+				undeliveredResults = nil
+				continue
+			}
 			// Em turnos iniciados por ação A2UI, a sentinela não deve ir ao
 			// servidor como mensagem de usuário (o contexto real da ação já
 			// está na sessão do servidor). Envia string vazia.
+			// O fallback sync só roda para falha no round 0 (ou resgate
+			// indisponível) — partial tokens já persistidos pelo parser SSE.
 			fallbackMsg := userMessage
 			if hasA2uiAction {
 				fallbackMsg = ""
@@ -279,16 +368,11 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 						tools = s.registry.OpenAIFunctions()
 					}
 					s.mu.RUnlock()
-					// Quando o turno foi iniciado por uma ação A2UI, a sentinela
-					// "__a2ui_action__" NÃO pode ser reenviada como Message —
-					// isso faria o servidor chamar StreamAsync e a ação A2UI
-					// (já consumida via takeA2uiAction) seria perdida. Nesse
-					// caso Message fica vazio (null) e apenas o SystemNote
-					// orienta o LLM a concluir.
-					retryMessage := userMessage
-					if hasA2uiAction {
-						retryMessage = ""
-					}
+					// M3: o retry NÃO reenvia a userMessage como Message — isso
+					// duplicava a mensagem do usuário no histórico do servidor.
+					// Message fica vazio (null) e apenas o SystemNote orienta o
+					// LLM a concluir (mesmo contrato do fluxo A2UI, onde a
+					// sentinela "__a2ui_action__" jamais pode ser reenviada).
 					s.logChatEntry(ChatLogEntry{
 						Type:      "tool_force_retry",
 						Method:    "multi_round",
@@ -296,11 +380,12 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 						Error:     retry,
 					})
 					req = agentStreamRequest{
-						Message:    retryMessage,
+						Message:    "",
 						SessionID:  currentSessionID,
 						Tools:      tools,
+						Model:      reqModel,
 						SystemNote: retry,
-						Mode:       "user_message",
+						Mode:       "tool_results",
 					}
 					if onStatus != nil {
 						onStatus("Concluindo ação solicitada...")
@@ -343,19 +428,34 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 				result = `{"error":"MCP indisponivel"}`
 				execErr = fmt.Errorf("MCP indisponivel")
 			} else {
-				// Timer de 60s por tool: se a execução travar (ex.: comando
-				// remoto pendurado), devolve erro estruturado em vez de
-				// bloquear o loop para sempre — o LLM pode informar o usuário
-				// e sugerir alternativas. O streamCtx (cancelável via botão
-				// Parar) prevalece sobre o timer.
-				execCtx, execCancel := context.WithTimeout(streamCtx, 60*time.Second)
+				// Timer por tool: se a execução travar (ex.: comando remoto
+				// pendurado), devolve erro estruturado em vez de bloquear o
+				// loop para sempre — o LLM pode informar o usuário e sugerir
+				// alternativas. O streamCtx (cancelável via botão Parar)
+				// prevalece sobre o timer.
+				//
+				// B4: ask_user espera até 120s pela resposta do usuário; um
+				// timeout de 60s aqui matava a pergunta antes do prazo. Tools
+				// interativas ganham margem (150s).
+				execTimeout := 60 * time.Second
+				if tc.Name == "ask_user" {
+					execTimeout = 150 * time.Second
+				}
+				execCtx, execCancel := context.WithTimeout(streamCtx, execTimeout)
 				result, execErr = mcpExecutor(execCtx, tc.Name, tc.Args)
 				execCancel()
 			}
 			toolElapsed := time.Since(toolExecStart)
 
 			if execErr != nil {
-				result = fmt.Sprintf(`{"error":"%s"}`, strings.ReplaceAll(execErr.Error(), `"`, `'`))
+				// M2: serializa o erro com json.Marshal — interpolação manual
+				// com ReplaceAll não escapava barras invertidas e produzia
+				// JSON inválido quando a mensagem de erro continha aspas/barra.
+				if b, mErr := json.Marshal(map[string]string{"error": execErr.Error()}); mErr == nil {
+					result = string(b)
+				} else {
+					result = `{"error":"erro interno na execucao da tool"}`
+				}
 				s.logChatEntry(ChatLogEntry{
 					Type:      "tool_exec_error",
 					Method:    "tool_exec",
@@ -396,6 +496,9 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 		})
 
 		pendingCalls = nil
+		// B3: guarda os results como "não entregues" até o próximo round
+		// confirmar sucesso; em erro, o resgate os reenvia.
+		undeliveredResults = toolResults
 		// Reenviar tools nos rounds 2+ para que o LLM mantenha contexto
 		// das ferramentas disponíveis. Modelos menores (ex: gpt-oss-20b)
 		// podem "esquecer" as tools entre rounds se não reenviadas.
@@ -406,6 +509,7 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 			SessionID:   currentSessionID,
 			ToolResults: toolResults,
 			Tools:       tools,
+			Model:       reqModel,
 			Mode:        "tool_results",
 		}
 	}
@@ -469,11 +573,6 @@ func (s *Service) lastAssistantContentSince(historySince int) string {
 		}
 	}
 	return ""
-}
-
-// lastAssistantContent mantido para compatibilidade com outros chamadores.
-func (s *Service) lastAssistantContent() string {
-	return s.lastAssistantContentSince(0)
 }
 
 func (s *Service) executeRound(ctx context.Context, cfg Config, req agentStreamRequest, round int, onToken func(string), pendingCalls *[]pendingToolCall, onLoopProgress func(round, maxRounds int), onA2ui ...func(string)) (string, error) {
@@ -666,7 +765,7 @@ func (s *Service) parseMultiRoundSSEWithProgress(body io.Reader, onToken func(st
 			}
 			if contentBuf.Len() > 0 {
 				s.mu.Lock()
-				s.history = append(s.history, Message{Role: "assistant", Content: contentBuf.String()})
+				appendHistoryLocked(s, Message{Role: "assistant", Content: contentBuf.String()})
 				s.mu.Unlock()
 			}
 			return currentSessionID, false, nil
@@ -677,7 +776,7 @@ func (s *Service) parseMultiRoundSSEWithProgress(body io.Reader, onToken func(st
 			done = true
 			if contentBuf.Len() > 0 {
 				s.mu.Lock()
-				s.history = append(s.history, Message{Role: "assistant", Content: contentBuf.String()})
+				appendHistoryLocked(s, Message{Role: "assistant", Content: contentBuf.String()})
 				s.mu.Unlock()
 			}
 			return currentSessionID, true, nil
@@ -685,6 +784,13 @@ func (s *Service) parseMultiRoundSSEWithProgress(body io.Reader, onToken func(st
 			msg := strings.TrimSpace(evt.Error)
 			if msg == "" {
 				msg = "stream erro"
+			}
+			// B3: persiste tokens parciais já recebidos antes do erro — sem
+			// isso o texto já exibido ao usuário se perdia do histórico.
+			if contentBuf.Len() > 0 {
+				s.mu.Lock()
+				appendHistoryLocked(s, Message{Role: "assistant", Content: contentBuf.String()})
+				s.mu.Unlock()
 			}
 			return currentSessionID, false, fmt.Errorf("%s", msg)
 		}
@@ -696,6 +802,12 @@ func (s *Service) parseMultiRoundSSEWithProgress(body io.Reader, onToken func(st
 			SessionID: currentSessionID,
 			Error:     err.Error(),
 		})
+		// B3: persiste tokens parciais recebidos antes do erro de leitura.
+		if contentBuf.Len() > 0 {
+			s.mu.Lock()
+			appendHistoryLocked(s, Message{Role: "assistant", Content: contentBuf.String()})
+			s.mu.Unlock()
+		}
 		return currentSessionID, false, fmt.Errorf("ler stream: %w", err)
 	}
 
@@ -850,7 +962,7 @@ func (s *Service) fallbackToSync(ctx context.Context, cfg Config, message, sessi
 	if strings.TrimSpace(resp.SessionID) != "" {
 		s.sessionID = strings.TrimSpace(resp.SessionID)
 	}
-	s.history = append(s.history, Message{Role: "assistant", Content: assistant})
+	appendHistoryLocked(s, Message{Role: "assistant", Content: assistant})
 	s.mu.Unlock()
 
 	s.logChatEntry(ChatLogEntry{

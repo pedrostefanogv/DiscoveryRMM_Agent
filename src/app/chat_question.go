@@ -154,5 +154,12 @@ func (a *App) AnswerA2uiAction(payloadJSON string) {
 	if strings.TrimSpace(payload.Name) == "" {
 		return
 	}
+	// B1: sem stream/turno ativo, a ação seria órfã — ficaria pendente e seria
+	// consumida indevidamente pela próxima mensagem comum do usuário (convertida
+	// em modo a2ui_action com a mensagem digitada descartada). Descarta com log.
+	if !a.chatSvc.HasActiveStream() {
+		a.Logs.Append("[chat] AnswerA2uiAction: ação descartada — nenhum turno de chat ativo (ação: " + payload.Name + ")")
+		return
+	}
 	a.chatSvc.SubmitA2uiAction(payload.SurfaceID, payload.Name, payload.Context)
 }

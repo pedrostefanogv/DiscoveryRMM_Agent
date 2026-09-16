@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -113,6 +114,26 @@ func (cl *ChatLogger) IsEnabled() bool {
 	return cl.enabled
 }
 
+// Padrões sensíveis redigidos antes de gravar (M8, privacidade): tokens de
+// agente (mdz_...), Bearer/Authorization e chaves sk-.
+var sensitiveRedactions = []*regexp.Regexp{
+	regexp.MustCompile(`mdz_[A-Za-z0-9_\-]{8,}`),
+	regexp.MustCompile(`(?i)(authorization\s*[:=]\s*)\S+`),
+	regexp.MustCompile(`(?i)bearer\s+[A-Za-z0-9._\-]+`),
+	regexp.MustCompile(`sk\-[A-Za-z0-9]{16,}`),
+}
+
+// redactSensitive substitui padrões de segredo por "[redacted]".
+func redactSensitive(s string) string {
+	if s == "" {
+		return s
+	}
+	for _, re := range sensitiveRedactions {
+		s = re.ReplaceAllString(s, "[redacted]")
+	}
+	return s
+}
+
 // Log escreve uma entrada de log no arquivo JSONL.
 func (cl *ChatLogger) Log(entry ChatLogEntry) {
 	cl.mu.Lock()
@@ -120,6 +141,17 @@ func (cl *ChatLogger) Log(entry ChatLogEntry) {
 
 	if !cl.enabled || cl.file == nil {
 		return
+	}
+
+	// M8: redige segredos antes de gravar em disco.
+	entry.UserMsg = redactSensitive(entry.UserMsg)
+	entry.Assistant = redactSensitive(entry.Assistant)
+	entry.Error = redactSensitive(entry.Error)
+	for i, v := range entry.ToolArgs {
+		entry.ToolArgs[i] = redactSensitive(v)
+	}
+	for i, v := range entry.ToolResults {
+		entry.ToolResults[i] = redactSensitive(v)
 	}
 
 	if entry.Timestamp == "" {

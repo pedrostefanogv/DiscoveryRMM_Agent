@@ -17,6 +17,7 @@ import (
 	"discovery/app/core/ai"
 	"discovery/app/core/mcp"
 	"discovery/app/core/platform"
+	"discovery/app/netutil"
 )
 
 // Config is the frontend-facing AI configuration.
@@ -344,6 +345,12 @@ func (s *Service) StopStream() bool {
 	return s.chatSvc.StopStream()
 }
 
+// HasActiveStream retorna true se há um turno de chat em execução (B1: o
+// binding de ações A2UI só enfileira com turno ativo).
+func (s *Service) HasActiveStream() bool {
+	return s.chatSvc.HasActiveStream()
+}
+
 // SubmitA2uiAction encaminha uma ação do usuário em uma surface A2UI para o
 // serviço de chat. A ação é registrada como um "tool result" pendente que o
 // próximo round do loop multi-round enviará ao LLM, permitindo que o agente
@@ -425,8 +432,16 @@ func (s *Service) RegisterToolsOnServer() error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(dbg.AuthToken))
-	resp, err := http.DefaultClient.Do(req)
+	// B2: usa o helper padrão de headers agent-auth (inclui AgentID) — o
+	// Bearer manual antigo falhava em servidores que exigem o header de ID.
+	if err := netutil.SetAgentAuthHeadersWithAgentID(req, strings.TrimSpace(dbg.AuthToken), strings.TrimSpace(dbg.AgentID)); err != nil {
+		s.logf("[chat] registro tools headers: " + err.Error())
+		return err
+	}
+	// B2: cliente com timeout — http.DefaultClient (sem timeout) podia
+	// pendurar o chamador indefinidamente.
+	client := &http.Client{Timeout: 60 * time.Second}
+	resp, err := client.Do(req)
 	if err != nil {
 		s.logf("[chat] registro tools falhou: " + err.Error())
 		return err
@@ -448,17 +463,14 @@ func (s *Service) ensureToolsRegistered() {
 	s.toolsRegistrationMu.RLock()
 	lastReg := s.lastToolsRegistration
 	s.toolsRegistrationMu.RUnlock()
-	if lastReg.IsZero() {
-		if err := s.RegisterToolsOnServer(); err != nil {
-			s.logf("[chat] aviso: registro inicial de tools falhou: " + err.Error())
-		}
-		return
-	}
-	if time.Since(lastReg) < 4*time.Minute {
-		return
-	}
-	if err := s.RegisterToolsOnServer(); err != nil {
-		s.logf("[chat] aviso: re-registro de tools falhou: " + err.Error())
+	if lastReg.IsZero() || time.Since(lastReg) >= 4*time.Minute {
+		// B2: registro em background — não bloqueia o envio da mensagem.
+		// Uma falha de rede no registro não deve impedir o chat de rodar.
+		s.safeGo(func() {
+			if err := s.RegisterToolsOnServer(); err != nil {
+				s.logf("[chat] aviso: registro de tools falhou: " + err.Error())
+			}
+		})
 	}
 }
 
