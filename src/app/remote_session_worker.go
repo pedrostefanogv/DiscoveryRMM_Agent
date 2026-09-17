@@ -210,8 +210,14 @@ func readStopOrCommandLine(br *bufio.Reader) (string, error) {
 	return strings.TrimSpace(line), nil
 }
 
-// connectWorkerNATS conecta ao NATS de streaming (wss → nats → derivados da
-// API), com a MESMA normalização do transporte do core (agentconn).
+// connectWorkerNATS conecta ao NATS de streaming seguindo a MESMA política do
+// core (agentconn runSession): NATIVO primeiro, websocket como fallback.
+//
+// Ordem dos candidatos (dedupe preserva a primeira ocorrência):
+//  1. natsServer configurado (nativo)
+//  2. natsWsServer configurado (websocket)
+//  3. nats://host:4222 derivado da API (nativo)
+//  4. wss://host:443/nats/ derivado da API (websocket)
 //
 // FIX 2026-09-16 (acesso remoto não conecta nas estações): os candidatos iam
 // crus ao nats.Connect. Duas falhas encadeadas deixavam o worker sem stream
@@ -224,31 +230,37 @@ func readStopOrCommandLine(br *bufio.Reader) (string, error) {
 //     connection".
 //
 // A normalização agora passa por agentconn.NormalizeClientEndpoint (porta
-// explícita + ProxyPath) e a ordem prefere wss: o viewer desiste da sessão em
-// poucos segundos, então o worker não pode gastar o timeout nativo antes do
-// caminho que funciona. Cada tentativa é logada no stderr (drenado pelo
-// serviço para o agent-service.log).
+// explícita + ProxyPath). Timeout por scheme: 3s para o nativo — rede saudável
+// conecta em <1s e, com a porta dropada por firewall (o caso das estações,
+// onde o dial TRAVA em vez de recusar), o failover ao wss acontece em ~3s;
+// o viewer aguenta ~31s de reconexão (RECONNECT_DELAYS 1+2+4+8+16s), então um
+// nativo lento não é perdido — a próxima sessão tenta nativo de novo. 8s para
+// ws/wss (TLS + handshake do proxy). Cada tentativa é logada no stderr
+// (drenado pelo serviço para o agent-service.log).
 func connectWorkerNATS(cfg WorkerDebugConfig, agentID, token string) (*nats.Conn, error) {
-	// Ordem: wss configurado → wss derivado da API → nats configurado →
-	// nats derivado da API. Dedupe preserva a primeira ocorrência.
 	var candidates []string
+	if nat := trimSpace(cfg.NatsServer); nat != "" {
+		candidates = append(candidates, nat)
+	}
 	if wss := trimSpace(cfg.NatsWsServer); wss != "" {
 		candidates = append(candidates, wss)
 	}
 	if host := extractAPIHost(cfg.ApiServer); host != "" {
-		candidates = append(candidates, "wss://"+host+"/nats/")
-	}
-	if nat := trimSpace(cfg.NatsServer); nat != "" {
-		candidates = append(candidates, nat)
+		candidates = append(candidates, "nats://"+host+":4222")
 	}
 	if host := extractAPIHost(cfg.ApiServer); host != "" {
-		candidates = append(candidates, "nats://"+host+":4222")
+		candidates = append(candidates, "wss://"+host+"/nats/")
 	}
 
 	type attempt struct {
 		url       string
 		proxyPath string
+		timeout   time.Duration
 	}
+	const (
+		nativeDialTimeout = 3 * time.Second // nativo: failover rápido ao wss (dial dropado trava)
+		wsDialTimeout     = 8 * time.Second // ws/wss: TLS + handshake do proxy
+	)
 	var attempts []attempt
 	seen := map[string]struct{}{}
 	for _, raw := range candidates {
@@ -261,7 +273,11 @@ func connectWorkerNATS(cfg WorkerDebugConfig, agentID, token string) (*nats.Conn
 			continue
 		}
 		seen[ep.URL] = struct{}{}
-		attempts = append(attempts, attempt{url: ep.URL, proxyPath: ep.ProxyPath})
+		timeout := wsDialTimeout
+		if strings.HasPrefix(ep.URL, "nats://") {
+			timeout = nativeDialTimeout
+		}
+		attempts = append(attempts, attempt{url: ep.URL, proxyPath: ep.ProxyPath, timeout: timeout})
 	}
 	if len(attempts) == 0 {
 		return nil, fmt.Errorf("nenhum endpoint NATS configurado")
@@ -269,11 +285,11 @@ func connectWorkerNATS(cfg WorkerDebugConfig, agentID, token string) (*nats.Conn
 
 	var lastErr error
 	for _, a := range attempts {
-		fmt.Fprintf(os.Stderr, "[remote-session-worker] tentando NATS %s\n", a.url)
+		fmt.Fprintf(os.Stderr, "[remote-session-worker] tentando NATS %s (timeout %s)\n", a.url, a.timeout)
 		opts := []nats.Option{
 			nats.Name("discovery-rs-worker-" + agentID),
 			nats.Token(token),
-			nats.Timeout(8 * time.Second),
+			nats.Timeout(a.timeout),
 			nats.ReconnectWait(10 * time.Second),
 			nats.MaxReconnects(-1),
 		}

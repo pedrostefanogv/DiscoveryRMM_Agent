@@ -91,32 +91,33 @@ func (a *App) ensureCompanionNats() error {
 	if err != nil {
 		return fmt.Errorf("token inválido: %w", err)
 	}
-
-	// Tenta WSS primeiro (mesma ordem de preferência do agentconn em redes
-	// onde a porta 4222 é bloqueada) e depois o NATS nativo derivado da API.
+	// Política do dono (igual ao core/agentconn runSession): NATIVO primeiro,
+	// websocket (wss via nginx /nats/) como fallback.
 	//
-	// FIX 2026-09-16 (mesma família do fix do worker): os candidatos iam crus
-	// ao nats.Connect — wss sem porta explícita disca "host:0" (o nats.go não
-	// aplica porta padrão para ws/wss) e o path do websocket precisa ir via
+	// FIX 2026-09-16 (mesma família do fix do worker): os candidatos iam crus ao
+	// nats.Connect — wss sem porta explícita disca "host:0" (o nats.go não aplica
+	// porta padrão para ws/wss) e o path do websocket precisa ir via
 	// nats.ProxyPath ("invalid websocket connection" sem isso). A normalização
-	// agora usa agentconn.NormalizeClientEndpoint, igual ao worker.
+	// usa agentconn.NormalizeClientEndpoint, igual ao worker. Timeout por
+	// scheme: 3s nativo (failover rápido), 8s ws/wss.
 	var candidates []string
+	if nat := strings.TrimSpace(cfg.NatsServer); nat != "" {
+		candidates = append(candidates, nat)
+	}
 	if wss := strings.TrimSpace(cfg.NatsWsServer); wss != "" {
 		candidates = append(candidates, wss)
 	}
 	if host := extractAPIHost(cfg.ApiServer); host != "" {
-		candidates = append(candidates, "wss://"+host+"/nats/")
-	}
-	if nat := strings.TrimSpace(cfg.NatsServer); nat != "" {
-		candidates = append(candidates, nat)
+		candidates = append(candidates, "nats://"+host+":4222")
 	}
 	if host := extractAPIHost(cfg.ApiServer); host != "" {
-		candidates = append(candidates, "nats://"+host+":4222")
+		candidates = append(candidates, "wss://"+host+"/nats/")
 	}
 
 	type natsAttempt struct {
 		url       string
 		proxyPath string
+		timeout   time.Duration
 	}
 	var attempts []natsAttempt
 	seen := map[string]struct{}{}
@@ -130,7 +131,11 @@ func (a *App) ensureCompanionNats() error {
 			continue
 		}
 		seen[ep.URL] = struct{}{}
-		attempts = append(attempts, natsAttempt{url: ep.URL, proxyPath: ep.ProxyPath})
+		timeout := 8 * time.Second
+		if strings.HasPrefix(ep.URL, "nats://") {
+			timeout = 3 * time.Second
+		}
+		attempts = append(attempts, natsAttempt{url: ep.URL, proxyPath: ep.ProxyPath, timeout: timeout})
 	}
 
 	var lastErr error
@@ -138,7 +143,7 @@ func (a *App) ensureCompanionNats() error {
 		opts := []nats.Option{
 			nats.Name("discovery-companion-stream-" + agentID),
 			nats.Token(token),
-			nats.Timeout(8 * time.Second),
+			nats.Timeout(at.timeout),
 			nats.ReconnectWait(10 * time.Second),
 			nats.MaxReconnects(-1),
 		}
