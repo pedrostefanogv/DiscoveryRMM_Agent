@@ -41,6 +41,12 @@ func RunServiceMode() {
 			log.Printf("[service] aviso: falha ao redirecionar log para %s: %v", p, err)
 		}
 	}
+	// Tee do stdlib log para o arquivo do serviço (mesmo caminho da UI, que
+	// já faz isso em src/main.go): linhas de log.Printf — dreno do stderr do
+	// worker de remote session, logs do manager/spawn — antes iam só para o
+	// stderr do serviço (invisível em produção) e o diagnóstico do acesso
+	// remoto ficava impossível no agent-service.log.
+	logger.RedirectStdLog(logger.LevelInfo)
 	log.Printf("[service] modo serviço iniciado (args=%v)", os.Args)
 
 	inService, err := svc.IsWindowsService()

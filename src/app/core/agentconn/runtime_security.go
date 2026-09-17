@@ -41,6 +41,40 @@ func normalizeNATSURL(server string) (string, error) {
 	return "nats://" + server, nil
 }
 
+// ClientNATSEndpoint é um endpoint NATS normalizado para clientes do agente
+// (worker de remote session, UI companion) que vivem fora deste pacote.
+type ClientNATSEndpoint struct {
+	// URL é o endpoint com porta explícita (nats:4222, wss:443, ws:80).
+	// Sem porta explícita o nats.go NÃO aplica a porta padrão para ws/wss e
+	// disca "host:0" ("dial tcp host:0: connectex: The requested address is
+	// not valid in its context") — falha instantânea e silenciosa.
+	URL string
+	// ProxyPath é o path do websocket (ws/wss), que precisa ir via
+	// nats.ProxyPath: o dialer do nats.go ignora o path da URL e o handshake
+	// cairia no "/" do site ("invalid websocket connection"). Vazio para
+	// nats://.
+	ProxyPath string
+}
+
+// NormalizeClientEndpoint normaliza um endpoint NATS arbitrário para uso por
+// clientes fora deste pacote — mesma regra do transporte interno
+// (normalizeNATSURL + natsWebSocketProxyPath).
+//
+// FIX 2026-09-16 (acesso remoto não conecta nas estações): o worker de remote
+// session e a UI companion passavam os candidatos crus ao nats.Connect; em
+// redes onde a porta 4222 não é alcançável (o caso em que só o wss sustenta —
+// ex. DESKTOP-JLO3IKQ), o candidato wss derivado ("wss://host/nats/") falhava
+// duas vezes: sem porta (dial :0) e sem ProxyPath (invalid websocket
+// connection). O worker nunca conectava, nenhum frame era publicado e a
+// sessão morria em segundos com exitCode=0 falso do spawn.
+func NormalizeClientEndpoint(server string) (ClientNATSEndpoint, error) {
+	url, err := normalizeNATSURL(server)
+	if err != nil {
+		return ClientNATSEndpoint{}, err
+	}
+	return ClientNATSEndpoint{URL: url, ProxyPath: natsWebSocketProxyPath(url)}, nil
+}
+
 // ensureDefaultPort adiciona a porta padrao ao Host da URL quando ausente.
 func ensureDefaultPort(u *url.URL, scheme string) {
 	if strings.Contains(u.Host, ":") {

@@ -174,15 +174,26 @@ func spawnRemoteSessionWorker(parent context.Context, payload map[string]any) er
 	// main) bootava um segundo serviço completo, ficava vivo para sempre e o
 	// spawn reportava exitCode=0 falso — o acesso remoto nunca iniciava.
 	// O handshake ("iniciando sessão <id>" no stderr) chega em <1s quando o
-	// modo worker corre; o teto de 10s cobre startup lento com segurança.
+	// modo worker corre.
+	//
+	// LIMITAÇÃO CONHECIDA (documentada, não corrigida aqui): o handshake prova
+	// apenas que o binário entrou no modo worker — NÃO que o worker conseguiu
+	// conectar o NATS (a conexão de streaming acontece DEPOIS do handshake).
+	// Se o worker morrer por falta de NATS ("NATS indisponível"), o spawn já
+	// publicou exitCode=0 — o mesmo falso positivo do bug de referência, mas
+	// agora VISÍVEL no agent-service.log: o dreno do stderr registra
+	// "[remote-session-worker] NATS falhou (...)" / "nats conectado: ..."
+	// (logger.RedirectStdLog no modo serviço teea o stdlib log para o arquivo).
+	// O teto de 20s cobre o pior caso de dial (candidato nativo travado em
+	// rede que filtra a 4222 + tentativa wss seguinte).
 	select {
 	case <-w.done:
 		return fmt.Errorf("worker encerrou imediatamente após o spawn (sessionId=%s): %s",
 			sessionID, w.stderrTail())
 	case <-w.handshake:
 		// worker confirmou o modo worker — payload lido, sessão iniciando
-	case <-time.After(10 * time.Second):
-		return fmt.Errorf("worker não confirmou handshake em 10s (sessionId=%s) — binário sem modo --remote-session-worker? stderr: %s",
+	case <-time.After(20 * time.Second):
+		return fmt.Errorf("worker não confirmou handshake em 20s (sessionId=%s) — binário sem modo --remote-session-worker? stderr: %s",
 			sessionID, w.stderrTail())
 	}
 

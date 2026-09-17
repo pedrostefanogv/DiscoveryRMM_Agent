@@ -28,6 +28,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 
+	"discovery/app/core/agentconn"
 	"discovery/app/core/remotesession"
 	"discovery/app/netutil"
 )
@@ -84,19 +85,40 @@ func RunRemoteSessionWorker() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Monitor de stdin: EOF (serviço morreu) ou "stop" → cancela sessão.
+	// Monitor de stdin: EOF (serviço morreu) → cancela sessão; mensagem
+	// framed {"action":"stop"} → cancela; linha crua "stop" → cancela.
+	//
+	// FIX 2026-09-16: o monitor antigo só comparava LINHAS com "stop", mas o
+	// serviço envia o stop FRAMED (writeWorkerPayload: 4B len + JSON). A linha
+	// nunca casava, o stop remoto nunca cancelava e o serviço esperava o teto
+	// de 5s de stopRemoteSessionWorker e matava o processo (Kill) — o
+	// encerramento gracioso (flush NATS, Shutdown das sessões) nunca rodava.
+	// Evidência: agent-service.log das estações com resultado de
+	// remotesessionstop sempre ~5s após o comando.
 	go func() {
-		scanner := bufio.NewScanner(os.Stdin)
-		for scanner.Scan() {
-			if scanner.Text() == "stop" {
+		br := bufio.NewReader(os.Stdin)
+		for {
+			line, err := readStopOrCommandLine(br)
+			if err != nil {
+				cancel() // EOF — serviço encerrou o pipe (ou morreu)
+				return
+			}
+			if line == "stop" {
 				cancel()
 				return
 			}
+			var cmd map[string]any
+			if json.Unmarshal([]byte(line), &cmd) == nil {
+				if act, _ := cmd["action"].(string); act == "stop" {
+					cancel()
+					return
+				}
+				// Outras ações framed (ex.: quality) chegam após o start; o
+				// worker atual não as aplica em runtime — ignoradas aqui
+				// (o reuso do worker para quality acontece via HandleCommand
+				// apenas no start; extender é trabalho futuro).
+			}
 		}
-		if err := scanner.Err(); err != nil {
-			fmt.Fprintf(os.Stderr, "[remote-session-worker] stdin interrompido: %v\n", err)
-		}
-		cancel() // EOF — serviço encerrou o pipe
 	}()
 
 	// Executa o comando (start/stop/quality).
@@ -155,34 +177,116 @@ func readFramedStdin(r io.Reader) ([]byte, error) {
 	return buf, nil
 }
 
-// connectWorkerNATS conecta ao NATS de streaming (wss → nats → derivado da API).
+// readStopOrCommandLine lê do stdin do worker aceitando os dois formatos que
+// chegam após o payload inicial:
+//   - mensagem framed (4B big-endian len + JSON) — caminho do serviço
+//     (writeWorkerPayload: stop, quality, monitor de parent.Done);
+//   - linha crua terminada em \n — caminho de teste manual ("stop\n").
+//
+// Retorna o conteúdo (JSON framed ou linha sem \n). Erro apenas quando o
+// stdin fecha (EOF) ou falha — nessas condições quem chama cancela a sessão.
+func readStopOrCommandLine(br *bufio.Reader) (string, error) {
+	head, err := br.Peek(4)
+	if err != nil {
+		// EOF com menos de 4 bytes: pode ser uma linha curta final ("stop")
+		// sem newline — drena o restante antes de propagar o erro.
+		if rest, rerr := br.ReadString('\n'); rerr == nil || (rerr == io.EOF && strings.TrimSpace(rest) != "") {
+			return strings.TrimSpace(rest), nil
+		}
+		return "", err
+	}
+	n := binary.BigEndian.Uint32(head)
+	if n > 0 && n <= 1<<20 { // mesmo teto de readFramedStdin
+		buf := make([]byte, 4+n)
+		if _, err := io.ReadFull(br, buf); err == nil {
+			return string(buf[4:]), nil
+		}
+		// Frame truncado: cai para o modo linha com o que restou.
+	}
+	line, rerr := br.ReadString('\n')
+	if rerr != nil && rerr != io.EOF {
+		return "", rerr
+	}
+	return strings.TrimSpace(line), nil
+}
+
+// connectWorkerNATS conecta ao NATS de streaming (wss → nats → derivados da
+// API), com a MESMA normalização do transporte do core (agentconn).
+//
+// FIX 2026-09-16 (acesso remoto não conecta nas estações): os candidatos iam
+// crus ao nats.Connect. Duas falhas encadeadas deixavam o worker sem stream
+// em redes onde a porta 4222 não é alcançável (nas quais o próprio core só
+// sustenta o transporte nats-wss):
+//  1. candidato wss sem porta explícita ("wss://host/nats/") — o nats.go NÃO
+//     aplica porta padrão para ws/wss → "dial tcp host:0" (falha instantânea);
+//  2. path do websocket na URL — o dialer do nats.go ignora o path da URL;
+//     sem nats.ProxyPath o handshake cai no "/" do site → "invalid websocket
+//     connection".
+//
+// A normalização agora passa por agentconn.NormalizeClientEndpoint (porta
+// explícita + ProxyPath) e a ordem prefere wss: o viewer desiste da sessão em
+// poucos segundos, então o worker não pode gastar o timeout nativo antes do
+// caminho que funciona. Cada tentativa é logada no stderr (drenado pelo
+// serviço para o agent-service.log).
 func connectWorkerNATS(cfg WorkerDebugConfig, agentID, token string) (*nats.Conn, error) {
+	// Ordem: wss configurado → wss derivado da API → nats configurado →
+	// nats derivado da API. Dedupe preserva a primeira ocorrência.
 	var candidates []string
 	if wss := trimSpace(cfg.NatsWsServer); wss != "" {
 		candidates = append(candidates, wss)
+	}
+	if host := extractAPIHost(cfg.ApiServer); host != "" {
+		candidates = append(candidates, "wss://"+host+"/nats/")
 	}
 	if nat := trimSpace(cfg.NatsServer); nat != "" {
 		candidates = append(candidates, nat)
 	}
 	if host := extractAPIHost(cfg.ApiServer); host != "" {
-		candidates = append(candidates,
-			"wss://"+host+"/nats/",
-			"nats://"+host+":4222",
-		)
+		candidates = append(candidates, "nats://"+host+":4222")
 	}
-	var lastErr error
-	for _, server := range candidates {
-		nc, err := nats.Connect(server,
-			nats.Name("discovery-rs-worker-"+agentID),
-			nats.Token(token),
-			nats.Timeout(8*time.Second),
-			nats.ReconnectWait(10*time.Second),
-			nats.MaxReconnects(-1),
-		)
+
+	type attempt struct {
+		url       string
+		proxyPath string
+	}
+	var attempts []attempt
+	seen := map[string]struct{}{}
+	for _, raw := range candidates {
+		ep, err := agentconn.NormalizeClientEndpoint(raw)
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "[remote-session-worker] endpoint NATS ignorado (%q): %v\n", raw, err)
+			continue
+		}
+		if _, dup := seen[ep.URL]; dup {
+			continue
+		}
+		seen[ep.URL] = struct{}{}
+		attempts = append(attempts, attempt{url: ep.URL, proxyPath: ep.ProxyPath})
+	}
+	if len(attempts) == 0 {
+		return nil, fmt.Errorf("nenhum endpoint NATS configurado")
+	}
+
+	var lastErr error
+	for _, a := range attempts {
+		fmt.Fprintf(os.Stderr, "[remote-session-worker] tentando NATS %s\n", a.url)
+		opts := []nats.Option{
+			nats.Name("discovery-rs-worker-" + agentID),
+			nats.Token(token),
+			nats.Timeout(8 * time.Second),
+			nats.ReconnectWait(10 * time.Second),
+			nats.MaxReconnects(-1),
+		}
+		if a.proxyPath != "" {
+			opts = append(opts, nats.ProxyPath(a.proxyPath))
+		}
+		nc, err := nats.Connect(a.url, opts...)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[remote-session-worker] NATS falhou (%s): %v\n", a.url, err)
 			lastErr = err
 			continue
 		}
+		fmt.Fprintf(os.Stderr, "[remote-session-worker] nats conectado: %s\n", a.url)
 		return nc, nil
 	}
 	if lastErr != nil {
