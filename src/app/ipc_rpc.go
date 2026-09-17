@@ -19,6 +19,12 @@ func (a *App) handleIPCRequest(ctx context.Context, payload map[string]any) map[
 	method, _ := payload["method"].(string)
 	delete(payload, "method")
 	switch method {
+	case "p2p:peers":
+		return a.ipcRPCP2PPeers()
+	case "p2p:debug_status":
+		return a.ipcRPCP2PDebugStatus()
+	case "p2p:ztc_stats":
+		return a.ipcRPCP2PZtcStats()
 	case "status:pending_counts":
 		return a.ipcRPCPendingCounts()
 	case "config:get":
@@ -167,4 +173,35 @@ func (a *App) ipcRPCUpdatesScan() map[string]any {
 	// da UI ter expirado enquanto o scan continuava no serviço.
 	a.EmitEvent("updates:list", "updates", json.RawMessage(raw))
 	return map[string]any{"ok": true, "data": map[string]any{"updates": json.RawMessage(raw)}}
+}
+
+// ── P2P / Zero Touch (companion → serviço) ──
+// A UI companion não tem coordenador P2P local (ele roda no serviço); estes
+// RPCs alimentam a página de Status: "Agentes P2P conectados", "P2P ativo",
+// "Bytes P2P (up / down)" e "Zero Touch" (provisionados).
+
+// ipcRPCP2PPeers devolve os peers descobertos pelo core do serviço.
+func (a *App) ipcRPCP2PPeers() map[string]any {
+	if a.P2PCoord == nil {
+		return map[string]any{"ok": true, "data": []P2PPeerView{}}
+	}
+	return map[string]any{"ok": true, "data": a.P2PCoord.GetPeers()}
+}
+
+// ipcRPCP2PDebugStatus devolve o estado do coordinator P2P do serviço
+// (active + metrics.bytesServed/bytesDownloaded).
+func (a *App) ipcRPCP2PDebugStatus() map[string]any {
+	if a.P2PCoord == nil {
+		return map[string]any{"ok": true, "data": P2PDebugStatus{}}
+	}
+	return map[string]any{"ok": true, "data": a.P2PCoord.GetStatus()}
+}
+
+// ipcRPCP2PZtcStats devolve as estatísticas de auto-provisioning (Zero Touch
+// provisionados) acumuladas pelo coordinator do serviço.
+func (a *App) ipcRPCP2PZtcStats() map[string]any {
+	if a.P2PCoord == nil {
+		return map[string]any{"ok": true, "data": P2PAutoProvisioningStats{RecentEvents: []P2POnboardingAuditEvent{}}}
+	}
+	return map[string]any{"ok": true, "data": a.GetAutoProvisioningStats()}
 }

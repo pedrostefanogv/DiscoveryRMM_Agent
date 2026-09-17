@@ -43,6 +43,10 @@ func (a *App) handleIPCMessage(conn net.Conn, msg IPCMessage) {
 				"transport": agent.Transport,
 				"reason":    strings.TrimSpace(agent.OnlineReason),
 				"lastEvent": strings.TrimSpace(agent.LastEvent),
+				// Último ping do servidor (página de Status na UI companion): o
+				// agentConn roda AQUI no serviço — a UI não tem esses campos localmente.
+				"lastGlobalPongAtUtc": strings.TrimSpace(agent.LastGlobalPongAtUTC),
+				"globalPongStale":     agent.GlobalPongStale,
 			}))
 		}
 	case IPCMsgRemoteSession:
@@ -127,7 +131,10 @@ func (a *App) broadcastIPCEvent(name string, data ...any) {
 // serviço via IPC. É usado por GetAgentStatus() na UI companion (o agentConn
 // local não roda lá), mantendo tray e página de status consistentes com o
 // core que roda no serviço.
-func (a *App) storeCompanionStatus(connected bool, transport string, lastEvent ...string) {
+// lastPongAtUtc/pongStale alimentam o campo "Último ping do servidor" da
+// página de Status — o pong global existe só no agentConn do serviço; sem
+// esses campos no snapshot, a UI exibia "-" para sempre.
+func (a *App) storeCompanionStatus(connected bool, transport string, lastEvent string, lastPongAtUtc string, pongStale bool) {
 	if a == nil {
 		return
 	}
@@ -146,12 +153,12 @@ func (a *App) storeCompanionStatus(connected bool, transport string, lastEvent .
 		st.LastEvent = "conectado (via serviço)"
 	}
 	// Motivo detalhado enviado pelo serviço (reason/lastEvent do snapshot).
-	for _, ev := range lastEvent {
-		if strings.TrimSpace(ev) != "" {
-			st.LastEvent = strings.TrimSpace(ev)
-			break
-		}
+	if strings.TrimSpace(lastEvent) != "" {
+		st.LastEvent = strings.TrimSpace(lastEvent)
 	}
+	// Último pong global do agentconn do serviço (formato RFC3339).
+	st.LastGlobalPongAtUTC = strings.TrimSpace(lastPongAtUtc)
+	st.GlobalPongStale = pongStale
 }
 
 // startIPCClient inicia o cliente IPC da UI (companion mode) e envia o hello.
@@ -182,10 +189,12 @@ func (a *App) startIPCClient() {
 					transport, _ := msg.Payload["transport"].(string)
 					reason, _ := msg.Payload["reason"].(string)
 					lastEvent, _ := msg.Payload["lastEvent"].(string)
+					lastPongAtUtc, _ := msg.Payload["lastGlobalPongAtUtc"].(string)
+					pongStale, _ := msg.Payload["globalPongStale"].(bool)
 					if strings.TrimSpace(reason) != "" {
 						lastEvent = reason
 					}
-					a.storeCompanionStatus(connected, transport, lastEvent)
+					a.storeCompanionStatus(connected, transport, lastEvent, lastPongAtUtc, pongStale)
 					a.syncTrayVisualState()
 					a.updateTrayMenu()
 					a.updateTrayTooltip()

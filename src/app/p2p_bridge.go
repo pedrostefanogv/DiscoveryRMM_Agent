@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -41,17 +42,43 @@ func (a *App) SetP2PConfig(cfg P2PConfig) error {
 }
 
 func (a *App) GetP2PDebugStatus() P2PDebugStatus {
-	if a.P2PCoord == nil {
-		return P2PDebugStatus{}
+	// Companion (modo interface): o coordinator P2P roda no serviço — consulta
+	// via IPC RPC. A UI cria o objeto em NewApp, mas NUNCA o inicia (o core
+	// vive só no serviço, runCoreStartup); sem este roteamento a página de
+	// Status exibia "P2P ativo: Offline" e "Bytes P2P: 0 B / 0 B" para sempre.
+	if a.ipcClient != nil {
+		if resp, ok := a.ipcRequest("p2p:debug_status", nil); ok {
+			if data, err := json.Marshal(resp["data"]); err == nil {
+				var out P2PDebugStatus
+				if json.Unmarshal(data, &out) == nil {
+					return out
+				}
+			}
+		}
 	}
-	return a.P2PCoord.GetStatus()
+	if a.P2PCoord != nil {
+		return a.P2PCoord.GetStatus()
+	}
+	return P2PDebugStatus{}
 }
 
 func (a *App) GetP2PPeers() []P2PPeerView {
-	if a.P2PCoord == nil {
-		return []P2PPeerView{}
+	// Companion: os peers descobertos moram no serviço (o coordinator local
+	// nunca inicia na UI) — IPC RPC alimenta "Agentes P2P conectados".
+	if a.ipcClient != nil {
+		if resp, ok := a.ipcRequest("p2p:peers", nil); ok {
+			if data, err := json.Marshal(resp["data"]); err == nil {
+				var out []P2PPeerView
+				if json.Unmarshal(data, &out) == nil {
+					return out
+				}
+			}
+		}
 	}
-	return a.P2PCoord.GetPeers()
+	if a.P2PCoord != nil {
+		return a.P2PCoord.GetPeers()
+	}
+	return []P2PPeerView{}
 }
 
 func (a *App) RefreshP2PPeerCatalog() {
@@ -244,6 +271,18 @@ func (a *App) ListP2PAuditEventsFiltered(action, peerAgentID, status string) []P
 // deste agente enquanto provisionador (agente configurado que entrega ofertas).
 // Útil para monitorar quantos agentes genéricos este peer já configurou.
 func (a *App) GetAutoProvisioningStats() P2PAutoProvisioningStats {
+	// Companion: o contador de Zero Touch provisionados é do serviço (o
+	// coordinator que aplica as ofertas roda lá; o local nunca inicia).
+	if a.ipcClient != nil {
+		if resp, ok := a.ipcRequest("p2p:ztc_stats", nil); ok {
+			if data, err := json.Marshal(resp["data"]); err == nil {
+				var out P2PAutoProvisioningStats
+				if json.Unmarshal(data, &out) == nil {
+					return out
+				}
+			}
+		}
+	}
 	agentCfg := a.GetAgentConfiguration()
 	enabled := agentCfg.DiscoveryEnabled == nil || *agentCfg.DiscoveryEnabled
 
