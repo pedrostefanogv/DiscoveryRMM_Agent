@@ -51,17 +51,29 @@ type QualityManager struct {
 	current QualityConfig
 
 	// manualMode: quando true, o usuário definiu qualidade/FPS/codec manualmente
-	// e a adaptação automática (adapt/downgrade) fica DESABILITADA. O valor
-	// definido permanece fixo — a partir do momento em que o viewer envia um
-	// override explícito, o agente NÃO deve rebaixar por conta própria.
+	// e a adaptação automática fica DESABILITADA. O valor definido permanece
+	// fixo — a partir do momento em que o viewer envia um override explícito, o
+	// agente NÃO deve rebaixar por conta própria.
 	manualMode bool
 
+	// Escada adaptativa do modo AUTO (fix 17/09): qualidade de imagem em
+	// múltiplos de 10 dentro de [10, 90] — "variando de 10 em 10". A escada
+	// ajusta APENAS a compressão (overrideImageQ); FPS/codec continuam do
+	// perfil. Alimentada pelas métricas de rede que o VIEWER reporta a cada 2s
+	// (netstats via .input: rttMs, recvKbps, recvFrames). Sem netstats (viewer
+	// antigo/sem feedback), NÃO adapta às cegas — mantém o perfil.
+	autoImageQ int
+	goodStreak int
+
 	// Metricas para adaptacao
-	frameCount    int
-	bytesLastSec  int
-	lastAdaptTime time.Time
-	rttMs         float64
-	lossPercent   float64
+	frameCount     int
+	bytesLastSec   int
+	lastAdaptTime  time.Time
+	rttMs          float64
+	recvKbps       float64
+	recvFrames     int
+	netstatsSeen   bool
+	lastNetstatsAt time.Time
 }
 
 // Profiles padrao — alinhados com QualityProfileMapping.cs do backend.
@@ -89,6 +101,7 @@ func NewQualityManager(cfg QualityConfig) QualityManager {
 	return QualityManager{
 		profile:       "high",
 		current:       cfg,
+		autoImageQ:    clampQualityLadder(cfg.JpegQuality),
 		lastAdaptTime: time.Now(),
 	}
 }
@@ -113,6 +126,9 @@ func (qm *QualityManager) SetProfile(profile string) {
 		qm.current = cfg
 		qm.current.overrideImageQ = oldOverrideQ
 		qm.current.overrideMaxFps = oldOverrideFps
+		// Re-semeia a escada automática a partir do novo perfil.
+		qm.autoImageQ = clampQualityLadder(cfg.JpegQuality)
+		qm.goodStreak = 0
 	}
 }
 
@@ -124,13 +140,47 @@ func (qm *QualityManager) Profile() string {
 }
 
 // imageQualityMin/imageQualityMax definem o range aceito para o override
-// MANUAL de qualidade de imagem (via UI do viewer). Fora desse range o valor
-// é rejeitado — evita JPEG 1% (inútil) e 100% (banda explosiva). A adaptação
-// AUTOMÁTICA (adapt/downgrade) continua com os perfis padrão, sem este teto.
+// MANUAL de qualidade de imagem (via UI do viewer) e para a escada AUTOMÁTICA
+// (10→90, de 10 em 10). Fora desse range o valor é rejeitado — evita JPEG 1%
+// (inútil) e 100% (banda explosiva).
 const (
 	imageQualityMin = 10
 	imageQualityMax = 90
 )
+
+// ── Parâmetros da escada adaptativa (modo auto) ──
+// A fonte de verdade é o VIEWER (netstats via .input a cada 2s): recvKbps é o
+// bitrate EFETIVAMENTE recebido (fim-a-fim) e recvFrames detecta tela ociosa.
+// RTT absoluto NÃO é usado para subir/descer (relógios de máquinas diferentes
+// têm skew — Date.now()-frame.ts não é latência real); só um teto extremo
+// (>3s) derruba a qualidade, imune a skew razoável.
+const (
+	// Abaixo disso com frames chegando → link não sustenta → desce 10.
+	adaptiveMinRecvKbps = 800
+	// Sustentado por >=2 janelas de 2s → sobe 10 (recuperação gradual).
+	adaptiveGoodRecvKbps = 4000
+	// RTT extremo (skew-imune) → desce.
+	adaptiveRttDownMs = 3000
+	// Janela sem netstats → consideramos o feedback stale (não adapta).
+	netstatsStaleAfter = 8 * time.Second
+)
+
+// clampQualityLadder aproxima q para a grade da escada (múltiplos de 10) e
+// clampa em [10, 90] — ex.: 75→80, 92→90, 25→30, 40→40, 7→10, 500→90.
+func clampQualityLadder(q int) int {
+	if q <= 0 {
+		return imageQualityMin
+	}
+	// arredonda para o múltiplo de 10 mais próximo
+	rounded := ((q + 5) / 10) * 10
+	if rounded < imageQualityMin {
+		rounded = imageQualityMin
+	}
+	if rounded > imageQualityMax {
+		rounded = imageQualityMax
+	}
+	return rounded
+}
 
 // SetImageQuality define override de compressão MANUAL (viewer). Aceita
 // 10-90 — valores fora do range são clampeados (evita JPEG 1% inútil e
@@ -154,9 +204,9 @@ func (qm *QualityManager) SetImageQuality(q int) {
 	qm.current.overrideImageQ = q
 }
 
-// SetImageQualityAuto aplica a qualidade do perfil em modo AUTOMÁTICO,
-// clampeada ao MESMO range das opções manuais (10-90). Perfis que excedem o
-// teto (ex.: ultra=92) são ajustados para 90 — mantém consistência com a UI.
+// SetImageQualityAuto semeia a ESCADA automática com o valor informado
+// (aproximado à grade de 10 e clampado em [10,90]) e aplica como override
+// corrente. É o ponto de partida da adaptação — o adapt() refinA de 10 em 10.
 // NÃO altera o modo manual — o caller controla isso via SetManualMode.
 func (qm *QualityManager) SetImageQualityAuto(q int) {
 	qm.mu.Lock()
@@ -165,13 +215,19 @@ func (qm *QualityManager) SetImageQualityAuto(q int) {
 		qm.current.overrideImageQ = 0
 		return
 	}
-	if q > imageQualityMax {
-		q = imageQualityMax
-	}
-	if q < imageQualityMin {
-		q = imageQualityMin
-	}
-	qm.current.overrideImageQ = q
+	qm.autoImageQ = clampQualityLadder(q)
+	qm.current.overrideImageQ = qm.autoImageQ
+	qm.goodStreak = 0
+}
+
+// ResetAutoToProfile volta ao perfil base e re-semeia a escada automática
+// (chamado quando o viewer volta ao modo auto sem override explícito).
+func (qm *QualityManager) ResetAutoToProfile() {
+	qm.mu.Lock()
+	defer qm.mu.Unlock()
+	qm.current.overrideImageQ = 0
+	qm.autoImageQ = clampQualityLadder(qm.current.JpegQuality)
+	qm.goodStreak = 0
 }
 
 // ClearImageQuality remove o override de qualidade de imagem (volta ao perfil).
@@ -228,47 +284,63 @@ func (qm *QualityManager) RecordFrame(bytes int, ts time.Time) {
 	}
 }
 
-// UpdateNetworkMetrics atualiza metricas de rede (chamado pelo viewer via ack).
-func (qm *QualityManager) UpdateNetworkMetrics(rttMs, lossPercent float64) {
+// UpdateNetworkMetrics recebe as métricas de rede medidas no VIEWER
+// (mensagem netstats via .input a cada 2s): rttMs = latência heurística
+// (Date.now()-frame.ts — contém skew de relógio entre máquinas; usar apenas
+// para extremos), recvKbps = bitrate recebido fim-a-fim, recvFrames = quadros
+// recebidos na janela (0 = tela ociosa — NÃO é congestionamento).
+func (qm *QualityManager) UpdateNetworkMetrics(rttMs, recvKbps float64, recvFrames int) {
 	qm.mu.Lock()
 	defer qm.mu.Unlock()
 	qm.rttMs = rttMs
-	qm.lossPercent = lossPercent
+	qm.recvKbps = recvKbps
+	qm.recvFrames = recvFrames
+	qm.netstatsSeen = true
+	qm.lastNetstatsAt = time.Now()
 }
 
+// adapt roda a cada 2s (RecordFrame) e move a escada de qualidade do modo
+// AUTO em passos de 10: degrada rápido (1 janela ruim = -10) e recupera
+// devagar (2 janelas boas consecutivas = +10), evitando oscilação.
 func (qm *QualityManager) adapt() {
 	// NUNCA adapta automaticamente quando o usuário está em modo manual.
 	if qm.manualMode {
 		return
 	}
 
-	// Adaptacao baseada em RTT e perda
-	if qm.rttMs > 300 || qm.lossPercent > 10 {
-		qm.downgrade()
+	// Sem feedback do viewer (nunca chegou netstats ou está stale): NÃO adapta
+	// às cegas — mantém a qualidade do perfil. O antigo "adapt por banda
+	// medida no agent" trocava o perfil inteiro (FPS junto) em degraus grosseiros
+	// (75/60/40/25) e nunca subia de volta.
+	now := time.Now()
+	if !qm.netstatsSeen || now.Sub(qm.lastNetstatsAt) > netstatsStaleAfter {
 		return
 	}
 
-	// Banda estimada: bytes/seg
-	bandwidthKbps := float64(qm.bytesLastSec*8) / 2.0 / 1000.0 // media em 2s
-	if bandwidthKbps < 500 {
-		qm.current = defaultProfiles["ultralow"]
-		qm.profile = "ultralow-adapted"
-	} else if bandwidthKbps < 800 {
-		qm.current = defaultProfiles["low"]
-		qm.profile = "low-adapted"
+	// Tela ociosa (nenhum frame chegou ao viewer): não é congestionamento —
+	// bitrate baixo com tela estática é esperado. Mantém.
+	if qm.recvFrames <= 0 {
+		return
 	}
-}
 
-func (qm *QualityManager) downgrade() {
-	switch qm.profile {
-	case "high", "ultra":
-		qm.current = defaultProfiles["medium"]
-		qm.profile = "medium-adapted"
-	case "medium":
-		qm.current = defaultProfiles["low"]
-		qm.profile = "low-adapted"
-	case "low":
-		qm.current = defaultProfiles["ultralow"]
-		qm.profile = "ultralow-adapted"
+	down := qm.recvKbps < adaptiveMinRecvKbps || qm.rttMs > adaptiveRttDownMs
+	good := qm.recvKbps > adaptiveGoodRecvKbps
+
+	switch {
+	case down:
+		if qm.autoImageQ > imageQualityMin {
+			qm.autoImageQ -= 10
+		}
+		qm.goodStreak = 0
+	case good:
+		qm.goodStreak++
+		if qm.goodStreak >= 2 && qm.autoImageQ < imageQualityMax {
+			qm.autoImageQ += 10
+			qm.goodStreak = 0
+		}
+	default:
+		qm.goodStreak = 0
 	}
+
+	qm.current.overrideImageQ = qm.autoImageQ
 }

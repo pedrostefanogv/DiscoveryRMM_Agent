@@ -269,7 +269,8 @@ func (m *Manager) handleQuality(_ context.Context, payload map[string]any) (bool
 		// Em Manual: aplica overrides explícitos com clamp 10-90.
 		if autoMode {
 			s.ImageQuality = 0
-			screen.ClearImageQuality()
+			// Volta ao perfil e re-semeia a escada adaptativa (10→90 de 10 em 10).
+			screen.ResetAutoToProfile()
 			s.MaxFps = 0
 			screen.ClearMaxFps()
 			// Aplica a qualidade do perfil do codec efetivo (sem clamp manual)
@@ -504,7 +505,10 @@ func (m *Manager) runScreenSession(ctx context.Context, session *Session) {
 	screenSession.SetCursorSeparate(cursorSeparate)
 	log.Printf("[remote-session-screen] cursor-separate=%v para sessao %s\n", cursorSeparate, session.ID)
 
-	// Subscreve input do viewer (mouse/teclado)
+	// Subscreve input do viewer (mouse/teclado + netstats p/ adaptação)
+	screenSession.inputCtrl.SetNetstatsHandler(func(rttMs, recvKbps float64, recvFrames int) {
+		screenSession.UpdateNetworkMetrics(rttMs, recvKbps, recvFrames)
+	})
 	inputSub, err := m.natsStream.SubscribeToInput(session.ID, func(data []byte) {
 		screenSession.inputCtrl.HandleInput(data)
 	})

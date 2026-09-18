@@ -60,6 +60,18 @@ type InputController struct {
 	lastEventTime time.Time
 	eventCount    int
 	maxEventsPerS int
+
+	// netstatsHandler recebe as métricas de rede medidas no VIEWER (type
+	// "netstats" via .input, a cada 2s) — alimenta a escada adaptativa do
+	// QualityManager. Opcional: nil = métricas ignoradas.
+	netstatsHandler func(rttMs, recvKbps float64, recvFrames int)
+}
+
+// SetNetstatsHandler registra o receptor das métricas de rede do viewer.
+func (c *InputController) SetNetstatsHandler(fn func(rttMs, recvKbps float64, recvFrames int)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.netstatsHandler = fn
 }
 
 // NewInputController cria um controlador de input.
@@ -265,8 +277,18 @@ func (c *InputController) handleLegacyInput(data []byte) {
 	// Loga apenas eventos de clique/teclado/scroll — mousemove é muito
 	// frequente (~60/s) e inundaria o log com dezenas de milhares de linhas.
 	// O payload completo também é omitido (só o tipo), para reduzir I/O.
-	if typ != "mousemove" {
+	// netstats (2s) também é silencioso — telemetria de rede do viewer.
+	if typ != "mousemove" && typ != "netstats" {
 		log.Printf("[input-controller] legado: type=%s", typ)
+	}
+
+	// Métricas de rede do viewer → escada adaptativa de qualidade (modo auto).
+	if typ == "netstats" && c.netstatsHandler != nil {
+		rttMs, _ := toFloat64(raw["rttMs"])
+		recvKbps, _ := toFloat64(raw["recvKbps"])
+		recvFrames, _ := toFloat64(raw["recvFrames"])
+		c.netstatsHandler(rttMs, recvKbps, int(recvFrames))
+		return
 	}
 
 	// O viewer envia frameWidth/frameHeight no payload. Usa-os para

@@ -734,9 +734,21 @@ func (s *SessionScreen) ClearMaxFps() {
 }
 
 // SetManualMode liga/desliga o modo manual (desabilita a adaptação automática).
-// Reflete o flag `auto` enviado pelo viewer.
+// Reflete o flag de modo enviado pelo viewer (auto/manual).
 func (s *SessionScreen) SetManualMode(manual bool) {
 	s.quality.SetManualMode(manual)
+}
+
+// UpdateNetworkMetrics recebe as métricas de rede medidas no VIEWER
+// (netstats via .input) e alimenta a escada adaptativa do modo auto.
+func (s *SessionScreen) UpdateNetworkMetrics(rttMs, recvKbps float64, recvFrames int) {
+	s.quality.UpdateNetworkMetrics(rttMs, recvKbps, recvFrames)
+}
+
+// ResetAutoToProfile volta à qualidade do perfil e re-semeia a escada
+// automática (usado quando o viewer retorna ao modo auto sem override).
+func (s *SessionScreen) ResetAutoToProfile() {
+	s.quality.ResetAutoToProfile()
 }
 
 // publishMetrics publica metricas de streaming no subject .event para o viewer.

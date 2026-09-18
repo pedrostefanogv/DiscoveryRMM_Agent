@@ -113,10 +113,17 @@ func RunRemoteSessionWorker() {
 					cancel()
 					return
 				}
-				// Outras ações framed (ex.: quality) chegam após o start; o
-				// worker atual não as aplica em runtime — ignoradas aqui
-				// (o reuso do worker para quality acontece via HandleCommand
-				// apenas no start; extender é trabalho futuro).
+				// FIX 17/09: comandos framed de runtime (quality,
+				// recording_start/stop, monitor...) eram DESCARTADOS aqui — o
+				// serviço reusa o worker vivo e escreve o comando no stdin, mas
+				// o monitor só entendia stop. Resultado: a troca manual de
+				// qualidade nunca chegava à sessão ativa (o card de estatística
+				// nunca mudava). Encaminha ao manager do próprio worker.
+				if handled, errMsg := mgr.HandleCommand(ctx, cmd); !handled {
+					fmt.Fprintf(os.Stderr, "[remote-session-worker] comando não tratado (action=%v): %s\n", cmd["action"], errMsg)
+				} else if errMsg != "" {
+					fmt.Fprintf(os.Stderr, "[remote-session-worker] comando %v: %s\n", cmd["action"], errMsg)
+				}
 			}
 		}
 	}()
