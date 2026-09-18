@@ -78,10 +78,15 @@ tasks:
           PRODUCTION: "true"
     cmds:
       - wails3 generate webview2bootstrapper -dir "{{.ROOT_DIR}}/build/windows/installer"
-      - makensis -DARG_WAILS_{{.ARG_FLAG}}_BINARY="{{.ROOT_DIR}}/{{.BIN_DIR}}/{{.APP_NAME}}.exe" -DARG_SERVICE_{{.ARG_FLAG}}_BINARY="{{.ROOT_DIR}}/{{.BIN_DIR}}/discovery-service.exe" project.nsi
+      - makensis -DINFO_PRODUCTVERSION="{{.PRODUCT_VERSION}}" -DARG_WAILS_{{.ARG_FLAG}}_BINARY="{{.ROOT_DIR}}\{{.BIN_DIR}}\{{.APP_NAME}}.exe" -DARG_SERVICE_{{.ARG_FLAG}}_BINARY="{{.ROOT_DIR}}\{{.BIN_DIR}}\discovery-service.exe" project.nsi
     vars:
       ARCH: '{{.ARCH | default ARCH}}'
       ARG_FLAG: '{{if eq .ARCH "amd64"}}AMD64{{else}}ARM64{{end}}'
+      # Versao lida do build/config.yml (info.version). Passada via -D para
+      # PULAR o bloco !system de leitura de versao no project.nsi — o NSIS
+      # 3.12 rejeita o escape '' usado nesse bloco (13 parametros no !system).
+      PRODUCT_VERSION:
+        sh: 'powershell -NoProfile -Command "\$m = Select-String -Path ''..\..\config.yml'' -Pattern ''version:\s*.([0-9]+\.[0-9]+\.[0-9]+)'' | Select-Object -First 1; if (\$m) { \$m.Matches[0].Groups[1].Value } else { ''1.2.1'' }"'
 
   run:
     cmds:

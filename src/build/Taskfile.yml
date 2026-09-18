@@ -21,19 +21,31 @@ tasks:
     cmds:
       - wails3 generate bindings -b -clean=true -d frontend/bindings ./...
 
-  # O frontend do Discovery é JS puro (sem npm/bundler). Os assets são
-  # embedados via //go:embed all:frontend no main.go. Não há passo de build
-  # de frontend — apenas a geração de bindings.
+  # Guarda de regressao: o gerador SEM `-b` emite imports npm-style
+  # (@wailsio/runtime), que sao bare module specifiers - quebram o WebView2
+  # (sem bundler) com "Failed to resolve module specifier" e deixam window.go
+  # indefinido ("API do Wails indisponivel", janela sem drag/close). Como o
+  # Task pode PULAR generate:bindings (sources/generates atualizados), esta
+  # verificacao roda sempre e falha o build se bindings npm-style existirem.
+  verify:bindings:
+    summary: Falha se os bindings importarem o pacote npm (@wailsio/runtime)
+    cmds:
+      - powershell -NoProfile -Command "if (Get-ChildItem -Recurse -Filter *.js frontend/bindings | Select-String -Pattern '@wailsio/runtime' -List) { throw 'bindings npm-style (@wailsio/runtime) detectados - rode o task generate:bindings' } else { Write-Host 'verify:bindings OK (runtime bundled)' }"
+
+  # O frontend do Discovery e JS puro (sem npm/bundler). Os assets sao
+  # embedados via //go:embed all:frontend no main.go. Nao ha passo de build
+  # de frontend - apenas a geracao de bindings + a guarda verify:bindings.
   build:frontend:
     label: build:frontend (PRODUCTION={{.PRODUCTION}})
-    summary: Prepares the frontend (vanilla JS — no bundler)
+    summary: Prepares the frontend (vanilla JS - no bundler)
     deps:
       - task: generate:bindings
         vars:
           BUILD_FLAGS:
             ref: .BUILD_FLAGS
     cmds:
-      - echo "Frontend vanilla JS — sem bundler; assets embedados via go:embed"
+      - task: verify:bindings
+      - echo "Frontend vanilla JS - sem bundler; assets embedados via go:embed"
 
   generate:icons:
     summary: Generates Windows `.ico` and Mac `.icns` files from an image
