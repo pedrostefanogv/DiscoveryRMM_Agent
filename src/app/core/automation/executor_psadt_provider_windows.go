@@ -32,11 +32,30 @@ func executePSADTWithLibrary(ctx context.Context, packageID, operation string, p
 		psadt.WithTimeout(timeout),
 		psadt.WithMinModuleVersion(strings.TrimSpace(policy.RequiredVersion)),
 		psadt.WithLogger(slog.Default()),
+		// go-psadt >= 306977e: prefere pwsh 7 (fallback automático para 5.1)
+		// e reconecta o runner do PowerShell de forma transparente caso o
+		// processo morra no meio do deploy (recomendado para agents RMM).
+		psadt.WithAutoPreferPS7(),
+		psadt.WithAutoReconnect(),
 	)
 	if err != nil {
 		return psadtExecutionErrorResult(err)
 	}
 	defer client.Close()
+
+	// Abort: quando o deploy é cancelado (timeout ou contexto encerrado), o
+	// runner da lib apenas resincroniza após o timeout — o winget/instalador
+	// pode continuar rodando em background. Abort() mata a árvore inteira
+	// (PowerShell + instalador + processos filhos).
+	abortIfCancelled := func(when string) {
+		if runCtx.Err() == nil {
+			return
+		}
+		slog.Warn("psadt: deploy cancelado, abortando arvore de processos", "when", when, "packageId", id)
+		if abortErr := client.Abort(); abortErr != nil {
+			slog.Warn("psadt: falha no abort pos-cancelamento", "error", abortErr)
+		}
+	}
 
 	cfgBuilder := pstypes.NewSessionConfig().
 		App("Meduza", "Discovery Agent", "1.0.0").
@@ -143,6 +162,7 @@ func executePSADTWithLibrary(ctx context.Context, packageID, operation string, p
 			PassThru: true,
 		})
 		if runErr != nil {
+			abortIfCancelled("StartMsiProcess")
 			return psadtExecutionErrorResult(runErr)
 		}
 		return mergeLive(executionResultFromPSADTProcess(result))
@@ -160,11 +180,13 @@ func executePSADTWithLibrary(ctx context.Context, packageID, operation string, p
 		PassThru:     true,
 	})
 	if runErr != nil {
+		abortIfCancelled("StartProcess")
 		return psadtExecutionErrorResult(runErr)
 	}
 
 	select {
 	case <-ctx.Done():
+		abortIfCancelled("pos-StartProcess")
 		return ExecutionResult{Success: false, ExitCode: 1, ExitCodeSet: true, ErrorMessage: ctx.Err().Error()}
 	default:
 	}
@@ -253,20 +275,40 @@ func psadtExecutionErrorResult(err error) ExecutionResult {
 		code = psadtImportFailureExitCode
 	}
 
-	// Classificação de erros tipados (equivalente ao parser.Is* da lib,
-	// que vive em internal/parser e não é importável externamente).
+	// go-psadt >= 306977e exporta erros tipados (re-export de parser.Is*).
+	// A ordem importa: reboot/cancel do usuário antes das falhas genéricas.
 	switch {
-	case isPSADTNetworkError(msg):
+	case psadt.IsRebootRequired(err):
+		// Exit codes 3010/1641: normalizePSADTExecutionResult reclassifica
+		// como sucesso com reboot pendente, conforme a policy.
+		return ExecutionResult{Success: false, ExitCode: 3010, ExitCodeSet: true, ErrorMessage: msg, Output: msg}
+	case psadt.IsUserCancelled(err):
+		// Exit code 1602: usuário cancelou — categoria user_denied.
+		return ExecutionResult{Success: false, ExitCode: 1602, ExitCodeSet: true, ErrorMessage: "execucao cancelada pelo usuario: " + msg, Output: msg}
+	case psadt.IsNetworkError(err):
 		// Sem conectividade — exit code 2 (recoverable, sem fallback de rede).
 		return ExecutionResult{Success: false, ExitCode: 2, ExitCodeSet: true, ErrorMessage: "sem conectividade de rede: " + msg, Output: msg}
-	case isPSADTTimeoutError(msg):
+	case psadt.IsTimeout(err):
 		// Timeout — exit code 1618 (recoverable, permite retry/fallback).
 		return ExecutionResult{Success: false, ExitCode: 1618, ExitCodeSet: true, ErrorMessage: "timeout na execucao PSADT: " + msg, Output: msg}
-	case isPSADTAccessDeniedError(msg):
+	case psadt.IsAccessDenied(err):
 		// Acesso negado — exit code 5 (fatal).
 		return ExecutionResult{Success: false, ExitCode: 5, ExitCodeSet: true, ErrorMessage: "acesso negado: " + msg, Output: msg}
-	case isPSADTFileNotFoundError(msg):
+	case psadt.IsFileNotFound(err):
 		// Arquivo não encontrado — exit code 2 (recoverable).
+		return ExecutionResult{Success: false, ExitCode: 2, ExitCodeSet: true, ErrorMessage: "arquivo nao encontrado: " + msg, Output: msg}
+	}
+
+	// Fallback heurístico para erros não tipados (NewClient, runner morto,
+	// falhas de bootstrap que não chegam como PSADTError).
+	switch {
+	case isPSADTNetworkError(msg):
+		return ExecutionResult{Success: false, ExitCode: 2, ExitCodeSet: true, ErrorMessage: "sem conectividade de rede: " + msg, Output: msg}
+	case isPSADTTimeoutError(msg):
+		return ExecutionResult{Success: false, ExitCode: 1618, ExitCodeSet: true, ErrorMessage: "timeout na execucao PSADT: " + msg, Output: msg}
+	case isPSADTAccessDeniedError(msg):
+		return ExecutionResult{Success: false, ExitCode: 5, ExitCodeSet: true, ErrorMessage: "acesso negado: " + msg, Output: msg}
+	case isPSADTFileNotFoundError(msg):
 		return ExecutionResult{Success: false, ExitCode: 2, ExitCodeSet: true, ErrorMessage: "arquivo nao encontrado: " + msg, Output: msg}
 	}
 
