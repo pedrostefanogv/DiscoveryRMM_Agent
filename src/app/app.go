@@ -131,6 +131,15 @@ type App struct {
 	zeroTouchAttemptInFlight atomic.Bool
 	zeroTouchApprovalPending atomic.Bool
 
+	// Companion mode: último estado de onboarding recebido do serviço via
+	// snapshot IPC (agent:status_snapshot). O sync (zero-touch) roda no
+	// SERVIÇO — a flag zeroTouchApprovalPending local da UI nunca muda no
+	// modo companion, e GetOnboardingStatus responde 'normal' mesmo quando o
+	// agente está provisionado aguardando aprovação. Com o snapshot, a UI
+	// reflete o estado real (e a overlay sai quando a aprovação chega).
+	companionOnboardingMu sync.RWMutex
+	companionOnboarding   map[string]interface{}
+
 	startupTime time.Time
 
 	// deferredRestart fica no App (não core): estado do power-command de

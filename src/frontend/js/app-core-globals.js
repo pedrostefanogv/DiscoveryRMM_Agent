@@ -263,9 +263,23 @@ const notificationUXState = {
   progressByGroup: {},
 };
 
+// Intervalo do polling de reavaliação do estado de provisionamento. A
+// constante NÃO existia (usada sem declaração) — o setInterval lançava
+// ReferenceError silenciado pelos .catch() e o polling NUNCA iniciava: a
+// overlay de "aguardando provisionamento/aprovação" só saía com clique em
+// "Verificar novamente" ou reinício do app, mesmo depois de o agente receber
+// a configuração/aprovação do servidor.
+const PROVISIONING_CHECK_INTERVAL_MS = 10000;
+
 const provisioningOverlayState = {
   refs: null,
   pollId: null,
+  // true quando a overlay estava VISÍVEL na sincronização anterior — usado
+  // para detectar a transição bloqueado→normal e avisar o usuário com um
+  // toast ("configuração recebida") em vez de a tela sumir em silêncio.
+  wasVisible: false,
+  // listeners de evento/visibilidade registrados uma única vez
+  listenersBound: false,
 };
 
 let inventorySoftware = [];
@@ -416,6 +430,20 @@ function computeProvisioningState(debugCfg) {
 }
 
 function resolveProvisioningOverlayMode(status, onboardingStatus) {
+  // Fonte primária: o modo calculado no GO (GetOnboardingStatus) — ele lê o
+  // config de produção DIRETO DO DISCO (loadInstallerConfig) e a flag de
+  // aprovação zero-touch do processo que roda o core. Em modo companion o
+  // GetDebugConfig da UI serve a cópia EM MEMÓRIA carregada no boot, que fica
+  // STALE depois de o serviço receber/aplicar a configuração — confiar nele
+  // mantinha a overlay presa ("só some ao fechar e abrir"). O fallback antigo
+  // (computeProvisioningState) fica apenas para chamadas sem onboardingStatus.
+  if (onboardingStatus && typeof onboardingStatus.mode === 'string' && onboardingStatus.mode) {
+    var goMode = onboardingStatus.mode.trim().toLowerCase();
+    if (goMode === 'awaiting-approval' || goMode === 'awaiting-auto-provisioning' || goMode === 'normal') {
+      return goMode;
+    }
+  }
+
   if (!status || !status.isProvisioned) {
     return 'awaiting-auto-provisioning';
   }
@@ -485,8 +513,42 @@ function ensureProvisioningOverlay() {
     syncProvisioningOverlayFromRuntime();
   });
 
+  bindProvisioningRuntimeListeners();
   provisioningOverlayState.refs = refs;
   return refs;
+}
+
+// Liga os gatilhos INSTANTÂNEOS de reavaliação da overlay (uma única vez):
+//   - evento 'agent:onboarding' do backend (emissão nova em sync.go): dispara
+//     quando a config do servidor chega/aplica ou quando a aprovação zero-touch
+//     muda de estado — derruba a overlay NA HORA, sem esperar o próximo tick.
+//     No modo companion o evento vem do serviço via IPC (broadcast → UI →
+//     wails.on), o mesmo caminho de 'agent:connectivity'.
+//   - visibilitychange: o polling pula os ticks com a janela oculta
+//     (close-to-tray); ao reabrir, sincroniza imediatamente em vez de esperar
+//     até PROVISIONING_CHECK_INTERVAL_MS.
+//   - 'service:ipc_state' conectado (companion): o IPC pode ter ficado fora
+//     quando o evento de onboarding foi emitido — reavalia ao reconectar.
+function bindProvisioningRuntimeListeners() {
+  if (provisioningOverlayState.listenersBound) return;
+  provisioningOverlayState.listenersBound = true;
+
+  var on = null;
+  if (window.wails && typeof window.wails.on === 'function') {
+    on = window.wails.on.bind(window.wails);
+  } else if (window.runtime && typeof window.runtime.EventsOn === 'function') {
+    on = window.runtime.EventsOn.bind(window.runtime);
+  }
+  if (on) {
+    try { on('agent:onboarding', function () { syncProvisioningOverlayFromRuntime(); }); } catch (_) {}
+    try { on('service:ipc_state', function (data) {
+      if (data && data.connected) syncProvisioningOverlayFromRuntime();
+    }); } catch (_) { /* não crítico */ }
+  }
+
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) syncProvisioningOverlayFromRuntime();
+  });
 }
 
 function stopProvisioningOverlayPolling() {
@@ -511,11 +573,20 @@ function syncProvisioningOverlayFromConfig(debugCfg, onboardingStatus) {
   var suppressOverlay = isDebugRuntimeMode();
 
   if (mode === 'normal' || suppressOverlay) {
+    // Transição bloqueado→normal (config/aprovação chegou enquanto a overlay
+    // estava visível): esconde E avisa — sem isso o usuário não sabe se foi
+    // liberado ou se a tela simplesmente fechou.
+    var wasVisible = !refs.overlay.classList.contains('hidden');
     refs.overlay.classList.add('hidden');
     refs.overlay.setAttribute('aria-hidden', 'true');
     refs.footnote.textContent = translate('provisioning.completed');
     stopProvisioningOverlayPolling();
+    if (provisioningOverlayState.wasVisible && !suppressOverlay && mode === 'normal') {
+      showToast(translate('provisioning.approved.toast'), 'info');
+    }
+    provisioningOverlayState.wasVisible = false;
   } else {
+    provisioningOverlayState.wasVisible = true;
     refs.title.textContent = translate(copyKeys.title);
     refs.message.textContent = translate(copyKeys.message);
     refs.overlay.classList.remove('hidden');

@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
     [string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path,
     [string]$OutputName = "discovery-agent-install.exe",
@@ -65,6 +65,7 @@ function Resolve-WindresPath() {
 
     $candidates = @(
         "C:\ProgramData\Chocolatey\lib\mingw\tools\install\mingw64\bin\windres.exe",
+        "C:\ProgramData\mingw64\mingw64\bin\windres.exe",
         "C:\msys64\mingw64\bin\windres.exe",
         "C:\msys64\usr\bin\windres.exe"
     )
@@ -90,6 +91,10 @@ $nsiFile = Join-Path $installerDir "project.nsi"
 $agentExe = Join-Path $binDir "discovery-agent.exe"
 $iconPath = Join-Path $srcRoot "build\windows\icon.ico"
 $sysoPath = Join-Path $srcRoot "resource_windows_amd64.syso"
+# O .syso vale apenas para o pacote em cujo DIRETÓRIO ele está: o do agente
+# (src/. inclui o da raiz), mas o serviço (./cmd/discovery-service) precisa de
+# um próprio — sem ele o discovery-service.exe sai SEM ícone.
+$serviceSysoPath = Join-Path $srcRoot "cmd\discovery-service\resource_windows_amd64.syso"
 
 if (-not (Test-Path $syncIconsScript)) {
     throw "Script de sincronizacao de icones nao encontrado: $syncIconsScript"
@@ -120,6 +125,15 @@ try {
     & $windresExe --target=pe-x86-64 -i $rcPath -o $sysoPath
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path $sysoPath)) {
         throw "Falha ao gerar recurso de icone com windres"
+    }
+    # Mesmo ícone para o binário do serviço (.syso no diretório do pacote).
+    $serviceSysoDir = Split-Path $serviceSysoPath -Parent
+    if (-not (Test-Path $serviceSysoDir)) {
+        New-Item -ItemType Directory -Path $serviceSysoDir | Out-Null
+    }
+    & $windresExe --target=pe-x86-64 -i $rcPath -o $serviceSysoPath
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $serviceSysoPath)) {
+        throw "Falha ao gerar recurso de icone do servico com windres"
     }
 
     # Build Windows AMD64 (go build direto — Wails v3 embeda o frontend via //go:embed).
@@ -188,6 +202,9 @@ finally {
     }
     if ($sysoPath -and (Test-Path $sysoPath)) {
         Remove-Item $sysoPath -Force -ErrorAction SilentlyContinue
+    }
+    if ($serviceSysoPath -and (Test-Path $serviceSysoPath)) {
+        Remove-Item $serviceSysoPath -Force -ErrorAction SilentlyContinue
     }
     Pop-Location
 }

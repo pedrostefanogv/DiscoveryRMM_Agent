@@ -3,11 +3,14 @@
 package terminal
 
 import (
+	"bufio"
 	"encoding/base64"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -73,6 +76,21 @@ func NewDispatcherShell(shell ShellKind, cols, rows int, onOutput func(string)) 
 		"--terminal-rows="+fmt.Sprint(rows),
 	)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+
+	// Telemetria do dispatcher: sem isso os log.Printf do filho (falha do
+	// ConPTY com 0xC0000142, ListenPipe, exit 1...) eram PERDIDOS — o
+	// discovery-service.exe é console-subsystem mas roda como serviço/GUI sem
+	// console, e o stderr do dispatcher ia para handle inválido. Na estação,
+	// o agent-service.log não registrava NADA do terminal. Capturamos
+	// stdout+stderr e teeamos com prefixo [term-dispatcher] no log do agente
+	// (que, no modo serviço, chega ao agent-service.log).
+	if stderr, serr := cmd.StderrPipe(); serr == nil {
+		go teeDispatcherLog(stderr)
+	}
+	if stdout, oerr := cmd.StdoutPipe(); oerr == nil {
+		go teeDispatcherLog(stdout)
+	}
+
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start dispatcher: %w", err)
 	}
@@ -114,6 +132,21 @@ func NewDispatcherShell(shell ShellKind, cols, rows int, onOutput func(string)) 
 	go ds.readOutputLoop()
 
 	return ds, nil
+}
+
+// teeDispatcherLog drena um stream do dispatcher (stdout/stderr) e repassa as
+// linhas para o log do agente com prefixo [term-dispatcher] — diagnóstico do
+// ConPTY isolado visível no agent-service.log (via tee do stdlib log).
+func teeDispatcherLog(r interface{ Read([]byte) (int, error) }) {
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 64*1024), 256*1024)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" {
+			continue
+		}
+		log.Printf("[term-dispatcher] %s", line)
+	}
 }
 
 // readOutputLoop lê o output do dispatcher (pipeOut) e repassa via onOutput.

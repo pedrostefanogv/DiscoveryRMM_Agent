@@ -4,7 +4,7 @@
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
-import { Create as $Create } from "/wails/runtime.js";
+import { Create as $Create } from "@wailsio/runtime";
 
 /**
  * AgentHeartbeatMetrics is a lightweight struct for collecting
@@ -142,6 +142,14 @@ export class AgentHeartbeatMetrics {
              * @type {number}
              */
             this["Port"] = 0;
+        }
+        if (!("UIOnline" in $$source)) {
+            /**
+             * UIOnline: nil = não aplicável (não é serviço); true/false = estado IPC
+             * @member
+             * @type {boolean | null}
+             */
+            this["UIOnline"] = null;
         }
 
         Object.assign(this, $$source);

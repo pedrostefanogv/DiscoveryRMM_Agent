@@ -159,6 +159,7 @@ var APP_I18N_DICTIONARY = {
     "provisioning.approval.footnote":
       "A integração será liberada automaticamente após a aprovação. Caso essa mensagem persista, entre em contato com a equipe de TI.",
     "provisioning.completed": "Provisionamento concluído. Interface liberada.",
+    "provisioning.approved.toast": "Configuração recebida — agente integrado com o servidor.",
     "provisioning.refresh": "Verificar novamente",
     "status.summary": "Resumo rápido de saúde do agente",
     "status.connectionTitle": "Status do Agente",
@@ -691,6 +692,7 @@ var APP_I18N_DICTIONARY = {
     "provisioning.approval.footnote":
       "Integration will be enabled automatically after approval. If this message persists, contact the IT team.",
     "provisioning.completed": "Provisioning completed. Interface unlocked.",
+    "provisioning.approved.toast": "Configuration received — agent integrated with the server.",
     "provisioning.refresh": "Check again",
     "status.summary": "Quick agent health summary",
     "status.connectionTitle": "Agent Status",

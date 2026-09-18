@@ -4,7 +4,7 @@
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
-import { Create as $Create } from "/wails/runtime.js";
+import { Create as $Create } from "@wailsio/runtime";
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
@@ -12,6 +12,9 @@ import * as agentconfig$0 from "./agentconfig/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
 import * as automation$0 from "./automation/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as coreagent$0 from "./coreagent/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
 import * as debug$0 from "./debug/models.js";
@@ -842,42 +845,18 @@ export const RealtimeStatus = debug$0.RealtimeStatus;
  */
 
 /**
- * RuntimeFlags are exposed to the frontend to control runtime-only UI behavior.
+ * inventoryCache/exportConfig/agentInfoCache/appStorePolicyCache/logBuffer/
+ * RuntimeFlags movidos para coreagent (lote 2, §0.8). RuntimeFlags mantém
+ * alias local com as mesmas tags json (exposto ao frontend).
  */
-export class RuntimeFlags {
-    /**
-     * Creates a new RuntimeFlags instance.
-     * @param {Partial<RuntimeFlags>} [$$source = {}] - The source object to create the RuntimeFlags.
-     */
-    constructor($$source = {}) {
-        if (!("debugMode" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["debugMode"] = false;
-        }
-        if (!("startMinimized" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["startMinimized"] = false;
-        }
+export const RuntimeFlags = coreagent$0.RuntimeFlags;
 
-        Object.assign(this, $$source);
-    }
-
-    /**
-     * Creates a new RuntimeFlags instance from a string or object.
-     * @param {any} [$$source = {}]
-     * @returns {RuntimeFlags}
-     */
-    static createFrom($$source = {}) {
-        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        return new RuntimeFlags(/** @type {Partial<RuntimeFlags>} */($$parsedSource));
-    }
-}
+/**
+ * inventoryCache/exportConfig/agentInfoCache/appStorePolicyCache/logBuffer/
+ * RuntimeFlags movidos para coreagent (lote 2, §0.8). RuntimeFlags mantém
+ * alias local com as mesmas tags json (exposto ao frontend).
+ * @typedef {coreagent$0.RuntimeFlags} RuntimeFlags
+ */
 
 /**
  * StatusOverview provides a simplified health snapshot for the default status page.

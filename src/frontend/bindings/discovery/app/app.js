@@ -4,7 +4,7 @@
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
-import { Call as $Call, CancellablePromise as $CancellablePromise, Create as $Create } from "/wails/runtime.js";
+import { Call as $Call, CancellablePromise as $CancellablePromise, Create as $Create } from "@wailsio/runtime";
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
@@ -33,6 +33,9 @@ import * as mcp$0 from "./core/mcp/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
 import * as models$0 from "./core/models/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as coreagent$0 from "./coreagent/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
 import * as debug$0 from "./debug/models.js";
@@ -83,6 +86,7 @@ export function AddAgentTicketComment(ticketID, content, isInternal) {
 
 /**
  * AddLocalMemory cria uma nova anotacao local.
+ * Em modo companion, executa no serviço via IPC (decisão D3).
  * @param {string} content
  * @returns {$CancellablePromise<database$0.MemoryNote>}
  */
@@ -369,7 +373,8 @@ export function Ctx() {
 }
 
 /**
- * DB expõe a.db via interface.
+ * DB expõe a.CoreAgent.DB via interface (migração lote 1: campo promovido do
+ * coreagent.CoreAgent embutido; método mantém a interface sync.SyncDeps).
  * @returns {$CancellablePromise<database$0.DB | null>}
  */
 export function DB() {
@@ -388,6 +393,7 @@ export function DebugMode() {
 
 /**
  * DeleteLocalMemory remove uma nota pelo seu ID.
+ * Em modo companion, executa no serviço via IPC (decisão D3).
  * @param {number} id
  * @returns {$CancellablePromise<void>}
  */
@@ -760,6 +766,7 @@ export function GetKnowledgeBaseArticles() {
 /**
  * GetLocalMemories retorna as memorias/anotacoes locais persistidas.
  * Esta API é exposta via Wails e MCP.
+ * Em modo companion, consulta o serviço via IPC (DB único — decisão D3).
  * @returns {$CancellablePromise<database$0.MemoryNote[]>}
  */
 export function GetLocalMemories() {
@@ -769,7 +776,6 @@ export function GetLocalMemories() {
 }
 
 /**
- * GetLogCount returns the total number of buffered log lines.
  * @returns {$CancellablePromise<number>}
  */
 export function GetLogCount() {
@@ -778,6 +784,8 @@ export function GetLogCount() {
 
 /**
  * GetLogs returns the accumulated command log lines.
+ * Companion mode: os logs do CORE rodam no serviço — busca via RPC
+ * logs:tail (PLANO_SEPARACAO_SERVICO_UI.md §0.5). Standalone: buffer local.
  * @returns {$CancellablePromise<string[]>}
  */
 export function GetLogs() {
@@ -965,6 +973,8 @@ export function GetPackageActionsJSON() {
 
 /**
  * GetPendingUpdates runs `winget upgrade` and parses the output into structured items.
+ * Companion mode: o scan roda NO serviço via RPC updates:scan (decisão D2 —
+ * winget/updates no serviço; a UI só exibe). Standalone: executa localmente.
  * @returns {$CancellablePromise<models$0.UpgradeItem[]>}
  */
 export function GetPendingUpdates() {
@@ -1621,6 +1631,16 @@ export function RestartSpoolerJSON() {
 }
 
 /**
+ * RunCore inicia o ciclo de vida do App sem depender de tipos do Wails.
+ * Usado pelo modo serviço (cmd/discovery-service) e pela UI (via
+ * ServiceStartup). No modo serviço, startup() já pula os itens de UI.
+ * @returns {$CancellablePromise<void>}
+ */
+export function RunCore() {
+    return $Call.ByID(113842096);
+}
+
+/**
  * RunOnboardingLoop periodically requests configuration from the local P2P network
  * when this agent has no server credentials ("generic agent" state).
  * Exits when configured, max attempts reached, or ctx cancelled.
@@ -1949,7 +1969,7 @@ const $$createType53 = $models.PSADTDebugState.createFrom;
 const $$createType54 = models$0.UpgradeItem.createFrom;
 const $$createType55 = $Create.Array($$createType54);
 const $$createType56 = debug$0.RealtimeStatus.createFrom;
-const $$createType57 = $models.RuntimeFlags.createFrom;
+const $$createType57 = coreagent$0.RuntimeFlags.createFrom;
 const $$createType58 = status$0.Overview.createFrom;
 const $$createType59 = $Create.Array($$createType5);
 const $$createType60 = $Create.Array($$createType1);

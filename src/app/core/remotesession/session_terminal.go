@@ -49,7 +49,7 @@ type TerminalSession struct {
 // reduzindo NATS publishes em ~90% para comandos com saida rapida (ex: dir, logs).
 
 type outputCoalescer struct {
-	mu       sync.Mutex
+	mu sync.Mutex
 	// buf acumula os chunks de output em BYTES (não string): o flush pode
 	// reter o tail de uma runa UTF-8 incompleta (ver Utf8IncompleteTail) e
 	// anexá-lo ao próximo chunk — impossível de fazer por ranhura em Builder.
@@ -250,7 +250,10 @@ func (oc *outputCoalescer) allowMessage() bool {
 	return true
 }
 
-// ForceFlush esvazia o buffer imediatamente (chamado no shutdown).
+// ForceFlush esvazia o buffer imediatamente (chamado no shutdown/exit do
+// shell). IGNORA o rate limit de propósito: é o último flush da sessão —
+// descartar o buffer aqui (comportamento antigo, quando a janela de 6
+// msgs/100ms estava cheia) perdia os últimos bytes de output do terminal.
 func (oc *outputCoalescer) ForceFlush() {
 	oc.mu.Lock()
 	defer oc.mu.Unlock()

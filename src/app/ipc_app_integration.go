@@ -37,6 +37,10 @@ func (a *App) handleIPCMessage(conn net.Conn, msg IPCMessage) {
 			// reason/lastEvent acompanham o snapshot para a UI logar e
 			// diagnosticar oscilações do indicador (ex.: "reconectando
 			// (planejado): watchdog global pong ...").
+			// Estado de onboarding calculado AQUI no serviço (loadInstallerConfig
+			// + flag zero-touch local): a UI companion usa para a overlay de
+			// "aguardando provisionamento/aprovação" refletir a verdade do core.
+			onb := a.GetOnboardingStatus()
 			a.ipcServer.RespondTo(conn, NewIPCMessage(IPCMsgEvent, map[string]any{
 				"name":      "agent:status_snapshot",
 				"connected": agent.Connected,
@@ -47,6 +51,10 @@ func (a *App) handleIPCMessage(conn net.Conn, msg IPCMessage) {
 				// agentConn roda AQUI no serviço — a UI não tem esses campos localmente.
 				"lastGlobalPongAtUtc": strings.TrimSpace(agent.LastGlobalPongAtUTC),
 				"globalPongStale":     agent.GlobalPongStale,
+				// Estado de onboarding (overlay de provisionamento/aprovação).
+				"onboardingMode":       onb["mode"],
+				"onboardingConfigured": onb["configured"],
+				"onboardingMessage":    onb["message"],
 			}))
 		}
 	case IPCMsgRemoteSession:
@@ -127,6 +135,36 @@ func (a *App) broadcastIPCEvent(name string, data ...any) {
 	a.ipcServer.Broadcast(NewIPCMessage(IPCMsgEvent, payload))
 }
 
+// storeCompanionOnboarding guarda o último estado de onboarding recebido do
+// serviço via snapshot IPC (companion mode). Nil-safe.
+func (a *App) storeCompanionOnboarding(mode string, configured bool, message string) {
+	if a == nil {
+		return
+	}
+	st := map[string]interface{}{
+		"mode":       strings.TrimSpace(mode),
+		"configured": configured,
+	}
+	if msg := strings.TrimSpace(message); msg != "" {
+		st["message"] = msg
+	}
+	a.companionOnboardingMu.Lock()
+	a.companionOnboarding = st
+	a.companionOnboardingMu.Unlock()
+}
+
+// getCompanionOnboarding devolve o último estado de onboarding do serviço
+// (nil quando nada foi recebido ainda — ex.: serviço mais antigo sem os
+// campos no snapshot). Nil-safe.
+func (a *App) getCompanionOnboarding() map[string]interface{} {
+	if a == nil {
+		return nil
+	}
+	a.companionOnboardingMu.RLock()
+	defer a.companionOnboardingMu.RUnlock()
+	return a.companionOnboarding
+}
+
 // storeCompanionStatus guarda o último snapshot de conectividade recebido do
 // serviço via IPC. É usado por GetAgentStatus() na UI companion (o agentConn
 // local não roda lá), mantendo tray e página de status consistentes com o
@@ -195,6 +233,14 @@ func (a *App) startIPCClient() {
 						lastEvent = reason
 					}
 					a.storeCompanionStatus(connected, transport, lastEvent, lastPongAtUtc, pongStale)
+					// Estado de onboarding do serviço (overlay de provisionamento/
+					// aprovação). Campos ausentes (serviço antigo) → mantém o último.
+					if rawMode, ok := msg.Payload["onboardingMode"]; ok {
+						mode, _ := rawMode.(string)
+						cfgd, _ := msg.Payload["onboardingConfigured"].(bool)
+						msg2, _ := msg.Payload["onboardingMessage"].(string)
+						a.storeCompanionOnboarding(mode, cfgd, msg2)
+					}
 					a.syncTrayVisualState()
 					a.updateTrayMenu()
 					a.updateTrayTooltip()

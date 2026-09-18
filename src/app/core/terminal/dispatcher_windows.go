@@ -105,12 +105,37 @@ func RunDispatcher() {
 	}
 	defer outConn.Close()
 
-	// Cria o ConPTY + shell. onOutput → escreve no pipe outConn.
-	ish, err := NewConPTYShell(ShellKind(shellKind), cols, rows, func(output string) {
-		_, _ = outConn.Write([]byte(output))
-	})
-	if err != nil {
-		log.Printf("[dispatcher] NewConPTYShell: %v", err)
+	// Cria o ConPTY + shell com retry por morte prematura — a MESMA política
+	// do caminho in-process (iserial_windows.go): o 0xC0000142 do AV/injetor
+	// também mata o ConPTY DENTRO do dispatcher (o isolamento reduz, não
+	// elimina). Antes: uma única tentativa — falhou, exit(1), e o agente não
+	// tinha fallback (terminal morto em silêncio). onOutput → pipe outConn.
+	newShell := func() (IShell, error) {
+		return NewConPTYShell(ShellKind(shellKind), cols, rows, func(output string) {
+			_, _ = outConn.Write([]byte(output))
+		})
+	}
+	var ish IShell
+	var lastErr error
+	for attempt := 0; attempt <= conptyMaxRetries; attempt++ {
+		cand, cerr := newShell()
+		if cerr != nil {
+			lastErr = cerr
+			log.Printf("[dispatcher] NewConPTYShell falhou (tentativa %d/%d): %v", attempt+1, conptyMaxRetries+1, cerr)
+			continue
+		}
+		if dead := probeForEarlyDeath(cand, conptyProbeTimeout); dead {
+			lastErr = fmt.Errorf("ConPTY morreu prematuramente no startup")
+			log.Printf("[dispatcher] ConPTY morreu prematuramente (tentativa %d/%d); %s",
+				attempt+1, conptyMaxRetries+1, retryLabel(attempt))
+			_ = cand.Close()
+			continue
+		}
+		ish = cand
+		break
+	}
+	if ish == nil {
+		log.Printf("[dispatcher] ConPTY instável após %d tentativas (último: %v)", conptyMaxRetries+1, lastErr)
 		os.Exit(1)
 	}
 	defer ish.Close()
@@ -122,6 +147,21 @@ func RunDispatcher() {
 	go func() {
 		_ = ish.Wait()
 		close(done)
+	}()
+
+	// FIX zumbi silencioso: se o shell morrer com o cliente calado (nenhum
+	// input chega), o loop principal fica PRESO em inConn.Read e o canal
+	// done só é consultado depois de um Read retornar — o dispatcher
+	// continuava VIVO com o shell morto: o cliente via processo vivo
+	// (Alive()=true), pipe aberta, nenhum byte de output e nenhum EOF — o
+	// viewer ficava mudo até o stop manual ('terminal não funciona', só o
+	// banner na tela). Fechando as conexões aqui, o Read pendente
+	// desbloqueia com erro, o loop sai e o cliente recebe o EOF/Wait.
+	go func() {
+		<-done
+		log.Printf("[dispatcher] shell encerrado — fechando pipes (notifica cliente via EOF)")
+		_ = outConn.Close()
+		_ = inConn.Close()
 	}()
 
 	// Leitura do pipe in → shell.WriteStdin (envelope: base64 por linha).

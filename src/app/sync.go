@@ -28,12 +28,18 @@ func (a *App) refreshAgentConfiguration(ctx context.Context) error {
 	if result.HasZeroTouchPendingFlag && result.ZeroTouchPending {
 		if a.setZeroTouchApprovalPending(true) {
 			a.Logs.Append("[sync] dispositivo provisionado e aguardando aprovacao da equipe de TI para integracao com o servidor")
+			// Notifica o frontend imediatamente (overlay de onboarding sai na
+			// hora, sem esperar o próximo tick de polling). No modo serviço o
+			// evento vai por IPC às UIs companion (mesmo caminho de
+			// agent:connectivity); no standalone, direto via Wails.
+			a.EmitEvent("agent:onboarding", "reason", "zero-touch-pending", "mode", "awaiting-approval")
 		}
 		return nil
 	}
 
 	if a.setZeroTouchApprovalPending(false) {
 		a.Logs.Append("[sync] aprovacao recebida; integracao com o servidor liberada")
+		a.EmitEvent("agent:onboarding", "reason", "zero-touch-approved", "mode", "normal")
 	}
 
 	if a.CoreAgent.DB != nil {
@@ -59,5 +65,8 @@ func (a *App) refreshAgentConfiguration(ctx context.Context) error {
 		}
 	}
 	a.Logs.Append("[sync] configuração do agent atualizada")
+	// Config aplicada (inclui o caso "sem config → configurado"): avisa o
+	// frontend para reavaliar a overlay de onboarding imediatamente.
+	a.EmitEvent("agent:onboarding", "reason", "config-applied", "mode", "normal")
 	return nil
 }

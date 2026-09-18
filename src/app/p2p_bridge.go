@@ -308,6 +308,19 @@ func (a *App) GetAutoProvisioningStats() P2PAutoProvisioningStats {
 // GetOnboardingStatus retorna o status do agente sob perspectiva de onboarding:
 // se está configurado ou aguardando provisionamento automático da rede P2P.
 func (a *App) GetOnboardingStatus() map[string]interface{} {
+	// Companion mode: o sync (zero-touch) roda no SERVIÇO — a flag local
+	// zeroTouchApprovalPending da UI nunca muda aqui e o resultado seria
+	// 'normal' mesmo aguardando aprovação. Usa o último estado recebido via
+	// snapshot IPC (agent:status_snapshot — campos onboarding*). Fallback:
+	// lógica local (o loadInstallerConfig lê o MESMO arquivo de disco — o
+	// estado "configured" é correto mesmo sem snapshot; só a flag de aprovação
+	// depende do serviço).
+	if a != nil && a.ipcClient != nil {
+		if st := a.getCompanionOnboarding(); st != nil {
+			return st
+		}
+	}
+
 	configured := isAgentConfigured()
 	result := map[string]interface{}{
 		"configured": configured,
