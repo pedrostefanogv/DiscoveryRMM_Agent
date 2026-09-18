@@ -102,6 +102,14 @@ func spawnRemoteSessionWorker(parent context.Context, payload map[string]any) er
 	}
 	defer tok.Close()
 
+	// Diagnóstico UIPI: worker NÃO elevado (Medium) tem o input descartado
+	// pelo UIPI em janelas de integridade maior (Gerenciador de Tarefas
+	// autoElevate/UAC prompts). Visível no log do serviço para suporte.
+	log.Printf("[remote-session] worker token: source=%s elevated=%t", source, tok.IsElevated())
+	if !tok.IsElevated() {
+		log.Printf("[remote-session] AVISO: worker NAO elevado — input em janelas elevadas (Gerenciador de Tarefas, UAC) NAO funcionara neste modo")
+	}
+
 	proc, stdin, stderr, err := spawnWorkerInSession(exe, tok, source)
 	if err != nil {
 		return err
@@ -395,11 +403,19 @@ func acquireInteractiveSessionToken() (windows.Token, string, error) {
 	// incluindo elevadas (Gerenciador de Tarefas). Com usuário logado o desktop
 	// é winsta0\default; sem usuário (tela de logon), winsta0\winlogon.
 	if tok, err := systemTokenForSession(consoleSession); err == nil {
-		source := "system-session"
-		if _, userErr := wtsQueryUserToken(consoleSession); userErr != nil {
-			source = "winlogon" // sem usuário logado → desktop de logon
+		if !tok.IsElevated() {
+			// Caller não-SYSTEM (ex.: UI standalone Medium): o token duplicado
+			// não pode ser elevado a System — cair para o fallback do usuário
+			// logado em vez de rotular um token Medium como "system-session"
+			// (UIPI bloquearia o input em janelas elevadas silenciosamente).
+			tok.Close()
+		} else {
+			source := "system-session"
+			if _, userErr := wtsQueryUserToken(consoleSession); userErr != nil {
+				source = "winlogon" // sem usuário logado → desktop de logon
+			}
+			return tok, source, nil
 		}
-		return tok, source, nil
 	}
 
 	// 2) Usuário logado na sessão do console (fallback — worker Medium:

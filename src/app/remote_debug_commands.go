@@ -261,6 +261,21 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 			return true, 0, "ok", ""
 		}
 
+		// ── UI companion (Medium integrity): repassa para o serviço (SYSTEM) ──
+		// A sessão rodando NESTE processo injeta input com token Medium — o
+		// UIPI descarta SendInput em janelas de integridade maior (o
+		// Gerenciador de Tarefas tem autoElevate no manifesto e roda SEMPRE
+		// High: cliques/teclas do controle remoto não chegam nele). Com o
+		// serviço presente, quem spawna o worker como SYSTEM na sessão
+		// interativa é o serviço (ipc_app_integration IPCMsgRemoteSession).
+		if a.ipcClient != nil {
+			if err := a.ipcClient.Send(NewIPCMessage(IPCMsgRemoteSession, parsedPayload)); err == nil {
+				log.Printf("[remote-session] repassado ao serviço via IPC (worker SYSTEM): sessionId=%s action=%s\n", sid, act)
+				return true, 0, "ok", ""
+			}
+			log.Printf("[remote-session] IPC do serviço indisponível — executando in-process (Medium: input em janelas elevadas NÃO funcionará)\n")
+		}
+
 		if a.RemoteSessionMgr == nil {
 			log.Printf("[remote-session] ERRO: remoteSessionMgr nil — nao inicializado\n")
 			return true, 1, "", "remote session manager nao inicializado"
