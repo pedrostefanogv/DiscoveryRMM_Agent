@@ -151,9 +151,9 @@ WAILS3_BIN="${WAILS3_BIN:-$(command -v wails3 2>/dev/null) || true}"
 if [[ -z "$WAILS3_BIN" ]]; then
   echo "[info] wails3 nao encontrado no PATH; instalando via go install..."
   # GOBIN defaults to $GOPATH/bin or $HOME/go/bin; garantimos que fica acessível.
-  if ! go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.3 2>/dev/null; then
+  if ! go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.23 2>/dev/null; then
     echo "[aviso] falha ao instalar wails3; continuando (bindings nao serao regenerados)"
-    echo "[dica] instale manualmente: go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.3"
+    echo "[dica] instale manualmente: go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.23"
   else
     # Resolve o caminho do binário instalado (GOBIN ou GOPATH/bin).
     WAILS3_BIN="$(go env GOBIN 2>/dev/null)"
@@ -193,6 +193,15 @@ if [[ -n "$WAILS3_BIN" ]]; then
     }
     popd >/dev/null
   fi
+fi
+
+# Guarda de regressao: bindings gerados SEM -b importam o pacote npm
+# (@wailsio/runtime) — bare module specifier que quebra o WebView2 sem bundler
+# (window.go indefinido -> "API do Wails indisponivel", janela sem close/drag).
+if grep -rq "@wailsio/runtime" "$SRC_ROOT/frontend/bindings" 2>/dev/null; then
+  echo "[erro] bindings npm-style (@wailsio/runtime) detectados — abortando build." >&2
+  echo "[dica] regenere com: wails3 generate bindings -b -clean=true -d frontend/bindings ./..." >&2
+  exit 1
 fi
 
 ICON_PATH="$SRC_ROOT/build/windows/icon.ico"
