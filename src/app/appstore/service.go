@@ -95,7 +95,7 @@ func NormalizeInstallationType(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "winget":
 		return string(InstallationWinget)
-	case "chocolatey":
+	case "chocolatey", "choco":
 		return string(InstallationChocolatey)
 	case "custom":
 		return string(InstallationCustom)
@@ -106,6 +106,38 @@ func NormalizeInstallationType(value string) string {
 
 func lookupKey(installationType, packageID string) string {
 	return strings.ToLower(strings.TrimSpace(installationType)) + "|" + strings.ToLower(strings.TrimSpace(packageID))
+}
+
+// installationTypeSortRank define a prioridade de exibição dos apps na loja:
+// Winget primeiro (melhor integração), depois Chocolatey e Custom; tipos
+// desconhecidos vão para o fim, mantendo ordem estável caso o servidor passe
+// a enviar outros valores.
+func installationTypeSortRank(value string) int {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "winget":
+		return 0
+	case "chocolatey", "choco":
+		return 1
+	case "custom":
+		return 2
+	default:
+		return 3
+	}
+}
+
+// sortEffectiveItems ordena os itens efetivos da loja por prioridade de origem
+// (Winget > Chocolatey > Custom > desconhecido) e, dentro da mesma origem,
+// por packageId alfabético (case-insensitive). SliceStable mantém a ordem
+// relativa de itens idênticos.
+func sortEffectiveItems(items []Item) {
+	sort.SliceStable(items, func(i, j int) bool {
+		leftRank := installationTypeSortRank(items[i].InstallationType)
+		rightRank := installationTypeSortRank(items[j].InstallationType)
+		if leftRank != rightRank {
+			return leftRank < rightRank
+		}
+		return strings.ToLower(items[i].PackageID) < strings.ToLower(items[j].PackageID)
+	})
 }
 
 // FetchByInstallationType coleta todas as páginas via cursor pagination (CQRS).
@@ -281,14 +313,7 @@ func (s *Service) LoadEffectivePolicy(ctx context.Context, forceRefresh bool) (E
 	for _, item := range lookup {
 		items = append(items, item)
 	}
-	sort.SliceStable(items, func(i, j int) bool {
-		leftType := strings.ToLower(items[i].InstallationType)
-		rightType := strings.ToLower(items[j].InstallationType)
-		if leftType != rightType {
-			return leftType < rightType
-		}
-		return strings.ToLower(items[i].PackageID) < strings.ToLower(items[j].PackageID)
-	})
+	sortEffectiveItems(items)
 
 	policy := EffectivePolicy{
 		Items:     items,

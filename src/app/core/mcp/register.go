@@ -50,6 +50,10 @@ type AppBridge interface {
 
 	// Chat — pergunta interativa ao usuario
 	AskUserChat(question, optionsJSON, allowText string) (string, error)
+	// AskUserChatWithContext é a variante consciente de contexto: o
+	// cancelamento do stream de chat (botão Parar) interrompe a espera pela
+	// resposta do usuário em vez de deixar a goroutine pendurada.
+	AskUserChatWithContext(ctx context.Context, question, optionsJSON, allowText string) (string, error)
 }
 
 // RegisterDiscoveryTools adds all Discovery app tools to the registry.
@@ -764,7 +768,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 		Name: "ask_user",
 		Description: "Faz uma pergunta ao usuario com opcoes clicaveis e aguarda a resposta. " +
 			"Use SEMPRE que precisar de confirmacao, escolha entre alternativas ou esclarecimento do usuario. " +
-			"A ferramenta BLOQUEIA ate o usuario responder — use apenas quando realmente precisar de input. " +
+			"A ferramenta BLOQUEIA ate o usuario responder (sem limite de tempo) — use apenas quando realmente precisar de input. " +
 			"Prefira usar texto com botoes (- opcao) para perguntas simples que nao bloqueiam o fluxo.",
 		Params: []ToolParam{
 			{Name: "question", Type: "string", Description: "A pergunta a ser exibida ao usuario (ex: 'Qual programa voce quer instalar?')", Required: true},
@@ -785,7 +789,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 				b, _ := json.Marshal(v)
 				optionsJSON = string(b)
 			}
-			// allowText pode vir como string "true"/"false" ou bool nativo
+			// allowText pode vir como string "true"/"false", bool nativo ou número
 			allowText := "false"
 			switch v := args["allowText"].(type) {
 			case string:
@@ -794,9 +798,17 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 				if v {
 					allowText = "true"
 				}
+			case float64:
+				if v != 0 {
+					allowText = "true"
+				}
 			}
 
-			answer, err := app.AskUserChat(question, optionsJSON, allowText)
+			// Com ctx: o cancelamento do stream (botão Parar) interrompe a
+			// espera pela resposta em vez de deixar a goroutine pendurada. A
+			// pergunta em si não tem limite de tempo — o chat prossegue
+			// quando o usuário responder (B5).
+			answer, err := app.AskUserChatWithContext(ctx, question, optionsJSON, allowText)
 			if err != nil {
 				return nil, err
 			}

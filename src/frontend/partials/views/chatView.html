@@ -50,10 +50,24 @@
 
     <div class="chat-input-wrap">
       <textarea id="chatInput" class="chat-input" placeholder="Digite sua mensagem...
-        (Enter para enviar, Shift+Enter para nova linha)" rows="2" spellcheck="true" data-app-lang="true"
+        (Enter para enviar, Shift+Enter para nova linha)" rows="3" spellcheck="true" data-app-lang="true"
         autocapitalize="sentences" autocomplete="on" data-i18n-placeholder="chat.inputPlaceholder"></textarea>
-      <button id="chatSendBtn" class="btn primary chat-send-btn" data-i18n="action.send">Enviar</button>
-      <button id="chatStopBtn" class="btn danger chat-stop-btn hidden" data-i18n="action.stop">Stop</button>
+      <div class="chat-input-actions">
+        <button id="chatStopBtn" class="chat-icon-btn chat-stop-btn hidden" type="button" title="Stop"
+          aria-label="Stop" data-i18n-title="action.stop" data-i18n-aria-label="action.stop">
+          <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor" aria-hidden="true">
+            <rect x="5.5" y="5.5" width="13" height="13" rx="2.5" />
+          </svg>
+        </button>
+        <button id="chatSendBtn" class="chat-icon-btn chat-send-btn" type="button" title="Enviar" aria-label="Enviar"
+          data-i18n-title="action.send" data-i18n-aria-label="action.send">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2"
+            stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="m22 2-7 20-4-9-9-4Z" />
+            <path d="M22 2 11 13" />
+          </svg>
+        </button>
+      </div>
     </div>
 
     <div id="chatLogsModal" class="chat-logs-modal hidden" aria-hidden="true">

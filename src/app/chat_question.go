@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -51,6 +52,21 @@ func takeQuestionChannel(id string) chan ChatQuestionAnswer {
 // AskUser displays a question to the user and waits for their answer.
 // This blocks the calling goroutine until the user responds or timeout is reached.
 func (a *App) AskUser(question, optionsJSON, allowTextRaw string) (string, error) {
+	return a.AskUserContext(nil, question, optionsJSON, allowTextRaw)
+}
+
+// AskUserContext exibe uma pergunta interativa ao usuário e aguarda a resposta
+// SEM limite de tempo — o chat prossegue quando o usuário responder.
+//
+// O ctx (quando informado) permite interromper a espera pelo cancelamento do
+// stream (botão Parar) ou pelo encerramento do app: nesse caso a pergunta
+// pendente é removida e a UI é notificada via evento "chat:question_cancelled"
+// para desabilitar a bolha (evita resposta órfã em pergunta já morta).
+func (a *App) AskUserContext(ctx context.Context, question, optionsJSON, allowTextRaw string) (string, error) {
+	if ctx == nil {
+		ctx = a.ctx
+	}
+
 	// Parse options
 	var options []string
 	if strings.TrimSpace(optionsJSON) != "" {
@@ -65,7 +81,9 @@ func (a *App) AskUser(question, optionsJSON, allowTextRaw string) (string, error
 		} else {
 			for _, o := range raw {
 				if s, ok := o.(string); ok {
-					options = append(options, s)
+					if s = strings.TrimSpace(s); s != "" {
+						options = append(options, s)
+					}
 				}
 			}
 		}
@@ -76,7 +94,7 @@ func (a *App) AskUser(question, optionsJSON, allowTextRaw string) (string, error
 
 	allowText := false
 	switch strings.ToLower(strings.TrimSpace(allowTextRaw)) {
-	case "true", "1", "yes", "sim":
+	case "true", "1", "yes", "sim", "on":
 		allowText = true
 	}
 
@@ -99,17 +117,24 @@ func (a *App) AskUser(question, optionsJSON, allowTextRaw string) (string, error
 	// eventos de chat pelo endpoint SSE (ver chat-native-event-loss.md).
 	a.PublishChatEvent("chat:question", string(qJSON))
 
-	// Wait for answer with timeout
+	// Sem timeout: aguarda o usuário responder indefinidamente. O ctx (stream
+	// do chat ou ciclo de vida do app) é a única forma de interromper.
 	select {
 	case answer := <-answerCh:
 		takeQuestionChannel(id) // limpeza defensiva
 		return answer.Answer, nil
-	case <-time.After(120 * time.Second):
+	case <-ctx.Done():
 		takeQuestionChannel(id)
-		return "", fmt.Errorf("tempo esgotado aguardando resposta do usuário")
-	case <-a.ctx.Done():
-		takeQuestionChannel(id)
-		return "", fmt.Errorf("aplicação encerrada")
+		// Notifica a UI: a bolha da pergunta deve ser desabilitada para o
+		// usuário não responder a uma pergunta que já não está mais ativa.
+		if cancelJSON, err := json.Marshal(map[string]string{"id": id, "reason": "cancelled"}); err == nil {
+			a.EmitEvent("chat:question_cancelled", string(cancelJSON))
+			a.PublishChatEvent("chat:question_cancelled", string(cancelJSON))
+		}
+		if ctx.Err() == context.Canceled {
+			return "", fmt.Errorf("pergunta cancelada: o processamento do chat foi interrompido")
+		}
+		return "", fmt.Errorf("aguardando resposta do usuário: %w", ctx.Err())
 	}
 }
 
@@ -117,10 +142,9 @@ func (a *App) AskUser(question, optionsJSON, allowTextRaw string) (string, error
 func (a *App) AnswerChatQuestion(questionID, answer string) {
 	ch := takeQuestionChannel(questionID)
 	if ch == nil {
-		// Pergunta desconhecida ou já expirada — ignora sem afetar outras
-		// perguntas, mas registra para diagnóstico (expiração de 120s vs. bug
-		// de ID no frontend).
-		log.Printf("[chat] AnswerChatQuestion: pergunta %s não encontrada (expirada ou já respondida)", questionID)
+		// Pergunta desconhecida, cancelada ou já respondida — ignora sem
+		// afetar outras perguntas, mas registra para diagnóstico.
+		log.Printf("[chat] AnswerChatQuestion: pergunta %s não encontrada (cancelada ou já respondida)", questionID)
 		return
 	}
 	select {

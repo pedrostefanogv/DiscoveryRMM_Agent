@@ -452,6 +452,9 @@ var APP_I18N_DICTIONARY = {
       "Se endpoint/token ficarem vazios, o chat usa automaticamente apiScheme/apiServer/authToken da aba Debug.",
     "chat.inputPlaceholder":
       "Digite sua mensagem... (Enter para enviar, Shift+Enter para nova linha)",
+    "chat.queuedTag": "na fila",
+    "chat.queueFull": "Fila cheia (max. {max}). Aguarde a resposta atual.",
+    "chat.questionCancelled": "Pergunta cancelada — o processamento do chat foi interrompido.",
     "chat.logsTitle": "Logs do Chat IA",
     "chat.localMemories": "Memórias Locais",
     "chat.noMemoryFound": "Nenhuma memória encontrada.",
@@ -985,6 +988,9 @@ var APP_I18N_DICTIONARY = {
       "If endpoint/token are empty, chat automatically uses apiScheme/apiServer/authToken from the Debug tab.",
     "chat.inputPlaceholder":
       "Type your message... (Enter to send, Shift+Enter for a new line)",
+    "chat.queuedTag": "queued",
+    "chat.queueFull": "Queue is full (max. {max}). Wait for the current response.",
+    "chat.questionCancelled": "Question cancelled — chat processing was interrupted.",
     "chat.logsTitle": "AI Chat Logs",
     "chat.localMemories": "Local Memories",
     "chat.noMemoryFound": "No memory found.",

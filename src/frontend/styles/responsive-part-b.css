@@ -703,6 +703,16 @@
   width: auto !important;
 }
 
+/* Nota exibida na bolha quando a pergunta pendente é cancelada no backend */
+.chat-question-cancelled-note {
+  margin-top: 8px;
+  font-size: 0.75rem;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
 [data-theme="dark"] .chat-msg.chat-question {
   background: color-mix(in srgb, var(--accent) 12%, var(--surface) 88%);
 }
@@ -712,43 +722,126 @@
   50%       { opacity: 0; }
 }
 
+/* Composer do chat estilo VS Code: caixa única com a área de texto expandida
+   e os botões de ação (enviar/stop) dentro da região de digitação. */
 .chat-input-wrap {
   flex-shrink: 0;
   display: flex;
+  flex-direction: column;
   gap: 8px;
-  padding-top: 8px;
-  border-top: 1px solid var(--border);
+  padding: 12px 14px 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  transition: border-color var(--transition), box-shadow var(--transition);
+}
+
+.chat-input-wrap:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
 .chat-input {
-  flex: 1;
+  display: block;
+  width: 100%;
   resize: none;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text);
   font-size: 0.9rem;
   font-family: inherit;
-  background: var(--bg);
-  color: var(--text);
-  min-height: 40px;
-  max-height: 120px;
+  line-height: 1.5;
+  /* Área de digitação maior; cresce conforme o texto (auto-grow) até o cap */
+  min-height: 3.9rem;
+  max-height: 200px;
+  overflow-y: auto;
 }
 
 .chat-input:focus {
   outline: none;
-  border-color: var(--accent);
 }
 
-.chat-send-btn {
-  align-self: flex-end;
-  padding: 10px 20px;
+.chat-input-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 6px;
 }
 
-.chat-stop-btn {
-  align-self: flex-end;
-  padding: 10px 14px;
+/* Botões de ícone do composer (enviar = avião, stop = quadrado) */
+.chat-icon-btn {
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--on-accent);
+  cursor: pointer;
+  transition: background var(--transition), transform var(--transition), opacity var(--transition);
+}
+
+.chat-icon-btn svg { display: block; }
+.chat-icon-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 86%, var(--darken) 14%); }
+.chat-icon-btn:active:not(:disabled) { transform: scale(0.96); }
+.chat-icon-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.chat-stop-btn.chat-icon-btn { background: var(--danger); }
+.chat-stop-btn.chat-icon-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 86%, var(--darken) 14%);
+}
+
+/* Bolha de mensagem enfileirada enquanto o chat processa outra resposta */
+.chat-msg.user.chat-queued {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  opacity: 0.78;
+  border: 1px dashed rgba(255, 255, 255, 0.55);
+}
+
+.chat-queued-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.chat-queued-tag {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.22);
+  color: var(--on-accent);
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.chat-queued-cancel {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.18);
+  color: var(--on-accent);
+  font-size: 0.85rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+  transition: background var(--transition);
+}
+
+.chat-queued-cancel:hover { background: rgba(255, 255, 255, 0.32); }
 
 .chat-logs-modal {
   position: fixed;

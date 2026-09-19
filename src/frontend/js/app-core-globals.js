@@ -343,6 +343,8 @@ function applyRuntimeTabVisibility() {
   if (tabPSADTBtn) tabPSADTBtn.classList.toggle('hidden', hiddenInNormal);
   if (tabAutomationBtn) tabAutomationBtn.classList.toggle('hidden', hiddenInNormal);
   if (chatMemoriesBtn) chatMemoriesBtn.classList.toggle('hidden', hiddenInNormal);
+  // Botão "Ver Ferramentas" do chat: diagnóstico, apenas em modo debug.
+  if (chatToolsBtn) chatToolsBtn.classList.toggle('hidden', hiddenInNormal);
   const openP2PDebugStatusBtnEl = document.getElementById('openP2PDebugStatusBtn');
   if (openP2PDebugStatusBtnEl) openP2PDebugStatusBtnEl.classList.toggle('hidden', hiddenInNormal);
   if (tabP2PBtn) tabP2PBtn.classList.toggle('hidden', hiddenInNormal);

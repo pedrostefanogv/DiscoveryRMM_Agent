@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"discovery/app/core/models"
 )
@@ -207,6 +208,13 @@ func parseUpgradeOutput(raw string) []models.UpgradeItem {
 	}
 	srcCol := findColumnStart(header, "Source")
 	if srcCol < 0 {
+		// winget localizado: pt-BR "Origem", es "Origen".
+		srcCol = findColumnStart(header, "Origem")
+	}
+	if srcCol < 0 {
+		srcCol = findColumnStart(header, "Origen")
+	}
+	if srcCol < 0 {
 		srcCol = findColumnStart(header, "Fonte")
 	}
 
@@ -226,20 +234,22 @@ func parseUpgradeOutput(raw string) []models.UpgradeItem {
 			item.Name = strings.TrimSpace(safeSubstring(line, 0, idCol))
 		}
 		if idCol >= 0 && verCol > idCol {
-			item.ID = strings.TrimSpace(safeSubstring(line, idCol, verCol))
+			item.ID = collapseSpaces(safeSubstring(line, idCol, verCol))
 		}
 		if verCol >= 0 && availCol > verCol {
-			item.CurrentVersion = strings.TrimSpace(safeSubstring(line, verCol, availCol))
+			item.CurrentVersion = collapseSpaces(safeSubstring(line, verCol, availCol))
 		}
 		if availCol >= 0 {
 			if srcCol > availCol {
-				item.AvailableVersion = strings.TrimSpace(safeSubstring(line, availCol, srcCol))
+				item.AvailableVersion = collapseSpaces(safeSubstring(line, availCol, srcCol))
 			} else {
-				item.AvailableVersion = strings.TrimSpace(safeSubstring(line, availCol, len(line)))
+				// Sem coluna de origem reconhecida no cabeçalho: o restante da
+				// linha pode trazer a origem grudada na versão ("26.03   winget").
+				item.AvailableVersion, item.Source = splitTrailingSource(safeSubstring(line, availCol, len(line)))
 			}
 		}
 		if srcCol >= 0 {
-			item.Source = strings.TrimSpace(safeSubstring(line, srcCol, len(line)))
+			item.Source = collapseSpaces(safeSubstring(line, srcCol, len(line)))
 		}
 
 		if item.ID != "" {
@@ -322,12 +332,48 @@ func normalizeUpgradeSource(raw string) string {
 	}
 }
 
+// findColumnStart localiza o início da coluna do keyword no cabeçalho em
+// RUNES (mesma unidade usada por safeSubstring). strings.Index retorna offset
+// em BYTES: com cabeçalhos localizados ("Versão", "Disponível") cada caractere
+// multi-byte antes da coluna desloca o índice em 1 e corrompe o fatiamento das
+// linhas de dados — o 1º caractere da versão disponível vazava para a célula
+// anterior e a origem vazava para a versão disponível.
 func findColumnStart(header, keyword string) int {
 	idx := strings.Index(header, keyword)
 	if idx < 0 {
 		idx = strings.Index(strings.ToLower(header), strings.ToLower(keyword))
 	}
-	return idx
+	if idx < 0 {
+		return -1
+	}
+	return utf8.RuneCountInString(header[:idx])
+}
+
+// knownUpgradeSources lista os nomes de origem que winget/chocolatey imprimem
+// na coluna Source/Origem (nomes de source não são localizados).
+var knownUpgradeSources = map[string]struct{}{
+	"winget":     {},
+	"msstore":    {},
+	"choco":      {},
+	"chocolatey": {},
+}
+
+// splitTrailingSource separa um token de origem conhecido do fim do valor
+// extraído quando a coluna de origem não foi localizada no cabeçalho.
+func splitTrailingSource(tail string) (value, source string) {
+	fields := strings.Fields(tail)
+	if len(fields) > 1 {
+		if _, ok := knownUpgradeSources[strings.ToLower(fields[len(fields)-1])]; ok {
+			return strings.Join(fields[:len(fields)-1], " "), fields[len(fields)-1]
+		}
+	}
+	return strings.TrimSpace(tail), ""
+}
+
+// collapseSpaces normaliza runs de espaços internos em campos que nunca
+// contêm espaços duplos (proteção contra leve desalinhamento das colunas).
+func collapseSpaces(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }
 
 func safeSubstring(s string, start, end int) string {

@@ -434,14 +434,18 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 				// alternativas. O streamCtx (cancelável via botão Parar)
 				// prevalece sobre o timer.
 				//
-				// B4: ask_user espera até 120s pela resposta do usuário; um
-				// timeout de 60s aqui matava a pergunta antes do prazo. Tools
-				// interativas ganham margem (150s).
-				execTimeout := 60 * time.Second
+				// B4/B5: ask_user NÃO tem timeout — a pergunta fica aberta até
+				// o usuário responder e o chat prossegue na resposta (o timer
+				// antigo de 60/120/150s matava a pergunta e a resposta do
+				// usuário ia para uma pergunta morta). O cancelamento do
+				// stream (botão Parar) interrompe a espera via streamCtx.
+				var execCtx context.Context
+				var execCancel context.CancelFunc
 				if tc.Name == "ask_user" {
-					execTimeout = 150 * time.Second
+					execCtx, execCancel = context.WithCancel(streamCtx)
+				} else {
+					execCtx, execCancel = context.WithTimeout(streamCtx, 60*time.Second)
 				}
-				execCtx, execCancel := context.WithTimeout(streamCtx, execTimeout)
 				result, execErr = mcpExecutor(execCtx, tc.Name, tc.Args)
 				execCancel()
 			}

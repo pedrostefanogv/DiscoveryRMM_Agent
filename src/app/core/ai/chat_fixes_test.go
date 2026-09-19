@@ -82,9 +82,10 @@ func TestValidateChatMessage_NoFalsePositive(t *testing.T) {
 	}
 }
 
-// B3/B4: timeout por tool — ask_user ganha 150s, demais 60s (verificação
-// indireta via constantes usadas no loop; aqui garantimos o corte de rune
-// do truncateToolResult continua válido).
+// B3/B4/B5: timeout por tool — as tools comuns usam 60s; ask_user NÃO tem
+// timeout (fica aberta até o usuário responder). Verificação indireta via
+// constantes usadas no loop; aqui garantimos o corte de rune do
+// truncateToolResult continua válido.
 func TestTruncateToolResult_UTF8Valid(t *testing.T) {
 	big := strings.Repeat("ç", 20000)
 	out := truncateToolResult(big)

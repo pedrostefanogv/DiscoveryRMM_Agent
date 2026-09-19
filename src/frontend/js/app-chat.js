@@ -231,11 +231,13 @@ function flushStreamingContent() {
 
 function setChatBusy(isBusy) {
   chatSending = !!isBusy;
-  if (chatSendBtn) chatSendBtn.disabled = !!isBusy;
+  // Enviar permanece habilitado durante o processamento: enquanto ocupado,
+  // ele enfileira a mensagem (mesmo comportamento de outros chats/agentes).
+  if (chatSendBtn) chatSendBtn.disabled = false;
   if (chatStopBtn) {
     chatStopBtn.classList.toggle("hidden", !isBusy);
     chatStopBtn.disabled = !isBusy;
-    chatStopBtn.textContent = translate("action.stop");
+    chatStopBtn.title = translate("action.stop");
   }
 }
 
@@ -266,7 +268,7 @@ function requestStopChatStream() {
   chatStopRequested = true;
   if (chatStopBtn) {
     chatStopBtn.disabled = true;
-    chatStopBtn.textContent = translate("chat.stopping");
+    chatStopBtn.title = translate("chat.stopping");
   }
   try {
     appApi()
@@ -277,6 +279,78 @@ function requestStopChatStream() {
   } catch (_) {
     // ignore
   }
+}
+
+// ─── Fila de mensagens (enquanto o chat processa outra resposta) ───
+// Se o usuário digitar e enviar durante o processamento, a mensagem entra em
+// fila, aparece como bolha "na fila" (com cancelamento individual) e é
+// despachada ao contexto do chat na primeira oportunidade em que o chat fica
+// livre — mesmo comportamento de outros chats/agentes.
+
+var chatMessageQueue = [];
+var CHAT_MESSAGE_QUEUE_MAX = 10;
+
+// autoGrowChatInput ajusta a altura do textarea ao conteúdo (cap 200px).
+function autoGrowChatInput() {
+  if (!chatInputEl) return;
+  chatInputEl.style.height = "auto";
+  chatInputEl.style.height = Math.min(chatInputEl.scrollHeight, 200) + "px";
+}
+
+function queueChatMessage(text) {
+  if (!chatMessagesEl) return;
+  if (chatMessageQueue.length >= CHAT_MESSAGE_QUEUE_MAX) {
+    showFeedback(translate("chat.queueFull", { max: CHAT_MESSAGE_QUEUE_MAX }), true);
+    return;
+  }
+
+  var item = { text: text, el: null };
+  var div = document.createElement("div");
+  div.className = "chat-msg user chat-queued";
+  div.title = text;
+
+  var textEl = document.createElement("span");
+  textEl.className = "chat-queued-text";
+  textEl.textContent = text;
+  div.appendChild(textEl);
+
+  var tag = document.createElement("span");
+  tag.className = "chat-queued-tag";
+  tag.textContent = "⏳ " + translate("chat.queuedTag");
+  div.appendChild(tag);
+
+  var cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "chat-queued-cancel";
+  cancel.textContent = "×";
+  cancel.title = translate("action.cancel");
+  cancel.setAttribute("aria-label", translate("action.cancel"));
+  cancel.addEventListener("click", function () {
+    removeQueuedChatMessage(item);
+  });
+  div.appendChild(cancel);
+
+  chatMessagesEl.appendChild(div);
+  item.el = div;
+  chatMessageQueue.push(item);
+  scheduleChatScrollToBottom();
+}
+
+function removeQueuedChatMessage(item) {
+  var idx = chatMessageQueue.indexOf(item);
+  if (idx !== -1) chatMessageQueue.splice(idx, 1);
+  if (item.el && item.el.parentNode) item.el.parentNode.removeChild(item.el);
+}
+
+// maybeFlushChatQueue despacha a próxima mensagem em fila quando o chat fica
+// livre. É chamada nos terminais do stream (done/error/stop), sempre APÓS
+// maybeProcessPendingA2uiAction — a ação A2UI solicitada pelo assistente tem
+// prioridade; a fila aguarda o terminal do processamento dela.
+function maybeFlushChatQueue() {
+  if (chatSending || !chatMessageQueue.length) return;
+  var next = chatMessageQueue.shift();
+  if (next.el && next.el.parentNode) next.el.parentNode.removeChild(next.el);
+  dispatchChatMessage(next.text);
 }
 
 function onStreamThinking(status) {
@@ -381,6 +455,8 @@ function onStreamDone() {
   if (chatInputEl) chatInputEl.focus();
   // Ação A2UI que chegou durante o stream: processa agora que o chat está livre.
   maybeProcessPendingA2uiAction();
+  // Fila de mensagens: despacha a próxima na primeira oportunidade.
+  maybeFlushChatQueue();
 }
 
 function onStreamError(errMsg) {
@@ -399,6 +475,8 @@ function onStreamError(errMsg) {
     // Ação A2UI pendente não deve "vazar" para a próxima mensagem digitada:
     // processa agora que o chat está livre (mesmo após stop).
     maybeProcessPendingA2uiAction();
+    // Fila: despacha a próxima mensagem pendente mesmo após stop.
+    maybeFlushChatQueue();
     return;
   }
 
@@ -423,6 +501,8 @@ function onStreamError(errMsg) {
   // Processa ação A2UI pendente também após erro de stream (evita vazamento
   // da ação para a próxima mensagem digitada).
   maybeProcessPendingA2uiAction();
+  // Fila: despacha a próxima mensagem pendente após o erro.
+  maybeFlushChatQueue();
 }
 
 function onStreamStopped() {
@@ -438,6 +518,8 @@ function onStreamStopped() {
   if (chatInputEl) chatInputEl.focus();
   // Processa ação A2UI pendente também após stop manual.
   maybeProcessPendingA2uiAction();
+  // Fila: despacha a próxima mensagem pendente após o stop.
+  maybeFlushChatQueue();
 }
 
 // ─── Mini-Questionário Interativo (ask_user MCP) ───
@@ -541,6 +623,27 @@ function disableQuestionButtons(container) {
   container.querySelectorAll("input").forEach(function (input) {
     input.disabled = true;
   });
+}
+
+// onChatQuestionCancelled recebe {id} quando a pergunta pendente foi
+// cancelada no backend (usuário parou o chat / app encerrado): desabilita a
+// bolha da pergunta para o usuário não responder a uma pergunta morta.
+function onChatQuestionCancelled(data) {
+  try {
+    var payload = typeof data === "string" ? JSON.parse(data) : data;
+    if (!payload || !payload.id || !chatMessagesEl) return;
+    var div = chatMessagesEl.querySelector(
+      '.chat-msg.chat-question[data-question-id="' + String(payload.id).replace(/"/g, '\\"') + '"]'
+    );
+    if (!div) return;
+    disableQuestionButtons(div);
+    var note = document.createElement("div");
+    note.className = "meta chat-question-cancelled-note";
+    note.textContent = translate("chat.questionCancelled");
+    div.appendChild(note);
+  } catch (e) {
+    console.error("chat:question_cancelled parse error:", e);
+  }
 }
 
 // ─── A2UI (Agent-to-User Interface) — interfaces ricas geradas por IA ───
@@ -833,6 +936,7 @@ function clearA2uiSurface() {
     "chat:error": onStreamError,
     "chat:stopped": onStreamStopped,
     "chat:question": onChatQuestion,
+    "chat:question_cancelled": onChatQuestionCancelled,
     "chat:a2ui": onChatA2ui,
   };
 
@@ -1558,11 +1662,26 @@ function removeChatThinking() {
 }
 
 async function sendChatMessage() {
-  if (chatSending || !chatInputEl) return;
+  if (!chatInputEl) return;
   var text = chatInputEl.value.trim();
   if (!text) return;
 
+  if (chatSending) {
+    // Chat processando: enfileira e limpa o input. A mensagem entra no
+    // contexto na primeira oportunidade (maybeFlushChatQueue).
+    queueChatMessage(text);
+    chatInputEl.value = "";
+    autoGrowChatInput();
+    return;
+  }
+
   chatInputEl.value = "";
+  dispatchChatMessage(text);
+}
+
+// dispatchChatMessage faz o dispatch real de uma mensagem do usuário (bolha +
+// StartChatStream). Quem chama garante que o chat está livre (chatSending=false).
+function dispatchChatMessage(text) {
   addChatMessage("user", text);
 
   chatStopRequested = false;
@@ -1861,6 +1980,9 @@ function initChat() {
         sendChatMessage();
       }
     });
+    // Auto-grow do composer (cap 200px via CSS; depois rola internamente).
+    chatInputEl.addEventListener("input", autoGrowChatInput);
+    autoGrowChatInput();
   }
   if (chatConfigBtn && chatConfigPanel) {
     chatConfigBtn.addEventListener("click", function () {
@@ -1868,6 +1990,12 @@ function initChat() {
       if (chatToolsPanel) chatToolsPanel.classList.add("hidden");
       loadChatConfig();
     });
+  }
+  // Ferramentas do chat: painel de diagnóstico — só em modo debug (mesma
+  // regra do botão Memórias; a visibilidade dinâmica também é tratada em
+  // applyRuntimeTabVisibility).
+  if (chatToolsBtn) {
+    chatToolsBtn.classList.toggle("hidden", !isDebugRuntimeMode());
   }
   if (chatToolsBtn && chatToolsPanel) {
     chatToolsBtn.addEventListener("click", function () {

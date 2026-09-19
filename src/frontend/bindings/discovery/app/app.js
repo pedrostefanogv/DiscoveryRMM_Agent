@@ -188,6 +188,36 @@ export function AskUserChat(question, optionsJSON, allowText) {
 }
 
 /**
+ * AskUserChatWithContext é a variante consciente de contexto do AppBridge:
+ * o cancelamento do stream de chat (botão Parar) interrompe a espera pela
+ * resposta do usuário, limpa a pergunta pendente e notifica a UI.
+ * @param {string} question
+ * @param {string} optionsJSON
+ * @param {string} allowText
+ * @returns {$CancellablePromise<string>}
+ */
+export function AskUserChatWithContext(question, optionsJSON, allowText) {
+    return $Call.ByID(3373031433, question, optionsJSON, allowText);
+}
+
+/**
+ * AskUserContext exibe uma pergunta interativa ao usuário e aguarda a resposta
+ * SEM limite de tempo — o chat prossegue quando o usuário responder.
+ * 
+ * O ctx (quando informado) permite interromper a espera pelo cancelamento do
+ * stream (botão Parar) ou pelo encerramento do app: nesse caso a pergunta
+ * pendente é removida e a UI é notificada via evento "chat:question_cancelled"
+ * para desabilitar a bolha (evita resposta órfã em pergunta já morta).
+ * @param {string} question
+ * @param {string} optionsJSON
+ * @param {string} allowTextRaw
+ * @returns {$CancellablePromise<string>}
+ */
+export function AskUserContext(question, optionsJSON, allowTextRaw) {
+    return $Call.ByID(525389175, question, optionsJSON, allowTextRaw);
+}
+
+/**
  * BuildOnboardingOffer expõe BuildOnboardingOffer via interface.
  * @param {string} sourceAgentID
  * @param {string} serverURL

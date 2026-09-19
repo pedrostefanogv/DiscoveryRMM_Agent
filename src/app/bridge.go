@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -141,5 +142,12 @@ func (a *App) GetLogsText() string {
 // AskUserChat exibe uma pergunta interativa ao usuário e aguarda a resposta.
 // Implementa AppBridge.AskUserChat para o MCP tool ask_user.
 func (a *App) AskUserChat(question, optionsJSON, allowText string) (string, error) {
-	return a.AskUser(question, optionsJSON, allowText)
+	return a.AskUserContext(nil, question, optionsJSON, allowText)
+}
+
+// AskUserChatWithContext é a variante consciente de contexto do AppBridge:
+// o cancelamento do stream de chat (botão Parar) interrompe a espera pela
+// resposta do usuário, limpa a pergunta pendente e notifica a UI.
+func (a *App) AskUserChatWithContext(ctx context.Context, question, optionsJSON, allowText string) (string, error) {
+	return a.AskUserContext(ctx, question, optionsJSON, allowText)
 }
