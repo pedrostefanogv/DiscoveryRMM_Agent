@@ -111,6 +111,11 @@
   --page-bar-padding-y: 8px;
   --page-bar-padding-x: 14px;
   --section-bar-height: 48px;
+
+  /* Origem dos apps na loja (badge Winget/Chocolatey/Custom) */
+  --origin-winget: #0b63c5;
+  --origin-choco: #8a5a2b;
+  --origin-custom: #6d4bd8;
 }
 
 /* Dark mode */
@@ -148,6 +153,11 @@
   --sidebar-btn-hover-border: rgba(255,255,255,.18);
   --sidebar-user-type: rgba(228,221,204,.5);
   --sidebar-version: rgba(228,221,204,.3);
+
+  /* Origem dos apps na loja — tons claros para contraste sobre fundo escuro */
+  --origin-winget: #7ab8f5;
+  --origin-choco: #d3a06a;
+  --origin-custom: #b3a1f5;
 }
 
 /* ================================================================

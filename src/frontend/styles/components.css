@@ -673,6 +673,41 @@
   gap: 10px;
 }
 
+/* Lado direito do topo do card: badge de origem + botão de detalhes */
+.store-card-top-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* ----- Badge de origem do app (Winget / Chocolatey / Custom) -----
+   Cor via --origin-fg definida por data-origin; fundo/borda derivam por
+   color-mix, então o badge funciona nos dois temas sem regras duplicadas. */
+.store-origin-badge {
+  --origin-fg: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 20px;
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1.5;
+  white-space: nowrap;
+  cursor: default;
+  color: var(--origin-fg);
+  background: color-mix(in srgb, var(--origin-fg) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--origin-fg) 24%, transparent);
+}
+
+.store-origin-badge svg { flex-shrink: 0; opacity: 0.9; }
+
+.store-origin-badge.store-origin-winget     { --origin-fg: var(--origin-winget); }
+.store-origin-badge.store-origin-chocolatey { --origin-fg: var(--origin-choco); }
+.store-origin-badge.store-origin-custom     { --origin-fg: var(--origin-custom); }
+
 .store-card .store-card-icon-slot {
   margin-bottom: 0;
   min-width: 48px;
@@ -786,6 +821,17 @@
   margin: 0 0 4px 0;
   font-size: 1.15rem;
 }
+
+/* Título do modal + badge de origem na mesma linha */
+.app-detail-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.app-detail-origin-slot { display: inline-flex; }
+.app-detail-origin-slot .store-origin-badge { margin-top: -4px; }
 
 .app-detail-description {
   flex: 1;

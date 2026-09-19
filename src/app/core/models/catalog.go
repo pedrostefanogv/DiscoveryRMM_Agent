@@ -24,6 +24,13 @@ type AppItem struct {
 	Category           string `json:"category"`
 	Icon               string `json:"icon"`
 	LastUpdated        string `json:"lastUpdated"`
+	// InstallationType é a origem do app na loja: "Winget", "Chocolatey" ou
+	// "Custom" (cadastro manual no servidor). Usado pela UI para o badge de
+	// origem nos cards e no modal de detalhe.
+	InstallationType string `json:"installationType"`
+	// SourceScope é o escopo da regra de aprovação que liberou o app
+	// (Global/Client/Site/Agent). Vazio quando o servidor não informa.
+	SourceScope string `json:"sourceScope"`
 }
 
 // UpgradeItem represents a single package with a pending update.

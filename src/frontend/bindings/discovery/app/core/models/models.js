@@ -112,6 +112,25 @@ export class AppItem {
              */
             this["lastUpdated"] = "";
         }
+        if (!("installationType" in $$source)) {
+            /**
+             * InstallationType é a origem do app na loja: "Winget", "Chocolatey" ou
+             * "Custom" (cadastro manual no servidor). Usado pela UI para o badge de
+             * origem nos cards e no modal de detalhe.
+             * @member
+             * @type {string}
+             */
+            this["installationType"] = "";
+        }
+        if (!("sourceScope" in $$source)) {
+            /**
+             * SourceScope é o escopo da regra de aprovação que liberou o app
+             * (Global/Client/Site/Agent). Vazio quando o servidor não informa.
+             * @member
+             * @type {string}
+             */
+            this["sourceScope"] = "";
+        }
 
         Object.assign(this, $$source);
     }

@@ -97,6 +97,8 @@ func NormalizeInstallationType(value string) string {
 		return string(InstallationWinget)
 	case "chocolatey":
 		return string(InstallationChocolatey)
+	case "custom":
+		return string(InstallationCustom)
 	default:
 		return strings.TrimSpace(value)
 	}
@@ -245,7 +247,7 @@ func (s *Service) LoadEffectivePolicy(ctx context.Context, forceRefresh bool) (E
 		}
 	}
 
-	results := make([]Response, 0, 2)
+	results := make([]Response, 0, 3)
 	for _, installationType := range []InstallationType{InstallationWinget, InstallationChocolatey} {
 		payload, err := s.FetchByInstallationType(ctx, installationType)
 		if err != nil {
@@ -253,6 +255,15 @@ func (s *Service) LoadEffectivePolicy(ctx context.Context, forceRefresh bool) (E
 			return EffectivePolicy{}, err
 		}
 		results = append(results, payload)
+	}
+
+	// Custom é fetch tolerante: o servidor ainda não publica metadados completos
+	// de apps custom (hoje entrega só o packageId). Uma falha aqui não pode
+	// derrubar winget/chocolatey — apenas loga e segue sem os itens custom.
+	if customPayload, err := s.FetchByInstallationType(ctx, InstallationCustom); err != nil {
+		s.logf(fmt.Sprintf("aviso: app-store (Custom) indisponivel (o servidor pode nao suportar ainda): %v", err))
+	} else {
+		results = append(results, customPayload)
 	}
 
 	lookup := make(map[string]Item)
@@ -320,6 +331,10 @@ func (s *Service) GetCatalogFromAppStore(ctx context.Context) (models.Catalog, e
 			SilentWithProgress: strings.TrimSpace(item.SilentWithProgress),
 			Category:           category,
 			Icon:               strings.TrimSpace(item.IconURL),
+			// Origem do app para exibição na loja (Winget/Chocolatey/Custom) e
+			// escopo da regra de aprovação (Global/Client/Site/Agent).
+			InstallationType: strings.TrimSpace(item.InstallationType),
+			SourceScope:      strings.TrimSpace(item.SourceScope),
 		}
 		if appItem.SilentCommand == "" {
 			appItem.SilentCommand = appItem.SilentWithProgress

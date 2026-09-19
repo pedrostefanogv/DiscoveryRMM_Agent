@@ -105,6 +105,7 @@ function packageMatchesSearchTerms(pkg, terms) {
     pkg && pkg.id,
     pkg && pkg.publisher,
     pkg && pkg.category,
+    pkg && pkg.installationType,
     stripMarkdown(pkg && pkg.description),
   ]
     .filter(Boolean)
@@ -177,6 +178,48 @@ function highlightStoreText(value, terms) {
 }
 
 // ---------------------------------------------------------------------------
+// Origem do app (Winget | Chocolatey | Custom) — badge nos cards e no modal
+// ---------------------------------------------------------------------------
+
+var STORE_ORIGIN_ICONS = {
+  winget:
+    '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<path d="M16.5 9.4 7.55 4.24"/><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.29 7 12 12 20.71 7"/><line x1="12" y1="22" x2="12" y2="12"/>' +
+    '</svg>',
+  chocolatey:
+    '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/>' +
+    '</svg>',
+  custom:
+    '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>' +
+    '</svg>'
+};
+
+function storeOriginKey(pkg) {
+  var raw = String((pkg && pkg.installationType) || '').trim().toLowerCase();
+  if (raw === 'winget') return 'winget';
+  if (raw === 'chocolatey' || raw === 'choco') return 'chocolatey';
+  if (raw === 'custom') return 'custom';
+  // Fallback legado: catálogos antigos usavam category=installationType.
+  var category = String((pkg && pkg.category) || '').trim().toLowerCase();
+  if (category === 'winget') return 'winget';
+  if (category === 'chocolatey' || category === 'choco') return 'chocolatey';
+  if (category === 'custom') return 'custom';
+  return '';
+}
+
+function storeOriginBadgeHtml(pkg) {
+  var key = storeOriginKey(pkg);
+  if (!key) return '';
+  return '<span class="store-origin-badge store-origin-' + key + '" data-origin="' + key + '" title="' +
+    escapeHtmlAttr(translate('store.originTooltip.' + key)) + '">' +
+    STORE_ORIGIN_ICONS[key] +
+    escapeHtml(translate('store.origin.' + key)) +
+    '</span>';
+}
+
+// ---------------------------------------------------------------------------
 // Catalog card rendering with pagination
 // ---------------------------------------------------------------------------
 function renderCards() {
@@ -216,11 +259,15 @@ function renderCards() {
     var actionClass = action.action === 'install' ? 'btn primary' : 'btn danger';
     var actionButton = '<button class="' + actionClass + '" data-action="' + escapeHtmlAttr(action.action) + '" data-id="' + escapeHtmlAttr(pkg.id) + '">' + escapeHtml(action.label) + '</button>';
     var detailButton = '<button class="btn subtle store-detail-btn" data-detail-id="' + escapeHtmlAttr(pkg.id) + '" title="' + escapeHtmlAttr(translate('store.viewDetails')) + '" aria-label="' + escapeHtmlAttr(translate('store.viewDetailsOf', { name: pkg.name || pkg.id })) + '">ⓘ</button>';
+    var originBadge = storeOriginBadgeHtml(pkg);
 
     return '<article class="card store-card" data-detail-id="' + escapeHtmlAttr(packageID) + '">' +
       '<div class="store-card-top">' +
         '<div class="app-icon-container store-card-icon-slot">' + iconImgHtml + '</div>' +
-        detailButton +
+        '<div class="store-card-top-right">' +
+          originBadge +
+          detailButton +
+        '</div>' +
       '</div>' +
       '<h3>' + highlightStoreText(nameLabel, searchTerms) + '</h3>' +
       '<div class="meta">' + highlightStoreText(publisherVersionLabel, searchTerms) + '</div>' +
@@ -501,6 +548,8 @@ function openAppDetailModal(pkg) {
   var actionBtn = document.getElementById('appDetailActionBtn');
 
   if (titleEl) titleEl.textContent = pkg.name || pkg.id;
+  var originBadgeEl = document.getElementById('appDetailOriginBadge');
+  if (originBadgeEl) originBadgeEl.innerHTML = storeOriginBadgeHtml(pkg);
   if (metaEl) metaEl.textContent = translate('store.appMeta', { publisher: (pkg.publisher || translate('common.unknown')), version: (pkg.version || translate('common.notAvailable')), id: pkg.id });
   if (iconEl) iconEl.innerHTML = pkg.icon
     ? '<img src="' + escapeHtmlAttr(pkg.icon) + '" alt="" class="app-icon" style="width:64px;height:64px;" />'

@@ -278,6 +278,12 @@ func (s *Service) Install(id string) (string, error) {
 		out, err = s.apps.Install(s.ctx(), packageID)
 	case string(appstore.InstallationChocolatey):
 		out, err = s.runChocolatey(s.ctx(), "install", packageID)
+	case string(appstore.InstallationCustom):
+		// App custom (cadastro manual no servidor): executa o InstallCommand
+		// registrado no catálogo. O comando só chega aqui após o pacote estar
+		// autorizado (resolveAllowed). Se o servidor ainda não publicou o
+		// comando, retorna erro claro em vez de "não suportado" genérico.
+		out, err = s.runCustomInstallCommand(s.ctx(), allowed, packageID)
 	default:
 		err = fmt.Errorf("installationType %q não suportado", allowed.InstallationType)
 	}
@@ -325,6 +331,9 @@ func (s *Service) Uninstall(id string) (string, error) {
 		out, err = s.apps.Uninstall(s.ctx(), packageID)
 	case string(appstore.InstallationChocolatey):
 		out, err = s.runChocolatey(s.ctx(), "uninstall", packageID)
+	case string(appstore.InstallationCustom):
+		// O servidor ainda não publica comando de remoção para apps custom.
+		err = fmt.Errorf("remoção de apps Custom ainda não suportada: o servidor não publica comando de desinstalação")
 	default:
 		err = fmt.Errorf("installationType %q não suportado", allowed.InstallationType)
 	}
@@ -364,6 +373,9 @@ func (s *Service) Upgrade(id string) (string, error) {
 		out, err = s.apps.Upgrade(s.ctx(), packageID)
 	case string(appstore.InstallationChocolatey):
 		out, err = s.runChocolatey(s.ctx(), "upgrade", packageID)
+	case string(appstore.InstallationCustom):
+		// O servidor ainda não publica comando de atualização para apps custom.
+		err = fmt.Errorf("atualização de apps Custom ainda não suportada: o servidor não publica comando de upgrade")
 	default:
 		err = fmt.Errorf("installationType %q não suportado", allowed.InstallationType)
 	}
@@ -654,6 +666,44 @@ func (s *Service) InstallOsquery() (string, error) {
 	}
 	inventory.InvalidateOsqueryBinaryCache()
 	return out, nil
+}
+
+// customInstallCommandTimeout limita a execução do InstallCommand de apps
+// custom (instaladores podem ser lentos; 30min dá folga sem travar a UI).
+const customInstallCommandTimeout = 30 * time.Minute
+
+// runCustomInstallCommand executa o InstallCommand de um app custom (cadastro
+// manual no servidor). Segue o padrão do executor de automação
+// (core/automation/executor.go): comando de texto livre via cmd /C, janela
+// oculta e timeout fixo. Só é chamado após FindAllowedPackage autorizar o
+// pacote — sem allow no escopo do agent não há execução.
+func (s *Service) runCustomInstallCommand(ctx context.Context, allowed appstore.Item, packageID string) (string, error) {
+	command := strings.TrimSpace(allowed.InstallCommand)
+	if command == "" {
+		return "", fmt.Errorf("app custom %q sem comando de instalação registrado no servidor", packageID)
+	}
+
+	runCtx := ctx
+	if runCtx == nil {
+		runCtx = context.Background()
+	}
+	runCtx, cancel := context.WithTimeout(runCtx, customInstallCommandTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(runCtx, "cmd", "/C", command)
+	processutil.HideWindow(cmd)
+	output, err := cmd.CombinedOutput()
+	text := strings.TrimSpace(string(output))
+	if err != nil {
+		if runCtx.Err() == context.DeadlineExceeded {
+			return text, fmt.Errorf("comando de instalação custom excedeu %s", customInstallCommandTimeout)
+		}
+		if text == "" {
+			text = err.Error()
+		}
+		return text, fmt.Errorf("erro executando comando custom: %w", err)
+	}
+	return text, nil
 }
 
 func (s *Service) runChocolatey(ctx context.Context, operation, packageID string) (string, error) {

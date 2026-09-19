@@ -11,6 +11,11 @@ type InstallationType string
 const (
 	InstallationWinget     InstallationType = "Winget"
 	InstallationChocolatey InstallationType = "Chocolatey"
+	// InstallationCustom representa apps cadastrados manualmente no servidor
+	// (AppInstallationType.Custom da API). O servidor ainda entrega apenas o
+	// packageId para esse tipo — metadados/comando são melhorias futuras do
+	// servidor; o agent já está preparado para exibir e instalar.
+	InstallationCustom InstallationType = "Custom"
 )
 
 // Item representa um item permitido retornado por /api/v1/agent-auth/me/app-store.
