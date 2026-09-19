@@ -29,6 +29,7 @@ import (
 	"github.com/nats-io/nats.go"
 
 	"discovery/app/core/agentconn"
+	"discovery/app/core/platform"
 	"discovery/app/core/remotesession"
 	"discovery/app/netutil"
 )
@@ -53,6 +54,13 @@ func RunRemoteSessionWorker() {
 
 	sessionID, _ := cmd["sessionId"].(string)
 	fmt.Fprintf(os.Stderr, "[remote-session-worker] iniciando sessão %s\n", sessionID)
+	// Guard-rail anti-regressão UIPI: a integridade EFETIVA do worker decide
+	// se o input chega em janelas elevadas (Gerenciador de Tarefas roda SEMPRE
+	// High via autoElevate; a UI do agente é High via requireAdministrator).
+	// Um worker Medium perde cliques/teclado enquanto qualquer uma delas está
+	// em primeiro plano — e volta ao fechá-las. Esta linha sempre presente
+	// torna o problema diagnosticável no agent-service.log com um grep.
+	fmt.Fprintf(os.Stderr, "[remote-session-worker] contexto de privilégio: %s\n", platform.ElevationReport())
 
 	// ── Config (mesma leitura do config de produção do agente) ──
 	cfg := loadWorkerDebugConfig()

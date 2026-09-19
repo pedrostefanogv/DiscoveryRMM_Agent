@@ -363,3 +363,44 @@ worker (relançamento pelo serviço em novo start).
 | **Cores invertidas no GDI**             | `capturer_gdi.go`: o 1º parâmetro de `GetDIBits` era `memDC`, mas o bitmap está selecionado no memDC — documentação do Windows exige que o bitmap NÃO esteja selecionado no DC passado (comportamento indefinido → canais R/B corrompidos). Corrigido para passar `screenDC` (DC da tela), como o MeshAgent faz em `tile.cpp get_desktop_buffer`. Mesma classe de bug já corrigida no caminho go-d3d (§ memória screen-rgba-bgra-bug)                                                                                                 |
 | **Qualidade manual 10–90%**             | `quality.go`: override manual do viewer clampa em 10–90 (`imageQualityMin/Max`). Perfis do modo automático NÃO passam pelo clamp (ultralow=25 … ultra=92) — novo `SetImageQualityAuto` usado pelo `handleQuality` quando `auto=true`; a adaptação automática (adapt/downgrade) segue inalterada                                                                                                                                                                                                                                       |
 | **Revisão final (bugs)**                | (1) CRÍTICO: `AcquireNextFrame` GDI chamava `GetMonitors()` por frame — `syscall.NewCallback` registra callback permanente (limite ~2000/processo) e crasharia em ~1min a 30fps. Corrigido com throttle de 5s na re-detecção de geometria. (2) `memDC`/`memBitmap` agora cacheados entre frames (recriados só em troca de geometria/falha de BitBlt) — `screenDC` continua re-adquirido por frame. (3) `handleStart`: `imageQuality` default 70 do payload não vira mais override manual em modo auto (perfis ficavam travados em 70) |
+
+
+### 7.7 Correção definitiva do UIPI no controle remoto (M-fix 2) — "controle remoto morre com Gerenciador de Tarefas/UI do agente em foco"
+
+> Sintoma: no acesso remoto dá para ver e até mexer, mas ao abrir o
+> Gerenciador de Tarefas (ou, nas versões recentes, a própria UI do agente)
+> os cliques/teclado param de chegar — e voltam ao fechar a janela.
+
+**Causa raiz (UIPI — User Interface Privilege Isolation):** o que decide se o
+`SendInput` chega é a INTEGRIDADE DO TOKEN DO INJETOR versus a integridade da
+janela em PRIMEIRO PLANO. Duas janelas são sempre High:
+
+- **Gerenciador de Tarefas** — manifest `autoElevate`: roda elevado em toda
+  abertura, mesmo para admins com UAC em auto-aceitar;
+- **UI do agente** — manifest `requireAdministrator` (High) desde a
+  introdução da separação serviço/UI.
+
+Um injetor com token **Medium** (o fallback `user-session` do spawn do worker
+— `WTSQueryUserToken` devolve o token FILTERED do UAC) perde o input
+silenciosamente (errno=5) enquanto qualquer uma dessas janelas tem foco. O
+M-fix anterior (worker SYSTEM) eliminava o caso principal, mas o fallback
+para token de usuário permanecia silenciosamente Medium.
+
+**Correção (definitiva, em camadas — o worker nunca mais sai Medium mudo):**
+
+| Camada | Implementação |
+| ------ | ------------- |
+| Elevação do token do fallback | `remote_session_worker_spawn.go`: nova `hardenUserSessionToken()` — (1) token já High/System → segue; (2) `GetLinkedToken()` (token completo do UAC, High nativo) duplicado como primário; (3) `SetTokenInformation(TokenIntegrityLevel)` força High (S-1-16-12288) no duplicado — permitido a partir do serviço SYSTEM (IL 0x4000 > 0x3000). A elevação NÃO concede privilégios de admin: só relaxa o UIPI contra janelas High (a captura segue no nível do usuário) |
+| Checagem por integridade, não por UAC | `platform.TokenIntegrityLevel(token)` + `IntegritySupportsUipiInjection(level)` — o spawn loga a integridade real; `IsElevated()` era insuficiente (flag de UAC não é rótulo de integridade) |
+| Fail-visible no spawn e no worker | Integridade < High no token do worker vira **ERRO** no `agent-service.log` e o worker imprime sempre o contexto de privilégio no stderr (`[remote-session-worker] contexto de privilégio: elevated=... integrity=...`) — greppable |
+| Diagnóstico na injeção | `core/screen/input_inject.go`: `sendInputErr()` anota no errno=5 a causa canônica (UIPI + o que verificar) em TODOS os pontos de SendInput |
+| Logs de injeção agregados | `core/remotesession/input_controller.go`: falhas de injeção logam 1 linha/3s (mousemove a ~60/s inundava o log); teclas keydown/keyup deixam de engolir o erro (`_ =`) |
+| Testes de regressão | `app/remote_session_token_windows_test.go`: (1) só High/System suporta injeção universal; (2) `hardenUserSessionToken` JAMAIS devolve token Medium sem erro |
+
+**Prevenção de regressão (guard-rails permanentes):**
+
+1. Qualquer nova fonte de token no spawn deve passar por `IntegritySupportsUipiInjection` — nunca mais `IsElevated()`.
+2. O log do worker SEMPRE imprime a integridade efetiva; suporte filtra `grep "[remote-session-worker] contexto de privilégio"`.
+3. Falha de SendInput com errno=5 no log indica exatamente o mecanismo (janela elevada em primeiro plano + injetor de IL menor).
+
+**Arquivos alterados:** `src/app/core/platform/elevation_windows.go`, `src/app/remote_session_worker_spawn.go`, `src/app/remote_session_worker.go`, `src/app/core/screen/input_inject.go`, `src/app/core/remotesession/input_controller.go`, `src/app/remote_session_token_windows_test.go` (novo).

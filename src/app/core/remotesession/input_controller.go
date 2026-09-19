@@ -61,10 +61,32 @@ type InputController struct {
 	eventCount    int
 	maxEventsPerS int
 
+	// Rate-limit de LOGS de falha de injeção: mousemove chega a ~60/s — sem
+	// agregação, um SendInput falhando (UIPI/desktop trocado) inunda o log com
+	// milhares de linhas idênticas por minuto. Loga no máximo 1 linha/3s.
+	lastErrLog time.Time
+
 	// netstatsHandler recebe as métricas de rede medidas no VIEWER (type
 	// "netstats" via .input, a cada 2s) — alimenta a escada adaptativa do
 	// QualityManager. Opcional: nil = métricas ignoradas.
 	netstatsHandler func(rttMs, recvKbps float64, recvFrames int)
+}
+
+// logInputFailure registra a falha de injeção com agregação (1 linha/3s).
+// O erro carrega o diagnóstico completo (sendInputErr anota o mecanismo UIPI
+// no errno=5), então a linha agregada basta para suporte.
+func (c *InputController) logInputFailure(op string, err error) {
+	if err == nil {
+		return
+	}
+	c.mu.Lock()
+	if !c.lastErrLog.IsZero() && time.Since(c.lastErrLog) < 3*time.Second {
+		c.mu.Unlock()
+		return
+	}
+	c.lastErrLog = time.Now()
+	c.mu.Unlock()
+	log.Printf("[input-controller] %s falhou (agregado 1/3s): %v", op, err)
 }
 
 // SetNetstatsHandler registra o receptor das métricas de rede do viewer.
@@ -174,7 +196,7 @@ func (c *InputController) handleMouseMove(evt *InputEvent) {
 	absY := int32(float64(evt.Y) / float64(fh) * 65535)
 
 	if err := screen.InjectMouseMove(absX, absY); err != nil {
-		log.Printf("[input-controller] mouse move falhou: %v", err)
+		c.logInputFailure("mouse move", err)
 	}
 }
 
@@ -182,13 +204,13 @@ func (c *InputController) handleMouseClick(evt *InputEvent, down bool) {
 	switch evt.Button {
 	case 0:
 		if err := screen.InjectMouseClickLeft(down); err != nil {
-			log.Printf("[input-controller] InjectMouseClickLeft falhou (down=%t): %v", down, err)
+			c.logInputFailure(fmt.Sprintf("click esquerdo (down=%t)", down), err)
 		}
 	case 1:
 		// Botão do meio — não implementado ainda
 	case 2:
 		if err := screen.InjectMouseClickRight(down); err != nil {
-			log.Printf("[input-controller] InjectMouseClickRight falhou (down=%t): %v", down, err)
+			c.logInputFailure(fmt.Sprintf("click direito (down=%t)", down), err)
 		}
 	}
 }
@@ -199,7 +221,7 @@ func (c *InputController) handleMouseWheel(evt *InputEvent) {
 		delta = int16(evt.DeltaX)
 	}
 	if err := screen.InjectMouseWheel(delta); err != nil {
-		log.Printf("[input-controller] InjectMouseWheel falhou: %v", err)
+		c.logInputFailure("mouse wheel", err)
 	}
 }
 
@@ -252,17 +274,25 @@ func (c *InputController) handleKey(code, key string, down bool, mods InputModif
 	}
 
 	if down {
-		_ = screen.InjectKeyDown(vk)
+		if err := screen.InjectKeyDown(vk); err != nil {
+			c.logInputFailure(fmt.Sprintf("key down VK=0x%X", vk), err)
+		}
 	} else {
-		_ = screen.InjectKeyUp(vk)
+		if err := screen.InjectKeyUp(vk); err != nil {
+			c.logInputFailure(fmt.Sprintf("key up VK=0x%X", vk), err)
+		}
 	}
 }
 
 func applyModifier(vk uint16, down bool) {
 	if down {
-		_ = screen.InjectKeyDown(vk)
+		if err := screen.InjectKeyDown(vk); err != nil {
+			log.Printf("[input-controller] modificador (down) VK=0x%X falhou: %v", vk, err)
+		}
 	} else {
-		_ = screen.InjectKeyUp(vk)
+		if err := screen.InjectKeyUp(vk); err != nil {
+			log.Printf("[input-controller] modificador (up) VK=0x%X falhou: %v", vk, err)
+		}
 	}
 }
 

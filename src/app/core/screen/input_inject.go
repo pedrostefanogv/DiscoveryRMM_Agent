@@ -91,9 +91,9 @@ func InjectMouseMove(x, y int32) error {
 	*(*mouseInput)(unsafePtr(&inputs[0].union)) = mi
 	ret, _, callErr := procSendInput.Call(1, uintptr(unsafe.Pointer(&inputs[0])), uintptr(unsafe.Sizeof(winInput{})))
 	if ret == 0 {
-		// Diagnóstico UIPI: SendInput falha com ERROR_ACCESS_DENIED (5) quando o
-		// processo NÃO é elevado e tenta injetar em janela de integridade maior.
-		return fmt.Errorf("SendInput mouse move falhou: %v (errno=%d)", describeErr(callErr), errnoOf(callErr))
+		// Diagnóstico UIPI embutido em sendInputErr (errno=5 → janela elevada
+		// em primeiro plano descartando a injeção de um injetor de IL menor).
+		return sendInputErr("mouse move", callErr)
 	}
 	return nil
 }
@@ -111,7 +111,7 @@ func InjectMouseClickLeft(down bool) error {
 	*(*mouseInput)(unsafePtr(&inputs[0].union)) = mi
 	ret, _, callErr := procSendInput.Call(1, uintptr(unsafe.Pointer(&inputs[0])), uintptr(unsafe.Sizeof(winInput{})))
 	if ret == 0 {
-		return fmt.Errorf("SendInput mouse click falhou: %v (errno=%d)", describeErr(callErr), errnoOf(callErr))
+		return sendInputErr("mouse click (esquerdo)", callErr)
 	}
 	return nil
 }
@@ -129,7 +129,7 @@ func InjectMouseClickRight(down bool) error {
 	*(*mouseInput)(unsafePtr(&inputs[0].union)) = mi
 	ret, _, callErr := procSendInput.Call(1, uintptr(unsafe.Pointer(&inputs[0])), uintptr(unsafe.Sizeof(winInput{})))
 	if ret == 0 {
-		return fmt.Errorf("SendInput mouse right click falhou: %v (errno=%d)", describeErr(callErr), errnoOf(callErr))
+		return sendInputErr("mouse click (direito)", callErr)
 	}
 	return nil
 }
@@ -145,7 +145,7 @@ func InjectMouseWheel(delta int16) error {
 	*(*mouseInput)(unsafePtr(&inputs[0].union)) = mi
 	ret, _, callErr := procSendInput.Call(1, uintptr(unsafe.Pointer(&inputs[0])), uintptr(unsafe.Sizeof(winInput{})))
 	if ret == 0 {
-		return fmt.Errorf("SendInput mouse wheel falhou: %v (errno=%d)", describeErr(callErr), errnoOf(callErr))
+		return sendInputErr("mouse wheel", callErr)
 	}
 	return nil
 }
@@ -161,7 +161,7 @@ func InjectKeyDown(vkCode uint16) error {
 	*(*keybdInput)(unsafePtr(&inputs[0].union)) = ki
 	ret, _, callErr := procSendInput.Call(1, uintptr(unsafe.Pointer(&inputs[0])), uintptr(unsafe.Sizeof(winInput{})))
 	if ret == 0 {
-		return fmt.Errorf("SendInput key down falhou para VK=0x%X: %v (errno=%d)", vkCode, describeErr(callErr), errnoOf(callErr))
+		return sendInputErr(fmt.Sprintf("key down VK=0x%X", vkCode), callErr)
 	}
 	return nil
 }
@@ -178,7 +178,7 @@ func InjectKeyUp(vkCode uint16) error {
 	*(*keybdInput)(unsafePtr(&inputs[0].union)) = ki
 	ret, _, callErr := procSendInput.Call(1, uintptr(unsafe.Pointer(&inputs[0])), uintptr(unsafe.Sizeof(winInput{})))
 	if ret == 0 {
-		return fmt.Errorf("SendInput key up falhou para VK=0x%X: %v (errno=%d)", vkCode, describeErr(callErr), errnoOf(callErr))
+		return sendInputErr(fmt.Sprintf("key up VK=0x%X", vkCode), callErr)
 	}
 	return nil
 }
@@ -242,6 +242,24 @@ const (
 
 // Placeholder
 var _ = syscall.EINVAL
+
+// sendInputErr formata a falha de uma chamada SendInput com o diagnóstico
+// correto do mecanismo. errno=5 (ERROR_ACCESS_DENIED) em SendInput tem causa
+// canônica: UIPI descarta a injeção quando a integridade do processo injetor
+// é menor que a da janela em PRIMEIRO PLANO — Gerenciador de Tarefas roda
+// SEMPRE High (manifest autoElevate) e a UI do agente é High (manifest
+// requireAdministrator). Era a causa do bug "abrir o Gerenciador de Tarefas
+// mata o controle remoto; fechá-lo traz de volta": o worker rodava com token
+// de usuário (Medium). Com o worker System/High o erro não deve ocorrer; se
+// ocorrer, a mensagem aponta exatamente para o mecanismo e o que verificar.
+func sendInputErr(what string, callErr error) error {
+	eno := errnoOf(callErr)
+	msg := fmt.Sprintf("SendInput %s falhou: %v (errno=%d)", what, describeErr(callErr), eno)
+	if eno == 5 {
+		msg += " [UIPI: integridade do injetor < integridade da janela em primeiro plano — ver integridade do worker de remote session (precisa High/System)]"
+	}
+	return fmt.Errorf("%s", msg)
+}
 
 // describeErr retorna a descrição amigável do errno do Windows.
 func describeErr(err error) string {

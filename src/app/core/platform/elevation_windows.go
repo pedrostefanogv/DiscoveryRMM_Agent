@@ -42,8 +42,18 @@ func IsRunningElevated() bool {
 
 // ProcessIntegrityLevel retorna o nível de integridade do processo.
 func ProcessIntegrityLevel() IntegrityLevel {
-	// Lê o token de integridade do processo.
-	label, err := getProcessIntegrityLabel()
+	return TokenIntegrityLevel(windows.GetCurrentProcessToken())
+}
+
+// TokenIntegrityLevel retorna o nível de integridade de um token qualquer
+// (processo corrente, token duplicado do worker de remote session etc.).
+//
+// POR QUÊ existe: a checagem de UIPI do controle remoto precisa saber a
+// integridade do TOKEN que vai injetar input — não a do processo que o criou.
+// O spawn do worker pode entregar um token de usuário (Medium) mesmo quando
+// o serviço é SYSTEM (fallback), e só a leitura do token em si revela isso.
+func TokenIntegrityLevel(tok windows.Token) IntegrityLevel {
+	label, err := getTokenIntegrityLabel(tok)
 	if err != nil {
 		return IntegrityUnknown
 	}
@@ -72,10 +82,21 @@ func ProcessIntegrityLevel() IntegrityLevel {
 	}
 }
 
-// getProcessIntegrityLabel lê o TOKEN_MANDATORY_LABEL (TOKEN_INTEGRITY_LEVEL)
-// do token do processo corrente.
-func getProcessIntegrityLabel() (*windows.Tokenmandatorylabel, error) {
-	token := windows.GetCurrentProcessToken()
+// IntegritySupportsUipiInjection reporta se um processo rodando com o nível
+// de integridade informado pode injetar input (SendInput) em QUALQUER janela
+// da sessão, incluindo elevadas: Gerenciador de Tarefas (manifest autoElevate
+// — roda SEMPRE High) e a própria UI do agente (manifest requireAdministrator
+// — High). UIPI descarta o SendInput de um injetor cuja integridade é menor
+// que a da janela em primeiro plano: é a causa do sintoma "o controle remoto
+// morre ao abrir o Gerenciador de Tarefas e volta ao fechá-lo".
+func IntegritySupportsUipiInjection(level IntegrityLevel) bool {
+	return level == IntegrityHigh || level == IntegritySystem
+}
+
+// getTokenIntegrityLabel lê o TOKEN_MANDATORY_LABEL (TOKEN_INTEGRITY_LEVEL)
+// de um token qualquer (o corrente ou um duplicado do worker).
+func getTokenIntegrityLabel(tok windows.Token) (*windows.Tokenmandatorylabel, error) {
+	token := tok
 	var size uint32
 	_ = windows.GetTokenInformation(token, windows.TokenIntegrityLevel, nil, 0, &size)
 	if size == 0 {

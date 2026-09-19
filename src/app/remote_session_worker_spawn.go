@@ -31,6 +31,8 @@ import (
 	"time"
 	"unsafe"
 
+	"discovery/app/core/platform"
+
 	"golang.org/x/sys/windows"
 )
 
@@ -102,12 +104,17 @@ func spawnRemoteSessionWorker(parent context.Context, payload map[string]any) er
 	}
 	defer tok.Close()
 
-	// Diagnóstico UIPI: worker NÃO elevado (Medium) tem o input descartado
-	// pelo UIPI em janelas de integridade maior (Gerenciador de Tarefas
-	// autoElevate/UAC prompts). Visível no log do serviço para suporte.
-	log.Printf("[remote-session] worker token: source=%s elevated=%t", source, tok.IsElevated())
-	if !tok.IsElevated() {
-		log.Printf("[remote-session] AVISO: worker NAO elevado — input em janelas elevadas (Gerenciador de Tarefas, UAC) NAO funcionara neste modo")
+	// Diagnóstico UIPI: o que decide se o input chega nas janelas elevadas é
+	// a INTEGRIDADE DO TOKEN (não IsElevated): Gerenciador de Tarefas roda
+	// SEMPRE High (manifest autoElevate) e a própria UI do agente também
+	// (requireAdministrator). Um worker Medium tem o SendInput descartado
+	// silenciosamente quando qualquer uma delas está em primeiro plano — o
+	// controle remoto "morre" e volta ao fechá-la. Falha aqui é fail-visible:
+	// integridade insuficiente fica marcada como ERRO no log do serviço.
+	il := platform.TokenIntegrityLevel(tok)
+	log.Printf("[remote-session] worker token: source=%s elevated=%t integrity=%s", source, tok.IsElevated(), il)
+	if !platform.IntegritySupportsUipiInjection(il) {
+		log.Printf("[remote-session] ERRO: worker com integridade %s — UIPI descartara o input em janelas elevadas (Gerenciador de Tarefas, UI do agente). Controle remoto parcial ate a janela elevada perder o foco.", il)
 	}
 
 	proc, stdin, stderr, err := spawnWorkerInSession(exe, tok, source)
@@ -403,7 +410,9 @@ func acquireInteractiveSessionToken() (windows.Token, string, error) {
 	// incluindo elevadas (Gerenciador de Tarefas). Com usuário logado o desktop
 	// é winsta0\default; sem usuário (tela de logon), winsta0\winlogon.
 	if tok, err := systemTokenForSession(consoleSession); err == nil {
-		if !tok.IsElevated() {
+		// Checagem por INTEGRIDADE do token (System/High), não IsElevated —
+		// o que decide o UIPI é o rótulo de integridade, não o flag de UAC.
+		if !platform.IntegritySupportsUipiInjection(platform.TokenIntegrityLevel(tok)) {
 			// Caller não-SYSTEM (ex.: UI standalone Medium): o token duplicado
 			// não pode ser elevado a System — cair para o fallback do usuário
 			// logado em vez de rotular um token Medium como "system-session"
@@ -418,10 +427,23 @@ func acquireInteractiveSessionToken() (windows.Token, string, error) {
 		}
 	}
 
-	// 2) Usuário logado na sessão do console (fallback — worker Medium:
-	// input em janelas elevadas NÃO funciona, mas captura/uso básico sim).
+	// 2) Usuário logado na sessão do console (fallback). M-fix definitivo
+	// (bug "controle remoto morre com Gerenciador de Tarefas/UI do agente em
+	// foco"): WTSQueryUserToken devolve o token de logon da sessão — para
+	// usuários UAC é o token FILTERED (Medium IL). Um worker Medium perde o
+	// input EXATAMENTE quando o Gerenciador de Tarefas (autoElevate→High) ou
+	// a própria UI do agente (requireAdministrator→High) ganham o primeiro
+	// plano: o UIPI descarta o SendInput e o controle volta ao fechá-las.
+	// O token é ELEVADO para High aqui (hardenUserSessionToken); se a
+	// elevação não for possível, o motivo fica no log (fail-visible) em vez
+	// de um worker Medium silencioso.
 	if tok, err := wtsQueryUserToken(consoleSession); err == nil {
-		return tok, "user-session", nil
+		hard, hardErr := hardenUserSessionToken(tok)
+		if hardErr != nil {
+			il := platform.TokenIntegrityLevel(hard)
+			log.Printf("[remote-session] AVISO UIPI: token do usuário permanece %s (%v) — input será descartado em janelas elevadas (Gerenciador de Tarefas, UI do agente) enquanto estiverem em primeiro plano", il, hardErr)
+		}
+		return hard, "user-session", nil
 	}
 
 	// 3) Fallback: token do processo winlogon da sessão do console (caminho
@@ -476,6 +498,69 @@ func systemTokenForSession(sessionID uint32) (windows.Token, error) {
 		dup.Close()
 		return 0, fmt.Errorf("SetTokenInformation(TokenSessionId=%d): %w", sessionID, err)
 	}
+	return dup, nil
+}
+
+// hardenUserSessionToken eleva um token de usuário (típico Medium IL) para
+// High, para que o worker de remote session não seja vítima do UIPI.
+//
+// CONTRATO DE POSSE: assume a posse de tok; fecha-o se devolver OUTRO token.
+// Quando devolve o próprio tok (já High/System ou falha total), ele continua
+// aberto para o caller fechar.
+//
+// Ordem das tentativas (a primeira que funcionar vale):
+//  1. Token já High/System → devolve como está.
+//  2. TokenLinkedToken (GetLinkedToken) — o token COMPLETO do UAC (High
+//     nativo) do mesmo logon. Duplicado como primário com MAXIMUM_ALLOWED.
+//  3. Rótulo de integridade do DUPLICADO forçado a High (S-1-16-12288) —
+//     SetTokenInformation(TokenIntegrityLevel) só é permitido a partir de um
+//     processo System/High (o serviço SYSTEM tem IL 0x4000 > 0x3000). A
+//     elevação NÃO concede privilégios de administrador: apenas relaxa o
+//     UIPI contra janelas High — exatamente o que a sessão remota precisa
+//     (captura continua no nível do usuário).
+//
+// De um caller Medium o passo 3 falha com access denied: devolve o erro para
+// o caller logar (fail-visible) em vez de produzir um worker Medium mudo.
+func hardenUserSessionToken(tok windows.Token) (windows.Token, error) {
+	if platform.IntegritySupportsUipiInjection(platform.TokenIntegrityLevel(tok)) {
+		return tok, nil
+	}
+
+	// 2) Token LINKED do UAC (token completo do usuário — High nativo).
+	if linked, err := tok.GetLinkedToken(); err == nil && linked != 0 {
+		if platform.IntegritySupportsUipiInjection(platform.TokenIntegrityLevel(linked)) {
+			var dup windows.Token
+			derr := windows.DuplicateTokenEx(linked, windows.MAXIMUM_ALLOWED, nil,
+				windows.SecurityImpersonation, windows.TokenPrimary, &dup)
+			linked.Close()
+			if derr == nil {
+				tok.Close() // substituído — o caller fecha apenas o retornado
+				return dup, nil
+			}
+			// Duplicação falhou: mantém tok aberto e cai para o passo 3.
+		} else {
+			linked.Close()
+		}
+	}
+
+	// 3) Eleva o rótulo de integridade do duplicado para High.
+	var dup windows.Token
+	if err := windows.DuplicateTokenEx(tok, windows.MAXIMUM_ALLOWED, nil,
+		windows.SecurityImpersonation, windows.TokenPrimary, &dup); err != nil {
+		return tok, fmt.Errorf("duplicando token do usuário: %w", err)
+	}
+	high, err := windows.StringToSid("S-1-16-12288") // SECURITY_MANDATORY_HIGH_RID
+	if err != nil {
+		dup.Close()
+		return tok, fmt.Errorf("SID de integridade High: %w", err)
+	}
+	tml := windows.Tokenmandatorylabel{Label: windows.SIDAndAttributes{Sid: high}}
+	if err := windows.SetTokenInformation(dup, windows.TokenIntegrityLevel,
+		(*byte)(unsafe.Pointer(&tml)), tml.Size()); err != nil {
+		dup.Close()
+		return tok, fmt.Errorf("SetTokenInformation(TokenIntegrityLevel=High): %w (o caller precisa ser System/High)", err)
+	}
+	tok.Close()
 	return dup, nil
 }
 
