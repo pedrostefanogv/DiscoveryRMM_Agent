@@ -516,6 +516,11 @@ function describeChatActivity(status) {
   if (s.indexOf("Conectando ao servidor") === 0) {
     return { key: "chat.activity.connecting", kind: "connect" };
   }
+  if (s.indexOf("Consultando o modelo") === 0) {
+    // Pós-conexão: LLM planejando/executando (o "Conectando" cobria 10-20s
+    // dessa fase — rótulo agora troca após o handshake).
+    return { key: "chat.activity.model", kind: "connect" };
+  }
   if (/^Round\s+\d+/.test(s)) {
     return { key: "chat.activity.planning", kind: "plan" };
   }
@@ -1634,8 +1639,13 @@ function formatInlineChatMarkdown(text) {
   var escaped = escapeHtml(String(text || ""));
   var codeTokens = [];
 
+  // Token de placeholder SEM underscores/asteriscos/colchetes: o token antigo
+  // (\x01CHAT_CODE_N\x01) continha "_CODE_" e era DESTRUIDO pelo regex de
+  // itálico (/_..._/g) que roda depois da tokenização — o restore falhava e o
+  // texto cru ("CHATCODE0") vazava para o usuário. \u0001C + índice + \u0001
+  // não colide com nenhum dos regex seguintes.
   escaped = escaped.replace(/`([^`\n]+)`/g, function (_, code) {
-    var token = "\x01CHAT_CODE_" + codeTokens.length + "\x01";
+    var token = "\u0001C" + codeTokens.length + "\u0001";
     codeTokens.push("<code>" + code + "</code>");
     return token;
   });
@@ -1696,7 +1706,12 @@ function formatInlineChatMarkdown(text) {
     .replace(/_([^_\n]+)_/g, "<em>$1</em>");
 
   for (var i = 0; i < codeTokens.length; i += 1) {
-    escaped = escaped.replace("\x01CHAT_CODE_" + i + "\x01", codeTokens[i]);
+    // Replacer por FUNÇÃO: o HTML do código é inserido literalmente (conteúdo
+    // com "$&", "$1" etc. não é interpretado como padrão de substituição).
+    var tokenHTML = codeTokens[i];
+    escaped = escaped.replace("\u0001C" + i + "\u0001", function () {
+      return tokenHTML;
+    });
   }
 
   return escaped;
@@ -1895,9 +1910,22 @@ function renderAssistantMarkdown(content) {
     });
   }
 
-  function renderTable(startIdx) {
+  // findTableSeparator localiza a linha separadora de uma tabela cujo
+  // cabeçalho está em startIdx, tolerando linhas em branco entre elas
+  // (modelos LLM emitem "| a | b |\n\n|---|---|" com frequência — sem esta
+  // tolerância a tabela não era reconhecida e os pipes apareciam crus).
+  function findTableSeparator(startIdx) {
+    for (var k = startIdx + 1; k < lines.length && k <= startIdx + 4; k += 1) {
+      var candidate = lines[k].trim();
+      if (!candidate) continue;
+      return isSeparatorRow(candidate) ? k : -1;
+    }
+    return -1;
+  }
+
+  function renderTable(startIdx, sepIdx) {
     var headerCells = parseTableCells(lines[startIdx]);
-    var aligns = parseTableAlign(lines[startIdx + 1]);
+    var aligns = parseTableAlign(lines[sepIdx]);
     var out =
       '<div class="chat-table-wrap"><table class="chat-table"><thead><tr>';
     for (var c = 0; c < headerCells.length; c += 1) {
@@ -1909,8 +1937,21 @@ function renderAssistantMarkdown(content) {
         "</th>";
     }
     out += "</tr></thead><tbody>";
-    var r = startIdx + 2;
-    while (r < lines.length && isTableRow(lines[r])) {
+    // Corpo tolerante a linhas em branco entre as rows (mesmo caso do
+    // cabeçalho): 1 blank não encerra; a tabela acaba em linha não-vazia
+    // que não seja row, ou em 2+ blanks consecutivos.
+    var r = sepIdx + 1;
+    var blanks = 0;
+    while (r < lines.length) {
+      var rowLine = lines[r].trim();
+      if (!rowLine) {
+        blanks += 1;
+        if (blanks >= 2) break;
+        r += 1;
+        continue;
+      }
+      blanks = 0;
+      if (!isTableRow(rowLine)) break;
       var cells = parseTableCells(lines[r]);
       out += "<tr>";
       for (var c2 = 0; c2 < headerCells.length; c2 += 1) {
@@ -1954,16 +1995,15 @@ function renderAssistantMarkdown(content) {
       continue;
     }
 
-    if (
-      isTableRow(line) &&
-      i + 1 < lines.length &&
-      isSeparatorRow(lines[i + 1].trim())
-    ) {
-      closeLists();
-      var tbl = renderTable(i);
-      html.push(tbl.html);
-      i = tbl.nextIndex - 1;
-      continue;
+    if (isTableRow(line)) {
+      var sepIdx = findTableSeparator(i);
+      if (sepIdx > 0) {
+        closeLists();
+        var tbl = renderTable(i, sepIdx);
+        html.push(tbl.html);
+        i = tbl.nextIndex - 1;
+        continue;
+      }
     }
 
     // Aceita headings com ou sem espaco apos os # (ex.: "##📊 Titulo" ou "## Titulo").

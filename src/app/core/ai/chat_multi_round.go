@@ -271,7 +271,7 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 			MessageLen: len(req.Message),
 		})
 
-		currentSessionID, err = s.executeRound(streamCtx, cfg, req, round, onToken, &pendingCalls, onLoopProgress, a2uiCb)
+		currentSessionID, err = s.executeRound(streamCtx, cfg, req, round, onStatus, onToken, &pendingCalls, onLoopProgress, a2uiCb)
 		roundElapsed := time.Since(roundStart)
 
 		if err == nil {
@@ -601,7 +601,7 @@ func (s *Service) lastAssistantContentSince(historySince int) string {
 	return ""
 }
 
-func (s *Service) executeRound(ctx context.Context, cfg Config, req agentStreamRequest, round int, onToken func(string), pendingCalls *[]pendingToolCall, onLoopProgress func(round, maxRounds int), onA2ui ...func(string)) (string, error) {
+func (s *Service) executeRound(ctx context.Context, cfg Config, req agentStreamRequest, round int, onStatus func(string), onToken func(string), pendingCalls *[]pendingToolCall, onLoopProgress func(round, maxRounds int), onA2ui ...func(string)) (string, error) {
 	startTime := time.Now()
 	baseURL, err := normalizeAgentChatBaseURL(cfg.Endpoint)
 	if err != nil {
@@ -684,6 +684,13 @@ func (s *Service) executeRound(ctx context.Context, cfg Config, req agentStreamR
 		StatusCode: resp.StatusCode,
 		LatencyMs:  int(time.Since(startTime).Milliseconds()),
 	})
+
+	// Status pós-conexão: do HTTP 200 até a primeira tool/token é o LLM
+	// planejando/executando — sem este sinal, o rótulo "Conectando ao
+	// servidor..." persistia 10-20s cobrindo a fase errada.
+	if onStatus != nil {
+		onStatus("Consultando o modelo de IA...")
+	}
 
 	sessionID, _, err := s.parseMultiRoundSSEWithProgress(resp.Body, onToken, pendingCalls, onLoopProgress, onA2ui...)
 	if err != nil {

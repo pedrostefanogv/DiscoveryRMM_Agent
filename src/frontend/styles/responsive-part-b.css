@@ -422,6 +422,12 @@
   min-height: 0;
 }
 
+/* Bolhas nunca são comprimidas pelo flex (flex-shrink padrão 1 podia achatar
+ * o card durante o stream quando o conteúdo excede o container). */
+.chat-messages > .chat-msg {
+  flex: 0 0 auto;
+}
+
 .chat-msg {
   max-width: 85%;
   padding: 10px 14px;
@@ -644,6 +650,12 @@
   min-height: 36px;
   width: 100%;
   box-sizing: border-box;
+  /* Camada própria no compositor: o fundo do card acompanha o crescimento do
+   * conteúdo em cada flush. Sem a promoção, o WebView2 atrasava o repaint do
+   * background — o card ficava "1 linha" com o texto vazando fora até o fim
+   * do stream (relato do usuário, stream com tabelas longas). */
+  transform: translateZ(0);
+  will-change: transform;
 }
 
 .stream-thinking {
