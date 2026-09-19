@@ -31,6 +31,13 @@ const (
 	handshakeTimeout = 10 * time.Second
 	maxOutputBytes   = 1 << 20
 
+	// plannedReconnectDelay é a espera antes de reconectar após um
+	// encerramento PLANEJADO do loop (reload de config, troca para o NATS
+	// nativo, watchdog de global pong). Transição intencional: volta rápido
+	// em vez de pagar o backoff de falha real (reconnectBase+jitter ≈ 10-15s),
+	// que mantinha o core fora do ar ~10x o necessário a cada ciclo planejado.
+	plannedReconnectDelay = 2 * time.Second
+
 	// nativeNATSRecheckEvery define a cadência com que o agente, quando conectado
 	// via NATS sobre WebSocket (wss), tenta voltar ao NATS nativo (nats://).
 	// 30 minutos por hora — intervalo conservador para não gerar carga; ajustável no futuro.
@@ -400,9 +407,9 @@ func (r *Runtime) notifyConnectivityChange(wasConnected, nowConnected bool, tran
 // isPlannedReconnect informa se o erro que encerrou a sessão faz parte da
 // operação normal do loop de conexão: reload de configuração, troca
 // programada para o NATS nativo (recheck de 30min) ou reconexão forçada pelo
-// watchdog de global pong. Nesses casos o Run reconecta em seguida
-// (reconnectBase+jitter ≈ 10-15s) e o indicador de status NÃO deve passar
-// por offline — marcar offline aqui fazia a página de Status piscar
+// watchdog de global pong. Nesses casos o Run reconecta em seguida com uma
+// espera curta (plannedReconnectDelay ≈ 2s) e o indicador de status NÃO deve
+// passar por offline — marcar offline aqui fazia a página de Status piscar
 // online→offline→online a cada ciclo (flicker reportado em homologação).
 func isPlannedReconnect(err error) bool {
 	if err == nil {
@@ -727,15 +734,18 @@ func (r *Runtime) Run(ctx context.Context) {
 		if err != nil && ctx.Err() == nil {
 			r.logf("sessao encerrada: %v", err)
 			// Reconexão planejada (reload, troca para NATS nativo, watchdog de
-			// pong): mantém o indicador online — o Run reconecta imediatamente
-			// e o ciclo offline→online era o flicker da página de Status.
+			// pong): mantém o indicador online e reconecta em ~2s — é uma
+			// transição intencional, não uma falha de rede. O backoff completo
+			// (10-15s) nesses casos mantinha o core em limbo ~10x o necessário
+			// e alimentava a percepção de intermitência do indicador.
 			// Offline só acontece quando TODAS as tentativas falham (erro não
 			// planejado) ou o contexto é cancelado.
 			if isPlannedReconnect(err) {
 				r.markReconnecting(err.Error())
-			} else {
-				r.setStatus(false, "sessao encerrada: "+err.Error())
+				r.waitOrStop(ctx, plannedReconnectDelay)
+				continue
 			}
+			r.setStatus(false, "sessao encerrada: "+err.Error())
 		} else if ctx.Err() != nil {
 			r.setStatus(false, "contexto cancelado")
 		}

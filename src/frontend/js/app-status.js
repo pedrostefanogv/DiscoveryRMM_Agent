@@ -207,9 +207,10 @@ function renderStatusOverview(data) {
   // da barra (app-window.js) — o pong global pode ficar stale sem derrubar o
   // transporte, e não deve deixar o agente aparecendo offline.
   var rawConnected = !!(data && (data.transportConnected || data.connected));
-  // Histerese anti-flicker (helper definido em app-window.js): 1 sinal
-  // offline isolado não derruba o indicador; 2 sinais consecutivos (poll 4s
-  // + evento/snapshot 5s) sim. Log do estado EXIBIDO apenas quando muda.
+  // Histerese anti-flicker (helper definido em app-window.js): offline só é
+  // exibido após ~15s de sinais offline sustentados (cobre a janela de ~10-15s
+  // das reconexões planejadas do core); online é aplicado na hora. Log do
+  // estado EXIBIDO apenas quando muda.
   var connected = (typeof window.__statusConnectedHysteresis === 'function')
     ? window.__statusConnectedHysteresis(rawConnected) : rawConnected;
   if (connected !== renderStatusOverview.__lastShown) {

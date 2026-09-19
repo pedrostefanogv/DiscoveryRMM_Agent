@@ -85,8 +85,13 @@
         // não venha preenchido. Evita correlacionar o indicador com o status do
         // pong global (que pode ficar stale sem derrubar o transporte).
         var transportUp = !!(status && (status.transportConnected || status.connected));
-        metaDot.classList.toggle('online', transportUp);
-        metaDot.classList.toggle('offline', !transportUp);
+        // O poll da barra passa pela MESMA histerese do fluxo de eventos:
+        // uma leitura isolada negativa (snapshot defasado, IPC lento) não
+        // derruba o indicador — só offline sustentado (~15s) derruba.
+        var shown = (typeof window.__statusConnectedHysteresis === 'function')
+          ? window.__statusConnectedHysteresis(transportUp) : transportUp;
+        metaDot.classList.toggle('online', shown);
+        metaDot.classList.toggle('offline', !shown);
       }
       // Mantém a versão do sidebar sempre em dia no boot/visível, sem
       // depender de abrir a página Status.
@@ -100,8 +105,12 @@
     }).catch(function () {
       if (metaPCName) metaPCName.textContent = translate('window.meta.pc') + ': -';
       if (metaDot) {
-        metaDot.classList.add('offline');
-        metaDot.classList.remove('online');
+        // Erro de leitura isolado (binding lento/ocupado) é apenas mais um
+        // sinal offline para a histerese — não derruba o indicador na hora.
+        var shown = (typeof window.__statusConnectedHysteresis === 'function')
+          ? window.__statusConnectedHysteresis(false) : false;
+        metaDot.classList.toggle('online', shown);
+        metaDot.classList.toggle('offline', !shown);
       }
     });
   }
@@ -233,20 +242,31 @@
   var lastConnectivityState = null;
 
   // ── Histerese do indicador de conectividade (anti-flicker) ──
-  // Um único sinal "offline" (evento ou poll) NÃO derruba o indicador:
-  // reconexões planejadas do core (reload de config, troca para o NATS
+  // Reconexões planejadas do core (reload de config, troca para o NATS
   // nativo, watchdog de pong) derrubam o transporte por ~10-15s e o core
   // emite offline→online em seguida, o que fazia o indicador piscar.
-  // Exigimos 2 sinais offline consecutivos (≈4-5s de intervalo entre o poll
-  // de 4s e o snapshot de 5s) para exibir offline; online é aplicado na hora.
-  window.__statusOfflineStrikes = 0;
+  // Existem 3 escritores do indicador (poll da barra 4s, poll da página
+  // Status 4s, eventos/snapshot ~5s) com cadências diferentes — contagem de
+  // "N sinais consecutivos" entre escritores distintos é ambígua e abria
+  // janela para o poll cru derrubar o indicador no 1º sinal negativo.
+  // A regra agora é TEMPORAL e única para todos os escritores:
+  //   - online  → aplicado na hora (e reinicia a janela de confirmação);
+  //   - offline → só é exibido após OFFLINE_CONFIRM_MS de sinais offline
+  //     SUSTENTADOS (15s cobre a janela documentada de ~10-15s das
+  //     reconexões planejadas). Falha real de rede continua aparecendo —
+  //     15s depois, em vez de piscar a cada sinal transitório.
+  var OFFLINE_CONFIRM_MS = 15000;
+  window.__statusOfflineSince = 0;
   window.__statusConnectedHysteresis = function (rawConnected) {
     if (rawConnected) {
-      window.__statusOfflineStrikes = 0;
+      window.__statusOfflineSince = 0;
       return true;
     }
-    window.__statusOfflineStrikes += 1;
-    return window.__statusOfflineStrikes < 2;
+    var now = Date.now();
+    if (!window.__statusOfflineSince) {
+      window.__statusOfflineSince = now;
+    }
+    return (now - window.__statusOfflineSince) < OFFLINE_CONFIRM_MS;
   };
 
   function applyConnectivityEvent(data) {
