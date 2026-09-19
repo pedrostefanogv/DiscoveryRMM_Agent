@@ -6,6 +6,11 @@
    DESIGN TOKENS
    ================================================================ */
 :root {
+  /* O tema da UI e manual ([data-theme]). Fixa o color-scheme do documento para
+     scrollbars/controles nativos do WebView seguirem o tema do app em vez do do
+     SO (sem isso, com o Windows em dark, a scrollbar nativa pintava escura no
+     tema claro - ex.: lista da loja .store-cards-wrap). */
+  color-scheme: light;
   --bg: #f8f6f0;
   --surface: #fffefa;
   --surface-2: #f3efe2;
@@ -110,6 +115,7 @@
 
 /* Dark mode */
 [data-theme="dark"] {
+  color-scheme: dark;
   --bg: #1e1e21;
   --surface: #2a2a2e;
   --surface-2: #333338;
