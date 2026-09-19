@@ -676,6 +676,38 @@
   margin-top: 8px;
 }
 
+/* Opção escolhida pelo usuário: destaque em accent antes do painel travar */
+.chat-question-option-selected {
+  background: var(--accent) !important;
+  color: var(--on-accent) !important;
+  border-color: var(--accent) !important;
+}
+
+/* Bolha destacada com a resposta dada pelo usuário à pergunta */
+.chat-msg.user.chat-question-answer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid color-mix(in srgb, var(--on-accent) 45%, transparent);
+}
+
+.chat-question-answer-tag {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.22);
+  color: var(--on-accent);
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.chat-question-answer-text {
+  flex: 1;
+  word-break: break-word;
+}
+
 .chat-question-text-row {
   display: flex;
   gap: 6px;
@@ -758,8 +790,13 @@
   overflow-y: auto;
 }
 
+/* Sem anel/borda própria: o foco é indicado apenas pela caixa externa
+   (:focus-within), evitando o efeito de "card dentro de card". */
 .chat-input:focus {
   outline: none;
+  border: none;
+  box-shadow: none;
+  border-color: transparent;
 }
 
 .chat-input-actions {

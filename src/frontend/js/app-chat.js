@@ -449,6 +449,7 @@ function onStreamDone() {
   stopPollingLoop();
   stopThinkingStatusUpdates();
   clearChatStreamTimeout();
+  chatPendingQuestionCount = 0;
   finaliseStreamingBubble();
   chatStopRequested = false;
   setChatBusy(false);
@@ -463,6 +464,7 @@ function onStreamError(errMsg) {
   stopPollingLoop();
   stopThinkingStatusUpdates();
   clearChatStreamTimeout();
+  chatPendingQuestionCount = 0;
 
   if (chatStopRequested) {
     if (streamingBubble && !streamingRawContent) {
@@ -509,6 +511,7 @@ function onStreamStopped() {
   stopPollingLoop();
   stopThinkingStatusUpdates();
   clearChatStreamTimeout();
+  chatPendingQuestionCount = 0;
   if (streamingBubble && !streamingRawContent) {
     streamingRawContent = translate("chat.responseInterrupted");
   }
@@ -524,13 +527,39 @@ function onStreamStopped() {
 
 // ─── Mini-Questionário Interativo (ask_user MCP) ───
 
+// Perguntas pendentes: enquanto houver, o timer de segurança do stream (60s)
+// fica PAUSADO — o backend espera o usuário responder sem limite de tempo, e
+// a UI não deve dar o stream por morto nem enfileirar/despachar por conta
+// própria nesse período.
+var chatPendingQuestionCount = 0;
+
 function onChatQuestion(data) {
   try {
     var q = typeof data === "string" ? JSON.parse(data) : data;
     if (!q || !q.id) return;
+    chatPendingQuestionCount += 1;
+    // Pausa o timeout de segurança: a espera pela resposta não tem prazo.
+    clearChatStreamTimeout();
+    // Indica no indicador de streaming que o chat está aguardando o usuário.
+    if (streamingBubble && !streamingRawContent) {
+      var thinkingEl = streamingBubble.querySelector(".stream-thinking");
+      if (thinkingEl) {
+        thinkingEl.style.display = "";
+        thinkingEl.textContent = translate("chat.waitingAnswer");
+      }
+    }
     showChatQuestion(q);
   } catch (e) {
     console.error("chat:question parse error:", e);
+  }
+}
+
+// endPendingQuestion decrementa o contador de perguntas pendentes e reativa o
+// timer de segurança se o stream ainda estiver em execução.
+function endPendingQuestion() {
+  if (chatPendingQuestionCount > 0) chatPendingQuestionCount -= 1;
+  if (chatPendingQuestionCount === 0 && chatSending) {
+    armChatStreamTimeout();
   }
 }
 
@@ -559,6 +588,8 @@ function showChatQuestion(question) {
       btn.className = "btn subtle btn-xs";
       btn.innerHTML = formatInlineChatMarkdown(opt);
       btn.addEventListener("click", function () {
+        // Destaca a opção escolhida antes de desabilitar o painel.
+        btn.classList.add("chat-question-option-selected");
         answerChatQuestion(question.id, opt);
         disableQuestionButtons(div);
       });
@@ -590,6 +621,7 @@ function showChatQuestion(question) {
 
     input.addEventListener("keydown", function (e) {
       if (e.key === "Enter") {
+        e.preventDefault();
         sendBtn.click();
       }
     });
@@ -605,7 +637,37 @@ function showChatQuestion(question) {
   scheduleChatScrollToBottom();
 }
 
+// appendChatQuestionAnswer exibe a resposta do usuário à pergunta como uma
+// bolha destacada (mesma linguagem visual dos outros chats).
+function appendChatQuestionAnswer(text) {
+  if (!chatMessagesEl) return;
+  var div = document.createElement("div");
+  div.className = "chat-msg user chat-question-answer";
+
+  var tag = document.createElement("span");
+  tag.className = "chat-question-answer-tag";
+  tag.textContent = translate("chat.answerTag");
+  div.appendChild(tag);
+
+  var textEl = document.createElement("span");
+  textEl.className = "chat-question-answer-text";
+  textEl.textContent = text;
+  div.appendChild(textEl);
+
+  chatMessagesEl.appendChild(div);
+  scheduleChatScrollToBottom();
+}
+
 function answerChatQuestion(questionId, answer) {
+  // Feedback imediato: bolha destacada com a resposta do usuário + reativa o
+  // timer de segurança (a espera pela pergunta terminou).
+  appendChatQuestionAnswer(answer);
+  endPendingQuestion();
+  // O processamento retomou: volta o indicador para "Pensando...".
+  if (streamingBubble && !streamingRawContent) {
+    var thinkingEl = streamingBubble.querySelector(".stream-thinking");
+    if (thinkingEl) thinkingEl.textContent = translate("chat.thinking");
+  }
   try {
     // B15: promise nao aguardada - captura a rejeicao com .catch.
     appApi().AnswerChatQuestion(questionId, answer).catch(function (e) {
@@ -631,6 +693,11 @@ function disableQuestionButtons(container) {
 function onChatQuestionCancelled(data) {
   try {
     var payload = typeof data === "string" ? JSON.parse(data) : data;
+    // A espera backend terminou — libera o estado de pergunta pendente.
+    if (chatPendingQuestionCount > 0) {
+      chatPendingQuestionCount -= 1;
+      if (chatPendingQuestionCount === 0 && chatSending) armChatStreamTimeout();
+    }
     if (!payload || !payload.id || !chatMessagesEl) return;
     var div = chatMessagesEl.querySelector(
       '.chat-msg.chat-question[data-question-id="' + String(payload.id).replace(/"/g, '\\"') + '"]'

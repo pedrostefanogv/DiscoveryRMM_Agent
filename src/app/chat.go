@@ -18,19 +18,16 @@ type ChatConfig struct {
 	MaxTokens    int    `json:"maxTokens"`
 }
 
-// initChatLogger inicializa o logger JSONL de chat baseado na configuração
-// do config.json. Se o campo chatLog estiver ausente (nil), ativa o log
-// por padrão e persiste a configuração. Se estiver explicitamente false,
-// desativa. Se true, ativa.
+// initChatLogger inicializa o logger JSONL de chat em
+// %ProgramData%\Discovery\logs\chat_logs.jsonl.
+//
+// Padrão: ATIVADO — todas as interações de chat são salvas por padrão
+// (contrato documentado em debug.ChatLogConfig: Enabled nil ou true = ativo).
+// Apenas um valor explicitamente false no config.json desativa (opt-out).
 func (a *App) initChatLogger() {
-	// Criar o ChatLogger na pasta logs/ dentro do diretório de dados do agente
-	chatLogger := ai.NewChatLogger("")
-	chatLogger.Enable(filepath.Join(platform.DataDir(), "logs"))
-
-	// Verificar config do installer para decidir se ativa ou não.
-	// M8 (privacidade): o log de chat persiste a conversa completa em disco;
-	// agora é opt-in — campo ausente no config.json significa DESATIVADO.
-	shouldEnable := false
+	// Config do installer decide apenas o OPT-OUT: campo chatLog.enabled
+	// explicitamente false desativa; ausente ou true mantém o log ativo.
+	shouldEnable := true
 
 	inst, _, err := loadInstallerConfig()
 	if err == nil && inst.ChatLog.Enabled != nil {
@@ -38,11 +35,14 @@ func (a *App) initChatLogger() {
 	}
 
 	if shouldEnable {
+		chatLogger := ai.NewChatLogger("")
+		chatLogger.Enable(filepath.Join(platform.DataDir(), "logs"))
 		a.chatSvc.Service().SetChatLogger(chatLogger)
 		a.Logs.Append("[chat] log detalhado de chat ativado em " + filepath.Join(platform.DataDir(), "logs", "chat_logs.jsonl"))
 	} else {
+		chatLogger := ai.NewChatLogger("")
 		chatLogger.Disable()
-		a.Logs.Append("[chat] log detalhado de chat desativado pela configuração")
+		a.Logs.Append("[chat] log detalhado de chat desativado explicitamente pela configuração (chatLog.enabled=false)")
 	}
 }
 
