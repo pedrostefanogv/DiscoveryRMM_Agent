@@ -1140,6 +1140,18 @@ export function GetTicketWorkflowStates() {
 }
 
 /**
+ * HasActiveChatStream informa se há um turno de chat em execução no core.
+ * Usado pelo timer de segurança da UI para reconciliar o estado quando um
+ * evento terminal (chat:done/error/stopped) se perde — antes disso a UI se
+ * liberava cedo demais e o próximo send batia no TryLock do backend, exibindo
+ * "já existe uma resposta em andamento" para o usuário.
+ * @returns {$CancellablePromise<boolean>}
+ */
+export function HasActiveChatStream() {
+    return $Call.ByID(3279695850);
+}
+
+/**
  * @param {string} id
  * @returns {$CancellablePromise<string>}
  */

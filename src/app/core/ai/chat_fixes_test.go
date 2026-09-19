@@ -53,6 +53,27 @@ func TestSendStreamMultiRound_TurnGuard(t *testing.T) {
 	}
 }
 
+// Regressão do log de 2026-09-19 (chat_logs.jsonl): a intenção de listagem de
+// chamados deve gerar instrução de retry com list_tickets — o retry agora só
+// roda quando NENHUMA tool foi usada no turno (gate do chamador), e o
+// diagnóstico "LLM nao usou tools" não deve mais disparar em turnos que já
+// executaram list_tickets/get_ticket_details no round 0.
+func TestDiagnoseMissingToolCall_TicketListIntent(t *testing.T) {
+	s := NewService(nil)
+	retry := diagnoseMissingToolCall(s, "tem algum chamado aberto para minha maquina?")
+	if retry == "" || !strings.Contains(retry, "list_tickets") {
+		t.Fatalf("esperado instrução de retry com list_tickets, obtido %q", retry)
+	}
+}
+
+// Pergunta sem intenção de chamado não deve gerar retry forçado.
+func TestDiagnoseMissingToolCall_NoTicketIntent(t *testing.T) {
+	s := NewService(nil)
+	if got := diagnoseMissingToolCall(s, "que horas são?"); got != "" {
+		t.Fatalf("não esperava retry para mensagem sem intenção de chamado, obtido %q", got)
+	}
+}
+
 // M8: redação de segredos no log.
 func TestRedactSensitive(t *testing.T) {
 	in := "token mdz_AbCdEf123456 e Bearer abc.def.ghi e sk-abcdefghijklmnopqrst"

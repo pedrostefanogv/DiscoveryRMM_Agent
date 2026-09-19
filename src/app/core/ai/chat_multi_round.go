@@ -55,6 +55,16 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 	// M4: um turno por vez. Dois fluxos concorrentes (webview + debug HTTP,
 	// duplo clique em enviar) não devem compartilhar history/sessionID.
 	if !s.turnMu.TryLock() {
+		// A recusa era invisível no chat_logs.jsonl — impossível diagnosticar o
+		// "já existe uma resposta em andamento" que o usuário vê quando a UI e
+		// o core divergem sobre o turno ativo (ex.: UI liberada antes do
+		// terminal real do turno). Loga para permitir correlação com o log da UI.
+		s.logf("[chat] send recusado: turno anterior ainda em andamento (%q)", TruncateForLog(userMessage, 200))
+		s.logChatEntry(ChatLogEntry{
+			Type:    "turn_busy_rejected",
+			Method:  "multi_round",
+			UserMsg: TruncateForLog(userMessage, 500),
+		})
 		return "", fmt.Errorf("já existe uma resposta em andamento — aguarde ou clique em Parar")
 	}
 	defer s.turnMu.Unlock()
@@ -355,9 +365,21 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 			if forcedRetries < 1 {
 				assistantText := s.lastAssistantContentSince(historyBeforeLen)
 				var retry string
-				if r := diagnoseMissingToolCall(s, userMessage); r != "" {
-					retry = r
-				} else if detectIncompleteResponse(assistantText) {
+				// O retry por intenção de chamado (e o diagnóstico "não usou
+				// tools") só faz sentido quando NENHUMA tool rodou no turno:
+				// se list_tickets/get_ticket_details já executaram nos rounds
+				// anteriores, o round final sem tool call É a resposta legítima.
+				// Sem este gate, o turno real de 2026-09-19 22:26 (pergunta de
+				// chamados com list_tickets no round 0) acusava "LLM nao usou
+				// tools" no log, e uma pergunta com "tem chamado aberto?" no
+				// round final dispararia um retry que reexecutaria list_tickets
+				// à toa (+10-30s e resposta duplicada).
+				if totalToolCalls == 0 {
+					if r := diagnoseMissingToolCall(s, userMessage); r != "" {
+						retry = r
+					}
+				}
+				if retry == "" && detectIncompleteResponse(assistantText) {
 					retry = "A sua resposta anterior terminou sem concluir a ação — você apenas prometeu fazer algo sem executar. Se existe uma ferramenta para a ação que o usuário pediu, EXECUTE-A agora via function call nativa. Caso contrário, dê uma resposta final completa e direta respondendo à solicitação, sem promessas como \"vou fazer\" ou \"só um instante\"."
 				}
 				if retry != "" {
@@ -982,6 +1004,10 @@ func (s *Service) fallbackToSync(ctx context.Context, cfg Config, message, sessi
 // diagnoseMissingToolCall verifica se a pergunta do usuario contem palavras-chave
 // que sugerem que o LLM deveria ter usado uma ferramenta MCP, e emite um warning
 // no log para facilitar o diagnostico de System Prompts ineficazes.
+//
+// Deve ser chamada APENAS quando nenhuma tool foi executada no turno
+// (totalToolCalls == 0): com tools já executadas, um round final sem tool call
+// é a resposta legítima, e o diagnóstico/retry seria falso positivo.
 //
 // Retorna uma string de instrucao (retry forcado) quando a acao solicitada e
 // explicita o suficiente para o agente reenviar com uma ordem imperativa —

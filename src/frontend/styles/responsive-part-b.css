@@ -665,6 +665,112 @@
   animation: blink-cursor 0.8s step-start infinite;
 }
 
+/* ---- Activity do agent (status polido: conectar → ferramentas → resposta) ----
+ * Substitui o texto cru "Pensando..."/"Executando: list_tickets..." por um
+ * widget com spinner + rótulo amigável, trilha de passos (chips ✓) e pill de
+ * progresso do agent loop. Cores via variáveis do tema (dark/free automático).
+ */
+.stream-thinking.chat-activity {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-style: normal;
+  opacity: 1;
+}
+
+.chat-activity-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.chat-activity-spinner {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border-top-color: var(--accent);
+  animation: spin 0.9s linear infinite;
+}
+
+.chat-activity-label {
+  font-weight: 500;
+}
+
+.chat-activity-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  padding-left: 20px;
+}
+
+.chat-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  background: color-mix(in srgb, var(--card-bg, transparent) 60%, transparent);
+  animation: chatStepIn 0.18s ease;
+}
+
+.chat-step.done {
+  opacity: 0.85;
+}
+
+.chat-step.done .chat-step-icon {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.chat-step.current {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  font-weight: 500;
+}
+
+.chat-step .chat-step-icon {
+  font-size: 0.7rem;
+  line-height: 1;
+}
+
+.chat-step .chat-step-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 260px;
+}
+
+.chat-activity-pill {
+  display: none;
+  align-self: flex-start;
+  margin-left: 20px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  border: 1px dashed var(--border);
+}
+
+.chat-activity-pill.visible {
+  display: inline-block;
+}
+
+@keyframes chatStepIn {
+  from { opacity: 0; transform: translateY(2px); }
+  to { opacity: 1; transform: none; }
+}
+
 /* ---- Mini-questionário interativo ---- */
 .chat-msg.chat-question {
   background: color-mix(in srgb, var(--accent) 8%, var(--card-bg, var(--surface)));

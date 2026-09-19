@@ -3,10 +3,16 @@
 var chatSending = false;
 var chatStopRequested = false;
 var chatThinkingPollId = null;
-// Timer de segurança: se o stream não terminar em X segundos, força o
-// encerramento da bolha "Pensando..." para não travar a interface.
+// Timer de segurança: se o stream não terminar em X segundos, a UI para de
+// esperar passivamente e RECONCILIA com o backend (HasActiveChatStream) —
+// antes ela se liberava na hora (60s) enquanto o core continuava processando,
+// e o próximo send batia no TryLock do backend ("já existe uma resposta em
+// andamento"). Turnos com 43 tools e múltiplos rounds passam de 60s com
+// frequência; 120s dá folga antes do primeiro aviso, e a reconciliação em
+// seguida cobre evento terminal perdido sem derrubar turnos longos.
 var chatStreamTimeoutId = null;
-var CHAT_STREAM_TIMEOUT_MS = 60000; // 60s
+var CHAT_STREAM_TIMEOUT_MS = 120000; // 120s até o primeiro aviso
+var CHAT_STREAM_PROBE_MS = 30000;    // sonda de reconciliação subsequente
 
 // Streaming state
 var streamingBubble = null;
@@ -249,18 +255,55 @@ function clearChatStreamTimeout() {
   }
 }
 
-// armChatStreamTimeout inicia o timer de segurança. Se o stream não terminar
-// dentro de CHAT_STREAM_TIMEOUT_MS, força onStreamError para não deixar o
-// usuário preso em "Pensando..." indefinidamente.
+// armChatStreamTimeout inicia o timer de segurança. Ao disparar, a UI NÃO se
+// libera sozinha: mostra aviso na bolha e passa a reconciliar com o backend
+// (HasActiveChatStream). Enquanto o core tiver turno ativo, a UI continua
+// ocupada (sends entram na fila); quando o core reporta idle — evento terminal
+// perdido ou goroutine morta — a bolha é encerrada localmente (onStreamStopped)
+// e o chat volta a aceitar dispatch com segurança (TryLock do backend passa).
+// O botão Parar continua disponível o tempo todo.
 function armChatStreamTimeout() {
   clearChatStreamTimeout();
   chatStreamTimeoutId = setTimeout(function () {
     chatStreamTimeoutId = null;
-    if (chatSending) {
-      console.warn("[chat] timeout de segurança do stream atingido; encerrando");
-      onStreamError(translate("chat.timeout"));
+    if (!chatSending) return;
+    console.warn("[chat] stream demorando (" + Math.round(CHAT_STREAM_TIMEOUT_MS / 1000) + "s); reconciliando com o backend");
+    if (streamingBubble && !streamingRawContent) {
+      var thinkingEl = streamingBubble.querySelector(".stream-thinking");
+      if (thinkingEl) {
+        thinkingEl.style.display = "";
+        setChatActivityText(thinkingEl, translate("chat.streamSlow"));
+      }
     }
+    probeBackendStreamIdle();
   }, CHAT_STREAM_TIMEOUT_MS);
+}
+
+// probeBackendStreamIdle sonda o backend: sem turno ativo + UI ocupada =
+// evento terminal perdido; encerra a bolha localmente e libera o chat.
+// Com turno ativo, continua sondando (turnos longos são legítimos — o loop
+// multi-round tem orçamento de até 10min no core).
+function probeBackendStreamIdle() {
+  try {
+    appApi()
+      .HasActiveChatStream()
+      .then(function (active) {
+        if (!chatSending) return;
+        if (!active) {
+          console.warn("[chat] core sem turno ativo e terminal não chegou — encerrando bolha localmente");
+          onStreamStopped();
+          return;
+        }
+        chatStreamTimeoutId = setTimeout(probeBackendStreamIdle, CHAT_STREAM_PROBE_MS);
+      })
+      .catch(function () {
+        if (!chatSending) return;
+        // Sonda indisponível: continua aguardando o terminal (Parar funciona).
+        chatStreamTimeoutId = setTimeout(probeBackendStreamIdle, CHAT_STREAM_PROBE_MS);
+      });
+  } catch (_) {
+    // Binding indisponível (serviço antigo): mantém aguardando o terminal.
+  }
 }
 
 function requestStopChatStream() {
@@ -273,12 +316,56 @@ function requestStopChatStream() {
   try {
     appApi()
       .StopChatStream()
+      .then(function (stopped) {
+        // Backend sem turno ativo = evento terminal se perdeu: encerra a
+        // bolha localmente. O core está livre — dispatch subsequente é seguro
+        // (não bate no TryLock do backend).
+        if (!stopped && chatSending && chatStopRequested) {
+          console.warn("[chat] StopChatStream=false: terminal do stream se perdeu — encerrando localmente");
+          onStreamStopped();
+        }
+      })
       .catch(function () {
         // If backend stop fails, UI still waits stream terminal event.
       });
   } catch (_) {
     // ignore
   }
+}
+
+// ─── Recusa por turno em andamento (reenfileiramento graceful) ───
+// Quando o backend recusa o send com "já existe uma resposta em andamento",
+// em vez de exibir um erro bruto, a mensagem volta para a fila e o chat
+// re-tenta em alguns segundos. O terminal do turno em curso re-dispacha a
+// fila (maybeFlushChatQueue); o retry cobre o caso de o evento terminal se
+// perder. Limitado a CHAT_BUSY_REQUEUE_MAX tentativas para não loopar.
+var CHAT_BUSY_ERR_MARKER = "já existe uma resposta em andamento";
+var CHAT_BUSY_REQUEUE_MAX = 10;
+var CHAT_BUSY_REQUEUE_MS = 3000;
+var chatBusyRequeueAttempts = 0;
+var chatBusyRequeueTimerId = null;
+var lastDispatchedChatText = "";
+
+function isChatBusyError(errMsg) {
+  return String(errMsg || "").indexOf(CHAT_BUSY_ERR_MARKER) !== -1;
+}
+
+function clearChatBusyRequeue() {
+  if (chatBusyRequeueTimerId) {
+    clearTimeout(chatBusyRequeueTimerId);
+    chatBusyRequeueTimerId = null;
+  }
+  chatBusyRequeueAttempts = 0;
+  lastDispatchedChatText = "";
+}
+
+function scheduleChatBusyRequeue() {
+  if (chatBusyRequeueTimerId) clearTimeout(chatBusyRequeueTimerId);
+  chatBusyRequeueTimerId = setTimeout(function () {
+    chatBusyRequeueTimerId = null;
+    if (chatSending) return; // outro turno assumiu; o terminal dele re-dispacha
+    maybeFlushChatQueue();
+  }, CHAT_BUSY_REQUEUE_MS);
 }
 
 // ─── Fila de mensagens (enquanto o chat processa outra resposta) ───
@@ -353,16 +440,249 @@ function maybeFlushChatQueue() {
   dispatchChatMessage(next.text);
 }
 
+// ─── Activity do agent (status polido: conectar → ferramentas → resposta) ───
+// O core envia status crus em pt-BR ("Conectando ao servidor...",
+// "Executando: list_tickets, get_disk_health..."). Este bloco converte em
+// rótulos amigáveis, humaniza nomes de tools MCP e mantém uma trilha de
+// passos (chips ✓) — em vez do texto único que saltava a cada evento.
+var CHAT_ACTIVITY_MAX_STEPS = 4;
+var chatActivityRoundMax = 0;
+
+// Rótulos humanos das tools MCP (pt-BR, coerente com os status do core).
+// Ferramenta fora do dicionário cai no prettify do nome bruto.
+var CHAT_TOOL_LABELS = {
+  "get_agent_info": "Coletando dados da máquina",
+  "get_inventory": "Coletando inventário",
+  "export_inventory_markdown": "Gerando relatório (Markdown)",
+  "export_inventory_pdf": "Gerando relatório (PDF)",
+  "get_osquery_status": "Verificando osquery",
+  "get_logs": "Lendo logs",
+  "query_event_log": "Consultando eventos do Windows",
+  "list_installed_packages": "Listando programas instalados",
+  "search_packages": "Pesquisando programas",
+  "install_package": "Instalando programa",
+  "uninstall_package": "Desinstalando programa",
+  "upgrade_package": "Atualizando programa",
+  "upgrade_all_packages": "Atualizando todos os programas",
+  "get_pending_updates": "Verificando atualizações",
+  "get_package_actions": "Verificando ações do pacote",
+  "list_printers": "Listando impressoras",
+  "install_printer": "Instalando impressora",
+  "remove_printer": "Removendo impressora",
+  "get_printer_config": "Consultando impressora",
+  "list_print_jobs": "Verificando fila de impressão",
+  "remove_print_job": "Cancelando job de impressão",
+  "spooler_status": "Verificando serviço de impressão",
+  "restart_spooler": "Reiniciando serviço de impressão",
+  "clear_queue": "Limpando fila de impressão",
+  "list_drivers": "Listando drivers",
+  "list_tickets": "Consultando chamados",
+  "get_ticket_details": "Buscando detalhes do chamado",
+  "create_ticket": "Abrindo chamado",
+  "add_ticket_comment": "Comentando no chamado",
+  "ping_host": "Testando conectividade (ping)",
+  "flush_dns": "Limpando cache DNS",
+  "memory/list": "Consultando memórias",
+  "memory/create": "Salvando anotação",
+  "memory/delete": "Removendo anotação",
+  "get_internal_navigation_routes": "Mapeando telas do app",
+  "build_internal_navigation_link": "Criando link interno",
+  "ask_user": "Aguardando sua resposta",
+  "get_performance_snapshot": "Capturando desempenho",
+  "get_top_processes": "Analisando processos",
+  "get_disk_health": "Verificando saúde dos discos",
+  "get_recent_errors": "Buscando erros recentes",
+};
+
+function humanizeToolName(name) {
+  var raw = String(name || "").trim();
+  if (!raw) return "";
+  if (CHAT_TOOL_LABELS[raw]) return CHAT_TOOL_LABELS[raw];
+  // Fallback: "get_top_processes" → "Get top processes"
+  return raw
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^./, function (c) { return c.toUpperCase(); });
+}
+
+// describeChatActivity converte o status cru do core (chat:thinking) em
+// {key, kind} — key: chave i18n do rótulo; kind: connect|plan|tools|compose|
+// rescue|fallback (controla a trilha de passos). Padrões desconhecidos voltam
+// como texto original (kind info).
+function describeChatActivity(status) {
+  var s = String(status || "").trim();
+  if (!s) return null;
+  if (s.indexOf("Conectando ao servidor") === 0) {
+    return { key: "chat.activity.connecting", kind: "connect" };
+  }
+  if (/^Round\s+\d+/.test(s)) {
+    return { key: "chat.activity.planning", kind: "plan" };
+  }
+  if (s.indexOf("Executando:") === 0) {
+    var tools = s
+      .slice("Executando:".length)
+      .replace(/\.+$/, "")
+      .split(",")
+      .map(function (x) { return x.trim(); })
+      .filter(Boolean);
+    return { kind: "tools", tools: tools };
+  }
+  if (s.indexOf("Concluindo ação solicitada") === 0) {
+    return { key: "chat.activity.composing", kind: "compose" };
+  }
+  if (s.indexOf("Reconectando") === 0) {
+    return { key: "chat.activity.rescue", kind: "rescue" };
+  }
+  if (s.indexOf("Alternando para resposta") === 0) {
+    return { key: "chat.activity.fallback", kind: "fallback" };
+  }
+  return { raw: s, kind: "info" };
+}
+
+function buildChatActivityElement() {
+  chatActivityRoundMax = 0;
+  var root = document.createElement("div");
+  root.className = "stream-thinking chat-activity";
+
+  var head = document.createElement("div");
+  head.className = "chat-activity-head";
+  var spinner = document.createElement("span");
+  spinner.className = "chat-activity-spinner";
+  spinner.setAttribute("aria-hidden", "true");
+  head.appendChild(spinner);
+  var label = document.createElement("span");
+  label.className = "chat-activity-label";
+  label.textContent = translate("chat.thinking");
+  head.appendChild(label);
+  root.appendChild(head);
+
+  var steps = document.createElement("div");
+  steps.className = "chat-activity-steps";
+  root.appendChild(steps);
+
+  var pill = document.createElement("span");
+  pill.className = "chat-activity-pill";
+  root.appendChild(pill);
+  return root;
+}
+
+function chatActivityLabelEl(root) {
+  return root ? root.querySelector(".chat-activity-label") : null;
+}
+
+// setChatActivityText atualiza o rótulo do widget; em estruturas antigas
+// (widget ausente), cai para textContent simples.
+function setChatActivityText(root, text) {
+  var el = chatActivityLabelEl(root);
+  if (el) {
+    el.textContent = text || "";
+  } else if (root) {
+    root.textContent = text || "";
+  }
+}
+
+function chatActivityStepsEl(root) {
+  return root ? root.querySelector(".chat-activity-steps") : null;
+}
+
+// pushChatActivityStep move a step "current" anterior para "done" e adiciona
+// a nova. A trilha mantém no máximo CHAT_ACTIVITY_MAX_STEPS concluídos.
+function pushChatActivityStep(root, text, state) {
+  var stepsEl = chatActivityStepsEl(root);
+  if (!stepsEl) return;
+  var prev = stepsEl.querySelector(".chat-step.current");
+  if (prev) {
+    prev.classList.remove("current");
+    prev.classList.add("done");
+    var prevIcon = prev.querySelector(".chat-step-icon");
+    if (prevIcon) prevIcon.textContent = "✓";
+  }
+  var chip = document.createElement("span");
+  chip.className = "chat-step" + (state === "current" ? " current" : " done");
+  var icon = document.createElement("span");
+  icon.className = "chat-step-icon";
+  icon.textContent = state === "current" ? "•" : "✓";
+  chip.appendChild(icon);
+  var name = document.createElement("span");
+  name.className = "chat-step-name";
+  name.textContent = text;
+  name.title = text;
+  chip.appendChild(name);
+  stepsEl.appendChild(chip);
+  var doneChips = stepsEl.querySelectorAll(".chat-step.done");
+  if (doneChips.length > CHAT_ACTIVITY_MAX_STEPS) {
+    stepsEl.removeChild(doneChips[0]);
+  }
+  scheduleChatScrollToBottom();
+}
+
+function updateChatActivityRound(root, round, maxRounds) {
+  var pill = root ? root.querySelector(".chat-activity-pill") : null;
+  if (!pill) return;
+  if (round <= 0) return;
+  var max = maxRounds > 0 ? maxRounds : chatActivityRoundMax;
+  pill.textContent = max > 0
+    ? translate("chat.activity.round", { round: round, max: max })
+    : translate("chat.activity.roundOnly", { round: round });
+  if (maxRounds > 0) chatActivityRoundMax = maxRounds;
+  pill.classList.add("visible");
+}
+
 function onStreamThinking(status) {
   if (document.hidden || window.__discoveryUISuspended) return;
   if (!streamingBubble) return;
   var thinkingEl = streamingBubble.querySelector(".stream-thinking");
   if (!thinkingEl) return;
-  if (!streamingRawContent) {
-    thinkingEl.style.display = "";
+  if (streamingRawContent) return; // resposta começou: activity oculta
+  thinkingEl.style.display = "";
+
+  var desc = describeChatActivity(status);
+  var label = chatActivityLabelEl(thinkingEl);
+  if (!label) {
+    // Estrutura antiga (sem widget): fallback texto simples.
     thinkingEl.textContent = status || translate("chat.thinking");
     scheduleChatScrollToBottom();
+    return;
   }
+  if (!desc) {
+    setChatActivityText(thinkingEl, translate("chat.thinking"));
+    return;
+  }
+  if (desc.raw) {
+    setChatActivityText(thinkingEl, desc.raw);
+    scheduleChatScrollToBottom();
+    return;
+  }
+  if (desc.kind === "tools" && desc.tools && desc.tools.length) {
+    var names = desc.tools.map(humanizeToolName).filter(Boolean);
+    if (!names.length) {
+      setChatActivityText(thinkingEl, translate("chat.activity.planning"));
+      return;
+    }
+    setChatActivityText(
+      thinkingEl,
+      names.length === 1
+        ? translate("chat.activity.executingOne", { tool: names[0] })
+        : translate("chat.activity.executingMany", { count: names.length }),
+    );
+    var shown = names.slice(0, 2).join(", ");
+    if (names.length > 2) shown += " +" + (names.length - 2);
+    pushChatActivityStep(thinkingEl, shown, "current");
+    return;
+  }
+  if (desc.kind === "compose") {
+    setChatActivityText(thinkingEl, translate(desc.key));
+    pushChatActivityStep(thinkingEl, translate("chat.activity.composingStep"), "current");
+    return;
+  }
+  if (desc.kind === "plan") {
+    setChatActivityText(thinkingEl, translate(desc.key));
+    scheduleChatScrollToBottom();
+    return;
+  }
+  setChatActivityText(thinkingEl, translate(desc.key));
+  scheduleChatScrollToBottom();
 }
 
 // onChatLoopProgress recebe o progresso do agent loop emitido pelo servidor
@@ -380,14 +700,14 @@ function onChatLoopProgress(data) {
   if (!payload || typeof payload !== "object") return;
   var round = Number(payload.round) || 0;
   var maxRounds = Number(payload.maxRounds) || 0;
-  if (maxRounds <= 0) return;
+  if (maxRounds <= 0 || round <= 0) return;
+  if (streamingRawContent) return; // resposta começou: activity oculta
   var thinkingEl = streamingBubble.querySelector(".stream-thinking");
   if (!thinkingEl) return;
-  if (!streamingRawContent) {
-    thinkingEl.style.display = "";
-    thinkingEl.textContent = translate("chat.thinking") + " (round " + round + "/" + maxRounds + ")";
-    scheduleChatScrollToBottom();
-  }
+  thinkingEl.style.display = "";
+  // Progresso do agent loop vira uma pill discreta ("Etapa 2 de 10") em vez
+  // de reescrever o rótulo principal — o status corrente permanece visível.
+  updateChatActivityRound(thinkingEl, round, maxRounds);
 }
 
 function finaliseStreamingBubble() {
@@ -450,6 +770,7 @@ function onStreamDone() {
   stopThinkingStatusUpdates();
   clearChatStreamTimeout();
   chatPendingQuestionCount = 0;
+  clearChatBusyRequeue();
   finaliseStreamingBubble();
   chatStopRequested = false;
   setChatBusy(false);
@@ -465,6 +786,30 @@ function onStreamError(errMsg) {
   stopThinkingStatusUpdates();
   clearChatStreamTimeout();
   chatPendingQuestionCount = 0;
+
+  // Recusa do backend por turno em andamento: devolve a mensagem para a fila
+  // em vez de exibir o erro bruto. O turno em curso libera o chat no terminal
+  // dele; o retry em 3s cobre o caso de evento terminal perdido.
+  if (isChatBusyError(errMsg)) {
+    var requeueText = lastDispatchedChatText;
+    if (streamingBubble && !streamingRawContent) {
+      streamingBubble.remove();
+      streamingBubble = null;
+      streamingRawContent = "";
+      resetA2uiTokenFilter();
+    }
+    setChatBusy(false);
+    if (requeueText && chatBusyRequeueAttempts < CHAT_BUSY_REQUEUE_MAX) {
+      chatBusyRequeueAttempts++;
+      console.warn("[chat] send recusado (turno em andamento) — reenfileirado (tentativa " + chatBusyRequeueAttempts + "/" + CHAT_BUSY_REQUEUE_MAX + ")");
+      queueChatMessage(requeueText);
+      scheduleChatBusyRequeue();
+      return;
+    }
+    // Acima do limite de tentativas: segue para o tratamento normal de erro.
+  }
+
+  clearChatBusyRequeue();
 
   if (chatStopRequested) {
     if (streamingBubble && !streamingRawContent) {
@@ -512,6 +857,7 @@ function onStreamStopped() {
   stopThinkingStatusUpdates();
   clearChatStreamTimeout();
   chatPendingQuestionCount = 0;
+  clearChatBusyRequeue();
   if (streamingBubble && !streamingRawContent) {
     streamingRawContent = translate("chat.responseInterrupted");
   }
@@ -545,7 +891,7 @@ function onChatQuestion(data) {
       var thinkingEl = streamingBubble.querySelector(".stream-thinking");
       if (thinkingEl) {
         thinkingEl.style.display = "";
-        thinkingEl.textContent = translate("chat.waitingAnswer");
+        setChatActivityText(thinkingEl, translate("chat.waitingAnswer"));
       }
     }
     showChatQuestion(q);
@@ -666,7 +1012,7 @@ function answerChatQuestion(questionId, answer) {
   // O processamento retomou: volta o indicador para "Pensando...".
   if (streamingBubble && !streamingRawContent) {
     var thinkingEl = streamingBubble.querySelector(".stream-thinking");
-    if (thinkingEl) thinkingEl.textContent = translate("chat.thinking");
+    if (thinkingEl) setChatActivityText(thinkingEl, translate("chat.thinking"));
   }
   try {
     // B15: promise nao aguardada - captura a rejeicao com .catch.
@@ -921,6 +1267,9 @@ function sendChatMessageWithA2uiAction() {
   if (chatSending) return;
 
   chatStopRequested = false;
+  // A sentinela "__a2ui_action__" não é reenfileirável: se o backend recusar,
+  // o fluxo A2UI trata pelo terminal do turno em curso (pendingA2uiAction).
+  lastDispatchedChatText = "";
   setChatBusy(true);
   resetA2uiTokenFilter();
 
@@ -930,9 +1279,8 @@ function sendChatMessageWithA2uiAction() {
   streamingBubble = document.createElement("div");
   streamingBubble.className = "chat-msg assistant streaming";
 
-  var thinkingEl = document.createElement("div");
-  thinkingEl.className = "stream-thinking";
-  thinkingEl.textContent = translate("chat.thinking");
+  // Widget de activity (mesma estrutura do dispatch por mensagem).
+  var thinkingEl = buildChatActivityElement();
   streamingBubble.appendChild(thinkingEl);
 
   var cursorEl = document.createElement("span");
@@ -1752,6 +2100,7 @@ function dispatchChatMessage(text) {
   addChatMessage("user", text);
 
   chatStopRequested = false;
+  lastDispatchedChatText = text;
   setChatBusy(true);
   resetA2uiTokenFilter();
 
@@ -1761,9 +2110,8 @@ function dispatchChatMessage(text) {
   streamingBubble = document.createElement("div");
   streamingBubble.className = "chat-msg assistant streaming";
 
-  var thinkingEl = document.createElement("div");
-  thinkingEl.className = "stream-thinking";
-  thinkingEl.textContent = translate("chat.thinking");
+  // Widget de activity: spinner + rótulo + trilha de passos + pill de etapa.
+  var thinkingEl = buildChatActivityElement();
   streamingBubble.appendChild(thinkingEl);
 
   var cursorEl = document.createElement("span");
