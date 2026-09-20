@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"golang.org/x/sys/windows"
+	xencoding "golang.org/x/text/encoding"
 	"golang.org/x/text/encoding/charmap"
 )
 
@@ -46,9 +47,18 @@ func NewShell(shell string, onOutput func(string)) (*Shell, error) {
 	var cmd *exec.Cmd
 	switch resolvedKind {
 	case ShellPowerShell:
-		cmd = exec.Command("powershell.exe", "-NoLogo", "-NoExit")
+		// Wrapper UTF-8 no spawn legacy (bug 2026-09-20): sem ele, o texto do
+		// PS (erros de parse, cmdlets) saía na code page do console oculto
+		// (OEM/ANSI) com best-fit destrutivo (ã→Æ em CP437) e o typed input
+		// acentuado era decodificado com a OEM CP → mojibake nos dois lados.
+		// [Console]::Output/InputEncoding=UTF8 força o próprio PS a falar
+		// UTF-8 na pipe; chcp 65001 não afeta NATIVOS em pipe (ping continua
+		// OEM — coberto pela decodificação OEM em normalizeToUtf8).
+		cmd = exec.Command("powershell.exe", "-NoLogo", "-NoExit", "-Command",
+			"chcp 65001 >$null; [Console]::OutputEncoding=[System.Text.Encoding]::UTF8; [Console]::InputEncoding=[System.Text.Encoding]::UTF8")
 	default:
-		cmd = exec.Command("cmd.exe")
+		// cmd: chcp 65001 faz o próprio cmd (echo/prompt/erro) emitir UTF-8.
+		cmd = exec.Command("cmd.exe", "/k", "chcp 65001>nul")
 	}
 
 	// Configura pipes
@@ -189,17 +199,65 @@ func (s *Shell) emitChunk(chunk []byte) {
 // "Estat�sticas").
 //
 // Se o trecho já for UTF-8 válido (ex.: ConPTY normaliza para UTF-8, ou o
-// shell já emite UTF-8 após SetConsoleOutputCP(65001)), usamos direto; caso
-// contrário, decodificamos de Windows-1252 (ANSI) e re-encodamos em UTF-8.
+// shell já emite UTF-8 após o wrapper de spawn), usamos direto; caso
+// contrário, decodificamos com a OEM code page real do sistema e, em último
+// caso, Windows-1252.
+//
+// POR QUÊ OEM (bug 2026-09-20 — mojibake "M¡nimo"/"n£mero"/"M‚dia" no ping):
+// nativos Windows (ping.exe etc.) escrevem em pipe usando a OEM code page
+// (GetOEMCP; CP437/CP850 no pt-BR/latino), NÃO a ANSI CP1252 — e "chcp 65001"
+// NÃO muda isso (provado com harness: ping emite \xa1=í, \xa3=ú, \xa0=á,
+// \x82=é mesmo após chcp 65001). Decodificar esses bytes como CP1252 produzia
+// exatamente o mojibake reportado. A codepage correta é a do GetOEMCP().
+// Resíduo conhecido: quando a OEM CP é 437 (sem ã/õ), o Windows best-fit
+// converte ã→Æ no EMISSOR (perda irreversível) — a correção estrutural para o
+// texto do PS é o wrapper UTF-8 do spawn (abaixo), não a decodificação.
 func normalizeToUtf8(b []byte) string {
 	if utf8.Valid(b) {
 		return string(b)
 	}
-	// CP1252 é aproximação da ANSI (cp_ACP) do Windows para pt-BR; cobre os
-	// acentos comuns (á, é, í, ó, ú, ã, õ, ç). Falhas de decodificação viram
-	// "\uFFFD" localmente em vez de propagar bytes inválidos.
+	if dec := oemDecoder(); dec != nil {
+		if decoded, err := dec.String(string(b)); err == nil {
+			return decoded
+		}
+	}
+	// Último recurso: CP1252 (ANSI) — cobre shells que emitem ANSI.
 	decoded, _ := charmap.Windows1252.NewDecoder().String(string(b))
 	return decoded
+}
+
+// procGetOEMCP: kernel32!GetOEMCP — OEM code page do sistema (a usada por
+// nativos escrevendo em pipe).
+var procGetOEMCP = kernel32.NewProc("GetOEMCP")
+
+// systemOEMCodePage retorna a OEM code page do sistema (0 em caso de falha).
+func systemOEMCodePage() uint32 {
+	r1, _, _ := procGetOEMCP.Call()
+	return uint32(r1)
+}
+
+// oemDecoder devolve o decoder para a OEM code page do sistema; nil se a CP
+// não tiver tabela no x/text (aí o chamador cai no fallback CP1252).
+func oemDecoder() *xencoding.Decoder {
+	dec, ok := oemDecoders[systemOEMCodePage()]
+	if !ok {
+		return nil
+	}
+	return dec
+}
+
+// oemDecoders mapeia as OEM code pages de fato suportadas pelo x/text/charmap.
+var oemDecoders = map[uint32]*xencoding.Decoder{
+	437: charmap.CodePage437.NewDecoder(),
+	850: charmap.CodePage850.NewDecoder(),
+	852: charmap.CodePage852.NewDecoder(),
+	855: charmap.CodePage855.NewDecoder(),
+	858: charmap.CodePage858.NewDecoder(),
+	860: charmap.CodePage860.NewDecoder(),
+	862: charmap.CodePage862.NewDecoder(),
+	863: charmap.CodePage863.NewDecoder(),
+	865: charmap.CodePage865.NewDecoder(),
+	866: charmap.CodePage866.NewDecoder(),
 }
 
 // WriteStdin escreve dados no stdin do shell.

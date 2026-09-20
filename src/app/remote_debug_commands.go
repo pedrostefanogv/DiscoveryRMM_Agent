@@ -254,6 +254,15 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 				stopRemoteSessionWorker(sid)
 				return true, 0, "ok", ""
 			}
+			// Injeta o token VIVO em memória no payload do worker (bug
+			// 2026-09-20): o worker lia o token do debug_config.json, que fica
+			// VELHO após a rotação P2P (persistida só no config.json) — o NATS
+			// rejeitava com "Authorization Violation" e a sessão morria no
+			// spawn. O token em memória é a fonte mais fresca; os arquivos
+			// continuam como fallback no próprio worker.
+			if live := strings.TrimSpace(a.DebugSvc.GetConfig().AuthToken); live != "" {
+				parsedPayload["authToken"] = live
+			}
 			if err := spawnRemoteSessionWorker(parent, parsedPayload); err != nil {
 				log.Printf("[remote-session] ERRO: worker não spawnado — sessao %s (%s): %v\n", sid, act, err)
 				return true, 1, "", "remote session sem sessão interativa: " + err.Error()

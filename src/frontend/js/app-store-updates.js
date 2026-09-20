@@ -34,6 +34,17 @@ function onStoreCatalogUpdated(data) {
   function doRegister() {
     if (window.wails && typeof window.wails.on === 'function') {
       window.wails.on('store:catalog-updated', onStoreCatalogUpdated);
+      // Config de debug atualizada (salva na página de Debug ou aplicada pelo
+      // serviço via IPC): a loja pode voltar a funcionar — marca o catálogo
+      // como dirty para recarregar ao ativar a aba (e imediatamente se já
+      // estiver nela). Corrige o erro "configuração de servidor API
+      // incompleta" persistir até fechar e abrir o agent/ui.
+      window.wails.on('debug:config_updated', function () {
+        storeCatalogDirty = true;
+        if (typeof setActiveTab === 'function' && activeTab === 'store' && !window.__discoveryUISuspended && !document.hidden) {
+          loadCatalog();
+        }
+      });
       // Entrega tardia do updates:scan (revisão 4 — bug B8): quando o scan
       // winget/choco no serviço passa do timeout do RPC (10s), o resultado
       // chega por este evento em vez da resposta do GetPendingUpdates.
@@ -338,6 +349,9 @@ async function loadCatalog() {
     applyFilter();
     showFeedback(translate('store.catalogLoaded'));
   } catch (error) {
+    // Falha ao carregar: marca dirty para que reativar a aba da loja tente de
+    // novo (antes o erro ficava travado na tela até fechar e abrir o agente).
+    storeCatalogDirty = true;
     showFeedback(String(error), true);
     infoEl.textContent = translate('store.catalogLoadFailure');
   } finally {

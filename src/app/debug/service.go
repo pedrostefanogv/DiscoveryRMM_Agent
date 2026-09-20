@@ -60,6 +60,12 @@ type Options struct {
 	// HardwareIdentity retorna a identidade de hardware (TPM EK + SMBIOS UUID)
 	// usada como fingerprint na Recuperação de Dispositivos. Pode ser nil.
 	HardwareIdentity func() hardwareid.Info
+	// OnConfigChanged é chamado sempre que a config de conexão muda em memória
+	// (SetConfig, ApplyRuntimeConnectionConfig, segurança remota). Usado pela
+	// App para propagar a config às UIs companion via IPC
+	// ("debug:config_updated") — sem isso, a cópia em memória da UI fica
+	// stale até ser reiniciada. Pode ser nil.
+	OnConfigChanged func(Config)
 }
 
 // Service owns runtime debug configuration and related workflows.
@@ -76,6 +82,7 @@ type Service struct {
 	defaultP2PConfig   func() p2pmeta.Config
 	version            string
 	hardwareIdentity   func() hardwareid.Info
+	onConfigChanged    func(Config)
 }
 
 // NewService builds a debug service with its dependencies.
@@ -95,7 +102,17 @@ func NewService(opts Options) *Service {
 		defaultP2PConfig:   opts.DefaultP2PConfig,
 		version:            strings.TrimSpace(opts.Version),
 		hardwareIdentity:   opts.HardwareIdentity,
+		onConfigChanged:    opts.OnConfigChanged,
 	}
+}
+
+// notifyConfigChanged dispara o callback OnConfigChanged (se configurado)
+// após uma mudança de config em memória. Não dispara para config vazia.
+func (s *Service) notifyConfigChanged(cfg Config) {
+	if s == nil || s.onConfigChanged == nil {
+		return
+	}
+	s.onConfigChanged(cfg)
 }
 
 func installerConfigAllowInsecureTLS(cfg InstallerConfig) bool {
@@ -270,6 +287,7 @@ func (s *Service) ApplyRuntimeConnectionConfig(apiScheme, apiServer, authToken, 
 	s.config = cfg
 	s.mu.Unlock()
 	tlsutil.SetConfigAllowInsecureTLS(cfg.AllowInsecureTLS)
+	s.notifyConfigChanged(cfg)
 }
 
 // ApplyRemoteConnectionSecurity updates TLS pinning and transport hardening values from /me/configuration.
@@ -330,6 +348,7 @@ func (s *Service) ApplyRemoteConnectionSecurity(natsServerHost, natsServerHostIn
 		s.logf("[debug] recarregando conexão após atualização de segurança remota")
 		s.agentConn.Reload()
 	}
+	s.notifyConfigChanged(cfg)
 
 	if persistErr != nil {
 		return true, persistErr
@@ -373,6 +392,7 @@ func (s *Service) ApplyP2PWingetInstallEnabledRemote(enabled *bool) (bool, error
 	}
 	// Não força reload: é uma flag local de comportamento, não de transporte.
 	s.logf(fmt.Sprintf("[p2p-winget] automationP2pWingetInstallEnabled=%t aplicado pela API", *enabled))
+	s.notifyConfigChanged(s.GetConfig())
 	return true, nil
 }
 
@@ -634,7 +654,32 @@ func (s *Service) SetConfig(cfg Config) error {
 		s.agentConn.Reload()
 	}
 	s.logf("[debug] configuração aplicada com sucesso")
+	s.notifyConfigChanged(cfg)
 	return nil
+}
+
+// AdoptExternalConfig adota uma config recebida de outro processo (ex.: o
+// core do serviço, via evento IPC "debug:config_updated" na UI companion).
+// Atualiza SOMENTE a memória — o processo emissor já persistiu o arquivo — e
+// NÃO dispara OnConfigChanged (evita loop de broadcast). Nil-safe.
+func (s *Service) AdoptExternalConfig(cfg Config) {
+	if s == nil {
+		return
+	}
+	cfg.ApiScheme = strings.TrimSpace(strings.ToLower(cfg.ApiScheme))
+	cfg.ApiServer = strings.TrimSpace(cfg.ApiServer)
+	cfg.NatsServer = strings.TrimSpace(cfg.NatsServer)
+	cfg.NatsWsServer = strings.TrimSpace(cfg.NatsWsServer)
+	cfg.AgentID = strings.TrimSpace(cfg.AgentID)
+	cfg.AuthToken = strings.TrimSpace(cfg.AuthToken)
+	normalizeSecurityConfig(&cfg)
+	cfg.normalizeApiScheme()
+
+	s.mu.Lock()
+	s.config = cfg
+	s.mu.Unlock()
+	tlsutil.SetConfigAllowInsecureTLS(cfg.AllowInsecureTLS)
+	s.logf("[debug] config adotada de processo externo (memória, sem persistir)")
 }
 
 // TestConnection tests connectivity to configured servers and returns diagnostic info.

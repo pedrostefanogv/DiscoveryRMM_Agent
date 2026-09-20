@@ -594,6 +594,13 @@ func NewApp(opts AppStartupOptions) *App {
 		ApplyP2PConfig:     a.applyP2PConfig,
 		DefaultP2PConfig:   defaultP2PConfig,
 		Version:            Version,
+		// Propaga mudanças de config de debug para as UIs companion (serviço →
+		// IPC "debug:config_updated") e para o frontend da própria UI quando o
+		// DebugSvc roda no processo da UI. Sem isso a cópia em memória da UI
+		// companion ficava stale ("só resolve fechando e abrindo o agent/ui").
+		OnConfigChanged: func(cfg debug.Config) {
+			a.EmitEvent("debug:config_updated", "config", cfg)
+		},
 		HardwareIdentity: func() hardwareid.Info {
 			if a.HardwareIDSvc == nil {
 				return hardwareid.Info{}
@@ -800,6 +807,14 @@ func NewApp(opts AppStartupOptions) *App {
 		}
 	}
 	a.chatSvc.LoadPersistedConfig()
+	// Carrega o debug_config.json (o que o usuário salvou na página de Debug —
+	// C:\ProgramData\Discovery) ANTES do config de produção. O loader de
+	// produção (ApplyRuntimeConnectionConfig) parte da config atual e sobrescreve
+	// apenas os campos de conexão quando o config.json traz credenciais; quando
+	// o config.json não tem credenciais (bootstrap pendente), o que foi salvo no
+	// Debug sobrevive ao restart em vez de ser perdido (bug da loja de apps:
+	// "configuração de servidor API incompleta" até reiniciar o agente/ui).
+	a.DebugSvc.LoadPersistedConfig()
 	a.DebugSvc.LoadConnectionConfigFromProduction()
 	a.initChatLogger()
 

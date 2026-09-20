@@ -156,6 +156,17 @@ function updateDebugBindHint(bound) {
 function initDebug() {
   var openP2PDebugWindowBtn = document.getElementById('openP2PDebugWindowBtn');
   var openPSADTDebugWindowBtn = document.getElementById('openPSADTDebugWindowBtn');
+
+  // Config de debug atualizada em outro processo (serviço via IPC — SetConfig,
+  // segurança remota, bootstrap): recarrega o formulário para refletir a
+  // config VIVA em vez da cópia stale do boot (evita "só resolve fechando e
+  // abrindo o agent/ui").
+  if (window.wails && typeof window.wails.on === 'function') {
+    window.wails.on('debug:config_updated', function () {
+      loadDebugConfig();
+    });
+  }
+
   if (openP2PDebugWindowBtn) {
     openP2PDebugWindowBtn.addEventListener('click', function () {
       setActiveTab('p2p');
@@ -223,6 +234,13 @@ function initDebug() {
         workflowStatesCache = null;
         workflowStatesCacheKey = '';
         setDebugStatus(translate('debug.savedSuccess'), 'success');
+        // A loja pode voltar a funcionar com a nova config: marca o catálogo
+        // como dirty (o evento debug:config_updated também recarrega quando
+        // chegar — este é o cinto de segurança caso o evento se perca).
+        storeCatalogDirty = true;
+        if (typeof setActiveTab === 'function' && activeTab === 'store' && !window.__discoveryUISuspended && !document.hidden) {
+          loadCatalog();
+        }
         if (typeof syncProvisioningOverlayFromRuntime === 'function') {
           syncProvisioningOverlayFromRuntime();
         }

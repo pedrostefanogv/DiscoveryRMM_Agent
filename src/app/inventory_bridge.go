@@ -7,6 +7,14 @@ import (
 )
 
 func (a *App) GetCatalog() (models.Catalog, error) {
+	// Companion mode (D3): resolve o catálogo NO serviço — ele tem a config de
+	// conexão correta (a cópia da UI pode estar stale) e o cache persistido da
+	// app-store (SQLite 7 dias); a UI não tem DB local. Com a API fora do ar a
+	// loja continua carregando pelo cache do serviço. Em falha de IPC (ex.:
+	// serviço ausente) cai no caminho local (standalone).
+	if catalog, ok := a.getStoreCatalogCompanion(); ok {
+		return catalog, nil
+	}
 	if err := a.requireInventorySvc(); err != nil {
 		return models.Catalog{}, err
 	}

@@ -29,6 +29,12 @@ func (a *App) handleIPCRequest(ctx context.Context, payload map[string]any) map[
 		return a.ipcRPCPendingCounts()
 	case "config:get":
 		return a.ipcRPCConfigGet()
+	case "debug:get":
+		return a.ipcRPCDebugGet()
+	case "debug:set":
+		return a.ipcRPCDebugSet(payload)
+	case "store:catalog":
+		return a.ipcRPCStoreCatalog()
 	case "inventory:snapshot":
 		return a.ipcRPCInventorySnapshot()
 	case "memory:list":

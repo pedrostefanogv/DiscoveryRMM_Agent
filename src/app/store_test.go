@@ -61,6 +61,11 @@ func TestLoadEffectiveAppStorePolicyMergesWingetAndChocolatey(t *testing.T) {
 			_, _ = w.Write([]byte(`{"installationType":"Winget","count":1,"items":[{"installationType":"Winget","packageId":"Google.Chrome","name":"Google Chrome"}]}`))
 		case "Chocolatey":
 			_, _ = w.Write([]byte(`{"installationType":"Chocolatey","count":1,"items":[{"installationType":"Chocolatey","packageId":"googlechrome","name":"Google Chrome"}]}`))
+		case "Custom":
+			// O fetch de Custom é tolerante (o servidor pode não suportar
+			// metadados completos de apps custom): responde vazio em vez de
+			// falhar o teste no handler.
+			_, _ = w.Write([]byte(`{"installationType":"Custom","count":0,"items":[]}`))
 		default:
 			t.Fatalf("installationType inesperado: %s", typ)
 		}

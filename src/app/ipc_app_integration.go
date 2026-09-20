@@ -6,6 +6,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net"
@@ -72,6 +73,13 @@ func (a *App) handleIPCMessage(conn net.Conn, msg IPCMessage) {
 			if act == "stop" {
 				stopRemoteSessionWorker(sid)
 			} else {
+				// Injeta o token VIVO em memória no payload do worker (mesma
+				// correção do caminho NATS — remote_debug_commands): o token do
+				// debug_config.json fica velho após a rotação P2P e o NATS
+				// rejeitava o worker com "Authorization Violation".
+				if live := strings.TrimSpace(a.DebugSvc.GetConfig().AuthToken); live != "" {
+					parsed["authToken"] = live
+				}
 				go func() {
 					if err := spawnRemoteSessionWorker(context.Background(), parsed); err != nil {
 						a.Logs.Append("[ipc] erro ao spawnar remote session worker: " + err.Error())
@@ -244,6 +252,19 @@ func (a *App) startIPCClient() {
 					a.syncTrayVisualState()
 					a.updateTrayMenu()
 					a.updateTrayTooltip()
+				}
+				// Config de debug atualizada no serviço (SetConfig, segurança
+				// remota, bootstrap): adota a config na cópia em memória da UI
+				// para que serviços locais (ex.: loja de apps, suporte) e a
+				// própria página de Debug deixem de estar stale até reiniciar.
+				if name == "debug:config_updated" {
+					if raw, err := json.Marshal(msg.Payload); err == nil {
+						var cfg DebugConfig
+						if err := json.Unmarshal(raw, &cfg); err == nil && a.DebugSvc != nil {
+							a.DebugSvc.AdoptExternalConfig(cfg)
+							a.Logs.Append("[ipc] config de debug adotada do serviço (debug:config_updated)")
+						}
+					}
 				}
 				data := make([]any, 0, len(msg.Payload))
 				for k, v := range msg.Payload {

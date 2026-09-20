@@ -159,7 +159,7 @@ func NewLegacyShell(shell ShellKind, cols, rows int, onOutput func(string)) (ISh
 	// terminal morto mesmo com o shell vivo. Com o aviso, o usuário sabe que
 	// o terminal está vivo: digite o comando e Enter (setas/TAB não funcionam
 	// neste backend — stdin é pipe, sem processamento VT).
-	onOutput("\r\n\x1b[33m" + key + " iniciado em modo compatibilidade (sem ConPTY neste agente).\r\nDigite o comando e pressione Enter — a saída aparece aqui. Setas/histórico/TAB não funcionam neste modo.\x1b[0m\r\n\r\n")
+	onOutput("\r\n\x1b[33m" + key + " iniciado em modo compatibilidade (sem ConPTY neste agente).\r\nEdição local ativa: ↑/↓ histórico, Backspace/Home/End/Delete, clear/cls e Ctrl+L.\r\nTAB e Ctrl+C (interromper execução) não funcionam neste modo.\x1b[0m\r\n\r\n")
 	return s, nil
 }
 

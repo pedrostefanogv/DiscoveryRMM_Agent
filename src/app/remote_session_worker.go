@@ -74,9 +74,22 @@ func RunRemoteSessionWorker() {
 		os.Exit(3)
 	}
 
-	token, err := netutil.NormalizeAgentToken(cfg.AuthToken)
+	// Resolução do token EM CADEIA (bug 2026-09-20 — Authorization Violation):
+	// 1) authToken injetado no payload pelo serviço (token VIVO em memória —
+	//    cobre rotação ainda não persistida);
+	// 2) config.json (persistência canônica da rotação P2P/zero-touch);
+	// 3) debug_config.json (legado — fica velho após a rotação; mantido como
+	//    último recurso para instalações antigas).
+	authToken := strings.TrimSpace(stringAuthTokenFromPayload(cmd))
+	if authToken == "" {
+		authToken = GetInstallerAuthTokenForWorker()
+	}
+	if authToken == "" {
+		authToken = trimSpace(cfg.AuthToken)
+	}
+	token, err := netutil.NormalizeAgentToken(authToken)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "[remote-session-worker] token inválido: %v\n", err)
+		fmt.Fprintf(os.Stderr, "[remote-session-worker] token inválido (%v) — fontes: payload/config.json/debug_config.json\n", err)
 		os.Exit(3)
 	}
 

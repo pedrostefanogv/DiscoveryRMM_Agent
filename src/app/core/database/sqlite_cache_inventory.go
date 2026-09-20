@@ -45,6 +45,30 @@ func (db *DB) CacheGet(key string) ([]byte, error) {
 	return []byte(value), nil
 }
 
+// CacheGetStale recupera um valor do cache IGNORANDO a expiração — sem
+// verificar TTL e sem deletar a entrada. Usado como fallback stale-on-error
+// (ex.: app-store com a API fora do ar serve a última política conhecida
+// mesmo expirada, em vez de falhar). Retorna (nil, nil) quando a chave não
+// existe.
+func (db *DB) CacheGetStale(key string) ([]byte, error) {
+	if err := db.ensureAvailable(); err != nil {
+		return nil, err
+	}
+
+	var value string
+	err := db.conn.QueryRow(
+		"SELECT value FROM cache WHERE key = ?",
+		key,
+	).Scan(&value)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return []byte(value), nil
+}
+
 // CacheSet armazena um valor no cache com TTL opcional (0 = sem expiração)
 func (db *DB) CacheSet(key string, value []byte, ttl time.Duration) error {
 	if err := db.ensureAvailable(); err != nil {

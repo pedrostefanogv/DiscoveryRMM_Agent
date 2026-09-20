@@ -1,5 +1,13 @@
 package app
 
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"time"
+)
+
 func (a *App) GetDebugConfig() DebugConfig {
 	if a == nil || a.DebugSvc == nil {
 		return DebugConfig{}
@@ -10,6 +18,32 @@ func (a *App) GetDebugConfig() DebugConfig {
 func (a *App) SetDebugConfig(cfg DebugConfig) error {
 	if err := a.requireDebugSvc(); err != nil {
 		return err
+	}
+	// Companion mode: o core roda NO serviço — a config é aplicada PRIMEIRO
+	// lá (validação + persistência + reload da conexão do core) e só então
+	// adotada na cópia local da UI. Assim uma rejeição do serviço (ex.:
+	// agentId inválido para NATS) chega à UI como erro, em vez de aplicar
+	// localmente e deixar os dois processos divergentes até reiniciar.
+	// Standalone (sem IPC) aplica localmente como antes.
+	if a.ipcClient != nil {
+		if raw, err := json.Marshal(cfg); err == nil {
+			ctx, cancel := context.WithTimeout(a.ctx, 10*time.Second)
+			resp, reqErr := a.ipcClient.Request(ctx, "debug:set", map[string]any{"config": json.RawMessage(raw)})
+			cancel()
+			if reqErr == nil {
+				a.DebugSvc.AdoptExternalConfig(cfg)
+				return nil
+			}
+			if resp != nil {
+				// O serviço respondeu com erro (validação) — propaga para a UI.
+				if errMsg, _ := resp["error"].(string); strings.TrimSpace(errMsg) != "" {
+					return fmt.Errorf("%s", errMsg)
+				}
+			}
+			// Serviço inacessível (sem resposta): cai no caminho local abaixo
+			// para não bloquear o usuário quando o core está fora do ar.
+			a.Logs.Append("[debug] serviço ausente ao propagar config (debug:set): " + reqErr.Error())
+		}
 	}
 	return a.DebugSvc.SetConfig(cfg)
 }

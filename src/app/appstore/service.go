@@ -253,17 +253,22 @@ func (s *Service) LoadEffectivePolicy(ctx context.Context, forceRefresh bool) (E
 		return EffectivePolicy{}, fmt.Errorf("app store desabilitada pela configuração do agente")
 	}
 
+	// Política persistida expirada (lida uma única vez nesta chamada): guarda
+	// como candidato a fallback stale caso o fetch remoto falhe. A leitura usa
+	// CacheGetStale (não deleta a entrada) — ler com CacheGetJSON apagaria a
+	// entrada expirada e tornaria o fallback stale impossível.
+	var expiredPersisted *EffectivePolicy
 	if !forceRefresh {
 		if cached, ok := s.cache.Get(MemoryCacheTTL); ok {
 			return cached, nil
 		}
-		if s.db != nil && s.db() != nil {
-			var persisted EffectivePolicy
-			found, err := s.db().CacheGetJSON(CacheKey, &persisted)
-			if err == nil && found {
+		if persisted, found := s.readPersistedPolicy(); found {
+			if s.persistedPolicyFresh(persisted) {
 				s.cache.Set(persisted)
 				return persisted, nil
 			}
+			expired := persisted
+			expiredPersisted = &expired
 		}
 	}
 
@@ -279,6 +284,73 @@ func (s *Service) LoadEffectivePolicy(ctx context.Context, forceRefresh bool) (E
 		}
 	}
 
+	policy, fetchErr := s.fetchEffectivePolicy(ctx)
+	if fetchErr != nil {
+		// Stale-on-error: se o fetch remoto falhar (API fora do ar, config
+		// incompleta, timeout), serve a última política conhecida persistida
+		// no SQLite MESMO expirada — a loja continua utilizável offline em vez
+		// de quebrar. A entrada stale não é apagada nem estendida; o próximo
+		// fetch bem-sucedido a substitui normalmente.
+		if expiredPersisted != nil {
+			s.logf(fmt.Sprintf("aviso: fetch da app-store falhou (%v); servindo cache stale do SQLite: %d item(ns), fetchedAt=%s",
+				fetchErr, len(expiredPersisted.Items), expiredPersisted.FetchedAt))
+			s.cache.Set(*expiredPersisted)
+			return *expiredPersisted, nil
+		}
+		if stale, found := s.readPersistedPolicy(); found {
+			s.logf(fmt.Sprintf("aviso: fetch da app-store falhou (%v); servindo cache stale do SQLite: %d item(ns), fetchedAt=%s",
+				fetchErr, len(stale.Items), stale.FetchedAt))
+			s.cache.Set(stale)
+			return stale, nil
+		}
+		return EffectivePolicy{}, fetchErr
+	}
+	return policy, nil
+}
+
+// readPersistedPolicy lê a política persistida no SQLite sem verificar TTL e
+// sem deletar a entrada (CacheGetStale). found=false quando não há DB, a
+// entrada não existe ou o JSON é inválido.
+func (s *Service) readPersistedPolicy() (EffectivePolicy, bool) {
+	if s.db == nil {
+		return EffectivePolicy{}, false
+	}
+	db := s.db()
+	if db == nil {
+		return EffectivePolicy{}, false
+	}
+	data, err := db.CacheGetStale(CacheKey)
+	if err != nil || len(data) == 0 {
+		return EffectivePolicy{}, false
+	}
+	var persisted EffectivePolicy
+	if err := json.Unmarshal(data, &persisted); err != nil {
+		return EffectivePolicy{}, false
+	}
+	if len(persisted.Items) == 0 {
+		return EffectivePolicy{}, false
+	}
+	return persisted, true
+}
+
+// persistedPolicyFresh avalia o frescor da política persistida pelo próprio
+// FetchedAt (a entrada não tem TTL confiável — pode ter sido gravada com TTL
+// expirado ou lida via CacheGetStale). FetchedAt ausente/ilegível é tratado
+// como fresco (comportamento conservador compatível com a leitura antiga).
+func (s *Service) persistedPolicyFresh(persisted EffectivePolicy) bool {
+	if strings.TrimSpace(persisted.FetchedAt) == "" {
+		return true
+	}
+	fetchedAt, err := time.Parse(time.RFC3339, persisted.FetchedAt)
+	if err != nil {
+		return true
+	}
+	return time.Since(fetchedAt) < SQLiteCacheTTL
+}
+
+// fetchEffectivePolicy baixa winget+chocolatey (custom tolerante), monta a
+// política efetiva e persiste no cache de memória + SQLite.
+func (s *Service) fetchEffectivePolicy(ctx context.Context) (EffectivePolicy, error) {
 	results := make([]Response, 0, 3)
 	for _, installationType := range []InstallationType{InstallationWinget, InstallationChocolatey} {
 		payload, err := s.FetchByInstallationType(ctx, installationType)
