@@ -15,6 +15,27 @@ import (
 // InputVersion define o contrato canônico de input (v1).
 const InputVersion = 1
 
+// Pontos de injeção (vars, não chamadas diretas): permitem stub nos testes
+// sem alterar o pacote screen.
+var (
+	injectKeyDown    = screen.InjectKeyDown
+	injectKeyUp      = screen.InjectKeyUp
+	injectMouseMove  = screen.InjectMouseMove
+	injectMouseLeft  = screen.InjectMouseClickLeft
+	injectMouseRight = screen.InjectMouseClickRight
+	injectMouseWheel = screen.InjectMouseWheel
+)
+
+// Watchdog de teclas presas: uma tecla "down" sem NENHUM evento de teclado
+// por keyStuckTimeout é liberada (keyup injetado). O browser emite keydown
+// repetido (~30/s) enquanto a tecla está segurada, então silêncio prolongado
+// com tecla "down" só acontece quando o keyup se perde (viewer fechado, foco
+// migrou para input local, queda de rede). Vars para os testes encurtarem.
+var (
+	keyStuckTimeout = 2 * time.Second
+	keyWatchdogTick = 500 * time.Millisecond
+)
+
 // InputEvent representa um evento de input do viewer (contrato canônico v1).
 type InputEvent struct {
 	Version     int            `json:"version"`
@@ -50,11 +71,28 @@ type InputController struct {
 	capW, capH     int // dimensões da captura real (virtual desktop)
 	rateLimiter    *rateLimiter
 
-	// Teclas atualmente pressionadas (dedup de key-repeat).
-	// O browser dispara keydown repetidamente (auto-repeat) enquanto a tecla
-	// está pressionada; sem dedup, o agent injeta repetição excessiva ou
-	// teclas "presas" na máquina remota.
-	keysDown map[string]struct{}
+	// Teclas logicamente pressionadas (keyID → VK). NÃO é mais filtro de
+	// key-repeat: os repeats do browser são REPASSADOS ao remoto (ver
+	// handleKey). O mapa existe para o watchdog liberar teclas "presas"
+	// (keyup perdido em queda de conexão / foco perdido no viewer) e para
+	// liberar tudo no encerramento da sessão (Close).
+	keysDown map[string]uint16
+
+	// Modificadores (Ctrl/Alt/Shift/Win) atualmente INJETADOS como down.
+	// Sincronizados com os flags do evento (syncModifiers): injeta uma única
+	// vez antes da tecla (repeats não re-injetam) e libera quando os flags
+	// deixam de indicar o modificador ou no keyup da própria tecla.
+	modsActive map[uint16]bool
+
+	// Último evento de teclado recebido — base do watchdog de teclas presas:
+	// tecla "down" sem nenhum evento por > keyStuckTimeout (viewer fechou /
+	// foco migrou para input local / keyup perdido na rede) é liberada.
+	lastKeyActivity time.Time
+
+	keyWatchdogStop chan struct{}
+	keyWatchdogDone chan struct{} // fechado quando watchdogLoop sai (Close aguarda)
+	closeOnce       sync.Once
+	closed          bool
 
 	// Eventos por segundo (leaky bucket)
 	lastEventTime time.Time
@@ -98,11 +136,84 @@ func (c *InputController) SetNetstatsHandler(fn func(rttMs, recvKbps float64, re
 
 // NewInputController cria um controlador de input.
 func NewInputController(sessionID string) *InputController {
-	return &InputController{
-		sessionID:     sessionID,
-		maxEventsPerS: 300,
-		keysDown:      make(map[string]struct{}),
+	c := &InputController{
+		sessionID:       sessionID,
+		maxEventsPerS:   300,
+		keysDown:        make(map[string]uint16),
+		modsActive:      make(map[uint16]bool),
+		keyWatchdogStop: make(chan struct{}),
+		keyWatchdogDone: make(chan struct{}),
 	}
+	go c.watchdogLoop()
+	return c
+}
+
+// Close encerra o watchdog e libera qualquer tecla/modificador que tenha
+// ficado pressionado no remoto (ex.: viewer fechou com a tecla segurada).
+// Idempotente.
+func (c *InputController) Close() {
+	c.closeOnce.Do(func() {
+		c.mu.Lock()
+		c.closed = true
+		c.mu.Unlock()
+		close(c.keyWatchdogStop)
+		<-c.keyWatchdogDone // watchdog parado antes da liberação final
+		c.releaseAllKeys("sessão encerrada")
+	})
+}
+
+// watchdogLoop verifica periodicamente se há teclas presas.
+func (c *InputController) watchdogLoop() {
+	defer close(c.keyWatchdogDone)
+	ticker := time.NewTicker(keyWatchdogTick)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-c.keyWatchdogStop:
+			return
+		case <-ticker.C:
+			c.mu.Lock()
+			hasDown := len(c.keysDown) > 0 || len(c.modsActive) > 0
+			stale := !c.lastKeyActivity.IsZero() && time.Since(c.lastKeyActivity) >= keyStuckTimeout
+			c.mu.Unlock()
+			if hasDown && stale {
+				c.releaseAllKeys("watchdog keyup perdido")
+			}
+		}
+	}
+}
+
+// releaseAllKeys injeta keyup para todas as teclas/modificadores marcados
+// como pressionados e limpa o estado.
+func (c *InputController) releaseAllKeys(reason string) {
+	c.mu.Lock()
+	if len(c.keysDown) == 0 && len(c.modsActive) == 0 {
+		c.mu.Unlock()
+		return
+	}
+	down := make([]uint16, 0, len(c.keysDown))
+	for _, vk := range c.keysDown {
+		down = append(down, vk)
+	}
+	mods := make([]uint16, 0, len(c.modsActive))
+	for vk := range c.modsActive {
+		mods = append(mods, vk)
+	}
+	c.keysDown = make(map[string]uint16)
+	c.modsActive = make(map[uint16]bool)
+	c.mu.Unlock()
+
+	for _, vk := range mods {
+		if err := injectKeyUp(vk); err != nil {
+			c.logInputFailure(fmt.Sprintf("key up modificador (%s) VK=0x%X", reason, vk), err)
+		}
+	}
+	for _, vk := range down {
+		if err := injectKeyUp(vk); err != nil {
+			c.logInputFailure(fmt.Sprintf("key up (%s) VK=0x%X", reason, vk), err)
+		}
+	}
+	log.Printf("[input-controller] %s: %d tecla(s) e %d modificador(es) liberados", reason, len(down), len(mods))
 }
 
 // UpdateFrameMetrics atualiza dimensões do frame e captura para normalização.
@@ -117,6 +228,13 @@ func (c *InputController) UpdateFrameMetrics(frameW, frameH, capW, capH int) {
 
 // HandleInput processa um evento de input raw do viewer.
 func (c *InputController) HandleInput(data []byte) {
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return
+	}
+	c.mu.Unlock()
+
 	// Anexa o thread ao input desktop ativo ANTES de injetar. Sem isso, o
 	// SendInput falha com Acesso negado (UIPI) quando o desktop mudou desde a
 	// criação do thread (UAC/secure desktop, lock screen, logon) — o thread
@@ -124,11 +242,6 @@ func (c *InputController) HandleInput(data []byte) {
 	// Erro é não-fatal: em desktop normal o thread já está no desktop certo.
 	if _, err := screen.CheckDesktopSwitch(); err != nil {
 		log.Printf("[input-controller] aviso desktop switch: %v", err)
-	}
-
-	// Rate limit
-	if !c.checkRateLimit() {
-		return
 	}
 
 	var evt InputEvent
@@ -150,8 +263,11 @@ func (c *InputController) HandleInput(data []byte) {
 		return
 	}
 
-	log.Printf("[input-controller] recebido: type=%s x=%d y=%d button=%d deltaX=%d deltaY=%d",
-		evt.Type, evt.X, evt.Y, evt.Button, evt.DeltaX, evt.DeltaY)
+	// Rate limit — key.up NUNCA é descartado: um keyup perdido deixa a tecla
+	// "presa" (logicamente down) no remoto até o watchdog agir.
+	if !c.checkRateLimit(evt.Type == "key.up") {
+		return
+	}
 
 	// Dedup por sequência
 	c.mu.Lock()
@@ -161,6 +277,16 @@ func (c *InputController) HandleInput(data []byte) {
 	}
 	c.lastSeq = evt.Sequence
 	c.mu.Unlock()
+
+	// Log seletivo: mousemove (~60/s) e key.down/key.up durante hold
+	// (auto-repeat ~30/s) inundariam o log — eventos de alta frequência são
+	// silenciosos; eventos raros (cliques, wheel, clipboard) são logados.
+	switch evt.Type {
+	case "mouse.move", "key.down", "key.up":
+	default:
+		log.Printf("[input-controller] recebido: type=%s x=%d y=%d button=%d deltaX=%d deltaY=%d",
+			evt.Type, evt.X, evt.Y, evt.Button, evt.DeltaX, evt.DeltaY)
+	}
 
 	switch evt.Type {
 	case "mouse.move":
@@ -195,7 +321,7 @@ func (c *InputController) handleMouseMove(evt *InputEvent) {
 	absX := int32(float64(evt.X) / float64(fw) * 65535)
 	absY := int32(float64(evt.Y) / float64(fh) * 65535)
 
-	if err := screen.InjectMouseMove(absX, absY); err != nil {
+	if err := injectMouseMove(absX, absY); err != nil {
 		c.logInputFailure("mouse move", err)
 	}
 }
@@ -203,13 +329,13 @@ func (c *InputController) handleMouseMove(evt *InputEvent) {
 func (c *InputController) handleMouseClick(evt *InputEvent, down bool) {
 	switch evt.Button {
 	case 0:
-		if err := screen.InjectMouseClickLeft(down); err != nil {
+		if err := injectMouseLeft(down); err != nil {
 			c.logInputFailure(fmt.Sprintf("click esquerdo (down=%t)", down), err)
 		}
 	case 1:
 		// Botão do meio — não implementado ainda
 	case 2:
-		if err := screen.InjectMouseClickRight(down); err != nil {
+		if err := injectMouseRight(down); err != nil {
 			c.logInputFailure(fmt.Sprintf("click direito (down=%t)", down), err)
 		}
 	}
@@ -220,78 +346,144 @@ func (c *InputController) handleMouseWheel(evt *InputEvent) {
 	if delta == 0 {
 		delta = int16(evt.DeltaX)
 	}
-	if err := screen.InjectMouseWheel(delta); err != nil {
+	if err := injectMouseWheel(delta); err != nil {
 		c.logInputFailure("mouse wheel", err)
 	}
 }
 
+// handleKey processa um evento de teclado do viewer (formato v1 e legado).
+//
+// Auto-repeat: o browser dispara keydown repetido enquanto a tecla está
+// pressionada (~30/s após o delay inicial, cadência das configurações de
+// teclado do SO do viewer). Os repeats são REPASSADOS ao remoto — cada um
+// injeta um SendInput down, produzindo o comportamento esperado de "segurar
+// a tecla" (backspace apagando continuamente, espaço/letras repetindo). O
+// Windows NÃO auto-repete um SendInput down solitário, então repassar os
+// repeats do viewer é o mecanismo de repetição — mesmo padrão de VNC e
+// MeshCentral. O mapa keysDown NÃO filtra mais repeats; serve apenas ao
+// watchdog de teclas presas e à liberação no Close.
 func (c *InputController) handleKey(code, key string, down bool, mods InputModifiers) {
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return
+	}
+	c.mu.Unlock()
+
 	vk := mapBrowserCodeToVK(code, key)
 	if vk == 0 {
 		return
 	}
 
-	// Dedup de key-repeat (K2): o browser dispara keydown repetido enquanto a
-	// tecla está pressionada (auto-repeat). Ignora keydown repetido da mesma
-	// tecla sem keyup intermediário — evita repetição excessiva e teclas
-	// "presas" na máquina remota.
 	keyID := fmt.Sprintf("%s|%s", code, key)
 	if keyID == "|" {
 		keyID = fmt.Sprintf("vk:%d", vk)
 	}
+
+	// Se a própria tecla é um modificador (Ctrl/Alt/Shift/Win), NÃO aplica os
+	// mods do evento separadamente — senão injetaria a tecla duas vezes. O
+	// estado do modificador é gerenciado pelos PRÓPRIOS eventos da tecla.
+	isModifier := vk == VK_CONTROL || vk == VK_MENU || vk == VK_SHIFT || vk == VK_LWIN
+
 	c.mu.Lock()
+	c.lastKeyActivity = time.Now()
 	if down {
-		if _, already := c.keysDown[keyID]; already {
-			c.mu.Unlock()
-			return // key-repeat: ignora
-		}
-		c.keysDown[keyID] = struct{}{}
+		c.keysDown[keyID] = vk
 	} else {
 		delete(c.keysDown, keyID)
 	}
 	c.mu.Unlock()
 
-	// Se a própria tecla é um modificador (Ctrl/Alt/Shift/Win), NÃO aplica o
-	// modificador separadamente — senão injeta a tecla duas vezes (ex: Ctrl
-	// pressionado → applyModifier(VK_CONTROL) + InjectKeyDown(VK_CONTROL)).
-	// O vk já cobre o modificador; os mods são para combinações (ex: Ctrl+C).
-	isModifier := vk == VK_CONTROL || vk == VK_MENU || vk == VK_SHIFT || vk == VK_LWIN
-
-	if !isModifier {
-		// Aplica modificadores antes da tecla
-		if mods.Ctrl {
-			applyModifier(VK_CONTROL, down)
+	if isModifier {
+		c.mu.Lock()
+		already := c.modsActive[vk]
+		if down && !already {
+			c.modsActive[vk] = true
 		}
-		if mods.Alt {
-			applyModifier(VK_MENU, down)
+		if !down {
+			delete(c.modsActive, vk)
 		}
-		if mods.Shift {
-			applyModifier(VK_SHIFT, down)
+		c.mu.Unlock()
+		// Auto-repeat do modificador (segurar Shift): o estado "down" já
+		// persiste no Windows — repetir a injeção não é necessário.
+		if down && already {
+			return
 		}
-		if mods.Meta {
-			applyModifier(VK_LWIN, down)
-		}
+	} else if down {
+		// Injeta os modificadores indicados pelos flags e ainda não injetados
+		// — UMA vez (repeats da tecla não re-injetam, evitando thrash
+		// down/up de modificador durante o hold).
+		c.syncModifiers(mods, true)
 	}
 
 	if down {
-		if err := screen.InjectKeyDown(vk); err != nil {
+		if err := injectKeyDown(vk); err != nil {
 			c.logInputFailure(fmt.Sprintf("key down VK=0x%X", vk), err)
 		}
 	} else {
-		if err := screen.InjectKeyUp(vk); err != nil {
+		if err := injectKeyUp(vk); err != nil {
 			c.logInputFailure(fmt.Sprintf("key up VK=0x%X", vk), err)
+		}
+		if !isModifier {
+			// Libera modificadores injetados que os flags do keyup indicam
+			// como não mais pressionados fisicamente (os flags refletem o
+			// estado real no momento do evento). Modificadores ainda
+			// pressionados permanecem até o keyup da própria tecla.
+			c.syncModifiers(mods, false)
 		}
 	}
 }
 
-func applyModifier(vk uint16, down bool) {
+// syncModifiers alinha o estado de modificadores INJETADOS com o estado
+// físico reportado pelo viewer (flags do evento). down=true injeta os
+// desejados que ainda não estão; down=false libera os injetados que deixaram
+// de ser desejados.
+func (c *InputController) syncModifiers(mods InputModifiers, down bool) {
+	desired := make(map[uint16]bool, 4)
+	if mods.Ctrl {
+		desired[VK_CONTROL] = true
+	}
+	if mods.Alt {
+		desired[VK_MENU] = true
+	}
+	if mods.Shift {
+		desired[VK_SHIFT] = true
+	}
+	if mods.Meta {
+		desired[VK_LWIN] = true
+	}
+
+	c.mu.Lock()
+	var toInject, toRelease []uint16
 	if down {
-		if err := screen.InjectKeyDown(vk); err != nil {
-			log.Printf("[input-controller] modificador (down) VK=0x%X falhou: %v", vk, err)
+		for vk := range desired {
+			if !c.modsActive[vk] {
+				toInject = append(toInject, vk)
+			}
 		}
 	} else {
-		if err := screen.InjectKeyUp(vk); err != nil {
-			log.Printf("[input-controller] modificador (up) VK=0x%X falhou: %v", vk, err)
+		for vk := range c.modsActive {
+			if !desired[vk] {
+				toRelease = append(toRelease, vk)
+			}
+		}
+	}
+	for _, vk := range toInject {
+		c.modsActive[vk] = true
+	}
+	for _, vk := range toRelease {
+		delete(c.modsActive, vk)
+	}
+	c.mu.Unlock()
+
+	for _, vk := range toInject {
+		if err := injectKeyDown(vk); err != nil {
+			c.logInputFailure(fmt.Sprintf("key down modificador VK=0x%X", vk), err)
+		}
+	}
+	for _, vk := range toRelease {
+		if err := injectKeyUp(vk); err != nil {
+			c.logInputFailure(fmt.Sprintf("key up modificador VK=0x%X", vk), err)
 		}
 	}
 }
@@ -304,11 +496,11 @@ func (c *InputController) handleLegacyInput(data []byte) {
 	}
 
 	typ, _ := raw["type"].(string)
-	// Loga apenas eventos de clique/teclado/scroll — mousemove é muito
-	// frequente (~60/s) e inundaria o log com dezenas de milhares de linhas.
+	// Loga apenas eventos raros — mousemove (~60/s), keydown/keyup durante
+	// hold (auto-repeat ~30/s) e netstats (2s) são silenciosos para não
+	// inundar o log com dezenas de milhares de linhas idênticas por minuto.
 	// O payload completo também é omitido (só o tipo), para reduzir I/O.
-	// netstats (2s) também é silencioso — telemetria de rede do viewer.
-	if typ != "mousemove" && typ != "netstats" {
+	if typ != "mousemove" && typ != "netstats" && typ != "keydown" && typ != "keyup" {
 		log.Printf("[input-controller] legado: type=%s", typ)
 	}
 
@@ -318,6 +510,12 @@ func (c *InputController) handleLegacyInput(data []byte) {
 		recvKbps, _ := toFloat64(raw["recvKbps"])
 		recvFrames, _ := toFloat64(raw["recvFrames"])
 		c.netstatsHandler(rttMs, recvKbps, int(recvFrames))
+		return
+	}
+
+	// Rate limit — keyup NUNCA é descartado: um keyup perdido deixa a tecla
+	// "presa" (logicamente down) no remoto até o watchdog agir.
+	if typ != "keyup" && !c.checkRateLimit(false) {
 		return
 	}
 
@@ -429,12 +627,17 @@ func (c *InputController) handleMouseMoveNormalized(x, y int) {
 	if absY > 65535 {
 		absY = 65535
 	}
-	if err := screen.InjectMouseMove(absX, absY); err != nil {
+	if err := injectMouseMove(absX, absY); err != nil {
 		log.Printf("[input-controller] InjectMouseMove falhou (absX=%d absY=%d): %v", absX, absY, err)
 	}
 }
 
-func (c *InputController) checkRateLimit() bool {
+// checkRateLimit controla o budget de eventos/s. bypass=true (key.up) sempre
+// passa — descartar um keyup deixaria a tecla presa no remoto.
+func (c *InputController) checkRateLimit(bypass bool) bool {
+	if bypass {
+		return true
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 

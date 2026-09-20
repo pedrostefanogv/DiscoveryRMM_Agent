@@ -660,6 +660,13 @@ func (s *SessionScreen) Stop() {
 		}
 	}
 	<-s.doneCh // aguarda loop terminar
+
+	// Libera teclas/modificadores que tenham ficado "presas" no remoto
+	// (viewer fechou com a tecla segurada e o keyup nunca chegou) e encerra
+	// o watchdog do input controller. Idempotente.
+	if s.inputCtrl != nil {
+		s.inputCtrl.Close()
+	}
 }
 
 // getEncoder retorna o encoder atual thread-safe.
