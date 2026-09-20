@@ -3,6 +3,7 @@
 package native
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"syscall"
@@ -12,6 +13,41 @@ import (
 	"github.com/go-ole/go-ole/oleutil"
 )
 
+// HRESULTs relevantes à inicialização do COM.
+const (
+	hresultSFalse             uintptr = 0x00000001 // COM já inicializado neste thread
+	hresultRPC_E_CHANGED_MODE uintptr = 0x80010106 // thread já inicializado em outro apartment
+)
+
+// comInitializeMTA inicializa o COM como MTA no thread atual.
+//
+//	RPC_E_CHANGED_MODE NÃO é erro fatal: o thread já foi inicializado em
+//	outro apartment (STA — webview2/Wails, go-toast, etc. no mesmo processo)
+//	e o COM é usável do mesmo jeito; nesse caso NÃO chamamos CoUninitialize
+//	(desbalancearia a inicialização de outra biblioteca).
+//
+// Antes, qualquer erro que não fosse "S_FALSE" textual abortava wmiQuery —
+// e TODAS as consultas WMI do agente falhavam silenciosamente (memória,
+// GPU, CPUInfo, motherboard/BIOS, fabricante…), pois os coletores usam
+// `if rows, err := wmiQuery(...); err == nil`.
+func comInitializeMTA() (needsUninit bool, err error) {
+	err = ole.CoInitializeEx(0, ole.COINIT_MULTITHREADED)
+	if err == nil {
+		return true, nil
+	}
+	var oleErr *ole.OleError
+	if errors.As(err, &oleErr) {
+		switch oleErr.Code() {
+		case hresultSFalse:
+			// Refcount incrementado — deve balancear com CoUninitialize.
+			return true, nil
+		case hresultRPC_E_CHANGED_MODE:
+			return false, nil
+		}
+	}
+	return false, err
+}
+
 // wmiQuery executes a WQL query against the given WMI namespace and returns
 // the rows as a slice of maps (property name -> value). It uses COM via
 // go-ole, avoiding any PowerShell subprocess.
@@ -19,14 +55,15 @@ import (
 // The returned values are normalized: strings become string, numbers become
 // int64/float64, and nil becomes "".
 func wmiQuery(namespace, query string) ([]map[string]any, error) {
-	// CoInitializeEx returns S_FALSE (0x00000001) when COM is already
-	// initialized on this thread, which is not an error.
-	if err := ole.CoInitializeEx(0, ole.COINIT_MULTITHREADED); err != nil {
-		if err.Error() != "S_FALSE" && err.Error() != "The operation completed successfully." {
-			return nil, fmt.Errorf("CoInitializeEx: %w", err)
-		}
+	// Ver comInitializeMTA: S_OK/S_FALSE exigem CoUninitialize;
+	// RPC_E_CHANGED_MODE usa o COM já ativo do thread sem CoUninitialize.
+	needsUninit, err := comInitializeMTA()
+	if err != nil {
+		return nil, fmt.Errorf("CoInitializeEx: %w", err)
 	}
-	defer ole.CoUninitialize()
+	if needsUninit {
+		defer ole.CoUninitialize()
+	}
 
 	unknown, err := oleutil.CreateObject("WbemScripting.SWbemLocator")
 	if err != nil {
@@ -91,31 +128,36 @@ func wmiQuery(namespace, query string) ([]map[string]any, error) {
 			continue
 		}
 
-		propCountRaw, err := oleutil.GetProperty(props, "Count")
-		if err != nil {
-			props.Release()
-			item.Release()
-			continue
-		}
-		propCount := int(propCountRaw.Val)
-
-		row := make(map[string]any, propCount)
-		for j := 0; j < propCount; j++ {
-			propRaw, err := oleutil.CallMethod(props, "ItemIndex", j)
-			if err != nil {
-				continue
-			}
-			prop := propRaw.ToIDispatch()
+		// IMPORTANTE: SWbemPropertySet NÃO suporta ItemIndex (só Item por
+		// nome). Antes o CallMethod("ItemIndex", j) falhava silenciosamente
+		// (continue) e TODA linha saía com 0 propriedades — memória, GPU,
+		// CPUInfo, motherboard/BIOS, impressoras etc. sempre vazias.
+		// oleutil.ForEach resolve o _NewEnum/IEnumVARIANT internamente.
+		row := make(map[string]any, 16)
+		enumErr := oleutil.ForEach(props, func(propVar *ole.VARIANT) error {
+			prop := propVar.ToIDispatch()
 			if prop == nil {
-				continue
+				return nil
 			}
-			nameRaw, err := oleutil.GetProperty(prop, "Name")
-			valRaw, err2 := oleutil.GetProperty(prop, "Value")
-			if err == nil && err2 == nil {
+			nameRaw, nameErr := oleutil.GetProperty(prop, "Name")
+			valRaw, valErr := oleutil.GetProperty(prop, "Value")
+			if nameErr == nil && valErr == nil {
 				name := nameRaw.ToString()
 				row[name] = normalizeWMIValue(valRaw)
 			}
+			if nameRaw != nil {
+				nameRaw.Clear()
+			}
+			if valRaw != nil {
+				valRaw.Clear()
+			}
 			prop.Release()
+			return nil
+		})
+		if enumErr != nil {
+			props.Release()
+			item.Release()
+			continue
 		}
 
 		props.Release()

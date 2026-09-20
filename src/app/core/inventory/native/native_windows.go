@@ -50,6 +50,12 @@ func (windowsCollector) CollectPrinters(ctx context.Context) ([]models.PrinterIn
 	return collectPrintersNative(ctx)
 }
 
+// CollectMonitors returns attached monitors via WmiMonitorID (PowerShell —
+// arrays uint16 do WMI não são decodificáveis baratamente via COM).
+func (windowsCollector) CollectMonitors(ctx context.Context) ([]models.MonitorInfo, error) {
+	return collectMonitorsNative(ctx)
+}
+
 // CollectHardware returns motherboard, BIOS, GPU, memory and CPU details via
 // WMI (COM) and native APIs.
 func (windowsCollector) CollectHardware(ctx context.Context) (models.HardwareInfo, []models.MemoryModule, []models.GPUInfo, []models.CPUInfo, []models.CPUFeature, error) {

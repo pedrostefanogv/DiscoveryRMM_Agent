@@ -242,6 +242,14 @@ func (p *Provider) collectWithNative(ctx context.Context) (models.InventoryRepor
 		printers = nil
 	}
 
+	// Monitores: best-effort via WmiMonitorID (PowerShell — arrays uint16 do
+	// WMI não são decodificáveis baratamente via COM).
+	monitors, monitorsErr := p.native.CollectMonitors(ctx)
+	if monitorsErr != nil {
+		log.Printf("[inventory] coleta de monitores indisponível (native): %v", monitorsErr)
+		monitors = nil
+	}
+
 	// Media types for volumes/disks.
 	mediaTypes := p.native.CollectDiskMediaTypes(ctx)
 	for i := range volumes {
@@ -296,6 +304,7 @@ func (p *Provider) collectWithNative(ctx context.Context) (models.InventoryRepor
 		CPUInfo:        cpus,
 		CPUFeatures:    cpuFeatures,
 		MemoryModules:  memoryModules,
+		Monitors:       monitors,
 		GPUs:           gpus,
 		Volumes:        volumes,
 		PhysicalDisks:  physicalDisks,

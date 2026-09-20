@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -29,6 +30,10 @@ const (
 	knowledgeMaxBodyBytes = 8 << 20
 	// knowledgeDetailWorkers: paralelismo máximo no enriquecimento de conteúdo.
 	knowledgeDetailWorkers = 4
+	// Paginação keyset da listagem: página padrão da API (clampada 1–500 lá)
+	// e teto de páginas por carga (50 × 200 = 10k artigos) contra loop/runaway.
+	knowledgeListPageSize = 200
+	knowledgeMaxPages     = 50
 )
 
 // kbHTTPClient é reutilizado entre requisições (reuso de conexões TLS em vez
@@ -153,6 +158,40 @@ func parseKnowledgeArticle(raw map[string]any) KnowledgeArticle {
 		tags = parseTagsFromJSON(raw["tagsJson"])
 	}
 
+	// Author: o endpoint do agent expõe createdBy/lastEditedBy — o campo
+	// "author" nunca existiu no DTO (AgentKnowledgeArticleDto), então o
+	// autor ficava sempre vazio na UI do agent.
+	author := strings.TrimSpace(extractStr(raw, "author"))
+	if author == "" {
+		author = strings.TrimSpace(extractStr(raw, "createdBy"))
+	}
+	if author == "" {
+		author = strings.TrimSpace(extractStr(raw, "lastEditedBy"))
+	}
+
+	// Scope: o DTO plano não tem "scope" — deriva de scopeOrigin (legado) ou,
+	// na falta deste, de clientId/siteId (herança site > client > global).
+	scope := strings.TrimSpace(extractStr(raw, "scope"))
+	if scope == "" {
+		switch strings.ToLower(strings.TrimSpace(extractStr(raw, "scopeOrigin"))) {
+		case "client":
+			scope = "Client"
+		case "site":
+			scope = "Site"
+		case "global":
+			scope = "Global"
+		default:
+			switch {
+			case strings.TrimSpace(extractStr(raw, "siteId")) != "":
+				scope = "Site"
+			case strings.TrimSpace(extractStr(raw, "clientId")) != "":
+				scope = "Client"
+			default:
+				scope = "Global"
+			}
+		}
+	}
+
 	article := KnowledgeArticle{
 		ID:          extractStr(raw, "id"),
 		Title:       extractStr(raw, "title"),
@@ -160,14 +199,16 @@ func parseKnowledgeArticle(raw map[string]any) KnowledgeArticle {
 		Summary:     extractStr(raw, "summary"),
 		Content:     extractStr(raw, "content"),
 		Tags:        tags,
-		Author:      extractStr(raw, "author"),
-		Scope:       extractStr(raw, "scope"),
+		Author:      author,
+		Scope:       scope,
 		PublishedAt: extractStr(raw, "publishedAt"),
 		Difficulty:  extractStr(raw, "difficulty"),
 		UpdatedAt:   extractStr(raw, "updatedAt"),
-		ParentID:    extractStr(raw, "parentId"),
-		SortOrder:   toInt(raw["sortOrder"]),
-		IsPage:      toBool(raw["isPage"]),
+		ParentID:      extractStr(raw, "parentId"),
+		SortOrder:     toInt(raw["sortOrder"]),
+		IsPage:        toBool(raw["isPage"]),
+		Status:        extractStr(raw, "status"),
+		VersionNumber: toInt(raw["currentVersionNumber"]),
 	}
 
 	if article.Summary == "" {
@@ -195,21 +236,33 @@ func parseKnowledgeArticle(raw map[string]any) KnowledgeArticle {
 	return article
 }
 
-func parseKnowledgeListBody(body []byte) ([]KnowledgeArticle, error) {
+// knowledgeListPage é o resultado parseado da listagem: artigos + metadados
+// de paginação keyset (cursor opaco da API).
+type knowledgeListPage struct {
+	Articles   []KnowledgeArticle
+	NextCursor string
+	HasMore    bool
+}
+
+// parseKnowledgeListEnvelope aceita os formatos que a API pode devolver:
+//   - array direto (respostas antigas, sem paginação);
+//   - envelope {"items": [...], "nextCursor": "...", "hasMore": true}.
+func parseKnowledgeListEnvelope(body []byte) (knowledgeListPage, error) {
 	var direct []map[string]any
 	if err := json.Unmarshal(body, &direct); err == nil {
 		out := make([]KnowledgeArticle, 0, len(direct))
 		for _, item := range direct {
 			out = append(out, parseKnowledgeArticle(item))
 		}
-		return out, nil
+		return knowledgeListPage{Articles: out}, nil
 	}
 
 	var envelope map[string]any
 	if err := json.Unmarshal(body, &envelope); err != nil {
-		return nil, err
+		return knowledgeListPage{}, err
 	}
 
+	page := knowledgeListPage{}
 	for _, key := range []string{"items", "data", "articles", "knowledge", "result"} {
 		arr, ok := envelope[key].([]any)
 		if !ok {
@@ -221,10 +274,19 @@ func parseKnowledgeListBody(body []byte) ([]KnowledgeArticle, error) {
 				out = append(out, parseKnowledgeArticle(m))
 			}
 		}
-		return out, nil
+		page.Articles = out
+		break
 	}
+	page.NextCursor = strings.TrimSpace(extractStr(envelope, "nextCursor"))
+	if h, ok := envelope["hasMore"].(bool); ok {
+		page.HasMore = h
+	}
+	return page, nil
+}
 
-	return []KnowledgeArticle{}, nil
+func parseKnowledgeListBody(body []byte) ([]KnowledgeArticle, error) {
+	page, err := parseKnowledgeListEnvelope(body)
+	return page.Articles, err
 }
 
 func parseKnowledgeDetailBody(body []byte) (KnowledgeArticle, error) {
@@ -333,52 +395,106 @@ func (s *Service) fetchKnowledgeListWithCache(info AgentInfo, category string, u
 		}
 	}
 
-	path := "/api/v1/agent-auth/knowledge"
-	if c := strings.TrimSpace(category); c != "" {
-		path += "?category=" + url.QueryEscape(c)
-	}
-	target := base + path
-
-	ctx := s.ctxOrBackground()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
-	if err != nil {
-		return nil, fmt.Errorf("URL invalida: %w", err)
-	}
-	if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, info.AgentID); err != nil {
-		return nil, err
-	}
-
-	resp, err := kbHTTP().Do(req)
-	if err != nil {
-		// Stale-if-error: servidor inacessivel — usa o backup local da ultima
-		// carga bem-sucedida para a pagina continuar utilizavel offline.
-		var backup []KnowledgeArticle
-		if s.readKnowledgeBackup(cacheKey, &backup) {
-			s.supportLogf("servidor inacessivel (%v) — usando backup local da base de conhecimento (%d artigo(s))", err, len(backup))
-			return backup, nil
+	// Paginação keyset: a API devolve {"items", "nextCursor", "hasMore"} ordenado
+	// por UpdatedAt desc + Id. O cursor é opaco — basta repassá-lo. Isso substitui
+	// o teto fixo de 500 artigos que truncava tenants maiores silenciosamente.
+	articles := make([]KnowledgeArticle, 0, knowledgeListPageSize)
+	cursor := ""
+	for pageIdx := 0; pageIdx < knowledgeMaxPages; pageIdx++ {
+		params := url.Values{}
+		if c := strings.TrimSpace(category); c != "" {
+			params.Set("category", c)
 		}
-		return nil, fmt.Errorf("falha ao buscar artigos da base de conhecimento: %w", err)
-	}
-	defer resp.Body.Close()
+		if cursor != "" {
+			params.Set("cursor", cursor)
+		}
+		params.Set("limit", strconv.Itoa(knowledgeListPageSize))
+		target := base + "/api/v1/agent-auth/knowledge?" + params.Encode()
 
-	// Teto de leitura: respostas gigantes/malformadas nao podem estourar memoria.
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, knowledgeMaxBodyBytes))
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		if resp.StatusCode >= 500 {
-			var backup []KnowledgeArticle
-			if s.readKnowledgeBackup(cacheKey, &backup) {
-				s.supportLogf("HTTP %d do servidor — usando backup local da base de conhecimento (%d artigo(s))", resp.StatusCode, len(backup))
-				return backup, nil
+		ctx := s.ctxOrBackground()
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+		if err != nil {
+			if pageIdx == 0 {
+				return nil, fmt.Errorf("URL invalida: %w", err)
 			}
+			break
 		}
-		return nil, fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(body)))
+		if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, info.AgentID); err != nil {
+			if pageIdx == 0 {
+				return nil, err
+			}
+			break
+		}
+
+		resp, err := kbHTTP().Do(req)
+		if err != nil {
+			// Primeira página: stale-if-error — usa o backup local da última
+			// carga bem-sucedida para a página continuar utilizável offline.
+			if pageIdx == 0 {
+				var backup []KnowledgeArticle
+				if s.readKnowledgeBackup(cacheKey, &backup) {
+					s.supportLogf("servidor inacessivel (%v) — usando backup local da base de conhecimento (%d artigo(s))", err, len(backup))
+					return backup, nil
+				}
+				return nil, fmt.Errorf("falha ao buscar artigos da base de conhecimento: %w", err)
+			}
+			// Página intermediária falhou: segue com o parcial (best-effort, logado).
+			s.supportLogf("página %d da base de conhecimento falhou (%v) — seguindo com %d artigo(s) parciais", pageIdx+1, err, len(articles))
+			break
+		}
+
+		// Teto de leitura: respostas gigantes/malformadas nao podem estourar memoria.
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, knowledgeMaxBodyBytes))
+		resp.Body.Close()
+
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			if pageIdx == 0 {
+				if resp.StatusCode >= 500 {
+					var backup []KnowledgeArticle
+					if s.readKnowledgeBackup(cacheKey, &backup) {
+						s.supportLogf("HTTP %d do servidor — usando backup local da base de conhecimento (%d artigo(s))", resp.StatusCode, len(backup))
+						return backup, nil
+					}
+				}
+				return nil, fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(body)))
+			}
+			s.supportLogf("HTTP %s na página %d da base de conhecimento — seguindo com %d artigo(s) parciais", resp.Status, pageIdx+1, len(articles))
+			break
+		}
+
+		pg, err := parseKnowledgeListEnvelope(body)
+		if err != nil {
+			if pageIdx == 0 {
+				return nil, fmt.Errorf("resposta invalida ao listar artigos: %w", err)
+			}
+			s.supportLogf("resposta invalida na página %d da base de conhecimento — seguindo com %d artigo(s) parciais", pageIdx+1, len(articles))
+			break
+		}
+
+		articles = append(articles, pg.Articles...)
+
+		if !pg.HasMore || pg.NextCursor == "" {
+			break
+		}
+		cursor = pg.NextCursor
 	}
 
-	articles, err := parseKnowledgeListBody(body)
-	if err != nil {
-		return nil, fmt.Errorf("resposta invalida ao listar artigos: %w", err)
+	// Dedupe por ID: segurança contra sobreposição de páginas (cursor afetado
+	// por atualizações concorrentes de UpdatedAt entre páginas).
+	seen := make(map[string]struct{}, len(articles))
+	deduped := articles[:0]
+	for _, a := range articles {
+		if a.ID == "" {
+			continue
+		}
+		if _, dup := seen[a.ID]; dup {
+			continue
+		}
+		seen[a.ID] = struct{}{}
+		deduped = append(deduped, a)
 	}
+	articles = deduped
 	if articles == nil {
 		articles = []KnowledgeArticle{}
 	}
@@ -615,9 +731,14 @@ func (s *Service) GetKnowledgeBaseArticles() []KnowledgeArticle {
 		return []KnowledgeArticle{}
 	}
 
-	// Enriquecimento de conteúdo (artigos sem 'content' no list): buscado em
-	// PARALELO com teto de concorrência — antes era sequencial (N requisições
-	// HTTP, cada uma até 15s), travando a página em 'Carregando artigos...'.
+	return s.enrichKnowledgeArticles(info, articles)
+}
+
+// enrichKnowledgeArticles completa conteúdo/resumo/tags dos artigos que vieram
+// sem 'content' na listagem (N+1 controlado): busca os detalhes em PARALELO com
+// teto de concorrência — antes era sequencial (N requisições HTTP, cada uma até
+// 15s), travando a página em 'Carregando artigos...'.
+func (s *Service) enrichKnowledgeArticles(info AgentInfo, articles []KnowledgeArticle) []KnowledgeArticle {
 	type detailJob struct {
 		idx int
 		id  string
@@ -629,39 +750,46 @@ func (s *Service) GetKnowledgeBaseArticles() []KnowledgeArticle {
 		}
 		jobs = append(jobs, detailJob{idx: i, id: articles[i].ID})
 	}
-	if len(jobs) > 0 {
-		sem := make(chan struct{}, knowledgeDetailWorkers)
-		var wg sync.WaitGroup
-		for _, job := range jobs {
-			wg.Add(1)
-			go func(j detailJob) {
-				defer wg.Done()
-				sem <- struct{}{}
-				defer func() { <-sem }()
-				detail, err := s.fetchKnowledgeDetail(info, j.id)
-				if err != nil {
-					s.supportLogf("falha ao carregar markdown do artigo %s: %v", j.id, err)
-					return
-				}
-				// Escrita em índices distintos do slice: seguro sem lock.
-				if strings.TrimSpace(detail.Content) != "" {
-					articles[j.idx].Content = detail.Content
-				}
-				if strings.TrimSpace(articles[j.idx].Summary) == "" {
-					articles[j.idx].Summary = detail.Summary
-				}
-				if len(articles[j.idx].Tags) == 0 {
-					articles[j.idx].Tags = detail.Tags
-				}
-			}(job)
-		}
-		wg.Wait()
+	if len(jobs) == 0 {
+		return articles
 	}
+
+	sem := make(chan struct{}, knowledgeDetailWorkers)
+	var wg sync.WaitGroup
+	for _, job := range jobs {
+		wg.Add(1)
+		go func(j detailJob) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			detail, err := s.fetchKnowledgeDetail(info, j.id)
+			if err != nil {
+				s.supportLogf("falha ao carregar markdown do artigo %s: %v", j.id, err)
+				return
+			}
+			// Escrita em índices distintos do slice: seguro sem lock.
+			if strings.TrimSpace(detail.Content) != "" {
+				articles[j.idx].Content = detail.Content
+			}
+			if strings.TrimSpace(articles[j.idx].Summary) == "" {
+				articles[j.idx].Summary = detail.Summary
+			}
+			if len(articles[j.idx].Tags) == 0 {
+				articles[j.idx].Tags = detail.Tags
+			}
+			if articles[j.idx].VersionNumber == 0 {
+				articles[j.idx].VersionNumber = detail.VersionNumber
+			}
+		}(job)
+	}
+	wg.Wait()
 
 	return articles
 }
 
 // GetKnowledgeArticles returns articles optionally filtered by category.
+// Usa o MESMO enriquecimento da listagem principal — antes o conteúdo/summary
+// ficavam vazios no caminho com filtro de categoria.
 func (s *Service) GetKnowledgeArticles(category string) ([]KnowledgeArticle, error) {
 	if !s.featureEnabled(s.knowledgeEnabled()) {
 		s.supportLogf("base de conhecimento desabilitada pela configuracao do agente")
@@ -672,7 +800,11 @@ func (s *Service) GetKnowledgeArticles(category string) ([]KnowledgeArticle, err
 		s.supportLogf("falha ao resolver contexto para knowledge base: %v", err)
 		return nil, err
 	}
-	return s.fetchKnowledgeList(info, category)
+	articles, err := s.fetchKnowledgeList(info, category)
+	if err != nil {
+		return nil, err
+	}
+	return s.enrichKnowledgeArticles(info, articles), nil
 }
 
 // GetKnowledgeArticleDetails returns a single article by ID.

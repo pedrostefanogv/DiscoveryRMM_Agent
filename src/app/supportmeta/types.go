@@ -139,6 +139,11 @@ type KnowledgeArticle struct {
 	Difficulty  string   `json:"difficulty"`
 	ReadTimeMin int      `json:"readTimeMin"`
 	UpdatedAt   string   `json:"updatedAt"`
+	// Estado de publicação e versão (AgentKnowledgeArticleDto).
+	// Hoje o endpoint do agent só entrega Published, mas o campo permite à UI
+	// distinguir conteúdo atualizado (v{n}) quando outros status forem expostos.
+	Status        string `json:"status"`
+	VersionNumber int    `json:"currentVersionNumber"`
 	// Hierarquia de páginas (estilo Notion)
 	ParentID  string `json:"parentId"`
 	SortOrder int    `json:"sortOrder"`

@@ -2,6 +2,7 @@ package automation
 
 import (
 	"testing"
+	"time"
 
 	"discovery/app/core/database"
 )
@@ -216,5 +217,99 @@ func TestShouldDeferExecution_WhenDeferredResult(t *testing.T) {
 	}
 	if svc.shouldDeferExecution(task, AutomationNotificationResponse{Accepted: true, Result: "approved"}) {
 		t.Fatalf("expected approved to not defer")
+	}
+}
+
+// ── Dedup de notificações por ciclo de check-in (spam laranja na UI) ──────
+// Regressão: uma tarefa de instalação que sempre falha (ex.: winget ausente
+// no contexto do serviço) era re-executada a cada ciclo de check-in e gerava
+// install_start + install_failed a cada ~3 min, repetidamente.
+
+func TestAutomationExecutionNotificationAllowed_DedupRules(t *testing.T) {
+	now := time.Now().UTC()
+	fresh := automationNotifDedupState{lastEventType: "install_start", lastAt: now.Add(-2 * time.Minute)}
+
+	if !automationExecutionNotificationAllowed(automationNotifDedupState{}, false, "install_start", now) {
+		t.Fatalf("primeira execução deve notificar")
+	}
+	if !automationExecutionNotificationAllowed(fresh, true, "install_failed", now) {
+		t.Fatalf("falha após start deve notificar (transição)")
+	}
+
+	failed := automationNotifDedupState{lastEventType: "install_failed", lastAt: now.Add(-2 * time.Minute)}
+	if automationExecutionNotificationAllowed(failed, true, "install_failed", now) {
+		t.Fatalf("falha repetida dentro de 24h deve ser suprimida")
+	}
+	if automationExecutionNotificationAllowed(failed, true, "install_start", now) {
+		t.Fatalf("start de tarefa em loop de falha deve ser suprimido dentro de 6h")
+	}
+	if !automationExecutionNotificationAllowed(failed, true, "install_end", now) {
+		t.Fatalf("install_end nunca deve ser suprimido")
+	}
+	if !automationExecutionNotificationAllowed(failed, true, "reboot_required", now) {
+		t.Fatalf("reboot_required nunca deve ser suprimido")
+	}
+
+	oldFailed := automationNotifDedupState{lastEventType: "install_failed", lastAt: now.Add(-25 * time.Hour)}
+	if !automationExecutionNotificationAllowed(oldFailed, true, "install_failed", now) {
+		t.Fatalf("falha após 24h deve notificar novamente")
+	}
+	oldStart := automationNotifDedupState{lastEventType: "install_start", lastAt: now.Add(-7 * time.Hour)}
+	if !automationExecutionNotificationAllowed(oldStart, true, "install_start", now) {
+		t.Fatalf("start após 6h deve notificar novamente")
+	}
+
+	ended := automationNotifDedupState{lastEventType: "install_end", lastAt: now.Add(-2 * time.Minute)}
+	if !automationExecutionNotificationAllowed(ended, true, "install_start", now) {
+		t.Fatalf("start após conclusão (nova rodada) deve notificar")
+	}
+}
+
+func TestDispatchExecutionNotification_SuppressesRepeatedCycles(t *testing.T) {
+	svc := &Service{}
+	var dispatched []AutomationNotificationRequest
+	dispatcher := func(req AutomationNotificationRequest) AutomationNotificationResponse {
+		dispatched = append(dispatched, req)
+		return AutomationNotificationResponse{Accepted: true, Result: "approved"}
+	}
+
+	task := AutomationTask{
+		TaskID:     "task-loop",
+		Name:       "Install Thunderbird",
+		ActionType: ActionInstallPackage,
+		PackageID:  "mozilla.thunderbird",
+	}
+	newEntry := func(execID string) database.AutomationExecutionEntry {
+		return database.AutomationExecutionEntry{
+			ExecutionID:   execID,
+			TaskID:        "task-loop",
+			TaskName:      task.Name,
+			ActionType:    string(ActionInstallPackage),
+			Status:        string(ExecutionStatusDispatched),
+			PackageID:     task.PackageID,
+			CorrelationID: "corr-" + execID,
+		}
+	}
+
+	// Ciclo 1: start + falha → 2 notificações
+	failed := ExecutionResult{Success: false, ExitCodeSet: true, ExitCode: 1603}
+	svc.dispatchExecutionNotification(dispatcher, task, newEntry("exec-1"), nil, deferState{}, resolvePSADTWelcomeOptions(task))
+	svc.dispatchExecutionNotification(dispatcher, task, newEntry("exec-1"), &failed, deferState{}, resolvePSADTWelcomeOptions(task))
+	if len(dispatched) != 2 {
+		t.Fatalf("ciclo 1: esperado 2 notificações (start+failed), got %d", len(dispatched))
+	}
+
+	// Ciclo 2 (check-in repetido): start e falha suprimidos
+	svc.dispatchExecutionNotification(dispatcher, task, newEntry("exec-2"), nil, deferState{}, resolvePSADTWelcomeOptions(task))
+	svc.dispatchExecutionNotification(dispatcher, task, newEntry("exec-2"), &failed, deferState{}, resolvePSADTWelcomeOptions(task))
+	if len(dispatched) != 2 {
+		t.Fatalf("ciclo 2: esperado 0 notificações novas (dedup), got %d", len(dispatched)-2)
+	}
+
+	// Resultado positivo sempre passa
+	success := ExecutionResult{Success: true, ExitCodeSet: true, ExitCode: 0}
+	svc.dispatchExecutionNotification(dispatcher, task, newEntry("exec-3"), &success, deferState{}, resolvePSADTWelcomeOptions(task))
+	if len(dispatched) != 3 {
+		t.Fatalf("install_end nunca deve ser suprimido")
 	}
 }

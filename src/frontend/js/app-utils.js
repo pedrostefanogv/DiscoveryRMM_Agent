@@ -1719,6 +1719,19 @@ function buildKnowledgeMeta(article) {
         escapeHtml(formatDate(article.updatedAt, "-")) +
         "</span>",
     );
+  // Status/versão (AgentKnowledgeArticleDto): hoje só Published chega ao
+  // agent, mas exibimos a versão (v{n}) e qualquer status != Published.
+  if (article.status && String(article.status).toLowerCase() !== "published")
+    parts.push(
+      '<span class="kb-meta-status">Status: ' +
+        escapeHtml(String(article.status)) +
+        "</span>",
+    );
+  var kbVersion = Number(article.currentVersionNumber || 0);
+  if (kbVersion > 0)
+    parts.push(
+      "<span>Versão: v" + escapeHtml(String(kbVersion)) + "</span>",
+    );
   return parts.join("");
 }
 

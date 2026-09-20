@@ -1121,7 +1121,13 @@ function handleNotificationEvent(payload) {
   applyProgressFromNotification(notification);
 
   var toastType = severity === 'high' || severity === 'critical' ? 'error' : (severity === 'medium' ? 'warning' : 'info');
-  showToast(microcopy.eventLabel + ' - ' + title + (message ? ': ' + message : ''), toastType);
+  // Toast: usar o TÍTULO da notificação quando existir (ex.: "Instalacao
+  // iniciada — Tarefa X iniciada. Pacote: …"). Antes concatenava
+  // eventLabel + title, duplicando o texto ("Instalação iniciada - Instalacao
+  // iniciada: …") e, sem eventType conhecido, exibia o genérico
+  // "Notificação de instalação - Notificação".
+  var toastHeading = String(notification.title || '').trim() || microcopy.eventLabel;
+  showToast(toastHeading + (message ? ': ' + message : ''), toastType);
 
   if (layout === 'banner' && mode !== 'require_confirmation') {
     showNotificationBanner(notification, microcopy, theme);

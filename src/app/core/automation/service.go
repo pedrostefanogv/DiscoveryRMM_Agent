@@ -66,6 +66,13 @@ type Service struct {
 	psadtResolver    func() PSADTPolicy
 	notifyDispatcher func(AutomationNotificationRequest) AutomationNotificationResponse
 	deferByTask      map[string]deferState
+	// notifDedup rastreia a última notificação enviada por tarefa (key =
+	// TaskID) para suprimir o spam de ciclos de check-in repetindo
+	// install_start/install_failed da mesma tarefa (ex.: instalação em loop
+	// de falha a cada ~3 min). Estado em memória: após restart do agente o
+	// primeiro ciclo volta a notificar — intencional, o usuário deve ver o
+	// estado atual ao menos uma vez por sessão.
+	notifDedup       map[string]automationNotifDedupState
 	state            State
 	currentAgent     string
 	cron             *cron.Cron
@@ -97,6 +104,7 @@ func NewService(getConfig func() RuntimeConfig, logger func(string)) *Service {
 		cronEntries:    make(map[string]cron.EntryID),
 		activeTasks:    make(map[string]bool),
 		deferByTask:    make(map[string]deferState),
+		notifDedup:     make(map[string]automationNotifDedupState),
 		processStartAt: time.Now().UTC(),
 		cfCache:        make(map[string]*ExecutionCustomFieldCtx),
 	}
@@ -1038,7 +1046,6 @@ func (s *Service) dispatchExecutionNotification(dispatcher func(AutomationNotifi
 	severity := "medium"
 	title := "Instalacao iniciada"
 	message := fmt.Sprintf("Tarefa %s iniciada.", strings.TrimSpace(task.Name))
-
 	if result != nil {
 		if result.Success {
 			if result.ExitCodeSet && (result.ExitCode == 3010 || result.ExitCode == 1641) {
@@ -1113,6 +1120,23 @@ func (s *Service) dispatchExecutionNotification(dispatcher func(AutomationNotifi
 	}
 
 	notificationID := fmt.Sprintf("automation-%s-%s", strings.TrimSpace(entry.ExecutionID), eventType)
+
+	// Dedup de notificação por tarefa: ciclos de check-in repetem a MESMA
+	// tarefa a cada ciclo (ex.: instalação que sempre falha) e, sem isso,
+	// geravam ~10 notificações laranjas/vermelhas a cada ~3 min na UI
+	// (install_start severity=medium → accent warning). Resultados
+	// (install_end/reboot) sempre passam.
+	if taskKey := strings.TrimSpace(entry.TaskID); taskKey != "" {
+		if !s.executionNotificationAllowed(eventType, taskKey) {
+			s.logf("automacao: notificacao suprimida (dedup) task=%s eventType=%s", taskKey, eventType)
+			return AutomationNotificationResponse{
+				Accepted:    false,
+				AgentAction: "suppressed_dedup",
+				Message:     "notificação suprimida por deduplicação de ciclo",
+			}
+		}
+	}
+
 	// C1: apenas install_start de tasks com RequiresApproval pede confirmação.
 	// Resultados (install_end/install_failed/reboot_required) nunca pedem —
 	// antes usavam require_confirmation e geravam modal de "concluído" que
@@ -1121,7 +1145,8 @@ func (s *Service) dispatchExecutionNotification(dispatcher func(AutomationNotifi
 	if result == nil && task.RequiresApproval {
 		mode = "require_confirmation"
 	}
-	return dispatcher(AutomationNotificationRequest{
+
+	resp := dispatcher(AutomationNotificationRequest{
 		NotificationID: notificationID,
 		IdempotencyKey: notificationID,
 		Title:          title,
@@ -1133,6 +1158,82 @@ func (s *Service) dispatchExecutionNotification(dispatcher func(AutomationNotifi
 		TimeoutSeconds: 45,
 		Metadata:       metadata,
 	})
+
+	// Só registra o estado do dedup quando a notificação foi de fato aceita —
+	// se o rollout bloqueou, o usuário não a viu e o próximo ciclo deve
+	// tentar novamente.
+	if resp.Accepted {
+		if taskKey := strings.TrimSpace(entry.TaskID); taskKey != "" {
+			s.recordExecutionNotification(eventType, taskKey)
+		}
+	}
+	return resp
+}
+
+// automationNotifDedupState guarda o último evento notificado de uma tarefa.
+type automationNotifDedupState struct {
+	lastEventType string
+	lastAt        time.Time
+}
+
+const (
+	// notifDedupFailureCooldown: intervalo mínimo entre notificações de
+	// install_failed da MESMA tarefa (check-in repete a cada ciclo).
+	notifDedupFailureCooldown = 24 * time.Hour
+	// notifDedupStartCooldown: janela em que um install_start repetido é
+	// suprimido quando a tarefa já está em loop de start/falha.
+	notifDedupStartCooldown = 6 * time.Hour
+)
+
+// automationExecutionNotificationAllowed decide se a notificação de execução
+// deve ser despachada. Função pura — testável sem relógio.
+//   - install_end / reboot_required: sempre passam (resultado relevante).
+//   - install_start: suprimido se a última notificação da tarefa também foi
+//     start ou falha (tarefa em loop) e a janela de 6h não expirou.
+//   - install_failed: suprimido se a última notificação da tarefa também foi
+//     falha e a janela de 24h não expirou.
+func automationExecutionNotificationAllowed(last automationNotifDedupState, exists bool, eventType string, now time.Time) bool {
+	if !exists {
+		return true
+	}
+	switch eventType {
+	case "install_end", "reboot_required", "restart_required":
+		return true
+	case "install_start":
+		if last.lastEventType != "install_start" && last.lastEventType != "install_failed" {
+			return true
+		}
+		return now.Sub(last.lastAt) >= notifDedupStartCooldown
+	case "install_failed":
+		if last.lastEventType != "install_failed" {
+			return true
+		}
+		return now.Sub(last.lastAt) >= notifDedupFailureCooldown
+	default:
+		return true
+	}
+}
+
+// executionNotificationAllowed lê o estado dedup da tarefa sob lock.
+func (s *Service) executionNotificationAllowed(eventType, taskKey string) bool {
+	now := time.Now().UTC()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.notifDedup == nil {
+		s.notifDedup = make(map[string]automationNotifDedupState)
+	}
+	state, exists := s.notifDedup[taskKey]
+	return automationExecutionNotificationAllowed(state, exists, eventType, now)
+}
+
+// recordExecutionNotification grava o último evento notificado da tarefa.
+func (s *Service) recordExecutionNotification(eventType, taskKey string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.notifDedup == nil {
+		s.notifDedup = make(map[string]automationNotifDedupState)
+	}
+	s.notifDedup[taskKey] = automationNotifDedupState{lastEventType: eventType, lastAt: time.Now().UTC()}
 }
 
 func (s *Service) logf(format string, args ...any) {

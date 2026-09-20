@@ -181,6 +181,12 @@ function renderKnowledgeArticles(items) {
           '<span class="kb-badge kb-badge-scope">' +
           escapeHtml(diff) +
           "</span>";
+      var kbVersion = Number(a.currentVersionNumber || 0);
+      if (kbVersion > 0)
+        badges +=
+          '<span class="kb-badge" title="Versão do artigo">v' +
+          escapeHtml(String(kbVersion)) +
+          "</span>";
       var tagsHtml = tags
         .map(function (t) {
           return "<em>#" + escapeHtml(t) + "</em>";

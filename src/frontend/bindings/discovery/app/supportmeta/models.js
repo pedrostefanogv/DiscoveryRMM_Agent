@@ -440,6 +440,23 @@ export class KnowledgeArticle {
              */
             this["updatedAt"] = "";
         }
+        if (!("status" in $$source)) {
+            /**
+             * Estado de publicação e versão (AgentKnowledgeArticleDto).
+             * Hoje o endpoint do agent só entrega Published, mas o campo permite à UI
+             * distinguir conteúdo atualizado (v{n}) quando outros status forem expostos.
+             * @member
+             * @type {string}
+             */
+            this["status"] = "";
+        }
+        if (!("currentVersionNumber" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["currentVersionNumber"] = 0;
+        }
         if (!("parentId" in $$source)) {
             /**
              * Hierarquia de páginas (estilo Notion)

@@ -30,6 +30,8 @@ type Collector interface {
 	CollectNetworkConnections(ctx context.Context) ([]models.ListeningPortInfo, []models.OpenSocketInfo, error)
 	// CollectPrinters returns installed printers.
 	CollectPrinters(ctx context.Context) ([]models.PrinterInfo, error)
+	// CollectMonitors returns attached monitors (WmiMonitorID).
+	CollectMonitors(ctx context.Context) ([]models.MonitorInfo, error)
 	// CollectHardware returns motherboard, BIOS, GPU, memory and CPU details.
 	CollectHardware(ctx context.Context) (models.HardwareInfo, []models.MemoryModule, []models.GPUInfo, []models.CPUInfo, []models.CPUFeature, error)
 	// CollectSoftware returns installed software.
