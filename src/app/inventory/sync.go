@@ -655,9 +655,8 @@ func buildAgentHardwareEnvelope(report models.InventoryReport, version, commitHa
 	osName := trimToMaxLen(strings.TrimSpace(report.OS.Name), 100)
 	osVersion := trimToMaxLen(strings.TrimSpace(report.OS.Version), 100)
 
-	if version == "" {
-		version = "dev"
-	}
+	// version/commitHash vazios são aceitáveis: a API preserva o último valor
+	// conhecido quando recebe vazio (nunca sobrescreve com "dev"/"unknown").
 	// Serializa hardware e components como json.RawMessage (API v1)
 	hwInfo := agentHardwareInfo{
 		InventoryRaw:            string(rawJSON),

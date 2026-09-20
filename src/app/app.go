@@ -656,8 +656,14 @@ func NewApp(opts AppStartupOptions) *App {
 		},
 		DB:                     nil,
 		DebugConfig:            a.GetDebugConfig,
-		Version:                Version,
-		CommitHash:             buildinfo.Commit,
+		// Fonte ÚNICA de versão/commit para relato ao servidor: buildinfo
+		// (injetado por ldflags em TODOS os binários oficiais, incluindo o
+		// discovery-service). app.Version só é injetado no binário de UI —
+		// usá-lo aqui fazia o serviço reportar "dev" no hardware report em
+		// builds oficiais. CommitForReport cai para o VCS stamping em builds
+		// locais sem ldflags e devolve "" (não "unknown") quando indisponível.
+		Version:                strings.TrimSpace(buildinfo.Version),
+		CommitHash:             buildinfo.CommitForReport(),
 		ShouldDeferNonCritical: a.nonCriticalBackoffWindow,
 		HardwareIdentity: func() hardwareid.Info {
 			if a.HardwareIDSvc == nil {
