@@ -441,8 +441,9 @@ function maybeFlushChatQueue() {
 }
 
 // ─── Activity do agent (status polido: conectar → ferramentas → resposta) ───
-// O core envia status crus em pt-BR ("Conectando ao servidor...",
-// "Executando: list_tickets, get_disk_health..."). Este bloco converte em
+// O core envia status crus em pt-BR ("Um instante...",
+// "Analisando sua solicitacao...", "Executando: list_tickets, ..."). Este
+// bloco converte em
 // rótulos amigáveis, humaniza nomes de tools MCP e mantém uma trilha de
 // passos (chips ✓) — em vez do texto único que saltava a cada evento.
 var CHAT_ACTIVITY_MAX_STEPS = 4;
@@ -513,12 +514,15 @@ function humanizeToolName(name) {
 function describeChatActivity(status) {
   var s = String(status || "").trim();
   if (!s) return null;
-  if (s.indexOf("Conectando ao servidor") === 0) {
+  if (s.indexOf("Um instante") === 0 || s.indexOf("Conectando ao servidor") === 0) {
+    // "Conectando ao servidor" = status cru de cores antigas do agent;
+    // mantido no match por compatibilidade retroativa.
     return { key: "chat.activity.connecting", kind: "connect" };
   }
-  if (s.indexOf("Consultando o modelo") === 0) {
-    // Pós-conexão: LLM planejando/executando (o "Conectando" cobria 10-20s
-    // dessa fase — rótulo agora troca após o handshake).
+  if (s.indexOf("Analisando sua solicitacao") === 0 || s.indexOf("Consultando o modelo") === 0) {
+    // Pós-conexão: LLM planejando/executando (o rótulo troca após o
+    // handshake; "Consultando o modelo" = cru antigo, aceito por
+    // compatibilidade retroativa).
     return { key: "chat.activity.model", kind: "connect" };
   }
   if (/^Round\s+\d+/.test(s)) {
@@ -747,6 +751,15 @@ function finaliseStreamingBubble() {
   // a sanitização final garante que nada cru chegue ao usuário.
   streamingRawContent = sanitizeLeakedToolCalls(streamingRawContent);
 
+  // Opções de continuação (bloco final de "- ") viram botões e SAEM do corpo
+  // do texto — sem isto, o mesmo conteúdo aparecia duas vezes (lista no texto
+  // + chips de botão). A extração roda sobre o conteúdo final; se houver
+  // opções, o corpo é re-renderizado sem as linhas viradas em botão.
+  var actionSplit = splitTrailingChatActionOptions(streamingRawContent);
+  if (actionSplit.options.length > 0) {
+    streamingRawContent = actionSplit.content;
+  }
+
   // Flush any remaining buffered content immediately.
   streamingRafPending = false;
   flushStreamingContent();
@@ -758,11 +771,9 @@ function finaliseStreamingBubble() {
   if (cursor) cursor.remove();
   streamingBubble.classList.remove("streaming");
 
-  // Add quick-action suggestion buttons if the assistant wrote "- " lines.
-  var finalContent = streamingRawContent;
-  var dynamicActions = extractChatActionOptions(finalContent);
-  if (dynamicActions.length > 0) {
-    appendChatQuickActions(streamingBubble, dynamicActions);
+  // Add quick-action suggestion buttons (bloco final de "- " da resposta).
+  if (actionSplit.options.length > 0) {
+    appendChatQuickActions(streamingBubble, actionSplit.options);
   }
 
   streamingBubble = null;
@@ -1527,40 +1538,52 @@ function scheduleChatScrollToBottom() {
   });
 }
 
-function extractChatActionOptions(content) {
+// ─── Opções de continuação (botões) ────────────────────────────────────────
+// O core pede ao modelo para listar opções finais com "- " — o frontend as
+// converte em botões e REMOVE as linhas do corpo da mensagem. Sem isso, o
+// mesmo conteúdo aparecia duas vezes: como lista no texto e como chips de
+// botão abaixo. Regras:
+//  - Só o bloco FINAL de linhas "- "/"* " vira botão; listas descritivas no
+//    meio do texto (ex.: detalhes de um chamado) permanecem como texto.
+//  - Listas numeradas ("1. 2. 3.") são passos sequenciais: NUNCA viram botão
+//    (antes disto, passos viravam botões E ficavam no texto — duplicados).
+//  - Bloco final com mais de 6 linhas é tratado como lista descritiva.
+//  - Normaliza o texto antes (normalizeGluedMarkdownLines) para que a extração
+//    veja as mesmas linhas que o renderizador enxerga.
+function splitTrailingChatActionOptions(content) {
   var text = String(content || "");
-  if (!text) return [];
+  if (!text.trim()) return { options: [], content: text };
 
-  var lines = text.split(/\r?\n/);
+  var lines = normalizeGluedMarkdownLines(text);
+  var end = lines.length;
+  while (end > 0 && !lines[end - 1].trim()) end -= 1;
+
+  var start = end;
+  while (start > 0 && /^[-*]\s+/.test(lines[start - 1].trim())) start -= 1;
+
+  var optionLines = lines.slice(start, end);
+  if (!optionLines.length || optionLines.length > 6) {
+    return { options: [], content: text };
+  }
+
   var options = [];
   var seen = new Set();
-
-  function pushOption(raw) {
-    var clean = String(raw || "")
-      .replace(/^[-*]\s+/, "")
-      .replace(/^\d+\.\s+/, "")
-      .trim();
-    if (!clean) return;
-
+  for (var i = 0; i < optionLines.length; i += 1) {
+    var clean = optionLines[i].replace(/^[-*]\s+/, "").trim();
+    if (!clean) continue;
     var key = clean.toLowerCase();
-    if (seen.has(key)) return;
+    if (seen.has(key)) continue;
     seen.add(key);
-
     var label = clean.length > 120 ? clean.slice(0, 117) + "..." : clean;
     // Remove markdown markers from the action value so the sent text is clean.
     var value = clean.replace(/[*_`~]/g, "").trim();
     options.push({ label: label, value: value || clean });
   }
+  if (!options.length) return { options: [], content: text };
 
-  for (var i = 0; i < lines.length; i += 1) {
-    var line = String(lines[i] || "").trim();
-    if (/^[-*]\s+/.test(line) || /^\d+\.\s+/.test(line)) {
-      pushOption(line);
-    }
-  }
-
-  // Keep UI concise even if the assistant listed many alternatives.
-  return options.slice(0, 6);
+  var bodyLines = lines.slice(0, start);
+  while (bodyLines.length && !bodyLines[bodyLines.length - 1].trim()) bodyLines.pop();
+  return { options: options, content: bodyLines.join("\n") };
 }
 
 function appendChatQuickActions(containerEl, actionOptions) {
@@ -1636,7 +1659,14 @@ document.addEventListener("ui:suspend", handleChatUISuspend);
 // stopThinkingStatusUpdates permanece (usada pelo handler ui:suspend).
 
 function formatInlineChatMarkdown(text) {
-  var escaped = escapeHtml(String(text || ""));
+  // Espaço após rótulo em negrito colado ao valor ("**ID:**01a0557e") —
+  // delta de espaço perdido no stream; insere espaço quando o ":" fecha o
+  // negrito e o caractere seguinte não é espaço/asterisco.
+  var raw = String(text || "").replace(
+    /(\*\*[^*]+?:\*\*)(?=[^\s*])/g,
+    "$1 ",
+  );
+  var escaped = escapeHtml(raw);
   var codeTokens = [];
 
   // Token de placeholder SEM underscores/asteriscos/colchetes: o token antigo
@@ -1844,11 +1874,78 @@ function stripRawToolCalls(content) {
   return s;
 }
 
+// ─── Normalização de texto "colado" (defesa em profundidade) ───────────────
+// Quando um delta de whitespace do LLM se perde no stream (causa raiz
+// corrigida na API — AiChatStreamingOrchestrator descartava tokens só de
+// espaço/quebra), o markdown chega com blocos colados: título na mesma linha
+// da tabela, itens de lista ordenada grudados no parágrafo e rótulos em
+// negrito colados ao próximo item. Isto repara os casos conhecidos sem
+// alterar texto íntegro. Conteúdo dentro de fences ``` nunca é alterado.
+function normalizeGluedMarkdownLines(content) {
+  var lines = String(content || "").replace(/\r\n/g, "\n").split("\n");
+  var out = [];
+  var inCode = false;
+  for (var i = 0; i < lines.length; i += 1) {
+    var line = lines[i];
+    if (/^\s*```/.test(line)) {
+      inCode = !inCode;
+      out.push(line);
+      continue;
+    }
+    if (inCode) {
+      out.push(line);
+      continue;
+    }
+
+    // a) Tabela colada ao texto/título: "### Título| Col A | Col B |" ou
+    //    "...foram: | Col A | Col B |" → quebra antes da tabela. O sufixo
+    //    precisa de >= 3 pipes e o prefixo não pode conter "|" — assim
+    //    linhas de tabela legítimas (começam com "|") nunca são divididas.
+    var gluedTable = line.match(/^([^|\r\n]*[^\s|])\s*(\|.+\|.+\|.*)$/);
+    // a2) O prefixo (com tabela) ou a própria linha (sem tabela) passa pelas
+    //     regras de itens colados; o trecho da tabela sai intacto.
+    pushSplitGluedItems(gluedTable ? gluedTable[1] : line);
+    if (gluedTable) {
+      out.push(gluedTable[2]);
+      continue;
+    }
+  }
+  return out;
+
+  // splitGluedItems aplica as regras de "itens colados" a um trecho de texto:
+  //
+  //  b) Itens de lista ordenada colados: "...travando.2. **Item**..." e
+  //     "lento1. **Item**..." (também "#### Título1. **Item**..."). Exige o
+  //     item em negrito (\d+\. **), sem espaço antes do número — texto
+  //     íntegro como "versão 2. **X**" não é afetado.
+  //  c) Rótulo em negrito colado ao próximo item: "...sistema**- **ID:**..."
+  //     e "...d2ddf- **Categoria:**..." → quebra antes de cada "- **...**".
+  //  d) Item em negrito introduzido por ":"/"." no meio do parágrafo:
+  //     "...foram: - **OnScreen Control**..." — as quebras de linha do
+  //     modelo se perderam no stream, mas os espaços ficaram; quebra antes
+  //     do item para restaurar a lista.
+  function splitGluedItems(seg) {
+    seg = seg.replace(/([a-zà-ÿA-ZÀ-þ)\]])(\.?)(\d+\.\s+\*\*)/g, "$1$2\n$3");
+    seg = seg.replace(/(\*\*)(- \*\*[^*]+?\*\*)/g, "$1\n$2");
+    seg = seg.replace(/([^\s*|])(- \*\*[^*]+?\*\*)/g, "$1\n$2");
+    seg = seg.replace(/([:.])\s+(- \*\*[^*]+?\*\*)/g, "$1\n$2");
+    return seg;
+  }
+
+  function pushSplitGluedItems(seg) {
+    seg = splitGluedItems(seg);
+    if (seg.indexOf("\n") >= 0) {
+      var parts = seg.split("\n");
+      for (var p = 0; p < parts.length; p += 1) out.push(parts[p]);
+      return;
+    }
+    out.push(seg);
+  }
+}
+
 function renderAssistantMarkdown(content) {
   content = stripRawToolCalls(content);
-  var lines = String(content || "")
-    .replace(/\r\n/g, "\n")
-    .split("\n");
+  var lines = normalizeGluedMarkdownLines(content);
   var html = ['<div class="md-content">'];
   var inCode = false;
   var codeLang = "";
@@ -2086,19 +2183,20 @@ function addChatMessage(role, content) {
   var div = document.createElement("div");
   div.className = "chat-msg " + role;
 
+  var actionSplit = { options: [], content: content };
   if (role === "assistant") {
-    div.innerHTML = renderAssistantMarkdown(content);
+    actionSplit = splitTrailingChatActionOptions(content);
+    div.innerHTML = renderAssistantMarkdown(
+      actionSplit.options.length > 0 ? actionSplit.content : content,
+    );
     syncColorMode();
     bindInternalChatLinks(div);
   } else {
     div.textContent = content;
   }
 
-  if (role === "assistant") {
-    var dynamicActions = extractChatActionOptions(content);
-    if (dynamicActions.length > 0) {
-      appendChatQuickActions(div, dynamicActions);
-    }
+  if (role === "assistant" && actionSplit.options.length > 0) {
+    appendChatQuickActions(div, actionSplit.options);
   }
 
   chatMessagesEl.appendChild(div);

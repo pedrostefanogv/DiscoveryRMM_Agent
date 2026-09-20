@@ -386,7 +386,7 @@ func (s *Service) SendStream(ctx context.Context, userMessage string, onToken fu
 	s.mu.Unlock()
 
 	if onStatus != nil {
-		onStatus("Conectando ao servidor...")
+		onStatus("Um instante...")
 	}
 
 	content, streamSessionID, hasToken, err := s.callAgentChatStream(streamCtx, cfg, userMessage, sessionID, onToken)

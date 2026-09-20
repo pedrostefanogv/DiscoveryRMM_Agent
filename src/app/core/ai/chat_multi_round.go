@@ -251,7 +251,7 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 		roundStart := time.Now()
 		if onStatus != nil {
 			if round == 0 {
-				onStatus("Conectando ao servidor...")
+				onStatus("Um instante...")
 			} else {
 				onStatus(fmt.Sprintf("Round %d — processando tools...", round+1))
 			}
@@ -686,10 +686,10 @@ func (s *Service) executeRound(ctx context.Context, cfg Config, req agentStreamR
 	})
 
 	// Status pós-conexão: do HTTP 200 até a primeira tool/token é o LLM
-	// planejando/executando — sem este sinal, o rótulo "Conectando ao
-	// servidor..." persistia 10-20s cobrindo a fase errada.
+	// planejando/executando — sem este sinal, o rótulo inicial ("Um
+	// instante...") persistia 10-20s cobrindo a fase errada.
 	if onStatus != nil {
-		onStatus("Consultando o modelo de IA...")
+		onStatus("Analisando sua solicitacao...")
 	}
 
 	sessionID, _, err := s.parseMultiRoundSSEWithProgress(resp.Body, onToken, pendingCalls, onLoopProgress, onA2ui...)
