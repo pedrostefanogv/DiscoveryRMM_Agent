@@ -382,6 +382,9 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 				if retry == "" && detectIncompleteResponse(assistantText) {
 					retry = "A sua resposta anterior terminou sem concluir a ação — você apenas prometeu fazer algo sem executar. Se existe uma ferramenta para a ação que o usuário pediu, EXECUTE-A agora via function call nativa. Caso contrário, dê uma resposta final completa e direta respondendo à solicitação, sem promessas como \"vou fazer\" ou \"só um instante\"."
 				}
+				if retry == "" && detectDegenerateResponse(assistantText) {
+					retry = "A sua resposta anterior saiu corrompida/degenerada (fragmentos, reticências soltas ou raciocínio interno vazado no lugar da resposta). Reenvie AGORA a resposta completa, coesa e em português, respondendo diretamente à solicitação do usuário. NAO repita o texto corrompido, NAO escreva raciocínio interno ou planejamento — apenas a resposta final limpa."
+				}
 				if retry != "" {
 					forcedRetries++
 					var tools []map[string]any
@@ -1221,4 +1224,78 @@ var completionMarkers = []string{
 	"chamado criado", "ticket criado", "reiniciei", "reiniciado",
 	"resolvido", "solucionado", "tudo certo", "tudo pronto", "é isso",
 	"isso é tudo", "mais alguma", "posso ajudar", "em que mais",
+}
+
+// isDegeneratePunctLine reporta se a linha inteira é só pontuação/fragmento
+// ("...", "…", "---", "??", "!!", "--"). Uma ou duas ocorrências são
+// separadores legítimos de markdown; em massa, são sinais de saída
+// degenerada do modelo.
+func isDegeneratePunctLine(t string) bool {
+	if t == "" {
+		return false
+	}
+	for _, r := range t {
+		switch r {
+		case '.', '…', '?', '!', '-', '*', '_', '~':
+			continue
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// degeneratePlanPhrases são frases de planejamento em inglês típicas de
+// raciocínio vazado como conteúdo (modelos reasoning mal isolados no stream).
+// A resposta do agente é em pt-BR; planejamento em inglês no meio dela é
+// vazamento. (Visto em produção em 20/09: "We need to respond properly...",
+// "Since they want verification, we can run listinstalledpackages...")
+var degeneratePlanPhrases = []string{
+	"we need to", "the user wants", "the user asked", "let's do that",
+	"we should", "i'll need to", "we can run", "we have already",
+	"we need to call", "properly respond",
+}
+
+// detectDegenerateResponse retorna true quando a resposta final apresenta
+// sinais de saída degenerada do modelo: muitas linhas que são só fragmentos
+// ("...", "…", "---", "??", palavras truncadas de 1-3 chars) ou planejamento
+// interno vazado como conteúdo. Nesse caso o turno é reenviado UMA vez com
+// instrução de regeneração limpa (mesmo mecanismo do retry forçado), em vez
+// de encerrar a conversa exibindo lixo. Conservador: exige múltiplos sinais
+// para não reagir a respostas legítimas com poucos separadores "---".
+func detectDegenerateResponse(assistant string) bool {
+	if len([]rune(assistant)) < 60 {
+		return false
+	}
+	junk := 0
+	total := 0
+	for _, line := range strings.Split(assistant, "\n") {
+		t := strings.TrimSpace(line)
+		if t == "" {
+			continue
+		}
+		total++
+		if isDegeneratePunctLine(t) {
+			junk++
+			continue
+		}
+		// Fragmento: linha alfabética muito curta ("O", "Vou", "Sim") sozinha,
+		// sem ser título/lista — no texto cru do modelo os itens de lista
+		// chegam colados, então linha curtíssima isolada é resíduo.
+		r := []rune(t)
+		if len(r) <= 3 && !strings.HasPrefix(t, "#") && !strings.HasPrefix(t, "-") && !strings.HasPrefix(t, "*") {
+			junk++
+		}
+	}
+	if junk >= 5 && total > 0 && junk*3 >= total {
+		return true
+	}
+	plan := 0
+	lower := strings.ToLower(assistant)
+	for _, p := range degeneratePlanPhrases {
+		if strings.Contains(lower, p) {
+			plan++
+		}
+	}
+	return plan >= 3
 }

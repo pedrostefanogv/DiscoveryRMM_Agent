@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"discovery/app/core/buildinfo"
 )
 
 type Level = slog.Level
@@ -73,11 +75,33 @@ func SetFileOutput(logPath string) error {
 	}
 	innerMu.Lock()
 	innerConfig.level = LevelInfo
-	innerConfig.handler = slog.NewTextHandler(io.MultiWriter(os.Stderr, f), &slog.HandlerOptions{
+	// O arquivo recebe cada linha prefixada com a revisão de código do binário
+	// ([<hash curto>+mod opcional], mesma assinatura do chat_logs.jsonl e do
+	// agent.log) — diagnosticar o log diz qual versão gerou a linha. O stderr
+	// continua limpo (só o arquivo é assinado).
+	innerConfig.handler = slog.NewTextHandler(io.MultiWriter(os.Stderr, &revPrefixWriter{w: f}), &slog.HandlerOptions{
 		Level: LevelInfo,
 	})
 	innerMu.Unlock()
 	return nil
+}
+
+// revPrefixWriter prefixa cada gravação com a revisão de código do binário.
+// O slog TextHandler emite um registro por Write na prática; mesmo com
+// writes multi-linha o prefixo segue correto no início do bloco.
+type revPrefixWriter struct {
+	w io.Writer
+}
+
+func (w *revPrefixWriter) Write(p []byte) (int, error) {
+	if len(strings.TrimSpace(string(p))) == 0 {
+		return w.w.Write(p)
+	}
+	prefixed := append([]byte("["+buildinfo.Revision()+"] "), p...)
+	if _, err := w.w.Write(prefixed); err != nil {
+		return 0, err
+	}
+	return len(p), nil
 }
 
 func SetSink(fn func(level slog.Level, msg string, args ...any)) {

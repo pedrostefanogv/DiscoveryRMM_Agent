@@ -27,6 +27,11 @@ const (
 // ChatLogEntry representa uma entrada de log de chat.
 type ChatLogEntry struct {
 	Timestamp    string   `json:"timestamp"`
+	// CodeRev identifica a revisão de código (hash curto do commit + "+mod"
+	// quando o worktree estava sujo) que produziu esta entrada — diagnosticar
+	// um log antigo passa a dizer QUAL versão do código o gerou. Preenchido
+	// automaticamente em Log() a partir do VCS stamping do build.
+	CodeRev      string   `json:"codeRev,omitempty"`
 	Type         string   `json:"type"`
 	Endpoint     string   `json:"endpoint,omitempty"`
 	Method       string   `json:"method,omitempty"` // sync / stream / multi_round / tool_exec
@@ -156,6 +161,11 @@ func (cl *ChatLogger) Log(entry ChatLogEntry) {
 
 	if entry.Timestamp == "" {
 		entry.Timestamp = time.Now().UTC().Format(time.RFC3339Nano)
+	}
+	// Revisão de código em toda linha: diagnóstico/analise sabem qual versão
+	// do código gerou o log (cached em codeRevision).
+	if entry.CodeRev == "" {
+		entry.CodeRev = codeRevision()
 	}
 
 	data, err := json.Marshal(entry)

@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"discovery/app/core/buildinfo"
 	"discovery/app/core/logger"
 )
 
@@ -61,7 +62,10 @@ func (l *Buffer) appendLineLocked(line string) string {
 		l.lines = l.lines[len(l.lines)-5000:]
 	}
 	if l.file != nil {
-		_, _ = l.file.WriteString(time.Now().Format(time.RFC3339) + " " + line + "\n")
+		// Assinatura de revisão: toda linha persistida declara qual versão do
+		// código a gerou (hash curto do commit), junto da data — mesmo contrato
+		// do chat_logs.jsonl. Diagnosticar um log antigo diz a versão exata.
+		_, _ = l.file.WriteString(time.Now().Format(time.RFC3339) + " [" + buildinfo.Revision() + "] " + line + "\n")
 	}
 	return line
 }

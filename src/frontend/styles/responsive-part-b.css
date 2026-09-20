@@ -620,9 +620,11 @@
 }
 
 .chat-msg-actions {
-  margin-top: 10px;
+  margin-top: 8px;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: flex-start;
   gap: 6px;
 }
 
@@ -634,6 +636,14 @@
   text-align: left;
   white-space: normal;
   word-break: break-word;
+}
+
+/* Botões de opção do chat (quick actions e perguntas ask_user) fluem em linha
+   como chips, ocupando só o espaço do rótulo — antes eram full-width
+   empilhados, somando várias "linhas" junto ao campo de digitação. */
+.chat-msg-actions .btn-xs {
+  width: auto;
+  padding: 5px 12px;
 }
 
 .chat-msg.thinking {
@@ -902,9 +912,11 @@
   font-size: 0.9rem;
   font-family: inherit;
   line-height: 1.5;
-  /* Área de digitação maior; cresce conforme o texto (auto-grow) até o cap */
-  min-height: 3.9rem;
-  max-height: 200px;
+  /* Área compacta: começa com ~2 linhas e cresce até ~4 linhas no máximo
+     (cap espelhado em autoGrowChatInput; line-height 1.5 × 0.9rem ≈ 22px por
+     linha) — antes expandia até 200px, como um parágrafo. */
+  min-height: 44px;
+  max-height: 88px;
   overflow-y: auto;
 }
 

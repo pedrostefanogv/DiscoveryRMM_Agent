@@ -41,6 +41,8 @@ var stopPollingLoop;
 //   "a2ui"    — dentro de bloco ```a2ui ... ``` (descartado)
 //   "json"    — dentro de bloco ```json ... ``` (retido até saber se é vazamento)
 //   "dsml"    — dentro de marcação DSML (descartado)
+//   "think"   — dentro de bloco de raciocínio <think>...</think> e variantes
+//               (descartado — planejamento interno do modelo nunca é exibido)
 var a2uiTokenFilter = {
   state: "",
   buffer: "",
@@ -57,6 +59,14 @@ var DSML_CLOSE_RE = /<\/[｜|]DSML[｜|][a-z_]*>/;
 // sanitização final).
 var INVOKE_ARRAY_RE = /^\s*\[\s*\{\s*"name"\s*:/;
 var A2UI_ACTION_RE = /^\s*\{\s*"version"\s*:\s*"a2ui"/;
+// 5. Blocos de raciocínio (<think>/<thinking>/<thought>/<reasoning>) que
+//    alguns modelos emitem no MEIO do conteúdo — planejamento interno que
+//    nunca deve aparecer na conversa (vazamento visto em produção em 20/09:
+//    planejamento em inglês misturado à resposta, fragmentado por rounds).
+var THINK_OPEN_RE = /<(?:think|thinking|thought|reasoning)>/i;
+var THINK_CLOSE_RE = /<\/(?:think|thinking|thought|reasoning)>/i;
+var THINK_PAIR_RE = /<(?:think|thinking|thought|reasoning)>[\s\S]*?<\/(?:think|thinking|thought|reasoning)>/gi;
+var THINK_TAG_RE = /<\/?(?:think|thinking|thought|reasoning)>/gi;
 
 // Filtra um fragmento de token, removendo blocos ```a2ui ... ```, blocos
 // ```json que contenham invokes/A2UI (vazamentos de tool call) e marcação
@@ -80,11 +90,16 @@ function filterA2uiTokens(token) {
       var openA2ui = f.buffer.indexOf(LEAK_OPEN_A2UI);
       var openJson = f.buffer.indexOf(LEAK_OPEN_JSON);
       var openDsml = f.buffer.search(DSML_OPEN_RE);
+      var openThink = f.buffer.search(THINK_OPEN_RE);
       // Escolhe a abertura mais próxima do início.
       var candidates = [];
       if (openA2ui !== -1) candidates.push({ idx: openA2ui, kind: "a2ui", len: LEAK_OPEN_A2UI.length });
       if (openJson !== -1) candidates.push({ idx: openJson, kind: "json", len: LEAK_OPEN_JSON.length });
       if (openDsml !== -1) candidates.push({ idx: openDsml, kind: "dsml", len: f.buffer.match(DSML_OPEN_RE)[0].length });
+      if (openThink !== -1) {
+        var thinkMatch = f.buffer.match(THINK_OPEN_RE)[0];
+        candidates.push({ idx: openThink, kind: "think", len: thinkMatch.length });
+      }
       candidates.sort(function (a, b) { return a.idx - b.idx; });
 
       if (candidates.length === 0) {
@@ -137,6 +152,20 @@ function filterA2uiTokens(token) {
       f.jsonBody = "";
       f.state = "";
       progress = true;
+    } else if (f.state === "think") {
+      // Dentro de bloco de raciocínio: descarta tudo até o fechamento.
+      var closeT = f.buffer.search(THINK_CLOSE_RE);
+      if (closeT === -1) {
+        // Sem fechamento ainda: descarta, mantendo o sufixo potencial do
+        // fechamento ("</reasoning>" tem 12 chars).
+        var keepT = Math.min(16, f.buffer.length);
+        f.buffer = f.buffer.slice(f.buffer.length - keepT);
+        break;
+      }
+      var matchT = f.buffer.match(THINK_CLOSE_RE)[0];
+      f.buffer = f.buffer.slice(closeT + matchT.length);
+      f.state = "";
+      progress = true;
     } else if (f.state === "dsml") {
       // Dentro de marcação DSML: procura o fechamento </｜DSML｜...>.
       var closeD = f.buffer.search(DSML_CLOSE_RE);
@@ -176,6 +205,10 @@ function sanitizeLeakedToolCalls(text) {
   // streaming é filtrado pelo buffer; aqui removemos o que sobrou).
   clean = clean.replace(DSML_TAG_RE, "");
   clean = clean.replace(INVOKE_TAG_RE, "");
+  // Remove blocos de raciocínio <think>...</think> (e variantes) e tags
+  // soltas — planejamento interno do modelo nunca deve vazar na conversa.
+  clean = clean.replace(THINK_PAIR_RE, "");
+  clean = clean.replace(THINK_TAG_RE, "");
   // Remove blocos ```json com invokes/A2UI.
   clean = clean.replace(JSON_FENCE_RE, function (m, body) {
     if (INVOKE_ARRAY_RE.test(body) || A2UI_ACTION_RE.test(body)) return "";
@@ -192,7 +225,10 @@ function sanitizeLeakedToolCalls(text) {
 // tokens, aplicamos de forma tolerante: removemos tags completas e mantemos
 // sufixos parciais no buffer (o chamador já gerencia o buffer).
 function stripLeakMarkersFromBuffer(buf) {
-  return buf.replace(DSML_TAG_RE, "").replace(INVOKE_TAG_RE, "");
+  return buf
+    .replace(DSML_TAG_RE, "")
+    .replace(INVOKE_TAG_RE, "")
+    .replace(THINK_TAG_RE, "");
 }
 
 function resetA2uiTokenFilter() {
@@ -302,7 +338,12 @@ function probeBackendStreamIdle() {
         chatStreamTimeoutId = setTimeout(probeBackendStreamIdle, CHAT_STREAM_PROBE_MS);
       });
   } catch (_) {
-    // Binding indisponível (serviço antigo): mantém aguardando o terminal.
+    // Binding lançou de forma síncrona (IPC indisponível neste instante): NÃO
+    // abandona a reconciliação — reagenda a sonda, senão o chat fica ocupado
+    // para sempre quando o evento terminal também não chega.
+    if (chatSending && !chatStreamTimeoutId) {
+      chatStreamTimeoutId = setTimeout(probeBackendStreamIdle, CHAT_STREAM_PROBE_MS);
+    }
   }
 }
 
@@ -381,7 +422,10 @@ var CHAT_MESSAGE_QUEUE_MAX = 10;
 function autoGrowChatInput() {
   if (!chatInputEl) return;
   chatInputEl.style.height = "auto";
-  chatInputEl.style.height = Math.min(chatInputEl.scrollHeight, 200) + "px";
+  // Cap de ~4 linhas (line-height 1.5 × 0.9rem ≈ 22px/linha; 88px ≈ 4 linhas),
+  // espelhado no max-height de .chat-input — antes crescia até 200px, virando
+  // um campo do tamanho de um parágrafo.
+  chatInputEl.style.height = Math.min(chatInputEl.scrollHeight, 88) + "px";
 }
 
 function queueChatMessage(text) {
@@ -781,13 +825,26 @@ function finaliseStreamingBubble() {
   scheduleChatScrollToBottom();
 }
 
+// safeFinaliseStreamingBubble: finalisa a bolha SEM deixar o chat ocupado
+// para sempre se a renderização final falhar (exceção em markdown/tabela/
+// botões). onStreamDone/onStreamError/onStreamStopped sempre liberam o estado
+// (setChatBusy(false) + fila) logo depois dela — uma exceção aqui não pode
+// travar o chat (bug de travamento visto em produção em 20/09).
+function safeFinaliseStreamingBubble() {
+  try {
+    safeFinaliseStreamingBubble();
+  } catch (e) {
+    console.error("[chat] falha ao finalizar bolha de streaming:", e);
+  }
+}
+
 function onStreamDone() {
   stopPollingLoop();
   stopThinkingStatusUpdates();
   clearChatStreamTimeout();
   chatPendingQuestionCount = 0;
   clearChatBusyRequeue();
-  finaliseStreamingBubble();
+  safeFinaliseStreamingBubble();
   chatStopRequested = false;
   setChatBusy(false);
   if (chatInputEl) chatInputEl.focus();
@@ -831,7 +888,7 @@ function onStreamError(errMsg) {
     if (streamingBubble && !streamingRawContent) {
       streamingRawContent = translate("chat.responseInterrupted");
     }
-    finaliseStreamingBubble();
+    safeFinaliseStreamingBubble();
     chatStopRequested = false;
     setChatBusy(false);
     if (chatInputEl) chatInputEl.focus();
@@ -850,7 +907,7 @@ function onStreamError(errMsg) {
         error: String(errMsg || translate("common.unknown")),
       });
     }
-    finaliseStreamingBubble();
+    safeFinaliseStreamingBubble();
   } else {
     addChatMessage(
       "assistant",
@@ -877,7 +934,7 @@ function onStreamStopped() {
   if (streamingBubble && !streamingRawContent) {
     streamingRawContent = translate("chat.responseInterrupted");
   }
-  finaliseStreamingBubble();
+  safeFinaliseStreamingBubble();
   chatStopRequested = false;
   setChatBusy(false);
   if (chatInputEl) chatInputEl.focus();
@@ -927,6 +984,14 @@ function endPendingQuestion() {
 
 function showChatQuestion(question) {
   if (!chatMessagesEl) return;
+
+  // Dedupe: reemissão do mesmo id (retry/retransmissão do backend) não cria
+  // uma segunda bolha — a pergunta duplicada aparecendo DEPOIS da resposta do
+  // usuário quebrava a ordem visual da conversa.
+  var existingQuestions = chatMessagesEl.querySelectorAll(".chat-question");
+  for (var qi = 0; qi < existingQuestions.length; qi += 1) {
+    if (existingQuestions[qi].dataset.questionId === question.id) return;
+  }
 
   var div = document.createElement("div");
   div.className = "chat-msg assistant chat-question";
@@ -1020,11 +1085,47 @@ function appendChatQuestionAnswer(text) {
   scheduleChatScrollToBottom();
 }
 
+// splitStreamingBubbleAfterQuestion fecha a bolha de streaming atual e abre
+// uma nova no fim da conversa. A bolha original nasce no INÍCIO do turno
+// (antes da pergunta ask_user); ao retomar o stream após a resposta do
+// usuário, o texto continuaria nela — aparecendo ACIMA da pergunta/resposta
+// e quebrando a cronologia. Com o split, a ordem fica:
+//   [resposta parcial] [pergunta] [sua resposta] [continuação da resposta]
+// O conteúdo pré-pergunta permanece na bolha antiga; streamingRawContent é
+// zerado para a continuação não duplicar o texto.
+function splitStreamingBubbleAfterQuestion() {
+  if (streamingBubble) {
+    var hadContent = !!streamingRawContent.trim();
+    var oldThinking = streamingBubble.querySelector(".stream-thinking");
+    if (oldThinking) oldThinking.remove();
+    var oldCursor = streamingBubble.querySelector(".stream-cursor");
+    if (oldCursor) oldCursor.remove();
+    streamingBubble.classList.remove("streaming");
+    if (!hadContent) streamingBubble.remove();
+    streamingBubble = null;
+  }
+  streamingRawContent = "";
+  streamingRafPending = false;
+  if (!chatMessagesEl) return;
+  streamingBubble = document.createElement("div");
+  streamingBubble.className = "chat-msg assistant streaming";
+  streamingBubble.appendChild(buildChatActivityElement());
+  var cursorEl = document.createElement("span");
+  cursorEl.className = "stream-cursor";
+  streamingBubble.appendChild(cursorEl);
+  chatMessagesEl.appendChild(streamingBubble);
+  scheduleChatScrollToBottom();
+}
+
 function answerChatQuestion(questionId, answer) {
   // Feedback imediato: bolha destacada com a resposta do usuário + reativa o
   // timer de segurança (a espera pela pergunta terminou).
   appendChatQuestionAnswer(answer);
   endPendingQuestion();
+  // O stream retoma escrevendo na bolha de streaming — que nasceu ANTES da
+  // pergunta. Fecha-a e abre uma nova depois do Q&A para a continuação da
+  // resposta aparecer na ordem certa da conversa.
+  splitStreamingBubbleAfterQuestion();
   // O processamento retomou: volta o indicador para "Pensando...".
   if (streamingBubble && !streamingRawContent) {
     var thinkingEl = streamingBubble.querySelector(".stream-thinking");
@@ -1310,6 +1411,12 @@ function sendChatMessageWithA2uiAction() {
   // não deixar "Pensando..." preso se o evento chat:done nunca chegar.
   armChatStreamTimeout();
 
+  // Polling já no dispatch (mesma justificativa do dispatch por mensagem):
+  // a resolução do binding não pode ser pré-condição para consumir eventos.
+  if (window.__wailsV3Bridge) {
+    startPollingLoop();
+  }
+
   try {
     appApi()
       .StartChatStream("__a2ui_action__")
@@ -1395,42 +1502,57 @@ function clearA2uiSurface() {
     if (pollTimerId) return; // já rodando
     console.log("[chat] polling via PollChatEvents iniciado (intervalo=" + POLL_INTERVAL_MS + "ms)");
 
+    // routePollResult processa o lote retornado por PollChatEvents e informa
+    // se algum evento terminal (done/error/stopped) foi processado.
+    function routePollResult(result) {
+      var events;
+      if (typeof result === "string") {
+        try { events = JSON.parse(result); } catch (_) { events = []; }
+      } else if (Array.isArray(result)) {
+        events = result;
+      } else {
+        events = [];
+      }
+
+      var foundTerminal = false;
+      for (var i = 0; i < events.length; i++) {
+        var raw = events[i];
+        var evt;
+        if (typeof raw === "string") {
+          try { evt = JSON.parse(raw); } catch (_) { continue; }
+        } else {
+          evt = raw;
+        }
+        if (!evt || !evt.event) continue;
+        routeChatEvent(evt);
+        if (STREAM_TERMINAL_EVENTS[evt.event]) {
+          foundTerminal = true;
+        }
+      }
+      return foundTerminal;
+    }
+
     function poll() {
       if (!chatSending) {
-        // Stream não está mais ativo — para o polling
-        stopPollingLoop();
+        // Drenagem final ANTES de parar: eventos ainda no buffer do broker
+        // (inclusive o terminal) não podem ficar órfãos — chatSending pode
+        // ter virado false por outro caminho enquanto o lote estava em voo.
+        appApi()
+          .PollChatEvents()
+          .then(function (result) {
+            routePollResult(result);
+            stopPollingLoop();
+          })
+          .catch(function () {
+            stopPollingLoop();
+          });
         return;
       }
 
       appApi()
         .PollChatEvents()
         .then(function (result) {
-          var events;
-          if (typeof result === "string") {
-            try { events = JSON.parse(result); } catch (_) { events = []; }
-          } else if (Array.isArray(result)) {
-            events = result;
-          } else {
-            events = [];
-          }
-
-          var foundTerminal = false;
-          for (var i = 0; i < events.length; i++) {
-            var raw = events[i];
-            var evt;
-            if (typeof raw === "string") {
-              try { evt = JSON.parse(raw); } catch (_) { continue; }
-            } else {
-              evt = raw;
-            }
-            if (!evt || !evt.event) continue;
-            routeChatEvent(evt);
-            if (STREAM_TERMINAL_EVENTS[evt.event]) {
-              foundTerminal = true;
-            }
-          }
-
-          if (foundTerminal) {
+          if (routePollResult(result)) {
             stopPollingLoop();
             return;
           }
@@ -2263,13 +2385,22 @@ function dispatchChatMessage(text) {
   // evento chat:done nunca chegar (erro de rede, goroutine perdida, etc.).
   armChatStreamTimeout();
 
+  // Polling inicia JÁ no dispatch (não dentro do .then do StartChatStream):
+  // se a resolução do binding se perder (Wails v3 beta), o transporte de
+  // eventos ficaria sem consumidor e o turno inteiro não apareceria na tela —
+  // travamento visto em produção em 20/09 ("Ele nao esta abrindo").
+  // startPollingLoop é idempotente (guard de pollTimerId).
+  if (window.__wailsV3Bridge) {
+    startPollingLoop();
+  }
+
   try {
     // StartChatStream returns immediately; response arrives via events.
     appApi()
       .StartChatStream(text)
       .then(function () {
-        // Inicia o polling loop APENAS no runtime nativo (WebView2).
-        // No navegador, o debug-http-bridge já conecta ao SSE via window.wails.on.
+        // Runtime nativo (WebView2) usa polling; no navegador, o
+        // debug-http-bridge já conecta ao SSE via window.wails.on.
         if (window.__wailsV3Bridge) {
           startPollingLoop();
         }
