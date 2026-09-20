@@ -1,8 +1,11 @@
 package remotesession
 
 import (
+	"runtime"
 	"sync"
 	"time"
+
+	"discovery/app/core/platform"
 )
 
 // QualityConfig define parametros de qualidade por perfil.
@@ -82,17 +85,22 @@ type QualityManager struct {
 // causava tela minúscula no viewer.
 // "fast": FPS 20 (fluido com banda moderada).
 // "unlimited": SEM LIMITE de FPS (captura o mais rápido possível).
+// Qualidades na grade da escada automática: 10 a 90, de 10 em 10.
+// (92/75/25 fora da grade não existem mais — o card nunca exibe 75%.)
 var defaultProfiles = map[string]QualityConfig{
-	"ultra":     {JpegQuality: 92, Fps: 30, ScaleFactor: 1.0},
+	"ultra":     {JpegQuality: 90, Fps: 30, ScaleFactor: 1.0},
 	"fast":      {JpegQuality: 80, Fps: 20, ScaleFactor: 1.0},
-	"high":      {JpegQuality: 75, Fps: 15, ScaleFactor: 1.0},
+	"high":      {JpegQuality: 70, Fps: 15, ScaleFactor: 1.0},
 	"medium":    {JpegQuality: 60, Fps: 12, ScaleFactor: 1.0},
 	"low":       {JpegQuality: 40, Fps: 5, ScaleFactor: 1.0},
-	"ultralow":  {JpegQuality: 25, Fps: 2, ScaleFactor: 1.0},
-	"unlimited": {JpegQuality: 75, Fps: 0, ScaleFactor: 1.0}, // 0 = sem limite
+	"ultralow":  {JpegQuality: 30, Fps: 2, ScaleFactor: 1.0},
+	"unlimited": {JpegQuality: 80, Fps: 0, ScaleFactor: 1.0}, // 0 = sem limite
 }
 
 // NewQualityManager cria um gerenciador de qualidade.
+// A escada automática é SEMEADA pela POTÊNCIA DA MÁQUINA (SeedAutoFromHost),
+// não pelo perfil: no modo auto o ponto de partida reflete o hardware/uso
+// local, e a rede (netstats do viewer) refinA de 10 em 10 em runtime.
 func NewQualityManager(cfg QualityConfig) QualityManager {
 	if cfg.JpegQuality == 0 {
 		cfg = defaultProfiles["high"]
@@ -101,9 +109,56 @@ func NewQualityManager(cfg QualityConfig) QualityManager {
 	return QualityManager{
 		profile:       "high",
 		current:       cfg,
-		autoImageQ:    clampQualityLadder(cfg.JpegQuality),
+		autoImageQ:    clampQualityLadder(SeedAutoImageQuality()),
 		lastAdaptTime: time.Now(),
 	}
+}
+
+// SeedAutoImageQuality calcula a qualidade inicial do modo AUTO pelo PODER DA
+// MÁQUINA: uso de CPU no momento + memória disponível + nº de núcleos.
+// Chamado no start da sessão (fix card 75%: antes a sessão nascia em modo
+// manual com o override do perfil, ex. unlimited=75, e a escada 10-90 de 10
+// em 10 nunca rodava). Retorna 0 quando não consegue medir nada.
+func SeedAutoImageQuality() int {
+	return SeedAutoImageQualityFrom(runtime.NumCPU(), platform.SampleCPUPercent(), platform.SampleMemoryPercent())
+}
+
+// SeedAutoImageQualityFrom é a versão testável do cálculo da semente.
+// cores: nº de núcleos (proxy do poder de processamento) · cpu: uso atual
+// 0-100 (-1 desconhecido) · mem: uso de memória 0-100 (-1 desconhecido).
+// Ajusta a qualidade pela CARGA NO MOMENTO: máquina ocupada começa mais leve.
+func SeedAutoImageQualityFrom(cores int, cpu, mem float64) int {
+	base := 50 // default conservador
+	switch {
+	case cores <= 2:
+		base = 30 // máquina fraca: começa leve
+	case cores <= 4:
+		base = 40
+	case cores <= 8:
+		base = 50
+	case cores > 8:
+		base = 60 // máquina forte
+	}
+	score := base
+	if cpu >= 0 {
+		switch {
+		case cpu >= 85:
+			score = base - 20
+		case cpu >= 60:
+			score = base - 10
+		case cpu <= 15:
+			score = base + 10
+		}
+	}
+	if mem >= 0 {
+		switch {
+		case mem >= 90:
+			score -= 10
+		case mem <= 40:
+			score += 10
+		}
+	}
+	return clampQualityLadder(score)
 }
 
 // Current retorna a configuracao atual.
@@ -220,13 +275,20 @@ func (qm *QualityManager) SetImageQualityAuto(q int) {
 	qm.goodStreak = 0
 }
 
-// ResetAutoToProfile volta ao perfil base e re-semeia a escada automática
-// (chamado quando o viewer volta ao modo auto sem override explícito).
+// ResetAutoToProfile limpa overrides manuais e reativa a escada automática
+// (chamado quando o viewer volta ao modo auto). Se a sessão já tem histórico
+// de adaptação (netstats do viewer), a escada APRENDIDA é preservada; sem
+// histórico, a semente é a POTÊNCIA DA MÁQUINA — nunca o valor do perfil
+// (75% do "unlimited" era o card travado).
 func (qm *QualityManager) ResetAutoToProfile() {
 	qm.mu.Lock()
 	defer qm.mu.Unlock()
 	qm.current.overrideImageQ = 0
-	qm.autoImageQ = clampQualityLadder(qm.current.JpegQuality)
+	if !qm.netstatsSeen {
+		if seed := SeedAutoImageQuality(); seed > 0 {
+			qm.autoImageQ = clampQualityLadder(seed)
+		}
+	}
 	qm.goodStreak = 0
 }
 
@@ -323,8 +385,16 @@ func (qm *QualityManager) adapt() {
 		return
 	}
 
-	down := qm.recvKbps < adaptiveMinRecvKbps || qm.rttMs > adaptiveRttDownMs
-	good := qm.recvKbps > adaptiveGoodRecvKbps
+	// ── Dimensão máquina (carga local): CPU alta no momento força degrau
+	// extra para baixo — a sessão não deve engasgar o host. Medição nativa
+	// (GetSystemTimes, janela de 2s); falha (-1) é ignorada.
+	hostHeavy := false
+	if cpu := platform.SampleCPUPercent(); cpu >= 85 {
+		hostHeavy = true
+	}
+
+	down := qm.recvKbps < adaptiveMinRecvKbps || qm.rttMs > adaptiveRttDownMs || hostHeavy
+	good := qm.recvKbps > adaptiveGoodRecvKbps && !hostHeavy
 
 	switch {
 	case down:

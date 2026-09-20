@@ -269,14 +269,15 @@ func (m *Manager) handleQuality(_ context.Context, payload map[string]any) (bool
 		// Em Manual: aplica overrides explícitos com clamp 10-90.
 		if autoMode {
 			s.ImageQuality = 0
-			// Volta ao perfil e re-semeia a escada adaptativa (10→90 de 10 em 10).
+			// Volta ao AUTO (10-90 de 10 em 10): mantém a escada já aprendida
+			// (rede/host calibrados) ou re-semeia pela POTÊNCIA DA MÁQUINA se
+			// nunca houve adaptação. A imageQuality do payload é do PERFIL
+			// (ex. unlimited=75) e NÃO deve semear a escada automática — era
+			// uma das fontes do card travado em 75%.
 			screen.ResetAutoToProfile()
 			s.MaxFps = 0
 			screen.ClearMaxFps()
-			// Aplica a qualidade do perfil do codec efetivo (sem clamp manual)
-			if iq, ok := toFloat64(imageQuality); ok {
-				screen.SetImageQualityAuto(int(iq))
-			}
+			// FPS do perfil pode ser aplicado (não é a escada de imagem).
 			if mf, ok := toFloat64(maxFpsVal); ok {
 				screen.SetMaxFps(int(mf))
 			}
@@ -464,12 +465,14 @@ func (m *Manager) runScreenSession(ctx context.Context, session *Session) {
 	}()
 
 	// Configura qualidade, codec, imagem e FPS.
-	// NOTA (qualidade): o payload do start tem imageQuality default 70, mas
-	// isso NÃO deve virar override manual quando o perfil é automático —
-	// senão o perfil (ex.: ultra=92, ultralow=25) ficava travado em 70 e a
-	// adaptação automática perdia o efeito. Override manual só quando o
-	// payload traz imageQuality EXPLÍCITO (>0) E modo manual (auto=false).
-	autoStart := false
+	// NOTA (qualidade): o backend NÃO envia "auto" no payload de start
+	// (RemoteSessionCommandHandlers) — tratá-lo como ausente significava
+	// sessão nascendo em MODO MANUAL com override do perfil (ex. unlimited
+	// = 75%) e a escada automática 10→90 nunca rodava: era o card travado
+	// em 75%. Sessão agora nasce em MODO AUTO por padrão: a escada parte da
+	// POTÊNCIA DA MÁQUINA (CPU/memória/núcleos) e refina de 10 em 10 com as
+	// netstats do viewer. Modo manual só via comando quality (auto=false).
+	autoStart := true
 	if a, ok := session.Meta["auto"].(bool); ok {
 		autoStart = a
 	}
@@ -477,11 +480,14 @@ func (m *Manager) runScreenSession(ctx context.Context, session *Session) {
 	screenSession.SetCodec(session.Codec)
 	screenSession.SetManualMode(!autoStart)
 	if session.ImageQuality > 0 && !autoStart {
+		// Override manual EXPLÍCITO (comando quality auto=false) — clampa 10-90.
 		screenSession.SetImageQuality(session.ImageQuality)
+	} else if autoStart {
+		// Semente automática pelo poder/carga da máquina (10-90, de 10 em 10).
+		screenSession.SetImageQualityAuto(SeedAutoImageQuality())
 	}
-	// FPS: >0 = máximo; 0 = sem limite (perfil "unlimited").
-	// O backend sempre envia maxFps (defaultFps do perfil), então o valor
-	// presente no payload é o desejado. Se ausente (0 default), usa o perfil.
+	// FPS: >0 = máximo; 0 = sem limite (perfil "unlimited"). No modo auto o
+	// limite do perfil (payload) é o desejado; 0 = captura sem throttle.
 	if session.MaxFps > 0 {
 		screenSession.SetMaxFps(session.MaxFps)
 	} else if session.Quality == "unlimited" {
