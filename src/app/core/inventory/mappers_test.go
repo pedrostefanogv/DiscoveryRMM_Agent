@@ -377,3 +377,83 @@ func TestFindOsqueryBinary_NegativeCacheCanBeInvalidated(t *testing.T) {
 		t.Fatalf("expected non-empty path when err is nil")
 	}
 }
+
+func TestMapPrinters_NilInput(t *testing.T) {
+	if got := mapPrinters(nil); got != nil {
+		t.Errorf("mapPrinters(nil) = %v, want nil", got)
+	}
+}
+
+func TestMapPrinters_MapsFields(t *testing.T) {
+	rows := []map[string]any{
+		{
+			"name":           "Microsoft Print to PDF",
+			"driver_name":    "Microsoft Print To PDF",
+			"port_name":      "PORTPROMPT:",
+			"printer_status": "3",
+			"default_":       "1",
+			"shared":         "0",
+		},
+		{
+			"name":           "HP LaserJet Corp",
+			"driver_name":    "HP Universal Printing",
+			"port_name":      "IP_192.168.10.60",
+			"printer_status": "7",
+			"default_":       "0",
+			"shared":         "1",
+			"share_name":     "HPLJ",
+			"computer_name":  "",
+		},
+		{
+			"name":          "Impressora do servidor",
+			"port_name":     "nul:",
+			"computer_name": "SRV-PRINT01",
+		},
+	}
+	result := mapPrinters(rows)
+	if len(result) != 3 {
+		t.Fatalf("expected 3 printers, got %d", len(result))
+	}
+
+	pdf := result[0]
+	if pdf.Name != "Microsoft Print to PDF" {
+		t.Errorf("Name = %q", pdf.Name)
+	}
+	if !pdf.IsDefault {
+		t.Errorf("default_ = 1 deve mapear IsDefault=true")
+	}
+	if pdf.IsNetworkPrinter {
+		t.Errorf("porta PORTPROMPT não é rede")
+	}
+	if pdf.PrinterStatus != "Ready" {
+		t.Errorf("status 3 = Ready, got %q", pdf.PrinterStatus)
+	}
+
+	hp := result[1]
+	if !hp.IsNetworkPrinter {
+		t.Errorf("porta IP_ deve marcar IsNetworkPrinter=true")
+	}
+	if !hp.Shared || hp.ShareName != "HPLJ" {
+		t.Errorf("shared/share_name não mapeados: %+v", hp)
+	}
+	if hp.PrinterStatus != "Offline" {
+		t.Errorf("status 7 = Offline, got %q", hp.PrinterStatus)
+	}
+
+	srv := result[2]
+	if !srv.IsNetworkPrinter {
+		t.Errorf("computer_name não vazio deve marcar rede")
+	}
+}
+
+func TestMapPrinters_DedupByName(t *testing.T) {
+	rows := []map[string]any{
+		{"name": "Dup", "printer_status": "3"},
+		{"name": "Dup", "printer_status": "7"},
+		{"name": "", "printer_status": "3"},
+	}
+	result := mapPrinters(rows)
+	if len(result) != 1 {
+		t.Fatalf("expected 1 printer after dedupe/empty-name skip, got %d", len(result))
+	}
+}

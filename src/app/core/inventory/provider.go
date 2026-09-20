@@ -233,6 +233,15 @@ func (p *Provider) collectWithNative(ctx context.Context) (models.InventoryRepor
 		return models.InventoryReport{}, err
 	}
 
+	// Impressoras: best-effort. Uma máquina pode não ter nenhuma impressora
+	// (dado válido) e uma falha na coleta não deve invalidar o inventário
+	// inteiro — loga e segue com lista vazia.
+	printers, printersErr := p.native.CollectPrinters(ctx)
+	if printersErr != nil {
+		log.Printf("[inventory] coleta de impressoras indisponível (native): %v", printersErr)
+		printers = nil
+	}
+
 	// Media types for volumes/disks.
 	mediaTypes := p.native.CollectDiskMediaTypes(ctx)
 	for i := range volumes {
@@ -294,6 +303,7 @@ func (p *Provider) collectWithNative(ctx context.Context) (models.InventoryRepor
 		Networks:       networks,
 		ListeningPorts: listeningPorts,
 		OpenSockets:    openSockets,
+		Printers:       printers,
 		Software:       software,
 		StartupItems:   startupItems,
 	}
@@ -497,6 +507,7 @@ func (p *Provider) collectWithOsquery(ctx context.Context) (models.InventoryRepo
 		{name: "routes", sql: "SELECT interface, gateway, destination FROM routes WHERE destination IN ('0.0.0.0', '::')"},
 		{name: "listening_ports", sql: "SELECT p.name AS process_name, p.pid AS pid, p.path AS process_path, l.protocol, l.address, l.port FROM listening_ports l JOIN processes p USING (pid) WHERE l.port != 0"},
 		{name: "open_sockets", sql: "SELECT p.name AS process_name, p.pid AS pid, p.path AS process_path, s.local_address, s.local_port, s.remote_address, s.remote_port, s.protocol, s.family FROM process_open_sockets s JOIN processes p USING (pid) WHERE s.remote_port != 0"},
+		{name: "printers", sql: "SELECT name, driver_name, port_name, printer_status, shared, share_name, published, computer_name, type, job_count, default_ FROM printers"},
 	}
 
 	results := p.runQueries(runCtx, bin, queries)
@@ -576,6 +587,7 @@ func (p *Provider) collectWithOsquery(ctx context.Context) (models.InventoryRepo
 		Networks:       mapNetworkRows(get("interface_details"), get("interface_addresses"), get("routes")),
 		ListeningPorts: mapListeningPorts(get("listening_ports")),
 		OpenSockets:    mapOpenSockets(get("open_sockets")),
+		Printers:       mapPrinters(get("printers")),
 		Software:       buildSoftwareInventoryFromResults(results),
 		StartupItems:   mapStartupItems(get("startup_items")),
 		Autoexec:       mapAutoexecItems(get("autoexec")),

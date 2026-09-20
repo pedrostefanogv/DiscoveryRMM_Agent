@@ -35,6 +35,9 @@ func (unsupportedCollector) CollectNetworks(context.Context) ([]models.NetworkIn
 func (unsupportedCollector) CollectNetworkConnections(context.Context) ([]models.ListeningPortInfo, []models.OpenSocketInfo, error) {
 	return nil, nil, ErrUnsupported
 }
+func (unsupportedCollector) CollectPrinters(context.Context) ([]models.PrinterInfo, error) {
+	return nil, ErrUnsupported
+}
 func (unsupportedCollector) CollectHardware(context.Context) (models.HardwareInfo, []models.MemoryModule, []models.GPUInfo, []models.CPUInfo, []models.CPUFeature, error) {
 	return models.HardwareInfo{}, nil, nil, nil, nil, ErrUnsupported
 }

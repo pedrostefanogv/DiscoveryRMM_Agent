@@ -560,6 +560,87 @@ func mapOpenSockets(rows []map[string]any) []models.OpenSocketInfo {
 }
 
 // -----------------------------------------------------------------------
+// Printers
+// -----------------------------------------------------------------------
+
+// printerPortLooksNetwork: portas TCP/IP RAW criam nomes "IP_x.x.x.x";
+// portas HTTP/HTTPS apontam para impressoras de rede/web.
+func printerPortLooksNetwork(port string) bool {
+	p := strings.ToUpper(strings.TrimSpace(port))
+	return strings.HasPrefix(p, "IP_") ||
+		strings.HasPrefix(p, "HTTP://") ||
+		strings.HasPrefix(p, "HTTPS://")
+}
+
+// printerStatusFromOsquery converte o PrinterStatus (Win32_Printer, int em
+// texto) em rótulo legível. Espelha native.printerStatusString — pacotes
+// separados, por isso a duplicação intencional.
+func printerStatusFromOsquery(v string) string {
+	switch parseInt(strings.TrimSpace(v)) {
+	case 3:
+		return "Ready"
+	case 4:
+		return "Printing"
+	case 5:
+		return "Warmup"
+	case 6:
+		return "Stopped Printing"
+	case 7:
+		return "Offline"
+	case 1:
+		return "Other"
+	case 2:
+		return "Unknown"
+	default:
+		return ""
+	}
+}
+
+// mapPrinters mapeia a tabela osquery `printers` (Windows). A coluna de
+// default chama-se `default_` no osquery (palavra reservada com sufixo).
+// Osquery não expõe `location` da impressora.
+func mapPrinters(rows []map[string]any) []models.PrinterInfo {
+	if len(rows) == 0 {
+		return nil
+	}
+
+	const maxPrinters = 100
+	items := make([]models.PrinterInfo, 0, len(rows))
+	seen := make(map[string]struct{}, len(rows))
+
+	for _, row := range rows {
+		name := strings.TrimSpace(getString(row, "name"))
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+
+		portName := strings.TrimSpace(getString(row, "port_name"))
+		computerName := strings.TrimSpace(getString(row, "computer_name"))
+		items = append(items, models.PrinterInfo{
+			Name:             name,
+			DriverName:       strings.TrimSpace(getString(row, "driver_name")),
+			PortName:         portName,
+			PrinterStatus:    printerStatusFromOsquery(getString(row, "printer_status")),
+			IsDefault:        parseBoolLoose(firstNonEmpty(getString(row, "default_"), getString(row, "default"))),
+			IsNetworkPrinter: computerName != "" || printerPortLooksNetwork(portName),
+			Shared:           parseBoolLoose(getString(row, "shared")),
+			ShareName:        strings.TrimSpace(getString(row, "share_name")),
+			Location:         "",
+		})
+
+		if len(items) >= maxPrinters {
+			break
+		}
+	}
+
+	return items
+}
+
+// -----------------------------------------------------------------------
 // Logged-in Users
 // -----------------------------------------------------------------------
 

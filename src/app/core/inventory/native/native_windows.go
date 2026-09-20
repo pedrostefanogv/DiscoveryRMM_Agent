@@ -45,6 +45,11 @@ func (windowsCollector) CollectNetworkConnections(ctx context.Context) ([]models
 	return collectNetworkConnectionsNative(ctx)
 }
 
+// CollectPrinters returns installed printers via WMI (Win32_Printer).
+func (windowsCollector) CollectPrinters(ctx context.Context) ([]models.PrinterInfo, error) {
+	return collectPrintersNative(ctx)
+}
+
 // CollectHardware returns motherboard, BIOS, GPU, memory and CPU details via
 // WMI (COM) and native APIs.
 func (windowsCollector) CollectHardware(ctx context.Context) (models.HardwareInfo, []models.MemoryModule, []models.GPUInfo, []models.CPUInfo, []models.CPUFeature, error) {
