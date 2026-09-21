@@ -195,9 +195,14 @@ func (a *App) ExecutePSADTTestScript(appName string, appVersion string) PSADTScr
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
+	// Usa a versao minima configurada no agente (RequiredVersion).
+	minVer := strings.TrimSpace(a.GetAgentConfiguration().PSADT.RequiredVersion)
+	if minVer == "" {
+		minVer = "4.1.8"
+	}
 	client, err := gopsadt.NewClient(
 		gopsadt.WithTimeout(30*time.Second),
-		gopsadt.WithMinModuleVersion("4.1.8"),
+		gopsadt.WithMinModuleVersion(minVer),
 	)
 	if err != nil {
 		result.Success = false
@@ -281,19 +286,50 @@ func (a *App) ExecuteCustomPSADTScript(scriptContent string) PSADTScriptResult {
 
 // PSADTVisualNotificationRequest define os parametros para um teste visual nativo de notificacao PSADT.
 type PSADTVisualNotificationRequest struct {
-	NotifType           string `json:"notifType"` // balloon_info | balloon_warning | balloon_error | prompt_ok | prompt_continue | progress
-	Title               string `json:"title"`
-	Message             string `json:"message"`
-	AppName             string `json:"appName"`
-	DurationSeconds     int    `json:"durationSeconds"` // utilizado apenas pelo tipo progress
+	NotifType   string `json:"notifType"` // balloon_info | balloon_warning | balloon_error | prompt_ok | prompt_yesno | prompt_continue | prompt_input | progress | dialog_box | restart_prompt | welcome
+	Title       string `json:"title"`
+	Message     string `json:"message"`
+	Subtitle    string `json:"subtitle"` // usado como StatusMessageDetail (progress) e Subtitle (prompt)
+	AppName     string `json:"appName"`
+	DurationSeconds int  `json:"durationSeconds"` // utilizado apenas pelo tipo progress
+
+	// Balloon (Show-ADTBalloonTip)
+	BalloonTimeSeconds int  `json:"balloonTimeSeconds"` // BalloonTipTime em segundos (0 = 10s default do PSADT)
+	BalloonNoWait      bool `json:"balloonNoWait"`
+
+	// Prompt (Show-ADTInstallationPrompt)
+	PromptLeftText   string `json:"promptLeftText"`
+	PromptMiddleText string `json:"promptMiddleText"`
+	PromptRightText  string `json:"promptRightText"`
+	PromptIcon       string `json:"promptIcon"`     // DialogSystemIcon: Information | Question | Exclamation | Error | Hand | Shield | Asterisk | Application | WinLogo | (vazio = omitir)
+	PromptTimeout    int    `json:"promptTimeout"`   // segundos, 0 = 120s (nao use o default de 55min do config.psd1)
+	PromptNoWait     bool   `json:"promptNoWait"`
+	PromptNotTopMost bool   `json:"promptNotTopMost"`
+
+	// Dialog (Show-ADTDialogBox)
 	DialogButtons       string `json:"dialogButtons"`   // Ok | OkCancel | AbortRetryIgnore | YesNoCancel | YesNo | RetryCancel | CancelTryContinue
 	DialogDefault       string `json:"dialogDefault"`   // First | Second | Third
 	DialogIcon          string `json:"dialogIcon"`      // None | Stop | Question | Exclamation | Information
-	DialogTimeout       int    `json:"dialogTimeout"`   // segundos, 0 = sem timeout
+	DialogTimeout       int    `json:"dialogTimeout"`   // segundos, 0 = 120s; maximo UI.DefaultTimeout do config.psd1 (3300s)
 	DialogNoWait        bool   `json:"dialogNoWait"`
 	DialogExitOnTimeout bool   `json:"dialogExitOnTimeout"`
 	DialogNotTopMost    bool   `json:"dialogNotTopMost"`
 	DialogForce         bool   `json:"dialogForce"`
+
+	// Restart (Show-ADTInstallationRestartPrompt)
+	RestartCountdownSeconds int  `json:"restartCountdownSeconds"`
+	RestartNoCountdown      bool `json:"restartNoCountdown"`
+
+	// Prompt input (Show-ADTInstallationPrompt -RequestInput)
+	PromptDefaultValue string `json:"promptDefaultValue"`
+
+	// Welcome (Show-ADTInstallationWelcome)
+	CloseProcesses          string `json:"closeProcesses"`          // nomes de processos separados por virgula
+	AllowDefer              bool   `json:"allowDefer"`
+	DeferTimes              int    `json:"deferTimes"`
+	DeferDeadline           string `json:"deferDeadline"`          // yyyy-MM-dd (opcional)
+	BlockExecution          bool   `json:"blockExecution"`
+	CloseProcessesCountdown int    `json:"closeProcessesCountdown"`
 }
 
 // ExecutePSADTVisualNotification executa uma notificacao visual nativa via cmdlets reais do PSAppDeployToolkit.
@@ -324,11 +360,46 @@ func (a *App) ExecutePSADTVisualNotification(req PSADTVisualNotificationRequest)
 	if req.DurationSeconds <= 0 || req.DurationSeconds > 60 {
 		req.DurationSeconds = 5
 	}
+	// Balloon: tempo de exibicao 1..120s (0 usa o default de 10s do PSADT).
+	if req.BalloonTimeSeconds < 0 || req.BalloonTimeSeconds > 120 {
+		req.BalloonTimeSeconds = 10
+	}
+	req.PromptIcon = normalizePromptIcon(req.PromptIcon)
+	if req.PromptNoWait {
+		// NoWait: sem Timeout (o PSADT usa o default do config.psd1, mas o
+		// processo Go termina em 30s e o dialogo fica em thread separada).
+		req.PromptTimeout = 0
+	}
+	// Prompts e dialogs bloqueantes: sem timeout explicito o PSADT usa o
+	// UI.DefaultTimeout do config.psd1 (55min), entao fixamos 120s por padrão
+	// para o teste retornar em tempo previsivel. Limite: UI.DefaultTimeout
+	// (3300s) — valores maiores geram ValidateScript error no PSADT.
+	if req.PromptTimeout <= 0 {
+		req.PromptTimeout = 120
+	}
+	if req.PromptTimeout > 3300 {
+		req.PromptTimeout = 3300
+	}
 	req.DialogButtons = normalizeDialogButtons(req.DialogButtons)
 	req.DialogDefault = normalizeDialogDefault(req.DialogDefault)
 	req.DialogIcon = normalizeDialogIcon(req.DialogIcon)
-	if req.DialogTimeout < 0 {
-		req.DialogTimeout = 0
+	if req.DialogTimeout <= 0 && !req.DialogNoWait {
+		req.DialogTimeout = 120
+	}
+	if req.DialogTimeout > 3300 {
+		req.DialogTimeout = 3300
+	}
+	if req.RestartCountdownSeconds <= 0 {
+		req.RestartCountdownSeconds = 60
+	}
+	if req.RestartCountdownSeconds > 3600 {
+		req.RestartCountdownSeconds = 3600
+	}
+	if req.DeferTimes < 0 {
+		req.DeferTimes = 0
+	}
+	if req.CloseProcessesCountdown < 0 {
+		req.CloseProcessesCountdown = 0
 	}
 	a.Logs.Append(fmt.Sprintf("[psadt] notificacao visual nativa: tipo=%s titulo=%q", req.NotifType, req.Title))
 
@@ -362,8 +433,19 @@ func (a *App) ExecutePSADTVisualNotification(req PSADTVisualNotificationRequest)
 	cmd.Env = append(os.Environ(),
 		"PSADT_TITLE="+req.Title,
 		"PSADT_MESSAGE="+req.Message,
+		"PSADT_SUBTITLE="+req.Subtitle,
 		"PSADT_APPNAME="+req.AppName,
 		fmt.Sprintf("PSADT_DURATION=%d", req.DurationSeconds),
+		fmt.Sprintf("PSADT_BALLOON_TIME=%d", req.BalloonTimeSeconds),
+		"PSADT_BALLOON_NOWAIT="+boolEnvValue(req.BalloonNoWait),
+		"PSADT_PROMPT_LEFT="+req.PromptLeftText,
+		"PSADT_PROMPT_MIDDLE="+req.PromptMiddleText,
+		"PSADT_PROMPT_RIGHT="+req.PromptRightText,
+		"PSADT_PROMPT_ICON="+req.PromptIcon,
+		fmt.Sprintf("PSADT_PROMPT_TIMEOUT=%d", req.PromptTimeout),
+		"PSADT_PROMPT_NOWAIT="+boolEnvValue(req.PromptNoWait),
+		"PSADT_PROMPT_NOT_TOPMOST="+boolEnvValue(req.PromptNotTopMost),
+		"PSADT_PROMPT_DEFAULT="+strings.TrimSpace(req.PromptDefaultValue),
 		"PSADT_DIALOG_BUTTONS="+req.DialogButtons,
 		"PSADT_DIALOG_DEFAULT="+req.DialogDefault,
 		"PSADT_DIALOG_ICON="+req.DialogIcon,
@@ -372,6 +454,14 @@ func (a *App) ExecutePSADTVisualNotification(req PSADTVisualNotificationRequest)
 		"PSADT_DIALOG_EXIT_ON_TIMEOUT="+boolEnvValue(req.DialogExitOnTimeout),
 		"PSADT_DIALOG_NOT_TOPMOST="+boolEnvValue(req.DialogNotTopMost),
 		"PSADT_DIALOG_FORCE="+boolEnvValue(req.DialogForce),
+		fmt.Sprintf("PSADT_RESTART_COUNTDOWN=%d", req.RestartCountdownSeconds),
+		"PSADT_RESTART_NO_COUNTDOWN="+boolEnvValue(req.RestartNoCountdown),
+		"PSADT_WELCOME_PROCESSES="+req.CloseProcesses,
+		"PSADT_WELCOME_ALLOW_DEFER="+boolEnvValue(req.AllowDefer),
+		fmt.Sprintf("PSADT_WELCOME_DEFER_TIMES=%d", req.DeferTimes),
+		"PSADT_WELCOME_DEFER_DEADLINE="+strings.TrimSpace(req.DeferDeadline),
+		"PSADT_WELCOME_BLOCK_EXEC="+boolEnvValue(req.BlockExecution),
+		fmt.Sprintf("PSADT_WELCOME_CLOSE_COUNTDOWN=%d", req.CloseProcessesCountdown),
 	)
 	processutil.HideWindow(cmd)
 
@@ -399,6 +489,15 @@ func (a *App) ExecutePSADTVisualNotification(req PSADTVisualNotificationRequest)
 }
 
 // buildPSADTVisualScript gera o script PowerShell para o tipo de notificacao solicitado.
+//
+// Parametros validados contra o codigo-fonte do PSAppDeployToolkit 4.1.8:
+//   - Show-ADTInstallationProgress: NAO tem -WindowTitle; usa -StatusMessage,
+//     -StatusMessageDetail, -StatusBarPercentage, -NotTopMost e -AllowMove.
+//   - Show-ADTInstallationPrompt -Icon usa DialogSystemIcon (Information,
+//     Question, Exclamation, Error, Hand, Shield, ...). 'Info' e INVALIDO.
+//   - -Timeout de prompts/dialogs nao pode exceder o UI.DefaultTimeout do
+//     config.psd1 (default 55min = 3300s); ValidateScript rejeita maiores.
+//   - Show-ADTBalloonTip aceita -BalloonTipTime (ms) e -NoWait.
 func buildPSADTVisualScript(req PSADTVisualNotificationRequest) (string, time.Duration) {
 	balloonIcon := "Info"
 	if strings.Contains(req.NotifType, "warning") {
@@ -418,7 +517,16 @@ func buildPSADTVisualScript(req PSADTVisualNotificationRequest) (string, time.Du
 		"$psadtTitle    = $env:PSADT_TITLE\n" +
 		"$psadtMessage  = $env:PSADT_MESSAGE\n" +
 		"$psadtAppName  = $env:PSADT_APPNAME\n" +
-		"$psadtDuration = [int]$env:PSADT_DURATION\n" +
+		"$psadtSubtitle = $env:PSADT_SUBTITLE\n" +
+		"$psadtBalloonTime = [int]$env:PSADT_BALLOON_TIME\n" +
+		"$psadtBalloonNoWait = ($env:PSADT_BALLOON_NOWAIT -eq '1')\n" +
+		"$psadtPromptLeft = $env:PSADT_PROMPT_LEFT\n" +
+		"$psadtPromptMiddle = $env:PSADT_PROMPT_MIDDLE\n" +
+		"$psadtPromptRight = $env:PSADT_PROMPT_RIGHT\n" +
+		"$psadtPromptIcon = $env:PSADT_PROMPT_ICON\n" +
+		"$psadtPromptTimeout = [int]$env:PSADT_PROMPT_TIMEOUT\n" +
+		"$psadtPromptNoWait = ($env:PSADT_PROMPT_NOWAIT -eq '1')\n" +
+		"$psadtPromptNotTopMost = ($env:PSADT_PROMPT_NOT_TOPMOST -eq '1')\n" +
 		"$psadtDialogButtons = $env:PSADT_DIALOG_BUTTONS\n" +
 		"$psadtDialogDefault = $env:PSADT_DIALOG_DEFAULT\n" +
 		"$psadtDialogIcon = $env:PSADT_DIALOG_ICON\n" +
@@ -426,7 +534,15 @@ func buildPSADTVisualScript(req PSADTVisualNotificationRequest) (string, time.Du
 		"$psadtDialogNoWait = ($env:PSADT_DIALOG_NOWAIT -eq '1')\n" +
 		"$psadtDialogExitOnTimeout = ($env:PSADT_DIALOG_EXIT_ON_TIMEOUT -eq '1')\n" +
 		"$psadtDialogNotTopMost = ($env:PSADT_DIALOG_NOT_TOPMOST -eq '1')\n" +
-		"$psadtDialogForce = ($env:PSADT_DIALOG_FORCE -eq '1')\n\n"
+		"$psadtDialogForce = ($env:PSADT_DIALOG_FORCE -eq '1')\n" +
+		"$psadtRestartCountdown = [int]$env:PSADT_RESTART_COUNTDOWN\n" +
+		"$psadtRestartNoCountdown = ($env:PSADT_RESTART_NO_COUNTDOWN -eq '1')\n" +
+		"$psadtWelcomeProcesses = $env:PSADT_WELCOME_PROCESSES\n" +
+		"$psadtWelcomeAllowDefer = ($env:PSADT_WELCOME_ALLOW_DEFER -eq '1')\n" +
+		"$psadtWelcomeDeferTimes = [int]$env:PSADT_WELCOME_DEFER_TIMES\n" +
+		"$psadtWelcomeDeadline = $env:PSADT_WELCOME_DEFER_DEADLINE\n" +
+		"$psadtWelcomeBlockExec = ($env:PSADT_WELCOME_BLOCK_EXEC -eq '1')\n" +
+		"$psadtWelcomeCloseCountdown = [int]$env:PSADT_WELCOME_CLOSE_COUNTDOWN\n\n"
 
 	openInteractive := "try {\n" +
 		"    Open-ADTSession -SessionState $ExecutionContext.SessionState" +
@@ -449,29 +565,69 @@ func buildPSADTVisualScript(req PSADTVisualNotificationRequest) (string, time.Du
 	switch req.NotifType {
 	case "balloon_info", "balloon_warning", "balloon_error":
 		body := openInteractive +
-			fmt.Sprintf("Show-ADTBalloonTip -BalloonTipTitle $psadtTitle -BalloonTipText $psadtMessage -BalloonTipIcon '%s'\n", balloonIcon) +
+			"$balloonParams = @{\n" +
+			"  BalloonTipTitle = $psadtTitle\n" +
+			"  BalloonTipText = $psadtMessage\n" +
+			fmt.Sprintf("  BalloonTipIcon = '%s'\n", balloonIcon) +
+			"}\n" +
+			"if ($psadtBalloonTime -gt 0) { $balloonParams.BalloonTipTime = $psadtBalloonTime * 1000 }\n" +
+			"if ($psadtBalloonNoWait) { $balloonParams.NoWait = $true }\n" +
+			"Show-ADTBalloonTip @balloonParams\n" +
 			"Write-Host 'BalloonTip exibido com sucesso'\n" +
 			closeSession
-		return header + body, 30 * time.Second
+		timeout := time.Duration(req.BalloonTimeSeconds+20) * time.Second
+		if req.BalloonNoWait {
+			timeout = 30 * time.Second
+		} else if timeout < 30*time.Second {
+			timeout = 30 * time.Second
+		}
+		return header + body, timeout
 
-	case "prompt_ok":
+	case "prompt_ok", "prompt_yesno", "prompt_continue", "prompt_input":
 		body := openInteractive +
-			"$adtResult = Show-ADTInstallationPrompt -Message $psadtMessage -Title $psadtTitle -ButtonRightText 'OK' -Icon 'Info'\n" +
-			"Write-Host \"Resultado: $adtResult\"\n" +
+			"$promptParams = @{\n" +
+			"  Message = $psadtMessage\n" +
+			"  Title = $psadtTitle\n" +
+			"}\n" +
+			"if ($psadtSubtitle) { $promptParams.Subtitle = $psadtSubtitle }\n" +
+			"if ($psadtPromptLeft) { $promptParams.ButtonLeftText = $psadtPromptLeft }\n" +
+			"if ($psadtPromptMiddle) { $promptParams.ButtonMiddleText = $psadtPromptMiddle }\n" +
+			"if ($psadtPromptRight) { $promptParams.ButtonRightText = $psadtPromptRight }\n" +
+			"if ($psadtPromptIcon) { $promptParams.Icon = $psadtPromptIcon }\n" +
+			"if ($psadtPromptTimeout -gt 0) { $promptParams.Timeout = $psadtPromptTimeout }\n" +
+			"if ($psadtPromptNoWait) { $promptParams.NoWait = $true }\n" +
+			"if ($psadtPromptNotTopMost) { $promptParams.NotTopMost = $true }\n"
+		switch req.NotifType {
+		case "prompt_ok":
+			body += "$promptParams.ButtonRightText = 'OK'\n"
+		case "prompt_yesno":
+			body += "$promptParams.ButtonLeftText = 'Sim'\n$promptParams.ButtonRightText = 'Nao'\n"
+		case "prompt_continue":
+			body += "$promptParams.ButtonLeftText = 'Continuar'\n$promptParams.ButtonRightText = 'Adiar'\n"
+		case "prompt_input":
+			body += "$promptParams.RequestInput = $true\n" +
+				"if ($env:PSADT_PROMPT_DEFAULT) { $promptParams.DefaultValue = $env:PSADT_PROMPT_DEFAULT }\n"
+		}
+		body += "$adtResult = Show-ADTInstallationPrompt @promptParams\n" +
+			"if ($null -ne $adtResult) { Write-Host \"Resultado: $adtResult\" } else { Write-Host 'Resultado: sem resposta (NoWait/Timeout)' }\n" +
 			closeSession
-		return header + body, 3 * time.Minute
-
-	case "prompt_continue":
-		body := openInteractive +
-			"$adtResult = Show-ADTInstallationPrompt -Message $psadtMessage -Title $psadtTitle -ButtonLeftText 'Continuar' -ButtonRightText 'Adiar' -Icon 'Info'\n" +
-			"Write-Host \"Resultado: $adtResult\"\n" +
-			closeSession
-		return header + body, 3 * time.Minute
+		timeout := 3 * time.Minute
+		if req.PromptNoWait {
+			timeout = 30 * time.Second
+		} else if req.PromptTimeout > 0 {
+			timeout = time.Duration(req.PromptTimeout+30) * time.Second
+		}
+		return header + body, timeout
 
 	case "progress":
 		body := openNonInt +
-			"Show-ADTInstallationProgress -StatusMessage $psadtMessage -WindowTitle $psadtTitle\n" +
+			"$progressParams = @{\n" +
+			"  StatusMessage = $psadtMessage\n" +
+			"}\n" +
+			"if ($psadtSubtitle) { $progressParams.StatusMessageDetail = $psadtSubtitle }\n" +
+			"Show-ADTInstallationProgress @progressParams\n" +
 			"Start-Sleep -Seconds $psadtDuration\n" +
+			"try { Close-ADTInstallationProgress } catch {}\n" +
 			"Write-Host \"Progresso exibido por $psadtDuration segundos\"\n" +
 			closeSession
 		timeout := time.Duration(req.DurationSeconds+30) * time.Second
@@ -501,12 +657,43 @@ func buildPSADTVisualScript(req PSADTVisualNotificationRequest) (string, time.Du
 		}
 		return header + body, timeout
 
+	case "restart_prompt":
+		body := openInteractive +
+			"$restartParams = @{}\n" +
+			"if ($psadtRestartNoCountdown) { $restartParams.NoCountdown = $true } else { $restartParams.CountdownSeconds = $psadtRestartCountdown }\n" +
+			"Show-ADTInstallationRestartPrompt @restartParams\n" +
+			"Write-Host 'RestartPrompt exibido com sucesso'\n" +
+			closeSession
+		return header + body, time.Duration(req.RestartCountdownSeconds+60) * time.Second
+
+	case "welcome":
+		body := openInteractive +
+			"$welcomeParams = @{}\n" +
+			"$welcomeProcs = @($psadtWelcomeProcesses -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })\n" +
+			"if ($welcomeProcs.Count -gt 0) { $welcomeParams.CloseProcesses = $welcomeProcs }\n" +
+			"if ($psadtWelcomeAllowDefer) { $welcomeParams.AllowDefer = $true }\n" +
+			"if ($psadtWelcomeDeferTimes -gt 0) { $welcomeParams.DeferTimes = $psadtWelcomeDeferTimes }\n" +
+			"if ($psadtWelcomeDeadline) { $welcomeParams.DeferDeadline = $psadtWelcomeDeadline }\n" +
+			"if ($psadtWelcomeBlockExec) { $welcomeParams.BlockExecution = $true }\n" +
+			"if ($psadtWelcomeCloseCountdown -gt 0) { $welcomeParams.CloseProcessesCountdown = $psadtWelcomeCloseCountdown }\n" +
+			"Show-ADTInstallationWelcome @welcomeParams\n" +
+			"Write-Host 'InstallationWelcome concluido'\n" +
+			closeSession
+		return header + body, 6*time.Minute + time.Duration(req.CloseProcessesCountdown) * time.Second
+
 	default:
 		body := openInteractive +
-			"Show-ADTBalloonTip -BalloonTipTitle $psadtTitle -BalloonTipText $psadtMessage -BalloonTipIcon 'Info'\n" +
+			"$balloonParams = @{\n" +
+			"  BalloonTipTitle = $psadtTitle\n" +
+			"  BalloonTipText = $psadtMessage\n" +
+			"  BalloonTipIcon = 'Info'\n" +
+			"}\n" +
+			"if ($psadtBalloonTime -gt 0) { $balloonParams.BalloonTipTime = $psadtBalloonTime * 1000 }\n" +
+			"if ($psadtBalloonNoWait) { $balloonParams.NoWait = $true }\n" +
+			"Show-ADTBalloonTip @balloonParams\n" +
 			"Write-Host 'BalloonTip exibido com sucesso'\n" +
 			closeSession
-		return header + body, 30 * time.Second
+		return header + body, 45 * time.Second
 	}
 }
 
@@ -586,5 +773,34 @@ func normalizeDialogIcon(raw string) string {
 		return "Information"
 	default:
 		return "None"
+	}
+}
+
+// normalizePromptIcon converte aliases para os valores do enum DialogSystemIcon do
+// PSADT 4.x (Show-ADTInstallationPrompt -Icon). Retorna vazio para omitir o parametro.
+func normalizePromptIcon(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "none":
+		return ""
+	case "info", "information":
+		return "Information"
+	case "warning", "exclamation":
+		return "Exclamation"
+	case "error":
+		return "Error"
+	case "question":
+		return "Question"
+	case "hand":
+		return "Hand"
+	case "shield":
+		return "Shield"
+	case "asterisk":
+		return "Asterisk"
+	case "application":
+		return "Application"
+	case "winlogo":
+		return "WinLogo"
+	default:
+		return "Information"
 	}
 }

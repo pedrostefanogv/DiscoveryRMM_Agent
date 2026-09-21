@@ -178,7 +178,7 @@
 
     <section class="panel">
       <h2>Notificacao Visual Nativa PSADT</h2>
-      <div class="meta" style="margin-bottom:10px;">Executa cmdlets PSADT reais: <code class="code-inline">Show-ADTBalloonTip</code>, <code class="code-inline">Show-ADTInstallationPrompt</code>, <code class="code-inline">Show-ADTInstallationProgress</code> e <code class="code-inline">Show-ADTDialogBox</code>.</div>
+      <div class="meta" style="margin-bottom:10px;">Executa cmdlets PSADT reais: <code class="code-inline">Show-ADTBalloonTip</code>, <code class="code-inline">Show-ADTInstallationPrompt</code>, <code class="code-inline">Show-ADTInstallationProgress</code>, <code class="code-inline">Show-ADTDialogBox</code>, <code class="code-inline">Show-ADTInstallationRestartPrompt</code> e <code class="code-inline">Show-ADTInstallationWelcome</code>. Timeouts de prompt/dialog limitados a 3300s (UI.DefaultTimeout do config.psd1).</div>
       <div class="form-grid">
         <div>
           <label for="visualNotifType">Tipo</label>
@@ -187,9 +187,13 @@
             <option value="balloon_warning">Balloon — Warning</option>
             <option value="balloon_error">Balloon — Error</option>
             <option value="prompt_ok">Prompt — OK</option>
+            <option value="prompt_yesno">Prompt — Sim / Não</option>
             <option value="prompt_continue">Prompt — Continuar / Adiar</option>
+            <option value="prompt_input">Prompt — Entrada de Texto</option>
             <option value="progress">Progress Bar</option>
             <option value="dialog_box">Dialog Box</option>
+            <option value="restart_prompt">Restart Prompt (countdown)</option>
+            <option value="welcome">Installation Welcome (fechar apps + defer)</option>
           </select>
         </div>
         <div>
@@ -204,9 +208,82 @@
           <label for="visualNotifDuration">Duracao Progress (seg)</label>
           <input id="visualNotifDuration" type="number" value="5" min="1" max="60" />
         </div>
+        <div>
+          <label for="visualNotifSubtitle">Subtitulo / Detail</label>
+          <input id="visualNotifSubtitle" type="text" value="" />
+        </div>
         <div style="grid-column: 1 / -1;">
           <label for="visualNotifMessage">Mensagem</label>
           <textarea id="visualNotifMessage">O pacote Office sera instalado. Aguarde.</textarea>
+        </div>
+        <div>
+          <label for="visualBalloonTime">Balloon Tempo (seg)</label>
+          <input id="visualBalloonTime" type="number" value="10" min="1" max="120" />
+        </div>
+        <div style="display:flex;align-items:center;gap:12px;">
+          <label style="cursor:pointer"><input id="visualBalloonNoWait" type="checkbox" /> Balloon NoWait</label>
+        </div>
+        <div>
+          <label for="visualPromptLeft">Prompt Botao Esq.</label>
+          <input id="visualPromptLeft" type="text" value="" />
+        </div>
+        <div>
+          <label for="visualPromptMiddle">Prompt Botao Meio</label>
+          <input id="visualPromptMiddle" type="text" value="" />
+        </div>
+        <div>
+          <label for="visualPromptRight">Prompt Botao Dir.</label>
+          <input id="visualPromptRight" type="text" value="" />
+        </div>
+        <div>
+          <label for="visualPromptIcon">Prompt Icon</label>
+          <select id="visualPromptIcon">
+            <option value="">(padrao Information)</option>
+            <option value="Information">Information</option>
+            <option value="Question">Question</option>
+            <option value="Exclamation">Exclamation</option>
+            <option value="Error">Error</option>
+            <option value="Hand">Hand</option>
+            <option value="Shield">Shield</option>
+            <option value="Asterisk">Asterisk</option>
+            <option value="Application">Application</option>
+            <option value="WinLogo">WinLogo</option>
+          </select>
+        </div>
+        <div>
+          <label for="visualPromptTimeout">Prompt Timeout (seg)</label>
+          <input id="visualPromptTimeout" type="number" value="120" min="0" max="3300" />
+        </div>
+        <div style="display:flex;align-items:center;gap:12px;">
+          <label style="cursor:pointer"><input id="visualPromptNoWait" type="checkbox" /> Prompt NoWait</label>
+          <label style="cursor:pointer"><input id="visualPromptNotTopMost" type="checkbox" /> NotTopMost</label>
+        </div>
+        <div>
+          <label for="visualRestartCountdown">Restart Countdown (seg)</label>
+          <input id="visualRestartCountdown" type="number" value="60" min="5" max="3600" />
+        </div>
+        <div style="display:flex;align-items:center;gap:12px;">
+          <label style="cursor:pointer"><input id="visualRestartNoCountdown" type="checkbox" /> Restart sem countdown</label>
+        </div>
+        <div>
+          <label for="visualCloseProcesses">Welcome — Processos (csv)</label>
+          <input id="visualCloseProcesses" type="text" value="winword,excel" />
+        </div>
+        <div>
+          <label for="visualDeferTimes">Welcome — Defer Times</label>
+          <input id="visualDeferTimes" type="number" value="3" min="0" max="999" />
+        </div>
+        <div>
+          <label for="visualDeferDeadline">Welcome — Defer Deadline</label>
+          <input id="visualDeferDeadline" type="text" placeholder="yyyy-MM-dd (opcional)" />
+        </div>
+        <div>
+          <label for="visualCloseCountdown">Welcome — Close Countdown (seg)</label>
+          <input id="visualCloseCountdown" type="number" value="0" min="0" max="3600" />
+        </div>
+        <div style="display:flex;align-items:center;gap:12px;">
+          <label style="cursor:pointer"><input id="visualAllowDefer" type="checkbox" checked /> Allow Defer</label>
+          <label style="cursor:pointer"><input id="visualBlockExecution" type="checkbox" /> Block Execution</label>
         </div>
         <div>
           <label for="visualDialogButtons">Dialog Buttons</label>
@@ -239,8 +316,8 @@
           </select>
         </div>
         <div>
-          <label for="visualDialogTimeout">Dialog Timeout (seg)</label>
-          <input id="visualDialogTimeout" type="number" value="0" min="0" max="3600" />
+          <label for="visualDialogTimeout">Dialog Timeout (seg, 0=120s, max 3300)</label>
+          <input id="visualDialogTimeout" type="number" value="120" min="0" max="3300" />
         </div>
         <div style="grid-column: 1 / -1; display:flex; gap:12px; flex-wrap:wrap; align-items:center;">
           <label><input id="visualDialogNoWait" type="checkbox" /> NoWait</label>

@@ -882,16 +882,17 @@
   50%       { opacity: 0; }
 }
 
-/* Composer do chat estilo VS Code: caixa única com a área de texto expandida
-   e os botões de ação (enviar/stop) dentro da região de digitação. */
+/* Composer do chat estilo VS Code: caixa única enxuta — o textarea é o corpo
+   inteiro do box e os botões (enviar/stop) flutuam sobre o canto inferior
+   direito, sem linha própria. Repouso: ~34px de altura total. */
 .chat-input-wrap {
   flex-shrink: 0;
+  position: relative;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 12px 14px 10px;
+  padding: 6px 10px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 10px;
   background: var(--surface);
   transition: border-color var(--transition), box-shadow var(--transition);
 }
@@ -905,18 +906,21 @@
   display: block;
   width: 100%;
   resize: none;
-  padding: 0;
+  /* Reserva à direita a largura dos botões flutuantes (enviar/stop), para o
+     texto não passar por baixo deles em nenhuma linha (inclusive rolada). */
+  padding: 0 56px 0 0;
   border: none;
   background: transparent;
   color: var(--text);
   font-size: 0.9rem;
   font-family: inherit;
-  line-height: 1.5;
-  /* Área compacta: começa com ~2 linhas e cresce até ~4 linhas no máximo
-     (cap espelhado em autoGrowChatInput; line-height 1.5 × 0.9rem ≈ 22px por
-     linha) — antes expandia até 200px, como um parágrafo. */
-  min-height: 44px;
-  max-height: 88px;
+  line-height: 1.35;
+  /* Área compacta: começa com 1 linha e cresce até ~3 linhas no máximo
+     (cap espelhado em autoGrowChatInput; line-height 1.35 × 0.9rem ≈ 20px por
+     linha) — antes começava com 2 linhas e expandia até 4 (88px), deixando o
+     composer alto demais para o espaço do painel. */
+  min-height: 20px;
+  max-height: 60px;
   overflow-y: auto;
 }
 
@@ -929,17 +933,23 @@
   border-color: transparent;
 }
 
+/* Botões flutuam sobre o canto inferior direito da caixa: não abrem uma
+   linha própria de altura — a faixa onde aparecem segue sendo área de
+   digitação (o padding-right do textarea preserva o espaço deles). */
 .chat-input-actions {
+  position: absolute;
+  right: 10px;
+  bottom: 4px;
+  z-index: 1;
   display: flex;
-  justify-content: flex-end;
   align-items: center;
   gap: 6px;
 }
 
 /* Botões de ícone do composer (enviar = avião, stop = quadrado) */
 .chat-icon-btn {
-  width: 30px;
-  height: 30px;
+  width: 24px;
+  height: 24px;
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;

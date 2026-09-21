@@ -422,10 +422,10 @@ var CHAT_MESSAGE_QUEUE_MAX = 10;
 function autoGrowChatInput() {
   if (!chatInputEl) return;
   chatInputEl.style.height = "auto";
-  // Cap de ~4 linhas (line-height 1.5 × 0.9rem ≈ 22px/linha; 88px ≈ 4 linhas),
+  // Cap de ~3 linhas (line-height 1.35 × 0.9rem ≈ 20px/linha; 60px ≈ 3 linhas),
   // espelhado no max-height de .chat-input — antes crescia até 200px, virando
-  // um campo do tamanho de um parágrafo.
-  chatInputEl.style.height = Math.min(chatInputEl.scrollHeight, 88) + "px";
+  // um campo do tamanho de um parágrafo (reduzido de 88px para 60px).
+  chatInputEl.style.height = Math.min(chatInputEl.scrollHeight, 60) + "px";
 }
 
 function queueChatMessage(text) {
@@ -832,7 +832,7 @@ function finaliseStreamingBubble() {
 // travar o chat (bug de travamento visto em produção em 20/09).
 function safeFinaliseStreamingBubble() {
   try {
-    safeFinaliseStreamingBubble();
+    finaliseStreamingBubble();
   } catch (e) {
     console.error("[chat] falha ao finalizar bolha de streaming:", e);
   }

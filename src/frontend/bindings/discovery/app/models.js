@@ -728,7 +728,7 @@ export class PSADTVisualNotificationRequest {
     constructor($$source = {}) {
         if (!("notifType" in $$source)) {
             /**
-             * balloon_info | balloon_warning | balloon_error | prompt_ok | prompt_continue | progress
+             * balloon_info | balloon_warning | balloon_error | prompt_ok | prompt_yesno | prompt_continue | prompt_input | progress | dialog_box | restart_prompt | welcome
              * @member
              * @type {string}
              */
@@ -748,6 +748,14 @@ export class PSADTVisualNotificationRequest {
              */
             this["message"] = "";
         }
+        if (!("subtitle" in $$source)) {
+            /**
+             * usado como StatusMessageDetail (progress) e Subtitle (prompt)
+             * @member
+             * @type {string}
+             */
+            this["subtitle"] = "";
+        }
         if (!("appName" in $$source)) {
             /**
              * @member
@@ -763,8 +771,77 @@ export class PSADTVisualNotificationRequest {
              */
             this["durationSeconds"] = 0;
         }
+        if (!("balloonTimeSeconds" in $$source)) {
+            /**
+             * Balloon (Show-ADTBalloonTip)
+             * BalloonTipTime em segundos (0 = 10s default do PSADT)
+             * @member
+             * @type {number}
+             */
+            this["balloonTimeSeconds"] = 0;
+        }
+        if (!("balloonNoWait" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["balloonNoWait"] = false;
+        }
+        if (!("promptLeftText" in $$source)) {
+            /**
+             * Prompt (Show-ADTInstallationPrompt)
+             * @member
+             * @type {string}
+             */
+            this["promptLeftText"] = "";
+        }
+        if (!("promptMiddleText" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["promptMiddleText"] = "";
+        }
+        if (!("promptRightText" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["promptRightText"] = "";
+        }
+        if (!("promptIcon" in $$source)) {
+            /**
+             * DialogSystemIcon: Information | Question | Exclamation | Error | Hand | Shield | Asterisk | Application | WinLogo | (vazio = omitir)
+             * @member
+             * @type {string}
+             */
+            this["promptIcon"] = "";
+        }
+        if (!("promptTimeout" in $$source)) {
+            /**
+             * segundos, 0 = 120s (nao use o default de 55min do config.psd1)
+             * @member
+             * @type {number}
+             */
+            this["promptTimeout"] = 0;
+        }
+        if (!("promptNoWait" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["promptNoWait"] = false;
+        }
+        if (!("promptNotTopMost" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["promptNotTopMost"] = false;
+        }
         if (!("dialogButtons" in $$source)) {
             /**
+             * Dialog (Show-ADTDialogBox)
              * Ok | OkCancel | AbortRetryIgnore | YesNoCancel | YesNo | RetryCancel | CancelTryContinue
              * @member
              * @type {string}
@@ -789,7 +866,7 @@ export class PSADTVisualNotificationRequest {
         }
         if (!("dialogTimeout" in $$source)) {
             /**
-             * segundos, 0 = sem timeout
+             * segundos, 0 = 120s; maximo UI.DefaultTimeout do config.psd1 (3300s)
              * @member
              * @type {number}
              */
@@ -822,6 +899,74 @@ export class PSADTVisualNotificationRequest {
              * @type {boolean}
              */
             this["dialogForce"] = false;
+        }
+        if (!("restartCountdownSeconds" in $$source)) {
+            /**
+             * Restart (Show-ADTInstallationRestartPrompt)
+             * @member
+             * @type {number}
+             */
+            this["restartCountdownSeconds"] = 0;
+        }
+        if (!("restartNoCountdown" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["restartNoCountdown"] = false;
+        }
+        if (!("promptDefaultValue" in $$source)) {
+            /**
+             * Prompt input (Show-ADTInstallationPrompt -RequestInput)
+             * @member
+             * @type {string}
+             */
+            this["promptDefaultValue"] = "";
+        }
+        if (!("closeProcesses" in $$source)) {
+            /**
+             * Welcome (Show-ADTInstallationWelcome)
+             * nomes de processos separados por virgula
+             * @member
+             * @type {string}
+             */
+            this["closeProcesses"] = "";
+        }
+        if (!("allowDefer" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["allowDefer"] = false;
+        }
+        if (!("deferTimes" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["deferTimes"] = 0;
+        }
+        if (!("deferDeadline" in $$source)) {
+            /**
+             * yyyy-MM-dd (opcional)
+             * @member
+             * @type {string}
+             */
+            this["deferDeadline"] = "";
+        }
+        if (!("blockExecution" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["blockExecution"] = false;
+        }
+        if (!("closeProcessesCountdown" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["closeProcessesCountdown"] = 0;
         }
 
         Object.assign(this, $$source);

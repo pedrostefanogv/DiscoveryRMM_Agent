@@ -277,8 +277,18 @@
     var typeEl    = document.getElementById("visualNotifType");
     var titleEl   = document.getElementById("visualNotifTitle");
     var messageEl = document.getElementById("visualNotifMessage");
+    var subtitleEl = document.getElementById("visualNotifSubtitle");
     var appNameEl = document.getElementById("visualNotifAppName");
     var durEl     = document.getElementById("visualNotifDuration");
+    var balloonTimeEl = document.getElementById("visualBalloonTime");
+    var balloonNoWaitEl = document.getElementById("visualBalloonNoWait");
+    var promptLeftEl = document.getElementById("visualPromptLeft");
+    var promptMiddleEl = document.getElementById("visualPromptMiddle");
+    var promptRightEl = document.getElementById("visualPromptRight");
+    var promptIconEl = document.getElementById("visualPromptIcon");
+    var promptTimeoutEl = document.getElementById("visualPromptTimeout");
+    var promptNoWaitEl = document.getElementById("visualPromptNoWait");
+    var promptNotTopMostEl = document.getElementById("visualPromptNotTopMost");
     var dialogButtonsEl = document.getElementById("visualDialogButtons");
     var dialogDefaultEl = document.getElementById("visualDialogDefault");
     var dialogIconEl = document.getElementById("visualDialogIcon");
@@ -287,6 +297,14 @@
     var dialogExitOnTimeoutEl = document.getElementById("visualDialogExitOnTimeout");
     var dialogNotTopMostEl = document.getElementById("visualDialogNotTopMost");
     var dialogForceEl = document.getElementById("visualDialogForce");
+    var restartCountdownEl = document.getElementById("visualRestartCountdown");
+    var restartNoCountdownEl = document.getElementById("visualRestartNoCountdown");
+    var closeProcessesEl = document.getElementById("visualCloseProcesses");
+    var allowDeferEl = document.getElementById("visualAllowDefer");
+    var deferTimesEl = document.getElementById("visualDeferTimes");
+    var deferDeadlineEl = document.getElementById("visualDeferDeadline");
+    var blockExecutionEl = document.getElementById("visualBlockExecution");
+    var closeCountdownEl = document.getElementById("visualCloseCountdown");
     var statusEl  = document.getElementById("visualNotifStatus");
     var outputEl  = document.getElementById("visualNotifOutput");
 
@@ -294,8 +312,18 @@
       notifType:       typeEl    ? typeEl.value                   : "balloon_info",
       title:           titleEl   ? titleEl.value                  : "Discovery Agent",
       message:         messageEl ? messageEl.value                : "Teste de notificacao PSADT",
+      subtitle:        subtitleEl ? subtitleEl.value              : "",
       appName:         appNameEl ? appNameEl.value                : "TestApp",
       durationSeconds: durEl     ? (parseInt(durEl.value, 10) || 5)  : 5,
+      balloonTimeSeconds: balloonTimeEl ? (parseInt(balloonTimeEl.value, 10) || 10) : 10,
+      balloonNoWait: balloonNoWaitEl ? !!balloonNoWaitEl.checked : false,
+      promptLeftText: promptLeftEl ? promptLeftEl.value : "",
+      promptMiddleText: promptMiddleEl ? promptMiddleEl.value : "",
+      promptRightText: promptRightEl ? promptRightEl.value : "",
+      promptIcon: promptIconEl ? promptIconEl.value : "",
+      promptTimeout: promptTimeoutEl ? (parseInt(promptTimeoutEl.value, 10) || 0) : 0,
+      promptNoWait: promptNoWaitEl ? !!promptNoWaitEl.checked : false,
+      promptNotTopMost: promptNotTopMostEl ? !!promptNotTopMostEl.checked : false,
       dialogButtons: dialogButtonsEl ? dialogButtonsEl.value : "OkCancel",
       dialogDefault: dialogDefaultEl ? dialogDefaultEl.value : "First",
       dialogIcon: dialogIconEl ? dialogIconEl.value : "Information",
@@ -303,7 +331,15 @@
       dialogNoWait: dialogNoWaitEl ? !!dialogNoWaitEl.checked : false,
       dialogExitOnTimeout: dialogExitOnTimeoutEl ? !!dialogExitOnTimeoutEl.checked : false,
       dialogNotTopMost: dialogNotTopMostEl ? !!dialogNotTopMostEl.checked : false,
-      dialogForce: dialogForceEl ? !!dialogForceEl.checked : false
+      dialogForce: dialogForceEl ? !!dialogForceEl.checked : false,
+      restartCountdownSeconds: restartCountdownEl ? (parseInt(restartCountdownEl.value, 10) || 60) : 60,
+      restartNoCountdown: restartNoCountdownEl ? !!restartNoCountdownEl.checked : false,
+      closeProcesses: closeProcessesEl ? closeProcessesEl.value : "",
+      allowDefer: allowDeferEl ? !!allowDeferEl.checked : false,
+      deferTimes: deferTimesEl ? (parseInt(deferTimesEl.value, 10) || 0) : 0,
+      deferDeadline: deferDeadlineEl ? deferDeadlineEl.value.trim() : "",
+      blockExecution: blockExecutionEl ? !!blockExecutionEl.checked : false,
+      closeProcessesCountdown: closeCountdownEl ? (parseInt(closeCountdownEl.value, 10) || 0) : 0
     };
 
     setStatus(statusEl, "Executando notificacao PSADT nativa...", "");
