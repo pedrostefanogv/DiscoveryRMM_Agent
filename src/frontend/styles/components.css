@@ -1259,13 +1259,49 @@ input[type="search"] {
 /* Campo oculto por tipo: classe em vez de style.display para preservar
    o display original (flex) dos wrappers quando o campo reaparece. */
 #psadtView .psadt-field-hidden { display: none !important; }
-/* Ajuda contextual por campo: para que serve e quando e usado. */
-#psadtView .field-help {
-  display: block;
-  margin-top: 4px;
+/* Ajuda contextual por campo: oculta por padrao para nao poluir a tela;
+   aparece como tooltip flutuante ao passar o mouse ou focar o campo. */
+#visualNotifForm .form-grid > div { position: relative; }
+#visualNotifForm .field-help {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 60;
+  width: max-content;
+  max-width: 340px;
+  margin: 0;
+  padding: 8px 10px;
   font-size: 0.72rem;
-  line-height: 1.35;
-  color: var(--psadt-muted);
+  line-height: 1.4;
+  color: var(--psadt-text);
+  background: color-mix(in srgb, var(--psadt-surface-2) 92%, var(--psadt-accent) 8%);
+  border: 1px solid var(--psadt-border);
+  border-radius: 8px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.15s ease-in 0.3s, visibility 0s linear 0.45s;
+}
+#visualNotifForm .form-grid > div:hover .field-help,
+#visualNotifForm .form-grid > div:focus-within .field-help {
+  opacity: 1;
+  visibility: visible;
+  transition-delay: 0s;
+}
+/* Modo revisao (botao "Mostrar ajudas"): todas as ajudas visiveis, inline. */
+#visualNotifForm.show-all-helps .field-help {
+  position: static;
+  width: auto;
+  max-width: none;
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  margin-top: 4px;
+  box-shadow: none;
+  border-left: 3px solid var(--psadt-accent);
+  border-radius: 6px;
+  transition: none;
 }
 #psadtView label { display: block; font-size: 0.82rem; color: var(--psadt-muted); margin-bottom: 4px; }
 #psadtView input, #psadtView select, #psadtView textarea {

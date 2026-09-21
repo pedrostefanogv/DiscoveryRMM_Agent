@@ -525,6 +525,18 @@
   if (visualNotifBtn) {
     visualNotifBtn.addEventListener("click", executeVisualNotification);
   }
+
+  // Ajudas de campo: ocultas por padrao (tooltip no hover/foco, via CSS).
+  // O botao "Mostrar ajudas" alterna o modo revisao, com todas visiveis.
+  var visualHelpToggleBtn = document.getElementById("visualHelpToggleBtn");
+  var visualNotifForm = document.getElementById("visualNotifForm");
+  if (visualHelpToggleBtn && visualNotifForm) {
+    visualHelpToggleBtn.addEventListener("click", function () {
+      var showing = visualNotifForm.classList.toggle("show-all-helps");
+      visualHelpToggleBtn.textContent = showing ? "\u2715 Ocultar ajudas" : "\u2026 Mostrar ajudas";
+      visualHelpToggleBtn.setAttribute("aria-pressed", showing ? "true" : "false");
+    });
+  }
   var visualNotifTypeEl = document.getElementById("visualNotifType");
   if (visualNotifTypeEl) {
     visualNotifTypeEl.addEventListener("change", updateVisualFields);

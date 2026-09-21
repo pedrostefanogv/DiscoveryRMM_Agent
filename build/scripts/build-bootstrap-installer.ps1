@@ -109,6 +109,9 @@ $nsiFile = Join-Path $installerDir "project.nsi"
 $agentExe = Join-Path $binDir "discovery-agent.exe"
 $iconPath = Join-Path $srcRoot "build\windows\icon.ico"
 $sysoPath = Join-Path $srcRoot "resource_windows_amd64.syso"
+# Mesmo ícone para o binário do serviço (.syso no diretório do pacote) — sem
+# ele o discovery-service.exe sai SEM ícone (ver build-install-installer.ps1).
+$serviceSysoPath = Join-Path $srcRoot "cmd\discovery-service\resource_windows_amd64.syso"
 
 if (-not (Test-Path $syncIconsScript)) {
     throw "Script de sincronizacao de icones nao encontrado: $syncIconsScript"
@@ -139,6 +142,15 @@ try {
     & $windresExe --target=pe-x86-64 -i $rcPath -o $sysoPath
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path $sysoPath)) {
         throw "Falha ao gerar recurso de icone com windres"
+    }
+    # Mesmo ícone para o binário do serviço (.syso no diretório do pacote).
+    $serviceSysoDir = Split-Path $serviceSysoPath -Parent
+    if (-not (Test-Path $serviceSysoDir)) {
+        New-Item -ItemType Directory -Path $serviceSysoDir | Out-Null
+    }
+    & $windresExe --target=pe-x86-64 -i $rcPath -o $serviceSysoPath
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $serviceSysoPath)) {
+        throw "Falha ao gerar recurso de icone do servico com windres"
     }
 
     # Build Windows AMD64 (go build direto — Wails v3 embeda o frontend via //go:embed).
@@ -203,6 +215,9 @@ finally {
     }
     if ($sysoPath -and (Test-Path $sysoPath)) {
         Remove-Item $sysoPath -Force -ErrorAction SilentlyContinue
+    }
+    if ($serviceSysoPath -and (Test-Path $serviceSysoPath)) {
+        Remove-Item $serviceSysoPath -Force -ErrorAction SilentlyContinue
     }
     Pop-Location
 }
