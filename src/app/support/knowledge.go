@@ -835,33 +835,3 @@ func (s *Service) GetKnowledgeArticlePages(articleID string) ([]KnowledgePage, e
 	return s.fetchKnowledgePages(info, articleID)
 }
 
-// SearchKnowledgeBaseArticles filters articles by title/category/tags/content.
-func (s *Service) SearchKnowledgeBaseArticles(query string) []KnowledgeArticle {
-	articles := s.GetKnowledgeBaseArticles()
-	q := strings.TrimSpace(strings.ToLower(query))
-	if q == "" {
-		return articles
-	}
-
-	matches := make([]KnowledgeArticle, 0, len(articles))
-	for _, article := range articles {
-		if strings.Contains(strings.ToLower(article.Title), q) ||
-			strings.Contains(strings.ToLower(article.Category), q) ||
-			strings.Contains(strings.ToLower(article.Summary), q) ||
-			strings.Contains(strings.ToLower(article.Content), q) ||
-			strings.Contains(strings.ToLower(article.Author), q) ||
-			strings.Contains(strings.ToLower(article.Scope), q) {
-			matches = append(matches, article)
-			continue
-		}
-
-		for _, tag := range article.Tags {
-			if strings.Contains(strings.ToLower(tag), q) {
-				matches = append(matches, article)
-				break
-			}
-		}
-	}
-
-	return matches
-}
