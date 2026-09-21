@@ -376,6 +376,9 @@ func (a *App) ExecutePSADTVisualNotification(req PSADTVisualNotificationRequest)
 	if req.DurationSeconds <= 0 || req.DurationSeconds > 60 {
 		req.DurationSeconds = 5
 	}
+	// Subtitulo/Detail vazio vira um espaco em branco: o PSADT renderiza a
+	// linha reservada ao subtitulo em vez de omiti-la completamente.
+	req.Subtitle = defaultPSADTSubtitle(req.Subtitle)
 	// Balloon: tempo de exibicao 1..120s (0 usa o default de 10s do PSADT).
 	if req.BalloonTimeSeconds < 0 || req.BalloonTimeSeconds > 120 {
 		req.BalloonTimeSeconds = 10
@@ -806,14 +809,25 @@ func boolEnvValue(v bool) string {
 	return "0"
 }
 
-// psadtAgentIconICO e o icon.ico do proprio Discovery Agent (embedado),
+// defaultPSADTSubtitle devolve um espaco em branco quando o usuario nao
+// preencheu o Subtitulo/Detail. O PSADT (Show-ADTInstallationPrompt -Subtitle
+// e Show-ADTInstallationProgress -StatusMessageDetail) omite a linha quando o
+// valor e vazio; com um espaco a linha reservada aparece em branco.
+func defaultPSADTSubtitle(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return " "
+	}
+	return s
+}
+
+// psadtAgentIconPNG e o appiconPSADT.png do Discovery Agent (embedado),
 // usado como logo default nos dialogs Fluent do PSADT para padronizar a
-// identidade visual das notificacoes com o icone do agent. O .ico (84 KB)
-// e bem menor que o appicon.png de origem (1 MB) e o GetIcon do PSADT
-// decodifica .ico nativamente escolhendo o frame de maior resolucao.
+// identidade visual das notificacoes com o icone do agent. O PNG (~200 KB)
+// e o mesmo asset de build (src/build/appiconPSADT.png) e e o formato
+// nativo esperado pela chave Assets.Logo do config.psd1.
 //
-//go:embed assets/psadt/icon.ico
-var psadtAgentIconICO []byte
+//go:embed assets/psadt/appiconPSADT.png
+var psadtAgentIconPNG []byte
 
 // psadtNotifUsesFluentDialogs indica se o tipo de notificacao renderiza
 // dialogs Fluent/Classic do PSADT (que exibem o logo do config.psd1).
@@ -879,13 +893,13 @@ func writePSADTVisualBranding(req PSADTVisualNotificationRequest, scriptPath str
 		banner = copyAsset(bannerPath, "discovery-banner.png")
 	}
 	// Padronizacao com o agent: em dialogs Fluent sem logo definido, usa o
-	// icon.ico embedado do Discovery Agent (claro e escuro). Se o usuario
-	// definiu logo sem dark, reaproveita o mesmo arquivo.
+	// appiconPSADT.png embedado do Discovery Agent (claro e escuro). Se o
+	// usuario definiu logo sem dark, reaproveita o mesmo arquivo.
 	switch {
 	case logo != "" && logoDark == "":
 		logoDark = logo
-	case logo == "" && logoDark == "" && fluentApplies && len(psadtAgentIconICO) > 0:
-		logo = writeAsset(psadtAgentIconICO, "discovery-agent-icon.ico")
+	case logo == "" && logoDark == "" && fluentApplies && len(psadtAgentIconPNG) > 0:
+		logo = writeAsset(psadtAgentIconPNG, "discovery-agent-icon.png")
 		logoDark = logo
 	}
 	if len(created) == 1 && accent == "" && style == "" { // so o dir vazio

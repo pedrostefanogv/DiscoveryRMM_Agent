@@ -365,7 +365,7 @@ func TestWritePSADTVisualBranding(t *testing.T) {
 	}
 }
 
-// Dialogs Fluent sem logo definido devem padronizar com o icon.ico do agent.
+// Dialogs Fluent sem logo definido devem padronizar com o appiconPSADT.png do agent.
 func TestWritePSADTVisualBranding_AgentIconDefault(t *testing.T) {
 	dir := t.TempDir()
 	scriptPath := filepath.Join(dir, "psadt-visual-test.ps1")
@@ -392,11 +392,11 @@ func TestWritePSADTVisualBranding_AgentIconDefault(t *testing.T) {
 		t.Fatalf("falha ao ler config gerado: %v", err)
 	}
 	cfg := string(data)
-	if !strings.Contains(cfg, "Logo = 'discovery-agent-icon.ico'") {
-		t.Errorf("config deveria usar o icon.ico do agent como Logo:\n%s", cfg)
+	if !strings.Contains(cfg, "Logo = 'discovery-agent-icon.png'") {
+		t.Errorf("config deveria usar o appiconPSADT.png do agent como Logo:\n%s", cfg)
 	}
-	if !strings.Contains(cfg, "LogoDark = 'discovery-agent-icon.ico'") {
-		t.Errorf("config deveria usar o icon.ico do agent como LogoDark:\n%s", cfg)
+	if !strings.Contains(cfg, "LogoDark = 'discovery-agent-icon.png'") {
+		t.Errorf("config deveria usar o appiconPSADT.png do agent como LogoDark:\n%s", cfg)
 	}
 
 	// Balloon e Dialog Box (Win32) nao usam dialogs Fluent: sem branding nada e criado.
@@ -407,5 +407,25 @@ func TestWritePSADTVisualBranding_AgentIconDefault(t *testing.T) {
 	files, err = writePSADTVisualBranding(PSADTVisualNotificationRequest{NotifType: "dialog_box"}, scriptPath)
 	if err != nil || len(files) != 0 {
 		t.Errorf("dialog_box sem branding deveria retornar nil/nil, veio %v, %v", files, err)
+	}
+}
+
+// Subtitulo/Detail vazio deve virar um espaco em branco para que o PSADT
+// renderize a linha reservada ao subtitulo em vez de omiti-la.
+func TestDefaultPSADTSubtitle_BlankSpaceWhenEmpty(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"", " "},
+		{"   ", " "},
+		{"\t\n", " "},
+		{"Copiando arquivos", "Copiando arquivos"},
+		{" detalhe com espacos ", " detalhe com espacos "},
+	}
+	for _, c := range cases {
+		if got := defaultPSADTSubtitle(c.in); got != c.want {
+			t.Errorf("defaultPSADTSubtitle(%q) = %q, esperado %q", c.in, got, c.want)
+		}
 	}
 }
