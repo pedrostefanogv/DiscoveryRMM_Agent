@@ -286,12 +286,12 @@ func (a *App) ExecuteCustomPSADTScript(scriptContent string) PSADTScriptResult {
 
 // PSADTVisualNotificationRequest define os parametros para um teste visual nativo de notificacao PSADT.
 type PSADTVisualNotificationRequest struct {
-	NotifType   string `json:"notifType"` // balloon_info | balloon_warning | balloon_error | prompt_ok | prompt_yesno | prompt_continue | prompt_input | progress | dialog_box | restart_prompt | welcome
-	Title       string `json:"title"`
-	Message     string `json:"message"`
-	Subtitle    string `json:"subtitle"` // usado como StatusMessageDetail (progress) e Subtitle (prompt)
-	AppName     string `json:"appName"`
-	DurationSeconds int  `json:"durationSeconds"` // utilizado apenas pelo tipo progress
+	NotifType       string `json:"notifType"` // balloon_info | balloon_warning | balloon_error | prompt_ok | prompt_yesno | prompt_continue | prompt_input | progress | dialog_box | restart_prompt | welcome
+	Title           string `json:"title"`
+	Message         string `json:"message"`
+	Subtitle        string `json:"subtitle"` // usado como StatusMessageDetail (progress) e Subtitle (prompt)
+	AppName         string `json:"appName"`
+	DurationSeconds int    `json:"durationSeconds"` // utilizado apenas pelo tipo progress
 
 	// Balloon (Show-ADTBalloonTip)
 	BalloonTimeSeconds int  `json:"balloonTimeSeconds"` // BalloonTipTime em segundos (0 = 10s default do PSADT)
@@ -301,16 +301,16 @@ type PSADTVisualNotificationRequest struct {
 	PromptLeftText   string `json:"promptLeftText"`
 	PromptMiddleText string `json:"promptMiddleText"`
 	PromptRightText  string `json:"promptRightText"`
-	PromptIcon       string `json:"promptIcon"`     // DialogSystemIcon: Information | Question | Exclamation | Error | Hand | Shield | Asterisk | Application | WinLogo | (vazio = omitir)
-	PromptTimeout    int    `json:"promptTimeout"`   // segundos, 0 = 120s (nao use o default de 55min do config.psd1)
+	PromptIcon       string `json:"promptIcon"`    // DialogSystemIcon: Information | Question | Exclamation | Error | Hand | Shield | Asterisk | Application | WinLogo | (vazio = omitir)
+	PromptTimeout    int    `json:"promptTimeout"` // segundos, 0 = 120s (nao use o default de 55min do config.psd1)
 	PromptNoWait     bool   `json:"promptNoWait"`
 	PromptNotTopMost bool   `json:"promptNotTopMost"`
 
 	// Dialog (Show-ADTDialogBox)
-	DialogButtons       string `json:"dialogButtons"`   // Ok | OkCancel | AbortRetryIgnore | YesNoCancel | YesNo | RetryCancel | CancelTryContinue
-	DialogDefault       string `json:"dialogDefault"`   // First | Second | Third
-	DialogIcon          string `json:"dialogIcon"`      // None | Stop | Question | Exclamation | Information
-	DialogTimeout       int    `json:"dialogTimeout"`   // segundos, 0 = 120s; maximo UI.DefaultTimeout do config.psd1 (3300s)
+	DialogButtons       string `json:"dialogButtons"` // Ok | OkCancel | AbortRetryIgnore | YesNoCancel | YesNo | RetryCancel | CancelTryContinue
+	DialogDefault       string `json:"dialogDefault"` // First | Second | Third
+	DialogIcon          string `json:"dialogIcon"`    // None | Stop | Question | Exclamation | Information
+	DialogTimeout       int    `json:"dialogTimeout"` // segundos, 0 = 120s; maximo UI.DefaultTimeout do config.psd1 (3300s)
 	DialogNoWait        bool   `json:"dialogNoWait"`
 	DialogExitOnTimeout bool   `json:"dialogExitOnTimeout"`
 	DialogNotTopMost    bool   `json:"dialogNotTopMost"`
@@ -324,10 +324,10 @@ type PSADTVisualNotificationRequest struct {
 	PromptDefaultValue string `json:"promptDefaultValue"`
 
 	// Welcome (Show-ADTInstallationWelcome)
-	CloseProcesses          string `json:"closeProcesses"`          // nomes de processos separados por virgula
+	CloseProcesses          string `json:"closeProcesses"` // nomes de processos separados por virgula
 	AllowDefer              bool   `json:"allowDefer"`
 	DeferTimes              int    `json:"deferTimes"`
-	DeferDeadline           string `json:"deferDeadline"`          // yyyy-MM-dd (opcional)
+	DeferDeadline           string `json:"deferDeadline"` // yyyy-MM-dd (opcional)
 	BlockExecution          bool   `json:"blockExecution"`
 	CloseProcessesCountdown int    `json:"closeProcessesCountdown"`
 }
@@ -365,16 +365,15 @@ func (a *App) ExecutePSADTVisualNotification(req PSADTVisualNotificationRequest)
 		req.BalloonTimeSeconds = 10
 	}
 	req.PromptIcon = normalizePromptIcon(req.PromptIcon)
-	if req.PromptNoWait {
-		// NoWait: sem Timeout (o PSADT usa o default do config.psd1, mas o
-		// processo Go termina em 30s e o dialogo fica em thread separada).
-		req.PromptTimeout = 0
-	}
-	// Prompts e dialogs bloqueantes: sem timeout explicito o PSADT usa o
-	// UI.DefaultTimeout do config.psd1 (55min), entao fixamos 120s por padrão
+	// Prompts bloqueantes: sem timeout explicito o PSADT usa o
+	// UI.DefaultTimeout do config.psd1 (55min), entao fixamos 120s por padrao
 	// para o teste retornar em tempo previsivel. Limite: UI.DefaultTimeout
 	// (3300s) — valores maiores geram ValidateScript error no PSADT.
-	if req.PromptTimeout <= 0 {
+	// Com PromptNoWait omitimos o Timeout (dialogo assincrono em thread separada).
+	switch {
+	case req.PromptNoWait:
+		req.PromptTimeout = 0
+	case req.PromptTimeout <= 0:
 		req.PromptTimeout = 120
 	}
 	if req.PromptTimeout > 3300 {
@@ -679,7 +678,7 @@ func buildPSADTVisualScript(req PSADTVisualNotificationRequest) (string, time.Du
 			"Show-ADTInstallationWelcome @welcomeParams\n" +
 			"Write-Host 'InstallationWelcome concluido'\n" +
 			closeSession
-		return header + body, 6*time.Minute + time.Duration(req.CloseProcessesCountdown) * time.Second
+		return header + body, 6*time.Minute + time.Duration(req.CloseProcessesCountdown)*time.Second
 
 	default:
 		body := openInteractive +
