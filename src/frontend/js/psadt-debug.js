@@ -273,6 +273,56 @@
     });
   }
 
+  // =====================================================================
+  // Notificacao Visual Nativa — visibilidade por tipo e ajuda contextual
+  // =====================================================================
+
+  var VISUAL_FIELD_GROUPS = {
+    subtitle: ["prompt_ok", "prompt_yesno", "prompt_continue", "prompt_input", "progress"],
+    balloon:  ["balloon_info", "balloon_warning", "balloon_error"],
+    prompt:   ["prompt_ok", "prompt_yesno", "prompt_continue", "prompt_input"],
+    dialog:   ["dialog_box"],
+    progress: ["progress"],
+    restart:  ["restart_prompt"],
+    welcome:  ["welcome"],
+    // Branding vale para os dialogs Fluent/Classic; Dialog Box (Win32) e Balloon usam icones de sistema.
+    branding: ["prompt_ok", "prompt_yesno", "prompt_continue", "prompt_input", "progress", "restart_prompt", "welcome"]
+  };
+
+  var VISUAL_TYPE_HELP = {
+    balloon_info:    "\u{1F4AC} BalloonTip \u2014 notifica\u00e7\u00e3o n\u00e3o bloqueante na bandeja (no Win10+ vira toast). Cmdlet: Show-ADTBalloonTip. \u00datil para avisos r\u00e1pidos sem interrup\u00e7\u00e3o. Campos aplic\u00e1veis: tempo de exibi\u00e7\u00e3o e NoWait.",
+    balloon_warning: "\u26A0\u{FE0F} BalloonTip de aviso \u2014 igual ao Info, com \u00edcone de alerta. N\u00e3o bloqueia o usu\u00e1rio. Cmdlet: Show-ADTBalloonTip (-BalloonTipIcon Warning).",
+    balloon_error:   "\u274C BalloonTip de erro \u2014 igual ao Info, com \u00edcone de erro. N\u00e3o bloqueia o usu\u00e1rio. Cmdlet: Show-ADTBalloonTip (-BalloonTipIcon Error).",
+    prompt_ok:       "\u{1F44D} Prompt modal com bot\u00e3o OK \u2014 bloqueante; o usu\u00e1rio responde e a sess\u00e3o aguarda. Cmdlet: Show-ADTInstallationPrompt. Retorna o texto do bot\u00e3o clicado.",
+    prompt_yesno:    "\u2753 Prompt modal Sim / N\u00e3o \u2014 o usu\u00e1rio decide e o bot\u00e3o clicado volta em \"Resposta do usuario\". \u00datil para confirmar a\u00e7\u00f5es antes de prosseguir.",
+    prompt_continue: "\u23ED\u{FE0F} Prompt Continuar / Adiar \u2014 o usu\u00e1rio prossegue com a instala\u00e7\u00e3o ou adia. Com timeout, o prompt fecha sozinho ap\u00f3s N segundos.",
+    prompt_input:    "\u2328\u{FE0F} Prompt com entrada de texto \u2014 -RequestInput: exibe caixa de texto e o que o usu\u00e1rio digitar volta em \"Resposta do usuario\" (InputDialogResult.Text). O bot\u00e3o direito submete a resposta.",
+    progress:        "\u23F3 Barra de progresso \u2014 janela fluent n\u00e3o bloqueante com mensagem de status e detalhe. Exibe por N segundos e fecha (Close-ADTInstallationProgress).",
+    dialog_box:      "\u{1F5A8}\u{FE0F} Dialog Box \u2014 MessageBox cl\u00e1ssico (Ok/OkCancel/YesNo/...) com \u00edcone, timeout e op\u00e7\u00f5es avan\u00e7adas. Cmdlet: Show-ADTDialogBox. Retorna o texto do bot\u00e3o clicado.",
+    restart_prompt:  "\u{1F501} Restart Prompt \u2014 janela de reinicializa\u00e7\u00e3o com countdown para restart for\u00e7ado (Show-ADTInstallationRestartPrompt). Sem countdown, o usu\u00e1rio apenas decide reiniciar agora.",
+    welcome:         "\u{1F44B} Installation Welcome \u2014 a experi\u00eancia completa do PSADT: avisa sobre processos abertos (fechar), permite adiar (defer times/deadline) e pode bloquear os apps durante o deploy. Show-ADTInstallationWelcome."
+  };
+
+  function updateVisualFields() {
+    var typeEl = document.getElementById("visualNotifType");
+    if (!typeEl) return;
+    var t = typeEl.value;
+    var groups = document.querySelectorAll("[data-visual-group]");
+    for (var i = 0; i < groups.length; i++) {
+      var keys = (groups[i].getAttribute("data-visual-group") || "").split(" ");
+      var show = false;
+      for (var j = 0; j < keys.length; j++) {
+        var list = VISUAL_FIELD_GROUPS[keys[j]] || [];
+        if (list.indexOf(t) >= 0) { show = true; break; }
+      }
+      groups[i].style.display = show ? "" : "none";
+    }
+    var help = document.getElementById("visualNotifHelp");
+    if (help) {
+      help.textContent = VISUAL_TYPE_HELP[t] || "";
+    }
+  }
+
   function executeVisualNotification() {
     var typeEl    = document.getElementById("visualNotifType");
     var titleEl   = document.getElementById("visualNotifTitle");
@@ -305,6 +355,11 @@
     var deferDeadlineEl = document.getElementById("visualDeferDeadline");
     var blockExecutionEl = document.getElementById("visualBlockExecution");
     var closeCountdownEl = document.getElementById("visualCloseCountdown");
+    var brandingIconEl = document.getElementById("visualBrandingIcon");
+    var brandingIconDarkEl = document.getElementById("visualBrandingIconDark");
+    var brandingBannerEl = document.getElementById("visualBrandingBanner");
+    var dialogStyleEl = document.getElementById("visualDialogStyle");
+    var accentColorEl = document.getElementById("visualAccentColor");
     var statusEl  = document.getElementById("visualNotifStatus");
     var outputEl  = document.getElementById("visualNotifOutput");
 
@@ -339,7 +394,12 @@
       deferTimes: deferTimesEl ? (parseInt(deferTimesEl.value, 10) || 0) : 0,
       deferDeadline: deferDeadlineEl ? deferDeadlineEl.value.trim() : "",
       blockExecution: blockExecutionEl ? !!blockExecutionEl.checked : false,
-      closeProcessesCountdown: closeCountdownEl ? (parseInt(closeCountdownEl.value, 10) || 0) : 0
+      closeProcessesCountdown: closeCountdownEl ? (parseInt(closeCountdownEl.value, 10) || 0) : 0,
+      brandingIconPath: brandingIconEl ? brandingIconEl.value.trim() : "",
+      brandingIconDark: brandingIconDarkEl ? brandingIconDarkEl.value.trim() : "",
+      brandingBannerPath: brandingBannerEl ? brandingBannerEl.value.trim() : "",
+      dialogStyle: dialogStyleEl ? dialogStyleEl.value : "",
+      fluentAccentColor: accentColorEl ? accentColorEl.value.trim() : ""
     };
 
     setStatus(statusEl, "Executando notificacao PSADT nativa...", "");
@@ -352,6 +412,7 @@
       var ok  = !!(result && result.success);
       var msg = ok ? "\u2713 Notificacao PSADT executada" : "\u2717 Falha";
       if (result && result.error) msg += ": " + result.error;
+      if (ok && result.result) msg += " \u2014 Resposta do usuario: " + result.result;
       var exitCode = result ? result.exitCode : -1;
       var duration = result ? result.durationMs : 0;
       setStatus(statusEl, msg + " (ExitCode: " + exitCode + ", " + duration + "ms)", ok ? "ok" : "error");
@@ -433,6 +494,11 @@
   var visualNotifBtn = document.getElementById("visualNotifBtn");
   if (visualNotifBtn) {
     visualNotifBtn.addEventListener("click", executeVisualNotification);
+  }
+  var visualNotifTypeEl = document.getElementById("visualNotifType");
+  if (visualNotifTypeEl) {
+    visualNotifTypeEl.addEventListener("change", updateVisualFields);
+    updateVisualFields();
   }
 
   // =====================================================================

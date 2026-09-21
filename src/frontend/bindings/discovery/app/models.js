@@ -660,6 +660,15 @@ export class PSADTScriptResult {
      * @param {Partial<PSADTScriptResult>} [$$source = {}] - The source object to create the PSADTScriptResult.
      */
     constructor($$source = {}) {
+        if (!("result" in $$source)) {
+            /**
+             * Resposta estruturada do dialogo: texto digitado pelo usuario
+             * (InputDialogResult.Text) ou botao clicado (DialogBoxResult).
+             * @member
+             * @type {string}
+             */
+            this["result"] = "";
+        }
         if (!("success" in $$source)) {
             /**
              * @member
@@ -923,7 +932,47 @@ export class PSADTVisualNotificationRequest {
              */
             this["promptDefaultValue"] = "";
         }
-        if (!("closeProcesses" in $$source)) {
+        if (!("brandingIconPath" in $source)) {
+            /**
+             * PNG do logo exibido nos dialogs Fluent (modo claro).
+             * @member
+             * @type {string}
+             */
+            this["brandingIconPath"] = "";
+        }
+        if (!("brandingIconDark" in $source)) {
+            /**
+             * PNG do logo para modo escuro.
+             * @member
+             * @type {string}
+             */
+            this["brandingIconDark"] = "";
+        }
+        if (!("brandingBannerPath" in $source)) {
+            /**
+             * PNG do banner para dialogs Classic.
+             * @member
+             * @type {string}
+             */
+            this["brandingBannerPath"] = "";
+        }
+        if (!("dialogStyle" in $source)) {
+            /**
+             * Fluent | Classic (vazio = default do modulo).
+             * @member
+             * @type {string}
+             */
+            this["dialogStyle"] = "";
+        }
+        if (!("fluentAccentColor" in $source)) {
+            /**
+             * Cor de acento Fluent em hex RGB/ARGB (vazio = default).
+             * @member
+             * @type {string}
+             */
+            this["fluentAccentColor"] = "";
+        }
+        if (!("closeProcesses" in $source)) {
             /**
              * Welcome (Show-ADTInstallationWelcome)
              * nomes de processos separados por virgula

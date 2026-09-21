@@ -1,6 +1,8 @@
 package app
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -105,6 +107,49 @@ func TestBuildPSADTVisualScript_PromptButtonsAndInput(t *testing.T) {
 	s, _ = buildPSADTVisualScript(input)
 	if !strings.Contains(s, "$promptParams.RequestInput = $true") {
 		t.Fatalf("expected RequestInput for prompt_input")
+	}
+	if !strings.Contains(s, "PSADT_RESULT=") {
+		t.Fatalf("expected structured PSADT_RESULT marker for input prompt")
+	}
+}
+
+// A resposta do dialogo deve ser extraida do marcador PSADT_RESULT=.
+func TestExtractVisualDialogResult(t *testing.T) {
+	cases := []struct {
+		name   string
+		output string
+		want   string
+	}{
+		{
+			name:   "input dialog com texto digitado",
+			output: "Resultado: PSADT.UserInterface.DialogResults.InputDialogResult\nPSADT_RESULT={\"Result\":\"Submit\",\"Text\":\"meu texto aqui\"}",
+			want:   "meu texto aqui",
+		},
+		{
+			name:   "input dialog sem texto",
+			output: "PSADT_RESULT={\"Result\":\"Ok\"}",
+			want:   "Ok",
+		},
+		{
+			name:   "dialog box string simples",
+			output: "PSADT_RESULT=\"Yes\"",
+			want:   "Yes",
+		},
+		{
+			name:   "sem marcador",
+			output: "BalloonTip exibido com sucesso\nExitCode: 0",
+			want:   "",
+		},
+		{
+			name:   "marcador com null",
+			output: "PSADT_RESULT=null",
+			want:   "",
+		},
+	}
+	for _, tc := range cases {
+		if got := extractVisualDialogResult(tc.output); got != tc.want {
+			t.Errorf("%s: extractVisualDialogResult() = %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }
 
@@ -214,5 +259,149 @@ func TestNormalizePromptIcon(t *testing.T) {
 		if !valid[want] {
 			t.Fatalf("normalizePromptIcon(%q) = %q, que nao e membro do enum DialogSystemIcon", in, want)
 		}
+	}
+}
+
+// O header do script gerado deve preparar o PSADT para o config de staging
+// (branding) via Initialize-ADTModule -ScriptDirectory.
+func TestBuildPSADTVisualScript_StagingBrandingHook(t *testing.T) {
+	req := PSADTVisualNotificationRequest{NotifType: "prompt_ok", Title: "T", Message: "M", AppName: "A"}
+	script, _ := buildPSADTVisualScript(req)
+	if !strings.Contains(script, "$env:PSADT_STAGING_CONFIG -eq '1'") {
+		t.Fatalf("expected staging config guard in script header")
+	}
+	if !strings.Contains(script, "Initialize-ADTModule -ScriptDirectory (Split-Path -Parent $PSCommandPath)") {
+		t.Fatalf("expected Initialize-ADTModule -ScriptDirectory hook")
+	}
+}
+
+func TestNormalizeHexAccent(t *testing.T) {
+	cases := map[string]string{
+		"":           "",
+		"4A9EFF":     "0xff4a9eff",
+		"#4A9EFF":    "0xff4a9eff",
+		"0xFF4A9EFF": "0xff4a9eff",
+		"FF4A9EFF":   "0xff4a9eff",
+		"XYZ":        "",
+		"12345":      "",
+	}
+	for in, want := range cases {
+		if got := normalizeHexAccent(in); got != want {
+			t.Errorf("normalizeHexAccent(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestNormalizeDialogStyle(t *testing.T) {
+	cases := map[string]string{
+		"":        "",
+		"fluent":  "Fluent",
+		"CLASSIC": "Classic",
+		"other":   "",
+	}
+	for in, want := range cases {
+		if got := normalizeDialogStyle(in); got != want {
+			t.Errorf("normalizeDialogStyle(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestWritePSADTVisualBranding(t *testing.T) {
+	dir := t.TempDir()
+	iconSrc := filepath.Join(dir, "src-icon.png")
+	if err := os.WriteFile(iconSrc, []byte("png-bytes"), 0o644); err != nil {
+		t.Fatalf("falha ao criar icone de teste: %v", err)
+	}
+	scriptPath := filepath.Join(dir, "psadt-visual-test.ps1")
+	if err := os.WriteFile(scriptPath, []byte("# teste"), 0o644); err != nil {
+		t.Fatalf("falha ao criar script de teste: %v", err)
+	}
+
+	// Sem personalizacao: nada criado.
+	files, err := writePSADTVisualBranding(PSADTVisualNotificationRequest{}, scriptPath)
+	if err != nil || len(files) != 0 {
+		t.Fatalf("sem branding deveria retornar nil/nil, veio %v, %v", files, err)
+	}
+
+	req := PSADTVisualNotificationRequest{
+		BrandingIconPath:  iconSrc,
+		FluentAccentColor: "#4A9EFF",
+		DialogStyle:       "classic",
+	}
+	files, err = writePSADTVisualBranding(req, scriptPath)
+	if err != nil {
+		t.Fatalf("falha inesperada: %v", err)
+	}
+	var configPath string
+	var hasIcon bool
+	for _, f := range files {
+		if filepath.Base(f) == "config.psd1" {
+			configPath = f
+		}
+		if filepath.Base(f) == "discovery-icon.png" {
+			hasIcon = true
+		}
+	}
+	if configPath == "" || !hasIcon {
+		t.Fatalf("arquivos de staging ausentes: %v", files)
+	}
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("falha ao ler config gerado: %v", err)
+	}
+	cfg := string(data)
+	for _, want := range []string{
+		"Logo = 'discovery-icon.png'",
+		"DialogStyle = 'Classic'",
+		"FluentAccentColor = 0xff4a9eff",
+	} {
+		if !strings.Contains(cfg, want) {
+			t.Errorf("config.psd1 gerado nao contem %q:\n%s", want, cfg)
+		}
+	}
+}
+
+// Dialogs Fluent sem logo definido devem padronizar com o icon.ico do agent.
+func TestWritePSADTVisualBranding_AgentIconDefault(t *testing.T) {
+	dir := t.TempDir()
+	scriptPath := filepath.Join(dir, "psadt-visual-test.ps1")
+	if err := os.WriteFile(scriptPath, []byte("# teste"), 0o644); err != nil {
+		t.Fatalf("falha ao criar script de teste: %v", err)
+	}
+
+	req := PSADTVisualNotificationRequest{NotifType: "prompt_ok", Title: "T", Message: "M", AppName: "A"}
+	files, err := writePSADTVisualBranding(req, scriptPath)
+	if err != nil {
+		t.Fatalf("falha inesperada: %v", err)
+	}
+	var configPath string
+	for _, f := range files {
+		if filepath.Base(f) == "config.psd1" {
+			configPath = f
+		}
+	}
+	if configPath == "" {
+		t.Fatalf("config.psd1 de staging ausente: %v", files)
+	}
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("falha ao ler config gerado: %v", err)
+	}
+	cfg := string(data)
+	if !strings.Contains(cfg, "Logo = 'discovery-agent-icon.ico'") {
+		t.Errorf("config deveria usar o icon.ico do agent como Logo:\n%s", cfg)
+	}
+	if !strings.Contains(cfg, "LogoDark = 'discovery-agent-icon.ico'") {
+		t.Errorf("config deveria usar o icon.ico do agent como LogoDark:\n%s", cfg)
+	}
+
+	// Balloon e Dialog Box (Win32) nao usam dialogs Fluent: sem branding nada e criado.
+	files, err = writePSADTVisualBranding(PSADTVisualNotificationRequest{NotifType: "balloon_info"}, scriptPath)
+	if err != nil || len(files) != 0 {
+		t.Errorf("balloon sem branding deveria retornar nil/nil, veio %v, %v", files, err)
+	}
+	files, err = writePSADTVisualBranding(PSADTVisualNotificationRequest{NotifType: "dialog_box"}, scriptPath)
+	if err != nil || len(files) != 0 {
+		t.Errorf("dialog_box sem branding deveria retornar nil/nil, veio %v, %v", files, err)
 	}
 }

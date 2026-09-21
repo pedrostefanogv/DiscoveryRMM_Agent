@@ -2,9 +2,12 @@ package app
 
 import (
 	"context"
+	_ "embed"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -158,9 +161,13 @@ func (a *App) EmitPSADTDebugNotification(req PSADTDebugNotificationRequest) erro
 
 // PSADTScriptResult representa o resultado da execução de um script PSADT
 type PSADTScriptResult struct {
-	Success       bool   `json:"success"`
-	ExitCode      int    `json:"exitCode"`
-	Output        string `json:"output"`
+	Success  bool   `json:"success"`
+	ExitCode int    `json:"exitCode"`
+	Output   string `json:"output"`
+	// Result carrega a resposta estruturada do diálogo quando aplicável:
+	// o texto digitado pelo usuário (InputDialogResult.Text) em prompts de
+	// entrada, ou o texto do botão clicado (DialogBoxResult).
+	Result        string `json:"result"`
 	Error         string `json:"error"`
 	ExecutedAtUTC string `json:"executedAtUtc"`
 	DurationMS    int64  `json:"durationMs"`
@@ -323,6 +330,15 @@ type PSADTVisualNotificationRequest struct {
 	// Prompt input (Show-ADTInstallationPrompt -RequestInput)
 	PromptDefaultValue string `json:"promptDefaultValue"`
 
+	// Branding (config.psd1 parcial + Initialize-ADTModule -ScriptDirectory).
+	// Aplica-se aos dialogs Fluent/Classic (prompts, progress, welcome, restart).
+	// Show-ADTDialogBox (Win32) e BalloonTip usam icones de sistema e ignoram isso.
+	BrandingIconPath   string `json:"brandingIconPath"`   // PNG do logo (modo claro)
+	BrandingIconDark   string `json:"brandingIconDark"`   // PNG do logo (modo escuro)
+	BrandingBannerPath string `json:"brandingBannerPath"` // PNG do banner (dialogos Classic)
+	DialogStyle        string `json:"dialogStyle"`        // Fluent | Classic
+	FluentAccentColor  string `json:"fluentAccentColor"`  // hex RGB(A): 4A9EFF ou FF4A9EFF
+
 	// Welcome (Show-ADTInstallationWelcome)
 	CloseProcesses          string `json:"closeProcesses"` // nomes de processos separados por virgula
 	AllowDefer              bool   `json:"allowDefer"`
@@ -423,6 +439,22 @@ func (a *App) ExecutePSADTVisualNotification(req PSADTVisualNotificationRequest)
 	}
 	tmpFile.Close()
 
+	// Branding: escreve um config.psd1 parcial no mesmo diretorio do script
+	// temporario quando o usuario personalizou icones/estilo/acento. O script
+	// gerado chama Initialize-ADTModule -ScriptDirectory e o PSADT 4.1.x faz
+	// o merge recursivo com o config default do modulo (mecanismo oficial).
+	stagingConfig := false
+	if stagingFiles, stagingErr := writePSADTVisualBranding(req, tmpPath); stagingErr != nil {
+		a.Logs.Append("[psadt] branding customizado ignorado: " + stagingErr.Error())
+	} else if len(stagingFiles) > 0 {
+		stagingConfig = true
+		defer func() {
+			for _, p := range stagingFiles {
+				_ = os.Remove(p)
+			}
+		}()
+	}
+
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -430,6 +462,7 @@ func (a *App) ExecutePSADTVisualNotification(req PSADTVisualNotificationRequest)
 	cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-WindowStyle", "Hidden",
 		"-ExecutionPolicy", "Bypass", "-File", tmpPath)
 	cmd.Env = append(os.Environ(),
+		"PSADT_STAGING_CONFIG="+boolEnvValue(stagingConfig),
 		"PSADT_TITLE="+req.Title,
 		"PSADT_MESSAGE="+req.Message,
 		"PSADT_SUBTITLE="+req.Subtitle,
@@ -483,8 +516,49 @@ func (a *App) ExecutePSADTVisualNotification(req PSADTVisualNotificationRequest)
 
 	result.Success = true
 	result.ExitCode = 0
+	// Extrai a resposta estruturada do diálogo (texto digitado pelo usuário
+	// em prompts de entrada, ou o botão clicado em dialogs/prompts).
+	if resposta := extractVisualDialogResult(result.Output); resposta != "" {
+		result.Result = resposta
+		a.Logs.Append(fmt.Sprintf("[psadt] resposta do dialogo (tipo=%s): %q", req.NotifType, resposta))
+	}
 	a.Logs.Append(fmt.Sprintf("[psadt] notificacao visual concluida (tipo=%s) em %dms", req.NotifType, elapsed))
 	return result
+}
+
+// extractVisualDialogResult procura a linha "PSADT_RESULT=<json>" emitida pelo
+// script de notificação visual e devolve a resposta do diálogo de forma
+// plana. Formatos aceitos:
+//   - {"Result":"<botao>","Text":"<texto digitado>"}  (InputDialogResult)
+//   - "<botao>"                                        (DialogBoxResult string)
+//   - texto puro                                       (fallback)
+func extractVisualDialogResult(output string) string {
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "PSADT_RESULT=") {
+			continue
+		}
+		raw := strings.TrimSpace(strings.TrimPrefix(line, "PSADT_RESULT="))
+		if raw == "" || raw == "null" {
+			return ""
+		}
+		var obj struct {
+			Result string `json:"Result"`
+			Text   string `json:"Text"`
+		}
+		if err := json.Unmarshal([]byte(raw), &obj); err == nil && (obj.Result != "" || obj.Text != "") {
+			if obj.Text != "" {
+				return obj.Text
+			}
+			return obj.Result
+		}
+		var s string
+		if err := json.Unmarshal([]byte(raw), &s); err == nil {
+			return s
+		}
+		return raw
+	}
+	return ""
 }
 
 // buildPSADTVisualScript gera o script PowerShell para o tipo de notificacao solicitado.
@@ -512,6 +586,11 @@ func buildPSADTVisualScript(req PSADTVisualNotificationRequest) (string, time.Du
 		"    Import-Module -Name PSAppDeployToolkit -ErrorAction Stop\n" +
 		"} catch {\n" +
 		"    Write-Error \"Falha ao importar PSAppDeployToolkit: $_\"; exit 1\n" +
+		"}\n" +
+		// Branding customizado: configura o PSADT para usar o config.psd1 parcial
+		// escrito ao lado deste script (merge oficial via -ScriptDirectory).
+		"if ($env:PSADT_STAGING_CONFIG -eq '1') {\n" +
+		"    try { Initialize-ADTModule -ScriptDirectory (Split-Path -Parent $PSCommandPath) } catch { Write-Error \"Falha ao aplicar branding customizado: $_\"; exit 3 }\n" +
 		"}\n" +
 		"$psadtTitle    = $env:PSADT_TITLE\n" +
 		"$psadtMessage  = $env:PSADT_MESSAGE\n" +
@@ -561,6 +640,16 @@ func buildPSADTVisualScript(req PSADTVisualNotificationRequest) (string, time.Du
 
 	closeSession := "try { Close-ADTSession -ExitCode 0 } catch {}\nexit 0\n"
 
+	// printResult emite o resultado do diálogo em formato legível e em um
+	// marcador estruturado ("PSADT_RESULT=<json>") que o lado Go extrai para
+	// PSADTScriptResult.Result. Para prompts de entrada (-RequestInput), o
+	// InputDialogResult do PSADT serializa {"Result":"<botao>","Text":"<texto
+	// digitado pelo usuario>"}. Para DialogBox o resultado e o texto do botao.
+	printResult := "if ($null -ne $adtResult) {\n" +
+		"  Write-Host (\"Resultado: \" + $adtResult)\n" +
+		"  Write-Host (\"PSADT_RESULT=\" + ($adtResult | ConvertTo-Json -Compress))\n" +
+		"} else { Write-Host 'Resultado: sem resposta (NoWait/Timeout)' }\n"
+
 	switch req.NotifType {
 	case "balloon_info", "balloon_warning", "balloon_error":
 		body := openInteractive +
@@ -608,7 +697,7 @@ func buildPSADTVisualScript(req PSADTVisualNotificationRequest) (string, time.Du
 				"if ($env:PSADT_PROMPT_DEFAULT) { $promptParams.DefaultValue = $env:PSADT_PROMPT_DEFAULT }\n"
 		}
 		body += "$adtResult = Show-ADTInstallationPrompt @promptParams\n" +
-			"if ($null -ne $adtResult) { Write-Host \"Resultado: $adtResult\" } else { Write-Host 'Resultado: sem resposta (NoWait/Timeout)' }\n" +
+			printResult +
 			closeSession
 		timeout := 3 * time.Minute
 		if req.PromptNoWait {
@@ -646,7 +735,7 @@ func buildPSADTVisualScript(req PSADTVisualNotificationRequest) (string, time.Du
 			"if ($psadtDialogNotTopMost) { $dialogParams.NotTopMost = $true }\n" +
 			"if ($psadtDialogForce) { $dialogParams.Force = $true }\n" +
 			"$adtResult = Show-ADTDialogBox @dialogParams\n" +
-			"if ($null -ne $adtResult) { Write-Host \"Resultado: $adtResult\" } else { Write-Host 'Resultado: sem resposta (NoWait/Timeout)' }\n" +
+			printResult +
 			"exit 0\n"
 		timeout := 3 * time.Minute
 		if req.DialogNoWait {
@@ -701,6 +790,158 @@ func boolEnvValue(v bool) string {
 		return "1"
 	}
 	return "0"
+}
+
+// psadtAgentIconICO e o icon.ico do proprio Discovery Agent (embedado),
+// usado como logo default nos dialogs Fluent do PSADT para padronizar a
+// identidade visual das notificacoes com o icone do agent. O .ico (84 KB)
+// e bem menor que o appicon.png de origem (1 MB) e o GetIcon do PSADT
+// decodifica .ico nativamente escolhendo o frame de maior resolucao.
+//
+//go:embed assets/psadt/icon.ico
+var psadtAgentIconICO []byte
+
+// psadtNotifUsesFluentDialogs indica se o tipo de notificacao renderiza
+// dialogs Fluent/Classic do PSADT (que exibem o logo do config.psd1).
+// Dialog Box (Win32 MessageBox) e BalloonTip usam icones de sistema.
+func psadtNotifUsesFluentDialogs(notifType string) bool {
+	switch notifType {
+	case "prompt_ok", "prompt_yesno", "prompt_continue", "prompt_input", "progress", "restart_prompt", "welcome":
+		return true
+	default:
+		return false
+	}
+}
+
+// writePSADTVisualBranding grava um config.psd1 parcial (e copia os assets
+// de branding) no diretorio do script temporario. O PSADT 4.1.x faz o merge
+// recursivo desse config sobre o default via Initialize-ADTModule
+// -ScriptDirectory. Retorna a lista de arquivos criados (para cleanup) ou
+// nil quando nao ha nada a personalizar.
+func writePSADTVisualBranding(req PSADTVisualNotificationRequest, scriptPath string) ([]string, error) {
+	userIcon := strings.TrimSpace(req.BrandingIconPath)
+	userIconDark := strings.TrimSpace(req.BrandingIconDark)
+	bannerPath := strings.TrimSpace(req.BrandingBannerPath)
+	accent := normalizeHexAccent(req.FluentAccentColor)
+	style := normalizeDialogStyle(req.DialogStyle)
+	fluentApplies := psadtNotifUsesFluentDialogs(req.NotifType)
+	if !fluentApplies && userIcon == "" && userIconDark == "" && bannerPath == "" && accent == "" && style == "" {
+		return nil, nil
+	}
+	dir := filepath.Dir(scriptPath)
+	var created []string
+	writeAsset := func(data []byte, destName string) string {
+		dest := filepath.Join(dir, destName)
+		if err := os.WriteFile(dest, data, 0o644); err != nil {
+			return ""
+		}
+		created = append(created, dest)
+		return destName
+	}
+	copyAsset := func(src, destName string) string {
+		data, err := os.ReadFile(src)
+		if err != nil {
+			return ""
+		}
+		return writeAsset(data, destName)
+	}
+	var logo, logoDark, banner string
+	if userIcon != "" {
+		logo = copyAsset(userIcon, "discovery-icon.png")
+	}
+	if userIconDark != "" {
+		logoDark = copyAsset(userIconDark, "discovery-icon-dark.png")
+	}
+	if bannerPath != "" {
+		banner = copyAsset(bannerPath, "discovery-banner.png")
+	}
+	// Padronizacao com o agent: em dialogs Fluent sem logo definido, usa o
+	// appicon.png embedado do Discovery Agent (claro e escuro). Se o usuario
+	// definiu logo sem dark, reaproveita o mesmo arquivo para manter a
+	// identidade consistente nos dois modos.
+	switch {
+	case logo != "" && logoDark == "":
+		logoDark = logo
+	case logo == "" && logoDark == "" && fluentApplies && len(psadtAgentIconICO) > 0:
+		logo = writeAsset(psadtAgentIconICO, "discovery-agent-icon.ico")
+		logoDark = logo
+	}
+	if len(created) == 0 && accent == "" && style == "" {
+		return nil, nil
+	}
+	var cfg strings.Builder
+	cfg.WriteString("@{\n")
+	if logo != "" || logoDark != "" || banner != "" {
+		cfg.WriteString("\tAssets = @{\n")
+		if logo != "" {
+			cfg.WriteString("\t\tLogo = '" + logo + "'\n")
+		}
+		if logoDark != "" {
+			cfg.WriteString("\t\tLogoDark = '" + logoDark + "'\n")
+		}
+		if banner != "" {
+			cfg.WriteString("\t\tBanner = '" + banner + "'\n")
+		}
+		cfg.WriteString("\t}\n")
+	}
+	if style != "" || accent != "" {
+		cfg.WriteString("\tUI = @{\n")
+		if style != "" {
+			cfg.WriteString("\t\tDialogStyle = '" + style + "'\n")
+		}
+		if accent != "" {
+			cfg.WriteString("\t\tFluentAccentColor = " + accent + "\n")
+		}
+		cfg.WriteString("\t}\n")
+	}
+	cfg.WriteString("}\n")
+	configPath := filepath.Join(dir, "config.psd1")
+	if err := os.WriteFile(configPath, []byte(cfg.String()), 0o644); err != nil {
+		for _, p := range created {
+			_ = os.Remove(p)
+		}
+		return nil, fmt.Errorf("falha ao gravar config.psd1 de branding: %w", err)
+	}
+	created = append(created, configPath)
+	return created, nil
+}
+
+// normalizeHexAccent aceita hex RGB (4A9EFF) ou ARGB (FF4A9EFF), com ou sem
+// prefixo 0x/#, e devolve no formato literal do config.psd1 (0xFFRRGGBB).
+// Vazio quando a entrada e invalida (o config usa o default do modulo).
+func normalizeHexAccent(raw string) string {
+	text := strings.ToLower(strings.TrimSpace(raw))
+	text = strings.TrimPrefix(text, "0x")
+	text = strings.TrimPrefix(text, "#")
+	if text == "" {
+		return ""
+	}
+	switch len(text) {
+	case 6:
+		text = "ff" + text
+	case 8:
+	default:
+		return ""
+	}
+	for _, ch := range text {
+		if (ch < '0' || ch > '9') && (ch < 'a' || ch > 'f') {
+			return ""
+		}
+	}
+	return "0x" + text
+}
+
+// normalizeDialogStyle valida o estilo de dialogo do PSADT (UI.DialogStyle).
+// Vazio = nao sobrescrever (usa o default Fluent do modulo).
+func normalizeDialogStyle(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "fluent":
+		return "Fluent"
+	case "classic":
+		return "Classic"
+	default:
+		return ""
+	}
 }
 
 // =============================================================================
