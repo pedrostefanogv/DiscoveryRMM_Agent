@@ -457,6 +457,10 @@ var APP_I18N_DICTIONARY = {
     "chat.questionCancelled": "Pergunta cancelada — o processamento do chat foi interrompido.",
     "chat.answerTag": "sua resposta",
     "chat.waitingAnswer": "Aguardando sua resposta...",
+    "chat.questionDockBadge": "A IA precisa da sua resposta",
+    "chat.questionDockHint":
+      "Responda no painel abaixo — escolha uma opção ou digite livremente.",
+    "chat.questionDockPlaceholder": "Ou digite sua própria resposta...",
     "chat.logsTitle": "Logs do Chat IA",
     "chat.localMemories": "Memórias Locais",
     "chat.noMemoryFound": "Nenhuma memória encontrada.",
@@ -1007,6 +1011,10 @@ var APP_I18N_DICTIONARY = {
     "chat.questionCancelled": "Question cancelled — chat processing was interrupted.",
     "chat.answerTag": "your answer",
     "chat.waitingAnswer": "Waiting for your answer...",
+    "chat.questionDockBadge": "The AI needs your answer",
+    "chat.questionDockHint":
+      "Answer in the panel below — pick an option or type freely.",
+    "chat.questionDockPlaceholder": "Or type your own answer...",
     "chat.logsTitle": "AI Chat Logs",
     "chat.localMemories": "Local Memories",
     "chat.noMemoryFound": "No memory found.",

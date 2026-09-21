@@ -48,8 +48,28 @@
 
     <div id="chatMessages" class="chat-messages"></div>
 
-    <div class="chat-input-wrap">
-      <textarea id="chatInput" class="chat-input" placeholder="Digite sua mensagem... (Enter para enviar, Shift+Enter para nova linha)" rows="1" spellcheck="true" data-app-lang="true"
+    <!-- Dock de pergunta interativa (ask_user): enquanto houver pergunta
+         pendente, substitui a área de digitação. Sempre oferece campo de
+         texto livre além das opções sugeridas. -->
+    <div id="chatQuestionDock" class="chat-question-dock hidden" role="group" aria-live="polite">
+      <div class="chat-question-dock-head">
+        <span class="chat-question-dock-badge" data-i18n="chat.questionDockBadge">A IA precisa da sua resposta</span>
+        <button id="chatQuestionDockStopBtn" class="btn subtle btn-xs chat-question-dock-stop" type="button"
+          data-i18n="action.stop">Parar</button>
+      </div>
+      <div id="chatQuestionDockText" class="chat-question-dock-text"></div>
+      <div id="chatQuestionDockOptions" class="chat-question-dock-options"></div>
+      <div class="chat-question-dock-input-row">
+        <input id="chatQuestionDockInput" type="text" class="chat-question-dock-input"
+          placeholder="Ou digite sua própria resposta..." data-i18n-placeholder="chat.questionDockPlaceholder"
+          spellcheck="true" data-app-lang="true" autocapitalize="sentences" autocomplete="on" />
+        <button id="chatQuestionDockSendBtn" class="btn primary btn-xs chat-question-dock-send" type="button"
+          data-i18n="action.send">Enviar</button>
+      </div>
+    </div>
+
+    <div id="chatInputWrap" class="chat-input-wrap">
+      <textarea id="chatInput" class="chat-input" placeholder="Digite sua mensagem... (Enter para enviar, Shift+Enter para nova linha)" rows="3" spellcheck="true" data-app-lang="true"
         autocapitalize="sentences" autocomplete="on" data-i18n-placeholder="chat.inputPlaceholder"></textarea>
       <div class="chat-input-actions">
         <button id="chatStopBtn" class="chat-icon-btn chat-stop-btn hidden" type="button" title="Stop"

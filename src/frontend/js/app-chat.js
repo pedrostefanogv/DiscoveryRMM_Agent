@@ -418,14 +418,15 @@ function scheduleChatBusyRequeue() {
 var chatMessageQueue = [];
 var CHAT_MESSAGE_QUEUE_MAX = 10;
 
-// autoGrowChatInput ajusta a altura do textarea ao conteúdo (cap 200px).
+// autoGrowChatInput ajusta a altura do textarea ao conteúdo: base de 3 linhas
+// (60px, piso no CSS .chat-input) crescendo até 6 linhas (cap de 120px, o
+// mesmo valor do max-height no CSS). Textos maiores rolam internamente.
 function autoGrowChatInput() {
   if (!chatInputEl) return;
   chatInputEl.style.height = "auto";
-  // Cap de ~3 linhas (line-height 1.35 × 0.9rem ≈ 20px/linha; 60px ≈ 3 linhas),
-  // espelhado no max-height de .chat-input — antes crescia até 200px, virando
-  // um campo do tamanho de um parágrafo (reduzido de 88px para 60px).
-  chatInputEl.style.height = Math.min(chatInputEl.scrollHeight, 60) + "px";
+  // Base de 3 linhas (60px) com cap de 6 linhas (120px) — espelhado no
+  // min/max-height de .chat-input.
+  chatInputEl.style.height = Math.max(Math.min(chatInputEl.scrollHeight, 120), 60) + "px";
 }
 
 function queueChatMessage(text) {
@@ -952,6 +953,22 @@ function onStreamStopped() {
 // própria nesse período.
 var chatPendingQuestionCount = 0;
 
+// ─── Dock de pergunta na área de digitação (ask_user) ───
+// A pergunta interativa não renderiza controles dentro da bolha: ela ocupa o
+// lugar da área de digitação (estilo assistente interativo), com opções como
+// botões e SEMPRE um campo de texto livre para o usuário digitar a própria
+// resposta, mesmo quando opções são sugeridas.
+var chatQuestionDock = null;
+var chatQuestionDockText = null;
+var chatQuestionDockOptions = null;
+var chatQuestionDockInput = null;
+var chatQuestionDockSendBtn = null;
+var chatQuestionDockStopBtn = null;
+var chatInputWrapEl = null;
+// Fila de perguntas pendentes: o backend pode emitir mais de uma; exibimos a
+// mais antiga no dock e avançamos conforme as respostas chegam.
+var chatQuestionQueue = [];
+
 function onChatQuestion(data) {
   try {
     var q = typeof data === "string" ? JSON.parse(data) : data;
@@ -982,19 +999,110 @@ function endPendingQuestion() {
   }
 }
 
+// ensureChatQuestionDockEls resolve os elementos do dock sob demanda e faz o
+// binding único dos handlers (input Enter, botão Enviar e Parar).
+function ensureChatQuestionDockEls() {
+  if (chatQuestionDock !== null) return;
+  chatQuestionDock = document.getElementById("chatQuestionDock");
+  chatInputWrapEl = document.getElementById("chatInputWrap");
+  if (!chatQuestionDock) return;
+  chatQuestionDockText = chatQuestionDock.querySelector("#chatQuestionDockText");
+  chatQuestionDockOptions = chatQuestionDock.querySelector("#chatQuestionDockOptions");
+  chatQuestionDockInput = chatQuestionDock.querySelector("#chatQuestionDockInput");
+  chatQuestionDockSendBtn = chatQuestionDock.querySelector("#chatQuestionDockSendBtn");
+  chatQuestionDockStopBtn = chatQuestionDock.querySelector("#chatQuestionDockStopBtn");
+  if (chatQuestionDockInput && !chatQuestionDockInput.dataset.bound) {
+    chatQuestionDockInput.dataset.bound = "1";
+    chatQuestionDockInput.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        submitChatQuestionDockText();
+      }
+    });
+  }
+  if (chatQuestionDockSendBtn && !chatQuestionDockSendBtn.dataset.bound) {
+    chatQuestionDockSendBtn.dataset.bound = "1";
+    chatQuestionDockSendBtn.addEventListener("click", submitChatQuestionDockText);
+  }
+  if (chatQuestionDockStopBtn && !chatQuestionDockStopBtn.dataset.bound) {
+    chatQuestionDockStopBtn.dataset.bound = "1";
+    chatQuestionDockStopBtn.addEventListener("click", function () {
+      // Cancela o turno no backend, que emite chat:question_cancelled e
+      // restaura a área de digitação (mesmo caminho do botão Parar original).
+      requestStopChatStream();
+    });
+  }
+}
+
+// submitChatQuestionDockText envia o texto digitado no dock para a pergunta em
+// exibição. Sempre disponível — mesmo com opções sugeridas, o usuário pode
+// responder com as próprias palavras.
+function submitChatQuestionDockText() {
+  ensureChatQuestionDockEls();
+  if (!chatQuestionDockInput || chatQuestionQueue.length === 0) return;
+  var answer = chatQuestionDockInput.value.trim();
+  if (!answer) return;
+  var question = chatQuestionQueue[0];
+  chatQuestionDockInput.value = "";
+  answerChatQuestion(question.id, answer);
+}
+
+// renderChatQuestionDock exibe a pergunta mais antiga pendente no dock,
+// escondendo a área de digitação; sem pendências, restaura o compositor.
+function renderChatQuestionDock() {
+  ensureChatQuestionDockEls();
+  if (!chatQuestionDock || !chatInputWrapEl) return;
+  if (chatQuestionQueue.length === 0) {
+    chatQuestionDock.classList.add("hidden");
+    chatInputWrapEl.classList.remove("hidden");
+    return;
+  }
+  var question = chatQuestionQueue[0];
+
+  chatQuestionDockText.innerHTML = renderAssistantMarkdown(question.question);
+  chatQuestionDockOptions.innerHTML = "";
+
+  // Opções como botões de resposta rápida.
+  if (question.options && question.options.length > 0) {
+    question.options.forEach(function (opt) {
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "btn subtle btn-xs";
+      btn.innerHTML = formatInlineChatMarkdown(opt);
+      btn.addEventListener("click", function () {
+        btn.classList.add("chat-question-option-selected");
+        answerChatQuestion(question.id, opt);
+      });
+      chatQuestionDockOptions.appendChild(btn);
+    });
+  }
+
+  // O campo de texto livre fica SEMPRE visível: o usuário escolhe entre as
+  // opções sugeridas ou digita a própria resposta.
+  chatQuestionDock.classList.remove("hidden");
+  chatInputWrapEl.classList.add("hidden");
+  syncColorMode();
+  scheduleChatScrollToBottom();
+  if (chatQuestionDockInput) chatQuestionDockInput.focus();
+}
+
 function showChatQuestion(question) {
   if (!chatMessagesEl) return;
 
   // Dedupe: reemissão do mesmo id (retry/retransmissão do backend) não cria
-  // uma segunda bolha — a pergunta duplicada aparecendo DEPOIS da resposta do
-  // usuário quebrava a ordem visual da conversa.
+  // uma segunda bolha nem reenfileira a pergunta no dock.
   var existingQuestions = chatMessagesEl.querySelectorAll(".chat-question");
   for (var qi = 0; qi < existingQuestions.length; qi += 1) {
     if (existingQuestions[qi].dataset.questionId === question.id) return;
   }
+  for (var qq = 0; qq < chatQuestionQueue.length; qq += 1) {
+    if (chatQuestionQueue[qq].id === question.id) return;
+  }
 
+  // Bolha na conversa: mantém a pergunta no histórico, SEM controles — a
+  // interação acontece no dock que substitui a área de digitação.
   var div = document.createElement("div");
-  div.className = "chat-msg assistant chat-question";
+  div.className = "chat-msg assistant chat-question chat-question-in-dock";
   div.dataset.questionId = question.id;
 
   // Pergunta renderizada com markdown
@@ -1003,63 +1111,17 @@ function showChatQuestion(question) {
   contentEl.innerHTML = renderAssistantMarkdown(question.question);
   div.appendChild(contentEl);
 
-  // Container de ações
-  var actions = document.createElement("div");
-  actions.className = "chat-msg-actions";
+  // Dica apontando para o dock de resposta.
+  var hint = document.createElement("div");
+  hint.className = "meta chat-question-dock-hint";
+  hint.textContent = translate("chat.questionDockHint");
+  div.appendChild(hint);
 
-  // Opções como botões
-  if (question.options && question.options.length > 0) {
-    question.options.forEach(function (opt) {
-      var btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "btn subtle btn-xs";
-      btn.innerHTML = formatInlineChatMarkdown(opt);
-      btn.addEventListener("click", function () {
-        // Destaca a opção escolhida antes de desabilitar o painel.
-        btn.classList.add("chat-question-option-selected");
-        answerChatQuestion(question.id, opt);
-        disableQuestionButtons(div);
-      });
-      actions.appendChild(btn);
-    });
-  }
-
-  // Campo de texto livre (sempre visível se allowText=true ou sem opções)
-  if (question.allowText || !question.options || question.options.length === 0) {
-    var textRow = document.createElement("div");
-    textRow.className = "chat-question-text-row";
-
-    var input = document.createElement("input");
-    input.type = "text";
-    input.className = "chat-question-input";
-    input.placeholder = "Digite sua resposta...";
-
-    var sendBtn = document.createElement("button");
-    sendBtn.type = "button";
-    sendBtn.className = "btn primary btn-xs chat-question-send-btn";
-    sendBtn.textContent = "Enviar";
-
-    sendBtn.addEventListener("click", function () {
-      var answer = input.value.trim();
-      if (!answer) return;
-      answerChatQuestion(question.id, answer);
-      disableQuestionButtons(div);
-    });
-
-    input.addEventListener("keydown", function (e) {
-      if (e.key === "Enter") {
-        e.preventDefault();
-        sendBtn.click();
-      }
-    });
-
-    textRow.appendChild(input);
-    textRow.appendChild(sendBtn);
-    actions.appendChild(textRow);
-  }
-
-  div.appendChild(actions);
   chatMessagesEl.appendChild(div);
+
+  // Enfileira e exibe no dock (área do compositor).
+  chatQuestionQueue.push(question);
+  renderChatQuestionDock();
   syncColorMode();
   scheduleChatScrollToBottom();
 }
@@ -1118,6 +1180,15 @@ function splitStreamingBubbleAfterQuestion() {
 }
 
 function answerChatQuestion(questionId, answer) {
+  // Remove a pergunta da fila do dock e avança para a próxima pendente (ou
+  // devolve a área de digitação) antes do feedback visual da resposta.
+  for (var qi = 0; qi < chatQuestionQueue.length; qi += 1) {
+    if (chatQuestionQueue[qi].id === questionId) {
+      chatQuestionQueue.splice(qi, 1);
+      break;
+    }
+  }
+  renderChatQuestionDock();
   // Feedback imediato: bolha destacada com a resposta do usuário + reativa o
   // timer de segurança (a espera pela pergunta terminou).
   appendChatQuestionAnswer(answer);
@@ -1161,7 +1232,19 @@ function onChatQuestionCancelled(data) {
       chatPendingQuestionCount -= 1;
       if (chatPendingQuestionCount === 0 && chatSending) armChatStreamTimeout();
     }
-    if (!payload || !payload.id || !chatMessagesEl) return;
+    if (!payload || !payload.id) return;
+
+    // Remove a pergunta do dock (se estava em exibição/fila) e restaura a
+    // área de digitação quando não houver outra pendente.
+    for (var qi = 0; qi < chatQuestionQueue.length; qi += 1) {
+      if (chatQuestionQueue[qi].id === payload.id) {
+        chatQuestionQueue.splice(qi, 1);
+        break;
+      }
+    }
+    renderChatQuestionDock();
+
+    if (!chatMessagesEl) return;
     var div = chatMessagesEl.querySelector(
       '.chat-msg.chat-question[data-question-id="' + String(payload.id).replace(/"/g, '\\"') + '"]'
     );
