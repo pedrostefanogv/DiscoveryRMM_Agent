@@ -1256,6 +1256,17 @@ input[type="search"] {
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 10px;
 }
+/* Campo oculto por tipo: classe em vez de style.display para preservar
+   o display original (flex) dos wrappers quando o campo reaparece. */
+#psadtView .psadt-field-hidden { display: none !important; }
+/* Ajuda contextual por campo: para que serve e quando e usado. */
+#psadtView .field-help {
+  display: block;
+  margin-top: 4px;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: var(--psadt-muted);
+}
 #psadtView label { display: block; font-size: 0.82rem; color: var(--psadt-muted); margin-bottom: 4px; }
 #psadtView input, #psadtView select, #psadtView textarea {
   width: 100%;

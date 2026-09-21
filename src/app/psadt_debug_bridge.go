@@ -450,7 +450,7 @@ func (a *App) ExecutePSADTVisualNotification(req PSADTVisualNotificationRequest)
 		stagingConfig = true
 		defer func() {
 			for _, p := range stagingFiles {
-				_ = os.Remove(p)
+				_ = os.RemoveAll(p)
 			}
 		}()
 	}
@@ -596,6 +596,7 @@ func buildPSADTVisualScript(req PSADTVisualNotificationRequest) (string, time.Du
 		"$psadtMessage  = $env:PSADT_MESSAGE\n" +
 		"$psadtAppName  = $env:PSADT_APPNAME\n" +
 		"$psadtSubtitle = $env:PSADT_SUBTITLE\n" +
+		"$psadtDuration = [int]$env:PSADT_DURATION\n" +
 		"$psadtBalloonTime = [int]$env:PSADT_BALLOON_TIME\n" +
 		"$psadtBalloonNoWait = ($env:PSADT_BALLOON_NOWAIT -eq '1')\n" +
 		"$psadtPromptLeft = $env:PSADT_PROMPT_LEFT\n" +
@@ -687,11 +688,24 @@ func buildPSADTVisualScript(req PSADTVisualNotificationRequest) (string, time.Du
 			"if ($psadtPromptNotTopMost) { $promptParams.NotTopMost = $true }\n"
 		switch req.NotifType {
 		case "prompt_ok":
-			body += "$promptParams.ButtonRightText = 'OK'\n"
+			// Overrides padrao apenas quando o usuario nao personalizou o botao.
+			if strings.TrimSpace(req.PromptRightText) == "" {
+				body += "$promptParams.ButtonRightText = 'OK'\n"
+			}
 		case "prompt_yesno":
-			body += "$promptParams.ButtonLeftText = 'Sim'\n$promptParams.ButtonRightText = 'Nao'\n"
+			if strings.TrimSpace(req.PromptLeftText) == "" {
+				body += "$promptParams.ButtonLeftText = 'Sim'\n"
+			}
+			if strings.TrimSpace(req.PromptRightText) == "" {
+				body += "$promptParams.ButtonRightText = 'Nao'\n"
+			}
 		case "prompt_continue":
-			body += "$promptParams.ButtonLeftText = 'Continuar'\n$promptParams.ButtonRightText = 'Adiar'\n"
+			if strings.TrimSpace(req.PromptLeftText) == "" {
+				body += "$promptParams.ButtonLeftText = 'Continuar'\n"
+			}
+			if strings.TrimSpace(req.PromptRightText) == "" {
+				body += "$promptParams.ButtonRightText = 'Adiar'\n"
+			}
 		case "prompt_input":
 			body += "$promptParams.RequestInput = $true\n" +
 				"if ($env:PSADT_PROMPT_DEFAULT) { $promptParams.DefaultValue = $env:PSADT_PROMPT_DEFAULT }\n"
@@ -828,10 +842,19 @@ func writePSADTVisualBranding(req PSADTVisualNotificationRequest, scriptPath str
 	if !fluentApplies && userIcon == "" && userIconDark == "" && bannerPath == "" && accent == "" && style == "" {
 		return nil, nil
 	}
-	dir := filepath.Dir(scriptPath)
+	// O PSADT so considera o diretorio do caller se existir
+	// "<scriptdir>\\Config\\config.psd1" (Initialize-ADTModule testa
+	// "Config\\config.psd1" relativo a -ScriptDirectory). Assets sao
+	// resolvidos a partir do mesmo diretorio Config. Logo, tudo vai em
+	// <tmpdir>\\Config\\ e o config referencia os assets por nome simples.
+	configDir := filepath.Join(filepath.Dir(scriptPath), "Config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		return nil, fmt.Errorf("falha ao criar diretorio de staging: %w", err)
+	}
 	var created []string
+	created = append(created, configDir)
 	writeAsset := func(data []byte, destName string) string {
-		dest := filepath.Join(dir, destName)
+		dest := filepath.Join(configDir, destName)
 		if err := os.WriteFile(dest, data, 0o644); err != nil {
 			return ""
 		}
@@ -856,9 +879,8 @@ func writePSADTVisualBranding(req PSADTVisualNotificationRequest, scriptPath str
 		banner = copyAsset(bannerPath, "discovery-banner.png")
 	}
 	// Padronizacao com o agent: em dialogs Fluent sem logo definido, usa o
-	// appicon.png embedado do Discovery Agent (claro e escuro). Se o usuario
-	// definiu logo sem dark, reaproveita o mesmo arquivo para manter a
-	// identidade consistente nos dois modos.
+	// icon.ico embedado do Discovery Agent (claro e escuro). Se o usuario
+	// definiu logo sem dark, reaproveita o mesmo arquivo.
 	switch {
 	case logo != "" && logoDark == "":
 		logoDark = logo
@@ -866,7 +888,8 @@ func writePSADTVisualBranding(req PSADTVisualNotificationRequest, scriptPath str
 		logo = writeAsset(psadtAgentIconICO, "discovery-agent-icon.ico")
 		logoDark = logo
 	}
-	if len(created) == 0 && accent == "" && style == "" {
+	if len(created) == 1 && accent == "" && style == "" { // so o dir vazio
+		_ = os.Remove(configDir)
 		return nil, nil
 	}
 	var cfg strings.Builder
@@ -895,10 +918,10 @@ func writePSADTVisualBranding(req PSADTVisualNotificationRequest, scriptPath str
 		cfg.WriteString("\t}\n")
 	}
 	cfg.WriteString("}\n")
-	configPath := filepath.Join(dir, "config.psd1")
+	configPath := filepath.Join(configDir, "config.psd1")
 	if err := os.WriteFile(configPath, []byte(cfg.String()), 0o644); err != nil {
 		for _, p := range created {
-			_ = os.Remove(p)
+			_ = os.RemoveAll(p)
 		}
 		return nil, fmt.Errorf("falha ao gravar config.psd1 de branding: %w", err)
 	}

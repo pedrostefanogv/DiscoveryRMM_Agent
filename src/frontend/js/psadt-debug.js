@@ -277,10 +277,22 @@
   // Notificacao Visual Nativa — visibilidade por tipo e ajuda contextual
   // =====================================================================
 
+  // Visibilidade de campos por tipo de notificacao. Espelha exatamente o que
+  // buildPSADTVisualScript (app/psadt_debug_bridge.go) consome de cada tipo:
+  // campos ignorados pelo cmdlet correspondente nao sao exibidos.
   var VISUAL_FIELD_GROUPS = {
+    // Titulo: Balloon (-BalloonTipTitle), Prompt (-Title) e Dialog Box.
+    // Nao se aplica a Progress/Restart/Welcome (usam textos padrao do PSADT).
+    title:    ["balloon_info", "balloon_warning", "balloon_error", "prompt_ok", "prompt_yesno", "prompt_continue", "prompt_input", "dialog_box"],
+    // Mensagem: Balloon (-BalloonTipText), Prompt (-Message), Progress (-StatusMessage), Dialog Box (-Text).
+    message:  ["balloon_info", "balloon_warning", "balloon_error", "prompt_ok", "prompt_yesno", "prompt_continue", "prompt_input", "progress", "dialog_box"],
+    // App Name: entra no Open-ADTSession; Dialog Box nao abre sessao.
+    session:  ["balloon_info", "balloon_warning", "balloon_error", "prompt_ok", "prompt_yesno", "prompt_continue", "prompt_input", "progress", "restart_prompt", "welcome"],
     subtitle: ["prompt_ok", "prompt_yesno", "prompt_continue", "prompt_input", "progress"],
     balloon:  ["balloon_info", "balloon_warning", "balloon_error"],
     prompt:   ["prompt_ok", "prompt_yesno", "prompt_continue", "prompt_input"],
+    promptButtons: ["prompt_ok", "prompt_yesno", "prompt_continue", "prompt_input"],
+    promptInput: ["prompt_input"],
     dialog:   ["dialog_box"],
     progress: ["progress"],
     restart:  ["restart_prompt"],
@@ -293,10 +305,10 @@
     balloon_info:    "\u{1F4AC} BalloonTip \u2014 notifica\u00e7\u00e3o n\u00e3o bloqueante na bandeja (no Win10+ vira toast). Cmdlet: Show-ADTBalloonTip. \u00datil para avisos r\u00e1pidos sem interrup\u00e7\u00e3o. Campos aplic\u00e1veis: tempo de exibi\u00e7\u00e3o e NoWait.",
     balloon_warning: "\u26A0\u{FE0F} BalloonTip de aviso \u2014 igual ao Info, com \u00edcone de alerta. N\u00e3o bloqueia o usu\u00e1rio. Cmdlet: Show-ADTBalloonTip (-BalloonTipIcon Warning).",
     balloon_error:   "\u274C BalloonTip de erro \u2014 igual ao Info, com \u00edcone de erro. N\u00e3o bloqueia o usu\u00e1rio. Cmdlet: Show-ADTBalloonTip (-BalloonTipIcon Error).",
-    prompt_ok:       "\u{1F44D} Prompt modal com bot\u00e3o OK \u2014 bloqueante; o usu\u00e1rio responde e a sess\u00e3o aguarda. Cmdlet: Show-ADTInstallationPrompt. Retorna o texto do bot\u00e3o clicado.",
-    prompt_yesno:    "\u2753 Prompt modal Sim / N\u00e3o \u2014 o usu\u00e1rio decide e o bot\u00e3o clicado volta em \"Resposta do usuario\". \u00datil para confirmar a\u00e7\u00f5es antes de prosseguir.",
-    prompt_continue: "\u23ED\u{FE0F} Prompt Continuar / Adiar \u2014 o usu\u00e1rio prossegue com a instala\u00e7\u00e3o ou adia. Com timeout, o prompt fecha sozinho ap\u00f3s N segundos.",
-    prompt_input:    "\u2328\u{FE0F} Prompt com entrada de texto \u2014 -RequestInput: exibe caixa de texto e o que o usu\u00e1rio digitar volta em \"Resposta do usuario\" (InputDialogResult.Text). O bot\u00e3o direito submete a resposta.",
+    prompt_ok:       "\u{1F44D} Prompt modal com bot\u00e3o OK \u2014 bloqueante; o usu\u00e1rio responde e a sess\u00e3o aguarda. Cmdlet: Show-ADTInstallationPrompt. Retorna o texto do bot\u00e3o clicado. Os campos de bot\u00e3o sobrescrevem o OK padr\u00e3o quando preenchidos.",
+    prompt_yesno:    "\u2753 Prompt modal Sim / N\u00e3o \u2014 o usu\u00e1rio decide e o bot\u00e3o clicado volta em \"Resposta do usuario\". \u00datil para confirmar a\u00e7\u00f5es antes de prosseguir. Os bot\u00f5es padr\u00e3o (Sim/N\u00e3o) podem ser renomeados nos campos de bot\u00e3o.",
+    prompt_continue: "\u23ED\u{FE0F} Prompt Continuar / Adiar \u2014 o usu\u00e1rio prossegue com a instala\u00e7\u00e3o ou adia. Com timeout, o prompt fecha sozinho ap\u00f3s N segundos. Bot\u00f5es padr\u00e3o (Continuar/Adiar) renome\u00e1veis nos campos de bot\u00e3o.",
+    prompt_input:    "\u2328\u{FE0F} Prompt com entrada de texto \u2014 -RequestInput: exibe caixa de texto e o que o usu\u00e1rio digitar volta em \"Resposta do usuario\" (InputDialogResult.Text). O bot\u00e3o direito submete a resposta; o campo Valor Inicial pre-preenche a caixa.",
     progress:        "\u23F3 Barra de progresso \u2014 janela fluent n\u00e3o bloqueante com mensagem de status e detalhe. Exibe por N segundos e fecha (Close-ADTInstallationProgress).",
     dialog_box:      "\u{1F5A8}\u{FE0F} Dialog Box \u2014 MessageBox cl\u00e1ssico (Ok/OkCancel/YesNo/...) com \u00edcone, timeout e op\u00e7\u00f5es avan\u00e7adas. Cmdlet: Show-ADTDialogBox. Retorna o texto do bot\u00e3o clicado.",
     restart_prompt:  "\u{1F501} Restart Prompt \u2014 janela de reinicializa\u00e7\u00e3o com countdown para restart for\u00e7ado (Show-ADTInstallationRestartPrompt). Sem countdown, o usu\u00e1rio apenas decide reiniciar agora.",
@@ -307,7 +319,9 @@
     var typeEl = document.getElementById("visualNotifType");
     if (!typeEl) return;
     var t = typeEl.value;
+    try { localStorage.setItem("psadt.visualNotifType", t); } catch (e) { /* storage indisponivel */ }
     var groups = document.querySelectorAll("[data-visual-group]");
+    var aplicaveis = [];
     for (var i = 0; i < groups.length; i++) {
       var keys = (groups[i].getAttribute("data-visual-group") || "").split(" ");
       var show = false;
@@ -315,11 +329,25 @@
         var list = VISUAL_FIELD_GROUPS[keys[j]] || [];
         if (list.indexOf(t) >= 0) { show = true; break; }
       }
-      groups[i].style.display = show ? "" : "none";
+      // Usa classe em vez de style.display para preservar o display:inline
+      // original dos wrappers (flex) quando o campo volta a aparecer.
+      if (show) {
+        groups[i].classList.remove("psadt-field-hidden");
+        var lbl = groups[i].querySelector("label");
+        if (lbl && aplicaveis.indexOf(lbl.textContent.trim()) < 0) {
+          aplicaveis.push(lbl.textContent.trim());
+        }
+      } else {
+        groups[i].classList.add("psadt-field-hidden");
+      }
     }
     var help = document.getElementById("visualNotifHelp");
     if (help) {
-      help.textContent = VISUAL_TYPE_HELP[t] || "";
+      var text = VISUAL_TYPE_HELP[t] || "";
+      if (aplicaveis.length) {
+        text += " Campos aplicaveis neste tipo: " + aplicaveis.join(", ") + ".";
+      }
+      help.textContent = text;
     }
   }
 
@@ -339,6 +367,7 @@
     var promptTimeoutEl = document.getElementById("visualPromptTimeout");
     var promptNoWaitEl = document.getElementById("visualPromptNoWait");
     var promptNotTopMostEl = document.getElementById("visualPromptNotTopMost");
+    var promptDefaultValueEl = document.getElementById("visualPromptDefaultValue");
     var dialogButtonsEl = document.getElementById("visualDialogButtons");
     var dialogDefaultEl = document.getElementById("visualDialogDefault");
     var dialogIconEl = document.getElementById("visualDialogIcon");
@@ -379,6 +408,7 @@
       promptTimeout: promptTimeoutEl ? (parseInt(promptTimeoutEl.value, 10) || 0) : 0,
       promptNoWait: promptNoWaitEl ? !!promptNoWaitEl.checked : false,
       promptNotTopMost: promptNotTopMostEl ? !!promptNotTopMostEl.checked : false,
+      promptDefaultValue: promptDefaultValueEl ? promptDefaultValueEl.value.trim() : "",
       dialogButtons: dialogButtonsEl ? dialogButtonsEl.value : "OkCancel",
       dialogDefault: dialogDefaultEl ? dialogDefaultEl.value : "First",
       dialogIcon: dialogIconEl ? dialogIconEl.value : "Information",
@@ -498,6 +528,12 @@
   var visualNotifTypeEl = document.getElementById("visualNotifType");
   if (visualNotifTypeEl) {
     visualNotifTypeEl.addEventListener("change", updateVisualFields);
+    try {
+      var savedType = localStorage.getItem("psadt.visualNotifType");
+      if (savedType && visualNotifTypeEl.querySelector('option[value="' + savedType + '"]')) {
+        visualNotifTypeEl.value = savedType;
+      }
+    } catch (e) { /* storage indisponivel */ }
     updateVisualFields();
   }
 

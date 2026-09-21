@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  Manifest minimo do discovery-service.exe (PLANO_SEPARACAO_SERVICO_UI.md).
+  SEM requireAdministrator: o SCM ignora requestedExecutionLevel. Usado apenas
+  para permitir o .syso do servico (wails3 generate syso exige manifest) junto
+  com o icone padrao do agente (windows/icon.ico).
+-->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <assemblyIdentity version="1.0.0.0" processorArchitecture="*" name="Discovery.Service" type="win32"/>
+</assembly>

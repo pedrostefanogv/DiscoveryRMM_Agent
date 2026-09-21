@@ -64,6 +64,9 @@ func TestBuildPSADTVisualScript_ProgressUsesValidParameters(t *testing.T) {
 	if !strings.Contains(script, "$progressParams.StatusMessageDetail = $psadtSubtitle") {
 		t.Fatalf("expected StatusMessageDetail mapping")
 	}
+	if !strings.Contains(script, "$psadtDuration = [int]$env:PSADT_DURATION") {
+		t.Fatalf("expected $psadtDuration mapping (Start-Sleep recebe null sem isso)")
+	}
 	if !strings.Contains(script, "Close-ADTInstallationProgress") {
 		t.Fatalf("expected progress close after test duration")
 	}
@@ -335,10 +338,11 @@ func TestWritePSADTVisualBranding(t *testing.T) {
 	var configPath string
 	var hasIcon bool
 	for _, f := range files {
-		if filepath.Base(f) == "config.psd1" {
+		base := filepath.Base(f)
+		if base == "config.psd1" && filepath.Base(filepath.Dir(f)) == "Config" {
 			configPath = f
 		}
-		if filepath.Base(f) == "discovery-icon.png" {
+		if base == "discovery-icon.png" {
 			hasIcon = true
 		}
 	}

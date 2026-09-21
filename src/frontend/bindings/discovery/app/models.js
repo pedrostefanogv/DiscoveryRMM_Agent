@@ -660,15 +660,6 @@ export class PSADTScriptResult {
      * @param {Partial<PSADTScriptResult>} [$$source = {}] - The source object to create the PSADTScriptResult.
      */
     constructor($$source = {}) {
-        if (!("result" in $$source)) {
-            /**
-             * Resposta estruturada do dialogo: texto digitado pelo usuario
-             * (InputDialogResult.Text) ou botao clicado (DialogBoxResult).
-             * @member
-             * @type {string}
-             */
-            this["result"] = "";
-        }
         if (!("success" in $$source)) {
             /**
              * @member
@@ -689,6 +680,16 @@ export class PSADTScriptResult {
              * @type {string}
              */
             this["output"] = "";
+        }
+        if (!("result" in $$source)) {
+            /**
+             * Result carrega a resposta estruturada do diálogo quando aplicável:
+             * o texto digitado pelo usuário (InputDialogResult.Text) em prompts de
+             * entrada, ou o texto do botão clicado (DialogBoxResult).
+             * @member
+             * @type {string}
+             */
+            this["result"] = "";
         }
         if (!("error" in $$source)) {
             /**
@@ -932,47 +933,50 @@ export class PSADTVisualNotificationRequest {
              */
             this["promptDefaultValue"] = "";
         }
-        if (!("brandingIconPath" in $source)) {
+        if (!("brandingIconPath" in $$source)) {
             /**
-             * PNG do logo exibido nos dialogs Fluent (modo claro).
+             * Branding (config.psd1 parcial + Initialize-ADTModule -ScriptDirectory).
+             * Aplica-se aos dialogs Fluent/Classic (prompts, progress, welcome, restart).
+             * Show-ADTDialogBox (Win32) e BalloonTip usam icones de sistema e ignoram isso.
+             * PNG do logo (modo claro)
              * @member
              * @type {string}
              */
             this["brandingIconPath"] = "";
         }
-        if (!("brandingIconDark" in $source)) {
+        if (!("brandingIconDark" in $$source)) {
             /**
-             * PNG do logo para modo escuro.
+             * PNG do logo (modo escuro)
              * @member
              * @type {string}
              */
             this["brandingIconDark"] = "";
         }
-        if (!("brandingBannerPath" in $source)) {
+        if (!("brandingBannerPath" in $$source)) {
             /**
-             * PNG do banner para dialogs Classic.
+             * PNG do banner (dialogos Classic)
              * @member
              * @type {string}
              */
             this["brandingBannerPath"] = "";
         }
-        if (!("dialogStyle" in $source)) {
+        if (!("dialogStyle" in $$source)) {
             /**
-             * Fluent | Classic (vazio = default do modulo).
+             * Fluent | Classic
              * @member
              * @type {string}
              */
             this["dialogStyle"] = "";
         }
-        if (!("fluentAccentColor" in $source)) {
+        if (!("fluentAccentColor" in $$source)) {
             /**
-             * Cor de acento Fluent em hex RGB/ARGB (vazio = default).
+             * hex RGB(A): 4A9EFF ou FF4A9EFF
              * @member
              * @type {string}
              */
             this["fluentAccentColor"] = "";
         }
-        if (!("closeProcesses" in $source)) {
+        if (!("closeProcesses" in $$source)) {
             /**
              * Welcome (Show-ADTInstallationWelcome)
              * nomes de processos separados por virgula

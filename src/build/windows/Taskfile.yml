@@ -45,8 +45,19 @@ tasks:
     # Wails, SEM frontend embedado, SEM manifest requireAdministrator (SCM
     # ignora requestedExecutionLevel, mas o build limpo evita linkar WebView2).
     # CGO_ENABLED=1 preservado (mesmos requisitos de runtime do core).
+    # Ícone: o .syso vale apenas para o pacote em cujo DIRETÓRIO ele está —
+    # ./cmd/discovery-service precisa do próprio (manifest mínimo
+    # service.exe.manifest, SEM requireAdministrator). Sem ele o
+    # discovery-service.exe sai SEM ícone (mesma causa corrigida em
+    # build-install-installer.ps1 via serviceSysoPath).
     cmds:
+      - task: generate:syso:service
       - go build {{.SERVICE_FLAGS}} -o {{.BIN_DIR}}/discovery-service.exe ./cmd/discovery-service
+      # Limpeza: mesmo comportamento do build do agente (syso é temporário).
+      - cmd: powershell -NoProfile -Command "Remove-Item -Path 'cmd\\discovery-service\\*.syso' -Force -ErrorAction SilentlyContinue"
+        platforms: [windows]
+      - cmd: rm -f cmd/discovery-service/*.syso
+        platforms: [linux, darwin]
     vars:
       # M25: o serviço também carrega versão/commit (diagnóstico e self-update).
       SERVICE_FLAGS: '{{if eq .PRODUCTION "true"}}-trimpath -buildvcs=false -ldflags="-w -s -X discovery/app/core/buildinfo.Version={{.APP_VERSION}} -X discovery/app/core/buildinfo.Commit={{.GIT_COMMIT}}"{{else}}-buildvcs=false{{end}}'
@@ -66,6 +77,17 @@ tasks:
     dir: build
     cmds:
       - wails3 generate syso -arch {{.ARCH}} -icon windows/icon.ico -manifest windows/wails.exe.manifest -info windows/info.json -out ../wails_windows_{{.ARCH}}.syso
+    vars:
+      ARCH: '{{.ARCH | default ARCH}}'
+
+  generate:syso:service:
+    summary: Generates Windows `.syso` file (agent icon) for the service binary
+    # Ícone padrao do projeto (windows/icon.ico) para o discovery-service.exe.
+    # Manifest minimo (service.exe.manifest) pois o wails3 generate syso exige
+    # um; SEM requireAdministrator e SEM info.json Wails (servico headless).
+    dir: build
+    cmds:
+      - wails3 generate syso -arch {{.ARCH}} -icon windows/icon.ico -manifest windows/service.exe.manifest -out ../cmd/discovery-service/resource_windows_{{.ARCH}}.syso
     vars:
       ARCH: '{{.ARCH | default ARCH}}'
 
