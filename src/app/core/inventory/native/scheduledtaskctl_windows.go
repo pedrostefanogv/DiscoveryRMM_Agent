@@ -144,8 +144,16 @@ func EditScheduledTask(ctx context.Context, taskPath, taskName string, edit Sche
 	sb.WriteString(triggerPS + "\n")
 	sb.WriteString("Set-ScheduledTask -TaskPath " + psQuote(p) + " -TaskName " + psQuote(n) + " -Trigger $t | Out-Null\n")
 	if actionPath := strings.TrimSpace(edit.ActionPath); actionPath != "" {
-		sb.WriteString("$a = New-ScheduledTaskAction -Execute " + psQuote(actionPath))
-		if args := strings.TrimSpace(edit.ActionArgs); args != "" {
+		// O Task Scheduler costuma expor Execute com aspas e, às vezes, os
+		// argumentos embutidos (\"C:\x.exe\" --flag) — separa antes de
+		// repassar para New-ScheduledTaskAction, que espera o executável puro.
+		exe, embeddedArgs := normalizeActionPath(actionPath)
+		args := strings.TrimSpace(edit.ActionArgs)
+		if args == "" {
+			args = embeddedArgs
+		}
+		sb.WriteString("$a = New-ScheduledTaskAction -Execute " + psQuote(exe))
+		if args != "" {
 			sb.WriteString(" -Argument " + psQuote(args))
 		}
 		sb.WriteString("\nSet-ScheduledTask -TaskPath " + psQuote(p) + " -TaskName " + psQuote(n) + " -Action $a | Out-Null\n")
@@ -156,6 +164,19 @@ func EditScheduledTask(ctx context.Context, taskPath, taskName string, edit Sche
 		return fmt.Errorf("falha ao editar tarefa %s%s: %w", p, n, err)
 	}
 	return nil
+}
+
+// normalizeActionPath separa o executável de argumentos embutidos quando o
+// caminho vem entre aspas (formato comum no Task Scheduler).
+func normalizeActionPath(raw string) (string, string) {
+	s := strings.TrimSpace(raw)
+	if strings.HasPrefix(s, "\"") {
+		if end := strings.Index(s[1:], "\""); end >= 0 {
+			return strings.TrimSpace(s[1 : 1+end]), strings.TrimSpace(s[2+end:])
+		}
+		return strings.Trim(s, "\""), ""
+	}
+	return s, ""
 }
 
 // weeklyDaysArg converte índices de dia (0=Dom..6=Sáb) para nomes aceitos

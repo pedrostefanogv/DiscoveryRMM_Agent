@@ -60,6 +60,9 @@ type agentStartupItemInfo struct {
 	Status   string `json:"status,omitempty"`
 	Username string `json:"username,omitempty"`
 	Detail   string `json:"detail,omitempty"`
+	// Hive identifica a conta do item ("HKLM", "HKCU" ou "HKU:<SID>"), para o
+	// comando de habilitar/desabilitar acertar o hive correto.
+	Hive string `json:"hive,omitempty"`
 }
 
 // agentScheduledTaskInfo tarefa agendada no formato do envelope da API.
@@ -435,6 +438,7 @@ func mapAgentStartupItems(items []models.StartupItem) []agentStartupItemInfo {
 			Status:   trimToMaxLen(strings.TrimSpace(it.Status), 20),
 			Username: trimToMaxLen(strings.TrimSpace(it.Username), 100),
 			Detail:   trimToMaxLen(strings.TrimSpace(it.Detail), 100),
+			Hive:     trimToMaxLen(strings.TrimSpace(it.Hive), 100),
 		})
 	}
 	return result

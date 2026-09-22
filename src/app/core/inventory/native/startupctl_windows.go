@@ -17,6 +17,10 @@ type StartupItemTarget struct {
 	Type   string // registry | folder | service
 	Name   string // valor do registro, arquivo .lnk ou nome do serviço
 	Source string // origem coletada (ex.: "HKLM Run", "Pasta Startup (Usuário)")
+	// Hive identifica a conta do item: "HKLM", "HKCU" ou "HKU:<SID>".
+	// Necessário para itens de outros usuários (lidos via HKEY_USERS quando
+	// o serviço roda como SYSTEM).
+	Hive string
 }
 
 // SetStartupItemEnabled habilita ou desabilita um item de inicialização.
@@ -34,58 +38,100 @@ func SetStartupItemEnabled(enable bool, target StartupItemTarget) error {
 	case "service":
 		return setServiceStartMode(enable, target.Name)
 	case "registry":
-		return setStartupApprovedState(enable, approvedKeyForSource(target.Source), target.Name)
-	case "folder":
-		root := registry.CURRENT_USER
-		if strings.EqualFold(strings.TrimSpace(target.Source), srcStartupCommon) {
-			root = registry.LOCAL_MACHINE
+		ref, err := approvedKeyForTarget(target, []string{"Run"})
+		if err != nil {
+			return err
 		}
-		return setStartupApprovedState(enable, approvedKeyRef{root: root, subkeys: []string{"StartupFolder"}}, target.Name)
+		return setStartupApprovedState(enable, ref, target.Name)
+	case "folder":
+		ref, err := approvedKeyForTarget(target, []string{"StartupFolder"})
+		if err != nil {
+			return err
+		}
+		return setStartupApprovedState(enable, ref, target.Name)
 	default:
 		return fmt.Errorf("tipo de item de inicialização não suportado: %q", itemType)
 	}
 }
 
 type approvedKeyRef struct {
-	root    registry.Key
-	subkeys []string
+	root     registry.Key
+	hivePath string // prefixo dentro do root (SID quando root é HKEY_USERS)
+	subkeys  []string
 }
 
 // approvedKeyForSource resolve a chave StartupApproved correta para a origem
-// do item (hive + subchaves candidatas, consultadas em ordem).
+// do item (subchaves candidatas, consultadas em ordem). O hive vem da origem,
+// mas é sobrescrito pelo Hive explícito do item quando presente.
 func approvedKeyForSource(source string) approvedKeyRef {
 	switch source {
 	case srcHKLMRun:
-		return approvedKeyRef{registry.LOCAL_MACHINE, []string{"Run"}}
+		return approvedKeyRef{root: registry.LOCAL_MACHINE, subkeys: []string{"Run"}}
 	case srcHKLMRunOnce:
-		return approvedKeyRef{registry.LOCAL_MACHINE, []string{"RunOnce", "Run32"}}
+		return approvedKeyRef{root: registry.LOCAL_MACHINE, subkeys: []string{"RunOnce", "Run32"}}
 	case srcHKLMRun32:
-		return approvedKeyRef{registry.LOCAL_MACHINE, []string{"Run32", "Run"}}
+		return approvedKeyRef{root: registry.LOCAL_MACHINE, subkeys: []string{"Run32", "Run"}}
 	case srcHKLMRunOnce32:
-		return approvedKeyRef{registry.LOCAL_MACHINE, []string{"Run32", "RunOnce"}}
+		return approvedKeyRef{root: registry.LOCAL_MACHINE, subkeys: []string{"Run32", "RunOnce"}}
 	case srcHKCURun:
-		return approvedKeyRef{registry.CURRENT_USER, []string{"Run"}}
+		return approvedKeyRef{root: registry.CURRENT_USER, subkeys: []string{"Run"}}
 	case srcHKCURunOnce:
-		return approvedKeyRef{registry.CURRENT_USER, []string{"RunOnce"}}
+		return approvedKeyRef{root: registry.CURRENT_USER, subkeys: []string{"RunOnce"}}
+	case srcHKCURun32:
+		return approvedKeyRef{root: registry.CURRENT_USER, subkeys: []string{"Run32", "Run"}}
+	case srcHKCURunOnce32:
+		return approvedKeyRef{root: registry.CURRENT_USER, subkeys: []string{"Run32", "RunOnce"}}
 	default:
-		return approvedKeyRef{registry.CURRENT_USER, []string{"Run"}}
+		return approvedKeyRef{root: registry.CURRENT_USER, subkeys: []string{"Run"}}
 	}
 }
 
-// startupApprovedPrefix retorna o prefixo da chave StartupApproved no hive.
-func startupApprovedPrefix(root registry.Key) string {
-	if root == registry.CURRENT_USER {
-		return "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\"
+// approvedKeyForTarget combina a origem (subchaves) com o hive do item.
+func approvedKeyForTarget(target StartupItemTarget, fallbackSubkeys []string) (approvedKeyRef, error) {
+	ref := approvedKeyForSource(target.Source)
+	if len(ref.subkeys) == 0 {
+		ref.subkeys = fallbackSubkeys
 	}
-	return "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\"
+	return applyHive(ref, target.Hive)
+}
+
+// applyHive sobrescreve root/hivePath quando o item traz o hive explícito.
+func applyHive(ref approvedKeyRef, hive string) (approvedKeyRef, error) {
+	h := strings.TrimSpace(hive)
+	switch {
+	case h == "":
+		return ref, nil
+	case strings.EqualFold(h, hiveHKCU):
+		ref.root = registry.CURRENT_USER
+		ref.hivePath = ""
+	case strings.EqualFold(h, hiveHKLM):
+		ref.root = registry.LOCAL_MACHINE
+		ref.hivePath = ""
+	case strings.HasPrefix(strings.ToUpper(h), strings.ToUpper(hiveHKUPrefix)):
+		sid := strings.TrimSpace(h[len(hiveHKUPrefix):])
+		if sid == "" || strings.ContainsAny(sid, `\/`) {
+			return ref, fmt.Errorf("hive HKU inválido: %q", hive)
+		}
+		ref.root = registry.Key(windows.HKEY_USERS)
+		ref.hivePath = sid
+	default:
+		return ref, fmt.Errorf("hive de item de inicialização não suportado: %q", hive)
+	}
+	return ref, nil
+}
+
+// startupApprovedPrefix retorna o prefixo da chave StartupApproved, já
+// considerando o hivePath (SID) quando o item pertence a outro usuário.
+func startupApprovedPrefix(ref approvedKeyRef) string {
+	return joinRegPath(ref.hivePath, approvedPrefixFor(ref.root))
 }
 
 // firstExistingSubkey retorna a primeira subchave existente (ex.: Run32 antes
 // de Run para itens Wow64). Se nenhuma existir, retorna a primeira candidata
 // (o OpenKey acima reporta o erro adequado).
-func firstExistingSubkey(root registry.Key, subkeys []string) string {
+func firstExistingSubkey(ref approvedKeyRef, subkeys []string) string {
 	for _, sub := range subkeys {
-		if _, err := registry.OpenKey(root, startupApprovedPrefix(root)+sub, windows.KEY_READ); err == nil {
+		if _, err := registry.OpenKey(ref.root, joinRegPath(startupApprovedPrefix(ref), sub), windows.KEY_READ); err == nil {
 			return sub
 		}
 	}
@@ -103,11 +149,12 @@ func setStartupApprovedState(enable bool, ref approvedKeyRef, name string) error
 	if strings.TrimSpace(name) == "" {
 		return fmt.Errorf("nome do item de inicialização é obrigatório")
 	}
-	path := startupApprovedPrefix(ref.root) + firstExistingSubkey(ref.root, ref.subkeys)
+	prefix := startupApprovedPrefix(ref)
+	path := joinRegPath(prefix, firstExistingSubkey(ref, ref.subkeys))
 	key, err := registry.OpenKey(ref.root, path, windows.KEY_SET_VALUE|windows.KEY_READ)
 	if err != nil {
 		// Chave StartupApproved pode não existir: criar sob a primeira candidata.
-		key, _, err = registry.CreateKey(ref.root, startupApprovedPrefix(ref.root)+ref.subkeys[0], windows.KEY_SET_VALUE)
+		key, _, err = registry.CreateKey(ref.root, joinRegPath(prefix, ref.subkeys[0]), windows.KEY_SET_VALUE)
 		if err != nil {
 			return fmt.Errorf("falha ao abrir/criar StartupApproved (%s): %w", strings.Join(ref.subkeys, "/"), err)
 		}

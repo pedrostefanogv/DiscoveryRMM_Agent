@@ -64,11 +64,12 @@ func (a *App) handleStartupItemCommand(ctx context.Context, payload any) (bool, 
 		Type:   agentcommands.GetStringField(payloadJSON, "type"),
 		Name:   name,
 		Source: agentcommands.GetStringField(payloadJSON, "source"),
+		Hive:   agentcommands.GetStringField(payloadJSON, "hive"),
 	}
 
 	enable := action == "enable"
-	a.Logs.Append(fmt.Sprintf("[agent] startupitem %s: type=%s name=%s source=%s",
-		action, target.Type, target.Name, target.Source))
+	a.Logs.Append(fmt.Sprintf("[agent] startupitem %s: type=%s name=%s source=%s hive=%s",
+		action, target.Type, target.Name, target.Source, target.Hive))
 
 	if err := native.SetStartupItemEnabled(enable, target); err != nil {
 		a.Logs.Append("[agent] startupitem falhou: " + err.Error())

@@ -195,6 +195,10 @@ type StartupItem struct {
 	// Detail descreve o modo de inicialização (ex.: serviços: "Automático",
 	// "Automático (Atrasado)") ou outro contexto auxiliar de exibição.
 	Detail string `json:"detail,omitempty"`
+	// Hive identifica o hive/conta do item, usado para habilitar/desabilitar:
+	// "HKLM", "HKCU" ou "HKU:<SID>" (itens de outros usuários, quando o
+	// serviço roda como SYSTEM e o HKCU do processo é o do próprio SYSTEM).
+	Hive string `json:"hive,omitempty"`
 }
 
 type AutoexecItem struct {

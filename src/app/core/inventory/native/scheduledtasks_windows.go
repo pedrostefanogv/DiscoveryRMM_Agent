@@ -55,52 +55,179 @@ func collectScheduledTasksNative(ctx context.Context) ([]models.ScheduledTaskInf
 // gatilho principal (tipo + descrição amigável) e o runtime (Status,
 // NextRunTime, LastRunTime, LastTaskResult). Saída em JSON compacto.
 const scheduledTasksScript = `$ErrorActionPreference = 'SilentlyContinue'
+
+$dayMap = @{
+    'Sunday' = 'Dom'; 'Monday' = 'Seg'; 'Tuesday' = 'Ter'; 'Wednesday' = 'Qua';
+    'Thursday' = 'Qui'; 'Friday' = 'Sex'; 'Saturday' = 'Sab'
+}
+$dayFlags = @(
+    @{ Bit = 1; Name = 'Dom' }, @{ Bit = 2; Name = 'Seg' }, @{ Bit = 4; Name = 'Ter' },
+    @{ Bit = 8; Name = 'Qua' }, @{ Bit = 16; Name = 'Qui' }, @{ Bit = 32; Name = 'Sex' },
+    @{ Bit = 64; Name = 'Sab' }
+)
+
 $result = @(Get-ScheduledTask | ForEach-Object {
     $t = $_
-    $a = $t.Actions | Select-Object -First 1
-    $tr = $t.Triggers | Select-Object -First 1
-    $triggerType = 'other'
-    $triggerDesc = ''
-    if ($tr) {
-        $cls = $tr.CimClass.CimClassName
-        switch -Wildcard ($cls) {
-            'MSFT_TaskBootTrigger'   { $triggerType = 'boot';   $triggerDesc = 'Na inicialização do sistema' }
-            'MSFT_TaskLogonTrigger'  { $triggerType = 'logon';  $triggerDesc = 'Ao fazer logon'; if ($tr.UserId) { $triggerDesc = "Ao fazer logon ($($tr.UserId))" } }
-            'MSFT_TaskDailyTrigger'  { $triggerType = 'daily';  $triggerDesc = 'Diário'; if ($tr.StartTime) { $triggerDesc = "Diário às $($tr.StartTime.ToString('HH:mm'))" } }
-            'MSFT_TaskWeeklyTrigger' { $triggerType = 'weekly'; $triggerDesc = 'Semanal' }
-            'MSFT_TaskTimeTrigger'   { $triggerType = 'once';   $triggerDesc = 'Uma vez'; if ($tr.StartTime) { $triggerDesc = "Uma vez em $($tr.StartTime.ToString('yyyy-MM-dd HH:mm'))" } }
-            'MSFT_TaskIdleTrigger'   { $triggerType = 'idle';   $triggerDesc = 'Quando o computador estiver ocioso' }
-            'MSFT_TaskEventTrigger'  { $triggerType = 'event';  $triggerDesc = 'Por evento' }
-            default                  { $triggerType = 'other';  if ($cls) { $triggerDesc = [string]$cls } }
+    try {
+        $a = $t.Actions | Select-Object -First 1
+        $tr = $t.Triggers | Select-Object -First 1
+
+        $triggerType = 'none'
+        $start = ''
+        $days = ''
+        $daysInterval = 0
+
+        if ($tr) {
+            $start = [string]$tr.StartBoundary
+            $days = [string]$tr.DaysOfWeek
+            $daysInterval = [int]$tr.DaysInterval
+
+            switch ([string]$tr.CimClass.CimClassName) {
+                'MSFT_TaskBootTrigger'   { $triggerType = 'boot' }
+                'MSFT_TaskLogonTrigger'  { $triggerType = 'logon' }
+                'MSFT_TaskDailyTrigger'  { $triggerType = 'daily' }
+                'MSFT_TaskWeeklyTrigger' { $triggerType = 'weekly' }
+                'MSFT_TaskTimeTrigger'   { $triggerType = 'once' }
+                'MSFT_TaskIdleTrigger'   { $triggerType = 'idle' }
+                'MSFT_TaskEventTrigger'  { $triggerType = 'event' }
+                default                  { $triggerType = 'other' }
+            }
+
+            if ($triggerType -eq 'other') {
+                $node = $null
+                $el = ''
+                $xml = ''
+                try { $xml = Export-ScheduledTask -TaskPath $t.TaskPath -TaskName $t.TaskName } catch { $xml = '' }
+                if ($xml) {
+                    try {
+                        $doc = [xml]$xml
+                        $node = $doc.Task.Triggers.ChildNodes | Select-Object -First 1
+                        if ($node) { $el = [string]$node.LocalName }
+                    } catch {
+                        $node = $null
+                    }
+                }
+
+                switch ($el) {
+                    'BootTrigger'               { $triggerType = 'boot' }
+                    'LogonTrigger'              { $triggerType = 'logon' }
+                    'RegistrationTrigger'       { $triggerType = 'registration' }
+                    'SessionStateChangeTrigger' { $triggerType = 'session' }
+                    'IdleTrigger'               { $triggerType = 'idle' }
+                    'EventTrigger'              { $triggerType = 'event' }
+                    'TimeTrigger'               { $triggerType = 'once' }
+                    'CalendarTrigger' {
+                        if ($node.ScheduleByWeek) { $triggerType = 'weekly' }
+                        elseif ($node.ScheduleByMonth) { $triggerType = 'monthly' }
+                        elseif ($node.ScheduleByDay) { $triggerType = 'daily' }
+                        else { $triggerType = 'calendar' }
+                    }
+                    'WnfStateChangeTrigger'     { $triggerType = 'wnf' }
+                    ''                          { $triggerType = 'none' }
+                    default                     { $triggerType = 'custom' }
+                }
+
+                if ($node) {
+                    if (-not $start -and $node.StartBoundary) { $start = [string]$node.StartBoundary }
+                    if ($daysInterval -le 1 -and $node.ScheduleByDay.DaysInterval) {
+                        $daysInterval = [int]$node.ScheduleByDay.DaysInterval
+                    }
+                }
+                # Dias do XML cru: o adapter XML do PowerShell não expõe os
+                # filhos de <DaysOfWeek>, então lemos o bloco como texto.
+                if (-not $days -and $xml) {
+                    $dm = [regex]::Match($xml, '(?s)<DaysOfWeek>(.*?)</DaysOfWeek>')
+                    if ($dm.Success) { $days = $dm.Groups[1].Value }
+                }
+            }
         }
-        if ($triggerType -eq 'weekly' -and $tr.DaysOfWeek) {
-            $names = @()
-            $flags = [int]$tr.DaysOfWeek
-            $map = @{ 1 = 'Dom'; 2 = 'Seg'; 4 = 'Ter'; 8 = 'Qua'; 16 = 'Qui'; 32 = 'Sex'; 64 = 'Sáb' }
-            foreach ($k in $map.Keys) { if ($flags -band [int]$k) { $names += $map[$k] } }
-            if ($names.Count -gt 0) { $triggerDesc = "Semanal ($($names -join ','))" }
-            if ($tr.StartTime) { $triggerDesc = "$triggerDesc às $($tr.StartTime.ToString('HH:mm'))" }
+
+        $triggerDesc = 'Outro'
+        switch ($triggerType) {
+            'boot'         { $triggerDesc = 'Na inicializacao do sistema' }
+            'logon'        { $triggerDesc = 'Ao fazer logon'; if ($tr -and $tr.UserId) { $triggerDesc = "Ao fazer logon ($($tr.UserId))" } }
+            'daily'        { $triggerDesc = 'Diario' }
+            'weekly'       { $triggerDesc = 'Semanal' }
+            'once'         { $triggerDesc = 'Uma vez' }
+            'idle'         { $triggerDesc = 'Quando o computador estiver ocioso' }
+            'event'        { $triggerDesc = 'Por evento' }
+            'monthly'      { $triggerDesc = 'Mensal' }
+            'calendar'     { $triggerDesc = 'Calendario' }
+            'registration' { $triggerDesc = 'No registro da tarefa' }
+            'session'      { $triggerDesc = 'Mudanca de estado da sessao' }
+            'wnf'          { $triggerDesc = 'Mudanca de estado do sistema (WNF)' }
+            'custom'       { $triggerDesc = 'Gatilho personalizado' }
+            'none'         { $triggerDesc = 'Sem gatilho (execucao sob demanda)' }
+            default        { $triggerDesc = 'Outro' }
         }
-        if ($triggerType -eq 'daily' -and $tr.DaysInterval -gt 1) { $triggerDesc = "A cada $($tr.DaysInterval) dias" }
-    }
-    $info = $t | Get-ScheduledTaskInfo
-    $state = [string]$t.State
-    if ($state -eq 'Disabled') { $state = 'disabled' } else { $state = 'enabled' }
-    $next = ''; if ($info.NextRunTime) { $next = $info.NextRunTime.ToString('yyyy-MM-ddTHH:mm:ssZ') }
-    $last = ''; if ($info.LastRunTime) { $last = $info.LastRunTime.ToString('yyyy-MM-ddTHH:mm:ssZ') }
-    [PSCustomObject]@{
-        taskPath    = $t.TaskPath
-        taskName    = $t.TaskName
-        state       = $state
-        status      = [string]$info.Status
-        author      = [string]$t.Author
-        actionPath  = [string]$a.Execute
-        actionArgs  = [string]$a.Arguments
-        triggerType = $triggerType
-        triggerDesc = [string]$triggerDesc
-        nextRun     = $next
-        lastRun     = $last
-        lastResult  = [int64]$info.LastTaskResult
+
+        $time = ''
+        if ($start) {
+            $dt = [datetime]::MinValue
+            if ([datetime]::TryParse($start, [ref]$dt)) {
+                if ($triggerType -eq 'once' -or $triggerType -eq 'monthly' -or $triggerType -eq 'calendar') {
+                    $time = $dt.ToString('yyyy-MM-dd HH:mm')
+                } else {
+                    $time = $dt.ToString('HH:mm')
+                }
+            }
+        }
+
+        $dayNames = @()
+        if ($days) {
+            foreach ($en in @('Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday')) {
+                if ($days -match $en) { $dayNames += $dayMap[$en] }
+            }
+            if ($dayNames.Count -eq 0) {
+                $num = 0
+                if ([int]::TryParse($days, [ref]$num)) {
+                    foreach ($f in $dayFlags) { if ($num -band [int]$f.Bit) { $dayNames += $f.Name } }
+                }
+            }
+        }
+
+        if ($triggerType -eq 'weekly' -and $dayNames.Count -gt 0) {
+            $triggerDesc = "Semanal ($($dayNames -join ', '))"
+        }
+        if ($triggerType -eq 'daily' -and $daysInterval -gt 1) {
+            $triggerDesc = "A cada $daysInterval dias"
+        }
+        if ($time) {
+            if ($triggerType -eq 'once') { $triggerDesc = "Uma vez em $time" }
+            elseif ($triggerType -eq 'daily') { $triggerDesc = "$triggerDesc as $time" }
+            elseif ($triggerType -eq 'weekly' -or $triggerType -eq 'monthly' -or $triggerType -eq 'calendar') {
+                if ($triggerType -eq 'calendar') { $triggerDesc = "$triggerDesc as $time" }
+            }
+        }
+
+        $info = $null
+        try { $info = $t | Get-ScheduledTaskInfo } catch { $info = $null }
+        $state = [string]$t.State
+        if ($state -eq 'Disabled') { $state = 'disabled' } else { $state = 'enabled' }
+        $next = ''; $last = ''; $lastResult = 0; $status = ''
+        if ($info) {
+            if ($info.NextRunTime) { $next = $info.NextRunTime.ToString('yyyy-MM-ddTHH:mm:ssZ') }
+            if ($info.LastRunTime) { $last = $info.LastRunTime.ToString('yyyy-MM-ddTHH:mm:ssZ') }
+            $status = [string]$info.Status
+            $lastResult = [int64]$info.LastTaskResult
+        }
+
+        [PSCustomObject]@{
+            taskPath    = $t.TaskPath
+            taskName    = $t.TaskName
+            state       = $state
+            status      = $status
+            author      = [string]$t.Author
+            actionPath  = [string]$a.Execute
+            actionArgs  = [string]$a.Arguments
+            triggerType = $triggerType
+            triggerDesc = [string]$triggerDesc
+            nextRun     = $next
+            lastRun     = $last
+            lastResult  = $lastResult
+        }
+    } catch {
+        # Tarefa problemática não interrompe a coleta das demais.
     }
 })
 if ($result.Count -eq 0) { '[]' } else { $result | ConvertTo-Json -Depth 3 -Compress }`
