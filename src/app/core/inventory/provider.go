@@ -250,6 +250,14 @@ func (p *Provider) collectWithNative(ctx context.Context) (models.InventoryRepor
 		monitors = nil
 	}
 
+	// Tarefas agendadas: best-effort via PowerShell (Get-ScheduledTask).
+	// Uma falha do Task Scheduler/PowerShell não deve invalidar o inventário.
+	scheduledTasks, scheduledTasksErr := p.native.CollectScheduledTasks(ctx)
+	if scheduledTasksErr != nil {
+		log.Printf("[inventory] coleta de tarefas agendadas indisponível (native): %v", scheduledTasksErr)
+		scheduledTasks = nil
+	}
+
 	// Media types for volumes/disks.
 	mediaTypes := p.native.CollectDiskMediaTypes(ctx)
 	for i := range volumes {
@@ -315,6 +323,7 @@ func (p *Provider) collectWithNative(ctx context.Context) (models.InventoryRepor
 		Printers:       printers,
 		Software:       software,
 		StartupItems:   startupItems,
+		ScheduledTasks: scheduledTasks,
 	}
 
 	if len(report.Disks) == 0 {
@@ -786,6 +795,25 @@ func (p *Provider) CollectStartupItems(ctx context.Context) ([]models.StartupIte
 
 	p.emitProgressHeartbeat()
 	return mapStartupItems(r.rows), nil
+}
+
+// CollectScheduledTasks collects only scheduled tasks (native/PowerShell).
+// Best-effort: erros retornam lista vazia, pois a coleta é auxiliar.
+func (p *Provider) CollectScheduledTasks(ctx context.Context) ([]models.ScheduledTaskInfo, error) {
+	p.emitProgressHeartbeat()
+
+	if p.native != nil {
+		tasks, err := p.native.CollectScheduledTasks(ctx)
+		if err == nil {
+			p.emitProgressHeartbeat()
+			return tasks, nil
+		}
+		log.Printf("[inventory] coleta de tarefas agendadas indisponível (native): %v", err)
+		return []models.ScheduledTaskInfo{}, nil
+	}
+
+	p.emitProgressHeartbeat()
+	return []models.ScheduledTaskInfo{}, nil
 }
 
 // CollectListeningPorts collects only listening ports.

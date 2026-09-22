@@ -32,6 +32,10 @@ func (m *mockInventoryProvider) CollectStartupItems(ctx context.Context) ([]mode
 	return nil, nil
 }
 
+func (m *mockInventoryProvider) CollectScheduledTasks(ctx context.Context) ([]models.ScheduledTaskInfo, error) {
+	return nil, nil
+}
+
 func (m *mockInventoryProvider) CollectListeningPorts(ctx context.Context) ([]models.ListeningPortInfo, error) {
 	return nil, nil
 }

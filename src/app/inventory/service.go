@@ -39,6 +39,7 @@ type InventoryService interface {
 	GetNetworkConnections(ctx context.Context) (models.NetworkConnectionsReport, error)
 	CollectSoftware(ctx context.Context) ([]models.SoftwareItem, error)
 	CollectStartupItems(ctx context.Context) ([]models.StartupItem, error)
+	CollectScheduledTasks(ctx context.Context) ([]models.ScheduledTaskInfo, error)
 	CollectListeningPorts(ctx context.Context) ([]models.ListeningPortInfo, error)
 }
 

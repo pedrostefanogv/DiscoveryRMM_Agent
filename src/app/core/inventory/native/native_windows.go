@@ -72,6 +72,11 @@ func (windowsCollector) CollectStartupItems(ctx context.Context) ([]models.Start
 	return collectStartupItemsNative(ctx)
 }
 
+// CollectScheduledTasks returns scheduled tasks via PowerShell (Task Scheduler).
+func (windowsCollector) CollectScheduledTasks(ctx context.Context) ([]models.ScheduledTaskInfo, error) {
+	return collectScheduledTasksNative(ctx)
+}
+
 // CollectLoggedInUsers returns logged-in users via WTS API.
 func (windowsCollector) CollectLoggedInUsers(ctx context.Context) ([]models.LoggedInUser, error) {
 	return collectLoggedInUsersNative(ctx)

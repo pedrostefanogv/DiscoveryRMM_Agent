@@ -38,6 +38,8 @@ type Collector interface {
 	CollectSoftware(ctx context.Context) ([]models.SoftwareItem, error)
 	// CollectStartupItems returns startup items.
 	CollectStartupItems(ctx context.Context) ([]models.StartupItem, error)
+	// CollectScheduledTasks returns Windows scheduled tasks (Task Scheduler).
+	CollectScheduledTasks(ctx context.Context) ([]models.ScheduledTaskInfo, error)
 	// CollectLoggedInUsers returns logged-in users.
 	CollectLoggedInUsers(ctx context.Context) ([]models.LoggedInUser, error)
 	// CollectBitLocker returns BitLocker volume status.

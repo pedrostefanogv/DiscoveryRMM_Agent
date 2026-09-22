@@ -37,15 +37,17 @@ func (a *App) handleSystemInfoCommand(ctx context.Context, payload any) (bool, i
 // handleRefreshOnDemand collects only the data requested by the dashboard refresh buttons.
 func (a *App) handleRefreshOnDemand(_ context.Context, payloadJSON map[string]any) (bool, int, string, string) {
 	flags := refreshOnDemandFlags{
-		Ports:       agentcommands.GetBoolField(payloadJSON, "Ports"),
-		Connections: agentcommands.GetBoolField(payloadJSON, "Connections"),
-		Software:    agentcommands.GetBoolField(payloadJSON, "Software"),
-		Printers:    agentcommands.GetBoolField(payloadJSON, "Printers"),
-		Hardware:    agentcommands.GetBoolField(payloadJSON, "Hardware"),
+		Ports:          agentcommands.GetBoolField(payloadJSON, "Ports"),
+		Connections:    agentcommands.GetBoolField(payloadJSON, "Connections"),
+		Software:       agentcommands.GetBoolField(payloadJSON, "Software"),
+		Printers:       agentcommands.GetBoolField(payloadJSON, "Printers"),
+		Hardware:       agentcommands.GetBoolField(payloadJSON, "Hardware"),
+		StartupItems:   agentcommands.GetBoolField(payloadJSON, "StartupItems"),
+		ScheduledTasks: agentcommands.GetBoolField(payloadJSON, "ScheduledTasks"),
 	}
 
 	// If nothing specific requested, default to ports + connections only
-	hasAny := flags.Ports || flags.Connections || flags.Software || flags.Printers || flags.Hardware
+	hasAny := flags.Ports || flags.Connections || flags.Software || flags.Printers || flags.Hardware || flags.StartupItems || flags.ScheduledTasks
 	if !hasAny {
 		flags.Ports = true
 		flags.Connections = true
@@ -79,6 +81,21 @@ func (a *App) handleRefreshOnDemand(_ context.Context, payloadJSON map[string]an
 			a.Logs.Append("[agent] refresh-on-demand: falha ao coletar software: " + err.Error())
 		} else {
 			results = append(results, fmt.Sprintf("software=%d", len(software)))
+		}
+	}
+
+	if flags.StartupItems || flags.ScheduledTasks {
+		// Itens de inicialização + tarefas agendadas: coleta e upload parcial
+		// (somente as duas listas — o merge server-side preserva o restante).
+		if err := a.SyncStartupAndScheduledTasks(); err != nil {
+			a.Logs.Append("[agent] refresh-on-demand: falha ao sincronizar startup/tarefas: " + err.Error())
+		} else {
+			if flags.StartupItems {
+				results = append(results, "startupItems=synced")
+			}
+			if flags.ScheduledTasks {
+				results = append(results, "scheduledTasks=synced")
+			}
 		}
 	}
 
@@ -145,9 +162,11 @@ func (a *App) handleForceSync(_ context.Context, payloadJSON map[string]any) (bo
 // ── helpers ────────────────────────────────────────────────────────────────
 
 type refreshOnDemandFlags struct {
-	Ports       bool
-	Connections bool
-	Software    bool
-	Printers    bool
-	Hardware    bool
+	Ports          bool
+	Connections    bool
+	Software       bool
+	Printers       bool
+	Hardware       bool
+	StartupItems   bool
+	ScheduledTasks bool
 }

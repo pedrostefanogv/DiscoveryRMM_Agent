@@ -304,6 +304,14 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 		return true, 1, "", "remotesession: " + errMsg
 	}
 
+	// ── Controle de inicialização e tarefas agendadas ──
+	if IsStartupItemCommandType(cmdType) {
+		return a.handleStartupItemCommand(parent, payload)
+	}
+	if IsScheduledTaskCommandType(cmdType) {
+		return a.handleScheduledTaskCommand(parent, payload)
+	}
+
 	// Delega comandos de inventário sob demanda (SystemInfo)
 	if cmdType == "systeminfo" {
 		return a.handleSystemInfoCommand(parent, payload)

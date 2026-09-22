@@ -11,6 +11,7 @@ type InventoryProvider interface {
 	CollectNetworkConnections(ctx context.Context) (models.NetworkConnectionsReport, error)
 	CollectSoftware(ctx context.Context) ([]models.SoftwareItem, error)
 	CollectStartupItems(ctx context.Context) ([]models.StartupItem, error)
+	CollectScheduledTasks(ctx context.Context) ([]models.ScheduledTaskInfo, error)
 	CollectListeningPorts(ctx context.Context) ([]models.ListeningPortInfo, error)
 }
 
@@ -36,6 +37,10 @@ func (s *InventoryService) CollectSoftware(ctx context.Context) ([]models.Softwa
 
 func (s *InventoryService) CollectStartupItems(ctx context.Context) ([]models.StartupItem, error) {
 	return s.provider.CollectStartupItems(ctx)
+}
+
+func (s *InventoryService) CollectScheduledTasks(ctx context.Context) ([]models.ScheduledTaskInfo, error) {
+	return s.provider.CollectScheduledTasks(ctx)
 }
 
 func (s *InventoryService) CollectListeningPorts(ctx context.Context) ([]models.ListeningPortInfo, error) {

@@ -43,6 +43,39 @@ type agentHardwareComponents struct {
 	Printers        []agentPrinterInfo        `json:"printers"`
 	ListeningPorts  []agentListeningPortInfo  `json:"listeningPorts"`
 	OpenSockets     []agentOpenSocketInfo     `json:"openSockets"`
+
+	// StartupItems/ScheduledTasks: omitempty — quando ausentes no envelope
+	// (sync parcial), a API preserva as listas já armazenadas (merge).
+	StartupItems   []agentStartupItemInfo   `json:"startupItems,omitempty"`
+	ScheduledTasks []agentScheduledTaskInfo `json:"scheduledTasks,omitempty"`
+}
+
+// agentStartupItemInfo item de inicialização no formato do envelope da API.
+type agentStartupItemInfo struct {
+	Name     string `json:"name"`
+	Path     string `json:"path,omitempty"`
+	Args     string `json:"args,omitempty"`
+	Type     string `json:"type"`
+	Source   string `json:"source"`
+	Status   string `json:"status,omitempty"`
+	Username string `json:"username,omitempty"`
+	Detail   string `json:"detail,omitempty"`
+}
+
+// agentScheduledTaskInfo tarefa agendada no formato do envelope da API.
+type agentScheduledTaskInfo struct {
+	TaskPath    string `json:"taskPath"`
+	TaskName    string `json:"taskName"`
+	State       string `json:"state,omitempty"`
+	Status      string `json:"status,omitempty"`
+	Author      string `json:"author,omitempty"`
+	ActionPath  string `json:"actionPath,omitempty"`
+	ActionArgs  string `json:"actionArgs,omitempty"`
+	TriggerType string `json:"triggerType,omitempty"`
+	TriggerDesc string `json:"triggerDesc,omitempty"`
+	NextRunTime string `json:"nextRunTime,omitempty"`
+	LastRunTime string `json:"lastRunTime,omitempty"`
+	LastResult  int64  `json:"lastResult,omitempty"`
 }
 
 type agentHardwareInfo struct {
@@ -380,6 +413,138 @@ func (s *Service) SyncNetworkConnections(ctx context.Context) error {
 	return nil
 }
 
+// mapAgentStartupItems converte os itens de inicialização para o envelope da API.
+// Entrada nil (coleta indisponível) → nil, para o merge server-side PRESERVAR
+// a lista armazenada em vez de zerá-la por uma falha transitória.
+func mapAgentStartupItems(items []models.StartupItem) []agentStartupItemInfo {
+	if items == nil {
+		return nil
+	}
+	result := make([]agentStartupItemInfo, 0, len(items))
+	for _, it := range items {
+		name := strings.TrimSpace(it.Name)
+		if name == "" {
+			continue
+		}
+		result = append(result, agentStartupItemInfo{
+			Name:     trimToMaxLen(name, 200),
+			Path:     trimToMaxLen(strings.TrimSpace(it.Path), 500),
+			Args:     trimToMaxLen(strings.TrimSpace(it.Args), 500),
+			Type:     trimToMaxLen(strings.TrimSpace(it.Type), 20),
+			Source:   trimToMaxLen(strings.TrimSpace(it.Source), 100),
+			Status:   trimToMaxLen(strings.TrimSpace(it.Status), 20),
+			Username: trimToMaxLen(strings.TrimSpace(it.Username), 100),
+			Detail:   trimToMaxLen(strings.TrimSpace(it.Detail), 100),
+		})
+	}
+	return result
+}
+
+// mapAgentScheduledTasks converte as tarefas agendadas para o envelope da API.
+// Entrada nil (coleta indisponível) → nil, para o merge server-side PRESERVAR
+// a lista armazenada em vez de zerá-la por uma falha transitória.
+func mapAgentScheduledTasks(tasks []models.ScheduledTaskInfo) []agentScheduledTaskInfo {
+	if tasks == nil {
+		return nil
+	}
+	result := make([]agentScheduledTaskInfo, 0, len(tasks))
+	for _, t := range tasks {
+		name := strings.TrimSpace(t.TaskName)
+		if name == "" {
+			continue
+		}
+		result = append(result, agentScheduledTaskInfo{
+			TaskPath:    trimToMaxLen(strings.TrimSpace(t.TaskPath), 300),
+			TaskName:    trimToMaxLen(name, 200),
+			State:       trimToMaxLen(strings.TrimSpace(t.State), 20),
+			Status:      trimToMaxLen(strings.TrimSpace(t.Status), 60),
+			Author:      trimToMaxLen(strings.TrimSpace(t.Author), 200),
+			ActionPath:  trimToMaxLen(strings.TrimSpace(t.ActionPath), 500),
+			ActionArgs:  trimToMaxLen(strings.TrimSpace(t.ActionArgs), 500),
+			TriggerType: trimToMaxLen(strings.TrimSpace(t.TriggerType), 20),
+			TriggerDesc: trimToMaxLen(strings.TrimSpace(t.TriggerDesc), 200),
+			NextRunTime: trimToMaxLen(strings.TrimSpace(t.NextRunTime), 40),
+			LastRunTime: trimToMaxLen(strings.TrimSpace(t.LastRunTime), 40),
+			LastResult:  t.LastResult,
+		})
+	}
+	return result
+}
+
+// SyncStartupAndScheduledTasks coleta itens de inicialização + tarefas
+// agendadas e faz upload APENAS dessas listas no envelope de componentes.
+// As demais listas ficam ausentes do JSON — a API preserva, no merge
+// server-side, as listas não reportadas nesta sincronização parcial.
+func (s *Service) SyncStartupAndScheduledTasks(ctx context.Context) error {
+	if err := s.requireProvisionedInventory(); err != nil {
+		return err
+	}
+
+	var startup []models.StartupItem
+	var tasks []models.ScheduledTaskInfo
+	if s.inventory != nil {
+		if items, err := s.inventory.CollectStartupItems(ctx); err == nil {
+			startup = items
+		} else {
+			s.logf("[agent-sync] falha ao coletar itens de inicialização: " + err.Error())
+		}
+		if t, err := s.inventory.CollectScheduledTasks(ctx); err == nil {
+			tasks = t
+		} else {
+			s.logf("[agent-sync] falha ao coletar tarefas agendadas: " + err.Error())
+		}
+	}
+
+	// Atualiza o cache local com os novos dados
+	if s.cache != nil {
+		if cached, ok := s.cache.Get(); ok {
+			cached.StartupItems = startup
+			cached.ScheduledTasks = tasks
+			s.cache.Set(cached)
+		}
+	}
+
+	cfg := s.debugConfig()
+	cfg.ApiServer = strings.TrimSpace(cfg.ApiServer)
+	cfg.ApiScheme = strings.TrimSpace(strings.ToLower(cfg.ApiScheme))
+
+	hasRemoteCredentials := cfg.ApiServer != "" && strings.TrimSpace(cfg.AuthToken) != "" && strings.TrimSpace(cfg.AgentID) != ""
+	validScheme := cfg.ApiScheme == "http" || cfg.ApiScheme == "https"
+	if !hasRemoteCredentials || !validScheme {
+		s.logf("[agent-sync] SyncStartupAndScheduledTasks: sem credenciais remotas, pulando upload")
+		return nil
+	}
+
+	collected := time.Now().UTC().Format(time.RFC3339)
+	components := agentHardwareComponents{
+		StartupItems:   mapAgentStartupItems(startup),
+		ScheduledTasks: mapAgentScheduledTasks(tasks),
+	}
+	compJSON, _ := json.Marshal(components)
+
+	envelope := agentHardwareEnvelope{
+		AgentID:              strings.TrimSpace(cfg.AgentID),
+		Status:               "online",
+		InventoryCollectedAt: collected,
+		Components:           compJSON,
+	}
+	body, err := json.Marshal(envelope)
+	if err != nil {
+		return fmt.Errorf("marshal startup/tasks envelope: %w", err)
+	}
+
+	hardwareEndpoint := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/hardware"
+	if err := s.sendAgentInventoryRequest(ctx, hardwareEndpoint, cfg, http.MethodPost, body); err != nil {
+		s.logf("[agent-sync] SyncStartupAndScheduledTasks POST falhou: " + err.Error())
+		if err := s.sendAgentInventoryRequest(ctx, hardwareEndpoint, cfg, http.MethodPut, body); err != nil {
+			return err
+		}
+	}
+	s.logf(fmt.Sprintf("[agent-sync] SyncStartupAndScheduledTasks enviado: startup=%d tasks=%d",
+		len(startup), len(tasks)))
+	return nil
+}
+
 // mapAgentListeningPorts converts model ports to API envelope format.
 func mapAgentListeningPorts(ports []models.ListeningPortInfo) []agentListeningPortInfo {
 	result := make([]agentListeningPortInfo, 0, len(ports))
@@ -706,6 +871,8 @@ func buildAgentHardwareEnvelope(report models.InventoryReport, version, commitHa
 		Printers:        printers,
 		ListeningPorts:  mapAgentListeningPorts(report.ListeningPorts),
 		OpenSockets:     mapAgentOpenSockets(report.OpenSockets),
+		StartupItems:    mapAgentStartupItems(report.StartupItems),
+		ScheduledTasks:  mapAgentScheduledTasks(report.ScheduledTasks),
 	}
 	compJSON, _ := json.Marshal(components)
 

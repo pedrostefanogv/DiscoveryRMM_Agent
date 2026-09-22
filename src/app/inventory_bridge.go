@@ -84,6 +84,15 @@ func (a *App) SyncNetworkConnections() error {
 	return a.InventorySvc.SyncNetworkConnections(context.Background())
 }
 
+// SyncStartupAndScheduledTasks re-coleta e envia itens de inicialização e
+// tarefas agendadas para a API (sync parcial, usado pós-ação de comando).
+func (a *App) SyncStartupAndScheduledTasks() error {
+	if err := a.requireInventorySvc(); err != nil {
+		return err
+	}
+	return a.InventorySvc.SyncStartupAndScheduledTasks(context.Background())
+}
+
 func (a *App) RefreshSoftware() ([]models.SoftwareItem, error) {
 	if err := a.requireInventorySvc(); err != nil {
 		return []models.SoftwareItem{}, err

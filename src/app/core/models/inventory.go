@@ -22,6 +22,7 @@ type InventoryReport struct {
 	Printers       []PrinterInfo       `json:"printers"`
 	Software       []SoftwareItem      `json:"software"`
 	StartupItems   []StartupItem       `json:"startupItems"`
+	ScheduledTasks []ScheduledTaskInfo `json:"scheduledTasks"`
 	Autoexec       []AutoexecItem      `json:"autoexec"`
 }
 
@@ -187,16 +188,37 @@ type StartupItem struct {
 	Name     string `json:"name"`
 	Path     string `json:"path"`
 	Args     string `json:"args"`
-	Type     string `json:"type"`
-	Source   string `json:"source"`
-	Status   string `json:"status"`
+	Type     string `json:"type"`   // registry | folder | service
+	Source   string `json:"source"` // ex.: "HKLM Run", "HKCU RunOnce", "Pasta Startup (Usuário)", "Serviço"
+	Status   string `json:"status"` // enabled | disabled
 	Username string `json:"username"`
+	// Detail descreve o modo de inicialização (ex.: serviços: "Automático",
+	// "Automático (Atrasado)") ou outro contexto auxiliar de exibição.
+	Detail string `json:"detail,omitempty"`
 }
 
 type AutoexecItem struct {
 	Path   string `json:"path"`
 	Name   string `json:"name"`
 	Source string `json:"source"`
+}
+
+// ScheduledTaskInfo representa uma tarefa agendada do Windows coletada
+// pelo agente (Task Scheduler). State distingue o estado da tarefa
+// (enabled/disabled), Status o runtime atual (Ready/Running/...).
+type ScheduledTaskInfo struct {
+	TaskPath    string `json:"taskPath"`
+	TaskName    string `json:"taskName"`
+	State       string `json:"state"`  // enabled | disabled
+	Status      string `json:"status"` // Ready | Running | Queued | ...
+	Author      string `json:"author"`
+	ActionPath  string `json:"actionPath"`
+	ActionArgs  string `json:"actionArgs"`
+	TriggerType string `json:"triggerType"` // boot | logon | daily | weekly | once | idle | event | other
+	TriggerDesc string `json:"triggerDesc"` // descrição amigável ("Diário às 03:00")
+	NextRunTime string `json:"nextRunTime"`
+	LastRunTime string `json:"lastRunTime"`
+	LastResult  int64  `json:"lastResult"`
 }
 
 type DiskInfo struct {

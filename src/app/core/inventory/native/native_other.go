@@ -50,6 +50,9 @@ func (unsupportedCollector) CollectSoftware(context.Context) ([]models.SoftwareI
 func (unsupportedCollector) CollectStartupItems(context.Context) ([]models.StartupItem, error) {
 	return nil, ErrUnsupported
 }
+func (unsupportedCollector) CollectScheduledTasks(context.Context) ([]models.ScheduledTaskInfo, error) {
+	return nil, ErrUnsupported
+}
 func (unsupportedCollector) CollectLoggedInUsers(context.Context) ([]models.LoggedInUser, error) {
 	return nil, ErrUnsupported
 }

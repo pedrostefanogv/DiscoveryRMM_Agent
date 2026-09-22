@@ -69,6 +69,10 @@ func (m *delayedRefreshInventoryProvider) CollectStartupItems(ctx context.Contex
 	return nil, nil
 }
 
+func (m *delayedRefreshInventoryProvider) CollectScheduledTasks(ctx context.Context) ([]models.ScheduledTaskInfo, error) {
+	return nil, nil
+}
+
 func (m *delayedRefreshInventoryProvider) CollectListeningPorts(ctx context.Context) ([]models.ListeningPortInfo, error) {
 	return nil, nil
 }
