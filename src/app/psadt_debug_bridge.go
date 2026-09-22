@@ -17,6 +17,7 @@ import (
 	pstypes "github.com/pedrostefanogv/go-psadt/types"
 
 	"discovery/app/agentconfig"
+	"discovery/app/core/platform"
 	"discovery/app/core/processutil"
 	"discovery/app/services/psadt"
 
@@ -423,7 +424,17 @@ func (a *App) ExecutePSADTVisualNotification(req PSADTVisualNotificationRequest)
 
 	script, timeout := buildPSADTVisualScript(req)
 
-	tmpFile, err := os.CreateTemp("", "psadt-visual-*.ps1")
+	// Script .ps1 dentro de %WINDIR%/Temp/Discovery (convenção do agente) —
+	// nunca na temp genérica do processo (os.TempDir vira C:/Windows/Temp
+	// quando o agente roda como SYSTEM, poluindo a raiz da pasta Temp).
+	tmpBase, err := platform.EnsureTempDir()
+	if err != nil {
+		result.Error = "falha ao preparar diretorio temporario: " + err.Error()
+		result.ExitCode = 1
+		a.Logs.Append("[psadt] " + result.Error)
+		return result
+	}
+	tmpFile, err := os.CreateTemp(tmpBase, "psadt-visual-*.ps1")
 	if err != nil {
 		result.Error = "falha ao criar arquivo temporario: " + err.Error()
 		result.ExitCode = 1

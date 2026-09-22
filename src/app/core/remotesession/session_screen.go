@@ -48,8 +48,12 @@ type SessionScreen struct {
 	capturerMu        sync.Mutex
 	monitorIndex      int
 	drawCursor        bool
-	usingDXGIFallback bool // true = capturer atual é DXGI (fallback one-way)
+	usingDXGIFallback bool // true = capturer atual é DXGI (fallback dinâmico GDI↔DXGI)
 	captureFailures   int  // falhas consecutivas da captura GDI (fallback DXGI)
+	// lastSecureKeepLog: throttle do log "mantendo GDI em desktop seguro" —
+	// o estado pode persistir minutos (logon aberto com GDI falhando) e sem
+	// throttle o threshold (40 falhas ≈ 2s) logaria 30 linhas/minuto.
+	lastSecureKeepLog time.Time
 
 	tileMode bool // quando true, envia apenas os tiles alterados (EncodeDirtyRects)
 
@@ -89,19 +93,55 @@ func NewSessionScreen(sessionID string, natsStream *NatsStreamHandler) (*Session
 
 // NewSessionScreenMonitor cria uma sessao de screen capture de um monitor específico.
 func NewSessionScreenMonitor(sessionID string, natsStream *NatsStreamHandler, monitorIndex int) (*SessionScreen, error) {
+	// DPI awareness: garante coordenadas FÍSICAS (GetSystemMetrics/
+	// EnumDisplayMonitors/GetCursorPos/SendInput não-virtualizados) mesmo em
+	// processos sem manifest PerMonitorV2 (serviço, spawns). Sem isso, com
+	// escala 125%/150% as métricas lógicas se misturam com os frames físicos
+	// e o input/cursor do acesso remoto desloca. Idempotente.
+	screen.EnsurePerMonitorDPIAwareness()
+
 	// Capturer primário: GDI (padrão MeshAgent). DXGI fica como fallback
-	// one-way — só entra se o GDI falhar repetidamente (ver loop de captura).
+	// dinâmico — só entra se o GDI falhar repetidamente (ver loop de captura).
+	// ORDEM IMPORTA PARA TELA DE LOGON: no desktop seguro (Winlogon) só o GDI
+	// BitBlt entrega frames confiáveis (DXGI congela/preto — IsSecureDesktop).
+	// A criação do capturador GDI pode falhar ANTES do primeiro attach de
+	// desktop (GetDC do desktop errado no worker spawnado em winsta0\winlogon).
+	// Nesse caso, anexa o thread ao input desktop ativo (CheckDesktopSwitch) e
+	// RE-TENTA o GDI uma vez antes de recorrer ao DXGI — garante que sessões
+	// abertas na tela de logon nasçam no capturer correto.
 	capturer, err := screen.NewGDICapturerMonitor(monitorIndex)
 	usingDXGI := false
 	if err != nil {
-		// GDI indisponível (raro — ex.: sem desktop acessível na criação):
-		// tenta DXGI diretamente.
-		capturer, err = screen.NewCapturerMode(monitorIndex, false)
-		if err != nil {
-			return nil, fmt.Errorf("screen capture: %w", err)
+		if _, aerr := screen.CheckDesktopSwitch(); aerr == nil {
+			capturer, err = screen.NewGDICapturerMonitor(monitorIndex)
 		}
-		usingDXGI = true
+		if err != nil {
+			// GDI indisponível mesmo com desktop anexado (raro): DXGI direto.
+			capturer, err = screen.NewCapturerMode(monitorIndex, false)
+			if err != nil {
+				return nil, fmt.Errorf("screen capture: %w", err)
+			}
+			usingDXGI = true
+		}
 	}
+
+	// Log de geometria (diagnóstico DPI/multi-monitor): região capturada
+	// dentro do desktop virtual físico. Se captura ≠ desktop inteiro, o
+	// InputController mapeia o mouse com origem+escala (mapFrameToAbsolute).
+	gx, gy, gw, gh := capturer.Geometry()
+	vx, vy, vw, vh, vok := screen.VirtualDesktopBounds()
+	if vok {
+		log.Printf("[remote-session-screen] geometria: captura %dx%d @(%d,%d) | desktop virtual %dx%d @(%d,%d) | dpi=%s\n",
+			gw, gh, gx, gy, vw, vh, vx, vy, screen.DpiAwarenessSource())
+	} else {
+		log.Printf("[remote-session-screen] geometria: captura %dx%d @(%d,%d) | desktop virtual indisponível\n", gw, gh, gx, gy)
+	}
+	desktopName := screen.CurrentDesktopName()
+	if desktopName == "" {
+		desktopName = "(inacessível)"
+	}
+	log.Printf("[remote-session-screen] desktop ativo: %s%s\n", desktopName,
+		map[bool]string{true: " (seguro — logon/UAC, captura GDI)", false: ""}[screen.IsSecureDesktop()])
 
 	encoder := screen.NewJPEGEncoder()
 	codecSel := NewCodecSelector()
@@ -169,6 +209,16 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 					if err != nil {
 						continue
 					}
+					// CORREÇÃO (cursor em monitor não-primário): GetCursorPos retorna
+					// coordenadas do DESKTOP VIRTUAL, mas o viewer desenha o sprite no
+					// canvas do FRAME (frame-relativo). Sem subtrair a origem da
+					// captura, o cursor desloca sempre que a sessão captura um monitor
+					// com origem != (0,0) — segundo monitor, monitor à esquerda, etc.
+					if cap := s.currentCapturer(); cap != nil {
+						gx, gy, _, _ := cap.Geometry()
+						info.X = clampCursorCoord(int(info.X) - gx)
+						info.Y = clampCursorCoord(int(info.Y) - gy)
+					}
 					if s.cursorSender.ShouldSend(info) {
 						_ = s.natsStream.PublishCursor(s.sessionID, s.cursorSender.Encode(info))
 					}
@@ -197,15 +247,25 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 		seq    uint64
 		rects  []screen.DirtyRect // dirty rects (modo tile); nil = frame completo
 		pooled bool               // frame veio do pool de frames (devolver após encode)
+
+		// Métricas de input: capW/capH = região coberta pela CAPTURA no desktop
+		// (ANTES da eventual escala — ResizeBGRA), originX/originY = origem da
+		// captura no desktop virtual físico. Alimentam o mapeamento do mouse
+		// (UpdateFrameMetrics/UpdateFrameOrigin); com escala<1 o frame é menor
+		// que a captura e capW/capH mantêm a cobertura real.
+		capW, capH       int
+		originX, originY int
 	}
 
 	type frameResult struct {
-		data     []byte
-		seq      uint64
-		width    int
-		height   int
-		rawBytes int64
-		encodeMs float64
+		data             []byte
+		seq              uint64
+		width            int
+		height           int
+		rawBytes         int64
+		encodeMs         float64
+		capW, capH       int
+		originX, originY int
 	}
 
 	encodeChan := make(chan encodeJob, 1) // buffer=1: captura nunca bloqueia se encoder ocupado
@@ -260,6 +320,10 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 				height:   job.height,
 				rawBytes: int64(len(job.frame.Data)),
 				encodeMs: encMs,
+				capW:     job.capW,
+				capH:     job.capH,
+				originX:  job.originX,
+				originY:  job.originY,
 			}:
 			case <-ctx.Done():
 				return
@@ -330,7 +394,12 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 				return nil
 			}
 
-			s.inputCtrl.UpdateFrameMetrics(result.width, result.height, result.width, result.height)
+			// Métricas do mapeamento do mouse: frame codificado (width/height),
+			// cobertura real da captura (capW/capH, difere com escala) e a
+			// origem da captura no desktop virtual físico (troca GDI→DXGI muda
+			// origem/dimensão — atualiza a cada frame).
+			s.inputCtrl.UpdateFrameMetrics(result.width, result.height, result.capW, result.capH)
+			s.inputCtrl.UpdateFrameOrigin(result.originX, result.originY)
 			s.recording.CaptureFrame(result.data)
 			s.frameSeq++
 			s.quality.RecordFrame(len(result.data), time.Now())
@@ -413,6 +482,13 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 		}
 		s.captureFailures = 0
 		captureMsTotal += capMs
+
+		// Métricas de input capturadas ANTES do tone mapping/escala: a
+		// cobertura real da captura no desktop virtual e a origem dela. O
+		// tone mapping/ResizeBGRA recriam o Frame (OriginX/OriginY zerados
+		// nos frames gerados), então guardamos os valores do frame original.
+		inputCapW, inputCapH := frame.Width, frame.Height
+		inputOriginX, inputOriginY := frame.OriginX, frame.OriginY
 
 		// ownsFrame indica se o frame atual é um buffer alocado por nós
 		// (tone mapping/escala) e não pertence mais ao capturer.
@@ -530,12 +606,16 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 		}
 		select {
 		case encodeChan <- encodeJob{
-			frame:  frame,
-			width:  frame.Width,
-			height: frame.Height,
-			seq:    s.frameSeq,
-			rects:  jobRects,
-			pooled: jobPooled,
+			frame:   frame,
+			width:   frame.Width,
+			height:  frame.Height,
+			seq:     s.frameSeq,
+			rects:   jobRects,
+			pooled:  jobPooled,
+			capW:    inputCapW,
+			capH:    inputCapH,
+			originX: inputOriginX,
+			originY: inputOriginY,
 		}:
 		case <-ctx.Done():
 			// Frame poolado não entregue: devolve ao pool.
@@ -571,23 +651,65 @@ func (s *SessionScreen) Start(ctx context.Context, fps int) error {
 	}
 }
 
-// maybeFallbackToDXGI troca GDI→DXGI (one-way) após falhas consecutivas
-// da captura GDI. Sem volta: DXGI permanece até o fim da sessão.
-// threshold: ~2s com idleDelay 50ms.
+// clampCursorCoord limita uma coordenada de cursor (desktop - origem) ao
+// range int16 usado no Encode do sprite. Valores negativos (cursor fora da
+// região capturada, ex.: no outro monitor) são preservados — o viewer
+// simplesmente não desenha fora do canvas.
+func clampCursorCoord(v int) int16 {
+	const minI16 = -32768
+	const maxI16 = 32767
+	if v < minI16 {
+		return minI16
+	}
+	if v > maxI16 {
+		return maxI16
+	}
+	return int16(v)
+}
+
+// maybeFallbackToDXGI troca o capturer após falhas consecutivas de captura
+// (threshold ~2s com idleDelay 50ms). A partir da correção de auto-ajuste de
+// geometria, a lógica é BIDIRECIONAL: se o capturer ATIVO for DXGI e passar a
+// falhar consecutivamente (ex.: DXGI_ERROR_ACCESS_LOST após troca de
+// resolução/DPI/monitor com a sessão ativa — a duplicação não sobrevive a
+// mode change), recria o GDI com a geometria ATUAL, recuperando a sessão sem
+// reinício manual. Se o ambiente não suportar GDI, as falhas acumulam de novo
+// e ele volta a tentar DXGI — recuperação alternada, sem ping-pong rápido
+// (40 falhas ≈ 2s de carência a cada troca).
 func (s *SessionScreen) maybeFallbackToDXGI(lastErr error) {
 	s.capturerMu.Lock()
-	alreadyDXGI := s.usingDXGIFallback
+	usingDXGI := s.usingDXGIFallback
 	s.capturerMu.Unlock()
-	if alreadyDXGI {
-		return
-	}
+
 	s.captureFailures++
 	if s.captureFailures < 40 {
 		return
 	}
-	log.Printf("[remote-session-screen] %d falhas consecutivas de captura GDI (%v) — fallback one-way para DXGI\n",
-		s.captureFailures, lastErr)
+	count := s.captureFailures
 	s.captureFailures = 0
+	if usingDXGI {
+		log.Printf("[remote-session-screen] %d falhas consecutivas de captura dxgi (%v) — recriando GDI com geometria atual\n", count, lastErr)
+		s.swapCapturer("gdi", "falhas consecutivas da captura DXGI (possível mudança de resolução/DPI)")
+		return
+	}
+
+	// GDI → DXGI: NÃO trocar em desktop seguro (tela de logon, lock screen,
+	// UAC). A Desktop Duplication API (DXGI) não entrega conteúdo confiável
+	// nesses desktops (frames congelados/preto — ver screen.IsSecureDesktop);
+	// o caminho que funciona lá é GDI BitBlt com o thread anexado via
+	// SetThreadDesktop (padrão MeshAgent). Falhas de GDI aqui são tipicamente
+	// transitórias (troca de desktop) — mantém o GDI tentando e loga com
+	// throttle (o estado pode persistir minutos; log a cada 2s inundaria o
+	// agent-service.log).
+	if screen.IsSecureDesktop() {
+		if time.Since(s.lastSecureKeepLog) >= 30*time.Second {
+			s.lastSecureKeepLog = time.Now()
+			log.Printf("[remote-session-screen] %d falhas de captura GDI em desktop seguro (%s) — mantendo GDI (DXGI não captura logon/UAC)\n",
+				count, screen.CurrentDesktopName())
+		}
+		return
+	}
+	log.Printf("[remote-session-screen] %d falhas consecutivas de captura GDI (%v) — fallback para DXGI\n", count, lastErr)
 	s.swapCapturer("dxgi", "falhas consecutivas da captura GDI")
 }
 

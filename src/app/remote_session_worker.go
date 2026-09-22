@@ -31,6 +31,7 @@ import (
 	"discovery/app/core/agentconn"
 	"discovery/app/core/platform"
 	"discovery/app/core/remotesession"
+	"discovery/app/core/screen"
 	"discovery/app/netutil"
 )
 
@@ -54,6 +55,17 @@ func RunRemoteSessionWorker() {
 
 	sessionID, _ := cmd["sessionId"].(string)
 	fmt.Fprintf(os.Stderr, "[remote-session-worker] iniciando sessão %s\n", sessionID)
+
+	// DPI awareness: o worker pode rodar em contexto sem manifest PerMonitorV2
+	// (binário antigo/spawn alternativo). Sem awareness, com escala 125%/150%
+	// o Windows virtualiza GetSystemMetrics/GetCursorPos (lógico) enquanto os
+	// frames continuam físicos — input e cursor do acesso remoto deslocam.
+	// Idempotente; loga o resultado para diagnóstico em campo.
+	if screen.EnsurePerMonitorDPIAwareness() {
+		fmt.Fprintf(os.Stderr, "[remote-session-worker] dpi awareness física ativa (%s)\n", screen.DpiAwarenessSource())
+	} else {
+		fmt.Fprintf(os.Stderr, "[remote-session-worker] AVISO: dpi awareness NÃO confirmada — coordenadas podem ser virtualizadas (escala != 100%%)\n")
+	}
 	// Guard-rail anti-regressão UIPI: a integridade EFETIVA do worker decide
 	// se o input chega em janelas elevadas (Gerenciador de Tarefas roda SEMPRE
 	// High via autoElevate; a UI do agente é High via requireAdministrator).

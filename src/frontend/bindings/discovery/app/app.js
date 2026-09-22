@@ -1870,6 +1870,15 @@ export function SyncP2PBootstrapNow() {
 }
 
 /**
+ * SyncStartupAndScheduledTasks re-coleta e envia itens de inicialização e
+ * tarefas agendadas para a API (sync parcial, usado pós-ação de comando).
+ * @returns {$CancellablePromise<void>}
+ */
+export function SyncStartupAndScheduledTasks() {
+    return $Call.ByID(1008455968);
+}
+
+/**
  * TestChatConfig checks whether the informed LLM settings are valid without saving them.
  * @param {$models.ChatConfig} cfg
  * @returns {$CancellablePromise<string>}

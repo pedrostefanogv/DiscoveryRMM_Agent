@@ -218,7 +218,22 @@ func (c *gdiCapturer) AcquireNextFrame() (*Frame, error) {
 	// por isso. Com screenDC, GetDIBits entrega BGRA canônico (B,G,R,A),
 	// que é o contrato esperado pelos encoders (jpeg/webp/tiles).
 
-	return &Frame{Data: frameData, Width: c.width, Height: c.height, Stride: c.width * 4}, nil
+	return &Frame{
+		Data:    frameData,
+		Width:   c.width,
+		Height:  c.height,
+		Stride:  c.width * 4,
+		OriginX: c.offsetX,
+		OriginY: c.offsetY,
+	}, nil
+}
+
+// Geometry retorna a origem e dimensões atuais da região capturada
+// (desktop virtual físico). Re-detectado no loop de captura a cada 5s
+// (lastGeoCheck), então reflete mudanças de resolução/DPI com atraso máximo
+// de um ciclo — o InputController recebe a origem a cada frame publicado.
+func (c *gdiCapturer) Geometry() (x, y, w, h int) {
+	return c.offsetX, c.offsetY, c.width, c.height
 }
 
 func (c *gdiCapturer) ReleaseFrame() {}

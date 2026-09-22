@@ -159,7 +159,8 @@ type dxgiCapturer struct {
 	factory, adapter, output, output1  unsafe.Pointer
 	duplication, d3dDevice, d3dContext unsafe.Pointer
 
-	width, height int
+	width, height    int
+	originX, originY int // origem do output no desktop virtual (DesktopCoordinates)
 
 	// HDR / Advanced Color: quando o monitor é HDR, captura em scRGB
 	// (R16G16B16A16_FLOAT, 8 bytes/px) e o pipeline aplica tone mapping.
@@ -227,6 +228,11 @@ func NewDXGICapturer(monitorIndex int) (Capturer, error) {
 	_, _, _ = comCall(c.output, slotOutputGetDesc, uintptr(unsafe.Pointer(&desc)))
 	c.width = int(desc.DesktopCoordinates.Right - desc.DesktopCoordinates.Left)
 	c.height = int(desc.DesktopCoordinates.Bottom - desc.DesktopCoordinates.Top)
+	// Origem do output no desktop virtual FÍSICO: DesktopCoordinates.Left/Top
+	// (pode ser negativo com monitores à esquerda/acima do primário). Consumido
+	// pelo InputController para mapear o mouse (frame → desktop → 0..65535).
+	c.originX = int(desc.DesktopCoordinates.Left)
+	c.originY = int(desc.DesktopCoordinates.Top)
 	if c.width <= 0 {
 		c.width = 1920
 	}
@@ -426,8 +432,17 @@ func (c *dxgiCapturer) AcquireNextFrame() (*Frame, error) {
 		Width:      c.width,
 		Height:     c.height,
 		Stride:     c.width * bpp,
+		OriginX:    c.originX,
+		OriginY:    c.originY,
 		ColorSpace: c.colorSpace,
 	}, nil
+}
+
+// Geometry retorna a origem e dimensões do output no desktop virtual físico.
+func (c *dxgiCapturer) Geometry() (x, y, w, h int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.originX, c.originY, c.width, c.height
 }
 
 func (c *dxgiCapturer) ReleaseFrame() {

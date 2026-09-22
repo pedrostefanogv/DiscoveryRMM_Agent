@@ -4,6 +4,7 @@ package remotesession
 
 import (
 	"fmt"
+	"math"
 	"sync"
 	"testing"
 	"time"
@@ -286,5 +287,127 @@ func TestRateLimitBypassForKeyUp(t *testing.T) {
 	c.HandleInput(legacyKeyEvent("keyup", "KeyA", "a", false, false, false, false))
 	if got := r.countUp(vkA); got != 1 {
 		t.Fatalf("keyup não deve ser descartado pelo rate limit; esperado 1 up, obtido %d", got)
+	}
+}
+
+// ── Mapeamento frame → desktop virtual (correção DPI/multi-monitor) ──
+//
+// InjectMouseMove usa MOUSEEVENTF_ABSOLUTE|MOUSEEVENTF_VIRTUALDESK: 0..65535
+// cobre o desktop virtual INTEIRO. O mapeamento antigo (x/frameW*65535)
+// tratava o frame capturado como se fosse o desktop todo — correto só com
+// monitor único primário; com 2 monitores (setup típico de DPI 125%) os
+// cliques caíam no lugar errado.
+
+func TestMapFrameToAbsoluteSingleMonitor(t *testing.T) {
+	// Desktop virtual = monitor primário único 1920x1080 @ (0,0), frame nativo.
+	ax, ay, ok := mapFrameToAbsolute(960, 540, 1920, 1080, 1920, 1080, 0, 0, 0, 0, 1920, 1080)
+	if !ok || ax != 32768 || ay != 32768 {
+		t.Fatalf("centro: esperado (32768,32768), obtido (%d,%d) ok=%v", ax, ay, ok)
+	}
+	// Canto superior esquerdo → origem.
+	ax, ay, _ = mapFrameToAbsolute(0, 0, 1920, 1080, 1920, 1080, 0, 0, 0, 0, 1920, 1080)
+	if ax != 0 || ay != 0 {
+		t.Fatalf("origem: esperado (0,0), obtido (%d,%d)", ax, ay)
+	}
+	// Canto inferior direito → ~fim do espaço.
+	ax, _, _ = mapFrameToAbsolute(1919, 1079, 1920, 1080, 1920, 1080, 0, 0, 0, 0, 1920, 1080)
+	if want := int32(math.Round(1919.0 / 1920.0 * 65535)); ax != want {
+		t.Fatalf("borda direita: esperado %d, obtido %d", want, ax)
+	}
+}
+
+func TestMapFrameToAbsoluteDualMonitor(t *testing.T) {
+	// Dois monitores 1920x1080 lado a lado: primário @ (0,0), secundário @ (1920,0).
+	// Desktop virtual: 3840x1080 @ (0,0).
+	// Captura do PRIMÁRIO: o canto DIREITO do frame deve mapear para ~metade
+	// do desktop virtual, NÃO para 65535 (comportamento antigo/bug).
+	ax, ay, ok := mapFrameToAbsolute(1919, 540, 1920, 1080, 1920, 1080, 0, 0, 0, 0, 3840, 1080)
+	if want := int32(math.Round(1919.0 / 3840.0 * 65535)); !ok || ax != want || ay != 32768 {
+		t.Fatalf("borda direita do primário: esperado (%d,32768), obtido (%d,%d) ok=%v", want, ax, ay, ok)
+	}
+	// Captura do SECUNDÁRIO (origem 1920,0): o canto ESQUERDO do frame deve
+	// mapear para ~metade do desktop virtual, não para 0.
+	ax, ay, _ = mapFrameToAbsolute(0, 0, 1920, 1080, 1920, 1080, 1920, 0, 0, 0, 3840, 1080)
+	if ax != 32768 || ay != 0 {
+		t.Fatalf("origem do secundário: esperado (32768,0), obtido (%d,%d)", ax, ay)
+	}
+}
+
+func TestMapFrameToAbsoluteNegativeOrigin(t *testing.T) {
+	// Monitor posicionado à ESQUERDA do primário: origem negativa no desktop
+	// virtual (3840x1080 @ (-1920,0)); captura desse monitor.
+	ax, _, _ := mapFrameToAbsolute(960, 540, 1920, 1080, 1920, 1080, -1920, 0, -1920, 0, 3840, 1080)
+	if want := int32(math.Round(960.0 / 3840.0 * 65535)); ax != want {
+		t.Fatalf("monitor à esquerda: esperado %d, obtido %d", want, ax)
+	}
+}
+
+func TestMapFrameToAbsoluteScaledFrame(t *testing.T) {
+	// Frame reduzido à metade pelo agente (capW/capH = 2x frameW/frameH):
+	// o centro do frame continua no centro da captura.
+	ax, ay, ok := mapFrameToAbsolute(480, 270, 960, 540, 1920, 1080, 0, 0, 0, 0, 1920, 1080)
+	if !ok || ax != 32768 || ay != 32768 {
+		t.Fatalf("frame escalado: esperado (32768,32768), obtido (%d,%d) ok=%v", ax, ay, ok)
+	}
+}
+
+func TestMapFrameToAbsoluteClampsAndInvalid(t *testing.T) {
+	// Coordenada fora do frame → clamp em 65535.
+	ax, _, _ := mapFrameToAbsolute(9999, 0, 1920, 1080, 1920, 1080, 0, 0, 0, 0, 1920, 1080)
+	if ax != 65535 {
+		t.Fatalf("clamp: esperado 65535, obtido %d", ax)
+	}
+	// Métricas inválidas → ok=false (caller usa fallback legado).
+	if _, _, ok := mapFrameToAbsolute(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1920, 1080); ok {
+		t.Fatal("métricas zeradas: esperado ok=false")
+	}
+	if _, _, ok := mapFrameToAbsolute(0, 0, 1920, 1080, 1920, 1080, 0, 0, 0, 0, 0, 1080); ok {
+		t.Fatal("desktop virtual inválido: esperado ok=false")
+	}
+}
+
+func TestHandleMouseMoveNormalizedUsesVirtualDesktop(t *testing.T) {
+	c := newTestController(t)
+
+	origBounds, origMove := virtualDesktopBounds, injectMouseMove
+	var gotX, gotY int32
+	var calls int
+	virtualDesktopBounds = func() (int, int, int, int, bool) { return 0, 0, 3840, 1080, true }
+	injectMouseMove = func(x, y int32) error { gotX, gotY, calls = x, y, calls+1; return nil }
+	t.Cleanup(func() { virtualDesktopBounds = origBounds; injectMouseMove = origMove })
+
+	c.UpdateFrameMetrics(1920, 1080, 1920, 1080)
+	c.UpdateFrameOrigin(0, 0)
+
+	// Clique no canto direito do monitor primário (captura) em desktop com 2
+	// monitores: deve cair na METADE do desktop virtual (32750), não em
+	// 65535 (bug antigo). y=540 é o centro vertical → 32768.
+	c.handleMouseMoveNormalized(1919, 540)
+	if want := int32(math.Round(1919.0 / 3840.0 * 65535)); calls != 1 || gotX != want || gotY != 32768 {
+		t.Fatalf("dual monitor: esperado 1 chamada (%d,32768), obtido %d chamadas (%d,%d)", want, calls, gotX, gotY)
+	}
+
+	// Origem do secundário: canto esquerdo do frame → ~32768.
+	c.UpdateFrameOrigin(1920, 0)
+	c.handleMouseMoveNormalized(0, 0)
+	if calls != 2 || gotX != 32768 || gotY != 0 {
+		t.Fatalf("secundário: esperado 2 chamadas (32768,0), obtido %d chamadas (%d,%d)", calls, gotX, gotY)
+	}
+}
+
+func TestHandleMouseMoveNormalizedFallbackWithoutVirtualMetrics(t *testing.T) {
+	c := newTestController(t)
+
+	origBounds, origMove := virtualDesktopBounds, injectMouseMove
+	var gotX int32
+	virtualDesktopBounds = func() (int, int, int, int, bool) { return 0, 0, 0, 0, false }
+	injectMouseMove = func(x, y int32) error { gotX = x; return nil }
+	t.Cleanup(func() { virtualDesktopBounds = origBounds; injectMouseMove = origMove })
+
+	// Sem métricas do desktop virtual → fallback legado proporcional.
+	c.UpdateFrameMetrics(1920, 1080, 1920, 1080)
+	c.handleMouseMoveNormalized(960, 540)
+	if want := int32(math.Round(960.0 / 1920.0 * 65535)); gotX != want {
+		t.Fatalf("fallback: esperado %d, obtido %d", want, gotX)
 	}
 }

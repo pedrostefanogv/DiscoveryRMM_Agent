@@ -30,6 +30,12 @@ type monitorInfo struct {
 
 const (
 	MONITORINFOF_PRIMARY = 0x00000001
+
+	// Índices do GetSystemMetrics para o desktop virtual (todos os monitores).
+	SM_XVIRTUALSCREEN  = 76
+	SM_YVIRTUALSCREEN  = 77
+	SM_CXVIRTUALSCREEN = 78
+	SM_CYVIRTUALSCREEN = 79
 )
 
 var (
@@ -67,6 +73,27 @@ var enumMonitorsCallback = syscall.NewCallback(func(hMonitor, _ uintptr, _, _ ui
 // callback pode ser chamado de goroutines distintas em momentos diferentes).
 var monitorsAccumMu sync.Mutex
 var monitorsAccum []Monitor
+
+// VirtualDesktopBounds retorna a geometria do desktop virtual FÍSICO em
+// pixels (canto do monitor mais à esquerda/topo + dimensão total da união
+// de todos os monitores). Com múltiplos monitores a origem pode ser
+// negativa e o tamanho excede o do monitor primário. As coordenadas são
+// físicas quando o processo tem DPI awareness (ver
+// EnsurePerMonitorDPIAwareness) — virtualizadas (lógicas) em processo
+// DPI-unaware, o que misturaria espaços no mapeamento do mouse.
+//
+// Retorna ok=false quando as métricas não estão disponíveis.
+func VirtualDesktopBounds() (x, y, w, h int, ok bool) {
+	xp, _, _ := procGetSystemMetrics.Call(SM_XVIRTUALSCREEN)
+	yp, _, _ := procGetSystemMetrics.Call(SM_YVIRTUALSCREEN)
+	wp, _, _ := procGetSystemMetrics.Call(SM_CXVIRTUALSCREEN)
+	hp, _, _ := procGetSystemMetrics.Call(SM_CYVIRTUALSCREEN)
+	w, h = int(wp), int(hp)
+	if w <= 0 || h <= 0 {
+		return 0, 0, 0, 0, false
+	}
+	return int(xp), int(yp), w, h, true
+}
 
 // GetMonitors retorna a lista de monitores conectados via EnumDisplayMonitors.
 // Ordena com o primário primeiro (índice 0 = primário, compatível com o capturer).

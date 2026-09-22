@@ -24,6 +24,7 @@ export {
     OperatingSystem,
     OsqueryStatus,
     PrinterInfo,
+    ScheduledTaskInfo,
     SoftwareItem,
     StartupItem,
     UpgradeItem

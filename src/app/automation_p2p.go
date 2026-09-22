@@ -16,6 +16,7 @@ import (
 	"golang.org/x/sys/windows"
 
 	"discovery/app/core/automation"
+	"discovery/app/core/platform"
 	"discovery/app/core/processutil"
 	"discovery/app/core/selfupdate"
 	"discovery/app/core/services"
@@ -380,7 +381,15 @@ func (m *automationPackageManagerRouter) PreloadPackageForP2P(ctx context.Contex
 		m.logf("[automation][p2p] preload: winget client indisponivel packageId=%s", packageID)
 		return
 	}
-	tmpDir, err := os.MkdirTemp("", "p2p-winget-preload-*")
+	// Diretório temporário dentro de %WINDIR%/Temp/Discovery (convenção do
+	// agente) — não na temp genérica do processo (os.TempDir vira
+	// C:/Windows/Temp quando o agente roda como SYSTEM).
+	tmpBase, err := platform.EnsureTempDir()
+	if err != nil {
+		m.logf("[automation][p2p] preload: falha ao preparar diretorio temporario packageId=%s: %v", packageID, err)
+		return
+	}
+	tmpDir, err := os.MkdirTemp(tmpBase, "p2p-winget-preload-*")
 	if err != nil {
 		m.logf("[automation][p2p] preload: falha ao criar diretorio temporario packageId=%s: %v", packageID, err)
 		return
@@ -454,8 +463,13 @@ func (m *automationPackageManagerRouter) downloadAndCacheForP2P(ctx context.Cont
 		return "", fmt.Errorf("winget client indisponivel")
 	}
 
-	// 1. Criar diretório temporário para o download
-	tmpDir, err := os.MkdirTemp("", "p2p-winget-download-*")
+	// 1. Criar diretório temporário dentro de %WINDIR%/Temp/Discovery
+	// (convenção do agente — nunca a temp genérica do processo).
+	tmpBase, err := platform.EnsureTempDir()
+	if err != nil {
+		return "", fmt.Errorf("falha ao preparar diretorio temporario: %w", err)
+	}
+	tmpDir, err := os.MkdirTemp(tmpBase, "p2p-winget-download-*")
 	if err != nil {
 		return "", fmt.Errorf("falha ao criar diretorio temporario: %w", err)
 	}

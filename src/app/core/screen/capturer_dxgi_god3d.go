@@ -30,6 +30,8 @@ type dxgiGoD3dCapturer struct {
 	img        *image.RGBA
 	width      int
 	height     int
+	originX    int // origem do output no desktop virtual físico (pixels)
+	originY    int
 	drawCursor bool // se true, desenha o cursor no frame (compat); false = cursor separado
 
 	// frameBuf é reutilizado entre frames (otimização de churn de GC: antes
@@ -87,12 +89,29 @@ func NewDXGIGoD3dCapturerMode(monitorIndex int, drawCursor bool) (Capturer, erro
 		height = 1080
 	}
 
+	// Origem do output no desktop virtual FÍSICO. O go-d3d não expõe o
+	// DesktopCoordinates do IDXGIOutput; identificamos o monitor pelo PAR
+	// (largura x altura) reportado pela duplicação — robusto à diferença de
+	// ordenação entre EnumOutputs (DXGI) e EnumDisplayMonitors (GDI). Sem
+	// match (ex.: rotacionado na troca), assume (0,0) — comportamento anterior.
+	originX, originY := 0, 0
+	if mons, merr := GetMonitors(); merr == nil {
+		for _, m := range mons {
+			if m.Width == width && m.Height == height {
+				originX, originY = m.X, m.Y
+				break
+			}
+		}
+	}
+
 	img := image.NewRGBA(image.Rect(0, 0, width, height))
 
 	return &dxgiGoD3dCapturer{
 		dup:        dup,
 		device:     device,
 		deviceCtx:  deviceCtx,
+		originX:    originX,
+		originY:    originY,
 		img:        img,
 		width:      width,
 		height:     height,
@@ -140,10 +159,12 @@ func (c *dxgiGoD3dCapturer) AcquireNextFrame() (*Frame, error) {
 		c.frameBuf = make([]byte, frameDataSize)
 	}
 	frame := &Frame{
-		Data:   c.frameBuf[:frameDataSize],
-		Width:  int(size.X),
-		Height: int(size.Y),
-		Stride: contentWidth,
+		Data:    c.frameBuf[:frameDataSize],
+		Width:   int(size.X),
+		Height:  int(size.Y),
+		Stride:  contentWidth,
+		OriginX: c.originX,
+		OriginY: c.originY,
 	}
 	var src, dst int
 	for i := 0; i < int(size.Y); i++ {
@@ -164,6 +185,11 @@ func (c *dxgiGoD3dCapturer) AcquireNextFrame() (*Frame, error) {
 	}
 
 	return frame, nil
+}
+
+// Geometry retorna a origem e dimensões do output no desktop virtual físico.
+func (c *dxgiGoD3dCapturer) Geometry() (x, y, w, h int) {
+	return c.originX, c.originY, c.width, c.height
 }
 
 // swapRB_BGRA converte um buffer RGBA (R,G,B,A) para BGRA (B,G,R,A) trocando
@@ -207,7 +233,11 @@ func (c *dxgiGoD3dCapturer) drawCursorBGRA(frame *Frame) {
 	if err != nil {
 		return
 	}
-	x, y := int(info.X), int(info.Y)
+	// Cursor frame-relativo: GetCursorPos retorna coordenadas do desktop
+	// virtual; o frame cobre a região iniciando em (originX, originY). Sem
+	// subtrair a origem, o cursor desloca em capturas de monitor não-primário.
+	x := int(info.X) - c.originX
+	y := int(info.Y) - c.originY
 	if x < 0 || y < 0 || x >= frame.Width || y >= frame.Height {
 		return
 	}

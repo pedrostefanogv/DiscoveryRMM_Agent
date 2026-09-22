@@ -15,6 +15,7 @@ import (
 	osquery "github.com/osquery/osquery-go"
 
 	"discovery/app/core/errutil"
+	"discovery/app/core/platform"
 	"discovery/app/core/processutil"
 )
 
@@ -191,7 +192,14 @@ func buildSocketPath() string {
 	case "windows":
 		return `\\.\pipe\discovery_osquery_` + pid + `_` + seq
 	default:
-		return filepath.Join(os.TempDir(), "discovery_osquery_"+pid+"_"+seq+".em")
+		// Socket dentro do diretório temporário do Discovery (convenção do
+		// agente), nunca na temp genérica. Se não for possível garantir o
+		// diretório, cai na temp do processo (comportamento anterior).
+		tmpBase, err := platform.EnsureTempDir()
+		if err != nil {
+			return filepath.Join(os.TempDir(), "discovery_osquery_"+pid+"_"+seq+".em")
+		}
+		return filepath.Join(tmpBase, "discovery_osquery_"+pid+"_"+seq+".em")
 	}
 }
 

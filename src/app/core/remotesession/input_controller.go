@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"sync"
 	"time"
 
@@ -25,6 +26,12 @@ var (
 	injectMouseRight = screen.InjectMouseClickRight
 	injectMouseWheel = screen.InjectMouseWheel
 )
+
+// virtualDesktopBounds fornece a geometria do desktop virtual FÍSICO
+// (var para stub nos testes). O mapeamento do mouse precisa dela porque
+// InjectMouseMove usa MOUSEEVENTF_ABSOLUTE|MOUSEEVENTF_VIRTUALDESK — o
+// espaço 0..65535 cobre o desktop virtual INTEIRO, não o monitor capturado.
+var virtualDesktopBounds = screen.VirtualDesktopBounds
 
 // Watchdog de teclas presas: uma tecla "down" sem NENHUM evento de teclado
 // por keyStuckTimeout é liberada (keyup injetado). O browser emite keydown
@@ -67,9 +74,14 @@ type InputController struct {
 
 	mu             sync.Mutex
 	lastSeq        uint64
-	frameW, frameH int // dimensões do último frame
-	capW, capH     int // dimensões da captura real (virtual desktop)
-	rateLimiter    *rateLimiter
+	frameW, frameH int // dimensões do último frame (pixels do frame codificado)
+	capW, capH     int // dimensões da captura real no desktop (pode diferir do frame com escala)
+	// frameOriginX/Y: origem do canto superior esquerdo do frame no desktop
+	// virtual FÍSICO (pixels). Vem do capturer (Frame.OriginX/OriginY). Com
+	// multi-monitor ou monitor não-primário, a origem NÃO é (0,0) — ignorá-la
+	// desloca todos os cliques (bug DPI/multi-monitor do acesso remoto).
+	frameOriginX, frameOriginY int
+	rateLimiter                *rateLimiter
 
 	// Teclas logicamente pressionadas (keyID → VK). NÃO é mais filtro de
 	// key-repeat: os repeats do browser são REPASSADOS ao remoto (ver
@@ -226,6 +238,78 @@ func (c *InputController) UpdateFrameMetrics(frameW, frameH, capW, capH int) {
 	c.capH = capH
 }
 
+// UpdateFrameDims atualiza APENAS as dimensões do frame codificado (informadas
+// pelo viewer no payload legado frameWidth/frameHeight). NÃO sobrescreve
+// capW/capH já definidos pelo capturer (cobertura real da captura — difere do
+// frame quando o agente reduz a resolução com escala<1). Quando capW/capH
+// ainda estão zerados (pré-primeiro frame), usa as dimensões do viewer como
+// bootstrap provisório — sem isso, eventos mouse.move do contrato v1 eram
+// descartados até o primeiro frame codificado (cw/ch>0 exigido em
+// handleMouseMove) e o fallback do legado usava default fixo 1920x1080.
+func (c *InputController) UpdateFrameDims(frameW, frameH int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.frameW = frameW
+	c.frameH = frameH
+	if c.capW <= 0 || c.capH <= 0 {
+		c.capW = frameW
+		c.capH = frameH
+	}
+}
+
+// UpdateFrameOrigin atualiza a origem (desktop virtual físico, em pixels) do
+// canto superior esquerdo da região capturada. Deve refletir o capturer ATIVO
+// — a troca GDI→DXGI (fallback) pode mudar monitor/origem.
+func (c *InputController) UpdateFrameOrigin(x, y int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.frameOriginX = x
+	c.frameOriginY = y
+}
+
+// mapFrameToAbsolute converte coordenadas (x,y) em pixels do frame para o
+// espaço absoluto 0..65535 do desktop virtual FÍSICO — o espaço que o
+// SendInput entende com MOUSEEVENTF_ABSOLUTE|MOUSEEVENTF_VIRTUALDESK.
+//
+// Pipeline (DPI-correct):
+//  1. frame → desktop: escala frame/captura (quando o agente reduz o frame)
+//     + origem da captura no desktop virtual;
+//  2. desktop → 0..65535: posição RELATIVA ao retângulo do desktop virtual
+//     (GetSystemMetrics SM_*VIRTUALSCREEN), não ao monitor primário.
+//
+// O mapeamento antigo (x/frameW*65535) tratava o frame capturado como se
+// fosse o desktop virtual inteiro começando em (0,0). Só é correto quando a
+// captura cobre o desktop todo — monitor único primário. Com dois monitores
+// (setup típico de laptop com escala 125%) os cliques caíam no lugar errado;
+// em processo DPI-unaware as métricas vinham virtualizadas (125% → lógico),
+// deslocando também o cursor/overlay. ok=false quando as métricas são
+// insuficientes (caller aplica o fallback legado proporcional).
+func mapFrameToAbsolute(x, y, frameW, frameH, capW, capH, originX, originY, vx, vy, vw, vh int) (absX, absY int32, ok bool) {
+	if frameW <= 0 || frameH <= 0 || capW <= 0 || capH <= 0 || vw <= 0 || vh <= 0 {
+		return 0, 0, false
+	}
+
+	// 1. Pixel do frame → pixel do desktop virtual físico.
+	deskX := float64(originX) + float64(x)*float64(capW)/float64(frameW)
+	deskY := float64(originY) + float64(y)*float64(capH)/float64(frameH)
+
+	// 2. Pixel do desktop → absoluto 0..65535 relativo ao desktop virtual.
+	ax := clampAbsolute((deskX - float64(vx)) / float64(vw) * 65535.0)
+	ay := clampAbsolute((deskY - float64(vy)) / float64(vh) * 65535.0)
+	return ax, ay, true
+}
+
+// clampAbsolute limita o valor absoluto ao espaço 0..65535 (com arredondamento).
+func clampAbsolute(v float64) int32 {
+	if v < 0 {
+		return 0
+	}
+	if v > 65535 {
+		return 65535
+	}
+	return int32(math.Round(v))
+}
+
 // HandleInput processa um evento de input raw do viewer.
 func (c *InputController) HandleInput(data []byte) {
 	c.mu.Lock()
@@ -310,14 +394,27 @@ func (c *InputController) handleMouseMove(evt *InputEvent) {
 	c.mu.Lock()
 	fw, fh := c.frameW, c.frameH
 	cw, ch := c.capW, c.capH
+	ox, oy := c.frameOriginX, c.frameOriginY
 	c.mu.Unlock()
 
 	if fw <= 0 || fh <= 0 || cw <= 0 || ch <= 0 {
 		return
 	}
 
-	// Converte coordenadas do frame para desktop virtual
-	// frameX/frameW * capW = desktopX (usa capW/capH = desktop real)
+	// Converte frame → desktop virtual físico → absoluto 0..65535 relativo ao
+	// RETÂNGULO do desktop virtual (mapeamento DPI-correct; ver
+	// mapFrameToAbsolute e handleMouseMoveNormalized).
+	if vx, vy, vw, vh, ok := virtualDesktopBounds(); ok {
+		if absX, absY, ok2 := mapFrameToAbsolute(evt.X, evt.Y, fw, fh, cw, ch, ox, oy, vx, vy, vw, vh); ok2 {
+			if err := injectMouseMove(absX, absY); err != nil {
+				c.logInputFailure("mouse move", err)
+			}
+			return
+		}
+	}
+
+	// Fallback legado (métricas do desktop virtual indisponíveis): proporcional
+	// ao frame — só correto quando a captura cobre o desktop virtual inteiro.
 	absX := int32(float64(evt.X) / float64(fw) * 65535)
 	absY := int32(float64(evt.Y) / float64(fh) * 65535)
 
@@ -522,9 +619,11 @@ func (c *InputController) handleLegacyInput(data []byte) {
 	// O viewer envia frameWidth/frameHeight no payload. Usa-os para
 	// normalização quando presentes (mais preciso que o default interno),
 	// evitando que o mouse vá para o lugar errado nos primeiros frames.
+	// UpdateFrameDims NÃO sobrescreve capW/capH (cobertura da captura vinda
+	// do capturer — difere do frame quando o agente escala a resolução).
 	if fw, ok := toFloat64(raw["frameWidth"]); ok && fw > 0 {
 		if fh, ok2 := toFloat64(raw["frameHeight"]); ok2 && fh > 0 {
-			c.UpdateFrameMetrics(int(fw), int(fh), int(fw), int(fh))
+			c.UpdateFrameDims(int(fw), int(fh))
 		}
 	}
 
@@ -597,36 +696,45 @@ func (c *InputController) handleMouseMoveNormalized(x, y int) {
 	c.mu.Lock()
 	fw, fh := c.frameW, c.frameH
 	cw, ch := c.capW, c.capH
+	ox, oy := c.frameOriginX, c.frameOriginY
 	c.mu.Unlock()
 
+	// Defaults ANTES da primeira métrica (viewer envia frameWidth/Height no
+	// payload e o loop de captura publica as dimensões reais a cada frame).
+	// NOTA: 1920x1080 é apenas fallback — em telas maiores (ex.: 2560x1440
+	// com escala 125%) os primeiros eventos podem deslocar até chegar o
+	// primeiro frame; o log de geometria na abertura da sessão ajuda a
+	// diagnosticar esse caso.
 	if fw <= 0 || fh <= 0 {
 		fw, fh = 1920, 1080
 	}
 	if cw <= 0 || ch <= 0 {
-		cw, ch = 1920, 1080
+		cw, ch = fw, fh
 	}
 
-	// Normaliza para o espaço absoluto do desktop virtual (0-65535).
-	// frameX/frameW * 65535 = desktopX. Usa capW/capH (desktop real) como
-	// denominador quando disponível, senão frameW/frameH.
-	denW, denH := fw, fh
-	if cw > 0 && ch > 0 {
-		denW, denH = cw, ch
+	// Mapeamento canônico (DPI/multi-monitor correct): frame → desktop virtual
+	// físico (origem da captura + escala frame/captura) → 0..65535 relativo ao
+	// retângulo do desktop virtual. InjectMouseMove usa MOUSEEVENTF_ABSOLUTE|
+	// MOUSEEVENTF_VIRTUALDESK: 0..65535 cobre o desktop virtual INTEIRO, então
+	// mapear x/frameW*65535 direto só é correto com captura = desktop inteiro
+	// começando em (0,0) (monitor único primário). Com 2 monitores o clique
+	// caía no monitor errado; com DPI-unaware as métricas vinham lógicas.
+	if vx, vy, vw, vh, ok := virtualDesktopBounds(); ok {
+		if absX, absY, ok2 := mapFrameToAbsolute(x, y, fw, fh, cw, ch, ox, oy, vx, vy, vw, vh); ok2 {
+			injectAbsoluteMove(absX, absY)
+			return
+		}
 	}
-	absX := int32(float64(x) / float64(denW) * 65535)
-	absY := int32(float64(y) / float64(denH) * 65535)
-	if absX < 0 {
-		absX = 0
-	}
-	if absY < 0 {
-		absY = 0
-	}
-	if absX > 65535 {
-		absX = 65535
-	}
-	if absY > 65535 {
-		absY = 65535
-	}
+
+	// Fallback legado: proporcional à captura (denominador capW/capH quando
+	// disponível — comportamento anterior preservado).
+	absX := clampAbsolute(float64(x) / float64(cw) * 65535)
+	absY := clampAbsolute(float64(y) / float64(ch) * 65535)
+	injectAbsoluteMove(absX, absY)
+}
+
+// injectAbsoluteMove injeta o movimento absoluto com log de falha agregado.
+func injectAbsoluteMove(absX, absY int32) {
 	if err := injectMouseMove(absX, absY); err != nil {
 		log.Printf("[input-controller] InjectMouseMove falhou (absX=%d absY=%d): %v", absX, absY, err)
 	}

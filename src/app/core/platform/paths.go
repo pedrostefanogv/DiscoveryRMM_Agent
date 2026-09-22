@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 )
 
 // ─── Diretórios Base ───────────────────────────────────────────────
@@ -48,6 +49,35 @@ func P2PTempDir() string {
 		return filepath.Join(envutil.WindowsDir(), "Temp", "Discovery", "P2P_Temp")
 	}
 	return filepath.Join(DataDir(), "TempP2P")
+}
+
+// ensureTempDirACLOnce aplica a ACL compartilhada do staging uma vez por
+// processo (o icacls é um spawn de processo — não pode rodar por chamada).
+var ensureTempDirACLOnce sync.Once
+
+// EnsureTempDir garante que o diretório temporário do Discovery (TempDir)
+// exista e retorna o caminho dele. Chame antes de criar arquivos ou
+// subdiretórios temporários com base em TempDir (os.MkdirTemp/os.CreateTemp)
+// — ambos falham quando o diretório base não existe. Centraliza a convenção:
+// TODO temporário do agente vive em %WINDIR%/Temp/Discovery (Windows), nunca
+// na temp genérica do processo (os.TempDir).
+//
+// ACL compartilhada (best-effort, 1x por processo — modelo C7/M13 do staging
+// P2P): SYSTEM/Administrators Full e Everyone RX, de modo que arquivos
+// escritos pelo serviço (ex.: instaladores, scripts .ps1) sejam legíveis por
+// processos em contexto de usuário. Falha de ACL é não-fatal: não elevado
+// (standalone) ou icacls indisponível degradam graciosamente.
+func EnsureTempDir() (string, error) {
+	dir := TempDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	if runtime.GOOS == "windows" {
+		ensureTempDirACLOnce.Do(func() {
+			_ = EnsureSharedStagingAccess(dir) // best-effort; herança replica nos filhos
+		})
+	}
+	return dir, nil
 }
 
 // ─── Caminhos de Arquivos de Configuração ──────────────────────────

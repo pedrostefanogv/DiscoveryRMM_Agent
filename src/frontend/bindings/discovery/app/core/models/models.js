@@ -1156,6 +1156,13 @@ export class InventoryReport {
              */
             this["startupItems"] = [];
         }
+        if (!("scheduledTasks" in $$source)) {
+            /**
+             * @member
+             * @type {ScheduledTaskInfo[]}
+             */
+            this["scheduledTasks"] = [];
+        }
         if (!("autoexec" in $$source)) {
             /**
              * @member
@@ -1193,6 +1200,7 @@ export class InventoryReport {
         const $$createField19_0 = $$createType32;
         const $$createField20_0 = $$createType34;
         const $$createField21_0 = $$createType36;
+        const $$createField22_0 = $$createType38;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("hardware" in $$parsedSource) {
             $$parsedSource["hardware"] = $$createField2_0($$parsedSource["hardware"]);
@@ -1251,8 +1259,11 @@ export class InventoryReport {
         if ("startupItems" in $$parsedSource) {
             $$parsedSource["startupItems"] = $$createField20_0($$parsedSource["startupItems"]);
         }
+        if ("scheduledTasks" in $$parsedSource) {
+            $$parsedSource["scheduledTasks"] = $$createField21_0($$parsedSource["scheduledTasks"]);
+        }
         if ("autoexec" in $$parsedSource) {
-            $$parsedSource["autoexec"] = $$createField21_0($$parsedSource["autoexec"]);
+            $$parsedSource["autoexec"] = $$createField22_0($$parsedSource["autoexec"]);
         }
         return new InventoryReport(/** @type {Partial<InventoryReport>} */($$parsedSource));
     }
@@ -2085,6 +2096,120 @@ export class PrinterInfo {
     }
 }
 
+/**
+ * ScheduledTaskInfo representa uma tarefa agendada do Windows coletada
+ * pelo agente (Task Scheduler). State distingue o estado da tarefa
+ * (enabled/disabled), Status o runtime atual (Ready/Running/...).
+ */
+export class ScheduledTaskInfo {
+    /**
+     * Creates a new ScheduledTaskInfo instance.
+     * @param {Partial<ScheduledTaskInfo>} [$$source = {}] - The source object to create the ScheduledTaskInfo.
+     */
+    constructor($$source = {}) {
+        if (!("taskPath" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["taskPath"] = "";
+        }
+        if (!("taskName" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["taskName"] = "";
+        }
+        if (!("state" in $$source)) {
+            /**
+             * enabled | disabled
+             * @member
+             * @type {string}
+             */
+            this["state"] = "";
+        }
+        if (!("status" in $$source)) {
+            /**
+             * Ready | Running | Queued | ...
+             * @member
+             * @type {string}
+             */
+            this["status"] = "";
+        }
+        if (!("author" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["author"] = "";
+        }
+        if (!("actionPath" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["actionPath"] = "";
+        }
+        if (!("actionArgs" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["actionArgs"] = "";
+        }
+        if (!("triggerType" in $$source)) {
+            /**
+             * boot | logon | daily | weekly | once | idle | event | other
+             * @member
+             * @type {string}
+             */
+            this["triggerType"] = "";
+        }
+        if (!("triggerDesc" in $$source)) {
+            /**
+             * descrição amigável ("Diário às 03:00")
+             * @member
+             * @type {string}
+             */
+            this["triggerDesc"] = "";
+        }
+        if (!("nextRunTime" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["nextRunTime"] = "";
+        }
+        if (!("lastRunTime" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["lastRunTime"] = "";
+        }
+        if (!("lastResult" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["lastResult"] = 0;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new ScheduledTaskInfo instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {ScheduledTaskInfo}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new ScheduledTaskInfo(/** @type {Partial<ScheduledTaskInfo>} */($$parsedSource));
+    }
+}
+
 export class SoftwareItem {
     /**
      * Creates a new SoftwareItem instance.
@@ -2191,6 +2316,7 @@ export class StartupItem {
         }
         if (!("type" in $$source)) {
             /**
+             * registry | folder | service
              * @member
              * @type {string}
              */
@@ -2198,6 +2324,7 @@ export class StartupItem {
         }
         if (!("source" in $$source)) {
             /**
+             * ex.: "HKLM Run", "HKCU RunOnce", "Pasta Startup (Usuário)", "Serviço"
              * @member
              * @type {string}
              */
@@ -2205,6 +2332,7 @@ export class StartupItem {
         }
         if (!("status" in $$source)) {
             /**
+             * enabled | disabled
              * @member
              * @type {string}
              */
@@ -2216,6 +2344,15 @@ export class StartupItem {
              * @type {string}
              */
             this["username"] = "";
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * Detail descreve o modo de inicialização (ex.: serviços: "Automático",
+             * "Automático (Atrasado)") ou outro contexto auxiliar de exibição.
+             * @member
+             * @type {string | undefined}
+             */
+            this["detail"] = undefined;
         }
 
         Object.assign(this, $$source);
@@ -2327,5 +2464,7 @@ const $$createType31 = SoftwareItem.createFrom;
 const $$createType32 = $Create.Array($$createType31);
 const $$createType33 = StartupItem.createFrom;
 const $$createType34 = $Create.Array($$createType33);
-const $$createType35 = AutoexecItem.createFrom;
+const $$createType35 = ScheduledTaskInfo.createFrom;
 const $$createType36 = $Create.Array($$createType35);
+const $$createType37 = AutoexecItem.createFrom;
+const $$createType38 = $Create.Array($$createType37);

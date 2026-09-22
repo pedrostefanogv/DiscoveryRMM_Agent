@@ -12,6 +12,14 @@ type Capturer interface {
 	Close() error
 	// Name retorna o nome do capturador (dxgi, gdi).
 	Name() string
+	// Geometry retorna a origem (x,y) da região capturada no desktop virtual
+	// FÍSICO (pixels) e as dimensões (w,h) físicas da região. A origem é
+	// (0,0) quando a captura começa no canto do desktop virtual (monitor
+	// primário único). O InputController usa esse valor para mapear o mouse
+	// do viewer para o desktop virtual — sem ele, cliques caem no lugar
+	// errado quando a captura não cobre o desktop inteiro (multi-monitor) ou
+	// não começa em (0,0), cenário típico de monitores com DPI scaling 125%.
+	Geometry() (x, y, w, h int)
 }
 
 // Frame representa um frame capturado da tela.
@@ -20,6 +28,13 @@ type Frame struct {
 	Width  int
 	Height int
 	Stride int // bytes por linha (width * 4 + padding)
+
+	// OriginX/OriginY: posição do canto superior esquerdo do frame no desktop
+	// virtual FÍSICO (pixels). 0,0 quando a captura começa na origem. É
+	// copiado por todos os capturers e consumido pelo InputController para o
+	// mapeamento frame → desktop virtual → 0..65535 do mouse.
+	OriginX int
+	OriginY int
 
 	// ColorSpace indica o color space do frame. 0 = SDR (BGRA 8-bit, padrão).
 	// Quando HDR (scRGB float), o frame.Data é R16G16B16A16_FLOAT (8 bytes/px)

@@ -18,6 +18,7 @@ type Capturer interface {
 	ReleaseFrame()
 	Close() error
 	Name() string
+	Geometry() (x, y, w, h int)
 }
 
 // Frame representa um frame capturado da tela.
@@ -26,6 +27,10 @@ type Frame struct {
 	Width  int
 	Height int
 	Stride int
+
+	// OriginX/OriginY: origem da captura no desktop virtual (0,0 no stub).
+	OriginX int
+	OriginY int
 
 	// ColorSpace indica o color space do frame (0 = SDR BGRA 8-bit).
 	ColorSpace uint32
@@ -100,3 +105,9 @@ func CaptureCursorImage() *CursorImage { return nil }
 
 // NewCursorSpriteSender retorna um sender vazio em plataformas não-Windows.
 func NewCursorSpriteSender() *CursorSpriteSender { return &CursorSpriteSender{} }
+
+// EnsurePerMonitorDPIAwareness é no-op em plataformas não-Windows.
+func EnsurePerMonitorDPIAwareness() bool { return false }
+
+// VirtualDesktopBounds não tem equivalente em plataformas não-Windows.
+func VirtualDesktopBounds() (x, y, w, h int, ok bool) { return 0, 0, 0, 0, false }
