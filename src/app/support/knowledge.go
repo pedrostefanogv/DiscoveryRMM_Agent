@@ -193,17 +193,17 @@ func parseKnowledgeArticle(raw map[string]any) KnowledgeArticle {
 	}
 
 	article := KnowledgeArticle{
-		ID:          extractStr(raw, "id"),
-		Title:       extractStr(raw, "title"),
-		Category:    extractStr(raw, "category"),
-		Summary:     extractStr(raw, "summary"),
-		Content:     extractStr(raw, "content"),
-		Tags:        tags,
-		Author:      author,
-		Scope:       scope,
-		PublishedAt: extractStr(raw, "publishedAt"),
-		Difficulty:  extractStr(raw, "difficulty"),
-		UpdatedAt:   extractStr(raw, "updatedAt"),
+		ID:            extractStr(raw, "id"),
+		Title:         extractStr(raw, "title"),
+		Category:      extractStr(raw, "category"),
+		Summary:       extractStr(raw, "summary"),
+		Content:       extractStr(raw, "content"),
+		Tags:          tags,
+		Author:        author,
+		Scope:         scope,
+		PublishedAt:   extractStr(raw, "publishedAt"),
+		Difficulty:    extractStr(raw, "difficulty"),
+		UpdatedAt:     extractStr(raw, "updatedAt"),
 		ParentID:      extractStr(raw, "parentId"),
 		SortOrder:     toInt(raw["sortOrder"]),
 		IsPage:        toBool(raw["isPage"]),
@@ -413,21 +413,16 @@ func (s *Service) fetchKnowledgeListWithCache(info AgentInfo, category string, u
 
 		ctx := s.ctxOrBackground()
 
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
-		if err != nil {
-			if pageIdx == 0 {
-				return nil, fmt.Errorf("URL invalida: %w", err)
-			}
-			break
-		}
-		if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, info.AgentID); err != nil {
-			if pageIdx == 0 {
+		resp, err := doGetWithRetry(ctx, kbHTTP(), func() (*http.Request, error) {
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+			if err != nil {
 				return nil, err
 			}
-			break
-		}
-
-		resp, err := kbHTTP().Do(req)
+			if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, info.AgentID); err != nil {
+				return nil, err
+			}
+			return req, nil
+		})
 		if err != nil {
 			// Primeira página: stale-if-error — usa o backup local da última
 			// carga bem-sucedida para a página continuar utilizável offline.
@@ -589,15 +584,16 @@ func (s *Service) fetchKnowledgeDetail(info AgentInfo, articleID string) (Knowle
 
 	ctx := s.ctxOrBackground()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
-	if err != nil {
-		return KnowledgeArticle{}, fmt.Errorf("URL invalida: %w", err)
-	}
-	if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, info.AgentID); err != nil {
-		return KnowledgeArticle{}, err
-	}
-
-	resp, err := kbHTTP().Do(req)
+	resp, err := doGetWithRetry(ctx, kbHTTP(), func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+		if err != nil {
+			return nil, err
+		}
+		if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, info.AgentID); err != nil {
+			return nil, err
+		}
+		return req, nil
+	})
 	if err != nil {
 		var backup KnowledgeArticle
 		if s.readKnowledgeBackup(cacheKey, &backup) && strings.TrimSpace(backup.ID) != "" {
@@ -663,15 +659,16 @@ func (s *Service) fetchKnowledgePages(info AgentInfo, articleID string) ([]Knowl
 
 	ctx := s.ctxOrBackground()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
-	if err != nil {
-		return nil, fmt.Errorf("URL invalida: %w", err)
-	}
-	if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, info.AgentID); err != nil {
-		return nil, err
-	}
-
-	resp, err := kbHTTP().Do(req)
+	resp, err := doGetWithRetry(ctx, kbHTTP(), func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+		if err != nil {
+			return nil, err
+		}
+		if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, info.AgentID); err != nil {
+			return nil, err
+		}
+		return req, nil
+	})
 	if err != nil {
 		var backup []KnowledgePage
 		if s.readKnowledgeBackup(cacheKey, &backup) {
@@ -834,4 +831,3 @@ func (s *Service) GetKnowledgeArticlePages(articleID string) ([]KnowledgePage, e
 	}
 	return s.fetchKnowledgePages(info, articleID)
 }
-

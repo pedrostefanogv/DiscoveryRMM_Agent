@@ -49,9 +49,9 @@ func (w *APIWorkflowState) UnmarshalJSON(data []byte) error {
 	}
 
 	var out alias
-	out.ID = strings.TrimSpace(fmt.Sprint(raw["id"]))
-	out.Name = strings.TrimSpace(fmt.Sprint(raw["name"]))
-	out.Color = strings.TrimSpace(fmt.Sprint(raw["color"]))
+	out.ID = ExtractStr(raw, "id")
+	out.Name = ExtractStr(raw, "name")
+	out.Color = ExtractStr(raw, "color")
 	out.IsInitial = toBool(raw["isInitial"], raw["initial"])
 	out.IsFinal = toBool(raw["isFinal"], raw["final"], raw["isTerminal"])
 	out.DisplayOrder = toInt(raw["displayOrder"], raw["order"], raw["sortOrder"], raw["position"])
@@ -65,7 +65,9 @@ type TicketPriority int
 func (p *TicketPriority) UnmarshalJSON(data []byte) error {
 	trimmed := strings.TrimSpace(string(data))
 	if trimmed == "" || trimmed == "null" {
-		*p = TicketPriority(0)
+		// Sem prioridade explícita o backend usa Medium; manter 0 faria a UI
+		// exibir "N/A" (priorityLabels[0] inexistente).
+		*p = TicketPriority(2)
 		return nil
 	}
 
@@ -95,6 +97,8 @@ type APITicket struct {
 	ClientID      string            `json:"clientId"`
 	SiteID        *string           `json:"siteId,omitempty"`
 	CreatedAt     string            `json:"createdAt"`
+	UpdatedAt     string            `json:"updatedAt,omitempty"`
+	ClosedAt      *string           `json:"closedAt,omitempty"`
 	WorkflowState *APIWorkflowState `json:"workflowState,omitempty"`
 	Rating        *int              `json:"rating,omitempty"`
 	RatedAt       *string           `json:"ratedAt,omitempty"`
@@ -237,6 +241,20 @@ func toBool(values ...any) bool {
 		}
 	}
 	return false
+}
+
+// ExtractStr lê uma chave string de um mapa JSON, retornando "" para
+// ausência/nulo (evita o "<nil>" de fmt.Sprint).
+func ExtractStr(raw map[string]any, key string) string {
+	v, ok := raw[key]
+	if !ok || v == nil {
+		return ""
+	}
+	s := strings.TrimSpace(fmt.Sprint(v))
+	if s == "<nil>" {
+		return ""
+	}
+	return s
 }
 
 func normalizePriority(v int) int {

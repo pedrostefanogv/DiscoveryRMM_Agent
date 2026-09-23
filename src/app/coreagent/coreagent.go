@@ -44,7 +44,6 @@ import (
 	"discovery/app/services/notifications"
 	appsupport "discovery/app/support"
 	syncsvc "discovery/app/sync"
-	"discovery/app/tickets"
 	"discovery/app/updates"
 )
 
@@ -64,7 +63,6 @@ type CoreAgent struct {
 	AgentConn       *agentconn.Runtime
 	DebugSvc        *debug.Service
 	AgentConfigSvc  *agentconfig.Service
-	TicketsSvc      *tickets.Service
 	UpdatesSvc      *updates.Service
 	Exporter        *updates.Exporter
 	InventorySvc    *appinventory.Service

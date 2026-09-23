@@ -52,7 +52,6 @@ import (
 	"discovery/app/services/psadt"
 	appsupport "discovery/app/support"
 	syncsvc "discovery/app/sync"
-	"discovery/app/tickets"
 	"discovery/app/updates"
 	"path/filepath"
 )
@@ -609,9 +608,6 @@ func NewApp(opts AppStartupOptions) *App {
 		},
 	})
 	a.AgentConfigSvc = agentconfig.New(agentconfig.FetchDeps{
-		GetDebugConfig: a.GetDebugConfig,
-	})
-	a.TicketsSvc = tickets.New(tickets.Deps{
 		GetDebugConfig: a.GetDebugConfig,
 	})
 	a.SyncSvc = syncsvc.NewService(a)

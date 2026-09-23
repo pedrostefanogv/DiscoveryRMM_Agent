@@ -4,6 +4,9 @@ var currentTicketId = '';
 var currentTicket = null;
 var workflowStatesCache = null;
 var workflowStatesCacheKey = '';
+// Cache por id: evita serializar o ticket inteiro em data-ticket (entidades
+// HTML no título, ex. "&amp;", corrompiam o atributo após round-trip).
+var supportTicketsById = {};
 var WORKFLOW_STATES_CACHE_TTL_MS = 10 * 60 * 1000;
 
 var priorityLabels = { 1: 'Baixa', 2: 'Media', 3: 'Alta', 4: 'Critica' };
@@ -139,6 +142,9 @@ function populateWorkflowStateOptions(states, currentWorkflowStateId) {
   });
 
   closeTicketWorkflowStateSelectEl.innerHTML = options.join('');
+  // Sem estados reais (ex.: endpoint ainda indisponível) desabilita o seletor
+  // em vez de oferecer um estado final que o backend ignoraria.
+  closeTicketWorkflowStateSelectEl.disabled = available.length === 0;
 
   if (currentWorkflowStateId && available.some(function (s) { return s.id === currentWorkflowStateId; })) {
     closeTicketWorkflowStateSelectEl.value = currentWorkflowStateId;
@@ -181,6 +187,7 @@ async function loadWorkflowStatesForClose(ticket) {
     closeTicketWorkflowStateSelectEl.innerHTML =
       '<option value="">Fechar com estado padrao</option>';
     closeTicketWorkflowStateSelectEl.value = '';
+    closeTicketWorkflowStateSelectEl.disabled = true;
   }
 }
 
@@ -370,7 +377,9 @@ async function loadSupportTickets() {
       return;
     }
     showSupportList();
+    supportTicketsById = {};
     supportTicketsListEl.innerHTML = tickets.map(function (t) {
+      supportTicketsById[t.id] = t;
       var status = ticketStatusInfo(t);
       var priLabel = ticketPriorityLabel(t.priority);
       var priClass = ticketPriorityClass(t.priority);
@@ -378,7 +387,7 @@ async function loadSupportTickets() {
       var date = formatDate(t.createdAt, '');
       var lastActivity = ticketLastActivityText(t);
       var ratingText = renderStars(t.rating);
-      return '<button class="support-ticket-card" data-id="' + escapeHtml(t.id) + '" data-ticket=\'' + escapeAttr(t) + '\'>' +
+      return '<button class="support-ticket-card" data-id="' + escapeHtml(t.id) + '">' +
         '<div class="ticket-subject">' + escapeHtml(t.title || translate('support.untitledTicket')) + '</div>' +
         '<div class="ticket-header">' +
           '<span class="ticket-id-badge">#' + escapeHtml(t.id.substring(0, 8)) + '</span>' +
@@ -398,11 +407,11 @@ async function loadSupportTickets() {
     supportTicketsListEl.querySelectorAll('.support-ticket-card').forEach(function (card) {
       card.addEventListener('click', function () {
         try {
-          var t = JSON.parse(card.getAttribute('data-ticket').replace(/&apos;/g, "'"));
+          var ticketId = card.getAttribute('data-id');
+          var t = supportTicketsById[ticketId];
+          if (!t) throw new Error('ticket não encontrado no cache local');
           showTicketDetail(t);
         } catch (e) {
-          // M17: catch vazio — card clicado sem feedback algum era inaceitável
-          // quando o data-ticket não parseava (entidades/sanitização).
           console.error('support: falha ao abrir ticket do card:', e);
           if (typeof showFeedback === 'function') {
             showFeedback(translate('support.ticketLoadError', { error: String(e) }), true);
@@ -413,10 +422,6 @@ async function loadSupportTickets() {
   } catch (err) {
     supportTicketsListEl.innerHTML = '<div class="meta">' + escapeHtml(translate('support.ticketListLoadError', { error: String(err) })) + '</div>';
   }
-}
-
-function escapeAttr(obj) {
-  return JSON.stringify(obj).replace(/'/g, '&apos;').replace(/"/g, '&quot;');
 }
 
 function showTicketDetail(t) {

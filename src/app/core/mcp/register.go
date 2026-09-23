@@ -45,7 +45,7 @@ type AppBridge interface {
 	GetAgentInfoJSON() (json.RawMessage, error)
 	ListAgentTickets() (json.RawMessage, error)
 	GetAgentTicketDetails(ticketID string) (json.RawMessage, error)
-	AddAgentTicketComment(ticketID, content string, isInternal bool) (json.RawMessage, error)
+	AddAgentTicketComment(ticketID, content string) (json.RawMessage, error)
 	CreateAgentTicket(title, description string, priority int, category string) (json.RawMessage, error)
 
 	// Chat — pergunta interativa ao usuario
@@ -590,11 +590,10 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 
 	reg.Register(Tool{
 		Name:        "add_ticket_comment",
-		Description: "Adiciona um comentário em um chamado do agente autenticado.",
+		Description: "Adiciona um comentário PÚBLICO em um chamado do agente autenticado. Notas internas são exclusivas do portal.",
 		Params: []ToolParam{
 			{Name: "ticketId", Type: "string", Description: "GUID do chamado", Required: true},
 			{Name: "content", Type: "string", Description: "Conteudo do comentario", Required: true},
-			{Name: "isInternal", Type: "boolean", Description: "Se true, cria comentario interno", Required: false},
 		},
 		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			ticketID, _ := args["ticketId"].(string)
@@ -605,13 +604,8 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 			if strings.TrimSpace(content) == "" {
 				return nil, fmt.Errorf("content nao pode ser vazio")
 			}
-			isInternal := false
-			if v, ok := args["isInternal"]; ok {
-				if parsed, ok := v.(bool); ok {
-					isInternal = parsed
-				}
-			}
-			return app.AddAgentTicketComment(ticketID, content, isInternal)
+			// Opção de produto (a): o agente nunca cria nota interna.
+			return app.AddAgentTicketComment(ticketID, content)
 		},
 	})
 

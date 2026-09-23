@@ -3,6 +3,7 @@ package support
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"discovery/app/core/tlsutil"
@@ -21,6 +23,94 @@ import (
 )
 
 var guidPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+var idempotencyFallbackSeq atomic.Uint64
+
+// newIdempotencyKey gera uma chave (UUID v4) para deduplicação server-side de
+// operações mutáveis (create/comment/close). A chave é enviada no header
+// Idempotency-Key e o servidor deduplica reenvios com a mesma chave.
+func newIdempotencyKey() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// crypto/rand indisponível: evita colisão sob concorrência com sequência.
+		return fmt.Sprintf("%d-%d", time.Now().UnixNano(), idempotencyFallbackSeq.Add(1))
+	}
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
+
+// doPostWithRetry reenvia a MESMA requisição POST (mesma Idempotency-Key) uma vez
+// em falha de rede ou HTTP 5xx. É seguro porque o servidor deduplica pela chave.
+func doPostWithRetry(ctx context.Context, client *http.Client, req *http.Request) (*http.Response, error) {
+	var lastErr error
+	for attempt := 0; attempt < 2; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(500 * time.Millisecond):
+			}
+		}
+
+		attemptReq := req
+		if attempt > 0 {
+			if req.GetBody == nil {
+				return nil, fmt.Errorf("requisição sem body reconstruível para retry")
+			}
+			fresh, err := req.GetBody()
+			if err != nil {
+				return nil, err
+			}
+			attemptReq = req.Clone(ctx)
+			attemptReq.Body = fresh
+		}
+
+		resp, err := client.Do(attemptReq)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if resp.StatusCode >= 500 && attempt == 0 {
+			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
+			_ = resp.Body.Close()
+			continue
+		}
+		return resp, nil
+	}
+	return nil, lastErr
+}
+
+// doGetWithRetry repete uma requisição GET uma vez em falha de rede ou HTTP 5xx,
+// com backoff de 500ms. O request é reconstruído a cada tentativa.
+func doGetWithRetry(ctx context.Context, client *http.Client, buildReq func() (*http.Request, error)) (*http.Response, error) {
+	var lastErr error
+	for attempt := 0; attempt < 2; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(500 * time.Millisecond):
+			}
+		}
+		req, err := buildReq()
+		if err != nil {
+			return nil, err
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if resp.StatusCode >= 500 && attempt == 0 {
+			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
+			_ = resp.Body.Close()
+			continue
+		}
+		return resp, nil
+	}
+	return nil, lastErr
+}
 
 type AgentInfo = supportmeta.AgentInfo
 
@@ -132,8 +222,10 @@ func (s *Service) supportLogf(format string, args ...any) {
 
 func shortBodyForLog(body []byte) string {
 	s := strings.TrimSpace(string(body))
-	if len(s) > 400 {
-		return s[:400] + "..."
+	runes := []rune(s)
+	if len(runes) > 400 {
+		// Truncar por runes evita cortar um caractere UTF-8 no meio.
+		return string(runes[:400]) + "..."
 	}
 	return s
 }
@@ -336,18 +428,16 @@ func (s *Service) fetchAgentContext() (AgentInfo, error) {
 
 	ctx := s.ctxOrBackground()
 	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/configuration"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
-	if err != nil {
-		wrapped := fmt.Errorf("URL inválida: %w", err)
-		s.supportLogf("falha ao montar request de contexto do agente: %v", wrapped)
-		return AgentInfo{}, wrapped
-	}
-	if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, cfg.AgentID); err != nil {
-		s.supportLogf("credenciais invalidas para contexto do agente: %v", err)
-		return AgentInfo{}, err
-	}
-
-	resp, err := tlsutil.NewHTTPClient(10 * time.Second).Do(req)
+	resp, err := doGetWithRetry(ctx, tlsutil.NewHTTPClient(10*time.Second), func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+		if err != nil {
+			return nil, err
+		}
+		if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, cfg.AgentID); err != nil {
+			return nil, err
+		}
+		return req, nil
+	})
 	if err != nil {
 		wrapped := fmt.Errorf("falha ao conectar em %s: %w", target, err)
 		s.supportLogf("erro HTTP ao resolver contexto do agente: %v", wrapped)
@@ -411,17 +501,16 @@ func (s *Service) GetSupportTickets() ([]APITicket, error) {
 	cfg := s.debugConfig()
 	ctx := s.ctxOrBackground()
 	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/tickets"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
-	if err != nil {
-		wrapped := fmt.Errorf("URL inválida: %w", err)
-		s.supportLogf("falha ao montar request de listagem: %v", wrapped)
-		return nil, wrapped
-	}
-	if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, cfg.AgentID); err != nil {
-		return nil, err
-	}
-
-	resp, err := tlsutil.NewHTTPClient(15 * time.Second).Do(req)
+	resp, err := doGetWithRetry(ctx, tlsutil.NewHTTPClient(15*time.Second), func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+		if err != nil {
+			return nil, err
+		}
+		if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, cfg.AgentID); err != nil {
+			return nil, err
+		}
+		return req, nil
+	})
 	if err != nil {
 		wrapped := fmt.Errorf("falha ao buscar chamados: %w", err)
 		s.supportLogf("erro HTTP ao listar chamados: %v", wrapped)
@@ -462,6 +551,12 @@ func (s *Service) GetSupportTickets() ([]APITicket, error) {
 
 // CreateSupportTicket opens a new ticket linked to this agent.
 func (s *Service) CreateSupportTicket(input CreateTicketInput) (APITicket, error) {
+	if !s.featureEnabled(s.supportEnabled()) {
+		// Mesmo gate da listagem: não criar chamado com suporte desabilitado.
+		s.supportLogf("suporte desabilitado pela configuração do agente")
+		return APITicket{}, fmt.Errorf("suporte desabilitado pela configuração do agente")
+	}
+
 	s.supportLogf("criando chamado: title=%q priority=%d category=%q", strings.TrimSpace(input.Title), input.Priority, strings.TrimSpace(input.Category))
 	info, err := s.fetchAgentContext()
 	if err != nil {
@@ -513,11 +608,12 @@ func (s *Service) CreateSupportTicket(input CreateTicketInput) (APITicket, error
 		return APITicket{}, wrapped
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", newIdempotencyKey())
 	if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, cfg.AgentID); err != nil {
 		return APITicket{}, err
 	}
 
-	resp, err := tlsutil.NewHTTPClient(15 * time.Second).Do(req)
+	resp, err := doPostWithRetry(ctx, tlsutil.NewHTTPClient(15*time.Second), req)
 	if err != nil {
 		wrapped := fmt.Errorf("falha ao criar chamado: %w", err)
 		s.supportLogf("erro HTTP ao criar chamado: %v", wrapped)
@@ -553,15 +649,16 @@ func (s *Service) GetSupportTicketDetails(ticketID string) (APITicket, error) {
 	ctx := s.ctxOrBackground()
 
 	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/tickets/" + ticketID
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
-	if err != nil {
-		return APITicket{}, err
-	}
-	if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, cfg.AgentID); err != nil {
-		return APITicket{}, err
-	}
-
-	resp, err := tlsutil.NewHTTPClient(10 * time.Second).Do(req)
+	resp, err := doGetWithRetry(ctx, tlsutil.NewHTTPClient(10*time.Second), func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+		if err != nil {
+			return nil, err
+		}
+		if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, cfg.AgentID); err != nil {
+			return nil, err
+		}
+		return req, nil
+	})
 	if err != nil {
 		return APITicket{}, fmt.Errorf("falha ao buscar ticket: %w", err)
 	}
@@ -630,69 +727,46 @@ func (s *Service) GetTicketWorkflowStates() ([]APIWorkflowState, error) {
 	cfg := s.debugConfig()
 	ctx := s.ctxOrBackground()
 
-	base := strings.TrimSpace(cfg.ApiScheme) + "://" + strings.TrimSpace(cfg.ApiServer)
-	paths := []string{
-		"/api/v1/agent-auth/me/tickets/workflow-states",
-		"/api/v1/agent-auth/me/workflow-states",
-		"/api/v1/agent-auth/workflow-states",
-	}
-
-	var lastErr error
-	for _, p := range paths {
-		target := base + p
+	// Caminho único suportado pelo endpoint do agent.
+	target := strings.TrimSpace(cfg.ApiScheme) + "://" + strings.TrimSpace(cfg.ApiServer) + "/api/v1/agent-auth/me/tickets/workflow-states"
+	resp, err := doGetWithRetry(ctx, tlsutil.NewHTTPClient(10*time.Second), func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 		if err != nil {
-			lastErr = fmt.Errorf("URL inválida: %w", err)
-			continue
+			return nil, err
 		}
 		if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, cfg.AgentID); err != nil {
-			lastErr = err
-			continue
+			return nil, err
 		}
-
-		resp, err := tlsutil.NewHTTPClient(10 * time.Second).Do(req)
-		if err != nil {
-			lastErr = fmt.Errorf("falha ao buscar estados de workflow: %w", err)
-			continue
-		}
-
-		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-
-		if resp.StatusCode == http.StatusNotFound {
-			lastErr = fmt.Errorf("endpoint não encontrado em %s", p)
-			continue
-		}
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			lastErr = fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(body)))
-			continue
-		}
-
-		states, err := parseWorkflowStatesFromBody(body)
-		if err != nil {
-			lastErr = fmt.Errorf("resposta inválida de estados de workflow: %w", err)
-			continue
-		}
-
-		if states == nil {
-			states = []APIWorkflowState{}
-		}
-
-		sort.SliceStable(states, func(i, j int) bool {
-			if states[i].DisplayOrder == states[j].DisplayOrder {
-				return strings.ToLower(states[i].Name) < strings.ToLower(states[j].Name)
-			}
-			return states[i].DisplayOrder < states[j].DisplayOrder
-		})
-
-		s.supportLogf("workflow states carregados: %d estado(s) via %s", len(states), p)
-		return states, nil
+		return req, nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("falha ao buscar estados de workflow: %w", err)
 	}
 
-	if lastErr == nil {
-		lastErr = fmt.Errorf("não foi possível carregar estados de workflow")
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(body)))
 	}
-	return nil, lastErr
+
+	states, err := parseWorkflowStatesFromBody(body)
+	if err != nil {
+		return nil, fmt.Errorf("resposta inválida de estados de workflow: %w", err)
+	}
+	if states == nil {
+		states = []APIWorkflowState{}
+	}
+
+	sort.SliceStable(states, func(i, j int) bool {
+		if states[i].DisplayOrder == states[j].DisplayOrder {
+			return strings.ToLower(states[i].Name) < strings.ToLower(states[j].Name)
+		}
+		return states[i].DisplayOrder < states[j].DisplayOrder
+	})
+
+	s.supportLogf("workflow states carregados: %d estado(s)", len(states))
+	return states, nil
 }
 
 // GetTicketComments returns comments for a given ticket.
@@ -705,15 +779,16 @@ func (s *Service) GetTicketComments(ticketID string) ([]TicketComment, error) {
 	ctx := s.ctxOrBackground()
 
 	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/tickets/" + ticketID + "/comments"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
-	if err != nil {
-		return nil, err
-	}
-	if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, cfg.AgentID); err != nil {
-		return nil, err
-	}
-
-	resp, err := tlsutil.NewHTTPClient(10 * time.Second).Do(req)
+	resp, err := doGetWithRetry(ctx, tlsutil.NewHTTPClient(10*time.Second), func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+		if err != nil {
+			return nil, err
+		}
+		if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, cfg.AgentID); err != nil {
+			return nil, err
+		}
+		return req, nil
+	})
 	if err != nil {
 		return nil, fmt.Errorf("falha ao buscar comentários: %w", err)
 	}
@@ -740,14 +815,20 @@ func (s *Service) GetTicketComments(ticketID string) ([]TicketComment, error) {
 			return nil, fmt.Errorf("resposta inválida: %w", err)
 		}
 	}
-	if comments == nil {
-		comments = []TicketComment{}
+	// Opção de produto (a): notas internas não vazam para o agente.
+	visible := make([]TicketComment, 0, len(comments))
+	for _, c := range comments {
+		if c.IsInternal {
+			continue
+		}
+		visible = append(visible, c)
 	}
-	return comments, nil
+	return visible, nil
 }
 
-// AddTicketCommentWithOptions adds a comment and returns the created comment.
-func (s *Service) AddTicketCommentWithOptions(ticketID, content string, isInternal bool) (TicketComment, error) {
+// AddTicketComment adds a PUBLIC comment and returns the created one.
+// Notas internas são exclusivas do portal (opção de produto a).
+func (s *Service) AddTicketCommentWithOptions(ticketID, content string) (TicketComment, error) {
 	ticketID = strings.TrimSpace(ticketID)
 	if !guidPattern.MatchString(ticketID) {
 		return TicketComment{}, fmt.Errorf("ticketId inválido")
@@ -761,8 +842,7 @@ func (s *Service) AddTicketCommentWithOptions(ticketID, content string, isIntern
 	ctx := s.ctxOrBackground()
 
 	payload := map[string]any{
-		"content":    content,
-		"isInternal": isInternal,
+		"content": content,
 	}
 	body, _ := json.Marshal(payload)
 
@@ -772,11 +852,12 @@ func (s *Service) AddTicketCommentWithOptions(ticketID, content string, isIntern
 		return TicketComment{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", newIdempotencyKey())
 	if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, cfg.AgentID); err != nil {
 		return TicketComment{}, err
 	}
 
-	resp, err := tlsutil.NewHTTPClient(10 * time.Second).Do(req)
+	resp, err := doPostWithRetry(ctx, tlsutil.NewHTTPClient(10*time.Second), req)
 	if err != nil {
 		return TicketComment{}, fmt.Errorf("falha ao enviar comentário: %w", err)
 	}
@@ -800,7 +881,7 @@ func (s *Service) AddTicketCommentWithOptions(ticketID, content string, isIntern
 // AddTicketComment adds a comment to a ticket.
 func (s *Service) AddTicketComment(ticketID, author, content string) error {
 	_ = author
-	_, err := s.AddTicketCommentWithOptions(ticketID, content, false)
+	_, err := s.AddTicketCommentWithOptions(ticketID, content)
 	if err != nil {
 		return err
 	}
@@ -820,8 +901,8 @@ func (s *Service) CloseSupportTicket(ticketID string, input CloseTicketInput) (A
 	}
 
 	if input.Rating != nil {
-		if *input.Rating < 0 || *input.Rating > 5 {
-			return APITicket{}, fmt.Errorf("rating inválido: informe valor entre 0 e 5")
+		if *input.Rating < 1 || *input.Rating > 5 {
+			return APITicket{}, fmt.Errorf("rating inválido: informe valor entre 1 e 5")
 		}
 	}
 
@@ -829,11 +910,15 @@ func (s *Service) CloseSupportTicket(ticketID string, input CloseTicketInput) (A
 	ctx := s.ctxOrBackground()
 
 	payload := map[string]any{}
-	if input.Rating != nil {
+	// 0 = "sem avaliação": o backend valida a nota no intervalo 1..5, então
+	// só enviamos o campo quando há nota real (evita 422/erro de validação).
+	if input.Rating != nil && *input.Rating > 0 {
 		payload["rating"] = *input.Rating
 	}
 	if c := strings.TrimSpace(input.Comment); c != "" {
-		payload["comment"] = c
+		// O backend (CloseAndRateMyTicketCommand) lê o campo "feedback";
+		// "comment" era ignorado e a avaliação perdia a observação.
+		payload["feedback"] = c
 	}
 	if workflowStateID != "" {
 		payload["workflowStateId"] = workflowStateID
@@ -850,12 +935,13 @@ func (s *Service) CloseSupportTicket(ticketID string, input CloseTicketInput) (A
 		return APITicket{}, fmt.Errorf("URL inválida: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", newIdempotencyKey())
 	if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, cfg.AgentID); err != nil {
 		return APITicket{}, err
 	}
 
 	s.supportLogf("fechando chamado %s", ticketID)
-	resp, err := tlsutil.NewHTTPClient(15 * time.Second).Do(req)
+	resp, err := doPostWithRetry(ctx, tlsutil.NewHTTPClient(15*time.Second), req)
 	if err != nil {
 		return APITicket{}, fmt.Errorf("falha ao fechar chamado: %w", err)
 	}
@@ -938,8 +1024,8 @@ func (s *Service) GetAgentTicketDetails(ticketID string) (json.RawMessage, error
 }
 
 // AddAgentTicketComment adds a comment to an agent ticket via MCP tool.
-func (s *Service) AddAgentTicketComment(ticketID, content string, isInternal bool) (json.RawMessage, error) {
-	comment, err := s.AddTicketCommentWithOptions(ticketID, content, isInternal)
+func (s *Service) AddAgentTicketComment(ticketID, content string) (json.RawMessage, error) {
+	comment, err := s.AddTicketCommentWithOptions(ticketID, content)
 	if err != nil {
 		return nil, err
 	}
@@ -960,12 +1046,9 @@ func (s *Service) CreateAgentTicket(title, description string, priority int, cat
 	return json.Marshal(ticket)
 }
 
+// extractStr delega para a implementação canônica do supportmeta.
 func extractStr(raw map[string]any, key string) string {
-	s := strings.TrimSpace(fmt.Sprint(raw[key]))
-	if s == "<nil>" {
-		return ""
-	}
-	return s
+	return supportmeta.ExtractStr(raw, key)
 }
 
 func (s *Service) ctxOrBackground() context.Context {

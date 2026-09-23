@@ -44,11 +44,11 @@ func (a *App) GetTicketComments(ticketID string) ([]TicketComment, error) {
 	return a.SupportSvc.GetTicketComments(ticketID)
 }
 
-func (a *App) AddTicketCommentWithOptions(ticketID, content string, isInternal bool) (TicketComment, error) {
+func (a *App) AddTicketCommentWithOptions(ticketID, content string) (TicketComment, error) {
 	if err := a.requireSupportSvc(); err != nil {
 		return TicketComment{}, err
 	}
-	return a.SupportSvc.AddTicketCommentWithOptions(ticketID, content, isInternal)
+	return a.SupportSvc.AddTicketCommentWithOptions(ticketID, content)
 }
 
 func (a *App) AddTicketComment(ticketID, author, content string) error {
@@ -108,11 +108,11 @@ func (a *App) GetAgentTicketDetails(ticketID string) (json.RawMessage, error) {
 	return a.SupportSvc.GetAgentTicketDetails(ticketID)
 }
 
-func (a *App) AddAgentTicketComment(ticketID, content string, isInternal bool) (json.RawMessage, error) {
+func (a *App) AddAgentTicketComment(ticketID, content string) (json.RawMessage, error) {
 	if err := a.requireSupportSvc(); err != nil {
 		return nil, err
 	}
-	return a.SupportSvc.AddAgentTicketComment(ticketID, content, isInternal)
+	return a.SupportSvc.AddAgentTicketComment(ticketID, content)
 }
 
 func (a *App) CreateAgentTicket(title, description string, priority int, category string) (json.RawMessage, error) {
