@@ -1,6 +1,10 @@
 package app
 
-import "discovery/app/core/models"
+import (
+	"context"
+
+	"discovery/app/core/models"
+)
 
 // GetPendingUpdates runs `winget upgrade` and parses the output into structured items.
 // Companion mode: o scan roda NO serviço via RPC updates:scan (decisão D2 —
@@ -11,6 +15,16 @@ func (a *App) GetPendingUpdates() ([]models.UpgradeItem, error) {
 	}
 	if err := a.requireUpdatesSvc(); err != nil {
 		return nil, err
+	}
+	return a.UpdatesSvc.GetPendingUpdates()
+}
+
+// pendingUpdatesForInventory expõe os updates pendentes (winget + chocolatey)
+// ao inventário de software, que os usa para reportar a versão disponível por
+// app. Best-effort: sem o serviço de updates retorna vazio.
+func (a *App) pendingUpdatesForInventory(_ context.Context) ([]models.UpgradeItem, error) {
+	if a == nil || a.UpdatesSvc == nil {
+		return nil, nil
 	}
 	return a.UpdatesSvc.GetPendingUpdates()
 }

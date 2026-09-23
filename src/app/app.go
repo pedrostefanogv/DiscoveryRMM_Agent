@@ -628,8 +628,9 @@ func NewApp(opts AppStartupOptions) *App {
 		ResolveAllowedByType: func(ctx context.Context, installationType, packageID string) (appstore.Item, error) {
 			return a.findAllowedPackage(ctx, installationType, packageID)
 		},
-		GetCatalog:    a.getCatalogFromAppStore,
-		BeginActivity: a.beginActivity,
+		GetCatalog:     a.getCatalogFromAppStore,
+		PendingUpdates: a.pendingUpdatesForInventory,
+		BeginActivity:  a.beginActivity,
 		DispatchNotification: func(req appinventory.InventoryNotification) appinventory.InventoryNotificationResponse {
 			resp := a.DispatchNotification(NotificationDispatchRequest{
 				NotificationID: req.NotificationID,
@@ -654,8 +655,8 @@ func NewApp(opts AppStartupOptions) *App {
 		Ctx: func() context.Context {
 			return a.ctx
 		},
-		DB:                     nil,
-		DebugConfig:            a.GetDebugConfig,
+		DB:          nil,
+		DebugConfig: a.GetDebugConfig,
 		// Fonte ÚNICA de versão/commit para relato ao servidor: buildinfo
 		// (injetado por ldflags em TODOS os binários oficiais, incluindo o
 		// discovery-service). app.Version só é injetado no binário de UI —

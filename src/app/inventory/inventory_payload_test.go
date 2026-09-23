@@ -125,7 +125,7 @@ func TestBuildAgentSoftwareEnvelope_AppliesContractLimits(t *testing.T) {
 		},
 	}
 
-	env := buildAgentSoftwareEnvelope(report, "test-agent-id")
+	env := buildAgentSoftwareEnvelope(report, "test-agent-id", nil)
 	if len(env.Software) != 1 {
 		t.Fatalf("esperado 1 software valido, veio %d", len(env.Software))
 	}
@@ -153,6 +153,44 @@ func TestBuildAgentSoftwareEnvelope_AppliesContractLimits(t *testing.T) {
 	}
 	if item.Source != "native/registry" {
 		t.Fatalf("source = %q, esperado fallback %q", item.Source, "native/registry")
+	}
+}
+
+func TestBuildAgentSoftwareEnvelope_IncludesPendingUpdates(t *testing.T) {
+	report := models.InventoryReport{
+		Software: []models.SoftwareItem{
+			{Name: "Google Chrome", Version: "120.0.0", InstallID: "{CHROME}", Source: "registry"},
+			{Name: "Contoso App", Version: "1.0.0", InstallID: "Contoso.App", Source: "registry"},
+			{Name: "Notepad++", Version: "8.5", Source: "registry"},
+		},
+	}
+	pending := []models.UpgradeItem{
+		{Name: "Google Chrome", ID: "Google.Chrome", CurrentVersion: "120.0.0", AvailableVersion: "121.0.0", Source: "winget"},
+		{Name: "Contoso", ID: "Contoso.App", CurrentVersion: "1.0.0", AvailableVersion: "2.0.0", Source: "choco"},
+	}
+
+	env := buildAgentSoftwareEnvelope(report, "agent-1", pending)
+
+	byName := map[string]agentSoftwareItem{}
+	for _, item := range env.Software {
+		byName[item.Name] = item
+	}
+
+	chrome := byName["Google Chrome"]
+	if !chrome.UpdateAvailable || chrome.AvailableVersion != "121.0.0" || chrome.UpdateSource != "winget" {
+		t.Fatalf("chrome update = %+v", chrome)
+	}
+	if chrome.UpdatePackageID != "Google.Chrome" {
+		t.Fatalf("chrome updatePackageId = %q, esperado Google.Chrome", chrome.UpdatePackageID)
+	}
+
+	contoso := byName["Contoso App"]
+	if !contoso.UpdateAvailable || contoso.AvailableVersion != "2.0.0" || contoso.UpdateSource != "chocolatey" {
+		t.Fatalf("contoso update (match por installId) = %+v", contoso)
+	}
+
+	if byName["Notepad++"].UpdateAvailable {
+		t.Fatalf("notepad++ nao deveria ter update")
 	}
 }
 

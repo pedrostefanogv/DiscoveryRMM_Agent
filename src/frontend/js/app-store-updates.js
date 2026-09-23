@@ -267,8 +267,12 @@ function renderCards() {
     }
 
     var action = getContextAction(pkg.id);
-    var actionClass = action.action === 'install' ? 'btn primary' : 'btn danger';
+    var actionClass = action.action === 'uninstall' ? 'btn danger' : 'btn primary';
     var actionButton = '<button class="' + actionClass + '" data-action="' + escapeHtmlAttr(action.action) + '" data-id="' + escapeHtmlAttr(pkg.id) + '">' + escapeHtml(action.label) + '</button>';
+    // App instalado com update pendente: além de "Atualizar", oferece "Remover".
+    if (action.action === 'upgrade') {
+      actionButton += '<button class="btn danger" data-action="uninstall" data-id="' + escapeHtmlAttr(pkg.id) + '">' + escapeHtml(translate('action.remove')) + '</button>';
+    }
     var detailButton = '<button class="btn subtle store-detail-btn" data-detail-id="' + escapeHtmlAttr(pkg.id) + '" title="' + escapeHtmlAttr(translate('store.viewDetails')) + '" aria-label="' + escapeHtmlAttr(translate('store.viewDetailsOf', { name: pkg.name || pkg.id })) + '">ⓘ</button>';
     var originBadge = storeOriginBadgeHtml(pkg);
 
@@ -374,7 +378,11 @@ async function loadPackageActions(api) {
 function getContextAction(packageId) {
   var key = String(packageId || '').toLowerCase();
   var action = state.packageActions[key];
-  if (action === 'upgrade' || action === 'uninstall') return { action: 'uninstall', label: translate('action.remove') };
+  // upgrade tem precedência sobre uninstall no mapa do agente (updates
+  // pendentes sobrescrevem a ação de um app instalado). Quando há update,
+  // o card mostra "Atualizar" em vez de "Remover".
+  if (action === 'upgrade') return { action: 'upgrade', label: translate('action.update') };
+  if (action === 'uninstall') return { action: 'uninstall', label: translate('action.remove') };
   return { action: 'install', label: translate('action.install') };
 }
 
@@ -575,7 +583,7 @@ function openAppDetailModal(pkg) {
   if (actionBtn) {
     var action = getContextAction(pkg.id);
     actionBtn.textContent = action.label;
-    actionBtn.className = action.action === 'install' ? 'btn primary' : 'btn danger';
+    actionBtn.className = action.action === 'uninstall' ? 'btn danger' : 'btn primary';
     actionBtn.dataset.action = action.action;
     actionBtn.dataset.id = pkg.id;
   }

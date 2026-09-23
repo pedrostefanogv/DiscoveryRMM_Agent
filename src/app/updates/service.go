@@ -146,6 +146,21 @@ func (s *Service) GetPackageActions() (map[string]string, error) {
 		}
 	}
 
+	// Updates do Chocolatey também habilitam o "Atualizar" no card da loja.
+	if s.apps != nil {
+		chocoRaw, chocoErr := s.apps.ListUpgradableChocolatey(ctx)
+		if chocoErr != nil {
+			s.logf("[choco outdated] erro: " + chocoErr.Error())
+		} else {
+			for _, u := range parseChocolateyOutdatedOutput(chocoRaw) {
+				if strings.TrimSpace(u.ID) == "" {
+					continue
+				}
+				actions[strings.ToLower(u.ID)] = packageActionUpgrade
+			}
+		}
+	}
+
 	return actions, nil
 }
 

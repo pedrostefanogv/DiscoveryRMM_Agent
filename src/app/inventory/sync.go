@@ -210,6 +210,17 @@ type agentSoftwareItem struct {
 	Source        string `json:"source"`
 	InstallDate   string `json:"installDate"`
 	InstallSource string `json:"installSource"`
+
+	// Update disponível (winget upgrade / choco outdated). omitempty: quando
+	// não há update pendente os campos ficam ausentes do JSON e a API os
+	// assume como false/vazio.
+	AvailableVersion string `json:"availableVersion,omitempty"`
+	UpdateAvailable  bool   `json:"updateAvailable,omitempty"`
+	UpdateSource     string `json:"updateSource,omitempty"`
+	// UpdatePackageID é o identificador do gerenciador de pacotes (winget/choco)
+	// usado para executar o update remoto. Difere do installId do registro, que
+	// costuma ser o ProductCode do MSI.
+	UpdatePackageID string `json:"updatePackageId,omitempty"`
 }
 
 // SyncInventoryOnStartup sends inventory payloads when credentials are available.
@@ -230,7 +241,7 @@ func (s *Service) SyncInventoryOnStartup(ctx context.Context, report models.Inve
 		return
 	}
 
-	softwarePayload := buildAgentSoftwareEnvelope(report, strings.TrimSpace(cfg.AgentID))
+	softwarePayload := buildAgentSoftwareEnvelope(report, strings.TrimSpace(cfg.AgentID), s.loadPendingUpdates(ctx))
 	softwareBody, err := json.Marshal(softwarePayload)
 	if err != nil {
 		s.logf("[agent-sync] falha ao serializar softwares: " + err.Error())
@@ -624,11 +635,13 @@ func (s *Service) sendAgentInventoryRequest(parent context.Context, endpoint str
 	return nil
 }
 
-func buildAgentSoftwareEnvelope(report models.InventoryReport, agentID string) agentSoftwareEnvelope {
+func buildAgentSoftwareEnvelope(report models.InventoryReport, agentID string, pending []models.UpgradeItem) agentSoftwareEnvelope {
 	collected := strings.TrimSpace(report.CollectedAt)
 	if collected == "" {
 		collected = time.Now().UTC().Format(time.RFC3339)
 	}
+
+	byInstallID, byName := indexPendingUpdates(pending)
 
 	software := make([]agentSoftwareItem, 0, len(report.Software))
 	for _, s := range report.Software {
@@ -640,7 +653,7 @@ func buildAgentSoftwareEnvelope(report models.InventoryReport, agentID string) a
 		if source == "" {
 			source = "native/registry"
 		}
-		software = append(software, agentSoftwareItem{
+		item := agentSoftwareItem{
 			Name:          name,
 			Version:       trimToMaxLen(strings.TrimSpace(s.Version), 120),
 			Publisher:     trimToMaxLen(strings.TrimSpace(s.Publisher), 300),
@@ -649,7 +662,14 @@ func buildAgentSoftwareEnvelope(report models.InventoryReport, agentID string) a
 			Source:        source,
 			InstallDate:   trimToMaxLen(strings.TrimSpace(s.InstallDate), 64),
 			InstallSource: trimToMaxLen(strings.TrimSpace(s.InstallSource), 1000),
-		})
+		}
+		if update, ok := matchPendingUpdate(s, byInstallID, byName); ok {
+			item.AvailableVersion = trimToMaxLen(strings.TrimSpace(update.AvailableVersion), 120)
+			item.UpdateAvailable = true
+			item.UpdateSource = normalizeSoftwareUpdateSource(update.Source)
+			item.UpdatePackageID = trimToMaxLen(strings.TrimSpace(update.ID), 1000)
+		}
+		software = append(software, item)
 	}
 
 	return agentSoftwareEnvelope{
@@ -657,6 +677,87 @@ func buildAgentSoftwareEnvelope(report models.InventoryReport, agentID string) a
 		CollectedAt: collected,
 		Software:    software,
 	}
+}
+
+// indexPendingUpdates cria índices por installId e por nome (case-insensitive)
+// a partir dos updates pendentes reportados por winget/chocolatey.
+func indexPendingUpdates(pending []models.UpgradeItem) (map[string]models.UpgradeItem, map[string]models.UpgradeItem) {
+	byInstallID := make(map[string]models.UpgradeItem, len(pending))
+	byName := make(map[string]models.UpgradeItem, len(pending))
+	for _, u := range pending {
+		if id := normalizeUpdateKey(u.ID); id != "" {
+			byInstallID[id] = u
+		}
+		if name := normalizeUpdateKey(u.Name); name != "" {
+			if _, exists := byName[name]; !exists {
+				byName[name] = u
+			}
+		}
+	}
+	return byInstallID, byName
+}
+
+// matchPendingUpdate liga um app instalado ao update pendente. O installId do
+// registro raramente coincide com o ID do winget (é o ProductCode MSI), então
+// o nome é o vínculo prático; o ID/serial entram como primeira tentativa.
+func matchPendingUpdate(s models.SoftwareItem, byInstallID, byName map[string]models.UpgradeItem) (models.UpgradeItem, bool) {
+	for _, candidate := range []string{s.InstallID, s.Serial} {
+		if key := normalizeUpdateKey(candidate); key != "" {
+			if u, ok := byInstallID[key]; ok {
+				return u, true
+			}
+		}
+	}
+	if key := normalizeUpdateKey(s.Name); key != "" {
+		if u, ok := byName[key]; ok {
+			return u, true
+		}
+	}
+	return models.UpgradeItem{}, false
+}
+
+func normalizeUpdateKey(value string) string {
+	return strings.ToLower(strings.Join(strings.Fields(value), " "))
+}
+
+func normalizeSoftwareUpdateSource(source string) string {
+	normalized := strings.ToLower(strings.TrimSpace(source))
+	switch {
+	case strings.Contains(normalized, "choco"):
+		return "chocolatey"
+	case strings.Contains(normalized, "winget"):
+		return "winget"
+	case normalized == "":
+		return "winget"
+	default:
+		return normalized
+	}
+}
+
+// loadPendingUpdates consulta os updates pendentes de forma best-effort. Em
+// falha transitória (winget/choco indisponíveis, timeout) reutiliza a última
+// lista conhecida: enviar "sem updates" num erro limparia no servidor a
+// informação de atualização já reportada. O próximo scan bem-sucedido — que
+// pode inclusive voltar vazio — a substitui normalmente.
+func (s *Service) loadPendingUpdates(ctx context.Context) []models.UpgradeItem {
+	if s.pendingUpdates == nil {
+		return nil
+	}
+	items, err := s.pendingUpdates(ctx)
+	if err != nil {
+		s.logf("[agent-sync] aviso: falha ao consultar updates pendentes: " + err.Error())
+		s.pendingUpdatesMu.Lock()
+		cached := s.pendingUpdatesLast
+		s.pendingUpdatesMu.Unlock()
+		if cached != nil {
+			s.logf("[agent-sync] reutilizando ultima lista de updates conhecida para nao limpar o servidor")
+		}
+		return cached
+	}
+	s.pendingUpdatesMu.Lock()
+	s.pendingUpdatesLast = items
+	s.pendingUpdatesMu.Unlock()
+	return items
 }
 
 // computeMachineScore calcula um score de capacidade da máquina (sem limite superior) baseado em:

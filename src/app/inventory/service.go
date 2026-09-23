@@ -105,6 +105,11 @@ type Options struct {
 	// HardwareIdentity retorna a identidade de hardware (TPM EK + SMBIOS UUID)
 	// usada como fingerprint na Recuperação de Dispositivos. Pode ser nil.
 	HardwareIdentity func() hardwareid.Info
+
+	// PendingUpdates retorna os updates pendentes (winget upgrade + choco
+	// outdated) usados para enriquecer o inventário de software com a versão
+	// disponível. Best-effort: falha não impede o envio do inventário.
+	PendingUpdates func(context.Context) ([]models.UpgradeItem, error)
 }
 
 // Service handles inventory, installs and sync operations.
@@ -124,6 +129,9 @@ type Service struct {
 	version                          string
 	commitHash                       string
 	shouldDeferNonCritical           func() (time.Duration, bool, string)
+	pendingUpdates                   func(context.Context) ([]models.UpgradeItem, error)
+	pendingUpdatesMu                 sync.Mutex
+	pendingUpdatesLast               []models.UpgradeItem
 	postInstallInventoryRefreshDelay time.Duration
 	postInstallInventoryRefreshMu    sync.Mutex
 	postInstallInventoryRefreshTimer *time.Timer
@@ -158,6 +166,7 @@ func NewService(opts Options) *Service {
 		version:                          opts.Version,
 		commitHash:                       opts.CommitHash,
 		shouldDeferNonCritical:           opts.ShouldDeferNonCritical,
+		pendingUpdates:                   opts.PendingUpdates,
 		postInstallInventoryRefreshDelay: postInstallInventoryRefreshDelayDefault,
 		hardwareIdentity:                 opts.HardwareIdentity,
 	}
