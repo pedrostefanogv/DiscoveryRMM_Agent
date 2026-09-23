@@ -242,22 +242,19 @@ func (s *Service) SyncInventoryOnStartup(ctx context.Context, report models.Inve
 		return
 	}
 
-	// Os índices locais (winget/choco) também alimentam a COLETA de software, não
-	// só a correlação: apps instalados por gerenciador de pacotes podem não ter
-	// entrada no registro (ex.: "WSL" registra-se como "Windows Subsystem for
-	// Linux") e nunca chegariam ao inventário sem um fallback por gerenciador.
-	softwareCollectionPrefix := "registry"
-	if s.apps != nil {
-		softwareCollectionPrefix = "osquery/programs"
-	}
+	// Updates pendentes + pacotes reconhecidos pelo gerenciador. Estas listas são
+	// a ÚNICA fonte de updateAvailable/updatePackageId do inventário — se
+	// qualquer um dos dois vier vazio, TODOS os apps são reportados como "sem
+	// atualização" e o botão "Atualizar" desaparece do dashboard.
 	pendingUpdates := s.loadPendingUpdates(ctx)
 	installedPackages := s.loadInstalledPackages(ctx)
-	report.Software = mergePackageManagerSoftware(
-		report.Software,
-		installedPackages,
-		pendingUpdates,
-		softwareCollectionPrefix,
-	)
+	if len(pendingUpdates) == 0 || len(installedPackages) == 0 {
+		// Diagnóstico explícito: sem isto o sintoma no dashboard é indistinguível
+		// de "não há updates" (e já causou perda silenciosa de dados em produção).
+		s.logf(fmt.Sprintf(
+			"[agent-sync] AVISO: scan do gerenciador incompleto (pending=%d installed=%d) — inventário será reportado sem atualizações/Ids de pacote",
+			len(pendingUpdates), len(installedPackages)))
+	}
 	softwarePayload := buildAgentSoftwareEnvelope(
 		report,
 		strings.TrimSpace(cfg.AgentID),
@@ -685,6 +682,13 @@ func buildAgentSoftwareEnvelopeWithIndex(
 		collected = time.Now().UTC().Format(time.RFC3339)
 	}
 
+	// O merge dos apps que só existem no gerenciador de pacotes é aplicado AQUI,
+	// no ponto único de montagem do payload — não em cada chamador. Antes ele
+	// morava apenas no SyncInventoryOnStartup e os outros caminhos de coleta
+	// (startup, loop periódico, force-sync) enviavam o inventário "cru", sem os
+	// apps do gerenciador e sem os Ids que habilitam update/desinstalação.
+	report.Software = mergePackageManagerSoftware(report.Software, installed, pending, "")
+
 	byInstallID, byName := indexPendingUpdates(pending)
 	installedIndex := indexInstalledPackages(installed)
 
@@ -1066,19 +1070,15 @@ func mergePackageManagerSoftware(
 		register(item.Name)
 	}
 
+	// Prefixo de origem dos itens adicionados: deriva da PRÓPRIA lista já
+	// coletada (nunca de um palpite sobre qual provider está ativo). Sem uma
+	// amostra, mantém o rótulo nativo do coletor Windows.
 	source = strings.TrimSpace(source)
 	if source == "" {
-		source = "registry"
+		source = detectSoftwareCollectionSource(software)
 	}
 
-	pendingByID := make(map[string]models.UpgradeItem, len(pending))
-	for _, update := range pending {
-		if id := normalizeUpdateKey(update.ID); id != "" {
-			pendingByID[id] = update
-		}
-	}
-
-	added := make([]models.SoftwareItem, 0, len(pending))
+	added := make([]models.SoftwareItem, 0, len(installed)+len(pending))
 	for _, pkg := range installed {
 		key := normalizeUpdateKey(pkg.Name)
 		if key == "" {
@@ -1122,6 +1122,20 @@ func mergePackageManagerSoftware(
 	return append(software, added...)
 }
 
+// detectSoftwareCollectionSource identifica o prefixo de origem usado pela
+// coleta atual a partir de uma amostra da lista já coletada (ex.: "registry"
+// no coletor nativo, "osquery/programs" no coletor via osquery). Assim os itens
+// adicionados pelo merge ficam com a MESMA origem do restante do inventário, em
+// vez de um palpite sobre qual provider está ativo.
+func detectSoftwareCollectionSource(software []models.SoftwareItem) string {
+	for _, item := range software {
+		if s := strings.TrimSpace(item.Source); s != "" {
+			return s
+		}
+	}
+	return "registry"
+}
+
 func normalizeUpdateKey(value string) string {
 	return strings.ToLower(strings.Join(strings.Fields(value), " "))
 }
@@ -1155,6 +1169,7 @@ func (s *Service) loadInstalledPackages(ctx context.Context) []models.InstalledP
 	s.installedPackagesMu.Lock()
 	cached := s.installedPackagesLast
 	cachedAt := s.installedPackagesLastAt
+	goodAt := s.installedPackagesGoodAt
 	loaded := s.installedPackagesLoaded
 	s.installedPackagesMu.Unlock()
 
@@ -1162,19 +1177,31 @@ func (s *Service) loadInstalledPackages(ctx context.Context) []models.InstalledP
 		return cached
 	}
 
+	hadGoodScan := len(cached) > 0 && !goodAt.IsZero()
 	items, err := s.installedPackages(ctx)
 	if err != nil {
 		s.logf("[agent-sync] aviso: falha ao listar pacotes instalados (winget list): " + err.Error())
-		if loaded {
+		if hadGoodScan {
+			s.logf("[agent-sync] reutilizando ultima lista de instalados conhecida para nao limpar o servidor")
 			return cached
 		}
 		return nil
+	}
+
+	// Mesma proteção do scan de updates: uma lista vazia transitória do
+	// "winget list" zeraria updatePackageId de todo o inventário no servidor.
+	if len(items) == 0 && hadGoodScan && time.Since(goodAt) < emptyScanGraceTTL {
+		s.logf("[agent-sync] winget list vazio suspeito; mantendo ultima lista conhecida para nao limpar o servidor")
+		return cached
 	}
 
 	s.installedPackagesMu.Lock()
 	s.installedPackagesLast = items
 	s.installedPackagesLastAt = time.Now()
 	s.installedPackagesLoaded = true
+	if len(items) > 0 {
+		s.installedPackagesGoodAt = s.installedPackagesLastAt
+	}
 	s.installedPackagesMu.Unlock()
 	return items
 }
@@ -1183,6 +1210,13 @@ func (s *Service) loadInstalledPackages(ctx context.Context) []models.InstalledP
 // sincronização (startup + pós-bootstrap). O próximo ciclo após o TTL — ou o
 // sync periódico (~6h) — refaz o scan e detecta updates novos.
 const pendingUpdatesCacheTTL = 10 * time.Minute
+
+// emptyScanGraceTTL é a janela em que um scan VAZIO é tratado como suspeito
+// logo após um scan com dados. O "winget upgrade" pode devolver tabela vazia
+// por timeout, bloqueio de fonte ou saída localizada não reconhecida — e enviar
+// esse vazio ao servidor ZERA updateAvailable/updatePackageId de todos os apps
+// (o dashboard perde os botões de atualizar/desinstalar até o próximo scan bom).
+const emptyScanGraceTTL = 15 * time.Minute
 
 // loadPendingUpdates consulta os updates pendentes de forma best-effort e com
 // cache curto. Em falha transitória (winget/choco indisponíveis, timeout)
@@ -1197,6 +1231,7 @@ func (s *Service) loadPendingUpdates(ctx context.Context) []models.UpgradeItem {
 	s.pendingUpdatesMu.Lock()
 	cached := s.pendingUpdatesLast
 	cachedAt := s.pendingUpdatesLastAt
+	goodAt := s.pendingUpdatesGoodAt
 	loaded := s.pendingUpdatesLoaded
 	s.pendingUpdatesMu.Unlock()
 
@@ -1204,20 +1239,36 @@ func (s *Service) loadPendingUpdates(ctx context.Context) []models.UpgradeItem {
 		return cached
 	}
 
+	// A última lista boa serve de fallback mesmo depois de invalidada: o
+	// marcador "loaded" cai na invalidação, mas o conteúdo continua válido.
+	hadGoodScan := len(cached) > 0 && !goodAt.IsZero()
 	items, err := s.pendingUpdates(ctx)
 	if err != nil {
 		s.logf("[agent-sync] aviso: falha ao consultar updates pendentes: " + err.Error())
-		if loaded {
+		if hadGoodScan {
 			s.logf("[agent-sync] reutilizando ultima lista de updates conhecida para nao limpar o servidor")
 			return cached
 		}
 		return nil
 	}
 
+	// Scan vazio logo após um scan com dados = quase sempre falha transitória do
+	// winget/choco (timeout, fonte indisponível, saída não reconhecida), não
+	// ausência real de updates. Enviar esse vazio apagaria no servidor os
+	// updates/Ids já reportados, então reutilizamos a última lista boa dentro da
+	// janela de graça. Após a janela, um vazio é aceito como verdade.
+	if len(items) == 0 && hadGoodScan && time.Since(goodAt) < emptyScanGraceTTL {
+		s.logf("[agent-sync] scan vazio suspeito; mantendo ultima lista de updates conhecida para nao limpar o servidor")
+		return cached
+	}
+
 	s.pendingUpdatesMu.Lock()
 	s.pendingUpdatesLast = items
 	s.pendingUpdatesLastAt = time.Now()
 	s.pendingUpdatesLoaded = true
+	if len(items) > 0 {
+		s.pendingUpdatesGoodAt = s.pendingUpdatesLastAt
+	}
 	s.pendingUpdatesMu.Unlock()
 	return items
 }

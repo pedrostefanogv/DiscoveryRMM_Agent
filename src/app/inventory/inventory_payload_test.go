@@ -210,13 +210,25 @@ func TestBuildAgentSoftwareEnvelope_CorrelatesByWingetListID(t *testing.T) {
 	}
 
 	env := buildAgentSoftwareEnvelope(report, "agent-1", pending, installed, nil)
-	if len(env.Software) != 1 {
-		t.Fatalf("esperado 1 software, veio %d", len(env.Software))
+	// O build do envelope agora aplica o merge dos apps do gerenciador; a lista
+	// pode ganhar entradas extras, então localizamos o item por nome.
+	item, ok := findSoftwareByName(env, "Notepad++ (32-bit)")
+	if !ok {
+		t.Fatalf("app do registro nao esta no envelope: %+v", env.Software)
 	}
-	item := env.Software[0]
 	if !item.UpdateAvailable || item.AvailableVersion != "8.6.0" || item.UpdatePackageID != "Notepad++.Notepad++" {
 		t.Fatalf("correlação por winget list falhou: %+v", item)
 	}
+}
+
+// findSoftwareByName localiza um item do envelope pelo nome (case-insensitive).
+func findSoftwareByName(env agentSoftwareEnvelope, name string) (agentSoftwareItem, bool) {
+	for _, item := range env.Software {
+		if strings.EqualFold(strings.TrimSpace(item.Name), strings.TrimSpace(name)) {
+			return item, true
+		}
+	}
+	return agentSoftwareItem{}, false
 }
 
 func TestBuildAgentSoftwareEnvelope_NameFallbackPrefersMatchingVersion(t *testing.T) {

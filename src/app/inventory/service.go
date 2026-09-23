@@ -119,31 +119,37 @@ type Options struct {
 
 // Service handles inventory, installs and sync operations.
 type Service struct {
-	apps                             AppsService
-	inventory                        InventoryService
-	cache                            InventoryCache
-	resolveAllowed                   func(context.Context, string) (appstore.Item, error)
-	resolveAllowedByType             func(context.Context, string, string) (appstore.Item, error)
-	getCatalog                       func(context.Context) (models.Catalog, error)
-	beginActivity                    ActivityFunc
-	dispatchNotification             InventoryNotificationDispatcher
-	logf                             func(string)
-	ctx                              func() context.Context
-	db                               DB
-	debugConfig                      func() debug.Config
-	version                          string
-	commitHash                       string
-	shouldDeferNonCritical           func() (time.Duration, bool, string)
-	pendingUpdates                   func(context.Context) ([]models.UpgradeItem, error)
-	pendingUpdatesMu                 sync.Mutex
-	pendingUpdatesLast               []models.UpgradeItem
-	pendingUpdatesLastAt             time.Time
-	pendingUpdatesLoaded             bool
-	installedPackages                func(context.Context) ([]models.InstalledPackage, error)
-	installedPackagesMu              sync.Mutex
-	installedPackagesLast            []models.InstalledPackage
-	installedPackagesLastAt          time.Time
-	installedPackagesLoaded          bool
+	apps                   AppsService
+	inventory              InventoryService
+	cache                  InventoryCache
+	resolveAllowed         func(context.Context, string) (appstore.Item, error)
+	resolveAllowedByType   func(context.Context, string, string) (appstore.Item, error)
+	getCatalog             func(context.Context) (models.Catalog, error)
+	beginActivity          ActivityFunc
+	dispatchNotification   InventoryNotificationDispatcher
+	logf                   func(string)
+	ctx                    func() context.Context
+	db                     DB
+	debugConfig            func() debug.Config
+	version                string
+	commitHash             string
+	shouldDeferNonCritical func() (time.Duration, bool, string)
+	pendingUpdates         func(context.Context) ([]models.UpgradeItem, error)
+	pendingUpdatesMu       sync.Mutex
+	pendingUpdatesLast     []models.UpgradeItem
+	pendingUpdatesLastAt   time.Time
+	pendingUpdatesLoaded   bool
+	// pendingUpdatesGoodAt é o carimbo do último scan NÃO-VAZIO bem-sucedido.
+	// Diferente de pendingUpdatesLastAt, ele não é zerado pela invalidação do
+	// cache: é a referência para decidir se um scan vazio é suspeito.
+	pendingUpdatesGoodAt    time.Time
+	installedPackages       func(context.Context) ([]models.InstalledPackage, error)
+	installedPackagesMu     sync.Mutex
+	installedPackagesLast   []models.InstalledPackage
+	installedPackagesLastAt time.Time
+	installedPackagesLoaded bool
+	// installedPackagesGoodAt: idem, para o "winget list".
+	installedPackagesGoodAt          time.Time
 	catalogChocoMu                   sync.Mutex
 	catalogChocoLast                 map[string]string
 	catalogChocoAt                   time.Time
@@ -592,14 +598,16 @@ func (s *Service) InvalidatePendingUpdatesCache() {
 }
 
 func (s *Service) invalidatePendingUpdates() {
+	// IMPORTANTE: invalidar NÃO descarta a última lista conhecida — apenas
+	// expira o cache (lastAt = zero) para forçar um novo scan. A lista anterior
+	// permanece como fallback: se o novo scan vier vazio/errar, o load ainda
+	// pode reutilizá-la em vez de enviar "sem updates" e limpar o servidor.
 	s.pendingUpdatesMu.Lock()
-	s.pendingUpdatesLoaded = false
 	s.pendingUpdatesLastAt = time.Time{}
 	s.pendingUpdatesMu.Unlock()
 
 	// O índice do "winget list" também muda após instalar/remover/atualizar.
 	s.installedPackagesMu.Lock()
-	s.installedPackagesLoaded = false
 	s.installedPackagesLastAt = time.Time{}
 	s.installedPackagesMu.Unlock()
 

@@ -61,10 +61,10 @@ func TestBuildAgentSoftwareEnvelope_MatchesWingetDisplayName(t *testing.T) {
 	}
 
 	env := buildAgentSoftwareEnvelope(report, "agent-1", pending, installed, nil)
-	if len(env.Software) != 1 {
-		t.Fatalf("esperado 1 software, veio %d", len(env.Software))
+	item, ok := findSoftwareByName(env, "Subsistema do Windows para Linux")
+	if !ok {
+		t.Fatalf("app do registro nao esta no envelope: %+v", env.Software)
 	}
-	item := env.Software[0]
 	if !item.UpdateAvailable || item.UpdatePackageID != "Microsoft.WSL" || item.AvailableVersion != "2.7.13" {
 		t.Fatalf("correlacao pelo nome do winget list falhou: %+v", item)
 	}
