@@ -148,6 +148,12 @@ type TicketComment = supportmeta.TicketComment
 
 type CreateTicketInput = supportmeta.CreateTicketInput
 
+type TicketOptions = supportmeta.TicketOptions
+
+type TicketOptionDepartment = supportmeta.TicketOptionDepartment
+
+type TicketOptionProfile = supportmeta.TicketOptionProfile
+
 type CloseTicketInput = supportmeta.CloseTicketInput
 
 type KnowledgeArticle = supportmeta.KnowledgeArticle

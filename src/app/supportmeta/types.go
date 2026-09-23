@@ -114,12 +114,35 @@ type TicketComment struct {
 	CreatedAt  string `json:"createdAt"`
 }
 
+// TicketOptionDepartment is a department option for the agent ticket form.
+type TicketOptionDepartment struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// TicketOptionProfile is a workflow profile option for the agent ticket form.
+type TicketOptionProfile struct {
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	DepartmentID string `json:"departmentId"`
+}
+
+// TicketOptions carries the department/profile pickers for the agent ticket form.
+type TicketOptions struct {
+	Departments      []TicketOptionDepartment `json:"departments"`
+	WorkflowProfiles []TicketOptionProfile    `json:"workflowProfiles"`
+}
+
 // CreateTicketInput is the frontend-facing request to create a ticket.
 type CreateTicketInput struct {
 	Title       string `json:"title"`
 	Description string `json:"description"`
 	Priority    int    `json:"priority"`
 	Category    string `json:"category"`
+	// Opcionais: quando preenchidos, o chamado nasce departamento/perfil e o
+	// servidor calcula o SLA. Sem eles, o perfil padrão do departamento não se aplica.
+	DepartmentID      string `json:"departmentId,omitempty"`
+	WorkflowProfileID string `json:"workflowProfileId,omitempty"`
 }
 
 // CloseTicketInput is the frontend-facing request to close a ticket.

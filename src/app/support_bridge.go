@@ -16,6 +16,13 @@ func (a *App) GetSupportTickets() ([]APITicket, error) {
 	return a.SupportSvc.GetSupportTickets()
 }
 
+func (a *App) GetTicketOptions() (TicketOptions, error) {
+	if err := a.requireSupportSvc(); err != nil {
+		return TicketOptions{}, err
+	}
+	return a.SupportSvc.GetTicketOptions()
+}
+
 func (a *App) CreateSupportTicket(input CreateTicketInput) (APITicket, error) {
 	if err := a.requireSupportSvc(); err != nil {
 		return APITicket{}, err

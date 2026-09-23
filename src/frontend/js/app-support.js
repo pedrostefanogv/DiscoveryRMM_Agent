@@ -8,6 +8,8 @@ var workflowStatesCacheKey = '';
 // HTML no título, ex. "&amp;", corrompiam o atributo após round-trip).
 var supportTicketsById = {};
 var WORKFLOW_STATES_CACHE_TTL_MS = 10 * 60 * 1000;
+// Departamentos/perfis para o picker do formulário de abertura de chamado.
+var ticketOptionsCache = { departments: [], workflowProfiles: [] };
 
 var priorityLabels = { 1: 'Baixa', 2: 'Media', 3: 'Alta', 4: 'Critica' };
 var priorityClasses = { 1: 'p-baixa', 2: 'p-media', 3: 'p-alta', 4: 'p-critica' };
@@ -57,6 +59,47 @@ function showNewTicketForm() {
   if (supportDetailViewEl) supportDetailViewEl.classList.add("hidden");
   if (supportNewTicketViewEl) supportNewTicketViewEl.classList.remove("hidden");
   hideTicketFormStatus();
+  loadTicketOptions();
+}
+
+function escapeOptionLabel(value) {
+  var el = document.createElement('div');
+  el.textContent = value == null ? '' : String(value);
+  return el.innerHTML;
+}
+
+function renderTicketProfileOptions(departmentId) {
+  var select = document.getElementById('ticketWorkflowProfile');
+  if (!select) return;
+  var profiles = (ticketOptionsCache.workflowProfiles || []).filter(function (p) {
+    return !departmentId || p.departmentId === departmentId;
+  });
+  var html = '<option value="">Padrao do departamento</option>';
+  profiles.forEach(function (p) {
+    html += '<option value="' + p.id + '">' + escapeOptionLabel(p.name) + '</option>';
+  });
+  select.innerHTML = html;
+}
+
+// Carrega departamentos/perfis do cliente do agente para o formulário. Sem
+// departamento o servidor não calcula SLA; sem perfil, usa o padrão do setor.
+function loadTicketOptions() {
+  var api = appApi();
+  if (!api || typeof api.GetTicketOptions !== 'function') return;
+  api.GetTicketOptions().then(function (options) {
+    ticketOptionsCache = options || { departments: [], workflowProfiles: [] };
+    var deptSelect = document.getElementById('ticketDepartment');
+    if (deptSelect) {
+      var html = '<option value="">Selecione...</option>';
+      (ticketOptionsCache.departments || []).forEach(function (d) {
+        html += '<option value="' + d.id + '">' + escapeOptionLabel(d.name) + '</option>';
+      });
+      deptSelect.innerHTML = html;
+    }
+    renderTicketProfileOptions('');
+  }).catch(function (err) {
+    console.warn('[support] falha ao carregar departamentos/perfis:', err);
+  });
 }
 
 function ticketPriorityLabel(p) { return priorityLabels[p] || 'N/A'; }
@@ -228,6 +271,8 @@ function initSupport() {
     var title = document.getElementById('ticketTitle') ? document.getElementById('ticketTitle').value.trim() : '';
     var category = document.getElementById('ticketCategory') ? document.getElementById('ticketCategory').value : '';
     var priority = parseInt(document.getElementById('ticketPriority') ? document.getElementById('ticketPriority').value : '2', 10);
+    var departmentId = document.getElementById('ticketDepartment') ? document.getElementById('ticketDepartment').value : '';
+    var workflowProfileId = document.getElementById('ticketWorkflowProfile') ? document.getElementById('ticketWorkflowProfile').value : '';
     var description = document.getElementById('ticketDescription') ? document.getElementById('ticketDescription').value.trim() : '';
 
     if (!title || !description) {
@@ -240,9 +285,13 @@ function initSupport() {
     showTicketFormStatus(translate('support.submittingTicket'), false);
 
     try {
-      var ticket = await appApi().CreateSupportTicket({ title: title, description: description, priority: priority, category: category });
+      var payload = { title: title, description: description, priority: priority, category: category };
+      if (departmentId) payload.departmentId = departmentId;
+      if (workflowProfileId) payload.workflowProfileId = workflowProfileId;
+      var ticket = await appApi().CreateSupportTicket(payload);
       showToast(translate('support.ticketCreatedSuccess'), 'success');
       supportFormEl.reset();
+      renderTicketProfileOptions('');
       hideTicketFormStatus();
       showSupportList();
       loadSupportTickets();
@@ -253,6 +302,13 @@ function initSupport() {
       if (btn) { btn.disabled = false; btn.textContent = translate('action.sendTicket'); }
     }
   });
+
+  var ticketDepartmentSelect = document.getElementById('ticketDepartment');
+  if (ticketDepartmentSelect) {
+    ticketDepartmentSelect.addEventListener('change', function () {
+      renderTicketProfileOptions(ticketDepartmentSelect.value);
+    });
+  }
 
   if (refreshTicketsBtnEl) {
     refreshTicketsBtnEl.addEventListener('click', function () { loadSupportTickets(); });

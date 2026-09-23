@@ -124,6 +124,12 @@ type TicketComment = supportmeta.TicketComment
 
 type CreateTicketInput = supportmeta.CreateTicketInput
 
+type TicketOptionDepartment = supportmeta.TicketOptionDepartment
+
+type TicketOptionProfile = supportmeta.TicketOptionProfile
+
+type TicketOptions = supportmeta.TicketOptions
+
 type CloseTicketInput = supportmeta.CloseTicketInput
 
 type KnowledgeArticle = supportmeta.KnowledgeArticle
@@ -549,6 +555,52 @@ func (s *Service) GetSupportTickets() ([]APITicket, error) {
 	return tickets, nil
 }
 
+// GetTicketOptions returns departments and workflow profiles for the agent ticket
+// form (department picker). Without a department the server cannot compute SLA.
+func (s *Service) GetTicketOptions() (TicketOptions, error) {
+	s.supportLogf("carregando opções de chamado (departamentos/perfis)")
+	info, err := s.fetchAgentContext()
+	if err != nil {
+		return TicketOptions{}, err
+	}
+
+	cfg := s.debugConfig()
+	ctx := s.ctxOrBackground()
+	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/tickets/options"
+	resp, err := doGetWithRetry(ctx, tlsutil.NewHTTPClient(10*time.Second), func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+		if err != nil {
+			return nil, err
+		}
+		if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, info.AgentID); err != nil {
+			return nil, err
+		}
+		return req, nil
+	})
+	if err != nil {
+		return TicketOptions{}, fmt.Errorf("falha ao buscar opções de chamado: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return TicketOptions{}, fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+
+	var options TicketOptions
+	if err := json.Unmarshal(body, &options); err != nil {
+		return TicketOptions{}, fmt.Errorf("resposta inválida ao buscar opções de chamado: %w", err)
+	}
+	if options.Departments == nil {
+		options.Departments = []TicketOptionDepartment{}
+	}
+	if options.WorkflowProfiles == nil {
+		options.WorkflowProfiles = []TicketOptionProfile{}
+	}
+	s.supportLogf("opções carregadas: %d departamento(s), %d perfil(is)", len(options.Departments), len(options.WorkflowProfiles))
+	return options, nil
+}
+
 // CreateSupportTicket opens a new ticket linked to this agent.
 func (s *Service) CreateSupportTicket(input CreateTicketInput) (APITicket, error) {
 	if !s.featureEnabled(s.supportEnabled()) {
@@ -587,6 +639,12 @@ func (s *Service) CreateSupportTicket(input CreateTicketInput) (APITicket, error
 	}
 	if c := strings.TrimSpace(input.Category); c != "" {
 		payload.Category = &c
+	}
+	if d := strings.TrimSpace(input.DepartmentID); d != "" {
+		payload.DepartmentID = &d
+	}
+	if p := strings.TrimSpace(input.WorkflowProfileID); p != "" {
+		payload.WorkflowProfileID = &p
 	}
 	if input.Priority > 0 {
 		pri := priorityIntToLabel(input.Priority)
