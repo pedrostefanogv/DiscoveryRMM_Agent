@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"discovery/app/core/chocolatey"
 	"discovery/app/core/models"
 	"discovery/app/debug"
 	"discovery/app/netutil"
@@ -241,8 +242,22 @@ func (s *Service) SyncInventoryOnStartup(ctx context.Context, report models.Inve
 		return
 	}
 
+	// Os índices locais (winget/choco) também alimentam a COLETA de software, não
+	// só a correlação: apps instalados por gerenciador de pacotes podem não ter
+	// entrada no registro (ex.: "WSL" registra-se como "Windows Subsystem for
+	// Linux") e nunca chegariam ao inventário sem um fallback por gerenciador.
+	softwareCollectionPrefix := "registry"
+	if s.apps != nil {
+		softwareCollectionPrefix = "osquery/programs"
+	}
 	pendingUpdates := s.loadPendingUpdates(ctx)
 	installedPackages := s.loadInstalledPackages(ctx)
+	report.Software = mergePackageManagerSoftware(
+		report.Software,
+		installedPackages,
+		pendingUpdates,
+		softwareCollectionPrefix,
+	)
 	softwarePayload := buildAgentSoftwareEnvelope(
 		report,
 		strings.TrimSpace(cfg.AgentID),
@@ -650,6 +665,21 @@ func buildAgentSoftwareEnvelope(
 	installed []models.InstalledPackage,
 	catalogChoco map[string]string,
 ) agentSoftwareEnvelope {
+	return buildAgentSoftwareEnvelopeWithIndex(
+		report, agentID, pending, installed, catalogChoco, indexInstalledDisplayNames(installed))
+}
+
+// buildAgentSoftwareEnvelopeWithIndex é o núcleo de buildAgentSoftwareEnvelope
+// com o índice de nomes de exibição injetado (testável sem tocar o disco do
+// Chocolatey).
+func buildAgentSoftwareEnvelopeWithIndex(
+	report models.InventoryReport,
+	agentID string,
+	pending []models.UpgradeItem,
+	installed []models.InstalledPackage,
+	catalogChoco map[string]string,
+	displayNameIndex installedDisplayNameIndex,
+) agentSoftwareEnvelope {
 	collected := strings.TrimSpace(report.CollectedAt)
 	if collected == "" {
 		collected = time.Now().UTC().Format(time.RFC3339)
@@ -678,12 +708,19 @@ func buildAgentSoftwareEnvelope(
 			InstallDate:   trimToMaxLen(strings.TrimSpace(s.InstallDate), 64),
 			InstallSource: trimToMaxLen(strings.TrimSpace(s.InstallSource), 1000),
 		}
-		if update, ok := matchPendingUpdate(s, byInstallID, byName, installedIndex, catalogChoco); ok {
+		if update, ok := matchPendingUpdate(s, byInstallID, byName, installedIndex, displayNameIndex, catalogChoco); ok {
 			item.AvailableVersion = trimToMaxLen(strings.TrimSpace(update.AvailableVersion), 120)
 			item.UpdateAvailable = true
 			item.UpdateSource = normalizeSoftwareUpdateSource(update.Source)
 			item.UpdatePackageID = trimToMaxLen(strings.TrimSpace(update.ID), 1000)
-		} else if pkg, ok := installedIndex.resolve(s.Name, s.Version); ok {
+		} else if update, ok := matchPendingUpdateByManagerName(s, byName, displayNameIndex); ok {
+			// A linha de upgrades cita um nome que não é o do registro (ex.: o
+			// "winget upgrade" pode citar o Id no lugar do nome): usa o update.
+			item.AvailableVersion = trimToMaxLen(strings.TrimSpace(update.AvailableVersion), 120)
+			item.UpdateAvailable = true
+			item.UpdateSource = normalizeSoftwareUpdateSource(update.Source)
+			item.UpdatePackageID = trimToMaxLen(strings.TrimSpace(update.ID), 1000)
+		} else if pkg, ok := resolvePackageForSoftware(s, installedIndex, displayNameIndex); ok {
 			// Sem update pendente, mas o gerenciador reconhece o app: guarda o
 			// Id do pacote (e a origem) para viabilizar a desinstalação remota.
 			item.UpdatePackageID = trimToMaxLen(strings.TrimSpace(pkg.ID), 1000)
@@ -798,6 +835,7 @@ func matchPendingUpdate(
 	byInstallID map[string]models.UpgradeItem,
 	byName map[string][]models.UpgradeItem,
 	installed installedPackageIndex,
+	displayNames installedDisplayNameIndex,
 	catalogChoco map[string]string,
 ) (models.UpgradeItem, bool) {
 	// 1) Id do gerenciador reconhecido localmente (winget list / choco list).
@@ -806,12 +844,22 @@ func matchPendingUpdate(
 			return u, true
 		}
 	}
-	// 2) Id Chocolatey pelo nome de exibição (catálogo da loja).
+	// 1b) Título do .nuspec instalado (choco registra o Id, o registro registra
+	// o título) e nome de exibição do "winget list". Sem isto, um app choco sem
+	// correspondência por InstallId/Serial só casaria pelo nome — justamente o
+	// nome que o winget não repete na tabela de upgrades.
+	for _, candidate := range packageDisplayNameCandidates(s, displayNames) {
+		if u, ok := byInstallID[normalizeUpdateKey(candidate)]; ok {
+			return u, true
+		}
+	}
+	// 1c) Id Chocolatey pelo nome de exibição (catálogo da loja).
 	if id := strings.TrimSpace(catalogChoco[normalizeUpdateKey(s.Name)]); id != "" {
 		if u, ok := byInstallID[normalizeUpdateKey(id)]; ok {
 			return u, true
 		}
 	}
+	// 2) ProductCode/UninstallString do registro.
 	for _, candidate := range []string{s.InstallID, s.Serial} {
 		if key := normalizeUpdateKey(candidate); key != "" {
 			if u, ok := byInstallID[key]; ok {
@@ -825,7 +873,253 @@ func matchPendingUpdate(
 		}
 		return entries[0], true
 	}
+	// 3) Último recurso: nome de exibição do gerenciador para o app do registro.
+	// Cobre o caso em que o item nem entrou na tabela de upgrades (ex.: o Id do
+	// "winget upgrade" consulta fontes que não existem no "winget list").
+	for _, candidate := range packageDisplayNameCandidates(s, displayNames) {
+		if entries := byName[normalizeUpdateKey(candidate)]; len(entries) > 0 {
+			if u, ok := pickNameMatch(entries, s.Version); ok {
+				return u, true
+			}
+			return entries[0], true
+		}
+	}
 	return models.UpgradeItem{}, false
+}
+
+// matchPendingUpdateByManagerName correlaciona o app do registro a um update
+// pendente cujo NOME ainda não foi resolvido pelos caminhos principais: o item
+// pode citar o nome de exibição do gerenciador ou o próprio Id do pacote (ex.:
+// "Microsoft.WSL") em vez do nome do registro.
+func matchPendingUpdateByManagerName(
+	s models.SoftwareItem,
+	byName map[string][]models.UpgradeItem,
+	displayNames installedDisplayNameIndex,
+) (models.UpgradeItem, bool) {
+	for _, pkg := range displayNames.candidates(s.Name, s.Version) {
+		for _, key := range []string{pkg.Name, pkg.ID} {
+			entries := byName[normalizeUpdateKey(key)]
+			if len(entries) == 0 {
+				continue
+			}
+			if u, ok := pickNameMatch(entries, s.Version); ok {
+				return u, true
+			}
+			return entries[0], true
+		}
+	}
+	return models.UpgradeItem{}, false
+}
+
+// installedDisplayNameIndex liga o TÍTULO de exibição do pacote (título do
+// .nuspec no Chocolatey; Name do "winget list") ao pacote instalado. O
+// inventário de registro guarda o nome de exibição ("Adobe Acrobat Reader DC",
+// "Kudu 3.3.0"), enquanto o gerenciador trabalha com Ids ("adobereader",
+// "AdventDevelopmentInc.Kudu") — sem este índice a correlação depende do nome
+// que o update imprime, que costuma divergir do nome do registro.
+type installedDisplayNameIndex struct {
+	byName map[string][]models.InstalledPackage
+}
+
+func indexInstalledDisplayNames(installed []models.InstalledPackage) installedDisplayNameIndex {
+	index := installedDisplayNameIndex{byName: make(map[string][]models.InstalledPackage, len(installed))}
+	// Títulos do .nuspec (choco list só devolve id|versão).
+	for _, info := range chocolatey.ScanInstalledPackages() {
+		title := normalizeUpdateKey(info.Title)
+		if title == "" {
+			continue
+		}
+		index.byName[title] = append(index.byName[title], models.InstalledPackage{
+			Name:    info.Title,
+			ID:      info.ID,
+			Version: info.Version,
+			Source:  "chocolatey",
+		})
+	}
+	// Nome de exibição do "winget list" — usado principalmente para resolver o
+	// Id do pacote quando o app ainda não tem update pendente.
+	for _, pkg := range installed {
+		name := normalizeUpdateKey(pkg.Name)
+		if name == "" {
+			continue
+		}
+		index.byName[name] = append(index.byName[name], pkg)
+	}
+	return index
+}
+
+// candidates devolve os pacotes cujo nome de exibição bate com o do inventário,
+// priorizando a versão exata (desambigua homônimos).
+func (index installedDisplayNameIndex) candidates(name, version string) []models.InstalledPackage {
+	entries := index.byName[normalizeUpdateKey(name)]
+	if len(entries) == 0 {
+		return nil
+	}
+	normalizedVersion := normalizeUpdateKey(version)
+	if normalizedVersion == "" {
+		return entries
+	}
+	ordered := make([]models.InstalledPackage, 0, len(entries))
+	for _, entry := range entries {
+		if normalizeUpdateKey(entry.Version) == normalizedVersion {
+			ordered = append(ordered, entry)
+		}
+	}
+	for _, entry := range entries {
+		if normalizeUpdateKey(entry.Version) != normalizedVersion {
+			ordered = append(ordered, entry)
+		}
+	}
+	return ordered
+}
+
+// packageDisplayNameCandidates lista os nomes pelos quais o app do inventário é
+// conhecido no gerenciador de pacotes, sem repetições.
+func packageDisplayNameCandidates(s models.SoftwareItem, displayNames installedDisplayNameIndex) []string {
+	// Elegibilidade por versão: só aceitamos o nome do gerenciador quando a
+	// versão confere com a do registro. Sem isso, um app homônimo de outra
+	// versão (ou de outro produto) herdaria um packageId errado.
+	if !sameSoftwareVersion(s.Version, displayNames.candidates(s.Name, s.Version)) {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	candidates := make([]string, 0, 4)
+	add := func(value string) {
+		name := strings.TrimSpace(value)
+		key := normalizeUpdateKey(name)
+		if key == "" {
+			return
+		}
+		if _, exists := seen[key]; exists {
+			return
+		}
+		seen[key] = struct{}{}
+		candidates = append(candidates, name)
+	}
+	add(s.Name)
+	for _, pkg := range displayNames.candidates(s.Name, s.Version) {
+		add(pkg.Name)
+	}
+	return candidates
+}
+
+// sameSoftwareVersion confirma que o pacote do gerenciador corresponde à MESMA
+// instalação do app do registro. Quando qualquer um dos lados não informa
+// versão, a comparação é inconclusiva e o candidato é aceito.
+func sameSoftwareVersion(version string, candidates []models.InstalledPackage) bool {
+	if len(candidates) == 0 {
+		return false
+	}
+	want := normalizeUpdateKey(version)
+	if want == "" {
+		return true
+	}
+	for _, pkg := range candidates {
+		if normalizeUpdateKey(pkg.Version) == want {
+			return true
+		}
+	}
+	return false
+}
+
+// resolvePackageForSoftware localiza o pacote do gerenciador correspondente ao
+// app do inventário (winget list primeiro; depois o nome de exibição/título do
+// .nuspec). É o que permite o botão "Atualizar" nos apps choco, cujo Id nunca
+// aparece na listagem do winget.
+func resolvePackageForSoftware(
+	s models.SoftwareItem,
+	installed installedPackageIndex,
+	displayNames installedDisplayNameIndex,
+) (models.InstalledPackage, bool) {
+	if pkg, ok := installed.resolve(s.Name, s.Version); ok {
+		return pkg, true
+	}
+	candidates := displayNames.candidates(s.Name, s.Version)
+	if len(candidates) == 0 {
+		return models.InstalledPackage{}, false
+	}
+	return candidates[0], true
+}
+
+// mergePackageManagerSoftware acrescenta ao inventário de registro os apps que
+// SÓ existem no gerenciador de pacotes (o registro não tem entrada de ARP para
+// eles — ex.: o pacote Microsoft.WSL). Sem esta união, esses apps nunca
+// aparecem no inventário do agente e, portanto, nunca exibem update pendente.
+// Best-effort: entrada ausente não altera nada.
+func mergePackageManagerSoftware(
+	software []models.SoftwareItem,
+	installed []models.InstalledPackage,
+	pending []models.UpgradeItem,
+	source string,
+) []models.SoftwareItem {
+	if len(installed) == 0 && len(pending) == 0 {
+		return software
+	}
+
+	seen := make(map[string]struct{}, len(installed)+len(pending))
+	register := func(name string) {
+		if key := normalizeUpdateKey(name); key != "" {
+			seen[key] = struct{}{}
+		}
+	}
+	for _, item := range software {
+		register(item.Name)
+	}
+
+	source = strings.TrimSpace(source)
+	if source == "" {
+		source = "registry"
+	}
+
+	pendingByID := make(map[string]models.UpgradeItem, len(pending))
+	for _, update := range pending {
+		if id := normalizeUpdateKey(update.ID); id != "" {
+			pendingByID[id] = update
+		}
+	}
+
+	added := make([]models.SoftwareItem, 0, len(pending))
+	for _, pkg := range installed {
+		key := normalizeUpdateKey(pkg.Name)
+		if key == "" {
+			continue
+		}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		added = append(added, models.SoftwareItem{
+			Name:      strings.TrimSpace(pkg.Name),
+			Version:   strings.TrimSpace(pkg.Version),
+			Publisher: "Sem fabricante",
+			Source:    source,
+		})
+	}
+
+	// Updates pendentes sem pacote listado (pacote não reconhecido pelo
+	// "winget list"): reporta o app com a versão atual e disponível.
+	for _, update := range pending {
+		name := strings.TrimSpace(update.Name)
+		key := normalizeUpdateKey(name)
+		if key == "" {
+			continue
+		}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		added = append(added, models.SoftwareItem{
+			Name:      name,
+			Version:   strings.TrimSpace(update.CurrentVersion),
+			Publisher: "Sem fabricante",
+			Source:    source,
+		})
+	}
+
+	if len(added) == 0 {
+		return software
+	}
+	return append(software, added...)
 }
 
 func normalizeUpdateKey(value string) string {
