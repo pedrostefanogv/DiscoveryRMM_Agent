@@ -14,6 +14,34 @@ func padTo(s string, width int) string {
 	return s
 }
 
+// TestParseInstalledListOutput_MapsNameToWingetID cobre o parsing do
+// "winget list" (Name/Id/Version) usado para correlacionar o inventário de
+// registro ao Id real do pacote, inclusive com cabeçalho pt-BR.
+func TestParseInstalledListOutput_MapsNameToWingetID(t *testing.T) {
+	header := padTo("Nome", 36) + padTo("ID", 30) + padTo("Versão", 16) + "Origem"
+	divider := strings.Repeat("-", 100)
+	rows := []struct{ name, id, version string }{
+		{"7-Zip 26.02 (x64 edition)", "7zip.7zip", "26.02.00.0"},
+		{"Google Chrome", "Google.Chrome", "151.0.7922.170"},
+	}
+	var sb strings.Builder
+	sb.WriteString(header + "\r\n" + divider + "\r\n")
+	for _, r := range rows {
+		sb.WriteString(padTo(r.name, 36) + padTo(r.id, 30) + padTo(r.version, 16) + "winget\r\n")
+	}
+
+	items := parseInstalledListOutput(sb.String())
+	if len(items) != len(rows) {
+		t.Fatalf("esperava %d itens, veio %d: %+v", len(rows), len(items), items)
+	}
+	for i, item := range items {
+		want := rows[i]
+		if item.Name != want.name || item.ID != want.id || item.Version != want.version {
+			t.Errorf("linha %d = %+v, queria %+v", i, item, want)
+		}
+	}
+}
+
 // TestParseUpgradeOutput_PortugueseHeaderKeepsVersionsIntact é a regressão do
 // bug da tela de updates em Windows pt-BR: o cabeçalho do `winget upgrade`
 // contém caracteres multi-byte ("Versão", "Disponível") e a coluna de origem

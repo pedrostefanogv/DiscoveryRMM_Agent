@@ -94,16 +94,31 @@ func (c *Client) Uninstall(ctx context.Context, id string) (string, error) {
 }
 
 func (c *Client) Upgrade(ctx context.Context, id string) (string, error) {
+	return c.UpgradeWithSwitches(ctx, id, "", "")
+}
+
+// UpgradeWithSwitches atualiza via winget anexando os switches silenciosos do
+// catálogo via --custom, com a mesma regra de segurança do InstallWithSwitches
+// (switches exe-only são descartados para não quebrar pacotes MSI).
+func (c *Client) UpgradeWithSwitches(ctx context.Context, id, silent, silentWithProgress string) (string, error) {
 	if err := validateID(id); err != nil {
 		return "", err
 	}
-	return c.run(ctx,
+	sw := strings.TrimSpace(silent)
+	if sw == "" {
+		sw = strings.TrimSpace(silentWithProgress)
+	}
+	args := []string{
 		"upgrade",
 		"--id", id,
 		"--silent",
 		"--accept-source-agreements",
 		"--accept-package-agreements",
-	)
+	}
+	if sw != "" && !looksLikeExeOnlySwitch(sw) {
+		args = append(args, "--custom", sw)
+	}
+	return c.run(ctx, args...)
 }
 
 func (c *Client) UpgradeAll(ctx context.Context) (string, error) {

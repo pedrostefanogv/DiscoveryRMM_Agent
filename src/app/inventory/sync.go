@@ -241,7 +241,15 @@ func (s *Service) SyncInventoryOnStartup(ctx context.Context, report models.Inve
 		return
 	}
 
-	softwarePayload := buildAgentSoftwareEnvelope(report, strings.TrimSpace(cfg.AgentID), s.loadPendingUpdates(ctx))
+	pendingUpdates := s.loadPendingUpdates(ctx)
+	installedPackages := s.loadInstalledPackages(ctx)
+	softwarePayload := buildAgentSoftwareEnvelope(
+		report,
+		strings.TrimSpace(cfg.AgentID),
+		pendingUpdates,
+		installedPackages,
+		s.loadCatalogChocoIndex(ctx, installedPackages, pendingUpdates),
+	)
 	softwareBody, err := json.Marshal(softwarePayload)
 	if err != nil {
 		s.logf("[agent-sync] falha ao serializar softwares: " + err.Error())
@@ -635,13 +643,20 @@ func (s *Service) sendAgentInventoryRequest(parent context.Context, endpoint str
 	return nil
 }
 
-func buildAgentSoftwareEnvelope(report models.InventoryReport, agentID string, pending []models.UpgradeItem) agentSoftwareEnvelope {
+func buildAgentSoftwareEnvelope(
+	report models.InventoryReport,
+	agentID string,
+	pending []models.UpgradeItem,
+	installed []models.InstalledPackage,
+	catalogChoco map[string]string,
+) agentSoftwareEnvelope {
 	collected := strings.TrimSpace(report.CollectedAt)
 	if collected == "" {
 		collected = time.Now().UTC().Format(time.RFC3339)
 	}
 
 	byInstallID, byName := indexPendingUpdates(pending)
+	installedIndex := indexInstalledPackages(installed)
 
 	software := make([]agentSoftwareItem, 0, len(report.Software))
 	for _, s := range report.Software {
@@ -663,11 +678,21 @@ func buildAgentSoftwareEnvelope(report models.InventoryReport, agentID string, p
 			InstallDate:   trimToMaxLen(strings.TrimSpace(s.InstallDate), 64),
 			InstallSource: trimToMaxLen(strings.TrimSpace(s.InstallSource), 1000),
 		}
-		if update, ok := matchPendingUpdate(s, byInstallID, byName); ok {
+		if update, ok := matchPendingUpdate(s, byInstallID, byName, installedIndex, catalogChoco); ok {
 			item.AvailableVersion = trimToMaxLen(strings.TrimSpace(update.AvailableVersion), 120)
 			item.UpdateAvailable = true
 			item.UpdateSource = normalizeSoftwareUpdateSource(update.Source)
 			item.UpdatePackageID = trimToMaxLen(strings.TrimSpace(update.ID), 1000)
+		} else if pkg, ok := installedIndex.resolve(s.Name, s.Version); ok {
+			// Sem update pendente, mas o gerenciador reconhece o app: guarda o
+			// Id do pacote (e a origem) para viabilizar a desinstalação remota.
+			item.UpdatePackageID = trimToMaxLen(strings.TrimSpace(pkg.ID), 1000)
+			item.UpdateSource = normalizeSoftwareUpdateSource(pkg.Source)
+		} else if id := strings.TrimSpace(catalogChoco[normalizeUpdateKey(s.Name)]); id != "" {
+			// App Chocolatey do catálogo da loja: o "choco list" só traz o Id,
+			// então o nome de exibição do registro é mapeado pelo catálogo.
+			item.UpdatePackageID = trimToMaxLen(id, 1000)
+			item.UpdateSource = "chocolatey"
 		}
 		software = append(software, item)
 	}
@@ -681,26 +706,112 @@ func buildAgentSoftwareEnvelope(report models.InventoryReport, agentID string, p
 
 // indexPendingUpdates cria índices por installId e por nome (case-insensitive)
 // a partir dos updates pendentes reportados por winget/chocolatey.
-func indexPendingUpdates(pending []models.UpgradeItem) (map[string]models.UpgradeItem, map[string]models.UpgradeItem) {
+func indexPendingUpdates(pending []models.UpgradeItem) (map[string]models.UpgradeItem, map[string][]models.UpgradeItem) {
 	byInstallID := make(map[string]models.UpgradeItem, len(pending))
-	byName := make(map[string]models.UpgradeItem, len(pending))
+	byName := make(map[string][]models.UpgradeItem, len(pending))
 	for _, u := range pending {
 		if id := normalizeUpdateKey(u.ID); id != "" {
 			byInstallID[id] = u
 		}
 		if name := normalizeUpdateKey(u.Name); name != "" {
-			if _, exists := byName[name]; !exists {
-				byName[name] = u
-			}
+			byName[name] = append(byName[name], u)
 		}
 	}
 	return byInstallID, byName
 }
 
-// matchPendingUpdate liga um app instalado ao update pendente. O installId do
-// registro raramente coincide com o ID do winget (é o ProductCode MSI), então
-// o nome é o vínculo prático; o ID/serial entram como primeira tentativa.
-func matchPendingUpdate(s models.SoftwareItem, byInstallID, byName map[string]models.UpgradeItem) (models.UpgradeItem, bool) {
+// pickNameMatch prefere o update cuja CurrentVersion casa com a versão do app
+// instalado, reduzindo falso positivo quando dois pacotes compartilham o nome.
+func pickNameMatch(entries []models.UpgradeItem, version string) (models.UpgradeItem, bool) {
+	normalized := normalizeUpdateKey(version)
+	if normalized == "" {
+		return models.UpgradeItem{}, false
+	}
+	for _, entry := range entries {
+		if normalizeUpdateKey(entry.CurrentVersion) == normalized {
+			return entry, true
+		}
+	}
+	return models.UpgradeItem{}, false
+}
+
+// installedPackageIndex indexa os apps instalados reconhecidos pelo winget por
+// nome normalizado, permitindo resolver o Id real do pacote de um item do
+// inventário (o InstallID do registro costuma ser o ProductCode do MSI).
+type installedPackageIndex struct {
+	byName map[string][]models.InstalledPackage
+}
+
+func indexInstalledPackages(installed []models.InstalledPackage) installedPackageIndex {
+	index := installedPackageIndex{byName: make(map[string][]models.InstalledPackage, len(installed))}
+	for _, pkg := range installed {
+		key := normalizeUpdateKey(pkg.Name)
+		if key == "" {
+			continue
+		}
+		index.byName[key] = append(index.byName[key], pkg)
+	}
+	return index
+}
+
+// candidates retorna os pacotes instalados com o mesmo nome, priorizando a
+// versão exata (desambigua homônimos x86/x64).
+func (index installedPackageIndex) candidates(name, version string) []models.InstalledPackage {
+	entries := index.byName[normalizeUpdateKey(name)]
+	if len(entries) == 0 {
+		return nil
+	}
+	normalizedVersion := normalizeUpdateKey(version)
+	if normalizedVersion == "" {
+		return entries
+	}
+	ordered := make([]models.InstalledPackage, 0, len(entries))
+	for _, entry := range entries {
+		if normalizeUpdateKey(entry.Version) == normalizedVersion {
+			ordered = append(ordered, entry)
+		}
+	}
+	for _, entry := range entries {
+		if normalizeUpdateKey(entry.Version) != normalizedVersion {
+			ordered = append(ordered, entry)
+		}
+	}
+	return ordered
+}
+
+// resolve localiza o pacote instalado reconhecido pelo gerenciador (versão exata
+// primeiro; caso contrário o primeiro com o mesmo nome).
+func (index installedPackageIndex) resolve(name, version string) (models.InstalledPackage, bool) {
+	candidates := index.candidates(name, version)
+	if len(candidates) == 0 {
+		return models.InstalledPackage{}, false
+	}
+	return candidates[0], true
+}
+
+// matchPendingUpdate liga um app instalado ao update pendente. A vinculação
+// preferencial usa o Id do "winget list" para o app do inventário — não depende
+// do nome que o "winget upgrade" imprime. Fallbacks: installId/serial do
+// registro e, por fim, o nome do update.
+func matchPendingUpdate(
+	s models.SoftwareItem,
+	byInstallID map[string]models.UpgradeItem,
+	byName map[string][]models.UpgradeItem,
+	installed installedPackageIndex,
+	catalogChoco map[string]string,
+) (models.UpgradeItem, bool) {
+	// 1) Id do gerenciador reconhecido localmente (winget list / choco list).
+	for _, pkg := range installed.candidates(s.Name, s.Version) {
+		if u, ok := byInstallID[normalizeUpdateKey(pkg.ID)]; ok {
+			return u, true
+		}
+	}
+	// 2) Id Chocolatey pelo nome de exibição (catálogo da loja).
+	if id := strings.TrimSpace(catalogChoco[normalizeUpdateKey(s.Name)]); id != "" {
+		if u, ok := byInstallID[normalizeUpdateKey(id)]; ok {
+			return u, true
+		}
+	}
 	for _, candidate := range []string{s.InstallID, s.Serial} {
 		if key := normalizeUpdateKey(candidate); key != "" {
 			if u, ok := byInstallID[key]; ok {
@@ -708,10 +819,11 @@ func matchPendingUpdate(s models.SoftwareItem, byInstallID, byName map[string]mo
 			}
 		}
 	}
-	if key := normalizeUpdateKey(s.Name); key != "" {
-		if u, ok := byName[key]; ok {
+	if entries := byName[normalizeUpdateKey(s.Name)]; len(entries) > 0 {
+		if u, ok := pickNameMatch(entries, s.Version); ok {
 			return u, true
 		}
+		return entries[0], true
 	}
 	return models.UpgradeItem{}, false
 }
@@ -734,28 +846,84 @@ func normalizeSoftwareUpdateSource(source string) string {
 	}
 }
 
-// loadPendingUpdates consulta os updates pendentes de forma best-effort. Em
-// falha transitória (winget/choco indisponíveis, timeout) reutiliza a última
-// lista conhecida: enviar "sem updates" num erro limparia no servidor a
-// informação de atualização já reportada. O próximo scan bem-sucedido — que
-// pode inclusive voltar vazio — a substitui normalmente.
+// installedPackagesCacheTTL evita rodar "winget list" repetidamente em rajadas
+// de sincronização (startup + pós-bootstrap).
+const installedPackagesCacheTTL = 10 * time.Minute
+
+// loadInstalledPackages consulta o "winget list" de forma best-effort e com
+// cache curto, reutilizando a última lista em falha transitória (indexar o
+// inventário com uma lista vazia perderia a correlação pelo Id do winget).
+func (s *Service) loadInstalledPackages(ctx context.Context) []models.InstalledPackage {
+	if s.installedPackages == nil {
+		return nil
+	}
+
+	s.installedPackagesMu.Lock()
+	cached := s.installedPackagesLast
+	cachedAt := s.installedPackagesLastAt
+	loaded := s.installedPackagesLoaded
+	s.installedPackagesMu.Unlock()
+
+	if loaded && time.Since(cachedAt) < installedPackagesCacheTTL {
+		return cached
+	}
+
+	items, err := s.installedPackages(ctx)
+	if err != nil {
+		s.logf("[agent-sync] aviso: falha ao listar pacotes instalados (winget list): " + err.Error())
+		if loaded {
+			return cached
+		}
+		return nil
+	}
+
+	s.installedPackagesMu.Lock()
+	s.installedPackagesLast = items
+	s.installedPackagesLastAt = time.Now()
+	s.installedPackagesLoaded = true
+	s.installedPackagesMu.Unlock()
+	return items
+}
+
+// pendingUpdatesCacheTTL evita rodar winget/choco repetidamente em rajadas de
+// sincronização (startup + pós-bootstrap). O próximo ciclo após o TTL — ou o
+// sync periódico (~6h) — refaz o scan e detecta updates novos.
+const pendingUpdatesCacheTTL = 10 * time.Minute
+
+// loadPendingUpdates consulta os updates pendentes de forma best-effort e com
+// cache curto. Em falha transitória (winget/choco indisponíveis, timeout)
+// reutiliza a última lista conhecida: enviar "sem updates" num erro limparia no
+// servidor a informação de atualização já reportada. O próximo scan
+// bem-sucedido — que pode inclusive voltar vazio — a substitui normalmente.
 func (s *Service) loadPendingUpdates(ctx context.Context) []models.UpgradeItem {
 	if s.pendingUpdates == nil {
 		return nil
 	}
+
+	s.pendingUpdatesMu.Lock()
+	cached := s.pendingUpdatesLast
+	cachedAt := s.pendingUpdatesLastAt
+	loaded := s.pendingUpdatesLoaded
+	s.pendingUpdatesMu.Unlock()
+
+	if loaded && time.Since(cachedAt) < pendingUpdatesCacheTTL {
+		return cached
+	}
+
 	items, err := s.pendingUpdates(ctx)
 	if err != nil {
 		s.logf("[agent-sync] aviso: falha ao consultar updates pendentes: " + err.Error())
-		s.pendingUpdatesMu.Lock()
-		cached := s.pendingUpdatesLast
-		s.pendingUpdatesMu.Unlock()
-		if cached != nil {
+		if loaded {
 			s.logf("[agent-sync] reutilizando ultima lista de updates conhecida para nao limpar o servidor")
+			return cached
 		}
-		return cached
+		return nil
 	}
+
 	s.pendingUpdatesMu.Lock()
 	s.pendingUpdatesLast = items
+	s.pendingUpdatesLastAt = time.Now()
+	s.pendingUpdatesLoaded = true
 	s.pendingUpdatesMu.Unlock()
 	return items
 }

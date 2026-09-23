@@ -28,6 +28,7 @@ type ChocolateyProvider interface {
 	Uninstall(ctx context.Context, id string) (string, error)
 	Upgrade(ctx context.Context, id string) (string, error)
 	ListUpgradable(ctx context.Context) (string, error)
+	ListInstalled(ctx context.Context) (string, error)
 }
 
 type AppsService struct {
@@ -79,12 +80,24 @@ func (s *AppsService) Uninstall(ctx context.Context, id string) (string, error) 
 }
 
 func (s *AppsService) Upgrade(ctx context.Context, id string) (string, error) {
+	return s.UpgradeWithSwitches(ctx, id, "", "")
+}
+
+// UpgradeWithSwitches atualiza usando os switches silenciosos do catálogo
+// (silent → silentWithProgress) quando o provider winget os suportar.
+// Chocolatey ignora switches (usa -y próprio).
+func (s *AppsService) UpgradeWithSwitches(ctx context.Context, id, silent, silentWithProgress string) (string, error) {
 	manager, packageID, err := s.resolvePackageTarget(id)
 	if err != nil {
 		return "", err
 	}
 	if manager == packageManagerChocolatey {
 		return s.chocolatey.Upgrade(ctx, packageID)
+	}
+	if wp, ok := s.winget.(interface {
+		UpgradeWithSwitches(context.Context, string, string, string) (string, error)
+	}); ok {
+		return wp.UpgradeWithSwitches(ctx, packageID, silent, silentWithProgress)
 	}
 	return s.winget.Upgrade(ctx, packageID)
 }
@@ -106,6 +119,19 @@ func (s *AppsService) ListUpgradableChocolatey(ctx context.Context) (string, err
 		return "", nil
 	}
 	out, err := s.chocolatey.ListUpgradable(ctx)
+	if err != nil && strings.Contains(strings.ToLower(err.Error()), "chocolatey nao encontrado") {
+		return "", nil
+	}
+	return out, err
+}
+
+// ListInstalledChocolatey lista os pacotes locais do Chocolatey, tolerando a
+// ausência do choco no host (retorna vazio em vez de erro).
+func (s *AppsService) ListInstalledChocolatey(ctx context.Context) (string, error) {
+	if s.chocolatey == nil {
+		return "", nil
+	}
+	out, err := s.chocolatey.ListInstalled(ctx)
 	if err != nil && strings.Contains(strings.ToLower(err.Error()), "chocolatey nao encontrado") {
 		return "", nil
 	}

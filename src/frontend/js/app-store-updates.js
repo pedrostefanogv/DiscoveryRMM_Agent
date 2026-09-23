@@ -428,6 +428,15 @@ async function runAction(action, id, displayID) {
     if (installedOutputEl) {
       installedOutputEl.textContent = output || translate('common.noOutput');
     }
+
+    // Recarrega o contexto de pacotes (instalado/update) para o card refletir o
+    // novo estado — ex.: após atualizar, deixa de mostrar "Atualizar".
+    try {
+      await loadPackageActions(appApi());
+      renderCards();
+    } catch (_) {
+      // best effort: falha ao atualizar o contexto não invalida a ação.
+    }
   } catch (error) {
     showFeedback(String(error), true);
   }

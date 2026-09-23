@@ -29,6 +29,16 @@ func (a *App) pendingUpdatesForInventory(_ context.Context) ([]models.UpgradeIte
 	return a.UpdatesSvc.GetPendingUpdates()
 }
 
+// installedPackagesForInventory expõe o "winget list" (Name/Id/Version) ao
+// inventário, que o usa para correlacionar apps de registro ao Id real do
+// pacote. Best-effort: sem o serviço de updates retorna vazio.
+func (a *App) installedPackagesForInventory(_ context.Context) ([]models.InstalledPackage, error) {
+	if a == nil || a.UpdatesSvc == nil {
+		return nil, nil
+	}
+	return a.UpdatesSvc.GetInstalledPackages()
+}
+
 // GetPackageActions returns a contextual action map keyed by package id.
 // Values: install, uninstall, upgrade.
 func (a *App) GetPackageActions() (map[string]string, error) {

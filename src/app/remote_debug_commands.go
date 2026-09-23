@@ -312,6 +312,16 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 		return a.handleScheduledTaskCommand(parent, payload)
 	}
 
+	// Atualização de software instalado (inventário do dashboard).
+	if IsSoftwareUpdateCommandType(cmdType) {
+		return a.handleSoftwareUpdateCommand(parent, payload)
+	}
+
+	// Desinstalação de software instalado (inventário do dashboard).
+	if IsSoftwareUninstallCommandType(cmdType) {
+		return a.handleSoftwareUninstallCommand(parent, payload)
+	}
+
 	// Delega comandos de inventário sob demanda (SystemInfo)
 	if cmdType == "systeminfo" {
 		return a.handleSystemInfoCommand(parent, payload)

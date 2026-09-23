@@ -125,7 +125,7 @@ func TestBuildAgentSoftwareEnvelope_AppliesContractLimits(t *testing.T) {
 		},
 	}
 
-	env := buildAgentSoftwareEnvelope(report, "test-agent-id", nil)
+	env := buildAgentSoftwareEnvelope(report, "test-agent-id", nil, nil, nil)
 	if len(env.Software) != 1 {
 		t.Fatalf("esperado 1 software valido, veio %d", len(env.Software))
 	}
@@ -169,7 +169,7 @@ func TestBuildAgentSoftwareEnvelope_IncludesPendingUpdates(t *testing.T) {
 		{Name: "Contoso", ID: "Contoso.App", CurrentVersion: "1.0.0", AvailableVersion: "2.0.0", Source: "choco"},
 	}
 
-	env := buildAgentSoftwareEnvelope(report, "agent-1", pending)
+	env := buildAgentSoftwareEnvelope(report, "agent-1", pending, nil, nil)
 
 	byName := map[string]agentSoftwareItem{}
 	for _, item := range env.Software {
@@ -191,6 +191,52 @@ func TestBuildAgentSoftwareEnvelope_IncludesPendingUpdates(t *testing.T) {
 
 	if byName["Notepad++"].UpdateAvailable {
 		t.Fatalf("notepad++ nao deveria ter update")
+	}
+}
+
+func TestBuildAgentSoftwareEnvelope_CorrelatesByWingetListID(t *testing.T) {
+	// O nome do update difere do nome instalado; a correlação deve acontecer
+	// pelo Id do "winget list" para o app do inventário.
+	report := models.InventoryReport{
+		Software: []models.SoftwareItem{
+			{Name: "Notepad++ (32-bit)", Version: "8.5.0", InstallID: "{NOTEPAD}", Source: "registry"},
+		},
+	}
+	pending := []models.UpgradeItem{
+		{Name: "Notepad++", ID: "Notepad++.Notepad++", CurrentVersion: "8.5.0", AvailableVersion: "8.6.0", Source: "winget"},
+	}
+	installed := []models.InstalledPackage{
+		{Name: "Notepad++ (32-bit)", ID: "Notepad++.Notepad++", Version: "8.5.0"},
+	}
+
+	env := buildAgentSoftwareEnvelope(report, "agent-1", pending, installed, nil)
+	if len(env.Software) != 1 {
+		t.Fatalf("esperado 1 software, veio %d", len(env.Software))
+	}
+	item := env.Software[0]
+	if !item.UpdateAvailable || item.AvailableVersion != "8.6.0" || item.UpdatePackageID != "Notepad++.Notepad++" {
+		t.Fatalf("correlação por winget list falhou: %+v", item)
+	}
+}
+
+func TestBuildAgentSoftwareEnvelope_NameFallbackPrefersMatchingVersion(t *testing.T) {
+	report := models.InventoryReport{
+		Software: []models.SoftwareItem{
+			{Name: "Contoso Tool", Version: "1.0.0", Source: "registry"},
+		},
+	}
+	pending := []models.UpgradeItem{
+		{Name: "Contoso Tool", ID: "Contoso.Tool.Old", CurrentVersion: "0.9.0", AvailableVersion: "9.9.9", Source: "winget"},
+		{Name: "Contoso Tool", ID: "Contoso.Tool", CurrentVersion: "1.0.0", AvailableVersion: "1.1.0", Source: "winget"},
+	}
+
+	env := buildAgentSoftwareEnvelope(report, "agent-1", pending, nil, nil)
+	if len(env.Software) != 1 {
+		t.Fatalf("esperado 1 software, veio %d", len(env.Software))
+	}
+	item := env.Software[0]
+	if item.AvailableVersion != "1.1.0" || item.UpdatePackageID != "Contoso.Tool" {
+		t.Fatalf("esperava o update da versao 1.0.0, veio %+v", item)
 	}
 }
 

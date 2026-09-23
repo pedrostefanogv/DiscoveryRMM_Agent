@@ -35,7 +35,7 @@ func (a *App) handleSystemInfoCommand(ctx context.Context, payload any) (bool, i
 }
 
 // handleRefreshOnDemand collects only the data requested by the dashboard refresh buttons.
-func (a *App) handleRefreshOnDemand(_ context.Context, payloadJSON map[string]any) (bool, int, string, string) {
+func (a *App) handleRefreshOnDemand(ctx context.Context, payloadJSON map[string]any) (bool, int, string, string) {
 	flags := refreshOnDemandFlags{
 		Ports:          agentcommands.GetBoolField(payloadJSON, "Ports"),
 		Connections:    agentcommands.GetBoolField(payloadJSON, "Connections"),
@@ -75,15 +75,6 @@ func (a *App) handleRefreshOnDemand(_ context.Context, payloadJSON map[string]an
 		}
 	}
 
-	if flags.Software {
-		software, err := a.InventorySvc.RefreshSoftware()
-		if err != nil {
-			a.Logs.Append("[agent] refresh-on-demand: falha ao coletar software: " + err.Error())
-		} else {
-			results = append(results, fmt.Sprintf("software=%d", len(software)))
-		}
-	}
-
 	if flags.StartupItems || flags.ScheduledTasks {
 		// Itens de inicialização + tarefas agendadas: coleta e upload parcial
 		// (somente as duas listas — o merge server-side preserva o restante).
@@ -99,11 +90,18 @@ func (a *App) handleRefreshOnDemand(_ context.Context, payloadJSON map[string]an
 		}
 	}
 
-	if flags.Printers || flags.Hardware {
+	if flags.Software || flags.Printers || flags.Hardware {
 		report, err := a.InventorySvc.RefreshInventory()
 		if err != nil {
 			a.Logs.Append("[agent] refresh-on-demand: falha ao coletar inventario: " + err.Error())
 		} else {
+			// Upload imediato ao servidor: o refresh manual do dashboard deve
+			// refletir sem esperar o sync periódico. Inclui o inventário de
+			// software com updates e Ids de winget/chocolatey.
+			a.InventorySvc.SyncInventoryOnStartup(ctx, report)
+			if flags.Software {
+				results = append(results, fmt.Sprintf("software=%d", len(report.Software)))
+			}
 			if flags.Printers {
 				results = append(results, fmt.Sprintf("printers=%d", len(report.Printers)))
 			}
@@ -118,7 +116,7 @@ func (a *App) handleRefreshOnDemand(_ context.Context, payloadJSON map[string]an
 }
 
 // handleForceSync triggers a full inventory and software sync.
-func (a *App) handleForceSync(_ context.Context, payloadJSON map[string]any) (bool, int, string, string) {
+func (a *App) handleForceSync(ctx context.Context, payloadJSON map[string]any) (bool, int, string, string) {
 	policies := agentcommands.GetBoolField(payloadJSON, "Policies")
 	inventory := agentcommands.GetBoolField(payloadJSON, "Inventory")
 	software := agentcommands.GetBoolField(payloadJSON, "Software")
@@ -131,22 +129,21 @@ func (a *App) handleForceSync(_ context.Context, payloadJSON map[string]any) (bo
 
 	var results []string
 
-	if inventory {
+	if inventory || software {
 		report, err := a.InventorySvc.RefreshInventory()
 		if err != nil {
 			a.Logs.Append("[agent] force-sync: falha ao coletar inventario: " + err.Error())
 			results = append(results, "inventory=failed")
 		} else {
-			results = append(results, fmt.Sprintf("inventory=ok(ports=%d,conn=%d)", len(report.ListeningPorts), len(report.OpenSockets)))
-		}
-	}
-
-	if software {
-		sw, err := a.InventorySvc.RefreshSoftware()
-		if err != nil {
-			a.Logs.Append("[agent] force-sync: falha ao coletar software: " + err.Error())
-		} else {
-			results = append(results, fmt.Sprintf("software=%d", len(sw)))
+			// force-sync de fato envia ao servidor (inclui software com updates
+			// e Ids de winget/chocolatey).
+			a.InventorySvc.SyncInventoryOnStartup(ctx, report)
+			if inventory {
+				results = append(results, fmt.Sprintf("inventory=ok(ports=%d,conn=%d)", len(report.ListeningPorts), len(report.OpenSockets)))
+			}
+			if software {
+				results = append(results, fmt.Sprintf("software=%d", len(report.Software)))
+			}
 		}
 	}
 

@@ -24,6 +24,10 @@ func (m *mockUpdatesAppsService) ListInstalled(ctx context.Context) (string, err
 	return "", nil
 }
 
+func (m *mockUpdatesAppsService) ListInstalledChocolatey(ctx context.Context) (string, error) {
+	return m.chocoOut, m.chocoErr
+}
+
 func TestParseChocolateyOutdatedOutput_LimitOutput(t *testing.T) {
 	raw := "Chocolatey v2.5.1\n" +
 		"git|2.45.1|2.46.0|false\n" +
@@ -38,6 +42,25 @@ func TestParseChocolateyOutdatedOutput_LimitOutput(t *testing.T) {
 	}
 	if items[1].ID != "7zip" || items[1].Source != "chocolatey" {
 		t.Fatalf("unexpected second chocolatey item: %+v", items[1])
+	}
+}
+
+func TestParseChocolateyListOutput_LimitOutput(t *testing.T) {
+	raw := "Chocolatey v2.5.1\n" +
+		"git|2.45.1\n" +
+		"7zip|24.07\n" +
+		"googlechrome|120.0.0\n" +
+		"3 packages installed.\n"
+
+	items := parseChocolateyListOutput(raw)
+	if len(items) != 3 {
+		t.Fatalf("esperava 3 itens, veio %d: %+v", len(items), items)
+	}
+	if items[0].ID != "git" || items[0].Version != "2.45.1" || items[0].Source != "chocolatey" || items[0].Name != "git" {
+		t.Fatalf("item inesperado: %+v", items[0])
+	}
+	if items[2].ID != "googlechrome" || items[2].Version != "120.0.0" {
+		t.Fatalf("item inesperado: %+v", items[2])
 	}
 }
 

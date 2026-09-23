@@ -110,6 +110,11 @@ type Options struct {
 	// outdated) usados para enriquecer o inventário de software com a versão
 	// disponível. Best-effort: falha não impede o envio do inventário.
 	PendingUpdates func(context.Context) ([]models.UpgradeItem, error)
+
+	// InstalledPackages lista os apps instalados reconhecidos pelo gerenciador
+	// (winget list: Name/Id/Version) para correlacionar o inventário de registro
+	// ao Id real do pacote. Best-effort.
+	InstalledPackages func(context.Context) ([]models.InstalledPackage, error)
 }
 
 // Service handles inventory, installs and sync operations.
@@ -132,6 +137,17 @@ type Service struct {
 	pendingUpdates                   func(context.Context) ([]models.UpgradeItem, error)
 	pendingUpdatesMu                 sync.Mutex
 	pendingUpdatesLast               []models.UpgradeItem
+	pendingUpdatesLastAt             time.Time
+	pendingUpdatesLoaded             bool
+	installedPackages                func(context.Context) ([]models.InstalledPackage, error)
+	installedPackagesMu              sync.Mutex
+	installedPackagesLast            []models.InstalledPackage
+	installedPackagesLastAt          time.Time
+	installedPackagesLoaded          bool
+	catalogChocoMu                   sync.Mutex
+	catalogChocoLast                 map[string]string
+	catalogChocoAt                   time.Time
+	catalogChocoLoaded               bool
 	postInstallInventoryRefreshDelay time.Duration
 	postInstallInventoryRefreshMu    sync.Mutex
 	postInstallInventoryRefreshTimer *time.Timer
@@ -167,6 +183,7 @@ func NewService(opts Options) *Service {
 		commitHash:                       opts.CommitHash,
 		shouldDeferNonCritical:           opts.ShouldDeferNonCritical,
 		pendingUpdates:                   opts.PendingUpdates,
+		installedPackages:                opts.InstalledPackages,
 		postInstallInventoryRefreshDelay: postInstallInventoryRefreshDelayDefault,
 		hardwareIdentity:                 opts.HardwareIdentity,
 	}
@@ -396,6 +413,73 @@ func (s *Service) Upgrade(id string) (string, error) {
 	return out, err
 }
 
+// UpgradeFromSource atualiza um pacote instalado sem consultar a política da
+// loja. Usado pelo comando remoto de atualização (o servidor aplica o gate de
+// confirmação). Continua passando pelo router de gerenciadores, preservando a
+// otimização P2P e os switches silenciosos do catálogo.
+func (s *Service) UpgradeFromSource(installationType, packageID string) (string, error) {
+	done := s.beginActivity("atualização")
+	if done != nil {
+		defer done()
+	}
+
+	packageID = strings.TrimSpace(packageID)
+	if packageID == "" {
+		return "", fmt.Errorf("id do pacote é obrigatório")
+	}
+
+	s.logf("[software-update " + packageID + "] " + time.Now().Format("15:04:05"))
+
+	var out string
+	var err error
+	switch normalizeAppStoreInstallationType(installationType) {
+	case string(appstore.InstallationWinget):
+		out, err = s.apps.Upgrade(s.ctx(), packageID)
+	case string(appstore.InstallationChocolatey):
+		out, err = s.runChocolatey(s.ctx(), "upgrade", packageID)
+	default:
+		err = fmt.Errorf("installationType %q não suportado para atualização remota", installationType)
+	}
+	s.logf(out)
+	if err == nil {
+		s.scheduleInventoryRefreshAfterPackageChange("upgrade", packageID)
+	}
+	return out, err
+}
+
+// UninstallFromSource desinstala um pacote instalado sem consultar a política
+// da loja. Usado pelo comando remoto de desinstalação do dashboard (remoção não
+// é bloqueada pela política). Passa pelo router de gerenciadores (winget/choco).
+func (s *Service) UninstallFromSource(installationType, packageID string) (string, error) {
+	done := s.beginActivity("desinstalação")
+	if done != nil {
+		defer done()
+	}
+
+	packageID = strings.TrimSpace(packageID)
+	if packageID == "" {
+		return "", fmt.Errorf("id do pacote é obrigatório")
+	}
+
+	s.logf("[software-uninstall " + packageID + "] " + time.Now().Format("15:04:05"))
+
+	var out string
+	var err error
+	switch normalizeAppStoreInstallationType(installationType) {
+	case string(appstore.InstallationWinget):
+		out, err = s.apps.Uninstall(s.ctx(), packageID)
+	case string(appstore.InstallationChocolatey):
+		out, err = s.runChocolatey(s.ctx(), "uninstall", packageID)
+	default:
+		err = fmt.Errorf("installationType %q não suportado para desinstalação remota", installationType)
+	}
+	s.logf(out)
+	if err == nil {
+		s.scheduleInventoryRefreshAfterPackageChange("uninstall", packageID)
+	}
+	return out, err
+}
+
 // UpgradeAll upgrades all packages.
 func (s *Service) UpgradeAll() (string, error) {
 	done := s.beginActivity("atualização em lote")
@@ -482,7 +566,111 @@ func (s *Service) runDelayedInventoryRefreshAfterPackageChange() {
 	if s.cache != nil {
 		s.cache.Set(report)
 	}
-	s.logf("[inventory-refresh] inventário atualizado após alterações de software")
+
+	// Invalida o cache de updates pendentes: sem isso o upload reaproveitaria a
+	// lista anterior e ainda reportaria como disponível o update recém-aplicado.
+	s.invalidatePendingUpdates()
+
+	// Envia o inventário atualizado ao servidor (best-effort). Sem este upload,
+	// o dashboard só enxergaria a mudança no próximo sync periódico (~6h) —
+	// justamente o que o botão remoto de atualização precisa refletir.
+	s.SyncInventoryOnStartup(ctx, report)
+
+	s.logf("[inventory-refresh] inventário atualizado e sincronizado após alterações de software")
+}
+
+func (s *Service) invalidatePendingUpdates() {
+	s.pendingUpdatesMu.Lock()
+	s.pendingUpdatesLoaded = false
+	s.pendingUpdatesLastAt = time.Time{}
+	s.pendingUpdatesMu.Unlock()
+
+	// O índice do "winget list" também muda após instalar/remover/atualizar.
+	s.installedPackagesMu.Lock()
+	s.installedPackagesLoaded = false
+	s.installedPackagesLastAt = time.Time{}
+	s.installedPackagesMu.Unlock()
+
+	s.catalogChocoMu.Lock()
+	s.catalogChocoLoaded = false
+	s.catalogChocoAt = time.Time{}
+	s.catalogChocoMu.Unlock()
+}
+
+// catalogChocoCacheTTL evita remapear o catálogo da loja a cada sincronização.
+const catalogChocoCacheTTL = 30 * time.Minute
+
+// loadCatalogChocoIndex mapeia nome de exibição → packageId dos itens Chocolatey
+// do catálogo da loja. É o elo entre o nome do registro e o Id real do pacote
+// choco (o "choco list" só devolve o Id, sem nome de exibição). Best-effort.
+func (s *Service) loadCatalogChocoIndex(
+	ctx context.Context,
+	installed []models.InstalledPackage,
+	pending []models.UpgradeItem,
+) map[string]string {
+	if s.getCatalog == nil {
+		return nil
+	}
+
+	// Sem nenhum indício de Chocolatey (instalado ou com update pendente) o
+	// catálogo não agrega: evita remapear o catálogo inteiro em máquinas sem choco.
+	if !hasChocolateySignal(installed, pending) {
+		return nil
+	}
+
+	s.catalogChocoMu.Lock()
+	cached := s.catalogChocoLast
+	cachedAt := s.catalogChocoAt
+	loaded := s.catalogChocoLoaded
+	s.catalogChocoMu.Unlock()
+
+	if loaded && time.Since(cachedAt) < catalogChocoCacheTTL {
+		return cached
+	}
+
+	catalog, err := s.getCatalog(ctx)
+	if err != nil {
+		s.logf("[agent-sync] aviso: catálogo indisponível para correlacionar Chocolatey: " + err.Error())
+		if loaded {
+			return cached
+		}
+		return nil
+	}
+
+	index := make(map[string]string, len(catalog.Packages))
+	for _, item := range catalog.Packages {
+		if !strings.Contains(strings.ToLower(item.InstallationType), "choco") {
+			continue
+		}
+		key := normalizeUpdateKey(item.Name)
+		if key == "" {
+			continue
+		}
+		if _, exists := index[key]; !exists {
+			index[key] = strings.TrimSpace(item.ID)
+		}
+	}
+
+	s.catalogChocoMu.Lock()
+	s.catalogChocoLast = index
+	s.catalogChocoAt = time.Now()
+	s.catalogChocoLoaded = true
+	s.catalogChocoMu.Unlock()
+	return index
+}
+
+func hasChocolateySignal(installed []models.InstalledPackage, pending []models.UpgradeItem) bool {
+	for _, pkg := range installed {
+		if strings.Contains(strings.ToLower(pkg.Source), "choco") {
+			return true
+		}
+	}
+	for _, update := range pending {
+		if strings.Contains(strings.ToLower(update.Source), "choco") {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Service) inventoryProvisioned() bool {

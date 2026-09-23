@@ -184,6 +184,18 @@ type SoftwareItem struct {
 	InstallSource string `json:"installSource"`
 }
 
+// InstalledPackage representa um aplicativo instalado reconhecido pelo
+// gerenciador de pacotes (saída de "winget list"), com o Id do pacote. É usado
+// para correlacionar o inventário de registro com os updates pendentes pelo Id
+// real do winget, em vez de depender só do nome de exibição.
+type InstalledPackage struct {
+	Name    string `json:"name"`
+	ID      string `json:"id"`
+	Version string `json:"version"`
+	// Source identifica o gerenciador que reconheceu o pacote (winget|chocolatey).
+	Source string `json:"source,omitempty"`
+}
+
 type StartupItem struct {
 	Name     string `json:"name"`
 	Path     string `json:"path"`

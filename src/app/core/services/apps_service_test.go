@@ -69,6 +69,10 @@ func (m *mockChocolateyProvider) Upgrade(ctx context.Context, id string) (string
 	return "choco-upgrade", nil
 }
 
+func (m *mockChocolateyProvider) ListInstalled(_ context.Context) (string, error) {
+	return m.listUpgradable, m.listErr
+}
+
 func (m *mockChocolateyProvider) ListUpgradable(ctx context.Context) (string, error) {
 	return m.listUpgradable, m.listErr
 }

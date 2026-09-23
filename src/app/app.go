@@ -628,9 +628,10 @@ func NewApp(opts AppStartupOptions) *App {
 		ResolveAllowedByType: func(ctx context.Context, installationType, packageID string) (appstore.Item, error) {
 			return a.findAllowedPackage(ctx, installationType, packageID)
 		},
-		GetCatalog:     a.getCatalogFromAppStore,
-		PendingUpdates: a.pendingUpdatesForInventory,
-		BeginActivity:  a.beginActivity,
+		GetCatalog:        a.getCatalogFromAppStore,
+		PendingUpdates:    a.pendingUpdatesForInventory,
+		InstalledPackages: a.installedPackagesForInventory,
+		BeginActivity:     a.beginActivity,
 		DispatchNotification: func(req appinventory.InventoryNotification) appinventory.InventoryNotificationResponse {
 			resp := a.DispatchNotification(NotificationDispatchRequest{
 				NotificationID: req.NotificationID,

@@ -47,6 +47,12 @@ func (c *Client) ListUpgradable(ctx context.Context) (string, error) {
 	return c.run(ctx, "outdated", "--limit-output", "--no-color")
 }
 
+// ListInstalled lista os pacotes locais do Chocolatey (id|version) — usado para
+// correlacionar o inventário e a desinstalação de apps instalados via choco.
+func (c *Client) ListInstalled(ctx context.Context) (string, error) {
+	return c.run(ctx, "list", "--local-only", "--limit-output", "--no-color")
+}
+
 func (c *Client) run(ctx context.Context, args ...string) (string, error) {
 	runCtx, cancel := ctxutil.WithTimeout(ctx, c.timeout)
 	defer cancel()

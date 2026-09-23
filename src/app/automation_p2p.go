@@ -89,8 +89,12 @@ func (m *automationPackageManagerRouter) Uninstall(ctx context.Context, id strin
 }
 
 func (m *automationPackageManagerRouter) Upgrade(ctx context.Context, id string) (string, error) {
+	// Switches silenciosos do catálogo também no upgrade (paridade com o install):
+	// o winget anexa via --custom e o guard de MSI evita switches exe-only.
+	catSilent, catSilentWithProgress := m.catalogSilentSwitches(id)
+
 	if !m.shouldUseP2PForWingetInstall() {
-		return m.fallback.Upgrade(ctx, id)
+		return m.fallback.UpgradeWithSwitches(ctx, id, catSilent, catSilentWithProgress)
 	}
 
 	output, p2pErr := m.installViaP2P(ctx, id)
@@ -99,7 +103,7 @@ func (m *automationPackageManagerRouter) Upgrade(ctx context.Context, id string)
 	}
 	if errors.Is(p2pErr, errInstallerExec) {
 		m.logf("[automation][p2p] instalador adquirido mas execução falhou, fallback para winget direto packageId=%s motivo=%v", strings.TrimSpace(id), p2pErr)
-		fallbackOut, fallbackErr := m.fallback.Upgrade(ctx, id)
+		fallbackOut, fallbackErr := m.fallback.UpgradeWithSwitches(ctx, id, catSilent, catSilentWithProgress)
 		if fallbackErr != nil {
 			return fallbackOut, fmt.Errorf("p2p e winget falharam: p2p=%v; winget=%w", p2pErr, fallbackErr)
 		}
@@ -113,7 +117,7 @@ func (m *automationPackageManagerRouter) Upgrade(ctx context.Context, id string)
 	}
 	m.logf("[automation][p2p] download+cache falhou, fallback para winget direto packageId=%s motivo=%v", strings.TrimSpace(id), dlErr)
 
-	fallbackOut, fallbackErr := m.fallback.Upgrade(ctx, id)
+	fallbackOut, fallbackErr := m.fallback.UpgradeWithSwitches(ctx, id, catSilent, catSilentWithProgress)
 	if fallbackErr != nil {
 		return fallbackOut, fmt.Errorf("p2p e winget falharam: p2p=%v; download+cache=%v; winget=%w", p2pErr, dlErr, fallbackErr)
 	}
