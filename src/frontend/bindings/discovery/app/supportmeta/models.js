@@ -81,6 +81,20 @@ export class APITicket {
         if (/** @type {any} */(false)) {
             /**
              * @member
+             * @type {string | undefined}
+             */
+            this["updatedAt"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | null | undefined}
+             */
+            this["closedAt"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
              * @type {APIWorkflowState | null | undefined}
              */
             this["workflowState"] = undefined;
@@ -116,10 +130,10 @@ export class APITicket {
      * @returns {APITicket}
      */
     static createFrom($$source = {}) {
-        const $$createField9_0 = $$createType1;
+        const $$createField11_0 = $$createType1;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("workflowState" in $$parsedSource) {
-            $$parsedSource["workflowState"] = $$createField9_0($$parsedSource["workflowState"]);
+            $$parsedSource["workflowState"] = $$createField11_0($$parsedSource["workflowState"]);
         }
         return new APITicket(/** @type {Partial<APITicket>} */($$parsedSource));
     }
@@ -331,6 +345,22 @@ export class CreateTicketInput {
              * @type {string}
              */
             this["category"] = "";
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * Opcionais: quando preenchidos, o chamado nasce departamento/perfil e o
+             * servidor calcula o SLA. Sem eles, o perfil padrão do departamento não se aplica.
+             * @member
+             * @type {string | undefined}
+             */
+            this["departmentId"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["workflowProfileId"] = undefined;
         }
 
         Object.assign(this, $$source);
@@ -643,6 +673,135 @@ export class TicketComment {
 }
 
 /**
+ * TicketOptionDepartment is a department option for the agent ticket form.
+ */
+export class TicketOptionDepartment {
+    /**
+     * Creates a new TicketOptionDepartment instance.
+     * @param {Partial<TicketOptionDepartment>} [$$source = {}] - The source object to create the TicketOptionDepartment.
+     */
+    constructor($$source = {}) {
+        if (!("id" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["id"] = "";
+        }
+        if (!("name" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["name"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new TicketOptionDepartment instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {TicketOptionDepartment}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new TicketOptionDepartment(/** @type {Partial<TicketOptionDepartment>} */($$parsedSource));
+    }
+}
+
+/**
+ * TicketOptionProfile is a workflow profile option for the agent ticket form.
+ */
+export class TicketOptionProfile {
+    /**
+     * Creates a new TicketOptionProfile instance.
+     * @param {Partial<TicketOptionProfile>} [$$source = {}] - The source object to create the TicketOptionProfile.
+     */
+    constructor($$source = {}) {
+        if (!("id" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["id"] = "";
+        }
+        if (!("name" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["name"] = "";
+        }
+        if (!("departmentId" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["departmentId"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new TicketOptionProfile instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {TicketOptionProfile}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new TicketOptionProfile(/** @type {Partial<TicketOptionProfile>} */($$parsedSource));
+    }
+}
+
+/**
+ * TicketOptions carries the department/profile pickers for the agent ticket form.
+ */
+export class TicketOptions {
+    /**
+     * Creates a new TicketOptions instance.
+     * @param {Partial<TicketOptions>} [$$source = {}] - The source object to create the TicketOptions.
+     */
+    constructor($$source = {}) {
+        if (!("departments" in $$source)) {
+            /**
+             * @member
+             * @type {TicketOptionDepartment[]}
+             */
+            this["departments"] = [];
+        }
+        if (!("workflowProfiles" in $$source)) {
+            /**
+             * @member
+             * @type {TicketOptionProfile[]}
+             */
+            this["workflowProfiles"] = [];
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new TicketOptions instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {TicketOptions}
+     */
+    static createFrom($$source = {}) {
+        const $$createField0_0 = $$createType6;
+        const $$createField1_0 = $$createType8;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("departments" in $$parsedSource) {
+            $$parsedSource["departments"] = $$createField0_0($$parsedSource["departments"]);
+        }
+        if ("workflowProfiles" in $$parsedSource) {
+            $$parsedSource["workflowProfiles"] = $$createField1_0($$parsedSource["workflowProfiles"]);
+        }
+        return new TicketOptions(/** @type {Partial<TicketOptions>} */($$parsedSource));
+    }
+}
+
+/**
  * TicketPriority normalizes priority values from API responses.
  * @typedef {number} TicketPriority
  */
@@ -653,3 +812,7 @@ const $$createType1 = $Create.Nullable($$createType0);
 const $$createType2 = $Create.Array($Create.Any);
 const $$createType3 = KnowledgePage.createFrom;
 const $$createType4 = $Create.Array($$createType3);
+const $$createType5 = TicketOptionDepartment.createFrom;
+const $$createType6 = $Create.Array($$createType5);
+const $$createType7 = TicketOptionProfile.createFrom;
+const $$createType8 = $Create.Array($$createType7);

@@ -17,7 +17,6 @@ export {
     ChatMessage,
     CloseTicketInput,
     CreateTicketInput,
-    CreateTicketRequest,
     DebugConfig,
     HardwareIdentityInfo,
     InstallerConfig,
@@ -50,5 +49,5 @@ export {
     RuntimeFlags,
     StatusOverview,
     TicketComment,
-    TicketSummary
+    TicketOptions
 } from "./models.js";

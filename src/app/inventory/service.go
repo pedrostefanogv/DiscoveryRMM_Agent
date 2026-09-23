@@ -579,6 +579,18 @@ func (s *Service) runDelayedInventoryRefreshAfterPackageChange() {
 	s.logf("[inventory-refresh] inventário atualizado e sincronizado após alterações de software")
 }
 
+// InvalidatePendingUpdatesCache força o próximo SyncInventoryOnStartup a
+// refazer o scan de updates (winget upgrade + choco outdated) e o "winget list",
+// em vez de reaproveitar o cache de 10 minutos. Usado pelo refresh manual de
+// software do dashboard ("Atualizar" no detalhe do agente).
+func (s *Service) InvalidatePendingUpdatesCache() {
+	if s == nil {
+		return
+	}
+	s.invalidatePendingUpdates()
+	s.logf("[inventory-refresh] cache de updates/instalados invalidado (refresh manual)")
+}
+
 func (s *Service) invalidatePendingUpdates() {
 	s.pendingUpdatesMu.Lock()
 	s.pendingUpdatesLoaded = false

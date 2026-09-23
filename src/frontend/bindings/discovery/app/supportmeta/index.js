@@ -10,7 +10,10 @@ export {
     CreateTicketInput,
     KnowledgeArticle,
     KnowledgePage,
-    TicketComment
+    TicketComment,
+    TicketOptionDepartment,
+    TicketOptionProfile,
+    TicketOptions
 } from "./models.js";
 
 import * as $models from "./models.js";

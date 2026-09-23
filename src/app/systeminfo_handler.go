@@ -95,9 +95,24 @@ func (a *App) handleRefreshOnDemand(ctx context.Context, payloadJSON map[string]
 		if err != nil {
 			a.Logs.Append("[agent] refresh-on-demand: falha ao coletar inventario: " + err.Error())
 		} else {
+			// O botão "Atualizar" do inventário de aplicativos precisa de dados
+			// FRESCOS do gerenciador de pacotes: o último scan fica em cache por
+			// pendingUpdatesCacheTTL (10 min) e o RefreshInventory só re-coleta o
+			// registro do Windows. Sem esta invalidação, um refresh logo após uma
+			// instalação/atualização devolvia a lista antiga de updates e o
+			// dashboard continuava sem o botão "Atualizar" em cada app.
+			if flags.Software && a.InventorySvc != nil {
+				a.InventorySvc.InvalidatePendingUpdatesCache()
+			}
+
 			// Upload imediato ao servidor: o refresh manual do dashboard deve
 			// refletir sem esperar o sync periódico. Inclui o inventário de
 			// software com updates e Ids de winget/chocolatey.
+			//
+			// O envio é BLOQUEANTE de propósito: o agente responde o comando ao
+			// servidor no return desta função e o dashboard faz polling curto
+			// (2s) do snapshot logo depois. Enviar em goroutine deixava o
+			// dashboard lendo o inventário antigo (corrida).
 			a.InventorySvc.SyncInventoryOnStartup(ctx, report)
 			if flags.Software {
 				results = append(results, fmt.Sprintf("software=%d", len(report.Software)))

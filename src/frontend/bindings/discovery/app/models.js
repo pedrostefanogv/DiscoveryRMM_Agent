@@ -36,9 +36,6 @@ import * as status$0 from "./status/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
 import * as supportmeta$0 from "./supportmeta/models.js";
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore: Unused imports
-import * as tickets$0 from "./tickets/models.js";
 
 export const APITicket = supportmeta$0.APITicket;
 
@@ -181,16 +178,6 @@ export const CreateTicketInput = supportmeta$0.CreateTicketInput;
 
 /**
  * @typedef {supportmeta$0.CreateTicketInput} CreateTicketInput
- */
-
-/**
- * CreateTicketRequest é o payload para POST /me/tickets.
- */
-export const CreateTicketRequest = tickets$0.CreateTicketRequest;
-
-/**
- * CreateTicketRequest é o payload para POST /me/tickets.
- * @typedef {tickets$0.CreateTicketRequest} CreateTicketRequest
  */
 
 export const DebugConfig = debug$0.Config;
@@ -1072,14 +1059,10 @@ export const TicketComment = supportmeta$0.TicketComment;
  * @typedef {supportmeta$0.TicketComment} TicketComment
  */
 
-/**
- * TicketSummary representa um ticket retornado pela API.
- */
-export const TicketSummary = tickets$0.TicketSummary;
+export const TicketOptions = supportmeta$0.TicketOptions;
 
 /**
- * TicketSummary representa um ticket retornado pela API.
- * @typedef {tickets$0.TicketSummary} TicketSummary
+ * @typedef {supportmeta$0.TicketOptions} TicketOptions
  */
 
 export const p2pDiscoveredPeer = p2pmeta$0.DiscoveredPeer;

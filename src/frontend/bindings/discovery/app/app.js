@@ -59,9 +59,6 @@ import * as status$0 from "./status/models.js";
 import * as supportmeta$0 from "./supportmeta/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
-import * as tickets$0 from "./tickets/models.js";
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore: Unused imports
 import * as json$0 from "../../encoding/json/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
@@ -77,11 +74,10 @@ import * as $models from "./models.js";
 /**
  * @param {string} ticketID
  * @param {string} content
- * @param {boolean} isInternal
  * @returns {$CancellablePromise<json$0.RawMessage>}
  */
-export function AddAgentTicketComment(ticketID, content, isInternal) {
-    return $Call.ByID(2286313891, ticketID, content, isInternal);
+export function AddAgentTicketComment(ticketID, content) {
+    return $Call.ByID(2286313891, ticketID, content);
 }
 
 /**
@@ -97,16 +93,6 @@ export function AddLocalMemory(content) {
 }
 
 /**
- * AddMyTicketComment adiciona um comentário ao ticket.
- * @param {string} ticketID
- * @param {string} content
- * @returns {$CancellablePromise<void>}
- */
-export function AddMyTicketComment(ticketID, content) {
-    return $Call.ByID(814921856, ticketID, content);
-}
-
-/**
  * @param {string} ticketID
  * @param {string} author
  * @param {string} content
@@ -119,11 +105,10 @@ export function AddTicketComment(ticketID, author, content) {
 /**
  * @param {string} ticketID
  * @param {string} content
- * @param {boolean} isInternal
  * @returns {$CancellablePromise<$models.TicketComment>}
  */
-export function AddTicketCommentWithOptions(ticketID, content, isInternal) {
-    return $Call.ByID(2500863336, ticketID, content, isInternal).then(/** @type {($result: any) => any} */(($result) => {
+export function AddTicketCommentWithOptions(ticketID, content) {
+    return $Call.ByID(2500863336, ticketID, content).then(/** @type {($result: any) => any} */(($result) => {
         return $$createType1($result);
     }));
 }
@@ -324,17 +309,6 @@ export function CloseAgentTicket(ticketID, rating, comment, workflowStateID) {
 }
 
 /**
- * CloseMyTicket fecha e avalia um ticket.
- * @param {string} ticketID
- * @param {number} rating
- * @param {string} notes
- * @returns {$CancellablePromise<void>}
- */
-export function CloseMyTicket(ticketID, rating, notes) {
-    return $Call.ByID(1146506252, ticketID, rating, notes);
-}
-
-/**
  * @param {string} ticketID
  * @param {$models.CloseTicketInput} input
  * @returns {$CancellablePromise<$models.APITicket>}
@@ -375,17 +349,6 @@ export function CreateAgentTicket(title, description, priority, category) {
 }
 
 /**
- * CreateMyTicket cria um novo ticket.
- * @param {$models.CreateTicketRequest} reqBody
- * @returns {$CancellablePromise<$models.TicketSummary | null>}
- */
-export function CreateMyTicket(reqBody) {
-    return $Call.ByID(647068532, reqBody).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType8($result);
-    }));
-}
-
-/**
  * @param {$models.CreateTicketInput} input
  * @returns {$CancellablePromise<$models.APITicket>}
  */
@@ -409,7 +372,7 @@ export function Ctx() {
  */
 export function DB() {
     return $Call.ByID(3136637640).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType10($result);
+        return $$createType8($result);
     }));
 }
 
@@ -447,7 +410,7 @@ export function DeleteP2PArtifact(artifactName) {
  */
 export function DetectApiFeatures() {
     return $Call.ByID(2366186640).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType12($result);
+        return $$createType10($result);
     }));
 }
 
@@ -458,7 +421,7 @@ export function DetectApiFeatures() {
  */
 export function DispatchNotification(req) {
     return $Call.ByID(2878630075, req).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType13($result);
+        return $$createType11($result);
     }));
 }
 
@@ -471,7 +434,7 @@ export function DispatchNotification(req) {
  */
 export function DownloadP2PArtifactSwarm(artifactName) {
     return $Call.ByID(3531730818, artifactName).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType14($result);
+        return $$createType12($result);
     }));
 }
 
@@ -501,7 +464,7 @@ export function EnsureChatSSEServer() {
  */
 export function ExecuteCustomPSADTScript(scriptContent) {
     return $Call.ByID(540611217, scriptContent).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType15($result);
+        return $$createType13($result);
     }));
 }
 
@@ -513,7 +476,7 @@ export function ExecuteCustomPSADTScript(scriptContent) {
  */
 export function ExecutePSADTTestScript(appName, appVersion) {
     return $Call.ByID(1972049288, appName, appVersion).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType15($result);
+        return $$createType13($result);
     }));
 }
 
@@ -525,7 +488,7 @@ export function ExecutePSADTTestScript(appName, appVersion) {
  */
 export function ExecutePSADTVisualNotification(req) {
     return $Call.ByID(3179337240, req).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType15($result);
+        return $$createType13($result);
     }));
 }
 
@@ -576,7 +539,7 @@ export function ExportPDF() {
  */
 export function FindP2PArtifactPeers(artifactName) {
     return $Call.ByID(1714534520, artifactName).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType16($result);
+        return $$createType14($result);
     }));
 }
 
@@ -585,7 +548,7 @@ export function FindP2PArtifactPeers(artifactName) {
  */
 export function GetAgentConfiguration() {
     return $Call.ByID(1761911899).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType17($result);
+        return $$createType15($result);
     }));
 }
 
@@ -594,7 +557,7 @@ export function GetAgentConfiguration() {
  */
 export function GetAgentInfo() {
     return $Call.ByID(2162875159).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType18($result);
+        return $$createType16($result);
     }));
 }
 
@@ -610,7 +573,7 @@ export function GetAgentInfoJSON() {
  */
 export function GetAgentStatus() {
     return $Call.ByID(42559989).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType19($result);
+        return $$createType17($result);
     }));
 }
 
@@ -630,7 +593,7 @@ export function GetAgentTicketDetails(ticketID) {
  */
 export function GetAutoProvisioningStats() {
     return $Call.ByID(1243203927).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType20($result);
+        return $$createType18($result);
     }));
 }
 
@@ -639,7 +602,7 @@ export function GetAutoProvisioningStats() {
  */
 export function GetAutomationState() {
     return $Call.ByID(2021899546).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType21($result);
+        return $$createType19($result);
     }));
 }
 
@@ -649,7 +612,7 @@ export function GetAutomationState() {
  */
 export function GetAvailableTools() {
     return $Call.ByID(2472798884).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType23($result);
+        return $$createType21($result);
     }));
 }
 
@@ -658,7 +621,7 @@ export function GetAvailableTools() {
  */
 export function GetCatalog() {
     return $Call.ByID(2156134909).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType24($result);
+        return $$createType22($result);
     }));
 }
 
@@ -668,7 +631,7 @@ export function GetCatalog() {
  */
 export function GetChatConfig() {
     return $Call.ByID(2978849638).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType25($result);
+        return $$createType23($result);
     }));
 }
 
@@ -678,7 +641,7 @@ export function GetChatConfig() {
  */
 export function GetChatHistory() {
     return $Call.ByID(1722802992).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType27($result);
+        return $$createType25($result);
     }));
 }
 
@@ -704,7 +667,7 @@ export function GetDataDir() {
  */
 export function GetDebugConfig() {
     return $Call.ByID(2473342835).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType28($result);
+        return $$createType26($result);
     }));
 }
 
@@ -724,7 +687,7 @@ export function GetDebugHTTPPort() {
  */
 export function GetHardwareIdentity() {
     return $Call.ByID(939318840).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType29($result);
+        return $$createType27($result);
     }));
 }
 
@@ -734,7 +697,7 @@ export function GetHardwareIdentity() {
  */
 export function GetHeartbeatMetrics() {
     return $Call.ByID(4184494407).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType30($result);
+        return $$createType28($result);
     }));
 }
 
@@ -743,7 +706,7 @@ export function GetHeartbeatMetrics() {
  */
 export function GetInventory() {
     return $Call.ByID(3541590274).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType31($result);
+        return $$createType29($result);
     }));
 }
 
@@ -760,7 +723,7 @@ export function GetInventoryJSON() {
  */
 export function GetKnowledgeArticleDetails(articleID) {
     return $Call.ByID(277603790, articleID).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType32($result);
+        return $$createType30($result);
     }));
 }
 
@@ -770,7 +733,7 @@ export function GetKnowledgeArticleDetails(articleID) {
  */
 export function GetKnowledgeArticlePages(articleID) {
     return $Call.ByID(187959072, articleID).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType34($result);
+        return $$createType32($result);
     }));
 }
 
@@ -780,7 +743,7 @@ export function GetKnowledgeArticlePages(articleID) {
  */
 export function GetKnowledgeArticles(category) {
     return $Call.ByID(2070621185, category).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType35($result);
+        return $$createType33($result);
     }));
 }
 
@@ -789,7 +752,7 @@ export function GetKnowledgeArticles(category) {
  */
 export function GetKnowledgeBaseArticles() {
     return $Call.ByID(4222193444).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType35($result);
+        return $$createType33($result);
     }));
 }
 
@@ -801,7 +764,7 @@ export function GetKnowledgeBaseArticles() {
  */
 export function GetLocalMemories() {
     return $Call.ByID(1215318446).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType36($result);
+        return $$createType34($result);
     }));
 }
 
@@ -820,7 +783,7 @@ export function GetLogCount() {
  */
 export function GetLogs() {
     return $Call.ByID(3090090525).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType37($result);
+        return $$createType35($result);
     }));
 }
 
@@ -837,18 +800,7 @@ export function GetLogsText() {
  */
 export function GetMCPRegistry() {
     return $Call.ByID(4204585049).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType39($result);
-    }));
-}
-
-/**
- * GetMyTickets lista tickets do agente.
- * @param {string} workflowStateID
- * @returns {$CancellablePromise<$models.TicketSummary[]>}
- */
-export function GetMyTickets(workflowStateID) {
-    return $Call.ByID(616944413, workflowStateID).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType40($result);
+        return $$createType37($result);
     }));
 }
 
@@ -859,7 +811,7 @@ export function GetMyTickets(workflowStateID) {
  */
 export function GetOnboardingStatus() {
     return $Call.ByID(435522917).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType41($result);
+        return $$createType38($result);
     }));
 }
 
@@ -868,7 +820,7 @@ export function GetOnboardingStatus() {
  */
 export function GetOsqueryStatus() {
     return $Call.ByID(3443049766).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType42($result);
+        return $$createType39($result);
     }));
 }
 
@@ -886,7 +838,7 @@ export function GetOsqueryStatusJSON() {
  */
 export function GetP2PArtifactAccess(artifactName, targetPeerID) {
     return $Call.ByID(1582468356, artifactName, targetPeerID).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType43($result);
+        return $$createType40($result);
     }));
 }
 
@@ -895,7 +847,7 @@ export function GetP2PArtifactAccess(artifactName, targetPeerID) {
  */
 export function GetP2PConfig() {
     return $Call.ByID(2853747614).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType44($result);
+        return $$createType41($result);
     }));
 }
 
@@ -904,7 +856,7 @@ export function GetP2PConfig() {
  */
 export function GetP2PDebugStatus() {
     return $Call.ByID(386736961).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType45($result);
+        return $$createType42($result);
     }));
 }
 
@@ -914,7 +866,7 @@ export function GetP2PDebugStatus() {
  */
 export function GetP2PDistributionStatus() {
     return $Call.ByID(2586216540).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType47($result);
+        return $$createType44($result);
     }));
 }
 
@@ -926,7 +878,7 @@ export function GetP2PDistributionStatus() {
  */
 export function GetP2PDistributionStatusWithOptions(opts) {
     return $Call.ByID(3990011018, opts).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType47($result);
+        return $$createType44($result);
     }));
 }
 
@@ -935,7 +887,7 @@ export function GetP2PDistributionStatusWithOptions(opts) {
  */
 export function GetP2PPeerArtifactIndex() {
     return $Call.ByID(1978502146).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType49($result);
+        return $$createType46($result);
     }));
 }
 
@@ -944,7 +896,7 @@ export function GetP2PPeerArtifactIndex() {
  */
 export function GetP2PPeers() {
     return $Call.ByID(3590775973).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType51($result);
+        return $$createType48($result);
     }));
 }
 
@@ -955,7 +907,7 @@ export function GetP2PPeers() {
  */
 export function GetP2PSeedPlanRecommendation() {
     return $Call.ByID(508162245).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType52($result);
+        return $$createType49($result);
     }));
 }
 
@@ -971,7 +923,7 @@ export function GetP2PTempDir() {
  */
 export function GetPSADTDebugState() {
     return $Call.ByID(2789250514).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType53($result);
+        return $$createType50($result);
     }));
 }
 
@@ -990,7 +942,7 @@ export function GetPSADTScriptTemplate() {
  */
 export function GetPackageActions() {
     return $Call.ByID(3765516573).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType22($result);
+        return $$createType20($result);
     }));
 }
 
@@ -1009,7 +961,7 @@ export function GetPackageActionsJSON() {
  */
 export function GetPendingUpdates() {
     return $Call.ByID(514441265).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType55($result);
+        return $$createType52($result);
     }));
 }
 
@@ -1048,7 +1000,7 @@ export function GetPrinterConfigJSON(name) {
  */
 export function GetRealtimeStatus() {
     return $Call.ByID(2038236921).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType56($result);
+        return $$createType53($result);
     }));
 }
 
@@ -1057,7 +1009,7 @@ export function GetRealtimeStatus() {
  */
 export function GetRuntimeFlags() {
     return $Call.ByID(2140353209).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType57($result);
+        return $$createType54($result);
     }));
 }
 
@@ -1066,7 +1018,7 @@ export function GetRuntimeFlags() {
  */
 export function GetServiceHealth() {
     return $Call.ByID(1809179847).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType41($result);
+        return $$createType38($result);
     }));
 }
 
@@ -1097,7 +1049,7 @@ export function GetStartupError() {
  */
 export function GetStatusOverview() {
     return $Call.ByID(4003627099).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType58($result);
+        return $$createType55($result);
     }));
 }
 
@@ -1116,7 +1068,7 @@ export function GetSupportTicketDetails(ticketID) {
  */
 export function GetSupportTickets() {
     return $Call.ByID(2418825250).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType59($result);
+        return $$createType56($result);
     }));
 }
 
@@ -1126,7 +1078,16 @@ export function GetSupportTickets() {
  */
 export function GetTicketComments(ticketID) {
     return $Call.ByID(3718392116, ticketID).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType60($result);
+        return $$createType57($result);
+    }));
+}
+
+/**
+ * @returns {$CancellablePromise<$models.TicketOptions>}
+ */
+export function GetTicketOptions() {
+    return $Call.ByID(1795408764).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType58($result);
     }));
 }
 
@@ -1135,7 +1096,7 @@ export function GetTicketComments(ticketID) {
  */
 export function GetTicketWorkflowStates() {
     return $Call.ByID(2054776725).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType62($result);
+        return $$createType60($result);
     }));
 }
 
@@ -1267,7 +1228,7 @@ export function ListInstalled() {
  */
 export function ListP2PArtifacts() {
     return $Call.ByID(1832312099).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType63($result);
+        return $$createType61($result);
     }));
 }
 
@@ -1276,7 +1237,7 @@ export function ListP2PArtifacts() {
  */
 export function ListP2PAuditEvents() {
     return $Call.ByID(2100415322).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType65($result);
+        return $$createType63($result);
     }));
 }
 
@@ -1288,7 +1249,7 @@ export function ListP2PAuditEvents() {
  */
 export function ListP2PAuditEventsFiltered(action, peerAgentID, status) {
     return $Call.ByID(1530405413, action, peerAgentID, status).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType65($result);
+        return $$createType63($result);
     }));
 }
 
@@ -1343,7 +1304,7 @@ export function ListPrintersJSON() {
  */
 export function LoadEffectiveAppStorePolicy(forceRefresh) {
     return $Call.ByID(2011064705, forceRefresh).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType66($result);
+        return $$createType64($result);
     }));
 }
 
@@ -1353,7 +1314,7 @@ export function LoadEffectiveAppStorePolicy(forceRefresh) {
  */
 export function LoadInstallerConfig() {
     return $Call.ByID(336072596).then(/** @type {($result: any) => any} */(($result) => {
-        $result[0] = $$createType67($result[0]);
+        $result[0] = $$createType65($result[0]);
         return $result;
     }));
 }
@@ -1438,7 +1399,7 @@ export function PublishChatEvent(eventType, data) {
  */
 export function PublishP2PTestArtifact(artifactName, content) {
     return $Call.ByID(2051842247, artifactName, content).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType14($result);
+        return $$createType12($result);
     }));
 }
 
@@ -1449,7 +1410,7 @@ export function PublishP2PTestArtifact(artifactName, content) {
  */
 export function PullP2PArtifactFromPeer(artifactName, sourcePeerID) {
     return $Call.ByID(2320787459, artifactName, sourcePeerID).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType14($result);
+        return $$createType12($result);
     }));
 }
 
@@ -1467,7 +1428,7 @@ export function RefreshAgentConfiguration() {
  */
 export function RefreshAutomationPolicy(includeScriptContent) {
     return $Call.ByID(2602153952, includeScriptContent).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType21($result);
+        return $$createType19($result);
     }));
 }
 
@@ -1489,7 +1450,7 @@ export function RefreshAutomationPolicyError(includeScriptContent) {
  */
 export function RefreshHardwareIdentity() {
     return $Call.ByID(2891408067).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType29($result);
+        return $$createType27($result);
     }));
 }
 
@@ -1498,7 +1459,7 @@ export function RefreshHardwareIdentity() {
  */
 export function RefreshInventory() {
     return $Call.ByID(2772913491).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType31($result);
+        return $$createType29($result);
     }));
 }
 
@@ -1515,7 +1476,7 @@ export function RefreshKnowledgeBase() {
  */
 export function RefreshListeningPorts() {
     return $Call.ByID(1221992142).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType69($result);
+        return $$createType67($result);
     }));
 }
 
@@ -1524,7 +1485,7 @@ export function RefreshListeningPorts() {
  */
 export function RefreshNetworkConnections() {
     return $Call.ByID(964299066).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType70($result);
+        return $$createType68($result);
     }));
 }
 
@@ -1549,7 +1510,7 @@ export function RefreshPeerArtifactIndex(source) {
  */
 export function RefreshSoftware() {
     return $Call.ByID(2717679924).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType72($result);
+        return $$createType70($result);
     }));
 }
 
@@ -1558,7 +1519,7 @@ export function RefreshSoftware() {
  */
 export function RefreshStartupItems() {
     return $Call.ByID(3800784882).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType74($result);
+        return $$createType72($result);
     }));
 }
 
@@ -1698,7 +1659,7 @@ export function RunOnboardingLoop() {
  */
 export function RunPSADTPreflightChecks() {
     return $Call.ByID(2615823421).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType75($result);
+        return $$createType73($result);
     }));
 }
 
@@ -1715,7 +1676,7 @@ export function SearchCatalog(query) {
  */
 export function SelectAndPublishP2PArtifact() {
     return $Call.ByID(1369003166).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType14($result);
+        return $$createType12($result);
     }));
 }
 
@@ -1970,72 +1931,70 @@ const $$createType3 = p2pmeta$0.OnboardingRequest.createFrom;
 const $$createType4 = $models.PSADTModuleStatus.createFrom;
 const $$createType5 = supportmeta$0.APITicket.createFrom;
 const $$createType6 = p2pmeta$0.SeedPlan.createFrom;
-const $$createType7 = tickets$0.TicketSummary.createFrom;
+const $$createType7 = database$0.DB.createFrom;
 const $$createType8 = $Create.Nullable($$createType7);
-const $$createType9 = database$0.DB.createFrom;
+const $$createType9 = apiclient$0.ApiVersionInfo.createFrom;
 const $$createType10 = $Create.Nullable($$createType9);
-const $$createType11 = apiclient$0.ApiVersionInfo.createFrom;
-const $$createType12 = $Create.Nullable($$createType11);
-const $$createType13 = notifications$0.DispatchResponse.createFrom;
-const $$createType14 = p2pmeta$0.ArtifactView.createFrom;
-const $$createType15 = $models.PSADTScriptResult.createFrom;
-const $$createType16 = p2pmeta$0.ArtifactAvailabilityView.createFrom;
-const $$createType17 = agentconfig$0.AgentConfiguration.createFrom;
-const $$createType18 = supportmeta$0.AgentInfo.createFrom;
-const $$createType19 = debug$0.AgentStatus.createFrom;
-const $$createType20 = p2pmeta$0.AutoProvisioningStats.createFrom;
-const $$createType21 = automation$0.StateView.createFrom;
-const $$createType22 = $Create.Map($Create.Any, $Create.Any);
-const $$createType23 = $Create.Array($$createType22);
-const $$createType24 = models$0.Catalog.createFrom;
-const $$createType25 = $models.ChatConfig.createFrom;
-const $$createType26 = $models.ChatMessage.createFrom;
-const $$createType27 = $Create.Array($$createType26);
-const $$createType28 = debug$0.Config.createFrom;
-const $$createType29 = hardwareid$0.Info.createFrom;
-const $$createType30 = agentconn$0.AgentHeartbeatMetrics.createFrom;
-const $$createType31 = models$0.InventoryReport.createFrom;
-const $$createType32 = supportmeta$0.KnowledgeArticle.createFrom;
-const $$createType33 = supportmeta$0.KnowledgePage.createFrom;
-const $$createType34 = $Create.Array($$createType33);
-const $$createType35 = $Create.Array($$createType32);
-const $$createType36 = $Create.Array($$createType0);
-const $$createType37 = $Create.Array($Create.Any);
-const $$createType38 = mcp$0.Registry.createFrom;
-const $$createType39 = $Create.Nullable($$createType38);
-const $$createType40 = $Create.Array($$createType7);
-const $$createType41 = $Create.Map($Create.Any, $Create.Any);
-const $$createType42 = models$0.OsqueryStatus.createFrom;
-const $$createType43 = p2pmeta$0.ArtifactAccess.createFrom;
-const $$createType44 = p2pmeta$0.Config.createFrom;
-const $$createType45 = p2pmeta$0.DebugStatus.createFrom;
-const $$createType46 = p2pmeta$0.DistributionStatus.createFrom;
-const $$createType47 = $Create.Array($$createType46);
-const $$createType48 = p2pmeta$0.PeerArtifactIndexView.createFrom;
-const $$createType49 = $Create.Array($$createType48);
-const $$createType50 = p2pmeta$0.PeerView.createFrom;
-const $$createType51 = $Create.Array($$createType50);
-const $$createType52 = p2pmeta$0.SeedPlanRecommendation.createFrom;
-const $$createType53 = $models.PSADTDebugState.createFrom;
-const $$createType54 = models$0.UpgradeItem.createFrom;
-const $$createType55 = $Create.Array($$createType54);
-const $$createType56 = debug$0.RealtimeStatus.createFrom;
-const $$createType57 = coreagent$0.RuntimeFlags.createFrom;
-const $$createType58 = status$0.Overview.createFrom;
-const $$createType59 = $Create.Array($$createType5);
-const $$createType60 = $Create.Array($$createType1);
-const $$createType61 = supportmeta$0.APIWorkflowState.createFrom;
-const $$createType62 = $Create.Array($$createType61);
-const $$createType63 = $Create.Array($$createType14);
-const $$createType64 = p2pmeta$0.AuditEvent.createFrom;
-const $$createType65 = $Create.Array($$createType64);
-const $$createType66 = appstore$0.EffectivePolicy.createFrom;
-const $$createType67 = debug$0.InstallerConfig.createFrom;
-const $$createType68 = models$0.ListeningPortInfo.createFrom;
-const $$createType69 = $Create.Array($$createType68);
-const $$createType70 = models$0.NetworkConnectionsReport.createFrom;
-const $$createType71 = models$0.SoftwareItem.createFrom;
+const $$createType11 = notifications$0.DispatchResponse.createFrom;
+const $$createType12 = p2pmeta$0.ArtifactView.createFrom;
+const $$createType13 = $models.PSADTScriptResult.createFrom;
+const $$createType14 = p2pmeta$0.ArtifactAvailabilityView.createFrom;
+const $$createType15 = agentconfig$0.AgentConfiguration.createFrom;
+const $$createType16 = supportmeta$0.AgentInfo.createFrom;
+const $$createType17 = debug$0.AgentStatus.createFrom;
+const $$createType18 = p2pmeta$0.AutoProvisioningStats.createFrom;
+const $$createType19 = automation$0.StateView.createFrom;
+const $$createType20 = $Create.Map($Create.Any, $Create.Any);
+const $$createType21 = $Create.Array($$createType20);
+const $$createType22 = models$0.Catalog.createFrom;
+const $$createType23 = $models.ChatConfig.createFrom;
+const $$createType24 = $models.ChatMessage.createFrom;
+const $$createType25 = $Create.Array($$createType24);
+const $$createType26 = debug$0.Config.createFrom;
+const $$createType27 = hardwareid$0.Info.createFrom;
+const $$createType28 = agentconn$0.AgentHeartbeatMetrics.createFrom;
+const $$createType29 = models$0.InventoryReport.createFrom;
+const $$createType30 = supportmeta$0.KnowledgeArticle.createFrom;
+const $$createType31 = supportmeta$0.KnowledgePage.createFrom;
+const $$createType32 = $Create.Array($$createType31);
+const $$createType33 = $Create.Array($$createType30);
+const $$createType34 = $Create.Array($$createType0);
+const $$createType35 = $Create.Array($Create.Any);
+const $$createType36 = mcp$0.Registry.createFrom;
+const $$createType37 = $Create.Nullable($$createType36);
+const $$createType38 = $Create.Map($Create.Any, $Create.Any);
+const $$createType39 = models$0.OsqueryStatus.createFrom;
+const $$createType40 = p2pmeta$0.ArtifactAccess.createFrom;
+const $$createType41 = p2pmeta$0.Config.createFrom;
+const $$createType42 = p2pmeta$0.DebugStatus.createFrom;
+const $$createType43 = p2pmeta$0.DistributionStatus.createFrom;
+const $$createType44 = $Create.Array($$createType43);
+const $$createType45 = p2pmeta$0.PeerArtifactIndexView.createFrom;
+const $$createType46 = $Create.Array($$createType45);
+const $$createType47 = p2pmeta$0.PeerView.createFrom;
+const $$createType48 = $Create.Array($$createType47);
+const $$createType49 = p2pmeta$0.SeedPlanRecommendation.createFrom;
+const $$createType50 = $models.PSADTDebugState.createFrom;
+const $$createType51 = models$0.UpgradeItem.createFrom;
+const $$createType52 = $Create.Array($$createType51);
+const $$createType53 = debug$0.RealtimeStatus.createFrom;
+const $$createType54 = coreagent$0.RuntimeFlags.createFrom;
+const $$createType55 = status$0.Overview.createFrom;
+const $$createType56 = $Create.Array($$createType5);
+const $$createType57 = $Create.Array($$createType1);
+const $$createType58 = supportmeta$0.TicketOptions.createFrom;
+const $$createType59 = supportmeta$0.APIWorkflowState.createFrom;
+const $$createType60 = $Create.Array($$createType59);
+const $$createType61 = $Create.Array($$createType12);
+const $$createType62 = p2pmeta$0.AuditEvent.createFrom;
+const $$createType63 = $Create.Array($$createType62);
+const $$createType64 = appstore$0.EffectivePolicy.createFrom;
+const $$createType65 = debug$0.InstallerConfig.createFrom;
+const $$createType66 = models$0.ListeningPortInfo.createFrom;
+const $$createType67 = $Create.Array($$createType66);
+const $$createType68 = models$0.NetworkConnectionsReport.createFrom;
+const $$createType69 = models$0.SoftwareItem.createFrom;
+const $$createType70 = $Create.Array($$createType69);
+const $$createType71 = models$0.StartupItem.createFrom;
 const $$createType72 = $Create.Array($$createType71);
-const $$createType73 = models$0.StartupItem.createFrom;
-const $$createType74 = $Create.Array($$createType73);
-const $$createType75 = $models.PSADTPreflightResult.createFrom;
+const $$createType73 = $models.PSADTPreflightResult.createFrom;

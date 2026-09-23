@@ -1892,6 +1892,13 @@ export class OpenSocketInfo {
              */
             this["family"] = "";
         }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["state"] = undefined;
+        }
 
         Object.assign(this, $$source);
     }
@@ -2353,6 +2360,16 @@ export class StartupItem {
              * @type {string | undefined}
              */
             this["detail"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * Hive identifica o hive/conta do item, usado para habilitar/desabilitar:
+             * "HKLM", "HKCU" ou "HKU:<SID>" (itens de outros usuários, quando o
+             * serviço roda como SYSTEM e o HKCU do processo é o do próprio SYSTEM).
+             * @member
+             * @type {string | undefined}
+             */
+            this["hive"] = undefined;
         }
 
         Object.assign(this, $$source);
