@@ -517,7 +517,10 @@ func mapOpenSockets(rows []map[string]any) []models.OpenSocketInfo {
 		return nil
 	}
 
-	const maxOpenSockets = 500
+	// Espelha HardwareInventoryParser.MaxOpenSockets (API .NET): o backend
+	// persiste até 5000 conexões por coleta, então não adianta truncar antes
+	// aqui no agente.
+	const maxOpenSockets = 5000
 	items := make([]models.OpenSocketInfo, 0, len(rows))
 	seen := make(map[string]struct{}, len(rows))
 
@@ -533,6 +536,7 @@ func mapOpenSockets(rows []map[string]any) []models.OpenSocketInfo {
 		remoteAddress := strings.TrimSpace(getString(row, "remote_address"))
 		protocol := strings.TrimSpace(getString(row, "protocol"))
 		family := strings.TrimSpace(getString(row, "family"))
+		state := strings.TrimSpace(getString(row, "state"))
 		key := protocol + "|" + family + "|" + localAddress + "|" + getString(row, "local_port") + "|" + remoteAddress + "|" + getString(row, "remote_port") + "|" + getString(row, "pid")
 		if _, ok := seen[key]; ok {
 			continue
@@ -549,6 +553,7 @@ func mapOpenSockets(rows []map[string]any) []models.OpenSocketInfo {
 			RemotePort:    remotePort,
 			Protocol:      protocol,
 			Family:        family,
+			State:         state,
 		})
 
 		if len(items) >= maxOpenSockets {

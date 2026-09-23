@@ -4,7 +4,11 @@ package native
 
 import (
 	"context"
+	"errors"
+	"net"
 	"testing"
+
+	"discovery/app/core/nettable"
 )
 
 // TestCollectSystemInfo verifies that native system info collection works
@@ -115,6 +119,90 @@ func TestCollectNetworkConnections(t *testing.T) {
 	}
 	_ = listening
 	_ = open
+}
+
+// TestPortBytesSwapsNetworkOrderPort trava a correção de byte order: as tabelas
+// MIB (TCP/UDP) guardam a porta em network byte order nos 16 bits baixos do
+// DWORD. Em hosts little-endian o campo lido no uint32 é a porta com os bytes
+// trocados (ex.: 41080 lê-se 0x78A0 = 30880), então portBytes precisa
+// desempilhar os bytes para que binary.BigEndian devolva a porta real.
+// Antes da correção, 135 (RPC) era reportado como 34560 e 3389 (RDP) como 15629.
+func TestPortDecodesNetworkOrderPort(t *testing.T) {
+	cases := map[uint32]int{
+		0x8700: 135,   // RPC endpoint mapper
+		0x3D0D: 3389,  // RDP
+		0x78A0: 41080, // faixa HTTP P2P do agente (DefaultP2PPortRangeStart)
+		0x5000: 80,    // HTTP
+	}
+	for raw, want := range cases {
+		if got := nettable.Port(raw); got != want {
+			t.Errorf("nettable.Port(0x%X) = %d, want %d", raw, got, want)
+		}
+	}
+}
+
+// TestCollectNetworkConnectionsHonorsCancellation garante que a coleta nativa
+// respeita o contexto cancelado (antes o ctx era ignorado com "_ = ctx").
+func TestCollectNetworkConnectionsHonorsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	listening, open, err := collectNetworkConnectionsNative(ctx)
+	if err == nil {
+		t.Fatal("esperava erro de contexto cancelado")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if listening != nil || open != nil {
+		t.Fatalf("esperava coleções nulas em cancelamento, veio listening=%v open=%v", listening, open)
+	}
+}
+
+// TestCollectOpenSocketsReportsRealPorts reproduce o cenário do bug na ponta:
+// antes da correção, um soquete na porta P era reportado como byteswap16(P)
+// (ex.: 41080 -> 30880), então nem a porta em escuta nem o soquete aberto
+// casavam com a porta realmente vinculada pelo processo.
+func TestCollectOpenSocketsReportsRealPorts(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	wantPort := ln.Addr().(*net.TCPAddr).Port
+
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	local := conn.LocalAddr().(*net.TCPAddr).Port
+	remote := conn.RemoteAddr().(*net.TCPAddr).Port
+
+	seen := make(map[string]struct{})
+	var foundListen bool
+	for _, p := range collectTCPListening(nettable.AfInet, seen) {
+		if p.Port == wantPort {
+			foundListen = true
+			break
+		}
+	}
+
+	seenOpen := make(map[string]struct{})
+	var foundOpen bool
+	for _, s := range collectTCPOpen(nettable.AfInet, seenOpen) {
+		if s.LocalPort == local && s.RemotePort == remote {
+			foundOpen = true
+			break
+		}
+	}
+
+	if !foundListen {
+		t.Errorf("porta em escuta %d não encontrada na coleta (byte order regrediu?)", wantPort)
+	}
+	if !foundOpen {
+		t.Errorf("soquete local=%d remote=%d não encontrado na coleta (byte order regrediu?)", local, remote)
+	}
 }
 
 // TestCollectHardware verifies that hardware details are collected via WMI.

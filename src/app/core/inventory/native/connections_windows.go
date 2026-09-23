@@ -4,36 +4,31 @@ package native
 
 import (
 	"context"
-	"encoding/binary"
 	"net"
 	"strconv"
 	"syscall"
-	"unsafe"
 
 	"golang.org/x/sys/windows"
 
 	"discovery/app/core/models"
-)
-
-var (
-	procGetExtendedTcpTable = modiphlpapi.NewProc("GetExtendedTcpTable")
-	procGetExtendedUdpTable = modiphlpapi.NewProc("GetExtendedUdpTable")
-)
-
-const (
-	tcpTableOwnerPidAll = 5
-	udpTableOwnerPid    = 1
-	afInet              = 2
-	afInet6             = 23
+	"discovery/app/core/nettable"
 )
 
 // collectNetworkConnectionsNative returns listening ports and open sockets
-// using GetExtendedTcpTable/GetExtendedUdpTable (no subprocess).
+// using the shared nettable package (GetExtendedTcpTable/GetExtendedUdpTable,
+// no subprocess).
 func collectNetworkConnectionsNative(ctx context.Context) ([]models.ListeningPortInfo, []models.OpenSocketInfo, error) {
-	_ = ctx
+	// Enumera as tabelas em duas fases: respeita o cancelamento antes de cada
+	// uma e ao final, para que um contexto cancelado não segure a coleta.
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
 	listening := collectListeningPortsNative()
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
 	open := collectOpenSocketsNative()
-	return listening, open, nil
+	return listening, open, ctx.Err()
 }
 
 func collectListeningPortsNative() []models.ListeningPortInfo {
@@ -41,12 +36,12 @@ func collectListeningPortsNative() []models.ListeningPortInfo {
 	seen := make(map[string]struct{})
 
 	// TCP listening (IPv4 + IPv6).
-	items = append(items, collectTCPListening(afInet, seen)...)
-	items = append(items, collectTCPListening(afInet6, seen)...)
+	items = append(items, collectTCPListening(nettable.AfInet, seen)...)
+	items = append(items, collectTCPListening(nettable.AfInet6, seen)...)
 
 	// UDP bound (IPv4 + IPv6).
-	items = append(items, collectUDPListening(afInet, seen)...)
-	items = append(items, collectUDPListening(afInet6, seen)...)
+	items = append(items, collectUDPListening(nettable.AfInet, seen)...)
+	items = append(items, collectUDPListening(nettable.AfInet6, seen)...)
 
 	return items
 }
@@ -56,58 +51,21 @@ func collectOpenSocketsNative() []models.OpenSocketInfo {
 	seen := make(map[string]struct{})
 
 	// TCP established (IPv4 + IPv6).
-	items = append(items, collectTCPOpen(afInet, seen)...)
-	items = append(items, collectTCPOpen(afInet6, seen)...)
+	items = append(items, collectTCPOpen(nettable.AfInet, seen)...)
+	items = append(items, collectTCPOpen(nettable.AfInet6, seen)...)
 
 	return items
 }
 
-// tcpRowOwnerPid mirrors MIB_TCPROW_OWNER_PID.
-type tcpRowOwnerPid struct {
-	State      uint32
-	LocalAddr  [4]byte
-	LocalPort  uint32
-	RemoteAddr [4]byte
-	RemotePort uint32
-	OwningPid  uint32
-}
-
-// tcp6RowOwnerPid mirrors MIB_TCP6ROW_OWNER_PID.
-type tcp6RowOwnerPid struct {
-	LocalAddr   [16]byte
-	LocalScope  uint32
-	LocalPort   uint32
-	RemoteAddr  [16]byte
-	RemoteScope uint32
-	RemotePort  uint32
-	State       uint32
-	OwningPid   uint32
-}
-
-// udpRowOwnerPid mirrors MIB_UDPROW_OWNER_PID.
-type udpRowOwnerPid struct {
-	LocalAddr [4]byte
-	LocalPort uint32
-	OwningPid uint32
-}
-
-// udp6RowOwnerPid mirrors MIB_UDP6ROW_OWNER_PID.
-type udp6RowOwnerPid struct {
-	LocalAddr  [16]byte
-	LocalScope uint32
-	LocalPort  uint32
-	OwningPid  uint32
-}
-
 func collectTCPListening(family int, seen map[string]struct{}) []models.ListeningPortInfo {
-	rows := getTCPTable(family)
+	rows := nettable.TCPRows(family)
 	var items []models.ListeningPortInfo
 	for _, row := range rows {
 		// MIB_TCP_STATE_LISTEN = 2
 		if row.State != 2 {
 			continue
 		}
-		port := int(binary.BigEndian.Uint16(portBytes(row.LocalPort)))
+		port := nettable.Port(row.LocalPort)
 		if port <= 0 {
 			continue
 		}
@@ -131,10 +89,10 @@ func collectTCPListening(family int, seen map[string]struct{}) []models.Listenin
 }
 
 func collectUDPListening(family int, seen map[string]struct{}) []models.ListeningPortInfo {
-	rows := getUDPTable(family)
+	rows := nettable.UDPRows(family)
 	var items []models.ListeningPortInfo
 	for _, row := range rows {
-		port := int(binary.BigEndian.Uint16(portBytes(row.LocalPort)))
+		port := nettable.Port(row.LocalPort)
 		if port <= 0 {
 			continue
 		}
@@ -158,15 +116,15 @@ func collectUDPListening(family int, seen map[string]struct{}) []models.Listenin
 }
 
 func collectTCPOpen(family int, seen map[string]struct{}) []models.OpenSocketInfo {
-	rows := getTCPTable(family)
+	rows := nettable.TCPRows(family)
 	var items []models.OpenSocketInfo
 	for _, row := range rows {
 		// Skip LISTEN (2) and CLOSED (1).
 		if row.State == 2 || row.State == 1 {
 			continue
 		}
-		localPort := int(binary.BigEndian.Uint16(portBytes(row.LocalPort)))
-		remotePort := int(binary.BigEndian.Uint16(portBytes(row.RemotePort)))
+		localPort := nettable.Port(row.LocalPort)
+		remotePort := nettable.Port(row.RemotePort)
 		if localPort <= 0 && remotePort <= 0 {
 			continue
 		}
@@ -188,185 +146,14 @@ func collectTCPOpen(family int, seen map[string]struct{}) []models.OpenSocketInf
 			RemotePort:    remotePort,
 			Protocol:      "tcp",
 			Family:        familyString(family),
+			State:         nettable.TCPStateName(row.State),
 		})
 	}
 	return items
 }
 
-func getTCPTable(family int) []tcpRowOwnerPid {
-	var rows []tcpRowOwnerPid
-	if family == afInet {
-		rows = getTCP4Table()
-	} else {
-		rows = getTCP6Table()
-	}
-	return rows
-}
-
-func getTCP4Table() []tcpRowOwnerPid {
-	size := uint32(0)
-	procGetExtendedTcpTable.Call(0, uintptr(unsafe.Pointer(&size)), 0, uintptr(afInet), uintptr(tcpTableOwnerPidAll), 0)
-	if size == 0 {
-		return nil
-	}
-	buf := make([]byte, size)
-	r, _, _ := procGetExtendedTcpTable.Call(
-		uintptr(unsafe.Pointer(&buf[0])),
-		uintptr(unsafe.Pointer(&size)),
-		0,
-		uintptr(afInet),
-		uintptr(tcpTableOwnerPidAll),
-		0,
-	)
-	if r != 0 {
-		return nil
-	}
-	// First 4 bytes = number of rows.
-	numRows := binary.LittleEndian.Uint32(buf[0:4])
-	rows := make([]tcpRowOwnerPid, 0, numRows)
-	offset := 4
-	for i := uint32(0); i < numRows; i++ {
-		if offset+int(unsafe.Sizeof(tcpRowOwnerPid{})) > len(buf) {
-			break
-		}
-		row := *(*tcpRowOwnerPid)(unsafe.Pointer(&buf[offset]))
-		rows = append(rows, row)
-		offset += int(unsafe.Sizeof(tcpRowOwnerPid{}))
-	}
-	return rows
-}
-
-func getTCP6Table() []tcpRowOwnerPid {
-	size := uint32(0)
-	procGetExtendedTcpTable.Call(0, uintptr(unsafe.Pointer(&size)), 0, uintptr(afInet6), uintptr(tcpTableOwnerPidAll), 0)
-	if size == 0 {
-		return nil
-	}
-	buf := make([]byte, size)
-	r, _, _ := procGetExtendedTcpTable.Call(
-		uintptr(unsafe.Pointer(&buf[0])),
-		uintptr(unsafe.Pointer(&size)),
-		0,
-		uintptr(afInet6),
-		uintptr(tcpTableOwnerPidAll),
-		0,
-	)
-	if r != 0 {
-		return nil
-	}
-	numRows := binary.LittleEndian.Uint32(buf[0:4])
-	rows := make([]tcpRowOwnerPid, 0, numRows)
-	offset := 4
-	for i := uint32(0); i < numRows; i++ {
-		if offset+int(unsafe.Sizeof(tcp6RowOwnerPid{})) > len(buf) {
-			break
-		}
-		row6 := *(*tcp6RowOwnerPid)(unsafe.Pointer(&buf[offset]))
-		rows = append(rows, tcpRowOwnerPid{
-			State:      row6.State,
-			LocalAddr:  ipv6ToIPv4(row6.LocalAddr),
-			LocalPort:  row6.LocalPort,
-			RemoteAddr: ipv6ToIPv4(row6.RemoteAddr),
-			RemotePort: row6.RemotePort,
-			OwningPid:  row6.OwningPid,
-		})
-		offset += int(unsafe.Sizeof(tcp6RowOwnerPid{}))
-	}
-	return rows
-}
-
-func getUDPTable(family int) []udpRowOwnerPid {
-	var rows []udpRowOwnerPid
-	if family == afInet {
-		rows = getUDP4Table()
-	} else {
-		rows = getUDP6Table()
-	}
-	return rows
-}
-
-func getUDP4Table() []udpRowOwnerPid {
-	size := uint32(0)
-	procGetExtendedUdpTable.Call(0, uintptr(unsafe.Pointer(&size)), 0, uintptr(afInet), uintptr(udpTableOwnerPid), 0)
-	if size == 0 {
-		return nil
-	}
-	buf := make([]byte, size)
-	r, _, _ := procGetExtendedUdpTable.Call(
-		uintptr(unsafe.Pointer(&buf[0])),
-		uintptr(unsafe.Pointer(&size)),
-		0,
-		uintptr(afInet),
-		uintptr(udpTableOwnerPid),
-		0,
-	)
-	if r != 0 {
-		return nil
-	}
-	numRows := binary.LittleEndian.Uint32(buf[0:4])
-	rows := make([]udpRowOwnerPid, 0, numRows)
-	offset := 4
-	for i := uint32(0); i < numRows; i++ {
-		if offset+int(unsafe.Sizeof(udpRowOwnerPid{})) > len(buf) {
-			break
-		}
-		row := *(*udpRowOwnerPid)(unsafe.Pointer(&buf[offset]))
-		rows = append(rows, row)
-		offset += int(unsafe.Sizeof(udpRowOwnerPid{}))
-	}
-	return rows
-}
-
-func getUDP6Table() []udpRowOwnerPid {
-	size := uint32(0)
-	procGetExtendedUdpTable.Call(0, uintptr(unsafe.Pointer(&size)), 0, uintptr(afInet6), uintptr(udpTableOwnerPid), 0)
-	if size == 0 {
-		return nil
-	}
-	buf := make([]byte, size)
-	r, _, _ := procGetExtendedUdpTable.Call(
-		uintptr(unsafe.Pointer(&buf[0])),
-		uintptr(unsafe.Pointer(&size)),
-		0,
-		uintptr(afInet6),
-		uintptr(udpTableOwnerPid),
-		0,
-	)
-	if r != 0 {
-		return nil
-	}
-	numRows := binary.LittleEndian.Uint32(buf[0:4])
-	rows := make([]udpRowOwnerPid, 0, numRows)
-	offset := 4
-	for i := uint32(0); i < numRows; i++ {
-		if offset+int(unsafe.Sizeof(udp6RowOwnerPid{})) > len(buf) {
-			break
-		}
-		row6 := *(*udp6RowOwnerPid)(unsafe.Pointer(&buf[offset]))
-		rows = append(rows, udpRowOwnerPid{
-			LocalAddr: ipv6ToIPv4(row6.LocalAddr),
-			LocalPort: row6.LocalPort,
-			OwningPid: row6.OwningPid,
-		})
-		offset += int(unsafe.Sizeof(udp6RowOwnerPid{}))
-	}
-	return rows
-}
-
-// ipv6ToIPv4 converts an IPv4-mapped IPv6 address to its IPv4 bytes.
-func ipv6ToIPv4(addr [16]byte) [4]byte {
-	var out [4]byte
-	// IPv4-mapped: ::ffff:a.b.c.d
-	if addr[0] == 0 && addr[1] == 0 && addr[2] == 0 && addr[3] == 0 &&
-		addr[4] == 0 && addr[5] == 0 && addr[6] == 0 && addr[7] == 0 &&
-		addr[8] == 0 && addr[9] == 0 && addr[10] == 0xff && addr[11] == 0xff {
-		copy(out[:], addr[12:16])
-	}
-	return out
-}
-
 func ipToString(b []byte, family int) string {
-	if family == afInet6 {
+	if family == nettable.AfInet6 {
 		ip := make(net.IP, 16)
 		copy(ip, b)
 		return ip.String()
@@ -375,16 +162,8 @@ func ipToString(b []byte, family int) string {
 	return ip.String()
 }
 
-func portBytes(port uint32) []byte {
-	// Ports are stored in network byte order (big-endian) in the MIB structs.
-	b := make([]byte, 2)
-	b[0] = byte(port >> 8)
-	b[1] = byte(port)
-	return b
-}
-
 func familyString(family int) string {
-	if family == afInet6 {
+	if family == nettable.AfInet6 {
 		return "IPv6"
 	}
 	return "IPv4"

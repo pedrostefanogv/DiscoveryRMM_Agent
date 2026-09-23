@@ -148,7 +148,7 @@ func collectHeartbeatMetricsWindows(ctx context.Context, metrics *agentconn.Agen
 	}
 
 	// Temperatura da CPU: PDH nativo (pdh.dll) — zero subprocessos
-	collectHeartbeatCPUTemperatureWindowsNative(metrics)
+	collectHeartbeatCPUTemperatureWindowsNative(ctx, metrics)
 }
 
 // collectHeartbeatMetricsOsquery é o fallback para plataformas não-Windows

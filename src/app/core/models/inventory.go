@@ -288,6 +288,7 @@ type OpenSocketInfo struct {
 	RemotePort    int    `json:"remotePort"`
 	Protocol      string `json:"protocol"`
 	Family        string `json:"family"`
+	State         string `json:"state,omitempty"`
 }
 
 type PrinterInfo struct {

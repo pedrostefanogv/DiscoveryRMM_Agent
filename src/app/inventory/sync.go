@@ -192,6 +192,7 @@ type agentOpenSocketInfo struct {
 	RemotePort    int    `json:"remotePort"`
 	Protocol      string `json:"protocol"`
 	Family        string `json:"family"`
+	State         string `json:"state,omitempty"`
 }
 
 type agentSoftwareEnvelope struct {
@@ -585,6 +586,7 @@ func mapAgentOpenSockets(sockets []models.OpenSocketInfo) []agentOpenSocketInfo 
 			RemotePort:    s.RemotePort,
 			Protocol:      trimToMaxLen(strings.TrimSpace(s.Protocol), 10),
 			Family:        trimToMaxLen(strings.TrimSpace(s.Family), 10),
+			State:         trimToMaxLen(strings.TrimSpace(s.State), 16),
 		})
 	}
 	return result

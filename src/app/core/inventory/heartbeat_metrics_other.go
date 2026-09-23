@@ -2,7 +2,11 @@
 
 package inventory
 
-import "discovery/app/core/agentconn"
+import (
+	"context"
+
+	"discovery/app/core/agentconn"
+)
 
 func collectWindowsMemoryNative() (float64, float64, float64, bool) {
 	return -1, -1, -1, false
@@ -26,4 +30,4 @@ func collectProcessCountNative() int {
 
 func collectHeartbeatDiskIOWindowsNative(_ *agentconn.AgentHeartbeatMetrics) {}
 
-func collectHeartbeatCPUTemperatureWindowsNative(_ *agentconn.AgentHeartbeatMetrics) {}
+func collectHeartbeatCPUTemperatureWindowsNative(_ context.Context, _ *agentconn.AgentHeartbeatMetrics) {}

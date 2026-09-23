@@ -3,13 +3,14 @@
 package sysctrl
 
 import (
-	"encoding/binary"
 	"sync"
 	"syscall"
 	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+
+	"discovery/app/core/nettable"
 )
 
 // ─────────────────────────────────────────────────────────────────────
@@ -22,24 +23,13 @@ import (
 // ─────────────────────────────────────────────────────────────────────
 
 var (
-	modpsapi    = syscall.NewLazyDLL("psapi.dll")
-	modiphlpapi = syscall.NewLazyDLL("iphlpapi.dll")
+	modpsapi = syscall.NewLazyDLL("psapi.dll")
 
 	procGetProcessMemoryInfo = modpsapi.NewProc("GetProcessMemoryInfo")
 	procGetProcessTimes      = modkernel32.NewProc("GetProcessTimes")
 	procGetProcessIoCounters = modkernel32.NewProc("GetProcessIoCounters")
 	procGlobalMemoryStatusEx = modkernel32.NewProc("GlobalMemoryStatusEx")
 	procGetSystemTimes       = modkernel32.NewProc("GetSystemTimes")
-
-	procGetExtendedTcpTable = modiphlpapi.NewProc("GetExtendedTcpTable")
-	procGetExtendedUdpTable = modiphlpapi.NewProc("GetExtendedUdpTable")
-)
-
-const (
-	tcpTableOwnerPidAll = 5
-	udpTableOwnerPid    = 1
-	afInet              = 2
-	afInet6             = 23
 )
 
 // processQueryAccess são os direitos usados para abrir o processo e ler
@@ -266,43 +256,13 @@ func systemMemory() (total uint64, used uint64, pct float64, ok bool) {
 	return ms.ullTotalPhys, used, pct, true
 }
 
-// ─── Conexões de rede por processo (GetExtendedTcpTable/UdpTable) ────
-
-type tcpRowOwnerPid struct {
-	State      uint32
-	LocalAddr  [4]byte
-	LocalPort  uint32
-	RemoteAddr [4]byte
-	RemotePort uint32
-	OwningPid  uint32
-}
-
-type tcp6RowOwnerPid struct {
-	LocalAddr   [16]byte
-	LocalScope  uint32
-	LocalPort   uint32
-	RemoteAddr  [16]byte
-	RemoteScope uint32
-	RemotePort  uint32
-	State       uint32
-	OwningPid   uint32
-}
-
-type udpRowOwnerPid struct {
-	LocalAddr [4]byte
-	LocalPort uint32
-	OwningPid uint32
-}
-
-type udp6RowOwnerPid struct {
-	LocalAddr  [16]byte
-	LocalScope uint32
-	LocalPort  uint32
-	OwningPid  uint32
-}
+// ─── Conexões de rede por processo (via pacote nettable) ───────────────
 
 // connCountsByPid retorna o número de conexões TCP+UDP (IPv4+IPv6) por PID.
 // Uma única enumeração para toda a lista (evita varrer as tabelas por PID).
+// As structs MIB e o acesso às tabelas vivem no pacote nettable — antes da
+// extração havia uma cópia de tcpRowOwnerPid/udpRowOwnerPid aqui e em
+// inventory/native, que divergia silenciosamente entre si.
 func connCountsByPid() map[uint32]uint32 {
 	counts := make(map[uint32]uint32)
 	add := func(pids []uint32) {
@@ -312,97 +272,27 @@ func connCountsByPid() map[uint32]uint32 {
 			}
 		}
 	}
-	add(tcpRowPids(afInet))
-	add(tcpRowPids(afInet6))
-	add(udpRowPids(afInet))
-	add(udpRowPids(afInet6))
+	add(tcpRowPids(nettable.AfInet))
+	add(tcpRowPids(nettable.AfInet6))
+	add(udpRowPids(nettable.AfInet))
+	add(udpRowPids(nettable.AfInet6))
 	return counts
 }
 
 func tcpRowPids(family int) []uint32 {
-	size := uint32(0)
-	procGetExtendedTcpTable.Call(0, uintptr(unsafe.Pointer(&size)), 0, uintptr(family), uintptr(tcpTableOwnerPidAll), 0)
-	if size == 0 {
-		return nil
-	}
-	buf := make([]byte, size)
-	r, _, _ := procGetExtendedTcpTable.Call(
-		uintptr(unsafe.Pointer(&buf[0])),
-		uintptr(unsafe.Pointer(&size)),
-		0,
-		uintptr(family),
-		uintptr(tcpTableOwnerPidAll),
-		0,
-	)
-	if r != 0 {
-		return nil
-	}
-
-	num := binary.LittleEndian.Uint32(buf[0:4])
-	pids := make([]uint32, 0, num)
-	rowSize := int(unsafe.Sizeof(tcpRowOwnerPid{}))
-	if family == afInet6 {
-		rowSize = int(unsafe.Sizeof(tcp6RowOwnerPid{}))
-	}
-	offset := 4
-	for i := uint32(0); i < num; i++ {
-		if offset+rowSize > len(buf) {
-			break
-		}
-		var pid uint32
-		if family == afInet6 {
-			row := (*tcp6RowOwnerPid)(unsafe.Pointer(&buf[offset]))
-			pid = row.OwningPid
-		} else {
-			row := (*tcpRowOwnerPid)(unsafe.Pointer(&buf[offset]))
-			pid = row.OwningPid
-		}
-		pids = append(pids, pid)
-		offset += rowSize
+	rows := nettable.TCPRows(family)
+	pids := make([]uint32, 0, len(rows))
+	for _, row := range rows {
+		pids = append(pids, row.OwningPid)
 	}
 	return pids
 }
 
 func udpRowPids(family int) []uint32 {
-	size := uint32(0)
-	procGetExtendedUdpTable.Call(0, uintptr(unsafe.Pointer(&size)), 0, uintptr(family), uintptr(udpTableOwnerPid), 0)
-	if size == 0 {
-		return nil
-	}
-	buf := make([]byte, size)
-	r, _, _ := procGetExtendedUdpTable.Call(
-		uintptr(unsafe.Pointer(&buf[0])),
-		uintptr(unsafe.Pointer(&size)),
-		0,
-		uintptr(family),
-		uintptr(udpTableOwnerPid),
-		0,
-	)
-	if r != 0 {
-		return nil
-	}
-
-	num := binary.LittleEndian.Uint32(buf[0:4])
-	pids := make([]uint32, 0, num)
-	rowSize := int(unsafe.Sizeof(udpRowOwnerPid{}))
-	if family == afInet6 {
-		rowSize = int(unsafe.Sizeof(udp6RowOwnerPid{}))
-	}
-	offset := 4
-	for i := uint32(0); i < num; i++ {
-		if offset+rowSize > len(buf) {
-			break
-		}
-		var pid uint32
-		if family == afInet6 {
-			row := (*udp6RowOwnerPid)(unsafe.Pointer(&buf[offset]))
-			pid = row.OwningPid
-		} else {
-			row := (*udpRowOwnerPid)(unsafe.Pointer(&buf[offset]))
-			pid = row.OwningPid
-		}
-		pids = append(pids, pid)
-		offset += rowSize
+	rows := nettable.UDPRows(family)
+	pids := make([]uint32, 0, len(rows))
+	for _, row := range rows {
+		pids = append(pids, row.OwningPid)
 	}
 	return pids
 }

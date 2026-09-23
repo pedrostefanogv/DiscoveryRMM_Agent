@@ -382,6 +382,11 @@ func mergeHardwareInfo(base, detail models.HardwareInfo) models.HardwareInfo {
 
 // CollectNetworkConnections gathers only listening ports and open sockets.
 func (p *Provider) CollectNetworkConnections(ctx context.Context) (models.NetworkConnectionsReport, error) {
+	// Cancelamento não deve cair no fallback do osquery (subprocesso): só faz
+	// sentido trocar de estratégia quando o nativo falha por conta própria.
+	if err := ctx.Err(); err != nil {
+		return models.NetworkConnectionsReport{}, err
+	}
 	p.emitProgressHeartbeat()
 
 	if p.native != nil {
@@ -393,6 +398,8 @@ func (p *Provider) CollectNetworkConnections(ctx context.Context) (models.Networ
 				ListeningPorts: listening,
 				OpenSockets:    open,
 			}, nil
+		} else if ctx.Err() != nil {
+			return models.NetworkConnectionsReport{}, ctx.Err()
 		}
 	}
 
@@ -415,7 +422,7 @@ func (p *Provider) collectNetworkConnectionsWithOsquery(ctx context.Context) (mo
 
 	queries := []osqueryQuery{
 		{name: "listening_ports", sql: "SELECT p.name AS process_name, p.pid AS pid, p.path AS process_path, l.protocol, l.address, l.port FROM listening_ports l JOIN processes p USING (pid) WHERE l.port != 0"},
-		{name: "open_sockets", sql: "SELECT p.name AS process_name, p.pid AS pid, p.path AS process_path, s.local_address, s.local_port, s.remote_address, s.remote_port, s.protocol, s.family FROM process_open_sockets s JOIN processes p USING (pid) WHERE s.remote_port != 0"},
+		{name: "open_sockets", sql: "SELECT p.name AS process_name, p.pid AS pid, p.path AS process_path, s.local_address, s.local_port, s.remote_address, s.remote_port, s.protocol, s.family, s.state FROM process_open_sockets s JOIN processes p USING (pid) WHERE s.remote_port != 0"},
 	}
 
 	results := p.runQueriesAllowEmpty(runCtx, bin, queries)
@@ -524,7 +531,7 @@ func (p *Provider) collectWithOsquery(ctx context.Context) (models.InventoryRepo
 		{name: "interface_addresses", sql: "SELECT interface, address, mask FROM interface_addresses WHERE address <> ''"},
 		{name: "routes", sql: "SELECT interface, gateway, destination FROM routes WHERE destination IN ('0.0.0.0', '::')"},
 		{name: "listening_ports", sql: "SELECT p.name AS process_name, p.pid AS pid, p.path AS process_path, l.protocol, l.address, l.port FROM listening_ports l JOIN processes p USING (pid) WHERE l.port != 0"},
-		{name: "open_sockets", sql: "SELECT p.name AS process_name, p.pid AS pid, p.path AS process_path, s.local_address, s.local_port, s.remote_address, s.remote_port, s.protocol, s.family FROM process_open_sockets s JOIN processes p USING (pid) WHERE s.remote_port != 0"},
+		{name: "open_sockets", sql: "SELECT p.name AS process_name, p.pid AS pid, p.path AS process_path, s.local_address, s.local_port, s.remote_address, s.remote_port, s.protocol, s.family, s.state FROM process_open_sockets s JOIN processes p USING (pid) WHERE s.remote_port != 0"},
 		{name: "printers", sql: "SELECT name, driver_name, port_name, printer_status, shared, share_name, published, computer_name, type, job_count, default_ FROM printers"},
 	}
 
