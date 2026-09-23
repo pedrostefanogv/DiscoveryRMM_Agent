@@ -124,11 +124,12 @@ func (s *Service) GetInstalledPackages() ([]models.InstalledPackage, error) {
 	if s.ctx != nil {
 		ctx = s.ctx()
 	}
-	raw, err := s.apps.ListInstalled(ctx)
-	if err != nil {
-		return nil, err
+	raw, wingetErr := s.apps.ListInstalled(ctx)
+	if wingetErr != nil {
+		s.logf("[winget list] erro: " + wingetErr.Error())
+	} else {
+		s.logf("[winget list] " + s.now().Format("15:04:05"))
 	}
-	s.logf("[winget list] " + s.now().Format("15:04:05"))
 	items := parseInstalledListOutput(raw)
 
 	// Chocolatey: lista local (id|version) para correlacionar apps instalados
@@ -139,6 +140,12 @@ func (s *Service) GetInstalledPackages() ([]models.InstalledPackage, error) {
 	} else if strings.TrimSpace(chocoRaw) != "" {
 		s.logf("[choco list] " + s.now().Format("15:04:05"))
 		items = append(items, parseChocolateyListOutput(chocoRaw)...)
+	}
+
+	// Só falha se as DUAS fontes falharem; se uma funcionar, indexa o que houver
+	// (antes uma falha do winget descartava também os pacotes do choco).
+	if wingetErr != nil && chocoErr != nil {
+		return nil, wingetErr
 	}
 
 	return mergeChocolateyNuspec(items), nil
