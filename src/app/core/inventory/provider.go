@@ -15,6 +15,7 @@ import (
 	"discovery/app/core/inventory/native"
 	"discovery/app/core/models"
 	"discovery/app/core/processutil"
+	"discovery/app/core/winget"
 )
 
 // Provider orchestrates inventory collection. It uses native collectors as
@@ -26,6 +27,48 @@ type Provider struct {
 	progressCallback func()
 	native           native.Collector
 }
+
+// init liga o fallback de último recurso do resolvedor do winget ao osquery:
+// quando TODAS as estratégias nativas falham (PATH, pacote da máquina, aliases
+// de perfil/SYSTEM, Get-AppxPackage), o osquery — se instalado — é usado para
+// localizar o winget.exe no disco.
+func init() {
+	winget.OsqueryLookup = runOsqueryLookup
+}
+
+// runOsqueryLookup executa uma query avulsa no osquery. Best-effort: devolve
+// nil quando o osquery não está disponível ou a consulta falha.
+func runOsqueryLookup(ctx context.Context, sql string) []string {
+	bin, err := FindOsqueryBinary()
+	if err != nil {
+		return nil
+	}
+
+	runCtx, cancel := ctxutil.WithTimeout(ctx, osqueryLookupTimeout)
+	defer cancel()
+
+	results := NewProvider(osqueryLookupTimeout).runQueriesAllowEmpty(runCtx, bin, []osqueryQuery{
+		{name: "winget_path", sql: sql},
+	})
+
+	r, ok := results["winget_path"]
+	if !ok || r.err != nil {
+		return nil
+	}
+
+	lines := make([]string, 0, len(r.rows))
+	for _, row := range r.rows {
+		for _, v := range row {
+			if s, isStr := v.(string); isStr && s != "" {
+				lines = append(lines, s)
+			}
+		}
+	}
+	return lines
+}
+
+// osqueryLookupTimeout limita a consulta de último recurso.
+const osqueryLookupTimeout = 20 * time.Second
 
 // NewProvider creates a Provider with the given per-collection timeout.
 func NewProvider(timeout time.Duration) *Provider {

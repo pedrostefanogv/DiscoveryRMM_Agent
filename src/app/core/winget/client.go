@@ -3,7 +3,6 @@ package winget
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"regexp"
 	"strings"
 	"time"
@@ -163,7 +162,7 @@ func (c *Client) run(ctx context.Context, args ...string) (string, error) {
 	runCtx, cancel := ctxutil.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(runCtx, "winget", args...)
+	cmd := c.command(runCtx, args...)
 	processutil.HideWindow(cmd)
 	output, err := cmd.CombinedOutput()
 	text := strings.TrimSpace(string(output))

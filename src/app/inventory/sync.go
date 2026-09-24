@@ -13,6 +13,7 @@ import (
 
 	"discovery/app/core/chocolatey"
 	"discovery/app/core/models"
+	"discovery/app/core/winget"
 	"discovery/app/debug"
 	"discovery/app/netutil"
 	"discovery/app/services/hardwareid"
@@ -251,9 +252,16 @@ func (s *Service) SyncInventoryOnStartup(ctx context.Context, report models.Inve
 	if len(pendingUpdates) == 0 || len(installedPackages) == 0 {
 		// Diagnóstico explícito: sem isto o sintoma no dashboard é indistinguível
 		// de "não há updates" (e já causou perda silenciosa de dados em produção).
+		// O caminho do winget é incluído porque o caso mais comum de scan vazio
+		// no serviço (LocalSystem) é o winget não ser localizável fora do perfil
+		// do usuário interativo.
+		wingetPath, wingetFrom := winget.ResolveExecutable()
+		if wingetPath == "" {
+			wingetPath = "(nao encontrado)"
+		}
 		s.logf(fmt.Sprintf(
-			"[agent-sync] AVISO: scan do gerenciador incompleto (pending=%d installed=%d) — inventário será reportado sem atualizações/Ids de pacote",
-			len(pendingUpdates), len(installedPackages)))
+			"[agent-sync] AVISO: scan do gerenciador incompleto (pending=%d installed=%d) — inventário será reportado sem atualizações/Ids de pacote; winget=%s origem=%s",
+			len(pendingUpdates), len(installedPackages), wingetPath, wingetFrom))
 	}
 	softwarePayload := buildAgentSoftwareEnvelope(
 		report,
