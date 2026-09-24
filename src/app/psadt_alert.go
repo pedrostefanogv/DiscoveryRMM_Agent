@@ -324,10 +324,19 @@ func (a *App) showPSADTFluentPrompt(p PsadtAlertPayload) (int, string, string) {
 		timeout = maxPsadtDialogTimeoutSeconds
 	}
 
+	// PSADT 4.1.x: o prompt custom (Show-ADTInstallationPrompt) NAO tem UI de
+	// contagem regressiva - o -Timeout apenas fecha a janela (confirmado na
+	// documentacao oficial e visualmente). Quando ha auto-fechamento, informamos
+	// o prazo na propria mensagem para o usuario saber que ela fecha sozinha.
+	message := strings.TrimSpace(p.Message)
+	if !p.WaitForUser && p.TimeoutSeconds > 0 {
+		message = fmt.Sprintf("%s\n\nEsta janela fechara automaticamente em %d segundos.", message, timeout)
+	}
+
 	req := PSADTVisualNotificationRequest{
 		NotifType: "prompt_ok",
 		Title:     strings.TrimSpace(p.Title),
-		Message:   strings.TrimSpace(p.Message),
+		Message:   message,
 		Subtitle:  strings.TrimSpace(p.Subtitle),
 		AppName:   "Discovery Agent",
 		// p.Icon já vem normalizado ("Warning"|"Error"|"Information"|"Question");

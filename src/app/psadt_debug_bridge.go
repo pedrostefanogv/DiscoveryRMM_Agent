@@ -695,11 +695,15 @@ func buildPSADTVisualScript(req PSADTVisualNotificationRequest) (string, time.Du
 			"if ($psadtBalloonNoWait) { $balloonParams.NoWait = $true }\n" +
 			"Show-ADTBalloonTip @balloonParams\n" +
 			"Write-Host 'BalloonTip exibido com sucesso'\n" +
+			// O PSADT encerra o processo cliente ao fechar a sessao, o que
+			// REMOVE o balloon. Um script de uso unico sairia imediatamente e o
+			// toast nunca apareceria; mantem o script vivo enquanto ele exibe.
+			"Start-Sleep -Seconds $psadtBalloonTime\n" +
 			closeSession
-		timeout := time.Duration(req.BalloonTimeSeconds+20) * time.Second
-		if req.BalloonNoWait {
-			timeout = 30 * time.Second
-		} else if timeout < 30*time.Second {
+		// Timeout do processo PowerShell: precisa cobrir a espera do balloon
+		// (BalloonTimeSeconds) + a inicializacao do modulo.
+		timeout := time.Duration(req.BalloonTimeSeconds+30) * time.Second
+		if timeout < 30*time.Second {
 			timeout = 30 * time.Second
 		}
 		return header + body, timeout
@@ -722,6 +726,11 @@ func buildPSADTVisualScript(req PSADTVisualNotificationRequest) (string, time.Du
 			"if ($psadtPromptRight) { $promptParams.ButtonRightText = $psadtPromptRight }\n" +
 			"if ($psadtPromptIcon) { $promptParams.Icon = $psadtPromptIcon }\n" +
 			"if ($psadtPromptTimeout -gt 0) { $promptParams.Timeout = $psadtPromptTimeout }\n" +
+			// -NoExitOnTimeout: sem isso o PSADT fecha a sessao ADT com o
+			// DefaultExitCode (1618) ao expirar o timeout e o script ainda tenta
+			// Close-ADTSession de novo. Para uma notificacao queremos apenas
+			// retornar "Timeout" e fechar normalmente com exit 0.
+			"$promptParams.NoExitOnTimeout = $true\n" +
 			"if ($psadtPromptNoWait) { $promptParams.NoWait = $true }\n" +
 			"if ($psadtPromptNotTopMost) { $promptParams.NotTopMost = $true }\n"
 		switch req.NotifType {

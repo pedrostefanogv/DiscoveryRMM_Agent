@@ -176,6 +176,11 @@ func TestBuildPSADTVisualScript_BalloonTimeAndNoWait(t *testing.T) {
 	if !strings.Contains(script, "BalloonTipIcon = 'Warning'") {
 		t.Fatalf("expected warning balloon icon")
 	}
+	// O PSADT remove o balloon ao fechar a sessao/processo cliente; o script
+	// precisa se manter vivo enquanto ele e exibido.
+	if !strings.Contains(script, "Start-Sleep -Seconds $psadtBalloonTime") {
+		t.Fatalf("expected balloon script to stay alive while the balloon is visible")
+	}
 }
 
 func TestBuildPSADTVisualScript_RestartAndWelcome(t *testing.T) {
