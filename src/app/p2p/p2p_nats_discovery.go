@@ -145,7 +145,9 @@ func (c *Coordinator) ApplyP2PDiscoverySnapshot(snapshot agentconn.P2PDiscoveryS
 		go c.connectP2PDiscoveryPeer(peer)
 	}
 	for _, peer := range newPeers {
-		go c.refreshSinglePeer(context.Background(), peer)
+		// Usa o contexto de vida do coordinator para que o refresh seja
+		// cancelado no shutdown em vez de sobreviver com Background.
+		go c.refreshSinglePeer(c.Ctx(), peer)
 	}
 
 	c.deps.Log(fmt.Sprintf("[p2p][nats-discovery] snapshot aplicado: sequence=%d peers=%d ttl=%ds novos=%d",

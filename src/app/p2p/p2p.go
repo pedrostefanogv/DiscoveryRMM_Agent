@@ -2,7 +2,6 @@ package p2p
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -23,11 +22,7 @@ const (
 	defaultP2PPortRangeStart       = 41080
 	defaultP2PPortRangeEnd         = 41120
 	defaultP2PTokenRotationMinutes = 15
-	p2pReplicationWorkers          = 2
-	p2pReplicationQueueSize        = 64
-	p2pPeerReplicationCooldown     = 20 * time.Second
 	p2pAuditLimit                  = 100
-	p2pReplicationDedupTTL         = 24 * time.Hour
 	p2pLANProbeWarmupDelay         = 12 * time.Second
 	// M16: sweep da LAN (/24 × portas) a cada 5min em vez de 2min — reduz o
 	// scanning contínuo da rede mantendo a descoberta em tempo razoável.
@@ -35,8 +30,6 @@ const (
 	peerArtifactCacheTTL   = 72 * time.Hour // cache de artifacts por peer expira em 72h
 	maxPeerArtifactEntries = 500            // cap máximo de entries no mapa peerArtifacts
 )
-
-var errP2PDuplicateReplication = errors.New("artifact ja distribuido recentemente para este peer")
 
 // artifactSHA256CacheEntry guarda o SHA256 de um arquivo local com a mtime
 // usada para calcular, permitindo invalidação barata.
@@ -57,7 +50,6 @@ type Coordinator struct {
 	metrics           P2PMetrics
 	audit             []P2PAuditEvent
 	peerLastAttempt   map[string]time.Time
-	replicationDedup  map[string]time.Time
 	knownPeers        int
 	lastCleanupUTC    time.Time
 	lastDiscoveryTick time.Time
@@ -66,7 +58,6 @@ type Coordinator struct {
 	listenAddress     string
 	discoveryProvider p2pDiscoveryProvider
 	transferServer    *TransferServer
-	replicationQueue  chan p2pReplicationJob
 
 	// sha256Cache evita recalcular SHA256 de artifacts locais a cada gossip tick.
 	// A entrada é invalidada quando a mtime do arquivo muda.
@@ -194,28 +185,18 @@ type p2pPeerArtifactState struct {
 	Source         string
 }
 
-type p2pReplicationJob struct {
-	ArtifactName string
-	Checksum     string
-	TargetPeerID string
-	Source       string
-	Result       chan error
-}
-
 func NewCoordinator(deps AppDeps) *Coordinator {
 	c := &Coordinator{
-		deps:             deps,
-		peers:            make(map[string]p2pPeerState),
-		peerArtifacts:    make(map[string]p2pPeerArtifactState),
-		peerLastAttempt:  make(map[string]time.Time),
-		replicationDedup: make(map[string]time.Time),
-		replicationQueue: make(chan p2pReplicationJob, p2pReplicationQueueSize),
-		sha256Cache:      make(map[string]artifactSHA256CacheEntry),
-		manifestHealth:   make(map[string]manifestHealthEntry),
-		fetchStates:      newFetchStateMap(),
-		cpuSampler:       platform.NewCPUSampler(),
-		servingSessions:  make(map[string]*servingSession),
-		downloadLocks:    make(map[string]*downloadLockEntry),
+		deps:            deps,
+		peers:           make(map[string]p2pPeerState),
+		peerArtifacts:   make(map[string]p2pPeerArtifactState),
+		peerLastAttempt: make(map[string]time.Time),
+		sha256Cache:     make(map[string]artifactSHA256CacheEntry),
+		manifestHealth:  make(map[string]manifestHealthEntry),
+		fetchStates:     newFetchStateMap(),
+		cpuSampler:      platform.NewCPUSampler(),
+		servingSessions: make(map[string]*servingSession),
+		downloadLocks:   make(map[string]*downloadLockEntry),
 	}
 	c.transferServer = NewTransferServer(deps, c)
 	return c
@@ -483,9 +464,6 @@ func (c *Coordinator) Run(ctx context.Context) {
 		c.setLastError(err)
 		c.deps.Log("[p2p] erro ao iniciar descoberta de peers: " + err.Error())
 	}
-	for workerIndex := 0; workerIndex < p2pReplicationWorkers; workerIndex++ {
-		go c.replicationWorker(runCtx)
-	}
 	// Re-seed automático: mantém cobertura de artifacts em todos os peers.
 	go c.startReseedLoop(runCtx)
 	_ = c.discoveryTick(time.Now())
@@ -538,11 +516,16 @@ func (c *Coordinator) Run(ctx context.Context) {
 		case <-contentGCTicker.C:
 			c.CollectOrphanArtifacts()
 		case <-lanProbeWarmupTimer.C:
-			lanProbeSem <- struct{}{}
-			go func() {
-				defer func() { <-lanProbeSem }()
-				_, _ = c.RunLANDiscoveryProbe(runCtx, "warmup")
-			}()
+			select {
+			case lanProbeSem <- struct{}{}:
+				go func() {
+					defer func() { <-lanProbeSem }()
+					_, _ = c.RunLANDiscoveryProbe(runCtx, "warmup")
+				}()
+			default:
+				// Sem slot livre (probe de startup ainda rodando): o ticker
+				// periódico cobre a descoberta; não bloqueia o loop principal.
+			}
 		case <-lanProbeTicker.C:
 			select {
 			case lanProbeSem <- struct{}{}:

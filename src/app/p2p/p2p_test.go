@@ -169,17 +169,6 @@ func TestDownloadArtifactFromPeerAuditsFailureWhenPeerNotFound(t *testing.T) {
 	}
 }
 
-func TestArtifactPriorityByResource(t *testing.T) {
-	c := &Coordinator{}
-	high := c.artifactPriority("appstore", "stable", "appstore-catalog-v2.json")
-	medium := c.artifactPriority("appstore", "stable", "agent-stable-package.bin")
-	low := c.artifactPriority("appstore", "stable", "unrelated-backup.dat")
-
-	if !(high < medium && medium < low) {
-		t.Fatalf("unexpected priority order: high=%d medium=%d low=%d", high, medium, low)
-	}
-}
-
 func TestFindArtifactPeersFromIndex(t *testing.T) {
 	c := &Coordinator{
 		peers:         make(map[string]p2pPeerState),

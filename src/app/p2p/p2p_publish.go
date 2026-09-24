@@ -620,36 +620,6 @@ func (c *Coordinator) ensureServingManifest(ctx context.Context, path, artifactN
 	return manifest, nil
 }
 
-// CleanupStaleArtifacts remove artifacts do diretório local que não foram
-// acessados/modificados há mais de 7 dias.
-func (c *Coordinator) CleanupStaleArtifacts() {
-	dir := c.deps.P2PTempDir()
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return
-	}
-	cutoff := time.Now().Add(-7 * 24 * time.Hour)
-	removed := 0
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		info, err := entry.Info()
-		if err != nil {
-			continue
-		}
-		if info.ModTime().Before(cutoff) {
-			path := filepath.Join(dir, entry.Name())
-			if err := os.Remove(path); err == nil {
-				removed++
-			}
-		}
-	}
-	if removed > 0 {
-		c.deps.Log(fmt.Sprintf("[p2p] cleanup: %d artifacts removidos (mais de 7 dias)", removed))
-	}
-}
-
 func (c *Coordinator) ReplicateArtifactToPeer(artifactName, targetPeerID string) (string, error) {
 	return "", fmt.Errorf("modo push desabilitado: use transferencia pull sob demanda")
 }
