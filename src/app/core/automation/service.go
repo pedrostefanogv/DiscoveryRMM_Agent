@@ -93,6 +93,11 @@ type Service struct {
 	processStartAt time.Time
 	cfMu           sync.RWMutex
 	cfCache        map[string]*ExecutionCustomFieldCtx // key = executionID
+	// onPackageChange, quando configurado, é chamado após uma tarefa de pacote
+	// (install/update/remove) concluir com SUCESSO. O App usa para agendar o
+	// refresh de inventário — sem isso, mudanças feitas pela Loja/automação só
+	// apareciam no dashboard no próximo sync periódico (~6h).
+	onPackageChange func(action, packageID string)
 }
 
 func NewService(getConfig func() RuntimeConfig, logger func(string)) *Service {
@@ -138,6 +143,31 @@ func (s *Service) SetNotificationDispatcher(dispatcher func(AutomationNotificati
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.notifyDispatcher = dispatcher
+}
+
+// SetPackageChangeHandler registra o callback chamado após uma tarefa de pacote
+// (install/update/remove) concluir com sucesso. Usado pelo App para agendar o
+// refresh de inventário do caminho de automação/Loja.
+func (s *Service) SetPackageChangeHandler(handler func(action, packageID string)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onPackageChange = handler
+}
+
+// packageChangeActionForTask mapeia a ação de uma tarefa de pacote para o rótulo
+// do refresh de inventário. Retorna false para tarefas que não alteram software
+// instalado (scripts/comandos).
+func packageChangeActionForTask(task AutomationTask) (string, bool) {
+	switch task.ActionType {
+	case ActionInstallPackage:
+		return "install", true
+	case ActionUpdatePackage, ActionUpdateOrInstallPackage:
+		return "upgrade", true
+	case ActionRemovePackage:
+		return "uninstall", true
+	default:
+		return "", false
+	}
 }
 
 // SetStartupReadinessWaiter configura um callback chamado uma única vez, antes
@@ -510,6 +540,7 @@ func (s *Service) executeTaskAsync(ctx context.Context, agentID string, task Aut
 	authorize := s.packageAuthorize
 	psadtPolicy := s.resolvePSADTPolicyLocked()
 	notifyDispatcher := s.notifyDispatcher
+	packageChange := s.onPackageChange
 	deferStateSnapshot := s.deferByTask[strings.TrimSpace(task.TaskID)]
 	s.mu.Unlock()
 
@@ -633,6 +664,16 @@ func (s *Service) executeTaskAsync(ctx context.Context, agentID string, task Aut
 		// Notifica o chamador do resultado (ex: marcador recurring:last).
 		if onComplete != nil {
 			onComplete(result.Success)
+		}
+
+		// Instalação/atualização/remoção pela Loja/automação concluída com
+		// sucesso: agenda o refresh de inventário (debounce) para o dashboard
+		// refletir a mudança sem esperar o sync periódico (~6h). Em falha o
+		// pacote não mudou — nada a reconciliar.
+		if result.Success && packageChange != nil {
+			if action, ok := packageChangeActionForTask(task); ok {
+				packageChange(action, strings.TrimSpace(task.PackageID))
+			}
 		}
 
 		// Anti-loop (Fase 1): atualiza backoff de skips e circuit breaker

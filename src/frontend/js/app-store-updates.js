@@ -268,10 +268,12 @@ function renderCards() {
 
     var action = getContextAction(pkg.id);
     var actionClass = action.action === 'uninstall' ? 'btn danger' : 'btn primary';
-    var actionButton = '<button class="' + actionClass + '" data-action="' + escapeHtmlAttr(action.action) + '" data-id="' + escapeHtmlAttr(pkg.id) + '">' + escapeHtml(action.label) + '</button>';
+    // Botões só com ícone: o rótulo vira title/aria-label (acessibilidade).
+    var actionButton = '<button class="' + actionClass + '" data-action="' + escapeHtmlAttr(action.action) + '" data-id="' + escapeHtmlAttr(pkg.id) + '" title="' + escapeHtmlAttr(action.label) + '" aria-label="' + escapeHtmlAttr(action.label) + '">' + storeActionIcon(action.action) + '</button>';
     // App instalado com update pendente: além de "Atualizar", oferece "Remover".
     if (action.action === 'upgrade') {
-      actionButton += '<button class="btn danger" data-action="uninstall" data-id="' + escapeHtmlAttr(pkg.id) + '">' + escapeHtml(translate('action.remove')) + '</button>';
+      var removeLabel = translate('action.remove');
+      actionButton += '<button class="btn danger" data-action="uninstall" data-id="' + escapeHtmlAttr(pkg.id) + '" title="' + escapeHtmlAttr(removeLabel) + '" aria-label="' + escapeHtmlAttr(removeLabel) + '">' + storeActionIcon('uninstall') + '</button>';
     }
     var detailButton = '<button class="btn subtle store-detail-btn" data-detail-id="' + escapeHtmlAttr(pkg.id) + '" title="' + escapeHtmlAttr(translate('store.viewDetails')) + '" aria-label="' + escapeHtmlAttr(translate('store.viewDetailsOf', { name: pkg.name || pkg.id })) + '">ⓘ</button>';
     var originBadge = storeOriginBadgeHtml(pkg);
@@ -373,6 +375,34 @@ async function loadPackageActions(api) {
   } catch (_) {
     // best effort only
   }
+}
+
+// storeActionIcon devolve o SVG (16px) da ação do card. Os botões da Loja são
+// somente ícone — o texto saiu para dar lugar ao rótulo acessível (title/aria).
+function storeActionIcon(action) {
+  var open = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">';
+  if (action === 'upgrade') {
+    return open +
+      '<circle cx="12" cy="12" r="10" />' +
+      '<path d="m16 12-4-4-4 4" />' +
+      '<path d="M12 16V8" />' +
+      '</svg>';
+  }
+  if (action === 'uninstall') {
+    return open +
+      '<path d="M3 6h18" />' +
+      '<path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />' +
+      '<path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />' +
+      '<line x1="10" y1="11" x2="10" y2="17" />' +
+      '<line x1="14" y1="11" x2="14" y2="17" />' +
+      '</svg>';
+  }
+  // install
+  return open +
+    '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />' +
+    '<polyline points="7 10 12 15 17 10" />' +
+    '<line x1="12" y1="15" x2="12" y2="3" />' +
+    '</svg>';
 }
 
 function getContextAction(packageId) {

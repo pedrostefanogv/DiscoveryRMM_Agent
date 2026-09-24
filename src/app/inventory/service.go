@@ -597,6 +597,19 @@ func (s *Service) InvalidatePendingUpdatesCache() {
 	s.logf("[inventory-refresh] cache de updates/instalados invalidado (refresh manual)")
 }
 
+// ScheduleInventoryRefreshAfterPackageChange agenda o refresh de inventário com
+// debounce após uma alteração de pacote feita FORA do InventorySvc (ex.: tarefas
+// de automação / Loja de aplicativos, que executam choco/winget diretamente).
+// Reusa o MESMO caminho do update remoto: re-coleta o inventário, invalida o
+// cache de updates/instalados e envia ao servidor. Deve ser chamado só no
+// sucesso — em falha o pacote não mudou e não há o que reconciliar.
+func (s *Service) ScheduleInventoryRefreshAfterPackageChange(action, packageID string) {
+	if s == nil {
+		return
+	}
+	s.scheduleInventoryRefreshAfterPackageChange(action, packageID)
+}
+
 func (s *Service) invalidatePendingUpdates() {
 	// IMPORTANTE: invalidar NÃO descarta a última lista conhecida — apenas
 	// expira o cache (lastAt = zero) para forçar um novo scan. A lista anterior

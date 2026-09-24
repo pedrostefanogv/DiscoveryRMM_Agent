@@ -670,6 +670,15 @@ func NewApp(opts AppStartupOptions) *App {
 			return a.HardwareIDSvc.Get()
 		},
 	})
+	// Loja/automação: qualquer install/update/remove de pacote concluído com
+	// sucesso agenda o MESMO refresh de inventário do update remoto (debounce
+	// de 2 min, novo scan de updates e upload). Antes, mudanças feitas pela
+	// Loja só apareciam no dashboard no sync periódico (~6h).
+	a.AutomationSvc.SetPackageChangeHandler(func(action, packageID string) {
+		if a.InventorySvc != nil {
+			a.InventorySvc.ScheduleInventoryRefreshAfterPackageChange(action, packageID)
+		}
+	})
 	a.SupportSvc = appsupport.NewService(appsupport.Options{
 		Logf:        a.Logs.Append,
 		Ctx:         func() context.Context { return a.ctx },
