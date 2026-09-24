@@ -399,7 +399,9 @@ func (a *App) ExecutePSADTVisualNotification(req PSADTVisualNotificationRequest)
 	// linha reservada ao subtitulo em vez de omiti-la completamente.
 	req.Subtitle = defaultPSADTSubtitle(req.Subtitle)
 	// Balloon: tempo de exibicao 1..120s (0 usa o default de 10s do PSADT).
-	if req.BalloonTimeSeconds < 0 || req.BalloonTimeSeconds > 120 {
+	// 0 tambem vira 10s: sem tempo o script nao da BalloonTipTime nem mantem o
+	// processo vivo (Start-Sleep 0) e o balloon seria removido antes de exibir.
+	if req.BalloonTimeSeconds <= 0 || req.BalloonTimeSeconds > 120 {
 		req.BalloonTimeSeconds = 10
 	}
 	req.PromptIcon = normalizePromptIcon(req.PromptIcon)
@@ -452,24 +454,27 @@ func (a *App) ExecutePSADTVisualNotification(req PSADTVisualNotificationRequest)
 		a.Logs.Append("[psadt] " + result.Error)
 		return result
 	}
-	tmpFile, err := os.CreateTemp(tmpBase, "psadt-visual-*.ps1")
+	// Diretorio de execucao dedicado: o staging (Config\config.psd1) e
+	// resolvido a partir da pasta do script (Initialize-ADTModule
+	// -ScriptDirectory). Sem diretorio proprio, notificacoes concorrentes
+	// sobrescreveriam o staging uma da outra (e o cleanup de uma apagaria o da
+	// outra).
+	runDir, err := os.MkdirTemp(tmpBase, "psadt-visual-")
 	if err != nil {
-		result.Error = "falha ao criar arquivo temporario: " + err.Error()
+		result.Error = "falha ao criar diretorio temporario: " + err.Error()
 		result.ExitCode = 1
 		a.Logs.Append("[psadt] " + result.Error)
 		return result
 	}
-	tmpPath := tmpFile.Name()
-	defer os.Remove(tmpPath)
+	defer os.RemoveAll(runDir)
+	tmpPath := filepath.Join(runDir, "psadt-visual.ps1")
 
-	if _, err := tmpFile.WriteString(script); err != nil {
-		tmpFile.Close()
+	if err := os.WriteFile(tmpPath, []byte(script), 0o644); err != nil {
 		result.Error = "falha ao escrever script temporario: " + err.Error()
 		result.ExitCode = 1
 		a.Logs.Append("[psadt] " + result.Error)
 		return result
 	}
-	tmpFile.Close()
 
 	// Branding: escreve um config.psd1 parcial no mesmo diretorio do script
 	// temporario quando o usuario personalizou icones/estilo/acento. O script
@@ -841,8 +846,14 @@ func buildPSADTVisualScript(req PSADTVisualNotificationRequest) (string, time.Du
 			"if ($psadtBalloonNoWait) { $balloonParams.NoWait = $true }\n" +
 			"Show-ADTBalloonTip @balloonParams\n" +
 			"Write-Host 'BalloonTip exibido com sucesso'\n" +
+			// Mantem o processo vivo: o PSADT remove o balloon ao fechar a sessao.
+			"Start-Sleep -Seconds $psadtBalloonTime\n" +
 			closeSession
-		return header + body, 45 * time.Second
+		timeout := time.Duration(req.BalloonTimeSeconds+30) * time.Second
+		if timeout < 30*time.Second {
+			timeout = 30 * time.Second
+		}
+		return header + body, timeout
 	}
 }
 

@@ -131,10 +131,17 @@ func (a *App) handlePsadtAlert(ctx context.Context, p PsadtAlertPayload) (int, s
 		return 0, string(body), ""
 	}
 
+	// Tipos desconhecidos caem no toast (balloon nativo); o parse ja converte
+	// vazio em "toast".
+	switch p.Type {
+	case "modal", "toast", "update-progress":
+	default:
+		p.Type = "toast"
+	}
+
 	// O PSADT rejeita -Timeout acima de UI.DefaultTimeout do config.psd1
 	// (padrão 3300s): o cmdlet lança erro e nada aparece na tela do usuário.
-	// Clampa para garantir a entrega; o retry de showPSADTModal cobre configs
-	// com DefaultTimeout ainda menor.
+	// Clampa para garantir a entrega.
 	if p.Type == "modal" && !p.WaitForUser && p.TimeoutSeconds > maxPsadtDialogTimeoutSeconds {
 		if a != nil {
 			a.Logs.Append(fmt.Sprintf("[agent] psadt-alert timeout=%ds acima do limite PSADT (%ds); clamp aplicado", p.TimeoutSeconds, maxPsadtDialogTimeoutSeconds))
@@ -155,7 +162,7 @@ func (a *App) handlePsadtAlert(ctx context.Context, p PsadtAlertPayload) (int, s
 	// Toast: usa o balloon nativo do PSADT com branding (TrayTitle/TrayIcon)
 	// em vez do caminho go-psadt, que exibia "PSAppDeployToolkit" no título e o
 	// ícone default do toolkit. Também retorna antes de criar o client.
-	if p.Type == "toast" || p.Type == "" {
+	if p.Type == "toast" {
 		return a.showPSADTBalloon(p)
 	}
 
@@ -202,24 +209,13 @@ func (a *App) handlePsadtAlert(ctx context.Context, p PsadtAlertPayload) (int, s
 		_ = session.CloseWithContext(closeCtx, 0)
 	}()
 
-	switch p.Type {
-	case "update-progress":
-		action, errMsg := a.showPSADTProgress(session, p)
-		if errMsg != "" {
-			return 1, "", errMsg
-		}
-		body, _ := json.Marshal(map[string]string{"action": action})
-		return 0, string(body), ""
-
-	default:
-		// Fallback: toast.
-		action, errMsg := a.showPSADTToast(session, p)
-		if errMsg != "" {
-			return 1, "", errMsg
-		}
-		body, _ := json.Marshal(map[string]string{"action": action})
-		return 0, string(body), ""
+	// So "update-progress" chega aqui (modal/toast retornaram antes).
+	action, errMsg := a.showPSADTProgress(session, p)
+	if errMsg != "" {
+		return 1, "", errMsg
 	}
+	body, _ := json.Marshal(map[string]string{"action": action})
+	return 0, string(body), ""
 }
 
 // showPSADTBalloon exibe a notificação como balloon/toast nativo do PSADT
@@ -276,36 +272,6 @@ func (a *App) showPSADTBalloon(p PsadtAlertPayload) (int, string, string) {
 		a.Logs.Append(fmt.Sprintf("[agent] psadt-alert [OK] type=toast alertId=%s action=shown", p.AlertID))
 	}
 	return 0, string(body), ""
-}
-
-// showPSADTToast exibe um BalloonTip não-bloqueante.
-func (a *App) showPSADTToast(session *psadt.Session, p PsadtAlertPayload) (string, string) {
-	icon := pstypes.BalloonInfo
-	switch strings.ToLower(p.Icon) {
-	case "warning":
-		icon = pstypes.BalloonWarning
-	case "error":
-		icon = pstypes.BalloonError
-	}
-
-	err := session.ShowBalloonTip(pstypes.BalloonTipOptions{
-		BalloonTipTitle: strings.TrimSpace(p.Title),
-		BalloonTipText:  strings.TrimSpace(p.Message),
-		BalloonTipIcon:  icon,
-		NoWait:          true,
-	})
-	if err != nil {
-		errMsg := fmt.Sprintf("ShowBalloonTip: %v", err)
-		if a != nil {
-			a.Logs.Append("[agent] psadt-alert [ERRO] type=toast alertId=" + p.AlertID + " " + errMsg)
-		}
-		return "", errMsg
-	}
-
-	if a != nil {
-		a.Logs.Append(fmt.Sprintf("[agent] psadt-alert [OK] type=toast alertId=%s action=shown", p.AlertID))
-	}
-	return "shown", ""
 }
 
 // showPSADTFluentPrompt exibe a notificação como prompt nativo do PSADT
