@@ -30,8 +30,8 @@ type Provider struct {
 
 // init liga o fallback de último recurso do resolvedor do winget ao osquery:
 // quando TODAS as estratégias nativas falham (PATH, pacote da máquina, aliases
-// de perfil/SYSTEM, Get-AppxPackage), o osquery — se instalado — é usado para
-// localizar o winget.exe no disco.
+// de perfil/SYSTEM, App Paths e Get-AppxPackage), o osquery — se instalado — é
+// usado para ler o App Paths do usuário em HKEY_USERS.
 func init() {
 	winget.OsqueryLookup = runOsqueryLookup
 }
@@ -67,8 +67,10 @@ func runOsqueryLookup(ctx context.Context, sql string) []string {
 	return lines
 }
 
-// osqueryLookupTimeout limita a consulta de último recurso.
-const osqueryLookupTimeout = 20 * time.Second
+// osqueryLookupTimeout limita a consulta de último recurso. Mantido curto: esta
+// consulta roda no caminho do refresh manual de software, e o operador está
+// esperando a resposta do botão "Atualizar".
+const osqueryLookupTimeout = 10 * time.Second
 
 // NewProvider creates a Provider with the given per-collection timeout.
 func NewProvider(timeout time.Duration) *Provider {

@@ -46,6 +46,7 @@ func (c *Client) InstallWithSwitches(ctx context.Context, id, silent, silentWith
 		"--scope", "machine",
 		"--accept-source-agreements",
 		"--accept-package-agreements",
+		"--disable-interactivity",
 	}
 	// C7: só repassamos switches do catálogo via --custom quando eles são
 	// argumentos válidos para o instalador do pacote. Switches de .exe (ex.:
@@ -89,6 +90,8 @@ func (c *Client) Uninstall(ctx context.Context, id string) (string, error) {
 		"--id", id,
 		"--silent",
 		"--scope", "machine",
+		"--accept-source-agreements",
+		"--disable-interactivity",
 	)
 }
 
@@ -113,6 +116,7 @@ func (c *Client) UpgradeWithSwitches(ctx context.Context, id, silent, silentWith
 		"--silent",
 		"--accept-source-agreements",
 		"--accept-package-agreements",
+		"--disable-interactivity",
 	}
 	if sw != "" && !looksLikeExeOnlySwitch(sw) {
 		args = append(args, "--custom", sw)
@@ -128,18 +132,38 @@ func (c *Client) UpgradeAll(ctx context.Context) (string, error) {
 		"--scope", "machine",
 		"--accept-source-agreements",
 		"--accept-package-agreements",
+		"--disable-interactivity",
 	)
 }
 
+// ListInstalled lista os pacotes instalados reconhecidos pelo winget.
+//
+// As flags de aceite NÃO são cosméticas: o agente roda como SERVIÇO (LocalSystem)
+// e o winget pede confirmação dos termos da fonte "msstore" na primeira vez que
+// a fonte é usada por aquele contexto. Sem terminal, o prompt falha com
+//
+//	0x8a150042 : Error reading input in prompt
+//
+// e a listagem inteira volta vazia — o inventário é reportado sem os Ids de
+// pacote (update/desinstalação deixam de funcionar). Como usuário interativo o
+// prompt costuma não aparecer (termos já aceitos no perfil), o que torna a falha
+// invisível em teste manual.
 func (c *Client) ListInstalled(ctx context.Context) (string, error) {
 	return c.run(ctx,
 		"list",
+		"--accept-source-agreements",
+		"--disable-interactivity",
 	)
 }
 
+// ListUpgradable lista os pacotes com atualização disponível.
+// Mesmas flags de aceite do ListInstalled (ver comentário acima): sem elas o
+// scan de updates devolve vazio no contexto do serviço.
 func (c *Client) ListUpgradable(ctx context.Context) (string, error) {
 	return c.run(ctx,
 		"upgrade",
+		"--accept-source-agreements",
+		"--disable-interactivity",
 	)
 }
 
@@ -155,6 +179,7 @@ func (c *Client) Download(ctx context.Context, id, downloadDir string) (string, 
 		"--download-directory", downloadDir,
 		"--accept-source-agreements",
 		"--accept-package-agreements",
+		"--disable-interactivity",
 	)
 }
 

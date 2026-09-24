@@ -35,19 +35,30 @@ import (
 //   2. pacote instalado para a MÁQUINA (Program Files\WindowsApps)
 //   3. alias nos perfis de usuário (scan de C:\Users\*)
 //   4. alias do SYSTEM
-//   5. pacote registrado no Windows (PowerShell/Get-AppxPackage)
-//   6. osquery (último recurso, só se disponível na máquina)
+//   5. App Paths no registro (HKLM/HKCU) — caminho real, sem subprocesso
+//   6. pacote registrado no Windows (PowerShell/Get-AppxPackage)
+//   7. osquery (último recurso, só se disponível na máquina)
 // ─────────────────────────────────────────────────────────────────────────────
 
 var (
+	wingetMu     sync.RWMutex
 	wingetOnce   sync.Once
 	wingetPath   string
 	wingetOrigin string
+	wingetAt     time.Time
 )
 
-// resolveTimeout limita as estratégias que invocam subprocesso, para não travar
-// o scan de inventário numa máquina onde elas não respondem.
-const resolveTimeout = 25 * time.Second
+// resolvedTTL limita a validade do cache de resolução. Sem ele, o resultado
+// "não encontrado" (máquina sem winget no boot) ficaria congelado para sempre e
+// o agente nunca passaria a enxergar o winget instalado depois — e uma
+// atualização do pacote (que troca o diretório com a versão no nome) deixaria o
+// caminho antigo em uso.
+const resolvedTTL = 30 * time.Minute
+
+// resolveTimeout limita CADA estratégia que invoca subprocesso (PowerShell,
+// osquery), para não travar o scan de inventário numa máquina onde elas não
+// respondem.
+const resolveTimeout = 10 * time.Second
 
 // OsqueryLookup é injetado pelo caller para o fallback de último recurso:
 // recebe uma query SQL e devolve as linhas resultantes. Fica como dependência
@@ -58,17 +69,43 @@ var OsqueryLookup func(ctx context.Context, sql string) []string
 // ResolveExecutable devolve o caminho do winget utilizável neste processo e a
 // origem da descoberta (para log/diagnóstico). Vazio quando não encontra.
 func ResolveExecutable() (string, string) {
+	// Fast path: já resolvido e ainda dentro do TTL (inclui "não encontrado",
+	// marcado por origin).
+	wingetMu.RLock()
+	path, origin := wingetPath, wingetOrigin
+	at := wingetAt
+	wingetMu.RUnlock()
+	if origin != "" && time.Since(at) < resolvedTTL {
+		return path, origin
+	}
+
+	// Resolução thread-safe. O Once é lido/escrito sob o mesmo mutex que o
+	// cache, evitando a corrida com InvalidateResolvedExecutable.
+	wingetMu.Lock()
+	defer wingetMu.Unlock()
+
+	// Outra goroutine pode ter resolvido enquanto esperávamos o lock.
+	if wingetOrigin != "" && time.Since(wingetAt) < resolvedTTL {
+		return wingetPath, wingetOrigin
+	}
+
+	wingetOnce = sync.Once{}
 	wingetOnce.Do(func() {
 		wingetPath, wingetOrigin = resolveExecutableUncached()
+		wingetAt = time.Now()
 	})
 	return wingetPath, wingetOrigin
 }
 
-// InvalidateResolvedExecutable descarta o cache (após instalar/atualizar o winget).
+// InvalidateResolvedExecutable descarta o cache (após instalar/atualizar o
+// winget). Seguro para uso concorrente com ResolveExecutable.
 func InvalidateResolvedExecutable() {
+	wingetMu.Lock()
+	defer wingetMu.Unlock()
 	wingetOnce = sync.Once{}
 	wingetPath = ""
 	wingetOrigin = ""
+	wingetAt = time.Time{}
 }
 
 func resolveExecutableUncached() (string, string) {
@@ -248,9 +285,9 @@ func fromAppxPackage() string {
 	return firstWingetPath(string(out))
 }
 
-// fromOsquery é o ÚLTIMO recurso: usa o osquery (quando instalado) para listar
-// arquivos do pacote DesktopAppInstaller no disco. Só roda depois de esgotadas
-// todas as estratégias nativas.
+// fromOsquery é o ÚLTIMO recurso: usa o osquery (quando instalado) para ler o
+// App Paths do usuário em HKEY_USERS. Só roda depois de esgotadas todas as
+// estratégias nativas.
 func fromOsquery(lookup func(context.Context, string) []string) string {
 	if lookup == nil {
 		return ""
@@ -259,10 +296,11 @@ func fromOsquery(lookup func(context.Context, string) []string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), resolveTimeout)
 	defer cancel()
 
-	// Consulta o App Paths via osquery: a tabela "file" NÃO enumera
-	// C:\Program Files\WindowsApps (ACL restrita), mas o registro expõe o
-	// caminho real gravado pelo instalador.
-	const sql = "SELECT data FROM registry WHERE key LIKE '%App Paths\\winget.exe' AND name = ''"
+	// Consulta o App Paths do usuário em HKEY_USERS. Detalhes que importam:
+	//   - a tabela "file" NÃO enumera C:\Program Files\WindowsApps (ACL restrita);
+	//   - o osquery não lê HKCU ("CURRENT_USER hives are not queryable"), mas lê
+	//     HKEY_USERS\<SID>\..., que é onde o instalador grava o caminho real.
+	const sql = "SELECT data FROM registry WHERE key LIKE 'HKEY_USERS\\%\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\winget.exe'"
 	for _, line := range lookup(ctx, sql) {
 		if p := firstWingetPath(line); p != "" {
 			return p
