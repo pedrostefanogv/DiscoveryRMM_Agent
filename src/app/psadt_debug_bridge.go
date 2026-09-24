@@ -332,13 +332,19 @@ type PSADTVisualNotificationRequest struct {
 	PromptDefaultValue string `json:"promptDefaultValue"`
 
 	// Branding (config.psd1 parcial + Initialize-ADTModule -ScriptDirectory).
-	// Aplica-se aos dialogs Fluent/Classic (prompts, progress, welcome, restart).
-	// Show-ADTDialogBox (Win32) e BalloonTip usam icones de sistema e ignoram isso.
+	// Aplica-se aos dialogs Fluent/Classic (prompts, progress, welcome,
+	// restart) E ao BalloonTip/toast: o PSADT usa Toolkit.CompanyName como
+	// TrayTitle (nome exibido na notificacao) e Assets.Logo como TrayIcon.
+	// Show-ADTDialogBox (Win32) usa icones de sistema e ignora isso.
 	BrandingIconPath   string `json:"brandingIconPath"`   // PNG do logo (modo claro)
 	BrandingIconDark   string `json:"brandingIconDark"`   // PNG do logo (modo escuro)
 	BrandingBannerPath string `json:"brandingBannerPath"` // PNG do banner (dialogos Classic)
 	DialogStyle        string `json:"dialogStyle"`        // Fluent | Classic
 	FluentAccentColor  string `json:"fluentAccentColor"`  // hex RGB(A): 4A9EFF ou FF4A9EFF
+	// CompanyName vira Toolkit.CompanyName: e o TrayTitle do toast/balloon e o
+	// texto default de subtitulos dos dialogs Fluent. Vazio usa o branding do
+	// agent (notificationBranding.companyName) ou "Discovery Agent".
+	CompanyName string `json:"companyName"`
 
 	// Welcome (Show-ADTInstallationWelcome)
 	CloseProcesses          string `json:"closeProcesses"` // nomes de processos separados por virgula
@@ -373,6 +379,18 @@ func (a *App) ExecutePSADTVisualNotification(req PSADTVisualNotificationRequest)
 	}
 	if strings.TrimSpace(req.AppName) == "" {
 		req.AppName = "Discovery Agent"
+	}
+	// CompanyName: assina o TrayTitle do toast/balloon (nome exibido na
+	// notificacao) e o subtitulo default dos dialogs Fluent. Sem valor
+	// explicito usa o branding do tenant e, na ausencia, "Discovery Agent" —
+	// evita o "PSAppDeployToolkit" default do modulo.
+	if strings.TrimSpace(req.CompanyName) == "" {
+		if a != nil {
+			req.CompanyName = strings.TrimSpace(a.GetAgentConfiguration().NotificationBranding.CompanyName)
+		}
+		if strings.TrimSpace(req.CompanyName) == "" {
+			req.CompanyName = "Discovery Agent"
+		}
 	}
 	if req.DurationSeconds <= 0 || req.DurationSeconds > 60 {
 		req.DurationSeconds = 5
@@ -848,10 +866,21 @@ var psadtAgentIconPNG []byte
 
 // psadtNotifUsesFluentDialogs indica se o tipo de notificacao renderiza
 // dialogs Fluent/Classic do PSADT (que exibem o logo do config.psd1).
-// Dialog Box (Win32 MessageBox) e BalloonTip usam icones de sistema.
+// Dialog Box (Win32 MessageBox) usa icone de sistema.
 func psadtNotifUsesFluentDialogs(notifType string) bool {
 	switch notifType {
 	case "prompt_ok", "prompt_yesno", "prompt_continue", "prompt_input", "progress", "restart_prompt", "welcome":
+		return true
+	default:
+		return false
+	}
+}
+
+// psadtNotifUsesTrayBranding indica se o tipo renderiza balloon/toast do PSADT,
+// cujo TrayTitle e TrayIcon vem de Toolkit.CompanyName e Assets.Logo.
+func psadtNotifUsesTrayBranding(notifType string) bool {
+	switch notifType {
+	case "balloon_info", "balloon_warning", "balloon_error":
 		return true
 	default:
 		return false
@@ -870,7 +899,11 @@ func writePSADTVisualBranding(req PSADTVisualNotificationRequest, scriptPath str
 	accent := normalizeHexAccent(req.FluentAccentColor)
 	style := normalizeDialogStyle(req.DialogStyle)
 	fluentApplies := psadtNotifUsesFluentDialogs(req.NotifType)
-	if !fluentApplies && userIcon == "" && userIconDark == "" && bannerPath == "" && accent == "" && style == "" {
+	// Balloons/toasts tambem usam branding: TrayTitle (Toolkit.CompanyName) e
+	// TrayIcon (Assets.Logo) sao exibidos na notificacao do Windows.
+	trayApplies := psadtNotifUsesTrayBranding(req.NotifType)
+	brandedAssets := fluentApplies || trayApplies
+	if !brandedAssets && userIcon == "" && userIconDark == "" && bannerPath == "" && accent == "" && style == "" {
 		return nil, nil
 	}
 	// O PSADT so considera o diretorio do caller se existir
@@ -915,16 +948,27 @@ func writePSADTVisualBranding(req PSADTVisualNotificationRequest, scriptPath str
 	switch {
 	case logo != "" && logoDark == "":
 		logoDark = logo
-	case logo == "" && logoDark == "" && fluentApplies && len(psadtAgentIconPNG) > 0:
+	case logo == "" && logoDark == "" && brandedAssets && len(psadtAgentIconPNG) > 0:
 		logo = writeAsset(psadtAgentIconPNG, "discovery-agent-icon.png")
 		logoDark = logo
 	}
-	if len(created) == 1 && accent == "" && style == "" { // so o dir vazio
+	// Nada de fato gravado (so o diretorio): limpa e nao gera config. Tipos
+	// branded sempre gravam Toolkit.CompanyName, entao nunca caem aqui.
+	if len(created) == 1 && accent == "" && style == "" && !brandedAssets {
 		_ = os.Remove(configDir)
 		return nil, nil
 	}
+	company := strings.TrimSpace(req.CompanyName)
+	if company == "" {
+		company = "Discovery Agent"
+	}
 	var cfg strings.Builder
 	cfg.WriteString("@{\n")
+	// Toolkit.CompanyName e o TrayTitle do balloon/toast e o nome default de
+	// subtitulo dos dialogs Fluent. Evita o "PSAppDeployToolkit" do modulo.
+	cfg.WriteString("\tToolkit = @{\n")
+	cfg.WriteString("\t\tCompanyName = '" + psadt.EscapeSingleQuoted(company) + "'\n")
+	cfg.WriteString("\t}\n")
 	if logo != "" || logoDark != "" || banner != "" {
 		cfg.WriteString("\tAssets = @{\n")
 		if logo != "" {

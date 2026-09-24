@@ -152,6 +152,13 @@ func (a *App) handlePsadtAlert(ctx context.Context, p PsadtAlertPayload) (int, s
 		return a.showPSADTFluentPrompt(p)
 	}
 
+	// Toast: usa o balloon nativo do PSADT com branding (TrayTitle/TrayIcon)
+	// em vez do caminho go-psadt, que exibia "PSAppDeployToolkit" no título e o
+	// ícone default do toolkit. Também retorna antes de criar o client.
+	if p.Type == "toast" || p.Type == "" {
+		return a.showPSADTBalloon(p)
+	}
+
 	if a != nil {
 		a.Logs.Append(fmt.Sprintf("[agent] psadt-alert iniciando type=%s alertId=%s timeout=%ds via go-psadt", p.Type, p.AlertID, p.TimeoutSeconds))
 	}
@@ -196,14 +203,6 @@ func (a *App) handlePsadtAlert(ctx context.Context, p PsadtAlertPayload) (int, s
 	}()
 
 	switch p.Type {
-	case "toast":
-		action, errMsg := a.showPSADTToast(session, p)
-		if errMsg != "" {
-			return 1, "", errMsg
-		}
-		body, _ := json.Marshal(map[string]string{"action": action})
-		return 0, string(body), ""
-
 	case "update-progress":
 		action, errMsg := a.showPSADTProgress(session, p)
 		if errMsg != "" {
@@ -221,6 +220,62 @@ func (a *App) handlePsadtAlert(ctx context.Context, p PsadtAlertPayload) (int, s
 		body, _ := json.Marshal(map[string]string{"action": action})
 		return 0, string(body), ""
 	}
+}
+
+// showPSADTBalloon exibe a notificação como balloon/toast nativo do PSADT
+// (Show-ADTBalloonTip) com branding próprio — TrayTitle (Toolkit.CompanyName)
+// e TrayIcon (Assets.Logo) — em vez do caminho go-psadt, que mostrava
+// "PSAppDeployToolkit" e o ícone default do toolkit.
+func (a *App) showPSADTBalloon(p PsadtAlertPayload) (int, string, string) {
+	notifType := "balloon_info"
+	switch strings.ToLower(strings.TrimSpace(p.Icon)) {
+	case "warning", "warn":
+		notifType = "balloon_warning"
+	case "error", "stop":
+		notifType = "balloon_error"
+	}
+
+	// BalloonTipTime em segundos (o script converte para ms). O console de
+	// debug limita 1..120s; 0 usa o default de 10s do PSADT.
+	balloonTime := p.TimeoutSeconds
+	if balloonTime <= 0 {
+		balloonTime = 10
+	}
+	if balloonTime > 120 {
+		balloonTime = 120
+	}
+
+	req := PSADTVisualNotificationRequest{
+		NotifType:          notifType,
+		Title:              strings.TrimSpace(p.Title),
+		Message:            strings.TrimSpace(p.Message),
+		AppName:            "Discovery Agent",
+		BalloonTimeSeconds: balloonTime,
+		// Não-bloqueante: o toast não prende o processamento do comando.
+		BalloonNoWait: true,
+	}
+
+	if a != nil {
+		a.Logs.Append(fmt.Sprintf("[agent] psadt-alert iniciando type=toast (balloon nativo) alertId=%s notifType=%s", p.AlertID, notifType))
+	}
+
+	result := a.ExecutePSADTVisualNotification(req)
+	if !result.Success {
+		errMsg := strings.TrimSpace(result.Error)
+		if errMsg == "" {
+			errMsg = "falha ao exibir a notificação toast"
+		}
+		if a != nil {
+			a.Logs.Append("[agent] psadt-alert [ERRO] type=toast alertId=" + p.AlertID + " " + errMsg)
+		}
+		return 1, result.Output, errMsg
+	}
+
+	body, _ := json.Marshal(map[string]string{"action": "shown", "mode": "balloon"})
+	if a != nil {
+		a.Logs.Append(fmt.Sprintf("[agent] psadt-alert [OK] type=toast alertId=%s action=shown", p.AlertID))
+	}
+	return 0, string(body), ""
 }
 
 // showPSADTToast exibe um BalloonTip não-bloqueante.

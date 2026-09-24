@@ -399,11 +399,35 @@ func TestWritePSADTVisualBranding_AgentIconDefault(t *testing.T) {
 		t.Errorf("config deveria usar o appiconPSADT.png do agent como LogoDark:\n%s", cfg)
 	}
 
-	// Balloon e Dialog Box (Win32) nao usam dialogs Fluent: sem branding nada e criado.
+	// Balloon/toast tambem usa branding: TrayTitle (Toolkit.CompanyName) e
+	// TrayIcon (Assets.Logo) aparecem na notificacao do Windows.
 	files, err = writePSADTVisualBranding(PSADTVisualNotificationRequest{NotifType: "balloon_info"}, scriptPath)
-	if err != nil || len(files) != 0 {
-		t.Errorf("balloon sem branding deveria retornar nil/nil, veio %v, %v", files, err)
+	if err != nil {
+		t.Fatalf("falha inesperada: %v", err)
 	}
+	var balloonConfig string
+	for _, f := range files {
+		if filepath.Base(f) == "config.psd1" {
+			balloonConfig = f
+		}
+	}
+	if balloonConfig == "" {
+		t.Fatalf("balloon deveria gerar config.psd1 de branding: %v", files)
+	}
+	balloonCfg, err := os.ReadFile(balloonConfig)
+	if err != nil {
+		t.Fatalf("falha ao ler config do balloon: %v", err)
+	}
+	for _, want := range []string{
+		"CompanyName = 'Discovery Agent'",
+		"Logo = 'discovery-agent-icon.png'",
+	} {
+		if !strings.Contains(string(balloonCfg), want) {
+			t.Errorf("config do balloon nao contem %q:\n%s", want, string(balloonCfg))
+		}
+	}
+
+	// Dialog Box (Win32 MessageBox) nao usa dialog Fluent/tray: sem branding.
 	files, err = writePSADTVisualBranding(PSADTVisualNotificationRequest{NotifType: "dialog_box"}, scriptPath)
 	if err != nil || len(files) != 0 {
 		t.Errorf("dialog_box sem branding deveria retornar nil/nil, veio %v, %v", files, err)
