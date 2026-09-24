@@ -19,11 +19,6 @@ import (
 	"discovery/app/core/processutil"
 )
 
-// maxModalAlertWait é o teto de segurança para um alerta modal com
-// waitForUser=true: o diálogo aguarda o clique do usuário, mas o comando não
-// fica pendurado para sempre caso a sessão seja abandonada (4 horas).
-const maxModalAlertWait = 4 * time.Hour
-
 // maxPsadtDialogTimeoutSeconds é o maior -Timeout que o Show-ADTDialogBox
 // aceita com o config.psd1 padrão do PSADT (UI.DefaultTimeout = 3300s).
 // Um valor acima disso faz o cmdlet lançar erro de validação e o diálogo não
@@ -147,35 +142,29 @@ func (a *App) handlePsadtAlert(ctx context.Context, p PsadtAlertPayload) (int, s
 		p.TimeoutSeconds = maxPsadtDialogTimeoutSeconds
 	}
 
+	// Notificação modal: usa o prompt nativo do PSADT
+	// (Show-ADTInstallationPrompt, estilo Fluent) — o MESMO caminho da
+	// "Notificação Visual Nativa" (Prompt) do console de debug do agent — em
+	// vez da MessageBox Win32 do Show-ADTDialogBox, que não tem o visual
+	// Fluent/branding. Retorna antes de criar o client go-psadt (o prompt
+	// nativo roda via script próprio).
+	if p.Type == "modal" {
+		return a.showPSADTFluentPrompt(p)
+	}
+
 	if a != nil {
 		a.Logs.Append(fmt.Sprintf("[agent] psadt-alert iniciando type=%s alertId=%s timeout=%ds via go-psadt", p.Type, p.AlertID, p.TimeoutSeconds))
 	}
 
 	// Init timeout: Import-Module + Get-Module -ListAvailable pode demorar.
-	// Mínimo de 90s para inicialização, independente do timeout do alerta.
+	// Mínimo de 90s. Modal já retornou acima (prompt nativo); aqui só restam
+	// toast/update-progress, ambos não-bloqueantes.
 	initTimeout := 90 * time.Second
 	execCtx, cancel := context.WithTimeout(ctx, initTimeout)
 	defer cancel()
 
-	// O deadline do client precisa cobrir toda a janela do diálogo modal, não
-	// apenas a inicialização. Sem isso o contexto de ~90s cancelaria o
-	// Show-ADTDialogBox antes do timeout configurado (ou de o usuário clicar).
-	commandTimeout := initTimeout
-	if p.Type == "modal" {
-		if p.WaitForUser || p.TimeoutSeconds <= 0 {
-			// Usuário decide quando fechar: teto de segurança para não manter
-			// o comando aberto indefinidamente em caso de sessão abandonada.
-			commandTimeout = maxModalAlertWait
-		} else {
-			needed := time.Duration(p.TimeoutSeconds)*time.Second + 120*time.Second
-			if needed > commandTimeout {
-				commandTimeout = needed
-			}
-		}
-	}
-
 	client, err := psadt.NewClient(
-		psadt.WithTimeout(commandTimeout),
+		psadt.WithTimeout(initTimeout),
 		psadt.WithMinModuleVersion(strings.TrimSpace(psadtCfg.RequiredVersion)),
 	)
 	if err != nil {
@@ -223,14 +212,6 @@ func (a *App) handlePsadtAlert(ctx context.Context, p PsadtAlertPayload) (int, s
 		body, _ := json.Marshal(map[string]string{"action": action})
 		return 0, string(body), ""
 
-	case "modal":
-		action, errMsg := a.showPSADTModal(execCtx, session, p)
-		if errMsg != "" {
-			return 1, "", errMsg
-		}
-		body, _ := json.Marshal(map[string]string{"action": action})
-		return 0, string(body), ""
-
 	default:
 		// Fallback: toast.
 		action, errMsg := a.showPSADTToast(session, p)
@@ -272,79 +253,124 @@ func (a *App) showPSADTToast(session *psadt.Session, p PsadtAlertPayload) (strin
 	return "shown", ""
 }
 
-// showPSADTModal exibe um DialogBox bloqueante com botões de ação.
-func (a *App) showPSADTModal(_ context.Context, session *psadt.Session, p PsadtAlertPayload) (string, string) {
-	buttons := pstypes.ButtonsOk
+// showPSADTFluentPrompt exibe a notificação como prompt nativo do PSADT
+// (Show-ADTInstallationPrompt), com o estilo Fluent e o branding/logo padrão do
+// Discovery Agent. É o mesmo caminho da "Notificação Visual Nativa" (Prompt) do
+// console de debug do agent, em vez da MessageBox Win32 do Show-ADTDialogBox.
+//
+// waitForUser (ou timeout <= 0) usa o maior timeout aceito pelo PSADT
+// (UI.DefaultTimeout, 3300s); com timeout positivo o prompt auto-fecha.
+func (a *App) showPSADTFluentPrompt(p PsadtAlertPayload) (int, string, string) {
+	timeout := p.TimeoutSeconds
+	if p.WaitForUser || timeout <= 0 {
+		timeout = maxPsadtDialogTimeoutSeconds
+	}
+	if timeout > maxPsadtDialogTimeoutSeconds {
+		timeout = maxPsadtDialogTimeoutSeconds
+	}
+
+	req := PSADTVisualNotificationRequest{
+		NotifType: "prompt_ok",
+		Title:     strings.TrimSpace(p.Title),
+		Message:   strings.TrimSpace(p.Message),
+		Subtitle:  strings.TrimSpace(p.Subtitle),
+		AppName:   "Discovery Agent",
+		// p.Icon já vem normalizado ("Warning"|"Error"|"Information"|"Question");
+		// normalizePromptIcon aceita essas formas e converte para DialogSystemIcon.
+		PromptIcon:    p.Icon,
+		PromptTimeout: timeout,
+		// DialogStyle vazio mantém o default do módulo (Fluent) e, sem logo
+		// customizado, writePSADTVisualBranding aplica o appiconPSADT.png.
+	}
+
+	// O prompt Fluent aceita até 3 botões (-ButtonLeftText/-ButtonMiddleText/
+	// -ButtonRightText). Alertas agendados podem trazer ações customizadas
+	// (ActionsJson); sem ações, o padrão é um único botão OK.
 	switch {
 	case len(p.Actions) >= 3:
-		buttons = pstypes.ButtonsYesNoCancel
-	case len(p.Actions) >= 2:
-		buttons = pstypes.ButtonsYesNo
+		req.PromptLeftText = psadtActionLabel(p.Actions[0])
+		req.PromptMiddleText = psadtActionLabel(p.Actions[1])
+		req.PromptRightText = psadtActionLabel(p.Actions[2])
+	case len(p.Actions) == 2:
+		req.PromptLeftText = psadtActionLabel(p.Actions[0])
+		req.PromptRightText = psadtActionLabel(p.Actions[1])
+	case len(p.Actions) == 1:
+		req.PromptRightText = psadtActionLabel(p.Actions[0])
+	default:
+		req.PromptRightText = "OK"
 	}
 
-	defaultButton := pstypes.DialogDefaultFirst
-	if strings.TrimSpace(p.DefaultAction) != "" && len(p.Actions) >= 2 {
-		if strings.EqualFold(strings.TrimSpace(p.DefaultAction), strings.TrimSpace(p.Actions[1].Value)) {
-			defaultButton = pstypes.DialogDefaultSecond
-		}
+	if a != nil {
+		a.Logs.Append(fmt.Sprintf("[agent] psadt-alert iniciando type=modal (prompt Fluent) alertId=%s timeout=%ds", p.AlertID, timeout))
 	}
 
-	icon := pstypes.IconInformation
-	switch strings.ToLower(p.Icon) {
-	case "warning":
-		icon = pstypes.IconExclamation
-	case "error":
-		icon = pstypes.IconHand
-	case "question":
-		icon = pstypes.IconQuestion
-	}
-
-	timeoutSeconds := p.TimeoutSeconds
-	if timeoutSeconds > maxPsadtDialogTimeoutSeconds {
-		timeoutSeconds = maxPsadtDialogTimeoutSeconds
-	}
-
-	// Timeout 0 (ou waitForUser) = diálogo sem -Timeout; o PSADT aplica o
-	// UI.DefaultTimeout do config.psd1 (padrão 3300s) antes de devolver Timeout.
-	// Com timeout positivo, auto-fecha ao expirar.
-	dialogOptions := pstypes.DialogBoxOptions{
-		Title:         strings.TrimSpace(p.Title),
-		Text:          strings.TrimSpace(p.Message),
-		Buttons:       buttons,
-		DefaultButton: defaultButton,
-		Icon:          icon,
-	}
-	if timeoutSeconds > 0 && !p.WaitForUser {
-		dialogOptions.Timeout = timeoutSeconds
-		dialogOptions.ExitOnTimeout = true
-	}
-
-	result, err := session.ShowDialogBox(dialogOptions)
-	if err != nil && dialogOptions.Timeout > 0 {
-		// O UI.DefaultTimeout pode ser menor que o global (administrador pode
-		// ter reduzido no config.psd1). Nesse caso o PSADT rejeita o -Timeout e
-		// nenhum diálogo aparece; reexibe sem -Timeout para não perder o aviso.
+	result := a.ExecutePSADTVisualNotification(req)
+	if !result.Success && req.PromptTimeout > 0 &&
+		strings.Contains(strings.ToLower(result.Error+" "+result.Output), "timeout") {
+		// O UI.DefaultTimeout do config.psd1 da máquina pode ser menor que o
+		// global; nesse caso o PSADT rejeita o -Timeout e nenhum prompt aparece.
+		// Reexibe com um timeout conservador para não perder o aviso.
 		if a != nil {
-			a.Logs.Append(fmt.Sprintf("[agent] psadt-alert [WARN] ShowDialogBox com timeout=%ds falhou (%v); retry sem -Timeout", dialogOptions.Timeout, err))
+			a.Logs.Append(fmt.Sprintf("[agent] psadt-alert [WARN] prompt Fluent com timeout=%ds falhou (%s); retry com timeout menor", req.PromptTimeout, strings.TrimSpace(result.Error)))
 		}
-		retryOptions := dialogOptions
-		retryOptions.Timeout = 0
-		retryOptions.ExitOnTimeout = false
-		result, err = session.ShowDialogBox(retryOptions)
+		retry := req
+		retry.PromptTimeout = 120
+		result = a.ExecutePSADTVisualNotification(retry)
 	}
-	if err != nil {
-		errMsg := fmt.Sprintf("ShowDialogBox: %v", err)
+	if !result.Success {
+		errMsg := strings.TrimSpace(result.Error)
+		if errMsg == "" {
+			errMsg = "falha ao exibir prompt nativo do PSADT"
+		}
 		if a != nil {
 			a.Logs.Append("[agent] psadt-alert [ERRO] type=modal alertId=" + p.AlertID + " " + errMsg)
 		}
-		return "", errMsg
+		return 1, result.Output, errMsg
 	}
 
-	action := mapPSADTDialogResult(result, p)
+	action := mapPSADTPromptResult(result.Result, p)
+	body, _ := json.Marshal(map[string]string{
+		"action": action,
+		"mode":   "fluent-prompt",
+		"result": strings.TrimSpace(result.Result),
+	})
 	if a != nil {
 		a.Logs.Append(fmt.Sprintf("[agent] psadt-alert [OK] type=modal alertId=%s action=%s", p.AlertID, action))
 	}
-	return action, ""
+	return 0, string(body), ""
+}
+
+// psadtActionLabel devolve o texto exibido no botão da ação (label ou value).
+func psadtActionLabel(action PsadtAlertAction) string {
+	if label := strings.TrimSpace(action.Label); label != "" {
+		return label
+	}
+	return strings.TrimSpace(action.Value)
+}
+
+// mapPSADTPromptResult converte o texto do botão clicado no prompt Fluent para
+// o value da ação correspondente. Resultado vazio/Timeout usa DefaultAction
+// quando configurado. O Show-ADTInstallationPrompt devolve o texto do botão.
+func mapPSADTPromptResult(resultText string, p PsadtAlertPayload) string {
+	r := strings.ToLower(strings.TrimSpace(resultText))
+
+	if r == "" || r == "timeout" {
+		if v := strings.TrimSpace(p.DefaultAction); v != "" {
+			return v
+		}
+		if r == "timeout" {
+			return "timeout"
+		}
+		return "ok"
+	}
+
+	for _, action := range p.Actions {
+		if strings.EqualFold(r, strings.TrimSpace(action.Label)) || strings.EqualFold(r, strings.TrimSpace(action.Value)) {
+			return strings.TrimSpace(action.Value)
+		}
+	}
+
+	return r
 }
 
 // showPSADTProgress exibe uma barra de progresso não-bloqueante.
@@ -378,51 +404,6 @@ func (a *App) showPSADTProgress(session *psadt.Session, p PsadtAlertPayload) (st
 		a.Logs.Append(fmt.Sprintf("[agent] psadt-alert [OK] type=update-progress alertId=%s action=shown", p.AlertID))
 	}
 	return "shown", ""
-}
-
-// mapPSADTDialogResult converte o resultado tipado do PSADT para o valor da action.
-// DialogBoxResult é uma string (ex: "Ok", "Yes", "No", "Cancel", "Timeout").
-func mapPSADTDialogResult(result pstypes.DialogBoxResult, p PsadtAlertPayload) string {
-	r := strings.ToLower(strings.TrimSpace(string(result)))
-
-	if r == "timeout" {
-		if strings.TrimSpace(p.DefaultAction) != "" {
-			return strings.TrimSpace(p.DefaultAction)
-		}
-		return "timeout"
-	}
-
-	// Mapeia o texto do botão para a action correspondente.
-	for i, a := range p.Actions {
-		if strings.EqualFold(r, strings.TrimSpace(a.Label)) || strings.EqualFold(r, strings.TrimSpace(a.Value)) {
-			return strings.TrimSpace(a.Value)
-		}
-		_ = i
-	}
-
-	// Fallback: mapeia strings comuns do PSADT.
-	switch r {
-	case "yes":
-		if len(p.Actions) > 0 {
-			return strings.TrimSpace(p.Actions[0].Value)
-		}
-		return "yes"
-	case "no":
-		if len(p.Actions) > 1 {
-			return strings.TrimSpace(p.Actions[1].Value)
-		}
-		return "no"
-	case "cancel":
-		if len(p.Actions) > 2 {
-			return strings.TrimSpace(p.Actions[2].Value)
-		}
-		return "cancel"
-	}
-
-	if strings.TrimSpace(p.DefaultAction) != "" {
-		return strings.TrimSpace(p.DefaultAction)
-	}
-	return r
 }
 
 // showForceRestartBalloon exibe um BalloonTip Warning (não-bloqueante) do PSADT
