@@ -429,3 +429,29 @@ func TestDefaultPSADTSubtitle_BlankSpaceWhenEmpty(t *testing.T) {
 		}
 	}
 }
+
+// PSADT 4.1.8 Fluent rejeita Subtitle nulo/whitespace ("Subtitle value is null
+// or invalid" no BaseDialogOptions), fazendo o prompt nao aparecer. O script
+// precisa usar um fallback nao vazio (AppName) em vez de repassar o espaco do
+// defaultPSADTSubtitle.
+func TestBuildPSADTVisualScript_PromptSubtitleNeverBlank(t *testing.T) {
+	req := PSADTVisualNotificationRequest{
+		NotifType: "prompt_ok",
+		Title:     "Aviso",
+		Message:   "Mensagem",
+		AppName:   "Discovery Agent",
+		Subtitle:  defaultPSADTSubtitle(""), // " " - o valor que quebrava o Fluent
+	}
+
+	script, _ := buildPSADTVisualScript(req)
+
+	if strings.Contains(script, "if ($psadtSubtitle) { $promptParams.Subtitle = $psadtSubtitle }") {
+		t.Fatalf("nao deve repassar subtitulo em branco para o prompt Fluent")
+	}
+	if !strings.Contains(script, "$promptParams.Subtitle = $promptSubtitle") {
+		t.Fatalf("esperado Subtitle sempre definido com valor validado")
+	}
+	if !strings.Contains(script, "else { $psadtAppName }") {
+		t.Fatalf("esperado AppName como fallback de subtitulo")
+	}
+}

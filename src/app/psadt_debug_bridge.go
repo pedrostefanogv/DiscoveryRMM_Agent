@@ -692,7 +692,13 @@ func buildPSADTVisualScript(req PSADTVisualNotificationRequest) (string, time.Du
 			"  Message = $psadtMessage\n" +
 			"  Title = $psadtTitle\n" +
 			"}\n" +
-			"if ($psadtSubtitle) { $promptParams.Subtitle = $psadtSubtitle }\n" +
+			// PSADT 4.1.8: o Fluent valida Subtitle via IsNullOrWhiteSpace no
+			// BaseDialogOptions. Um espaco em branco (default do
+			// defaultPSADTSubtitle) faz o cmdlet lancar "Subtitle value is null
+			// or invalid" e NADA e exibido. O AppName entra como fallback para
+			// garantir sempre um subtitulo valido.
+			"$promptSubtitle = if ($psadtSubtitle -and $psadtSubtitle.Trim()) { $psadtSubtitle } else { $psadtAppName }\n" +
+			"$promptParams.Subtitle = $promptSubtitle\n" +
 			"if ($psadtPromptLeft) { $promptParams.ButtonLeftText = $psadtPromptLeft }\n" +
 			"if ($psadtPromptMiddle) { $promptParams.ButtonMiddleText = $psadtPromptMiddle }\n" +
 			"if ($psadtPromptRight) { $promptParams.ButtonRightText = $psadtPromptRight }\n" +
