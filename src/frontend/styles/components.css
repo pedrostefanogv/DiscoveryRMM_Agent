@@ -1267,9 +1267,33 @@ input[type="search"] {
 /* Campo oculto por tipo: classe em vez de style.display para preservar
    o display original (flex) dos wrappers quando o campo reaparece. */
 #psadtView .psadt-field-hidden { display: none !important; }
-/* Ajuda contextual por campo: oculta por padrao para nao poluir a tela;
-   aparece como tooltip flutuante ao passar o mouse ou focar o campo. */
+/* Ajuda contextual por campo: um icone "?" ao lado do label. O texto da
+   ajuda so aparece quando o mouse/foco esta no ICONE (nao no campo inteiro),
+   evitando tooltips intrusivos. O estado e controlado por JS (.is-help-open). */
 #visualNotifForm .form-grid > div { position: relative; }
+#visualNotifForm .form-grid > div > label { display: inline-flex; align-items: center; gap: 5px; }
+#visualNotifForm .field-help-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  padding: 0;
+  font-size: 0.66rem;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--psadt-muted);
+  background: transparent;
+  border: 1px solid var(--psadt-border);
+  border-radius: 50%;
+  cursor: help;
+}
+#visualNotifForm .field-help-icon:hover,
+#visualNotifForm .field-help-icon:focus-visible {
+  color: var(--psadt-accent);
+  border-color: var(--psadt-accent);
+  outline: none;
+}
 #visualNotifForm .field-help {
   position: absolute;
   bottom: calc(100% + 6px);
@@ -1289,27 +1313,12 @@ input[type="search"] {
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
-  transition: opacity 0.15s ease-in 0.3s, visibility 0s linear 0.45s;
+  transition: opacity 0.15s ease-in 0.1s, visibility 0s linear 0.25s;
 }
-#visualNotifForm .form-grid > div:hover .field-help,
-#visualNotifForm .form-grid > div:focus-within .field-help {
+#visualNotifForm .field-help.is-help-open {
   opacity: 1;
   visibility: visible;
   transition-delay: 0s;
-}
-/* Modo revisao (botao "Mostrar ajudas"): todas as ajudas visiveis, inline. */
-#visualNotifForm.show-all-helps .field-help {
-  position: static;
-  width: auto;
-  max-width: none;
-  opacity: 1;
-  visibility: visible;
-  pointer-events: auto;
-  margin-top: 4px;
-  box-shadow: none;
-  border-left: 3px solid var(--psadt-accent);
-  border-radius: 6px;
-  transition: none;
 }
 #psadtView label { display: block; font-size: 0.82rem; color: var(--psadt-muted); margin-bottom: 4px; }
 #psadtView input, #psadtView select, #psadtView textarea {

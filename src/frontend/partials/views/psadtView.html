@@ -178,7 +178,7 @@
 
     <section class="panel">
       <h2>Notificacao Visual Nativa PSADT</h2>
-      <div class="meta" style="margin-bottom:10px;">Executa cmdlets PSADT reais: <code class="code-inline">Show-ADTBalloonTip</code>, <code class="code-inline">Show-ADTInstallationPrompt</code>, <code class="code-inline">Show-ADTInstallationProgress</code>, <code class="code-inline">Show-ADTDialogBox</code>, <code class="code-inline">Show-ADTInstallationRestartPrompt</code> e <code class="code-inline">Show-ADTInstallationWelcome</code>. Timeouts de prompt/dialog limitados a 3300s (UI.DefaultTimeout do config.psd1). Personalize o logo/banner/acento dos dialogs Fluent via campos <b>Branding</b> (o PSADT exibe o logo default do toolkit quando vazio). <b>Dica:</b> passe o mouse sobre um campo (ou foque nele via <kbd>Tab</kbd>) para ver a ajuda do que ele faz.</div>
+      <div class="meta" style="margin-bottom:10px;">Executa cmdlets PSADT reais: <code class="code-inline">Show-ADTBalloonTip</code>, <code class="code-inline">Show-ADTInstallationPrompt</code>, <code class="code-inline">Show-ADTInstallationProgress</code>, <code class="code-inline">Show-ADTDialogBox</code>, <code class="code-inline">Show-ADTInstallationRestartPrompt</code> e <code class="code-inline">Show-ADTInstallationWelcome</code>. Timeouts de prompt/dialog limitados a 3300s (UI.DefaultTimeout do config.psd1). Personalize o logo/banner/acento dos dialogs Fluent via campos <b>Branding</b> (o PSADT exibe o logo default do toolkit quando vazio). <b>Dica:</b> passe o mouse (ou foque via <kbd>Tab</kbd>) no icone <b>?</b> ao lado do rotulo de cada campo para ver a ajuda daquele campo.</div>
       <div id="visualNotifForm">
       <div class="form-grid">
         <div>
@@ -195,6 +195,7 @@
             <option value="dialog_box">Dialog Box</option>
             <option value="restart_prompt">Restart Prompt (countdown)</option>
             <option value="welcome">Installation Welcome (fechar apps + defer)</option>
+            <option value="countdown">Countdown — Mensagem + Contador (fecha sozinho)</option>
           </select>
           <small class="field-help">Define o cmdlet PSADT executado. Os campos abaixo aparecem/desaparecem conforme o tipo: so ficam visiveis os campos que o cmdlet realmente usa.</small>
         </div>
@@ -268,7 +269,7 @@
           </select>
           <small class="field-help">Somente Prompts: -Icon do dialogo (enum DialogSystemIcon). Ex.: Question para confirmacoes, Shield para acoes que exigem admin. Vazio = padrao do PSADT.</small>
         </div>
-        <div data-visual-group="prompt">
+        <div data-visual-group="prompt promptTimeout">
           <label for="visualPromptTimeout">Prompt Timeout (seg)</label>
           <input id="visualPromptTimeout" type="number" value="120" min="0" max="3300" />
           <small class="field-help">Somente Prompts: -Timeout em segundos ate o dialogo fechar sozinho (0 = usa 120s no teste; max 3300s = UI.DefaultTimeout do config.psd1). Com NoWait marcado, o timeout e ignorado.</small>
@@ -387,9 +388,6 @@
           <small class="field-help">Somente Dialog Box: NoWait (-NoWait) assincrono; ExitOnTimeout (-ExitOnTimeout) encerra o script ao expirar; NotTopMost (-NotTopMost) sem ficar acima de tudo; Force (-Force) exibe mesmo com DeployMode Silent/NonInteractive.</small>
         </div>
       </div>
-      </div>
-      <div class="actions" style="margin-top:6px;">
-        <button id="visualHelpToggleBtn" class="btn subtle" type="button">… Mostrar ajudas</button>
       </div>
       <div id="visualNotifHelp" class="meta" style="margin-top:10px;font-size:.8rem;line-height:1.45;border-left:3px solid var(--accent, #4a9eff);padding-left:8px;"></div>
       <div class="actions" style="margin-top:10px;">

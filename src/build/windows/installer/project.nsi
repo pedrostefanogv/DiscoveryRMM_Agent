@@ -995,7 +995,9 @@ Function DownloadAndRunStage2
       StrCpy $PayloadFileName "discovery-stage2-installer.exe"
    ${EndIf}
 
-   StrCpy $R6 "$TEMP\DiscoveryBootstrap"
+   ; Staging na pasta dedicada do agent (%WINDIR%\Temp\Discovery) — a mesma
+   ; usada por platform.TempDir no runtime — nunca na raiz de %TEMP%.
+   StrCpy $R6 "$WINDIR\Temp\Discovery\Bootstrap"
    CreateDirectory "$R6"
    StrCpy $R7 "$R6\$PayloadFileName"
 
@@ -1214,8 +1216,10 @@ Function RegisterUIStartupTask
    ; Limpar atalho legado de startup (migracao)
    Delete "$SMSTARTUP\${INFO_PRODUCTNAME}.lnk"
 
-   ; Evita fragilidade de quoting no -Command inline: gera script temporario.
-   StrCpy $R9 "$TEMP\discovery_ui_task_reg.ps1"
+   ; Evita fragilidade de quoting no -Command inline: gera script temporario
+   ; na pasta dedicada do agent (%WINDIR%\Temp\Discovery), nunca na raiz de %TEMP%.
+   CreateDirectory "$WINDIR\Temp\Discovery"
+   StrCpy $R9 "$WINDIR\Temp\Discovery\discovery_ui_task_reg.ps1"
    ClearErrors
    FileOpen $R8 "$R9" w
    ${If} ${Errors}

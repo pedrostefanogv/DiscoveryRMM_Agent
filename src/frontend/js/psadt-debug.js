@@ -283,12 +283,12 @@
   var VISUAL_FIELD_GROUPS = {
     // Titulo: Balloon (-BalloonTipTitle), Prompt (-Title) e Dialog Box.
     // Nao se aplica a Progress/Restart/Welcome (usam textos padrao do PSADT).
-    title:    ["balloon_info", "balloon_warning", "balloon_error", "prompt_ok", "prompt_yesno", "prompt_continue", "prompt_input", "dialog_box"],
+    title:    ["balloon_info", "balloon_warning", "balloon_error", "prompt_ok", "prompt_yesno", "prompt_continue", "prompt_input", "dialog_box", "countdown"],
     // Mensagem: Balloon (-BalloonTipText), Prompt (-Message), Progress (-StatusMessage), Dialog Box (-Text).
-    message:  ["balloon_info", "balloon_warning", "balloon_error", "prompt_ok", "prompt_yesno", "prompt_continue", "prompt_input", "progress", "dialog_box"],
+    message:  ["balloon_info", "balloon_warning", "balloon_error", "prompt_ok", "prompt_yesno", "prompt_continue", "prompt_input", "progress", "dialog_box", "countdown"],
     // App Name: entra no Open-ADTSession; Dialog Box nao abre sessao.
-    session:  ["balloon_info", "balloon_warning", "balloon_error", "prompt_ok", "prompt_yesno", "prompt_continue", "prompt_input", "progress", "restart_prompt", "welcome"],
-    subtitle: ["prompt_ok", "prompt_yesno", "prompt_continue", "prompt_input", "progress"],
+    session:  ["balloon_info", "balloon_warning", "balloon_error", "prompt_ok", "prompt_yesno", "prompt_continue", "prompt_input", "progress", "restart_prompt", "welcome", "countdown"],
+    subtitle: ["prompt_ok", "prompt_yesno", "prompt_continue", "prompt_input", "progress", "countdown"],
     balloon:  ["balloon_info", "balloon_warning", "balloon_error"],
     prompt:   ["prompt_ok", "prompt_yesno", "prompt_continue", "prompt_input"],
     promptButtons: ["prompt_ok", "prompt_yesno", "prompt_continue", "prompt_input"],
@@ -298,7 +298,10 @@
     restart:  ["restart_prompt"],
     welcome:  ["welcome"],
     // Branding vale para os dialogs Fluent/Classic; Dialog Box (Win32) e Balloon usam icones de sistema.
-    branding: ["prompt_ok", "prompt_yesno", "prompt_continue", "prompt_input", "progress", "restart_prompt", "welcome"]
+    branding: ["prompt_ok", "prompt_yesno", "prompt_continue", "prompt_input", "progress", "restart_prompt", "welcome", "countdown"],
+    // Timeout do prompt: para o tipo "countdown" e o contador do notice
+    // (ForceCountdown do Welcome), nao o -Timeout do Prompt.
+    promptTimeout: ["prompt_ok", "prompt_yesno", "prompt_continue", "prompt_input", "countdown"]
   };
 
   var VISUAL_TYPE_HELP = {
@@ -312,7 +315,8 @@
     progress:        "\u23F3 Barra de progresso \u2014 janela fluent n\u00e3o bloqueante com mensagem de status e detalhe. Exibe por N segundos e fecha (Close-ADTInstallationProgress).",
     dialog_box:      "\u{1F5A8}\u{FE0F} Dialog Box \u2014 MessageBox cl\u00e1ssico (Ok/OkCancel/YesNo/...) com \u00edcone, timeout e op\u00e7\u00f5es avan\u00e7adas. Cmdlet: Show-ADTDialogBox. Retorna o texto do bot\u00e3o clicado.",
     restart_prompt:  "\u{1F501} Restart Prompt \u2014 janela de reinicializa\u00e7\u00e3o com countdown para restart for\u00e7ado (Show-ADTInstallationRestartPrompt). Sem countdown, o usu\u00e1rio apenas decide reiniciar agora.",
-    welcome:         "\u{1F44B} Installation Welcome \u2014 a experi\u00eancia completa do PSADT: avisa sobre processos abertos (fechar), permite adiar (defer times/deadline) e pode bloquear os apps durante o deploy. Show-ADTInstallationWelcome."
+    welcome:         "\u{1F44B} Installation Welcome \u2014 a experi\u00eancia completa do PSADT: avisa sobre processos abertos (fechar), permite adiar (defer times/deadline) e pode bloquear os apps durante o deploy. Show-ADTInstallationWelcome.",
+    countdown:       "\u23F3 Countdown \u2014 mensagem com bot\u00e3o OK e CONTADOR VIS\u00cdVEL na tela (Show-ADTInstallationWelcome -ForceCountdown), com mensagem/bot\u00e3o customizados via strings.psd1 no staging. Fecha sozinha quando o contador termina; OK para continuar, Fechar para dispensar."
   };
 
   function updateVisualFields() {
@@ -526,17 +530,50 @@
     visualNotifBtn.addEventListener("click", executeVisualNotification);
   }
 
-  // Ajudas de campo: ocultas por padrao (tooltip no hover/foco, via CSS).
-  // O botao "Mostrar ajudas" alterna o modo revisao, com todas visiveis.
-  var visualHelpToggleBtn = document.getElementById("visualHelpToggleBtn");
-  var visualNotifForm = document.getElementById("visualNotifForm");
-  if (visualHelpToggleBtn && visualNotifForm) {
-    visualHelpToggleBtn.addEventListener("click", function () {
-      var showing = visualNotifForm.classList.toggle("show-all-helps");
-      visualHelpToggleBtn.textContent = showing ? "\u2715 Ocultar ajudas" : "\u2026 Mostrar ajudas";
-      visualHelpToggleBtn.setAttribute("aria-pressed", showing ? "true" : "false");
+  // Ajudas contextuais: um icone "?" ao lado do label de cada campo abre o
+  // texto daquele campo. Substitui o tooltip no hover do campo inteiro e o
+  // antigo botao "Mostrar ajudas".
+  (function initFieldHelpIcons() {
+    var form = document.getElementById("visualNotifForm");
+    if (!form) return;
+    var helps = form.querySelectorAll(".field-help");
+    Array.prototype.forEach.call(helps, function (help, index) {
+      var field = help.parentElement;
+      if (!field) return;
+      if (!help.id) help.id = "visualFieldHelp" + index;
+      var icon = document.createElement("button");
+      icon.type = "button";
+      icon.className = "field-help-icon";
+      icon.textContent = "?";
+      icon.setAttribute("aria-label", "Ajuda deste campo");
+      icon.setAttribute("aria-describedby", help.id);
+      icon.setAttribute("aria-expanded", "false");
+      var label = field.querySelector("label");
+      if (label) {
+        label.insertAdjacentElement("afterend", icon);
+      } else {
+        field.insertBefore(icon, help);
+      }
+      function showHelp() {
+        help.classList.add("is-help-open");
+        icon.setAttribute("aria-expanded", "true");
+      }
+      function hideHelp() {
+        help.classList.remove("is-help-open");
+        icon.setAttribute("aria-expanded", "false");
+      }
+      icon.addEventListener("mouseenter", showHelp);
+      icon.addEventListener("mouseleave", hideHelp);
+      icon.addEventListener("focus", showHelp);
+      icon.addEventListener("blur", hideHelp);
+      icon.addEventListener("keydown", function (event) {
+        if (event.key === "Escape") {
+          hideHelp();
+          icon.blur();
+        }
+      });
     });
-  }
+  })();
   var visualNotifTypeEl = document.getElementById("visualNotifType");
   if (visualNotifTypeEl) {
     visualNotifTypeEl.addEventListener("change", updateVisualFields);

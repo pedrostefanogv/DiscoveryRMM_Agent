@@ -192,6 +192,14 @@ func TestBuildPSADTVisualScript_RestartAndWelcome(t *testing.T) {
 	if !strings.Contains(s, "$restartParams.CountdownSeconds = $psadtRestartCountdown") {
 		t.Fatalf("expected countdown mapping")
 	}
+	// Sem sessao: com Open-ADTSession o PSADT exibe o restart prompt de forma
+	// assincrona (-NoWait) e o script de uso unico encerraria antes de aparecer.
+	if strings.Contains(s, "Open-ADTSession") {
+		t.Fatalf("restart prompt nao deve abrir ADTSession (seria exibido async e sumiria)")
+	}
+	if !strings.Contains(s, "  Title = $psadtTitle") || !strings.Contains(s, "  Subtitle = $psadtSubtitle") {
+		t.Fatalf("restart prompt sem sessao exige Title/Subtitle explicitos")
+	}
 
 	welcome := PSADTVisualNotificationRequest{
 		NotifType:      "welcome",
@@ -212,6 +220,13 @@ func TestBuildPSADTVisualScript_RestartAndWelcome(t *testing.T) {
 	}
 	if !strings.Contains(s, "$welcomeParams.AllowDefer = $true") {
 		t.Fatalf("expected defer mapping")
+	}
+	// Arvore de decisao dos parameter sets (evita AmbiguousParameterSet).
+	if !strings.Contains(s, "} elseif ($psadtWelcomeAllowDefer -and $psadtWelcomeCloseCountdown -gt 0) {") {
+		t.Fatalf("expected welcome parameter-set decision tree")
+	}
+	if !strings.Contains(s, "  $welcomeParams.ForceCountdown = $psadtWelcomeCloseCountdown") {
+		t.Fatalf("expected ForceCountdown for deferral without processes")
 	}
 	if !strings.Contains(s, "$welcomeParams.BlockExecution = $true") {
 		t.Fatalf("expected block execution mapping")
@@ -366,6 +381,75 @@ func TestWritePSADTVisualBranding(t *testing.T) {
 	} {
 		if !strings.Contains(cfg, want) {
 			t.Errorf("config.psd1 gerado nao contem %q:\n%s", want, cfg)
+		}
+	}
+}
+
+// NotifType "countdown": usa o Welcome com ForceCountdown (contador visivel) e
+// a mensagem/botao vem do strings.psd1 staged.
+func TestBuildPSADTVisualScript_CountdownNotice(t *testing.T) {
+	req := PSADTVisualNotificationRequest{
+		NotifType:     "countdown",
+		Title:         "Aviso",
+		Message:       "Mensagem com contador",
+		Subtitle:      "Discovery Agent",
+		AppName:       "Discovery Agent",
+		PromptTimeout: 45,
+	}
+	script, _ := buildPSADTVisualScript(req)
+	for _, want := range []string{
+		"$welcomeParams.ForceCountdown = $psadtPromptTimeout",
+		"$welcomeParams.AllowDefer = $true",
+		"Show-ADTInstallationWelcome @welcomeParams",
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("script countdown nao contem %q:\n%s", want, script)
+		}
+	}
+	if strings.Contains(script, "Show-ADTInstallationPrompt") {
+		t.Fatalf("countdown nao deve usar Show-ADTInstallationPrompt (sem contador)")
+	}
+}
+
+// O staging do countdown deve gravar Strings\strings.psd1 com a mensagem,
+// botao e rotulo do contador (o Welcome usa os textos do strings.psd1).
+func TestWritePSADTVisualBranding_CountdownStrings(t *testing.T) {
+	dir := t.TempDir()
+	scriptPath := filepath.Join(dir, "psadt-visual-test.ps1")
+	if err := os.WriteFile(scriptPath, []byte("# teste"), 0o644); err != nil {
+		t.Fatalf("falha ao criar script de teste: %v", err)
+	}
+
+	req := PSADTVisualNotificationRequest{
+		NotifType: "countdown",
+		Message:   "Manutencao em 5 minutos",
+	}
+	files, err := writePSADTVisualBranding(req, scriptPath)
+	if err != nil {
+		t.Fatalf("falha inesperada: %v", err)
+	}
+	var stringsPath string
+	for _, f := range files {
+		if filepath.Base(f) == "strings.psd1" {
+			stringsPath = f
+		}
+	}
+	if stringsPath == "" {
+		t.Fatalf("strings.psd1 de staging ausente: %v", files)
+	}
+	data, err := os.ReadFile(stringsPath)
+	if err != nil {
+		t.Fatalf("falha ao ler strings gerado: %v", err)
+	}
+	content := string(data)
+	for _, want := range []string{
+		"Manutencao em 5 minutos",
+		"ButtonLeftNoProcessesText",
+		"AutomaticStartCountdown",
+		"ButtonRightText = 'Fechar'",
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("strings.psd1 nao contem %q:\n%s", want, content)
 		}
 	}
 }

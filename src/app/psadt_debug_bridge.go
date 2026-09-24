@@ -314,6 +314,12 @@ type PSADTVisualNotificationRequest struct {
 	PromptNoWait     bool   `json:"promptNoWait"`
 	PromptNotTopMost bool   `json:"promptNotTopMost"`
 
+	// CountdownNotice (NotifType "countdown") — textos do strings.psd1 staged.
+	// Vazios usam "OK" / "Fechar" / "Esta janela fechara automaticamente em:".
+	ButtonText      string `json:"buttonText"`
+	ButtonCloseText string `json:"buttonCloseText"`
+	CountdownLabel  string `json:"countdownLabel"`
+
 	// Dialog (Show-ADTDialogBox)
 	DialogButtons       string `json:"dialogButtons"` // Ok | OkCancel | AbortRetryIgnore | YesNoCancel | YesNo | RetryCancel | CancelTryContinue
 	DialogDefault       string `json:"dialogDefault"` // First | Second | Third
@@ -812,24 +818,78 @@ func buildPSADTVisualScript(req PSADTVisualNotificationRequest) (string, time.Du
 		return header + body, timeout
 
 	case "restart_prompt":
-		body := openInteractive +
-			"$restartParams = @{}\n" +
+		// Sem Open-ADTSession de proposito: com sessao ativa o PSADT exibe o
+		// restart prompt de forma ASSINCRONA (-NoWait) e retorna; como o script
+		// de uso unico encerra em seguida, o processo cliente e fechado e o
+		// prompt nunca aparece. Sem sessao, o cmdlet exibe de forma sincrona e
+		// so retorna quando o usuario responde ou o countdown termina.
+		body := "$restartParams = @{\n" +
+			"  Title = $psadtTitle\n" +
+			"  Subtitle = $psadtSubtitle\n" +
+			"}\n" +
 			"if ($psadtRestartNoCountdown) { $restartParams.NoCountdown = $true } else { $restartParams.CountdownSeconds = $psadtRestartCountdown }\n" +
 			"Show-ADTInstallationRestartPrompt @restartParams\n" +
-			"Write-Host 'RestartPrompt exibido com sucesso'\n" +
+			"Write-Host 'RestartPrompt encerrado'\n" +
+			"exit 0\n"
+		timeout := time.Duration(req.RestartCountdownSeconds+300) * time.Second
+		if timeout < 5*time.Minute {
+			timeout = 5 * time.Minute
+		}
+		return header + body, timeout
+
+	case "countdown":
+		// Prompt nativo com MENSAGEM + CONTADOR VISIVEL: o
+		// Show-ADTInstallationPrompt nao tem countdown; o
+		// Show-ADTInstallationWelcome TEM (ForceCountdown -> CountdownDuration
+		// automatico no set "deferral allowed + continue countdown"). A mensagem
+		// e o botao sao customizados via Strings\\strings.psd1 no staging
+		// (writePSADTVisualBranding), pois o Welcome usa os textos do
+		// strings.psd1 e nao aceita mensagem em runtime.
+		body := openInteractive +
+			"$welcomeParams = @{}\n" +
+			"  $welcomeParams.Title = $psadtTitle\n" +
+			"  $welcomeParams.Subtitle = $psadtSubtitle\n" +
+			"  $welcomeParams.AllowDefer = $true\n" +
+			"  $welcomeParams.ForceCountdown = $psadtPromptTimeout\n" +
+			"  Show-ADTInstallationWelcome @welcomeParams\n" +
+			"  Write-Host 'CountdownNotice concluido'\n" +
 			closeSession
-		return header + body, time.Duration(req.RestartCountdownSeconds+60) * time.Second
+		timeout := time.Duration(req.PromptTimeout+60) * time.Second
+		if timeout < 5*time.Minute {
+			timeout = 5 * time.Minute
+		}
+		return header + body, timeout
 
 	case "welcome":
+		// Show-ADTInstallationWelcome tem ~40 parameter sets distinguidos pela
+		// combinacao exata de CloseProcesses/AllowDefer/defer/countdown. Montar
+		// os params livremente gera "parameter set cannot be resolved"
+		// (AmbiguousParameterSet) e o dialogo nao aparece. A arvore abaixo
+		// produz SEMPRE uma combinacao valida (um unico set):
+		//   com procs + defer + countdown -> CloseProcessesCountdown
+		//   com procs + defer             -> AllowDefer (+ DeferTimes/Deadline)
+		//   com procs + countdown         -> CloseProcessesCountdown
+		//   com procs                     -> CloseProcesses
+		//   sem procs + defer + countdown -> ForceCountdown (continuar automatico)
+		//   sem procs + defer             -> AllowDefer
+		//   sem procs                     -> set padrao
+		// BlockExecution so e valido em sets com CloseProcesses.
 		body := openInteractive +
 			"$welcomeParams = @{}\n" +
 			"$welcomeProcs = @($psadtWelcomeProcesses -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })\n" +
-			"if ($welcomeProcs.Count -gt 0) { $welcomeParams.CloseProcesses = $welcomeProcs }\n" +
-			"if ($psadtWelcomeAllowDefer) { $welcomeParams.AllowDefer = $true }\n" +
-			"if ($psadtWelcomeDeferTimes -gt 0) { $welcomeParams.DeferTimes = $psadtWelcomeDeferTimes }\n" +
-			"if ($psadtWelcomeDeadline) { $welcomeParams.DeferDeadline = $psadtWelcomeDeadline }\n" +
-			"if ($psadtWelcomeBlockExec) { $welcomeParams.BlockExecution = $true }\n" +
-			"if ($psadtWelcomeCloseCountdown -gt 0) { $welcomeParams.CloseProcessesCountdown = $psadtWelcomeCloseCountdown }\n" +
+			"$welcomeHasProcs = $welcomeProcs.Count -gt 0\n" +
+			"if ($welcomeHasProcs) { $welcomeParams.CloseProcesses = $welcomeProcs }\n" +
+			"if ($psadtWelcomeAllowDefer) {\n" +
+			"  $welcomeParams.AllowDefer = $true\n" +
+			"  if ($psadtWelcomeDeferTimes -gt 0) { $welcomeParams.DeferTimes = $psadtWelcomeDeferTimes }\n" +
+			"  if ($psadtWelcomeDeadline) { $welcomeParams.DeferDeadline = $psadtWelcomeDeadline }\n" +
+			"}\n" +
+			"if ($welcomeHasProcs) {\n" +
+			"  if ($psadtWelcomeCloseCountdown -gt 0) { $welcomeParams.CloseProcessesCountdown = $psadtWelcomeCloseCountdown }\n" +
+			"  if ($psadtWelcomeBlockExec) { $welcomeParams.BlockExecution = $true }\n" +
+			"} elseif ($psadtWelcomeAllowDefer -and $psadtWelcomeCloseCountdown -gt 0) {\n" +
+			"  $welcomeParams.ForceCountdown = $psadtWelcomeCloseCountdown\n" +
+			"}\n" +
 			"Show-ADTInstallationWelcome @welcomeParams\n" +
 			"Write-Host 'InstallationWelcome concluido'\n" +
 			closeSession
@@ -889,7 +949,7 @@ var psadtAgentIconPNG []byte
 // Dialog Box (Win32 MessageBox) usa icone de sistema.
 func psadtNotifUsesFluentDialogs(notifType string) bool {
 	switch notifType {
-	case "prompt_ok", "prompt_yesno", "prompt_continue", "prompt_input", "progress", "restart_prompt", "welcome":
+	case "prompt_ok", "prompt_yesno", "prompt_continue", "prompt_input", "progress", "restart_prompt", "welcome", "countdown":
 		return true
 	default:
 		return false
@@ -1021,6 +1081,85 @@ func writePSADTVisualBranding(req PSADTVisualNotificationRequest, scriptPath str
 		return nil, fmt.Errorf("falha ao gravar config.psd1 de branding: %w", err)
 	}
 	created = append(created, configPath)
+
+	// Notificacao de contagem (NotifType "countdown"): o Welcome usa os
+	// textos do strings.psd1 (nao aceita mensagem em runtime), entao sobrescreve
+	// os textos do dialogo via Strings\\strings.psd1 no staging (merge oficial
+	// do Initialize-ADTModule -ScriptDirectory). Fluent e o estilo default; os
+	// textos Classic sao sobrescritos tambem para o DialogStyle Classic.
+	if req.NotifType == "countdown" {
+		stringsDir := filepath.Join(filepath.Dir(scriptPath), "Strings")
+		if err := os.MkdirAll(stringsDir, 0o755); err != nil {
+			for _, p := range created {
+				_ = os.RemoveAll(p)
+			}
+			return nil, fmt.Errorf("falha ao criar diretorio de strings: %w", err)
+		}
+		created = append(created, stringsDir)
+		message := strings.TrimSpace(req.Message)
+		if message == "" {
+			message = "Atencao: esta janela fechara automaticamente em breve."
+		}
+		okText := strings.TrimSpace(req.ButtonText)
+		if okText == "" {
+			okText = "OK"
+		}
+		closeText := strings.TrimSpace(req.ButtonCloseText)
+		if closeText == "" {
+			closeText = "Fechar"
+		}
+		label := strings.TrimSpace(req.CountdownLabel)
+		if label == "" {
+			label = "Esta janela fechara automaticamente em:"
+		}
+		var sb strings.Builder
+		sb.WriteString("@{\n")
+		sb.WriteString("\tCloseAppsPrompt = @{\n")
+		sb.WriteString("\t\tCustomMessage = '" + psadt.EscapeSingleQuoted(message) + "'\n")
+		sb.WriteString("\t\tFluent = @{\n")
+		sb.WriteString("\t\t\tDialogMessageNoProcesses = @{\n")
+		sb.WriteString("\t\t\t\tInstall   = '" + psadt.EscapeSingleQuoted(message) + "'\n")
+		sb.WriteString("\t\t\t\tRepair    = '" + psadt.EscapeSingleQuoted(message) + "'\n")
+		sb.WriteString("\t\t\t\tUninstall = '" + psadt.EscapeSingleQuoted(message) + "'\n")
+		sb.WriteString("\t\t\t}\n")
+		sb.WriteString("\t\t\tDialogMessage = @{\n")
+		sb.WriteString("\t\t\t\tInstall   = '" + psadt.EscapeSingleQuoted(message) + "'\n")
+		sb.WriteString("\t\t\t\tRepair    = '" + psadt.EscapeSingleQuoted(message) + "'\n")
+		sb.WriteString("\t\t\t\tUninstall = '" + psadt.EscapeSingleQuoted(message) + "'\n")
+		sb.WriteString("\t\t\t}\n")
+		sb.WriteString("\t\t\tButtonLeftNoProcessesText = @{\n")
+		sb.WriteString("\t\t\t\tInstall   = '" + psadt.EscapeSingleQuoted(okText) + "'\n")
+		sb.WriteString("\t\t\t\tRepair    = '" + psadt.EscapeSingleQuoted(okText) + "'\n")
+		sb.WriteString("\t\t\t\tUninstall = '" + psadt.EscapeSingleQuoted(okText) + "'\n")
+		sb.WriteString("\t\t\t}\n")
+		sb.WriteString("\t\t\tButtonLeftText = @{\n")
+		sb.WriteString("\t\t\t\tInstall   = '" + psadt.EscapeSingleQuoted(okText) + "'\n")
+		sb.WriteString("\t\t\t\tRepair    = '" + psadt.EscapeSingleQuoted(okText) + "'\n")
+		sb.WriteString("\t\t\t\tUninstall = '" + psadt.EscapeSingleQuoted(okText) + "'\n")
+		sb.WriteString("\t\t\t}\n")
+		sb.WriteString("\t\t\tButtonRightText = '" + psadt.EscapeSingleQuoted(closeText) + "'\n")
+		sb.WriteString("\t\t\tAutomaticStartCountdown = '" + psadt.EscapeSingleQuoted(label) + "'\n")
+		sb.WriteString("\t\t}\n")
+		sb.WriteString("\t\tClassic = @{\n")
+		sb.WriteString("\t\t\tCountdownDefer = @{\n")
+		sb.WriteString("\t\t\t\tInstall   = '" + psadt.EscapeSingleQuoted(label) + "'\n")
+		sb.WriteString("\t\t\t\tRepair    = '" + psadt.EscapeSingleQuoted(label) + "'\n")
+		sb.WriteString("\t\t\t\tUninstall = '" + psadt.EscapeSingleQuoted(label) + "'\n")
+		sb.WriteString("\t\t\t}\n")
+		sb.WriteString("\t\t\tButtonContinue = '" + psadt.EscapeSingleQuoted(okText) + "'\n")
+		sb.WriteString("\t\t\tButtonDefer = '" + psadt.EscapeSingleQuoted(closeText) + "'\n")
+		sb.WriteString("\t\t}\n")
+		sb.WriteString("\t}\n")
+		sb.WriteString("}\n")
+		stringsPath := filepath.Join(stringsDir, "strings.psd1")
+		if err := os.WriteFile(stringsPath, []byte(sb.String()), 0o644); err != nil {
+			for _, p := range created {
+				_ = os.RemoveAll(p)
+			}
+			return nil, fmt.Errorf("falha ao gravar strings.psd1 de staging: %w", err)
+		}
+		created = append(created, stringsPath)
+	}
 	return created, nil
 }
 
