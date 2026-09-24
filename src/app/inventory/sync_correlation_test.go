@@ -98,7 +98,7 @@ func TestMergePackageManagerSoftware_AddsPendingUpdateWithoutRegistryEntry(t *te
 		{Name: "Subsistema do Windows para Linux", ID: "Microsoft.WSL", CurrentVersion: "2.7.11.0", AvailableVersion: "2.7.13", Source: "winget"},
 	}
 
-	merged := mergePackageManagerSoftware(software, installed, pending, "registry")
+	merged := mergePackageManagerSoftware(software, installed, pending, "registry", installedDisplayNameIndex{})
 
 	if len(merged) != 2 {
 		t.Fatalf("esperado 2 itens (1 do registro + 1 so do gerenciador), veio %d: %+v", len(merged), merged)
@@ -136,7 +136,7 @@ func TestMergePackageManagerSoftware_IgnoresPackagesAlreadyInRegistry(t *testing
 		{Name: "   ", ID: "vazio", Version: "1.0"},
 	}
 
-	merged := mergePackageManagerSoftware(software, installed, nil, "registry")
+	merged := mergePackageManagerSoftware(software, installed, nil, "registry", installedDisplayNameIndex{})
 	if len(merged) != 3 {
 		t.Fatalf("esperado 3 itens (2 do registro + 7-Zip implicitamente), veio %d: %+v", len(merged), merged)
 	}
@@ -144,8 +144,89 @@ func TestMergePackageManagerSoftware_IgnoresPackagesAlreadyInRegistry(t *testing
 
 func TestMergePackageManagerSoftware_NoopWithoutPackageManagerData(t *testing.T) {
 	software := []models.SoftwareItem{{Name: "AnyDesk", Version: "ad 9.7.15"}}
-	merged := mergePackageManagerSoftware(software, nil, nil, "registry")
+	merged := mergePackageManagerSoftware(software, nil, nil, "registry", installedDisplayNameIndex{})
 	if len(merged) != 1 {
 		t.Fatalf("sem dados do gerenciador a lista nao deve mudar, veio %+v", merged)
+	}
+}
+
+// ── Duplicatas título × Id do Chocolatey ──
+//
+// O registro de ARP guarda o TÍTULO ("Adobe Acrobat Reader DC") e o
+// "choco outdated"/"choco list" só devolvem o Id ("adobereader"). Sem cruzar
+// esses apelidos, o merge acrescentava o Id como um SEGUNDO app, com a mesma
+// versão e o mesmo update — a duplicata vista na aba Aplicativos.
+
+func chocoDisplayIndex(title, id, version string) installedDisplayNameIndex {
+	pkg := models.InstalledPackage{Name: title, ID: id, Version: version, Source: "chocolatey"}
+	return installedDisplayNameIndex{
+		byName: map[string][]models.InstalledPackage{normalizeUpdateKey(title): {pkg}},
+		byID:   map[string][]models.InstalledPackage{normalizeUpdateKey(id): {pkg}},
+	}
+}
+
+func TestMergePackageManagerSoftware_SkipsChocoIdWhenRegistryTitleExists(t *testing.T) {
+	software := []models.SoftwareItem{
+		{Name: "Adobe Acrobat Reader DC", Version: "2026.1.21662", Source: "registry"},
+	}
+	installed := []models.InstalledPackage{
+		{Name: "adobereader", ID: "adobereader", Version: "2026.1.21662", Source: "chocolatey"},
+	}
+	pending := []models.UpgradeItem{
+		{Name: "adobereader", ID: "adobereader", CurrentVersion: "2026.1.21662", AvailableVersion: "2026.2.21931", Source: "chocolatey"},
+	}
+
+	merged := mergePackageManagerSoftware(
+		software, installed, pending, "registry",
+		chocoDisplayIndex("Adobe Acrobat Reader DC", "adobereader", "2026.1.21662"))
+
+	if len(merged) != 1 {
+		t.Fatalf("Id do choco nao deveria duplicar o app do registro, veio %d: %+v", len(merged), merged)
+	}
+	if merged[0].Name != "Adobe Acrobat Reader DC" {
+		t.Fatalf("nome do item = %q", merged[0].Name)
+	}
+}
+
+func TestMergePackageManagerSoftware_NamesManagerOnlyAppByNuspecTitle(t *testing.T) {
+	software := []models.SoftwareItem{{Name: "Outro App", Version: "1.0", Source: "registry"}}
+	pending := []models.UpgradeItem{
+		{Name: "fvm", ID: "fvm", CurrentVersion: "4.1.2", AvailableVersion: "4.3.1", Source: "chocolatey"},
+	}
+
+	merged := mergePackageManagerSoftware(
+		software, nil, pending, "registry",
+		chocoDisplayIndex("Flutter Version Management (FVM)", "fvm", "4.1.2"))
+
+	if len(merged) != 2 {
+		t.Fatalf("esperado 2 itens (registro + app so-do-choco), veio %d: %+v", len(merged), merged)
+	}
+	if merged[1].Name != "Flutter Version Management (FVM)" {
+		t.Fatalf("app so-do-choco deveria usar o titulo do nuspec, veio %q", merged[1].Name)
+	}
+}
+
+// TestBuildAgentSoftwareEnvelope_DoesNotDuplicateChocoTitleAndId fecha o caso
+// de ponta a ponta: o envelope não pode conter o título do registro E o Id do
+// choco para o mesmo aplicativo.
+func TestBuildAgentSoftwareEnvelope_DoesNotDuplicateChocoTitleAndId(t *testing.T) {
+	report := models.InventoryReport{
+		Software: []models.SoftwareItem{
+			{Name: "Visual Studio 2022 Build Tools", Version: "117.14.37", Source: "registry"},
+		},
+	}
+	pending := []models.UpgradeItem{
+		{Name: "visualstudio2022buildtools", ID: "visualstudio2022buildtools", CurrentVersion: "117.14.37", AvailableVersion: "117.14.41", Source: "chocolatey"},
+	}
+	index := chocoDisplayIndex("Visual Studio 2022 Build Tools", "visualstudio2022buildtools", "117.14.37")
+
+	env := buildAgentSoftwareEnvelopeWithIndex(report, "agent-1", pending, nil, nil, index)
+
+	if len(env.Software) != 1 {
+		t.Fatalf("esperado 1 app (sem duplicata Id/titulo), veio %d: %+v", len(env.Software), env.Software)
+	}
+	item := env.Software[0]
+	if !item.UpdateAvailable || item.UpdatePackageID != "visualstudio2022buildtools" || item.AvailableVersion != "117.14.41" {
+		t.Fatalf("item sem update correlacionado: %+v", item)
 	}
 }

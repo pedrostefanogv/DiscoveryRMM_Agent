@@ -695,7 +695,7 @@ func buildAgentSoftwareEnvelopeWithIndex(
 	// morava apenas no SyncInventoryOnStartup e os outros caminhos de coleta
 	// (startup, loop periódico, force-sync) enviavam o inventário "cru", sem os
 	// apps do gerenciador e sem os Ids que habilitam update/desinstalação.
-	report.Software = mergePackageManagerSoftware(report.Software, installed, pending, "")
+	report.Software = mergePackageManagerSoftware(report.Software, installed, pending, "", displayNameIndex)
 
 	byInstallID, byName := indexPendingUpdates(pending)
 	installedIndex := indexInstalledPackages(installed)
@@ -931,22 +931,34 @@ func matchPendingUpdateByManagerName(
 // que o update imprime, que costuma divergir do nome do registro.
 type installedDisplayNameIndex struct {
 	byName map[string][]models.InstalledPackage
+	// byID é o índice reverso (Id do gerenciador → pacote). O merge usa para
+	// reconhecer que um Id de pacote do choco/winget (ex.: "adobereader") já
+	// está representado no inventário pelo nome de exibição do registro
+	// ("Adobe Acrobat Reader DC") e não virar uma segunda linha.
+	byID map[string][]models.InstalledPackage
 }
 
 func indexInstalledDisplayNames(installed []models.InstalledPackage) installedDisplayNameIndex {
-	index := installedDisplayNameIndex{byName: make(map[string][]models.InstalledPackage, len(installed))}
+	index := installedDisplayNameIndex{
+		byName: make(map[string][]models.InstalledPackage, len(installed)),
+		byID:   make(map[string][]models.InstalledPackage, len(installed)),
+	}
 	// Títulos do .nuspec (choco list só devolve id|versão).
 	for _, info := range chocolatey.ScanInstalledPackages() {
 		title := normalizeUpdateKey(info.Title)
 		if title == "" {
 			continue
 		}
-		index.byName[title] = append(index.byName[title], models.InstalledPackage{
+		pkg := models.InstalledPackage{
 			Name:    info.Title,
 			ID:      info.ID,
 			Version: info.Version,
 			Source:  "chocolatey",
-		})
+		}
+		index.byName[title] = append(index.byName[title], pkg)
+		if id := normalizeUpdateKey(info.ID); id != "" {
+			index.byID[id] = append(index.byID[id], pkg)
+		}
 	}
 	// Nome de exibição do "winget list" — usado principalmente para resolver o
 	// Id do pacote quando o app ainda não tem update pendente.
@@ -956,8 +968,47 @@ func indexInstalledDisplayNames(installed []models.InstalledPackage) installedDi
 			continue
 		}
 		index.byName[name] = append(index.byName[name], pkg)
+		if id := normalizeUpdateKey(pkg.ID); id != "" {
+			index.byID[id] = append(index.byID[id], pkg)
+		}
 	}
 	return index
+}
+
+// aliasesFor devolve os nomes/Ids alternativos do gerenciador para um nome de
+// exibição já presente no inventário (título do .nuspec no choco ou Name do
+// "winget list"). É o que liga "Adobe Acrobat Reader DC" ao Id "adobereader".
+func (index installedDisplayNameIndex) aliasesFor(name string) []string {
+	entries := index.byName[normalizeUpdateKey(name)]
+	if len(entries) == 0 {
+		return nil
+	}
+	aliases := make([]string, 0, len(entries)*2)
+	for _, pkg := range entries {
+		if id := strings.TrimSpace(pkg.ID); id != "" {
+			aliases = append(aliases, id)
+		}
+		if pkgName := strings.TrimSpace(pkg.Name); pkgName != "" {
+			aliases = append(aliases, pkgName)
+		}
+	}
+	return aliases
+}
+
+// displayNameFor devolve o título de exibição conhecido para um Id de pacote
+// (título do .nuspec no choco; Name do "winget list"). Usado para nomear com o
+// nome amigável os apps que só existem no gerenciador.
+func (index installedDisplayNameIndex) displayNameFor(id string) string {
+	key := normalizeUpdateKey(id)
+	if key == "" {
+		return ""
+	}
+	for _, pkg := range index.byID[key] {
+		if name := strings.TrimSpace(pkg.Name); name != "" {
+			return name
+		}
+	}
+	return ""
 }
 
 // candidates devolve os pacotes cujo nome de exibição bate com o do inventário,
@@ -1057,25 +1108,64 @@ func resolvePackageForSoftware(
 // SÓ existem no gerenciador de pacotes (o registro não tem entrada de ARP para
 // eles — ex.: o pacote Microsoft.WSL). Sem esta união, esses apps nunca
 // aparecem no inventário do agente e, portanto, nunca exibem update pendente.
+//
+// A decisão de "já existe" considera TODOS os apelidos do pacote: o Id e o nome
+// do gerenciador, o nome de exibição do "winget list" e o título do .nuspec do
+// Chocolatey. Era isto que faltava: o registro tem "Adobe Acrobat Reader DC" e o
+// "choco outdated" só devolve o Id "adobereader" — sem cruzar os apelidos o
+// mesmo app aparecia DUAS vezes (título + Id), cada uma com update pendente.
 // Best-effort: entrada ausente não altera nada.
 func mergePackageManagerSoftware(
 	software []models.SoftwareItem,
 	installed []models.InstalledPackage,
 	pending []models.UpgradeItem,
 	source string,
+	displayNames installedDisplayNameIndex,
 ) []models.SoftwareItem {
 	if len(installed) == 0 && len(pending) == 0 {
 		return software
 	}
 
 	seen := make(map[string]struct{}, len(installed)+len(pending))
-	register := func(name string) {
-		if key := normalizeUpdateKey(name); key != "" {
-			seen[key] = struct{}{}
+	mark := func(values ...string) {
+		for _, value := range values {
+			if key := normalizeUpdateKey(value); key != "" {
+				seen[key] = struct{}{}
+			}
 		}
 	}
+	isKnown := func(values ...string) bool {
+		for _, value := range values {
+			if key := normalizeUpdateKey(value); key != "" {
+				if _, exists := seen[key]; exists {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	// aliases devolve todas as formas pelas quais o pacote do gerenciador pode
+	// já estar representado no inventário.
+	aliases := func(id, name string) []string {
+		values := []string{id, name}
+		values = append(values, displayNames.aliasesFor(name)...)
+		values = append(values, displayNames.displayNameFor(id))
+		return values
+	}
+	// preferredName usa o nome amigável conhecido (título do .nuspec no choco,
+	// Name do winget list) em vez do Id cru quando o app só existe no gerenciador.
+	preferredName := func(id, name string) string {
+		if title := displayNames.displayNameFor(id); title != "" {
+			return title
+		}
+		return strings.TrimSpace(name)
+	}
+
 	for _, item := range software {
-		register(item.Name)
+		mark(item.Name)
+		// Registra também os apelidos dos itens já existentes: "Adobe Acrobat
+		// Reader DC" marca o Id "adobereader" como já representado.
+		mark(displayNames.aliasesFor(item.Name)...)
 	}
 
 	// Prefixo de origem dos itens adicionados: deriva da PRÓPRIA lista já
@@ -1088,16 +1178,16 @@ func mergePackageManagerSoftware(
 
 	added := make([]models.SoftwareItem, 0, len(installed)+len(pending))
 	for _, pkg := range installed {
-		key := normalizeUpdateKey(pkg.Name)
-		if key == "" {
+		if normalizeUpdateKey(pkg.Name) == "" {
 			continue
 		}
-		if _, exists := seen[key]; exists {
+		values := aliases(pkg.ID, pkg.Name)
+		if isKnown(values...) {
 			continue
 		}
-		seen[key] = struct{}{}
+		mark(values...)
 		added = append(added, models.SoftwareItem{
-			Name:      strings.TrimSpace(pkg.Name),
+			Name:      preferredName(pkg.ID, pkg.Name),
 			Version:   strings.TrimSpace(pkg.Version),
 			Publisher: "Sem fabricante",
 			Source:    source,
@@ -1107,17 +1197,16 @@ func mergePackageManagerSoftware(
 	// Updates pendentes sem pacote listado (pacote não reconhecido pelo
 	// "winget list"): reporta o app com a versão atual e disponível.
 	for _, update := range pending {
-		name := strings.TrimSpace(update.Name)
-		key := normalizeUpdateKey(name)
-		if key == "" {
+		if normalizeUpdateKey(update.Name) == "" {
 			continue
 		}
-		if _, exists := seen[key]; exists {
+		values := aliases(update.ID, update.Name)
+		if isKnown(values...) {
 			continue
 		}
-		seen[key] = struct{}{}
+		mark(values...)
 		added = append(added, models.SoftwareItem{
-			Name:      name,
+			Name:      preferredName(update.ID, update.Name),
 			Version:   strings.TrimSpace(update.CurrentVersion),
 			Publisher: "Sem fabricante",
 			Source:    source,

@@ -951,6 +951,10 @@ func (s *Service) runChocolatey(ctx context.Context, operation, packageID string
 	}
 	cmd := exec.CommandContext(runCtx, "choco", args...)
 	processutil.HideWindow(cmd)
+	// O serviço roda como LocalSystem: enriquece o PATH com as ferramentas do
+	// Chocolatey que ficam só no PATH do usuário (ex.: dart em C:	ools),
+	// senão scripts de pós-instalação que chamam ferramentas por nome falham.
+	cmd.Env = packageManagerEnv()
 	output, err := cmd.CombinedOutput()
 	text := strings.TrimSpace(string(output))
 	if err != nil {

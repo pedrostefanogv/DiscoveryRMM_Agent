@@ -32,7 +32,7 @@ func TestMergePackageManagerSoftware_UsesDetectedSource(t *testing.T) {
 	software := []models.SoftwareItem{{Name: "Existente", Version: "1.0", Source: "osquery/programs"}}
 	installed := []models.InstalledPackage{{Name: "Novo App", ID: "Novo.App", Version: "2.0", Source: "winget"}}
 
-	merged := mergePackageManagerSoftware(software, installed, nil, "")
+	merged := mergePackageManagerSoftware(software, installed, nil, "", installedDisplayNameIndex{})
 	if len(merged) != 2 {
 		t.Fatalf("esperado 2 itens, veio %d", len(merged))
 	}
