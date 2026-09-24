@@ -596,6 +596,14 @@
   animation: spin 0.8s linear infinite;
 }
 
+/* O botão de recarregar já tem o próprio feedback (ícone girando). A regra
+   genérica .loading::before acrescentava um SEGUNDO spinner (bolinha) ao lado
+   do ícone — remove o pseudo-elemento para deixar só uma animação. */
+#reloadBtn.loading::before {
+  content: none;
+  display: none;
+}
+
 /* Card unificado de status + observações da automação */
 .automation-summary-card h3 {
   margin: 0 0 6px;
