@@ -47,12 +47,16 @@ func parsePsadtAlertPayload(payload any) (PsadtAlertPayload, error) {
 	if p.Type == "" {
 		p.Type = "toast"
 	}
-	if p.TimeoutSeconds <= 0 {
-		if p.Type == "toast" {
+	switch {
+	case p.Type == "toast":
+		if p.TimeoutSeconds <= 0 {
 			p.TimeoutSeconds = 15
-		} else {
-			p.TimeoutSeconds = 120
 		}
+	case p.WaitForUser:
+		// Modal aguardando clique do usuário: 0 = sem timeout.
+		p.TimeoutSeconds = 0
+	case p.TimeoutSeconds <= 0:
+		p.TimeoutSeconds = 120
 	}
 
 	return p, nil

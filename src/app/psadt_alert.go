@@ -19,6 +19,17 @@ import (
 	"discovery/app/core/processutil"
 )
 
+// maxModalAlertWait é o teto de segurança para um alerta modal com
+// waitForUser=true: o diálogo aguarda o clique do usuário, mas o comando não
+// fica pendurado para sempre caso a sessão seja abandonada (4 horas).
+const maxModalAlertWait = 4 * time.Hour
+
+// maxPsadtDialogTimeoutSeconds é o maior -Timeout que o Show-ADTDialogBox
+// aceita com o config.psd1 padrão do PSADT (UI.DefaultTimeout = 3300s).
+// Um valor acima disso faz o cmdlet lançar erro de validação e o diálogo não
+// é exibido — por isso o timeout é clampado antes de chegar ao PSADT.
+const maxPsadtDialogTimeoutSeconds = 3300
+
 // isPsadtAlertCommandType verifica se o commandType corresponde a ShowPsadtAlert (9).
 // Aceita o valor numérico "9" ou aliases string para compatibilidade.
 func isPsadtAlertCommandType(cmdType string) bool {
@@ -55,12 +66,18 @@ func parsePsadtAlertPayload(payload any) (PsadtAlertPayload, error) {
 	if p.Type == "" {
 		p.Type = "toast"
 	}
-	if p.TimeoutSeconds <= 0 {
-		if p.Type == "toast" {
+	switch {
+	case p.Type == "toast":
+		// Toast sempre auto-fecha; default curto quando não informado.
+		if p.TimeoutSeconds <= 0 {
 			p.TimeoutSeconds = 15
-		} else {
-			p.TimeoutSeconds = 120
 		}
+	case p.WaitForUser:
+		// Modal que aguarda o usuário clicar em OK: 0 significa "sem timeout"
+		// e é propagado assim para o Show-ADTDialogBox.
+		p.TimeoutSeconds = 0
+	case p.TimeoutSeconds <= 0:
+		p.TimeoutSeconds = 120
 	}
 	return p, nil
 }
@@ -119,6 +136,17 @@ func (a *App) handlePsadtAlert(ctx context.Context, p PsadtAlertPayload) (int, s
 		return 0, string(body), ""
 	}
 
+	// O PSADT rejeita -Timeout acima de UI.DefaultTimeout do config.psd1
+	// (padrão 3300s): o cmdlet lança erro e nada aparece na tela do usuário.
+	// Clampa para garantir a entrega; o retry de showPSADTModal cobre configs
+	// com DefaultTimeout ainda menor.
+	if p.Type == "modal" && !p.WaitForUser && p.TimeoutSeconds > maxPsadtDialogTimeoutSeconds {
+		if a != nil {
+			a.Logs.Append(fmt.Sprintf("[agent] psadt-alert timeout=%ds acima do limite PSADT (%ds); clamp aplicado", p.TimeoutSeconds, maxPsadtDialogTimeoutSeconds))
+		}
+		p.TimeoutSeconds = maxPsadtDialogTimeoutSeconds
+	}
+
 	if a != nil {
 		a.Logs.Append(fmt.Sprintf("[agent] psadt-alert iniciando type=%s alertId=%s timeout=%ds via go-psadt", p.Type, p.AlertID, p.TimeoutSeconds))
 	}
@@ -129,8 +157,25 @@ func (a *App) handlePsadtAlert(ctx context.Context, p PsadtAlertPayload) (int, s
 	execCtx, cancel := context.WithTimeout(ctx, initTimeout)
 	defer cancel()
 
+	// O deadline do client precisa cobrir toda a janela do diálogo modal, não
+	// apenas a inicialização. Sem isso o contexto de ~90s cancelaria o
+	// Show-ADTDialogBox antes do timeout configurado (ou de o usuário clicar).
+	commandTimeout := initTimeout
+	if p.Type == "modal" {
+		if p.WaitForUser || p.TimeoutSeconds <= 0 {
+			// Usuário decide quando fechar: teto de segurança para não manter
+			// o comando aberto indefinidamente em caso de sessão abandonada.
+			commandTimeout = maxModalAlertWait
+		} else {
+			needed := time.Duration(p.TimeoutSeconds)*time.Second + 120*time.Second
+			if needed > commandTimeout {
+				commandTimeout = needed
+			}
+		}
+	}
+
 	client, err := psadt.NewClient(
-		psadt.WithTimeout(initTimeout),
+		psadt.WithTimeout(commandTimeout),
 		psadt.WithMinModuleVersion(strings.TrimSpace(psadtCfg.RequiredVersion)),
 	)
 	if err != nil {
@@ -254,15 +299,39 @@ func (a *App) showPSADTModal(_ context.Context, session *psadt.Session, p PsadtA
 		icon = pstypes.IconQuestion
 	}
 
-	result, err := session.ShowDialogBox(pstypes.DialogBoxOptions{
+	timeoutSeconds := p.TimeoutSeconds
+	if timeoutSeconds > maxPsadtDialogTimeoutSeconds {
+		timeoutSeconds = maxPsadtDialogTimeoutSeconds
+	}
+
+	// Timeout 0 (ou waitForUser) = diálogo sem -Timeout; o PSADT aplica o
+	// UI.DefaultTimeout do config.psd1 (padrão 3300s) antes de devolver Timeout.
+	// Com timeout positivo, auto-fecha ao expirar.
+	dialogOptions := pstypes.DialogBoxOptions{
 		Title:         strings.TrimSpace(p.Title),
 		Text:          strings.TrimSpace(p.Message),
 		Buttons:       buttons,
 		DefaultButton: defaultButton,
 		Icon:          icon,
-		Timeout:       p.TimeoutSeconds,
-		ExitOnTimeout: true,
-	})
+	}
+	if timeoutSeconds > 0 && !p.WaitForUser {
+		dialogOptions.Timeout = timeoutSeconds
+		dialogOptions.ExitOnTimeout = true
+	}
+
+	result, err := session.ShowDialogBox(dialogOptions)
+	if err != nil && dialogOptions.Timeout > 0 {
+		// O UI.DefaultTimeout pode ser menor que o global (administrador pode
+		// ter reduzido no config.psd1). Nesse caso o PSADT rejeita o -Timeout e
+		// nenhum diálogo aparece; reexibe sem -Timeout para não perder o aviso.
+		if a != nil {
+			a.Logs.Append(fmt.Sprintf("[agent] psadt-alert [WARN] ShowDialogBox com timeout=%ds falhou (%v); retry sem -Timeout", dialogOptions.Timeout, err))
+		}
+		retryOptions := dialogOptions
+		retryOptions.Timeout = 0
+		retryOptions.ExitOnTimeout = false
+		result, err = session.ShowDialogBox(retryOptions)
+	}
 	if err != nil {
 		errMsg := fmt.Sprintf("ShowDialogBox: %v", err)
 		if a != nil {

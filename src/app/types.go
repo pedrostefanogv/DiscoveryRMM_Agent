@@ -119,6 +119,9 @@ type PsadtAlertPayload struct {
 	ProgressPercent int                `json:"progressPercent"` // 0-100 para update-progress
 	StatusText      string             `json:"statusText"`      // texto de status para update-progress
 	Subtitle        string             `json:"subtitle"`        // subtítulo para update-progress
+	// WaitForUser (modal): aguarda o usuário clicar em OK indefinidamente,
+	// ignorando timeoutSeconds. Sem ele, o modal auto-fecha no timeout.
+	WaitForUser bool `json:"waitForUser"`
 }
 
 // exportConfig holds the current export options.
