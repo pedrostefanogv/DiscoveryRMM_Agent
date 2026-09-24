@@ -227,6 +227,34 @@ func (c *Coordinator) GetPeerArtifactIndex() []P2PPeerArtifactIndexView {
 	return out
 }
 
+// PeerArtifactIndexCached devolve o índice de artifacts por peer a partir do
+// cache de gossip, SEM rede. GetPeerArtifactIndex faz fetch live (timeout de 5s
+// por peer) e é o caminho de debug/UI — não deve ser usado em hot path de
+// produção (automação, selfupdate), onde causava fan-out de gossip a cada
+// resolução de artifact.
+func (c *Coordinator) PeerArtifactIndexCached() []P2PPeerArtifactIndexView {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	out := make([]P2PPeerArtifactIndexView, 0, len(c.peerArtifacts))
+	for peerKey, state := range c.peerArtifacts {
+		host := ""
+		if ps, ok := c.peers[peerKey]; ok {
+			host = strings.TrimSpace(ps.Peer.Host)
+		}
+		out = append(out, P2PPeerArtifactIndexView{
+			PeerAgentID:    peerKey,
+			PeerHost:       host,
+			LastUpdatedUTC: formatTimeRFC3339(state.LastUpdatedUTC),
+			Source:         state.Source,
+			Artifacts:      append([]P2PArtifactView(nil), state.Artifacts...),
+		})
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return out[i].PeerAgentID < out[j].PeerAgentID
+	})
+	return out
+}
+
 // FindArtifactPeers returns a summary of which peers currently advertise the
 // named artifact. Lookup uses the in-memory cache (peerArtifacts) first;
 // on cache miss, falls back to live libp2p query to each known peer.

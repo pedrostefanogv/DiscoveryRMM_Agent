@@ -140,6 +140,16 @@ func (a *App) GetP2PPeerArtifactIndex() []P2PPeerArtifactIndexView {
 	return a.P2PCoord.GetPeerArtifactIndex()
 }
 
+// GetP2PPeerArtifactIndexCached devolve o índice de artifacts dos peers a
+// partir do cache de gossip (sem rede). Use em hot paths de produção;
+// GetP2PPeerArtifactIndex SEMPRE faz fetch live de todos os peers.
+func (a *App) GetP2PPeerArtifactIndexCached() []P2PPeerArtifactIndexView {
+	if a == nil || a.P2PCoord == nil {
+		return []P2PPeerArtifactIndexView{}
+	}
+	return a.P2PCoord.PeerArtifactIndexCached()
+}
+
 // FindP2PArtifactPeers returns availability of an artifact across known peers.
 // Lookup is performed exclusively by canonical ArtifactID.
 func (a *App) FindP2PArtifactPeers(artifactName string) P2PArtifactAvailabilityView {

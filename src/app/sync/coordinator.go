@@ -33,6 +33,9 @@ type Coordinator struct {
 	revisions       map[string]string
 	contentHashes   map[string]string
 	pollEvery       time.Duration
+	// manifestFailures conta falhas consecutivas do sync-manifest para aplicar
+	// backoff no poll (ex.: HTTP 502 recorrente do servidor/nginx).
+	manifestFailures int
 }
 
 // New cria um Coordinator com as dependências injetadas.
@@ -71,7 +74,7 @@ func (c *Coordinator) Run(ctx context.Context) {
 			return
 		case <-ticker.C:
 			_ = c.ReconcileFromManifest(ctx, "poll")
-			ticker.Reset(c.getPollEvery())
+			ticker.Reset(c.nextPollInterval())
 		case <-cleanupTicker.C:
 			c.pruneProcessedEvents(time.Now())
 		case trigger := <-c.queue:
@@ -276,8 +279,9 @@ func (c *Coordinator) fullResync(ctx context.Context, source string) error {
 // ReconcileFromManifest busca o sync-manifest e enfileira recursos alterados.
 func (c *Coordinator) ReconcileFromManifest(ctx context.Context, source string) error {
 	manifest, err := c.fetchSyncManifest(ctx)
+	c.recordManifestResult(err)
 	if err != nil {
-		c.deps.Log("[sync] manifesto indisponível (" + source + "): " + err.Error())
+		c.deps.Log(fmt.Sprintf("[sync] manifesto indisponível (%s): %v — próximo poll em %s", source, err, c.nextPollInterval().Round(time.Second)))
 		return err
 	}
 
@@ -331,6 +335,43 @@ func (c *Coordinator) setPollEvery(value time.Duration) {
 	}
 	c.mu.Lock()
 	c.pollEvery = value
+	c.mu.Unlock()
+}
+
+// manifestPollBackoffMax limita o intervalo do poll de sync-manifest quando o
+// servidor responde com erro repetido (ex.: HTTP 502 do nginx). Sem teto, o
+// backoff cresceria indefinidamente e o agente pararia de sincronizar.
+const manifestPollBackoffMax = 30 * time.Minute
+
+// nextPollInterval devolve o intervalo do próximo poll considerando falhas
+// consecutivas do sync-manifest (backoff exponencial sobre o intervalo base,
+// limitado por manifestPollBackoffMax). Sucesso zera o contador.
+func (c *Coordinator) nextPollInterval() time.Duration {
+	base := c.getPollEvery()
+	c.mu.Lock()
+	fails := c.manifestFailures
+	c.mu.Unlock()
+	if fails <= 0 {
+		return base
+	}
+	backoff := base
+	for i := 0; i < fails && backoff < manifestPollBackoffMax; i++ {
+		backoff *= 2
+	}
+	if backoff > manifestPollBackoffMax {
+		backoff = manifestPollBackoffMax
+	}
+	return backoff
+}
+
+// recordManifestResult atualiza o contador de falhas consecutivas do manifest.
+func (c *Coordinator) recordManifestResult(err error) {
+	c.mu.Lock()
+	if err == nil {
+		c.manifestFailures = 0
+	} else {
+		c.manifestFailures++
+	}
 	c.mu.Unlock()
 }
 

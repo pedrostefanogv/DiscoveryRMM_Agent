@@ -271,6 +271,15 @@ func (m *automationPackageManagerRouter) installViaP2P(ctx context.Context, pack
 		}
 	}
 
+	// Persiste o ID lógico no sidecar .meta do artifact baixado por P2P: sem
+	// isso, ListArtifacts o anuncia como "name:<arquivo>" e o re-seed (e a
+	// própria automação) o trata como ausente, re-disparando o download.
+	if len(peerIDs) > 0 {
+		if coord := m.app.P2PCoord; coord != nil {
+			coord.RememberArtifactIdentity(artifact, "winget:"+normalizePackageLookupKey(packageID))
+		}
+	}
+
 	artifactPath := filepath.Join(m.app.p2pTempDir(), artifact)
 	catSilent, catSilentWithProgress, catInstallerType := m.catalogInstallerInfo(packageID)
 	output, err := runLocalInstallerFull(ctx, artifactPath, catSilent, catSilentWithProgress, catInstallerType)
@@ -305,7 +314,9 @@ func (m *automationPackageManagerRouter) resolveArtifactSources(ctx context.Cont
 
 	// 2. Busca em TODOS os peers via gossip (não apenas o primeiro match).
 	m.app.P2PCoord.RefreshPeerArtifactIndex(ctx, "automation-install")
-	index := m.app.GetP2PPeerArtifactIndex()
+	// Índice do cache (sem rede): GetP2PPeerArtifactIndex faz fetch live de
+	// TODOS os peers (5s cada) e não deve rodar a cada execução de tarefa.
+	index := m.app.GetP2PPeerArtifactIndexCached()
 	for _, peer := range index {
 		for _, a := range peer.Artifacts {
 			if strings.EqualFold(strings.TrimSpace(a.ArtifactID), artifactLookupID) {
@@ -318,6 +329,13 @@ func (m *automationPackageManagerRouter) resolveArtifactSources(ctx context.Cont
 		}
 	}
 	if artifactName != "" && len(peerIDs) > 0 {
+		// O ID lógico local pode divergir do anunciado quando o sidecar .meta
+		// não existe (artifact recebido via download P2P). Se já temos o
+		// arquivo em disco com o mesmo nome, instalamos direto sem re-baixar.
+		if existing := m.findLocalArtifactByName(artifactName); existing != "" {
+			m.logf("[automation][p2p] artifact já presente no cache local (por nome), instalando sem re-baixar artifact=%s", artifactName)
+			return artifactName, nil, nil
+		}
 		return artifactName, peerIDs, nil
 	}
 
@@ -618,6 +636,37 @@ func (m *automationPackageManagerRouter) findLocalArtifactByID(artifactID string
 	}
 	for _, a := range artifacts {
 		if !strings.EqualFold(strings.TrimSpace(a.ArtifactID), artifactID) {
+			continue
+		}
+		if !a.Available {
+			continue
+		}
+		path := filepath.Join(m.app.p2pTempDir(), a.ArtifactName)
+		if info, statErr := os.Stat(path); statErr != nil || info.IsDir() || info.Size() == 0 {
+			continue
+		}
+		return path
+	}
+	return ""
+}
+
+// findLocalArtifactByName é o equivalente de findLocalArtifactByID casando pelo
+// nome do arquivo. Cobre artifacts cujo ID lógico local divergiu do anunciado
+// (download P2P sem sidecar .meta), evitando re-download pela automação.
+func (m *automationPackageManagerRouter) findLocalArtifactByName(artifactName string) string {
+	if m == nil || m.app == nil || m.app.P2PCoord == nil {
+		return ""
+	}
+	artifactName = strings.TrimSpace(artifactName)
+	if artifactName == "" {
+		return ""
+	}
+	artifacts, err := m.app.ListP2PArtifacts()
+	if err != nil {
+		return ""
+	}
+	for _, a := range artifacts {
+		if !strings.EqualFold(strings.TrimSpace(a.ArtifactName), artifactName) {
 			continue
 		}
 		if !a.Available {

@@ -435,19 +435,27 @@ func downloadChunkedLibp2p(
 	var totalBytes int64
 	for i := range manifest.Chunks {
 		chunkFile := filepath.Join(partsDir, fmt.Sprintf("chunk-%04d", i))
-		data, err := os.ReadFile(chunkFile)
+		// Streaming: copia o chunk para o destino calculando o hash em paralelo,
+		// sem carregar o chunk inteiro em memória (chunks podem ter até 64 MB).
+		cf, err := os.Open(chunkFile)
 		if err != nil {
 			out.Close()
 			_ = os.Remove(tmpPath)
 			return "", 0, fmt.Errorf("leitura do chunk %d: %w", i, err)
 		}
-		if _, err := out.Write(data); err != nil {
+		n, copyErr := io.Copy(io.MultiWriter(out, fullHash), cf)
+		closeErr := cf.Close()
+		if copyErr != nil {
 			out.Close()
 			_ = os.Remove(tmpPath)
-			return "", 0, fmt.Errorf("escrita do chunk %d: %w", i, err)
+			return "", 0, fmt.Errorf("escrita do chunk %d: %w", i, copyErr)
 		}
-		fullHash.Write(data)
-		totalBytes += int64(len(data))
+		if closeErr != nil {
+			out.Close()
+			_ = os.Remove(tmpPath)
+			return "", 0, fmt.Errorf("fechar chunk %d: %w", i, closeErr)
+		}
+		totalBytes += n
 	}
 	if err := out.Close(); err != nil {
 		_ = os.Remove(tmpPath)

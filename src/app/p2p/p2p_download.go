@@ -415,7 +415,7 @@ func (c *Coordinator) DownloadArtifactByID(ctx context.Context, artifactID, sour
 	// Resolve o artifactName: cache primeiro (rápido), live fetch como fallback.
 	artifactName := c.resolveArtifactNameByID(artifactID)
 	if artifactName == "" {
-		for _, peer := range c.GetPeerArtifactIndex() {
+		for _, peer := range c.PeerArtifactIndexCached() {
 			if !strings.EqualFold(strings.TrimSpace(peer.PeerAgentID), sourcePeerID) {
 				continue
 			}
@@ -453,7 +453,7 @@ func (c *Coordinator) DownloadArtifactByIDSwarm(ctx context.Context, artifactID 
 	// Resolve o artifactName: cache primeiro (rápido), live fetch como fallback.
 	artifactName := c.resolveArtifactNameByID(artifactID)
 	if artifactName == "" {
-		for _, peer := range c.GetPeerArtifactIndex() {
+		for _, peer := range c.PeerArtifactIndexCached() {
 			for _, art := range peer.Artifacts {
 				if strings.EqualFold(strings.TrimSpace(art.ArtifactID), artifactID) {
 					artifactName = strings.TrimSpace(art.ArtifactName)

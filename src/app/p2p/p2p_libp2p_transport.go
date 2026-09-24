@@ -252,10 +252,14 @@ func handleStreamArtifactManifest(s network.Stream, transfer *TransferServer) {
 	deps := transfer.deps
 	transfer.mu.RUnlock()
 
-	// Rejeitar arquivos .importing (ainda sendo copiados) — não devem gerar
-	// nem servir manifest, assim como o /artifact/get rejeita. Evita servir
-	// um manifest com offsets/hashes de um arquivo parcial.
-	if strings.HasSuffix(req.ArtifactName, ".importing") {
+	// Rejeitar arquivos .importing (ainda sendo copiados), .partial (montagem
+	// em andamento) e sidecars .meta — não devem gerar nem servir manifest,
+	// assim como o /artifact/get rejeita. Evita servir um manifest com
+	// offsets/hashes de um arquivo parcial.
+	if strings.HasSuffix(req.ArtifactName, ".importing") ||
+		strings.HasSuffix(req.ArtifactName, ".partial") ||
+		strings.HasSuffix(req.ArtifactName, ".meta") ||
+		strings.HasSuffix(req.ArtifactName, ".meta.json") {
 		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "artifact em andamento"})
 		return
 	}
@@ -308,19 +312,31 @@ func handleStreamArtifactManifest(s network.Stream, transfer *TransferServer) {
 			chunkSize = cfg.ChunkSizeBytes
 		}
 	}
-	artifactID := CanonicalArtifactID("", req.ArtifactName, "")
 	var cpuFn func() float64
 	if transfer != nil && transfer.coord != nil {
 		cpuFn = func() float64 { return transfer.coord.cpuSampler.Sample() }
 	}
-	manifest, err := buildChunkManifest(context.Background(), path, artifactID, chunkSize, nil, cpuFn)
+
+	// Geração com dedup (manifestInFlight) e contexto de vida do agente: evita
+	// N leituras completas do mesmo arquivo quando vários peers pedem o manifest
+	// juntos e permite abortar no shutdown.
+	buildCtx := context.Background()
+	useCoord := transfer != nil && transfer.coord != nil
+	var manifest P2PChunkManifest
+	if useCoord {
+		buildCtx = transfer.coord.Ctx()
+		manifest, err = transfer.coord.ensureServingManifest(buildCtx, path, req.ArtifactName, chunkSize, cpuFn)
+	} else {
+		manifest, err = buildChunkManifest(buildCtx, path, CanonicalArtifactID("", req.ArtifactName, ""), chunkSize, nil, cpuFn)
+	}
 	if err != nil {
 		_ = json.NewEncoder(s).Encode(libp2pErrorResponse{Error: "erro ao construir manifest: " + err.Error()})
 		return
 	}
-
-	// Cachear manifest para reuso futuro (best-effort).
-	_ = saveCachedManifest(manifestDir, req.ArtifactName, manifest)
+	if !useCoord {
+		// Fallback sem coordinator: cacheia o manifest para reuso futuro.
+		_ = saveCachedManifest(manifestDir, req.ArtifactName, manifest)
+	}
 
 	_ = json.NewEncoder(s).Encode(manifest)
 }
@@ -514,7 +530,17 @@ func handleStreamArtifactGet(s network.Stream, transfer *TransferServer) {
 	// M15: throttle de bandwidth no sender (bytes servidos a peers) — bucket
 	// global da máquina, configurável via servidor.
 	if bwMaxPerSec.Load() > 0 {
-		reader = newBandwidthThrottleReader(reader, context.Background())
+		// Usa o contexto de vida do agente (não Background): o wait do token
+		// bucket passa a ser cancelável no shutdown em vez de segurar a
+		// goroutine até o fim do sleep. O deadline rolante do stream continua
+		// sendo o limite para peer que para de ler.
+		throttleCtx := context.Background()
+		if coord != nil && coord.deps != nil {
+			if appCtx := coord.deps.Context(); appCtx != nil {
+				throttleCtx = appCtx
+			}
+		}
+		reader = newBandwidthThrottleReader(reader, throttleCtx)
 	}
 
 	written, copyErr := io.Copy(s, reader)

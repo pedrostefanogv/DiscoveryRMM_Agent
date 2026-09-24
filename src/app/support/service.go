@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -206,7 +207,7 @@ func NewService(opts Options) *Service {
 	return &Service{
 		logf:             logf,
 		ctx:              ctx,
-		db:               opts.DB,
+		db:               normalizeCacheDB(opts.DB),
 		agentInfo:        opts.AgentInfo,
 		debugConfig:      debugConfig,
 		featureEnabled:   featureEnabled,
@@ -219,7 +220,27 @@ func NewService(opts Options) *Service {
 // Deve ser chamado após a abertura do SQLite, já que o Service
 // pode ser construído antes do banco estar disponível.
 func (s *Service) SetDB(db CacheDB) {
-	s.db = db
+	s.db = normalizeCacheDB(db)
+}
+
+// normalizeCacheDB devolve nil quando db é uma interface com valor tipado nulo
+// (ex.: um (*database.DB)(nil) atribuído a CacheDB durante o startup, antes de o
+// SQLite abrir). Sem esta normalização a checagem "s.db != nil" passa, mas a
+// chamada no ponteiro nulo falha com "database indisponivel" — gerando os
+// avisos repetidos de cache do suporte e impedindo o caminho correto de
+// "sem cache local".
+func normalizeCacheDB(db CacheDB) CacheDB {
+	if db == nil {
+		return nil
+	}
+	v := reflect.ValueOf(db)
+	switch v.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Ptr, reflect.Slice:
+		if v.IsNil() {
+			return nil
+		}
+	}
+	return db
 }
 
 func (s *Service) supportLogf(format string, args ...any) {

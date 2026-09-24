@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -30,9 +31,9 @@ const (
 	p2pLANProbeWarmupDelay         = 12 * time.Second
 	// M16: sweep da LAN (/24 × portas) a cada 5min em vez de 2min — reduz o
 	// scanning contínuo da rede mantendo a descoberta em tempo razoável.
-	p2pLANProbeInterval            = 5 * time.Minute
-	peerArtifactCacheTTL           = 72 * time.Hour // cache de artifacts por peer expira em 72h
-	maxPeerArtifactEntries         = 500            // cap máximo de entries no mapa peerArtifacts
+	p2pLANProbeInterval    = 5 * time.Minute
+	peerArtifactCacheTTL   = 72 * time.Hour // cache de artifacts por peer expira em 72h
+	maxPeerArtifactEntries = 500            // cap máximo de entries no mapa peerArtifacts
 )
 
 var errP2PDuplicateReplication = errors.New("artifact ja distribuido recentemente para este peer")
@@ -338,6 +339,92 @@ func (c *Coordinator) gcServingSessions(now time.Time) {
 	}
 }
 
+// pruneStaleCaches remove entradas de cache (sha256Cache, manifestHealth) cujos
+// arquivos não existem mais em P2P_Temp: a limpeza por TTL apaga os arquivos,
+// mas os caches em memória cresciam indefinidamente. Também poda os
+// fetchStates já resolvidos. Chamada no cleanup tick (1h).
+func (c *Coordinator) pruneStaleCaches() {
+	dir := c.deps.P2PTempDir()
+	if dir == "" {
+		return
+	}
+	existing := make(map[string]bool)
+	if entries, err := os.ReadDir(dir); err == nil {
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			existing[filepath.Join(dir, e.Name())] = true
+		}
+	}
+
+	c.sha256CacheMu.Lock()
+	for path := range c.sha256Cache {
+		if !existing[path] {
+			delete(c.sha256Cache, path)
+		}
+	}
+	c.sha256CacheMu.Unlock()
+
+	c.manifestHealthMu.Lock()
+	for path := range c.manifestHealth {
+		if !existing[path] {
+			delete(c.manifestHealth, path)
+		}
+	}
+	c.manifestHealthMu.Unlock()
+
+	c.pruneResolvedFetchStates()
+}
+
+// pruneResolvedFetchStates remove estados "available" que não correspondem a
+// nenhum artifact local nem a anúncio atual de peers. Sem isso o mapa crescia
+// com artifactIDs que já saíram de circulação. Não toca em estados
+// missing/fetching/failed (precisam do backoff/cooldown).
+func (c *Coordinator) pruneResolvedFetchStates() {
+	c.mu.RLock()
+	announced := make(map[string]bool, len(c.peerArtifacts))
+	for _, state := range c.peerArtifacts {
+		for _, a := range state.Artifacts {
+			if id := strings.TrimSpace(a.ArtifactID); id != "" {
+				announced[id] = true
+			}
+		}
+	}
+	c.mu.RUnlock()
+
+	artifacts, err := c.ListArtifacts()
+	if err != nil {
+		return
+	}
+	localByID := make(map[string]bool, len(artifacts))
+	localByName := make(map[string]bool, len(artifacts))
+	for _, a := range artifacts {
+		if id := strings.TrimSpace(a.ArtifactID); id != "" {
+			localByID[id] = true
+		}
+		if name := strings.ToLower(strings.TrimSpace(a.ArtifactName)); name != "" {
+			localByName[name] = true
+		}
+	}
+
+	c.fetchStates.mu.Lock()
+	for id, st := range c.fetchStates.states {
+		if st.Status != "available" {
+			continue
+		}
+		if announced[id] || localByID[id] {
+			continue
+		}
+		// Para o ID derivado do nome ("name:<arquivo>"), valida o arquivo local.
+		if name := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(id, "name:"))); name != "" && localByName[name] {
+			continue
+		}
+		delete(c.fetchStates.states, id)
+	}
+	c.fetchStates.mu.Unlock()
+}
+
 // cachedFileSHA256 retorna o SHA256 do arquivo, usando cache invalidado por mtime.
 // M14: o computeFileSHA256 NÃO roda mais sob sha256CacheMu — o lock global
 // durante o hash serializava todos os ListArtifacts e bloqueava leitores do
@@ -447,6 +534,7 @@ func (c *Coordinator) Run(ctx context.Context) {
 				c.setLastError(err)
 			}
 			c.gcServingSessions(time.Now())
+			c.pruneStaleCaches()
 		case <-contentGCTicker.C:
 			c.CollectOrphanArtifacts()
 		case <-lanProbeWarmupTimer.C:

@@ -80,8 +80,13 @@ func (c *Coordinator) ListArtifacts() ([]P2PArtifactView, error) {
 		if strings.HasSuffix(name, ".importing") {
 			continue
 		}
-		// Ignorar sidecars .meta — são metadados, não artifacts.
-		if strings.HasSuffix(name, artifactMetaSuffix) {
+		// Ignorar montagens parciais (.partial) e sidecars de metadata (.meta,
+		// .meta.json) — não são artifacts transferíveis. O handler de download
+		// já os rejeitava, mas ListArtifacts os anunciava no catálogo, fazendo
+		// peers tentarem baixar um arquivo que nunca seria servido.
+		if strings.HasSuffix(name, ".partial") ||
+			strings.HasSuffix(name, artifactMetaSuffix) ||
+			strings.HasSuffix(name, artifactMetaSuffix+".json") {
 			continue
 		}
 		path := filepath.Join(dir, name)
@@ -561,51 +566,58 @@ func (c *Coordinator) emitPublishProgress(artifactName string, processed, total 
 	})
 }
 
-// generateManifestEager constrói e cacheia o manifest para um artifact recém-publicado.
-// Executado em goroutine para não bloquear o retorno ao chamador.
-// Usa manifestInFlight para evitar geração duplicada concorrente do mesmo artifact.
-func (c *Coordinator) generateManifestEager(path, artifactName string) {
+// ensureServingManifest devolve o manifest de um artifact para servir a peers,
+// usando o cache local quando válido e deduplicando gerações concorrentes via
+// manifestInFlight. Sem a dedup, N peers pedindo o manifest de um artifact não
+// cacheado disparavam N leituras/hashes completos do MESMO arquivo em paralelo
+// (carga de disco/CPU amplificada). Substitui o antigo generateManifestEager,
+// que era assíncrono, não tinha chamador e não servia ao handler de manifest.
+func (c *Coordinator) ensureServingManifest(ctx context.Context, path, artifactName string, chunkSize int64, cpuFn func() float64) (P2PChunkManifest, error) {
+	if c == nil || c.deps == nil {
+		return P2PChunkManifest{}, fmt.Errorf("coordinator indisponivel")
+	}
 	if c.transferServer == nil {
-		return
+		return P2PChunkManifest{}, fmt.Errorf("transfer server indisponivel")
 	}
 	manifestDir := c.transferServer.manifestDir()
 	if manifestDir == "" {
-		return
+		return P2PChunkManifest{}, fmt.Errorf("manifest dir indisponivel")
+	}
+	if cached := loadCachedManifest(manifestDir, artifactName, path); cached != nil && manifestMatchesFile(cached, path) {
+		return *cached, nil
+	}
+	if chunkSize <= 0 {
+		chunkSize = defaultChunkSizeBytes
 	}
 
-	// Dedup: se já existe uma goroutine gerando manifest para este artifact,
-	// esta goroutine aguarda a anterior terminar e retorna sem fazer nada.
 	readyCh := make(chan struct{})
 	if actual, loaded := c.manifestInFlight.LoadOrStore(artifactName, readyCh); loaded {
-		// Outra goroutine já está gerando — aguarda e retorna.
-		<-actual.(chan struct{})
-		return
+		// Outra goroutine está gerando: aguarda e tenta o cache deixado por ela.
+		select {
+		case <-actual.(chan struct{}):
+		case <-ctx.Done():
+			return P2PChunkManifest{}, ctx.Err()
+		}
+		if cached := loadCachedManifest(manifestDir, artifactName, path); cached != nil && manifestMatchesFile(cached, path) {
+			return *cached, nil
+		}
+		// Geração concorrente não cacheou: gera localmente (sem liderar).
+	} else {
+		defer func() {
+			close(readyCh)
+			c.manifestInFlight.Delete(artifactName)
+		}()
 	}
-	defer func() {
-		close(readyCh)
-		c.manifestInFlight.Delete(artifactName)
-	}()
 
 	artifactID := CanonicalArtifactID("", artifactName, "")
-	var chunkSize int64 = defaultChunkSizeBytes
-	if cfg := c.deps.GetP2PConfig(); cfg.ChunkSizeBytes > 0 {
-		chunkSize = cfg.ChunkSizeBytes
-	}
-	cpuFn := func() float64 { return c.cpuSampler.Sample() }
-	ctx := context.Background()
-	if c.deps.Context() != nil {
-		ctx = c.deps.Context()
-	}
 	manifest, err := buildChunkManifest(ctx, path, artifactID, chunkSize, nil, cpuFn)
 	if err != nil {
-		c.deps.Log(fmt.Sprintf("[p2p] aviso: falha ao gerar manifest eager para %s: %v", artifactName, err))
-		return
+		return P2PChunkManifest{}, err
 	}
 	if err := saveCachedManifest(manifestDir, artifactName, manifest); err != nil {
-		c.deps.Log(fmt.Sprintf("[p2p] aviso: falha ao salvar manifest eager para %s: %v", artifactName, err))
-		return
+		c.deps.Log(fmt.Sprintf("[p2p] aviso: falha ao salvar manifest de %s: %v", artifactName, err))
 	}
-	c.deps.Log(fmt.Sprintf("[p2p] manifest eager gerado: %s chunks=%d size=%d", artifactName, manifest.TotalChunks, manifest.TotalSize))
+	return manifest, nil
 }
 
 // CleanupStaleArtifacts remove artifacts do diretório local que não foram

@@ -57,6 +57,11 @@ const (
 	// candidatura antes de se auto-eleger, permitindo que peers remotos
 	// reivindiquem o lease e evitem fetchers duplicados.
 	electionGracePeriod = 2 * time.Second
+	// artifactFetchSuccessCooldown impede re-baixar um artifact recém-obtido
+	// caso ele volte a ser marcado "missing" (lease expirado ou candidatura
+	// remota rebaixando o estado). Sem este piso, uma detecção de presença que
+	// falhe momentaneamente re-dispara o download — amplificação do loop.
+	artifactFetchSuccessCooldown = 15 * time.Minute
 )
 
 // fetchStateMap guarda o estado atual de cada artifact neste grupo.
@@ -143,6 +148,12 @@ func canStartLocalElection(state *ArtifactFetchState, now time.Time, loadOK bool
 		return loadOK
 	}
 	if state.Status == "available" {
+		return false
+	}
+	// Respeita o backoff (após falha) e o cooldown (após sucesso). O re-seed
+	// chama runLocalElection diretamente e, sem isto, ignorava o NextAttemptUTC
+	// gravado — re-baixando o artifact imediatamente.
+	if !state.NextAttemptUTC.IsZero() && now.Before(state.NextAttemptUTC) {
 		return false
 	}
 	if state.Status == "fetching" && now.Before(state.LeaseUntil) {

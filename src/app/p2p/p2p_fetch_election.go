@@ -25,10 +25,12 @@ func (c *Coordinator) publishFetchHeartbeats(ctx context.Context) {
 		return
 	}
 
+	// Coleta os heartbeats sob o lock e publica FORA dele. O broadcast libp2p
+	// chama libp2pHostAndRegistry (que adquire c.mu); publicar dentro do lock
+	// segurava fetchStates.mu por toda a rodada e criava ordem de lock.
 	c.fetchStates.mu.Lock()
-	defer c.fetchStates.mu.Unlock()
-
 	now := time.Now()
+	heartbeats := make([]ArtifactFetchHeartbeat, 0, len(c.fetchStates.states))
 	for artifactID, state := range c.fetchStates.states {
 		if state.Status != "fetching" || !strings.EqualFold(state.OwnerPeerID, selfAgentID) {
 			continue
@@ -43,7 +45,7 @@ func (c *Coordinator) publishFetchHeartbeats(ctx context.Context) {
 		// peer re-elegeria um fetcher, causando download duplicado/abortado.
 		state.LeaseUntil = now.Add(artifactFetchLeaseTTL)
 
-		hb := ArtifactFetchHeartbeat{
+		heartbeats = append(heartbeats, ArtifactFetchHeartbeat{
 			ArtifactID:  artifactID,
 			ClientID:    state.ClientID,
 			OwnerPeerID: selfAgentID,
@@ -51,10 +53,14 @@ func (c *Coordinator) publishFetchHeartbeats(ctx context.Context) {
 			LeaseUntil:  state.LeaseUntil,
 			ProgressPct: state.ProgressPct,
 			UpdatedAt:   now.UTC(),
-		}
+		})
 
-		// Publicar via gossip — o canal exato depende do provider ativo.
-		// No modo libp2p, publicamos via broadcast no tópico de fetch.
+	}
+	c.fetchStates.mu.Unlock()
+
+	// Publicar via gossip — o canal exato depende do provider ativo.
+	// No modo libp2p, publicamos via broadcast no tópico de fetch.
+	for _, hb := range heartbeats {
 		c.publishFetchHeartbeatToGossip(ctx, hb)
 	}
 }
@@ -106,6 +112,20 @@ func (c *Coordinator) handleFetchCandidacy(ctx context.Context, msg ArtifactFetc
 	}
 
 	clientID := strings.TrimSpace(c.deps.GetAgentConfiguration().ClientID)
+
+	// Já temos o artifact localmente: não compete na eleição nem sobrescreve o
+	// estado "available". Sem esta guarda, uma candidatura remota rebaixava o
+	// estado para "missing"/"fetching" e o re-seed re-baixava o arquivo.
+	if c.artifactPresentLocally(artifactID, c.resolveArtifactNameByID(artifactID)) {
+		c.fetchStates.mutate(artifactID, clientID, func(state *ArtifactFetchState) {
+			state.Status = "available"
+			state.ProgressPct = 100
+			state.OwnerPeerID = selfAgentID
+			state.FailCount = 0
+			state.NextAttemptUTC = time.Time{}
+		})
+		return
+	}
 
 	// Construir candidatura local
 	load := c.CollectHostLoad()
@@ -172,6 +192,29 @@ func (c *Coordinator) runLocalElection(ctx context.Context, artifactID string) {
 	}
 
 	clientID := strings.TrimSpace(c.deps.GetAgentConfiguration().ClientID)
+
+	// Se o artifact já está em disco, não re-elege: o ID local pode divergir do
+	// ID anunciado pelos peers (download P2P sem sidecar .meta), e re-eleger
+	// re-baixaria o mesmo arquivo a cada expiração de lease.
+	if c.artifactPresentLocally(artifactID, c.resolveArtifactNameByID(artifactID)) {
+		c.fetchStates.mutate(artifactID, clientID, func(state *ArtifactFetchState) {
+			state.Status = "available"
+			state.ProgressPct = 100
+			state.FailCount = 0
+			state.NextAttemptUTC = time.Time{}
+		})
+		return
+	}
+
+	// Respeita o backoff/cooldown vigente antes de iniciar nova rodada de
+	// eleição: o re-seed chama runLocalElection direto e, sem esta guarda,
+	// ignorava o NextAttemptUTC gravado em falha ou após um fetch bem-sucedido.
+	if snap, ok := c.fetchStates.snapshot(artifactID); ok {
+		if !canStartLocalElection(&snap, time.Now(), c.isLoadOK()) {
+			return
+		}
+	}
+
 	load := c.CollectHostLoad()
 
 	candidate := ArtifactFetchCandidate{
@@ -206,12 +249,22 @@ func (c *Coordinator) runLocalElection(ctx context.Context, artifactID string) {
 	case <-time.After(electionGracePeriod):
 	}
 
-	// Auto-eleição: se não houver outro peer com lease válido, este peer se elege.
-	state := c.fetchStates.getOrCreate(artifactID, clientID)
-	if canStartLocalElection(state, time.Now(), c.isLoadOK()) {
+	// Auto-eleição: se não houver outro peer com lease válido, este peer se
+	// elege. A checagem e a reivindicação acontecem na MESMA seção crítica
+	// (fetchStates.mutate): sem isso, re-seed + ticker de pending eleições
+	// podiam passar juntos pelo check-then-set e disparar downloads duplicados
+	// do mesmo artifact (além de mutar campos fora do lock — A7).
+	var claimed bool
+	c.fetchStates.mutate(artifactID, clientID, func(state *ArtifactFetchState) {
+		if !canStartLocalElection(state, time.Now(), c.isLoadOK()) {
+			return
+		}
 		state.OwnerPeerID = selfAgentID
 		state.Status = "fetching"
 		state.LeaseUntil = time.Now().Add(artifactFetchLeaseTTL)
+		claimed = true
+	})
+	if claimed {
 		go c.executeFetch(ctx, artifactID, artifactID)
 	}
 }
@@ -265,8 +318,16 @@ func (c *Coordinator) executeFetch(ctx context.Context, artifactID string, artif
 		state.Status = "available"
 		state.ProgressPct = 100
 		state.FailCount = 0
-		state.NextAttemptUTC = time.Time{}
+		// Cooldown pós-sucesso: se o artifact voltar a ser marcado "missing"
+		// (lease expirado, candidatura remota), o re-seed só o re-baixa depois
+		// desta janela — defesa extra contra o loop de re-download.
+		state.NextAttemptUTC = time.Now().UTC().Add(artifactFetchSuccessCooldown)
 	})
+
+	// Persiste o artifactID lógico no sidecar .meta. Sem isso, ListArtifacts
+	// deriva "name:<arquivo>" e o re-seed deixa de reconhecer que este nó já
+	// possui o artifact — origem do loop de re-download/re-seed.
+	c.recordArtifactIdentity(view.ArtifactName, artifactID)
 
 	c.deps.Log(fmt.Sprintf("[p2p][fetch] artifact=%s concluido path=%s size=%d",
 		artifactID, view.ArtifactName, view.SizeBytes))
