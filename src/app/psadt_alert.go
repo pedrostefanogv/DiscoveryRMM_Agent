@@ -444,6 +444,8 @@ func (a *App) showPSADTProgress(session *psadt.Session, p PsadtAlertPayload) (st
 // Retorna:
 //   - "proceed"  — usuario confirmou (OK) ou o contador terminou.
 //   - "defer"    — usuario clicou em adiar/fechar.
+//   - "handled"  — reinicio ja entregue pelo RestartPrompt do PSADT (sem
+//     adiamento): o proprio dialogo dispara o reboot no fim do contador.
 //   - "fallback" — nao foi possivel exibir (PSADT indisponivel/erro).
 func (a *App) showPSADTFluentPowerCountdown(action string, delaySeconds int, message string) string {
 	if runtime.GOOS != "windows" {
@@ -467,6 +469,38 @@ func (a *App) showPSADTFluentPowerCountdown(action string, delaySeconds int, mes
 	body := strings.TrimSpace(message)
 	if body == "" {
 		body = defaultMsg
+	}
+
+	// Reinicio: usa o RestartPrompt do PSADT. Diferente do Welcome
+	// (-ForceCountdown + -AllowDefer), o RestartDialog NAO tem botao de
+	// adiamento — apenas "Reiniciar agora" e "Minimizar" — e, ao fim do
+	// contador (ou no clique), executa shutdown.exe /r /f /t 0, SEM a
+	// mensagem nativa do Windows "reiniciara em menos de um minuto".
+	if action == "restart" {
+		req := PSADTVisualNotificationRequest{
+			NotifType:               "restart_prompt",
+			Title:                   title,
+			Message:                 body,
+			Subtitle:                "Discovery Agent",
+			AppName:                 "Discovery Agent",
+			ButtonText:              okText,
+			RestartCountdownSeconds: delaySeconds,
+		}
+		if a != nil {
+			a.Logs.Append(fmt.Sprintf("[agent] %s-action iniciando RestartPrompt PSADT (sem adiamento) delay=%ds", action, delaySeconds))
+		}
+
+		result := a.ExecutePSADTVisualNotification(req)
+		// O RestartDialog executa o reboot no fim do contador; a acao ja esta
+		// entregue. Nao chamar executeSystemPowerAction (seria um segundo
+		// shutdown com o aviso nativo que queremos evitar).
+		if result.Success || strings.Contains(result.Output, "RestartPrompt encerrado") {
+			return "handled"
+		}
+		if a != nil {
+			a.Logs.Append(fmt.Sprintf("[agent] %s-action [WARN] RestartPrompt PSADT nao exibido (exit=%d): %s", action, result.ExitCode, strings.TrimSpace(result.Error)))
+		}
+		return "fallback"
 	}
 
 	req := PSADTVisualNotificationRequest{
@@ -546,7 +580,10 @@ func resolvePowerShellExe() string {
 
 // executeSystemPowerAction executa o restart/shutdown no SO.
 //
-// Usa shutdown.exe com diálogo nativo do Windows (countdown + botão "Fechar").
+// Usa shutdown.exe. delaySeconds > 0 agenda a ação (fluxo silencioso com
+// countdown nativo); delaySeconds == 0 executa imediatamente — usado quando o
+// aviso PSADT já deu o prazo ao usuário, evitando a mensagem nativa do Windows
+// "o computador será reiniciado em menos de um minuto".
 // force=true adiciona /f (fecha apps sem confirmação adicional).
 // message (se não vazia) é exibida no diálogo nativo via /c.
 func (a *App) executeSystemPowerAction(_ context.Context, action string, delaySeconds int, force bool, message string) (int, string, string) {
@@ -569,8 +606,8 @@ func (a *App) executeSystemPowerAction(_ context.Context, action string, delaySe
 		}
 	}
 
-	if delaySeconds <= 0 {
-		delaySeconds = 60
+	if delaySeconds < 0 {
+		delaySeconds = 0
 	}
 
 	args := []string{flag, "/t", fmt.Sprintf("%d", delaySeconds)}

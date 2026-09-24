@@ -197,8 +197,13 @@ func TestBuildPSADTVisualScript_RestartAndWelcome(t *testing.T) {
 	if strings.Contains(s, "Open-ADTSession") {
 		t.Fatalf("restart prompt nao deve abrir ADTSession (seria exibido async e sumiria)")
 	}
-	if !strings.Contains(s, "  Title = $psadtTitle") || !strings.Contains(s, "  Subtitle = $psadtSubtitle") {
+	if !strings.Contains(s, "  Title = $psadtTitle") || !strings.Contains(s, "  Subtitle = $restartSubtitle") {
 		t.Fatalf("restart prompt sem sessao exige Title/Subtitle explicitos")
+	}
+	// O RestartDialogOptions (BaseOptions) rejeita subtitle vazio OU so de
+	// espacos; o script precisa cair no AppName em vez de mandar " ".
+	if !strings.Contains(s, "$restartSubtitle = if ($psadtSubtitle -and $psadtSubtitle.Trim()) { $psadtSubtitle } else { $psadtAppName }") {
+		t.Fatalf("restart prompt deve usar fallback de subtitulo (AppName) para nao falhar no RestartDialogOptions")
 	}
 
 	welcome := PSADTVisualNotificationRequest{
@@ -447,6 +452,50 @@ func TestWritePSADTVisualBranding_CountdownStrings(t *testing.T) {
 		"ButtonLeftNoProcessesText",
 		"AutomaticStartCountdown",
 		"ButtonRightText = 'Fechar'",
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("strings.psd1 nao contem %q:\n%s", want, content)
+		}
+	}
+}
+
+// O staging do restart_prompt grava Stringsstrings.psd1 com a mensagem
+// personalizada e o rotulo do botao "Reiniciar agora" (o RestartDialog le
+// RestartPrompt.MessageRestart durante o contador).
+func TestWritePSADTVisualBranding_RestartStrings(t *testing.T) {
+	dir := t.TempDir()
+	scriptPath := filepath.Join(dir, "psadt-visual-test.ps1")
+	if err := os.WriteFile(scriptPath, []byte("# teste"), 0o644); err != nil {
+		t.Fatalf("falha ao criar script de teste: %v", err)
+	}
+
+	req := PSADTVisualNotificationRequest{
+		NotifType:  "restart_prompt",
+		Message:    "Reinicio agendado pela TI",
+		ButtonText: "Reiniciar agora",
+	}
+	files, err := writePSADTVisualBranding(req, scriptPath)
+	if err != nil {
+		t.Fatalf("falha inesperada: %v", err)
+	}
+	var stringsPath string
+	for _, f := range files {
+		if filepath.Base(f) == "strings.psd1" {
+			stringsPath = f
+		}
+	}
+	if stringsPath == "" {
+		t.Fatalf("strings.psd1 de staging ausente: %v", files)
+	}
+	data, err := os.ReadFile(stringsPath)
+	if err != nil {
+		t.Fatalf("falha ao ler strings gerado: %v", err)
+	}
+	content := string(data)
+	for _, want := range []string{
+		"RestartPrompt",
+		"Reinicio agendado pela TI",
+		"ButtonRestartNow = 'Reiniciar agora'",
 	} {
 		if !strings.Contains(content, want) {
 			t.Errorf("strings.psd1 nao contem %q:\n%s", want, content)

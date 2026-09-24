@@ -823,9 +823,15 @@ func buildPSADTVisualScript(req PSADTVisualNotificationRequest) (string, time.Du
 		// de uso unico encerra em seguida, o processo cliente e fechado e o
 		// prompt nunca aparece. Sem sessao, o cmdlet exibe de forma sincrona e
 		// so retorna quando o usuario responde ou o countdown termina.
-		body := "$restartParams = @{\n" +
+		// PSADT 4.1.8: o RestartDialogOptions (BaseOptions) rejeita Subtitle
+		// nulo/vazio OU SO DE ESPACOS via IsNullOrWhiteSpace. O default do
+		// defaultPSADTSubtitle (" ") dispara "Subtitle value is null or
+		// invalid" e o prompt nao aparece. AppName entra como fallback para
+		// garantir sempre um subtitulo valido (mesmo padrao do prompt).
+		body := "$restartSubtitle = if ($psadtSubtitle -and $psadtSubtitle.Trim()) { $psadtSubtitle } else { $psadtAppName }\n" +
+			"$restartParams = @{\n" +
 			"  Title = $psadtTitle\n" +
-			"  Subtitle = $psadtSubtitle\n" +
+			"  Subtitle = $restartSubtitle\n" +
 			"}\n" +
 			"if ($psadtRestartNoCountdown) { $restartParams.NoCountdown = $true } else { $restartParams.CountdownSeconds = $psadtRestartCountdown }\n" +
 			"Show-ADTInstallationRestartPrompt @restartParams\n" +
@@ -1162,6 +1168,50 @@ func writePSADTVisualBranding(req PSADTVisualNotificationRequest, scriptPath str
 			return nil, fmt.Errorf("falha ao gravar strings.psd1 de staging: %w", err)
 		}
 		created = append(created, stringsPath)
+	}
+
+	// Restart Prompt (NotifType "restart_prompt"): o RestartDialog usa
+	// RestartPrompt.MessageRestart como texto do contador e RestartPrompt.Message
+	// quando nao ha countdown. Sem isso o PSADT mostraria o texto default do
+	// modulo (ingles/localizado), ignorando a mensagem personalizada do
+	// comando de power. Tambem permite renomear o botao "Reiniciar agora".
+	if req.NotifType == "restart_prompt" {
+		message := strings.TrimSpace(req.Message)
+		okText := strings.TrimSpace(req.ButtonText)
+		if message != "" || okText != "" {
+			stringsDir := filepath.Join(filepath.Dir(scriptPath), "Strings")
+			if err := os.MkdirAll(stringsDir, 0o755); err != nil {
+				for _, p := range created {
+					_ = os.RemoveAll(p)
+				}
+				return nil, fmt.Errorf("falha ao criar diretorio de strings: %w", err)
+			}
+			created = append(created, stringsDir)
+			var sb strings.Builder
+			sb.WriteString("@{\n")
+			sb.WriteString("	RestartPrompt = @{\n")
+			if message != "" {
+				sb.WriteString("		MessageRestart = '" + psadt.EscapeSingleQuoted(message) + "'\n")
+				sb.WriteString("		Message = @{\n")
+				sb.WriteString("			Install   = '" + psadt.EscapeSingleQuoted(message) + "'\n")
+				sb.WriteString("			Repair    = '" + psadt.EscapeSingleQuoted(message) + "'\n")
+				sb.WriteString("			Uninstall = '" + psadt.EscapeSingleQuoted(message) + "'\n")
+				sb.WriteString("		}\n")
+			}
+			if okText != "" {
+				sb.WriteString("		ButtonRestartNow = '" + psadt.EscapeSingleQuoted(okText) + "'\n")
+			}
+			sb.WriteString("	}\n")
+			sb.WriteString("}\n")
+			stringsPath := filepath.Join(stringsDir, "strings.psd1")
+			if err := os.WriteFile(stringsPath, []byte(sb.String()), 0o644); err != nil {
+				for _, p := range created {
+					_ = os.RemoveAll(p)
+				}
+				return nil, fmt.Errorf("falha ao gravar strings.psd1 de staging: %w", err)
+			}
+			created = append(created, stringsPath)
+		}
 	}
 	return created, nil
 }

@@ -1861,13 +1861,18 @@ func (a *App) scheduleDeferredRestart(action string, pp powerCommandPayload) {
 	ds.timer = time.AfterFunc(time.Duration(deferMinutes)*time.Minute, func() {
 		a.Logs.Append(fmt.Sprintf("[agent] %s-defer [RETRY] defer=%d/%d — re-exibindo prompt", action, deferCount, maxDefers))
 		if pp.NotifyUser {
-			// Reexibe o aviso Fluent com contador; "defer" reagenda, o resto executa.
-			if a.showPSADTFluentPowerCountdown(action, delaySeconds, msg) == "defer" {
+			// Reexibe o aviso Fluent com contador; "defer" reagenda, "handled"
+			// (RestartPrompt) ja executa o reboot, o resto executa direto.
+			switch a.showPSADTFluentPowerCountdown(action, delaySeconds, msg) {
+			case "handled":
+				return
+			case "defer":
 				a.scheduleDeferredRestart(action, pp)
 				return
+			default:
+				a.executeSystemPowerAction(context.Background(), action, 0, pp.Force, msg)
+				return
 			}
-			a.executeSystemPowerAction(context.Background(), action, 0, pp.Force, msg)
-			return
 		}
 		// Sem aviso configurado: executa direto.
 		a.executeSystemPowerAction(context.Background(), action, delaySeconds, pp.Force, msg)

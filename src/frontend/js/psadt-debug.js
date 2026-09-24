@@ -281,14 +281,14 @@
   // buildPSADTVisualScript (app/psadt_debug_bridge.go) consome de cada tipo:
   // campos ignorados pelo cmdlet correspondente nao sao exibidos.
   var VISUAL_FIELD_GROUPS = {
-    // Titulo: Balloon (-BalloonTipTitle), Prompt (-Title) e Dialog Box.
-    // Nao se aplica a Progress/Restart/Welcome (usam textos padrao do PSADT).
-    title:    ["balloon_info", "balloon_warning", "balloon_error", "prompt_ok", "prompt_yesno", "prompt_continue", "prompt_input", "dialog_box", "countdown"],
+    // Titulo: Balloon (-BalloonTipTitle), Prompt (-Title), Dialog Box e
+    // Restart Prompt (-Title). Progress/Welcome usam textos padrao do PSADT.
+    title:    ["balloon_info", "balloon_warning", "balloon_error", "prompt_ok", "prompt_yesno", "prompt_continue", "prompt_input", "dialog_box", "restart_prompt", "countdown"],
     // Mensagem: Balloon (-BalloonTipText), Prompt (-Message), Progress (-StatusMessage), Dialog Box (-Text).
-    message:  ["balloon_info", "balloon_warning", "balloon_error", "prompt_ok", "prompt_yesno", "prompt_continue", "prompt_input", "progress", "dialog_box", "countdown"],
+    message:  ["balloon_info", "balloon_warning", "balloon_error", "prompt_ok", "prompt_yesno", "prompt_continue", "prompt_input", "progress", "dialog_box", "restart_prompt", "countdown"],
     // App Name: entra no Open-ADTSession; Dialog Box nao abre sessao.
     session:  ["balloon_info", "balloon_warning", "balloon_error", "prompt_ok", "prompt_yesno", "prompt_continue", "prompt_input", "progress", "restart_prompt", "welcome", "countdown"],
-    subtitle: ["prompt_ok", "prompt_yesno", "prompt_continue", "prompt_input", "progress", "countdown"],
+    subtitle: ["prompt_ok", "prompt_yesno", "prompt_continue", "prompt_input", "progress", "restart_prompt", "countdown"],
     balloon:  ["balloon_info", "balloon_warning", "balloon_error"],
     prompt:   ["prompt_ok", "prompt_yesno", "prompt_continue", "prompt_input"],
     promptButtons: ["prompt_ok", "prompt_yesno", "prompt_continue", "prompt_input"],

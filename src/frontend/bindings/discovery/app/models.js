@@ -836,6 +836,29 @@ export class PSADTVisualNotificationRequest {
              */
             this["promptNotTopMost"] = false;
         }
+        if (!("buttonText" in $$source)) {
+            /**
+             * CountdownNotice (NotifType "countdown") — textos do strings.psd1 staged.
+             * Vazios usam "OK" / "Fechar" / "Esta janela fechara automaticamente em:".
+             * @member
+             * @type {string}
+             */
+            this["buttonText"] = "";
+        }
+        if (!("buttonCloseText" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["buttonCloseText"] = "";
+        }
+        if (!("countdownLabel" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["countdownLabel"] = "";
+        }
         if (!("dialogButtons" in $$source)) {
             /**
              * Dialog (Show-ADTDialogBox)
@@ -923,8 +946,10 @@ export class PSADTVisualNotificationRequest {
         if (!("brandingIconPath" in $$source)) {
             /**
              * Branding (config.psd1 parcial + Initialize-ADTModule -ScriptDirectory).
-             * Aplica-se aos dialogs Fluent/Classic (prompts, progress, welcome, restart).
-             * Show-ADTDialogBox (Win32) e BalloonTip usam icones de sistema e ignoram isso.
+             * Aplica-se aos dialogs Fluent/Classic (prompts, progress, welcome,
+             * restart) E ao BalloonTip/toast: o PSADT usa Toolkit.CompanyName como
+             * TrayTitle (nome exibido na notificacao) e Assets.Logo como TrayIcon.
+             * Show-ADTDialogBox (Win32) usa icones de sistema e ignora isso.
              * PNG do logo (modo claro)
              * @member
              * @type {string}
@@ -962,6 +987,16 @@ export class PSADTVisualNotificationRequest {
              * @type {string}
              */
             this["fluentAccentColor"] = "";
+        }
+        if (!("companyName" in $$source)) {
+            /**
+             * CompanyName vira Toolkit.CompanyName: e o TrayTitle do toast/balloon e o
+             * texto default de subtitulos dos dialogs Fluent. Vazio usa o branding do
+             * agent (notificationBranding.companyName) ou "Discovery Agent".
+             * @member
+             * @type {string}
+             */
+            this["companyName"] = "";
         }
         if (!("closeProcesses" in $$source)) {
             /**
