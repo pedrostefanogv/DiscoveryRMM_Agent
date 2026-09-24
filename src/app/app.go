@@ -1807,11 +1807,12 @@ func (a *App) cancelDeferredRestart() {
 }
 
 // scheduleDeferredRestart agenda a re-exibição do prompt de restart após
-// deferMinutes. Se maxDefers for atingido, força o restart imediatamente.
+// deferMinutes. Por padrão NAO força o restart (maxDefers=0 = sem limite): a
+// acao so e forçada se o servidor enviar maxDefers > 0 explicitamente.
 func (a *App) scheduleDeferredRestart(action string, pp powerCommandPayload) {
 	if a.deferredRestart == nil {
 		a.deferredRestart = &deferredRestartState{
-			maxDefers:    3,
+			maxDefers:    0,
 			deferMinutes: 60,
 			message:      pp.Message,
 		}
@@ -1831,7 +1832,7 @@ func (a *App) scheduleDeferredRestart(action string, pp powerCommandPayload) {
 
 	ds.deferCount++
 
-	if ds.deferCount >= ds.maxDefers {
+	if ds.maxDefers > 0 && ds.deferCount >= ds.maxDefers {
 		ds.mu.Unlock()
 		a.Logs.Append(fmt.Sprintf("[agent] %s-defer [FORCE] maxDefers=%d atingido — restart forçado", action, ds.maxDefers))
 		go func() {
@@ -1859,13 +1860,17 @@ func (a *App) scheduleDeferredRestart(action string, pp powerCommandPayload) {
 
 	ds.timer = time.AfterFunc(time.Duration(deferMinutes)*time.Minute, func() {
 		a.Logs.Append(fmt.Sprintf("[agent] %s-defer [RETRY] defer=%d/%d — re-exibindo prompt", action, deferCount, maxDefers))
-		result := a.showDeferrableRestartPrompt(action, delaySeconds, msg, deferMinutes)
-		if result == "restart_now" || result == "fallback" {
-			a.executeSystemPowerAction(context.Background(), action, delaySeconds, false, msg)
-		} else {
-			// "defer" — re-agenda
-			a.scheduleDeferredRestart(action, pp)
+		if pp.NotifyUser {
+			// Reexibe o aviso Fluent com contador; "defer" reagenda, o resto executa.
+			if a.showPSADTFluentPowerCountdown(action, delaySeconds, msg) == "defer" {
+				a.scheduleDeferredRestart(action, pp)
+				return
+			}
+			a.executeSystemPowerAction(context.Background(), action, 0, pp.Force, msg)
+			return
 		}
+		// Sem aviso configurado: executa direto.
+		a.executeSystemPowerAction(context.Background(), action, delaySeconds, pp.Force, msg)
 	})
 
 	ds.mu.Unlock()

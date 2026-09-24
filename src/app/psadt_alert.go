@@ -436,191 +436,71 @@ func (a *App) showPSADTProgress(session *psadt.Session, p PsadtAlertPayload) (st
 	return "shown", ""
 }
 
-// showForceRestartBalloon exibe um BalloonTip Warning (não-bloqueante) do PSADT
-// informando que o restart forçado ocorrerá em delaySeconds.
-//
-// Diferente do diálogo interativo, este apenas notifica — o usuário não pode
-// cancelar nem adiar. O caller é responsável por aguardar o delay e executar
-// o shutdown.
+// showPSADTFluentPowerCountdown exibe o aviso Fluent de reinicio/desligamento
+// com CONTAGEM regressiva visivel e botoes de acao (mesmo visual da
+// "Notificacao Visual Nativa" -> countdown). Reaproveita o NotifType
+// "countdown" (Welcome + ForceCountdown) com textos customizados via staging.
 //
 // Retorna:
-//   - "shown" — balloon exibido com sucesso.
-//   - "skipped" — PSADT indisponível (disabled, sessão falhou, erro).
-func (a *App) showForceRestartBalloon(action string, delaySeconds int, message string) string {
+//   - "proceed"  — usuario confirmou (OK) ou o contador terminou.
+//   - "defer"    — usuario clicou em adiar/fechar.
+//   - "fallback" — nao foi possivel exibir (PSADT indisponivel/erro).
+func (a *App) showPSADTFluentPowerCountdown(action string, delaySeconds int, message string) string {
 	if runtime.GOOS != "windows" {
-		return "skipped"
-	}
-
-	psadtCfg := a.GetAgentConfiguration().PSADT
-	if psadtCfg.Enabled == nil || !*psadtCfg.Enabled {
-		a.Logs.Append(fmt.Sprintf("[agent] psadt-%s-force [SKIP] psadt.enabled=false", action))
-		return "skipped"
-	}
-
-	// Init pode demorar (Import-Module + Get-Module -ListAvailable).
-	// Mínimo de 60s, mesmo para balloon simples.
-	initTimeout := 60 * time.Second
-	initCtx, initCancel := context.WithTimeout(context.Background(), initTimeout)
-	defer initCancel()
-
-	client, err := psadt.NewClient(
-		psadt.WithTimeout(initTimeout),
-		psadt.WithMinModuleVersion(strings.TrimSpace(psadtCfg.RequiredVersion)),
-	)
-	if err != nil {
-		a.Logs.Append(fmt.Sprintf("[agent] psadt-%s-force [ERRO] NewClient: %v", action, err))
-		return "skipped"
-	}
-	defer client.Close()
-
-	session, err := client.OpenSessionWithContext(initCtx, pstypes.NewSessionConfig().
-		App("Discovery", "Discovery Agent", "1.0").
-		Install().
-		Interactive().
-		Build())
-	if err != nil {
-		a.Logs.Append(fmt.Sprintf("[agent] psadt-%s-force [ERRO] OpenSession: %v", action, err))
-		return "skipped"
-	}
-	a.registerPSADTSessionHooks(session, action+"-force")
-	defer func() {
-		closeCtx, closeCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer closeCancel()
-		_ = session.CloseWithContext(closeCtx, 0)
-	}()
-
-	balloonText := fmt.Sprintf("O computador será reiniciado em %d segundos.", delaySeconds)
-	if strings.TrimSpace(message) != "" {
-		balloonText = fmt.Sprintf("%s\n\nReinicialização em %d segundos.", message, delaySeconds)
-	}
-
-	err = session.ShowBalloonTip(pstypes.BalloonTipOptions{
-		BalloonTipTitle: "Reinicialização Forçada",
-		BalloonTipText:  balloonText,
-		BalloonTipIcon:  pstypes.BalloonWarning,
-		NoWait:          true,
-	})
-	if err != nil {
-		a.Logs.Append(fmt.Sprintf("[agent] psadt-%s-force [ERRO] ShowBalloonTip: %v", action, err))
-		return "skipped"
-	}
-
-	a.Logs.Append(fmt.Sprintf("[agent] psadt-%s-force [OK] balloon exibido delay=%ds", action, delaySeconds))
-	return "shown"
-}
-
-// showDeferrableRestartPrompt exibe um diálogo PSADT bloqueante com opção de adiar.
-//
-// Usa ShowDialogBox com botões Yes/No:
-//   - "Yes" → restart agora ("restart_now")
-//   - "No"  → adiar ("defer")
-//   - timeout (delaySeconds) → restart ("restart_now")
-//
-// Se PSADT indisponível, retorna "fallback" para o caller usar
-// DispatchNotification como alternativa.
-//
-// Retorna: "restart_now", "defer", ou "fallback".
-func (a *App) showDeferrableRestartPrompt(action string, delaySeconds int, message string, deferMinutes int) string {
-	if runtime.GOOS != "windows" {
-		return "restart_now"
-	}
-
-	psadtCfg := a.GetAgentConfiguration().PSADT
-	if psadtCfg.Enabled == nil || !*psadtCfg.Enabled {
-		a.Logs.Append(fmt.Sprintf("[agent] psadt-%s-defer [SKIP] psadt.enabled=false — fallback notification", action))
 		return "fallback"
 	}
-
 	if delaySeconds <= 0 {
-		delaySeconds = 300
+		delaySeconds = 60
 	}
 
-	dialogText := fmt.Sprintf("O computador precisa ser reiniciado.\n\nTempo restante: %d segundos.\n\nClique em Sim para reiniciar agora ou Não para adiar", delaySeconds)
-	if deferMinutes > 0 {
-		dialogText = fmt.Sprintf("O computador precisa ser reiniciado.\n\nTempo restante: %d segundos.\n\nClique em Sim para reiniciar agora ou Não para adiar por %d minutos", delaySeconds, deferMinutes)
-	}
-	if strings.TrimSpace(message) != "" {
-		dialogText = message
-		if deferMinutes > 0 {
-			dialogText += fmt.Sprintf("\n\nAdiamento disponível: %d minutos", deferMinutes)
-		}
-	}
-
-	// Tempo para inicializar o PSADT + executar o diálogo.
-	// NewClient faz Import-Module + Get-Module -ListAvailable, que pode
-	// demorar em máquinas lentas ou com muitos módulos no PSModulePath.
-	// Usamos pelo menos 120s para a inicialização.
-	initTimeout := time.Duration(delaySeconds+60) * time.Second
-	if initTimeout < 120*time.Second {
-		initTimeout = 120 * time.Second
+	title := "Reinicializacao Necessaria"
+	okText := "Reiniciar agora"
+	countdownLabel := "O computador sera reiniciado em:"
+	defaultMsg := fmt.Sprintf("O computador sera reiniciado automaticamente em %d segundos.", delaySeconds)
+	if action == "shutdown" {
+		title = "Desligamento Necessario"
+		okText = "Desligar agora"
+		countdownLabel = "O computador sera desligado em:"
+		defaultMsg = fmt.Sprintf("O computador sera desligado automaticamente em %d segundos.", delaySeconds)
 	}
 
-	// Context separado para inicialização: timeout maior que o diálogo
-	// porque o CheckModuleVersion (Get-Module -ListAvailable) pode ser lento.
-	initCtx, initCancel := context.WithTimeout(context.Background(), initTimeout)
-	defer initCancel()
-
-	a.Logs.Append(fmt.Sprintf("[agent] psadt-%s-defer [DIAG] inicializando PSADT client (initTimeout=%v delaySeconds=%d deferMinutes=%d)", action, initTimeout, delaySeconds, deferMinutes))
-
-	client, err := psadt.NewClient(
-		psadt.WithTimeout(initTimeout),
-		psadt.WithMinModuleVersion(strings.TrimSpace(psadtCfg.RequiredVersion)),
-	)
-	if err != nil {
-		a.Logs.Append(fmt.Sprintf("[agent] psadt-%s-defer [ERRO] NewClient: %v — fallback", action, err))
-		return "fallback"
-	}
-	defer client.Close()
-
-	a.Logs.Append(fmt.Sprintf("[agent] psadt-%s-defer [DIAG] PSADT client inicializado, abrindo sessão interativa", action))
-
-	session, err := client.OpenSessionWithContext(initCtx, pstypes.NewSessionConfig().
-		App("Discovery", "Discovery Agent", "1.0").
-		Install().
-		Interactive().
-		Build())
-	if err != nil {
-		a.Logs.Append(fmt.Sprintf("[agent] psadt-%s-defer [ERRO] OpenSession: %v — fallback", action, err))
-		return "fallback"
-	}
-	a.registerPSADTSessionHooks(session, action+"-defer")
-	defer func() {
-		closeCtx, c := context.WithTimeout(context.Background(), 10*time.Second)
-		defer c()
-		_ = session.CloseWithContext(closeCtx, 0)
-	}()
-
-	a.Logs.Append(fmt.Sprintf("[agent] psadt-%s-defer [EXEC] delay=%ds deferMinutes=%d via ShowDialogBox", action, delaySeconds, deferMinutes))
-
-	// Usa ShowDialogBox com Yes/No para oferecer escolha clara.
-	// Yes = reiniciar agora, No = adiar.
-	result, err := session.ShowDialogBox(pstypes.DialogBoxOptions{
-		Title:         "Reinicialização Necessária",
-		Text:          dialogText,
-		Buttons:       pstypes.ButtonsYesNo,
-		DefaultButton: pstypes.DialogDefaultFirst,
-		Icon:          pstypes.IconExclamation,
-		Timeout:       delaySeconds,
-		ExitOnTimeout: true,
-	})
-	if err != nil {
-		a.Logs.Append(fmt.Sprintf("[agent] psadt-%s-defer [ERRO] ShowDialogBox: %v — fallback", action, err))
-		return "fallback"
+	body := strings.TrimSpace(message)
+	if body == "" {
+		body = defaultMsg
 	}
 
-	resultStr := strings.ToLower(strings.TrimSpace(string(result)))
-	a.Logs.Append(fmt.Sprintf("[agent] psadt-%s-defer [OK] result=%s", action, resultStr))
+	req := PSADTVisualNotificationRequest{
+		NotifType:       "countdown",
+		Title:           title,
+		Message:         body,
+		Subtitle:        "Discovery Agent",
+		AppName:         "Discovery Agent",
+		ButtonText:      okText,
+		ButtonCloseText: "Adiar",
+		CountdownLabel:  countdownLabel,
+		PromptTimeout:   delaySeconds,
+	}
 
-	switch resultStr {
-	case "yes":
-		return "restart_now"
-	case "timeout":
-		a.Logs.Append(fmt.Sprintf("[agent] psadt-%s-defer timeout após %ds — restart forçado", action, delaySeconds))
-		return "restart_now"
-	default:
-		// "no" ou qualquer outro resultado → adiar
+	if a != nil {
+		a.Logs.Append(fmt.Sprintf("[agent] %s-action iniciando aviso Fluent com contador delay=%ds", action, delaySeconds))
+	}
+
+	result := a.ExecutePSADTVisualNotification(req)
+	output := result.Output
+	outputLower := strings.ToLower(output)
+
+	// O script so chega ao fim (marcador) se o usuario nao adiou.
+	if strings.Contains(output, "COUNTDOWN-PROCEED") {
+		return "proceed"
+	}
+	if strings.Contains(outputLower, "deferred") || strings.Contains(outputLower, "adiad") {
 		return "defer"
 	}
+
+	if a != nil {
+		a.Logs.Append(fmt.Sprintf("[agent] %s-action [WARN] aviso Fluent nao confirmou (exit=%d): %s", action, result.ExitCode, strings.TrimSpace(result.Error)))
+	}
+	return "fallback"
 }
 
 // resolveSystem32Exe returns the absolute path to an executable in System32.

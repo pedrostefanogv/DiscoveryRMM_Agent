@@ -852,7 +852,10 @@ func buildPSADTVisualScript(req PSADTVisualNotificationRequest) (string, time.Du
 			"  $welcomeParams.AllowDefer = $true\n" +
 			"  $welcomeParams.ForceCountdown = $psadtPromptTimeout\n" +
 			"  Show-ADTInstallationWelcome @welcomeParams\n" +
-			"  Write-Host 'CountdownNotice concluido'\n" +
+			// O PSADT NAO devolve o resultado do Welcome: no ADIAR ele encerra o
+			// processo (Close-ADTSession -> exit). Logo, chegar ao fim do script =
+			// usuario confirmou/contador terminou (prosseguir); sair antes = adiou.
+			"  Write-Host 'COUNTDOWN-PROCEED'\n" +
 			closeSession
 		timeout := time.Duration(req.PromptTimeout+60) * time.Second
 		if timeout < 5*time.Minute {

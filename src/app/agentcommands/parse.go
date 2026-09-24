@@ -164,6 +164,7 @@ type PowerCommandPayload struct {
 	Message      string `json:"message"`
 	DeferMinutes int    `json:"deferMinutes"` // minutos para adiar (default 60)
 	MaxDefers    int    `json:"maxDefers"`    // máximo de adiamentos permitidos (default 3)
+	NotifyUser   bool   `json:"notifyUser"`   // aviso Fluent com contador antes de agir
 }
 
 // IsPowerActionCommandType verifica se o cmdType é restart/reboot/shutdown.
@@ -242,12 +243,20 @@ func ParsePowerCommandPayload(payload any) PowerCommandPayload {
 		}
 	}
 
+	// NotifyUser: campo ausente = comportamento legado (notificar). A API atual
+	// sempre envia o campo; ausencia so ocorre com uma API mais antiga.
+	notifyUser := true
+	if _, ok := m["notifyUser"]; ok {
+		notifyUser = toBool(m["notifyUser"])
+	}
+
 	return PowerCommandPayload{
 		DelaySeconds: toInt(m["delaySeconds"]),
 		Force:        toBool(m["force"]),
 		Message:      toString(m["message"]),
 		DeferMinutes: toInt(m["deferMinutes"]),
 		MaxDefers:    toInt(m["maxDefers"]),
+		NotifyUser:   notifyUser,
 	}
 }
 

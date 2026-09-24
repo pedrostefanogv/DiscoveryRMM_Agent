@@ -126,20 +126,17 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 	}
 
 	// ── Power Actions: restart / shutdown ──
-	// Fluxo revisado (2026-07-17):
+	// Fluxo atual:
 	//
-	//   FORCE (force=true):
-	//     1. showForceRestartBalloon → PSADT BalloonTip Warning (não-bloqueante)
-	//     2. Aguarda delaySeconds no agent (permite abort com shutdown /a)
-	//     3. executeSystemPowerAction → shutdown.exe /r /t 0 /f (imediato)
+	//   notifyUser=true (aviso Fluent com contador):
+	//     1. showPSADTFluentPowerCountdown → mensagem + contador visivel + OK/Adiar
+	//     2. OK / fim do contador → executeSystemPowerAction imediato
+	//     3. Adiar → scheduleDeferredRestart (re-exibe apos deferMinutes)
+	//     4. PSADT indisponivel → fallback para DispatchNotification
 	//
-	//   NORMAL (force=false, com adiamento):
-	//     1. showDeferrableRestartPrompt → PSADT ShowDialogBox YesNo
-	//        - Yes / timeout → restart agora
-	//        - No → adiar (scheduleDeferredRestart)
-	//     2. Se restart_now: executeSystemPowerAction
-	//     3. Se defer: agenda timer para re-exibição após deferMinutes
-	//     4. Se PSADT indisponível: fallback para DispatchNotification
+	//   notifyUser=false (sem aviso):
+	//     1. executeSystemPowerAction direto com o delay (countdown nativo do
+	//        shutdown.exe /r|/s /t N)
 	//
 	if isPowerActionCommandType(cmdType) {
 		pp := parsePowerCommandPayload(payload)
@@ -165,62 +162,50 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 		// Cancela qualquer deferred restart pendente se receber novo comando
 		a.cancelDeferredRestart()
 
-		if pp.Force {
-			// ── FORCE: balloon informativo + delay + shutdown imediato ──
-			a.Logs.Append(fmt.Sprintf("[agent] %s-action [FORCE] delay=%ds force=true — modo balloon", action, pp.DelaySeconds))
-			a.showForceRestartBalloon(action, pp.DelaySeconds, pp.Message)
-
-			// Aguarda o delay no agent para dar tempo do usuário ver o balloon
-			// e potencialmente salvar trabalho.
-			select {
-			case <-time.After(time.Duration(pp.DelaySeconds) * time.Second):
-			case <-parent.Done():
-				return true, 1, "", "contexto cancelado durante delay de restart forçado"
-			}
-
-			exitCode, output, errText := a.executeSystemPowerAction(parent, action, 0, true, pp.Message)
-			return true, exitCode, output, errText
-		}
-
-		// ── NORMAL: diálogo com opção de adiar ──
-		result := a.showDeferrableRestartPrompt(action, pp.DelaySeconds, pp.Message, pp.DeferMinutes)
-		a.Logs.Append(fmt.Sprintf("[agent] %s-action [NORMAL] psadt-result=%s", action, result))
-
-		switch result {
-		case "restart_now":
-			exitCode, output, errText := a.executeSystemPowerAction(parent, action, pp.DelaySeconds, false, pp.Message)
-			return true, exitCode, output, errText
-
-		case "defer":
-			a.scheduleDeferredRestart(action, pp)
-			return true, 0, fmt.Sprintf("%s adiado pelo usuário (defer=%d/%d, %dmin)", action, 1, pp.MaxDefers, pp.DeferMinutes), ""
-
-		default:
-			// "fallback" — PSADT indisponível, usar DispatchNotification
-			a.Logs.Append(fmt.Sprintf("[agent] %s-action [FALLBACK] PSADT indisponível — usando DispatchNotification", action))
-			// Timeout mínimo de 60s para o fallback de confirmação,
-			// independente do delaySeconds recebido do servidor.
-			notifTimeout := pp.DelaySeconds
-			if notifTimeout < 60 {
-				notifTimeout = 60
-			}
-			notifResp := a.DispatchNotification(NotificationDispatchRequest{
-				NotificationID: fmt.Sprintf("restart-%d", time.Now().UnixNano()),
-				Title:          "Reinicialização Necessária",
-				Message:        pp.Message,
-				Mode:           "require_confirmation",
-				Severity:       "high",
-				EventType:      "system_restart",
-				Layout:         "modal",
-				TimeoutSeconds: notifTimeout,
-			})
-
-			if notifResp.Result == "approved" {
-				exitCode, output, errText := a.executeSystemPowerAction(parent, action, pp.DelaySeconds, false, pp.Message)
+		if pp.NotifyUser {
+			// ── AVISO FLUENTE: mensagem + contador visivel + OK/Adiar ──
+			a.Logs.Append(fmt.Sprintf("[agent] %s-action [NOTIFY] delay=%ds force=%t — aviso Fluent com contador", action, pp.DelaySeconds, pp.Force))
+			result := a.showPSADTFluentPowerCountdown(action, pp.DelaySeconds, pp.Message)
+			switch result {
+			case "proceed":
+				// OK ou contador terminou: executa imediatamente (o contador ja deu o prazo).
+				exitCode, output, errText := a.executeSystemPowerAction(parent, action, 0, pp.Force, pp.Message)
 				return true, exitCode, output, errText
+
+			case "defer":
+				a.scheduleDeferredRestart(action, pp)
+				return true, 0, fmt.Sprintf("%s adiado pelo usuário (defer=%d/%d, %dmin)", action, 1, pp.MaxDefers, pp.DeferMinutes), ""
+
+			default:
+				// "fallback" — PSADT indisponível: usa o pipeline nativo de notificação.
+				a.Logs.Append(fmt.Sprintf("[agent] %s-action [FALLBACK] PSADT indisponível — usando DispatchNotification", action))
+				notifTimeout := pp.DelaySeconds
+				if notifTimeout < 60 {
+					notifTimeout = 60
+				}
+				notifResp := a.DispatchNotification(NotificationDispatchRequest{
+					NotificationID: fmt.Sprintf("restart-%d", time.Now().UnixNano()),
+					Title:          "Reinicialização Necessária",
+					Message:        pp.Message,
+					Mode:           "require_confirmation",
+					Severity:       "high",
+					EventType:      "system_restart",
+					Layout:         "modal",
+					TimeoutSeconds: notifTimeout,
+				})
+
+				if notifResp.Result == "approved" {
+					exitCode, output, errText := a.executeSystemPowerAction(parent, action, 0, pp.Force, pp.Message)
+					return true, exitCode, output, errText
+				}
+				return true, 10, notifResp.Message, "usuário negou a reinicialização"
 			}
-			return true, 10, notifResp.Message, "usuário negou a reinicialização"
 		}
+
+		// ── SEM AVISO: executa direto com o delay (countdown nativo do shutdown.exe) ──
+		a.Logs.Append(fmt.Sprintf("[agent] %s-action [SILENT] delay=%ds force=%t — sem aviso ao usuário", action, pp.DelaySeconds, pp.Force))
+		exitCode, output, errText := a.executeSystemPowerAction(parent, action, pp.DelaySeconds, pp.Force, pp.Message)
+		return true, exitCode, output, errText
 	}
 
 	if a == nil || a.RemoteDebug == nil {
