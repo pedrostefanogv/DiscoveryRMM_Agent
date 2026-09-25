@@ -283,16 +283,22 @@ func spawnRemoteSessionWorkerAttempt(parent context.Context, payload map[string]
 	return nil
 }
 
-// workerDesktopName retorna o desktop alvo do spawn. Decisão do dono: o worker
-// é spawnado SEMPRE em winsta0\winlogon (inclusive com usuário logado). O
-// CheckDesktopSwitch (core/screen/desktop_switch.go) anexa o thread ao input
-// desktop ativo a cada frame, então a captura segue o desktop Default do
-// usuário e troca para Winlogon/UAC/lock sozinha — mesmo padrão do MeshAgent
-// (ILibProcessPipe.c SpawnTypes_WINLOGON → "Winsta0\\Winlogon").
-// O argumento source fica apenas para log/diagnóstico.
+// workerDesktopName retorna o desktop alvo do spawn.
+//
+// REGRESSÃO 2026-09-25: usar SEMPRE winsta0\winlogon com token de USUÁRIO
+// (source=user-session, fallback via WTSQueryUserToken) cria o processo, mas a
+// inicialização de DLLs de shell (shell32 — o init() do pacote
+// github.com/adrg/xdg chama SHGetKnownFolderPath) falha com "A dynamic link
+// library (DLL) initialization routine failed" e o worker morre no init().
+// O desktop winlogon é restrito a SYSTEM: só é seguro quando o token já está
+// na sessão correta (source=winlogon, do processo winlogon). Para token de
+// usuário usamos winsta0\default — o comportamento com o qual o remote
+// sempre funcionou.
 func workerDesktopName(source string) string {
-	_ = source
-	return `winsta0\winlogon`
+	if source == "winlogon" {
+		return `winsta0\winlogon`
+	}
+	return `winsta0\default`
 }
 
 // spawnWorkerInSession lança o binário com CreateProcessAsUser no token da
@@ -349,11 +355,10 @@ func spawnWorkerInSession(exe string, tok windows.Token, source string) (*os.Pro
 		cleanupSpawnPipes(stdinR, stdinW, serrR, serrW)
 		return nil, nil, nil, fmt.Errorf("cmdline inválida: %w", err)
 	}
-	// Desktop alvo: SEMPRE winsta0\winlogon (decisão do dono). O token do
-	// usuário logado (fallback) pode não ter acesso ao winlogon; nesse caso
-	// tenta o Default para não deixar a sessão remota sem worker.
+	// Desktop alvo definido por workerDesktopName. Fallback defensivo: se o
+	// CreateProcessAsUser falhar no desktop primário, tenta o Default.
 	desktopCandidates := []string{workerDesktopName(source)}
-	if source == "user-session" {
+	if desktopCandidates[0] != `winsta0\default` {
 		desktopCandidates = append(desktopCandidates, `winsta0\default`)
 	}
 
@@ -543,11 +548,13 @@ func acquireInteractiveSessionToken() (windows.Token, string, error) {
 	if tok, err := systemTokenForSession(consoleSession); err == nil {
 		// Checagem por INTEGRIDADE do token (System/High), não IsElevated —
 		// o que decide o UIPI é o rótulo de integridade, não o flag de UAC.
-		if !platform.IntegritySupportsUipiInjection(platform.TokenIntegrityLevel(tok)) {
+		il := platform.TokenIntegrityLevel(tok)
+		if !platform.IntegritySupportsUipiInjection(il) {
 			// Caller não-SYSTEM (ex.: UI standalone Medium): o token duplicado
 			// não pode ser elevado a System — cair para o fallback do usuário
 			// logado em vez de rotular um token Medium como "system-session"
 			// (UIPI bloquearia o input em janelas elevadas silenciosamente).
+			log.Printf("[remote-session] token SYSTEM/sessão descartado: integrity=%s (insuficiente para UIPI) — usando token do usuário", il)
 			tok.Close()
 		} else {
 			source := "system-session"
@@ -556,6 +563,8 @@ func acquireInteractiveSessionToken() (windows.Token, string, error) {
 			}
 			return tok, source, nil
 		}
+	} else {
+		log.Printf("[remote-session] token SYSTEM/sessão indisponível: %v — usando token do usuário (SetTokenInformation exige SeTcbPrivilege)", err)
 	}
 
 	// 2) Usuário logado na sessão do console (fallback). M-fix definitivo
