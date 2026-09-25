@@ -404,3 +404,46 @@ para token de usuário permanecia silenciosamente Medium.
 3. Falha de SendInput com errno=5 no log indica exatamente o mecanismo (janela elevada em primeiro plano + injetor de IL menor).
 
 **Arquivos alterados:** `src/app/core/platform/elevation_windows.go`, `src/app/remote_session_worker_spawn.go`, `src/app/remote_session_worker.go`, `src/app/core/screen/input_inject.go`, `src/app/core/remotesession/input_controller.go`, `src/app/remote_session_token_windows_test.go` (novo).
+
+---
+
+## 8. Sobrevivência ao reinício/desligamento NATIVO do Windows
+
+> Gatilho: usuário clica em Reiniciar/Desligar no menu Iniciar com o operador
+> em sessão remota. Antes, o remoto caía no primeiro aviso de shutdown do SCM
+> (o handler chamava ServiceShutdown imediatamente e o worker recebia stop).
+
+### 8.1 Mudanças
+
+| Item | Implementação |
+| --- | --- |
+| Grace de encerramento | app/servicemode_service_windows.go: aceita SERVICE_ACCEPT_PRESHUTDOWN; em PreShutdown/Shutdown reporta STOP_PENDING e MANTÉM core/NATS/remote debug/worker vivos por grace (default 30s, env DISCOVERY_SHUTDOWN_GRACE_SECONDS, 0..120). Stop (sc stop/update) continua imediato. Teardown idempotente (sync.Once). |
+| Preshutdown no SCM | app/core/platform/serviceconfig_windows.go: ConfigureServiceLifecycle faz ChangeServiceConfig2(SERVICE_CONFIG_PRESHUTDOWN_INFO) (grace + 5s) e reafirma start= auto, a cada start do serviço (best-effort, sem depender do NSIS). |
+| Boot mais cedo | app.go (runStagedStartup): no modo serviço o agentConn/NATS sobe em ~1s (DISCOVERY_SERVICE_AGENTCONN_DELAY_MS); inventário segue em 2s. |
+| Worker no winlogon | app/remote_session_worker_spawn.go: workerDesktopName sempre winsta0\winlogon; CheckDesktopSwitch segue o input desktop (Default do usuário). Fallback user-session tenta Default se o winlogon negar. |
+| Watchdog | remoteSessionWorkerProc.maybeRespawn: se o worker morre com sessão ativa e o serviço não está em teardown, relança até 3x por sessão (backoff 2s). |
+| Forçar/Aviso | app/agent_commands_power.go + psadt_alert.go + psadt_debug_bridge.go: force=true remove o botão Adiar (CountdownNoDefer) e ignora negativa no fallback; notifyUser=false usa timer interno + /t 0, sem diálogo nativo do Windows. |
+
+### 8.2 Logs de diagnóstico
+
+- [service] SCM PreShutdown recebido — grace de encerramento ativo por Ns
+- [service] grace de encerramento expirado — encerrando core
+- [remote-session] watchdog: worker morreu com sessão ativa — relançando
+- [agent] action [SILENT-TIMER] sem aviso nativo
+
+### 8.3 Premissa / validação pendente (VM)
+
+Confirmar que o PRESHUTDOWN é entregue antes do logoff das sessões (senão o
+ganho fica limitado ao fallback de 4s). Testar com usuário logado e sem usuário,
+captura/input no winlogon e sc stop (update) para garantir que segue rápido.
+
+### 8.4 Observações
+
+- O grace vale para QUALQUER shutdown/reinício (menu Iniciar, Windows Update ou
+  comando do próprio agente): o tempo total percebido é o atraso do comando mais
+  o grace. Para desligar o comportamento, use DISCOVERY_SHUTDOWN_GRACE_SECONDS=0.
+- Durante o grace o serviço envia heartbeat de STOP_PENDING (CheckPoint/WaitHint)
+  ao SCM a cada 5s, para não parecer travado.
+- O comando de power silencioso (notifyUser=false) usa timer interno no agente e
+  é cancelado/substituído quando chega um novo comando de power ou no shutdown
+  do agente.

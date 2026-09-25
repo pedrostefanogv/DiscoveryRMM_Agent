@@ -404,7 +404,9 @@ func TestBuildPSADTVisualScript_CountdownNotice(t *testing.T) {
 	script, _ := buildPSADTVisualScript(req)
 	for _, want := range []string{
 		"$welcomeParams.ForceCountdown = $psadtPromptTimeout",
+		"$welcomeParams.AllowDefer = $false",
 		"$welcomeParams.AllowDefer = $true",
+		"$psadtCountdownNoDefer",
 		"Show-ADTInstallationWelcome @welcomeParams",
 	} {
 		if !strings.Contains(script, want) {
@@ -413,6 +415,23 @@ func TestBuildPSADTVisualScript_CountdownNotice(t *testing.T) {
 	}
 	if strings.Contains(script, "Show-ADTInstallationPrompt") {
 		t.Fatalf("countdown nao deve usar Show-ADTInstallationPrompt (sem contador)")
+	}
+}
+
+// CountdownNoDefer (force=true) desliga o adiamento no script (AllowDefer
+// condicional) e e propagado pelo env do processo PSADT.
+func TestBuildPSADTVisualScript_CountdownNoDeferWiring(t *testing.T) {
+	req := PSADTVisualNotificationRequest{
+		NotifType:        "countdown",
+		PromptTimeout:    30,
+		CountdownNoDefer: true,
+	}
+	script, _ := buildPSADTVisualScript(req)
+	if !strings.Contains(script, "$psadtCountdownNoDefer = ($env:PSADT_COUNTDOWN_NO_DEFER -eq '1')") {
+		t.Fatalf("script countdown nao le PSADT_COUNTDOWN_NO_DEFER:\n%s", script)
+	}
+	if !strings.Contains(script, "if ($psadtCountdownNoDefer) { $welcomeParams.AllowDefer = $false }") {
+		t.Fatalf("script countdown nao condiciona AllowDefer ao CountdownNoDefer:\n%s", script)
 	}
 }
 

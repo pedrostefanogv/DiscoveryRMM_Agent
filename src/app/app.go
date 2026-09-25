@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -145,6 +146,13 @@ type App struct {
 	// restart adiado — usa campos minúsculos intensivamente e é acionado
 	// pela sessão de UI (powerCommandPayload). Revisão da migração lote 2.
 	deferredRestart *deferredRestartState
+
+	// silentPowerMu/silentPowerTimer controlam o timer interno do comando de
+	// power silencioso (notifyUser=false): o atraso é contado pelo agente (sem
+	// diálogo nativo do Windows) e pode ser cancelado/reagendado por um novo
+	// comando de power.
+	silentPowerMu    sync.Mutex
+	silentPowerTimer *time.Timer
 
 	// M4: fases de startup em andamento — o shutdown loga quantas ficaram
 	// pendentes ao fechar o SQLite após o timeout.
@@ -1305,6 +1313,15 @@ func (a *App) runStagedStartup(ctx context.Context) {
 		startupPhaseMaintenance = 12 * time.Second
 	)
 
+	// No modo serviço o agentConn/NATS é antecipado: o agente precisa ficar
+	// alcançável (comandos remotos) o quanto antes a partir do boot. O
+	// inventário continua atrasado para não saturar CPUs modestas.
+	agentConnDelay := startupPhaseAgentConn
+	if a.RuntimeFlags.ServiceMode {
+		agentConnDelay = serviceAgentConnDelay()
+		log.Printf("[startup] modo serviço: agentConn/NATS antecipado para %s", agentConnDelay)
+	}
+
 	// Phase 1: Inventory collection (heaviest operation — delayed 2s).
 	a.StartupWg.Add(1)
 	// M4: contador para o shutdown saber quantas fases ficaram pendentes.
@@ -1354,7 +1371,7 @@ func (a *App) runStagedStartup(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(startupPhaseAgentConn):
+		case <-time.After(agentConnDelay):
 		}
 
 		if a.DebugSvc != nil {
@@ -1370,6 +1387,7 @@ func (a *App) runStagedStartup(ctx context.Context) {
 			_ = a.onPostBootstrapProvisioned(ctx)
 		})
 
+		log.Printf("[startup] agentConn/NATS iniciando (serviceMode=%t, atraso=%s)", a.RuntimeFlags.ServiceMode, agentConnDelay)
 		a.AgentConn.Run(ctx)
 	})
 
@@ -1515,6 +1533,28 @@ func (a *App) runStagedStartup(ctx context.Context) {
 
 	// Apply startup throttle config from agent configuration (if already loaded).
 	a.applyStartupThrottleConfig()
+}
+
+// serviceAgentConnDelay resolve o atraso da fase agentConn/NATS no modo
+// serviço. Default 1s (agente alcançável o quanto antes no boot), com override
+// por DISCOVERY_SERVICE_AGENTCONN_DELAY_MS (0..60000 ms).
+func serviceAgentConnDelay() time.Duration {
+	const defaultMS = 1000
+	const maxMS = 60000
+
+	raw := strings.TrimSpace(os.Getenv("DISCOVERY_SERVICE_AGENTCONN_DELAY_MS"))
+	if raw == "" {
+		return defaultMS * time.Millisecond
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 0 {
+		log.Printf("[startup] DISCOVERY_SERVICE_AGENTCONN_DELAY_MS inválido (%q) — usando %dms", raw, defaultMS)
+		return defaultMS * time.Millisecond
+	}
+	if n > maxMS {
+		n = maxMS
+	}
+	return time.Duration(n) * time.Millisecond
 }
 
 // runPeriodicInventorySync collects full inventory and syncs to server.
@@ -1744,6 +1784,10 @@ func (a *App) shutdown() {
 		a.cancel()
 	}
 
+	// Cancela qualquer power silencioso pendente (timer interno) para não
+	// disparar shutdown.exe durante/depois do teardown.
+	a.cancelSilentPowerAction()
+
 	a.applyIdleMode(false)
 
 	if !a.RuntimeFlags.ServiceMode {
@@ -1893,7 +1937,7 @@ func (a *App) scheduleDeferredRestart(action string, pp powerCommandPayload) {
 		if pp.NotifyUser {
 			// Reexibe o aviso Fluent com contador; "defer" reagenda, "handled"
 			// (RestartPrompt) ja executa o reboot, o resto executa direto.
-			switch a.showPSADTFluentPowerCountdown(action, delaySeconds, msg) {
+			switch a.showPSADTFluentPowerCountdown(action, delaySeconds, msg, pp.Force) {
 			case "handled":
 				return
 			case "defer":
@@ -1904,8 +1948,15 @@ func (a *App) scheduleDeferredRestart(action string, pp powerCommandPayload) {
 				return
 			}
 		}
-		// Sem aviso configurado: executa direto.
-		a.executeSystemPowerAction(context.Background(), action, delaySeconds, pp.Force, msg)
+		// Sem aviso configurado: timer interno, sem diálogo nativo do Windows.
+		if delaySeconds > 0 {
+			silent := pp
+			silent.DelaySeconds = delaySeconds
+			silent.Message = msg
+			a.scheduleSilentPowerAction(action, silent)
+			return
+		}
+		a.executeSystemPowerAction(context.Background(), action, 0, pp.Force, "")
 	})
 
 	ds.mu.Unlock()

@@ -28,6 +28,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -42,13 +43,58 @@ var remoteSessionWorkers struct {
 	byID map[string]*remoteSessionWorkerProc
 }
 
-func init() { remoteSessionWorkers.byID = make(map[string]*remoteSessionWorkerProc) }
+// maxRemoteSessionRespawns limita quantas vezes o watchdog relança o worker de
+// uma mesma sessão dentro do serviço (evita loop em caso de falha persistente).
+const maxRemoteSessionRespawns = 3
+
+// respawnBudgetStore conta, por sessão, quantos relançamentos o watchdog ainda
+// pode fazer. Zerado quando chega um start explícito novo.
+type respawnBudgetStore struct {
+	mu   sync.Mutex
+	byID map[string]int
+}
+
+// remoteSessionRespawnBudget é o orçamento global do processo de serviço.
+var remoteSessionRespawnBudget respawnBudgetStore
+
+// reset zera o orçamento de uma sessão (novo start explícito).
+func (s *respawnBudgetStore) reset(id string, n int) {
+	s.mu.Lock()
+	s.byID[id] = n
+	s.mu.Unlock()
+}
+
+// consume decrementa o orçamento; false se esgotado (e limpa a entrada para
+// não acumular sessões encerradas no mapa).
+func (s *respawnBudgetStore) consume(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := s.byID[id]
+	if n <= 0 {
+		delete(s.byID, id)
+		return false
+	}
+	s.byID[id] = n - 1
+	return true
+}
+
+func init() {
+	remoteSessionWorkers.byID = make(map[string]*remoteSessionWorkerProc)
+	remoteSessionRespawnBudget.byID = make(map[string]int)
+}
 
 // remoteSessionWorkerProc representa um worker spawnado para uma sessão.
 type remoteSessionWorkerProc struct {
 	sessionID string
 	proc      *os.Process
 	stdin     *os.File
+	// payload/parent permitem relançar o worker se ele morrer com a sessão
+	// ativa (watchdog de logoff/shutdown).
+	payload map[string]any
+	parent  context.Context
+	// stopping marca encerramento explícito (stop/teardown) — o watchdog não
+	// relança nesse caso.
+	stopping atomic.Bool
 	// stderrDrainDone é fechado quando a goroutine de dreno do stderr termina.
 	stderrDrainDone chan struct{}
 	// handshake é fechado quando o worker confirma no stderr que entrou no
@@ -67,10 +113,17 @@ type remoteSessionWorkerProc struct {
 	done       chan struct{}
 }
 
-// spawnRemoteSessionWorker lança o worker na sessão interativa (ou winlogon
-// quando não há usuário) e escreve o payload do comando no stdin dele.
-// Retorna erro se não houver sessão interativa nem winlogon acessível.
+// spawnRemoteSessionWorker lança o worker na sessão interativa
+// (winsta0\winlogon, seguindo depois o input desktop ativo) e escreve o
+// payload do comando no stdin dele. Retorna erro se não houver sessão
+// interativa nem winlogon acessível.
 func spawnRemoteSessionWorker(parent context.Context, payload map[string]any) error {
+	return spawnRemoteSessionWorkerAttempt(parent, payload, false)
+}
+
+// spawnRemoteSessionWorkerAttempt é o spawn com controle de relançamento: um
+// isRespawn=true (watchdog) não reseta o orçamento de relançamentos da sessão.
+func spawnRemoteSessionWorkerAttempt(parent context.Context, payload map[string]any, isRespawn bool) error {
 	sessionID, _ := payload["sessionId"].(string)
 	if strings.TrimSpace(sessionID) == "" {
 		return fmt.Errorf("payload sem sessionId")
@@ -88,6 +141,10 @@ func spawnRemoteSessionWorker(parent context.Context, payload map[string]any) er
 		default:
 			return writeWorkerPayload(w, payload)
 		}
+	}
+
+	if !isRespawn {
+		remoteSessionRespawnBudget.reset(sessionID, maxRemoteSessionRespawns)
 	}
 
 	exe, err := os.Executable()
@@ -126,6 +183,8 @@ func spawnRemoteSessionWorker(parent context.Context, payload map[string]any) er
 		sessionID:       sessionID,
 		proc:            proc,
 		stdin:           stdin,
+		payload:         cloneWorkerPayload(payload),
+		parent:          parent,
 		stderrDrainDone: make(chan struct{}),
 		handshake:       make(chan struct{}),
 		done:            make(chan struct{}),
@@ -171,11 +230,16 @@ func spawnRemoteSessionWorker(parent context.Context, payload map[string]any) er
 			delete(remoteSessionWorkers.byID, sessionID)
 		}
 		remoteSessionWorkers.mu.Unlock()
+		// Watchdog: se o worker morreu com a sessão ativa (ex.: logoff no
+		// meio do shutdown), relança para o remoto voltar.
+		go w.maybeRespawn()
 	}()
 
-	// Monitor do parent: serviço parando → manda stop ao worker.
+	// Monitor do parent: serviço parando → manda stop ao worker e desarma o
+	// watchdog (encerramento explícito não relança).
 	go func() {
 		<-parent.Done()
+		w.stopping.Store(true)
 		_ = writeWorkerPayload(w, map[string]any{"action": "stop", "sessionId": sessionID})
 	}()
 
@@ -219,14 +283,16 @@ func spawnRemoteSessionWorker(parent context.Context, payload map[string]any) er
 	return nil
 }
 
-// workerDesktopName retorna o desktop alvo do spawn (log/diagnóstico).
-// Padrão MeshAgent (ILibProcessPipe.c): SpawnTypes_WINLOGON → "Winsta0\\Winlogon";
-// sessão de usuário (user-session ou system-session) → "Winsta0\\Default".
+// workerDesktopName retorna o desktop alvo do spawn. Decisão do dono: o worker
+// é spawnado SEMPRE em winsta0\winlogon (inclusive com usuário logado). O
+// CheckDesktopSwitch (core/screen/desktop_switch.go) anexa o thread ao input
+// desktop ativo a cada frame, então a captura segue o desktop Default do
+// usuário e troca para Winlogon/UAC/lock sozinha — mesmo padrão do MeshAgent
+// (ILibProcessPipe.c SpawnTypes_WINLOGON → "Winsta0\\Winlogon").
+// O argumento source fica apenas para log/diagnóstico.
 func workerDesktopName(source string) string {
-	if source == "winlogon" {
-		return `winsta0\winlogon`
-	}
-	return `winsta0\default`
+	_ = source
+	return `winsta0\winlogon`
 }
 
 // spawnWorkerInSession lança o binário com CreateProcessAsUser no token da
@@ -283,42 +349,61 @@ func spawnWorkerInSession(exe string, tok windows.Token, source string) (*os.Pro
 		cleanupSpawnPipes(stdinR, stdinW, serrR, serrW)
 		return nil, nil, nil, fmt.Errorf("cmdline inválida: %w", err)
 	}
-	desktop, err := windows.UTF16PtrFromString(workerDesktopName(source))
-	if err != nil {
-		cleanupSpawnPipes(stdinR, stdinW, serrR, serrW)
-		return nil, nil, nil, fmt.Errorf("desktop inválido: %w", err)
+	// Desktop alvo: SEMPRE winsta0\winlogon (decisão do dono). O token do
+	// usuário logado (fallback) pode não ter acesso ao winlogon; nesse caso
+	// tenta o Default para não deixar a sessão remota sem worker.
+	desktopCandidates := []string{workerDesktopName(source)}
+	if source == "user-session" {
+		desktopCandidates = append(desktopCandidates, `winsta0\default`)
 	}
 
-	si := &windows.StartupInfo{
-		Desktop:    desktop, // CRÍTICO: sem isso o filho fica na window station da sessão 0
-		Flags:      windows.STARTF_USESTDHANDLES | windows.STARTF_USESHOWWINDOW,
-		ShowWindow: windows.SW_HIDE,
-		StdInput:   windows.Handle(stdinR.Fd()),
-		StdOutput:  windows.Handle(serrW.Fd()),
-		StdErr:     windows.Handle(serrW.Fd()),
-	}
-	pi := new(windows.ProcessInformation)
-
-	err = windows.CreateProcessAsUser(
-		tok,
-		argv0,
-		cmdline,
-		nil,  // process attributes
-		nil,  // thread attributes
-		true, // inheritHandles (pipes stdin/stderr)
-		windows.CREATE_BREAKAWAY_FROM_JOB|windows.CREATE_NO_WINDOW,
-		nil, // environment (herda do SYSTEM — worker não usa vars custom)
-		nil, // current directory
-		si,
-		pi,
+	var (
+		spawned bool
+		lastErr error
+		pi      *windows.ProcessInformation
 	)
+	for _, desktopName := range desktopCandidates {
+		desktop, derr := windows.UTF16PtrFromString(desktopName)
+		if derr != nil {
+			lastErr = fmt.Errorf("desktop %q inválido: %w", desktopName, derr)
+			continue
+		}
+		si := &windows.StartupInfo{
+			Desktop:    desktop, // CRÍTICO: sem isso o filho fica na window station da sessão 0
+			Flags:      windows.STARTF_USESTDHANDLES | windows.STARTF_USESHOWWINDOW,
+			ShowWindow: windows.SW_HIDE,
+			StdInput:   windows.Handle(stdinR.Fd()),
+			StdOutput:  windows.Handle(serrW.Fd()),
+			StdErr:     windows.Handle(serrW.Fd()),
+		}
+		pi = new(windows.ProcessInformation)
+		lastErr = windows.CreateProcessAsUser(
+			tok,
+			argv0,
+			cmdline,
+			nil,  // process attributes
+			nil,  // thread attributes
+			true, // inheritHandles (pipes stdin/stderr)
+			windows.CREATE_BREAKAWAY_FROM_JOB|windows.CREATE_NO_WINDOW,
+			nil, // environment (herda do SYSTEM — worker não usa vars custom)
+			nil, // current directory
+			si,
+			pi,
+		)
+		if lastErr == nil {
+			spawned = true
+			break
+		}
+		log.Printf("[remote-session] spawn falhou no desktop %s (source=%s): %v — tentando próximo", desktopName, source, lastErr)
+	}
+
 	// O pai não precisa mais dos ends herdados pelo filho.
 	stdinR.Close()
 	serrW.Close()
-	if err != nil {
+	if !spawned {
 		stdinW.Close()
 		serrR.Close()
-		return nil, nil, nil, fmt.Errorf("CreateProcessAsUser (%s, desktop=%s): %w", source, workerDesktopName(source), err)
+		return nil, nil, nil, fmt.Errorf("CreateProcessAsUser (%s, desktop=%s): %w", source, strings.Join(desktopCandidates, ","), lastErr)
 	}
 
 	// Fecha o handle do thread primário (não usado).
@@ -389,6 +474,52 @@ func (w *remoteSessionWorkerProc) stderrTail() string {
 		return "(sem stderr)"
 	}
 	return strings.Join(w.stderrLast, " | ")
+}
+
+// cloneWorkerPayload copia o payload para o watchdog poder relançar o worker
+// sem compartilhar o mapa com o chamador (que pode mutá-lo).
+func cloneWorkerPayload(payload map[string]any) map[string]any {
+	cp := make(map[string]any, len(payload))
+	for k, v := range payload {
+		cp[k] = v
+	}
+	return cp
+}
+
+// maybeRespawn relança o worker se ele morreu com a sessão ainda ativa e o
+// serviço NÃO está encerrando. Limitado por maxRemoteSessionRespawns por sessão.
+func (w *remoteSessionWorkerProc) maybeRespawn() {
+	if w.stopping.Load() || w.parent == nil || w.parent.Err() != nil {
+		return
+	}
+
+	// Já existe um worker registrado para a sessão (ex.: um start novo)?
+	remoteSessionWorkers.mu.Lock()
+	_, exists := remoteSessionWorkers.byID[w.sessionID]
+	remoteSessionWorkers.mu.Unlock()
+	if exists {
+		return
+	}
+
+	if !remoteSessionRespawnBudget.consume(w.sessionID) {
+		log.Printf("[remote-session] watchdog: orçamento de relançamento esgotado (sessionId=%s) — não relança", w.sessionID)
+		return
+	}
+
+	select {
+	case <-w.parent.Done():
+		return
+	case <-time.After(2 * time.Second):
+	}
+
+	if w.stopping.Load() || w.parent.Err() != nil {
+		return
+	}
+
+	log.Printf("[remote-session] watchdog: worker morreu com sessão ativa — relançando sessionId=%s", w.sessionID)
+	if err := spawnRemoteSessionWorkerAttempt(w.parent, w.payload, true); err != nil {
+		log.Printf("[remote-session] watchdog: relançamento falhou (sessionId=%s): %v", w.sessionID, err)
+	}
 }
 
 // acquireInteractiveSessionToken obtém um token primário da sessão interativa:
@@ -651,6 +782,8 @@ func stopRemoteSessionWorker(sessionID string) {
 	if w == nil {
 		return
 	}
+	// Encerramento explícito: desarma o watchdog de relançamento.
+	w.stopping.Store(true)
 	// Worker já morto? Não espera o timeout à toa.
 	select {
 	case <-w.done:

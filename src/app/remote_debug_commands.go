@@ -129,19 +129,17 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 	// Fluxo atual:
 	//
 	//   notifyUser=true (aviso Fluent com contador):
-	//     restart → RestartPrompt do PSADT: contador SEM adiamento (apenas
-	//       "Reiniciar agora"/"Minimizar") e reboot imediato no fim
-	//       (shutdown.exe /r /f /t 0), sem o aviso nativo do Windows
-	//     shutdown → Welcome com contador: OK prossiga, Adiar reprograma
-	//     1. showPSADTFluentPowerCountdown → "handled" (restart) / "proceed" /
-	//        "defer" / "fallback"
+	//     restart → RestartPrompt do PSADT: contador SEM adiamento
+	//     shutdown → Welcome com contador; force=true remove o botao "Adiar"
+	//     1. showPSADTFluentPowerCountdown → "handled"/"proceed"/"defer"/"fallback"
 	//     2. OK / fim do contador → executeSystemPowerAction imediato
-	//     3. Adiar → scheduleDeferredRestart (re-exibe apos deferMinutes)
-	//     4. PSADT indisponivel → fallback para DispatchNotification
+	//     3. Adiar (somente force=false) → scheduleDeferredRestart
+	//     4. PSADT indisponivel → fallback para DispatchNotification; com
+	//        force=true o usuario nao bloqueia (executa mesmo se negar)
 	//
 	//   notifyUser=false (sem aviso):
-	//     1. executeSystemPowerAction direto com o delay (countdown nativo do
-	//        shutdown.exe /r|/s /t N)
+	//     1. timer interno do agente e executeSystemPowerAction com /t 0 —
+	//        NENHUM dialogo nativo do Windows (o /t N>0 e que o exibia)
 	//
 	if isPowerActionCommandType(cmdType) {
 		pp := parsePowerCommandPayload(payload)
@@ -164,13 +162,15 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 			pp.MaxDefers = 3
 		}
 
-		// Cancela qualquer deferred restart pendente se receber novo comando
+		// Cancela qualquer deferred restart ou power silencioso pendente se
+		// receber um novo comando de power.
 		a.cancelDeferredRestart()
+		a.cancelSilentPowerAction()
 
 		if pp.NotifyUser {
 			// ── AVISO FLUENTE: mensagem + contador visivel ──
 			a.Logs.Append(fmt.Sprintf("[agent] %s-action [NOTIFY] delay=%ds force=%t — aviso Fluent com contador", action, pp.DelaySeconds, pp.Force))
-			result := a.showPSADTFluentPowerCountdown(action, pp.DelaySeconds, pp.Message)
+			result := a.showPSADTFluentPowerCountdown(action, pp.DelaySeconds, pp.Message, pp.Force)
 			switch result {
 			case "handled":
 				// RestartPrompt do PSADT: o proprio dialogo dispara o reboot
@@ -205,6 +205,13 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 					TimeoutSeconds: notifTimeout,
 				})
 
+				if pp.Force {
+					// 'Forcar' ativo: o usuario nao pode bloquear a acao. Executa
+					// mesmo se negou/expirou o aviso.
+					a.Logs.Append(fmt.Sprintf("[agent] %s-action [FORCE] aviso respondeu %q — prosseguindo (force)", action, notifResp.Result))
+					exitCode, output, errText := a.executeSystemPowerAction(parent, action, 0, pp.Force, pp.Message)
+					return true, exitCode, output, errText
+				}
 				if notifResp.Result == "approved" {
 					exitCode, output, errText := a.executeSystemPowerAction(parent, action, 0, pp.Force, pp.Message)
 					return true, exitCode, output, errText
@@ -213,9 +220,16 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 			}
 		}
 
-		// ── SEM AVISO: executa direto com o delay (countdown nativo do shutdown.exe) ──
-		a.Logs.Append(fmt.Sprintf("[agent] %s-action [SILENT] delay=%ds force=%t — sem aviso ao usuário", action, pp.DelaySeconds, pp.Force))
-		exitCode, output, errText := a.executeSystemPowerAction(parent, action, pp.DelaySeconds, pp.Force, pp.Message)
+		// ── SEM AVISO: timer interno, SEM notificação nativa do Windows ──
+		// O /t N>0 do shutdown.exe é o que exibe o diálogo nativo; por isso o
+		// atraso passa a ser contado pelo agente e o SO é acionado com /t 0.
+		strategy := resolvePowerStrategy(pp)
+		a.Logs.Append(fmt.Sprintf("[agent] %s-action [SILENT] delay=%ds force=%t mode=%d — sem notificação nativa", action, pp.DelaySeconds, pp.Force, strategy.Mode))
+		if pp.DelaySeconds > 0 {
+			a.scheduleSilentPowerAction(action, pp)
+			return true, 0, fmt.Sprintf("%s agendado silenciosamente em %ds (sem aviso nativo)", action, pp.DelaySeconds), ""
+		}
+		exitCode, output, errText := a.executeSystemPowerAction(parent, action, 0, pp.Force, "")
 		return true, exitCode, output, errText
 	}
 

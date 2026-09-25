@@ -447,7 +447,7 @@ func (a *App) showPSADTProgress(session *psadt.Session, p PsadtAlertPayload) (st
 //   - "handled"  — reinicio ja entregue pelo RestartPrompt do PSADT (sem
 //     adiamento): o proprio dialogo dispara o reboot no fim do contador.
 //   - "fallback" — nao foi possivel exibir (PSADT indisponivel/erro).
-func (a *App) showPSADTFluentPowerCountdown(action string, delaySeconds int, message string) string {
+func (a *App) showPSADTFluentPowerCountdown(action string, delaySeconds int, message string, force bool) string {
 	if runtime.GOOS != "windows" {
 		return "fallback"
 	}
@@ -503,20 +503,28 @@ func (a *App) showPSADTFluentPowerCountdown(action string, delaySeconds int, mes
 		return "fallback"
 	}
 
+	// force=true → sem botao de adiamento (CountdownNoDefer): o usuario nao
+	// pode adiar o reinicio/desligamento.
+	closeText := "Adiar"
+	if force {
+		closeText = ""
+	}
+
 	req := PSADTVisualNotificationRequest{
-		NotifType:       "countdown",
-		Title:           title,
-		Message:         body,
-		Subtitle:        "Discovery Agent",
-		AppName:         "Discovery Agent",
-		ButtonText:      okText,
-		ButtonCloseText: "Adiar",
-		CountdownLabel:  countdownLabel,
-		PromptTimeout:   delaySeconds,
+		NotifType:        "countdown",
+		Title:            title,
+		Message:          body,
+		Subtitle:         "Discovery Agent",
+		AppName:          "Discovery Agent",
+		ButtonText:       okText,
+		ButtonCloseText:  closeText,
+		CountdownLabel:   countdownLabel,
+		PromptTimeout:    delaySeconds,
+		CountdownNoDefer: force,
 	}
 
 	if a != nil {
-		a.Logs.Append(fmt.Sprintf("[agent] %s-action iniciando aviso Fluent com contador delay=%ds", action, delaySeconds))
+		a.Logs.Append(fmt.Sprintf("[agent] %s-action iniciando aviso Fluent com contador delay=%ds force=%t", action, delaySeconds, force))
 	}
 
 	result := a.ExecutePSADTVisualNotification(req)
@@ -528,6 +536,10 @@ func (a *App) showPSADTFluentPowerCountdown(action string, delaySeconds int, mes
 		return "proceed"
 	}
 	if strings.Contains(outputLower, "deferred") || strings.Contains(outputLower, "adiad") {
+		if force {
+			// 'Forcar' ativo: adiamento nao e permitido — prossegue direto.
+			return "proceed"
+		}
 		return "defer"
 	}
 

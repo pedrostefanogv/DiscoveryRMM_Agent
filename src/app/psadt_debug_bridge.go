@@ -319,6 +319,9 @@ type PSADTVisualNotificationRequest struct {
 	ButtonText      string `json:"buttonText"`
 	ButtonCloseText string `json:"buttonCloseText"`
 	CountdownLabel  string `json:"countdownLabel"`
+	// CountdownNoDefer remove o botao de adiamento do aviso com contador
+	// (usado quando o comando de power vem com force=true).
+	CountdownNoDefer bool `json:"countdownNoDefer"`
 
 	// Dialog (Show-ADTDialogBox)
 	DialogButtons       string `json:"dialogButtons"` // Ok | OkCancel | AbortRetryIgnore | YesNoCancel | YesNo | RetryCancel | CancelTryContinue
@@ -533,6 +536,7 @@ func (a *App) ExecutePSADTVisualNotification(req PSADTVisualNotificationRequest)
 		"PSADT_RESTART_NO_COUNTDOWN="+boolEnvValue(req.RestartNoCountdown),
 		"PSADT_WELCOME_PROCESSES="+req.CloseProcesses,
 		"PSADT_WELCOME_ALLOW_DEFER="+boolEnvValue(req.AllowDefer),
+		"PSADT_COUNTDOWN_NO_DEFER="+boolEnvValue(req.CountdownNoDefer),
 		fmt.Sprintf("PSADT_WELCOME_DEFER_TIMES=%d", req.DeferTimes),
 		"PSADT_WELCOME_DEFER_DEADLINE="+strings.TrimSpace(req.DeferDeadline),
 		"PSADT_WELCOME_BLOCK_EXEC="+boolEnvValue(req.BlockExecution),
@@ -661,6 +665,7 @@ func buildPSADTVisualScript(req PSADTVisualNotificationRequest) (string, time.Du
 		"$psadtRestartNoCountdown = ($env:PSADT_RESTART_NO_COUNTDOWN -eq '1')\n" +
 		"$psadtWelcomeProcesses = $env:PSADT_WELCOME_PROCESSES\n" +
 		"$psadtWelcomeAllowDefer = ($env:PSADT_WELCOME_ALLOW_DEFER -eq '1')\n" +
+		"$psadtCountdownNoDefer = ($env:PSADT_COUNTDOWN_NO_DEFER -eq '1')\n" +
 		"$psadtWelcomeDeferTimes = [int]$env:PSADT_WELCOME_DEFER_TIMES\n" +
 		"$psadtWelcomeDeadline = $env:PSADT_WELCOME_DEFER_DEADLINE\n" +
 		"$psadtWelcomeBlockExec = ($env:PSADT_WELCOME_BLOCK_EXEC -eq '1')\n" +
@@ -855,7 +860,9 @@ func buildPSADTVisualScript(req PSADTVisualNotificationRequest) (string, time.Du
 			"$welcomeParams = @{}\n" +
 			"  $welcomeParams.Title = $psadtTitle\n" +
 			"  $welcomeParams.Subtitle = $psadtSubtitle\n" +
-			"  $welcomeParams.AllowDefer = $true\n" +
+			// force=true (CountdownNoDefer) usa o parameter set sem AllowDefer:
+			// mostra o contador com botao de prosseguir, SEM opcao de adiar.
+			"  if ($psadtCountdownNoDefer) { $welcomeParams.AllowDefer = $false } else { $welcomeParams.AllowDefer = $true }\n" +
 			"  $welcomeParams.ForceCountdown = $psadtPromptTimeout\n" +
 			"  Show-ADTInstallationWelcome @welcomeParams\n" +
 			// O PSADT NAO devolve o resultado do Welcome: no ADIAR ele encerra o
