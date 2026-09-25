@@ -231,9 +231,12 @@ type natsSubjects struct {
 	Result              string
 	Hardware            string
 	RemoteDebugLog      string
-	SyncPing            string
-	P2PDiscovery        string
-	P2PEvents           string
+	// RemoteDebugControl e o canal unico de controle do debug remoto: o agente
+	// PUBLICA pong/closed e ASSINA ping/setLevel no MESMO subject.
+	RemoteDebugControl string
+	SyncPing           string
+	P2PDiscovery       string
+	P2PEvents          string
 }
 
 // Options defines dependencies injected by the app layer.

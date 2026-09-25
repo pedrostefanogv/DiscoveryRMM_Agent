@@ -13,10 +13,16 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
-// Publisher publica mensagens de log em um transporte remoto.
+// Publisher publica mensagens (log e controle) em um transporte remoto e
+// assina o canal de controle da sessao.
 type Publisher interface {
 	Name() string
 	Publish(ctx context.Context, msg LogMessage) error
+	// PublishRaw publica bytes crus no subject informado (canal de controle).
+	PublishRaw(ctx context.Context, subject string, payload []byte) error
+	// Subscribe assina o subject e devolve o disposer. O erro NAO e fatal
+	// para o log: quem chama decide (o manager exige sucesso no start).
+	Subscribe(subject string, handler func([]byte)) (func(), error)
 	Close() error
 }
 
@@ -71,6 +77,70 @@ func (p *natsPublisher) Publish(_ context.Context, msg LogMessage) error {
 		return fmt.Errorf("servidor recusou o publish em %q: %w", p.subject, after)
 	}
 	return nil
+}
+
+// PublishRaw publica bytes crus no subject informado (canal de controle).
+// Mesma semantica de erro do Publish de log: LastError e sticky e por isso e
+// comparado antes/depois; timeout com conexao viva conta como sucesso porque
+// a mensagem ja esta no buffer do cliente NATS.
+func (p *natsPublisher) PublishRaw(_ context.Context, subject string, payload []byte) error {
+	subject = strings.TrimSpace(subject)
+	if subject == "" {
+		return fmt.Errorf("subject de controle ausente")
+	}
+	before := p.conn.LastError()
+	if err := p.conn.Publish(subject, payload); err != nil {
+		return err
+	}
+	if err := p.conn.FlushTimeout(flushTimeout); err != nil {
+		if p.conn.IsClosed() {
+			return err
+		}
+		return nil
+	}
+	after := p.conn.LastError()
+	if after != nil && !errors.Is(after, before) {
+		return fmt.Errorf("servidor recusou o publish em %q: %w", subject, after)
+	}
+	return nil
+}
+
+// Subscribe assina o canal de controle e devolve o disposer.
+func (p *natsPublisher) Subscribe(subject string, handler func([]byte)) (func(), error) {
+	subject = strings.TrimSpace(subject)
+	if subject == "" {
+		return nil, fmt.Errorf("subject de controle ausente")
+	}
+	if handler == nil {
+		return nil, fmt.Errorf("handler de controle ausente")
+	}
+	// O NATS entrega erros de permissao de SUBSCRIBE de forma ASSINCRONA:
+	// Subscribe() retorna nil mesmo quando o servidor vai responder
+	// -ERR Permissions Violation. Sem o flush + LastError abaixo, o fail-fast
+	// do start nao detectaria a ACL negada e a sessao abriria para morrer em
+	// InitialGrace (viewer nunca recebe pong). Comparar antes/depois evita
+	// reprovar a assinatura por um erro antigo e alheio (LastError e sticky).
+	before := p.conn.LastError()
+	sub, err := p.conn.Subscribe(subject, func(msg *nats.Msg) {
+		handler(msg.Data)
+	})
+	if err != nil {
+		return nil, err
+	}
+	if flushErr := p.conn.FlushTimeout(flushTimeout); flushErr == nil {
+		after := p.conn.LastError()
+		if after != nil && !errors.Is(after, before) {
+			_ = sub.Unsubscribe()
+			return nil, fmt.Errorf("servidor recusou a assinatura em %q: %w", subject, after)
+		}
+	}
+	// Timeout de flush com conexao viva: a assinatura permanece valida no
+	// cliente e sera registrada quando a conexao voltar.
+	return func() {
+		if sub != nil {
+			_ = sub.Unsubscribe()
+		}
+	}, nil
 }
 
 func (p *natsPublisher) Close() error {

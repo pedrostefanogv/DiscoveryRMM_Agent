@@ -43,6 +43,9 @@ func validateAgentIdentityJWTClaims(jwt string, subjects natsSubjects) error {
 		subjects.GlobalPong,
 		subjects.SyncPing,
 		subjects.P2PDiscovery,
+		// Canal unico de controle do remote debug: o agente ASSINA o mesmo
+		// subject em que publica (ping do viewer, setLevel do servidor).
+		subjects.RemoteDebugControl,
 		// Remote-session subjects use canonical UUIDs without hyphens.
 		// O agent precisa SUBSCREVER os subjects de input/control/term.in/files.req/
 		// proxy.req/signal para receber interação do viewer (mouse, teclado, terminal,
@@ -57,6 +60,7 @@ func validateAgentIdentityJWTClaims(jwt string, subjects natsSubjects) error {
 		subjects.Result,
 		subjects.Hardware,
 		subjects.RemoteDebugLog,
+		subjects.RemoteDebugControl,
 		// Remote-session subjects use canonical UUIDs without hyphens.
 		fmt.Sprintf("tenant.%s.site.%s.agent.%s.remote.session.>",
 			stripSubjectHyphens(subjects.ClientID),

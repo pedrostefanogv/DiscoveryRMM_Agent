@@ -9,35 +9,59 @@ import (
 
 // Command representa um comando de remote debug enviado pelo servidor.
 type Command struct {
-	Action       string       `json:"action"`
-	SessionID    string       `json:"sessionId"`
-	LogLevel     string       `json:"logLevel"`
-	StartedAtUTC string       `json:"startedAtUtc"`
-	ExpiresAtUTC string       `json:"expiresAtUtc"`
-	StoppedAtUTC string       `json:"stoppedAtUtc"`
-	Stream       StreamConfig `json:"stream"`
+	Action          string         `json:"action"`
+	SessionID       string         `json:"sessionId"`
+	LogLevel        string         `json:"logLevel"`
+	StartedAtUTC    string         `json:"startedAtUtc"`
+	ExpiresAtUTC    string         `json:"expiresAtUtc"`
+	MaxExpiresAtUTC string         `json:"maxExpiresAtUtc"`
+	StoppedAtUTC    string         `json:"stoppedAtUtc"`
+	Liveness        LivenessConfig `json:"liveness"`
+	Stream          StreamConfig   `json:"stream"`
+}
+
+// LivenessConfig parametriza o canal de controle da sessao. O servidor e a
+// fonte dos valores; quando ausentes (servidor antigo/omitido), valem os
+// defaults de NormalizeLiveness.
+type LivenessConfig struct {
+	PingIntervalSeconds    int `json:"pingIntervalSeconds"`
+	MissedPingsBeforeClose int `json:"missedPingsBeforeClose"`
+	InitialGraceSeconds    int `json:"initialGraceSeconds"`
+	KeepAliveSeconds       int `json:"keepAliveSeconds"`
 }
 
 // commandPayload é o payload bruto tolerante a null vindo do servidor.
 type commandPayload struct {
-	Action       *string        `json:"action"`
-	SessionID    *string        `json:"sessionId"`
-	LogLevel     *string        `json:"logLevel"`
-	StartedAtUTC *string        `json:"startedAtUtc"`
-	ExpiresAtUTC *string        `json:"expiresAtUtc"`
-	StoppedAtUTC *string        `json:"stoppedAtUtc"`
-	Stream       *streamPayload `json:"stream"`
+	Action          *string          `json:"action"`
+	SessionID       *string          `json:"sessionId"`
+	LogLevel        *string          `json:"logLevel"`
+	StartedAtUTC    *string          `json:"startedAtUtc"`
+	ExpiresAtUTC    *string          `json:"expiresAtUtc"`
+	MaxExpiresAtUTC *string          `json:"maxExpiresAtUtc"`
+	StoppedAtUTC    *string          `json:"stoppedAtUtc"`
+	Liveness        *livenessPayload `json:"liveness"`
+	Stream          *streamPayload   `json:"stream"`
+}
+
+// livenessPayload e o payload bruto tolerante a null do bloco liveness.
+type livenessPayload struct {
+	PingIntervalSeconds    *int `json:"pingIntervalSeconds"`
+	MissedPingsBeforeClose *int `json:"missedPingsBeforeClose"`
+	InitialGraceSeconds    *int `json:"initialGraceSeconds"`
+	KeepAliveSeconds       *int `json:"keepAliveSeconds"`
 }
 
 // StreamConfig configura o transporte de stream de logs.
 type StreamConfig struct {
-	NatsSubject string `json:"natsSubject"`
-	NatsWssURL  string `json:"natsWssUrl"`
+	NatsSubject        string `json:"natsSubject"`
+	NatsWssURL         string `json:"natsWssUrl"`
+	NatsControlSubject string `json:"natsControlSubject"`
 }
 
 type streamPayload struct {
-	NatsSubject *string `json:"natsSubject"`
-	NatsWssURL  *string `json:"natsWssUrl"`
+	NatsSubject        *string `json:"natsSubject"`
+	NatsWssURL         *string `json:"natsWssUrl"`
+	NatsControlSubject *string `json:"natsControlSubject"`
 }
 
 // LogMessage é a mensagem de log publicada no stream remoto.
@@ -74,19 +98,56 @@ func ParseCommand(payload any) (Command, error) {
 		return Command{}, err
 	}
 	cmd := Command{
-		Action:       strings.TrimSpace(ptrStringOrEmpty(raw.Action)),
-		SessionID:    strings.TrimSpace(ptrStringOrEmpty(raw.SessionID)),
-		LogLevel:     strings.TrimSpace(ptrStringOrEmpty(raw.LogLevel)),
-		StartedAtUTC: strings.TrimSpace(ptrStringOrEmpty(raw.StartedAtUTC)),
-		ExpiresAtUTC: strings.TrimSpace(ptrStringOrEmpty(raw.ExpiresAtUTC)),
-		StoppedAtUTC: strings.TrimSpace(ptrStringOrEmpty(raw.StoppedAtUTC)),
+		Action:          strings.TrimSpace(ptrStringOrEmpty(raw.Action)),
+		SessionID:       strings.TrimSpace(ptrStringOrEmpty(raw.SessionID)),
+		LogLevel:        strings.TrimSpace(ptrStringOrEmpty(raw.LogLevel)),
+		StartedAtUTC:    strings.TrimSpace(ptrStringOrEmpty(raw.StartedAtUTC)),
+		ExpiresAtUTC:    strings.TrimSpace(ptrStringOrEmpty(raw.ExpiresAtUTC)),
+		MaxExpiresAtUTC: strings.TrimSpace(ptrStringOrEmpty(raw.MaxExpiresAtUTC)),
+		StoppedAtUTC:    strings.TrimSpace(ptrStringOrEmpty(raw.StoppedAtUTC)),
 	}
 	if raw.Stream != nil {
 		cmd.Stream.NatsSubject = strings.TrimSpace(ptrStringOrEmpty(raw.Stream.NatsSubject))
 		cmd.Stream.NatsWssURL = strings.TrimSpace(ptrStringOrEmpty(raw.Stream.NatsWssURL))
+		cmd.Stream.NatsControlSubject = strings.TrimSpace(ptrStringOrEmpty(raw.Stream.NatsControlSubject))
 	}
+	cmd.Liveness = NormalizeLiveness(raw.Liveness)
 	cmd.LogLevel = NormalizeLevel(cmd.LogLevel)
 	return cmd, nil
+}
+
+// NormalizeLiveness aplica defaults seguros quando o servidor nao envia o
+// bloco de liveness (ou envia valores invalidos).
+func NormalizeLiveness(raw *livenessPayload) LivenessConfig {
+	cfg := LivenessConfig{
+		PingIntervalSeconds:    DefaultPingIntervalSeconds,
+		MissedPingsBeforeClose: DefaultMissedPingsBeforeClose,
+		InitialGraceSeconds:    DefaultInitialGraceSeconds,
+		KeepAliveSeconds:       DefaultKeepAliveSeconds,
+	}
+	if raw == nil {
+		return cfg
+	}
+	if v := ptrIntOrZero(raw.PingIntervalSeconds); v > 0 {
+		cfg.PingIntervalSeconds = v
+	}
+	if v := ptrIntOrZero(raw.MissedPingsBeforeClose); v > 0 {
+		cfg.MissedPingsBeforeClose = v
+	}
+	if v := ptrIntOrZero(raw.InitialGraceSeconds); v > 0 {
+		cfg.InitialGraceSeconds = v
+	}
+	if v := ptrIntOrZero(raw.KeepAliveSeconds); v > 0 {
+		cfg.KeepAliveSeconds = v
+	}
+	return cfg
+}
+
+func ptrIntOrZero(v *int) int {
+	if v == nil {
+		return 0
+	}
+	return *v
 }
 
 func decodePayloadBytes(payload any) ([]byte, error) {

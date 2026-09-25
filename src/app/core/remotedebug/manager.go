@@ -6,6 +6,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"discovery/app/core/sessionlive"
 )
 
 // queuedLine é uma linha de log enfileirada para publicação.
@@ -16,10 +18,32 @@ type queuedLine struct {
 
 // Session representa uma sessão de remote debug ativa.
 type Session struct {
-	sessionID   string
-	agentID     string
-	minLevel    int
-	deadline    time.Time
+	sessionID      string
+	agentID        string
+	controlSubject string
+	minLevel       int
+	// levelMu protege minLevel: o setLevel chega pelo canal de controle
+	// (goroutine do NATS) enquanto o enqueue de logs lê o nível.
+	levelMu   sync.RWMutex
+	startedAt time.Time
+	deadline  time.Time
+	// maxDeadline é o teto absoluto (startedAt + duração configurada na
+	// instalação). A renovação nunca ultrapassa este instante.
+	maxDeadline time.Time
+	// ttl é a janela de renovação deslizante.
+	ttl time.Duration
+	// live rastreia a presença do viewer (ping/pong) e calcula o deadline.
+	live *sessionlive.Peer
+	// runner roda o loop de liveness (ping + avaliação de ausência).
+	runner *sessionlive.Runner
+	// controlOffs guarda os disposers das assinaturas do canal de controle.
+	controlOffs []func()
+	// controlSeq numerar os frames do canal de controle (idempotencia/dedupe).
+	controlSeqMu sync.Mutex
+	controlSeq   uint64
+	// transportMu protege activeIndex: publishLoop, o handler do controle e o
+	// runner podem publicar ao mesmo tempo.
+	transportMu sync.Mutex
 	logQueue    chan queuedLine
 	cancel      context.CancelFunc
 	unsubscribe func()
@@ -30,6 +54,27 @@ type Session struct {
 	// agent-service.log (que já passa de 8 MB), escondendo o problema real.
 	// Acessado apenas pelo goroutine do publishLoop — não precisa de lock.
 	publishFailureLogged bool
+}
+
+// SessionMinLevel lê o nível mínimo atual da sessão com proteção de lock.
+func (s *Session) SessionMinLevel() int {
+	if s == nil {
+		return LevelValue("info")
+	}
+	s.levelMu.RLock()
+	defer s.levelMu.RUnlock()
+	return s.minLevel
+}
+
+// SetMinLevel aplica um novo nível mínimo (usado pelo setLevel do canal de
+// controle, sem reiniciar a sessão).
+func (s *Session) SetMinLevel(level int) {
+	if s == nil {
+		return
+	}
+	s.levelMu.Lock()
+	s.minLevel = level
+	s.levelMu.Unlock()
 }
 
 // Deps são as dependências injetadas no Manager.
@@ -185,7 +230,20 @@ func (m *Manager) startSession(cmd Command) error {
 
 	m.logf(fmt.Sprintf("[remote-debug] iniciando sessao: sessionId=%s agentId=%s clientId=%s siteId=%s subjectRaw=%q", sessionID, agentID, clientID, siteID, strings.TrimSpace(cmd.Stream.NatsSubject)))
 
-	deadline := ComputeDeadline(strings.TrimSpace(cmd.ExpiresAtUTC), time.Now().UTC())
+	now := time.Now().UTC()
+	deadline := ComputeDeadline(strings.TrimSpace(cmd.ExpiresAtUTC), now)
+	maxDeadline := ComputeMaxDeadline(strings.TrimSpace(cmd.MaxExpiresAtUTC), now, deadline)
+	renewalTTL := deadline.Sub(now)
+	if renewalTTL <= 0 {
+		renewalTTL = DefaultSessionCap
+	}
+
+	controlSubject, err := ResolveControlSubjectPrefixed(cmd.Stream, clientID, siteID, agentID)
+	if err != nil {
+		m.logf(fmt.Sprintf("[remote-debug] FALHA ao iniciar sessao: %v", err))
+		return err
+	}
+
 	publishers, err := BuildPublishers(cfg, cmd.Stream, token, clientID, siteID)
 	if err != nil {
 		m.logf(fmt.Sprintf("[remote-debug] FALHA ao criar publishers: %v", err))
@@ -197,20 +255,70 @@ func (m *Manager) startSession(cmd Command) error {
 		lifecycleBase = context.Background()
 	}
 	ctx, cancel := context.WithCancel(lifecycleBase)
+
+	liveness := cmd.Liveness
+	livePeer := sessionlive.NewPeer(sessionlive.Config{
+		Interval:      time.Duration(liveness.PingIntervalSeconds) * time.Second,
+		MissesAllowed: liveness.MissedPingsBeforeClose,
+		InitialGrace:  time.Duration(liveness.InitialGraceSeconds) * time.Second,
+		MaxDeadline:   maxDeadline,
+	}, now)
+
 	session := &Session{
-		sessionID:  sessionID,
-		agentID:    agentID,
-		minLevel:   LevelValue(cmd.LogLevel),
-		deadline:   deadline,
-		logQueue:   make(chan queuedLine, QueueSize),
-		cancel:     cancel,
-		publishers: publishers,
+		sessionID:      sessionID,
+		agentID:        agentID,
+		controlSubject: controlSubject,
+		minLevel:       LevelValue(cmd.LogLevel),
+		startedAt:      now,
+		deadline:       deadline,
+		maxDeadline:    maxDeadline,
+		ttl:            renewalTTL,
+		live:           livePeer,
+		logQueue:       make(chan queuedLine, QueueSize),
+		cancel:         cancel,
+		publishers:     publishers,
+	}
+
+	// Canal de controle: assina o MESMO subject em cada transporte. Fail-fast:
+	// sem assinatura a sessao morreria em InitialGrace — melhor recusar o start
+	// com erro claro (ACL do servidor desatualizada) do que abrir uma sessao
+	// que se autodestroi. Nao ha retrocompatibilidade com servidores antigos.
+	for _, pub := range publishers {
+		off, subErr := pub.Subscribe(controlSubject, func(data []byte) {
+			m.handleControlFrame(session, data)
+		})
+		if subErr != nil {
+			m.logf(fmt.Sprintf("[remote-debug] assinatura do canal de controle falhou em %s: %v", pub.Name(), subErr))
+			continue
+		}
+		session.controlOffs = append(session.controlOffs, off)
+	}
+	if len(session.controlOffs) == 0 {
+		for _, pub := range publishers {
+			_ = pub.Close()
+		}
+		cancel()
+		errText := fmt.Sprintf("ping subscribe indisponivel em %s — ACL do servidor desatualizada", controlSubject)
+		m.logf("[remote-debug] FALHA ao iniciar sessao: " + errText)
+		return fmt.Errorf("%s", errText)
 	}
 
 	unsubscribe := m.replayLogs(func(line string) {
 		m.enqueueWithSession(sessionID, line, DetectLevel(line))
 	})
 	session.unsubscribe = unsubscribe
+
+	session.runner = sessionlive.NewRunner(livePeer, sessionlive.RunnerOptions{
+		OnTick: func(context.Context) {
+			m.sendControl(session, ControlTypePing, nil)
+			m.extendDeadline(session)
+		},
+		OnPeerLost: func(reason string) {
+			m.logf(fmt.Sprintf("[remote-debug] viewer ausente (%s): encerrando sessao %s", reason, sessionID))
+			m.stopSession(sessionID, "viewer-timeout")
+		},
+		Logf: m.logf,
+	})
 
 	m.mu.Lock()
 	previous := m.activeSession
@@ -221,34 +329,120 @@ func (m *Manager) startSession(cmd Command) error {
 		m.stopGivenSession(previous, "replaced")
 	}
 
-	m.logf(fmt.Sprintf("[remote-debug] sessao iniciada: sessionId=%s deadline=%s transport=%s", sessionID, deadline.Format(time.RFC3339), session.publishers[0].Name()))
+	m.logf(fmt.Sprintf("[remote-debug] sessao iniciada: sessionId=%s deadline=%s maxDeadline=%s control=%s transport=%s", sessionID, deadline.Format(time.RFC3339), maxDeadline.Format(time.RFC3339), controlSubject, session.publishers[0].Name()))
 	go m.publishLoop(ctx, session)
-	go m.autoStopAtDeadline(sessionID, deadline)
+	go session.runner.Run(ctx)
 	return nil
 }
 
-func (m *Manager) autoStopAtDeadline(sessionID string, deadline time.Time) {
-	wait := time.Until(deadline)
-	if wait < 0 {
-		wait = 0
+// extendDeadline estende o deadline da sessão enquanto o viewer estiver vivo,
+// sem ultrapassar maxDeadline. Ao atingir o teto, encerra com max-duration.
+func (m *Manager) extendDeadline(session *Session) {
+	if session == nil || session.live == nil {
+		return
 	}
-	timer := time.NewTimer(wait)
-	defer timer.Stop()
-	<-timer.C
-	// Só para a sessão se ela ainda for a ativa com o MESMO sessionID E o MESMO
-	// deadline. Se o servidor reabriu a sessão com o mesmo ID mas um deadline
-	// mais longo, a sessão antiga já foi parada por stopGivenSession("replaced")
-	// no startSession, e uma nova sessão com novo deadline foi criada — o timer
-	// antigo não deve parar a nova prematuramente.
+	now := time.Now().UTC()
+	if session.live.ExceededMaxDeadline(now) {
+		m.logf(fmt.Sprintf("[remote-debug] teto de sessao atingido (max-duration): sessionId=%s", session.sessionID))
+		m.stopSession(session.sessionID, "max-duration")
+		return
+	}
+	next := session.live.Deadline(now, session.ttl)
+	if next.IsZero() {
+		return
+	}
 	m.mu.Lock()
-	current := m.activeSession
-	matches := current != nil &&
-		strings.EqualFold(current.sessionID, strings.TrimSpace(sessionID)) &&
-		current.deadline.Equal(deadline)
-	m.mu.Unlock()
-	if matches {
-		m.stopSession(sessionID, "timeout")
+	if m.activeSession == session {
+		session.deadline = next
 	}
+	m.mu.Unlock()
+}
+
+func (m *Manager) nextControlSeq(session *Session) uint64 {
+	session.controlSeqMu.Lock()
+	defer session.controlSeqMu.Unlock()
+	session.controlSeq++
+	return session.controlSeq
+}
+
+// handleControlFrame processa um frame recebido no canal de controle.
+// Validações: sessionId da sessão ativa, from diferente do próprio agente
+// (eco), tipo na allow-list e tamanho — tudo isso já é checado no DecodeControl.
+func (m *Manager) handleControlFrame(session *Session, data []byte) {
+	if session == nil {
+		return
+	}
+	env, err := DecodeControl(data)
+	if err != nil {
+		m.logf(fmt.Sprintf("[remote-debug] frame de controle descartado: %v", err))
+		return
+	}
+	if !strings.EqualFold(strings.TrimSpace(env.SessionID), session.sessionID) {
+		return
+	}
+	if env.From == RoleAgent {
+		return // eco do próprio agente
+	}
+	// Presença do VIEWER: apenas ping/pong do viewer contam. Um setLevel vindo
+	// do servidor NÃO prova que o navegador está vivo — se contasse, a sessão
+	// sobreviveria com a popup fechada.
+	if env.From == RoleViewer && (env.Type == ControlTypePing || env.Type == ControlTypePong) {
+		session.live.NotePeerSignal(time.Now().UTC())
+	}
+	switch env.Type {
+	case ControlTypePing:
+		m.sendControl(session, ControlTypePong, nil)
+	case ControlTypeSetLevel:
+		level := NormalizeLevel(payloadString(env.Payload, "logLevel"))
+		session.SetMinLevel(LevelValue(level))
+		m.sendControl(session, ControlTypeLevelChanged, map[string]any{"logLevel": level})
+		m.logf(fmt.Sprintf("[remote-debug] nivel de log alterado em tempo real: sessionId=%s level=%s", session.sessionID, level))
+	case ControlTypePong, ControlTypeLevelChanged, ControlTypeClosed:
+		// presença já registrada acima
+	}
+}
+
+// sendControl publica um frame de controle no transporte ativo.
+func (m *Manager) sendControl(session *Session, typ string, payload map[string]any) {
+	if session == nil || session.controlSubject == "" {
+		return
+	}
+	seq := m.nextControlSeq(session)
+	env := NewControlEnvelope(RoleAgent, typ, session.sessionID, seq, payload)
+	raw, err := EncodeControl(env)
+	if err != nil {
+		m.logf(fmt.Sprintf("[remote-debug] falha ao codificar controle: %v", err))
+		return
+	}
+	if err := m.publishControlRaw(session, session.controlSubject, raw); err != nil && typ != ControlTypeClosed {
+		m.logf(fmt.Sprintf("[remote-debug] falha ao publicar controle %s: %v", typ, err))
+	}
+}
+
+func (m *Manager) publishControlRaw(session *Session, subject string, payload []byte) error {
+	session.transportMu.Lock()
+	defer session.transportMu.Unlock()
+	for idx := session.activeIndex; idx < len(session.publishers); idx++ {
+		pub := session.publishers[idx]
+		if err := pub.PublishRaw(context.Background(), subject, payload); err != nil {
+			m.logf(fmt.Sprintf("[remote-debug] publish de controle falhou em %s: %v", pub.Name(), err))
+			_ = pub.Close()
+			session.activeIndex = idx + 1
+			continue
+		}
+		return nil
+	}
+	return fmt.Errorf("nenhum transporte remoto disponivel")
+}
+
+func payloadString(payload map[string]any, key string) string {
+	if payload == nil {
+		return ""
+	}
+	if v, ok := payload[key].(string); ok {
+		return v
+	}
+	return ""
 }
 
 func (m *Manager) publishLoop(ctx context.Context, session *Session) {
@@ -296,6 +490,8 @@ func (m *Manager) publishLoop(ctx context.Context, session *Session) {
 }
 
 func (m *Manager) publishWithFallback(ctx context.Context, session *Session, msg LogMessage) error {
+	session.transportMu.Lock()
+	defer session.transportMu.Unlock()
 	for idx := session.activeIndex; idx < len(session.publishers); idx++ {
 		pub := session.publishers[idx]
 		if err := pub.Publish(ctx, msg); err != nil {
@@ -334,7 +530,7 @@ func (m *Manager) enqueueWithSession(sessionID, message, level string) {
 }
 
 func (m *Manager) enqueueToSession(session *Session, message, level string) {
-	if LevelValue(level) < session.minLevel {
+	if LevelValue(level) < session.SessionMinLevel() {
 		return
 	}
 	select {
@@ -368,11 +564,21 @@ func (m *Manager) stopGivenSession(session *Session, reason string) {
 	if session == nil {
 		return
 	}
+	if session.runner != nil {
+		session.runner.Stop()
+	}
 	if session.unsubscribe != nil {
 		session.unsubscribe()
 	}
 	if session.cancel != nil {
 		session.cancel()
+	}
+	// Avisa o viewer (best-effort) ANTES de fechar publisher/assinaturas.
+	m.sendControl(session, ControlTypeClosed, map[string]any{"reason": strings.TrimSpace(reason)})
+	for _, off := range session.controlOffs {
+		if off != nil {
+			off()
+		}
 	}
 	for _, pub := range session.publishers {
 		_ = pub.Close()

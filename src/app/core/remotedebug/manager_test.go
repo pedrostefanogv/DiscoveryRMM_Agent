@@ -9,7 +9,33 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"discovery/app/core/sessionlive"
 )
+
+func TestComputeMaxDeadline_FallsBackToInitialDeadlineWhenServerDoesNotAuthorizeRenewal(t *testing.T) {
+	now := time.Date(2026, 3, 28, 10, 0, 0, 0, time.UTC)
+	initial := now.Add(20 * time.Minute)
+
+	// Servidor nao enviou maxExpiresAtUtc: o agente NAO pode estender alem do
+	// prazo inicial concedido (antes caia em now+1h e mantinha a sessao viva
+	// sem autorizacao do servidor).
+	got := ComputeMaxDeadline("", now, initial)
+	if !got.Equal(initial) {
+		t.Fatalf("fallback = %s, want %s", got.Format(time.RFC3339), initial.Format(time.RFC3339))
+	}
+}
+
+func TestComputeMaxDeadline_UsesServerValueWhenPresent(t *testing.T) {
+	now := time.Date(2026, 3, 28, 10, 0, 0, 0, time.UTC)
+	initial := now.Add(20 * time.Minute)
+	serverMax := now.Add(time.Hour).Format(time.RFC3339)
+
+	got := ComputeMaxDeadline(serverMax, now, initial)
+	if !got.Equal(now.Add(time.Hour)) {
+		t.Fatalf("max = %s, want %s", got.Format(time.RFC3339), now.Add(time.Hour).Format(time.RFC3339))
+	}
+}
 
 func TestComputeDeadline_DefaultOneHourCap(t *testing.T) {
 	now := time.Date(2026, 3, 28, 10, 0, 0, 0, time.UTC)
@@ -376,7 +402,67 @@ func (f *failingPublisher) Publish(context.Context, LogMessage) error {
 	f.calls.Add(1)
 	return errors.New("boom")
 }
+func (f *failingPublisher) PublishRaw(context.Context, string, []byte) error {
+	f.calls.Add(1)
+	return errors.New("boom")
+}
+func (f *failingPublisher) Subscribe(string, func([]byte)) (func(), error) {
+	return func() {}, nil
+}
 func (f *failingPublisher) Close() error { return nil }
+
+// recordingPublisher captura os frames de controle publicados e permite
+// disparar manualmente um handler de assinatura (sem NATS real).
+type recordingPublisher struct {
+	mu       sync.Mutex
+	subject  string
+	payloads [][]byte
+	handler  func([]byte)
+	closed   bool
+}
+
+func (p *recordingPublisher) Name() string                              { return "recording" }
+func (p *recordingPublisher) Publish(context.Context, LogMessage) error { return nil }
+func (p *recordingPublisher) PublishRaw(_ context.Context, subject string, payload []byte) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.subject = subject
+	cp := append([]byte(nil), payload...)
+	p.payloads = append(p.payloads, cp)
+	return nil
+}
+func (p *recordingPublisher) Subscribe(_ string, handler func([]byte)) (func(), error) {
+	p.mu.Lock()
+	p.handler = handler
+	p.mu.Unlock()
+	return func() {}, nil
+}
+func (p *recordingPublisher) Close() error {
+	p.mu.Lock()
+	p.closed = true
+	p.mu.Unlock()
+	return nil
+}
+func (p *recordingPublisher) deliver(data []byte) {
+	p.mu.Lock()
+	handler := p.handler
+	p.mu.Unlock()
+	if handler != nil {
+		handler(data)
+	}
+}
+func (p *recordingPublisher) frames() []ControlEnvelope {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make([]ControlEnvelope, 0, len(p.payloads))
+	for _, raw := range p.payloads {
+		env, err := DecodeControl(raw)
+		if err == nil {
+			out = append(out, env)
+		}
+	}
+	return out
+}
 
 // TestPublishLoop_SignalsFatalFailureOnlyOnce garante que, com todos os
 // transportes mortos, o operador recebe UMA linha clara e acionável em vez de
@@ -490,65 +576,177 @@ func TestShutdown_StopsActiveSession(t *testing.T) {
 	}
 }
 
-func TestAutoStopAtDeadline_DoesNotStopSessionWithDifferentDeadline(t *testing.T) {
+// TestHandleControlFrame_PingRegistraPeerERespondePong cobre o caminho real do
+// canal de controle: o ping do viewer registra presença e o agente responde
+// pong no MESMO subject.
+func TestHandleControlFrame_PingRegistraPeerERespondePong(t *testing.T) {
 	m := New(Deps{Logf: func(string) {}})
-
-	// Sessão ativa com deadline T2 (mais longo).
-	deadlineT2 := time.Now().Add(2 * time.Hour)
-	ctx, cancel := context.WithCancel(context.Background())
-	_ = ctx
-	m.mu.Lock()
-	m.activeSession = &Session{
-		sessionID:   "sess-same-id",
-		agentID:     "agent-1",
-		minLevel:    LevelValue("info"),
-		deadline:    deadlineT2,
-		logQueue:    make(chan queuedLine, QueueSize),
-		cancel:      cancel,
-		unsubscribe: func() {},
-		publishers:  []Publisher{},
+	pub := &recordingPublisher{}
+	startedAt := time.Now().UTC()
+	session := &Session{
+		sessionID:      "sess-ctrl",
+		agentID:        "agent-1",
+		controlSubject: "tenant.c.site.s.agent.a.remote-debug.control",
+		minLevel:       LevelValue("info"),
+		deadline:       startedAt.Add(20 * time.Minute),
+		ttl:            20 * time.Minute,
+		startedAt:      startedAt,
+		live: sessionlive.NewPeer(sessionlive.Config{
+			Interval:      5 * time.Second,
+			MissesAllowed: 3,
+			InitialGrace:  60 * time.Second,
+			MaxDeadline:   startedAt.Add(time.Hour),
+		}, startedAt),
+		publishers: []Publisher{pub},
 	}
-	m.mu.Unlock()
 
-	// Timer antigo com deadline T1 (mais curto, já expirado) e mesmo sessionID.
-	// Não deve parar a sessão ativa (deadline diferente).
-	m.autoStopAtDeadline("sess-same-id", time.Now().Add(-time.Hour))
+	ping, err := EncodeControl(NewControlEnvelope(RoleViewer, ControlTypePing, "sess-ctrl", 1, nil))
+	if err != nil {
+		t.Fatalf("EncodeControl: %v", err)
+	}
+	m.handleControlFrame(session, ping)
 
-	m.mu.Lock()
-	stillActive := m.activeSession != nil
-	m.mu.Unlock()
-	if !stillActive {
-		t.Fatalf("expected session to remain active when deadline differs")
+	if !session.live.PeerSeen() {
+		t.Fatalf("ping do viewer deveria registrar presenca do peer")
+	}
+	frames := pub.frames()
+	if len(frames) != 1 || frames[0].Type != ControlTypePong || frames[0].From != RoleAgent {
+		t.Fatalf("esperava 1 pong do agente, got %+v", frames)
 	}
 }
 
-func TestAutoStopAtDeadline_StopsSessionWithSameDeadline(t *testing.T) {
+// TestHandleControlFrame_IgnoraEcoDoProprioAgente garante que o agente não
+// conta o próprio frame como sinal do viewer (o subject tem pub+sub nos dois
+// sentidos, então o eco é esperado).
+func TestHandleControlFrame_IgnoraEcoDoProprioAgente(t *testing.T) {
 	m := New(Deps{Logf: func(string) {}})
-
-	// Deadline já expirado para o timer disparar imediatamente.
-	deadline := time.Now().Add(-time.Hour)
-	ctx, cancel := context.WithCancel(context.Background())
-	_ = ctx
-	m.mu.Lock()
-	m.activeSession = &Session{
-		sessionID:   "sess-same-id",
-		agentID:     "agent-1",
-		minLevel:    LevelValue("info"),
-		deadline:    deadline,
-		logQueue:    make(chan queuedLine, QueueSize),
-		cancel:      cancel,
-		unsubscribe: func() {},
-		publishers:  []Publisher{},
+	startedAt := time.Now().UTC()
+	session := &Session{
+		sessionID: "sess-eco",
+		live: sessionlive.NewPeer(sessionlive.Config{
+			Interval:      5 * time.Second,
+			MissesAllowed: 3,
+			InitialGrace:  60 * time.Second,
+		}, startedAt),
 	}
-	m.mu.Unlock()
+	raw, _ := EncodeControl(NewControlEnvelope(RoleAgent, ControlTypePing, "sess-eco", 1, nil))
+	m.handleControlFrame(session, raw)
+	if session.live.PeerSeen() {
+		t.Fatalf("eco do proprio agente nao deveria contar como sinal do peer")
+	}
+}
 
-	// Timer com o MESMO deadline (expirado) e mesmo sessionID → deve parar.
-	m.autoStopAtDeadline("sess-same-id", deadline)
+// TestHandleControlFrame_SetLevelAplicaSemRestart cobre a troca de nível em
+// tempo real: sem novo sessionId, sem matar a sessão, com confirmação.
+func TestHandleControlFrame_SetLevelAplicaSemRestart(t *testing.T) {
+	m := New(Deps{Logf: func(string) {}})
+	pub := &recordingPublisher{}
+	startedAt := time.Now().UTC()
+	session := &Session{
+		sessionID:      "sess-level",
+		agentID:        "agent-1",
+		controlSubject: "tenant.c.site.s.agent.a.remote-debug.control",
+		minLevel:       LevelValue("info"),
+		ttl:            20 * time.Minute,
+		startedAt:      startedAt,
+		live: sessionlive.NewPeer(sessionlive.Config{
+			Interval:      5 * time.Second,
+			MissesAllowed: 3,
+			InitialGrace:  60 * time.Second,
+		}, startedAt),
+		publishers: []Publisher{pub},
+	}
+	raw, _ := EncodeControl(NewControlEnvelope(RoleServer, ControlTypeSetLevel, "sess-level", 2, map[string]any{"logLevel": "warn"}))
+	m.handleControlFrame(session, raw)
 
+	if got := session.SessionMinLevel(); got != LevelValue("warn") {
+		t.Fatalf("minLevel = %d, want %d", got, LevelValue("warn"))
+	}
+	if session.sessionID != "sess-level" {
+		t.Fatalf("a troca de nivel NAO deve trocar o sessionId")
+	}
+	frames := pub.frames()
+	if len(frames) != 1 || frames[0].Type != ControlTypeLevelChanged {
+		t.Fatalf("esperava levelChanged, got %+v", frames)
+	}
+}
+
+// TestHandleControlFrame_DescartaSessionIdDiferente evita que frames de outra
+// sessão contaminem a liveness desta.
+func TestHandleControlFrame_DescartaSessionIdDiferente(t *testing.T) {
+	m := New(Deps{Logf: func(string) {}})
+	startedAt := time.Now().UTC()
+	session := &Session{
+		sessionID: "sess-a",
+		live:      sessionlive.NewPeer(sessionlive.Config{Interval: 5 * time.Second, MissesAllowed: 3, InitialGrace: 60 * time.Second}, startedAt),
+	}
+	raw, _ := EncodeControl(NewControlEnvelope(RoleViewer, ControlTypePing, "sess-b", 1, nil))
+	m.handleControlFrame(session, raw)
+	if session.live.PeerSeen() {
+		t.Fatalf("frame de outra sessao nao deveria contar")
+	}
+}
+
+// TestExtendDeadline_ClampaNoTetoEEncerraComMaxDuration garante o teto da
+// sessão (duração configurada na instalação) mesmo com o viewer ativo.
+func TestExtendDeadline_ClampaNoTetoEEncerraComMaxDuration(t *testing.T) {
+	var logs []string
+	var mu sync.Mutex
+	m := New(Deps{Logf: func(line string) { mu.Lock(); logs = append(logs, line); mu.Unlock() }})
+	startedAt := time.Now().UTC()
+	pub := &recordingPublisher{}
+	session := &Session{
+		sessionID:      "sess-max",
+		controlSubject: "tenant.c.site.s.agent.a.remote-debug.control",
+		minLevel:       LevelValue("info"),
+		ttl:            20 * time.Minute,
+		startedAt:      startedAt,
+		maxDeadline:    startedAt.Add(time.Hour),
+		live: sessionlive.NewPeer(sessionlive.Config{
+			Interval:      5 * time.Second,
+			MissesAllowed: 3,
+			InitialGrace:  60 * time.Second,
+			MaxDeadline:   startedAt.Add(time.Hour),
+		}, startedAt),
+		publishers: []Publisher{pub},
+	}
+	session.live.NotePeerSignal(startedAt)
 	m.mu.Lock()
-	stillActive := m.activeSession != nil
+	m.activeSession = session
 	m.mu.Unlock()
-	if stillActive {
-		t.Fatalf("expected session to be stopped when deadline matches")
+
+	// Antes do teto: estende e permanece ativa.
+	m.extendDeadline(session)
+	m.mu.Lock()
+	active := m.activeSession
+	m.mu.Unlock()
+	if active == nil {
+		t.Fatalf("sessao nao deveria encerrar antes do teto")
+	}
+	if session.deadline.After(session.maxDeadline) {
+		t.Fatalf("deadline nao pode ultrapassar maxDeadline")
+	}
+
+	// Forca o teto no passado e verifica o encerramento por max-duration.
+	session.maxDeadline = startedAt.Add(-time.Second)
+	session.live = sessionlive.NewPeer(sessionlive.Config{
+		Interval:      5 * time.Second,
+		MissesAllowed: 3,
+		InitialGrace:  60 * time.Second,
+		MaxDeadline:   startedAt.Add(-time.Second),
+	}, startedAt)
+	session.live.NotePeerSignal(startedAt)
+	m.extendDeadline(session)
+	m.mu.Lock()
+	active = m.activeSession
+	m.mu.Unlock()
+	if active != nil {
+		t.Fatalf("sessao deveria encerrar ao atingir o teto")
+	}
+	mu.Lock()
+	joined := strings.Join(logs, "\n")
+	mu.Unlock()
+	if !strings.Contains(joined, "max-duration") {
+		t.Fatalf("esperava log de max-duration, logs=%q", joined)
 	}
 }

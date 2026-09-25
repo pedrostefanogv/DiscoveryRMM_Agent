@@ -685,6 +685,7 @@ func resolveNATSSubjects(cfg Config) (natsSubjects, error) {
 		Result:              prefix + ".result",
 		Hardware:            prefix + ".hardware",
 		RemoteDebugLog:      prefix + ".remote-debug.log",
+		RemoteDebugControl:  prefix + ".remote-debug.control",
 		SyncPing:            prefix + ".sync.ping",
 		P2PDiscovery:        fmt.Sprintf("tenant.%s.site.%s.p2p.discovery", clientID, siteID),
 		P2PEvents:           fmt.Sprintf("tenant.%s.p2p.events", clientID),

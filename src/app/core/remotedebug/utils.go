@@ -8,10 +8,53 @@ import (
 )
 
 // DefaultSessionCap é o teto máximo de duração de uma sessão de remote debug.
+// O valor efetivo vem do servidor (MaxExpiresAtUTC) e é definido na variável
+// de sistema REMOTE_SESSION_MAX_DURATION_HOURS do instalador; este é apenas o
+// fallback quando o campo não chega.
 const DefaultSessionCap = time.Hour
+
+// Defaults do canal de controle (usados quando o servidor não envia o bloco
+// liveness no comando).
+const (
+	DefaultPingIntervalSeconds    = 5
+	DefaultMissedPingsBeforeClose = 3
+	DefaultInitialGraceSeconds    = 60
+	DefaultKeepAliveSeconds       = 60
+)
 
 // QueueSize é o tamanho da fila de logs em memória por sessão.
 const QueueSize = 2048
+
+// ComputeMaxDeadline calcula o teto absoluto da sessão a partir de
+// maxExpiresAtUtc — valor derivado da duração máxima configurada na
+// instalação (variável REMOTE_SESSION_MAX_DURATION_HOURS, padrão 1h).
+//
+// fallbackDeadline é o deadline inicial (expiresAtUtc) do comando: quando o
+// servidor NÃO envia maxExpiresAtUtc (servidor que não autoriza renovação), o
+// agente NÃO pode estender além do que lhe foi concedido — usar
+// now+DefaultSessionCap aqui deixaria a sessão viva por 1h sem autorização.
+func ComputeMaxDeadline(maxExpiresAt string, now time.Time, fallbackDeadline time.Time) time.Time {
+	now = now.UTC()
+	maxExpiresAt = strings.TrimSpace(maxExpiresAt)
+	if maxExpiresAt == "" {
+		if fallbackDeadline.IsZero() {
+			return now.Add(DefaultSessionCap)
+		}
+		return fallbackDeadline.UTC()
+	}
+	t, err := time.Parse(time.RFC3339, maxExpiresAt)
+	if err != nil {
+		if fallbackDeadline.IsZero() {
+			return now.Add(DefaultSessionCap)
+		}
+		return fallbackDeadline.UTC()
+	}
+	t = t.UTC()
+	if t.Before(now) {
+		return now
+	}
+	return t
+}
 
 // ComputeDeadline calcula o deadline da sessão, respeitando o teto de 1h.
 func ComputeDeadline(expiresAt string, now time.Time) time.Time {

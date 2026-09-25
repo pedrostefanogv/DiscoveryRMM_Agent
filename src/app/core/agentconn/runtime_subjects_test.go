@@ -45,6 +45,9 @@ func TestResolveNATSSubjects_CanonicalLayout(t *testing.T) {
 	if subjects.RemoteDebugLog != prefix+".remote-debug.log" {
 		t.Fatalf("RemoteDebugLog = %q", subjects.RemoteDebugLog)
 	}
+	if subjects.RemoteDebugControl != prefix+".remote-debug.control" {
+		t.Fatalf("RemoteDebugControl = %q", subjects.RemoteDebugControl)
+	}
 	if subjects.SyncPing != prefix+".sync.ping" {
 		t.Fatalf("SyncPing = %q", subjects.SyncPing)
 	}
@@ -122,6 +125,7 @@ func TestValidateAgentIdentityJWTClaims_ExactSubjects(t *testing.T) {
 					subjects.GlobalPong,
 					subjects.SyncPing,
 					subjects.P2PDiscovery,
+					subjects.RemoteDebugControl,
 					fmt.Sprintf("tenant.%s.site.%s.agent.%s.remote.session.>",
 						stripSubjectHyphens(subjects.ClientID),
 						stripSubjectHyphens(subjects.SiteID),
@@ -134,6 +138,7 @@ func TestValidateAgentIdentityJWTClaims_ExactSubjects(t *testing.T) {
 					subjects.Result,
 					subjects.Hardware,
 					subjects.RemoteDebugLog,
+					subjects.RemoteDebugControl,
 					fmt.Sprintf("tenant.%s.site.%s.agent.%s.remote.session.>",
 						stripSubjectHyphens(subjects.ClientID),
 						stripSubjectHyphens(subjects.SiteID),
@@ -165,6 +170,7 @@ func TestValidateAgentIdentityJWTClaims_RejectsExtraSubject(t *testing.T) {
 					subjects.GlobalPong,
 					subjects.SyncPing,
 					subjects.P2PDiscovery,
+					subjects.RemoteDebugControl,
 					"tenant.extra.agents.command",
 				},
 			},
@@ -174,6 +180,7 @@ func TestValidateAgentIdentityJWTClaims_RejectsExtraSubject(t *testing.T) {
 					subjects.Result,
 					subjects.Hardware,
 					subjects.RemoteDebugLog,
+					subjects.RemoteDebugControl,
 				},
 			},
 		},
