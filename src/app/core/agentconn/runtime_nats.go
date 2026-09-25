@@ -53,6 +53,12 @@ func (r *Runtime) runNATSSession(ctx context.Context, cfg Config, server, transp
 		nats.Timeout(connectTimeout),
 		nats.ReconnectWait(reconnectBase),
 		nats.MaxReconnects(-1),
+		// Erro de autorizacao NAO pode abortar a reconexao: durante um
+		// restart/redeploy da API o auth callout fica alguns segundos sem
+		// assinante e o nats-server recusa com "authentication error". Sem este
+		// flag o cliente Go encerra a reconexao em definitivo e o agente fica
+		// offline ate um novo ciclo manual.
+		nats.IgnoreAuthErrorAbort(),
 		nats.DisconnectErrHandler(func(_ *nats.Conn, err error) {
 			r.logf("[heartbeat][nats] NATS desconectado: %v — heartbeats suspensos ate reconexao", err)
 		}),
