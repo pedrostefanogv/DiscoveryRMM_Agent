@@ -1238,6 +1238,31 @@ func (a *App) startup(ctx context.Context) {
 // runCoreStartup é o startup do modo serviço: DB + staged startup, sem os
 // itens acoplados à sessão do usuário (SSE chat, tray, janela, idle mode).
 func (a *App) runCoreStartup(ctx context.Context) {
+	// ── Remote debug: lifecycle no processo que recebe os comandos ──
+	//
+	// BUG 2026-09-24 (debug remoto nunca envia logs): o lifecycle deste domínio
+	// era iniciado APENAS pelo adapter Wails v3 (remote_services.go), que só é
+	// registrado no main.go do binário da UI. No binário do serviço
+	// (discovery-service.exe → RunServiceMode → RunCore → runCoreStartup) não
+	// existe aplicação Wails, então remotedebug.Manager.started permanecia
+	// false. Todo comando "remotedebug" era recusado no primeiro check de
+	// startSession — ANTES do primeiro logf — resultando em:
+	//   [cmd] recebido: cmdType="remotedebug" ...
+	//   result NATS publicado ... exitCode=1
+	// e nenhuma linha [remote-debug] no agent-service.log. O servidor criava a
+	// sessão, o agente respondia erro e o console ficava em "Aguardando
+	// entradas de log..." para sempre.
+	//
+	// O serviço é quem consome os comandos do NATS, logo é aqui que o domínio
+	// precisa estar vivo. Startup é idempotente (a primeira chamada vence).
+	if a.RemoteDebug != nil {
+		if err := a.RemoteDebug.Startup(ctx); err != nil {
+			log.Printf("[service] FALHA ao iniciar remote debug: %v", err)
+		} else {
+			log.Println("[service] remote debug pronto (lifecycle iniciado)")
+		}
+	}
+
 	dataDir := GetDataDir()
 	db, err := database.Open(dataDir)
 	if err != nil {
@@ -1733,11 +1758,16 @@ func (a *App) shutdown() {
 	if a.ipcClient != nil {
 		a.ipcClient.Close()
 	}
-	// NOTA: remoteDebug e remoteSessionMgr agora são Services Wails v3
-	// separados (adapters thin em remote_services.go). Seus ciclos de vida
-	// (Startup/Shutdown) são gerenciados pelo Wails, que encerra os services
-	// na ordem inversa de registro — ou seja, antes do App. Por isso não são
-	// encerrados aqui.
+	// NOTA: no modo UI (companion) remoteDebug e remoteSessionMgr são Services
+	// Wails v3 separados (adapters thin em remote_services.go) e o Wails encerra
+	// os services na ordem inversa de registro — antes do App.
+	//
+	// No modo serviço NÃO há aplicação Wails: ninguém encerraria o remote debug,
+	// então o encerramento é feito aqui. Shutdown é idempotente, portanto no
+	// modo UI esta chamada é um no-op (o Wails já encerrou o service).
+	if a.RemoteDebug != nil {
+		_ = a.RemoteDebug.Shutdown()
+	}
 
 	// Desliga o domínio Sync (cancela contexto, aguarda goroutines).
 	if a.SyncSvc != nil {

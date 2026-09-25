@@ -25,6 +25,11 @@ type Session struct {
 	unsubscribe func()
 	publishers  []Publisher
 	activeIndex int
+	// publishFailureLogged evita spam: sem isso, cada linha de log com todos os
+	// transportes mortos gravaria "falha ao publicar log remoto" no
+	// agent-service.log (que já passa de 8 MB), escondendo o problema real.
+	// Acessado apenas pelo goroutine do publishLoop — não precisa de lock.
+	publishFailureLogged bool
 }
 
 // Deps são as dependências injetadas no Manager.
@@ -62,6 +67,11 @@ type Manager struct {
 	cancel context.CancelFunc
 	// started indica se Startup foi chamado com sucesso.
 	started bool
+	// shutdownRequested marca que Shutdown foi chamado explicitamente: a partir
+	// daí novas sessões são recusadas (o processo está encerrando). Diferente de
+	// started=false, que também significa "Startup nunca foi chamado" — nesse
+	// caso o manager se auto-inicializa (ver ensureStarted).
+	shutdownRequested bool
 }
 
 // New cria um Manager com as dependências injetadas.
@@ -140,24 +150,32 @@ func (m *Manager) OnCommandOutput(cmdType, output, errText string) {
 func (m *Manager) startSession(cmd Command) error {
 	sessionID := strings.TrimSpace(cmd.SessionID)
 	if sessionID == "" {
+		m.logf("[remote-debug] FALHA ao iniciar sessao: sessionId ausente no comando")
 		return fmt.Errorf("sessionId ausente")
 	}
 
-	// Garante que o manager está com lifecycle iniciado. Se o shutdown já
-	// ocorreu (started=false), recusa abrir sessão para evitar sessões órfãs
-	// com contexto de ciclo de vida já cancelado.
+	// Garante o contexto de ciclo de vida antes de qualquer trabalho.
+	//
+	// O Startup é responsabilidade do processo dono (adapter Wails v3 na UI,
+	// runCoreStartup no modo serviço). Se esse wiring falhar, o manager se
+	// auto-inicializa e registra um AVISO em vez de recusar o comando sem
+	// deixar rastro — foi exatamente esse o bug do agente no modo serviço
+	// (comando "remotedebug" recebido, exitCode=1, ZERO linha [remote-debug]
+	// no agent-service.log e console eternamente em "Aguardando entradas").
+	if err := m.ensureStarted(); err != nil {
+		m.logf("[remote-debug] FALHA ao iniciar sessao: " + err.Error())
+		return err
+	}
+
 	m.mu.Lock()
-	started := m.started
 	lifecycleCtx := m.ctx
 	m.mu.Unlock()
-	if !started {
-		return fmt.Errorf("remote debug nao inicializado (shutdown em andamento)")
-	}
 
 	cfg := m.getConfig()
 	token := strings.TrimSpace(cfg.AuthToken)
 	agentID := strings.TrimSpace(cfg.AgentID)
 	if token == "" || agentID == "" {
+		m.logf(fmt.Sprintf("[remote-debug] FALHA ao iniciar sessao: credenciais incompletas (authTokenVazio=%v agentIdVazio=%v)", token == "", agentID == ""))
 		return fmt.Errorf("authToken/agentId ausentes para remote debug (token=vazio=%v agentId=vazio=%v)", token == "", agentID == "")
 	}
 
@@ -240,6 +258,13 @@ func (m *Manager) publishLoop(ctx context.Context, session *Session) {
 		case <-ctx.Done():
 			return
 		case item := <-session.logQueue:
+			// select escolhe aleatoriamente entre cases prontos: depois do
+			// cancel ainda poderíamos consumir um item e publicar com os
+			// publishers já fechados por stopGivenSession, gerando um
+			// "PUBLICACAO FALHOU" falso no encerramento da sessão.
+			if ctx.Err() != nil {
+				return
+			}
 			if strings.TrimSpace(item.message) == "" {
 				continue
 			}
@@ -253,7 +278,18 @@ func (m *Manager) publishLoop(ctx context.Context, session *Session) {
 				Sequence:     seq,
 			}
 			if err := m.publishWithFallback(ctx, session, msg); err != nil {
-				m.logf("[remote-debug] falha ao publicar log remoto: " + err.Error())
+				// Loga UMA vez por sessão: repetir a cada linha esconde o
+				// problema e enche o log. Esta linha é o que o operador deve
+				// procurar quando o console fica vazio.
+				if !session.publishFailureLogged {
+					session.publishFailureLogged = true
+					m.logf("[remote-debug] PUBLICACAO FALHOU — os logs NAO estao chegando ao servidor (console ficara em \"Aguardando entradas\"): " + err.Error())
+				}
+				continue
+			}
+			if session.publishFailureLogged {
+				session.publishFailureLogged = false
+				m.logf("[remote-debug] publicacao restabelecida")
 			}
 		}
 	}
@@ -349,6 +385,35 @@ func (m *Manager) ServiceName() string {
 	return "remotedebug.Manager"
 }
 
+// ensureStarted garante que o contexto de ciclo de vida está ativo.
+//
+// Três estados possíveis:
+//   - started=true            → nada a fazer;
+//   - shutdownRequested=true  → processo encerrando; recusa (evita sessão órfã
+//     com contexto já cancelado);
+//   - nenhum dos dois         → Startup nunca foi chamado (wiring incompleto):
+//     auto-inicializa com context.Background() e AVISA no log, em vez de
+//     falhar silenciosamente.
+func (m *Manager) ensureStarted() error {
+	m.mu.Lock()
+	if m.started {
+		m.mu.Unlock()
+		return nil
+	}
+	if m.shutdownRequested {
+		m.mu.Unlock()
+		return fmt.Errorf("remote debug nao inicializado (shutdown em andamento)")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	m.ctx = ctx
+	m.cancel = cancel
+	m.started = true
+	m.mu.Unlock()
+
+	m.logf("[remote-debug] AVISO: lifecycle nao foi iniciado pelo processo (Startup ausente) — auto-inicializando; verifique o wiring de lifecycle no modo servico")
+	return nil
+}
+
 // Startup prepara o contexto de ciclo de vida do domínio remote debug.
 // É chamado pelo App (ou pelo adapter Wails v3) durante o startup.
 // Idempotente: a primeira chamada vence.
@@ -358,8 +423,11 @@ func (m *Manager) Startup(ctx context.Context) error {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.started {
+	if m.started || m.shutdownRequested {
 		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	m.ctx = ctx
@@ -376,6 +444,10 @@ func (m *Manager) Shutdown() error {
 	}
 
 	m.mu.Lock()
+	// shutdownRequested é marcado mesmo quando o manager nunca foi iniciado:
+	// assim um Start posterior não "ressuscita" o domínio num processo que já
+	// está encerrando.
+	m.shutdownRequested = true
 	if !m.started {
 		m.mu.Unlock()
 		return nil

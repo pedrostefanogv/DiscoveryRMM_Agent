@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -240,7 +241,7 @@ func (r *Runtime) natsCommandHandler(ctx context.Context, nc *nats.Conn, cfg Con
 			if !shouldExecute {
 				r.logf("comando fan-out duplicado ignorado dispatchId=%s idempotencyKey=%s scope=%s subject=%s", env.DispatchID, env.IdempotencyKey, route, strings.TrimSpace(msg.Subject))
 				if requiresAck && cachedResult != nil {
-					if err := publishJSON(nc, subjects.Result, cachedResult); err != nil {
+					if err := publishJSONResult(nc, subjects.Result, cachedResult); err != nil {
 						r.logf("falha ao republicar result cacheado para comando fan-out duplicado dispatchId=%s: %v", env.DispatchID, err)
 						return
 					}
@@ -274,7 +275,7 @@ func (r *Runtime) executeAndPublishNATSCommand(ctx context.Context, nc *nats.Con
 		r.completeFanoutDispatch(dedupeKey, res)
 	}
 
-	if err := publishJSON(nc, subjects.Result, res); err != nil {
+	if err := publishJSONResult(nc, subjects.Result, res); err != nil {
 		r.logf("falha ao publicar result (dispatchId=%s cmd=%s): %v", env.DispatchID, env.CommandID, err)
 		r.enqueueCommandResultOutbox("nats", env.DispatchID, env.CommandID, exitCode, output, errText, err)
 		return
@@ -566,7 +567,7 @@ func (r *Runtime) runNATSEventLoop(ctx context.Context, nc *nats.Conn, cfg Confi
 					Output:       item.Output,
 					ErrorMessage: item.ErrorMessage,
 				}
-				return publishJSON(nc, subjects.Result, res)
+				return publishJSONResult(nc, subjects.Result, res)
 			})
 		case <-nativeNATSRecheckCh:
 			if r.probeNativeNATS(cfg) {
@@ -724,6 +725,38 @@ func publishJSON(nc *nats.Conn, subject string, payload any) error {
 		return err
 	}
 	return nc.Publish(subject, b)
+}
+
+// publishJSONResult publica o RESULTADO de um comando confirmando a entrega no
+// servidor.
+//
+// nc.Publish é assíncrono: enfileira no buffer local e retorna nil mesmo quando
+// o servidor vai recusar a mensagem (permissions violation) ou quando a conexão
+// já caiu. Sem confirmação, o agente logava "result NATS publicado" e o servidor
+// nunca recebia nada — o comando ficava sem completed_at/exit_code no dashboard
+// (caso real do debug remoto, 2026-09-24) e o diagnóstico era impossível: cada
+// lado jurava ter feito a sua parte. Com o flush a falha vira erro de verdade e
+// o chamador manda o resultado para o outbox de reenvio.
+//
+// Só um erro NOVO é reportado: LastError() devolve nc.err, que é "sticky" (um
+// permissions violation antigo, em qualquer subject, permanece até a conexão
+// reconectar). Comparar antes/depois evita reprovar todo publish seguinte por
+// causa de um erro antigo e alheio a esta mensagem.
+func publishJSONResult(nc *nats.Conn, subject string, payload any) error {
+	before := nc.LastError()
+
+	if err := publishJSON(nc, subject, payload); err != nil {
+		return err
+	}
+	if err := nc.FlushTimeout(2 * time.Second); err != nil {
+		return err
+	}
+
+	after := nc.LastError()
+	if after != nil && !errors.Is(after, before) {
+		return fmt.Errorf("servidor recusou o publish em %q: %w", subject, after)
+	}
+	return nil
 }
 
 func parseP2PDiscoverySnapshot(data []byte) (P2PDiscoverySnapshot, error) {

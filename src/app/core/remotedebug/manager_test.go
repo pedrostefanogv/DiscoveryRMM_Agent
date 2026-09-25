@@ -2,7 +2,11 @@ package remotedebug
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -272,6 +276,169 @@ func TestHandleCommand_StartWithJSONStringPayloadDoesNotReturnParseError(t *test
 	}
 	if code != 1 {
 		t.Fatalf("expected start without config to fail as business error (code=1), got code=%d err=%q", code, errText)
+	}
+}
+
+// TestStartSession_AutoInitializesLifecycleWhenStartupWasNotCalled cobre a
+// causa raiz do bug do debug remoto no modo serviço (2026-09-24): o manager só
+// recebia Startup pelo adapter Wails v3, que não existe em
+// discovery-service.exe. O comando era recusado com exitCode=1 e SEM nenhum
+// log, deixando o console vazio e o diagnóstico impossível.
+//
+// Aqui o Start NÃO chama Startup. Ele deve mesmo assim chegar até
+// "iniciando sessao" (prova de que o lifecycle foi auto-inicializado) e falhar
+// apenas por falta de transporte NATS — com o erro registrado no log.
+func TestStartSession_AutoInitializesLifecycleWhenStartupWasNotCalled(t *testing.T) {
+	var mu sync.Mutex
+	var logs []string
+	m := New(Deps{
+		Logf: func(line string) {
+			mu.Lock()
+			logs = append(logs, line)
+			mu.Unlock()
+		},
+		GetConfig: func() Config {
+			// Servidor inválido: o nats.Connect falha imediatamente, sem os 5s
+			// de timeout do dial real.
+			return Config{AuthToken: "token-1", AgentID: "agent-1", NatsServer: "not-a-valid-url"}
+		},
+		GetAgentConfig: func() AgentConfig {
+			return AgentConfig{ClientID: "client-1", SiteID: "site-1"}
+		},
+	})
+
+	raw := `{"action":"start","sessionId":"sess-auto","logLevel":"debug","stream":{"natsSubject":"tenant.client-1.site.site-1.agent.agent-1.remote-debug.log"}}`
+	handled, code, _, errText := m.HandleCommand(context.Background(), "remotedebug", raw)
+	if !handled {
+		t.Fatalf("expected remotedebug command to be handled")
+	}
+	if code != 1 {
+		t.Fatalf("expected code=1 (sem transporte NATS), got code=%d err=%q", code, errText)
+	}
+	if !strings.Contains(errText, "nenhum transporte remoto disponivel") {
+		t.Fatalf("expected transport failure, got err=%q", errText)
+	}
+
+	mu.Lock()
+	joined := strings.Join(logs, "\n")
+	mu.Unlock()
+
+	if strings.Contains(joined, "nao inicializado") {
+		t.Fatalf("lifecycle deveria ter sido auto-inicializado, logs=%q", joined)
+	}
+	if !strings.Contains(joined, "[remote-debug] iniciando sessao") {
+		t.Fatalf("esperava log de inicio de sessao; logs=%q", joined)
+	}
+	if !strings.Contains(joined, "FALHA ao criar publishers") {
+		t.Fatalf("esperava log da falha de publishers; logs=%q", joined)
+	}
+}
+
+// TestStartSession_RefusedAfterShutdown garante que o domínio não "ressuscita"
+// num processo que já está encerrando (shutdown marca mesmo sem Startup prévio).
+func TestStartSession_RefusedAfterShutdown(t *testing.T) {
+	raw := `{"action":"start","sessionId":"sess-down","logLevel":"debug","stream":{"natsSubject":"tenant.client-1.site.site-1.agent.agent-1.remote-debug.log"}}`
+
+	cases := []struct {
+		name string
+		stop func(*Manager)
+	}{
+		{name: "startup_depois_shutdown", stop: func(m *Manager) {
+			_ = m.Startup(context.Background())
+			m.Shutdown()
+		}},
+		{name: "shutdown_sem_startup", stop: func(m *Manager) { m.Shutdown() }},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := New(Deps{Logf: func(string) {}})
+			tc.stop(m)
+
+			_, code, _, errText := m.HandleCommand(context.Background(), "remotedebug", raw)
+			if code != 1 {
+				t.Fatalf("expected code=1, got code=%d err=%q", code, errText)
+			}
+			if !strings.Contains(errText, "nao inicializado") {
+				t.Fatalf("expected refusal after shutdown, got err=%q", errText)
+			}
+		})
+	}
+}
+
+// failingPublisher simula um transporte que sempre recusa a publicação.
+type failingPublisher struct {
+	calls atomic.Int64
+}
+
+func (f *failingPublisher) Name() string { return "fake" }
+func (f *failingPublisher) Publish(context.Context, LogMessage) error {
+	f.calls.Add(1)
+	return errors.New("boom")
+}
+func (f *failingPublisher) Close() error { return nil }
+
+// TestPublishLoop_SignalsFatalFailureOnlyOnce garante que, com todos os
+// transportes mortos, o operador recebe UMA linha clara e acionável em vez de
+// uma linha por mensagem (o agent-service.log já passa de 8 MB) — e que o log
+// continua existindo, porque a ausência total de log foi o que tornou o bug do
+// debug remoto invisível.
+func TestPublishLoop_SignalsFatalFailureOnlyOnce(t *testing.T) {
+	var mu sync.Mutex
+	var logs []string
+	m := New(Deps{Logf: func(line string) {
+		mu.Lock()
+		logs = append(logs, line)
+		mu.Unlock()
+	}})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	pub := &failingPublisher{}
+	session := &Session{
+		sessionID:  "sess-fail",
+		agentID:    "agent-1",
+		minLevel:   LevelValue("info"),
+		deadline:   time.Now().Add(time.Hour),
+		logQueue:   make(chan queuedLine, 64),
+		cancel:     cancel,
+		publishers: []Publisher{pub},
+	}
+
+	go m.publishLoop(ctx, session)
+	for i := 0; i < 5; i++ {
+		session.logQueue <- queuedLine{message: fmt.Sprintf("linha %d", i), level: "info"}
+	}
+
+	// Espera a fila ser drenada (comprimento de channel é seguro de ler).
+	deadline := time.Now().Add(2 * time.Second)
+	for len(session.logQueue) > 0 && time.Now().Before(deadline) {
+		time.Sleep(2 * time.Millisecond)
+	}
+	if len(session.logQueue) > 0 {
+		t.Fatalf("publishLoop nao drenou a fila (restante=%d)", len(session.logQueue))
+	}
+	cancel()
+
+	mu.Lock()
+	failures := 0
+	for _, line := range logs {
+		if strings.Contains(line, "PUBLICACAO FALHOU") {
+			failures++
+		}
+	}
+	joined := strings.Join(logs, "\n")
+	mu.Unlock()
+
+	if failures != 1 {
+		t.Fatalf("esperava exatamente 1 sinal de falha, got %d\nlogs=%q", failures, joined)
+	}
+
+	// Com todos os transportes mortos, o publisher que falhou é aposentado
+	// (activeIndex avança): não ficamos martelando a conexão a cada linha.
+	if got := pub.calls.Load(); got != 1 {
+		t.Fatalf("esperava 1 tentativa de publish (transporte aposentado), got %d", got)
 	}
 }
 
