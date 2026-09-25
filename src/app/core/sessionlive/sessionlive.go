@@ -37,6 +37,13 @@ type Config struct {
 	// MaxDeadline é o teto absoluto da sessão (startedAt + duração máxima
 	// configurada na instalação). Zero = sem teto.
 	MaxDeadline time.Time
+	// CloseWithoutPeerSignal: quando true, encerra a sessão após InitialGrace se
+	// o peer NUNCA sinalizou (comportamento do remote debug). Quando false
+	// (acesso remoto), nunca fecha por ausência antes do primeiro sinal — o
+	// chamador mantém o prazo original do start, o que preserva viewers antigos
+	// que ainda não enviam ping. Depois do primeiro sinal, os dois modos fecham
+	// após MissesAllowed*Interval.
+	CloseWithoutPeerSignal bool
 }
 
 // Peer rastreia a presença do outro lado e calcula o deadline deslizante.
@@ -119,6 +126,12 @@ func (p *Peer) ShouldClose(now time.Time) (bool, string) {
 		if now.Sub(p.lastSignalAt) > time.Duration(p.cfg.MissesAllowed)*p.cfg.Interval {
 			return true, "peer-timeout"
 		}
+		return false, ""
+	}
+
+	if !p.cfg.CloseWithoutPeerSignal {
+		// Acesso remoto: sem primeiro sinal do viewer, o encerramento é do
+		// prazo original do start (o runner também avalia esse fallback).
 		return false, ""
 	}
 

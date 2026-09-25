@@ -143,8 +143,16 @@ func RunRemoteSessionWorker() {
 			var cmd map[string]any
 			if json.Unmarshal([]byte(line), &cmd) == nil {
 				if act, _ := cmd["action"].(string); act == "stop" {
-					cancel()
-					return
+					// Fecha a sessao pelo manager ANTES de sair: closeSessionLocked
+					// publica o frame "closed" no .control e o viewer mostra o
+					// placeholder na hora, em vez de esperar o watchdog
+					// (viewer-timeout de ~15s). O loop principal encerra sozinho
+					// ao ver CountActive()==0; sem isso o manager so fecharia no
+					// Shutdown() final, depois de o loop sair.
+					if handled, errMsg := mgr.HandleCommand(ctx, cmd); !handled && errMsg != "" {
+						fmt.Fprintf(os.Stderr, "[remote-session-worker] stop: %s\n", errMsg)
+					}
+					continue
 				}
 				// FIX 17/09: comandos framed de runtime (quality,
 				// recording_start/stop, monitor...) eram DESCARTADOS aqui — o

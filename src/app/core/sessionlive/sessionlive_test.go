@@ -12,9 +12,10 @@ import (
 func TestPeer_InitialGraceClosesWhenPeerNeverSignals(t *testing.T) {
 	startedAt := time.Date(2026, 3, 28, 10, 0, 0, 0, time.UTC)
 	cfg := Config{
-		Interval:      5 * time.Second,
-		MissesAllowed: 3,
-		InitialGrace:  60 * time.Second,
+		Interval:               5 * time.Second,
+		MissesAllowed:          3,
+		InitialGrace:           60 * time.Second,
+		CloseWithoutPeerSignal: true,
 	}
 	p := NewPeer(cfg, startedAt)
 
@@ -32,6 +33,34 @@ func TestPeer_InitialGraceClosesWhenPeerNeverSignals(t *testing.T) {
 	}
 	if p.Alive(startedAt.Add(61 * time.Second)) {
 		t.Fatalf("peer nao deveria estar vivo sem sinal")
+	}
+}
+
+// TestPeer_NoCloseWithoutPeerSignal cobre o acesso remoto: sem o primeiro
+// sinal do viewer, o peer NUNCA fecha por ausencia (viewers antigos nao
+// enviam ping); o prazo original do start continua valendo no consumidor.
+func TestPeer_NoCloseWithoutPeerSignal(t *testing.T) {
+	startedAt := time.Date(2026, 3, 28, 10, 0, 0, 0, time.UTC)
+	cfg := Config{
+		Interval:      5 * time.Second,
+		MissesAllowed: 3,
+		InitialGrace:  60 * time.Second,
+	}
+	p := NewPeer(cfg, startedAt)
+
+	for _, at := range []time.Duration{59 * time.Second, 61 * time.Second, 30 * time.Minute} {
+		if closed, reason := p.ShouldClose(startedAt.Add(at)); closed {
+			t.Fatalf("sem primeiro sinal nao deveria fechar (t=%s), got %q", at, reason)
+		}
+	}
+	if p.Alive(startedAt.Add(time.Hour)) {
+		t.Fatalf("Alive deveria ser false sem nenhum sinal do viewer")
+	}
+
+	// Depois do primeiro sinal, a janela normal volta a valer.
+	p.NotePeerSignal(startedAt.Add(time.Minute))
+	if closed, reason := p.ShouldClose(startedAt.Add(time.Minute + 16*time.Second)); !closed || reason != "peer-timeout" {
+		t.Fatalf("apos o primeiro sinal deveria fechar, got closed=%t reason=%q", closed, reason)
 	}
 }
 
@@ -143,7 +172,7 @@ func TestNormalizeConfig_AppliesDefaults(t *testing.T) {
 // TestRunner_ClosesWhenPeerNeverSignals exercita o loop real com relogio curto.
 func TestRunner_ClosesWhenPeerNeverSignals(t *testing.T) {
 	startedAt := time.Now().UTC()
-	cfg := Config{Interval: 20 * time.Millisecond, MissesAllowed: 3, InitialGrace: 60 * time.Millisecond}
+	cfg := Config{Interval: 20 * time.Millisecond, MissesAllowed: 3, InitialGrace: 60 * time.Millisecond, CloseWithoutPeerSignal: true}
 	p := NewPeer(cfg, startedAt)
 
 	lost := make(chan string, 1)

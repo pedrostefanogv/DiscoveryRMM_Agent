@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -14,6 +15,8 @@ import (
 
 	"discovery/app/core/safego"
 	"discovery/app/core/screen"
+	"discovery/app/core/sessioncontrol"
+	"discovery/app/core/sessionlive"
 	"discovery/app/core/terminal"
 )
 
@@ -35,6 +38,16 @@ type Session struct {
 	stopCh chan struct{}
 	doneCh chan struct{}
 	Meta   map[string]any `json:"-"` // metadados do payload original (shell, termCols, termRows, etc.)
+
+	// liveness (ping/pong no canal .control)
+	live            *sessionlive.Peer   // presenca do viewer e deadline deslizante
+	runner          *sessionlive.Runner // loop de ping/avaliacao de ausencia
+	ttl             time.Duration       // janela de renovacao concedida a cada sinal do viewer
+	initialDeadline time.Time           // prazo original do start (fallback sem primeiro ping)
+	maxDeadline     time.Time           // teto absoluto (startedAt + duracao maxima)
+	controlSub      *nats.Subscription  // assinatura do canal .control (por sessao)
+	controlSeq      uint64
+	controlSeqMu    *sync.Mutex // ponteiro: Session e copiada em GetActiveSessions
 }
 
 // Manager gerencia o lifecycle de sessoes remotas no agent.
@@ -130,25 +143,55 @@ func (m *Manager) handleStart(ctx context.Context, payload map[string]any) (bool
 		}
 	}
 
+	now := time.Now().UTC()
 	expiresAt, _ := time.Parse(time.RFC3339, toString(payload["expiresAtUtc"]))
 	if expiresAt.IsZero() {
-		expiresAt = time.Now().Add(30 * time.Minute)
+		expiresAt = now.Add(30 * time.Minute)
 	}
+	expiresAt = expiresAt.UTC()
+
+	maxExpiresAt, _ := time.Parse(time.RFC3339, toString(payload["maxExpiresAtUtc"]))
+	maxExpiresAt = maxExpiresAt.UTC()
+	if maxExpiresAt.IsZero() {
+		// Servidor antigo (sem contrato de liveness): o teto absoluto e o
+		// proprio prazo do start — a sessao nao pode ser renovada alem dele.
+		maxExpiresAt = expiresAt
+	}
+	renewalTTL := expiresAt.Sub(now)
+	if renewalTTL <= 0 {
+		renewalTTL = 30 * time.Minute
+	}
+	liveness := parseLivenessConfig(payload["liveness"])
+
+	livePeer := sessionlive.NewPeer(sessionlive.Config{
+		Interval:      time.Duration(liveness.PingIntervalSeconds) * time.Second,
+		MissesAllowed: liveness.MissedPingsBeforeClose,
+		InitialGrace:  time.Duration(liveness.InitialGraceSeconds) * time.Second,
+		MaxDeadline:   maxExpiresAt,
+		// Acesso remoto: viewers antigos nao enviam ping. Sem o primeiro sinal
+		// NAO fechar por ausencia — a sessao cai no prazo original do start.
+		CloseWithoutPeerSignal: false,
+	}, now)
 
 	session := &Session{
-		ID:           sessionID,
-		Kind:         kind,
-		Transport:    transport,
-		Quality:      quality,
-		Codec:        codec,
-		ImageQuality: imageQuality,
-		MaxFps:       maxFps,
-		NatsSubject:  natsSubject,
-		StartedAt:    time.Now(),
-		ExpiresAt:    expiresAt,
-		stopCh:       make(chan struct{}),
-		doneCh:       make(chan struct{}),
-		Meta:         payload, // armazena payload original para acesso a shell, termCols, termRows
+		ID:              sessionID,
+		Kind:            kind,
+		Transport:       transport,
+		Quality:         quality,
+		Codec:           codec,
+		ImageQuality:    imageQuality,
+		MaxFps:          maxFps,
+		NatsSubject:     natsSubject,
+		StartedAt:       now,
+		ExpiresAt:       expiresAt,
+		stopCh:          make(chan struct{}),
+		doneCh:          make(chan struct{}),
+		Meta:            payload, // payload original (shell, termCols, termRows, etc.)
+		live:            livePeer,
+		ttl:             renewalTTL,
+		initialDeadline: expiresAt,
+		maxDeadline:     maxExpiresAt,
+		controlSeqMu:    &sync.Mutex{},
 	}
 
 	// Garante que o NatsStreamHandler esta configurado. Como o comando start
@@ -161,6 +204,19 @@ func (m *Manager) handleStart(ctx context.Context, payload map[string]any) (bool
 			sessionID, kind)
 		return false, "nats stream not ready"
 	}
+
+	// Canal .control assinado para TODO kind: carrega a liveness do viewer
+	// (ping/pong) e comandos de dominio (ex. keyframe da tela). Fail-fast: sem
+	// assinatura a sessao nao sabe se o viewer esta vivo; melhor recusar o
+	// start do que abrir uma sessao que se autodestroi.
+	controlSub, cerr := m.natsStream.SubscribeToControl(sessionID, func(data []byte) {
+		m.handleControlFrame(session, data)
+	})
+	if cerr != nil {
+		log.Printf("[remote-session] handleStart: ERRO ao subscrever control sessionId=%s: %v\n", sessionID, cerr)
+		return false, "subscribe control: " + cerr.Error()
+	}
+	session.controlSub = controlSub
 
 	m.sessions[sessionID] = session
 
@@ -200,12 +256,24 @@ func (m *Manager) handleStart(ctx context.Context, payload map[string]any) (bool
 		})
 	}
 
-	// Monitor de expiracao — copia o stopCh ANTES de soltar o lock (evita race)
-	stopCh := session.stopCh
+	// Loop de liveness: envia ping ao viewer e avalia o deadline deslizante
+	// (renovado a cada sinal do viewer) com teto absoluto em maxDeadline.
+	session.runner = sessionlive.NewRunner(livePeer, sessionlive.RunnerOptions{
+		OnTick: func(context.Context) {
+			m.tickLiveness(session)
+		},
+		OnPeerLost: func(reason string) {
+			log.Printf("[remote-session] viewer ausente (%s): encerrando sessao %s\n", reason, sessionID)
+			m.closeSession(sessionID, "viewer-timeout")
+		},
+		Logf: func(line string) {
+			log.Printf("[remote-session-live] %s\n", line)
+		},
+	})
 	safego.Go(func() {
-		m.monitorExpiration(sessionID, expiresAt, stopCh)
+		session.runner.Run(ctx)
 	}, func(line string) {
-		fmt.Printf("[remote-session] %s\n", line)
+		fmt.Printf("[remote-session-live] %s\n", line)
 	})
 
 	if m.onSessionStarted != nil {
@@ -371,6 +439,19 @@ func (m *Manager) closeSessionLocked(sessionID, reason string) bool {
 		close(s.stopCh)
 	}
 
+	// Para o loop de liveness antes de avisar o viewer (evita novo ping).
+	if s.runner != nil {
+		s.runner.Stop()
+	}
+
+	// Avisa o viewer pelo canal .control (motivo do encerramento), para que a
+	// popup mostre o placeholder em vez de continuar tentando conectar.
+	m.sendControl(s, ControlTypeClosed, map[string]any{"reason": strings.TrimSpace(reason)})
+
+	if s.controlSub != nil {
+		_ = s.controlSub.Unsubscribe()
+	}
+
 	if m.natsStream != nil {
 		m.natsStream.PublishEvent(sessionID, "closed", map[string]string{"reason": reason})
 	} else {
@@ -405,16 +486,147 @@ func (m *Manager) publishEvent(sessionID, eventType string, data any) {
 	m.publishEventLegacy(sessionID, eventType, data)
 }
 
-func (m *Manager) monitorExpiration(sessionID string, expiresAt time.Time, stopCh chan struct{}) {
-	select {
-	case <-time.After(time.Until(expiresAt)):
-		m.mu.Lock()
-		defer m.mu.Unlock()
-		if _, ok := m.sessions[sessionID]; ok {
-			m.closeSessionLocked(sessionID, "expired")
+// livenessConfig espelha o bloco `liveness` do payload de start enviado pelo
+// backend (RemoteAccessOptions). Defaults iguais aos do debug remoto.
+type livenessConfig struct {
+	PingIntervalSeconds    int
+	MissedPingsBeforeClose int
+	InitialGraceSeconds    int
+}
+
+func parseLivenessConfig(raw any) livenessConfig {
+	cfg := livenessConfig{PingIntervalSeconds: 5, MissedPingsBeforeClose: 3, InitialGraceSeconds: 60}
+	m, ok := raw.(map[string]any)
+	if !ok {
+		return cfg
+	}
+	if v := toInt(m["pingIntervalSeconds"], 0); v > 0 {
+		cfg.PingIntervalSeconds = v
+	}
+	if v := toInt(m["missedPingsBeforeClose"], 0); v > 0 {
+		cfg.MissedPingsBeforeClose = v
+	}
+	if v := toInt(m["initialGraceSeconds"], 0); v > 0 {
+		cfg.InitialGraceSeconds = v
+	}
+	return cfg
+}
+
+// tickLiveness roda a cada intervalo do runner: envia ping, avalia o teto
+// absoluto e renova o deadline quando o viewer ja provou estar vivo.
+func (m *Manager) tickLiveness(session *Session) {
+	if session == nil || session.live == nil {
+		return
+	}
+	now := time.Now().UTC()
+
+	m.sendControl(session, ControlTypePing, nil)
+
+	if session.live.ExceededMaxDeadline(now) {
+		log.Printf("[remote-session] teto de sessao atingido (max-duration): sessionId=%s\n", session.ID)
+		m.closeSession(session.ID, "max-duration")
+		return
+	}
+
+	// Sem o primeiro sinal do viewer (viewer antigo, sem ping): o prazo
+	// original do start continua valendo — nao renovar no escuro.
+	if !session.live.PeerSeen() {
+		if now.After(session.initialDeadline) {
+			log.Printf("[remote-session] prazo original expirado sem sinal do viewer: sessionId=%s\n", session.ID)
+			m.closeSession(session.ID, "expired")
 		}
-	case <-stopCh:
-		// sessao fechada antes de expirar
+		return
+	}
+
+	m.extendDeadline(session)
+}
+
+// extendDeadline renova o prazo da sessao enquanto o viewer estiver vivo,
+// sem ultrapassar maxDeadline (teto absoluto).
+func (m *Manager) extendDeadline(session *Session) {
+	if session == nil || session.live == nil {
+		return
+	}
+	next := session.live.Deadline(time.Now().UTC(), session.ttl)
+	if next.IsZero() {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.sessions[session.ID]; ok {
+		session.ExpiresAt = next
+	}
+}
+
+// closeSession adquire o lock do manager e encerra a sessao. Usado pelos
+// callbacks que rodam fora do lock (runner de liveness).
+func (m *Manager) closeSession(sessionID, reason string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.closeSessionLocked(sessionID, reason)
+}
+
+// handleControlFrame processa um frame do canal .control da sessao.
+// Valida sessionId, descarta o eco do proprio agente e trata ping/pong
+// (liveness) e keyframe (tela).
+func (m *Manager) handleControlFrame(session *Session, data []byte) {
+	if session == nil {
+		return
+	}
+	env, err := DecodeRemoteSessionControl(data)
+	if err != nil {
+		log.Printf("[remote-session] frame de controle descartado: %v\n", err)
+		return
+	}
+	if env.SessionID != "" && !strings.EqualFold(strings.TrimSpace(env.SessionID), session.ID) {
+		return
+	}
+	if env.From == sessioncontrol.RoleAgent {
+		return // eco do proprio agente
+	}
+
+	// Presenca: somente ping/pong do VIEWER contam. O servidor nao prova que
+		// o navegador esta vivo.
+	if session.live != nil && env.From == sessioncontrol.RoleViewer &&
+		(env.Type == ControlTypePing || env.Type == ControlTypePong) {
+		session.live.NotePeerSignal(time.Now().UTC())
+	}
+
+	switch env.Type {
+	case ControlTypePing:
+		m.sendControl(session, ControlTypePong, nil)
+	case ControlTypeKeyframe:
+		m.mu.RLock()
+		screenSession, ok := m.screenSessions[session.ID]
+		m.mu.RUnlock()
+		if ok {
+			screenSession.RequestKeyFrame()
+		}
+	case ControlTypePong, ControlTypeClosed:
+		// presenca ja registrada acima
+	}
+}
+
+// sendControl publica um frame de controle no subject .control da sessao.
+func (m *Manager) sendControl(session *Session, typ string, payload map[string]any) {
+	if session == nil || m.natsStream == nil {
+		return
+	}
+	if session.controlSeqMu != nil {
+		session.controlSeqMu.Lock()
+		session.controlSeq++
+		session.controlSeqMu.Unlock()
+	}
+	seq := session.controlSeq
+
+	env := sessioncontrol.NewEnvelope(sessioncontrol.RoleAgent, typ, session.ID, seq, payload)
+	raw, err := encodeRemoteSessionControl(env)
+	if err != nil {
+		log.Printf("[remote-session] falha ao codificar controle: %v\n", err)
+		return
+	}
+	if err := m.natsStream.PublishControl(session.ID, raw); err != nil && typ != ControlTypeClosed {
+		log.Printf("[remote-session] falha ao publicar controle %s: %v\n", typ, err)
 	}
 }
 
@@ -524,21 +736,8 @@ func (m *Manager) runScreenSession(ctx context.Context, session *Session) {
 		defer inputSub.Unsubscribe()
 	}
 
-	// Subscreve canal de controle do viewer (.control): ações como
-	// "keyframe" (viewer voltou a ficar visível e precisa da tela completa).
-	controlSub, cerr := m.natsStream.SubscribeToControl(session.ID, func(action string, _ json.RawMessage) {
-		switch action {
-		case "keyframe":
-			screenSession.RequestKeyFrame()
-		default:
-			log.Printf("[remote-session-screen] ação de controle desconhecida: %s", action)
-		}
-	})
-	if cerr != nil {
-		log.Printf("[remote-session-screen] ERRO ao subscrever control: %v", cerr)
-	} else {
-		defer controlSub.Unsubscribe()
-	}
+	// O canal .control e assinado uma unica vez em handleStart (para todos os
+	// kinds); o keyframe chega por handleControlFrame -> RequestKeyFrame().
 
 	// ── Clipboard (somente texto, bidirecional) ──
 	// viewer→agent: o viewer publica o texto em .clipboard.req; o agent aplica
@@ -899,14 +1098,11 @@ func (m *Manager) Shutdown() error {
 	return nil
 }
 
-// normalizeTransport garante que o transport reportado ao servidor/viewer
-// reflita a capacidade real do binario. Se o servidor pediu WebRTC mas o
-// binario foi compilado sem a build tag webrtc, faz fallback para NATS.
+// normalizeTransport mapeia o transporte pedido pelo servidor para o que o
+// binario realmente suporta. WebRTC foi removido: qualquer pedido de "webrtc"
+// (ou vazio) cai para NATS.
 func normalizeTransport(requested string) string {
-	if requested == "" {
-		return "nats"
-	}
-	if requested == "webrtc" && !WebRTCAvailable {
+	if requested == "" || requested == "webrtc" {
 		return "nats"
 	}
 	return requested

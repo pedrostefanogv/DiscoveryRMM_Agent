@@ -262,6 +262,9 @@ func (m *Manager) startSession(cmd Command) error {
 		MissesAllowed: liveness.MissedPingsBeforeClose,
 		InitialGrace:  time.Duration(liveness.InitialGraceSeconds) * time.Second,
 		MaxDeadline:   maxDeadline,
+		// Debug remoto: sem nenhum sinal do viewer dentro da grace, a sessao
+		// nao pode ficar presa esperando uma popup que nunca conectou.
+		CloseWithoutPeerSignal: true,
 	}, now)
 
 	session := &Session{

@@ -3,7 +3,6 @@
 package remotesession
 
 import (
-	"context"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -88,19 +87,20 @@ func (h *NatsStreamHandler) publishSubject(sessionID, suffix string) string {
 	return fmt.Sprintf("%s.%s.%s", h.subjectBase(), stripHyphens(sessionID), suffix)
 }
 
-// SubscribeToControl subscreve ao subject de controle da sessao (Server→Agent).
-func (h *NatsStreamHandler) SubscribeToControl(sessionID string, handler func(action string, payload json.RawMessage)) (*nats.Subscription, error) {
+// SubscribeToControl subscreve ao subject de controle da sessao. O handler
+// recebe os BYTES crus: o canal unico carrega o envelope tipado de liveness
+// (ping/pong/keyframe/closed) e o decodificador do dominio decide o que fazer.
+func (h *NatsStreamHandler) SubscribeToControl(sessionID string, handler func(data []byte)) (*nats.Subscription, error) {
 	subject := h.subscribePattern(sessionID, "control")
 	return h.nc.Subscribe(subject, func(msg *nats.Msg) {
-		var ctrl struct {
-			Action  string          `json:"action"`
-			Payload json.RawMessage `json:"payload,omitempty"`
-		}
-		if err := json.Unmarshal(msg.Data, &ctrl); err != nil {
-			return
-		}
-		handler(ctrl.Action, ctrl.Payload)
+		handler(msg.Data)
 	})
+}
+
+// PublishControl publica um frame de controle ja codificado no subject da
+// sessao (.control). Usado pela liveness (ping/pong) e pelo encerramento.
+func (h *NatsStreamHandler) PublishControl(sessionID string, payload []byte) error {
+	return h.nc.Publish(h.publishSubject(sessionID, "control"), payload)
 }
 
 // PublishFrame envia um frame de tela para o viewer.
@@ -216,11 +216,6 @@ func (h *NatsStreamHandler) PublishEvent(sessionID string, eventType string, dat
 	subject := h.publishSubject(sessionID, "event")
 	log.Printf("[remote-session-nats] PublishEvent: subject=%s eventType=%s\n", subject, eventType)
 	return h.nc.Publish(subject, payload)
-}
-
-// PublishSignal envia sinalizacao WebRTC (SDP/ICE).
-func (h *NatsStreamHandler) PublishSignal(sessionID string, signalData []byte) error {
-	return h.nc.Publish(h.publishSubject(sessionID, "signal"), signalData)
 }
 
 // SubscribeToInput subscreve a eventos de input (mouse/teclado) do viewer.
@@ -356,137 +351,7 @@ func (h *NatsStreamHandler) SubscribeToProxyReq(sessionID string, handler func(r
 	})
 }
 
-// SubscribeToSignal subscreve a sinalizacao WebRTC do viewer.
-func (h *NatsStreamHandler) SubscribeToSignal(sessionID string, handler func(signalData []byte)) (*nats.Subscription, error) {
-	return h.nc.Subscribe(h.subscribePattern(sessionID, "signal"), func(msg *nats.Msg) {
-		handler(msg.Data)
-	})
-}
-
 // Close encerra o handler (no-op por enquanto, a conexao NATS e gerenciada externamente).
 func (h *NatsStreamHandler) Close() error {
 	return nil
-}
-
-// Subscription helpers para gerenciar subscricoes
-
-type SessionSubscriptions struct {
-	Control      *nats.Subscription
-	Input        *nats.Subscription
-	TermIn       *nats.Subscription
-	FilesReq     *nats.Subscription
-	ProxyReq     *nats.Subscription
-	ProcReq      *nats.Subscription
-	Signal       *nats.Subscription
-	ClipboardReq *nats.Subscription
-}
-
-// UnsubscribeAll cancela todas as subscricoes.
-func (ss *SessionSubscriptions) UnsubscribeAll() {
-	if ss.Control != nil {
-		_ = ss.Control.Unsubscribe()
-	}
-	if ss.Input != nil {
-		_ = ss.Input.Unsubscribe()
-	}
-	if ss.TermIn != nil {
-		_ = ss.TermIn.Unsubscribe()
-	}
-	if ss.FilesReq != nil {
-		_ = ss.FilesReq.Unsubscribe()
-	}
-	if ss.ProxyReq != nil {
-		_ = ss.ProxyReq.Unsubscribe()
-	}
-	if ss.ProcReq != nil {
-		_ = ss.ProcReq.Unsubscribe()
-	}
-	if ss.Signal != nil {
-		_ = ss.Signal.Unsubscribe()
-	}
-	if ss.ClipboardReq != nil {
-		_ = ss.ClipboardReq.Unsubscribe()
-	}
-}
-
-// SubscribeAll cria as subscricoes necessarias para uma sessao, com contexto para cleanup.
-func (h *NatsStreamHandler) SubscribeAll(ctx context.Context, sessionID string, handlers SessionHandlers) (*SessionSubscriptions, error) {
-	subs := &SessionSubscriptions{}
-	var err error
-
-	subs.Control, err = h.SubscribeToControl(sessionID, handlers.OnControl)
-	if err != nil {
-		subs.UnsubscribeAll()
-		return nil, fmt.Errorf("subscribe control: %w", err)
-	}
-
-	if handlers.OnInput != nil {
-		subs.Input, err = h.SubscribeToInput(sessionID, handlers.OnInput)
-		if err != nil {
-			subs.UnsubscribeAll()
-			return nil, fmt.Errorf("subscribe input: %w", err)
-		}
-	}
-
-	if handlers.OnTermIn != nil {
-		subs.TermIn, err = h.SubscribeToTermIn(sessionID, handlers.OnTermIn)
-		if err != nil {
-			subs.UnsubscribeAll()
-			return nil, fmt.Errorf("subscribe term.in: %w", err)
-		}
-	}
-
-	if handlers.OnFilesReq != nil {
-		subs.FilesReq, err = h.SubscribeToFilesReq(sessionID, handlers.OnFilesReq)
-		if err != nil {
-			subs.UnsubscribeAll()
-			return nil, fmt.Errorf("subscribe files.req: %w", err)
-		}
-	}
-
-	if handlers.OnProxyReq != nil {
-		subs.ProxyReq, err = h.SubscribeToProxyReq(sessionID, handlers.OnProxyReq)
-		if err != nil {
-			subs.UnsubscribeAll()
-			return nil, fmt.Errorf("subscribe proxy.req: %w", err)
-		}
-	}
-
-	if handlers.OnProcReq != nil {
-		subs.ProcReq, err = h.SubscribeToProcReq(sessionID, handlers.OnProcReq)
-		if err != nil {
-			subs.UnsubscribeAll()
-			return nil, fmt.Errorf("subscribe proc.req: %w", err)
-		}
-	}
-
-	if handlers.OnSignal != nil {
-		subs.Signal, err = h.SubscribeToSignal(sessionID, handlers.OnSignal)
-		if err != nil {
-			subs.UnsubscribeAll()
-			return nil, fmt.Errorf("subscribe signal: %w", err)
-		}
-	}
-
-	if handlers.OnClipboardReq != nil {
-		subs.ClipboardReq, err = h.SubscribeToClipboardReq(sessionID, handlers.OnClipboardReq)
-		if err != nil {
-			subs.UnsubscribeAll()
-			return nil, fmt.Errorf("subscribe clipboard.req: %w", err)
-		}
-	}
-
-	return subs, nil
-}
-
-// SessionHandlers define os handlers de eventos para uma sessao.
-type SessionHandlers struct {
-	OnControl      func(action string, payload json.RawMessage)
-	OnInput        func(data []byte)
-	OnTermIn       func(data []byte)
-	OnFilesReq     func(reqData []byte) []byte
-	OnProxyReq     func(reqData []byte) []byte
-	OnProcReq      func(reqData []byte) []byte
-	OnSignal       func(signalData []byte)
-	OnClipboardReq func(text string)
 }
