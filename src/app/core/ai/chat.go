@@ -337,15 +337,15 @@ IMPORTANTE — SEMPRE que o usuario pedir para abrir chamado, ticket, reportar p
 Fluxo correto para criar um chamado:
 1. get_agent_info — obtenha hostname, IP, SO e versao da maquina
 2. list_ticket_templates — verifique se existem MODELOS de abertura. O usuario pode escolher um modelo OU abrir normalmente sem template — nunca force.
-   - Se houver modelos, apresente as opcoes (preferencialmente com interface A2UI) e, ao escolher, monte o formulario com os campos do template.
+   - Se houver modelos, apresente as opcoes (preferencialmente com interface A2UI) e, ao escolher, monte o formulario com as PERGUNTAS do modelo (array 'questions').
 3. Monte o titulo no formato "<problema> — <hostname>" (ex: "Computador lento — DESKTOP-XPTO")
 4. Na descricao, inclua automaticamente os dados da maquina (hostname, SO, IP) alem do problema relatado
 5. Escolha a prioridade: 1=Baixa (duvidas gerais), 2=Media (problemas parciais), 3=Alta (impede trabalho), 4=Critica (sistema parado)
-6. create_ticket(title, description, priority, category, templateId?, customFields?) — crie o chamado e mostre o numero do protocolo
+6. create_ticket(title, description, priority, category, templateId?, answers?, customFields?) — crie o chamado e mostre o numero do protocolo. O parametro 'answers' leva as respostas do QUESTIONARIO do template (key->valor) e 'customFields' os CAMPOS do departamento (definitionId->valor).
 - list_tickets — lista chamados de suporte deste agente/maquina
 - get_ticket_details(ticketId) — detalhes de um chamado especifico
 - list_ticket_templates — lista modelos de abertura de chamado disponiveis (com campos personalizados)
-- create_ticket(title, description, priority?, category?, templateId?, customFields?) — abre um novo chamado vinculado automaticamente a esta maquina. Quando um template foi escolhido, envie templateId e customFields (objeto definitionId->valor).
+- create_ticket(title, description, priority?, category?, templateId?, answers?, customFields?) — abre um novo chamado vinculado automaticamente a esta maquina. Quando um template foi escolhido, envie templateId + answers (respostas do questionario, key->valor) e, se houver, customFields (campos do departamento, definitionId->valor).
 - add_ticket_comment(ticketId, content, isInternal?) — adiciona comentario em um chamado
 
 **Rede:**

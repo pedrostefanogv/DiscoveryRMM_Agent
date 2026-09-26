@@ -126,6 +126,7 @@ type TicketComment = supportmeta.TicketComment
 type CreateTicketInput = supportmeta.CreateTicketInput
 type TicketTemplateOption = supportmeta.TicketTemplateOption
 type TicketTemplateField = supportmeta.TicketTemplateField
+type TicketTemplateQuestion = supportmeta.TicketTemplateQuestion
 
 type TicketOptionDepartment = supportmeta.TicketOptionDepartment
 
@@ -656,6 +657,7 @@ func (s *Service) CreateSupportTicket(input CreateTicketInput) (APITicket, error
 		Category          *string        `json:"category,omitempty"`
 		TemplateID        *string        `json:"templateId,omitempty"`
 		CustomFieldValues map[string]any `json:"customFieldValues,omitempty"`
+		TemplateAnswers   map[string]any `json:"templateAnswers,omitempty"`
 	}
 
 	payload := createReq{
@@ -667,6 +669,9 @@ func (s *Service) CreateSupportTicket(input CreateTicketInput) (APITicket, error
 	}
 	if len(input.CustomFields) > 0 {
 		payload.CustomFieldValues = input.CustomFields
+	}
+	if len(input.TemplateAnswers) > 0 {
+		payload.TemplateAnswers = input.TemplateAnswers
 	}
 	if c := strings.TrimSpace(input.Category); c != "" {
 		payload.Category = &c
@@ -1123,7 +1128,7 @@ func (s *Service) AddAgentTicketComment(ticketID, content string) (json.RawMessa
 
 // CreateAgentTicket creates a ticket via MCP tool. templateID e os campos
 // personalizados são opcionais (abertura normal continua funcionando).
-func (s *Service) CreateAgentTicket(title, description string, priority int, category, templateID string, customFieldsJSON string) (json.RawMessage, error) {
+func (s *Service) CreateAgentTicket(title, description string, priority int, category, templateID, customFieldsJSON, templateAnswersJSON string) (json.RawMessage, error) {
 	input := CreateTicketInput{
 		Title:       title,
 		Description: description,
@@ -1137,6 +1142,13 @@ func (s *Service) CreateAgentTicket(title, description string, priority int, cat
 			return nil, fmt.Errorf("customFields inválido: %w", err)
 		}
 		input.CustomFields = fields
+	}
+	if strings.TrimSpace(templateAnswersJSON) != "" {
+		answers := map[string]any{}
+		if err := json.Unmarshal([]byte(templateAnswersJSON), &answers); err != nil {
+			return nil, fmt.Errorf("templateAnswers inválido: %w", err)
+		}
+		input.TemplateAnswers = answers
 	}
 	ticket, err := s.CreateSupportTicket(input)
 	if err != nil {

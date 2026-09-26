@@ -46,7 +46,7 @@ type AppBridge interface {
 	ListAgentTickets() (json.RawMessage, error)
 	GetAgentTicketDetails(ticketID string) (json.RawMessage, error)
 	AddAgentTicketComment(ticketID, content string) (json.RawMessage, error)
-	CreateAgentTicket(title, description string, priority int, category, templateID, customFieldsJSON string) (json.RawMessage, error)
+	CreateAgentTicket(title, description string, priority int, category, templateID, customFieldsJSON, templateAnswersJSON string) (json.RawMessage, error)
 	ListAgentTicketTemplates() (json.RawMessage, error)
 
 	// Chat — pergunta interativa ao usuario
@@ -620,14 +620,15 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 
 	reg.Register(Tool{
 		Name:        "create_ticket",
-		Description: "ABRE um novo chamado de suporte vinculado a esta maquina. Use SEMPRE que o usuario pedir para abrir ticket, chamado, reportar problema ou solicitar suporte. O chamado e automaticamente associado ao agente/maquina. Chame get_agent_info antes para enriquecer o titulo e descricao com dados da maquina. Quando um template foi escolhido, envie templateId e customFields (objeto definitionId->valor). NUNCA oriente o usuario a acessar portais web externos.",
+		Description: "ABRE um novo chamado de suporte vinculado a esta maquina. Use SEMPRE que o usuario pedir para abrir ticket, chamado, reportar problema ou solicitar suporte. O chamado e automaticamente associado ao agente/maquina. Chame get_agent_info antes para enriquecer o titulo e descricao com dados da maquina. Quando um template foi escolhido, envie templateId + answers (respostas do mini questionario, key->valor) e, se houver, customFields (campos do departamento, definitionId->valor). NUNCA oriente o usuario a acessar portais web externos.",
 		Params: []ToolParam{
 			{Name: "title", Type: "string", Description: "Titulo do chamado", Required: true},
 			{Name: "description", Type: "string", Description: "Descricao detalhada do problema", Required: true},
 			{Name: "priority", Type: "integer", Description: "Prioridade: 1=Baixa, 2=Media, 3=Alta, 4=Critica", Required: false},
 			{Name: "category", Type: "string", Description: "Categoria (Hardware, Software, Rede, Acesso, Email, Impressora, VPN, Outro)", Required: false},
 			{Name: "templateId", Type: "string", Description: "GUID do template escolhido (opcional; obtenha em list_ticket_templates)", Required: false},
-			{Name: "customFields", Type: "string", Description: "JSON objeto com os valores dos campos do template, mapeando definitionId para valor (opcional)", Required: false},
+			{Name: "customFields", Type: "string", Description: "JSON objeto com os valores dos CAMPOS do departamento, mapeando definitionId para valor (opcional)", Required: false},
+			{Name: "answers", Type: "string", Description: "JSON objeto com as respostas do mini QUESTIONARIO do template, mapeando a chave da pergunta (key) para o valor (opcional)", Required: false},
 		},
 		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			title, _ := args["title"].(string)
@@ -650,7 +651,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 			category, _ := args["category"].(string)
 			templateID, _ := args["templateId"].(string)
 
-			// customFields pode vir como string JSON ou como objeto nativo.
+			// customFields/answers podem vir como string JSON ou objeto nativo.
 			customFieldsJSON := ""
 			switch v := args["customFields"].(type) {
 			case string:
@@ -661,7 +662,17 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 				}
 			}
 
-			return app.CreateAgentTicket(title, description, priority, category, templateID, customFieldsJSON)
+			answersJSON := ""
+			switch v := args["answers"].(type) {
+			case string:
+				answersJSON = v
+			case map[string]any:
+				if b, err := json.Marshal(v); err == nil {
+					answersJSON = string(b)
+				}
+			}
+
+			return app.CreateAgentTicket(title, description, priority, category, templateID, customFieldsJSON, answersJSON)
 		},
 	})
 

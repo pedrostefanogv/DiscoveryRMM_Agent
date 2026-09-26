@@ -145,9 +145,11 @@ type CreateTicketInput struct {
 	// servidor calcula o SLA. Sem eles, o perfil padrão do departamento não se aplica.
 	DepartmentID      string `json:"departmentId,omitempty"`
 	WorkflowProfileID string `json:"workflowProfileId,omitempty"`
-	// Template opcional + valores dos campos personalizados (definitionId→valor).
-	TemplateID   string         `json:"templateId,omitempty"`
-	CustomFields map[string]any `json:"customFieldValues,omitempty"`
+	// Template opcional + valores dos campos personalizados (definitionId→valor)
+	// + respostas do mini questionário do template (key→valor).
+	TemplateID      string         `json:"templateId,omitempty"`
+	CustomFields    map[string]any `json:"customFieldValues,omitempty"`
+	TemplateAnswers map[string]any `json:"templateAnswers,omitempty"`
 }
 
 // TicketTemplateField descreve um campo personalizado de um template de chamado.
@@ -162,16 +164,29 @@ type TicketTemplateField struct {
 	InputMask       string   `json:"inputMask"`
 }
 
+// TicketTemplateQuestion é uma pergunta do mini questionário de um template.
+type TicketTemplateQuestion struct {
+	Key             string   `json:"key"`
+	Label           string   `json:"label"`
+	DataType        string   `json:"dataType"`
+	IsRequired      bool     `json:"isRequired"`
+	Options         []string `json:"options"`
+	ValidationRegex string   `json:"validationRegex"`
+	InputMask       string   `json:"inputMask"`
+	HelpText        string   `json:"helpText"`
+}
+
 // TicketTemplateOption é um template de abertura de chamado disponível ao agente.
 type TicketTemplateOption struct {
-	ID           string                `json:"id"`
-	Name         string                `json:"name"`
-	Title        string                `json:"title"`
-	Description  string                `json:"description"`
-	Priority     string                `json:"priority"`
-	Category     string                `json:"category"`
-	DepartmentID string                `json:"departmentId"`
-	Fields       []TicketTemplateField `json:"fields"`
+	ID           string                   `json:"id"`
+	Name         string                   `json:"name"`
+	Title        string                   `json:"title"`
+	Description  string                   `json:"description"`
+	Priority     string                   `json:"priority"`
+	Category     string                   `json:"category"`
+	DepartmentID string                   `json:"departmentId"`
+	Questions    []TicketTemplateQuestion `json:"questions"`
+	Fields       []TicketTemplateField    `json:"fields"`
 }
 
 // CloseTicketInput is the frontend-facing request to close a ticket.
