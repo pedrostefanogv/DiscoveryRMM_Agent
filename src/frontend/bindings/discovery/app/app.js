@@ -342,10 +342,14 @@ export function Context() {
  * @param {string} description
  * @param {number} priority
  * @param {string} category
+ * @param {string} templateID
+ * @param {string} departmentID
+ * @param {string} customFieldsJSON
+ * @param {string} templateAnswersJSON
  * @returns {$CancellablePromise<json$0.RawMessage>}
  */
-export function CreateAgentTicket(title, description, priority, category) {
-    return $Call.ByID(124489267, title, description, priority, category);
+export function CreateAgentTicket(title, description, priority, category, templateID, departmentID, customFieldsJSON, templateAnswersJSON) {
+    return $Call.ByID(124489267, title, description, priority, category, templateID, departmentID, customFieldsJSON, templateAnswersJSON);
 }
 
 /**
@@ -892,6 +896,18 @@ export function GetP2PPeerArtifactIndex() {
 }
 
 /**
+ * GetP2PPeerArtifactIndexCached devolve o índice de artifacts dos peers a
+ * partir do cache de gossip (sem rede). Use em hot paths de produção;
+ * GetP2PPeerArtifactIndex SEMPRE faz fetch live de todos os peers.
+ * @returns {$CancellablePromise<$models.P2PPeerArtifactIndexView[]>}
+ */
+export function GetP2PPeerArtifactIndexCached() {
+    return $Call.ByID(2663043948).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType46($result);
+    }));
+}
+
+/**
  * @returns {$CancellablePromise<$models.P2PPeerView[]>}
  */
 export function GetP2PPeers() {
@@ -1212,6 +1228,13 @@ export function IsTrayReady() {
 /**
  * @returns {$CancellablePromise<json$0.RawMessage>}
  */
+export function ListAgentTicketTemplates() {
+    return $Call.ByID(535195374);
+}
+
+/**
+ * @returns {$CancellablePromise<json$0.RawMessage>}
+ */
 export function ListAgentTickets() {
     return $Call.ByID(2566506872);
 }
@@ -1295,6 +1318,15 @@ export function ListPrinters() {
  */
 export function ListPrintersJSON() {
     return $Call.ByID(401928665);
+}
+
+/**
+ * ListTicketDepartmentsJSON expõe os departamentos de abertura de chamado
+ * (globais + do cliente) para a IA escolher o responsável pelo atendimento.
+ * @returns {$CancellablePromise<json$0.RawMessage>}
+ */
+export function ListTicketDepartmentsJSON() {
+    return $Call.ByID(3447354127);
 }
 
 /**

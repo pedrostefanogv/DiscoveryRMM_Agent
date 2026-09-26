@@ -279,14 +279,18 @@ function initSupport() {
       showToast(translate('support.fillTitleDescription'), 'error');
       return;
     }
+    // Departamento é obrigatório: define responsável (auto-atribuição) e SLA.
+    if (!departmentId) {
+      showToast(translate('support.selectDepartment'), 'error');
+      return;
+    }
 
     var btn = document.getElementById('submitTicketBtn');
     if (btn) { btn.disabled = true; btn.textContent = translate('support.sending'); }
     showTicketFormStatus(translate('support.submittingTicket'), false);
 
     try {
-      var payload = { title: title, description: description, priority: priority, category: category };
-      if (departmentId) payload.departmentId = departmentId;
+      var payload = { title: title, description: description, priority: priority, category: category, departmentId: departmentId };
       if (workflowProfileId) payload.workflowProfileId = workflowProfileId;
       var ticket = await appApi().CreateSupportTicket(payload);
       showToast(translate('support.ticketCreatedSuccess'), 'success');

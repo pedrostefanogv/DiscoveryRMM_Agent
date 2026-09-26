@@ -120,6 +120,14 @@ export class APITicket {
              */
             this["ratedBy"] = undefined;
         }
+        if (/** @type {any} */(false)) {
+            /**
+             * Snapshot markdown (somente leitura) do formulário/template enviado na abertura.
+             * @member
+             * @type {string | null | undefined}
+             */
+            this["submissionSnapshotMarkdown"] = undefined;
+        }
 
         Object.assign(this, $$source);
     }
@@ -362,6 +370,29 @@ export class CreateTicketInput {
              */
             this["workflowProfileId"] = undefined;
         }
+        if (/** @type {any} */(false)) {
+            /**
+             * Template opcional + valores dos campos personalizados (definitionId→valor)
+             * + respostas do mini questionário do template (key→valor).
+             * @member
+             * @type {string | undefined}
+             */
+            this["templateId"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {{ [_ in string]?: any } | undefined}
+             */
+            this["customFieldValues"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {{ [_ in string]?: any } | undefined}
+             */
+            this["templateAnswers"] = undefined;
+        }
 
         Object.assign(this, $$source);
     }
@@ -372,7 +403,15 @@ export class CreateTicketInput {
      * @returns {CreateTicketInput}
      */
     static createFrom($$source = {}) {
+        const $$createField7_0 = $$createType2;
+        const $$createField8_0 = $$createType2;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("customFieldValues" in $$parsedSource) {
+            $$parsedSource["customFieldValues"] = $$createField7_0($$parsedSource["customFieldValues"]);
+        }
+        if ("templateAnswers" in $$parsedSource) {
+            $$parsedSource["templateAnswers"] = $$createField8_0($$parsedSource["templateAnswers"]);
+        }
         return new CreateTicketInput(/** @type {Partial<CreateTicketInput>} */($$parsedSource));
     }
 }
@@ -519,7 +558,7 @@ export class KnowledgeArticle {
      * @returns {KnowledgeArticle}
      */
     static createFrom($$source = {}) {
-        const $$createField5_0 = $$createType2;
+        const $$createField5_0 = $$createType3;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("tags" in $$parsedSource) {
             $$parsedSource["tags"] = $$createField5_0($$parsedSource["tags"]);
@@ -604,7 +643,7 @@ export class KnowledgePage {
      * @returns {KnowledgePage}
      */
     static createFrom($$source = {}) {
-        const $$createField7_0 = $$createType4;
+        const $$createField7_0 = $$createType5;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("children" in $$parsedSource) {
             $$parsedSource["children"] = $$createField7_0($$parsedSource["children"]);
@@ -788,8 +827,8 @@ export class TicketOptions {
      * @returns {TicketOptions}
      */
     static createFrom($$source = {}) {
-        const $$createField0_0 = $$createType6;
-        const $$createField1_0 = $$createType8;
+        const $$createField0_0 = $$createType7;
+        const $$createField1_0 = $$createType9;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("departments" in $$parsedSource) {
             $$parsedSource["departments"] = $$createField0_0($$parsedSource["departments"]);
@@ -809,10 +848,11 @@ export class TicketOptions {
 // Private type creation functions
 const $$createType0 = APIWorkflowState.createFrom;
 const $$createType1 = $Create.Nullable($$createType0);
-const $$createType2 = $Create.Array($Create.Any);
-const $$createType3 = KnowledgePage.createFrom;
-const $$createType4 = $Create.Array($$createType3);
-const $$createType5 = TicketOptionDepartment.createFrom;
-const $$createType6 = $Create.Array($$createType5);
-const $$createType7 = TicketOptionProfile.createFrom;
-const $$createType8 = $Create.Array($$createType7);
+const $$createType2 = $Create.Map($Create.Any, $Create.Any);
+const $$createType3 = $Create.Array($Create.Any);
+const $$createType4 = KnowledgePage.createFrom;
+const $$createType5 = $Create.Array($$createType4);
+const $$createType6 = TicketOptionDepartment.createFrom;
+const $$createType7 = $Create.Array($$createType6);
+const $$createType8 = TicketOptionProfile.createFrom;
+const $$createType9 = $Create.Array($$createType8);

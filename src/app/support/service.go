@@ -1128,13 +1128,16 @@ func (s *Service) AddAgentTicketComment(ticketID, content string) (json.RawMessa
 
 // CreateAgentTicket creates a ticket via MCP tool. templateID e os campos
 // personalizados são opcionais (abertura normal continua funcionando).
-func (s *Service) CreateAgentTicket(title, description string, priority int, category, templateID, customFieldsJSON, templateAnswersJSON string) (json.RawMessage, error) {
+func (s *Service) CreateAgentTicket(title, description string, priority int, category, templateID, departmentID, customFieldsJSON, templateAnswersJSON string) (json.RawMessage, error) {
 	input := CreateTicketInput{
 		Title:       title,
 		Description: description,
 		Priority:    priority,
 		Category:    category,
 		TemplateID:  templateID,
+		// Departamento é obrigatório na API: define responsável (auto-atribuição)
+		// e perfil/SLA do chamado.
+		DepartmentID: departmentID,
 	}
 	if strings.TrimSpace(customFieldsJSON) != "" {
 		fields := map[string]any{}

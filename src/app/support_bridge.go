@@ -122,11 +122,24 @@ func (a *App) AddAgentTicketComment(ticketID, content string) (json.RawMessage, 
 	return a.SupportSvc.AddAgentTicketComment(ticketID, content)
 }
 
-func (a *App) CreateAgentTicket(title, description string, priority int, category, templateID, customFieldsJSON, templateAnswersJSON string) (json.RawMessage, error) {
+func (a *App) CreateAgentTicket(title, description string, priority int, category, templateID, departmentID, customFieldsJSON, templateAnswersJSON string) (json.RawMessage, error) {
 	if err := a.requireSupportSvc(); err != nil {
 		return nil, err
 	}
-	return a.SupportSvc.CreateAgentTicket(title, description, priority, category, templateID, customFieldsJSON, templateAnswersJSON)
+	return a.SupportSvc.CreateAgentTicket(title, description, priority, category, templateID, departmentID, customFieldsJSON, templateAnswersJSON)
+}
+
+// ListTicketDepartmentsJSON expõe os departamentos de abertura de chamado
+// (globais + do cliente) para a IA escolher o responsável pelo atendimento.
+func (a *App) ListTicketDepartmentsJSON() (json.RawMessage, error) {
+	if err := a.requireSupportSvc(); err != nil {
+		return nil, err
+	}
+	options, err := a.SupportSvc.GetTicketOptions()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(map[string]any{"departments": options.Departments})
 }
 
 func (a *App) ListAgentTicketTemplates() (json.RawMessage, error) {

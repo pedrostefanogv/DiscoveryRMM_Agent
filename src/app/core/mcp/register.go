@@ -46,8 +46,9 @@ type AppBridge interface {
 	ListAgentTickets() (json.RawMessage, error)
 	GetAgentTicketDetails(ticketID string) (json.RawMessage, error)
 	AddAgentTicketComment(ticketID, content string) (json.RawMessage, error)
-	CreateAgentTicket(title, description string, priority int, category, templateID, customFieldsJSON, templateAnswersJSON string) (json.RawMessage, error)
+	CreateAgentTicket(title, description string, priority int, category, templateID, departmentID, customFieldsJSON, templateAnswersJSON string) (json.RawMessage, error)
 	ListAgentTicketTemplates() (json.RawMessage, error)
+	ListTicketDepartmentsJSON() (json.RawMessage, error)
 
 	// Chat — pergunta interativa ao usuario
 	AskUserChat(question, optionsJSON, allowText string) (string, error)
@@ -629,6 +630,14 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 	})
 
 	reg.Register(Tool{
+		Name:        "list_departments",
+		Description: "Lista os DEPARTAMENTOS de abertura de chamado disponiveis (globais + do cliente), com id e nome. O departamento define quem atende (auto-atribuicao) e o SLA. Chame ANTES de create_ticket: escolha o departamento que melhor se enquadra no relato do usuario; se nao conseguir decidir, use ask_user mostrando estas opcoes e so abra o chamado depois da resposta.",
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
+			return app.ListTicketDepartmentsJSON()
+		},
+	})
+
+	reg.Register(Tool{
 		Name:        "create_ticket",
 		Description: "ABRE um novo chamado de suporte vinculado a esta maquina. Use SEMPRE que o usuario pedir para abrir ticket, chamado, reportar problema ou solicitar suporte. O chamado e automaticamente associado ao agente/maquina. Chame get_agent_info antes para enriquecer o titulo e descricao com dados da maquina. Quando um template foi escolhido, envie templateId + answers (respostas do mini questionario, key->valor) e, se houver, customFields (campos do departamento, definitionId->valor). NUNCA oriente o usuario a acessar portais web externos.",
 		Params: []ToolParam{
@@ -637,6 +646,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 			{Name: "priority", Type: "integer", Description: "Prioridade: 1=Baixa, 2=Media, 3=Alta, 4=Critica", Required: false},
 			{Name: "category", Type: "string", Description: "Categoria (Hardware, Software, Rede, Acesso, Email, Impressora, VPN, Outro)", Required: false},
 			{Name: "templateId", Type: "string", Description: "GUID do template escolhido (opcional; obtenha em list_ticket_templates)", Required: false},
+			{Name: "departmentId", Type: "string", Description: "GUID do departamento responsavel (obrigatorio; obtenha em list_departments e escolha o que melhor se enquadra ou pergunte ao usuario)", Required: true},
 			{Name: "customFields", Type: "string", Description: "JSON objeto com os valores dos CAMPOS do departamento, mapeando definitionId para valor (opcional)", Required: false},
 			{Name: "answers", Type: "string", Description: "JSON objeto com as respostas do mini QUESTIONARIO do template, mapeando a chave da pergunta (key) para o valor (opcional)", Required: false},
 		},
@@ -660,6 +670,12 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 			}
 			category, _ := args["category"].(string)
 			templateID, _ := args["templateId"].(string)
+			departmentID, _ := args["departmentId"].(string)
+			if strings.TrimSpace(departmentID) == "" {
+				// Departamento é obrigatório na API (responsável + SLA). Falha clara
+				// para a IA pedir/decidir o departamento antes de abrir o chamado.
+				return nil, fmt.Errorf("departmentId obrigatorio: consulte list_departments e, se nao conseguir decidir, pergunte ao usuario com as opcoes")
+			}
 
 			// customFields/answers podem vir como string JSON ou objeto nativo.
 			customFieldsJSON := ""
@@ -682,7 +698,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 				}
 			}
 
-			return app.CreateAgentTicket(title, description, priority, category, templateID, customFieldsJSON, answersJSON)
+			return app.CreateAgentTicket(title, description, priority, category, templateID, departmentID, customFieldsJSON, answersJSON)
 		},
 	})
 

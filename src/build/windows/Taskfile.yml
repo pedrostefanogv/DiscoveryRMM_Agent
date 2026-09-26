@@ -21,7 +21,7 @@ tasks:
         vars:
           PRODUCTION:
             ref: .PRODUCTION
-      - cmd: powershell Remove-item *.syso
+      - cmd: powershell Remove-Item *.syso -Force -ErrorAction SilentlyContinue
         platforms: [windows]
       - cmd: rm -f *.syso
         platforms: [linux, darwin]

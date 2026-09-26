@@ -859,6 +859,15 @@ export class PSADTVisualNotificationRequest {
              */
             this["countdownLabel"] = "";
         }
+        if (!("countdownNoDefer" in $$source)) {
+            /**
+             * CountdownNoDefer remove o botao de adiamento do aviso com contador
+             * (usado quando o comando de power vem com force=true).
+             * @member
+             * @type {boolean}
+             */
+            this["countdownNoDefer"] = false;
+        }
         if (!("dialogButtons" in $$source)) {
             /**
              * Dialog (Show-ADTDialogBox)

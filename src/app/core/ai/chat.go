@@ -284,7 +284,7 @@ Se receber um erro mencionando "parametro obrigatorio", corrija os argumentos e 
 Exemplos de chamadas CORRETAS:
 - search_packages: SEMPRE envie {"query": "<termo de busca>"} — NUNCA chame sem "query"
 - install_package: SEMPRE envie {"id": "<ID do pacote>"} — NUNCA chame sem "id"
-- create_ticket: SEMPRE envie {"title": "<titulo>", "description": "<descricao>"} — NUNCA chame sem ambos
+- create_ticket: SEMPRE envie {"title": "<titulo>", "description": "<descricao>", "departmentId": "<GUID do departamento>"} — NUNCA chame sem eles
 - get_agent_info: pode chamar sem argumentos (nao tem parametros obrigatorios)
 - list_installed_packages: pode chamar sem argumentos (nao tem parametros obrigatorios)
 
@@ -336,16 +336,18 @@ Para ver atualizacoes pendentes: use get_pending_updates.
 IMPORTANTE — SEMPRE que o usuario pedir para abrir chamado, ticket, reportar problema ou solicitar suporte, use as ferramentas abaixo. NUNCA oriente o usuario a acessar portal web, ligar para central ou enviar e-mail.
 Fluxo correto para criar um chamado:
 1. get_agent_info — obtenha hostname, IP, SO e versao da maquina
+2b. list_departments — escolha o DEPARTAMENTO responsavel pelo atendimento (define quem atende e o SLA): use o que melhor se enquadra no relato do usuario. Se houver duvida, chame ask_user mostrando os departamentos e so abra o chamado depois da resposta.
 2. list_ticket_templates — verifique se existem MODELOS de abertura. O usuario pode escolher um modelo OU abrir normalmente sem template — nunca force.
    - Se houver modelos, apresente as opcoes (preferencialmente com interface A2UI) e, ao escolher, monte o formulario com as PERGUNTAS do modelo (array 'questions').
 3. Monte o titulo no formato "<problema> — <hostname>" (ex: "Computador lento — DESKTOP-XPTO")
 4. Na descricao, inclua automaticamente os dados da maquina (hostname, SO, IP) alem do problema relatado
 5. Escolha a prioridade: 1=Baixa (duvidas gerais), 2=Media (problemas parciais), 3=Alta (impede trabalho), 4=Critica (sistema parado)
-6. create_ticket(title, description, priority, category, templateId?, answers?, customFields?) — crie o chamado e mostre o numero do protocolo. O parametro 'answers' leva as respostas do QUESTIONARIO do template (key->valor) e 'customFields' os CAMPOS do departamento (definitionId->valor).
+6. create_ticket(title, description, departmentId, priority, category, templateId?, answers?, customFields?) — crie o chamado; departmentId e OBRIGATORIO e mostre o numero do protocolo. O parametro 'answers' leva as respostas do QUESTIONARIO do template (key->valor) e 'customFields' os CAMPOS do departamento (definitionId->valor).
 - list_tickets — lista chamados de suporte deste agente/maquina
 - get_ticket_details(ticketId) — detalhes de um chamado especifico
 - list_ticket_templates — lista modelos de abertura de chamado disponiveis (com campos personalizados)
-- create_ticket(title, description, priority?, category?, templateId?, answers?, customFields?) — abre um novo chamado vinculado automaticamente a esta maquina. Quando um template foi escolhido, envie templateId + answers (respostas do questionario, key->valor) e, se houver, customFields (campos do departamento, definitionId->valor).
+- list_departments — lista os departamentos disponiveis (id + nome) para escolher o responsavel pelo atendimento
+- create_ticket(title, description, departmentId, priority?, category?, templateId?, answers?, customFields?) — abre um novo chamado vinculado automaticamente a esta maquina. Quando um template foi escolhido, envie templateId + answers (respostas do questionario, key->valor) e, se houver, customFields (campos do departamento, definitionId->valor).
 - add_ticket_comment(ticketId, content, isInternal?) — adiciona comentario em um chamado
 
 **Rede:**
