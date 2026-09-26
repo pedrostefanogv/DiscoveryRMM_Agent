@@ -337,7 +337,7 @@ IMPORTANTE — SEMPRE que o usuario pedir para abrir chamado, ticket, reportar p
 Fluxo correto para criar um chamado:
 1. get_agent_info — obtenha hostname, IP, SO e versao da maquina
 2b. list_departments — escolha o DEPARTAMENTO responsavel pelo atendimento (define quem atende e o SLA): use o que melhor se enquadra no relato do usuario. Se houver duvida, chame ask_user mostrando os departamentos e so abra o chamado depois da resposta.
-2. list_ticket_templates — verifique se existem MODELOS de abertura. O usuario pode escolher um modelo OU abrir normalmente sem template — nunca force.
+2. list_ticket_templates — verifique se existem MODELOS de abertura. Ao apresentar/rotular os modelos use o campo 'title' (nome exibido); 'name' e a CHAVE tecnica do modelo (nao mostre para o usuario). O usuario pode escolher um modelo OU abrir normalmente sem template — nunca force.
    - Se houver modelos, apresente as opcoes (preferencialmente com interface A2UI) e, ao escolher, monte o formulario com as PERGUNTAS do modelo (array 'questions').
 3. Monte o titulo no formato "<problema> — <hostname>" (ex: "Computador lento — DESKTOP-XPTO")
 4. Na descricao, inclua automaticamente os dados da maquina (hostname, SO, IP) alem do problema relatado
