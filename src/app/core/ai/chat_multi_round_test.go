@@ -10,11 +10,11 @@ func TestRoundTimeout(t *testing.T) {
 		round    int
 		expected time.Duration
 	}{
-		{0, 60 * time.Second},
-		{1, 90 * time.Second},
-		{2, 130 * time.Second},
-		{3, 130 * time.Second},
-		{99, 130 * time.Second},
+		{0, 180 * time.Second},
+		{1, 210 * time.Second},
+		{2, 240 * time.Second},
+		{3, 240 * time.Second},
+		{99, 240 * time.Second},
 	}
 	for _, tt := range tests {
 		if got := roundTimeout(tt.round); got != tt.expected {

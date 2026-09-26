@@ -322,6 +322,14 @@ func (s *Service) parseSSEStream(body io.Reader, onToken func(string)) (string, 
 			if strings.TrimSpace(evt.SessionID) != "" {
 				currentSessionID = strings.TrimSpace(evt.SessionID)
 			}
+			// B16: conteúdo final pode vir no próprio evento done.
+			if evt.Content != "" {
+				hasToken = true
+				contentBuf.WriteString(evt.Content)
+				if onToken != nil {
+					onToken(evt.Content)
+				}
+			}
 			return contentBuf.String(), currentSessionID, hasToken, nil
 		case "error":
 			msg := strings.TrimSpace(evt.Error)

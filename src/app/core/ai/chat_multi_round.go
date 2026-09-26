@@ -342,7 +342,11 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 		}
 
 		if !hasToolCalls {
-			s.logf("[chat] round %d: LLM respondeu sem tool_call (resposta direta)", round)
+			if strings.TrimSpace(s.lastAssistantContentSince(historyBeforeLen)) == "" {
+				s.logf("[chat] round %d: stream sem conteúdo e sem tool_call (resposta vazia do servidor)", round)
+			} else {
+				s.logf("[chat] round %d: LLM respondeu sem tool_call (resposta direta)", round)
+			}
 			s.logChatEntry(ChatLogEntry{
 				Type:         "round_end",
 				Method:       "multi_round",
@@ -799,6 +803,15 @@ func (s *Service) parseMultiRoundSSEWithProgress(body io.Reader, onToken func(st
 			if evt.SessionID != "" {
 				currentSessionID = evt.SessionID
 			}
+			// B16: o servidor pode entregar o texto final no próprio evento de
+			// encerramento (done/round_end) em vez de em tokens incrementais.
+			// Antes esse conteúdo era descartado e o chat exibia "sem resposta".
+			if evt.Content != "" {
+				contentBuf.WriteString(evt.Content)
+				if onToken != nil {
+					onToken(evt.Content)
+				}
+			}
 			if contentBuf.Len() > 0 {
 				s.mu.Lock()
 				appendHistoryLocked(s, Message{Role: "assistant", Content: contentBuf.String()})
@@ -810,6 +823,12 @@ func (s *Service) parseMultiRoundSSEWithProgress(body io.Reader, onToken func(st
 				currentSessionID = evt.SessionID
 			}
 			done = true
+			if evt.Content != "" {
+				contentBuf.WriteString(evt.Content)
+				if onToken != nil {
+					onToken(evt.Content)
+				}
+			}
 			if contentBuf.Len() > 0 {
 				s.mu.Lock()
 				appendHistoryLocked(s, Message{Role: "assistant", Content: contentBuf.String()})
@@ -847,6 +866,17 @@ func (s *Service) parseMultiRoundSSEWithProgress(body io.Reader, onToken func(st
 		return currentSessionID, false, fmt.Errorf("ler stream: %w", err)
 	}
 
+	// B16: stream fechado sem NENHUM evento SSE — sintoma clássico de dead-end
+	// no servidor (200 sem tokens/tool_call). Registra diagnóstico explícito em
+	// vez de deixar o turno cair silenciosamente no fallback.
+	if parsedEvents == 0 {
+		s.logf("[chat] stream encerrado sem nenhum evento SSE do servidor")
+		s.logChatEntry(ChatLogEntry{
+			Type:      "empty_stream_response",
+			Method:    "multi_round",
+			SessionID: currentSessionID,
+		})
+	}
 	s.logChatEntry(ChatLogEntry{
 		Type:        "sse_stream_end",
 		Method:      "multi_round",
@@ -863,11 +893,13 @@ func (s *Service) parseMultiRoundSSEWithProgress(body io.Reader, onToken func(st
 func roundTimeout(round int) time.Duration {
 	switch round {
 	case 0:
-		return 60 * time.Second
+		// B16: 60s cortava modelos de raciocínio (openrouter/auto) que levam
+		// mais tempo até o primeiro token. Alinhado ao piso de 120s do servidor.
+		return 180 * time.Second
 	case 1:
-		return 90 * time.Second
+		return 210 * time.Second
 	default:
-		return 130 * time.Second
+		return 240 * time.Second
 	}
 }
 
