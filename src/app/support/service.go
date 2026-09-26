@@ -124,6 +124,8 @@ type APITicket = supportmeta.APITicket
 type TicketComment = supportmeta.TicketComment
 
 type CreateTicketInput = supportmeta.CreateTicketInput
+type TicketTemplateOption = supportmeta.TicketTemplateOption
+type TicketTemplateField = supportmeta.TicketTemplateField
 
 type TicketOptionDepartment = supportmeta.TicketOptionDepartment
 
@@ -646,17 +648,25 @@ func (s *Service) CreateSupportTicket(input CreateTicketInput) (APITicket, error
 	ctx := s.ctxOrBackground()
 
 	type createReq struct {
-		DepartmentID      *string `json:"departmentId,omitempty"`
-		WorkflowProfileID *string `json:"workflowProfileId,omitempty"`
-		Title             string  `json:"title"`
-		Description       string  `json:"description"`
-		Priority          *string `json:"priority,omitempty"`
-		Category          *string `json:"category,omitempty"`
+		DepartmentID      *string        `json:"departmentId,omitempty"`
+		WorkflowProfileID *string        `json:"workflowProfileId,omitempty"`
+		Title             string         `json:"title"`
+		Description       string         `json:"description"`
+		Priority          *string        `json:"priority,omitempty"`
+		Category          *string        `json:"category,omitempty"`
+		TemplateID        *string        `json:"templateId,omitempty"`
+		CustomFieldValues map[string]any `json:"customFieldValues,omitempty"`
 	}
 
 	payload := createReq{
 		Title:       strings.TrimSpace(input.Title),
 		Description: strings.TrimSpace(input.Description),
+	}
+	if t := strings.TrimSpace(input.TemplateID); t != "" {
+		payload.TemplateID = &t
+	}
+	if len(input.CustomFields) > 0 {
+		payload.CustomFieldValues = input.CustomFields
 	}
 	if c := strings.TrimSpace(input.Category); c != "" {
 		payload.Category = &c
@@ -1111,18 +1121,73 @@ func (s *Service) AddAgentTicketComment(ticketID, content string) (json.RawMessa
 	return json.Marshal(comment)
 }
 
-// CreateAgentTicket creates a ticket via MCP tool.
-func (s *Service) CreateAgentTicket(title, description string, priority int, category string) (json.RawMessage, error) {
-	ticket, err := s.CreateSupportTicket(CreateTicketInput{
+// CreateAgentTicket creates a ticket via MCP tool. templateID e os campos
+// personalizados são opcionais (abertura normal continua funcionando).
+func (s *Service) CreateAgentTicket(title, description string, priority int, category, templateID string, customFieldsJSON string) (json.RawMessage, error) {
+	input := CreateTicketInput{
 		Title:       title,
 		Description: description,
 		Priority:    priority,
 		Category:    category,
-	})
+		TemplateID:  templateID,
+	}
+	if strings.TrimSpace(customFieldsJSON) != "" {
+		fields := map[string]any{}
+		if err := json.Unmarshal([]byte(customFieldsJSON), &fields); err != nil {
+			return nil, fmt.Errorf("customFields inválido: %w", err)
+		}
+		input.CustomFields = fields
+	}
+	ticket, err := s.CreateSupportTicket(input)
 	if err != nil {
 		return nil, err
 	}
 	return json.Marshal(ticket)
+}
+
+// ListAgentTicketTemplates returns the ticket templates available to this agent.
+func (s *Service) ListAgentTicketTemplates() (json.RawMessage, error) {
+	if !s.featureEnabled(s.supportEnabled()) {
+		s.supportLogf("suporte desabilitado pela configuração do agente")
+		return json.Marshal([]TicketTemplateOption{})
+	}
+
+	info, err := s.fetchAgentContext()
+	if err != nil {
+		return nil, err
+	}
+
+	cfg := s.debugConfig()
+	ctx := s.ctxOrBackground()
+	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/ticket-templates"
+	resp, err := doGetWithRetry(ctx, tlsutil.NewHTTPClient(10*time.Second), func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+		if err != nil {
+			return nil, err
+		}
+		if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, info.AgentID); err != nil {
+			return nil, err
+		}
+		return req, nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("falha ao buscar templates de chamado: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+
+	var templates []TicketTemplateOption
+	if err := json.Unmarshal(body, &templates); err != nil {
+		return nil, fmt.Errorf("resposta inválida ao listar templates: %w", err)
+	}
+	if templates == nil {
+		templates = []TicketTemplateOption{}
+	}
+	return json.Marshal(templates)
 }
 
 // extractStr delega para a implementação canônica do supportmeta.

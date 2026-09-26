@@ -122,11 +122,18 @@ func (a *App) AddAgentTicketComment(ticketID, content string) (json.RawMessage, 
 	return a.SupportSvc.AddAgentTicketComment(ticketID, content)
 }
 
-func (a *App) CreateAgentTicket(title, description string, priority int, category string) (json.RawMessage, error) {
+func (a *App) CreateAgentTicket(title, description string, priority int, category, templateID, customFieldsJSON string) (json.RawMessage, error) {
 	if err := a.requireSupportSvc(); err != nil {
 		return nil, err
 	}
-	return a.SupportSvc.CreateAgentTicket(title, description, priority, category)
+	return a.SupportSvc.CreateAgentTicket(title, description, priority, category, templateID, customFieldsJSON)
+}
+
+func (a *App) ListAgentTicketTemplates() (json.RawMessage, error) {
+	if err := a.requireSupportSvc(); err != nil {
+		return nil, err
+	}
+	return a.SupportSvc.ListAgentTicketTemplates()
 }
 
 func (a *App) GetKnowledgeArticles(category string) ([]KnowledgeArticle, error) {

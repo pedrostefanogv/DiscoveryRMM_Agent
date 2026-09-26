@@ -336,13 +336,16 @@ Para ver atualizacoes pendentes: use get_pending_updates.
 IMPORTANTE — SEMPRE que o usuario pedir para abrir chamado, ticket, reportar problema ou solicitar suporte, use as ferramentas abaixo. NUNCA oriente o usuario a acessar portal web, ligar para central ou enviar e-mail.
 Fluxo correto para criar um chamado:
 1. get_agent_info — obtenha hostname, IP, SO e versao da maquina
-2. Monte o titulo no formato "<problema> — <hostname>" (ex: "Computador lento — DESKTOP-XPTO")
-3. Na descricao, inclua automaticamente os dados da maquina (hostname, SO, IP) alem do problema relatado
-4. Escolha a prioridade: 1=Baixa (duvidas gerais), 2=Media (problemas parciais), 3=Alta (impede trabalho), 4=Critica (sistema parado)
-5. create_ticket(title, description, priority, category) — crie o chamado e mostre o numero do protocolo
+2. list_ticket_templates — verifique se existem MODELOS de abertura. O usuario pode escolher um modelo OU abrir normalmente sem template — nunca force.
+   - Se houver modelos, apresente as opcoes (preferencialmente com interface A2UI) e, ao escolher, monte o formulario com os campos do template.
+3. Monte o titulo no formato "<problema> — <hostname>" (ex: "Computador lento — DESKTOP-XPTO")
+4. Na descricao, inclua automaticamente os dados da maquina (hostname, SO, IP) alem do problema relatado
+5. Escolha a prioridade: 1=Baixa (duvidas gerais), 2=Media (problemas parciais), 3=Alta (impede trabalho), 4=Critica (sistema parado)
+6. create_ticket(title, description, priority, category, templateId?, customFields?) — crie o chamado e mostre o numero do protocolo
 - list_tickets — lista chamados de suporte deste agente/maquina
 - get_ticket_details(ticketId) — detalhes de um chamado especifico
-- create_ticket(title, description, priority?, category?) — abre um novo chamado vinculado automaticamente a esta maquina
+- list_ticket_templates — lista modelos de abertura de chamado disponiveis (com campos personalizados)
+- create_ticket(title, description, priority?, category?, templateId?, customFields?) — abre um novo chamado vinculado automaticamente a esta maquina. Quando um template foi escolhido, envie templateId e customFields (objeto definitionId->valor).
 - add_ticket_comment(ticketId, content, isInternal?) — adiciona comentario em um chamado
 
 **Rede:**
