@@ -478,6 +478,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 				{"target": "logs", "url": "discovery://logs", "description": "Abre a aba Logs"},
 				{"target": "chat", "url": "discovery://chat", "description": "Abre a aba Chat IA"},
 				{"target": "knowledge", "url": "discovery://knowledge", "description": "Abre a Base de Conhecimento"},
+				{"target": "knowledge_article", "url": "discovery://knowledge/article/{articleId}", "description": "Abre um artigo especifico da Base de Conhecimento"},
 				{"target": "debug", "url": "discovery://debug", "description": "Abre a aba Debug"},
 			}, nil
 		},
@@ -487,8 +488,9 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 		Name:        "build_internal_navigation_link",
 		Description: "Monta um link interno discovery:// e um markdown de card clicavel para navegação interna no app.",
 		Params: []ToolParam{
-			{Name: "target", Type: "string", Description: "Destino: support_tickets, support_ticket, store, updates, inventory, logs, chat, knowledge, debug", Required: true},
+			{Name: "target", Type: "string", Description: "Destino: support_tickets, support_ticket, store, updates, inventory, logs, chat, knowledge, knowledge_article, debug", Required: true},
 			{Name: "ticketId", Type: "string", Description: "GUID do chamado (obrigatorio apenas para target=support_ticket)", Required: false},
+			{Name: "articleId", Type: "string", Description: "GUID do artigo da Base de Conhecimento (obrigatorio apenas para target=knowledge_article)", Required: false},
 			{Name: "title", Type: "string", Description: "Titulo do card/botao", Required: false},
 			{Name: "subtitle", Type: "string", Description: "Subtitulo do card", Required: false},
 			{Name: "meta", Type: "string", Description: "Meta adicional do card", Required: false},
@@ -502,6 +504,9 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 
 			ticketID, _ := args["ticketId"].(string)
 			ticketID = strings.TrimSpace(ticketID)
+
+			articleID, _ := args["articleId"].(string)
+			articleID = strings.TrimSpace(articleID)
 
 			urlByTarget := map[string]string{
 				"support_tickets": "discovery://support/tickets",
@@ -520,6 +525,11 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 					return nil, fmt.Errorf("ticketId e obrigatorio para target=support_ticket")
 				}
 				url = "discovery://support/ticket/" + ticketID
+			} else if target == "knowledge_article" {
+				if articleID == "" {
+					return nil, fmt.Errorf("articleId e obrigatorio para target=knowledge_article")
+				}
+				url = "discovery://knowledge/article/" + articleID
 			} else {
 				u, ok := urlByTarget[target]
 				if !ok {

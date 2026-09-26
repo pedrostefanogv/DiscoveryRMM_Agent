@@ -1984,6 +1984,21 @@ function parseInternalAppRoute(url) {
       ticketId = segments[2];
     }
 
+    // Deep link para um artigo especifico da Base de Conhecimento:
+    // discovery://knowledge/article/<articleId> (ou ?articleId=/<id>).
+    var articleId =
+      parsed.searchParams.get("articleId") ||
+      parsed.searchParams.get("article") ||
+      "";
+    if (
+      !articleId &&
+      segments[0] === "knowledge" &&
+      segments[1] === "article" &&
+      segments[2]
+    ) {
+      articleId = segments[2];
+    }
+
     var tabBySegment;
     switch (segments[0]) {
       case "support":
@@ -2016,7 +2031,7 @@ function parseInternalAppRoute(url) {
     }
 
     if (!tabBySegment) return null;
-    return { tab: tabBySegment, ticketId: ticketId };
+    return { tab: tabBySegment, ticketId: ticketId, articleId: articleId };
   } catch (_) {
     return null;
   }
@@ -2046,6 +2061,17 @@ async function navigateInternalAppRoute(url) {
           "error",
         );
       }
+    }
+  }
+
+  if (route.tab === "knowledge" && route.articleId) {
+    try {
+      var opened = await openKnowledgeArticleById(route.articleId);
+      if (!opened) {
+        showToast(translate("chat.openKnowledgeArticleError"), "error");
+      }
+    } catch (err) {
+      showToast(translate("chat.openKnowledgeArticleError"), "error");
     }
   }
 }

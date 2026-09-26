@@ -496,6 +496,9 @@ var APP_I18N_DICTIONARY = {
     "chat.memoryDeleteError": "Erro ao excluir memorias: {error}",
     "chat.cleared": "Chat limpo",
     "chat.clearError": "Erro: {error}",
+    "chat.invalidInternalLink": "Link interno inválido: {url}",
+    "chat.openTicketError": "Não foi possível abrir o chamado: {error}",
+    "chat.openKnowledgeArticleError": "Não foi possível abrir o artigo na Base de Conhecimento.",
     "action.delete": "Excluir",
     "p2p.nativeSubtitle":
       "P2P nativo: descoberta, distribuicao hibrida e cache temporario",
@@ -1051,6 +1054,9 @@ var APP_I18N_DICTIONARY = {
     "chat.memoryDeleteError": "Failed to delete memories: {error}",
     "chat.cleared": "Chat cleared",
     "chat.clearError": "Error: {error}",
+    "chat.invalidInternalLink": "Invalid internal link: {url}",
+    "chat.openTicketError": "Could not open the ticket: {error}",
+    "chat.openKnowledgeArticleError": "Could not open the knowledge base article.",
     "action.delete": "Delete",
     "p2p.nativeSubtitle":
       "Native P2P: discovery, hybrid distribution and temporary cache",

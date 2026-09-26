@@ -291,6 +291,29 @@ function selectKnowledgeArticle(id) {
   }
 }
 
+// Abre um artigo especifico por id (usado pelo deep link discovery://knowledge/article/<id>
+// vindo dos cards do chat). Garante que a lista esteja carregada antes de selecionar.
+async function openKnowledgeArticleById(id) {
+  var target = String(id || "").trim();
+  if (!target) return false;
+
+  var article = knowledgeArticles.find(function (a) {
+    return a && a.id === target;
+  });
+
+  if (!article) {
+    await loadKnowledgeBase();
+    article = knowledgeArticles.find(function (a) {
+      return a && a.id === target;
+    });
+  }
+
+  if (!article) return false;
+
+  selectKnowledgeArticle(target);
+  return true;
+}
+
 function selectKbPage(pageId) {
   kbActivePageId = pageId === "__home__" ? null : pageId;
   var article = knowledgeArticles.find(function (a) {

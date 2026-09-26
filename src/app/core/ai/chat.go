@@ -435,6 +435,7 @@ Regras:
 - Sempre que fizer sentido, ofereca links discovery:// para telas relevantes (Store, Updates, Tickets, Inventory).
 - Para card clicavel: [Titulo | Subtitulo | Meta](discovery://rota)
 - Para botao simples: [Abrir](discovery://rota)
+- Para abrir um artigo especifico da Base de Conhecimento, use build_internal_navigation_link com target=knowledge_article e articleId (o id retornado por knowledge_search/knowledge_list). NUNCA diga que nao consegue abrir o artigo.
 - A Loja de Aplicativos fica em discovery://store — ofereca esse link quando o usuario quiser explorar programas disponiveis.`
 
 func resolveSystemPrompt(cfg Config) string {
