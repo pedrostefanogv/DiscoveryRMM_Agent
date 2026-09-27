@@ -100,9 +100,15 @@ type APITicket struct {
 	UpdatedAt     string            `json:"updatedAt,omitempty"`
 	ClosedAt      *string           `json:"closedAt,omitempty"`
 	WorkflowState *APIWorkflowState `json:"workflowState,omitempty"`
-	Rating        *int              `json:"rating,omitempty"`
-	RatedAt       *string           `json:"ratedAt,omitempty"`
-	RatedBy       *string           `json:"ratedBy,omitempty"`
+	// WorkflowStateID é o id do estado atual. A API do agent devolve a entidade
+	// crua (sem o objeto workflowState), então a UI resolve nome/cor/isFinal pelo
+	// endpoint me/tickets/workflow-states usando este id.
+	WorkflowStateID string  `json:"workflowStateId,omitempty"`
+	Rating          *int    `json:"rating,omitempty"`
+	RatedAt         *string `json:"ratedAt,omitempty"`
+	RatedBy         *string `json:"ratedBy,omitempty"`
+	// RatingFeedback é o comentário textual da avaliação (CSAT).
+	RatingFeedback *string `json:"ratingFeedback,omitempty"`
 	// Snapshot markdown (somente leitura) do formulário/template enviado na abertura.
 	SubmissionSnapshotMarkdown *string `json:"submissionSnapshotMarkdown,omitempty"`
 }

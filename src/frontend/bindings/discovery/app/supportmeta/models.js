@@ -101,6 +101,16 @@ export class APITicket {
         }
         if (/** @type {any} */(false)) {
             /**
+             * WorkflowStateID é o id do estado atual. A API do agent devolve a entidade
+             * crua (sem o objeto workflowState), então a UI resolve nome/cor/isFinal pelo
+             * endpoint me/tickets/workflow-states usando este id.
+             * @member
+             * @type {string | undefined}
+             */
+            this["workflowStateId"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
              * @member
              * @type {number | null | undefined}
              */
@@ -119,6 +129,14 @@ export class APITicket {
              * @type {string | null | undefined}
              */
             this["ratedBy"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * RatingFeedback é o comentário textual da avaliação (CSAT).
+             * @member
+             * @type {string | null | undefined}
+             */
+            this["ratingFeedback"] = undefined;
         }
         if (/** @type {any} */(false)) {
             /**

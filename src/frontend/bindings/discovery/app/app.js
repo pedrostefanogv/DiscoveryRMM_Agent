@@ -1447,6 +1447,32 @@ export function PullP2PArtifactFromPeer(artifactName, sourcePeerID) {
 }
 
 /**
+ * RateAgentTicket avalia (CSAT 1..5) um chamado encerrado via MCP tool e
+ * devolve o ticket atualizado como JSON.
+ * @param {string} ticketID
+ * @param {number} rating
+ * @param {string} feedback
+ * @returns {$CancellablePromise<json$0.RawMessage>}
+ */
+export function RateAgentTicket(ticketID, rating, feedback) {
+    return $Call.ByID(2629686513, ticketID, rating, feedback);
+}
+
+/**
+ * RateSupportTicket registra a avaliação (CSAT 1..5) e o feedback de um
+ * chamado encerrado.
+ * @param {string} ticketID
+ * @param {number} rating
+ * @param {string} feedback
+ * @returns {$CancellablePromise<$models.APITicket>}
+ */
+export function RateSupportTicket(ticketID, rating, feedback) {
+    return $Call.ByID(1281156623, ticketID, rating, feedback).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType5($result);
+    }));
+}
+
+/**
  * RefreshAgentConfiguration expõe refreshAgentConfiguration via interface.
  * @returns {$CancellablePromise<void>}
  */
@@ -1595,6 +1621,30 @@ export function RemovePrinter(name) {
  */
 export function RemovePrinterJSON(name) {
     return $Call.ByID(3178073468, name);
+}
+
+/**
+ * ReopenAgentTicket reabre um chamado encerrado via MCP tool e devolve o
+ * ticket atualizado como JSON. Reabrir descarta a avaliação anterior e volta a
+ * permitir comentários.
+ * @param {string} ticketID
+ * @param {string} reason
+ * @returns {$CancellablePromise<json$0.RawMessage>}
+ */
+export function ReopenAgentTicket(ticketID, reason) {
+    return $Call.ByID(2487568268, ticketID, reason);
+}
+
+/**
+ * ReopenSupportTicket reabre um chamado encerrado do agent (libera novos
+ * comentários). A avaliação anterior é descartada pelo servidor.
+ * @param {string} ticketID
+ * @returns {$CancellablePromise<$models.APITicket>}
+ */
+export function ReopenSupportTicket(ticketID) {
+    return $Call.ByID(475056018, ticketID).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType5($result);
+    }));
 }
 
 /**

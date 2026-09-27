@@ -559,6 +559,124 @@
   flex-wrap: wrap;
 }
 
+/* Support toolbar: busca + filtros */
+.support-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.support-toolbar-search {
+  flex: 1 1 220px;
+  min-width: 180px;
+}
+
+.support-toolbar input,
+.support-toolbar select {
+  font-family: inherit;
+  font-size: 0.82rem;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 9px;
+}
+
+.support-toolbar input:focus,
+.support-toolbar select:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.support-toolbar-count {
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.ticket-awaiting-rating-badge {
+  font-size: 0.72rem;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-weight: 600;
+  background: var(--priority-medium-bg);
+  color: var(--priority-medium-text);
+}
+
+/* Chamado encerrado: aviso + reabertura */
+.ticket-closed-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--priority-medium-bg);
+  color: var(--priority-medium-text);
+}
+
+.ticket-closed-notice-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* Avaliacao (CSAT) no detalhe */
+.ticket-rating-panel,
+.ticket-rating-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.ticket-rating-panel h4,
+.ticket-rating-summary h4 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.ticket-rating-panel textarea {
+  width: 100%;
+  resize: vertical;
+  font-family: inherit;
+  font-size: 0.85rem;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.rating-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.rating-summary-stars {
+  font-size: 1.05rem;
+  letter-spacing: 1px;
+  color: var(--accent);
+}
+
+.rating-summary-feedback {
+  font-size: 0.85rem;
+  color: var(--text);
+  white-space: pre-wrap;
+}
+
 /* Side panel (obsolete — now single-view) */
 .support-side-panel {
   display: none;

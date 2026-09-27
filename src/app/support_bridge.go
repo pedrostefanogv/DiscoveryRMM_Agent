@@ -87,6 +87,51 @@ func (a *App) CloseSupportTicket(ticketID string, input CloseTicketInput) (APITi
 	return a.SupportSvc.CloseSupportTicket(ticketID, input)
 }
 
+// ReopenAgentTicket reabre um chamado encerrado via MCP tool e devolve o
+// ticket atualizado como JSON. Reabrir descarta a avaliação anterior e volta a
+// permitir comentários.
+func (a *App) ReopenAgentTicket(ticketID, reason string) (json.RawMessage, error) {
+	if err := a.requireSupportSvc(); err != nil {
+		return nil, err
+	}
+	ticket, err := a.SupportSvc.ReopenSupportTicket(ticketID, reason)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(ticket)
+}
+
+// RateAgentTicket avalia (CSAT 1..5) um chamado encerrado via MCP tool e
+// devolve o ticket atualizado como JSON.
+func (a *App) RateAgentTicket(ticketID string, rating int, feedback string) (json.RawMessage, error) {
+	if err := a.requireSupportSvc(); err != nil {
+		return nil, err
+	}
+	ticket, err := a.SupportSvc.RateSupportTicket(ticketID, rating, feedback)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(ticket)
+}
+
+// ReopenSupportTicket reabre um chamado encerrado do agent (libera novos
+// comentários). A avaliação anterior é descartada pelo servidor.
+func (a *App) ReopenSupportTicket(ticketID string) (APITicket, error) {
+	if err := a.requireSupportSvc(); err != nil {
+		return APITicket{}, err
+	}
+	return a.SupportSvc.ReopenSupportTicket(ticketID, "")
+}
+
+// RateSupportTicket registra a avaliação (CSAT 1..5) e o feedback de um
+// chamado encerrado.
+func (a *App) RateSupportTicket(ticketID string, rating int, feedback string) (APITicket, error) {
+	if err := a.requireSupportSvc(); err != nil {
+		return APITicket{}, err
+	}
+	return a.SupportSvc.RateSupportTicket(ticketID, rating, feedback)
+}
+
 func (a *App) CloseAgentTicket(ticketID string, rating *int, comment, workflowStateID string) (json.RawMessage, error) {
 	if err := a.requireSupportSvc(); err != nil {
 		return nil, err

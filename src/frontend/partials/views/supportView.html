@@ -12,6 +12,15 @@
     </div>
 
     <div id="supportListView" class="support-list-view">
+      <div class="support-toolbar">
+        <input id="ticketSearchInput" class="support-toolbar-search" type="search" autocomplete="off"
+          data-i18n-placeholder="support.searchPlaceholder" placeholder="Buscar por titulo, categoria ou #ID" />
+        <select id="ticketStatusFilter" data-i18n-title="support.filterStatus"></select>
+        <select id="ticketPriorityFilter" data-i18n-title="support.filterPriority"></select>
+        <button id="clearTicketFiltersBtn" class="btn subtle btn-sm" type="button"
+          data-i18n="support.clearFilters">Limpar filtros</button>
+        <span id="ticketsResultCount" class="meta support-toolbar-count"></span>
+      </div>
       <div id="supportTicketsList" class="support-tickets-list">
         <div class="meta" data-i18n="support.noTickets">Nenhum chamado.</div>
       </div>
@@ -34,12 +43,66 @@
         <div id="ticketDetailMeta" class="ticket-detail-meta"></div>
         <div id="ticketDetailDesc" class="ticket-detail-desc"></div>
 
+        <div id="ticketClosedNotice" class="ticket-closed-notice hidden">
+          <div class="ticket-closed-notice-text">
+            <strong data-i18n="support.closedTitle">Chamado encerrado</strong>
+            <span id="ticketClosedNoticeText" class="meta"></span>
+          </div>
+          <button id="reopenTicketBtn" class="btn primary" type="button"
+            data-i18n="support.reopenTicket">Reabrir chamado</button>
+        </div>
+
+        <div id="ticketRatingSummary" class="ticket-rating-summary hidden">
+          <h4 data-i18n="support.ratingGiven">Avaliacao do atendimento</h4>
+          <div id="ticketRatingSummaryBody" class="rating-summary-body"></div>
+        </div>
+
+        <div id="ticketRatingPanel" class="ticket-rating-panel hidden">
+          <h4 data-i18n="support.rateTitle">Avalie o atendimento</h4>
+          <p class="meta" data-i18n="support.rateHint">Sua avaliacao ajuda a melhorar o suporte.</p>
+          <div id="ratingStars" class="stars-row">
+            <button type="button" class="star-btn" data-value="1" aria-label="1 estrelas" title="Muito ruim"><svg
+                  viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8">
+                  <polygon
+                    points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+                </svg></button>
+            <button type="button" class="star-btn" data-value="2" aria-label="2 estrelas" title="Ruim"><svg
+                  viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8">
+                  <polygon
+                    points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+                </svg></button>
+            <button type="button" class="star-btn" data-value="3" aria-label="3 estrelas" title="Regular"><svg
+                  viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8">
+                  <polygon
+                    points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+                </svg></button>
+            <button type="button" class="star-btn" data-value="4" aria-label="4 estrelas" title="Bom"><svg
+                  viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8">
+                  <polygon
+                    points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+                </svg></button>
+            <button type="button" class="star-btn" data-value="5" aria-label="5 estrelas" title="Excelente"><svg
+                  viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8">
+                  <polygon
+                    points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+                </svg></button>
+          </div>
+          <textarea id="ratingFeedback" rows="3" placeholder="Deixe um comentario (opcional)"
+            data-i18n-placeholder="support.ratingFeedbackPlaceholder" data-app-lang="true"></textarea>
+          <div class="rating-actions">
+            <button id="clearRatingPanelBtn" class="btn subtle btn-sm hidden" type="button"
+              data-i18n="support.noRating">Sem avaliacao</button>
+            <button id="submitRatingBtn" class="btn primary" type="button"
+              data-i18n="support.submitRating">Enviar avaliacao</button>
+          </div>
+        </div>
+
         <div class="comments-section">
           <h4 data-i18n="support.comments">Comentarios</h4>
           <div id="commentsList" class="comments-list">
             <div class="meta" data-i18n="common.loading">Carregando...</div>
           </div>
-          <div class="comment-compose">
+          <div id="commentCompose" class="comment-compose">
             <textarea id="commentInput" rows="3" placeholder="Escreva um comentario..."
               data-i18n-placeholder="support.writeCommentPlaceholder" data-app-lang="true"></textarea>
             <button id="submitCommentBtn" class="btn primary" data-i18n="action.sendComment">Enviar Comentario</button>

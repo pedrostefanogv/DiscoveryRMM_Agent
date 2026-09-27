@@ -47,6 +47,9 @@ type AppBridge interface {
 	GetAgentTicketDetails(ticketID string) (json.RawMessage, error)
 	AddAgentTicketComment(ticketID, content string) (json.RawMessage, error)
 	CreateAgentTicket(title, description string, priority int, category, templateID, departmentID, customFieldsJSON, templateAnswersJSON string) (json.RawMessage, error)
+	CloseAgentTicket(ticketID string, rating *int, comment, workflowStateID string) (json.RawMessage, error)
+	ReopenAgentTicket(ticketID, reason string) (json.RawMessage, error)
+	RateAgentTicket(ticketID string, rating int, feedback string) (json.RawMessage, error)
 	ListAgentTicketTemplates() (json.RawMessage, error)
 	ListTicketDepartmentsJSON() (json.RawMessage, error)
 
@@ -699,6 +702,90 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 			}
 
 			return app.CreateAgentTicket(title, description, priority, category, templateID, departmentID, customFieldsJSON, answersJSON)
+		},
+	})
+
+	reg.Register(Tool{
+		Name:        "close_ticket",
+		Description: "ENCERRA um chamado de suporte desta maquina. Use SOMENTE quando o usuario confirmar que o problema foi resolvido (ou pedir explicitamente para fechar). Opcionalmente registre a solucao em comment e a nota do usuario em rating (1..5), sempre perguntando a nota antes de enviar. Chamado encerrado deixa de aceitar comentarios (use reopen_ticket) e, se ja tiver sido avaliado, a nota nao pode ser trocada sem reabrir.",
+		Params: []ToolParam{
+			{Name: "ticketId", Type: "string", Description: "GUID do chamado", Required: true},
+			{Name: "comment", Type: "string", Description: "Resumo da solucao aplicada (opcional)", Required: false},
+			{Name: "rating", Type: "integer", Description: "Nota do usuario de 1 a 5 (opcional; pergunte antes de enviar)", Required: false},
+			{Name: "workflowStateId", Type: "string", Description: "GUID do estado final desejado (opcional; omita para usar o padrao do workflow)", Required: false},
+		},
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
+			ticketID, _ := args["ticketId"].(string)
+			if strings.TrimSpace(ticketID) == "" {
+				return nil, fmt.Errorf("ticketId nao pode ser vazio")
+			}
+			comment, _ := args["comment"].(string)
+			workflowStateID, _ := args["workflowStateId"].(string)
+
+			var rating *int
+			if raw, ok := args["rating"]; ok && raw != nil {
+				value := 0
+				switch v := raw.(type) {
+				case float64:
+					value = int(v)
+				case int:
+					value = v
+				}
+				if value != 0 {
+					if value < 1 || value > 5 {
+						return nil, fmt.Errorf("rating invalido: informe valor entre 1 e 5")
+					}
+					rating = &value
+				}
+			}
+			return app.CloseAgentTicket(ticketID, rating, comment, workflowStateID)
+		},
+	})
+
+	reg.Register(Tool{
+		Name:        "reopen_ticket",
+		Description: "REABRE um chamado encerrado desta maquina: volta ao estado inicial e libera novos comentarios. Use quando o usuario relatar que o problema voltou/persiste apos o encerramento ou quando precisar comentar em um chamado fechado. Reabrir DESCARTA a avaliacao anterior - depois de fechar de novo, o usuario podera avaliar novamente.",
+		Params: []ToolParam{
+			{Name: "ticketId", Type: "string", Description: "GUID do chamado", Required: true},
+			{Name: "reason", Type: "string", Description: "Motivo da reabertura (opcional)", Required: false},
+		},
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
+			ticketID, _ := args["ticketId"].(string)
+			if strings.TrimSpace(ticketID) == "" {
+				return nil, fmt.Errorf("ticketId nao pode ser vazio")
+			}
+			reason, _ := args["reason"].(string)
+			return app.ReopenAgentTicket(ticketID, reason)
+		},
+	})
+
+	reg.Register(Tool{
+		Name:        "rate_ticket",
+		Description: "REGISTRA a avaliacao (CSAT 1..5) e o feedback do usuario para um chamado ENCERRADO desta maquina. Pergunte a nota ao usuario antes de enviar. Chamado aberto nao pode ser avaliado; se ja estiver avaliado, a nota anterior se mantem - para avaliar de novo, reabra o chamado com reopen_ticket e feche-o outra vez.",
+		Params: []ToolParam{
+			{Name: "ticketId", Type: "string", Description: "GUID do chamado", Required: true},
+			{Name: "rating", Type: "integer", Description: "Nota de 1 a 5", Required: true},
+			{Name: "feedback", Type: "string", Description: "Comentario do usuario sobre o atendimento (opcional)", Required: false},
+		},
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
+			ticketID, _ := args["ticketId"].(string)
+			if strings.TrimSpace(ticketID) == "" {
+				return nil, fmt.Errorf("ticketId nao pode ser vazio")
+			}
+			rating := 0
+			if raw, ok := args["rating"]; ok {
+				switch v := raw.(type) {
+				case float64:
+					rating = int(v)
+				case int:
+					rating = v
+				}
+			}
+			if rating < 1 || rating > 5 {
+				return nil, fmt.Errorf("rating obrigatorio: informe valor entre 1 e 5")
+			}
+			feedback, _ := args["feedback"].(string)
+			return app.RateAgentTicket(ticketID, rating, feedback)
 		},
 	})
 

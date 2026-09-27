@@ -447,7 +447,7 @@ export class InstallerConfig {
     static createFrom($$source = {}) {
         const $$createField12_0 = $$createType1;
         const $$createField13_0 = $$createType2;
-        const $$createField15_0 = $$createType3;
+        const $$createField14_0 = $$createType3;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("agentUpdate" in $$parsedSource) {
             $$parsedSource["agentUpdate"] = $$createField12_0($$parsedSource["agentUpdate"]);
@@ -456,7 +456,7 @@ export class InstallerConfig {
             $$parsedSource["p2p"] = $$createField13_0($$parsedSource["p2p"]);
         }
         if ("chatLog" in $$parsedSource) {
-            $$parsedSource["chatLog"] = $$createField15_0($$parsedSource["chatLog"]);
+            $$parsedSource["chatLog"] = $$createField14_0($$parsedSource["chatLog"]);
         }
         return new InstallerConfig(/** @type {Partial<InstallerConfig>} */($$parsedSource));
     }

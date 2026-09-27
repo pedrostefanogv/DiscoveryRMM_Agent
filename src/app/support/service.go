@@ -1046,34 +1046,124 @@ func (s *Service) CloseSupportTicket(ticketID string, input CloseTicketInput) (A
 		return APITicket{}, fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(respBody)))
 	}
 
-	var ticket APITicket
-	if len(respBody) == 0 {
-		s.supportLogf("chamado %s fechado (resposta vazia); buscando detalhes atualizados", ticketID)
-		return s.GetSupportTicketDetails(ticketID)
+	// O /close devolve um resumo ({ticketId, closed, workflowStateId, rating}),
+	// não a entidade completa. Decodificar isso como APITicket gerava um ticket
+	// vazio (id "") e a UI quebrava ao renderizar o detalhe. Reler sempre os
+	// detalhes garante closedAt/rating/workflowStateId atualizados.
+	s.supportLogf("chamado %s fechado; buscando detalhes atualizados (%d bytes de resposta)", ticketID, len(respBody))
+	ticket, err := s.GetSupportTicketDetails(ticketID)
+	if err != nil {
+		return APITicket{}, err
 	}
-	if err := json.Unmarshal(respBody, &ticket); err != nil {
-		var envelope struct {
-			Ticket *APITicket `json:"ticket"`
-			Data   *APITicket `json:"data"`
-			Item   *APITicket `json:"item"`
-		}
-		if err2 := json.Unmarshal(respBody, &envelope); err2 == nil {
-			switch {
-			case envelope.Ticket != nil:
-				ticket = *envelope.Ticket
-			case envelope.Data != nil:
-				ticket = *envelope.Data
-			case envelope.Item != nil:
-				ticket = *envelope.Item
-			default:
-				return APITicket{}, fmt.Errorf("resposta inválida ao fechar chamado")
-			}
-		} else {
-			return APITicket{}, fmt.Errorf("resposta inválida ao fechar chamado: %w", err)
-		}
+	s.supportLogf("chamado fechado com sucesso: ticketId=%s", ticket.ID)
+	return ticket, nil
+}
+
+// ReopenSupportTicket reabre um chamado encerrado do agent e devolve o ticket
+// atualizado. A API valida que o chamado pertence ao agent, volta ao estado
+// inicial, limpa ClosedAt e descarta a avaliação anterior (reabrir invalida o
+// CSAT do fechamento antigo).
+func (s *Service) ReopenSupportTicket(ticketID, reason string) (APITicket, error) {
+	ticketID = strings.TrimSpace(ticketID)
+	if !guidPattern.MatchString(ticketID) {
+		return APITicket{}, fmt.Errorf("ticketId inválido")
 	}
 
-	s.supportLogf("chamado fechado com sucesso: ticketId=%s", ticket.ID)
+	cfg := s.debugConfig()
+	ctx := s.ctxOrBackground()
+
+	payload := map[string]any{}
+	if r := strings.TrimSpace(reason); r != "" {
+		// Motivo vai para o activity log da reabertura.
+		payload["reason"] = r
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return APITicket{}, fmt.Errorf("erro ao serializar payload de reabertura: %w", err)
+	}
+
+	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/tickets/" + ticketID + "/reopen"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
+	if err != nil {
+		return APITicket{}, fmt.Errorf("URL inválida: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", newIdempotencyKey())
+	if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, cfg.AgentID); err != nil {
+		return APITicket{}, err
+	}
+
+	s.supportLogf("reabrindo chamado %s", ticketID)
+	resp, err := doPostWithRetry(ctx, tlsutil.NewHTTPClient(15*time.Second), req)
+	if err != nil {
+		return APITicket{}, fmt.Errorf("falha ao reabrir chamado: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return APITicket{}, fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(respBody)))
+	}
+
+	ticket, err := s.GetSupportTicketDetails(ticketID)
+	if err != nil {
+		return APITicket{}, err
+	}
+	s.supportLogf("chamado reaberto com sucesso: ticketId=%s", ticket.ID)
+	return ticket, nil
+}
+
+// RateSupportTicket envia a avaliação (CSAT 1..5) e o feedback de um chamado
+// encerrado, devolvendo o ticket atualizado.
+func (s *Service) RateSupportTicket(ticketID string, rating int, feedback string) (APITicket, error) {
+	ticketID = strings.TrimSpace(ticketID)
+	if !guidPattern.MatchString(ticketID) {
+		return APITicket{}, fmt.Errorf("ticketId inválido")
+	}
+	if rating < 1 || rating > 5 {
+		return APITicket{}, fmt.Errorf("rating inválido: informe valor entre 1 e 5")
+	}
+
+	cfg := s.debugConfig()
+	ctx := s.ctxOrBackground()
+
+	payload := map[string]any{"rating": rating}
+	if f := strings.TrimSpace(feedback); f != "" {
+		payload["feedback"] = f
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return APITicket{}, fmt.Errorf("erro ao serializar payload de avaliação: %w", err)
+	}
+
+	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/tickets/" + ticketID + "/rating"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
+	if err != nil {
+		return APITicket{}, fmt.Errorf("URL inválida: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", newIdempotencyKey())
+	if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, cfg.AgentID); err != nil {
+		return APITicket{}, err
+	}
+
+	s.supportLogf("avaliando chamado %s (rating=%d)", ticketID, rating)
+	resp, err := doPostWithRetry(ctx, tlsutil.NewHTTPClient(15*time.Second), req)
+	if err != nil {
+		return APITicket{}, fmt.Errorf("falha ao enviar avaliação: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return APITicket{}, fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(respBody)))
+	}
+
+	ticket, err := s.GetSupportTicketDetails(ticketID)
+	if err != nil {
+		return APITicket{}, err
+	}
+	s.supportLogf("avaliação registrada: ticketId=%s rating=%d", ticket.ID, rating)
 	return ticket, nil
 }
 
