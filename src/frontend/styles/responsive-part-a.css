@@ -559,16 +559,47 @@
   flex-wrap: wrap;
 }
 
-/* Support toolbar: busca + filtros */
+/* Cabecalho unificado do suporte: titulo + acoes + busca/filtros num so card */
+.support-header-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: var(--page-bar-padding-y) var(--page-bar-padding-x);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+
+.support-header-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.support-header-title {
+  min-width: 0;
+}
+
+.support-header-title .meta {
+  line-height: 1.25;
+}
+
+.support-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Busca + filtros: mesma linha dentro do card, separados por um divisor sutil */
 .support-toolbar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--surface);
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
 }
 
 .support-toolbar-search {

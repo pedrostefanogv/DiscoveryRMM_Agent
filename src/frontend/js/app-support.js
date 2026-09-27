@@ -333,6 +333,8 @@ function showNewTicketForm() {
   if (supportListViewEl) supportListViewEl.classList.add("hidden");
   if (supportDetailViewEl) supportDetailViewEl.classList.add("hidden");
   if (supportNewTicketViewEl) supportNewTicketViewEl.classList.remove("hidden");
+  // O cabecalho unificado (busca/filtros/acoes) nao faz sentido no formulario.
+  if (supportStatusBarEl) supportStatusBarEl.classList.add("hidden");
   hideTicketFormStatus();
   loadTicketOptions();
 }
