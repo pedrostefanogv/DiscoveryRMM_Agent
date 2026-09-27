@@ -34,7 +34,7 @@ const (
 
 // TerminalSession representa o console remoto unico de uma sessao.
 // Ao contrario do design antigo (multi-abas), mantemos UM console por sessao,
-// usando subjects fixos (term.out / term.in), similar ao MeshCentral.
+// usando subjects fixos (term.out / term.in).
 type TerminalSession struct {
 	ID        string
 	Shell     terminal.IShell
@@ -392,7 +392,7 @@ func (st *SessionTerminal) DisableRecording() {
 }
 
 // Start inicia o console unico com output coalescing, rate limiting e subjects fixos
-// (term.out para saida, term.in para entrada), similar ao MeshCentral.
+// (term.out para saida, term.in para entrada).
 func (st *SessionTerminal) Start(ctx context.Context, shellKind terminal.ShellKind, cols, rows int) (*TerminalSession, error) {
 	st.mu.Lock()
 	defer st.mu.Unlock()

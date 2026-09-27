@@ -37,8 +37,8 @@ type Shell struct {
 // NewShell cria um novo shell interativo (console real oculto, via pipes).
 // Este é o caminho LEGADO/fallback usado quando ConPTY se mostra instável
 // (ex.: injetor/AV mata o processo ConPTY com 0xC0000142). Usa
-// CREATE_NEW_CONSOLE (console real) + HideWindow, semelhante ao terminal
-// legado do MeshCentral — mais resistente a injetores/AV do que ConPTY.
+// CREATE_NEW_CONSOLE (console real) + HideWindow — mais resistente a
+// injetores/AV do que ConPTY.
 // shell: "powershell" ou "cmd".
 func NewShell(shell string, onOutput func(string)) (*Shell, error) {
 	resolvedKind, _ := ResolveShell(ShellKind(shell))

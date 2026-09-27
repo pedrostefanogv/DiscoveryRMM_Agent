@@ -20,8 +20,8 @@ import (
 //
 // Contexto: o ConPTY rodado no processo principal do agente (Wails GUI)
 // é suscetível ao crash 0xC0000142 (STATUS_DLL_INIT_FAILED) durante o boot por
-// injeção de DLL de AV/injetores. O MeshCentral resolve isso rodando o
-// terminal num processo filho isolado (dispatcher).
+// injeção de DLL de AV/injetores. A solução é rodar o terminal num processo
+// filho isolado (dispatcher).
 //
 // Este arquivo implementa o LADO SERVIDOR do dispatcher: um subprocesso do
 // próprio binário do agente, lançado com a flag "--terminal-dispatcher", que
@@ -33,8 +33,8 @@ import (
 // setas ↑/↓ (histórico do PSReadLine), Home/End/Delete e TAB-completação não
 // funcionam nele; só texto cru. O ConPTY é quem traduz \x1b[A em KEY_EVENT.
 // Como o ConPTY in-process morre intermitentemente com AV/EDR (0xC0000142,
-// injeção de DLL), o dispatcher isola o ConPTY num processo filho — o mesmo
-// padrão do MeshCentral — mantendo TUI/setas/história funcionando.
+// injeção de DLL), o dispatcher isola o ConPTY num processo filho,
+// mantendo TUI/setas/história funcionando.
 // Opt-out explícito: DISCOVERY_TERM_DISPATCHER=0/false/no volta ao comportamento
 // antigo (ConPTY in-process → legacy). Opt-in continua aceito (1/true/yes).
 

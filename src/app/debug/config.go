@@ -79,20 +79,19 @@ type InstallerConfig struct {
 	// o agente assume o comportamento padrão definido pela configuração do
 	// servidor. O JSON canônico é "autoProvisioning"; o campo legado
 	// "discoveryEnabled" continua sendo aceito em leitura para retrocompat.
-	AutoProvisioning     *bool              `json:"autoProvisioning,omitempty"`
-	ApiScheme            string             `json:"-"` // Deprecated: não serializado. Usar ApiInsecure.
-	ApiServer            string             `json:"apiServer,omitempty"`
-	AuthToken            string             `json:"authToken,omitempty"`
-	AgentID              string             `json:"agentId,omitempty"`
-	ClientID             string             `json:"clientId,omitempty"`
-	SiteID               string             `json:"siteId,omitempty"`
-	NatsServer           string             `json:"natsServer,omitempty"`
-	NatsWsServer         string             `json:"natsWsServer,omitempty"`
-	AllowInsecureTLS     *bool              `json:"allowInsecureTls,omitempty"`
-	AgentUpdate          *selfupdate.Policy `json:"agentUpdate,omitempty"`
-	P2P                  p2pmeta.Config     `json:"p2p,omitempty"`
-	MeshCentralInstalled bool               `json:"meshCentralInstalled,omitempty"`
-	ChatLog              ChatLogConfig      `json:"chatLog,omitempty"`
+	AutoProvisioning *bool              `json:"autoProvisioning,omitempty"`
+	ApiScheme        string             `json:"-"` // Deprecated: não serializado. Usar ApiInsecure.
+	ApiServer        string             `json:"apiServer,omitempty"`
+	AuthToken        string             `json:"authToken,omitempty"`
+	AgentID          string             `json:"agentId,omitempty"`
+	ClientID         string             `json:"clientId,omitempty"`
+	SiteID           string             `json:"siteId,omitempty"`
+	NatsServer       string             `json:"natsServer,omitempty"`
+	NatsWsServer     string             `json:"natsWsServer,omitempty"`
+	AllowInsecureTLS *bool              `json:"allowInsecureTls,omitempty"`
+	AgentUpdate      *selfupdate.Policy `json:"agentUpdate,omitempty"`
+	P2P              p2pmeta.Config     `json:"p2p,omitempty"`
+	ChatLog          ChatLogConfig      `json:"chatLog,omitempty"`
 	// ApiInsecure quando true indica HTTP simples (sem TLS).
 	// Padrão (false/ausente) = HTTPS. Substitui o campo legado apiScheme.
 	ApiInsecure *bool `json:"apiInsecure,omitempty"`
@@ -110,50 +109,48 @@ type ChatLogConfig struct {
 func (c *InstallerConfig) UnmarshalJSON(data []byte) error {
 	// Schema canônico (camelCase) — usado pelo instalador NSIS.
 	type rawInstallerConfig struct {
-		ServerURL            string             `json:"serverUrl"`
-		ServerAPI            string             `json:"serverapi,omitempty"`
-		DeployToken          string             `json:"deployToken,omitempty"`
-		APIKey               string             `json:"apiKey"`
-		AutoProvisioning     json.RawMessage    `json:"autoProvisioning,omitempty"`
-		DiscoveryEnabled     json.RawMessage    `json:"discoveryEnabled,omitempty"`
-		ApiScheme            string             `json:"apiScheme,omitempty"`
-		ApiServer            string             `json:"apiServer,omitempty"`
-		ApiInsecure          json.RawMessage    `json:"apiInsecure,omitempty"`
-		AuthToken            string             `json:"authToken,omitempty"`
-		AgentID              string             `json:"agentId,omitempty"`
-		ClientID             string             `json:"clientId,omitempty"`
-		SiteID               string             `json:"siteId,omitempty"`
-		NatsServer           string             `json:"natsServer,omitempty"`
-		NatsWsServer         string             `json:"natsWsServer,omitempty"`
-		AllowInsecureTLS     json.RawMessage    `json:"allowInsecureTls,omitempty"`
-		AgentUpdate          *selfupdate.Policy `json:"agentUpdate,omitempty"`
-		P2P                  p2pmeta.Config     `json:"p2p,omitempty"`
-		MeshCentralInstalled bool               `json:"meshCentralInstalled,omitempty"`
-		ChatLog              ChatLogConfig      `json:"chatLog,omitempty"`
+		ServerURL        string             `json:"serverUrl"`
+		ServerAPI        string             `json:"serverapi,omitempty"`
+		DeployToken      string             `json:"deployToken,omitempty"`
+		APIKey           string             `json:"apiKey"`
+		AutoProvisioning json.RawMessage    `json:"autoProvisioning,omitempty"`
+		DiscoveryEnabled json.RawMessage    `json:"discoveryEnabled,omitempty"`
+		ApiScheme        string             `json:"apiScheme,omitempty"`
+		ApiServer        string             `json:"apiServer,omitempty"`
+		ApiInsecure      json.RawMessage    `json:"apiInsecure,omitempty"`
+		AuthToken        string             `json:"authToken,omitempty"`
+		AgentID          string             `json:"agentId,omitempty"`
+		ClientID         string             `json:"clientId,omitempty"`
+		SiteID           string             `json:"siteId,omitempty"`
+		NatsServer       string             `json:"natsServer,omitempty"`
+		NatsWsServer     string             `json:"natsWsServer,omitempty"`
+		AllowInsecureTLS json.RawMessage    `json:"allowInsecureTls,omitempty"`
+		AgentUpdate      *selfupdate.Policy `json:"agentUpdate,omitempty"`
+		P2P              p2pmeta.Config     `json:"p2p,omitempty"`
+		ChatLog          ChatLogConfig      `json:"chatLog,omitempty"`
 	}
 
 	// Schema alternativo (snake_case) — usado pelo ServiceManager (SharedConfig)
 	// quando persiste o config.json em C:\ProgramData\Discovery\config.json.
 	type snakeCaseInstallerConfig struct {
-		ServerURL            string             `json:"server_url"`
-		ServerAPI            string             `json:"server_api,omitempty"`
-		DeployToken          string             `json:"deploy_token,omitempty"`
-		APIKey               string             `json:"api_key"`
-		AutoProvisioning     json.RawMessage    `json:"auto_provisioning,omitempty"`
-		ApiScheme            string             `json:"api_scheme,omitempty"`
-		ApiServer            string             `json:"api_server,omitempty"`
-		ApiInsecure          json.RawMessage    `json:"api_insecure,omitempty"`
-		AuthToken            string             `json:"auth_token,omitempty"`
-		AgentID              string             `json:"agent_id,omitempty"`
-		ClientID             string             `json:"client_id,omitempty"`
-		SiteID               string             `json:"site_id,omitempty"`
-		NatsServer           string             `json:"nats_server,omitempty"`
-		NatsWsServer         string             `json:"nats_ws_server,omitempty"`
-		AllowInsecureTLS     json.RawMessage    `json:"allow_insecure_tls,omitempty"`
-		AgentUpdate          *selfupdate.Policy `json:"agent_update,omitempty"`
-		P2P                  p2pmeta.Config     `json:"p2p,omitempty"`
-		MeshCentralInstalled bool               `json:"mesh_central_installed,omitempty"`
-		ChatLog              ChatLogConfig      `json:"chat_log,omitempty"`
+		ServerURL        string             `json:"server_url"`
+		ServerAPI        string             `json:"server_api,omitempty"`
+		DeployToken      string             `json:"deploy_token,omitempty"`
+		APIKey           string             `json:"api_key"`
+		AutoProvisioning json.RawMessage    `json:"auto_provisioning,omitempty"`
+		ApiScheme        string             `json:"api_scheme,omitempty"`
+		ApiServer        string             `json:"api_server,omitempty"`
+		ApiInsecure      json.RawMessage    `json:"api_insecure,omitempty"`
+		AuthToken        string             `json:"auth_token,omitempty"`
+		AgentID          string             `json:"agent_id,omitempty"`
+		ClientID         string             `json:"client_id,omitempty"`
+		SiteID           string             `json:"site_id,omitempty"`
+		NatsServer       string             `json:"nats_server,omitempty"`
+		NatsWsServer     string             `json:"nats_ws_server,omitempty"`
+		AllowInsecureTLS json.RawMessage    `json:"allow_insecure_tls,omitempty"`
+		AgentUpdate      *selfupdate.Policy `json:"agent_update,omitempty"`
+		P2P              p2pmeta.Config     `json:"p2p,omitempty"`
+		ChatLog          ChatLogConfig      `json:"chat_log,omitempty"`
 	}
 
 	var raw rawInstallerConfig
@@ -179,7 +176,6 @@ func (c *InstallerConfig) UnmarshalJSON(data []byte) error {
 			raw.SiteID = coalesceStr(raw.SiteID, snake.SiteID)
 			raw.NatsServer = coalesceStr(raw.NatsServer, snake.NatsServer)
 			raw.NatsWsServer = coalesceStr(raw.NatsWsServer, snake.NatsWsServer)
-			raw.MeshCentralInstalled = snake.MeshCentralInstalled
 			if raw.AutoProvisioning == nil {
 				raw.AutoProvisioning = snake.AutoProvisioning
 			}
@@ -242,24 +238,23 @@ func (c *InstallerConfig) UnmarshalJSON(data []byte) error {
 	}
 
 	cfg := InstallerConfig{
-		ServerURL:            raw.ServerURL,
-		ServerAPI:            raw.ServerAPI,
-		APIKey:               deployToken,
-		AutoProvisioning:     autoProvisioning,
-		ApiScheme:            raw.ApiScheme,
-		ApiServer:            raw.ApiServer,
-		AuthToken:            raw.AuthToken,
-		AgentID:              raw.AgentID,
-		ClientID:             raw.ClientID,
-		SiteID:               raw.SiteID,
-		NatsServer:           raw.NatsServer,
-		NatsWsServer:         raw.NatsWsServer,
-		AllowInsecureTLS:     allowInsecureTLS,
-		ApiInsecure:          apiInsecure,
-		AgentUpdate:          raw.AgentUpdate,
-		P2P:                  raw.P2P,
-		MeshCentralInstalled: raw.MeshCentralInstalled,
-		ChatLog:              raw.ChatLog,
+		ServerURL:        raw.ServerURL,
+		ServerAPI:        raw.ServerAPI,
+		APIKey:           deployToken,
+		AutoProvisioning: autoProvisioning,
+		ApiScheme:        raw.ApiScheme,
+		ApiServer:        raw.ApiServer,
+		AuthToken:        raw.AuthToken,
+		AgentID:          raw.AgentID,
+		ClientID:         raw.ClientID,
+		SiteID:           raw.SiteID,
+		NatsServer:       raw.NatsServer,
+		NatsWsServer:     raw.NatsWsServer,
+		AllowInsecureTLS: allowInsecureTLS,
+		ApiInsecure:      apiInsecure,
+		AgentUpdate:      raw.AgentUpdate,
+		P2P:              raw.P2P,
+		ChatLog:          raw.ChatLog,
 	}
 	tryMigrateInstallerServerURL(&cfg)
 	*c = cfg

@@ -422,13 +422,6 @@ export class InstallerConfig {
         if (/** @type {any} */(false)) {
             /**
              * @member
-             * @type {boolean | undefined}
-             */
-            this["meshCentralInstalled"] = undefined;
-        }
-        if (/** @type {any} */(false)) {
-            /**
-             * @member
              * @type {ChatLogConfig | undefined}
              */
             this["chatLog"] = undefined;

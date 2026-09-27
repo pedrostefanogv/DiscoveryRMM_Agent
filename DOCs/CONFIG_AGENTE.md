@@ -60,7 +60,6 @@ Este documento descreve os arquivos locais de configuração usados pelo agent D
 | `allowInsecureTls` | bool | não | Quando `true`, o agent aceita certificado autoassinado ou cadeia não confiável do servidor. Afeta bootstrap, chamadas HTTP autenticadas, automação e NATS WSS. Deve ser usado apenas em laboratório ou ambientes controlados. |
 | `agentUpdate` | objeto | não | Política de self-update do agent. Campos descritos abaixo. |
 | `p2p` | objeto | não | Configuração local do subsistema P2P. Campos descritos abaixo. |
-| `meshCentralInstalled` | bool | não | Estado persistido do bootstrap do MeshCentral. Campo interno do agent; normalmente não precisa edição manual. |
 
 ## Campos de `agentUpdate`
 

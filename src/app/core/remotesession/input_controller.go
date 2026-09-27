@@ -456,8 +456,8 @@ func (c *InputController) handleMouseWheel(evt *InputEvent) {
 // injeta um SendInput down, produzindo o comportamento esperado de "segurar
 // a tecla" (backspace apagando continuamente, espaço/letras repetindo). O
 // Windows NÃO auto-repete um SendInput down solitário, então repassar os
-// repeats do viewer é o mecanismo de repetição — mesmo padrão de VNC e
-// MeshCentral. O mapa keysDown NÃO filtra mais repeats; serve apenas ao
+// repeats do viewer é o mecanismo de repetição — mesmo padrão de VNC.
+// O mapa keysDown NÃO filtra mais repeats; serve apenas ao
 // watchdog de teclas presas e à liberação no Close.
 func (c *InputController) handleKey(code, key string, down bool, mods InputModifiers) {
 	c.mu.Lock()

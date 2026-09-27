@@ -33,7 +33,7 @@ const dispatcherProbeTimeout = 4 * time.Second
 // ConPTY primeiro; se o processo morre prematuramente (com 0xC0000142 /
 // STATUS_DLL_INIT_FAILED) no boot de DLL, tenta novamente (até conptyMaxRetries)
 // e só então faz fallback para o console real (pipes + CREATE_NEW_CONSOLE), que
-// é mais resistente a injetores/AV (como o terminal legado do MeshCentral).
+// é mais resistente a injetores/AV.
 func NewShellInteractive(shell ShellKind, cols, rows int, onOutput func(string)) (IShell, error) {
 	// 0ª tentativa: dispatcher (ConPTY num processo filho isolado) quando
 	// habilitado via DISCOVERY_TERM_DISPATCHER=1. Isola o ConPTY do processo
