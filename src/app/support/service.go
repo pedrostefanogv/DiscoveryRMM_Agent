@@ -129,6 +129,8 @@ type TicketTemplateOption = supportmeta.TicketTemplateOption
 type TicketDepartmentField = supportmeta.TicketDepartmentField
 
 type TicketFieldValue = supportmeta.TicketFieldValue
+
+type TicketAnswer = supportmeta.TicketAnswer
 type TicketTemplateField = supportmeta.TicketTemplateField
 type TicketTemplateQuestion = supportmeta.TicketTemplateQuestion
 
@@ -711,6 +713,47 @@ func (s *Service) GetTicketFields(ticketID string) ([]TicketFieldValue, error) {
 		fields = []TicketFieldValue{}
 	}
 	return fields, nil
+}
+
+// GetTicketAnswers retorna as respostas do mini questionário do template de um
+// chamado (detalhe do agent, somente leitura).
+func (s *Service) GetTicketAnswers(ticketID string) ([]TicketAnswer, error) {
+	ticketID = strings.TrimSpace(ticketID)
+	if !guidPattern.MatchString(ticketID) {
+		return nil, fmt.Errorf("ticketId inválido")
+	}
+
+	cfg := s.debugConfig()
+	ctx := s.ctxOrBackground()
+	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/tickets/" + ticketID + "/answers"
+	resp, err := doGetWithRetry(ctx, tlsutil.NewHTTPClient(10*time.Second), func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+		if err != nil {
+			return nil, err
+		}
+		if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, cfg.AgentID); err != nil {
+			return nil, err
+		}
+		return req, nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("falha ao buscar respostas do chamado: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+
+	var answers []TicketAnswer
+	if err := json.Unmarshal(body, &answers); err != nil {
+		return nil, fmt.Errorf("resposta inválida ao buscar respostas do chamado: %w", err)
+	}
+	if answers == nil {
+		answers = []TicketAnswer{}
+	}
+	return answers, nil
 }
 
 // CreateSupportTicket opens a new ticket linked to this agent.

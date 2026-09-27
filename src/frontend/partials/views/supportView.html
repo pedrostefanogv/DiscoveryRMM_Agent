@@ -210,9 +210,16 @@
         <h3 id="supportCreateTitle" data-i18n="support.openTicketTitle">Abrir Chamado</h3>
         <form id="supportForm" class="support-form" autocomplete="off">
           <div class="form-field">
+            <label for="ticketDepartment"><span data-i18n="field.department">Departamento</span> *</label>
+            <select id="ticketDepartment">
+              <option value="" data-i18n="support.select">Selecione...</option>
+            </select>
+          </div>
+          <div id="ticketDepartmentFields" class="ticket-template-extra hidden"></div>
+          <div class="form-field">
             <label for="ticketTemplate" data-i18n="field.template">Modelo de chamado</label>
-            <select id="ticketTemplate">
-              <option value="" data-i18n="support.templateNone">Sem modelo</option>
+            <select id="ticketTemplate" disabled>
+              <option value="" data-i18n="support.templateSelectDepartment">Selecione o departamento primeiro</option>
             </select>
           </div>
           <div id="ticketTemplateExtra" class="ticket-template-extra hidden"></div>
@@ -246,13 +253,6 @@
               </select>
             </div>
           </div>
-          <div class="form-field">
-            <label for="ticketDepartment"><span data-i18n="field.department">Departamento</span> *</label>
-            <select id="ticketDepartment">
-              <option value="" data-i18n="support.select">Selecione...</option>
-            </select>
-          </div>
-          <div id="ticketDepartmentFields" class="ticket-template-extra hidden"></div>
           <div class="form-field">
             <label for="ticketDescription" data-i18n="support.descriptionRequired">Descricao *</label>
             <textarea id="ticketDescription" rows="6" placeholder="Descreva o problema com detalhes..." required

@@ -302,6 +302,7 @@ var APP_I18N_DICTIONARY = {
     "support.problemSummary": "Resumo do problema",
     "support.select": "Selecione...",
     "support.templateNone": "Sem modelo",
+    "support.templateSelectDepartment": "Selecione o departamento primeiro",
     "support.ticketFields": "Dados do chamado",
     "support.templateQuestions": "Perguntas do modelo",
     "support.templateFields": "Campos do departamento",
@@ -907,6 +908,7 @@ var APP_I18N_DICTIONARY = {
     "support.problemSummary": "Problem summary",
     "support.select": "Select...",
     "support.templateNone": "No template",
+    "support.templateSelectDepartment": "Select the department first",
     "support.ticketFields": "Ticket data",
     "support.templateQuestions": "Template questions",
     "support.templateFields": "Department fields",
@@ -1897,5 +1899,6 @@ function safeCssColor(value, fallback) {
 function safeStatusBadgeStyle(color) {
   var c = safeCssColor(color);
   if (!c) return '';
-  return ' style="background:' + c + '20;color:' + c + '"';
+  // color-mix aceita hex E rgb(); concatenar "20" no fim quebrava o rgb().
+  return ' style="background:color-mix(in srgb, ' + c + ' 14%, transparent);color:' + c + '"';
 }

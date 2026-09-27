@@ -167,6 +167,8 @@ type TicketDepartmentField = supportmeta.TicketDepartmentField
 
 type TicketFieldValue = supportmeta.TicketFieldValue
 
+type TicketAnswer = supportmeta.TicketAnswer
+
 type CloseTicketInput = supportmeta.CloseTicketInput
 
 type KnowledgeArticle = supportmeta.KnowledgeArticle

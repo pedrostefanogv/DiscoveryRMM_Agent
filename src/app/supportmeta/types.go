@@ -88,14 +88,16 @@ func (p *TicketPriority) UnmarshalJSON(data []byte) error {
 
 // APITicket is the ticket representation returned by the remote API.
 type APITicket struct {
-	ID            string            `json:"id"`
-	Title         string            `json:"title"`
-	Description   string            `json:"description"`
-	Priority      TicketPriority    `json:"priority"`
-	Category      *string           `json:"category,omitempty"`
-	AgentID       *string           `json:"agentId,omitempty"`
-	ClientID      string            `json:"clientId"`
-	SiteID        *string           `json:"siteId,omitempty"`
+	ID          string         `json:"id"`
+	Title       string         `json:"title"`
+	Description string         `json:"description"`
+	Priority    TicketPriority `json:"priority"`
+	Category    *string        `json:"category,omitempty"`
+	AgentID     *string        `json:"agentId,omitempty"`
+	ClientID    string         `json:"clientId"`
+	SiteID      *string        `json:"siteId,omitempty"`
+	// DepartmentID é o departamento do chamado; a IA usa em get_department_fields.
+	DepartmentID  *string           `json:"departmentId,omitempty"`
 	CreatedAt     string            `json:"createdAt"`
 	UpdatedAt     string            `json:"updatedAt,omitempty"`
 	ClosedAt      *string           `json:"closedAt,omitempty"`
@@ -225,6 +227,16 @@ type TicketFieldValue struct {
 	DataType     string  `json:"dataType"`
 	IsRequired   bool    `json:"isRequired"`
 	ValueJSON    *string `json:"valueJson,omitempty"`
+}
+
+// TicketAnswer é uma resposta do mini questionário do template de um chamado
+// (detalhe do agent, somente leitura).
+type TicketAnswer struct {
+	ID            string `json:"id"`
+	QuestionKey   string `json:"questionKey"`
+	QuestionLabel string `json:"questionLabel"`
+	ValueText     string `json:"valueText,omitempty"`
+	CreatedAt     string `json:"createdAt"`
 }
 
 // CloseTicketInput is the frontend-facing request to close a ticket.

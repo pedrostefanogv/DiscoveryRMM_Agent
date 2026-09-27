@@ -76,6 +76,15 @@ func (a *App) GetTicketFields(ticketID string) ([]TicketFieldValue, error) {
 	return a.SupportSvc.GetTicketFields(ticketID)
 }
 
+// GetTicketAnswers expõe as respostas do mini questionário do template do
+// chamado para o detalhe da aba Suporte.
+func (a *App) GetTicketAnswers(ticketID string) ([]TicketAnswer, error) {
+	if err := a.requireSupportSvc(); err != nil {
+		return []TicketAnswer{}, err
+	}
+	return a.SupportSvc.GetTicketAnswers(ticketID)
+}
+
 func (a *App) CreateSupportTicket(input CreateTicketInput) (APITicket, error) {
 	if err := a.requireSupportSvc(); err != nil {
 		return APITicket{}, err

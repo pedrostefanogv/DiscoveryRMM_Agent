@@ -151,17 +151,89 @@ function normalizeSearchText(value) {
   return text;
 }
 
-function ticketMatchesQuery(ticket, query) {
-  if (!query) return true;
+// Termos da busca: cada palavra e um termo. Todos precisam estar presentes
+// (AND), em QUALQUER ordem/posicao — "erro sistema" e "sistema erro" dao o
+// mesmo resultado.
+function ticketSearchTerms() {
+  return normalizeSearchText(ticketFilters.query)
+    .split(/\s+/)
+    .filter(function (term) { return term.length > 0; });
+}
+
+function ticketMatchesQuery(ticket, terms) {
+  if (!terms || !terms.length) return true;
   var state = resolveTicketState(ticket);
-  var haystack = [
+  var haystack = normalizeSearchText([
     ticket.title,
+    ticket.description,
     ticket.category,
     ticket.id,
     ticket.id ? String(ticket.id).substring(0, 8) : '',
     state ? state.name : ''
-  ].join(' ');
-  return normalizeSearchText(haystack).indexOf(query) >= 0;
+  ].join(' '));
+  return terms.every(function (term) { return haystack.indexOf(term) >= 0; });
+}
+
+// Normaliza preservando o COMPRIMENTO (ponto a ponto), para mapear os indices
+// do texto original na hora de destacar os termos.
+function foldSearchTextPreserveLength(text) {
+  var raw = String(text == null ? '' : text);
+  var out = '';
+  for (var i = 0; i < raw.length; i++) {
+    var ch = raw.charAt(i);
+    var base = ch;
+    try {
+      if (typeof ch.normalize === 'function') {
+        var decomposed = ch.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+        if (decomposed.length) base = decomposed.charAt(0);
+      }
+    } catch (e) {
+      // mantem o caractere original
+    }
+    out += base.toLowerCase();
+  }
+  return out;
+}
+
+// Destaca (com <mark>) os termos encontrados no texto, sem quebrar o escape.
+function highlightSearchTerms(text, terms) {
+  var raw = text == null ? '' : String(text);
+  if (!raw || !terms || !terms.length) return escapeHtml(raw);
+
+  var folded = foldSearchTextPreserveLength(raw);
+  var ranges = [];
+  terms.forEach(function (term) {
+    if (!term) return;
+    var from = 0;
+    while (from + term.length <= folded.length) {
+      var idx = folded.indexOf(term, from);
+      if (idx < 0) break;
+      ranges.push([idx, idx + term.length]);
+      from = idx + Math.max(1, term.length);
+    }
+  });
+  if (!ranges.length) return escapeHtml(raw);
+
+  ranges.sort(function (a, b) { return a[0] - b[0]; });
+  var merged = [];
+  ranges.forEach(function (range) {
+    var last = merged[merged.length - 1];
+    if (last && range[0] <= last[1]) {
+      if (range[1] > last[1]) last[1] = range[1];
+    } else {
+      merged.push([range[0], range[1]]);
+    }
+  });
+
+  var html = '';
+  var cursor = 0;
+  merged.forEach(function (range) {
+    html += escapeHtml(raw.slice(cursor, range[0]));
+    html += '<mark class="search-hit">' + escapeHtml(raw.slice(range[0], range[1])) + '</mark>';
+    cursor = range[1];
+  });
+  html += escapeHtml(raw.slice(cursor));
+  return html;
 }
 
 function ticketMatchesStatusFilter(ticket, status) {
@@ -175,11 +247,11 @@ function ticketMatchesStatusFilter(ticket, status) {
 }
 
 function filterTickets(list) {
-  var query = normalizeSearchText(ticketFilters.query);
+  var terms = ticketSearchTerms();
   return (list || []).filter(function (t) {
     if (!ticketMatchesStatusFilter(t, ticketFilters.status)) return false;
     if (ticketFilters.priority !== 'all' && String(t.priority) !== String(ticketFilters.priority)) return false;
-    return ticketMatchesQuery(t, query);
+    return ticketMatchesQuery(t, terms);
   });
 }
 
@@ -302,6 +374,8 @@ function showNewTicketForm() {
   if (ticketTemplateSelectEl) ticketTemplateSelectEl.value = '';
   clearTicketTemplateExtra();
   clearDepartmentFields();
+  // Sem departamento selecionado o modelo fica desabilitado.
+  renderTicketTemplateOptions();
   loadTicketOptions();
   loadTicketTemplates();
 }
@@ -352,16 +426,41 @@ function loadTicketTemplates() {
   if (!api || typeof api.GetTicketTemplates !== 'function' || !ticketTemplateSelectEl) return;
   api.GetTicketTemplates().then(function (templates) {
     ticketTemplatesCache = Array.isArray(templates) ? templates : [];
-    var html = '<option value="">' + escapeHtml(translate('support.templateNone')) + '</option>';
-    ticketTemplatesCache.forEach(function (t) {
-      if (!t || !t.id) return;
-      html += '<option value="' + escapeHtmlAttr(t.id) + '">' + escapeHtml(t.name || t.title || t.id) + '</option>';
-    });
-    ticketTemplateSelectEl.innerHTML = html;
-    ticketTemplateSelectEl.value = '';
+    renderTicketTemplateOptions();
   }).catch(function (err) {
     console.warn('[support] falha ao carregar modelos de chamado:', err);
+    renderTicketTemplateOptions();
   });
+}
+
+// O departamento vem primeiro: o modelo so fica disponivel depois dele e a
+// lista e filtrada pelo departamento (modelos sem departamento valem para
+// qualquer um). Assim nao ha como escolher um modelo de outro departamento.
+function renderTicketTemplateOptions() {
+  if (!ticketTemplateSelectEl) return;
+  var departmentId = selectedDepartmentId();
+  if (!departmentId) {
+    ticketTemplateSelectEl.innerHTML =
+      '<option value="">' + escapeHtml(translate('support.templateSelectDepartment')) + '</option>';
+    ticketTemplateSelectEl.value = '';
+    ticketTemplateSelectEl.disabled = true;
+    return;
+  }
+  var available = ticketTemplatesCache.filter(function (t) {
+    return t && t.id && (!t.departmentId || t.departmentId === departmentId);
+  });
+  var previous = ticketTemplateSelectEl.value;
+  var html = '<option value="">' + escapeHtml(translate('support.templateNone')) + '</option>';
+  available.forEach(function (t) {
+    // O texto humano e o Title; Name e apenas a chave identificadora.
+    html += '<option value="' + escapeHtmlAttr(t.id) + '">' + escapeHtml(t.title || t.name || t.id) + '</option>';
+  });
+  ticketTemplateSelectEl.innerHTML = html;
+  // Preserva a escolha do usuario: a lista pode ser reconstruida depois de uma
+  // resposta assincrona (loadTicketTemplates) e nao pode descartar a selecao.
+  var keepPrevious = available.some(function (t) { return t.id === previous; });
+  ticketTemplateSelectEl.value = keepPrevious ? previous : '';
+  ticketTemplateSelectEl.disabled = false;
 }
 
 function findTicketTemplate(id) {
@@ -506,7 +605,20 @@ function setTemplateControlValue(idAttr, dataType, value) {
   el.value = String(value);
 }
 
+// Le os valores atuais dos campos antes de um re-render (para nao apagar o que
+// o usuario digitou quando ele troca o modelo).
+function readDepartmentFieldValuesSnapshot() {
+  var snapshot = {};
+  currentDepartmentFields.forEach(function (field) {
+    if (!field || !field.definitionId) return;
+    var value = readTemplateControlValue(templateInputId('field', field.definitionId), field.dataType);
+    if (value !== undefined) snapshot[field.definitionId] = value;
+  });
+  return snapshot;
+}
+
 function renderDepartmentFields(fields, defaultsJson) {
+  var previousValues = readDepartmentFieldValuesSnapshot();
   currentDepartmentFields = Array.isArray(fields) ? fields : [];
   if (!ticketDepartmentFieldsEl || !currentDepartmentFields.length) {
     clearDepartmentFields();
@@ -515,10 +627,19 @@ function renderDepartmentFields(fields, defaultsJson) {
   ticketDepartmentFieldsEl.innerHTML = renderTemplateGroup('support.templateFields', 'field', currentDepartmentFields);
   ticketDepartmentFieldsEl.classList.remove('hidden');
 
-  // Pre-preenche com os defaults do modelo selecionado (definitionId -> valor).
+  // Restaura o que ja havia sido digitado...
+  currentDepartmentFields.forEach(function (field) {
+    if (!field || !field.definitionId) return;
+    if (Object.prototype.hasOwnProperty.call(previousValues, field.definitionId)) {
+      setTemplateControlValue(templateInputId('field', field.definitionId), field.dataType, previousValues[field.definitionId]);
+    }
+  });
+
+  // ...e aplica os defaults do modelo somente nos campos ainda vazios.
   var defaults = parseTemplateDefaults(defaultsJson);
   currentDepartmentFields.forEach(function (field) {
     if (!field || !field.definitionId) return;
+    if (Object.prototype.hasOwnProperty.call(previousValues, field.definitionId)) return;
     if (Object.prototype.hasOwnProperty.call(defaults, field.definitionId)) {
       setTemplateControlValue(templateInputId('field', field.definitionId), field.dataType, defaults[field.definitionId]);
     }
@@ -589,7 +710,8 @@ function applyTicketTemplate(templateId) {
   setSelectValueIfPresent(document.getElementById('ticketCategory'), template.category);
   var priority = templatePriorityToInt(template.priority);
   if (priority) setSelectValueIfPresent(document.getElementById('ticketPriority'), String(priority));
-  setSelectValueIfPresent(document.getElementById('ticketDepartment'), template.departmentId);
+  // O departamento NAO e alterado pelo modelo: ele foi escolhido antes e o
+  // modelo ja foi filtrado por ele.
   renderTicketTemplateExtra(template);
   // Os campos sao do departamento (nao do template): recarrega para o
   // departamento efetivo, aplicando os defaults do modelo.
@@ -915,8 +1037,12 @@ function initSupport() {
   }
   var ticketDepartmentSelect = document.getElementById('ticketDepartment');
   if (ticketDepartmentSelect) {
-    // Os campos personalizados do departamento mudam junto com a selecao.
+    // Departamento primeiro: ao trocar, reseta o modelo e recarrega os campos
+    // personalizados e os modelos permitidos para o novo departamento.
     ticketDepartmentSelect.addEventListener('change', function () {
+      if (ticketTemplateSelectEl) ticketTemplateSelectEl.value = '';
+      clearTicketTemplateExtra();
+      renderTicketTemplateOptions();
       loadDepartmentFields(ticketDepartmentSelect.value);
     });
   }
@@ -1084,6 +1210,7 @@ function renderSupportTicketList(tickets) {
   if (supportTicketsLoadFailed) return;
 
   var visible = sortTickets(filterTickets(tickets));
+  var searchTerms = ticketSearchTerms();
   if (ticketsResultCountEl) {
     ticketsResultCountEl.textContent = visible.length
       ? translate('support.resultsCount', { count: visible.length })
@@ -1115,7 +1242,7 @@ function renderSupportTicketList(tickets) {
       ? '<span class="ticket-awaiting-rating-badge">' + escapeHtml(translate('support.awaitingRatingBadge')) + '</span>'
       : '';
     return '<button class="support-ticket-card" data-id="' + escapeHtml(t.id) + '">' +
-      '<div class="ticket-subject">' + escapeHtml(t.title || translate('support.untitledTicket')) + '</div>' +
+      '<div class="ticket-subject">' + highlightSearchTerms(t.title || translate('support.untitledTicket'), searchTerms) + '</div>' +
       '<div class="ticket-header">' +
         '<span class="ticket-id-badge">#' + escapeHtml(String(t.id).substring(0, 8)) + '</span>' +
         '<span class="ticket-status-badge"' + safeStatusBadgeStyle(status.color) + '>' + escapeHtml(status.name) + '</span>' +
@@ -1123,7 +1250,7 @@ function renderSupportTicketList(tickets) {
         awaitingBadge +
       '</div>' +
       '<div class="ticket-meta">' +
-        (cat ? '<span>' + escapeHtml(cat) + '</span>' : '') +
+        (cat ? '<span>' + highlightSearchTerms(cat, searchTerms) + '</span>' : '') +
         (date ? '<span>' + escapeHtml(translate('support.openedAtShort', { date: date })) + '</span>' : '') +
         (lastActivity ? '<span>' + escapeHtml(lastActivity) + '</span>' : '') +
         (ratingText ? '<span>' + escapeHtml(ratingText) + '</span>' : '') +
@@ -1206,7 +1333,7 @@ function renderTicketDetail(t) {
     // B14: cor do servidor validada antes de aplicar no style.
     var _statusColor = safeCssColor(status.color);
     if (_statusColor) {
-      ticketDetailStatusEl.style.background = _statusColor + '20';
+      ticketDetailStatusEl.style.background = 'color-mix(in srgb, ' + _statusColor + ' 14%, transparent)';
       ticketDetailStatusEl.style.color = _statusColor;
     }
   }

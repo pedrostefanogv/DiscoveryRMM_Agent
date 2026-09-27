@@ -638,6 +638,12 @@
   outline-offset: 1px;
 }
 
+/* Select desabilitado (ex.: modelo enquanto nao ha departamento) */
+.support-form select:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 /* Campos personalizados do chamado (detalhe, somente leitura) */
 .ticket-custom-fields {
   display: flex;
@@ -714,6 +720,14 @@
   font-weight: 600;
   background: var(--priority-medium-bg);
   color: var(--priority-medium-text);
+}
+
+/* Destaque dos termos pesquisados nos cards de chamado */
+.support-ticket-card mark.search-hit {
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 2px;
 }
 
 /* Chamado encerrado: aviso + reabertura */
