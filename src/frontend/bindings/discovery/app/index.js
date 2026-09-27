@@ -49,5 +49,8 @@ export {
     RuntimeFlags,
     StatusOverview,
     TicketComment,
-    TicketOptions
+    TicketDepartmentField,
+    TicketFieldValue,
+    TicketOptions,
+    TicketTemplateOption
 } from "./models.js";

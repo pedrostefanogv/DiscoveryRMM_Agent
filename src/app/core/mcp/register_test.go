@@ -18,7 +18,7 @@ func TestTicketLifecycleToolsRegistered(t *testing.T) {
 	reg := NewRegistry()
 	RegisterDiscoveryTools(reg, stubAppBridge{})
 
-	for _, name := range []string{"close_ticket", "reopen_ticket", "rate_ticket"} {
+	for _, name := range []string{"close_ticket", "reopen_ticket", "rate_ticket", "get_department_fields"} {
 		if reg.Find(name) == nil {
 			t.Fatalf("ferramenta %q nao registrada", name)
 		}
@@ -41,5 +41,8 @@ func TestTicketLifecycleToolsRegistered(t *testing.T) {
 	}
 	if err := call("close_ticket", map[string]any{"ticketId": "abc", "rating": 9}); err == nil || !strings.Contains(err.Error(), "rating") {
 		t.Fatalf("close_ticket deveria validar rating quando informado, got=%v", err)
+	}
+	if err := call("get_department_fields", map[string]any{}); err == nil || !strings.Contains(err.Error(), "departmentId") {
+		t.Fatalf("get_department_fields deveria exigir departmentId, got=%v", err)
 	}
 }

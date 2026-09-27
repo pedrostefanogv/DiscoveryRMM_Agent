@@ -11,9 +11,14 @@ export {
     KnowledgeArticle,
     KnowledgePage,
     TicketComment,
+    TicketDepartmentField,
+    TicketFieldValue,
     TicketOptionDepartment,
     TicketOptionProfile,
-    TicketOptions
+    TicketOptions,
+    TicketTemplateField,
+    TicketTemplateOption,
+    TicketTemplateQuestion
 } from "./models.js";
 
 import * as $models from "./models.js";

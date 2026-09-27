@@ -1103,10 +1103,28 @@ export const TicketComment = supportmeta$0.TicketComment;
  * @typedef {supportmeta$0.TicketComment} TicketComment
  */
 
+export const TicketDepartmentField = supportmeta$0.TicketDepartmentField;
+
+/**
+ * @typedef {supportmeta$0.TicketDepartmentField} TicketDepartmentField
+ */
+
+export const TicketFieldValue = supportmeta$0.TicketFieldValue;
+
+/**
+ * @typedef {supportmeta$0.TicketFieldValue} TicketFieldValue
+ */
+
 export const TicketOptions = supportmeta$0.TicketOptions;
 
 /**
  * @typedef {supportmeta$0.TicketOptions} TicketOptions
+ */
+
+export const TicketTemplateOption = supportmeta$0.TicketTemplateOption;
+
+/**
+ * @typedef {supportmeta$0.TicketTemplateOption} TicketTemplateOption
  */
 
 export const p2pDiscoveredPeer = p2pmeta$0.DiscoveredPeer;

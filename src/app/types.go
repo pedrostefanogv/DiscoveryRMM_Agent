@@ -157,6 +157,16 @@ type TicketOptionDepartment = supportmeta.TicketOptionDepartment
 
 type TicketOptionProfile = supportmeta.TicketOptionProfile
 
+type TicketTemplateOption = supportmeta.TicketTemplateOption
+
+type TicketTemplateQuestion = supportmeta.TicketTemplateQuestion
+
+type TicketTemplateField = supportmeta.TicketTemplateField
+
+type TicketDepartmentField = supportmeta.TicketDepartmentField
+
+type TicketFieldValue = supportmeta.TicketFieldValue
+
 type CloseTicketInput = supportmeta.CloseTicketInput
 
 type KnowledgeArticle = supportmeta.KnowledgeArticle

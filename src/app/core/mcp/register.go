@@ -52,6 +52,7 @@ type AppBridge interface {
 	RateAgentTicket(ticketID string, rating int, feedback string) (json.RawMessage, error)
 	ListAgentTicketTemplates() (json.RawMessage, error)
 	ListTicketDepartmentsJSON() (json.RawMessage, error)
+	ListDepartmentFieldsJSON(departmentID string) (json.RawMessage, error)
 
 	// Chat — pergunta interativa ao usuario
 	AskUserChat(question, optionsJSON, allowText string) (string, error)
@@ -641,8 +642,23 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 	})
 
 	reg.Register(Tool{
+		Name:        "get_department_fields",
+		Description: "Lista os CAMPOS PERSONALIZADOS de um departamento (label, tipo, obrigatorio, opcoes, limites). Eles valem para TODO chamado do departamento, com ou sem template; os obrigatorios devem ser enviados em customFields (definitionId->valor) no create_ticket. Chame DEPOIS de escolher o departamento (list_departments) e, se houver campos obrigatorios, pergunte os valores ao usuario antes de abrir o chamado.",
+		Params: []ToolParam{
+			{Name: "departmentId", Type: "string", Description: "GUID do departamento (obtido em list_departments)", Required: true},
+		},
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
+			departmentID, _ := args["departmentId"].(string)
+			if strings.TrimSpace(departmentID) == "" {
+				return nil, fmt.Errorf("departmentId nao pode ser vazio")
+			}
+			return app.ListDepartmentFieldsJSON(departmentID)
+		},
+	})
+
+	reg.Register(Tool{
 		Name:        "create_ticket",
-		Description: "ABRE um novo chamado de suporte vinculado a esta maquina. Use SEMPRE que o usuario pedir para abrir ticket, chamado, reportar problema ou solicitar suporte. O chamado e automaticamente associado ao agente/maquina. Chame get_agent_info antes para enriquecer o titulo e descricao com dados da maquina. Quando um template foi escolhido, envie templateId + answers (respostas do mini questionario, key->valor) e, se houver, customFields (campos do departamento, definitionId->valor). NUNCA oriente o usuario a acessar portais web externos.",
+		Description: "ABRE um novo chamado de suporte vinculado a esta maquina. Use SEMPRE que o usuario pedir para abrir ticket, chamado, reportar problema ou solicitar suporte. O chamado e automaticamente associado ao agente/maquina. Chame get_agent_info antes para enriquecer o titulo e descricao com dados da maquina. Chame get_department_fields para conhecer os campos personalizados obrigatorios do departamento (eles valem mesmo sem template) e envie os valores em customFields (definitionId->valor). Quando um template foi escolhido, envie templateId + answers (respostas do mini questionario, key->valor). NUNCA oriente o usuario a acessar portais web externos.",
 		Params: []ToolParam{
 			{Name: "title", Type: "string", Description: "Titulo do chamado", Required: true},
 			{Name: "description", Type: "string", Description: "Descricao detalhada do problema", Required: true},

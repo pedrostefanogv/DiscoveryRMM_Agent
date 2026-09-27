@@ -592,35 +592,37 @@
   gap: 8px;
 }
 
-/* Busca + filtros: mesma linha dentro do card, separados por um divisor sutil */
-.support-toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
+/* Busca sempre visivel dentro do card, separada por um divisor sutil */
+.support-search {
   padding-top: 10px;
   border-top: 1px solid var(--border);
 }
 
-.support-toolbar-search {
-  flex: 1 1 240px;
-  min-width: 180px;
-  max-width: 340px;
+.support-search input {
+  width: 100%;
 }
 
-.support-toolbar select {
+/* Filtros (situacao/prioridade) ficam recolhiveis pelo icone de funil */
+.support-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.support-filters select {
   flex: 0 1 auto;
-  min-width: 140px;
-  max-width: 190px;
+  min-width: 150px;
+  max-width: 260px;
 }
 
-.support-toolbar #clearTicketFiltersBtn {
+.support-filters #clearTicketFiltersBtn {
   flex: 0 0 auto;
   margin-left: auto;
 }
 
-.support-toolbar input,
-.support-toolbar select {
+.support-search input,
+.support-filters select {
   font-family: inherit;
   font-size: 0.82rem;
   color: var(--text);
@@ -630,10 +632,69 @@
   padding: 7px 9px;
 }
 
-.support-toolbar input:focus,
-.support-toolbar select:focus {
+.support-search input:focus,
+.support-filters select:focus {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+}
+
+/* Campos personalizados do chamado (detalhe, somente leitura) */
+.ticket-custom-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ticket-custom-fields h4 {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.ticket-field-row {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 0.82rem;
+}
+
+.ticket-field-label {
+  min-width: 140px;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.ticket-field-value {
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Campos extras do modelo de chamado (perguntas + campos do departamento) */
+.ticket-template-extra {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+}
+
+.ticket-template-extra .template-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ticket-template-extra .template-group-title {
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+}
+
+.ticket-template-extra select[multiple] {
+  min-height: 68px;
 }
 
 .support-header-count {

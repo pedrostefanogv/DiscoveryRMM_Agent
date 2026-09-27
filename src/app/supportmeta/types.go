@@ -184,15 +184,47 @@ type TicketTemplateQuestion struct {
 
 // TicketTemplateOption é um template de abertura de chamado disponível ao agente.
 type TicketTemplateOption struct {
-	ID           string                   `json:"id"`
-	Name         string                   `json:"name"`
-	Title        string                   `json:"title"`
-	Description  string                   `json:"description"`
-	Priority     string                   `json:"priority"`
-	Category     string                   `json:"category"`
-	DepartmentID string                   `json:"departmentId"`
-	Questions    []TicketTemplateQuestion `json:"questions"`
-	Fields       []TicketTemplateField    `json:"fields"`
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Title        string `json:"title"`
+	Description  string `json:"description"`
+	Priority     string `json:"priority"`
+	Category     string `json:"category"`
+	DepartmentID string `json:"departmentId"`
+	// CustomFieldDefaultsJSON é o JSON (texto) de defaults dos campos do
+	// departamento (definitionId -> valor) para pré-preencher o formulário.
+	CustomFieldDefaultsJSON string                   `json:"customFieldDefaultsJson,omitempty"`
+	Questions               []TicketTemplateQuestion `json:"questions"`
+	Fields                  []TicketTemplateField    `json:"fields"`
+}
+
+// TicketDepartmentField descreve um campo personalizado público de um
+// departamento (formulário de abertura). Vale para todo chamado do
+// departamento, com ou sem template.
+type TicketDepartmentField struct {
+	DefinitionID    string   `json:"definitionId"`
+	Name            string   `json:"name"`
+	Label           string   `json:"label"`
+	Description     string   `json:"description,omitempty"`
+	DataType        string   `json:"dataType"`
+	IsRequired      bool     `json:"isRequired"`
+	Options         []string `json:"options"`
+	ValidationRegex string   `json:"validationRegex,omitempty"`
+	InputMask       string   `json:"inputMask,omitempty"`
+	MinLength       *int     `json:"minLength,omitempty"`
+	MaxLength       *int     `json:"maxLength,omitempty"`
+	MinValue        *float64 `json:"minValue,omitempty"`
+	MaxValue        *float64 `json:"maxValue,omitempty"`
+}
+
+// TicketFieldValue é um campo personalizado do departamento com o valor gravado
+// no chamado (detalhe do agent, somente leitura).
+type TicketFieldValue struct {
+	DefinitionID string  `json:"definitionId"`
+	Label        string  `json:"label"`
+	DataType     string  `json:"dataType"`
+	IsRequired   bool    `json:"isRequired"`
+	ValueJSON    *string `json:"valueJson,omitempty"`
 }
 
 // CloseTicketInput is the frontend-facing request to close a ticket.

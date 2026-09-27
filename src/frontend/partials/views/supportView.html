@@ -36,9 +36,11 @@
           </button>
         </div>
       </div>
-      <div id="ticketFiltersPanel" class="support-toolbar hidden">
-        <input id="ticketSearchInput" class="support-toolbar-search" type="search" autocomplete="off"
+      <div class="support-search">
+        <input id="ticketSearchInput" type="search" autocomplete="off"
           data-i18n-placeholder="support.searchPlaceholder" placeholder="Buscar por titulo, categoria ou #ID" />
+      </div>
+      <div id="ticketFiltersPanel" class="support-filters hidden">
         <select id="ticketStatusFilter" data-i18n-title="support.filterStatus"></select>
         <select id="ticketPriorityFilter" data-i18n-title="support.filterPriority"></select>
         <button id="clearTicketFiltersBtn" class="btn subtle btn-sm" type="button"
@@ -68,6 +70,7 @@
         <h3 id="ticketDetailTitle" class="ticket-detail-title"></h3>
         <div id="ticketDetailMeta" class="ticket-detail-meta"></div>
         <div id="ticketDetailDesc" class="ticket-detail-desc"></div>
+        <div id="ticketCustomFields" class="ticket-custom-fields hidden"></div>
 
         <div id="ticketClosedNotice" class="ticket-closed-notice hidden">
           <div class="ticket-closed-notice-text">
@@ -207,6 +210,13 @@
         <h3 id="supportCreateTitle" data-i18n="support.openTicketTitle">Abrir Chamado</h3>
         <form id="supportForm" class="support-form" autocomplete="off">
           <div class="form-field">
+            <label for="ticketTemplate" data-i18n="field.template">Modelo de chamado</label>
+            <select id="ticketTemplate">
+              <option value="" data-i18n="support.templateNone">Sem modelo</option>
+            </select>
+          </div>
+          <div id="ticketTemplateExtra" class="ticket-template-extra hidden"></div>
+          <div class="form-field">
             <label for="ticketTitle" data-i18n="support.ticketTitle">Titulo *</label>
             <input id="ticketTitle" type="text" placeholder="Resumo do problema" required maxlength="200"
               data-i18n-placeholder="support.problemSummary" />
@@ -236,20 +246,13 @@
               </select>
             </div>
           </div>
-          <div class="form-row">
-            <div class="form-field">
-              <label for="ticketDepartment" data-i18n="field.department">Departamento</label>
-              <select id="ticketDepartment">
-                <option value="" data-i18n="support.select">Selecione...</option>
-              </select>
-            </div>
-            <div class="form-field">
-              <label for="ticketWorkflowProfile" data-i18n="field.workflowProfile">Perfil de Workflow</label>
-              <select id="ticketWorkflowProfile">
-                <option value="" data-i18n="support.departmentDefault">Padrao do departamento</option>
-              </select>
-            </div>
+          <div class="form-field">
+            <label for="ticketDepartment"><span data-i18n="field.department">Departamento</span> *</label>
+            <select id="ticketDepartment">
+              <option value="" data-i18n="support.select">Selecione...</option>
+            </select>
           </div>
+          <div id="ticketDepartmentFields" class="ticket-template-extra hidden"></div>
           <div class="form-field">
             <label for="ticketDescription" data-i18n="support.descriptionRequired">Descricao *</label>
             <textarea id="ticketDescription" rows="6" placeholder="Descreva o problema com detalhes..." required

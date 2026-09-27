@@ -298,7 +298,12 @@ function showNewTicketForm() {
   // O cabecalho unificado (busca/filtros/acoes) nao faz sentido no formulario.
   if (supportStatusBarEl) supportStatusBarEl.classList.add("hidden");
   hideTicketFormStatus();
+  // Reabrir o formulario comeca limpo (modelo/campos do departamento).
+  if (ticketTemplateSelectEl) ticketTemplateSelectEl.value = '';
+  clearTicketTemplateExtra();
+  clearDepartmentFields();
   loadTicketOptions();
+  loadTicketTemplates();
 }
 
 function escapeOptionLabel(value) {
@@ -307,21 +312,9 @@ function escapeOptionLabel(value) {
   return el.innerHTML;
 }
 
-function renderTicketProfileOptions(departmentId) {
-  var select = document.getElementById('ticketWorkflowProfile');
-  if (!select) return;
-  var profiles = (ticketOptionsCache.workflowProfiles || []).filter(function (p) {
-    return !departmentId || p.departmentId === departmentId;
-  });
-  var html = '<option value="">Padrao do departamento</option>';
-  profiles.forEach(function (p) {
-    html += '<option value="' + p.id + '">' + escapeOptionLabel(p.name) + '</option>';
-  });
-  select.innerHTML = html;
-}
-
-// Carrega departamentos/perfis do cliente do agente para o formulario. Sem
-// departamento o servidor nao calcula SLA; sem perfil, usa o padrao do setor.
+// Carrega os departamentos do cliente do agente para o formulario. Sem
+// departamento o servidor nao calcula SLA. O perfil de workflow deixou de ser
+// informado na abertura (o servidor aplica o padrao do departamento).
 function loadTicketOptions() {
   var api = appApi();
   if (!api || typeof api.GetTicketOptions !== 'function') return;
@@ -329,16 +322,317 @@ function loadTicketOptions() {
     ticketOptionsCache = options || { departments: [], workflowProfiles: [] };
     var deptSelect = document.getElementById('ticketDepartment');
     if (deptSelect) {
-      var html = '<option value="">Selecione...</option>';
+      var html = '<option value="">' + escapeHtml(translate('support.select')) + '</option>';
       (ticketOptionsCache.departments || []).forEach(function (d) {
-        html += '<option value="' + d.id + '">' + escapeOptionLabel(d.name) + '</option>';
+        html += '<option value="' + escapeHtmlAttr(d.id) + '">' + escapeOptionLabel(d.name) + '</option>';
       });
       deptSelect.innerHTML = html;
     }
-    renderTicketProfileOptions('');
   }).catch(function (err) {
-    console.warn('[support] falha ao carregar departamentos/perfis:', err);
+    console.warn('[support] falha ao carregar departamentos:', err);
   });
+}
+
+// ── Modelos (templates) de abertura de chamado ─────────────────────────────
+
+var ticketTemplatesCache = [];
+
+function templatePriorityToInt(priority) {
+  var map = {
+    '1': 1, 'low': 1, 'baixa': 1,
+    '2': 2, 'medium': 2, 'media': 2, 'média': 2,
+    '3': 3, 'high': 3, 'alta': 3,
+    '4': 4, 'critical': 4, 'critica': 4, 'crítica': 4
+  };
+  return map[String(priority || '').trim().toLowerCase()] || 0;
+}
+
+function loadTicketTemplates() {
+  var api = appApi();
+  if (!api || typeof api.GetTicketTemplates !== 'function' || !ticketTemplateSelectEl) return;
+  api.GetTicketTemplates().then(function (templates) {
+    ticketTemplatesCache = Array.isArray(templates) ? templates : [];
+    var html = '<option value="">' + escapeHtml(translate('support.templateNone')) + '</option>';
+    ticketTemplatesCache.forEach(function (t) {
+      if (!t || !t.id) return;
+      html += '<option value="' + escapeHtmlAttr(t.id) + '">' + escapeHtml(t.name || t.title || t.id) + '</option>';
+    });
+    ticketTemplateSelectEl.innerHTML = html;
+    ticketTemplateSelectEl.value = '';
+  }).catch(function (err) {
+    console.warn('[support] falha ao carregar modelos de chamado:', err);
+  });
+}
+
+function findTicketTemplate(id) {
+  for (var i = 0; i < ticketTemplatesCache.length; i++) {
+    if (ticketTemplatesCache[i] && ticketTemplatesCache[i].id === id) return ticketTemplatesCache[i];
+  }
+  return null;
+}
+
+function clearTicketTemplateExtra() {
+  if (!ticketTemplateExtraEl) return;
+  ticketTemplateExtraEl.innerHTML = '';
+  ticketTemplateExtraEl.classList.add('hidden');
+}
+
+function templateInputId(prefix, key) {
+  return 'tpl-' + prefix + '-' + String(key || '').replace(/[^a-zA-Z0-9_-]/g, '');
+}
+
+// Controles por CustomFieldDataType da API (Text, Integer, Decimal, Boolean,
+// Date, DateTime, Dropdown, ListBox).
+function buildTemplateFieldControl(item, idAttr) {
+  var dataType = String((item && item.dataType) || 'Text');
+  var required = !!(item && item.isRequired);
+  var options = (item && Array.isArray(item.options)) ? item.options : [];
+
+  // Limites do campo viram atributos HTML (o servidor continua validando).
+  var bounds = '';
+  if (item && item.minValue !== null && item.minValue !== undefined) bounds += ' min="' + Number(item.minValue) + '"';
+  if (item && item.maxValue !== null && item.maxValue !== undefined) bounds += ' max="' + Number(item.maxValue) + '"';
+  var lengths = '';
+  if (item && item.minLength !== null && item.minLength !== undefined) lengths += ' minlength="' + Number(item.minLength) + '"';
+  if (item && item.maxLength !== null && item.maxLength !== undefined) lengths += ' maxlength="' + Number(item.maxLength) + '"';
+
+  if (dataType === 'Dropdown' && options.length) {
+    var selectHtml = '<select id="' + idAttr + '"' + (required ? ' required' : '') + '><option value="">' + escapeHtml(translate('support.select')) + '</option>';
+    options.forEach(function (o) {
+      selectHtml += '<option value="' + escapeHtmlAttr(o) + '">' + escapeHtml(o) + '</option>';
+    });
+    return selectHtml + '</select>';
+  }
+  if (dataType === 'ListBox') {
+    var listHtml = '<select id="' + idAttr + '" multiple size="' + Math.min(5, Math.max(2, options.length || 2)) + '"' + (required ? ' required' : '') + '>';
+    options.forEach(function (o) {
+      listHtml += '<option value="' + escapeHtmlAttr(o) + '">' + escapeHtml(o) + '</option>';
+    });
+    return listHtml + '</select>';
+  }
+  if (dataType === 'Boolean') {
+    return '<select id="' + idAttr + '"' + (required ? ' required' : '') + '>' +
+      '<option value="">' + escapeHtml(translate('support.select')) + '</option>' +
+      '<option value="true">' + escapeHtml(translate('support.yes')) + '</option>' +
+      '<option value="false">' + escapeHtml(translate('support.no')) + '</option>' +
+      '</select>';
+  }
+  if (dataType === 'Integer') return '<input id="' + idAttr + '" type="number" step="1"' + bounds + (required ? ' required' : '') + ' />';
+  if (dataType === 'Decimal') return '<input id="' + idAttr + '" type="number" step="0.01"' + bounds + (required ? ' required' : '') + ' />';
+  if (dataType === 'Date') return '<input id="' + idAttr + '" type="date"' + (required ? ' required' : '') + ' />';
+  if (dataType === 'DateTime') return '<input id="' + idAttr + '" type="datetime-local"' + (required ? ' required' : '') + ' />';
+  return '<input id="' + idAttr + '" type="text"' + lengths + (required ? ' required' : '') + ' />';
+}
+
+function renderTemplateGroup(titleKey, prefix, items) {
+  var list = Array.isArray(items) ? items : [];
+  if (!list.length) return '';
+  var html = '<div class="template-group"><div class="template-group-title">' + escapeHtml(translate(titleKey)) + '</div>';
+  list.forEach(function (item) {
+    if (!item) return;
+    var key = prefix === 'field' ? item.definitionId : item.key;
+    if (!key) return;
+    var idAttr = templateInputId(prefix, key);
+    var label = item.label || item.name || key;
+    html += '<div class="form-field">' +
+      '<label for="' + idAttr + '">' + escapeHtml(label) + (item.isRequired ? ' *' : '') + '</label>' +
+      buildTemplateFieldControl(item, idAttr) +
+      ((item.helpText || item.description)
+        ? '<div class="meta">' + escapeHtml(item.helpText || item.description) + '</div>'
+        : '') +
+      '</div>';
+  });
+  return html + '</div>';
+}
+
+function renderTicketTemplateExtra(template) {
+  if (!ticketTemplateExtraEl) return;
+  var html = template ? renderTemplateGroup('support.templateQuestions', 'q', template.questions) : '';
+  if (!html) {
+    clearTicketTemplateExtra();
+    return;
+  }
+  ticketTemplateExtraEl.innerHTML = html;
+  ticketTemplateExtraEl.classList.remove('hidden');
+}
+
+function setSelectValueIfPresent(select, value) {
+  if (!select || !value) return;
+  for (var i = 0; i < select.options.length; i++) {
+    if (select.options[i].value === value) {
+      select.value = value;
+      return;
+    }
+  }
+}
+
+// ── Campos personalizados do departamento ──────────────────────────────────
+// Valem para TODO chamado do departamento (com ou sem template), por isso sao
+// carregados do endpoint do departamento — nao apenas dos campos do template.
+
+var currentDepartmentFields = [];
+
+function clearDepartmentFields() {
+  currentDepartmentFields = [];
+  if (!ticketDepartmentFieldsEl) return;
+  ticketDepartmentFieldsEl.innerHTML = '';
+  ticketDepartmentFieldsEl.classList.add('hidden');
+}
+
+function parseTemplateDefaults(defaultsJson) {
+  if (!defaultsJson) return {};
+  try {
+    var parsed = typeof defaultsJson === 'string' ? JSON.parse(defaultsJson) : defaultsJson;
+    return (parsed && typeof parsed === 'object') ? parsed : {};
+  } catch (e) {
+    return {};
+  }
+}
+
+function setTemplateControlValue(idAttr, dataType, value) {
+  var el = document.getElementById(idAttr);
+  if (!el || value === null || value === undefined) return;
+  if (dataType === 'ListBox') {
+    var wanted = Array.isArray(value) ? value.map(String) : [String(value)];
+    for (var i = 0; i < el.options.length; i++) {
+      el.options[i].selected = wanted.indexOf(el.options[i].value) >= 0;
+    }
+    return;
+  }
+  if (dataType === 'Boolean') {
+    el.value = (value === true || value === 'true') ? 'true' : 'false';
+    return;
+  }
+  el.value = String(value);
+}
+
+function renderDepartmentFields(fields, defaultsJson) {
+  currentDepartmentFields = Array.isArray(fields) ? fields : [];
+  if (!ticketDepartmentFieldsEl || !currentDepartmentFields.length) {
+    clearDepartmentFields();
+    return;
+  }
+  ticketDepartmentFieldsEl.innerHTML = renderTemplateGroup('support.templateFields', 'field', currentDepartmentFields);
+  ticketDepartmentFieldsEl.classList.remove('hidden');
+
+  // Pre-preenche com os defaults do modelo selecionado (definitionId -> valor).
+  var defaults = parseTemplateDefaults(defaultsJson);
+  currentDepartmentFields.forEach(function (field) {
+    if (!field || !field.definitionId) return;
+    if (Object.prototype.hasOwnProperty.call(defaults, field.definitionId)) {
+      setTemplateControlValue(templateInputId('field', field.definitionId), field.dataType, defaults[field.definitionId]);
+    }
+  });
+}
+
+function selectedTemplateDefaultsJson() {
+  var template = findTicketTemplate(ticketTemplateSelectEl ? ticketTemplateSelectEl.value : '');
+  return template ? template.customFieldDefaultsJson : '';
+}
+
+function selectedDepartmentId() {
+  var select = document.getElementById('ticketDepartment');
+  return select ? select.value : '';
+}
+
+var departmentFieldsCache = {};
+
+function loadDepartmentFields(departmentId) {
+  var api = appApi();
+  if (!departmentId || !api || typeof api.GetTicketDepartmentFields !== 'function') {
+    clearDepartmentFields();
+    return;
+  }
+  var requested = departmentId;
+  if (Object.prototype.hasOwnProperty.call(departmentFieldsCache, requested)) {
+    renderDepartmentFields(departmentFieldsCache[requested], selectedTemplateDefaultsJson());
+    return;
+  }
+  api.GetTicketDepartmentFields(departmentId).then(function (fields) {
+    departmentFieldsCache[requested] = Array.isArray(fields) ? fields : [];
+    // Ignora resposta tardia de um departamento que nao esta mais selecionado.
+    if (selectedDepartmentId() !== requested) return;
+    renderDepartmentFields(departmentFieldsCache[requested], selectedTemplateDefaultsJson());
+  }).catch(function (err) {
+    console.warn('[support] falha ao carregar campos do departamento:', err);
+    clearDepartmentFields();
+  });
+}
+
+function collectDepartmentFieldValues() {
+  var result = { values: {}, missing: [] };
+  currentDepartmentFields.forEach(function (field) {
+    if (!field || !field.definitionId) return;
+    var value = readTemplateControlValue(templateInputId('field', field.definitionId), field.dataType);
+    if (value === undefined) {
+      if (field.isRequired) result.missing.push(field.label || field.name || field.definitionId);
+      return;
+    }
+    result.values[field.definitionId] = value;
+  });
+  return result;
+}
+
+function applyTicketTemplate(templateId) {
+  var template = findTicketTemplate(templateId);
+  if (!template) {
+    clearTicketTemplateExtra();
+    // Sem modelo, os campos do departamento continuam valendo.
+    loadDepartmentFields(selectedDepartmentId());
+    return;
+  }
+  // Prefill a partir do modelo; o usuario ainda pode editar antes de enviar.
+  var titleEl = document.getElementById('ticketTitle');
+  if (titleEl && template.title) titleEl.value = template.title;
+  var descriptionEl = document.getElementById('ticketDescription');
+  if (descriptionEl && template.description) descriptionEl.value = template.description;
+  setSelectValueIfPresent(document.getElementById('ticketCategory'), template.category);
+  var priority = templatePriorityToInt(template.priority);
+  if (priority) setSelectValueIfPresent(document.getElementById('ticketPriority'), String(priority));
+  setSelectValueIfPresent(document.getElementById('ticketDepartment'), template.departmentId);
+  renderTicketTemplateExtra(template);
+  // Os campos sao do departamento (nao do template): recarrega para o
+  // departamento efetivo, aplicando os defaults do modelo.
+  loadDepartmentFields(selectedDepartmentId());
+}
+
+function readTemplateControlValue(idAttr, dataType) {
+  var el = document.getElementById(idAttr);
+  if (!el) return undefined;
+  if (dataType === 'ListBox') {
+    var selected = [];
+    for (var i = 0; i < el.options.length; i++) {
+      if (el.options[i].selected) selected.push(el.options[i].value);
+    }
+    return selected.length ? selected : undefined;
+  }
+  var raw = el.value;
+  if (raw === '' || raw === null || raw === undefined) return undefined;
+  if (dataType === 'Integer') {
+    var intValue = parseInt(raw, 10);
+    return Number.isFinite(intValue) ? intValue : undefined;
+  }
+  if (dataType === 'Decimal') {
+    var decValue = parseFloat(raw);
+    return Number.isFinite(decValue) ? decValue : undefined;
+  }
+  if (dataType === 'Boolean') return raw === 'true';
+  return raw;
+}
+
+function collectTicketTemplateExtra(template) {
+  var result = { templateAnswers: {}, missing: [] };
+  if (!template) return result;
+  (template.questions || []).forEach(function (q) {
+    if (!q || !q.key) return;
+    var value = readTemplateControlValue(templateInputId('q', q.key), q.dataType);
+    if (value === undefined) {
+      if (q.isRequired) result.missing.push(q.label || q.key);
+      return;
+    }
+    result.templateAnswers[q.key] = value;
+  });
+  return result;
 }
 
 function ticketPriorityLabel(p) { return priorityLabels[p] || 'N/A'; }
@@ -563,8 +857,9 @@ function initSupport() {
     var category = document.getElementById('ticketCategory') ? document.getElementById('ticketCategory').value : '';
     var priority = parseInt(document.getElementById('ticketPriority') ? document.getElementById('ticketPriority').value : '2', 10);
     var departmentId = document.getElementById('ticketDepartment') ? document.getElementById('ticketDepartment').value : '';
-    var workflowProfileId = document.getElementById('ticketWorkflowProfile') ? document.getElementById('ticketWorkflowProfile').value : '';
     var description = document.getElementById('ticketDescription') ? document.getElementById('ticketDescription').value.trim() : '';
+    var templateId = ticketTemplateSelectEl ? ticketTemplateSelectEl.value : '';
+    var template = findTicketTemplate(templateId);
 
     if (!title || !description) {
       showToast(translate('support.fillTitleDescription'), 'error');
@@ -576,17 +871,32 @@ function initSupport() {
       return;
     }
 
+    // Obrigatorios: perguntas do modelo + campos personalizados do departamento.
+    var templateExtra = collectTicketTemplateExtra(template);
+    var departmentExtra = collectDepartmentFieldValues();
+    var missingFields = templateExtra.missing.concat(departmentExtra.missing);
+    if (missingFields.length) {
+      showToast(translate('support.fieldRequired', { fields: missingFields.join(', ') }), 'error');
+      return;
+    }
+
     var btn = document.getElementById('submitTicketBtn');
     if (btn) { btn.disabled = true; btn.textContent = translate('support.sending'); }
     showTicketFormStatus(translate('support.submittingTicket'), false);
 
     try {
       var payload = { title: title, description: description, priority: priority, category: category, departmentId: departmentId };
-      if (workflowProfileId) payload.workflowProfileId = workflowProfileId;
+      if (Object.keys(departmentExtra.values).length) payload.customFieldValues = departmentExtra.values;
+      if (templateId) {
+        payload.templateId = templateId;
+        if (Object.keys(templateExtra.templateAnswers).length) payload.templateAnswers = templateExtra.templateAnswers;
+      }
       await appApi().CreateSupportTicket(payload);
       showToast(translate('support.ticketCreatedSuccess'), 'success');
       supportFormEl.reset();
-      renderTicketProfileOptions('');
+      if (ticketTemplateSelectEl) ticketTemplateSelectEl.value = '';
+      clearTicketTemplateExtra();
+      clearDepartmentFields();
       hideTicketFormStatus();
       showSupportList();
       loadSupportTickets();
@@ -598,10 +908,16 @@ function initSupport() {
     }
   });
 
+  if (ticketTemplateSelectEl) {
+    ticketTemplateSelectEl.addEventListener('change', function () {
+      applyTicketTemplate(ticketTemplateSelectEl.value);
+    });
+  }
   var ticketDepartmentSelect = document.getElementById('ticketDepartment');
   if (ticketDepartmentSelect) {
+    // Os campos personalizados do departamento mudam junto com a selecao.
     ticketDepartmentSelect.addEventListener('change', function () {
-      renderTicketProfileOptions(ticketDepartmentSelect.value);
+      loadDepartmentFields(ticketDepartmentSelect.value);
     });
   }
 
@@ -856,6 +1172,7 @@ function showTicketDetail(t) {
   renderTicketDetail(t);
   loadWorkflowStatesForClose(t);
   loadTicketComments(t.id);
+  loadTicketFields(t.id);
   ensureWorkflowStates(false).then(function () {
     if (currentTicketId === t.id && currentTicket) renderTicketDetail(currentTicket);
   }).catch(function () { /* mantem o render atual */ });
@@ -1039,6 +1356,46 @@ async function submitTicketRating() {
   } finally {
     submitRatingBtnEl.disabled = false;
     submitRatingBtnEl.textContent = translate('support.submitRating');
+  }
+}
+
+// ── Campos personalizados do chamado (somente leitura) ────────────────────
+
+function formatFieldValue(rawJson) {
+  if (rawJson === null || rawJson === undefined || rawJson === '') return '';
+  var value = rawJson;
+  try {
+    value = JSON.parse(rawJson);
+  } catch (e) {
+    // mantem o valor cru quando nao for JSON valido
+  }
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'boolean') return value ? translate('support.yes') : translate('support.no');
+  if (Array.isArray(value)) return value.map(function (v) { return String(v); }).join(', ');
+  return String(value);
+}
+
+async function loadTicketFields(ticketId) {
+  if (!ticketCustomFieldsEl) return;
+  ticketCustomFieldsEl.classList.add('hidden');
+  ticketCustomFieldsEl.innerHTML = '';
+  if (!ticketId) return;
+  try {
+    var fields = await appApi().GetTicketFields(ticketId);
+    if (!fields || !fields.length || currentTicketId !== ticketId) return;
+    var rows = fields.map(function (f) {
+      var label = f.label || f.name || '';
+      var value = formatFieldValue(f.valueJson);
+      return '<div class="ticket-field-row">' +
+        '<span class="ticket-field-label">' + escapeHtml(label) + '</span>' +
+        '<span class="ticket-field-value">' + escapeHtml(value || '—') + '</span>' +
+      '</div>';
+    }).join('');
+    ticketCustomFieldsEl.innerHTML =
+      '<h4>' + escapeHtml(translate('support.ticketFields')) + '</h4>' + rows;
+    ticketCustomFieldsEl.classList.remove('hidden');
+  } catch (err) {
+    console.warn('[support] falha ao carregar campos do chamado:', err);
   }
 }
 

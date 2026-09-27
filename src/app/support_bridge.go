@@ -23,6 +23,59 @@ func (a *App) GetTicketOptions() (TicketOptions, error) {
 	return a.SupportSvc.GetTicketOptions()
 }
 
+// GetTicketTemplates expõe os modelos de abertura de chamado para o formulário
+// da aba Suporte. Lista tipada (o MCP usa ListAgentTicketTemplates em JSON) para
+// o binding JS receber questions/fields estruturados.
+func (a *App) GetTicketTemplates() ([]TicketTemplateOption, error) {
+	if err := a.requireSupportSvc(); err != nil {
+		return []TicketTemplateOption{}, err
+	}
+	raw, err := a.SupportSvc.ListAgentTicketTemplates()
+	if err != nil {
+		return []TicketTemplateOption{}, err
+	}
+	var templates []TicketTemplateOption
+	if err := json.Unmarshal(raw, &templates); err != nil {
+		return []TicketTemplateOption{}, err
+	}
+	if templates == nil {
+		templates = []TicketTemplateOption{}
+	}
+	return templates, nil
+}
+
+// GetTicketDepartmentFields expõe os campos personalizados públicos de um
+// departamento para o formulário de abertura do suporte. Esses campos valem
+// para todo chamado do departamento, com ou sem template.
+func (a *App) GetTicketDepartmentFields(departmentID string) ([]TicketDepartmentField, error) {
+	if err := a.requireSupportSvc(); err != nil {
+		return []TicketDepartmentField{}, err
+	}
+	return a.SupportSvc.GetTicketDepartmentFields(departmentID)
+}
+
+// ListDepartmentFieldsJSON expõe os campos personalizados de um departamento
+// como JSON para as ferramentas MCP da IA (create_ticket/customFields).
+func (a *App) ListDepartmentFieldsJSON(departmentID string) (json.RawMessage, error) {
+	if err := a.requireSupportSvc(); err != nil {
+		return nil, err
+	}
+	fields, err := a.SupportSvc.GetTicketDepartmentFields(departmentID)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(fields)
+}
+
+// GetTicketFields expõe os campos personalizados do departamento do chamado
+// (com os valores gravados) para o detalhe da aba Suporte.
+func (a *App) GetTicketFields(ticketID string) ([]TicketFieldValue, error) {
+	if err := a.requireSupportSvc(); err != nil {
+		return []TicketFieldValue{}, err
+	}
+	return a.SupportSvc.GetTicketFields(ticketID)
+}
+
 func (a *App) CreateSupportTicket(input CreateTicketInput) (APITicket, error) {
 	if err := a.requireSupportSvc(); err != nil {
 		return APITicket{}, err

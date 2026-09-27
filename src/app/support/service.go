@@ -125,6 +125,10 @@ type TicketComment = supportmeta.TicketComment
 
 type CreateTicketInput = supportmeta.CreateTicketInput
 type TicketTemplateOption = supportmeta.TicketTemplateOption
+
+type TicketDepartmentField = supportmeta.TicketDepartmentField
+
+type TicketFieldValue = supportmeta.TicketFieldValue
 type TicketTemplateField = supportmeta.TicketTemplateField
 type TicketTemplateQuestion = supportmeta.TicketTemplateQuestion
 
@@ -623,6 +627,90 @@ func (s *Service) GetTicketOptions() (TicketOptions, error) {
 	}
 	s.supportLogf("opções carregadas: %d departamento(s), %d perfil(is)", len(options.Departments), len(options.WorkflowProfiles))
 	return options, nil
+}
+
+// GetTicketDepartmentFields retorna os campos personalizados públicos de um
+// departamento. Eles valem para todo chamado do departamento (com ou sem
+// template) e são validados obrigatoriamente pelo servidor na abertura.
+func (s *Service) GetTicketDepartmentFields(departmentID string) ([]TicketDepartmentField, error) {
+	departmentID = strings.TrimSpace(departmentID)
+	if !guidPattern.MatchString(departmentID) {
+		return nil, fmt.Errorf("departmentId inválido")
+	}
+
+	cfg := s.debugConfig()
+	ctx := s.ctxOrBackground()
+	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/tickets/departments/" + departmentID + "/fields"
+	resp, err := doGetWithRetry(ctx, tlsutil.NewHTTPClient(10*time.Second), func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+		if err != nil {
+			return nil, err
+		}
+		if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, cfg.AgentID); err != nil {
+			return nil, err
+		}
+		return req, nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("falha ao buscar campos do departamento: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+
+	var fields []TicketDepartmentField
+	if err := json.Unmarshal(body, &fields); err != nil {
+		return nil, fmt.Errorf("resposta inválida ao buscar campos do departamento: %w", err)
+	}
+	if fields == nil {
+		fields = []TicketDepartmentField{}
+	}
+	s.supportLogf("campos do departamento carregados: %d campo(s)", len(fields))
+	return fields, nil
+}
+
+// GetTicketFields retorna os campos personalizados do departamento do chamado
+// com os valores gravados (detalhe do agent, somente leitura).
+func (s *Service) GetTicketFields(ticketID string) ([]TicketFieldValue, error) {
+	ticketID = strings.TrimSpace(ticketID)
+	if !guidPattern.MatchString(ticketID) {
+		return nil, fmt.Errorf("ticketId inválido")
+	}
+
+	cfg := s.debugConfig()
+	ctx := s.ctxOrBackground()
+	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/tickets/" + ticketID + "/fields"
+	resp, err := doGetWithRetry(ctx, tlsutil.NewHTTPClient(10*time.Second), func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+		if err != nil {
+			return nil, err
+		}
+		if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, cfg.AgentID); err != nil {
+			return nil, err
+		}
+		return req, nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("falha ao buscar campos do chamado: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+
+	var fields []TicketFieldValue
+	if err := json.Unmarshal(body, &fields); err != nil {
+		return nil, fmt.Errorf("resposta inválida ao buscar campos do chamado: %w", err)
+	}
+	if fields == nil {
+		fields = []TicketFieldValue{}
+	}
+	return fields, nil
 }
 
 // CreateSupportTicket opens a new ticket linked to this agent.

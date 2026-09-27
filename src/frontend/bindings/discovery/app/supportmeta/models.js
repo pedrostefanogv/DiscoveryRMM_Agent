@@ -730,6 +730,187 @@ export class TicketComment {
 }
 
 /**
+ * TicketDepartmentField descreve um campo personalizado público de um
+ * departamento (formulário de abertura). Vale para todo chamado do
+ * departamento, com ou sem template.
+ */
+export class TicketDepartmentField {
+    /**
+     * Creates a new TicketDepartmentField instance.
+     * @param {Partial<TicketDepartmentField>} [$$source = {}] - The source object to create the TicketDepartmentField.
+     */
+    constructor($$source = {}) {
+        if (!("definitionId" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["definitionId"] = "";
+        }
+        if (!("name" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["name"] = "";
+        }
+        if (!("label" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["label"] = "";
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["description"] = undefined;
+        }
+        if (!("dataType" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["dataType"] = "";
+        }
+        if (!("isRequired" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["isRequired"] = false;
+        }
+        if (!("options" in $$source)) {
+            /**
+             * @member
+             * @type {string[]}
+             */
+            this["options"] = [];
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["validationRegex"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["inputMask"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {number | null | undefined}
+             */
+            this["minLength"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {number | null | undefined}
+             */
+            this["maxLength"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {number | null | undefined}
+             */
+            this["minValue"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {number | null | undefined}
+             */
+            this["maxValue"] = undefined;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new TicketDepartmentField instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {TicketDepartmentField}
+     */
+    static createFrom($$source = {}) {
+        const $$createField6_0 = $$createType3;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("options" in $$parsedSource) {
+            $$parsedSource["options"] = $$createField6_0($$parsedSource["options"]);
+        }
+        return new TicketDepartmentField(/** @type {Partial<TicketDepartmentField>} */($$parsedSource));
+    }
+}
+
+/**
+ * TicketFieldValue é um campo personalizado do departamento com o valor gravado
+ * no chamado (detalhe do agent, somente leitura).
+ */
+export class TicketFieldValue {
+    /**
+     * Creates a new TicketFieldValue instance.
+     * @param {Partial<TicketFieldValue>} [$$source = {}] - The source object to create the TicketFieldValue.
+     */
+    constructor($$source = {}) {
+        if (!("definitionId" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["definitionId"] = "";
+        }
+        if (!("label" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["label"] = "";
+        }
+        if (!("dataType" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["dataType"] = "";
+        }
+        if (!("isRequired" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["isRequired"] = false;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | null | undefined}
+             */
+            this["valueJson"] = undefined;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new TicketFieldValue instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {TicketFieldValue}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new TicketFieldValue(/** @type {Partial<TicketFieldValue>} */($$parsedSource));
+    }
+}
+
+/**
  * TicketOptionDepartment is a department option for the agent ticket form.
  */
 export class TicketOptionDepartment {
@@ -863,6 +1044,278 @@ export class TicketOptions {
  * @typedef {number} TicketPriority
  */
 
+/**
+ * TicketTemplateField descreve um campo personalizado de um template de chamado.
+ */
+export class TicketTemplateField {
+    /**
+     * Creates a new TicketTemplateField instance.
+     * @param {Partial<TicketTemplateField>} [$$source = {}] - The source object to create the TicketTemplateField.
+     */
+    constructor($$source = {}) {
+        if (!("definitionId" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["definitionId"] = "";
+        }
+        if (!("name" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["name"] = "";
+        }
+        if (!("label" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["label"] = "";
+        }
+        if (!("dataType" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["dataType"] = "";
+        }
+        if (!("isRequired" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["isRequired"] = false;
+        }
+        if (!("options" in $$source)) {
+            /**
+             * @member
+             * @type {string[]}
+             */
+            this["options"] = [];
+        }
+        if (!("validationRegex" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["validationRegex"] = "";
+        }
+        if (!("inputMask" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["inputMask"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new TicketTemplateField instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {TicketTemplateField}
+     */
+    static createFrom($$source = {}) {
+        const $$createField5_0 = $$createType3;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("options" in $$parsedSource) {
+            $$parsedSource["options"] = $$createField5_0($$parsedSource["options"]);
+        }
+        return new TicketTemplateField(/** @type {Partial<TicketTemplateField>} */($$parsedSource));
+    }
+}
+
+/**
+ * TicketTemplateOption é um template de abertura de chamado disponível ao agente.
+ */
+export class TicketTemplateOption {
+    /**
+     * Creates a new TicketTemplateOption instance.
+     * @param {Partial<TicketTemplateOption>} [$$source = {}] - The source object to create the TicketTemplateOption.
+     */
+    constructor($$source = {}) {
+        if (!("id" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["id"] = "";
+        }
+        if (!("name" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["name"] = "";
+        }
+        if (!("title" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["title"] = "";
+        }
+        if (!("description" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["description"] = "";
+        }
+        if (!("priority" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["priority"] = "";
+        }
+        if (!("category" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["category"] = "";
+        }
+        if (!("departmentId" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["departmentId"] = "";
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * CustomFieldDefaultsJSON é o JSON (texto) de defaults dos campos do
+             * departamento (definitionId -> valor) para pré-preencher o formulário.
+             * @member
+             * @type {string | undefined}
+             */
+            this["customFieldDefaultsJson"] = undefined;
+        }
+        if (!("questions" in $$source)) {
+            /**
+             * @member
+             * @type {TicketTemplateQuestion[]}
+             */
+            this["questions"] = [];
+        }
+        if (!("fields" in $$source)) {
+            /**
+             * @member
+             * @type {TicketTemplateField[]}
+             */
+            this["fields"] = [];
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new TicketTemplateOption instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {TicketTemplateOption}
+     */
+    static createFrom($$source = {}) {
+        const $$createField8_0 = $$createType11;
+        const $$createField9_0 = $$createType13;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("questions" in $$parsedSource) {
+            $$parsedSource["questions"] = $$createField8_0($$parsedSource["questions"]);
+        }
+        if ("fields" in $$parsedSource) {
+            $$parsedSource["fields"] = $$createField9_0($$parsedSource["fields"]);
+        }
+        return new TicketTemplateOption(/** @type {Partial<TicketTemplateOption>} */($$parsedSource));
+    }
+}
+
+/**
+ * TicketTemplateQuestion é uma pergunta do mini questionário de um template.
+ */
+export class TicketTemplateQuestion {
+    /**
+     * Creates a new TicketTemplateQuestion instance.
+     * @param {Partial<TicketTemplateQuestion>} [$$source = {}] - The source object to create the TicketTemplateQuestion.
+     */
+    constructor($$source = {}) {
+        if (!("key" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["key"] = "";
+        }
+        if (!("label" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["label"] = "";
+        }
+        if (!("dataType" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["dataType"] = "";
+        }
+        if (!("isRequired" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["isRequired"] = false;
+        }
+        if (!("options" in $$source)) {
+            /**
+             * @member
+             * @type {string[]}
+             */
+            this["options"] = [];
+        }
+        if (!("validationRegex" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["validationRegex"] = "";
+        }
+        if (!("inputMask" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["inputMask"] = "";
+        }
+        if (!("helpText" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["helpText"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new TicketTemplateQuestion instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {TicketTemplateQuestion}
+     */
+    static createFrom($$source = {}) {
+        const $$createField4_0 = $$createType3;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("options" in $$parsedSource) {
+            $$parsedSource["options"] = $$createField4_0($$parsedSource["options"]);
+        }
+        return new TicketTemplateQuestion(/** @type {Partial<TicketTemplateQuestion>} */($$parsedSource));
+    }
+}
+
 // Private type creation functions
 const $$createType0 = APIWorkflowState.createFrom;
 const $$createType1 = $Create.Nullable($$createType0);
@@ -874,3 +1327,7 @@ const $$createType6 = TicketOptionDepartment.createFrom;
 const $$createType7 = $Create.Array($$createType6);
 const $$createType8 = TicketOptionProfile.createFrom;
 const $$createType9 = $Create.Array($$createType8);
+const $$createType10 = TicketTemplateQuestion.createFrom;
+const $$createType11 = $Create.Array($$createType10);
+const $$createType12 = TicketTemplateField.createFrom;
+const $$createType13 = $Create.Array($$createType12);
