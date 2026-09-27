@@ -7,6 +7,15 @@
           <div class="meta" data-i18n="support.subtitle">Chamados vinculados a este agente</div>
         </div>
         <div class="support-header-actions">
+          <span id="ticketsResultCount" class="meta support-header-count"></span>
+          <button id="toggleTicketFiltersBtn" class="btn subtle btn-icon" type="button" aria-expanded="false"
+            aria-controls="ticketFiltersPanel" data-i18n-title="support.toggleFilters"
+            data-i18n-aria-label="support.toggleFilters" aria-label="Filtros" title="Filtros">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <polygon points="3 4 21 4 14 12.5 14 19 10 21 10 12.5 3 4" />
+            </svg>
+          </button>
           <button id="refreshTicketsBtn" class="btn subtle btn-icon" type="button"
             data-i18n-title="action.refreshList" data-i18n-aria-label="action.refreshList"
             aria-label="Atualizar Lista" title="Atualizar Lista">
@@ -27,14 +36,13 @@
           </button>
         </div>
       </div>
-      <div class="support-toolbar">
+      <div id="ticketFiltersPanel" class="support-toolbar hidden">
         <input id="ticketSearchInput" class="support-toolbar-search" type="search" autocomplete="off"
           data-i18n-placeholder="support.searchPlaceholder" placeholder="Buscar por titulo, categoria ou #ID" />
         <select id="ticketStatusFilter" data-i18n-title="support.filterStatus"></select>
         <select id="ticketPriorityFilter" data-i18n-title="support.filterPriority"></select>
         <button id="clearTicketFiltersBtn" class="btn subtle btn-sm" type="button"
           data-i18n="support.clearFilters">Limpar filtros</button>
-        <span id="ticketsResultCount" class="meta support-toolbar-count"></span>
       </div>
     </div>
 

@@ -603,8 +603,20 @@
 }
 
 .support-toolbar-search {
-  flex: 1 1 220px;
+  flex: 1 1 240px;
   min-width: 180px;
+  max-width: 340px;
+}
+
+.support-toolbar select {
+  flex: 0 1 auto;
+  min-width: 140px;
+  max-width: 190px;
+}
+
+.support-toolbar #clearTicketFiltersBtn {
+  flex: 0 0 auto;
+  margin-left: auto;
 }
 
 .support-toolbar input,
@@ -624,9 +636,14 @@
   outline-offset: 1px;
 }
 
-.support-toolbar-count {
-  margin-left: auto;
+.support-header-count {
   white-space: nowrap;
+}
+
+/* Icone de filtros: fica destacado quando ha algum filtro ativo */
+.support-header-actions .btn.active {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .ticket-awaiting-rating-badge {

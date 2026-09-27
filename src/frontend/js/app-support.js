@@ -20,11 +20,8 @@ var ticketFilters = { query: '', status: '__default', priority: 'all' };
 // Evita que uma interacao com os filtros sobrescreva a mensagem de erro de
 // carregamento por "nenhum chamado".
 var supportTicketsLoadFailed = false;
-// Filtros persistidos por perfil (scheme|server|agentId) no localStorage, para
-// sobreviverem ao fechamento do app.
-var ticketFiltersRestored = false;
-var ticketFiltersProfileKey = '';
-var TICKET_FILTERS_STORAGE_VERSION = 'v1';
+// Filtros vivem apenas na sessão: ao iniciar o agent a lista sempre abre no
+// padrão "Abertos e aguardando avaliação" (não há restauração de localStorage).
 
 var closeTicketStarsWidget = null;
 var ratingStarsWidget = null;
@@ -212,9 +209,7 @@ function renderTicketFilterControls(states) {
     if (!options.some(function (o) { return o.value === current; })) current = '__default';
     ticketFilters.status = current;
     ticketStatusFilterEl.value = current;
-    // Filtro salvo apontando para um estado que não existe mais: corrige e
-    // regrava para não repetir a validação no próximo carregamento.
-    if (previousStatus !== current) persistTicketFilters();
+    if (previousStatus !== current) updateTicketFiltersToggle();
   }
   if (ticketPriorityFilterEl) {
     if (!ticketPriorityFilterEl.options.length) {
@@ -233,66 +228,6 @@ function renderTicketFilterControls(states) {
   }
 }
 
-function ticketFiltersStorageKey(profileKey) {
-  return 'discovery.support.ticket-filters.' + TICKET_FILTERS_STORAGE_VERSION + '.' + (profileKey || 'default');
-}
-
-// Sanitiza o que vem do storage: status valido e validado depois contra a lista
-// de estados; prioridade precisa ser uma das opcoes conhecidas.
-function sanitizeTicketFilters(raw) {
-  var out = { query: '', status: '__default', priority: 'all' };
-  if (!raw || typeof raw !== 'object') return out;
-  if (typeof raw.query === 'string') out.query = raw.query.slice(0, 200);
-  if (typeof raw.status === 'string' && raw.status) out.status = raw.status;
-  if (['all', '1', '2', '3', '4'].indexOf(String(raw.priority)) >= 0) out.priority = String(raw.priority);
-  return out;
-}
-
-function readTicketFiltersLocal(profileKey) {
-  try {
-    if (!window.localStorage) return null;
-    var raw = window.localStorage.getItem(ticketFiltersStorageKey(profileKey));
-    if (!raw) return null;
-    return sanitizeTicketFilters(JSON.parse(raw));
-  } catch (e) {
-    return null;
-  }
-}
-
-var persistTicketFiltersDebounced = debounce(function () {
-  try {
-    if (!window.localStorage) return;
-    window.localStorage.setItem(
-      ticketFiltersStorageKey(ticketFiltersProfileKey || 'default'),
-      JSON.stringify({
-        query: String(ticketFilters.query || '').slice(0, 200),
-        status: String(ticketFilters.status || '__default'),
-        priority: String(ticketFilters.priority || 'all'),
-      })
-    );
-  } catch (e) {
-    // storage indisponivel/quota: filtros seguem apenas em memoria
-  }
-}, 400);
-
-function persistTicketFilters() {
-  persistTicketFiltersDebounced();
-}
-
-// Restaura os filtros uma vez por perfil. Ao trocar de servidor/agente, os
-// filtros do perfil anterior sao substituidos pelos do novo.
-function restoreTicketFilters() {
-  var profileKey = workflowStatesCacheKey || 'default';
-  if (ticketFiltersRestored && ticketFiltersProfileKey === profileKey) return;
-  ticketFiltersRestored = true;
-  ticketFiltersProfileKey = profileKey;
-  var next = readTicketFiltersLocal(profileKey) || { query: '', status: '__default', priority: 'all' };
-  ticketFilters.query = next.query;
-  ticketFilters.status = next.status;
-  ticketFilters.priority = next.priority;
-  if (ticketSearchInputEl) ticketSearchInputEl.value = ticketFilters.query;
-}
-
 function clearTicketFilters() {
   ticketFilters.query = '';
   ticketFilters.status = '__default';
@@ -300,8 +235,35 @@ function clearTicketFilters() {
   if (ticketSearchInputEl) ticketSearchInputEl.value = '';
   if (ticketStatusFilterEl) ticketStatusFilterEl.value = '__default';
   if (ticketPriorityFilterEl) ticketPriorityFilterEl.value = 'all';
-  persistTicketFilters();
   renderSupportTicketList(supportTicketsAll);
+  updateTicketFiltersToggle();
+}
+
+// Algum filtro fora do padrao? (mantem o icone destacado mesmo recolhido)
+function hasActiveTicketFilters() {
+  return !!ticketFilters.query
+    || ticketFilters.priority !== 'all'
+    || (!!ticketFilters.status && ticketFilters.status !== '__default');
+}
+
+function updateTicketFiltersToggle() {
+  if (toggleTicketFiltersBtnEl) {
+    toggleTicketFiltersBtnEl.classList.toggle('active', hasActiveTicketFilters());
+  }
+}
+
+function setTicketFiltersPanelVisible(visible) {
+  if (!ticketFiltersPanelEl) return;
+  ticketFiltersPanelEl.classList.toggle('hidden', !visible);
+  if (toggleTicketFiltersBtnEl) {
+    toggleTicketFiltersBtnEl.setAttribute('aria-expanded', String(visible));
+    toggleTicketFiltersBtnEl.classList.toggle('open', visible);
+  }
+}
+
+function toggleTicketFiltersPanel() {
+  if (!ticketFiltersPanelEl) return;
+  setTicketFiltersPanelVisible(ticketFiltersPanelEl.classList.contains('hidden'));
 }
 
 // ── Modal de fechamento ────────────────────────────────────────────────────
@@ -671,27 +633,31 @@ function initSupport() {
   if (ticketSearchInputEl) {
     ticketSearchInputEl.addEventListener('input', debounce(function () {
       ticketFilters.query = ticketSearchInputEl.value;
-      persistTicketFilters();
+      updateTicketFiltersToggle();
       renderSupportTicketList(supportTicketsAll);
     }, 200));
   }
   if (ticketStatusFilterEl) {
     ticketStatusFilterEl.addEventListener('change', function () {
       ticketFilters.status = ticketStatusFilterEl.value || '__default';
-      persistTicketFilters();
+      updateTicketFiltersToggle();
       renderSupportTicketList(supportTicketsAll);
     });
   }
   if (ticketPriorityFilterEl) {
     ticketPriorityFilterEl.addEventListener('change', function () {
       ticketFilters.priority = ticketPriorityFilterEl.value || 'all';
-      persistTicketFilters();
+      updateTicketFiltersToggle();
       renderSupportTicketList(supportTicketsAll);
     });
   }
   if (clearTicketFiltersBtnEl) {
     clearTicketFiltersBtnEl.addEventListener('click', clearTicketFilters);
   }
+  if (toggleTicketFiltersBtnEl) {
+    toggleTicketFiltersBtnEl.addEventListener('click', toggleTicketFiltersPanel);
+  }
+  updateTicketFiltersToggle();
 
   if (reopenTicketBtnEl) {
     reopenTicketBtnEl.addEventListener('click', reopenTicket);
@@ -787,7 +753,6 @@ async function loadSupportTickets(opts) {
     supportTicketsLoadFailed = false;
     var states = [];
     try { states = await ensureWorkflowStates(false); } catch (e) { states = []; }
-    restoreTicketFilters();
     renderTicketFilterControls(states);
     renderSupportTicketList(supportTicketsAll);
   } catch (err) {
