@@ -294,7 +294,9 @@ func (a *App) ExecuteCustomPSADTScript(scriptContent string) PSADTScriptResult {
 
 // PSADTVisualNotificationRequest define os parametros para um teste visual nativo de notificacao PSADT.
 type PSADTVisualNotificationRequest struct {
-	NotifType       string `json:"notifType"` // balloon_info | balloon_warning | balloon_error | prompt_ok | prompt_yesno | prompt_continue | prompt_input | progress | dialog_box | restart_prompt | welcome
+	NotifType       string `json:"notifType"`
+	AppVendor       string `json:"appVendor"`  // vazio = omitir (evita "Discovery <app>")
+	AppVersion      string `json:"appVersion"` // vazio = omitir (nao exibir versao) // balloon_info | balloon_warning | balloon_error | prompt_ok | prompt_yesno | prompt_continue | prompt_input | progress | dialog_box | restart_prompt | welcome
 	Title           string `json:"title"`
 	Message         string `json:"message"`
 	Subtitle        string `json:"subtitle"` // usado como StatusMessageDetail (progress) e Subtitle (prompt)
@@ -513,6 +515,8 @@ func (a *App) ExecutePSADTVisualNotification(req PSADTVisualNotificationRequest)
 		"PSADT_MESSAGE="+req.Message,
 		"PSADT_SUBTITLE="+req.Subtitle,
 		"PSADT_APPNAME="+req.AppName,
+		"PSADT_APPVENDOR="+req.AppVendor,
+		"PSADT_APPVERSION="+req.AppVersion,
 		fmt.Sprintf("PSADT_DURATION=%d", req.DurationSeconds),
 		fmt.Sprintf("PSADT_BALLOON_TIME=%d", req.BalloonTimeSeconds),
 		"PSADT_BALLOON_NOWAIT="+boolEnvValue(req.BalloonNoWait),
@@ -642,6 +646,8 @@ func buildPSADTVisualScript(req PSADTVisualNotificationRequest) (string, time.Du
 		"$psadtTitle    = $env:PSADT_TITLE\n" +
 		"$psadtMessage  = $env:PSADT_MESSAGE\n" +
 		"$psadtAppName  = $env:PSADT_APPNAME\n" +
+		"$psadtAppVendor  = $env:PSADT_APPVENDOR\n" +
+		"$psadtAppVersion = $env:PSADT_APPVERSION\n" +
 		"$psadtSubtitle = $env:PSADT_SUBTITLE\n" +
 		"$psadtDuration = [int]$env:PSADT_DURATION\n" +
 		"$psadtBalloonTime = [int]$env:PSADT_BALLOON_TIME\n" +
@@ -671,17 +677,24 @@ func buildPSADTVisualScript(req PSADTVisualNotificationRequest) (string, time.Du
 		"$psadtWelcomeBlockExec = ($env:PSADT_WELCOME_BLOCK_EXEC -eq '1')\n" +
 		"$psadtWelcomeCloseCountdown = [int]$env:PSADT_WELCOME_CLOSE_COUNTDOWN\n\n"
 
+	// Identidade da sessao: AppName vem do chamador (app sendo instalado);
+	// Vendor/Version sao opcionais — evita o titulo duplicado
+	// "Discovery Discovery Agent 1.0" (vendor + nome do agent + versao).
 	openInteractive := "try {\n" +
-		"    Open-ADTSession -SessionState $ExecutionContext.SessionState" +
-		" -AppName $psadtAppName -AppVersion '1.0' -AppVendor 'Discovery'" +
+		"    $sessionParams = @{ AppName = $psadtAppName }\n" +
+		"    if ($psadtAppVendor) { $sessionParams.AppVendor = $psadtAppVendor }\n" +
+		"    if ($psadtAppVersion) { $sessionParams.AppVersion = $psadtAppVersion }\n" +
+		"    Open-ADTSession -SessionState $ExecutionContext.SessionState @sessionParams" +
 		" -DeploymentType 'Install' -DeployMode 'Interactive'\n" +
 		"} catch {\n" +
 		"    Write-Error \"Falha ao abrir sessao PSADT: $_\"; exit 2\n" +
 		"}\n"
 
 	openNonInt := "try {\n" +
-		"    Open-ADTSession -SessionState $ExecutionContext.SessionState" +
-		" -AppName $psadtAppName -AppVersion '1.0' -AppVendor 'Discovery'" +
+		"    $sessionParams = @{ AppName = $psadtAppName }\n" +
+		"    if ($psadtAppVendor) { $sessionParams.AppVendor = $psadtAppVendor }\n" +
+		"    if ($psadtAppVersion) { $sessionParams.AppVersion = $psadtAppVersion }\n" +
+		"    Open-ADTSession -SessionState $ExecutionContext.SessionState @sessionParams" +
 		" -DeploymentType 'Install' -DeployMode 'NonInteractive'\n" +
 		"} catch {\n" +
 		"    Write-Error \"Falha ao abrir sessao PSADT: $_\"; exit 2\n" +
@@ -858,8 +871,8 @@ func buildPSADTVisualScript(req PSADTVisualNotificationRequest) (string, time.Du
 		// strings.psd1 e nao aceita mensagem em runtime.
 		body := openInteractive +
 			"$welcomeParams = @{}\n" +
-			"  $welcomeParams.Title = $psadtTitle\n" +
-			"  $welcomeParams.Subtitle = $psadtSubtitle\n" +
+			// Title/Subtitle NAO existem em Show-ADTInstallationWelcome (PSADT 4.1.8):
+			// passar esses keys quebra o binding. O texto vem do strings.psd1 staged.
 			// force=true (CountdownNoDefer) usa o parameter set sem AllowDefer:
 			// mostra o contador com botao de prosseguir, SEM opcao de adiar.
 			"  if ($psadtCountdownNoDefer) { $welcomeParams.AllowDefer = $false } else { $welcomeParams.AllowDefer = $true }\n" +
@@ -901,7 +914,9 @@ func buildPSADTVisualScript(req PSADTVisualNotificationRequest) (string, time.Du
 			"  if ($psadtWelcomeDeadline) { $welcomeParams.DeferDeadline = $psadtWelcomeDeadline }\n" +
 			"}\n" +
 			"if ($welcomeHasProcs) {\n" +
-			"  if ($psadtWelcomeCloseCountdown -gt 0) { $welcomeParams.CloseProcessesCountdown = $psadtWelcomeCloseCountdown }\n" +
+			// ForceCloseProcessesCountdown conta MESMO com adiamento permitido — a
+			// acao padrao (continuar/fechar processos) roda no fim do contador.
+			"  if ($psadtWelcomeCloseCountdown -gt 0) { $welcomeParams.ForceCloseProcessesCountdown = $psadtWelcomeCloseCountdown }\n" +
 			"  if ($psadtWelcomeBlockExec) { $welcomeParams.BlockExecution = $true }\n" +
 			"} elseif ($psadtWelcomeAllowDefer -and $psadtWelcomeCloseCountdown -gt 0) {\n" +
 			"  $welcomeParams.ForceCountdown = $psadtWelcomeCloseCountdown\n" +
@@ -1109,7 +1124,10 @@ func writePSADTVisualBranding(req PSADTVisualNotificationRequest, scriptPath str
 	// os textos do dialogo via Strings\\strings.psd1 no staging (merge oficial
 	// do Initialize-ADTModule -ScriptDirectory). Fluent e o estilo default; os
 	// textos Classic sao sobrescritos tambem para o DialogStyle Classic.
-	if req.NotifType == "countdown" {
+	// O Welcome também usa os textos do strings.psd1 (não aceita mensagem em
+	// runtime e Title/Subtitle não existem como parâmetros): staging define a
+	// mensagem do app, os botões (Instalar/Adiar) e o texto do contador.
+	if req.NotifType == "countdown" || req.NotifType == "welcome" {
 		stringsDir := filepath.Join(filepath.Dir(scriptPath), "Strings")
 		if err := os.MkdirAll(stringsDir, 0o755); err != nil {
 			for _, p := range created {
@@ -1118,21 +1136,38 @@ func writePSADTVisualBranding(req PSADTVisualNotificationRequest, scriptPath str
 			return nil, fmt.Errorf("falha ao criar diretorio de strings: %w", err)
 		}
 		created = append(created, stringsDir)
+		isWelcome := req.NotifType == "welcome"
 		message := strings.TrimSpace(req.Message)
 		if message == "" {
-			message = "Atencao: esta janela fechara automaticamente em breve."
+			if isWelcome {
+				message = "A instalacao do aplicativo vai continuar. Selecione Instalar para prosseguir agora ou Adiar para mais tarde."
+			} else {
+				message = "Atencao: esta janela fechara automaticamente em breve."
+			}
 		}
 		okText := strings.TrimSpace(req.ButtonText)
 		if okText == "" {
-			okText = "OK"
+			if isWelcome {
+				okText = "Instalar"
+			} else {
+				okText = "OK"
+			}
 		}
 		closeText := strings.TrimSpace(req.ButtonCloseText)
 		if closeText == "" {
-			closeText = "Fechar"
+			if isWelcome {
+				closeText = "Adiar"
+			} else {
+				closeText = "Fechar"
+			}
 		}
 		label := strings.TrimSpace(req.CountdownLabel)
 		if label == "" {
-			label = "Esta janela fechara automaticamente em:"
+			if isWelcome {
+				label = "A instalacao continuara automaticamente em:"
+			} else {
+				label = "Esta janela fechara automaticamente em:"
+			}
 		}
 		var sb strings.Builder
 		sb.WriteString("@{\n")

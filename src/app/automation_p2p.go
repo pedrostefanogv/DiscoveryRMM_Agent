@@ -57,29 +57,33 @@ func (m *automationPackageManagerRouter) Install(ctx context.Context, id string)
 
 	output, p2pErr := m.installViaP2P(ctx, id)
 	if p2pErr == nil {
-		return output, nil
-	}
-	if errors.Is(p2pErr, errInstallerExec) {
+		// Instalador saiu 0 — mas stub/online pode sair sem instalar. Confirma o
+		// estado real; se não instalou, cai para o winget (escopo correto).
+		if m.verifyLocalInstallResult(ctx, id, "install") {
+			return output, nil
+		}
+		m.logf("[automation][p2p] instalador local concluiu sem instalar o pacote, fallback para winget direto packageId=%s", strings.TrimSpace(id))
+	} else if errors.Is(p2pErr, errInstallerExec) {
 		// O instalador já está em disco — re-baixar seria desperdício de banda.
 		// Vai direto ao winget install, que aplica as flags corretas do manifesto.
 		m.logf("[automation][p2p] instalador adquirido mas execução falhou, fallback para winget direto packageId=%s motivo=%v", strings.TrimSpace(id), p2pErr)
-		fallbackOut, fallbackErr := m.fallback.InstallWithSwitches(ctx, id, catSilent, catSilentWithProgress)
-		if fallbackErr != nil {
-			return fallbackOut, fmt.Errorf("p2p e winget falharam: p2p=%v; winget=%w", p2pErr, fallbackErr)
-		}
-		return fallbackOut, nil
-	}
-	m.logf("[automation][p2p] artifact nao encontrado na rede P2P, tentando download+cache packageId=%s", strings.TrimSpace(id))
+	} else {
+		m.logf("[automation][p2p] artifact nao encontrado na rede P2P, tentando download+cache packageId=%s", strings.TrimSpace(id))
 
-	output, dlErr := m.downloadAndCacheForP2P(ctx, id)
-	if dlErr == nil {
-		return output, nil
+		output, dlErr := m.downloadAndCacheForP2P(ctx, id)
+		if dlErr == nil {
+			if m.verifyLocalInstallResult(ctx, id, "install") {
+				return output, nil
+			}
+			m.logf("[automation][p2p] instalador baixado concluiu sem instalar o pacote, fallback para winget direto packageId=%s", strings.TrimSpace(id))
+		} else {
+			m.logf("[automation][p2p] download+cache falhou, fallback para winget direto packageId=%s motivo=%v", strings.TrimSpace(id), dlErr)
+		}
 	}
-	m.logf("[automation][p2p] download+cache falhou, fallback para winget direto packageId=%s motivo=%v", strings.TrimSpace(id), dlErr)
 
 	fallbackOut, fallbackErr := m.fallback.InstallWithSwitches(ctx, id, catSilent, catSilentWithProgress)
 	if fallbackErr != nil {
-		return fallbackOut, fmt.Errorf("p2p e winget falharam: p2p=%v; download+cache=%v; winget=%w", p2pErr, dlErr, fallbackErr)
+		return fallbackOut, fmt.Errorf("p2p e winget falharam: p2p=%v; winget=%w", p2pErr, fallbackErr)
 	}
 	return fallbackOut, nil
 }
@@ -99,27 +103,29 @@ func (m *automationPackageManagerRouter) Upgrade(ctx context.Context, id string)
 
 	output, p2pErr := m.installViaP2P(ctx, id)
 	if p2pErr == nil {
-		return output, nil
-	}
-	if errors.Is(p2pErr, errInstallerExec) {
-		m.logf("[automation][p2p] instalador adquirido mas execução falhou, fallback para winget direto packageId=%s motivo=%v", strings.TrimSpace(id), p2pErr)
-		fallbackOut, fallbackErr := m.fallback.UpgradeWithSwitches(ctx, id, catSilent, catSilentWithProgress)
-		if fallbackErr != nil {
-			return fallbackOut, fmt.Errorf("p2p e winget falharam: p2p=%v; winget=%w", p2pErr, fallbackErr)
+		if m.verifyLocalInstallResult(ctx, id, "upgrade") {
+			return output, nil
 		}
-		return fallbackOut, nil
-	}
-	m.logf("[automation][p2p] artifact nao encontrado na rede P2P, tentando download+cache packageId=%s", strings.TrimSpace(id))
+		m.logf("[automation][p2p] instalador local concluiu sem atualizar o pacote, fallback para winget direto packageId=%s", strings.TrimSpace(id))
+	} else if errors.Is(p2pErr, errInstallerExec) {
+		m.logf("[automation][p2p] instalador adquirido mas execução falhou, fallback para winget direto packageId=%s motivo=%v", strings.TrimSpace(id), p2pErr)
+	} else {
+		m.logf("[automation][p2p] artifact nao encontrado na rede P2P, tentando download+cache packageId=%s", strings.TrimSpace(id))
 
-	output, dlErr := m.downloadAndCacheForP2P(ctx, id)
-	if dlErr == nil {
-		return output, nil
+		output, dlErr := m.downloadAndCacheForP2P(ctx, id)
+		if dlErr == nil {
+			if m.verifyLocalInstallResult(ctx, id, "upgrade") {
+				return output, nil
+			}
+			m.logf("[automation][p2p] instalador baixado concluiu sem atualizar o pacote, fallback para winget direto packageId=%s", strings.TrimSpace(id))
+		} else {
+			m.logf("[automation][p2p] download+cache falhou, fallback para winget direto packageId=%s motivo=%v", strings.TrimSpace(id), dlErr)
+		}
 	}
-	m.logf("[automation][p2p] download+cache falhou, fallback para winget direto packageId=%s motivo=%v", strings.TrimSpace(id), dlErr)
 
 	fallbackOut, fallbackErr := m.fallback.UpgradeWithSwitches(ctx, id, catSilent, catSilentWithProgress)
 	if fallbackErr != nil {
-		return fallbackOut, fmt.Errorf("p2p e winget falharam: p2p=%v; download+cache=%v; winget=%w", p2pErr, dlErr, fallbackErr)
+		return fallbackOut, fmt.Errorf("p2p e winget falharam: p2p=%v; winget=%w", p2pErr, fallbackErr)
 	}
 	return fallbackOut, nil
 }
@@ -573,6 +579,39 @@ func (m *automationPackageManagerRouter) downloadAndCacheForP2P(ctx context.Cont
 	return output, nil
 }
 
+// verifyLocalInstallResult confirma que o instalador local (cache P2P) realmente
+// instalou/atualizou o pacote. Instaladores stub/online (ex.: BraveSilentSetup,
+// instalação por usuário) saem com exit 0 — ou ficam travados como SYSTEM — sem
+// instalar machine-scope. Nesses casos o router cai para o winget install, que
+// conhece o escopo correto (machine) e roda elevado (o agent é SYSTEM; sem
+// elevação, o UAC é acionado pelo caminho já existente).
+// Sem dados confiáveis do winget, assume sucesso para não duplicar a instalação.
+func (m *automationPackageManagerRouter) verifyLocalInstallResult(ctx context.Context, packageID, operation string) bool {
+	installedOut, installedErr := m.fallback.ListInstalled(ctx)
+	upgradableOut, upgradableErr := m.fallback.ListUpgradable(ctx)
+	return localInstallVerified(packageID, installedOut, installedErr, upgradableOut, upgradableErr, operation)
+}
+
+// localInstallVerified é a decisão pura da verificação pós-instalação (testável
+// sem App/P2P): confirma que o instalador local realmente instalou/atualizou.
+func localInstallVerified(packageID, installedOut string, installedErr error, upgradableOut string, upgradableErr error, operation string) bool {
+	if installedErr != nil || strings.TrimSpace(installedOut) == "" {
+		return true // sem evidência do winget list: não força fallback
+	}
+	switch strings.TrimSpace(operation) {
+	case "install":
+		return automation.IsPackageInOutput(installedOut, packageID)
+	case "upgrade":
+		if upgradableErr != nil || strings.TrimSpace(upgradableOut) == "" {
+			return true // sem evidência de pendência: assume sucesso
+		}
+		// Ainda listado como atualizável → o upgrade não teve efeito.
+		return !automation.IsPackageInOutput(upgradableOut, packageID)
+	default:
+		return true
+	}
+}
+
 // catalogSilentSwitches busca os switches silenciosos do pacote no cache da
 // loja de aplicativos (silent → silentWithProgress). Retorna strings vazias
 // quando o pacote não está no catálogo ou não tem switches — nesse caso o
@@ -759,7 +798,6 @@ func runLocalInstallerFull(ctx context.Context, artifactPath, silent, silentWith
 		return "", fmt.Errorf("artifact path vazio")
 	}
 	ext := strings.ToLower(filepath.Ext(artifactPath))
-	timeout := 20 * time.Minute
 	it := strings.ToLower(strings.TrimSpace(installerType))
 
 	// InstallerType do manifesto tem prioridade sobre a extensão: decide a
@@ -769,6 +807,16 @@ func runLocalInstallerFull(ctx context.Context, artifactPath, silent, silentWith
 	isMSIFamily := ext == ".msi" ||
 		it == "wix" || it == "msi" || it == "burn"
 	isPortable := it == "zip" || it == "portable"
+
+	// Prazo curto: instaladores stub/online (ex.: BraveSilentSetup, que instala
+	// por usuário) FICAM TRAVADOS como SYSTEM sem instalar. Com prazo curto o
+	// processo é morto (CommandContext) e o router cai para o winget install,
+	// que conhece o escopo correto (machine) e conclui. Falha de verificação
+	// pós-instalação também cai para o winget.
+	timeout := 10 * time.Minute
+	if !isMSIFamily {
+		timeout = 5 * time.Minute
+	}
 
 	switch {
 	case isPortable:

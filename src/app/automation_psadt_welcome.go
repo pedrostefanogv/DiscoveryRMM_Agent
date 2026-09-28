@@ -15,7 +15,7 @@ import (
 //
 // Regras:
 //   - Só intercepta confirmacao de INICIO (install_start + require_confirmation
-//     + layout welcome). Resultados continuam no caminho normal.
+//   - layout welcome). Resultados continuam no caminho normal.
 //   - Exige PSADT habilitado e Windows. Caso contrário retorna handled=false e o
 //     chamador segue no toast require_confirmation (fallback).
 //   - Usuário adiou -> Result "deferred" (a automation agenda nova tentativa).
@@ -47,15 +47,36 @@ func (a *App) tryDispatchAutomationPsadtWelcome(req automation.AutomationNotific
 		timeoutSeconds = 3600
 	}
 
+	// Identidade: o dialogo deve dizer O QUE esta sendo instalado. O PSADT monta
+	// o titulo a partir do AppName da sessao (sem Vendor/Version — o agent nao
+	// deve aparecer como "Discovery Discovery Agent 1.0").
+	appName := strings.TrimSpace(automationMetadataString(req.Metadata, "taskName"))
+	if appName == "" {
+		appName = strings.TrimSpace(automationMetadataString(req.Metadata, "packageId"))
+	}
+	if appName == "" {
+		appName = "aplicativo"
+	}
+	closeProcs := automationMetadataStrings(req.Metadata, "closeProcesses")
+	message := fmt.Sprintf("Instalando %s no seu computador.", appName)
+	if len(closeProcs) > 0 {
+		message += fmt.Sprintf(" Os programas abertos (%s) serao fechados automaticamente em %d segundos.", strings.Join(closeProcs, ", "), timeoutSeconds)
+	} else {
+		message += fmt.Sprintf(" A instalacao continuara automaticamente em %d segundos.", timeoutSeconds)
+	}
+	message += " Selecione Instalar para prosseguir agora ou Adiar para fazer depois."
+
 	welcomeReq := PSADTVisualNotificationRequest{
 		NotifType:               "welcome",
-		Title:                   strings.TrimSpace(req.Title),
-		Message:                 strings.TrimSpace(req.Message),
-		Subtitle:                "Discovery Agent",
-		AppName:                 "Discovery Agent",
+		Title:                   "Instalando " + appName,
+		Message:                 message,
+		Subtitle:                "Instalação do Aplicativo",
+		AppName:                 appName,
+		AppVendor:               "",
+		AppVersion:              "",
 		AllowDefer:              automationMetadataBool(req.Metadata, "allowDefer", true),
 		DeferTimes:              automationMetadataInt(req.Metadata, "deferTimes", 0),
-		CloseProcesses:          strings.Join(automationMetadataStrings(req.Metadata, "closeProcesses"), ","),
+		CloseProcesses:          strings.Join(closeProcs, ","),
 		CloseProcessesCountdown: timeoutSeconds,
 	}
 
@@ -161,6 +182,25 @@ func automationMetadataInt(metadata map[string]any, key string, fallback int) in
 		}
 	}
 	return fallback
+}
+
+// automationMetadataString extrai um valor string simples do metadata (com
+// tolerância a números/floats vindos de JSON).
+func automationMetadataString(metadata map[string]any, key string) string {
+	if metadata == nil {
+		return ""
+	}
+	value, ok := metadata[key]
+	if !ok || value == nil {
+		return ""
+	}
+	if text, ok := value.(string); ok {
+		return strings.TrimSpace(text)
+	}
+	if number, ok := value.(float64); ok {
+		return strconv.FormatFloat(number, 'f', -1, 64)
+	}
+	return strings.TrimSpace(fmt.Sprint(value))
 }
 
 func automationMetadataStrings(metadata map[string]any, key string) []string {

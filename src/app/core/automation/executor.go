@@ -317,6 +317,12 @@ func buildWingetDecisionMetadata(operation string, decision wingetActionDecision
 	return string(raw)
 }
 
+// IsPackageInOutput é a versão exportada de isPackageInOutput, usada pelo App
+// para confirmar o estado instalado após executar um instalador local (cache P2P).
+func IsPackageInOutput(output, packageID string) bool {
+	return isPackageInOutput(output, packageID)
+}
+
 // isPackageInOutput verifica se o packageID aparece na saída do winget list/upgrade.
 // A comparação é case-insensitive e trata o ID como um token delimitado por
 // whitespace/início/fim de linha. Isso evita falsos positivos como "Foxit"

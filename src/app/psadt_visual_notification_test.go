@@ -207,14 +207,15 @@ func TestBuildPSADTVisualScript_RestartAndWelcome(t *testing.T) {
 	}
 
 	welcome := PSADTVisualNotificationRequest{
-		NotifType:      "welcome",
-		Title:          "T",
-		Message:        "M",
-		AppName:        "A",
-		CloseProcesses: "winword,excel",
-		AllowDefer:     true,
-		DeferTimes:     3,
-		BlockExecution: true,
+		NotifType:               "welcome",
+		Title:                   "T",
+		Message:                 "M",
+		AppName:                 "A",
+		CloseProcesses:          "winword,excel",
+		AllowDefer:              true,
+		DeferTimes:              3,
+		CloseProcessesCountdown: 60,
+		BlockExecution:          true,
 	}
 	s, _ = buildPSADTVisualScript(welcome)
 	if !strings.Contains(s, "Show-ADTInstallationWelcome @welcomeParams") {
@@ -227,14 +228,31 @@ func TestBuildPSADTVisualScript_RestartAndWelcome(t *testing.T) {
 		t.Fatalf("expected defer mapping")
 	}
 	// Arvore de decisao dos parameter sets (evita AmbiguousParameterSet).
-	if !strings.Contains(s, "} elseif ($psadtWelcomeAllowDefer -and $psadtWelcomeCloseCountdown -gt 0) {") {
-		t.Fatalf("expected welcome parameter-set decision tree")
+	// Title/Subtitle NAO existem em Show-ADTInstallationWelcome (PSADT 4.1.8):
+	// passa-los quebra o binding do cmdlet e o dialogo nao abre.
+	if strings.Contains(s, "$welcomeParams.Title") || strings.Contains(s, "$welcomeParams.Subtitle") {
+		t.Fatalf("welcome nao pode passar Title/Subtitle (parametros inexistentes)")
+	}
+	// Com processos + contador: ForceCloseProcessesCountdown conta MESMO com
+	// adiamento permitido (acao padrao = continuar no fim do contador).
+	if !strings.Contains(s, "$welcomeParams.ForceCloseProcessesCountdown = $psadtWelcomeCloseCountdown") {
+		t.Fatalf("expected ForceCloseProcessesCountdown for processes countdown")
+	}
+	if strings.Contains(s, "$welcomeParams.CloseProcessesCountdown") {
+		t.Fatalf("CloseProcessesCountdown so conta quando o adiamento expira")
 	}
 	if !strings.Contains(s, "  $welcomeParams.ForceCountdown = $psadtWelcomeCloseCountdown") {
 		t.Fatalf("expected ForceCountdown for deferral without processes")
 	}
 	if !strings.Contains(s, "$welcomeParams.BlockExecution = $true") {
 		t.Fatalf("expected block execution mapping")
+	}
+	// Identidade da sessao: sem versao/vendor do agent no dialogo.
+	if strings.Contains(s, "-AppVersion '1.0'") || strings.Contains(s, "-AppVendor 'Discovery'") {
+		t.Fatalf("sessao nao deve fixar vendor/versao do agent")
+	}
+	if !strings.Contains(s, "$sessionParams = @{ AppName = $psadtAppName }") {
+		t.Fatalf("sessao deve usar AppName do app alvo")
 	}
 }
 
