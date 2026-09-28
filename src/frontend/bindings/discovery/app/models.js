@@ -725,11 +725,26 @@ export class PSADTVisualNotificationRequest {
     constructor($$source = {}) {
         if (!("notifType" in $$source)) {
             /**
-             * balloon_info | balloon_warning | balloon_error | prompt_ok | prompt_yesno | prompt_continue | prompt_input | progress | dialog_box | restart_prompt | welcome
              * @member
              * @type {string}
              */
             this["notifType"] = "";
+        }
+        if (!("appVendor" in $$source)) {
+            /**
+             * vazio = omitir (evita "Discovery <app>")
+             * @member
+             * @type {string}
+             */
+            this["appVendor"] = "";
+        }
+        if (!("appVersion" in $$source)) {
+            /**
+             * vazio = omitir (nao exibir versao) // balloon_info | balloon_warning | balloon_error | prompt_ok | prompt_yesno | prompt_continue | prompt_input | progress | dialog_box | restart_prompt | welcome
+             * @member
+             * @type {string}
+             */
+            this["appVersion"] = "";
         }
         if (!("title" in $$source)) {
             /**

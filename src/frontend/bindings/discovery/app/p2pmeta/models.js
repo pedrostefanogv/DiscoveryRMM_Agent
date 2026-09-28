@@ -977,6 +977,16 @@ export class Metrics {
              */
             this["staleManifestDetected"] = 0;
         }
+        if (!("preloadSkippedFinalState" in $$source)) {
+            /**
+             * PreloadSkippedFinalState conta pré-cargas P2P evitadas porque o pacote já
+             * estava em estado final (instalado/sem update pendente) — mede tráfego não
+             * transferido. Cumulativo desde o início do processo (como os demais).
+             * @member
+             * @type {number}
+             */
+            this["preloadSkippedFinalState"] = 0;
+        }
 
         Object.assign(this, $$source);
     }

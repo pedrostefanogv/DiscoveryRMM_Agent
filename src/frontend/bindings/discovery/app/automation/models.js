@@ -490,10 +490,32 @@ export class TaskView {
         }
         if (!("requiresApproval" in $$source)) {
             /**
+             * RequiresApproval: notifica o usuario (Welcome PSADT) antes de executar.
              * @member
              * @type {boolean}
              */
             this["requiresApproval"] = false;
+        }
+        if (!("allowDefer" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["allowDefer"] = false;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string[] | undefined}
+             */
+            this["closeProcesses"] = undefined;
+        }
+        if (!("promptTimeoutSeconds" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["promptTimeoutSeconds"] = 0;
         }
         if (!("triggerImmediate" in $$source)) {
             /**
@@ -561,14 +583,18 @@ export class TaskView {
      * @returns {TaskView}
      */
     static createFrom($$source = {}) {
-        const $$createField23_0 = $$createType4;
-        const $$createField24_0 = $$createType4;
+        const $$createField19_0 = $$createType4;
+        const $$createField26_0 = $$createType4;
+        const $$createField27_0 = $$createType4;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("closeProcesses" in $$parsedSource) {
+            $$parsedSource["closeProcesses"] = $$createField19_0($$parsedSource["closeProcesses"]);
+        }
         if ("includeTags" in $$parsedSource) {
-            $$parsedSource["includeTags"] = $$createField23_0($$parsedSource["includeTags"]);
+            $$parsedSource["includeTags"] = $$createField26_0($$parsedSource["includeTags"]);
         }
         if ("excludeTags" in $$parsedSource) {
-            $$parsedSource["excludeTags"] = $$createField24_0($$parsedSource["excludeTags"]);
+            $$parsedSource["excludeTags"] = $$createField27_0($$parsedSource["excludeTags"]);
         }
         return new TaskView(/** @type {Partial<TaskView>} */($$parsedSource));
     }
