@@ -188,6 +188,10 @@ type Metrics struct {
 	ChunkedDownloads      int   `json:"chunkedDownloads"`
 	ChunksDownloaded      int64 `json:"chunksDownloaded"`
 	StaleManifestDetected int   `json:"staleManifestDetected"`
+	// PreloadSkippedFinalState conta pré-cargas P2P evitadas porque o pacote já
+	// estava em estado final (instalado/sem update pendente) — mede tráfego não
+	// transferido. Cumulativo desde o início do processo (como os demais).
+	PreloadSkippedFinalState int64 `json:"preloadSkippedFinalState"`
 }
 
 // HostLoad descreve capacidade e carga atual do host para eleição de fetcher e paralelismo dinâmico.

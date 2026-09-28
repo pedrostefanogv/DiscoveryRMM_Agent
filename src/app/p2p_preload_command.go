@@ -107,6 +107,11 @@ func (a *App) preloadPackage(ctx context.Context, packageID, actionType string) 
 
 	// 1. Estado real da máquina: pacote em estado final → nada a fazer.
 	if !automation.ShouldPreloadPackage(ctx, a.packageManagerRouter, automation.AutomationTaskActionType(strings.TrimSpace(actionType)), packageID) {
+		// Telemetria de tráfego evitado: alimenta preloadSkippedFinalState no
+		// snapshot P2P (antes só existia log).
+		if a.P2PCoord != nil {
+			a.P2PCoord.RecordPreloadSkippedFinalState()
+		}
 		a.Logs.Append(fmt.Sprintf("[p2p][preload] pacote em estado final, ignorando packageId=%s action=%s", packageID, actionType))
 		return
 	}

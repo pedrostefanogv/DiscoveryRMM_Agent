@@ -56,6 +56,15 @@ func (c *Coordinator) recordReplicationResult(success bool) {
 // recordStaleManifest incrementa o contador de manifests stale detectados.
 // Usado para monitorar a frequência do problema em produção e avaliar a
 // eficácia das correções de validação de cache.
+// RecordPreloadSkippedFinalState registra que uma pré-carga foi evitada por o
+// pacote já estar em estado final. Exposto ao App (comando p2ppreload e
+// PreloadPackages do policy-sync), que é quem consulta o estado local.
+func (c *Coordinator) RecordPreloadSkippedFinalState() {
+	c.mu.Lock()
+	c.metrics.PreloadSkippedFinalState++
+	c.mu.Unlock()
+}
+
 func (c *Coordinator) recordStaleManifest() {
 	c.mu.Lock()
 	c.metrics.StaleManifestDetected++
