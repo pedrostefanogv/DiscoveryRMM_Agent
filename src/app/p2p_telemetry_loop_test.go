@@ -10,8 +10,85 @@ import (
 	"testing"
 	"time"
 
+	"discovery/app/agentconfig"
+	"discovery/app/consolidation"
+	"discovery/app/core/database"
 	debugsvc "discovery/app/debug"
 )
+
+// TestStartP2PTelemetryLoopForcesInitialSendPastConsolidationGate garante que o
+// envio inicial não é adiado por uma janela de batching persistida do
+// ConsolidationEngine (ex.: política p2p_telemetry=5min vinda do servidor).
+func TestStartP2PTelemetryLoopForcesInitialSendPastConsolidationGate(t *testing.T) {
+	const token = "mdz_test_token"
+	const agentID = "8f6d6d72-4a8a-4c87-bffa-34ba29dc0bb7"
+
+	var telemetryHits int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/p2p/telemetry") {
+			atomic.AddInt32(&telemetryHits, 1)
+		}
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte("{}"))
+	}))
+	defer server.Close()
+
+	db, err := database.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	engine := consolidation.New(db, agentID)
+	engine.Enable()
+	engine.SetPolicy("p2p_telemetry", agentconfig.ConsolidationMode5Min)
+	// Janela recém-fluída: ShouldFlush("p2p_telemetry") devolveria false.
+	now := time.Now()
+	if err := db.UpsertConsolidationWindowState(database.ConsolidationWindowStateEntry{
+		AgentID:       agentID,
+		DataType:      "p2p_telemetry",
+		WindowMode:    agentconfig.ConsolidationMode5Min,
+		WindowStartAt: now,
+		LastFlushAt:   now,
+		UpdatedAt:     now,
+	}); err != nil {
+		t.Fatalf("upsert window state: %v", err)
+	}
+
+	a := &App{ctx: context.Background()}
+	a.DebugSvc = debugsvc.NewService(debugsvc.Options{})
+	a.DebugSvc.ApplyRuntimeConnectionConfig("http", strings.TrimPrefix(server.URL, "http://"), token, agentID, "", "")
+	a.P2PCoord = newP2PCoordinator(a)
+	a.applyP2PConfig(P2PConfig{Enabled: true})
+	a.ConsolEngine = engine
+
+	original := p2pTelemetryInterval
+	p2pTelemetryInterval = time.Hour
+	defer func() { p2pTelemetryInterval = original }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		a.StartP2PTelemetryLoop(ctx)
+	}()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) && atomic.LoadInt32(&telemetryHits) == 0 {
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("StartP2PTelemetryLoop nao encerrou apos o cancelamento")
+	}
+
+	if got := atomic.LoadInt32(&telemetryHits); got == 0 {
+		t.Fatal("o envio inicial deveria ignorar o gate de consolidacao")
+	}
+}
 
 // TestStartupWiresP2PTelemetryLoop garante que o core (runStagedStartup)
 // mantém o chamador do loop de telemetria. Foi exatamente a remoção desse

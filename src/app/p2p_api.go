@@ -238,7 +238,8 @@ func (a *App) StartP2PTelemetryLoop(ctx context.Context) {
 	// flush envia o snapshot atual (quando o P2P está habilitado) e drena o
 	// outbox. É chamado UMA VEZ imediatamente — para o dashboard não ficar sem
 	// dados por até p2pTelemetryInterval após restart/deploy — e a cada tick.
-	flush := func() {
+	// force=true (envio inicial) ignora o gate do ConsolidationEngine.
+	flush := func(force bool) {
 		if remaining, deferred, reason := a.nonCriticalBackoffWindow(); deferred {
 			if reason != "" {
 				a.Logs.Append(fmt.Sprintf("[p2p][api] envio adiado por sobrecarga do servidor: restante=%s motivo=%s", remaining.Round(time.Second), reason))
@@ -255,8 +256,10 @@ func (a *App) StartP2PTelemetryLoop(ctx context.Context) {
 				a.Logs.Append("[p2p][api] falha ao atualizar seed-plan: " + err.Error())
 			}
 			// ConsolidationEngine gate: skip telemetry send if window hasn't elapsed.
+			// No envio inicial o gate é ignorado — uma janela de batching (ex.:
+			// p2p_telemetry=5min persistida) não pode adiar o primeiro snapshot.
 			shouldFlush := true
-			if a.ConsolEngine != nil {
+			if !force && a.ConsolEngine != nil {
 				ok, err := a.ConsolEngine.ShouldFlush("p2p_telemetry", time.Now())
 				if err != nil {
 					a.Logs.Append("[p2p][api] consolidation engine erro: " + err.Error())
@@ -281,7 +284,7 @@ func (a *App) StartP2PTelemetryLoop(ctx context.Context) {
 
 	// Envio inicial imediato: sem isso o card ficava "Sem telemetria P2P" por
 	// até 5 minutos após cada deploy/restart do serviço.
-	flush()
+	flush(true)
 
 	ticker := time.NewTicker(p2pTelemetryInterval)
 	defer ticker.Stop()
@@ -291,7 +294,7 @@ func (a *App) StartP2PTelemetryLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			flush()
+			flush(false)
 		}
 	}
 }
