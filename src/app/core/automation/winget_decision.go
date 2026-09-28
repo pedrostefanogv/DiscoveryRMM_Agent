@@ -30,6 +30,36 @@ func listUpgradableForDecision(ctx context.Context, packages PackageManager) (st
 	return packages.ListUpgradable(ctx)
 }
 
+// ShouldSkipPackageActionBeforePrompt decide, ANTES do prompt de confirmação
+// (Welcome PSADT / toast), se uma ação de PACOTE não tem nada a fazer: já
+// instalado, já atualizado ou ausente para upgrade. Sem isso o usuário era
+// interrompido para confirmar uma instalação que o executor pularia logo depois
+// (o welcome acontecia antes da checagem de estado).
+//
+// Só faz sentido quando a tarefa exigiria confirmação; não é usado para
+// RunScript/CustomCommand/RemovePackage (esses sempre executam).
+func ShouldSkipPackageActionBeforePrompt(ctx context.Context, packages PackageManager, task AutomationTask) bool {
+	if packages == nil {
+		return false
+	}
+	packageID := strings.TrimSpace(task.PackageID)
+	if packageID == "" {
+		return false
+	}
+
+	switch task.ActionType {
+	case ActionInstallPackage:
+		return decideWingetAction(ctx, packages, "install", packageID).Skip
+	case ActionUpdatePackage:
+		return decideWingetAction(ctx, packages, "upgrade", packageID).Skip
+	case ActionUpdateOrInstallPackage:
+		// Instalado E sem update pendente → nada a fazer.
+		return !ShouldPreloadPackage(ctx, packages, ActionUpdateOrInstallPackage, packageID)
+	default:
+		return false
+	}
+}
+
 // wingetActionDecision é o resultado da decisão versionada de execução.
 type wingetActionDecision struct {
 	Skip bool

@@ -26,10 +26,15 @@ func (s *TransferServer) manifestDir() string {
 }
 
 // cachedManifestPath retorna o caminho completo para o arquivo de cache do manifest.
+// Não duplica o sufixo quando o artifact já termina em ".json" (antes,
+// "selfupdate-installed.json" virava "selfupdate-installed.json.json").
 func cachedManifestPath(manifestDir, artifactName string) string {
 	safe := SanitizeArtifactName(artifactName)
 	if safe == "" {
 		return ""
+	}
+	if strings.HasSuffix(strings.ToLower(safe), ".json") {
+		return filepath.Join(manifestDir, safe)
 	}
 	return filepath.Join(manifestDir, safe+".json")
 }

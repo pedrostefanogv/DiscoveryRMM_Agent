@@ -201,3 +201,80 @@ func TestDecideWingetAction_PrefersRichLister(t *testing.T) {
 		t.Fatalf("ListInstalledRich deveria ter sido usado")
 	}
 }
+
+// O prompt (Welcome PSADT / toast) só deve aparecer quando há algo a executar.
+func TestShouldSkipPackageActionBeforePrompt(t *testing.T) {
+	resetDecisionHooks(t)
+	cases := []struct {
+		name   string
+		mgr    *stubPackageManager
+		action AutomationTaskActionType
+		want   bool
+	}{
+		{
+			name:   "install ja instalado: pula prompt",
+			mgr:    &stubPackageManager{installedOut: "Brave  brave.brave  1.66\n"},
+			action: ActionInstallPackage, want: true,
+		},
+		{
+			name:   "install ausente: pede confirmacao",
+			mgr:    &stubPackageManager{installedOut: "Outro  Outro.Pacote  1.0\n"},
+			action: ActionInstallPackage, want: false,
+		},
+		{
+			name:   "update sem pendencia: pula prompt",
+			mgr:    &stubPackageManager{installedOut: "Brave  brave.brave  1.66\n", upgradableOut: "Outro  Outro.Pacote  1.0  2.0\n"},
+			action: ActionUpdatePackage, want: true,
+		},
+		{
+			name:   "update com pendencia: pede confirmacao",
+			mgr:    &stubPackageManager{installedOut: "Brave  brave.brave  1.66\n", upgradableOut: "Brave  brave.brave  1.66  1.67\n"},
+			action: ActionUpdatePackage, want: false,
+		},
+		{
+			name:   "update-or-install instalado e atualizado: pula prompt",
+			mgr:    &stubPackageManager{installedOut: "Brave  brave.brave  1.66\n", upgradableOut: "Outro  Outro.Pacote  1.0  2.0\n"},
+			action: ActionUpdateOrInstallPackage, want: true,
+		},
+		{
+			name:   "update-or-install com update pendente: pede confirmacao",
+			mgr:    &stubPackageManager{installedOut: "Brave  brave.brave  1.66\n", upgradableOut: "Brave  brave.brave  1.66  1.67\n"},
+			action: ActionUpdateOrInstallPackage, want: false,
+		},
+		{
+			name:   "update-or-install ausente: pede confirmacao",
+			mgr:    &stubPackageManager{installedOut: "Outro  Outro.Pacote  1.0\n"},
+			action: ActionUpdateOrInstallPackage, want: false,
+		},
+		{
+			name:   "remove package nunca pula prompt",
+			mgr:    &stubPackageManager{installedOut: "Brave  brave.brave  1.66\n"},
+			action: ActionRemovePackage, want: false,
+		},
+		{
+			name:   "run script nunca pula prompt",
+			mgr:    &stubPackageManager{installedOut: "Brave  brave.brave  1.66\n"},
+			action: ActionRunScript, want: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			task := AutomationTask{TaskID: "t-1", PackageID: "brave.brave", ActionType: tc.action}
+			got := ShouldSkipPackageActionBeforePrompt(context.Background(), tc.mgr, task)
+			if got != tc.want {
+				t.Fatalf("got %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestShouldSkipPackageActionBeforePrompt_NoPackageOrManager(t *testing.T) {
+	resetDecisionHooks(t)
+	mgr := &stubPackageManager{installedOut: "Brave  brave.brave  1.66\n"}
+	if ShouldSkipPackageActionBeforePrompt(context.Background(), mgr, AutomationTask{ActionType: ActionInstallPackage}) {
+		t.Fatal("sem packageId não há decisão")
+	}
+	if ShouldSkipPackageActionBeforePrompt(context.Background(), nil, AutomationTask{PackageID: "brave.brave", ActionType: ActionInstallPackage}) {
+		t.Fatal("sem package manager não há decisão")
+	}
+}

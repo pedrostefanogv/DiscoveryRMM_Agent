@@ -453,12 +453,7 @@ func NewApp(opts AppStartupOptions) *App {
 	// (instalado/sem update pendente), que não serão mais usados e ocupam
 	// centenas de MB (ex.: Chrome 520 MB). Só artifacts mapeáveis a pacote.
 	p2p.SetArtifactRetentionChecker(func(artifactID, artifactName string) bool {
-		packageID := wingetPackageIDFromArtifact(artifactID)
-		if packageID == "" || a.packageManagerRouter == nil {
-			return false
-		}
-		// Sem evidência confiável (winget falhou), mantém o arquivo (fail-safe).
-		return !a.packageInFinalState(packageID)
+		return a.artifactShouldBeRemoved(artifactID, artifactName)
 	})
 
 	// Gate de utilidade do fetch P2P: não baixa instalador de pacote já em estado
@@ -466,12 +461,7 @@ func NewApp(opts AppStartupOptions) *App {
 	// em P2P_Temp. Artifacts sem pacote mapeável (selfupdate:, name:) são sempre
 	// permitidos.
 	p2p.SetArtifactFetchGate(func(artifactID, artifactName string) bool {
-		packageID := wingetPackageIDFromArtifact(artifactID)
-		if packageID == "" || a.packageManagerRouter == nil {
-			return true
-		}
-		// Não final (ausente/pendente) → baixa para virar seed.
-		return !a.packageInFinalState(packageID)
+		return a.artifactFetchUseful(artifactID, artifactName)
 	})
 	a.AutomationSvc.SetPackageAuthorization(func(ctx context.Context, installationType automation.AppInstallationType, packageID, operation string) error {
 		return a.authorizeAutomationPackage(ctx, string(installationType), packageID, operation)

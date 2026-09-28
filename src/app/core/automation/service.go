@@ -631,7 +631,16 @@ func (s *Service) executeTaskAsync(ctx context.Context, agentID string, task Aut
 		}
 		s.refreshDerivedState(agentID)
 
-		startResp := s.dispatchExecutionNotification(notifyDispatcher, task, entry, nil, deferStateSnapshot, welcome)
+		// Pré-checagem do prompt: se a ação de pacote já está em estado final
+		// (instalado/atualizado), NÃO interrompe o usuário com o Welcome/toast — o
+		// executor faria o skip logo depois da confirmação. O prompt só ocorre
+		// quando realmente há algo a executar.
+		var startResp AutomationNotificationResponse
+		if task.RequiresApproval && ShouldSkipPackageActionBeforePrompt(ctx, packages, task) {
+			s.logf("automacao: task=%s ja em estado final - prompt de confirmacao ignorado", strings.TrimSpace(task.TaskID))
+		} else {
+			startResp = s.dispatchExecutionNotification(notifyDispatcher, task, entry, nil, deferStateSnapshot, welcome)
+		}
 		if s.shouldDeferExecution(task, startResp) {
 			next := s.recordAndGetNextDefer(agentID, executionID, task, deferStateSnapshot, welcome)
 			if next.IsZero() {
