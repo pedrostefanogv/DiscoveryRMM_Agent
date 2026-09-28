@@ -14,6 +14,12 @@ const (
 	TelemetryDrainLimit      = 20
 	TelemetryDedupWindow     = 5 * time.Minute
 	TelemetryMaxPayloadBytes = 1 << 20
+
+	// TelemetryPayloadMaxAge é a idade máxima aceita pelo servidor para
+	// collectedAtUtc (ValidateTelemetryRequest rejeita TIMESTAMP_TOO_OLD além de
+	// 24h). Entradas mais antigas no outbox nunca terão sucesso e devem ser
+	// descartadas em vez de reagendadas indefinidamente.
+	TelemetryPayloadMaxAge = 24 * time.Hour
 )
 
 // TelemetryRetryBackoff calcula o backoff exponencial (limitado) para reenvio.

@@ -23,7 +23,13 @@ const (
 	p2pSeedPlanRefreshInterval = 5 * time.Minute
 )
 
-var p2pAPIHTTPClient = &http.Client{Timeout: p2pAPITimeout}
+var (
+	p2pAPIHTTPClient = &http.Client{Timeout: p2pAPITimeout}
+
+	// p2pTelemetryInterval é o período do loop de telemetria/seed-plan.
+	// Variável (e não const) para permitir testes com cadência curta.
+	p2pTelemetryInterval = p2pSeedPlanRefreshInterval
+)
 
 // cachedP2PSeedPlan stores the last server recommendation for local reuse.
 type cachedP2PSeedPlan = p2pmeta.CachedSeedPlan
@@ -225,7 +231,7 @@ func (a *App) StartP2PTelemetryLoop(ctx context.Context) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	ticker := time.NewTicker(p2pSeedPlanRefreshInterval)
+	ticker := time.NewTicker(p2pTelemetryInterval)
 	defer ticker.Stop()
 
 	for {
@@ -241,23 +247,28 @@ func (a *App) StartP2PTelemetryLoop(ctx context.Context) {
 				}
 				continue
 			}
-			if _, err := a.GetP2PSeedPlanRecommendation(ctx); err != nil {
-				a.Logs.Append("[p2p][api] falha ao atualizar seed-plan: " + err.Error())
-			}
-			// ConsolidationEngine gate: skip telemetry send if window hasn't elapsed.
-			shouldFlush := true
-			if a.ConsolEngine != nil {
-				ok, err := a.ConsolEngine.ShouldFlush("p2p_telemetry", time.Now())
-				if err != nil {
-					a.Logs.Append("[p2p][api] consolidation engine erro: " + err.Error())
+			// P2P desabilitado: não há métricas úteis a reportar. Evita KPIs
+			// zerados e "agentes ativos" fantasma no dashboard. O outbox abaixo
+			// continua sendo drenado para não perder o que já foi enfileirado.
+			if a.GetP2PConfig().Enabled {
+				if _, err := a.GetP2PSeedPlanRecommendation(ctx); err != nil {
+					a.Logs.Append("[p2p][api] falha ao atualizar seed-plan: " + err.Error())
 				}
-				shouldFlush = ok
-			}
-			if shouldFlush {
-				if err := a.PostP2PTelemetry(ctx); err != nil {
-					a.Logs.Append("[p2p][api] falha ao enviar telemetria: " + err.Error())
-				} else if a.ConsolEngine != nil {
-					_ = a.ConsolEngine.RecordFlush("p2p_telemetry", time.Now())
+				// ConsolidationEngine gate: skip telemetry send if window hasn't elapsed.
+				shouldFlush := true
+				if a.ConsolEngine != nil {
+					ok, err := a.ConsolEngine.ShouldFlush("p2p_telemetry", time.Now())
+					if err != nil {
+						a.Logs.Append("[p2p][api] consolidation engine erro: " + err.Error())
+					}
+					shouldFlush = ok
+				}
+				if shouldFlush {
+					if err := a.PostP2PTelemetry(ctx); err != nil {
+						a.Logs.Append("[p2p][api] falha ao enviar telemetria: " + err.Error())
+					} else if a.ConsolEngine != nil {
+						_ = a.ConsolEngine.RecordFlush("p2p_telemetry", time.Now())
+					}
 				}
 			}
 			if err := a.drainP2PTelemetryOutbox(ctx, p2pTelemetryDrainLimit); err != nil {

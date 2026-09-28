@@ -103,6 +103,14 @@ func (o *P2PTelemetryOutbox) Drain(ctx context.Context, limit int) error {
 			_ = db.DeleteP2PTelemetryOutbox(entry.ID)
 			continue
 		}
+		// O servidor rejeita collectedAtUtc com mais de 24h (TIMESTAMP_TOO_OLD).
+		// Descartar em vez de reagendar evita retries inúteis até a expiração (14d).
+		if collectedAt, parseErr := time.Parse(time.RFC3339, strings.TrimSpace(payload.CollectedAtUTC)); parseErr != nil ||
+			collectedAt.Before(time.Now().Add(-p2p.TelemetryPayloadMaxAge)) {
+			o.deps.Log("[p2p][api] telemetria expirada removida do outbox id=" + strconv.FormatInt(entry.ID, 10))
+			_ = db.DeleteP2PTelemetryOutbox(entry.ID)
+			continue
+		}
 		if err := o.deps.PostP2PTelemetryPayload(ctx, payload, entry.IdempotencyKey); err != nil {
 			attempt := entry.Attempts + 1
 			nextAttemptAt := time.Now().Add(p2p.TelemetryRetryBackoff(attempt))

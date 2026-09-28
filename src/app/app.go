@@ -1450,6 +1450,14 @@ func (a *App) runStagedStartup(ctx context.Context) {
 			a.safeGo(func() {
 				a.P2PCoord.Run(ctx)
 			})
+			// Telemetria P2P: envia um snapshot a cada p2pTelemetryInterval e
+			// drena o outbox offline. Este chamador existia no startup da UI e
+			// foi removido na refatoracao M5 (commit a6ddadd), quando o core
+			// passou a viver apenas no servico. Sem ele, nenhuma telemetria P2P
+			// chega ao servidor e as metricas do dashboard ficam zeradas.
+			a.safeGo(func() {
+				a.StartP2PTelemetryLoop(ctx)
+			})
 		}
 	})
 

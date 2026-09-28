@@ -130,3 +130,36 @@ func TestMarshalP2PTelemetryPayloadRejectsOversize(t *testing.T) {
 		t.Fatalf("expected error to mention payload limit, got %v", err)
 	}
 }
+
+// TestP2PTelemetryOutboxDropsExpiredPayloads garante que a telemetria com
+// collectedAtUtc > 24h (rejeitada pelo servidor com TIMESTAMP_TOO_OLD) é
+// descartada no drain em vez de reagendada indefinidamente.
+func TestP2PTelemetryOutboxDropsExpiredPayloads(t *testing.T) {
+	a := newOfflineSyncTestApp(t, agentconfig.AgentRolloutConfig{P2PTelemetryOfflineMode: agentconfig.OfflineQueueModeEnqueueAndDrain})
+
+	payload := P2PTelemetryPayload{
+		AgentID:        "agent-1",
+		CollectedAtUTC: time.Now().Add(-25 * time.Hour).UTC().Format(time.RFC3339),
+	}
+	if err := a.enqueueP2PTelemetryOutbox(payload, errors.New("offline")); err != nil {
+		t.Fatalf("enqueue p2p telemetry: %v", err)
+	}
+	pending, err := a.CoreAgent.DB.CountPendingP2PTelemetryOutbox("agent-1")
+	if err != nil {
+		t.Fatalf("count pending: %v", err)
+	}
+	if pending != 1 {
+		t.Fatalf("expected 1 pending, got %d", pending)
+	}
+
+	if err := a.drainP2PTelemetryOutbox(context.Background(), 10); err != nil {
+		t.Fatalf("drain p2p telemetry: %v", err)
+	}
+	pending, err = a.CoreAgent.DB.CountPendingP2PTelemetryOutbox("agent-1")
+	if err != nil {
+		t.Fatalf("count pending after drain: %v", err)
+	}
+	if pending != 0 {
+		t.Fatalf("payload expirado deveria ser descartado, restaram %d pendentes", pending)
+	}
+}
