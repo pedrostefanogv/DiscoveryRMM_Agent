@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -1043,8 +1044,31 @@ func executeHiddenProcess(parent context.Context, timeout time.Duration, executa
 
 	cmd := exec.CommandContext(ctx, executable, args...)
 	processutil.HideWindow(cmd)
-	output, err := cmd.CombinedOutput()
-	text := strings.TrimSpace(string(output))
+	// Captura a saída manualmente (em vez de CombinedOutput) para poder atribuir o
+	// processo a um Job Object antes do Wait: o exec.CommandContext mata apenas o
+	// processo principal no timeout; instaladores stub deixam filhos vivos
+	// (ex.: BraveUpdate), que só o Job encerra.
+	var outputBuf bytes.Buffer
+	cmd.Stdout = &outputBuf
+	cmd.Stderr = &outputBuf
+	if err := cmd.Start(); err != nil {
+		return "", err
+	}
+	job, jobErr := processutil.NewJobObject()
+	if jobErr == nil {
+		if assignErr := job.Assign(cmd.Process); assignErr != nil {
+			job.Close()
+			job = nil
+		}
+	} else {
+		job = nil
+	}
+	if job != nil {
+		defer job.Close()
+	}
+
+	err := cmd.Wait()
+	text := strings.TrimSpace(outputBuf.String())
 	if err == nil {
 		if text == "" {
 			text = "instalação concluída"
@@ -1058,6 +1082,13 @@ func executeHiddenProcess(parent context.Context, timeout time.Duration, executa
 			text = "instalação concluída (reboot pendente)"
 		}
 		return text, nil
+	}
+	// Falha/timeout: encerra a ÁRVORE (processo principal + filhos). Sem isso o
+	// stub travado deixava BraveUpdate e afins rodando depois do prazo.
+	if job != nil {
+		if termErr := job.Terminate(); termErr == nil {
+			text = strings.TrimSpace(text + " [arvore do instalador encerrada]")
+		}
 	}
 	if ctx.Err() == context.DeadlineExceeded {
 		return text, fmt.Errorf("timeout na execução do instalador")

@@ -276,6 +276,18 @@ func (c *Coordinator) runLocalElection(ctx context.Context, artifactID string) {
 func (c *Coordinator) executeFetch(ctx context.Context, artifactID string, artifactName string) {
 	clientID := strings.TrimSpace(c.deps.GetAgentConfiguration().ClientID)
 
+	// Gate de utilidade: não baixa instalador de pacote já em estado final
+	// (instalado/atualizado) — evita tráfego desnecessário no P2P_Temp.
+	if !fetchAllowed(artifactID, artifactName) {
+		c.deps.Log(fmt.Sprintf("[p2p][fetch] artifact ignorado: pacote em estado final (instalado/atualizado) artifactID=%s", artifactID))
+		c.fetchStates.mutate(artifactID, clientID, func(state *ArtifactFetchState) {
+			state.Status = "failed"
+			// Reavalia depois (ex.: pacote desinstalado / novo update pendente).
+			state.NextAttemptUTC = time.Now().UTC().Add(artifactFetchSuccessCooldown)
+		})
+		return
+	}
+
 	c.deps.Log(fmt.Sprintf("[p2p][fetch] iniciando artifact=%s", artifactID))
 
 	c.fetchStates.mutate(artifactID, clientID, func(state *ArtifactFetchState) {

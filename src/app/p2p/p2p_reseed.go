@@ -114,6 +114,12 @@ func (c *Coordinator) ScanAndSeedMissingArtifacts(ctx context.Context) []string 
 		if name := strings.ToLower(strings.TrimSpace(artifactName)); name != "" && localByName[name] {
 			continue
 		}
+		// Gate de utilidade: não entra na eleição de fetch para instalador de
+		// pacote já em estado final (instalado/atualizado) — evita baixar
+		// instaladores sem necessidade para "virar seed".
+		if !fetchAllowed(artifactID, artifactName) {
+			continue
+		}
 
 		// Estado de fetch: "missing" aciona runPendingElections (ticker de
 		// 60s do coordinator), que roda runLocalElection → broadcast de

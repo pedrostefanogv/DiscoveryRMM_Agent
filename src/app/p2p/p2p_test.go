@@ -2,6 +2,8 @@ package p2p
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -541,35 +543,53 @@ func writeTestFile(path string, size int64) error {
 	return nil
 }
 
-func TestDownloadArtifactFromPeerCountsReplicationFailure(t *testing.T) {
+// "Peer ausente" é erro de SEM FONTE: nada foi transferido, então não entra em
+// started/failed. Antes contava como replicação falha e o Success rate do card
+// ficava permanentemente 0% (pré-cargas de artifacts ausentes na rede).
+func TestDownloadArtifactFromPeerMissingPeerDoesNotCountReplication(t *testing.T) {
 	a := &mockDeps{}
 	c := &Coordinator{deps: a, peers: map[string]p2pPeerState{}, peerArtifacts: map[string]p2pPeerArtifactState{}}
 
-	if _, err := c.DownloadArtifactFromPeer(context.Background(), "agent.bin", "peer-missing"); err == nil {
+	_, err := c.DownloadArtifactFromPeer(context.Background(), "agent.bin", "peer-missing")
+	if err == nil {
 		t.Fatal("expected error when peer is missing")
 	}
-
-	if c.metrics.ReplicationsStarted != 1 {
-		t.Fatalf("expected ReplicationsStarted=1, got %d", c.metrics.ReplicationsStarted)
+	if !isNoTransferSourceError(err) {
+		t.Fatalf("peer ausente deveria ser classificado como sem fonte: %v", err)
 	}
-	if c.metrics.ReplicationsFailed != 1 || c.metrics.ReplicationsSucceeded != 0 {
-		t.Fatalf("expected Failed=1 Succeeded=0, got Failed=%d Succeeded=%d",
-			c.metrics.ReplicationsFailed, c.metrics.ReplicationsSucceeded)
+	if c.metrics.ReplicationsStarted != 0 || c.metrics.ReplicationsFailed != 0 || c.metrics.ReplicationsSucceeded != 0 {
+		t.Fatalf("sem transferência não deve contabilizar replicação: started=%d failed=%d succeeded=%d",
+			c.metrics.ReplicationsStarted, c.metrics.ReplicationsFailed, c.metrics.ReplicationsSucceeded)
 	}
 }
 
-func TestDownloadArtifactSwarmCountsReplicationFailure(t *testing.T) {
+func TestDownloadArtifactSwarmWithoutSourceDoesNotCountReplication(t *testing.T) {
 	a := &mockDeps{}
 	c := &Coordinator{deps: a, peers: map[string]p2pPeerState{}, peerArtifacts: map[string]p2pPeerArtifactState{}}
 
-	if _, err := c.DownloadArtifactSwarm(context.Background(), "agent.bin"); err == nil {
+	_, err := c.DownloadArtifactSwarm(context.Background(), "agent.bin")
+	if err == nil {
 		t.Fatal("expected error when no peer has the artifact")
 	}
-
-	if c.metrics.ReplicationsStarted != 1 {
-		t.Fatalf("expected ReplicationsStarted=1, got %d", c.metrics.ReplicationsStarted)
+	if !isNoTransferSourceError(err) {
+		t.Fatalf("sem peer com o artifact deveria ser sem fonte: %v", err)
 	}
-	if c.metrics.ReplicationsFailed != 1 {
-		t.Fatalf("expected ReplicationsFailed=1, got %d", c.metrics.ReplicationsFailed)
+	if c.metrics.ReplicationsStarted != 0 || c.metrics.ReplicationsFailed != 0 {
+		t.Fatalf("sem transferência não deve contabilizar replicação: started=%d failed=%d",
+			c.metrics.ReplicationsStarted, c.metrics.ReplicationsFailed)
+	}
+}
+
+// Erro genérico (falha real durante a transferência) NÃO é "sem fonte" e deve
+// continuar contabilizando.
+func TestIsNoTransferSourceErrorClassification(t *testing.T) {
+	if isNoTransferSourceError(nil) {
+		t.Fatal("nil não é erro de fonte")
+	}
+	if isNoTransferSourceError(errors.New("checksum divergente")) {
+		t.Fatal("falha de transferência real não pode ser classificada como sem fonte")
+	}
+	if !isNoTransferSourceError(fmt.Errorf("%w: detalhe", errNoTransferSource)) {
+		t.Fatal("erro embrulhado com o sentinel deveria ser reconhecido")
 	}
 }

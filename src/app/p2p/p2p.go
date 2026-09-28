@@ -490,6 +490,9 @@ func (c *Coordinator) Run(ctx context.Context) {
 		// Discovery inicial concluído: libera consumidores que aguardam
 		// readiness (ex.: router de automação antes do fallback winget).
 		c.markReady()
+		// Limpa já no startup instaladores de pacotes em estado final (não
+		// espera o tick de 1h para liberar centenas de MB no P2P_Temp).
+		_, _ = c.PruneFinalStateArtifacts(time.Now())
 	}()
 
 	lanProbeSem := make(chan struct{}, 2)
@@ -513,6 +516,9 @@ func (c *Coordinator) Run(ctx context.Context) {
 			}
 			c.gcServingSessions(time.Now())
 			c.pruneStaleCaches()
+			// Retenção por estado: remove instaladores de pacotes já instalados
+			// (trafego de banda + disco desnecessários — ex.: Chrome 520 MB).
+			_, _ = c.PruneFinalStateArtifacts(time.Now())
 		case <-contentGCTicker.C:
 			c.CollectOrphanArtifacts()
 		case <-lanProbeWarmupTimer.C:

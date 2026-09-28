@@ -2,6 +2,7 @@ package p2p
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -10,11 +11,27 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
+// errNoTransferSource marca tentativas em que NADA foi transferido: não havia
+// peer com o artifact, host sobrecarregado, peer não registrado ou libp2p
+// indisponível. Essas tentativas NÃO entram em started/failed — senão o
+// "Success rate" do card ficava permanentemente 0% porque as pré-cargas de
+// artifacts ausentes na rede contavam como replicações falhas.
+var errNoTransferSource = errors.New("nenhuma fonte de transferencia disponivel")
+
+// isNoTransferSourceError informa se o erro é de "sem fonte" (nada transferido).
+func isNoTransferSourceError(err error) bool {
+	return errors.Is(err, errNoTransferSource)
+}
+
 // DownloadArtifactFromPeer baixa um artifact de um peer específico e contabiliza
 // a replicação (started/succeeded/failed) usada pela telemetria P2P.
 func (c *Coordinator) DownloadArtifactFromPeer(ctx context.Context, artifactName, sourcePeerID string) (P2PArtifactView, error) {
-	c.recordReplicationStarted()
 	view, err := c.downloadArtifactFromPeer(ctx, artifactName, sourcePeerID)
+	if isNoTransferSourceError(err) {
+		// Nada foi transferido (sem fonte): não conta como replicação.
+		return view, err
+	}
+	c.recordReplicationStarted()
 	c.recordReplicationResult(err == nil)
 	return view, err
 }
@@ -23,11 +40,12 @@ func (c *Coordinator) downloadArtifactFromPeer(ctx context.Context, artifactName
 	rawArtifactName := strings.TrimSpace(artifactName)
 	artifactName = SanitizeArtifactName(artifactName)
 	if artifactName == "" {
-		err := fmt.Errorf("artifact inválido")
+		err := fmt.Errorf("%w: artifact inválido", errNoTransferSource)
 		c.appendAudit("pull", rawArtifactName, sourcePeerID, "libp2p", false, err.Error())
 		return P2PArtifactView{}, err
 	}
 	if _, err := c.findPeerByAgentID(sourcePeerID); err != nil {
+		err = fmt.Errorf("%w: %v", errNoTransferSource, err)
 		c.appendAudit("pull", artifactName, sourcePeerID, "libp2p", false, err.Error())
 		return P2PArtifactView{}, err
 	}
@@ -35,7 +53,7 @@ func (c *Coordinator) downloadArtifactFromPeer(ctx context.Context, artifactName
 	// Guarda de sobrecarga: recusar servir se o host estiver pesado.
 	load := c.CollectHostLoad()
 	if !canServePartsNow(load) {
-		err := fmt.Errorf("host sobrecarregado, recusando download de artifact")
+		err := fmt.Errorf("%w: host sobrecarregado, recusando download de artifact", errNoTransferSource)
 		c.appendAudit("pull", artifactName, sourcePeerID, "libp2p", false, err.Error())
 		return P2PArtifactView{}, err
 	}
@@ -49,7 +67,7 @@ func (c *Coordinator) downloadArtifactFromPeer(ctx context.Context, artifactName
 	if h, registry := c.libp2pHostAndRegistry(); h != nil && registry != nil {
 		peerID, ok := registry.Lookup(sourcePeerID)
 		if !ok {
-			err := fmt.Errorf("peer não registrado no libp2p")
+			err := fmt.Errorf("%w: peer não registrado no libp2p", errNoTransferSource)
 			c.appendAudit("pull", artifactName, sourcePeerID, "libp2p", false, err.Error())
 			return P2PArtifactView{}, err
 		}
@@ -210,7 +228,7 @@ func (c *Coordinator) downloadArtifactFromPeer(ctx context.Context, artifactName
 		return c.buildArtifactView(artifactName, manifest.ArtifactID, path)
 	}
 
-	err := fmt.Errorf("libp2p indisponível para download do artifact")
+	err := fmt.Errorf("%w: libp2p indisponível para download do artifact", errNoTransferSource)
 	c.appendAudit("pull", artifactName, sourcePeerID, "libp2p", false, err.Error())
 	return P2PArtifactView{}, err
 }
@@ -220,8 +238,12 @@ func (c *Coordinator) downloadArtifactFromPeer(ctx context.Context, artifactName
 // DownloadArtifactSwarm baixa um artifact coletando chunks dos peers que o
 // possuem e contabiliza a replicação para a telemetria P2P.
 func (c *Coordinator) DownloadArtifactSwarm(ctx context.Context, artifactName string) (P2PArtifactView, error) {
-	c.recordReplicationStarted()
 	view, err := c.downloadArtifactSwarm(ctx, artifactName)
+	if isNoTransferSourceError(err) {
+		// Sem peer com o artifact: não houve transferência — não conta.
+		return view, err
+	}
+	c.recordReplicationStarted()
 	c.recordReplicationResult(err == nil)
 	return view, err
 }
@@ -230,21 +252,21 @@ func (c *Coordinator) downloadArtifactSwarm(ctx context.Context, artifactName st
 	rawArtifactName := strings.TrimSpace(artifactName)
 	artifactName = SanitizeArtifactName(artifactName)
 	if artifactName == "" {
-		err := fmt.Errorf("artifact inválido")
+		err := fmt.Errorf("%w: artifact inválido", errNoTransferSource)
 		c.appendAudit("swarm-pull", rawArtifactName, "", "automation", false, err.Error())
 		return P2PArtifactView{}, err
 	}
 
 	// Guarda de sobrecarga: recusar servir se o host estiver pesado.
 	if !canServePartsNow(c.CollectHostLoad()) {
-		err := fmt.Errorf("host sobrecarregado, recusando swarm pull")
+		err := fmt.Errorf("%w: host sobrecarregado, recusando swarm pull", errNoTransferSource)
 		c.appendAudit("swarm-pull", artifactName, "", "automation", false, err.Error())
 		return P2PArtifactView{}, err
 	}
 
 	avail := c.FindArtifactPeers(artifactName)
 	if !avail.Found || len(avail.PeerAgentIDs) == 0 {
-		err := fmt.Errorf("nenhum peer possui o artifact %q", artifactName)
+		err := fmt.Errorf("%w: nenhum peer possui o artifact %q", errNoTransferSource, artifactName)
 		c.appendAudit("swarm-pull", artifactName, "", "automation", false, err.Error())
 		return P2PArtifactView{}, err
 	}
