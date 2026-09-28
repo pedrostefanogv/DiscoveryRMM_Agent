@@ -468,7 +468,7 @@ func NewApp(opts AppStartupOptions) *App {
 		return policy
 	})
 	a.AutomationSvc.SetNotificationDispatcher(func(req automation.AutomationNotificationRequest) automation.AutomationNotificationResponse {
-		resp := a.DispatchNotification(NotificationDispatchRequest{
+		dispatchReq := NotificationDispatchRequest{
 			NotificationID: req.NotificationID,
 			IdempotencyKey: req.IdempotencyKey,
 			Title:          req.Title,
@@ -479,7 +479,19 @@ func NewApp(opts AppStartupOptions) *App {
 			Layout:         req.Layout,
 			TimeoutSeconds: req.TimeoutSeconds,
 			Metadata:       req.Metadata,
-		})
+		}
+		// Task com "notificar usuario" (RequiresApproval): tenta o Welcome nativo
+		// do PSADT antes do toast. O portão AllowsUserPrompt aplica a política por
+		// eventType e o rollout (enableRequireConfirmation/enableNotifications) —
+		// sem ele o Welcome furaria o kill switch. Se o PSADT estiver
+		// desligado/indisponivel o helper devolve handled=false e o fluxo cai no
+		// toast require_confirmation.
+		if a.NotificationSvc != nil && a.NotificationSvc.AllowsUserPrompt(dispatchReq) {
+			if welcomeResp, handled := a.tryDispatchAutomationPsadtWelcome(req); handled {
+				return welcomeResp
+			}
+		}
+		resp := a.DispatchNotification(dispatchReq)
 		if !resp.Accepted {
 			a.Logs.Append("[automation] notificação não aceita: " + strings.TrimSpace(resp.AgentAction))
 		}
@@ -678,6 +690,46 @@ func NewApp(opts AppStartupOptions) *App {
 			return a.HardwareIDSvc.Get()
 		},
 	})
+	// Pré-carga P2P pedida pelo policy-sync (PreloadPackages): reaproveita o mesmo
+	// caminho coordenado do comando p2ppreload (ShouldPreloadPackage + stagger).
+	a.AutomationSvc.SetPreloadHandler(func(packages []automation.PreloadPackage) {
+		if a.packageManagerRouter == nil || a.P2PCoord == nil || len(packages) == 0 {
+			return
+		}
+		items := make([]p2pPreloadPackage, 0, len(packages))
+		for _, pkg := range packages {
+			packageID := strings.TrimSpace(pkg.PackageID)
+			if packageID == "" {
+				continue
+			}
+			items = append(items, p2pPreloadPackage{
+				PackageID:  packageID,
+				ActionType: string(pkg.ActionType),
+			})
+		}
+		if len(items) == 0 {
+			return
+		}
+		ctx := a.ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		go a.runP2pPreload(ctx, items)
+	})
+
+	// Automação: usa a última lista de instalados conhecida do inventário para
+	// NÃO baixar instalador quando o "winget list" falhar e o pacote já estiver
+	// instalado (evita transferências indevidas de centenas de MB).
+	automation.SetInstalledPackageChecker(func(packageID string) (bool, bool) {
+		if a.InventorySvc == nil {
+			return false, false
+		}
+		return a.InventorySvc.KnownInstalledPackage(packageID)
+	})
+	automation.SetWingetDecisionLogger(func(line string) {
+		a.Logs.Append("[automation][decision] " + line)
+	})
+
 	// Loja/automação: qualquer install/update/remove de pacote concluído com
 	// sucesso agenda o MESMO refresh de inventário do update remoto (debounce
 	// de 2 min, novo scan de updates e upload). Antes, mudanças feitas pela

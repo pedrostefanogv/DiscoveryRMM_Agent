@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -98,7 +99,20 @@ type Service struct {
 	// refresh de inventário — sem isso, mudanças feitas pela Loja/automação só
 	// apareciam no dashboard no próximo sync periódico (~6h).
 	onPackageChange func(action, packageID string)
+	// preloadHandler, quando configurado, recebe os PreloadPackages do policy-sync
+	// (pré-carga P2P coordenada). Deve retornar imediatamente — o App resolve o
+	// download em background.
+	preloadHandler func(packages []PreloadPackage)
+	// lastPreloadSignature/lastPreloadAt evitam reacionar a mesma pré-carga a
+	// cada policy-sync (a cada ~5 min), mantendo um retry a cada 30 min.
+	lastPreloadSignature string
+	lastPreloadAt        time.Time
 }
+
+// policyPreloadRetriggerInterval é o intervalo mínimo para reacionar a MESMA
+// lista de pré-carga do policy-sync (permite retry de falhas sem repetir o
+// trabalho a cada sync).
+const policyPreloadRetriggerInterval = 30 * time.Minute
 
 func NewService(getConfig func() RuntimeConfig, logger func(string)) *Service {
 	return &Service{
@@ -148,6 +162,13 @@ func (s *Service) SetNotificationDispatcher(dispatcher func(AutomationNotificati
 // SetPackageChangeHandler registra o callback chamado após uma tarefa de pacote
 // (install/update/remove) concluir com sucesso. Usado pelo App para agendar o
 // refresh de inventário do caminho de automação/Loja.
+// SetPreloadHandler registra o callback de pré-carga P2P pedida pelo policy-sync.
+func (s *Service) SetPreloadHandler(handler func(packages []PreloadPackage)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.preloadHandler = handler
+}
+
 func (s *Service) SetPackageChangeHandler(handler func(action, packageID string)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -260,10 +281,6 @@ func (s *Service) triggerUserLoginTasks(ctx context.Context, sessionID uint32) {
 		if !task.TriggerOnUserLogin {
 			continue
 		}
-		if task.RequiresApproval {
-			s.logf("automacao: tarefa %s requer aprovacao - trigger userlogin ignorado", strings.TrimSpace(task.TaskID))
-			continue
-		}
 		s.executeTaskAsync(ctx, agentID, task, sourceForTrigger(TriggerTypeUserLogin), TriggerTypeUserLogin, nil)
 	}
 }
@@ -354,6 +371,7 @@ func (s *Service) refreshPolicy(ctx context.Context, includeScriptContent bool) 
 			GeneratedAt:       next.GeneratedAt,
 			TaskCount:         len(effectiveTasks),
 			Tasks:             effectiveTasks,
+			PreloadPackages:   resp.PreloadPackages,
 		},
 		SavedAt:              now,
 		IncludeScriptContent: includeScriptContent,
@@ -379,8 +397,54 @@ func (s *Service) refreshPolicy(ctx context.Context, includeScriptContent bool) 
 	}
 
 	s.refreshDerivedState(agentID)
+	// Pré-carga P2P pedida pelo servidor no próprio policy-sync: antes o campo era
+	// ignorado (struct Go sem PreloadPackages) e só o comando p2ppreload baixava.
+	s.dispatchPreloadPackages(resp.PreloadPackages)
 	s.logf("automacao: policy sync concluido (tasks=%d upToDate=%t)", len(effectiveTasks), resp.UpToDate)
 	return s.GetState(), nil
+}
+
+// dispatchPreloadPackages aciona a pré-carga P2P dos pacotes pedidos pelo
+// policy-sync. Deduplica por assinatura com TTL: a mesma lista não reaciona o
+// fluxo a cada sync, mas volta a tentar a cada
+// policyPreloadRetriggerInterval (retry de falhas/artifacts ainda ausentes).
+func (s *Service) dispatchPreloadPackages(packages []PreloadPackage) {
+	if len(packages) == 0 {
+		return
+	}
+	s.mu.RLock()
+	handler := s.preloadHandler
+	s.mu.RUnlock()
+	if handler == nil {
+		return
+	}
+
+	signature := preloadPackagesSignature(packages)
+	s.mu.Lock()
+	if signature == s.lastPreloadSignature && time.Since(s.lastPreloadAt) < policyPreloadRetriggerInterval {
+		s.mu.Unlock()
+		return
+	}
+	s.lastPreloadSignature = signature
+	s.lastPreloadAt = time.Now()
+	s.mu.Unlock()
+
+	s.logf("automacao: pre-carga P2P solicitada pelo policy-sync (itens=%d)", len(packages))
+	handler(packages)
+}
+
+// preloadPackagesSignature gera uma chave estável (ordem-insensível) da lista.
+func preloadPackagesSignature(packages []PreloadPackage) string {
+	parts := make([]string, 0, len(packages))
+	for _, pkg := range packages {
+		id := strings.TrimSpace(pkg.PackageID)
+		if id == "" {
+			continue
+		}
+		parts = append(parts, id+"|"+string(pkg.ActionType))
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, ",")
 }
 
 func (s *Service) reconcilePolicy(ctx context.Context, previous State, current State, agentID string) error {
@@ -415,10 +479,6 @@ func (s *Service) reconcilePolicy(ctx context.Context, previous State, current S
 		triggered := false
 		for _, task := range current.Tasks {
 			if task.TriggerOnUserLogin {
-				if task.RequiresApproval {
-					s.logf("automacao: tarefa %s requer aprovacao - trigger userlogin ignorado", strings.TrimSpace(task.TaskID))
-					continue
-				}
 				triggered = true
 				s.executeTaskAsync(ctx, agentID, task, sourceForTrigger(TriggerTypeUserLogin), TriggerTypeUserLogin, nil)
 			}
@@ -443,10 +503,6 @@ func (s *Service) reconcilePolicy(ctx context.Context, previous State, current S
 func (s *Service) triggerImmediate(ctx context.Context, agentID, fingerprint string, task AutomationTask) {
 	if s.db == nil || agentID == "" || fingerprint == "" {
 		s.executeTaskAsync(ctx, agentID, task, sourceForTrigger(TriggerTypeImmediate), TriggerTypeImmediate, nil)
-		return
-	}
-	if task.RequiresApproval {
-		s.logf("automacao: tarefa %s requer aprovacao - trigger immediate ignorado", strings.TrimSpace(task.TaskID))
 		return
 	}
 	// C2: a chave inclui LastUpdatedAt — se a task for atualizada no servidor,
@@ -488,10 +544,6 @@ func (s *Service) TriggerAgentCheckInTasks(ctx context.Context) {
 		if !task.TriggerOnAgentCheckIn {
 			continue
 		}
-		if task.RequiresApproval {
-			s.logf("automacao: tarefa %s requer aprovacao - trigger checkin ignorado", strings.TrimSpace(task.TaskID))
-			continue
-		}
 		taskID := strings.TrimSpace(task.TaskID)
 		if s.db != nil {
 			markerKey := "checkin:cycle:" + taskID
@@ -509,10 +561,6 @@ func (s *Service) TriggerAgentCheckInTasks(ctx context.Context) {
 func (s *Service) triggerOnAgentCheckIn(ctx context.Context, agentID, fingerprint string, task AutomationTask) {
 	if s.db == nil || agentID == "" || fingerprint == "" {
 		s.executeTaskAsync(ctx, agentID, task, sourceForTrigger(TriggerTypeAgentCheckIn), TriggerTypeAgentCheckIn, nil)
-		return
-	}
-	if task.RequiresApproval {
-		s.logf("automacao: tarefa %s requer aprovacao - trigger checkin ignorado", strings.TrimSpace(task.TaskID))
 		return
 	}
 	// C2: mesma correção do triggerImmediate — LastUpdatedAt na chave.
@@ -837,10 +885,6 @@ func (s *Service) rebuildRecurringSchedules(ctx context.Context, previous, curre
 		if !task.TriggerRecurring || strings.TrimSpace(task.ScheduleCron) == "" {
 			continue
 		}
-		if task.RequiresApproval {
-			s.logf("automacao: tarefa %s requer aprovacao e nao sera agendada no cron", task.TaskID)
-			continue
-		}
 
 		// Pula se já existe um job igual para esta tarefa.
 		existingPrev, hadPrev := prevByID[task.TaskID]
@@ -1079,13 +1123,23 @@ func (s *Service) dispatchExecutionNotification(dispatcher func(AutomationNotifi
 	if dispatcher == nil {
 		return AutomationNotificationResponse{}
 	}
-	if !isPackageAction(task.ActionType) {
+	// Acao que nao e de pacote so notifica quando a tarefa pede confirmacao do
+	// usuario (RequiresApproval). Sem isso, scripts/comandos gerariam ruido de
+	// "notify_only" a cada execucao.
+	if !isPackageAction(task.ActionType) && !task.RequiresApproval {
 		return AutomationNotificationResponse{}
+	}
+
+	// Rotulo neutro para RunScript/CustomCommand: com o prompt habilitado essas
+	// acoes tambem notificam, e "Instalacao concluida" para um script confundia.
+	subject := "Instalacao"
+	if !isPackageAction(task.ActionType) {
+		subject = "Tarefa"
 	}
 
 	eventType := "install_start"
 	severity := "medium"
-	title := "Instalacao iniciada"
+	title := subject + " iniciada"
 	message := fmt.Sprintf("Tarefa %s iniciada.", strings.TrimSpace(task.Name))
 	if result != nil {
 		if result.Success {
@@ -1097,13 +1151,13 @@ func (s *Service) dispatchExecutionNotification(dispatcher func(AutomationNotifi
 			} else {
 				eventType = "install_end"
 				severity = "low"
-				title = "Instalacao concluida"
+				title = subject + " concluida"
 				message = fmt.Sprintf("Tarefa %s concluida com sucesso.", strings.TrimSpace(task.Name))
 			}
 		} else {
 			eventType = "install_failed"
 			severity = "high"
-			title = "Instalacao com falha"
+			title = subject + " com falha"
 			message = fmt.Sprintf("Tarefa %s falhou.", strings.TrimSpace(task.Name))
 		}
 	}
@@ -1137,6 +1191,9 @@ func (s *Service) dispatchExecutionNotification(dispatcher func(AutomationNotifi
 		"forceCountdownSeconds":          welcome.ForceCountdownSeconds,
 		"closeProcessesCountdownSeconds": welcome.CloseProcessesCountdownSeconds,
 		"forceCloseProcessesCountdown":   welcome.ForceCloseProcessesCountdown,
+		"promptTimeoutSeconds":           resolveUserPromptTimeoutSeconds(task),
+		"defaultAction":                  "continue",
+		"usePsadtWelcome":                task.RequiresApproval,
 	}
 	if !deferSnapshot.NextAttempt.IsZero() {
 		metadata["nextAttemptAt"] = deferSnapshot.NextAttempt.UTC().Format(time.RFC3339)
@@ -1182,9 +1239,14 @@ func (s *Service) dispatchExecutionNotification(dispatcher func(AutomationNotifi
 	// Resultados (install_end/install_failed/reboot_required) nunca pedem —
 	// antes usavam require_confirmation e geravam modal de "concluído" que
 	// exigia interação do usuário (e timeout registrava "deferred").
+	// Resultado (install_end/install_failed/reboot) nunca pede confirmacao —
+	// apenas o start. Layout "welcome" sinaliza ao App que o prompt deve usar o
+	// Welcome nativo do PSADT (Continuar/Adiar) quando o PSADT estiver ligado.
 	mode := "notify_only"
+	layout := "toast"
 	if result == nil && task.RequiresApproval {
 		mode = "require_confirmation"
+		layout = "welcome"
 	}
 
 	resp := dispatcher(AutomationNotificationRequest{
@@ -1195,15 +1257,16 @@ func (s *Service) dispatchExecutionNotification(dispatcher func(AutomationNotifi
 		Mode:           mode,
 		Severity:       severity,
 		EventType:      eventType,
-		Layout:         "toast",
-		TimeoutSeconds: 45,
+		Layout:         layout,
+		TimeoutSeconds: resolveUserPromptTimeoutSeconds(task),
 		Metadata:       metadata,
 	})
 
 	// Só registra o estado do dedup quando a notificação foi de fato aceita —
 	// se o rollout bloqueou, o usuário não a viu e o próximo ciclo deve
-	// tentar novamente.
-	if resp.Accepted {
+	// tentar novamente. Adiamento não registra: a próxima tentativa precisa
+	// voltar a perguntar em vez de cair no silêncio do dedup.
+	if resp.Accepted && !isDeferredResult(resp.Result) {
 		if taskKey := strings.TrimSpace(entry.TaskID); taskKey != "" {
 			s.recordExecutionNotification(eventType, taskKey)
 		}

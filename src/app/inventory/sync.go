@@ -1303,6 +1303,34 @@ func (s *Service) loadInstalledPackages(ctx context.Context) []models.InstalledP
 	return items
 }
 
+// KnownInstalledPackage informa se o pacote consta na última lista de instalados
+// conhecida (cache do "winget list"). A automação usa isso para NÃO baixar
+// instalador quando o winget falha mas o pacote já está instalado.
+//
+// known=false quando não há lista boa em cache — o chamador deve manter o
+// comportamento anterior (fail-safe). installed=true só com evidência positiva.
+func (s *Service) KnownInstalledPackage(packageID string) (known bool, installed bool) {
+	target := strings.TrimSpace(packageID)
+	if s == nil || target == "" {
+		return false, false
+	}
+
+	s.installedPackagesMu.Lock()
+	items := s.installedPackagesLast
+	hasGoodList := s.installedPackagesLoaded && len(items) > 0 && !s.installedPackagesGoodAt.IsZero()
+	s.installedPackagesMu.Unlock()
+	if !hasGoodList {
+		return false, false
+	}
+
+	for i := range items {
+		if strings.EqualFold(strings.TrimSpace(items[i].ID), target) {
+			return true, true
+		}
+	}
+	return true, false
+}
+
 // pendingUpdatesCacheTTL evita rodar winget/choco repetidamente em rajadas de
 // sincronização (startup + pós-bootstrap). O próximo ciclo após o TTL — ou o
 // sync periódico (~6h) — refaz o scan e detecta updates novos.

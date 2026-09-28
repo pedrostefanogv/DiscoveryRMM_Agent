@@ -49,7 +49,12 @@ function triggerChips(task) {
   if (task.triggerRecurring) items.push('<span class="automation-chip">Recurring</span>');
   if (task.triggerOnUserLogin) items.push('<span class="automation-chip">UserLogin</span>');
   if (task.triggerOnAgentCheckIn) items.push('<span class="automation-chip">AgentCheckIn</span>');
-  if (task.requiresApproval) items.push('<span class="automation-chip warn">RequiresApproval</span>');
+  if (task.requiresApproval) {
+    var notifyChip = 'Notifica usuário';
+    if (task.allowDefer === false) notifyChip += ' (sem adiar)';
+    if (task.promptTimeoutSeconds) notifyChip += ' · ' + task.promptTimeoutSeconds + 's';
+    items.push('<span class="automation-chip warn">' + notifyChip + '</span>');
+  }
   return items.join(' ');
 }
 

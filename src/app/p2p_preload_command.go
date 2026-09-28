@@ -5,10 +5,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"discovery/app/core/automation"
 )
+
+// preloadInFlight evita pré-carga concorrente do MESMO packageId quando o pedido
+// chega por caminhos diferentes (comando p2ppreload e PreloadPackages do
+// policy-sync). Sem isso, dois fluxos poderiam baixar o mesmo instalador.
+var preloadInFlight sync.Map
 
 // ─── Comando p2ppreload (servidor → agent) ──────────────────────────────────
 //
@@ -87,21 +93,31 @@ func (a *App) runP2pPreload(parent context.Context, packages []p2pPreloadPackage
 		if packageID == "" {
 			continue
 		}
-
-		// 1. Estado real da máquina: pacote em estado final → nada a fazer.
-		if !automation.ShouldPreloadPackage(ctx, a.packageManagerRouter, automation.AutomationTaskActionType(strings.TrimSpace(pkg.ActionType)), packageID) {
-			a.Logs.Append(fmt.Sprintf("[p2p][preload] pacote em estado final, ignorando packageId=%s action=%s", packageID, pkg.ActionType))
-			continue
-		}
-
-		// 2. Stagger por score: melhor máquina baixa primeiro.
-		if !a.waitPreloadTurn(ctx, packageID) {
-			return
-		}
-
-		// 3. Download coordenado.
-		a.packageManagerRouter.PreloadPackageForP2P(ctx, packageID)
+		a.preloadPackage(ctx, packageID, pkg.ActionType)
 	}
+}
+
+// preloadPackage executa a pré-carga de um pacote com dedup de concorrência.
+func (a *App) preloadPackage(ctx context.Context, packageID, actionType string) {
+	if _, loaded := preloadInFlight.LoadOrStore(packageID, struct{}{}); loaded {
+		a.Logs.Append(fmt.Sprintf("[p2p][preload] ja em andamento, ignorando duplicata packageId=%s", packageID))
+		return
+	}
+	defer preloadInFlight.Delete(packageID)
+
+	// 1. Estado real da máquina: pacote em estado final → nada a fazer.
+	if !automation.ShouldPreloadPackage(ctx, a.packageManagerRouter, automation.AutomationTaskActionType(strings.TrimSpace(actionType)), packageID) {
+		a.Logs.Append(fmt.Sprintf("[p2p][preload] pacote em estado final, ignorando packageId=%s action=%s", packageID, actionType))
+		return
+	}
+
+	// 2. Stagger por score: melhor máquina baixa primeiro.
+	if !a.waitPreloadTurn(ctx, packageID) {
+		return
+	}
+
+	// 3. Download coordenado.
+	a.packageManagerRouter.PreloadPackageForP2P(ctx, packageID)
 }
 
 // waitPreloadTurn espera a vez deste agent no stagger. Retorna false se o ctx

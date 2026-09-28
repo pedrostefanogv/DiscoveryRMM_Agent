@@ -8,10 +8,25 @@ import (
 )
 
 func resolvePSADTWelcomeOptions(task AutomationTask) psadtWelcomeOptions {
+	// Defaults do contrato: usuario pode adiar e a acao padrao (timeout) e
+	// continuar. Os campos da task vem do policy-sync (server novo); o payload
+	// (CommandPayload/metadata do script) continua podendo sobrescrever tudo.
+	allowDefer := true
+	if task.AllowDefer != nil {
+		allowDefer = *task.AllowDefer
+	}
+
 	options := psadtWelcomeOptions{
-		AllowDefer:       true,
+		AllowDefer:       allowDefer,
 		DeferTimes:       defaultDeferTimes,
 		DeferRunInterval: defaultDeferInterval,
+		// Timeout do prompt (segundos) vira o contador do Welcome: com processos
+		// alvo vira CloseProcessesCountdown; sem processos vira ForceCountdown,
+		// ou seja, "continuar" automaticamente quando o usuario nao responde.
+		CloseProcessesCountdownSeconds: resolveUserPromptTimeoutSeconds(task),
+	}
+	if list := normalizeCloseProcesses(task.CloseProcesses); len(list) > 0 {
+		options.CloseProcesses = list
 	}
 
 	applyPayload := func(raw string) {
@@ -62,6 +77,36 @@ func resolvePSADTWelcomeOptions(task AutomationTask) psadtWelcomeOptions {
 	}
 
 	return options
+}
+
+// normalizeCloseProcesses limpa a lista de processos vinda do server: trim,
+// remove vazios/duplicados (case-insensitive) e limita a 20 entradas.
+func normalizeCloseProcesses(raw []string) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+	const maxCloseProcesses = 20
+	seen := make(map[string]struct{}, len(raw))
+	out := make([]string, 0, len(raw))
+	for _, item := range raw {
+		name := strings.TrimSpace(item)
+		if name == "" {
+			continue
+		}
+		key := strings.ToLower(name)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, name)
+		if len(out) >= maxCloseProcesses {
+			break
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func getBoolFromAny(m map[string]any, key string, fallback bool) bool {

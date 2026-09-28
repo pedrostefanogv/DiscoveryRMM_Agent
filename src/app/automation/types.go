@@ -19,7 +19,11 @@ type TaskView struct {
 	CommandPayload        string   `json:"commandPayload,omitempty"`
 	ScopeType             string   `json:"scopeType"`
 	ScopeLabel            string   `json:"scopeLabel"`
+	// RequiresApproval: notifica o usuario (Welcome PSADT) antes de executar.
 	RequiresApproval      bool     `json:"requiresApproval"`
+	AllowDefer            bool     `json:"allowDefer"`
+	CloseProcesses        []string `json:"closeProcesses,omitempty"`
+	PromptTimeoutSeconds  int      `json:"promptTimeoutSeconds"`
 	TriggerImmediate      bool     `json:"triggerImmediate"`
 	TriggerRecurring      bool     `json:"triggerRecurring"`
 	TriggerOnUserLogin    bool     `json:"triggerOnUserLogin"`

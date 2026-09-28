@@ -95,29 +95,50 @@ type PolicySyncResponse struct {
 	GeneratedAt       string           `json:"GeneratedAt"`
 	TaskCount         int              `json:"TaskCount"`
 	Tasks             []AutomationTask `json:"Tasks"`
+	// PreloadPackages vem do policy-sync (server) e pede pré-carga P2P dos
+	// instaladores das tasks ativas, sem instalar. Antes era ignorado pelo
+	// agent (campo ausente no struct), então a pré-carga só acontecia via
+	// comando p2ppreload.
+	PreloadPackages []PreloadPackage `json:"PreloadPackages"`
+}
+
+// PreloadPackage é um item de PreloadPackages do policy-sync.
+type PreloadPackage struct {
+	PackageID  string                   `json:"PackageId"`
+	ActionType AutomationTaskActionType `json:"ActionType"`
 }
 
 type AutomationTask struct {
-	CommandID             string                   `json:"CommandId,omitempty"`
-	TaskID                string                   `json:"TaskId"`
-	Name                  string                   `json:"Name"`
-	Description           string                   `json:"Description,omitempty"`
-	ActionType            AutomationTaskActionType `json:"ActionType"`
-	InstallationType      AppInstallationType      `json:"InstallationType,omitempty"`
-	PackageID             string                   `json:"PackageId,omitempty"`
-	ScriptID              string                   `json:"ScriptId,omitempty"`
-	CommandPayload        string                   `json:"CommandPayload,omitempty"`
-	ScopeType             AppApprovalScopeType     `json:"ScopeType"`
-	RequiresApproval      bool                     `json:"RequiresApproval"`
-	TriggerImmediate      bool                     `json:"TriggerImmediate"`
-	TriggerRecurring      bool                     `json:"TriggerRecurring"`
-	TriggerOnUserLogin    bool                     `json:"TriggerOnUserLogin"`
-	TriggerOnAgentCheckIn bool                     `json:"TriggerOnAgentCheckIn"`
-	ScheduleCron          string                   `json:"ScheduleCron,omitempty"`
-	IncludeTags           []string                 `json:"IncludeTags"`
-	ExcludeTags           []string                 `json:"ExcludeTags"`
-	LastUpdatedAt         string                   `json:"LastUpdatedAt"`
-	Script                *AutomationScript        `json:"Script,omitempty"`
+	CommandID        string                   `json:"CommandId,omitempty"`
+	TaskID           string                   `json:"TaskId"`
+	Name             string                   `json:"Name"`
+	Description      string                   `json:"Description,omitempty"`
+	ActionType       AutomationTaskActionType `json:"ActionType"`
+	InstallationType AppInstallationType      `json:"InstallationType,omitempty"`
+	PackageID        string                   `json:"PackageId,omitempty"`
+	ScriptID         string                   `json:"ScriptId,omitempty"`
+	CommandPayload   string                   `json:"CommandPayload,omitempty"`
+	ScopeType        AppApprovalScopeType     `json:"ScopeType"`
+	// RequiresApproval: notifica o usuario (prompt Welcome do PSADT) antes de
+	// executar. NAO bloqueia a execucao — nao e aprovacao.
+	RequiresApproval bool `json:"RequiresApproval"`
+	// AllowDefer: usuario pode adiar (botao Adiar do Welcome). Nil (server
+	// antigo sem o campo) equivale a true, preservando o comportamento anterior.
+	AllowDefer *bool `json:"AllowDefer,omitempty"`
+	// CloseProcesses: processos fechados antes de executar (CloseProcesses).
+	CloseProcesses []string `json:"CloseProcesses,omitempty"`
+	// PromptTimeoutSeconds: tempo para a acao padrao de continuar quando o
+	// usuario nao responde. 0 = default (60s).
+	PromptTimeoutSeconds  int               `json:"PromptTimeoutSeconds,omitempty"`
+	TriggerImmediate      bool              `json:"TriggerImmediate"`
+	TriggerRecurring      bool              `json:"TriggerRecurring"`
+	TriggerOnUserLogin    bool              `json:"TriggerOnUserLogin"`
+	TriggerOnAgentCheckIn bool              `json:"TriggerOnAgentCheckIn"`
+	ScheduleCron          string            `json:"ScheduleCron,omitempty"`
+	IncludeTags           []string          `json:"IncludeTags"`
+	ExcludeTags           []string          `json:"ExcludeTags"`
+	LastUpdatedAt         string            `json:"LastUpdatedAt"`
+	Script                *AutomationScript `json:"Script,omitempty"`
 }
 
 type AutomationScript struct {

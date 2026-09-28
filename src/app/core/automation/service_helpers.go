@@ -90,6 +90,16 @@ func buildExecutionMetadata(task AutomationTask, triggerType TriggerType, stage 
 		if result.ExitCodeSet {
 			payload["exitCode"] = result.ExitCode
 		}
+		// Metadados específicos do executor (ex.: wingetDecision) são mesclados no
+		// topo do payload enviado ao servidor.
+		if extra := strings.TrimSpace(result.MetadataJSON); extra != "" {
+			var decoded map[string]any
+			if json.Unmarshal([]byte(extra), &decoded) == nil {
+				for key, value := range decoded {
+					payload[key] = value
+				}
+			}
+		}
 	}
 	if policy != nil {
 		payload["psadtPolicy"] = map[string]any{

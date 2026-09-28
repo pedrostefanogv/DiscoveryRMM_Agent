@@ -4,7 +4,31 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"discovery/app/core/winget"
 )
+
+// richPackageLister é a capacidade opcional do PackageManager que entrega o
+// JSON do winget ("--output json", Ids completos) quando suportado. Sem ela o
+// decision cai para o ListInstalled tabular normal.
+type richPackageLister interface {
+	ListInstalledRich(ctx context.Context) (string, error)
+	ListUpgradableRich(ctx context.Context) (string, error)
+}
+
+func listInstalledForDecision(ctx context.Context, packages PackageManager) (string, error) {
+	if rich, ok := packages.(richPackageLister); ok {
+		return rich.ListInstalledRich(ctx)
+	}
+	return packages.ListInstalled(ctx)
+}
+
+func listUpgradableForDecision(ctx context.Context, packages PackageManager) (string, error) {
+	if rich, ok := packages.(richPackageLister); ok {
+		return rich.ListUpgradableRich(ctx)
+	}
+	return packages.ListUpgradable(ctx)
+}
 
 // wingetActionDecision é o resultado da decisão versionada de execução.
 type wingetActionDecision struct {
@@ -18,7 +42,16 @@ type wingetActionDecision struct {
 	AvailableVersion string
 	// InstalledVersion é a versão instalada localmente (quando conhecida).
 	InstalledVersion string
+	// DecidedBy registra a fonte da decisão para telemetria no servidor:
+	// "winget" (list/upgrade responderam) ou "inventory-cache" (winget
+	// indisponível e o cache de instalados confirmou o pacote).
+	DecidedBy string
 }
+
+const (
+	decidedByWinget = "winget"
+	decidedByCache  = "inventory-cache"
+)
 
 // decideWingetAction decide se a operação winget deve executar, combinando:
 //  1. Estado local real (winget list / winget upgrade) — fonte primária.
@@ -36,56 +69,93 @@ func decideWingetAction(ctx context.Context, packages PackageManager, operation,
 
 	switch operation {
 	case "install":
-		installed, err := packages.ListInstalled(ctx)
-		if err != nil {
-			// Erro na verificação — prossegue com install (fail-safe).
-			return wingetActionDecision{}
-		}
+		installed, err := listInstalledForDecision(ctx, packages)
+		// O output é avaliado mesmo quando o winget sai com erro: ele costuma
+		// imprimir a tabela inteira e só depois falhar numa fonte, e descartar
+		// esse texto fazia o agente re-baixar instalador de pacote já instalado.
 		if isPackageInOutput(installed, packageID) {
 			return wingetActionDecision{
 				Skip:             true,
 				Reason:           fmt.Sprintf("pacote %s ja instalado — pulando install", packageID),
 				Benign:           true,
 				InstalledVersion: findVersionInOutput(installed, packageID),
+				DecidedBy:        decidedByWinget,
 			}
+		}
+		if err != nil || strings.TrimSpace(installed) == "" {
+			// Lista indisponível: antes o fluxo seguia para o download (fail-open).
+			// O cache do inventário é a última evidência confiável de instalação —
+			// se ele confirma o pacote, pula sem transferir nada.
+			if knownInstalledFromCache(packageID) {
+				logWingetDecision("install: winget list indisponivel (%v) mas %s consta instalado no cache do inventario — skip sem baixar", err, packageID)
+				return wingetActionDecision{
+					Skip:      true,
+					Reason:    fmt.Sprintf("pacote %s ja instalado (cache do inventario) — pulando install", packageID),
+					Benign:    true,
+					DecidedBy: decidedByCache,
+				}
+			}
+			if err != nil {
+				logWingetDecision("install: winget list falhou (%v) e %s nao esta no cache — prosseguindo (fail-safe)", err, packageID)
+			}
+		}
+		if err == nil && strings.TrimSpace(installed) != "" {
+			// Lista confiável: o pacote realmente não está instalado.
+			return wingetActionDecision{DecidedBy: decidedByWinget}
 		}
 		return wingetActionDecision{}
 
 	case "upgrade":
-		upgradable, err := packages.ListUpgradable(ctx)
-		if err != nil {
-			// Erro na verificação — prossegue com upgrade (fail-safe).
-			return wingetActionDecision{}
-		}
+		upgradable, upErr := listUpgradableForDecision(ctx, packages)
+		// Mesma regra do install: usa o output mesmo com erro de saída.
 		if isPackageInOutput(upgradable, packageID) {
 			// Há update pendente segundo o winget real → executa.
 			return wingetActionDecision{
 				AvailableVersion: findVersionInOutput(upgradable, packageID, "available"),
+				DecidedBy:        decidedByWinget,
 			}
+		}
+		if upErr != nil {
+			// Antes um erro aqui retornava direto e o router baixava o instalador
+			// para rodar um upgrade que podia nem existir. Agora segue para a
+			// validação de estado instalado.
+			logWingetDecision("upgrade: winget upgrade indisponivel (%v) packageId=%s — validando estado instalado antes de prosseguir", upErr, packageID)
 		}
 
 		// Não está em "upgrade": instalado e atualizado, ou ausente.
-		installed, instErr := packages.ListInstalled(ctx)
+		installed, instErr := listInstalledForDecision(ctx, packages)
 		installedVersion := ""
-		present := false
-		if instErr == nil {
-			present = isPackageInOutput(installed, packageID)
+		// decidedBy fica vazio quando nenhuma fonte confirmou o estado (skip
+		// conservador sem evidência) — não atribuir a autoria ao winget nesse caso.
+		decidedBy := ""
+		present := isPackageInOutput(installed, packageID)
+		if present {
 			installedVersion = findVersionInOutput(installed, packageID)
+			decidedBy = decidedByWinget
+		} else if knownInstalledFromCache(packageID) {
+			present = true
+			decidedBy = decidedByCache
+			logWingetDecision("upgrade: %s consta instalado no cache do inventario (winget list err=%v) — sem download", packageID, instErr)
 		}
 
-		if instErr == nil && !present {
+		// Fonte confiável (sem erro e com conteúdo) e pacote ausente: nada a fazer.
+		if !present && instErr == nil && strings.TrimSpace(installed) != "" {
 			return wingetActionDecision{
-				Skip:   true,
-				Reason: fmt.Sprintf("pacote %s nao encontrado — pulando upgrade", packageID),
+				Skip:      true,
+				Reason:    fmt.Sprintf("pacote %s nao encontrado — pulando upgrade", packageID),
+				DecidedBy: decidedByWinget,
 			}
 		}
 
-		// Instalado e sem update pendente: skip benigno.
+		// Instalado e sem update pendente: skip benigno. Quando o estado não pôde
+		// ser confirmado, mantém o skip conservador (não transfere instalador para
+		// um update incerto; o próximo ciclo reavalia).
 		decision := wingetActionDecision{
 			Skip:             true,
 			Reason:           fmt.Sprintf("pacote %s ja atualizado — pulando upgrade", packageID),
 			Benign:           true,
 			InstalledVersion: installedVersion,
+			DecidedBy:        decidedBy,
 		}
 
 		// Validação extra via P2P: se a rede anuncia uma versão do pacote mais
@@ -114,6 +184,43 @@ func decideWingetAction(ctx context.Context, packages PackageManager, operation,
 // nil quando não há suporte (testes, agent sem P2P).
 var p2pVersionResolver func(packageID string) string
 
+// installedPackageChecker é injetado pelo App (inventory.Service) e informa se o
+// pacote consta na última lista de instalados conhecida (cache do "winget list").
+// Retorna (known, installed): known=false quando não há lista boa em cache.
+// Usado para NÃO baixar instalador quando o winget está momentaneamente
+// indisponível mas o pacote já está instalado.
+var installedPackageChecker func(packageID string) (known bool, installed bool)
+
+// SetInstalledPackageChecker registra o verificador de pacote instalado.
+func SetInstalledPackageChecker(checker func(packageID string) (known bool, installed bool)) {
+	installedPackageChecker = checker
+}
+
+// wingetDecisionLogger é injetado pelo App para registrar decisões relevantes
+// (ex.: winget indisponível e uso do cache para evitar transferência).
+var wingetDecisionLogger func(string)
+
+// SetWingetDecisionLogger registra o logger das decisões.
+func SetWingetDecisionLogger(logger func(string)) {
+	wingetDecisionLogger = logger
+}
+
+func logWingetDecision(format string, args ...any) {
+	if wingetDecisionLogger != nil {
+		wingetDecisionLogger(fmt.Sprintf(format, args...))
+	}
+}
+
+// knownInstalledFromCache consulta o cache do inventário. Só devolve true com
+// evidência POSITIVA de instalação — nunca conclui "não instalado" a partir dele.
+func knownInstalledFromCache(packageID string) bool {
+	if installedPackageChecker == nil {
+		return false
+	}
+	known, installed := installedPackageChecker(packageID)
+	return known && installed
+}
+
 // SetP2PVersionResolver registra o resolvedor de versão P2P. Chamado pelo App
 // no startup (depois de criar o packageManagerRouter).
 func SetP2PVersionResolver(resolver func(packageID string) string) {
@@ -135,6 +242,19 @@ func p2pAvailableVersion(packageID string) string {
 // which: "" = coluna Version; "available" = coluna Available.
 func findVersionInOutput(output, packageID string, which ...string) string {
 	wantAvailable := len(which) > 0 && which[0] == "available"
+	if entries, ok := winget.ParseListJSON(output); ok {
+		target := strings.TrimSpace(packageID)
+		for _, entry := range entries {
+			if !strings.EqualFold(strings.TrimSpace(entry.ID), target) {
+				continue
+			}
+			if wantAvailable {
+				return entry.AvailableVersionValue()
+			}
+			return strings.TrimSpace(entry.Version)
+		}
+		return ""
+	}
 	lines := strings.Split(output, "\n")
 	for _, line := range lines {
 		if !isPackageLine(line, packageID) {
@@ -223,18 +343,28 @@ func ShouldPreloadPackage(ctx context.Context, packages PackageManager, actionTy
 		return !d.Skip // sem update pendente → não pré-carrega
 	case ActionUpdateOrInstallPackage:
 		// Precisa se (não instalado) OU (há update pendente).
-		inst, instErr := packages.ListInstalled(ctx)
-		if instErr != nil {
-			return true // fail-safe
+		inst, instErr := listInstalledForDecision(ctx, packages)
+		if strings.TrimSpace(inst) != "" && isPackageInOutput(inst, packageID) {
+			up, upErr := listUpgradableForDecision(ctx, packages)
+			if strings.TrimSpace(up) == "" || upErr != nil {
+				// Lista de updates indisponível, mas o cache confirma que está
+				// instalado: não pré-carrega (não há evidência de update).
+				return false
+			}
+			return isPackageInOutput(up, packageID)
 		}
-		if !isPackageInOutput(inst, packageID) {
-			return true // não instalado → install futuro precisará do instalador
+		if instErr == nil && strings.TrimSpace(inst) != "" {
+			return true // lista confiável e pacote ausente → precisará do instalador
 		}
-		up, upErr := packages.ListUpgradable(ctx)
-		if upErr != nil {
-			return true // fail-safe
+		// Lista indisponível: só evita o download com evidência positiva do cache.
+		if knownInstalledFromCache(packageID) {
+			up, upErr := listUpgradableForDecision(ctx, packages)
+			if upErr == nil && strings.TrimSpace(up) != "" && isPackageInOutput(up, packageID) {
+				return true
+			}
+			return false
 		}
-		return isPackageInOutput(up, packageID)
+		return true // fail-safe
 	default:
 		return false
 	}

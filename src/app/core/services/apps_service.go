@@ -106,11 +106,41 @@ func (s *AppsService) UpgradeAll(ctx context.Context) (string, error) {
 	return s.winget.UpgradeAll(ctx)
 }
 
+// ListInstalled mantém o formato TABULAR histórico: é a saída crua exposta à UI
+// (aba de instalados) e às ferramentas MCP, que a exibem como texto.
 func (s *AppsService) ListInstalled(ctx context.Context) (string, error) {
 	return s.winget.ListInstalled(ctx)
 }
 
 func (s *AppsService) ListUpgradable(ctx context.Context) (string, error) {
+	return s.winget.ListUpgradable(ctx)
+}
+
+// installedListRich e upgradableListRich são capacidades opcionais do provider:
+// o client real expõe variantes que tentam "--output json" (Ids completos, sem
+// truncamento de coluna) e caem para a tabela em versões sem suporte. Mocks e
+// providers antigos continuam funcionando pelo caminho tabular.
+type installedListRich interface {
+	ListInstalledRich(ctx context.Context) (string, error)
+}
+
+type upgradableListRich interface {
+	ListUpgradableRich(ctx context.Context) (string, error)
+}
+
+// ListInstalledRich é para consumidores INTERNOS que parseiam os dois formatos
+// (decisão de instalação, correlação de inventário) — nunca para exibição crua.
+func (s *AppsService) ListInstalledRich(ctx context.Context) (string, error) {
+	if rich, ok := s.winget.(installedListRich); ok {
+		return rich.ListInstalledRich(ctx)
+	}
+	return s.winget.ListInstalled(ctx)
+}
+
+func (s *AppsService) ListUpgradableRich(ctx context.Context) (string, error) {
+	if rich, ok := s.winget.(upgradableListRich); ok {
+		return rich.ListUpgradableRich(ctx)
+	}
 	return s.winget.ListUpgradable(ctx)
 }
 

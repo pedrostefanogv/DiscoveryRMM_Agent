@@ -68,6 +68,9 @@ func mapAutomationState(state automation.State) AutomationStateView {
 			ScopeType:             string(task.ScopeType),
 			ScopeLabel:            automationScopeLabel(string(task.ScopeType)),
 			RequiresApproval:      task.RequiresApproval,
+			AllowDefer:            taskAllowsDefer(task),
+			CloseProcesses:        append([]string(nil), task.CloseProcesses...),
+			PromptTimeoutSeconds:  taskPromptTimeoutSeconds(task),
 			TriggerImmediate:      task.TriggerImmediate,
 			TriggerRecurring:      task.TriggerRecurring,
 			TriggerOnUserLogin:    task.TriggerOnUserLogin,
@@ -121,6 +124,26 @@ func mapAutomationState(state automation.State) AutomationStateView {
 	}
 
 	return view
+}
+
+// taskAllowsDefer: nil (policy de server antigo sem o campo) equivale a true,
+// preservando o comportamento anterior de permitir adiar.
+func taskAllowsDefer(task automation.AutomationTask) bool {
+	if task.AllowDefer == nil {
+		return true
+	}
+	return *task.AllowDefer
+}
+
+// taskPromptTimeoutSeconds normaliza o timeout da acao padrao (default 60s).
+func taskPromptTimeoutSeconds(task automation.AutomationTask) int {
+	if task.PromptTimeoutSeconds <= 0 {
+		return 60
+	}
+	if task.PromptTimeoutSeconds > 3600 {
+		return 3600
+	}
+	return task.PromptTimeoutSeconds
 }
 
 func automationScopeLabel(value string) string {

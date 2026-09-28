@@ -136,6 +136,17 @@ func (m *automationPackageManagerRouter) ListUpgradable(ctx context.Context) (st
 	return m.fallback.ListUpgradable(ctx)
 }
 
+// ListInstalledRich/ListUpgradableRich expõem o JSON do winget (Ids completos)
+// para a decisão de instalação (automation.richPackageLister). A saída crua da
+// UI/MCP continua usando ListInstalled/ListUpgradable (tabela).
+func (m *automationPackageManagerRouter) ListInstalledRich(ctx context.Context) (string, error) {
+	return m.fallback.ListInstalledRich(ctx)
+}
+
+func (m *automationPackageManagerRouter) ListUpgradableRich(ctx context.Context) (string, error) {
+	return m.fallback.ListUpgradableRich(ctx)
+}
+
 func (m *automationPackageManagerRouter) shouldUseP2PForWingetInstall() bool {
 	if m == nil || m.app == nil || m.fallback == nil {
 		return false

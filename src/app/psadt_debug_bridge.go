@@ -905,6 +905,12 @@ func buildPSADTVisualScript(req PSADTVisualNotificationRequest) (string, time.Du
 			"  if ($psadtWelcomeBlockExec) { $welcomeParams.BlockExecution = $true }\n" +
 			"} elseif ($psadtWelcomeAllowDefer -and $psadtWelcomeCloseCountdown -gt 0) {\n" +
 			"  $welcomeParams.ForceCountdown = $psadtWelcomeCloseCountdown\n" +
+			"} elseif ($psadtWelcomeCloseCountdown -gt 0) {\n" +
+			// Sem processos e sem adiamento: usa o set NoDeferralCountdown para
+			// garantir que a acao padrao (continuar) rode ao fim do tempo em vez
+			// de deixar o Welcome esperando uma resposta que nunca vem.
+			"  $welcomeParams.AllowDefer = $false\n" +
+			"  $welcomeParams.ForceCountdown = $psadtWelcomeCloseCountdown\n" +
 			"}\n" +
 			"Show-ADTInstallationWelcome @welcomeParams\n" +
 			"Write-Host 'InstallationWelcome concluido'\n" +

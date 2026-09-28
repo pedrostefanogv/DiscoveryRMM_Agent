@@ -8,6 +8,7 @@ import (
 
 	"discovery/app/core/chocolatey"
 	"discovery/app/core/models"
+	"discovery/app/core/winget"
 )
 
 // AppsService defines the package manager surface used by updates.
@@ -116,6 +117,30 @@ func ParseInstalledListOutput(raw string) []models.InstalledPackage {
 	return parseInstalledListOutput(raw)
 }
 
+// installedListRich/upgradableListRich são as variantes opcionais que entregam
+// JSON quando o winget suporta (Ids completos). Os parsers aceitam JSON e tabela.
+type installedListRich interface {
+	ListInstalledRich(ctx context.Context) (string, error)
+}
+
+type upgradableListRich interface {
+	ListUpgradableRich(ctx context.Context) (string, error)
+}
+
+func (s *Service) listInstalledRaw(ctx context.Context) (string, error) {
+	if rich, ok := s.apps.(installedListRich); ok {
+		return rich.ListInstalledRich(ctx)
+	}
+	return s.apps.ListInstalled(ctx)
+}
+
+func (s *Service) listUpgradableRaw(ctx context.Context) (string, error) {
+	if rich, ok := s.apps.(upgradableListRich); ok {
+		return rich.ListUpgradableRich(ctx)
+	}
+	return s.apps.ListUpgradable(ctx)
+}
+
 // GetInstalledPackages lista os apps instalados reconhecidos pelo winget com
 // Name/Id/Version. É o índice que liga o inventário de registro ao Id real do
 // pacote no winget (o installId do registro costuma ser o ProductCode do MSI).
@@ -124,7 +149,7 @@ func (s *Service) GetInstalledPackages() ([]models.InstalledPackage, error) {
 	if s.ctx != nil {
 		ctx = s.ctx()
 	}
-	raw, wingetErr := s.apps.ListInstalled(ctx)
+	raw, wingetErr := s.listInstalledRaw(ctx)
 	if wingetErr != nil {
 		s.logf("[winget list] erro: " + wingetErr.Error())
 	} else {
@@ -259,10 +284,69 @@ func collapseTableLines(raw string) []string {
 	return lines
 }
 
+// jsonInstalledPackages converte a saída JSON do winget em InstalledPackage.
+// Retorna ok=false quando o texto não é JSON (aí o chamador usa a tabela).
+func jsonInstalledPackages(raw string) ([]models.InstalledPackage, bool) {
+	entries, ok := winget.ParseListJSON(raw)
+	if !ok {
+		return nil, false
+	}
+	items := make([]models.InstalledPackage, 0, len(entries))
+	for _, entry := range entries {
+		id := strings.TrimSpace(entry.ID)
+		if id == "" {
+			continue
+		}
+		source := strings.TrimSpace(entry.Source)
+		if source == "" {
+			source = "winget"
+		}
+		items = append(items, models.InstalledPackage{
+			Name:    strings.TrimSpace(entry.Name),
+			ID:      id,
+			Version: strings.TrimSpace(entry.Version),
+			Source:  source,
+		})
+	}
+	return items, true
+}
+
+// jsonUpgradeItems converte a saída JSON do "winget upgrade" em UpgradeItem.
+func jsonUpgradeItems(raw string) ([]models.UpgradeItem, bool) {
+	entries, ok := winget.ParseListJSON(raw)
+	if !ok {
+		return nil, false
+	}
+	items := make([]models.UpgradeItem, 0, len(entries))
+	for _, entry := range entries {
+		id := strings.TrimSpace(entry.ID)
+		if id == "" {
+			continue
+		}
+		source := strings.TrimSpace(entry.Source)
+		if source == "" {
+			source = "winget"
+		}
+		items = append(items, models.UpgradeItem{
+			Name:             strings.TrimSpace(entry.Name),
+			ID:               id,
+			CurrentVersion:   strings.TrimSpace(entry.Version),
+			AvailableVersion: entry.AvailableVersionValue(),
+			Source:           source,
+		})
+	}
+	return items, true
+}
+
 // parseInstalledListOutput parseia a tabela do "winget list" (Name, Id, Version,
 // Available, Source) em itens com Name/Id/Version. As colunas são localizadas
 // pelo cabeçalho (winget pode estar localizado).
 func parseInstalledListOutput(raw string) []models.InstalledPackage {
+	// "winget list --output json" (quando suportado): Ids completos, sem o
+	// truncamento da coluna Id da tabela.
+	if items, ok := jsonInstalledPackages(raw); ok {
+		return items
+	}
 	lines := collapseTableLines(raw)
 
 	headerIdx := -1
@@ -343,7 +427,7 @@ func (s *Service) GetPackageActions() (map[string]string, error) {
 		ctx = s.ctx()
 	}
 
-	installedRaw, err := s.apps.ListInstalled(ctx)
+	installedRaw, err := s.listInstalledRaw(ctx)
 	if err != nil {
 		return actions, err
 	}
@@ -354,7 +438,7 @@ func (s *Service) GetPackageActions() (map[string]string, error) {
 		actions[strings.ToLower(id)] = packageActionUninstall
 	}
 
-	updatesRaw, updatesErr := s.apps.ListUpgradable(ctx)
+	updatesRaw, updatesErr := s.listUpgradableRaw(ctx)
 	s.logf("[winget upgrade] " + s.now().Format("15:04:05"))
 	s.logf(updatesRaw)
 	if updatesErr == nil {
@@ -386,6 +470,9 @@ func (s *Service) GetPackageActions() (map[string]string, error) {
 
 // parseUpgradeOutput parses the tabular output of `winget upgrade`.
 func parseUpgradeOutput(raw string) []models.UpgradeItem {
+	if items, ok := jsonUpgradeItems(raw); ok {
+		return items
+	}
 	lines := collapseTableLines(raw)
 
 	var items []models.UpgradeItem
@@ -610,6 +697,15 @@ func safeSubstring(s string, start, end int) string {
 }
 
 func parseInstalledOutput(raw string) []string {
+	if entries, ok := winget.ParseListJSON(raw); ok {
+		ids := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			if id := strings.TrimSpace(entry.ID); id != "" {
+				ids = append(ids, id)
+			}
+		}
+		return ids
+	}
 	lines := collapseTableLines(raw)
 
 	headerIdx := -1

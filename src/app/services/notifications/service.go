@@ -182,6 +182,28 @@ func New(deps Deps) *Service {
 	}
 }
 
+// AllowsUserPrompt informa se, depois da política por eventType e do rollout, a
+// notificação continua exigindo confirmação do usuário. É o portão que decide se
+// o prompt nativo do PSADT pode substituir o toast: sem ele, o Welcome furaria o
+// kill switch rollout.enableRequireConfirmation e o enableNotifications.
+func (s *Service) AllowsUserPrompt(req DispatchRequest) bool {
+	if s == nil || s.getAgentConfiguration == nil {
+		return false
+	}
+	cfg := s.getAgentConfiguration()
+	effective := applyPolicyByEventType(req, cfg)
+	if !isEnabledForRollout(cfg.Rollout, effective.EventType) {
+		return false
+	}
+	if normalizeMode(effective.Mode) != "require_confirmation" {
+		return false
+	}
+	if cfg.Rollout.EnableRequireConfirmation != nil && !*cfg.Rollout.EnableRequireConfirmation {
+		return false
+	}
+	return true
+}
+
 // Dispatch processa e despacha uma notificação.
 func (s *Service) Dispatch(req DispatchRequest) DispatchResponse {
 	if s.getAgentConfiguration != nil {

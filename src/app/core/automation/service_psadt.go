@@ -5,14 +5,42 @@ import (
 	"time"
 )
 
+// shouldDeferExecution decide se o usuario adiou a execucao. Vale para
+// qualquer tipo de acao quando o prompt esta habilitado — antes so acoes de
+// pacote podiam adiar, o que impedia RunScript/CustomCommand de usar o Welcome.
 func (s *Service) shouldDeferExecution(task AutomationTask, response AutomationNotificationResponse) bool {
-	if !isPackageAction(task.ActionType) {
-		return false
+	_ = task
+	// Timeout do prompt: acao padrao e CONTINUAR (nao adiar). Um resultado
+	// "timeout_policy_applied" NAO adia — a execucao segue normalmente.
+	return response.Accepted && isDeferredResult(response.Result)
+}
+
+// isDeferredResult identifica o resultado "deferred" devolvido pelo prompt do
+// usuario (toast require_confirmation ou Welcome do PSADT).
+func isDeferredResult(result string) bool {
+	return strings.EqualFold(strings.TrimSpace(result), "deferred") ||
+		strings.EqualFold(strings.TrimSpace(result), "defer")
+}
+
+// resolveUserPromptTimeoutSeconds normaliza o tempo para a acao padrao de
+// continuar quando o usuario nao responde ao prompt. Default 60s; faixa 5..3600.
+func resolveUserPromptTimeoutSeconds(task AutomationTask) int {
+	const (
+		defaultTimeout = 60
+		minTimeout     = 5
+		maxTimeout     = 3600
+	)
+	seconds := task.PromptTimeoutSeconds
+	if seconds <= 0 {
+		return defaultTimeout
 	}
-	if !response.Accepted {
-		return false
+	if seconds < minTimeout {
+		return minTimeout
 	}
-	return strings.EqualFold(strings.TrimSpace(response.Result), "deferred")
+	if seconds > maxTimeout {
+		return maxTimeout
+	}
+	return seconds
 }
 
 func (s *Service) recordAndGetNextDefer(agentID, executionID string, task AutomationTask, current deferState, welcome psadtWelcomeOptions) time.Time {

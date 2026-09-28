@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"discovery/app/core/processutil"
+	"discovery/app/core/winget"
 )
 
 const (
@@ -23,10 +24,9 @@ const (
 type PackageAuthorizationFunc func(ctx context.Context, installationType AppInstallationType, packageID, operation string) error
 
 func executeTask(ctx context.Context, packages PackageManager, authorize PackageAuthorizationFunc, task AutomationTask, psadtPolicy PSADTPolicy, customFields map[string]any) ExecutionResult {
-	if task.RequiresApproval {
-		return ExecutionResult{Success: false, ExitCode: 10, ExitCodeSet: true, ErrorMessage: "tarefa exige aprovacao e nao pode ser executada automaticamente"}
-	}
-
+	// RequiresApproval significa "notificar o usuario antes de executar" (prompt
+	// Welcome do PSADT), NAO bloqueio. A confirmacao/adiamento e tratada em
+	// executeTaskAsync via dispatchExecutionNotification; aqui a tarefa executa.
 	switch task.ActionType {
 	case ActionInstallPackage:
 		return executePackageAction(ctx, packages, authorize, task, "install", psadtPolicy)
@@ -88,7 +88,11 @@ func executePackageAction(ctx context.Context, packages PackageManager, authoriz
 		// originais (consumidas pelo anti-loop / classifyPackageResult).
 		decision := decideWingetAction(ctx, packages, operation, packageID)
 		if decision.Skip {
-			return ExecutionResult{Success: true, ExitCode: 0, ExitCodeSet: true, Output: decision.Reason}
+			result := ExecutionResult{Success: true, ExitCode: 0, ExitCodeSet: true, Output: decision.Reason}
+			// Telemetria: o servidor registra o motivo do skip e a fonte da decisão
+			// (winget × cache do inventário) para medir decisões sem download.
+			result.MetadataJSON = buildWingetDecisionMetadata(operation, decision)
+			return result
 		}
 		var out string
 		var err error
@@ -103,6 +107,7 @@ func executePackageAction(ctx context.Context, packages PackageManager, authoriz
 			return ExecutionResult{Success: false, ExitCode: 2, ExitCodeSet: true, ErrorMessage: "operacao de pacote invalida"}
 		}
 		result := resultFromCommand(out, err)
+		result.MetadataJSON = buildWingetDecisionMetadata(operation, decision)
 		// Anexa as versões observadas na decisão — usado pelo metadata de
 		// execução (visibilidade no servidor) e no versionamento do artifact.
 		if decision.AvailableVersion != "" || decision.InstalledVersion != "" {
@@ -287,6 +292,31 @@ func truncateOutput(output string) string {
 	return strings.TrimSpace(output[:maxStoredOutputBytes]) + "\n... output truncado ..."
 }
 
+// buildWingetDecisionMetadata serializa a decisão winget em JSON para o
+// metadata de execução enviado ao servidor (result_metadata_json). Permite medir
+// quantas execuções foram puladas sem download e por qual fonte
+// ("winget" × "inventory-cache").
+func buildWingetDecisionMetadata(operation string, decision wingetActionDecision) string {
+	detail := map[string]any{
+		"operation": operation,
+		"skip":      decision.Skip,
+		"benign":    decision.Benign,
+		"decidedBy": decision.DecidedBy,
+		"reason":    decision.Reason,
+	}
+	if strings.TrimSpace(decision.InstalledVersion) != "" {
+		detail["installedVersion"] = decision.InstalledVersion
+	}
+	if strings.TrimSpace(decision.AvailableVersion) != "" {
+		detail["availableVersion"] = decision.AvailableVersion
+	}
+	raw, err := json.Marshal(map[string]any{"wingetDecision": detail})
+	if err != nil {
+		return ""
+	}
+	return string(raw)
+}
+
 // isPackageInOutput verifica se o packageID aparece na saída do winget list/upgrade.
 // A comparação é case-insensitive e trata o ID como um token delimitado por
 // whitespace/início/fim de linha. Isso evita falsos positivos como "Foxit"
@@ -298,6 +328,16 @@ func isPackageInOutput(output, packageID string) bool {
 	normalized := strings.TrimSpace(output)
 	target := strings.TrimSpace(packageID)
 	if normalized == "" || target == "" {
+		return false
+	}
+	// Formato JSON ("list --output json"): comparar o Id exato, sem depender das
+	// colunas da tabela (que truncam identificadores longos com "...").
+	if entries, ok := winget.ParseListJSON(normalized); ok {
+		for _, entry := range entries {
+			if strings.EqualFold(strings.TrimSpace(entry.ID), target) {
+				return true
+			}
+		}
 		return false
 	}
 	// Match case-insensitive do ID como token delimitado por whitespace ou início/fim.
