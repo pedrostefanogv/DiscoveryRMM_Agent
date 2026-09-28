@@ -138,3 +138,55 @@ func TestStartP2PTelemetryLoopSkipsWhenP2pDisabled(t *testing.T) {
 		t.Fatalf("P2P desabilitado nao deveria enviar telemetria, recebeu %d POST(s)", got)
 	}
 }
+
+// TestStartP2PTelemetryLoopSendsImmediately garante que o primeiro snapshot sai
+// sem esperar p2pTelemetryInterval — era isso que deixava o card "Sem telemetria
+// P2P" por até 5 minutos após cada deploy/restart do serviço.
+func TestStartP2PTelemetryLoopSendsImmediately(t *testing.T) {
+	const token = "mdz_test_token"
+	const agentID = "8f6d6d72-4a8a-4c87-bffa-34ba29dc0bb7"
+
+	var telemetryHits int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/p2p/telemetry") {
+			atomic.AddInt32(&telemetryHits, 1)
+		}
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte("{}"))
+	}))
+	defer server.Close()
+
+	a := &App{ctx: context.Background()}
+	a.DebugSvc = debugsvc.NewService(debugsvc.Options{})
+	a.DebugSvc.ApplyRuntimeConnectionConfig("http", strings.TrimPrefix(server.URL, "http://"), token, agentID, "", "")
+	a.P2PCoord = newP2PCoordinator(a)
+	a.applyP2PConfig(P2PConfig{Enabled: true})
+
+	original := p2pTelemetryInterval
+	// Intervalo longo de propósito: o envio inicial não pode depender do tick.
+	p2pTelemetryInterval = time.Hour
+	defer func() { p2pTelemetryInterval = original }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		a.StartP2PTelemetryLoop(ctx)
+	}()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) && atomic.LoadInt32(&telemetryHits) == 0 {
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("StartP2PTelemetryLoop nao encerrou apos o cancelamento")
+	}
+
+	if got := atomic.LoadInt32(&telemetryHits); got == 0 {
+		t.Fatal("o loop deveria enviar um snapshot imediatamente, sem esperar o intervalo")
+	}
+}

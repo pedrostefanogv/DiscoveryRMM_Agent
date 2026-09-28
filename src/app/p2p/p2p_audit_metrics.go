@@ -32,6 +32,27 @@ func (c *Coordinator) recordBytesDownloaded(size int64) {
 	c.mu.Unlock()
 }
 
+// recordReplicationStarted marca o início de uma tentativa de replicação
+// (pull de um artifact via peer ou swarm). Sem esses contadores a telemetria
+// enviava replicationsStarted/Succeeded/Failed sempre zerados e o "Success rate"
+// do dashboard ficava permanentemente sem valor.
+func (c *Coordinator) recordReplicationStarted() {
+	c.mu.Lock()
+	c.metrics.ReplicationsStarted++
+	c.mu.Unlock()
+}
+
+// recordReplicationResult fecha a tentativa iniciada por recordReplicationStarted.
+func (c *Coordinator) recordReplicationResult(success bool) {
+	c.mu.Lock()
+	if success {
+		c.metrics.ReplicationsSucceeded++
+	} else {
+		c.metrics.ReplicationsFailed++
+	}
+	c.mu.Unlock()
+}
+
 // recordStaleManifest incrementa o contador de manifests stale detectados.
 // Usado para monitorar a frequência do problema em produção e avaliar a
 // eficácia das correções de validação de cache.

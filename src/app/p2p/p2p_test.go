@@ -540,3 +540,36 @@ func writeTestFile(path string, size int64) error {
 	}
 	return nil
 }
+
+func TestDownloadArtifactFromPeerCountsReplicationFailure(t *testing.T) {
+	a := &mockDeps{}
+	c := &Coordinator{deps: a, peers: map[string]p2pPeerState{}, peerArtifacts: map[string]p2pPeerArtifactState{}}
+
+	if _, err := c.DownloadArtifactFromPeer(context.Background(), "agent.bin", "peer-missing"); err == nil {
+		t.Fatal("expected error when peer is missing")
+	}
+
+	if c.metrics.ReplicationsStarted != 1 {
+		t.Fatalf("expected ReplicationsStarted=1, got %d", c.metrics.ReplicationsStarted)
+	}
+	if c.metrics.ReplicationsFailed != 1 || c.metrics.ReplicationsSucceeded != 0 {
+		t.Fatalf("expected Failed=1 Succeeded=0, got Failed=%d Succeeded=%d",
+			c.metrics.ReplicationsFailed, c.metrics.ReplicationsSucceeded)
+	}
+}
+
+func TestDownloadArtifactSwarmCountsReplicationFailure(t *testing.T) {
+	a := &mockDeps{}
+	c := &Coordinator{deps: a, peers: map[string]p2pPeerState{}, peerArtifacts: map[string]p2pPeerArtifactState{}}
+
+	if _, err := c.DownloadArtifactSwarm(context.Background(), "agent.bin"); err == nil {
+		t.Fatal("expected error when no peer has the artifact")
+	}
+
+	if c.metrics.ReplicationsStarted != 1 {
+		t.Fatalf("expected ReplicationsStarted=1, got %d", c.metrics.ReplicationsStarted)
+	}
+	if c.metrics.ReplicationsFailed != 1 {
+		t.Fatalf("expected ReplicationsFailed=1, got %d", c.metrics.ReplicationsFailed)
+	}
+}

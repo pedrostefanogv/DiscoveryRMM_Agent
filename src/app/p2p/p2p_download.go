@@ -10,7 +10,16 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
+// DownloadArtifactFromPeer baixa um artifact de um peer específico e contabiliza
+// a replicação (started/succeeded/failed) usada pela telemetria P2P.
 func (c *Coordinator) DownloadArtifactFromPeer(ctx context.Context, artifactName, sourcePeerID string) (P2PArtifactView, error) {
+	c.recordReplicationStarted()
+	view, err := c.downloadArtifactFromPeer(ctx, artifactName, sourcePeerID)
+	c.recordReplicationResult(err == nil)
+	return view, err
+}
+
+func (c *Coordinator) downloadArtifactFromPeer(ctx context.Context, artifactName, sourcePeerID string) (P2PArtifactView, error) {
 	rawArtifactName := strings.TrimSpace(artifactName)
 	artifactName = SanitizeArtifactName(artifactName)
 	if artifactName == "" {
@@ -208,7 +217,16 @@ func (c *Coordinator) DownloadArtifactFromPeer(ctx context.Context, artifactName
 
 // downloadArtifactSwarm encontra todos os peers que possuem o artifact e faz
 // download chunked via libp2p streams, mesmo com peer único (resiliência/resume).
+// DownloadArtifactSwarm baixa um artifact coletando chunks dos peers que o
+// possuem e contabiliza a replicação para a telemetria P2P.
 func (c *Coordinator) DownloadArtifactSwarm(ctx context.Context, artifactName string) (P2PArtifactView, error) {
+	c.recordReplicationStarted()
+	view, err := c.downloadArtifactSwarm(ctx, artifactName)
+	c.recordReplicationResult(err == nil)
+	return view, err
+}
+
+func (c *Coordinator) downloadArtifactSwarm(ctx context.Context, artifactName string) (P2PArtifactView, error) {
 	rawArtifactName := strings.TrimSpace(artifactName)
 	artifactName = SanitizeArtifactName(artifactName)
 	if artifactName == "" {

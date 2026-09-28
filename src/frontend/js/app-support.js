@@ -1327,6 +1327,10 @@ function resetRating() {
 function initSupport() {
   if (!supportFormEl) return;
 
+  // Bind independente do resto do init: se algo abaixo falhar, as listas
+  // continuam repassando a roda para a pagina.
+  bindSupportScrollChaining();
+
   closeTicketStarsWidget = attachStarsWidget(closeTicketStarsEl, clearRatingBtnEl);
   ratingStarsWidget = attachStarsWidget(ratingStarsEl, clearRatingPanelBtnEl);
 
@@ -1441,7 +1445,6 @@ function initSupport() {
       }
     });
   }
-
   if (ticketSearchInputEl) {
     ticketSearchInputEl.addEventListener('input', debounce(function () {
       ticketFilters.query = ticketSearchInputEl.value;
@@ -1960,15 +1963,24 @@ function formatChatTime(value) {
   }
 }
 
+// Data + hora no proprio balao (o separador de dia centralizado foi removido:
+// a data agora fica ao lado do nome de quem enviou, junto da hora).
+function formatChatDayTime(value) {
+  var day = formatChatDay(value);
+  var time = formatChatTime(value);
+  if (day && time) return day + ' ' + time;
+  return day || time;
+}
+
 function ticketCommentHtml(c) {
   var own = isOwnTicketComment(c);
   var author = own ? translate('support.you') : (c.author || translate('support.supportTeam'));
-  var time = formatChatTime(c.createdAt);
+  var when = formatChatDayTime(c.createdAt);
   return '<div class="ticket-msg ' + (own ? 'own' : 'other') + '">' +
     '<div class="ticket-bubble">' + escapeHtml(c.content) + '</div>' +
     '<div class="ticket-msg-meta">' +
       '<span class="ticket-msg-author">' + escapeHtml(author) + '</span>' +
-      (time ? '<span class="ticket-msg-time">' + escapeHtml(time) + '</span>' : '') +
+      (when ? '<span class="ticket-msg-time">' + escapeHtml(when) + '</span>' : '') +
     '</div>' +
   '</div>';
 }
@@ -1984,14 +1996,10 @@ async function loadTicketComments(ticketId) {
       commentsListEl.innerHTML = '<div class="meta">' + escapeHtml(translate('support.noComments')) + '</div>';
       return;
     }
+    // Cada balao carrega a propria data/hora no meta (autor + data + hora);
+    // nao ha mais separador de dia centralizado entre as mensagens.
     var html = '';
-    var lastDay = '';
     comments.forEach(function (c) {
-      var day = formatChatDay(c.createdAt);
-      if (day && day !== lastDay) {
-        lastDay = day;
-        html += '<div class="ticket-day"><span>' + escapeHtml(day) + '</span></div>';
-      }
       html += ticketCommentHtml(c);
     });
     commentsListEl.innerHTML = html;
@@ -2001,4 +2009,107 @@ async function loadTicketComments(ticketId) {
     if (currentTicketId !== ticketId) return;
     commentsListEl.innerHTML = '<div class="meta">' + escapeHtml(translate('support.commentLoadError', { error: String(err) })) + '</div>';
   }
+}
+
+// ── Rolagem: repasse da roda do mouse para a pagina ───────────────────────
+// Listas com rolagem propria (.comments-list e .support-tickets-list) tem
+// max-height. Ao chegar ao fim (topo/base) o WebView2 nao repassa a roda do
+// mouse para a pagina, deixando a janela "travada". Repassamos o delta
+// manualmente para o ancestral rolavel mais proximo — inclusive quando a lista
+// nem tem overflow. Nao usamos overscroll-behavior: contain de proposito: se
+// este JS nao rodar, o encadeamento nativo continua sendo a rede de seguranca.
+
+// Elementos ja instrumentados (WeakSet: os elementos vem do DOM).
+var scrollChainingBound = new WeakSet();
+
+// Valor original de scroll-behavior por elemento, enquanto uma rajada de roda
+// estiver em andamento. Uma variavel local por evento NAO serve: dois eventos
+// no mesmo frame fariam o segundo capturar "auto" (ja aplicado pelo primeiro) e
+// restaurar "auto" no fim, desligando o smooth da pagina permanentemente.
+var smoothScrollSuspensions = new WeakMap();
+
+// deltaMode: 0 = pixels, 1 = linhas, 2 = paginas.
+function normalizeWheelDelta(event) {
+  if (!event) return 0;
+  if (event.deltaMode === 1) return event.deltaY * 16;
+  if (event.deltaMode === 2) return event.deltaY * 100;
+  return event.deltaY;
+}
+
+function requestFrame(callback) {
+  if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+    window.requestAnimationFrame(callback);
+    return;
+  }
+  setTimeout(callback, 0);
+}
+
+function suspendSmoothScroll(node) {
+  if (!smoothScrollSuspensions.has(node)) {
+    smoothScrollSuspensions.set(node, node.style.scrollBehavior);
+  }
+  node.style.scrollBehavior = 'auto';
+}
+
+function restoreSmoothScroll(node) {
+  if (!smoothScrollSuspensions.has(node)) return;
+  node.style.scrollBehavior = smoothScrollSuspensions.get(node);
+  smoothScrollSuspensions.delete(node);
+}
+
+function scrollNearestScrollableAncestor(el, deltaY) {
+  var node = el ? el.parentElement : null;
+  while (node) {
+    var style = window.getComputedStyle(node);
+    var overflowY = style.overflowY;
+    if ((overflowY === 'auto' || overflowY === 'scroll') && node.scrollHeight > node.clientHeight) {
+      var before = node.scrollTop;
+      // Durante a rajada de roda o scroll-behavior: smooth reinicia a animacao
+      // a cada evento e a rolagem parece travada; rola instantaneo e restaura.
+      suspendSmoothScroll(node);
+      node.scrollTop = before + deltaY;
+      var moved = node.scrollTop !== before;
+      var target = node;
+      requestFrame(function () { restoreSmoothScroll(target); });
+      if (moved) return true;
+    }
+    node = node.parentElement;
+  }
+  return false;
+}
+
+// A lista ainda consegue rolar na direcao do delta?
+function canScrollInside(el, deltaY) {
+  if (el.scrollHeight <= el.clientHeight) return false;
+  var atTop = el.scrollTop <= 0;
+  var atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 1;
+  return deltaY < 0 ? !atTop : !atBottom;
+}
+
+// Repassa a roda para a pagina. Retorna true quando interceptou o evento.
+function forwardWheelToPage(el, event) {
+  // Eventos nao-cancelaveis (fling do trackpad) nao aceitam preventDefault;
+  // nesse caso deixamos o encadeamento nativo cuidar da rolagem.
+  if (!el || !event || event.cancelable === false) return false;
+  var delta = normalizeWheelDelta(event);
+  if (!delta) return false;
+  if (canScrollInside(el, delta)) return false; // rola dentro da lista
+  event.preventDefault();
+  scrollNearestScrollableAncestor(el, delta);
+  return true;
+}
+
+function bindScrollChaining(el) {
+  if (!el || scrollChainingBound.has(el)) return;
+  scrollChainingBound.add(el);
+  el.addEventListener('wheel', function (event) {
+    forwardWheelToPage(el, event);
+  }, { passive: false });
+}
+
+// Historico do chamado e lista de chamados: mesma estrutura (scroller aninhado
+// dentro do .page-content) e mesmo sintoma.
+function bindSupportScrollChaining() {
+  bindScrollChaining(commentsListEl);
+  bindScrollChaining(supportTicketsListEl);
 }

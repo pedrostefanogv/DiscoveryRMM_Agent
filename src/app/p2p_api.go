@@ -231,6 +231,58 @@ func (a *App) StartP2PTelemetryLoop(ctx context.Context) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+
+	a.Logs.Append(fmt.Sprintf("[p2p][api] loop de telemetria iniciado: intervalo=%s p2pEnabled=%t",
+		p2pTelemetryInterval, a.GetP2PConfig().Enabled))
+
+	// flush envia o snapshot atual (quando o P2P está habilitado) e drena o
+	// outbox. É chamado UMA VEZ imediatamente — para o dashboard não ficar sem
+	// dados por até p2pTelemetryInterval após restart/deploy — e a cada tick.
+	flush := func() {
+		if remaining, deferred, reason := a.nonCriticalBackoffWindow(); deferred {
+			if reason != "" {
+				a.Logs.Append(fmt.Sprintf("[p2p][api] envio adiado por sobrecarga do servidor: restante=%s motivo=%s", remaining.Round(time.Second), reason))
+			} else {
+				a.Logs.Append(fmt.Sprintf("[p2p][api] envio adiado por sobrecarga do servidor: restante=%s", remaining.Round(time.Second)))
+			}
+			return
+		}
+		// P2P desabilitado: não há métricas úteis a reportar. Evita KPIs
+		// zerados e "agentes ativos" fantasma no dashboard. O outbox abaixo
+		// continua sendo drenado para não perder o que já foi enfileirado.
+		if a.GetP2PConfig().Enabled {
+			if _, err := a.GetP2PSeedPlanRecommendation(ctx); err != nil {
+				a.Logs.Append("[p2p][api] falha ao atualizar seed-plan: " + err.Error())
+			}
+			// ConsolidationEngine gate: skip telemetry send if window hasn't elapsed.
+			shouldFlush := true
+			if a.ConsolEngine != nil {
+				ok, err := a.ConsolEngine.ShouldFlush("p2p_telemetry", time.Now())
+				if err != nil {
+					a.Logs.Append("[p2p][api] consolidation engine erro: " + err.Error())
+				}
+				shouldFlush = ok
+			}
+			if shouldFlush {
+				if err := a.PostP2PTelemetry(ctx); err != nil {
+					a.Logs.Append("[p2p][api] falha ao enviar telemetria: " + err.Error())
+				} else {
+					a.Logs.Append("[p2p][api] snapshot de telemetria enviado")
+					if a.ConsolEngine != nil {
+						_ = a.ConsolEngine.RecordFlush("p2p_telemetry", time.Now())
+					}
+				}
+			}
+		}
+		if err := a.drainP2PTelemetryOutbox(ctx, p2pTelemetryDrainLimit); err != nil {
+			a.Logs.Append("[p2p][api] falha ao drenar backlog de telemetria: " + err.Error())
+		}
+	}
+
+	// Envio inicial imediato: sem isso o card ficava "Sem telemetria P2P" por
+	// até 5 minutos após cada deploy/restart do serviço.
+	flush()
+
 	ticker := time.NewTicker(p2pTelemetryInterval)
 	defer ticker.Stop()
 
@@ -239,41 +291,7 @@ func (a *App) StartP2PTelemetryLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if remaining, deferred, reason := a.nonCriticalBackoffWindow(); deferred {
-				if reason != "" {
-					a.Logs.Append(fmt.Sprintf("[p2p][api] envio adiado por sobrecarga do servidor: restante=%s motivo=%s", remaining.Round(time.Second), reason))
-				} else {
-					a.Logs.Append(fmt.Sprintf("[p2p][api] envio adiado por sobrecarga do servidor: restante=%s", remaining.Round(time.Second)))
-				}
-				continue
-			}
-			// P2P desabilitado: não há métricas úteis a reportar. Evita KPIs
-			// zerados e "agentes ativos" fantasma no dashboard. O outbox abaixo
-			// continua sendo drenado para não perder o que já foi enfileirado.
-			if a.GetP2PConfig().Enabled {
-				if _, err := a.GetP2PSeedPlanRecommendation(ctx); err != nil {
-					a.Logs.Append("[p2p][api] falha ao atualizar seed-plan: " + err.Error())
-				}
-				// ConsolidationEngine gate: skip telemetry send if window hasn't elapsed.
-				shouldFlush := true
-				if a.ConsolEngine != nil {
-					ok, err := a.ConsolEngine.ShouldFlush("p2p_telemetry", time.Now())
-					if err != nil {
-						a.Logs.Append("[p2p][api] consolidation engine erro: " + err.Error())
-					}
-					shouldFlush = ok
-				}
-				if shouldFlush {
-					if err := a.PostP2PTelemetry(ctx); err != nil {
-						a.Logs.Append("[p2p][api] falha ao enviar telemetria: " + err.Error())
-					} else if a.ConsolEngine != nil {
-						_ = a.ConsolEngine.RecordFlush("p2p_telemetry", time.Now())
-					}
-				}
-			}
-			if err := a.drainP2PTelemetryOutbox(ctx, p2pTelemetryDrainLimit); err != nil {
-				a.Logs.Append("[p2p][api] falha ao drenar backlog de telemetria: " + err.Error())
-			}
+			flush()
 		}
 	}
 }
