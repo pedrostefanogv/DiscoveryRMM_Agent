@@ -1051,8 +1051,16 @@ func executeHiddenProcess(parent context.Context, timeout time.Duration, executa
 	var outputBuf bytes.Buffer
 	cmd.Stdout = &outputBuf
 	cmd.Stderr = &outputBuf
-	if err := cmd.Start(); err != nil {
-		return "", err
+	if startErr := cmd.Start(); startErr != nil {
+		// Falha de CreateProcess (ex.: ERROR_ELEVATION_REQUIRED 740 / binário sem
+		// permissão): mantém o fallback de UAC do caminho antigo — sem isso o
+		// instalador que exige admin deixava de acionar o prompt e falhava seco.
+		if isElevationRequiredExecError(startErr) {
+			if elevOut, elevErr := launchInstallerViaUAC(executable, args); elevErr == nil {
+				return elevOut, nil
+			}
+		}
+		return "", startErr
 	}
 	job, jobErr := processutil.NewJobObject()
 	if jobErr == nil {
