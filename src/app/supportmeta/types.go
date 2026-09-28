@@ -111,6 +111,9 @@ type APITicket struct {
 	RatedBy         *string `json:"ratedBy,omitempty"`
 	// RatingFeedback é o comentário textual da avaliação (CSAT).
 	RatingFeedback *string `json:"ratingFeedback,omitempty"`
+	// Template usado na abertura (nome preservado no histórico).
+	TemplateID   *string `json:"templateId,omitempty"`
+	TemplateName *string `json:"templateName,omitempty"`
 	// Snapshot markdown (somente leitura) do formulário/template enviado na abertura.
 	SubmissionSnapshotMarkdown *string `json:"submissionSnapshotMarkdown,omitempty"`
 }
@@ -182,6 +185,11 @@ type TicketTemplateQuestion struct {
 	ValidationRegex string   `json:"validationRegex"`
 	InputMask       string   `json:"inputMask"`
 	HelpText        string   `json:"helpText"`
+	// Limites usados na validação do cliente (o servidor também valida).
+	MinLength *int     `json:"minLength,omitempty"`
+	MaxLength *int     `json:"maxLength,omitempty"`
+	MinValue  *float64 `json:"minValue,omitempty"`
+	MaxValue  *float64 `json:"maxValue,omitempty"`
 }
 
 // TicketTemplateOption é um template de abertura de chamado disponível ao agente.

@@ -88,7 +88,12 @@ func (a *App) AskUserContext(ctx context.Context, question, optionsJSON, allowTe
 			}
 		}
 	}
+	// O dock da UI foi desenhado para até 6 opções (acima disso a lista fica
+	// longa e empurra a conversa). O truncamento é intencional, mas precisa
+	// ficar rastreável — era a origem silenciosa de relatos do tipo
+	// "algumas opções não apareceram".
 	if len(options) > 6 {
+		log.Printf("[chat] ask_user: %d opções recebidas; exibindo apenas as 6 primeiras pergunta=%q", len(options), question)
 		options = options[:6]
 	}
 

@@ -1097,6 +1097,12 @@ export const StatusOverview = status$0.Overview;
  * @typedef {status$0.Overview} StatusOverview
  */
 
+export const TicketAnswer = supportmeta$0.TicketAnswer;
+
+/**
+ * @typedef {supportmeta$0.TicketAnswer} TicketAnswer
+ */
+
 export const TicketComment = supportmeta$0.TicketComment;
 
 /**

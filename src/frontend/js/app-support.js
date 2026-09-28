@@ -236,6 +236,48 @@ function highlightSearchTerms(text, terms) {
   return html;
 }
 
+// Trecho da descricao em volta do primeiro termo encontrado, para o card
+// mostrar ONDE a busca casou quando o termo nao aparece no titulo/categoria.
+function descriptionSnippet(description, terms) {
+  var raw = description == null ? '' : String(description);
+  if (!raw || !terms || !terms.length) return '';
+  var folded = foldSearchTextPreserveLength(raw);
+  var at = -1;
+  var matchLength = 0;
+  terms.forEach(function (term) {
+    if (!term) return;
+    var idx = folded.indexOf(term);
+    if (idx >= 0 && (at < 0 || idx < at)) {
+      at = idx;
+      matchLength = term.length;
+    }
+  });
+  if (at < 0) return '';
+
+  var matchEnd = at + matchLength;
+  var sliceStart = Math.max(0, at - 60);
+  var sliceEnd = Math.min(raw.length, at + 90);
+  var snippet = raw.slice(sliceStart, sliceEnd);
+
+  // Corte em limite de palavra, mas nunca removendo o trecho que casou (senao
+  // o destaque sumiria do snippet).
+  if (sliceStart > 0) {
+    var firstSpace = snippet.indexOf(' ');
+    if (firstSpace > 0 && sliceStart + firstSpace + 1 <= at) {
+      snippet = snippet.slice(firstSpace + 1);
+      sliceStart = sliceStart + firstSpace + 1;
+    }
+  }
+  if (sliceEnd < raw.length) {
+    var lastSpace = snippet.lastIndexOf(' ');
+    if (lastSpace > 0 && sliceStart + lastSpace >= matchEnd) {
+      snippet = snippet.slice(0, lastSpace);
+      sliceEnd = sliceStart + lastSpace;
+    }
+  }
+  return (sliceStart > 0 ? '…' : '') + snippet.trim() + (sliceEnd < raw.length ? '…' : '');
+}
+
 function ticketMatchesStatusFilter(ticket, status) {
   if (!status || status === '__default') return !(isTicketClosed(ticket) && isTicketRated(ticket));
   if (status === '__awaiting') return isTicketAwaitingRating(ticket);
@@ -372,8 +414,12 @@ function showNewTicketForm() {
   hideTicketFormStatus();
   // Reabrir o formulario comeca limpo (modelo/campos do departamento).
   if (ticketTemplateSelectEl) ticketTemplateSelectEl.value = '';
+  lastAppliedTemplateId = '';
   clearTicketTemplateExtra();
   clearDepartmentFields();
+  // Campos do departamento sao recarregados a cada abertura do formulario
+  // (evita cache velho quando um campo e adicionado no servidor).
+  departmentFieldsCache = {};
   // Sem departamento selecionado o modelo fica desabilitado.
   renderTicketTemplateOptions();
   loadTicketOptions();
@@ -480,6 +526,242 @@ function templateInputId(prefix, key) {
   return 'tpl-' + prefix + '-' + String(key || '').replace(/[^a-zA-Z0-9_-]/g, '');
 }
 
+// ── Mascara leve (mesmos tokens do console: 9=digito, A=letra, *=alfanumerico)
+
+var MASK_TOKEN_PATTERNS = { '9': /[0-9]/, 'A': /[A-Za-z]/, '*': /[A-Za-z0-9]/ };
+
+function isMaskToken(ch) { return ch === '9' || ch === 'A' || ch === '*'; }
+
+function matchesMaskToken(token, ch) {
+  var pattern = MASK_TOKEN_PATTERNS[token];
+  return pattern ? pattern.test(ch) : false;
+}
+
+// Formata o valor digitado segundo a mascara (largura fixa, ignorando excessos
+// invalidos). A autoridade de validacao continua no servidor.
+function applyFieldMask(mask, raw) {
+  var trimmed = String(mask || '').trim();
+  if (!trimmed) return raw == null ? '' : String(raw);
+  var chars = String(raw == null ? '' : raw).split('');
+  var out = '';
+  var cursor = 0;
+  for (var i = 0; i < trimmed.length; i++) {
+    var token = trimmed.charAt(i);
+    if (isMaskToken(token)) {
+      while (cursor < chars.length && !matchesMaskToken(token, chars[cursor])) cursor++;
+      if (cursor >= chars.length) break;
+      out += chars[cursor];
+      cursor++;
+    } else {
+      if (cursor >= chars.length) break;
+      out += token;
+    }
+  }
+  return out;
+}
+
+// Numeros mascarados (ex.: "R$ 9.999.999,99"): normaliza pt-BR/en-US para o
+// valor que o Number() entende e formata o rascunho para exibicao.
+function normalizeNumericDraft(draft) {
+  var raw = String(draft == null ? '' : draft).trim();
+  if (!raw) return '';
+  var cleaned = raw.replace(/[^\d,.-]/g, '');
+  if (!cleaned) return '';
+  var lastComma = cleaned.lastIndexOf(',');
+  var lastDot = cleaned.lastIndexOf('.');
+  var negative = cleaned.charAt(0) === '-';
+  var body = cleaned.replace(/-/g, '');
+  var normalized;
+  if (lastComma >= 0 && lastComma > lastDot) {
+    normalized = body.replace(/\./g, '').replace(',', '.');
+  } else {
+    normalized = body.replace(/,/g, '');
+  }
+  return (negative ? '-' : '') + normalized;
+}
+
+function maskUsesCommaDecimals(mask) {
+  return /,\s*9+\s*$/.test(String(mask || ''));
+}
+
+// Normaliza considerando tipo e locale da mascara: em Integer, ponto/virgula
+// sao separadores de milhar; em Decimal com mascara pt-BR (sufixo ",99") o
+// ponto e milhar e a virgula e decimal. Evita "1.234" virar 1,23.
+function normalizeNumericDraftForMask(mask, draft, dataType) {
+  var raw = String(draft == null ? '' : draft).trim();
+  if (!raw) return '';
+  if (dataType === 'Integer') {
+    // Usa so a parte inteira (antes do separador decimal da mascara, se houver).
+    var integerRaw = maskUsesCommaDecimals(mask) ? raw.split(',')[0] : raw;
+    var digits = integerRaw.replace(/[^\d-]/g, '');
+    return (digits === '' || digits === '-') ? '' : digits;
+  }
+  if (!maskUsesCommaDecimals(mask)) return normalizeNumericDraft(raw);
+
+  var cleaned = raw.replace(/[^\d,.-]/g, '');
+  if (!cleaned) return '';
+  var negative = cleaned.charAt(0) === '-';
+  var body = cleaned.replace(/-/g, '');
+  var commaAt = body.lastIndexOf(',');
+  var integerText;
+  var decimalText = '';
+  if (commaAt >= 0) {
+    integerText = body.slice(0, commaAt).replace(/\./g, '');
+    decimalText = body.slice(commaAt + 1).replace(/\D/g, '');
+  } else {
+    integerText = body.replace(/\./g, '');
+  }
+  var normalized = integerText + (decimalText ? '.' + decimalText : '');
+  if (!normalized) return '';
+  return (negative ? '-' : '') + normalized;
+}
+
+function maskNumericDraft(mask, draft, dataType) {
+  var trimmedMask = String(mask || '').trim();
+  var normalized = normalizeNumericDraftForMask(trimmedMask, draft, dataType);
+  if (!normalized) return '';
+  if (!trimmedMask) return normalized;
+
+  var prefixMatch = /^[^9A*]*/.exec(trimmedMask);
+  var prefix = prefixMatch ? prefixMatch[0] : '';
+  var decimalSuffix = /,9+\s*$/.exec(trimmedMask);
+  var decimals = decimalSuffix ? decimalSuffix[0].replace(/[^9]/g, '').length : 0;
+  var negative = normalized.charAt(0) === '-';
+  var parts = normalized.replace('-', '').split('.');
+  var integerPart = parts[0] || '';
+  var decimalPart = parts[1] || '';
+  var grouped = integerPart.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+  var decimalText = decimals > 0 ? ',' + decimalPart.padEnd(decimals, '0').slice(0, decimals) : '';
+  return (negative ? '-' : '') + prefix + grouped + decimalText;
+}
+
+// Orientação humana para regex/máscara (port do fieldFormatHints do console):
+// o usuário final nunca deve ver a regex crua.
+
+var KNOWN_FORMAT_EXAMPLES = [
+  { test: /@/, example: 'nome@empresa.com' },
+  { test: /\[A-Za-z0-9\]\{12\}|\\d\{14\}/, example: 'XX.XXX.XXX/XXXX-00' },
+  { test: /\\d\{11\}/, example: '000.000.000-00' },
+  { test: /\\d\{8\}|\\d\{5\}-\?\\d\{3\}/, example: '00000-000' },
+  { test: /\(\?\\d\{2\}|\\d\{4,5\}/, example: '(00) 00000-0000' },
+  { test: /https\?:/, example: 'https://exemplo.com' },
+  { test: /\\d\{4\}.*\\d\{2\}|\\d{1,2}\/\\d{1,2}/, example: 'dd/mm/aaaa' }
+];
+
+function fieldMaskPlaceholder(mask) {
+  var trimmed = String(mask || '').trim();
+  if (!trimmed) return '';
+  return trimmed.replace(/9/g, '0').replace(/A/g, 'A').replace(/\*/g, 'X');
+}
+
+function exampleFromRegex(regex) {
+  if (!regex) return null;
+  for (var i = 0; i < KNOWN_FORMAT_EXAMPLES.length; i++) {
+    if (KNOWN_FORMAT_EXAMPLES[i].test.test(regex)) return KNOWN_FORMAT_EXAMPLES[i].example;
+  }
+  return null;
+}
+
+// Linha de orientação do campo: helpText/description + exemplo (máscara ou
+// regex conhecida). Sem regex crua.
+function describeFieldFormat(source) {
+  var help = ((source && (source.helpText || source.description)) || '').trim();
+  var maskExample = fieldMaskPlaceholder(source && source.inputMask);
+  var regexExample = maskExample ? null : exampleFromRegex(source && source.validationRegex);
+  var parts = [];
+  if (help) parts.push(help);
+  if (maskExample) parts.push('ex.: ' + maskExample);
+  else if (regexExample) parts.push('ex.: ' + regexExample);
+  return parts.length > 0 ? parts.join(' · ') : '';
+}
+
+// Mensagem de erro com orientação: "Label: informe um valor como X."
+function describeFieldFormatError(label, source) {
+  var maskExample = fieldMaskPlaceholder(source && source.inputMask);
+  var example = maskExample || exampleFromRegex(source && source.validationRegex);
+  if (example) return translate('support.formatLike', { label: label || '', example: example });
+  return translate('support.formatMismatch', { label: label || '' });
+}
+
+function attachInputMasks(containerEl) {
+  if (!containerEl) return;
+  containerEl.querySelectorAll('input[data-input-mask]').forEach(function (el) {
+    var mask = el.getAttribute('data-input-mask');
+    if (!mask) return;
+    el.addEventListener('input', function () {
+      var next = applyFieldMask(mask, el.value);
+      if (el.value !== next) el.value = next;
+    });
+  });
+
+  // Numericos: formata ao sair do campo (digitar continua livre) e o valor e
+  // normalizado no envio.
+  containerEl.querySelectorAll('input[data-number-mask]').forEach(function (el) {
+    var mask = el.getAttribute('data-number-mask');
+    if (!mask) return;
+    var type = el.getAttribute('data-number-type') || 'Decimal';
+    var format = function () {
+      var next = maskNumericDraft(mask, el.value, type);
+      if (next && el.value !== next) el.value = next;
+    };
+    el.addEventListener('blur', format);
+    el.addEventListener('change', format);
+  });
+}
+
+// Min/max dos campos numéricos no cliente: o type="text" mascarado perde os
+// limites nativos, então validamos aqui (o servidor continua validando).
+function numericBoundsFailures(items, prefix) {
+  var failures = [];
+  (items || []).forEach(function (item) {
+    if (!item || (item.minValue == null && item.maxValue == null)) return;
+    var dataType = String(item.dataType || '');
+    if (dataType !== 'Integer' && dataType !== 'Decimal') return;
+    var key = prefix === 'field' ? item.definitionId : item.key;
+    if (!key) return;
+    var value = readTemplateControlValue(templateInputId(prefix, key), dataType);
+    if (value === undefined) return;
+    var num = Number(value);
+    if (!Number.isFinite(num)) return;
+    if (item.minValue != null && num < Number(item.minValue)) {
+      failures.push(translate('support.minValueHint', { label: item.label || key, min: Number(item.minValue) }));
+      return;
+    }
+    if (item.maxValue != null && num > Number(item.maxValue)) {
+      failures.push(translate('support.maxValueHint', { label: item.label || key, max: Number(item.maxValue) }));
+    }
+  });
+  return failures;
+}
+
+// validationRegex do servidor aplicada no cliente (semântica de substring,
+// igual ao Regex.IsMatch). Regex incompatível com JS é ignorada com aviso e a
+// mensagem de erro mostra o formato esperado.
+function regexValidationFailures(items, prefix) {
+  var failures = [];
+  (items || []).forEach(function (item) {
+    if (!item || !item.validationRegex) return;
+    // O servidor aplica validationRegex apenas em Text (ValidateTextInternal).
+    if (String(item.dataType || 'Text') !== 'Text') return;
+    var key = prefix === 'field' ? item.definitionId : item.key;
+    if (!key) return;
+    var value = readTemplateControlValue(templateInputId(prefix, key), item.dataType);
+    if (value === undefined) return;
+    var text = Array.isArray(value) ? value.join(', ') : String(value);
+    var regex = null;
+    try {
+      regex = new RegExp(item.validationRegex);
+    } catch (e) {
+      console.warn('[support] validationRegex incompativel com JS (ignorada):', item.validationRegex);
+      return;
+    }
+    if (!regex.test(text)) {
+      failures.push(describeFieldFormatError(item.label || item.name || key, item));
+    }
+  });
+  return failures;
+}
+
 // Controles por CustomFieldDataType da API (Text, Integer, Decimal, Boolean,
 // Date, DateTime, Dropdown, ListBox).
 function buildTemplateFieldControl(item, idAttr) {
@@ -494,6 +776,9 @@ function buildTemplateFieldControl(item, idAttr) {
   var lengths = '';
   if (item && item.minLength !== null && item.minLength !== undefined) lengths += ' minlength="' + Number(item.minLength) + '"';
   if (item && item.maxLength !== null && item.maxLength !== undefined) lengths += ' maxlength="' + Number(item.maxLength) + '"';
+  var maskAttr = (item && item.inputMask)
+    ? ' data-input-mask="' + escapeHtmlAttr(item.inputMask) + '"'
+    : '';
 
   if (dataType === 'Dropdown' && options.length) {
     var selectHtml = '<select id="' + idAttr + '"' + (required ? ' required' : '') + '><option value="">' + escapeHtml(translate('support.select')) + '</option>';
@@ -516,11 +801,22 @@ function buildTemplateFieldControl(item, idAttr) {
       '<option value="false">' + escapeHtml(translate('support.no')) + '</option>' +
       '</select>';
   }
-  if (dataType === 'Integer') return '<input id="' + idAttr + '" type="number" step="1"' + bounds + (required ? ' required' : '') + ' />';
-  if (dataType === 'Decimal') return '<input id="' + idAttr + '" type="number" step="0.01"' + bounds + (required ? ' required' : '') + ' />';
+  var numberMask = (item && item.inputMask)
+    ? ' data-number-mask="' + escapeHtmlAttr(item.inputMask) + '"'
+    : '';
+  if (dataType === 'Integer') {
+    return numberMask
+      ? '<input id="' + idAttr + '" type="text" inputmode="numeric"' + numberMask + ' data-number-type="Integer"' + (required ? ' required' : '') + ' />'
+      : '<input id="' + idAttr + '" type="number" step="1"' + bounds + (required ? ' required' : '') + ' />';
+  }
+  if (dataType === 'Decimal') {
+    return numberMask
+      ? '<input id="' + idAttr + '" type="text" inputmode="decimal"' + numberMask + ' data-number-type="Decimal"' + (required ? ' required' : '') + ' />'
+      : '<input id="' + idAttr + '" type="number" step="0.01"' + bounds + (required ? ' required' : '') + ' />';
+  }
   if (dataType === 'Date') return '<input id="' + idAttr + '" type="date"' + (required ? ' required' : '') + ' />';
   if (dataType === 'DateTime') return '<input id="' + idAttr + '" type="datetime-local"' + (required ? ' required' : '') + ' />';
-  return '<input id="' + idAttr + '" type="text"' + lengths + (required ? ' required' : '') + ' />';
+  return '<input id="' + idAttr + '" type="text"' + lengths + maskAttr + (required ? ' required' : '') + ' />';
 }
 
 function renderTemplateGroup(titleKey, prefix, items) {
@@ -533,12 +829,16 @@ function renderTemplateGroup(titleKey, prefix, items) {
     if (!key) return;
     var idAttr = templateInputId(prefix, key);
     var label = item.label || item.name || key;
+    var formatHint = describeFieldFormat({
+      inputMask: item.inputMask,
+      validationRegex: item.validationRegex,
+      helpText: item.helpText,
+      description: item.description
+    });
     html += '<div class="form-field">' +
       '<label for="' + idAttr + '">' + escapeHtml(label) + (item.isRequired ? ' *' : '') + '</label>' +
       buildTemplateFieldControl(item, idAttr) +
-      ((item.helpText || item.description)
-        ? '<div class="meta">' + escapeHtml(item.helpText || item.description) + '</div>'
-        : '') +
+      (formatHint ? '<div class="meta">' + escapeHtml(formatHint) + '</div>' : '') +
       '</div>';
   });
   return html + '</div>';
@@ -553,6 +853,7 @@ function renderTicketTemplateExtra(template) {
   }
   ticketTemplateExtraEl.innerHTML = html;
   ticketTemplateExtraEl.classList.remove('hidden');
+  attachInputMasks(ticketTemplateExtraEl);
 }
 
 function setSelectValueIfPresent(select, value) {
@@ -602,7 +903,15 @@ function setTemplateControlValue(idAttr, dataType, value) {
     el.value = (value === true || value === 'true') ? 'true' : 'false';
     return;
   }
+  var numberMask = el.getAttribute ? el.getAttribute('data-number-mask') : '';
+  if (numberMask) {
+    el.value = maskNumericDraft(numberMask, String(value), dataType);
+    return;
+  }
   el.value = String(value);
+  // Defaults/valores restaurados tambem precisam respeitar a mascara.
+  var mask = el.getAttribute ? el.getAttribute('data-input-mask') : '';
+  if (mask) el.value = applyFieldMask(mask, el.value);
 }
 
 // Le os valores atuais dos campos antes de um re-render (para nao apagar o que
@@ -626,6 +935,7 @@ function renderDepartmentFields(fields, defaultsJson) {
   }
   ticketDepartmentFieldsEl.innerHTML = renderTemplateGroup('support.templateFields', 'field', currentDepartmentFields);
   ticketDepartmentFieldsEl.classList.remove('hidden');
+  attachInputMasks(ticketDepartmentFieldsEl);
 
   // Restaura o que ja havia sido digitado...
   currentDepartmentFields.forEach(function (field) {
@@ -657,6 +967,13 @@ function selectedDepartmentId() {
 }
 
 var departmentFieldsCache = {};
+// TTL curto: campo criado no servidor aparece sem precisar reiniciar o app.
+var DEPARTMENT_FIELDS_CACHE_TTL_MS = 2 * 60 * 1000;
+// Perfil (scheme|server|agentId) e ultimo modelo aplicado: usados para
+// invalidar caches quando o agente troca de servidor e para nao sobrescrever
+// texto digitado pelo usuario.
+var lastSupportProfileKey = '';
+var lastAppliedTemplateId = '';
 
 function loadDepartmentFields(departmentId) {
   var api = appApi();
@@ -665,15 +982,17 @@ function loadDepartmentFields(departmentId) {
     return;
   }
   var requested = departmentId;
-  if (Object.prototype.hasOwnProperty.call(departmentFieldsCache, requested)) {
-    renderDepartmentFields(departmentFieldsCache[requested], selectedTemplateDefaultsJson());
+  var cached = departmentFieldsCache[requested];
+  if (cached && cached.fields && (Date.now() - Number(cached.at || 0)) <= DEPARTMENT_FIELDS_CACHE_TTL_MS) {
+    renderDepartmentFields(cached.fields, selectedTemplateDefaultsJson());
     return;
   }
   api.GetTicketDepartmentFields(departmentId).then(function (fields) {
-    departmentFieldsCache[requested] = Array.isArray(fields) ? fields : [];
+    var list = Array.isArray(fields) ? fields : [];
+    departmentFieldsCache[requested] = { fields: list, at: Date.now() };
     // Ignora resposta tardia de um departamento que nao esta mais selecionado.
     if (selectedDepartmentId() !== requested) return;
-    renderDepartmentFields(departmentFieldsCache[requested], selectedTemplateDefaultsJson());
+    renderDepartmentFields(list, selectedTemplateDefaultsJson());
   }).catch(function (err) {
     console.warn('[support] falha ao carregar campos do departamento:', err);
     clearDepartmentFields();
@@ -694,19 +1013,35 @@ function collectDepartmentFieldValues() {
   return result;
 }
 
+// Preenche o campo apenas se o usuario nao tiver mexido nele: vazio ou ainda
+// com o valor do template aplicado anteriormente.
+function prefillIfUntouched(el, nextValue, previousValue) {
+  if (!el || !nextValue) return;
+  var current = String(el.value || '').trim();
+  if (current === '' || (previousValue != null && current === String(previousValue))) {
+    el.value = nextValue;
+  }
+}
+
 function applyTicketTemplate(templateId) {
   var template = findTicketTemplate(templateId);
+  var previousTemplate = findTicketTemplate(lastAppliedTemplateId);
   if (!template) {
     clearTicketTemplateExtra();
+    lastAppliedTemplateId = '';
     // Sem modelo, os campos do departamento continuam valendo.
     loadDepartmentFields(selectedDepartmentId());
     return;
   }
-  // Prefill a partir do modelo; o usuario ainda pode editar antes de enviar.
-  var titleEl = document.getElementById('ticketTitle');
-  if (titleEl && template.title) titleEl.value = template.title;
-  var descriptionEl = document.getElementById('ticketDescription');
-  if (descriptionEl && template.description) descriptionEl.value = template.description;
+  // Prefill sem sobrescrever o que o usuario ja digitou.
+  prefillIfUntouched(
+    document.getElementById('ticketTitle'),
+    template.title,
+    previousTemplate ? previousTemplate.title : null);
+  prefillIfUntouched(
+    document.getElementById('ticketDescription'),
+    template.description,
+    previousTemplate ? previousTemplate.description : null);
   setSelectValueIfPresent(document.getElementById('ticketCategory'), template.category);
   var priority = templatePriorityToInt(template.priority);
   if (priority) setSelectValueIfPresent(document.getElementById('ticketPriority'), String(priority));
@@ -716,6 +1051,11 @@ function applyTicketTemplate(templateId) {
   // Os campos sao do departamento (nao do template): recarrega para o
   // departamento efetivo, aplicando os defaults do modelo.
   loadDepartmentFields(selectedDepartmentId());
+  lastAppliedTemplateId = template.id;
+}
+
+function hasNumberMask(el) {
+  return !!(el && el.getAttribute && el.getAttribute('data-number-mask'));
 }
 
 function readTemplateControlValue(idAttr, dataType) {
@@ -731,11 +1071,17 @@ function readTemplateControlValue(idAttr, dataType) {
   var raw = el.value;
   if (raw === '' || raw === null || raw === undefined) return undefined;
   if (dataType === 'Integer') {
-    var intValue = parseInt(raw, 10);
+    var intRaw = hasNumberMask(el)
+      ? normalizeNumericDraftForMask(el.getAttribute('data-number-mask'), raw, dataType)
+      : raw;
+    var intValue = parseInt(intRaw, 10);
     return Number.isFinite(intValue) ? intValue : undefined;
   }
   if (dataType === 'Decimal') {
-    var decValue = parseFloat(raw);
+    var decRaw = hasNumberMask(el)
+      ? normalizeNumericDraftForMask(el.getAttribute('data-number-mask'), raw, dataType)
+      : raw;
+    var decValue = parseFloat(decRaw);
     return Number.isFinite(decValue) ? decValue : undefined;
   }
   if (dataType === 'Boolean') return raw === 'true';
@@ -837,6 +1183,14 @@ async function ensureWorkflowStates(force) {
     profileKey = 'default';
   }
 
+  if (profileKey !== lastSupportProfileKey) {
+    // Servidor/agente mudou: caches de campos/modelos do perfil antigo nao valem.
+    lastSupportProfileKey = profileKey;
+    departmentFieldsCache = {};
+    ticketTemplatesCache = [];
+    lastAppliedTemplateId = '';
+  }
+
   // Um resultado vazio tambem e cacheavel: sem isso um cliente sem estados
   // configurados refaz a chamada a cada carga da lista/detalhe.
   if (!force && workflowStatesCacheKey === profileKey && workflowStatesCache !== null
@@ -901,7 +1255,10 @@ function populateWorkflowStateOptions(states, currentWorkflowStateId) {
 
 async function loadWorkflowStatesForClose(ticket) {
   if (!closeTicketWorkflowStateSelectEl) return;
+  var ticketId = ticket ? ticket.id : '';
   var states = await ensureWorkflowStates(false);
+  // O detalhe pode ter mudado enquanto os estados carregavam.
+  if (ticketId && currentTicketId !== ticketId) return;
   if (states && states.length) {
     populateWorkflowStateOptions(states, currentTicketStateId(ticket));
     return;
@@ -1002,6 +1359,18 @@ function initSupport() {
       return;
     }
 
+    // Regras dos campos (min/max, validationRegex) no cliente; o servidor
+    // continua validando.
+    var validationMessages = []
+      .concat(numericBoundsFailures(currentDepartmentFields, 'field'))
+      .concat(numericBoundsFailures(template ? template.questions : [], 'q'))
+      .concat(regexValidationFailures(currentDepartmentFields, 'field'))
+      .concat(regexValidationFailures(template ? template.questions : [], 'q'));
+    if (validationMessages.length) {
+      showToast(validationMessages.join(' '), 'error');
+      return;
+    }
+
     var btn = document.getElementById('submitTicketBtn');
     if (btn) { btn.disabled = true; btn.textContent = translate('support.sending'); }
     showTicketFormStatus(translate('support.submittingTicket'), false);
@@ -1017,6 +1386,7 @@ function initSupport() {
       showToast(translate('support.ticketCreatedSuccess'), 'success');
       supportFormEl.reset();
       if (ticketTemplateSelectEl) ticketTemplateSelectEl.value = '';
+      lastAppliedTemplateId = '';
       clearTicketTemplateExtra();
       clearDepartmentFields();
       hideTicketFormStatus();
@@ -1241,6 +1611,15 @@ function renderSupportTicketList(tickets) {
     var awaitingBadge = isTicketAwaitingRating(t)
       ? '<span class="ticket-awaiting-rating-badge">' + escapeHtml(translate('support.awaitingRatingBadge')) + '</span>'
       : '';
+    var snippet = '';
+    if (searchTerms.length) {
+      var visibleText = foldSearchTextPreserveLength((t.title || '') + ' ' + (t.category || '') + ' ' + String(t.id || ''));
+      var descriptionText = foldSearchTextPreserveLength(t.description || '');
+      var matchedOnlyInDescription = searchTerms.some(function (term) {
+        return descriptionText.indexOf(term) >= 0 && visibleText.indexOf(term) < 0;
+      });
+      if (matchedOnlyInDescription) snippet = descriptionSnippet(t.description, searchTerms);
+    }
     return '<button class="support-ticket-card" data-id="' + escapeHtml(t.id) + '">' +
       '<div class="ticket-subject">' + highlightSearchTerms(t.title || translate('support.untitledTicket'), searchTerms) + '</div>' +
       '<div class="ticket-header">' +
@@ -1255,6 +1634,7 @@ function renderSupportTicketList(tickets) {
         (lastActivity ? '<span>' + escapeHtml(lastActivity) + '</span>' : '') +
         (ratingText ? '<span>' + escapeHtml(ratingText) + '</span>' : '') +
       '</div>' +
+      (snippet ? '<div class="ticket-snippet">' + highlightSearchTerms(snippet, searchTerms) + '</div>' : '') +
     '</button>';
   }).join('');
   supportTicketsById = cache;
@@ -1345,6 +1725,7 @@ function renderTicketDetail(t) {
   if (ticketDetailMetaEl) {
     ticketDetailMetaEl.innerHTML =
       (cat ? '<span>' + escapeHtml(cat) + '</span>' : '') +
+      (t.templateName ? '<span>' + escapeHtml(translate('support.templateLabel', { name: t.templateName })) + '</span>' : '') +
       (date ? '<span>' + escapeHtml(translate('support.ticketOpenedAt', { date: date })) + '</span>' : '') +
       (lastActivity ? '<span>' + escapeHtml(lastActivity) + '</span>' : '') +
       (rating > 0 ? '<span>' + escapeHtml(translate('support.ratingDisplay', { rating: renderStars(rating) })) + '</span>' : '') +
@@ -1502,28 +1883,94 @@ function formatFieldValue(rawJson) {
   return String(value);
 }
 
+function ticketDataRow(label, value) {
+  var text = (value === null || value === undefined || value === '') ? '—' : String(value);
+  return '<div class="ticket-field-row">' +
+    '<span class="ticket-field-label">' + escapeHtml(label || '') + '</span>' +
+    '<span class="ticket-field-value">' + escapeHtml(text) + '</span>' +
+  '</div>';
+}
+
 async function loadTicketFields(ticketId) {
   if (!ticketCustomFieldsEl) return;
   ticketCustomFieldsEl.classList.add('hidden');
   ticketCustomFieldsEl.innerHTML = '';
   if (!ticketId) return;
   try {
-    var fields = await appApi().GetTicketFields(ticketId);
-    if (!fields || !fields.length || currentTicketId !== ticketId) return;
-    var rows = fields.map(function (f) {
-      var label = f.label || f.name || '';
-      var value = formatFieldValue(f.valueJson);
-      return '<div class="ticket-field-row">' +
-        '<span class="ticket-field-label">' + escapeHtml(label) + '</span>' +
-        '<span class="ticket-field-value">' + escapeHtml(value || '—') + '</span>' +
-      '</div>';
-    }).join('');
-    ticketCustomFieldsEl.innerHTML =
-      '<h4>' + escapeHtml(translate('support.ticketFields')) + '</h4>' + rows;
+    var api = appApi();
+    // Uma falha (ex.: /answers indisponivel) nao pode esconder a outra secao.
+    var fieldsPromise = typeof api.GetTicketFields === 'function'
+      ? api.GetTicketFields(ticketId).catch(function () { return []; })
+      : Promise.resolve([]);
+    var answersPromise = typeof api.GetTicketAnswers === 'function'
+      ? api.GetTicketAnswers(ticketId).catch(function () { return []; })
+      : Promise.resolve([]);
+    var results = await Promise.all([fieldsPromise, answersPromise]);
+    if (currentTicketId !== ticketId) return;
+
+    var fields = Array.isArray(results[0]) ? results[0] : [];
+    var answers = Array.isArray(results[1]) ? results[1] : [];
+    if (!fields.length && !answers.length) return;
+
+    var parts = ['<h4>' + escapeHtml(translate('support.ticketFields')) + '</h4>'];
+    if (fields.length) {
+      parts.push('<div class="ticket-fields-group-title">' + escapeHtml(translate('support.templateFields')) + '</div>');
+      parts.push(fields.map(function (f) {
+        return ticketDataRow(f.label || f.name, formatFieldValue(f.valueJson));
+      }).join(''));
+    }
+    if (answers.length) {
+      parts.push('<div class="ticket-fields-group-title">' + escapeHtml(translate('support.ticketAnswers')) + '</div>');
+      parts.push(answers.map(function (a) {
+        return ticketDataRow(a.questionLabel || a.questionKey, a.valueText);
+      }).join(''));
+    }
+    ticketCustomFieldsEl.innerHTML = parts.join('');
     ticketCustomFieldsEl.classList.remove('hidden');
   } catch (err) {
-    console.warn('[support] falha ao carregar campos do chamado:', err);
+    console.warn('[support] falha ao carregar dados do chamado:', err);
   }
+}
+
+// ── Conversa do chamado (layout estilo chat) ───────────────────────────────
+// Comentarios criados pelo usuario local/agent ficam a direita; os do suporte
+// remoto (tecnico/portal) a esquerda — mesma linguagem visual do chat do app.
+
+function isOwnTicketComment(comment) {
+  return String((comment && comment.author) || '').trim().toLowerCase() === 'agent';
+}
+
+function formatChatDay(value) {
+  var d = value instanceof Date ? value : new Date(value);
+  if (isNaN(d.getTime())) return '';
+  try {
+    return d.toLocaleDateString(getAppLocaleTag(getAppLocale()));
+  } catch (e) {
+    return d.toLocaleDateString();
+  }
+}
+
+function formatChatTime(value) {
+  var d = value instanceof Date ? value : new Date(value);
+  if (isNaN(d.getTime())) return '';
+  try {
+    return d.toLocaleTimeString(getAppLocaleTag(getAppLocale()), { hour: '2-digit', minute: '2-digit' });
+  } catch (e) {
+    return d.toLocaleTimeString();
+  }
+}
+
+function ticketCommentHtml(c) {
+  var own = isOwnTicketComment(c);
+  var author = own ? translate('support.you') : (c.author || translate('support.supportTeam'));
+  var time = formatChatTime(c.createdAt);
+  return '<div class="ticket-msg ' + (own ? 'own' : 'other') + '">' +
+    '<div class="ticket-bubble">' + escapeHtml(c.content) + '</div>' +
+    '<div class="ticket-msg-meta">' +
+      '<span class="ticket-msg-author">' + escapeHtml(author) + '</span>' +
+      (time ? '<span class="ticket-msg-time">' + escapeHtml(time) + '</span>' : '') +
+    '</div>' +
+  '</div>';
 }
 
 async function loadTicketComments(ticketId) {
@@ -1531,24 +1978,27 @@ async function loadTicketComments(ticketId) {
   commentsListEl.innerHTML = '<div class="meta">' + escapeHtml(translate('support.loadingComments')) + '</div>';
   try {
     var comments = await appApi().GetTicketComments(ticketId);
+    // Ignora resposta tardia de um chamado que nao esta mais aberto (troca rapida).
+    if (currentTicketId !== ticketId) return;
     if (!comments || !comments.length) {
       commentsListEl.innerHTML = '<div class="meta">' + escapeHtml(translate('support.noComments')) + '</div>';
       return;
     }
-    commentsListEl.innerHTML = comments.map(function (c) {
-      var date = c.createdAt ? formatDate(c.createdAt, '') : '';
-      return '<div class="comment-card' + (c.isInternal ? ' comment-internal' : '') + '">' +
-        '<div class="comment-header">' +
-          '<span class="comment-author">' + escapeHtml(c.author || translate('support.user')) + '</span>' +
-          (date ? '<span class="comment-date">' + escapeHtml(date) + '</span>' : '') +
-          (c.isInternal ? '<span class="comment-internal-badge">' + escapeHtml(translate('support.internal')) + '</span>' : '') +
-        '</div>' +
-        '<div class="comment-content">' + escapeHtml(c.content) + '</div>' +
-      '</div>';
-    }).join('');
+    var html = '';
+    var lastDay = '';
+    comments.forEach(function (c) {
+      var day = formatChatDay(c.createdAt);
+      if (day && day !== lastDay) {
+        lastDay = day;
+        html += '<div class="ticket-day"><span>' + escapeHtml(day) + '</span></div>';
+      }
+      html += ticketCommentHtml(c);
+    });
+    commentsListEl.innerHTML = html;
     // Rola para o comentario mais recente
     commentsListEl.scrollTop = commentsListEl.scrollHeight;
   } catch (err) {
+    if (currentTicketId !== ticketId) return;
     commentsListEl.innerHTML = '<div class="meta">' + escapeHtml(translate('support.commentLoadError', { error: String(err) })) + '</div>';
   }
 }

@@ -71,6 +71,14 @@ export class APITicket {
              */
             this["siteId"] = undefined;
         }
+        if (/** @type {any} */(false)) {
+            /**
+             * DepartmentID é o departamento do chamado; a IA usa em get_department_fields.
+             * @member
+             * @type {string | null | undefined}
+             */
+            this["departmentId"] = undefined;
+        }
         if (!("createdAt" in $$source)) {
             /**
              * @member
@@ -140,6 +148,21 @@ export class APITicket {
         }
         if (/** @type {any} */(false)) {
             /**
+             * Template usado na abertura (nome preservado no histórico).
+             * @member
+             * @type {string | null | undefined}
+             */
+            this["templateId"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | null | undefined}
+             */
+            this["templateName"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
              * Snapshot markdown (somente leitura) do formulário/template enviado na abertura.
              * @member
              * @type {string | null | undefined}
@@ -156,10 +179,10 @@ export class APITicket {
      * @returns {APITicket}
      */
     static createFrom($$source = {}) {
-        const $$createField11_0 = $$createType1;
+        const $$createField12_0 = $$createType1;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("workflowState" in $$parsedSource) {
-            $$parsedSource["workflowState"] = $$createField11_0($$parsedSource["workflowState"]);
+            $$parsedSource["workflowState"] = $$createField12_0($$parsedSource["workflowState"]);
         }
         return new APITicket(/** @type {Partial<APITicket>} */($$parsedSource));
     }
@@ -667,6 +690,66 @@ export class KnowledgePage {
             $$parsedSource["children"] = $$createField7_0($$parsedSource["children"]);
         }
         return new KnowledgePage(/** @type {Partial<KnowledgePage>} */($$parsedSource));
+    }
+}
+
+/**
+ * TicketAnswer é uma resposta do mini questionário do template de um chamado
+ * (detalhe do agent, somente leitura).
+ */
+export class TicketAnswer {
+    /**
+     * Creates a new TicketAnswer instance.
+     * @param {Partial<TicketAnswer>} [$$source = {}] - The source object to create the TicketAnswer.
+     */
+    constructor($$source = {}) {
+        if (!("id" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["id"] = "";
+        }
+        if (!("questionKey" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["questionKey"] = "";
+        }
+        if (!("questionLabel" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["questionLabel"] = "";
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["valueText"] = undefined;
+        }
+        if (!("createdAt" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["createdAt"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new TicketAnswer instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {TicketAnswer}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new TicketAnswer(/** @type {Partial<TicketAnswer>} */($$parsedSource));
     }
 }
 
@@ -1296,6 +1379,35 @@ export class TicketTemplateQuestion {
              * @type {string}
              */
             this["helpText"] = "";
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * Limites usados na validação do cliente (o servidor também valida).
+             * @member
+             * @type {number | null | undefined}
+             */
+            this["minLength"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {number | null | undefined}
+             */
+            this["maxLength"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {number | null | undefined}
+             */
+            this["minValue"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {number | null | undefined}
+             */
+            this["maxValue"] = undefined;
         }
 
         Object.assign(this, $$source);

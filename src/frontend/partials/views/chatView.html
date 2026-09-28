@@ -51,11 +51,20 @@
     <!-- Dock de pergunta interativa (ask_user): enquanto houver pergunta
          pendente, substitui a área de digitação. Sempre oferece campo de
          texto livre além das opções sugeridas. -->
-    <div id="chatQuestionDock" class="chat-question-dock hidden" role="group" aria-live="polite">
+    <div id="chatQuestionDock" class="chat-question-dock hidden" role="group" aria-live="polite"
+      data-i18n-aria-label="chat.questionDockBadge">
       <div class="chat-question-dock-head">
         <span class="chat-question-dock-badge" data-i18n="chat.questionDockBadge">A IA precisa da sua resposta</span>
-        <button id="chatQuestionDockStopBtn" class="btn subtle btn-xs chat-question-dock-stop" type="button"
-          data-i18n="action.stop">Parar</button>
+        <!-- Botão de cancelar compacto (ícone + rótulo). O data-i18n fica no
+             span interno: applyI18n escreve textContent e apagaria o SVG. -->
+        <button id="chatQuestionDockStopBtn" class="btn subtle chat-question-dock-stop" type="button" title="Parar"
+          aria-label="Parar" data-i18n-title="action.stop" data-i18n-aria-label="action.stop">
+          <svg class="chat-question-dock-stop-icon" viewBox="0 0 24 24" width="10" height="10" fill="currentColor"
+            aria-hidden="true">
+            <rect x="5.5" y="5.5" width="13" height="13" rx="2.5" />
+          </svg>
+          <span class="chat-question-dock-stop-label" data-i18n="action.stop">Parar</span>
+        </button>
       </div>
       <div id="chatQuestionDockText" class="chat-question-dock-text"></div>
       <div id="chatQuestionDockOptions" class="chat-question-dock-options"></div>
@@ -63,7 +72,7 @@
         <input id="chatQuestionDockInput" type="text" class="chat-question-dock-input"
           placeholder="Ou digite sua própria resposta..." data-i18n-placeholder="chat.questionDockPlaceholder"
           spellcheck="true" data-app-lang="true" autocapitalize="sentences" autocomplete="on" />
-        <button id="chatQuestionDockSendBtn" class="btn primary btn-xs chat-question-dock-send" type="button"
+        <button id="chatQuestionDockSendBtn" class="btn primary chat-question-dock-send" type="button"
           data-i18n="action.send">Enviar</button>
       </div>
     </div>

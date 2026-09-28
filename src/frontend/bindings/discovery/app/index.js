@@ -48,6 +48,7 @@ export {
     RealtimeStatus,
     RuntimeFlags,
     StatusOverview,
+    TicketAnswer,
     TicketComment,
     TicketDepartmentField,
     TicketFieldValue,

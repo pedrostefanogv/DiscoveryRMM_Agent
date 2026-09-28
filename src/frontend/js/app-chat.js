@@ -1003,9 +1003,16 @@ function endPendingQuestion() {
 }
 
 // ensureChatQuestionDockEls resolve os elementos do dock sob demanda e faz o
-// binding único dos handlers (input Enter, botão Enviar e Parar).
+// binding único dos handlers (Enter/Esc no input, botão Enviar e Parar).
 function ensureChatQuestionDockEls() {
-  if (chatQuestionDock !== null) return;
+  // Revalida a referência cacheada: se o partial do chat for reinjetado
+  // (hot-reload/dev), o nó antigo fica órfão e o dock pararia de responder.
+  if (chatQuestionDock !== null && document.body.contains(chatQuestionDock)) return;
+  chatQuestionDockText = null;
+  chatQuestionDockOptions = null;
+  chatQuestionDockInput = null;
+  chatQuestionDockSendBtn = null;
+  chatQuestionDockStopBtn = null;
   chatQuestionDock = document.getElementById("chatQuestionDock");
   chatInputWrapEl = document.getElementById("chatInputWrap");
   if (!chatQuestionDock) return;
@@ -1020,6 +1027,12 @@ function ensureChatQuestionDockEls() {
       if (e.key === "Enter") {
         e.preventDefault();
         submitChatQuestionDockText();
+        return;
+      }
+      // Esc cancela a pergunta pelo mesmo caminho do botão Parar.
+      if (e.key === "Escape") {
+        e.preventDefault();
+        requestStopChatStream();
       }
     });
   }
@@ -1050,6 +1063,39 @@ function submitChatQuestionDockText() {
   answerChatQuestion(question.id, answer);
 }
 
+// normalizeChatQuestionOptions aceita options como array (formato atual do
+// evento chat:question), string JSON ("[\"a\",\"b\"]") ou string delimitada
+// ("a; b") — assim a pergunta nunca fica sem opções por diferença de versão
+// entre backend/UI ou por reemissão. Deduplica (case-insensitive) e descarta
+// entradas vazias.
+function normalizeChatQuestionOptions(options) {
+  var raw = options;
+  if (typeof raw === "string") {
+    var text = raw.trim();
+    if (!text) return [];
+    if (text.charAt(0) === "[") {
+      try {
+        raw = JSON.parse(text);
+      } catch (_) {
+        raw = null;
+      }
+    }
+    if (!Array.isArray(raw)) raw = text.split(/[;\n]/);
+  }
+  if (!Array.isArray(raw)) return [];
+  var out = [];
+  var seen = {};
+  for (var i = 0; i < raw.length; i += 1) {
+    var label = String(raw[i] == null ? "" : raw[i]).trim();
+    if (!label) continue;
+    var key = label.toLowerCase();
+    if (seen[key]) continue;
+    seen[key] = 1;
+    out.push(label);
+  }
+  return out;
+}
+
 // renderChatQuestionDock exibe a pergunta mais antiga pendente no dock,
 // escondendo a área de digitação; sem pendências, restaura o compositor.
 function renderChatQuestionDock() {
@@ -1065,12 +1111,17 @@ function renderChatQuestionDock() {
   chatQuestionDockText.innerHTML = renderAssistantMarkdown(question.question);
   chatQuestionDockOptions.innerHTML = "";
 
-  // Opções como botões de resposta rápida.
-  if (question.options && question.options.length > 0) {
-    question.options.forEach(function (opt) {
+  // Opções como botões de resposta rápida (sempre normalizadas antes).
+  var questionOptions = normalizeChatQuestionOptions(question.options);
+  if (questionOptions.length > 0) {
+    questionOptions.forEach(function (opt) {
       var btn = document.createElement("button");
       btn.type = "button";
-      btn.className = "btn subtle btn-xs";
+      // Classe própria do dock: NÃO usa btn-xs (que força width:100% e
+      // transforma cada opção numa barra de largura total, estourando o card).
+      btn.className = "btn subtle chat-question-option";
+      // Rótulo longo ganha tooltip com o texto completo.
+      btn.title = String(opt);
       btn.innerHTML = formatInlineChatMarkdown(opt);
       btn.addEventListener("click", function () {
         btn.classList.add("chat-question-option-selected");

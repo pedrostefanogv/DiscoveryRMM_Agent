@@ -10,6 +10,7 @@ export {
     CreateTicketInput,
     KnowledgeArticle,
     KnowledgePage,
+    TicketAnswer,
     TicketComment,
     TicketDepartmentField,
     TicketFieldValue,

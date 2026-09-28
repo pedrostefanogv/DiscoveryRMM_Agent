@@ -193,3 +193,42 @@ func TestCloseSupportTicket_RefetchesFullTicket(t *testing.T) {
 		t.Fatal("closedAt deveria vir do detalhe relido")
 	}
 }
+
+// GetTicketAnswers faz GET no /answers, com auth do agent, e decodifica a lista.
+func TestGetTicketAnswers_FetchesAndParses(t *testing.T) {
+	var gotPath string
+	var gotAgentID string
+
+	svc := newLifecycleService(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/tickets/"+lifecycleTicketID+"/answers") {
+			gotPath = r.URL.Path
+			gotAgentID = r.Header.Get("X-Agent-ID")
+			_, _ = w.Write([]byte(`[{"id":"a1","questionKey":"tipo","questionLabel":"Tipo de equipamento","valueText":"Notebook","createdAt":"2026-10-01T10:00:00Z"}]`))
+			return
+		}
+		http.NotFound(w, r)
+	})
+
+	answers, err := svc.GetTicketAnswers(lifecycleTicketID)
+	if err != nil {
+		t.Fatalf("busca de respostas falhou: %v", err)
+	}
+	if len(answers) != 1 {
+		t.Fatalf("esperava 1 resposta, got=%d", len(answers))
+	}
+	if answers[0].QuestionLabel != "Tipo de equipamento" || answers[0].ValueText != "Notebook" {
+		t.Fatalf("resposta inesperada: %+v", answers[0])
+	}
+	if !strings.HasSuffix(gotPath, "/api/v1/agent-auth/me/tickets/"+lifecycleTicketID+"/answers") {
+		t.Fatalf("rota inesperada: %q", gotPath)
+	}
+	if gotAgentID != lifecycleAgentID {
+		t.Fatalf("X-Agent-ID ausente/incorreto: %q", gotAgentID)
+	}
+
+	// ticketId invalido falha antes de qualquer HTTP.
+	if _, err := svc.GetTicketAnswers("nao-e-guid"); err == nil {
+		t.Fatal("ticketId invalido deveria falhar")
+	}
+}
