@@ -239,20 +239,42 @@ func (r *Runtime) natsCommandHandler(ctx context.Context, nc *nats.Conn, cfg Con
 			return
 		}
 
+		// Dedupe:
+		//  - fan-out: idempotencyKey|dispatchId (mensagem única para N agentes
+		//    com replay JetStream);
+		//  - comando de UM agente: CommandId. O servidor REENTREGA o comando
+		//    enquanto não houver confirmação (agente estava offline), então sem
+		//    dedupe um script/restart seria reexecutado a cada reentrega.
 		dedupeKey := ""
+		dedupeTTL := fanoutDedupeTTL(expiresAt, now)
 		if route.isFanout() {
 			dedupeKey = fanoutDedupeKey(env)
-			ttl := fanoutDedupeTTL(expiresAt, now)
-			cachedResult, shouldExecute := r.reserveFanoutDispatch(dedupeKey, ttl)
+		} else {
+			dedupeKey = agentCommandDedupeKey(env)
+			if dedupeKey != "" {
+				dedupeTTL = commandAgentDedupeTTL
+			}
+		}
+
+		if dedupeKey != "" {
+			cachedResult, shouldExecute := r.reserveFanoutDispatch(dedupeKey, dedupeTTL)
 			if !shouldExecute {
-				r.logf("comando fan-out duplicado ignorado dispatchId=%s idempotencyKey=%s scope=%s subject=%s", env.DispatchID, env.IdempotencyKey, route, strings.TrimSpace(msg.Subject))
-				if requiresAck && cachedResult != nil {
+				r.logf("comando duplicado ignorado (dedupe) cmdId=%s dispatchId=%s scope=%s subject=%s", strings.TrimSpace(env.CommandID), env.DispatchID, route, strings.TrimSpace(msg.Subject))
+
+				// Republica o resultado já obtido: o servidor pode ter perdido a
+				// primeira resposta (queda de conexão) e continua reenviando.
+				if cachedResult != nil {
 					if err := publishJSONResult(nc, subjects.Result, cachedResult); err != nil {
-						r.logf("falha ao republicar result cacheado para comando fan-out duplicado dispatchId=%s: %v", env.DispatchID, err)
+						r.logf("falha ao republicar result cacheado cmdId=%s: %v", strings.TrimSpace(env.CommandID), err)
 						return
 					}
+				}
+
+				// JetStream: sem resultado cacheado a mensagem NÃO é acked, para
+				// que o broker reentregue quando a execução em curso terminar.
+				if requiresAck && cachedResult != nil {
 					if err := ackNATSMessage(msg); err != nil {
-						r.logf("falha ao ack de comando fan-out duplicado dispatchId=%s: %v", env.DispatchID, err)
+						r.logf("falha ao ack de comando duplicado cmdId=%s: %v", strings.TrimSpace(env.CommandID), err)
 					}
 				}
 				return
@@ -382,6 +404,16 @@ func isCommandExpired(expiresAt *time.Time, now time.Time) bool {
 
 func fanoutDedupeKey(env natsCommandEnvelope) string {
 	return strings.ToLower(strings.TrimSpace(env.IdempotencyKey)) + "|" + strings.ToLower(strings.TrimSpace(env.DispatchID))
+}
+
+// agentCommandDedupeKey identifica um comando endereçado a um único agente.
+// Retorna "" quando o envelope não traz CommandId (nada a deduplicar).
+func agentCommandDedupeKey(env natsCommandEnvelope) string {
+	commandID := strings.ToLower(strings.TrimSpace(env.CommandID))
+	if commandID == "" {
+		return ""
+	}
+	return "agent-cmd:" + commandID
 }
 
 func fanoutDedupeTTL(expiresAt *time.Time, now time.Time) time.Duration {

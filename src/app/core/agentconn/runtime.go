@@ -53,6 +53,10 @@ const (
 	commandFanoutDedupeDefaultTTL = 30 * time.Minute
 	commandFanoutDedupeMaxTTL     = 24 * time.Hour
 	commandFanoutDedupeMinTTL     = 1 * time.Minute
+
+	// Janela de dedupe para comandos de UM agente (reentregues pelo servidor
+	// enquanto o agente não confirma). Cobre a janela de retenção da reentrega.
+	commandAgentDedupeTTL = 24 * time.Hour
 )
 
 var guidPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
