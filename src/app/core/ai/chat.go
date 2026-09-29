@@ -201,8 +201,8 @@ func (s *Service) GetConfig() Config {
 // iniciar um turno e ao final dele — nunca no meio do loop (os índices de
 // lastAssistantContentSince ficariam deslocados).
 const (
-	maxHistoryMessages  = 80
-	trimHistoryTo       = 60
+	maxHistoryMessages = 80
+	trimHistoryTo      = 60
 )
 
 func appendHistoryLocked(s *Service, m Message) {
@@ -336,14 +336,15 @@ Para ver atualizacoes pendentes: use get_pending_updates.
 IMPORTANTE — SEMPRE que o usuario pedir para abrir chamado, ticket, reportar problema ou solicitar suporte, use as ferramentas abaixo. NUNCA oriente o usuario a acessar portal web, ligar para central ou enviar e-mail.
 Fluxo correto para criar um chamado:
 1. get_agent_info — obtenha hostname, IP, SO e versao da maquina
+1b. list_tickets — VERIFICACAO ANTIDUPLICIDADE (obrigatoria): veja se JA existe chamado ABERTO (isOpen=true, ou seja ClosedAt nulo) sobre o MESMO assunto; se truncated=true existem chamados fora do recorte. Se existir, NAO chame create_ticket — informe o usuario que ja ha um chamado aberto sobre o assunto e ofereca add_ticket_comment no chamado existente. So abra chamado novo se o usuario disser explicitamente que e um problema diferente.
 2b. list_departments — escolha o DEPARTAMENTO responsavel pelo atendimento (define quem atende e o SLA): use o que melhor se enquadra no relato do usuario. Se houver duvida, chame ask_user mostrando os departamentos e so abra o chamado depois da resposta.
 2. list_ticket_templates — verifique se existem MODELOS de abertura. Ao apresentar/rotular os modelos use o campo 'title' (nome exibido); 'name' e a CHAVE tecnica do modelo (nao mostre para o usuario). O usuario pode escolher um modelo OU abrir normalmente sem template — nunca force.
    - Se houver modelos, apresente as opcoes (preferencialmente com interface A2UI) e, ao escolher, monte o formulario com as PERGUNTAS do modelo (array 'questions').
 3. Monte o titulo no formato "<problema> — <hostname>" (ex: "Computador lento — DESKTOP-XPTO")
 4. Na descricao, inclua automaticamente os dados da maquina (hostname, SO, IP) alem do problema relatado
 5. Escolha a prioridade: 1=Baixa (duvidas gerais), 2=Media (problemas parciais), 3=Alta (impede trabalho), 4=Critica (sistema parado)
-6. create_ticket(title, description, departmentId, priority, category, templateId?, answers?, customFields?) — crie o chamado; departmentId e OBRIGATORIO e mostre o numero do protocolo. O parametro 'answers' leva as respostas do QUESTIONARIO do template (key->valor) e 'customFields' os CAMPOS do departamento (definitionId->valor).
-- list_tickets — lista chamados de suporte deste agente/maquina
+6. create_ticket(title, description, departmentId, priority, category, templateId?, answers?, customFields?) — crie o chamado (somente apos a verificacao de duplicidade do passo 1b); departmentId e OBRIGATORIO e mostre o numero do protocolo. O parametro 'answers' leva as respostas do QUESTIONARIO do template (key->valor) e 'customFields' os CAMPOS do departamento (definitionId->valor).
+- list_tickets — lista os chamados deste agente/maquina em resumo (abertos primeiro; aberto = isOpen=true / ClosedAt nulo; contadores total/openCount/returned/truncated). Use ANTES de create_ticket para nao abrir chamado duplicado
 - get_ticket_details(ticketId) — detalhes de um chamado especifico
 - list_ticket_templates — lista modelos de abertura de chamado disponiveis (com campos personalizados)
 - list_departments — lista os departamentos disponiveis (id + nome) para escolher o responsavel pelo atendimento
@@ -519,12 +520,12 @@ func (s *Service) Send(ctx context.Context, userMessage string) (string, error) 
 }
 
 type agentChatRequest struct {
-	Message   string           `json:"message"`
-	SessionID *string          `json:"sessionId,omitempty"`
-	MaxTokens *int             `json:"maxTokens,omitempty"`
+	Message   string  `json:"message"`
+	SessionID *string `json:"sessionId,omitempty"`
+	MaxTokens *int    `json:"maxTokens,omitempty"`
 	// Model é opcional (pass-through, Fase 3): o servidor pode usar para
 	// rotear o provedor LLM (ex.: OpenRouter). Servidores antigos ignoram.
-	Model     string           `json:"model,omitempty"`
+	Model string `json:"model,omitempty"`
 	// Tools NÃO é populado pelo builder no sync (M7): o endpoint sync não
 	// suporta function calling e receber tools só induzia o LLM a emitir
 	// invokes como texto (vazamentos DSML). O builder do stream single-round

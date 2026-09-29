@@ -612,12 +612,18 @@ func (m *Manager) sendControl(session *Session, typ string, payload map[string]a
 	if session == nil || m.natsStream == nil {
 		return
 	}
+	var seq uint64
 	if session.controlSeqMu != nil {
+		// O seq DEVE ser lido sob o mesmo mutex da incrementação: a leitura
+		// fora do lock é uma data race real (detectada com -race) entre a
+		// goroutine de liveness/watchdog e a que encerra a sessão.
 		session.controlSeqMu.Lock()
 		session.controlSeq++
+		seq = session.controlSeq
 		session.controlSeqMu.Unlock()
+	} else {
+		seq = session.controlSeq
 	}
-	seq := session.controlSeq
 
 	env := sessioncontrol.NewEnvelope(sessioncontrol.RoleAgent, typ, session.ID, seq, payload)
 	raw, err := encodeRemoteSessionControl(env)
@@ -859,7 +865,16 @@ func (m *Manager) runTerminalSession(ctx context.Context, session *Session) {
 	if err != nil {
 		log.Printf("[remote-session-term] ERRO ao iniciar console (conptyDisponivel=%v): %v",
 			terminal.IsConPTYAvailable(), err)
-		m.publishEvent(session.ID, "error", map[string]string{"error": err.Error()})
+		// A falha de start era INVISIVEL: o evento ia para .event (sem nenhum
+		// assinante no viewer) e a sessao continuava "ativa" — o operador via
+		// um terminal vazio sem mensagem. Agora o erro vai no .term.out (que o
+		// viewer assina) e a sessao e encerrada, disparando o evento closed do
+		// canal .control para a liveness parar de tentar reconectar.
+		sessTerm.PublishError("terminal_start_failed", err.Error())
+		m.publishEvent(session.ID, "error", map[string]string{"scope": "terminal", "error": err.Error()})
+		m.mu.Lock()
+		m.closeSessionLocked(session.ID, "terminal-start-failed")
+		m.mu.Unlock()
 		return
 	}
 
@@ -870,21 +885,23 @@ func (m *Manager) runTerminalSession(ctx context.Context, session *Session) {
 			availableShells = append(availableShells, "wsl:"+d)
 		}
 	}
-	readyPayload, _ := json.Marshal(map[string]any{
+
+	// Dimensoes EFETIVAS do console: Start aplica clamp, entao o valor pedido
+	// pelo servidor pode nao ser o que o ConPTY/console recebeu.
+	ready := map[string]any{
 		"shells":    availableShells,
 		"consoleId": console.ID,
-		"termCols":  cols,
-		"termRows":  rows,
+		"termCols":  console.Cols,
+		"termRows":  console.Rows,
 		"backend":   terminal.ShellBackendName(console.Shell),
-	})
-	m.natsStream.PublishTermReady(session.ID, map[string]any{
-		"shells":    availableShells,
-		"consoleId": console.ID,
-		"termCols":  cols,
-		"termRows":  rows,
-		"backend":   terminal.ShellBackendName(console.Shell),
-	})
-	// Guarda o payload para republicar no primeiro term.in (handshake).
+	}
+	// Binario realmente resolvido (pwsh vs powershell.exe) — diagnostico.
+	if _, shellPath := terminal.ResolveShell(defaultShell); shellPath != "" {
+		ready["shellPath"] = shellPath
+	}
+	m.natsStream.PublishTermReady(session.ID, ready)
+	// Guarda o payload para republicar no handshake (hello) e em cada resize.
+	readyPayload, _ := json.Marshal(ready)
 	sessTerm.SetReadyPayload(readyPayload)
 	log.Printf("[remote-session-term] console pronto para sessao %s (consoleId=%s, shells=%v)\n",
 		session.ID, console.ID, availableShells)

@@ -28,7 +28,101 @@ const (
 	// o teto, o flush é imediato (o payload resultante ~700KB após base64+
 	// JSON cabe folgado no max payload do NATS, 2MB — ver nats_stream.go).
 	maxCoalesceBufferBytes = 512 * 1024
+
+	// termReplayMaxBytes limita o anel de replay por sessão. O NATS core é
+	// fire-and-forget: output publicado enquanto o viewer está desconectado não
+	// é recebido por ninguém e se perderia para sempre (o MeshCentral contorna
+	// isso derrubando o terminal junto com o WebSocket; aqui a sessão sobrevive
+	// e o viewer reconecta). Guardamos os últimos frames de term.out para
+	// reenviar no handshake (term.in "hello" com lastSeq).
+	termReplayMaxBytes = 512 * 1024
+
+	// Limites de dimensão aceitos do servidor. 0/negativo já vira default; aqui
+	// cobrimos o extremo oposto (valor absurdo não pode ir ao ConPTY/console).
+	termMinCols, termMaxCols = 20, 500
+	termMinRows, termMaxRows = 5, 200
 )
+
+// clampTermDims limita cols/rows à faixa suportada. Valores fora da faixa são
+// aproximados para o limite mais próximo (nunca rejeitados: o terminal precisa
+// abrir).
+func clampTermDims(cols, rows int) (int, int) {
+	if cols < termMinCols {
+		cols = termMinCols
+	}
+	if cols > termMaxCols {
+		cols = termMaxCols
+	}
+	if rows < termMinRows {
+		rows = termMinRows
+	}
+	if rows > termMaxRows {
+		rows = termMaxRows
+	}
+	return cols, rows
+}
+
+// ── Replay sob reconexão ──
+//
+// Anel limitado dos últimos frames de term.out. O viewer informa no handshake
+// o último seq que renderizou (lastSeq); reenviamos os frames com seq maior.
+// Quando o viewer está mais antigo que o anel, não há como garantir
+// continuidade: publicamos {"reset":true} para ele limpar o buffer em vez de
+// emendar saída nova em saída velha (texto torto).
+
+type termFrame struct {
+	seq     int64
+	payload string // JSON já pronto (data base64 + seq)
+}
+
+type termReplayRing struct {
+	mu     sync.Mutex
+	frames []termFrame
+	bytes  int
+	max    int
+}
+
+func newTermReplayRing(maxBytes int) *termReplayRing {
+	return &termReplayRing{max: maxBytes}
+}
+
+func (r *termReplayRing) add(seq int64, payload string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.frames = append(r.frames, termFrame{seq: seq, payload: payload})
+	r.bytes += len(payload)
+	// Mantém ao menos 1 frame (um único frame maior que o teto é aceitável).
+	for r.bytes > r.max && len(r.frames) > 1 {
+		r.bytes -= len(r.frames[0].payload)
+		r.frames = r.frames[1:]
+	}
+}
+
+// since devolve os frames com seq > fromSeq em ordem. ok=false quando fromSeq é
+// mais antigo que o primeiro frame retido (há lacuna — não dá para continuar).
+func (r *termReplayRing) since(fromSeq int64) (frames []termFrame, ok bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.frames) == 0 {
+		return nil, true
+	}
+	if fromSeq < r.frames[0].seq-1 {
+		return nil, false
+	}
+	for _, f := range r.frames {
+		if f.seq > fromSeq {
+			frames = append(frames, f)
+		}
+	}
+	return frames, true
+}
+
+func (r *termReplayRing) clear() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.frames = nil
+	r.bytes = 0
+}
 
 // ── TerminalSession ──
 
@@ -86,10 +180,11 @@ func (oc *outputCoalescer) Write(s string) {
 	if oc.timer == nil {
 		oc.timer = time.AfterFunc(oc.interval, oc.flush)
 	}
-	// Teto de buffer: acima do limite, despacha imediatamente (ignora os
-	// guards de adiamento) — memória/lag não podem crescer indefinidamente.
+	// Teto de buffer: acima do limite, despacha imediatamente IGNORANDO o rate
+	// limit. Com dispatchLocked puro o rate limit seguraria o flush e o buffer
+	// continuaria crescendo a cada Write — o teto não valeria de fato.
 	if len(oc.buf) >= maxCoalesceBufferBytes {
-		oc.dispatchLocked()
+		oc.forceDispatchLocked()
 	}
 	oc.mu.Unlock()
 }
@@ -152,6 +247,30 @@ func (oc *outputCoalescer) dispatchPrefixLocked(n int) {
 	rest := append([]byte(nil), oc.buf[n:]...)
 	oc.buf = rest
 	oc.onFlush(prefix)
+	oc.timer = nil
+	if len(oc.buf) > 0 {
+		oc.timer = time.AfterFunc(oc.interval, oc.flush)
+	}
+}
+
+// forceDispatchLocked despacha o buffer INTEIRO ignorando o rate limit —
+// usado quando o teto de bytes é atingido (memória não pode crescer sem
+// limite). Preserva o guard de runa UTF-8: um tail incompleto fica retido para
+// o próximo chunk, como em mustDispatchLocked. Nunca descarta bytes.
+func (oc *outputCoalescer) forceDispatchLocked() {
+	oc.deferCount = 0
+	if len(oc.buf) == 0 {
+		oc.timer = nil
+		return
+	}
+	if t := terminal.Utf8IncompleteTail(oc.buf); t > 0 && t < len(oc.buf) {
+		prefix := string(oc.buf[:len(oc.buf)-t])
+		oc.buf = append([]byte(nil), oc.buf[len(oc.buf)-t:]...)
+		oc.onFlush(prefix)
+	} else {
+		oc.onFlush(string(oc.buf))
+		oc.buf = nil
+	}
 	oc.timer = nil
 	if len(oc.buf) > 0 {
 		oc.timer = time.AfterFunc(oc.interval, oc.flush)
@@ -330,6 +449,16 @@ type SessionTerminal struct {
 	// (data-only) NÃO republica (evita spam por tecla).
 	readyPayload []byte
 	readySent    bool
+	// readyRequested cobre a corrida entre a assinatura de term.in (dentro de
+	// Start) e o SetReadyPayload (chamado pelo manager DEPOIS de Start): se um
+	// hello/resize chegar antes do payload existir, ele é publicado assim que
+	// o manager o guardar — senão o viewer ficaria sem shells/dimensões.
+	readyRequested bool
+
+	// outMu serializa as publicações em term.out (coalescer, replay, erro,
+	// exit). Sem ele o replay do handshake poderia intercalar com frames live e
+	// o viewer renderizaria seq fora de ordem (texto torto).
+	outMu sync.Mutex
 
 	stopCh chan struct{}
 	doneCh chan struct{}
@@ -347,8 +476,30 @@ func (st *SessionTerminal) SetOnExit(cb func(reason string)) {
 // term.in (handshake) — evita que o viewer perca o ready (NATS fire-and-forget).
 func (st *SessionTerminal) SetReadyPayload(payload []byte) {
 	st.mu.Lock()
-	defer st.mu.Unlock()
 	st.readyPayload = payload
+	// Um hello/resize chegou antes do payload existir: publica agora.
+	send := st.readyRequested && len(payload) > 0
+	st.readyRequested = false
+	st.mu.Unlock()
+	if send {
+		_ = st.natsStream.PublishTermOut(st.sessionID, string(payload))
+	}
+}
+
+// PublishError publica um frame de erro de terminal no term.out. Usado pelo
+// manager quando o console sequer chegou a iniciar: é a única forma de o
+// viewer saber POR QUE o terminal veio vazio. O `.event` (usado antes) tinha a
+// permissão do viewer mas nenhum assinante — a falha ficava invisível.
+func (st *SessionTerminal) PublishError(code, reason string) {
+	payload, _ := json.Marshal(map[string]any{
+		"error":  true,
+		"code":   code,
+		"reason": reason,
+		"seq":    int64(0),
+	})
+	if err := st.natsStream.PublishTermOut(st.sessionID, string(payload)); err != nil {
+		log.Printf("[session-terminal] erro ao publicar frame de erro: %v", err)
+	}
 }
 
 // NewSessionTerminal cria um novo gerenciador de sessao de terminal (console unico).
@@ -408,6 +559,9 @@ func (st *SessionTerminal) Start(ctx context.Context, shellKind terminal.ShellKi
 	if rows <= 0 {
 		rows = 40
 	}
+	// O servidor manda termCols/termRows sem validação; dimensão absurda não
+	// pode chegar ao CreatePseudoConsole/console real.
+	cols, rows = clampTermDims(cols, rows)
 
 	term := &TerminalSession{
 		ID:        "main",
@@ -420,12 +574,52 @@ func (st *SessionTerminal) Start(ctx context.Context, shellKind terminal.ShellKi
 	var seq int64
 	var seqMu sync.Mutex
 
-	// Coalescer: junta chunks consecutivos em uma so mensagem
-	coalescer := newOutputCoalescer(func(output string) {
+	// nextSeq aloca o próximo seq de publicação. TODA mensagem que carrega seq
+	// (output, erro, exit) passa por aqui: reutilizar o seq entre dois frames
+	// faria o viewer acreditar que um frame que ele nunca recebeu já foi visto
+	// — e o replay da reconexão o pularia (perda silenciosa de output).
+	nextSeq := func() int64 {
 		seqMu.Lock()
-		currentSeq := seq
+		s := seq
 		seq++
 		seqMu.Unlock()
+		return s
+	}
+
+	// Anel de replay: alimentado por publishFrame, lido no handshake (hello).
+	replay := newTermReplayRing(termReplayMaxBytes)
+
+	// publishFrame publica um frame em term.out mantendo a ordem (outMu) e
+	// registrando-o no anel de replay. Falha de publish NÃO impede o registro:
+	// o replay do handshake é justamente a rede de recuperação.
+	publishFrame := func(frameSeq int64, payload string) {
+		st.outMu.Lock()
+		replay.add(frameSeq, payload)
+		err := st.natsStream.PublishTermOut(st.sessionID, payload)
+		st.outMu.Unlock()
+		if err != nil {
+			log.Printf("[session-terminal] erro ao publicar term.out: %v", err)
+		}
+	}
+
+	// emitError publica um erro de terminal no term.out com seq PRÓPRIO e
+	// também no anel de replay: o seq é a identidade do frame, então dois frames
+	// não podem compartilhar o mesmo número. Reenviar o erro no replay é
+	// desejável (explica a lacuna ao operador).
+	emitError := func(code, reason string) {
+		errSeq := nextSeq()
+		payload, _ := json.Marshal(map[string]any{
+			"error":  true,
+			"code":   code,
+			"reason": reason,
+			"seq":    errSeq,
+		})
+		publishFrame(errSeq, string(payload))
+	}
+
+	// Coalescer: junta chunks consecutivos em uma so mensagem
+	coalescer := newOutputCoalescer(func(output string) {
+		currentSeq := nextSeq()
 
 		encoded := base64.StdEncoding.EncodeToString([]byte(output))
 		payload, _ := json.Marshal(map[string]any{
@@ -434,11 +628,9 @@ func (st *SessionTerminal) Start(ctx context.Context, shellKind terminal.ShellKi
 		})
 
 		// Subject fixo term.out (console unico)
-		if err := st.natsStream.PublishTermOut(st.sessionID, string(payload)); err != nil {
-			log.Printf("[session-terminal] erro ao publicar term.out: %v", err)
-		}
+		publishFrame(currentSeq, string(payload))
 		// (Log de sucesso por mensagem removido — dezenas de linhas/segundo em
-		// saída intensa; erro continua logado acima.)
+		// saída intensa; erro continua logado no publishFrame.)
 
 		// Gravação (thread-safe)
 		if st.recordingTap != nil {
@@ -468,8 +660,8 @@ func (st *SessionTerminal) Start(ctx context.Context, shellKind terminal.ShellKi
 		// Só notifica exit se há dados pendentes ou seq > 0 (shell produziu output)
 		seqMu.Lock()
 		hasOutput := seq > 0
-		exitSeq := seq
 		seqMu.Unlock()
+		exitSeq := nextSeq() // seq próprio: nunca colide com um erro concorrente
 
 		// P2: loga o exit code também em hexadecimal (0xC0000142 =
 		// STATUS_DLL_INIT_FAILED) para diagnóstico imediato.
@@ -486,7 +678,11 @@ func (st *SessionTerminal) Start(ctx context.Context, shellKind terminal.ShellKi
 			"exit":   true,
 			"reason": exitMsg,
 		})
-		st.natsStream.PublishTermOut(st.sessionID, string(exitPayload))
+		// Serializa com o coalescer/emitError para o exit ser o ÚLTIMO frame
+		// da sessão (o ForceFlush logo acima já esvaziou o buffer).
+		st.outMu.Lock()
+		_ = st.natsStream.PublishTermOut(st.sessionID, string(exitPayload))
+		st.outMu.Unlock()
 
 		// Notifica o manager para encerrar a sessão (console morto)
 		st.mu.RLock()
@@ -500,27 +696,38 @@ func (st *SessionTerminal) Start(ctx context.Context, shellKind terminal.ShellKi
 	// Subscrever input do viewer no subject fixo term.in
 	sub, err := st.natsStream.SubscribeToTermIn(st.sessionID, func(data []byte) {
 		var req struct {
-			Data string `json:"data"`
-			Cols int    `json:"cols"`
-			Rows int    `json:"rows"`
+			Data    string `json:"data"`
+			Cols    int    `json:"cols"`
+			Rows    int    `json:"rows"`
+			Hello   bool   `json:"hello"`
+			LastSeq *int64 `json:"lastSeq"`
 		}
 		if err := json.Unmarshal(data, &req); err != nil {
 			log.Printf("[session-terminal] term.in JSON invalido: %v\n", err)
 			return
 		}
 
-		// Handshake: republica o term.ready no primeiro term.in (qualquer
-		// tipo) e em CADA resize. Antes era one-shot (payload nil'd após o
-		// 1º envio) — em reconexão do viewer o ready nunca mais voltava e o
-		// terminal ficava sem shells/dimensões ("morto"). Resize é raro, e o
-		// viewer sempre envia o fit logo após conectar — cobre reconexões.
+		// Handshake explícito do viewer logo após o +OK do NATS. O ready é
+		// publicado UMA vez no start da sessão: se o viewer assinar depois (ou
+		// reconectar) ele nunca mais voltava — terminal sem lista de shells,
+		// sem banner de backend e sem dimensões ("morto"). O hello cobre isso
+		// de forma determinística, sem depender de haver resize nem de o
+		// usuário digitar. (Havia também a república no resize e no 1º term.in;
+		// o hello elimina a corrida entre assinatura e publish.)
+		isHello := req.Hello || (req.Data == "" && req.Cols <= 0 && req.Rows <= 0)
 		isResize := req.Cols > 0 && req.Rows > 0
+
 		st.mu.Lock()
 		rp := st.readyPayload
-		firstIn := !st.readySent
-		if len(rp) > 0 && (firstIn || isResize) {
+		switch {
+		case len(rp) == 0:
+			// Start ainda não guardou o payload (corrida entre assinar term.in
+			// e SetReadyPayload): marca para publicar assim que existir.
+			st.readyRequested = true
+			rp = nil
+		case isHello || isResize || !st.readySent:
 			st.readySent = true
-		} else {
+		default:
 			rp = nil
 		}
 		st.mu.Unlock()
@@ -528,26 +735,71 @@ func (st *SessionTerminal) Start(ctx context.Context, shellKind terminal.ShellKi
 			_ = st.natsStream.PublishTermOut(st.sessionID, string(rp))
 		}
 
-		// Resize se dimensoes informadas
-		if req.Cols > 0 && req.Rows > 0 {
-			log.Printf("[session-terminal] term.in resize: session=%s cols=%d rows=%d\n",
-				st.sessionID, req.Cols, req.Rows)
+		// Replay do que o viewer perdeu enquanto o WebSocket esteve caído.
+		// Serializado por outMu com os frames live: sem isso o viewer poderia
+		// receber um seq novo antes de um antigo e renderizar fora de ordem.
+		if isHello && req.LastSeq != nil {
+			st.outMu.Lock()
+			frames, ok := replay.since(*req.LastSeq)
+			if ok {
+				for _, f := range frames {
+					if err := st.natsStream.PublishTermOut(st.sessionID, f.payload); err != nil {
+						log.Printf("[session-terminal] erro ao reenviar term.out: %v", err)
+					}
+				}
+			} else {
+				// Lacuna maior que o anel retido: manda o viewer LIMPAR o buffer
+				// para não emendar saída nova em saída velha. NÃO enviamos um
+				// "lastSeq" novo: o viewer só pode assumir continuidade até o
+				// último seq que ELE recebeu. Adotar outro valor (em especial o
+				// seq corrente, ainda não publicado) faria o replay seguinte
+				// pular um frame nunca recebido — perda silenciosa de output.
+				reset, _ := json.Marshal(map[string]any{
+					"reset":         true,
+					"requestedFrom": *req.LastSeq,
+				})
+				_ = st.natsStream.PublishTermOut(st.sessionID, string(reset))
+				log.Printf("[session-terminal] replay indisponivel (lastSeq=%d): enviando reset", *req.LastSeq)
+			}
+			st.outMu.Unlock()
+		}
+
+		// Resize se dimensoes informadas. Num hello com dimensões seguimos
+		// adiante (o input vem em mensagem separada e é vazio); num resize
+		// puro encerramos aqui, como antes.
+		if isResize {
 			_ = shell.Resize(req.Cols, req.Rows)
 			term.Cols = req.Cols
 			term.Rows = req.Rows
+			if !isHello {
+				return
+			}
+		}
+
+		if req.Data == "" {
 			return
 		}
 
-		// Decodificar input base64 (com limitacao de tamanho)
-		if req.Data != "" && len(req.Data) <= termMaxInputSize {
-			decoded, err := base64.StdEncoding.DecodeString(req.Data)
-			if err != nil {
-				log.Printf("[session-terminal] term.in base64 invalido: %v\n", err)
-				return
-			}
-			log.Printf("[session-terminal] term.in input: session=%s bytes=%d\n",
-				st.sessionID, len(decoded))
-			_ = shell.WriteStdin(string(decoded))
+		// Um único PUB acima do teto é REJEITADO com aviso — antes era
+		// descartado em silêncio (parecia "o terminal engoliu o paste"). O
+		// front fatia pastes grandes em vários PUBs abaixo deste limite.
+		if len(req.Data) > termMaxInputSize {
+			log.Printf("[session-terminal] term.in acima do limite: %d bytes base64 (max %d)",
+				len(req.Data), termMaxInputSize)
+			emitError("input_too_large",
+				fmt.Sprintf("entrada de %d bytes excede o limite de %d", len(req.Data), termMaxInputSize))
+			return
+		}
+
+		decoded, err := base64.StdEncoding.DecodeString(req.Data)
+		if err != nil {
+			log.Printf("[session-terminal] term.in base64 invalido: %v\n", err)
+			return
+		}
+		if err := shell.WriteStdin(string(decoded)); err != nil {
+			// Fila de input cheia / shell fechado: nunca descartar em silêncio.
+			log.Printf("[session-terminal] WriteStdin falhou: %v", err)
+			emitError("stdin_rejected", err.Error())
 		}
 	})
 	if err != nil {

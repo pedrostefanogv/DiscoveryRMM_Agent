@@ -1,8 +1,8 @@
 package ai
 
 import (
-`strings`
-`testing`
+	"strings"
+	"testing"
 )
 
 // B1: fila de ações A2UI com limite — cliques rápidos não se sobrescrevem e
@@ -100,6 +100,29 @@ func TestValidateChatMessage_NoFalsePositive(t *testing.T) {
 	}
 	if err := validateChatMessage(strings.Repeat("a", 8000)); err != nil {
 		t.Fatalf("mensagem de 8000 bytes deveria passar: %v", err)
+	}
+}
+
+// Deduplicação de chamados: o prompt local (fallback) e o retry forçado de
+// abertura devem exigir a consulta de chamados existentes antes de create_ticket.
+func TestTicketDedupInstructions(t *testing.T) {
+	if !strings.Contains(defaultSystemPrompt, "list_tickets") {
+		t.Fatal("prompt local deve citar list_tickets no fluxo de chamados")
+	}
+	if !strings.Contains(strings.ToLower(defaultSystemPrompt), "duplicad") {
+		t.Fatal("prompt local deve instruir a verificar chamado duplicado antes de abrir")
+	}
+	if !strings.Contains(defaultSystemPrompt, "ClosedAt") {
+		t.Fatal("prompt local deve explicar que chamado aberto = ClosedAt nulo")
+	}
+
+	s := NewService(nil)
+	retry := diagnoseMissingToolCall(s, "pode abrir o chamado, sim")
+	if !strings.Contains(retry, "list_tickets") {
+		t.Fatalf("retry de abertura deve exigir list_tickets antes de create_ticket, obtido %q", retry)
+	}
+	if !strings.Contains(retry, "create_ticket") {
+		t.Fatalf("retry de abertura deve citar create_ticket, obtido %q", retry)
 	}
 }
 

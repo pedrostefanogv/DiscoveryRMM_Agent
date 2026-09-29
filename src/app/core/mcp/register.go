@@ -583,7 +583,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 
 	reg.Register(Tool{
 		Name:        "list_tickets",
-		Description: "Lista os chamados de suporte abertos para este agente/maquina.",
+		Description: "Lista os chamados de suporte vinculados a este agente/maquina em formato resumido (id, titulo, descricao curta, categoria, prioridade, workflowStateId, isOpen, createdAt, closedAt), com os ABERTOS primeiro e os contadores total/openCount/returned/truncated. isOpen=true significa chamado ABERTO (ClosedAt nulo); se truncated=true existem chamados fora do recorte. Chame SEMPRE ANTES de create_ticket para verificar se ja existe chamado aberto sobre o MESMO assunto e evitar chamado duplicado; se existir, NAO abra duplicata — informe o usuario e ofereca add_ticket_comment no chamado existente. Use get_ticket_details(ticketId) para o texto completo de um chamado. Use tambem quando o usuario perguntar quais chamados ele tem.",
 		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			return app.ListAgentTickets()
 		},
@@ -658,7 +658,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 
 	reg.Register(Tool{
 		Name:        "create_ticket",
-		Description: "ABRE um novo chamado de suporte vinculado a esta maquina. Use SEMPRE que o usuario pedir para abrir ticket, chamado, reportar problema ou solicitar suporte. O chamado e automaticamente associado ao agente/maquina. Chame get_agent_info antes para enriquecer o titulo e descricao com dados da maquina. Chame get_department_fields para conhecer os campos personalizados obrigatorios do departamento (eles valem mesmo sem template) e envie os valores em customFields (definitionId->valor). Quando um template foi escolhido, envie templateId + answers (respostas do mini questionario, key->valor). NUNCA oriente o usuario a acessar portais web externos.",
+		Description: "ABRE um novo chamado de suporte vinculado a esta maquina. PRÉ-REQUISITO ANTIDUPLICIDADE (OBRIGATORIO): antes de abrir, chame list_tickets e confirme que NAO existe chamado aberto (ClosedAt nulo) sobre o mesmo assunto; se existir, NAO abra um chamado novo — avise o usuario e ofereca complementar o existente com add_ticket_comment. Só abra um chamado novo se o usuario confirmar explicitamente que e um problema diferente. Use SEMPRE que o usuario pedir para abrir ticket, chamado, reportar problema ou solicitar suporte, apos a verificacao. O chamado e automaticamente associado ao agente/maquina. Chame get_agent_info antes para enriquecer o titulo e descricao com dados da maquina. Chame get_department_fields para conhecer os campos personalizados obrigatorios do departamento (eles valem mesmo sem template) e envie os valores em customFields (definitionId->valor). Quando um template foi escolhido, envie templateId + answers (respostas do mini questionario, key->valor). NUNCA oriente o usuario a acessar portais web externos.",
 		Params: []ToolParam{
 			{Name: "title", Type: "string", Description: "Titulo do chamado", Required: true},
 			{Name: "description", Type: "string", Description: "Descricao detalhada do problema", Required: true},

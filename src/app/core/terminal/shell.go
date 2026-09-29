@@ -27,8 +27,13 @@ const (
 func ResolveShell(shell ShellKind) (ShellKind, string) {
 	switch shell {
 	case ShellPowerShell:
-		if p, err := exec.LookPath("powershell.exe"); err == nil {
-			return ShellPowerShell, p
+		// PowerShell 7+ (pwsh) quando instalado; o Windows PowerShell 5.1
+		// (powershell.exe) fica como fallback. O binário resolvido vai no
+		// term.ready (shellPath) para diagnóstico remoto.
+		for _, name := range []string{"pwsh.exe", "powershell.exe"} {
+			if p, err := exec.LookPath(name); err == nil {
+				return ShellPowerShell, p
+			}
 		}
 		// Sem PowerShell — rebaixa para cmd.
 		if p, err := exec.LookPath("cmd.exe"); err == nil {

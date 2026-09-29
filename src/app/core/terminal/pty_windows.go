@@ -32,6 +32,13 @@ type Shell struct {
 	mu       sync.Mutex
 	closed   bool
 	onOutput func(string) // callback para saida
+
+	// waitOnce/waitErr compartilham o cmd.Wait() entre o monitor de exit da
+	// sessão e o Close(). Chamar cmd.Wait() duas vezes em paralelo NÃO é seguro
+	// (documentado no os/exec) — o Close antigo podia racear com a goroutine de
+	// exit e devolver "Wait was already called".
+	waitOnce sync.Once
+	waitErr  error
 }
 
 // NewShell cria um novo shell interativo (console real oculto, via pipes).
@@ -41,7 +48,7 @@ type Shell struct {
 // injetores/AV do que ConPTY.
 // shell: "powershell" ou "cmd".
 func NewShell(shell string, onOutput func(string)) (*Shell, error) {
-	resolvedKind, _ := ResolveShell(ShellKind(shell))
+	resolvedKind, resolvedPath := ResolveShell(ShellKind(shell))
 	shell = string(resolvedKind)
 
 	var cmd *exec.Cmd
@@ -54,7 +61,10 @@ func NewShell(shell string, onOutput func(string)) (*Shell, error) {
 		// [Console]::Output/InputEncoding=UTF8 força o próprio PS a falar
 		// UTF-8 na pipe; chcp 65001 não afeta NATIVOS em pipe (ping continua
 		// OEM — coberto pela decodificação OEM em normalizeToUtf8).
-		cmd = exec.Command("powershell.exe", "-NoLogo", "-NoExit", "-Command",
+		if resolvedPath == "" {
+			resolvedPath = "powershell.exe"
+		}
+		cmd = exec.Command(resolvedPath, "-NoLogo", "-NoExit", "-Command",
 			"chcp 65001 >$null; [Console]::OutputEncoding=[System.Text.Encoding]::UTF8; [Console]::InputEncoding=[System.Text.Encoding]::UTF8")
 	default:
 		// cmd: chcp 65001 faz o próprio cmd (echo/prompt/erro) emitir UTF-8.
@@ -136,10 +146,14 @@ func (s *Shell) Alive() bool {
 // Útil para o gerenciador de sessão detectar falha prematura (ex.:
 // 0xC0000142 quando um injetor/AV mata o processo no DllMain).
 func (s *Shell) Wait() error {
-	if s.cmd == nil || s.cmd.Process == nil {
-		return fmt.Errorf("processo nao inicializado")
-	}
-	return s.cmd.Wait()
+	s.waitOnce.Do(func() {
+		if s.cmd == nil || s.cmd.Process == nil {
+			s.waitErr = fmt.Errorf("processo nao inicializado")
+			return
+		}
+		s.waitErr = s.cmd.Wait()
+	})
+	return s.waitErr
 }
 
 func (s *Shell) readLoop(r io.Reader) {
@@ -181,11 +195,16 @@ func (s *Shell) readLoop(r io.Reader) {
 // emitChunk normaliza o chunk para UTF-8 e entrega ao callback da sessão.
 func (s *Shell) emitChunk(chunk []byte) {
 	output := normalizeToUtf8(chunk)
+	// Captura o callback sob o mutex e o INVOCA fora dele: onOutput encadeia
+	// até um publish NATS (que pode bloquear). Com o mutex travado, Resize/
+	// Close/Alive ficavam presos atrás do publish.
 	s.mu.Lock()
-	if s.onOutput != nil && !s.closed {
-		s.onOutput(output)
-	}
+	cb := s.onOutput
+	closed := s.closed
 	s.mu.Unlock()
+	if cb != nil && !closed {
+		cb(output)
+	}
 }
 
 // normalizeToUtf8 garante que a saída lida da pipe esteja em UTF-8 antes de
@@ -310,14 +329,24 @@ func (s *Shell) Resize(cols, rows int) error {
 // Close encerra o shell.
 func (s *Shell) Close() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed {
+		s.mu.Unlock()
 		return nil
 	}
 	s.closed = true
-	s.stdin.Close()
-	s.cmd.Process.Kill()
-	s.cmd.Wait()
+	stdin := s.stdin
+	s.mu.Unlock()
+
+	// Fecha o stdin e mata o processo FORA do mutex: cmd.Wait() pode bloquear e,
+	// com o mutex travado, Resize/Alive/Dimensions/Close ficariam presos. O Wait
+	// é compartilhado via waitOnce com o monitor de exit (ver campo waitOnce).
+	if stdin != nil {
+		_ = stdin.Close()
+	}
+	if s.cmd != nil && s.cmd.Process != nil {
+		_ = s.cmd.Process.Kill()
+	}
+	_ = s.Wait()
 	return nil
 }
 

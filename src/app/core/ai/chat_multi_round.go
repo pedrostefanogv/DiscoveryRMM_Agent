@@ -1063,7 +1063,7 @@ func diagnoseMissingToolCall(s *Service, userMessage string) string {
 		}
 		if pattern.kind == ticketOpen {
 			if hasConfirmedAction(msg) {
-				return "O usuario ja confirmou a abertura do chamado. Emita AGORA uma unica function call nativa `create_ticket` com os dados ja coletados (title, description, priority, category). NAO responda com texto, NAO prometa abrir, NAO chame outras ferramentas. Envie apenas a function call create_ticket."
+				return "O usuario ja confirmou a abertura do chamado. ANTES de abrir, verifique duplicidade: emita AGORA uma unica function call nativa `list_tickets` e AGUARDE o resultado (NAO envie create_ticket no mesmo turno). Se nenhum item tiver isOpen=true sobre o mesmo assunto, emita na proxima rodada a function call nativa `create_ticket` com os dados ja coletados (title, description, departmentId, priority, category). Se existir chamado aberto do mesmo assunto, NAO crie duplicata: informe o usuario e ofereca add_ticket_comment no chamado existente. NAO responda apenas com texto prometendo verificar."
 			}
 			continue
 		}

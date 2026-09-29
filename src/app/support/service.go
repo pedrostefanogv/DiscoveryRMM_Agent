@@ -1320,13 +1320,97 @@ func (s *Service) GetAgentInfoJSON() (json.RawMessage, error) {
 	return json.Marshal(info)
 }
 
+// maxListedTickets limita quantos chamados a tool list_tickets devolve a IA.
+// Sem o limite, um histórico grande de chamados encerrados enchia o resultado
+// (o loop de chat trunca tool results em 16 KB) e a verificação de duplicidade
+// podia não enxergar o chamado aberto relevante.
+const maxListedTickets = 30
+
+// ticketListDescriptionChars limita a descrição resumida de cada chamado.
+const ticketListDescriptionChars = 160
+
+// ticketListSummary é a projeção enxuta de um chamado devolvida por
+// list_tickets. Campos pesados (submissionSnapshotMarkdown, rating, ids de
+// escopo) ficam de fora: o detalhe completo está em get_ticket_details.
+type ticketListSummary struct {
+	ID              string         `json:"id"`
+	Title           string         `json:"title"`
+	Description     string         `json:"description,omitempty"`
+	Priority        TicketPriority `json:"priority"`
+	Category        *string        `json:"category,omitempty"`
+	WorkflowStateID string         `json:"workflowStateId,omitempty"`
+	IsOpen          bool           `json:"isOpen"`
+	CreatedAt       string         `json:"createdAt"`
+	ClosedAt        *string        `json:"closedAt,omitempty"`
+}
+
+// compactTicketList devolve os chamados ABERTOS primeiro (criados mais
+// recentes primeiro dentro de cada grupo), com descrição resumida e limite de
+// itens. `total`, `openCount`, `returned` e `truncated` permitem à IA saber se
+// o recorte ficou incompleto — sem isso ela poderia concluir, errado, que não
+// existe chamado aberto sobre o assunto.
+func compactTicketList(tickets []APITicket) map[string]any {
+	open := make([]APITicket, 0, len(tickets))
+	closed := make([]APITicket, 0, len(tickets))
+	for _, t := range tickets {
+		if ticketIsOpen(t) {
+			open = append(open, t)
+		} else {
+			closed = append(closed, t)
+		}
+	}
+
+	ordered := make([]APITicket, 0, len(tickets))
+	ordered = append(ordered, open...)
+	ordered = append(ordered, closed...)
+
+	returned := len(ordered)
+	if returned > maxListedTickets {
+		returned = maxListedTickets
+	}
+	summaries := make([]ticketListSummary, 0, returned)
+	for _, t := range ordered[:returned] {
+		desc := strings.TrimSpace(t.Description)
+		if r := []rune(desc); len(r) > ticketListDescriptionChars {
+			desc = string(r[:ticketListDescriptionChars]) + "…"
+		}
+		summaries = append(summaries, ticketListSummary{
+			ID:              t.ID,
+			Title:           t.Title,
+			Description:     desc,
+			Priority:        t.Priority,
+			Category:        t.Category,
+			WorkflowStateID: t.WorkflowStateID,
+			IsOpen:          ticketIsOpen(t),
+			CreatedAt:       t.CreatedAt,
+			ClosedAt:        t.ClosedAt,
+		})
+	}
+
+	return map[string]any{
+		"total":     len(ordered),
+		"openCount": len(open),
+		"returned":  len(summaries),
+		"truncated": len(ordered) > len(summaries),
+		"tickets":   summaries,
+	}
+}
+
+// ticketIsOpen define "chamado aberto" = sem data de encerramento (ClosedAt).
+// Mesma regra ensinada no prompt da IA; centralizada aqui para não divergir.
+func ticketIsOpen(t APITicket) bool {
+	return t.ClosedAt == nil || strings.TrimSpace(*t.ClosedAt) == ""
+}
+
 // ListAgentTickets returns agent tickets as JSON (for MCP tools).
 func (s *Service) ListAgentTickets() (json.RawMessage, error) {
 	tickets, err := s.GetSupportTickets()
 	if err != nil {
 		return nil, err
 	}
-	return json.Marshal(tickets)
+	// Resultado resumido e com abertos primeiro: o mesmo payload alimenta a
+	// verificação de chamado duplicado feita pela IA antes de create_ticket.
+	return json.Marshal(compactTicketList(tickets))
 }
 
 // GetAgentTicketDetails returns one agent ticket as JSON (for MCP tools).

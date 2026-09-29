@@ -178,6 +178,10 @@ func resolveShellCommand(shell ShellKind) (exe string, args []string) {
 
 	switch shell {
 	case ShellPowerShell:
+		// PowerShell 7+ quando presente (mesma política do ResolveShell).
+		if p, err := exec.LookPath("pwsh.exe"); err == nil {
+			return p, []string{"-NoLogo", "-NoExit"}
+		}
 		return "powershell.exe", []string{"-NoLogo", "-NoExit"}
 	case ShellCmd:
 		return "cmd.exe", nil
@@ -410,8 +414,8 @@ func (s *ConPTYShell) Alive() bool {
 
 func (s *ConPTYShell) Close() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed {
+		s.mu.Unlock()
 		return nil
 	}
 	s.closed = true
@@ -422,13 +426,19 @@ func (s *ConPTYShell) Close() error {
 	close(s.stdinQueue)
 	s.stdinPipe.Close()
 	ClosePseudoConsole(s.hpc)
+	cmd := s.cmd
+	s.mu.Unlock()
 
-	if s.cmd != nil && s.cmd.Process != nil {
-		_ = s.cmd.Process.Kill()
+	// Kill/Wait FORA do mutex: se o Kill não matar o processo (raro, mas
+	// possível com handle/injetor), Wait bloqueia indefinidamente — e com o
+	// mutex travado Resize/Dimensions/Alive/Close ficariam presos, travando o
+	// encerramento da sessão inteira.
+	if cmd != nil && cmd.Process != nil {
+		_ = cmd.Process.Kill()
 		// Reaproveita o mesmo sync.Once do Wait() para não chamar
 		// Process.Wait() duas vezes (a goroutine de exit já pode tê-lo feito).
 		s.waitOnce.Do(func() {
-			_, _ = s.cmd.Process.Wait()
+			_, _ = cmd.Process.Wait()
 		})
 	}
 
@@ -442,11 +452,17 @@ func (s *ConPTYShell) readLoop(r io.Reader) {
 		n, err := r.Read(buf)
 		if n > 0 {
 			output := string(buf[:n])
+			// Captura o callback sob o mutex e o INVOCA fora dele: onOutput
+			// encadeia até um publish NATS (que pode bloquear). Chamá-lo com
+			// s.mu travado prendia Resize/Dimensions/Close/Alive — inclusive a
+			// sonda de morte prematura do startup.
 			s.mu.Lock()
-			if s.onOutput != nil && !s.closed {
-				s.onOutput(output)
-			}
+			cb := s.onOutput
+			closed := s.closed
 			s.mu.Unlock()
+			if cb != nil && !closed {
+				cb(output)
+			}
 		}
 		if err != nil {
 			return

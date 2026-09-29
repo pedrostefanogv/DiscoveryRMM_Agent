@@ -156,11 +156,16 @@ func (d *dispatcherShell) readOutputLoop() {
 		n, err := d.pipeOut.Read(buf)
 		if n > 0 {
 			output := string(buf[:n])
+			// Captura sob o mutex e invoca FORA dele: onOutput encadeia até um
+			// publish NATS (pode bloquear). Com o mutex travado, WriteStdin/
+			// Resize/Close/Dimensions ficariam presos atrás do publish.
 			d.mu.Lock()
-			if d.onOutput != nil && !d.closed {
-				d.onOutput(output)
-			}
+			cb := d.onOutput
+			closed := d.closed
 			d.mu.Unlock()
+			if cb != nil && !closed {
+				cb(output)
+			}
 		}
 		if err != nil {
 			// Dispatcher/shell encerrou (pipe fechado). Fecha os pipes e marca
@@ -203,8 +208,13 @@ func (d *dispatcherShell) Resize(cols, rows int) error {
 	if cols <= 0 || rows <= 0 {
 		return fmt.Errorf("dimensões inválidas")
 	}
-	_, err := d.pipeIn.Write([]byte(fmt.Sprintf("resize:%dx%d\n", cols, rows)))
-	return err
+	if _, err := d.pipeIn.Write([]byte(fmt.Sprintf("resize:%dx%d\n", cols, rows))); err != nil {
+		return err
+	}
+	// Sem isto Dimensions() devolvia para sempre o tamanho do spawn, mesmo
+	// depois de um resize aplicado com sucesso.
+	d.cols, d.rows = cols, rows
+	return nil
 }
 
 func (d *dispatcherShell) Dimensions() (cols, rows int) {
