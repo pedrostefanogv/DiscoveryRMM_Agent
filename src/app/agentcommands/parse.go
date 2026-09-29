@@ -328,16 +328,52 @@ func GetStringField(m map[string]any, key string) string {
 	return ""
 }
 
-// GetBoolField extrai um campo bool de um map.
+// HasField informa se a chave existe no payload, independentemente do valor
+// (busca case-insensitive). Serve para distinguir "flag ausente" (aplicar
+// default) de "flag=false" (desligada explicitamente).
+func HasField(m map[string]any, key string) bool {
+	if _, ok := m[key]; ok {
+		return true
+	}
+	for k := range m {
+		if strings.EqualFold(k, key) {
+			return true
+		}
+	}
+	return false
+}
+
+// boolValue normaliza os tipos que o payload pode trazer para um bool.
+func boolValue(v any) bool {
+	switch b := v.(type) {
+	case bool:
+		return b
+	case string:
+		return strings.EqualFold(b, "true") || b == "1"
+	case float64:
+		return b != 0
+	}
+	return false
+}
+
+// GetBoolField extrai um campo bool de um map (chave case-sensitive).
 func GetBoolField(m map[string]any, key string) bool {
+	v, ok := m[key]
+	if !ok {
+		return false
+	}
+	return boolValue(v)
+}
+
+// GetBoolFieldFold extrai um campo bool com busca case-insensitive da chave —
+// tolera payloads camelCase (policies/inventory) e PascalCase (Policies).
+func GetBoolFieldFold(m map[string]any, key string) bool {
 	if v, ok := m[key]; ok {
-		switch b := v.(type) {
-		case bool:
-			return b
-		case string:
-			return strings.EqualFold(b, "true") || b == "1"
-		case float64:
-			return b != 0
+		return boolValue(v)
+	}
+	for k, v := range m {
+		if strings.EqualFold(k, key) {
+			return boolValue(v)
 		}
 	}
 	return false

@@ -130,17 +130,45 @@ func (a *App) handleRefreshOnDemand(ctx context.Context, payloadJSON map[string]
 	return true, 0, "refresh-on-demand: " + strings.Join(results, ", "), ""
 }
 
+// forceSyncFlags é o recorte do force-sync efetivamente executado.
+type forceSyncFlags struct {
+	Policies  bool
+	Inventory bool
+	Software  bool
+	AppStore  bool
+}
+
+// resolveForceSyncFlags decide o que o force-sync deve executar.
+//
+// O servidor envia as flags EXPLÍCITAS (inclusive "tudo desmarcado"); nesse caso
+// os valores são respeitados integralmente. Só aplica o default histórico
+// (policies + inventory) quando NENHUMA flag veio no payload — payloads legados
+// ou o comando genérico "force-sync" sem corpo.
+func resolveForceSyncFlags(payloadJSON map[string]any) forceSyncFlags {
+	flags := forceSyncFlags{
+		Policies:  agentcommands.GetBoolFieldFold(payloadJSON, "Policies"),
+		Inventory: agentcommands.GetBoolFieldFold(payloadJSON, "Inventory"),
+		Software:  agentcommands.GetBoolFieldFold(payloadJSON, "Software"),
+		AppStore:  agentcommands.GetBoolFieldFold(payloadJSON, "AppStore"),
+	}
+
+	provided := agentcommands.HasField(payloadJSON, "Policies") ||
+		agentcommands.HasField(payloadJSON, "Inventory") ||
+		agentcommands.HasField(payloadJSON, "Software") ||
+		agentcommands.HasField(payloadJSON, "AppStore")
+
+	if !provided {
+		flags.Policies = true
+		flags.Inventory = true
+	}
+
+	return flags
+}
+
 // handleForceSync triggers a full inventory and software sync.
 func (a *App) handleForceSync(ctx context.Context, payloadJSON map[string]any) (bool, int, string, string) {
-	policies := agentcommands.GetBoolField(payloadJSON, "Policies")
-	inventory := agentcommands.GetBoolField(payloadJSON, "Inventory")
-	software := agentcommands.GetBoolField(payloadJSON, "Software")
-
-	hasAny := policies || inventory || software
-	if !hasAny {
-		policies = true
-		inventory = true
-	}
+	flags := resolveForceSyncFlags(payloadJSON)
+	policies, inventory, software := flags.Policies, flags.Inventory, flags.Software
 
 	var results []string
 
@@ -165,6 +193,18 @@ func (a *App) handleForceSync(ctx context.Context, payloadJSON map[string]any) (
 	if policies {
 		a.Logs.Append("[agent] force-sync: policies sync triggered")
 		results = append(results, "policies=triggered")
+	}
+
+	if flags.AppStore {
+		// A app-store guarda a política efetiva em cache (memória + SQLite).
+		// Invalidar força a releitura da política atualizada no servidor.
+		a.AppStorePolicy.Invalidate()
+		if _, err := a.loadEffectiveAppStorePolicy(ctx, true); err != nil {
+			a.Logs.Append("[agent] force-sync: falha ao recarregar app-store: " + err.Error())
+			results = append(results, "appStore=failed")
+		} else {
+			results = append(results, "appStore=refreshed")
+		}
 	}
 
 	a.Logs.Append("[agent] force-sync concluido: " + strings.Join(results, ", "))
