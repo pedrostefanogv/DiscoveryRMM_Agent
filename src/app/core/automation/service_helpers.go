@@ -84,6 +84,8 @@ func buildExecutionMetadata(task AutomationTask, triggerType TriggerType, stage 
 		"packageId":        task.PackageID,
 		"scriptId":         task.ScriptID,
 		"requiresApproval": task.RequiresApproval,
+		"notificationMode": ResolveNotificationMode(task),
+		"toastTiming":      ResolveToastTiming(task),
 	}
 	if result != nil {
 		payload["success"] = result.Success

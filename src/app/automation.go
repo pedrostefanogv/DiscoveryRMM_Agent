@@ -71,6 +71,8 @@ func mapAutomationState(state automation.State) AutomationStateView {
 			AllowDefer:            taskAllowsDefer(task),
 			CloseProcesses:        append([]string(nil), task.CloseProcesses...),
 			PromptTimeoutSeconds:  taskPromptTimeoutSeconds(task),
+			NotificationMode:      automation.ResolveNotificationMode(task),
+			ToastTiming:           automation.ResolveToastTiming(task),
 			TriggerImmediate:      task.TriggerImmediate,
 			TriggerRecurring:      task.TriggerRecurring,
 			TriggerOnUserLogin:    task.TriggerOnUserLogin,

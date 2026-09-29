@@ -49,11 +49,27 @@ function triggerChips(task) {
   if (task.triggerRecurring) items.push('<span class="automation-chip">Recurring</span>');
   if (task.triggerOnUserLogin) items.push('<span class="automation-chip">UserLogin</span>');
   if (task.triggerOnAgentCheckIn) items.push('<span class="automation-chip">AgentCheckIn</span>');
-  if (task.requiresApproval) {
-    var notifyChip = 'Notifica usuário';
-    if (task.allowDefer === false) notifyChip += ' (sem adiar)';
-    if (task.promptTimeoutSeconds) notifyChip += ' · ' + task.promptTimeoutSeconds + 's';
-    items.push('<span class="automation-chip warn">' + notifyChip + '</span>');
+  var notificationMode = task.notificationMode || (task.requiresApproval ? 'Prompt' : '');
+  if (notificationMode === 'Prompt') {
+    var notifyChip = translate(
+      task.allowDefer === false
+        ? 'automation.notifyPromptNoDefer'
+        : 'automation.notifyPrompt',
+    );
+    if (task.promptTimeoutSeconds) {
+      notifyChip = translate('automation.notifyPromptTimeout', {
+        base: notifyChip,
+        seconds: task.promptTimeoutSeconds,
+      });
+    }
+    items.push('<span class="automation-chip warn">' + escapeHtml(notifyChip) + '</span>');
+  } else if (notificationMode === 'Toast') {
+    var toastChip = translate(
+      task.toastTiming === 'Before'
+        ? 'automation.notifyToastBefore'
+        : 'automation.notifyToastAfter',
+    );
+    items.push('<span class="automation-chip">' + escapeHtml(toastChip) + '</span>');
   }
   return items.join(' ');
 }

@@ -2,28 +2,31 @@ package automation
 
 // TaskView is the frontend representation of a resolved automation task.
 type TaskView struct {
-	CommandID             string   `json:"commandId,omitempty"`
-	TaskID                string   `json:"taskId"`
-	Name                  string   `json:"name"`
-	Description           string   `json:"description,omitempty"`
-	ActionType            string   `json:"actionType"`
-	ActionLabel           string   `json:"actionLabel"`
-	InstallationType      string   `json:"installationType,omitempty"`
-	InstallationLabel     string   `json:"installationLabel,omitempty"`
-	PackageID             string   `json:"packageId,omitempty"`
-	ScriptID              string   `json:"scriptId,omitempty"`
-	ScriptName            string   `json:"scriptName,omitempty"`
-	ScriptVersion         string   `json:"scriptVersion,omitempty"`
-	ScriptType            string   `json:"scriptType,omitempty"`
-	ScriptTypeLabel       string   `json:"scriptTypeLabel,omitempty"`
-	CommandPayload        string   `json:"commandPayload,omitempty"`
-	ScopeType             string   `json:"scopeType"`
-	ScopeLabel            string   `json:"scopeLabel"`
+	CommandID         string `json:"commandId,omitempty"`
+	TaskID            string `json:"taskId"`
+	Name              string `json:"name"`
+	Description       string `json:"description,omitempty"`
+	ActionType        string `json:"actionType"`
+	ActionLabel       string `json:"actionLabel"`
+	InstallationType  string `json:"installationType,omitempty"`
+	InstallationLabel string `json:"installationLabel,omitempty"`
+	PackageID         string `json:"packageId,omitempty"`
+	ScriptID          string `json:"scriptId,omitempty"`
+	ScriptName        string `json:"scriptName,omitempty"`
+	ScriptVersion     string `json:"scriptVersion,omitempty"`
+	ScriptType        string `json:"scriptType,omitempty"`
+	ScriptTypeLabel   string `json:"scriptTypeLabel,omitempty"`
+	CommandPayload    string `json:"commandPayload,omitempty"`
+	ScopeType         string `json:"scopeType"`
+	ScopeLabel        string `json:"scopeLabel"`
 	// RequiresApproval: notifica o usuario (Welcome PSADT) antes de executar.
-	RequiresApproval      bool     `json:"requiresApproval"`
-	AllowDefer            bool     `json:"allowDefer"`
-	CloseProcesses        []string `json:"closeProcesses,omitempty"`
-	PromptTimeoutSeconds  int      `json:"promptTimeoutSeconds"`
+	RequiresApproval     bool     `json:"requiresApproval"`
+	AllowDefer           bool     `json:"allowDefer"`
+	CloseProcesses       []string `json:"closeProcesses,omitempty"`
+	PromptTimeoutSeconds int      `json:"promptTimeoutSeconds"`
+	// NotificationMode: Silent | Prompt | Toast (efetivo, ja com fallback legado).
+	NotificationMode      string   `json:"notificationMode"`
+	ToastTiming           string   `json:"toastTiming"`
 	TriggerImmediate      bool     `json:"triggerImmediate"`
 	TriggerRecurring      bool     `json:"triggerRecurring"`
 	TriggerOnUserLogin    bool     `json:"triggerOnUserLogin"`

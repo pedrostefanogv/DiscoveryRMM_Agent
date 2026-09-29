@@ -636,7 +636,7 @@ func (s *Service) executeTaskAsync(ctx context.Context, agentID string, task Aut
 		// executor faria o skip logo depois da confirmação. O prompt só ocorre
 		// quando realmente há algo a executar.
 		var startResp AutomationNotificationResponse
-		if task.RequiresApproval && ShouldSkipPackageActionBeforePrompt(ctx, packages, task) {
+		if ResolveNotificationMode(task) == NotificationModePrompt && ShouldSkipPackageActionBeforePrompt(ctx, packages, task) {
 			s.logf("automacao: task=%s ja em estado final - prompt de confirmacao ignorado", strings.TrimSpace(task.TaskID))
 		} else {
 			startResp = s.dispatchExecutionNotification(notifyDispatcher, task, entry, nil, deferStateSnapshot, welcome)
@@ -1128,15 +1128,70 @@ func (s *Service) stopCron() {
 	s.cronEntries = make(map[string]cron.EntryID)
 }
 
+// ResolveNotificationMode decide como a task notifica o usuario. Um valor
+// explicito da policy ("Silent"/"Prompt"/"Toast") vence; vazio (policy anterior
+// a esta feature) cai no comportamento legado: RequiresApproval = Prompt, caso
+// contrario Toast (notificacoes informativas de inicio e resultado).
+func ResolveNotificationMode(task AutomationTask) string {
+	switch strings.ToLower(strings.TrimSpace(task.NotificationMode)) {
+	case "silent":
+		return NotificationModeSilent
+	case "prompt":
+		return NotificationModePrompt
+	case "toast":
+		return NotificationModeToast
+	}
+	if task.RequiresApproval {
+		return NotificationModePrompt
+	}
+	return NotificationModeToast
+}
+
+// HasExplicitNotificationMode informa se a policy trouxe o modo novo. Diferencia
+// o modo Toast explicito (com escolha Before/After) do legado (sempre ambos).
+func HasExplicitNotificationMode(task AutomationTask) bool {
+	switch strings.ToLower(strings.TrimSpace(task.NotificationMode)) {
+	case "silent", "prompt", "toast":
+		return true
+	}
+	return false
+}
+
+// ResolveToastTiming normaliza o momento do toast informativo. Vazio/invalido =
+// "After" (apos a conclusao).
+func ResolveToastTiming(task AutomationTask) string {
+	if strings.EqualFold(strings.TrimSpace(task.ToastTiming), ToastTimingBefore) {
+		return ToastTimingBefore
+	}
+	return ToastTimingAfter
+}
+
 func (s *Service) dispatchExecutionNotification(dispatcher func(AutomationNotificationRequest) AutomationNotificationResponse, task AutomationTask, entry database.AutomationExecutionEntry, result *ExecutionResult, deferSnapshot deferState, welcome psadtWelcomeOptions) AutomationNotificationResponse {
 	if dispatcher == nil {
 		return AutomationNotificationResponse{}
 	}
-	// Acao que nao e de pacote so notifica quando a tarefa pede confirmacao do
-	// usuario (RequiresApproval). Sem isso, scripts/comandos gerariam ruido de
-	// "notify_only" a cada execucao.
-	if !isPackageAction(task.ActionType) && !task.RequiresApproval {
+	notificationMode := ResolveNotificationMode(task)
+	if notificationMode == NotificationModeSilent {
 		return AutomationNotificationResponse{}
+	}
+
+	// Acao que nao e de pacote so notifica quando a tarefa pede confirmacao
+	// (Prompt) ou quando o novo modo foi configurado explicitamente. Sem isso,
+	// scripts/comandos gerariam ruido de "notify_only" a cada execucao.
+	if !isPackageAction(task.ActionType) && notificationMode != NotificationModePrompt && !HasExplicitNotificationMode(task) {
+		return AutomationNotificationResponse{}
+	}
+
+	// Toast simples: o usuario escolhe se o aviso aparece antes de executar ou
+	// apenas apos a conclusao. No legado (modo ausente) mantem-se ambos.
+	toastTiming := ResolveToastTiming(task)
+	if notificationMode == NotificationModeToast && HasExplicitNotificationMode(task) {
+		if toastTiming == ToastTimingAfter && result == nil {
+			return AutomationNotificationResponse{}
+		}
+		if toastTiming == ToastTimingBefore && result != nil {
+			return AutomationNotificationResponse{}
+		}
 	}
 
 	// Rotulo neutro para RunScript/CustomCommand: com o prompt habilitado essas
@@ -1202,7 +1257,9 @@ func (s *Service) dispatchExecutionNotification(dispatcher func(AutomationNotifi
 		"forceCloseProcessesCountdown":   welcome.ForceCloseProcessesCountdown,
 		"promptTimeoutSeconds":           resolveUserPromptTimeoutSeconds(task),
 		"defaultAction":                  "continue",
-		"usePsadtWelcome":                task.RequiresApproval,
+		"usePsadtWelcome":                notificationMode == NotificationModePrompt,
+		"notificationMode":               notificationMode,
+		"toastTiming":                    toastTiming,
 	}
 	if !deferSnapshot.NextAttempt.IsZero() {
 		metadata["nextAttemptAt"] = deferSnapshot.NextAttempt.UTC().Format(time.RFC3339)
@@ -1251,10 +1308,10 @@ func (s *Service) dispatchExecutionNotification(dispatcher func(AutomationNotifi
 	// Resultado (install_end/install_failed/reboot) nunca pede confirmacao —
 	// apenas o start. Layout "welcome" sinaliza ao App que o prompt deve usar o
 	// Welcome nativo do PSADT (Continuar/Adiar) quando o PSADT estiver ligado.
-	mode := "notify_only"
+	dispatchMode := "notify_only"
 	layout := "toast"
-	if result == nil && task.RequiresApproval {
-		mode = "require_confirmation"
+	if result == nil && notificationMode == NotificationModePrompt {
+		dispatchMode = "require_confirmation"
 		layout = "welcome"
 	}
 
@@ -1263,7 +1320,7 @@ func (s *Service) dispatchExecutionNotification(dispatcher func(AutomationNotifi
 		IdempotencyKey: notificationID,
 		Title:          title,
 		Message:        message,
-		Mode:           mode,
+		Mode:           dispatchMode,
 		Severity:       severity,
 		EventType:      eventType,
 		Layout:         layout,

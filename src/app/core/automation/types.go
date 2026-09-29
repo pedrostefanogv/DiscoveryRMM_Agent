@@ -129,7 +129,14 @@ type AutomationTask struct {
 	CloseProcesses []string `json:"CloseProcesses,omitempty"`
 	// PromptTimeoutSeconds: tempo para a acao padrao de continuar quando o
 	// usuario nao responde. 0 = default (60s).
-	PromptTimeoutSeconds  int               `json:"PromptTimeoutSeconds,omitempty"`
+	PromptTimeoutSeconds int `json:"PromptTimeoutSeconds,omitempty"`
+	// NotificationMode: "Silent" | "Prompt" | "Toast". Vazio (policy anterior a
+	// esta feature) faz o agent cair no comportamento legado: RequiresApproval =
+	// Prompt, caso contrario Toast.
+	NotificationMode string `json:"NotificationMode,omitempty"`
+	// ToastTiming: "Before" (antes de executar) | "After" (apos a conclusao).
+	// Vazio equivale a "After". So se aplica a NotificationMode = Toast.
+	ToastTiming           string            `json:"ToastTiming,omitempty"`
 	TriggerImmediate      bool              `json:"TriggerImmediate"`
 	TriggerRecurring      bool              `json:"TriggerRecurring"`
 	TriggerOnUserLogin    bool              `json:"TriggerOnUserLogin"`
@@ -262,6 +269,19 @@ type PSADTPolicy struct {
 	TimeoutAction           string
 	UnknownExitCodePolicy   string
 }
+
+// Modos de notificacao ao usuario da automation task.
+const (
+	NotificationModeSilent = "Silent"
+	NotificationModePrompt = "Prompt"
+	NotificationModeToast  = "Toast"
+)
+
+// Momentos do toast informativo (NotificationMode = Toast).
+const (
+	ToastTimingBefore = "Before"
+	ToastTimingAfter  = "After"
+)
 
 type AutomationNotificationRequest struct {
 	NotificationID string
