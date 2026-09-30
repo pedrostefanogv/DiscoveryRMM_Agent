@@ -42,6 +42,12 @@ type dispatcherShell struct {
 
 	onOutput func(string)
 
+	// writeQueue desacopla WriteStdin/Resize da escrita no named pipe, que pode
+	// BLOQUEAR (dispatcher ocupado/travado). Escrever direto sob d.mu prendia
+	// Dimensions/Alive/Close — e o encerramento da sessão inteira. Mesmo padrão
+	// do ConPTYShell.stdinQueue.
+	writeQueue chan string
+
 	mu        sync.Mutex
 	closed    bool
 	closeOnce sync.Once
@@ -120,16 +126,18 @@ func NewDispatcherShell(shell ShellKind, cols, rows int, onOutput func(string)) 
 	}
 
 	ds := &dispatcherShell{
-		shellKind: shell,
-		cols:      cols,
-		rows:      rows,
-		cmd:       cmd,
-		pipeIn:    inConn,
-		pipeOut:   outConn,
-		onOutput:  onOutput,
+		shellKind:  shell,
+		cols:       cols,
+		rows:       rows,
+		cmd:        cmd,
+		pipeIn:     inConn,
+		pipeOut:    outConn,
+		onOutput:   onOutput,
+		writeQueue: make(chan string, 256),
 	}
 
 	go ds.readOutputLoop()
+	go ds.writeLoop()
 
 	return ds, nil
 }
@@ -177,38 +185,74 @@ func (d *dispatcherShell) readOutputLoop() {
 	}
 }
 
-// markOutputClosed fecha os pipes de output de forma idempotente.
-func (d *dispatcherShell) markOutputClosed() {
+// shutdown encerra a fila e os pipes de forma idempotente. O canal é fechado
+// SEGURANDO d.mu: os senders (WriteStdin/Resize) também seguram o mutex, então
+// ninguém pode estar no meio de um send quando o canal fecha (send em canal
+// fechado = panic).
+func (d *dispatcherShell) shutdown() {
 	d.closeOnce.Do(func() {
 		d.mu.Lock()
 		d.closed = true
+		if d.writeQueue != nil {
+			close(d.writeQueue)
+		}
 		d.mu.Unlock()
-		_ = d.pipeOut.Close()
 		_ = d.pipeIn.Close()
+		_ = d.pipeOut.Close()
 	})
 }
 
-func (d *dispatcherShell) WriteStdin(data string) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+// markOutputClosed fecha os pipes de output de forma idempotente.
+func (d *dispatcherShell) markOutputClosed() {
+	d.shutdown()
+}
+
+// writeLoop drena a fila de escrita para o named pipe em goroutine dedicada.
+func (d *dispatcherShell) writeLoop() {
+	for line := range d.writeQueue {
+		d.mu.Lock()
+		closed := d.closed
+		d.mu.Unlock()
+		if closed {
+			continue // shell encerrado: descarta o restante da fila
+		}
+		if _, err := d.pipeIn.Write([]byte(line)); err != nil {
+			log.Printf("[terminal] dispatcher pipe in write falhou: %v", err)
+			d.markOutputClosed()
+			return
+		}
+	}
+}
+
+// enqueueLocked coloca uma linha na fila de escrita (chamador segura d.mu).
+func (d *dispatcherShell) enqueueLocked(line string) error {
 	if d.closed {
 		return fmt.Errorf("shell fechado")
 	}
+	select {
+	case d.writeQueue <- line:
+		return nil
+	default:
+		return fmt.Errorf("fila de escrita cheia (%d/%d)", len(d.writeQueue), cap(d.writeQueue))
+	}
+}
+
+// WriteStdin enfileira o input (não-bloqueante) — a escrita real acontece em
+// writeLoop, fora do mutex.
+func (d *dispatcherShell) WriteStdin(data string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	line := base64.StdEncoding.EncodeToString([]byte(data)) + "\n"
-	_, err := d.pipeIn.Write([]byte(line))
-	return err
+	return d.enqueueLocked(line)
 }
 
 func (d *dispatcherShell) Resize(cols, rows int) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.closed {
-		return fmt.Errorf("shell fechado")
-	}
 	if cols <= 0 || rows <= 0 {
 		return fmt.Errorf("dimensões inválidas")
 	}
-	if _, err := d.pipeIn.Write([]byte(fmt.Sprintf("resize:%dx%d\n", cols, rows))); err != nil {
+	if err := d.enqueueLocked(fmt.Sprintf("resize:%dx%d\n", cols, rows)); err != nil {
 		return err
 	}
 	// Sem isto Dimensions() devolvia para sempre o tamanho do spawn, mesmo
@@ -241,16 +285,10 @@ func (d *dispatcherShell) Alive() bool {
 
 // Close encerra o shell. Usa closeOnce (idempotente) e NÃO toca no waitOnce.
 func (d *dispatcherShell) Close() error {
-	d.closeOnce.Do(func() {
-		d.mu.Lock()
-		d.closed = true
-		d.mu.Unlock()
-		_ = d.pipeIn.Close()
-		_ = d.pipeOut.Close()
-		if d.cmd != nil && d.cmd.Process != nil {
-			_ = d.cmd.Process.Kill()
-		}
-	})
+	d.shutdown()
+	if d.cmd != nil && d.cmd.Process != nil {
+		_ = d.cmd.Process.Kill()
+	}
 	return nil
 }
 
@@ -264,13 +302,8 @@ func (d *dispatcherShell) Wait() error {
 				d.waitErr = err
 			}
 		}
-		d.mu.Lock()
-		if !d.closed {
-			d.closed = true
-		}
-		d.mu.Unlock()
-		_ = d.pipeIn.Close()
-		_ = d.pipeOut.Close()
+		// Mesmo encerramento idempotente dos pipes/fila.
+		d.shutdown()
 	})
 	return d.waitErr
 }

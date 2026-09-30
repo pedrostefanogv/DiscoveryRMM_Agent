@@ -517,6 +517,21 @@ export class TaskView {
              */
             this["promptTimeoutSeconds"] = 0;
         }
+        if (!("notificationMode" in $$source)) {
+            /**
+             * NotificationMode: Silent | Prompt | Toast (efetivo, ja com fallback legado).
+             * @member
+             * @type {string}
+             */
+            this["notificationMode"] = "";
+        }
+        if (!("toastTiming" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["toastTiming"] = "";
+        }
         if (!("triggerImmediate" in $$source)) {
             /**
              * @member
@@ -584,17 +599,17 @@ export class TaskView {
      */
     static createFrom($$source = {}) {
         const $$createField19_0 = $$createType4;
-        const $$createField26_0 = $$createType4;
-        const $$createField27_0 = $$createType4;
+        const $$createField28_0 = $$createType4;
+        const $$createField29_0 = $$createType4;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("closeProcesses" in $$parsedSource) {
             $$parsedSource["closeProcesses"] = $$createField19_0($$parsedSource["closeProcesses"]);
         }
         if ("includeTags" in $$parsedSource) {
-            $$parsedSource["includeTags"] = $$createField26_0($$parsedSource["includeTags"]);
+            $$parsedSource["includeTags"] = $$createField28_0($$parsedSource["includeTags"]);
         }
         if ("excludeTags" in $$parsedSource) {
-            $$parsedSource["excludeTags"] = $$createField27_0($$parsedSource["excludeTags"]);
+            $$parsedSource["excludeTags"] = $$createField29_0($$parsedSource["excludeTags"]);
         }
         return new TaskView(/** @type {Partial<TaskView>} */($$parsedSource));
     }

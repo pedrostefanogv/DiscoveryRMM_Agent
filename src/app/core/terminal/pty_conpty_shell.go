@@ -109,16 +109,21 @@ func NewConPTYShell(shell ShellKind, cols, rows int, onOutput func(string)) (*Co
 	// os.FindProcess espera um PID, nao um HANDLE. pi.Process guarda o HANDLE
 	// retornado pelo CreateProcessW; o PID correto esta em pi.ProcessId.
 	process, err := os.FindProcess(int(pi.ProcessId))
-	// O os.FindProcess abre um handle proprio (OpenProcess) a partir do PID,
-	// portanto o handle original do CreateProcessW pode (e deve) ser fechado
-	// aqui para evitar vazamento.
-	syscall.CloseHandle(syscall.Handle(pi.Process))
 	if err != nil {
+		// NÃO deixar o shell órfão: o CreateProcessW já criou o processo, então
+		// matamos pelo handle ORIGINAL antes de fechá-lo (o FindProcess pode
+		// falhar por acesso, mas o processo está vivo e sem dono).
+		_ = syscall.TerminateProcess(syscall.Handle(pi.Process), 1)
+		syscall.CloseHandle(syscall.Handle(pi.Process))
 		ClosePseudoConsole(hpc)
 		stdinWrite.Close()
 		stdoutRead.Close()
 		return nil, fmt.Errorf("FindProcess: %w", err)
 	}
+	// O os.FindProcess abre um handle proprio (OpenProcess) a partir do PID,
+	// portanto o handle original do CreateProcessW pode (e deve) ser fechado
+	// aqui para evitar vazamento.
+	syscall.CloseHandle(syscall.Handle(pi.Process))
 
 	s := &ConPTYShell{
 		hpc:        hpc,
@@ -230,13 +235,15 @@ type procInfo struct {
 }
 
 func createProcessConPTY(cmdLine *uint16, hpc HPCON, pi *procInfo) error {
-	si := startupInfoExPool.Get().(*startupInfoEx)
-	defer startupInfoExPool.Put(si)
+	si := &startupInfoEx{}
 
 	// cb deve ser o tamanho de STARTUPINFOEXW (STARTUPINFOW + lpAttributeList),
 	// ou seja 112 bytes em 64-bit. Usar 104 (só STARTUPINFOW) faz o
 	// CreateProcessW falhar com ERROR_INVALID_PARAMETER.
-	si.cb = sizeOfStartupInfoEx
+	si.cb = startupInfoExSize
+	// SEM ISTO O CONPTY NÃO FUNCIONA: o pseudoconsole só é aplicado ao filho
+	// quando lpStartupInfo pede os std handles (ver startupInfoFlagUseStdHandles).
+	si.dwFlags = startupInfoFlagUseStdHandles
 	si.lpAttributeList = nil
 
 	// Monta a PROC_THREAD_ATTRIBUTE_LIST via API oficial. A estrutura possui um
@@ -293,24 +300,53 @@ func createProcessConPTY(cmdLine *uint16, hpc HPCON, pi *procInfo) error {
 }
 
 const (
-	// STARTUPINFOW tem 104 bytes (64-bit). STARTUPINFOEXW adiciona o campo
-	// lpAttributeList (8 bytes), totalizando 112 bytes.
-	sizeOfStartupInfo   = 104
-	sizeOfStartupInfoEx = 112
+	// STARTUPINFOW tem 104 bytes (64-bit); STARTUPINFOEXW adiciona o campo
+	// lpAttributeList (8 bytes), totalizando 112 — ver startupInfoEx abaixo.
 
 	// EXTENDED_STARTUPINFO_PRESENT not in Go's syscall package
 	extendedStartupinfoPresent = 0x00080000
+
+	// STARTF_USESTDHANDLES (wingdi.h) = 0x00000100. É OBRIGATÓRIO com
+	// pseudoconsole: sem este flag o Windows NÃO aplica os handles do ConPTY ao
+	// processo filho. O filho passa a rodar no console do PAI (a saída vaza
+	// para o stdout do agente), morre no boot com STATUS_DLL_INIT_FAILED
+	// (0xC0000142) e o pseudoconsole nunca recebe um byte — era exatamente isso
+	// que fazia o ConPTY "sempre falhar" e o terminal cair para o modo
+	// compatibilidade. Confirmado por bisseção: sem o flag, 0 bytes e processo
+	// morto; com o flag, a saída volta pelo pseudoconsole e o shell permanece
+	// vivo.
+	// CUIDADO: não confundir com STARTF_USESHOWWINDOW (0x1), que é o valor
+	// errado mais fácil de escrever aqui.
+	startupInfoFlagUseStdHandles = 0x00000100
 )
 
+// startupInfoEx espelha STARTUPINFOEXW (x64) campo a campo — ordem e tamanho
+// importam para o CreateProcessW. STARTUPINFOW = 104 bytes + lpAttributeList.
+// O layout é validado por test (startup_info_layout_windows_test.go).
 type startupInfoEx struct {
 	cb              uint32
-	_               [sizeOfStartupInfo - 4]byte
+	lpReserved      uintptr
+	lpDesktop       uintptr
+	lpTitle         uintptr
+	dwX             uint32
+	dwY             uint32
+	dwXSize         uint32
+	dwYSize         uint32
+	dwXCountChars   uint32
+	dwYCountChars   uint32
+	dwFillAttribute uint32
+	dwFlags         uint32
+	wShowWindow     uint16
+	cbReserved2     uint16
+	lpReserved2     uintptr
+	hStdInput       uintptr
+	hStdOutput      uintptr
+	hStdError       uintptr
 	lpAttributeList unsafe.Pointer
 }
 
-var startupInfoExPool = sync.Pool{
-	New: func() any { return &startupInfoEx{} },
-}
+// startupInfoExSize é o cb do STARTUPINFOEXW (112 em x64).
+var startupInfoExSize = uint32(unsafe.Sizeof(startupInfoEx{}))
 
 type procInfoNative struct {
 	Process   syscall.Handle

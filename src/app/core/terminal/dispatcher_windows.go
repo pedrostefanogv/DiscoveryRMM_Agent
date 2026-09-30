@@ -9,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -110,32 +111,39 @@ func RunDispatcher() {
 	// também mata o ConPTY DENTRO do dispatcher (o isolamento reduz, não
 	// elimina). Antes: uma única tentativa — falhou, exit(1), e o agente não
 	// tinha fallback (terminal morto em silêncio). onOutput → pipe outConn.
+	// firstOutput sinaliza saída já produzida: a sonda de startup sai cedo
+	// (produzir output = ConPTY saudável), em vez de esperar o timeout inteiro.
+	var firstOutput atomic.Bool
 	newShell := func() (IShell, error) {
 		return NewConPTYShell(ShellKind(shellKind), cols, rows, func(output string) {
+			firstOutput.Store(true)
 			_, _ = outConn.Write([]byte(output))
 		})
 	}
 	var ish IShell
 	var lastErr error
-	for attempt := 0; attempt <= conptyMaxRetries; attempt++ {
+	for attempt := 0; attempt <= dispatcherInnerRetries; attempt++ {
 		cand, cerr := newShell()
 		if cerr != nil {
 			lastErr = cerr
-			log.Printf("[dispatcher] NewConPTYShell falhou (tentativa %d/%d): %v", attempt+1, conptyMaxRetries+1, cerr)
-			continue
-		}
-		if dead := probeForEarlyDeath(cand, conptyProbeTimeout); dead {
+			log.Printf("[dispatcher] NewConPTYShell falhou (tentativa %d/%d): %v", attempt+1, dispatcherInnerRetries+1, cerr)
+		} else if probeForEarlyDeath(cand, conptyProbeTimeout, &firstOutput) {
 			lastErr = fmt.Errorf("ConPTY morreu prematuramente no startup")
-			log.Printf("[dispatcher] ConPTY morreu prematuramente (tentativa %d/%d); %s",
-				attempt+1, conptyMaxRetries+1, retryLabel(attempt))
+			log.Printf("[dispatcher] ConPTY morreu prematuramente (tentativa %d/%d); tentando novamente",
+				attempt+1, dispatcherInnerRetries+1)
 			_ = cand.Close()
-			continue
+		} else {
+			ish = cand
+			break
 		}
-		ish = cand
-		break
+		// Backoff: a morte prematura é uma corrida no boot do processo —
+		// respawn imediato tende a repetir a falha.
+		if attempt < dispatcherInnerRetries {
+			time.Sleep(conptyRetryBackoff)
+		}
 	}
 	if ish == nil {
-		log.Printf("[dispatcher] ConPTY instável após %d tentativas (último: %v)", conptyMaxRetries+1, lastErr)
+		log.Printf("[dispatcher] ConPTY instável após %d tentativas (último: %v)", dispatcherInnerRetries+1, lastErr)
 		os.Exit(1)
 	}
 	defer ish.Close()

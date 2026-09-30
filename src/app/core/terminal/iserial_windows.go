@@ -5,96 +5,218 @@ package terminal
 import (
 	"fmt"
 	"log"
+	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
-// conptyProbeTimeout é o tempo de observação do ConPTY logo após o spawn. Se o
-// processo filho morre dentro dessa janela (sintoma de 0xC0000142 /
-// STATUS_DLL_INIT_FAILED), considera-se ConPTY instável e faz-se fallback.
-const conptyProbeTimeout = 500 * time.Millisecond
+// ── Política de backend ──
+//
+// O console "legacy" (console real + pipes) NÃO é um terminal de verdade: o
+// stdin é uma PIPE, então o filho não processa VT — setas/histórico/TAB/Ctrl+C
+// não funcionam, o prompt apenas se repete e nada executa (sintoma relatado).
+// Por isso o ConPTY é o caminho PREFERIDO e o legacy só é aceito quando o
+// ConPTY não existe na máquina ou quando explicitamente liberado.
 
-// conptyMaxRetries define quantas tentativas extras de ConPTY são feitas após
-// uma morte prematura antes de desistir e cair para o console real (legacy).
-// Como o 0xC0000142 é intermitente (injeção de DLL de AV/antivírus), uma
-// segunda tentativa costuma estabilizar — preservando TUI/ANSI completos.
-const conptyMaxRetries = 2
+type TerminalBackendPolicy int
 
-// dispatcherProbeTimeout é a janela de observação do shell do dispatcher logo
-// após a conexão dos pipes. Precisa cobrir o boot do dispatcher E as suas
-// tentativas internas de ConPTY (3 × spawn + sonda de 500ms ≈ 2s+ — o filho
-// só sai quando TODAS falham). Se o dispatcher sair dentro desta janela
-// (ConPTY derrubado por AV no filho), a cadeia cai para ConPTY in-process →
-// legacy em vez de entregar um shell morto e mudo. No caso saudável a sonda
-// sai CEDO (primeiro output), então uma janela maior não custa latência.
-const dispatcherProbeTimeout = 4 * time.Second
+const (
+	// BackendAuto (padrão): ConPTY primeiro; o console real só é usado quando
+	// o ConPTY não existe (Windows < 10 1809) ou com DISCOVERY_TERM_ALLOW_LEGACY=1.
+	BackendAuto TerminalBackendPolicy = iota
+	// BackendConPTY: exige ConPTY — se todas as tentativas falharem devolve
+	// erro com a causa, em vez de entregar um shell de pipe inutilizável.
+	BackendConPTY
+	// BackendLegacy: força o console real (pipes). Diagnóstico/compatibilidade.
+	BackendLegacy
+)
 
-// NewShellInteractive cria um shell do melhor backend disponível:
-// ConPTY primeiro; se o processo morre prematuramente (com 0xC0000142 /
-// STATUS_DLL_INIT_FAILED) no boot de DLL, tenta novamente (até conptyMaxRetries)
-// e só então faz fallback para o console real (pipes + CREATE_NEW_CONSOLE), que
-// é mais resistente a injetores/AV.
+// ResolveBackendPolicy lê DISCOVERY_TERM_BACKEND (auto|conpty|legacy).
+func ResolveBackendPolicy() TerminalBackendPolicy {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("DISCOVERY_TERM_BACKEND"))) {
+	case "legacy", "console", "pipe":
+		return BackendLegacy
+	case "conpty", "strict":
+		return BackendConPTY
+	default:
+		return BackendAuto
+	}
+}
+
+// legacyAllowExplicit libera o fallback para o console real MESMO quando o
+// ConPTY existe (o antigo downgrade silencioso).
+// Opt-in: DISCOVERY_TERM_ALLOW_LEGACY=1.
+func legacyAllowExplicit() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("DISCOVERY_TERM_ALLOW_LEGACY"))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+// ── Timings do startup ──
+
+const (
+	// conptyStableWindow é a janela de risco do 0xC0000142
+	// (STATUS_DLL_INIT_FAILED): o DllMain de uma DLL injetada falha em ~20–60 ms.
+	// Sobreviver a esta janela — ou produzir saída — já caracteriza ConPTY
+	// saudável. ANTES a sonda só olhava Alive() e queimava o timeout INTEIRO no
+	// caminho feliz (4 s no dispatcher), atrasando o terminal sem motivo.
+	conptyStableWindow = 500 * time.Millisecond
+
+	// conptyProbeTimeout é o teto da sonda do ConPTY in-process (morte
+	// prematura é detectada em ~40 ms; o caminho feliz sai em ~500 ms).
+	conptyProbeTimeout = 1200 * time.Millisecond
+
+	// conptyMaxRetries: a morte prematura do ConPTY (0xC0000142) ainda ocorre de
+	// forma intermitente mesmo com o spawn correto (corrida de injeção de DLL de
+	// AV/EDR no boot). Cada tentativa falha custa ~40 ms + backoff, então um
+	// número alto de tentativas é barato e recupera praticamente todos os casos
+	// (medido na estação: tentativa 1 falhou, tentativa 2 subiu).
+	conptyMaxRetries   = 8
+	conptyRetryBackoff = 150 * time.Millisecond
+
+	// dispatcherInnerRetries é o retry DENTRO do processo dispatcher. O pai já
+	// repete a escada inteira; manter este número baixo evita que um dispatcher
+	// preso segure a sessão por muito tempo.
+	dispatcherInnerRetries = 3
+
+	// dispatcherProbeTimeout cobre o boot do dispatcher E as tentativas
+	// internas dele (5 × spawn + sonda). O caminho feliz sai em ~500 ms.
+	dispatcherProbeTimeout = 5 * time.Second
+)
+
+// NewShellInteractive cria um shell do melhor backend disponível, com o ConPTY
+// como caminho padrão:
+//
+//	1. ConPTY in-process (menor latência) — com retry/backoff;
+//	2. dispatcher (ConPTY isolado em processo filho) — mesma tecnologia;
+//	3. console real (legacy) APENAS se o ConPTY não existir na máquina ou se
+//	   DISCOVERY_TERM_ALLOW_LEGACY=1. Caso contrário devolve erro com a causa,
+//	   que o viewer mostra ao operador (em vez de um shell de pipe que "abre"
+//	   mas não executa nada).
 func NewShellInteractive(shell ShellKind, cols, rows int, onOutput func(string)) (IShell, error) {
-	// 0ª tentativa: dispatcher (ConPTY num processo filho isolado) quando
-	// habilitado via DISCOVERY_TERM_DISPATCHER=1. Isola o ConPTY do processo
-	// GUI do agente, reduzindo o 0xC0000142. Se falhar ou não habilitado,
-	// segue para ConPTY in-process → legacy.
+	policy := ResolveBackendPolicy()
+	if policy == BackendLegacy {
+		log.Printf("[terminal] backend=legacy forçado por DISCOVERY_TERM_BACKEND")
+		return NewLegacyShell(shell, cols, rows, onOutput)
+	}
+
+	if !IsConPTYAvailable() {
+		// Sem as APIs de pseudoconsole não existe alternativa: o console real
+		// (pipes) é o único shell possível nesta máquina.
+		log.Printf("[terminal] ConPTY indisponível neste sistema (requer Windows 10 1809+); usando console real (legacy)")
+		return NewLegacyShell(shell, cols, rows, onOutput)
+	}
+
+	// Acumula TODAS as causas: se a escada inteira falhar, o operador precisa
+	// ver as duas (antes a mensagem do dispatcher sobrescrevia a do in-process).
+	var failures []string
+
+	// 1) ConPTY in-process: caminho preferido.
+	if s, err := tryConPTY(shell, cols, rows, onOutput); err != nil {
+		failures = append(failures, "conpty: "+err.Error())
+	} else {
+		return s, nil
+	}
+
+	// 2) ConPTY isolado em processo filho (dispatcher).
 	if DispatchersAvailable() {
-		ds, err := NewDispatcherShell(shell, cols, rows, onOutput)
-		if err == nil {
-			// Sonda de morte prematura: o NewDispatcherShell devolve sucesso
-			// assim que os named pipes conectam — o ConPTY é criado DEPOIS,
-			// dentro do filho. Se o AV derrubar o ConPTY no boot de DLL
-			// (0xC0000142), o dispatcher sai em ~instantes e o shell fica
-			// MUDO: sessão criada, term.ready publicado, zero output — o
-			// "terminal não funciona" com banner de compatibilidade que
-			// ninguém entendia. Sem esta sonda NÃO havia retry/fallback
-			// depois do dispatcher (a escada só cobria o ConPTY in-process).
-			if dead := probeForEarlyDeath(ds, dispatcherProbeTimeout); dead {
-				log.Printf("[terminal] dispatcher morreu prematuramente (ConPTY isolado derrubado?); tentando ConPTY in-process")
-				_ = ds.Close()
-			} else {
-				log.Printf("[terminal] usando dispatcher (ConPTY remoto isolado)")
-				return ds, nil
-			}
+		if ds, err := tryDispatcher(shell, cols, rows, onOutput); err != nil {
+			failures = append(failures, "dispatcher: "+err.Error())
 		} else {
-			log.Printf("[terminal] dispatcher indisponível (%v); usando ConPTY in-process ou legacy", err)
+			return ds, nil
 		}
 	} else {
-		log.Printf("[terminal] dispatcher desabilitado por configuração; usando ConPTY in-process ou legacy")
+		log.Printf("[terminal] dispatcher desabilitado (DISCOVERY_TERM_DISPATCHER=0)")
 	}
 
-	// 1ª tentativa: ConPTY (contribui com TUI/ANSI quando estável).
-	if IsConPTYAvailable() {
-		var lastErr error
-		for attempt := 0; attempt <= conptyMaxRetries; attempt++ {
-			s, err := NewConPTYShell(shell, cols, rows, onOutput)
-			if err != nil {
-				lastErr = err
-				log.Printf("[terminal] ConPTY falhou no spawn (tentativa %d/%d): %v", attempt+1, conptyMaxRetries+1, err)
-				continue
-			}
-			// O 0xC0000142 termina em milissegundos. Observamos por uma janela
-			// curta usando Alive() (não-bloqueante, não consome Wait): se o
-			// processo segui vivo, aceitamos ConPTY; se morreu prematuramente,
-			// tentamos novamente antes de partir para o console real oculto.
-			if dead := probeForEarlyDeath(s, conptyProbeTimeout); dead {
-				lastErr = fmt.Errorf("ConPTY morreu prematuramente no startup")
-				log.Printf("[terminal] ConPTY morreu prematuramente (tentativa %d/%d); %s",
-					attempt+1, conptyMaxRetries+1, retryLabel(attempt))
-				_ = s.Close()
-				continue
-			}
+	// 3) ConPTY existe mas não subiu. Entregar o shell de pipe produziria o
+	// terminal "quebrado" (prompt repetindo, nada executa) — melhor falhar com
+	// causa explícita, que o viewer mostra no banner de erro.
+	detail := strings.Join(failures, "; ")
+	if detail == "" {
+		detail = "nenhum backend ConPTY disponivel"
+	}
+	if legacyAllowExplicit() {
+		log.Printf("[terminal] fallback para console real liberado por DISCOVERY_TERM_ALLOW_LEGACY=1: %s", detail)
+		return NewLegacyShell(shell, cols, rows, onOutput)
+	}
+	// A dica da variável de ambiente fica no LOG (diagnóstico), não na mensagem
+	// que chega ao operador no banner do terminal.
+	log.Printf("[terminal] ConPTY indisponivel na pratica (%s); para forcar o console real (pipes, sem VT) use DISCOVERY_TERM_ALLOW_LEGACY=1", detail)
+	return nil, fmt.Errorf("nao foi possivel iniciar o terminal ConPTY neste computador (%s)", detail)
+}
+
+// tryConPTY tenta o ConPTY in-process com retry/backoff.
+func tryConPTY(shell ShellKind, cols, rows int, onOutput func(string)) (IShell, error) {
+	var lastErr error
+	for attempt := 0; attempt <= conptyMaxRetries; attempt++ {
+		firstOutput := &atomic.Bool{}
+		s, err := NewConPTYShell(shell, cols, rows, func(out string) {
+			firstOutput.Store(true)
+			onOutput(out)
+		})
+		if err != nil {
+			lastErr = err
+			log.Printf("[terminal] ConPTY falhou no spawn (tentativa %d/%d): %v", attempt+1, conptyMaxRetries+1, err)
+		} else if probeForEarlyDeath(s, conptyProbeTimeout, firstOutput) {
+			lastErr = fmt.Errorf("ConPTY morreu prematuramente no startup")
+			log.Printf("[terminal] ConPTY morreu prematuramente (tentativa %d/%d); %s",
+				attempt+1, conptyMaxRetries+1, retryLabel(attempt))
+			_ = s.Close()
+		} else {
 			return s, nil
 		}
-		log.Printf("[terminal] ConPTY instável após %d tentativas (último: %v); usando console real", conptyMaxRetries+1, lastErr)
+		if attempt < conptyMaxRetries {
+			time.Sleep(conptyRetryBackoff)
+		}
 	}
+	return nil, lastErr
+}
 
-	// 2ª: ConPTY indisponível ou falhou no spawn — usa console real.
-	if !IsConPTYAvailable() {
-		log.Printf("[terminal] ConPTY indisponível neste sistema (requer Windows 10 1809+); usando console real (legacy)")
+// tryDispatcher tenta o ConPTY isolado no processo filho (dispatcher).
+func tryDispatcher(shell ShellKind, cols, rows int, onOutput func(string)) (IShell, error) {
+	firstOutput := &atomic.Bool{}
+	ds, err := NewDispatcherShell(shell, cols, rows, func(out string) {
+		firstOutput.Store(true)
+		onOutput(out)
+	})
+	if err != nil {
+		log.Printf("[terminal] dispatcher indisponivel (%v)", err)
+		return nil, err
 	}
-	return NewLegacyShell(shell, cols, rows, onOutput)
+	if probeForEarlyDeath(ds, dispatcherProbeTimeout, firstOutput) {
+		log.Printf("[terminal] dispatcher morreu prematuramente (ConPTY isolado nao subiu)")
+		_ = ds.Close()
+		return nil, fmt.Errorf("dispatcher morreu prematuramente")
+	}
+	log.Printf("[terminal] usando dispatcher (ConPTY remoto isolado)")
+	return ds, nil
+}
+
+// probeForEarlyDeath observa o shell no startup e devolve true se ele morreu.
+// Sai CEDO em dois casos: (a) o processo morreu (0xC0000142 aparece em ~20–60 ms)
+// ou (b) o shell já produziu saída. Sem (b), o caminho feliz esperava o timeout
+// inteiro — 4 s no dispatcher. firstOutput pode ser nil.
+func probeForEarlyDeath(s IShell, timeout time.Duration, firstOutput *atomic.Bool) bool {
+	deadline := time.Now().Add(timeout)
+	started := time.Now()
+	for time.Now().Before(deadline) {
+		if !s.Alive() {
+			return true
+		}
+		if firstOutput != nil && firstOutput.Load() {
+			return false
+		}
+		if time.Since(started) >= conptyStableWindow {
+			return false // sobreviveu à janela de risco do DllMain
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return !s.Alive()
 }
 
 // retryLabel devolve o texto de reação para o log conforme a tentativa restante.
@@ -102,21 +224,7 @@ func retryLabel(attempt int) string {
 	if attempt < conptyMaxRetries {
 		return "tentando novamente"
 	}
-	return "usando console real"
-}
-
-// probeForEarlyDeath observa o shell por um curto intervalo de startup,
-// verificando periodicamente Alive() (que NÃO consome o Wait() da sessão).
-// Retorna true se o processo morreu dentro da janela (morte prematura).
-func probeForEarlyDeath(s IShell, timeout time.Duration) bool {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if !s.Alive() {
-			return true
-		}
-		time.Sleep(25 * time.Millisecond)
-	}
-	return !s.Alive()
+	return "esgotadas as tentativas"
 }
 
 // ShellBackendName retorna o nome legível do backend de shell em uso, para
@@ -133,15 +241,16 @@ func ShellBackendName(s IShell) string {
 		// verdade (setas/história/TAB funcionam). Reportar "legacy" aqui —
 		// comportamento antigo — fazia o viewer exibir o banner falso
 		// "Modo compatibilidade (ConPTY indisponível)" e aplicar mitigações
-		// de input de pipe (\x7f→\x08, interceptação de clear/cls) sobre
-		// uma sessão ConPTY sã.
+		// de input de pipe sobre uma sessão ConPTY sã.
 		return "conpty"
 	}
 	return "legacy"
 }
 
-// NewLegacyShell cria um shell via console real (pipes + CREATE_NEW_CONSOLE),
-// o mais tolerante a injetores/AV.
+// NewLegacyShell cria um shell via console real (pipes + CREATE_NEW_CONSOLE).
+// É o último recurso: o stdin é um pipe, então setas/histórico/TAB/Ctrl+C NÃO
+// funcionam e o prompt apenas se repete. Só é usado quando o ConPTY não existe
+// na máquina ou com DISCOVERY_TERM_ALLOW_LEGACY=1.
 func NewLegacyShell(shell ShellKind, cols, rows int, onOutput func(string)) (IShell, error) {
 	key := string(shell)
 	if strings.HasPrefix(key, "wsl") {
@@ -154,12 +263,10 @@ func NewLegacyShell(shell ShellKind, cols, rows int, onOutput func(string)) (ISh
 	_ = s.Resize(cols, rows)
 	// Banner sintético no stream: no legacy o stdout do shell é um PIPE e o
 	// cmd/powershell NÃO imprime banner/prompt por ele (o banner vai para o
-	// console real oculto) — provado em 17/09: terminal ConPTY morto por
-	// 0xC0000142 (Kaspersky) → legacy → viewer com tela VAZIA, parecendo
-	// terminal morto mesmo com o shell vivo. Com o aviso, o usuário sabe que
-	// o terminal está vivo: digite o comando e Enter (setas/TAB não funcionam
-	// neste backend — stdin é pipe, sem processamento VT).
-	onOutput("\r\n\x1b[33m" + key + " iniciado em modo compatibilidade (sem ConPTY neste agente).\r\nEdição local ativa: ↑/↓ histórico, Backspace/Home/End/Delete, clear/cls e Ctrl+L.\r\nTAB e Ctrl+C (interromper execução) não funcionam neste modo.\x1b[0m\r\n\r\n")
+	// console real oculto). Sem o aviso o viewer ficaria em tela vazia.
+	onOutput("\r\n\x1b[33mconsole real (modo compatibilidade): ConPTY indisponivel nesta maquina ou liberado por configuracao.\r\n" +
+		"Stdin em pipe: setas, TAB, Home/End/Delete e Ctrl+C NAO funcionam no shell.\r\n" +
+		"Edicao local no viewer: historico, Backspace, Home/End/Delete, clear/cls e Ctrl+L.\x1b[0m\r\n\r\n")
 	return s, nil
 }
 
