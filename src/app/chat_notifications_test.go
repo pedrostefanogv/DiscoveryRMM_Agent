@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -251,6 +253,7 @@ func TestSetChatTabActiveAndNilSafeNotification(t *testing.T) {
 	// Sem serviço nativo registrado nada é enviado e nada panica.
 	a.notifyChatResponseComplete("resposta")
 	a.notifyChatResponseFailed("erro")
+	a.notifyChatQuestion("pergunta")
 	a.sendChatNotification(chatNotifyResponse, "resposta")
 	a.SetNativeNotificationService(nil)
 	// Lifecycle nil-safe (sem serviço registrado nada acontece).
@@ -345,6 +348,165 @@ func TestHandleActivationArgsSetsPendingBeforeUIRready(t *testing.T) {
 	}
 	if !a.uiReady.Load() {
 		t.Fatal("uiReady deveria ser marcado pelo primeiro report")
+	}
+}
+
+// TestChatNotificationTextQuestion cobre o texto da notificação de pergunta.
+func TestChatNotificationTextQuestion(t *testing.T) {
+	question := "Deseja reiniciar o serviço agora?"
+	title, body := chatNotificationText(chatNotifyQuestion, question, "pt-BR", true)
+	if title != "O agente aguarda sua resposta" || body != question {
+		t.Fatalf("pt-BR inesperado: %q / %q", title, body)
+	}
+	titleEN, bodyEN := chatNotificationText(chatNotifyQuestion, question, "en-US", true)
+	if titleEN != "The agent is waiting for your answer" || bodyEN != question {
+		t.Fatalf("en-US inesperado: %q / %q", titleEN, bodyEN)
+	}
+	// Sem preview (privacidade) a pergunta não pode aparecer.
+	for _, lang := range []string{"pt-BR", "en-US"} {
+		_, generic := chatNotificationText(chatNotifyQuestion, question, lang, false)
+		if strings.Contains(generic, "reiniciar") || strings.Contains(generic, "serviço") {
+			t.Fatalf("corpo sem preview vazou a pergunta (%s): %q", lang, generic)
+		}
+		if generic == "" {
+			t.Fatalf("corpo genérico vazio (%s)", lang)
+		}
+	}
+}
+
+// TestDeliverChatNotificationQuestionBypassesAbsence garante que o aviso de
+// pergunta (agente bloqueado esperando) não é engolido pelo aviso de resposta
+// já dado na mesma ausência — e que ele não consome essa ausência.
+func TestDeliverChatNotificationQuestionBypassesAbsence(t *testing.T) {
+	a := NewApp(AppStartupOptions{})
+	sender := &fakeSender{}
+
+	// Simula "já avisamos uma resposta nesta ausência" e remove o debounce
+	// para isolar a regra de ausência.
+	a.chatNotifyPending = true
+	a.chatNotifyLastAt = time.Time{}
+
+	if !a.deliverChatNotification(chatNotifyQuestion, "Reiniciar?", awayState(), false, true, sender.send) {
+		t.Fatal("pergunta deveria notificar mesmo com resposta já avisada")
+	}
+	if len(sender.sent) != 1 {
+		t.Fatalf("esperado 1 envio, got %d", len(sender.sent))
+	}
+	if kind, _ := sender.sent[0].Data["kind"].(string); kind != "chat.question" {
+		t.Fatalf("kind inesperado: %+v", sender.sent[0].Data)
+	}
+	if !a.chatNotifyPending {
+		t.Fatal("a pergunta não pode consumir a ausência da resposta")
+	}
+
+	// E a resposta seguinte continua suprimida pela ausência já avisada.
+	a.chatNotifyLastAt = time.Time{}
+	if a.deliverChatNotification(chatNotifyResponse, "Resposta", awayState(), false, true, sender.send) {
+		t.Fatal("resposta na mesma ausência deveria continuar suprimida")
+	}
+	if len(sender.sent) != 1 {
+		t.Fatalf("esperado 1 envio após supressão, got %d", len(sender.sent))
+	}
+}
+
+// TestChatResponsePreviewStripsMarkdown cobre o caso real de produção: a
+// resposta começava com "Boa notícia: **não há nenhum sinal...**" e o toast
+// exibia os asteriscos literais (o Windows não renderiza markdown).
+func TestChatResponsePreviewStripsMarkdown(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "negrito inline (caso de produção)",
+			in:   "Fiz uma análise completa da sua máquina agora. Boa notícia: **não há nenhum sinal de sobrecarga ou problema grave de hardware no momento.** Veja o que encontrei:",
+			want: "Fiz uma análise completa da sua máquina agora. Boa notícia: não há nenhum sinal de sobrecarga ou problema grave de hardware no momento. Veja o que encontrei:",
+		},
+		{name: "itálico e código", in: "*importante*: rodar `gpupdate /force`", want: "importante: rodar gpupdate /force"},
+		{name: "link", in: "Veja [a documentação](https://exemplo.com/doc) do produto.", want: "Veja a documentação do produto."},
+		{name: "imagem e html", in: "![logo](http://x/y.png) <b>Pronto</b>", want: "logo Pronto"},
+		{name: "bullet com negrito", in: "- **CPU:** 26% de uso", want: "CPU: 26% de uso"},
+		{name: "item numerado", in: "1. Reinicie o serviço Spooler", want: "Reinicie o serviço Spooler"},
+		{name: "título", in: "### Resumo do dia", want: "Resumo do dia"},
+		{name: "citação", in: "> atenção ao disco D:", want: "atenção ao disco D:"},
+		{name: "bullet com asterisco", in: "* item um", want: "item um"},
+		{name: "itálico no início não vira bullet", in: "*atenção* ao disco", want: "atenção ao disco"},
+		{name: "riscado", in: "~~obsoleto~~ atual", want: "obsoleto atual"},
+		{name: "underscore em nome de arquivo", in: "O arquivo chat_config.json foi lido.", want: "O arquivo chat_config.json foi lido."},
+		{name: "negrito não fechado", in: "Resultado **parcial", want: "Resultado parcial"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := chatResponsePreview(tc.in); got != tc.want {
+				t.Fatalf("chatResponsePreview(%q) = %q, esperado %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestChatResponsePreviewSkipsCodeAndTables garante que o preview não escolhe
+// linhas de bloco de código nem linhas de tabela como texto do toast.
+func TestChatResponsePreviewSkipsCodeAndTables(t *testing.T) {
+	in := "~~~powershell\nGet-Service Spooler\n~~~\n\n|---|---|\n| a | b |\n\nDepois disso tudo funcionou."
+	if got := chatResponsePreview(in); got != "Depois disso tudo funcionou." {
+		t.Fatalf("preview = %q, esperado o texto final", got)
+	}
+}
+
+// TestEnsureNotificationIconMaterializesPNG cobre a materialização do PNG do
+// logo (Windows exige URI file:/// no src do toast).
+func TestEnsureNotificationIconMaterializesPNG(t *testing.T) {
+	a := NewApp(AppStartupOptions{})
+	a.notificationIconDir = t.TempDir()
+	a.trayIcon = []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}
+
+	url := a.ensureNotificationIcon()
+	if !strings.HasPrefix(url, "file:///") {
+		t.Fatalf("URI inesperado: %q", url)
+	}
+	path := filepath.FromSlash(strings.TrimPrefix(url, "file:///"))
+	if filepath.Base(path) != chatNotificationIconFile {
+		t.Fatalf("arquivo inesperado: %q", path)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("ícone não materializado: %v", err)
+	}
+	if info.Size() != int64(len(a.trayIcon)) {
+		t.Fatalf("tamanho inesperado: %d", info.Size())
+	}
+
+	// O toast precisa levar o logo como appLogoOverride (é o que o Windows
+	// mostra no popup, independente do AppUserModelId).
+	a.trayIcon = []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}
+	sender := &fakeSender{}
+	if !a.deliverChatNotification(chatNotifyResponse, "Pronto.", awayState(), false, true, sender.send) {
+		t.Fatal("notificação deveria ser entregue")
+	}
+	if len(sender.sent) != 1 {
+		t.Fatalf("esperado 1 envio, got %d", len(sender.sent))
+	}
+	att := sender.sent[0].Attachments
+	if len(att) != 1 || att[0].Type != "appLogoOverride" {
+		t.Fatalf("logo ausente no toast: %+v", att)
+	}
+	if !strings.HasPrefix(att[0].Path, "file:///") {
+		t.Fatalf("caminho do logo deve ser URI: %q", att[0].Path)
+	}
+
+	// Sem bytes de ícone o toast sai sem logo, mas nada quebra.
+	a.trayIcon = nil
+	if got := a.ensureNotificationIcon(); got != "" {
+		t.Fatalf("sem bytes de ícone o URI deve ser vazio, got %q", got)
+	}
+	a.clearChatNotifyAbsence()
+	sender2 := &fakeSender{}
+	if !a.deliverChatNotification(chatNotifyResponse, "Pronto.", awayState(), false, true, sender2.send) {
+		t.Fatal("notificação sem logo deveria ser entregue")
+	}
+	if len(sender2.sent[0].Attachments) != 0 {
+		t.Fatalf("sem ícone não pode haver anexo: %+v", sender2.sent[0].Attachments)
 	}
 }
 

@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -172,12 +173,12 @@ type App struct {
 	// main.go); chatTabActive é reportado pelo frontend (SetChatTabActive) e a
 	// decisão final combina esse estado com foco/visibilidade reais da janela.
 	nativeNotifications *wailsnotifications.NotificationService
-	// nativeNotificationsReady é fornecido pelo wrapper de startup em main.go:
-	// false quando o serviço nativo não conseguiu inicializar (toast desabilitado
-	// em vez de tentar enviar por um notifier meio-inicializado).
 	// nativeNotificationsStarted: o ServiceStartup do serviço nativo concluiu
 	// com sucesso (sem isso o notifier tem AppID/CLSID vazios).
 	nativeNotificationsStarted atomic.Bool
+	// notificationIconDir sobrescreve o diretório onde o PNG do logo do toast é
+	// materializado (vazio = diretório de dados do agente). Usado pelos testes.
+	notificationIconDir string
 	// Fan-out do callback único de OnNotificationResponse do serviço nativo.
 	nativeNotifyHandlersMu sync.Mutex
 	nativeNotifyHandlers   []func(wailsnotifications.NotificationResult)
@@ -917,7 +918,7 @@ func NewApp(opts AppStartupOptions) *App {
 	if a.RuntimeFlags.ServiceMode {
 		logPath = platform.ServiceLogFilePath()
 	}
-	if logPath != "" {
+	if logPath != "" && logFilePersistenceEnabled() {
 		if err := a.Logs.EnableFilePersistence(logPath); err != nil {
 			log.Printf("[startup] aviso: falha ao habilitar persistência de logs em arquivo: %v", err)
 		} else {
@@ -948,6 +949,18 @@ func NewApp(opts AppStartupOptions) *App {
 	agentconfig.NormalizeRolloutDefaults(&a.AgentConfig.Rollout)
 
 	return a
+}
+
+// logFilePersistenceEnabled informa se o processo deve persistir logs no
+// arquivo do agente.
+//
+// Em binários de teste devolve false: os testes criam Apps reais (NewApp) e
+// passavam a escrever linhas de startup e de falhas simuladas no agent.log de
+// PRODUÇÃO (C:ProgramDataDiscoverylogsagent.log), poluindo o log do
+// usuário. A flag "test.v" só existe quando o pacote testing está linkado
+// (binário do go test); o agente em produção nunca a registra.
+func logFilePersistenceEnabled() bool {
+	return flag.Lookup("test.v") == nil
 }
 
 func (a *App) GetRuntimeFlags() RuntimeFlags {

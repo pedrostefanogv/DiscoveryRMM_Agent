@@ -1783,12 +1783,20 @@ function clearA2uiSurface() {
 })();
 
 // __discoveryFocusChatView é chamado pelo backend (ExecJS) quando o usuário
-// clica na notificação nativa de resposta concluída: a janela é trazida para
-// frente no Go e aqui a aba de chat é selecionada.
+// clica na notificação nativa (resposta concluída ou pergunta aguardando): a
+// janela é trazida para frente no Go e aqui a aba de chat é selecionada.
+// Quando há uma pergunta pendente, o foco vai para o dock de resposta — é o
+// campo que o usuário precisa usar para destravar o turno.
 window.__discoveryFocusChatView = function () {
   try {
     if (typeof setActiveTab === "function") setActiveTab("chat");
-    if (chatInputEl) chatInputEl.focus();
+    var dockVisible =
+      !!chatQuestionDock && !chatQuestionDock.classList.contains("hidden");
+    if (dockVisible && chatQuestionDockInput) {
+      chatQuestionDockInput.focus();
+    } else if (chatInputEl) {
+      chatInputEl.focus();
+    }
     scheduleChatScrollToBottom();
   } catch (e) {
     console.warn("[chat] falha ao focar a aba de chat:", e);

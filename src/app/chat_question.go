@@ -122,6 +122,11 @@ func (a *App) AskUserContext(ctx context.Context, question, optionsJSON, allowTe
 	// eventos de chat pelo endpoint SSE (ver chat-native-event-loss.md).
 	a.PublishChatEvent("chat:question", string(qJSON))
 
+	// Aviso nativo: o turno fica bloqueado até o usuário responder — se a
+	// janela do chat não está em tela, ele precisa saber que o agente parou
+	// esperando por ele (ver chat_notifications.go).
+	a.notifyChatQuestion(question)
+
 	// Sem timeout: aguarda o usuário responder indefinidamente. O ctx (stream
 	// do chat ou ciclo de vida do app) é a única forma de interromper.
 	select {
