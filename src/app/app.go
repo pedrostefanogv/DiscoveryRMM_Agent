@@ -38,6 +38,7 @@ import (
 	"discovery/app/core/remotesession"
 	"discovery/app/core/safego"
 	"discovery/app/core/selfupdate"
+	"discovery/app/core/screenshot"
 	"discovery/app/core/services"
 	"discovery/app/core/winget"
 	"discovery/app/coreagent"
@@ -113,6 +114,13 @@ type App struct {
 	mcpRegistry *mcp.Registry
 	chatSvc     *chat.Service
 	psadtSvc    *psadt.Service
+
+	// ── Captura de tela assistida (chat IA) ──
+	// screenshotConsent controla a autorização do usuário; screenshotMu/
+	// screenshotOverlay guardam a sessão ativa do overlay de seleção.
+	screenshotMu      sync.Mutex
+	screenshotConsent *screenshot.ConsentManager
+	screenshotOverlay *screenshotOverlaySession
 
 	// toolsRegistration guarda o timestamp do último registro bem-sucedido de tools.
 	// Usado para re-registrar se o cache do servidor expirou (TTL 5min por padrão no servidor).
@@ -249,6 +257,8 @@ func NewApp(opts AppStartupOptions) *App {
 	a.CoreAgent.InvSvc = services.NewInventoryService(inventoryProvider)
 	a.CoreAgent.PrinterSvc = services.NewPrinterService(printerManager)
 	a.Logs.Buffer = logs.New()
+	// Consentimento de captura de tela (tools MCP + overlay do chat).
+	a.initScreenshotService()
 	installerSvc = installer.New(installer.Deps{
 		NormalizeP2PConfig: normalizeP2PConfig,
 	})

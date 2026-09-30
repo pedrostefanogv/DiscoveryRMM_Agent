@@ -111,6 +111,11 @@ type agentStreamRequest struct {
 	// rotear o provedor LLM (ex.: OpenRouter). Servidores antigos ignoram.
 	Model string `json:"model,omitempty"`
 	Mode string `json:"mode,omitempty"`
+	// Images são data URLs (data:image/png;base64,...) anexadas pelo usuário a
+	// este turno (ex.: print de tela capturado pelo agente). O servidor as
+	// converte em conteúdo multimodal na mensagem do usuário. Servidores
+	// antigos ignoram o campo.
+	Images []string `json:"images,omitempty"`
 }
 
 // pendingToolCall collects a tool_call event before execution.

@@ -75,6 +75,43 @@ type Service struct {
 	// (ex.: usuário clicando em "enviar" duas vezes, ou webview + debug HTTP)
 	// não devem compartilhar history/sessionID em loops paralelos.
 	turnMu sync.Mutex
+
+	// pendingImagesMu protege as imagens (data URLs) que o usuário anexou ao
+	// chat (ex.: print da tela). São consumidas pelo próximo turno multi-round
+	// e enviadas ao servidor no campo "images" — o servidor as converte em
+	// conteúdo multimodal para o LLM.
+	pendingImagesMu sync.Mutex
+	pendingImages   []string
+}
+
+// maxPendingImages limita quantos prints entram em um único turno.
+const maxPendingImages = 3
+
+// SetPendingImages registra imagens (data URLs) anexadas pelo usuário para o
+// próximo turno. Substitui qualquer anexo anterior (evita acúmulo silencioso).
+func (s *Service) SetPendingImages(images []string) {
+	s.pendingImagesMu.Lock()
+	defer s.pendingImagesMu.Unlock()
+	if len(images) == 0 {
+		s.pendingImages = nil
+		return
+	}
+	if len(images) > maxPendingImages {
+		images = images[:maxPendingImages]
+	}
+	s.pendingImages = append([]string(nil), images...)
+}
+
+// takePendingImages consome (e limpa) as imagens pendentes do turno.
+func (s *Service) takePendingImages() []string {
+	s.pendingImagesMu.Lock()
+	defer s.pendingImagesMu.Unlock()
+	if len(s.pendingImages) == 0 {
+		return nil
+	}
+	out := s.pendingImages
+	s.pendingImages = nil
+	return out
 }
 
 // A2uiAction representa uma ação do usuário em uma surface A2UI.

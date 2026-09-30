@@ -746,6 +746,23 @@
   font-weight: 500;
 }
 
+/* Cronômetro do widget de atividade (mm:ss). Uma única chamada de winget/choco
+ * pode levar 1-2min sem emitir evento: o contador é a prova visual de que a
+ * execução continua viva, não travada.
+ */
+.chat-activity-elapsed {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  opacity: 0.8;
+}
+
 .chat-activity-steps {
   display: flex;
   flex-wrap: wrap;

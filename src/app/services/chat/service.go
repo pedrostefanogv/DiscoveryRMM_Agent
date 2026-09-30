@@ -411,6 +411,41 @@ func (s *Service) StartStream(message string) {
 	})
 }
 
+// maxAttachedImageBytes limita o tamanho de cada data URL anexada (base64).
+// Um print PNG grande é redimensionado pelo backend antes de virar anexo.
+// Alinhado ao teto do servidor (AiChatHelpers.MaxImageBase64Chars = 4 MiB):
+// acima disso o servidor descarta a imagem silenciosamente.
+const maxAttachedImageBytes = 4 << 20
+
+// StartStreamWithImages envia uma mensagem com imagens anexadas (data URLs) —
+// usado pelo ícone de captura de tela do chat. As imagens são validadas
+// (prefixo data:image/ e tamanho) e enviadas ao servidor no primeiro round,
+// onde viram conteúdo multimodal para o LLM.
+func (s *Service) StartStreamWithImages(message string, imagesJSON string) {
+	images := []string{}
+	if strings.TrimSpace(imagesJSON) != "" {
+		if err := json.Unmarshal([]byte(imagesJSON), &images); err != nil {
+			s.logf("[chat] StartStreamWithImages: payload de imagens invalido: " + err.Error())
+			images = nil
+		}
+	}
+	filtered := make([]string, 0, len(images))
+	for _, img := range images {
+		img = strings.TrimSpace(img)
+		if !strings.HasPrefix(img, "data:image/") {
+			s.logf("[chat] anexo ignorado: nao e uma data URL de imagem")
+			continue
+		}
+		if len(img) > maxAttachedImageBytes {
+			s.logf(fmt.Sprintf("[chat] anexo ignorado: %d bytes excede o limite de %d", len(img), maxAttachedImageBytes))
+			continue
+		}
+		filtered = append(filtered, img)
+	}
+	s.chatSvc.SetPendingImages(filtered)
+	s.StartStream(message)
+}
+
 // StopStream interrupts the active streamed AI response, if running.
 func (s *Service) StopStream() bool {
 	return s.chatSvc.StopStream()

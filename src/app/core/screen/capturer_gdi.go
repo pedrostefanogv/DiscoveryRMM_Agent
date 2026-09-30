@@ -93,6 +93,14 @@ func NewGDICapturerMonitor(monitorIndex int) (Capturer, error) {
 	return newGDICapturerRegionIdx(m.X, m.Y, m.Width, m.Height, monitorIndex)
 }
 
+// NewGDICapturerRegion cria um capturador GDI de uma região arbitrária do
+// desktop virtual (coordenadas FÍSICAS). É usado pela captura de tela avulsa
+// (app/core/screenshot) para print de tela cheia/região sem montar um loop de
+// captura. width/height devem ser > 0.
+func NewGDICapturerRegion(offsetX, offsetY, width, height int) (Capturer, error) {
+	return newGDICapturerRegion(offsetX, offsetY, width, height)
+}
+
 // newGDICapturerRegion cria o capturer GDI capturando a região (offsetX, offsetY, width, height).
 // Se width/height == 0, captura o desktop virtual inteiro.
 func newGDICapturerRegion(offsetX, offsetY, width, height int) (Capturer, error) {

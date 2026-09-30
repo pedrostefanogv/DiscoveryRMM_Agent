@@ -101,6 +101,14 @@ func (a *App) StartChatStream(message string) {
 	a.chatSvc.StartStream(message)
 }
 
+// StartChatStreamWithImages envia uma mensagem do chat com imagens anexadas
+// (prints capturados pelo ícone de câmera). imagesJSON é um array JSON de data
+// URLs (data:image/...). As imagens são enviadas ao servidor no primeiro round
+// e viram conteúdo multimodal para o LLM.
+func (a *App) StartChatStreamWithImages(message string, imagesJSON string) {
+	a.chatSvc.StartStreamWithImages(message, imagesJSON)
+}
+
 // StopChatStream interrupts the active streamed AI response, if running.
 func (a *App) StopChatStream() bool {
 	return a.chatSvc.StopStream()

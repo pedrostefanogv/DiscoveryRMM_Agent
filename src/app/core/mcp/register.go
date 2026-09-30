@@ -60,6 +60,15 @@ type AppBridge interface {
 	// cancelamento do stream de chat (botão Parar) interrompe a espera pela
 	// resposta do usuário em vez de deixar a goroutine pendurada.
 	AskUserChatWithContext(ctx context.Context, question, optionsJSON, allowText string) (string, error)
+
+	// Captura de tela — visão do LLM (PLANO_CAPTURA_TELA_ASSISTIDA).
+	// ListOpenWindowsJSON: janelas visíveis + monitores (não captura nada).
+	// CaptureScreenshotForTool: captura com autorização do usuário e devolve
+	// a imagem no contrato {"image_base64","mime"} consumido pela API.
+	// ScreenshotConsentStatusJSON: estado da autorização + auditoria.
+	ListOpenWindowsJSON() (json.RawMessage, error)
+	CaptureScreenshotForTool(ctx context.Context, args map[string]any) (json.RawMessage, error)
+	ScreenshotConsentStatusJSON() (json.RawMessage, error)
 }
 
 // RegisterDiscoveryTools adds all Discovery app tools to the registry.
@@ -971,6 +980,50 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 				return nil, err
 			}
 			return map[string]string{"answer": answer}, nil
+		},
+	})
+
+	// ========== CAPTURA DE TELA (visao do LLM) ==========
+	reg.Register(Tool{
+		Name: "list_open_windows",
+		Description: "Lista as janelas visiveis abertas no desktop (handle, titulo, processo, PID, posicao/tamanho, foco). " +
+			"Use ANTES de capture_screenshot(mode=window) para escolher o alvo do diagnostico. " +
+			"Nao captura nada e nao exige autorizacao.",
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
+			return app.ListOpenWindowsJSON()
+		},
+	})
+
+	reg.Register(Tool{
+		Name: "capture_screenshot",
+		Description: "Captura a tela deste computador para diagnostico visual e devolve a imagem ao modelo (visao). " +
+			"Modos: full (todos os monitores), window (exige windowHandle de list_open_windows), monitor (exige monitor), " +
+			"region (exige x, y, width, height) e interactive (o usuario seleciona a area/janela na tela congelada). " +
+			"A PRIMEIRA captura pedida pela IA exige autorizacao explicita do usuario: o agente abre um pedido de permissao " +
+			"no chat; depois de autorizada (nesta conversa ou sempre), a IA pode capturar de forma automatica. " +
+			"Nunca use para espionar: informe sempre o motivo em reason e prefira a janela especifica em vez da tela inteira.",
+		Params: []ToolParam{
+			{Name: "mode", Type: "string", Description: "full | window | monitor | region | interactive", Required: true},
+			{Name: "windowHandle", Type: "integer", Description: "Handle da janela (list_open_windows) — modo window", Required: false},
+			{Name: "monitor", Type: "integer", Description: "Indice do monitor (0 = primario) — modo monitor", Required: false},
+			{Name: "x", Type: "integer", Description: "Coordenada X fisica da regiao — modo region", Required: false},
+			{Name: "y", Type: "integer", Description: "Coordenada Y fisica da regiao — modo region", Required: false},
+			{Name: "width", Type: "integer", Description: "Largura da regiao — modo region", Required: false},
+			{Name: "height", Type: "integer", Description: "Altura da regiao — modo region", Required: false},
+			{Name: "reason", Type: "string", Description: "Motivo da captura exibido ao usuario no pedido de autorizacao", Required: false},
+			{Name: "quality", Type: "integer", Description: "Qualidade JPEG 1-100 (padrao 80; PNG e usado quando menor)", Required: false},
+		},
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
+			return app.CaptureScreenshotForTool(ctx, args)
+		},
+	})
+
+	reg.Register(Tool{
+		Name: "screenshot_permission",
+		Description: "Consulta o estado da autorizacao de captura de tela (undecided, session, always ou denied) e as ultimas capturas. " +
+			"Use quando capture_screenshot falhar por falta de autorizacao para orientar o usuario.",
+		Handler: func(ctx context.Context, args map[string]any) (any, error) {
+			return app.ScreenshotConsentStatusJSON()
 		},
 	})
 }

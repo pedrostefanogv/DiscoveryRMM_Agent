@@ -251,17 +251,22 @@ function onStreamToken(token) {
 function flushStreamingContent() {
   streamingRafPending = false;
   if (!streamingBubble) return;
+  var thinkingEl = streamingBubble.querySelector(".stream-thinking");
   var contentEl = streamingBubble.querySelector(".stream-content");
   if (!contentEl) {
     contentEl = document.createElement("div");
     contentEl.className = "stream-content";
-    var thinkingEl = streamingBubble.querySelector(".stream-thinking");
     if (thinkingEl) {
       streamingBubble.insertBefore(contentEl, thinkingEl);
       thinkingEl.style.display = "none";
     } else {
       streamingBubble.appendChild(contentEl);
     }
+  } else if (thinkingEl && !chatActivityToolPhase && thinkingEl.style.display !== "none") {
+    // O conteúdo voltou a fluir: o widget reaberto pelo aviso de lentidão sai
+    // de cena. Em fase de ferramenta ele PERMANECE — é o indicador de trabalho
+    // real, e um rAF atrasado não pode apagá-lo no meio de um upgrade.
+    thinkingEl.style.display = "none";
   }
   contentEl.innerHTML = renderAssistantMarkdown(streamingRawContent);
   syncColorMode();
@@ -304,11 +309,21 @@ function armChatStreamTimeout() {
     chatStreamTimeoutId = null;
     if (!chatSending) return;
     console.warn("[chat] stream demorando (" + Math.round(CHAT_STREAM_TIMEOUT_MS / 1000) + "s); reconciliando com o backend");
-    if (streamingBubble && !streamingRawContent) {
+    // O aviso de lentidão é a rede de segurança do turno (120s sem evento
+    // terminal): vale também quando o LLM já emitiu preâmbulo. Antes o gate
+    // `!streamingRawContent` silenciava o aviso junto com o widget — no turno de
+    // 2026-09-30 isso deixou ~5min sem QUALQUER sinal na tela.
+    if (streamingBubble) {
       var thinkingEl = streamingBubble.querySelector(".stream-thinking");
       if (thinkingEl) {
         thinkingEl.style.display = "";
-        setChatActivityText(thinkingEl, translate("chat.streamSlow"));
+        // Em fase de ferramenta o rótulo de progresso ("Atualizando programa
+        // (2 de 4)") diz mais que o aviso genérico — preserva o rótulo, mas
+        // liga o cronômetro para o usuário ver que a execução segue viva.
+        if (!chatActivityToolPhase) {
+          setChatActivityText(thinkingEl, translate("chat.streamSlow"));
+        }
+        startChatActivityTimer(thinkingEl);
       }
     }
     probeBackendStreamIdle();
@@ -493,6 +508,17 @@ function maybeFlushChatQueue() {
 // passos (chips ✓) — em vez do texto único que saltava a cada evento.
 var CHAT_ACTIVITY_MAX_STEPS = 4;
 var chatActivityRoundMax = 0;
+// chatActivityToolPhase fica true quando o turno entra na fase de execução de
+// ferramentas (tools/compose/rescue). Diferente das fases "sociais" (conectar,
+// planejar), essa fase continua merecendo indicador mesmo depois que o LLM já
+// emitiu texto — ver chatActivityShowsWhileText.
+var chatActivityToolPhase = false;
+// Cronômetro de tempo decorrido do widget: uma única chamada de winget/choco
+// pode levar 1-2min sem emitir nenhum evento (o log de 2026-09-30 registra
+// 152s só para atualizar o Chrome). Sem contador vivo o usuário não distingue
+// "executando" de "travado".
+var chatActivityTimerId = null;
+var chatActivityStartedAt = 0;
 
 // Rótulos humanos das tools MCP (pt-BR, coerente com os status do core).
 // Ferramenta fora do dicionário cai no prettify do nome bruto.
@@ -577,13 +603,33 @@ function describeChatActivity(status) {
     return { key: "chat.activity.planning", kind: "plan" };
   }
   if (s.indexOf("Executando:") === 0) {
+    // O core pode anexar progresso ao status de cada tool do lote:
+    // "Executando: upgrade_package (2/4) [Google.Chrome.EXE]..." — ver
+    // formatToolProgressStatus em app/core/ai/chat_multi_round.go. Tanto o
+    // contador "(i/n)" quanto o bloco "[hint]" vêm sempre no fim, então são
+    // extraídos antes do prettify do nome da tool.
+    var index = 0;
+    var total = 0;
+    var detail = "";
     var tools = s
       .slice("Executando:".length)
       .replace(/\.+$/, "")
       .split(",")
-      .map(function (x) { return x.trim(); })
+      .map(function (x) {
+        var part = x.trim();
+        if (!part) return "";
+        var withDetail = /\((\d+)\/(\d+)\)\s*\[([^\]]*)\]\s*$/.exec(part);
+        var m = withDetail || /\((\d+)\/(\d+)\)\s*$/.exec(part);
+        if (m) {
+          index = parseInt(m[1], 10) || 0;
+          total = parseInt(m[2], 10) || 0;
+          if (withDetail) detail = (withDetail[3] || "").trim();
+          part = part.slice(0, m.index).trim();
+        }
+        return part;
+      })
       .filter(Boolean);
-    return { kind: "tools", tools: tools };
+    return { kind: "tools", tools: tools, index: index, total: total, detail: detail };
   }
   if (s.indexOf("Concluindo ação solicitada") === 0) {
     return { key: "chat.activity.composing", kind: "compose" };
@@ -599,6 +645,12 @@ function describeChatActivity(status) {
 
 function buildChatActivityElement() {
   chatActivityRoundMax = 0;
+  chatActivityToolPhase = false;
+  // Cada bolha tem o SEU cronômetro. Sem parar o intervalo aqui, o split
+  // pós-pergunta (splitStreamingBubbleAfterQuestion descarta a bolha antiga e
+  // cria outra) deixaria o timer antigo escrevendo na bolha nova.
+  stopChatActivityTimer();
+  chatActivityStartedAt = 0;
   var root = document.createElement("div");
   root.className = "stream-thinking chat-activity";
 
@@ -610,8 +662,20 @@ function buildChatActivityElement() {
   head.appendChild(spinner);
   var label = document.createElement("span");
   label.className = "chat-activity-label";
+  // Live region "polite": leitores de tela anunciam a troca de rótulo
+  // (ex.: "Atualizando programa (2 de 4)…") sem que o cronômetro — que muda a
+  // cada segundo e está aria-hidden — vire spam.
+  label.setAttribute("role", "status");
   label.textContent = translate("chat.thinking");
   head.appendChild(label);
+
+  var elapsed = document.createElement("span");
+  elapsed.className = "chat-activity-elapsed";
+  elapsed.setAttribute("aria-hidden", "true");
+  // Semeia o chip: sem isto ele fica como pílula vazia até o próximo evento —
+  // visível no split pós-pergunta, que cria bolha nova no meio do turno.
+  elapsed.textContent = formatChatActivityElapsed(0);
+  head.appendChild(elapsed);
   root.appendChild(head);
 
   var steps = document.createElement("div");
@@ -643,12 +707,61 @@ function chatActivityStepsEl(root) {
   return root ? root.querySelector(".chat-activity-steps") : null;
 }
 
+// formatChatActivityElapsed devolve mm:ss (neutro de idioma): leitura rápida de
+// "há quanto tempo" sem inflar o rótulo do widget.
+function formatChatActivityElapsed(ms) {
+  var total = Math.max(0, Math.floor(Number(ms) / 1000));
+  var min = Math.floor(total / 60);
+  var sec = total % 60;
+  return min + ":" + (sec < 10 ? "0" + sec : String(sec));
+}
+
+// startChatActivityTimer liga o contador de tempo decorrido do widget (uma vez
+// por bolha). Cobre o caso em que não há NENHUM evento intermediário possível:
+// winget/choco são um único processo externo por pacote.
+function startChatActivityTimer(root) {
+  if (chatActivityTimerId) return;
+  // Só define o marco zero na primeira exibição DESTA bolha: após
+  // suspender/restaurar a UI o contador retoma de onde parou em vez de voltar
+  // para 0:00. O reset entre turnos/bolhas é feito em
+  // buildChatActivityElement.
+  if (!chatActivityStartedAt) chatActivityStartedAt = Date.now();
+  var el = root ? root.querySelector(".chat-activity-elapsed") : null;
+  // Semeia com o tempo JÁ decorrido: após suspender/restaurar a UI o marco zero
+  // é preservado, e um "0:00" fixo aqui piscava antes de saltar de volta.
+  if (el) {
+    el.textContent = formatChatActivityElapsed(
+      chatActivityStartedAt ? Date.now() - chatActivityStartedAt : 0,
+    );
+  }
+  chatActivityTimerId = setInterval(function () {
+    var node = streamingBubble
+      ? streamingBubble.querySelector(".chat-activity-elapsed")
+      : null;
+    if (!node) return;
+    node.textContent = formatChatActivityElapsed(Date.now() - chatActivityStartedAt);
+  }, 1000);
+}
+
+function stopChatActivityTimer() {
+  if (chatActivityTimerId) {
+    clearInterval(chatActivityTimerId);
+    chatActivityTimerId = null;
+  }
+  // NÃO zera chatActivityStartedAt: uma suspensão/restauração da UI deve
+  // retomar o tempo decorrido, não reiniciá-lo. O reset é por bolha.
+}
+
 // pushChatActivityStep move a step "current" anterior para "done" e adiciona
 // a nova. A trilha mantém no máximo CHAT_ACTIVITY_MAX_STEPS concluídos.
 function pushChatActivityStep(root, text, state) {
   var stepsEl = chatActivityStepsEl(root);
   if (!stepsEl) return;
   var prev = stepsEl.querySelector(".chat-step.current");
+  // Mesmo passo reemitido (retry forçado ou resgate após reconexão): atualiza o
+  // chip existente em vez de empilhar um duplicado idêntico.
+  var prevName = prev ? prev.querySelector(".chat-step-name") : null;
+  if (prevName && prevName.textContent === text) return;
   if (prev) {
     prev.classList.remove("current");
     prev.classList.add("done");
@@ -686,15 +799,43 @@ function updateChatActivityRound(root, round, maxRounds) {
   pill.classList.add("visible");
 }
 
+// chatActivityShowsWhileText decide se o widget continua valendo DEPOIS que o
+// LLM já emitiu texto no turno (ex.: preâmbulo "Vou atualizar os programas…").
+//
+// Fases "sociais" (conectar, analisar, planejar) ficam ocultas para não duplicar
+// o que o texto já diz. Execução de ferramenta é trabalho real e demorado: o
+// widget TEM de reaparecer, senão o turno parece travado. Foi exatamente esse o
+// gate antigo (`if (streamingRawContent) return`) que escondeu ~5min de
+// upgrades via winget no turno de 2026-09-30 — o preâmbulo do round 0 desligou
+// o indicador para o turno inteiro (ver chat_logs.jsonl, linhas 666-700).
+function chatActivityShowsWhileText(desc) {
+  if (!desc) return false;
+  return desc.kind === "tools" || desc.kind === "compose" || desc.kind === "rescue";
+}
+
 function onStreamThinking(status) {
   if (document.hidden || window.__discoveryUISuspended) return;
   if (!streamingBubble) return;
   var thinkingEl = streamingBubble.querySelector(".stream-thinking");
   if (!thinkingEl) return;
-  if (streamingRawContent) return; // resposta começou: activity oculta
-  thinkingEl.style.display = "";
 
   var desc = describeChatActivity(status);
+  // Reclassifica a fase a CADA status (não "trava" em true para sempre): todo
+  // round começa com um status social ("Um instante..."/"Round N — ..."), e é
+  // isso que volta a ocultar o widget quando a resposta final começa a fluir.
+  // Com o latch anterior, o widget ficava preso abaixo da resposta com o rótulo
+  // da última ferramenta e o spinner girando durante todo o texto final.
+  //
+  // Seguro contra corrida: o loop de tools é síncrono no cliente, então nenhum
+  // status social pode chegar no meio de uma execução — só os "Executando: ...".
+  chatActivityToolPhase = chatActivityShowsWhileText(desc);
+  if (streamingRawContent && !chatActivityToolPhase) {
+    thinkingEl.style.display = "none";
+    return;
+  }
+  thinkingEl.style.display = "";
+  startChatActivityTimer(thinkingEl);
+
   var label = chatActivityLabelEl(thinkingEl);
   if (!label) {
     // Estrutura antiga (sem widget): fallback texto simples.
@@ -717,14 +858,24 @@ function onStreamThinking(status) {
       setChatActivityText(thinkingEl, translate("chat.activity.planning"));
       return;
     }
+    // Progresso por item do lote ("(2/4)"), quando o core mandou.
+    var inBatch = desc.total > 1 && desc.index > 0;
     setChatActivityText(
       thinkingEl,
-      names.length === 1
-        ? translate("chat.activity.executingOne", { tool: names[0] })
-        : translate("chat.activity.executingMany", { count: names.length }),
+      inBatch && names.length === 1
+        ? translate("chat.activity.executingStep", {
+            tool: names[0],
+            done: desc.index,
+            total: desc.total,
+          })
+        : names.length === 1
+          ? translate("chat.activity.executingOne", { tool: names[0] })
+          : translate("chat.activity.executingMany", { count: names.length }),
     );
-    var shown = names.slice(0, 2).join(", ");
-    if (names.length > 2) shown += " +" + (names.length - 2);
+    // Com o alvo (id do pacote) disponível, o chip mostra QUAL item está em
+    // execução em vez de repetir o rótulo genérico da ferramenta.
+    var shown = desc.detail || names.slice(0, 2).join(", ");
+    if (!desc.detail && names.length > 2) shown += " +" + (names.length - 2);
     pushChatActivityStep(thinkingEl, shown, "current");
     return;
   }
@@ -758,10 +909,13 @@ function onChatLoopProgress(data) {
   var round = Number(payload.round) || 0;
   var maxRounds = Number(payload.maxRounds) || 0;
   if (maxRounds <= 0 || round <= 0) return;
-  if (streamingRawContent) return; // resposta começou: activity oculta
+  // Mesma regra do onStreamThinking: com texto já visível a pill de etapa só
+  // reaparece se o turno está em fase de execução de ferramentas.
+  if (streamingRawContent && !chatActivityToolPhase) return;
   var thinkingEl = streamingBubble.querySelector(".stream-thinking");
   if (!thinkingEl) return;
   thinkingEl.style.display = "";
+  startChatActivityTimer(thinkingEl);
   // Progresso do agent loop vira uma pill discreta ("Etapa 2 de 10") em vez
   // de reescrever o rótulo principal — o status corrente permanece visível.
   updateChatActivityRound(thinkingEl, round, maxRounds);
@@ -980,7 +1134,10 @@ function onChatQuestion(data) {
     // Pausa o timeout de segurança: a espera pela resposta não tem prazo.
     clearChatStreamTimeout();
     // Indica no indicador de streaming que o chat está aguardando o usuário.
-    if (streamingBubble && !streamingRawContent) {
+    // Sem o gate `!streamingRawContent`: com um preâmbulo antes do ask_user o
+    // widget já está visível e ficaria com o rótulo da ferramenta ("Atualizando
+    // programa…") em vez de "Aguardando sua resposta".
+    if (streamingBubble) {
       var thinkingEl = streamingBubble.querySelector(".stream-thinking");
       if (thinkingEl) {
         thinkingEl.style.display = "";
@@ -1613,6 +1770,10 @@ function clearA2uiSurface() {
     "chat:question": onChatQuestion,
     "chat:question_cancelled": onChatQuestionCancelled,
     "chat:a2ui": onChatA2ui,
+    // Captura de tela assistida (app-screenshot.js).
+    "screenshot:request": onScreenshotRequest,
+    "screenshot:overlay_close": onScreenshotOverlayClose,
+    "screenshot:captured": onScreenshotCaptured,
   };
 
   var nativeListenersRegistered = false;
@@ -1926,6 +2087,9 @@ function stopThinkingStatusUpdates() {
     clearInterval(chatThinkingPollId);
     chatThinkingPollId = null;
   }
+  // Terminal do turno (done/error/stopped) ou suspensão da UI: o cronômetro do
+  // widget não pode continuar rodando sobre uma bolha que vai sumir.
+  stopChatActivityTimer();
 }
 
 function handleChatUISuspend() {
@@ -2543,6 +2707,14 @@ async function sendChatMessage() {
 function dispatchChatMessage(text) {
   addChatMessage("user", text);
 
+  // Prints anexados pelo usuário (ícone de câmera do composer): vão junto do
+  // texto no primeiro round e viram conteúdo multimodal no servidor.
+  var attachedImages =
+    typeof screenshotTakePendingImages === "function" ? screenshotTakePendingImages() : [];
+  if (attachedImages.length > 0 && typeof screenshotRenderSentImages === "function") {
+    screenshotRenderSentImages(attachedImages);
+  }
+
   chatStopRequested = false;
   lastDispatchedChatText = text;
   setChatBusy(true);
@@ -2580,8 +2752,22 @@ function dispatchChatMessage(text) {
 
   try {
     // StartChatStream returns immediately; response arrives via events.
-    appApi()
-      .StartChatStream(text)
+    var api = appApi();
+    var sendPromise;
+    var imagesSent = false;
+    if (attachedImages.length > 0) {
+      if (typeof api.StartChatStreamWithImages === "function") {
+        sendPromise = api.StartChatStreamWithImages(text, JSON.stringify(attachedImages));
+        imagesSent = true;
+      } else if (typeof screenshotRestoreAttachments === "function") {
+        // Build antigo: devolve os prints ao composer em vez de descartá-los.
+        screenshotRestoreAttachments(attachedImages);
+      }
+    }
+    if (!sendPromise) {
+      sendPromise = api.StartChatStream(text);
+    }
+    sendPromise
       .then(function () {
         // Runtime nativo (WebView2) usa polling; no navegador, o
         // debug-http-bridge já conecta ao SSE via window.wails.on.
@@ -2590,9 +2776,16 @@ function dispatchChatMessage(text) {
         }
       })
       .catch(function (err) {
+        // O envio falhou: não perder os prints anexados.
+        if (imagesSent && typeof screenshotRestoreAttachments === "function") {
+          screenshotRestoreAttachments(attachedImages);
+        }
         onStreamError(String(err));
       });
   } catch (err) {
+    if (attachedImages.length > 0 && typeof screenshotRestoreAttachments === "function") {
+      screenshotRestoreAttachments(attachedImages);
+    }
     onStreamError(String(err));
   }
 }
@@ -2841,6 +3034,10 @@ function initChat() {
   if (chatSendBtn) {
     chatSendBtn.addEventListener("click", sendChatMessage);
   }
+  // Captura de tela (ícone de câmera + anexos do composer).
+  if (typeof initScreenshotCapture === "function") {
+    initScreenshotCapture();
+  }
   if (chatStopBtn) {
     chatStopBtn.addEventListener("click", requestStopChatStream);
   }
@@ -2910,7 +3107,19 @@ function initChat() {
     chatClearBtn.addEventListener("click", async function () {
       try {
         await appApi().ClearChatHistory();
+        // Turno em curso: sem isto o cronômetro do widget continuaria rodando a
+        // cada segundo sobre uma bolha já destacada (e streamingBubble seguiria
+        // apontando para um nó fora do documento) até o evento terminal.
+        stopThinkingStatusUpdates();
+        clearChatStreamTimeout();
+        streamingBubble = null;
+        streamingRawContent = "";
+        streamingRafPending = false;
+        resetA2uiTokenFilter();
         if (chatMessagesEl) chatMessagesEl.innerHTML = "";
+        if (typeof screenshotClearAttachments === "function") {
+          screenshotClearAttachments();
+        }
         clearA2uiSurface();
         showFeedback(translate("chat.cleared"));
       } catch (err) {

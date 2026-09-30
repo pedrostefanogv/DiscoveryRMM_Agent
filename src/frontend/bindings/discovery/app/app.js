@@ -217,6 +217,24 @@ export function BuildOnboardingOffer(sourceAgentID, serverURL, deployKey, ttl) {
 }
 
 /**
+ * CancelScreenshotOverlay cancela a seleção e restaura a janela.
+ * @param {string} sessionID
+ * @returns {$CancellablePromise<void>}
+ */
+export function CancelScreenshotOverlay(sessionID) {
+    return $Call.ByID(724593732, sessionID);
+}
+
+/**
+ * CaptureScreenshotForTool implementa AppBridge: chamada da tool MCP pela IA.
+ * @param {{ [_ in string]?: any }} args
+ * @returns {$CancellablePromise<json$0.RawMessage>}
+ */
+export function CaptureScreenshotForTool(args) {
+    return $Call.ByID(1992578829, args);
+}
+
+/**
  * CheckAgentUpdate dispara uma verificação manual de atualização do agente.
  * Aciona o mesmo fluxo do check automático de startup (respeita a política de
  * update), mas sem esperar pelo timer interno.
@@ -548,6 +566,16 @@ export function FindP2PArtifactPeers(artifactName) {
 }
 
 /**
+ * FinishScreenshotOverlay materializa a seleção do usuário e restaura a janela.
+ * @param {string} sessionID
+ * @param {string} selectionJSON
+ * @returns {$CancellablePromise<string>}
+ */
+export function FinishScreenshotOverlay(sessionID, selectionJSON) {
+    return $Call.ByID(1426246247, sessionID, selectionJSON);
+}
+
+/**
  * @returns {$CancellablePromise<agentconfig$0.AgentConfiguration>}
  */
 export function GetAgentConfiguration() {
@@ -820,6 +848,14 @@ export function GetOnboardingStatus() {
 }
 
 /**
+ * GetOpenWindows devolve as janelas visíveis (binding de UI).
+ * @returns {$CancellablePromise<string>}
+ */
+export function GetOpenWindows() {
+    return $Call.ByID(1696110523);
+}
+
+/**
  * @returns {$CancellablePromise<models$0.OsqueryStatus>}
  */
 export function GetOsqueryStatus() {
@@ -1027,6 +1063,14 @@ export function GetRuntimeFlags() {
     return $Call.ByID(2140353209).then(/** @type {($result: any) => any} */(($result) => {
         return $$createType54($result);
     }));
+}
+
+/**
+ * GetScreenshotPermission devolve o estado de autorização + auditoria.
+ * @returns {$CancellablePromise<string>}
+ */
+export function GetScreenshotPermission() {
+    return $Call.ByID(3529772117);
 }
 
 /**
@@ -1306,6 +1350,14 @@ export function ListInstalled() {
 }
 
 /**
+ * ListOpenWindowsJSON implementa AppBridge: janelas visíveis + monitores.
+ * @returns {$CancellablePromise<json$0.RawMessage>}
+ */
+export function ListOpenWindowsJSON() {
+    return $Call.ByID(3885529817);
+}
+
+/**
  * @returns {$CancellablePromise<$models.P2PArtifactView[]>}
  */
 export function ListP2PArtifacts() {
@@ -1470,6 +1522,16 @@ export function PostP2PTelemetry() {
  */
 export function PostP2PTelemetryPayload(payload, idempotencyKey) {
     return $Call.ByID(3216398493, payload, idempotencyKey);
+}
+
+/**
+ * PrepareScreenshotOverlay captura o desktop, coloca a janela principal em
+ * modo overlay cobrindo o desktop virtual e devolve o payload para a UI.
+ * @param {string} reason
+ * @returns {$CancellablePromise<string>}
+ */
+export function PrepareScreenshotOverlay(reason) {
+    return $Call.ByID(373583411, reason);
 }
 
 /**
@@ -1805,6 +1867,14 @@ export function RunPSADTPreflightChecks() {
 }
 
 /**
+ * ScreenshotConsentStatusJSON implementa AppBridge: estado de autorização.
+ * @returns {$CancellablePromise<json$0.RawMessage>}
+ */
+export function ScreenshotConsentStatusJSON() {
+    return $Call.ByID(2257929884);
+}
+
+/**
  * @param {string} query
  * @returns {$CancellablePromise<json$0.RawMessage>}
  */
@@ -1905,6 +1975,15 @@ export function SetP2PConfig(cfg) {
 }
 
 /**
+ * SetScreenshotPermission altera a autorização (UI: conceder/revogar).
+ * @param {string} decision
+ * @returns {$CancellablePromise<void>}
+ */
+export function SetScreenshotPermission(decision) {
+    return $Call.ByID(620718449, decision);
+}
+
+/**
  * SetUIRuntimeSuspended is a no-op (watchdog system removed).
  * @param {boolean} suspended
  * @param {string} reason
@@ -1928,6 +2007,19 @@ export function ShouldHideOnClose() {
  */
 export function StartChatStream(message) {
     return $Call.ByID(2817758308, message);
+}
+
+/**
+ * StartChatStreamWithImages envia uma mensagem do chat com imagens anexadas
+ * (prints capturados pelo ícone de câmera). imagesJSON é um array JSON de data
+ * URLs (data:image/...). As imagens são enviadas ao servidor no primeiro round
+ * e viram conteúdo multimodal para o LLM.
+ * @param {string} message
+ * @param {string} imagesJSON
+ * @returns {$CancellablePromise<void>}
+ */
+export function StartChatStreamWithImages(message, imagesJSON) {
+    return $Call.ByID(1392424606, message, imagesJSON);
 }
 
 /**

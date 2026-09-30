@@ -82,6 +82,11 @@ func NewCapturerMode(monitorIndex int, drawCursor bool) (Capturer, error) {
 	return nil, errNotSupported
 }
 
+// NewGDICapturerRegion retorna erro em plataformas não-Windows.
+func NewGDICapturerRegion(offsetX, offsetY, width, height int) (Capturer, error) {
+	return nil, errNotSupported
+}
+
 // DetectGPU retorna capacidade vazia em plataformas não-Windows.
 func DetectGPU() GPUCapability {
 	return GPUCapability{}

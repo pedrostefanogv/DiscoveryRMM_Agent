@@ -42,6 +42,9 @@
     // Bundle A2UI (renderer de interfaces geradas por IA). Deve carregar
     // ANTES de app-chat.js, que consome window.A2uiChat.
     "a2ui-bundle.js",
+    // Captura de tela: precisa carregar ANTES de app-chat.js (o mapa de
+    // handlers de evento do chat referencia onScreenshotRequest/onScreenshotOverlayClose).
+    "js/app-screenshot.js",
     "js/app-chat.js",
     "js/app-support.js",
     "js/app-knowledge.js",

@@ -85,10 +85,26 @@
       </div>
     </div>
 
+    <!-- Anexos do composer: prints capturados pelo ícone de câmera. São
+         enviados ao servidor junto da próxima mensagem (multimodal). -->
+    <div id="chatAttachments" class="chat-attachments hidden" aria-live="polite"></div>
+
     <div id="chatInputWrap" class="chat-input-wrap">
       <textarea id="chatInput" class="chat-input" placeholder="Digite sua mensagem... (Enter para enviar, Shift+Enter para nova linha)" rows="3" spellcheck="true" data-app-lang="true"
         autocapitalize="sentences" autocomplete="on" data-i18n-placeholder="chat.inputPlaceholder"></textarea>
       <div class="chat-input-actions">
+        <button id="chatScreenshotBtn" class="chat-icon-btn chat-screenshot-btn" type="button"
+          title="Capturar tela" aria-label="Capturar tela" data-i18n-title="chat.screenshot"
+          data-i18n-aria-label="chat.screenshot">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M4 8V6a2 2 0 0 1 2-2h2" />
+            <path d="M16 4h2a2 2 0 0 1 2 2v2" />
+            <path d="M20 16v2a2 2 0 0 1-2 2h-2" />
+            <path d="M8 20H6a2 2 0 0 1-2-2v-2" />
+            <circle cx="12" cy="12" r="3.5" />
+          </svg>
+        </button>
         <button id="chatStopBtn" class="chat-icon-btn chat-stop-btn hidden" type="button" title="Stop"
           aria-label="Stop" data-i18n-title="action.stop" data-i18n-aria-label="action.stop">
           <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor" aria-hidden="true">

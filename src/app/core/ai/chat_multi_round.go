@@ -165,6 +165,11 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 		reqMode = "a2ui_action"
 	}
 	req := agentStreamRequest{Message: reqMessage, SessionID: sessionID, ToolResults: initialToolResults, Mode: reqMode}
+	// Prints/atachamentos do usuário (data URLs) entram no primeiro round.
+	if imgs := s.takePendingImages(); len(imgs) > 0 {
+		req.Images = imgs
+		s.logf("[chat] %d imagem(ns) anexada(s) enviadas ao servidor", len(imgs))
+	}
 	// Model pass-through (Fase 3): campo opcional, servidores antigos ignoram.
 	reqModel := strings.TrimSpace(cfg.Model)
 	req.Model = reqModel
@@ -455,7 +460,16 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 		}
 		var toolResults []toolResultItem
 		toolResultNames := make([]string, 0, len(pendingCalls))
-		for _, tc := range pendingCalls {
+		for toolIdx, tc := range pendingCalls {
+			// Progresso granular: num lote com várias tools a execução é
+			// sequencial e cada item pode levar minutos (winget/choco). Sem um
+			// status por item, a UI fica com o rótulo do lote congelado — foi o
+			// que aconteceu no turno de 2026-09-30 17:08Z (log chat_logs.jsonl):
+			// 4 upgrade_package em ~5min com o indicador parado. O formato é
+			// consumido por describeChatActivity em frontend/js/app-chat.js.
+			if onStatus != nil && len(pendingCalls) > 1 {
+				onStatus(formatToolProgressStatus(tc.Name, toolIdx+1, len(pendingCalls), tc.Args))
+			}
 			toolExecStart := time.Now()
 			var result string
 			var execErr error
@@ -474,9 +488,13 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 				// antigo de 60/120/150s matava a pergunta e a resposta do
 				// usuário ia para uma pergunta morta). O cancelamento do
 				// stream (botão Parar) interrompe a espera via streamCtx.
+				//
+				// capture_screenshot também exige interação do usuário
+				// (autorização + seleção da área/janela no overlay): o timer de
+				// 60s mataria a captura no meio da interação.
 				var execCtx context.Context
 				var execCancel context.CancelFunc
-				if tc.Name == "ask_user" {
+				if tc.Name == "ask_user" || tc.Name == "capture_screenshot" {
 					execCtx, execCancel = context.WithCancel(streamCtx)
 				} else {
 					execCtx, execCancel = context.WithTimeout(streamCtx, 60*time.Second)
@@ -597,6 +615,71 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 	})
 
 	return assistant, nil
+}
+
+// formatToolProgressStatus monta o status de progresso de UMA tool dentro de um
+// lote: "Executando: <tool> (i/n) [<hint>]...".
+//
+// O sufixo "(i/n)" diz em qual item do lote estamos e o bloco "[hint]" diz QUAL
+// item (ex.: id do pacote winget) — sem isso o usuário só vê o rótulo genérico
+// do lote ("Atualizando programa") congelado por minutos. O hint é opcional e
+// fica sempre no fim, antes das reticências; o parser do frontend
+// (describeChatActivity) depende dessa ordem.
+func formatToolProgressStatus(name string, index, total int, args string) string {
+	base := "Executando: " + strings.TrimSpace(name)
+	if total > 1 && index > 0 {
+		base += fmt.Sprintf(" (%d/%d)", index, total)
+	}
+	if hint := toolProgressHint(args); hint != "" {
+		base += " [" + hint + "]"
+	}
+	return base + "..."
+}
+
+// toolProgressHint extrai dos argumentos JSON da tool um rótulo curto e legível
+// para o status de progresso (id/nome do pacote, host, arquivo). Devolve "" se
+// nenhum campo aproveitável existir — o status sai sem o bloco "[...]".
+//
+// Colchetes, vírgulas e quebras de linha são neutralizados porque delimitam
+// partes do status no parser do frontend.
+func toolProgressHint(args string) string {
+	args = strings.TrimSpace(args)
+	if args == "" || args == "{}" {
+		return ""
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(args), &m); err != nil {
+		return ""
+	}
+	for _, key := range []string{"id", "packageId", "name", "app", "host", "file", "path"} {
+		v, ok := m[key].(string)
+		if !ok {
+			continue
+		}
+		v = strings.TrimSpace(v)
+		if v == "" {
+			continue
+		}
+		// Data URL (ex.: argumento da captura de tela) não é rótulo útil: viraria
+		// "data:image/png;base64,…" no chip em vez do alvo da ação.
+		if strings.HasPrefix(v, "data:") {
+			continue
+		}
+		// Neutraliza os caracteres que o parser do frontend usa como delimitador:
+		// "," separa as tools da lista, "[" e "]" delimitam o bloco do hint e
+		// quebras de linha bagunçam o chip. Sem isso, um pacote com vírgula no
+		// nome (ex.: {"name":"Foo, Bar"}) viraria dois chips lixo.
+		v = strings.NewReplacer(
+			"[", "(", "]", ")",
+			",", ";",
+			"\n", " ", "\r", " ",
+		).Replace(v)
+		if utf8.RuneCountInString(v) > 60 {
+			v = string([]rune(v)[:60]) + "…"
+		}
+		return v
+	}
+	return ""
 }
 
 // lastAssistantContentSince retorna o conteudo da ultima resposta do assistant
