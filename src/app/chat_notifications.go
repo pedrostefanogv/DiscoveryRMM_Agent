@@ -26,6 +26,7 @@ package app
 // native_toast_*) e não é alterada.
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -52,6 +53,9 @@ const (
 
 	// chatNotificationPreviewLimit limita o preview em runas.
 	chatNotificationPreviewLimit = 180
+	// chatNotificationPreviewMin é o mínimo de contexto aceitável no preview:
+	// abaixo disso, linhas seguintes são concatenadas (até o limite).
+	chatNotificationPreviewMin = 120
 
 	// chatNotificationDebounce absorve eventos terminais duplicados/rajadas
 	// muito próximas. A deduplicação principal é por AUSÊNCIA (ver
@@ -183,9 +187,9 @@ func (a *App) ensureNotificationIcon() string {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return ""
 	}
-	// Reescreve quando ausente ou com tamanho diferente (update do binário
-	// pode trocar o ícone).
-	if data, err := os.ReadFile(path); err != nil || len(data) != len(a.trayIcon) {
+	// Reescreve quando ausente ou com conteúdo diferente (um update do binário
+	// pode trocar o ícone mantendo o tamanho).
+	if data, err := os.ReadFile(path); err != nil || !bytes.Equal(data, a.trayIcon) {
 		if err := os.WriteFile(path, a.trayIcon, 0o644); err != nil {
 			a.Logs.Append("[chat] aviso: não foi possível gravar o ícone da notificação: " + err.Error())
 			return ""
@@ -491,7 +495,34 @@ func chatActivationArgsMatch(args []string) bool {
 // chatNotificationText monta título/corpo localizados do toast. Em falha o
 // corpo é sempre genérico (sem o texto do erro); em sucesso e em pergunta o
 // preview depende da preferência de privacidade.
+//
+// O texto passa por neutralizeToastInterpolation: o fallback do PowerShell do
+// wintoast embute o XML num here-string que interpola $var/$(comando).
 func chatNotificationText(kind chatNotifyKind, content, lang string, includePreview bool) (string, string) {
+	title, body := chatNotificationTextRaw(kind, content, lang, includePreview)
+	return neutralizeToastInterpolation(title), neutralizeToastInterpolation(body)
+}
+
+// chatNotificationZWSP é o zero-width space usado para quebrar a interpolação
+// do fallback sem mudar o que o usuário lê no toast.
+const chatNotificationZWSP = "\u200b"
+
+// neutralizeToastInterpolation protege o texto do toast contra o FALLBACK do
+// PowerShell do wintoast: quando o push COM falha (visto em produção:
+// "RoInitialize: Função incorreta"), o XML do toast é embutido num here-string
+// de aspas duplas, que interpola $var/$(comando) e trata ` como escape. Sem
+// isso, um trecho de resposta com "$(...)" poderia ser interpretado pelo
+// PowerShell (ou o toast sair sem parte do texto). O zero-width space depois de
+// $ e ` quebra a interpolação e não aparece na tela.
+func neutralizeToastInterpolation(value string) string {
+	if !strings.ContainsAny(value, "$`") {
+		return value
+	}
+	replacer := strings.NewReplacer("$", "$"+chatNotificationZWSP, "`", "`"+chatNotificationZWSP)
+	return replacer.Replace(value)
+}
+
+func chatNotificationTextRaw(kind chatNotifyKind, content, lang string, includePreview bool) (string, string) {
 	english := strings.EqualFold(strings.TrimSpace(lang), "en-US")
 	if kind == chatNotifyFailure {
 		if english {
@@ -551,12 +582,15 @@ var (
 	chatPreviewTableRowRe = regexp.MustCompile(`^\s*\|`)
 )
 
-// chatResponsePreview extrai um resumo de uma linha do texto final, já em texto
-// plano: ignora blocos de código e separadores de tabela/regra, remove
-// marcadores de bloco e inline e normaliza espaços.
+// chatResponsePreview extrai o resumo do texto final, já em texto plano: ignora
+// blocos de código e separadores de tabela/regra, remove marcadores de bloco e
+// inline, normaliza espaços e junta linhas curtas até ter contexto suficiente
+// (uma primeira linha do tipo "Claro!" sozinha não diz nada ao usuário).
 func chatResponsePreview(content string) string {
 	text := strings.ReplaceAll(content, "\r\n", "\n")
 	inFence := false
+	var parts []string
+	total := 0
 	for _, line := range strings.Split(text, "\n") {
 		if chatPreviewFenceRe.MatchString(line) {
 			inFence = !inFence
@@ -572,9 +606,16 @@ func chatResponsePreview(content string) string {
 		if clean == "" {
 			continue
 		}
-		return truncateRunes(clean, chatNotificationPreviewLimit)
+		parts = append(parts, clean)
+		total += utf8.RuneCountInString(clean) + 1
+		if total >= chatNotificationPreviewMin {
+			break
+		}
 	}
-	return ""
+	if len(parts) == 0 {
+		return ""
+	}
+	return truncateRunes(strings.Join(parts, " "), chatNotificationPreviewLimit)
 }
 
 // chatPreviewPlainLine converte uma linha markdown em texto plano para o toast:

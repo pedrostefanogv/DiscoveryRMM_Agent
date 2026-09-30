@@ -68,7 +68,7 @@ func TestChatResponsePreview(t *testing.T) {
 	}{
 		{name: "texto simples", content: "Pronto, atualizei o ticket.", want: "Pronto, atualizei o ticket."},
 		{name: "pula linhas vazias", content: "\n\n   \nResposta final", want: "Resposta final"},
-		{name: "remove marcadores de markdown", content: "## Resumo\n- nada", want: "Resumo"},
+		{name: "remove marcadores de markdown", content: "## Resumo\n- nada", want: "Resumo nada"},
 		{name: "normaliza espacos", content: "linha   com\tmuitos   espacos", want: "linha com muitos espacos"},
 		{name: "vazio", content: "   \n\t\n", want: ""},
 	}
@@ -131,6 +131,45 @@ func TestChatNotificationTextPrivacy(t *testing.T) {
 
 // TestChatNotificationTextFailureIsGeneric garante que a notificação de falha
 // nunca carrega o texto bruto do erro.
+// TestChatResponsePreviewJoinsShortLines cobre a melhoria do preview: uma
+// primeira linha curta ("Claro!") sozinha não informa nada — o preview junta as
+// linhas seguintes até ter contexto.
+func TestChatResponsePreviewJoinsShortLines(t *testing.T) {
+	// Primeira linha curta: o preview continua juntando até ter contexto.
+	in := "Claro!\n\n**Desempenho atual:** CPU em 26% e memória com folga.\n\nÚltimo detalhe irrelevante."
+	want := "Claro! Desempenho atual: CPU em 26% e memória com folga. Último detalhe irrelevante."
+	if got := chatResponsePreview(in); got != want {
+		t.Fatalf("preview = %q, esperado %q", got, want)
+	}
+
+	// Primeira linha já longa o bastante: para por aí (não mistura seções).
+	long := strings.Repeat("contexto ", 16) + "final"
+	got := chatResponsePreview(long + "\n\nSegunda linha que não deve entrar.")
+	if got != long {
+		t.Fatalf("preview = %q, esperado apenas a primeira linha", got)
+	}
+}
+
+// TestChatNotificationTextNeutralizesShellInterpolation garante que o texto do
+// toast não fica vulnerável ao here-string interpolado do fallback PowerShell
+// do wintoast ($var / $(comando) e o escape "`).
+func TestChatNotificationTextNeutralizesShellInterpolation(t *testing.T) {
+	content := "Rode $(Get-Process) e veja `n isso"
+	title, body := chatNotificationText(chatNotifyResponse, content, "pt-BR", true)
+	if title == "" {
+		t.Fatal("título vazio")
+	}
+	if strings.Contains(body, "$(") {
+		t.Fatalf("subexpressão do PowerShell não neutralizada: %q", body)
+	}
+	if strings.Contains(body, "`n") {
+		t.Fatalf("escape do PowerShell não neutralizado: %q", body)
+	}
+	if !strings.Contains(body, "Get-Process") {
+		t.Fatalf("conteúdo perdido: %q", body)
+	}
+}
+
 func TestChatNotificationTextFailureIsGeneric(t *testing.T) {
 	errMsg := "dial tcp 10.0.0.5:443: connect: connection refused (token abc)"
 	for _, lang := range []string{"pt-BR", "en-US"} {
