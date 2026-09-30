@@ -115,6 +115,15 @@ export class ChatConfig {
              */
             this["maxTokens"] = 0;
         }
+        if (/** @type {any} */(false)) {
+            /**
+             * NotifyPreview: mostrar um trecho da resposta no toast nativo (privacidade
+             * — o conteúdo aparece no Action Center e na tela de bloqueio).
+             * @member
+             * @type {boolean | null | undefined}
+             */
+            this["notifyPreview"] = undefined;
+        }
 
         Object.assign(this, $$source);
     }

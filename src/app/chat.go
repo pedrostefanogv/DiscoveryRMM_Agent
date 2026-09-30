@@ -16,6 +16,9 @@ type ChatConfig struct {
 	Model        string `json:"model"`
 	SystemPrompt string `json:"systemPrompt"`
 	MaxTokens    int    `json:"maxTokens"`
+	// NotifyPreview: mostrar um trecho da resposta no toast nativo (privacidade
+	// — o conteúdo aparece no Action Center e na tela de bloqueio).
+	NotifyPreview *bool `json:"notifyPreview,omitempty"`
 }
 
 // initChatLogger inicializa o logger JSONL de chat em
@@ -55,11 +58,12 @@ type ChatMessage struct {
 // SetChatConfig updates and persists the LLM API settings.
 func (a *App) SetChatConfig(cfg ChatConfig) error {
 	return a.chatSvc.SetConfig(chat.Config{
-		Endpoint:     cfg.Endpoint,
-		APIKey:       cfg.APIKey,
-		Model:        cfg.Model,
-		SystemPrompt: cfg.SystemPrompt,
-		MaxTokens:    cfg.MaxTokens,
+		Endpoint:      cfg.Endpoint,
+		APIKey:        cfg.APIKey,
+		Model:         cfg.Model,
+		SystemPrompt:  cfg.SystemPrompt,
+		MaxTokens:     cfg.MaxTokens,
+		NotifyPreview: cfg.NotifyPreview,
 	})
 }
 
@@ -78,11 +82,12 @@ func (a *App) TestChatConfig(cfg ChatConfig) (string, error) {
 func (a *App) GetChatConfig() ChatConfig {
 	c := a.chatSvc.GetConfig()
 	return ChatConfig{
-		Endpoint:     c.Endpoint,
-		APIKey:       c.APIKey,
-		Model:        c.Model,
-		SystemPrompt: c.SystemPrompt,
-		MaxTokens:    c.MaxTokens,
+		Endpoint:      c.Endpoint,
+		APIKey:        c.APIKey,
+		Model:         c.Model,
+		SystemPrompt:  c.SystemPrompt,
+		MaxTokens:     c.MaxTokens,
+		NotifyPreview: c.NotifyPreview,
 	}
 }
 

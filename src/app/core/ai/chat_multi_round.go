@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,6 +17,11 @@ import (
 	"discovery/app/core/tlsutil"
 	"discovery/app/netutil"
 )
+
+// ErrTurnBusy é devolvido quando já existe um turno de chat em andamento.
+// Sentinel de propósito: a camada de UI/serviço precisa distinguir essa recusa
+// (não é falha de resposta — não deve gerar notificação) de um erro real.
+var ErrTurnBusy = errors.New("já existe uma resposta em andamento — aguarde ou clique em Parar")
 
 // maxMultiRounds limita o número de rounds do loop multi-round no agent.
 // Alinhado com o orçamento do servidor (MaxToolCallIterations, default 10,
@@ -65,7 +71,7 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 			Method:  "multi_round",
 			UserMsg: TruncateForLog(userMessage, 500),
 		})
-		return "", fmt.Errorf("já existe uma resposta em andamento — aguarde ou clique em Parar")
+		return "", ErrTurnBusy
 	}
 	defer s.turnMu.Unlock()
 

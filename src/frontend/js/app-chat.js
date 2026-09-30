@@ -1782,6 +1782,19 @@ function clearA2uiSurface() {
   }
 })();
 
+// __discoveryFocusChatView é chamado pelo backend (ExecJS) quando o usuário
+// clica na notificação nativa de resposta concluída: a janela é trazida para
+// frente no Go e aqui a aba de chat é selecionada.
+window.__discoveryFocusChatView = function () {
+  try {
+    if (typeof setActiveTab === "function") setActiveTab("chat");
+    if (chatInputEl) chatInputEl.focus();
+    scheduleChatScrollToBottom();
+  } catch (e) {
+    console.warn("[chat] falha ao focar a aba de chat:", e);
+  }
+};
+
 function scrollChatToBottom() {
   if (chatMessagesEl) chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
   if (chatViewEl) chatViewEl.scrollTop = chatViewEl.scrollHeight;
@@ -2586,6 +2599,8 @@ async function loadChatConfig() {
       chatMaxTokensEl.value = maxTokens > 0 ? String(maxTokens) : "";
     }
     if (chatSystemPromptEl) chatSystemPromptEl.value = cfg.systemPrompt || "";
+    // Privacidade: campo ausente (config antiga) = prévia habilitada.
+    if (chatNotifyPreviewEl) chatNotifyPreviewEl.checked = cfg.notifyPreview !== false;
     // Don't set API key - it's masked
   } catch (_) {}
 }
@@ -2614,6 +2629,7 @@ async function saveChatConfig() {
       model: model,
       systemPrompt: systemPrompt,
       maxTokens: maxTokens,
+      notifyPreview: chatNotifyPreviewEl ? !!chatNotifyPreviewEl.checked : true,
     });
     showFeedback(translate("chat.configSavedSuccess"));
     if (chatConfigPanel) chatConfigPanel.classList.add("hidden");

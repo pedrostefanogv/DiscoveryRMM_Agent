@@ -1847,6 +1847,20 @@ export function SetChatConfig(cfg) {
 }
 
 /**
+ * SetChatTabActive informa ao backend se a aba de chat é a view ativa em tela.
+ * É o único estado que o frontend pode reportar; o restante (foco, visibilidade,
+ * minimizado) é lido direto da janela do Wails.
+ * 
+ * A primeira chamada também sinaliza "frontend pronto": é o gatilho para focar
+ * a aba de chat quando o processo foi aberto por um clique em toast.
+ * @param {boolean} active
+ * @returns {$CancellablePromise<void>}
+ */
+export function SetChatTabActive(active) {
+    return $Call.ByID(4000607965, active);
+}
+
+/**
  * @returns {$CancellablePromise<void>}
  */
 export function SetContext() {

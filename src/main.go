@@ -13,6 +13,7 @@ import (
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
+	wailsnotifications "github.com/wailsapp/wails/v3/pkg/services/notifications"
 
 	appkg "discovery/app"
 	"discovery/app/core/logger"
@@ -145,6 +146,20 @@ func main() {
 		TrayOfflineIcon:      trayOfflineICO,
 	})
 
+	// ── Notificação nativa do Wails v3 (Chat IA) ──
+	// Usada SOMENTE para avisar que a resposta do chat ficou pronta quando a
+	// aba/janela do chat não está em tela (ver app/chat_notifications.go).
+	// O serviço NÃO é registrado em Options.Services: o lifecycle é conduzido
+	// por App.ServiceStartup/ServiceShutdown, o que evita expor a API de
+	// notificações ao webview e impede que uma falha de registro do toast
+	// aborte o startup (erro de bindings/ServiceStartup é fatal no Wails).
+	notifService := wailsnotifications.New()
+
+	// Clique num toast de resposta do chat com o agente FECHADO relança o exe
+	// com o payload do toast nos argumentos: marca o foco pendente na aba de
+	// chat (consumido quando o frontend reportar que está pronto).
+	app.HandleActivationArgs(os.Args[1:])
+
 	// ── Wails v3: aplicação explícita ──
 	// Cria a aplicação, registra o App como service, cria a janela e executa.
 	// O ciclo de vida (startup/shutdown) é tratado via ServiceStartup/ServiceShutdown.
@@ -178,12 +193,18 @@ func main() {
 			OnSecondInstanceLaunch: func(data application.SecondInstanceData) {
 				log.Printf("[single-instance] segunda abertura bloqueada. args=%v", data.Args)
 				app.ShowMainWindow()
+				// Clique num toast de resposta do chat com o agente já aberto:
+				// traz a janela e foca a aba de chat.
+				app.HandleActivationArgs(data.Args)
 			},
 		},
 	})
 
 	// Guarda a referência da aplicação no App para acesso a eventos/janela/tray.
 	app.SetApplication(appInstance)
+	// Conecta o serviço nativo de notificações ao App (toast de resposta do
+	// chat + clique no toast reabrindo a aba de chat).
+	app.SetNativeNotificationService(notifService)
 
 	// Garante que o diretório de dados do WebView2 existe antes da janela
 	// ser criada (evita falha de criação do EBWebView em contexto SYSTEM).

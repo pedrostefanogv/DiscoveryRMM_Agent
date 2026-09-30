@@ -168,6 +168,7 @@ const chatApiKeyEl = document.getElementById('chatApiKey');
 const chatModelEl = document.getElementById('chatModel');
 const chatMaxTokensEl = document.getElementById('chatMaxTokens');
 const chatSystemPromptEl = document.getElementById('chatSystemPrompt');
+const chatNotifyPreviewEl = document.getElementById('chatNotifyPreview');
 const chatLogsModal = document.getElementById('chatLogsModal');
 const chatLogsOutput = document.getElementById('chatLogsOutput');
 const chatLogsCloseBtn = document.getElementById('chatLogsCloseBtn');

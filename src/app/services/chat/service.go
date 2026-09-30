@@ -27,6 +27,11 @@ type Config struct {
 	Model        string `json:"model"`
 	SystemPrompt string `json:"systemPrompt"`
 	MaxTokens    int    `json:"maxTokens"`
+	// NotifyPreview controla se o toast de resposta concluída mostra um trecho
+	// da resposta (padrão true). nil = campo ausente no arquivo persistido
+	// (config antiga) e mantém o padrão; false = corpo genérico, para não
+	// expor conteúdo do chat no Action Center/tela de bloqueio.
+	NotifyPreview *bool `json:"notifyPreview,omitempty"`
 }
 
 // Message is a single message for the frontend.
@@ -65,6 +70,17 @@ type Deps struct {
 	EmitEvent func(string, ...any)
 	// PublishChatEvent publishes a chat event to SSE subscribers.
 	PublishChatEvent func(string, string)
+	// OnAssistantResponseComplete é chamado quando um turno de chat termina
+	// com sucesso e a resposta final está pronta para exibição (após
+	// chat:done). Recebe o texto final do assistente. Usado pelo App para
+	// notificar o usuário quando a aba de chat não está visível em tela.
+	OnAssistantResponseComplete func(content string)
+	// OnAssistantResponseFailed é chamado quando um turno de chat termina em
+	// erro real DURANTE o processamento (o usuário estava esperando a resposta)
+	// — não em cancelamento e não em recusa por turno em andamento. Rejeições
+	// instantâneas anteriores ao turno (IA desabilitada, config incompleta) não
+	// passam por aqui: o usuário acabou de enviar e vê o erro na hora.
+	OnAssistantResponseFailed func(errMsg string)
 	// SafeGo runs a function in a safe goroutine.
 	SafeGo func(func())
 	// ChatConfigFile is the config file name.
@@ -96,8 +112,16 @@ type Service struct {
 	beginActivity    func(string) func()
 	emitEvent        func(string, ...any)
 	publishChatEvent func(string, string)
-	safeGo           func(func())
-	chatConfigFile   string
+	// onAssistantResponseComplete notifica o App que a resposta final do turno
+	// ficou pronta (nil = desabilitado).
+	onAssistantResponseComplete func(content string)
+	onAssistantResponseFailed   func(errMsg string)
+	safeGo                      func(func())
+	chatConfigFile              string
+
+	// notifyPreview é a preferência de privacidade do toast (padrão true).
+	notifyPreviewMu sync.RWMutex
+	notifyPreview   bool
 
 	toolsRegistrationMu   sync.RWMutex
 	lastToolsRegistration time.Time
@@ -106,18 +130,44 @@ type Service struct {
 // New creates a ChatService.
 func New(reg *mcp.Registry, deps Deps) *Service {
 	return &Service{
-		chatSvc:          ai.NewService(reg),
-		mcpRegistry:      reg,
-		ctx:              deps.Ctx,
-		logf:             deps.Logf,
-		getDebugConfig:   deps.GetDebugConfig,
-		getAgentConfig:   deps.GetAgentConfiguration,
-		beginActivity:    deps.BeginActivity,
-		emitEvent:        deps.EmitEvent,
-		publishChatEvent: deps.PublishChatEvent,
-		safeGo:           deps.SafeGo,
-		chatConfigFile:   deps.ChatConfigFile,
+		chatSvc:                     ai.NewService(reg),
+		mcpRegistry:                 reg,
+		ctx:                         deps.Ctx,
+		logf:                        deps.Logf,
+		getDebugConfig:              deps.GetDebugConfig,
+		getAgentConfig:              deps.GetAgentConfiguration,
+		beginActivity:               deps.BeginActivity,
+		emitEvent:                   deps.EmitEvent,
+		publishChatEvent:            deps.PublishChatEvent,
+		onAssistantResponseComplete: deps.OnAssistantResponseComplete,
+		onAssistantResponseFailed:   deps.OnAssistantResponseFailed,
+		safeGo:                      deps.SafeGo,
+		chatConfigFile:              deps.ChatConfigFile,
+		// Padrão de privacidade: mostrar prévia (comportamento anterior). O
+		// installer/config do chat pode desligar.
+		notifyPreview: true,
 	}
+}
+
+// NotifyPreviewEnabled informa se o toast de resposta pode mostrar um trecho da
+// resposta. Seguro para chamada concorrente (o envio roda em goroutine).
+func (s *Service) NotifyPreviewEnabled() bool {
+	if s == nil {
+		return false
+	}
+	s.notifyPreviewMu.RLock()
+	defer s.notifyPreviewMu.RUnlock()
+	return s.notifyPreview
+}
+
+// setNotifyPreview aplica a preferência persistida (nil = mantém a atual).
+func (s *Service) setNotifyPreview(value *bool) {
+	if s == nil || value == nil {
+		return
+	}
+	s.notifyPreviewMu.Lock()
+	s.notifyPreview = *value
+	s.notifyPreviewMu.Unlock()
 }
 
 // Service returns the underlying ai.Service (for advanced use).
@@ -158,6 +208,7 @@ func (s *Service) LoadPersistedConfig() {
 		if cfg.MaxTokens < 0 {
 			cfg.MaxTokens = 0
 		}
+		s.setNotifyPreview(cfg.NotifyPreview)
 		s.chatSvc.SetConfig(ai.Config{
 			Endpoint:     cfg.Endpoint,
 			APIKey:       cfg.APIKey,
@@ -214,6 +265,13 @@ func (s *Service) SetConfig(cfg Config) error {
 	if key := strings.TrimSpace(cfg.APIKey); key == "" || key == maskedAPIKey {
 		cfg.APIKey = s.chatSvc.GetConfig().APIKey
 	}
+	if cfg.NotifyPreview == nil {
+		// UI antiga (sem o campo) ou save parcial: preserva a preferência atual
+		// em vez de resetar o padrão.
+		enabled := s.NotifyPreviewEnabled()
+		cfg.NotifyPreview = &enabled
+	}
+	s.setNotifyPreview(cfg.NotifyPreview)
 	s.chatSvc.SetConfig(ai.Config{
 		Endpoint:     cfg.Endpoint,
 		APIKey:       cfg.APIKey,
@@ -243,12 +301,14 @@ func (s *Service) TestConfig(cfg Config) (string, error) {
 // "masked" mas devolvia a chave integral (leak para frontend/debug HTTP).
 func (s *Service) GetConfig() Config {
 	c := s.chatSvc.GetConfig()
+	preview := s.NotifyPreviewEnabled()
 	return Config{
-		Endpoint:     c.Endpoint,
-		APIKey:       maskAPIKey(c.APIKey),
-		Model:        c.Model,
-		SystemPrompt: c.SystemPrompt,
-		MaxTokens:    c.MaxTokens,
+		Endpoint:      c.Endpoint,
+		APIKey:        maskAPIKey(c.APIKey),
+		Model:         c.Model,
+		SystemPrompt:  c.SystemPrompt,
+		MaxTokens:     c.MaxTokens,
+		NotifyPreview: &preview,
 	}
 }
 
@@ -303,7 +363,7 @@ func (s *Service) StartStream(message string) {
 		}
 		s.chatSvc.SetConfig(runtimeCfg)
 
-		_, err := s.chatSvc.SendStreamMultiRoundWithProgress(
+		content, err := s.chatSvc.SendStreamMultiRoundWithProgress(
 			s.ctx(),
 			message,
 			func(token string) {
@@ -332,10 +392,21 @@ func (s *Service) StartStream(message string) {
 			} else {
 				s.emitEvent("chat:error", err.Error())
 				s.publishChatEvent("chat:error", err.Error())
+				// Recusa por turno em andamento (ErrTurnBusy) não é falha da
+				// resposta — não deve gerar notificação. Erro real gera.
+				if s.onAssistantResponseFailed != nil && !errors.Is(err, ai.ErrTurnBusy) {
+					s.onAssistantResponseFailed(err.Error())
+				}
 			}
 		} else {
 			s.emitEvent("chat:done")
 			s.publishChatEvent("chat:done", "")
+			// Resposta final pronta: o App decide se deve notificar o usuário
+			// (aba de chat fora de tela). O hook é nil-safe e não bloqueia a
+			// liberação do turno.
+			if s.onAssistantResponseComplete != nil {
+				s.onAssistantResponseComplete(content)
+			}
 		}
 	})
 }

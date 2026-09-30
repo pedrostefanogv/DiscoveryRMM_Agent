@@ -25,6 +25,52 @@ function renderCardList(targetEl, items, emptyMessage, cardRenderer, opts) {
   targetEl.innerHTML = list.map(cardRenderer).join('');
 }
 
+// ── Estado da aba de chat para a notificação nativa (Wails v3) ─────────────
+// O backend (App.SetChatTabActive) só dispara o toast de resposta concluída
+// quando a aba de chat NÃO está em tela. Aqui reportamos apenas se a aba é a
+// view ativa do webview; foco/visibilidade/minimizado da janela são checados
+// no Go (application.Window). Falha no binding é ignorada: a UI não depende
+// disso para funcionar.
+var chatTabActiveReported = null;
+var chatTabActiveRetryTimer = null;
+var chatTabActiveRetries = 0;
+var CHAT_TAB_ACTIVE_MAX_RETRIES = 40;
+
+function reportChatTabActive(force) {
+  var active = activeTab === 'chat' && !window.__discoveryUISuspended;
+  if (!force && active === chatTabActiveReported) return;
+
+  var api = null;
+  try {
+    api = typeof appApi === 'function' ? appApi() : null;
+  } catch (_) {
+    api = null;
+  }
+
+  // wails-bridge.js é um módulo deferred: o binding pode ainda não existir no
+  // boot. Repete sem marcar o estado como reportado para não perder o primeiro
+  // report (desistindo após CHAT_TAB_ACTIVE_MAX_RETRIES).
+  if (!api || typeof api.SetChatTabActive !== 'function') {
+    if (chatTabActiveRetryTimer === null && chatTabActiveRetries < CHAT_TAB_ACTIVE_MAX_RETRIES) {
+      chatTabActiveRetries += 1;
+      chatTabActiveRetryTimer = setTimeout(function () {
+        chatTabActiveRetryTimer = null;
+        reportChatTabActive(true);
+      }, 250);
+    }
+    return;
+  }
+
+  chatTabActiveRetries = 0;
+  chatTabActiveReported = active;
+  try {
+    var result = api.SetChatTabActive(active);
+    if (result && typeof result.catch === 'function') {
+      result.catch(function () {});
+    }
+  } catch (_) {}
+}
+
 function setActiveTab(tab) {
   if (!isRuntimeTabAllowed(tab)) {
     tab = 'status';
@@ -120,6 +166,10 @@ function setActiveTab(tab) {
       startLogsAutoRefresh();
     }
   }
+
+  // Notificação de resposta do chat: mantém o backend ciente de qual view está
+  // em tela (aba de chat ativa ou não).
+  reportChatTabActive();
 }
 
 var uiRuntimeHeartbeatId = null;
@@ -143,11 +193,13 @@ function handleWindowVisibilityChange() {
     stopLogsAutoRefresh();
     if (typeof stopStatusPoll === 'function') stopStatusPoll();
     if (typeof stopAgentStatusPoll === 'function') stopAgentStatusPoll();
+    reportChatTabActive();
     return;
   }
 
   setUISuspended(false);
   startUIRuntimeMonitor('visibilitychange:visible');
+  reportChatTabActive();
 
   if (activeTab === 'status' && typeof startStatusPoll === 'function') {
     startStatusPoll();
@@ -169,14 +221,18 @@ document.addEventListener('ui:resume', function () {
 });
 window.addEventListener('focus', function () {
   reportUIRuntimeState('window:focus');
+  reportChatTabActive(true);
 });
 window.addEventListener('blur', function () {
   reportUIRuntimeState('window:blur');
+  reportChatTabActive(true);
 });
 window.addEventListener('beforeunload', function () {
   stopUIRuntimeMonitor(true, 'window:unload');
 });
 setUISuspended(!isAppWindowVisible());
+// Estado inicial da aba de chat (o boot começa na aba status).
+reportChatTabActive(true);
 
 // ---------------------------------------------------------------------------
 // Logs tab

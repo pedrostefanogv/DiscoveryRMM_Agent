@@ -15,6 +15,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/wailsapp/wails/v3/pkg/application"
+	wailsnotifications "github.com/wailsapp/wails/v3/pkg/services/notifications"
 
 	"discovery/app/agentconfig"
 	"discovery/app/apiclient"
@@ -166,6 +167,31 @@ type App struct {
 	mainWindow application.Window
 	systemTray *application.SystemTray
 
+	// ── Notificação nativa da resposta do chat (Wails v3 notifications) ──
+	// nativeNotifications é o serviço nativo do Wails v3 (registrado em
+	// main.go); chatTabActive é reportado pelo frontend (SetChatTabActive) e a
+	// decisão final combina esse estado com foco/visibilidade reais da janela.
+	nativeNotifications *wailsnotifications.NotificationService
+	// nativeNotificationsReady é fornecido pelo wrapper de startup em main.go:
+	// false quando o serviço nativo não conseguiu inicializar (toast desabilitado
+	// em vez de tentar enviar por um notifier meio-inicializado).
+	// nativeNotificationsStarted: o ServiceStartup do serviço nativo concluiu
+	// com sucesso (sem isso o notifier tem AppID/CLSID vazios).
+	nativeNotificationsStarted atomic.Bool
+	// Fan-out do callback único de OnNotificationResponse do serviço nativo.
+	nativeNotifyHandlersMu sync.Mutex
+	nativeNotifyHandlers   []func(wailsnotifications.NotificationResult)
+	chatTabActive          atomic.Bool
+	// chatNotifyPending: já avisamos nesta ausência do usuário; lastAt é o
+	// debounce mínimo entre envios.
+	chatNotifyMu      sync.Mutex
+	chatNotifyPending bool
+	chatNotifyLastAt  time.Time
+	// uiReady: o frontend já reportou estado (bindings carregados).
+	// pendingChatFocus: a abertura veio de clique em toast com o app fechado.
+	uiReady          atomic.Bool
+	pendingChatFocus atomic.Bool
+
 	// ── IPC serviço ↔ UI (PLANO_AGENT_SERVICE_SYSTEM.md, Fase 2) ──
 	// No serviço: ipcServer distribui eventos para as UIs conectadas.
 	// Na UI: ipcClient conecta ao serviço (modo companion) com reconexão.
@@ -262,8 +288,12 @@ func NewApp(opts AppStartupOptions) *App {
 		BeginActivity:    a.beginActivity,
 		EmitEvent:        a.EmitEvent,
 		PublishChatEvent: a.PublishChatEvent,
-		SafeGo:           a.safeGo,
-		ChatConfigFile:   chatConfigFile,
+		// Notificação nativa (Wails v3) quando o turno do chat termina e a
+		// aba/janela do chat não está visível para o usuário.
+		OnAssistantResponseComplete: a.notifyChatResponseComplete,
+		OnAssistantResponseFailed:   a.notifyChatResponseFailed,
+		SafeGo:                      a.safeGo,
+		ChatConfigFile:              chatConfigFile,
 	})
 	a.psadtSvc = psadt.New(psadt.Deps{
 		Logf: func(line string) {
@@ -941,7 +971,15 @@ func (a *App) ClearMemoryCaches() { a.clearMemoryCaches() }
 // ServiceStartup é chamado pelo Wails v3 durante a inicialização da aplicação.
 // Substitui o OnStartup do v2. O ctx recebido é o contexto da aplicação.
 func (a *App) ServiceStartup(ctx context.Context, options application.ServiceOptions) error {
-	return a.RunCore(ctx)
+	if err := a.RunCore(ctx); err != nil {
+		return err
+	}
+	// Serviço nativo de notificações (Wails v3), usado só pelo chat. O
+	// lifecycle é conduzido aqui — e não registrando o serviço em
+	// application.Options.Services — para não expor a API de notificações ao
+	// webview e para que uma falha de registro do toast não aborte o startup.
+	a.startNativeNotificationService(ctx)
+	return nil
 }
 
 // RunCore inicia o ciclo de vida do App sem depender de tipos do Wails.
@@ -954,6 +992,9 @@ func (a *App) RunCore(ctx context.Context) error {
 
 // ServiceShutdown é chamado pelo Wails v3 durante o encerramento.
 func (a *App) ServiceShutdown() error {
+	// Encerra o serviço nativo antes do teardown (mesma ordem que o Wails
+	// aplicaria a um serviço registrado: encerramento inverso ao startup).
+	a.stopNativeNotificationService()
 	a.shutdown()
 	return nil
 }

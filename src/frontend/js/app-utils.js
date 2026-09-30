@@ -509,6 +509,9 @@ var APP_I18N_DICTIONARY = {
       "Ex.: Responda com foco em inventário corporativo e sempre cite riscos antes de executar ações.",
     "chat.configUsesDebugFallback":
       "Se endpoint/token ficarem vazios, o chat usa automaticamente apiScheme/apiServer/authToken da aba Debug.",
+    "chat.notifyPreview": "Mostrar prévia da resposta nas notificações",
+    "chat.notifyPreviewHint":
+      "Quando desligado, a notificação apenas avisa que há uma nova resposta, sem exibir o conteúdo na tela de bloqueio.",
     "chat.inputPlaceholder":
       "Digite sua mensagem... (Enter para enviar, Shift+Enter para nova linha)",
     "chat.queuedTag": "na fila",
@@ -1125,6 +1128,9 @@ var APP_I18N_DICTIONARY = {
       "Example: Answer with a focus on corporate inventory and always cite risks before executing actions.",
     "chat.configUsesDebugFallback":
       "If endpoint/token are empty, chat automatically uses apiScheme/apiServer/authToken from the Debug tab.",
+    "chat.notifyPreview": "Show response preview in notifications",
+    "chat.notifyPreviewHint":
+      "When off, the notification only says there is a new reply — content is not shown on the lock screen.",
     "chat.inputPlaceholder":
       "Type your message... (Enter to send, Shift+Enter for a new line)",
     "chat.queuedTag": "queued",
