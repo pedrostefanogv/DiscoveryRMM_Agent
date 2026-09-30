@@ -141,6 +141,7 @@ func main() {
 	app := appkg.NewApp(appkg.AppStartupOptions{
 		DebugMode:            startupDebugMode,
 		StartMinimized:       startupMinimized,
+		MainWindowFrameless:  startupFrameless,
 		TrayIcon:             trayIconICO,
 		TrayProvisioningIcon: trayProvisioningICO,
 		TrayOfflineIcon:      trayOfflineICO,

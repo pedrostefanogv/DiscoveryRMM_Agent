@@ -63,10 +63,11 @@ type AppBridge interface {
 
 	// Captura de tela — visão do LLM (PLANO_CAPTURA_TELA_ASSISTIDA).
 	// ListOpenWindowsJSON: janelas visíveis + monitores (não captura nada).
+	// includeUntitled permite listar janelas sem título (games/UWP).
 	// CaptureScreenshotForTool: captura com autorização do usuário e devolve
 	// a imagem no contrato {"image_base64","mime"} consumido pela API.
 	// ScreenshotConsentStatusJSON: estado da autorização + auditoria.
-	ListOpenWindowsJSON() (json.RawMessage, error)
+	ListOpenWindowsJSON(includeUntitled bool) (json.RawMessage, error)
 	CaptureScreenshotForTool(ctx context.Context, args map[string]any) (json.RawMessage, error)
 	ScreenshotConsentStatusJSON() (json.RawMessage, error)
 }
@@ -988,22 +989,38 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 		Name: "list_open_windows",
 		Description: "Lista as janelas visiveis abertas no desktop (handle, titulo, processo, PID, posicao/tamanho, foco). " +
 			"Use ANTES de capture_screenshot(mode=window) para escolher o alvo do diagnostico. " +
+			"Janelas com blocked=true estao na blocklist de privacidade e NAO podem ser capturadas. " +
 			"Nao captura nada e nao exige autorizacao.",
+		Params: []ToolParam{
+			{Name: "includeUntitled", Type: "boolean", Description: "Inclui janelas sem titulo (games/UWP); padrao false", Required: false},
+		},
 		Handler: func(ctx context.Context, args map[string]any) (any, error) {
-			return app.ListOpenWindowsJSON()
+			includeUntitled := false
+			switch v := args["includeUntitled"].(type) {
+			case bool:
+				includeUntitled = v
+			case string:
+				switch strings.ToLower(strings.TrimSpace(v)) {
+				case "true", "1", "yes", "sim", "on":
+					includeUntitled = true
+				}
+			case float64:
+				includeUntitled = v != 0
+			}
+			return app.ListOpenWindowsJSON(includeUntitled)
 		},
 	})
 
 	reg.Register(Tool{
 		Name: "capture_screenshot",
 		Description: "Captura a tela deste computador para diagnostico visual e devolve a imagem ao modelo (visao). " +
-			"Modos: full (todos os monitores), window (exige windowHandle de list_open_windows), monitor (exige monitor), " +
-			"region (exige x, y, width, height) e interactive (o usuario seleciona a area/janela na tela congelada). " +
+			"Modos: full (todos os monitores), window (exige windowHandle de list_open_windows), focused (janela em foco), " +
+			"monitor (exige monitor), region (exige x, y, width, height) e interactive (o usuario seleciona a area/janela na tela congelada). " +
 			"A PRIMEIRA captura pedida pela IA exige autorizacao explicita do usuario: o agente abre um pedido de permissao " +
 			"no chat; depois de autorizada (nesta conversa ou sempre), a IA pode capturar de forma automatica. " +
 			"Nunca use para espionar: informe sempre o motivo em reason e prefira a janela especifica em vez da tela inteira.",
 		Params: []ToolParam{
-			{Name: "mode", Type: "string", Description: "full | window | monitor | region | interactive", Required: true},
+			{Name: "mode", Type: "string", Description: "full | window | focused | monitor | region | interactive", Required: true},
 			{Name: "windowHandle", Type: "integer", Description: "Handle da janela (list_open_windows) — modo window", Required: false},
 			{Name: "monitor", Type: "integer", Description: "Indice do monitor (0 = primario) — modo monitor", Required: false},
 			{Name: "x", Type: "integer", Description: "Coordenada X fisica da regiao — modo region", Required: false},

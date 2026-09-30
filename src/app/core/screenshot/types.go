@@ -19,6 +19,7 @@ const (
 	ModeMonitor     = "monitor"     // um monitor específico
 	ModeRegion      = "region"      // região retangular informada
 	ModeWindow      = "window"      // janela específica (PrintWindow)
+	ModeFocused     = "focused"     // janela em foco (o app resolve para window)
 	ModeInteractive = "interactive" // usuário seleciona área/janela no overlay
 )
 
@@ -35,7 +36,10 @@ type WindowInfo struct {
 	Minimized   bool   `json:"minimized"`
 	Foreground  bool   `json:"foreground"`
 	IsSelf      bool   `json:"isSelf"`
-	ZOrder      int    `json:"zOrder"`
+	// Blocked indica que o processo está na blocklist da política local de
+	// privacidade (a IA não deve capturar esta janela).
+	Blocked bool `json:"blocked,omitempty"`
+	ZOrder  int  `json:"zOrder"`
 }
 
 // MonitorInfo descreve um monitor no desktop virtual (coordenadas físicas).
@@ -132,6 +136,9 @@ type OverlayPayload struct {
 	Monitors       []MonitorInfo `json:"monitors"`
 	Windows        []WindowInfo  `json:"windows"`
 	RequestedByLLM bool          `json:"requestedByLlm"`
+	// Flags da política local para a UI não oferecer ações proibidas.
+	PolicyFullScreenAllowed bool `json:"policyFullScreenAllowed"`
+	PolicyWindowRequired    bool `json:"policyWindowRequired"`
 }
 
 // Selection é a escolha do usuário no overlay de captura.
@@ -143,6 +150,10 @@ type Selection struct {
 	Height       int    `json:"height"`
 	WindowHandle uint64 `json:"windowHandle"`
 	MonitorIndex int    `json:"monitorIndex"`
+	// AnnotatedDataURL é a imagem final já com as anotações (setas, caixas,
+	// texto) desenhadas pelo usuário no overlay. Quando presente, é ela que vale
+	// — o backend apenas normaliza/reencoda.
+	AnnotatedDataURL string `json:"annotatedDataUrl,omitempty"`
 }
 
 // ToolPayload monta o contrato JSON devolvido ao LLM como resultado da tool.

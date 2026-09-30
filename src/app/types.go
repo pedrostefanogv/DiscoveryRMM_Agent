@@ -29,6 +29,10 @@ type AppStartupOptions struct {
 	TrayProvisioningIcon []byte
 	// TrayOfflineIcon is shown when the provisioned agent is offline.
 	TrayOfflineIcon []byte
+	// MainWindowFrameless informa se a janela principal nasceu sem moldura —
+	// usado para restaurar o modo depois do overlay de captura (que força
+	// frameless para cobrir a tela inteira sem barra de título).
+	MainWindowFrameless bool
 }
 
 // RuntimeFlags movido para coreagent.RuntimeFlags (alias acima, mesmas tags json).

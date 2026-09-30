@@ -102,6 +102,33 @@ func bgraToRGBA(f *screen.Frame) *image.RGBA {
 	return &image.RGBA{Pix: rgba, Stride: stride, Rect: image.Rect(0, 0, f.Width, f.Height)}
 }
 
+// ScaledDimensions devolve as dimensões que Downscale produz para maxDim.
+// É usado quando o chamador precisa dos tamanhos do frame JÁ reduzido — o
+// overlay de captura, por exemplo, entrega ao frontend a imagem reduzida e as
+// dimensões PRECISAM casar com ela (senão o recorte/anotação sai deslocado).
+func ScaledDimensions(w, h, maxDim int) (int, int) {
+	if w <= 0 || h <= 0 || maxDim <= 0 {
+		return w, h
+	}
+	longest := w
+	if h > longest {
+		longest = h
+	}
+	if longest <= maxDim {
+		return w, h
+	}
+	scale := float64(maxDim) / float64(longest)
+	nw := int(float64(w) * scale)
+	nh := int(float64(h) * scale)
+	if nw < 1 {
+		nw = 1
+	}
+	if nh < 1 {
+		nh = 1
+	}
+	return nw, nh
+}
+
 // EncodePNG codifica o frame como PNG.
 func EncodePNG(f *screen.Frame) ([]byte, error) {
 	if f == nil || len(f.Data) == 0 {

@@ -61,6 +61,9 @@ var (
 	// global (o callback do EnumWindows é registrado uma única vez por processo)
 	// e duas enumerações simultâneas intercalariam janelas de ambas.
 	enumMu sync.Mutex
+	// enumIncludeUntitled é lido pelo callback durante a enumeração protegida
+	// por enumMu (opção de listar janelas sem título — games/UWP).
+	enumIncludeUntitled bool
 )
 
 const (
@@ -98,7 +101,7 @@ func describeWindow(hwnd uintptr) (WindowInfo, bool) {
 		return WindowInfo{}, false
 	}
 	title := windowTitle(hwnd)
-	if title == "" {
+	if title == "" && !enumIncludeUntitled {
 		return WindowInfo{}, false
 	}
 	x, y, w, h, ok := windowBounds(hwnd)
@@ -182,10 +185,21 @@ func processName(pid uint32) string {
 }
 
 // ListWindows retorna as janelas visíveis de nível superior, em ordem de
-// z-order (índice 0 = mais à frente).
-func ListWindows() ([]WindowInfo, error) {
+// z-order (índice 0 = mais à frente). Equivale a ListWindowsWithOptions(false).
+func ListWindows() ([]WindowInfo, error) { return ListWindowsWithOptions(false) }
+
+// ForegroundWindowHandle retorna o handle da janela em foco (0 = indisponível).
+func ForegroundWindowHandle() uint64 {
+	hwnd, _, _ := procGetForegroundWindowS.Call()
+	return uint64(hwnd)
+}
+
+// ListWindowsWithOptions permite incluir janelas sem título (alguns jogos/UWP
+// não expõem título, mas continuam sendo alvos úteis de diagnóstico).
+func ListWindowsWithOptions(includeUntitled bool) ([]WindowInfo, error) {
 	enumMu.Lock()
 	defer enumMu.Unlock()
+	enumIncludeUntitled = includeUntitled
 
 	windowsAccumMu.Lock()
 	windowsAccum = windowsAccum[:0]

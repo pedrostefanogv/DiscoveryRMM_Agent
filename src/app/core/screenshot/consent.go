@@ -36,19 +36,63 @@ type Persist struct {
 
 // AuditEntry registra uma captura autorizada (trilha de auditoria exibida na UI).
 type AuditEntry struct {
+	ID       int64     `json:"id"`
 	At       time.Time `json:"at"`
 	Decision Decision  `json:"decision"`
 	Mode     string    `json:"mode"`
 	Detail   string    `json:"detail"`
 	ByLLM    bool      `json:"byLlm"`
 	Bytes    int       `json:"bytes"`
+	// Thumbnail é a miniatura do que foi capturado. NÃO é serializada no
+	// binding de status/tool (payload e privacidade); a UI de privacidade busca
+	// as miniaturas pelo binding GetScreenshotAuditPanel.
+	Thumbnail    []byte `json:"-"`
+	HasThumbnail bool   `json:"hasThumbnail"`
 }
 
-// ConsentOptions são as opções apresentadas no diálogo de autorização.
-var ConsentOptions = []string{
-	"Permitir nesta conversa",
-	"Permitir sempre",
-	"Negar",
+// consentDialogs é o texto do diálogo de autorização por idioma. O locale vem
+// do binding GetPreferredLocale do agent.
+var consentDialogs = map[string]struct {
+	Question string
+	Options  []string
+}{
+	"pt": {
+		Question: "O assistente de IA pediu para capturar a tela deste computador%s. Permite a captura?",
+		Options:  []string{"Permitir nesta conversa", "Permitir sempre", "Negar"},
+	},
+	"en": {
+		Question: "The AI assistant requested a screen capture of this computer%s. Allow the capture?",
+		Options:  []string{"Allow this conversation", "Always allow", "Deny"},
+	},
+	"es": {
+		Question: "El asistente de IA solicitó capturar la pantalla de este equipo%s. ¿Permitir la captura?",
+		Options:  []string{"Permitir esta conversación", "Permitir siempre", "Negar"},
+	},
+}
+
+// ConsentLanguage mapeia um locale ("pt-BR", "en-US", "es-ES") para a chave de
+// idioma do diálogo. Locale desconhecido → inglês; locale vazio (sem informação)
+// mantém pt-BR, o comportamento original.
+func ConsentLanguage(locale string) string {
+	v := strings.ToLower(strings.TrimSpace(locale))
+	switch {
+	case v == "":
+		return "pt"
+	case strings.HasPrefix(v, "pt"):
+		return "pt"
+	case strings.HasPrefix(v, "es"):
+		return "es"
+	default:
+		return "en"
+	}
+}
+
+// ConsentOptions retorna as opções do diálogo no idioma informado.
+func ConsentOptions(locale string) []string {
+	dialog := consentDialogs[ConsentLanguage(locale)]
+	out := make([]string, len(dialog.Options))
+	copy(out, dialog.Options)
+	return out
 }
 
 const auditMax = 50
@@ -62,12 +106,15 @@ type ConsentManager struct {
 	prompt   Prompter
 	persist  Persist
 	logf     func(string)
-	audit    []AuditEntry
+	// locale devolve o idioma preferido (ex.: "pt-BR") para o diálogo.
+	locale func() string
+	audit  []AuditEntry
+	nextID int64
 }
 
-// NewConsentManager cria o gerenciador. prompt/persist/logf podem ser nil.
-func NewConsentManager(prompt Prompter, persist Persist, logf func(string)) *ConsentManager {
-	m := &ConsentManager{decision: DecisionUndecided, prompt: prompt, persist: persist, logf: logf}
+// NewConsentManager cria o gerenciador. prompt/persist/logf/locale podem ser nil.
+func NewConsentManager(prompt Prompter, persist Persist, logf func(string), locale func() string) *ConsentManager {
+	m := &ConsentManager{decision: DecisionUndecided, prompt: prompt, persist: persist, logf: logf, locale: locale}
 	if persist.Load != nil {
 		if d, err := persist.Load(); err == nil && d != "" {
 			m.decision = d
@@ -169,8 +216,12 @@ func (m *ConsentManager) Ensure(ctx context.Context, reason string) (Decision, e
 		return DecisionUndecided, fmt.Errorf("é preciso autorizar a captura de tela, mas nenhum diálogo está disponível")
 	}
 
-	question := BuildConsentQuestion(reason)
-	answer, err := m.prompt(ctx, question, ConsentOptions)
+	lang := ""
+	if m.locale != nil {
+		lang = m.locale()
+	}
+	question := BuildConsentQuestion(reason, lang)
+	answer, err := m.prompt(ctx, question, ConsentOptions(lang))
 	if err != nil {
 		return DecisionUndecided, err
 	}
@@ -184,15 +235,15 @@ func (m *ConsentManager) Ensure(ctx context.Context, reason string) (Decision, e
 	return decision, nil
 }
 
-// BuildConsentQuestion monta a pergunta de autorização exibida no chat.
-func BuildConsentQuestion(reason string) string {
-	var sb strings.Builder
-	sb.WriteString("O assistente de IA pediu para capturar a tela deste computador")
+// BuildConsentQuestion monta a pergunta de autorização exibida no chat, no
+// idioma do locale informado.
+func BuildConsentQuestion(reason, locale string) string {
+	dialog := consentDialogs[ConsentLanguage(locale)]
+	suffix := ""
 	if r := strings.TrimSpace(reason); r != "" {
-		sb.WriteString(" (" + r + ")")
+		suffix = " (" + r + ")"
 	}
-	sb.WriteString(". Permite a captura?")
-	return sb.String()
+	return fmt.Sprintf(dialog.Question, suffix)
 }
 
 // ClassifyConsentAnswer mapeia a resposta do usuário para uma decisão.
@@ -203,12 +254,16 @@ func ClassifyConsentAnswer(answer string) Decision {
 		return DecisionDenied
 	}
 	switch {
-	case strings.Contains(a, "sempre"), strings.Contains(a, "always"), strings.Contains(a, "permanente"):
+	case strings.Contains(a, "sempre"), strings.Contains(a, "siempre"), strings.Contains(a, "always"),
+		strings.Contains(a, "permanente"), strings.Contains(a, "permanent"):
 		return DecisionAlways
 	case strings.Contains(a, "neg"), strings.Contains(a, "não"), strings.Contains(a, "nao"),
-		strings.Contains(a, "no "), a == "no", strings.Contains(a, "recus"), strings.Contains(a, "cancel"):
+		strings.Contains(a, "no "), a == "no", strings.Contains(a, "recus"), strings.Contains(a, "cancel"),
+		strings.Contains(a, "deny"), strings.Contains(a, "nunca"), strings.Contains(a, "jamais"),
+		strings.Contains(a, "never"):
 		return DecisionDenied
-	case strings.Contains(a, "permitir"), strings.Contains(a, "pode"), strings.Contains(a, "sim"),
+	case strings.Contains(a, "permitir"), strings.Contains(a, "permit"), strings.Contains(a, "pode"),
+		strings.Contains(a, "sim"), a == "sí",
 		strings.Contains(a, "ok"), strings.Contains(a, "autoriz"), strings.Contains(a, "allow"):
 		return DecisionSession
 	default:
@@ -218,20 +273,26 @@ func ClassifyConsentAnswer(answer string) Decision {
 	}
 }
 
-// RecordCapture adiciona uma entrada de auditoria (ring buffer).
-func (m *ConsentManager) RecordCapture(entry AuditEntry) {
+// RecordCapture adiciona uma entrada de auditoria (ring buffer) e devolve a
+// entrada armazenada — com ID atribuído — para o chamador correlacionar com a
+// imagem cheia mantida em memória (lightbox do chat).
+func (m *ConsentManager) RecordCapture(entry AuditEntry) AuditEntry {
 	if m == nil {
-		return
+		return entry
 	}
 	if entry.At.IsZero() {
 		entry.At = time.Now()
 	}
 	m.mu.Lock()
+	m.nextID++
+	entry.ID = m.nextID
+	entry.HasThumbnail = len(entry.Thumbnail) > 0
 	m.audit = append(m.audit, entry)
 	if len(m.audit) > auditMax {
 		m.audit = append([]AuditEntry(nil), m.audit[len(m.audit)-auditMax:]...)
 	}
 	m.mu.Unlock()
+	return entry
 }
 
 // Audit retorna uma cópia da trilha de auditoria (mais recente por último).

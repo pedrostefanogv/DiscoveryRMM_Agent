@@ -2,7 +2,6 @@
 
 var chatSending = false;
 var chatStopRequested = false;
-var chatThinkingPollId = null;
 // Timer de segurança: se o stream não terminar em X segundos, a UI para de
 // esperar passivamente e RECONCILIA com o backend (HasActiveChatStream) —
 // antes ela se liberava na hora (60s) enquanto o core continuava processando,
@@ -2058,37 +2057,11 @@ function appendChatQuickActions(containerEl, actionOptions) {
   containerEl.appendChild(actions);
 }
 
-function parseChatProgressLine(line) {
-  var raw = String(line || "");
-  if (!raw.startsWith("[chat] ")) return "";
-  var text = raw.replace(/^\[chat\]\s*/, "");
-
-  if (text.indexOf("mensagem recebida") >= 0)
-    return "Entendendo sua solicitacao...";
-  if (text.indexOf("ferramentas disponiveis") >= 0)
-    return "Preparando ferramentas...";
-  if (text.indexOf("rodada de ferramentas") >= 0)
-    return "Analisando e planejando a melhor acao...";
-  if (text.indexOf("chamando ferramenta:") >= 0) {
-    var name = text.split("chamando ferramenta:")[1] || "";
-    name = name.trim();
-    return name ? "Executando: " + name + "..." : "Executando ferramenta...";
-  }
-  if (text.indexOf("executada com sucesso") >= 0)
-    return "Acao concluida com sucesso, preparando resposta...";
-  if (text.indexOf("retornou erro") >= 0)
-    return "Houve um erro na acao. Ajustando resposta...";
-  if (text.indexOf("resposta final") >= 0) return "Finalizando resposta...";
-  return "";
-}
-
 function stopThinkingStatusUpdates() {
-  if (chatThinkingPollId) {
-    clearInterval(chatThinkingPollId);
-    chatThinkingPollId = null;
-  }
-  // Terminal do turno (done/error/stopped) ou suspensão da UI: o cronômetro do
-  // widget não pode continuar rodando sobre uma bolha que vai sumir.
+  // Ponto único de teardown do turno: chamado nos terminais (done/error/stopped)
+  // e na suspensão da UI. O polling de logs que alimentava o antigo
+  // "Pensando..." foi removido como dead code (B18); o que resta desligar aqui é
+  // o cronômetro do widget de atividade.
   stopChatActivityTimer();
 }
 
@@ -2097,10 +2070,6 @@ function handleChatUISuspend() {
 }
 
 document.addEventListener("ui:suspend", handleChatUISuspend);
-
-// B18: startThinkingStatusUpdates removida — era dead code (sem callers).
-// Se fosse ativada, faria GetLogs() a cada 900ms durante o "thinking".
-// stopThinkingStatusUpdates permanece (usada pelo handler ui:suspend).
 
 function formatInlineChatMarkdown(text) {
   // Espaço após rótulo em negrito colado ao valor ("**ID:**01a0557e") —
@@ -2672,16 +2641,6 @@ function addChatMessage(role, content) {
   chatMessagesEl.appendChild(div);
   scheduleChatScrollToBottom();
   return div;
-}
-
-function removeChatThinking() {
-  if (!chatMessagesEl) return;
-  stopThinkingStatusUpdates();
-  var thinking = chatMessagesEl.querySelector(".chat-msg.thinking");
-  if (thinking) {
-    thinking.remove();
-    scheduleChatScrollToBottom();
-  }
 }
 
 async function sendChatMessage() {

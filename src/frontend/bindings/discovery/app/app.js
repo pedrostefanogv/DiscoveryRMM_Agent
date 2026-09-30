@@ -356,6 +356,16 @@ export function Context() {
 }
 
 /**
+ * CopyImageDataURLToClipboard copia uma imagem (data URL) para a área de
+ * transferência do Windows como bitmap (CF_DIB). Usado pelo lightbox.
+ * @param {string} dataURL
+ * @returns {$CancellablePromise<void>}
+ */
+export function CopyImageDataURLToClipboard(dataURL) {
+    return $Call.ByID(382759050, dataURL);
+}
+
+/**
  * @param {string} title
  * @param {string} description
  * @param {number} priority
@@ -1066,11 +1076,38 @@ export function GetRuntimeFlags() {
 }
 
 /**
+ * GetScreenshotAuditPanel devolve consentimento + política + uso do limite +
+ * auditoria (com miniaturas das últimas capturas) para o painel de privacidade.
+ * @returns {$CancellablePromise<string>}
+ */
+export function GetScreenshotAuditPanel() {
+    return $Call.ByID(955338621);
+}
+
+/**
+ * GetScreenshotImage devolve a imagem cheia de uma captura da auditoria
+ * (lightbox do chat). IDs fora do buffer (expirados) retornam erro.
+ * @param {number} id
+ * @returns {$CancellablePromise<string>}
+ */
+export function GetScreenshotImage(id) {
+    return $Call.ByID(3647248935, id);
+}
+
+/**
  * GetScreenshotPermission devolve o estado de autorização + auditoria.
  * @returns {$CancellablePromise<string>}
  */
 export function GetScreenshotPermission() {
     return $Call.ByID(3529772117);
+}
+
+/**
+ * GetScreenshotPolicy devolve a política atual (binding da UI de privacidade).
+ * @returns {$CancellablePromise<string>}
+ */
+export function GetScreenshotPolicy() {
+    return $Call.ByID(543572100);
 }
 
 /**
@@ -1350,11 +1387,13 @@ export function ListInstalled() {
 }
 
 /**
- * ListOpenWindowsJSON implementa AppBridge: janelas visíveis + monitores.
+ * ListOpenWindowsJSON implementa AppBridge: janelas visíveis + monitores,
+ * enriquecidas com o flag Blocked da política local de privacidade.
+ * @param {boolean} includeUntitled
  * @returns {$CancellablePromise<json$0.RawMessage>}
  */
-export function ListOpenWindowsJSON() {
-    return $Call.ByID(3885529817);
+export function ListOpenWindowsJSON(includeUntitled) {
+    return $Call.ByID(3885529817, includeUntitled);
 }
 
 /**
@@ -1864,6 +1903,15 @@ export function RunPSADTPreflightChecks() {
     return $Call.ByID(2615823421).then(/** @type {($result: any) => any} */(($result) => {
         return $$createType81($result);
     }));
+}
+
+/**
+ * SaveScreenshotPolicy salva a política editada na UI e reconfigura o limitador.
+ * @param {string} policyJSON
+ * @returns {$CancellablePromise<void>}
+ */
+export function SaveScreenshotPolicy(policyJSON) {
+    return $Call.ByID(1445683885, policyJSON);
 }
 
 /**

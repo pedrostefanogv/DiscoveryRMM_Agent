@@ -61,5 +61,5 @@ func TestPutPooledFrame_Guards(t *testing.T) {
 	PutPooledFrame(nil)      // nil - nao pode panic
 	PutPooledFrame(&Frame{}) // Data vazio - nao pode panic
 	big := &Frame{Data: make([]byte, maxPooledFrameBytes+1)}
-	PutPooledFrame(big)      // acima do limite - nao pode panic
+	PutPooledFrame(big) // acima do limite - nao pode panic
 }

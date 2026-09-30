@@ -5,24 +5,33 @@ package screenshot
 import (
 	"fmt"
 	"runtime"
+	"sync"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"discovery/app/core/screen"
 )
 
-// ── Captura de uma janela específica (PrintWindow) ────────────────────────
+// ── Captura de uma janela específica (PrintWindow com watchdog) ───────────
 //
 // PrintWindow entrega o conteúdo real da janela mesmo quando ela está
 // parcialmente coberta — é o que torna a captura útil para diagnóstico pela
-// IA (a tela congelada mostra o que está por cima). Fallback: BitBlt direto
-// do DC da janela quando o app não responde ao PrintWindow.
+// IA. Porém apps travados podem PENDURAR a chamada indefinidamente; por isso
+// ela roda em goroutine própria com timeout: estourou, marca a janela como
+// "sem PrintWindow" por um período e usa BitBlt (rápido) como fallback.
 
 const (
 	PW_RENDERFULLCONTENT = 0x00000002
 	SRCCOPY_WINDOW       = 0x00CC0020
 	BI_RGB_WINDOW        = 0
 	DIB_RGB_COLORS_W     = 0
+	// printWindowTimeout é o teto de espera pelo PrintWindow de uma janela.
+	printWindowTimeout = 5 * time.Second
+	// printWindowSkipTTL evita retentar PrintWindow em janela que já travou.
+	printWindowSkipTTL = 60 * time.Second
+	// printWindowSkipCleanup remove entradas antigas do cache de skip.
+	printWindowSkipCleanup = 10 * time.Minute
 )
 
 var (
@@ -39,6 +48,9 @@ var (
 	procDeleteObjectS           = gdi32S.NewProc("DeleteObject")
 	procBitBltS                 = gdi32S.NewProc("BitBlt")
 	procGetDIBitsS              = gdi32S.NewProc("GetDIBits")
+
+	printWindowSkipMu sync.Mutex
+	printWindowSkip   = map[uintptr]time.Time{}
 )
 
 // captureWindow captura uma janela por handle.
@@ -55,6 +67,68 @@ func captureWindow(handle uint64, quality, maxDim int) (*CaptureResult, error) {
 		return nil, fmt.Errorf("nao foi possivel obter as dimensoes da janela")
 	}
 
+	var frame *screen.Frame
+	now := time.Now()
+	if !shouldSkipPrintWindow(hwnd, now) {
+		printed, err := windowFrameWithTimeout(hwnd, w, h, printWindowTimeout)
+		if err == nil {
+			frame = printed
+		} else {
+			markPrintWindowSkip(hwnd, now)
+		}
+	}
+	if frame == nil {
+		bit, err := windowFrameFromGDI(hwnd, w, h, false)
+		if err != nil {
+			return nil, fmt.Errorf("captura da janela falhou (PrintWindow e BitBlt): %w", err)
+		}
+		frame = bit
+	}
+
+	frame.OriginX, frame.OriginY = x, y
+	res, err := encodeResult(frame, ModeWindow, -1, quality, maxDim)
+	if err != nil {
+		return nil, err
+	}
+	var pid uint32
+	procGetWindowThreadProcessIdS.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
+	res.Window = &WindowInfo{
+		Handle: handle, Title: windowTitle(hwnd), ProcessName: processName(pid), PID: pid,
+		X: x, Y: y, Width: w, Height: h, IsSelf: pid == uint32(selfPID()),
+	}
+	res.OriginX = x
+	res.OriginY = y
+	return res, nil
+}
+
+type windowFrameResult struct {
+	frame *screen.Frame
+	err   error
+}
+
+// windowFrameWithTimeout executa o PrintWindow em goroutine própria e devolve
+// erro se a janela não responder dentro do timeout. A goroutine presa não pode
+// ser cancelada (limitação do Win32): os recursos dela são liberados quando a
+// chamada finalmente retornar, e o cache de skip evita acumular novas.
+func windowFrameWithTimeout(hwnd uintptr, w, h int, timeout time.Duration) (*screen.Frame, error) {
+	ch := make(chan windowFrameResult, 1)
+	go func() {
+		frame, err := windowFrameFromGDI(hwnd, w, h, true)
+		ch <- windowFrameResult{frame: frame, err: err}
+	}()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case out := <-ch:
+		return out.frame, out.err
+	case <-timer.C:
+		return nil, fmt.Errorf("PrintWindow excedeu %s (janela sem resposta)", timeout)
+	}
+}
+
+// windowFrameFromGDI captura a janela via PrintWindow (usePrintWindow=true) ou
+// BitBlt do DC da janela (false). Retorna BGRA top-down.
+func windowFrameFromGDI(hwnd uintptr, w, h int, usePrintWindow bool) (*screen.Frame, error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
@@ -83,13 +157,17 @@ func captureWindow(handle uint64, quality, maxDim int) (*CaptureResult, error) {
 	defer procDeleteObjectS.Call(bitmap)
 	procSelectObjectS.Call(memDC, bitmap)
 
-	printed, _, _ := procPrintWindow.Call(hwnd, memDC, PW_RENDERFULLCONTENT)
-	if printed == 0 {
-		// Fallback: copia direto do DC da janela (pode capturar o que estiver
-		// por cima, mas garante alguma imagem em apps que ignoram PrintWindow).
-		copied, _, _ := procBitBltS.Call(memDC, 0, 0, uintptr(w), uintptr(h), windowDC, 0, 0, SRCCOPY_WINDOW)
-		if copied == 0 {
-			return nil, fmt.Errorf("PrintWindow e BitBlt falharam para a janela")
+	copied := false
+	if usePrintWindow {
+		printed, _, _ := procPrintWindow.Call(hwnd, memDC, PW_RENDERFULLCONTENT)
+		copied = printed != 0
+	}
+	if !copied {
+		// BitBlt direto do DC da janela: pode capturar o que estiver por cima,
+		// mas funciona em apps que ignoram PrintWindow e não bloqueia como ele.
+		ret, _, _ := procBitBltS.Call(memDC, 0, 0, uintptr(w), uintptr(h), windowDC, 0, 0, SRCCOPY_WINDOW)
+		if ret == 0 {
+			return nil, fmt.Errorf("PrintWindow/BitBlt falharam para a janela")
 		}
 	}
 
@@ -106,19 +184,30 @@ func captureWindow(handle uint64, quality, maxDim int) (*CaptureResult, error) {
 	if lines == 0 {
 		return nil, fmt.Errorf("GetDIBits falhou")
 	}
+	return &screen.Frame{Data: buf, Width: w, Height: h, Stride: w * 4}, nil
+}
 
-	frame := &screen.Frame{Data: buf, Width: w, Height: h, Stride: w * 4, OriginX: x, OriginY: y}
-	res, err := encodeResult(frame, ModeWindow, -1, quality, maxDim)
-	if err != nil {
-		return nil, err
+func shouldSkipPrintWindow(hwnd uintptr, now time.Time) bool {
+	printWindowSkipMu.Lock()
+	defer printWindowSkipMu.Unlock()
+	until, ok := printWindowSkip[hwnd]
+	if !ok {
+		return false
 	}
-	var pid uint32
-	procGetWindowThreadProcessIdS.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
-	res.Window = &WindowInfo{
-		Handle: handle, Title: windowTitle(hwnd), ProcessName: processName(pid), PID: pid,
-		X: x, Y: y, Width: w, Height: h, IsSelf: pid == uint32(selfPID()),
+	if now.After(until) {
+		delete(printWindowSkip, hwnd)
+		return false
 	}
-	res.OriginX = x
-	res.OriginY = y
-	return res, nil
+	return true
+}
+
+func markPrintWindowSkip(hwnd uintptr, now time.Time) {
+	printWindowSkipMu.Lock()
+	defer printWindowSkipMu.Unlock()
+	for handle, until := range printWindowSkip {
+		if now.Sub(until) > printWindowSkipCleanup {
+			delete(printWindowSkip, handle)
+		}
+	}
+	printWindowSkip[hwnd] = now.Add(printWindowSkipTTL)
 }

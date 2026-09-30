@@ -4,6 +4,7 @@
       <span class="meta" data-i18n="chat.subtitle">Chat IA - converse com a IA para gerenciar seu computador</span>
       <div class="actions">
         <button id="chatToolsBtn" class="btn subtle" data-i18n="action.viewTools">Ver Ferramentas</button>
+        <button id="chatPrivacyBtn" class="btn subtle" data-i18n="screenshot.privacyButton">Privacidade</button>
         <button id="chatMemoriesBtn" class="btn subtle hidden" data-i18n="chat.memories">Memórias</button>
         <button id="chatClearBtn" class="btn danger" data-i18n="action.clearChat">Limpar Chat</button>
       </div>
@@ -146,6 +147,60 @@
         </div>
         <div id="chatMemoriesList" class="chat-logs-output">
           <div class="meta" data-i18n="chat.noMemoryFound">Nenhuma memoria encontrada.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Painel de privacidade da captura: autorização da IA, política local
+         (blocklist/limites) e auditoria com miniaturas do que foi capturado. -->
+    <div id="chatPrivacyModal" class="chat-logs-modal hidden" aria-hidden="true">
+      <div class="chat-logs-card">
+        <div class="chat-logs-head section-bar">
+          <strong data-i18n="screenshot.privacyTitle">Privacidade da captura de tela</strong>
+          <div class="actions">
+            <button id="chatPrivacyRefreshBtn" class="btn subtle" data-i18n="action.refresh">Atualizar</button>
+            <button id="chatPrivacyCloseBtn" class="btn danger" data-i18n="action.close">Fechar</button>
+          </div>
+        </div>
+        <div class="chat-privacy-body">
+          <div class="chat-privacy-section">
+            <span class="chat-privacy-label" data-i18n="screenshot.consentLabel">Autorização da IA</span>
+            <div class="chat-privacy-status">
+              <span id="chatPrivacyState" class="chat-privacy-badge"></span>
+              <span id="chatPrivacyUsage" class="meta"></span>
+            </div>
+            <div class="chat-privacy-actions">
+              <button id="chatPrivacyAllowSession" class="btn subtle" data-i18n="screenshot.allowSession">Permitir
+                nesta sessão</button>
+              <button id="chatPrivacyAllowAlways" class="btn primary" data-i18n="screenshot.allowAlways">Permitir
+                sempre</button>
+              <button id="chatPrivacyDeny" class="btn danger" data-i18n="screenshot.deny">Revogar/Negar</button>
+            </div>
+          </div>
+          <div class="chat-privacy-section">
+            <label class="chat-privacy-label" for="chatPrivacyBlocked"
+              data-i18n="screenshot.blockedLabel">Processos bloqueados</label>
+            <textarea id="chatPrivacyBlocked" rows="4" spellcheck="false"
+              data-i18n-placeholder="screenshot.blockedPlaceholder"></textarea>
+            <label class="chat-privacy-check"><input id="chatPrivacyAllowFull" type="checkbox" />
+              <span data-i18n="screenshot.allowFullScreen"></span></label>
+            <label class="chat-privacy-check"><input id="chatPrivacyRequireWindow" type="checkbox" />
+              <span data-i18n="screenshot.requireWindow"></span></label>
+            <label class="chat-privacy-check"><input id="chatPrivacyHideWindow" type="checkbox" checked />
+              <span data-i18n="screenshot.hideAgentWindow"></span></label>
+            <div class="chat-privacy-row">
+              <label for="chatPrivacyMax"><span data-i18n="screenshot.maxCaptures">Máx. capturas</span>
+                <input id="chatPrivacyMax" type="number" min="1" max="120" /></label>
+              <label for="chatPrivacyWindow"><span data-i18n="screenshot.windowMinutes">Janela (min)</span>
+                <input id="chatPrivacyWindow" type="number" min="1" max="1440" /></label>
+            </div>
+            <button id="chatPrivacySavePolicy" class="btn primary"
+              data-i18n="screenshot.savePolicy">Salvar política</button>
+          </div>
+          <div class="chat-privacy-section">
+            <span class="chat-privacy-label" data-i18n="screenshot.auditTitle">Últimas capturas (auditoria)</span>
+            <div id="chatPrivacyAudit" class="chat-privacy-audit"></div>
+          </div>
         </div>
       </div>
     </div>

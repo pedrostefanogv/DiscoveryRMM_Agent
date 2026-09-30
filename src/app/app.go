@@ -37,8 +37,8 @@ import (
 	"discovery/app/core/remotedebug"
 	"discovery/app/core/remotesession"
 	"discovery/app/core/safego"
-	"discovery/app/core/selfupdate"
 	"discovery/app/core/screenshot"
+	"discovery/app/core/selfupdate"
 	"discovery/app/core/services"
 	"discovery/app/core/winget"
 	"discovery/app/coreagent"
@@ -121,6 +121,17 @@ type App struct {
 	screenshotMu      sync.Mutex
 	screenshotConsent *screenshot.ConsentManager
 	screenshotOverlay *screenshotOverlaySession
+	// screenshotOverlayActive evita que o clamp de janela (FitWindowToWorkArea)
+	// desfaça o overlay em tela cheia durante a seleção.
+	screenshotOverlayActive atomic.Bool
+	// mainWindowFrameless guarda o modo da janela para restaurar após o overlay.
+	mainWindowFrameless bool
+	// Buffer das últimas capturas cheias (lightbox do chat): memória apenas.
+	screenshotImagesMu   sync.Mutex
+	screenshotImages     map[int64]screenshotStoredImage
+	screenshotImageOrder []int64
+	screenshotPolicy     screenshot.Policy
+	screenshotLimiter    *screenshot.CaptureLimiter
 
 	// toolsRegistration guarda o timestamp do último registro bem-sucedido de tools.
 	// Usado para re-registrar se o cache do servidor expirou (TTL 5min por padrão no servidor).
@@ -240,13 +251,14 @@ func NewApp(opts AppStartupOptions) *App {
 	reg := mcp.NewRegistry()
 
 	a := &App{
-		ctx:              context.Background(),
-		mcpRegistry:      reg,
-		chatEvents:       debughttp.NewChatEventBroker(),
-		startupTime:      time.Now(),
-		trayIcon:         opts.TrayIcon,
-		trayProvisioning: opts.TrayProvisioningIcon,
-		trayOffline:      opts.TrayOfflineIcon,
+		ctx:                 context.Background(),
+		mcpRegistry:         reg,
+		mainWindowFrameless: opts.MainWindowFrameless,
+		chatEvents:          debughttp.NewChatEventBroker(),
+		startupTime:         time.Now(),
+		trayIcon:            opts.TrayIcon,
+		trayProvisioning:    opts.TrayProvisioningIcon,
+		trayOffline:         opts.TrayOfflineIcon,
 	}
 	a.RuntimeFlags = coreagent.RuntimeFlags{DebugMode: opts.DebugMode, ServiceMode: opts.ServiceMode}
 	// Campos do core (migração lote 1 — embed coreagent.CoreAgent).

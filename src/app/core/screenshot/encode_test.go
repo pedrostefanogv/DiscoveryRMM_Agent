@@ -83,6 +83,23 @@ func TestEncodeFrameProducesPNG(t *testing.T) {
 	}
 }
 
+func TestScaledDimensionsMatchesDownscale(t *testing.T) {
+	cases := []struct{ w, h, max int }{
+		{4000, 2000, 1600},
+		{3440, 1440, 2560},
+		{1000, 800, 1600},
+		{5000, 900, 1000},
+	}
+	for _, c := range cases {
+		wantW, wantH := ScaledDimensions(c.w, c.h, c.max)
+		out := Downscale(solidFrame(c.w, c.h, 0, 0, 0, 255), c.max)
+		if out.Width != wantW || out.Height != wantH {
+			t.Errorf("ScaledDimensions(%d,%d,%d)=(%d,%d), Downscale=(%d,%d)",
+				c.w, c.h, c.max, wantW, wantH, out.Width, out.Height)
+		}
+	}
+}
+
 func TestCaptureResultDataURL(t *testing.T) {
 	r := &CaptureResult{MIME: "image/png", Data: []byte{1, 2, 3}}
 	if got := r.DataURL(); got != "data:image/png;base64,AQID" {

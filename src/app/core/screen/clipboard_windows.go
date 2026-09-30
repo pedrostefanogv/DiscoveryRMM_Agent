@@ -3,7 +3,9 @@
 package screen
 
 import (
+	"encoding/binary"
 	"fmt"
+	"image"
 	"syscall"
 	"unicode/utf16"
 	"unsafe"
@@ -31,8 +33,96 @@ var (
 
 const (
 	cfUnicodeText = 13
-	gmemMoveable  = 0x0002
+	// cfDIB é o formato clássico de bitmap (BITMAPINFOHEADER + pixels).
+	// Suportado por Word, Paint, navegadores, Teams etc.
+	cfDIB        = 8
+	gmemMoveable = 0x0002
 )
+
+// SetClipboardImage coloca um bitmap 32bpp no clipboard do Windows (CF_DIB,
+// pixels BGRA bottom-up). Usado pelo botão "Copiar" do lightbox de captura.
+// Após SetClipboardData, o sistema passa a ser dono da memória global.
+//
+//go:nocheckptr
+func SetClipboardImage(img image.Image) error {
+	data, err := dibBytes(img)
+	if err != nil {
+		return err
+	}
+	if r, _, _ := procOpenClipboard.Call(0); r == 0 {
+		return fmt.Errorf("OpenClipboard falhou")
+	}
+	defer procCloseClipboard.Call()
+	if r, _, _ := procEmptyClipboard.Call(); r == 0 {
+		return fmt.Errorf("EmptyClipboard falhou")
+	}
+	hMem, _, _ := procGlobalAlloc.Call(gmemMoveable, uintptr(len(data)))
+	if hMem == 0 {
+		return fmt.Errorf("GlobalAlloc falhou")
+	}
+	p, _, _ := syscall.Syscall(procGlobalLock.Addr(), 1, hMem, 0, 0)
+	if p == 0 {
+		procGlobalFree.Call(hMem)
+		return fmt.Errorf("GlobalLock falhou")
+	}
+	dst := unsafe.Slice((*byte)(unsafe.Add(unsafe.Pointer(nil), p)), len(data))
+	copy(dst, data)
+	syscall.Syscall(procGlobalUnlock.Addr(), 1, hMem, 0, 0)
+	if r, _, _ := procSetClipboardData.Call(cfDIB, hMem); r == 0 {
+		procGlobalFree.Call(hMem)
+		return fmt.Errorf("SetClipboardData(CF_DIB) falhou")
+	}
+	return nil
+}
+
+// dibBytes monta BITMAPINFOHEADER (40 bytes) + pixels BGRA bottom-up.
+func dibBytes(img image.Image) ([]byte, error) {
+	if img == nil {
+		return nil, fmt.Errorf("imagem vazia")
+	}
+	bounds := img.Bounds()
+	w, h := bounds.Dx(), bounds.Dy()
+	if w <= 0 || h <= 0 {
+		return nil, fmt.Errorf("dimensoes invalidas (%dx%d)", w, h)
+	}
+	stride := w * 4
+	out := make([]byte, 40+stride*h)
+	le := binary.LittleEndian
+	le.PutUint32(out[0:], 40)
+	le.PutUint32(out[4:], uint32(w))
+	le.PutUint32(out[8:], uint32(h)) // positivo = bottom-up
+	le.PutUint16(out[12:], 1)
+	le.PutUint16(out[14:], 32)
+	le.PutUint32(out[16:], 0) // BI_RGB
+	le.PutUint32(out[20:], uint32(stride*h))
+
+	if rgba, ok := img.(*image.RGBA); ok {
+		for y := 0; y < h; y++ {
+			srcRow := rgba.PixOffset(bounds.Min.X, bounds.Min.Y+(h-1-y))
+			dstRow := 40 + y*stride
+			for x := 0; x < w; x++ {
+				s := rgba.Pix[srcRow+x*4:]
+				d := out[dstRow+x*4:]
+				d[0], d[1], d[2], d[3] = s[2], s[1], s[0], s[3]
+			}
+		}
+		return out, nil
+	}
+
+	for y := 0; y < h; y++ {
+		srcY := bounds.Min.Y + (h - 1 - y)
+		dstRow := 40 + y*stride
+		for x := 0; x < w; x++ {
+			r, g, b, a := img.At(bounds.Min.X+x, srcY).RGBA()
+			d := out[dstRow+x*4:]
+			d[0] = byte(b >> 8)
+			d[1] = byte(g >> 8)
+			d[2] = byte(r >> 8)
+			d[3] = byte(a >> 8)
+		}
+	}
+	return out, nil
+}
 
 // SetClipboardText coloca o texto no clipboard do Windows.
 // Após SetClipboardData, o sistema passa a ser dono da memória global — não

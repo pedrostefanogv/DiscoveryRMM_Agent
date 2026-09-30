@@ -40,6 +40,11 @@ func (a *App) FitWindowToWorkArea() {
 	if a.mainWindow == nil {
 		return
 	}
+	// Durante o overlay de captura a janela cobre TODO o desktop virtual (além
+	// da WorkArea) de propósito: o clamp a reduziria e quebraria a seleção.
+	if a.screenshotOverlayActive.Load() {
+		return
+	}
 	screen, err := a.mainWindow.GetScreen()
 	if err != nil || screen == nil {
 		log.Printf("[window-fit] screen indisponivel: %v", err)

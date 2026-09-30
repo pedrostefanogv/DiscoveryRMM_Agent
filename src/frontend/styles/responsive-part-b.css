@@ -670,15 +670,6 @@
   text-align: left;
 }
 
-.chat-msg.thinking {
-  align-self: flex-start;
-  background: transparent;
-  color: var(--text-muted);
-  font-style: italic;
-  border: none;
-  padding: 6px 14px;
-}
-
 /* ---- Streaming response bubble ---- */
 .chat-msg.assistant.streaming {
   min-height: 36px;
