@@ -234,10 +234,12 @@ body.screenshot-active { overflow: hidden !important; }
 
 .screenshot-annot-toolbar {
   position: fixed;
-  bottom: 18px;
-  left: 50%;
-  transform: translateX(-50%);
+  /* left/top são definidos por JS: a barra nasce junto da seleção e pode ser
+     arrastada pelo usuário para não cobrir a área do print. */
+  left: 12px;
+  top: 12px;
   z-index: 9015;
+  cursor: move;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -266,6 +268,16 @@ body.screenshot-active { overflow: hidden !important; }
 .screenshot-annot-color { width: 22px; height: 22px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; padding: 0; }
 .screenshot-annot-color.active { border-color: #fff; box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.5); }
 .screenshot-annot-sep { width: 1px; height: 20px; background: var(--border); margin: 0 4px; }
+.screenshot-annot-drag {
+  cursor: grab;
+  user-select: none;
+  padding: 0 4px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1;
+  letter-spacing: -2px;
+}
+.screenshot-annot-drag:active { cursor: grabbing; }
 .screenshot-annot-confirm {
   width: 34px;
   height: 30px;

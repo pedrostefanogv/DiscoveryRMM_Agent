@@ -213,6 +213,7 @@ function screenshotEnsureOverlayEls() {
     '<div id="screenshotOverlayWindow" class="screenshot-overlay-window hidden"></div>',
     '<div id="screenshotOverlaySelection" class="screenshot-overlay-selection hidden"></div>',
     '<div id="screenshotAnnotToolbar" class="screenshot-annot-toolbar hidden">',
+    '  <span id="screenshotAnnotDrag" class="screenshot-annot-drag" data-i18n-title="screenshot.annotDrag">⣿</span>',
     '  <button type="button" class="screenshot-annot-btn" data-annot-tool="rect" data-i18n-title="screenshot.annotRect">▭</button>',
     '  <button type="button" class="screenshot-annot-btn" data-annot-tool="arrow" data-i18n-title="screenshot.annotArrow">↗</button>',
     '  <button type="button" class="screenshot-annot-btn" data-annot-tool="line" data-i18n-title="screenshot.annotLine">╱</button>',
@@ -277,6 +278,12 @@ function screenshotEnsureOverlayEls() {
   Array.prototype.forEach.call(root.querySelectorAll("[data-annot-width]"), function (btn) {
     btn.addEventListener("click", function () { screenshotSetAnnotWidth(Number(btn.getAttribute("data-annot-width")) || 6); });
   });
+  // Barra flutuante: arrastável (fundo ou alça) para não cobrir o print.
+  var annotToolbar = document.getElementById("screenshotAnnotToolbar");
+  if (annotToolbar) {
+    annotToolbar.addEventListener("mousedown", screenshotStartToolbarDrag);
+  }
+
   var undoBtn = document.getElementById("screenshotAnnotUndo");
   if (undoBtn) undoBtn.addEventListener("click", screenshotAnnotUndo);
   var clearBtn = document.getElementById("screenshotAnnotClear");
@@ -340,6 +347,9 @@ function screenshotShowOverlay(payload) {
     lineWidth: 6,
   };
   screenshotSetAnnotToolbarVisible(false);
+  // Nova sessão de captura: a barra volta a ser posicionada perto da seleção
+  // (descarta a posição arrastada da captura anterior).
+  screenshotAnnotToolbarPos.dragged = false;
   // Estado inicial das ferramentas (destaque visual nos botões).
   screenshotSetAnnotTool("rect");
   screenshotSetAnnotColor("#ff3b30");
@@ -365,9 +375,14 @@ function screenshotShowOverlay(payload) {
       ? screenshotT("screenshot.llmHint", { reason: payload.reason || "" })
       : screenshotT("screenshot.overlayHint");
   }
-  // Política: sem tela inteira permitida, o atalho nem aparece.
+  // Política: sem tela inteira permitida (ou exigindo janela), o atalho nem aparece.
   var fullBtn = document.getElementById("screenshotModeFull");
-  if (fullBtn) fullBtn.classList.toggle("hidden", payload.policyFullScreenAllowed === false);
+  if (fullBtn) {
+    fullBtn.classList.toggle(
+      "hidden",
+      payload.policyFullScreenAllowed === false || payload.policyWindowRequired === true,
+    );
+  }
 }
 
 // screenshotPrepareCanvas dimensiona o canvas de anotação em pixels da IMAGEM
@@ -395,6 +410,9 @@ function screenshotHideOverlay() {
   var canvas = screenshotOverlayCanvas();
   if (canvas) canvas.classList.add("hidden");
   screenshotSetAnnotToolbarVisible(false);
+  if (screenshotToolbarDragCleanup) {
+    screenshotToolbarDragCleanup();
+  }
   screenshotOverlayState = null;
 }
 
@@ -517,6 +535,14 @@ function screenshotOnMouseUp(event) {
   var height = Math.abs(event.clientY - state.startY);
   if (width < 6 || height < 6) return;
   var p = state.payload;
+  if (p.policyWindowRequired === true) {
+    // A política exige janela específica: recusa a região AQUI (com o overlay
+    // ainda aberto) em vez de falhar só no Finish, depois de fechar tudo.
+    var rejectedBox = document.getElementById("screenshotOverlaySelection");
+    if (rejectedBox) rejectedBox.classList.add("hidden");
+    screenshotFeedback(screenshotT("screenshot.windowRequired"), true);
+    return;
+  }
   screenshotLockSelection({
     kind: "region",
     x: p.virtualX + Math.round(left * physical.x),
@@ -576,19 +602,27 @@ function screenshotLockSelection(selection) {
   state.selection = selection;
   state.annotations = [];
   state.draft = null;
+  var selCss = {
+    left: (selection.x - state.payload.virtualX) / physical.x,
+    top: (selection.y - state.payload.virtualY) / physical.y,
+    width: selection.width / physical.x,
+    height: selection.height / physical.y,
+  };
   var box = document.getElementById("screenshotOverlaySelection");
   if (box) {
     box.classList.remove("hidden");
-    box.style.left = (selection.x - state.payload.virtualX) / physical.x + "px";
-    box.style.top = (selection.y - state.payload.virtualY) / physical.y + "px";
-    box.style.width = selection.width / physical.x + "px";
-    box.style.height = selection.height / physical.y + "px";
+    box.style.left = selCss.left + "px";
+    box.style.top = selCss.top + "px";
+    box.style.width = selCss.width + "px";
+    box.style.height = selCss.height + "px";
   }
   var highlight = document.getElementById("screenshotOverlayWindow");
   if (highlight) highlight.classList.add("hidden");
   var canvas = screenshotOverlayCanvas();
   if (canvas) canvas.classList.remove("hidden");
   screenshotSetAnnotToolbarVisible(true);
+  // Barra de ferramentas aparece junto da área selecionada (abaixo/ao lado).
+  screenshotPlaceAnnotToolbar(selCss);
   screenshotAnnotRedraw();
 }
 
@@ -610,6 +644,91 @@ function screenshotAnnotReselect() {
 function screenshotSetAnnotToolbarVisible(visible) {
   var toolbar = document.getElementById("screenshotAnnotToolbar");
   if (toolbar) toolbar.classList.toggle("hidden", !visible);
+}
+
+// ── Barra de anotação: posição e arraste ─────────────────────────────────
+//
+// A barra é `position: fixed` e reposicionada por JS. Regras:
+//   * ao travar a seleção, ela aparece PRÓXIMA da área (abaixo; acima quando não
+//     couber), alinhada à esquerda da seleção;
+//   * se o usuário ARRASTAR (alça ⣿ ou fundo da barra), a posição manual passa a
+//     valer para o resto da sessão de captura — não é mais reposicionada sozinha.
+var screenshotAnnotToolbarPos = { dragged: false, x: 12, y: 12 };
+// Cleanup do arraste em andamento (removido ao esconder o overlay): sem isso,
+// fechar a captura no meio do arraste deixaria listeners de mousemove no
+// documento mexendo numa barra que não existe mais.
+var screenshotToolbarDragCleanup = null;
+
+function screenshotAnnotToolbarEl() {
+  return document.getElementById("screenshotAnnotToolbar");
+}
+
+function screenshotClampToolbarPos(x, y) {
+  var toolbar = screenshotAnnotToolbarEl();
+  var w = toolbar && toolbar.offsetWidth ? toolbar.offsetWidth : 520;
+  var h = toolbar && toolbar.offsetHeight ? toolbar.offsetHeight : 40;
+  var maxX = Math.max(8, window.innerWidth - w - 8);
+  var maxY = Math.max(8, window.innerHeight - h - 8);
+  return {
+    x: Math.min(Math.max(8, x), maxX),
+    y: Math.min(Math.max(8, y), maxY),
+  };
+}
+
+function screenshotApplyToolbarPos(x, y) {
+  var toolbar = screenshotAnnotToolbarEl();
+  if (!toolbar) return;
+  var pos = screenshotClampToolbarPos(x, y);
+  screenshotAnnotToolbarPos.x = pos.x;
+  screenshotAnnotToolbarPos.y = pos.y;
+  toolbar.style.left = pos.x + "px";
+  toolbar.style.top = pos.y + "px";
+  toolbar.style.bottom = "auto";
+}
+
+// screenshotPlaceAnnotToolbar posiciona a barra perto da seleção em CSS px.
+function screenshotPlaceAnnotToolbar(selCss) {
+  var toolbar = screenshotAnnotToolbarEl();
+  if (!toolbar) return;
+  if (screenshotAnnotToolbarPos.dragged) {
+    screenshotApplyToolbarPos(screenshotAnnotToolbarPos.x, screenshotAnnotToolbarPos.y);
+    return;
+  }
+  if (!selCss) return;
+  var h = toolbar.offsetHeight || 40;
+  // Preferência: logo abaixo da seleção; sem espaço, logo acima.
+  var top = selCss.top + selCss.height + 10;
+  if (top + h > window.innerHeight - 8) {
+    top = selCss.top - h - 10;
+  }
+  screenshotApplyToolbarPos(selCss.left, top);
+}
+
+function screenshotStartToolbarDrag(event) {
+  var toolbar = screenshotAnnotToolbarEl();
+  if (!toolbar || !event) return;
+  // Clique em botão/select da barra é ação, não arraste.
+  if (event.target && event.target.closest && event.target.closest("button")) return;
+  event.preventDefault();
+  var rect = toolbar.getBoundingClientRect();
+  var offsetX = event.clientX - rect.left;
+  var offsetY = event.clientY - rect.top;
+  function onMove(ev) {
+    // A partir do primeiro movimento a posição é do usuário.
+    screenshotAnnotToolbarPos.dragged = true;
+    screenshotApplyToolbarPos(ev.clientX - offsetX, ev.clientY - offsetY);
+  }
+  function onUp() {
+    document.removeEventListener("mousemove", onMove);
+    document.removeEventListener("mouseup", onUp);
+    screenshotToolbarDragCleanup = null;
+  }
+  if (screenshotToolbarDragCleanup) {
+    screenshotToolbarDragCleanup();
+  }
+  screenshotToolbarDragCleanup = onUp;
+  document.addEventListener("mousemove", onMove);
+  document.addEventListener("mouseup", onUp);
 }
 
 function screenshotSetAnnotTool(tool) {
@@ -823,15 +942,20 @@ function screenshotShapeDistance(shape, point) {
 }
 
 // screenshotEraseAt remove a marca mais próxima do clique dentro da tolerância.
+// Critério determinístico: menor distância; empates (dentro de um epsilon para
+// não depender de ruído de ponto flutuante) resolvem pela marca mais RECENTE,
+// que é a que está por cima e o usuário acabou de ver desenhada.
 function screenshotEraseAt(point) {
   var state = screenshotOverlayState;
   if (!state) return;
   var tolerance = 16;
+  var tieEpsilon = 0.5;
   var bestIndex = -1;
   var bestDistance = Infinity;
   for (var i = 0; i < state.annotations.length; i += 1) {
     var distance = screenshotShapeDistance(state.annotations[i], point);
-    if (distance <= tolerance && distance <= bestDistance) {
+    if (distance > tolerance) continue;
+    if (bestIndex < 0 || distance <= bestDistance + tieEpsilon) {
       bestDistance = distance;
       bestIndex = i;
     }
@@ -979,9 +1103,30 @@ function screenshotStrokeRoundedRect(ctx, shape) {
   ctx.stroke();
 }
 
-// Borrão/pixelado: reduz a região em um canvas auxiliar e devolve ampliada com
-// suavização desligada. Funciona tanto no canvas do overlay quanto na composição
-// final (o ctx já está transformado em pixels da imagem).
+// screenshotBlurRegion aplica borrão/pixelado NA RESOLUÇÃO DA FONTE.
+//
+// O recorte é copiado 1:1 para um canvas auxiliar (sem transformação), onde o
+// raio do filtro vale pixels reais da imagem — antes o blur era desenhado no ctx
+// já transformado, então o raio efetivo variava com o zoom/seleção e o resultado
+// saía lavado (ou borrado demais) em seleções grandes. Só depois o recorte
+// tratado volta escalado para o destino, o que mantém a suavidade em qualquer
+// tamanho de saída (overlay em preview ou imagem anotada final).
+var screenshotBlurFilterSupport = null;
+var screenshotBlurMaxPixels = 12 * 1000 * 1000; // teto do canvas auxiliar
+
+function screenshotBlurSupportsFilter() {
+  if (screenshotBlurFilterSupport !== null) return screenshotBlurFilterSupport;
+  var probe = null;
+  try {
+    probe = document.createElement("canvas").getContext("2d");
+    probe.filter = "blur(1px)";
+    screenshotBlurFilterSupport = probe.filter === "blur(1px)";
+  } catch (_) {
+    screenshotBlurFilterSupport = false;
+  }
+  return screenshotBlurFilterSupport;
+}
+
 function screenshotBlurRegion(ctx, shape, source, drawScale) {
   if (!source) return;
   var x = Math.min(shape.x1, shape.x2);
@@ -989,36 +1134,40 @@ function screenshotBlurRegion(ctx, shape, source, drawScale) {
   var w = Math.abs(shape.x2 - shape.x1);
   var h = Math.abs(shape.y2 - shape.y1);
   if (w < 4 || h < 4) return;
-  var scale = drawScale > 0 ? drawScale : 1;
-  var supportsFilter = false;
-  try {
-    ctx.filter = "blur(1px)";
-    supportsFilter = ctx.filter === "blur(1px)";
-    ctx.filter = "none";
-  } catch (_) {
-    supportsFilter = false;
-  }
-  if (supportsFilter) {
-    // Filtro gaussiano nativo: sem "blocos" visíveis em zoom.
-    var radius = Math.max(5, (shape.width || 6) * 2.5) * scale;
-    ctx.save();
-    ctx.filter = "blur(" + radius.toFixed(2) + "px)";
-    ctx.drawImage(source, x, y, w, h, x, y, w, h);
-    ctx.restore();
-    return;
-  }
-  // Fallback (ambiente sem ctx.filter): reduz e devolve suavizado.
-  var blocks = Math.max(5, Math.round(w / 22));
-  var blockH = Math.max(3, Math.round((h / w) * blocks));
+  // O recorte é feito em pixels da fonte; para regiões gigantes o auxiliar é
+  // reduzido (e o raio, junto) para não alocar canvas exagerado.
+  var shrink = Math.min(1, Math.sqrt(screenshotBlurMaxPixels / (w * h)));
+  var cw = Math.max(4, Math.round(w * shrink));
+  var ch = Math.max(4, Math.round(h * shrink));
   var temp = document.createElement("canvas");
-  temp.width = blocks;
-  temp.height = blockH;
+  temp.width = cw;
+  temp.height = ch;
   var tctx = temp.getContext("2d");
-  tctx.drawImage(source, x, y, w, h, 0, 0, blocks, blockH);
+
+  if (screenshotBlurSupportsFilter()) {
+    // Raio em pixels REAIS da fonte (independe de zoom/seleção): sem blocos
+    // visíveis e com o mesmo visual no preview e na imagem final.
+    var radius = Math.max(4, (shape.width || 6) * 2.0) * shrink;
+    tctx.filter = "blur(" + radius.toFixed(2) + "px)";
+    tctx.drawImage(source, x, y, w, h, 0, 0, cw, ch);
+    tctx.filter = "none";
+  } else {
+    // Fallback (ambiente sem ctx.filter): reduz e devolve suavizado (mosaico).
+    var blocks = Math.max(5, Math.round(cw / 22));
+    var blockH = Math.max(3, Math.round((ch / cw) * blocks));
+    var small = document.createElement("canvas");
+    small.width = blocks;
+    small.height = blockH;
+    small.getContext("2d").drawImage(source, x, y, w, h, 0, 0, blocks, blockH);
+    tctx.imageSmoothingEnabled = true;
+    tctx.imageSmoothingQuality = "high";
+    tctx.drawImage(small, 0, 0, blocks, blockH, 0, 0, cw, ch);
+  }
+
   ctx.save();
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = "high";
-  ctx.drawImage(temp, 0, 0, blocks, blockH, x, y, w, h);
+  ctx.drawImage(temp, 0, 0, cw, ch, x, y, w, h);
   ctx.restore();
 }
 

@@ -3,11 +3,16 @@
 package screenshot
 
 import (
+	"bufio"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"image/png"
+	"io"
 	"os"
+	"os/exec"
 	"strings"
+	"syscall"
 )
 
 // ── Processo auxiliar de PrintWindow ──────────────────────────────────────
@@ -17,7 +22,70 @@ import (
 // de janela em um processo FILHO permite ao agente matá-lo por timeout, sem
 // deixar thread/goroutine presa nem recursos GDI pendurados.
 
-// RunPrintWorker executa o modo auxiliar (flag --screenshot-print-worker):
+// startPrintServerProcess sobe o processo auxiliar persistente
+// (--screenshot-print-server) e devolve cmd + pipes de stdin/stdout. O processo
+// sai sozinho no EOF do stdin (quando o agente encerra), então não fica órfão.
+func startPrintServerProcess() (*exec.Cmd, io.WriteCloser, io.ReadCloser, error) {
+	if printHelperDisabled() {
+		return nil, nil, nil, fmt.Errorf("processo auxiliar de PrintWindow desabilitado")
+	}
+	cmd := exec.Command(os.Args[0], "--screenshot-print-server")
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, nil, nil, err
+	}
+	return cmd, stdin, stdout, nil
+}
+
+// RunPrintServer executa o modo auxiliar PERSISTENTE
+// (--screenshot-print-server): lê uma requisição JSON por linha no stdin
+// ({"hwnd":N,"out":"caminho.png"}) e responde {"ok":true} ou
+// {"ok":false,"error":"..."} no stdout.
+//
+// Um único processo atende todas as capturas de janela da sessão: elimina o
+// custo de spawn por captura (~100 ms) mantendo o isolamento — se uma janela
+// travar o PrintWindow, o agente mata ESTE processo e o próximo pedido sobe um
+// novo. O loop termina sozinho no EOF do stdin (agente encerrado), sem deixar
+// processo órfão.
+func RunPrintServer(in io.Reader, out io.Writer) int {
+	scanner := bufio.NewScanner(in)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
+	encoder := json.NewEncoder(out)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		var req struct {
+			Hwnd uint64 `json:"hwnd"`
+			Out  string `json:"out"`
+		}
+		if err := json.Unmarshal([]byte(line), &req); err != nil {
+			_ = encoder.Encode(map[string]any{"ok": false, "error": "json invalido: " + err.Error()})
+			continue
+		}
+		if req.Hwnd == 0 || strings.TrimSpace(req.Out) == "" {
+			_ = encoder.Encode(map[string]any{"ok": false, "error": "hwnd/out obrigatorios"})
+			continue
+		}
+		if err := writePrintWindowPNG(req.Hwnd, req.Out); err != nil {
+			_ = encoder.Encode(map[string]any{"ok": false, "error": err.Error()})
+			continue
+		}
+		_ = encoder.Encode(map[string]any{"ok": true})
+	}
+	return 0
+}
+
+// RunPrintWorker executa o modo auxiliar avulso (flag --screenshot-print-worker):
 // captura a janela via PrintWindow e grava um PNG no caminho informado.
 // Retorna o exit code do processo.
 func RunPrintWorker(args []string) int {

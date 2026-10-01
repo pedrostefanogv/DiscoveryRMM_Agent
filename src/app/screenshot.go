@@ -275,6 +275,11 @@ func (a *App) validateSelectionPolicy(session *screenshotOverlaySession, sel scr
 	if policy.WindowRequired() {
 		return fmt.Errorf("a politica de privacidade exige capturar uma janela especifica")
 	}
+	// Blocklist também vale para recorte geométrico: antes só o modo janela era
+	// checado, então um print por região podia fotografar um app bloqueado.
+	if hit, ok := a.blockedSelectionHit(policy, sel); ok {
+		return fmt.Errorf("captura bloqueada pela politica de privacidade: a area selecionada cobre a janela de %q", hit.ProcessName)
+	}
 	if !policy.FullScreenAllowed() && session.payload != nil {
 		p := session.payload
 		coversFullDesktop := sel.X <= p.VirtualX && sel.Y <= p.VirtualY &&
@@ -285,6 +290,28 @@ func (a *App) validateSelectionPolicy(session *screenshotOverlaySession, sel scr
 		}
 	}
 	return nil
+}
+
+// blockedSelectionHit devolve a primeira janela bloqueada cuja área é
+// encobrida pela seleção geométrica. Enumera as janelas atuais (as do payload do
+// overlay podem estar filtradas) e ignora a janela do próprio agente.
+func (a *App) blockedSelectionHit(policy screenshot.Policy, sel screenshot.Selection) (screenshot.WindowInfo, bool) {
+	wins, err := screenshot.ListWindowsWithOptions(true)
+	if err != nil {
+		return screenshot.WindowInfo{}, false
+	}
+	for _, w := range wins {
+		if w.IsSelf || w.Minimized || w.Width <= 0 || w.Height <= 0 {
+			continue
+		}
+		if !w.Blocked && !policy.IsProcessBlocked(w.ProcessName) {
+			continue
+		}
+		if screenshot.OverlapsBlockedWindow(sel, w) {
+			return w, true
+		}
+	}
+	return screenshot.WindowInfo{}, false
 }
 
 // checkScreenshotBudget aplica o rate limit de capturas da IA.
@@ -376,6 +403,10 @@ func (a *App) CaptureScreenshotForTool(ctx context.Context, args map[string]any)
 	if err := a.checkScreenshotBudget(now); err != nil {
 		return nil, err
 	}
+	// A TENTATIVA já consome cota (mesmo negada/cancelada): sem isso o LLM podia
+	// ficar disparando perguntas de consentimento sem limite (a cota contava só
+	// capturas concluídas).
+	a.recordScreenshotBudget(now)
 	// AUTORIZAÇÃO POR CAPTURA: pergunta SEMPRE (não existe "permitir sempre").
 	// A pergunta inclui o ALVO (janela/região/monitores) para consentimento
 	// informado — o motivo escrito pela IA não basta para o usuário decidir.
@@ -391,12 +422,7 @@ func (a *App) CaptureScreenshotForTool(ctx context.Context, args map[string]any)
 		a.recordScreenshotConsentDenied(decision, req, consentReason)
 		return nil, authErr
 	}
-	result, err := a.runScreenshotRequest(ctx, req, reason, true)
-	if err != nil {
-		return nil, err
-	}
-	a.recordScreenshotBudget(now)
-	return result, nil
+	return a.runScreenshotRequest(ctx, req, reason, true)
 }
 
 func (a *App) runScreenshotRequest(ctx context.Context, req screenshot.Request, reason string, byLLM bool) (json.RawMessage, error) {

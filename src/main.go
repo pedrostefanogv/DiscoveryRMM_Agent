@@ -92,6 +92,11 @@ func main() {
 	if hasStartupArg("--screenshot-print-worker") || hasStartupArg("/screenshot-print-worker") || hasStartupArg("-screenshot-print-worker") {
 		os.Exit(screenshot.RunPrintWorker(os.Args[1:]))
 	}
+	// Worker persistente: atende todas as capturas de janela da sessão por
+	// stdin/stdout (sem custo de spawn por captura). Sai no EOF do stdin.
+	if hasStartupArg("--screenshot-print-server") || hasStartupArg("/screenshot-print-server") || hasStartupArg("-screenshot-print-server") {
+		os.Exit(screenshot.RunPrintServer(os.Stdin, os.Stdout))
+	}
 
 	// ── Modo serviço removido do binário UI (PLANO_SEPARACAO_SERVICO_UI.md,
 	// Fase B — decisão D1) ──

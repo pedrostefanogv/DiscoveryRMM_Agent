@@ -3,10 +3,12 @@
 package screenshot
 
 import (
+	"bufio"
 	"bytes"
-	"context"
+	"encoding/json"
 	"fmt"
 	"image"
+	"io"
 	"os"
 	"os/exec"
 	"runtime"
@@ -132,10 +134,112 @@ func printHelperDisabled() bool {
 	return strings.HasSuffix(exe, ".test.exe") || strings.HasSuffix(exe, ".test")
 }
 
-// runPrintWindowHelper roda o PrintWindow em um processo filho e devolve o frame
-// BGRA. O filho é morto se passar de printWindowTimeout (o ctx cancela e o
-// CommandContext mata o processo), então uma janela travada não deixa nada preso
-// no agente.
+// ── Worker persistente de PrintWindow ─────────────────────────────────────
+//
+// Um único processo filho (--screenshot-print-server) atende TODAS as capturas
+// de janela da sessão via stdin/stdout JSON. Isso elimina o custo de spawn por
+// captura (~50-100 ms + carga do binário) sem abrir mão do isolamento: se uma
+// janela travar o PrintWindow, o agente mata o worker por timeout e o próximo
+// pedido sobe um novo. O filho sai sozinho no EOF do stdin (agente encerrado).
+type printWorkerClient struct {
+	mu     sync.Mutex
+	cmd    *exec.Cmd
+	stdin  io.WriteCloser
+	stdout *bufio.Reader
+}
+
+var printWorker printWorkerClient
+
+func (p *printWorkerClient) stopLocked() {
+	if p.stdin != nil {
+		_ = p.stdin.Close()
+	}
+	if p.cmd != nil && p.cmd.Process != nil {
+		_ = p.cmd.Process.Kill()
+	}
+	p.cmd, p.stdin, p.stdout = nil, nil, nil
+}
+
+func (p *printWorkerClient) ensureStartedLocked() error {
+	if p.cmd != nil && p.stdin != nil && p.stdout != nil {
+		return nil
+	}
+	cmd, stdinPipe, stdoutPipe, err := startPrintServerProcess()
+	if err != nil {
+		return err
+	}
+	p.cmd = cmd
+	p.stdin = stdinPipe
+	p.stdout = bufio.NewReader(stdoutPipe)
+	return nil
+}
+
+// capture pede uma captura ao worker persistente. Em timeout/erro o worker é
+// morto e reiniciado no próximo pedido (nada fica pendurado).
+func (p *printWorkerClient) capture(hwnd uintptr, outPath string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if err := p.ensureStartedLocked(); err != nil {
+		return err
+	}
+	return p.requestLocked(hwnd, outPath)
+}
+
+// requestLocked envia um pedido pelo transporte já aberto e espera a resposta
+// com timeout (matando o worker em falha). Separado de capture para poder ser
+// exercitado em teste com um transporte em memória.
+func (p *printWorkerClient) requestLocked(hwnd uintptr, outPath string) error {
+	body, err := json.Marshal(map[string]any{"hwnd": uint64(hwnd), "out": outPath})
+	if err != nil {
+		return err
+	}
+	if _, err := p.stdin.Write(append(body, '\n')); err != nil {
+		p.stopLocked()
+		return fmt.Errorf("worker de PrintWindow caiu ao enviar pedido: %w", err)
+	}
+
+	type readResult struct {
+		line string
+		err  error
+	}
+	// A leitura roda em goroutine com timeout: se a janela travar o PrintWindow,
+	// o processo é morto e o ReadString retorna erro (a goroutine encerra).
+	ch := make(chan readResult, 1)
+	// reader local: stopLocked() zera p.stdout, e a goroutine não deve ler o
+	// campo compartilhado depois disso (evita corrida de dados).
+	reader := p.stdout
+	go func() {
+		line, readErr := reader.ReadString('\n')
+		ch <- readResult{line: line, err: readErr}
+	}()
+
+	select {
+	case r := <-ch:
+		if r.err != nil {
+			p.stopLocked()
+			return fmt.Errorf("worker de PrintWindow encerrou: %w", r.err)
+		}
+		var resp struct {
+			Ok    bool   `json:"ok"`
+			Error string `json:"error"`
+		}
+		if err := json.Unmarshal([]byte(strings.TrimSpace(r.line)), &resp); err != nil {
+			p.stopLocked()
+			return fmt.Errorf("resposta invalida do worker de PrintWindow: %w", err)
+		}
+		if !resp.Ok {
+			return fmt.Errorf("worker de PrintWindow: %s", resp.Error)
+		}
+		return nil
+	case <-time.After(printWindowTimeout):
+		p.stopLocked()
+		return fmt.Errorf("PrintWindow excedeu %s (worker reiniciado)", printWindowTimeout)
+	}
+}
+
+// runPrintWindowHelper captura a janela via worker persistente e devolve o
+// frame BGRA. Fallback automático: o chamador cai para o PrintWindow em processo
+// (com timeout) e, por fim, BitBlt.
 func runPrintWindowHelper(hwnd uintptr, w, h int) (*screen.Frame, error) {
 	if printHelperDisabled() {
 		return nil, fmt.Errorf("processo auxiliar de PrintWindow desabilitado")
@@ -148,15 +252,8 @@ func runPrintWindowHelper(hwnd uintptr, w, h int) (*screen.Frame, error) {
 	tmp.Close()
 	defer os.Remove(outPath)
 
-	ctx, cancel := context.WithTimeout(context.Background(), printWindowTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, os.Args[0],
-		"--screenshot-print-worker",
-		fmt.Sprintf("--hwnd=%d", hwnd),
-		"--out="+outPath)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("processo auxiliar de PrintWindow falhou: %w", err)
+	if err := printWorker.capture(hwnd, outPath); err != nil {
+		return nil, err
 	}
 	data, err := os.ReadFile(outPath)
 	if err != nil {

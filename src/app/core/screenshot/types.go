@@ -163,6 +163,63 @@ type Selection struct {
 	AnnotatedDataURL string `json:"annotatedDataUrl,omitempty"`
 }
 
+// RectOverlapArea devolve a área (px²) da interseção de dois retângulos no
+// mesmo espaço de coordenadas (0 quando não há sobreposição).
+func RectOverlapArea(ax, ay, aw, ah, bx, by, bw, bh int) int {
+	if aw <= 0 || ah <= 0 || bw <= 0 || bh <= 0 {
+		return 0
+	}
+	x0, y0 := ax, ay
+	if bx > x0 {
+		x0 = bx
+	}
+	if by > y0 {
+		y0 = by
+	}
+	x1, y1 := ax+aw, ay+ah
+	if bx+bw < x1 {
+		x1 = bx + bw
+	}
+	if by+bh < y1 {
+		y1 = by + bh
+	}
+	w, h := x1-x0, y1-y0
+	if w <= 0 || h <= 0 {
+		return 0
+	}
+	return w * h
+}
+
+// Limites da tolerância de sobreposição da blocklist (px²): ignora encostes de
+// borda/sombra (< 400 px²) e não fica leniente em janelas gigantes — acima de
+// 16 000 px² a fatia mínima relevante satura nesse valor.
+const (
+	blockedOverlapMinArea = 400
+	blockedOverlapMaxArea = 16000
+)
+
+// OverlapsBlockedWindow informa se a seleção geométrica encobre de forma
+// relevante a janela informada (janela da blocklist). A tolerância é
+// clamp(1% da área da janela, 400 px², 16 000 px²).
+//
+// A checagem é geométrica: não leva em conta oclusão (uma janela bloqueada
+// atrás de outra ainda é considerada coberta) — o lado seguro da política de
+// privacidade.
+func OverlapsBlockedWindow(sel Selection, w WindowInfo) bool {
+	area := RectOverlapArea(sel.X, sel.Y, sel.Width, sel.Height, w.X, w.Y, w.Width, w.Height)
+	if area <= 0 {
+		return false
+	}
+	min := w.Width * w.Height / 100
+	if min < blockedOverlapMinArea {
+		min = blockedOverlapMinArea
+	}
+	if min > blockedOverlapMaxArea {
+		min = blockedOverlapMaxArea
+	}
+	return area >= min
+}
+
 // ToolPayload monta o contrato JSON devolvido ao LLM como resultado da tool.
 //
 // Contrato de visão (consumido pelo DiscoveryRMM_API): quando "image_base64"
