@@ -3,8 +3,14 @@
 package screenshot
 
 import (
+	"bytes"
+	"context"
 	"fmt"
+	"image"
+	"os"
+	"os/exec"
 	"runtime"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -17,9 +23,16 @@ import (
 //
 // PrintWindow entrega o conteúdo real da janela mesmo quando ela está
 // parcialmente coberta — é o que torna a captura útil para diagnóstico pela
-// IA. Porém apps travados podem PENDURAR a chamada indefinidamente; por isso
-// ela roda em goroutine própria com timeout: estourou, marca a janela como
-// "sem PrintWindow" por um período e usa BitBlt (rápido) como fallback.
+// IA. Porém apps travados podem PENDURAR a chamada indefinidamente.
+//
+// Estratégia (da mais forte para a mais fraca):
+//  1. processo AUXILIAR (--screenshot-print-worker): um filho faz o PrintWindow
+//     e o pai o mata por timeout — não deixa thread/goroutine presa (limitação
+//     do Win32 resolvida de fato);
+//  2. goroutine com timeout no próprio processo (fallback quando o auxiliar não
+//     está disponível, ex.: testes); ao estourar, a janela entra no cache de
+//     skip por 60 s;
+//  3. BitBlt direto do DC da janela (nunca bloqueia como o PrintWindow).
 
 const (
 	PW_RENDERFULLCONTENT = 0x00000002
@@ -53,8 +66,13 @@ var (
 	printWindowSkip   = map[uintptr]time.Time{}
 )
 
-// captureWindow captura uma janela por handle.
+// captureWindow captura uma janela por handle (formato automático).
 func captureWindow(handle uint64, quality, maxDim int) (*CaptureResult, error) {
+	return captureWindowFormat(handle, quality, maxDim, FormatAuto)
+}
+
+// captureWindowFormat captura uma janela por handle no formato pedido.
+func captureWindowFormat(handle uint64, quality, maxDim int, format string) (*CaptureResult, error) {
 	hwnd := uintptr(handle)
 	if hwnd == 0 {
 		return nil, fmt.Errorf("handle de janela invalido")
@@ -70,7 +88,11 @@ func captureWindow(handle uint64, quality, maxDim int) (*CaptureResult, error) {
 	var frame *screen.Frame
 	now := time.Now()
 	if !shouldSkipPrintWindow(hwnd, now) {
-		printed, err := windowFrameWithTimeout(hwnd, w, h, printWindowTimeout)
+		printed, err := runPrintWindowHelper(hwnd, w, h)
+		if err != nil {
+			// Auxiliar indisponível/falhou: tenta em processo com timeout.
+			printed, err = windowFrameWithTimeout(hwnd, w, h, printWindowTimeout)
+		}
 		if err == nil {
 			frame = printed
 		} else {
@@ -86,7 +108,7 @@ func captureWindow(handle uint64, quality, maxDim int) (*CaptureResult, error) {
 	}
 
 	frame.OriginX, frame.OriginY = x, y
-	res, err := encodeResult(frame, ModeWindow, -1, quality, maxDim)
+	res, err := encodeResult(frame, ModeWindow, -1, quality, maxDim, format)
 	if err != nil {
 		return nil, err
 	}
@@ -99,6 +121,56 @@ func captureWindow(handle uint64, quality, maxDim int) (*CaptureResult, error) {
 	res.OriginX = x
 	res.OriginY = y
 	return res, nil
+}
+
+// printHelperDisabled permite desligar o processo auxiliar (testes/depuração).
+func printHelperDisabled() bool {
+	if strings.TrimSpace(os.Getenv("DISCOVERY_DISABLE_PRINT_HELPER")) == "1" {
+		return true
+	}
+	exe := strings.ToLower(os.Args[0])
+	return strings.HasSuffix(exe, ".test.exe") || strings.HasSuffix(exe, ".test")
+}
+
+// runPrintWindowHelper roda o PrintWindow em um processo filho e devolve o frame
+// BGRA. O filho é morto se passar de printWindowTimeout (o ctx cancela e o
+// CommandContext mata o processo), então uma janela travada não deixa nada preso
+// no agente.
+func runPrintWindowHelper(hwnd uintptr, w, h int) (*screen.Frame, error) {
+	if printHelperDisabled() {
+		return nil, fmt.Errorf("processo auxiliar de PrintWindow desabilitado")
+	}
+	tmp, err := os.CreateTemp("", "discovery-print-*.png")
+	if err != nil {
+		return nil, err
+	}
+	outPath := tmp.Name()
+	tmp.Close()
+	defer os.Remove(outPath)
+
+	ctx, cancel := context.WithTimeout(context.Background(), printWindowTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0],
+		"--screenshot-print-worker",
+		fmt.Sprintf("--hwnd=%d", hwnd),
+		"--out="+outPath)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("processo auxiliar de PrintWindow falhou: %w", err)
+	}
+	data, err := os.ReadFile(outPath)
+	if err != nil {
+		return nil, err
+	}
+	img, _, decodeErr := image.Decode(bytes.NewReader(data))
+	if decodeErr != nil {
+		return nil, fmt.Errorf("PNG do processo auxiliar invalido: %w", decodeErr)
+	}
+	frame := imageToBGRAFrame(img)
+	if frame == nil {
+		return nil, fmt.Errorf("processo auxiliar devolveu imagem vazia")
+	}
+	return frame, nil
 }
 
 type windowFrameResult struct {

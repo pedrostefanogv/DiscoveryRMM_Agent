@@ -5,8 +5,9 @@ import (
 	"encoding/base64"
 	"fmt"
 	"image"
-	"image/jpeg"
-	"image/png"
+	// Registra os decoders PNG/JPEG usados por image.Decode.
+	_ "image/jpeg"
+	_ "image/png"
 	"strings"
 )
 
@@ -14,35 +15,24 @@ import (
 const decodedImageMaxBase64 = 8 << 20
 
 // DecodeDataURLImage decodifica a imagem anotada gerada pelo canvas do overlay
-// (data:image/png;base64,...) e devolve bytes normalizados para visão do LLM:
-// downscale até maxDim, PNG quando couber em maxBytes e JPEG caso contrário.
-// Aceita apenas data URLs de imagem — nunca URLs externas.
-func DecodeDataURLImage(dataURL string, maxDim, quality, maxBytes int) ([]byte, string, int, int, error) {
+// (data:image/png ou data:image/webp, base64) e devolve bytes normalizados para
+// visão do LLM: downscale até maxDim e reencode no formato pedido ("auto"
+// prefere WebP lossless quando menor; "png" força PNG). Aceita apenas data URLs
+// de imagem — nunca URLs externas.
+func DecodeDataURLImage(dataURL string, maxDim, quality int, format string) ([]byte, string, int, int, error) {
 	img, err := DecodeDataURLToImage(dataURL)
 	if err != nil {
 		return nil, "", 0, 0, err
 	}
-	img = downscaleImage(img, maxDim)
-	bounds := img.Bounds()
-	w, h := bounds.Dx(), bounds.Dy()
-	if w <= 0 || h <= 0 {
+	frame := imageToBGRAFrame(downscaleImage(img, maxDim))
+	if frame == nil {
 		return nil, "", 0, 0, fmt.Errorf("imagem anotada vazia")
 	}
-	if maxBytes <= 0 {
-		maxBytes = maxPNGBytes
+	data, mime, err := EncodeFrameFormat(frame, quality, -1, format)
+	if err != nil {
+		return nil, "", 0, 0, err
 	}
-	var pngBuf bytes.Buffer
-	if err := png.Encode(&pngBuf, img); err == nil && pngBuf.Len() <= maxBytes {
-		return pngBuf.Bytes(), "image/png", w, h, nil
-	}
-	if quality <= 0 {
-		quality = 82
-	}
-	var jpegBuf bytes.Buffer
-	if err := jpeg.Encode(&jpegBuf, img, &jpeg.Options{Quality: quality}); err != nil {
-		return nil, "", 0, 0, fmt.Errorf("jpeg encode: %w", err)
-	}
-	return jpegBuf.Bytes(), "image/jpeg", w, h, nil
+	return data, mime, frame.Width, frame.Height, nil
 }
 
 // DecodeDataURLToImage decodifica uma data URL de imagem (base64) em
@@ -73,6 +63,29 @@ func DecodeDataURLToImage(dataURL string) (image.Image, error) {
 		return nil, fmt.Errorf("formato de imagem nao suportado: %w", err)
 	}
 	return img, nil
+}
+
+// NormalizeEncodedImage decodifica bytes de imagem já codificados (ex.: o PNG
+// devolvido pelo processo auxiliar de PrintWindow) e reencoda dentro dos limites:
+// downscale até maxDim, PNG quando couber em maxBytes e JPEG caso contrário.
+// Devolve bytes, mime e dimensões finais.
+func NormalizeEncodedImage(data []byte, maxDim, quality, maxBytes int) ([]byte, string, int, int, error) {
+	if len(data) == 0 {
+		return nil, "", 0, 0, fmt.Errorf("imagem vazia")
+	}
+	img, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, "", 0, 0, fmt.Errorf("formato de imagem nao suportado: %w", err)
+	}
+	frame := imageToBGRAFrame(downscaleImage(img, maxDim))
+	if frame == nil {
+		return nil, "", 0, 0, fmt.Errorf("imagem vazia")
+	}
+	data, mime, err := EncodeFrameFormat(frame, quality, -1, FormatAuto)
+	if err != nil {
+		return nil, "", 0, 0, err
+	}
+	return data, mime, frame.Width, frame.Height, nil
 }
 
 // downscaleImage reduz a imagem se o maior lado exceder maxDim

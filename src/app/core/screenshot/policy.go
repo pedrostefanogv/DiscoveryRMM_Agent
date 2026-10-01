@@ -27,6 +27,10 @@ type Policy struct {
 	// HideAgentWindow oculta a janela do agente durante a captura para que a UI
 	// do próprio agente não apareça no print. Default true.
 	HideAgentWindow *bool `json:"hideAgentWindow,omitempty"`
+	// ImageFormat é a preferência de formato da imagem final: "auto" (WebP
+	// lossless quando menor que PNG) ou "png" (portabilidade máxima — use se
+	// algum provedor de visão recusar WebP). Vazio = auto.
+	ImageFormat string `json:"imageFormat,omitempty"`
 }
 
 // DefaultPolicy devolve a política conservadora padrão: sem bloqueios, tela
@@ -158,5 +162,6 @@ func (p Policy) Normalize() Policy {
 	out.HideAgentWindow = &hideWindow
 	out.MaxCapturesPerWindow = out.LimitMax()
 	out.WindowMinutes = int(out.LimitWindow().Minutes())
+	out.ImageFormat = NormalizeFormat(out.ImageFormat)
 	return out
 }

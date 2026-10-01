@@ -234,6 +234,12 @@ func resolveFocusedHandle(foreground uint64, wins []screenshot.WindowInfo, polic
 	return 0
 }
 
+// screenshotImageFormat devolve a preferência de formato de imagem da política
+// local ("auto" = WebP lossless quando menor que PNG; "png" = portabilidade).
+func (a *App) screenshotImageFormat() string {
+	return screenshot.NormalizeFormat(a.currentScreenshotPolicy().ImageFormat)
+}
+
 // validateSelectionPolicy aplica a política local à seleção feita no overlay.
 // O modo interativo não passa por applyScreenshotPolicy (o alvo só existe depois
 // da escolha do usuário), então a validação precisa acontecer aqui — inclusive
@@ -406,6 +412,7 @@ func (a *App) CaptureScreenshotForTool(ctx context.Context, args map[string]any)
 	}
 	// Política local (blocklist/modo) e cota de capturas antes de executar.
 	policy := a.currentScreenshotPolicy()
+	req.Format = screenshot.NormalizeFormat(policy.ImageFormat)
 	if err := a.applyScreenshotPolicy(&req, policy); err != nil {
 		return nil, err
 	}
@@ -530,10 +537,10 @@ const (
 	screenshotImageStoreLimit = 8
 	// annotatedImageMaxDim limita o lado maior da imagem anotada recebida do
 	// overlay (o canvas já entrega reduzido; aqui é a última defesa).
-	annotatedImageMaxDim = 1600
+	annotatedImageMaxDim = 2560
 	// overlayImageMaxDim é o lado maior da imagem congelada exibida no overlay
 	// (fundo da seleção/anotação).
-	overlayImageMaxDim = 2560
+	overlayImageMaxDim = 3200
 )
 
 // hideAgentWindowForCapture oculta a janela do agente (se a política permitir e
@@ -649,6 +656,17 @@ func parseScreenshotArgs(args map[string]any) (screenshot.Request, string, error
 		return req, "", fmt.Errorf("modo de captura invalido: %q (use full, window, focused, monitor, region ou interactive)", req.Mode)
 	}
 	req.Quality = screenshotIntArg(args, "quality")
+	// maxDimension opcional: permite à IA pedir um recorte maior (texto miúdo)
+	// sem estourar o orçamento. 0 = padrão (2560).
+	if maxDim := screenshotIntArg(args, "maxDimension"); maxDim > 0 {
+		if maxDim < 200 {
+			maxDim = 200
+		}
+		if maxDim > 3840 {
+			maxDim = 3840
+		}
+		req.MaxDimension = maxDim
+	}
 	return req, screenshotStringArg(args, "reason"), nil
 }
 
@@ -836,7 +854,9 @@ func (a *App) openScreenshotOverlay(reason string, byLLM bool) (*screenshotOverl
 		restoreVisibility()
 		return nil, err
 	}
-	overlayBytes, mime, err := screenshot.EncodeFrame(frame, 78, overlayImageMaxDim)
+	// Qualidade alta: a tela congelada é o que o usuário lê para escolher a
+	// área e o fundo da imagem anotada enviada ao LLM.
+	overlayBytes, mime, err := screenshot.EncodeFrameFormat(frame, 92, overlayImageMaxDim, a.screenshotImageFormat())
 	if err != nil {
 		return nil, err
 	}
@@ -858,6 +878,7 @@ func (a *App) openScreenshotOverlay(reason string, byLLM bool) (*screenshotOverl
 		ImageWidth:     overlayW,
 		ImageHeight:    overlayH,
 		ImageDataURL:   "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(overlayBytes),
+		ImageMime:      mime,
 		Monitors:       screenshot.ListMonitors(),
 		Windows:        wins,
 		RequestedByLLM: byLLM,
@@ -985,7 +1006,7 @@ func (a *App) captureFromSelection(session *screenshotOverlaySession, sel screen
 	// Imagem anotada (setas/caixas/texto desenhados no overlay) tem prioridade:
 	// é exatamente o que o usuário viu e quer compartilhar.
 	if strings.TrimSpace(sel.AnnotatedDataURL) != "" {
-		data, mime, w, h, err := screenshot.DecodeDataURLImage(sel.AnnotatedDataURL, annotatedImageMaxDim, 82, 0)
+		data, mime, w, h, err := screenshot.DecodeDataURLImage(sel.AnnotatedDataURL, annotatedImageMaxDim, 92, a.screenshotImageFormat())
 		if err != nil {
 			return nil, fmt.Errorf("imagem anotada invalida: %w", err)
 		}
@@ -1014,7 +1035,7 @@ func (a *App) captureFromSelection(session *screenshotOverlaySession, sel screen
 	if err != nil {
 		return nil, err
 	}
-	data, mime, err := screenshot.EncodeFrame(cropped, 80, 0)
+	data, mime, err := screenshot.EncodeFrameFormat(cropped, 92, 0, a.screenshotImageFormat())
 	if err != nil {
 		return nil, err
 	}

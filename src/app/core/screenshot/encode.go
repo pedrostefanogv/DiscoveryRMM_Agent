@@ -5,18 +5,24 @@ import (
 	"fmt"
 	"image"
 	"image/png"
+	"strings"
 	"unsafe"
 
 	"discovery/app/core/screen"
 )
 
 const (
-	defaultMaxDimension = 1600
-	defaultJPEGQuality  = 80
-	// maxPNGBytes acima do qual a imagem é reencodada em JPEG. PNG é melhor
-	// para UI/texto, mas um print 4K pode passar de 10 MB — inviável para o
-	// payload multimodal.
-	maxPNGBytes = 1_200_000
+	// defaultMaxDimension é o teto do lado maior da imagem enviada ao LLM.
+	// 1600 px deixava textos/legendas ilegíveis; 2560 preserva leitura de UI e
+	// ainda fica dentro do orçamento de visão da maioria dos modelos.
+	defaultMaxDimension = 2560
+	// defaultJPEGQuality só é usado quando o PNG passa de maxPNGBytes (print
+	// fotográfico/4K). 90 evita o ringing que borrava texto no JPEG 80.
+	defaultJPEGQuality = 90
+	// maxPNGBytes acima do qual a imagem é reencodada em JPEG. PNG é lossless —
+	// é o formato preferido para capturas de UI/texto; o teto existe apenas para
+	// não estourar o limite de payload do servidor (~6 MiB de base64).
+	maxPNGBytes = 2_900_000
 	// Miniatura exibida no chat (o que a IA viu).
 	thumbnailMaxDimension = 480
 	thumbnailQuality      = 60
@@ -129,6 +135,45 @@ func ScaledDimensions(w, h, maxDim int) (int, int) {
 	return nw, nh
 }
 
+// imageToBGRAFrame converte uma imagem decodificada (ex.: PNG do processo
+// auxiliar de PrintWindow) para o Frame BGRA usado pelo pipeline de captura.
+func imageToBGRAFrame(img image.Image) *screen.Frame {
+	if img == nil {
+		return nil
+	}
+	bounds := img.Bounds()
+	w, h := bounds.Dx(), bounds.Dy()
+	if w <= 0 || h <= 0 {
+		return nil
+	}
+	stride := w * 4
+	data := make([]byte, stride*h)
+	if rgba, ok := img.(*image.RGBA); ok {
+		for y := 0; y < h; y++ {
+			srcRow := rgba.PixOffset(bounds.Min.X, bounds.Min.Y+y)
+			dstRow := y * stride
+			for x := 0; x < w; x++ {
+				s := rgba.Pix[srcRow+x*4:]
+				d := data[dstRow+x*4:]
+				d[0], d[1], d[2], d[3] = s[2], s[1], s[0], s[3]
+			}
+		}
+		return &screen.Frame{Data: data, Width: w, Height: h, Stride: stride}
+	}
+	for y := 0; y < h; y++ {
+		dstRow := y * stride
+		for x := 0; x < w; x++ {
+			r, g, b, a := img.At(bounds.Min.X+x, bounds.Min.Y+y).RGBA()
+			d := data[dstRow+x*4:]
+			d[0] = byte(b >> 8)
+			d[1] = byte(g >> 8)
+			d[2] = byte(r >> 8)
+			d[3] = byte(a >> 8)
+		}
+	}
+	return &screen.Frame{Data: data, Width: w, Height: h, Stride: stride}
+}
+
 // EncodePNG codifica o frame como PNG.
 func EncodePNG(f *screen.Frame) ([]byte, error) {
 	if f == nil || len(f.Data) == 0 {
@@ -141,12 +186,46 @@ func EncodePNG(f *screen.Frame) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// EncodeFrame codifica o frame para visão do LLM: tenta PNG (melhor para
-// texto/UI) e cai para JPEG quando o PNG fica grande demais.
+// EncodeFrame é o atalho para o formato automático (WebP por padrão):
+//
+//  1. **WebP lossless** (padrão quando cgo/libwebp disponível): mesmo conteúdo do
+//     PNG com 20-35% menos bytes em UI/texto — um único encode;
+//  2. **PNG** lossless no formato explícito "png" (ou sem WebP);
+//  3. se o lossless passar do teto: **WebP lossy** na qualidade pedida
+//     (melhor relação qualidade/tamanho que JPEG) ou, por fim, JPEG.
 //
 // maxDim == 0 aplica o padrão (defaultMaxDimension); maxDim < 0 desativa o
 // redimensionamento (usado quando o chamador já reduziu o frame).
+// Formatos suportados para a imagem final. "auto" prefere o lossless mais
+// econômico (WebP quando menor que o PNG); "png" força PNG (portabilidade
+// máxima — útil quando algum provedor de visão recusa WebP).
+const (
+	FormatAuto = "auto"
+	FormatPNG  = "png"
+)
+
+// NormalizeFormat reduz o valor recebido a um formato conhecido.
+func NormalizeFormat(format string) string {
+	if strings.EqualFold(strings.TrimSpace(format), FormatPNG) {
+		return FormatPNG
+	}
+	return FormatAuto
+}
+
+// EncodeFrame é o atalho para o formato automático (WebP quando compensa).
 func EncodeFrame(f *screen.Frame, quality, maxDim int) ([]byte, string, error) {
+	return EncodeFrameFormat(f, quality, maxDim, FormatAuto)
+}
+
+// EncodeFrameFormat codifica conforme a preferência ("auto" ou "png").
+//
+// O modo "auto" é **WebP-first**: com WebP disponível, o lossless é codificado
+// UMA vez e usado direto quando cabe no teto (sem calcular PNG — evita o custo
+// dobrado de encode). O PNG só entra na conta no caso raro do lossless WebP
+// passar do teto, onde ele ainda pode caber; a preferência explícita "png"
+// nunca gera WebP (nem no fallback, que vai para JPEG).
+func EncodeFrameFormat(f *screen.Frame, quality, maxDim int, format string) ([]byte, string, error) {
+	useWebP := NormalizeFormat(format) == FormatAuto
 	if maxDim == 0 {
 		maxDim = defaultMaxDimension
 	}
@@ -156,16 +235,54 @@ func EncodeFrame(f *screen.Frame, quality, maxDim int) ([]byte, string, error) {
 	if maxDim > 0 {
 		f = Downscale(f, maxDim)
 	}
-	pngData, err := EncodePNG(f)
-	if err == nil && len(pngData) <= maxPNGBytes {
+
+	// Caminho padrão: WebP lossless (mesmo conteúdo do PNG, ~1/3 menor).
+	if useWebP && webpAvailable() {
+		if webpData, webpErr := encodeWebPLossless(f); webpErr == nil && len(webpData) > 0 {
+			if len(webpData) <= maxPNGBytes {
+				return webpData, "image/webp", nil
+			}
+			// Raro: lossless passou do teto. PNG pode caber (menor em conteúdo
+			// ruidoso) — compara; senão, WebP lossy.
+			if pngData, pngErr := EncodePNG(f); pngErr == nil && len(pngData) <= maxPNGBytes && len(pngData) < len(webpData) {
+				return pngData, "image/png", nil
+			}
+			if lossyData, lossyErr := encodeWebPLossy(f, quality); lossyErr == nil && len(lossyData) <= maxPNGBytes {
+				return lossyData, "image/webp", nil
+			}
+		}
+	}
+
+	// PNG explícito (ou WebP indisponível/falhou): PNG; acima do teto, JPEG.
+	pngData, pngErr := EncodePNG(f)
+	if pngErr == nil && len(pngData) <= maxPNGBytes {
 		return pngData, "image/png", nil
+	}
+	if useWebP && webpAvailable() {
+		if lossyData, lossyErr := encodeWebPLossy(f, quality); lossyErr == nil && len(lossyData) <= maxPNGBytes {
+			return lossyData, "image/webp", nil
+		}
 	}
 	jpegData, jpegErr := screen.NewJPEGEncoder().Encode(f, quality)
 	if jpegErr != nil {
-		if err != nil {
-			return nil, "", fmt.Errorf("png: %v; jpeg: %w", err, jpegErr)
+		if pngErr != nil {
+			return nil, "", fmt.Errorf("png: %v; jpeg: %w", pngErr, jpegErr)
 		}
 		return nil, "", jpegErr
 	}
 	return jpegData, "image/jpeg", nil
+}
+
+// encodeThumbnail gera a miniatura do chat no formato mais econômico
+// (WebP lossy quando disponível; JPEG como fallback).
+func encodeThumbnail(f *screen.Frame) ([]byte, string) {
+	if webpAvailable() {
+		if data, err := encodeWebPLossy(f, thumbnailQuality+10); err == nil && len(data) > 0 {
+			return data, "image/webp"
+		}
+	}
+	if data, err := screen.NewJPEGEncoder().Encode(f, thumbnailQuality); err == nil {
+		return data, "image/jpeg"
+	}
+	return nil, ""
 }

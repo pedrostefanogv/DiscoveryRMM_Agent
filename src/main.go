@@ -18,6 +18,7 @@ import (
 	appkg "discovery/app"
 	"discovery/app/core/logger"
 	"discovery/app/core/platform"
+	"discovery/app/core/screenshot"
 )
 
 //go:embed all:frontend
@@ -81,6 +82,15 @@ func main() {
 	if hasStartupArg("--terminal-dispatcher") || hasStartupArg("/terminal-dispatcher") || hasStartupArg("-terminal-dispatcher") {
 		appkg.TerminalRunDispatcher()
 		return
+	}
+
+	// ── Modo auxiliar de captura de janela (PrintWindow) ──
+	// Lançado como subprocesso pelo agente para capturar uma janela via
+	// PrintWindow. Isolar em processo filho permite MATAR a captura por timeout
+	// quando o app alvo está travado — sem deixar thread/goroutine presa no
+	// agente (limitação do Win32). Não inicializa a GUI.
+	if hasStartupArg("--screenshot-print-worker") || hasStartupArg("/screenshot-print-worker") || hasStartupArg("-screenshot-print-worker") {
+		os.Exit(screenshot.RunPrintWorker(os.Args[1:]))
 	}
 
 	// ── Modo serviço removido do binário UI (PLANO_SEPARACAO_SERVICO_UI.md,

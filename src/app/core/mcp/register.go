@@ -1028,7 +1028,8 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 			{Name: "width", Type: "integer", Description: "Largura da regiao — modo region", Required: false},
 			{Name: "height", Type: "integer", Description: "Altura da regiao — modo region", Required: false},
 			{Name: "reason", Type: "string", Description: "Motivo da captura exibido ao usuario no pedido de autorizacao", Required: false},
-			{Name: "quality", Type: "integer", Description: "Qualidade JPEG 1-100 (padrao 80; PNG e usado quando menor)", Required: false},
+			{Name: "quality", Type: "integer", Description: "Qualidade JPEG 1-100 (padrao 90; PNG lossless e usado sempre que couber)", Required: false},
+			{Name: "maxDimension", Type: "integer", Description: "Lado maior da imagem (200-3840; padrao 2560). Aumente para ler textos pequenos", Required: false},
 		},
 		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			return app.CaptureScreenshotForTool(ctx, args)

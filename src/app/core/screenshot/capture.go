@@ -115,6 +115,10 @@ func captureWithCapturer(c screen.Capturer) (*screen.Frame, error) {
 
 // CaptureMonitor captura um monitor completo.
 func CaptureMonitor(monitorIndex, quality, maxDim int) (*CaptureResult, error) {
+	return captureMonitorFormat(monitorIndex, quality, maxDim, FormatAuto)
+}
+
+func captureMonitorFormat(monitorIndex, quality, maxDim int, format string) (*CaptureResult, error) {
 	mons := ListMonitors()
 	if len(mons) == 0 {
 		return nil, fmt.Errorf("nenhum monitor detectado")
@@ -130,28 +134,36 @@ func CaptureMonitor(monitorIndex, quality, maxDim int) (*CaptureResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("captura do monitor %d: %w", monitorIndex, err)
 	}
-	return encodeResult(frame, ModeMonitor, monitorIndex, quality, maxDim)
+	return encodeResult(frame, ModeMonitor, monitorIndex, quality, maxDim, FormatAuto)
 }
 
 // CaptureDesktop captura o desktop virtual inteiro (todos os monitores).
 func CaptureDesktop(quality, maxDim int) (*CaptureResult, error) {
+	return captureDesktopFormat(quality, maxDim, FormatAuto)
+}
+
+func captureDesktopFormat(quality, maxDim int, format string) (*CaptureResult, error) {
 	x, y, w, h, ok := VirtualBounds()
 	if !ok {
 		return nil, fmt.Errorf("nao foi possivel determinar os limites do desktop")
 	}
-	return captureRegionRaw(x, y, w, h, ModeFull, quality, maxDim)
+	return captureRegionRaw(x, y, w, h, ModeFull, quality, maxDim, format)
 }
 
 // CaptureRegion captura uma região arbitrária do desktop virtual.
 func CaptureRegion(x, y, w, h, quality, maxDim int) (*CaptureResult, error) {
+	return captureRegionFormat(x, y, w, h, quality, maxDim, FormatAuto)
+}
+
+func captureRegionFormat(x, y, w, h, quality, maxDim int, format string) (*CaptureResult, error) {
 	cx, cy, cw, ch, err := ClampRegion(x, y, w, h)
 	if err != nil {
 		return nil, err
 	}
-	return captureRegionRaw(cx, cy, cw, ch, ModeRegion, quality, maxDim)
+	return captureRegionRaw(cx, cy, cw, ch, ModeRegion, quality, maxDim, format)
 }
 
-func captureRegionRaw(x, y, w, h int, mode string, quality, maxDim int) (*CaptureResult, error) {
+func captureRegionRaw(x, y, w, h int, mode string, quality, maxDim int, format string) (*CaptureResult, error) {
 	c, err := screen.NewGDICapturerRegion(x, y, w, h)
 	if err != nil {
 		return nil, fmt.Errorf("captura de regiao: %w", err)
@@ -160,7 +172,7 @@ func captureRegionRaw(x, y, w, h int, mode string, quality, maxDim int) (*Captur
 	if err != nil {
 		return nil, fmt.Errorf("captura de regiao: %w", err)
 	}
-	res, err := encodeResult(frame, mode, -1, quality, maxDim)
+	res, err := encodeResult(frame, mode, -1, quality, maxDim, format)
 	if err != nil {
 		return nil, err
 	}
@@ -169,14 +181,14 @@ func captureRegionRaw(x, y, w, h int, mode string, quality, maxDim int) (*Captur
 	return res, nil
 }
 
-func encodeResult(frame *screen.Frame, mode string, monitor, quality, maxDim int) (*CaptureResult, error) {
+func encodeResult(frame *screen.Frame, mode string, monitor, quality, maxDim int, format string) (*CaptureResult, error) {
 	frame = toneMapIfHDR(frame)
 	originX, originY := frame.OriginX, frame.OriginY
 	if maxDim == 0 {
 		maxDim = defaultMaxDimension
 	}
 	frame = Downscale(frame, maxDim)
-	data, mime, err := EncodeFrame(frame, quality, -1)
+	data, mime, err := EncodeFrameFormat(frame, quality, -1, format)
 	if err != nil {
 		return nil, err
 	}
@@ -188,9 +200,9 @@ func encodeResult(frame *screen.Frame, mode string, monitor, quality, maxDim int
 	}
 	// Miniatura para transparência no chat (não vai ao LLM).
 	if thumbFrame := Downscale(frame, thumbnailMaxDimension); thumbFrame != nil {
-		if thumbData, thumbErr := screen.NewJPEGEncoder().Encode(thumbFrame, thumbnailQuality); thumbErr == nil {
+		if thumbData, thumbMime := encodeThumbnail(thumbFrame); len(thumbData) > 0 {
 			res.Thumbnail = thumbData
-			res.ThumbnailMIME = "image/jpeg"
+			res.ThumbnailMIME = thumbMime
 		}
 	}
 	return res, nil
@@ -198,7 +210,7 @@ func encodeResult(frame *screen.Frame, mode string, monitor, quality, maxDim int
 
 // CaptureWindow captura uma janela específica por handle (PrintWindow).
 func CaptureWindow(handle uint64, quality, maxDim int) (*CaptureResult, error) {
-	return captureWindow(handle, quality, maxDim)
+	return captureWindowFormat(handle, quality, maxDim, FormatAuto)
 }
 
 // CaptureScreen despacha a captura conforme o modo solicitado.
@@ -206,16 +218,16 @@ func CaptureScreen(req Request) (*CaptureResult, error) {
 	mode := strings.ToLower(strings.TrimSpace(req.Mode))
 	switch mode {
 	case "", ModeFull:
-		return CaptureDesktop(req.Quality, req.MaxDimension)
+		return captureDesktopFormat(req.Quality, req.MaxDimension, req.Format)
 	case ModeMonitor:
-		return CaptureMonitor(req.MonitorIndex, req.Quality, req.MaxDimension)
+		return captureMonitorFormat(req.MonitorIndex, req.Quality, req.MaxDimension, req.Format)
 	case ModeRegion:
-		return CaptureRegion(req.X, req.Y, req.Width, req.Height, req.Quality, req.MaxDimension)
+		return captureRegionFormat(req.X, req.Y, req.Width, req.Height, req.Quality, req.MaxDimension, req.Format)
 	case ModeWindow:
 		if req.WindowHandle == 0 {
 			return nil, fmt.Errorf("windowHandle obrigatorio no modo window")
 		}
-		return captureWindow(req.WindowHandle, req.Quality, req.MaxDimension)
+		return captureWindowFormat(req.WindowHandle, req.Quality, req.MaxDimension, req.Format)
 	default:
 		return nil, fmt.Errorf("modo de captura desconhecido: %q", req.Mode)
 	}

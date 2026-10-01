@@ -21,3 +21,8 @@ func ForegroundWindowHandle() uint64 { return 0 }
 func captureWindow(handle uint64, quality, maxDim int) (*CaptureResult, error) {
 	return nil, errNotSupported
 }
+
+// captureWindowFormat não tem equivalente fora do Windows.
+func captureWindowFormat(handle uint64, quality, maxDim int, format string) (*CaptureResult, error) {
+	return nil, errNotSupported
+}

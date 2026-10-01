@@ -188,6 +188,13 @@
               <span data-i18n="screenshot.requireWindow"></span></label>
             <label class="chat-privacy-check"><input id="chatPrivacyHideWindow" type="checkbox" checked />
               <span data-i18n="screenshot.hideAgentWindow"></span></label>
+            <label class="chat-privacy-row-item" for="chatPrivacyImageFormat">
+              <span data-i18n="screenshot.imageFormat">Formato da imagem</span>
+              <select id="chatPrivacyImageFormat">
+                <option value="auto" data-i18n="screenshot.imageFormatAuto">Automático (WebP quando menor)</option>
+                <option value="png" data-i18n="screenshot.imageFormatPng">PNG (máxima compatibilidade)</option>
+              </select>
+            </label>
             <div class="chat-privacy-row">
               <label for="chatPrivacyMax"><span data-i18n="screenshot.maxCaptures">Máx. capturas</span>
                 <input id="chatPrivacyMax" type="number" min="1" max="120" /></label>

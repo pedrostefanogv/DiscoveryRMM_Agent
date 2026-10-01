@@ -702,45 +702,113 @@ function screenshotAnnotUp() {
   screenshotAnnotRedraw();
 }
 
-// screenshotShapeHit testa se um ponto (px da imagem) atinge uma marca — usado
-// pela borracha. Aproximação por bounding box/raio, suficiente para a UI.
-function screenshotShapeHit(shape, point) {
-  if (!shape || !point) return false;
-  if (shape.type === "step" || shape.type === "text") {
-    var pad = Math.max(20, (shape.width || 6) * 5);
-    var ax = shape.x || 0;
-    var ay = shape.y || 0;
-    return point.x >= ax - pad && point.x <= ax + pad && point.y >= ay - pad && point.y <= ay + pad;
-  }
-  if (shape.points && shape.points.length) {
-    var tolerance = Math.max(14, (shape.width || 6) * 2);
-    for (var i = 0; i < shape.points.length; i += 1) {
-      var dx = shape.points[i].x - point.x;
-      var dy = shape.points[i].y - point.y;
-      if (Math.sqrt(dx * dx + dy * dy) <= tolerance) return true;
-    }
-    return false;
-  }
-  if (shape.x1 !== undefined) {
-    var minX = Math.min(shape.x1, shape.x2) - 10;
-    var maxX = Math.max(shape.x1, shape.x2) + 10;
-    var minY = Math.min(shape.y1, shape.y2) - 10;
-    var maxY = Math.max(shape.y1, shape.y2) + 10;
-    return point.x >= minX && point.x <= maxX && point.y >= minY && point.y <= maxY;
-  }
-  return false;
+// Distância de um ponto ao segmento (px da imagem).
+function screenshotDistanceToSegment(px, py, x1, y1, x2, y2) {
+  var dx = x2 - x1;
+  var dy = y2 - y1;
+  var lenSq = dx * dx + dy * dy;
+  var t = lenSq > 0 ? ((px - x1) * dx + (py - y1) * dy) / lenSq : 0;
+  if (t < 0) t = 0;
+  if (t > 1) t = 1;
+  var cx = x1 + t * dx;
+  var cy = y1 + t * dy;
+  return Math.sqrt((px - cx) * (px - cx) + (py - cy) * (py - cy));
 }
 
-// screenshotEraseAt remove a marca mais recente que contém o ponto.
+// Bounding box medida do texto (via canvas de medição).
+function screenshotTextBounds(shape) {
+  var size = Math.max(14, (shape.width || 6) * 5);
+  var text = shape.text || "";
+  var width = 0;
+  try {
+    var canvas = document.createElement("canvas");
+    var ctx = canvas.getContext("2d");
+    ctx.font = "bold " + size + "px sans-serif";
+    width = ctx.measureText(text).width;
+  } catch (_) {
+    width = text.length * size * 0.6;
+  }
+  return { x: shape.x || 0, y: shape.y || 0, w: width, h: size * 1.2 };
+}
+
+// screenshotShapeDistance devolve a distância do ponto à marca (Infinity quando
+// não atinge). A borracha usa isso para apagar a marca MAIS PRÓXIMA do clique,
+// não apenas a última desenhada — essencial em marcas sobrepostas.
+function screenshotShapeDistance(shape, point) {
+  if (!shape || !point) return Infinity;
+  var stroke = Math.max(6, shape.width || 6);
+  var half = stroke / 2;
+  if (shape.type === "step") {
+    var radius = Math.max(13, (shape.width || 6) * 3);
+    var dc = Math.sqrt((point.x - shape.x) * (point.x - shape.x) + (point.y - shape.y) * (point.y - shape.y));
+    return Math.max(0, dc - radius);
+  }
+  if (shape.type === "text") {
+    var b = screenshotTextBounds(shape);
+    if (point.x >= b.x - half && point.x <= b.x + b.w + half && point.y >= b.y - half && point.y <= b.y + b.h + half) {
+      return 0;
+    }
+    return Infinity;
+  }
+  if (shape.type === "blur") {
+    // O borrão cobre a área inteira: qualquer ponto dentro apaga.
+    var bx = Math.min(shape.x1, shape.x2);
+    var by = Math.min(shape.y1, shape.y2);
+    var bw = Math.abs(shape.x2 - shape.x1);
+    var bh = Math.abs(shape.y2 - shape.y1);
+    var inside = point.x >= bx && point.x <= bx + bw && point.y >= by && point.y <= by + bh;
+    return inside ? 0 : Infinity;
+  }
+  if (shape.points && shape.points.length) {
+    var best = Infinity;
+    if (shape.points.length === 1) {
+      var p0 = shape.points[0];
+      best = Math.sqrt((point.x - p0.x) * (point.x - p0.x) + (point.y - p0.y) * (point.y - p0.y));
+    }
+    for (var i = 1; i < shape.points.length; i += 1) {
+      best = Math.min(best, screenshotDistanceToSegment(
+        point.x, point.y,
+        shape.points[i - 1].x, shape.points[i - 1].y,
+        shape.points[i].x, shape.points[i].y));
+    }
+    return Math.max(0, best - half);
+  }
+  if (shape.x1 !== undefined) {
+    if (shape.type === "line" || shape.type === "arrow") {
+      return Math.max(0, screenshotDistanceToSegment(point.x, point.y, shape.x1, shape.y1, shape.x2, shape.y2) - half);
+    }
+    // Retângulo: distância às 4 arestas (não ao miolo).
+    var rx1 = Math.min(shape.x1, shape.x2);
+    var ry1 = Math.min(shape.y1, shape.y2);
+    var rx2 = Math.max(shape.x1, shape.x2);
+    var ry2 = Math.max(shape.y1, shape.y2);
+    var edges = Math.min(
+      screenshotDistanceToSegment(point.x, point.y, rx1, ry1, rx2, ry1),
+      screenshotDistanceToSegment(point.x, point.y, rx2, ry1, rx2, ry2),
+      screenshotDistanceToSegment(point.x, point.y, rx2, ry2, rx1, ry2),
+      screenshotDistanceToSegment(point.x, point.y, rx1, ry2, rx1, ry1));
+    return Math.max(0, edges - half);
+  }
+  return Infinity;
+}
+
+// screenshotEraseAt remove a marca mais próxima do clique dentro da tolerância.
 function screenshotEraseAt(point) {
   var state = screenshotOverlayState;
   if (!state) return;
-  for (var i = state.annotations.length - 1; i >= 0; i -= 1) {
-    if (screenshotShapeHit(state.annotations[i], point)) {
-      state.annotations.splice(i, 1);
-      screenshotAnnotRedraw();
-      return;
+  var tolerance = 16;
+  var bestIndex = -1;
+  var bestDistance = Infinity;
+  for (var i = 0; i < state.annotations.length; i += 1) {
+    var distance = screenshotShapeDistance(state.annotations[i], point);
+    if (distance <= tolerance && distance <= bestDistance) {
+      bestDistance = distance;
+      bestIndex = i;
     }
+  }
+  if (bestIndex >= 0) {
+    state.annotations.splice(bestIndex, 1);
+    screenshotAnnotRedraw();
   }
 }
 
@@ -806,17 +874,17 @@ function screenshotAnnotRedraw() {
   var step = 0;
   state.annotations.forEach(function (shape) {
     if (shape.type === "step") step += 1;
-    screenshotDrawShape(ctx, shape, screenshotOverlayImg(), shape.type === "step" ? step : 0);
+    screenshotDrawShape(ctx, shape, screenshotOverlayImg(), shape.type === "step" ? step : 0, 1);
   });
   if (state.draft) {
-    screenshotDrawShape(ctx, state.draft, screenshotOverlayImg(), 0);
+    screenshotDrawShape(ctx, state.draft, screenshotOverlayImg(), 0, 1);
   }
   ctx.restore();
 }
 
 // screenshotDrawShape desenha uma marca em pixels da IMAGEM. `source` é a tela
 // congelada (necessária para o borrão); stepIndex numera os passos.
-function screenshotDrawShape(ctx, shape, source, stepIndex) {
+function screenshotDrawShape(ctx, shape, source, stepIndex, drawScale) {
   if (!shape) return;
   ctx.save();
   ctx.strokeStyle = shape.color || "#ff3b30";
@@ -834,7 +902,7 @@ function screenshotDrawShape(ctx, shape, source, stepIndex) {
   } else if (shape.type === "arrow") {
     screenshotDrawArrow(ctx, shape.x1, shape.y1, shape.x2, shape.y2);
   } else if (shape.type === "blur") {
-    screenshotPixelate(ctx, shape, source);
+    screenshotBlurRegion(ctx, shape, source, drawScale);
   } else if (shape.type === "pen" || shape.type === "marker") {
     if (shape.points && shape.points.length > 1) {
       if (shape.type === "marker") ctx.globalAlpha = 0.35;
@@ -884,14 +952,33 @@ function screenshotStrokeRoundedRect(ctx, shape) {
 // Borrão/pixelado: reduz a região em um canvas auxiliar e devolve ampliada com
 // suavização desligada. Funciona tanto no canvas do overlay quanto na composição
 // final (o ctx já está transformado em pixels da imagem).
-function screenshotPixelate(ctx, shape, source) {
+function screenshotBlurRegion(ctx, shape, source, drawScale) {
   if (!source) return;
   var x = Math.min(shape.x1, shape.x2);
   var y = Math.min(shape.y1, shape.y2);
   var w = Math.abs(shape.x2 - shape.x1);
   var h = Math.abs(shape.y2 - shape.y1);
   if (w < 4 || h < 4) return;
-  var blocks = Math.max(4, Math.round(w / 16));
+  var scale = drawScale > 0 ? drawScale : 1;
+  var supportsFilter = false;
+  try {
+    ctx.filter = "blur(1px)";
+    supportsFilter = ctx.filter === "blur(1px)";
+    ctx.filter = "none";
+  } catch (_) {
+    supportsFilter = false;
+  }
+  if (supportsFilter) {
+    // Filtro gaussiano nativo: sem "blocos" visíveis em zoom.
+    var radius = Math.max(5, (shape.width || 6) * 2.5) * scale;
+    ctx.save();
+    ctx.filter = "blur(" + radius.toFixed(2) + "px)";
+    ctx.drawImage(source, x, y, w, h, x, y, w, h);
+    ctx.restore();
+    return;
+  }
+  // Fallback (ambiente sem ctx.filter): reduz e devolve suavizado.
+  var blocks = Math.max(5, Math.round(w / 22));
   var blockH = Math.max(3, Math.round((h / w) * blocks));
   var temp = document.createElement("canvas");
   temp.width = blocks;
@@ -899,7 +986,8 @@ function screenshotPixelate(ctx, shape, source) {
   var tctx = temp.getContext("2d");
   tctx.drawImage(source, x, y, w, h, 0, 0, blocks, blockH);
   ctx.save();
-  ctx.imageSmoothingEnabled = false;
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
   ctx.drawImage(temp, 0, 0, blocks, blockH, x, y, w, h);
   ctx.restore();
 }
@@ -943,7 +1031,8 @@ function screenshotBuildAnnotatedDataUrl() {
   var img = screenshotOverlayImg();
   var clip = screenshotSelectionImageRect();
   if (!state || !img || !clip) throw new Error("sem selecao");
-  var maxDim = 1600;
+  // 2560 px (mesmo teto do backend): preserva a legibilidade de textos pequenos.
+  var maxDim = 2560;
   var scale = Math.min(1, maxDim / Math.max(clip.w, clip.h));
   var outW = Math.max(1, Math.round(clip.w * scale));
   var outH = Math.max(1, Math.round(clip.h * scale));
@@ -961,9 +1050,17 @@ function screenshotBuildAnnotatedDataUrl() {
   var step = 0;
   state.annotations.forEach(function (shape) {
     if (shape.type === "step") step += 1;
-    screenshotDrawShape(ctx, shape, img, shape.type === "step" ? step : 0);
+    screenshotDrawShape(ctx, shape, img, shape.type === "step" ? step : 0, factor);
   });
   ctx.restore();
+  // WebP lossy q0.95 quando o backend suporta (a tela congelada veio em WebP):
+  // mesma percepção de qualidade com uma fração dos bytes do PNG.
+  if (state.payload.imageMime === "image/webp") {
+    try {
+      var webpUrl = canvas.toDataURL("image/webp", 0.95);
+      if (webpUrl && webpUrl.indexOf("data:image/webp") === 0) return webpUrl;
+    } catch (_) {}
+  }
   return canvas.toDataURL("image/png");
 }
 
@@ -1161,6 +1258,8 @@ function screenshotRenderPrivacy(data) {
   if (windowEl) windowEl.value = String(policy.windowMinutes || 5);
   var hideWindowEl = screenshotModalEl("chatPrivacyHideWindow");
   if (hideWindowEl) hideWindowEl.checked = policy.hideAgentWindow !== false;
+  var formatEl = screenshotModalEl("chatPrivacyImageFormat");
+  if (formatEl) formatEl.value = policy.imageFormat === "png" ? "png" : "auto";
   screenshotRenderAudit(data.audit || []);
 }
 
@@ -1220,6 +1319,7 @@ function screenshotSavePrivacyPolicy() {
   var maxEl = screenshotModalEl("chatPrivacyMax");
   var windowEl = screenshotModalEl("chatPrivacyWindow");
   var hideWindowEl = screenshotModalEl("chatPrivacyHideWindow");
+  var formatEl = screenshotModalEl("chatPrivacyImageFormat");
   var payload = {
     blockedProcesses: blockedEl ? blockedEl.value.split(/\r?\n/) : [],
     allowFullScreen: allowFullEl ? !!allowFullEl.checked : true,
@@ -1227,6 +1327,7 @@ function screenshotSavePrivacyPolicy() {
     maxCapturesPerWindow: maxEl ? Number(maxEl.value) || 0 : 0,
     windowMinutes: windowEl ? Number(windowEl.value) || 0 : 0,
     hideAgentWindow: hideWindowEl ? !!hideWindowEl.checked : true,
+    imageFormat: formatEl ? formatEl.value : "auto",
   };
   api.SaveScreenshotPolicy(JSON.stringify(payload))
     .then(function () {

@@ -2,6 +2,7 @@ package screenshot
 
 import (
 	"bytes"
+	"image"
 	"testing"
 
 	"discovery/app/core/screen"
@@ -16,6 +17,54 @@ func solidFrame(w, h int, b, g, r, a byte) *screen.Frame {
 		f.Data[i*4+3] = a
 	}
 	return f
+}
+
+func TestEncodeFrameAutoDefaultsToWebP(t *testing.T) {
+	if !webpAvailable() {
+		t.Skip("webp indisponivel (cgo desabilitado)")
+	}
+	// Conteúdo de UI (áreas chapadas) comprime melhor em WebP lossless que PNG.
+	f := solidFrame(640, 480, 28, 30, 36, 255)
+	data, mime, err := EncodeFrame(f, 90, 0)
+	if err != nil {
+		t.Fatalf("EncodeFrame falhou: %v", err)
+	}
+	if mime != "image/webp" {
+		t.Fatalf("modo auto deveria usar webp, got %q", mime)
+	}
+	if _, _, err := image.Decode(bytes.NewReader(data)); err != nil {
+		t.Fatalf("webp nao decodifica: %v", err)
+	}
+}
+
+func TestEncodeFrameFormatForcesPNG(t *testing.T) {
+	f := noiseFrame(400, 300)
+	data, mime, err := EncodeFrameFormat(f, 90, 0, FormatPNG)
+	if err != nil {
+		t.Fatalf("EncodeFrameFormat(png) falhou: %v", err)
+	}
+	if mime != "image/png" {
+		t.Fatalf("mime = %q, want image/png", mime)
+	}
+	if !bytes.HasPrefix(data, []byte{0x89, 0x50, 0x4E, 0x47}) {
+		t.Fatal("assinatura PNG ausente")
+	}
+}
+
+func TestNormalizeFormat(t *testing.T) {
+	cases := map[string]string{
+		"":      FormatAuto,
+		"auto":  FormatAuto,
+		"PNG":   FormatPNG,
+		" png ": FormatPNG,
+		"webp":  FormatAuto,
+		"jpg":   FormatAuto,
+	}
+	for in, want := range cases {
+		if got := NormalizeFormat(in); got != want {
+			t.Errorf("NormalizeFormat(%q) = %q, want %q", in, got, want)
+		}
+	}
 }
 
 func TestCropFrameKeepsPixelsAndOrigin(t *testing.T) {
@@ -71,7 +120,8 @@ func TestDownscaleLimitsLongestSide(t *testing.T) {
 
 func TestEncodeFrameProducesPNG(t *testing.T) {
 	src := solidFrame(64, 32, 10, 20, 30, 255)
-	data, mime, err := EncodeFrame(src, 80, 0)
+	// Formato forçado: o modo "auto" pode escolher WebP lossless (menor).
+	data, mime, err := EncodeFrameFormat(src, 80, 0, FormatPNG)
 	if err != nil {
 		t.Fatalf("EncodeFrame falhou: %v", err)
 	}
@@ -80,6 +130,42 @@ func TestEncodeFrameProducesPNG(t *testing.T) {
 	}
 	if !bytes.HasPrefix(data, []byte{0x89, 0x50, 0x4E, 0x47}) {
 		t.Fatalf("assinatura PNG ausente: %v", data[:4])
+	}
+}
+
+func noiseFrame(w, h int) *screen.Frame {
+	f := &screen.Frame{Data: make([]byte, w*h*4), Width: w, Height: h, Stride: w * 4}
+	seed := uint32(12345)
+	for i := 0; i < w*h; i++ {
+		seed = seed*1664525 + 1013904223
+		f.Data[i*4] = byte(seed >> 24)
+		f.Data[i*4+1] = byte(seed>>16) ^ 0x5a
+		f.Data[i*4+2] = byte(seed >> 8)
+		f.Data[i*4+3] = 255
+	}
+	return f
+}
+
+func TestEncodeFramePrefersEfficientLossless(t *testing.T) {
+	f := noiseFrame(1200, 800)
+	pngData, pngErr := EncodePNG(f)
+	if pngErr != nil {
+		t.Fatalf("EncodePNG: %v", pngErr)
+	}
+
+	data, mime, err := EncodeFrame(f, 90, 0)
+	if err != nil {
+		t.Fatalf("EncodeFrame falhou: %v", err)
+	}
+	if mime != "image/webp" && mime != "image/png" {
+		t.Fatalf("mime inesperado: %q", mime)
+	}
+	if len(data) > len(pngData) {
+		t.Fatalf("formato escolhido (%s) ficou MAIOR que o PNG: %d > %d", mime, len(data), len(pngData))
+	}
+	// O formato escolhido precisa ser decodificável (valida o registro do WebP).
+	if _, _, err := image.Decode(bytes.NewReader(data)); err != nil {
+		t.Fatalf("imagem codificada nao decodifica (%s): %v", mime, err)
 	}
 }
 

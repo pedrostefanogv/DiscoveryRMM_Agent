@@ -64,9 +64,12 @@ type Request struct {
 	WindowHandle uint64
 	// Quality é a qualidade JPEG (1-100). 0 = padrão (80).
 	Quality int
-	// MaxDimension limita o maior lado da imagem final (0 = padrão 1600).
+	// MaxDimension limita o maior lado da imagem final (0 = padrão 2560).
 	// Reduz custo de visão/tokens e o tamanho do payload enviado à API.
 	MaxDimension int
+	// Format é a preferência de formato da imagem final: "auto" (WebP lossless
+	// quando menor que PNG) ou "png" (portabilidade máxima).
+	Format string
 }
 
 // CaptureResult é o resultado de uma captura, com os bytes já codificados.
@@ -124,15 +127,19 @@ type OverlayPayload struct {
 	Session string `json:"session"`
 	// At é o instante de criação do payload — o frontend descarta eventos
 	// atrasados (broker do chat entrega pendências no próximo poll).
-	At             time.Time     `json:"at"`
-	Reason         string        `json:"reason,omitempty"`
-	VirtualX       int           `json:"virtualX"`
-	VirtualY       int           `json:"virtualY"`
-	VirtualWidth   int           `json:"virtualWidth"`
-	VirtualHeight  int           `json:"virtualHeight"`
-	ImageWidth     int           `json:"imageWidth"`
-	ImageHeight    int           `json:"imageHeight"`
-	ImageDataURL   string        `json:"imageDataUrl"`
+	At            time.Time `json:"at"`
+	Reason        string    `json:"reason,omitempty"`
+	VirtualX      int       `json:"virtualX"`
+	VirtualY      int       `json:"virtualY"`
+	VirtualWidth  int       `json:"virtualWidth"`
+	VirtualHeight int       `json:"virtualHeight"`
+	ImageWidth    int       `json:"imageWidth"`
+	ImageHeight   int       `json:"imageHeight"`
+	ImageDataURL  string    `json:"imageDataUrl"`
+	// ImageMime diz em que formato a tela congelada foi entregue (image/webp ou
+	// image/png). O frontend usa isso para compor a imagem anotada no mesmo
+	// formato — que só vale a pena se o backend souber decodificá-lo.
+	ImageMime      string        `json:"imageMime"`
 	Monitors       []MonitorInfo `json:"monitors"`
 	Windows        []WindowInfo  `json:"windows"`
 	RequestedByLLM bool          `json:"requestedByLlm"`

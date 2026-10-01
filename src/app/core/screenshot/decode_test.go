@@ -9,6 +9,33 @@ import (
 	"testing"
 )
 
+func TestNormalizeEncodedImageDownscalesAndKeepsPNG(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, 4000, 2000))
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatalf("png.Encode: %v", err)
+	}
+
+	data, mime, w, h, err := NormalizeEncodedImage(buf.Bytes(), 2560, 92, 0)
+	if err != nil {
+		t.Fatalf("NormalizeEncodedImage falhou: %v", err)
+	}
+	if w != 2560 || h != 1280 {
+		t.Fatalf("dimensoes = %dx%d, want 2560x1280", w, h)
+	}
+	// O formato é escolhido pelo modo "auto" (WebP lossless quando menor).
+	if mime != "image/png" && mime != "image/webp" {
+		t.Fatalf("mime = %q, want image/png ou image/webp", mime)
+	}
+	if _, _, err := image.Decode(bytes.NewReader(data)); err != nil {
+		t.Fatalf("imagem normalizada nao decodifica (%s): %v", mime, err)
+	}
+
+	if _, _, _, _, err := NormalizeEncodedImage(nil, 0, 0, 0); err == nil {
+		t.Fatal("bytes vazios deveriam falhar")
+	}
+}
+
 func TestDecodeDataURLToImageRoundTrip(t *testing.T) {
 	img := image.NewRGBA(image.Rect(0, 0, 3, 2))
 	img.Set(1, 1, color.RGBA{R: 10, G: 20, B: 30, A: 255})

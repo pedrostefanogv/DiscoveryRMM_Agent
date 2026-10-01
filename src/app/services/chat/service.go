@@ -413,9 +413,9 @@ func (s *Service) StartStream(message string) {
 
 // maxAttachedImageBytes limita o tamanho de cada data URL anexada (base64).
 // Um print PNG grande é redimensionado pelo backend antes de virar anexo.
-// Alinhado ao teto do servidor (AiChatHelpers.MaxImageBase64Chars = 4 MiB):
+// Alinhado ao teto do servidor (AiChatHelpers.MaxImageBase64Chars = 6 MiB):
 // acima disso o servidor descarta a imagem silenciosamente.
-const maxAttachedImageBytes = 4 << 20
+const maxAttachedImageBytes = 6 << 20
 
 // StartStreamWithImages envia uma mensagem com imagens anexadas (data URLs) —
 // usado pelo ícone de captura de tela do chat. As imagens são validadas

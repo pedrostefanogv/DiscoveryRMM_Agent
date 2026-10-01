@@ -22,6 +22,15 @@ func TestPolicyBlocksProcessBySubstringAndExact(t *testing.T) {
 	}
 }
 
+func TestPolicyKeepsExplicitPNGFormat(t *testing.T) {
+	p := DefaultPolicy()
+	p.ImageFormat = "PNG"
+	n := p.Normalize()
+	if n.ImageFormat != FormatPNG {
+		t.Fatalf("ImageFormat = %q, want %q", n.ImageFormat, FormatPNG)
+	}
+}
+
 func TestPolicyNormalize(t *testing.T) {
 	full := false
 	requireWindow := true
