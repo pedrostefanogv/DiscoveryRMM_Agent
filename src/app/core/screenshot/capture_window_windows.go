@@ -157,6 +157,12 @@ func (p *printWorkerClient) stopLocked() {
 	if p.cmd != nil && p.cmd.Process != nil {
 		_ = p.cmd.Process.Kill()
 	}
+	if p.cmd != nil {
+		// Wait libera o handle do processo (no Windows, Kill sem Wait deixa o
+		// handle pendurado até o GC — e um timeout por captura acumularia).
+		cmd := p.cmd
+		go func() { _ = cmd.Wait() }()
+	}
 	p.cmd, p.stdin, p.stdout = nil, nil, nil
 }
 

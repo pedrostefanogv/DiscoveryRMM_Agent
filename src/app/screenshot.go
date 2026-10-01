@@ -171,7 +171,7 @@ func (a *App) applyScreenshotPolicy(req *screenshot.Request, policy screenshot.P
 		handle := screenshot.ForegroundWindowHandle()
 		// A janela em foco pode ser a DO PRÓPRIO AGENTE (o pedido veio do chat)
 		// ou estar bloqueada — nesse caso usa a primeira elegível no z-order.
-		if wins, err := screenshot.ListWindowsWithOptions(true); err == nil {
+		if wins, err := screenshot.ListWindowsForPolicy(); err == nil {
 			handle = resolveFocusedHandle(handle, wins, policy)
 		}
 		if handle == 0 {
@@ -183,7 +183,7 @@ func (a *App) applyScreenshotPolicy(req *screenshot.Request, policy screenshot.P
 	switch req.Mode {
 	case screenshot.ModeWindow:
 		if handle := req.WindowHandle; handle != 0 {
-			if wins, err := screenshot.ListWindowsWithOptions(true); err == nil {
+			if wins, err := screenshot.ListWindowsForPolicy(); err == nil {
 				for _, w := range wins {
 					if w.Handle == handle && policy.IsProcessBlocked(w.ProcessName) {
 						return fmt.Errorf("captura bloqueada pela politica de privacidade: processo %q esta na blocklist", w.ProcessName)
@@ -201,6 +201,14 @@ func (a *App) applyScreenshotPolicy(req *screenshot.Request, policy screenshot.P
 		}
 		if !policy.FullScreenAllowed() {
 			return fmt.Errorf("captura de tela inteira desabilitada pela politica de privacidade — capture uma janela especifica")
+		}
+		// A blocklist também vale para a captura AUTOMÁTICA (região/monitor/tela
+		// inteira): antes só o modo janela era checado aqui, então a tool podia
+		// fotografar um app bloqueado sem passar pelo overlay de seleção.
+		if sel, ok := screenshotSelectionForRequest(*req); ok {
+			if hit, blocked := a.blockedSelectionHit(policy, sel); blocked {
+				return fmt.Errorf("captura bloqueada pela politica de privacidade: a area pedida cobre a janela de %q", hit.ProcessName)
+			}
 		}
 	}
 	return nil
@@ -262,7 +270,7 @@ func (a *App) validateSelectionPolicy(session *screenshotOverlaySession, sel scr
 		// Handle não presente na lista do overlay (janela nova/lista vazia):
 		// confere de novo na enumeração atual antes de permitir.
 		if !checked && sel.WindowHandle != 0 {
-			if wins, err := screenshot.ListWindowsWithOptions(true); err == nil {
+			if wins, err := screenshot.ListWindowsForPolicy(); err == nil {
 				for _, w := range wins {
 					if w.Handle == sel.WindowHandle && policy.IsProcessBlocked(w.ProcessName) {
 						return fmt.Errorf("captura bloqueada pela politica de privacidade: processo %q", w.ProcessName)
@@ -296,22 +304,53 @@ func (a *App) validateSelectionPolicy(session *screenshotOverlaySession, sel scr
 // encobrida pela seleção geométrica. Enumera as janelas atuais (as do payload do
 // overlay podem estar filtradas) e ignora a janela do próprio agente.
 func (a *App) blockedSelectionHit(policy screenshot.Policy, sel screenshot.Selection) (screenshot.WindowInfo, bool) {
-	wins, err := screenshot.ListWindowsWithOptions(true)
+	wins, err := screenshot.ListWindowsForPolicy()
 	if err != nil {
 		return screenshot.WindowInfo{}, false
 	}
-	for _, w := range wins {
-		if w.IsSelf || w.Minimized || w.Width <= 0 || w.Height <= 0 {
-			continue
+	return screenshot.FirstBlockedOverlap(policy, wins, sel)
+}
+
+// screenshotSelectionForRequest traduz o pedido da IA (região, monitor ou tela
+// inteira) no retângulo físico usado pela checagem geométrica da blocklist.
+func screenshotSelectionForRequest(req screenshot.Request) (screenshot.Selection, bool) {
+	switch strings.ToLower(strings.TrimSpace(req.Mode)) {
+	case screenshot.ModeRegion:
+		if req.Width <= 0 || req.Height <= 0 {
+			return screenshot.Selection{}, false
 		}
-		if !w.Blocked && !policy.IsProcessBlocked(w.ProcessName) {
-			continue
+		return screenshot.Selection{Kind: "region", X: req.X, Y: req.Y, Width: req.Width, Height: req.Height}, true
+	case screenshot.ModeMonitor:
+		for _, m := range screenshot.ListMonitors() {
+			if m.Index == req.MonitorIndex {
+				return screenshot.Selection{Kind: "monitor", X: m.X, Y: m.Y, Width: m.Width, Height: m.Height}, true
+			}
 		}
-		if screenshot.OverlapsBlockedWindow(sel, w) {
-			return w, true
+		return screenshot.Selection{}, false
+	case screenshot.ModeFull:
+		mons := screenshot.ListMonitors()
+		if len(mons) == 0 {
+			return screenshot.Selection{}, false
 		}
+		x0, y0 := mons[0].X, mons[0].Y
+		x1, y1 := mons[0].X+mons[0].Width, mons[0].Y+mons[0].Height
+		for _, m := range mons[1:] {
+			if m.X < x0 {
+				x0 = m.X
+			}
+			if m.Y < y0 {
+				y0 = m.Y
+			}
+			if m.X+m.Width > x1 {
+				x1 = m.X + m.Width
+			}
+			if m.Y+m.Height > y1 {
+				y1 = m.Y + m.Height
+			}
+		}
+		return screenshot.Selection{Kind: "full", X: x0, Y: y0, Width: x1 - x0, Height: y1 - y0}, true
 	}
-	return screenshot.WindowInfo{}, false
+	return screenshot.Selection{}, false
 }
 
 // checkScreenshotBudget aplica o rate limit de capturas da IA.
@@ -478,7 +517,9 @@ func (a *App) screenshotTargetLabel(req screenshot.Request) string {
 	case screenshot.ModeRegion:
 		return fmt.Sprintf("regiao de %dx%d pixels", req.Width, req.Height)
 	case screenshot.ModeWindow, screenshot.ModeFocused:
-		if wins, err := screenshot.ListWindowsWithOptions(true); err == nil {
+		// Lista COMPLETA: o rótulo de consentimento não pode ficar genérico só
+		// porque a janela está além do corte de z-order do payload.
+		if wins, err := screenshot.ListWindowsForPolicy(); err == nil {
 			for _, w := range wins {
 				if w.Handle != req.WindowHandle {
 					continue
@@ -1096,8 +1137,15 @@ func (a *App) captureFromSelection(session *screenshotOverlaySession, sel screen
 		}, nil
 	}
 	if strings.EqualFold(sel.Kind, "window") && sel.WindowHandle != 0 {
-		// Blocklist já validada em validateSelectionPolicy.
-		if res, err := screenshot.CaptureWindow(sel.WindowHandle, 80, 0); err == nil {
+		// Blocklist já validada em validateSelectionPolicy. Formato vem da
+		// política (png/webp/auto), igual aos demais caminhos — antes esta
+		// captura ignorava a preferência da UI.
+		if res, err := screenshot.CaptureScreen(screenshot.Request{
+			Mode:         screenshot.ModeWindow,
+			WindowHandle: sel.WindowHandle,
+			Quality:      92,
+			Format:       a.screenshotImageFormat(),
+		}); err == nil {
 			res.Interactive = true
 			return res, nil
 		}

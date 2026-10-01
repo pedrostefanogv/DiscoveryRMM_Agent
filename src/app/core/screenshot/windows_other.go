@@ -14,6 +14,9 @@ func ListWindowsWithOptions(includeUntitled bool) ([]WindowInfo, error) {
 	return nil, errNotSupported
 }
 
+// ListWindowsForPolicy não tem equivalente fora do Windows.
+func ListWindowsForPolicy() ([]WindowInfo, error) { return nil, errNotSupported }
+
 // ForegroundWindowHandle não tem equivalente fora do Windows.
 func ForegroundWindowHandle() uint64 { return 0 }
 

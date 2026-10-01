@@ -64,3 +64,40 @@ func TestOverlapsBlockedWindow(t *testing.T) {
 		t.Errorf("encoste de 300 px² nao deveria bloquear")
 	}
 }
+
+func TestFirstBlockedOverlap(t *testing.T) {
+	policy := Policy{BlockedProcesses: []string{"keepass"}}
+	blocked := WindowInfo{Handle: 7, ProcessName: "KeePassXC.exe", X: 100, Y: 100, Width: 400, Height: 300}
+	marked := WindowInfo{Handle: 8, ProcessName: "banco.exe", X: 600, Y: 100, Width: 400, Height: 300, Blocked: true}
+	self := WindowInfo{Handle: 9, ProcessName: "keepass-helper.exe", X: 100, Y: 100, Width: 400, Height: 300, IsSelf: true}
+	minimized := WindowInfo{Handle: 10, ProcessName: "keepass-helper.exe", X: 100, Y: 100, Width: 400, Height: 300, Minimized: true}
+	empty := WindowInfo{Handle: 11, ProcessName: "keepass-helper.exe"}
+	free := WindowInfo{Handle: 12, ProcessName: "notepad.exe", X: 100, Y: 600, Width: 800, Height: 600}
+	wins := []WindowInfo{self, minimized, empty, free, blocked, marked}
+
+	// Seleção só sobre a janela livre (y ≥ 600): nada bloqueado é encoberto.
+	if hit, ok := FirstBlockedOverlap(policy, wins, Selection{X: 200, Y: 700, Width: 200, Height: 200}); ok {
+		t.Fatalf("selecao sobre janela livre nao deveria bloquear (hit=%q)", hit.ProcessName)
+	}
+	// Seleção cobrindo a janela da blocklist: bloqueia pelo nome do processo.
+	if hit, ok := FirstBlockedOverlap(policy, wins, Selection{X: 200, Y: 200, Width: 100, Height: 100}); !ok || hit.Handle != 7 {
+		t.Fatalf("selecao sobre keepass deveria bloquear (ok=%v hit=%d)", ok, hit.Handle)
+	}
+	// Seleção sobre a janela marcada com Blocked=true (política vazia).
+	if hit, ok := FirstBlockedOverlap(Policy{}, wins, Selection{X: 700, Y: 200, Width: 100, Height: 100}); !ok || hit.Handle != 8 {
+		t.Fatalf("flag Blocked deveria bloquear (ok=%v hit=%d)", ok, hit.Handle)
+	}
+	// Janela do próprio agente, minimizada e sem dimensão nunca bloqueiam,
+	// mesmo quando a seleção cobre exatamente a área delas.
+	sel := Selection{X: 100, Y: 100, Width: 400, Height: 300}
+	selfPolicy := Policy{BlockedProcesses: []string{"keepass-helper"}}
+	if hit, ok := FirstBlockedOverlap(selfPolicy, []WindowInfo{self}, sel); ok {
+		t.Fatalf("janela do proprio agente nao deveria bloquear (hit=%q)", hit.ProcessName)
+	}
+	if hit, ok := FirstBlockedOverlap(selfPolicy, []WindowInfo{minimized}, sel); ok {
+		t.Fatalf("janela minimizada nao deveria bloquear (hit=%q)", hit.ProcessName)
+	}
+	if hit, ok := FirstBlockedOverlap(selfPolicy, []WindowInfo{empty}, sel); ok {
+		t.Fatalf("janela sem dimensao nao deveria bloquear (hit=%q)", hit.ProcessName)
+	}
+}

@@ -227,7 +227,10 @@ function screenshotEnsureOverlayEls() {
     '  <button type="button" class="screenshot-annot-color" data-annot-color="#ff3b30" style="background:#ff3b30"></button>',
     '  <button type="button" class="screenshot-annot-color" data-annot-color="#ffcc00" style="background:#ffcc00"></button>',
     '  <button type="button" class="screenshot-annot-color" data-annot-color="#34c759" style="background:#34c759"></button>',
-    '  <button type="button" class="screenshot-annot-color" data-annot-color="#0a84ff" style="background:#0a84ff"></button>',
+    // Cor personalizada: abre o seletor nativo (paleta do sistema). O próprio
+    // botão é o "quadradinho" da cor escolhida; sem escolha, mostra um arco-íris.
+    '  <button type="button" id="screenshotAnnotColorCustom" class="screenshot-annot-color screenshot-annot-color-custom" data-i18n-title="screenshot.annotColorCustom"></button>',
+    '  <input type="color" id="screenshotAnnotColorInput" class="screenshot-annot-color-input" value="#ff3b30" tabindex="-1" aria-hidden="true" />',
     '  <span class="screenshot-annot-sep"></span>',
     '  <button type="button" class="screenshot-annot-btn" data-annot-width="3" data-i18n-title="screenshot.widthThin">•</button>',
     '  <button type="button" class="screenshot-annot-btn" data-annot-width="6" data-i18n-title="screenshot.widthMedium">●●</button>',
@@ -275,6 +278,32 @@ function screenshotEnsureOverlayEls() {
   Array.prototype.forEach.call(root.querySelectorAll("[data-annot-color]"), function (btn) {
     btn.addEventListener("click", function () { screenshotSetAnnotColor(btn.getAttribute("data-annot-color")); });
   });
+  // Seletor de cor personalizada: o botão abre a paleta nativa e a escolha vale
+  // na hora. `input` cobre a paleta do Chrome (dispara a cada ajuste) e `change`
+  // o fechamento; sem tratamento o estado ficaria com a cor antiga.
+  var colorCustom = document.getElementById("screenshotAnnotColorCustom");
+  var colorInput = document.getElementById("screenshotAnnotColorInput");
+  if (colorCustom && colorInput) {
+    colorCustom.addEventListener("click", function () {
+      // Clique no quadradinho = "usar a última cor livre" e reabrir a paleta
+      // nela (sem isso, reabrir na cor anterior parecia não fazer nada).
+      if (screenshotLastCustomColor) {
+        colorInput.value = screenshotLastCustomColor;
+        screenshotSetAnnotColor(screenshotLastCustomColor);
+      }
+      // Mantém o seletor ancorado no botão (o input é 1×1 px dentro da barra).
+      if (typeof colorInput.showPicker === "function") {
+        try { colorInput.showPicker(); return; } catch (_) { /* fallback abaixo */ }
+      }
+      colorInput.click();
+    });
+    function applyCustomColor() {
+      screenshotLastCustomColor = colorInput.value;
+      screenshotSetAnnotColor(colorInput.value);
+    }
+    colorInput.addEventListener("input", applyCustomColor);
+    colorInput.addEventListener("change", applyCustomColor);
+  }
   Array.prototype.forEach.call(root.querySelectorAll("[data-annot-width]"), function (btn) {
     btn.addEventListener("click", function () { screenshotSetAnnotWidth(Number(btn.getAttribute("data-annot-width")) || 6); });
   });
@@ -658,6 +687,9 @@ var screenshotAnnotToolbarPos = { dragged: false, x: 12, y: 12 };
 // fechar a captura no meio do arraste deixaria listeners de mousemove no
 // documento mexendo numa barra que não existe mais.
 var screenshotToolbarDragCleanup = null;
+// Última cor livre escolhida na paleta: mantida entre capturas da sessão para
+// reabrir o seletor no mesmo tom (o estado da anotação volta ao preset padrão).
+var screenshotLastCustomColor = null;
 
 function screenshotAnnotToolbarEl() {
   return document.getElementById("screenshotAnnotToolbar");
@@ -742,15 +774,40 @@ function screenshotSetAnnotTool(tool) {
   });
 }
 
+// screenshotNormalizeColor padroniza a cor em minúsculas para comparar presets
+// (o seletor nativo devolve hex minúsculo; os presets estão em minúsculas).
+function screenshotNormalizeColor(color) {
+  return String(color || "").trim().toLowerCase();
+}
+
 function screenshotSetAnnotColor(color) {
   var state = screenshotOverlayState;
   if (!state || !color) return;
   state.color = color;
   var root = screenshotOverlayRoot();
   if (!root) return;
+  var wanted = screenshotNormalizeColor(color);
+  var isPreset = false;
   Array.prototype.forEach.call(root.querySelectorAll("[data-annot-color]"), function (btn) {
-    btn.classList.toggle("active", btn.getAttribute("data-annot-color") === color);
+    var match = screenshotNormalizeColor(btn.getAttribute("data-annot-color")) === wanted;
+    if (match) isPreset = true;
+    btn.classList.toggle("active", match);
   });
+  // O botão de cor personalizada vira o quadradinho da cor escolhida e fica
+  // destacado quando a cor ativa NÃO é um dos presets.
+  var custom = document.getElementById("screenshotAnnotColorCustom");
+  if (custom) {
+    custom.classList.toggle("active", !isPreset);
+    if (isPreset) {
+      custom.style.background = "";
+    } else {
+      custom.style.background = color;
+    }
+  }
+  var input = document.getElementById("screenshotAnnotColorInput");
+  if (input && screenshotNormalizeColor(input.value) !== wanted) {
+    input.value = color;
+  }
 }
 
 function screenshotSetAnnotWidth(width) {
@@ -1127,6 +1184,11 @@ function screenshotBlurSupportsFilter() {
   return screenshotBlurFilterSupport;
 }
 
+// Intensidade do borrão: a espessura escolhida escala o tamanho da célula do
+// mosaico e o raio do desfoque (1x na espessura padrão = 6).
+var screenshotBlurDefaultCell = 12; // px da fonte por célula do mosaico (1x)
+var screenshotBlurDefaultRadius = 14; // raio do desfoque em px da fonte (1x)
+
 function screenshotBlurRegion(ctx, shape, source, drawScale) {
   if (!source) return;
   var x = Math.min(shape.x1, shape.x2);
@@ -1139,29 +1201,45 @@ function screenshotBlurRegion(ctx, shape, source, drawScale) {
   var shrink = Math.min(1, Math.sqrt(screenshotBlurMaxPixels / (w * h)));
   var cw = Math.max(4, Math.round(w * shrink));
   var ch = Math.max(4, Math.round(h * shrink));
+  var strength = Math.max(1, (shape.width || 6) / 6);
   var temp = document.createElement("canvas");
   temp.width = cw;
   temp.height = ch;
   var tctx = temp.getContext("2d");
 
+  // 1) MOSAICO FORTE primeiro: reduz o recorte a ~1/12 (célula de 12 px da
+  //    fonte, no mínimo 8 px) e devolve ampliado. Isso já destrói texto e
+  //    detalhes finos — a garantia de privacidade não depende de ctx.filter.
+  var cell = Math.max(8, screenshotBlurDefaultCell * strength);
+  var mosaicW = Math.max(6, Math.round(cw / cell));
+  var mosaicH = Math.max(4, Math.round((ch / cw) * mosaicW));
+  var mosaic = document.createElement("canvas");
+  mosaic.width = mosaicW;
+  mosaic.height = mosaicH;
+  var mctx = mosaic.getContext("2d");
+  mctx.imageSmoothingEnabled = true;
+  mctx.imageSmoothingQuality = "high";
+  mctx.drawImage(source, x, y, w, h, 0, 0, mosaicW, mosaicH);
+  tctx.imageSmoothingEnabled = true;
+  tctx.imageSmoothingQuality = "high";
+  tctx.drawImage(mosaic, 0, 0, mosaicW, mosaicH, 0, 0, cw, ch);
+
+  // 2) DESFOQUE em duas passadas (raio em pixels REAIS da fonte): apaga as
+  //    quinas dos blocos e embaralha o que sobrou do mosaico. Duas passadas
+  //    equivalem a um raio bem maior, sem o custo/traço de um raio gigante.
   if (screenshotBlurSupportsFilter()) {
-    // Raio em pixels REAIS da fonte (independe de zoom/seleção): sem blocos
-    // visíveis e com o mesmo visual no preview e na imagem final.
-    var radius = Math.max(4, (shape.width || 6) * 2.0) * shrink;
-    tctx.filter = "blur(" + radius.toFixed(2) + "px)";
-    tctx.drawImage(source, x, y, w, h, 0, 0, cw, ch);
+    var radius = Math.max(8, screenshotBlurDefaultRadius * strength) * shrink;
+    var filter = "blur(" + radius.toFixed(2) + "px)";
+    var second = document.createElement("canvas");
+    second.width = cw;
+    second.height = ch;
+    var sctx = second.getContext("2d");
+    sctx.filter = filter;
+    sctx.drawImage(temp, 0, 0);
+    sctx.filter = "none";
+    tctx.filter = filter;
+    tctx.drawImage(second, 0, 0);
     tctx.filter = "none";
-  } else {
-    // Fallback (ambiente sem ctx.filter): reduz e devolve suavizado (mosaico).
-    var blocks = Math.max(5, Math.round(cw / 22));
-    var blockH = Math.max(3, Math.round((ch / cw) * blocks));
-    var small = document.createElement("canvas");
-    small.width = blocks;
-    small.height = blockH;
-    small.getContext("2d").drawImage(source, x, y, w, h, 0, 0, blocks, blockH);
-    tctx.imageSmoothingEnabled = true;
-    tctx.imageSmoothingQuality = "high";
-    tctx.drawImage(small, 0, 0, blocks, blockH, 0, 0, cw, ch);
   }
 
   ctx.save();

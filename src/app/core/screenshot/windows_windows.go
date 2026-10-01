@@ -69,6 +69,10 @@ var (
 const (
 	// maxListedWindows limita o payload entregue ao LLM e ao overlay.
 	maxListedWindows = 60
+	// maxPolicyWindows limita a enumeração da política de privacidade (blocklist):
+	// bem maior que o payload para não perder janelas bloqueadas no fim do
+	// z-order.
+	maxPolicyWindows = 400
 	// maxWindowTitleRunes evita títulos patológicos (alguns apps usam o título
 	// como buffer de status, com dezenas de KB).
 	maxWindowTitleRunes = 160
@@ -195,8 +199,21 @@ func ForegroundWindowHandle() uint64 {
 }
 
 // ListWindowsWithOptions permite incluir janelas sem título (alguns jogos/UWP
-// não expõem título, mas continuam sendo alvos úteis de diagnóstico).
+// não expõem título, mas continuam sendo alvos úteis de diagnóstico). O
+// resultado é limitado a maxListedWindows (payload da UI/LLM).
 func ListWindowsWithOptions(includeUntitled bool) ([]WindowInfo, error) {
+	return listWindowsWithLimit(includeUntitled, maxListedWindows)
+}
+
+// ListWindowsForPolicy enumera as janelas visíveis SEM o corte de
+// maxListedWindows: a checagem da blocklist não pode depender do z-order, senão
+// uma janela bloqueada além da 60ª ficaria de fora da validação e apareceria no
+// print. O teto maior existe só como salvaguarda de memória.
+func ListWindowsForPolicy() ([]WindowInfo, error) {
+	return listWindowsWithLimit(true, maxPolicyWindows)
+}
+
+func listWindowsWithLimit(includeUntitled bool, limit int) ([]WindowInfo, error) {
 	enumMu.Lock()
 	defer enumMu.Unlock()
 	enumIncludeUntitled = includeUntitled
@@ -211,8 +228,8 @@ func ListWindowsWithOptions(includeUntitled bool) ([]WindowInfo, error) {
 	}
 	windowsAccumMu.Lock()
 	count := len(windowsAccum)
-	if count > maxListedWindows {
-		count = maxListedWindows
+	if limit > 0 && count > limit {
+		count = limit
 	}
 	out := append([]WindowInfo(nil), windowsAccum[:count]...)
 	windowsAccumMu.Unlock()

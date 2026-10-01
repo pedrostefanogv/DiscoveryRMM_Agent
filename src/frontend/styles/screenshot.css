@@ -267,6 +267,10 @@ body.screenshot-active { overflow: hidden !important; }
 .screenshot-annot-btn.active { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent); }
 .screenshot-annot-color { width: 22px; height: 22px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; padding: 0; }
 .screenshot-annot-color.active { border-color: #fff; box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.5); }
+/* Cor personalizada: arco-íris quando nenhuma cor livre foi escolhida; ao
+   escolher, o JS troca o fundo pelo tom ativo. */
+.screenshot-annot-color-custom { background: conic-gradient(#ff3b30, #ffcc00, #34c759, #0a84ff, #af52de, #ff3b30); }
+.screenshot-annot-color-input { position: absolute; left: 0; bottom: 0; width: 1px; height: 1px; padding: 0; border: 0; opacity: 0; pointer-events: none; }
 .screenshot-annot-sep { width: 1px; height: 20px; background: var(--border); margin: 0 4px; }
 .screenshot-annot-drag {
   cursor: grab;

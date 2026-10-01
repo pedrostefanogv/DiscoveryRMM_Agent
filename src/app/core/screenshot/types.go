@@ -190,17 +190,22 @@ func RectOverlapArea(ax, ay, aw, ah, bx, by, bw, bh int) int {
 	return w * h
 }
 
-// Limites da tolerância de sobreposição da blocklist (px²): ignora encostes de
-// borda/sombra (< 400 px²) e não fica leniente em janelas gigantes — acima de
-// 16 000 px² a fatia mínima relevante satura nesse valor.
+// Limites da tolerância de sobreposição da blocklist: ignora encostes de
+// borda/sombra (< 400 px²) e considera relevante cobrir 2% da SELEÇÃO ou 1% da
+// JANELA bloqueada — o menor dos dois. Só a janela como referência (regra
+// anterior) deixava passar um recorte pequeno inteiro dentro de uma janela
+// grande (ex.: 60×60 px sobre um navegador maximizado); só a seleção como
+// referência deixaria passar uma janela bloqueada pequena dentro de um print de
+// tela inteira.
 const (
-	blockedOverlapMinArea = 400
-	blockedOverlapMaxArea = 16000
+	blockedOverlapMinArea  = 400
+	blockedOverlapSelRatio = 0.02
+	blockedOverlapWinRatio = 0.01
 )
 
 // OverlapsBlockedWindow informa se a seleção geométrica encobre de forma
 // relevante a janela informada (janela da blocklist). A tolerância é
-// clamp(1% da área da janela, 400 px², 16 000 px²).
+// max(400 px², min(2% da seleção, 1% da janela)).
 //
 // A checagem é geométrica: não leva em conta oclusão (uma janela bloqueada
 // atrás de outra ainda é considerada coberta) — o lado seguro da política de
@@ -210,14 +215,39 @@ func OverlapsBlockedWindow(sel Selection, w WindowInfo) bool {
 	if area <= 0 {
 		return false
 	}
-	min := w.Width * w.Height / 100
+	// Referência: a MENOR fração relevante entre seleção e janela — cobre tanto
+	// o recorte pequeno dentro de uma janela grande quanto a janela bloqueada
+	// pequena dentro de um print amplo.
+	bySelection := int(float64(sel.Width*sel.Height) * blockedOverlapSelRatio)
+	byWindow := int(float64(w.Width*w.Height) * blockedOverlapWinRatio)
+	min := bySelection
+	if byWindow < min {
+		min = byWindow
+	}
 	if min < blockedOverlapMinArea {
 		min = blockedOverlapMinArea
 	}
-	if min > blockedOverlapMaxArea {
-		min = blockedOverlapMaxArea
-	}
 	return area >= min
+}
+
+// FirstBlockedOverlap devolve a primeira janela BLOQUEADA cuja área é encoberta
+// pela seleção (Blocked já marcado ou processo na blocklist da política).
+// Ignora a janela do próprio agente, minimizadas e entradas sem dimensão.
+// Puro: recebe a lista de janelas, o que torna a decisão testável sem enumerar
+// o desktop.
+func FirstBlockedOverlap(policy Policy, wins []WindowInfo, sel Selection) (WindowInfo, bool) {
+	for _, w := range wins {
+		if w.IsSelf || w.Minimized || w.Width <= 0 || w.Height <= 0 {
+			continue
+		}
+		if !w.Blocked && !policy.IsProcessBlocked(w.ProcessName) {
+			continue
+		}
+		if OverlapsBlockedWindow(sel, w) {
+			return w, true
+		}
+	}
+	return WindowInfo{}, false
 }
 
 // ToolPayload monta o contrato JSON devolvido ao LLM como resultado da tool.
