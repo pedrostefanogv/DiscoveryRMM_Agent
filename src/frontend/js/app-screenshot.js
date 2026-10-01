@@ -364,14 +364,19 @@ function screenshotEnsureOverlayEls() {
     '<div id="screenshotAnnotToolbar" class="screenshot-annot-toolbar hidden">',
     '  <span id="screenshotAnnotDrag" class="screenshot-annot-drag" data-i18n-title="screenshot.annotDrag">⣿</span>',
     '  <button type="button" class="screenshot-annot-btn" data-annot-tool="rect" data-i18n-title="screenshot.annotRect">▭</button>',
+    '  <button type="button" class="screenshot-annot-btn" data-annot-tool="circle" data-i18n-title="screenshot.annotCircle">◯</button>',
     '  <button type="button" class="screenshot-annot-btn" data-annot-tool="arrow" data-i18n-title="screenshot.annotArrow">↗</button>',
     '  <button type="button" class="screenshot-annot-btn" data-annot-tool="line" data-i18n-title="screenshot.annotLine">╱</button>',
     '  <button type="button" class="screenshot-annot-btn" data-annot-tool="pen" data-i18n-title="screenshot.annotPen">✎</button>',
     '  <button type="button" class="screenshot-annot-btn" data-annot-tool="marker" data-i18n-title="screenshot.annotMarker">🖍</button>',
     '  <button type="button" class="screenshot-annot-btn" data-annot-tool="blur" data-i18n-title="screenshot.annotBlur">▦</button>',
+    // Lupa: arraste sobre a área pequena e o recorte aparece ampliado ao lado.
+    '  <button type="button" class="screenshot-annot-btn" data-annot-tool="magnify" data-i18n-title="screenshot.annotMagnify"><svg viewBox="0 0 16 16" class="screenshot-annot-icon" aria-hidden="true"><circle cx="6.8" cy="6.8" r="4.3" fill="none" stroke="currentColor" stroke-width="1.6"/><line x1="10.1" y1="10.1" x2="13.6" y2="13.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></button>',
     '  <button type="button" class="screenshot-annot-btn" data-annot-tool="step" data-i18n-title="screenshot.annotStep">①</button>',
     '  <button type="button" class="screenshot-annot-btn" data-annot-tool="text" data-i18n-title="screenshot.annotText">T</button>',
-    '  <button type="button" class="screenshot-annot-btn" data-annot-tool="eraser" data-i18n-title="screenshot.annotEraser">🧽</button>',
+    // Ícone em SVG (não emoji): o 🧽 renderizava como um borrão laranja em alguns
+    // WebViews e destoava dos demais glifos.
+    '  <button type="button" class="screenshot-annot-btn" data-annot-tool="eraser" data-i18n-title="screenshot.annotEraser"><svg viewBox="0 0 16 16" class="screenshot-annot-icon" aria-hidden="true"><rect x="3" y="5.8" width="10" height="4.8" rx="1.4" transform="rotate(-38 8 8.2)" fill="none" stroke="currentColor" stroke-width="1.5"/><line x1="6.1" y1="11" x2="9.9" y2="7.2" stroke="currentColor" stroke-width="1.3"/></svg></button>',
     '  <span class="screenshot-annot-sep"></span>',
     '  <button type="button" class="screenshot-annot-color" data-annot-color="#ff3b30" style="background:#ff3b30"></button>',
     '  <button type="button" class="screenshot-annot-color" data-annot-color="#ffcc00" style="background:#ffcc00"></button>',
@@ -381,9 +386,11 @@ function screenshotEnsureOverlayEls() {
     '  <button type="button" id="screenshotAnnotColorCustom" class="screenshot-annot-color screenshot-annot-color-custom" data-i18n-title="screenshot.annotColorCustom"></button>',
     '  <input type="color" id="screenshotAnnotColorInput" class="screenshot-annot-color-input" value="#ff3b30" tabindex="-1" aria-hidden="true" />',
     '  <span class="screenshot-annot-sep"></span>',
-    '  <button type="button" class="screenshot-annot-btn" data-annot-width="3" data-i18n-title="screenshot.widthThin">•</button>',
-    '  <button type="button" class="screenshot-annot-btn" data-annot-width="6" data-i18n-title="screenshot.widthMedium">●●</button>',
-    '  <button type="button" class="screenshot-annot-btn" data-annot-width="10" data-i18n-title="screenshot.widthThick">●●●</button>',
+    // Espessuras como BARRAS de alturas diferentes (antes eram pontos ●●●, que não
+    // comunicavam "traço grosso" e ficavam estranhos ao lado dos outros ícones).
+    '  <button type="button" class="screenshot-annot-btn" data-annot-width="3" data-i18n-title="screenshot.widthThin"><span class="screenshot-width-mark" style="height:2px"></span></button>',
+    '  <button type="button" class="screenshot-annot-btn" data-annot-width="6" data-i18n-title="screenshot.widthMedium"><span class="screenshot-width-mark" style="height:4px"></span></button>',
+    '  <button type="button" class="screenshot-annot-btn" data-annot-width="10" data-i18n-title="screenshot.widthThick"><span class="screenshot-width-mark" style="height:7px"></span></button>',
     '  <span class="screenshot-annot-sep"></span>',
     '  <button type="button" class="screenshot-annot-btn" id="screenshotAnnotUndo" data-i18n-title="screenshot.annotUndo">↺</button>',
     '  <button type="button" class="screenshot-annot-btn" id="screenshotAnnotClear" data-i18n-title="screenshot.annotClear">🧹</button>',
@@ -1205,6 +1212,9 @@ function screenshotSetAnnotColor(color) {
   var custom = document.getElementById("screenshotAnnotColorCustom");
   if (custom) {
     custom.classList.toggle("active", !isPreset);
+    // `has-color` desliga o miolo da roda de cores: com cor escolhida o botão
+    // passa a ser a própria amostra do tom.
+    custom.classList.toggle("has-color", !isPreset);
     if (isPreset) {
       custom.style.background = "";
     } else {
@@ -1253,7 +1263,7 @@ function screenshotAnnotPoint(event) {
 
 // Ferramentas que desenham por arraste (retângulo/linha/seta/borrão).
 function screenshotIsDragTool(tool) {
-  return tool === "rect" || tool === "arrow" || tool === "line" || tool === "blur";
+  return tool === "rect" || tool === "circle" || tool === "arrow" || tool === "line" || tool === "blur" || tool === "magnify";
 }
 
 function screenshotAnnotDown(event) {
@@ -1349,7 +1359,9 @@ function screenshotTextBounds(shape) {
 // screenshotShapeDistance devolve a distância do ponto à marca (Infinity quando
 // não atinge). A borracha usa isso para apagar a marca MAIS PRÓXIMA do clique,
 // não apenas a última desenhada — essencial em marcas sobrepostas.
-function screenshotShapeDistance(shape, point) {
+// O terceiro parâmetro (a tela congelada) só é usado pela lupa, que precisa
+// recalcular onde caiu a lente para aceitar o apagamento.
+function screenshotShapeDistance(shape, point, source) {
   if (!shape || !point) return Infinity;
   var stroke = Math.max(6, shape.width || 6);
   var half = stroke / 2;
@@ -1374,7 +1386,30 @@ function screenshotShapeDistance(shape, point) {
     var inside = point.x >= bx && point.x <= bx + bw && point.y >= by && point.y <= by + bh;
     return inside ? 0 : Infinity;
   }
-  if (shape.points && shape.points.length) {
+  if (shape.type === "magnify") {
+    // A lupa ocupa dois lugares: a área de origem e a lente. Qualquer um apaga.
+    var lens = screenshotMagnifierRects(shape);
+    if (!lens) return Infinity;
+    if (screenshotPointInRect(point, lens.src) || screenshotPointInRect(point, lens.dst)) return 0;
+    return Infinity;
+  }
+  if (shape.type === "circle") {
+    // Elipse: |(px-cx)/rx, (py-cy)/ry| normalizado; a distância aproximada até a
+    // borda é |d-1| × menor raio (suficiente para o alvo da borracha).
+    var cx = Math.min(shape.x1, shape.x2) + Math.abs(shape.x2 - shape.x1) / 2;
+    var cy = Math.min(shape.y1, shape.y2) + Math.abs(shape.y2 - shape.y1) / 2;
+    var rx = Math.max(1, Math.abs(shape.x2 - shape.x1) / 2);
+    var ry = Math.max(1, Math.abs(shape.y2 - shape.y1) / 2);
+    var nx = (point.x - cx) / rx;
+    var ny = (point.y - cy) / ry;
+    var norm = Math.sqrt(nx * nx + ny * ny);
+    return Math.max(0, Math.abs(norm - 1) * Math.min(rx, ry) - half);
+  }
+  // Só caneta/marca-texto usam a lista de pontos. As ferramentas de ARRASTE
+  // (retângulo/seta/linha/círculo) também carregam `points: [origem]` desde o
+  // mousedown; se esta checagem viesse antes, a borracha só acertaria a marca
+  // clicando exatamente no canto onde o arraste começou.
+  if ((shape.type === "pen" || shape.type === "marker") && shape.points && shape.points.length) {
     var best = Infinity;
     if (shape.points.length === 1) {
       var p0 = shape.points[0];
@@ -1419,7 +1454,7 @@ function screenshotEraseAt(point) {
   var bestIndex = -1;
   var bestDistance = Infinity;
   for (var i = 0; i < state.annotations.length; i += 1) {
-    var distance = screenshotShapeDistance(state.annotations[i], point);
+    var distance = screenshotShapeDistance(state.annotations[i], point, screenshotOverlayImg());
     if (distance > tolerance) continue;
     if (bestIndex < 0 || distance <= bestDistance + tieEpsilon) {
       bestDistance = distance;
@@ -1514,6 +1549,8 @@ function screenshotDrawShape(ctx, shape, source, stepIndex, drawScale) {
   ctx.lineJoin = "round";
   if (shape.type === "rect") {
     screenshotStrokeRoundedRect(ctx, shape);
+  } else if (shape.type === "circle") {
+    screenshotStrokeEllipse(ctx, shape);
   } else if (shape.type === "line") {
     ctx.beginPath();
     ctx.moveTo(shape.x1, shape.y1);
@@ -1523,6 +1560,8 @@ function screenshotDrawShape(ctx, shape, source, stepIndex, drawScale) {
     screenshotDrawArrow(ctx, shape.x1, shape.y1, shape.x2, shape.y2);
   } else if (shape.type === "blur") {
     screenshotBlurRegion(ctx, shape, source, drawScale);
+  } else if (shape.type === "magnify") {
+    screenshotDrawMagnifier(ctx, shape, source);
   } else if (shape.type === "pen" || shape.type === "marker") {
     if (shape.points && shape.points.length > 1) {
       if (shape.type === "marker") ctx.globalAlpha = 0.35;
@@ -1555,18 +1594,132 @@ function screenshotStrokeRoundedRect(ctx, shape) {
   var w = Math.abs(shape.x2 - shape.x1);
   var h = Math.abs(shape.y2 - shape.y1);
   var radius = Math.min(Math.max(6, (shape.width || 6) * 2), w / 2, h / 2);
-  ctx.beginPath();
-  ctx.moveTo(x + radius, y);
-  ctx.lineTo(x + w - radius, y);
-  ctx.quadraticCurveTo(x + w, y, x + w, y + radius);
-  ctx.lineTo(x + w, y + h - radius);
-  ctx.quadraticCurveTo(x + w, y + h, x + w - radius, y + h);
-  ctx.lineTo(x + radius, y + h);
-  ctx.quadraticCurveTo(x, y + h, x, y + h - radius);
-  ctx.lineTo(x, y + radius);
-  ctx.quadraticCurveTo(x, y, x + radius, y);
-  ctx.closePath();
+  screenshotRoundedRectPath(ctx, x, y, w, h, radius);
   ctx.stroke();
+}
+
+// Caminho de retângulo arredondado — compartilhado por quem só desenha a borda
+// (retângulo) e por quem precisa recortar a área (lente da lupa).
+function screenshotRoundedRectPath(ctx, x, y, w, h, radius) {
+  var r = Math.min(Math.max(0, radius), w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
+// Círculo/elipse inscrita na mesma caixa do arraste do retângulo.
+function screenshotStrokeEllipse(ctx, shape) {
+  var x = Math.min(shape.x1, shape.x2);
+  var y = Math.min(shape.y1, shape.y2);
+  var rx = Math.abs(shape.x2 - shape.x1) / 2;
+  var ry = Math.abs(shape.y2 - shape.y1) / 2;
+  if (rx < 1 || ry < 1) return;
+  ctx.beginPath();
+  ctx.ellipse(x + rx, y + ry, rx, ry, 0, 0, Math.PI * 2);
+  ctx.stroke();
+}
+
+// Limites onde uma anotação pode ser desenhada: o recorte SELECIONADO (que vira
+// a imagem final) quando existe, senão a imagem inteira. A lupa usa isso para
+// não jogar a lente para fora da área que será exportada.
+function screenshotAnnotBounds() {
+  var sel = screenshotSelectionImageRect();
+  if (sel && sel.w > 0 && sel.h > 0) return sel;
+  var img = screenshotOverlayImg();
+  if (img && img.naturalWidth > 0) {
+    return { x: 0, y: 0, w: img.naturalWidth, h: img.naturalHeight };
+  }
+  return null;
+}
+
+function screenshotPointInRect(point, rect) {
+  return !!point && !!rect && point.x >= rect.x && point.x <= rect.x + rect.w && point.y >= rect.y && point.y <= rect.y + rect.h;
+}
+
+var screenshotMagnifyFactor = 2.5;
+var screenshotMagnifyMargin = 18;
+
+// screenshotMagnifierRects calcula a lente (origem + destino) — usado tanto para
+// desenhar quanto para o hit-test da borracha.
+//
+// Posicionamento: à direita da origem quando cabe; senão à esquerda; senão abaixo;
+// por fim acima, sempre mantendo a lente dentro dos limites da anotação.
+function screenshotMagnifierRects(shape) {
+  var x = Math.min(shape.x1, shape.x2);
+  var y = Math.min(shape.y1, shape.y2);
+  var w = Math.abs(shape.x2 - shape.x1);
+  var h = Math.abs(shape.y2 - shape.y1);
+  if (w < 6 || h < 6) return null;
+  var bounds = screenshotAnnotBounds();
+  // Fator 2,5x; se a lente não couber na área anotada, reduz (mínimo 1,3x) para
+  // não sair cortada pela imagem final.
+  var factor = screenshotMagnifyFactor;
+  if (bounds && bounds.w > 0 && bounds.h > 0) {
+    var maxFactor = Math.min(bounds.w / w, bounds.h / h);
+    if (maxFactor < factor) factor = Math.max(1.3, maxFactor);
+  }
+  var dw = w * factor;
+  var dh = h * factor;
+  var bx = bounds ? bounds.x : 0;
+  var by = bounds ? bounds.y : 0;
+  var bw = bounds ? bounds.w : x + w + dw + screenshotMagnifyMargin;
+  var bh = bounds ? bounds.h : y + h + dh + screenshotMagnifyMargin;
+  var margin = screenshotMagnifyMargin;
+  var dx = x + w + margin;
+  var dy = y;
+  if (dx + dw > bx + bw) dx = x - dw - margin;
+  if (dx < bx) {
+    dx = x;
+    dy = y + h + margin;
+  }
+  if (dy + dh > by + bh) dy = y - dh - margin;
+  if (dy < by) dy = Math.min(Math.max(by, y), Math.max(by, by + bh - dh));
+  if (dx < bx) dx = bx;
+  if (dx + dw > bx + bw) dx = Math.max(bx, bx + bw - dw);
+  return { src: { x: x, y: y, w: w, h: h }, dst: { x: dx, y: dy, w: dw, h: dh } };
+}
+
+// screenshotDrawMagnifier desenha a LENTE: o recorte da tela congelada ampliado
+// (2,5x), com borda, linha conectora e um retângulo fino marcando a origem.
+function screenshotDrawMagnifier(ctx, shape, source) {
+  if (!source) return;
+  var rects = screenshotMagnifierRects(shape);
+  if (!rects) return;
+  var s = rects.src;
+  var d = rects.dst;
+  var color = shape.color || "#ff3b30";
+  var radius = Math.max(6, (shape.width || 6) * 1.5);
+  ctx.save();
+  ctx.strokeStyle = color;
+  // Linha conectora: da origem até a lente.
+  ctx.lineWidth = Math.max(1.5, (shape.width || 6) * 0.35);
+  ctx.beginPath();
+  ctx.moveTo(s.x + s.w, s.y + s.h / 2);
+  ctx.lineTo(d.x, d.y + d.h / 2);
+  ctx.stroke();
+  // Conteúdo ampliado, recortado pelo contorno da lente.
+  ctx.save();
+  screenshotRoundedRectPath(ctx, d.x, d.y, d.w, d.h, radius);
+  ctx.clip();
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(source, s.x, s.y, s.w, s.h, d.x, d.y, d.w, d.h);
+  ctx.restore();
+  // Borda da lente e marcação da área de origem.
+  screenshotRoundedRectPath(ctx, d.x, d.y, d.w, d.h, radius);
+  ctx.lineWidth = Math.max(2, (shape.width || 6) * 0.6);
+  ctx.stroke();
+  ctx.lineWidth = Math.max(1.5, (shape.width || 6) * 0.35);
+  ctx.strokeRect(s.x, s.y, s.w, s.h);
+  ctx.restore();
 }
 
 // screenshotBlurRegion aplica borrão/pixelado NA RESOLUÇÃO DA FONTE.
