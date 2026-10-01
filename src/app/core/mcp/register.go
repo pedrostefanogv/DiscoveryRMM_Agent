@@ -1016,8 +1016,8 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 		Description: "Captura a tela deste computador para diagnostico visual e devolve a imagem ao modelo (visao). " +
 			"Modos: full (todos os monitores), window (exige windowHandle de list_open_windows), focused (janela em foco), " +
 			"monitor (exige monitor), region (exige x, y, width, height) e interactive (o usuario seleciona a area/janela na tela congelada). " +
-			"A PRIMEIRA captura pedida pela IA exige autorizacao explicita do usuario: o agente abre um pedido de permissao " +
-			"no chat; depois de autorizada (nesta conversa ou sempre), a IA pode capturar de forma automatica. " +
+			"TODA captura pedida pela IA exige autorizacao explicita do usuario NESTA captura: o agente abre um pedido de " +
+			"permissao no chat a cada pedido (nao existe 'permitir sempre'). " +
 			"Nunca use para espionar: informe sempre o motivo em reason e prefira a janela especifica em vez da tela inteira.",
 		Params: []ToolParam{
 			{Name: "mode", Type: "string", Description: "full | window | focused | monitor | region | interactive", Required: true},
@@ -1038,7 +1038,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 
 	reg.Register(Tool{
 		Name: "screenshot_permission",
-		Description: "Consulta o estado da autorizacao de captura de tela (undecided, session, always ou denied) e as ultimas capturas. " +
+		Description: "Consulta o modelo de autorizacao de captura de tela: o consentimento e POR CAPTURA (a IA pergunta a cada pedido, sem 'permitir sempre'), se os pedidos da IA estao habilitados e as ultimas decisoes (autorizadas/negadas). " +
 			"Use quando capture_screenshot falhar por falta de autorizacao para orientar o usuario.",
 		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			return app.ScreenshotConsentStatusJSON()

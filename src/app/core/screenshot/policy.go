@@ -31,6 +31,10 @@ type Policy struct {
 	// lossless quando menor que PNG) ou "png" (portabilidade máxima — use se
 	// algum provedor de visão recusar WebP). Vazio = auto.
 	ImageFormat string `json:"imageFormat,omitempty"`
+	// AllowAiCapture liga/desliga os PEDIDOS de captura feitos pela IA.
+	// NÃO é autorização: com true (padrão) a IA pergunta a CADA captura; com
+	// false a tool é recusada sem abrir o diálogo.
+	AllowAiCapture *bool `json:"allowAiCapture,omitempty"`
 }
 
 // DefaultPolicy devolve a política conservadora padrão: sem bloqueios, tela
@@ -66,6 +70,15 @@ func (p Policy) WindowRequired() bool {
 		return false
 	}
 	return *p.RequireWindow
+}
+
+// AiCaptureAllowed indica se a IA pode PEDIR capturas. Default true — e mesmo
+// habilitado, cada pedido exige autorização individual do usuário.
+func (p Policy) AiCaptureAllowed() bool {
+	if p.AllowAiCapture == nil {
+		return true
+	}
+	return *p.AllowAiCapture
 }
 
 // HideWindowOnCapture indica se a janela do agente deve ser ocultada durante a
@@ -157,9 +170,11 @@ func (p Policy) Normalize() Policy {
 	full := out.FullScreenAllowed()
 	requireWindow := out.WindowRequired()
 	hideWindow := out.HideWindowOnCapture()
+	allowAi := out.AiCaptureAllowed()
 	out.AllowFullScreen = &full
 	out.RequireWindow = &requireWindow
 	out.HideAgentWindow = &hideWindow
+	out.AllowAiCapture = &allowAi
 	out.MaxCapturesPerWindow = out.LimitMax()
 	out.WindowMinutes = int(out.LimitWindow().Minutes())
 	out.ImageFormat = NormalizeFormat(out.ImageFormat)

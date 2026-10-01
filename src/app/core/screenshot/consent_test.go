@@ -14,17 +14,19 @@ func TestClassifyConsentAnswer(t *testing.T) {
 		answer string
 		want   Decision
 	}{
-		{"Permitir nesta conversa", DecisionSession},
-		{"Permitir sempre", DecisionAlways},
+		{"Permitir esta captura", DecisionGranted},
 		{"Negar", DecisionDenied},
-		{"sim", DecisionSession},
-		{"pode", DecisionSession},
+		{"sim", DecisionGranted},
+		{"pode", DecisionGranted},
+		{"Allow this capture", DecisionGranted},
+		{"Deny", DecisionDenied},
 		{"não", DecisionDenied},
 		{"nao", DecisionDenied},
 		{"Não autorizo", DecisionDenied},
 		{"", DecisionDenied},
 		{"talvez", DecisionDenied},
-		{"SEMPRE", DecisionAlways},
+		// "sempre" NÃO cria autorização permanente — vale só para esta captura.
+		{"Permitir sempre", DecisionGranted},
 	}
 	for _, tc := range cases {
 		if got := ClassifyConsentAnswer(tc.answer); got != tc.want {
@@ -33,43 +35,80 @@ func TestClassifyConsentAnswer(t *testing.T) {
 	}
 }
 
+// Requisito de produto (2026-10-01): a IA pergunta TODAS as vezes, mesmo que a
+// captura anterior tenha sido autorizada.
+func TestConsentAsksEveryTime(t *testing.T) {
+	var calls int32
+	prompt := func(ctx context.Context, question string, options []string) (string, error) {
+		atomic.AddInt32(&calls, 1)
+		if len(options) != 2 {
+			t.Errorf("opcoes = %v, want 2 (permitir/negar)", options)
+		}
+		return "Permitir esta captura", nil
+	}
+	m := NewConsentManager(prompt, nil, nil)
+	ctx := context.Background()
+
+	for i := 0; i < 3; i++ {
+		decision, err := m.Ensure(ctx, "diagnostico")
+		if err != nil || decision != DecisionGranted {
+			t.Fatalf("Ensure #%d = (%q, %v), want (granted, nil)", i+1, decision, err)
+		}
+	}
+	if calls != 3 {
+		t.Fatalf("prompt chamado %d vezes, want 3 (uma por captura)", calls)
+	}
+}
+
+// Negar vale só para a captura em questão: o próximo pedido pergunta de novo.
+func TestConsentDenialIsPerCapture(t *testing.T) {
+	var calls int32
+	prompt := func(ctx context.Context, question string, options []string) (string, error) {
+		atomic.AddInt32(&calls, 1)
+		if atomic.LoadInt32(&calls) == 1 {
+			return "Negar", nil
+		}
+		return "Permitir esta captura", nil
+	}
+	m := NewConsentManager(prompt, nil, nil)
+	ctx := context.Background()
+
+	if _, err := m.Ensure(ctx, ""); err == nil {
+		t.Fatal("esperava erro quando o usuario nega")
+	}
+	decision, err := m.Ensure(ctx, "")
+	if err != nil || decision != DecisionGranted {
+		t.Fatalf("segundo pedido = (%q, %v), want (granted, nil) — a negativa nao pode ser permanente", decision, err)
+	}
+	if calls != 2 {
+		t.Fatalf("prompt chamado %d vezes, want 2", calls)
+	}
+}
+
 func TestConsentDialogLocalized(t *testing.T) {
 	pt := BuildConsentQuestion("diagnóstico de erro", "pt-BR")
-	if !strings.Contains(pt, "Permite a captura?") || !strings.Contains(pt, "diagnóstico de erro") {
+	if !strings.Contains(pt, "Permite esta captura?") || !strings.Contains(pt, "diagnóstico de erro") {
 		t.Fatalf("pergunta pt inesperada: %q", pt)
 	}
 	en := BuildConsentQuestion("error diagnosis", "en-US")
-	if !strings.Contains(en, "Allow the capture?") {
+	if !strings.Contains(en, "Allow this capture?") {
 		t.Fatalf("pergunta en inesperada: %q", en)
 	}
 	es := BuildConsentQuestion("diagnóstico", "es-ES")
-	if !strings.Contains(es, "Permitir la captura?") {
+	if !strings.Contains(es, "Permitir esta captura?") {
 		t.Fatalf("pergunta es inesperada: %q", es)
 	}
-	if got := ConsentOptions("en-US"); len(got) != 3 || got[0] != "Allow this conversation" {
+	if got := ConsentOptions("en-US"); len(got) != 2 || got[0] != "Allow this capture" || got[1] != "Deny" {
 		t.Fatalf("opcoes en inesperadas: %v", got)
 	}
-	if got := ConsentOptions("es-ES"); got[1] != "Permitir siempre" {
+	if got := ConsentOptions("es-ES"); got[0] != "Permitir esta captura" || got[1] != "Negar" {
 		t.Fatalf("opcoes es inesperadas: %v", got)
 	}
-	// Locale desconhecido cai para inglês; vazio mantém pt-BR (compat).
 	if got := ConsentLanguage("de-DE"); got != "en" {
 		t.Fatalf("ConsentLanguage(de-DE) = %q, want en", got)
 	}
 	if got := ConsentLanguage(""); got != "pt" {
 		t.Fatalf("ConsentLanguage(vazio) = %q, want pt", got)
-	}
-	if ClassifyConsentAnswer("Allow this conversation") != DecisionSession {
-		t.Fatal("resposta en deveria ser session")
-	}
-	if ClassifyConsentAnswer("Always allow") != DecisionAlways {
-		t.Fatal("resposta en deveria ser always")
-	}
-	if ClassifyConsentAnswer("Permitir siempre") != DecisionAlways {
-		t.Fatal("resposta es deberia ser always")
-	}
-	if ClassifyConsentAnswer("Deny") != DecisionDenied {
-		t.Fatal("resposta en deveria ser denied")
 	}
 }
 
@@ -77,120 +116,35 @@ func TestConsentUsesPreferredLocale(t *testing.T) {
 	var asked string
 	prompt := func(ctx context.Context, question string, options []string) (string, error) {
 		asked = question
-		return "Allow this conversation", nil
+		return "Allow this capture", nil
 	}
-	m := NewConsentManager(prompt, Persist{}, nil, func() string { return "en-US" })
+	m := NewConsentManager(prompt, nil, func() string { return "en-US" })
 	if _, err := m.Ensure(context.Background(), "disk error"); err != nil {
 		t.Fatalf("Ensure falhou: %v", err)
 	}
-	if !strings.Contains(asked, "Allow the capture?") {
+	if !strings.Contains(asked, "Allow this capture?") {
 		t.Fatalf("pergunta deveria estar em inglês: %q", asked)
 	}
 }
 
-func TestConsentEnsureAsksOncePerSession(t *testing.T) {
+// Concorrência: cada pedido pergunta, mas NUNCA dois diálogos ao mesmo tempo.
+func TestConsentConcurrentEnsureSerialized(t *testing.T) {
 	var calls int32
+	var inFlight int32
+	var maxInFlight int32
 	prompt := func(ctx context.Context, question string, options []string) (string, error) {
 		atomic.AddInt32(&calls, 1)
-		if len(options) < 2 {
-			t.Errorf("opcoes insuficientes: %v", options)
+		cur := atomic.AddInt32(&inFlight, 1)
+		for {
+			max := atomic.LoadInt32(&maxInFlight)
+			if cur <= max || atomic.CompareAndSwapInt32(&maxInFlight, max, cur) {
+				break
+			}
 		}
-		return "Permitir nesta conversa", nil
+		atomic.AddInt32(&inFlight, -1)
+		return "Permitir esta captura", nil
 	}
-	m := NewConsentManager(prompt, Persist{}, nil, nil)
-	ctx := context.Background()
-
-	d, err := m.Ensure(ctx, "diagnostico de erro")
-	if err != nil || d != DecisionSession {
-		t.Fatalf("Ensure = (%q, %v), want (session, nil)", d, err)
-	}
-	if !m.Authorized() {
-		t.Fatal("esperava autorizado apos consentimento")
-	}
-	if calls != 1 {
-		t.Fatalf("prompt chamado %d vezes, want 1", calls)
-	}
-	// Segunda captura não deve reabrir o diálogo.
-	if _, err := m.Ensure(ctx, "outra captura"); err != nil {
-		t.Fatalf("segundo Ensure falhou: %v", err)
-	}
-	if calls != 1 {
-		t.Fatalf("prompt chamado %d vezes apos segunda captura, want 1", calls)
-	}
-}
-
-func TestConsentDeniedBlocksAndRevokeReasks(t *testing.T) {
-	prompt := func(ctx context.Context, question string, options []string) (string, error) {
-		return "Negar", nil
-	}
-	m := NewConsentManager(prompt, Persist{}, nil, nil)
-	if _, err := m.Ensure(context.Background(), ""); err == nil {
-		t.Fatal("esperava erro quando o usuario nega")
-	}
-	if m.Status() != DecisionDenied {
-		t.Fatalf("status = %q, want denied", m.Status())
-	}
-	if _, err := m.Ensure(context.Background(), ""); err == nil {
-		t.Fatal("captura deve continuar bloqueada apos negar")
-	}
-	// Autorizar manualmente pela UI destrava.
-	if err := m.Set(DecisionSession); err != nil {
-		t.Fatalf("Set falhou: %v", err)
-	}
-	if _, err := m.Ensure(context.Background(), ""); err != nil {
-		t.Fatalf("Ensure apos Set falhou: %v", err)
-	}
-}
-
-func TestConsentAlwaysPersists(t *testing.T) {
-	persisted := DecisionUndecided
-	persist := Persist{
-		Load: func() (Decision, error) { return persisted, nil },
-		Save: func(d Decision) error { persisted = d; return nil },
-	}
-	prompt := func(ctx context.Context, question string, options []string) (string, error) {
-		return "Permitir sempre", nil
-	}
-	m := NewConsentManager(prompt, persist, nil, nil)
-	if _, err := m.Ensure(context.Background(), ""); err != nil {
-		t.Fatalf("Ensure falhou: %v", err)
-	}
-	if persisted != DecisionAlways {
-		t.Fatalf("persistido = %q, want always", persisted)
-	}
-
-	// Reinício do agente: carrega a decisão persistida sem novo diálogo.
-	var calls int32
-	m2 := NewConsentManager(func(ctx context.Context, q string, o []string) (string, error) {
-		atomic.AddInt32(&calls, 1)
-		return "", fmt.Errorf("nao deveria perguntar")
-	}, persist, nil, nil)
-	if !m2.Authorized() {
-		t.Fatal("esperava autorizacao persistida apos restart")
-	}
-	if _, err := m2.Ensure(context.Background(), ""); err != nil {
-		t.Fatalf("Ensure apos restart falhou: %v", err)
-	}
-	if calls != 0 {
-		t.Fatalf("prompt chamado %d vezes, want 0", calls)
-	}
-
-	// Revogar limpa a persistencia.
-	if err := m2.Revoke(); err != nil {
-		t.Fatalf("Revoke falhou: %v", err)
-	}
-	if persisted != DecisionUndecided {
-		t.Fatalf("persistido apos revogar = %q, want undecided", persisted)
-	}
-}
-
-func TestConsentConcurrentEnsureSinglePrompt(t *testing.T) {
-	var calls int32
-	prompt := func(ctx context.Context, question string, options []string) (string, error) {
-		atomic.AddInt32(&calls, 1)
-		return "Permitir nesta conversa", nil
-	}
-	m := NewConsentManager(prompt, Persist{}, nil, nil)
+	m := NewConsentManager(prompt, nil, nil)
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
 		wg.Add(1)
@@ -200,16 +154,30 @@ func TestConsentConcurrentEnsureSinglePrompt(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-	if calls != 1 {
-		t.Fatalf("prompt chamado %d vezes, want 1 (serializacao)", calls)
+	if calls != 8 {
+		t.Fatalf("prompt chamado %d vezes, want 8 (um por pedido)", calls)
 	}
-	if !m.Authorized() {
-		t.Fatal("esperava autorizado")
+	if maxInFlight != 1 {
+		t.Fatalf("dialogos simultaneos = %d, want 1 (promptMu)", maxInFlight)
+	}
+}
+
+// Ao mudar para miniaturas WebP, o MIME precisa acompanhar a entrada de
+// auditoria — o painel de privacidade montava "data:image/jpeg" fixo e a
+// miniatura saía quebrada.
+func TestConsentAuditKeepsThumbnailMime(t *testing.T) {
+	m := NewConsentManager(nil, nil, nil)
+	entry := m.RecordCapture(AuditEntry{Mode: "window", Thumbnail: []byte{1, 2, 3}, ThumbnailMIME: "image/webp"})
+	if !entry.HasThumbnail {
+		t.Fatal("HasThumbnail deveria ser true com miniatura")
+	}
+	if entry.ThumbnailMIME != "image/webp" {
+		t.Fatalf("ThumbnailMIME = %q, want image/webp", entry.ThumbnailMIME)
 	}
 }
 
 func TestConsentAuditRing(t *testing.T) {
-	m := NewConsentManager(nil, Persist{}, nil, nil)
+	m := NewConsentManager(nil, nil, nil)
 	for i := 0; i < auditMax+10; i++ {
 		m.RecordCapture(AuditEntry{Mode: "full", Detail: fmt.Sprintf("captura %d", i)})
 	}
@@ -219,5 +187,8 @@ func TestConsentAuditRing(t *testing.T) {
 	}
 	if audit[len(audit)-1].Detail != fmt.Sprintf("captura %d", auditMax+9) {
 		t.Fatalf("ultima entrada = %q", audit[len(audit)-1].Detail)
+	}
+	if audit[len(audit)-1].ID == 0 {
+		t.Fatal("entrada de auditoria sem ID")
 	}
 }

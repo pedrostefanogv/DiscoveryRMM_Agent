@@ -23,8 +23,9 @@ import (
 // seleção, tools MCP e trilha de auditoria.
 
 const (
-	screenshotConsentFile = "screenshot_consent.json"
-	screenshotPolicyFile  = "screenshot_policy.json"
+	// screenshot_consent.json é legado ("permitir sempre") e é IGNORADO: o
+	// consentimento passou a ser por captura (ver core/screenshot/consent.go).
+	screenshotPolicyFile = "screenshot_policy.json"
 	// screenshotAuditThumbLimit limita quantas miniaturas a UI de privacidade
 	// recebe de uma vez (payload do binding).
 	screenshotAuditThumbLimit = 12
@@ -63,7 +64,6 @@ func (a *App) initScreenshotService() {
 			opts, _ := json.Marshal(options)
 			return a.AskUserChatWithContext(ctx, question, string(opts), "false")
 		},
-		screenshot.Persist{Load: a.loadScreenshotConsent, Save: a.saveScreenshotConsent},
 		func(line string) { a.Logs.Append(line) },
 		applocale.DetectPreferredLocale,
 	)
@@ -307,55 +307,10 @@ func (a *App) recordScreenshotBudget(now time.Time) {
 	limiter.Record(now)
 }
 
-func (a *App) screenshotConsentPaths() []string {
-	return platform.ChatConfigPathCandidates(screenshotConsentFile)
-}
-
-func (a *App) loadScreenshotConsent() (screenshot.Decision, error) {
-	for _, path := range a.screenshotConsentPaths() {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			continue
-		}
-		var cfg struct {
-			Decision string `json:"decision"`
-		}
-		if err := json.Unmarshal(data, &cfg); err != nil {
-			continue
-		}
-		if cfg.Decision != "" {
-			return screenshot.Decision(cfg.Decision), nil
-		}
-	}
-	return screenshot.DecisionUndecided, nil
-}
-
-func (a *App) saveScreenshotConsent(d screenshot.Decision) error {
-	data, err := json.MarshalIndent(map[string]string{"decision": string(d)}, "", "  ")
-	if err != nil {
-		return err
-	}
-	var lastErr error
-	for _, path := range a.screenshotConsentPaths() {
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			lastErr = err
-			continue
-		}
-		if err := os.WriteFile(path, data, 0o600); err != nil {
-			lastErr = err
-			continue
-		}
-		if platform.IsElevated() {
-			_ = platform.HardenSecretFileACL(path)
-		}
-		return nil
-	}
-	if lastErr == nil {
-		lastErr = fmt.Errorf("nenhum caminho valido para persistir o consentimento")
-	}
-	return lastErr
-}
-
+// NOTA (2026-10-01): o consentimento da captura pela IA passou a ser POR
+// CAPTURA — o usuário é perguntado TODAS as vezes. Por isso não há mais
+// leitura/gravação de consentimento persistido ("permitir sempre" deixou de
+// existir) e o arquivo legado screenshot_consent.json é ignorado.
 // ── Bindings de UI / tools MCP ────────────────────────────────────────────
 
 // ListOpenWindowsJSON implementa AppBridge: janelas visíveis + monitores,
@@ -387,13 +342,14 @@ func (a *App) ListOpenWindowsJSON(includeUntitled bool) (json.RawMessage, error)
 	})
 }
 
-// ScreenshotConsentStatusJSON implementa AppBridge: estado de autorização.
+// ScreenshotConsentStatusJSON implementa AppBridge: estado da política de
+// captura. Não existe "autorizado": a IA SEMPRE pergunta antes de capturar.
 func (a *App) ScreenshotConsentStatusJSON() (json.RawMessage, error) {
 	a.initScreenshotService()
 	return json.Marshal(map[string]any{
-		"decision":   string(a.screenshotConsent.Status()),
-		"authorized": a.screenshotConsent.Authorized(),
-		"audit":      a.screenshotConsent.Audit(),
+		"perCaptureConsent": true,
+		"aiCaptureEnabled":  a.currentScreenshotPolicy().AiCaptureAllowed(),
+		"audit":             a.screenshotConsent.Audit(),
 	})
 }
 
@@ -407,11 +363,11 @@ func (a *App) CaptureScreenshotForTool(ctx context.Context, args map[string]any)
 	if ctx == nil {
 		ctx = a.ctx
 	}
-	if _, err := a.screenshotConsent.Ensure(ctx, reason); err != nil {
-		return nil, err
-	}
-	// Política local (blocklist/modo) e cota de capturas antes de executar.
+	// Política primeiro: se os pedidos da IA estão desabilitados, nem pergunta.
 	policy := a.currentScreenshotPolicy()
+	if !policy.AiCaptureAllowed() {
+		return nil, fmt.Errorf("captura de tela pela IA desabilitada pela politica de privacidade")
+	}
 	req.Format = screenshot.NormalizeFormat(policy.ImageFormat)
 	if err := a.applyScreenshotPolicy(&req, policy); err != nil {
 		return nil, err
@@ -419,6 +375,21 @@ func (a *App) CaptureScreenshotForTool(ctx context.Context, args map[string]any)
 	now := time.Now()
 	if err := a.checkScreenshotBudget(now); err != nil {
 		return nil, err
+	}
+	// AUTORIZAÇÃO POR CAPTURA: pergunta SEMPRE (não existe "permitir sempre").
+	// A pergunta inclui o ALVO (janela/região/monitores) para consentimento
+	// informado — o motivo escrito pela IA não basta para o usuário decidir.
+	consentReason := reason
+	if target := a.screenshotTargetLabel(req); target != "" {
+		if strings.TrimSpace(consentReason) != "" {
+			consentReason += " — alvo: " + target
+		} else {
+			consentReason = "alvo: " + target
+		}
+	}
+	if decision, authErr := a.screenshotConsent.Ensure(ctx, consentReason); authErr != nil {
+		a.recordScreenshotConsentDenied(decision, req, consentReason)
+		return nil, authErr
 	}
 	result, err := a.runScreenshotRequest(ctx, req, reason, true)
 	if err != nil {
@@ -470,6 +441,59 @@ func toolTarget(res *screenshot.CaptureResult) map[string]any {
 	}
 }
 
+// screenshotTargetLabel descreve, em linguagem do usuário, o que a captura vai
+// abranger. É anexado ao pedido de autorização (consentimento informado).
+func (a *App) screenshotTargetLabel(req screenshot.Request) string {
+	switch strings.ToLower(strings.TrimSpace(req.Mode)) {
+	case screenshot.ModeFull:
+		return "tela inteira (todos os monitores)"
+	case screenshot.ModeMonitor:
+		return fmt.Sprintf("monitor %d", req.MonitorIndex)
+	case screenshot.ModeRegion:
+		return fmt.Sprintf("regiao de %dx%d pixels", req.Width, req.Height)
+	case screenshot.ModeWindow, screenshot.ModeFocused:
+		if wins, err := screenshot.ListWindowsWithOptions(true); err == nil {
+			for _, w := range wins {
+				if w.Handle != req.WindowHandle {
+					continue
+				}
+				if strings.TrimSpace(w.Title) != "" {
+					return fmt.Sprintf("janela %q (%s)", w.Title, w.ProcessName)
+				}
+				return "janela " + w.ProcessName
+			}
+		}
+		return "janela selecionada"
+	case screenshot.ModeInteractive:
+		return "area ou janela que VOCE escolher na tela congelada"
+	}
+	return ""
+}
+
+// recordScreenshotConsentDenied registra na auditoria um pedido da IA negado
+// pelo usuário (rastreabilidade: a IA pediu, o usuário recusou).
+func (a *App) recordScreenshotConsentDenied(decision screenshot.Decision, req screenshot.Request, reason string) {
+	if a.screenshotConsent == nil {
+		return
+	}
+	state := "negado"
+	if decision == screenshot.DecisionUndecided {
+		// Pergunta cancelada (ex.: botão Parar) ou diálogo indisponível.
+		state = "cancelado"
+	}
+	detail := fmt.Sprintf("pedido da IA %s (modo %s)", state, req.Mode)
+	if r := strings.TrimSpace(reason); r != "" {
+		detail += " | motivo: " + r
+	}
+	a.screenshotConsent.RecordCapture(screenshot.AuditEntry{
+		Decision: decision,
+		Mode:     req.Mode,
+		Detail:   detail,
+		ByLLM:    true,
+	})
+	a.Logs.Append("[screenshot] " + detail)
+}
+
 // recordScreenshot registra a captura na auditoria, guarda a imagem cheia em
 // memória (lightbox) e devolve o ID da entrada — 0 quando não registrada.
 func (a *App) recordScreenshot(res *screenshot.CaptureResult, reason string, byLLM bool) int64 {
@@ -481,12 +505,14 @@ func (a *App) recordScreenshot(res *screenshot.CaptureResult, reason string, byL
 		detail += " | motivo: " + r
 	}
 	entry := a.screenshotConsent.RecordCapture(screenshot.AuditEntry{
-		Decision:  a.screenshotConsent.Status(),
-		Mode:      res.Mode,
-		Detail:    detail,
-		ByLLM:     byLLM,
-		Bytes:     len(res.Data),
-		Thumbnail: res.Thumbnail,
+		// Capturas só chegam aqui depois de autorizadas para ESTA captura.
+		Decision:      screenshot.DecisionGranted,
+		Mode:          res.Mode,
+		Detail:        detail,
+		ByLLM:         byLLM,
+		Bytes:         len(res.Data),
+		Thumbnail:     res.Thumbnail,
+		ThumbnailMIME: res.ThumbnailMIME,
 	})
 	a.storeScreenshotImage(entry.ID, res)
 	a.Logs.Append("[screenshot] " + detail)
@@ -537,10 +563,10 @@ const (
 	screenshotImageStoreLimit = 8
 	// annotatedImageMaxDim limita o lado maior da imagem anotada recebida do
 	// overlay (o canvas já entrega reduzido; aqui é a última defesa).
-	annotatedImageMaxDim = 2560
+	annotatedImageMaxDim = 3840
 	// overlayImageMaxDim é o lado maior da imagem congelada exibida no overlay
 	// (fundo da seleção/anotação).
-	overlayImageMaxDim = 3200
+	overlayImageMaxDim = 3840
 )
 
 // hideAgentWindowForCapture oculta a janela do agente (se a política permitir e
@@ -747,10 +773,26 @@ func (a *App) GetScreenshotPermission() (string, error) {
 	return string(payload), nil
 }
 
-// SetScreenshotPermission altera a autorização (UI: conceder/revogar).
-func (a *App) SetScreenshotPermission(decision string) error {
+// SetScreenshotAiCaptureEnabled liga/desliga os PEDIDOS de captura da IA.
+// Não é uma autorização: com o recurso ligado a IA continua perguntando a cada
+// captura; desligado, a tool recusa sem sequer abrir o diálogo.
+func (a *App) SetScreenshotAiCaptureEnabled(enabled bool) error {
 	a.initScreenshotService()
-	return a.screenshotConsent.Set(screenshot.Decision(strings.ToLower(strings.TrimSpace(decision))))
+	policy := a.currentScreenshotPolicy()
+	policy.AllowAiCapture = &enabled
+	policy = policy.Normalize()
+	if err := a.saveScreenshotPolicyFile(policy); err != nil {
+		return err
+	}
+	a.screenshotMu.Lock()
+	a.screenshotPolicy = policy
+	limiter := a.screenshotLimiter
+	a.screenshotMu.Unlock()
+	// Mantém o limitador coerente com a política persistida (mesma regra de
+	// SaveScreenshotPolicy), já que Normalize pode reajustar a cota.
+	limiter.Reconfigure(policy.LimitMax(), policy.LimitWindow())
+	a.Logs.Append(fmt.Sprintf("[screenshot] pedidos de captura da IA habilitados=%t", enabled))
+	return nil
 }
 
 // screenshotAuditView é um item da auditoria exibido na UI de privacidade.
@@ -783,17 +825,23 @@ func (a *App) GetScreenshotAuditPanel() (string, error) {
 			Mode: entry.Mode, Detail: entry.Detail, ByLLM: entry.ByLLM, Bytes: entry.Bytes,
 		}
 		if len(entry.Thumbnail) > 0 {
-			view.Thumbnail = "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(entry.Thumbnail)
+			// MIME vem do encoder (WebP quando cgo disponível); o default jpeg
+			// cobre entradas antigas/legadas sem o campo.
+			mime := strings.TrimSpace(entry.ThumbnailMIME)
+			if mime == "" {
+				mime = "image/jpeg"
+			}
+			view.Thumbnail = "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(entry.Thumbnail)
 		}
 		views = append(views, view)
 	}
 
 	now := time.Now()
 	body, err := json.Marshal(map[string]any{
-		"decision":   string(a.screenshotConsent.Status()),
-		"authorized": a.screenshotConsent.Authorized(),
-		"locale":     applocale.DetectPreferredLocale(),
-		"policy":     policy.Normalize(),
+		"perCaptureConsent": true,
+		"aiCaptureEnabled":  policy.AiCaptureAllowed(),
+		"locale":            applocale.DetectPreferredLocale(),
+		"policy":            policy.Normalize(),
 		"usage": map[string]any{
 			"used":          limiter.Count(now),
 			"max":           limiter.Max(),
@@ -856,7 +904,7 @@ func (a *App) openScreenshotOverlay(reason string, byLLM bool) (*screenshotOverl
 	}
 	// Qualidade alta: a tela congelada é o que o usuário lê para escolher a
 	// área e o fundo da imagem anotada enviada ao LLM.
-	overlayBytes, mime, err := screenshot.EncodeFrameFormat(frame, 92, overlayImageMaxDim, a.screenshotImageFormat())
+	overlayBytes, mime, err := screenshot.EncodeOverlayFrame(frame, overlayImageMaxDim)
 	if err != nil {
 		return nil, err
 	}

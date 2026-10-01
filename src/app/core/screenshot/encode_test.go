@@ -37,6 +37,28 @@ func TestEncodeFrameAutoDefaultsToWebP(t *testing.T) {
 	}
 }
 
+func TestEncodeFrameAutoUsesPNGForLargeFrames(t *testing.T) {
+	if !webpAvailable() {
+		t.Skip("webp indisponivel (cgo desabilitado)")
+	}
+	// Acima do orçamento de pixels do WebP lossless o modo auto usa PNG
+	// (lossless e ~10x mais rápido).
+	f := solidFrame(3000, 1000, 28, 30, 36, 255)
+	if f.Width*f.Height <= webpLosslessPixelBudget {
+		t.Fatalf("frame de teste (%d px) deveria exceder o orcamento WebP (%d px)", f.Width*f.Height, webpLosslessPixelBudget)
+	}
+	data, mime, err := EncodeFrame(f, 90, 0)
+	if err != nil {
+		t.Fatalf("EncodeFrame falhou: %v", err)
+	}
+	if mime != "image/png" {
+		t.Fatalf("modo auto deveria usar PNG em frame grande, got %q", mime)
+	}
+	if _, _, err := image.Decode(bytes.NewReader(data)); err != nil {
+		t.Fatalf("png nao decodifica: %v", err)
+	}
+}
+
 func TestEncodeFrameFormatForcesPNG(t *testing.T) {
 	f := noiseFrame(400, 300)
 	data, mime, err := EncodeFrameFormat(f, 90, 0, FormatPNG)
@@ -57,7 +79,8 @@ func TestNormalizeFormat(t *testing.T) {
 		"auto":  FormatAuto,
 		"PNG":   FormatPNG,
 		" png ": FormatPNG,
-		"webp":  FormatAuto,
+		"webp":  FormatWebP,
+		"WEBP":  FormatWebP,
 		"jpg":   FormatAuto,
 	}
 	for in, want := range cases {

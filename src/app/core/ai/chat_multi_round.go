@@ -282,7 +282,13 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 			MessageLen: len(req.Message),
 		})
 
-		currentSessionID, err = s.executeRound(streamCtx, cfg, req, round, onStatus, onToken, &pendingCalls, onLoopProgress, a2uiCb)
+		roundSessionID, roundErr := s.executeRound(streamCtx, cfg, req, round, onStatus, onToken, &pendingCalls, onLoopProgress, a2uiCb)
+		// BUG (turno real de 2026-10-01 12:01Z): em erro o executeRound devolve
+		// sessionID VAZIO; sobrescrever currentSessionID zerava a sessão e o
+		// resgate (B3) era rejeitado com "SessionId requerido em multi-round",
+		// derrubando o turno para o sync e PERDENDO as capturas já feitas.
+		currentSessionID = resolveRoundSessionID(currentSessionID, roundSessionID, sessionID)
+		err = roundErr
 		roundElapsed := time.Since(roundStart)
 
 		if err == nil {
@@ -305,7 +311,7 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 			// tool_results) em vez de degradar direto para o sync — que não
 			// suporta function calling e perderia todo o contexto das tools.
 			// O fallback sync fica apenas para falha no round 0.
-			if round > 0 && !rescueAttempted && len(undeliveredResults) > 0 {
+			if round > 0 && !rescueAttempted && len(undeliveredResults) > 0 && strings.TrimSpace(currentSessionID) != "" {
 				rescueAttempted = true
 				s.logChatEntry(ChatLogEntry{
 					Type:      "round_error_rescue",
@@ -339,6 +345,22 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 			// está na sessão do servidor). Envia string vazia.
 			// O fallback sync só roda para falha no round 0 (ou resgate
 			// indisponível) — partial tokens já persistidos pelo parser SSE.
+			// Rounds > 0 NÃO degradam para o sync: o sync não suporta function
+			// calling e descartaria tools/capturas já executadas — o LLM respondia
+			// como se não tivesse visto nada (exatamente o turno de
+			// 2026-10-01 12:01Z, em que 2 capturas de janela foram perdidas).
+			// Devolve erro claro para o usuário tentar de novo; o texto parcial
+			// já transmitido permanece na bolha.
+			if round > 0 {
+				s.logChatEntry(ChatLogEntry{
+					Type:      "round_failed_no_sync",
+					Method:    "multi_round",
+					SessionID: currentSessionID,
+					Round:     round,
+					Error:     err.Error(),
+				})
+				return "", fmt.Errorf("não consegui concluir a análise das ferramentas no round %d (%v) — as capturas/resultados não foram descartados no servidor; tente novamente", round+1, err)
+			}
 			fallbackMsg := userMessage
 			if hasA2uiAction {
 				fallbackMsg = ""
@@ -979,6 +1001,24 @@ func (s *Service) parseMultiRoundSSEWithProgress(body io.Reader, onToken func(st
 // round 1 = 90s, rounds 2+ = 130s. Reduz a espera do usuário quando o
 // servidor está lento e dá folga extra para tool chains longas em rounds
 // intermediários.
+// resolveRoundSessionID decide o sessionId a usar depois de um round.
+//
+// Regra: um id devolvido válido vence; se o round falhou e devolveu vazio,
+// MANTÉM o id anterior (o servidor já conhece a sessão) e só usa o fallback do
+// turno quando não havia nenhum. Sem isso, o resgate de tool results (B3)
+// enviava sessionId vazio e o servidor respondia
+// "SessionId requerido em multi-round" — o turno caía para o sync e as
+// capturas eram descartadas (regressão real de 2026-10-01 12:01Z).
+func resolveRoundSessionID(previous, returned, fallback string) string {
+	if strings.TrimSpace(returned) != "" {
+		return returned
+	}
+	if strings.TrimSpace(previous) != "" {
+		return previous
+	}
+	return fallback
+}
+
 func roundTimeout(round int) time.Duration {
 	switch round {
 	case 0:

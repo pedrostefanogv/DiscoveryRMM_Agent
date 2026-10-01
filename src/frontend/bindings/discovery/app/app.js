@@ -1915,7 +1915,8 @@ export function SaveScreenshotPolicy(policyJSON) {
 }
 
 /**
- * ScreenshotConsentStatusJSON implementa AppBridge: estado de autorização.
+ * ScreenshotConsentStatusJSON implementa AppBridge: estado da política de
+ * captura. Não existe "autorizado": a IA SEMPRE pergunta antes de capturar.
  * @returns {$CancellablePromise<json$0.RawMessage>}
  */
 export function ScreenshotConsentStatusJSON() {
@@ -2023,12 +2024,14 @@ export function SetP2PConfig(cfg) {
 }
 
 /**
- * SetScreenshotPermission altera a autorização (UI: conceder/revogar).
- * @param {string} decision
+ * SetScreenshotAiCaptureEnabled liga/desliga os PEDIDOS de captura da IA.
+ * Não é uma autorização: com o recurso ligado a IA continua perguntando a cada
+ * captura; desligado, a tool recusa sem sequer abrir o diálogo.
+ * @param {boolean} enabled
  * @returns {$CancellablePromise<void>}
  */
-export function SetScreenshotPermission(decision) {
-    return $Call.ByID(620718449, decision);
+export function SetScreenshotAiCaptureEnabled(enabled) {
+    return $Call.ByID(1202833915, enabled);
 }
 
 /**

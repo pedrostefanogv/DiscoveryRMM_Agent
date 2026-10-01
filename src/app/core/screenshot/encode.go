@@ -13,19 +13,22 @@ import (
 
 const (
 	// defaultMaxDimension é o teto do lado maior da imagem enviada ao LLM.
-	// 1600 px deixava textos/legendas ilegíveis; 2560 preserva leitura de UI e
-	// ainda fica dentro do orçamento de visão da maioria dos modelos.
-	defaultMaxDimension = 2560
+	// 3840 = resolução NATIVA até 4K: telas 1440p/1600p/4K não são reduzidas
+	// (textos pequenos continuam legíveis). Só desktops maiores que 4K encolhem.
+	defaultMaxDimension = 3840
 	// defaultJPEGQuality só é usado quando o PNG passa de maxPNGBytes (print
 	// fotográfico/4K). 90 evita o ringing que borrava texto no JPEG 80.
 	defaultJPEGQuality = 90
 	// maxPNGBytes acima do qual a imagem é reencodada em JPEG. PNG é lossless —
 	// é o formato preferido para capturas de UI/texto; o teto existe apenas para
 	// não estourar o limite de payload do servidor (~6 MiB de base64).
-	maxPNGBytes = 2_900_000
+	maxPNGBytes = 4_200_000
 	// Miniatura exibida no chat (o que a IA viu).
 	thumbnailMaxDimension = 480
 	thumbnailQuality      = 60
+	// overlayWebPQuality é a qualidade lossy da tela congelada do overlay
+	// (imagem intermediária de exibição).
+	overlayWebPQuality = 95
 )
 
 // CropFrame recorta uma sub-região de um frame BGRA. Retorna um frame novo
@@ -202,14 +205,29 @@ func EncodePNG(f *screen.Frame) ([]byte, error) {
 const (
 	FormatAuto = "auto"
 	FormatPNG  = "png"
+	// FormatWebP força WebP lossless sempre que disponível (qualidade idêntica ao
+	// PNG, ~33% menor — porém o encoder lossless do libwebp é lento em imagens
+	// grandes: ~2 s em 3440×1440).
+	FormatWebP = "webp"
 )
+
+// webpLosslessPixelBudget é o limite de pixels em que o WebP lossless compensa
+// em TEMPO: abaixo dele (janelas/diálogos, até ~1600×900) o encode fica rápido
+// (~0,2–0,4 s) e economiza ~1/3 dos bytes; acima (tela inteira 1080p/1440p/4K) o
+// libwebp leva segundos para economizar pouco, então o modo automático usa PNG
+// (lossless e ~10x mais rápido), mantendo a qualidade idêntica.
+const webpLosslessPixelBudget = 1_500_000
 
 // NormalizeFormat reduz o valor recebido a um formato conhecido.
 func NormalizeFormat(format string) string {
-	if strings.EqualFold(strings.TrimSpace(format), FormatPNG) {
+	switch strings.ToLower(strings.TrimSpace(format)) {
+	case FormatPNG:
 		return FormatPNG
+	case FormatWebP:
+		return FormatWebP
+	default:
+		return FormatAuto
 	}
-	return FormatAuto
 }
 
 // EncodeFrame é o atalho para o formato automático (WebP quando compensa).
@@ -217,15 +235,44 @@ func EncodeFrame(f *screen.Frame, quality, maxDim int) ([]byte, string, error) {
 	return EncodeFrameFormat(f, quality, maxDim, FormatAuto)
 }
 
-// EncodeFrameFormat codifica conforme a preferência ("auto" ou "png").
+// EncodeOverlayFrame codifica a TELA CONGELADA exibida no overlay. É a base do
+// recorte E da imagem anotada, então precisa ser LOSSLESS: usa PNG (rápido,
+// ~0,2 s em 1440p e sem perdas). Se o PNG passar do teto de payload (desktops
+// muito grandes/ruidosos), cai para WebP lossy de alta qualidade.
+func EncodeOverlayFrame(f *screen.Frame, maxDim int) ([]byte, string, error) {
+	if maxDim == 0 {
+		maxDim = defaultMaxDimension
+	}
+	if maxDim > 0 {
+		f = Downscale(f, maxDim)
+	}
+	pngData, err := EncodePNG(f)
+	if err == nil && len(pngData) <= maxPNGBytes {
+		return pngData, "image/png", nil
+	}
+	if webpAvailable() {
+		if data, lossyErr := encodeWebPLossy(f, overlayWebPQuality); lossyErr == nil && len(data) > 0 {
+			return data, "image/webp", nil
+		}
+	}
+	if err != nil {
+		return nil, "", err
+	}
+	return pngData, "image/png", nil
+}
+
+// EncodeFrameFormat codifica conforme a preferência ("auto", "webp" ou "png").
 //
-// O modo "auto" é **WebP-first**: com WebP disponível, o lossless é codificado
-// UMA vez e usado direto quando cabe no teto (sem calcular PNG — evita o custo
-// dobrado de encode). O PNG só entra na conta no caso raro do lossless WebP
-// passar do teto, onde ele ainda pode caber; a preferência explícita "png"
-// nunca gera WebP (nem no fallback, que vai para JPEG).
+// Qualidade é sempre lossless no caminho padrão. O que muda por formato/tamanho
+// é o CODEC: o WebP lossless economiza ~1/3 dos bytes, mas o encoder do libwebp
+// é lento em imagens grandes (~2 s em 3440×1440), enquanto o PNG leva ~0,2 s.
+//
+//   - "png": sempre PNG (fallback JPEG);
+//   - "webp": sempre WebP lossless quando disponível;
+//   - "auto" (padrão): WebP lossless até webpLosslessPixelBudget pixels (rápido e
+//     menor); acima disso PNG lossless (evita segundos de espera por pouco ganho).
 func EncodeFrameFormat(f *screen.Frame, quality, maxDim int, format string) ([]byte, string, error) {
-	useWebP := NormalizeFormat(format) == FormatAuto
+	normalized := NormalizeFormat(format)
 	if maxDim == 0 {
 		maxDim = defaultMaxDimension
 	}
@@ -236,7 +283,14 @@ func EncodeFrameFormat(f *screen.Frame, quality, maxDim int, format string) ([]b
 		f = Downscale(f, maxDim)
 	}
 
-	// Caminho padrão: WebP lossless (mesmo conteúdo do PNG, ~1/3 menor).
+	useWebP := normalized == FormatWebP
+	if normalized == FormatAuto {
+		useWebP = f != nil && f.Width*f.Height <= webpLosslessPixelBudget
+	}
+	// A preferência explícita "png" nunca gera WebP, nem no fallback (vai p/ JPEG).
+	lossyAllowed := normalized != FormatPNG
+
+	// Caminho lossless WebP: mesmo conteúdo do PNG, ~1/3 menor.
 	if useWebP && webpAvailable() {
 		if webpData, webpErr := encodeWebPLossless(f); webpErr == nil && len(webpData) > 0 {
 			if len(webpData) <= maxPNGBytes {
@@ -258,7 +312,7 @@ func EncodeFrameFormat(f *screen.Frame, quality, maxDim int, format string) ([]b
 	if pngErr == nil && len(pngData) <= maxPNGBytes {
 		return pngData, "image/png", nil
 	}
-	if useWebP && webpAvailable() {
+	if lossyAllowed && webpAvailable() {
 		if lossyData, lossyErr := encodeWebPLossy(f, quality); lossyErr == nil && len(lossyData) <= maxPNGBytes {
 			return lossyData, "image/webp", nil
 		}

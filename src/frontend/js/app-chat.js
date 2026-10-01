@@ -17,6 +17,9 @@ var CHAT_STREAM_PROBE_MS = 30000;    // sonda de reconciliação subsequente
 var streamingBubble = null;
 var streamingRawContent = "";
 var streamingRafPending = false;
+// Último round do agent loop visto no turno (usado para inserir a quebra entre
+// as mensagens de rounds diferentes). Reson no dispatch de cada mensagem.
+var streamingLastRound = 0;
 
 // Funções de polling do chat. São DECLARADAS aqui (escopo global) e
 // ATRIBUÍDAS dentro do IIFE registerChatStreamEvents, pois dependem do estado
@@ -898,8 +901,6 @@ function onStreamThinking(status) {
 // sensação de travamento durante tool chains longas. Payload pode chegar
 // como objeto {round, maxRounds} (Wails) ou string JSON (SSE/publish).
 function onChatLoopProgress(data) {
-  if (document.hidden || window.__discoveryUISuspended) return;
-  if (!streamingBubble) return;
   var payload = data;
   if (typeof data === "string") {
     try { payload = JSON.parse(data); } catch (e) { return; }
@@ -907,6 +908,18 @@ function onChatLoopProgress(data) {
   if (!payload || typeof payload !== "object") return;
   var round = Number(payload.round) || 0;
   var maxRounds = Number(payload.maxRounds) || 0;
+  // Separação entre rounds: cada round é uma NOVA mensagem do LLM. Sem a
+  // quebra, o texto de dois rounds fica colado no mesmo parágrafo (visto no
+  // turno de 2026-10-01 12:01Z: "...janelas abertas primeiro.Vou dar uma...").
+  // Roda mesmo com a janela oculta (o buffer continua sendo montado).
+  if (round > streamingLastRound) {
+    streamingLastRound = round;
+    if (round > 1 && streamingRawContent.trim() && !/\n\s*$/.test(streamingRawContent)) {
+      onStreamToken("\n\n");
+    }
+  }
+  if (document.hidden || window.__discoveryUISuspended) return;
+  if (!streamingBubble) return;
   if (maxRounds <= 0 || round <= 0) return;
   // Mesma regra do onStreamThinking: com texto já visível a pill de etapa só
   // reaparece se o turno está em fase de execução de ferramentas.
@@ -1001,6 +1014,8 @@ function onStreamDone() {
   clearChatStreamTimeout();
   chatPendingQuestionCount = 0;
   clearChatBusyRequeue();
+  // Rede de segurança: a resposta final precisa ser a última bolha do turno.
+  ensureStreamingBubbleAtEnd();
   safeFinaliseStreamingBubble();
   chatStopRequested = false;
   setChatBusy(false);
@@ -1045,6 +1060,7 @@ function onStreamError(errMsg) {
     if (streamingBubble && !streamingRawContent) {
       streamingRawContent = translate("chat.responseInterrupted");
     }
+    ensureStreamingBubbleAtEnd();
     safeFinaliseStreamingBubble();
     chatStopRequested = false;
     setChatBusy(false);
@@ -1064,6 +1080,7 @@ function onStreamError(errMsg) {
         error: String(errMsg || translate("common.unknown")),
       });
     }
+    ensureStreamingBubbleAtEnd();
     safeFinaliseStreamingBubble();
   } else {
     addChatMessage(
@@ -1091,6 +1108,7 @@ function onStreamStopped() {
   if (streamingBubble && !streamingRawContent) {
     streamingRawContent = translate("chat.responseInterrupted");
   }
+  ensureStreamingBubbleAtEnd();
   safeFinaliseStreamingBubble();
   chatStopRequested = false;
   setChatBusy(false);
@@ -2617,6 +2635,46 @@ function renderAssistantMarkdown(content) {
   return html.join("");
 }
 
+// insertBeforeStreamingBubble insere um nó ANTES da bolha de streaming ativa.
+// A bolha nasce no início do turno e só recebe o texto final no fim; sem isso,
+// artefatos do meio do turno (prints capturados pela IA, cards informativos)
+// apareceriam DEPOIS da resposta final — foi a ordem quebrada vista no turno
+// de 2026-10-01 12:01Z (2 prints listados após a resposta).
+function insertBeforeStreamingBubble(node) {
+  if (!chatMessagesEl || !node) return;
+  if (streamingBubble && streamingBubble.parentNode === chatMessagesEl) {
+    chatMessagesEl.insertBefore(node, streamingBubble);
+  } else {
+    chatMessagesEl.appendChild(node);
+  }
+  scheduleChatScrollToBottom();
+}
+
+// ensureStreamingBubbleAtEnd é a rede de segurança do fim do turno: garante que
+// a bolha com a resposta final seja o último elemento da conversa.
+// ensureStreamingBubbleAtEnd reposiciona a bolha do turno no fim SOMENTE quando
+// o que veio depois dela são artefatos do meio do turno (prints da IA, respostas
+// do dock de pergunta). Se houver algo que pertence ao FIM da resposta — em
+// especial superfícies A2UI (.chat-a2ui, o card interativo) — a bolha fica onde
+// está, senão o texto final passaria por cima do card.
+function ensureStreamingBubbleAtEnd() {
+  if (!chatMessagesEl || !streamingBubble) return;
+  if (streamingBubble.parentNode !== chatMessagesEl) return;
+  var node = streamingBubble.nextElementSibling;
+  var artifact = false;
+  while (node) {
+    var isArtifact =
+      node.classList &&
+      (node.classList.contains("screenshot-info") || node.classList.contains("chat-question-answer"));
+    if (!isArtifact) return;
+    artifact = true;
+    node = node.nextElementSibling;
+  }
+  if (artifact) {
+    chatMessagesEl.appendChild(streamingBubble);
+  }
+}
+
 function addChatMessage(role, content) {
   if (!chatMessagesEl) return;
   var div = document.createElement("div");
@@ -2682,6 +2740,7 @@ function dispatchChatMessage(text) {
   // Create the streaming bubble immediately.
   streamingRawContent = "";
   streamingRafPending = false;
+  streamingLastRound = 0;
   streamingBubble = document.createElement("div");
   streamingBubble.className = "chat-msg assistant streaming";
 

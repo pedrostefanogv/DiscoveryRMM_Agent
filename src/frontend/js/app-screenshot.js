@@ -75,6 +75,7 @@ function screenshotRenderAttachments() {
     var img = document.createElement("img");
     img.src = att.dataUrl;
     img.alt = att.label || "print";
+    img.title = screenshotT("screenshot.viewLarger");
     var meta = document.createElement("span");
     meta.className = "chat-attachment-meta";
     meta.textContent = att.label || "print";
@@ -164,11 +165,19 @@ function screenshotAppendInfoBubble(result, label) {
   var img = document.createElement("img");
   img.className = "chat-msg-image";
   img.src = result.dataUrl;
+  // Na timeline a visualização é por CLIQUE (sem prévia no hover).
+  img.title = screenshotT("screenshot.viewLarger");
   if (result.auditId) img.setAttribute("data-screenshot-id", String(result.auditId));
   div.appendChild(caption);
   div.appendChild(img);
-  container.appendChild(div);
-  if (typeof scheduleChatScrollToBottom === "function") scheduleChatScrollToBottom();
+  // Insere ANTES da bolha de streaming: o print foi produzido no MEIO do turno
+  // e a resposta final ainda vai ser preenchida na bolha criada no início.
+  if (typeof insertBeforeStreamingBubble === "function") {
+    insertBeforeStreamingBubble(div);
+  } else {
+    container.appendChild(div);
+    if (typeof scheduleChatScrollToBottom === "function") scheduleChatScrollToBottom();
+  }
 }
 
 // ── Overlay de seleção ───────────────────────────────────────────────────
@@ -397,17 +406,35 @@ function screenshotMetrics() {
   return { rect: rect, sx: sx, sy: sy };
 }
 
-function screenshotWindowAt(cssX, cssY, metrics) {
+// screenshotPhysicalScale converte pixels do desktop FÍSICO ↔ CSS do overlay
+// (virtualWidth / largura CSS da viewport). NÃO confundir com metrics.sx, que é
+// "pixels da IMAGEM congelada por CSS": a imagem entregue ao overlay pode estar
+// reduzida (≤3840) em relação ao desktop físico, e misturar os dois espaços
+// desalinhava o destaque das janelas e o recorte da seleção.
+function screenshotPhysicalScale(metrics) {
+  var state = screenshotOverlayState;
+  var p = state && state.payload ? state.payload : null;
+  var sx = 1;
+  var sy = 1;
+  if (p && metrics && metrics.rect.width > 0 && metrics.rect.height > 0) {
+    if (p.virtualWidth > 0) sx = p.virtualWidth / metrics.rect.width;
+    if (p.virtualHeight > 0) sy = p.virtualHeight / metrics.rect.height;
+  }
+  return { x: sx, y: sy };
+}
+
+function screenshotWindowAt(cssX, cssY, metrics, physical) {
   var state = screenshotOverlayState;
   if (!state || !state.payload.windows) return null;
   var p = state.payload;
+  var scale = physical || screenshotPhysicalScale(metrics);
   for (var i = 0; i < p.windows.length; i += 1) {
     var w = p.windows[i];
     if (w.isSelf || w.blocked || w.minimized || !w.width || !w.height) continue;
-    var x = (w.x - p.virtualX) / metrics.sx;
-    var y = (w.y - p.virtualY) / metrics.sy;
-    var ww = w.width / metrics.sx;
-    var hh = w.height / metrics.sy;
+    var x = (w.x - p.virtualX) / scale.x;
+    var y = (w.y - p.virtualY) / scale.y;
+    var ww = w.width / scale.x;
+    var hh = w.height / scale.y;
     if (cssX >= x && cssX <= x + ww && cssY >= y && cssY <= y + hh) {
       return { win: w, css: { x: x, y: y, w: ww, h: hh } };
     }
@@ -428,6 +455,7 @@ function screenshotOnMouseMove(event) {
   var state = screenshotOverlayState;
   if (!state || !state.ready || state.selection) return;
   var metrics = screenshotMetrics();
+  var physical = screenshotPhysicalScale(metrics);
   var selection = document.getElementById("screenshotOverlaySelection");
   var highlight = document.getElementById("screenshotOverlayWindow");
   if (state.dragging) {
@@ -443,11 +471,11 @@ function screenshotOnMouseMove(event) {
       selection.style.height = height + "px";
     }
     var size = document.getElementById("screenshotOverlaySize");
-    if (size) size.textContent = Math.round(width * metrics.sx) + " \u00d7 " + Math.round(height * metrics.sy);
+    if (size) size.textContent = Math.round(width * physical.x) + " \u00d7 " + Math.round(height * physical.y);
     if (highlight) highlight.classList.add("hidden");
     return;
   }
-  var hover = screenshotWindowAt(event.clientX - metrics.rect.left, event.clientY - metrics.rect.top, metrics);
+  var hover = screenshotWindowAt(event.clientX - metrics.rect.left, event.clientY - metrics.rect.top, metrics, physical);
   state.hover = hover;
   if (highlight && hover) {
     highlight.classList.remove("hidden");
@@ -465,10 +493,11 @@ function screenshotOnMouseUp(event) {
   var state = screenshotOverlayState;
   if (!state || !state.ready) return;
   var metrics = screenshotMetrics();
+  var physical = screenshotPhysicalScale(metrics);
   var moved = Math.abs(event.clientX - state.startX) + Math.abs(event.clientY - state.startY);
   state.dragging = false;
   if (moved < 6) {
-    var hover = screenshotWindowAt(event.clientX - metrics.rect.left, event.clientY - metrics.rect.top, metrics);
+    var hover = screenshotWindowAt(event.clientX - metrics.rect.left, event.clientY - metrics.rect.top, metrics, physical);
     if (hover) {
       screenshotLockSelection({
         kind: "window",
@@ -490,10 +519,10 @@ function screenshotOnMouseUp(event) {
   var p = state.payload;
   screenshotLockSelection({
     kind: "region",
-    x: p.virtualX + Math.round(left * metrics.sx),
-    y: p.virtualY + Math.round(top * metrics.sy),
-    width: Math.round(width * metrics.sx),
-    height: Math.round(height * metrics.sy),
+    x: p.virtualX + Math.round(left * physical.x),
+    y: p.virtualY + Math.round(top * physical.y),
+    width: Math.round(width * physical.x),
+    height: Math.round(height * physical.y),
     windowHandle: 0,
     monitorIndex: 0,
   });
@@ -543,16 +572,17 @@ function screenshotLockSelection(selection) {
   var state = screenshotOverlayState;
   if (!state) return;
   var metrics = screenshotMetrics();
+  var physical = screenshotPhysicalScale(metrics);
   state.selection = selection;
   state.annotations = [];
   state.draft = null;
   var box = document.getElementById("screenshotOverlaySelection");
   if (box) {
     box.classList.remove("hidden");
-    box.style.left = (selection.x - state.payload.virtualX) / metrics.sx + "px";
-    box.style.top = (selection.y - state.payload.virtualY) / metrics.sy + "px";
-    box.style.width = selection.width / metrics.sx + "px";
-    box.style.height = selection.height / metrics.sy + "px";
+    box.style.left = (selection.x - state.payload.virtualX) / physical.x + "px";
+    box.style.top = (selection.y - state.payload.virtualY) / physical.y + "px";
+    box.style.width = selection.width / physical.x + "px";
+    box.style.height = selection.height / physical.y + "px";
   }
   var highlight = document.getElementById("screenshotOverlayWindow");
   if (highlight) highlight.classList.add("hidden");
@@ -1031,8 +1061,8 @@ function screenshotBuildAnnotatedDataUrl() {
   var img = screenshotOverlayImg();
   var clip = screenshotSelectionImageRect();
   if (!state || !img || !clip) throw new Error("sem selecao");
-  // 2560 px (mesmo teto do backend): preserva a legibilidade de textos pequenos.
-  var maxDim = 2560;
+  // 3840 px (mesmo teto do backend = nativo até 4K): textos pequenos legíveis.
+  var maxDim = 3840;
   var scale = Math.min(1, maxDim / Math.max(clip.w, clip.h));
   var outW = Math.max(1, Math.round(clip.w * scale));
   var outH = Math.max(1, Math.round(clip.h * scale));
@@ -1053,14 +1083,8 @@ function screenshotBuildAnnotatedDataUrl() {
     screenshotDrawShape(ctx, shape, img, shape.type === "step" ? step : 0, factor);
   });
   ctx.restore();
-  // WebP lossy q0.95 quando o backend suporta (a tela congelada veio em WebP):
-  // mesma percepção de qualidade com uma fração dos bytes do PNG.
-  if (state.payload.imageMime === "image/webp") {
-    try {
-      var webpUrl = canvas.toDataURL("image/webp", 0.95);
-      if (webpUrl && webpUrl.indexOf("data:image/webp") === 0) return webpUrl;
-    } catch (_) {}
-  }
+  // SEMPRE PNG: a imagem anotada é o que o usuário lê e envia ao LLM — o
+  // backend reencoda lossless (WebP/PNG) depois, dentro dos limites de payload.
   return canvas.toDataURL("image/png");
 }
 
@@ -1217,26 +1241,24 @@ function screenshotLoadPrivacy() {
     });
 }
 
-function screenshotConsentLabel(decision) {
-  switch (decision) {
-    case "session":
-      return screenshotT("screenshot.consentSession");
-    case "always":
-      return screenshotT("screenshot.consentAlways");
-    case "denied":
-      return screenshotT("screenshot.consentDenied");
-    default:
-      return screenshotT("screenshot.consentUndecided");
+// screenshotConsentLabel descreve o modelo de consentimento: POR CAPTURA.
+// Não existe "autorizado" permanente — a IA pergunta a cada pedido.
+function screenshotConsentLabel(data) {
+  if (data && data.aiCaptureEnabled === false) {
+    return screenshotT("screenshot.consentDisabled");
   }
+  return screenshotT("screenshot.consentPerCapture");
 }
 
 function screenshotRenderPrivacy(data) {
   var stateEl = screenshotModalEl("chatPrivacyState");
   if (stateEl) {
-    stateEl.textContent = screenshotConsentLabel(data.decision);
-    stateEl.classList.toggle("allowed", data.decision === "session" || data.decision === "always");
-    stateEl.classList.toggle("denied", data.decision === "denied");
+    stateEl.textContent = screenshotConsentLabel(data);
+    stateEl.classList.toggle("allowed", data.aiCaptureEnabled !== false);
+    stateEl.classList.toggle("denied", data.aiCaptureEnabled === false);
   }
+  var allowAiEl = screenshotModalEl("chatPrivacyAllowAi");
+  if (allowAiEl) allowAiEl.checked = data.aiCaptureEnabled !== false;
   var usageEl = screenshotModalEl("chatPrivacyUsage");
   if (usageEl && data.usage) {
     usageEl.textContent = screenshotT("screenshot.usage", {
@@ -1259,7 +1281,10 @@ function screenshotRenderPrivacy(data) {
   var hideWindowEl = screenshotModalEl("chatPrivacyHideWindow");
   if (hideWindowEl) hideWindowEl.checked = policy.hideAgentWindow !== false;
   var formatEl = screenshotModalEl("chatPrivacyImageFormat");
-  if (formatEl) formatEl.value = policy.imageFormat === "png" ? "png" : "auto";
+  if (formatEl) {
+    var fmt = policy.imageFormat === "png" || policy.imageFormat === "webp" ? policy.imageFormat : "auto";
+    formatEl.value = fmt;
+  }
   screenshotRenderAudit(data.audit || []);
 }
 
@@ -1283,12 +1308,19 @@ function screenshotRenderAudit(items) {
       img.className = "chat-privacy-thumb";
       img.src = item.thumbnail;
       img.alt = "print";
+      img.title = screenshotT("screenshot.viewLarger");
       if (item.id) img.setAttribute("data-screenshot-id", String(item.id));
       row.appendChild(img);
     }
     var info = document.createElement("div");
     info.className = "chat-privacy-info";
     var who = item.byLlm ? screenshotT("screenshot.auditByLlm") : screenshotT("screenshot.auditManual");
+    var decision =
+      item.decision === "granted"
+        ? screenshotT("screenshot.auditGranted")
+        : item.decision === "denied"
+          ? screenshotT("screenshot.auditDenied")
+          : screenshotT("screenshot.auditCancelled");
     var when = "";
     try {
       when = item.at ? new Date(item.at).toLocaleString() : "";
@@ -1296,7 +1328,7 @@ function screenshotRenderAudit(items) {
     var head = document.createElement("div");
     head.className = "chat-privacy-line";
     head.textContent =
-      when + " · " + item.mode + " · " + who + " · " + Math.round((item.bytes || 0) / 1024) + " KB";
+      when + " · " + item.mode + " · " + who + " · " + decision + " · " + Math.round((item.bytes || 0) / 1024) + " KB";
     var detail = document.createElement("div");
     detail.className = "meta";
     detail.textContent = item.detail || "";
@@ -1339,20 +1371,25 @@ function screenshotSavePrivacyPolicy() {
     });
 }
 
-function screenshotSetConsent(decision) {
+// screenshotSetAiCapture liga/desliga os PEDIDOS de captura da IA. Não é
+// autorização: ligado, a IA continua perguntando em cada captura.
+function screenshotSetAiCapture(enabled) {
   var api = screenshotApi();
-  if (!api || typeof api.SetScreenshotPermission !== "function") {
+  if (!api || typeof api.SetScreenshotAiCaptureEnabled !== "function") {
     screenshotFeedback(screenshotT("screenshot.unavailable"), true);
     return;
   }
-  var pending = api.SetScreenshotPermission(decision);
+  var pending = api.SetScreenshotAiCaptureEnabled(!!enabled);
   if (pending && typeof pending.then === "function") {
     pending
       .then(function () {
         screenshotLoadPrivacy();
       })
       .catch(function (err) {
+        // Recarrega também no erro: o checkbox voltaria marcado sem a política
+        // ter sido persistida (estado fantasma na UI).
         screenshotFeedback(String(err), true);
+        screenshotLoadPrivacy();
       });
   } else {
     screenshotLoadPrivacy();
@@ -1481,10 +1518,22 @@ function screenshotOpenThumb(element) {
   screenshotOpenLightbox(element.getAttribute("src") || element.src || "", element.getAttribute("alt") || "");
 }
 
+// screenshotThumbFromEvent: alvos CLICÁVEIS (timeline, anexos do composer e
+// auditoria). O clique abre o lightbox com a imagem cheia.
 function screenshotThumbFromEvent(event) {
   var target = event.target;
   if (!target || !target.closest) return null;
   return target.closest(".chat-msg-image, .chat-attachment img, .chat-privacy-thumb");
+}
+
+// screenshotHoverTargetFromEvent: prévia ao passar o mouse SOMENTE na imagem
+// anexada na caixa de texto (antes de enviar). Imagens da timeline do chat não
+// abrem prévia no hover — nelas a visualização é por CLIQUE (lightbox), para não
+// cobrir a conversa enquanto o usuário lê.
+function screenshotHoverTargetFromEvent(event) {
+  var target = event.target;
+  if (!target || !target.closest) return null;
+  return target.closest("#chatAttachments .chat-attachment img");
 }
 
 function screenshotEnsureHoverPreview() {
@@ -1525,11 +1574,11 @@ function initScreenshotLightbox() {
     screenshotOpenThumb(thumb);
   });
   document.addEventListener("mouseover", function (event) {
-    var thumb = screenshotThumbFromEvent(event);
-    if (thumb) screenshotShowHoverPreview(thumb);
+    var hoverTarget = screenshotHoverTargetFromEvent(event);
+    if (hoverTarget) screenshotShowHoverPreview(hoverTarget);
   });
   document.addEventListener("mouseout", function (event) {
-    if (screenshotThumbFromEvent(event)) screenshotHideHoverPreview();
+    if (screenshotHoverTargetFromEvent(event)) screenshotHideHoverPreview();
   });
   document.addEventListener("keydown", function (event) {
     if (event.key === "Escape") screenshotCloseLightbox();
@@ -1545,16 +1594,10 @@ function initScreenshotPrivacy() {
   if (refreshBtn) refreshBtn.addEventListener("click", screenshotLoadPrivacy);
   var saveBtn = document.getElementById("chatPrivacySavePolicy");
   if (saveBtn) saveBtn.addEventListener("click", screenshotSavePrivacyPolicy);
-  var allowSession = document.getElementById("chatPrivacyAllowSession");
-  if (allowSession) {
-    allowSession.addEventListener("click", function () { screenshotSetConsent("session"); });
+  var allowAi = document.getElementById("chatPrivacyAllowAi");
+  if (allowAi) {
+    allowAi.addEventListener("change", function () { screenshotSetAiCapture(!!allowAi.checked); });
   }
-  var allowAlways = document.getElementById("chatPrivacyAllowAlways");
-  if (allowAlways) {
-    allowAlways.addEventListener("click", function () { screenshotSetConsent("always"); });
-  }
-  var deny = document.getElementById("chatPrivacyDeny");
-  if (deny) deny.addEventListener("click", function () { screenshotSetConsent("denied"); });
   var modal = screenshotModalEl("chatPrivacyModal");
   if (modal) {
     modal.addEventListener("click", function (event) {

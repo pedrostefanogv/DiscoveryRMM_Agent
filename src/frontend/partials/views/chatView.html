@@ -169,13 +169,9 @@
               <span id="chatPrivacyState" class="chat-privacy-badge"></span>
               <span id="chatPrivacyUsage" class="meta"></span>
             </div>
-            <div class="chat-privacy-actions">
-              <button id="chatPrivacyAllowSession" class="btn subtle" data-i18n="screenshot.allowSession">Permitir
-                nesta sessão</button>
-              <button id="chatPrivacyAllowAlways" class="btn primary" data-i18n="screenshot.allowAlways">Permitir
-                sempre</button>
-              <button id="chatPrivacyDeny" class="btn danger" data-i18n="screenshot.deny">Revogar/Negar</button>
-            </div>
+            <label class="chat-privacy-check"><input id="chatPrivacyAllowAi" type="checkbox" checked />
+              <span data-i18n="screenshot.allowAiCapture"></span></label>
+            <div class="meta" data-i18n="screenshot.perCaptureHint"></div>
           </div>
           <div class="chat-privacy-section">
             <label class="chat-privacy-label" for="chatPrivacyBlocked"
@@ -191,7 +187,8 @@
             <label class="chat-privacy-row-item" for="chatPrivacyImageFormat">
               <span data-i18n="screenshot.imageFormat">Formato da imagem</span>
               <select id="chatPrivacyImageFormat">
-                <option value="auto" data-i18n="screenshot.imageFormatAuto">Automático (WebP quando menor)</option>
+                <option value="auto" data-i18n="screenshot.imageFormatAuto">Automático (recomendado)</option>
+                <option value="webp" data-i18n="screenshot.imageFormatWebp">WebP lossless (sempre)</option>
                 <option value="png" data-i18n="screenshot.imageFormatPng">PNG (máxima compatibilidade)</option>
               </select>
             </label>
