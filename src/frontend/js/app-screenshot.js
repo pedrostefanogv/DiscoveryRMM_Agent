@@ -619,6 +619,9 @@ function screenshotPrepareCanvas() {
   canvas.width = img.naturalWidth;
   canvas.height = img.naturalHeight;
   canvas.classList.add("hidden");
+  // A imagem acabou de carregar: reaplica o enquadramento com as dimensões reais
+  // (antes do load o ApplyView usa o tamanho da viewport como fallback).
+  screenshotApplyView();
   screenshotAnnotRedraw();
 }
 
@@ -669,13 +672,16 @@ function screenshotPhysicalScale(metrics) {
   return { x: sx, y: sy };
 }
 
-// ── Zoom/pan do overlay (seleção pixel-perfect) ───────────────────────────
+// ── Zoom/pan do overlay (dentro do print selecionado) ─────────────────────
 //
-// O conteúdo (imagem congelada + canvas + caixas) é dimensionado para
-// viewport × zoom e deslocado por translate. Os conversores de coordenadas
-// continuam válidos sem alteração porque todos partem de
-// img.getBoundingClientRect() — que já devolve posição/tamanho REAIS com zoom
-// e deslocamento aplicados (clientX - rect.left = px da imagem em CSS).
+// Existe uma CAIXA DE VISUALIZAÇÃO (`screenshotViewBox`, em pixels da imagem):
+// é a tela inteira enquanto o usuário escolhe a área e, depois de travar a
+// seleção, SOMENTE o recorte escolhido. O conteúdo (imagem + canvas + caixas) é
+// dimensionado por `natural × escala` e deslocado por translate, com o pan
+// limitado à caixa — ou seja, o zoom nunca sai do print.
+//
+// Os conversores de coordenadas continuam partindo de
+// img.getBoundingClientRect() (posição/tamanho reais com zoom e deslocamento).
 var screenshotOverlayView = { zoom: 1, panX: 0, panY: 0 };
 var screenshotZoomMin = 1;
 var screenshotZoomMax = 8;
@@ -707,33 +713,105 @@ function screenshotViewportBox() {
   };
 }
 
-function screenshotClampPan(value, content, viewport) {
-  var max = Math.max(0, content - viewport);
-  if (value < 0) return 0;
+// screenshotViewBox devolve a caixa de visualização em pixels da IMAGEM: o
+// recorte selecionado quando existe, senão a tela congelada inteira.
+function screenshotViewBox() {
+  var sel = screenshotSelectionImageRect();
+  if (sel && sel.w > 0 && sel.h > 0) return sel;
+  var img = screenshotOverlayImg();
+  if (img && img.naturalWidth > 0 && img.naturalHeight > 0) {
+    return { x: 0, y: 0, w: img.naturalWidth, h: img.naturalHeight };
+  }
+  var box = screenshotViewportBox();
+  return { x: 0, y: 0, w: box.w, h: box.h };
+}
+
+// screenshotViewLocked informa se a área já foi escolhida (a caixa de
+// visualização é o recorte).
+function screenshotViewLocked() {
+  var state = screenshotOverlayState;
+  return !!(state && state.selection);
+}
+
+// screenshotViewFit calcula o encaixe da caixa de visualização na viewport:
+//
+//   * fase de seleção: preenche a LARGURA (como sempre foi — a janela do overlay
+//     cobre exatamente o desktop virtual, então a imagem não distorce);
+//   * com a área travada: `contain`, para o print inteiro caber na tela.
+function screenshotViewFit(box, vb) {
+  var fitW = box.w / Math.max(1, vb.w);
+  if (!screenshotViewLocked()) return fitW;
+  return Math.min(fitW, box.h / Math.max(1, vb.h));
+}
+
+// screenshotImageScale é a escala atual "px da imagem → px de CSS", já com o
+// zoom aplicado.
+function screenshotImageScale() {
+  var box = screenshotViewportBox();
+  var vb = screenshotViewBox();
+  return screenshotViewFit(box, vb) * screenshotOverlayView.zoom;
+}
+
+// Limita o deslocamento à caixa de visualização. Quando a caixa é menor que a
+// viewport num eixo (aspecto diferente), centraliza em vez de deixar buraco.
+function screenshotClampPan(value, min, max) {
+  if (max <= min) return (min + max) / 2;
+  if (value < min) return min;
   if (value > max) return max;
   return value;
 }
 
-// screenshotApplyView recalcula tamanho do conteúdo e deslocamento, limitando o
-// pan para nunca sobrar área preta fora do print.
+// screenshotApplyView recalcula tamanho do conteúdo, deslocamento e o quadro da
+// seleção. O pan é limitado à caixa de visualização: com a área travada, nada
+// além do print selecionado entra na janela.
 function screenshotApplyView() {
   var content = screenshotOverlayContent();
   if (!content) return;
+  var img = screenshotOverlayImg();
   var view = screenshotOverlayView;
   view.zoom = Math.max(screenshotZoomMin, Math.min(screenshotZoomMax, view.zoom || 1));
   var box = screenshotViewportBox();
-  var cw = Math.round(box.w * view.zoom);
-  var ch = Math.round(box.h * view.zoom);
+  var vb = screenshotViewBox();
+  var natW = img && img.naturalWidth > 0 ? img.naturalWidth : box.w;
+  var natH = img && img.naturalHeight > 0 ? img.naturalHeight : box.h;
+  var scale = screenshotViewFit(box, vb) * view.zoom;
+  var cw = Math.max(1, Math.round(natW * scale));
+  var ch = Math.max(1, Math.round(natH * scale));
   content.style.width = cw + "px";
   content.style.height = ch + "px";
-  view.panX = screenshotClampPan(view.panX, cw, box.w);
-  view.panY = screenshotClampPan(view.panY, ch, box.h);
+  view.panX = screenshotClampPan(view.panX, vb.x * scale, (vb.x + vb.w) * scale - box.w);
+  view.panY = screenshotClampPan(view.panY, vb.y * scale, (vb.y + vb.h) * scale - box.h);
   content.style.transform = "translate(" + -view.panX + "px," + -view.panY + "px)";
-  var img = document.getElementById("screenshotOverlayImage");
   if (img) {
     img.style.imageRendering = view.zoom >= screenshotZoomPixelatedFrom ? "pixelated" : "";
   }
+  screenshotPositionSelectionBox();
+  // O destaque de janela é recalculado no próximo mousemove; se ficasse parado
+  // enquanto o zoom muda, apareceria fora de lugar.
+  var highlight = document.getElementById("screenshotOverlayWindow");
+  if (highlight) highlight.classList.add("hidden");
   screenshotUpdateZoomLabel();
+}
+
+// screenshotPositionSelectionBox desenha o quadro da seleção em px de CSS a
+// partir do retângulo em px da IMAGEM. Sem isso o quadro ficava parado enquanto
+// o zoom mudava a escala — a moldura saía de cima da área selecionada.
+function screenshotPositionSelectionBox() {
+  var state = screenshotOverlayState;
+  var box = document.getElementById("screenshotOverlaySelection");
+  if (!box) return;
+  var rect = screenshotSelectionImageRect();
+  if (!state || !state.selection || !rect || rect.w <= 0 || rect.h <= 0) {
+    box.classList.add("hidden");
+    return;
+  }
+  var scale = screenshotImageScale();
+  box.classList.remove("hidden");
+  box.classList.add("locked");
+  box.style.left = rect.x * scale + "px";
+  box.style.top = rect.y * scale + "px";
+  box.style.width = rect.w * scale + "px";
+  box.style.height = rect.h * scale + "px";
 }
 
 function screenshotUpdateZoomLabel() {
@@ -752,12 +830,15 @@ function screenshotSetZoom(next, clientX, clientY) {
   var rect = vp.getBoundingClientRect();
   var anchorX = typeof clientX === "number" ? clientX - rect.left : rect.width / 2;
   var anchorY = typeof clientY === "number" ? clientY - rect.top : rect.height / 2;
-  // Ponto em coordenadas de CONTEÚDO (px de imagem em CSS) antes do zoom.
-  var contentX = (anchorX + view.panX) / view.zoom;
-  var contentY = (anchorY + view.panY) / view.zoom;
+  // Ponto sob o cursor em px da IMAGEM (independe do zoom atual) — a âncora é
+  // preservada mesmo com a escala derivando da caixa de visualização.
+  var scaleBefore = screenshotImageScale();
+  var imageX = (anchorX + view.panX) / scaleBefore;
+  var imageY = (anchorY + view.panY) / scaleBefore;
   view.zoom = zoom;
-  view.panX = contentX * zoom - anchorX;
-  view.panY = contentY * zoom - anchorY;
+  var scaleAfter = screenshotImageScale();
+  view.panX = imageX * scaleAfter - anchorX;
+  view.panY = imageY * scaleAfter - anchorY;
   screenshotApplyView();
 }
 
@@ -971,43 +1052,33 @@ function screenshotSelectFrontWindow() {
 function screenshotLockSelection(selection) {
   var state = screenshotOverlayState;
   if (!state) return;
-  var metrics = screenshotMetrics();
-  var physical = screenshotPhysicalScale(metrics);
   state.selection = selection;
   state.annotations = [];
   state.draft = null;
-  var selCss = {
-    left: (selection.x - state.payload.virtualX) / physical.x,
-    top: (selection.y - state.payload.virtualY) / physical.y,
-    width: selection.width / physical.x,
-    height: selection.height / physical.y,
-  };
-  var box = document.getElementById("screenshotOverlaySelection");
-  if (box) {
-    box.classList.remove("hidden");
-    box.style.left = selCss.left + "px";
-    box.style.top = selCss.top + "px";
-    box.style.width = selCss.width + "px";
-    box.style.height = selCss.height + "px";
-  }
-  var highlight = document.getElementById("screenshotOverlayWindow");
-  if (highlight) highlight.classList.add("hidden");
+  // A partir daqui a caixa de visualização é o RECORTE: o print passa a ocupar a
+  // tela e o zoom/pan fica limitado a ele (nunca volta a mostrar o resto do
+  // desktop). O quadro da seleção é reposicionado por screenshotApplyView.
+  screenshotResetOverlayView();
   var canvas = screenshotOverlayCanvas();
   if (canvas) canvas.classList.remove("hidden");
   screenshotSetAnnotToolbarVisible(true);
   // A barra do topo (dica + tela inteira/janela/cancelar) some assim que a área
   // é escolhida: a partir daqui quem manda é a barra de anotações.
   screenshotSetOverlayToolbarVisible(false);
-  // A barra é `fixed`, em coordenadas da VIEWPORT; selCss está em coordenadas do
-  // CONTEÚDO (px da imagem em CSS). Com zoom/pan os dois espaços diferem, então
-  // converte-se subtraindo o deslocamento antes de posicionar.
-  var selView = {
-    left: selCss.left - screenshotOverlayView.panX,
-    top: selCss.top - screenshotOverlayView.panY,
-    width: selCss.width,
-    height: selCss.height,
-  };
-  screenshotPlaceAnnotToolbar(selView);
+  // A barra é `fixed`, em coordenadas da VIEWPORT; a seleção está em px da
+  // IMAGEM. Converte pela escala vigente e subtrai o deslocamento do pan.
+  var rect = screenshotSelectionImageRect();
+  if (rect) {
+    var vp = screenshotOverlayViewport();
+    var vpRect = vp ? vp.getBoundingClientRect() : { left: 0, top: 0 };
+    var scale = screenshotImageScale();
+    screenshotPlaceAnnotToolbar({
+      left: vpRect.left + rect.x * scale - screenshotOverlayView.panX,
+      top: vpRect.top + rect.y * scale - screenshotOverlayView.panY,
+      width: rect.w * scale,
+      height: rect.h * scale,
+    });
+  }
   screenshotAnnotRedraw();
 }
 
@@ -1018,11 +1089,19 @@ function screenshotAnnotReselect() {
   state.annotations = [];
   state.draft = null;
   var box = document.getElementById("screenshotOverlaySelection");
-  if (box) box.classList.add("hidden");
+  if (box) {
+    box.classList.add("hidden");
+    // Sem a marca `locked` o próximo arraste volta a usar o destaque suave de
+    // seleção (o forte é só enquanto o print está travado).
+    box.classList.remove("locked");
+  }
   var canvas = screenshotOverlayCanvas();
   if (canvas) canvas.classList.add("hidden");
   var textInput = document.getElementById("screenshotAnnotTextInput");
   if (textInput) textInput.classList.add("hidden");
+  // Sem seleção a caixa de visualização volta a ser a tela inteira (o quadro é
+  // escondido por screenshotPositionSelectionBox dentro do ApplyView).
+  screenshotResetOverlayView();
   screenshotSetAnnotToolbarVisible(false);
   // Volta a mostrar dica e atalhos para escolher outra área/janela.
   screenshotSetOverlayToolbarVisible(true);
