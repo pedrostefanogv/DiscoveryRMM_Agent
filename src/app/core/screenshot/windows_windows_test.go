@@ -149,3 +149,51 @@ func TestCaptureWindowSmoke(t *testing.T) {
 	}
 	t.Logf("%s", res.Describe())
 }
+
+// TestCaptureMonitorFormatKeepsRequestedFormat cobre o bug em que o modo monitor
+// ignorava o formato da política e sempre usava FormatAuto (WebP) — a UI pedia
+// PNG e o print saía em WebP.
+func TestCaptureMonitorFormatKeepsRequestedFormat(t *testing.T) {
+	if testing.Short() {
+		t.Skip("captura real ignorada em -short")
+	}
+	if len(ListMonitors()) == 0 {
+		t.Skip("nenhum monitor detectado")
+	}
+	res, err := captureMonitorFormat(0, 92, 800, FormatPNG)
+	if err != nil {
+		t.Skipf("captura do monitor falhou no ambiente: %v", err)
+	}
+	if res.MIME != "image/png" {
+		t.Fatalf("formato pedido png veio %q", res.MIME)
+	}
+	if len(res.Thumbnail) == 0 {
+		t.Fatal("captura de monitor deveria trazer miniatura")
+	}
+}
+
+// TestCaptureDesktopFrameSmoke cobre o caminho usado pelo overlay (frame cru do
+// retângulo físico, com origem preservada para o recorte da seleção).
+func TestCaptureDesktopFrameSmoke(t *testing.T) {
+	if testing.Short() {
+		t.Skip("captura real ignorada em -short")
+	}
+	x, y, _, _, ok := VirtualBounds()
+	if !ok {
+		t.Skip("desktop virtual indisponivel")
+	}
+	const w, h = 320, 200
+	frame, err := CaptureDesktopFrame(x+10, y+10, w, h)
+	if err != nil {
+		t.Skipf("captura do frame falhou no ambiente: %v", err)
+	}
+	if frame.Width != w || frame.Height != h {
+		t.Fatalf("dimensoes = %dx%d, want %dx%d", frame.Width, frame.Height, w, h)
+	}
+	if frame.OriginX != x+10 || frame.OriginY != y+10 {
+		t.Fatalf("origem = %d,%d, want %d,%d", frame.OriginX, frame.OriginY, x+10, y+10)
+	}
+	if len(frame.Data) == 0 {
+		t.Fatal("frame vazio")
+	}
+}

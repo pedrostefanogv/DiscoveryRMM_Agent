@@ -153,6 +153,136 @@ function screenshotRenderSentImages(images) {
   if (typeof scheduleChatScrollToBottom === "function") scheduleChatScrollToBottom();
 }
 
+// ── Colar imagem da área de transferência ─────────────────────────────────
+//
+// Só IMAGENS: outros tipos de arquivo são recusados com aviso (o backend também
+// descarta qualquer data URL que não seja data:image/). O conteúdo colado passa
+// por normalização antes de virar anexo porque o agente ignora em silêncio
+// data URLs acima de 6 MiB — um print 4K colado em PNG estouraria esse teto.
+var screenshotPastedImageMaxDim = 2560;
+var screenshotPastedImageBudget = 4 << 20; // tamanho da data URL (base64)
+
+// screenshotEncodeCanvasWithinBudget tenta PNG e, se estourar o orçamento, JPEG
+// em qualidades decrescentes — o print colado precisa caber no limite do chat.
+function screenshotEncodeCanvasWithinBudget(canvas) {
+  var attempts = [
+    { mime: "image/png" },
+    { mime: "image/jpeg", quality: 0.92 },
+    { mime: "image/jpeg", quality: 0.8 },
+  ];
+  var dataUrl = "";
+  for (var i = 0; i < attempts.length; i += 1) {
+    try {
+      dataUrl = attempts[i].quality === undefined
+        ? canvas.toDataURL(attempts[i].mime)
+        : canvas.toDataURL(attempts[i].mime, attempts[i].quality);
+    } catch (_) {
+      dataUrl = "";
+    }
+    if (dataUrl && dataUrl.length <= screenshotPastedImageBudget) return dataUrl;
+  }
+  return dataUrl; // último recurso: o backend decide se aceita
+}
+
+// screenshotPrepareClipboardImage converte o arquivo colado em data URL
+// redimensionada (máx. 2560 px) e dentro do orçamento.
+function screenshotPrepareClipboardImage(file, done) {
+  var url = "";
+  try {
+    url = URL.createObjectURL(file);
+  } catch (_) {
+    url = "";
+  }
+  if (!url) {
+    done("", "");
+    return;
+  }
+  var img = new Image();
+  img.onload = function () {
+    try { URL.revokeObjectURL(url); } catch (_) {}
+    var w = img.naturalWidth || 0;
+    var h = img.naturalHeight || 0;
+    if (!w || !h) {
+      done("", "");
+      return;
+    }
+    var scale = Math.min(1, screenshotPastedImageMaxDim / Math.max(w, h));
+    var outW = Math.max(1, Math.round(w * scale));
+    var outH = Math.max(1, Math.round(h * scale));
+    var canvas = document.createElement("canvas");
+    canvas.width = outW;
+    canvas.height = outH;
+    canvas.getContext("2d").drawImage(img, 0, 0, outW, outH);
+    done(screenshotEncodeCanvasWithinBudget(canvas), outW + "x" + outH);
+  };
+  img.onerror = function () {
+    try { URL.revokeObjectURL(url); } catch (_) {}
+    done("", "");
+  };
+  img.src = url;
+}
+
+// screenshotPasteImages anexa as imagens coladas respeitando o teto do composer.
+function screenshotPasteImages(files) {
+  if (!files || !files.length) return;
+  for (var i = 0; i < files.length; i += 1) {
+    if (screenshotAttachments.length >= 3) {
+      screenshotFeedback(screenshotT("chat.screenshotLimit"), true);
+      return;
+    }
+    (function (file) {
+      screenshotPrepareClipboardImage(file, function (dataUrl, label) {
+        if (!dataUrl) {
+          screenshotFeedback(screenshotT("chat.pasteImageFailed"), true);
+          return;
+        }
+        if (screenshotAttachments.length >= 3) {
+          screenshotFeedback(screenshotT("chat.screenshotLimit"), true);
+          return;
+        }
+        screenshotAttachments.push({ dataUrl: dataUrl, label: label || "print" });
+        screenshotRenderAttachments();
+        screenshotFeedback(screenshotT("chat.screenshotAttached"), false);
+      });
+    })(files[i]);
+  }
+}
+
+// initScreenshotPaste liga o Ctrl+V de imagens na caixa de digitação do chat.
+// Texto puro continua colando normalmente; arquivos que não são imagem são
+// bloqueados com aviso (por enquanto só imagens são aceitas).
+function initScreenshotPaste() {
+  var input = document.getElementById("chatInput");
+  if (!input || input.dataset.screenshotPasteBound === "1") return;
+  input.dataset.screenshotPasteBound = "1";
+  input.addEventListener("paste", function (event) {
+    var clipboard = event.clipboardData;
+    if (!clipboard) return;
+    var items = clipboard.items || [];
+    var images = [];
+    var others = 0;
+    for (var i = 0; i < items.length; i += 1) {
+      var item = items[i];
+      if (item.kind !== "file") continue;
+      if ((item.type || "").toLowerCase().indexOf("image/") === 0) {
+        var file = item.getAsFile ? item.getAsFile() : null;
+        if (file) images.push(file);
+      } else {
+        others += 1;
+      }
+    }
+    if (!images.length) {
+      if (others > 0) {
+        event.preventDefault();
+        screenshotFeedback(screenshotT("chat.onlyImages"), true);
+      }
+      return;
+    }
+    event.preventDefault();
+    screenshotPasteImages(images);
+  });
+}
+
 function screenshotAppendInfoBubble(result, label) {
   if (!result || !result.dataUrl) return;
   var container = document.getElementById("chatMessages");
@@ -200,18 +330,37 @@ function screenshotEnsureOverlayEls() {
   root.id = "screenshotOverlay";
   root.className = "screenshot-overlay hidden";
   root.innerHTML = [
-    '<div class="screenshot-overlay-toolbar">',
+    '<div id="screenshotOverlayToolbar" class="screenshot-overlay-toolbar">',
+    // Alça de arraste: a barra nasce centralizada no topo, mas pode ser movida
+    // quando ela cobre justamente a área que o usuário quer selecionar.
+    '  <span id="screenshotOverlayDrag" class="screenshot-overlay-drag" data-i18n-title="screenshot.annotDrag">⣿</span>',
     '  <span id="screenshotOverlayHint" class="screenshot-overlay-hint"></span>',
     '  <span id="screenshotOverlaySize" class="screenshot-overlay-size"></span>',
     '  <button id="screenshotModeFull" type="button" class="btn subtle"></button>',
     '  <button id="screenshotModeWindow" type="button" class="btn subtle"></button>',
     '  <button id="screenshotModeCancel" type="button" class="btn danger"></button>',
     '</div>',
-    '<img id="screenshotOverlayImage" class="screenshot-overlay-image" alt="tela congelada" draggable="false" />',
-    '<canvas id="screenshotAnnotCanvas" class="screenshot-annot-canvas hidden"></canvas>',
-    '<input id="screenshotAnnotTextInput" class="screenshot-annot-input hidden" type="text" maxlength="120" />',
-    '<div id="screenshotOverlayWindow" class="screenshot-overlay-window hidden"></div>',
-    '<div id="screenshotOverlaySelection" class="screenshot-overlay-selection hidden"></div>',
+    // A viewport recorta; o conteúdo (imagem + anotações + caixas) é maior que ela
+    // quando o zoom passa de 1 e anda por translate. Toda a matemática de
+    // coordenadas parte de `img.getBoundingClientRect()`, que já reflete zoom e
+    // deslocamento — por isso o zoom não exige mudar os conversores existentes.
+    '<div id="screenshotOverlayViewport" class="screenshot-overlay-viewport">',
+    '  <div id="screenshotOverlayContent" class="screenshot-overlay-content">',
+    '    <img id="screenshotOverlayImage" class="screenshot-overlay-image" alt="tela congelada" draggable="false" />',
+    '    <canvas id="screenshotAnnotCanvas" class="screenshot-annot-canvas hidden"></canvas>',
+    '    <div id="screenshotOverlayWindow" class="screenshot-overlay-window hidden"></div>',
+    '    <div id="screenshotOverlaySelection" class="screenshot-overlay-selection hidden"></div>',
+    '    <input id="screenshotAnnotTextInput" class="screenshot-annot-input hidden" type="text" maxlength="120" />',
+    '  </div>',
+    '</div>',
+    // Controle de zoom/pan do print. Fica FORA da barra do topo (que some quando a
+    // área é escolhida), então acompanha as duas fases da captura.
+    '<div id="screenshotZoomBar" class="screenshot-zoom-bar hidden">',
+    '  <button type="button" class="screenshot-zoom-btn" id="screenshotZoomOut" data-i18n-title="screenshot.zoomOut">−</button>',
+    '  <span id="screenshotZoomLabel" class="screenshot-zoom-label" data-i18n-title="screenshot.zoomHint">100%</span>',
+    '  <button type="button" class="screenshot-zoom-btn" id="screenshotZoomIn" data-i18n-title="screenshot.zoomIn">+</button>',
+    '  <button type="button" class="screenshot-zoom-btn" id="screenshotZoomFit" data-i18n-title="screenshot.zoomFit">⤢</button>',
+    '</div>',
     '<div id="screenshotAnnotToolbar" class="screenshot-annot-toolbar hidden">',
     '  <span id="screenshotAnnotDrag" class="screenshot-annot-drag" data-i18n-title="screenshot.annotDrag">⣿</span>',
     '  <button type="button" class="screenshot-annot-btn" data-annot-tool="rect" data-i18n-title="screenshot.annotRect">▭</button>',
@@ -239,6 +388,7 @@ function screenshotEnsureOverlayEls() {
     '  <button type="button" class="screenshot-annot-btn" id="screenshotAnnotUndo" data-i18n-title="screenshot.annotUndo">↺</button>',
     '  <button type="button" class="screenshot-annot-btn" id="screenshotAnnotClear" data-i18n-title="screenshot.annotClear">🧹</button>',
     '  <button type="button" class="screenshot-annot-btn" id="screenshotAnnotReselect" data-i18n-title="screenshot.annotReselect">⟲</button>',
+    '  <button type="button" class="screenshot-annot-btn danger" id="screenshotAnnotCancel" data-i18n-title="screenshot.annotCancel">✕</button>',
     '  <button type="button" class="screenshot-annot-confirm" id="screenshotAnnotConfirm" data-i18n-title="screenshot.annotConfirm">✓</button>',
     '</div>',
   ].join("");
@@ -252,6 +402,9 @@ function screenshotEnsureOverlayEls() {
   if (winBtn) winBtn.textContent = screenshotT("screenshot.window");
   var cancel = document.getElementById("screenshotModeCancel");
   if (cancel) cancel.textContent = screenshotT("screenshot.cancel");
+  // A barra do topo também é arrastável (alça ⣿ ou fundo), como a de anotações.
+  var overlayBar = document.getElementById("screenshotOverlayToolbar");
+  if (overlayBar) overlayBar.addEventListener("mousedown", screenshotStartOverlayToolbarDrag);
 
   if (full) full.addEventListener("click", function () { screenshotSelectFull(); });
   if (winBtn) winBtn.addEventListener("click", function () { screenshotSelectFrontWindow(); });
@@ -312,6 +465,19 @@ function screenshotEnsureOverlayEls() {
   if (annotToolbar) {
     annotToolbar.addEventListener("mousedown", screenshotStartToolbarDrag);
   }
+  // Zoom/pan: roda do mouse (Ctrl+roda = zoom ancorado no cursor), botão do meio
+  // para arrastar e os botões da barra de zoom.
+  var viewport = screenshotOverlayViewport();
+  if (viewport) {
+    viewport.addEventListener("wheel", screenshotOverlayWheel, { passive: false });
+    viewport.addEventListener("mousedown", screenshotOverlayMiddleDrag);
+  }
+  var zoomOut = document.getElementById("screenshotZoomOut");
+  if (zoomOut) zoomOut.addEventListener("click", function () { screenshotSetZoom(screenshotOverlayView.zoom / screenshotZoomStep); });
+  var zoomIn = document.getElementById("screenshotZoomIn");
+  if (zoomIn) zoomIn.addEventListener("click", function () { screenshotSetZoom(screenshotOverlayView.zoom * screenshotZoomStep); });
+  var zoomFit = document.getElementById("screenshotZoomFit");
+  if (zoomFit) zoomFit.addEventListener("click", screenshotResetOverlayView);
 
   var undoBtn = document.getElementById("screenshotAnnotUndo");
   if (undoBtn) undoBtn.addEventListener("click", screenshotAnnotUndo);
@@ -321,6 +487,10 @@ function screenshotEnsureOverlayEls() {
   if (reselectBtn) reselectBtn.addEventListener("click", screenshotAnnotReselect);
   var confirmBtn = document.getElementById("screenshotAnnotConfirm");
   if (confirmBtn) confirmBtn.addEventListener("click", screenshotConfirmSelection);
+  // Cancelar também na barra de anotações: depois de travar a área a barra do
+  // topo some, e sem isso o usuário perderia o atalho de desistir.
+  var annotCancelBtn = document.getElementById("screenshotAnnotCancel");
+  if (annotCancelBtn) annotCancelBtn.addEventListener("click", screenshotCancelOverlay);
   var textInput = document.getElementById("screenshotAnnotTextInput");
   if (textInput) {
     textInput.addEventListener("keydown", function (event) {
@@ -343,9 +513,20 @@ function screenshotEnsureOverlayEls() {
 
   document.addEventListener("keydown", function (event) {
     if (!screenshotOverlayState) return;
+    // Digitação de anotação/campo não pode disparar atalhos (setas, 0, +, -).
+    var tag = event.target && event.target.tagName ? String(event.target.tagName).toUpperCase() : "";
+    if (tag === "INPUT" || tag === "TEXTAREA" || event.target === textInput) return;
     if (event.key === "Escape") { event.preventDefault(); screenshotCancelOverlay(); return; }
     if (event.key === "Enter" && screenshotOverlayState.selection) { event.preventDefault(); screenshotConfirmSelection(); return; }
-    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") { event.preventDefault(); screenshotAnnotUndo(); }
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") { event.preventDefault(); screenshotAnnotUndo(); return; }
+    // Zoom/pan por teclado (mesmos passos da barra de zoom).
+    if (event.key === "+" || event.key === "=") { event.preventDefault(); screenshotSetZoom(screenshotOverlayView.zoom * screenshotZoomStep); return; }
+    if (event.key === "-" || event.key === "_") { event.preventDefault(); screenshotSetZoom(screenshotOverlayView.zoom / screenshotZoomStep); return; }
+    if (event.key === "0") { event.preventDefault(); screenshotResetOverlayView(); return; }
+    if (event.key === "ArrowLeft") { event.preventDefault(); screenshotPanBy(-80, 0); return; }
+    if (event.key === "ArrowRight") { event.preventDefault(); screenshotPanBy(80, 0); return; }
+    if (event.key === "ArrowUp") { event.preventDefault(); screenshotPanBy(0, -80); return; }
+    if (event.key === "ArrowDown") { event.preventDefault(); screenshotPanBy(0, 80); }
   });
 }
 
@@ -376,6 +557,14 @@ function screenshotShowOverlay(payload) {
     lineWidth: 6,
   };
   screenshotSetAnnotToolbarVisible(false);
+  // Nova sessão: zoom/pan zerados (sem herdar o enquadramento da captura
+  // anterior) e barra de zoom visível nas duas fases da captura.
+  screenshotResetOverlayView();
+  screenshotSetZoomBarVisible(true);
+  // Nova sessão: barra do topo visível e de volta ao centro (posição arrastada
+  // na captura anterior não é herdada).
+  screenshotSetOverlayToolbarVisible(true);
+  screenshotResetOverlayToolbarPos();
   // Nova sessão de captura: a barra volta a ser posicionada perto da seleção
   // (descarta a posição arrastada da captura anterior).
   screenshotAnnotToolbarPos.dragged = false;
@@ -442,6 +631,9 @@ function screenshotHideOverlay() {
   if (screenshotToolbarDragCleanup) {
     screenshotToolbarDragCleanup();
   }
+  if (screenshotOverlayToolbarDragCleanup) {
+    screenshotOverlayToolbarDragCleanup();
+  }
   screenshotOverlayState = null;
 }
 
@@ -470,6 +662,150 @@ function screenshotPhysicalScale(metrics) {
   return { x: sx, y: sy };
 }
 
+// ── Zoom/pan do overlay (seleção pixel-perfect) ───────────────────────────
+//
+// O conteúdo (imagem congelada + canvas + caixas) é dimensionado para
+// viewport × zoom e deslocado por translate. Os conversores de coordenadas
+// continuam válidos sem alteração porque todos partem de
+// img.getBoundingClientRect() — que já devolve posição/tamanho REAIS com zoom
+// e deslocamento aplicados (clientX - rect.left = px da imagem em CSS).
+var screenshotOverlayView = { zoom: 1, panX: 0, panY: 0 };
+var screenshotZoomMin = 1;
+var screenshotZoomMax = 8;
+var screenshotZoomStep = 1.25;
+// A partir deste zoom o navegador para de suavizar a imagem (pixel nítido para
+// conferir texto miúdo).
+var screenshotZoomPixelatedFrom = 3;
+
+function screenshotOverlayViewport() {
+  return document.getElementById("screenshotOverlayViewport");
+}
+
+function screenshotOverlayContent() {
+  return document.getElementById("screenshotOverlayContent");
+}
+
+function screenshotSetZoomBarVisible(visible) {
+  var bar = document.getElementById("screenshotZoomBar");
+  if (bar) bar.classList.toggle("hidden", !visible);
+}
+
+function screenshotViewportBox() {
+  var vp = screenshotOverlayViewport();
+  if (!vp) return { w: window.innerWidth, h: window.innerHeight };
+  var rect = vp.getBoundingClientRect();
+  return {
+    w: rect.width > 0 ? rect.width : window.innerWidth,
+    h: rect.height > 0 ? rect.height : window.innerHeight,
+  };
+}
+
+function screenshotClampPan(value, content, viewport) {
+  var max = Math.max(0, content - viewport);
+  if (value < 0) return 0;
+  if (value > max) return max;
+  return value;
+}
+
+// screenshotApplyView recalcula tamanho do conteúdo e deslocamento, limitando o
+// pan para nunca sobrar área preta fora do print.
+function screenshotApplyView() {
+  var content = screenshotOverlayContent();
+  if (!content) return;
+  var view = screenshotOverlayView;
+  view.zoom = Math.max(screenshotZoomMin, Math.min(screenshotZoomMax, view.zoom || 1));
+  var box = screenshotViewportBox();
+  var cw = Math.round(box.w * view.zoom);
+  var ch = Math.round(box.h * view.zoom);
+  content.style.width = cw + "px";
+  content.style.height = ch + "px";
+  view.panX = screenshotClampPan(view.panX, cw, box.w);
+  view.panY = screenshotClampPan(view.panY, ch, box.h);
+  content.style.transform = "translate(" + -view.panX + "px," + -view.panY + "px)";
+  var img = document.getElementById("screenshotOverlayImage");
+  if (img) {
+    img.style.imageRendering = view.zoom >= screenshotZoomPixelatedFrom ? "pixelated" : "";
+  }
+  screenshotUpdateZoomLabel();
+}
+
+function screenshotUpdateZoomLabel() {
+  var label = document.getElementById("screenshotZoomLabel");
+  if (label) label.textContent = Math.round(screenshotOverlayView.zoom * 100) + "%";
+}
+
+// screenshotSetZoom aplica o zoom mantendo parado o ponto sob o cursor (zoom
+// ancorado). Sem coordenada, ancora no centro da viewport.
+function screenshotSetZoom(next, clientX, clientY) {
+  var view = screenshotOverlayView;
+  var vp = screenshotOverlayViewport();
+  if (!vp) return;
+  var zoom = Math.max(screenshotZoomMin, Math.min(screenshotZoomMax, next));
+  if (Math.abs(zoom - view.zoom) < 0.001) return;
+  var rect = vp.getBoundingClientRect();
+  var anchorX = typeof clientX === "number" ? clientX - rect.left : rect.width / 2;
+  var anchorY = typeof clientY === "number" ? clientY - rect.top : rect.height / 2;
+  // Ponto em coordenadas de CONTEÚDO (px de imagem em CSS) antes do zoom.
+  var contentX = (anchorX + view.panX) / view.zoom;
+  var contentY = (anchorY + view.panY) / view.zoom;
+  view.zoom = zoom;
+  view.panX = contentX * zoom - anchorX;
+  view.panY = contentY * zoom - anchorY;
+  screenshotApplyView();
+}
+
+function screenshotPanBy(dx, dy) {
+  screenshotOverlayView.panX += dx;
+  screenshotOverlayView.panY += dy;
+  screenshotApplyView();
+}
+
+function screenshotResetOverlayView() {
+  var view = screenshotOverlayView;
+  view.zoom = 1;
+  view.panX = 0;
+  view.panY = 0;
+  screenshotApplyView();
+}
+
+// screenshotOverlayWheel: roda = zoom ancorado no cursor (como em visualizadores
+// de imagem) e Shift+roda = deslocamento horizontal. Pan contínuo fica no botão
+// do meio, nas setas e nos próprios botões de zoom.
+function screenshotOverlayWheel(event) {
+  if (!screenshotOverlayState) return;
+  event.preventDefault();
+  // deltaMode: 0 = pixels, 1 = linhas, 2 = páginas (alguns mouses/WebView).
+  var unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? screenshotViewportBox().h : 1;
+  if (event.shiftKey && !event.ctrlKey && !event.metaKey) {
+    screenshotPanBy(event.deltaY * unit, 0);
+    return;
+  }
+  var factor = event.deltaY < 0 ? screenshotZoomStep : 1 / screenshotZoomStep;
+  screenshotSetZoom(screenshotOverlayView.zoom * factor, event.clientX, event.clientY);
+}
+
+// screenshotOverlayMiddleDrag: botão do meio arrasta o print (o esquerdo é
+// reservado para selecionar/desenhar).
+function screenshotOverlayMiddleDrag(event) {
+  if (event.button !== 1 || !screenshotOverlayState) return;
+  event.preventDefault();
+  var startX = event.clientX;
+  var startY = event.clientY;
+  var panX0 = screenshotOverlayView.panX;
+  var panY0 = screenshotOverlayView.panY;
+  function onMove(ev) {
+    screenshotOverlayView.panX = panX0 - (ev.clientX - startX);
+    screenshotOverlayView.panY = panY0 - (ev.clientY - startY);
+    screenshotApplyView();
+  }
+  function onUp() {
+    document.removeEventListener("mousemove", onMove);
+    document.removeEventListener("mouseup", onUp);
+  }
+  document.addEventListener("mousemove", onMove);
+  document.addEventListener("mouseup", onUp);
+}
+
 function screenshotWindowAt(cssX, cssY, metrics, physical) {
   var state = screenshotOverlayState;
   if (!state || !state.payload.windows) return null;
@@ -493,6 +829,8 @@ function screenshotOnMouseDown(event) {
   var state = screenshotOverlayState;
   // Com uma seleção travada, quem recebe o mouse é o canvas de anotação.
   if (!state || !state.ready || state.selection) return;
+  // Só o botão esquerdo seleciona; o do meio é pan (screenshotOverlayMiddleDrag).
+  if (event.button !== 0) return;
   state.dragging = true;
   state.startX = event.clientX;
   state.startY = event.clientY;
@@ -650,8 +988,19 @@ function screenshotLockSelection(selection) {
   var canvas = screenshotOverlayCanvas();
   if (canvas) canvas.classList.remove("hidden");
   screenshotSetAnnotToolbarVisible(true);
-  // Barra de ferramentas aparece junto da área selecionada (abaixo/ao lado).
-  screenshotPlaceAnnotToolbar(selCss);
+  // A barra do topo (dica + tela inteira/janela/cancelar) some assim que a área
+  // é escolhida: a partir daqui quem manda é a barra de anotações.
+  screenshotSetOverlayToolbarVisible(false);
+  // A barra é `fixed`, em coordenadas da VIEWPORT; selCss está em coordenadas do
+  // CONTEÚDO (px da imagem em CSS). Com zoom/pan os dois espaços diferem, então
+  // converte-se subtraindo o deslocamento antes de posicionar.
+  var selView = {
+    left: selCss.left - screenshotOverlayView.panX,
+    top: selCss.top - screenshotOverlayView.panY,
+    width: selCss.width,
+    height: selCss.height,
+  };
+  screenshotPlaceAnnotToolbar(selView);
   screenshotAnnotRedraw();
 }
 
@@ -668,11 +1017,69 @@ function screenshotAnnotReselect() {
   var textInput = document.getElementById("screenshotAnnotTextInput");
   if (textInput) textInput.classList.add("hidden");
   screenshotSetAnnotToolbarVisible(false);
+  // Volta a mostrar dica e atalhos para escolher outra área/janela.
+  screenshotSetOverlayToolbarVisible(true);
 }
 
 function screenshotSetAnnotToolbarVisible(visible) {
   var toolbar = document.getElementById("screenshotAnnotToolbar");
   if (toolbar) toolbar.classList.toggle("hidden", !visible);
+}
+
+// ── Barra do topo (dica + tela inteira/janela/cancelar) ───────────────────
+//
+// Nasce centralizada no topo (via CSS) e pode ser arrastada pela alça ⣿ ou pelo
+// fundo quando estiver cobrindo justamente a área que o usuário quer selecionar.
+// Ela desaparece quando a seleção é travada (a partir daí vale a barra de
+// anotações) e volta ao acionar "refazer seleção".
+var screenshotOverlayToolbarDragCleanup = null;
+
+function screenshotSetOverlayToolbarVisible(visible) {
+  var bar = document.getElementById("screenshotOverlayToolbar");
+  if (!bar) return;
+  bar.classList.toggle("hidden", !visible);
+}
+
+// screenshotResetOverlayToolbarPos volta a barra do topo ao centro (nova captura):
+// sem isso a posição arrastada na captura anterior seria herdada.
+function screenshotResetOverlayToolbarPos() {
+  var bar = document.getElementById("screenshotOverlayToolbar");
+  if (!bar) return;
+  bar.style.left = "";
+  bar.style.top = "";
+  bar.style.transform = "";
+}
+
+function screenshotStartOverlayToolbarDrag(event) {
+  var bar = document.getElementById("screenshotOverlayToolbar");
+  if (!bar || !event) return;
+  // Clique em botão/select é ação, não arraste.
+  if (event.target && event.target.closest && event.target.closest("button")) return;
+  event.preventDefault();
+  var rect = bar.getBoundingClientRect();
+  var offsetX = event.clientX - rect.left;
+  var offsetY = event.clientY - rect.top;
+  function onMove(ev) {
+    var w = bar.offsetWidth || 0;
+    var h = bar.offsetHeight || 0;
+    var x = Math.min(Math.max(8, ev.clientX - offsetX), Math.max(8, window.innerWidth - w - 8));
+    var y = Math.min(Math.max(8, ev.clientY - offsetY), Math.max(8, window.innerHeight - h - 8));
+    // O transform (centralização) sai de cena: a posição passa a ser left/top.
+    bar.style.transform = "none";
+    bar.style.left = x + "px";
+    bar.style.top = y + "px";
+  }
+  function onUp() {
+    document.removeEventListener("mousemove", onMove);
+    document.removeEventListener("mouseup", onUp);
+    screenshotOverlayToolbarDragCleanup = null;
+  }
+  if (screenshotOverlayToolbarDragCleanup) {
+    screenshotOverlayToolbarDragCleanup();
+  }
+  screenshotOverlayToolbarDragCleanup = onUp;
+  document.addEventListener("mousemove", onMove);
+  document.addEventListener("mouseup", onUp);
 }
 
 // ── Barra de anotação: posição e arraste ─────────────────────────────────
@@ -852,6 +1259,8 @@ function screenshotIsDragTool(tool) {
 function screenshotAnnotDown(event) {
   var state = screenshotOverlayState;
   if (!state || !state.selection) return;
+  // Botão do meio é pan, não desenho.
+  if (event.button !== 0) return;
   event.preventDefault();
   var point = screenshotAnnotPoint(event);
   if (state.tool === "text") {
@@ -1647,6 +2056,8 @@ function screenshotEnsureLightbox() {
     '  <div class="screenshot-lightbox-head">',
     '    <span id="screenshotLightboxCaption" class="screenshot-lightbox-caption"></span>',
     '    <span class="screenshot-lightbox-buttons">',
+    '      <span id="screenshotLightboxZoom" class="screenshot-lightbox-zoom">100%</span>',
+    '      <button id="screenshotLightboxZoomFit" class="btn subtle" type="button" data-i18n-title="screenshot.zoomFit">⤢</button>',
     '      <button id="screenshotLightboxCopy" class="btn subtle" type="button"></button>',
     '      <button id="screenshotLightboxClose" class="btn danger" type="button"></button>',
     '    </span>',
@@ -1665,6 +2076,16 @@ function screenshotEnsureLightbox() {
     copy.textContent = screenshotT("screenshot.copy");
     copy.addEventListener("click", screenshotCopyLightboxImage);
   }
+  var fit = document.getElementById("screenshotLightboxZoomFit");
+  if (fit) fit.addEventListener("click", screenshotResetLightboxView);
+  var lightboxImg = document.getElementById("screenshotLightboxImage");
+  if (lightboxImg) {
+    // Zoom na roda (ancorado no cursor), arrastar para mover e duplo clique
+    // para voltar ao tamanho ajustado.
+    lightboxImg.addEventListener("wheel", screenshotLightboxWheel, { passive: false });
+    lightboxImg.addEventListener("mousedown", screenshotLightboxDragStart);
+    lightboxImg.addEventListener("dblclick", screenshotResetLightboxView);
+  }
   box.addEventListener("click", function (event) {
     if (event.target === box) screenshotCloseLightbox();
   });
@@ -1677,6 +2098,7 @@ function screenshotOpenLightbox(dataUrl, caption) {
   var img = document.getElementById("screenshotLightboxImage");
   var cap = document.getElementById("screenshotLightboxCaption");
   if (!box || !img) return;
+  screenshotResetLightboxView();
   img.src = dataUrl;
   if (cap) cap.textContent = caption || "";
   box.classList.remove("hidden");
@@ -1685,6 +2107,87 @@ function screenshotOpenLightbox(dataUrl, caption) {
 function screenshotCloseLightbox() {
   var box = document.getElementById("screenshotLightbox");
   if (box) box.classList.add("hidden");
+}
+
+// ── Zoom/pan do lightbox (leitura do print já capturado) ─────────────────
+//
+// Aqui não há matemática de coordenadas: a imagem só é exibida, então o zoom é
+// um transform (com origem no cursor para o zoom ancorado) e o arraste move.
+var screenshotLightboxView = { zoom: 1, x: 0, y: 0 };
+var screenshotLightboxZoomMin = 1;
+var screenshotLightboxZoomMax = 8;
+var screenshotLightboxZoomStep = 1.2;
+
+function screenshotLightboxImage() {
+  return document.getElementById("screenshotLightboxImage");
+}
+
+function screenshotApplyLightboxView() {
+  var img = screenshotLightboxImage();
+  if (!img) return;
+  var view = screenshotLightboxView;
+  view.zoom = Math.max(screenshotLightboxZoomMin, Math.min(screenshotLightboxZoomMax, view.zoom));
+  img.style.transform = "translate(" + view.x + "px," + view.y + "px) scale(" + view.zoom + ")";
+  img.style.cursor = view.zoom > 1 ? "grab" : "zoom-in";
+  var badge = document.getElementById("screenshotLightboxZoom");
+  if (badge) badge.textContent = Math.round(view.zoom * 100) + "%";
+}
+
+function screenshotResetLightboxView() {
+  var view = screenshotLightboxView;
+  view.zoom = 1;
+  view.x = 0;
+  view.y = 0;
+  var img = screenshotLightboxImage();
+  if (img) img.style.transformOrigin = "50% 50%";
+  screenshotApplyLightboxView();
+}
+
+// screenshotLightboxWheel dá zoom ancorado no cursor: a origem do transform vai
+// para o ponto sob o mouse (em % da imagem), então ele fica parado ao escalar.
+function screenshotLightboxWheel(event) {
+  var img = screenshotLightboxImage();
+  if (!img || !img.naturalWidth) return;
+  event.preventDefault();
+  var rect = img.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) return;
+  var originX = ((event.clientX - rect.left) / rect.width) * 100;
+  var originY = ((event.clientY - rect.top) / rect.height) * 100;
+  img.style.transformOrigin = originX.toFixed(2) + "% " + originY.toFixed(2) + "%";
+  var factor = event.deltaY < 0 ? screenshotLightboxZoomStep : 1 / screenshotLightboxZoomStep;
+  screenshotLightboxView.zoom *= factor;
+  if (screenshotLightboxView.zoom <= 1.001) {
+    screenshotResetLightboxView();
+    return;
+  }
+  screenshotApplyLightboxView();
+}
+
+// screenshotLightboxDragStart move o print ampliado (limitado para não perder a
+// imagem de vista).
+function screenshotLightboxDragStart(event) {
+  var view = screenshotLightboxView;
+  var img = screenshotLightboxImage();
+  if (!img || event.button !== 0 || view.zoom <= 1) return;
+  event.preventDefault();
+  var rect = img.getBoundingClientRect();
+  var maxX = Math.max(60, rect.width * 0.6);
+  var maxY = Math.max(60, rect.height * 0.6);
+  var startX = event.clientX;
+  var startY = event.clientY;
+  var x0 = view.x;
+  var y0 = view.y;
+  function onMove(ev) {
+    view.x = Math.max(-maxX, Math.min(maxX, x0 + (ev.clientX - startX)));
+    view.y = Math.max(-maxY, Math.min(maxY, y0 + (ev.clientY - startY)));
+    screenshotApplyLightboxView();
+  }
+  function onUp() {
+    document.removeEventListener("mousemove", onMove);
+    document.removeEventListener("mouseup", onUp);
+  }
+  document.addEventListener("mousemove", onMove);
+  document.addEventListener("mouseup", onUp);
 }
 
 // screenshotOpenLightboxById busca a imagem cheia da captura (auditId) — o chat
@@ -1840,5 +2343,6 @@ function initScreenshotCapture() {
   }
   initScreenshotPrivacy();
   initScreenshotLightbox();
+  initScreenshotPaste();
   screenshotRenderAttachments();
 }

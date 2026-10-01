@@ -134,7 +134,10 @@ func captureMonitorFormat(monitorIndex, quality, maxDim int, format string) (*Ca
 	if err != nil {
 		return nil, fmt.Errorf("captura do monitor %d: %w", monitorIndex, err)
 	}
-	return encodeResult(frame, ModeMonitor, monitorIndex, quality, maxDim, FormatAuto)
+	// `format` (não FormatAuto): o modo monitor precisa respeitar a preferência
+	// png/webp da política, como os outros modos — ignorá-la fazia o print sair em
+	// WebP quando a UI pedia PNG.
+	return encodeResult(frame, ModeMonitor, monitorIndex, quality, maxDim, format)
 }
 
 // CaptureDesktop captura o desktop virtual inteiro (todos os monitores).
@@ -164,11 +167,7 @@ func captureRegionFormat(x, y, w, h, quality, maxDim int, format string) (*Captu
 }
 
 func captureRegionRaw(x, y, w, h int, mode string, quality, maxDim int, format string) (*CaptureResult, error) {
-	c, err := screen.NewGDICapturerRegion(x, y, w, h)
-	if err != nil {
-		return nil, fmt.Errorf("captura de regiao: %w", err)
-	}
-	frame, err := captureWithCapturer(c)
+	frame, err := captureRegionFrame(x, y, w, h)
 	if err != nil {
 		return nil, fmt.Errorf("captura de regiao: %w", err)
 	}
@@ -179,6 +178,70 @@ func captureRegionRaw(x, y, w, h int, mode string, quality, maxDim int, format s
 	res.OriginX = x
 	res.OriginY = y
 	return res, nil
+}
+
+// CaptureDesktopFrame captura o retângulo físico do desktop (x,y,w,h) e devolve
+// o frame BGRA já copiado (pode ser usado depois de fechar o capturer). É o que
+// o overlay usa para congelar a tela.
+func CaptureDesktopFrame(x, y, w, h int) (*screen.Frame, error) {
+	return captureRegionFrame(x, y, w, h)
+}
+
+// captureRegionFrame captura o retângulo físico. Em monitor Advanced Color/HDR,
+// o BitBlt (GDI) devolve SDR LAVADO e ignora o tone mapping, então preferimos
+// capturar o monitor inteiro pelo capturer HDR-aware e recortar. Qualquer
+// desconfiança (retângulo fora do monitor, captura falhou) volta para o GDI, que
+// é o comportamento antigo.
+func captureRegionFrame(x, y, w, h int) (*screen.Frame, error) {
+	if frame, ok := captureRegionFrameHDR(x, y, w, h); ok {
+		return frame, nil
+	}
+	c, err := screen.NewGDICapturerRegion(x, y, w, h)
+	if err != nil {
+		return nil, err
+	}
+	return captureWithCapturer(c)
+}
+
+func captureRegionFrameHDR(x, y, w, h int) (*screen.Frame, bool) {
+	mons := ListMonitors()
+	if len(mons) == 0 || w <= 0 || h <= 0 {
+		return nil, false
+	}
+	centerX, centerY := x+w/2, y+h/2
+	index := -1
+	for _, m := range mons {
+		if centerX >= m.X && centerX < m.X+m.Width && centerY >= m.Y && centerY < m.Y+m.Height {
+			index = m.Index
+			break
+		}
+	}
+	if index < 0 {
+		return nil, false
+	}
+	ac, err := screen.DetectAdvancedColor(index)
+	if err != nil || ac == nil || !ac.IsHDR {
+		return nil, false
+	}
+	c, err := screen.NewCapturerMode(index, true)
+	if err != nil {
+		return nil, false
+	}
+	frame, err := captureWithCapturer(c)
+	if err != nil || frame == nil {
+		return nil, false
+	}
+	offsetX, offsetY := x-frame.OriginX, y-frame.OriginY
+	// Guarda: o recorte só vale se o retângulo pedido estiver inteiro dentro do
+	// frame capturado — assim uma origem inesperada nunca devolve região errada.
+	if offsetX < 0 || offsetY < 0 || offsetX+w > frame.Width || offsetY+h > frame.Height {
+		return nil, false
+	}
+	crop, cerr := CropFrame(frame, offsetX, offsetY, w, h)
+	if cerr != nil {
+		return nil, false
+	}
+	return crop, true
 }
 
 func encodeResult(frame *screen.Frame, mode string, monitor, quality, maxDim int, format string) (*CaptureResult, error) {

@@ -85,6 +85,22 @@
 
 .screenshot-overlay.hidden { display: none; }
 
+/* Viewport recorta o conteúdo ampliado; o conteúdo cresce com o zoom e anda
+   por translate (o pan é limitado em JS para não sobrar área preta). */
+.screenshot-overlay-viewport {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.screenshot-overlay-content {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
 .screenshot-overlay-image {
   position: absolute;
   left: 0;
@@ -112,6 +128,39 @@
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
 }
 
+.screenshot-overlay-toolbar.hidden { display: none; }
+
+/* Controle de zoom/pan do print (visível nas duas fases da captura). */
+.screenshot-zoom-bar {
+  position: fixed;
+  right: 14px;
+  bottom: 14px;
+  z-index: 9014;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  border: 1px solid var(--border);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
+}
+.screenshot-zoom-bar.hidden { display: none; }
+.screenshot-zoom-btn {
+  width: 28px;
+  height: 26px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+.screenshot-zoom-btn:hover { background: color-mix(in srgb, var(--accent) 18%, var(--surface)); }
+.screenshot-zoom-label { min-width: 48px; text-align: center; font-size: 12px; color: var(--muted); }
+.screenshot-overlay-drag { cursor: grab; user-select: none; color: var(--muted); font-size: 14px; line-height: 1; letter-spacing: -2px; padding: 0 2px; }
+.screenshot-overlay-drag:active { cursor: grabbing; }
 .screenshot-overlay-hint { font-size: 12px; color: var(--text); max-width: 46vw; }
 .screenshot-overlay-size { font-size: 12px; color: var(--muted); min-width: 74px; text-align: right; }
 
@@ -282,6 +331,15 @@ body.screenshot-active { overflow: hidden !important; }
   letter-spacing: -2px;
 }
 .screenshot-annot-drag:active { cursor: grabbing; }
+/* Cancelar na barra de anotações: a barra do topo some depois da seleção, então
+   o atalho de desistir precisa existir aqui também. */
+.screenshot-annot-btn.danger {
+  border-color: color-mix(in srgb, var(--danger, #dc2626) 55%, var(--border));
+  color: var(--danger, #dc2626);
+  font-weight: 700;
+}
+.screenshot-annot-btn.danger:hover { background: color-mix(in srgb, var(--danger, #dc2626) 18%, transparent); }
+
 .screenshot-annot-confirm {
   width: 34px;
   height: 30px;
@@ -308,6 +366,8 @@ body.screenshot-active { overflow: hidden !important; }
 .screenshot-lightbox-card {
   max-width: 92vw;
   max-height: 92vh;
+  /* O zoom do lightbox é um transform: o card recorta o que passar do quadro. */
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -318,7 +378,8 @@ body.screenshot-active { overflow: hidden !important; }
 }
 .screenshot-lightbox-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .screenshot-lightbox-caption { font-size: 12px; color: var(--muted); }
-.screenshot-lightbox-card img { max-width: 88vw; max-height: 80vh; border-radius: 8px; border: 1px solid var(--border); }
+.screenshot-lightbox-card img { max-width: 88vw; max-height: 80vh; border-radius: 8px; border: 1px solid var(--border); cursor: zoom-in; }
+.screenshot-lightbox-zoom { font-size: 11px; color: var(--muted); min-width: 44px; text-align: right; }
 
 .screenshot-hover-preview {
   position: fixed;

@@ -66,6 +66,10 @@ func CropFrame(src *screen.Frame, x, y, w, h int) (*screen.Frame, error) {
 	}
 	dst.OriginX = src.OriginX + x
 	dst.OriginY = src.OriginY + y
+	// ColorSpace PRECISA acompanhar o recorte: um frame HDR (scRGB float) que
+	// perde a marca seria tratado como BGRA 8-bit e o tone mapping deixaria de
+	// rodar — o print sairia corrompido (bytes float interpretados como cor).
+	dst.ColorSpace = src.ColorSpace
 	return dst, nil
 }
 
@@ -325,6 +329,24 @@ func EncodeFrameFormat(f *screen.Frame, quality, maxDim int, format string) ([]b
 		return nil, "", jpegErr
 	}
 	return jpegData, "image/jpeg", nil
+}
+
+// AttachThumbnailFrame gera a miniatura do chat/auditoria a partir de um frame
+// capturado e a anexa ao resultado. É usada pelos caminhos que montam o
+// CaptureResult à mão (overlay do usuário): sem isso a auditoria de privacidade
+// ficava sem a prévia de toda captura manual, e o chat ficava sem a miniatura.
+func AttachThumbnailFrame(res *CaptureResult, f *screen.Frame) {
+	if res == nil || f == nil || f.Width <= 0 || f.Height <= 0 {
+		return
+	}
+	thumb := Downscale(f, thumbnailMaxDimension)
+	if thumb == nil {
+		return
+	}
+	if data, mime := encodeThumbnail(thumb); len(data) > 0 {
+		res.Thumbnail = data
+		res.ThumbnailMIME = mime
+	}
 }
 
 // encodeThumbnail gera a miniatura do chat no formato mais econômico

@@ -222,3 +222,47 @@ func TestCaptureResultDataURL(t *testing.T) {
 		t.Fatalf("payload inesperado: %v", payload)
 	}
 }
+
+func TestAttachThumbnailFrame(t *testing.T) {
+	f := &screen.Frame{Data: make([]byte, 800*600*4), Width: 800, Height: 600, Stride: 800 * 4}
+	res := &CaptureResult{Data: []byte("x"), MIME: "image/png", Width: 800, Height: 600}
+	AttachThumbnailFrame(res, f)
+	if len(res.Thumbnail) == 0 {
+		t.Fatal("miniatura nao gerada")
+	}
+	if res.ThumbnailMIME != "image/webp" && res.ThumbnailMIME != "image/jpeg" {
+		t.Fatalf("mime da miniatura = %q", res.ThumbnailMIME)
+	}
+	tiny := &CaptureResult{}
+	AttachThumbnailFrame(tiny, f)
+	if len(tiny.Thumbnail) == 0 {
+		t.Fatal("miniatura deveria ser gerada mesmo sem Data (auditoria usa so a thumb)")
+	}
+	// Frame inválido/ausente não deve mexer no resultado.
+	keep := &CaptureResult{Thumbnail: []byte("a"), ThumbnailMIME: "image/webp"}
+	AttachThumbnailFrame(keep, nil)
+	AttachThumbnailFrame(keep, &screen.Frame{})
+	if string(keep.Thumbnail) != "a" || keep.ThumbnailMIME != "image/webp" {
+		t.Fatalf("resultado existente foi alterado: %q %q", keep.Thumbnail, keep.ThumbnailMIME)
+	}
+}
+
+// TestCropFrameKeepsColorSpace: um recorte de frame HDR precisa manter a marca
+// de color space, senão o tone mapping é pulado e os bytes float do scRGB são
+// interpretados como BGRA 8-bit (print corrompido).
+func TestCropFrameKeepsColorSpace(t *testing.T) {
+	const scRGB = uint32(0x0c) // DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709
+	src := solidFrame(40, 30, 10, 20, 30, 255)
+	src.OriginX, src.OriginY = 100, 200
+	src.ColorSpace = scRGB
+	crop, err := CropFrame(src, 5, 4, 10, 8)
+	if err != nil {
+		t.Fatalf("CropFrame: %v", err)
+	}
+	if crop.ColorSpace != scRGB {
+		t.Fatalf("ColorSpace do recorte = %#x, want %#x", crop.ColorSpace, scRGB)
+	}
+	if crop.OriginX != 105 || crop.OriginY != 204 {
+		t.Fatalf("origem do recorte = %d,%d, want 105,204", crop.OriginX, crop.OriginY)
+	}
+}

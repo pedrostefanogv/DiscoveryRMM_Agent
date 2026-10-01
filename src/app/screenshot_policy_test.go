@@ -30,8 +30,27 @@ func TestScreenshotSelectionForRequestModes(t *testing.T) {
 		}
 	}
 
-	if _, ok := screenshotSelectionForRequest(screenshot.Request{Mode: "monitor", MonitorIndex: 9999}); ok {
-		t.Fatal("monitor inexistente nao deveria gerar selecao")
+	// Índice de monitor fora da faixa é CLAMPADO para o primário (mesma regra do
+	// captureMonitorFormat), e não ignorado: antes disso a checagem da blocklist
+	// era pulada e a captura ainda acontecia — só que no monitor primário, com o
+	// usuário autorizando "monitor 10000".
+	mons := screenshot.ListMonitors()
+	if len(mons) > 0 {
+		clamped, ok := screenshotSelectionForRequest(screenshot.Request{Mode: "monitor", MonitorIndex: 9999})
+		if !ok {
+			t.Fatal("monitor fora da faixa deveria ser clampado para o primario")
+		}
+		if clamped.X != mons[0].X || clamped.Y != mons[0].Y || clamped.Width != mons[0].Width || clamped.Height != mons[0].Height {
+			t.Fatalf("clamp do monitor = %+v, want primario %+v", clamped, mons[0])
+		}
+		negative, ok := screenshotSelectionForRequest(screenshot.Request{Mode: "monitor", MonitorIndex: -3})
+		if !ok || negative.X != mons[0].X {
+			t.Fatalf("indice negativo deveria cair no primario: %+v ok=%v", negative, ok)
+		}
+		valid, ok := screenshotSelectionForRequest(screenshot.Request{Mode: "monitor", MonitorIndex: len(mons) - 1})
+		if !ok || valid.Width != mons[len(mons)-1].Width {
+			t.Fatalf("ultimo monitor valido = %+v ok=%v", valid, ok)
+		}
 	}
 	if _, ok := screenshotSelectionForRequest(screenshot.Request{Mode: "window", WindowHandle: 1}); ok {
 		t.Fatal("modo janela nao usa selecao geometrica")

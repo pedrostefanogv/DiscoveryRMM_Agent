@@ -321,12 +321,19 @@ func screenshotSelectionForRequest(req screenshot.Request) (screenshot.Selection
 		}
 		return screenshot.Selection{Kind: "region", X: req.X, Y: req.Y, Width: req.Width, Height: req.Height}, true
 	case screenshot.ModeMonitor:
-		for _, m := range screenshot.ListMonitors() {
-			if m.Index == req.MonitorIndex {
-				return screenshot.Selection{Kind: "monitor", X: m.X, Y: m.Y, Width: m.Width, Height: m.Height}, true
-			}
+		mons := screenshot.ListMonitors()
+		if len(mons) == 0 {
+			return screenshot.Selection{}, false
 		}
-		return screenshot.Selection{}, false
+		// Mesma regra de captureMonitorFormat: índice fora da faixa cai no 0
+		// (primário). Sem espelhar isso, um índice inválido pulava a checagem da
+		// blocklist e ainda assim capturava o monitor primário.
+		index := req.MonitorIndex
+		if index < 0 || index >= len(mons) {
+			index = 0
+		}
+		m := mons[index]
+		return screenshot.Selection{Kind: "monitor", X: m.X, Y: m.Y, Width: m.Width, Height: m.Height}, true
 	case screenshot.ModeFull:
 		mons := screenshot.ListMonitors()
 		if len(mons) == 0 {
@@ -471,11 +478,13 @@ func (a *App) runScreenshotRequest(ctx context.Context, req screenshot.Request, 
 	// A janela do agente é ocultada durante a captura para não sair no print.
 	restoreVisibility := a.hideAgentWindowForCapture()
 	defer restoreVisibility()
+	started := time.Now()
 	res, err := screenshot.CaptureScreen(req)
 	if err != nil {
 		return nil, err
 	}
-	id := a.recordScreenshot(res, reason, byLLM)
+	elapsed := time.Since(started)
+	id := a.recordScreenshot(res, reason, byLLM, elapsed)
 	// Transparência: mostra no chat o que a IA acabou de capturar (miniatura),
 	// já que uma captura automática não passa pelo overlay de seleção.
 	a.emitScreenshotCaptured(res, reason, byLLM, id)
@@ -513,7 +522,17 @@ func (a *App) screenshotTargetLabel(req screenshot.Request) string {
 	case screenshot.ModeFull:
 		return "tela inteira (todos os monitores)"
 	case screenshot.ModeMonitor:
-		return fmt.Sprintf("monitor %d", req.MonitorIndex)
+		// 1-based para o usuário (índice 0 = primário no capturer). O índice
+		// inválido cai no primário, igual à captura — o rótulo não pode mentir.
+		mons := screenshot.ListMonitors()
+		index := req.MonitorIndex
+		if index < 0 || index >= len(mons) {
+			index = 0
+		}
+		if len(mons) <= 1 {
+			return "monitor principal"
+		}
+		return fmt.Sprintf("monitor %d", index+1)
 	case screenshot.ModeRegion:
 		return fmt.Sprintf("regiao de %dx%d pixels", req.Width, req.Height)
 	case screenshot.ModeWindow, screenshot.ModeFocused:
@@ -563,11 +582,17 @@ func (a *App) recordScreenshotConsentDenied(decision screenshot.Decision, req sc
 
 // recordScreenshot registra a captura na auditoria, guarda a imagem cheia em
 // memória (lightbox) e devolve o ID da entrada — 0 quando não registrada.
-func (a *App) recordScreenshot(res *screenshot.CaptureResult, reason string, byLLM bool) int64 {
+// elapsed é o tempo do pipeline de captura (acquire + encode) medido pelo
+// chamador; entra no detalhe da auditoria como observabilidade barata (Fase 2
+// pedia métricas de latência por modo). Zero = não medido.
+func (a *App) recordScreenshot(res *screenshot.CaptureResult, reason string, byLLM bool, elapsed time.Duration) int64 {
 	if a.screenshotConsent == nil || res == nil {
 		return 0
 	}
 	detail := res.Describe()
+	if elapsed > 0 {
+		detail += fmt.Sprintf(" | %d ms", elapsed.Milliseconds())
+	}
 	if r := strings.TrimSpace(reason); r != "" {
 		detail += " | motivo: " + r
 	}
@@ -1034,33 +1059,17 @@ func (a *App) openScreenshotOverlay(reason string, byLLM bool) (*screenshotOverl
 	return session, nil
 }
 
+// captureDesktopFrame congela o retângulo físico do desktop para o overlay.
+// Delegado ao pacote screenshot: além de evitar a duplicação do copy do frame,
+// passa pelo mesmo caminho HDR-aware (monitor Advanced Color capturado por DXGI
+// com tone mapping, em vez do BitBlt lavado). OriginX/OriginY vêm preservados —
+// o recorte da seleção depende deles em multi-monitor.
 func (a *App) captureDesktopFrame(x, y, w, h int) (*screen.Frame, error) {
-	c, err := screen.NewGDICapturerRegion(x, y, w, h)
+	frame, err := screenshot.CaptureDesktopFrame(x, y, w, h)
 	if err != nil {
 		return nil, fmt.Errorf("captura do desktop para o overlay: %w", err)
 	}
-	defer c.Close()
-	frame, err := c.AcquireNextFrame()
-	if err != nil {
-		return nil, err
-	}
-	stride := frame.Stride
-	if stride <= 0 {
-		stride = frame.Width * 4
-	}
-	// OriginX/OriginY são essenciais: o recorte da seleção usa a origem do
-	// frame para converter coordenadas físicas do desktop virtual em locais.
-	// Sem copiá-los, multi-monitor com origem != (0,0) recortava a região errada.
-	cp := &screen.Frame{
-		Data:    append([]byte(nil), frame.Data...),
-		Width:   frame.Width,
-		Height:  frame.Height,
-		Stride:  stride,
-		OriginX: frame.OriginX,
-		OriginY: frame.OriginY,
-	}
-	c.ReleaseFrame()
-	return cp, nil
+	return frame, nil
 }
 
 func (a *App) captureInteractive(ctx context.Context, reason string, byLLM bool) (json.RawMessage, error) {
@@ -1079,7 +1088,8 @@ func (a *App) captureInteractive(ctx context.Context, reason string, byLLM bool)
 			return nil, out.err
 		}
 		out.result.Interactive = true
-		a.recordScreenshot(out.result, reason, true)
+		// Captura interativa: o tempo é o da escolha do usuário, não do pipeline.
+		a.recordScreenshot(out.result, reason, true, 0)
 		payload := out.result.ToolPayload(toolNote(out.result), toolTarget(out.result))
 		return json.Marshal(payload)
 	case <-ctx.Done():
@@ -1100,7 +1110,9 @@ func (a *App) finishScreenshotOverlay(sessionID, selectionJSON string) (*screens
 		a.releaseScreenshotOverlay(sessionID, nil, fmt.Errorf("selecao invalida: %w", err))
 		return nil, fmt.Errorf("selecao de captura invalida: %w", err)
 	}
+	started := time.Now()
 	res, err := a.captureFromSelection(session, sel)
+	elapsed := time.Since(started)
 	a.releaseScreenshotOverlay(sessionID, res, err)
 	if err != nil {
 		return nil, err
@@ -1108,7 +1120,7 @@ func (a *App) finishScreenshotOverlay(sessionID, selectionJSON string) (*screens
 	// Sessões pedidas pela IA registram a auditoria em captureInteractive (que
 	// também recebe o resultado pelo waiter) — evita entrada duplicada.
 	if !session.byLLM {
-		a.recordScreenshot(res, session.reason, session.byLLM)
+		a.recordScreenshot(res, session.reason, session.byLLM, elapsed)
 	}
 	return res, nil
 }
@@ -1129,12 +1141,20 @@ func (a *App) captureFromSelection(session *screenshotOverlaySession, sel screen
 		if strings.EqualFold(sel.Kind, "window") {
 			mode = screenshot.ModeWindow
 		}
-		return &screenshot.CaptureResult{
+		res := &screenshot.CaptureResult{
 			Mode: mode, MIME: mime, Data: data,
 			Width: w, Height: h,
 			OriginX: sel.X, OriginY: sel.Y,
 			Interactive: true, CapturedAt: time.Now(),
-		}, nil
+		}
+		// Miniatura da auditoria/chat a partir do recorte da tela congelada: sem
+		// isso toda captura manual com anotação ficava sem prévia no painel de
+		// privacidade (o caminho anotado só existia como bytes PNG). O recorte é
+		// barato; decodificar o PNG anotado custaria ~100 ms.
+		if crop, cerr := screenshot.CropFrame(session.frame, sel.X-session.frame.OriginX, sel.Y-session.frame.OriginY, sel.Width, sel.Height); cerr == nil {
+			screenshot.AttachThumbnailFrame(res, crop)
+		}
+		return res, nil
 	}
 	if strings.EqualFold(sel.Kind, "window") && sel.WindowHandle != 0 {
 		// Blocklist já validada em validateSelectionPolicy. Formato vem da
@@ -1165,12 +1185,16 @@ func (a *App) captureFromSelection(session *screenshotOverlaySession, sel screen
 	if strings.EqualFold(sel.Kind, "window") {
 		mode = screenshot.ModeWindow
 	}
-	return &screenshot.CaptureResult{
+	res := &screenshot.CaptureResult{
 		Mode: mode, MIME: mime, Data: data,
 		Width: cropped.Width, Height: cropped.Height,
 		OriginX: sel.X, OriginY: sel.Y,
 		Interactive: true, CapturedAt: time.Now(),
-	}, nil
+	}
+	// Miniatura do recorte (auditoria/chat) — o caminho de região montava o
+	// resultado à mão e ficava sem prévia no painel de privacidade.
+	screenshot.AttachThumbnailFrame(res, cropped)
+	return res, nil
 }
 
 // releaseScreenshotOverlay restaura a janela, limpa a sessão e entrega o
