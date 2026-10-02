@@ -648,6 +648,8 @@ func (s *Service) InvalidateAgentContext() {
 	if s.agentInfo != nil {
 		s.agentInfo.Invalidate()
 	}
+	// Contexto novo (servidor/site) não deve herdar o estado offline anterior.
+	s.markReachable()
 	if s.db == nil {
 		return
 	}
@@ -757,7 +759,12 @@ func isNetworkError(err error) bool {
 	if err == nil {
 		return false
 	}
-	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+	// Cancelamento é shutdown/navegação, não falta de conectividade: não deve
+	// colocar o agente em modo somente consulta.
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
 		return true
 	}
 	var netErr net.Error

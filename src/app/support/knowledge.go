@@ -395,6 +395,8 @@ func (s *Service) cleanupOldKnowledgeScope(scope string) {
 			for _, prefix := range []string{
 				"knowledge:list:", "knowledge:detail:", "knowledge:pages:",
 				"knowledge:backup:list:", "knowledge:backup:detail:", "knowledge:backup:pages:",
+				// Datas dos backups também são específicas do escopo.
+				"knowledge:backup:meta:",
 			} {
 				if err := purger.CacheDeletePrefix(prefix + previous + ":"); err != nil {
 					log.Printf("[support] aviso: falha ao limpar cache %s<escopo>: %v", prefix, err)
@@ -821,24 +823,29 @@ func (s *Service) getAllKnowledgeArticles(category string) (KnowledgeArticleList
 // knowledgeBackupSavedAtKey guarda a data do backup FORA dos prefixos que o
 // refresh limpa, para sobreviver junto com o próprio backup.
 func knowledgeBackupSavedAtKey(cacheKey string) string {
+	if !strings.HasPrefix(cacheKey, "knowledge:list:") {
+		return ""
+	}
 	return strings.Replace(cacheKey, "knowledge:list:", "knowledge:backup:meta:", 1)
 }
 
 func (s *Service) saveKnowledgeListSavedAt(cacheKey string) {
-	if s.db == nil {
+	metaKey := knowledgeBackupSavedAtKey(cacheKey)
+	if s.db == nil || metaKey == "" {
 		return
 	}
-	if err := s.db.CacheSetJSON(knowledgeBackupSavedAtKey(cacheKey), time.Now().UTC().Format(time.RFC3339), knowledgeBackupTTL); err != nil {
+	if err := s.db.CacheSetJSON(metaKey, time.Now().UTC().Format(time.RFC3339), knowledgeBackupTTL); err != nil {
 		log.Printf("[support] aviso: falha ao salvar data do backup de knowledge: %v", err)
 	}
 }
 
 func (s *Service) readKnowledgeListSavedAt(cacheKey string) string {
-	if s.db == nil {
+	metaKey := knowledgeBackupSavedAtKey(cacheKey)
+	if s.db == nil || metaKey == "" {
 		return ""
 	}
 	var savedAt string
-	found, err := s.db.CacheGetJSON(knowledgeBackupSavedAtKey(cacheKey), &savedAt)
+	found, err := s.db.CacheGetJSON(metaKey, &savedAt)
 	if err != nil || !found {
 		return ""
 	}

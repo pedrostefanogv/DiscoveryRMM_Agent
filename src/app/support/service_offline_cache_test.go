@@ -1,6 +1,7 @@
 package support
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -503,5 +504,36 @@ func TestKnowledgeEnrichOffline_NoNetworkCalls(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&detailHits); got != 0 {
 		t.Fatalf("enriquecimento offline não deveria chamar detalhes remotos (chamadas=%d)", got)
+	}
+}
+
+// Cancelamento (shutdown/navegação) não pode virar "offline"; timeout sim.
+func TestIsNetworkError_CancellationIsNotOffline(t *testing.T) {
+	if isNetworkError(context.Canceled) {
+		t.Fatal("context.Canceled não deveria ser tratado como falta de conexão")
+	}
+	if !isNetworkError(context.DeadlineExceeded) {
+		t.Fatal("context.DeadlineExceeded deveria ser tratado como rede")
+	}
+}
+
+// A limpeza de escopo do knowledge também remove as datas dos backups antigos.
+func TestCleanupOldKnowledgeScope_RemovesMeta(t *testing.T) {
+	db := newMemCacheDB()
+	oldScope := "http:old:1:client:site:agent"
+	metaKey := "knowledge:backup:meta:" + oldScope + ":" + url.QueryEscape("")
+	if err := db.CacheSetJSON(metaKey, "2026-01-01T00:00:00Z", 0); err != nil {
+		t.Fatalf("preparar meta: %v", err)
+	}
+	if err := db.CacheSetJSON(knowledgeScopeControlKey, oldScope, 0); err != nil {
+		t.Fatalf("preparar escopo ativo: %v", err)
+	}
+
+	svc := NewService(Options{DB: db})
+	svc.cleanupOldKnowledgeScope("http:new:2:client:site:agent")
+
+	var ts string
+	if found, _ := db.CacheGetJSON(metaKey, &ts); found {
+		t.Fatal("data do backup do escopo anterior deveria ter sido removida")
 	}
 }
