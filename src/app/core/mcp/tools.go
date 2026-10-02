@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"regexp"
 	"strings"
 	"sync"
 )
@@ -88,9 +89,64 @@ func NewRegistry() *Registry { return &Registry{} }
 
 // Register adds a tool to the registry.
 func (r *Registry) Register(t Tool) {
+	// O nome é normalizado para o formato aceito pelo provedor ANTES de entrar no
+	// registro: um nome fora do padrão (ex.: "memory/list") derrubava o turno
+	// INTEIRO do chat — "Provider stream error: Invalid 'tools[0].function.name'"
+	// (OpenAI/OpenRouter exigem ^[a-zA-Z0-9_-]{1,64}$). Como o registro passa a
+	// guardar o nome normalizado, o roteamento da tool_call também casa.
+	t.Name = SanitizeToolName(t.Name)
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	// Nome repetido é ambíguo e o provedor recusa função duplicada: renomeia com
+	// sufixo numérico determinístico (ex.: tool, tool_2).
+	if r.hasNameLocked(t.Name) {
+		base := t.Name
+		for i := 2; r.hasNameLocked(t.Name); i++ {
+			t.Name = fmt.Sprintf("%s_%d", base, i)
+		}
+		log.Printf("[mcp] nome de tool duplicado %q registrado como %q", base, t.Name)
+	}
 	r.tools = append(r.tools, t)
+}
+
+// hasNameLocked informa se o nome já existe (chamada com r.mu travado).
+func (r *Registry) hasNameLocked(name string) bool {
+	for i := range r.tools {
+		if r.tools[i].Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// providerToolNamePattern é o padrão exigido pelos provedores OpenAI/OpenRouter.
+var providerToolNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
+
+// SanitizeToolName converte um nome arbitrário para o formato aceito pelo
+// provedor: qualquer caractere fora de [a-zA-Z0-9_-] vira '_' (barras, espaços,
+// pontos) e o resultado é limitado a 64 caracteres.
+func SanitizeToolName(name string) string {
+	trimmed := strings.TrimSpace(name)
+	if providerToolNamePattern.MatchString(trimmed) {
+		return trimmed
+	}
+	var b strings.Builder
+	for _, r := range trimmed {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('_')
+		}
+	}
+	out := strings.Trim(b.String(), "_")
+	if out == "" {
+		return "tool"
+	}
+	if runes := []rune(out); len(runes) > 64 {
+		out = string(runes[:64])
+	}
+	return out
 }
 
 // Tools returns a snapshot of all registered tools.

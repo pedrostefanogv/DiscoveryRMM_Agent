@@ -19,9 +19,16 @@ func (a *App) setAgentConfiguration(cfg agentconfig.AgentConfiguration) {
 	a.AgentConfigMu.Unlock()
 	a.persistAgentRoutingContext(cfg)
 	a.applyAgentConfiguration(cfg)
+	clientChanged := strings.TrimSpace(previous.ClientID) != strings.TrimSpace(cfg.ClientID)
+	siteChanged := strings.TrimSpace(previous.SiteID) != strings.TrimSpace(cfg.SiteID)
+	// Transferência de site/cliente: descarta a identidade resolvida do suporte.
+	// Sem isso o cache "agent_info" (24h) serviria clientId/siteId antigos e a
+	// página mostraria conteúdo do escopo anterior.
+	if a.SupportSvc != nil && (clientChanged || siteChanged) {
+		a.SupportSvc.InvalidateAgentContext()
+		a.Logs.Append("[config] contexto do agente mudou; cache de suporte invalidado")
+	}
 	if a.AgentConn != nil {
-		clientChanged := strings.TrimSpace(previous.ClientID) != strings.TrimSpace(cfg.ClientID)
-		siteChanged := strings.TrimSpace(previous.SiteID) != strings.TrimSpace(cfg.SiteID)
 		if clientChanged || siteChanged {
 			a.Logs.Append("[config] contexto NATS canônico atualizado; reconexão solicitada")
 			a.AgentConn.Reload()

@@ -364,18 +364,32 @@ var kbLoading = false;
 async function loadKnowledgeBase() {
   if (!kbArticlesListEl || kbLoading) return; // guard: evita cargas concorrentes
   kbLoading = true;
+  var staleBanner = document.getElementById("kbStaleBanner");
   try {
     kbArticlesListEl.innerHTML =
       '<div class="meta">' +
       escapeHtml(translate("knowledge.loadingArticles")) +
       "</div>";
-    knowledgeArticles = await appApi().GetKnowledgeBaseArticles();
+    // Binding com status propaga erro (habilita o estado de erro/retry) e
+    // informa se os artigos vieram do backup offline.
+    var api = appApi();
+    if (typeof api.GetKnowledgeBaseArticlesWithStatus === "function") {
+      var result = await api.GetKnowledgeBaseArticlesWithStatus();
+      knowledgeArticles = result && Array.isArray(result.articles)
+        ? result.articles
+        : (Array.isArray(result) ? result : []);
+      if (staleBanner) staleBanner.classList.toggle("hidden", !(result && result.stale));
+    } else {
+      knowledgeArticles = await api.GetKnowledgeArticles("");
+      if (staleBanner) staleBanner.classList.add("hidden");
+    }
     knowledgeArticles = Array.isArray(knowledgeArticles)
       ? knowledgeArticles
       : [];
     showKBList();
     filterKnowledgeArticles(kbSearchInputEl ? kbSearchInputEl.value : "");
   } catch (err) {
+    if (staleBanner) staleBanner.classList.add("hidden");
     // Estado de erro distinguível de 'sem artigos', com ação de retry
     // embutida — antes o usuário via só um texto sem caminho de recuperação.
     kbArticlesListEl.innerHTML =

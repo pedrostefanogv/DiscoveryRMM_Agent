@@ -716,11 +716,22 @@ function screenshotViewportBox() {
 // screenshotViewBox devolve a caixa de visualização em pixels da IMAGEM: o
 // recorte selecionado quando existe, senão a tela congelada inteira.
 function screenshotViewBox() {
-  var sel = screenshotSelectionImageRect();
-  if (sel && sel.w > 0 && sel.h > 0) return sel;
   var img = screenshotOverlayImg();
-  if (img && img.naturalWidth > 0 && img.naturalHeight > 0) {
-    return { x: 0, y: 0, w: img.naturalWidth, h: img.naturalHeight };
+  var natW = img && img.naturalWidth > 0 ? img.naturalWidth : 0;
+  var natH = img && img.naturalHeight > 0 ? img.naturalHeight : 0;
+  var sel = screenshotSelectionImageRect();
+  if (sel && sel.w > 0 && sel.h > 0 && natW > 0 && natH > 0) {
+    // A seleção de JANELA pode ter partes fora do desktop (janela arrastada para
+    // fora da tela): sem limitar à imagem, os limites de pan ficavam invertidos e
+    // a "janela" mostrava faixas fora do print.
+    var x = Math.max(0, Math.min(sel.x, natW - 1));
+    var y = Math.max(0, Math.min(sel.y, natH - 1));
+    var w = Math.max(1, Math.min(sel.w, natW - x));
+    var h = Math.max(1, Math.min(sel.h, natH - y));
+    return { x: x, y: y, w: w, h: h };
+  }
+  if (natW > 0 && natH > 0) {
+    return { x: 0, y: 0, w: natW, h: natH };
   }
   var box = screenshotViewportBox();
   return { x: 0, y: 0, w: box.w, h: box.h };
@@ -802,7 +813,9 @@ function screenshotPositionSelectionBox() {
   if (!box) return;
   var rect = screenshotSelectionImageRect();
   if (!state || !state.selection || !rect || rect.w <= 0 || rect.h <= 0) {
-    box.classList.add("hidden");
+    // Durante o arraste o quadro é posicionado por screenshotOnMouseMove: um zoom
+    // no meio do arraste não pode fazer a moldura sumir.
+    if (!state || !state.dragging) box.classList.add("hidden");
     return;
   }
   var scale = screenshotImageScale();
@@ -1710,12 +1723,11 @@ function screenshotStrokeEllipse(ctx, shape) {
 // a imagem final) quando existe, senão a imagem inteira. A lupa usa isso para
 // não jogar a lente para fora da área que será exportada.
 function screenshotAnnotBounds() {
-  var sel = screenshotSelectionImageRect();
-  if (sel && sel.w > 0 && sel.h > 0) return sel;
-  var img = screenshotOverlayImg();
-  if (img && img.naturalWidth > 0) {
-    return { x: 0, y: 0, w: img.naturalWidth, h: img.naturalHeight };
-  }
+  // Reusa a caixa de visualização (já limitada à imagem), evitando divergência
+  // entre o enquadramento do zoom e os limites das anotações (ex.: lupa em
+  // seleção de janela parcialmente fora do desktop).
+  var vb = screenshotViewBox();
+  if (vb && vb.w > 0 && vb.h > 0) return vb;
   return null;
 }
 
@@ -1791,6 +1803,12 @@ function screenshotDrawMagnifier(ctx, shape, source) {
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = "high";
   ctx.drawImage(source, s.x, s.y, s.w, s.h, d.x, d.y, d.w, d.h);
+  // Privacidade: se a região de origem tem borrão, a lente NÃO pode devolver o
+  // conteúdo nítido ampliado — replica o mesmo efeito sobre a lente.
+  var privacy = screenshotMagnifierPrivacyStrength(shape);
+  if (privacy > 0) {
+    screenshotPrivacyEffectInto(ctx, source, s.x, s.y, s.w, s.h, d.x, d.y, d.w, d.h, privacy);
+  }
   ctx.restore();
   // Borda da lente e marcação da área de origem.
   screenshotRoundedRectPath(ctx, d.x, d.y, d.w, d.h, radius);
@@ -1837,12 +1855,20 @@ function screenshotBlurRegion(ctx, shape, source, drawScale) {
   var w = Math.abs(shape.x2 - shape.x1);
   var h = Math.abs(shape.y2 - shape.y1);
   if (w < 4 || h < 4) return;
+  screenshotPrivacyEffectInto(ctx, source, x, y, w, h, x, y, w, h, Math.max(1, (shape.width || 6) / 6));
+}
+
+// screenshotPrivacyEffectInto aplica o efeito de privacidade (mosaico forte +
+// duas passadas de desfoque) lendo uma região da FONTE e escrevendo em um
+// destino qualquer. O borrão usa src == dst; a LUPA usa src = região de origem e
+// dst = lente, para não reexpor ampliado justamente o que o usuário borrou.
+function screenshotPrivacyEffectInto(ctx, source, srcX, srcY, srcW, srcH, dstX, dstY, dstW, dstH, strength) {
+  if (!source || srcW < 4 || srcH < 4) return;
   // O recorte é feito em pixels da fonte; para regiões gigantes o auxiliar é
   // reduzido (e o raio, junto) para não alocar canvas exagerado.
-  var shrink = Math.min(1, Math.sqrt(screenshotBlurMaxPixels / (w * h)));
-  var cw = Math.max(4, Math.round(w * shrink));
-  var ch = Math.max(4, Math.round(h * shrink));
-  var strength = Math.max(1, (shape.width || 6) / 6);
+  var shrink = Math.min(1, Math.sqrt(screenshotBlurMaxPixels / (srcW * srcH)));
+  var cw = Math.max(4, Math.round(srcW * shrink));
+  var ch = Math.max(4, Math.round(srcH * shrink));
   var temp = document.createElement("canvas");
   temp.width = cw;
   temp.height = ch;
@@ -1860,7 +1886,7 @@ function screenshotBlurRegion(ctx, shape, source, drawScale) {
   var mctx = mosaic.getContext("2d");
   mctx.imageSmoothingEnabled = true;
   mctx.imageSmoothingQuality = "high";
-  mctx.drawImage(source, x, y, w, h, 0, 0, mosaicW, mosaicH);
+  mctx.drawImage(source, srcX, srcY, srcW, srcH, 0, 0, mosaicW, mosaicH);
   tctx.imageSmoothingEnabled = true;
   tctx.imageSmoothingQuality = "high";
   tctx.drawImage(mosaic, 0, 0, mosaicW, mosaicH, 0, 0, cw, ch);
@@ -1886,8 +1912,32 @@ function screenshotBlurRegion(ctx, shape, source, drawScale) {
   ctx.save();
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = "high";
-  ctx.drawImage(temp, 0, 0, cw, ch, x, y, w, h);
+  ctx.drawImage(temp, 0, 0, cw, ch, dstX, dstY, dstW, dstH);
   ctx.restore();
+}
+
+// screenshotMagnifierPrivacyStrength devolve a intensidade do borrão que cobre a
+// região de origem da lupa (0 = nenhum). Sem isso a lupa mostrava NÍTIDO e
+// ampliado o conteúdo que o usuário havia borrado.
+function screenshotMagnifierPrivacyStrength(shape) {
+  var state = screenshotOverlayState;
+  if (!state || !state.annotations) return 0;
+  var ax1 = Math.min(shape.x1, shape.x2);
+  var ay1 = Math.min(shape.y1, shape.y2);
+  var ax2 = Math.max(shape.x1, shape.x2);
+  var ay2 = Math.max(shape.y1, shape.y2);
+  var strength = 0;
+  for (var i = 0; i < state.annotations.length; i += 1) {
+    var other = state.annotations[i];
+    if (!other || other === shape || other.type !== "blur") continue;
+    var bx1 = Math.min(other.x1, other.x2);
+    var by1 = Math.min(other.y1, other.y2);
+    var bx2 = Math.max(other.x1, other.x2);
+    var by2 = Math.max(other.y1, other.y2);
+    var overlaps = Math.min(ax2, bx2) > Math.max(ax1, bx1) && Math.min(ay2, by2) > Math.max(ay1, by1);
+    if (overlaps) strength = Math.max(strength, Math.max(1, (other.width || 6) / 6));
+  }
+  return strength;
 }
 
 // Passo numerado (círculo colorido com o número).

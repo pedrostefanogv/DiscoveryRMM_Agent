@@ -131,6 +131,43 @@
   line-height: 1.4;
 }
 
+/* No grid de artigos o estado vazio/erro é o único filho; sem o span ele ficava
+   preso na primeira coluna (minmax(320px, 1fr)) e o ícone/texto apareciam num
+   canto em vez de centralizados na área da lista. */
+.kb-articles-grid > .kb-empty-state {
+  grid-column: 1 / -1;
+  align-self: stretch;
+  justify-content: center;
+  min-height: 240px;
+}
+
+/* O placeholder "Carregando artigos..." sofre do mesmo confinamento de coluna. */
+.kb-articles-grid > .meta {
+  grid-column: 1 / -1;
+}
+
+/* Aviso de dados em cache (offline): usado por Suporte e Base de Conhecimento. */
+.cache-stale-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--warning-strong) 35%, transparent);
+  background: color-mix(in srgb, var(--warning-strong) 10%, transparent);
+  color: var(--warning-strong);
+  font-size: 0.8rem;
+  line-height: 1.3;
+}
+
+.cache-stale-banner::before {
+  content: "\26A0";
+  font-size: 1rem;
+  line-height: 1;
+}
+
 .kb-article-detail {
   display: flex;
   flex-direction: column;
@@ -1187,6 +1224,16 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.chat-queued-images { display: flex; gap: 4px; flex-shrink: 0; }
+
+.chat-queued-image {
+  width: 64px;
+  height: 40px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid var(--border);
 }
 
 .chat-queued-tag {

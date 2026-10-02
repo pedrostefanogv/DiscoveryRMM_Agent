@@ -393,9 +393,9 @@ Fluxo correto para criar um chamado:
 - flush_dns — limpa o cache DNS (ipconfig /flushdns)
 
 **Memorias Locais:**
-- memory/list — lista anotacoes locais do agente
-- memory/create(content) — cria uma nova anotacao
-- memory/delete(id) — remove uma anotacao pelo ID
+- memory_list — lista anotacoes locais do agente
+- memory_create(content) — cria uma nova anotacao
+- memory_delete(id) — remove uma anotacao pelo ID
 
 **Navegacao Interna:**
 - get_internal_navigation_routes — lista rotas disponiveis (store, updates, inventory, tickets, logs, chat, knowledge, debug)

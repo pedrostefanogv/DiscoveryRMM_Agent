@@ -824,6 +824,22 @@ func NewApp(opts AppStartupOptions) *App {
 			cfg := a.GetAgentConfiguration()
 			return cfg.KnowledgeBaseEnabled
 		},
+		// Fallback offline: clientId/siteId vêm da configuração persistida do
+		// agente (agent_configuration_raw, 30 dias) quando /configuration não
+		// responde. Permite consultar chamados e base de conhecimento offline.
+		AgentInfoFallback: func() (appsupport.AgentInfo, bool) {
+			cfg := a.GetAgentConfiguration()
+			clientID := strings.TrimSpace(cfg.ClientID)
+			siteID := strings.TrimSpace(cfg.SiteID)
+			if clientID == "" && siteID == "" {
+				return appsupport.AgentInfo{}, false
+			}
+			return appsupport.AgentInfo{
+				AgentID:  strings.TrimSpace(a.GetDebugConfig().AgentID),
+				ClientID: clientID,
+				SiteID:   siteID,
+			}, true
+		},
 	})
 	a.UpdatesSvc = updates.NewService(updates.Options{
 		Apps:          a.AppsSvc,
@@ -1861,6 +1877,13 @@ func (a *App) onPostBootstrapProvisioned(ctx context.Context) error {
 		if a.SupportSvc != nil && a.featureEnabled(a.GetAgentConfiguration().KnowledgeBaseEnabled) {
 			if err := a.SupportSvc.RefreshKnowledgeBase(); err != nil {
 				a.Logs.Append("[startup] post-bootstrap: falha ao atualizar knowledge base: " + err.Error())
+			}
+		}
+		// Snapshot local de chamados: sem este prefetch o cache offline só
+		// existia depois de o usuário abrir a aba Suporte online ao menos uma vez.
+		if a.SupportSvc != nil && a.featureEnabled(a.GetAgentConfiguration().SupportEnabled) {
+			if _, err := a.SupportSvc.GetSupportTickets(); err != nil {
+				a.Logs.Append("[startup] post-bootstrap: falha ao atualizar snapshot local de chamados: " + err.Error())
 			}
 		}
 		// Registra tools MCP do agent na API para o fluxo multi-round do chat

@@ -1562,8 +1562,24 @@ async function loadSupportTickets(opts) {
   supportTicketsListEl.innerHTML = '<div class="meta">' + escapeHtml(translate('common.loading')) + '</div>';
   if (ticketsResultCountEl) ticketsResultCountEl.textContent = '';
 
+  var staleBanner = document.getElementById('supportStaleBanner');
+
   try {
-    var tickets = await appApi().GetSupportTickets();
+    var api = appApi();
+    var tickets;
+    // Binding com status: permite avisar que a lista veio do cache offline.
+    if (typeof api.GetSupportTicketsWithStatus === 'function') {
+      var result = await api.GetSupportTicketsWithStatus();
+      // Tolera tanto o envelope {tickets,stale} quanto um array cru (binário
+      // antigo/build sem bindings regenerados).
+      tickets = result && Array.isArray(result.tickets)
+        ? result.tickets
+        : (Array.isArray(result) ? result : []);
+      if (staleBanner) staleBanner.classList.toggle('hidden', !(result && result.stale));
+    } else {
+      tickets = await api.GetSupportTickets();
+      if (staleBanner) staleBanner.classList.add('hidden');
+    }
     supportTicketsAll = Array.isArray(tickets) ? tickets : [];
     supportTicketsLoadFailed = false;
     var states = [];
@@ -1574,6 +1590,7 @@ async function loadSupportTickets(opts) {
     supportTicketsAll = [];
     supportTicketsById = {};
     supportTicketsLoadFailed = true;
+    if (staleBanner) staleBanner.classList.add('hidden');
     supportTicketsListEl.innerHTML = '<div class="meta">' + escapeHtml(translate('support.ticketListLoadError', { error: String(err) })) + '</div>';
   }
 }
@@ -2007,7 +2024,11 @@ async function loadTicketComments(ticketId) {
     commentsListEl.scrollTop = commentsListEl.scrollHeight;
   } catch (err) {
     if (currentTicketId !== ticketId) return;
-    commentsListEl.innerHTML = '<div class="meta">' + escapeHtml(translate('support.commentLoadError', { error: String(err) })) + '</div>';
+    // Sem snapshot local, falha de rede vira mensagem amigável em vez do erro cru.
+    var commentMsg = /conectar|deadline|timeout|connection|network|inacess/i.test(String(err))
+      ? translate('support.commentsOffline')
+      : translate('support.commentLoadError', { error: String(err) });
+    commentsListEl.innerHTML = '<div class="meta">' + escapeHtml(commentMsg) + '</div>';
   }
 }
 

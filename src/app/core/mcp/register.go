@@ -221,7 +221,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 
 	// ========== MEMORIAS LOCAIS ==========
 	reg.Register(Tool{
-		Name:        "memory/list",
+		Name:        "memory_list",
 		Description: "Lista as memorias/anotacoes locais gravadas pelo agente.",
 		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			return app.GetLocalMemories()
@@ -229,7 +229,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 	})
 
 	reg.Register(Tool{
-		Name:        "memory/create",
+		Name:        "memory_create",
 		Description: "Cria uma nova memorias/anotacao local.",
 		Params: []ToolParam{
 			{Name: "content", Type: "string", Description: "Conteudo da anotacao", Required: true},
@@ -244,7 +244,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 	})
 
 	reg.Register(Tool{
-		Name:        "memory/delete",
+		Name:        "memory_delete",
 		Description: "Remove uma memorias/anotacao local pelo ID.",
 		Params: []ToolParam{
 			{Name: "id", Type: "integer", Description: "ID da anotacao", Required: true},

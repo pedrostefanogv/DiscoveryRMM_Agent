@@ -23,8 +23,9 @@ const (
 	knowledgeMinRefreshInterval = 5 * time.Minute
 	// knowledgeBackupTTL: cópia de segurança usada quando o servidor está
 	// inacessível (stale-if-error) — a página de conhecimento continua
-	// funcionando offline/instável com o último conteúdo conhecido.
-	knowledgeBackupTTL = 30 * 24 * time.Hour
+	// funcionando offline/instável com o último conteúdo conhecido. Alinhado ao
+	// longo prazo da identidade durável (era 30d e sumia antes dos chamados).
+	knowledgeBackupTTL = 180 * 24 * time.Hour
 	// knowledgeMaxBodyBytes: teto de leitura do corpo HTTP (anti-OOM para
 	// respostas gigantes/malformadas do servidor).
 	knowledgeMaxBodyBytes = 8 << 20
@@ -361,7 +362,7 @@ func parseKnowledgePagesBody(body []byte) ([]KnowledgePage, error) {
 
 func knowledgeCacheScope(cfg debug.Config, info AgentInfo) string {
 	parts := []string{
-		strings.TrimSpace(strings.ToLower(cfg.ApiScheme)),
+		apiScheme(cfg),
 		strings.TrimSpace(strings.ToLower(cfg.ApiServer)),
 		strings.TrimSpace(strings.ToLower(info.ClientID)),
 		strings.TrimSpace(strings.ToLower(info.SiteID)),
@@ -373,25 +374,61 @@ func knowledgeCacheScope(cfg debug.Config, info AgentInfo) string {
 	return strings.Join(parts, ":")
 }
 
-func (s *Service) fetchKnowledgeList(info AgentInfo, category string) ([]KnowledgeArticle, error) {
+// knowledgeScopeControlKey guarda o escopo ativo para limpar caches órfãos
+// quando o agente troca de cliente/site/ID (transferência/reprovisionamento).
+const knowledgeScopeControlKey = "knowledge:active_scope"
+
+// cleanupOldKnowledgeScope remove caches (quentes e backups) do escopo anterior
+// quando o escopo muda — antes eles ficavam no SQLite para sempre.
+func (s *Service) cleanupOldKnowledgeScope(scope string) {
+	if s.db == nil || strings.TrimSpace(scope) == "" {
+		return
+	}
+	purger, ok := s.db.(CachePurger)
+	if !ok {
+		return
+	}
+	var previous string
+	if found, err := s.db.CacheGetJSON(knowledgeScopeControlKey, &previous); err == nil && found {
+		previous = strings.TrimSpace(previous)
+		if previous != "" && previous != scope {
+			for _, prefix := range []string{
+				"knowledge:list:", "knowledge:detail:", "knowledge:pages:",
+				"knowledge:backup:list:", "knowledge:backup:detail:", "knowledge:backup:pages:",
+			} {
+				if err := purger.CacheDeletePrefix(prefix + previous + ":"); err != nil {
+					log.Printf("[support] aviso: falha ao limpar cache %s<escopo>: %v", prefix, err)
+				}
+			}
+			s.supportLogf("escopo de knowledge mudou; caches antigos removidos")
+		}
+	}
+	_ = s.db.CacheSetJSON(knowledgeScopeControlKey, scope, 0)
+}
+
+// fetchKnowledgeList devolve artigos e se a origem foi o backup offline
+// (stale), para a UI avisar e para o enriquecimento não tentar rede.
+func (s *Service) fetchKnowledgeList(info AgentInfo, category string) ([]KnowledgeArticle, bool, error) {
 	return s.fetchKnowledgeListWithCache(info, category, true)
 }
 
-func (s *Service) fetchKnowledgeListWithCache(info AgentInfo, category string, useCache bool) ([]KnowledgeArticle, error) {
+func (s *Service) fetchKnowledgeListWithCache(info AgentInfo, category string, useCache bool) ([]KnowledgeArticle, bool, error) {
 	cfg := s.debugConfig()
-	base := strings.TrimSpace(strings.ToLower(cfg.ApiScheme)) + "://" + strings.TrimSpace(cfg.ApiServer)
+	base := apiScheme(cfg) + "://" + strings.TrimSpace(cfg.ApiServer)
 	if strings.TrimSpace(cfg.ApiServer) == "" || strings.TrimSpace(cfg.AuthToken) == "" {
-		return nil, fmt.Errorf("configuração de servidor API incompleta: preencha apiServer e token no Debug")
+		return nil, false, fmt.Errorf("configuração de servidor API incompleta: preencha apiServer e token no Debug")
 	}
-	cacheKey := "knowledge:list:" + knowledgeCacheScope(cfg, info) + ":" + url.QueryEscape(strings.TrimSpace(strings.ToLower(category)))
+	scope := knowledgeCacheScope(cfg, info)
+	s.cleanupOldKnowledgeScope(scope)
+	cacheKey := "knowledge:list:" + scope + ":" + url.QueryEscape(strings.TrimSpace(strings.ToLower(category)))
 
 	if useCache && s.db != nil {
 		var cached []KnowledgeArticle
 		if found, err := s.db.CacheGetJSON(cacheKey, &cached); err == nil && found {
 			if cached == nil {
-				return []KnowledgeArticle{}, nil
+				return []KnowledgeArticle{}, false, nil
 			}
-			return cached, nil
+			return cached, false, nil
 		}
 	}
 
@@ -430,9 +467,9 @@ func (s *Service) fetchKnowledgeListWithCache(info AgentInfo, category string, u
 				var backup []KnowledgeArticle
 				if s.readKnowledgeBackup(cacheKey, &backup) {
 					s.supportLogf("servidor inacessivel (%v) — usando backup local da base de conhecimento (%d artigo(s))", err, len(backup))
-					return backup, nil
+					return backup, true, nil
 				}
-				return nil, fmt.Errorf("falha ao buscar artigos da base de conhecimento: %w", err)
+				return nil, false, fmt.Errorf("falha ao buscar artigos da base de conhecimento: %w", err)
 			}
 			// Página intermediária falhou: segue com o parcial (best-effort, logado).
 			s.supportLogf("página %d da base de conhecimento falhou (%v) — seguindo com %d artigo(s) parciais", pageIdx+1, err, len(articles))
@@ -449,10 +486,10 @@ func (s *Service) fetchKnowledgeListWithCache(info AgentInfo, category string, u
 					var backup []KnowledgeArticle
 					if s.readKnowledgeBackup(cacheKey, &backup) {
 						s.supportLogf("HTTP %d do servidor — usando backup local da base de conhecimento (%d artigo(s))", resp.StatusCode, len(backup))
-						return backup, nil
+						return backup, true, nil
 					}
 				}
-				return nil, fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(body)))
+				return nil, false, fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(body)))
 			}
 			s.supportLogf("HTTP %s na página %d da base de conhecimento — seguindo com %d artigo(s) parciais", resp.Status, pageIdx+1, len(articles))
 			break
@@ -461,7 +498,7 @@ func (s *Service) fetchKnowledgeListWithCache(info AgentInfo, category string, u
 		pg, err := parseKnowledgeListEnvelope(body)
 		if err != nil {
 			if pageIdx == 0 {
-				return nil, fmt.Errorf("resposta invalida ao listar artigos: %w", err)
+				return nil, false, fmt.Errorf("resposta invalida ao listar artigos: %w", err)
 			}
 			s.supportLogf("resposta invalida na página %d da base de conhecimento — seguindo com %d artigo(s) parciais", pageIdx+1, len(articles))
 			break
@@ -501,7 +538,7 @@ func (s *Service) fetchKnowledgeListWithCache(info AgentInfo, category string, u
 	}
 	s.saveKnowledgeBackup(cacheKey, articles)
 
-	return articles, nil
+	return articles, false, nil
 }
 
 func (s *Service) RefreshKnowledgeBase() error {
@@ -510,13 +547,26 @@ func (s *Service) RefreshKnowledgeBase() error {
 	}
 
 	s.knowledgeMu.Lock()
+	// Flag in-flight: o lock era liberado antes do fetch e dois refreshes
+	// concorrentes passavam pela checagem de intervalo mínimo.
+	if s.knowledgeRefreshing {
+		s.knowledgeMu.Unlock()
+		s.supportLogf("refresh da knowledge base ignorado: já existe um refresh em andamento")
+		return nil
+	}
 	if time.Since(s.lastKnowledgeRefresh) < knowledgeMinRefreshInterval {
 		s.knowledgeMu.Unlock()
 		s.supportLogf("refresh da knowledge base ignorado: intervalo mínimo de %s não decorrido (último refresh há %s)",
 			knowledgeMinRefreshInterval, time.Since(s.lastKnowledgeRefresh).Round(time.Second))
 		return nil
 	}
+	s.knowledgeRefreshing = true
 	s.knowledgeMu.Unlock()
+	defer func() {
+		s.knowledgeMu.Lock()
+		s.knowledgeRefreshing = false
+		s.knowledgeMu.Unlock()
+	}()
 
 	info, err := s.fetchAgentContext()
 	if err != nil {
@@ -526,6 +576,7 @@ func (s *Service) RefreshKnowledgeBase() error {
 
 	cfg := s.debugConfig()
 	scope := knowledgeCacheScope(cfg, info)
+	s.cleanupOldKnowledgeScope(scope)
 	// Purge COMPLETO do escopo: antes só a lista sem categoria era limpa e
 	// listas filtradas/detalhes/páginas ficavam defasados até 6h após o refresh.
 	// Backups (knowledge:backup:...) são preservados para o fallback offline.
@@ -545,7 +596,7 @@ func (s *Service) RefreshKnowledgeBase() error {
 		}
 	}
 
-	articles, err := s.fetchKnowledgeListWithCache(info, "", false)
+	articles, _, err := s.fetchKnowledgeListWithCache(info, "", false)
 	if err != nil {
 		s.supportLogf("falha ao recarregar base de conhecimento: %v", err)
 		return err
@@ -580,7 +631,7 @@ func (s *Service) fetchKnowledgeDetail(info AgentInfo, articleID string) (Knowle
 		}
 	}
 
-	target := strings.TrimSpace(strings.ToLower(cfg.ApiScheme)) + "://" + strings.TrimSpace(cfg.ApiServer) + "/api/v1/agent-auth/knowledge/" + url.PathEscape(articleID)
+	target := apiScheme(cfg) + "://" + strings.TrimSpace(cfg.ApiServer) + "/api/v1/agent-auth/knowledge/" + url.PathEscape(articleID)
 
 	ctx := s.ctxOrBackground()
 
@@ -655,7 +706,7 @@ func (s *Service) fetchKnowledgePages(info AgentInfo, articleID string) ([]Knowl
 		}
 	}
 
-	target := strings.TrimSpace(strings.ToLower(cfg.ApiScheme)) + "://" + strings.TrimSpace(cfg.ApiServer) + "/api/v1/agent-auth/knowledge/" + url.PathEscape(articleID) + "/pages"
+	target := apiScheme(cfg) + "://" + strings.TrimSpace(cfg.ApiServer) + "/api/v1/agent-auth/knowledge/" + url.PathEscape(articleID) + "/pages"
 
 	ctx := s.ctxOrBackground()
 
@@ -709,33 +760,76 @@ func (s *Service) fetchKnowledgePages(info AgentInfo, articleID string) ([]Knowl
 	return pages, nil
 }
 
-// GetKnowledgeBaseArticles returns knowledge-base articles available to the authenticated agent.
+// KnowledgeArticleList é o retorno da listagem para o binding da UI, com o flag
+// de cache offline (stale) usado para avisar que os dados podem estar antigos.
+type KnowledgeArticleList struct {
+	Articles []KnowledgeArticle `json:"articles"`
+	Stale    bool               `json:"stale"`
+}
+
+// GetKnowledgeBaseArticles mantém a assinatura antiga (sem erro) para
+// compatibilidade — a UI usa GetKnowledgeBaseArticleList, que propaga erro.
 func (s *Service) GetKnowledgeBaseArticles() []KnowledgeArticle {
+	result, _ := s.getAllKnowledgeArticles("")
+	if result.Articles == nil {
+		// Compat: a assinatura antiga nunca devolvia nil (virava "null" no JSON).
+		return []KnowledgeArticle{}
+	}
+	return result.Articles
+}
+
+// GetKnowledgeBaseArticleList devolve os artigos + indicador de cache offline.
+func (s *Service) GetKnowledgeBaseArticleList() (KnowledgeArticleList, error) {
+	return s.getAllKnowledgeArticles("")
+}
+
+func (s *Service) getAllKnowledgeArticles(category string) (KnowledgeArticleList, error) {
 	if !s.featureEnabled(s.knowledgeEnabled()) {
 		s.supportLogf("base de conhecimento desabilitada pela configuracao do agente")
-		return []KnowledgeArticle{}
+		return KnowledgeArticleList{Articles: []KnowledgeArticle{}}, nil
 	}
 
 	info, err := s.fetchAgentContext()
 	if err != nil {
 		s.supportLogf("falha ao resolver contexto para knowledge base: %v", err)
-		return []KnowledgeArticle{}
+		return KnowledgeArticleList{}, err
 	}
 
-	articles, err := s.fetchKnowledgeList(info, "")
+	articles, fromBackup, err := s.fetchKnowledgeList(info, category)
 	if err != nil {
 		s.supportLogf("falha ao listar base de conhecimento: %v", err)
-		return []KnowledgeArticle{}
+		return KnowledgeArticleList{}, err
 	}
 
-	return s.enrichKnowledgeArticles(info, articles)
+	return KnowledgeArticleList{
+		Articles: s.enrichKnowledgeArticles(info, articles, !fromBackup),
+		Stale:    fromBackup,
+	}, nil
+}
+
+// readCachedKnowledgeDetail lê um detalhe SEM rede (cache quente ou backup),
+// usado quando a listagem veio do backup offline.
+func (s *Service) readCachedKnowledgeDetail(info AgentInfo, articleID string) (KnowledgeArticle, error) {
+	cfg := s.debugConfig()
+	cacheKey := "knowledge:detail:" + knowledgeCacheScope(cfg, info) + ":" + url.QueryEscape(strings.ToLower(articleID))
+	if s.db != nil {
+		var cached KnowledgeArticle
+		if found, err := s.db.CacheGetJSON(cacheKey, &cached); err == nil && found && strings.TrimSpace(cached.ID) != "" {
+			return cached, nil
+		}
+	}
+	var backup KnowledgeArticle
+	if s.readKnowledgeBackup(cacheKey, &backup) && strings.TrimSpace(backup.ID) != "" {
+		return backup, nil
+	}
+	return KnowledgeArticle{}, fmt.Errorf("detalhe do artigo %s não está em cache", articleID)
 }
 
 // enrichKnowledgeArticles completa conteúdo/resumo/tags dos artigos que vieram
-// sem 'content' na listagem (N+1 controlado): busca os detalhes em PARALELO com
-// teto de concorrência — antes era sequencial (N requisições HTTP, cada uma até
-// 15s), travando a página em 'Carregando artigos...'.
-func (s *Service) enrichKnowledgeArticles(info AgentInfo, articles []KnowledgeArticle) []KnowledgeArticle {
+// sem 'content' na listagem (N+1 controlado), em PARALELO com teto de
+// concorrência. Com allowNetwork=false (lista veio do backup offline) usa
+// APENAS o cache local: sem isso cada artigo dispararia 2×15s de timeout.
+func (s *Service) enrichKnowledgeArticles(info AgentInfo, articles []KnowledgeArticle, allowNetwork bool) []KnowledgeArticle {
 	type detailJob struct {
 		idx int
 		id  string
@@ -759,7 +853,13 @@ func (s *Service) enrichKnowledgeArticles(info AgentInfo, articles []KnowledgeAr
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			detail, err := s.fetchKnowledgeDetail(info, j.id)
+			var detail KnowledgeArticle
+			var err error
+			if allowNetwork {
+				detail, err = s.fetchKnowledgeDetail(info, j.id)
+			} else {
+				detail, err = s.readCachedKnowledgeDetail(info, j.id)
+			}
 			if err != nil {
 				s.supportLogf("falha ao carregar markdown do artigo %s: %v", j.id, err)
 				return
@@ -788,20 +888,8 @@ func (s *Service) enrichKnowledgeArticles(info AgentInfo, articles []KnowledgeAr
 // Usa o MESMO enriquecimento da listagem principal — antes o conteúdo/summary
 // ficavam vazios no caminho com filtro de categoria.
 func (s *Service) GetKnowledgeArticles(category string) ([]KnowledgeArticle, error) {
-	if !s.featureEnabled(s.knowledgeEnabled()) {
-		s.supportLogf("base de conhecimento desabilitada pela configuracao do agente")
-		return []KnowledgeArticle{}, nil
-	}
-	info, err := s.fetchAgentContext()
-	if err != nil {
-		s.supportLogf("falha ao resolver contexto para knowledge base: %v", err)
-		return nil, err
-	}
-	articles, err := s.fetchKnowledgeList(info, category)
-	if err != nil {
-		return nil, err
-	}
-	return s.enrichKnowledgeArticles(info, articles), nil
+	result, err := s.getAllKnowledgeArticles(category)
+	return result.Articles, err
 }
 
 // GetKnowledgeArticleDetails returns a single article by ID.

@@ -403,6 +403,7 @@ var CHAT_BUSY_REQUEUE_MS = 3000;
 var chatBusyRequeueAttempts = 0;
 var chatBusyRequeueTimerId = null;
 var lastDispatchedChatText = "";
+var lastDispatchedChatImages = [];
 
 function isChatBusyError(errMsg) {
   return String(errMsg || "").indexOf(CHAT_BUSY_ERR_MARKER) !== -1;
@@ -415,6 +416,7 @@ function clearChatBusyRequeue() {
   }
   chatBusyRequeueAttempts = 0;
   lastDispatchedChatText = "";
+  lastDispatchedChatImages = [];
 }
 
 function scheduleChatBusyRequeue() {
@@ -446,14 +448,20 @@ function autoGrowChatInput() {
   chatInputEl.style.height = Math.max(Math.min(chatInputEl.scrollHeight, 120), 60) + "px";
 }
 
-function queueChatMessage(text) {
-  if (!chatMessagesEl) return;
+// Devolve false quando a mensagem NÃO entrou na fila (sem espaço): quem chamou
+// precisa devolver os anexos ao composer, senão eles somem sem nunca serem
+// enviados (o take acontece antes do enfileiramento).
+function queueChatMessage(text, images) {
+  if (!chatMessagesEl) return false;
   if (chatMessageQueue.length >= CHAT_MESSAGE_QUEUE_MAX) {
     showFeedback(translate("chat.queueFull", { max: CHAT_MESSAGE_QUEUE_MAX }), true);
-    return;
+    return false;
   }
 
-  var item = { text: text, el: null };
+  // Os anexos ficam PRESOS na mensagem enfileirada (snapshot): sem isso a fila
+  // despachava apenas o texto e o print acabava indo com a próxima mensagem —
+  // ou se perdia se o usuário trocasse os anexos do composer enquanto esperava.
+  var item = { text: text, el: null, images: images || [] };
   var div = document.createElement("div");
   div.className = "chat-msg user chat-queued";
   div.title = text;
@@ -462,6 +470,19 @@ function queueChatMessage(text) {
   textEl.className = "chat-queued-text";
   textEl.textContent = text;
   div.appendChild(textEl);
+
+  if (item.images.length > 0) {
+    var thumbs = document.createElement("span");
+    thumbs.className = "chat-queued-images";
+    item.images.forEach(function (src) {
+      var img = document.createElement("img");
+      img.className = "chat-queued-image";
+      img.src = src;
+      img.alt = "anexo na fila";
+      thumbs.appendChild(img);
+    });
+    div.appendChild(thumbs);
+  }
 
   var tag = document.createElement("span");
   tag.className = "chat-queued-tag";
@@ -483,12 +504,18 @@ function queueChatMessage(text) {
   item.el = div;
   chatMessageQueue.push(item);
   scheduleChatScrollToBottom();
+  return true;
 }
 
 function removeQueuedChatMessage(item) {
   var idx = chatMessageQueue.indexOf(item);
   if (idx !== -1) chatMessageQueue.splice(idx, 1);
   if (item.el && item.el.parentNode) item.el.parentNode.removeChild(item.el);
+  // Cancelar a mensagem devolve os prints ao composer (nada é perdido por ter
+  // sido enviado junto dela).
+  if (item.images && item.images.length && typeof screenshotRestoreAttachments === "function") {
+    screenshotRestoreAttachments(item.images);
+  }
 }
 
 // maybeFlushChatQueue despacha a próxima mensagem em fila quando o chat fica
@@ -499,7 +526,7 @@ function maybeFlushChatQueue() {
   if (chatSending || !chatMessageQueue.length) return;
   var next = chatMessageQueue.shift();
   if (next.el && next.el.parentNode) next.el.parentNode.removeChild(next.el);
-  dispatchChatMessage(next.text);
+  dispatchChatMessage(next.text, next.images);
 }
 
 // ─── Activity do agent (status polido: conectar → ferramentas → resposta) ───
@@ -559,9 +586,9 @@ var CHAT_TOOL_LABELS = {
   "rate_ticket": "Registrando avaliação",
   "ping_host": "Testando conectividade (ping)",
   "flush_dns": "Limpando cache DNS",
-  "memory/list": "Consultando memórias",
-  "memory/create": "Salvando anotação",
-  "memory/delete": "Removendo anotação",
+  "memory_list": "Consultando memórias",
+  "memory_create": "Salvando anotação",
+  "memory_delete": "Removendo anotação",
   "get_internal_navigation_routes": "Mapeando telas do app",
   "build_internal_navigation_link": "Criando link interno",
   "ask_user": "Aguardando sua resposta",
@@ -1047,7 +1074,12 @@ function onStreamError(errMsg) {
     if (requeueText && chatBusyRequeueAttempts < CHAT_BUSY_REQUEUE_MAX) {
       chatBusyRequeueAttempts++;
       console.warn("[chat] send recusado (turno em andamento) — reenfileirado (tentativa " + chatBusyRequeueAttempts + "/" + CHAT_BUSY_REQUEUE_MAX + ")");
-      queueChatMessage(requeueText);
+      if (!queueChatMessage(requeueText, lastDispatchedChatImages)) {
+        // Sem espaço na fila: os prints voltam ao composer em vez de sumirem.
+        if (lastDispatchedChatImages.length > 0 && typeof screenshotRestoreAttachments === "function") {
+          screenshotRestoreAttachments(lastDispatchedChatImages);
+        }
+      }
       scheduleChatBusyRequeue();
       return;
     }
@@ -2708,8 +2740,18 @@ async function sendChatMessage() {
 
   if (chatSending) {
     // Chat processando: enfileira e limpa o input. A mensagem entra no
-    // contexto na primeira oportunidade (maybeFlushChatQueue).
-    queueChatMessage(text);
+    // contexto na primeira oportunidade (maybeFlushChatQueue) e leva junto os
+    // prints que estavam anexados no momento do envio.
+    var queuedImages =
+      typeof screenshotTakePendingImages === "function" ? screenshotTakePendingImages() : [];
+    if (!queueChatMessage(text, queuedImages)) {
+      // Fila cheia: os prints voltam para o composer e o texto fica no input, em
+      // vez de os anexos serem consumidos e nunca enviados.
+      if (queuedImages.length > 0 && typeof screenshotRestoreAttachments === "function") {
+        screenshotRestoreAttachments(queuedImages);
+      }
+      return;
+    }
     chatInputEl.value = "";
     autoGrowChatInput();
     return;
@@ -2721,19 +2763,28 @@ async function sendChatMessage() {
 
 // dispatchChatMessage faz o dispatch real de uma mensagem do usuário (bolha +
 // StartChatStream). Quem chama garante que o chat está livre (chatSending=false).
-function dispatchChatMessage(text) {
+// `images` é o snapshot de anexos que veio junto da mensagem enfileirada; quando
+// ausente (envio direto), pega o que está pendente no composer.
+function dispatchChatMessage(text, images) {
   addChatMessage("user", text);
 
   // Prints anexados pelo usuário (ícone de câmera do composer): vão junto do
   // texto no primeiro round e viram conteúdo multimodal no servidor.
   var attachedImages =
-    typeof screenshotTakePendingImages === "function" ? screenshotTakePendingImages() : [];
+    images && images.length
+      ? images
+      : typeof screenshotTakePendingImages === "function"
+        ? screenshotTakePendingImages()
+        : [];
   if (attachedImages.length > 0 && typeof screenshotRenderSentImages === "function") {
     screenshotRenderSentImages(attachedImages);
   }
 
   chatStopRequested = false;
   lastDispatchedChatText = text;
+  // Guardado para o reenfileiramento por "turno em andamento": sem isso o print
+  // era perdido quando o backend recusava o envio.
+  lastDispatchedChatImages = attachedImages;
   setChatBusy(true);
   resetA2uiTokenFilter();
 
@@ -2794,8 +2845,10 @@ function dispatchChatMessage(text) {
         }
       })
       .catch(function (err) {
-        // O envio falhou: não perder os prints anexados.
-        if (imagesSent && typeof screenshotRestoreAttachments === "function") {
+        // O envio falhou: não perder os prints anexados. Exceção: recusa por
+        // "turno em andamento" — nesse caso o onStreamError reenfileira a
+        // mensagem COM as imagens, então devolvê-las ao composer duplicaria.
+        if (imagesSent && typeof screenshotRestoreAttachments === "function" && !isChatBusyError(String(err))) {
           screenshotRestoreAttachments(attachedImages);
         }
         onStreamError(String(err));

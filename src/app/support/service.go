@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"reflect"
 	"regexp"
 	"sort"
@@ -85,8 +86,17 @@ func doPostWithRetry(ctx context.Context, client *http.Client, req *http.Request
 // doGetWithRetry repete uma requisição GET uma vez em falha de rede ou HTTP 5xx,
 // com backoff de 500ms. O request é reconstruído a cada tentativa.
 func doGetWithRetry(ctx context.Context, client *http.Client, buildReq func() (*http.Request, error)) (*http.Response, error) {
+	return doGetAttempts(ctx, client, 2, buildReq)
+}
+
+// doGetAttempts permite reduzir as tentativas quando já existe fallback local:
+// offline, o retry dobra o tempo até o dado em cache aparecer.
+func doGetAttempts(ctx context.Context, client *http.Client, attempts int, buildReq func() (*http.Request, error)) (*http.Response, error) {
+	if attempts < 1 {
+		attempts = 1
+	}
 	var lastErr error
-	for attempt := 0; attempt < 2; attempt++ {
+	for attempt := 0; attempt < attempts; attempt++ {
 		if attempt > 0 {
 			select {
 			case <-ctx.Done():
@@ -103,7 +113,10 @@ func doGetWithRetry(ctx context.Context, client *http.Client, buildReq func() (*
 			lastErr = err
 			continue
 		}
-		if resp.StatusCode >= 500 && attempt == 0 {
+		// Só descarta a resposta para retry quando ainda existe tentativa
+		// seguinte. Com attempts=1 a resposta 5xx precisa chegar ao chamador,
+		// senão o status real é perdido (virava "HTTP 500" genérico).
+		if resp.StatusCode >= 500 && attempt < attempts-1 {
 			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
 			_ = resp.Body.Close()
 			continue
@@ -170,6 +183,11 @@ type Options struct {
 	FeatureEnabled   func(*bool) bool
 	SupportEnabled   func() *bool
 	KnowledgeEnabled func() *bool
+	// AgentInfoFallback devolve clientId/siteId persistidos localmente (cache de
+	// configuração do agente) quando /configuration está inacessível. É a última
+	// linha de defesa para a consulta offline em instalações que ainda não têm a
+	// identidade durável gravada no cache do suporte.
+	AgentInfoFallback func() (AgentInfo, bool)
 }
 
 // Service handles support and knowledge base APIs.
@@ -183,8 +201,11 @@ type Service struct {
 	supportEnabled   func() *bool
 	knowledgeEnabled func() *bool
 
+	agentInfoFallback func() (AgentInfo, bool)
+
 	knowledgeMu          sync.Mutex
 	lastKnowledgeRefresh time.Time
+	knowledgeRefreshing  bool
 }
 
 // NewService builds a support service.
@@ -214,14 +235,15 @@ func NewService(opts Options) *Service {
 		knowledgeEnabled = func() *bool { return nil }
 	}
 	return &Service{
-		logf:             logf,
-		ctx:              ctx,
-		db:               normalizeCacheDB(opts.DB),
-		agentInfo:        opts.AgentInfo,
-		debugConfig:      debugConfig,
-		featureEnabled:   featureEnabled,
-		supportEnabled:   supportEnabled,
-		knowledgeEnabled: knowledgeEnabled,
+		logf:              logf,
+		ctx:               ctx,
+		db:                normalizeCacheDB(opts.DB),
+		agentInfo:         opts.AgentInfo,
+		agentInfoFallback: opts.AgentInfoFallback,
+		debugConfig:       debugConfig,
+		featureEnabled:    featureEnabled,
+		supportEnabled:    supportEnabled,
+		knowledgeEnabled:  knowledgeEnabled,
 	}
 }
 
@@ -423,14 +445,239 @@ func extractAgentInfoFromJSON(body []byte, cfg debug.Config) (AgentInfo, error) 
 	return info, nil
 }
 
-// fetchAgentContext resolves clientId/siteId from /api/v1/agent-auth/me (cached).
-func (s *Service) fetchAgentContext() (AgentInfo, error) {
-	if info, ok := s.agentInfo.Get(); ok {
-		if strings.TrimSpace(info.ClientID) != "" {
+const (
+	// agentInfoCacheTTL é o TTL do cache "quente" da identidade resolvida.
+	agentInfoCacheTTL = 24 * time.Hour
+	// agentInfoStaleCacheKey guarda a última identidade válida SEM expiração.
+	// O cache "agent_info" expira em 24h e o CacheGet apaga a entrada vencida;
+	// sem essa cópia durável, um agente offline por mais de um dia perdia
+	// clientId/siteId e TANTO os chamados QUANTO a base de conhecimento falhavam
+	// em /configuration antes de chegar aos caches de conteúdo.
+	agentInfoStaleCacheKey = "agent_info_stale"
+	// ticketListBackupTTL: snapshot local da listagem de chamados, sem
+	// expiração, para consulta offline. É sobrescrito a cada listagem exitosa.
+	ticketListBackupTTL = 0
+	// ticketScopeControlKey guarda o escopo local ativo para limpar snapshots
+	// órfãos quando o agente muda de servidor/ID (transferência/reinstalação).
+	ticketScopeControlKey = "tickets:active_scope"
+)
+
+// apiScheme devolve o scheme efetivo da API: prefere o campo legado (já
+// sincronizado por normalizeApiScheme) e cai para o canônico APIScheme()
+// quando ele está vazio/inválido — antes um ApiScheme vazio gerava "://".
+func apiScheme(cfg debug.Config) string {
+	if s := strings.TrimSpace(strings.ToLower(cfg.ApiScheme)); s == "http" || s == "https" {
+		return s
+	}
+	return cfg.APIScheme()
+}
+
+// ticketListCacheKey identifica a listagem de chamados desta instalação usando
+// apenas dados locais (apiScheme/apiServer/agentId) — não depende de
+// clientId/siteId, que só existem depois de uma resposta do servidor. Assim o
+// backup continua legível mesmo quando /configuration está inacessível.
+func ticketListCacheKey(cfg debug.Config) string {
+	parts := []string{
+		apiScheme(cfg),
+		strings.TrimSpace(strings.ToLower(cfg.ApiServer)),
+		strings.TrimSpace(strings.ToLower(cfg.AgentID)),
+	}
+	for i, p := range parts {
+		parts[i] = url.QueryEscape(p)
+	}
+	return "tickets:list:" + strings.Join(parts, ":")
+}
+
+// ticketScope é o escopo local (scheme/servidor/agentId) usado nas chaves.
+func ticketScope(cfg debug.Config) string {
+	return strings.TrimPrefix(ticketListCacheKey(cfg), "tickets:list:")
+}
+
+// ticketListBackupKey produz a chave do snapshot offline a partir da chave de
+// listagem. Fica FORA do prefixo "tickets:list:" para nunca ser confundido com
+// cache quente e sobreviver a limpezas de cache por prefixo.
+func ticketListBackupKey(cacheKey string) string {
+	return "tickets:backup:" + strings.TrimPrefix(cacheKey, "tickets:")
+}
+
+func ticketDetailBackupKey(cfg debug.Config, ticketID string) string {
+	return "tickets:backup:detail:" + ticketScope(cfg) + ":" + url.QueryEscape(strings.ToLower(strings.TrimSpace(ticketID)))
+}
+
+func ticketCommentsBackupKey(cfg debug.Config, ticketID string) string {
+	return "tickets:backup:comments:" + ticketScope(cfg) + ":" + url.QueryEscape(strings.ToLower(strings.TrimSpace(ticketID)))
+}
+
+// saveTicketBackup grava um snapshot local sem expiração (best-effort).
+func (s *Service) saveTicketBackup(key string, value any) {
+	if s.db == nil {
+		return
+	}
+	if err := s.db.CacheSetJSON(key, value, ticketListBackupTTL); err != nil {
+		log.Printf("[support] aviso: falha ao salvar snapshot local (%s): %v", key, err)
+	}
+}
+
+// readTicketBackup lê um snapshot local (stale-if-error).
+func (s *Service) readTicketBackup(key string, out any) bool {
+	if s.db == nil {
+		return false
+	}
+	found, err := s.db.CacheGetJSON(key, out)
+	return err == nil && found
+}
+
+// readTicketListBackup lê o snapshot local de chamados (stale-if-error).
+func (s *Service) readTicketListBackup(cacheKey string) ([]APITicket, bool) {
+	var backup []APITicket
+	if !s.readTicketBackup(ticketListBackupKey(cacheKey), &backup) {
+		return nil, false
+	}
+	if backup == nil {
+		backup = []APITicket{}
+	}
+	return backup, true
+}
+
+// hasTicketBackup informa se já existe snapshot local para a chave — usado
+// para encurtar o timeout/retry quando o fallback offline está disponível.
+func (s *Service) hasTicketBackup(key string) bool {
+	if s.db == nil {
+		return false
+	}
+	var raw json.RawMessage
+	found, err := s.db.CacheGetJSON(key, &raw)
+	return err == nil && found
+}
+
+func (s *Service) readCachedTicketDetail(key string) (APITicket, bool) {
+	var cached APITicket
+	if !s.readTicketBackup(key, &cached) || strings.TrimSpace(cached.ID) == "" {
+		return APITicket{}, false
+	}
+	return cached, true
+}
+
+func (s *Service) readCachedTicketComments(key string) ([]TicketComment, bool) {
+	var cached []TicketComment
+	if !s.readTicketBackup(key, &cached) {
+		return nil, false
+	}
+	if cached == nil {
+		cached = []TicketComment{}
+	}
+	return cached, true
+}
+
+// cleanupOldTicketScope remove snapshots do escopo anterior quando o agente
+// muda de servidor/ID — evita crescimento indefinido do SQLite com dados que
+// nunca mais serão lidos.
+func (s *Service) cleanupOldTicketScope(scope string) {
+	if s.db == nil || strings.TrimSpace(scope) == "" {
+		return
+	}
+	purger, ok := s.db.(CachePurger)
+	if !ok {
+		return
+	}
+	var previous string
+	if found, err := s.db.CacheGetJSON(ticketScopeControlKey, &previous); err == nil && found {
+		previous = strings.TrimSpace(previous)
+		if previous != "" && previous != scope {
+			for _, prefix := range []string{
+				"tickets:list:",
+				"tickets:backup:list:",
+				"tickets:backup:detail:",
+				"tickets:backup:comments:",
+			} {
+				if err := purger.CacheDeletePrefix(prefix + previous); err != nil {
+					log.Printf("[support] aviso: falha ao limpar cache %s<escopo>: %v", prefix, err)
+				}
+			}
+			s.supportLogf("escopo local de chamados mudou; snapshots antigos removidos")
+		}
+	}
+	_ = s.db.CacheSetJSON(ticketScopeControlKey, scope, 0)
+}
+
+// InvalidateAgentContext descarta a identidade resolvida (memória + cache
+// quente + cópia durável). Deve ser chamado quando clientId/siteId/agentId
+// mudam (transferência de site/reprovisionamento): sem isso a página mostraria,
+// por até 24h, conteúdo do escopo antigo.
+func (s *Service) InvalidateAgentContext() {
+	if s.agentInfo != nil {
+		s.agentInfo.Invalidate()
+	}
+	if s.db == nil {
+		return
+	}
+	for _, key := range []string{"agent_info", agentInfoStaleCacheKey} {
+		if err := s.db.CacheDelete(key); err != nil {
+			log.Printf("[support] aviso: falha ao invalidar contexto do agente (%s): %v", key, err)
+		}
+	}
+}
+
+// persistStaleAgentInfo grava uma cópia SEM expiração da identidade resolvida
+// (clientId/siteId/agentId) para que chamados e knowledge continuem consultáveis
+// durante longos períodos offline.
+func (s *Service) persistStaleAgentInfo(info AgentInfo) {
+	if s.db == nil || strings.TrimSpace(info.ClientID) == "" {
+		return
+	}
+	if err := s.db.CacheSetJSON(agentInfoStaleCacheKey, info, 0); err != nil {
+		log.Printf("[support] aviso: falha ao salvar identidade durável (agent_info_stale): %v", err)
+	}
+}
+
+// readStaleAgentInfo lê a identidade durável gravada sem expiração.
+func (s *Service) readStaleAgentInfo() (AgentInfo, bool) {
+	if s.db == nil {
+		return AgentInfo{}, false
+	}
+	var cached AgentInfo
+	found, err := s.db.CacheGetJSON(agentInfoStaleCacheKey, &cached)
+	if err != nil || !found || strings.TrimSpace(cached.ClientID) == "" {
+		return AgentInfo{}, false
+	}
+	return cached, true
+}
+
+// offlineAgentInfo resolve a identidade localmente quando o servidor não
+// responde: primeiro a cópia durável do próprio cache, depois clientId/siteId
+// persistidos na configuração do agente. Sem isso, toda a consulta offline
+// (chamados e base de conhecimento) morria em /configuration.
+func (s *Service) offlineAgentInfo(cause error) (AgentInfo, error) {
+	if stale, ok := s.readStaleAgentInfo(); ok {
+		s.supportLogf("servidor inacessivel (%v) — usando identidade local em cache (agentId=%s clientId=%s siteId=%s)", cause, stale.AgentID, stale.ClientID, stale.SiteID)
+		if s.agentInfo != nil {
+			s.agentInfo.Set(stale)
+		}
+		return stale, nil
+	}
+	if s.agentInfoFallback != nil {
+		if info, ok := s.agentInfoFallback(); ok && strings.TrimSpace(info.ClientID) != "" {
+			s.supportLogf("servidor inacessivel (%v) — usando clientId/siteId persistidos da configuração do agente (clientId=%s siteId=%s)", cause, info.ClientID, info.SiteID)
+			s.persistStaleAgentInfo(info)
+			if s.agentInfo != nil {
+				s.agentInfo.Set(info)
+			}
 			return info, nil
 		}
-		s.supportLogf("cache em memória sem clientId; ignorando e recarregando do servidor")
-		s.agentInfo.Invalidate()
+	}
+	return AgentInfo{}, cause
+}
+
+// fetchAgentContext resolves clientId/siteId from /api/v1/agent-auth/me (cached).
+func (s *Service) fetchAgentContext() (AgentInfo, error) {
+	if s.agentInfo != nil {
+		if info, ok := s.agentInfo.Get(); ok {
+			if strings.TrimSpace(info.ClientID) != "" {
+				return info, nil
+			}
+			s.supportLogf("cache em memória sem clientId; ignorando e recarregando do servidor")
+			s.agentInfo.Invalidate()
+		}
 	}
 
 	if s.db != nil {
@@ -438,7 +685,11 @@ func (s *Service) fetchAgentContext() (AgentInfo, error) {
 		found, err := s.db.CacheGetJSON("agent_info", &cached)
 		if err == nil && found {
 			if strings.TrimSpace(cached.ClientID) != "" {
-				s.agentInfo.Set(cached)
+				// Reforça a cópia durável (sem expiração) usada no fallback offline.
+				s.persistStaleAgentInfo(cached)
+				if s.agentInfo != nil {
+					s.agentInfo.Set(cached)
+				}
 				return cached, nil
 			}
 			s.supportLogf("cache SQLite sem clientId; removendo entrada e atualizando do servidor")
@@ -449,22 +700,23 @@ func (s *Service) fetchAgentContext() (AgentInfo, error) {
 	}
 
 	cfg := s.debugConfig()
-	cfg.ApiScheme = strings.TrimSpace(strings.ToLower(cfg.ApiScheme))
 	cfg.ApiServer = strings.TrimSpace(cfg.ApiServer)
 	if cfg.ApiServer == "" || strings.TrimSpace(cfg.AuthToken) == "" {
 		err := fmt.Errorf("configuração de servidor API incompleta: preencha apiServer e token no Debug")
 		s.supportLogf("falha ao resolver contexto do agente: %v", err)
 		return AgentInfo{}, err
 	}
-	if cfg.ApiScheme != "http" && cfg.ApiScheme != "https" {
-		err := fmt.Errorf("apiScheme inválido: use http ou https")
-		s.supportLogf("falha ao resolver contexto do agente: %v", err)
-		return AgentInfo{}, err
-	}
+	scheme := apiScheme(cfg)
 
 	ctx := s.ctxOrBackground()
-	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/configuration"
-	resp, err := doGetWithRetry(ctx, tlsutil.NewHTTPClient(10*time.Second), func() (*http.Request, error) {
+	target := scheme + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/configuration"
+	// Com identidade durável disponível basta uma tentativa curta: offline, o
+	// retry só adia a exibição do cache (o fallback cobre a falha).
+	attempts, timeout := 2, 10*time.Second
+	if _, ok := s.readStaleAgentInfo(); ok {
+		attempts, timeout = 1, 4*time.Second
+	}
+	resp, err := doGetAttempts(ctx, tlsutil.NewHTTPClient(timeout), attempts, func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 		if err != nil {
 			return nil, err
@@ -477,7 +729,7 @@ func (s *Service) fetchAgentContext() (AgentInfo, error) {
 	if err != nil {
 		wrapped := fmt.Errorf("falha ao conectar em %s: %w", target, err)
 		s.supportLogf("erro HTTP ao resolver contexto do agente: %v", wrapped)
-		return AgentInfo{}, wrapped
+		return s.offlineAgentInfo(wrapped)
 	}
 	defer resp.Body.Close()
 
@@ -485,26 +737,29 @@ func (s *Service) fetchAgentContext() (AgentInfo, error) {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		wrapped := fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(body)))
 		s.supportLogf("/api/v1/agent-auth/me/configuration retornou erro: %v", wrapped)
-		return AgentInfo{}, wrapped
+		return s.offlineAgentInfo(wrapped)
 	}
 
 	info, err := extractAgentInfoFromJSON(body, cfg)
 	if err != nil {
 		s.supportLogf("falha ao decodificar /api/v1/agent-auth/me/configuration: %v", err)
-		return AgentInfo{}, err
+		return s.offlineAgentInfo(err)
 	}
 	if info.ClientID == "" {
 		err := fmt.Errorf("clientId não retornado por /api/v1/agent-auth/me/configuration: verifique token/escopo do agente")
 		s.supportLogf("%v | resposta=%s", err, shortBodyForLog(body))
-		return AgentInfo{}, err
+		return s.offlineAgentInfo(err)
 	}
 
-	s.agentInfo.Set(info)
+	if s.agentInfo != nil {
+		s.agentInfo.Set(info)
+	}
 	if s.db != nil {
-		if err := s.db.CacheSetJSON("agent_info", info, 24*time.Hour); err != nil {
+		if err := s.db.CacheSetJSON("agent_info", info, agentInfoCacheTTL); err != nil {
 			log.Printf("[support] aviso: falha ao salvar no cache SQLite (agent_info): %v", err)
 		}
 	}
+	s.persistStaleAgentInfo(info)
 	s.supportLogf("contexto do agente resolvido: agentId=%s clientId=%s siteId=%s", info.AgentID, info.ClientID, info.SiteID)
 
 	return info, nil
@@ -516,28 +771,58 @@ func (s *Service) GetAgentInfo() (AgentInfo, error) {
 }
 
 // GetSupportTickets returns tickets linked to this agent (filtered by agentId).
+// SupportTicketList é o retorno da listagem para o binding da UI: além dos
+// chamados, informa se eles vieram do snapshot offline (stale), para a tela
+// poder avisar que os dados podem estar desatualizados.
+type SupportTicketList struct {
+	Tickets []APITicket `json:"tickets"`
+	Stale   bool        `json:"stale"`
+}
+
+// GetSupportTickets returns tickets linked to this agent (filtered by agentId).
 func (s *Service) GetSupportTickets() ([]APITicket, error) {
+	result, err := s.GetSupportTicketList()
+	return result.Tickets, err
+}
+
+// GetSupportTicketList devolve a listagem + indicador de cache offline.
+func (s *Service) GetSupportTicketList() (SupportTicketList, error) {
 	if !s.featureEnabled(s.supportEnabled()) {
 		s.supportLogf("suporte desabilitado pela configuração do agente")
-		return []APITicket{}, nil
+		return SupportTicketList{Tickets: []APITicket{}}, nil
 	}
 
 	s.supportLogf("listando chamados vinculados ao agente")
+	cfg := s.debugConfig()
+	cacheKey := ticketListCacheKey(cfg)
+	s.cleanupOldTicketScope(ticketScope(cfg))
+
 	info, err := s.fetchAgentContext()
 	if err != nil {
 		s.supportLogf("falha ao obter contexto para listagem de chamados: %v", err)
-		return nil, err
+		if backup, ok := s.readTicketListBackup(cacheKey); ok {
+			s.supportLogf("servidor inacessivel (%v) — usando snapshot local de chamados (%d chamado(s))", err, len(backup))
+			return SupportTicketList{Tickets: backup, Stale: true}, nil
+		}
+		return SupportTicketList{}, err
 	}
 	if strings.TrimSpace(info.ClientID) == "" {
 		err := fmt.Errorf("clientId não resolvido: verifique a configuração do agente")
 		s.supportLogf("%v (agentId=%s)", err, info.AgentID)
-		return nil, err
+		return SupportTicketList{}, err
 	}
 
-	cfg := s.debugConfig()
 	ctx := s.ctxOrBackground()
-	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/tickets"
-	resp, err := doGetWithRetry(ctx, tlsutil.NewHTTPClient(15*time.Second), func() (*http.Request, error) {
+	target := apiScheme(cfg) + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/tickets"
+	// Com snapshot local, uma tentativa curta basta: offline o retry só adia a
+	// exibição dos dados em cache.
+	attempts, timeout := 2, 15*time.Second
+	// Checagem leve de existência: ler/deserializar o snapshot inteiro só para
+	// decidir o timeout era desperdício (a lista pode ter centenas de chamados).
+	if s.hasTicketBackup(ticketListBackupKey(cacheKey)) {
+		attempts, timeout = 1, 8*time.Second
+	}
+	resp, err := doGetAttempts(ctx, tlsutil.NewHTTPClient(timeout), attempts, func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 		if err != nil {
 			return nil, err
@@ -550,7 +835,11 @@ func (s *Service) GetSupportTickets() ([]APITicket, error) {
 	if err != nil {
 		wrapped := fmt.Errorf("falha ao buscar chamados: %w", err)
 		s.supportLogf("erro HTTP ao listar chamados: %v", wrapped)
-		return nil, wrapped
+		if backup, ok := s.readTicketListBackup(cacheKey); ok {
+			s.supportLogf("servidor inacessivel (%v) — usando snapshot local de chamados (%d chamado(s))", wrapped, len(backup))
+			return SupportTicketList{Tickets: backup, Stale: true}, nil
+		}
+		return SupportTicketList{}, wrapped
 	}
 	defer resp.Body.Close()
 
@@ -558,7 +847,15 @@ func (s *Service) GetSupportTickets() ([]APITicket, error) {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		wrapped := fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(body)))
 		s.supportLogf("erro na listagem de chamados: %v", wrapped)
-		return nil, wrapped
+		// Só falha de servidor justifica servir o snapshot: 4xx indica problema
+		// real de credencial/rota e não deve ser mascarado por dados antigos.
+		if resp.StatusCode >= 500 {
+			if backup, ok := s.readTicketListBackup(cacheKey); ok {
+				s.supportLogf("HTTP %s — usando snapshot local de chamados (%d chamado(s))", resp.Status, len(backup))
+				return SupportTicketList{Tickets: backup, Stale: true}, nil
+			}
+		}
+		return SupportTicketList{}, wrapped
 	}
 
 	var tickets []APITicket
@@ -574,15 +871,19 @@ func (s *Service) GetSupportTickets() ([]APITicket, error) {
 				tickets = envelope.Data
 			}
 		} else {
-			return nil, fmt.Errorf("resposta inválida ao listar chamados: %w", err)
+			return SupportTicketList{}, fmt.Errorf("resposta inválida ao listar chamados: %w", err)
 		}
 	}
 	if tickets == nil {
 		tickets = []APITicket{}
 	}
 
+	// Snapshot offline sem expiração: consulta local quando /configuration ou
+	// /tickets estiverem inacessíveis.
+	s.saveTicketBackup(ticketListBackupKey(cacheKey), tickets)
+
 	s.supportLogf("listagem concluída: %d chamado(s) retornado(s)", len(tickets))
-	return tickets, nil
+	return SupportTicketList{Tickets: tickets}, nil
 }
 
 // GetTicketOptions returns departments and workflow profiles for the agent ticket
@@ -596,7 +897,7 @@ func (s *Service) GetTicketOptions() (TicketOptions, error) {
 
 	cfg := s.debugConfig()
 	ctx := s.ctxOrBackground()
-	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/tickets/options"
+	target := apiScheme(cfg) + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/tickets/options"
 	resp, err := doGetWithRetry(ctx, tlsutil.NewHTTPClient(10*time.Second), func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 		if err != nil {
@@ -642,7 +943,7 @@ func (s *Service) GetTicketDepartmentFields(departmentID string) ([]TicketDepart
 
 	cfg := s.debugConfig()
 	ctx := s.ctxOrBackground()
-	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/tickets/departments/" + departmentID + "/fields"
+	target := apiScheme(cfg) + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/tickets/departments/" + departmentID + "/fields"
 	resp, err := doGetWithRetry(ctx, tlsutil.NewHTTPClient(10*time.Second), func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 		if err != nil {
@@ -684,7 +985,7 @@ func (s *Service) GetTicketFields(ticketID string) ([]TicketFieldValue, error) {
 
 	cfg := s.debugConfig()
 	ctx := s.ctxOrBackground()
-	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/tickets/" + ticketID + "/fields"
+	target := apiScheme(cfg) + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/tickets/" + ticketID + "/fields"
 	resp, err := doGetWithRetry(ctx, tlsutil.NewHTTPClient(10*time.Second), func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 		if err != nil {
@@ -725,7 +1026,7 @@ func (s *Service) GetTicketAnswers(ticketID string) ([]TicketAnswer, error) {
 
 	cfg := s.debugConfig()
 	ctx := s.ctxOrBackground()
-	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/tickets/" + ticketID + "/answers"
+	target := apiScheme(cfg) + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/tickets/" + ticketID + "/answers"
 	resp, err := doGetWithRetry(ctx, tlsutil.NewHTTPClient(10*time.Second), func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 		if err != nil {
@@ -825,7 +1126,7 @@ func (s *Service) CreateSupportTicket(input CreateTicketInput) (APITicket, error
 		return APITicket{}, wrapped
 	}
 
-	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/tickets"
+	target := apiScheme(cfg) + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/tickets"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(reqBody))
 	if err != nil {
 		wrapped := fmt.Errorf("URL inválida: %w", err)
@@ -871,10 +1172,15 @@ func (s *Service) GetSupportTicketDetails(ticketID string) (APITicket, error) {
 	}
 
 	cfg := s.debugConfig()
+	backupKey := ticketDetailBackupKey(cfg, ticketID)
 	ctx := s.ctxOrBackground()
 
-	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/tickets/" + ticketID
-	resp, err := doGetWithRetry(ctx, tlsutil.NewHTTPClient(10*time.Second), func() (*http.Request, error) {
+	target := apiScheme(cfg) + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/tickets/" + ticketID
+	attempts, timeout := 2, 10*time.Second
+	if s.hasTicketBackup(backupKey) {
+		attempts, timeout = 1, 6*time.Second
+	}
+	resp, err := doGetAttempts(ctx, tlsutil.NewHTTPClient(timeout), attempts, func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 		if err != nil {
 			return nil, err
@@ -885,12 +1191,22 @@ func (s *Service) GetSupportTicketDetails(ticketID string) (APITicket, error) {
 		return req, nil
 	})
 	if err != nil {
+		if cached, ok := s.readCachedTicketDetail(backupKey); ok {
+			s.supportLogf("servidor inacessivel (%v) — usando detalhe local do chamado %s", err, ticketID)
+			return cached, nil
+		}
 		return APITicket{}, fmt.Errorf("falha ao buscar ticket: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if resp.StatusCode >= 500 {
+			if cached, ok := s.readCachedTicketDetail(backupKey); ok {
+				s.supportLogf("HTTP %s — usando detalhe local do chamado %s", resp.Status, ticketID)
+				return cached, nil
+			}
+		}
 		return APITicket{}, fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(body)))
 	}
 
@@ -915,6 +1231,10 @@ func (s *Service) GetSupportTicketDetails(ticketID string) (APITicket, error) {
 		} else {
 			return APITicket{}, fmt.Errorf("resposta inválida: %w", err)
 		}
+	}
+
+	if strings.TrimSpace(ticket.ID) != "" {
+		s.saveTicketBackup(backupKey, ticket)
 	}
 
 	return ticket, nil
@@ -953,7 +1273,7 @@ func (s *Service) GetTicketWorkflowStates() ([]APIWorkflowState, error) {
 	ctx := s.ctxOrBackground()
 
 	// Caminho único suportado pelo endpoint do agent.
-	target := strings.TrimSpace(cfg.ApiScheme) + "://" + strings.TrimSpace(cfg.ApiServer) + "/api/v1/agent-auth/me/tickets/workflow-states"
+	target := apiScheme(cfg) + "://" + strings.TrimSpace(cfg.ApiServer) + "/api/v1/agent-auth/me/tickets/workflow-states"
 	resp, err := doGetWithRetry(ctx, tlsutil.NewHTTPClient(10*time.Second), func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 		if err != nil {
@@ -1001,10 +1321,15 @@ func (s *Service) GetTicketComments(ticketID string) ([]TicketComment, error) {
 		return nil, fmt.Errorf("ticketId inválido")
 	}
 	cfg := s.debugConfig()
+	backupKey := ticketCommentsBackupKey(cfg, ticketID)
 	ctx := s.ctxOrBackground()
 
-	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/tickets/" + ticketID + "/comments"
-	resp, err := doGetWithRetry(ctx, tlsutil.NewHTTPClient(10*time.Second), func() (*http.Request, error) {
+	target := apiScheme(cfg) + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/tickets/" + ticketID + "/comments"
+	attempts, timeout := 2, 10*time.Second
+	if s.hasTicketBackup(backupKey) {
+		attempts, timeout = 1, 6*time.Second
+	}
+	resp, err := doGetAttempts(ctx, tlsutil.NewHTTPClient(timeout), attempts, func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 		if err != nil {
 			return nil, err
@@ -1015,12 +1340,22 @@ func (s *Service) GetTicketComments(ticketID string) ([]TicketComment, error) {
 		return req, nil
 	})
 	if err != nil {
+		if cached, ok := s.readCachedTicketComments(backupKey); ok {
+			s.supportLogf("servidor inacessivel (%v) — usando comentários locais do chamado %s", err, ticketID)
+			return cached, nil
+		}
 		return nil, fmt.Errorf("falha ao buscar comentários: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if resp.StatusCode >= 500 {
+			if cached, ok := s.readCachedTicketComments(backupKey); ok {
+				s.supportLogf("HTTP %s — usando comentários locais do chamado %s", resp.Status, ticketID)
+				return cached, nil
+			}
+		}
 		return nil, fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(body)))
 	}
 
@@ -1048,6 +1383,7 @@ func (s *Service) GetTicketComments(ticketID string) ([]TicketComment, error) {
 		}
 		visible = append(visible, c)
 	}
+	s.saveTicketBackup(backupKey, visible)
 	return visible, nil
 }
 
@@ -1071,7 +1407,7 @@ func (s *Service) AddTicketCommentWithOptions(ticketID, content string) (TicketC
 	}
 	body, _ := json.Marshal(payload)
 
-	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/tickets/" + ticketID + "/comments"
+	target := apiScheme(cfg) + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/tickets/" + ticketID + "/comments"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
 	if err != nil {
 		return TicketComment{}, err
@@ -1154,7 +1490,7 @@ func (s *Service) CloseSupportTicket(ticketID string, input CloseTicketInput) (A
 		return APITicket{}, fmt.Errorf("erro ao serializar payload de fechamento: %w", err)
 	}
 
-	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/tickets/" + ticketID + "/close"
+	target := apiScheme(cfg) + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/tickets/" + ticketID + "/close"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
 	if err != nil {
 		return APITicket{}, fmt.Errorf("URL inválida: %w", err)
@@ -1213,7 +1549,7 @@ func (s *Service) ReopenSupportTicket(ticketID, reason string) (APITicket, error
 		return APITicket{}, fmt.Errorf("erro ao serializar payload de reabertura: %w", err)
 	}
 
-	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/tickets/" + ticketID + "/reopen"
+	target := apiScheme(cfg) + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/tickets/" + ticketID + "/reopen"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
 	if err != nil {
 		return APITicket{}, fmt.Errorf("URL inválida: %w", err)
@@ -1267,7 +1603,7 @@ func (s *Service) RateSupportTicket(ticketID string, rating int, feedback string
 		return APITicket{}, fmt.Errorf("erro ao serializar payload de avaliação: %w", err)
 	}
 
-	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/tickets/" + ticketID + "/rating"
+	target := apiScheme(cfg) + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/tickets/" + ticketID + "/rating"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
 	if err != nil {
 		return APITicket{}, fmt.Errorf("URL inválida: %w", err)
@@ -1404,13 +1740,17 @@ func ticketIsOpen(t APITicket) bool {
 
 // ListAgentTickets returns agent tickets as JSON (for MCP tools).
 func (s *Service) ListAgentTickets() (json.RawMessage, error) {
-	tickets, err := s.GetSupportTickets()
+	result, err := s.GetSupportTicketList()
 	if err != nil {
 		return nil, err
 	}
 	// Resultado resumido e com abertos primeiro: o mesmo payload alimenta a
 	// verificação de chamado duplicado feita pela IA antes de create_ticket.
-	return json.Marshal(compactTicketList(tickets))
+	out := compactTicketList(result.Tickets)
+	// `stale` avisa a IA que a lista veio do snapshot offline: dados antigos
+	// não devem ser tratados como verdade absoluta na checagem de duplicidade.
+	out["stale"] = result.Stale
+	return json.Marshal(out)
 }
 
 // GetAgentTicketDetails returns one agent ticket as JSON (for MCP tools).
@@ -1479,7 +1819,7 @@ func (s *Service) ListAgentTicketTemplates() (json.RawMessage, error) {
 
 	cfg := s.debugConfig()
 	ctx := s.ctxOrBackground()
-	target := cfg.ApiScheme + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/ticket-templates"
+	target := apiScheme(cfg) + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/ticket-templates"
 	resp, err := doGetWithRetry(ctx, tlsutil.NewHTTPClient(10*time.Second), func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 		if err != nil {

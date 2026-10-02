@@ -1,6 +1,10 @@
 package app
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	appsupport "discovery/app/support"
+)
 
 func (a *App) GetAgentInfo() (AgentInfo, error) {
 	if err := a.requireSupportSvc(); err != nil {
@@ -14,6 +18,15 @@ func (a *App) GetSupportTickets() ([]APITicket, error) {
 		return []APITicket{}, err
 	}
 	return a.SupportSvc.GetSupportTickets()
+}
+
+// GetSupportTicketsWithStatus expõe a listagem + o flag de cache offline
+// (stale) para a aba Suporte avisar que os dados podem estar desatualizados.
+func (a *App) GetSupportTicketsWithStatus() (appsupport.SupportTicketList, error) {
+	if err := a.requireSupportSvc(); err != nil {
+		return appsupport.SupportTicketList{}, err
+	}
+	return a.SupportSvc.GetSupportTicketList()
 }
 
 func (a *App) GetTicketOptions() (TicketOptions, error) {
@@ -125,6 +138,15 @@ func (a *App) AddTicketComment(ticketID, author, content string) error {
 		return err
 	}
 	return a.SupportSvc.AddTicketComment(ticketID, author, content)
+}
+
+// GetKnowledgeBaseArticlesWithStatus expõe os artigos + o flag de cache offline
+// (stale) para a UI avisar que os dados podem estar desatualizados.
+func (a *App) GetKnowledgeBaseArticlesWithStatus() (appsupport.KnowledgeArticleList, error) {
+	if err := a.requireSupportSvc(); err != nil {
+		return appsupport.KnowledgeArticleList{}, err
+	}
+	return a.SupportSvc.GetKnowledgeBaseArticleList()
 }
 
 func (a *App) GetKnowledgeBaseArticles() []KnowledgeArticle {

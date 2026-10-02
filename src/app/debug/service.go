@@ -640,8 +640,12 @@ func (s *Service) SetConfig(cfg Config) error {
 	}
 
 	if s.db != nil {
-		if err := s.db.CacheDelete("agent_info"); err != nil {
-			log.Printf("[debug] aviso: falha ao limpar cache SQLite: %v", err)
+		// agent_info_stale guarda a identidade durável usada no offline; se a
+		// conexão mudou (servidor/agentId), ela também precisa ser descartada.
+		for _, key := range []string{"agent_info", "agent_info_stale"} {
+			if err := s.db.CacheDelete(key); err != nil {
+				log.Printf("[debug] aviso: falha ao limpar cache SQLite (%s): %v", key, err)
+			}
 		}
 	}
 
