@@ -12,6 +12,53 @@ var ticketOptionsCache = { departments: [], workflowProfiles: [] };
 
 // Snapshot volatil da sessao: substituido a cada carga e NUNCA persistido.
 var supportTicketsAll = [];
+
+// Offline o agente opera em modo somente consulta: controles de escrita ficam
+// desabilitados enquanto a listagem vier do cache.
+var supportOfflineReadOnly = false;
+var SUPPORT_WRITE_CONTROLS = [
+  'newTicketBtn', 'submitTicketBtn', 'submitCommentBtn', 'commentInput',
+  'openCloseTicketBtn', 'closeTicketBtn', 'reopenTicketBtn',
+  'submitRatingBtn', 'clearRatingPanelBtn', 'clearRatingBtn',
+];
+
+function applySupportOfflineMode() {
+  var offline = !!supportOfflineReadOnly;
+  SUPPORT_WRITE_CONTROLS.forEach(function (id) {
+    var el = document.getElementById(id);
+    if (el) el.disabled = offline;
+  });
+}
+
+function formatCacheAge(iso) {
+  if (!iso) return '';
+  try {
+    if (typeof formatDate === 'function') {
+      return formatDate(iso, '') || String(iso);
+    }
+  } catch (_) { /* usa o valor cru */ }
+  return String(iso);
+}
+
+// Mostra/esconde o aviso e aplica o bloqueio de escrita.
+function renderSupportCacheState(result) {
+  var stale = !!(result && result.stale);
+  supportOfflineReadOnly = stale;
+  applySupportOfflineMode();
+
+  var banner = document.getElementById('supportStaleBanner');
+  if (!banner) return;
+  if (!stale) {
+    banner.classList.add('hidden');
+    banner.textContent = '';
+    return;
+  }
+  var msg = translate('support.staleCache');
+  var when = formatCacheAge(result && result.cachedAt);
+  if (when) msg += ' ' + translate('cache.updatedAt', { time: when });
+  banner.textContent = msg;
+  banner.classList.remove('hidden');
+}
 // Cache local id->chamado usado pelo clique no card. Chamados fechados E ja
 // avaliados nao entram aqui: nao ha mais acao pendente neles (requisito de
 // produto). Se um filtro explicito exibir um deles, o detalhe e buscado ao vivo.
@@ -1575,10 +1622,10 @@ async function loadSupportTickets(opts) {
       tickets = result && Array.isArray(result.tickets)
         ? result.tickets
         : (Array.isArray(result) ? result : []);
-      if (staleBanner) staleBanner.classList.toggle('hidden', !(result && result.stale));
+      renderSupportCacheState(result);
     } else {
       tickets = await api.GetSupportTickets();
-      if (staleBanner) staleBanner.classList.add('hidden');
+      renderSupportCacheState(null);
     }
     supportTicketsAll = Array.isArray(tickets) ? tickets : [];
     supportTicketsLoadFailed = false;
@@ -1590,6 +1637,9 @@ async function loadSupportTickets(opts) {
     supportTicketsAll = [];
     supportTicketsById = {};
     supportTicketsLoadFailed = true;
+    // Sem lista nem cache não há como saber o estado: assume somente consulta.
+    supportOfflineReadOnly = true;
+    applySupportOfflineMode();
     if (staleBanner) staleBanner.classList.add('hidden');
     supportTicketsListEl.innerHTML = '<div class="meta">' + escapeHtml(translate('support.ticketListLoadError', { error: String(err) })) + '</div>';
   }

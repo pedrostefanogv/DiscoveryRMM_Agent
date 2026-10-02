@@ -125,10 +125,41 @@ func (s *Service) runRemoteCleanup(ctx context.Context) error {
 }
 
 func (s *Service) cleanupLocalTempDirs() error {
-	return CleanupPaths([]string{
+	if err := CleanupPaths([]string{
 		platform.P2PTempDir(),
 		platform.TempDir(),
-	})
+	}); err != nil {
+		return err
+	}
+	return s.purgeLocalSupportCache()
+}
+
+// purgeLocalSupportCache remove do SQLite local os dados de suporte e da base
+// de conhecimento (títulos, descrições, comentários, artigos) junto com a
+// identidade do agente. Sem isso, uma máquina reatribuída continuaria com
+// conteúdo do cliente em cache local.
+func (s *Service) purgeLocalSupportCache() error {
+	dataDir := strings.TrimSpace(s.getDataDir())
+	if dataDir == "" {
+		return nil
+	}
+	db, err := database.Open(dataDir)
+	if err != nil {
+		return fmt.Errorf("abrir DB para limpar caches de suporte: %w", err)
+	}
+	defer db.Close()
+
+	for _, prefix := range []string{"tickets:", "knowledge:"} {
+		if err := db.CacheDeletePrefix(prefix); err != nil {
+			return fmt.Errorf("limpar cache de suporte %s: %w", prefix, err)
+		}
+	}
+	for _, key := range []string{"agent_info", "agent_info_stale"} {
+		if err := db.CacheDelete(key); err != nil {
+			return fmt.Errorf("limpar %s: %w", key, err)
+		}
+	}
+	return nil
 }
 
 // CleanupPaths remove diretórios locais, ignorando duplicatas e ausentes.

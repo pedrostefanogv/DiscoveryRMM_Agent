@@ -537,6 +537,7 @@ func (s *Service) fetchKnowledgeListWithCache(info AgentInfo, category string, u
 		}
 	}
 	s.saveKnowledgeBackup(cacheKey, articles)
+	s.saveKnowledgeListSavedAt(cacheKey)
 
 	return articles, false, nil
 }
@@ -765,6 +766,7 @@ func (s *Service) fetchKnowledgePages(info AgentInfo, articleID string) ([]Knowl
 type KnowledgeArticleList struct {
 	Articles []KnowledgeArticle `json:"articles"`
 	Stale    bool               `json:"stale"`
+	CachedAt string             `json:"cachedAt,omitempty"`
 }
 
 // GetKnowledgeBaseArticles mantém a assinatura antiga (sem erro) para
@@ -801,10 +803,46 @@ func (s *Service) getAllKnowledgeArticles(category string) (KnowledgeArticleList
 		return KnowledgeArticleList{}, err
 	}
 
+	// Data do backup: exibida no aviso de modo somente consulta.
+	cachedAt := ""
+	if fromBackup {
+		cfg := s.debugConfig()
+		cacheKey := "knowledge:list:" + knowledgeCacheScope(cfg, info) + ":" + url.QueryEscape(strings.TrimSpace(strings.ToLower(category)))
+		cachedAt = s.readKnowledgeListSavedAt(cacheKey)
+	}
+
 	return KnowledgeArticleList{
 		Articles: s.enrichKnowledgeArticles(info, articles, !fromBackup),
 		Stale:    fromBackup,
+		CachedAt: cachedAt,
 	}, nil
+}
+
+// knowledgeBackupSavedAtKey guarda a data do backup FORA dos prefixos que o
+// refresh limpa, para sobreviver junto com o próprio backup.
+func knowledgeBackupSavedAtKey(cacheKey string) string {
+	return strings.Replace(cacheKey, "knowledge:list:", "knowledge:backup:meta:", 1)
+}
+
+func (s *Service) saveKnowledgeListSavedAt(cacheKey string) {
+	if s.db == nil {
+		return
+	}
+	if err := s.db.CacheSetJSON(knowledgeBackupSavedAtKey(cacheKey), time.Now().UTC().Format(time.RFC3339), knowledgeBackupTTL); err != nil {
+		log.Printf("[support] aviso: falha ao salvar data do backup de knowledge: %v", err)
+	}
+}
+
+func (s *Service) readKnowledgeListSavedAt(cacheKey string) string {
+	if s.db == nil {
+		return ""
+	}
+	var savedAt string
+	found, err := s.db.CacheGetJSON(knowledgeBackupSavedAtKey(cacheKey), &savedAt)
+	if err != nil || !found {
+		return ""
+	}
+	return strings.TrimSpace(savedAt)
 }
 
 // readCachedKnowledgeDetail lê um detalhe SEM rede (cache quente ou backup),

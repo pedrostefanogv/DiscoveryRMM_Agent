@@ -2,11 +2,13 @@ package support
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -46,6 +48,18 @@ func (m *memCacheDB) CacheDelete(key string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.data, key)
+	return nil
+}
+
+// CacheDeletePrefix torna o fake compatível com CachePurger (limpeza de escopo).
+func (m *memCacheDB) CacheDeletePrefix(prefix string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for key := range m.data {
+		if strings.HasPrefix(key, prefix) {
+			delete(m.data, key)
+		}
+	}
 	return nil
 }
 
@@ -352,5 +366,142 @@ func TestGetKnowledgeBaseArticleList_FlagsStaleFromBackup(t *testing.T) {
 	}
 	if len(res.Articles) != 1 || res.Articles[0].ID != "k-1" {
 		t.Fatalf("artigos inesperados: %+v", res.Articles)
+	}
+}
+
+// Offline o agente é somente consulta: abrir chamado e comentar são bloqueados
+// antes de qualquer requisição.
+func TestOffline_ReadOnlyBlocksMutations(t *testing.T) {
+	db := newMemCacheDB()
+	cfg := offlineConfig(unreachableAPI(t))
+	if err := db.CacheSetJSON(agentInfoStaleCacheKey, AgentInfo{AgentID: lifecycleAgentID, ClientID: "client-1"}, 0); err != nil {
+		t.Fatalf("preparar identidade: %v", err)
+	}
+	if err := db.CacheSetJSON(ticketListBackupKey(ticketListCacheKey(cfg)), []APITicket{{ID: "t-1"}}, 0); err != nil {
+		t.Fatalf("preparar snapshot: %v", err)
+	}
+	svc := NewService(Options{DB: db, DebugConfig: func() debug.Config { return cfg }})
+
+	// A listagem offline marca a conexão como indisponível.
+	if _, err := svc.GetSupportTicketList(); err != nil {
+		t.Fatalf("listagem offline falhou: %v", err)
+	}
+
+	if _, err := svc.AddTicketCommentWithOptions(lifecycleTicketID, "oi"); !errors.Is(err, ErrOfflineReadOnly) {
+		t.Fatalf("comentário offline deveria ser bloqueado: %v", err)
+	}
+	if _, err := svc.CreateSupportTicket(CreateTicketInput{Title: "t", Description: "d", Priority: 2}); !errors.Is(err, ErrOfflineReadOnly) {
+		t.Fatalf("abertura offline deveria ser bloqueada: %v", err)
+	}
+	if _, err := svc.CloseSupportTicket(lifecycleTicketID, CloseTicketInput{}); !errors.Is(err, ErrOfflineReadOnly) {
+		t.Fatalf("fechamento offline deveria ser bloqueado: %v", err)
+	}
+}
+
+// Invalidar o contexto (transferência de site) descarta a identidade durável.
+func TestInvalidateAgentContext_DropsDurableIdentity(t *testing.T) {
+	db := newMemCacheDB()
+	cfg := offlineConfig(unreachableAPI(t))
+	if err := db.CacheSetJSON(agentInfoStaleCacheKey, AgentInfo{AgentID: lifecycleAgentID, ClientID: "client-1"}, 0); err != nil {
+		t.Fatalf("preparar identidade: %v", err)
+	}
+	svc := NewService(Options{DB: db, DebugConfig: func() debug.Config { return cfg }})
+
+	if _, err := svc.GetAgentInfo(); err != nil {
+		t.Fatalf("primeiro GetAgentInfo deveria usar o cache: %v", err)
+	}
+	svc.InvalidateAgentContext()
+
+	if _, err := svc.GetAgentInfo(); err == nil {
+		t.Fatal("após invalidar não deveria haver identidade offline")
+	}
+}
+
+// Troca de escopo deve remover os snapshots antigos (senão o SQLite só cresce).
+func TestCleanupOldTicketScope_RemovesPreviousScope(t *testing.T) {
+	db := newMemCacheDB()
+	oldCfg := debug.Config{ApiScheme: "http", ApiServer: "old:1", AuthToken: "t", AgentID: lifecycleAgentID}
+	oldKey := ticketListBackupKey(ticketListCacheKey(oldCfg))
+	if err := db.CacheSetJSON(oldKey, []APITicket{{ID: "old"}}, 0); err != nil {
+		t.Fatalf("preparar snapshot antigo: %v", err)
+	}
+	if err := db.CacheSetJSON(ticketScopeControlKey, ticketScope(oldCfg), 0); err != nil {
+		t.Fatalf("preparar escopo ativo: %v", err)
+	}
+
+	newCfg := debug.Config{ApiScheme: "http", ApiServer: "new:2", AuthToken: "t", AgentID: lifecycleAgentID}
+	svc := NewService(Options{DB: db, DebugConfig: func() debug.Config { return newCfg }})
+	svc.cleanupOldTicketScope(ticketScope(newCfg))
+
+	var dummy []APITicket
+	if found, _ := db.CacheGetJSON(oldKey, &dummy); found {
+		t.Fatal("snapshot do escopo anterior deveria ter sido removido")
+	}
+}
+
+// Campos personalizados do chamado também precisam abrir offline.
+func TestGetTicketFields_UsesOfflineSnapshot(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/fields") {
+			_, _ = w.Write([]byte(`[{"definitionId":"d-1","label":"Setor","dataType":"Text","valueJson":"\"TI\""}]`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	cfg := offlineConfig(strings.TrimPrefix(srv.URL, "http://"))
+	db := newMemCacheDB()
+	svc := NewService(Options{DB: db, DebugConfig: func() debug.Config { return cfg }})
+
+	if _, err := svc.GetTicketFields(lifecycleTicketID); err != nil {
+		t.Fatalf("campos online falharam: %v", err)
+	}
+	srv.Close()
+
+	fields, err := svc.GetTicketFields(lifecycleTicketID)
+	if err != nil {
+		t.Fatalf("campos offline deveriam vir do snapshot: %v", err)
+	}
+	if len(fields) != 1 || fields[0].Label != "Setor" {
+		t.Fatalf("campos inesperados: %+v", fields)
+	}
+}
+
+// Enriquecimento de uma lista vinda do backup NÃO pode disparar N detalhes remotos.
+func TestKnowledgeEnrichOffline_NoNetworkCalls(t *testing.T) {
+	var detailHits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/knowledge/") {
+			atomic.AddInt32(&detailHits, 1)
+			http.Error(w, "detail unavailable", http.StatusInternalServerError)
+			return
+		}
+		http.Error(w, "list unavailable", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	cfg := offlineConfig(strings.TrimPrefix(srv.URL, "http://"))
+	db := newMemCacheDB()
+	info := AgentInfo{AgentID: lifecycleAgentID, ClientID: "client-1", SiteID: "site-1"}
+	if err := db.CacheSetJSON(agentInfoStaleCacheKey, info, 0); err != nil {
+		t.Fatalf("preparar identidade: %v", err)
+	}
+	listKey := "knowledge:list:" + knowledgeCacheScope(cfg, info) + ":" + url.QueryEscape("")
+	// Artigo SEM content: seria exatamente o caso que dispara o N+1.
+	backup := []KnowledgeArticle{{ID: "k-1", Title: "Sem conteudo"}}
+	if err := db.CacheSetJSON(knowledgeBackupKey(listKey), backup, 0); err != nil {
+		t.Fatalf("preparar backup: %v", err)
+	}
+
+	svc := NewService(Options{DB: db, DebugConfig: func() debug.Config { return cfg }})
+	res, err := svc.GetKnowledgeBaseArticleList()
+	if err != nil {
+		t.Fatalf("listagem offline falhou: %v", err)
+	}
+	if !res.Stale || len(res.Articles) != 1 {
+		t.Fatalf("esperado backup stale com 1 artigo: stale=%v artigos=%d", res.Stale, len(res.Articles))
+	}
+	if got := atomic.LoadInt32(&detailHits); got != 0 {
+		t.Fatalf("enriquecimento offline não deveria chamar detalhes remotos (chamadas=%d)", got)
 	}
 }

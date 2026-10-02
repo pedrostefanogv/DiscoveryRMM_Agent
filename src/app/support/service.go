@@ -5,9 +5,11 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"reflect"
@@ -206,6 +208,11 @@ type Service struct {
 	knowledgeMu          sync.Mutex
 	lastKnowledgeRefresh time.Time
 	knowledgeRefreshing  bool
+
+	// offline é o último estado conhecido da conexão com o servidor. Offline o
+	// agente opera em modo somente consulta (sem abrir/editar chamados).
+	offlineMu sync.Mutex
+	offline   bool
 }
 
 // NewService builds a support service.
@@ -508,6 +515,14 @@ func ticketCommentsBackupKey(cfg debug.Config, ticketID string) string {
 	return "tickets:backup:comments:" + ticketScope(cfg) + ":" + url.QueryEscape(strings.ToLower(strings.TrimSpace(ticketID)))
 }
 
+func ticketFieldsBackupKey(cfg debug.Config, ticketID string) string {
+	return "tickets:backup:fields:" + ticketScope(cfg) + ":" + url.QueryEscape(strings.ToLower(strings.TrimSpace(ticketID)))
+}
+
+func ticketAnswersBackupKey(cfg debug.Config, ticketID string) string {
+	return "tickets:backup:answers:" + ticketScope(cfg) + ":" + url.QueryEscape(strings.ToLower(strings.TrimSpace(ticketID)))
+}
+
 // saveTicketBackup grava um snapshot local sem expiração (best-effort).
 func (s *Service) saveTicketBackup(key string, value any) {
 	if s.db == nil {
@@ -516,6 +531,29 @@ func (s *Service) saveTicketBackup(key string, value any) {
 	if err := s.db.CacheSetJSON(key, value, ticketListBackupTTL); err != nil {
 		log.Printf("[support] aviso: falha ao salvar snapshot local (%s): %v", key, err)
 	}
+}
+
+// saveTicketListSnapshot grava o snapshot da listagem + a data em que foi
+// gravado (exibida no aviso de modo somente consulta).
+func (s *Service) saveTicketListSnapshot(cacheKey string, tickets []APITicket) {
+	backupKey := ticketListBackupKey(cacheKey)
+	s.saveTicketBackup(backupKey, tickets)
+	if s.db == nil {
+		return
+	}
+	if err := s.db.CacheSetJSON(ticketSnapshotSavedAtKey(backupKey), time.Now().UTC().Format(time.RFC3339), 0); err != nil {
+		log.Printf("[support] aviso: falha ao salvar data do snapshot de chamados: %v", err)
+	}
+}
+
+func ticketSnapshotSavedAtKey(backupKey string) string { return backupKey + ":savedAt" }
+
+func (s *Service) ticketSnapshotSavedAt(cacheKey string) string {
+	var savedAt string
+	if !s.readTicketBackup(ticketSnapshotSavedAtKey(ticketListBackupKey(cacheKey)), &savedAt) {
+		return ""
+	}
+	return strings.TrimSpace(savedAt)
 }
 
 // readTicketBackup lê um snapshot local (stale-if-error).
@@ -589,6 +627,8 @@ func (s *Service) cleanupOldTicketScope(scope string) {
 				"tickets:backup:list:",
 				"tickets:backup:detail:",
 				"tickets:backup:comments:",
+				"tickets:backup:fields:",
+				"tickets:backup:answers:",
 			} {
 				if err := purger.CacheDeletePrefix(prefix + previous); err != nil {
 					log.Printf("[support] aviso: falha ao limpar cache %s<escopo>: %v", prefix, err)
@@ -648,6 +688,7 @@ func (s *Service) readStaleAgentInfo() (AgentInfo, bool) {
 // persistidos na configuração do agente. Sem isso, toda a consulta offline
 // (chamados e base de conhecimento) morria em /configuration.
 func (s *Service) offlineAgentInfo(cause error) (AgentInfo, error) {
+	s.markUnreachable()
 	if stale, ok := s.readStaleAgentInfo(); ok {
 		s.supportLogf("servidor inacessivel (%v) — usando identidade local em cache (agentId=%s clientId=%s siteId=%s)", cause, stale.AgentID, stale.ClientID, stale.SiteID)
 		if s.agentInfo != nil {
@@ -666,6 +707,65 @@ func (s *Service) offlineAgentInfo(cause error) (AgentInfo, error) {
 		}
 	}
 	return AgentInfo{}, cause
+}
+
+// ErrOfflineReadOnly é devolvido quando o agente está offline e a operação
+// exigiria escrita no servidor. Offline o agente é somente consulta.
+var ErrOfflineReadOnly = errors.New("agente offline: modo somente consulta")
+
+func (s *Service) markReachable() {
+	s.offlineMu.Lock()
+	s.offline = false
+	s.offlineMu.Unlock()
+}
+
+func (s *Service) markUnreachable() {
+	s.offlineMu.Lock()
+	s.offline = true
+	s.offlineMu.Unlock()
+}
+
+func (s *Service) isOffline() bool {
+	s.offlineMu.Lock()
+	defer s.offlineMu.Unlock()
+	return s.offline
+}
+
+// ensureOnline bloqueia mutações quando a conexão com o servidor está
+// indisponível: offline o agente consulta, mas não abre/edita chamados.
+func (s *Service) ensureOnline(action string) error {
+	if s.isOffline() {
+		return fmt.Errorf("%w: %s indisponível", ErrOfflineReadOnly, action)
+	}
+	return nil
+}
+
+// transportError converte falha de rede em modo somente consulta (marca a
+// conexão como indisponível); erros não-rede mantêm a mensagem original.
+func (s *Service) transportError(action string, err error) error {
+	if err == nil {
+		return nil
+	}
+	if isNetworkError(err) {
+		s.markUnreachable()
+		return fmt.Errorf("%w: %s (%v)", ErrOfflineReadOnly, action, err)
+	}
+	return fmt.Errorf("falha ao %s: %w", action, err)
+}
+
+func isNetworkError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+	var urlErr *url.Error
+	return errors.As(err, &urlErr)
 }
 
 // fetchAgentContext resolves clientId/siteId from /api/v1/agent-auth/me (cached).
@@ -760,6 +860,7 @@ func (s *Service) fetchAgentContext() (AgentInfo, error) {
 		}
 	}
 	s.persistStaleAgentInfo(info)
+	s.markReachable()
 	s.supportLogf("contexto do agente resolvido: agentId=%s clientId=%s siteId=%s", info.AgentID, info.ClientID, info.SiteID)
 
 	return info, nil
@@ -770,13 +871,13 @@ func (s *Service) GetAgentInfo() (AgentInfo, error) {
 	return s.fetchAgentContext()
 }
 
-// GetSupportTickets returns tickets linked to this agent (filtered by agentId).
 // SupportTicketList é o retorno da listagem para o binding da UI: além dos
-// chamados, informa se eles vieram do snapshot offline (stale), para a tela
-// poder avisar que os dados podem estar desatualizados.
+// chamados, informa se eles vieram do snapshot offline (stale) e quando o
+// snapshot foi gravado (CachedAt). Offline a tela entra em modo somente consulta.
 type SupportTicketList struct {
-	Tickets []APITicket `json:"tickets"`
-	Stale   bool        `json:"stale"`
+	Tickets  []APITicket `json:"tickets"`
+	Stale    bool        `json:"stale"`
+	CachedAt string      `json:"cachedAt,omitempty"`
 }
 
 // GetSupportTickets returns tickets linked to this agent (filtered by agentId).
@@ -801,8 +902,9 @@ func (s *Service) GetSupportTicketList() (SupportTicketList, error) {
 	if err != nil {
 		s.supportLogf("falha ao obter contexto para listagem de chamados: %v", err)
 		if backup, ok := s.readTicketListBackup(cacheKey); ok {
+			s.markUnreachable()
 			s.supportLogf("servidor inacessivel (%v) — usando snapshot local de chamados (%d chamado(s))", err, len(backup))
-			return SupportTicketList{Tickets: backup, Stale: true}, nil
+			return SupportTicketList{Tickets: backup, Stale: true, CachedAt: s.ticketSnapshotSavedAt(cacheKey)}, nil
 		}
 		return SupportTicketList{}, err
 	}
@@ -836,8 +938,9 @@ func (s *Service) GetSupportTicketList() (SupportTicketList, error) {
 		wrapped := fmt.Errorf("falha ao buscar chamados: %w", err)
 		s.supportLogf("erro HTTP ao listar chamados: %v", wrapped)
 		if backup, ok := s.readTicketListBackup(cacheKey); ok {
+			s.markUnreachable()
 			s.supportLogf("servidor inacessivel (%v) — usando snapshot local de chamados (%d chamado(s))", wrapped, len(backup))
-			return SupportTicketList{Tickets: backup, Stale: true}, nil
+			return SupportTicketList{Tickets: backup, Stale: true, CachedAt: s.ticketSnapshotSavedAt(cacheKey)}, nil
 		}
 		return SupportTicketList{}, wrapped
 	}
@@ -851,8 +954,9 @@ func (s *Service) GetSupportTicketList() (SupportTicketList, error) {
 		// real de credencial/rota e não deve ser mascarado por dados antigos.
 		if resp.StatusCode >= 500 {
 			if backup, ok := s.readTicketListBackup(cacheKey); ok {
+				s.markUnreachable()
 				s.supportLogf("HTTP %s — usando snapshot local de chamados (%d chamado(s))", resp.Status, len(backup))
-				return SupportTicketList{Tickets: backup, Stale: true}, nil
+				return SupportTicketList{Tickets: backup, Stale: true, CachedAt: s.ticketSnapshotSavedAt(cacheKey)}, nil
 			}
 		}
 		return SupportTicketList{}, wrapped
@@ -878,9 +982,10 @@ func (s *Service) GetSupportTicketList() (SupportTicketList, error) {
 		tickets = []APITicket{}
 	}
 
+	s.markReachable()
 	// Snapshot offline sem expiração: consulta local quando /configuration ou
 	// /tickets estiverem inacessíveis.
-	s.saveTicketBackup(ticketListBackupKey(cacheKey), tickets)
+	s.saveTicketListSnapshot(cacheKey, tickets)
 
 	s.supportLogf("listagem concluída: %d chamado(s) retornado(s)", len(tickets))
 	return SupportTicketList{Tickets: tickets}, nil
@@ -984,9 +1089,14 @@ func (s *Service) GetTicketFields(ticketID string) ([]TicketFieldValue, error) {
 	}
 
 	cfg := s.debugConfig()
+	backupKey := ticketFieldsBackupKey(cfg, ticketID)
 	ctx := s.ctxOrBackground()
 	target := apiScheme(cfg) + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/tickets/" + ticketID + "/fields"
-	resp, err := doGetWithRetry(ctx, tlsutil.NewHTTPClient(10*time.Second), func() (*http.Request, error) {
+	attempts, timeout := 2, 10*time.Second
+	if s.hasTicketBackup(backupKey) {
+		attempts, timeout = 1, 6*time.Second
+	}
+	resp, err := doGetAttempts(ctx, tlsutil.NewHTTPClient(timeout), attempts, func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 		if err != nil {
 			return nil, err
@@ -997,12 +1107,26 @@ func (s *Service) GetTicketFields(ticketID string) ([]TicketFieldValue, error) {
 		return req, nil
 	})
 	if err != nil {
+		var cached []TicketFieldValue
+		if s.readTicketBackup(backupKey, &cached) {
+			s.markUnreachable()
+			s.supportLogf("servidor inacessivel (%v) — usando campos locais do chamado %s", err, ticketID)
+			return cached, nil
+		}
 		return nil, fmt.Errorf("falha ao buscar campos do chamado: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if resp.StatusCode >= 500 {
+			var cached []TicketFieldValue
+			if s.readTicketBackup(backupKey, &cached) {
+				s.markUnreachable()
+				s.supportLogf("HTTP %s — usando campos locais do chamado %s", resp.Status, ticketID)
+				return cached, nil
+			}
+		}
 		return nil, fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(body)))
 	}
 
@@ -1013,6 +1137,8 @@ func (s *Service) GetTicketFields(ticketID string) ([]TicketFieldValue, error) {
 	if fields == nil {
 		fields = []TicketFieldValue{}
 	}
+	s.markReachable()
+	s.saveTicketBackup(backupKey, fields)
 	return fields, nil
 }
 
@@ -1025,9 +1151,14 @@ func (s *Service) GetTicketAnswers(ticketID string) ([]TicketAnswer, error) {
 	}
 
 	cfg := s.debugConfig()
+	backupKey := ticketAnswersBackupKey(cfg, ticketID)
 	ctx := s.ctxOrBackground()
 	target := apiScheme(cfg) + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/tickets/" + ticketID + "/answers"
-	resp, err := doGetWithRetry(ctx, tlsutil.NewHTTPClient(10*time.Second), func() (*http.Request, error) {
+	attempts, timeout := 2, 10*time.Second
+	if s.hasTicketBackup(backupKey) {
+		attempts, timeout = 1, 6*time.Second
+	}
+	resp, err := doGetAttempts(ctx, tlsutil.NewHTTPClient(timeout), attempts, func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 		if err != nil {
 			return nil, err
@@ -1038,12 +1169,26 @@ func (s *Service) GetTicketAnswers(ticketID string) ([]TicketAnswer, error) {
 		return req, nil
 	})
 	if err != nil {
+		var cached []TicketAnswer
+		if s.readTicketBackup(backupKey, &cached) {
+			s.markUnreachable()
+			s.supportLogf("servidor inacessivel (%v) — usando respostas locais do chamado %s", err, ticketID)
+			return cached, nil
+		}
 		return nil, fmt.Errorf("falha ao buscar respostas do chamado: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if resp.StatusCode >= 500 {
+			var cached []TicketAnswer
+			if s.readTicketBackup(backupKey, &cached) {
+				s.markUnreachable()
+				s.supportLogf("HTTP %s — usando respostas locais do chamado %s", resp.Status, ticketID)
+				return cached, nil
+			}
+		}
 		return nil, fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(body)))
 	}
 
@@ -1054,6 +1199,8 @@ func (s *Service) GetTicketAnswers(ticketID string) ([]TicketAnswer, error) {
 	if answers == nil {
 		answers = []TicketAnswer{}
 	}
+	s.markReachable()
+	s.saveTicketBackup(backupKey, answers)
 	return answers, nil
 }
 
@@ -1065,6 +1212,11 @@ func (s *Service) CreateSupportTicket(input CreateTicketInput) (APITicket, error
 		return APITicket{}, fmt.Errorf("suporte desabilitado pela configuração do agente")
 	}
 
+	if err := s.ensureOnline("abrir chamado"); err != nil {
+		s.supportLogf("criação bloqueada: %v", err)
+		return APITicket{}, err
+	}
+
 	s.supportLogf("criando chamado: title=%q priority=%d category=%q", strings.TrimSpace(input.Title), input.Priority, strings.TrimSpace(input.Category))
 	info, err := s.fetchAgentContext()
 	if err != nil {
@@ -1074,6 +1226,11 @@ func (s *Service) CreateSupportTicket(input CreateTicketInput) (APITicket, error
 	if strings.TrimSpace(info.ClientID) == "" {
 		err := fmt.Errorf("clientId não resolvido: verifique a configuração do agente")
 		s.supportLogf("%v (agentId=%s)", err, info.AgentID)
+		return APITicket{}, err
+	}
+	// A resolução do contexto pode ter descoberto que estamos offline (usou o
+	// cache durável). Bloqueia antes de gastar o timeout do POST.
+	if err := s.ensureOnline("abrir chamado"); err != nil {
 		return APITicket{}, err
 	}
 
@@ -1141,7 +1298,7 @@ func (s *Service) CreateSupportTicket(input CreateTicketInput) (APITicket, error
 
 	resp, err := doPostWithRetry(ctx, tlsutil.NewHTTPClient(15*time.Second), req)
 	if err != nil {
-		wrapped := fmt.Errorf("falha ao criar chamado: %w", err)
+		wrapped := s.transportError("criar chamado", err)
 		s.supportLogf("erro HTTP ao criar chamado: %v", wrapped)
 		return APITicket{}, wrapped
 	}
@@ -1154,6 +1311,7 @@ func (s *Service) CreateSupportTicket(input CreateTicketInput) (APITicket, error
 		return APITicket{}, wrapped
 	}
 
+	s.markReachable()
 	var ticket APITicket
 	if err := json.Unmarshal(respBody, &ticket); err != nil {
 		wrapped := fmt.Errorf("resposta inválida ao criar chamado: %w", err)
@@ -1192,6 +1350,7 @@ func (s *Service) GetSupportTicketDetails(ticketID string) (APITicket, error) {
 	})
 	if err != nil {
 		if cached, ok := s.readCachedTicketDetail(backupKey); ok {
+			s.markUnreachable()
 			s.supportLogf("servidor inacessivel (%v) — usando detalhe local do chamado %s", err, ticketID)
 			return cached, nil
 		}
@@ -1203,6 +1362,7 @@ func (s *Service) GetSupportTicketDetails(ticketID string) (APITicket, error) {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		if resp.StatusCode >= 500 {
 			if cached, ok := s.readCachedTicketDetail(backupKey); ok {
+				s.markUnreachable()
 				s.supportLogf("HTTP %s — usando detalhe local do chamado %s", resp.Status, ticketID)
 				return cached, nil
 			}
@@ -1233,6 +1393,7 @@ func (s *Service) GetSupportTicketDetails(ticketID string) (APITicket, error) {
 		}
 	}
 
+	s.markReachable()
 	if strings.TrimSpace(ticket.ID) != "" {
 		s.saveTicketBackup(backupKey, ticket)
 	}
@@ -1341,6 +1502,7 @@ func (s *Service) GetTicketComments(ticketID string) ([]TicketComment, error) {
 	})
 	if err != nil {
 		if cached, ok := s.readCachedTicketComments(backupKey); ok {
+			s.markUnreachable()
 			s.supportLogf("servidor inacessivel (%v) — usando comentários locais do chamado %s", err, ticketID)
 			return cached, nil
 		}
@@ -1352,6 +1514,7 @@ func (s *Service) GetTicketComments(ticketID string) ([]TicketComment, error) {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		if resp.StatusCode >= 500 {
 			if cached, ok := s.readCachedTicketComments(backupKey); ok {
+				s.markUnreachable()
 				s.supportLogf("HTTP %s — usando comentários locais do chamado %s", resp.Status, ticketID)
 				return cached, nil
 			}
@@ -1383,6 +1546,7 @@ func (s *Service) GetTicketComments(ticketID string) ([]TicketComment, error) {
 		}
 		visible = append(visible, c)
 	}
+	s.markReachable()
 	s.saveTicketBackup(backupKey, visible)
 	return visible, nil
 }
@@ -1397,6 +1561,10 @@ func (s *Service) AddTicketCommentWithOptions(ticketID, content string) (TicketC
 	content = strings.TrimSpace(content)
 	if content == "" {
 		return TicketComment{}, fmt.Errorf("content não pode ser vazio")
+	}
+	if err := s.ensureOnline("adicionar comentário"); err != nil {
+		s.supportLogf("comentário bloqueado: %v", err)
+		return TicketComment{}, err
 	}
 
 	cfg := s.debugConfig()
@@ -1420,7 +1588,7 @@ func (s *Service) AddTicketCommentWithOptions(ticketID, content string) (TicketC
 
 	resp, err := doPostWithRetry(ctx, tlsutil.NewHTTPClient(10*time.Second), req)
 	if err != nil {
-		return TicketComment{}, fmt.Errorf("falha ao enviar comentário: %w", err)
+		return TicketComment{}, s.transportError("enviar comentário", err)
 	}
 	defer resp.Body.Close()
 
@@ -1429,6 +1597,7 @@ func (s *Service) AddTicketCommentWithOptions(ticketID, content string) (TicketC
 		return TicketComment{}, fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(respBody)))
 	}
 
+	s.markReachable()
 	var created TicketComment
 	if len(respBody) == 0 {
 		return created, nil
@@ -1465,6 +1634,10 @@ func (s *Service) CloseSupportTicket(ticketID string, input CloseTicketInput) (A
 		if *input.Rating < 1 || *input.Rating > 5 {
 			return APITicket{}, fmt.Errorf("rating inválido: informe valor entre 1 e 5")
 		}
+	}
+	if err := s.ensureOnline("fechar chamado"); err != nil {
+		s.supportLogf("fechamento bloqueado: %v", err)
+		return APITicket{}, err
 	}
 
 	cfg := s.debugConfig()
@@ -1504,7 +1677,7 @@ func (s *Service) CloseSupportTicket(ticketID string, input CloseTicketInput) (A
 	s.supportLogf("fechando chamado %s", ticketID)
 	resp, err := doPostWithRetry(ctx, tlsutil.NewHTTPClient(15*time.Second), req)
 	if err != nil {
-		return APITicket{}, fmt.Errorf("falha ao fechar chamado: %w", err)
+		return APITicket{}, s.transportError("fechar chamado", err)
 	}
 	defer resp.Body.Close()
 
@@ -1535,6 +1708,10 @@ func (s *Service) ReopenSupportTicket(ticketID, reason string) (APITicket, error
 	if !guidPattern.MatchString(ticketID) {
 		return APITicket{}, fmt.Errorf("ticketId inválido")
 	}
+	if err := s.ensureOnline("reabrir chamado"); err != nil {
+		s.supportLogf("reabertura bloqueada: %v", err)
+		return APITicket{}, err
+	}
 
 	cfg := s.debugConfig()
 	ctx := s.ctxOrBackground()
@@ -1563,7 +1740,7 @@ func (s *Service) ReopenSupportTicket(ticketID, reason string) (APITicket, error
 	s.supportLogf("reabrindo chamado %s", ticketID)
 	resp, err := doPostWithRetry(ctx, tlsutil.NewHTTPClient(15*time.Second), req)
 	if err != nil {
-		return APITicket{}, fmt.Errorf("falha ao reabrir chamado: %w", err)
+		return APITicket{}, s.transportError("reabrir chamado", err)
 	}
 	defer resp.Body.Close()
 
@@ -1589,6 +1766,10 @@ func (s *Service) RateSupportTicket(ticketID string, rating int, feedback string
 	}
 	if rating < 1 || rating > 5 {
 		return APITicket{}, fmt.Errorf("rating inválido: informe valor entre 1 e 5")
+	}
+	if err := s.ensureOnline("avaliar chamado"); err != nil {
+		s.supportLogf("avaliação bloqueada: %v", err)
+		return APITicket{}, err
 	}
 
 	cfg := s.debugConfig()
@@ -1617,7 +1798,7 @@ func (s *Service) RateSupportTicket(ticketID string, rating int, feedback string
 	s.supportLogf("avaliando chamado %s (rating=%d)", ticketID, rating)
 	resp, err := doPostWithRetry(ctx, tlsutil.NewHTTPClient(15*time.Second), req)
 	if err != nil {
-		return APITicket{}, fmt.Errorf("falha ao enviar avaliação: %w", err)
+		return APITicket{}, s.transportError("enviar avaliação", err)
 	}
 	defer resp.Body.Close()
 

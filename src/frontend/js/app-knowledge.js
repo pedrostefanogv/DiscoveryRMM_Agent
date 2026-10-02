@@ -361,6 +361,25 @@ function filterKnowledgeArticles(query) {
 
 var kbLoading = false;
 
+// Aviso de modo offline com a data do backup (quando disponível).
+function renderKnowledgeCacheState(result) {
+  var banner = document.getElementById("kbStaleBanner");
+  if (!banner) return;
+  if (!(result && result.stale)) {
+    banner.classList.add("hidden");
+    banner.textContent = "";
+    return;
+  }
+  var msg = translate("knowledge.staleCache");
+  var when = result.cachedAt ? String(result.cachedAt) : "";
+  if (when && typeof formatDate === "function") {
+    try { when = formatDate(result.cachedAt, "") || when; } catch (_) { /* valor cru */ }
+  }
+  if (when) msg += " " + translate("cache.updatedAt", { time: when });
+  banner.textContent = msg;
+  banner.classList.remove("hidden");
+}
+
 async function loadKnowledgeBase() {
   if (!kbArticlesListEl || kbLoading) return; // guard: evita cargas concorrentes
   kbLoading = true;
@@ -378,10 +397,10 @@ async function loadKnowledgeBase() {
       knowledgeArticles = result && Array.isArray(result.articles)
         ? result.articles
         : (Array.isArray(result) ? result : []);
-      if (staleBanner) staleBanner.classList.toggle("hidden", !(result && result.stale));
+      renderKnowledgeCacheState(result);
     } else {
       knowledgeArticles = await api.GetKnowledgeArticles("");
-      if (staleBanner) staleBanner.classList.add("hidden");
+      renderKnowledgeCacheState(null);
     }
     knowledgeArticles = Array.isArray(knowledgeArticles)
       ? knowledgeArticles
