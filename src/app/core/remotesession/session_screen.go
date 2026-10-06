@@ -30,6 +30,11 @@ type SessionScreen struct {
 	codecSel   CodecSelector
 	recording  *RecordingSource
 	inputCtrl  *InputController
+	// inputLock: bloqueio (KVM lock) da entrada da máquina remota. atomic.Pointer
+	// porque o .control é assinado antes de runScreenSession anexar o manager —
+	// um comando do viewer pode chegar nesse intervalo e deve ser ignorado (não
+	// corromper a leitura).
+	inputLock atomic.Pointer[InputLockManager]
 
 	// Dirty rect detection
 	dirtyDetector *screen.DirtyDetector
@@ -767,6 +772,16 @@ func (s *SessionScreen) currentCapturer() screen.Capturer {
 	return s.capturer
 }
 
+// SetInputLock anexa o gerenciador de bloqueio de entrada da sessão.
+func (s *SessionScreen) SetInputLock(m *InputLockManager) {
+	s.inputLock.Store(m)
+}
+
+// InputLock devolve o gerenciador de bloqueio (nil quando ainda não anexado).
+func (s *SessionScreen) InputLock() *InputLockManager {
+	return s.inputLock.Load()
+}
+
 // Stop encerra o loop de captura.
 func (s *SessionScreen) Stop() {
 	select {
@@ -782,6 +797,14 @@ func (s *SessionScreen) Stop() {
 		}
 	}
 	<-s.doneCh // aguarda loop terminar
+
+	// FAIL-SAFE do KVM lock: a sessão está encerrando por QUALQUER motivo
+	// (stop, liveness, erro) — devolve teclado/mouse ao usuário da máquina
+	// remota ANTES de qualquer outra limpeza, para o intervalo sem controle
+	// ser o menor possível. Idempotente.
+	if lk := s.inputLock.Load(); lk != nil {
+		lk.Close()
+	}
 
 	// Libera teclas/modificadores que tenham ficado "presas" no remoto
 	// (viewer fechou com a tecla segurada e o keyup nunca chegou) e encerra

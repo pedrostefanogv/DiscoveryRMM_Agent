@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // orderRecorder registra a ORDEM das injeções de teclado (o stubRecorder de
@@ -87,7 +88,7 @@ func TestNormalizeSpecialKey(t *testing.T) {
 func TestIsSupportedSpecialKey(t *testing.T) {
 	supported := []string{
 		"ctrl+alt+del", "ctrl+alt+delete", "win+l", "ctrl+shift+esc",
-		"alt+tab", "alt+shift+tab", "alt+f4", "ctrl+esc", "ctrl+alt+end",
+		"alt+tab", "alt+shift+tab", "alt+f4", "ctrl+esc",
 		"win", "win+d", "win+e", "win+r", "win+x", "win+tab",
 		"printscreen", "alt+printscreen",
 	}
@@ -96,7 +97,10 @@ func TestIsSupportedSpecialKey(t *testing.T) {
 			t.Errorf("%q deveria estar na allow-list", id)
 		}
 	}
-	for _, id := range []string{"", "combo inexistente", "ctrl+alt+f13", "shutdown"} {
+	// ctrl+alt+end saiu da lista: só é SAS DENTRO de uma sessão RDP, e o worker
+	// sempre injeta na sessão do console (WTSGetActiveConsoleSessionId) — o item
+	// não teria efeito nenhum e poluía o menu.
+	for _, id := range []string{"", "combo inexistente", "ctrl+alt+f13", "ctrl+alt+end", "shutdown"} {
 		if IsSupportedSpecialKey(id) {
 			t.Errorf("%q NAO deveria estar na allow-list", id)
 		}
@@ -250,6 +254,95 @@ func TestHandleInput_V1KeyComboInvokesHandler(t *testing.T) {
 
 	if gotCombo != "printscreen" || gotMethod != comboMethodSequence || gotErr != nil {
 		t.Fatalf("handler v1: combo=%q method=%q err=%v", gotCombo, gotMethod, gotErr)
+	}
+}
+
+// Regressão: um releaseAllKeys do watchdog NÃO pode se intrometer no meio de
+// uma combinação especial (ver injectMu em input_controller.go). O teste segura
+// a injeção no meio da combinação, dispara o release em paralelo e verifica que
+// nenhum keyup sai antes de a combinação terminar.
+func TestReleaseAllKeysWaitsForCombo(t *testing.T) {
+	origDown, origUp := injectKeyDown, injectKeyUp
+	t.Cleanup(func() { injectKeyDown, injectKeyUp = origDown, origUp })
+
+	var mu sync.Mutex
+	var events []string
+	comboStarted := make(chan struct{})
+	releaseCombo := make(chan struct{})
+	// Garante que o teste nunca deixe a combinação presa (mesmo com t.Fatal).
+	defer func() {
+		select {
+		case <-releaseCombo:
+		default:
+			close(releaseCombo)
+		}
+	}()
+
+	injectKeyDown = func(vk uint16) error {
+		if vk == VK_MENU {
+			select {
+			case <-comboStarted:
+			default:
+				close(comboStarted)
+			}
+			<-releaseCombo // segura a combinação no meio (injectMu em mãos)
+		}
+		mu.Lock()
+		events = append(events, "down")
+		mu.Unlock()
+		return nil
+	}
+	injectKeyUp = func(vk uint16) error {
+		mu.Lock()
+		events = append(events, "up")
+		mu.Unlock()
+		return nil
+	}
+
+	c := newTestController(t)
+	// Viewer segura Shift: fica rastreado para o release ter o que liberar.
+	c.HandleInput(legacyKeyEvent("keydown", "ShiftLeft", "Shift", false, true, false, false))
+	mu.Lock()
+	events = nil // ignora o down do Shift; interessa o que vier agora
+	mu.Unlock()
+
+	comboDone := make(chan struct{})
+	go func() {
+		c.HandleInput([]byte("{\"type\":\"keycombo\",\"combo\":\"alt+tab\"}"))
+		close(comboDone)
+	}()
+
+	<-comboStarted // combinação no meio: injectMu adquirido
+
+	releaseDone := make(chan struct{})
+	go func() {
+		c.releaseAllKeys("teste")
+		close(releaseDone)
+	}()
+
+	select {
+	case <-releaseDone:
+		t.Fatal("releaseAllKeys NAO deveria concluir durante a combinacao")
+	case <-time.After(80 * time.Millisecond):
+	}
+
+	mu.Lock()
+	n := len(events)
+	mu.Unlock()
+	if n != 0 {
+		t.Fatalf("nenhuma injecao deveria ocorrer durante o bloqueio, obtidas %d", n)
+	}
+
+	close(releaseCombo) // libera a combinação
+	<-comboDone
+	<-releaseDone
+
+	mu.Lock()
+	total := len(events)
+	mu.Unlock()
+	// 2 downs (Alt, Tab) + 2 ups (Tab, Alt) da combinação + 1 up do Shift.
+	if total != 5 {
+		t.Fatalf("esperado 5 injecoes (2 down + 3 up), obtidas %d", total)
 	}
 }
 

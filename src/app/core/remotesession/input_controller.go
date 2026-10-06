@@ -75,7 +75,14 @@ type InputModifiers struct {
 type InputController struct {
 	sessionID string
 
-	mu             sync.Mutex
+	mu sync.Mutex
+	// injectMu serializa SEQUÊNCIAS de injeção entre goroutines. O caminho do
+	// viewer (HandleInput) é serializado por assinatura, mas o watchdog de
+	// teclas presas e o Close rodam em goroutines próprias: sem este mutex, um
+	// releaseAllKeys pode cair no MEIO de uma combinação especial (keyup de
+	// modificador entre o down e o up da combinação), deixando a combinação
+	// inconsistente no remoto. Nunca adquirir c.mu com injectMu em mãos.
+	injectMu       sync.Mutex
 	lastSeq        uint64
 	frameW, frameH int // dimensões do último frame (pixels do frame codificado)
 	capW, capH     int // dimensões da captura real no desktop (pode diferir do frame com escala)
@@ -221,17 +228,31 @@ func (c *InputController) releaseAllKeys(reason string) {
 		c.mu.Unlock()
 		return
 	}
-	down := make([]uint16, 0, len(c.keysDown))
-	for _, vk := range c.keysDown {
-		down = append(down, vk)
-	}
+	// Deduplica por VK: uma tecla MODIFICADORA (Ctrl/Alt/Shift/Win) aparece nos
+	// DOIS mapas (modsActive e keysDown pelo próprio evento dela), então liberar
+	// os dois conjuntos ingetava keyup DUPLICADO da mesma tecla. Inofensivo no
+	// Windows, mas suja o log e dobra o número de SendInput no teardown.
+	seen := make(map[uint16]bool, len(c.modsActive)+len(c.keysDown))
 	mods := make([]uint16, 0, len(c.modsActive))
 	for vk := range c.modsActive {
 		mods = append(mods, vk)
+		seen[vk] = true
+	}
+	down := make([]uint16, 0, len(c.keysDown))
+	for _, vk := range c.keysDown {
+		if seen[vk] {
+			continue // já liberado como modificador
+		}
+		seen[vk] = true
+		down = append(down, vk)
 	}
 	c.keysDown = make(map[string]uint16)
 	c.modsActive = make(map[uint16]bool)
 	c.mu.Unlock()
+
+	// Serializa com sequências em andamento (ex.: combinação especial).
+	c.injectMu.Lock()
+	defer c.injectMu.Unlock()
 
 	for _, vk := range mods {
 		if err := injectKeyUp(vk); err != nil {
@@ -653,7 +674,10 @@ func (c *InputController) handleCombo(combo string) {
 	// rastreamento antes para não deixar estado "preso"/desincronizado.
 	c.forgetTrackedKeys(SpecialKeyVirtualKeys(combo))
 
+	// Sequência atômica do ponto de vista do watchdog/Close (ver injectMu).
+	c.injectMu.Lock()
 	method, err := InjectSpecialKey(combo)
+	c.injectMu.Unlock()
 	if err != nil {
 		log.Printf("[input-controller] tecla especial %q falhou: %v", combo, err)
 	} else {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"discovery/app/core/screen"
 )
@@ -51,8 +52,13 @@ type comboInjection struct {
 const (
 	VK_F4       = 0x73
 	VK_SNAPSHOT = 0x2C
-	VK_END      = 0x23
 )
+
+// comboKeyHoldDelay é o intervalo mantido entre pressionar e liberar a
+// sequência. Sem ele, em máquinas com ganchos de input (EDR, outro RMM, hook
+// de acessibilidade) o Windows pode processar a tecla SEM o modificador —
+// sintoma clássico: Alt+Tab / Win+D não fazem nada. Var para os testes zerarem.
+var comboKeyHoldDelay = 15 * time.Millisecond
 
 // specialKeyCombos é a allow-list canônica (ids usados pelo viewer).
 var specialKeyCombos = map[string]comboInjection{
@@ -66,7 +72,6 @@ var specialKeyCombos = map[string]comboInjection{
 	"alt+tab":        {Method: comboMethodSequence, Keys: []uint16{VK_MENU, VK_TAB}},
 	"alt+shift+tab":  {Method: comboMethodSequence, Keys: []uint16{VK_MENU, VK_SHIFT, VK_TAB}},
 	"alt+f4":         {Method: comboMethodSequence, Keys: []uint16{VK_MENU, VK_F4}},
-	"ctrl+alt+end":   {Method: comboMethodSequence, Keys: []uint16{VK_CONTROL, VK_MENU, VK_END}},
 
 	// Shell do Windows.
 	"win":     {Method: comboMethodSequence, Keys: []uint16{VK_LWIN}},
@@ -182,6 +187,13 @@ func InjectSpecialKey(raw string) (string, error) {
 		}
 		pressed++
 	}
+	// Mantém a combinação pressionada por um instante antes de liberar (ver
+	// comboKeyHoldDelay): garante que o modificador esteja ativo quando o app
+	// remoto processar a tecla.
+	if comboKeyHoldDelay > 0 {
+		time.Sleep(comboKeyHoldDelay)
+	}
+
 	// Libera TODAS as teclas mesmo se um keyup falhar: parar no primeiro erro
 	// deixaria as demais (inclusive modificadores) presas no remoto.
 	var releaseErr error

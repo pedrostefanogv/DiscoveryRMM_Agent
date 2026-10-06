@@ -66,7 +66,10 @@ func (s TypeSet) Has(typ string) bool {
 var RemoteDebugTypes = NewTypeSet("ping", "pong", "setLevel", "levelChanged", "closed")
 
 // Tipos do acesso remoto (canal .remote-session.<id>.control).
-var RemoteSessionTypes = NewTypeSet("ping", "pong", "keyframe", "closed")
+//
+// inputLock/inputLockChanged = bloqueio (KVM lock) da entrada da máquina
+// remota: comando do viewer e estado autoritativo devolvido pelo agent.
+var RemoteSessionTypes = NewTypeSet("ping", "pong", "keyframe", "closed", "inputLock", "inputLockChanged")
 
 // IsRole valida o campo from contra os papeis conhecidos.
 func IsRole(role string) bool {

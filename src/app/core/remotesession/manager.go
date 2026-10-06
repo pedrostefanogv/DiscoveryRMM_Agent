@@ -578,7 +578,9 @@ func (m *Manager) handleControlFrame(session *Session, data []byte) {
 		log.Printf("[remote-session] frame de controle descartado: %v\n", err)
 		return
 	}
-	if env.SessionID != "" && !strings.EqualFold(strings.TrimSpace(env.SessionID), session.ID) {
+	// Comparação tolerante a hífens: o subject NATS usa o GUID sem hífens e o
+	// viewer pode mandar o GUID canônico (com hífens) no envelope tipado.
+	if env.SessionID != "" && !sameSessionID(env.SessionID, session.ID) {
 		return
 	}
 	if env.From == sessioncontrol.RoleAgent {
@@ -590,21 +592,62 @@ func (m *Manager) handleControlFrame(session *Session, data []byte) {
 	if session.live != nil && env.From == sessioncontrol.RoleViewer &&
 		(env.Type == ControlTypePing || env.Type == ControlTypePong) {
 		session.live.NotePeerSignal(time.Now().UTC())
+		// LEASE do KVM lock: qualquer ping/pong do viewer renova o bloqueio. Se
+		// o viewer sumir (aba fechada, rede, API), o lease expira e o agent
+		// devolve teclado/mouse ao usuário da máquina remota sozinho.
+		if lk := m.inputLockFor(session.ID); lk != nil {
+			lk.Renew()
+		}
 	}
 
 	switch env.Type {
 	case ControlTypePing:
 		m.sendControl(session, ControlTypePong, nil)
 	case ControlTypeKeyframe:
-		m.mu.RLock()
-		screenSession, ok := m.screenSessions[session.ID]
-		m.mu.RUnlock()
-		if ok {
+		if screenSession := m.screenSessionFor(session.ID); screenSession != nil {
 			screenSession.RequestKeyFrame()
 		}
+	case ControlTypeInputLock:
+		// Bloqueio/destrave + query de estado. Só o VIEWER pode comandar e só
+		// sessões de TELA têm um gerenciador (terminal/arquivos ignoram).
+		if env.From != sessioncontrol.RoleViewer {
+			log.Printf("[remote-session] inputLock ignorado: papel %q nao pode comandar o bloqueio\n", env.From)
+			break
+		}
+		lk := m.inputLockFor(session.ID)
+		if lk == nil {
+			log.Printf("[remote-session] inputLock ignorado: sessao %s sem sessao de tela ativa\n", session.ID)
+			break
+		}
+		lk.HandleCommand(env.Payload)
 	case ControlTypePong, ControlTypeClosed:
 		// presenca ja registrada acima
 	}
+}
+
+// sameSessionID compara ids de sessão tolerando hífens e caixa.
+func sameSessionID(a, b string) bool {
+	norm := func(s string) string {
+		return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(s), "-", ""))
+	}
+	return norm(a) == norm(b)
+}
+
+// screenSessionFor devolve a sessão de tela ativa (nil quando não há).
+func (m *Manager) screenSessionFor(sessionID string) *SessionScreen {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.screenSessions[sessionID]
+}
+
+// inputLockFor devolve o gerenciador de bloqueio de entrada da sessão de tela
+// (nil quando a sessão não é de tela ou o manager ainda não foi anexado).
+func (m *Manager) inputLockFor(sessionID string) *InputLockManager {
+	ss := m.screenSessionFor(sessionID)
+	if ss == nil {
+		return nil
+	}
+	return ss.InputLock()
 }
 
 // sendControl publica um frame de controle no subject .control da sessao.
@@ -752,6 +795,18 @@ func (m *Manager) runScreenSession(ctx context.Context, session *Session) {
 	} else {
 		defer inputSub.Unsubscribe()
 	}
+
+	// ── KVM input lock (bloqueio de teclado/mouse do host remoto) ──
+	// O estado autoritativo é publicado no .control; a liberação é garantida
+	// por: (1) Close() no Stop desta sessão, (2) lease renovado pelos pings do
+	// viewer com watchdog próprio, (3) saída do processo (thread pinada).
+	lockMgr := NewInputLockManager(session.ID, func(state InputLockState) {
+		m.sendControl(session, ControlTypeInputLockChanged, state.Payload())
+	})
+	screenSession.SetInputLock(lockMgr)
+	// Estado inicial (destravado) para viewers que já estejam assinando; quem
+	// conectar depois manda query e recebe a resposta pelo .control.
+	lockMgr.PublishCurrent("session_start")
 
 	// O canal .control e assinado uma unica vez em handleStart (para todos os
 	// kinds); o keyframe chega por handleControlFrame -> RequestKeyFrame().

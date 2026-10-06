@@ -16,6 +16,13 @@ const (
 	ControlTypePong     = "pong"
 	ControlTypeKeyframe = "keyframe"
 	ControlTypeClosed   = "closed"
+	// ControlTypeInputLock é o comando do viewer para bloquear/destravar a
+	// entrada (teclado/mouse) da máquina remota. Payload:
+	// {locked, leaseSeconds?, maxSeconds?, query?}.
+	ControlTypeInputLock = "inputLock"
+	// ControlTypeInputLockChanged é o estado autoritativo publicado pelo agent
+	// (também em resposta a query e em toda liberação automática).
+	ControlTypeInputLockChanged = "inputLockChanged"
 )
 
 // DecodeRemoteSessionControl decodifica um frame recebido no .control.
