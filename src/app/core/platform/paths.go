@@ -146,6 +146,20 @@ func ServiceLogFilePath() string {
 	return ""
 }
 
+// LogDir retorna o diretório de logs do agente.
+// Windows: %ProgramData%\Discovery\logs · Outros: <DataDir>/logs.
+func LogDir() string {
+	return filepath.Join(DataDir(), "logs")
+}
+
+// LogDBPath retorna o banco unificado de logs do agente/serviço (log_entries).
+// É um arquivo só em repouso (journal_mode=DELETE) — copiável para debug.
+func LogDBPath() string { return filepath.Join(LogDir(), "logs.db") }
+
+// ChatDBPath retorna o banco das interações de chat (chat_entries). Fica
+// separado de propósito: coletar logs do agente não expõe conversas.
+func ChatDBPath() string { return filepath.Join(LogDir(), "chat.db") }
+
 // ─── Caminhos do Chat Config ────────────────────────────────────────
 
 // ChatConfigPathCandidates retorna caminhos candidatos para o arquivo de config do chat.

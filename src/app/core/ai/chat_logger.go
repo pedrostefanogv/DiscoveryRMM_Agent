@@ -1,32 +1,23 @@
-// Package ai: logger JSONL dedicado para logs de chat com IA.
-// Independente do modo debug, salva todas as interações em chat_logs.jsonl.
+// Package ai: logger dedicado para as interações de chat com IA.
+// Independente do modo debug, salva todas as interações em
+// %ProgramData%\Discovery\logs\chat.db (SQLite — separado de logs.db por
+// privacidade: coletar logs do agente não expõe conversas).
 package ai
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
-)
 
-// M9: limites de privacidade/espaco do log de chat — as interacoes (incl.
-// userMsg/assistant/tool args) eram acumuladas em texto plano sem limite.
-const (
-	// chatLogMaxSize rotaciona o arquivo ativo quando atinge ~10 MB.
-	chatLogMaxSize = int64(10 << 20)
-	// chatLogRetention remove arquivos rotacionados com mais de 7 dias.
-	chatLogRetention = 7 * 24 * time.Hour
-	// chatLogMaxBackups teto de arquivos rotacionados mantidos.
-	chatLogMaxBackups = 7
+	"discovery/app/core/logstore"
 )
 
 // ChatLogEntry representa uma entrada de log de chat.
 type ChatLogEntry struct {
-	Timestamp    string   `json:"timestamp"`
+	Timestamp string `json:"timestamp"`
 	// CodeRev identifica a revisão de código (hash curto do commit + "+mod"
 	// quando o worktree estava sujo) que produziu esta entrada — diagnosticar
 	// um log antigo passa a dizer QUAL versão do código o gerou. Preenchido
@@ -54,13 +45,13 @@ type ChatLogEntry struct {
 	ToolResults  []string `json:"toolResults,omitempty"`  // multi-round: resultados das execuções (truncados)
 }
 
-// ChatLogger é um logger thread-safe que escreve entradas JSONL
-// para o arquivo chat_logs.jsonl no diretório de dados do agente.
+// ChatLogger persiste as interações de chat em chat.db. A retenção (7 dias),
+// o teto de tamanho (128 MB) e a purga (startup + 24 h) são responsabilidade
+// do logstore — o logger só redige segredos e enfileira.
 type ChatLogger struct {
-	mu       sync.Mutex
-	file     *os.File
-	filePath string
-	enabled  bool
+	mu      sync.Mutex
+	store   *logstore.Store
+	enabled bool
 }
 
 // NewChatLogger cria um novo logger de chat. Se logDir for vazio,
@@ -73,42 +64,42 @@ func NewChatLogger(logDir string) *ChatLogger {
 	return cl
 }
 
-// Enable ativa o logger e abre/rotaciona o arquivo de log.
+// Enable ativa o logger abrindo (ou reutilizando) chat.db no diretório dado.
+// Falha de abertura deixa o logger desabilitado — nunca é fatal.
 func (cl *ChatLogger) Enable(logDir string) {
+	logDir = strings.TrimSpace(logDir)
+	if logDir == "" {
+		return
+	}
 	cl.mu.Lock()
 	defer cl.mu.Unlock()
-
 	if cl.enabled {
 		return
 	}
-
-	filePath := filepath.Join(logDir, "chat_logs.jsonl")
-	if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
-		return
-	}
-
-	f, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	store, err := logstore.Open(logstore.Options{
+		Path:      filepath.Join(logDir, "chat.db"),
+		Kind:      logstore.KindChat,
+		Retention: logstore.DefaultRetention,
+		MaxBytes:  logstore.DefaultMaxBytes,
+	})
 	if err != nil {
 		return
 	}
-
-	cl.filePath = filePath
-	cl.file = f
+	cl.store = store
 	cl.enabled = true
-
-	// M9: limpeza de rotacoes antigas (privacidade/espaco em maquina de usuario).
-	cl.cleanupRotationsLocked()
+	// Purga no startup: idade (7 dias) + teto de tamanho.
+	_ = store.Purge()
 }
 
-// Disable desativa o logger e fecha o arquivo.
+// Disable desativa o logger, drenando a fila e fechando o banco.
 func (cl *ChatLogger) Disable() {
 	cl.mu.Lock()
-	defer cl.mu.Unlock()
-
+	store := cl.store
+	cl.store = nil
 	cl.enabled = false
-	if cl.file != nil {
-		_ = cl.file.Close()
-		cl.file = nil
+	cl.mu.Unlock()
+	if store != nil {
+		_ = store.Close()
 	}
 }
 
@@ -139,12 +130,13 @@ func redactSensitive(s string) string {
 	return s
 }
 
-// Log escreve uma entrada de log no arquivo JSONL.
+// Log grava uma entrada de log no chat.db. É thread-safe e não bloqueia.
 func (cl *ChatLogger) Log(entry ChatLogEntry) {
 	cl.mu.Lock()
-	defer cl.mu.Unlock()
-
-	if !cl.enabled || cl.file == nil {
+	store := cl.store
+	enabled := cl.enabled
+	cl.mu.Unlock()
+	if !enabled || store == nil {
 		return
 	}
 
@@ -168,73 +160,35 @@ func (cl *ChatLogger) Log(entry ChatLogEntry) {
 		entry.CodeRev = codeRevision()
 	}
 
-	data, err := json.Marshal(entry)
+	ts, err := time.Parse(time.RFC3339Nano, entry.Timestamp)
 	if err != nil {
-		return
+		ts = time.Now().UTC()
 	}
 
-	_, _ = cl.file.WriteString(string(data) + "\n")
-
-	// M9: rotacao por tamanho — arquivo cheio vai para chat_logs-<ts>.jsonl.
-	cl.rotateIfNeededLocked()
-}
-
-// rotateIfNeededLocked renomeia o arquivo atual quando excede chatLogMaxSize e
-// abre um novo. Caller segura cl.mu.
-func (cl *ChatLogger) rotateIfNeededLocked() {
-	info, err := cl.file.Stat()
-	if err != nil || info.Size() < chatLogMaxSize {
-		return
-	}
-	_ = cl.file.Close()
-	stamp := time.Now().UTC().Format("20060102-150405")
-	rotated := filepath.Join(filepath.Dir(cl.filePath), "chat_logs-"+stamp+".jsonl")
-	if err := os.Rename(cl.filePath, rotated); err != nil {
-		// Sem rename: continua escrevendo no mesmo arquivo (degrada graciosamente).
-		return
-	}
-	f, err := os.OpenFile(cl.filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
-	if err != nil {
-		cl.enabled = false
-		cl.file = nil
-		return
-	}
-	cl.file = f
-	cl.cleanupRotationsLocked()
-}
-
-// cleanupRotationsLocked remove arquivos rotacionados vencidos (chatLogRetention)
-// e mantém no máximo chatLogMaxBackups. Caller segura cl.mu.
-func (cl *ChatLogger) cleanupRotationsLocked() {
-	dir := filepath.Dir(cl.filePath)
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return
-	}
-	cutoff := time.Now().Add(-chatLogRetention)
-	var rotated []string
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasPrefix(e.Name(), "chat_logs-") || !strings.HasSuffix(e.Name(), ".jsonl") {
-			continue
-		}
-		rotated = append(rotated, e.Name())
-	}
-	// Ordem cronológica pelo nome (timestamp no nome).
-	// Mantém os chatLogMaxBackups mais recentes; remove os excedentes e os
-	// que passaram da retenção.
-	keep := len(rotated) - chatLogMaxBackups
-	for i, name := range rotated {
-		full := filepath.Join(dir, name)
-		remove := i < keep
-		if !remove {
-			if info, err := os.Stat(full); err == nil && info.ModTime().Before(cutoff) {
-				remove = true
-			}
-		}
-		if remove {
-			_ = os.Remove(full)
-		}
-	}
+	store.AppendChat(logstore.ChatEntry{
+		Timestamp:    ts,
+		CodeRev:      entry.CodeRev,
+		Type:         entry.Type,
+		Endpoint:     entry.Endpoint,
+		Method:       entry.Method,
+		SessionID:    entry.SessionID,
+		StatusCode:   entry.StatusCode,
+		LatencyMs:    entry.LatencyMs,
+		TokensUsed:   entry.TokensUsed,
+		MessageLen:   entry.MessageLen,
+		ResponseLen:  entry.ResponseLen,
+		Round:        entry.Round,
+		ToolCount:    entry.ToolCount,
+		StreamDone:   entry.StreamDone,
+		HasTokens:    entry.HasTokens,
+		HasToolCalls: entry.HasToolCalls,
+		Error:        entry.Error,
+		UserMsg:      entry.UserMsg,
+		Assistant:    entry.Assistant,
+		ToolCalls:    entry.ToolCalls,
+		ToolArgs:     entry.ToolArgs,
+		ToolResults:  entry.ToolResults,
+	})
 }
 
 // TruncateForLog helper para truncar mensagens longas nos logs

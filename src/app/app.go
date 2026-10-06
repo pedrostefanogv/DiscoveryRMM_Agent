@@ -29,6 +29,7 @@ import (
 	"discovery/app/core/data"
 	"discovery/app/core/database"
 	"discovery/app/core/inventory"
+	"discovery/app/core/logstore"
 	"discovery/app/core/mcp"
 	"discovery/app/core/models"
 	"discovery/app/core/platform"
@@ -114,6 +115,8 @@ type App struct {
 	mcpRegistry *mcp.Registry
 	chatSvc     *chat.Service
 	psadtSvc    *psadt.Service
+	// logStore é o banco unificado de logs do processo (nil quando indisponível).
+	logStore *logstore.Store
 
 	// ── Captura de tela assistida (chat IA) ──
 	// screenshotConsent controla a autorização do usuário; screenshotMu/
@@ -949,20 +952,10 @@ func NewApp(opts AppStartupOptions) *App {
 		GetRedact: a.getRedact,
 		SetRedact: a.ExportCfg.Set,
 	})
-	// Persistência de logs: serviço usa agent-service.log (Fase 0.2 do plano);
-	// UI usa agent.log padrão. O log file do modo serviço também é configurado
-	// via logger.SetFileOutput em RunServiceMode (para o stdlib log).
-	logPath := platform.LogFilePath()
-	if a.RuntimeFlags.ServiceMode {
-		logPath = platform.ServiceLogFilePath()
-	}
-	if logPath != "" && logFilePersistenceEnabled() {
-		if err := a.Logs.EnableFilePersistence(logPath); err != nil {
-			log.Printf("[startup] aviso: falha ao habilitar persistência de logs em arquivo: %v", err)
-		} else {
-			a.Logs.Append("[startup] persistência de logs habilitada em " + logPath)
-		}
-	}
+	// Persistência de logs: banco unificado em %ProgramData%\Discovery\logs
+	// (logs.db). O arquivo texto passa a ser apenas fallback de abertura. O
+	// serviço também registra o sink do slog em RunServiceMode.
+	a.initLogPersistence()
 	a.chatSvc.LoadPersistedConfig()
 	// Carrega o debug_config.json (o que o usuário salvou na página de Debug —
 	// C:\ProgramData\Discovery) ANTES do config de produção. O loader de
@@ -2038,6 +2031,11 @@ func (a *App) shutdown() {
 		}
 	}
 	a.Logs.CloseFile()
+	// Fecha os bancos de log por último: o Close drena a fila (flush).
+	if a.chatSvc != nil {
+		a.chatSvc.Service().CloseChatLogger()
+	}
+	closeProcessLogStore()
 }
 
 // cancelDeferredRestart cancela qualquer restart adiado pendente.

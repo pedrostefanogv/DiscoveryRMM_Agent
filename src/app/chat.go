@@ -1,8 +1,6 @@
 package app
 
 import (
-	"path/filepath"
-
 	"discovery/app/core/ai"
 	"discovery/app/core/mcp"
 	"discovery/app/core/platform"
@@ -21,8 +19,8 @@ type ChatConfig struct {
 	NotifyPreview *bool `json:"notifyPreview,omitempty"`
 }
 
-// initChatLogger inicializa o logger JSONL de chat em
-// %ProgramData%\Discovery\logs\chat_logs.jsonl.
+// initChatLogger inicializa o banco de chat em
+// %ProgramData%\Discovery\logs\chat.db (separado de logs.db por privacidade).
 //
 // Padrão: ATIVADO — todas as interações de chat são salvas por padrão
 // (contrato documentado em debug.ChatLogConfig: Enabled nil ou true = ativo).
@@ -37,11 +35,13 @@ func (a *App) initChatLogger() {
 		shouldEnable = *inst.ChatLog.Enabled
 	}
 
-	if shouldEnable {
+	// Em binários de teste o logger global é desligado (mesma guarda do
+	// agent.log/logs.db): sem isso o go test criaria chat.db em produção.
+	if shouldEnable && logFilePersistenceEnabled() {
 		chatLogger := ai.NewChatLogger("")
-		chatLogger.Enable(filepath.Join(platform.DataDir(), "logs"))
+		chatLogger.Enable(platform.LogDir())
 		a.chatSvc.Service().SetChatLogger(chatLogger)
-		a.Logs.Append("[chat] log detalhado de chat ativado em " + filepath.Join(platform.DataDir(), "logs", "chat_logs.jsonl"))
+		a.Logs.Append("[chat] log detalhado de chat ativado em " + platform.ChatDBPath())
 	} else {
 		chatLogger := ai.NewChatLogger("")
 		chatLogger.Disable()

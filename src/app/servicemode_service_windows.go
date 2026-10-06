@@ -115,18 +115,21 @@ type discoveryService struct {
 // Detecta se o processo foi lançado pelo SCM (svc.IsWindowsService) ou com
 // --service manual; nunca inicializa a aplicação Wails.
 func RunServiceMode() {
-	// Log do serviço em arquivo dedicado (Fase 0.2) — antes de qualquer
-	// operação, para capturar falhas de início.
-	if p := platform.ServiceLogFilePath(); p != "" {
-		if err := logger.SetFileOutput(p); err != nil {
-			log.Printf("[service] aviso: falha ao redirecionar log para %s: %v", p, err)
+	// Logs unificados em logs.db — aberto antes de qualquer operação, para
+	// capturar falhas de início, e com o sink do slog registrado. Só cai para
+	// arquivo texto quando o banco não pode ser aberto.
+	if ensureProcessLogStore("service", "discovery-service") == nil {
+		if p := platform.ServiceLogFilePath(); p != "" {
+			if err := logger.SetFileOutput(p); err != nil {
+				log.Printf("[service] aviso: falha ao redirecionar log para %s: %v", p, err)
+			}
 		}
 	}
-	// Tee do stdlib log para o arquivo do serviço (mesmo caminho da UI, que
-	// já faz isso em src/main.go): linhas de log.Printf — dreno do stderr do
-	// worker de remote session, logs do manager/spawn — antes iam só para o
-	// stderr do serviço (invisível em produção) e o diagnóstico do acesso
-	// remoto ficava impossível no agent-service.log.
+	// Tee do stdlib log para o sink estruturado: linhas de log.Printf — dreno
+	// do stderr do worker de remote session, logs do manager/spawn — antes iam
+	// só para o stderr do serviço (invisível em produção) e o diagnóstico do
+	// acesso remoto ficava impossível. Agora caem em logs.db (ou no arquivo de
+	// fallback quando o banco não abre).
 	logger.RedirectStdLog(logger.LevelInfo)
 	log.Printf("[service] modo serviço iniciado (args=%v)", os.Args)
 

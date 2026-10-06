@@ -12,6 +12,7 @@ import (
 
 	"discovery/app/core/buildinfo"
 	"discovery/app/core/logger"
+	"discovery/app/core/logstore"
 )
 
 // Buffer stores command output lines for the embedded terminal view.
@@ -19,6 +20,7 @@ type Buffer struct {
 	mu          sync.RWMutex
 	lines       []string
 	file        *os.File
+	store       *logstore.Store
 	nextSubID   uint64
 	subscribers map[uint64]func(string)
 }
@@ -66,6 +68,10 @@ func (l *Buffer) appendLineLocked(line string) string {
 		// código a gerou (hash curto do commit), junto da data — mesmo contrato
 		// do chat_logs.jsonl. Diagnosticar um log antigo diz a versão exata.
 		_, _ = l.file.WriteString(time.Now().Format(time.RFC3339) + " [" + buildinfo.Revision() + "] " + line + "\n")
+	}
+	if l.store != nil {
+		level, msg := logstore.ParseLevel(line)
+		l.store.AppendLog(level, buildinfo.Revision(), msg)
 	}
 	return line
 }
@@ -195,6 +201,15 @@ func (l *Buffer) EnableFilePersistence(path string) error {
 	}
 	l.file = f
 	return nil
+}
+
+// EnableStore encaminha cada linha para o banco unificado (logs.db).
+// A chamada é não bloqueante por natureza (o Store enfileira e descarta se a
+// fila encher), então pode ser feita com o mutex do buffer preso.
+func (l *Buffer) EnableStore(s *logstore.Store) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.store = s
 }
 
 // CloseFile fecha o arquivo de persistência.

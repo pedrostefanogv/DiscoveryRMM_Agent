@@ -30,6 +30,9 @@ var (
 	sinkMu  sync.RWMutex
 	logSink func(level slog.Level, msg string, args ...any)
 
+	storeSinkMu sync.RWMutex
+	storeSink   func(level slog.Level, msg string, args ...any)
+
 	innerMu     sync.RWMutex
 	innerConfig innerHandlerConfig
 )
@@ -102,6 +105,44 @@ func (w *revPrefixWriter) Write(p []byte) (int, error) {
 		return 0, err
 	}
 	return len(p), nil
+}
+
+// SetStoreSink registra um sink adicional (ex.: persistência em SQLite).
+// Diferente de SetSink, pode coexistir com o buffer de logs.
+func SetStoreSink(fn func(level slog.Level, msg string, args ...any)) {
+	storeSinkMu.Lock()
+	storeSink = fn
+	storeSinkMu.Unlock()
+}
+
+// recordAttrs converte os atributos do registro (mais os herdados) em pares
+// chave/valor aceitos pelos sinks.
+func recordAttrs(r slog.Record, extra []slog.Attr) []any {
+	var args []any
+	for _, a := range extra {
+		args = append(args, a)
+	}
+	r.Attrs(func(a slog.Attr) bool {
+		args = append(args, a)
+		return true
+	})
+	return args
+}
+
+// emit despacha o registro para todos os sinks registrados.
+func emit(level slog.Level, msg string, args []any) {
+	sinkMu.RLock()
+	fn := logSink
+	sinkMu.RUnlock()
+	if fn != nil {
+		fn(level, msg, args...)
+	}
+	storeSinkMu.RLock()
+	sfn := storeSink
+	storeSinkMu.RUnlock()
+	if sfn != nil {
+		sfn(level, msg, args...)
+	}
 }
 
 func SetSink(fn func(level slog.Level, msg string, args ...any)) {
@@ -212,17 +253,7 @@ func (h *sinkHandler) Enabled(_ context.Context, level slog.Level) bool {
 }
 
 func (h *sinkHandler) Handle(_ context.Context, r slog.Record) error {
-	sinkMu.RLock()
-	fn := logSink
-	sinkMu.RUnlock()
-	if fn != nil {
-		var args []any
-		r.Attrs(func(a slog.Attr) bool {
-			args = append(args, a)
-			return true
-		})
-		fn(r.Level, r.Message, args...)
-	}
+	emit(r.Level, r.Message, recordAttrs(r, nil))
 
 	innerMu.RLock()
 	handler := innerConfig.handler
@@ -248,20 +279,7 @@ func (h *sinkAttrsHandler) Enabled(ctx context.Context, level slog.Level) bool {
 }
 
 func (h *sinkAttrsHandler) Handle(ctx context.Context, r slog.Record) error {
-	sinkMu.RLock()
-	fn := logSink
-	sinkMu.RUnlock()
-	if fn != nil {
-		var args []any
-		for _, a := range h.attrs {
-			args = append(args, a)
-		}
-		r.Attrs(func(a slog.Attr) bool {
-			args = append(args, a)
-			return true
-		})
-		fn(r.Level, r.Message, args...)
-	}
+	emit(r.Level, r.Message, recordAttrs(r, h.attrs))
 
 	innerMu.RLock()
 	handler := innerConfig.handler
@@ -291,20 +309,7 @@ func (h *sinkGroupHandler) Enabled(ctx context.Context, level slog.Level) bool {
 }
 
 func (h *sinkGroupHandler) Handle(ctx context.Context, r slog.Record) error {
-	sinkMu.RLock()
-	fn := logSink
-	sinkMu.RUnlock()
-	if fn != nil {
-		var args []any
-		for _, a := range h.attrs {
-			args = append(args, a)
-		}
-		r.Attrs(func(a slog.Attr) bool {
-			args = append(args, a)
-			return true
-		})
-		fn(r.Level, r.Message, args...)
-	}
+	emit(r.Level, r.Message, recordAttrs(r, h.attrs))
 
 	innerMu.RLock()
 	handler := innerConfig.handler

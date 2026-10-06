@@ -193,11 +193,21 @@ func (s *Service) SetLogger(logger func(string)) {
 	s.logger = logger
 }
 
-// SetChatLogger configura o logger JSONL dedicado para logs de chat.
+// SetChatLogger configura o banco dedicado para logs de chat (chat.db).
 func (s *Service) SetChatLogger(cl *ChatLogger) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.chatLogger = cl
+}
+
+// CloseChatLogger drena e fecha o banco de chat (chamado no shutdown).
+func (s *Service) CloseChatLogger() {
+	s.mu.Lock()
+	cl := s.chatLogger
+	s.mu.Unlock()
+	if cl != nil {
+		cl.Disable()
+	}
 }
 
 // IsChatLogEnabled retorna true se o log de chat JSONL está ativo.

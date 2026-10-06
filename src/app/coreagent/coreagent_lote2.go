@@ -17,6 +17,7 @@ import (
 	"time"
 
 	appstore "discovery/app/appstore"
+	"discovery/app/core/logstore"
 	"discovery/app/core/models"
 	"discovery/app/logs"
 	appsupportmeta "discovery/app/supportmeta"
@@ -62,6 +63,14 @@ func (l *LogBuffer) EnableFilePersistence(path string) error {
 // minúsculos acima não são acessíveis de fora do pacote.
 func (l *LogBuffer) Append(line string) {
 	l.append(line)
+}
+
+// EnableStore expõe Buffer.EnableStore (cross-package).
+func (l *LogBuffer) EnableStore(s *logstore.Store) {
+	if l == nil || l.Buffer == nil {
+		return
+	}
+	l.Buffer.EnableStore(s)
 }
 
 func (l *LogBuffer) subscribe(fn func(string)) func() {

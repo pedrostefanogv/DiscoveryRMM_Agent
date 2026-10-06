@@ -82,6 +82,21 @@ func TestChatConfigPathCandidates_NotEmpty(t *testing.T) {
 	}
 }
 
+func TestLogDBPaths(t *testing.T) {
+	if p := LogDir(); p == "" {
+		t.Fatal("LogDir retornou vazio")
+	}
+	if p := LogDBPath(); !contains(p, "logs.db") {
+		t.Errorf("LogDBPath nao termina com logs.db: %s", p)
+	}
+	if p := ChatDBPath(); !contains(p, "chat.db") {
+		t.Errorf("ChatDBPath nao termina com chat.db: %s", p)
+	}
+	if LogDBPath() == ChatDBPath() {
+		t.Fatal("logs.db e chat.db devem ser arquivos distintos")
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && s[len(s)-len(substr):] == substr
 }
