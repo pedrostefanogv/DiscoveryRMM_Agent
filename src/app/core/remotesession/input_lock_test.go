@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"discovery/app/core/sessioncontrol"
 )
 
 // lockTestClock relógio controlado (atômico: o watchdog lê em outra goroutine).
@@ -55,7 +57,9 @@ type lockTestRig struct {
 	showCalls     int
 	hideCalls     int
 	indCloseCalls int
+	newIndCalls   int
 	blockErr      error
+	unblockErr    error
 	indErr        error
 	indicatorErr  error
 	unblocked     chan struct{}
@@ -68,41 +72,49 @@ func newLockRig(t *testing.T) *lockTestRig {
 
 	clock := &lockTestClock{}
 	rig := &lockTestRig{clock: clock, unblocked: make(chan struct{}, 16)}
-	rig.mgr = NewInputLockManager("sess-lock", func(st InputLockState) {
+	// Injeção NA CONSTRUÇÃO: o watchdog já inicia lendo now/unblock — mutar
+	// esses campos depois do start é data race (detectado com -race).
+	rig.mgr = newInputLockManager("sess-lock", func(st InputLockState) {
 		rig.mu.Lock()
 		rig.states = append(rig.states, st)
 		rig.mu.Unlock()
+	}, inputLockOptions{
+		now: clock.now,
+		block: func() (string, error) {
+			rig.mu.Lock()
+			rig.blockCalls++
+			err := rig.blockErr
+			rig.mu.Unlock()
+			if err != nil {
+				return "", err
+			}
+			return "blockinput", nil
+		},
+		unblock: func() error {
+			rig.mu.Lock()
+			rig.unblockCalls++
+			err := rig.unblockErr
+			rig.mu.Unlock()
+			if err == nil {
+				select {
+				case rig.unblocked <- struct{}{}:
+				default:
+				}
+			}
+			return err
+		},
+		newInd: func() (lockIndicator, error) {
+			rig.mu.Lock()
+			rig.newIndCalls++
+			err := rig.indicatorErr
+			rig.mu.Unlock()
+			if err != nil {
+				return nil, err
+			}
+			return &fakeLockIndicator{rig: rig}, nil
+		},
+		tick: inputLockWatchdogTick,
 	})
-	rig.mgr.now = clock.now
-	rig.mgr.block = func() (string, error) {
-		rig.mu.Lock()
-		rig.blockCalls++
-		err := rig.blockErr
-		rig.mu.Unlock()
-		if err != nil {
-			return "", err
-		}
-		return "blockinput", nil
-	}
-	rig.mgr.unblock = func() error {
-		rig.mu.Lock()
-		rig.unblockCalls++
-		rig.mu.Unlock()
-		select {
-		case rig.unblocked <- struct{}{}:
-		default:
-		}
-		return nil
-	}
-	rig.mgr.newInd = func() (lockIndicator, error) {
-		rig.mu.Lock()
-		err := rig.indicatorErr
-		rig.mu.Unlock()
-		if err != nil {
-			return nil, err
-		}
-		return &fakeLockIndicator{rig: rig}, nil
-	}
 
 	t.Cleanup(func() {
 		rig.mgr.Close()
@@ -340,6 +352,126 @@ func TestSameSessionIDToleratesHyphens(t *testing.T) {
 	}
 }
 
+// Regressão (fail-safe): se o unblock FALHA, a máquina pode continuar
+// bloqueada — o estado deve permanecer "travado" (verdade) e um novo pedido
+// de destrave deve TENTAR de novo, em vez de mentir "liberado".
+func TestInputLock_UnblockFailureKeepsLockedAndRetries(t *testing.T) {
+	rig := newLockRig(t)
+	rig.mgr.HandleCommand(map[string]any{"locked": true})
+	rig.waitState(t, 2*time.Second, func(st InputLockState) bool { return st.Locked })
+
+	rig.mu.Lock()
+	rig.unblockErr = errors.New("BlockInput(FALSE) falhou: errno=5")
+	rig.mu.Unlock()
+	rig.mgr.HandleCommand(map[string]any{"locked": false})
+	rig.waitState(t, 2*time.Second, func(st InputLockState) bool {
+		return st.Locked && strings.HasPrefix(st.Reason, "unblock_failed")
+	})
+
+	rig.mu.Lock()
+	rig.unblockErr = nil
+	rig.mu.Unlock()
+	rig.mgr.HandleCommand(map[string]any{"locked": false})
+	rig.waitState(t, 2*time.Second, func(st InputLockState) bool {
+		return !st.Locked && st.Reason == "viewer_request"
+	})
+
+	if _, unblock, _, _, _ := rig.counts(); unblock != 2 {
+		t.Fatalf("UnblockInput deveria ser tentado 2x, tentado %d", unblock)
+	}
+}
+
+// Regressão (fail-safe): Close durante o block() de um lock EM VOO não pode
+// deixar a entrada bloqueada sem ninguém para liberar (o watchdog já parou e
+// nenhum teardown voltaria a passar).
+func TestInputLock_CloseDuringBlockUndoesLock(t *testing.T) {
+	rig := newLockRig(t)
+	blockEntered := make(chan struct{})
+	blockRelease := make(chan struct{})
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(blockRelease) })
+
+	rig.mgr.block = func() (string, error) {
+		rig.mu.Lock()
+		rig.blockCalls++
+		rig.mu.Unlock()
+		close(blockEntered)
+		<-blockRelease
+		return "blockinput", nil
+	}
+
+	cmdDone := make(chan struct{})
+	go func() {
+		rig.mgr.HandleCommand(map[string]any{"locked": true})
+		close(cmdDone)
+	}()
+	<-blockEntered
+
+	closeDone := make(chan struct{})
+	go func() {
+		rig.mgr.Close()
+		close(closeDone)
+	}()
+	select {
+	case <-closeDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Close travou esperando o applyLock em voo")
+	}
+
+	releaseOnce.Do(func() { close(blockRelease) })
+	select {
+	case <-cmdDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("applyLock em voo nao terminou")
+	}
+
+	if _, unblock, _, _, _ := rig.counts(); unblock != 1 {
+		t.Fatalf("o bloqueio em voo deveria ser desfeito (unblock=1), unblock=%d", unblock)
+	}
+	rig.mu.Lock()
+	defer rig.mu.Unlock()
+	for _, st := range rig.states {
+		if st.Locked {
+			t.Fatalf("nenhum estado travado deveria ser publicado apos Close: %+v", st)
+		}
+	}
+}
+
+// Close antes de qualquer lock: o indicador não deve nem ser criado.
+func TestInputLock_IndicatorNotCreatedAfterClose(t *testing.T) {
+	rig := newLockRig(t)
+	rig.mgr.Close()
+
+	if ind := rig.mgr.ensureIndicator(); ind != nil {
+		t.Fatal("ensureIndicator nao deveria criar indicador apos Close")
+	}
+	rig.mu.Lock()
+	calls := rig.newIndCalls
+	rig.mu.Unlock()
+	if calls != 0 {
+		t.Fatalf("newInd deveria ter 0 chamadas apos Close, teve %d", calls)
+	}
+}
+
+func TestInputLockStatePayloadTruncatesLongReason(t *testing.T) {
+	long := strings.Repeat("x", 600)
+	st := InputLockState{Locked: true, Reason: "block_failed: " + long}
+	payload := st.Payload()
+	reason, _ := payload["reason"].(string)
+	if len([]rune(reason)) > 210 {
+		t.Fatalf("motivo deveria ser truncado, tem %d runas", len([]rune(reason)))
+	}
+	if !strings.HasSuffix(reason, "...") {
+		t.Fatalf("motivo truncado deveria terminar em ..., got %q", reason[len(reason)-10:])
+	}
+	raw, err := encodeRemoteSessionControl(sessioncontrol.NewEnvelope(sessioncontrol.RoleAgent, ControlTypeInputLockChanged, "sess-1", 1, payload))
+	if err != nil {
+		t.Fatalf("envelope com motivo longo deveria codificar: %v", err)
+	}
+	if len(raw) > sessioncontrol.MaxEnvelopeBytes {
+		t.Fatalf("envelope com %d bytes excede o limite", len(raw))
+	}
+}
 func TestClampLockSeconds(t *testing.T) {
 	cases := []struct{ in, min, max, want int }{
 		{5, 15, 600, 15},

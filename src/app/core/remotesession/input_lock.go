@@ -12,9 +12,10 @@ import (
 
 // ── Bloqueio de entrada do host remoto (KVM input lock) ──
 //
-// O viewer manda o comando pelo canal .control (inputLock) e o agent aplica
-// BlockInput no desktop remoto, mantendo o OPERADOR no controle (SendInput
-// continua passando — mesmo mecanismo do MeshCentral).
+// O viewer manda o comando pelo canal .control (inputLock) e o agent aplica o
+// bloqueio no desktop remoto por hooks de baixo nível, engolindo apenas eventos
+// FÍSICOS: o SendInput do operador continua passando (ver
+// screen/input_lock_windows.go).
 //
 // FAIL-SAFE (requisito central): a máquina nunca pode ficar sem teclado/mouse.
 //  1. liberação explícita em todos os teardowns (SessionScreen.Stop,
@@ -58,9 +59,22 @@ func (s InputLockState) Payload() map[string]any {
 		p["leaseRemainingSeconds"] = s.LeaseRemainingSeconds
 	}
 	if s.Reason != "" {
-		p["reason"] = s.Reason
+		p["reason"] = truncateLockReason(s.Reason)
 	}
 	return p
+}
+
+// truncateLockReason limita o motivo ao orçamento do envelope de controle
+// (sessioncontrol.MaxEnvelopeBytes = 512). Sem isto um erro longo do Windows
+// faria Encode falhar e o viewer nunca receberia o estado — ficaria com o
+// cadeado "travado" sem qualquer feedback.
+func truncateLockReason(reason string) string {
+	const maxRunes = 200
+	runes := []rune(reason)
+	if len(runes) <= maxRunes {
+		return reason
+	}
+	return string(runes[:maxRunes]) + "..."
 }
 
 // lockIndicator é o indicador na máquina acessada (bandeja + balloon).
@@ -89,14 +103,35 @@ type InputLockManager struct {
 	leaseUntil time.Time
 	hardUntil  time.Time
 	indicator  lockIndicator
+	// closed fecha o manager: impede que um applyLock EM VOO (block() já
+	// executado) marque a entrada como bloqueada DEPOIS do Close — sem isso a
+	// máquina remota ficaria sem teclado/mouse, pois o watchdog já parou e
+	// nenhum teardown voltaria a liberar.
+	closed bool
 
 	stopCh    chan struct{}
 	doneCh    chan struct{}
 	closeOnce sync.Once
 }
 
+// inputLockOptions injeta relógio/efeitos ANTES de o watchdog iniciar.
+// Campos mutados depois do start seriam data race REAL (o watchdog lê now/
+// unblock continuamente) — por isso a injeção é feita na construção.
+type inputLockOptions struct {
+	now     func() time.Time
+	block   func() (string, error)
+	unblock func() error
+	newInd  func() (lockIndicator, error)
+	tick    time.Duration
+}
+
 // NewInputLockManager cria o gerenciador e inicia o watchdog do lease.
 func NewInputLockManager(sessionID string, publish func(InputLockState)) *InputLockManager {
+	return newInputLockManager(sessionID, publish, inputLockOptions{})
+}
+
+// newInputLockManager é o construtor com pontos de injeção (testes).
+func newInputLockManager(sessionID string, publish func(InputLockState), opts inputLockOptions) *InputLockManager {
 	m := &InputLockManager{
 		sessionID: sessionID,
 		publish:   publish,
@@ -109,6 +144,21 @@ func NewInputLockManager(sessionID string, publish func(InputLockState)) *InputL
 		tick:   inputLockWatchdogTick,
 		stopCh: make(chan struct{}),
 		doneCh: make(chan struct{}),
+	}
+	if opts.now != nil {
+		m.now = opts.now
+	}
+	if opts.block != nil {
+		m.block = opts.block
+	}
+	if opts.unblock != nil {
+		m.unblock = opts.unblock
+	}
+	if opts.newInd != nil {
+		m.newInd = opts.newInd
+	}
+	if opts.tick > 0 {
+		m.tick = opts.tick
 	}
 	go m.watchdogLoop()
 	return m
@@ -161,7 +211,7 @@ func (m *InputLockManager) applyLock(leaseSeconds, hardCapSeconds int) {
 	}
 	m.mu.Unlock()
 
-	// Efeito fora do lock: BlockInput é rápido, mas não bloquear o estado.
+	// Efeito fora do lock: instalar os hooks é rápido, mas não bloquear o estado.
 	method, err := m.block()
 	if err != nil {
 		log.Printf("[remote-session][input-lock] falha ao bloquear entrada (sessao=%s): %v", m.sessionID, err)
@@ -169,14 +219,17 @@ func (m *InputLockManager) applyLock(leaseSeconds, hardCapSeconds int) {
 		return
 	}
 
-	// Indicador na máquina acessada é BEST-EFFORT: se falhar, o bloqueio vale.
-	if ind := m.ensureIndicator(); ind != nil {
-		if err := ind.Show("Teclado e mouse bloqueados pelo suporte remoto"); err != nil {
-			log.Printf("[remote-session][input-lock] indicador na maquina remota indisponivel: %v", err)
-		}
-	}
-
 	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		// Sessão encerrada enquanto o block() rodava: desfaz AGORA. Ninguém
+		// mais vai liberar (watchdog parado, Stop já passou).
+		log.Printf("[remote-session][input-lock] sessao fechou durante o bloqueio — desfazendo (sessao=%s)", m.sessionID)
+		if uerr := m.unblock(); uerr != nil {
+			log.Printf("[remote-session][input-lock] unblock de desfazimento falhou (sessao=%s): %v", m.sessionID, uerr)
+		}
+		return
+	}
 	m.locked = true
 	m.method = method
 	m.leaseSecs = leaseSeconds
@@ -187,6 +240,13 @@ func (m *InputLockManager) applyLock(leaseSeconds, hardCapSeconds int) {
 		m.hardUntil = time.Time{}
 	}
 	m.mu.Unlock()
+
+	// Indicador na máquina acessada é BEST-EFFORT: se falhar, o bloqueio vale.
+	if ind := m.ensureIndicator(); ind != nil {
+		if err := ind.Show("Teclado e mouse bloqueados pelo suporte remoto"); err != nil {
+			log.Printf("[remote-session][input-lock] indicador na maquina remota indisponivel: %v", err)
+		}
+	}
 
 	log.Printf("[remote-session][input-lock] entrada BLOQUEADA (metodo=%s lease=%ds) sessao=%s", method, leaseSeconds, m.sessionID)
 	m.publishState(m.snapshot("locked"))
@@ -214,18 +274,35 @@ func (m *InputLockManager) Release(reason string) {
 		m.mu.Unlock()
 		return
 	}
-	m.locked = false
-	m.method = ""
-	m.leaseUntil = time.Time{}
-	m.hardUntil = time.Time{}
 	ind := m.indicator
 	m.mu.Unlock()
 
 	if err := m.unblock(); err != nil {
-		// Não fatal: se o processo morrer, o Windows libera; e o operador
-		// continua com o botão de destravar na tela.
+		// A máquina PODE continuar bloqueada. Manter o estado "travado" é a
+		// verdade: o operador vê o cadeado vermelho, pode tentar de novo e o
+		// lease/watchdog continuam valendo. Se o processo morrer, o Windows
+		// libera de qualquer forma.
 		log.Printf("[remote-session][input-lock] falha ao liberar entrada (sessao=%s): %v", m.sessionID, err)
+		if ind != nil {
+			if serr := ind.Show("Falha ao liberar a entrada — a máquina pode continuar bloqueada"); serr != nil {
+				log.Printf("[remote-session][input-lock] falha ao atualizar indicador: %v", serr)
+			}
+		}
+		m.publishState(InputLockState{
+			Locked: true,
+			Method: m.methodName(),
+			Reason: "unblock_failed: " + err.Error(),
+		})
+		return
 	}
+
+	m.mu.Lock()
+	m.locked = false
+	m.method = ""
+	m.leaseUntil = time.Time{}
+	m.hardUntil = time.Time{}
+	m.mu.Unlock()
+
 	if ind != nil {
 		if err := ind.Hide(); err != nil {
 			log.Printf("[remote-session][input-lock] falha ao remover indicador: %v", err)
@@ -233,6 +310,13 @@ func (m *InputLockManager) Release(reason string) {
 	}
 	log.Printf("[remote-session][input-lock] entrada LIBERADA (%s) sessao=%s", reason, m.sessionID)
 	m.publishState(InputLockState{Locked: false, Reason: reason})
+}
+
+// methodName lê o método de bloqueio atual (thread-safe).
+func (m *InputLockManager) methodName() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.method
 }
 
 // PublishCurrent publica o estado atual (usado no início da sessão e no query).
@@ -243,6 +327,11 @@ func (m *InputLockManager) PublishCurrent(reason string) {
 // Close encerra o watchdog, libera a entrada e fecha o indicador. Idempotente.
 func (m *InputLockManager) Close() {
 	m.closeOnce.Do(func() {
+		// MARCA closed ANTES de parar o watchdog: um applyLock em voo precisa
+		// ver a flag ao voltar do block() e desfazer o bloqueio.
+		m.mu.Lock()
+		m.closed = true
+		m.mu.Unlock()
 		close(m.stopCh)
 		<-m.doneCh
 		m.Release("manager_closed")
@@ -265,6 +354,11 @@ func (m *InputLockManager) ensureIndicator() lockIndicator {
 		m.mu.Unlock()
 		return ind
 	}
+	if m.closed {
+		// Fast-path: nem cria a janela/thread do indicador.
+		m.mu.Unlock()
+		return nil
+	}
 	m.mu.Unlock()
 
 	ind, err := m.newInd()
@@ -274,15 +368,23 @@ func (m *InputLockManager) ensureIndicator() lockIndicator {
 	}
 
 	m.mu.Lock()
-	if m.indicator == nil {
-		m.indicator = ind
-	} else {
-		// Outra goroutine criou primeiro: descarta o duplicado.
+	switch {
+	case m.closed:
+		// Manager fechado durante a criação: não deixa janela/thread órfã.
+		m.mu.Unlock()
 		ind.Close()
-		ind = m.indicator
+		return nil
+	case m.indicator == nil:
+		m.indicator = ind
+		m.mu.Unlock()
+		return ind
+	default:
+		// Outra goroutine criou primeiro: descarta o duplicado.
+		existing := m.indicator
+		m.mu.Unlock()
+		ind.Close()
+		return existing
 	}
-	m.mu.Unlock()
-	return ind
 }
 
 // snapshot devolve o estado atual com o lease restante.
