@@ -57,7 +57,10 @@ type InputEvent struct {
 	Code        string         `json:"code"` // KeyboardEvent.code
 	Key         string         `json:"key"`  // KeyboardEvent.key
 	Modifiers   InputModifiers `json:"modifiers"`
-	Sequence    uint64         `json:"sequence"`
+	// Combo é o id canônico de uma combinação de teclas especiais (ex.:
+	// "ctrl+alt+del"), usado pelo type "key.combo" no contrato v1.
+	Combo    string `json:"combo"`
+	Sequence uint64 `json:"sequence"`
 }
 
 // InputModifiers representa teclas modificadoras.
@@ -120,6 +123,13 @@ type InputController struct {
 	// "netstats" via .input, a cada 2s) — alimenta a escada adaptativa do
 	// QualityManager. Opcional: nil = métricas ignoradas.
 	netstatsHandler func(rttMs, recvKbps float64, recvFrames int)
+
+	// specialKeyHandler recebe o resultado das combinações de teclas especiais
+	// (type "keycombo"): combo, método usado ("sequence"/"sas"/"lock") e erro.
+	// O manager usa isso para publicar o feedback no canal .event do viewer —
+	// sem ele, uma SAS recusada pela política do Windows falharia em silêncio.
+	// Opcional: nil = resultado apenas logado.
+	specialKeyHandler func(combo, method string, err error)
 }
 
 // logInputFailure registra a falha de injeção com agregação (1 linha/3s).
@@ -144,6 +154,14 @@ func (c *InputController) SetNetstatsHandler(fn func(rttMs, recvKbps float64, re
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.netstatsHandler = fn
+}
+
+// SetSpecialKeyHandler registra o receptor do resultado das teclas especiais
+// (usado pelo manager para devolver o feedback ao viewer).
+func (c *InputController) SetSpecialKeyHandler(fn func(combo, method string, err error)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.specialKeyHandler = fn
 }
 
 // NewInputController cria um controlador de input.
@@ -385,6 +403,8 @@ func (c *InputController) HandleInput(data []byte) {
 		c.handleKey(evt.Code, evt.Key, true, evt.Modifiers)
 	case "key.up":
 		c.handleKey(evt.Code, evt.Key, false, evt.Modifiers)
+	case "key.combo":
+		c.handleCombo(evt.Combo)
 	default:
 		log.Printf("[input-controller] tipo desconhecido: %s", evt.Type)
 	}
@@ -585,6 +605,65 @@ func (c *InputController) syncModifiers(mods InputModifiers, down bool) {
 	}
 }
 
+// forgetTrackedKeys remove do rastreamento (keysDown/modsActive) as teclas que
+// uma combinação especial vai pressionar/liberar por conta própria.
+//
+// Sem isto o rastreamento DESINCRONIZA: o viewer segura Ctrl (o agente marca
+// modsActive[VK_CONTROL] e injeta o down); ao enviar Ctrl+Shift+Esc, a
+// combinação injeta o up do Ctrl e o remoto fica sem o modificador, mas o
+// rastreamento continua dizendo "Ctrl ativo" — o próximo keydown do viewer não
+// re-injeta o modificador (syncModifiers acha que já está down) e Ctrl+letra
+// vira letra solta até o watchdog. Limpar o rastreamento faz o próximo evento
+// re-sincronizar o modificador.
+func (c *InputController) forgetTrackedKeys(vks []uint16) {
+	if len(vks) == 0 {
+		return
+	}
+	target := make(map[uint16]bool, len(vks))
+	for _, vk := range vks {
+		target[vk] = true
+	}
+	c.mu.Lock()
+	for id, vk := range c.keysDown {
+		if target[vk] {
+			delete(c.keysDown, id)
+		}
+	}
+	for vk := range c.modsActive {
+		if target[vk] {
+			delete(c.modsActive, vk)
+		}
+	}
+	c.mu.Unlock()
+}
+
+// handleCombo injeta uma combinação de teclas especiais ("keycombo") e reporta
+// o resultado ao manager — que publica o feedback no viewer. A allow-list
+// fechada e a injeção vivem em input_combo.go.
+func (c *InputController) handleCombo(combo string) {
+	c.mu.Lock()
+	closed := c.closed
+	handler := c.specialKeyHandler
+	c.mu.Unlock()
+	if closed {
+		return
+	}
+
+	// A combinação injeta e libera as próprias teclas: remove-as do
+	// rastreamento antes para não deixar estado "preso"/desincronizado.
+	c.forgetTrackedKeys(SpecialKeyVirtualKeys(combo))
+
+	method, err := InjectSpecialKey(combo)
+	if err != nil {
+		log.Printf("[input-controller] tecla especial %q falhou: %v", combo, err)
+	} else {
+		log.Printf("[input-controller] tecla especial %q injetada (método=%s)", combo, method)
+	}
+	if handler != nil {
+		handler(combo, method, err)
+	}
+}
+
 // handleLegacyInput processa formato JSON simples (usado pelo viewer atual).
 func (c *InputController) handleLegacyInput(data []byte) {
 	var raw map[string]any
@@ -689,6 +768,9 @@ func (c *InputController) handleLegacyInput(data []byte) {
 		shift, _ := raw["shift"].(bool)
 		meta, _ := raw["meta"].(bool)
 		c.handleKey(code, key, false, InputModifiers{Ctrl: ctrl, Alt: alt, Shift: shift, Meta: meta})
+	case "keycombo":
+		combo, _ := raw["combo"].(string)
+		c.handleCombo(combo)
 	}
 }
 

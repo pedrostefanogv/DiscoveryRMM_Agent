@@ -586,7 +586,7 @@ func (m *Manager) handleControlFrame(session *Session, data []byte) {
 	}
 
 	// Presenca: somente ping/pong do VIEWER contam. O servidor nao prova que
-		// o navegador esta vivo.
+	// o navegador esta vivo.
 	if session.live != nil && env.From == sessioncontrol.RoleViewer &&
 		(env.Type == ControlTypePing || env.Type == ControlTypePong) {
 		session.live.NotePeerSignal(time.Now().UTC())
@@ -732,6 +732,17 @@ func (m *Manager) runScreenSession(ctx context.Context, session *Session) {
 	// Subscreve input do viewer (mouse/teclado + netstats p/ adaptação)
 	screenSession.inputCtrl.SetNetstatsHandler(func(rttMs, recvKbps float64, recvFrames int) {
 		screenSession.UpdateNetworkMetrics(rttMs, recvKbps, recvFrames)
+	})
+	// Teclas especiais (Ctrl+Alt+Del, Win+L, Alt+Tab...): publica o resultado no
+	// .event para feedback no viewer. Sem isso a SAS recusada pela política
+	// SoftwareSASGeneration do Windows falharia em silêncio (o operador acharia
+	// que a tela remota "ignorou" a combinação).
+	screenSession.inputCtrl.SetSpecialKeyHandler(func(combo, method string, err error) {
+		payload := map[string]any{"combo": combo, "method": method, "ok": err == nil}
+		if err != nil {
+			payload["error"] = err.Error()
+		}
+		m.publishEvent(session.ID, "special_key", payload)
 	})
 	inputSub, err := m.natsStream.SubscribeToInput(session.ID, func(data []byte) {
 		screenSession.inputCtrl.HandleInput(data)

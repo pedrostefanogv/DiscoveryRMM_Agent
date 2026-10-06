@@ -1429,6 +1429,8 @@ func (a *App) runCoreStartup(ctx context.Context) {
 		log.Printf("[service] AVISO: falha ao abrir database: %v", err)
 	} else {
 		a.CoreAgent.DB = db
+		// WAL limitado a 4 MB e checkpoint/optimize periódicos (30 min).
+		db.StartMaintenance(database.DefaultMaintenanceInterval)
 		log.Printf("[service] database SQLite inicializado em %s", dataDir)
 
 		if a.CatalogClient != nil {

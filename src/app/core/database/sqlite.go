@@ -3,8 +3,10 @@ package database
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -13,6 +15,12 @@ import (
 // DB encapsula a conexão SQLite e operações de cache
 type DB struct {
 	conn *sql.DB
+
+	// Manutenção do WAL: checkpoint TRUNCATE + optimize periódicos.
+	maintenanceMu   sync.Mutex
+	maintenanceStop chan struct{}
+	maintenanceWg   sync.WaitGroup
+	closeOnce       sync.Once
 }
 
 type AutomationExecutionEntry struct {
@@ -168,7 +176,11 @@ func Open(dataDir string) (*DB, error) {
 	// primeira. Crítico para o modo serviço (SYSTEM) + UI companion
 	// (PLANO_AGENT_SERVICE_SYSTEM.md, Fase 0): dois processos escrevendo no
 	// mesmo discovery.db — sem busy_timeout, SQLITE_BUSY vira erro intermitente.
-	dsn := "file:" + dbPath + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)"
+	// journal_size_limit limita o WAL a 4 MB depois de cada checkpoint — sem
+	// ele o arquivo cresce indefinidamente em máquina com dois processos
+	// (serviço SYSTEM + UI companion) mantendo o mesmo discovery.db aberto.
+	dsn := "file:" + dbPath + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)" +
+		"&_pragma=synchronous(NORMAL)&_pragma=journal_size_limit(4194304)"
 	conn, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("erro ao abrir database: %w", err)
@@ -494,10 +506,121 @@ func (db *DB) initializeCurrent() error {
 	return nil
 }
 
-// Close fecha a conexão com o database
-func (db *DB) Close() error {
-	if db.conn != nil {
-		return db.conn.Close()
+// DefaultMaintenanceInterval é o período do checkpoint/optimize automáticos.
+// Com journal_size_limit(4 MB) o WAL já fica limitado; o timer garante o
+// truncamento também em execução longa, sem depender do shutdown.
+const DefaultMaintenanceInterval = 30 * time.Minute
+
+// CheckpointResult resume o resultado de PRAGMA wal_checkpoint(TRUNCATE).
+type CheckpointResult struct {
+	// Busy indica que leitores/escritores impediram o checkpoint completo.
+	Busy bool
+	// LogFrames é o total de frames no WAL no momento da chamada.
+	LogFrames int
+	// Checkpointed é quantos frames foram movidos para o .db.
+	Checkpointed int
+}
+
+// Checkpoint move o WAL para o banco e tenta truncá-lo (TRUNCATE).
+//
+// Devolve erro apenas quando o PRAGMA falha; um checkpoint bloqueado por outro
+// processo volta com Busy=true (esperado com serviço e UI ativos ao mesmo tempo).
+func (db *DB) Checkpoint() (CheckpointResult, error) {
+	var res CheckpointResult
+	if db == nil || db.conn == nil {
+		return res, nil
+	}
+	var busy, logFrames, checkpointed int
+	if err := db.conn.QueryRow("PRAGMA wal_checkpoint(TRUNCATE)").Scan(&busy, &logFrames, &checkpointed); err != nil {
+		return res, fmt.Errorf("wal_checkpoint: %w", err)
+	}
+	return CheckpointResult{Busy: busy != 0, LogFrames: logFrames, Checkpointed: checkpointed}, nil
+}
+
+// Optimize roda PRAGMA optimize (estatísticas para o planejador de queries).
+// É barato e idempotente; falha nunca é fatal.
+func (db *DB) Optimize() error {
+	if db == nil || db.conn == nil {
+		return nil
+	}
+	if _, err := db.conn.Exec("PRAGMA optimize"); err != nil {
+		return fmt.Errorf("optimize: %w", err)
 	}
 	return nil
+}
+
+// StartMaintenance inicia checkpoint/optimize periódicos. Idempotente: uma
+// segunda chamada é ignorada. Close encerra o ticker e aguarda a goroutine.
+func (db *DB) StartMaintenance(interval time.Duration) {
+	if db == nil || db.conn == nil || interval <= 0 {
+		return
+	}
+	db.maintenanceMu.Lock()
+	defer db.maintenanceMu.Unlock()
+	if db.maintenanceStop != nil {
+		return
+	}
+	stop := make(chan struct{})
+	db.maintenanceStop = stop
+	db.maintenanceWg.Add(1)
+	go func() {
+		defer db.maintenanceWg.Done()
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if res, err := db.Checkpoint(); err != nil {
+					log.Printf("[database] wal_checkpoint periódico: %v", err)
+				} else if res.Busy {
+					log.Printf("[database] wal_checkpoint periódico incompleto (leitor ativo): %d/%d páginas",
+						res.Checkpointed, res.LogFrames)
+				}
+				if err := db.Optimize(); err != nil {
+					log.Printf("[database] optimize periódico: %v", err)
+				}
+			case <-stop:
+				return
+			}
+		}
+	}()
+}
+
+// stopMaintenance encerra o ticker (se ativo) e aguarda a goroutine sair.
+func (db *DB) stopMaintenance() {
+	db.maintenanceMu.Lock()
+	stop := db.maintenanceStop
+	db.maintenanceStop = nil
+	db.maintenanceMu.Unlock()
+	if stop != nil {
+		close(stop)
+		db.maintenanceWg.Wait()
+	}
+}
+
+// Close encerra a manutenção, faz checkpoint/optimize best-effort e fecha a
+// conexão. Idempotente.
+func (db *DB) Close() error {
+	if db == nil {
+		return nil
+	}
+	var err error
+	db.closeOnce.Do(func() {
+		db.stopMaintenance()
+		// Best-effort: no encerramento o WAL é movido para o .db, reduzindo o
+		// -wal residual quando o agente para de forma limpa.
+		if res, cerr := db.Checkpoint(); cerr != nil {
+			log.Printf("[database] wal_checkpoint no shutdown: %v", cerr)
+		} else if res.Busy {
+			log.Printf("[database] wal_checkpoint no shutdown incompleto (outro processo ativo): %d/%d páginas",
+				res.Checkpointed, res.LogFrames)
+		}
+		if oerr := db.Optimize(); oerr != nil {
+			log.Printf("[database] optimize no shutdown: %v", oerr)
+		}
+		if db.conn != nil {
+			err = db.conn.Close()
+		}
+	})
+	return err
 }
