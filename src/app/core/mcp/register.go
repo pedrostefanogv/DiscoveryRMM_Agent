@@ -225,16 +225,20 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 	// ========== SISTEMA E DIAGNOSTICOS ==========
 	// ========== MEMORIAS LOCAIS ==========
 	reg.Register(Tool{
-		Name:        "memory_list",
-		Description: "Lista as memorias/anotacoes locais gravadas pelo agente.",
+		Name: "memory_list",
+		Description: "Lista as ANOTACOES LOCAIS gravadas por voce neste computador (memoria do agente, guardada localmente no cliente). " +
+			"Use para reler preferencias, observacoes e lembretes que voce mesmo salvou nesta maquina. " +
+			"Diferente de memory.search (servidor), que le o historico de conversas anteriores — estas anotacoes sao duráveis e ficam no computador do usuario.",
 		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			return app.GetLocalMemories()
 		},
 	})
 
 	reg.Register(Tool{
-		Name:        "memory_create",
-		Description: "Cria uma nova memorias/anotacao local.",
+		Name: "memory_create",
+		Description: "Grava uma ANOTACAO LOCAL permanente neste computador (memoria do agente). " +
+			"Use quando o usuario pedir para lembrar de algo ou quando identificar uma preferencia/contexto durável que deva sobreviver a novas conversas. " +
+			"NUNCA grave senhas, tokens ou dados sensiveis. Conteudo curto e objetivo.",
 		Params: []ToolParam{
 			{Name: "content", Type: "string", Description: "Conteudo da anotacao", Required: true},
 		},
@@ -248,8 +252,9 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 	})
 
 	reg.Register(Tool{
-		Name:        "memory_delete",
-		Description: "Remove uma memorias/anotacao local pelo ID.",
+		Name: "memory_delete",
+		Description: "Remove uma ANOTACAO LOCAL da memoria do agente pelo ID (obtido em memory_list). " +
+			"Use quando o usuario pedir para esquecer/apagar uma anotacao.",
 		Params: []ToolParam{
 			{Name: "id", Type: "integer", Description: "ID da anotacao", Required: true},
 		},

@@ -412,10 +412,11 @@ Fluxo correto para criar um chamado:
 - power_action(action) — restart | shutdown | lock (TODAS exigem confirm=true)
 - send_notification(title, message, level?) — exibe uma notificacao/toast ao usuario
 
-**Memorias Locais:**
-- memory_list — lista anotacoes locais do agente
-- memory_create(content) — cria uma nova anotacao
+**Memorias Locais do Agente (anotacoes no computador):**
+- memory_list — lista as anotacoes locais persistentes deste computador
+- memory_create(content) — grava uma anotacao local permanente (nunca grave senhas/tokens)
 - memory_delete(id) — remove uma anotacao pelo ID
+- Diferenca importante: estas anotacoes sao LOCAIS (ficam no computador do usuario). O historico de conversas anteriores fica no servidor e e acessado pela tool memory.search — nao sao a mesma memoria.
 
 **Navegacao Interna:**
 - get_internal_navigation_routes — lista rotas disponiveis (store, updates, inventory, tickets, logs, chat, knowledge, debug)
