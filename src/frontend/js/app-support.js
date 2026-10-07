@@ -94,7 +94,11 @@ function initSupportConnectivity() {
   if (!(window.wails && typeof window.wails.on === 'function')) return;
   supportConnectivityBound = true;
   var handler = function (data) {
-    var connected = !!(data && data.connected);
+    // Evento sem "connected" booleano é IGNORADO (payload parcial/versão
+    // antiga): assumir offline aqui colocava o suporte em somente-consulta
+    // mesmo com o servidor no ar.
+    if (!data || typeof data.connected !== 'boolean') return;
+    var connected = !!data.connected;
     var shown = typeof window.__statusConnectedHysteresis === 'function'
       ? window.__statusConnectedHysteresis(connected)
       : connected;

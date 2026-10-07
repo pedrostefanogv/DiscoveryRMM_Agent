@@ -271,9 +271,21 @@
 
   function applyConnectivityEvent(data) {
     if (!data) return;
-    var connected = !!data.connected;
+    // Sem "connected" booleano (payload parcial/versão antiga do serviço) o
+    // evento é IGNORADO: assumir offline derrubava indicador, chat e suporte
+    // mesmo com o servidor no ar.
+    if (typeof data.connected !== 'boolean') return;
+    var connected = data.connected;
     var transport = (data && data.transport) || '';
-    lastConnectivityState = { connected: connected, transport: transport };
+    // Guarda também apiReachable/reason: o chat usa esses campos para escolher o
+    // aviso correto ("API fora" x "sem transporte") inclusive no poll de 5s,
+    // que reavalia o estado sem payload de evento.
+    lastConnectivityState = {
+      connected: connected,
+      transport: transport,
+      apiReachable: (typeof data.apiReachable === 'boolean') ? data.apiReachable : undefined,
+      reason: String((data && (data.reason || data.lastEvent)) || ''),
+    };
 
     // Diagnóstico do flicker: registra todo evento de conectividade com
     // origem, motivo (quando o serviço envia) e timestamp ISO.

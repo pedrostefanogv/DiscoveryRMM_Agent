@@ -42,12 +42,27 @@ func (a *App) handleIPCMessage(conn net.Conn, msg IPCMessage) {
 			// + flag zero-touch local): a UI companion usa para a overlay de
 			// "aguardando provisionamento/aprovação" refletir a verdade do core.
 			onb := a.GetOnboardingStatus()
+			// transportConnected é o estado CRU do transporte NATS: com a API HTTP
+			// fora, `connected` (efetivo) é false mas o NATS segue de pé — a página
+			// de Status precisa distinguir os dois casos.
+			transportConnected := false
+			if a.AgentConn != nil {
+				transportConnected = a.AgentConn.GetStatus().Connected
+			}
+			// apiReachable permite ao chat/status diferenciar "API fora" de
+			// "sem transporte" (banner específico na UI).
+			apiReachable := true
+			if a.ApiClientSvc != nil {
+				apiReachable = a.ApiClientSvc.APIReachable()
+			}
 			a.ipcServer.RespondTo(conn, NewIPCMessage(IPCMsgEvent, map[string]any{
-				"name":      "agent:status_snapshot",
-				"connected": agent.Connected,
-				"transport": agent.Transport,
-				"reason":    strings.TrimSpace(agent.OnlineReason),
-				"lastEvent": strings.TrimSpace(agent.LastEvent),
+				"name":               "agent:status_snapshot",
+				"connected":          agent.Connected,
+				"transportConnected": transportConnected,
+				"apiReachable":       apiReachable,
+				"transport":          agent.Transport,
+				"reason":             strings.TrimSpace(agent.OnlineReason),
+				"lastEvent":          strings.TrimSpace(agent.LastEvent),
 				// Último ping do servidor (página de Status na UI companion): o
 				// agentConn roda AQUI no serviço — a UI não tem esses campos localmente.
 				"lastGlobalPongAtUtc": strings.TrimSpace(agent.LastGlobalPongAtUTC),
@@ -126,6 +141,60 @@ func (a *App) handleIPCNotificationRespond(payload map[string]any) bool {
 	return ok
 }
 
+// ipcEventRawKey é a chave reservada do payload IPC para eventos cujo dado é
+// um valor único NÃO-mapa (string JSON, struct, número...). Ela é necessária
+// porque o contrato do pipe espalha os campos do evento no próprio payload:
+// um valor único precisaria de um nome de campo, que não existe.
+const ipcEventRawKey = "__eventData"
+
+// buildIPCEventPayload empacota um EmitEvent(name, data...) no payload IPC
+// {name, <campos>}. As três formas de chamada do EmitEvent são preservadas:
+//
+//   - 0 argumentos .......... evento sem dados (só "name");
+//   - 1 argumento mapa ...... campos do mapa viram campos do payload
+//     (é o caso de agent:connectivity, store:catalog-updated, ...);
+//   - 1 argumento escalar ... valor cru sob ipcEventRawKey (chat:question,
+//     screenshot:request, p2p:transfer-progress, ...);
+//   - N argumentos .......... pares chave/valor (agent:onboarding, updates:list).
+//
+// BUG CORRIGIDO: antes o loop de pares era a ÚNICA forma tratada, então
+// EmitEvent(name, mapa) e EmitEvent(name, valor) eram enviados ao pipe sem
+// nenhum dado — a UI companion recebia o evento vazio e tratava tudo como
+// offline (chat indisponível/suporte somente-consulta) mesmo com o servidor
+// no ar.
+func buildIPCEventPayload(name string, data ...any) map[string]any {
+	payload := make(map[string]any, len(data)/2+2)
+	payload["name"] = name
+	switch {
+	case len(data) == 1:
+		switch m := data[0].(type) {
+		case map[string]any:
+			for k, v := range m {
+				if k == "name" || k == ipcEventRawKey {
+					continue
+				}
+				payload[k] = v
+			}
+		case map[string]string:
+			for k, v := range m {
+				if k == "name" || k == ipcEventRawKey {
+					continue
+				}
+				payload[k] = v
+			}
+		default:
+			payload[ipcEventRawKey] = data[0]
+		}
+	case len(data) > 1:
+		for i := 0; i+1 < len(data); i += 2 {
+			if key, ok := data[i].(string); ok {
+				payload[key] = data[i+1]
+			}
+		}
+	}
+	return payload
+}
+
 // broadcastIPCEvent repassa um evento para as UIs conectadas via IPC
 // (lado do serviço). É chamado pelos bridges que antes só faziam EmitEvent
 // (Wails) — no modo serviço o Wails não existe e o evento vai pelo pipe.
@@ -133,14 +202,36 @@ func (a *App) broadcastIPCEvent(name string, data ...any) {
 	if a == nil || a.ipcServer == nil || a.ipcServer.ClientCount() == 0 {
 		return
 	}
-	payload := make(map[string]any, len(data)/2+1)
-	payload["name"] = name
-	for i := 0; i+1 < len(data); i += 2 {
-		if key, ok := data[i].(string); ok {
-			payload[key] = data[i+1]
-		}
+	a.ipcServer.Broadcast(NewIPCMessage(IPCMsgEvent, buildIPCEventPayload(name, data...)))
+}
+
+// ipcEventToFrontend desempacota o payload IPC {name, <campos>} no par
+// (nome, dados) aceito por EmitEvent. Espelha buildIPCEventPayload: o mapa de
+// campos volta como UM argumento (objeto para o frontend) e o valor cru sob
+// ipcEventRawKey volta como o valor unico original.
+//
+// BUG CORRIGIDO: antes a UI reconstruia um slice plano [chave, valor, ...] e
+// chamava EmitEvent(name, chave, valor, ...). No Wails v3 (EventManager.Emit),
+// MAIS DE UM argumento faz com que Event.Data seja o SLICE - o frontend recebia
+// um array e data.connected era sempre undefined/false. Resultado: chat com
+// aviso de servidor offline, bolinha offline e suporte em somente-consulta
+// mesmo com o servico/servidor no ar.
+func ipcEventToFrontend(payload map[string]any) (string, []any) {
+	name, _ := payload["name"].(string)
+	if name == "" {
+		return "", nil
 	}
-	a.ipcServer.Broadcast(NewIPCMessage(IPCMsgEvent, payload))
+	if raw, ok := payload[ipcEventRawKey]; ok {
+		return name, []any{raw}
+	}
+	data := make(map[string]any, len(payload))
+	for k, v := range payload {
+		if k == "name" || k == ipcEventRawKey {
+			continue
+		}
+		data[k] = v
+	}
+	return name, []any{data}
 }
 
 // storeCompanionOnboarding guarda o último estado de onboarding recebido do
@@ -180,10 +271,26 @@ func (a *App) getCompanionOnboarding() map[string]interface{} {
 // lastPongAtUtc/pongStale alimentam o campo "Último ping do servidor" da
 // página de Status — o pong global existe só no agentConn do serviço; sem
 // esses campos no snapshot, a UI exibia "-" para sempre.
-func (a *App) storeCompanionStatus(connected bool, transport string, lastEvent string, lastPongAtUtc string, pongStale bool) {
-	if a == nil {
+// Campos ausentes NÃO sobrescrevem o estado anterior: uma transição
+// agent:connectivity carrega só connected/transport/reason e antes zerava o
+// "Último ping do servidor" da página de Status até o próximo snapshot.
+func (a *App) storeCompanionStatus(payload map[string]any) {
+	if a == nil || payload == nil {
 		return
 	}
+	connected, _ := payload["connected"].(bool)
+	transportConnected, hasTransportConnected := payload["transportConnected"].(bool)
+	if !hasTransportConnected {
+		// Serviço antigo (sem o campo): o transporte era o próprio efetivo.
+		transportConnected = connected
+	}
+	transport, _ := payload["transport"].(string)
+	reason, _ := payload["reason"].(string)
+	lastEvent, _ := payload["lastEvent"].(string)
+	if strings.TrimSpace(reason) != "" {
+		lastEvent = reason
+	}
+
 	a.companionStatusMu.Lock()
 	defer a.companionStatusMu.Unlock()
 	st := a.companionStatus
@@ -192,7 +299,7 @@ func (a *App) storeCompanionStatus(connected bool, transport string, lastEvent s
 		a.companionStatus = st
 	}
 	st.Connected = connected
-	st.TransportConnected = connected
+	st.TransportConnected = transportConnected
 	st.Transport = transport
 	st.LastEvent = "snapshot do serviço via IPC"
 	if connected {
@@ -202,9 +309,16 @@ func (a *App) storeCompanionStatus(connected bool, transport string, lastEvent s
 	if strings.TrimSpace(lastEvent) != "" {
 		st.LastEvent = strings.TrimSpace(lastEvent)
 	}
-	// Último pong global do agentconn do serviço (formato RFC3339).
-	st.LastGlobalPongAtUTC = strings.TrimSpace(lastPongAtUtc)
-	st.GlobalPongStale = pongStale
+	// Último pong global do agentconn do serviço (formato RFC3339): só atualiza
+	// quando o evento REALMENTE carrega o campo.
+	if raw, ok := payload["lastGlobalPongAtUtc"]; ok {
+		lastPongAtUtc, _ := raw.(string)
+		st.LastGlobalPongAtUTC = strings.TrimSpace(lastPongAtUtc)
+	}
+	if raw, ok := payload["globalPongStale"]; ok {
+		pongStale, _ := raw.(bool)
+		st.GlobalPongStale = pongStale
+	}
 }
 
 // startIPCClient inicia o cliente IPC da UI (companion mode) e envia o hello.
@@ -224,23 +338,14 @@ func (a *App) startIPCClient() {
 				// Repassa eventos do serviço (notification:new, agent:connectivity,
 				// chat:question, ...) para o frontend da UI companion. O payload
 				// IPC vem como {name, <campos do evento>}.
-				name, _ := msg.Payload["name"].(string)
+				name, eventData := ipcEventToFrontend(msg.Payload)
 				if name == "" {
 					return
 				}
 				// Guarda o snapshot de conectividade para o tray/status Go-side
 				// (GetAgentStatus) refletirem o core que roda no serviço.
 				if name == "agent:status_snapshot" || name == "agent:connectivity" {
-					connected, _ := msg.Payload["connected"].(bool)
-					transport, _ := msg.Payload["transport"].(string)
-					reason, _ := msg.Payload["reason"].(string)
-					lastEvent, _ := msg.Payload["lastEvent"].(string)
-					lastPongAtUtc, _ := msg.Payload["lastGlobalPongAtUtc"].(string)
-					pongStale, _ := msg.Payload["globalPongStale"].(bool)
-					if strings.TrimSpace(reason) != "" {
-						lastEvent = reason
-					}
-					a.storeCompanionStatus(connected, transport, lastEvent, lastPongAtUtc, pongStale)
+					a.storeCompanionStatus(msg.Payload)
 					// Estado de onboarding do serviço (overlay de provisionamento/
 					// aprovação). Campos ausentes (serviço antigo) → mantém o último.
 					if rawMode, ok := msg.Payload["onboardingMode"]; ok {
@@ -258,7 +363,15 @@ func (a *App) startIPCClient() {
 				// para que serviços locais (ex.: loja de apps, suporte) e a
 				// própria página de Debug deixem de estar stale até reiniciar.
 				if name == "debug:config_updated" {
-					if raw, err := json.Marshal(msg.Payload); err == nil {
+					// O serviço emite EmitEvent("debug:config_updated", "config", cfg):
+					// os dados são o VALOR da chave "config", não o payload inteiro
+					// (com "name"/"config" o unmarshal em debug.Config resultaria em
+					// config ZERO e a UI perderia endpoint/token em memória).
+					source := any(msg.Payload)
+					if inner, ok := msg.Payload["config"]; ok {
+						source = inner
+					}
+					if raw, err := json.Marshal(source); err == nil {
 						var cfg DebugConfig
 						if err := json.Unmarshal(raw, &cfg); err == nil && a.DebugSvc != nil {
 							a.DebugSvc.AdoptExternalConfig(cfg)
@@ -266,13 +379,7 @@ func (a *App) startIPCClient() {
 						}
 					}
 				}
-				data := make([]any, 0, len(msg.Payload))
-				for k, v := range msg.Payload {
-					if k != "name" {
-						data = append(data, k, v)
-					}
-				}
-				a.EmitEvent(name, data...)
+				a.EmitEvent(name, eventData...)
 			default:
 			}
 		},

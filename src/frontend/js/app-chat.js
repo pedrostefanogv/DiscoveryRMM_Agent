@@ -2882,8 +2882,9 @@ function dispatchChatMessage(text, images) {
           screenshotRestoreAttachments(attachedImages);
         }
         // Falha de transporte/servidor no dispatch: reforça o aviso mesmo que
-        // o evento de conectividade não tenha chegado.
-        if (isLikelyOfflineChatError(String(err))) {
+        // o evento de conectividade não tenha chegado — mas nunca quando o
+        // estado real já é sabidamente online (timeout de turno longo).
+        if (isLikelyOfflineChatError(String(err)) && shouldFlagChatOffline()) {
           showChatOfflineBannerNow();
         }
         onStreamError(String(err));
@@ -2892,7 +2893,7 @@ function dispatchChatMessage(text, images) {
     if (attachedImages.length > 0 && typeof screenshotRestoreAttachments === "function") {
       screenshotRestoreAttachments(attachedImages);
     }
-    if (isLikelyOfflineChatError(String(err))) {
+    if (isLikelyOfflineChatError(String(err)) && shouldFlagChatOffline()) {
       showChatOfflineBannerNow();
     }
     onStreamError(String(err));
@@ -3146,12 +3147,10 @@ function closeChatLogsModal() {
 var chatOfflineBannerTimer = null;
 
 // offlineNow mostra o aviso na hora (sem a histerese de 15s do indicador) —
-// usado quando o próprio usuário tenta enviar já desconectado.
+// usado quando o próprio usuário tenta enviar já desconectado. Passa pelo
+// applyChatOfflineBanner para o texto acompanhar o canal que caiu.
 function showChatOfflineBannerNow() {
-  var banner = document.getElementById("chatOfflineBanner");
-  if (banner) banner.classList.remove("hidden");
-  applyChatSendAffordance(true);
-  applyChatOfflineMode(true);
+  applyChatOfflineBanner(false);
 }
 
 // chatOfflineActive guarda o estado para que setChatBusy/send não reabilitem o
@@ -3200,14 +3199,37 @@ function isLikelyOfflineChatError(message) {
   );
 }
 
+// shouldFlagChatOffline: uma falha no dispatch só justifica o aviso de "sem
+// comunicação" quando o estado real NÃO é sabidamente online. Ex.: "timeout"
+// casa com isLikelyOfflineChatError mas também acontece em turnos longos com a
+// conexão perfeita — antes isso piscava o banner de offline por até 5s.
+function shouldFlagChatOffline() {
+  var last = typeof window.__lastConnectivityState === "function"
+    ? window.__lastConnectivityState()
+    : null;
+  if (!last) return true; // estado desconhecido: mantém o reforço do aviso
+  return last.connected !== true;
+}
+
+// chatOfflineBannerKey escolhe o aviso conforme o canal que caiu:
+//   - API HTTP inacessível (NATS de pé) → "servidor de gestão indisponível";
+//   - transporte fora → "sem conexão com o servidor";
+//   - sem detalhe (evento antigo/serviço ausente) → aviso genérico.
+function chatOfflineBannerKey(detail) {
+  if (detail && detail.apiReachable === false) return "chat.offlineBannerApi";
+  if (detail && detail.transport) return "chat.offlineBannerTransport";
+  return "chat.offlineBanner";
+}
+
 // applyChatOfflineBanner sincroniza o aviso e o bloqueio do chat.
 // IMPORTANTE: usa o estado BRUTO de conectividade (sem a histerese de 15s do
 // indicador global) — o chat precisa ficar indisponível assim que não houver
 // comunicação, não 15s depois. A histerese continua valendo só para o
 // indicador de status.
-function applyChatOfflineBanner(rawConnected) {
+function applyChatOfflineBanner(rawConnected, detail) {
   var banner = document.getElementById("chatOfflineBanner");
   var connected;
+  var connDetail = detail || null;
   if (typeof rawConnected === "boolean") {
     connected = rawConnected;
   } else {
@@ -3221,8 +3243,31 @@ function applyChatOfflineBanner(rawConnected) {
       return;
     }
     connected = !!last.connected;
+    connDetail = last;
   }
-  if (banner) banner.classList.toggle("hidden", !!connected);
+  if (banner) {
+    banner.classList.toggle("hidden", !!connected);
+    if (!connected) {
+      var key = chatOfflineBannerKey(connDetail);
+      // Mantém data-i18n em sincronia: trocar o idioma reaplica o aviso certo.
+      if (banner.getAttribute("data-i18n") !== key) {
+        banner.setAttribute("data-i18n", key);
+      }
+      banner.textContent = translate(key);
+      var reason = connDetail && connDetail.reason ? String(connDetail.reason) : "";
+      if (reason) {
+        banner.title = reason;
+      } else {
+        banner.removeAttribute("title");
+      }
+    } else if (banner.getAttribute("data-i18n") !== "chat.offlineBanner") {
+      // Online: volta ao texto genérico para não deixar um aviso específico
+      // "congelado" no elemento para o próximo idioma/estado.
+      banner.setAttribute("data-i18n", "chat.offlineBanner");
+      banner.textContent = translate("chat.offlineBanner");
+      banner.removeAttribute("title");
+    }
+  }
   applyChatSendAffordance(!connected);
   applyChatOfflineMode(!connected);
 }
@@ -3235,8 +3280,12 @@ function initChatConnectivityBanner() {
   if (chatConnectivityBound) return;
   if (window.wails && typeof window.wails.on === "function") {
     chatConnectivityBound = true;
+    // Só aplica com booleano explícito do backend: evento sem o campo
+    // "connected" (payload parcial/versão antiga) NÃO pode ser lido como
+    // offline — era esse o sintoma de "servidor offline" com o servidor no ar.
     var handler = function (data) {
-      applyChatOfflineBanner(!!(data && data.connected));
+      if (!data || typeof data.connected !== "boolean") return;
+      applyChatOfflineBanner(data.connected, data);
     };
     window.wails.on("agent:connectivity", handler);
     window.wails.on("agent:status_snapshot", handler);

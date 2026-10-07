@@ -1082,12 +1082,40 @@ func (a *App) ShowMainWindow() {
 //
 //wails:ignore
 func (a *App) EmitEvent(name string, data ...any) {
+	data = normalizeEventArgs(data)
 	if a.app == nil {
 		// Sem app Wails (serviço ou headless): repassa via IPC se houver UI.
 		a.broadcastIPCEvent(name, data...)
 		return
 	}
 	a.app.Event.Emit(name, data...)
+}
+
+// normalizeEventArgs converte a forma multi-argumento do EmitEvent
+// ("chave", valor, "chave", valor, ...) em UM único mapa, que é o formato que os
+// handlers do frontend consomem (`data.connected`, `data.updates`, ...).
+//
+// Por que: no Wails v3 (EventManager.Emit) MAIS DE UM argumento faz
+// Event.Data ser o slice de argumentos e o runtime JS entrega `ev.data` cru —
+// os handlers liam `data.<campo>` em um ARRAY (undefined) e interpretavam o
+// evento como vazio. Era o mesmo defeito de raiz do chat "servidor offline":
+// aqui ele é eliminado em TODOS os caminhos (UI standalone e serviço→IPC).
+//
+// As demais formas permanecem intactas: 0 argumentos, 1 mapa, 1 valor cru,
+// 1 nil e qualquer sequência que não seja estritamente pares string/valor.
+func normalizeEventArgs(data []any) []any {
+	if len(data) < 2 || len(data)%2 != 0 {
+		return data
+	}
+	pairs := make(map[string]any, len(data)/2)
+	for i := 0; i < len(data); i += 2 {
+		key, ok := data[i].(string)
+		if !ok {
+			return data
+		}
+		pairs[key] = data[i+1]
+	}
+	return []any{pairs}
 }
 
 // HideMainWindow esconde a janela principal (close-to-tray).
@@ -1330,6 +1358,7 @@ func (a *App) onConnectivityChange(connected bool, transport string) {
 		"connected":    effective,
 		"transport":    transport,
 		"apiReachable": apiReachable,
+		"reason":       fmt.Sprintf("transport=%s%s", transport, pongInfo),
 	})
 	// Atualiza o ícone e o tooltip do tray imediatamente (safeTrayAction cobre
 	// o caso de o tray ainda não ter sido iniciado).

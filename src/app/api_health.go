@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"time"
 )
 
@@ -45,8 +46,17 @@ func (a *App) probeAPIOnce(ctx context.Context) {
 		return
 	}
 	was := a.ApiClientSvc.APIReachable()
-	_ = a.ApiClientSvc.ProbeAPI(ctx)
+	err := a.ApiClientSvc.ProbeAPI(ctx)
 	now := a.ApiClientSvc.APIReachable()
+	if err != nil {
+		_, _, failStreak := a.ApiClientSvc.APIHealth()
+		// Diagnóstico sem spam: registra a 1ª falha da sequência e depois a cada
+		// ~5 min (15 probes de 20s) enquanto a API continuar inacessível. Sem
+		// isso o motivo real (timeout x HTTP 5xx) ficava invisível no log.
+		if failStreak == 1 || failStreak%15 == 0 {
+			a.Logs.Append(fmt.Sprintf("[connectivity] health-check da API falhou (falhas consecutivas=%d): %v", failStreak, err))
+		}
+	}
 	if was == now {
 		return
 	}
@@ -91,6 +101,7 @@ func (a *App) emitEffectiveConnectivity(logMsg string) {
 		"connected":    connected,
 		"transport":    transport,
 		"apiReachable": apiReachable,
+		"reason":       logMsg,
 	})
 	a.syncTrayVisualState()
 	a.updateTrayTooltip()
@@ -99,8 +110,14 @@ func (a *App) emitEffectiveConnectivity(logMsg string) {
 
 // applyAPIHealth força o status para offline quando a API HTTP está
 // inacessível, mesmo com o NATS de pé.
+//
+// Só se aplica ao processo que RODA o probe (o serviço, via runAPIHealthProbe):
+// na UI companion o ApiClientSvc local nunca é sondado e, se algum caminho
+// futuro marcasse o health como indisponível ali, o tray/status da UI passaria a
+// forçar offline com o serviço online — exatamente o falso negativo corrigido
+// nesta revisão.
 func (a *App) applyAPIHealth(st AgentStatus) AgentStatus {
-	if a == nil || a.ApiClientSvc == nil {
+	if a == nil || a.ApiClientSvc == nil || !a.RuntimeFlags.ServiceMode {
 		return st
 	}
 	if a.ApiClientSvc.APIReachable() {

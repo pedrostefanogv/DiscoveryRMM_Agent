@@ -507,6 +507,12 @@ var APP_I18N_DICTIONARY = {
       "Chat IA - converse com a IA para gerenciar seu computador",
     "chat.offlineBanner":
       "Sem comunicação com o servidor — o chat está indisponível até a conexão voltar.",
+    // Avisos específicos por canal (apiReachable/transport do evento de
+    // conectividade): dizer QUAL lado caiu ajuda o suporte a agir.
+    "chat.offlineBannerApi":
+      "Servidor de gestão inacessível (API fora do ar) — o chat volta assim que a comunicação for restabelecida.",
+    "chat.offlineBannerTransport":
+      "Sem conexão com o servidor (transporte) — o chat volta assim que a conexão for restabelecida.",
     "chat.sendOfflineHint": "Sem comunicação com o servidor — a mensagem pode não ser respondida.",
     "chat.memories": "Memórias",
     "chat.apiServerOptional": "Servidor API (opcional)",
@@ -1214,6 +1220,10 @@ var APP_I18N_DICTIONARY = {
     "chat.subtitle": "AI Chat - talk to the AI to manage your computer",
     "chat.offlineBanner":
       "No communication with the server — the chat is unavailable until the connection returns.",
+    "chat.offlineBannerApi":
+      "Management server unreachable (API is down) — the chat returns as soon as communication is restored.",
+    "chat.offlineBannerTransport":
+      "No connection to the server (transport) — the chat returns as soon as the connection is restored.",
     "chat.sendOfflineHint": "No communication with the server — the message may not get a reply.",
     "chat.memories": "Memories",
     "chat.apiServerOptional": "API Server (optional)",

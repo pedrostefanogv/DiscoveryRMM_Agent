@@ -30,18 +30,36 @@ func New() *Buffer {
 	return &Buffer{}
 }
 
-// Append adiciona uma linha ao buffer.
+// Append adiciona uma linha ao buffer e a persiste (arquivo + banco unificado).
 func (l *Buffer) Append(line string) {
+	l.append(line, true)
+}
+
+// appendCaptured adiciona uma linha vinda do sink do logger SEM gravar no banco
+// unificado: quem grava essas linhas é o storeSink do logger
+// (logger.SetStoreSink, registrado em app/logstore.go). Gravar nos dois caminhos
+// inseria a MESMA linha duas vezes em logs.db (ids consecutivos, mesmo ts_ms) —
+// cada log.Printf/log.Println aparecia duplicado no banco de logs.
+//
+// A divisão é por origem, não por ordem de inicialização:
+//   - linhas capturadas do logger → storeSink (único gravador no banco);
+//   - linhas de a.Logs.Append(...) → este caminho (\"a.Logs\" não passa pelo logger).
+func (l *Buffer) appendCaptured(line string) {
+	l.append(line, false)
+}
+
+// append é o núcleo de Append/appendCaptured.
+func (l *Buffer) append(line string, persistStore bool) {
 	l.mu.Lock()
 	var appended []string
 
 	if strings.TrimSpace(line) == "" {
-		appended = append(appended, l.appendLineLocked(""))
+		appended = append(appended, l.appendLineLocked("", persistStore))
 	} else {
 		normalized := strings.ReplaceAll(line, "\r\n", "\n")
 		normalized = strings.ReplaceAll(normalized, "\r", "\n")
 		for _, part := range strings.Split(normalized, "\n") {
-			appended = append(appended, l.appendLineLocked(part))
+			appended = append(appended, l.appendLineLocked(part, persistStore))
 		}
 	}
 	subscribers := l.snapshotSubscribersLocked()
@@ -54,7 +72,7 @@ func (l *Buffer) Append(line string) {
 	}
 }
 
-func (l *Buffer) appendLineLocked(line string) string {
+func (l *Buffer) appendLineLocked(line string, persistStore bool) string {
 	const maxLineBytes = 8192
 	if len(line) > maxLineBytes {
 		line = line[:maxLineBytes] + "... (truncado)"
@@ -69,7 +87,7 @@ func (l *Buffer) appendLineLocked(line string) string {
 		// do chat_logs.jsonl. Diagnosticar um log antigo diz a versão exata.
 		_, _ = l.file.WriteString(time.Now().Format(time.RFC3339) + " [" + buildinfo.Revision() + "] " + line + "\n")
 	}
-	if l.store != nil {
+	if persistStore && l.store != nil {
 		level, msg := logstore.ParseLevel(line)
 		l.store.AppendLog(level, buildinfo.Revision(), msg)
 	}
@@ -244,8 +262,10 @@ func TruncateLogBody(body []byte, max int) string {
 }
 
 // CaptureStdLog redireciona o std log para o buffer e retorna um restore.
+// Usa appendCaptured (e não Append): as linhas do logger já são persistidas no
+// banco pelo storeSink — ver comentário de appendCaptured.
 func CaptureStdLog(buf *Buffer) func() {
-	logger.SetSink(logger.LogBufferAdapter(buf.Append))
+	logger.SetSink(logger.LogBufferAdapter(buf.appendCaptured))
 	return func() {
 		logger.SetSink(nil)
 	}

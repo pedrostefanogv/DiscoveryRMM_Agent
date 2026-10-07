@@ -1658,6 +1658,19 @@ export function RateSupportTicket(ticketID, rating, feedback) {
 }
 
 /**
+ * ReadFileWithConsent implementa AppBridge: leitura de arquivo pedida pela IA,
+ * com AUTORIZACAO OBRIGATORIA do usuario em CADA leitura (nao existe "permitir
+ * sempre", igual a captura de tela). Sem aprovacao explicita o arquivo NAO e lido.
+ * @param {string} path
+ * @param {number} maxBytes
+ * @param {string} reason
+ * @returns {$CancellablePromise<json$0.RawMessage>}
+ */
+export function ReadFileWithConsent(path, maxBytes, reason) {
+    return $Call.ByID(2328485606, path, maxBytes, reason);
+}
+
+/**
  * RefreshAgentConfiguration expõe refreshAgentConfiguration via interface.
  * @returns {$CancellablePromise<void>}
  */
@@ -1921,6 +1934,18 @@ export function RunOnboardingLoop() {
 }
 
 /**
+ * RunOsqueryQueryJSON executa uma query SQL read-only no osquery (cliente
+ * osquery-go quando ha socket; fallback para o binario osqueryi), limitando o
+ * numero de linhas. Implementa o AppBridge da tool osquery (action=query).
+ * @param {string} sql
+ * @param {number} limit
+ * @returns {$CancellablePromise<json$0.RawMessage>}
+ */
+export function RunOsqueryQueryJSON(sql, limit) {
+    return $Call.ByID(1495464695, sql, limit);
+}
+
+/**
  * RunPSADTPreflightChecks executa verificacoes pre-flight usando a lib go-psadt.
  * @returns {$CancellablePromise<$models.PSADTPreflightResult>}
  */
@@ -1928,6 +1953,23 @@ export function RunPSADTPreflightChecks() {
     return $Call.ByID(2615823421).then(/** @type {($result: any) => any} */(($result) => {
         return $$createType83($result);
     }));
+}
+
+/**
+ * RunPowerAction implementa AppBridge: restart/shutdown/lock pedidos pela IA.
+ * 
+ * restart/shutdown abrem o aviso nativo do PSADT com CONTAGEM regressiva e
+ * botao CANCELAR (o usuario pode cancelar por seguranca). Se o usuario
+ * cancelar, NADA e executado. Se o PSADT nao estiver disponivel, cai para
+ * shutdown.exe /t <delay> /c <msg> — que tambem mostra aviso nativo e pode ser
+ * cancelado com "shutdown /a".
+ * @param {string} action
+ * @param {number} delaySeconds
+ * @param {string} message
+ * @returns {$CancellablePromise<json$0.RawMessage>}
+ */
+export function RunPowerAction(action, delaySeconds, message) {
+    return $Call.ByID(11236734, action, delaySeconds, message);
 }
 
 /**
@@ -1963,6 +2005,19 @@ export function SelectAndPublishP2PArtifact() {
     return $Call.ByID(1369003166).then(/** @type {($result: any) => any} */(($result) => {
         return $$createType12($result);
     }));
+}
+
+/**
+ * SendAgentNotification despacha uma notificacao para o usuario usando o
+ * servico de notificacoes do agente. Implementa o AppBridge da tool
+ * send_notification.
+ * @param {string} title
+ * @param {string} message
+ * @param {string} level
+ * @returns {$CancellablePromise<json$0.RawMessage>}
+ */
+export function SendAgentNotification(title, message, level) {
+    return $Call.ByID(3478725938, title, message, level);
 }
 
 /**
