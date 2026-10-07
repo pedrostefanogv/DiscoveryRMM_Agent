@@ -11,16 +11,19 @@ import (
 	"discovery/app/debug"
 )
 
-// M5: chamados já avaliados não são prefetchados (sem pendência offline).
-func TestSelectTicketsForPrefetch_SkipsRated(t *testing.T) {
+// Regressão: chamados encerrados/avaliados TAMBÉM precisam entrar no prefetch —
+// o usuário consulta o histórico de comentários offline neles. A seleção só
+// descarta itens sem ID.
+func TestSelectTicketsForPrefetch_KeepsRatedAndClosed(t *testing.T) {
 	rating := 5
+	closed := "2026-09-28T01:08:03Z"
 	tickets := []APITicket{
 		{ID: "a"},
-		{ID: "b", Rating: &rating},
+		{ID: "b", Rating: &rating, ClosedAt: &closed},
 		{ID: "  "},
 	}
 	got := selectTicketsForPrefetch(tickets)
-	if len(got) != 1 || got[0].ID != "a" {
+	if len(got) != 2 || got[0].ID != "a" || got[1].ID != "b" {
 		t.Fatalf("seleção inesperada: %+v", got)
 	}
 }

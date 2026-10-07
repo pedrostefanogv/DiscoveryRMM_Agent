@@ -282,7 +282,8 @@ function setChatBusy(isBusy) {
   chatSending = !!isBusy;
   // Enviar permanece habilitado durante o processamento: enquanto ocupado,
   // ele enfileira a mensagem (mesmo comportamento de outros chats/agentes).
-  if (chatSendBtn) chatSendBtn.disabled = false;
+  // Exceção: sem comunicação com o servidor o envio fica bloqueado.
+  if (chatSendBtn) chatSendBtn.disabled = chatOfflineActive;
   if (chatStopBtn) {
     chatStopBtn.classList.toggle("hidden", !isBusy);
     chatStopBtn.disabled = !isBusy;
@@ -1725,6 +1726,11 @@ function handleA2uiUserAction(surfaceId, action) {
 // usa uma sentinela interna que o agent converte em tool result.
 function sendChatMessageWithA2uiAction() {
   if (chatSending) return;
+  // Sem comunicação com o servidor o chat está indisponível.
+  if (chatOfflineActive) {
+    showChatOfflineBannerNow();
+    return;
+  }
 
   chatStopRequested = false;
   // A sentinela "__a2ui_action__" não é reenfileirável: se o backend recusar,
@@ -2738,13 +2744,20 @@ async function sendChatMessage() {
   var text = chatInputEl.value.trim();
   if (!text) return;
 
+  // Sem comunicação com o servidor o chat está indisponível: não despacha.
+  if (chatOfflineActive) {
+    showChatOfflineBannerNow();
+    return;
+  }
+
   // Envio manual já desconectado: mostra o aviso na hora (sem esperar a
-  // histerese) para o usuário entender por que a resposta pode falhar.
+  // histerese) e bloqueia o composer.
   var lastConn = typeof window.__lastConnectivityState === "function"
     ? window.__lastConnectivityState()
     : null;
   if (lastConn && lastConn.connected === false) {
     showChatOfflineBannerNow();
+    return;
   }
 
   if (chatSending) {
@@ -3130,6 +3143,23 @@ function showChatOfflineBannerNow() {
   var banner = document.getElementById("chatOfflineBanner");
   if (banner) banner.classList.remove("hidden");
   applyChatSendAffordance(true);
+  applyChatOfflineMode(true);
+}
+
+// chatOfflineActive guarda o estado para que setChatBusy/send não reabilitem o
+// composer enquanto não houver comunicação com o servidor.
+var chatOfflineActive = false;
+
+// applyChatOfflineMode deixa o chat INDISPONÍVEL offline: sem comunicação o
+// turno não chega ao servidor, então o composer é bloqueado (além do aviso).
+function applyChatOfflineMode(offline) {
+  chatOfflineActive = !!offline;
+  if (chatInputEl) chatInputEl.disabled = chatOfflineActive;
+  if (chatSendBtn) chatSendBtn.disabled = chatOfflineActive;
+  ["chatScreenshotBtn", "chatQuestionDockSendBtn", "chatQuestionDockInput"].forEach(function (id) {
+    var el = document.getElementById(id);
+    if (el) el.disabled = chatOfflineActive;
+  });
 }
 
 // applyChatSendAffordance deixa explícito no próprio botão de envio que o
@@ -3184,6 +3214,7 @@ function applyChatOfflineBanner(rawConnected) {
   }
   banner.classList.toggle("hidden", !!connected);
   applyChatSendAffordance(!connected);
+  applyChatOfflineMode(!connected);
 }
 
 var chatConnectivityBound = false;

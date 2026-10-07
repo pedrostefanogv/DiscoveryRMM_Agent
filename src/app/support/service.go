@@ -582,15 +582,15 @@ const (
 	ticketPrefetchStartDelay = 10 * time.Second
 )
 
-// selectTicketsForPrefetch devolve os chamados que ainda têm consulta/ação
-// útil offline: ignora os já avaliados (sem pendência).
+// selectTicketsForPrefetch devolve todos os chamados com ID válido.
+// IMPORTANTE: NÃO filtrar por "já avaliado/fechado" — o histórico de
+// comentários precisa estar disponível offline também nos chamados encerrados
+// e avaliados (o usuário abre o detalhe para consultar o histórico). O único
+// filtro é de custo (teto por passada + client/endpoints), não de negócio.
 func selectTicketsForPrefetch(tickets []APITicket) []APITicket {
 	out := make([]APITicket, 0, len(tickets))
 	for _, t := range tickets {
 		if strings.TrimSpace(t.ID) == "" {
-			continue
-		}
-		if t.Rating != nil && *t.Rating > 0 {
 			continue
 		}
 		out = append(out, t)

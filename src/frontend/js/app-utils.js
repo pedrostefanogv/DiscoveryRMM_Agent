@@ -506,7 +506,7 @@ var APP_I18N_DICTIONARY = {
     "chat.subtitle":
       "Chat IA - converse com a IA para gerenciar seu computador",
     "chat.offlineBanner":
-      "Sem comunicação com o servidor — o chat continua disponível, mas as respostas da IA podem falhar até a conexão voltar.",
+      "Sem comunicação com o servidor — o chat está indisponível até a conexão voltar.",
     "chat.sendOfflineHint": "Sem comunicação com o servidor — a mensagem pode não ser respondida.",
     "chat.memories": "Memórias",
     "chat.apiServerOptional": "Servidor API (opcional)",
@@ -1213,7 +1213,7 @@ var APP_I18N_DICTIONARY = {
     "debug.networkToggleHint": "Allows other machines on the network to access this interface",
     "chat.subtitle": "AI Chat - talk to the AI to manage your computer",
     "chat.offlineBanner":
-      "No communication with the server — the chat stays available, but AI replies may fail until the connection returns.",
+      "No communication with the server — the chat is unavailable until the connection returns.",
     "chat.sendOfflineHint": "No communication with the server — the message may not get a reply.",
     "chat.memories": "Memories",
     "chat.apiServerOptional": "API Server (optional)",
