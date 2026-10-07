@@ -22,6 +22,8 @@ type AppBridge interface {
 	ExportMarkdown() (string, error)
 	ExportPDF() (string, error)
 	GetOsqueryStatusJSON() (json.RawMessage, error)
+	RunOsqueryQueryJSON(sql string, limit int) (json.RawMessage, error)
+	SendAgentNotification(title, message, level string) (json.RawMessage, error)
 	ListPrintersJSON() (json.RawMessage, error)
 	InstallPrinterJSON(name, driverName, portName, portAddress string) (json.RawMessage, error)
 	InstallSharedPrinterJSON(connectionPath string, setDefault bool) (json.RawMessage, error)
@@ -70,6 +72,16 @@ type AppBridge interface {
 	ListOpenWindowsJSON(includeUntitled bool) (json.RawMessage, error)
 	CaptureScreenshotForTool(ctx context.Context, args map[string]any) (json.RawMessage, error)
 	ScreenshotConsentStatusJSON() (json.RawMessage, error)
+
+	// ReadFileWithConsent le um arquivo de TEXTO do computador do usuario com
+	// autorizacao obrigatoria NESTA leitura (o usuario aprova ou nega cada
+	// pedido; nao existe "permitir sempre").
+	ReadFileWithConsent(ctx context.Context, path string, maxBytes int, reason string) (json.RawMessage, error)
+
+	// RunPowerAction executa restart/shutdown/lock pedidos pela IA. Reinicio e
+	// desligamento exibem aviso do PSADT com contador e botao CANCELAR; se o
+	// usuario cancelar, nada e executado.
+	RunPowerAction(ctx context.Context, action string, delaySeconds int, message string) (json.RawMessage, error)
 }
 
 // RegisterDiscoveryTools adds all Discovery app tools to the registry.
@@ -211,14 +223,6 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 	})
 
 	// ========== SISTEMA E DIAGNOSTICOS ==========
-	reg.Register(Tool{
-		Name:        "get_osquery_status",
-		Description: "Verifica se o osquery esta instalado no computador e retorna o caminho do binario.",
-		Handler: func(ctx context.Context, args map[string]any) (any, error) {
-			return app.GetOsqueryStatusJSON()
-		},
-	})
-
 	// ========== MEMORIAS LOCAIS ==========
 	reg.Register(Tool{
 		Name:        "memory_list",
@@ -258,176 +262,6 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 		},
 	})
 
-	// ========== IMPRESSORAS ==========
-	reg.Register(Tool{
-		Name:        "list_printers",
-		Description: "Lista as impressoras instaladas no Windows com driver, porta e status.",
-		Handler: func(ctx context.Context, args map[string]any) (any, error) {
-			return app.ListPrintersJSON()
-		},
-	})
-
-	reg.Register(Tool{
-		Name:        "install_printer",
-		Description: "Instala uma impressora usando nome, driver, porta e opcionalmente um endereco para criar a porta TCP/IP.",
-		Params: []ToolParam{
-			{Name: "name", Type: "string", Description: "Nome da impressora", Required: true},
-			{Name: "driverName", Type: "string", Description: "Nome do driver de impressao", Required: true},
-			{Name: "portName", Type: "string", Description: "Nome da porta local ou TCP/IP", Required: true},
-			{Name: "portAddress", Type: "string", Description: "IP ou hostname para criar a porta, se ela ainda nao existir", Required: false},
-		},
-		Handler: func(ctx context.Context, args map[string]any) (any, error) {
-			name, err := requiredStringArg(args, "name")
-			if err != nil {
-				return nil, err
-			}
-			driverName, err := requiredStringArg(args, "driverName")
-			if err != nil {
-				return nil, err
-			}
-			portName, err := requiredStringArg(args, "portName")
-			if err != nil {
-				return nil, err
-			}
-			portAddress := optionalStringArg(args, "portAddress")
-			return app.InstallPrinterJSON(name, driverName, portName, portAddress)
-		},
-	})
-
-	reg.Register(Tool{
-		Name:        "install_shared_printer",
-		Description: "Instala uma impressora compartilhada via caminho UNC, por exemplo \\\\servidor\\fila.",
-		Params: []ToolParam{
-			{Name: "connectionPath", Type: "string", Description: "Caminho UNC da impressora compartilhada (ex: \\\\servidor\\impressora)", Required: true},
-			{Name: "setDefault", Type: "boolean", Description: "Se true, define a impressora instalada como padrao", Required: false},
-		},
-		Handler: func(ctx context.Context, args map[string]any) (any, error) {
-			connectionPath, err := requiredStringArg(args, "connectionPath")
-			if err != nil {
-				return nil, err
-			}
-			setDefault := false
-			if value, ok := args["setDefault"].(bool); ok {
-				setDefault = value
-			}
-			return app.InstallSharedPrinterJSON(connectionPath, setDefault)
-		},
-	})
-
-	reg.Register(Tool{
-		Name:        "remove_printer",
-		Description: "Remove uma impressora instalada pelo nome.",
-		Params: []ToolParam{
-			{Name: "name", Type: "string", Description: "Nome da impressora", Required: true},
-		},
-		Handler: func(ctx context.Context, args map[string]any) (any, error) {
-			name, err := requiredStringArg(args, "name")
-			if err != nil {
-				return nil, err
-			}
-			return app.RemovePrinterJSON(name)
-		},
-	})
-
-	reg.Register(Tool{
-		Name:        "get_printer_config",
-		Description: "Retorna a configuracao atual de impressao para uma impressora especifica.",
-		Params: []ToolParam{
-			{Name: "printerName", Type: "string", Description: "Nome da impressora", Required: true},
-		},
-		Handler: func(ctx context.Context, args map[string]any) (any, error) {
-			printerName, err := requiredStringArg(args, "printerName")
-			if err != nil {
-				return nil, err
-			}
-			return app.GetPrinterConfigJSON(printerName)
-		},
-	})
-
-	reg.Register(Tool{
-		Name:        "list_print_jobs",
-		Description: "Lista os jobs atualmente na fila de uma impressora.",
-		Params: []ToolParam{
-			{Name: "printerName", Type: "string", Description: "Nome da impressora", Required: true},
-		},
-		Handler: func(ctx context.Context, args map[string]any) (any, error) {
-			printerName, err := requiredStringArg(args, "printerName")
-			if err != nil {
-				return nil, err
-			}
-			return app.ListPrintJobsJSON(printerName)
-		},
-	})
-
-	reg.Register(Tool{
-		Name:        "remove_print_job",
-		Description: "Cancela um job especifico da fila de impressao.",
-		Params: []ToolParam{
-			{Name: "printerName", Type: "string", Description: "Nome da impressora", Required: true},
-			{Name: "jobId", Type: "integer", Description: "ID numerico do job de impressao", Required: true},
-		},
-		Handler: func(ctx context.Context, args map[string]any) (any, error) {
-			printerName, err := requiredStringArg(args, "printerName")
-			if err != nil {
-				return nil, err
-			}
-			jobID, err := requiredIntArg(args, "jobId")
-			if err != nil {
-				return nil, err
-			}
-			return app.RemovePrintJobJSON(printerName, jobID)
-		},
-	})
-
-	reg.Register(Tool{
-		Name:        "spooler_status",
-		Description: "Consulta o status atual do servico Spooler de impressao.",
-		Handler: func(ctx context.Context, args map[string]any) (any, error) {
-			return app.GetSpoolerStatusJSON()
-		},
-	})
-
-	reg.Register(Tool{
-		Name:        "restart_spooler",
-		Description: "Reinicia o servico Spooler de impressao. DESTRUTIVA (para jobs de impressão): exige confirm=true.",
-		Params: []ToolParam{
-			{Name: "confirm", Type: "boolean", Description: "Confirmação explícita do usuário (M31)", Required: true},
-		},
-		Handler: func(ctx context.Context, args map[string]any) (any, error) {
-			if err := requireConfirm(args); err != nil {
-				return nil, err
-			}
-			return app.RestartSpoolerJSON()
-		},
-	})
-
-	reg.Register(Tool{
-		Name:        "clear_queue",
-		Description: "Limpa todos os jobs pendentes da fila de uma impressora. DESTRUTIVA: exige confirm=true.",
-		Params: []ToolParam{
-			{Name: "printerName", Type: "string", Description: "Nome da impressora", Required: true},
-			{Name: "confirm", Type: "boolean", Description: "Confirmação explícita do usuário (M31)", Required: true},
-		},
-		Handler: func(ctx context.Context, args map[string]any) (any, error) {
-			if err := requireConfirm(args); err != nil {
-				return nil, err
-			}
-			printerName, err := requiredStringArg(args, "printerName")
-			if err != nil {
-				return nil, err
-			}
-			return app.ClearPrintQueueJSON(printerName)
-		},
-	})
-
-	reg.Register(Tool{
-		Name:        "list_drivers",
-		Description: "Lista os drivers de impressora instalados no Windows.",
-		Handler: func(ctx context.Context, args map[string]any) (any, error) {
-			return app.ListPrinterDriversJSON()
-		},
-	})
-
 	reg.Register(Tool{
 		Name:        "get_logs",
 		Description: "Retorna os logs recentes de operacoes do winget (instalacao, atualizacao, etc).",
@@ -436,46 +270,33 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 		},
 	})
 
+	// ========== LEITURA DE ARQUIVO (com autorizacao do usuario) ==========
 	reg.Register(Tool{
-		Name:        "ping_host",
-		Description: "Verifica se um host/IP na rede local esta online usando ping (apenas redes privadas).",
+		Name: "read_file",
+		Description: "Le o conteudo de um arquivo de TEXTO no computador do usuario (somente leitura; nunca escreve nem apaga). " +
+			"TODA leitura exige AUTORIZACAO EXPLICITA do usuario NESTA leitura: o agente mostra caminho, tamanho e motivo e " +
+			"so le o arquivo se o usuario aprovar (nao existe 'permitir sempre'). Sem aprovacao, devolve approved=false. " +
+			"Arquivos binarios sao recusados. Le no maximo 10 KB por padrao (ajustavel ate 64 KB). " +
+			"Use SEMPRE que o usuario pedir para ler/ver o conteudo de um arquivo e explique o motivo em reason.",
 		Params: []ToolParam{
-			{Name: "host", Type: "string", Description: "Nome ou IP (privado) a ser verificado", Required: true},
-			{Name: "count", Type: "integer", Description: "Numero de pacotes ping (padrao 1)", Required: false},
-			{Name: "timeoutSeconds", Type: "integer", Description: "Timeout em segundos (padrao 5)", Required: false},
+			{Name: "path", Type: "string", Description: "Caminho ABSOLUTO do arquivo de texto (ex: C:\\Users\\usuario\\Documents\\config.ini)", Required: true},
+			{Name: "maxBytes", Type: "integer", Description: "Limite de bytes a ler (padrao 10240, max 65536)", Required: false},
+			{Name: "reason", Type: "string", Description: "Motivo da leitura, exibido ao usuario no pedido de autorizacao (OBRIGATORIO: o usuario decide com base nele)", Required: true},
 		},
 		Handler: func(ctx context.Context, args map[string]any) (any, error) {
-			host, err := requiredStringArg(args, "host")
+			path, err := requiredStringArg(args, "path")
 			if err != nil {
 				return nil, err
 			}
-			count := 1
-			if v, ok := args["count"]; ok {
-				if n, ok := v.(float64); ok {
-					count = int(n)
-				}
-				if n, ok := v.(int); ok {
-					count = n
-				}
+			maxBytes := optionalIntArg(args, "maxBytes")
+			reason, err := requiredStringArg(args, "reason")
+			if err != nil {
+				return nil, err
 			}
-			timeout := 5
-			if v, ok := args["timeoutSeconds"]; ok {
-				if n, ok := v.(float64); ok {
-					timeout = int(n)
-				}
-				if n, ok := v.(int); ok {
-					timeout = n
-				}
+			if ctx == nil {
+				ctx = context.Background()
 			}
-			return PingHost(ctx, host, count, timeout)
-		},
-	})
-
-	reg.Register(Tool{
-		Name:        "flush_dns",
-		Description: "Limpa o cache DNS do sistema (ipconfig /flushdns no Windows).",
-		Handler: func(ctx context.Context, args map[string]any) (any, error) {
-			return FlushDNS(ctx)
+			return app.ReadFileWithConsent(ctx, path, maxBytes, reason)
 		},
 	})
 
@@ -901,36 +722,6 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 		},
 	})
 
-	reg.Register(Tool{
-		Name:        "get_top_processes",
-		Description: "Retorna os N processos com maior consumo de CPU (segundos acumulados) ou memoria (MB). CommandLine e omitido por seguranca. top: 1-50 (padrao 10). orderBy: cpu ou memory (padrao cpu).",
-		Params: []ToolParam{
-			{Name: "top", Type: "integer", Description: "Numero de processos a retornar (1-50, padrao 10)", Required: false},
-			{Name: "orderBy", Type: "string", Description: "Criterio de ordenacao: cpu ou memory (padrao cpu)", Required: false},
-		},
-		Handler: func(ctx context.Context, args map[string]any) (any, error) {
-			top := 0
-			if v, ok := args["top"]; ok {
-				switch n := v.(type) {
-				case float64:
-					top = int(n)
-				case int:
-					top = n
-				}
-			}
-			orderBy, _ := args["orderBy"].(string)
-			return GetTopProcesses(ctx, top, orderBy)
-		},
-	})
-
-	reg.Register(Tool{
-		Name:        "get_disk_health",
-		Description: "Retorna o status de saude dos discos fisicos via WMI (Win32_DiskDrive). Inclui modelo, fabricante, serial, interface, tamanho e status (OK / Pred Fail / Unknown). Util para identificar discos com falha iminente.",
-		Handler: func(ctx context.Context, args map[string]any) (any, error) {
-			return GetDiskHealth(ctx)
-		},
-	})
-
 	// ========== PERGUNTA INTERATIVA ==========
 	reg.Register(Tool{
 		Name: "ask_user",
@@ -1044,6 +835,22 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 			return app.ScreenshotConsentStatusJSON()
 		},
 	})
+	// ========== FAMILIAS CONSOLIDADAS E NOVAS TOOLS ==========
+	// Tools action-based que substituem registrations antigas + tools novas de
+	// administracao do Windows. Acoes destrutivas exigem confirm=true.
+	registerPrinterTool(reg, app)
+	registerNetworkDiagnosticsTool(reg)
+	registerProcessControlTool(reg)
+	registerOsqueryTool(reg, app)
+	registerDiskTool(reg)
+	registerServiceControlTool(reg)
+	registerSystemInfoTool(reg)
+	registerWindowsUpdateTool(reg)
+	registerSecurityStatusTool(reg)
+	registerScheduledTaskTool(reg)
+	registerSharesTool(reg)
+	registerPowerActionTool(reg, app)
+	registerSendNotificationTool(reg, app)
 }
 
 func requiredStringArg(args map[string]any, name string) (string, error) {

@@ -512,14 +512,22 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 				// stream (botão Parar) interrompe a espera via streamCtx.
 				//
 				// capture_screenshot também exige interação do usuário
-				// (autorização + seleção da área/janela no overlay): o timer de
-				// 60s mataria a captura no meio da interação.
+				// (autorização + seleção da área/janela no overlay) e read_file
+				// exige autorização por leitura: o timer de 60s mataria a
+				// interação/espera pela resposta do usuário.
+				// Timeout padrão de 60s; a política de escopo do servidor pode definir
+				// um valor por tool (pendingToolCall.TimeoutSeconds) — ex.: ações
+				// pesadas precisam de mais tempo.
+				execTimeout := 60 * time.Second
+				if tc.TimeoutSeconds > 0 {
+					execTimeout = time.Duration(tc.TimeoutSeconds) * time.Second
+				}
 				var execCtx context.Context
 				var execCancel context.CancelFunc
-				if tc.Name == "ask_user" || tc.Name == "capture_screenshot" {
+				if tc.Name == "ask_user" || tc.Name == "capture_screenshot" || tc.Name == "read_file" {
 					execCtx, execCancel = context.WithCancel(streamCtx)
 				} else {
-					execCtx, execCancel = context.WithTimeout(streamCtx, 60*time.Second)
+					execCtx, execCancel = context.WithTimeout(streamCtx, execTimeout)
 				}
 				result, execErr = mcpExecutor(execCtx, tc.Name, tc.Args)
 				execCancel()
@@ -914,6 +922,16 @@ func (s *Service) parseMultiRoundSSEWithProgress(body io.Reader, onToken func(st
 			if evt.SessionID != "" {
 				currentSessionID = evt.SessionID
 			}
+			// Timeouts por tool definidos na política de escopo do servidor
+			// (governança das MCP tools): aplicados às chamadas pendentes deste
+			// round. Vazio/ausente = padrão do agente.
+			if pendingCalls != nil && len(evt.ToolTimeouts) > 0 {
+				for i := range *pendingCalls {
+					if secs, ok := evt.ToolTimeouts[(*pendingCalls)[i].Name]; ok && secs > 0 {
+						(*pendingCalls)[i].TimeoutSeconds = secs
+					}
+				}
+			}
 			// B16: o servidor pode entregar o texto final no próprio evento de
 			// encerramento (done/round_end) em vez de em tokens incrementais.
 			// Antes esse conteúdo era descartado e o chat exibia "sem resposta".
@@ -1214,15 +1232,15 @@ func diagnoseMissingToolCall(s *Service, userMessage string) string {
 		"ram":            "get_inventory",
 		"cpu":            "get_inventory",
 		"processador":    "get_inventory",
-		"disco":          "get_inventory",
-		"hd":             "get_inventory",
-		"ssd":            "get_inventory",
+		"disco":          "disk / get_inventory",
+		"hd":             "disk / get_inventory",
+		"ssd":            "disk / get_inventory",
 		"gpu":            "get_inventory",
 		"placa de video": "get_inventory",
 		"versao":         "get_inventory",
-		"windows":        "get_inventory",
-		"impressora":     "list_printers",
-		"imprimir":       "list_printers / list_print_jobs",
+		"windows":        "get_inventory / windows_update",
+		"impressora":     "printer",
+		"imprimir":       "printer",
 		"chamado":        "list_ticket_templates / list_tickets / create_ticket",
 		"ticket":         "list_ticket_templates / list_tickets / create_ticket",
 		"suporte":        "list_ticket_templates / list_tickets / create_ticket",
@@ -1230,22 +1248,22 @@ func diagnoseMissingToolCall(s *Service, userMessage string) string {
 		"template":       "list_ticket_templates",
 		"abrir":          "list_ticket_templates / create_ticket",
 		"criar":          "list_ticket_templates / create_ticket",
-		"ping":           "ping_host",
-		"dns":            "flush_dns",
-		"firewall":       "get_inventory",
-		"antivirus":      "get_inventory",
-		"virus":          "get_top_processes / get_recent_errors / get_inventory",
-		"malware":        "get_top_processes / get_recent_errors / get_inventory",
+		"ping":           "network_diagnostics",
+		"dns":            "network_diagnostics",
+		"firewall":       "security_status / get_inventory",
+		"antivirus":      "security_status / get_inventory",
+		"virus":          "process_control / get_recent_errors / get_inventory",
+		"malware":        "process_control / get_recent_errors / get_inventory",
 		"bateria":        "get_inventory",
 		"bitlocker":      "get_inventory",
 		"usuarios":       "get_inventory",
 		"logados":        "get_inventory",
 		"exportar":       "export_inventory_markdown",
 		"relatorio":      "export_inventory_markdown",
-		"lento":          "get_top_processes / get_inventory",
-		"lentid":         "get_top_processes / get_inventory",
-		"travando":       "get_top_processes",
-		"travado":        "get_top_processes",
+		"lento":          "process_control / get_inventory",
+		"lentid":         "process_control / get_inventory",
+		"travando":       "process_control",
+		"travado":        "process_control",
 	}
 	hits := make([]string, 0)
 	for keyword, tool := range hints {

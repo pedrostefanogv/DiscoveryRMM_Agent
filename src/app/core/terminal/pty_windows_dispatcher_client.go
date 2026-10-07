@@ -65,6 +65,10 @@ func NewDispatcherShell(shell ShellKind, cols, rows int, onOutput func(string)) 
 		rows = 40
 	}
 
+	// Nova sessão: a métrica de descarte do dispatcher anterior não vale
+	// para esta (R8).
+	resetDispatcherDroppedBytes()
+
 	session := fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano())
 	inPipe := fmt.Sprintf(`\\.\pipe\discovery-term-%s-in`, session)
 	outPipe := fmt.Sprintf(`\\.\pipe\discovery-term-%s-out`, session)
@@ -152,6 +156,14 @@ func teeDispatcherLog(r interface{ Read([]byte) (int, error) }) {
 		line := strings.TrimSpace(sc.Text())
 		if line == "" {
 			continue
+		}
+		// R8: a linha de métrica do dispatcher alimenta o contador exposto em
+		// .stats (não é logada — senão o log do agente viraria ruído).
+		if strings.HasPrefix(line, "[dispatcher-metrics]") {
+			if v, ok := parseDispatcherMetric(line, "dropped="); ok {
+				setDispatcherDroppedBytes(v)
+				continue
+			}
 		}
 		log.Printf("[term-dispatcher] %s", line)
 	}

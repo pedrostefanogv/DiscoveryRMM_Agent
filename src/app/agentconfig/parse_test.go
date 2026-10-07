@@ -54,9 +54,6 @@ func TestParseAgentConfiguration_BasicFields(t *testing.T) {
 	if cfg.SiteID != "s1" || cfg.ClientID != "c1" {
 		t.Fatalf("expected siteId/clientId parsed")
 	}
-	if !cfg.AutoUpdate.Enabled || cfg.AutoUpdate.CheckEveryHours != 4 {
-		t.Fatalf("expected autoUpdate parsed")
-	}
 	if cfg.PSADT.Enabled == nil || !*cfg.PSADT.Enabled {
 		t.Fatalf("expected psadt.enabled=true")
 	}
@@ -71,14 +68,29 @@ func TestParseAgentConfiguration_BasicFields(t *testing.T) {
 	}
 }
 
-func TestParseAgentConfiguration_AgentUpdateOverridesLegacyPolicy(t *testing.T) {
+func TestParseAgentConfiguration_LegacyAutoUpdateIsIgnored(t *testing.T) {
+	// autoUpdate saiu do produto: payload antigo deve parsear sem derivar
+	// a política de self-update (que agora vem só de agentUpdate).
+	payload := []byte(`{"autoUpdate":{"enabled":false,"checkEveryHours":99}}`)
+	cfg, err := ParseAgentConfiguration(payload)
+	if err != nil {
+		t.Fatalf("expected legacy payload to parse, got %v", err)
+	}
+
+	want := selfupdate.DefaultPolicy()
+	if cfg.AgentUpdate.Enabled != want.Enabled || cfg.AgentUpdate.CheckEveryHours != want.CheckEveryHours {
+		t.Fatalf("legacy autoUpdate não deve influenciar AgentUpdate: %+v", cfg.AgentUpdate)
+	}
+}
+
+func TestParseAgentConfiguration_AgentUpdatePolicy(t *testing.T) {
 	payload := []byte(`{"autoUpdate":{"enabled":true,"checkEveryHours":24},"agentUpdate":{"enabled":false,"checkOnStartup":false,"checkPeriodically":true,"checkOnSyncManifest":false,"checkEveryHours":12,"preferredArtifactType":"PortableZip","requireSignatureValidation":true}}`)
 	cfg, err := ParseAgentConfiguration(payload)
 	if err != nil {
 		t.Fatalf("expected agentUpdate payload to parse, got %v", err)
 	}
 	if cfg.AgentUpdate.Enabled {
-		t.Fatalf("expected agentUpdate.enabled=false to override legacy autoUpdate")
+		t.Fatalf("expected agentUpdate.enabled=false")
 	}
 	if cfg.AgentUpdate.CheckOnStartup {
 		t.Fatalf("expected agentUpdate.checkOnStartup=false")
@@ -244,7 +256,6 @@ func TestAgentConfig_MarshalRoundtrip(t *testing.T) {
 		SiteID:                        "site-x",
 		ClientID:                      "client-x",
 		ResolvedAt:                    "2026-01-01T00:00:00Z",
-		AutoUpdate:                    AgentAutoUpdateConfig{Enabled: true},
 		AgentUpdate:                   selfupdate.DefaultPolicy(),
 	}
 	data, err := json.Marshal(cfg)

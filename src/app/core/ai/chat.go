@@ -352,9 +352,12 @@ Para ver atualizacoes pendentes: use get_pending_updates.
 - get_inventory — inventario completo: hardware, SO, discos, rede, memoria, GPU, bateria, BitLocker, software instalado, usuarios logados
 - export_inventory_markdown — exporta relatorio em Markdown
 - export_inventory_pdf — exporta relatorio em PDF
-- get_osquery_status — verifica se o osquery esta instalado
+- osquery(action) — status da instalacao e consultas SQL read-only (action=query, SELECT/WITH)
 - get_logs — logs recentes de operacoes do winget
 - query_event_log — consulta o Windows Event Log (System, Application, Setup) com filtros de nivel, fonte e periodo
+- read_file(path, reason?, maxBytes?) — le o conteudo de um arquivo de TEXTO do computador do usuario (somente leitura).
+  TODA leitura exige AUTORIZACAO EXPLICITA do usuario: o agente mostra caminho, tamanho e motivo e so le se o usuario aprovar
+  (nao existe "permitir sempre"); sem aprovacao a tool devolve approved=false. Arquivos binarios sao recusados. Explique SEMPRE o motivo.
 
 **Pacotes e Programas (Winget):**
 - list_installed_packages — lista todos os programas instalados detectados pelo winget
@@ -367,17 +370,10 @@ Para ver atualizacoes pendentes: use get_pending_updates.
 - get_package_actions — mapa de acoes disponiveis por pacote (install, uninstall, upgrade)
 
 **Impressoras:**
-- list_printers — lista impressoras instaladas
-- install_printer(name, driverName, portName, portAddress?) — instala uma impressora local/TCP-IP
-- install_shared_printer(connectionPath, setDefault?) — instala impressora compartilhada (UNC)
-- remove_printer(name) — remove uma impressora
-- get_printer_config(printerName) — consulta configuracao de uma impressora
-- list_print_jobs(printerName) — lista jobs na fila
-- remove_print_job(printerName, jobId) — cancela um job
-- spooler_status — status do servico Spooler
-- restart_spooler — reinicia o Spooler
-- clear_queue(printerName) — limpa a fila de uma impressora
-- list_drivers — lista drivers de impressora instalados
+- printer(action, ...) — familia unica de impressoras. action:
+  list | install (name, driverName, portName, portAddress?) | install_shared (connectionPath, setDefault?) |
+  remove (confirm=true) | config | jobs | cancel_job (confirm=true) | spooler |
+  restart_spooler (confirm=true) | clear_queue (confirm=true) | drivers
 
 **Chamados de Suporte:**
 IMPORTANTE — SEMPRE que o usuario pedir para abrir chamado, ticket, reportar problema ou solicitar suporte, use as ferramentas abaixo. NUNCA oriente o usuario a acessar portal web, ligar para central ou enviar e-mail.
@@ -399,8 +395,22 @@ Fluxo correto para criar um chamado:
 - add_ticket_comment(ticketId, content, isInternal?) — adiciona comentario em um chamado
 
 **Rede:**
-- ping_host(host, count?, timeoutSeconds?) — verifica se um host esta online (apenas redes privadas)
-- flush_dns — limpa o cache DNS (ipconfig /flushdns)
+- network_diagnostics(action, ...) — diagnostico de rede. action:
+  ping (host, count?, timeoutSeconds?; apenas redes privadas) | flush_dns |
+  test_connection (host, port) | resolve (host) | connections (conexoes TCP/UDP) |
+  config (adaptadores: IP, mascara, gateway, DNS)
+
+**Sistema, hardware e seguranca:**
+- system_info — uptime, boot time, hostname, dominio/workgroup, versao/arquitetura do SO, RAM/CPU
+- process_control(action) — list | top (orderBy cpu/memory) | kill (confirm=true)
+- disk(action) — health | usage | temp
+- service_control(action) — list | get | start | stop | restart (start/stop/restart exigem confirm=true)
+- windows_update(action) — installed | pending_reboot | history
+- security_status(action) — summary | defender | firewall | tpm
+- scheduled_task(action) — list | run (confirm=true)
+- shares(action) — shares | mapped_drives
+- power_action(action) — restart | shutdown | lock (TODAS exigem confirm=true)
+- send_notification(title, message, level?) — exibe uma notificacao/toast ao usuario
 
 **Memorias Locais:**
 - memory_list — lista anotacoes locais do agente

@@ -73,7 +73,10 @@ func TestStartP2PTelemetryLoopForcesInitialSendPastConsolidationGate(t *testing.
 		a.StartP2PTelemetryLoop(ctx)
 	}()
 
-	deadline := time.Now().Add(3 * time.Second)
+	// 10s (antes 3s): a construção do payload de telemetria leva ~3s nesta
+	// máquina e o deadline de 3s empatava com a operação — o teste falhava de
+	// forma intermitente sem nenhum defeito no produto.
+	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) && atomic.LoadInt32(&telemetryHits) == 0 {
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -251,7 +254,10 @@ func TestStartP2PTelemetryLoopSendsImmediately(t *testing.T) {
 		a.StartP2PTelemetryLoop(ctx)
 	}()
 
-	deadline := time.Now().Add(3 * time.Second)
+	// 10s (antes 3s): a construção do payload de telemetria leva ~3s nesta
+	// máquina e o deadline de 3s empatava com a operação — o teste falhava de
+	// forma intermitente sem nenhum defeito no produto.
+	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) && atomic.LoadInt32(&telemetryHits) == 0 {
 		time.Sleep(10 * time.Millisecond)
 	}

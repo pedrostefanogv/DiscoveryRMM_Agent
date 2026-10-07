@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
+	"discovery/app/core/inventory"
 	"discovery/app/core/models"
 )
 
@@ -126,6 +128,46 @@ func (a *App) ExportPDF() (string, error)      { return a.ExportInventoryPDF() }
 func (a *App) GetOsqueryStatusJSON() (json.RawMessage, error) {
 	status, _ := a.GetOsqueryStatus()
 	return json.Marshal(status)
+}
+
+// RunOsqueryQueryJSON executa uma query SQL read-only no osquery (cliente
+// osquery-go quando ha socket; fallback para o binario osqueryi), limitando o
+// numero de linhas. Implementa o AppBridge da tool osquery (action=query).
+func (a *App) RunOsqueryQueryJSON(sql string, limit int) (json.RawMessage, error) {
+	if strings.TrimSpace(sql) == "" {
+		return nil, fmt.Errorf("sql nao pode ser vazio")
+	}
+	ctx := context.Background()
+	if a != nil && a.ctx != nil {
+		ctx = a.ctx
+	}
+	rows, err := inventory.RunOsqueryQuery(ctx, sql, limit)
+	if err != nil {
+		return nil, err
+	}
+	if limit <= 0 || limit > 200 {
+		limit = 200
+	}
+	return json.Marshal(map[string]any{
+		"count": len(rows),
+		"limit": limit,
+		"rows":  rows,
+	})
+}
+
+// SendAgentNotification despacha uma notificacao para o usuario usando o
+// servico de notificacoes do agente. Implementa o AppBridge da tool
+// send_notification.
+func (a *App) SendAgentNotification(title, message, level string) (json.RawMessage, error) {
+	req := NotificationDispatchRequest{
+		NotificationID: fmt.Sprintf("mcp-notification-%d", time.Now().UnixNano()),
+		Title:          title,
+		Message:        message,
+		Mode:           "notify_only",
+		Severity:       level,
+		EventType:      "agent.notification",
+	}
+	return json.Marshal(a.DispatchNotification(req))
 }
 
 // CheckAgentUpdate dispara uma verificação manual de atualização do agente.

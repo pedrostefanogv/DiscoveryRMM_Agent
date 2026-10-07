@@ -22,7 +22,7 @@ const (
 )
 
 // allowedOrderBy is the set of valid values for the orderBy parameter in
-// get_top_processes. The actual PowerShell property name is resolved in Go —
+// process_control (action=top). The actual PowerShell property name is resolved in Go —
 // the user-supplied string is never interpolated into the script.
 var allowedOrderBy = map[string]string{
 	"cpu":    "CPU",

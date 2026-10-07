@@ -14,14 +14,14 @@ import (
 	"discovery/app/core/processutil"
 )
 
-// PingResult is the structured response returned by the ping_host tool.
+// PingResult is the structured response returned by network_diagnostics (action=ping).
 type PingResult struct {
 	Success    bool   `json:"success"`
 	DurationMs int    `json:"durationMs"`
 	Output     string `json:"output"`
 }
 
-// FlushDNSResult is the structured response returned by the flush_dns tool.
+// FlushDNSResult is the structured response returned by network_diagnostics (action=flush_dns).
 type FlushDNSResult struct {
 	Success bool   `json:"success"`
 	Output  string `json:"output"`

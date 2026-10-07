@@ -4,20 +4,6 @@ package agentconfig
 
 import "discovery/app/core/selfupdate"
 
-// AgentAutoUpdateConfig represents the agent-side auto-update policy.
-type AgentAutoUpdateConfig struct {
-	Enabled               bool     `json:"enabled"`
-	CheckEveryHours       int      `json:"checkEveryHours"`
-	AllowUserDelay        bool     `json:"allowUserDelay"`
-	MaxDelayHours         int      `json:"maxDelayHours"`
-	ForceRestartDelay     bool     `json:"forceRestartDelay"`
-	RestartDelayHours     int      `json:"restartDelayHours"`
-	UpdateOnLogon         bool     `json:"updateOnLogon"`
-	MaintenanceWindows    []string `json:"maintenanceWindows"`
-	SilentInstall         bool     `json:"silentInstall"`
-	AutoRollbackOnFailure bool     `json:"autoRollbackOnFailure"`
-}
-
 // AgentPSADTConfig defines PSAppDeployToolkit integration settings from the API.
 type AgentPSADTConfig struct {
 	Enabled                 *bool  `json:"enabled"`
@@ -126,7 +112,6 @@ type AgentConfiguration struct {
 	SiteID                            string                          `json:"siteId"`
 	ClientID                          string                          `json:"clientId"`
 	ResolvedAt                        string                          `json:"resolvedAt"`
-	AutoUpdate                        AgentAutoUpdateConfig           `json:"autoUpdate"`
 	AgentUpdate                       selfupdate.Policy               `json:"agentUpdate"`
 	PSADT                             AgentPSADTConfig                `json:"psadt"`
 	NotificationBranding              AgentNotificationBrandingConfig `json:"notificationBranding"`
@@ -156,7 +141,6 @@ type ServerConfiguration struct {
 	AppStorePolicy                    string `json:"appStorePolicy"`
 	AutomationP2PWingetInstallEnabled *bool  `json:"automationP2pWingetInstallEnabled"`
 	InventoryIntervalHours            int    `json:"inventoryIntervalHours"`
-	AutoUpdateSettingsJSON            string `json:"autoUpdateSettingsJson"`
 	AgentUpdatePolicyJSON             string `json:"agentUpdatePolicyJson"`
 	AgentHeartbeatIntervalSeconds     int    `json:"agentHeartbeatIntervalSeconds"`
 	AgentOnlineGraceSeconds           int    `json:"agentOnlineGraceSeconds"`
@@ -196,7 +180,6 @@ type ClientConfiguration struct {
 	AutomationP2PWingetInstallEnabled *bool   `json:"automationP2pWingetInstallEnabled"`
 	AIIntegrationSettingsJSON         *string `json:"aiIntegrationSettingsJson"`
 	InventoryIntervalHours            *int    `json:"inventoryIntervalHours"`
-	AutoUpdateSettingsJSON            *string `json:"autoUpdateSettingsJson"`
 	AgentUpdatePolicyJSON             *string `json:"agentUpdatePolicyJson"`
 	AgentHeartbeatIntervalSeconds     *int    `json:"agentHeartbeatIntervalSeconds"`
 	AgentOnlineGraceSeconds           *int    `json:"agentOnlineGraceSeconds"`
@@ -226,7 +209,6 @@ type SiteConfiguration struct {
 	AutomationP2PWingetInstallEnabled *bool   `json:"automationP2pWingetInstallEnabled"`
 	AIIntegrationSettingsJSON         *string `json:"aiIntegrationSettingsJson"`
 	InventoryIntervalHours            *int    `json:"inventoryIntervalHours"`
-	AutoUpdateSettingsJSON            *string `json:"autoUpdateSettingsJson"`
 	AgentUpdatePolicyJSON             *string `json:"agentUpdatePolicyJson"`
 	AgentOnlineGraceSeconds           *int    `json:"agentOnlineGraceSeconds"`
 	Timezone                          *string `json:"timezone"`

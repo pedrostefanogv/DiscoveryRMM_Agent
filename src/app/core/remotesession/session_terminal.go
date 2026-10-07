@@ -3,12 +3,18 @@
 package remotesession
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
+	"os/exec"
+	"strconv"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"discovery/app/core/terminal"
@@ -21,6 +27,14 @@ const (
 	termMaxMsgPerSec     = 60        // rate limit maximo de mensagens/segundo
 	termRateWindowMs     = 100       // janela deslizante para rate limit
 	termMaxInputSize     = 32 * 1024 // limite de input por mensagem (32KB — suporta paste de textos longos)
+
+	// R2: limites de taxa POR SESSÃO aplicados no agente (o debounce do front
+	// não é defesa). Excedente é descartado com contador em .stats.
+	termMaxInputPerSec  = 100
+	termMaxResizePerSec = 10
+
+	// R9: publica o heartbeat de .stats mesmo sem mudança a cada N ticks.
+	termStatsIdleTicks = 5
 
 	// Teto do buffer do coalescer: saída intensa (ex.: type de arquivo grande)
 	// não pode crescer sem limite entre flushes — o rate limit segura o
@@ -41,6 +55,24 @@ const (
 	// cobrimos o extremo oposto (valor absurdo não pode ir ao ConPTY/console).
 	termMinCols, termMaxCols = 20, 500
 	termMinRows, termMaxRows = 5, 200
+)
+
+const (
+	// termStatsIntervalMs é o período de publicação da telemetria .stats
+	// enquanto o terminal estiver ativo (contrato realtime v3, aditivo).
+	termStatsIntervalMs = 2000
+
+	// Limites da consulta de completação (TAB) executada num processo
+	// auxiliar. Timeout curto: a UI não pode ficar pendurada; acima do
+	// limite de itens o resultado é truncado.
+	completionProcessTimeout  = 3 * time.Second
+	completionMaxItems        = 500
+	completionDefaultPageSize = 50
+
+	// completionMaxCacheEntries limita o cache de ciclos do Tab/Shift+Tab
+	// (chave input+cursor). Ao exceder, o cache é descartado — não é estado
+	// essencial, apenas para o ciclo continuar de onde parou.
+	completionMaxCacheEntries = 64
 )
 
 // clampTermDims limita cols/rows à faixa suportada. Valores fora da faixa são
@@ -124,6 +156,128 @@ func (r *termReplayRing) clear() {
 	r.bytes = 0
 }
 
+// gapSize estima quantos frames o viewer perdeu quando o anel não cobre o
+// lastSeq pedido (usado só para telemetria replayGapFrames).
+func (r *termReplayRing) gapSize(fromSeq int64) int64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.frames) == 0 {
+		return 0
+	}
+	g := r.frames[0].seq - fromSeq - 1
+	if g < 0 {
+		return 0
+	}
+	return g
+}
+
+// ── Telemetria (.stats) ──
+
+// termStats agrega os contadores de UMA sessão de terminal. Publicado a cada
+// termStatsIntervalMs no subject .stats enquanto o terminal existir.
+type termStats struct {
+	framesOut         atomic.Int64
+	bytesOut          atomic.Int64
+	lastFlushBytes    atomic.Int64
+	inputFrames       atomic.Int64
+	inputBytes        atomic.Int64
+	inputRejected     atomic.Int64
+	inputTooLarge     atomic.Int64
+	inputRateLimited  atomic.Int64
+	resizeRateLimited atomic.Int64
+	flushHolds        atomic.Int64
+	flushForcedAtCap  atomic.Int64
+	publishErrors     atomic.Int64
+	replayResets      atomic.Int64
+	replayGapFrames   atomic.Int64
+	startedAt         time.Time
+}
+
+// termStatsPayload é o JSON do subject .stats (contrato B).
+type termStatsPayload struct {
+	SessionID         string `json:"sessionId"`
+	TimestampMs       int64  `json:"timestampMs"`
+	FramesOut         int64  `json:"framesOut"`
+	BytesOut          int64  `json:"bytesOut"`
+	InputFrames       int64  `json:"inputFrames"`
+	InputBytes        int64  `json:"inputBytes"`
+	InputRejected     int64  `json:"inputRejected"`
+	InputTooLarge     int64  `json:"inputTooLarge"`
+	InputRateLimited  int64  `json:"inputRateLimited"`
+	ResizeRateLimited int64  `json:"resizeRateLimited"`
+	PipeDroppedBytes  int64  `json:"pipeDroppedBytes"`
+	FlushHolds        int64  `json:"flushHolds"`
+	FlushForcedAtCap  int64  `json:"flushForcedAtCap"`
+	PublishErrors     int64  `json:"publishErrors"`
+	ReplayResets      int64  `json:"replayResets"`
+	ReplayGapFrames   int64  `json:"replayGapFrames"`
+	UptimeMs          int64  `json:"uptimeMs"`
+	AvgFlushBytes     int64  `json:"avgFlushBytes"`
+	LastFlushBytes    int64  `json:"lastFlushBytes"`
+}
+
+// snapshot monta o payload de telemetria. avgFlushBytes = bytesOut/framesOut.
+func (s *termStats) snapshot(sessionID string) termStatsPayload {
+	frames := s.framesOut.Load()
+	bytes := s.bytesOut.Load()
+	avg := int64(0)
+	if frames > 0 {
+		avg = bytes / frames
+	}
+	return termStatsPayload{
+		SessionID:         sessionID,
+		TimestampMs:       time.Now().UnixMilli(),
+		FramesOut:         frames,
+		BytesOut:          bytes,
+		InputFrames:       s.inputFrames.Load(),
+		InputBytes:        s.inputBytes.Load(),
+		InputRejected:     s.inputRejected.Load(),
+		InputTooLarge:     s.inputTooLarge.Load(),
+		InputRateLimited:  s.inputRateLimited.Load(),
+		ResizeRateLimited: s.resizeRateLimited.Load(),
+		PipeDroppedBytes:  terminal.DispatcherDroppedBytes(),
+		FlushHolds:        s.flushHolds.Load(),
+		FlushForcedAtCap:  s.flushForcedAtCap.Load(),
+		PublishErrors:     s.publishErrors.Load(),
+		ReplayResets:      s.replayResets.Load(),
+		ReplayGapFrames:   s.replayGapFrames.Load(),
+		UptimeMs:          time.Since(s.startedAt).Milliseconds(),
+		AvgFlushBytes:     avg,
+		LastFlushBytes:    s.lastFlushBytes.Load(),
+	}
+}
+
+// countersEqual compara apenas os contadores (ignora timestamp/uptime), para
+// o statsLoop não publicar quando nada mudou (R9).
+func (s termStatsPayload) countersEqual(o termStatsPayload) bool {
+	s.TimestampMs, o.TimestampMs = 0, 0
+	s.UptimeMs, o.UptimeMs = 0, 0
+	return s == o
+}
+
+// rateWindow é uma janela deslizante de 1s usada para limitar a taxa de
+// mensagens por sessão (R2).
+type rateWindow struct {
+	mu    sync.Mutex
+	start time.Time
+	count int
+}
+
+func (w *rateWindow) allow(max int) bool {
+	now := time.Now()
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.start.IsZero() || now.Sub(w.start) >= time.Second {
+		w.start = now
+		w.count = 0
+	}
+	if w.count >= max {
+		return false
+	}
+	w.count++
+	return true
+}
+
 // ── TerminalSession ──
 
 // TerminalSession representa o console remoto unico de uma sessao.
@@ -161,6 +315,9 @@ type outputCoalescer struct {
 	// ANSI incompleta. Limita a retenção do buffer a poucos intervalos.
 	deferCount   int
 	maxAnsiDefer int
+
+	// stats acumula a telemetria da sessão (opcional; nil no uso isolado).
+	stats *termStats
 }
 
 func newOutputCoalescer(onFlush func(string), interval time.Duration) *outputCoalescer {
@@ -239,6 +396,9 @@ func (oc *outputCoalescer) mustDispatchLocked() {
 func (oc *outputCoalescer) dispatchPrefixLocked(n int) {
 	oc.deferCount = 0
 	if n <= 0 || !oc.allowMessage() {
+		if n > 0 && oc.stats != nil {
+			oc.stats.flushHolds.Add(1)
+		}
 		oc.timer = nil
 		oc.timer = time.AfterFunc(oc.interval, oc.flush)
 		return
@@ -246,7 +406,7 @@ func (oc *outputCoalescer) dispatchPrefixLocked(n int) {
 	prefix := string(oc.buf[:n])
 	rest := append([]byte(nil), oc.buf[n:]...)
 	oc.buf = rest
-	oc.onFlush(prefix)
+	oc.emitLocked(prefix)
 	oc.timer = nil
 	if len(oc.buf) > 0 {
 		oc.timer = time.AfterFunc(oc.interval, oc.flush)
@@ -263,12 +423,15 @@ func (oc *outputCoalescer) forceDispatchLocked() {
 		oc.timer = nil
 		return
 	}
+	if oc.stats != nil {
+		oc.stats.flushForcedAtCap.Add(1)
+	}
 	if t := terminal.Utf8IncompleteTail(oc.buf); t > 0 && t < len(oc.buf) {
 		prefix := string(oc.buf[:len(oc.buf)-t])
 		oc.buf = append([]byte(nil), oc.buf[len(oc.buf)-t:]...)
-		oc.onFlush(prefix)
+		oc.emitLocked(prefix)
 	} else {
-		oc.onFlush(string(oc.buf))
+		oc.emitLocked(string(oc.buf))
 		oc.buf = nil
 	}
 	oc.timer = nil
@@ -281,8 +444,10 @@ func (oc *outputCoalescer) dispatchLocked() {
 	oc.deferCount = 0 // reset ao despachar
 	if len(oc.buf) > 0 {
 		if oc.allowMessage() {
-			oc.onFlush(string(oc.buf))
+			oc.emitLocked(string(oc.buf))
 			oc.buf = nil
+		} else if oc.stats != nil {
+			oc.stats.flushHolds.Add(1)
 		}
 	}
 	oc.timer = nil
@@ -381,43 +546,87 @@ func (oc *outputCoalescer) ForceFlush() {
 		oc.timer = nil
 	}
 	if len(oc.buf) > 0 {
-		oc.onFlush(string(oc.buf))
+		oc.emitLocked(string(oc.buf))
 		oc.buf = nil
 	}
 }
 
+// emitLocked entrega o payload ao callback e atualiza os contadores de flush
+// (framesOut/bytesOut/lastFlushBytes). O chamador segura oc.mu.
+func (oc *outputCoalescer) emitLocked(payload string) {
+	if oc.stats != nil {
+		oc.stats.framesOut.Add(1)
+		oc.stats.bytesOut.Add(int64(len(payload)))
+		oc.stats.lastFlushBytes.Store(int64(len(payload)))
+	}
+	oc.onFlush(payload)
+}
+
 // ── RecordingTap ──
+
+// recordingPublisher é o mínimo necessário para gravar frames (permite teste
+// com um publisher falso, sem NATS).
+type recordingPublisher interface {
+	PublishRecordingTerm(sessionID string, data []byte) error
+}
 
 // RecordingTap captura output do terminal para gravacao.
 type RecordingTap struct {
 	sessionID  string
-	natsStream *NatsStreamHandler
+	natsStream recordingPublisher
 	enabled    bool
 	mu         sync.Mutex
 }
 
 // TermRecordingFrame representa um frame de terminal para gravacao.
+// ADITIVO e retrocompatível: um frame sem "kind" é tratado como output pelos
+// consumidores existentes.
 type TermRecordingFrame struct {
 	Data        string `json:"data"`
 	Seq         int64  `json:"seq"`
 	TimestampMs int64  `json:"timestampMs"`
+	Kind        string `json:"kind,omitempty"`
+	ExitCode    *int   `json:"exitCode,omitempty"`
+	Cols        *int   `json:"cols,omitempty"`
+	Rows        *int   `json:"rows,omitempty"`
+	Backend     string `json:"backend,omitempty"`
+	ShellKind   string `json:"shellKind,omitempty"`
 }
 
-// Write grava um frame de terminal, thread-safe.
-func (rt *RecordingTap) Write(data string, seq int64) {
-	rt.mu.Lock()
-	if !rt.enabled {
-		rt.mu.Unlock()
-		return
-	}
-	rt.mu.Unlock()
-
-	frame := TermRecordingFrame{
+// buildTermRecordingFrame monta o frame de gravacao (puro, testável).
+func buildTermRecordingFrame(kind, data string, seq int64, exitCode *int, cols, rows *int, backend, shellKind string) TermRecordingFrame {
+	return TermRecordingFrame{
 		Data:        data,
 		Seq:         seq,
 		TimestampMs: time.Now().UnixMilli(),
+		Kind:        kind,
+		ExitCode:    exitCode,
+		Cols:        cols,
+		Rows:        rows,
+		Backend:     backend,
+		ShellKind:   shellKind,
 	}
-	payload, _ := json.Marshal(frame)
+}
+
+// Write grava um frame de output, thread-safe.
+func (rt *RecordingTap) Write(data string, seq int64) {
+	rt.WriteFrame("output", data, seq, nil, nil, nil, "", "")
+}
+
+// WriteFrame grava um frame tipado (kind=output|ready|resize|exit|error),
+// thread-safe. Metadados nulos sao omitidos no JSON.
+func (rt *RecordingTap) WriteFrame(kind, data string, seq int64, exitCode *int, cols, rows *int, backend, shellKind string) {
+	rt.mu.Lock()
+	enabled := rt.enabled
+	rt.mu.Unlock()
+	if !enabled || rt.natsStream == nil {
+		return
+	}
+	frame := buildTermRecordingFrame(kind, data, seq, exitCode, cols, rows, backend, shellKind)
+	payload, err := json.Marshal(frame)
+	if err != nil {
+		return
+	}
 	_ = rt.natsStream.PublishRecordingTerm(rt.sessionID, payload)
 }
 
@@ -426,6 +635,182 @@ func (rt *RecordingTap) SetEnabled(v bool) {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
 	rt.enabled = v
+}
+
+// ── Completacao (TAB) ──
+//
+// A consulta roda num PROCESSO AUXILIAR (pwsh/powershell -NoProfile
+// -NonInteractive), NUNCA no runspace da sessao do usuario. O input chega por
+// variavel de ambiente (base64) para nao haver injecao na command line. O
+// resultado e cacheado por (input,cursor) para o ciclo Tab/Shift+Tab.
+
+type completionReq struct {
+	ReqID    string `json:"reqId"`
+	Input    string `json:"input"`
+	Cursor   int    `json:"cursor"`
+	Forward  *bool  `json:"forward"`
+	Page     int    `json:"page"`
+	PageSize int    `json:"pageSize"`
+}
+
+// completionMatch é um item do contrato D.
+type completionMatch struct {
+	Text     string `json:"text"`
+	ListItem string `json:"listItem"`
+	Type     string `json:"type"`
+	Tooltip  string `json:"tooltip"`
+}
+
+// completionRes é a resposta do contrato D.
+type completionRes struct {
+	ReqID             string            `json:"reqId"`
+	Ok                bool              `json:"ok"`
+	Error             string            `json:"error"`
+	ReplacementIndex  int               `json:"replacementIndex"`
+	ReplacementLength int               `json:"replacementLength"`
+	Matches           []completionMatch `json:"matches"`
+	TotalCount        int               `json:"totalCount"`
+	Page              int               `json:"page"`
+	PageSize          int               `json:"pageSize"`
+	HasMore           bool              `json:"hasMore"`
+}
+
+type tabExpansionResult struct {
+	ReplacementIndex  int
+	ReplacementLength int
+	Matches           []completionMatch
+}
+
+type completionCacheEntry struct {
+	result tabExpansionResult
+	index  int
+}
+
+// completionSupported decide se o backend/shell suportam a consulta.
+func completionSupported(shellKind terminal.ShellKind, backend string) bool {
+	return isPowerShellShellKind(string(shellKind)) && backend == "conpty"
+}
+
+// isPowerShellShellKind reconhece powershell/pwsh (Windows PowerShell 5.1 e
+// PowerShell 7+); WSL/bash/cmd nao suportam TabExpansion2.
+func isPowerShellShellKind(kind string) bool {
+	k := strings.ToLower(strings.TrimSpace(kind))
+	return k == "powershell" || k == "pwsh"
+}
+
+// tabExpansionScript consulta TabExpansion2 no processo auxiliar e devolve
+// JSON. O input vem por env (base64) — sem concatenacao em command line.
+const tabExpansionScript = `
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+try {
+  $in = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:DSH_COMPLETION_INPUT))
+  $cursor = [int]$env:DSH_COMPLETION_CURSOR
+  $r = TabExpansion2 $in $cursor
+  $ms = @()
+  foreach ($m in $r.CompletionMatches) {
+    $ms += [pscustomobject]@{
+      text = [string]$m.CompletionText
+      listItem = [string]$m.ListItemText
+      type = [string]$m.ResultType
+      tooltip = [string]$m.ToolTip
+    }
+  }
+  [pscustomobject]@{
+    ok = $true
+    error = ''
+    replacementIndex = [int]$r.ReplacementIndex
+    replacementLength = [int]$r.ReplacementLength
+    matches = @($ms)
+  } | ConvertTo-Json -Compress -Depth 5
+} catch {
+  [pscustomobject]@{
+    ok = $false
+    error = [string]$_.Exception.Message
+    replacementIndex = 0
+    replacementLength = 0
+    matches = @()
+  } | ConvertTo-Json -Compress -Depth 5
+}
+`
+
+// runTabExpansion executa a consulta num processo auxiliar. Nunca no runspace
+// do usuario; timeout curto e truncamento no limite de itens.
+func runTabExpansion(input string, cursor int) (tabExpansionResult, error) {
+	// O viewer (ConPTY) envia a linha do xterm INCLUINDO o prompt. Remove o
+	// prefixo antes de consultar o TabExpansion2 e devolve o ReplacementIndex
+	// na coordenada da linha ORIGINAL (o viewer aplica sobre ela).
+	queryInput, queryCursor, prefixRunes := sanitizeCompletionInput(input, cursor)
+	kind, exe := terminal.ResolveShell(terminal.ShellPowerShell)
+	if kind != terminal.ShellPowerShell || exe == "" {
+		return tabExpansionResult{}, fmt.Errorf("powershell/pwsh nao disponivel")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), completionProcessTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, exe, "-NoProfile", "-NonInteractive", "-Command", tabExpansionScript)
+	cmd.Env = append(os.Environ(),
+		"DSH_COMPLETION_INPUT="+base64.StdEncoding.EncodeToString([]byte(queryInput)),
+		"DSH_COMPLETION_CURSOR="+strconv.Itoa(queryCursor),
+	)
+	out, err := cmd.Output()
+	if ctx.Err() != nil {
+		return tabExpansionResult{}, fmt.Errorf("timeout na consulta de completion")
+	}
+	if err != nil {
+		return tabExpansionResult{}, fmt.Errorf("falha ao executar completion: %v", err)
+	}
+
+	var parsed struct {
+		Ok                bool            `json:"ok"`
+		Error             string          `json:"error"`
+		ReplacementIndex  int             `json:"replacementIndex"`
+		ReplacementLength int             `json:"replacementLength"`
+		Matches           json.RawMessage `json:"matches"`
+	}
+	// PowerShell 5.1 pode emitir BOM/espacos antes do JSON.
+	out = bytes.TrimSpace(bytes.TrimPrefix(out, []byte{0xEF, 0xBB, 0xBF}))
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		return tabExpansionResult{}, fmt.Errorf("resposta invalida da completion: %v", err)
+	}
+	if !parsed.Ok {
+		if parsed.Error == "" {
+			parsed.Error = "TabExpansion2 falhou"
+		}
+		return tabExpansionResult{}, fmt.Errorf("%s", parsed.Error)
+	}
+	matches := decodeCompletionMatches(parsed.Matches)
+	if len(matches) > completionMaxItems {
+		matches = matches[:completionMaxItems]
+	}
+	return tabExpansionResult{
+		// +prefixRunes: o viewer aplica replacementIndex sobre a linha original.
+		ReplacementIndex:  parsed.ReplacementIndex + prefixRunes,
+		ReplacementLength: parsed.ReplacementLength,
+		Matches:           matches,
+	}, nil
+}
+
+// decodeCompletionMatches aceita tanto um array JSON quanto um objeto unico
+// (PowerShell 5.1 pode desembrulhar arrays de 1 elemento no ConvertTo-Json).
+func decodeCompletionMatches(raw json.RawMessage) []completionMatch {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return []completionMatch{}
+	}
+	if strings.HasPrefix(trimmed, "[") {
+		var arr []completionMatch
+		if err := json.Unmarshal(raw, &arr); err == nil {
+			return arr
+		}
+		return []completionMatch{}
+	}
+	var one completionMatch
+	if err := json.Unmarshal(raw, &one); err == nil {
+		return []completionMatch{one}
+	}
+	return []completionMatch{}
 }
 
 // ── SessionTerminal ──
@@ -438,6 +823,24 @@ type SessionTerminal struct {
 
 	recordingEnabled bool
 	recordingTap     *RecordingTap
+
+	// termShellKind/termBackend descrevem o shell/backend EFETIVOS em uso
+	// (term.ready/gravacao e decisao de completacao).
+	termShellKind string
+	termBackend   string
+
+	// stats é a telemetria do console ativo (subject .stats).
+	stats *termStats
+
+	// seqAlloc aloca o próximo seq de term.out para os frames de gravação de
+	// ciclo de vida (ready/resize/exit/error) — mesma sequência do output,
+	// evitando seq=0 duplicado no arquivo de gravação (R4).
+	seqAlloc func() int64
+
+	// completionCache guarda o ultimo resultado de completacao por (input,
+	// cursor) para o ciclo Tab/Shift+Tab devolver 1 match por vez.
+	completionMu    sync.Mutex
+	completionCache map[string]*completionCacheEntry
 
 	// onExit é chamado quando o console/shell encerra (para o manager encerrar a sessão).
 	onExit func(reason string)
@@ -486,6 +889,283 @@ func (st *SessionTerminal) SetReadyPayload(payload []byte) {
 	}
 }
 
+// notePublishError contabiliza uma falha de publish no stats do console ativo.
+func (st *SessionTerminal) notePublishError() {
+	st.mu.RLock()
+	s := st.stats
+	st.mu.RUnlock()
+	if s != nil {
+		s.publishErrors.Add(1)
+	}
+}
+
+// recordFrame grava um frame tipado (kind) alocando o seq da sequência do
+// terminal quando disponível (R4).
+func (st *SessionTerminal) recordFrame(kind, data string, exitCode *int, cols, rows *int) {
+	st.recordFrameSeq(kind, data, 0, exitCode, cols, rows)
+}
+
+// recordFrameSeq grava um frame tipado com seq explícito (0 = aloca do
+// seqAlloc). Compartilhar a sequência do output evita seq=0 duplicado entre
+// frames de ciclo de vida no arquivo de gravação.
+func (st *SessionTerminal) recordFrameSeq(kind, data string, seq int64, exitCode *int, cols, rows *int) {
+	st.mu.RLock()
+	tap := st.recordingTap
+	backend := st.termBackend
+	shellKind := st.termShellKind
+	alloc := st.seqAlloc
+	st.mu.RUnlock()
+	if tap == nil {
+		return
+	}
+	if seq == 0 && alloc != nil {
+		seq = alloc()
+	}
+	tap.WriteFrame(kind, data, seq, exitCode, cols, rows, backend, shellKind)
+}
+
+// RecordReady grava um frame kind=ready apos o term.ready (chamado pelo manager
+// que publica o ready).
+func (st *SessionTerminal) RecordReady(backend, shellKind string, cols, rows int) {
+	c, r := cols, rows
+	st.mu.RLock()
+	tap := st.recordingTap
+	alloc := st.seqAlloc
+	st.mu.RUnlock()
+	if tap == nil {
+		return
+	}
+	var seq int64
+	if alloc != nil {
+		seq = alloc()
+	}
+	tap.WriteFrame("ready", "", seq, nil, &c, &r, backend, shellKind)
+}
+
+// statsLoop publica a telemetria .stats a cada termStatsIntervalMs enquanto o
+// terminal existir e um ultimo stats no encerramento (stopCh).
+func (st *SessionTerminal) statsLoop(term *TerminalSession, stats *termStats) {
+	ticker := time.NewTicker(termStatsIntervalMs * time.Millisecond)
+	defer ticker.Stop()
+	var prev termStatsPayload
+	idle := 0
+	first := true
+	for {
+		select {
+		case <-term.stopCh:
+			st.publishStats(stats)
+			return
+		case <-ticker.C:
+			// R9: publica quando algo mudou; sem mudança, só um heartbeat a
+			// cada termStatsIdleTicks para não gerar tráfego em ociosidade.
+			cur := stats.snapshot(st.sessionID)
+			if !first && prev.countersEqual(cur) {
+				idle++
+				if idle < termStatsIdleTicks {
+					continue
+				}
+			}
+			first = false
+			idle = 0
+			prev = cur
+			st.publishStats(stats)
+		}
+	}
+}
+
+// publishStats publica o snapshot atual e contabiliza falhas em publishErrors.
+func (st *SessionTerminal) publishStats(stats *termStats) {
+	if stats == nil {
+		return
+	}
+	payload := stats.snapshot(st.sessionID)
+	if err := st.natsStream.PublishTermStats(st.sessionID, payload); err != nil {
+		stats.publishErrors.Add(1)
+	}
+}
+
+// buildTermReadyPayload monta o term.ready com os campos de capacidade
+// (contrato A, aditivo). No legacy nao ha VT nem resize real.
+func buildTermReadyPayload(availableShells []string, consoleID string, cols, rows int, shellKind, shellPath, backend string) map[string]any {
+	supportsVt := backend == "conpty"
+	// O backend legacy redimensiona o console real (AttachConsole +
+	// SetConsoleScreenBufferSize), então também anuncia suporte a resize (R6).
+	supportsResize := backend == "conpty" || backend == "legacy"
+	return map[string]any{
+		"shells":                  availableShells,
+		"consoleId":               consoleID,
+		"termCols":                cols,
+		"termRows":                rows,
+		"backend":                 backend,
+		"capabilitiesVersion":     1,
+		"shellKind":               shellKind,
+		"shellPath":               shellPath,
+		"supportsVt":              supportsVt,
+		"supportsResize":          supportsResize,
+		"supportsCompletionQuery": completionSupported(terminal.ShellKind(shellKind), backend),
+		"encoding":                "utf-8",
+	}
+}
+
+// handleCompletionReq processa a requisicao e publica a resposta (.completion.res).
+func (st *SessionTerminal) handleCompletionReq(data []byte) {
+	res := st.buildCompletionResponse(data)
+	if err := st.natsStream.PublishCompletionRes(st.sessionID, json.RawMessage(res)); err != nil {
+		st.notePublishError()
+	}
+}
+
+// buildCompletionResponse monta a resposta (JSON) para uma requisicao crua.
+// Payload invalido ou shell/backend sem suporte retornam ok=false com erro
+// explicito.
+func (st *SessionTerminal) buildCompletionResponse(data []byte) []byte {
+	var req completionReq
+	if err := json.Unmarshal(data, &req); err != nil {
+		return completionJSON(completionRes{
+			ReqID: req.ReqID,
+			Ok:    false,
+			Error: "payload de completion invalido: " + err.Error(),
+		})
+	}
+
+	st.mu.RLock()
+	shellKind := st.termShellKind
+	backend := st.termBackend
+	st.mu.RUnlock()
+	if !completionSupported(terminal.ShellKind(shellKind), backend) {
+		return completionJSON(completionRes{
+			ReqID: req.ReqID,
+			Ok:    false,
+			Error: "completion nao suportado pelo shell/backend em uso",
+		})
+	}
+
+	if req.Forward != nil {
+		return st.buildCompletionCycle(req, *req.Forward)
+	}
+
+	entry, err := st.completionEntry(req.Input, req.Cursor)
+	if err != nil {
+		return completionJSON(completionRes{ReqID: req.ReqID, Ok: false, Error: err.Error()})
+	}
+	return completionJSON(paginateCompletion(req, entry.result))
+}
+
+// completionEntry devolve (criando se necessário) a entrada de cache de
+// TabExpansion2 para (input,cursor) — reaproveitada pela lista (Ctrl+Espaço) e
+// pelo ciclo (Tab/Shift+Tab), evitando spawnar o processo auxiliar de novo (R7).
+func (st *SessionTerminal) completionEntry(input string, cursor int) (*completionCacheEntry, error) {
+	key := completionCacheKey(input, cursor)
+
+	st.completionMu.Lock()
+	entry := st.completionCache[key]
+	st.completionMu.Unlock()
+	if entry != nil {
+		return entry, nil
+	}
+
+	result, err := runTabExpansion(input, cursor)
+	if err != nil {
+		return nil, err
+	}
+	entry = &completionCacheEntry{result: result, index: -1}
+	st.completionMu.Lock()
+	if st.completionCache == nil || len(st.completionCache) >= completionMaxCacheEntries {
+		st.completionCache = make(map[string]*completionCacheEntry)
+	}
+	st.completionCache[key] = entry
+	st.completionMu.Unlock()
+	return entry, nil
+}
+
+// buildCompletionCycle devolve 1 match por vez usando o cache (Tab avanca,
+// Shift+Tab retrocede); o ciclo reinicia quando (input,cursor) muda.
+func (st *SessionTerminal) buildCompletionCycle(req completionReq, forward bool) []byte {
+	entry, err := st.completionEntry(req.Input, req.Cursor)
+	if err != nil {
+		return completionJSON(completionRes{ReqID: req.ReqID, Ok: false, Error: err.Error()})
+	}
+
+	n := len(entry.result.Matches)
+	if n == 0 {
+		return completionJSON(completionRes{ReqID: req.ReqID, Ok: true, PageSize: 1})
+	}
+
+	st.completionMu.Lock()
+	if forward {
+		entry.index = (entry.index + 1) % n
+	} else if entry.index < 0 {
+		entry.index = n - 1
+	} else {
+		entry.index = (entry.index - 1 + n) % n
+	}
+	idx := entry.index
+	st.completionMu.Unlock()
+
+	return completionJSON(completionRes{
+		ReqID:             req.ReqID,
+		Ok:                true,
+		ReplacementIndex:  entry.result.ReplacementIndex,
+		ReplacementLength: entry.result.ReplacementLength,
+		Matches:           []completionMatch{entry.result.Matches[idx]},
+		TotalCount:        n,
+		Page:              idx,
+		PageSize:          1,
+		HasMore:           n > 1,
+	})
+}
+
+// paginateCompletion fatia o resultado pela page/pageSize do pedido.
+func paginateCompletion(req completionReq, result tabExpansionResult) completionRes {
+	pageSize := req.PageSize
+	if pageSize <= 0 {
+		pageSize = completionDefaultPageSize
+	}
+	if pageSize > completionMaxItems {
+		pageSize = completionMaxItems
+	}
+	page := req.Page
+	if page < 0 {
+		page = 0
+	}
+	total := len(result.Matches)
+	start := page * pageSize
+	if start > total {
+		start = total
+	}
+	end := start + pageSize
+	if end > total {
+		end = total
+	}
+	matches := result.Matches[start:end]
+	if matches == nil {
+		matches = []completionMatch{}
+	}
+	return completionRes{
+		ReqID:             req.ReqID,
+		Ok:                true,
+		ReplacementIndex:  result.ReplacementIndex,
+		ReplacementLength: result.ReplacementLength,
+		Matches:           matches,
+		TotalCount:        total,
+		Page:              page,
+		PageSize:          pageSize,
+		HasMore:           end < total,
+	}
+}
+
+func completionCacheKey(input string, cursor int) string {
+	return strconv.Itoa(cursor) + "\x00" + input
+}
+
+func completionJSON(v completionRes) []byte {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return []byte(`{"ok":false,"error":"marshal falhou"}`)
+	}
+	return b
+}
+
 // PublishError publica um frame de erro de terminal no term.out. Usado pelo
 // manager quando o console sequer chegou a iniciar: é a única forma de o
 // viewer saber POR QUE o terminal veio vazio. O `.event` (usado antes) tinha a
@@ -498,8 +1178,11 @@ func (st *SessionTerminal) PublishError(code, reason string) {
 		"seq":    int64(0),
 	})
 	if err := st.natsStream.PublishTermOut(st.sessionID, string(payload)); err != nil {
+		st.notePublishError()
 		log.Printf("[session-terminal] erro ao publicar frame de erro: %v", err)
 	}
+	// T3: erro de sessao tambem vai para a gravacao (kind=error).
+	st.recordFrame("error", reason, nil, nil, nil)
 }
 
 // NewSessionTerminal cria um novo gerenciador de sessao de terminal (console unico).
@@ -585,9 +1268,20 @@ func (st *SessionTerminal) Start(ctx context.Context, shellKind terminal.ShellKi
 		seqMu.Unlock()
 		return s
 	}
+	// R4: frames de gravação de ciclo de vida compartilham a sequência.
+	st.seqAlloc = nextSeq
 
 	// Anel de replay: alimentado por publishFrame, lido no handshake (hello).
 	replay := newTermReplayRing(termReplayMaxBytes)
+
+	// Telemetria da sessão (subject .stats, contrato B).
+	stats := &termStats{startedAt: time.Now()}
+
+	// Cache do ciclo de completion: zera a cada novo console — resultados de
+	// uma sessão anterior (mesmo input/cursor) não valem para a nova.
+	st.completionMu.Lock()
+	st.completionCache = nil
+	st.completionMu.Unlock()
 
 	// publishFrame publica um frame em term.out mantendo a ordem (outMu) e
 	// registrando-o no anel de replay. Falha de publish NÃO impede o registro:
@@ -598,6 +1292,7 @@ func (st *SessionTerminal) Start(ctx context.Context, shellKind terminal.ShellKi
 		err := st.natsStream.PublishTermOut(st.sessionID, payload)
 		st.outMu.Unlock()
 		if err != nil {
+			stats.publishErrors.Add(1)
 			log.Printf("[session-terminal] erro ao publicar term.out: %v", err)
 		}
 	}
@@ -615,9 +1310,14 @@ func (st *SessionTerminal) Start(ctx context.Context, shellKind terminal.ShellKi
 			"seq":    errSeq,
 		})
 		publishFrame(errSeq, string(payload))
+		st.recordFrameSeq("error", reason, errSeq, nil, nil, nil)
 	}
 
-	// Coalescer: junta chunks consecutivos em uma so mensagem
+	// Coalescer: junta chunks consecutivos em uma so mensagem.
+	// O tap é capturado UMA vez (o ponteiro é imutável após a construção): o
+	// flush pode rodar enquanto Start ainda segura st.mu, então o callback NÃO
+	// pode adquirir RLock aqui (RWMutex não é reentrante → deadlock).
+	recTap := st.recordingTap
 	coalescer := newOutputCoalescer(func(output string) {
 		currentSeq := nextSeq()
 
@@ -632,11 +1332,12 @@ func (st *SessionTerminal) Start(ctx context.Context, shellKind terminal.ShellKi
 		// (Log de sucesso por mensagem removido — dezenas de linhas/segundo em
 		// saída intensa; erro continua logado no publishFrame.)
 
-		// Gravação (thread-safe)
-		if st.recordingTap != nil {
-			st.recordingTap.Write(encoded, currentSeq)
+		// Gravação (thread-safe).
+		if recTap != nil {
+			recTap.Write(encoded, currentSeq)
 		}
 	}, termOutputCoalesceMs*time.Millisecond)
+	coalescer.stats = stats
 
 	shell, err := terminal.NewShellInteractive(shellKind, cols, rows, func(output string) {
 		coalescer.Write(output)
@@ -647,6 +1348,9 @@ func (st *SessionTerminal) Start(ctx context.Context, shellKind terminal.ShellKi
 
 	term.Shell = shell
 	st.terminal = term
+	st.termShellKind = string(shell.ShellKind())
+	st.termBackend = terminal.ShellBackendName(shell)
+	st.stats = stats
 
 	// Monitor de exit do shell — notifica viewer e encerra a sessão
 	go func() {
@@ -665,7 +1369,9 @@ func (st *SessionTerminal) Start(ctx context.Context, shellKind terminal.ShellKi
 
 		// P2: loga o exit code também em hexadecimal (0xC0000142 =
 		// STATUS_DLL_INIT_FAILED) para diagnóstico imediato.
+		var exitCodePtr *int
 		if exitCode, ok := terminal.ExitCodeOf(err); ok {
+			exitCodePtr = &exitCode
 			log.Printf("[session-terminal] shell saiu: shell=%s exitCode=0x%08X (%d) hasOutput=%v",
 				shellKind, uint32(exitCode), exitCode, hasOutput)
 		} else {
@@ -681,8 +1387,13 @@ func (st *SessionTerminal) Start(ctx context.Context, shellKind terminal.ShellKi
 		// Serializa com o coalescer/emitError para o exit ser o ÚLTIMO frame
 		// da sessão (o ForceFlush logo acima já esvaziou o buffer).
 		st.outMu.Lock()
-		_ = st.natsStream.PublishTermOut(st.sessionID, string(exitPayload))
+		if perr := st.natsStream.PublishTermOut(st.sessionID, string(exitPayload)); perr != nil {
+			stats.publishErrors.Add(1)
+		}
 		st.outMu.Unlock()
+
+		// Gravação do encerramento: kind=exit, com exitCode quando disponível.
+		st.recordFrameSeq("exit", exitMsg, exitSeq, exitCodePtr, nil, nil)
 
 		// Notifica o manager para encerrar a sessão (console morto)
 		st.mu.RLock()
@@ -692,6 +1403,10 @@ func (st *SessionTerminal) Start(ctx context.Context, shellKind terminal.ShellKi
 			cb(exitMsg)
 		}
 	}()
+
+	// R2: janelas de rate limit por sessão (input e resize).
+	inputRate := &rateWindow{}
+	resizeRate := &rateWindow{}
 
 	// Subscrever input do viewer no subject fixo term.in
 	sub, err := st.natsStream.SubscribeToTermIn(st.sessionID, func(data []byte) {
@@ -744,6 +1459,7 @@ func (st *SessionTerminal) Start(ctx context.Context, shellKind terminal.ShellKi
 			if ok {
 				for _, f := range frames {
 					if err := st.natsStream.PublishTermOut(st.sessionID, f.payload); err != nil {
+						stats.publishErrors.Add(1)
 						log.Printf("[session-terminal] erro ao reenviar term.out: %v", err)
 					}
 				}
@@ -754,11 +1470,15 @@ func (st *SessionTerminal) Start(ctx context.Context, shellKind terminal.ShellKi
 				// último seq que ELE recebeu. Adotar outro valor (em especial o
 				// seq corrente, ainda não publicado) faria o replay seguinte
 				// pular um frame nunca recebido — perda silenciosa de output.
+				stats.replayResets.Add(1)
+				stats.replayGapFrames.Add(replay.gapSize(*req.LastSeq))
 				reset, _ := json.Marshal(map[string]any{
 					"reset":         true,
 					"requestedFrom": *req.LastSeq,
 				})
-				_ = st.natsStream.PublishTermOut(st.sessionID, string(reset))
+				if rerr := st.natsStream.PublishTermOut(st.sessionID, string(reset)); rerr != nil {
+					stats.publishErrors.Add(1)
+				}
 				log.Printf("[session-terminal] replay indisponivel (lastSeq=%d): enviando reset", *req.LastSeq)
 			}
 			st.outMu.Unlock()
@@ -768,9 +1488,18 @@ func (st *SessionTerminal) Start(ctx context.Context, shellKind terminal.ShellKi
 		// adiante (o input vem em mensagem separada e é vazio); num resize
 		// puro encerramos aqui, como antes.
 		if isResize {
-			_ = shell.Resize(req.Cols, req.Rows)
-			term.Cols = req.Cols
-			term.Rows = req.Rows
+			if !resizeRate.allow(termMaxResizePerSec) {
+				// R2: limite por sessão.
+				stats.resizeRateLimited.Add(1)
+				log.Printf("[session-terminal] resize acima do limite (sessao %s)", st.sessionID)
+			} else if rerr := shell.Resize(req.Cols, req.Rows); rerr != nil {
+				log.Printf("[session-terminal] resize falhou: %v", rerr)
+			} else {
+				c, r := req.Cols, req.Rows
+				st.recordFrame("resize", "", nil, &c, &r)
+				term.Cols = req.Cols
+				term.Rows = req.Rows
+			}
 			if !isHello {
 				return
 			}
@@ -780,10 +1509,21 @@ func (st *SessionTerminal) Start(ctx context.Context, shellKind terminal.ShellKi
 			return
 		}
 
+		// Telemetria de input: conta cada frame de dados recebido do viewer.
+		stats.inputFrames.Add(1)
+
+		// R2: limite por sessão (o viewer legítimo fica muito abaixo de 100/s).
+		if !inputRate.allow(termMaxInputPerSec) {
+			stats.inputRateLimited.Add(1)
+			log.Printf("[session-terminal] input acima do limite (sessao %s)", st.sessionID)
+			return
+		}
+
 		// Um único PUB acima do teto é REJEITADO com aviso — antes era
 		// descartado em silêncio (parecia "o terminal engoliu o paste"). O
 		// front fatia pastes grandes em vários PUBs abaixo deste limite.
 		if len(req.Data) > termMaxInputSize {
+			stats.inputTooLarge.Add(1)
 			log.Printf("[session-terminal] term.in acima do limite: %d bytes base64 (max %d)",
 				len(req.Data), termMaxInputSize)
 			emitError("input_too_large",
@@ -796,8 +1536,10 @@ func (st *SessionTerminal) Start(ctx context.Context, shellKind terminal.ShellKi
 			log.Printf("[session-terminal] term.in base64 invalido: %v\n", err)
 			return
 		}
+		stats.inputBytes.Add(int64(len(decoded)))
 		if err := shell.WriteStdin(string(decoded)); err != nil {
 			// Fila de input cheia / shell fechado: nunca descartar em silêncio.
+			stats.inputRejected.Add(1)
 			log.Printf("[session-terminal] WriteStdin falhou: %v", err)
 			emitError("stdin_rejected", err.Error())
 		}
@@ -807,6 +1549,24 @@ func (st *SessionTerminal) Start(ctx context.Context, shellKind terminal.ShellKi
 		st.terminal = nil
 		return nil, fmt.Errorf("subscribe term.in: %w", err)
 	}
+
+	// Assina a completacao (TAB) quando o shell/backend suportam. A consulta
+	// roda num processo auxiliar (pwsh/powershell -NoProfile -NonInteractive),
+	// nunca no runspace da sessao do usuario. Assunto literal .completion.req.
+	if completionSupported(shell.ShellKind(), terminal.ShellBackendName(shell)) {
+		subC, cerr := st.natsStream.SubscribeToCompletionReq(st.sessionID, st.handleCompletionReq)
+		if cerr != nil {
+			log.Printf("[session-terminal] subscribe completion.req: %v", cerr)
+		} else {
+			go func() {
+				<-term.stopCh
+				_ = subC.Unsubscribe()
+			}()
+		}
+	}
+
+	// Telemetria .stats a cada 2s enquanto o terminal existir.
+	go st.statsLoop(term, stats)
 
 	// Cleanup da subscription quando o console for encerrado
 	go func() {
@@ -824,6 +1584,9 @@ func (st *SessionTerminal) Start(ctx context.Context, shellKind terminal.ShellKi
 func (st *SessionTerminal) closeTerminalLocked() {
 	term := st.terminal
 	st.terminal = nil
+	// O stats do console encerrado não deve mais contabilizar publicações.
+	st.stats = nil
+	st.seqAlloc = nil
 	if term == nil {
 		return
 	}

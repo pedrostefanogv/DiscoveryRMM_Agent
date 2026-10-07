@@ -47,6 +47,10 @@ type agentChatStreamEvent struct {
 	// servidor não os enviam e o valor zero é simplesmente ignorado.
 	LoopRound     int `json:"loopRound"`
 	LoopMaxRounds int `json:"loopMaxRounds"`
+	// ToolTimeouts mapeia nome da tool -> timeout em segundos, definido pela
+	// política de escopo do servidor e enviado no evento "round_end". O agente
+	// aplica esse timeout na execução local; ausente/vazio mantém o padrão.
+	ToolTimeouts map[string]int `json:"toolTimeouts,omitempty"`
 }
 
 // toolArgsString normaliza toolArguments (pode ser string JSON ou objeto JSON).
@@ -110,7 +114,7 @@ type agentStreamRequest struct {
 	// Model é opcional (pass-through, Fase 3): o servidor pode usar para
 	// rotear o provedor LLM (ex.: OpenRouter). Servidores antigos ignoram.
 	Model string `json:"model,omitempty"`
-	Mode string `json:"mode,omitempty"`
+	Mode  string `json:"mode,omitempty"`
 	// Images são data URLs (data:image/png;base64,...) anexadas pelo usuário a
 	// este turno (ex.: print de tela capturado pelo agente). O servidor as
 	// converte em conteúdo multimodal na mensagem do usuário. Servidores
@@ -123,6 +127,9 @@ type pendingToolCall struct {
 	CallID string
 	Name   string
 	Args   string
+	// TimeoutSeconds é o timeout por tool definido pela política de escopo do
+	// servidor (evento round_end). Zero = padrão do agente.
+	TimeoutSeconds int
 }
 
 // ─── Stream Call ───────────────────────────────────────────────────

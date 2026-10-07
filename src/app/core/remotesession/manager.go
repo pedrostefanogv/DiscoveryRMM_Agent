@@ -954,21 +954,24 @@ func (m *Manager) runTerminalSession(ctx context.Context, session *Session) {
 
 	// Dimensoes EFETIVAS do console: Start aplica clamp, entao o valor pedido
 	// pelo servidor pode nao ser o que o ConPTY/console recebeu.
-	ready := map[string]any{
-		"shells":    availableShells,
-		"consoleId": console.ID,
-		"termCols":  console.Cols,
-		"termRows":  console.Rows,
-		"backend":   terminal.ShellBackendName(console.Shell),
+	// T5: alem dos campos atuais, o ready carrega shellKind/shellPath reais e
+	// as capacidades (aditivas — consumidores antigos ignoram campos extras).
+	backend := "none"
+	shellKind := string(defaultShell)
+	if console.Shell != nil {
+		backend = terminal.ShellBackendName(console.Shell)
+		shellKind = string(console.Shell.ShellKind())
 	}
-	// Binario realmente resolvido (pwsh vs powershell.exe) — diagnostico.
-	if _, shellPath := terminal.ResolveShell(defaultShell); shellPath != "" {
-		ready["shellPath"] = shellPath
+	_, shellPath := terminal.ResolveShell(defaultShell)
+	ready := buildTermReadyPayload(availableShells, console.ID, console.Cols, console.Rows, shellKind, shellPath, backend)
+	if err := m.natsStream.PublishTermReady(session.ID, ready); err != nil {
+		sessTerm.notePublishError()
 	}
-	m.natsStream.PublishTermReady(session.ID, ready)
 	// Guarda o payload para republicar no handshake (hello) e em cada resize.
 	readyPayload, _ := json.Marshal(ready)
 	sessTerm.SetReadyPayload(readyPayload)
+	// T3: frame de gravacao kind=ready.
+	sessTerm.RecordReady(backend, shellKind, console.Cols, console.Rows)
 	log.Printf("[remote-session-term] console pronto para sessao %s (consoleId=%s, shells=%v)\n",
 		session.ID, console.ID, availableShells)
 

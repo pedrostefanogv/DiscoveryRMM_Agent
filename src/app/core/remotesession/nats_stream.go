@@ -163,10 +163,37 @@ func (h *NatsStreamHandler) PublishTermOut(sessionID string, data string) error 
 }
 
 // PublishTermReady notifica o viewer sobre shells disponiveis e console pronto.
+// Erros de marshal/publish sao logados e devolvidos: o SessionTerminal os
+// contabiliza em publishErrors (telemetria .stats).
 func (h *NatsStreamHandler) PublishTermReady(sessionID string, data any) error {
-	payload, _ := json.Marshal(data)
+	payload, err := json.Marshal(data)
+	if err != nil {
+		log.Printf("[remote-session-nats] PublishTermReady marshal erro: %v\n", err)
+		return err
+	}
 	subject := h.publishSubject(sessionID, "term.ready")
-	return h.nc.Publish(subject, payload)
+	if err := h.nc.Publish(subject, payload); err != nil {
+		log.Printf("[remote-session-nats] PublishTermReady erro: subject=%s err=%v\n", subject, err)
+		return err
+	}
+	return nil
+}
+
+// PublishTermStats publica a telemetria periodica da sessao de terminal
+// (subject .stats, agent->viewer — contrato realtime v3, aditivo). Erros sao
+// logados e devolvidos para o SessionTerminal contabilizar em publishErrors.
+func (h *NatsStreamHandler) PublishTermStats(sessionID string, data any) error {
+	payload, err := json.Marshal(data)
+	if err != nil {
+		log.Printf("[remote-session-nats] PublishTermStats marshal erro: %v\n", err)
+		return err
+	}
+	subject := h.publishSubject(sessionID, "stats")
+	if err := h.nc.Publish(subject, payload); err != nil {
+		log.Printf("[remote-session-nats] PublishTermStats erro: subject=%s err=%v\n", subject, err)
+		return err
+	}
+	return nil
 }
 
 // PublishRecordingTerm envia frames de terminal para gravacao.
@@ -275,6 +302,38 @@ func (h *NatsStreamHandler) SubscribeToTermIn(sessionID string, handler func(dat
 		log.Printf("[remote-session-nats] SubscribeToTermIn ok: pattern=%s\n", pattern)
 	}
 	return sub, err
+}
+
+// SubscribeToCompletionReq subscreve a requisicao de completacao (TAB) do
+// viewer (subject .completion.req, viewer->agent). Assunto LITERAL, como os
+// demais: nada de wildcards (ACL do backend + isolamento por sessao).
+func (h *NatsStreamHandler) SubscribeToCompletionReq(sessionID string, handler func(data []byte)) (*nats.Subscription, error) {
+	pattern := h.subscribePattern(sessionID, "completion.req")
+	sub, err := h.nc.Subscribe(pattern, func(msg *nats.Msg) {
+		handler(msg.Data)
+	})
+	if err != nil {
+		log.Printf("[remote-session-nats] SubscribeToCompletionReq erro: pattern=%s err=%v\n", pattern, err)
+	} else {
+		log.Printf("[remote-session-nats] SubscribeToCompletionReq ok: pattern=%s\n", pattern)
+	}
+	return sub, err
+}
+
+// PublishCompletionRes publica a resposta da completacao (subject
+// .completion.res, agent->viewer).
+func (h *NatsStreamHandler) PublishCompletionRes(sessionID string, data any) error {
+	payload, err := json.Marshal(data)
+	if err != nil {
+		log.Printf("[remote-session-nats] PublishCompletionRes marshal erro: %v\n", err)
+		return err
+	}
+	subject := h.publishSubject(sessionID, "completion.res")
+	if err := h.nc.Publish(subject, payload); err != nil {
+		log.Printf("[remote-session-nats] PublishCompletionRes erro: subject=%s err=%v\n", subject, err)
+		return err
+	}
+	return nil
 }
 
 // SubscribeToFilesReq subscreve a requisicoes de arquivos (list/get/put/delete).

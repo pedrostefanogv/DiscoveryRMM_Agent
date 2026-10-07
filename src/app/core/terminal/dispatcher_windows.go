@@ -6,9 +6,11 @@ import (
 	"encoding/base64"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -16,6 +18,196 @@ import (
 	"github.com/Microsoft/go-winio"
 	"golang.org/x/sys/windows"
 )
+
+// ── Fila de saída do dispatcher (backpressure T6) ──
+
+const (
+	// Limites da fila ConPTY → named pipe. Ao encher, os chunks são
+	// coalescidos; o descarte só acontece como último recurso.
+	pipeOutQueueItems = 256
+	pipeOutQueueBytes = 1 << 20 // 1MB
+	pipeWriteTimeout  = 2 * time.Second
+)
+
+// bufferedWriter desacopla o callback de output do ConPTY da escrita no named
+// pipe (que pode BLOQUEAR sem deadline e travar a sessão inteira). O callback
+// apenas enfileira/coalesce e sinaliza; a escrita real acontece numa goroutine
+// dedicada com deadline curto.
+type bufferedWriter struct {
+	conn         net.Conn
+	writeTimeout time.Duration
+
+	mu       sync.Mutex
+	chunks   [][]byte
+	bytes    int
+	maxItems int
+	maxBytes int
+	closed   bool
+	dropped  int64
+
+	notify  chan struct{}
+	done    chan struct{}
+	drainMu sync.Mutex
+}
+
+func newBufferedWriter(conn net.Conn, maxItems, maxBytes int) *bufferedWriter {
+	w := &bufferedWriter{
+		conn:         conn,
+		writeTimeout: pipeWriteTimeout,
+		maxItems:     maxItems,
+		maxBytes:     maxBytes,
+		notify:       make(chan struct{}, 1),
+		done:         make(chan struct{}),
+	}
+	go w.loop()
+	go w.metricsLoop()
+	return w
+}
+
+// metricsLoop publica periodicamente os bytes descartados para o agente (R8).
+func (w *bufferedWriter) metricsLoop() {
+	t := time.NewTicker(30 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-w.done:
+			return
+		case <-t.C:
+			w.logDroppedIfAny()
+		}
+	}
+}
+
+// logDroppedIfAny emite a métrica apenas quando houve descarte.
+func (w *bufferedWriter) logDroppedIfAny() {
+	w.mu.Lock()
+	d := w.dropped
+	w.mu.Unlock()
+	if d > 0 {
+		log.Printf("[dispatcher-metrics] dropped=%d", d)
+	}
+}
+
+// Write enfileira o chunk. NUNCA bloqueia: no máximo coalesce no último chunk
+// e, se o teto duro for excedido, descarta os chunks antigos (com contador).
+func (w *bufferedWriter) Write(p []byte) {
+	if len(p) == 0 {
+		return
+	}
+	w.mu.Lock()
+	if w.closed {
+		// Escrita apos o fechamento (callback tardio do ConPTY): contabiliza
+		// para a telemetria nao mentir sobre bytes perdidos.
+		w.dropped += int64(len(p))
+		w.mu.Unlock()
+		return
+	}
+	if len(w.chunks) >= w.maxItems || w.bytes+len(p) > w.maxBytes {
+		if n := len(w.chunks); n > 0 {
+			w.chunks[n-1] = append(w.chunks[n-1], p...)
+		} else {
+			w.chunks = append(w.chunks, append([]byte(nil), p...))
+		}
+		w.bytes += len(p)
+		w.trimLocked()
+	} else {
+		w.chunks = append(w.chunks, append([]byte(nil), p...))
+		w.bytes += len(p)
+	}
+	w.mu.Unlock()
+	w.signal()
+}
+
+// trimLocked descarta os bytes mais antigos enquanto exceder o teto. Primeiro
+// remove chunks inteiros; se restar UM chunk ainda acima do teto (caso em que
+// o coalesce acumulou tudo nele), descarta a parte mais antiga dele — sem isso
+// a fila "bounded" cresceria sem limite. Chamador segura w.mu.
+func (w *bufferedWriter) trimLocked() {
+	for len(w.chunks) > 1 && w.bytes > w.maxBytes {
+		w.bytes -= len(w.chunks[0])
+		w.dropped += int64(len(w.chunks[0]))
+		w.chunks = w.chunks[1:]
+	}
+	if len(w.chunks) == 1 && w.bytes > w.maxBytes {
+		excess := w.bytes - w.maxBytes
+		if excess > len(w.chunks[0]) {
+			excess = len(w.chunks[0])
+		}
+		w.chunks[0] = append([]byte(nil), w.chunks[0][excess:]...)
+		w.bytes -= excess
+		w.dropped += int64(excess)
+	}
+}
+
+func (w *bufferedWriter) signal() {
+	select {
+	case w.notify <- struct{}{}:
+	default:
+	}
+}
+
+func (w *bufferedWriter) loop() {
+	for {
+		select {
+		case <-w.done:
+			return
+		case <-w.notify:
+			w.drain()
+		}
+	}
+}
+
+// drain escreve os chunks pendentes com deadline curto. Serializado por
+// drainMu para o flush final (Close) não competir com o loop.
+func (w *bufferedWriter) drain() {
+	w.drainMu.Lock()
+	defer w.drainMu.Unlock()
+	for {
+		w.mu.Lock()
+		if len(w.chunks) == 0 {
+			w.mu.Unlock()
+			return
+		}
+		chunk := w.chunks[0]
+		w.chunks = w.chunks[1:]
+		w.bytes -= len(chunk)
+		w.mu.Unlock()
+
+		_ = w.conn.SetWriteDeadline(time.Now().Add(w.writeTimeout))
+		if _, err := w.conn.Write(chunk); err != nil {
+			// Telemetria: bytes que não chegaram ao pipe (sem retry — reenfileirar
+			// poderia inverter a ordem ou crescer sem limite).
+			w.mu.Lock()
+			w.dropped += int64(len(chunk))
+			w.mu.Unlock()
+			log.Printf("[dispatcher] pipe out write falhou (%d bytes perdidos): %v", len(chunk), err)
+			return
+		}
+	}
+}
+
+// Close interrompe o loop e esvazia o que restou (flush no encerramento do
+// shell, antes de fechar o pipe).
+func (w *bufferedWriter) Close() {
+	w.mu.Lock()
+	if w.closed {
+		w.mu.Unlock()
+		return
+	}
+	w.closed = true
+	w.mu.Unlock()
+	close(w.done)
+	w.drain()
+	// Métrica final (o agente a converte em .stats).
+	w.logDroppedIfAny()
+}
+
+// Dropped retorna os bytes descartados por overflow (telemetria).
+func (w *bufferedWriter) Dropped() int64 {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.dropped
+}
 
 // ── Dispatcher do terminal — executa o ConPTY num processo filho ──
 //
@@ -113,11 +305,16 @@ func RunDispatcher() {
 	// tinha fallback (terminal morto em silêncio). onOutput → pipe outConn.
 	// firstOutput sinaliza saída já produzida: a sonda de startup sai cedo
 	// (produzir output = ConPTY saudável), em vez de esperar o timeout inteiro.
+	// T6: o callback do ConPTY apenas enfileira (nunca bloqueia); a escrita no
+	// named pipe fica numa goroutine dedicada com deadline curto.
+	outWriter := newBufferedWriter(outConn, pipeOutQueueItems, pipeOutQueueBytes)
+	defer outWriter.Close()
+
 	var firstOutput atomic.Bool
 	newShell := func() (IShell, error) {
 		return NewConPTYShell(ShellKind(shellKind), cols, rows, func(output string) {
 			firstOutput.Store(true)
-			_, _ = outConn.Write([]byte(output))
+			outWriter.Write([]byte(output))
 		})
 	}
 	var ish IShell
@@ -167,7 +364,10 @@ func RunDispatcher() {
 	// desbloqueia com erro, o loop sai e o cliente recebe o EOF/Wait.
 	go func() {
 		<-done
-		log.Printf("[dispatcher] shell encerrado — fechando pipes (notifica cliente via EOF)")
+		// T6: drena a fila ANTES de fechar o pipe (o shell pode ter produzido
+		// output final que ainda não foi escrito).
+		outWriter.Close()
+		log.Printf("[dispatcher] shell encerrado — fila drenada e pipes fechados (notifica cliente via EOF)")
 		_ = outConn.Close()
 		_ = inConn.Close()
 	}()

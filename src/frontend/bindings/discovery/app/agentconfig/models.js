@@ -11,104 +11,6 @@ import { Create as $Create } from "/wails/runtime.js";
 import * as selfupdate$0 from "../core/selfupdate/models.js";
 
 /**
- * AgentAutoUpdateConfig represents the agent-side auto-update policy.
- */
-export class AgentAutoUpdateConfig {
-    /**
-     * Creates a new AgentAutoUpdateConfig instance.
-     * @param {Partial<AgentAutoUpdateConfig>} [$$source = {}] - The source object to create the AgentAutoUpdateConfig.
-     */
-    constructor($$source = {}) {
-        if (!("enabled" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["enabled"] = false;
-        }
-        if (!("checkEveryHours" in $$source)) {
-            /**
-             * @member
-             * @type {number}
-             */
-            this["checkEveryHours"] = 0;
-        }
-        if (!("allowUserDelay" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["allowUserDelay"] = false;
-        }
-        if (!("maxDelayHours" in $$source)) {
-            /**
-             * @member
-             * @type {number}
-             */
-            this["maxDelayHours"] = 0;
-        }
-        if (!("forceRestartDelay" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["forceRestartDelay"] = false;
-        }
-        if (!("restartDelayHours" in $$source)) {
-            /**
-             * @member
-             * @type {number}
-             */
-            this["restartDelayHours"] = 0;
-        }
-        if (!("updateOnLogon" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["updateOnLogon"] = false;
-        }
-        if (!("maintenanceWindows" in $$source)) {
-            /**
-             * @member
-             * @type {string[]}
-             */
-            this["maintenanceWindows"] = [];
-        }
-        if (!("silentInstall" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["silentInstall"] = false;
-        }
-        if (!("autoRollbackOnFailure" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["autoRollbackOnFailure"] = false;
-        }
-
-        Object.assign(this, $$source);
-    }
-
-    /**
-     * Creates a new AgentAutoUpdateConfig instance from a string or object.
-     * @param {any} [$$source = {}]
-     * @returns {AgentAutoUpdateConfig}
-     */
-    static createFrom($$source = {}) {
-        const $$createField7_0 = $$createType0;
-        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        if ("maintenanceWindows" in $$parsedSource) {
-            $$parsedSource["maintenanceWindows"] = $$createField7_0($$parsedSource["maintenanceWindows"]);
-        }
-        return new AgentAutoUpdateConfig(/** @type {Partial<AgentAutoUpdateConfig>} */($$parsedSource));
-    }
-}
-
-/**
  * AgentConfiguration defines the configuration schema returned by /api/v1/agent-auth/me/configuration.
  * It is used to control what features should be enabled on the agent.
  */
@@ -272,13 +174,6 @@ export class AgentConfiguration {
              */
             this["resolvedAt"] = "";
         }
-        if (!("autoUpdate" in $$source)) {
-            /**
-             * @member
-             * @type {AgentAutoUpdateConfig}
-             */
-            this["autoUpdate"] = (new AgentAutoUpdateConfig());
-        }
         if (!("agentUpdate" in $$source)) {
             /**
              * @member
@@ -350,34 +245,30 @@ export class AgentConfiguration {
      * @returns {AgentConfiguration}
      */
     static createFrom($$source = {}) {
-        const $$createField22_0 = $$createType1;
-        const $$createField23_0 = $$createType2;
-        const $$createField24_0 = $$createType3;
+        const $$createField22_0 = $$createType0;
+        const $$createField23_0 = $$createType1;
+        const $$createField24_0 = $$createType2;
         const $$createField25_0 = $$createType4;
-        const $$createField26_0 = $$createType6;
-        const $$createField27_0 = $$createType7;
-        const $$createField28_0 = $$createType8;
+        const $$createField26_0 = $$createType5;
+        const $$createField27_0 = $$createType6;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        if ("autoUpdate" in $$parsedSource) {
-            $$parsedSource["autoUpdate"] = $$createField22_0($$parsedSource["autoUpdate"]);
-        }
         if ("agentUpdate" in $$parsedSource) {
-            $$parsedSource["agentUpdate"] = $$createField23_0($$parsedSource["agentUpdate"]);
+            $$parsedSource["agentUpdate"] = $$createField22_0($$parsedSource["agentUpdate"]);
         }
         if ("psadt" in $$parsedSource) {
-            $$parsedSource["psadt"] = $$createField24_0($$parsedSource["psadt"]);
+            $$parsedSource["psadt"] = $$createField23_0($$parsedSource["psadt"]);
         }
         if ("notificationBranding" in $$parsedSource) {
-            $$parsedSource["notificationBranding"] = $$createField25_0($$parsedSource["notificationBranding"]);
+            $$parsedSource["notificationBranding"] = $$createField24_0($$parsedSource["notificationBranding"]);
         }
         if ("notificationPolicies" in $$parsedSource) {
-            $$parsedSource["notificationPolicies"] = $$createField26_0($$parsedSource["notificationPolicies"]);
+            $$parsedSource["notificationPolicies"] = $$createField25_0($$parsedSource["notificationPolicies"]);
         }
         if ("consolidation" in $$parsedSource) {
-            $$parsedSource["consolidation"] = $$createField27_0($$parsedSource["consolidation"]);
+            $$parsedSource["consolidation"] = $$createField26_0($$parsedSource["consolidation"]);
         }
         if ("rollout" in $$parsedSource) {
-            $$parsedSource["rollout"] = $$createField28_0($$parsedSource["rollout"]);
+            $$parsedSource["rollout"] = $$createField27_0($$parsedSource["rollout"]);
         }
         return new AgentConfiguration(/** @type {Partial<AgentConfiguration>} */($$parsedSource));
     }
@@ -416,7 +307,7 @@ export class AgentConsolidationConfig {
      * @returns {AgentConsolidationConfig}
      */
     static createFrom($$source = {}) {
-        const $$createField1_0 = $$createType10;
+        const $$createField1_0 = $$createType8;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("policies" in $$parsedSource) {
             $$parsedSource["policies"] = $$createField1_0($$parsedSource["policies"]);
@@ -555,7 +446,7 @@ export class AgentNotificationBrandingConfig {
      * @returns {AgentNotificationBrandingConfig}
      */
     static createFrom($$source = {}) {
-        const $$createField3_0 = $$createType11;
+        const $$createField3_0 = $$createType9;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("theme" in $$parsedSource) {
             $$parsedSource["theme"] = $$createField3_0($$parsedSource["theme"]);
@@ -625,8 +516,8 @@ export class AgentNotificationPolicy {
      * @returns {AgentNotificationPolicy}
      */
     static createFrom($$source = {}) {
-        const $$createField4_0 = $$createType12;
-        const $$createField5_0 = $$createType14;
+        const $$createField4_0 = $$createType10;
+        const $$createField5_0 = $$createType12;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("styleOverride" in $$parsedSource) {
             $$parsedSource["styleOverride"] = $$createField4_0($$parsedSource["styleOverride"]);
@@ -793,9 +684,9 @@ export class AgentPSADTConfig {
      * @returns {AgentPSADTConfig}
      */
     static createFrom($$source = {}) {
-        const $$createField8_0 = $$createType15;
-        const $$createField9_0 = $$createType15;
-        const $$createField10_0 = $$createType15;
+        const $$createField8_0 = $$createType13;
+        const $$createField9_0 = $$createType13;
+        const $$createField10_0 = $$createType13;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("successExitCodes" in $$parsedSource) {
             $$parsedSource["successExitCodes"] = $$createField8_0($$parsedSource["successExitCodes"]);
@@ -885,8 +776,8 @@ export class AgentRolloutConfig {
      * @returns {AgentRolloutConfig}
      */
     static createFrom($$source = {}) {
-        const $$createField6_0 = $$createType0;
-        const $$createField7_0 = $$createType0;
+        const $$createField6_0 = $$createType14;
+        const $$createField7_0 = $$createType14;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("allowedNotificationEventTypes" in $$parsedSource) {
             $$parsedSource["allowedNotificationEventTypes"] = $$createField6_0($$parsedSource["allowedNotificationEventTypes"]);
@@ -965,19 +856,18 @@ export class NotificationThemeConfig {
 }
 
 // Private type creation functions
-const $$createType0 = $Create.Array($Create.Any);
-const $$createType1 = AgentAutoUpdateConfig.createFrom;
-const $$createType2 = selfupdate$0.Policy.createFrom;
-const $$createType3 = AgentPSADTConfig.createFrom;
-const $$createType4 = AgentNotificationBrandingConfig.createFrom;
-const $$createType5 = AgentNotificationPolicy.createFrom;
-const $$createType6 = $Create.Array($$createType5);
-const $$createType7 = AgentConsolidationConfig.createFrom;
-const $$createType8 = AgentRolloutConfig.createFrom;
-const $$createType9 = AgentConsolidationPolicy.createFrom;
-const $$createType10 = $Create.Array($$createType9);
-const $$createType11 = NotificationThemeConfig.createFrom;
-const $$createType12 = AgentNotificationStyleOverride.createFrom;
-const $$createType13 = AgentNotificationAction.createFrom;
-const $$createType14 = $Create.Array($$createType13);
-const $$createType15 = $Create.Array($Create.Any);
+const $$createType0 = selfupdate$0.Policy.createFrom;
+const $$createType1 = AgentPSADTConfig.createFrom;
+const $$createType2 = AgentNotificationBrandingConfig.createFrom;
+const $$createType3 = AgentNotificationPolicy.createFrom;
+const $$createType4 = $Create.Array($$createType3);
+const $$createType5 = AgentConsolidationConfig.createFrom;
+const $$createType6 = AgentRolloutConfig.createFrom;
+const $$createType7 = AgentConsolidationPolicy.createFrom;
+const $$createType8 = $Create.Array($$createType7);
+const $$createType9 = NotificationThemeConfig.createFrom;
+const $$createType10 = AgentNotificationStyleOverride.createFrom;
+const $$createType11 = AgentNotificationAction.createFrom;
+const $$createType12 = $Create.Array($$createType11);
+const $$createType13 = $Create.Array($Create.Any);
+const $$createType14 = $Create.Array($Create.Any);

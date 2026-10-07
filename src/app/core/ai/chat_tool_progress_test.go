@@ -47,11 +47,11 @@ func TestFormatToolProgressStatus(t *testing.T) {
 		},
 		{
 			name:  "args invalidos nao quebram o status",
-			tool:  "ping_host",
+			tool:  "network_diagnostics",
 			index: 1,
 			total: 2,
 			args:  `nao-e-json`,
-			want:  "Executando: ping_host (1/2)...",
+			want:  "Executando: network_diagnostics (1/2)...",
 		},
 		{
 			name:  "campo vazio cai para o proximo candidato",

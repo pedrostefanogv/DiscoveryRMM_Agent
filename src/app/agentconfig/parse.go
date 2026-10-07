@@ -109,31 +109,12 @@ func parseLegacyAgentConfiguration(data []byte) (AgentConfiguration, error) {
 		ResolvedAt:                        getString("resolvedAt"),
 		AgentUpdate:                       selfupdate.DefaultPolicy(),
 	}
-	// Parse nested autoUpdate object if present.
-	hasAutoUpdate := false
-	if auRaw, ok := raw["autoUpdate"]; ok {
-		if auMap, ok := auRaw.(map[string]any); ok {
-			hasAutoUpdate = true
-			cfg.AutoUpdate.Enabled = getBoolFromMap(auMap, "enabled", "isEnabled")
-			cfg.AutoUpdate.CheckEveryHours = getIntFromMap(auMap, "checkEveryHours", "checkEvery")
-			cfg.AutoUpdate.AllowUserDelay = getBoolFromMap(auMap, "allowUserDelay")
-			cfg.AutoUpdate.MaxDelayHours = getIntFromMap(auMap, "maxDelayHours")
-			cfg.AutoUpdate.ForceRestartDelay = getBoolFromMap(auMap, "forceRestartDelay")
-			cfg.AutoUpdate.RestartDelayHours = getIntFromMap(auMap, "restartDelayHours")
-			cfg.AutoUpdate.UpdateOnLogon = getBoolFromMap(auMap, "updateOnLogon")
-			cfg.AutoUpdate.MaintenanceWindows = getStringSliceFromMap(auMap, "maintenanceWindows")
-			cfg.AutoUpdate.SilentInstall = getBoolFromMap(auMap, "silentInstall")
-			cfg.AutoUpdate.AutoRollbackOnFailure = getBoolFromMap(auMap, "autoRollbackOnFailure")
-		}
-	}
 	if agentUpdateRaw, ok := raw["agentUpdate"]; ok {
 		if agentUpdateMap, ok := agentUpdateRaw.(map[string]any); ok {
 			cfg.AgentUpdate = parseAgentUpdatePolicy(agentUpdateMap)
 		} else {
 			cfg.AgentUpdate = selfupdate.NormalizePolicy(cfg.AgentUpdate)
 		}
-	} else if hasAutoUpdate {
-		cfg.AgentUpdate = deriveAgentUpdatePolicyFromLegacy(cfg.AutoUpdate)
 	}
 	// Parse nested psadt object if present.
 	if psadtRaw, ok := raw["psadt"]; ok {
@@ -378,22 +359,8 @@ func mergeAgentConfigResponse(resp *AgentConfigResponse) AgentConfiguration {
 	}
 	cfg.NatsUseWssExternal = boolPtr(srv.NatsUseWssExternal)
 
-	// Parse embedded JSON strings (autoUpdate, agentUpdate, branding, etc.)
+	// Parse embedded JSON strings (agentUpdate, branding, etc.)
 	// Server fornece os defaults; Client/Site podem sobrescrever
-	autoUpdateJSON := srv.AutoUpdateSettingsJSON
-	if cli != nil && cli.AutoUpdateSettingsJSON != nil && *cli.AutoUpdateSettingsJSON != "" {
-		autoUpdateJSON = *cli.AutoUpdateSettingsJSON
-	}
-	if site != nil && site.AutoUpdateSettingsJSON != nil && *site.AutoUpdateSettingsJSON != "" {
-		autoUpdateJSON = *site.AutoUpdateSettingsJSON
-	}
-	if autoUpdateJSON != "" {
-		var auCfg AgentAutoUpdateConfig
-		if err := json.Unmarshal([]byte(autoUpdateJSON), &auCfg); err == nil {
-			cfg.AutoUpdate = auCfg
-		}
-	}
-
 	agentUpdateJSON := srv.AgentUpdatePolicyJSON
 	if cli != nil && cli.AgentUpdatePolicyJSON != nil && *cli.AgentUpdatePolicyJSON != "" {
 		agentUpdateJSON = *cli.AgentUpdatePolicyJSON
@@ -510,15 +477,6 @@ func parseAgentUpdatePolicy(raw map[string]any) selfupdate.Policy {
 		CheckEveryHours:            getIntFromMap(raw, "checkEveryHours", "checkEvery"),
 		PreferredArtifactType:      getStringFromMap(raw, "preferredArtifactType", "artifactType"),
 		RequireSignatureValidation: getBoolFromMap(raw, "requireSignatureValidation"),
-	}
-	return selfupdate.NormalizePolicy(policy)
-}
-
-func deriveAgentUpdatePolicyFromLegacy(legacy AgentAutoUpdateConfig) selfupdate.Policy {
-	policy := selfupdate.DefaultPolicy()
-	policy.Enabled = legacy.Enabled
-	if legacy.CheckEveryHours > 0 {
-		policy.CheckEveryHours = legacy.CheckEveryHours
 	}
 	return selfupdate.NormalizePolicy(policy)
 }
