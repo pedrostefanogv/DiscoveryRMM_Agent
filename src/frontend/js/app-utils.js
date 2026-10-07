@@ -337,6 +337,8 @@ var APP_I18N_DICTIONARY = {
     "support.ticketCreateError": "Erro ao criar chamado: {error}",
     "support.ticketListLoadError": "Erro ao carregar chamados: {error}",
     "support.staleCache": "Sem conexão com o servidor — modo somente consulta. Exibindo chamados em cache, que podem estar desatualizados.",
+    "support.serverOffline": "Sem comunicação com o servidor — modo somente consulta. Abrir chamados e enviar comentários está indisponível.",
+    "support.commentOfflineHint": "Sem comunicação com o servidor — não é possível enviar comentários agora.",
     "cache.updatedAt": "Cache de {time}.",
  "support.ticketLoadError": "Erro ao abrir chamado: {error}",
     "support.enterComment": "Digite um comentario",
@@ -503,6 +505,9 @@ var APP_I18N_DICTIONARY = {
     "debug.networkToggleHint": "Permite que outras máquinas da rede acessem esta interface",
     "chat.subtitle":
       "Chat IA - converse com a IA para gerenciar seu computador",
+    "chat.offlineBanner":
+      "Sem comunicação com o servidor — o chat continua disponível, mas as respostas da IA podem falhar até a conexão voltar.",
+    "chat.sendOfflineHint": "Sem comunicação com o servidor — a mensagem pode não ser respondida.",
     "chat.memories": "Memórias",
     "chat.apiServerOptional": "Servidor API (opcional)",
     "chat.agentTokenOptional": "Token do Agente (opcional)",
@@ -1042,6 +1047,8 @@ var APP_I18N_DICTIONARY = {
     "support.ticketCreateError": "Failed to create ticket: {error}",
     "support.ticketListLoadError": "Failed to load tickets: {error}",
     "support.staleCache": "No connection to the server — read-only mode. Showing cached tickets, which may be outdated.",
+    "support.serverOffline": "No communication with the server — read-only mode. Creating tickets and posting comments is unavailable.",
+    "support.commentOfflineHint": "No communication with the server — comments cannot be sent right now.",
     "cache.updatedAt": "Cached {time}.",
     "support.ticketLoadError": "Failed to open ticket: {error}",
     "support.enterComment": "Enter a comment",
@@ -1205,6 +1212,9 @@ var APP_I18N_DICTIONARY = {
     "debug.networkToggle": "Available on network",
     "debug.networkToggleHint": "Allows other machines on the network to access this interface",
     "chat.subtitle": "AI Chat - talk to the AI to manage your computer",
+    "chat.offlineBanner":
+      "No communication with the server — the chat stays available, but AI replies may fail until the connection returns.",
+    "chat.sendOfflineHint": "No communication with the server — the message may not get a reply.",
     "chat.memories": "Memories",
     "chat.apiServerOptional": "API Server (optional)",
     "chat.agentTokenOptional": "Agent Token (optional)",

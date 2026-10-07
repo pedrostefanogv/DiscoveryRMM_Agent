@@ -49,7 +49,10 @@
     </div>
 
     <div id="supportListView" class="support-list-view">
-      <div id="supportStaleBanner" class="cache-stale-banner hidden" data-i18n="support.staleCache"></div>
+      <!-- Texto gerenciado por updateSupportOfflineBanner() (variante stale vs.
+         transporte offline + data do cache). Sem data-i18n: o applyTranslations
+         sobrescreveria o texto montado. -->
+    <div id="supportStaleBanner" class="cache-stale-banner hidden"></div>
       <div id="supportTicketsList" class="support-tickets-list">
         <div class="meta" data-i18n="support.noTickets">Nenhum chamado.</div>
       </div>
@@ -136,6 +139,7 @@
             <textarea id="commentInput" rows="3" placeholder="Escreva um comentario..."
               data-i18n-placeholder="support.writeCommentPlaceholder" data-app-lang="true"></textarea>
             <button id="submitCommentBtn" class="btn primary" data-i18n="action.sendComment">Enviar Comentario</button>
+            <div id="commentOfflineHint" class="meta hidden" data-i18n="support.commentOfflineHint"></div>
           </div>
         </div>
       </div>

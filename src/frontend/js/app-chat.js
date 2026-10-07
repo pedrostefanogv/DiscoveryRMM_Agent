@@ -2738,6 +2738,15 @@ async function sendChatMessage() {
   var text = chatInputEl.value.trim();
   if (!text) return;
 
+  // Envio manual já desconectado: mostra o aviso na hora (sem esperar a
+  // histerese) para o usuário entender por que a resposta pode falhar.
+  var lastConn = typeof window.__lastConnectivityState === "function"
+    ? window.__lastConnectivityState()
+    : null;
+  if (lastConn && lastConn.connected === false) {
+    showChatOfflineBannerNow();
+  }
+
   if (chatSending) {
     // Chat processando: enfileira e limpa o input. A mensagem entra no
     // contexto na primeira oportunidade (maybeFlushChatQueue) e leva junto os
@@ -2851,11 +2860,19 @@ function dispatchChatMessage(text, images) {
         if (imagesSent && typeof screenshotRestoreAttachments === "function" && !isChatBusyError(String(err))) {
           screenshotRestoreAttachments(attachedImages);
         }
+        // Falha de transporte/servidor no dispatch: reforça o aviso mesmo que
+        // o evento de conectividade não tenha chegado.
+        if (isLikelyOfflineChatError(String(err))) {
+          showChatOfflineBannerNow();
+        }
         onStreamError(String(err));
       });
   } catch (err) {
     if (attachedImages.length > 0 && typeof screenshotRestoreAttachments === "function") {
       screenshotRestoreAttachments(attachedImages);
+    }
+    if (isLikelyOfflineChatError(String(err))) {
+      showChatOfflineBannerNow();
     }
     onStreamError(String(err));
   }
@@ -3101,7 +3118,97 @@ function closeChatLogsModal() {
   chatLogsModal.setAttribute("aria-hidden", "true");
 }
 
+// ── Aviso de conectividade do chat ─────────────────────────────────────────
+// O chat permanece disponível offline (histórico/digitação), mas as respostas
+// da IA dependem do servidor. Sem aviso, a única pista era a bolha de erro
+// depois do envio.
+var chatOfflineBannerTimer = null;
+
+// offlineNow mostra o aviso na hora (sem a histerese de 15s do indicador) —
+// usado quando o próprio usuário tenta enviar já desconectado.
+function showChatOfflineBannerNow() {
+  var banner = document.getElementById("chatOfflineBanner");
+  if (banner) banner.classList.remove("hidden");
+  applyChatSendAffordance(true);
+}
+
+// applyChatSendAffordance deixa explícito no próprio botão de envio que o
+// servidor está inacessível (title/aria), além do banner.
+function applyChatSendAffordance(offline) {
+  if (!chatSendBtn) return;
+  var label = offline ? translate("chat.sendOfflineHint") : translate("action.send");
+  chatSendBtn.title = label;
+  chatSendBtn.setAttribute("aria-label", label);
+}
+
+// isLikelyOfflineChatError reconhece falha de transporte/servidor no dispatch
+// (mesmo que o evento de conectividade não tenha chegado).
+function isLikelyOfflineChatError(message) {
+  var m = String(message || "").toLowerCase();
+  if (!m) return false;
+  return (
+    m.indexOf("deadline exceeded") >= 0 ||
+    m.indexOf("timeout") >= 0 ||
+    m.indexOf("connection refused") >= 0 ||
+    m.indexOf("no such host") >= 0 ||
+    m.indexOf("unreachable") >= 0 ||
+    m.indexOf("network is") >= 0 ||
+    m.indexOf("eof") >= 0 ||
+    m.indexOf("http 502") >= 0 ||
+    m.indexOf("http 503") >= 0 ||
+    m.indexOf("http 504") >= 0
+  );
+}
+
+// applyChatOfflineBanner sincroniza o aviso. rawConnected ausente usa o último
+// estado conhecido. A histerese evita piscar em reconexões planejadas do core.
+function applyChatOfflineBanner(rawConnected) {
+  var banner = document.getElementById("chatOfflineBanner");
+  if (!banner) return;
+  var hysteresis = typeof window.__statusConnectedHysteresis === "function"
+    ? window.__statusConnectedHysteresis
+    : null;
+  var connected;
+  if (typeof rawConnected === "boolean") {
+    connected = hysteresis ? hysteresis(rawConnected) : rawConnected;
+  } else {
+    var last = typeof window.__lastConnectivityState === "function"
+      ? window.__lastConnectivityState()
+      : null;
+    if (!last) {
+      banner.classList.add("hidden");
+      applyChatSendAffordance(false);
+      return;
+    }
+    connected = hysteresis ? hysteresis(!!last.connected) : !!last.connected;
+  }
+  banner.classList.toggle("hidden", !!connected);
+  applyChatSendAffordance(!connected);
+}
+
+var chatConnectivityBound = false;
+
+function initChatConnectivityBanner() {
+  applyChatOfflineBanner();
+  // Idempotente: initChat pode ser reexecutado sem duplicar listeners.
+  if (chatConnectivityBound) return;
+  if (window.wails && typeof window.wails.on === "function") {
+    chatConnectivityBound = true;
+    var handler = function (data) {
+      applyChatOfflineBanner(!!(data && data.connected));
+    };
+    window.wails.on("agent:connectivity", handler);
+    window.wails.on("agent:status_snapshot", handler);
+  }
+  // Fallback: reavalia periodicamente (o poll de status também roda ~5s),
+  // mantendo o aviso em sincronia mesmo se um evento se perder.
+  if (!chatOfflineBannerTimer) {
+    chatOfflineBannerTimer = setInterval(applyChatOfflineBanner, 5000);
+  }
+}
+
 function initChat() {
+  initChatConnectivityBanner();
   if (chatSendBtn) {
     chatSendBtn.addEventListener("click", sendChatMessage);
   }

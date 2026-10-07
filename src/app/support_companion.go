@@ -14,8 +14,22 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
+	"sync"
 	"time"
 )
+
+// unknownSupportRPCLogged evita spam de log quando a UI nova conversa com um
+// serviço antigo (janela de update in-place).
+var unknownSupportRPCLogged sync.Once
+
+// isUnknownIPCMethod identifica o erro do serviço que não conhece o RPC —
+// nesse caso o bridge cai no caminho local (degradação graciosa durante a
+// atualização, em vez de quebrar o Suporte/Knowledge da UI).
+func isUnknownIPCMethod(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "método desconhecido")
+}
 
 const (
 	// supportRPCReadTimeout cobre o caminho offline do serviço (identidade
@@ -44,14 +58,36 @@ func (a *App) supportCompanionCall(method string, payload map[string]any, timeou
 
 	resp, err := a.ipcClient.Request(ctx, method, payload)
 	if err != nil {
+		// Serviço antigo (sem o RPC): usa o caminho local. Online ainda
+		// funciona via HTTP direto; evita quebrar na janela de update.
+		if isUnknownIPCMethod(err) {
+			unknownSupportRPCLogged.Do(func() {
+				a.Logs.Append("[ipc] serviço sem os RPCs de suporte/knowledge (protocolo antigo); usando caminho local")
+			})
+			return nil, nil, false
+		}
 		return nil, err, true
 	}
-	data, _ := resp["data"].(map[string]any)
-	raw, mErr := json.Marshal(data["result"])
-	if mErr != nil {
-		return nil, mErr, true
+	raw, dErr := decodeIPCSupportResult(method, resp)
+	if dErr != nil {
+		return nil, dErr, true
 	}
 	return raw, nil, true
+}
+
+// decodeIPCSupportResult extrai data.result do envelope de resposta RPC.
+// Envelope sem "data" é erro de protocolo: não pode virar o zero silencioso do
+// tipo no caller.
+func decodeIPCSupportResult(method string, resp map[string]any) (json.RawMessage, error) {
+	data, ok := resp["data"].(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("resposta IPC inválida em %s: campo data ausente", method)
+	}
+	raw, err := json.Marshal(data["result"])
+	if err != nil {
+		return nil, err
+	}
+	return raw, nil
 }
 
 // supportCompanionOrLocal tenta o serviço em modo companion e cai no caminho

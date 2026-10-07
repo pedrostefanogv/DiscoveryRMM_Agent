@@ -942,6 +942,26 @@
   filter: brightness(0.97);
 }
 
+/* Botões/textarea desabilitados (ex.: modo somente consulta offline no
+   Suporte) precisam ser visualmente distintos — sem isso o controle continua
+   "parecendo" clicável e dá a impressão de que a ação está disponível. */
+.btn:disabled,
+.btn[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+  filter: none;
+}
+
+.btn:disabled:hover,
+.btn[disabled]:hover {
+  filter: none;
+}
+
+.comment-compose textarea:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .btn.primary {
   background: var(--accent);
   color: var(--on-accent);

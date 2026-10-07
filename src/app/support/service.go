@@ -209,6 +209,25 @@ type Service struct {
 	lastKnowledgeRefresh time.Time
 	knowledgeRefreshing  bool
 
+	// prefetch da árvore de sub-páginas da base de conhecimento (best-effort).
+	pagesPrefetchMu  sync.Mutex
+	pagesPrefetching bool
+	pagesPrefetched  map[string]string
+	// pagesPrefetchFails conta falhas por artigo (fila justa) e
+	// pagesPrefetchHTTP é o client reusado pelo prefetch.
+	pagesPrefetchFails map[string]int
+	pagesPrefetchHTTP  *http.Client
+
+	// prefetch de detalhe/comentários (e campos/respostas) dos chamados para o
+	// snapshot offline — sem ele o histórico de comentários só existia no cache
+	// depois de o usuário abrir o chamado online.
+	ticketsPrefetchMu  sync.Mutex
+	ticketsPrefetching bool
+	ticketsPrefetched  map[string]string
+	// ticketsPrefetchFails conta falhas por chamado: itens que falharam vão
+	// para o fim da fila e não prendem o teto por passada.
+	ticketsPrefetchFails map[string]int
+
 	// offline é o último estado conhecido da conexão com o servidor. Offline o
 	// agente opera em modo somente consulta (sem abrir/editar chamados).
 	offlineMu sync.Mutex
@@ -548,6 +567,169 @@ func (s *Service) saveTicketListSnapshot(cacheKey string, tickets []APITicket) {
 
 func ticketSnapshotSavedAtKey(backupKey string) string { return backupKey + ":savedAt" }
 
+// ── Prefetch de detalhe/comentários dos chamados (cache offline) ──────────
+
+const (
+	// ticketPrefetchWorkers limita o paralelismo do prefetch.
+	ticketPrefetchWorkers = 4
+	// ticketPrefetchMaxPerPass limita quantos chamados são prefetchados por
+	// passada — evita rajada de N+1 em tenants com centenas de chamados.
+	ticketPrefetchMaxPerPass = 200
+	// ticketPrefetchBigBatch: acima deste nº de candidatos a passada começa
+	// com atraso para não competir com o startup/primeira carga da UI.
+	ticketPrefetchBigBatch = 20
+	// ticketPrefetchStartDelay é aplicado a lotes grandes.
+	ticketPrefetchStartDelay = 10 * time.Second
+)
+
+// selectTicketsForPrefetch devolve os chamados que ainda têm consulta/ação
+// útil offline: ignora os já avaliados (sem pendência).
+func selectTicketsForPrefetch(tickets []APITicket) []APITicket {
+	out := make([]APITicket, 0, len(tickets))
+	for _, t := range tickets {
+		if strings.TrimSpace(t.ID) == "" {
+			continue
+		}
+		if t.Rating != nil && *t.Rating > 0 {
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
+// scheduleTicketDetailPrefetch agenda (best-effort, em background) o cache do
+// detalhe + histórico de comentários + campos/respostas de cada chamado.
+// Deve ser chamado só no caminho de REDE da listagem (snapshot offline não
+// deve disparar refetch).
+func (s *Service) scheduleTicketDetailPrefetch(tickets []APITicket) {
+	if s.db == nil || len(tickets) == 0 {
+		return
+	}
+	candidates := selectTicketsForPrefetch(tickets)
+	if len(candidates) == 0 {
+		return
+	}
+	s.ticketsPrefetchMu.Lock()
+	if s.ticketsPrefetching {
+		s.ticketsPrefetchMu.Unlock()
+		return
+	}
+	s.ticketsPrefetching = true
+	if s.ticketsPrefetched == nil {
+		s.ticketsPrefetched = map[string]string{}
+	}
+	if s.ticketsPrefetchFails == nil {
+		s.ticketsPrefetchFails = map[string]int{}
+	}
+	s.ticketsPrefetchMu.Unlock()
+
+	go func() {
+		defer func() {
+			s.ticketsPrefetchMu.Lock()
+			s.ticketsPrefetching = false
+			s.ticketsPrefetchMu.Unlock()
+		}()
+		s.prefetchTicketDetails(candidates)
+	}()
+}
+
+func (s *Service) prefetchTicketDetails(tickets []APITicket) {
+	type job struct {
+		id        string
+		updatedAt string
+		fails     int
+	}
+	jobs := make([]job, 0, len(tickets))
+	for _, t := range tickets {
+		id := strings.TrimSpace(t.ID)
+		if id == "" {
+			continue
+		}
+		updatedAt := strings.TrimSpace(t.UpdatedAt)
+		s.ticketsPrefetchMu.Lock()
+		already := s.ticketsPrefetched[id] == updatedAt
+		fails := s.ticketsPrefetchFails[id]
+		s.ticketsPrefetchMu.Unlock()
+		if already {
+			continue
+		}
+		jobs = append(jobs, job{id: id, updatedAt: updatedAt, fails: fails})
+	}
+	if len(jobs) == 0 {
+		return
+	}
+	// Itens que já falharam vão para o fim da fila: o teto por passada nunca
+	// prende a fila em itens problemáticos e o progresso é garantido.
+	sort.SliceStable(jobs, func(i, j int) bool { return jobs[i].fails < jobs[j].fails })
+	if len(jobs) > ticketPrefetchMaxPerPass {
+		jobs = jobs[:ticketPrefetchMaxPerPass]
+	}
+	// Lote grande começa com atraso para não competir com o startup.
+	if len(jobs) > ticketPrefetchBigBatch {
+		time.Sleep(ticketPrefetchStartDelay)
+	}
+
+	sem := make(chan struct{}, ticketPrefetchWorkers)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	ok, failed := 0, 0
+	for _, j := range jobs {
+		if s.isOffline() {
+			break
+		}
+		wg.Add(1)
+		go func(j job) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			if s.isOffline() {
+				return
+			}
+			// markReach=false: o prefetch não altera online/offline.
+			// Detalhe E comentários precisam entrar no cache; campos e respostas
+			// são best-effort.
+			if _, err := s.getSupportTicketDetails(j.id, false); err != nil {
+				s.recordTicketPrefetchFailure(j.id)
+				mu.Lock()
+				failed++
+				mu.Unlock()
+				return
+			}
+			if _, err := s.getTicketComments(j.id, false); err != nil {
+				s.recordTicketPrefetchFailure(j.id)
+				mu.Lock()
+				failed++
+				mu.Unlock()
+				return
+			}
+			_, _ = s.getTicketFields(j.id, false)
+			_, _ = s.getTicketAnswers(j.id, false)
+
+			s.ticketsPrefetchMu.Lock()
+			s.ticketsPrefetched[j.id] = j.updatedAt
+			delete(s.ticketsPrefetchFails, j.id)
+			s.ticketsPrefetchMu.Unlock()
+			mu.Lock()
+			ok++
+			mu.Unlock()
+		}(j)
+	}
+	wg.Wait()
+	s.supportLogf("prefetch de chamados: %d ok, %d falha(s) de %d candidato(s)", ok, failed, len(jobs))
+}
+
+// recordTicketPrefetchFailure incrementa o contador de falhas do chamado — na
+// próxima passada ele vai para o fim da fila e não bloqueia os demais.
+func (s *Service) recordTicketPrefetchFailure(id string) {
+	s.ticketsPrefetchMu.Lock()
+	if s.ticketsPrefetchFails == nil {
+		s.ticketsPrefetchFails = map[string]int{}
+	}
+	s.ticketsPrefetchFails[id]++
+	s.ticketsPrefetchMu.Unlock()
+}
+
 func (s *Service) ticketSnapshotSavedAt(cacheKey string) string {
 	var savedAt string
 	if !s.readTicketBackup(ticketSnapshotSavedAtKey(ticketListBackupKey(cacheKey)), &savedAt) {
@@ -634,6 +816,9 @@ func (s *Service) cleanupOldTicketScope(scope string) {
 					log.Printf("[support] aviso: falha ao limpar cache %s<escopo>: %v", prefix, err)
 				}
 			}
+			// O escopo mudou: o bookkeeping em memória do prefetch também é do
+			// escopo antigo — sem isso o cache do novo escopo não seria criado.
+			s.resetTicketPrefetchState()
 			s.supportLogf("escopo local de chamados mudou; snapshots antigos removidos")
 		}
 	}
@@ -648,8 +833,11 @@ func (s *Service) InvalidateAgentContext() {
 	if s.agentInfo != nil {
 		s.agentInfo.Invalidate()
 	}
-	// Contexto novo (servidor/site) não deve herdar o estado offline anterior.
+	// Contexto novo (servidor/site) não deve herdar o estado offline anterior
+	// nem o bookkeeping do prefetch do escopo antigo.
 	s.markReachable()
+	s.resetTicketPrefetchState()
+	s.resetKnowledgePagesPrefetchState()
 	if s.db == nil {
 		return
 	}
@@ -658,6 +846,15 @@ func (s *Service) InvalidateAgentContext() {
 			log.Printf("[support] aviso: falha ao invalidar contexto do agente (%s): %v", key, err)
 		}
 	}
+}
+
+// resetTicketPrefetchState limpa o bookkeeping em memória do prefetch de
+// chamados (troca de escopo/reprovisionamento).
+func (s *Service) resetTicketPrefetchState() {
+	s.ticketsPrefetchMu.Lock()
+	s.ticketsPrefetched = nil
+	s.ticketsPrefetchFails = nil
+	s.ticketsPrefetchMu.Unlock()
 }
 
 // persistStaleAgentInfo grava uma cópia SEM expiração da identidade resolvida
@@ -714,6 +911,20 @@ func (s *Service) offlineAgentInfo(cause error) (AgentInfo, error) {
 // ErrOfflineReadOnly é devolvido quando o agente está offline e a operação
 // exigiria escrita no servidor. Offline o agente é somente consulta.
 var ErrOfflineReadOnly = errors.New("agente offline: modo somente consulta")
+
+// markReachability aplica o estado de conectividade apenas quando o chamador
+// participa dessa decisão. O prefetch usa markReach=false para não mascarar o
+// estado online/offline observado pelas operações do usuário.
+func (s *Service) markReachability(markReach, reachable bool) {
+	if !markReach {
+		return
+	}
+	if reachable {
+		s.markReachable()
+	} else {
+		s.markUnreachable()
+	}
+}
 
 func (s *Service) markReachable() {
 	s.offlineMu.Lock()
@@ -993,6 +1204,8 @@ func (s *Service) GetSupportTicketList() (SupportTicketList, error) {
 	// Snapshot offline sem expiração: consulta local quando /configuration ou
 	// /tickets estiverem inacessíveis.
 	s.saveTicketListSnapshot(cacheKey, tickets)
+	// Cacheia detalhe + comentários de cada chamado para consulta offline.
+	s.scheduleTicketDetailPrefetch(tickets)
 
 	s.supportLogf("listagem concluída: %d chamado(s) retornado(s)", len(tickets))
 	return SupportTicketList{Tickets: tickets}, nil
@@ -1090,6 +1303,12 @@ func (s *Service) GetTicketDepartmentFields(departmentID string) ([]TicketDepart
 // GetTicketFields retorna os campos personalizados do departamento do chamado
 // com os valores gravados (detalhe do agent, somente leitura).
 func (s *Service) GetTicketFields(ticketID string) ([]TicketFieldValue, error) {
+	return s.getTicketFields(ticketID, true)
+}
+
+// getTicketFields é a variante interna. markReach=false (prefetch) evita que
+// uma leitura de fundo altere o estado online/offline do serviço.
+func (s *Service) getTicketFields(ticketID string, markReach bool) ([]TicketFieldValue, error) {
 	ticketID = strings.TrimSpace(ticketID)
 	if !guidPattern.MatchString(ticketID) {
 		return nil, fmt.Errorf("ticketId inválido")
@@ -1116,7 +1335,7 @@ func (s *Service) GetTicketFields(ticketID string) ([]TicketFieldValue, error) {
 	if err != nil {
 		var cached []TicketFieldValue
 		if s.readTicketBackup(backupKey, &cached) {
-			s.markUnreachable()
+			s.markReachability(markReach, false)
 			s.supportLogf("servidor inacessivel (%v) — usando campos locais do chamado %s", err, ticketID)
 			return cached, nil
 		}
@@ -1129,7 +1348,7 @@ func (s *Service) GetTicketFields(ticketID string) ([]TicketFieldValue, error) {
 		if resp.StatusCode >= 500 {
 			var cached []TicketFieldValue
 			if s.readTicketBackup(backupKey, &cached) {
-				s.markUnreachable()
+				s.markReachability(markReach, false)
 				s.supportLogf("HTTP %s — usando campos locais do chamado %s", resp.Status, ticketID)
 				return cached, nil
 			}
@@ -1144,7 +1363,7 @@ func (s *Service) GetTicketFields(ticketID string) ([]TicketFieldValue, error) {
 	if fields == nil {
 		fields = []TicketFieldValue{}
 	}
-	s.markReachable()
+	s.markReachability(markReach, true)
 	s.saveTicketBackup(backupKey, fields)
 	return fields, nil
 }
@@ -1152,6 +1371,11 @@ func (s *Service) GetTicketFields(ticketID string) ([]TicketFieldValue, error) {
 // GetTicketAnswers retorna as respostas do mini questionário do template de um
 // chamado (detalhe do agent, somente leitura).
 func (s *Service) GetTicketAnswers(ticketID string) ([]TicketAnswer, error) {
+	return s.getTicketAnswers(ticketID, true)
+}
+
+// getTicketAnswers é a variante interna (markReach=false no prefetch).
+func (s *Service) getTicketAnswers(ticketID string, markReach bool) ([]TicketAnswer, error) {
 	ticketID = strings.TrimSpace(ticketID)
 	if !guidPattern.MatchString(ticketID) {
 		return nil, fmt.Errorf("ticketId inválido")
@@ -1178,7 +1402,7 @@ func (s *Service) GetTicketAnswers(ticketID string) ([]TicketAnswer, error) {
 	if err != nil {
 		var cached []TicketAnswer
 		if s.readTicketBackup(backupKey, &cached) {
-			s.markUnreachable()
+			s.markReachability(markReach, false)
 			s.supportLogf("servidor inacessivel (%v) — usando respostas locais do chamado %s", err, ticketID)
 			return cached, nil
 		}
@@ -1191,7 +1415,7 @@ func (s *Service) GetTicketAnswers(ticketID string) ([]TicketAnswer, error) {
 		if resp.StatusCode >= 500 {
 			var cached []TicketAnswer
 			if s.readTicketBackup(backupKey, &cached) {
-				s.markUnreachable()
+				s.markReachability(markReach, false)
 				s.supportLogf("HTTP %s — usando respostas locais do chamado %s", resp.Status, ticketID)
 				return cached, nil
 			}
@@ -1206,7 +1430,7 @@ func (s *Service) GetTicketAnswers(ticketID string) ([]TicketAnswer, error) {
 	if answers == nil {
 		answers = []TicketAnswer{}
 	}
-	s.markReachable()
+	s.markReachability(markReach, true)
 	s.saveTicketBackup(backupKey, answers)
 	return answers, nil
 }
@@ -1331,6 +1555,11 @@ func (s *Service) CreateSupportTicket(input CreateTicketInput) (APITicket, error
 
 // GetSupportTicketDetails returns a single ticket if it belongs to the authenticated agent.
 func (s *Service) GetSupportTicketDetails(ticketID string) (APITicket, error) {
+	return s.getSupportTicketDetails(ticketID, true)
+}
+
+// getSupportTicketDetails é a variante interna (markReach=false no prefetch).
+func (s *Service) getSupportTicketDetails(ticketID string, markReach bool) (APITicket, error) {
 	ticketID = strings.TrimSpace(ticketID)
 	if !guidPattern.MatchString(ticketID) {
 		return APITicket{}, fmt.Errorf("ticketId inválido")
@@ -1357,7 +1586,7 @@ func (s *Service) GetSupportTicketDetails(ticketID string) (APITicket, error) {
 	})
 	if err != nil {
 		if cached, ok := s.readCachedTicketDetail(backupKey); ok {
-			s.markUnreachable()
+			s.markReachability(markReach, false)
 			s.supportLogf("servidor inacessivel (%v) — usando detalhe local do chamado %s", err, ticketID)
 			return cached, nil
 		}
@@ -1369,7 +1598,7 @@ func (s *Service) GetSupportTicketDetails(ticketID string) (APITicket, error) {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		if resp.StatusCode >= 500 {
 			if cached, ok := s.readCachedTicketDetail(backupKey); ok {
-				s.markUnreachable()
+				s.markReachability(markReach, false)
 				s.supportLogf("HTTP %s — usando detalhe local do chamado %s", resp.Status, ticketID)
 				return cached, nil
 			}
@@ -1400,7 +1629,7 @@ func (s *Service) GetSupportTicketDetails(ticketID string) (APITicket, error) {
 		}
 	}
 
-	s.markReachable()
+	s.markReachability(markReach, true)
 	if strings.TrimSpace(ticket.ID) != "" {
 		s.saveTicketBackup(backupKey, ticket)
 	}
@@ -1484,6 +1713,11 @@ func (s *Service) GetTicketWorkflowStates() ([]APIWorkflowState, error) {
 
 // GetTicketComments returns comments for a given ticket.
 func (s *Service) GetTicketComments(ticketID string) ([]TicketComment, error) {
+	return s.getTicketComments(ticketID, true)
+}
+
+// getTicketComments é a variante interna (markReach=false no prefetch).
+func (s *Service) getTicketComments(ticketID string, markReach bool) ([]TicketComment, error) {
 	ticketID = strings.TrimSpace(ticketID)
 	if !guidPattern.MatchString(ticketID) {
 		return nil, fmt.Errorf("ticketId inválido")
@@ -1509,7 +1743,7 @@ func (s *Service) GetTicketComments(ticketID string) ([]TicketComment, error) {
 	})
 	if err != nil {
 		if cached, ok := s.readCachedTicketComments(backupKey); ok {
-			s.markUnreachable()
+			s.markReachability(markReach, false)
 			s.supportLogf("servidor inacessivel (%v) — usando comentários locais do chamado %s", err, ticketID)
 			return cached, nil
 		}
@@ -1521,7 +1755,7 @@ func (s *Service) GetTicketComments(ticketID string) ([]TicketComment, error) {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		if resp.StatusCode >= 500 {
 			if cached, ok := s.readCachedTicketComments(backupKey); ok {
-				s.markUnreachable()
+				s.markReachability(markReach, false)
 				s.supportLogf("HTTP %s — usando comentários locais do chamado %s", resp.Status, ticketID)
 				return cached, nil
 			}
@@ -1553,7 +1787,7 @@ func (s *Service) GetTicketComments(ticketID string) ([]TicketComment, error) {
 		}
 		visible = append(visible, c)
 	}
-	s.markReachable()
+	s.markReachability(markReach, true)
 	s.saveTicketBackup(backupKey, visible)
 	return visible, nil
 }

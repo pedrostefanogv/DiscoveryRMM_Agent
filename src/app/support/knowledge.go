@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -562,6 +563,9 @@ func (s *Service) fetchKnowledgeListWithCache(info AgentInfo, category string, u
 	}
 	s.saveKnowledgeBackup(cacheKey, articles)
 	s.saveKnowledgeListSavedAt(cacheKey)
+	// Cacheia a árvore de sub-páginas dos artigos (multipágina) para consulta
+	// offline. Só no caminho de rede — o fallback de backup não deve refetch.
+	s.scheduleKnowledgePagesPrefetch(info, articles)
 
 	return articles, false, nil
 }
@@ -710,6 +714,24 @@ func (s *Service) fetchKnowledgeDetail(info AgentInfo, articleID string) (Knowle
 }
 
 func (s *Service) fetchKnowledgePages(info AgentInfo, articleID string) ([]KnowledgePage, error) {
+	return s.fetchKnowledgePagesWithPolicy(info, articleID, 2, 0)
+}
+
+// fetchKnowledgePagesWithPolicy permite encurtar o timeout/retry quando o
+// chamador já tem fallback local (prefetch) — timeout=0 usa o client
+// compartilhado kbHTTP() (15s); attempts<1 vira 1.
+func (s *Service) fetchKnowledgePagesWithPolicy(info AgentInfo, articleID string, attempts int, timeout time.Duration) ([]KnowledgePage, error) {
+	client := kbHTTP()
+	if timeout > 0 {
+		client = tlsutil.NewHTTPClient(timeout)
+	}
+	return s.fetchKnowledgePagesWithClient(info, articleID, attempts, client)
+}
+
+// fetchKnowledgePagesWithClient é a variante que recebe o client HTTP — o
+// prefetch reusa um único client (uma conexão/TLS) em vez de criar um por
+// artigo.
+func (s *Service) fetchKnowledgePagesWithClient(info AgentInfo, articleID string, attempts int, client *http.Client) ([]KnowledgePage, error) {
 	articleID = strings.TrimSpace(articleID)
 	if articleID == "" {
 		return nil, fmt.Errorf("articleId inválido")
@@ -735,7 +757,7 @@ func (s *Service) fetchKnowledgePages(info AgentInfo, articleID string) ([]Knowl
 
 	ctx := s.ctxOrBackground()
 
-	resp, err := doGetWithRetry(ctx, kbHTTP(), func() (*http.Request, error) {
+	resp, err := doGetAttempts(ctx, client, attempts, func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 		if err != nil {
 			return nil, err
@@ -783,6 +805,160 @@ func (s *Service) fetchKnowledgePages(info AgentInfo, articleID string) ([]Knowl
 	s.saveKnowledgeBackup(cacheKey, pages)
 
 	return pages, nil
+}
+
+// ── Prefetch da árvore de sub-páginas (artigos multipágina) ────────────────
+// Sem isso a árvore de páginas só era cacheada depois de o usuário abrir o
+// artigo ONLINE; offline o detalhe vinha sem as páginas adicionais.
+
+const (
+	// knowledgePagesPrefetchWorkers limita o paralelismo (mesmo teto do
+	// enriquecimento de conteúdo).
+	knowledgePagesPrefetchWorkers = 4
+	// knowledgePagesPrefetchMaxPerPass limita quantos artigos são prefetchados
+	// por passada — evita rajada de N+1 em bases grandes. Artigos já
+	// prefetchados (mesmo updatedAt) são pulados nas passadas seguintes.
+	knowledgePagesPrefetchMaxPerPass = 300
+	// knowledgePagesPrefetchBigBatch: acima deste nº de candidatos a passada
+	// começa com atraso para não competir com o startup/primeira carga da UI.
+	knowledgePagesPrefetchBigBatch = 20
+	// knowledgePagesPrefetchStartDelay é aplicado a lotes grandes.
+	knowledgePagesPrefetchStartDelay = 10 * time.Second
+	// knowledgePagesPrefetchTimeout é o timeout do client reusado no prefetch.
+	knowledgePagesPrefetchTimeout = 8 * time.Second
+)
+
+// prefetchKnowledgeHTTP reusa um único client em todo o prefetch (M1): cria
+// um por artigo desperdiça handshake TLS/conexões ociosas.
+func (s *Service) prefetchKnowledgeHTTP() *http.Client {
+	s.pagesPrefetchMu.Lock()
+	defer s.pagesPrefetchMu.Unlock()
+	if s.pagesPrefetchHTTP == nil {
+		s.pagesPrefetchHTTP = tlsutil.NewHTTPClient(knowledgePagesPrefetchTimeout)
+	}
+	return s.pagesPrefetchHTTP
+}
+
+// resetKnowledgePagesPrefetchState limpa o bookkeeping em memória do prefetch
+// (troca de escopo/reprovisionamento).
+func (s *Service) resetKnowledgePagesPrefetchState() {
+	s.pagesPrefetchMu.Lock()
+	s.pagesPrefetched = nil
+	s.pagesPrefetchFails = nil
+	s.pagesPrefetchMu.Unlock()
+}
+
+// scheduleKnowledgePagesPrefetch agenda (best-effort, em background) o cache
+// das sub-páginas dos artigos. Deve ser chamado só no caminho de REDE da
+// listagem (backup offline não deve disparar refetch).
+func (s *Service) scheduleKnowledgePagesPrefetch(info AgentInfo, articles []KnowledgeArticle) {
+	if s.db == nil || len(articles) == 0 {
+		return
+	}
+	s.pagesPrefetchMu.Lock()
+	if s.pagesPrefetching {
+		s.pagesPrefetchMu.Unlock()
+		return
+	}
+	s.pagesPrefetching = true
+	if s.pagesPrefetched == nil {
+		s.pagesPrefetched = map[string]string{}
+	}
+	if s.pagesPrefetchFails == nil {
+		s.pagesPrefetchFails = map[string]int{}
+	}
+	s.pagesPrefetchMu.Unlock()
+
+	go func() {
+		defer func() {
+			s.pagesPrefetchMu.Lock()
+			s.pagesPrefetching = false
+			s.pagesPrefetchMu.Unlock()
+		}()
+		s.prefetchKnowledgePages(info, articles)
+	}()
+}
+
+func (s *Service) prefetchKnowledgePages(info AgentInfo, articles []KnowledgeArticle) {
+	type job struct {
+		id        string
+		updatedAt string
+		fails     int
+	}
+	jobs := make([]job, 0, len(articles))
+	for _, a := range articles {
+		id := strings.TrimSpace(a.ID)
+		if id == "" {
+			continue
+		}
+		updatedAt := strings.TrimSpace(a.UpdatedAt)
+		s.pagesPrefetchMu.Lock()
+		already := s.pagesPrefetched[id] == updatedAt
+		fails := s.pagesPrefetchFails[id]
+		s.pagesPrefetchMu.Unlock()
+		if already {
+			continue
+		}
+		jobs = append(jobs, job{id: id, updatedAt: updatedAt, fails: fails})
+	}
+	if len(jobs) == 0 {
+		return
+	}
+	// Itens que já falharam vão para o fim da fila (B1): o teto por passada
+	// nunca prende a fila em itens problemáticos.
+	sort.SliceStable(jobs, func(i, j int) bool { return jobs[i].fails < jobs[j].fails })
+	if len(jobs) > knowledgePagesPrefetchMaxPerPass {
+		jobs = jobs[:knowledgePagesPrefetchMaxPerPass]
+	}
+	if len(jobs) > knowledgePagesPrefetchBigBatch {
+		time.Sleep(knowledgePagesPrefetchStartDelay)
+	}
+
+	client := s.prefetchKnowledgeHTTP()
+	sem := make(chan struct{}, knowledgePagesPrefetchWorkers)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	ok, failed := 0, 0
+	for _, j := range jobs {
+		if s.isOffline() {
+			break
+		}
+		wg.Add(1)
+		go func(j job) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			if s.isOffline() {
+				return
+			}
+			if _, err := s.fetchKnowledgePagesWithClient(info, j.id, 1, client); err != nil {
+				s.recordKnowledgePagesPrefetchFailure(j.id)
+				mu.Lock()
+				failed++
+				mu.Unlock()
+				return
+			}
+			s.pagesPrefetchMu.Lock()
+			s.pagesPrefetched[j.id] = j.updatedAt
+			delete(s.pagesPrefetchFails, j.id)
+			s.pagesPrefetchMu.Unlock()
+			mu.Lock()
+			ok++
+			mu.Unlock()
+		}(j)
+	}
+	wg.Wait()
+	s.supportLogf("prefetch de páginas: %d ok, %d falha(s) de %d candidato(s)", ok, failed, len(jobs))
+}
+
+// recordKnowledgePagesPrefetchFailure incrementa o contador de falhas do artigo.
+func (s *Service) recordKnowledgePagesPrefetchFailure(id string) {
+	s.pagesPrefetchMu.Lock()
+	if s.pagesPrefetchFails == nil {
+		s.pagesPrefetchFails = map[string]int{}
+	}
+	s.pagesPrefetchFails[id]++
+	s.pagesPrefetchMu.Unlock()
 }
 
 // KnowledgeArticleList é o retorno da listagem para o binding da UI, com o flag

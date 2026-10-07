@@ -57,13 +57,11 @@ const (
 	IPCMsgResponse IPCMessageType = "response"
 )
 
-// IPCRequestTimeout é o teto de espera por resposta no cliente.
-// 30s cobre os RPCs de suporte/base de conhecimento quando o servidor está
-// offline: a resolução de identidade dura até ~4s e a leitura do snapshot até
-// ~8s (chamados) / ~6s (knowledge) — o teto antigo de 10s abortava a resposta
-// antes do cache offline aparecer. Chamadas que criam o próprio contexto
-// (ipcRequest, 10s) continuam efetivamente limitadas por ele, pois Request usa
-// o menor valor entre o deadline do ctx e este teto.
+// IPCRequestTimeout é o fallback de espera por resposta quando o contexto do
+// chamador NÃO tem deadline. Quem cria o contexto é dono do timeout: o
+// ipcRequest padrão usa 10s e os bridges lentos (loja/suporte) usam 30s. Antes
+// este valor era um teto global e cortava silenciosamente os timeouts maiores
+// (ex.: 30s da loja viravam 10s) — ver Request.
 const IPCRequestTimeout = 30 * time.Second
 
 // IPCProtocolVersion é a versão do contrato JSON-lines (handshake hello/
@@ -593,11 +591,11 @@ func (c *IPCClient) Request(ctx context.Context, method string, payload map[stri
 		return nil, err
 	}
 
+	// O deadline do ctx do chamador é a fonte de verdade; IPCRequestTimeout só
+	// vale quando não há deadline (contexto sem timeout).
 	timeout := IPCRequestTimeout
 	if deadline, ok := ctx.Deadline(); ok {
-		if d := time.Until(deadline); d < timeout {
-			timeout = d
-		}
+		timeout = time.Until(deadline)
 	}
 	select {
 	case resp := <-ch:

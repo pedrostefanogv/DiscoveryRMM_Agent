@@ -16,6 +16,12 @@ var supportTicketsAll = [];
 // Offline o agente opera em modo somente consulta: controles de escrita ficam
 // desabilitados enquanto a listagem vier do cache.
 var supportOfflineReadOnly = false;
+// Offline de TRANSPORTE (sem comunicação com o servidor), derivado dos eventos
+// de conectividade: bloqueia a escrita mesmo antes de a listagem voltar do
+// cache (ex.: conexão cai com a página já aberta).
+var supportServerDisconnected = false;
+// Data do snapshot exibida no aviso (preenchida quando a listagem veio do cache).
+var supportStaleCachedAt = '';
 var SUPPORT_WRITE_CONTROLS = [
   'newTicketBtn', 'submitTicketBtn', 'submitCommentBtn', 'commentInput',
   'openCloseTicketBtn', 'closeTicketBtn', 'reopenTicketBtn',
@@ -23,11 +29,15 @@ var SUPPORT_WRITE_CONTROLS = [
 ];
 
 function applySupportOfflineMode() {
-  var offline = !!supportOfflineReadOnly;
+  var offline = !!supportOfflineReadOnly || !!supportServerDisconnected;
   SUPPORT_WRITE_CONTROLS.forEach(function (id) {
     var el = document.getElementById(id);
     if (el) el.disabled = offline;
   });
+  // Aviso explícito no composer, além do botão desabilitado: deixa claro que
+  // não é possível enviar comentário enquanto não houver comunicação.
+  var hint = document.getElementById('commentOfflineHint');
+  if (hint) hint.classList.toggle('hidden', !offline);
 }
 
 function formatCacheAge(iso) {
@@ -44,20 +54,61 @@ function formatCacheAge(iso) {
 function renderSupportCacheState(result) {
   var stale = !!(result && result.stale);
   supportOfflineReadOnly = stale;
+  supportStaleCachedAt = stale ? (result && result.cachedAt) || '' : '';
   applySupportOfflineMode();
+  updateSupportOfflineBanner();
+}
 
+// updateSupportOfflineBanner centraliza o aviso: aparece quando a listagem veio
+// do cache OU quando não há comunicação com o servidor.
+function updateSupportOfflineBanner() {
   var banner = document.getElementById('supportStaleBanner');
   if (!banner) return;
-  if (!stale) {
+  var offline = !!supportOfflineReadOnly || !!supportServerDisconnected;
+  if (!offline) {
     banner.classList.add('hidden');
     banner.textContent = '';
     return;
   }
-  var msg = translate('support.staleCache');
-  var when = formatCacheAge(result && result.cachedAt);
-  if (when) msg += ' ' + translate('cache.updatedAt', { time: when });
+  var msg;
+  if (supportOfflineReadOnly) {
+    // Listagem veio do snapshot: informa também a data do cache.
+    msg = translate('support.staleCache');
+    var when = formatCacheAge(supportStaleCachedAt);
+    if (when) msg += ' ' + translate('cache.updatedAt', { time: when });
+  } else {
+    // Apenas transporte offline (lista ainda não recarregada do cache).
+    msg = translate('support.serverOffline');
+  }
   banner.textContent = msg;
   banner.classList.remove('hidden');
+}
+
+// initSupportConnectivity liga o bloqueio/aviso ao estado real de conexão
+// (evento do backend, com a mesma histerese anti-flicker do indicador).
+var supportConnectivityBound = false;
+
+function initSupportConnectivity() {
+  // Idempotente: initSupport pode ser reexecutado sem duplicar listeners.
+  if (supportConnectivityBound) return;
+  if (!(window.wails && typeof window.wails.on === 'function')) return;
+  supportConnectivityBound = true;
+  var handler = function (data) {
+    var connected = !!(data && data.connected);
+    var shown = typeof window.__statusConnectedHysteresis === 'function'
+      ? window.__statusConnectedHysteresis(connected)
+      : connected;
+    var wasDisconnected = supportServerDisconnected;
+    supportServerDisconnected = !shown;
+    applySupportOfflineMode();
+    updateSupportOfflineBanner();
+    // Reconectou: recarrega a lista para sair do modo somente consulta.
+    if (!supportServerDisconnected && wasDisconnected && supportOfflineReadOnly) {
+      loadSupportTickets({ keepView: true });
+    }
+  };
+  window.wails.on('agent:connectivity', handler);
+  window.wails.on('agent:status_snapshot', handler);
 }
 // Cache local id->chamado usado pelo clique no card. Chamados fechados E ja
 // avaliados nao entram aqui: nao ha mais acao pendente neles (requisito de
@@ -1377,6 +1428,9 @@ function initSupport() {
   // Bind independente do resto do init: se algo abaixo falhar, as listas
   // continuam repassando a roda para a pagina.
   bindSupportScrollChaining();
+  // Bloqueio/aviso dirigidos pelo estado real de conexão (mesmo quando a
+  // listagem ainda não foi recarregada).
+  initSupportConnectivity();
 
   closeTicketStarsWidget = attachStarsWidget(closeTicketStarsEl, clearRatingBtnEl);
   ratingStarsWidget = attachStarsWidget(ratingStarsEl, clearRatingPanelBtnEl);
