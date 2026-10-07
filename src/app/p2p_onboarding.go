@@ -58,12 +58,27 @@ func isAgentConfigured() bool {
 	return strings.TrimSpace(inst.AuthToken) != "" && strings.TrimSpace(inst.ApiServer) != ""
 }
 
-// zeroTouchConfigRegistrationAllowed respeita o kill-switch local em config.json.
+// zeroTouchConfigRegistrationAllowed respeita o kill-switch do servidor
+// (zeroTouchEnabled, herdável server → cliente → site), a dependência de
+// Descoberta de Rede e o kill-switch local em config.json.
 // Quando ausente, o comportamento padrao e permitir (true).
 func (a *App) zeroTouchConfigRegistrationAllowed() bool {
 	if a == nil {
 		return true
 	}
+
+	agentCfg := a.GetAgentConfiguration()
+	if agentCfg.ZeroTouchEnabled != nil && !*agentCfg.ZeroTouchEnabled {
+		a.Logs.Append("[zero-touch] zeroTouchEnabled=false na configuração efetiva: registro zero-touch desabilitado pelo servidor")
+		return false
+	}
+	// Zero-touch depende da Descoberta de Rede: sem ela os agents não se
+	// encontram para trocar a configuração.
+	if agentCfg.DiscoveryEnabled != nil && !*agentCfg.DiscoveryEnabled {
+		a.Logs.Append("[zero-touch] discoveryEnabled=false: registro zero-touch requer descoberta de rede ativa")
+		return false
+	}
+
 	cfg, _, err := loadInstallerConfig()
 	if err != nil {
 		return true

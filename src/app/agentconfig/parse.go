@@ -98,6 +98,8 @@ func parseLegacyAgentConfiguration(data []byte) (AgentConfiguration, error) {
 		NatsTlsCertHash:                   strings.ToUpper(getString("natsTlsCertHash")),
 		ChatAIEnabled:                     getBoolPtr("chatAIEnabled"),
 		KnowledgeBaseEnabled:              getBoolPtr("knowledgeBaseEnabled"),
+		ZeroTouchEnabled:                  getBoolPtr("zeroTouchEnabled"),
+		CloudBootstrapEnabled:             getBoolPtr("cloudBootstrapEnabled"),
 		AppStoreEnabled:                   getBoolPtr("appStoreEnabled"),
 		AutomationP2PWingetInstallEnabled: getBoolPtr("automationP2pWingetInstallEnabled"),
 		InventoryIntervalHours:            getIntPtr("inventoryIntervalHours"),
@@ -307,6 +309,17 @@ func mergeAgentConfigResponse(resp *AgentConfigResponse) AgentConfiguration {
 		boolFromPtr(site, func(s *SiteConfiguration) *bool { return s.KnowledgeBaseEnabled }),
 		boolFromPtr(cli, func(c *ClientConfiguration) *bool { return c.KnowledgeBaseEnabled }),
 		srv.KnowledgeBaseEnabled,
+	))
+	cfg.ZeroTouchEnabled = boolPtr(resolveBool(
+		boolFromPtr(site, func(s *SiteConfiguration) *bool { return s.ZeroTouchEnabled }),
+		boolFromPtr(cli, func(c *ClientConfiguration) *bool { return c.ZeroTouchEnabled }),
+		srv.ZeroTouchEnabled,
+	))
+	// Cloud bootstrap não tem override por site no backend (Server > Client).
+	cfg.CloudBootstrapEnabled = boolPtr(resolveBool(
+		nil,
+		boolFromPtr(cli, func(c *ClientConfiguration) *bool { return c.CloudBootstrapEnabled }),
+		srv.CloudBootstrapEnabled,
 	))
 	cfg.AppStoreEnabled = boolPtr(resolveBool(
 		boolFromPtr(site, func(s *SiteConfiguration) *bool {

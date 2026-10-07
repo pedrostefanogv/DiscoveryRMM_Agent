@@ -300,5 +300,67 @@ func TestParseAgentConfiguration_P2PWingetInstallServerOnly(t *testing.T) {
 	}
 }
 
+func TestParseAgentConfiguration_ZeroTouchHierarchy(t *testing.T) {
+	payload := []byte(`{
+		"server": {"zeroTouchEnabled": true},
+		"client": {"zeroTouchEnabled": false},
+		"site": {}
+	}`)
+	cfg, err := ParseAgentConfiguration(payload)
+	if err != nil {
+		t.Fatalf("expected hierarchical parse, got %v", err)
+	}
+	// Precedência: site > client > server → client=false vence.
+	if cfg.ZeroTouchEnabled == nil || *cfg.ZeroTouchEnabled {
+		t.Fatal("expected client override to disable (false) o zero-touch")
+	}
+}
+
+func TestParseAgentConfiguration_ZeroTouchServerOnly(t *testing.T) {
+	payload := []byte(`{
+		"server": {"zeroTouchEnabled": true},
+		"client": {},
+		"site": {}
+	}`)
+	cfg, err := ParseAgentConfiguration(payload)
+	if err != nil {
+		t.Fatalf("expected parse, got %v", err)
+	}
+	if cfg.ZeroTouchEnabled == nil || !*cfg.ZeroTouchEnabled {
+		t.Fatal("expected zero-touch habilitado herdando do servidor")
+	}
+}
+
+func TestParseAgentConfiguration_CloudBootstrapHierarchy(t *testing.T) {
+	payload := []byte(`{
+		"server": {"cloudBootstrapEnabled": true},
+		"client": {"cloudBootstrapEnabled": false},
+		"site": {"cloudBootstrapEnabled": true}
+	}`)
+	cfg, err := ParseAgentConfiguration(payload)
+	if err != nil {
+		t.Fatalf("expected parse, got %v", err)
+	}
+	// Cloud bootstrap não tem override por site: client=false vence sobre server.
+	if cfg.CloudBootstrapEnabled == nil || *cfg.CloudBootstrapEnabled {
+		t.Fatal("expected client override to disable (false) o cloud bootstrap")
+	}
+}
+
+func TestParseAgentConfiguration_CloudBootstrapServerOnly(t *testing.T) {
+	payload := []byte(`{
+		"server": {"cloudBootstrapEnabled": true},
+		"client": {},
+		"site": {}
+	}`)
+	cfg, err := ParseAgentConfiguration(payload)
+	if err != nil {
+		t.Fatalf("expected parse, got %v", err)
+	}
+	if cfg.CloudBootstrapEnabled == nil || !*cfg.CloudBootstrapEnabled {
+		t.Fatal("expected cloud bootstrap herdado do servidor")
+	}
+}
+
 func ptrBool(v bool) *bool { return &v }
 func ptrInt(v int) *int    { return &v }

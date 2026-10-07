@@ -387,6 +387,12 @@ function applyRuntimeTabVisibility() {
   if (!isRuntimeTabAllowed(activeTab)) {
     setActiveTab('store');
   }
+
+  // Reaplica o gate por feature flags do agent: setRuntimeFlags roda de novo
+  // quando as runtime flags mudam e reexibiria uma aba desabilitada no servidor.
+  if (typeof applyAgentFeatureVisibility === 'function') {
+    applyAgentFeatureVisibility();
+  }
 }
 
 function setRuntimeFlags(flags) {

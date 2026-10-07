@@ -117,6 +117,8 @@ type AgentConfiguration struct {
 	NatsTlsCertHash                   string                          `json:"natsTlsCertHash"`
 	ChatAIEnabled                     *bool                           `json:"chatAIEnabled"`
 	KnowledgeBaseEnabled              *bool                           `json:"knowledgeBaseEnabled"`
+	ZeroTouchEnabled                  *bool                           `json:"zeroTouchEnabled"`
+	CloudBootstrapEnabled             *bool                           `json:"cloudBootstrapEnabled"`
 	AppStoreEnabled                   *bool                           `json:"appStoreEnabled"`
 	AutomationP2PWingetInstallEnabled *bool                           `json:"automationP2pWingetInstallEnabled"`
 	InventoryIntervalHours            *int                            `json:"inventoryIntervalHours"`
@@ -150,6 +152,7 @@ type ServerConfiguration struct {
 	SupportEnabled                    bool   `json:"supportEnabled"`
 	ChatAIEnabled                     bool   `json:"chatAIEnabled"`
 	KnowledgeBaseEnabled              bool   `json:"knowledgeBaseEnabled"`
+	ZeroTouchEnabled                  bool   `json:"zeroTouchEnabled"`
 	AppStorePolicy                    string `json:"appStorePolicy"`
 	AutomationP2PWingetInstallEnabled *bool  `json:"automationP2pWingetInstallEnabled"`
 	InventoryIntervalHours            int    `json:"inventoryIntervalHours"`
@@ -188,6 +191,7 @@ type ClientConfiguration struct {
 	SupportEnabled                    *bool   `json:"supportEnabled"`
 	ChatAIEnabled                     *bool   `json:"chatAIEnabled"`
 	KnowledgeBaseEnabled              *bool   `json:"knowledgeBaseEnabled"`
+	ZeroTouchEnabled                  *bool   `json:"zeroTouchEnabled"`
 	AppStorePolicy                    *string `json:"appStorePolicy"`
 	AutomationP2PWingetInstallEnabled *bool   `json:"automationP2pWingetInstallEnabled"`
 	AIIntegrationSettingsJSON         *string `json:"aiIntegrationSettingsJson"`
@@ -217,6 +221,7 @@ type SiteConfiguration struct {
 	SupportEnabled                    *bool   `json:"supportEnabled"`
 	ChatAIEnabled                     *bool   `json:"chatAIEnabled"`
 	KnowledgeBaseEnabled              *bool   `json:"knowledgeBaseEnabled"`
+	ZeroTouchEnabled                  *bool   `json:"zeroTouchEnabled"`
 	AppStorePolicy                    *string `json:"appStorePolicy"`
 	AutomationP2PWingetInstallEnabled *bool   `json:"automationP2pWingetInstallEnabled"`
 	AIIntegrationSettingsJSON         *string `json:"aiIntegrationSettingsJson"`

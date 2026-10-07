@@ -209,6 +209,20 @@ export class AgentConfiguration {
              */
             this["knowledgeBaseEnabled"] = null;
         }
+        if (!("zeroTouchEnabled" in $$source)) {
+            /**
+             * @member
+             * @type {boolean | null}
+             */
+            this["zeroTouchEnabled"] = null;
+        }
+        if (!("cloudBootstrapEnabled" in $$source)) {
+            /**
+             * @member
+             * @type {boolean | null}
+             */
+            this["cloudBootstrapEnabled"] = null;
+        }
         if (!("appStoreEnabled" in $$source)) {
             /**
              * @member
@@ -336,34 +350,34 @@ export class AgentConfiguration {
      * @returns {AgentConfiguration}
      */
     static createFrom($$source = {}) {
-        const $$createField20_0 = $$createType1;
-        const $$createField21_0 = $$createType2;
-        const $$createField22_0 = $$createType3;
-        const $$createField23_0 = $$createType4;
-        const $$createField24_0 = $$createType6;
-        const $$createField25_0 = $$createType7;
-        const $$createField26_0 = $$createType8;
+        const $$createField22_0 = $$createType1;
+        const $$createField23_0 = $$createType2;
+        const $$createField24_0 = $$createType3;
+        const $$createField25_0 = $$createType4;
+        const $$createField26_0 = $$createType6;
+        const $$createField27_0 = $$createType7;
+        const $$createField28_0 = $$createType8;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("autoUpdate" in $$parsedSource) {
-            $$parsedSource["autoUpdate"] = $$createField20_0($$parsedSource["autoUpdate"]);
+            $$parsedSource["autoUpdate"] = $$createField22_0($$parsedSource["autoUpdate"]);
         }
         if ("agentUpdate" in $$parsedSource) {
-            $$parsedSource["agentUpdate"] = $$createField21_0($$parsedSource["agentUpdate"]);
+            $$parsedSource["agentUpdate"] = $$createField23_0($$parsedSource["agentUpdate"]);
         }
         if ("psadt" in $$parsedSource) {
-            $$parsedSource["psadt"] = $$createField22_0($$parsedSource["psadt"]);
+            $$parsedSource["psadt"] = $$createField24_0($$parsedSource["psadt"]);
         }
         if ("notificationBranding" in $$parsedSource) {
-            $$parsedSource["notificationBranding"] = $$createField23_0($$parsedSource["notificationBranding"]);
+            $$parsedSource["notificationBranding"] = $$createField25_0($$parsedSource["notificationBranding"]);
         }
         if ("notificationPolicies" in $$parsedSource) {
-            $$parsedSource["notificationPolicies"] = $$createField24_0($$parsedSource["notificationPolicies"]);
+            $$parsedSource["notificationPolicies"] = $$createField26_0($$parsedSource["notificationPolicies"]);
         }
         if ("consolidation" in $$parsedSource) {
-            $$parsedSource["consolidation"] = $$createField25_0($$parsedSource["consolidation"]);
+            $$parsedSource["consolidation"] = $$createField27_0($$parsedSource["consolidation"]);
         }
         if ("rollout" in $$parsedSource) {
-            $$parsedSource["rollout"] = $$createField26_0($$parsedSource["rollout"]);
+            $$parsedSource["rollout"] = $$createField28_0($$parsedSource["rollout"]);
         }
         return new AgentConfiguration(/** @type {Partial<AgentConfiguration>} */($$parsedSource));
     }

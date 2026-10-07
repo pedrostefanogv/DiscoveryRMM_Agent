@@ -51,6 +51,30 @@ func (c *Coordinator) PruneFinalStateArtifacts(now time.Time) (int, error) {
 	return removed, nil
 }
 
+// DeleteArtifactAfterInstall remove do P2P_Temp o instalador de um pacote cuja
+// instalação acabou de ser concluída com sucesso (liberação imediata de disco em
+// vez de esperar o tick de retenção de 1h). Respeita transferências em andamento
+// para não quebrar o download de um peer.
+func (c *Coordinator) DeleteArtifactAfterInstall(artifactName string) bool {
+	name := strings.TrimSpace(artifactName)
+	if c == nil || name == "" {
+		return false
+	}
+	if c.artifactBeingServed(name) {
+		return false
+	}
+	if err := c.DeleteArtifact(name); err != nil {
+		if c.deps != nil {
+			c.deps.Log(fmt.Sprintf("[p2p][retention] falha ao remover artifact pos-instalacao name=%s err=%v", name, err))
+		}
+		return false
+	}
+	if c.deps != nil {
+		c.deps.Log(fmt.Sprintf("[p2p][retention] artifact removido pos-instalacao name=%s", name))
+	}
+	return true
+}
+
 // artifactBeingServed informa se há uma serving session ativa para o artifact.
 func (c *Coordinator) artifactBeingServed(name string) bool {
 	name = strings.TrimSpace(name)

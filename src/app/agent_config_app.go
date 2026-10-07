@@ -61,11 +61,37 @@ func (a *App) persistAgentRoutingContext(cfg agentconfig.AgentConfiguration) {
 
 // applyAgentConfiguration adjusts runtime behavior based on the agent configuration.
 func (a *App) applyAgentConfiguration(cfg agentconfig.AgentConfiguration) {
+	// Cloud bootstrap: quando o servidor envia o campo, ele é a fonte da verdade
+	// (o agent não expõe esse ajuste localmente).
+	if cfg.CloudBootstrapEnabled != nil {
+		p2pCfg := a.GetP2PConfig()
+		if p2pCfg.BootstrapConfig.CloudBootstrapEnabled != *cfg.CloudBootstrapEnabled {
+			p2pCfg.BootstrapConfig.CloudBootstrapEnabled = *cfg.CloudBootstrapEnabled
+			a.applyP2PConfig(p2pCfg)
+			a.Logs.Append(fmt.Sprintf("[config] cloudBootstrapEnabled=%t aplicado ao P2P", *cfg.CloudBootstrapEnabled))
+		}
+	}
+
 	// P2P files toggle.
+	// P2P só funciona se os agents conseguirem se descobrir: Descoberta de Rede
+	// (LAN) OU Bootstrap P2P via Nuvem. Sem nenhum dos dois, o download/serviço
+	// de artifacts é desativado mesmo com p2pFilesEnabled=true no servidor.
 	if cfg.P2PFilesEnabled != nil {
 		p2pCfg := a.GetP2PConfig()
-		p2pCfg.Enabled = *cfg.P2PFilesEnabled
-		a.applyP2PConfig(p2pCfg)
+		effective, dependencyMissing := resolveP2PFileTransferEnabled(
+			*cfg.P2PFilesEnabled,
+			cfg.DiscoveryEnabled,
+			cfg.CloudBootstrapEnabled,
+			p2pCfg.BootstrapConfig.CloudBootstrapEnabled,
+		)
+
+		if p2pCfg.Enabled != effective {
+			p2pCfg.Enabled = effective
+			a.applyP2PConfig(p2pCfg)
+		}
+		if dependencyMissing {
+			a.Logs.Append("[config] p2pFilesEnabled=true ignorado: habilite Descoberta de Rede ou Bootstrap P2P via Nuvem para os agents se encontrarem na rede")
+		}
 	}
 	// Instalação de winget via P2P-first — quando a API remota envia o campo,
 	// ele sobrescreve o valor local. Quando ausente, mantém o default do agente (true).
@@ -109,6 +135,30 @@ func (a *App) applyAgentConfiguration(cfg agentconfig.AgentConfiguration) {
 		a.ConsolEngine.SetAgentID(strings.TrimSpace(a.GetDebugConfig().AgentID))
 		a.ConsolEngine.ApplyAgentConfig(cfg)
 	}
+}
+
+// resolveP2PFileTransferEnabled decide se o subsistema P2P de arquivos deve
+// ficar ativo. Requer que o servidor tenha pedido (p2pFilesEnabled) E que exista
+// um caminho de descoberta: Descoberta de Rede na LAN ou Bootstrap P2P via Nuvem.
+// Sem descoberta os agents não se encontram e o download/serviço de artifacts
+// ficaria ativo sem função.
+//
+// dependencyMissing é true quando o P2P foi pedido mas não há caminho de
+// descoberta (usado para log/telemetria).
+func resolveP2PFileTransferEnabled(
+	requested bool,
+	discoveryEnabled *bool,
+	cloudBootstrapEnabled *bool,
+	cloudFallback bool,
+) (enabled bool, dependencyMissing bool) {
+	discovery := discoveryEnabled == nil || *discoveryEnabled
+	cloud := cloudFallback
+	if cloudBootstrapEnabled != nil {
+		cloud = *cloudBootstrapEnabled
+	}
+
+	allowed := discovery || cloud
+	return requested && allowed, requested && !allowed
 }
 
 func (a *App) persistAgentUpdatePolicy(policy selfupdate.Policy) {

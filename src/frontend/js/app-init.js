@@ -538,17 +538,8 @@ async function bootstrapApp() {
 
   // Hide tabs based on agent configuration feature flags.
   try {
-    var cfg = await appApi().GetAgentConfiguration();
-    if (cfg) {
-      hideTabIfNeeded(tabStoreBtn, storeViewEl, cfg.appStoreEnabled);
-      hideTabIfNeeded(tabChatBtn, chatViewEl, cfg.chatAIEnabled);
-      hideTabIfNeeded(tabSupportBtn, supportViewEl, cfg.supportEnabled);
-      hideTabIfNeeded(
-        tabKnowledgeBtn,
-        knowledgeViewEl,
-        cfg.knowledgeBaseEnabled,
-      );
-
+    window.__discoveryAgentConfig = await appApi().GetAgentConfiguration();
+    if (applyAgentFeatureVisibility()) {
       // Ensure the active tab is visible (fallback to status)
       var active = document.querySelector(".sidebar-link.active");
       if (active && active.classList.contains("hidden")) {
@@ -588,6 +579,48 @@ function hideTabIfNeeded(tabBtn, viewEl, flag) {
     tabBtn.classList.add("hidden");
     if (viewEl) viewEl.classList.add("hidden");
   }
+}
+
+// applyAgentFeatureVisibility esconde abas cujas funcionalidades estão
+// desabilitadas na configuração efetiva do agent.
+//
+// É idempotente e APENAS esconde (nunca reexibe): a visibilidade por modo de
+// runtime (applyRuntimeTabVisibility) roda de novo quando as runtime flags
+// mudam e reexibiria uma aba desabilitada no servidor. Devolve true quando havia
+// configuração para aplicar.
+function applyAgentFeatureVisibility() {
+  var cfg = window.__discoveryAgentConfig;
+  if (!cfg) {
+    return false;
+  }
+
+  hideTabIfNeeded(tabStoreBtn, storeViewEl, cfg.appStoreEnabled);
+  hideTabIfNeeded(tabChatBtn, chatViewEl, cfg.chatAIEnabled);
+  hideTabIfNeeded(tabSupportBtn, supportViewEl, cfg.supportEnabled);
+  hideTabIfNeeded(tabKnowledgeBtn, knowledgeViewEl, cfg.knowledgeBaseEnabled);
+
+  // P2P exige um caminho de descoberta (Descoberta de Rede na LAN ou Bootstrap
+  // P2P via Nuvem). Sem nenhum dos dois os agents não se encontram, então o
+  // menu P2P não é exibido.
+  var p2pDependencyMissing =
+    cfg.discoveryEnabled === false && cfg.cloudBootstrapEnabled === false;
+  hideTabIfNeeded(
+    tabP2PBtn,
+    p2pViewEl,
+    cfg.p2pFilesEnabled === false || p2pDependencyMissing,
+  );
+
+  // Zero-touch depende de estar habilitado no servidor e da Descoberta de Rede
+  // ativa para os agents se encontrarem.
+  var zeroTouchAllowed =
+    cfg.zeroTouchEnabled !== false && cfg.discoveryEnabled !== false;
+  hideTabIfNeeded(
+    tabZeroTouchConfigBtn,
+    zeroTouchConfigViewEl,
+    !zeroTouchAllowed,
+  );
+
+  return true;
 }
 
 bootstrapApp();

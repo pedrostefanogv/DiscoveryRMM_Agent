@@ -495,6 +495,7 @@ func (m *automationPackageManagerRouter) downloadAndCacheForP2P(ctx context.Cont
 			// (Install/Upgrade) vai direto ao winget install sem re-baixar.
 			return "", fmt.Errorf("%w: %v", errInstallerExec, err)
 		}
+		m.pruneArtifactAfterInstall(filepath.Base(existing))
 		return output, nil
 	}
 
@@ -577,6 +578,7 @@ func (m *automationPackageManagerRouter) downloadAndCacheForP2P(ctx context.Cont
 	if err != nil {
 		return "", fmt.Errorf("%w: %v", errInstallerExec, err)
 	}
+	m.pruneArtifactAfterInstall(published.ArtifactName)
 	return output, nil
 }
 
@@ -672,6 +674,17 @@ func resolveInstallerTypeForHost(typesByArch map[string]string) string {
 		}
 	}
 	return ""
+}
+
+// pruneArtifactAfterInstall libera o instalador do P2P_Temp depois que a
+// instalação concluiu com sucesso. Best-effort: nunca falha a instalação.
+func (m *automationPackageManagerRouter) pruneArtifactAfterInstall(artifactName string) {
+	if m == nil || m.app == nil || m.app.P2PCoord == nil {
+		return
+	}
+	if m.app.P2PCoord.DeleteArtifactAfterInstall(artifactName) {
+		m.logf("[automation][p2p] instalador removido do P2P_Temp apos instalacao artifact=%s", artifactName)
+	}
 }
 
 // findLocalArtifactByID procura um artifact no cache P2P local pelo artifactID
