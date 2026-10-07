@@ -66,6 +66,11 @@ func (a *App) GetAgentStatus() AgentStatus {
 	if a == nil {
 		return AgentStatus{}
 	}
+	return a.applyAPIHealth(a.getAgentStatusRaw())
+}
+
+// getAgentStatusRaw é o status antes do ajuste de saúde da API (NATS + pong).
+func (a *App) getAgentStatusRaw() AgentStatus {
 	// Companion mode: o core (agentConn) roda no serviço — o agentConn local
 	// nunca conecta nesta UI, então GetAgentStatus() local retornaria sempre
 	// offline (tray cinza/status offline mesmo com heartbeat no site). Usa o

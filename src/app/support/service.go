@@ -926,6 +926,18 @@ func (s *Service) markReachability(markReach, reachable bool) {
 	}
 }
 
+// NotifyConnectivity informa o estado do transporte (NATS) ao serviço de
+// suporte. Ao cair, o serviço entra imediatamente em modo somente consulta —
+// sem esperar uma operação de suporte falhar para descobrir que está offline.
+// Na volta não força "reachable": uma falha real da API HTTP continua mandando
+// (a próxima operação bem-sucedida é que reabre a escrita).
+func (s *Service) NotifyConnectivity(connected bool) {
+	if connected {
+		return
+	}
+	s.markUnreachable()
+}
+
 func (s *Service) markReachable() {
 	s.offlineMu.Lock()
 	s.offline = false

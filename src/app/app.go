@@ -1297,8 +1297,16 @@ func (a *App) onNatsConnected(nc *nats.Conn, cfg agentconn.Config) {
 // que a bolinha da barra, a página de Status e a consulta de versão reajam na
 // hora — sem depender do polling.
 func (a *App) onConnectivityChange(connected bool, transport string) {
+	// O estado EFETIVO combina o transporte NATS com a saúde da API HTTP: o
+	// agent só é "online" quando os dois respondem (NATS nativo, wss ou API
+	// fora ⇒ offline).
+	apiReachable := true
+	if a.ApiClientSvc != nil {
+		apiReachable = a.ApiClientSvc.APIReachable()
+	}
+	effective := connected && apiReachable
 	state := "offline"
-	if connected {
+	if effective {
 		state = "online"
 	}
 	// Idade do último pong global: correlaciona oscilações do indicador com
@@ -1309,10 +1317,19 @@ func (a *App) onConnectivityChange(connected bool, transport string) {
 			pongInfo = fmt.Sprintf(" pongAge=%s", time.Since(lastPongAt).Round(time.Second))
 		}
 	}
+	if effective != connected {
+		pongInfo += fmt.Sprintf(" apiReachable=%t", apiReachable)
+	}
 	a.Logs.Append(fmt.Sprintf("[connectivity] mudanca de estado para %s (transport=%s%s)", state, transport, pongInfo))
+	// Suporte/Knowledge entram em somente-consulta junto com o transporte, sem
+	// depender de uma operação falhar primeiro.
+	if a.SupportSvc != nil {
+		a.SupportSvc.NotifyConnectivity(effective)
+	}
 	a.EmitEvent("agent:connectivity", map[string]any{
-		"connected": connected,
-		"transport": transport,
+		"connected":    effective,
+		"transport":    transport,
+		"apiReachable": apiReachable,
 	})
 	// Atualiza o ícone e o tooltip do tray imediatamente (safeTrayAction cobre
 	// o caso de o tray ainda não ter sido iniciado).
@@ -1584,6 +1601,13 @@ func (a *App) runStagedStartup(ctx context.Context) {
 		// Se habilitado na config e o módulo não estiver instalado, instala
 		// em background sem bloquear o startup do agente.
 		a.bootstrapPSADTModuleIfNeeded()
+
+		// Health-check da API HTTP: NATS (nativo/wss) OU API fora ⇒ agent
+		// offline. Roda no core (serviço), que é quem tem o agentConn e o
+		// ApiClient; a UI recebe o estado pelo snapshot/evento via IPC.
+		a.safeGo(func() {
+			a.runAPIHealthProbe(ctx)
+		})
 
 		if a.SyncSvc != nil {
 			// Inicializa o ciclo de vida do sync.Service antes de iniciar o loop.

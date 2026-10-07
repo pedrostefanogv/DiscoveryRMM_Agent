@@ -42,6 +42,8 @@ type Deps struct {
 type Service struct {
 	getDebugConfig func() DebugConfig
 	logf           func(string)
+	// health acompanha a disponibilidade da API HTTP (probe periódico).
+	health healthState
 }
 
 // New cria um ApiClientService.
@@ -53,6 +55,8 @@ func New(deps Deps) *Service {
 	return &Service{
 		getDebugConfig: deps.GetDebugConfig,
 		logf:           logf,
+		// Otimista no boot: só marca offline após falhas consecutivas do probe.
+		health: healthState{reachable: true},
 	}
 }
 

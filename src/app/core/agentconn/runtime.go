@@ -38,6 +38,14 @@ const (
 	// que mantinha o core fora do ar ~10x o necessário a cada ciclo planejado.
 	plannedReconnectDelay = 2 * time.Second
 
+	// transportDownGrace é a carência antes de considerar o transporte NATS
+	// realmente indisponível. Absorve reconexões planejadas (reload, troca para
+	// o NATS nativo) e blips curtos, que fecham/reabrem a conexão em ~2s — sem
+	// essa carência o indicador piscaria offline→online a cada ciclo.
+	// Quedas reais são detectadas em 15–45s (ticker do watchdog = 30s), em vez
+	// dos ~6 min que o watchdog de global pong levava.
+	transportDownGrace = 15 * time.Second
+
 	// nativeNATSRecheckEvery define a cadência com que o agente, quando conectado
 	// via NATS sobre WebSocket (wss), tenta voltar ao NATS nativo (nats://).
 	// 30 minutos por hora — intervalo conservador para não gerar carga; ajustável no futuro.
@@ -294,6 +302,10 @@ type Runtime struct {
 	statMu   sync.RWMutex
 	statSnap Status
 
+	// transportDownSince guarda (unix nanos) quando o transporte NATS caiu;
+	// 0 = conectado. Usado para dar a carência antes de marcar offline.
+	transportDownSince atomic.Int64
+
 	dedupeMu     sync.Mutex
 	fanoutDedupe map[string]fanoutDedupeRecord
 
@@ -390,6 +402,8 @@ func (r *Runtime) setStatusConnected(agentID, server, transport string) {
 	r.statSnap.Server = server
 	r.statSnap.LastEvent = "conectado"
 	r.statSnap.Transport = transport
+	// Nova sessão conectada: zera o relógio da carência de transporte.
+	r.clearTransportDown()
 	// Zera contadores de diagnóstico e marca o momento da nova sessão.
 	r.markSessionConnected()
 	r.statMu.Unlock()
@@ -409,6 +423,30 @@ func (r *Runtime) notifyConnectivityChange(wasConnected, nowConnected bool, tran
 	if r.opts.OnConnectivityChange != nil {
 		r.opts.OnConnectivityChange(nowConnected, transport)
 	}
+}
+
+// markTransportDown registra o início de uma queda de transporte (mantém o
+// primeiro horário: CompareAndSwap só grava quando ainda não havia queda).
+func (r *Runtime) markTransportDown() {
+	now := time.Now().UnixNano()
+	if now == 0 {
+		now = 1
+	}
+	r.transportDownSince.CompareAndSwap(0, now)
+}
+
+// clearTransportDown marca o transporte como conectado novamente.
+func (r *Runtime) clearTransportDown() {
+	r.transportDownSince.Store(0)
+}
+
+// transportDownBeyondGrace informa se o transporte está caído além da carência.
+// downSinceUnixNano == 0 significa conectado.
+func transportDownBeyondGrace(now time.Time, downSinceUnixNano int64, grace time.Duration) bool {
+	if downSinceUnixNano == 0 {
+		return false
+	}
+	return now.Sub(time.Unix(0, downSinceUnixNano)) > grace
 }
 
 // isPlannedReconnect informa se o erro que encerrou a sessão faz parte da

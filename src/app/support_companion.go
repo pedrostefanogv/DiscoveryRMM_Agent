@@ -17,12 +17,18 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
-// unknownSupportRPCLogged evita spam de log quando a UI nova conversa com um
-// serviço antigo (janela de update in-place).
-var unknownSupportRPCLogged sync.Once
+// unknownSupportRPCLogged evita spam de log e unknownSupportRPCUnsupported
+// memoriza a detecção: depois da primeira resposta "método desconhecido" (UI
+// nova × serviço antigo), as chamadas seguintes vão direto ao caminho local,
+// sem repetir o round-trip que sabidamente falha.
+var (
+	unknownSupportRPCLogged      sync.Once
+	unknownSupportRPCUnsupported atomic.Bool
+)
 
 // isUnknownIPCMethod identifica o erro do serviço que não conhece o RPC —
 // nesse caso o bridge cai no caminho local (degradação graciosa durante a
@@ -49,6 +55,10 @@ func (a *App) supportCompanionCall(method string, payload map[string]any, timeou
 	if a == nil || a.ipcClient == nil {
 		return nil, nil, false
 	}
+	// Serviço antigo já detectado nesta sessão: não repete o RPC.
+	if unknownSupportRPCUnsupported.Load() {
+		return nil, nil, false
+	}
 	base := a.ctx
 	if base == nil {
 		base = context.Background()
@@ -61,6 +71,7 @@ func (a *App) supportCompanionCall(method string, payload map[string]any, timeou
 		// Serviço antigo (sem o RPC): usa o caminho local. Online ainda
 		// funciona via HTTP direto; evita quebrar na janela de update.
 		if isUnknownIPCMethod(err) {
+			unknownSupportRPCUnsupported.Store(true)
 			unknownSupportRPCLogged.Do(func() {
 				a.Logs.Append("[ipc] serviço sem os RPCs de suporte/knowledge (protocolo antigo); usando caminho local")
 			})

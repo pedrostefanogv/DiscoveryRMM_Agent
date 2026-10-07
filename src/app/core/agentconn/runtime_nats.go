@@ -16,9 +16,13 @@ import (
 )
 
 const (
-	natsFanoutAckWait        = 30 * time.Minute
-	globalPongWatchdogEvery  = 30 * time.Second
-	globalPongReconnectAfter = 6 * time.Minute
+	natsFanoutAckWait       = 30 * time.Minute
+	globalPongWatchdogEvery = 30 * time.Second
+	// globalPongReconnectAfter: quando o NATS está CONECTADO mas o servidor
+	// parou de publicar tenant.global.pong. Reduzido de 6min para 3min para
+	// alinhar com syncmeta.GlobalPongStaleAfter; a queda de transporte em si é
+	// tratada antes por transportDownGrace (15s).
+	globalPongReconnectAfter = 3 * time.Minute
 )
 
 type natsCommandRouteScope string
@@ -60,9 +64,14 @@ func (r *Runtime) runNATSSession(ctx context.Context, cfg Config, server, transp
 		// offline ate um novo ciclo manual.
 		nats.IgnoreAuthErrorAbort(),
 		nats.DisconnectErrHandler(func(_ *nats.Conn, err error) {
+			// Inicia a carência: se a reconexão não voltar em transportDownGrace,
+			// o watchdog encerra a sessão e o Run marca offline. Antes o agente
+			// ficava preso em RECONNECTING até o watchdog de global pong (6min).
+			r.markTransportDown()
 			r.logf("[heartbeat][nats] NATS desconectado: %v — heartbeats suspensos ate reconexao", err)
 		}),
 		nats.ReconnectHandler(func(_ *nats.Conn) {
+			r.clearTransportDown()
 			r.logf("[heartbeat][nats] NATS reconectado — heartbeats retomados")
 		}),
 		nats.ClosedHandler(func(_ *nats.Conn) {
@@ -615,6 +624,15 @@ func (r *Runtime) runNATSEventLoop(ctx context.Context, nc *nats.Conn, cfg Confi
 		case <-globalPongWatchdogTicker.C:
 			status := nc.Status()
 			if status == nats.CONNECTING || status == nats.RECONNECTING {
+				// Queda de transporte persistente além da carência: encerra a
+				// sessão para o Run marcar offline (erro não planejado). Sem
+				// isto, a UI/tray ficavam "online" por até ~6min com o servidor
+				// fora do ar, porque o cliente NATS reconecta para sempre.
+				if down := r.transportDownSince.Load(); transportDownBeyondGrace(time.Now(), down, transportDownGrace) {
+					age := time.Since(time.Unix(0, down)).Round(time.Second)
+					r.logf("[heartbeat][nats] transporte indisponivel ha %s (status=%s) — encerrando sessao para marcar offline", age, status)
+					return fmt.Errorf("transporte NATS indisponivel ha %s", age)
+				}
 				continue
 			}
 			if status == nats.CLOSED {

@@ -525,6 +525,9 @@ function removeQueuedChatMessage(item) {
 // prioridade; a fila aguarda o terminal do processamento dela.
 function maybeFlushChatQueue() {
   if (chatSending || !chatMessageQueue.length) return;
+  // Sem comunicação o chat está indisponível: mantém a fila intacta até
+  // reconectar (não descarta a mensagem do usuário).
+  if (chatOfflineActive) return;
   var next = chatMessageQueue.shift();
   if (next.el && next.el.parentNode) next.el.parentNode.removeChild(next.el);
   dispatchChatMessage(next.text, next.images);
@@ -2788,6 +2791,11 @@ async function sendChatMessage() {
 // `images` é o snapshot de anexos que veio junto da mensagem enfileirada; quando
 // ausente (envio direto), pega o que está pendente no composer.
 function dispatchChatMessage(text, images) {
+  // Ponto único de dispatch: cobre o envio direto, a ação A2UI e a fila.
+  if (chatOfflineActive) {
+    showChatOfflineBannerNow();
+    return;
+  }
   addChatMessage("user", text);
 
   // Prints anexados pelo usuário (ícone de câmera do composer): vão junto do
@@ -3183,36 +3191,38 @@ function isLikelyOfflineChatError(message) {
     m.indexOf("no such host") >= 0 ||
     m.indexOf("unreachable") >= 0 ||
     m.indexOf("network is") >= 0 ||
-    m.indexOf("eof") >= 0 ||
+    m.indexOf("unexpected eof") >= 0 ||
+    m.indexOf("connection closed") >= 0 ||
+    m.indexOf("broken pipe") >= 0 ||
     m.indexOf("http 502") >= 0 ||
     m.indexOf("http 503") >= 0 ||
     m.indexOf("http 504") >= 0
   );
 }
 
-// applyChatOfflineBanner sincroniza o aviso. rawConnected ausente usa o último
-// estado conhecido. A histerese evita piscar em reconexões planejadas do core.
+// applyChatOfflineBanner sincroniza o aviso e o bloqueio do chat.
+// IMPORTANTE: usa o estado BRUTO de conectividade (sem a histerese de 15s do
+// indicador global) — o chat precisa ficar indisponível assim que não houver
+// comunicação, não 15s depois. A histerese continua valendo só para o
+// indicador de status.
 function applyChatOfflineBanner(rawConnected) {
   var banner = document.getElementById("chatOfflineBanner");
-  if (!banner) return;
-  var hysteresis = typeof window.__statusConnectedHysteresis === "function"
-    ? window.__statusConnectedHysteresis
-    : null;
   var connected;
   if (typeof rawConnected === "boolean") {
-    connected = hysteresis ? hysteresis(rawConnected) : rawConnected;
+    connected = rawConnected;
   } else {
     var last = typeof window.__lastConnectivityState === "function"
       ? window.__lastConnectivityState()
       : null;
     if (!last) {
-      banner.classList.add("hidden");
+      // Ainda sem estado conhecido: não bloqueia nem avisa.
+      if (banner) banner.classList.add("hidden");
       applyChatSendAffordance(false);
       return;
     }
-    connected = hysteresis ? hysteresis(!!last.connected) : !!last.connected;
+    connected = !!last.connected;
   }
-  banner.classList.toggle("hidden", !!connected);
+  if (banner) banner.classList.toggle("hidden", !!connected);
   applyChatSendAffordance(!connected);
   applyChatOfflineMode(!connected);
 }
