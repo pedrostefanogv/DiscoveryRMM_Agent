@@ -137,6 +137,18 @@ func (s *Service) readKnowledgeBackup(cacheKey string, out any) bool {
 	return err == nil && found
 }
 
+// hasKnowledgeBackup informa se ja existe backup local para a chave — usado
+// para encurtar o timeout/retry do fetch quando o fallback offline esta
+// disponivel (offline o retry so adia a exibicao do conteudo em cache).
+func (s *Service) hasKnowledgeBackup(cacheKey string) bool {
+	if s.db == nil {
+		return false
+	}
+	var raw json.RawMessage
+	found, err := s.db.CacheGetJSON(knowledgeBackupKey(cacheKey), &raw)
+	return err == nil && found
+}
+
 func buildSummary(content string) string {
 	if strings.TrimSpace(content) == "" {
 		return ""
@@ -452,7 +464,17 @@ func (s *Service) fetchKnowledgeListWithCache(info AgentInfo, category string, u
 
 		ctx := s.ctxOrBackground()
 
-		resp, err := doGetWithRetry(ctx, kbHTTP(), func() (*http.Request, error) {
+		// Offline com backup disponível: uma única tentativa curta evita que o
+		// retry dobre o tempo ate o conteudo em cache aparecer (mesmo padrao da
+		// listagem de chamados). Sem backup, mantem o retry normal. Sem isso o
+		// fetch offline levava ~30s (2x15s) por causa do client kbHTTP().
+		client := kbHTTP()
+		attempts := 2
+		if pageIdx == 0 && s.hasKnowledgeBackup(cacheKey) {
+			client = tlsutil.NewHTTPClient(6 * time.Second)
+			attempts = 1
+		}
+		resp, err := doGetAttempts(ctx, client, attempts, func() (*http.Request, error) {
 			req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 			if err != nil {
 				return nil, err

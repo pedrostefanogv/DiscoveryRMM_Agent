@@ -49,6 +49,25 @@ func TestKnowledgeBackupKey(t *testing.T) {
 	}
 }
 
+// TestHasKnowledgeBackup: a checagem leve de existência (usada para encurtar
+// o fetch offline quando o backup está disponível) deve concordar com o
+// backup efetivamente gravado.
+func TestHasKnowledgeBackup(t *testing.T) {
+	db := newMemCacheDB()
+	svc := NewService(Options{DB: db})
+	cacheKey := "knowledge:list:scope:cat"
+
+	if svc.hasKnowledgeBackup(cacheKey) {
+		t.Fatal("sem backup gravado não pode retornar true")
+	}
+	if err := db.CacheSetJSON(knowledgeBackupKey(cacheKey), []KnowledgeArticle{{ID: "a1"}}, 0); err != nil {
+		t.Fatalf("preparar backup: %v", err)
+	}
+	if !svc.hasKnowledgeBackup(cacheKey) {
+		t.Fatal("backup gravado deveria ser detectado")
+	}
+}
+
 // TestParseKnowledgeListBody cobre os dois formatos aceitos do servidor.
 func TestParseKnowledgeListBody(t *testing.T) {
 	direct := []byte(`[{"id":"a1","title":"Guia","content":"# Passo 1"}]`)
@@ -154,5 +173,3 @@ func TestParseKnowledgeListEnvelope_Pagination(t *testing.T) {
 		t.Fatalf("última página falhou: %v %+v", err, page3)
 	}
 }
-
-

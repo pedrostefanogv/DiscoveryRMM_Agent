@@ -52,6 +52,62 @@ func (a *App) handleIPCRequest(ctx context.Context, payload map[string]any) map[
 		return a.ipcRPCAutomationState()
 	case "updates:scan":
 		return a.ipcRPCUpdatesScan()
+	// Suporte / base de conhecimento (D3: a UI companion não abre o SQLite —
+	// estes RPCs usam o SupportSvc do serviço, que tem o cache offline).
+	case "support:agent_info":
+		return a.ipcRPCSupportAgentInfo()
+	case "support:agent_info_json":
+		return a.ipcRPCSupportAgentInfoJSON()
+	case "support:tickets":
+		return a.ipcRPCSupportTicketList()
+	case "support:ticket":
+		return a.ipcRPCSupportTicket(payload)
+	case "support:ticket_fields":
+		return a.ipcRPCSupportTicketFields(payload)
+	case "support:ticket_answers":
+		return a.ipcRPCSupportTicketAnswers(payload)
+	case "support:comments":
+		return a.ipcRPCSupportComments(payload)
+	case "support:options":
+		return a.ipcRPCSupportOptions()
+	case "support:department_fields":
+		return a.ipcRPCSupportDepartmentFields(payload)
+	case "support:workflow_states":
+		return a.ipcRPCSupportWorkflowStates()
+	case "support:templates":
+		return a.ipcRPCSupportTemplates()
+	case "support:create":
+		return a.ipcRPCSupportCreate(payload)
+	case "support:comment_add":
+		return a.ipcRPCSupportAddComment(payload)
+	case "support:comment_add_legacy":
+		return a.ipcRPCSupportAddCommentLegacy(payload)
+	case "support:close":
+		return a.ipcRPCSupportClose(payload)
+	case "support:reopen":
+		return a.ipcRPCSupportReopen(payload)
+	case "support:rate":
+		return a.ipcRPCSupportRate(payload)
+	case "support:agent_tickets":
+		return a.ipcRPCSupportAgentTickets()
+	case "support:agent_ticket":
+		return a.ipcRPCSupportAgentTicket(payload)
+	case "support:agent_ticket_create":
+		return a.ipcRPCSupportAgentTicketCreate(payload)
+	case "support:agent_ticket_close":
+		return a.ipcRPCSupportAgentTicketClose(payload)
+	case "support:agent_comment_add":
+		return a.ipcRPCSupportAgentCommentAdd(payload)
+	case "knowledge:list":
+		return a.ipcRPCKnowledgeList()
+	case "knowledge:articles":
+		return a.ipcRPCKnowledgeArticles(payload)
+	case "knowledge:article":
+		return a.ipcRPCKnowledgeArticle(payload)
+	case "knowledge:pages":
+		return a.ipcRPCKnowledgePages(payload)
+	case "knowledge:refresh":
+		return a.ipcRPCKnowledgeRefresh()
 	default:
 		return map[string]any{"ok": false, "error": "método desconhecido: " + method}
 	}
@@ -160,7 +216,7 @@ func (a *App) ipcRPCAutomationState() map[string]any {
 
 // ipcRPCUpdatesScan roda a checagem de atualizações (winget/choco) NO serviço
 // (decisão D2 — winget/updates rodam no serviço; a UI só exibe). Operação
-// potencialmente lenta: se o scan passar do IPCRequestTimeout (10s), o
+// potencialmente lenta: se o scan passar do timeout padrão do bridge (10s), o
 // Request da UI expira — por isso o resultado também é emitido como evento
 // "updates:list" para as UIs conectadas, garantindo entrega tardia.
 func (a *App) ipcRPCUpdatesScan() map[string]any {

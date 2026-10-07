@@ -12,8 +12,10 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"time"
 
+	"discovery/app/agentconfig"
 	"discovery/app/core/database"
 	"discovery/app/core/models"
 )
@@ -138,6 +140,39 @@ func (a *App) ipcRPCDebugSet(payload map[string]any) map[string]any {
 		return map[string]any{"ok": false, "error": err.Error()}
 	}
 	return map[string]any{"ok": true}
+}
+
+// hydrateAgentConfigurationCompanion adota a configuração do agente resolvida
+// pelo serviço (RPC config:get) na cópia em memória da UI companion.
+// Sem isso a UI tem AgentConfig zero e os fallbacks dependentes de
+// clientId/siteId (ex.: support.AgentInfoFallback) nunca disparam offline.
+// A cópia é apenas em memória — a UI não abre o DB (decisão D3) nem persiste.
+func (a *App) hydrateAgentConfigurationCompanion() {
+	if a == nil || a.ipcClient == nil {
+		return
+	}
+	resp, ok := a.ipcRequest("config:get", nil)
+	if !ok {
+		return
+	}
+	data, _ := resp["data"].(map[string]any)
+	raw, err := json.Marshal(data["configuration"])
+	if err != nil {
+		return
+	}
+	var cfg agentconfig.AgentConfiguration
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return
+	}
+	if strings.TrimSpace(cfg.ClientID) == "" && strings.TrimSpace(cfg.SiteID) == "" {
+		// Serviço ainda sem config resolvida: não grava config vazia; tenta de
+		// novo na próxima reconexão.
+		return
+	}
+	a.AgentConfigMu.Lock()
+	a.AgentConfig = cfg
+	a.AgentConfigMu.Unlock()
+	a.Logs.Append("[ipc] configuração do agente adotada do serviço (config:get)")
 }
 
 // GetLocalMemoriesCompanion consulta Memory Notes via IPC quando companion.

@@ -58,7 +58,13 @@ const (
 )
 
 // IPCRequestTimeout é o teto de espera por resposta no cliente.
-const IPCRequestTimeout = 10 * time.Second
+// 30s cobre os RPCs de suporte/base de conhecimento quando o servidor está
+// offline: a resolução de identidade dura até ~4s e a leitura do snapshot até
+// ~8s (chamados) / ~6s (knowledge) — o teto antigo de 10s abortava a resposta
+// antes do cache offline aparecer. Chamadas que criam o próprio contexto
+// (ipcRequest, 10s) continuam efetivamente limitadas por ele, pois Request usa
+// o menor valor entre o deadline do ctx e este teto.
+const IPCRequestTimeout = 30 * time.Second
 
 // IPCProtocolVersion é a versão do contrato JSON-lines (handshake hello/
 // hello_ack, PLANO_SEPARACAO_SERVICO_UI.md §0.4 — item "versionar handshake").
@@ -216,7 +222,17 @@ func (s *IPCServer) handleConn(conn net.Conn) {
 			}
 		}
 		if s.OnMessage != nil {
-			s.OnMessage(conn, msg)
+			// RPC (Fase C) é despachado em goroutine: um RPC lento (ex.: leitura
+			// do snapshot offline de chamados/knowledge, muitos segundos) bloquearia
+			// o read loop DESTA conexão — o CompanionController deixaria de receber
+			// os snapshots de status e o rxWatchdog do cliente fecharia o pipe.
+			// RespondTo serializa a escrita pelo writeMu da conn e o cliente roteia
+			// as respostas por CorrelationID (out-of-order é seguro).
+			if msg.Type == IPCMsgRequest {
+				go s.OnMessage(conn, msg)
+			} else {
+				s.OnMessage(conn, msg)
+			}
 		}
 	}
 }

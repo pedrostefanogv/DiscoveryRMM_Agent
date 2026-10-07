@@ -284,6 +284,9 @@ func (a *App) startIPCClient() {
 			a.Logs.Append("[ipc] " + state + " ao serviço")
 			a.EmitEvent("service:ipc_state", map[string]any{"connected": connected})
 			if connected {
+				// Adota a configuração do agente resolvida no serviço (clientId/
+				// siteId): a UI companion nasce com AgentConfig zero e sem DB.
+				go a.hydrateAgentConfigurationCompanion()
 				// Reconexão: pede um snapshot imediato de conectividade para o
 				// tray/status refletirem o estado real sem esperar o próximo
 				// tick de 5s do CompanionController (evita indicador defasado
