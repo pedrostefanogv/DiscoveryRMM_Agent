@@ -210,8 +210,9 @@ func TestRegisteredToolCount(t *testing.T) {
 	for _, name := range names {
 		t.Logf("  %s", name)
 	}
-	// 49 apos a consolidacao das familias + read_file (leitura com autorizacao).
-	if len(names) != 50 {
-		t.Fatalf("total de tools = %d, esperado 50", len(names))
+	// 49 apos a consolidacao das familias + read_file (leitura com autorizacao)
+	// + open_folder/open_app (abrir pasta/app com autorizacao por acao).
+	if len(names) != 53 {
+		t.Fatalf("total de tools = %d, esperado 53", len(names))
 	}
 }

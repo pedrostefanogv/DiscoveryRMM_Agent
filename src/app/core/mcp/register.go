@@ -82,10 +82,23 @@ type AppBridge interface {
 	// desligamento exibem aviso do PSADT com contador e botao CANCELAR; se o
 	// usuario cancelar, nada e executado.
 	RunPowerAction(ctx context.Context, action string, delaySeconds int, message string) (json.RawMessage, error)
+
+	// OpenFolder/OpenApp abrem uma pasta no Explorer ou um aplicativo JA
+	// INSTALADO, pedidos pela IA. A autorização por ação vem de
+	// mcp.ToolConsentFor (fail-closed) e a resolução/validação do alvo fica no
+	// App: a tool nunca recebe linha de comando nem caminho arbitrário.
+	OpenFolder(folder, reason string) (json.RawMessage, error)
+	OpenApp(name, reason string) (json.RawMessage, error)
+	// ListInstalledApps lista nomes de apps instalados (leitura pura, sem
+	// autorização) para o LLM não adivinhar o nome antes de open_app.
+	ListInstalledApps(query string, limit int) (json.RawMessage, error)
 }
 
 // RegisterDiscoveryTools adds all Discovery app tools to the registry.
 func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
+	// Abrir pasta/app: ações visíveis no computador, com consentimento por ação.
+	registerOpenExternalTools(reg, app)
+
 	// ========== INVENTARIO ==========
 	reg.Register(Tool{
 		Name:        "get_inventory",

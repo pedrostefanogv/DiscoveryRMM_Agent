@@ -100,6 +100,18 @@ func ToolConsentFor(toolName string, args map[string]any) *consent.Request {
 		case "clear_queue":
 			return destructive("printer_clear_queue", optionalStringArg(args, "name"))
 		}
+	case "open_folder":
+		// Abrir uma pasta é visível na máquina do usuário (e pode expor conteúdo
+		// pessoal na tela): exige autorização por ação, como qualquer efeito.
+		target := optionalStringArg(args, "folder")
+		extra := reasonExtra(args)
+		if isSensitiveOpenFolder(target) {
+			extra = append(extra, "Atencao: pasta com dados de aplicativos/sistema.")
+		}
+		return destructive("open_folder", target, extra...)
+	case "open_app":
+		// Abrir um aplicativo instalado também altera o estado visível da máquina.
+		return destructive("open_app", optionalStringArg(args, "app"), reasonExtra(args)...)
 	case "power_action":
 		switch actionArg(args) {
 		case "restart":
@@ -112,6 +124,24 @@ func ToolConsentFor(toolName string, args map[string]any) *consent.Request {
 	}
 
 	return nil
+}
+
+// reasonExtra devolve o motivo informado pela IA (quando houver) para o usuário
+// decidir com contexto no pedido de autorização.
+func reasonExtra(args map[string]any) []string {
+	if reason := strings.TrimSpace(optionalStringArg(args, "reason")); reason != "" {
+		return []string{"Motivo informado pela IA: " + reason}
+	}
+	return nil
+}
+
+// isSensitiveOpenFolder marca apelidos que expõem dados técnicos/sistema.
+func isSensitiveOpenFolder(folder string) bool {
+	switch strings.ToLower(strings.TrimSpace(folder)) {
+	case "appdata", "localappdata", "programas", "program files":
+		return true
+	}
+	return false
 }
 
 // destructive monta um pedido de autorização para ação destrutiva.

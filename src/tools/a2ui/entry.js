@@ -83,6 +83,23 @@ function createSurface(containerEl, surfaceId) {
     onUserAction(cb) {
       if (typeof cb === "function") userActionHandlers.push(cb);
     },
+    // Acesso LOCAL ao data model da surface: permite INTERAÇÕES DENTRO DO CARD
+    // (passo a passo, contador, mostrar/ocultar) sem virar turno no chat. O
+    // componente precisa estar ligado ao caminho (ex.: text: {"path":"/etapa"}).
+    updateDataModel(path, value) {
+      processor.processMessages([
+        { version: "v0.9", updateDataModel: { surfaceId: surfaceIdFinal, path: path, value: value } },
+      ]);
+    },
+    getDataModel(path) {
+      try {
+        const surface = processor.model.getSurface(surfaceIdFinal);
+        if (!surface || !surface.dataModel) return undefined;
+        return surface.dataModel.get(path);
+      } catch (_) {
+        return undefined;
+      }
+    },
     destroy() {
       try {
         processor.processMessages([

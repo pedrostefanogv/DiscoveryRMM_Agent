@@ -2293,6 +2293,99 @@ function ensureA2uiSurface(surfaceId) {
   return handle;
 }
 
+// ─── Ações LOCAIS (prefixo ui.) — interação DENTRO do card, sem turno ───
+//
+// Todo clique numa ação normal vira turno no chat (bolha + LLM). Para botões que
+// só mudam o que aparece no card (passo a passo, contador, mostrar/ocultar), o
+// prefixo `ui.` faz o app resolver a mudança no data model da própria surface:
+// instantâneo, sem custo de LLM, sem bolha e funcionando offline. O componente
+// precisa estar ligado ao caminho (ex.: {"text":{"path":"/etapaTexto"}}).
+//
+// SEGURANÇA: aqui só passa estado de APRESENTAÇÃO. Ações com efeito colateral
+// (instalar, remover, abrir chamado, executar comando) continuam sendo ações
+// normais e SEMPRE passam pelo agente (com a autorização já existente).
+var A2UI_LOCAL_ACTION_PREFIX = "ui.";
+
+function isLocalA2uiAction(name) {
+  return String(name || "").indexOf(A2UI_LOCAL_ACTION_PREFIX) === 0;
+}
+
+function applyLocalA2uiAction(surfaceId, action) {
+  var entry = a2uiSurfaces[surfaceId];
+  var handle = entry && entry.handle;
+  if (!handle || typeof handle.updateDataModel !== "function") {
+    console.warn("[a2ui] ação local ignorada (surface/handle sem updateDataModel):", action.name);
+    return;
+  }
+  var ctx = action.context || {};
+  // ATENÇÃO: a chave NÃO pode ser `path`. O bind do renderer resolve um objeto
+  // com a chave `path` como DataBinding — um context `{"path":"/x"}` vira o
+  // VALOR de /x (número/string) e a ação é descartada com "Invalid action
+  // payload". Por isso o parâmetro é `target` (o fallback cobre um bundle que
+  // corrija essa colisão no futuro).
+  var path = typeof ctx.target === "string" ? ctx.target : typeof ctx.path === "string" ? ctx.path : "";
+  if (!path) {
+    console.warn("[a2ui] ação local sem 'target' no context:", action.name);
+    return;
+  }
+  var op = String(action.name).slice(A2UI_LOCAL_ACTION_PREFIX.length);
+  var current = typeof handle.getDataModel === "function" ? handle.getDataModel(path) : undefined;
+  var min = Number(ctx.min);
+  var max = Number(ctx.max);
+  var next;
+  if (op === "set") {
+    // Sem 'value' não há o que gravar: gravar undefined apagaria a chave do data
+    // model (DataModel.set remove a propriedade) e o componente perderia o valor.
+    if (ctx.value === undefined || ctx.value === null) {
+      console.warn("[a2ui] ui.set sem 'value' no context (ignorado):", action.name);
+      return;
+    }
+    next = ctx.value;
+  } else if (op === "toggle") {
+    next = !(current === true || current === "true");
+  } else if (op === "next" || op === "prev") {
+    var num = Number(current);
+    if (!isFinite(num)) num = 0;
+    var step = Number(ctx.step);
+    if (!isFinite(step) || step === 0) step = 1;
+    next = num + (op === "next" ? step : -step);
+    if (isFinite(min)) next = Math.max(min, next);
+    if (isFinite(max)) next = Math.min(max, next);
+    // Preserva o tipo do valor atual: string numérica continua string (os
+    // componentes ligados ao mesmo caminho re-renderizam com o novo valor).
+    if (typeof current === "string") next = String(next);
+  } else {
+    console.warn("[a2ui] operação local desconhecida (ignorada):", action.name);
+    return;
+  }
+
+  try {
+    handle.updateDataModel(path, next);
+
+    // 'states' (opcional): um mapa de caminho→valor POR valor de /path. É assim
+    // que um passo a passo troca o conteúdo de cada etapa sem ida ao servidor:
+    // o cliente escolhe o mapa pelo índice do novo valor.
+    var states = Array.isArray(ctx.states) ? ctx.states : null;
+    if (states && states.length) {
+      var base = isFinite(min) ? min : 1;
+      var idx = Number(next) - base;
+      var stateMap = idx >= 0 && idx < states.length ? states[idx] : null;
+      if (stateMap && typeof stateMap === "object") {
+        Object.keys(stateMap).forEach(function (key) {
+          var p = key.charAt(0) === "/" ? key : "/" + key;
+          try {
+            handle.updateDataModel(p, stateMap[key]);
+          } catch (e2) {
+            console.warn("[a2ui] falha ao aplicar estado local em " + p + ":", e2);
+          }
+        });
+      }
+    }
+  } catch (e) {
+    console.warn("[a2ui] falha ao aplicar ação local:", e);
+  }
+}
+
 // handleA2uiUserAction encaminha uma ação do usuário (clique/input) ao agent.
 // Registra a ação via AnswerA2uiAction e dispara um novo StartStream para que
 // o agent processe a ação como um tool result no próximo round (resposta
@@ -2304,6 +2397,13 @@ function ensureA2uiSurface(surfaceId) {
 // um turno sobre outro assunto.
 function handleA2uiUserAction(surfaceId, action) {
   if (!action || !action.name) return;
+
+  // Ação LOCAL (ui.*): muda só o card. Não gera bolha, não fica busy e não
+  // dispara turno — é o caminho para botões de navegação/estado da interface.
+  if (isLocalA2uiAction(action.name)) {
+    applyLocalA2uiAction(surfaceId, action);
+    return;
+  }
 
   // Clique repetido no MESMO botão (duplo clique, ou clique enquanto o anterior
   // ainda está na fila) é ignorado: sem isso a mesma ação seria enfileirada

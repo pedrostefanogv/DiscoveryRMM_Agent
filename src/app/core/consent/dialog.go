@@ -78,6 +78,8 @@ var actionPhrases = map[string]map[string]string{
 	"power_restart":           {"pt": "REINICIAR o computador", "en": "RESTART the computer", "es": "REINICIAR el equipo"},
 	"power_shutdown":          {"pt": "DESLIGAR o computador", "en": "SHUT DOWN the computer", "es": "APAGAR el equipo"},
 	"power_lock":              {"pt": "BLOQUEAR a sessão", "en": "LOCK the session", "es": "BLOQUEAR la sesión"},
+	"open_folder":             {"pt": "ABRIR uma pasta no Explorer", "en": "OPEN a folder in Explorer", "es": "ABRIR una carpeta en el Explorador"},
+	"open_app":                {"pt": "ABRIR um aplicativo instalado", "en": "OPEN an installed application", "es": "ABRIR una aplicación instalada"},
 }
 
 var fallbackPhrase = map[string]string{
