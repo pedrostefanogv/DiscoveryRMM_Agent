@@ -135,7 +135,7 @@ type Service struct {
 
 // New creates a ChatService.
 func New(reg *mcp.Registry, deps Deps) *Service {
-	return &Service{
+	s := &Service{
 		chatSvc:                     ai.NewService(reg),
 		mcpRegistry:                 reg,
 		ctx:                         deps.Ctx,
@@ -154,6 +154,27 @@ func New(reg *mcp.Registry, deps Deps) *Service {
 		// installer/config do chat pode desligar.
 		notifyPreview: true,
 	}
+	// Orçamento de rounds do agent loop: leva ao chat o motivo de uma ação
+	// clicada ainda não ter executado ("limite atingido — aguardando sua
+	// autorização") e o aviso de renovação. O observador fica no ai.Service
+	// porque é o parser SSE que vê os chunks do servidor.
+	s.chatSvc.SetBudgetObserver(func(state, message string, round, maxRounds int) {
+		payload := map[string]any{
+			"state":     state,
+			"message":   message,
+			"round":     round,
+			"maxRounds": maxRounds,
+		}
+		if s.emitEvent != nil {
+			s.emitEvent("chat:budget", payload)
+		}
+		if s.publishChatEvent != nil {
+			if raw, err := json.Marshal(payload); err == nil {
+				s.publishChatEvent("chat:budget", string(raw))
+			}
+		}
+	})
+	return s
 }
 
 // NotifyPreviewEnabled informa se o toast de resposta pode mostrar um trecho da

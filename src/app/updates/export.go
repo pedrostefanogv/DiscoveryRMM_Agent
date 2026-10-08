@@ -183,6 +183,14 @@ func exportDirCandidates() []string {
 // Desktop/Documentos podem estar redirecionados para %OneDrive% e a pasta
 // antiga em %USERPROFILE% pode nem existir — criar uma pasta vazia ali daria um
 // destino ruim (o arquivo "sumiria" da área de trabalho real do usuário).
+// isSystemProfileHome detecta o perfil do sistema (serviço/SYSTEM): nesse
+// contexto as pastas pessoais do usuário não existem e o relatório exportado
+// precisa cair em um local que a pessoa consiga abrir.
+func isSystemProfileHome(home string) bool {
+	h := strings.ToLower(strings.TrimSpace(home))
+	return strings.Contains(h, "systemprofile") || strings.Contains(h, `system32config`)
+}
+
 func userVisibleExportBaseDirs() []string {
 	var existing, missing []string
 	add := func(dir string) {
@@ -198,9 +206,24 @@ func userVisibleExportBaseDirs() []string {
 	}
 
 	home, _ := os.UserHomeDir()
+	home = strings.TrimSpace(home)
 	oneDrive := strings.TrimSpace(os.Getenv("OneDrive"))
 
-	if strings.TrimSpace(home) != "" {
+	// Execução como SYSTEM (serviço/sessão 0): USERPROFILE aponta para o perfil
+	// do sistema, então Desktop/Documentos ali são invisíveis para o usuário.
+	// Usa Documentos Públicos — aparece no Explorer de qualquer usuário — em vez
+	// de gravar o relatório em C:Windowssystem32configsystemprofile.
+	if isSystemProfileHome(home) {
+		public := strings.TrimSpace(os.Getenv("PUBLIC"))
+		if public == "" {
+			public = `C:\Users\Public`
+		}
+		add(filepath.Join(public, "Documents"))
+		add(filepath.Join(public, "Desktop"))
+		return append(existing, missing...)
+	}
+
+	if home != "" {
 		add(filepath.Join(home, "Desktop"))
 	}
 	if oneDrive != "" {

@@ -60,6 +60,33 @@ func TestExportDirCandidatesPrefersDesktopThenDocuments(t *testing.T) {
 	}
 }
 
+// Execução como SYSTEM (serviço): o perfil do sistema não tem Desktop/Documentos
+// do usuário — o relatório deve ir para Documentos Públicos, não para
+// C:\Windows\system32\config\systemprofile (invisível para o usuário).
+func TestExportDirCandidates_SystemProfileUsesPublicDocuments(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "Windows", "system32", "config", "systemprofile")
+	public := filepath.Join(t.TempDir(), "Public")
+	for _, dir := range []string{home, filepath.Join(public, "Documents")} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("preparar %s: %v", dir, err)
+		}
+	}
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("HOME", home)
+	t.Setenv("OneDrive", "")
+	t.Setenv("PUBLIC", public)
+	t.Setenv("LOCALAPPDATA", filepath.Join(home, "AppData", "Local"))
+
+	dirs := exportDirCandidates()
+	if len(dirs) == 0 {
+		t.Fatal("nenhuma pasta candidata")
+	}
+	want := filepath.Join(public, "Documents", "DiscoveryExports")
+	if dirs[0] != want {
+		t.Fatalf("primeiro candidato = %q, want %q", dirs[0], want)
+	}
+}
+
 // Pastas pessoais inexistentes (ex.: Desktop antigo após o Known Folder Move do
 // OneDrive) não podem ser preferidas às que existem de fato.
 func TestExportDirCandidatesPrefersExistingPersonalDirs(t *testing.T) {

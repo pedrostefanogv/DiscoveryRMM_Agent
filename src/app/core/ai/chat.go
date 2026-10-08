@@ -69,6 +69,7 @@ type Service struct {
 	// cliques rápidos em surfaces diferentes não se sobrescrevem mais.
 	a2uiActionMu   sync.Mutex
 	a2uiActions    []A2uiAction
+	a2uiActionSeq  uint64
 	maxA2uiActions int
 
 	// turnMu garante um turno de chat por vez (B-M4): dois fluxos concorrentes
@@ -82,6 +83,36 @@ type Service struct {
 	// conteúdo multimodal para o LLM.
 	pendingImagesMu sync.Mutex
 	pendingImages   []string
+
+	// budgetObserver recebe os eventos de orçamento de rounds do agent loop
+	// (esgotado / renovado) para a UI explicar por que uma ação ainda não
+	// executou. Registrado pelo serviço de chat (SetBudgetObserver); fica nulo
+	// quando não há UI (ex.: testes e uso headless).
+	budgetObserver func(state, message string, round, maxRounds int)
+}
+
+// SetBudgetObserver registra o observador de orçamento de rounds. Idempotente:
+// a última função registrada vence.
+func (s *Service) SetBudgetObserver(fn func(state, message string, round, maxRounds int)) {
+	s.mu.Lock()
+	s.budgetObserver = fn
+	s.mu.Unlock()
+}
+
+// notifyBudget dispara o observador, quando houver, sem nunca derrubar o stream.
+func (s *Service) notifyBudget(state, message string, round, maxRounds int) {
+	s.mu.RLock()
+	fn := s.budgetObserver
+	s.mu.RUnlock()
+	if fn == nil {
+		return
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			s.logf("[chat] budget observer falhou: %v", r)
+		}
+	}()
+	fn(state, message, round, maxRounds)
 }
 
 // maxPendingImages limita quantos prints entram em um único turno.
@@ -119,6 +150,12 @@ type A2uiAction struct {
 	SurfaceID string
 	Name      string
 	Context   map[string]any
+	// Seq é um contador monotônico por processo, atribuído no enfileiramento.
+	// Serve para montar um CallID ÚNICO por clique: o tool result sintético
+	// (name "a2ui_action") usa o mesmo par (surface, name) em cliques repetidos,
+	// e um tool_call_id repetido na mesma sessão confunde o pareamento
+	// tool_call/tool_message exigido pelos provedores OpenAI-compatible.
+	Seq uint64
 }
 
 // NewService creates a chat service.
@@ -148,7 +185,13 @@ func (s *Service) SubmitA2uiAction(surfaceID, name string, context map[string]an
 		// sem limite se um turno demorar a consumir).
 		s.a2uiActions = s.a2uiActions[1:]
 	}
-	s.a2uiActions = append(s.a2uiActions, A2uiAction{SurfaceID: surfaceID, Name: name, Context: context})
+	s.a2uiActionSeq++
+	s.a2uiActions = append(s.a2uiActions, A2uiAction{
+		SurfaceID: surfaceID,
+		Name:      name,
+		Context:   context,
+		Seq:       s.a2uiActionSeq,
+	})
 }
 
 // takeA2uiAction consome e retorna a PRIMEIRA ação A2UI pendente (se houver).

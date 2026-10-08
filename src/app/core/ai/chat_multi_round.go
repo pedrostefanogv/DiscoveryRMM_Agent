@@ -151,11 +151,14 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 	if action != nil {
 		ctxJSON, _ := json.Marshal(action.Context)
 		initialToolResults = append(initialToolResults, toolResultItem{
-			CallID: "a2ui_" + action.SurfaceID,
+			// CallID ÚNICO por clique (surface + seq): cliques repetidos na mesma
+			// surface geravam o MESMO tool_call_id, e ids repetidos na sessão
+			// quebram o pareamento tool_call/tool_message do provedor.
+			CallID: a2uiActionCallID(action),
 			Name:   "a2ui_action",
-			Result: fmt.Sprintf(`{"surfaceId":%q,"name":%q,"context":%s}`, action.SurfaceID, action.Name, string(ctxJSON)),
+			Result: fmt.Sprintf(`{"surfaceId":%q,"name":%q,"context":%s,"instruction":"Execute agora a acao clicada pelo usuario: chame a tool MCP com o mesmo nome do campo name, usando o context informado. Nao peca confirmacao nem repita a interface - a autorizacao do usuario ja e tratada pelo agente."}`, action.SurfaceID, action.Name, string(ctxJSON)),
 		})
-		s.logf("[chat] ação A2UI '%s' injetada como tool result", action.Name)
+		s.logf("[chat] ação A2UI '%s' (seq=%d) injetada como tool result", action.Name, action.Seq)
 	}
 
 	pendingCalls := make([]pendingToolCall, 0)
@@ -231,6 +234,14 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 			m := strings.TrimSpace(msg)
 			if m == "" {
 				return
+			}
+			// Corrige defeitos do payload antes de renderizar (rótulo duplicado
+			// de Button + markdown cru no Text). O dedup abaixo compara o payload
+			// JÁ normalizado — dois envios que só diferem em formatação passam a
+			// contar como duplicados.
+			if norm := NormalizeA2uiMessage(m); norm != m {
+				s.logf("[chat] a2ui: payload normalizado (rótulo duplicado/markdown) %d -> %d chars", len(m), len(norm))
+				m = norm
 			}
 			if seenA2ui[m] {
 				s.logf("[chat] a2ui: payload duplicado descartado (%d chars)", len(m))
@@ -994,6 +1005,17 @@ func (s *Service) parseMultiRoundSSEWithProgress(body io.Reader, onToken func(st
 			if onLoopProgress != nil && evt.LoopMaxRounds > 0 {
 				onLoopProgress(evt.LoopRound, evt.LoopMaxRounds)
 			}
+		case "budget_exhausted", "budget_renewed":
+			// Orçamento de rounds do turno: o servidor vai PEDIR autorização ao
+			// usuário (esgotado) ou retomar as ações pendentes (renovado). Sem
+			// este sinal a UI não tinha como explicar por que a ação clicada
+			// ainda não executou.
+			state := "exhausted"
+			if strings.EqualFold(evt.Type, "budget_renewed") {
+				state = "renewed"
+			}
+			s.logf("[chat] orçamento de rounds: %s (%d/%d) — %s", state, evt.LoopRound, evt.LoopMaxRounds, TruncateForLog(evt.Content, 160))
+			s.notifyBudget(state, evt.Content, evt.LoopRound, evt.LoopMaxRounds)
 		case "token":
 			if evt.Content != "" {
 				contentBuf.WriteString(evt.Content)
@@ -1263,7 +1285,7 @@ func (s *Service) fallbackToSync(ctx context.Context, cfg Config, message, sessi
 	if len(onA2ui) > 0 && onA2ui[0] != nil {
 		for _, msg := range resp.A2uiMessages {
 			if m := strings.TrimSpace(msg); m != "" {
-				onA2ui[0](m)
+				onA2ui[0](NormalizeA2uiMessage(m))
 			}
 		}
 	}

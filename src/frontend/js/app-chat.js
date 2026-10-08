@@ -972,6 +972,40 @@ function onStreamThinking(status) {
   scheduleChatScrollToBottom();
 }
 
+// onChatBudget mostra no chat o estado do ORÇAMENTO DE ROUNDS do agent loop.
+// "exhausted": o servidor atingiu o limite de ferramentas do turno e vai pedir
+//   autorização ao usuário antes de continuar (as ações clicadas ainda NÃO
+//   executaram). "renewed": o usuário autorizou (ou começou um turno novo) e as
+//   ações pendentes serão retomadas.
+// Sem este aviso a interface ficava muda enquanto o backend já estava
+// bloqueado — foi o caso do clique no YogaDNS (2026-10-08).
+function onChatBudget(data) {
+  var payload = data;
+  if (typeof payload === "string") {
+    try { payload = JSON.parse(payload); } catch (_) { payload = { message: payload }; }
+  }
+  var state = (payload && payload.state) || "";
+  var round = payload && payload.round ? payload.round : 0;
+  var maxRounds = payload && payload.maxRounds ? payload.maxRounds : 0;
+  var msg = (payload && payload.message) || "";
+  if (!msg) {
+    msg = state === "renewed"
+      ? "Orçamento de rounds renovado — retomando as ações pendentes."
+      : "Limite de rounds de ferramentas atingido — aguardando sua autorização.";
+  }
+  console.log("[chat] budget " + state + " (" + round + "/" + maxRounds + "): " + msg);
+  // A bolha de streaming segue aberta enquanto o modelo pergunta: usa o widget
+  // de activity para o aviso ficar visível junto do progresso.
+  if (streamingBubble) {
+    var thinkingEl = streamingBubble.querySelector(".stream-thinking");
+    if (thinkingEl) {
+      thinkingEl.style.display = "";
+      setChatActivityText(thinkingEl, msg);
+      if (state !== "renewed") startChatActivityTimer(thinkingEl);
+    }
+  }
+  if (typeof showFeedback === "function") showFeedback(msg, false);
+}
 // onChatLoopProgress recebe o progresso do agent loop. O round vem do AGENTE
 // (contador do turno, ver chat_multi_round.go) — não do heartbeat cru do
 // servidor, cujo contador é por-request e travava em 1 nas tool chains MCP.
@@ -1626,9 +1660,9 @@ var A2UI_THEME_CSS = [
   "p,h1,h2,h3,h4,h5{margin:0 0 6px;line-height:1.5;color:inherit;}",
   "h1,h2,h3{font-weight:600;letter-spacing:.01em;}",
   "p{font-size:.92rem;}",
-  ".a2ui-caption{display:block;font-size:.76rem;text-transform:uppercase;letter-spacing:.06em;opacity:.7;}",
+  ".a2ui-caption{display:block;font-size:.82rem;line-height:1.45;opacity:.75;}",
   "button.a2ui-button{display:inline-flex;align-items:center;justify-content:center;gap:6px;",
-  "font:inherit;font-weight:600;font-size:.86rem;padding:8px 14px;border-radius:10px;",
+  "font:inherit;font-weight:600;font-size:.86rem;padding:8px 14px;border-radius:10px;white-space:nowrap;",
   "border:1px solid color-mix(in srgb,var(--accent,#4f8cff) 55%,transparent);",
   "background:linear-gradient(180deg,color-mix(in srgb,var(--accent,#4f8cff) 88%,#fff 12%),var(--accent,#4f8cff));",
   "color:var(--on-accent,#fff);cursor:pointer;",
@@ -1735,11 +1769,65 @@ function a2uiThemeRefresh(surfaceId) {
   if (contentEl) a2uiScheduleTheme(contentEl, entry.theme);
 }
 
+// ─── Watchdog de surface incompleta ───
+// Uma surface criada sem updateComponents fica presa em "Loading surface..."
+// para sempre: o renderer do catálogo só mostra o slot de loading quando o
+// componente root não existe. Foi o que aconteceu quando a resposta foi
+// interrompida no meio do bloco a2ui. O watchdog troca o card vazio por um
+// aviso claro em vez de deixar "Loading surface..." na tela.
+var A2UI_SURFACE_WATCHDOG_MS = 12000;
+
+function a2uiClearSurfaceWatchdog(entry) {
+  if (entry && entry.watchdog) {
+    clearTimeout(entry.watchdog);
+    entry.watchdog = null;
+  }
+}
+
+function a2uiArmSurfaceWatchdog(surfaceId, entry) {
+  a2uiClearSurfaceWatchdog(entry);
+  entry.watchdog = setTimeout(function () {
+    entry.watchdog = null;
+    if (a2uiSurfaces[surfaceId] !== entry) return;
+    // Turno ainda em andamento: os updateComponents podem estar a caminho (o
+    // createSurface e o updateComponents são mensagens distintas do stream e um
+    // turno lento pode separá-las por mais que o timeout). Só desiste quando o
+    // chat está livre — antes um turno lento matava o card e mostrava
+    // "interface não concluída" com a interface chegando logo depois.
+    if (chatSending || pendingA2uiAction) {
+      a2uiArmSurfaceWatchdog(surfaceId, entry);
+      return;
+    }
+    console.warn("[a2ui] surface " + surfaceId + " sem componentes após " + A2UI_SURFACE_WATCHDOG_MS + "ms — resposta interrompida?");
+    a2uiSurfaceDestroy(surfaceId);
+    showA2uiIncompleteNotice();
+  }, A2UI_SURFACE_WATCHDOG_MS);
+}
+
+// showA2uiIncompleteNotice avisa que a interface não veio completa — o texto
+// markdown normal do turno já foi exibido, então não há perda de conteúdo.
+function showA2uiIncompleteNotice() {
+  if (!chatMessagesEl) return;
+  var div = document.createElement("div");
+  div.className = "chat-msg assistant";
+  div.innerHTML = renderAssistantMarkdown(
+    "A interface interativa não foi concluída — a resposta foi interrompida antes de enviar os componentes. Peça para a IA gerar novamente.",
+  );
+  syncColorMode();
+  bindInternalChatLinks(div);
+  chatMessagesEl.appendChild(div);
+  scheduleChatScrollToBottom();
+}
+
 // ─── Estado ocupado e rastro do clique na conversa ───
-// a2uiActionBubblePending evita várias bolhas quando o usuário clica em mais de
-// um botão antes de o turno anterior terminar (o backend consome uma ação por
-// turno).
-var a2uiActionBubblePending = false;
+// Dedupe de clique repetido: mesma ação (surface + nome + contexto) dentro de
+// A2UI_ACTION_DEDUPE_MS é ignorada. Antes existia um flag GLOBAL que engolia a
+// bolha de QUALQUER clique feito durante um turno — o usuário clicava em outro
+// programa e a interface não mostrava nada (caso YogaDNS 2026-10-08), mesmo com
+// o comando já enfileirado no agent.
+var A2UI_ACTION_DEDUPE_MS = 1200;
+var a2uiLastActionKey = "";
+var a2uiLastActionAt = 0;
 
 // formatA2uiActionLabel dá nome legível ao clique, para o turno disparado pela
 // interface não ficar sem rastro na conversa.
@@ -1764,7 +1852,6 @@ function clearA2uiBusy() {
 // nem ação A2UI na fila; chamada nos terminais do stream.
 function a2uiSettleBusyIfIdle() {
   if (chatSending || pendingA2uiAction) return;
-  a2uiActionBubblePending = false;
   clearA2uiBusy();
 }
 
@@ -1772,6 +1859,7 @@ function a2uiSettleBusyIfIdle() {
 function a2uiSurfaceDestroy(surfaceId) {
   var entry = a2uiSurfaces[surfaceId];
   if (!entry) return;
+  a2uiClearSurfaceWatchdog(entry);
   a2uiThemeDispose(entry);
   try { entry.handle.destroy(); } catch (_) {}
   if (entry.bubble) { try { entry.bubble.remove(); } catch (_) {} }
@@ -1878,6 +1966,8 @@ function onChatA2ui(data) {
     // Para as demais (updateComponents/updateDataModel/deleteSurface), envia.
     if (!isCreateSurface && entry) {
       entry.handle.processMessages([parsed]);
+      // Chegaram componentes: a surface é válida, cancela o watchdog.
+      a2uiClearSurfaceWatchdog(entry);
     }
     // updateComponents/updateDataModel criam hosts novos (e novos shadow roots):
     // reaplica o tema depois do processamento.
@@ -1953,6 +2043,8 @@ function ensureA2uiSurface(surfaceId) {
   // Tema visual: injetado nos shadow roots do catálogo Lit (o CSS do app não
   // atravessa a fronteira do shadow root — ver A2UI_THEME_CSS).
   a2uiThemeAttach(contentEl, entry);
+  // Surface sem updateComponents = card preso em "Loading surface...".
+  a2uiArmSurfaceWatchdog(surfaceId, entry);
   syncColorMode();
   scheduleChatScrollToBottom();
   return handle;
@@ -1969,6 +2061,19 @@ function ensureA2uiSurface(surfaceId) {
 // um turno sobre outro assunto.
 function handleA2uiUserAction(surfaceId, action) {
   if (!action || !action.name) return;
+
+  // Clique repetido no MESMO botão (duplo clique, ou clique enquanto o anterior
+  // ainda está na fila) é ignorado: sem isso a mesma ação seria enfileirada
+  // duas vezes e o programa seria atualizado/instalado duas vezes.
+  var actionKey = surfaceId + "|" + action.name + "|" + JSON.stringify(action.context || {});
+  var now = Date.now();
+  if (a2uiLastActionKey === actionKey && now - a2uiLastActionAt < A2UI_ACTION_DEDUPE_MS) {
+    console.warn("[a2ui] clique repetido ignorado (mesma ação em <" + A2UI_ACTION_DEDUPE_MS + "ms):", action.name);
+    return;
+  }
+  a2uiLastActionKey = actionKey;
+  a2uiLastActionAt = now;
+
   try {
     var payload = {
       surfaceId: surfaceId,
@@ -1976,13 +2081,10 @@ function handleA2uiUserAction(surfaceId, action) {
       context: action.context || {},
     };
     appApi().AnswerA2uiAction(JSON.stringify(payload));
-    // Rastro na conversa: o clique vira uma bolha do usuário. Antes o turno
-    // disparado pela surface não deixava nenhuma marca na thread e a resposta
-    // do agente parecia "surgir do nada".
-    if (!a2uiActionBubblePending) {
-      a2uiActionBubblePending = true;
-      addChatMessage("user", formatA2uiActionLabel(action));
-    }
+    // Rastro SEMPRE: o clique vira bolha do usuário, inclusive quando entrou na
+    // fila durante um turno ativo (antes o flag global escondia esse clique e a
+    // ação era processada sem nenhum sinal na interface).
+    addChatMessage("user", formatA2uiActionLabel(action));
     // Estado ocupado no card: o componente fica esmaecido enquanto o agente
     // processa a ação (antes o clique não dava nenhum retorno visual imediato).
     a2uiSetBusy(surfaceId, true);
@@ -2092,6 +2194,7 @@ function clearA2uiSurface() {
     "chat:token": onStreamToken,
     "chat:thinking": onStreamThinking,
     "chat:loop_progress": onChatLoopProgress,
+    "chat:budget": onChatBudget,
     "chat:done": onStreamDone,
     "chat:error": onStreamError,
     "chat:stopped": onStreamStopped,

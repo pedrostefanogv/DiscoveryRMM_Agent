@@ -3,6 +3,7 @@ package ai
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
 // A2uiActionSentinel é a mensagem interna que o frontend envia ao iniciar um
@@ -10,6 +11,26 @@ import (
 // LLM nem entrar no histórico: o conteúdo real do clique vai como tool result
 // (a2ui_action).
 const A2uiActionSentinel = "__a2ui_action__"
+
+// a2uiActionCallID gera o tool_call_id do tool result sintético que transporta
+// o clique da interface até o LLM.
+//
+// Precisa ser ÚNICO por clique: o par (surface, name) se repete quando o usuário
+// clica no mesmo botão em momentos diferentes, e repetir o tool_call_id na
+// mesma sessão confunde o pareamento tool_call/tool_message exigido pelos
+// provedores OpenAI-compatible (o segundo clique podia ser ignorado).
+// a2uiProcessTag identifica a EXECUÇÃO do agent na composição do call id. O
+// contador Seq reinicia a cada start do processo, então sem esta marca dois
+// cliques em execuções diferentes poderiam repetir o mesmo tool_call_id dentro
+// da mesma sessão do servidor (a sessão vive no servidor, não no agent).
+var a2uiProcessTag = fmt.Sprintf("%x", uint32(time.Now().UnixNano()))
+
+func a2uiActionCallID(action *A2uiAction) string {
+	if action == nil {
+		return "a2ui_action"
+	}
+	return fmt.Sprintf("a2ui_%s_%s_%d", action.SurfaceID, a2uiProcessTag, action.Seq)
+}
 
 // resolveA2uiTurn decide, no INÍCIO de um turno, como a mensagem entrante se
 // relaciona com a fila de ações A2UI. Devolve a ação a injetar (nil quando não

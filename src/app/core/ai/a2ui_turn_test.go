@@ -1,8 +1,36 @@
 package ai
 
 import (
+	"strings"
 	"testing"
 )
+
+// Regressão 2026-10-08: o CallID do tool result A2UI era "a2ui_<surfaceId>",
+// repetido a cada clique na mesma surface. Ids repetidos na sessão quebram o
+// pareamento tool_call/tool_message do provedor — cada clique precisa do seu.
+func TestA2uiActionCallID_UniquePerClick(t *testing.T) {
+	s := NewService(nil)
+	ctx := map[string]any{"id": "Initex.YogaDNS"}
+	s.SubmitA2uiAction("updates_card", "upgrade_package", ctx)
+	s.SubmitA2uiAction("updates_card", "upgrade_package", ctx)
+
+	first := s.takeA2uiAction()
+	second := s.takeA2uiAction()
+	if first == nil || second == nil {
+		t.Fatalf("as duas ações deveriam estar na fila (first=%#v second=%#v)", first, second)
+	}
+
+	id1, id2 := a2uiActionCallID(first), a2uiActionCallID(second)
+	if id1 == id2 {
+		t.Fatalf("callIds devem ser únicos por clique, ambos = %q", id1)
+	}
+	if !strings.HasPrefix(id1, "a2ui_updates_card_") {
+		t.Fatalf("callId inesperado: %q", id1)
+	}
+	if first.Name != "upgrade_package" || first.SurfaceID != "updates_card" {
+		t.Fatalf("ação alterada: %#v", first)
+	}
+}
 
 // Regressão do ciclo de vida das ações A2UI (bug exposto quando as surfaces
 // passaram a renderizar): o clique podia ser perdido e a sentinela
