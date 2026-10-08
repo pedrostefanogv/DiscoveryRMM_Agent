@@ -510,9 +510,17 @@ func resolveSystemPrompt(cfg Config) string {
 	return prompt
 }
 
-// Send processes a user message: appends it to history, calls the LLM
-// (possibly multiple rounds for tool calls), and returns the assistant reply.
+// Send processa uma mensagem pelo endpoint SÍNCRONO e devolve a resposta.
+// Mantido para compatibilidade; quem precisa das interfaces A2UI usa
+// SendWithA2ui (o endpoint sync não tem SSE: as mensagens A2UI chegam no JSON
+// da resposta e precisam ser repassadas ao frontend).
 func (s *Service) Send(ctx context.Context, userMessage string) (string, error) {
+	return s.SendWithA2ui(ctx, userMessage, nil)
+}
+
+// SendWithA2ui é o Send com callback das mensagens A2UI devolvidas pelo
+// endpoint síncrono. onA2ui pode ser nil.
+func (s *Service) SendWithA2ui(ctx context.Context, userMessage string, onA2ui func(string)) (string, error) {
 	s.mu.Lock()
 	cfg := s.cfg
 	sessionID := s.sessionID
@@ -553,6 +561,15 @@ func (s *Service) Send(ctx context.Context, userMessage string) (string, error) 
 		}
 		s.mu.Unlock()
 		return "", err
+	}
+
+	// A2UI no caminho síncrono: o servidor extrai as interfaces e as devolve
+	// no JSON (não há SSE). Repassa ANTES de devolver o texto para o card
+	// aparecer junto com a resposta.
+	for _, msg := range resp.A2uiMessages {
+		if m := strings.TrimSpace(msg); m != "" && onA2ui != nil {
+			onA2ui(m)
+		}
 	}
 
 	assistant := strings.TrimSpace(resp.AssistantMessage)
@@ -600,6 +617,11 @@ type agentChatSyncResponse struct {
 	TokensUsed              int    `json:"tokensUsed"`
 	ConversationTokensTotal int    `json:"conversationTokensTotal"`
 	LatencyMs               int    `json:"latencyMs"`
+	// A2uiMessages são as interfaces A2UI extraídas pelo servidor no JSON da
+	// resposta síncrona (que não tem SSE para emitir chunks "a2ui"). O agent
+	// repassa cada uma ao frontend via evento "chat:a2ui". Ausente em
+	// servidores antigos (slice vazia).
+	A2uiMessages []string `json:"a2uiMessages"`
 }
 
 // agentChatStreamEvent está definido em chat_stream.go

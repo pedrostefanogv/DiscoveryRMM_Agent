@@ -2,24 +2,46 @@ package ai
 
 import "testing"
 
-// Regressão: a autorização de gravação dos exports é uma PERGUNTA no chat.
-// Se a tool ficar sujeita ao timeout de 60s do loop, a pergunta morre antes do
-// clique do usuário e a exportação nunca é confirmada (ou é negada em silêncio).
+// Regressão: as tools que pedem autorização ao usuário no chat não podem ficar
+// sujeitas ao timeout de 60s do loop, senão a pergunta morre antes do clique.
 func TestInteractiveToolRequiresUser(t *testing.T) {
-	wantInteractive := []string{
-		"ask_user", "capture_screenshot", "read_file",
-		"export_inventory_markdown", "export_inventory_pdf",
-	}
-	for _, name := range wantInteractive {
-		if !interactiveToolRequiresUser(name) {
-			t.Errorf("%q deveria aguardar o usuário (sem timeout)", name)
-		}
+	cases := []struct {
+		name     string
+		args     string
+		expected bool
+	}{
+		{"ask_user", `{"question":"x"}`, true},
+		{"read_file", `{"path":"C:/a.txt"}`, true},
+		{"capture_screenshot", "", true},
+
+		// Consentimento (mcp.ToolConsentFor) — por AÇÃO.
+		{"export_inventory_pdf", "", true},
+		{"install_package", `{"id":"Google.Chrome"}`, true},
+		{"uninstall_package", `{"id":"7zip.7zip"}`, true},
+		{"upgrade_all_packages", "", true},
+		{"power_action", `{"action":"restart"}`, true},
+
+		// Mesma tool, ação de leitura: NÃO é interativa.
+		{"service_control", `{"action":"list"}`, false},
+		{"service_control", `{"action":"stop","name":"Spooler"}`, true},
+		{"process_control", `{"action":"list"}`, false},
+		{"process_control", `{"action":"kill","pid":4242}`, true},
+		{"scheduled_task", `{"action":"list"}`, false},
+		{"scheduled_task", `{"action":"run","taskName":"X"}`, true},
+		{"printer", `{"action":"list"}`, false},
+		{"printer", `{"action":"remove","name":"HP"}`, true},
+
+		// Diagnóstico puro nunca é interativo.
+		{"get_inventory", "", false},
+		{"search_packages", `{"query":"firefox"}`, false},
+		{"get_logs", "", false},
+		{"shares", `{"action":"shares"}`, false},
+		{"osquery", `{"sql":"select 1"}`, false},
 	}
 
-	wantTimed := []string{"get_inventory", "search_packages", "install_package", "get_logs"}
-	for _, name := range wantTimed {
-		if interactiveToolRequiresUser(name) {
-			t.Errorf("%q NÃO deveria ser isenta de timeout", name)
+	for _, tc := range cases {
+		if got := interactiveToolRequiresUser(tc.name, tc.args); got != tc.expected {
+			t.Errorf("interactiveToolRequiresUser(%q, %s) = %v, want %v", tc.name, tc.args, got, tc.expected)
 		}
 	}
 }

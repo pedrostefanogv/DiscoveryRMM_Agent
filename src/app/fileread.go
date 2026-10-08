@@ -8,6 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"discovery/app/core/consent"
+	applocale "discovery/app/services/locale"
 )
 
 // Limites da leitura de arquivo solicitada pela IA. O conteudo e sempre de
@@ -17,10 +20,6 @@ const (
 	readFileHardMaxBytes    = 64 * 1024
 	readFileBinaryProbe     = 8 * 1024
 )
-
-// readFileApproveLabel e o rotulo EXATO do botao de autorizacao. Qualquer outra
-// resposta (inclusive texto livre) conta como negacao — fail-closed.
-const readFileApproveLabel = "Autorizar leitura"
 
 // sensitiveReadFileHints sao caminhos que costumam conter segredos. Nao bloqueiam
 // a leitura (a decisao e do usuario), mas aparecem em destaque no pedido de
@@ -59,15 +58,21 @@ func (a *App) ReadFileWithConsent(ctx context.Context, path string, maxBytes int
 		maxBytes = readFileHardMaxBytes
 	}
 
+	// Rótulos localizados (mesmo vocabulário do consentimento de ações em
+	// core/consent). A comparação continua sendo por igualdade EXATA: qualquer
+	// outra resposta (inclusive texto livre) conta como negativa — fail-closed.
+	locale := applocale.DetectPreferredLocale()
+	approveLabel := consent.ApproveLabel(locale)
+
 	question := buildReadFileQuestion(cleanPath, info.Size(), reason)
-	optionsJSON, _ := json.Marshal([]string{readFileApproveLabel, "Negar"})
+	optionsJSON, _ := json.Marshal([]string{approveLabel, consent.DenyLabel(locale)})
 	answer, askErr := a.AskUserContext(ctx, question, string(optionsJSON), "false")
 	if askErr != nil {
 		a.logReadFile("cancelado", cleanPath, askErr.Error())
 		return nil, askErr
 	}
 
-	if !strings.EqualFold(strings.TrimSpace(answer), readFileApproveLabel) {
+	if !strings.EqualFold(strings.TrimSpace(answer), approveLabel) {
 		a.logReadFile("negado", cleanPath, "resposta do usuario: "+strings.TrimSpace(answer))
 		payload, _ := json.Marshal(map[string]any{
 			"approved": false,

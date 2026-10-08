@@ -143,10 +143,12 @@ func writeWithFallback(fileName string, writer func(outPath string) error) (stri
 func exportDirCandidates() []string {
 	paths := make([]string, 0, 5)
 
-	if exe, err := os.Executable(); err == nil && strings.TrimSpace(exe) != "" {
-		paths = append(paths, filepath.Join(filepath.Dir(exe), "DiscoveryExports"))
-	}
-
+	// 1) Pastas GRAVÁVEIS PELO USUÁRIO primeiro. A exportação pedida pela IA
+	// (e o botão da tela de inventário) não deve exigir privilégio de
+	// administrador: antes a pasta do executável
+	// (C:\Program Files\Discovery\DiscoveryExports) vinha primeiro e, sem
+	// elevação, todas as tentativas até a primeira pasta do usuário falhavam —
+	// o erro reportado ficava com "falha ao exportar; tentativas: ...".
 	if runtime.GOOS == "windows" {
 		if localAppData := strings.TrimSpace(os.Getenv("LOCALAPPDATA")); localAppData != "" {
 			paths = append(paths, filepath.Join(localAppData, "Discovery", "Exports"))
@@ -155,9 +157,18 @@ func exportDirCandidates() []string {
 
 	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
 		paths = append(paths, filepath.Join(home, "Documents", "DiscoveryExports"))
-		paths = append(paths, filepath.Join(home, "DiscoveryExports"))
 	}
 
+	// 2) Pasta ao lado do executável (instalação elevada): mantém a
+	// descoberta fácil em instalações administrativas.
+	if exe, err := os.Executable(); err == nil && strings.TrimSpace(exe) != "" {
+		paths = append(paths, filepath.Join(filepath.Dir(exe), "DiscoveryExports"))
+	}
+
+	// 3) Últimos recursos.
+	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
+		paths = append(paths, filepath.Join(home, "DiscoveryExports"))
+	}
 	paths = append(paths, filepath.Join(".", "DiscoveryExports"))
 	return lo.Uniq(paths)
 }

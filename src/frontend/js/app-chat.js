@@ -51,6 +51,15 @@ var a2uiTokenFilter = {
   jsonBody: "",
 };
 
+// Rastreio da interface A2UI do turno. O servidor DESCARTA interfaces inválidas
+// (validação contra o catálogo do renderer) — nesse caso nenhum evento
+// "chat:a2ui" chega e o texto, que costuma anunciar um card, ficaria sem
+// explicação. a2uiBlockSeen = o filtro viu um bloco ```a2ui; a2uiRendered =
+// algum evento chat:a2ui foi recebido (mesmo que a renderização tenha falhado,
+// o fallback visual já explica).
+var a2uiBlockSeen = false;
+var a2uiRendered = false;
+
 // Aberturas reconhecidas (prefixo mais longo primeiro).
 var LEAK_OPEN_A2UI = "```a2ui";
 var LEAK_OPEN_JSON = "```json";
@@ -119,6 +128,7 @@ function filterA2uiTokens(token) {
       out += f.buffer.slice(0, c.idx);
       f.buffer = f.buffer.slice(c.idx + c.len);
       f.state = c.kind;
+      if (c.kind === "a2ui") a2uiBlockSeen = true;
       f.jsonBody = "";
       progress = true;
     } else if (f.state === "a2ui") {
@@ -237,6 +247,8 @@ function resetA2uiTokenFilter() {
   a2uiTokenFilter.state = "";
   a2uiTokenFilter.buffer = "";
   a2uiTokenFilter.jsonBody = "";
+  a2uiBlockSeen = false;
+  a2uiRendered = false;
 }
 
 function onStreamToken(token) {
@@ -977,6 +989,7 @@ function onChatLoopProgress(data) {
 
 function finaliseStreamingBubble() {
   if (!streamingBubble) return;
+  var filterStateAtEnd = a2uiTokenFilter.state;
   // Libera qualquer texto residual que ficou retido no buffer do filtro
   // (ex.: os últimos caracteres de uma resposta sem vazamentos). Se o stream
   // morreu DENTRO de um bloco a2ui/json/DSML, o residual é conteúdo truncado
@@ -991,12 +1004,29 @@ function finaliseStreamingBubble() {
     if (!INVOKE_ARRAY_RE.test(partialBody) && !A2UI_ACTION_RE.test(partialBody)) {
       streamingRawContent += "```json" + a2uiTokenFilter.jsonBody;
     }
+  } else if (a2uiTokenFilter.state === "a2ui") {
+    // Stream morreu DENTRO do bloco a2ui: o evento chat:a2ui nunca chegará
+    // (o servidor só extrai o bloco no fim). Com texto visível, anexa um aviso
+    // curto — antes o usuário via o texto anunciando o card e nada acontecia.
+    if (streamingRawContent.trim()) {
+      streamingRawContent += "\n\n" + translate("chat.a2uiInterrupted");
+    } else {
+      streamingRawContent = translate("chat.responseInterrupted");
+    }
   } else if (!streamingRawContent.trim()) {
-    // Stream morreu no meio de um bloco a2ui/DSML e não há texto visível:
-    // o evento chat:a2ui nunca chegará (o servidor só extrai o bloco no fim).
-    // Mostra um aviso em vez de deixar o usuário sem resposta.
+    // Stream morreu no meio de um bloco DSML e não há texto visível: o evento
+    // chat:a2ui nunca chegará. Mostra um aviso em vez de deixar o usuário sem
+    // resposta.
     streamingRawContent = translate("chat.responseInterrupted");
   }
+  // Bloco a2ui visto no stream, mas NENHUM evento chat:a2ui recebido: o
+  // servidor descartou a interface (validação do catálogo). Avisa para o texto
+  // que anunciava um card não ficar sem explicação. O caso de stream truncado
+  // dentro do bloco já foi avisado acima (filterStateAtEnd === "a2ui").
+  if (filterStateAtEnd !== "a2ui" && a2uiBlockSeen && !a2uiRendered) {
+    streamingRawContent += "\n\n" + translate("chat.a2uiNotShown");
+  }
+
   a2uiTokenFilter.buffer = "";
   a2uiTokenFilter.state = "";
   a2uiTokenFilter.jsonBody = "";
@@ -1536,9 +1566,19 @@ function onChatQuestionCancelled(data) {
 
 // ─── A2UI (Agent-to-User Interface) — interfaces ricas geradas por IA ───
 
-// Estado da surface A2UI ativa no chat.
-var a2uiSurfaceHandle = null;
-var a2uiSurfaceBubble = null;
+// Mapa das surfaces A2UI ativas por surfaceId. Antes havia UMA surface ativa:
+// ao chegar um card novo a anterior era destruída e seus botões morriam. Agora
+// cada surfaceId conserva a sua bolha/handle (um card antigo continua clicável).
+var a2uiSurfaces = Object.create(null);
+
+// a2uiSurfaceDestroy remove a bolha e destrói o handle de UMA surface.
+function a2uiSurfaceDestroy(surfaceId) {
+  var entry = a2uiSurfaces[surfaceId];
+  if (!entry) return;
+  try { entry.handle.destroy(); } catch (_) {}
+  if (entry.bubble) { try { entry.bubble.remove(); } catch (_) {} }
+  delete a2uiSurfaces[surfaceId];
+}
 // True quando uma ação A2UI foi submetida durante um stream ativo e precisa
 // ser processada (novo StartChatStream) assim que o stream atual terminar.
 var pendingA2uiAction = false;
@@ -1565,7 +1605,7 @@ function onChatA2ui(data) {
     // usuário preso em "Pensando..." sem resposta), mostra uma mensagem
     // amigável. O texto markdown normal (fora do bloco a2ui) já foi exibido
     // pelo streaming, então não há perda de conteúdo relevante.
-    fallbackA2uiToMarkdown(msg);
+    fallbackA2uiToMarkdown(msg, null);
     return;
   }
 
@@ -1581,6 +1621,9 @@ function onChatA2ui(data) {
       console.warn("[a2ui] mensagem sem version; ignorando:", msg);
       return;
     }
+    // O evento chegou: a interface TENTOU renderizar. Em caso de falha o
+    // fallback abaixo já explica — não somar o aviso de "não exibida".
+    a2uiRendered = true;
 
     // Determina o surfaceId da mensagem (createSurface/updateComponents/...).
     var msgSurfaceId = null;
@@ -1594,13 +1637,17 @@ function onChatA2ui(data) {
       msgSurfaceId = parsed.deleteSurface.surfaceId || null;
     }
 
-    // Se a mensagem referencia uma surface diferente da ativa, ignora (defensivo).
-    if (
-      msgSurfaceId &&
-      a2uiSurfaceHandle &&
-      a2uiSurfaceHandle.surfaceId !== msgSurfaceId
-    ) {
-      console.warn("[a2ui] mensagem para surface diferente; ignorando:", msgSurfaceId);
+    // Roteia por surfaceId: cada surface tem a sua bolha/handle, então uma
+    // mensagem nunca é descartada por "surface diferente" (era o que fazia os
+    // cards anteriores — e seus botões — sumirem).
+    var targetSurfaceId = msgSurfaceId || "discovery-chat-surface";
+
+    // deleteSurface: remove a bolha local também. O MessageProcessor destrói a
+    // surface interna, mas a bolha ficaria vazia no chat (e recriar uma surface
+    // para uma mensagem de exclusão só piorava).
+    if (parsed.deleteSurface) {
+      a2uiSurfaceDestroy(targetSurfaceId);
+      scheduleChatScrollToBottom();
       return;
     }
 
@@ -1609,18 +1656,21 @@ function onChatA2ui(data) {
     // aqui para evitar duplicação.
     var isCreateSurface = !!parsed.createSurface;
     if (isCreateSurface) {
-      ensureA2uiSurface(msgSurfaceId || "discovery-chat-surface");
+      ensureA2uiSurface(targetSurfaceId);
     }
 
-    if (!a2uiSurfaceHandle) {
-      // Sem surface ativa, cria uma default (defensivo).
-      ensureA2uiSurface("discovery-chat-surface");
+    var entry = a2uiSurfaces[targetSurfaceId];
+    if (!entry) {
+      // Mensagem de surface ainda não criada (ex.: createSurface perdido):
+      // cria a default para não perder a interface.
+      ensureA2uiSurface(targetSurfaceId);
+      entry = a2uiSurfaces[targetSurfaceId];
     }
 
     // Para createSurface, o ensureA2uiSurface já enviou a mensagem ao processor.
     // Para as demais (updateComponents/updateDataModel/deleteSurface), envia.
-    if (!isCreateSurface) {
-      a2uiSurfaceHandle.processMessages([parsed]);
+    if (!isCreateSurface && entry) {
+      entry.handle.processMessages([parsed]);
     }
     scheduleChatScrollToBottom();
   } catch (e) {
@@ -1628,23 +1678,18 @@ function onChatA2ui(data) {
     // não deixamos o usuário sem resposta. Renderiza o conteúdo bruto como
     // markdown normal e limpa a surface parcial, se houver.
     console.error("[a2ui] erro ao processar mensagem:", e);
-    fallbackA2uiToMarkdown(msg);
+    fallbackA2uiToMarkdown(msg, targetSurfaceId || null);
   }
 }
 
 // fallbackA2uiToMarkdown é chamado quando o renderer A2UI falha. Em vez de
-// exibir o JSON cru (lixo para o usuário), remove a surface parcial e mostra
-// uma mensagem amigável. O texto markdown normal (fora do bloco a2ui) já foi
-// exibido pelo streaming, então não há perda de conteúdo relevante.
-function fallbackA2uiToMarkdown(rawMsg) {
+// exibir o JSON cru (lixo para o usuário), remove a surface parcial (a do
+// surfaceId informado) e mostra uma mensagem amigável. O texto markdown normal
+// (fora do bloco a2ui) já foi exibido pelo streaming, então não há perda.
+function fallbackA2uiToMarkdown(rawMsg, surfaceId) {
   try {
-    if (a2uiSurfaceHandle) {
-      try { a2uiSurfaceHandle.destroy(); } catch (_) {}
-      a2uiSurfaceHandle = null;
-    }
-    if (a2uiSurfaceBubble) {
-      a2uiSurfaceBubble.remove();
-      a2uiSurfaceBubble = null;
+    if (surfaceId) {
+      a2uiSurfaceDestroy(surfaceId);
     }
     // Loga o payload bruto para diagnóstico, mas não o exibe ao usuário.
     console.warn("[a2ui] payload que falhou:", String(rawMsg || ""));
@@ -1663,21 +1708,13 @@ function fallbackA2uiToMarkdown(rawMsg) {
   }
 }
 
-// ensureA2uiSurface cria a bolha de mensagem e a surface A2UI dentro dela.
+// ensureA2uiSurface cria a bolha de mensagem e a surface A2UI dentro dela para
+// o surfaceId informado (reutiliza a existente). Cada surface tem a sua bolha:
+// um card novo NÃO destrói os anteriores.
 function ensureA2uiSurface(surfaceId) {
-  if (a2uiSurfaceHandle && a2uiSurfaceHandle.surfaceId === surfaceId) return;
-  if (!chatMessagesEl) return;
-
-  // Destrói surface anterior e REMOVE a bolha antiga do DOM — sem isso a
-  // bolha antiga ficava órfã (sem handle) e se acumulava a cada nova surface.
-  if (a2uiSurfaceHandle) {
-    try { a2uiSurfaceHandle.destroy(); } catch (_) {}
-    a2uiSurfaceHandle = null;
-  }
-  if (a2uiSurfaceBubble) {
-    a2uiSurfaceBubble.remove();
-    a2uiSurfaceBubble = null;
-  }
+  var existing = a2uiSurfaces[surfaceId];
+  if (existing) return existing.handle;
+  if (!chatMessagesEl) return null;
 
   var div = document.createElement("div");
   div.className = "chat-msg assistant chat-a2ui";
@@ -1688,22 +1725,23 @@ function ensureA2uiSurface(surfaceId) {
   div.appendChild(contentEl);
 
   chatMessagesEl.appendChild(div);
-  a2uiSurfaceBubble = div;
 
+  var handle = null;
   try {
-    a2uiSurfaceHandle = window.A2uiChat.createSurface(contentEl, surfaceId);
-    a2uiSurfaceHandle.onUserAction(function (action) {
+    handle = window.A2uiChat.createSurface(contentEl, surfaceId);
+    handle.onUserAction(function (action) {
       handleA2uiUserAction(surfaceId, action);
     });
   } catch (e) {
     console.error("[a2ui] falha ao criar surface:", e);
     div.remove();
-    a2uiSurfaceHandle = null;
-    a2uiSurfaceBubble = null;
+    return null;
   }
 
+  a2uiSurfaces[surfaceId] = { handle: handle, bubble: div };
   syncColorMode();
   scheduleChatScrollToBottom();
+  return handle;
 }
 
 // handleA2uiUserAction encaminha uma ação do usuário (clique/input) ao agent.
@@ -1796,16 +1834,12 @@ function sendChatMessageWithA2uiAction() {
   }
 }
 
-// Limpa a surface A2UI quando o chat é limpo.
+// Limpa TODAS as surfaces A2UI quando o chat é limpo.
 function clearA2uiSurface() {
-  if (a2uiSurfaceHandle) {
-    try { a2uiSurfaceHandle.destroy(); } catch (_) {}
-    a2uiSurfaceHandle = null;
-  }
-  if (a2uiSurfaceBubble) {
-    a2uiSurfaceBubble.remove();
-    a2uiSurfaceBubble = null;
-  }
+  Object.keys(a2uiSurfaces).forEach(function (surfaceId) {
+    a2uiSurfaceDestroy(surfaceId);
+  });
+  a2uiSurfaces = Object.create(null);
   pendingA2uiAction = false;
 }
 

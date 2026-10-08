@@ -622,6 +622,10 @@ var APP_I18N_DICTIONARY = {
     "chat.stopping": "Parando...",
     "chat.thinking": "Pensando...",
     "chat.responseInterrupted": "_Resposta interrompida pelo usuário._",
+    "chat.a2uiInterrupted":
+      "_A interface interativa ficou incompleta (a resposta foi interrompida)._",
+    "chat.a2uiNotShown":
+      "_A interface interativa desta resposta não pôde ser exibida._",
     "chat.timeout": "_Tempo limite da resposta excedido. Tente novamente._",
     "chat.streamSlow": "_A resposta está demorando mais que o esperado. Você pode aguardar ou clicar em Parar._",
     "chat.activity.connecting": "Um instante…",
@@ -1333,6 +1337,10 @@ var APP_I18N_DICTIONARY = {
     "chat.stopping": "Stopping...",
     "chat.thinking": "Thinking...",
     "chat.responseInterrupted": "_Response interrupted by the user._",
+    "chat.a2uiInterrupted":
+      "_The interactive interface is incomplete (the response was interrupted)._",
+    "chat.a2uiNotShown":
+      "_The interactive interface for this response could not be displayed._",
     "chat.timeout": "_Response timed out. Please try again._",
     "chat.streamSlow": "_The response is taking longer than expected. You can wait or click Stop._",
     "chat.activity.connecting": "One moment…",

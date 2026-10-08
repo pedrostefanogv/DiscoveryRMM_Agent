@@ -384,7 +384,7 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 			if isA2uiTurn {
 				fallbackMsg = ""
 			}
-			return s.fallbackToSync(streamCtx, cfg, fallbackMsg, sessionID, onToken)
+			return s.fallbackToSync(streamCtx, cfg, fallbackMsg, sessionID, onToken, onA2ui...)
 		}
 
 		hasToolCalls := len(pendingCalls) > 0
@@ -535,9 +535,10 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 				// exige autorização por leitura: o timer de 60s mataria a
 				// interação/espera pela resposta do usuário.
 				//
-				// export_inventory_markdown/pdf pedem AUTORIZAÇÃO de gravação ao
-				// usuário (RequestFileWriteConsent) e ficam na mesma regra: o
-				// timeout de 60s mataria a pergunta antes do clique.
+				// Toda tool que pede AUTORIZAÇÃO ao usuário (gravação, instalar,
+				// desinstalar, parar serviço, reiniciar...) fica na mesma regra:
+				// o timeout de 60s mataria a pergunta antes do clique. A lista é
+				// derivada de mcp.ToolConsentFor, então acompanha a política.
 				// Timeout padrão de 60s; a política de escopo do servidor pode definir
 				// um valor por tool (pendingToolCall.TimeoutSeconds) — ex.: ações
 				// pesadas precisam de mais tempo.
@@ -547,7 +548,7 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 				}
 				var execCtx context.Context
 				var execCancel context.CancelFunc
-				if interactiveToolRequiresUser(tc.Name) {
+				if interactiveToolRequiresUser(tc.Name, tc.Args) {
 					execCtx, execCancel = context.WithCancel(streamCtx)
 				} else {
 					execCtx, execCancel = context.WithTimeout(streamCtx, execTimeout)
@@ -1237,7 +1238,7 @@ func toolArgsForLog(calls []pendingToolCall) []string {
 	return args
 }
 
-func (s *Service) fallbackToSync(ctx context.Context, cfg Config, message, sessionID string, onToken func(string)) (string, error) {
+func (s *Service) fallbackToSync(ctx context.Context, cfg Config, message, sessionID string, onToken func(string), onA2ui ...func(string)) (string, error) {
 	s.logChatEntry(ChatLogEntry{
 		Type:       "fallback_to_sync",
 		Method:     "multi_round",
@@ -1255,6 +1256,16 @@ func (s *Service) fallbackToSync(ctx context.Context, cfg Config, message, sessi
 			Error:     err.Error(),
 		})
 		return "", err
+	}
+
+	// A2UI no fallback síncrono: o servidor devolve as interfaces no JSON (sem
+	// SSE). Sem este repasse o card sumia em silêncio quando o stream falhava.
+	if len(onA2ui) > 0 && onA2ui[0] != nil {
+		for _, msg := range resp.A2uiMessages {
+			if m := strings.TrimSpace(msg); m != "" {
+				onA2ui[0](m)
+			}
+		}
 	}
 	assistant := strings.TrimSpace(resp.AssistantMessage)
 	if assistant == "" {

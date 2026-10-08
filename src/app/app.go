@@ -320,6 +320,9 @@ func NewApp(opts AppStartupOptions) *App {
 		OnAssistantResponseFailed:   a.notifyChatResponseFailed,
 		SafeGo:                      a.safeGo,
 		ChatConfigFile:              chatConfigFile,
+		// Gate de consentimento das tools com efeito no computador
+		// (core/mcp.ToolConsentFor) — pergunta localizada no chat, por ação.
+		RequestToolConsent: a.RequestToolConsent,
 	})
 	a.psadtSvc = psadt.New(psadt.Deps{
 		Logf: func(line string) {

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"discovery/app/core/ai"
+	"discovery/app/core/consent"
 	"discovery/app/core/mcp"
 	"discovery/app/core/platform"
 	"discovery/app/netutil"
@@ -85,6 +86,10 @@ type Deps struct {
 	SafeGo func(func())
 	// ChatConfigFile is the config file name.
 	ChatConfigFile string
+	// RequestToolConsent pede autorização do USUÁRIO antes de executar uma
+	// ação com efeito no computador (ver core/mcp.ToolConsentFor). nil =
+	// indisponível: tools que exigem consentimento são recusadas por segurança.
+	RequestToolConsent func(ctx context.Context, req consent.Request) (bool, error)
 }
 
 // DebugConfig is a minimal view of the debug config used by chat.
@@ -118,6 +123,7 @@ type Service struct {
 	onAssistantResponseFailed   func(errMsg string)
 	safeGo                      func(func())
 	chatConfigFile              string
+	requestToolConsent          func(ctx context.Context, req consent.Request) (bool, error)
 
 	// notifyPreview é a preferência de privacidade do toast (padrão true).
 	notifyPreviewMu sync.RWMutex
@@ -143,6 +149,7 @@ func New(reg *mcp.Registry, deps Deps) *Service {
 		onAssistantResponseFailed:   deps.OnAssistantResponseFailed,
 		safeGo:                      deps.SafeGo,
 		chatConfigFile:              deps.ChatConfigFile,
+		requestToolConsent:          deps.RequestToolConsent,
 		// Padrão de privacidade: mostrar prévia (comportamento anterior). O
 		// installer/config do chat pode desligar.
 		notifyPreview: true,
@@ -332,7 +339,12 @@ func (s *Service) SendMessage(message string) (string, error) {
 		return "", err
 	}
 	s.chatSvc.SetConfig(runtimeCfg)
-	return s.chatSvc.Send(s.ctx(), message)
+	return s.chatSvc.SendWithA2ui(s.ctx(), message, func(a2uiMsg string) {
+		// O endpoint síncrono devolve as interfaces A2UI no JSON (não há SSE):
+		// repassa ao frontend pelo mesmo evento do streaming.
+		s.emitEvent("chat:a2ui", a2uiMsg)
+		s.publishChatEvent("chat:a2ui", a2uiMsg)
+	})
 }
 
 // StartStream sends a chat message and streams the response via Wails events.
@@ -496,7 +508,70 @@ func (s *Service) GetAvailableTools() []map[string]string {
 	return result
 }
 
+// parseToolArgs desserializa os argumentos da tool. JSON vazio/null vira um
+// mapa vazio; JSON malformado devolve erro (a política de consentimento precisa
+// do mapa; o Registry.Call faria a mesma validação depois).
+func parseToolArgs(argsJSON string) (map[string]any, error) {
+	args := map[string]any{}
+	if strings.TrimSpace(argsJSON) == "" {
+		return args, nil
+	}
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return map[string]any{}, err
+	}
+	if args == nil {
+		args = map[string]any{}
+	}
+	return args, nil
+}
+
 func (s *Service) mcpExecuteForChat(ctx context.Context, toolName, argsJSON string) (string, error) {
+	args, argsErr := parseToolArgs(argsJSON)
+
+	// Gate de consentimento: tools/ações com efeito no computador (gravar
+	// arquivo, instalar/desinstalar, parar serviço, reiniciar...) exigem
+	// aprovação do USUÁRIO antes de rodar. A decisão é por ação — ver
+	// core/mcp.ToolConsentFor. Antes, a única "confirmação" era o parâmetro
+	// confirm=true preenchido pelo próprio LLM.
+	// Payload malformado não passa pelo gate: não há execução possível (o
+	// Registry.Call devolve o erro claro) e não faz sentido pedir autorização
+	// para uma chamada que não vai rodar.
+	if req := mcp.ToolConsentFor(toolName, args); argsErr == nil && req != nil {
+		if s.requestToolConsent == nil {
+			return "", fmt.Errorf("autorizacao do usuario indisponivel neste contexto: a acao '%s' nao foi executada", toolName)
+		}
+		approved, consentErr := s.requestToolConsent(ctx, *req)
+		if consentErr != nil {
+			return "", consentErr
+		}
+		if !approved {
+			// Negativa é RESULTADO estruturado, não erro: o LLM informa o
+			// usuário e não repete a chamada.
+			denied, _ := json.Marshal(map[string]any{
+				"approved": false,
+				"tool":     toolName,
+				"message":  "Ação NAO autorizada pelo usuario. Nao insista: explique o motivo e peca novamente somente se for realmente necessario.",
+			})
+			return string(denied), nil
+		}
+
+		// A aprovação do usuário É a confirmação explícita exigida pelos
+		// handlers destrutivos (confirm=true em uninstall_package,
+		// upgrade_all_packages, service_control, scheduled_task,
+		// process_control, printer e power_action). Sem esta marca o
+		// Registry.Call recusava a chamada por "parametro obrigatorio confirm
+		// ausente" DEPOIS de o usuário já ter autorizado — o LLM precisava
+		// repetir a chamada e o usuário recebia um SEGUNDO pedido idêntico.
+		// Só marca quando o payload é JSON válido: args malformado continua
+		// devolvendo o erro claro do Registry.Call.
+		if argsErr == nil {
+			args["confirm"] = true
+			if b, mErr := json.Marshal(args); mErr == nil {
+				argsJSON = string(b)
+			}
+		}
+	}
+
 	result, err := s.mcpRegistry.Call(ctx, toolName, json.RawMessage(argsJSON))
 	if err != nil {
 		return "", err
