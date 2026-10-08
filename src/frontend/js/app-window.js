@@ -93,6 +93,16 @@
         metaDot.classList.toggle('online', shown);
         metaDot.classList.toggle('offline', !shown);
       }
+      // Fallback de conectividade por BINDING: os eventos custom do Wails não
+      // são confiáveis no runtime nativo (mesma razão do polling do chat), então
+      // quem depende de agent:connectivity/agent:status_snapshot podia ficar sem
+      // estado nenhum. Este poll (4s) alimenta o aviso do chat e o suporte com o
+      // estado real do core.
+      if (typeof window.__connectivityPollUpdate === 'function') {
+        try {
+          window.__connectivityPollUpdate(status || {});
+        } catch (e) { /* não crítico */ }
+      }
       // Mantém a versão do sidebar sempre em dia no boot/visível, sem
       // depender de abrir a página Status.
       var appVersion = (status && status.appVersion) ? String(status.appVersion).trim() : '';

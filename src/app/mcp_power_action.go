@@ -55,35 +55,88 @@ func (a *App) RunPowerAction(ctx context.Context, action string, delaySeconds in
 
 	body := strings.TrimSpace(message)
 
-	// 1) PSADT: aviso Fluent com contador e cancelamento.
+	// restart/shutdown são TERMINAIS para o turno de chat: a maquina sera
+	// reiniciada/desligada, entao o aviso ao usuario e a execucao correm em
+	// BACKGROUND e o tool result volta NA HORA (outcome=notification_shown,
+	// terminal=true) — ver terminalToolResult em core/ai/chat_multi_round.go.
+	//
+	// Antes o handler ficava BLOQUEADO no contador (30s por padrao) e executava a
+	// acao no fim: o turno nunca fechava (o reboot mata o processo antes do tool
+	// result chegar ao servidor/LLM) e o usuario ficava com "Pensando..."
+	// para sempre. Agora o agente sabe que o aviso foi entregue ao usuario e
+	// ENCERRA a conversa com uma mensagem final.
+	//
+	// Contexto: usa context.Background() porque o ctx da tool morre quando o
+	// turno termina (streamCancel) — com ele, o contador e a execucao seriam
+	// abortados no exato momento em que devolvemos o resultado.
+	go a.runPowerActionNoticeAndExecute(action, delay, body)
+
+	a.logPowerAction(action, fmt.Sprintf("aviso agendado em background (delay=%ds, cancelavel)", delay))
+	return marshalPowerResult(map[string]any{
+		"ok":           true,
+		"action":       action,
+		"outcome":      "notification_shown",
+		"delaySeconds": delay,
+		"terminal":     true,
+		"message":      powerActionTerminalMessage(action, delay),
+	}), nil
+}
+
+// powerActionWords devolve (substantivo, participio) em PT-BR para a acao de
+// energia — usado nas mensagens do chat (aviso agendado e cancelamento).
+func powerActionWords(action string) (string, string) {
+	if action == "shutdown" {
+		return "desligamento", "desligado"
+	}
+	return "reinicio", "reiniciado"
+}
+
+// powerActionTerminalMessage e o texto final mostrado ao usuario pelo chat
+// quando a acao de energia e agendada (o turno e encerrado logo depois).
+func powerActionTerminalMessage(action string, delay int) string {
+	word, done := powerActionWords(action)
+	return fmt.Sprintf(
+		"O aviso de %s com contador de %ds e botao Cancelar foi disparado para o usuario. "+
+			"O computador sera %s em instantes — encerre a conversa aqui; "+
+			"se precisar cancelar, use o botao no proprio aviso.",
+		word, delay, done)
+}
+
+// runPowerActionNoticeAndExecute exibe o aviso cancelavel e executa a acao de
+// energia. Roda em goroutine: o tool result ja foi devolvido ao LLM/chat.
+func (a *App) runPowerActionNoticeAndExecute(action string, delay int, body string) {
+	if a == nil {
+		return
+	}
+	// PSADT: aviso Fluent com contador e cancelamento.
 	switch a.showPSADTCancellablePowerCountdown(action, delay, body) {
 	case "proceed":
-		code, out, errText := a.executeSystemPowerAction(ctx, action, 0, false, "")
+		code, out, errText := a.executeSystemPowerAction(context.Background(), action, 0, false, "")
 		if code != 0 || strings.TrimSpace(errText) != "" {
-			return nil, fmt.Errorf("falha ao executar %s apos confirmacao: %s %s", action, strings.TrimSpace(out), strings.TrimSpace(errText))
+			a.logPowerAction(action, fmt.Sprintf("falha ao executar apos confirmacao: %s %s", strings.TrimSpace(out), strings.TrimSpace(errText)))
+			return
 		}
 		a.logPowerAction(action, "executado apos confirmacao no aviso")
-		return marshalPowerResult(map[string]any{
-			"ok": true, "action": action, "outcome": "executed", "delaySeconds": delay,
-		}), nil
+		return
 	case "cancel":
-		a.logPowerAction(action, "CANCELADO pelo usuario no aviso do PSADT")
-		return marshalPowerResult(map[string]any{
-			"ok": false, "action": action, "outcome": "cancelled",
-			"message": "O usuario CANCELOU a acao. Nada foi executado; nao repita sem pedir de novo.",
-		}), nil
+		a.logPowerAction(action, "CANCELADO pelo usuario no aviso do PSADT — nada foi executado")
+		// O turno de chat ja foi encerrado (tool terminal): avisa o usuario pelo
+		// chat que nada aconteceu, senao ele fica achando que vai reiniciar.
+		word, _ := powerActionWords(action)
+		a.EmitEvent("chat:info", map[string]any{
+			"kind": "power_action_cancelled",
+			"text": fmt.Sprintf("Acao de %s CANCELADA pelo usuario — nada foi executado.", word),
+		})
+		return
 	}
 
-	// 2) Fallback: aviso nativo do Windows + cancelavel via "shutdown /a".
-	code, out, errText := a.executeSystemPowerAction(ctx, action, delay, false, body)
+	// Fallback: aviso nativo do Windows + cancelavel via "shutdown /a".
+	code, out, errText := a.executeSystemPowerAction(context.Background(), action, delay, false, body)
 	if code != 0 || strings.TrimSpace(errText) != "" {
-		return nil, fmt.Errorf("falha ao agendar %s: %s %s", action, strings.TrimSpace(out), strings.TrimSpace(errText))
+		a.logPowerAction(action, fmt.Sprintf("falha ao agendar com aviso nativo: %s %s", strings.TrimSpace(out), strings.TrimSpace(errText)))
+		return
 	}
 	a.logPowerAction(action, fmt.Sprintf("agendado com aviso nativo (delay=%ds)", delay))
-	return marshalPowerResult(map[string]any{
-		"ok": true, "action": action, "outcome": "scheduled", "delaySeconds": delay,
-		"cancelHint": fmt.Sprintf("o usuario tem %ds para cancelar com 'shutdown /a'", delay),
-	}), nil
 }
 
 // showPSADTCancellablePowerCountdown exibe o aviso do PSADT com contador e

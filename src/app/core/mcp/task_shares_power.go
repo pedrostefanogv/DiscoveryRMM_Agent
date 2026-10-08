@@ -122,7 +122,10 @@ func registerPowerActionTool(reg *Registry, app AppBridge) {
 			"restart | shutdown | lock. TODAS DESTRUTIVAS: exigem confirm=true apos aprovacao do usuario. " +
 			"restart/shutdown exibem um AVISO AO USUARIO com contador (padrao 30s, minimo 10s) e botao CANCELAR " +
 			"(PSADT; fallback no aviso nativo do Windows) — se o usuario cancelar, NADA e executado. " +
-			"Informe sempre o atraso e que ele pode cancelar. lock e imediato.",
+			"Informe sempre o atraso e que ele pode cancelar. " +
+			"IMPORTANTE: restart/shutdown ENCERRAM a conversa no ato (a maquina reinicia/desliga em seguida): " +
+			"na ultima mensagem diga apenas o que foi agendado e como cancelar, sem prometer acoes futuras " +
+			"nem pedir nova confirmacao. lock e imediato.",
 		Params: []ToolParam{
 			{Name: "action", Type: "string", Description: "Acao: restart, shutdown, lock", Required: true},
 			{Name: "confirm", Type: "boolean", Description: "Confirmacao explicita do usuario", Required: false},

@@ -131,12 +131,15 @@ func NewService(registry *mcp.Registry) *Service {
 }
 
 // SubmitA2uiAction registra uma ação do usuário em uma surface A2UI. A ação é
-// consumida pelo próximo round do loop multi-round (SendStreamMultiRound) e
-// enviada ao LLM como um tool result, permitindo que o agente reaja ao clique.
+// consumida no INÍCIO do próximo turno disparado pela sentinela
+// __a2ui_action__ (resolveA2uiTurn) e enviada ao LLM como tool result,
+// permitindo que o agente reaja ao clique — inclusive quando o clique acontece
+// com o turno anterior já encerrado (a surface continua visível no chat).
 //
-// B1: as ações ficam em uma fila limitada (maxA2uiActions); chamador deve
-// verificar HasActiveStream() antes de enfileirar — ação clicada sem stream
-// ativo é descartada pelo binding (app.AnswerA2uiAction) e não deve chegar aqui.
+// A fila é limitada (maxA2uiActions). Cliques feitos DURANTE um turno
+// sobrevivem ao fim dele e são consumidos pelo turno-sentinela seguinte; ações
+// órfãs (clique sem turno-sentinela correspondente) são descartadas quando
+// começa um turno de mensagem digitada, para nunca sequestrarem a conversa.
 func (s *Service) SubmitA2uiAction(surfaceID, name string, context map[string]any) {
 	s.a2uiActionMu.Lock()
 	defer s.a2uiActionMu.Unlock()
@@ -821,6 +824,13 @@ func validateChatMessage(message string) error {
 	}
 	if !utf8.ValidString(trimmed) {
 		return fmt.Errorf("mensagem invalida: UTF-8 incorreto")
+	}
+	// Sentinela interna do fluxo A2UI: rede de segurança para caminhos que não
+	// passam pelo resolveA2uiTurn (Send síncrono, stream single-round). Sem
+	// isso, um clique perdido fazia a string "__a2ui_action__" ser enviada ao
+	// LLM como se fosse mensagem do usuário.
+	if trimmed == A2uiActionSentinel {
+		return fmt.Errorf("mensagem interna reservada")
 	}
 	for _, pattern := range blockedMessagePatterns {
 		if pattern.MatchString(trimmed) {

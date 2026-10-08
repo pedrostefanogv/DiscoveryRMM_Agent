@@ -188,12 +188,19 @@ func (a *App) AnswerA2uiAction(payloadJSON string) {
 	if strings.TrimSpace(payload.Name) == "" {
 		return
 	}
-	// B1: sem stream/turno ativo, a ação seria órfã — ficaria pendente e seria
-	// consumida indevidamente pela próxima mensagem comum do usuário (convertida
-	// em modo a2ui_action com a mensagem digitada descartada). Descarta com log.
+	// A ação é SEMPRE enfileirada, com ou sem stream ativo. O clique em um card
+	// A2UI continua válido depois do turno terminar (a surface fica visível no
+	// chat) e o frontend inicia imediatamente um turno-sentinela
+	// (__a2ui_action__) que consome a fila. Antes, o guard "sem stream ativo"
+	// descartava o clique da forma IDLE determinística: o binding
+	// AnswerA2uiAction sempre chega ANTES do StartChatStream, então nunca havia
+	// stream ativo e a ação morria — o turno-sentinela seguia sem ação.
+	//
+	// Segurança contra órfã: a fila é limitada (maxA2uiActions) e
+	// resolveA2uiTurn descarta ações remanescentes quando o turno seguinte é de
+	// mensagem digitada — a órfã nunca sequestra a conversa nem vai ao LLM.
 	if !a.chatSvc.HasActiveStream() {
-		a.Logs.Append("[chat] AnswerA2uiAction: ação descartada — nenhum turno de chat ativo (ação: " + payload.Name + ")")
-		return
+		a.Logs.Append("[chat] AnswerA2uiAction: ação enfileirada sem turno ativo (será consumida pelo turno-sentinela): " + payload.Name)
 	}
 	a.chatSvc.SubmitA2uiAction(payload.SurfaceID, payload.Name, payload.Context)
 }

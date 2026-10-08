@@ -541,6 +541,11 @@ function maybeFlushChatQueue() {
 // passos (chips ✓) — em vez do texto único que saltava a cada evento.
 var CHAT_ACTIVITY_MAX_STEPS = 4;
 var chatActivityRoundMax = 0;
+// Maior round do turno já exibido na pill DESTA bolha. É o guard de
+// monotonicidade: heartbeat que não avança (ou retrocede) é valor degenerado e
+// não reescreve a pill — era exatamente o sintoma do contador por-request do
+// servidor, que mandava round=1 para sempre ("Etapa 1 de N" travada).
+var chatActivityRoundShown = 0;
 // chatActivityToolPhase fica true quando o turno entra na fase de execução de
 // ferramentas (tools/compose/rescue). Diferente das fases "sociais" (conectar,
 // planejar), essa fase continua merecendo indicador mesmo depois que o LLM já
@@ -678,6 +683,7 @@ function describeChatActivity(status) {
 
 function buildChatActivityElement() {
   chatActivityRoundMax = 0;
+  chatActivityRoundShown = 0;
   chatActivityToolPhase = false;
   // Cada bolha tem o SEU cronômetro. Sem parar o intervalo aqui, o split
   // pós-pergunta (splitStreamingBubbleAfterQuestion descarta a bolha antiga e
@@ -824,6 +830,10 @@ function updateChatActivityRound(root, round, maxRounds) {
   var pill = root ? root.querySelector(".chat-activity-pill") : null;
   if (!pill) return;
   if (round <= 0) return;
+  // Nunca anda para trás: reemissão do mesmo round (retry/resgate) é no-op e um
+  // valor menor que o já exibido é descartado.
+  if (round < chatActivityRoundShown) return;
+  chatActivityRoundShown = round;
   var max = maxRounds > 0 ? maxRounds : chatActivityRoundMax;
   pill.textContent = max > 0
     ? translate("chat.activity.round", { round: round, max: max })
@@ -926,11 +936,12 @@ function onStreamThinking(status) {
   scheduleChatScrollToBottom();
 }
 
-// onChatLoopProgress recebe o progresso do agent loop emitido pelo servidor
-// (chunk "loop_progress": round atual / máximo de rounds). Atualiza o
-// indicador "Pensando..." para "Processando… round X/Y", eliminando a
-// sensação de travamento durante tool chains longas. Payload pode chegar
-// como objeto {round, maxRounds} (Wails) ou string JSON (SSE/publish).
+// onChatLoopProgress recebe o progresso do agent loop. O round vem do AGENTE
+// (contador do turno, ver chat_multi_round.go) — não do heartbeat cru do
+// servidor, cujo contador é por-request e travava em 1 nas tool chains MCP.
+// maxRounds pode chegar 0: sem teto confiável, a pill mostra "Etapa N".
+// Elimina a sensação de travamento durante tool chains longas. Payload pode
+// chegar como objeto {round, maxRounds} (Wails) ou string JSON (SSE/publish).
 function onChatLoopProgress(data) {
   var payload = data;
   if (typeof data === "string") {
@@ -951,7 +962,7 @@ function onChatLoopProgress(data) {
   }
   if (document.hidden || window.__discoveryUISuspended) return;
   if (!streamingBubble) return;
-  if (maxRounds <= 0 || round <= 0) return;
+  if (round <= 0) return;
   // Mesma regra do onStreamThinking: com texto já visível a pill de etapa só
   // reaparece se o turno está em fase de execução de ferramentas.
   if (streamingRawContent && !chatActivityToolPhase) return;
@@ -3221,6 +3232,20 @@ function chatOfflineBannerKey(detail) {
   return "chat.offlineBanner";
 }
 
+// __connectivityPollUpdate é chamado pelo poll de status do app-window.js
+// (GetStatusOverview a cada 4s) com o estado REAL do core. É o caminho
+// confiável no runtime nativo, onde a entrega de eventos custom do Wails pode
+// falhar — sem ele o aviso do chat podia nunca refletir uma queda/volta real.
+window.__connectivityPollUpdate = function (status) {
+  if (!status || typeof status.connected !== "boolean") return;
+  var detail = { transport: String(status.connectionType || status.transport || "") };
+  if (!status.connected && status.transportConnected) {
+    // Transporte de pé e agente offline ⇒ quem caiu foi a API HTTP.
+    detail.apiReachable = false;
+  }
+  applyChatOfflineBanner(status.connected, detail);
+};
+
 // applyChatOfflineBanner sincroniza o aviso e o bloqueio do chat.
 // IMPORTANTE: usa o estado BRUTO de conectividade (sem a histerese de 15s do
 // indicador global) — o chat precisa ficar indisponível assim que não houver
@@ -3297,8 +3322,34 @@ function initChatConnectivityBanner() {
   }
 }
 
+// chat:info — mensagem informativa do backend FORA de um turno (ex.: a acao de
+// energia foi CANCELADA pelo usuario depois que o turno terminal ja tinha
+// encerrado a conversa). Sem isso o usuario nao recebia nenhum retorno.
+var chatInfoBound = false;
+
+function initChatInfoListener() {
+  if (chatInfoBound) return;
+  if (!(window.wails && typeof window.wails.on === "function")) return;
+  chatInfoBound = true;
+  window.wails.on("chat:info", function (data) {
+    var text = "";
+    if (data && typeof data === "object") {
+      text = String(data.text || "");
+    } else if (typeof data === "string") {
+      text = data;
+    }
+    if (!text.trim()) return;
+    try {
+      addChatMessage("assistant", text);
+    } catch (e) {
+      console.error("[chat] falha ao exibir chat:info:", e);
+    }
+  });
+}
+
 function initChat() {
   initChatConnectivityBanner();
+  initChatInfoListener();
   if (chatSendBtn) {
     chatSendBtn.addEventListener("click", sendChatMessage);
   }

@@ -81,3 +81,36 @@ func TestParseMultiRoundSSE_LoopProgressWithoutCallback(t *testing.T) {
 		t.Errorf("callback não deveria ser chamado com loopMaxRounds=0")
 	}
 }
+
+// TestTurnRoundProgress verifica que o progresso exibido ao usuário usa o
+// contador de TURNO do agente (round do loop + 1, 1-based) em vez do heartbeat
+// por request do servidor, e que não publica denominador (maxRounds=0): o teto
+// de iterações do servidor não limita a cadeia delegada ao agente, então um
+// "de N" seria uma promessa falsa.
+func TestTurnRoundProgress(t *testing.T) {
+	if turnRoundProgress(nil, 3) != nil {
+		t.Fatal("sem callback deveria devolver nil")
+	}
+
+	type progress struct{ round, maxRounds int }
+	var received []progress
+	cb := turnRoundProgress(func(round, maxRounds int) {
+		received = append(received, progress{round, maxRounds})
+	}, 2)
+
+	// Os valores do servidor são ignorados de propósito (heartbeat por request).
+	cb(1, 10)
+	cb(1, 10)
+
+	if len(received) != 2 {
+		t.Fatalf("esperado 2 eventos de progresso, obteve %d", len(received))
+	}
+	for i, p := range received {
+		if p.round != 3 {
+			t.Errorf("evento %d: round esperado 3 (round do loop 2 + 1), obteve %d", i, p.round)
+		}
+		if p.maxRounds != 0 {
+			t.Errorf("evento %d: maxRounds esperado 0, obteve %d", i, p.maxRounds)
+		}
+	}
+}

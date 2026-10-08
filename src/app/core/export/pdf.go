@@ -3,6 +3,7 @@ package export
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -18,7 +19,27 @@ const (
 	pdfFontFamily       = "DiscoveryUTF8"
 	pdfFontPathEnvVar   = "DISCOVERY_PDF_TTF"
 	pdfFontConfigEnvVar = "DISCOVERY_PDF_FONT_DIR"
+	// pdfFallbackFamily é a família "core" do PDF (Helvetica, aceita pelo
+	// alias "Arial"). Usada quando nenhuma TTF UTF-8 está disponível: o
+	// relatório perde acentuação, mas NUNCA falha.
+	pdfFallbackFamily = "Arial"
 )
+
+// defaultPDFFontNames são as TTF procuradas no diretório de fontes
+// configurado (DISCOVERY_PDF_FONT_DIR) quando o caminho exato não foi dado.
+var defaultPDFFontNames = []string{
+	"arial.ttf", "segoeui.ttf", "calibri.ttf",
+	"DejaVuSans.ttf", "LiberationSans-Regular.ttf",
+}
+
+// knownBoldSiblings mapeia a TTF regular para a variante negrito equivalente.
+var knownBoldSiblings = map[string]string{
+	"arial.ttf":                  "arialbd.ttf",
+	"segoeui.ttf":                "segoeuib.ttf",
+	"calibri.ttf":                "calibrib.ttf",
+	"DejaVuSans.ttf":             "DejaVuSans-Bold.ttf",
+	"LiberationSans-Regular.ttf": "LiberationSans-Bold.ttf",
+}
 
 // WritePDF writes the inventory report as a PDF file to outPath.
 // If redact is true, sensitive fields (serials, MACs, hostname) are masked.
@@ -29,16 +50,16 @@ func WritePDF(r models.InventoryReport, outPath string, redact bool) error {
 	}
 
 	pdf := fpdf.New("P", "mm", "A4", "")
-	tryEnableUTF8Font(pdf)
+	family := resolvePDFFamily(pdf)
 	pdf.SetMargins(12, 12, 12)
 	pdf.AddPage()
-	setPDFFont(pdf, "B", 14)
+	setPDFFont(pdf, family, "B", 14)
 	pdf.CellFormat(0, 8, "Inventario Discovery", "", 1, "L", false, 0, "")
-	setPDFFont(pdf, "", 10)
+	setPDFFont(pdf, family, "", 10)
 	pdf.CellFormat(0, 6, "Coletado em: "+safePDF(r.CollectedAt), "", 1, "L", false, 0, "")
 	pdf.CellFormat(0, 6, "Fonte: "+safePDF(r.Source), "", 1, "L", false, 0, "")
 
-	addSection(pdf, "Hardware", []string{
+	addSection(pdf, family, "Hardware", []string{
 		"Hostname: " + safePDF(hw.Hostname),
 		"Fabricante: " + safePDF(hw.Manufacturer),
 		"Modelo: " + safePDF(hw.Model),
@@ -56,7 +77,7 @@ func WritePDF(r models.InventoryReport, outPath string, redact bool) error {
 		"Quantidade de pentes: " + strconv.Itoa(hw.MemoryModulesCount),
 	})
 
-	addSection(pdf, "Sistema Operacional", []string{
+	addSection(pdf, family, "Sistema Operacional", []string{
 		"Nome: " + safePDF(r.OS.Name),
 		"Versao: " + safePDF(r.OS.Version),
 		"Build: " + safePDF(r.OS.Build),
@@ -64,9 +85,9 @@ func WritePDF(r models.InventoryReport, outPath string, redact bool) error {
 	})
 
 	if len(r.LoggedInUsers) > 0 {
-		setPDFFont(pdf, "B", 11)
+		setPDFFont(pdf, family, "B", 11)
 		pdf.CellFormat(0, 7, "Usuarios Logados", "", 1, "L", false, 0, "")
-		setPDFFont(pdf, "", 9)
+		setPDFFont(pdf, family, "", 9)
 		for _, u := range r.LoggedInUsers {
 			sid := u.SID
 			if redact {
@@ -79,7 +100,7 @@ func WritePDF(r models.InventoryReport, outPath string, redact bool) error {
 		pdf.Ln(1)
 	}
 
-	addSection(pdf, "Resumo", []string{
+	addSection(pdf, family, "Resumo", []string{
 		"Volumes: " + strconv.Itoa(len(r.Volumes)),
 		"Interfaces de rede: " + strconv.Itoa(len(r.Networks)),
 		"Modulos de memoria: " + strconv.Itoa(len(r.MemoryModules)),
@@ -90,9 +111,9 @@ func WritePDF(r models.InventoryReport, outPath string, redact bool) error {
 		"Softwares: " + strconv.Itoa(len(r.Software)),
 	})
 
-	setPDFFont(pdf, "B", 11)
+	setPDFFont(pdf, family, "B", 11)
 	pdf.CellFormat(0, 7, fmt.Sprintf("Softwares (primeiros %d)", maxPDFSoftwareItems), "", 1, "L", false, 0, "")
-	setPDFFont(pdf, "", 9)
+	setPDFFont(pdf, family, "", 9)
 	limit := len(r.Software)
 	if limit > maxPDFSoftwareItems {
 		limit = maxPDFSoftwareItems
@@ -122,35 +143,116 @@ func WritePDF(r models.InventoryReport, outPath string, redact bool) error {
 	return nil
 }
 
-func addSection(pdf *fpdf.Fpdf, title string, lines []string) {
-	setPDFFont(pdf, "B", 11)
+func addSection(pdf *fpdf.Fpdf, family, title string, lines []string) {
+	setPDFFont(pdf, family, "B", 11)
 	pdf.CellFormat(0, 7, title, "", 1, "L", false, 0, "")
-	setPDFFont(pdf, "", 9)
+	setPDFFont(pdf, family, "", 9)
 	for _, line := range lines {
 		pdf.MultiCell(0, 5, line, "", "L", false)
 	}
 	pdf.Ln(1)
 }
 
-func setPDFFont(pdf *fpdf.Fpdf, style string, size float64) {
-	pdf.SetFont(pdfFontFamily, style, size)
+// setPDFFont aplica a fonte e, se ela não existir, cai para a família core.
+//
+// BUG (corrigido): o fallback usava pdf.Error(), que em go-pdf/fpdf é apenas um
+// GETTER — não limpa o erro interno. Depois do primeiro SetFont("DiscoveryUTF8")
+// sem a TTF registrada, f.err ficava preso; SetFont passava a ignorar TODAS as
+// chamadas seguintes (early-return em f.err != nil) e OutputFileAndClose devolvia
+// "undefined font: discoveryutf8 B". Era o erro relatado pelo usuário: a
+// exportação em Markdown funcionava e a em PDF falhava sempre, em qualquer pasta.
+func setPDFFont(pdf *fpdf.Fpdf, family, style string, size float64) {
+	pdf.SetFont(family, style, size)
 	if pdf.Err() {
-		_ = pdf.Error()
-		pdf.SetFont("Arial", style, size)
+		pdf.ClearError()
+		pdf.SetFont(pdfFallbackFamily, style, size)
 	}
 }
 
-func tryEnableUTF8Font(pdf *fpdf.Fpdf) {
-	fontPath := strings.TrimSpace(os.Getenv(pdfFontPathEnvVar))
-	if fontPath == "" {
-		fontDir := strings.TrimSpace(os.Getenv(pdfFontConfigEnvVar))
-		if fontDir != "" {
-			pdf.SetFontLocation(fontDir)
+// resolvePDFFamily registra uma TTF UTF-8 quando disponível e devolve a família
+// que deve ser usada em todas as chamadas SetFont.
+//
+// Ordem de busca: DISCOVERY_PDF_TTF (arquivo explícito) → DISCOVERY_PDF_FONT_DIR
+// (diretório de fontes) → fontes do Windows. Sem nenhuma disponível, devolve a
+// família core (Arial/Helvetica) — o PDF sai sem acentos, mas sai.
+func resolvePDFFamily(pdf *fpdf.Fpdf) string {
+	regular := existingFile(strings.TrimSpace(os.Getenv(pdfFontPathEnvVar)))
+
+	if dir := strings.TrimSpace(os.Getenv(pdfFontConfigEnvVar)); dir != "" {
+		pdf.SetFontLocation(dir)
+		if regular == "" {
+			for _, name := range defaultPDFFontNames {
+				if p := existingFile(filepath.Join(dir, name)); p != "" {
+					regular = p
+					break
+				}
+			}
 		}
-		return
 	}
-	pdf.AddUTF8Font(pdfFontFamily, "", fontPath)
-	pdf.AddUTF8Font(pdfFontFamily, "B", fontPath)
+
+	if regular == "" {
+		for _, candidate := range defaultPDFFontCandidates() {
+			if p := existingFile(candidate); p != "" {
+				regular = p
+				break
+			}
+		}
+	}
+
+	if regular == "" {
+		return pdfFallbackFamily
+	}
+
+	bold := boldSibling(regular)
+	if bold == "" {
+		bold = regular
+	}
+
+	pdf.AddUTF8Font(pdfFontFamily, "", regular)
+	pdf.AddUTF8Font(pdfFontFamily, "B", bold)
+	if pdf.Err() {
+		// TTF inválida/ilegível: prefere um PDF sem acentos a falhar.
+		pdf.ClearError()
+		return pdfFallbackFamily
+	}
+	return pdfFontFamily
+}
+
+// defaultPDFFontCandidates devolve TTF com cobertura Unicode incluídas no
+// Windows, para o relatório manter acentuação sem configuração extra.
+func defaultPDFFontCandidates() []string {
+	windir := strings.TrimSpace(os.Getenv("WINDIR"))
+	if windir == "" {
+		return nil
+	}
+	fonts := filepath.Join(windir, "Fonts")
+	out := make([]string, 0, len(defaultPDFFontNames))
+	for _, name := range defaultPDFFontNames {
+		out = append(out, filepath.Join(fonts, name))
+	}
+	return out
+}
+
+// boldSibling devolve a variante negrito para uma TTF regular conhecida.
+func boldSibling(regular string) string {
+	name := filepath.Base(regular)
+	boldName, ok := knownBoldSiblings[strings.ToLower(name)]
+	if !ok {
+		return ""
+	}
+	return existingFile(filepath.Join(filepath.Dir(regular), boldName))
+}
+
+// existingFile devolve o caminho quando ele existe e é arquivo regular.
+func existingFile(path string) string {
+	if strings.TrimSpace(path) == "" {
+		return ""
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return ""
+	}
+	return path
 }
 
 // safePDF cleans a string for safe use in PDF cells.

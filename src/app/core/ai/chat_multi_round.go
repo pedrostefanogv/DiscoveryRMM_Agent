@@ -82,11 +82,12 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 	defer func() {
 		s.unregisterStreamCancel(streamID)
 		streamCancel()
-		// B1: ações A2UI remanescentes ao final do turno são órfãs — descarta
-		// para não contaminarem a próxima mensagem do usuário.
-		if n := s.discardPendingA2uiActions(); n > 0 {
-			s.logf("[chat] %d ação(ões) A2UI pendente(s) descartada(s) ao final do turno", n)
-		}
+		// As ações A2UI NÃO são descartadas aqui de propósito: um clique feito
+		// DURANTE o turno precisa sobreviver até o turno-sentinela que o frontend
+		// inicia logo após "chat:done". O descarte neste ponto matava justamente o
+		// clique legítimo (a ação morria antes do turno-sentinela consumir).
+		// A limpeza de ações órfãs ficou em resolveA2uiTurn, no início de um
+		// turno de mensagem digitada.
 	}()
 	startTime := time.Now()
 
@@ -105,11 +106,23 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 		})
 		return "", err
 	}
-	// Verifica se há ação A2UI pendente ANTES de validar a mensagem. Quando o
-	// usuário clica num botão A2UI, a mensagem pode ser vazia (a ação é enviada
-	// como tool result). Nesse caso, pulamos a validação de mensagem.
-	hasPendingA2ui := s.peekA2uiAction()
-	if !hasPendingA2ui {
+	// Resolve a relação da mensagem entrante com a fila de ações A2UI ANTES de
+	// validar: a sentinela __a2ui_action__ é um turno disparado por clique em
+	// surface, não uma mensagem de usuário (ver resolveA2uiTurn).
+	action, isA2uiTurn, a2uiErr := s.resolveA2uiTurn(userMessage)
+	if a2uiErr != nil {
+		s.logChatEntry(ChatLogEntry{
+			Type:    "chat_request",
+			Method:  "multi_round",
+			Error:   a2uiErr.Error(),
+			UserMsg: TruncateForLog(userMessage, 500),
+		})
+		return "", a2uiErr
+	}
+
+	// Só mensagem real do usuário passa por validação e entra no histórico; a
+	// sentinela interna jamais deve ir ao LLM nem poluir a conversa.
+	if !isA2uiTurn {
 		if err := validateChatMessage(userMessage); err != nil {
 			s.logChatEntry(ChatLogEntry{
 				Type:    "chat_request",
@@ -119,21 +132,14 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 			})
 			return "", err
 		}
-	}
-
-	// Quando há ação A2UI, a "mensagem" é apenas uma sentinela interna
-	// (__a2ui_action__) que não deve poluir o histórico nem ser enviada ao LLM.
-	// A ação em si é injetada como tool result. Só adiciona ao history quando
-	// for uma mensagem real do usuário.
-	if !hasPendingA2ui {
 		s.mu.Lock()
 		appendHistoryLocked(s, Message{Role: "user", Content: userMessage})
 		s.mu.Unlock()
 	}
 
-	// Se houver uma ação A2UI pendente (userAction de uma surface), injeta-a
-	// como um tool result no primeiro round para o LLM reagir ao clique/input.
-	// O servidor C# espera toolResults no formato {callId, name, result}.
+	// Se houver uma ação A2UI (userAction de uma surface), injeta-a como tool
+	// result no primeiro round para o LLM reagir ao clique/input. O servidor C#
+	// espera toolResults no formato {callId, name, result}.
 	//
 	// IMPORTANTE: quando há ação A2UI, o request deve ter Message VAZIO (null)
 	// e ToolResults preenchido, para que o servidor chame StreamMultiRoundAsync
@@ -142,9 +148,7 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 	// Se enviarmos Message + ToolResults juntos, o servidor chama StreamAsync e
 	// IGNORA os ToolResults — a ação A2UI nunca chegaria ao LLM.
 	var initialToolResults []toolResultItem
-	hasA2uiAction := false
-	if action := s.takeA2uiAction(); action != nil {
-		hasA2uiAction = true
+	if action != nil {
 		ctxJSON, _ := json.Marshal(action.Context)
 		initialToolResults = append(initialToolResults, toolResultItem{
 			CallID: "a2ui_" + action.SurfaceID,
@@ -160,7 +164,7 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 	// Mode explícito elimina a dependência da convenção "Message == null".
 	reqMessage := userMessage
 	reqMode := "user_message"
-	if hasA2uiAction {
+	if isA2uiTurn {
 		reqMessage = ""
 		reqMode = "a2ui_action"
 	}
@@ -204,6 +208,10 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 	var err error
 	totalToolCalls := 0
 	allCalledTools := make([]string, 0)
+	// terminalMessage: preenchido quando uma tool do round e TERMINAL (ex.:
+	// power_action restart/shutdown). Nesse caso o turno e encerrado na hora,
+	// sem novo round no LLM — ver terminalToolResult.
+	terminalMessage := ""
 	forcedRetries := 0
 	// B3: tool results já executadas mas ainda não processadas pelo LLM em um
 	// round concluído. Se o round seguinte falhar por erro de rede/HTTP,
@@ -282,7 +290,18 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 			MessageLen: len(req.Message),
 		})
 
-		roundSessionID, roundErr := s.executeRound(streamCtx, cfg, req, round, onStatus, onToken, &pendingCalls, onLoopProgress, a2uiCb)
+		// O heartbeat de progresso do servidor é contado POR REQUEST (toolIterations
+		// é local ao StreamAsync dele). Em tool chains MCP cada round do agente é um
+		// request novo, então o servidor sempre reporta "round 1" — a pill do
+		// frontend travava em "Etapa 1 de N" durante toda a cadeia. O único contador
+		// com escopo de TURNO é este loop, então reescrevemos o progresso com o round
+		// local. maxRounds vai 0 de propósito: o teto de iterações do servidor não
+		// limita esta cadeia (ele só vale para tools executadas lá dentro), e um
+		// "de N" fixo aqui seria uma promessa falsa. O frontend cai em
+		// "Etapa {round}" (chat.activity.roundOnly) quando maxRounds é 0.
+		roundProgress := turnRoundProgress(onLoopProgress, round)
+
+		roundSessionID, roundErr := s.executeRound(streamCtx, cfg, req, round, onStatus, onToken, &pendingCalls, roundProgress, a2uiCb)
 		// BUG (turno real de 2026-10-01 12:01Z): em erro o executeRound devolve
 		// sessionID VAZIO; sobrescrever currentSessionID zerava a sessão e o
 		// resgate (B3) era rejeitado com "SessionId requerido em multi-round",
@@ -362,7 +381,7 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 				return "", fmt.Errorf("não consegui concluir a análise das ferramentas no round %d (%v) — as capturas/resultados não foram descartados no servidor; tente novamente", round+1, err)
 			}
 			fallbackMsg := userMessage
-			if hasA2uiAction {
+			if isA2uiTurn {
 				fallbackMsg = ""
 			}
 			return s.fallbackToSync(streamCtx, cfg, fallbackMsg, sessionID, onToken)
@@ -515,6 +534,10 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 				// (autorização + seleção da área/janela no overlay) e read_file
 				// exige autorização por leitura: o timer de 60s mataria a
 				// interação/espera pela resposta do usuário.
+				//
+				// export_inventory_markdown/pdf pedem AUTORIZAÇÃO de gravação ao
+				// usuário (RequestFileWriteConsent) e ficam na mesma regra: o
+				// timeout de 60s mataria a pergunta antes do clique.
 				// Timeout padrão de 60s; a política de escopo do servidor pode definir
 				// um valor por tool (pendingToolCall.TimeoutSeconds) — ex.: ações
 				// pesadas precisam de mais tempo.
@@ -524,7 +547,7 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 				}
 				var execCtx context.Context
 				var execCancel context.CancelFunc
-				if tc.Name == "ask_user" || tc.Name == "capture_screenshot" || tc.Name == "read_file" {
+				if interactiveToolRequiresUser(tc.Name) {
 					execCtx, execCancel = context.WithCancel(streamCtx)
 				} else {
 					execCtx, execCancel = context.WithTimeout(streamCtx, execTimeout)
@@ -569,6 +592,45 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 			}
 
 			toolResults = append(toolResults, toolResultItem{CallID: tc.CallID, Name: tc.Name, Result: truncateToolResult(result)})
+
+			// Tool TERMINAL (ex.: power_action restart/shutdown): a maquina sera
+			// reiniciada/desligada, logo NAO ha tempo para outro round do LLM nem
+			// para o tool result chegar ao servidor. Encerra o turno agora.
+			if finalMsg, terminal := terminalToolResult(result); terminal {
+				terminalMessage = finalMsg
+				break
+			}
+		}
+
+		if terminalMessage != "" {
+			s.logChatEntry(ChatLogEntry{
+				Type:         "turn_terminal_tool",
+				Method:       "multi_round",
+				SessionID:    currentSessionID,
+				Round:        round,
+				HasToolCalls: true,
+				ToolCalls:    calledTools,
+				ResponseLen:  len(terminalMessage),
+				Assistant:    TruncateForLog(terminalMessage, 1000),
+				LatencyMs:    int(time.Since(startTime).Milliseconds()),
+			})
+			// Emite a mensagem final ao usuario e fecha o turno (o chamador emite
+			// chat:done). Sem novo round no LLM: ele nao teria tempo de responder
+			// antes do reboot e um erro deixaria o usuario preso em "Pensando...".
+			if onToken != nil {
+				onToken(terminalMessage)
+			}
+			s.mu.Lock()
+			appendHistoryLocked(s, Message{Role: "assistant", Content: terminalMessage})
+			// Sessao NOVA no proximo turno: o tool result desta tool terminal NUNCA
+			// e enviado ao servidor (o turno fecha aqui), entao a sessao atual fica
+			// com um assistant.tool_calls sem o role=tool correspondente — e os
+			// providers (OpenAI/OpenRouter) rejeitam a cadeia com HTTP 400. Isso
+			// importa quando o usuario CANCELA o aviso e volta a conversar (no
+			// reboot a sessao se perde de qualquer forma).
+			s.sessionID = ""
+			s.mu.Unlock()
+			return terminalMessage, nil
 		}
 
 		s.logChatEntry(ChatLogEntry{
@@ -645,6 +707,35 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 	})
 
 	return assistant, nil
+}
+
+// terminalToolResult detecta um resultado de tool marcado com "terminal": true
+// e devolve a mensagem final para o usuario.
+//
+// Contrato usado por tools cuja acao encerra o contexto do computador
+// (power_action restart/shutdown): o tool result precisa voltar IMEDIATAMENTE,
+// porque (a) a maquina sera reiniciada/desligada e o processo morre antes de
+// qualquer novo round, e (b) o servidor/LLM nunca receberiam a resposta — o
+// usuario ficaria com "Pensando..." preso. O tool devolve
+// {ok:true, terminal:true, outcome:"notification_shown", message:"..."} e o
+// loop encerra o turno com essa mensagem (sem novo round).
+func terminalToolResult(result string) (string, bool) {
+	trimmed := strings.TrimSpace(result)
+	if trimmed == "" {
+		return "", false
+	}
+	var payload struct {
+		Terminal bool   `json:"terminal"`
+		Message  string `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(trimmed), &payload); err != nil || !payload.Terminal {
+		return "", false
+	}
+	msg := strings.TrimSpace(payload.Message)
+	if msg == "" {
+		msg = "Acao agendada — a conversa foi encerrada. A maquina sera reiniciada/desligada."
+	}
+	return msg, true
 }
 
 // formatToolProgressStatus monta o status de progresso de UMA tool dentro de um
@@ -830,6 +921,22 @@ func (s *Service) executeRound(ctx context.Context, cfg Config, req agentStreamR
 		})
 	}
 	return sessionID, err
+}
+
+// turnRoundProgress adapta o callback de progresso do servidor para o contador
+// de TURNO do agente. O servidor conta as iterações do loop DELE por request
+// (toolIterations é local ao StreamAsync): nas tool chains MCP cada round do
+// agente é um request novo e o heartbeat sempre volta "round 1". O round
+// relevante para o usuário é o deste loop (0-based), então descartamos os
+// valores do servidor. maxRounds vai 0 de propósito: o teto de iterações do
+// servidor não limita a cadeia delegada, e um "de N" fixo seria falso — o
+// frontend renderiza "Etapa {round}" (chat.activity.roundOnly) nesse caso.
+// Devolve nil quando não há callback, preservando os chamadores antigos.
+func turnRoundProgress(onLoopProgress func(round, maxRounds int), round int) func(round, maxRounds int) {
+	if onLoopProgress == nil {
+		return nil
+	}
+	return func(_, _ int) { onLoopProgress(round+1, 0) }
 }
 
 func (s *Service) parseMultiRoundSSE(body io.Reader, onToken func(string), pendingCalls *[]pendingToolCall, onA2ui ...func(string)) (string, bool, error) {

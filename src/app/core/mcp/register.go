@@ -78,6 +78,12 @@ type AppBridge interface {
 	// pedido; nao existe "permitir sempre").
 	ReadFileWithConsent(ctx context.Context, path string, maxBytes int, reason string) (json.RawMessage, error)
 
+	// RequestFileWriteConsent pede autorizacao do usuario antes de a IA GRAVAR
+	// um arquivo no disco. Tambem e POR GRAVACAO (sem "permitir sempre") e
+	// fail-closed: qualquer resposta diferente do rotulo de aprovacao nega.
+	// Sem aprovacao nada e gravado.
+	RequestFileWriteConsent(ctx context.Context, description, destination string) (bool, error)
+
 	// RunPowerAction executa restart/shutdown/lock pedidos pela IA. Reinicio e
 	// desligamento exibem aviso do PSADT com contador e botao CANCELAR; se o
 	// usuario cancelar, nada e executado.
@@ -96,20 +102,22 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 	})
 
 	reg.Register(Tool{
-		Name:        "export_inventory_markdown",
-		Description: "Exporta o relatorio de inventario em formato Markdown e retorna o caminho do arquivo gerado.",
+		Name: "export_inventory_markdown",
+		Description: "Exporta o relatorio de inventario em formato Markdown e retorna o caminho do arquivo gerado. " +
+			"A GRAVACAO do arquivo exige AUTORIZACAO do usuario: uma pergunta e exibida no chat e, sem aprovacao, nada e gravado. " +
+			"Se o usuario negar, NAO repita a chamada — apenas informe que a gravacao nao foi autorizada.",
 		Handler: func(ctx context.Context, args map[string]any) (any, error) {
-			path, err := app.ExportMarkdown()
-			return map[string]string{"path": path}, err
+			return exportWithConsent(ctx, app, exportMarkdownDescription, "Markdown", app.ExportMarkdown)
 		},
 	})
 
 	reg.Register(Tool{
-		Name:        "export_inventory_pdf",
-		Description: "Exporta o relatorio de inventario em formato PDF e retorna o caminho do arquivo gerado.",
+		Name: "export_inventory_pdf",
+		Description: "Exporta o relatorio de inventario em formato PDF e retorna o caminho do arquivo gerado. " +
+			"A GRAVACAO do arquivo exige AUTORIZACAO do usuario: uma pergunta e exibida no chat e, sem aprovacao, nada e gravado. " +
+			"Se o usuario negar, NAO repita a chamada — apenas informe que a gravacao nao foi autorizada.",
 		Handler: func(ctx context.Context, args map[string]any) (any, error) {
-			path, err := app.ExportPDF()
-			return map[string]string{"path": path}, err
+			return exportWithConsent(ctx, app, exportPDFDescription, "PDF", app.ExportPDF)
 		},
 	})
 
