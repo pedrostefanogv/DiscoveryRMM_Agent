@@ -141,34 +141,77 @@ func writeWithFallback(fileName string, writer func(outPath string) error) (stri
 }
 
 func exportDirCandidates() []string {
-	paths := make([]string, 0, 5)
+	paths := make([]string, 0, 8)
 
-	// 1) Pastas GRAVÁVEIS PELO USUÁRIO primeiro. A exportação pedida pela IA
-	// (e o botão da tela de inventário) não deve exigir privilégio de
-	// administrador: antes a pasta do executável
-	// (C:\Program Files\Discovery\DiscoveryExports) vinha primeiro e, sem
-	// elevação, todas as tentativas até a primeira pasta do usuário falhavam —
-	// o erro reportado ficava com "falha ao exportar; tentativas: ...".
+	// 1) Pastas VISÍVEIS PARA O USUÁRIO primeiro: Desktop e, em seguida,
+	// Documentos. É onde a pessoa realmente procura o relatório — antes o
+	// destino era LocalAppData\Discovery\Exports, invisível no dia a dia, e o
+	// arquivo só aparecia depois de navegar por AppData. Mantemos o
+	// subdiretório DiscoveryExports para não misturar o relatório com os
+	// arquivos pessoais do usuário.
+	for _, base := range userVisibleExportBaseDirs() {
+		paths = append(paths, filepath.Join(base, "DiscoveryExports"))
+	}
+
+	// 2) Pasta histórica do agente (LocalAppData\Discovery\Exports): continua
+	// como fallback — era o destino anterior e é sempre gravável pelo usuário
+	// (a exportação pedida pela IA não deve exigir privilégio de administrador;
+	// antes a pasta do executável vinha primeiro e, sem elevação, todas as
+	// tentativas falhavam).
 	if runtime.GOOS == "windows" {
 		if localAppData := strings.TrimSpace(os.Getenv("LOCALAPPDATA")); localAppData != "" {
 			paths = append(paths, filepath.Join(localAppData, "Discovery", "Exports"))
 		}
 	}
 
-	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
-		paths = append(paths, filepath.Join(home, "Documents", "DiscoveryExports"))
-	}
-
-	// 2) Pasta ao lado do executável (instalação elevada): mantém a
-	// descoberta fácil em instalações administrativas.
+	// 3) Últimos recursos: pasta ao lado do executável (instalação elevada /
+	// perfil não interativo), home e diretório corrente.
 	if exe, err := os.Executable(); err == nil && strings.TrimSpace(exe) != "" {
 		paths = append(paths, filepath.Join(filepath.Dir(exe), "DiscoveryExports"))
 	}
-
-	// 3) Últimos recursos.
 	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
 		paths = append(paths, filepath.Join(home, "DiscoveryExports"))
 	}
 	paths = append(paths, filepath.Join(".", "DiscoveryExports"))
 	return lo.Uniq(paths)
+}
+
+// userVisibleExportBaseDirs devolve as pastas pessoais onde o usuário espera
+// achar o relatório exportado — Desktop antes de Documentos.
+//
+// Pastas que JÁ EXISTEM vêm primeiro: com o "Known Folder Move" do OneDrive,
+// Desktop/Documentos podem estar redirecionados para %OneDrive% e a pasta
+// antiga em %USERPROFILE% pode nem existir — criar uma pasta vazia ali daria um
+// destino ruim (o arquivo "sumiria" da área de trabalho real do usuário).
+func userVisibleExportBaseDirs() []string {
+	var existing, missing []string
+	add := func(dir string) {
+		dir = strings.TrimSpace(dir)
+		if dir == "" {
+			return
+		}
+		if st, err := os.Stat(dir); err == nil && st.IsDir() {
+			existing = append(existing, dir)
+			return
+		}
+		missing = append(missing, dir)
+	}
+
+	home, _ := os.UserHomeDir()
+	oneDrive := strings.TrimSpace(os.Getenv("OneDrive"))
+
+	if strings.TrimSpace(home) != "" {
+		add(filepath.Join(home, "Desktop"))
+	}
+	if oneDrive != "" {
+		add(filepath.Join(oneDrive, "Desktop"))
+	}
+	if strings.TrimSpace(home) != "" {
+		add(filepath.Join(home, "Documents"))
+	}
+	if oneDrive != "" {
+		add(filepath.Join(oneDrive, "Documents"))
+	}
+
+	return append(existing, missing...)
 }

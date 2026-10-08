@@ -13,7 +13,7 @@ import (
 // aprovação. O texto precisa acompanhar essa ordem — antes ele dizia
 // "C:\Program Files\..." e ficou obsoleto quando a pasta do usuário passou a
 // ser a primeira opção (o pedido de consentimento informava um destino errado).
-const exportDestinationHint = `Pasta de exportacao do agente (LocalAppData\Discovery\Exports ou Documentos\DiscoveryExports; fallback: pasta do executavel)`
+const exportDestinationHint = `Pasta pessoal do usuario (Desktop\DiscoveryExports ou Documentos\DiscoveryExports; fallback: LocalAppData\Discovery\Exports)`
 
 // ToolConsentFor devolve o pedido de autorização do USUÁRIO para a tool/ação,
 // ou nil quando a tool é de leitura/diagnóstico e não exige consentimento.

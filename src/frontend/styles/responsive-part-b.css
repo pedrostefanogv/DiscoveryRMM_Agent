@@ -1754,10 +1754,48 @@
 
 /* ─── A2UI (Agent-to-User Interface) — interfaces ricas geradas por IA ─── */
 
+/* IMPORTANTE: os componentes do catálogo A2UI (@a2ui/lit) renderizam em SHADOW
+   DOM — nenhum seletor de componente escrito aqui alcança o interior deles, e o
+   card traz "border: 1px solid #ccc" INLINE. O visual real (card com gradiente,
+   botão com hover/active, campos) vem do tema injetado pelo app-chat.js em cada
+   shadow root (A2UI_THEME_CSS, marcado com [data-a2ui-theme]). O que fica aqui é
+   apenas o enquadramento da bolha no chat e o estado ocupado. */
+
 .chat-msg.assistant.chat-a2ui {
   max-width: 100%;
   padding: 12px 14px;
   white-space: normal;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+  border-radius: 14px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 7%, transparent), transparent 60%);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
+  animation: a2ui-bubble-in 0.24s ease-out;
+}
+
+@keyframes a2ui-bubble-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Estado ocupado: o agente está processando a ação disparada pelo clique. */
+.chat-msg.assistant.chat-a2ui.a2ui-busy {
+  animation: a2ui-busy-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes a2ui-busy-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent), 0 6px 18px rgba(0, 0, 0, 0.12);
+  }
+  50% {
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 28%, transparent), 0 10px 26px rgba(0, 0, 0, 0.18);
+  }
 }
 
 .a2ui-container {

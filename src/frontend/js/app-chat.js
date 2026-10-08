@@ -446,6 +446,13 @@ function scheduleChatBusyRequeue() {
 // fila, aparece como bolha "na fila" (com cancelamento individual) e é
 // despachada ao contexto do chat na primeira oportunidade em que o chat fica
 // livre — mesmo comportamento de outros chats/agentes.
+//
+// ORDEM: a fila é FIFO (shift no flush). Quem entra depois sai depois. Dois
+// pontos precisam respeitar isso para a conversa não perder a ordem:
+//   1. o envio direto só pode furar a fila quando ela está VAZIA
+//      (sendChatMessage testa chatMessageQueue.length, não só chatSending);
+//   2. mensagem reenfileirada por "turno em andamento" volta para a FRENTE
+//      (queueChatMessage(..., atFront=true)), pois foi enviada antes.
 
 var chatMessageQueue = [];
 var CHAT_MESSAGE_QUEUE_MAX = 10;
@@ -464,7 +471,12 @@ function autoGrowChatInput() {
 // Devolve false quando a mensagem NÃO entrou na fila (sem espaço): quem chamou
 // precisa devolver os anexos ao composer, senão eles somem sem nunca serem
 // enviados (o take acontece antes do enfileiramento).
-function queueChatMessage(text, images) {
+//
+// atFront=true insere no INÍCIO da fila. É o caso da mensagem que o backend
+// recusou com "já existe uma resposta em andamento": ela foi enviada ANTES das
+// que já estão na fila, então precisa voltar para a frente — empurrá-la para o
+// fim invertia a ordem da conversa.
+function queueChatMessage(text, images, atFront) {
   if (!chatMessagesEl) return false;
   if (chatMessageQueue.length >= CHAT_MESSAGE_QUEUE_MAX) {
     showFeedback(translate("chat.queueFull", { max: CHAT_MESSAGE_QUEUE_MAX }), true);
@@ -513,9 +525,21 @@ function queueChatMessage(text, images) {
   });
   div.appendChild(cancel);
 
-  chatMessagesEl.appendChild(div);
+  // A bolha "na fila" entra no ponto correspondente da fila (frente ou fim),
+  // na mesma ordem em que será despachada — antes, uma mensagem reenfileirada
+  // aparecia depois das que seriam enviadas antes dela.
+  var frontEl = atFront && chatMessageQueue.length > 0 ? chatMessageQueue[0].el : null;
+  if (frontEl && frontEl.parentNode === chatMessagesEl) {
+    chatMessagesEl.insertBefore(div, frontEl);
+  } else {
+    chatMessagesEl.appendChild(div);
+  }
   item.el = div;
-  chatMessageQueue.push(item);
+  if (atFront) {
+    chatMessageQueue.unshift(item);
+  } else {
+    chatMessageQueue.push(item);
+  }
   scheduleChatScrollToBottom();
   return true;
 }
@@ -1096,6 +1120,8 @@ function onStreamDone() {
   maybeProcessPendingA2uiAction();
   // Fila de mensagens: despacha a próxima na primeira oportunidade.
   maybeFlushChatQueue();
+  // Sem turno nem ação pendente: encerra o estado ocupado das surfaces A2UI.
+  a2uiSettleBusyIfIdle();
 }
 
 function onStreamError(errMsg) {
@@ -1119,7 +1145,9 @@ function onStreamError(errMsg) {
     if (requeueText && chatBusyRequeueAttempts < CHAT_BUSY_REQUEUE_MAX) {
       chatBusyRequeueAttempts++;
       console.warn("[chat] send recusado (turno em andamento) — reenfileirado (tentativa " + chatBusyRequeueAttempts + "/" + CHAT_BUSY_REQUEUE_MAX + ")");
-      if (!queueChatMessage(requeueText, lastDispatchedChatImages)) {
+      // A mensagem recusada foi enviada ANTES das que já estavam na fila:
+      // volta para a FRENTE para não inverter a ordem da conversa.
+      if (!queueChatMessage(requeueText, lastDispatchedChatImages, true)) {
         // Sem espaço na fila: os prints voltam ao composer em vez de sumirem.
         if (lastDispatchedChatImages.length > 0 && typeof screenshotRestoreAttachments === "function") {
           screenshotRestoreAttachments(lastDispatchedChatImages);
@@ -1147,6 +1175,7 @@ function onStreamError(errMsg) {
     maybeProcessPendingA2uiAction();
     // Fila: despacha a próxima mensagem pendente mesmo após stop.
     maybeFlushChatQueue();
+    a2uiSettleBusyIfIdle();
     return;
   }
 
@@ -1174,6 +1203,7 @@ function onStreamError(errMsg) {
   maybeProcessPendingA2uiAction();
   // Fila: despacha a próxima mensagem pendente após o erro.
   maybeFlushChatQueue();
+  a2uiSettleBusyIfIdle();
 }
 
 function onStreamStopped() {
@@ -1194,6 +1224,7 @@ function onStreamStopped() {
   maybeProcessPendingA2uiAction();
   // Fila: despacha a próxima mensagem pendente após o stop.
   maybeFlushChatQueue();
+  a2uiSettleBusyIfIdle();
 }
 
 // ─── Mini-Questionário Interativo (ask_user MCP) ───
@@ -1571,10 +1602,177 @@ function onChatQuestionCancelled(data) {
 // cada surfaceId conserva a sua bolha/handle (um card antigo continua clicável).
 var a2uiSurfaces = Object.create(null);
 
+// ─── Tema visual das surfaces A2UI ───
+// Os componentes do catálogo A2UI (@a2ui/lit) renderizam em SHADOW DOM: os
+// seletores de responsive-part-b.css NÃO atravessam a fronteira do shadow root
+// e o card traz "border: 1px solid #ccc" INLINE — era por isso que o visual
+// ficava pobre (borda cinza, sem cor, sem hover). O tema abaixo é injetado em
+// CADA shadow root aberto da surface e reaplicado conforme o Lit cria novos
+// hosts (updateComponents/updateDataModel criam elementos novos).
+var A2UI_THEME_CSS = [
+  ":host{font-family:inherit;color:var(--text,#e6ecf5);}",
+  "@keyframes a2ui-card-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}",
+  ".a2ui-card{display:block;position:relative;padding:16px 18px!important;",
+  "border:1px solid color-mix(in srgb,var(--accent,#4f8cff) 45%,transparent)!important;",
+  "border-radius:14px!important;",
+  "background:linear-gradient(145deg,color-mix(in srgb,var(--accent,#4f8cff) 16%,transparent),transparent 55%),",
+  "var(--card-bg,rgba(255,255,255,.05))!important;",
+  "box-shadow:0 10px 26px rgba(0,0,0,.22),inset 0 1px 0 rgba(255,255,255,.06);",
+  "overflow:hidden;animation:a2ui-card-in .22s ease-out;}",
+  ".a2ui-card::before{content:\"\";position:absolute;inset:0 auto 0 0;width:3px;",
+  "background:linear-gradient(180deg,var(--accent,#4f8cff),transparent);}",
+  ".a2ui-column{display:flex;flex-direction:column;gap:10px;}",
+  ".a2ui-row{display:flex;flex-direction:row;gap:10px;align-items:center;flex-wrap:wrap;}",
+  "p,h1,h2,h3,h4,h5{margin:0 0 6px;line-height:1.5;color:inherit;}",
+  "h1,h2,h3{font-weight:600;letter-spacing:.01em;}",
+  "p{font-size:.92rem;}",
+  ".a2ui-caption{display:block;font-size:.76rem;text-transform:uppercase;letter-spacing:.06em;opacity:.7;}",
+  "button.a2ui-button{display:inline-flex;align-items:center;justify-content:center;gap:6px;",
+  "font:inherit;font-weight:600;font-size:.86rem;padding:8px 14px;border-radius:10px;",
+  "border:1px solid color-mix(in srgb,var(--accent,#4f8cff) 55%,transparent);",
+  "background:linear-gradient(180deg,color-mix(in srgb,var(--accent,#4f8cff) 88%,#fff 12%),var(--accent,#4f8cff));",
+  "color:var(--on-accent,#fff);cursor:pointer;",
+  "box-shadow:0 4px 12px color-mix(in srgb,var(--accent,#4f8cff) 32%,transparent);",
+  "transition:transform .12s ease,box-shadow .18s ease,filter .18s ease;}",
+  "button.a2ui-button:hover:not([disabled]){transform:translateY(-1px);filter:brightness(1.08);",
+  "box-shadow:0 8px 20px color-mix(in srgb,var(--accent,#4f8cff) 42%,transparent);}",
+  "button.a2ui-button:active:not([disabled]){transform:translateY(0) scale(.985);}",
+  "button.a2ui-button:focus-visible{outline:2px solid color-mix(in srgb,var(--accent,#4f8cff) 70%,#fff 30%);outline-offset:2px;}",
+  "button.a2ui-button[disabled]{opacity:.5;cursor:default;box-shadow:none;}",
+  "button.a2ui-button-borderless{background:transparent;color:var(--accent,#4f8cff);border-color:transparent;box-shadow:none;}",
+  "button.a2ui-button-borderless:hover:not([disabled]){background:color-mix(in srgb,var(--accent,#4f8cff) 12%,transparent);}",
+  ".a2ui-divider{border:0;border-top:1px solid color-mix(in srgb,var(--border,#fff) 18%,transparent);margin:10px 0;}",
+  ".a2ui-checkbox{display:flex;align-items:center;gap:8px;margin:4px 0;}",
+  ".a2ui-checkbox input{accent-color:var(--accent,#4f8cff);}",
+  "input[type=text],input[type=number],input[type=email]{width:100%;padding:8px 12px;border-radius:10px;",
+  "border:1px solid color-mix(in srgb,var(--border,#fff) 22%,transparent);",
+  "background:var(--input-bg,rgba(0,0,0,.18));color:inherit;font:inherit;font-size:.88rem;}",
+  "input[type=text]:focus,input[type=number]:focus,input[type=email]:focus{outline:none;",
+  "border-color:var(--accent,#4f8cff);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent,#4f8cff) 25%,transparent);}",
+  ".a2ui-list{display:flex;flex-direction:column;gap:8px;}",
+  ".a2ui-list-item{padding:8px 10px;border-radius:10px;background:color-mix(in srgb,var(--text,#fff) 5%,transparent);}",
+  ".a2ui-slider input[type=range]{width:100%;accent-color:var(--accent,#4f8cff);}",
+  ".a2ui-choicepicker,.a2ui-tabs{display:flex;gap:8px;flex-wrap:wrap;}",
+  ".a2ui-modal{border-radius:14px;border:1px solid color-mix(in srgb,var(--accent,#4f8cff) 35%,transparent);",
+  "background:var(--card-bg,rgba(20,24,32,.98));padding:16px;box-shadow:0 18px 40px rgba(0,0,0,.4);}",
+  ".a2ui-video,.a2ui-audioplayer{width:100%;border-radius:12px;}",
+].join("");
+
+// a2uiInjectThemeIn percorre o container E os shadow roots (recursivo) e injeta
+// o tema em cada root novo. Também observa cada root descoberto: mutações
+// DENTRO de um shadow root não são vistas pelo observer do container externo.
+function a2uiInjectThemeIn(containerEl, state) {
+  var queue = [containerEl];
+  while (queue.length) {
+    var el = queue.shift();
+    var sr = el && el.shadowRoot;
+    if (!sr) continue;
+    if (!sr.__a2uiThemeInjected) {
+      try {
+        var st = document.createElement("style");
+        st.setAttribute("data-a2ui-theme", "1");
+        st.textContent = A2UI_THEME_CSS;
+        sr.insertBefore(st, sr.firstChild);
+        sr.__a2uiThemeInjected = true;
+      } catch (e) {
+        console.warn("[a2ui] falha ao injetar tema no shadow root:", e);
+      }
+      if (state && window.MutationObserver) {
+        var obs = new MutationObserver(function () {
+          a2uiScheduleTheme(containerEl, state);
+        });
+        try { obs.observe(sr, { childList: true, subtree: true }); state.observers.push(obs); } catch (_) {}
+      }
+    }
+    var inner = sr.querySelectorAll("*");
+    for (var i = 0; i < inner.length; i++) queue.push(inner[i]);
+  }
+}
+
+function a2uiScheduleTheme(containerEl, state) {
+  if (!state || state.scheduled) return;
+  state.scheduled = true;
+  var run = function () {
+    state.scheduled = false;
+    try { a2uiInjectThemeIn(containerEl, state); } catch (e) { console.warn("[a2ui] tema falhou:", e); }
+  };
+  if (window.requestAnimationFrame) window.requestAnimationFrame(run);
+  else setTimeout(run, 16);
+}
+
+// a2uiThemeAttach liga o tema a uma surface recém-criada.
+function a2uiThemeAttach(containerEl, entry) {
+  var state = { scheduled: false, observers: [], timers: [] };
+  entry.theme = state;
+  a2uiScheduleTheme(containerEl, state);
+  // O Lit anexa o shadow root no primeiro update (microtask) e cria hosts novos
+  // a cada updateComponents — reaplica em alguns instantes para cobrir as
+  // primeiras renderizações sem depender de observer no root ainda inexistente.
+  [120, 400, 1200, 2500].forEach(function (ms) {
+    state.timers.push(setTimeout(function () { a2uiScheduleTheme(containerEl, state); }, ms));
+  });
+  if (window.MutationObserver) {
+    var obs = new MutationObserver(function () { a2uiScheduleTheme(containerEl, state); });
+    try { obs.observe(containerEl, { childList: true, subtree: true }); state.observers.push(obs); } catch (_) {}
+  }
+  return state;
+}
+
+function a2uiThemeDispose(entry) {
+  var state = entry && entry.theme;
+  if (!state) return;
+  (state.observers || []).forEach(function (o) { try { o.disconnect(); } catch (_) {} });
+  (state.timers || []).forEach(function (t) { clearTimeout(t); });
+  state.observers = [];
+  state.timers = [];
+  entry.theme = null;
+}
+
+function a2uiThemeRefresh(surfaceId) {
+  var entry = a2uiSurfaces[surfaceId];
+  if (!entry || !entry.theme) return;
+  var contentEl = entry.bubble ? entry.bubble.querySelector(".a2ui-container") : null;
+  if (contentEl) a2uiScheduleTheme(contentEl, entry.theme);
+}
+
+// ─── Estado ocupado e rastro do clique na conversa ───
+// a2uiActionBubblePending evita várias bolhas quando o usuário clica em mais de
+// um botão antes de o turno anterior terminar (o backend consome uma ação por
+// turno).
+var a2uiActionBubblePending = false;
+
+// formatA2uiActionLabel dá nome legível ao clique, para o turno disparado pela
+// interface não ficar sem rastro na conversa.
+function formatA2uiActionLabel(action) {
+  var name = String((action && action.name) || "").trim();
+  if (!name) return "▶ ação na interface";
+  return "▶ " + name.replace(/[._]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function a2uiSetBusy(surfaceId, busy) {
+  var entry = a2uiSurfaces[surfaceId];
+  if (!entry || !entry.bubble) return;
+  entry.bubble.classList.toggle("a2ui-busy", !!busy);
+  entry.bubble.setAttribute("aria-busy", busy ? "true" : "false");
+}
+
+function clearA2uiBusy() {
+  Object.keys(a2uiSurfaces).forEach(function (surfaceId) { a2uiSetBusy(surfaceId, false); });
+}
+
+// a2uiSettleBusyIfIdle encerra o estado ocupado só quando NÃO há mais turno
+// nem ação A2UI na fila; chamada nos terminais do stream.
+function a2uiSettleBusyIfIdle() {
+  if (chatSending || pendingA2uiAction) return;
+  a2uiActionBubblePending = false;
+  clearA2uiBusy();
+}
+
 // a2uiSurfaceDestroy remove a bolha e destrói o handle de UMA surface.
 function a2uiSurfaceDestroy(surfaceId) {
   var entry = a2uiSurfaces[surfaceId];
   if (!entry) return;
+  a2uiThemeDispose(entry);
   try { entry.handle.destroy(); } catch (_) {}
   if (entry.bubble) { try { entry.bubble.remove(); } catch (_) {} }
   delete a2uiSurfaces[surfaceId];
@@ -1681,6 +1879,9 @@ function onChatA2ui(data) {
     if (!isCreateSurface && entry) {
       entry.handle.processMessages([parsed]);
     }
+    // updateComponents/updateDataModel criam hosts novos (e novos shadow roots):
+    // reaplica o tema depois do processamento.
+    a2uiThemeRefresh(targetSurfaceId);
     scheduleChatScrollToBottom();
   } catch (e) {
     // Fallback: se o A2UI falhar (JSON inválido, catalog/surface error, etc.),
@@ -1747,7 +1948,11 @@ function ensureA2uiSurface(surfaceId) {
     return null;
   }
 
-  a2uiSurfaces[surfaceId] = { handle: handle, bubble: div };
+  var entry = { handle: handle, bubble: div, theme: null };
+  a2uiSurfaces[surfaceId] = entry;
+  // Tema visual: injetado nos shadow roots do catálogo Lit (o CSS do app não
+  // atravessa a fronteira do shadow root — ver A2UI_THEME_CSS).
+  a2uiThemeAttach(contentEl, entry);
   syncColorMode();
   scheduleChatScrollToBottom();
   return handle;
@@ -1771,6 +1976,16 @@ function handleA2uiUserAction(surfaceId, action) {
       context: action.context || {},
     };
     appApi().AnswerA2uiAction(JSON.stringify(payload));
+    // Rastro na conversa: o clique vira uma bolha do usuário. Antes o turno
+    // disparado pela surface não deixava nenhuma marca na thread e a resposta
+    // do agente parecia "surgir do nada".
+    if (!a2uiActionBubblePending) {
+      a2uiActionBubblePending = true;
+      addChatMessage("user", formatA2uiActionLabel(action));
+    }
+    // Estado ocupado no card: o componente fica esmaecido enquanto o agente
+    // processa a ação (antes o clique não dava nenhum retorno visual imediato).
+    a2uiSetBusy(surfaceId, true);
     if (chatSending) {
       // Stream ativo: guarda a ação para disparar o processamento no chat:done.
       pendingA2uiAction = true;
@@ -1779,6 +1994,7 @@ function handleA2uiUserAction(surfaceId, action) {
     sendChatMessageWithA2uiAction();
   } catch (e) {
     console.error("[a2ui] falha ao enviar userAction:", e);
+    a2uiSetBusy(surfaceId, false);
   }
 }
 
@@ -2817,7 +3033,12 @@ async function sendChatMessage() {
     return;
   }
 
-  if (chatSending) {
+  // Fila estrita (FIFO): se existe QUALQUER mensagem esperando — inclusive no
+  // intervalo em que o chat acabou de ficar livre e o flush ainda não rodou —
+  // a nova mensagem entra ATRÁS dela. Antes o teste era apenas chatSending,
+  // então um envio recém-digitado ultrapassava a fila (LIFO na prática, apesar
+  // de o shift() da fila ser FIFO) e a conversa perdia a ordem.
+  if (chatSending || chatMessageQueue.length > 0) {
     // Chat processando: enfileira e limpa o input. A mensagem entra no
     // contexto na primeira oportunidade (maybeFlushChatQueue) e leva junto os
     // prints que estavam anexados no momento do envio.
@@ -2833,6 +3054,9 @@ async function sendChatMessage() {
     }
     chatInputEl.value = "";
     autoGrowChatInput();
+    // Chat livre com fila pendente (janela entre o terminal do stream e o
+    // flush): despacha a MAIS ANTIGA — a ordem de chegada é preservada.
+    if (!chatSending) maybeFlushChatQueue();
     return;
   }
 

@@ -26,6 +26,9 @@ import * as automation$0 from "./automation/models.js";
 import * as agentconn$0 from "./core/agentconn/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
+import * as consent$0 from "./core/consent/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
 import * as database$0 from "./core/database/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
@@ -1887,6 +1890,25 @@ export function RequestAppClose() {
  */
 export function RequestProvisioningToken() {
     return $Call.ByID(3451619263);
+}
+
+/**
+ * RequestToolConsent é o gate de autorização do chat: pede aprovação do
+ * USUÁRIO antes de a IA executar uma ação com efeito no computador (gravar
+ * arquivo, instalar/desinstalar programa, parar serviço, reiniciar...).
+ * 
+ * É POR AÇÃO (não existe "permitir sempre") e fail-closed: qualquer resposta
+ * diferente do rótulo localizado de aprovação conta como NEGATIVA. O texto do
+ * diálogo é localizado (pt/en/es) por core/consent.
+ * 
+ * Motivação: as tools destrutivas dependiam de um parâmetro confirm=true que o
+ * PRÓPRIO LLM preenchia — não havia confirmação real do usuário. Agora o gate
+ * em services/chat consulta core/mcp.ToolConsentFor antes de executar a tool.
+ * @param {consent$0.Request} req
+ * @returns {$CancellablePromise<boolean>}
+ */
+export function RequestToolConsent(req) {
+    return $Call.ByID(3255323401, req);
 }
 
 /**
