@@ -1,7 +1,9 @@
 package mcp
 
 import (
+	"context"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -46,5 +48,47 @@ func TestBuildFlushDNSCommand_Exists(t *testing.T) {
 	}
 	if cmd == nil || len(cmd.Args) == 0 {
 		t.Fatalf("expected valid command, got %v", cmd)
+	}
+}
+
+// O agent roda no contexto do usuário (sem UAC). Nesse cenário o
+// `ipconfig /flushdns` devolve "A operação solicitada requer elevação"
+// (exit 1) e a limpeza nunca acontecia; o caminho nativo via dnsapi.dll resolve.
+func TestFlushDNS_SucceedsWithoutElevation(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("teste especifico do caminho nativo do Windows")
+	}
+	res, err := FlushDNS(context.Background())
+	if err != nil {
+		t.Fatalf("FlushDNS devolveu erro: %v", err)
+	}
+	if !res.Success {
+		t.Fatalf("flush DNS sem elevacao deveria funcionar; saida=%q", res.Output)
+	}
+}
+
+// Garante que o simbolo realmente existe na DLL: syscall.LazyProc.Call PANICa
+// quando o proc nao resolve, e um panic derrubaria o agent (por isso Find() +
+// recover em flushDNSNative).
+func TestFlushDNSNativeSymbolResolves(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("teste especifico do Windows")
+	}
+	if err := dnsapiDLL.Load(); err != nil {
+		t.Fatalf("dnsapi.dll nao carregou: %v", err)
+	}
+	if err := procDnsFlushResolverCache.Find(); err != nil {
+		t.Fatalf("DnsFlushResolverCache nao existe em dnsapi.dll: %v", err)
+	}
+}
+
+func TestWithFlushDNSHint_OnlyForElevationFailures(t *testing.T) {
+	withHint := withFlushDNSHint("A operacao solicitada requer elevacao.")
+	if !strings.Contains(withHint, "administrador") {
+		t.Fatalf("esperava dica de elevacao, got %q", withHint)
+	}
+	plain := withFlushDNSHint("Successfully flushed the DNS Resolver Cache.")
+	if strings.Contains(plain, "administrador") {
+		t.Fatalf("nao deveria acrescentar dica: %q", plain)
 	}
 }

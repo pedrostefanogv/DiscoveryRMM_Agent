@@ -31,7 +31,7 @@ func registerNetworkDiagnosticsTool(reg *Registry) {
 		Name: "network_diagnostics",
 		Description: "Diagnostico de rede (familia action-based). action: " +
 			"ping (host, count, timeoutSeconds; apenas rede privada) | " +
-			"flush_dns (limpa o cache DNS) | " +
+			"flush_dns (limpa o cache DNS; usa a API nativa do Windows, NAO exige elevacao) | " +
 			"test_connection (host e port; teste TCP, apenas rede privada/local) | " +
 			"resolve (host; DNS) | " +
 			"connections (conexoes TCP/UDP ativas com PID e estado) | " +

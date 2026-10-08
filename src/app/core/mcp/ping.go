@@ -177,6 +177,23 @@ func buildFlushDNSCommand() (*exec.Cmd, error) {
 
 // FlushDNS attempts to clear the system DNS cache.
 func FlushDNS(ctx context.Context) (FlushDNSResult, error) {
+	// 1) Windows: API nativa (dnsapi!DnsFlushResolverCache). NÃO exige UAC —
+	// é o caminho preferido porque `ipconfig /flushdns` retorna
+	// "A operação solicitada requer elevação" quando o agent não roda elevado
+	// (era exatamente o caso do suporte remoto: a limpeza falhava nas duas
+	// tentativas e o usuário ficava sem solução).
+	var nativeErr error
+	if runtime.GOOS == "windows" {
+		nativeErr = flushDNSNative()
+		if nativeErr == nil {
+			return FlushDNSResult{
+				Success: true,
+				Output:  "Cache do resolvedor DNS limpo com sucesso.",
+			}, nil
+		}
+	}
+
+	// 2) Fallback: comando do sistema (ipconfig/resolvectl/killall).
 	cmd, err := buildFlushDNSCommand()
 	if err != nil {
 		return FlushDNSResult{}, err
@@ -187,9 +204,30 @@ func FlushDNS(ctx context.Context) (FlushDNSResult, error) {
 
 	cmd = exec.CommandContext(ctx, cmd.Path, cmd.Args[1:]...)
 	processutil.HideWindow(cmd)
-	out, err := cmd.CombinedOutput()
-	return FlushDNSResult{
-		Success: err == nil,
-		Output:  strings.TrimSpace(string(out)),
-	}, err
+	out, cmdErr := cmd.CombinedOutput()
+	output := strings.TrimSpace(string(out))
+	if cmdErr != nil {
+		if output == "" {
+			output = cmdErr.Error()
+		}
+		if nativeErr != nil {
+			output += "\nAPI nativa: " + nativeErr.Error()
+		}
+		// Devolve o resultado estruturado (sem erro cru) para o assistente
+		// explicar a causa — ex.: falta de elevação — em vez de só "falhou".
+		return FlushDNSResult{Success: false, Output: withFlushDNSHint(output)}, nil
+	}
+	return FlushDNSResult{Success: true, Output: output}, nil
+}
+
+// withFlushDNSHint acrescenta orientação quando a saída do comando indica falta
+// de privilégio — caso clássico do `ipconfig /flushdns` sem elevação.
+func withFlushDNSHint(output string) string {
+	lower := strings.ToLower(output)
+	if strings.Contains(lower, "eleva") ||
+		strings.Contains(lower, "access is denied") ||
+		strings.Contains(lower, "acesso negado") {
+		return output + "\nA limpeza exige privilégio de administrador. Abra o chamado para a equipe de TI ou execute em uma sessão elevada."
+	}
+	return output
 }

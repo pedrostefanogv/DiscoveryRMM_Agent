@@ -644,8 +644,16 @@ func (s *Service) SendWithA2ui(ctx context.Context, userMessage string, onA2ui f
 	// A2UI no caminho síncrono: o servidor extrai as interfaces e as devolve
 	// no JSON (não há SSE). Repassa ANTES de devolver o texto para o card
 	// aparecer junto com a resposta.
-	for _, msg := range resp.A2uiMessages {
-		if m := strings.TrimSpace(msg); m != "" && onA2ui != nil {
+	if onA2ui != nil {
+		// Mesmos guardrails do streaming (normalizar/dedup/teto) e mesma retenção
+		// da surface para os cliques de navegação continuarem funcionando.
+		guard := newA2uiClientGuard(maxA2uiMessagesPerTurn)
+		for _, msg := range resp.A2uiMessages {
+			m, reason := guard.Offer(msg)
+			if reason != a2uiAccept {
+				continue
+			}
+			s.rememberA2uiSurface(m)
 			onA2ui(m)
 		}
 	}

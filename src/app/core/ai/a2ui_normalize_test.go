@@ -87,6 +87,120 @@ func TestNormalizeA2uiMessage_RealProductionPayload(t *testing.T) {
 	}
 }
 
+// Card de passo a passo em que o LLM pôs os botões direto no Column: o catálogo
+// empilha os filhos (flex-direction: column) e "Voltar/Avançar/Não resolveu"
+// ficavam um embaixo do outro.
+const buttonsStackedUpdate = `{"version":"v0.9","updateComponents":{"surfaceId":"wizard","components":[{"id":"root","component":"Column","children":["t","b1","b2","b3"]},{"id":"t","component":"Text","text":"Etapa 1 de 3"},{"id":"b1","component":"Button","child":"l1","action":{"event":{"name":"ui.prev"}}},{"id":"l1","component":"Text","text":"Voltar"},{"id":"b2","component":"Button","child":"l2","action":{"event":{"name":"ui.next"}}},{"id":"l2","component":"Text","text":"Avançar"},{"id":"b3","component":"Button","child":"l3","action":{"event":{"name":"ui.help"}}},{"id":"l3","component":"Text","text":"Nao resolveu"}]}}`
+
+func TestNormalizeA2uiMessage_GroupsConsecutiveButtonsIntoRow(t *testing.T) {
+	out := NormalizeA2uiMessage(buttonsStackedUpdate)
+	if out == buttonsStackedUpdate {
+		t.Fatal("botoes irmãos consecutivos deveriam ter sido agrupados num Row")
+	}
+	byID := decodeA2uiComponents(t, out)
+
+	root, _ := byID["root"]["children"].([]any)
+	if len(root) != 2 || root[0] != "t" {
+		t.Fatalf("root children = %v, quer [t <row>]", root)
+	}
+	rowID, _ := root[1].(string)
+	row, ok := byID[rowID]
+	if !ok {
+		t.Fatalf("Row %q nao existe", rowID)
+	}
+	if name, _ := row["component"].(string); !strings.EqualFold(name, "Row") {
+		t.Fatalf("componente %q = %v, quer Row", rowID, row["component"])
+	}
+	kids, _ := row["children"].([]any)
+	if len(kids) != 3 || kids[0] != "b1" || kids[1] != "b2" || kids[2] != "b3" {
+		t.Fatalf("Row children = %v, quer [b1 b2 b3]", kids)
+	}
+	// Cada botao continua com o rotulo dentro dele (o child nao pode ser perdido).
+	for id, label := range map[string]string{"b1": "l1", "b2": "l2", "b3": "l3"} {
+		if byID[id]["child"] != label {
+			t.Fatalf("%s perdeu o child (%v)", id, byID[id]["child"])
+		}
+		if _, ok := byID[label]; !ok {
+			t.Fatalf("rotulo %s desapareceu", label)
+		}
+	}
+}
+
+// Botões separados por Text/Divider também precisam ficar lado a lado: sem isso
+// o caso "botão, explicação, botão" continuava empilhado.
+const buttonsSeparatedUpdate = `{"version":"v0.9","updateComponents":{"surfaceId":"wizard","components":[{"id":"root","component":"Column","children":["t","b1","dica","b2","sep","b3"]},{"id":"t","component":"Text","text":"Etapa 1"},{"id":"b1","component":"Button","child":"l1"},{"id":"l1","component":"Text","text":"Voltar"},{"id":"dica","component":"Text","text":"Ligue a impressora"},{"id":"b2","component":"Button","child":"l2"},{"id":"l2","component":"Text","text":"Avançar"},{"id":"sep","component":"Divider"},{"id":"b3","component":"Button","child":"l3"},{"id":"l3","component":"Text","text":"Nao resolveu"}]}}`
+
+func TestNormalizeA2uiMessage_GroupsButtonsSeparatedByTextAndDivider(t *testing.T) {
+	out := NormalizeA2uiMessage(buttonsSeparatedUpdate)
+	byID := decodeA2uiComponents(t, out)
+
+	root, _ := byID["root"]["children"].([]any)
+	if len(root) != 4 || root[0] != "t" {
+		t.Fatalf("root children = %v, quer [t <row> dica sep]", root)
+	}
+	rowID, _ := root[1].(string)
+	row, ok := byID[rowID]
+	if !ok {
+		t.Fatalf("Row %q nao existe", rowID)
+	}
+	if name, _ := row["component"].(string); !strings.EqualFold(name, "Row") {
+		t.Fatalf("componente %q = %v, quer Row", rowID, row["component"])
+	}
+	kids, _ := row["children"].([]any)
+	if len(kids) != 3 || kids[0] != "b1" || kids[1] != "b2" || kids[2] != "b3" {
+		t.Fatalf("Row children = %v, quer [b1 b2 b3]", kids)
+	}
+}
+
+// Payload que o LLM JÁ montou certo (botões dentro de um Row) não deve mudar.
+const buttonsInRowUpdate = `{"version":"v0.9","updateComponents":{"surfaceId":"wizard","components":[{"id":"root","component":"Column","children":["nav"]},{"id":"nav","component":"Row","children":["b1","b2"]},{"id":"b1","component":"Button","child":"l1"},{"id":"l1","component":"Text","text":"Voltar"},{"id":"b2","component":"Button","child":"l2"},{"id":"l2","component":"Text","text":"Avançar"}]}}`
+
+func TestNormalizeA2uiMessage_KeepsButtonsAlreadyInRow(t *testing.T) {
+	if got := NormalizeA2uiMessage(buttonsInRowUpdate); got != buttonsInRowUpdate {
+		t.Fatalf("payload ja correto nao deveria mudar: in = %s / out = %s", buttonsInRowUpdate, got)
+	}
+}
+
+// normalizeA2uiForClient e o ponto unico usado por TODOS os caminhos que
+// entregam A2UI ao frontend (streaming, fallback e Send sincrono).
+func TestNormalizeA2uiForClient_DropsEmptyAndNull(t *testing.T) {
+	for _, in := range []string{"", "   ", "null", " null "} {
+		if got := normalizeA2uiForClient(in); got != "" {
+			t.Fatalf("normalizeA2uiForClient(%q) = %q, quer string vazia", in, got)
+		}
+	}
+}
+
+func TestNormalizeA2uiForClient_AppliesButtonGrouping(t *testing.T) {
+	out := normalizeA2uiForClient(buttonsStackedUpdate)
+	if out == "" || out == buttonsStackedUpdate {
+		t.Fatal("mensagem deveria sair normalizada (nao vazia nem igual a entrada)")
+	}
+	byID := decodeA2uiComponents(t, out)
+	root, _ := byID["root"]["children"].([]any)
+	if len(root) != 2 {
+		t.Fatalf("root children = %v, quer [t <row>]", root)
+	}
+}
+
+// Idempotencia: o normalizador roda no streaming e pode rodar de novo no
+// fallback/cache — a segunda passada nao pode criar Rows aninhados nem mudar o
+// payload.
+func TestNormalizeA2uiMessage_IsIdempotent(t *testing.T) {
+	for name, in := range map[string]string{
+		"botoes empilhados": buttonsStackedUpdate,
+		"botoes separados":  buttonsSeparatedUpdate,
+		"botoes ja em Row":  buttonsInRowUpdate,
+		"payload real":      realA2uiUpdate,
+	} {
+		once := NormalizeA2uiMessage(in)
+		twice := NormalizeA2uiMessage(once)
+		if twice != once {
+			t.Fatalf("%s: normalizacao nao e idempotente (1x = %s / 2x = %s)", name, once, twice)
+		}
+	}
+}
+
 func TestNormalizeA2uiMessage_Passthrough(t *testing.T) {
 	cases := []string{
 		rawCreate,

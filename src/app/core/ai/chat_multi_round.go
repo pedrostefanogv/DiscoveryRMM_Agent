@@ -226,37 +226,28 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 	undeliveredResults := make([]toolResultItem, 0)
 	rescueAttempted := false
 
-	// Guardrails A2UI client-side (Fase 3): maximo de 6 mensagens de surface
-	// por turno e descarte de payloads identicos reenviados. Sem isso, um
-	// modelo exagerado podia inundar a UI com surfaces.
-	a2uiMsgCount := 0
-	seenA2ui := make(map[string]bool, 4)
+	// Guardrails A2UI client-side: normalização, teto por turno e dedup. Agora
+	// centralizados em a2uiClientGuard para valerem também nos caminhos
+	// síncronos (SendWithA2ui/fallbackToSync).
+	guard := newA2uiClientGuard(maxA2uiMessagesPerTurn)
 	var a2uiCb func(string)
 	if len(onA2ui) > 0 && onA2ui[0] != nil {
 		base := onA2ui[0]
 		a2uiCb = func(msg string) {
-			m := strings.TrimSpace(msg)
-			if m == "" {
+			m, reason := guard.Offer(msg)
+			switch reason {
+			case a2uiDropEmpty:
 				return
-			}
-			// Corrige defeitos do payload antes de renderizar (rótulo duplicado
-			// de Button + markdown cru no Text). O dedup abaixo compara o payload
-			// JÁ normalizado — dois envios que só diferem em formatação passam a
-			// contar como duplicados.
-			if norm := NormalizeA2uiMessage(m); norm != m {
-				s.logf("[chat] a2ui: payload normalizado (rótulo duplicado/markdown) %d -> %d chars", len(m), len(norm))
-				m = norm
-			}
-			if seenA2ui[m] {
+			case a2uiDropDuplicate:
 				s.logf("[chat] a2ui: payload duplicado descartado (%d chars)", len(m))
 				return
-			}
-			if a2uiMsgCount >= 6 {
-				s.logf("[chat] a2ui: limite de 6 mensagens por turno atingido — mensagem descartada")
+			case a2uiDropLimit:
+				s.logf("[chat] a2ui: limite de %d mensagens por turno atingido — mensagem descartada", maxA2uiMessagesPerTurn)
 				return
 			}
-			seenA2ui[m] = true
-			a2uiMsgCount++
+			if trimmed := strings.TrimSpace(msg); m != trimmed {
+				s.logf("[chat] a2ui: payload normalizado (rótulo duplicado/markdown/botões) %d -> %d chars", len(trimmed), len(m))
+			}
 			// Guarda a última definição da surface: será reenviada ao LLM no
 			// clique de navegação (o histórico persistido não tem o bloco a2ui).
 			s.rememberA2uiSurface(m)
@@ -1290,10 +1281,16 @@ func (s *Service) fallbackToSync(ctx context.Context, cfg Config, message, sessi
 	// A2UI no fallback síncrono: o servidor devolve as interfaces no JSON (sem
 	// SSE). Sem este repasse o card sumia em silêncio quando o stream falhava.
 	if len(onA2ui) > 0 && onA2ui[0] != nil {
+		// Mesmos guardrails do streaming (normalizar/dedup/teto) e mesma
+		// retenção da surface para os cliques de navegação continuarem funcionando.
+		guard := newA2uiClientGuard(maxA2uiMessagesPerTurn)
 		for _, msg := range resp.A2uiMessages {
-			if m := strings.TrimSpace(msg); m != "" {
-				onA2ui[0](NormalizeA2uiMessage(m))
+			m, reason := guard.Offer(msg)
+			if reason != a2uiAccept {
+				continue
 			}
+			s.rememberA2uiSurface(m)
+			onA2ui[0](m)
 		}
 	}
 	assistant := strings.TrimSpace(resp.AssistantMessage)
