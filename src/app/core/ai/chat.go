@@ -72,6 +72,17 @@ type Service struct {
 	a2uiActionSeq  uint64
 	maxA2uiActions int
 
+	// a2uiSurfaceMu protege o cache da última DEFINIÇÃO (updateComponents) de
+	// cada surface A2UI vista neste processo. O servidor persiste a resposta
+	// assistente já sem o bloco a2ui, então quando o usuário clica num botão de
+	// navegação (step_next/voltar/tab) o LLM não tem a árvore anterior no
+	// histórico para reemitir em updateComponents — sem isso ele só respondia
+	// em prosa e a interface ficava presa no passo anterior (caso stepper
+	// 2026-10-08). O snapshot vai anexado ao tool result sintético a2ui_action.
+	a2uiSurfaceMu    sync.Mutex
+	a2uiSurface      map[string]string
+	a2uiSurfaceOrder []string
+
 	// turnMu garante um turno de chat por vez (B-M4): dois fluxos concorrentes
 	// (ex.: usuário clicando em "enviar" duas vezes, ou webview + debug HTTP)
 	// não devem compartilhar history/sessionID em loops paralelos.
@@ -156,7 +167,16 @@ type A2uiAction struct {
 	// e um tool_call_id repetido na mesma sessão confunde o pareamento
 	// tool_call/tool_message exigido pelos provedores OpenAI-compatible.
 	Seq uint64
+	// At é o instante do enfileiramento. Um clique pode ficar na fila enquanto
+	// um turno longo roda; ações velhas demais são descartadas no consumo para
+	// não serem executadas muito depois do clique (TTL em a2uiActionTTL).
+	At time.Time
 }
+
+// a2uiActionTTL é o tempo máximo que um clique A2UI pode esperar na fila. A
+// surface continua visível no chat, então um clique esquecido num card antigo
+// não pode ser executado minutos depois — quando o usuário já mudou de contexto.
+const a2uiActionTTL = 2 * time.Minute
 
 // NewService creates a chat service.
 func NewService(registry *mcp.Registry) *Service {
@@ -191,19 +211,34 @@ func (s *Service) SubmitA2uiAction(surfaceID, name string, context map[string]an
 		Name:      name,
 		Context:   context,
 		Seq:       s.a2uiActionSeq,
+		At:        time.Now(),
 	})
 }
 
-// takeA2uiAction consome e retorna a PRIMEIRA ação A2UI pendente (se houver).
+// takeA2uiAction consome e retorna a PRIMEIRA ação A2UI pendente e NÃO
+// expirada. Ações mais velhas que a2uiActionTTL são descartadas (um clique
+// antigo num card esquecido não pode disparar uma execução muito depois).
 func (s *Service) takeA2uiAction() *A2uiAction {
 	s.a2uiActionMu.Lock()
-	defer s.a2uiActionMu.Unlock()
-	if len(s.a2uiActions) == 0 {
-		return nil
+	var expired int
+	var next *A2uiAction
+	now := time.Now()
+	for len(s.a2uiActions) > 0 {
+		action := s.a2uiActions[0]
+		s.a2uiActions = s.a2uiActions[1:]
+		if !action.At.IsZero() && now.Sub(action.At) > a2uiActionTTL {
+			expired++
+			continue
+		}
+		next = &action
+		break
 	}
-	action := s.a2uiActions[0]
-	s.a2uiActions = s.a2uiActions[1:]
-	return &action
+	s.a2uiActionMu.Unlock()
+	if expired > 0 {
+		// logf fora do lock (ele pode tocar em outros subsistemas de log).
+		s.logf("[chat] %d ação(ões) A2UI expirada(s) descartada(s) (TTL %s)", expired, a2uiActionTTL)
+	}
+	return next
 }
 
 // peekA2uiAction retorna true se há ação A2UI pendente SEM consumi-la.

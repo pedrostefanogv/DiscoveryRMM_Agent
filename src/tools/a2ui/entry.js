@@ -13,10 +13,21 @@
 // (gere com: cd src/tools/a2ui && npm install && npm run build).
 // O runtime do agente não depende de node/npm.
 
-import { MessageProcessor } from "@a2ui/web_core/v0_9";
+import { MessageProcessor, Catalog } from "@a2ui/web_core/v0_9";
 import { A2uiSurface, basicCatalog } from "@a2ui/lit/v0_9";
+import { A2uiSelect } from "./components/Select.js";
 
-const CATALOG_ID = basicCatalog.id;
+// Catálogo do Discovery = basic v0.9 + componentes próprios (Select/dropdown).
+// O id é o MESMO do basic de propósito: o createSurface emitido pelo LLM
+// continua mandando basic_catalog.json e o AiChatA2uiValidator do servidor não
+// precisa conhecer um catalogId novo — só o nome do componente (Select).
+const catalog = new Catalog(
+  basicCatalog.id,
+  [...basicCatalog.components.values(), A2uiSelect],
+  [...basicCatalog.functions.values()],
+);
+
+const CATALOG_ID = catalog.id;
 
 function createSurface(containerEl, surfaceId) {
   if (!containerEl) {
@@ -32,7 +43,7 @@ function createSurface(containerEl, surfaceId) {
   // createSurface inteiro — a surface era criada, mas o handle nunca era
   // devolvido, então NENHUM card era exibido (o erro ficava engolido pelo
   // catch do ensureA2uiSurface no app-chat.js).
-  const processor = new MessageProcessor([basicCatalog], (action) => {
+  const processor = new MessageProcessor([catalog], (action) => {
     for (const handler of userActionHandlers) {
       try {
         handler(action);
@@ -86,4 +97,4 @@ function createSurface(containerEl, surfaceId) {
 }
 
 // Expõe a API global (o esbuild com globalName="A2uiChat" cria window.A2uiChat).
-export { createSurface, basicCatalog, CATALOG_ID };
+export { createSurface, catalog, CATALOG_ID };

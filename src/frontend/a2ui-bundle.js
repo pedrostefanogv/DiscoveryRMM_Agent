@@ -28,7 +28,7 @@ var A2uiChat = (() => {
   var entry_exports = {};
   __export(entry_exports, {
     CATALOG_ID: () => CATALOG_ID,
-    basicCatalog: () => basicCatalog,
+    catalog: () => catalog,
     createSurface: () => createSurface
   });
 
@@ -4899,9 +4899,9 @@ var A2uiChat = (() => {
      * @param theme The theme to apply to this surface.
      * @param sendDataModel If true, the client will send the full data model.
      */
-    constructor(id, catalog, theme = {}, sendDataModel = false) {
+    constructor(id, catalog2, theme = {}, sendDataModel = false) {
       this.id = id;
-      this.catalog = catalog;
+      this.catalog = catalog2;
       this.theme = theme;
       this.sendDataModel = sendDataModel;
       this._onAction = new EventEmitter();
@@ -6393,9 +6393,9 @@ var A2uiChat = (() => {
       }
       return capabilities;
     }
-    generateInlineCatalog(catalog) {
+    generateInlineCatalog(catalog2) {
       const components = {};
-      for (const [name, api] of catalog.components.entries()) {
+      for (const [name, api] of catalog2.components.entries()) {
         const zodSchema = zodToJsonSchema(api.schema, {
           target: "jsonSchema2019-09"
         });
@@ -6414,7 +6414,7 @@ var A2uiChat = (() => {
         };
       }
       const functions = [];
-      for (const api of catalog.functions.values()) {
+      for (const api of catalog2.functions.values()) {
         const zodSchema = zodToJsonSchema(api.schema, {
           target: "jsonSchema2019-09"
         });
@@ -6427,15 +6427,15 @@ var A2uiChat = (() => {
         });
       }
       let theme;
-      if (catalog.themeSchema) {
-        const zodSchema = zodToJsonSchema(catalog.themeSchema, {
+      if (catalog2.themeSchema) {
+        const zodSchema = zodToJsonSchema(catalog2.themeSchema, {
           target: "jsonSchema2019-09"
         });
         this.processRefs(zodSchema);
         theme = zodSchema.properties;
       }
       return {
-        catalogId: catalog.id,
+        catalogId: catalog2.id,
         components,
         functions: functions.length > 0 ? functions : void 0,
         theme
@@ -6538,14 +6538,14 @@ var A2uiChat = (() => {
     processCreateSurfaceMessage(message2) {
       const payload = message2.createSurface;
       const { surfaceId, catalogId, theme, sendDataModel } = payload;
-      const catalog = this.catalogs.find((c6) => c6.id === catalogId);
-      if (!catalog) {
+      const catalog2 = this.catalogs.find((c6) => c6.id === catalogId);
+      if (!catalog2) {
         throw new A2uiStateError(`Catalog not found: ${catalogId}`);
       }
       if (this.model.getSurface(surfaceId)) {
         throw new A2uiStateError(`Surface ${surfaceId} already exists.`);
       }
-      const surface = new SurfaceModel(surfaceId, catalog, theme, sendDataModel ?? false);
+      const surface = new SurfaceModel(surfaceId, catalog2, theme, sendDataModel ?? false);
       this.model.addSurface(surface);
     }
     processDeleteSurfaceMessage(message2) {
@@ -7910,9 +7910,9 @@ var A2uiChat = (() => {
   var $2 = n6(T);
 
   // node_modules/@a2ui/lit/src/v0_9/surface/render-a2ui-node.js
-  function renderA2uiNode(context, catalog) {
+  function renderA2uiNode(context, catalog2) {
     const type = context.componentModel.type;
-    const implementation = catalog.components.get(type);
+    const implementation = catalog2.components.get(type);
     if (!implementation) {
       console.warn(`Component implementation not found for type: ${type}`);
       return A;
@@ -12831,15 +12831,77 @@ var A2uiChat = (() => {
     A2uiModal
   ], BASIC_FUNCTIONS);
 
+  // components/Select.js
+  var SelectApi = {
+    name: "Select",
+    schema: external_exports.object({
+      accessibility: AccessibilityAttributesSchema.optional(),
+      weight: external_exports.number().optional(),
+      label: DynamicStringSchema.describe("The label shown above the dropdown.").optional(),
+      value: DynamicStringSchema.describe(
+        "The currently selected value. Should be bound to a string in the data model."
+      ).optional(),
+      placeholder: DynamicStringSchema.describe(
+        "Text shown when no option is selected yet."
+      ).optional(),
+      options: external_exports.array(
+        external_exports.object({
+          label: DynamicStringSchema.describe("The text to display for this option."),
+          value: external_exports.string().describe("The stable value associated with this option.")
+        }).strict()
+      ).describe("The list of available options.")
+    }).strict().describe("A dropdown that lets the user pick a single option from a list.")
+  };
+  var A2uiSelectElement = class extends A2uiLitElement {
+    createController() {
+      return new A2uiController(this, SelectApi);
+    }
+    render() {
+      const props = this.controller.props;
+      if (!props) return A;
+      const raw = props.value;
+      const current = Array.isArray(raw) ? String(raw[0] ?? "") : typeof raw === "string" ? raw : "";
+      const options = Array.isArray(props.options) ? props.options : [];
+      return b3`
+      <div class="a2ui-select">
+        ${props.label ? b3`<label for="a2ui-select-input">${props.label}</label>` : A}
+        <select
+          id="a2ui-select-input"
+          class="a2ui-select-input"
+          .value=${current}
+          @change=${(e9) => props.setValue && props.setValue(e9.target.value)}
+        >
+          <option value="" ?selected=${current === ""}>${props.placeholder || "Selecione..."}</option>
+          ${options.map(
+        (opt) => b3`<option value=${opt.value} ?selected=${String(opt.value) === current}>${opt.label != null ? opt.label : opt.value}</option>`
+      )}
+        </select>
+      </div>
+    `;
+    }
+  };
+  if (!customElements.get("a2ui-select")) {
+    customElements.define("a2ui-select", A2uiSelectElement);
+  }
+  var A2uiSelect = {
+    ...SelectApi,
+    tagName: "a2ui-select"
+  };
+
   // entry.js
-  var CATALOG_ID = basicCatalog.id;
+  var catalog = new Catalog(
+    basicCatalog.id,
+    [...basicCatalog.components.values(), A2uiSelect],
+    [...basicCatalog.functions.values()]
+  );
+  var CATALOG_ID = catalog.id;
   function createSurface(containerEl, surfaceId) {
     if (!containerEl) {
       throw new Error("A2uiChat.createSurface: containerEl \xE9 obrigat\xF3rio");
     }
     const surfaceIdFinal = surfaceId || "discovery-chat-surface";
     const userActionHandlers = [];
-    const processor = new MessageProcessor([basicCatalog], (action) => {
+    const processor = new MessageProcessor([catalog], (action) => {
       for (const handler of userActionHandlers) {
         try {
           handler(action);

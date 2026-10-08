@@ -1634,6 +1634,72 @@ function onChatQuestionCancelled(data) {
   }
 }
 
+// ─── Ponte de log do frontend → logs.db (R8 da revisão 2026-10-08) ───
+// Os console.warn/error do WebView não apareciam em logs.db (fontes só "agent" e
+// "service"): falhas de render do A2UI eram invisíveis no diagnóstico. Aqui os
+// avisos de [a2ui]/[chat] são encaminhados ao agent (throttle local + no Go).
+// A chamada é defensiva: exe antigo sem o binding LogFrontend apenas ignora.
+// Janela deslizante de 10 min (o teto não pode ser vitalício: um app aberto por
+// dias pararia de registrar avisos justo quando o diagnóstico é necessário).
+var frontendLogBridge = {
+  seen: Object.create(null),
+  count: 0,
+  max: 100,
+  windowMs: 600000,
+  windowAt: 0,
+};
+
+function forwardFrontendLog(level, args) {
+  try {
+    if (frontendLogBridge.count >= frontendLogBridge.max) return;
+    var text = "";
+    for (var i = 0; i < args.length; i++) {
+      var a = args[i];
+      var part;
+      if (a && a.message) part = a.message;
+      else if (typeof a === "object" && a !== null) {
+        try { part = JSON.stringify(a); } catch (_) { part = String(a); }
+      } else part = String(a);
+      text += (i ? " " : "") + part;
+    }
+    if (!text) return;
+    if (text.indexOf("[a2ui]") === -1 && text.indexOf("[chat]") === -1) return;
+    // Um payload A2UI que falhou pode ter dezenas de KB: não trafega inteiro no IPC.
+    if (text.length > 800) text = text.slice(0, 800) + "…";
+    var now = Date.now();
+    if (!frontendLogBridge.windowAt || now - frontendLogBridge.windowAt > frontendLogBridge.windowMs) {
+      frontendLogBridge.windowAt = now;
+      frontendLogBridge.count = 0;
+      frontendLogBridge.seen = Object.create(null);
+    }
+    if (frontendLogBridge.count >= frontendLogBridge.max) return;
+    if (frontendLogBridge.seen[text] && now - frontendLogBridge.seen[text] < 10000) return;
+    frontendLogBridge.seen[text] = now;
+    frontendLogBridge.count++;
+    var api = appApi();
+    if (api && typeof api.LogFrontend === "function") {
+      try { api.LogFrontend(level, text); } catch (_) {}
+    }
+  } catch (_) {
+    // Nunca lançar a partir do console.
+  }
+}
+
+(function installFrontendLogBridge() {
+  if (typeof console === "undefined" || console.__a2uiBridged) return;
+  console.__a2uiBridged = true;
+  var origWarn = console.warn ? console.warn.bind(console) : function () {};
+  var origError = console.error ? console.error.bind(console) : function () {};
+  console.warn = function () {
+    forwardFrontendLog("warn", arguments);
+    return origWarn.apply(null, arguments);
+  };
+  console.error = function () {
+    forwardFrontendLog("error", arguments);
+    return origError.apply(null, arguments);
+  };
+})();
+
 // ─── A2UI (Agent-to-User Interface) — interfaces ricas geradas por IA ───
 
 // Mapa das surfaces A2UI ativas por surfaceId. Antes havia UMA surface ativa:
@@ -1649,7 +1715,10 @@ var a2uiSurfaces = Object.create(null);
 // CADA shadow root aberto da surface e reaplicado conforme o Lit cria novos
 // hosts (updateComponents/updateDataModel criam elementos novos).
 var A2UI_THEME_CSS = [
-  ":host{font-family:inherit;color:var(--text,#e6ecf5);}",
+  // :host display:block é essencial: os componentes do catálogo Lit são
+  // elementos INLINE por padrão, então o card encolhia para o tamanho do
+  // conteúdo (os "cards finos" do exemplo do ChoicePicker).
+  ":host{display:block;width:100%;box-sizing:border-box;font-family:inherit;color:var(--text,#e6ecf5);}",
   "@keyframes a2ui-card-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}",
   ".a2ui-card{display:block;position:relative;padding:16px 18px!important;",
   "border:1px solid color-mix(in srgb,var(--accent,#4f8cff) 45%,transparent)!important;",
@@ -1685,7 +1754,7 @@ var A2UI_THEME_CSS = [
   ".a2ui-checkbox input{accent-color:var(--accent,#4f8cff);}",
   "input[type=text],input[type=number],input[type=email]{width:100%;padding:8px 12px;border-radius:10px;",
   "border:1px solid color-mix(in srgb,var(--border,#fff) 22%,transparent);",
-  "background:var(--input-bg,rgba(0,0,0,.18));color:inherit;font:inherit;font-size:.88rem;}",
+  "background:var(--input-bg,color-mix(in srgb,var(--text,#888) 8%,transparent));color:inherit;font:inherit;font-size:.88rem;}",
   "input[type=text]:focus,input[type=number]:focus,input[type=email]:focus{outline:none;",
   "border-color:var(--accent,#4f8cff);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent,#4f8cff) 25%,transparent);}",
   ".a2ui-list{display:flex;flex-direction:column;gap:8px;}",
@@ -1695,45 +1764,142 @@ var A2UI_THEME_CSS = [
   ".a2ui-modal{border-radius:14px;border:1px solid color-mix(in srgb,var(--accent,#4f8cff) 35%,transparent);",
   "background:var(--card-bg,rgba(20,24,32,.98));padding:16px;box-shadow:0 18px 40px rgba(0,0,0,.4);}",
   ".a2ui-video,.a2ui-audioplayer{width:100%;border-radius:12px;}",
+  // ─── Cobertura do markup REAL do catálogo basic (@a2ui/lit 0.9.1) ───
+  // Os nomes de classe abaixo foram conferidos no a2ui-bundle.js: TextField usa
+  // input/textarea.a2ui-textfield dentro de .a2ui-textfield-container; ChoicePicker
+  // é .a2ui-choicepicker > label + .options > label > input; Divider horizontal é
+  // <hr class="a2ui-divider">. Sem isso os campos caíam no visual nativo do WebView.
+  "*,*::before,*::after{box-sizing:border-box;}",
+  ".a2ui-column{width:100%;}",
+  "button.a2ui-button-primary{background:linear-gradient(180deg,color-mix(in srgb,var(--accent,#4f8cff) 88%,#fff 12%),var(--accent,#4f8cff));}",
+  "button.a2ui-button-default{background:color-mix(in srgb,var(--text,#fff) 8%,transparent);color:inherit;box-shadow:none;border-color:color-mix(in srgb,var(--border,#fff) 26%,transparent);}",
+  "button.a2ui-button-default:hover:not([disabled]){background:color-mix(in srgb,var(--text,#fff) 14%,transparent);}",
+  ".a2ui-textfield-container{display:flex;flex-direction:column;gap:4px;width:100%;}",
+  ".a2ui-textfield-container>label{font-size:.78rem;opacity:.8;}",
+  ".a2ui-textfield{width:100%;padding:8px 12px;border-radius:10px;border:1px solid color-mix(in srgb,var(--border,#fff) 24%,transparent);background:var(--input-bg,color-mix(in srgb,var(--text,#888) 8%,transparent));color:inherit;font:inherit;font-size:.88rem;}",
+  ".a2ui-textfield:focus{outline:none;border-color:var(--accent,#4f8cff);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent,#4f8cff) 25%,transparent);}",
+  ".a2ui-textfield.invalid{border-color:var(--danger,#e5484d);}",
+  "textarea.a2ui-textfield{min-height:76px;resize:vertical;}",
+  ".a2ui-textfield-container .error{color:var(--danger,#e5484d);font-size:.78rem;}",
+  ".a2ui-choicepicker{display:flex;flex-direction:column;gap:6px;width:100%;}",
+  ".a2ui-choicepicker>label{font-size:.78rem;opacity:.8;}",
+  ".a2ui-choicepicker .options{display:flex;flex-wrap:wrap;gap:10px;}",
+  ".a2ui-choicepicker .options label{display:inline-flex;align-items:center;gap:6px;font-size:.86rem;padding:5px 9px;border-radius:9px;border:1px solid color-mix(in srgb,var(--border,#fff) 22%,transparent);cursor:pointer;transition:background .15s ease,border-color .15s ease;}",
+  ".a2ui-choicepicker .options label:hover{background:color-mix(in srgb,var(--accent,#4f8cff) 12%,transparent);border-color:color-mix(in srgb,var(--accent,#4f8cff) 45%,transparent);}",
+  ".a2ui-choicepicker input[type=radio],.a2ui-choicepicker input[type=checkbox]{accent-color:var(--accent,#4f8cff);margin:0;}",
+  ".a2ui-slider{display:flex;flex-direction:column;gap:6px;width:100%;}",
+  ".a2ui-slider>label{font-size:.78rem;opacity:.8;}",
+  ".a2ui-slider>span{font-size:.8rem;opacity:.75;}",
+  ".a2ui-datetime{display:flex;flex-direction:column;gap:4px;width:100%;}",
+  ".a2ui-datetime>label{font-size:.78rem;opacity:.8;}",
+  ".a2ui-datetime input{width:100%;padding:8px 12px;border-radius:10px;border:1px solid color-mix(in srgb,var(--border,#fff) 24%,transparent);background:var(--input-bg,color-mix(in srgb,var(--text,#888) 8%,transparent));color:inherit;font:inherit;font-size:.88rem;}",
+  ".a2ui-datetime input:focus{outline:none;border-color:var(--accent,#4f8cff);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent,#4f8cff) 25%,transparent);}",
+  ".a2ui-list{display:flex;flex-direction:column;gap:8px;width:100%;}",
+  ".a2ui-tabs{display:flex;flex-direction:column;gap:10px;width:100%;}",
+  ".a2ui-tab-headers{display:flex;gap:6px;flex-wrap:wrap;}",
+  ".a2ui-tab-headers button{border:1px solid color-mix(in srgb,var(--border,#fff) 22%,transparent);background:transparent;color:inherit;padding:6px 12px;border-radius:9px;cursor:pointer;}",
+  ".a2ui-tab-headers button:hover{background:color-mix(in srgb,var(--accent,#4f8cff) 12%,transparent);}",
+  // Tabs do pacote usam style INLINE (padding/background #eee/border:none), que
+  // vence qualquer regra sem !important: sem isto a aba ATIVA ficava cinza-claro
+  // (#eee) com o texto claro do tema escuro — ilegível. O seletor por atributo
+  // identifica a aba ativa pela cor inline; se o pacote mudar a cor, a regra
+  // apenas deixa de casar (volta ao visual anterior, sem quebrar).
+  ".a2ui-tab-headers{border-bottom:1px solid color-mix(in srgb,var(--border,#fff) 30%,transparent)!important;margin-bottom:12px!important;flex-wrap:wrap!important;}",
+  ".a2ui-tab-headers button{padding:6px 14px!important;border:none!important;border-bottom:2px solid transparent!important;background:transparent!important;color:inherit!important;font:inherit!important;font-weight:600!important;font-size:.86rem!important;cursor:pointer!important;opacity:.7!important;}",
+  ".a2ui-tab-headers button[style*='#eee']{opacity:1!important;border-bottom-color:var(--accent,#4f8cff)!important;background:color-mix(in srgb,var(--accent,#4f8cff) 12%,transparent)!important;color:var(--accent,#4f8cff)!important;}",
+  "hr.a2ui-divider{width:100%;border:0;border-top:1px solid color-mix(in srgb,var(--border,#fff) 22%,transparent);margin:10px 0;}",
+  ".a2ui-divider-vertical{width:1px;align-self:stretch;background:color-mix(in srgb,var(--border,#fff) 22%,transparent);margin:0 10px;}",
+  // Select = dropdown próprio do Discovery (components/Select.js no bundle).
+  ".a2ui-select{display:flex;flex-direction:column;gap:4px;width:100%;}",
+  ".a2ui-select>label{font-size:.78rem;opacity:.8;}",
+  ".a2ui-select select{width:100%;padding:8px 12px;border-radius:10px;border:1px solid color-mix(in srgb,var(--border,#fff) 24%,transparent);background:var(--input-bg,color-mix(in srgb,var(--text,#888) 8%,transparent));color:inherit;font:inherit;font-size:.88rem;cursor:pointer;}",
+  ".a2ui-select select:focus{outline:none;border-color:var(--accent,#4f8cff);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent,#4f8cff) 25%,transparent);}",
 ].join("");
 
 // a2uiInjectThemeIn percorre o container E os shadow roots (recursivo) e injeta
 // o tema em cada root novo. Também observa cada root descoberto: mutações
 // DENTRO de um shadow root não são vistas pelo observer do container externo.
-function a2uiInjectThemeIn(containerEl, state) {
-  var queue = [containerEl];
-  while (queue.length) {
-    var el = queue.shift();
-    var sr = el && el.shadowRoot;
-    if (!sr) continue;
-    if (!sr.__a2uiThemeInjected) {
-      try {
-        var st = document.createElement("style");
-        st.setAttribute("data-a2ui-theme", "1");
-        st.textContent = A2UI_THEME_CSS;
-        sr.insertBefore(st, sr.firstChild);
-        sr.__a2uiThemeInjected = true;
-      } catch (e) {
-        console.warn("[a2ui] falha ao injetar tema no shadow root:", e);
-      }
-      if (state && window.MutationObserver) {
-        var obs = new MutationObserver(function () {
-          a2uiScheduleTheme(containerEl, state);
-        });
-        try { obs.observe(sr, { childList: true, subtree: true }); state.observers.push(obs); } catch (_) {}
+// collectAddedNodes extrai os ELEMENTOS adicionados de um lote de mutações.
+// Devolve null quando não há nada novo (nesse caso a varredura é completa).
+function collectAddedNodes(mutations) {
+  var added = null;
+  for (var i = 0; i < mutations.length; i++) {
+    var nodes = mutations[i].addedNodes;
+    for (var j = 0; j < nodes.length; j++) {
+      var n = nodes[j];
+      if (n && n.nodeType === 1) {
+        if (!added) added = [];
+        added.push(n);
       }
     }
-    var inner = sr.querySelectorAll("*");
-    for (var i = 0; i < inner.length; i++) queue.push(inner[i]);
+  }
+  return added;
+}
+
+// a2uiInjectThemeIn percorre o container E os shadow roots (recursivo) e injeta
+// o tema em cada root novo. `startNodes` (opcional) limita a varredura às
+// subárvores que MUDARAM: o observer enfileira só os nós adicionados, então uma
+// mutação pequena não paga o custo da surface inteira. Sem startNodes, varre
+// tudo (anexo inicial, timers de segurança e a2uiThemeRefresh).
+function a2uiInjectThemeIn(containerEl, state, startNodes) {
+  // Percorre LIGHT DOM e SHADOW DOM. O container (.a2ui-container) é um <div>
+  // comum, sem shadow root: a versão anterior fazia `if (!sr) continue`, ou
+  // seja, só descia por shadow roots — partindo de um nó sem shadow root ela
+  // terminava sem visitar NADA e o tema nunca era injetado (os componentes,
+  // inclusive o botão, ficavam com o visual nativo do WebView).
+  var stack = [];
+  if (startNodes && startNodes.length) {
+    for (var s = 0; s < startNodes.length; s++) stack.push(startNodes[s]);
+  } else {
+    stack.push(containerEl);
+  }
+  while (stack.length) {
+    var el = stack.pop();
+    if (!el || el.nodeType !== 1) continue;
+    var sr = el.shadowRoot;
+    if (sr) {
+      var st = sr.__a2uiThemeEl;
+      if (!(st && st.isConnected && st.parentNode === sr)) {
+        try {
+          st = document.createElement("style");
+          st.setAttribute("data-a2ui-theme", "1");
+          st.textContent = A2UI_THEME_CSS;
+          sr.insertBefore(st, sr.firstChild);
+          sr.__a2uiThemeEl = st;
+        } catch (e) {
+          console.warn("[a2ui] falha ao injetar tema no shadow root:", e);
+          st = null;
+        }
+        if (st && state && window.MutationObserver) {
+          // Mutações DENTRO de um shadow root não são vistas pelo observer do
+          // container: cada root novo ganha o seu (componentes criados por
+          // updateComponents/updateDataModel re-renderizam aqui).
+          var obs = new MutationObserver(function (mutations) {
+            a2uiScheduleTheme(containerEl, state, collectAddedNodes(mutations));
+          });
+          try { obs.observe(sr, { childList: true, subtree: true }); state.observers.push(obs); } catch (_) {}
+        }
+      }
+      for (var i = 0; i < sr.children.length; i++) stack.push(sr.children[i]);
+    }
+    // Filhos em light DOM: aqui ficam o .a2ui-surface-host e o <a2ui-surface>.
+    for (var j = 0; j < el.children.length; j++) stack.push(el.children[j]);
   }
 }
 
-function a2uiScheduleTheme(containerEl, state) {
-  if (!state || state.scheduled) return;
+function a2uiScheduleTheme(containerEl, state, addedNodes) {
+  if (!state) return;
+  if (addedNodes && addedNodes.length) {
+    if (!state.pending) state.pending = [];
+    for (var p = 0; p < addedNodes.length; p++) state.pending.push(addedNodes[p]);
+  }
+  if (state.scheduled) return;
   state.scheduled = true;
   var run = function () {
     state.scheduled = false;
-    try { a2uiInjectThemeIn(containerEl, state); } catch (e) { console.warn("[a2ui] tema falhou:", e); }
+    var pending = state.pending || [];
+    state.pending = [];
+    try { a2uiInjectThemeIn(containerEl, state, pending); } catch (e) { console.warn("[a2ui] tema falhou:", e); }
   };
   if (window.requestAnimationFrame) window.requestAnimationFrame(run);
   else setTimeout(run, 16);
@@ -1741,7 +1907,7 @@ function a2uiScheduleTheme(containerEl, state) {
 
 // a2uiThemeAttach liga o tema a uma surface recém-criada.
 function a2uiThemeAttach(containerEl, entry) {
-  var state = { scheduled: false, observers: [], timers: [] };
+  var state = { scheduled: false, observers: [], timers: [], pending: [] };
   entry.theme = state;
   a2uiScheduleTheme(containerEl, state);
   // O Lit anexa o shadow root no primeiro update (microtask) e cria hosts novos
@@ -1751,7 +1917,9 @@ function a2uiThemeAttach(containerEl, entry) {
     state.timers.push(setTimeout(function () { a2uiScheduleTheme(containerEl, state); }, ms));
   });
   if (window.MutationObserver) {
-    var obs = new MutationObserver(function () { a2uiScheduleTheme(containerEl, state); });
+    var obs = new MutationObserver(function (mutations) {
+      a2uiScheduleTheme(containerEl, state, collectAddedNodes(mutations));
+    });
     try { obs.observe(containerEl, { childList: true, subtree: true }); state.observers.push(obs); } catch (_) {}
   }
   return state;
@@ -1799,7 +1967,7 @@ function a2uiArmSurfaceWatchdog(surfaceId, entry) {
     // turno lento pode separá-las por mais que o timeout). Só desiste quando o
     // chat está livre — antes um turno lento matava o card e mostrava
     // "interface não concluída" com a interface chegando logo depois.
-    if (chatSending || pendingA2uiAction) {
+    if (chatSending || pendingA2uiAction > 0) {
       a2uiArmSurfaceWatchdog(surfaceId, entry);
       return;
     }
@@ -1856,8 +2024,13 @@ function clearA2uiBusy() {
 // a2uiSettleBusyIfIdle encerra o estado ocupado só quando NÃO há mais turno
 // nem ação A2UI na fila; chamada nos terminais do stream.
 function a2uiSettleBusyIfIdle() {
-  if (chatSending || pendingA2uiAction) return;
+  if (chatSending || pendingA2uiAction > 0) return;
   clearA2uiBusy();
+  // Turno encerrado: libera a chave de dedupe. Sem isto, um segundo clique
+  // LEGÍTIMO no mesmo botão (ex.: avançar 2 passos) podia ser engolido pela
+  // janela de 1,2s mesmo depois de o turno terminar. Duplo clique DURANTE o
+  // turno continua protegido (o estado busy é setado no dispatch do 1º clique).
+  a2uiLastActionKey = "";
 }
 
 // a2uiDropOrphanSurfaces remove as surfaces que ficaram sem componentes (o
@@ -1882,15 +2055,60 @@ function a2uiSurfaceDestroy(surfaceId) {
   if (entry.bubble) { try { entry.bubble.remove(); } catch (_) {} }
   delete a2uiSurfaces[surfaceId];
 }
-// True quando uma ação A2UI foi submetida durante um stream ativo e precisa
-// ser processada (novo StartChatStream) assim que o stream atual terminar.
-var pendingA2uiAction = false;
+// a2uiWarnUnsupportedComponents detecta componentes que o catálogo EMBARCADO
+// nesta versão do app não conhece (ex.: API publicada antes do exe novo, com um
+// componente recém-criado como `Select`). O renderer ignora o tipo em silêncio
+// e o card sai sem o componente; aqui o usuário recebe o aviso no próprio card.
+function a2uiWarnUnsupportedComponents(msg, entry) {
+  var comps = msg && msg.updateComponents && msg.updateComponents.components;
+  if (!Array.isArray(comps)) return;
+  var cat = window.A2uiChat && window.A2uiChat.catalog;
+  if (!cat || !cat.components || typeof cat.components.has !== "function") return;
+  var missing = [];
+  for (var i = 0; i < comps.length; i++) {
+    var t = comps[i] && comps[i].component;
+    if (t && !cat.components.has(t) && missing.indexOf(t) === -1) missing.push(t);
+  }
+  if (!missing.length) {
+    // Payload corrigido numa atualização seguinte: o aviso antigo sai da tela.
+    if (entry && entry.bubble) {
+      var stale = entry.bubble.querySelector(".a2ui-unsupported");
+      if (stale) stale.remove();
+      entry.unsupportedNotified = "";
+    }
+    return;
+  }
+  console.warn("[a2ui] componentes não suportados pelo renderer desta versão:", missing.join(", "));
+  if (!entry || !entry.bubble) return;
+  var key = missing.join(",");
+  if (entry.unsupportedNotified === key) return;
+  entry.unsupportedNotified = key;
+  var note = entry.bubble.querySelector(".a2ui-unsupported");
+  if (!note) {
+    note = document.createElement("div");
+    note.className = "a2ui-unsupported";
+    entry.bubble.appendChild(note);
+  }
+  note.textContent = translate("chat.a2uiUnsupported", { components: missing.join(", ") });
+  scheduleChatScrollToBottom();
+}
 
-// maybeProcessPendingA2uiAction dispara o processamento de uma ação A2UI que
-// ficou pendente durante um stream. Chamado nos eventos terminais do stream.
+// CONTADOR (não bool) de cliques enfileirados durante um stream ativo.
+//
+// O agent consome EXATAMENTE UMA ação A2UI por turno-sentinela. Com um bool, 3
+// cliques durante um turno geravam UM turno e as outras 2 ações ficavam
+// engavetadas no agent; o clique seguinte consumia a ação VELHA (fila FIFO) e a
+// interface reagia ao pedido anterior, deixando o novo preso na fila (bug
+// identificado na revisão de 2026-10-08). Cada ação pendente precisa do seu
+// turno.
+var pendingA2uiAction = 0;
+
+// maybeProcessPendingA2uiAction dispara o processamento de UMA ação A2UI que
+// ficou pendente durante um stream. Chamado nos eventos terminais: o terminal
+// do turno seguinte chama de novo, drenando a fila um clique por turno.
 function maybeProcessPendingA2uiAction() {
-  if (!pendingA2uiAction || chatSending) return;
-  pendingA2uiAction = false;
+  if (pendingA2uiAction <= 0 || chatSending) return;
+  pendingA2uiAction--;
   sendChatMessageWithA2uiAction();
 }
 
@@ -1986,6 +2204,10 @@ function onChatA2ui(data) {
       // Chegaram componentes: a surface é válida, cancela o watchdog.
       entry.hasComponents = true;
       a2uiClearSurfaceWatchdog(entry);
+    }
+    // Tipo desconhecido pelo bundle embarcado seria ignorado em silêncio.
+    if (parsed.updateComponents && entry) {
+      a2uiWarnUnsupportedComponents(parsed, entry);
     }
     // updateComponents/updateDataModel criam hosts novos (e novos shadow roots):
     // reaplica o tema depois do processamento.
@@ -2111,7 +2333,8 @@ function handleA2uiUserAction(surfaceId, action) {
     a2uiSetBusy(surfaceId, true);
     if (chatSending) {
       // Stream ativo: guarda a ação para disparar o processamento no chat:done.
-      pendingA2uiAction = true;
+      // Contador: um turno-sentinela por clique (o agent consome 1 por turno).
+      pendingA2uiAction++;
       return;
     }
     sendChatMessageWithA2uiAction();
@@ -2188,7 +2411,7 @@ function clearA2uiSurface() {
     a2uiSurfaceDestroy(surfaceId);
   });
   a2uiSurfaces = Object.create(null);
-  pendingA2uiAction = false;
+  pendingA2uiAction = 0;
 }
 
 // Register Wails event listeners once the runtime is ready.
@@ -2856,17 +3079,45 @@ function renderAssistantMarkdown(content) {
     }
   }
 
+  // Bloco ```json/jsonl/a2ui em que TODAS as linhas são mensagens A2UI v0.9
+  // (version + um dos verbos). É serialização interna do protocolo: em vez de
+  // despejar uma parede de JSON na conversa, o bloco fica recolhido — o usuário
+  // vê a interface e abre o JSON só se quiser.
+  function isA2uiJsonBlock(lang, lines) {
+    if (!/^(json|jsonl|a2ui)$/i.test(lang || "")) return false;
+    var count = 0;
+    for (var i = 0; i < lines.length; i++) {
+      var s = String(lines[i]).trim();
+      if (!s) continue;
+      if (s.charAt(0) !== "{") return false;
+      if (!/"version"\s*:/.test(s)) return false;
+      if (!/"(createSurface|updateComponents|updateDataModel|deleteSurface)"\s*:/.test(s)) return false;
+      count++;
+    }
+    return count > 0;
+  }
+
   function flushCodeBlock() {
     var langClass = codeLang
       ? ' class="lang-' + escapeHtmlAttr(codeLang) + '"'
       : "";
-    html.push(
+    var codeHtml =
       '<pre class="chat-code"><code' +
-        langClass +
-        ">" +
-        escapeHtml(codeLines.join("\n")) +
-        "</code></pre>",
-    );
+      langClass +
+      ">" +
+      escapeHtml(codeLines.join("\n")) +
+      "</code></pre>";
+    if (isA2uiJsonBlock(codeLang, codeLines)) {
+      html.push(
+        '<details class="chat-a2ui-json"><summary>' +
+          escapeHtml(translate("chat.a2uiJsonToggle")) +
+          "</summary>" +
+          codeHtml +
+          "</details>",
+      );
+    } else {
+      html.push(codeHtml);
+    }
     inCode = false;
     codeLang = "";
     codeLines = [];

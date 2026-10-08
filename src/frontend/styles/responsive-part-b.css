@@ -1808,101 +1808,47 @@
   min-width: 0;
 }
 
-/* Estilos básicos para os componentes do catálogo A2UI renderizados pelo
-   renderer Lit. Usam as variáveis de tema do Discovery para consistência. */
+/* O renderer A2UI (@a2ui/lit) monta os componentes em SHADOW DOM: nenhum
+   seletor escrito neste arquivo alcança o interior deles. TODO o visual dos
+   componentes (card, botão, campos, ChoicePicker, Select, Tabs...) vem do tema
+   injetado por app-chat.js (A2UI_THEME_CSS, marcado com [data-a2ui-theme]).
+   Aqui fica só o enquadramento do host, que É light DOM. As regras de
+   componente que existiam neste ponto eram código morto (removidas na revisão
+   de 2026-10-08) — davam a falsa impressão de estilizar o card. */
 .a2ui-surface-host a2ui-surface {
   display: block;
   width: 100%;
 }
 
-.a2ui-surface-host [data-component="Card"],
-.a2ui-surface-host a2ui-card {
-  display: block;
-  padding: 12px 14px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--card-bg, rgba(255,255,255,0.85));
-  margin-bottom: 8px;
+/* Payload A2UI v0.9 que o modelo colocou em bloco ```json: fica recolhido
+   (a interface já aparece renderizada; o JSON é só a serialização interna). */
+.chat-a2ui-json {
+  margin: 6px 0;
 }
 
-.a2ui-surface-host [data-component="Button"],
-.a2ui-surface-host a2ui-button,
-.a2ui-surface-host button.a2ui-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 6px 12px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: var(--accent);
-  color: var(--on-accent);
-  font-size: 0.85rem;
+.chat-a2ui-json > summary {
   cursor: pointer;
-  transition: background var(--transition), opacity var(--transition);
+  font-size: 0.8rem;
+  opacity: 0.75;
+  user-select: none;
 }
 
-.a2ui-surface-host [data-component="Button"]:hover,
-.a2ui-surface-host a2ui-button:hover,
-.a2ui-surface-host button.a2ui-button:hover {
-  opacity: 0.9;
+.chat-a2ui-json > summary:hover {
+  opacity: 1;
 }
 
-.a2ui-surface-host [data-component="Text"],
-.a2ui-surface-host a2ui-text {
-  display: block;
-  margin: 4px 0;
-  line-height: 1.5;
+.chat-a2ui-json .chat-code {
+  margin-top: 6px;
 }
 
-.a2ui-surface-host [data-component="Column"],
-.a2ui-surface-host a2ui-column {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.a2ui-surface-host [data-component="Row"],
-.a2ui-surface-host a2ui-row {
-  display: flex;
-  flex-direction: row;
-  gap: 8px;
-  align-items: center;
-  flex-wrap: wrap;
-}
-
-.a2ui-surface-host [data-component="Divider"],
-.a2ui-surface-host a2ui-divider {
-  border: none;
-  border-top: 1px solid var(--border);
-  margin: 8px 0;
-}
-
-.a2ui-surface-host [data-component="TextField"] input,
-.a2ui-surface-host a2ui-textfield input {
-  width: 100%;
-  padding: 6px 10px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--input-bg, transparent);
-  color: var(--text);
-  font-size: 0.85rem;
-}
-
-.a2ui-surface-host [data-component="CheckBox"],
-.a2ui-surface-host a2ui-checkbox {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin: 4px 0;
-}
-
-.a2ui-surface-host [data-component="StatusBar"],
-.a2ui-surface-host a2ui-statusbar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+/* Aviso de componente que o bundle embarcado não conhece (API mais nova que o
+   app): sem isso o componente simplesmente desaparecia do card. */
+.a2ui-unsupported {
+  margin-top: 8px;
   padding: 6px 10px;
   border-radius: 8px;
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-  font-size: 0.85rem;
+  font-size: 0.78rem;
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--border));
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  color: var(--danger);
 }

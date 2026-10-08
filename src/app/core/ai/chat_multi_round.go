@@ -149,14 +149,18 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 	// IGNORA os ToolResults — a ação A2UI nunca chegaria ao LLM.
 	var initialToolResults []toolResultItem
 	if action != nil {
-		ctxJSON, _ := json.Marshal(action.Context)
 		initialToolResults = append(initialToolResults, toolResultItem{
 			// CallID ÚNICO por clique (surface + seq): cliques repetidos na mesma
 			// surface geravam o MESMO tool_call_id, e ids repetidos na sessão
 			// quebram o pareamento tool_call/tool_message do provedor.
 			CallID: a2uiActionCallID(action),
 			Name:   "a2ui_action",
-			Result: fmt.Sprintf(`{"surfaceId":%q,"name":%q,"context":%s,"instruction":"Execute agora a acao clicada pelo usuario: chame a tool MCP com o mesmo nome do campo name, usando o context informado. Nao peca confirmacao nem repita a interface - a autorizacao do usuario ja e tratada pelo agente."}`, action.SurfaceID, action.Name, string(ctxJSON)),
+			// O snapshot da última definição da surface vai anexado: o servidor
+			// persiste a resposta assistente SEM o bloco a2ui, então o LLM não tem
+			// a árvore anterior no histórico para reemitir em updateComponents —
+			// era por isso que "Avançar" no stepper só devolvia prosa e a tela não
+			// mudava de passo (2026-10-08).
+			Result: buildA2uiActionToolResult(action, s.a2uiSurfaceSnapshot(action.SurfaceID)),
 		})
 		s.logf("[chat] ação A2UI '%s' (seq=%d) injetada como tool result", action.Name, action.Seq)
 	}
@@ -253,6 +257,9 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 			}
 			seenA2ui[m] = true
 			a2uiMsgCount++
+			// Guarda a última definição da surface: será reenviada ao LLM no
+			// clique de navegação (o histórico persistido não tem o bloco a2ui).
+			s.rememberA2uiSurface(m)
 			base(m)
 		}
 	}
