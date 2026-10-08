@@ -1066,6 +1066,11 @@ function finaliseStreamingBubble() {
     // Stream morreu DENTRO do bloco a2ui: o evento chat:a2ui nunca chegará
     // (o servidor só extrai o bloco no fim). Com texto visível, anexa um aviso
     // curto — antes o usuário via o texto anunciando o card e nada acontecia.
+    //
+    // O createSurface pode ter chegado antes do corte: a surface ficaria presa
+    // em "Loading surface..." até o watchdog (12s). Aqui o corte é CERTO, então
+    // remove as surfaces deste turno que não receberam componentes.
+    a2uiDropOrphanSurfaces();
     if (streamingRawContent.trim()) {
       streamingRawContent += "\n\n" + translate("chat.a2uiInterrupted");
     } else {
@@ -1855,6 +1860,18 @@ function a2uiSettleBusyIfIdle() {
   clearA2uiBusy();
 }
 
+// a2uiDropOrphanSurfaces remove as surfaces que ficaram sem componentes (o
+// createSurface chegou, o updateComponents não). Usado quando o stream termina
+// dentro do bloco a2ui — evita o card eterno em "Loading surface...".
+function a2uiDropOrphanSurfaces() {
+  Object.keys(a2uiSurfaces).forEach(function (surfaceId) {
+    var entry = a2uiSurfaces[surfaceId];
+    if (entry && !entry.hasComponents) {
+      a2uiSurfaceDestroy(surfaceId);
+    }
+  });
+}
+
 // a2uiSurfaceDestroy remove a bolha e destrói o handle de UMA surface.
 function a2uiSurfaceDestroy(surfaceId) {
   var entry = a2uiSurfaces[surfaceId];
@@ -1967,6 +1984,7 @@ function onChatA2ui(data) {
     if (!isCreateSurface && entry) {
       entry.handle.processMessages([parsed]);
       // Chegaram componentes: a surface é válida, cancela o watchdog.
+      entry.hasComponents = true;
       a2uiClearSurfaceWatchdog(entry);
     }
     // updateComponents/updateDataModel criam hosts novos (e novos shadow roots):
@@ -2038,7 +2056,10 @@ function ensureA2uiSurface(surfaceId) {
     return null;
   }
 
-  var entry = { handle: handle, bubble: div, theme: null };
+  // hasComponents fica true quando chega updateComponents/updateDataModel: sem
+  // isso, uma surface criada e nunca preenchida fica presa em "Loading surface..."
+  // (resposta truncada no meio do bloco a2ui).
+  var entry = { handle: handle, bubble: div, theme: null, hasComponents: false };
   a2uiSurfaces[surfaceId] = entry;
   // Tema visual: injetado nos shadow roots do catálogo Lit (o CSS do app não
   // atravessa a fronteira do shadow root — ver A2UI_THEME_CSS).
