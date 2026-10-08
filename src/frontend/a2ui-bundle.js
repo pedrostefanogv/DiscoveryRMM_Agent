@@ -7548,7 +7548,7 @@ var A2uiChat = (() => {
   var v2 = /<(?:(!--|\/[^a-zA-Z])|(\/?[a-zA-Z][^>\s]*)|(\/?$))/g;
   var _2 = /-->/g;
   var m2 = />/g;
-  var p3 = RegExp(`>|${f3}(?:([^\\s"'>=/]+)(${f3}*=${f3}*(?:[^
+  var p3 = RegExp(`>|${f3}(?:([^\\s"'>=/]+)(${f3}*=${f3}*(?:[^ 	
 \f\r"'\`<>=]|("|')|))|$)`, "g");
   var g2 = /'/g;
   var $ = /"/g;
@@ -12838,22 +12838,8 @@ var A2uiChat = (() => {
       throw new Error("A2uiChat.createSurface: containerEl \xE9 obrigat\xF3rio");
     }
     const surfaceIdFinal = surfaceId || "discovery-chat-surface";
-    const processor = new MessageProcessor([basicCatalog]);
-    processor.onSurfaceCreated((s6) => {
-      if (s6.id !== surfaceIdFinal) return;
-      const host = document.createElement("div");
-      host.className = "a2ui-surface-host";
-      containerEl.appendChild(host);
-      const surface = new A2uiSurface(s6);
-      host.appendChild(surface);
-    });
-    processor.processMessages([
-      { version: "v0.9", createSurface: { surfaceId: surfaceIdFinal, catalogId: CATALOG_ID } }
-    ]);
     const userActionHandlers = [];
-    processor.events.subscribe((event) => {
-      if (!event || !event.message || !event.message.userAction) return;
-      const action = event.message.userAction;
+    const processor = new MessageProcessor([basicCatalog], (action) => {
       for (const handler of userActionHandlers) {
         try {
           handler(action);
@@ -12862,6 +12848,18 @@ var A2uiChat = (() => {
         }
       }
     });
+    processor.onSurfaceCreated((s6) => {
+      if (s6.id !== surfaceIdFinal) return;
+      const host = document.createElement("div");
+      host.className = "a2ui-surface-host";
+      containerEl.appendChild(host);
+      const surface = new A2uiSurface();
+      surface.surface = s6;
+      host.appendChild(surface);
+    });
+    processor.processMessages([
+      { version: "v0.9", createSurface: { surfaceId: surfaceIdFinal, catalogId: CATALOG_ID } }
+    ]);
     return {
       surfaceId: surfaceIdFinal,
       processMessages(messages) {
@@ -12883,7 +12881,6 @@ var A2uiChat = (() => {
   }
   return __toCommonJS(entry_exports);
 })();
-window.A2uiChat = A2uiChat;
 /*! Bundled license information:
 
 @lit/reactive-element/css-tag.js:
@@ -13026,3 +13023,4 @@ lit-html/directives/style-map.js:
    * SPDX-License-Identifier: BSD-3-Clause
    *)
 */
+window.A2uiChat = A2uiChat;

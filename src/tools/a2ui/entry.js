@@ -24,7 +24,23 @@ function createSurface(containerEl, surfaceId) {
   }
   const surfaceIdFinal = surfaceId || "discovery-chat-surface";
 
-  const processor = new MessageProcessor([basicCatalog]);
+  const userActionHandlers = [];
+
+  // O MessageProcessor recebe o actionHandler no CONSTRUTOR. NÃO existe
+  // `processor.events`: a chamada antiga lançava
+  // "Cannot read properties of undefined (reading 'subscribe')" e derrubava o
+  // createSurface inteiro — a surface era criada, mas o handle nunca era
+  // devolvido, então NENHUM card era exibido (o erro ficava engolido pelo
+  // catch do ensureA2uiSurface no app-chat.js).
+  const processor = new MessageProcessor([basicCatalog], (action) => {
+    for (const handler of userActionHandlers) {
+      try {
+        handler(action);
+      } catch (e) {
+        console.error("[a2ui] userAction handler error:", e);
+      }
+    }
+  });
 
   // Cria a surface assim que o processor estiver pronto.
   processor.onSurfaceCreated((s) => {
@@ -32,7 +48,12 @@ function createSurface(containerEl, surfaceId) {
     const host = document.createElement("div");
     host.className = "a2ui-surface-host";
     containerEl.appendChild(host);
-    const surface = new A2uiSurface(s);
+    // A2uiSurface é um custom element Lit: o construtor NÃO recebe a surface.
+    // O model precisa ser atribuído na propriedade `surface` (com
+    // `new A2uiSurface(s)` o elemento renderiza vazio — `render()` devolve
+    // nothing porque `this.surface` fica undefined).
+    const surface = new A2uiSurface();
+    surface.surface = s;
     host.appendChild(surface);
   });
 
@@ -42,21 +63,6 @@ function createSurface(containerEl, surfaceId) {
   processor.processMessages([
     { version: "v0.9", createSurface: { surfaceId: surfaceIdFinal, catalogId: CATALOG_ID } },
   ]);
-
-  const userActionHandlers = [];
-
-  // Encaminha eventos do processor (userAction) para os handlers registrados.
-  processor.events.subscribe((event) => {
-    if (!event || !event.message || !event.message.userAction) return;
-    const action = event.message.userAction;
-    for (const handler of userActionHandlers) {
-      try {
-        handler(action);
-      } catch (e) {
-        console.error("[a2ui] userAction handler error:", e);
-      }
-    }
-  });
 
   return {
     surfaceId: surfaceIdFinal,

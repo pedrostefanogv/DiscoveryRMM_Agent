@@ -1667,6 +1667,15 @@ function onChatA2ui(data) {
       entry = a2uiSurfaces[targetSurfaceId];
     }
 
+    if (!entry) {
+      // Sem surface não há como renderizar. ANTES isso passava em silêncio
+      // (um TypeError no bundle engolia o card sem nenhum aviso ao usuário).
+      // Agora avisa e limpa a bolha parcial.
+      console.error("[a2ui] surface não pôde ser criada:", targetSurfaceId);
+      fallbackA2uiToMarkdown(msg, targetSurfaceId);
+      return;
+    }
+
     // Para createSurface, o ensureA2uiSurface já enviou a mensagem ao processor.
     // Para as demais (updateComponents/updateDataModel/deleteSurface), envia.
     if (!isCreateSurface && entry) {
