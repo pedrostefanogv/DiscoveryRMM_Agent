@@ -76,6 +76,9 @@ func TestPolicyDefaults(t *testing.T) {
 	if p.ImageFormat != FormatAuto {
 		t.Fatalf("formato default = %q, want %q", p.ImageFormat, FormatAuto)
 	}
+	if p.SessionCaptureAllowed() {
+		t.Fatal("a permissao permanente (permitir sempre) deve nascer DESLIGADA")
+	}
 	if p.LimitMax() != 10 {
 		t.Fatalf("max default = %d, want 10", p.LimitMax())
 	}
@@ -93,6 +96,20 @@ func TestPolicyDefaults(t *testing.T) {
 	}
 	if n.ImageFormat != FormatAuto || n.MaxCapturesPerWindow != 10 || n.WindowMinutes != 1 {
 		t.Fatalf("defaults apos Normalize = %+v", n)
+	}
+}
+
+// A permissão "permitir sempre" é persistida e Normalize não pode revogá-la
+// (nil = desligada; true explícito precisa sobreviver ao round-trip).
+func TestPolicySessionCaptureAllowed(t *testing.T) {
+	if (Policy{}).SessionCaptureAllowed() {
+		t.Fatal("nil deveria significar desligada")
+	}
+	on := true
+	p := DefaultPolicy()
+	p.AllowSessionCapture = &on
+	if !p.Normalize().SessionCaptureAllowed() {
+		t.Fatal("Normalize nao pode revogar a permissao permanente")
 	}
 }
 

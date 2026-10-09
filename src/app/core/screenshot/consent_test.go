@@ -31,6 +31,10 @@ func TestClassifyConsentAnswer(t *testing.T) {
 		{"Permitir sempre nesta sessão", DecisionGrantedForSession},
 		{"Always allow for this session", DecisionGrantedForSession},
 		{"Permitir siempre en esta sesión", DecisionGrantedForSession},
+		// Redação atual da opção (permissão permanente até desativar).
+		{"Permitir sempre (até eu desativar)", DecisionGrantedForSession},
+		{"Always allow (until I turn it off)", DecisionGrantedForSession},
+		{"Permitir siempre (hasta que lo desactive)", DecisionGrantedForSession},
 		// Fail-closed: a negação vence mesmo citando a sessão.
 		{"Não, não permitir nesta sessão", DecisionDenied},
 	}
@@ -98,7 +102,7 @@ func TestConsentSessionOptionGrantsSessionWithoutError(t *testing.T) {
 	var calls int32
 	prompt := func(ctx context.Context, question string, options []string) (string, error) {
 		atomic.AddInt32(&calls, 1)
-		return "Permitir sempre nesta sessão", nil
+		return "Permitir sempre (até eu desativar)", nil
 	}
 	m := NewConsentManager(prompt, nil, nil)
 	decision, err := m.Ensure(context.Background(), "diagnostico")
@@ -131,14 +135,14 @@ func TestConsentDialogLocalized(t *testing.T) {
 		t.Fatalf("pergunta es inesperada: %q", es)
 	}
 	if got := ConsentOptions("en-US"); len(got) != 3 || got[0] != "Allow this capture" ||
-		got[1] != "Always allow for this session" || got[2] != "Deny" {
+		got[1] != "Always allow (until I turn it off)" || got[2] != "Deny" {
 		t.Fatalf("opcoes en inesperadas: %v", got)
 	}
 	if got := ConsentOptions("es-ES"); len(got) != 3 || got[0] != "Permitir esta captura" ||
-		got[1] != "Permitir siempre en esta sesión" || got[2] != "Negar" {
+		got[1] != "Permitir siempre (hasta que lo desactive)" || got[2] != "Negar" {
 		t.Fatalf("opcoes es inesperadas: %v", got)
 	}
-	if got := ConsentOptions("pt-BR"); len(got) != 3 || got[1] != "Permitir sempre nesta sessão" {
+	if got := ConsentOptions("pt-BR"); len(got) != 3 || got[1] != "Permitir sempre (até eu desativar)" {
 		t.Fatalf("opcoes pt inesperadas: %v", got)
 	}
 	if got := ConsentLanguage("de-DE"); got != "en" {

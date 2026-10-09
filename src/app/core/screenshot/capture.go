@@ -184,7 +184,16 @@ func captureRegionRaw(x, y, w, h int, mode string, quality, maxDim int, format s
 // o frame BGRA já copiado (pode ser usado depois de fechar o capturer). É o que
 // o overlay usa para congelar a tela.
 func CaptureDesktopFrame(x, y, w, h int) (*screen.Frame, error) {
-	return captureRegionFrame(x, y, w, h)
+	frame, err := captureRegionFrame(x, y, w, h)
+	if err != nil {
+		return nil, err
+	}
+	// Monitor HDR/Advanced Color: o capturer devolve scRGB float (8 bytes/px) e
+	// TODO o pipeline do overlay (encode do frame congelado, recorte geométrico,
+	// miniatura e imagem anotada) assume BGRA 8-bit — sem o tone mapping aqui o
+	// print do overlay saía com cores corrompidas. O caminho de captura direta
+	// já fazia isso em encodeResult; o overlay ficou sem.
+	return toneMapIfHDR(frame), nil
 }
 
 // captureRegionFrame captura o retângulo físico. Em monitor Advanced Color/HDR,

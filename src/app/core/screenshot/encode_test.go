@@ -19,43 +19,45 @@ func solidFrame(w, h int, b, g, r, a byte) *screen.Frame {
 	return f
 }
 
-func TestEncodeFrameAutoDefaultsToWebP(t *testing.T) {
-	if !webpAvailable() {
-		t.Skip("webp indisponivel (cgo desabilitado)")
-	}
-	// Conteúdo de UI (áreas chapadas) comprime melhor em WebP lossless que PNG.
-	f := solidFrame(640, 480, 28, 30, 36, 255)
-	data, mime, err := EncodeFrame(f, 90, 0)
-	if err != nil {
-		t.Fatalf("EncodeFrame falhou: %v", err)
-	}
-	if mime != "image/webp" {
-		t.Fatalf("modo auto deveria usar webp, got %q", mime)
-	}
-	if _, _, err := image.Decode(bytes.NewReader(data)); err != nil {
-		t.Fatalf("webp nao decodifica: %v", err)
+// Regressão do bug de visão: o modo automático usava WebP lossless em
+// janelas/diálogos e o provedor recusava a imagem ("Request could not be
+// processed"). Auto agora é SEMPRE PNG, em qualquer tamanho.
+func TestEncodeFrameAutoAlwaysPNG(t *testing.T) {
+	for _, f := range []*screen.Frame{
+		solidFrame(640, 480, 28, 30, 36, 255),   // janela/diálogo (antes: WebP)
+		solidFrame(3000, 1000, 28, 30, 36, 255), // tela inteira
+	} {
+		data, mime, err := EncodeFrame(f, 90, 0)
+		if err != nil {
+			t.Fatalf("EncodeFrame(%dx%d) falhou: %v", f.Width, f.Height, err)
+		}
+		if mime == "image/webp" {
+			t.Fatalf("modo auto NUNCA pode gerar webp (provedores recusam): %dx%d", f.Width, f.Height)
+		}
+		if mime != "image/png" {
+			t.Fatalf("modo auto deveria usar PNG, got %q", mime)
+		}
+		if _, _, err := image.Decode(bytes.NewReader(data)); err != nil {
+			t.Fatalf("png nao decodifica: %v", err)
+		}
 	}
 }
 
-func TestEncodeFrameAutoUsesPNGForLargeFrames(t *testing.T) {
+// "webp" explícito continua funcionando (opt-in de quem sabe que o provedor aceita).
+func TestEncodeFrameExplicitWebPUsesWebP(t *testing.T) {
 	if !webpAvailable() {
 		t.Skip("webp indisponivel (cgo desabilitado)")
 	}
-	// Acima do orçamento de pixels do WebP lossless o modo auto usa PNG
-	// (lossless e ~10x mais rápido).
-	f := solidFrame(3000, 1000, 28, 30, 36, 255)
-	if f.Width*f.Height <= webpLosslessPixelBudget {
-		t.Fatalf("frame de teste (%d px) deveria exceder o orcamento WebP (%d px)", f.Width*f.Height, webpLosslessPixelBudget)
-	}
-	data, mime, err := EncodeFrame(f, 90, 0)
+	f := solidFrame(640, 480, 28, 30, 36, 255)
+	data, mime, err := EncodeFrameFormat(f, 90, 0, FormatWebP)
 	if err != nil {
-		t.Fatalf("EncodeFrame falhou: %v", err)
+		t.Fatalf("EncodeFrameFormat(webp) falhou: %v", err)
 	}
-	if mime != "image/png" {
-		t.Fatalf("modo auto deveria usar PNG em frame grande, got %q", mime)
+	if mime != "image/webp" {
+		t.Fatalf("formato webp explicito deveria usar webp, got %q", mime)
 	}
 	if _, _, err := image.Decode(bytes.NewReader(data)); err != nil {
-		t.Fatalf("png nao decodifica: %v", err)
+		t.Fatalf("webp nao decodifica: %v", err)
 	}
 }
 

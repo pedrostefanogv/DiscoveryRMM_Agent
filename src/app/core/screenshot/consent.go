@@ -11,10 +11,10 @@ import (
 // Decision é o resultado de UMA solicitação de captura feita pela IA.
 //
 // A regra base continua sendo perguntar a CADA pedido (decisão de produto
-// 2026-10-01): não existe autorização permanente. O usuário pode, porém,
-// escolher "permitir sempre nesta sessão" — autorização de escopo de SESSÃO,
-// desligada por padrão, válida só enquanto o agente está em execução e
-// revogável no painel de privacidade.
+// 2026-10-01). O usuário pode, porém, escolher "permitir sempre" — permissão
+// PERMANENTE, desligada por padrão, persistida no arquivo da política (sobrevive
+// a reinício/atualização do agente) e revogável a qualquer momento no painel de
+// privacidade ou voltando ao padrão.
 type Decision string
 
 const (
@@ -42,8 +42,8 @@ type AuditEntry struct {
 	Detail   string    `json:"detail"`
 	ByLLM    bool      `json:"byLlm"`
 	Bytes    int       `json:"bytes"`
-	// SessionAuthorized indica que a captura foi coberta pela autorização de
-	// SESSÃO ("permitir sempre nesta sessão"), sem pergunta individual.
+	// SessionAuthorized indica que a captura foi coberta pela permissão
+	// permanente ("permitir sempre"), sem pergunta individual.
 	SessionAuthorized bool `json:"sessionAuthorized,omitempty"`
 	// Thumbnail é a miniatura do que foi capturado. NÃO é serializada no
 	// binding de status/tool (payload e privacidade); a UI de privacidade busca
@@ -63,16 +63,31 @@ var consentDialogs = map[string]struct {
 }{
 	"pt": {
 		Question: "O assistente de IA pediu para capturar a tela deste computador%s. Permite esta captura?",
-		Options:  []string{"Permitir esta captura", "Permitir sempre nesta sessão", "Negar"},
+		Options:  []string{"Permitir esta captura", "Permitir sempre (até eu desativar)", "Negar"},
 	},
 	"en": {
 		Question: "The AI assistant requested a screen capture of this computer%s. Allow this capture?",
-		Options:  []string{"Allow this capture", "Always allow for this session", "Deny"},
+		Options:  []string{"Allow this capture", "Always allow (until I turn it off)", "Deny"},
 	},
 	"es": {
 		Question: "El asistente de IA solicitó capturar la pantalla de este equipo%s. ¿Permitir esta captura?",
-		Options:  []string{"Permitir esta captura", "Permitir siempre en esta sesión", "Negar"},
+		Options:  []string{"Permitir esta captura", "Permitir siempre (hasta que lo desactive)", "Negar"},
 	},
+}
+
+// isPermanentGrantPhrase reconhece a opção "permitir sempre" (permissão
+// PERMANENTE, persistida) nas três línguas — na redação atual ("até eu
+// desativar" / "until I turn it off" / "hasta que lo desactive") e na antiga
+// ("nesta sessão"). "Sempre" sozinho continua valendo só para a captura em
+// questão, como antes.
+func isPermanentGrantPhrase(a string) bool {
+	always := strings.Contains(a, "sempre") || strings.Contains(a, "siempre") || strings.Contains(a, "always")
+	if !always {
+		return false
+	}
+	return strings.Contains(a, "sess") || strings.Contains(a, "sesi") ||
+		strings.Contains(a, "desativ") || strings.Contains(a, "desactive") ||
+		strings.Contains(a, "turn it off") || strings.Contains(a, "desligar")
 }
 
 // ConsentLanguage mapeia um locale ("pt-BR", "en-US", "es-ES") para a chave de
@@ -128,10 +143,7 @@ func ClassifyConsentAnswer(answer string) Decision {
 		strings.Contains(a, "deny"), strings.Contains(a, "nunca"), strings.Contains(a, "jamais"),
 		strings.Contains(a, "never"):
 		return DecisionDenied
-	// "sess" cobre pt/en ("sessão"/"session"); "sesi" cobre es ("sesión").
-	case (strings.Contains(a, "sess") || strings.Contains(a, "sesi")) &&
-		(strings.Contains(a, "sempre") || strings.Contains(a, "siempre") || strings.Contains(a, "always") ||
-			strings.Contains(a, "permit") || strings.Contains(a, "allow") || strings.Contains(a, "autoriz")):
+	case isPermanentGrantPhrase(a):
 		return DecisionGrantedForSession
 	case strings.Contains(a, "permitir"), strings.Contains(a, "permit"), strings.Contains(a, "pode"),
 		strings.Contains(a, "sim"), a == "sí", strings.Contains(a, "ok"),
@@ -154,13 +166,31 @@ type ConsentManager struct {
 	logf     func(string)
 	// locale devolve o idioma preferido (ex.: "pt-BR") para o diálogo.
 	locale func() string
-	audit  []AuditEntry
-	nextID int64
+	// sessionGrant devolve true quando o usuário já liberou a sessão inteira.
+	// É consultado SOB promptMu: se a liberação acontecer enquanto outra captura
+	// aguardava na fila, a próxima NÃO abre uma segunda pergunta.
+	//
+	// Deve ser registrado UMA vez com SetSessionGrant, antes de o manager ser
+	// publicado ao resto do app (é o que initScreenshotService faz) — por isso a
+	// leitura não usa lock: é escrita única antes da publicação.
+	sessionGrant func() bool
+	audit        []AuditEntry
+	nextID       int64
 }
 
 // NewConsentManager cria o gerenciador. prompt/logf/locale podem ser nil.
 func NewConsentManager(prompt Prompter, logf func(string), locale func() string) *ConsentManager {
 	return &ConsentManager{prompt: prompt, logf: logf, locale: locale}
+}
+
+// SetSessionGrant registra a consulta de autorização de SESSÃO (nil = sempre
+// pergunta). Chame ANTES de publicar o manager para outras goroutines (o app
+// faz isso dentro do init idempotente) — a leitura em Ensure não usa lock.
+func (m *ConsentManager) SetSessionGrant(fn func() bool) {
+	if m == nil {
+		return
+	}
+	m.sessionGrant = fn
 }
 
 func (m *ConsentManager) log(msg string) {
@@ -188,6 +218,13 @@ func (m *ConsentManager) Ensure(ctx context.Context, reason string) (Decision, e
 	}
 	m.promptMu.Lock()
 	defer m.promptMu.Unlock()
+	// Reconfere a autorização de SESSÃO já com o turno do diálogo adquirido:
+	// duas capturas concorrentes não podem fazer o usuário responder "permitir
+	// sempre nesta sessão" na primeira e ver uma segunda pergunta em seguida.
+	if m.sessionGrant != nil && m.sessionGrant() {
+		m.log("[screenshot] captura autorizada pela permissao permanente (sem nova pergunta)")
+		return DecisionGrantedForSession, nil
+	}
 	if m.prompt == nil {
 		return DecisionUndecided, fmt.Errorf("é preciso autorizar a captura de tela, mas nenhum diálogo está disponível")
 	}

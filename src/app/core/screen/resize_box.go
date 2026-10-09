@@ -80,10 +80,13 @@ func ResizeBGRABox(src *Frame, scaleFactor float64) *Frame {
 				continue
 			}
 			o := y*newStride + x*4
-			dst.Data[o] = byte(sumB / count)
-			dst.Data[o+1] = byte(sumG / count)
-			dst.Data[o+2] = byte(sumR / count)
-			dst.Data[o+3] = byte(sumA / count)
+			// Arredonda para o mais próximo (floor introduzia viés de até 1
+			// nível por pixel, visível em gradientes).
+			half := count / 2
+			dst.Data[o] = byte((sumB + half) / count)
+			dst.Data[o+1] = byte((sumG + half) / count)
+			dst.Data[o+2] = byte((sumR + half) / count)
+			dst.Data[o+3] = byte((sumA + half) / count)
 		}
 	}
 

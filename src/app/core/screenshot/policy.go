@@ -35,6 +35,11 @@ type Policy struct {
 	// NÃO é autorização: com true (padrão) a IA pergunta a CADA captura; com
 	// false a tool é recusada sem abrir o diálogo.
 	AllowAiCapture *bool `json:"allowAiCapture,omitempty"`
+	// AllowSessionCapture é a permissão "permitir sempre": com true a IA deixa
+	// de pedir autorização a cada captura até o usuário desativar (ou voltar ao
+	// padrão). É PERSISTIDA no arquivo da política — sobrevive a reinício e
+	// atualização do agente — e nasce DESLIGADA (nil/false = pergunta sempre).
+	AllowSessionCapture *bool `json:"allowSessionCapture,omitempty"`
 }
 
 // DefaultPolicy devolve a política padrão do produto: sem bloqueios, tela
@@ -46,6 +51,7 @@ func DefaultPolicy() Policy {
 	requireWindow := false
 	hideWindow := true
 	allowAi := true
+	allowAlways := false
 	return Policy{
 		BlockedProcesses:     []string{},
 		AllowFullScreen:      &full,
@@ -55,6 +61,7 @@ func DefaultPolicy() Policy {
 		HideAgentWindow:      &hideWindow,
 		ImageFormat:          FormatAuto,
 		AllowAiCapture:       &allowAi,
+		AllowSessionCapture:  &allowAlways,
 	}
 }
 
@@ -84,6 +91,16 @@ func (p Policy) AiCaptureAllowed() bool {
 		return true
 	}
 	return *p.AllowAiCapture
+}
+
+// SessionCaptureAllowed indica se a IA está dispensada de pedir autorização a
+// cada captura ("permitir sempre"). Default false: sem escolha explícita do
+// usuário (nil), a IA continua perguntando em cada pedido.
+func (p Policy) SessionCaptureAllowed() bool {
+	if p.AllowSessionCapture == nil {
+		return false
+	}
+	return *p.AllowSessionCapture
 }
 
 // HideWindowOnCapture indica se a janela do agente deve ser ocultada durante a

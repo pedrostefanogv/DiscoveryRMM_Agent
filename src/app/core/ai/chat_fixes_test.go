@@ -132,7 +132,7 @@ func TestTicketDedupInstructions(t *testing.T) {
 // truncateToolResult continua válido.
 func TestTruncateToolResult_UTF8Valid(t *testing.T) {
 	big := strings.Repeat("ç", 20000)
-	out := truncateToolResult(big)
+	out := truncateToolResult("get_inventory", big)
 	if len(out) == 0 {
 		t.Fatal("resultado truncado vazio")
 	}

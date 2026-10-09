@@ -1959,9 +1959,9 @@ export function RequestToolConsent(req) {
 
 /**
  * ResetScreenshotPolicy volta a política local aos padrões de fábrica
- * (DefaultPolicy), persiste, reconfigura o limitador e revoga a autorização de
- * sessão. Devolve a política resultante em JSON para a UI não precisar de uma
- * segunda chamada.
+ * (DefaultPolicy), persiste, reconfigura o limitador e revoga a permissão
+ * permanente ("permitir sempre"). Devolve a política resultante em JSON para a
+ * UI não precisar de uma segunda chamada.
  * @returns {$CancellablePromise<string>}
  */
 export function ResetScreenshotPolicy() {
@@ -2063,8 +2063,8 @@ export function SaveScreenshotPolicy(policyJSON) {
 /**
  * ScreenshotConsentStatusJSON implementa AppBridge: estado da política de
  * captura. A regra é perguntar em cada pedido; "perCaptureConsent" fica false
- * quando o usuário ligou a autorização de sessão ("permitir sempre nesta
- * sessão"), que é opt-in e desligada por padrão.
+ * quando o usuário ligou a permissão permanente ("permitir sempre") — opt-in,
+ * desligada por padrão e persistida na política (sobrevive a restart).
  * @returns {$CancellablePromise<json$0.RawMessage>}
  */
 export function ScreenshotConsentStatusJSON() {
@@ -2196,11 +2196,11 @@ export function SetScreenshotAiCaptureEnabled(enabled) {
 }
 
 /**
- * SetScreenshotSessionAllow liga/desliga a autorização de SESSÃO ("permitir
- * sempre nesta sessão"). Desligada por padrão e mantida apenas em memória: vale
- * enquanto o agente está em execução e não sobrevive a um restart. Ligada, os
- * pedidos da IA deixam de abrir a pergunta por captura — a captura continua
- * sujeita à blocklist, às demais regras da política, à cota e à auditoria.
+ * SetScreenshotSessionAllow liga/desliga a permissão "permitir sempre": com ela
+ * ligada a IA deixa de abrir a pergunta por captura até o usuário desativar — a
+ * captura continua sujeita à blocklist, às demais regras da política, à cota e à
+ * auditoria. O valor é PERSISTIDO no arquivo da política: sobrevive a reinício e
+ * atualização do agente, e só sai quando o usuário desmarca ou volta ao padrão.
  * @param {boolean} enabled
  * @returns {$CancellablePromise<void>}
  */

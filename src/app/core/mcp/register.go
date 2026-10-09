@@ -830,9 +830,9 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 			"Modos: full (todos os monitores), window (exige windowHandle de list_open_windows), focused (janela em foco), " +
 			"monitor (exige monitor), region (exige x, y, width, height) e interactive (o usuario seleciona a area/janela na tela congelada). " +
 			"Por padrao TODA captura pedida pela IA exige autorizacao explicita do usuario NESTA captura (o agente abre um " +
-			"pedido de permissao no chat a cada pedido). O usuario pode ligar 'permitir sempre nesta sessao' — opt-in, " +
-			"desligado por padrao e revogavel no painel de privacidade; nesse caso o agente deixa de perguntar, mas a captura " +
-			"segue registrada na auditoria e sujeita a blocklist/cota. " +
+			"pedido de permissao no chat a cada pedido). O usuario pode ligar 'permitir sempre' (permissao permanente) — opt-in, " +
+			"desligada por padrao, persistida e revogavel no painel de privacidade; nesse caso o agente deixa de perguntar, mas a " +
+			"captura segue registrada na auditoria e sujeita a blocklist/cota. " +
 			"Nunca use para espionar: informe sempre o motivo em reason e prefira a janela especifica em vez da tela inteira.",
 		Params: []ToolParam{
 			{Name: "mode", Type: "string", Description: "full | window | focused | monitor | region | interactive", Required: true},
@@ -853,7 +853,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 
 	reg.Register(Tool{
 		Name: "screenshot_permission",
-		Description: "Consulta o modelo de autorizacao de captura de tela: por padrao o consentimento e POR CAPTURA (a IA pergunta a cada pedido), se os pedidos da IA estao habilitados, se o usuario ligou 'permitir sempre nesta sessao' (sessionAllow/perCaptureConsent) e as ultimas decisoes (autorizadas/negadas). " +
+		Description: "Consulta o modelo de autorizacao de captura de tela: por padrao o consentimento e POR CAPTURA (a IA pergunta a cada pedido), se os pedidos da IA estao habilitados, se o usuario ligou 'permitir sempre' (permissao permanente: sessionAllow/perCaptureConsent) e as ultimas decisoes (autorizadas/negadas). " +
 			"Use quando capture_screenshot falhar por falta de autorizacao para orientar o usuario.",
 		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			return app.ScreenshotConsentStatusJSON()

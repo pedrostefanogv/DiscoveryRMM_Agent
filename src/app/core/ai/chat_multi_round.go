@@ -604,7 +604,7 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 				toolResultNames = append(toolResultNames, fmt.Sprintf("%s=ok", tc.Name))
 			}
 
-			toolResults = append(toolResults, toolResultItem{CallID: tc.CallID, Name: tc.Name, Result: truncateToolResult(result)})
+			toolResults = append(toolResults, toolResultItem{CallID: tc.CallID, Name: tc.Name, Result: truncateToolResult(tc.Name, result)})
 
 			// Tool TERMINAL (ex.: power_action restart/shutdown): a maquina sera
 			// reiniciada/desligada, logo NAO ha tempo para outro round do LLM nem
@@ -1213,16 +1213,20 @@ const maxScreenshotToolResultBytes = 8 * 1024 * 1024
 // resultado truncado não for JSON válido (ex.: corte no meio de uma chave ou
 // de um rune multibyte), cai para texto cru com marcador — nunca devolve JSON
 // quebrado que faria o parse falhar no servidor.
-func truncateToolResult(result string) string {
+func truncateToolResult(toolName, result string) string {
 	limit := maxToolResultBytes
-	// Imagem em base64 nunca é truncada no teto curto (ver
-	// maxScreenshotToolResultBytes). A detecção é a mesma do servidor, para os
-	// dois lados usarem a mesma regra.
-	if strings.Contains(result, "\"image_base64\"") {
+	hasImage := hasScreenshotImagePayload(toolName, result)
+	if hasImage {
 		limit = maxScreenshotToolResultBytes
 	}
 	if len(result) <= limit {
 		return result
+	}
+	if hasImage {
+		// Acima do teto não existe corte seguro: qualquer ponto cai dentro do
+		// base64 e o fechamento de JSON produziria um payload "válido" com
+		// imagem pela metade. Erro pequeno é melhor que corrupção silenciosa.
+		return `{"ok":false,"error":"captura de tela acima do limite de payload do chat"}`
 	}
 	cut := result[:limit]
 	// Não partir rune UTF-8 no meio: recua bytes até o corte ser string válida.
@@ -1276,6 +1280,21 @@ func truncateToolResult(result string) string {
 		return closed
 	}
 	return cut + "\n...[resultado truncado pela limitação de tamanho]"
+}
+
+// hasScreenshotImagePayload identifica tool results que carregam a imagem da
+// captura (contrato "image_base64"). Além da chave, exige a tool de captura ou
+// o marcador do payload: sem isso, um texto qualquer que apenas cite a chave
+// (ex.: read_file de um log) ganharia o teto de 8 MiB. A regra espelha a do
+// servidor (AgentAuthController.MaxScreenshotToolResultLength).
+func hasScreenshotImagePayload(toolName, result string) bool {
+	if !strings.Contains(result, "\"image_base64\"") {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(toolName), "capture_screenshot") {
+		return true
+	}
+	return strings.Contains(result, "\"type\":\"screenshot\"")
 }
 
 // toolArgsForLog extrai os argumentos de pendingToolCalls para logging (truncados 300 chars cada).

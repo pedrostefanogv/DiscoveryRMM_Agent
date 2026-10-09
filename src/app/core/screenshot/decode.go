@@ -156,11 +156,12 @@ func downscaleImage(src image.Image, maxDim int) image.Image {
 			if count == 0 {
 				continue
 			}
+			half := count / 2
 			dst.Set(x, y, color.RGBA64{
-				R: uint16(sumR / count),
-				G: uint16(sumG / count),
-				B: uint16(sumB / count),
-				A: uint16(sumA / count),
+				R: uint16((sumR + half) / count),
+				G: uint16((sumG + half) / count),
+				B: uint16((sumB + half) / count),
+				A: uint16((sumA + half) / count),
 			})
 		}
 	}

@@ -2155,13 +2155,13 @@ function screenshotLoadPrivacy() {
       if (data) screenshotRenderPrivacy(data);
     })
     .catch(function (err) {
-      screenshotFeedback("Falha ao carregar privacidade: " + err, true);
+      screenshotFeedback(screenshotT("screenshot.loadFailed", { error: err }), true);
     });
 }
 
 // screenshotConsentLabel descreve o modelo de consentimento: POR CAPTURA é o
-// padrão; a autorização de sessão ("permitir sempre nesta sessão") é opt-in e
-// desligada por padrão. Não existe autorização permanente.
+// padrão; "permitir sempre" é uma permissão PERMANENTE opt-in (desligada por
+// padrão, persistida na política) — revogável a qualquer momento pelo usuário.
 function screenshotConsentLabel(data) {
   if (data && data.aiCaptureEnabled === false) {
     return screenshotT("screenshot.consentDisabled");
@@ -2184,7 +2184,12 @@ function screenshotRenderPrivacy(data) {
   var allowAiEl = screenshotModalEl("chatPrivacyAllowAi");
   if (allowAiEl) allowAiEl.checked = data.aiCaptureEnabled !== false;
   var allowSessionEl = screenshotModalEl("chatPrivacyAllowSession");
-  if (allowSessionEl) allowSessionEl.checked = data.sessionAllow === true;
+  if (allowSessionEl) {
+    allowSessionEl.checked = data.sessionAllow === true;
+    // Sem pedidos da IA a permissão permanente não tem efeito: deixar marcar
+    // criaria uma autorização "pendente" que valeria ao religar os pedidos.
+    allowSessionEl.disabled = data.aiCaptureEnabled === false;
+  }
   var usageEl = screenshotModalEl("chatPrivacyUsage");
   if (usageEl && data.usage) {
     usageEl.textContent = screenshotT("screenshot.usage", {
@@ -2295,13 +2300,13 @@ function screenshotSavePrivacyPolicy() {
       screenshotLoadPrivacy();
     })
     .catch(function (err) {
-      screenshotFeedback("Falha ao salvar politica: " + err, true);
+      screenshotFeedback(screenshotT("screenshot.saveFailed", { error: err }), true);
     });
 }
 
-// screenshotSetSessionAllow liga/desliga a autorização de SESSÃO ("permitir
-// sempre nesta sessão"). Opt-in e desligada por padrão: ligada, a IA deixa de
-// abrir a pergunta por captura até o usuário revogar (ou reiniciar o agente).
+// screenshotSetSessionAllow liga/desliga a permissão "permitir sempre". Opt-in e
+// desligada por padrão: ligada, a IA deixa de abrir a pergunta por captura até o
+// usuário desmarcar (o valor é persistido e sobrevive a reinício do agente).
 function screenshotSetSessionAllow(enabled) {
   var api = screenshotApi();
   if (!api || typeof api.SetScreenshotSessionAllow !== "function") {
@@ -2344,7 +2349,7 @@ function screenshotResetPrivacyPolicy() {
       screenshotLoadPrivacy();
     })
     .catch(function (err) {
-      screenshotFeedback("Falha ao restaurar o padrão: " + err, true);
+      screenshotFeedback(screenshotT("screenshot.resetFailed", { error: err }), true);
       screenshotLoadPrivacy();
     });
 }

@@ -224,12 +224,10 @@ const (
 	FormatWebP = "webp"
 )
 
-// webpLosslessPixelBudget é o limite de pixels em que o WebP lossless compensa
-// em TEMPO: abaixo dele (janelas/diálogos, até ~1600×900) o encode fica rápido
-// (~0,2–0,4 s) e economiza ~1/3 dos bytes; acima (tela inteira 1080p/1440p/4K) o
-// libwebp leva segundos para economizar pouco, então o modo automático usa PNG
-// (lossless e ~10x mais rápido), mantendo a qualidade idêntica.
-const webpLosslessPixelBudget = 1_500_000
+// NOTA: o antigo orçamento de pixels (webpLosslessPixelBudget) foi removido.
+// O automático usava WebP lossless em janelas/diálogos para economizar ~30%
+// de bytes; como a aceitação de WebP pelo provedor de visão não é garantida,
+// "auto" agora é PNG lossless e "webp" virou opt-in explícito.
 
 // NormalizeFormat reduz o valor recebido a um formato conhecido.
 func NormalizeFormat(format string) string {
@@ -269,22 +267,28 @@ func EncodeOverlayFrame(f *screen.Frame, maxDim int) ([]byte, string, error) {
 	if data, mime, ok := encodeLossyWithinBudget(f, overlayWebPQuality, true); ok {
 		return data, mime, nil
 	}
+	if data, mime, ok := encodeShrunkWithinBudget(f, overlayWebPQuality, true); ok {
+		return data, mime, nil
+	}
 	if err != nil {
 		return nil, "", err
 	}
-	return pngData, "image/png", nil
+	// Devolver um PNG acima do teto só adiava o problema: ele vira a base do
+	// canvas anotado, que o decoder recusa (>16 MiB de data URL) com erro.
+	return nil, "", fmt.Errorf("tela congelada acima do teto de payload (%d bytes)", maxPNGBytes)
 }
 
 // EncodeFrameFormat codifica conforme a preferência ("auto", "webp" ou "png").
 //
-// Qualidade é sempre lossless no caminho padrão. O que muda por formato/tamanho
-// é o CODEC: o WebP lossless economiza ~1/3 dos bytes, mas o encoder do libwebp
-// é lento em imagens grandes (~2 s em 3440×1440), enquanto o PNG leva ~0,2 s.
+// Qualidade é lossless no caminho normal: o que muda é o CODEC e, em último
+// caso (imagem acima do teto de payload), a qualidade do lossy.
 //
-//   - "png": sempre PNG (fallback JPEG);
-//   - "webp": sempre WebP lossless quando disponível;
-//   - "auto" (padrão): WebP lossless até webpLosslessPixelBudget pixels (rápido e
-//     menor); acima disso PNG lossless (evita segundos de espera por pouco ganho).
+//   - "auto" (padrão): **PNG lossless**, aceito por qualquer provedor de visão.
+//     O automático não usa WebP por precaução (aceitação de WebP não validada
+//     no provedor em uso). Fallback lossy: JPEG.
+//   - "png": idêntico ao auto (PNG sempre; fallback JPEG);
+//   - "webp": WebP lossless quando disponível (arquivo ~30% menor) — opt-in para
+//     quem tem certeza de que o provedor aceita; fallback WebP lossy/JPEG.
 func EncodeFrameFormat(f *screen.Frame, quality, maxDim int, format string) ([]byte, string, error) {
 	normalized := NormalizeFormat(format)
 	if maxDim == 0 {
@@ -297,12 +301,16 @@ func EncodeFrameFormat(f *screen.Frame, quality, maxDim int, format string) ([]b
 		f = Downscale(f, maxDim)
 	}
 
+	// WebP SÓ por escolha explícita. O modo automático passou a usar PNG
+	// lossless por PRECAUÇÃO de compatibilidade: a aceitação de WebP pelo
+	// provedor de visão não pôde ser comprovada (todas as amostras WebP do
+	// incidente estavam corrompidas pelo truncamento do tool result — ver
+	// chat_multi_round.go). PNG é aceito universalmente; "webp" fica
+	// disponível para quem validou com o próprio provedor (~30% menor).
 	useWebP := normalized == FormatWebP
-	if normalized == FormatAuto {
-		useWebP = f != nil && f.Width*f.Height <= webpLosslessPixelBudget
-	}
-	// A preferência explícita "png" nunca gera WebP, nem no fallback (vai p/ JPEG).
-	lossyAllowed := normalized != FormatPNG
+	// O fallback lossy acompanha o formato pedido: WebP lossy só no "webp";
+	// "auto" e "png" caem para JPEG, aceito universalmente.
+	allowWebP := normalized == FormatWebP
 
 	// Caminho lossless WebP: mesmo conteúdo do PNG, ~1/3 menor.
 	if useWebP && webpAvailable() {
@@ -329,22 +337,27 @@ func EncodeFrameFormat(f *screen.Frame, quality, maxDim int, format string) ([]b
 	// Acima do teto: mantém a RESOLUÇÃO ORIGINAL e desce apenas a qualidade
 	// (WebP lossy é melhor em qualidade/tamanho; o formato "png" explícito
 	// nunca usa WebP — compatibilidade é o motivo da opção — então vai só JPEG).
-	if data, mime, ok := encodeLossyWithinBudget(f, quality, lossyAllowed); ok {
+	if data, mime, ok := encodeLossyWithinBudget(f, quality, allowWebP); ok {
 		return data, mime, nil
 	}
 	// Último recurso (desktop gigante e ruidoso): reduz em degraus, porque uma
 	// imagem acima do teto seria descartada em silêncio pelo servidor.
-	if data, mime, ok := encodeShrunkWithinBudget(f, quality, lossyAllowed); ok {
+	if data, mime, ok := encodeShrunkWithinBudget(f, quality, allowWebP); ok {
 		return data, mime, nil
 	}
 	jpegData, jpegErr := screen.NewJPEGEncoder().Encode(f, quality)
+	if jpegErr == nil && len(jpegData) <= maxPNGBytes {
+		return jpegData, "image/jpeg", nil
+	}
 	if jpegErr != nil {
 		if pngErr != nil {
 			return nil, "", fmt.Errorf("png: %v; jpeg: %w", pngErr, jpegErr)
 		}
 		return nil, "", jpegErr
 	}
-	return jpegData, "image/jpeg", nil
+	// Entrega uma imagem acima do teto = o servidor descarta em silêncio (e o
+	// anexo manual rejeita >6 MiB). Erro explícito é melhor que captura muda.
+	return nil, "", fmt.Errorf("imagem acima do teto de payload (%d bytes) mesmo apos reduzir", maxPNGBytes)
 }
 
 // lossyQualityLadder devolve a qualidade pedida seguida de degraus menores.
@@ -355,8 +368,11 @@ func lossyQualityLadder(quality int) []int {
 	if quality > 100 {
 		quality = 100
 	}
+	// Degraus CURTOS de propósito: cada nível custa encode full-frame (WebP e
+	// JPEG) e capture_screenshot é interativo (sem timeout) — uma cadeia longa
+	// deixaria o chat pendurado em telas 5K/6K.
 	ladder := []int{quality}
-	for _, q := range []int{90, 85, 80, 70, 60, 50} {
+	for _, q := range []int{85, 70, 50} {
 		if q < quality {
 			ladder = append(ladder, q)
 		}
@@ -370,14 +386,23 @@ func lossyQualityLadder(quality int) []int {
 // primeiro resultado que couber em maxPNGBytes.
 func encodeLossyWithinBudget(f *screen.Frame, quality int, allowWebP bool) ([]byte, string, bool) {
 	for _, q := range lossyQualityLadder(quality) {
-		if allowWebP && webpAvailable() {
-			if data, err := encodeWebPLossy(f, q); err == nil && len(data) > 0 && len(data) <= maxPNGBytes {
-				return data, "image/webp", true
-			}
+		if data, mime, ok := encodeLossySingle(f, q, allowWebP); ok {
+			return data, mime, true
 		}
-		if data, err := screen.NewJPEGEncoder().Encode(f, q); err == nil && len(data) > 0 && len(data) <= maxPNGBytes {
-			return data, "image/jpeg", true
+	}
+	return nil, "", false
+}
+
+// encodeLossySingle tenta UM nível de qualidade (WebP e depois JPEG), sem
+// redimensionar. É a unidade usada pelo ladder e pelo caminho de redução.
+func encodeLossySingle(f *screen.Frame, quality int, allowWebP bool) ([]byte, string, bool) {
+	if allowWebP && webpAvailable() {
+		if data, err := encodeWebPLossy(f, quality); err == nil && len(data) > 0 && len(data) <= maxPNGBytes {
+			return data, "image/webp", true
 		}
+	}
+	if data, err := screen.NewJPEGEncoder().Encode(f, quality); err == nil && len(data) > 0 && len(data) <= maxPNGBytes {
+		return data, "image/jpeg", true
 	}
 	return nil, "", false
 }
@@ -392,7 +417,7 @@ func encodeShrunkWithinBudget(f *screen.Frame, quality int, allowWebP bool) ([]b
 	if f.Height > longest {
 		longest = f.Height
 	}
-	for _, factor := range []float64{0.9, 0.8, 0.7, 0.5} {
+	for _, factor := range []float64{0.85, 0.7, 0.5} {
 		target := int(float64(longest) * factor)
 		if target < 1 {
 			break
@@ -401,8 +426,15 @@ func encodeShrunkWithinBudget(f *screen.Frame, quality int, allowWebP bool) ([]b
 		if shrunk == f {
 			break
 		}
-		if data, mime, ok := encodeLossyWithinBudget(shrunk, quality, allowWebP); ok {
+		// Um nível (e no máximo um degrau extra) por escala: aqui o objetivo é
+		// caber no teto, não maximizar qualidade — o custo já é alto.
+		if data, mime, ok := encodeLossySingle(shrunk, quality, allowWebP); ok {
 			return data, mime, true
+		}
+		if quality > 60 {
+			if data, mime, ok := encodeLossySingle(shrunk, 60, allowWebP); ok {
+				return data, mime, true
+			}
 		}
 	}
 	return nil, "", false

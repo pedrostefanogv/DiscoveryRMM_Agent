@@ -28,8 +28,8 @@ func TestDownscaleUsesAreaAveraging(t *testing.T) {
 		t.Fatalf("dimensoes = %dx%d, want 2x1", out.Width, out.Height)
 	}
 	for x := 0; x < 2; x++ {
-		if got := out.Data[x*4]; got != 127 {
-			t.Fatalf("pixel %d = %d, want 127 (media de area)", x, got)
+		if got := out.Data[x*4]; got != 128 {
+			t.Fatalf("pixel %d = %d, want 128 (media de area, arredondada)", x, got)
 		}
 	}
 }

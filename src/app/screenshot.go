@@ -62,7 +62,7 @@ func (a *App) initScreenshotService() {
 	if a.screenshotConsent != nil {
 		return
 	}
-	a.screenshotConsent = screenshot.NewConsentManager(
+	mgr := screenshot.NewConsentManager(
 		func(ctx context.Context, question string, options []string) (string, error) {
 			opts, _ := json.Marshal(options)
 			return a.AskUserChatWithContext(ctx, question, string(opts), "false")
@@ -70,6 +70,12 @@ func (a *App) initScreenshotService() {
 		func(line string) { a.Logs.Append(line) },
 		applocale.DetectPreferredLocale,
 	)
+	// Reconsulta da autorização de sessão SOB o promptMu do manager: duas
+	// capturas concorrentes não podem fazer o usuário responder "permitir sempre
+	// nesta sessão" na primeira e receber uma segunda pergunta logo depois.
+	// Precisa ser registrado ANTES de publicar o manager em a.screenshotConsent.
+	mgr.SetSessionGrant(a.screenshotSessionAllowed)
+	a.screenshotConsent = mgr
 	policy := a.loadScreenshotPolicyOrDefault()
 	a.screenshotPolicy = policy
 	a.screenshotLimiter = screenshot.NewCaptureLimiter(policy.LimitMax(), policy.LimitWindow())
@@ -77,7 +83,14 @@ func (a *App) initScreenshotService() {
 
 // ── Política de captura (privacidade) ─────────────────────────────────────
 
+// screenshotPolicyPathOverride permite que testes isolem o arquivo da política
+// (evita escrever no %ProgramData% real da máquina). Vazio em produção.
+var screenshotPolicyPathOverride string
+
 func (a *App) screenshotPolicyPaths() []string {
+	if screenshotPolicyPathOverride != "" {
+		return []string{screenshotPolicyPathOverride}
+	}
 	return platform.ChatConfigPathCandidates(screenshotPolicyFile)
 }
 
@@ -129,31 +142,45 @@ func (a *App) currentScreenshotPolicy() screenshot.Policy {
 	return a.screenshotPolicy
 }
 
-// screenshotSessionAllowed informa se a autorização de sessão está ligada.
+// screenshotSessionAllowed informa se a IA está dispensada de pedir autorização
+// a cada captura ("permitir sempre", persistido na política).
 func (a *App) screenshotSessionAllowed() bool {
 	a.screenshotMu.Lock()
 	defer a.screenshotMu.Unlock()
-	return a.screenshotSessionAllow
+	return a.screenshotPolicy.SessionCaptureAllowed()
 }
 
-// SetScreenshotSessionAllow liga/desliga a autorização de SESSÃO ("permitir
-// sempre nesta sessão"). Desligada por padrão e mantida apenas em memória: vale
-// enquanto o agente está em execução e não sobrevive a um restart. Ligada, os
-// pedidos da IA deixam de abrir a pergunta por captura — a captura continua
-// sujeita à blocklist, às demais regras da política, à cota e à auditoria.
+// SetScreenshotSessionAllow liga/desliga a permissão "permitir sempre": com ela
+// ligada a IA deixa de abrir a pergunta por captura até o usuário desativar — a
+// captura continua sujeita à blocklist, às demais regras da política, à cota e à
+// auditoria. O valor é PERSISTIDO no arquivo da política: sobrevive a reinício e
+// atualização do agente, e só sai quando o usuário desmarca ou volta ao padrão.
 func (a *App) SetScreenshotSessionAllow(enabled bool) error {
 	a.initScreenshotService()
+	if enabled && !a.currentScreenshotPolicy().AiCaptureAllowed() {
+		// Liberar a permissão com os pedidos da IA desligados deixaria uma
+		// autorização pendente que passaria a valer, sem nova confirmação,
+		// quando os pedidos fossem religados — e o painel mostraria "desabilitado".
+		return fmt.Errorf("habilite os pedidos de captura da IA antes de liberar a permissao permanente")
+	}
 	a.screenshotMu.Lock()
-	a.screenshotSessionAllow = enabled
+	policy := a.screenshotPolicy
+	policy.AllowSessionCapture = &enabled
+	policy = policy.Normalize()
+	if err := a.saveScreenshotPolicyFile(policy); err != nil {
+		a.screenshotMu.Unlock()
+		return err
+	}
+	a.screenshotPolicy = policy
 	a.screenshotMu.Unlock()
-	a.Logs.Append(fmt.Sprintf("[screenshot] autorizacao de sessao (permitir sempre nesta sessao) = %t", enabled))
+	a.Logs.Append(fmt.Sprintf("[screenshot] permissao permanente de captura (permitir sempre) = %t", enabled))
 	return nil
 }
 
 // ResetScreenshotPolicy volta a política local aos padrões de fábrica
-// (DefaultPolicy), persiste, reconfigura o limitador e revoga a autorização de
-// sessão. Devolve a política resultante em JSON para a UI não precisar de uma
-// segunda chamada.
+// (DefaultPolicy), persiste, reconfigura o limitador e revoga a permissão
+// permanente ("permitir sempre"). Devolve a política resultante em JSON para a
+// UI não precisar de uma segunda chamada.
 func (a *App) ResetScreenshotPolicy() (string, error) {
 	a.initScreenshotService()
 	policy := screenshot.DefaultPolicy().Normalize()
@@ -162,7 +189,6 @@ func (a *App) ResetScreenshotPolicy() (string, error) {
 	}
 	a.screenshotMu.Lock()
 	a.screenshotPolicy = policy
-	a.screenshotSessionAllow = false
 	limiter := a.screenshotLimiter
 	a.screenshotMu.Unlock()
 	limiter.Reconfigure(policy.LimitMax(), policy.LimitWindow())
@@ -195,19 +221,30 @@ func (a *App) SaveScreenshotPolicy(policyJSON string) error {
 	// painel). Sem este cuidado o campo ausente virava nil e Normalize o
 	// reativava para true — salvar a política reabilitava silenciosamente os
 	// pedidos da IA que o usuário havia desligado.
+	//
+	// Seção crítica ÚNICA (leitura + persistência + publicação): o checkbox dos
+	// pedidos da IA é um binding assíncrono separado e, sem isso, salvar podia
+	// regravar um allowAiCapture antigo por cima de um "desligar" concorrente.
+	a.screenshotMu.Lock()
 	if policy.AllowAiCapture == nil {
-		policy.AllowAiCapture = a.currentScreenshotPolicy().AllowAiCapture
+		policy.AllowAiCapture = a.screenshotPolicy.AllowAiCapture
+	}
+	// A permissão "permitir sempre" também não vem no payload do formulário:
+	// preservar o valor vigente evita revogá-la por omissão ao salvar. Ela só cai
+	// quando o usuário desliga os pedidos da IA (abaixo) ou desmarca a permissão.
+	if policy.AllowSessionCapture == nil {
+		policy.AllowSessionCapture = a.screenshotPolicy.AllowSessionCapture
+	}
+	if !policy.AiCaptureAllowed() {
+		denied := false
+		policy.AllowSessionCapture = &denied
 	}
 	policy = policy.Normalize()
 	if err := a.saveScreenshotPolicyFile(policy); err != nil {
+		a.screenshotMu.Unlock()
 		return err
 	}
-	a.screenshotMu.Lock()
 	a.screenshotPolicy = policy
-	if !policy.AiCaptureAllowed() {
-		// Sem pedidos da IA, uma autorização de sessão pendente não tem efeito.
-		a.screenshotSessionAllow = false
-	}
 	limiter := a.screenshotLimiter
 	a.screenshotMu.Unlock()
 	limiter.Reconfigure(policy.LimitMax(), policy.LimitWindow())
@@ -476,8 +513,8 @@ func (a *App) ListOpenWindowsJSON(includeUntitled bool) (json.RawMessage, error)
 
 // ScreenshotConsentStatusJSON implementa AppBridge: estado da política de
 // captura. A regra é perguntar em cada pedido; "perCaptureConsent" fica false
-// quando o usuário ligou a autorização de sessão ("permitir sempre nesta
-// sessão"), que é opt-in e desligada por padrão.
+// quando o usuário ligou a permissão permanente ("permitir sempre") — opt-in,
+// desligada por padrão e persistida na política (sobrevive a restart).
 func (a *App) ScreenshotConsentStatusJSON() (json.RawMessage, error) {
 	a.initScreenshotService()
 	sessionAllow := a.screenshotSessionAllowed()
@@ -517,9 +554,9 @@ func (a *App) CaptureScreenshotForTool(ctx context.Context, args map[string]any)
 	// capturas concluídas).
 	a.recordScreenshotBudget(now)
 	// AUTORIZAÇÃO: pergunta a CADA pedido, exceto quando o usuário já ligou a
-	// autorização de SESSÃO ("permitir sempre nesta sessão") — opt-in, desligado
-	// por padrão. A pergunta inclui o ALVO (janela/região/monitores) para
-	// consentimento informado: o motivo escrito pela IA não basta.
+	// permissão permanente ("permitir sempre") — opt-in, desligada por padrão e
+	// persistida na política. A pergunta inclui o ALVO (janela/região/monitores)
+	// para consentimento informado: o motivo escrito pela IA não basta.
 	consentReason := reason
 	if target := a.screenshotTargetLabel(req); target != "" {
 		if strings.TrimSpace(consentReason) != "" {
@@ -530,7 +567,7 @@ func (a *App) CaptureScreenshotForTool(ctx context.Context, args map[string]any)
 	}
 	sessionAuthorized := a.screenshotSessionAllowed()
 	if sessionAuthorized {
-		a.Logs.Append("[screenshot] captura autorizada pela permissao de sessao (sem nova pergunta)")
+		a.Logs.Append("[screenshot] captura autorizada pela permissao permanente (sem nova pergunta)")
 	} else {
 		decision, authErr := a.screenshotConsent.Ensure(ctx, consentReason)
 		if authErr != nil {
@@ -538,8 +575,8 @@ func (a *App) CaptureScreenshotForTool(ctx context.Context, args map[string]any)
 			return nil, authErr
 		}
 		if decision == screenshot.DecisionGrantedForSession {
-			// O usuário escolheu "permitir sempre nesta sessão" no diálogo:
-			// liga a autorização de sessão para os próximos pedidos.
+			// O usuário escolheu "permitir sempre" no diálogo: liga (e persiste)
+			// a permissão permanente para os próximos pedidos.
 			sessionAuthorized = true
 			if err := a.SetScreenshotSessionAllow(true); err != nil {
 				a.Logs.Append("[screenshot] falha ao ativar autorizacao de sessao: " + err.Error())
@@ -674,7 +711,7 @@ func (a *App) recordScreenshot(res *screenshot.CaptureResult, reason string, byL
 		detail += fmt.Sprintf(" | %d ms", elapsed.Milliseconds())
 	}
 	if sessionAuthorized {
-		detail += " | autorizada pela permissao de sessao"
+		detail += " | autorizada pela permissao permanente"
 	}
 	if r := strings.TrimSpace(reason); r != "" {
 		detail += " | motivo: " + r
@@ -966,19 +1003,25 @@ func (a *App) GetScreenshotPermission() (string, error) {
 // captura; desligado, a tool recusa sem sequer abrir o diálogo.
 func (a *App) SetScreenshotAiCaptureEnabled(enabled bool) error {
 	a.initScreenshotService()
-	policy := a.currentScreenshotPolicy()
+	// Mesma seção crítica de SaveScreenshotPolicy: ler, persistir e publicar com
+	// o lock preso evita lost update entre os dois bindings (usuário desmarca o
+	// checkbox e clica "Salvar política" em seguida).
+	a.screenshotMu.Lock()
+	policy := a.screenshotPolicy
 	policy.AllowAiCapture = &enabled
+	if !enabled {
+		// Revoga (e persiste) a permissão "permitir sempre": desligar os pedidos
+		// da IA não pode deixar uma autorização pendente para quando forem
+		// religados.
+		denied := false
+		policy.AllowSessionCapture = &denied
+	}
 	policy = policy.Normalize()
 	if err := a.saveScreenshotPolicyFile(policy); err != nil {
+		a.screenshotMu.Unlock()
 		return err
 	}
-	a.screenshotMu.Lock()
 	a.screenshotPolicy = policy
-	if !enabled {
-		// Revoga a autorização de sessão: desligar os pedidos da IA não pode
-		// deixar um "permitir sempre" pendente para quando forem religados.
-		a.screenshotSessionAllow = false
-	}
 	limiter := a.screenshotLimiter
 	a.screenshotMu.Unlock()
 	// Mantém o limitador coerente com a política persistida (mesma regra de
