@@ -266,7 +266,7 @@ func EncodeOverlayFrame(f *screen.Frame, maxDim int) ([]byte, string, error) {
 	// Mantém a resolução da tela congelada e reduz a qualidade até caber no
 	// teto do payload do overlay (antes o WebP lossy era devolvido sem checar
 	// tamanho, e o PNG estourado voltava como estava).
-	if data, mime, ok := encodeLossyWithinBudget(f, overlayWebPQuality); ok {
+	if data, mime, ok := encodeLossyWithinBudget(f, overlayWebPQuality, true); ok {
 		return data, mime, nil
 	}
 	if err != nil {
@@ -326,17 +326,16 @@ func EncodeFrameFormat(f *screen.Frame, quality, maxDim int, format string) ([]b
 	if pngErr == nil && len(pngData) <= maxPNGBytes {
 		return pngData, "image/png", nil
 	}
-	if lossyAllowed {
-		// Mantém a RESOLUÇÃO ORIGINAL: desce apenas a qualidade (lossy WebP,
-		// melhor relação qualidade/tamanho, depois JPEG) até caber no teto.
-		if data, mime, ok := encodeLossyWithinBudget(f, quality); ok {
-			return data, mime, nil
-		}
-		// Último recurso (desktop gigante e ruidoso): reduz em degraus, porque
-		// uma imagem acima do teto seria descartada em silêncio pelo servidor.
-		if data, mime, ok := encodeShrunkWithinBudget(f, quality); ok {
-			return data, mime, nil
-		}
+	// Acima do teto: mantém a RESOLUÇÃO ORIGINAL e desce apenas a qualidade
+	// (WebP lossy é melhor em qualidade/tamanho; o formato "png" explícito
+	// nunca usa WebP — compatibilidade é o motivo da opção — então vai só JPEG).
+	if data, mime, ok := encodeLossyWithinBudget(f, quality, lossyAllowed); ok {
+		return data, mime, nil
+	}
+	// Último recurso (desktop gigante e ruidoso): reduz em degraus, porque uma
+	// imagem acima do teto seria descartada em silêncio pelo servidor.
+	if data, mime, ok := encodeShrunkWithinBudget(f, quality, lossyAllowed); ok {
+		return data, mime, nil
 	}
 	jpegData, jpegErr := screen.NewJPEGEncoder().Encode(f, quality)
 	if jpegErr != nil {
@@ -365,12 +364,13 @@ func lossyQualityLadder(quality int) []int {
 	return ladder
 }
 
-// encodeLossyWithinBudget tenta lossy (WebP e depois JPEG) na qualidade pedida e
-// em degraus menores, SEM mudar a resolução. Devolve o primeiro resultado que
-// couber em maxPNGBytes.
-func encodeLossyWithinBudget(f *screen.Frame, quality int) ([]byte, string, bool) {
+// encodeLossyWithinBudget tenta lossy na qualidade pedida e em degraus menores,
+// SEM mudar a resolução. allowWebP=false restringe a tentativa a JPEG (formato
+// "png" explícito, que existe justamente para máxima compatibilidade). Devolve o
+// primeiro resultado que couber em maxPNGBytes.
+func encodeLossyWithinBudget(f *screen.Frame, quality int, allowWebP bool) ([]byte, string, bool) {
 	for _, q := range lossyQualityLadder(quality) {
-		if webpAvailable() {
+		if allowWebP && webpAvailable() {
 			if data, err := encodeWebPLossy(f, q); err == nil && len(data) > 0 && len(data) <= maxPNGBytes {
 				return data, "image/webp", true
 			}
@@ -384,7 +384,7 @@ func encodeLossyWithinBudget(f *screen.Frame, quality int) ([]byte, string, bool
 
 // encodeShrunkWithinBudget é a rede de segurança: se nem a qualidade mínima
 // couber, reduz a resolução em degraus pequenos até o teto ser respeitado.
-func encodeShrunkWithinBudget(f *screen.Frame, quality int) ([]byte, string, bool) {
+func encodeShrunkWithinBudget(f *screen.Frame, quality int, allowWebP bool) ([]byte, string, bool) {
 	if f == nil || f.Width <= 0 || f.Height <= 0 {
 		return nil, "", false
 	}
@@ -401,7 +401,7 @@ func encodeShrunkWithinBudget(f *screen.Frame, quality int) ([]byte, string, boo
 		if shrunk == f {
 			break
 		}
-		if data, mime, ok := encodeLossyWithinBudget(shrunk, quality); ok {
+		if data, mime, ok := encodeLossyWithinBudget(shrunk, quality, allowWebP); ok {
 			return data, mime, true
 		}
 	}

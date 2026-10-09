@@ -1197,16 +1197,34 @@ func roundTimeout(round int) time.Duration {
 // limites do servidor e degradar o contexto do LLM.
 const maxToolResultBytes = 16 * 1024
 
-// truncateToolResult trunca o resultado de uma tool para maxToolResultBytes.
+// maxScreenshotToolResultBytes é o teto para tool results que carregam IMAGEM
+// (contrato "image_base64", usado por capture_screenshot). Cortar em 16 KB
+// destruía a imagem de forma SILENCIOSA: o fechamento de JSON produzia um
+// payload válido com base64 parcial (~94% da imagem perdida no caso real), e o
+// servidor anexava um PNG truncado ao LLM. O teto acompanha o servidor
+// (AgentAuthController.MaxScreenshotToolResultLength = 8 MiB) e o encoder do
+// agente já limita a imagem a ~4,2 MB de binário (~5,6 MB de base64).
+const maxScreenshotToolResultBytes = 8 * 1024 * 1024
+
+// truncateToolResult trunca o resultado de uma tool para maxToolResultBytes —
+// exceto resultados com imagem, que precisam chegar INTACTOS ao servidor
+// (qualquer corte corrompe o base64 sem gerar erro de parse).
 // Tenta fechar estruturas JSON abertas de forma estruturalmente válida; se o
 // resultado truncado não for JSON válido (ex.: corte no meio de uma chave ou
 // de um rune multibyte), cai para texto cru com marcador — nunca devolve JSON
 // quebrado que faria o parse falhar no servidor.
 func truncateToolResult(result string) string {
-	if len(result) <= maxToolResultBytes {
+	limit := maxToolResultBytes
+	// Imagem em base64 nunca é truncada no teto curto (ver
+	// maxScreenshotToolResultBytes). A detecção é a mesma do servidor, para os
+	// dois lados usarem a mesma regra.
+	if strings.Contains(result, "\"image_base64\"") {
+		limit = maxScreenshotToolResultBytes
+	}
+	if len(result) <= limit {
 		return result
 	}
-	cut := result[:maxToolResultBytes]
+	cut := result[:limit]
 	// Não partir rune UTF-8 no meio: recua bytes até o corte ser string válida.
 	for len(cut) > 0 && !utf8.ValidString(cut) {
 		cut = cut[:len(cut)-1]

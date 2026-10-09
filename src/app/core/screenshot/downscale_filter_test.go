@@ -42,6 +42,32 @@ func TestDownscaleNoOpWhenWithinLimit(t *testing.T) {
 	}
 }
 
+// Conteúdo ruidoso (incompressível) estoura o teto lossless: a imagem final
+// precisa caber no limite do servidor SEM perder resolução — e o formato "png"
+// explícito não pode cair para WebP.
+func TestEncodeStaysWithinPayloadCapWithoutReducingResolution(t *testing.T) {
+	frame := noiseFrame(1600, 1600)
+	for _, format := range []string{FormatAuto, FormatPNG} {
+		data, mime, err := EncodeFrameFormat(frame, 0, 0, format)
+		if err != nil {
+			t.Fatalf("EncodeFrameFormat(%s) falhou: %v", format, err)
+		}
+		if len(data) > maxPNGBytes {
+			t.Fatalf("formato %s: %d bytes acima do teto %d", format, len(data), maxPNGBytes)
+		}
+		if format == FormatPNG && mime == "image/webp" {
+			t.Fatalf("formato png nao pode produzir webp")
+		}
+		img, _, err := image.Decode(bytes.NewReader(data))
+		if err != nil {
+			t.Fatalf("formato %s nao decodifica: %v", format, err)
+		}
+		if b := img.Bounds(); b.Dx() != 1600 || b.Dy() != 1600 {
+			t.Fatalf("formato %s perdeu resolucao: %dx%d", format, b.Dx(), b.Dy())
+		}
+	}
+}
+
 // Padrão de produto: a captura vai na resolução ORIGINAL. Mesmo acima do antigo
 // teto de 3840 (ultrawide/5K), sem maxDimension explícito nada é reduzido.
 func TestEncodeKeepsOriginalResolutionByDefault(t *testing.T) {
