@@ -64,7 +64,8 @@ type Request struct {
 	WindowHandle uint64
 	// Quality é a qualidade JPEG (1-100). 0 = padrão (80).
 	Quality int
-	// MaxDimension limita o maior lado da imagem final (0 = padrão 2560).
+	// MaxDimension limita o maior lado da imagem final. 0 (padrão) preserva a
+	// resolução ORIGINAL da captura; valores > 0 reduzem (custo de tokens).
 	// Reduz custo de visão/tokens e o tamanho do payload enviado à API.
 	MaxDimension int
 	// Format é a preferência de formato da imagem final: "auto" (WebP lossless

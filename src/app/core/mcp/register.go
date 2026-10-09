@@ -829,8 +829,10 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 		Description: "Captura a tela deste computador para diagnostico visual e devolve a imagem ao modelo (visao). " +
 			"Modos: full (todos os monitores), window (exige windowHandle de list_open_windows), focused (janela em foco), " +
 			"monitor (exige monitor), region (exige x, y, width, height) e interactive (o usuario seleciona a area/janela na tela congelada). " +
-			"TODA captura pedida pela IA exige autorizacao explicita do usuario NESTA captura: o agente abre um pedido de " +
-			"permissao no chat a cada pedido (nao existe 'permitir sempre'). " +
+			"Por padrao TODA captura pedida pela IA exige autorizacao explicita do usuario NESTA captura (o agente abre um " +
+			"pedido de permissao no chat a cada pedido). O usuario pode ligar 'permitir sempre nesta sessao' — opt-in, " +
+			"desligado por padrao e revogavel no painel de privacidade; nesse caso o agente deixa de perguntar, mas a captura " +
+			"segue registrada na auditoria e sujeita a blocklist/cota. " +
 			"Nunca use para espionar: informe sempre o motivo em reason e prefira a janela especifica em vez da tela inteira.",
 		Params: []ToolParam{
 			{Name: "mode", Type: "string", Description: "full | window | focused | monitor | region | interactive", Required: true},
@@ -841,8 +843,8 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 			{Name: "width", Type: "integer", Description: "Largura da regiao — modo region", Required: false},
 			{Name: "height", Type: "integer", Description: "Altura da regiao — modo region", Required: false},
 			{Name: "reason", Type: "string", Description: "Motivo da captura exibido ao usuario no pedido de autorizacao", Required: false},
-			{Name: "quality", Type: "integer", Description: "Qualidade JPEG 1-100 (padrao 90; PNG lossless e usado sempre que couber)", Required: false},
-			{Name: "maxDimension", Type: "integer", Description: "Lado maior da imagem (200-3840; padrao 2560). Aumente para ler textos pequenos", Required: false},
+			{Name: "quality", Type: "integer", Description: "Qualidade do fallback lossy (JPEG/WebP) 1-100, padrao 95. O caminho normal e lossless (PNG/WebP sem perdas), entao este valor so importa em telas muito grandes/ruidosas", Required: false},
+			{Name: "maxDimension", Type: "integer", Description: "Reduz o lado maior da imagem (200-3840). OMITA para manter a resolucao ORIGINAL da captura (padrao); use 1280-1920 para economizar tokens quando o alvo for so confirmar um estado de tela", Required: false},
 		},
 		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			return app.CaptureScreenshotForTool(ctx, args)
@@ -851,7 +853,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 
 	reg.Register(Tool{
 		Name: "screenshot_permission",
-		Description: "Consulta o modelo de autorizacao de captura de tela: o consentimento e POR CAPTURA (a IA pergunta a cada pedido, sem 'permitir sempre'), se os pedidos da IA estao habilitados e as ultimas decisoes (autorizadas/negadas). " +
+		Description: "Consulta o modelo de autorizacao de captura de tela: por padrao o consentimento e POR CAPTURA (a IA pergunta a cada pedido), se os pedidos da IA estao habilitados, se o usuario ligou 'permitir sempre nesta sessao' (sessionAllow/perCaptureConsent) e as ultimas decisoes (autorizadas/negadas). " +
 			"Use quando capture_screenshot falhar por falta de autorizacao para orientar o usuario.",
 		Handler: func(ctx context.Context, args map[string]any) (any, error) {
 			return app.ScreenshotConsentStatusJSON()

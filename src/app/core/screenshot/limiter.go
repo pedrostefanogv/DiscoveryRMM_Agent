@@ -21,7 +21,8 @@ const (
 	// DefaultMaxCapturesPerWindow é o teto padrão de capturas por janela.
 	DefaultMaxCapturesPerWindow = 10
 	// DefaultCaptureWindowMinutes é o tamanho padrão da janela de tempo.
-	DefaultCaptureWindowMinutes = 5
+	// Ajuste de produto: a cota local padrão da IA é 10 capturas a cada 1 minuto.
+	DefaultCaptureWindowMinutes = 1
 )
 
 // NewCaptureLimiter cria o limitador. max/window <= 0 usam os padrões.

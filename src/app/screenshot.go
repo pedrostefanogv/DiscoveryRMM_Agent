@@ -41,6 +41,9 @@ type screenshotOverlaySession struct {
 	// exatamente o que o usuário viu (tela congelada).
 	frame   *screen.Frame
 	restore func()
+	// sessionAuthorized registra que a captura foi coberta pela autorização de
+	// sessão (auditoria da captura interativa pedida pela IA).
+	sessionAuthorized bool
 	// waiter recebe o resultado quando a captura interativa foi pedida pela IA.
 	waiter chan screenshotOverlayOutcome
 	// once garante que release/entrega aconteçam uma única vez.
@@ -126,6 +129,51 @@ func (a *App) currentScreenshotPolicy() screenshot.Policy {
 	return a.screenshotPolicy
 }
 
+// screenshotSessionAllowed informa se a autorização de sessão está ligada.
+func (a *App) screenshotSessionAllowed() bool {
+	a.screenshotMu.Lock()
+	defer a.screenshotMu.Unlock()
+	return a.screenshotSessionAllow
+}
+
+// SetScreenshotSessionAllow liga/desliga a autorização de SESSÃO ("permitir
+// sempre nesta sessão"). Desligada por padrão e mantida apenas em memória: vale
+// enquanto o agente está em execução e não sobrevive a um restart. Ligada, os
+// pedidos da IA deixam de abrir a pergunta por captura — a captura continua
+// sujeita à blocklist, às demais regras da política, à cota e à auditoria.
+func (a *App) SetScreenshotSessionAllow(enabled bool) error {
+	a.initScreenshotService()
+	a.screenshotMu.Lock()
+	a.screenshotSessionAllow = enabled
+	a.screenshotMu.Unlock()
+	a.Logs.Append(fmt.Sprintf("[screenshot] autorizacao de sessao (permitir sempre nesta sessao) = %t", enabled))
+	return nil
+}
+
+// ResetScreenshotPolicy volta a política local aos padrões de fábrica
+// (DefaultPolicy), persiste, reconfigura o limitador e revoga a autorização de
+// sessão. Devolve a política resultante em JSON para a UI não precisar de uma
+// segunda chamada.
+func (a *App) ResetScreenshotPolicy() (string, error) {
+	a.initScreenshotService()
+	policy := screenshot.DefaultPolicy().Normalize()
+	if err := a.saveScreenshotPolicyFile(policy); err != nil {
+		return "", err
+	}
+	a.screenshotMu.Lock()
+	a.screenshotPolicy = policy
+	a.screenshotSessionAllow = false
+	limiter := a.screenshotLimiter
+	a.screenshotMu.Unlock()
+	limiter.Reconfigure(policy.LimitMax(), policy.LimitWindow())
+	a.Logs.Append("[screenshot] politica de captura restaurada ao padrao")
+	body, err := json.Marshal(policy)
+	if err != nil {
+		return "", err
+	}
+	return string(body), nil
+}
+
 // GetScreenshotPolicy devolve a política atual (binding da UI de privacidade).
 func (a *App) GetScreenshotPolicy() (string, error) {
 	policy := a.currentScreenshotPolicy().Normalize()
@@ -143,12 +191,23 @@ func (a *App) SaveScreenshotPolicy(policyJSON string) error {
 	if err := json.Unmarshal([]byte(policyJSON), &policy); err != nil {
 		return fmt.Errorf("politica de captura invalida: %w", err)
 	}
+	// O payload da UI de política NÃO inclui allowAiCapture (checkbox próprio do
+	// painel). Sem este cuidado o campo ausente virava nil e Normalize o
+	// reativava para true — salvar a política reabilitava silenciosamente os
+	// pedidos da IA que o usuário havia desligado.
+	if policy.AllowAiCapture == nil {
+		policy.AllowAiCapture = a.currentScreenshotPolicy().AllowAiCapture
+	}
 	policy = policy.Normalize()
 	if err := a.saveScreenshotPolicyFile(policy); err != nil {
 		return err
 	}
 	a.screenshotMu.Lock()
 	a.screenshotPolicy = policy
+	if !policy.AiCaptureAllowed() {
+		// Sem pedidos da IA, uma autorização de sessão pendente não tem efeito.
+		a.screenshotSessionAllow = false
+	}
 	limiter := a.screenshotLimiter
 	a.screenshotMu.Unlock()
 	limiter.Reconfigure(policy.LimitMax(), policy.LimitWindow())
@@ -416,11 +475,15 @@ func (a *App) ListOpenWindowsJSON(includeUntitled bool) (json.RawMessage, error)
 }
 
 // ScreenshotConsentStatusJSON implementa AppBridge: estado da política de
-// captura. Não existe "autorizado": a IA SEMPRE pergunta antes de capturar.
+// captura. A regra é perguntar em cada pedido; "perCaptureConsent" fica false
+// quando o usuário ligou a autorização de sessão ("permitir sempre nesta
+// sessão"), que é opt-in e desligada por padrão.
 func (a *App) ScreenshotConsentStatusJSON() (json.RawMessage, error) {
 	a.initScreenshotService()
+	sessionAllow := a.screenshotSessionAllowed()
 	return json.Marshal(map[string]any{
-		"perCaptureConsent": true,
+		"perCaptureConsent": !sessionAllow,
+		"sessionAllow":      sessionAllow,
 		"aiCaptureEnabled":  a.currentScreenshotPolicy().AiCaptureAllowed(),
 		"audit":             a.screenshotConsent.Audit(),
 	})
@@ -453,9 +516,10 @@ func (a *App) CaptureScreenshotForTool(ctx context.Context, args map[string]any)
 	// ficar disparando perguntas de consentimento sem limite (a cota contava só
 	// capturas concluídas).
 	a.recordScreenshotBudget(now)
-	// AUTORIZAÇÃO POR CAPTURA: pergunta SEMPRE (não existe "permitir sempre").
-	// A pergunta inclui o ALVO (janela/região/monitores) para consentimento
-	// informado — o motivo escrito pela IA não basta para o usuário decidir.
+	// AUTORIZAÇÃO: pergunta a CADA pedido, exceto quando o usuário já ligou a
+	// autorização de SESSÃO ("permitir sempre nesta sessão") — opt-in, desligado
+	// por padrão. A pergunta inclui o ALVO (janela/região/monitores) para
+	// consentimento informado: o motivo escrito pela IA não basta.
 	consentReason := reason
 	if target := a.screenshotTargetLabel(req); target != "" {
 		if strings.TrimSpace(consentReason) != "" {
@@ -464,16 +528,32 @@ func (a *App) CaptureScreenshotForTool(ctx context.Context, args map[string]any)
 			consentReason = "alvo: " + target
 		}
 	}
-	if decision, authErr := a.screenshotConsent.Ensure(ctx, consentReason); authErr != nil {
-		a.recordScreenshotConsentDenied(decision, req, consentReason)
-		return nil, authErr
+	sessionAuthorized := a.screenshotSessionAllowed()
+	if sessionAuthorized {
+		a.Logs.Append("[screenshot] captura autorizada pela permissao de sessao (sem nova pergunta)")
+	} else {
+		decision, authErr := a.screenshotConsent.Ensure(ctx, consentReason)
+		if authErr != nil {
+			a.recordScreenshotConsentDenied(decision, req, consentReason)
+			return nil, authErr
+		}
+		if decision == screenshot.DecisionGrantedForSession {
+			// O usuário escolheu "permitir sempre nesta sessão" no diálogo:
+			// liga a autorização de sessão para os próximos pedidos.
+			sessionAuthorized = true
+			if err := a.SetScreenshotSessionAllow(true); err != nil {
+				a.Logs.Append("[screenshot] falha ao ativar autorizacao de sessao: " + err.Error())
+			}
+		}
 	}
-	return a.runScreenshotRequest(ctx, req, reason, true)
+	return a.runScreenshotRequest(ctx, req, reason, true, sessionAuthorized)
 }
 
-func (a *App) runScreenshotRequest(ctx context.Context, req screenshot.Request, reason string, byLLM bool) (json.RawMessage, error) {
+// sessionAuthorized indica que esta captura foi coberta pela autorização de
+// sessão (sem pergunta individual) — entra na auditoria.
+func (a *App) runScreenshotRequest(ctx context.Context, req screenshot.Request, reason string, byLLM bool, sessionAuthorized bool) (json.RawMessage, error) {
 	if strings.EqualFold(req.Mode, screenshot.ModeInteractive) {
-		return a.captureInteractive(ctx, reason, byLLM)
+		return a.captureInteractive(ctx, reason, byLLM, sessionAuthorized)
 	}
 	// A janela do agente é ocultada durante a captura para não sair no print.
 	restoreVisibility := a.hideAgentWindowForCapture()
@@ -484,7 +564,7 @@ func (a *App) runScreenshotRequest(ctx context.Context, req screenshot.Request, 
 		return nil, err
 	}
 	elapsed := time.Since(started)
-	id := a.recordScreenshot(res, reason, byLLM, elapsed)
+	id := a.recordScreenshot(res, reason, byLLM, elapsed, sessionAuthorized)
 	// Transparência: mostra no chat o que a IA acabou de capturar (miniatura),
 	// já que uma captura automática não passa pelo overlay de seleção.
 	a.emitScreenshotCaptured(res, reason, byLLM, id)
@@ -585,7 +665,7 @@ func (a *App) recordScreenshotConsentDenied(decision screenshot.Decision, req sc
 // elapsed é o tempo do pipeline de captura (acquire + encode) medido pelo
 // chamador; entra no detalhe da auditoria como observabilidade barata (Fase 2
 // pedia métricas de latência por modo). Zero = não medido.
-func (a *App) recordScreenshot(res *screenshot.CaptureResult, reason string, byLLM bool, elapsed time.Duration) int64 {
+func (a *App) recordScreenshot(res *screenshot.CaptureResult, reason string, byLLM bool, elapsed time.Duration, sessionAuthorized bool) int64 {
 	if a.screenshotConsent == nil || res == nil {
 		return 0
 	}
@@ -593,18 +673,27 @@ func (a *App) recordScreenshot(res *screenshot.CaptureResult, reason string, byL
 	if elapsed > 0 {
 		detail += fmt.Sprintf(" | %d ms", elapsed.Milliseconds())
 	}
+	if sessionAuthorized {
+		detail += " | autorizada pela permissao de sessao"
+	}
 	if r := strings.TrimSpace(reason); r != "" {
 		detail += " | motivo: " + r
 	}
+	decision := screenshot.DecisionGranted
+	if sessionAuthorized {
+		decision = screenshot.DecisionGrantedForSession
+	}
 	entry := a.screenshotConsent.RecordCapture(screenshot.AuditEntry{
-		// Capturas só chegam aqui depois de autorizadas para ESTA captura.
-		Decision:      screenshot.DecisionGranted,
-		Mode:          res.Mode,
-		Detail:        detail,
-		ByLLM:         byLLM,
-		Bytes:         len(res.Data),
-		Thumbnail:     res.Thumbnail,
-		ThumbnailMIME: res.ThumbnailMIME,
+		// Capturas só chegam aqui depois de autorizadas (individualmente ou
+		// pela autorização de sessão).
+		Decision:          decision,
+		Mode:              res.Mode,
+		Detail:            detail,
+		ByLLM:             byLLM,
+		Bytes:             len(res.Data),
+		Thumbnail:         res.Thumbnail,
+		ThumbnailMIME:     res.ThumbnailMIME,
+		SessionAuthorized: sessionAuthorized,
 	})
 	a.storeScreenshotImage(entry.ID, res)
 	a.Logs.Append("[screenshot] " + detail)
@@ -654,11 +743,12 @@ const (
 	// o lightbox do chat (as mais antigas são descartadas).
 	screenshotImageStoreLimit = 8
 	// annotatedImageMaxDim limita o lado maior da imagem anotada recebida do
-	// overlay (o canvas já entrega reduzido; aqui é a última defesa).
-	annotatedImageMaxDim = 3840
+	// overlay. 0 = resolução ORIGINAL (sem redução): a imagem anotada é o que o
+	// usuário leu na tela e precisa manter o mesmo detalhe da captura.
+	annotatedImageMaxDim = 0
 	// overlayImageMaxDim é o lado maior da imagem congelada exibida no overlay
-	// (fundo da seleção/anotação).
-	overlayImageMaxDim = 3840
+	// (fundo da seleção/anotação). 0 = resolução original da captura.
+	overlayImageMaxDim = 0
 )
 
 // hideAgentWindowForCapture oculta a janela do agente (se a política permitir e
@@ -774,8 +864,8 @@ func parseScreenshotArgs(args map[string]any) (screenshot.Request, string, error
 		return req, "", fmt.Errorf("modo de captura invalido: %q (use full, window, focused, monitor, region ou interactive)", req.Mode)
 	}
 	req.Quality = screenshotIntArg(args, "quality")
-	// maxDimension opcional: permite à IA pedir um recorte maior (texto miúdo)
-	// sem estourar o orçamento. 0 = padrão (2560).
+	// maxDimension opcional: só REDUZ (o padrão é a resolução original da
+	// captura). 0 = sem redução.
 	if maxDim := screenshotIntArg(args, "maxDimension"); maxDim > 0 {
 		if maxDim < 200 {
 			maxDim = 200
@@ -808,13 +898,19 @@ func screenshotIntArg(args map[string]any, name string) int {
 	return 0
 }
 
+// authorized indica que a captura da sessão está coberta pela autorização de
+// sessão do usuário.
+func (s *screenshotOverlaySession) authorized() bool {
+	return s != nil && s.sessionAuthorized
+}
+
 // ── Overlay de seleção (tela congelada) ───────────────────────────────────
 
 // PrepareScreenshotOverlay captura o desktop, coloca a janela principal em
 // modo overlay cobrindo o desktop virtual e devolve o payload para a UI.
 func (a *App) PrepareScreenshotOverlay(reason string) (string, error) {
 	a.initScreenshotService()
-	session, err := a.openScreenshotOverlay(strings.TrimSpace(reason), false)
+	session, err := a.openScreenshotOverlay(strings.TrimSpace(reason), false, false)
 	if err != nil {
 		return "", err
 	}
@@ -878,6 +974,11 @@ func (a *App) SetScreenshotAiCaptureEnabled(enabled bool) error {
 	}
 	a.screenshotMu.Lock()
 	a.screenshotPolicy = policy
+	if !enabled {
+		// Revoga a autorização de sessão: desligar os pedidos da IA não pode
+		// deixar um "permitir sempre" pendente para quando forem religados.
+		a.screenshotSessionAllow = false
+	}
 	limiter := a.screenshotLimiter
 	a.screenshotMu.Unlock()
 	// Mantém o limitador coerente com a política persistida (mesma regra de
@@ -889,14 +990,16 @@ func (a *App) SetScreenshotAiCaptureEnabled(enabled bool) error {
 
 // screenshotAuditView é um item da auditoria exibido na UI de privacidade.
 type screenshotAuditView struct {
-	ID        int64     `json:"id"`
-	At        time.Time `json:"at"`
-	Decision  string    `json:"decision"`
-	Mode      string    `json:"mode"`
-	Detail    string    `json:"detail"`
-	ByLLM     bool      `json:"byLlm"`
-	Bytes     int       `json:"bytes"`
-	Thumbnail string    `json:"thumbnail,omitempty"`
+	ID       int64     `json:"id"`
+	At       time.Time `json:"at"`
+	Decision string    `json:"decision"`
+	Mode     string    `json:"mode"`
+	Detail   string    `json:"detail"`
+	ByLLM    bool      `json:"byLlm"`
+	Bytes    int       `json:"bytes"`
+	// SessionAuthorized: a captura foi coberta pela autorização de sessão.
+	SessionAuthorized bool   `json:"sessionAuthorized,omitempty"`
+	Thumbnail         string `json:"thumbnail,omitempty"`
 }
 
 // GetScreenshotAuditPanel devolve consentimento + política + uso do limite +
@@ -904,6 +1007,7 @@ type screenshotAuditView struct {
 func (a *App) GetScreenshotAuditPanel() (string, error) {
 	a.initScreenshotService()
 	policy := a.currentScreenshotPolicy()
+	sessionAllow := a.screenshotSessionAllowed()
 	a.screenshotMu.Lock()
 	limiter := a.screenshotLimiter
 	a.screenshotMu.Unlock()
@@ -915,6 +1019,7 @@ func (a *App) GetScreenshotAuditPanel() (string, error) {
 		view := screenshotAuditView{
 			ID: entry.ID, At: entry.At, Decision: string(entry.Decision),
 			Mode: entry.Mode, Detail: entry.Detail, ByLLM: entry.ByLLM, Bytes: entry.Bytes,
+			SessionAuthorized: entry.SessionAuthorized,
 		}
 		if len(entry.Thumbnail) > 0 {
 			// MIME vem do encoder (WebP quando cgo disponível); o default jpeg
@@ -930,7 +1035,8 @@ func (a *App) GetScreenshotAuditPanel() (string, error) {
 
 	now := time.Now()
 	body, err := json.Marshal(map[string]any{
-		"perCaptureConsent": true,
+		"perCaptureConsent": !sessionAllow,
+		"sessionAllow":      sessionAllow,
 		"aiCaptureEnabled":  policy.AiCaptureAllowed(),
 		"locale":            applocale.DetectPreferredLocale(),
 		"policy":            policy.Normalize(),
@@ -967,7 +1073,7 @@ func (a *App) GetOpenWindows() (string, error) {
 	return string(b), nil
 }
 
-func (a *App) openScreenshotOverlay(reason string, byLLM bool) (*screenshotOverlaySession, error) {
+func (a *App) openScreenshotOverlay(reason string, byLLM bool, sessionAuthorized bool) (*screenshotOverlaySession, error) {
 	a.screenshotMu.Lock()
 	if a.screenshotOverlay != nil {
 		active := a.screenshotOverlay
@@ -1035,13 +1141,14 @@ func (a *App) openScreenshotOverlay(reason string, byLLM bool) (*screenshotOverl
 	// SWP_SHOWWINDOW; o Show é idempotente e cobre o caso de hide pendente).
 	restoreVisibility()
 	session := &screenshotOverlaySession{
-		id:      id,
-		reason:  reason,
-		byLLM:   byLLM,
-		payload: payload,
-		frame:   frame,
-		restore: restore,
-		waiter:  make(chan screenshotOverlayOutcome, 1),
+		id:                id,
+		reason:            reason,
+		byLLM:             byLLM,
+		sessionAuthorized: sessionAuthorized,
+		payload:           payload,
+		frame:             frame,
+		restore:           restore,
+		waiter:            make(chan screenshotOverlayOutcome, 1),
 	}
 	a.screenshotMu.Lock()
 	a.screenshotOverlay = session
@@ -1072,8 +1179,8 @@ func (a *App) captureDesktopFrame(x, y, w, h int) (*screen.Frame, error) {
 	return frame, nil
 }
 
-func (a *App) captureInteractive(ctx context.Context, reason string, byLLM bool) (json.RawMessage, error) {
-	session, err := a.openScreenshotOverlay(reason, byLLM)
+func (a *App) captureInteractive(ctx context.Context, reason string, byLLM bool, sessionAuthorized bool) (json.RawMessage, error) {
+	session, err := a.openScreenshotOverlay(reason, byLLM, sessionAuthorized)
 	if err != nil {
 		return nil, err
 	}
@@ -1089,7 +1196,7 @@ func (a *App) captureInteractive(ctx context.Context, reason string, byLLM bool)
 		}
 		out.result.Interactive = true
 		// Captura interativa: o tempo é o da escolha do usuário, não do pipeline.
-		a.recordScreenshot(out.result, reason, true, 0)
+		a.recordScreenshot(out.result, reason, true, 0, session.authorized())
 		payload := out.result.ToolPayload(toolNote(out.result), toolTarget(out.result))
 		return json.Marshal(payload)
 	case <-ctx.Done():
@@ -1120,7 +1227,7 @@ func (a *App) finishScreenshotOverlay(sessionID, selectionJSON string) (*screens
 	// Sessões pedidas pela IA registram a auditoria em captureInteractive (que
 	// também recebe o resultado pelo waiter) — evita entrada duplicada.
 	if !session.byLLM {
-		a.recordScreenshot(res, session.reason, session.byLLM, elapsed)
+		a.recordScreenshot(res, session.reason, session.byLLM, elapsed, session.authorized())
 	}
 	return res, nil
 }
@@ -1133,7 +1240,9 @@ func (a *App) captureFromSelection(session *screenshotOverlaySession, sel screen
 	// Imagem anotada (setas/caixas/texto desenhados no overlay) tem prioridade:
 	// é exatamente o que o usuário viu e quer compartilhar.
 	if strings.TrimSpace(sel.AnnotatedDataURL) != "" {
-		data, mime, w, h, err := screenshot.DecodeDataURLImage(sel.AnnotatedDataURL, annotatedImageMaxDim, 92, a.screenshotImageFormat())
+		// Qualidade de fallback 95 (lossy só quando o lossless não cabe): a imagem
+		// anotada é o que o usuário leu na tela — não pode perder texto no reencode.
+		data, mime, w, h, err := screenshot.DecodeDataURLImage(sel.AnnotatedDataURL, annotatedImageMaxDim, 95, a.screenshotImageFormat())
 		if err != nil {
 			return nil, fmt.Errorf("imagem anotada invalida: %w", err)
 		}
@@ -1163,7 +1272,7 @@ func (a *App) captureFromSelection(session *screenshotOverlaySession, sel screen
 		if res, err := screenshot.CaptureScreen(screenshot.Request{
 			Mode:         screenshot.ModeWindow,
 			WindowHandle: sel.WindowHandle,
-			Quality:      92,
+			Quality:      95,
 			Format:       a.screenshotImageFormat(),
 		}); err == nil {
 			res.Interactive = true
@@ -1177,7 +1286,7 @@ func (a *App) captureFromSelection(session *screenshotOverlaySession, sel screen
 	if err != nil {
 		return nil, err
 	}
-	data, mime, err := screenshot.EncodeFrameFormat(cropped, 92, 0, a.screenshotImageFormat())
+	data, mime, err := screenshot.EncodeFrameFormat(cropped, 95, 0, a.screenshotImageFormat())
 	if err != nil {
 		return nil, err
 	}

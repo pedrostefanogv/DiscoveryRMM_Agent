@@ -135,6 +135,10 @@ type App struct {
 	screenshotImageOrder []int64
 	screenshotPolicy     screenshot.Policy
 	screenshotLimiter    *screenshot.CaptureLimiter
+	// screenshotSessionAllow é a autorização de SESSÃO ("permitir sempre nesta
+	// sessão"): memória apenas, desligada por padrão, zerada em todo início do
+	// agente, revogável no painel de privacidade e limpa pelo "Voltar ao padrão".
+	screenshotSessionAllow bool
 
 	// toolsRegistration guarda o timestamp do último registro bem-sucedido de tools.
 	// Usado para re-registrar se o cache do servidor expirou (TTL 5min por padrão no servidor).

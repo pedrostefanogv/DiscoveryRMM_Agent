@@ -12,20 +12,27 @@ import (
 )
 
 const (
-	// defaultMaxDimension é o teto do lado maior da imagem enviada ao LLM.
-	// 3840 = resolução NATIVA até 4K: telas 1440p/1600p/4K não são reduzidas
-	// (textos pequenos continuam legíveis). Só desktops maiores que 4K encolhem.
-	defaultMaxDimension = 3840
-	// defaultJPEGQuality só é usado quando o PNG passa de maxPNGBytes (print
-	// fotográfico/4K). 90 evita o ringing que borrava texto no JPEG 80.
-	defaultJPEGQuality = 90
-	// maxPNGBytes acima do qual a imagem é reencodada em JPEG. PNG é lossless —
-	// é o formato preferido para capturas de UI/texto; o teto existe apenas para
-	// não estourar o limite de payload do servidor (~6 MiB de base64).
+	// defaultMaxDimension = 0 significa NÃO reduzir: as capturas são enviadas na
+	// resolução ORIGINAL (nativa) do desktop. A redução deixou de ser padrão —
+	// era ela que borrava texto em telas 1440p/4K/ultrawide. A IA ainda pode
+	// pedir redução explícita via o parâmetro maxDimension da tool.
+	defaultMaxDimension = 0
+	// defaultJPEGQuality é usado quando o lossless passa de maxPNGBytes
+	// (print fotográfico/4K ou desktop muito ruidoso). 95 mantém o texto
+	// legível no fallback lossy (o 80 original borrava; 90 ainda deixava
+	// ringing visível em fonte pequena).
+	defaultJPEGQuality = 95
+	// maxPNGBytes é o teto do binário final. Existe apenas para não estourar o
+	// limite de payload do servidor (AiChatHelpers.MaxImageBase64Chars = 6 MiB
+	// de base64, ou ~4,2 MB de binário; acima disso o servidor descarta a
+	// imagem). PNG/WebP lossless é o caminho preferido; quando não cabe, a
+	// resolução é PRESERVADA e só a qualidade do lossy cai (ver ladder abaixo).
 	maxPNGBytes = 4_200_000
-	// Miniatura exibida no chat (o que a IA viu).
-	thumbnailMaxDimension = 480
-	thumbnailQuality      = 60
+	// Miniatura exibida no chat (o que a IA viu) e no painel de auditoria.
+	// 800px @ 72 dá prévia legível de texto em janela/diálogo sem pesar no
+	// payload do evento (a miniatura NÃO vai ao LLM).
+	thumbnailMaxDimension = 800
+	thumbnailQuality      = 72
 	// overlayWebPQuality é a qualidade lossy da tela congelada do overlay
 	// (imagem intermediária de exibição).
 	overlayWebPQuality = 95
@@ -73,7 +80,9 @@ func CropFrame(src *screen.Frame, x, y, w, h int) (*screen.Frame, error) {
 	return dst, nil
 }
 
-// Downscale reduz o frame quando o maior lado excede maxDim (bilinear).
+// Downscale reduz o frame quando o maior lado excede maxDim com filtro de ÁREA
+// (média de todos os pixels cobertos): sem ele, texto/linhas de 1px trepidavam
+// nas capturas reduzidas (bilinear amostra 4 pixels e descarta o resto).
 func Downscale(f *screen.Frame, maxDim int) *screen.Frame {
 	if f == nil || maxDim <= 0 {
 		return f
@@ -86,7 +95,7 @@ func Downscale(f *screen.Frame, maxDim int) *screen.Frame {
 		return f
 	}
 	scale := float64(maxDim) / float64(longest)
-	return screen.ResizeBGRA(f, scale)
+	return screen.ResizeBGRABox(f, scale)
 }
 
 // bgraToRGBA converte um frame BGRA para image.RGBA (cópia independente).
@@ -199,10 +208,10 @@ func EncodePNG(f *screen.Frame) ([]byte, error) {
 //     PNG com 20-35% menos bytes em UI/texto — um único encode;
 //  2. **PNG** lossless no formato explícito "png" (ou sem WebP);
 //  3. se o lossless passar do teto: **WebP lossy** na qualidade pedida
-//     (melhor relação qualidade/tamanho que JPEG) ou, por fim, JPEG.
+//     (melhor relação qualidade/tamanho que JPEG; padrão 95) ou, por fim, JPEG.
 //
-// maxDim == 0 aplica o padrão (defaultMaxDimension); maxDim < 0 desativa o
-// redimensionamento (usado quando o chamador já reduziu o frame).
+// maxDim == 0 (padrão) preserva a resolução ORIGINAL do frame; maxDim < 0
+// também não redimensiona (usado quando o chamador já reduziu o frame).
 // Formatos suportados para a imagem final. "auto" prefere o lossless mais
 // econômico (WebP quando menor que o PNG); "png" força PNG (portabilidade
 // máxima — útil quando algum provedor de visão recusa WebP).
@@ -254,10 +263,11 @@ func EncodeOverlayFrame(f *screen.Frame, maxDim int) ([]byte, string, error) {
 	if err == nil && len(pngData) <= maxPNGBytes {
 		return pngData, "image/png", nil
 	}
-	if webpAvailable() {
-		if data, lossyErr := encodeWebPLossy(f, overlayWebPQuality); lossyErr == nil && len(data) > 0 {
-			return data, "image/webp", nil
-		}
+	// Mantém a resolução da tela congelada e reduz a qualidade até caber no
+	// teto do payload do overlay (antes o WebP lossy era devolvido sem checar
+	// tamanho, e o PNG estourado voltava como estava).
+	if data, mime, ok := encodeLossyWithinBudget(f, overlayWebPQuality); ok {
+		return data, mime, nil
 	}
 	if err != nil {
 		return nil, "", err
@@ -311,14 +321,21 @@ func EncodeFrameFormat(f *screen.Frame, quality, maxDim int, format string) ([]b
 		}
 	}
 
-	// PNG explícito (ou WebP indisponível/falhou): PNG; acima do teto, JPEG.
+	// PNG explícito (ou WebP indisponível/falhou): PNG; acima do teto, lossy.
 	pngData, pngErr := EncodePNG(f)
 	if pngErr == nil && len(pngData) <= maxPNGBytes {
 		return pngData, "image/png", nil
 	}
-	if lossyAllowed && webpAvailable() {
-		if lossyData, lossyErr := encodeWebPLossy(f, quality); lossyErr == nil && len(lossyData) <= maxPNGBytes {
-			return lossyData, "image/webp", nil
+	if lossyAllowed {
+		// Mantém a RESOLUÇÃO ORIGINAL: desce apenas a qualidade (lossy WebP,
+		// melhor relação qualidade/tamanho, depois JPEG) até caber no teto.
+		if data, mime, ok := encodeLossyWithinBudget(f, quality); ok {
+			return data, mime, nil
+		}
+		// Último recurso (desktop gigante e ruidoso): reduz em degraus, porque
+		// uma imagem acima do teto seria descartada em silêncio pelo servidor.
+		if data, mime, ok := encodeShrunkWithinBudget(f, quality); ok {
+			return data, mime, nil
 		}
 	}
 	jpegData, jpegErr := screen.NewJPEGEncoder().Encode(f, quality)
@@ -329,6 +346,66 @@ func EncodeFrameFormat(f *screen.Frame, quality, maxDim int, format string) ([]b
 		return nil, "", jpegErr
 	}
 	return jpegData, "image/jpeg", nil
+}
+
+// lossyQualityLadder devolve a qualidade pedida seguida de degraus menores.
+func lossyQualityLadder(quality int) []int {
+	if quality <= 0 {
+		quality = defaultJPEGQuality
+	}
+	if quality > 100 {
+		quality = 100
+	}
+	ladder := []int{quality}
+	for _, q := range []int{90, 85, 80, 70, 60, 50} {
+		if q < quality {
+			ladder = append(ladder, q)
+		}
+	}
+	return ladder
+}
+
+// encodeLossyWithinBudget tenta lossy (WebP e depois JPEG) na qualidade pedida e
+// em degraus menores, SEM mudar a resolução. Devolve o primeiro resultado que
+// couber em maxPNGBytes.
+func encodeLossyWithinBudget(f *screen.Frame, quality int) ([]byte, string, bool) {
+	for _, q := range lossyQualityLadder(quality) {
+		if webpAvailable() {
+			if data, err := encodeWebPLossy(f, q); err == nil && len(data) > 0 && len(data) <= maxPNGBytes {
+				return data, "image/webp", true
+			}
+		}
+		if data, err := screen.NewJPEGEncoder().Encode(f, q); err == nil && len(data) > 0 && len(data) <= maxPNGBytes {
+			return data, "image/jpeg", true
+		}
+	}
+	return nil, "", false
+}
+
+// encodeShrunkWithinBudget é a rede de segurança: se nem a qualidade mínima
+// couber, reduz a resolução em degraus pequenos até o teto ser respeitado.
+func encodeShrunkWithinBudget(f *screen.Frame, quality int) ([]byte, string, bool) {
+	if f == nil || f.Width <= 0 || f.Height <= 0 {
+		return nil, "", false
+	}
+	longest := f.Width
+	if f.Height > longest {
+		longest = f.Height
+	}
+	for _, factor := range []float64{0.9, 0.8, 0.7, 0.5} {
+		target := int(float64(longest) * factor)
+		if target < 1 {
+			break
+		}
+		shrunk := Downscale(f, target)
+		if shrunk == f {
+			break
+		}
+		if data, mime, ok := encodeLossyWithinBudget(shrunk, quality); ok {
+			return data, mime, true
+		}
+	}
+	return nil, "", false
 }
 
 // AttachThumbnailFrame gera a miniatura do chat/auditoria a partir de um frame

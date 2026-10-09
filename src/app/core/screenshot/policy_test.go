@@ -59,16 +59,40 @@ func TestPolicyNormalize(t *testing.T) {
 	}
 }
 
+// Padrões de produto: permitir pedidos da IA, tela inteira permitida, janela do
+// agente oculta, formato automático e 10 capturas a cada 1 minuto (o mesmo
+// alvo do botão "Voltar ao padrão").
 func TestPolicyDefaults(t *testing.T) {
 	p := DefaultPolicy()
 	if !p.FullScreenAllowed() || p.WindowRequired() {
 		t.Fatal("defaults inesperados")
 	}
-	if p.LimitMax() != DefaultMaxCapturesPerWindow {
-		t.Fatalf("max default = %d", p.LimitMax())
+	if !p.AiCaptureAllowed() {
+		t.Fatal("pedidos de captura da IA deveriam ser permitidos por padrão")
+	}
+	if !p.HideWindowOnCapture() {
+		t.Fatal("a janela do agente deveria ser ocultada por padrão")
+	}
+	if p.ImageFormat != FormatAuto {
+		t.Fatalf("formato default = %q, want %q", p.ImageFormat, FormatAuto)
+	}
+	if p.LimitMax() != 10 {
+		t.Fatalf("max default = %d, want 10", p.LimitMax())
+	}
+	if p.LimitWindow() != time.Minute {
+		t.Fatalf("janela default = %s, want 1 minuto", p.LimitWindow())
 	}
 	if p.LimitWindow() != time.Duration(DefaultCaptureWindowMinutes)*time.Minute {
 		t.Fatalf("janela default = %s", p.LimitWindow())
+	}
+	// DefaultPolicy é o alvo do reset: precisa sobreviver ao Normalize sem
+	// perder nenhum dos campos (cópia defensiva dos ponteiros).
+	n := p.Normalize()
+	if !n.AiCaptureAllowed() || !n.FullScreenAllowed() || n.WindowRequired() || !n.HideWindowOnCapture() {
+		t.Fatal("Normalize alterou os defaults")
+	}
+	if n.ImageFormat != FormatAuto || n.MaxCapturesPerWindow != 10 || n.WindowMinutes != 1 {
+		t.Fatalf("defaults apos Normalize = %+v", n)
 	}
 }
 

@@ -37,12 +37,15 @@ type Policy struct {
 	AllowAiCapture *bool `json:"allowAiCapture,omitempty"`
 }
 
-// DefaultPolicy devolve a política conservadora padrão: sem bloqueios, tela
-// inteira permitida e limite de 10 capturas a cada 5 minutos.
+// DefaultPolicy devolve a política padrão do produto: sem bloqueios, tela
+// inteira permitida, janela do agente oculta durante a captura, formato
+// automático e limite de 10 capturas a cada 1 minuto. É o estado de uma
+// instalação nova e o alvo do botão "Voltar ao padrão" da UI de privacidade.
 func DefaultPolicy() Policy {
 	full := true
 	requireWindow := false
 	hideWindow := true
+	allowAi := true
 	return Policy{
 		BlockedProcesses:     []string{},
 		AllowFullScreen:      &full,
@@ -50,6 +53,8 @@ func DefaultPolicy() Policy {
 		MaxCapturesPerWindow: DefaultMaxCapturesPerWindow,
 		WindowMinutes:        DefaultCaptureWindowMinutes,
 		HideAgentWindow:      &hideWindow,
+		ImageFormat:          FormatAuto,
+		AllowAiCapture:       &allowAi,
 	}
 }
 

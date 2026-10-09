@@ -10,10 +10,11 @@ import (
 
 // Decision é o resultado de UMA solicitação de captura feita pela IA.
 //
-// NÃO existe autorização permanente: cada pedido da IA exige uma resposta
-// explícita do usuário (decisão de produto 2026-10-01 — "o pedido de print ao
-// usuário deve ocorrer TODAS as vezes que a IA pedir"). Não há "permitir
-// sempre" nem "permitir nesta sessão".
+// A regra base continua sendo perguntar a CADA pedido (decisão de produto
+// 2026-10-01): não existe autorização permanente. O usuário pode, porém,
+// escolher "permitir sempre nesta sessão" — autorização de escopo de SESSÃO,
+// desligada por padrão, válida só enquanto o agente está em execução e
+// revogável no painel de privacidade.
 type Decision string
 
 const (
@@ -21,6 +22,9 @@ const (
 	DecisionUndecided Decision = "undecided"
 	// DecisionGranted: permitido APENAS para esta captura.
 	DecisionGranted Decision = "granted"
+	// DecisionGrantedForSession: permitido para esta captura E para as demais
+	// da sessão atual — o agente deixa de perguntar até o usuário revogar.
+	DecisionGrantedForSession Decision = "granted_session"
 	// DecisionDenied: negado APENAS para esta captura (a próxima pergunta de novo).
 	DecisionDenied Decision = "denied"
 )
@@ -38,6 +42,9 @@ type AuditEntry struct {
 	Detail   string    `json:"detail"`
 	ByLLM    bool      `json:"byLlm"`
 	Bytes    int       `json:"bytes"`
+	// SessionAuthorized indica que a captura foi coberta pela autorização de
+	// SESSÃO ("permitir sempre nesta sessão"), sem pergunta individual.
+	SessionAuthorized bool `json:"sessionAuthorized,omitempty"`
 	// Thumbnail é a miniatura do que foi capturado. NÃO é serializada no
 	// binding de status/tool (payload e privacidade); a UI de privacidade busca
 	// as miniaturas pelo binding GetScreenshotAuditPanel.
@@ -56,15 +63,15 @@ var consentDialogs = map[string]struct {
 }{
 	"pt": {
 		Question: "O assistente de IA pediu para capturar a tela deste computador%s. Permite esta captura?",
-		Options:  []string{"Permitir esta captura", "Negar"},
+		Options:  []string{"Permitir esta captura", "Permitir sempre nesta sessão", "Negar"},
 	},
 	"en": {
 		Question: "The AI assistant requested a screen capture of this computer%s. Allow this capture?",
-		Options:  []string{"Allow this capture", "Deny"},
+		Options:  []string{"Allow this capture", "Always allow for this session", "Deny"},
 	},
 	"es": {
 		Question: "El asistente de IA solicitó capturar la pantalla de este equipo%s. ¿Permitir esta captura?",
-		Options:  []string{"Permitir esta captura", "Negar"},
+		Options:  []string{"Permitir esta captura", "Permitir siempre en esta sesión", "Negar"},
 	},
 }
 
@@ -106,8 +113,10 @@ func BuildConsentQuestion(reason, locale string) string {
 
 // ClassifyConsentAnswer mapeia a resposta do usuário para permitir/negar ESTA
 // captura. Texto livre é aceito ("sim", "pode", "não"...). Resposta ambígua
-// nega (nunca autoriza por engano). "sempre"/"always" não criam autorização
-// permanente — valem apenas para a captura em questão.
+// nega (nunca autoriza por engano). A negação é avaliada PRIMEIRO (fail-closed:
+// "não, pode sempre" nega). "sempre" sozinho continua valendo só para a captura
+// em questão; a autorização de sessão exige a menção explícita a "sessão"
+// (option "Permitir sempre nesta sessão").
 func ClassifyConsentAnswer(answer string) Decision {
 	a := strings.ToLower(strings.TrimSpace(answer))
 	if a == "" {
@@ -119,6 +128,11 @@ func ClassifyConsentAnswer(answer string) Decision {
 		strings.Contains(a, "deny"), strings.Contains(a, "nunca"), strings.Contains(a, "jamais"),
 		strings.Contains(a, "never"):
 		return DecisionDenied
+	// "sess" cobre pt/en ("sessão"/"session"); "sesi" cobre es ("sesión").
+	case (strings.Contains(a, "sess") || strings.Contains(a, "sesi")) &&
+		(strings.Contains(a, "sempre") || strings.Contains(a, "siempre") || strings.Contains(a, "always") ||
+			strings.Contains(a, "permit") || strings.Contains(a, "allow") || strings.Contains(a, "autoriz")):
+		return DecisionGrantedForSession
 	case strings.Contains(a, "permitir"), strings.Contains(a, "permit"), strings.Contains(a, "pode"),
 		strings.Contains(a, "sim"), a == "sí", strings.Contains(a, "ok"),
 		strings.Contains(a, "autoriz"), strings.Contains(a, "allow"), strings.Contains(a, "sempre"),
@@ -155,7 +169,14 @@ func (m *ConsentManager) log(msg string) {
 	}
 }
 
-// Ensure pede autorização para ESTA captura, SEMPRE.
+// Ensure pede autorização para ESTA captura, SEMPRE — a menos que o chamador já
+// tenha a autorização de sessão ligada (esse curto-circuito é do app, no
+// CaptureScreenshotForTool, para não duplicar perguntas).
+//
+// A resposta pode autorizar apenas esta captura (DecisionGranted) ou a sessão
+// inteira (DecisionGrantedForSession). Nos dois casos não há erro: cabe ao
+// chamador registrar a decisão de sessão (o manager não guarda estado de
+// autorização — a trilha de auditoria é o que ele mantém).
 //
 // O diálogo é serializado (promptMu): duas tools concorrentes nunca abrem
 // perguntas duplicadas ao mesmo tempo — a segunda espera a resposta da
@@ -180,7 +201,7 @@ func (m *ConsentManager) Ensure(ctx context.Context, reason string) (Decision, e
 	}
 	decision := ClassifyConsentAnswer(answer)
 	m.log("[screenshot] autorizacao da captura respondida pelo usuario: " + string(decision))
-	if decision != DecisionGranted {
+	if decision != DecisionGranted && decision != DecisionGrantedForSession {
 		return decision, fmt.Errorf("o usuario negou a autorizacao para esta captura de tela")
 	}
 	return decision, nil

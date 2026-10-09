@@ -177,6 +177,9 @@
             <label class="chat-privacy-check"><input id="chatPrivacyAllowAi" type="checkbox" checked />
               <span data-i18n="screenshot.allowAiCapture"></span></label>
             <div class="meta" data-i18n="screenshot.perCaptureHint"></div>
+            <label class="chat-privacy-check"><input id="chatPrivacyAllowSession" type="checkbox" />
+              <span data-i18n="screenshot.allowSessionCapture"></span></label>
+            <div class="meta" data-i18n="screenshot.sessionHint"></div>
           </div>
           <div class="chat-privacy-section">
             <label class="chat-privacy-label" for="chatPrivacyBlocked"
@@ -203,8 +206,12 @@
               <label for="chatPrivacyWindow"><span data-i18n="screenshot.windowMinutes">Janela (min)</span>
                 <input id="chatPrivacyWindow" type="number" min="1" max="1440" /></label>
             </div>
-            <button id="chatPrivacySavePolicy" class="btn primary"
-              data-i18n="screenshot.savePolicy">Salvar política</button>
+            <div class="chat-privacy-actions">
+              <button id="chatPrivacyResetPolicy" class="btn subtle"
+                data-i18n="screenshot.resetPolicy">Voltar ao padrão</button>
+              <button id="chatPrivacySavePolicy" class="btn primary"
+                data-i18n="screenshot.savePolicy">Salvar política</button>
+            </div>
           </div>
           <div class="chat-privacy-section">
             <span class="chat-privacy-label" data-i18n="screenshot.auditTitle">Últimas capturas (auditoria)</span>

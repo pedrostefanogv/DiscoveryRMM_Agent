@@ -1958,6 +1958,17 @@ export function RequestToolConsent(req) {
 }
 
 /**
+ * ResetScreenshotPolicy volta a política local aos padrões de fábrica
+ * (DefaultPolicy), persiste, reconfigura o limitador e revoga a autorização de
+ * sessão. Devolve a política resultante em JSON para a UI não precisar de uma
+ * segunda chamada.
+ * @returns {$CancellablePromise<string>}
+ */
+export function ResetScreenshotPolicy() {
+    return $Call.ByID(3468182099);
+}
+
+/**
  * RespondToNotification processa a resposta do usuário a uma notificação.
  * @param {string} notificationID
  * @param {string} result
@@ -2051,7 +2062,9 @@ export function SaveScreenshotPolicy(policyJSON) {
 
 /**
  * ScreenshotConsentStatusJSON implementa AppBridge: estado da política de
- * captura. Não existe "autorizado": a IA SEMPRE pergunta antes de capturar.
+ * captura. A regra é perguntar em cada pedido; "perCaptureConsent" fica false
+ * quando o usuário ligou a autorização de sessão ("permitir sempre nesta
+ * sessão"), que é opt-in e desligada por padrão.
  * @returns {$CancellablePromise<json$0.RawMessage>}
  */
 export function ScreenshotConsentStatusJSON() {
@@ -2180,6 +2193,19 @@ export function SetP2PConfig(cfg) {
  */
 export function SetScreenshotAiCaptureEnabled(enabled) {
     return $Call.ByID(1202833915, enabled);
+}
+
+/**
+ * SetScreenshotSessionAllow liga/desliga a autorização de SESSÃO ("permitir
+ * sempre nesta sessão"). Desligada por padrão e mantida apenas em memória: vale
+ * enquanto o agente está em execução e não sobrevive a um restart. Ligada, os
+ * pedidos da IA deixam de abrir a pergunta por captura — a captura continua
+ * sujeita à blocklist, às demais regras da política, à cota e à auditoria.
+ * @param {boolean} enabled
+ * @returns {$CancellablePromise<void>}
+ */
+export function SetScreenshotSessionAllow(enabled) {
+    return $Call.ByID(412546271, enabled);
 }
 
 /**

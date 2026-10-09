@@ -2159,11 +2159,15 @@ function screenshotLoadPrivacy() {
     });
 }
 
-// screenshotConsentLabel descreve o modelo de consentimento: POR CAPTURA.
-// Não existe "autorizado" permanente — a IA pergunta a cada pedido.
+// screenshotConsentLabel descreve o modelo de consentimento: POR CAPTURA é o
+// padrão; a autorização de sessão ("permitir sempre nesta sessão") é opt-in e
+// desligada por padrão. Não existe autorização permanente.
 function screenshotConsentLabel(data) {
   if (data && data.aiCaptureEnabled === false) {
     return screenshotT("screenshot.consentDisabled");
+  }
+  if (data && data.sessionAllow === true) {
+    return screenshotT("screenshot.consentSession");
   }
   return screenshotT("screenshot.consentPerCapture");
 }
@@ -2172,11 +2176,15 @@ function screenshotRenderPrivacy(data) {
   var stateEl = screenshotModalEl("chatPrivacyState");
   if (stateEl) {
     stateEl.textContent = screenshotConsentLabel(data);
-    stateEl.classList.toggle("allowed", data.aiCaptureEnabled !== false);
+    var sessionOn = data.sessionAllow === true;
+    stateEl.classList.toggle("allowed", data.aiCaptureEnabled !== false && !sessionOn);
+    stateEl.classList.toggle("session", data.aiCaptureEnabled !== false && sessionOn);
     stateEl.classList.toggle("denied", data.aiCaptureEnabled === false);
   }
   var allowAiEl = screenshotModalEl("chatPrivacyAllowAi");
   if (allowAiEl) allowAiEl.checked = data.aiCaptureEnabled !== false;
+  var allowSessionEl = screenshotModalEl("chatPrivacyAllowSession");
+  if (allowSessionEl) allowSessionEl.checked = data.sessionAllow === true;
   var usageEl = screenshotModalEl("chatPrivacyUsage");
   if (usageEl && data.usage) {
     usageEl.textContent = screenshotT("screenshot.usage", {
@@ -2234,8 +2242,10 @@ function screenshotRenderAudit(items) {
     info.className = "chat-privacy-info";
     var who = item.byLlm ? screenshotT("screenshot.auditByLlm") : screenshotT("screenshot.auditManual");
     var decision =
-      item.decision === "granted"
-        ? screenshotT("screenshot.auditGranted")
+      item.decision === "granted" || item.decision === "granted_session"
+        ? item.sessionAuthorized
+          ? screenshotT("screenshot.auditGrantedSession")
+          : screenshotT("screenshot.auditGranted")
         : item.decision === "denied"
           ? screenshotT("screenshot.auditDenied")
           : screenshotT("screenshot.auditCancelled");
@@ -2286,6 +2296,56 @@ function screenshotSavePrivacyPolicy() {
     })
     .catch(function (err) {
       screenshotFeedback("Falha ao salvar politica: " + err, true);
+    });
+}
+
+// screenshotSetSessionAllow liga/desliga a autorização de SESSÃO ("permitir
+// sempre nesta sessão"). Opt-in e desligada por padrão: ligada, a IA deixa de
+// abrir a pergunta por captura até o usuário revogar (ou reiniciar o agente).
+function screenshotSetSessionAllow(enabled) {
+  var api = screenshotApi();
+  if (!api || typeof api.SetScreenshotSessionAllow !== "function") {
+    screenshotFeedback(screenshotT("screenshot.unavailable"), true);
+    return;
+  }
+  var pending = api.SetScreenshotSessionAllow(!!enabled);
+  if (pending && typeof pending.then === "function") {
+    pending
+      .then(function () {
+        screenshotLoadPrivacy();
+      })
+      .catch(function (err) {
+        // Recarrega também no erro para o checkbox não ficar com estado fantasma.
+        screenshotFeedback(String(err), true);
+        screenshotLoadPrivacy();
+      });
+  } else {
+    screenshotLoadPrivacy();
+  }
+}
+
+// screenshotResetPrivacyPolicy volta a política local aos padrões (o valor
+// padrão vem do Go — fonte única) e revoga a autorização de sessão.
+function screenshotResetPrivacyPolicy() {
+  var api = screenshotApi();
+  if (!api || typeof api.ResetScreenshotPolicy !== "function") {
+    screenshotFeedback(screenshotT("screenshot.unavailable"), true);
+    return;
+  }
+  if (typeof window !== "undefined" && typeof window.confirm === "function" &&
+    !window.confirm(screenshotT("screenshot.resetPolicyConfirm"))) {
+    // Cancelou: recarrega para o formulário voltar ao estado persistido.
+    screenshotLoadPrivacy();
+    return;
+  }
+  api.ResetScreenshotPolicy()
+    .then(function () {
+      screenshotFeedback(screenshotT("screenshot.policyReset"), false);
+      screenshotLoadPrivacy();
+    })
+    .catch(function (err) {
+      screenshotFeedback("Falha ao restaurar o padrão: " + err, true);
+      screenshotLoadPrivacy();
     });
 }
 
@@ -2604,11 +2664,17 @@ function initScreenshotPrivacy() {
   if (closeBtn) closeBtn.addEventListener("click", closeScreenshotPrivacyModal);
   var refreshBtn = document.getElementById("chatPrivacyRefreshBtn");
   if (refreshBtn) refreshBtn.addEventListener("click", screenshotLoadPrivacy);
+  var resetBtn = document.getElementById("chatPrivacyResetPolicy");
+  if (resetBtn) resetBtn.addEventListener("click", screenshotResetPrivacyPolicy);
   var saveBtn = document.getElementById("chatPrivacySavePolicy");
   if (saveBtn) saveBtn.addEventListener("click", screenshotSavePrivacyPolicy);
   var allowAi = document.getElementById("chatPrivacyAllowAi");
   if (allowAi) {
     allowAi.addEventListener("change", function () { screenshotSetAiCapture(!!allowAi.checked); });
+  }
+  var allowSession = document.getElementById("chatPrivacyAllowSession");
+  if (allowSession) {
+    allowSession.addEventListener("change", function () { screenshotSetSessionAllow(!!allowSession.checked); });
   }
   var modal = screenshotModalEl("chatPrivacyModal");
   if (modal) {

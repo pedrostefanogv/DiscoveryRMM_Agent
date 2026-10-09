@@ -27,6 +27,12 @@ func TestClassifyConsentAnswer(t *testing.T) {
 		{"talvez", DecisionDenied},
 		// "sempre" NÃO cria autorização permanente — vale só para esta captura.
 		{"Permitir sempre", DecisionGranted},
+		// Autorização de SESSÃO: exige menção explícita a "sessão/session".
+		{"Permitir sempre nesta sessão", DecisionGrantedForSession},
+		{"Always allow for this session", DecisionGrantedForSession},
+		{"Permitir siempre en esta sesión", DecisionGrantedForSession},
+		// Fail-closed: a negação vence mesmo citando a sessão.
+		{"Não, não permitir nesta sessão", DecisionDenied},
 	}
 	for _, tc := range cases {
 		if got := ClassifyConsentAnswer(tc.answer); got != tc.want {
@@ -41,8 +47,8 @@ func TestConsentAsksEveryTime(t *testing.T) {
 	var calls int32
 	prompt := func(ctx context.Context, question string, options []string) (string, error) {
 		atomic.AddInt32(&calls, 1)
-		if len(options) != 2 {
-			t.Errorf("opcoes = %v, want 2 (permitir/negar)", options)
+		if len(options) != 3 {
+			t.Errorf("opcoes = %v, want 3 (permitir/permitir na sessao/negar)", options)
 		}
 		return "Permitir esta captura", nil
 	}
@@ -85,6 +91,32 @@ func TestConsentDenialIsPerCapture(t *testing.T) {
 	}
 }
 
+// A opção de sessão precisa voltar como DecisionGrantedForSession (sem erro) e
+// NÃO pode virar autorização permanente: quem guarda o estado de sessão é o
+// app, e a captura de cada pedido continua registrada na auditoria.
+func TestConsentSessionOptionGrantsSessionWithoutError(t *testing.T) {
+	var calls int32
+	prompt := func(ctx context.Context, question string, options []string) (string, error) {
+		atomic.AddInt32(&calls, 1)
+		return "Permitir sempre nesta sessão", nil
+	}
+	m := NewConsentManager(prompt, nil, nil)
+	decision, err := m.Ensure(context.Background(), "diagnostico")
+	if err != nil || decision != DecisionGrantedForSession {
+		t.Fatalf("Ensure = (%q, %v), want (%q, nil)", decision, err, DecisionGrantedForSession)
+	}
+
+	// A decisão de sessão não é estado interno do manager: o próximo Ensure
+	// volta a perguntar (o curto-circuito de sessão é do app, na tool).
+	decision, err = m.Ensure(context.Background(), "diagnostico")
+	if err != nil || decision != DecisionGrantedForSession {
+		t.Fatalf("segundo Ensure = (%q, %v)", decision, err)
+	}
+	if calls != 2 {
+		t.Fatalf("prompt chamado %d vezes, want 2 (manager nao guarda sessao)", calls)
+	}
+}
+
 func TestConsentDialogLocalized(t *testing.T) {
 	pt := BuildConsentQuestion("diagnóstico de erro", "pt-BR")
 	if !strings.Contains(pt, "Permite esta captura?") || !strings.Contains(pt, "diagnóstico de erro") {
@@ -98,11 +130,16 @@ func TestConsentDialogLocalized(t *testing.T) {
 	if !strings.Contains(es, "Permitir esta captura?") {
 		t.Fatalf("pergunta es inesperada: %q", es)
 	}
-	if got := ConsentOptions("en-US"); len(got) != 2 || got[0] != "Allow this capture" || got[1] != "Deny" {
+	if got := ConsentOptions("en-US"); len(got) != 3 || got[0] != "Allow this capture" ||
+		got[1] != "Always allow for this session" || got[2] != "Deny" {
 		t.Fatalf("opcoes en inesperadas: %v", got)
 	}
-	if got := ConsentOptions("es-ES"); got[0] != "Permitir esta captura" || got[1] != "Negar" {
+	if got := ConsentOptions("es-ES"); len(got) != 3 || got[0] != "Permitir esta captura" ||
+		got[1] != "Permitir siempre en esta sesión" || got[2] != "Negar" {
 		t.Fatalf("opcoes es inesperadas: %v", got)
+	}
+	if got := ConsentOptions("pt-BR"); len(got) != 3 || got[1] != "Permitir sempre nesta sessão" {
+		t.Fatalf("opcoes pt inesperadas: %v", got)
 	}
 	if got := ConsentLanguage("de-DE"); got != "en" {
 		t.Fatalf("ConsentLanguage(de-DE) = %q, want en", got)

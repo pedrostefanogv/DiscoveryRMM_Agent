@@ -225,6 +225,7 @@
 }
 
 .chat-privacy-badge.allowed { background: color-mix(in srgb, var(--accent) 25%, transparent); }
+.chat-privacy-badge.session { background: color-mix(in srgb, var(--accent) 40%, transparent); }
 .chat-privacy-badge.denied { background: color-mix(in srgb, var(--danger) 25%, transparent); }
 
 .chat-privacy-actions { display: flex; gap: 8px; flex-wrap: wrap; }
