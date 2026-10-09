@@ -180,6 +180,12 @@ func (a *App) PollChatEvents() string {
 		return "[]"
 	}
 	events := a.chatEvents.DrainPollBuffer()
+	// M7 (revisão 2026-10-08): os contadores de descarte existiam mas nunca eram
+	// lidos — o evento perdido ficava invisível no diagnóstico. B4: agora cada
+	// causa é reportada separadamente.
+	if subDropped, pollOverwritten := a.chatEvents.DrainDrops(); subDropped > 0 || pollOverwritten > 0 {
+		log.Printf("[chat-sse] broker: descarte de eventos — inscrito SSE lento=%d, buffer de polling sobrescrito=%d", subDropped, pollOverwritten)
+	}
 	if len(events) == 0 {
 		return "[]"
 	}

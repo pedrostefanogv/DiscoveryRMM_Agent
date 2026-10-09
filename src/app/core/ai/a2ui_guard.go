@@ -14,8 +14,16 @@ import (
 // renderizado duas vezes. Este guard centraliza as três regras (normalizar,
 // deduplicar e limitar) para TODOS os caminhos de entrega.
 
-// maxA2uiMessagesPerTurn é o teto de mensagens de interface por turno.
-const maxA2uiMessagesPerTurn = 6
+// maxA2uiMessagesPerTurn é o teto de mensagens de interface por TURNO do agent.
+//
+// NÃO confundir com o teto do SERVIDOR (AiChatA2uiExtractor.MaxA2uiMessagesPerResponse
+// = 6, por RESPOSTA/round). Um turno pode ter mais de um round (multi-round com
+// tools) e cada resposta traz, no mínimo, createSurface + updateComponents. Com
+// o teto antigo (6 = igual ao do servidor) um turno de 2 rounds podia ter a
+// definição da surface descartada no cliente, deixando a bolha em
+// "Loading surface..." — o mesmo sintoma do bug de 2026-10-08. O valor cobre
+// 2 respostas cheias e continua limitando um servidor comprometido.
+const maxA2uiMessagesPerTurn = 12
 
 type a2uiDropReason int
 

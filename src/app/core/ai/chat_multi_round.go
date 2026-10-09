@@ -43,18 +43,21 @@ func (s *Service) SendStreamMultiRound(
 	mcpExecutor func(ctx context.Context, toolName, argsJSON string) (string, error),
 	onA2ui ...func(string),
 ) (string, error) {
-	return s.SendStreamMultiRoundWithProgress(ctx, userMessage, onToken, onStatus, nil, mcpExecutor, onA2ui...)
+	return s.SendStreamMultiRoundWithProgress(ctx, userMessage, onToken, onStatus, nil, nil, mcpExecutor, onA2ui...)
 }
 
 // SendStreamMultiRoundWithProgress é a versão estendida do multi-round que
 // recebe callback de progresso do agent loop (chunk "loop_progress" do
-// servidor: round atual / máximo). onLoopProgress pode ser nil.
+// servidor: round atual / máximo) e o diagnóstico de interface incompleta
+// (chunk "a2ui_incomplete": surface criada sem a definição). Os dois callbacks
+// podem ser nil.
 func (s *Service) SendStreamMultiRoundWithProgress(
 	ctx context.Context,
 	userMessage string,
 	onToken func(string),
 	onStatus func(string),
 	onLoopProgress func(round, maxRounds int),
+	onA2uiIncomplete func(string),
 	mcpExecutor func(ctx context.Context, toolName, argsJSON string) (string, error),
 	onA2ui ...func(string),
 ) (string, error) {
@@ -310,7 +313,7 @@ func (s *Service) SendStreamMultiRoundWithProgress(
 		// "Etapa {round}" (chat.activity.roundOnly) quando maxRounds é 0.
 		roundProgress := turnRoundProgress(onLoopProgress, round)
 
-		roundSessionID, roundErr := s.executeRound(streamCtx, cfg, req, round, onStatus, onToken, &pendingCalls, roundProgress, a2uiCb)
+		roundSessionID, roundErr := s.executeRound(streamCtx, cfg, req, round, onStatus, onToken, &pendingCalls, roundProgress, onA2uiIncomplete, a2uiCb)
 		// BUG (turno real de 2026-10-01 12:01Z): em erro o executeRound devolve
 		// sessionID VAZIO; sobrescrever currentSessionID zerava a sessão e o
 		// resgate (B3) era rejeitado com "SessionId requerido em multi-round",
@@ -828,7 +831,7 @@ func (s *Service) lastAssistantContentSince(historySince int) string {
 	return ""
 }
 
-func (s *Service) executeRound(ctx context.Context, cfg Config, req agentStreamRequest, round int, onStatus func(string), onToken func(string), pendingCalls *[]pendingToolCall, onLoopProgress func(round, maxRounds int), onA2ui ...func(string)) (string, error) {
+func (s *Service) executeRound(ctx context.Context, cfg Config, req agentStreamRequest, round int, onStatus func(string), onToken func(string), pendingCalls *[]pendingToolCall, onLoopProgress func(round, maxRounds int), onA2uiIncomplete func(string), onA2ui ...func(string)) (string, error) {
 	startTime := time.Now()
 	baseURL, err := normalizeAgentChatBaseURL(cfg.Endpoint)
 	if err != nil {
@@ -919,7 +922,7 @@ func (s *Service) executeRound(ctx context.Context, cfg Config, req agentStreamR
 		onStatus("Analisando sua solicitacao...")
 	}
 
-	sessionID, _, err := s.parseMultiRoundSSEWithProgress(resp.Body, onToken, pendingCalls, onLoopProgress, onA2ui...)
+	sessionID, _, err := s.parseMultiRoundSSEWithProgress(resp.Body, onToken, pendingCalls, onLoopProgress, onA2uiIncomplete, onA2ui...)
 	if err != nil {
 		s.logChatEntry(ChatLogEntry{
 			Type:      "round_sse_error",
@@ -950,14 +953,14 @@ func turnRoundProgress(onLoopProgress func(round, maxRounds int), round int) fun
 }
 
 func (s *Service) parseMultiRoundSSE(body io.Reader, onToken func(string), pendingCalls *[]pendingToolCall, onA2ui ...func(string)) (string, bool, error) {
-	return s.parseMultiRoundSSEWithProgress(body, onToken, pendingCalls, nil, onA2ui...)
+	return s.parseMultiRoundSSEWithProgress(body, onToken, pendingCalls, nil, nil, onA2ui...)
 }
 
 // parseMultiRoundSSEWithProgress é a versão estendida do parser SSE que
 // também recebe callback de progresso do agent loop (chunk "loop_progress"
 // do servidor: round atual / máximo de rounds). Permite ao frontend exibir
 // "Processando… round X/Y" em vez de parecer travado durante tool chains.
-func (s *Service) parseMultiRoundSSEWithProgress(body io.Reader, onToken func(string), pendingCalls *[]pendingToolCall, onLoopProgress func(round, maxRounds int), onA2ui ...func(string)) (string, bool, error) {
+func (s *Service) parseMultiRoundSSEWithProgress(body io.Reader, onToken func(string), pendingCalls *[]pendingToolCall, onLoopProgress func(round, maxRounds int), onA2uiIncomplete func(string), onA2ui ...func(string)) (string, bool, error) {
 	var contentBuf strings.Builder
 	currentSessionID := ""
 	done := false
@@ -1030,6 +1033,17 @@ func (s *Service) parseMultiRoundSSEWithProgress(body io.Reader, onToken func(st
 			if msg != "" && msg != "null" {
 				if len(onA2ui) > 0 && onA2ui[0] != nil {
 					onA2ui[0](msg)
+				}
+			}
+		case "a2ui_incomplete":
+			// Diagnóstico do SERVIDOR: a surface foi criada mas a definição
+			// (updateComponents com "root") não chegou nem depois da reemissão.
+			// Sem repassar isto a UI só teria a mensagem genérica.
+			msg := strings.TrimSpace(evt.Content)
+			if msg != "" {
+				s.logf("[chat] a2ui: interface criada sem definição (card não exibido): %s", TruncateForLog(msg, 200))
+				if onA2uiIncomplete != nil {
+					onA2uiIncomplete(msg)
 				}
 			}
 		case "tool_call":

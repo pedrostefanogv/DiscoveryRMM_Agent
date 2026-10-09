@@ -1415,6 +1415,18 @@ export function ListInstalled() {
 }
 
 /**
+ * ListInstalledApps implementa AppBridge: nomes de apps instalados (atalhos do
+ * Menu Iniciar) para o LLM descobrir o nome exato antes de chamar open_app.
+ * É leitura pura — não exige autorização.
+ * @param {string} query
+ * @param {number} limit
+ * @returns {$CancellablePromise<json$0.RawMessage>}
+ */
+export function ListInstalledApps(query, limit) {
+    return $Call.ByID(1098007388, query, limit);
+}
+
+/**
  * ListOpenWindowsJSON implementa AppBridge: janelas visíveis + monitores,
  * enriquecidas com o flag Blocked da política local de privacidade.
  * @param {boolean} includeUntitled
@@ -1539,6 +1551,20 @@ export function Log(line) {
 }
 
 /**
+ * LogFrontend registra uma mensagem de console do frontend no log do agent.
+ * 
+ * Throttle: no máximo 1 registro por mensagem idêntica a cada 10s e um teto por
+ * execução — sem isso um erro em loop (ex.: tema falhando a cada mutação)
+ * inundaria o logs.db.
+ * @param {string} level
+ * @param {string} message
+ * @returns {$CancellablePromise<void>}
+ */
+export function LogFrontend(level, message) {
+    return $Call.ByID(3994059524, level, message);
+}
+
+/**
  * OnResourceSynced expõe p2pCoord.OnResourceSynced via interface.
  * @param {string} resource
  * @param {string} variant
@@ -1547,6 +1573,26 @@ export function Log(line) {
  */
 export function OnResourceSynced(resource, variant, revision) {
     return $Call.ByID(1977103993, resource, variant, revision);
+}
+
+/**
+ * OpenApp implementa AppBridge: abre um aplicativo instalado.
+ * @param {string} name
+ * @param {string} reason
+ * @returns {$CancellablePromise<json$0.RawMessage>}
+ */
+export function OpenApp(name, reason) {
+    return $Call.ByID(1224443105, name, reason);
+}
+
+/**
+ * OpenFolder implementa AppBridge: abre a pasta no Explorer.
+ * @param {string} folder
+ * @param {string} reason
+ * @returns {$CancellablePromise<json$0.RawMessage>}
+ */
+export function OpenFolder(folder, reason) {
+    return $Call.ByID(1884477066, folder, reason);
 }
 
 /**

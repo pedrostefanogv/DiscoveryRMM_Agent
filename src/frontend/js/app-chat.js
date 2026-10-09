@@ -1161,6 +1161,8 @@ function onStreamDone() {
   maybeFlushChatQueue();
   // Sem turno nem ação pendente: encerra o estado ocupado das surfaces A2UI.
   a2uiSettleBusyIfIdle();
+  // Surface que ficou sem componentes: avisa agora (não espera o watchdog).
+  a2uiFinalizeIncompleteSurfaces();
 }
 
 function onStreamError(errMsg) {
@@ -1243,6 +1245,8 @@ function onStreamError(errMsg) {
   // Fila: despacha a próxima mensagem pendente após o erro.
   maybeFlushChatQueue();
   a2uiSettleBusyIfIdle();
+  // Surface que ficou sem componentes: avisa agora (não espera o watchdog).
+  a2uiFinalizeIncompleteSurfaces();
 }
 
 function onStreamStopped() {
@@ -1264,6 +1268,8 @@ function onStreamStopped() {
   // Fila: despacha a próxima mensagem pendente após o stop.
   maybeFlushChatQueue();
   a2uiSettleBusyIfIdle();
+  // Surface que ficou sem componentes: avisa agora (não espera o watchdog).
+  a2uiFinalizeIncompleteSurfaces();
 }
 
 // ─── Mini-Questionário Interativo (ask_user MCP) ───
@@ -1718,7 +1724,14 @@ var A2UI_THEME_CSS = [
   // :host display:block é essencial: os componentes do catálogo Lit são
   // elementos INLINE por padrão, então o card encolhia para o tamanho do
   // conteúdo (os "cards finos" do exemplo do ChoicePicker).
-  ":host{display:block;width:100%;box-sizing:border-box;font-family:inherit;color:var(--text,#e6ecf5);}",
+  // ATENÇÃO: NÃO usar width:100% no :host. Este CSS é injetado em TODOS os
+  // shadow roots, inclusive no de cada botão; com width:100% cada botão virava
+  // uma caixa de largura total e, como .a2ui-row usa flex-wrap:wrap, os botões
+  // de um Row QUEBRAVAM para linhas separadas ("Voltar" em cima de "Avançar",
+  // layout verificado em navegador em 2026-10-08). O display:block sozinho já
+  // faz o componente ocupar a largura disponível quando é filho de Column/Card;
+  // como item de Row, a largura fica no tamanho do conteúdo (lado a lado).
+  ":host{display:block;box-sizing:border-box;font-family:inherit;color:var(--text,#e6ecf5);}",
   "@keyframes a2ui-card-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}",
   ".a2ui-card{display:block;position:relative;padding:16px 18px!important;",
   "border:1px solid color-mix(in srgb,var(--accent,#4f8cff) 45%,transparent)!important;",
@@ -1731,6 +1744,9 @@ var A2UI_THEME_CSS = [
   "background:linear-gradient(180deg,var(--accent,#4f8cff),transparent);}",
   ".a2ui-column{display:flex;flex-direction:column;gap:10px;}",
   ".a2ui-row{display:flex;flex-direction:row;gap:10px;align-items:center;flex-wrap:wrap;}",
+  // Botões dentro de um Row NUNCA devem esticar/ocupar a linha inteira: ficam
+  // lado a lado (o Row quebra a linha apenas quando realmente não couber).
+  ".a2ui-row>a2ui-basic-button,.a2ui-row>a2ui-button{width:auto;flex:0 0 auto;}",
   "p,h1,h2,h3,h4,h5{margin:0 0 6px;line-height:1.5;color:inherit;}",
   "h1,h2,h3{font-weight:600;letter-spacing:.01em;}",
   "p{font-size:.92rem;}",
@@ -1984,7 +2000,7 @@ function showA2uiIncompleteNotice() {
   var div = document.createElement("div");
   div.className = "chat-msg assistant";
   div.innerHTML = renderAssistantMarkdown(
-    "A interface interativa não foi concluída — a resposta foi interrompida antes de enviar os componentes. Peça para a IA gerar novamente.",
+    translate("chat.a2uiIncomplete"),
   );
   syncColorMode();
   bindInternalChatLinks(div);
@@ -2043,6 +2059,60 @@ function a2uiDropOrphanSurfaces() {
       a2uiSurfaceDestroy(surfaceId);
     }
   });
+}
+
+// a2uiFinalizeIncompleteSurfaces roda no ENCERRAMENTO do turno. As mensagens
+// a2ui do servidor chegam SEMPRE antes do evento terminal (chat:done/error/
+// stopped), então se a surface continua sem updateComponents foi porque a linha
+// de componentes não chegou (JSON inválido descartado no servidor, validação,
+// stream cortado). Não vale esperar os 12s do watchdog: remove a bolha vazia e
+// avisa o usuário, em vez de deixar "Loading surface..." na tela.
+function a2uiDestroyIncompleteSurfaces() {
+  var removed = 0;
+  Object.keys(a2uiSurfaces).forEach(function (surfaceId) {
+    var entry = a2uiSurfaces[surfaceId];
+    if (!entry || entry.hasComponents) return;
+    // Rastro no logs.db: o bridge do console encaminha textos com [a2ui].
+    // Sem isto o caminho comum (createSurface + updateDataModel sem
+    // updateComponents) era destruído sem nenhum registro — o watchdog que
+    // logava não chega a disparar porque a surface já não existe.
+    console.warn("[a2ui] surface " + surfaceId + " sem updateComponents com root — o card não foi exibido");
+    a2uiSurfaceDestroy(surfaceId);
+    removed++;
+  });
+  return removed;
+}
+
+function a2uiFinalizeIncompleteSurfaces() {
+  // Mesma condição do watchdog: com turno ou ação A2UI em andamento os
+  // componentes ainda podem chegar (o terminal pode ter sido processado antes
+  // de um lote da fila de polling).
+  if (chatSending || pendingA2uiAction > 0) return;
+  if (a2uiDestroyIncompleteSurfaces() > 0) showA2uiIncompleteNotice();
+}
+
+// onChatA2uiIncomplete recebe o diagnóstico do SERVIDOR (chunk
+// "a2ui_incomplete" → evento "chat:a2ui_incomplete"): a surface foi criada mas
+// a definição (updateComponents com root) não chegou nem depois da reemissão do
+// M2. Aqui a bolha vazia é removida e o usuário vê QUAIS surfaces falharam, em
+// vez do aviso genérico do finalizador/watchdog.
+function onChatA2uiIncomplete(data) {
+  var surfaces = String(data || "").trim();
+  console.warn("[a2ui] servidor reportou interface sem definição:", surfaces || "(sem surfaceId)");
+  var removed = a2uiDestroyIncompleteSurfaces();
+  if (removed === 0 && !surfaces) return;
+  if (!chatMessagesEl) return;
+  var div = document.createElement("div");
+  div.className = "chat-msg assistant";
+  div.innerHTML = renderAssistantMarkdown(
+    surfaces
+      ? translate("chat.a2uiIncompleteDetail", { surfaces: surfaces })
+      : translate("chat.a2uiIncomplete"),
+  );
+  syncColorMode();
+  bindInternalChatLinks(div);
+  chatMessagesEl.appendChild(div);
+  scheduleChatScrollToBottom();
 }
 
 // a2uiSurfaceDestroy remove a bolha e destrói o handle de UMA surface.
@@ -2201,9 +2271,23 @@ function onChatA2ui(data) {
     // Para as demais (updateComponents/updateDataModel/deleteSurface), envia.
     if (!isCreateSurface && entry) {
       entry.handle.processMessages([parsed]);
-      // Chegaram componentes: a surface é válida, cancela o watchdog.
-      entry.hasComponents = true;
-      a2uiClearSurfaceWatchdog(entry);
+      // SÓ updateComponents COM o componente raiz preenche a surface.
+      // updateDataModel NÃO conta como componentes (marcar hasComponents ali
+      // cancelava o watchdog e a bolha ficava presa em "Loading surface..."
+      // para sempre — caso real de 2026-10-08, surface paper_jam_wizard6).
+      // Sem root o renderer também fica em loading: exige o id "root" em vez
+      // de confiar só no verbo (fecha o caso de updateComponents vazio ou sem
+      // root vindo de servidor antigo/caminho síncrono).
+      var comps = parsed.updateComponents && parsed.updateComponents.components;
+      var hasRoot = Array.isArray(comps) && comps.some(function (c) { return c && c.id === "root"; });
+      if (hasRoot) {
+        entry.hasComponents = true;
+        a2uiClearSurfaceWatchdog(entry);
+      } else if (!entry.hasComponents) {
+        // Surface ainda incompleta: mantém o watchdog armado. Se ela JÁ estava
+        // completa, um update incremental (sem root) não pode rearmar nada.
+        a2uiArmSurfaceWatchdog(targetSurfaceId, entry);
+      }
     }
     // Tipo desconhecido pelo bundle embarcado seria ignorado em silêncio.
     if (parsed.updateComponents && entry) {
@@ -2237,7 +2321,7 @@ function fallbackA2uiToMarkdown(rawMsg, surfaceId) {
     var div = document.createElement("div");
     div.className = "chat-msg assistant";
     div.innerHTML = renderAssistantMarkdown(
-      "Não foi possível exibir a interface interativa gerada.",
+      translate("chat.a2uiRenderFailed"),
     );
     syncColorMode();
     bindInternalChatLinks(div);
@@ -2278,9 +2362,11 @@ function ensureA2uiSurface(surfaceId) {
     return null;
   }
 
-  // hasComponents fica true quando chega updateComponents/updateDataModel: sem
-  // isso, uma surface criada e nunca preenchida fica presa em "Loading surface..."
-  // (resposta truncada no meio do bloco a2ui).
+  // hasComponents fica true APENAS quando chega updateComponents (a mensagem
+  // que realmente define a árvore). updateDataModel não conta: sem isso, uma
+  // surface criada e nunca preenchida ficava presa em "Loading surface..."
+  // (resposta truncada no meio do bloco a2ui ou linha updateComponents
+  // descartada no servidor por JSON inválido).
   var entry = { handle: handle, bubble: div, theme: null, hasComponents: false };
   a2uiSurfaces[surfaceId] = entry;
   // Tema visual: injetado nos shadow roots do catálogo Lit (o CSS do app não
@@ -2319,11 +2405,11 @@ function applyLocalA2uiAction(surfaceId, action) {
   }
   var ctx = action.context || {};
   // ATENÇÃO: a chave NÃO pode ser `path`. O bind do renderer resolve um objeto
-  // com a chave `path` como DataBinding — um context `{"path":"/x"}` vira o
-  // VALOR de /x (número/string) e a ação é descartada com "Invalid action
-  // payload". Por isso o parâmetro é `target` (o fallback cobre um bundle que
-  // corrija essa colisão no futuro).
-  var path = typeof ctx.target === "string" ? ctx.target : typeof ctx.path === "string" ? ctx.path : "";
+  // com a chave `path` como DataBinding — um context `{"path":"/x"}` tem a
+  // chave REMOVIDA do context entregue (verificado no bundle em 2026-10-08: o
+  // clique chegou com context {}) e a ação não dispara. Por isso o parâmetro é
+  // `target` — não existe fallback para ctx.path.
+  var path = typeof ctx.target === "string" ? ctx.target : "";
   if (!path) {
     console.warn("[a2ui] ação local sem 'target' no context:", action.name);
     return;
@@ -2365,7 +2451,20 @@ function applyLocalA2uiAction(surfaceId, action) {
     // 'states' (opcional): um mapa de caminho→valor POR valor de /path. É assim
     // que um passo a passo troca o conteúdo de cada etapa sem ida ao servidor:
     // o cliente escolhe o mapa pelo índice do novo valor.
+    //
+    // 'statesPath' é a alternativa recomendada: o array fica UMA única vez no
+    // data model (via updateDataModel) e cada botão só referencia o caminho.
+    // Sem isso o LLM repetia o array inteiro em TODOS os botões — foi o payload
+    // gigante que quebrou o JSON do wizard de papel atolado em 2026-10-08.
     var states = Array.isArray(ctx.states) ? ctx.states : null;
+    if (!states && typeof ctx.statesPath === "string" && ctx.statesPath) {
+      var loadedStates = typeof handle.getDataModel === "function" ? handle.getDataModel(ctx.statesPath) : undefined;
+      if (Array.isArray(loadedStates)) {
+        states = loadedStates;
+      } else {
+        console.warn("[a2ui] " + action.name + ": statesPath sem array no data model:", ctx.statesPath);
+      }
+    }
     if (states && states.length) {
       var base = isFinite(min) ? min : 1;
       var idx = Number(next) - base;
@@ -2545,6 +2644,7 @@ function clearA2uiSurface() {
     "chat:question": onChatQuestion,
     "chat:question_cancelled": onChatQuestionCancelled,
     "chat:a2ui": onChatA2ui,
+    "chat:a2ui_incomplete": onChatA2uiIncomplete,
     // Captura de tela assistida (app-screenshot.js).
     "screenshot:request": onScreenshotRequest,
     "screenshot:overlay_close": onScreenshotOverlayClose,

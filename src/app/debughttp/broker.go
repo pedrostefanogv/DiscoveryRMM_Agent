@@ -23,7 +23,11 @@ type ChatEventBroker struct {
 	pollBuffer  []string // buffer circular para PollChatEvents (binding Wails)
 	pollMax     int      // limite máximo de eventos no buffer
 	pollWrite   int      // índice de escrita (circular)
-	pollDropped int64    // contador de eventos descartados (diagnóstico)
+	// B4: descartes separados POR CAUSA (antes um único contador somava as duas
+	// e o diagnóstico não dizia se o problema era inscrito SSE lento ou polling
+	// atrasado — causas e correções diferentes).
+	subscriberDropped int64 // canal SSE cheio (inscrito lento)
+	pollOverwritten   int64 // buffer de polling estourado (sobrescrita circular)
 }
 
 // NewChatEventBroker cria um broker de eventos de chat.
@@ -71,7 +75,7 @@ func (b *ChatEventBroker) Publish(eventType, data string) {
 		default:
 			// descarta se inscrito estiver lento (buffer cheio)
 			// B5: contabiliza a queda — antes a métrica ficava sempre em 0.
-			atomic.AddInt64(&b.pollDropped, 1)
+			atomic.AddInt64(&b.subscriberDropped, 1)
 		}
 	}
 	b.mu.RUnlock()
@@ -84,9 +88,14 @@ func (b *ChatEventBroker) Publish(eventType, data string) {
 	if len(b.pollBuffer) < b.pollMax {
 		b.pollBuffer = append(b.pollBuffer, line)
 	} else {
-		// Buffer circular: sobrescreve a posição mais antiga
+		// Buffer circular: sobrescreve a posição mais antiga.
+		// B4 (revisão 2026-10-08): a sobrescrita TAMBÉM é um evento perdido e
+		// antes não era contada — a métrica ficava em 0 mesmo com o polling
+		// atrasado (e o evento descartado costuma ser justamente o createSurface
+		// /updateDataModel, o começo do card).
 		b.pollBuffer[b.pollWrite] = line
 		b.pollWrite = (b.pollWrite + 1) % b.pollMax
+		atomic.AddInt64(&b.pollOverwritten, 1)
 	}
 	b.mu.Unlock()
 }
@@ -121,11 +130,15 @@ func (b *ChatEventBroker) DrainPollBuffer() []string {
 	return events
 }
 
-// PollDropped retorna o número de eventos descartados desde a última chamada
-// (quando o buffer estava cheio e o polling não conseguiu acompanhar).
-// Zera o contador após a leitura.
-func (b *ChatEventBroker) PollDropped() int64 {
-	return atomic.SwapInt64(&b.pollDropped, 0)
+// DrainDrops devolve (e zera) os descartes separados por causa:
+//   - subscriberDropped: inscrito SSE não consumiu o canal a tempo;
+//   - pollOverwritten:   o buffer circular de polling foi sobrescrito.
+//
+// Separar as causas importa para o diagnóstico: inscrito lento aponta para o
+// consumidor SSE (navegador/debug), enquanto sobrescrita aponta para o polling
+// do WebView não acompanhar o stream.
+func (b *ChatEventBroker) DrainDrops() (subscriberDropped, pollOverwritten int64) {
+	return atomic.SwapInt64(&b.subscriberDropped, 0), atomic.SwapInt64(&b.pollOverwritten, 0)
 }
 
 // FrontendFS guarda o filesystem do frontend embedado para o servidor HTTP.

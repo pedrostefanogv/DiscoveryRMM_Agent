@@ -30,6 +30,7 @@ func TestParseMultiRoundSSE_LoopProgress(t *testing.T) {
 		func(tok string) { tokens = append(tokens, tok) },
 		&pending,
 		func(round, maxRounds int) { received = append(received, progress{round, maxRounds}) },
+		nil, // onA2uiIncomplete
 	)
 	if err != nil {
 		t.Fatalf("parseMultiRoundSSEWithProgress erro: %v", err)
@@ -70,6 +71,7 @@ func TestParseMultiRoundSSE_LoopProgressWithoutCallback(t *testing.T) {
 		nil,
 		&pending,
 		func(round, maxRounds int) { callbackCalled = true },
+		nil, // onA2uiIncomplete
 	)
 	if err != nil {
 		t.Fatalf("erro: %v", err)
@@ -79,6 +81,35 @@ func TestParseMultiRoundSSE_LoopProgressWithoutCallback(t *testing.T) {
 	}
 	if callbackCalled {
 		t.Errorf("callback não deveria ser chamado com loopMaxRounds=0")
+	}
+}
+
+// O diagnóstico de interface incompleta do servidor (chunk "a2ui_incomplete")
+// precisa chegar ao callback: é o que permite a UI explicar POR QUE o card não
+// apareceu em vez do aviso genérico.
+func TestParseMultiRoundSSE_A2uiIncompleteIsForwarded(t *testing.T) {
+	const sse = `data: {"type":"a2ui_incomplete","content":"paper_jam_wizard6"}
+` +
+		`data: {"type":"done","sessionId":"s1"}`
+
+	var pending []pendingToolCall
+	var received []string
+
+	_, done, err := (&Service{}).parseMultiRoundSSEWithProgress(
+		strings.NewReader(sse),
+		nil,
+		&pending,
+		nil,
+		func(surfaces string) { received = append(received, surfaces) },
+	)
+	if err != nil {
+		t.Fatalf("erro: %v", err)
+	}
+	if !done {
+		t.Errorf("esperado done=true")
+	}
+	if len(received) != 1 || received[0] != "paper_jam_wizard6" {
+		t.Fatalf("callback de a2ui_incomplete = %v, quer [paper_jam_wizard6]", received)
 	}
 }
 

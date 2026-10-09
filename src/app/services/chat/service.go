@@ -412,6 +412,12 @@ func (s *Service) StartStream(message string) {
 				progressJSON, _ := json.Marshal(map[string]int{"round": round, "maxRounds": maxRounds})
 				s.publishChatEvent("chat:loop_progress", string(progressJSON))
 			},
+			func(surfaces string) {
+				// Interface criada sem definição (nem após a reemissão): a UI explica
+				// POR QUE o card não apareceu em vez do aviso genérico.
+				s.emitEvent("chat:a2ui_incomplete", surfaces)
+				s.publishChatEvent("chat:a2ui_incomplete", surfaces)
+			},
 			s.mcpExecuteForChat,
 			func(a2uiMsg string) {
 				s.emitEvent("chat:a2ui", a2uiMsg)

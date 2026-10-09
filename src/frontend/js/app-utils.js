@@ -538,6 +538,11 @@ var APP_I18N_DICTIONARY = {
     "chat.pasteImageFailed": "Não foi possível ler a imagem colada",
     "chat.a2uiJsonToggle": "JSON da interface (clique para exibir)",
     "chat.a2uiUnsupported": "⚠ Componente não suportado por esta versão do aplicativo: {components}",
+    "chat.a2uiIncomplete":
+      "A interface interativa não foi concluída — a resposta foi interrompida antes de enviar os componentes. Peça para a IA gerar novamente.",
+    "chat.a2uiRenderFailed": "Não foi possível exibir a interface interativa gerada.",
+    "chat.a2uiIncompleteDetail":
+      "A interface interativa não foi concluída (surface: {surfaces}) — a resposta veio sem os componentes. Peça para a IA gerar novamente.",
     "screenshot.overlayHint": "Arraste para selecionar a área ou clique numa janela; a roda do mouse dá zoom e o botão do meio move o print",
     "screenshot.annotRect": "Retângulo",
     "screenshot.annotCircle": "Círculo/elipse",
@@ -1255,6 +1260,11 @@ var APP_I18N_DICTIONARY = {
     "chat.pasteImageFailed": "Could not read the pasted image",
     "chat.a2uiJsonToggle": "Interface JSON (click to show)",
     "chat.a2uiUnsupported": "⚠ Component not supported by this app version: {components}",
+    "chat.a2uiIncomplete":
+      "The interactive interface was not completed — the response was interrupted before the components were sent. Ask the AI to generate it again.",
+    "chat.a2uiRenderFailed": "The generated interactive interface could not be displayed.",
+    "chat.a2uiIncompleteDetail":
+      "The interactive interface was not completed (surface: {surfaces}) — the response came without the components. Ask the AI to generate it again.",
     "screenshot.overlayHint": "Drag to select an area or click a window; the wheel zooms and the middle button pans the print",
     "screenshot.annotRect": "Rectangle",
     "screenshot.annotCircle": "Circle/ellipse",
