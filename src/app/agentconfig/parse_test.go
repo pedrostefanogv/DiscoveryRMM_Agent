@@ -373,5 +373,116 @@ func TestParseAgentConfiguration_CloudBootstrapServerOnly(t *testing.T) {
 	}
 }
 
+func TestParseAgentConfiguration_AgentHomeTabDefaultStatus(t *testing.T) {
+	cfg, err := ParseAgentConfiguration([]byte(`{"siteId":"s1"}`))
+	if err != nil {
+		t.Fatalf("expected parse, got %v", err)
+	}
+	if cfg.AgentHomeTab != "status" {
+		t.Fatalf("expected agentHomeTab default \"status\", got %q", cfg.AgentHomeTab)
+	}
+}
+
+func TestParseAgentConfiguration_AgentHomeTabFlat(t *testing.T) {
+	cfg, err := ParseAgentConfiguration([]byte(`{"agentHomeTab":"support"}`))
+	if err != nil {
+		t.Fatalf("expected flat parse, got %v", err)
+	}
+	if cfg.AgentHomeTab != "support" {
+		t.Fatalf("expected agentHomeTab=support, got %q", cfg.AgentHomeTab)
+	}
+
+	normalized, err := ParseAgentConfiguration([]byte(`{"agentHomeTab":"  STORE "}`))
+	if err != nil {
+		t.Fatalf("expected flat parse, got %v", err)
+	}
+	if normalized.AgentHomeTab != "store" {
+		t.Fatalf("expected agentHomeTab normalized to store, got %q", normalized.AgentHomeTab)
+	}
+}
+
+func TestParseAgentConfiguration_AgentHomeTabHierarchySiteWins(t *testing.T) {
+	payload := []byte(`{
+		"server": {"agentHomeTab": "chat"},
+		"client": {"agentHomeTab": "knowledge"},
+		"site": {"agentHomeTab": "support"}
+	}`)
+	cfg, err := ParseAgentConfiguration(payload)
+	if err != nil {
+		t.Fatalf("expected hierarchical parse, got %v", err)
+	}
+	// Precedência: site > client > server → site=support vence.
+	if cfg.AgentHomeTab != "support" {
+		t.Fatalf("expected site agentHomeTab=support, got %q", cfg.AgentHomeTab)
+	}
+}
+
+func TestParseAgentConfiguration_AgentHomeTabUnknownIdIsPreservedForTheUi(t *testing.T) {
+	// O agent não mantém allow-list de abas: o servidor é a autoridade da lista e
+	// o painel só ativa abas que conhece (AGENT_HOME_TAB_BUTTONS), caindo para
+	// "status" em id desconhecido. Aqui garantimos apenas o pass-through normalizado.
+	flat, err := ParseAgentConfiguration([]byte(`{"agentHomeTab":"bogus"}`))
+	if err != nil {
+		t.Fatalf("expected flat parse, got %v", err)
+	}
+	if flat.AgentHomeTab != "bogus" {
+		t.Fatalf("expected unknown agentHomeTab to be preserved, got %q", flat.AgentHomeTab)
+	}
+
+	hierarchical := []byte(`{
+		"server": {"agentHomeTab": "chat"},
+		"client": {"agentHomeTab": "knowledge"},
+		"site": {"agentHomeTab": "NOT-A-TAB"}
+	}`)
+	cfg, err := ParseAgentConfiguration(hierarchical)
+	if err != nil {
+		t.Fatalf("expected hierarchical parse, got %v", err)
+	}
+	if cfg.AgentHomeTab != "not-a-tab" {
+		t.Fatalf("expected unknown site agentHomeTab normalized to lowercase, got %q", cfg.AgentHomeTab)
+	}
+}
+
+func TestParseAgentConfiguration_AgentHomeTabEmptySiteInheritsClient(t *testing.T) {
+	payload := []byte(`{
+		"server": {"agentHomeTab": "chat"},
+		"client": {"agentHomeTab": "knowledge"},
+		"site": {"agentHomeTab": ""}
+	}`)
+	cfg, err := ParseAgentConfiguration(payload)
+	if err != nil {
+		t.Fatalf("expected hierarchical parse, got %v", err)
+	}
+	// Site vazio não deve sobrescrever; herda do client.
+	if cfg.AgentHomeTab != "knowledge" {
+		t.Fatalf("expected empty site to inherit client agentHomeTab=knowledge, got %q", cfg.AgentHomeTab)
+	}
+}
+
+func TestNormalizeAgentHomeTab(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"", "status"},
+		{"   ", "status"},
+		{"STATUS", "status"},
+		{" Store ", "store"},
+		{"updates", "updates"},
+		{"chat", "chat"},
+		{"support", "support"},
+		{"knowledge", "knowledge"},
+		// Sem allow-list no agent: id é normalizado (trim/lowercase) e o painel
+		// decide se consegue abrir a aba.
+		{" Inventory ", "inventory"},
+		{"unknown", "unknown"},
+	}
+	for _, tc := range cases {
+		if got := NormalizeAgentHomeTab(tc.in); got != tc.want {
+			t.Fatalf("NormalizeAgentHomeTab(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 func ptrBool(v bool) *bool { return &v }
 func ptrInt(v int) *int    { return &v }

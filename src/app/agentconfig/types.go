@@ -107,6 +107,7 @@ type AgentConfiguration struct {
 	CloudBootstrapEnabled             *bool                           `json:"cloudBootstrapEnabled"`
 	AppStoreEnabled                   *bool                           `json:"appStoreEnabled"`
 	AutomationP2PWingetInstallEnabled *bool                           `json:"automationP2pWingetInstallEnabled"`
+	AgentHomeTab                      string                          `json:"agentHomeTab"`
 	InventoryIntervalHours            *int                            `json:"inventoryIntervalHours"`
 	AgentHeartbeatIntervalSeconds     *int                            `json:"agentHeartbeatIntervalSeconds"`
 	SiteID                            string                          `json:"siteId"`
@@ -140,6 +141,7 @@ type ServerConfiguration struct {
 	ZeroTouchEnabled                  bool   `json:"zeroTouchEnabled"`
 	AppStorePolicy                    string `json:"appStorePolicy"`
 	AutomationP2PWingetInstallEnabled *bool  `json:"automationP2pWingetInstallEnabled"`
+	AgentHomeTab                      string `json:"agentHomeTab"`
 	InventoryIntervalHours            int    `json:"inventoryIntervalHours"`
 	AgentUpdatePolicyJSON             string `json:"agentUpdatePolicyJson"`
 	AgentHeartbeatIntervalSeconds     int    `json:"agentHeartbeatIntervalSeconds"`
@@ -178,6 +180,7 @@ type ClientConfiguration struct {
 	ZeroTouchEnabled                  *bool   `json:"zeroTouchEnabled"`
 	AppStorePolicy                    *string `json:"appStorePolicy"`
 	AutomationP2PWingetInstallEnabled *bool   `json:"automationP2pWingetInstallEnabled"`
+	AgentHomeTab                      *string `json:"agentHomeTab"`
 	AIIntegrationSettingsJSON         *string `json:"aiIntegrationSettingsJson"`
 	InventoryIntervalHours            *int    `json:"inventoryIntervalHours"`
 	AgentUpdatePolicyJSON             *string `json:"agentUpdatePolicyJson"`
@@ -207,6 +210,7 @@ type SiteConfiguration struct {
 	ZeroTouchEnabled                  *bool   `json:"zeroTouchEnabled"`
 	AppStorePolicy                    *string `json:"appStorePolicy"`
 	AutomationP2PWingetInstallEnabled *bool   `json:"automationP2pWingetInstallEnabled"`
+	AgentHomeTab                      *string `json:"agentHomeTab"`
 	AIIntegrationSettingsJSON         *string `json:"aiIntegrationSettingsJson"`
 	InventoryIntervalHours            *int    `json:"inventoryIntervalHours"`
 	AgentUpdatePolicyJSON             *string `json:"agentUpdatePolicyJson"`

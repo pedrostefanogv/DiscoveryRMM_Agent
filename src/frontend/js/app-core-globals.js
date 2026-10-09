@@ -393,6 +393,11 @@ function applyRuntimeTabVisibility() {
   if (typeof applyAgentFeatureVisibility === 'function') {
     applyAgentFeatureVisibility();
   }
+
+  // Se a aba ativa foi bloqueada por feature flag do servidor, volta para Status.
+  if (typeof ensureActiveTabVisible === 'function') {
+    ensureActiveTabVisible();
+  }
 }
 
 function setRuntimeFlags(flags) {

@@ -34,6 +34,8 @@ func ParseAgentConfiguration(data []byte) (AgentConfiguration, error) {
 		enabled := true
 		cfg.AutomationP2PWingetInstallEnabled = &enabled
 	}
+	// agentHomeTab é sempre normalizado (ausente/vazio/inválido → "status").
+	cfg.AgentHomeTab = NormalizeAgentHomeTab(cfg.AgentHomeTab)
 	return cfg, nil
 }
 
@@ -102,6 +104,7 @@ func parseLegacyAgentConfiguration(data []byte) (AgentConfiguration, error) {
 		CloudBootstrapEnabled:             getBoolPtr("cloudBootstrapEnabled"),
 		AppStoreEnabled:                   getBoolPtr("appStoreEnabled"),
 		AutomationP2PWingetInstallEnabled: getBoolPtr("automationP2pWingetInstallEnabled"),
+		AgentHomeTab:                      NormalizeAgentHomeTab(getString("agentHomeTab")),
 		InventoryIntervalHours:            getIntPtr("inventoryIntervalHours"),
 		AgentHeartbeatIntervalSeconds:     getIntPtr("agentHeartbeatIntervalSeconds"),
 		SiteID:                            getString("siteId"),
@@ -399,6 +402,9 @@ func mergeAgentConfigResponse(resp *AgentConfigResponse) AgentConfiguration {
 		),
 	)
 
+	// Aba inicial do agent: site > client > server (apenas strings não vazias).
+	cfg.AgentHomeTab = resolveAgentHomeTab(site, cli, srv)
+
 	return cfg
 }
 
@@ -543,6 +549,34 @@ func NormalizeRolloutDefaults(cfg *AgentRolloutConfig) {
 	}
 	cfg.CommandResultOfflineMode = NormalizeOfflineQueueMode(cfg.CommandResultOfflineMode)
 	cfg.P2PTelemetryOfflineMode = NormalizeOfflineQueueMode(cfg.P2PTelemetryOfflineMode)
+}
+
+// NormalizeAgentHomeTab normaliza o id da aba inicial do agent: trim + lowercase
+// e default "status" quando vazio. NÃO há allow-list duplicada aqui de propósito:
+// a lista de valores aceitos é do servidor (AgentHomeTabCatalog, publicada na
+// metadata de configuração) e o painel só ativa abas que conhece
+// (AGENT_HOME_TAB_BUTTONS em app-init.js), caindo para "status" em id desconhecido.
+func NormalizeAgentHomeTab(tab string) string {
+	normalized := strings.ToLower(strings.TrimSpace(tab))
+	if normalized == "" {
+		return "status"
+	}
+	return normalized
+}
+
+// resolveAgentHomeTab resolve a aba inicial no formato hierárquico
+// considerando apenas strings não vazias. Precedência: site > client > server.
+func resolveAgentHomeTab(site *SiteConfiguration, cli *ClientConfiguration, srv *ServerConfiguration) string {
+	if site != nil && site.AgentHomeTab != nil && strings.TrimSpace(*site.AgentHomeTab) != "" {
+		return NormalizeAgentHomeTab(*site.AgentHomeTab)
+	}
+	if cli != nil && cli.AgentHomeTab != nil && strings.TrimSpace(*cli.AgentHomeTab) != "" {
+		return NormalizeAgentHomeTab(*cli.AgentHomeTab)
+	}
+	if srv != nil {
+		return NormalizeAgentHomeTab(srv.AgentHomeTab)
+	}
+	return "status"
 }
 
 func normalizeConsolidationConfigDefaults(cfg *AgentConsolidationConfig) {

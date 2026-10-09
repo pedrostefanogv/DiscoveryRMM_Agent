@@ -529,9 +529,13 @@ async function bootstrapApp() {
   }
 
   if (isDebugRuntimeMode()) {
+    // Modo debug preserva o comportamento atual: abre logs.
     setActiveTab("logs");
     loadLogs();
   } else {
+    // Pinta a tela de status imediatamente (não depende da API de configuração).
+    // A aba inicial configurada (agentHomeTab) é aplicada mais abaixo, depois
+    // dos módulos inicializados.
     setActiveTab("status");
     loadStatusOverview();
   }
@@ -541,13 +545,10 @@ async function bootstrapApp() {
     window.__discoveryAgentConfig = await appApi().GetAgentConfiguration();
     if (applyAgentFeatureVisibility()) {
       // Ensure the active tab is visible (fallback to status)
-      var active = document.querySelector(".sidebar-link.active");
-      if (active && active.classList.contains("hidden")) {
-        setActiveTab("status");
-      }
+      ensureActiveTabVisible();
     }
   } catch (_) {
-    // ignore; leave tabs as-is
+    // ignore; a tela de status já foi carregada acima
   }
 
   loadCatalog();
@@ -559,6 +560,12 @@ async function bootstrapApp() {
   initDebug();
   if (typeof initP2PPage === "function") {
     initP2PPage();
+  }
+
+  // Aba inicial herdável (agentHomeTab) — depois dos módulos inicializados para
+  // que o clique programático tenha as mesmas garantias de um clique do usuário.
+  if (!isDebugRuntimeMode()) {
+    applyAgentHomeTab();
   }
 
   if (
@@ -621,6 +628,75 @@ function applyAgentFeatureVisibility() {
   );
 
   return true;
+}
+
+// ---- Aba inicial do agent (agentHomeTab) ----
+
+// AGENT_HOME_TAB_BUTTONS é a lista de CAPACIDADE do painel: apenas as abas que o
+// agent consegue abrir no modo normal, com o respectivo botão da sidebar. A lista
+// de valores aceitos é do servidor (AgentHomeTabCatalog, publicada na metadata);
+// um id que não esteja aqui cai para Status (resolveAgentHomeTab).
+var AGENT_HOME_TAB_BUTTONS = {
+  status: tabStatusBtn,
+  store: tabStoreBtn,
+  updates: tabUpdatesBtn,
+  chat: tabChatBtn,
+  support: tabSupportBtn,
+  knowledge: tabKnowledgeBtn,
+};
+
+// ensureActiveTabVisible devolve o agent para Status quando a aba ativa foi
+// escondida (feature flag do servidor ou gate de modo de runtime). Devolve o id
+// da aba ativa ao final.
+function ensureActiveTabVisible() {
+  var active = document.querySelector(".sidebar-link.active");
+  if (active && active.classList.contains("hidden")) {
+    setActiveTab("status");
+    if (typeof loadStatusOverview === "function") {
+      loadStatusOverview();
+    }
+    return "status";
+  }
+  return activeTab;
+}
+
+// resolveAgentHomeTab lê window.__discoveryAgentConfig.agentHomeTab e devolve o
+// id da aba inicial quando ele é elegível e o botão correspondente existe e não
+// está escondido; caso contrário devolve "status".
+function resolveAgentHomeTab() {
+  var cfg = window.__discoveryAgentConfig;
+  var raw = cfg && typeof cfg.agentHomeTab === "string" ? cfg.agentHomeTab : "";
+  var tab = raw.trim().toLowerCase();
+  if (!Object.prototype.hasOwnProperty.call(AGENT_HOME_TAB_BUTTONS, tab)) {
+    return "status";
+  }
+  var btn = AGENT_HOME_TAB_BUTTONS[tab];
+  if (!btn || btn.classList.contains("hidden")) {
+    return "status";
+  }
+  return tab;
+}
+
+// applyAgentHomeTab ativa a aba inicial resolvida reaproveitando os handlers de
+// clique existentes (que disparam os loaders). Sem botão disponível, cai para
+// status.
+function applyAgentHomeTab() {
+  var tab = resolveAgentHomeTab();
+  // Já é a aba ativa (ex.: status pintado no bootstrap): evita recarregar duas
+  // vezes a mesma aba.
+  if (tab === activeTab) {
+    return tab;
+  }
+  var btn = AGENT_HOME_TAB_BUTTONS[tab];
+  if (btn) {
+    btn.click();
+    return tab;
+  }
+  setActiveTab("status");
+  if (typeof loadStatusOverview === "function") {
+    loadStatusOverview();
+  }
+  return "status";
 }
 
 bootstrapApp();

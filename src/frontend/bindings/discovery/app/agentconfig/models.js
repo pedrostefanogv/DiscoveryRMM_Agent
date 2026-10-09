@@ -139,6 +139,13 @@ export class AgentConfiguration {
              */
             this["automationP2pWingetInstallEnabled"] = null;
         }
+        if (!("agentHomeTab" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["agentHomeTab"] = "";
+        }
         if (!("inventoryIntervalHours" in $$source)) {
             /**
              * @member
@@ -245,30 +252,30 @@ export class AgentConfiguration {
      * @returns {AgentConfiguration}
      */
     static createFrom($$source = {}) {
-        const $$createField22_0 = $$createType0;
-        const $$createField23_0 = $$createType1;
-        const $$createField24_0 = $$createType2;
-        const $$createField25_0 = $$createType4;
-        const $$createField26_0 = $$createType5;
-        const $$createField27_0 = $$createType6;
+        const $$createField23_0 = $$createType0;
+        const $$createField24_0 = $$createType1;
+        const $$createField25_0 = $$createType2;
+        const $$createField26_0 = $$createType4;
+        const $$createField27_0 = $$createType5;
+        const $$createField28_0 = $$createType6;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("agentUpdate" in $$parsedSource) {
-            $$parsedSource["agentUpdate"] = $$createField22_0($$parsedSource["agentUpdate"]);
+            $$parsedSource["agentUpdate"] = $$createField23_0($$parsedSource["agentUpdate"]);
         }
         if ("psadt" in $$parsedSource) {
-            $$parsedSource["psadt"] = $$createField23_0($$parsedSource["psadt"]);
+            $$parsedSource["psadt"] = $$createField24_0($$parsedSource["psadt"]);
         }
         if ("notificationBranding" in $$parsedSource) {
-            $$parsedSource["notificationBranding"] = $$createField24_0($$parsedSource["notificationBranding"]);
+            $$parsedSource["notificationBranding"] = $$createField25_0($$parsedSource["notificationBranding"]);
         }
         if ("notificationPolicies" in $$parsedSource) {
-            $$parsedSource["notificationPolicies"] = $$createField25_0($$parsedSource["notificationPolicies"]);
+            $$parsedSource["notificationPolicies"] = $$createField26_0($$parsedSource["notificationPolicies"]);
         }
         if ("consolidation" in $$parsedSource) {
-            $$parsedSource["consolidation"] = $$createField26_0($$parsedSource["consolidation"]);
+            $$parsedSource["consolidation"] = $$createField27_0($$parsedSource["consolidation"]);
         }
         if ("rollout" in $$parsedSource) {
-            $$parsedSource["rollout"] = $$createField27_0($$parsedSource["rollout"]);
+            $$parsedSource["rollout"] = $$createField28_0($$parsedSource["rollout"]);
         }
         return new AgentConfiguration(/** @type {Partial<AgentConfiguration>} */($$parsedSource));
     }
