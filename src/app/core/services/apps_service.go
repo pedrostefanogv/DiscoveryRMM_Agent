@@ -68,6 +68,28 @@ func (s *AppsService) InstallWithSwitches(ctx context.Context, id, silent, silen
 	return s.winget.Install(ctx, packageID)
 }
 
+// InstallAsUser instala SEM forçar escopo de máquina, para pacotes cujo
+// manifesto só oferece instalador user-scope (ex.: Brave.Brave, `Scope: user`).
+// Deve ser chamado com um ctx que carregue o token da sessão interativa
+// (ctxutil.WithProcessUserToken): aí o winget roda na identidade do usuário
+// logado, não exige admin e o app fica no perfil dele. Chocolatey ignora
+// escopo (também cai no provider winget quando disponível).
+func (s *AppsService) InstallAsUser(ctx context.Context, id, silent, silentWithProgress string) (string, error) {
+	manager, packageID, err := s.resolvePackageTarget(id)
+	if err != nil {
+		return "", err
+	}
+	if manager == packageManagerChocolatey {
+		return s.chocolatey.Install(ctx, packageID)
+	}
+	if wp, ok := s.winget.(interface {
+		InstallWithScope(context.Context, string, string, string, string) (string, error)
+	}); ok {
+		return wp.InstallWithScope(ctx, packageID, silent, silentWithProgress, "")
+	}
+	return s.winget.Install(ctx, packageID)
+}
+
 func (s *AppsService) Uninstall(ctx context.Context, id string) (string, error) {
 	manager, packageID, err := s.resolvePackageTarget(id)
 	if err != nil {

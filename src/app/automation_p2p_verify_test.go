@@ -75,6 +75,21 @@ func TestExecuteHiddenProcessHonorsParentDeadline(t *testing.T) {
 	}
 }
 
+// Sem sessão interativa não existe caminho para um pacote user-scope: o erro
+// tem de ser EXPLÍCITO (e nada pode ser executado) em vez de um fallback
+// silencioso que reporta sucesso sem instalar.
+func TestInstallInUserSessionWithoutInteractiveSession(t *testing.T) {
+	orig := activeUserTokenFn
+	defer func() { activeUserTokenFn = orig }()
+	activeUserTokenFn = func(ctx context.Context) (context.Context, func(), bool) {
+		return ctx, func() {}, false
+	}
+	m := &automationPackageManagerRouter{logf: func(string, ...any) {}}
+	if _, err := m.installInUserSession(context.Background(), "brave.brave", "", ""); err == nil {
+		t.Fatal("esperado erro explicito quando nao ha sessao interativa ativa")
+	}
+}
+
 // O caso real do Brave: instalador stub saiu/travou sem instalar machine-scope.
 func TestLocalInstallVerified_BraveStubDoesNotInstall(t *testing.T) {
 	if localInstallVerified("brave.brave", stubInstalledWithoutBrave, nil, "", nil, "install") {

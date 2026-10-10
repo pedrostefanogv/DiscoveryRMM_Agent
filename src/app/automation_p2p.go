@@ -54,7 +54,7 @@ func (m *automationPackageManagerRouter) Install(ctx context.Context, id string)
 	catSilent, catSilentWithProgress := m.catalogSilentSwitches(id)
 
 	if !m.shouldUseP2PForWingetInstall() {
-		return m.fallback.InstallWithSwitches(ctx, id, catSilent, catSilentWithProgress)
+		return m.installMachineThenUser(ctx, id, catSilent, catSilentWithProgress)
 	}
 
 	output, p2pErr := m.installViaP2P(ctx, id)
@@ -83,7 +83,7 @@ func (m *automationPackageManagerRouter) Install(ctx context.Context, id string)
 		}
 	}
 
-	fallbackOut, fallbackErr := m.fallback.InstallWithSwitches(ctx, id, catSilent, catSilentWithProgress)
+	fallbackOut, fallbackErr := m.installMachineThenUser(ctx, id, catSilent, catSilentWithProgress)
 	if fallbackErr != nil {
 		return fallbackOut, fmt.Errorf("p2p e winget falharam: p2p=%v; winget=%w", p2pErr, fallbackErr)
 	}
@@ -100,7 +100,7 @@ func (m *automationPackageManagerRouter) Upgrade(ctx context.Context, id string)
 	catSilent, catSilentWithProgress := m.catalogSilentSwitches(id)
 
 	if !m.shouldUseP2PForWingetInstall() {
-		return m.fallback.UpgradeWithSwitches(ctx, id, catSilent, catSilentWithProgress)
+		return m.upgradeMachineThenUser(ctx, id, catSilent, catSilentWithProgress)
 	}
 
 	output, p2pErr := m.installViaP2P(ctx, id)
@@ -125,11 +125,78 @@ func (m *automationPackageManagerRouter) Upgrade(ctx context.Context, id string)
 		}
 	}
 
-	fallbackOut, fallbackErr := m.fallback.UpgradeWithSwitches(ctx, id, catSilent, catSilentWithProgress)
+	fallbackOut, fallbackErr := m.upgradeMachineThenUser(ctx, id, catSilent, catSilentWithProgress)
 	if fallbackErr != nil {
 		return fallbackOut, fmt.Errorf("p2p e winget falharam: p2p=%v; winget=%w", p2pErr, fallbackErr)
 	}
 	return fallbackOut, nil
+}
+
+// installMachineThenUser tenta o caminho normal (escopo de máquina, como SYSTEM)
+// e, se ele falhar, tenta na IDENTIDADE do usuário logado, SEM forçar escopo.
+//
+// Esse segundo caminho é o único possível para pacotes cujo manifesto winget só
+// oferece instalador USER-scope (ex.: Brave.Brave, `Scope: user`): `--scope
+// machine` não tem instalador aplicável, a execução direta do stub como SYSTEM
+// trava e nada é instalado para ninguém. Rodando como o usuário, a instalação
+// não exige admin e o app fica no perfil dele — genérico para QUALQUER pacote
+// user-scope, não só o Brave.
+//
+// Sem sessão interativa (nenhum usuário logado, ex.: servidor) o erro de
+// máquina é devolvido com o motivo registrado — comportamento inalterado.
+func (m *automationPackageManagerRouter) installMachineThenUser(ctx context.Context, id, silent, silentWithProgress string) (string, error) {
+	out, err := m.fallback.InstallWithSwitches(ctx, id, silent, silentWithProgress)
+	if err == nil {
+		return out, nil
+	}
+	userOut, userErr := m.installInUserSession(ctx, id, silent, silentWithProgress)
+	if userErr == nil {
+		return userOut, nil
+	}
+	m.logf("[automation][p2p] fallback no contexto do usuario nao concluiu packageId=%s motivo=%v", strings.TrimSpace(id), userErr)
+	return out, fmt.Errorf("%w (fallback na sessao do usuario tambem falhou: %v)", err, userErr)
+}
+
+// upgradeMachineThenUser é o equivalente para update: `winget upgrade` não usa
+// --scope, então basta repetir a operação no contexto do usuário logado.
+func (m *automationPackageManagerRouter) upgradeMachineThenUser(ctx context.Context, id, silent, silentWithProgress string) (string, error) {
+	out, err := m.fallback.UpgradeWithSwitches(ctx, id, silent, silentWithProgress)
+	if err == nil {
+		return out, nil
+	}
+	userCtx, cleanup, ok := activeUserTokenFn(ctx)
+	if !ok {
+		return out, err
+	}
+	defer cleanup()
+	m.logf("[automation][p2p] tentando upgrade na sessao do usuario logado packageId=%s", strings.TrimSpace(id))
+	userOut, userErr := m.fallback.UpgradeWithSwitches(userCtx, id, silent, silentWithProgress)
+	if userErr == nil {
+		return userOut, nil
+	}
+	return out, fmt.Errorf("%w (upgrade na sessao do usuario tambem falhou: %v)", err, userErr)
+}
+
+// installInUserSession executa a instalação no perfil do usuário da sessão
+// interativa e CONFIRMA o resultado no MESMO contexto — `winget list` como
+// SYSTEM não enxerga pacotes per-user, então verificar fora do contexto do
+// usuário acusaria falso negativo.
+func (m *automationPackageManagerRouter) installInUserSession(ctx context.Context, id, silent, silentWithProgress string) (string, error) {
+	userCtx, cleanup, ok := activeUserTokenFn(ctx)
+	if !ok {
+		return "", fmt.Errorf("sem sessao interativa ativa: pacote sem instalador de escopo de maquina e o agente roda como SYSTEM")
+	}
+	defer cleanup()
+	m.logf("[automation][p2p] tentando instalacao na sessao do usuario logado packageId=%s (pacote sem instalador machine)", strings.TrimSpace(id))
+	userOut, userErr := m.fallback.InstallAsUser(userCtx, id, silent, silentWithProgress)
+	if userErr != nil {
+		return userOut, userErr
+	}
+	if m.verifyLocalInstallResult(userCtx, id, "install") {
+		m.logf("[automation][p2p] instalado no perfil do usuario logado packageId=%s", strings.TrimSpace(id))
+		return userOut, nil
+	}
+	return userOut, fmt.Errorf("winget concluiu sem instalar o pacote no perfil do usuario")
 }
 
 func (m *automationPackageManagerRouter) UpgradeAll(ctx context.Context) (string, error) {
@@ -1146,6 +1213,10 @@ func executeHiddenProcess(parent context.Context, timeout time.Duration, executa
 
 	cmd := exec.CommandContext(ctx, executable, args...)
 	processutil.HideWindow(cmd)
+	// Honra um token de usuário colocado no ctx (sessão interativa): é o que
+	// permite executar um instalador USER-scope no perfil do usuário logado
+	// (ex.: Brave, cujo manifesto declara `Scope: user`) sem exigir admin.
+	processutil.ApplyUserContext(ctx, cmd)
 	// Captura a saída manualmente (em vez de CombinedOutput) para poder atribuir o
 	// processo a um Job Object antes do Wait: o exec.CommandContext mata apenas o
 	// processo principal no timeout; instaladores stub deixam filhos vivos

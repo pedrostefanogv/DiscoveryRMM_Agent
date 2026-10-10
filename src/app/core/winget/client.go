@@ -32,8 +32,30 @@ func (c *Client) Install(ctx context.Context, id string) (string, error) {
 // --custom ADICIONA aos switches padrão do winget (preserva --accept-*-agreements),
 // ao contrário de --override que os substituiria. Switches vazios = comportamento padrão.
 func (c *Client) InstallWithSwitches(ctx context.Context, id, silent, silentWithProgress string) (string, error) {
-	if err := validateID(id); err != nil {
+	return c.InstallWithScope(ctx, id, silent, silentWithProgress, "machine")
+}
+
+// InstallWithScope instala com um escopo explícito. scope VAZIO omite --scope
+// e deixa o winget escolher o instalador aplicável do manifesto.
+//
+// Usado para pacotes cujo manifesto só oferece instalador USER-scope (ex.:
+// Brave.Brave declara `Scope: user`): `--scope machine` não tem instalador
+// aplicável e a instalação falha. Esses pacotes são instalados rodando o
+// winget na identidade do usuário logado (CreateProcessAsUser): não exige
+// admin e o app fica no perfil do usuário.
+func (c *Client) InstallWithScope(ctx context.Context, id, silent, silentWithProgress, scope string) (string, error) {
+	args, err := buildInstallArgs(id, silent, silentWithProgress, scope)
+	if err != nil {
 		return "", err
+	}
+	return c.run(ctx, args...)
+}
+
+// buildInstallArgs é puro (testável sem executar winget) e monta os argumentos
+// de instalação.
+func buildInstallArgs(id, silent, silentWithProgress, scope string) ([]string, error) {
+	if err := validateID(id); err != nil {
+		return nil, err
 	}
 	sw := strings.TrimSpace(silent)
 	if sw == "" {
@@ -43,11 +65,15 @@ func (c *Client) InstallWithSwitches(ctx context.Context, id, silent, silentWith
 		"install",
 		"--id", id,
 		"--silent",
-		"--scope", "machine",
+	}
+	if s := strings.TrimSpace(scope); s != "" {
+		args = append(args, "--scope", s)
+	}
+	args = append(args,
 		"--accept-source-agreements",
 		"--accept-package-agreements",
 		"--disable-interactivity",
-	}
+	)
 	// C7: só repassamos switches do catálogo via --custom quando eles são
 	// argumentos válidos para o instalador do pacote. Switches de .exe (ex.:
 	// /S do NSIS) aplicados a pacotes MSI causam "0x8a15004a: Arguments for
@@ -57,7 +83,7 @@ func (c *Client) InstallWithSwitches(ctx context.Context, id, silent, silentWith
 	if sw != "" && !looksLikeExeOnlySwitch(sw) {
 		args = append(args, "--custom", sw)
 	}
-	return c.run(ctx, args...)
+	return args, nil
 }
 
 // looksLikeExeOnlySwitch detecta switches que só fazem sentido para
@@ -225,6 +251,11 @@ func (c *Client) run(ctx context.Context, args ...string) (string, error) {
 
 	cmd := c.command(runCtx, args...)
 	processutil.HideWindow(cmd)
+	// Honra um token de usuário colocado no ctx (sessão interativa): sem isso,
+	// `winget list/install` rodam sempre como SYSTEM e não enxergam (nem
+	// instalam em) o perfil do usuário logado — necessário para pacotes
+	// user-scope (ex.: Brave.Brave, `Scope: user`).
+	processutil.ApplyUserContext(runCtx, cmd)
 	output, err := cmd.CombinedOutput()
 	text := strings.TrimSpace(string(output))
 	if err != nil {
