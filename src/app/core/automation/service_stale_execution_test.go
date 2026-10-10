@@ -53,7 +53,7 @@ func TestWatchdogReconcilesStaleExecutionAndReleasesTrigger(t *testing.T) {
 		TaskName:    task.Name,
 		ActionType:  string(task.ActionType),
 		Status:      string(ExecutionStatusDispatched),
-		StartedAt:   time.Now().UTC().Add(-10 * time.Minute),
+		StartedAt:   time.Now().UTC().Add(-2 * time.Hour),
 		PackageID:   task.PackageID,
 	}
 	if err := db.UpsertAutomationExecution(stale); err != nil {
@@ -64,7 +64,7 @@ func TestWatchdogReconcilesStaleExecutionAndReleasesTrigger(t *testing.T) {
 		t.Fatalf("set marker: %v", err)
 	}
 
-	svc.reconcileStaleExecutions("agent-1", true)
+	svc.reconcileStaleExecutions("agent-1")
 
 	entries, err := db.ListRecentAutomationExecutions("agent-1", 10)
 	if err != nil {
@@ -161,20 +161,23 @@ func TestDeferredExecutionDoesNotStayDispatched(t *testing.T) {
 	}
 }
 
-// O teto duro de execucao fica dentro dos limites documentados, qualquer que
-// seja o timeout da policy — e nunca e zero.
+// O teto duro e derivado da policy, SEM limite superior fixo: truncar aqui
+// cancelaria o ctx externo ANTES do timeout interno do executor PSADT (que
+// aplica timeoutAction), suprimindo o tratamento de timeout do servidor.
 func TestResolveExecutionHardTimeout(t *testing.T) {
 	if got := resolveExecutionHardTimeout(PSADTPolicy{}); got != executionHardTimeoutMin {
 		t.Fatalf("sem policy deveria usar o minimo, obtido %s", got)
 	}
-	if got := resolveExecutionHardTimeout(PSADTPolicy{ExecutionTimeoutSeconds: 1800}); got != 35*time.Minute {
-		t.Fatalf("1800s + margem deveria dar 35min, obtido %s", got)
+	if got := resolveExecutionHardTimeout(PSADTPolicy{ExecutionTimeoutSeconds: 1800}); got != 30*time.Minute+executionHardTimeoutMargin {
+		t.Fatalf("1800s + margem, obtido %s", got)
 	}
-	if got := resolveExecutionHardTimeout(PSADTPolicy{ExecutionTimeoutSeconds: 86400}); got != executionHardTimeoutMax {
-		t.Fatalf("timeout absurdo deveria ser limitado ao maximo, obtido %s", got)
+	// Policy ACIMA do antigo teto de 60 min nao pode ser truncada.
+	want := 2*time.Hour + executionHardTimeoutMargin
+	if got := resolveExecutionHardTimeout(PSADTPolicy{ExecutionTimeoutSeconds: 7200}); got != want {
+		t.Fatalf("policy de 7200s deveria dar %s, obtido %s", want, got)
 	}
-	if got := resolveExecutionHardTimeout(PSADTPolicy{ExecutionTimeoutSeconds: 5}); got != executionHardTimeoutMin {
-		t.Fatalf("timeout minusculo deveria subir para o minimo, obtido %s", got)
+	if got := resolveExecutionHardTimeout(PSADTPolicy{ExecutionTimeoutSeconds: 5}); got != 5*time.Second+executionHardTimeoutMargin {
+		t.Fatalf("policy de 5s deveria dar 5s+margem, obtido %s", got)
 	}
 }
 
@@ -223,7 +226,7 @@ func TestWatchdogSkipsInFlightExecution(t *testing.T) {
 		AgentID:     "agent-1",
 		TaskID:      task.TaskID,
 		Status:      string(ExecutionStatusDispatched),
-		StartedAt:   time.Now().UTC().Add(-10 * time.Minute),
+		StartedAt:   time.Now().UTC().Add(-2 * time.Hour),
 	}
 	if err := db.UpsertAutomationExecution(entry); err != nil {
 		t.Fatalf("upsert: %v", err)
@@ -232,7 +235,7 @@ func TestWatchdogSkipsInFlightExecution(t *testing.T) {
 	svc.activeExecutions["exec-in-flight"] = true
 	svc.mu.Unlock()
 
-	svc.reconcileStaleExecutions("agent-1", true)
+	svc.reconcileStaleExecutions("agent-1")
 
 	entries, err := db.ListRecentAutomationExecutions("agent-1", 5)
 	if err != nil {
@@ -246,10 +249,13 @@ func TestWatchdogSkipsInFlightExecution(t *testing.T) {
 	}
 }
 
-// Execucao ADIADA no startup: o status terminal permanece (o adiamento foi
-// legitimo), mas o gatilho precisa voltar a valer — o timer do retry mora so
-// em memoria e se perdeu no restart.
-func TestStartupWatchdogReleasesDeferredTriggerKeepingStatus(t *testing.T) {
+// Linha Deferred HISTORICA nao pode liberar o gatilho. Depois de um adiamento
+// que concluiu com sucesso, o marcador segue armado (correto) e o registro
+// Deferred permanece no historico para sempre; liberar o gatilho a cada
+// restart re-executaria uma task ja concluida (para RunScript, rodaria o
+// script de novo). A retomada de adiamento e responsabilidade de
+// resumePendingDefers, que usa o estado de defer PERSISTIDO.
+func TestWatchdogIgnoresHistoricalDeferredRow(t *testing.T) {
 	task := braveTask()
 	svc, db := newWatchdogService(t, []AutomationTask{task}, "fp-deferred")
 
@@ -258,7 +264,7 @@ func TestStartupWatchdogReleasesDeferredTriggerKeepingStatus(t *testing.T) {
 		AgentID:     "agent-1",
 		TaskID:      task.TaskID,
 		Status:      string(ExecutionStatusDeferred),
-		StartedAt:   time.Now().UTC().Add(-10 * time.Minute),
+		StartedAt:   time.Now().UTC().Add(-2 * time.Hour),
 		FinishedAt:  time.Now().UTC().Add(-9 * time.Minute),
 	}
 	if err := db.UpsertAutomationExecution(entry); err != nil {
@@ -269,7 +275,7 @@ func TestStartupWatchdogReleasesDeferredTriggerKeepingStatus(t *testing.T) {
 		t.Fatalf("set marker: %v", err)
 	}
 
-	svc.reconcileStaleExecutions("agent-1", true)
+	svc.reconcileStaleExecutions("agent-1")
 
 	entries, err := db.ListRecentAutomationExecutions("agent-1", 5)
 	if err != nil {
@@ -281,7 +287,122 @@ func TestStartupWatchdogReleasesDeferredTriggerKeepingStatus(t *testing.T) {
 	if entries[0].Status != string(ExecutionStatusDeferred) {
 		t.Fatalf("status do adiamento nao deveria ser reescrito, obtido %q", entries[0].Status)
 	}
+	if _, found, err := db.GetAutomationMarker("agent-1", markerKey); err != nil || !found {
+		t.Fatalf("marcador de task concluida NAO pode ser liberado (found=%v err=%v)", found, err)
+	}
+}
+
+// Sem policy carregada nao da para recalcular a chave do marcador de trigger.
+// O watchdog deve ESPERAR: marcar a linha como terminal a tiraria do conjunto
+// e o marcador ficaria armado para sempre, sem retry.
+func TestWatchdogWaitsWhenPolicyNotLoaded(t *testing.T) {
+	svc, db := newWatchdogService(t, nil, "")
+
+	entry := database.AutomationExecutionEntry{
+		ExecutionID: "exec-no-policy",
+		AgentID:     "agent-1",
+		TaskID:      "task-sem-policy",
+		Status:      string(ExecutionStatusDispatched),
+		StartedAt:   time.Now().UTC().Add(-2 * time.Hour),
+	}
+	if err := db.UpsertAutomationExecution(entry); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	svc.reconcileStaleExecutions("agent-1")
+
+	entries, err := db.ListRecentAutomationExecutions("agent-1", 5)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("esperava 1 execucao, obtido %d", len(entries))
+	}
+	if entries[0].Status != string(ExecutionStatusDispatched) {
+		t.Fatalf("sem policy o watchdog nao pode encerrar a linha, status=%q", entries[0].Status)
+	}
+}
+
+// resumePendingDefers: agenda UM timer por task adiada (sem multiplicacao) e
+// libera o gatilho quando a janela de adiamento ja se esgotou sem retry.
+func TestResumePendingDefers(t *testing.T) {
+	task := braveTask()
+	svc, db := newWatchdogService(t, []AutomationTask{task}, "fp-resume")
+	markerKey := "immediate:fp-resume:" + task.TaskID + ":" + task.LastUpdatedAt
+	if err := db.SetAutomationMarker("agent-1", markerKey, time.Now().UTC().Format(time.RFC3339)); err != nil {
+		t.Fatalf("set marker: %v", err)
+	}
+
+	// (a) adiamento ainda pendente: agenda o retry e NAO toca no gatilho.
+	svc.mu.Lock()
+	svc.deferByTask[task.TaskID] = deferState{Count: 1, NextAttempt: time.Now().UTC().Add(30 * time.Minute)}
+	svc.mu.Unlock()
+	svc.resumePendingDefers("agent-1")
+
+	svc.mu.RLock()
+	timer := svc.deferTimers[task.TaskID]
+	svc.mu.RUnlock()
+	if timer == nil {
+		t.Fatal("esperava timer de retry agendado para o adiamento pendente")
+	}
+	if _, found, err := db.GetAutomationMarker("agent-1", markerKey); err != nil || !found {
+		t.Fatalf("gatilho nao pode ser liberado com adiamento pendente (found=%v err=%v)", found, err)
+	}
+
+	// (b) janela esgotada (sem NextAttempt): a task deve executar.
+	svc.mu.Lock()
+	svc.deferByTask[task.TaskID] = deferState{Count: 3, Exhausted: true}
+	svc.mu.Unlock()
+	svc.resumePendingDefers("agent-1")
 	if _, found, err := db.GetAutomationMarker("agent-1", markerKey); err != nil || found {
-		t.Fatalf("gatilho de execucao adiada deveria ter sido liberado (found=%v err=%v)", found, err)
+		t.Fatalf("adiamento esgotado deveria liberar o gatilho (found=%v err=%v)", found, err)
+	}
+
+	svc.mu.Lock()
+	if tm := svc.deferTimers[task.TaskID]; tm != nil {
+		tm.Stop()
+	}
+	svc.mu.Unlock()
+}
+
+// O corte do watchdog é SEMPRE por tempo: no startup NÃO se reconcilia "tudo o
+// que existe". Com duas instâncias de core no mesmo agentID/DB (ex.: serviço
+// rodado manualmente fora do SCM, ou sobreposição durante restart/self-update),
+// reconciliar tudo no boot encerraria a execução EM VOO do processo antigo e
+// liberaria o gatilho — disparando uma execução duplicada concorrente. Uma
+// linha recente fica intacta e é recuperada quando envelhecer.
+func TestWatchdogIgnoresRecentExecution(t *testing.T) {
+	task := braveTask()
+	svc, db := newWatchdogService(t, []AutomationTask{task}, "fp-recent")
+
+	entry := database.AutomationExecutionEntry{
+		ExecutionID: "exec-recent",
+		AgentID:     "agent-1",
+		TaskID:      task.TaskID,
+		Status:      string(ExecutionStatusDispatched),
+		StartedAt:   time.Now().UTC().Add(-10 * time.Minute),
+	}
+	if err := db.UpsertAutomationExecution(entry); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	markerKey := "immediate:fp-recent:" + task.TaskID + ":" + task.LastUpdatedAt
+	if err := db.SetAutomationMarker("agent-1", markerKey, time.Now().UTC().Format(time.RFC3339)); err != nil {
+		t.Fatalf("set marker: %v", err)
+	}
+
+	svc.reconcileStaleExecutions("agent-1")
+
+	entries, err := db.ListRecentAutomationExecutions("agent-1", 5)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("esperava 1 execucao, obtido %d", len(entries))
+	}
+	if entries[0].Status != string(ExecutionStatusDispatched) {
+		t.Fatalf("execucao recente nao pode ser reconciliada, status=%q", entries[0].Status)
+	}
+	if _, found, err := db.GetAutomationMarker("agent-1", markerKey); err != nil || !found {
+		t.Fatalf("marcador de execucao recente nao pode ser liberado (found=%v err=%v)", found, err)
 	}
 }

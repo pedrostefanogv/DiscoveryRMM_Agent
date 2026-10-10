@@ -28,15 +28,19 @@ const (
 	recentExecutionLimit = 15
 	defaultDeferTimes    = 3
 	defaultDeferInterval = 30 * time.Minute
-	// executionHardTimeoutMin/Max limitam QUALQUER execucao de task. Sem um
-	// teto, o goroutine de execucao podia ficar vivo indefinidamente (prompt,
-	// winget, instalador stub) e a linha de historico ficava em "Dispatched"
-	// para sempre — e a task nunca mais era disparada.
+	// executionHardTimeoutMin e o piso do teto de execucao quando a policy nao
+	// define executionTimeoutSeconds. O teto e derivado da POLICY + margem, SEM
+	// limite superior fixo: truncar aqui cancelaria o ctx externo ANTES do
+	// timeout interno do executor PSADT (que aplica timeoutAction/politica),
+	// suprimindo o tratamento de timeout declarado pelo servidor.
 	executionHardTimeoutMin = 10 * time.Minute
-	executionHardTimeoutMax = 60 * time.Minute
-	// executionStaleTimeout fica ACIMA de qualquer execucao legitima (teto
-	// acima). Usado pelo watchdog para encerrar linhas nao terminais que
-	// sobreviveram ao processo que as criou.
+	// executionHardTimeoutMargin e a folga sobre o timeout da policy para o
+	// timeout INTERNO disparar primeiro — o ctx externo e apenas a rede de
+	// seguranca do watchdog.
+	executionHardTimeoutMargin = 10 * time.Minute
+	// executionStaleTimeout e usado pelo watchdog para encerrar linhas nao
+	// terminais que sobreviveram ao processo que as criou (execucoes em voo
+	// deste processo sao protegidas por activeExecutions, nao por este prazo).
 	executionStaleTimeout = 90 * time.Minute
 )
 
@@ -96,6 +100,11 @@ type Service struct {
 	// uma execução legítima como falha e LIBERARIA o gatilho, disparando uma
 	// execução duplicada concorrente.
 	activeExecutions map[string]bool
+	// deferTimers guarda o timer de retry de adiamento por task. O timer não é
+	// persistido: sem este registro ele se multiplicaria (cada chamada com
+	// NextAttempt futuro cria um AfterFunc novo) e não haveria como rearmá-lo
+	// de forma idempotente após um restart.
+	deferTimers      map[string]*time.Timer
 	userLoginHandled bool
 	// startupReadinessWaiter, quando configurado, é chamado uma única vez antes
 	// do PRIMEIRO refreshPolicy do processo. Permite que o App atrase o primeiro
@@ -140,6 +149,7 @@ func NewService(getConfig func() RuntimeConfig, logger func(string)) *Service {
 		cronEntries:      make(map[string]cron.EntryID),
 		activeTasks:      make(map[string]bool),
 		activeExecutions: make(map[string]bool),
+		deferTimers:      make(map[string]*time.Timer),
 		deferByTask:      make(map[string]deferState),
 		notifDedup:       make(map[string]automationNotifDedupState),
 		processStartAt:   time.Now().UTC(),
@@ -233,13 +243,21 @@ func (s *Service) Run(ctx context.Context, onBeat func()) {
 
 	s.loadPersistedForCurrentAgent()
 
+	startupAgentID := strings.TrimSpace(s.getConfig().AgentID)
+	s.loadDeferStateForAgent(startupAgentID)
+	// Retoma adiamentos que sobreviveram ao processo anterior: o timer do defer
+	// vive só em memória. Sem isto, a task adiada cujo processo morreu na janela
+	// ficaria sem próxima tentativa (o marcador de trigger segue armado e o
+	// policy-sync não a redispara).
+	s.resumePendingDefers(startupAgentID)
+
 	// Watchdog de execucoes presas (startup): qualquer linha nao terminal que
 	// ja existe pertence a um processo anterior — a execucao foi interrompida
 	// (restart/crash/self-update) e nunca sera finalizada por ninguem.
 	// Reconciliar ANTES do primeiro policy-sync e o que devolve a convergencia
 	// das tasks Immediate, que nao possuem outro gatilho. Sem isso o marcador
 	// de dedup permanece gravado e a task nunca mais roda (caso Brave).
-	s.reconcileStaleExecutions(strings.TrimSpace(s.getConfig().AgentID), true)
+	s.reconcileStaleExecutions(startupAgentID)
 
 	// Warmup (uma vez por processo): atrai o primeiro policy-sync para depois
 	// de uma dependência local estar pronta (ex.: discovery P2P). Os triggers
@@ -337,7 +355,7 @@ func (s *Service) refreshPolicy(ctx context.Context, includeScriptContent bool) 
 	s.loadDeferStateForAgent(agentID)
 	// Sweep periodico do watchdog (as execucoes legitimas nunca chegam perto
 	// de executionStaleTimeout, entao nada em andamento e afetado).
-	s.reconcileStaleExecutions(agentID, false)
+	s.reconcileStaleExecutions(agentID)
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	correlationID := uuid.NewString()
@@ -548,8 +566,14 @@ func (s *Service) triggerImmediate(ctx context.Context, agentID, fingerprint str
 	if s.circuitBreakerPaused(agentID, task.TaskID) {
 		return
 	}
+	// Arma o marcador SOMENTE se a execução realmente iniciou. Se o guard de
+	// concorrência bloqueou (execução anterior ainda finalizando), armar aqui
+	// deixaria a task muda: o próximo policy-sync cairia no dedup sem executar.
+	if !s.executeTaskAsync(ctx, agentID, task, sourceForTrigger(TriggerTypeImmediate), TriggerTypeImmediate, nil) {
+		s.logf("automacao: execucao da task=%s nao iniciou (ja em andamento) - marcador de trigger nao armado", strings.TrimSpace(task.TaskID))
+		return
+	}
 	errutil.LogIfErr(s.db.SetAutomationMarker(agentID, markerKey, time.Now().UTC().Format(time.RFC3339)), "automation: definir marker imediato")
-	s.executeTaskAsync(ctx, agentID, task, sourceForTrigger(TriggerTypeImmediate), TriggerTypeImmediate, nil)
 }
 
 // triggerOnAgentCheckIn dispara tarefas TriggerOnAgentCheckIn com deduplicação por marcador.
@@ -606,20 +630,28 @@ func (s *Service) triggerOnAgentCheckIn(ctx context.Context, agentID, fingerprin
 	if s.circuitBreakerPaused(agentID, task.TaskID) {
 		return
 	}
+	if !s.executeTaskAsync(ctx, agentID, task, sourceForTrigger(TriggerTypeAgentCheckIn), TriggerTypeAgentCheckIn, nil) {
+		s.logf("automacao: execucao da task=%s nao iniciou (ja em andamento) - marcador de checkin nao armado", strings.TrimSpace(task.TaskID))
+		return
+	}
 	errutil.LogIfErr(s.db.SetAutomationMarker(agentID, markerKey, time.Now().UTC().Format(time.RFC3339)), "automation: definir marker checkin")
-	s.executeTaskAsync(ctx, agentID, task, sourceForTrigger(TriggerTypeAgentCheckIn), TriggerTypeAgentCheckIn, nil)
 }
 
-func (s *Service) executeTaskAsync(ctx context.Context, agentID string, task AutomationTask, sourceType AutomationExecutionSourceType, triggerType TriggerType, onComplete func(success bool)) {
+// executeTaskAsync dispara a execução em background e informa se ela foi de
+// fato iniciada. Retorna false quando o agente é inválido ou já existe uma
+// execução da mesma task+trigger em andamento — nesse caso o caller NÃO deve
+// armar o marcador de deduplicação do gatilho: marcador armado sem execução
+// deixa a task muda até o próximo restart/falha (mesma classe do bug original).
+func (s *Service) executeTaskAsync(ctx context.Context, agentID string, task AutomationTask, sourceType AutomationExecutionSourceType, triggerType TriggerType, onComplete func(success bool)) bool {
 	if agentID == "" {
-		return
+		return false
 	}
 	activeKey := strings.TrimSpace(task.TaskID) + "|" + string(triggerType)
 
 	s.mu.Lock()
 	if s.activeTasks[activeKey] {
 		s.mu.Unlock()
-		return
+		return false
 	}
 	s.activeTasks[activeKey] = true
 	packages := s.packageManager
@@ -641,18 +673,9 @@ func (s *Service) executeTaskAsync(ctx context.Context, agentID string, task Aut
 		nowUTC := time.Now().UTC()
 		if !deferStateSnapshot.NextAttempt.IsZero() && nowUTC.Before(deferStateSnapshot.NextAttempt) {
 			s.logf("automacao: task=%s aguardando proxima tentativa de deferimento em %s", strings.TrimSpace(task.TaskID), deferStateSnapshot.NextAttempt.UTC().Format(time.RFC3339))
-			// O timer do adiamento vive só em memória e se perde num restart; sem
-			// reagendar aqui, uma task adiada cujo processo morreu no intervalo
-			// ficaria sem próxima tentativa (o estado de defer é persistido, o
-			// timer não).
-			delay := time.Until(deferStateSnapshot.NextAttempt)
-			if delay < 0 {
-				delay = 0
-			}
-			taskCopy := task
-			time.AfterFunc(delay, func() {
-				s.executeTaskAsync(context.Background(), agentID, taskCopy, sourceType, triggerType, nil)
-			})
+			// O timer do adiamento vive só em memória e se perde num restart; o
+			// registro por task reagenda sem multiplicar timers.
+			s.scheduleDeferRetry(agentID, task, sourceType, triggerType, deferStateSnapshot.NextAttempt)
 			return
 		}
 
@@ -807,12 +830,19 @@ func (s *Service) executeTaskAsync(ctx context.Context, agentID string, task Aut
 		} else {
 			entry.Status = string(ExecutionStatusFailed)
 		}
+		// Só marca como finalizado se o resultado terminal FOI persistido: se o
+		// upsert falhar (SQLITE_BUSY/lock), o finalizador de segurança precisa
+		// tentar de novo — senão a linha fica "Dispatched" no banco até o
+		// próximo restart, exatamente o que o finalizador existe para evitar.
+		terminalPersisted := s.db == nil
 		if s.db != nil {
-			errutil.LogIfErr(s.db.UpsertAutomationExecution(entry), "automation: persistir resultado da execucao")
+			if err := s.db.UpsertAutomationExecution(entry); err != nil {
+				s.logf("automacao: falha ao persistir resultado da execucao task=%s: %v (finalizador tentara novamente)", strings.TrimSpace(task.TaskID), err)
+			} else {
+				terminalPersisted = true
+			}
 		}
-		// Resultado terminal persistido: o finalizador de segurança não deve
-		// mais reescrever a linha.
-		finalized = true
+		finalized = terminalPersisted
 
 		if entry.CommandID != "" {
 			payload := ResultRequest{
@@ -872,6 +902,7 @@ func (s *Service) executeTaskAsync(ctx context.Context, agentID string, task Aut
 
 		s.refreshDerivedState(agentID)
 	}()
+	return true
 }
 
 func (s *Service) sendOrQueueCallback(ctx context.Context, agentID, executionID, commandID string, callbackType CallbackType, payload any, correlationID string) error {
@@ -1523,22 +1554,16 @@ func (s *Service) recordExecutionNotification(eventType, taskKey string) {
 }
 
 // resolveExecutionHardTimeout devolve o teto de duração de UMA execução de
-// task. Usa o timeout da policy PSADT quando configurado (default 1800s), com
-// margem para o fallback winget, limitado a [executionHardTimeoutMin,
-// executionHardTimeoutMax]. Garante que nenhuma execução fique viva para
-// sempre deixando a linha de histórico presa em "Dispatched".
+// task: timeout declarado pela policy PSADT + margem, ou o piso quando a
+// policy não define nada. Não há teto superior fixo de propósito — a policy do
+// servidor é autoritativa e o timeout interno do executor (que aplica
+// timeoutAction) precisa disparar ANTES do ctx externo. Garante apenas que
+// nenhuma execução fique viva indefinidamente.
 func resolveExecutionHardTimeout(policy PSADTPolicy) time.Duration {
-	timeout := executionHardTimeoutMin
 	if policy.ExecutionTimeoutSeconds > 0 {
-		timeout = time.Duration(policy.ExecutionTimeoutSeconds)*time.Second + 5*time.Minute
+		return time.Duration(policy.ExecutionTimeoutSeconds)*time.Second + executionHardTimeoutMargin
 	}
-	if timeout < executionHardTimeoutMin {
-		timeout = executionHardTimeoutMin
-	}
-	if timeout > executionHardTimeoutMax {
-		timeout = executionHardTimeoutMax
-	}
-	return timeout
+	return executionHardTimeoutMin
 }
 
 // triggerMarkerKeysForTask retorna as chaves de deduplicação dos gatilhos de
@@ -1618,30 +1643,43 @@ func (s *Service) circuitBreakerPaused(agentID, taskID string) bool {
 // nunca receberam status terminal e LIBERA a deduplicação de trigger das tasks
 // correspondentes, para que voltem a ser disparadas.
 //
-//   - startup=true: TODA linha não terminal existente antes deste processo
-//     nascer é órfã (o processo anterior morreu no meio da execução).
-//   - startup=false (sweep periódico): apenas linhas acima de
-//     executionStaleTimeout — nada que uma execução legítima alcançaria.
-func (s *Service) reconcileStaleExecutions(agentID string, startup bool) {
+// O corte é SEMPRE por tempo (executionStaleTimeout) e nunca "tudo o que já
+// existe no startup". A versão anterior reconciliada tudo no boot; com duas
+// instâncias de core no mesmo agentID/DB (ex.: discovery-service.exe rodado
+// manualmente fora do SCM, ou sobreposição durante restart/self-update) o
+// processo novo encerraria a execução EM VOO do antigo E liberaria o gatilho —
+// disparando uma execução duplicada concorrente. Pelo corte por tempo, uma
+// execução só é reconciliada quando já passou bem além de qualquer duração
+// legítima (o caso Brave, de dias, continua sendo recuperado no primeiro
+// policy-sync após o boot).
+func (s *Service) reconcileStaleExecutions(agentID string) {
 	agentID = strings.TrimSpace(agentID)
 	if s.db == nil || agentID == "" {
 		return
 	}
 	cutoff := time.Now().UTC().Add(-executionStaleTimeout)
-	if startup {
-		// Inclui tudo o que já existe (margem de 1 min no futuro).
-		cutoff = time.Now().UTC().Add(time.Minute)
-	}
+	// Execuções ADIADAS (Deferred) NÃO entram aqui. A linha Deferred é histórica
+	// e nunca é atualizada: liberar o gatilho dela a cada restart re-executaria
+	// uma task já concluída (defer vale para qualquer ação, inclusive
+	// RunScript), e com ORDER BY started_at ASC + LIMIT linhas Deferred antigas
+	// dominariam o conjunto e causariam starvation da execução realmente presa.
+	// A retomada de adiamento é feita por resumePendingDefers, a partir do
+	// estado de defer PERSISTIDO (automation_defer_state).
 	statuses := []string{string(ExecutionStatusDispatched), string(ExecutionStatusAcknowledged)}
-	if startup {
-		// Execuções ADIADAS também entram no startup: o retry do adiamento é um
-		// timer em memória (perdido no restart) e o marcador de trigger seguiu
-		// gravado — sem isto a task adiada nunca retomava.
-		statuses = append(statuses, string(ExecutionStatusDeferred))
-	}
 	entries, err := s.db.ListAutomationExecutionsByStatus(agentID, statuses, cutoff, 100)
 	if err != nil {
 		s.logf("automacao: watchdog de execucoes falhou ao listar: %v", err)
+		return
+	}
+
+	// Sem policy carregada não há como recalcular a chave do marcador de
+	// trigger: marcar a linha como terminal agora a tiraria do conjunto do
+	// watchdog e deixaria o marcador armado para sempre, sem retry. Espera o
+	// próximo ciclo (o startup roda antes do primeiro policy-sync).
+	s.mu.RLock()
+	policyLoaded := len(s.state.Tasks) > 0
+	s.mu.RUnlock()
+	if !policyLoaded {
 		return
 	}
 
@@ -1656,15 +1694,6 @@ func (s *Service) reconcileStaleExecutions(agentID string, startup bool) {
 
 	for _, entry := range entries {
 		if inFlight[entry.ExecutionID] {
-			continue
-		}
-		if entry.Status == string(ExecutionStatusDeferred) {
-			// A linha já está em estado terminal coerente (o usuário adiou); só o
-			// gatilho precisa voltar a valer para a task reentrar em
-			// executeTaskAsync (que reagenda a próxima tentativa ou executa, se o
-			// prazo do adiamento já passou).
-			s.logf("automacao: watchdog liberou gatilho de execucao adiada execution=%s task=%s", entry.ExecutionID, entry.TaskID)
-			s.releaseTriggerMarkers(agentID, entry.TaskID)
 			continue
 		}
 		entry.Status = string(ExecutionStatusFailed)
@@ -1683,6 +1712,80 @@ func (s *Service) reconcileStaleExecutions(agentID string, startup bool) {
 	}
 	if len(entries) > 0 {
 		s.refreshDerivedState(agentID)
+	}
+}
+
+// scheduleDeferRetry (re)agenda a próxima tentativa de uma task adiada.
+// Idempotente por task: o timer anterior é parado antes de criar o novo, o que
+// evita multiplicação de timers quando o reagendamento roda mais de uma vez na
+// mesma janela de adiamento.
+func (s *Service) scheduleDeferRetry(agentID string, task AutomationTask, sourceType AutomationExecutionSourceType, triggerType TriggerType, at time.Time) {
+	taskID := strings.TrimSpace(task.TaskID)
+	if taskID == "" {
+		return
+	}
+	delay := time.Until(at)
+	if delay < 0 {
+		delay = 0
+	}
+	taskCopy := task
+	s.mu.Lock()
+	if existing, ok := s.deferTimers[taskID]; ok && existing != nil {
+		existing.Stop()
+	}
+	s.deferTimers[taskID] = time.AfterFunc(delay, func() {
+		s.executeTaskAsync(context.Background(), agentID, taskCopy, sourceType, triggerType, nil)
+	})
+	s.mu.Unlock()
+}
+
+// resumePendingDefers rear-ma os timers de adiamento que sobreviveram ao
+// processo anterior. O estado de defer é PERSISTIDO (automation_defer_state e
+// deferByTask após loadDeferStateForAgent — que só carrega ciclos ainda
+// pendentes), mas o timer não é: sem este rearme, uma task adiada cujo processo
+// morreu na janela ficaria sem próxima tentativa, porque o marcador de gatilho
+// continua armado e o policy-sync não a redispara.
+//
+// Deferimento já ESGOTADO (NextAttempt zero, Exhausted) não tem retry a
+// agendar: a janela do usuário acabou e a task deve executar — liberamos o
+// gatilho para o próximo policy-sync redisparar.
+//
+// O triggerType do retry original não é persistido; usamos Immediate apenas
+// para compor a chave de concorrência e o metadado da execução.
+func (s *Service) resumePendingDefers(agentID string) {
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" || s.db == nil {
+		return
+	}
+	type resumeItem struct {
+		task    AutomationTask
+		attempt time.Time
+	}
+	s.mu.RLock()
+	items := make([]resumeItem, 0, len(s.deferByTask))
+	for _, task := range s.state.Tasks {
+		taskID := strings.TrimSpace(task.TaskID)
+		if taskID == "" {
+			continue
+		}
+		state, ok := s.deferByTask[taskID]
+		if !ok {
+			continue
+		}
+		items = append(items, resumeItem{task: task, attempt: state.NextAttempt})
+	}
+	s.mu.RUnlock()
+
+	for _, item := range items {
+		taskID := strings.TrimSpace(item.task.TaskID)
+		if item.attempt.IsZero() {
+			// Janela de adiamento esgotada sem retry agendado: a task deve rodar.
+			s.logf("automacao: adiamento esgotado da task=%s apos restart - liberando gatilho para execucao", taskID)
+			s.releaseTriggerMarkers(agentID, taskID)
+			continue
+		}
+		s.logf("automacao: retomando adiamento da task=%s (proxima tentativa %s) apos restart", taskID, item.attempt.UTC().Format(time.RFC3339))
+		s.scheduleDeferRetry(agentID, item.task, sourceForTrigger(TriggerTypeImmediate), TriggerTypeImmediate, item.attempt)
 	}
 }
 

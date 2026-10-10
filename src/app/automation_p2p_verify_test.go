@@ -1,8 +1,10 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 // Tabelas simuladas do "winget list"/"winget upgrade" contendo o Brave.
@@ -37,7 +39,11 @@ func TestLocalInstallVerified(t *testing.T) {
 		{name: "install: winget list vazio nao assume sucesso", installed: "   ", op: "install", want: false},
 		{name: "upgrade: ainda atualizavel precisa fallback", installed: stubInstalledWithBrave, upgradable: stubUpgradableWithBrave, op: "upgrade", want: false},
 		{name: "upgrade: atualizado", installed: stubInstalledWithBrave, upgradable: stubUpgradableWithoutBrave, op: "upgrade", want: true},
-		{name: "upgrade: lista indisponivel nao assume sucesso", installed: stubInstalledWithBrave, upgradableErr: errors.New("timeout"), op: "upgrade", want: false},
+		{name: "upgrade: erro do winget nao assume sucesso", installed: stubInstalledWithBrave, upgradableErr: errors.New("timeout"), op: "upgrade", want: false},
+		// `winget upgrade` sem pendências legitimamente não lista nada: lista
+		// VAZIA com exit 0 é evidência válida de "nada a atualizar" e não pode
+		// forçar um subprocesso winget extra em toda execução.
+		{name: "upgrade: lista vazia e valida como nada a atualizar", installed: stubInstalledWithBrave, upgradable: "", op: "upgrade", want: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -46,6 +52,26 @@ func TestLocalInstallVerified(t *testing.T) {
 				t.Fatalf("got %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// O orçamento total da execução direta (localInstallerExeBudget, aplicado por
+// runLocalInstallerFull) depende de o deadline do ctx PAI limitar cada
+// tentativa: executeHiddenProcess faz context.WithTimeout(parent, timeout),
+// então prevalece min(orçamento, timeout da tentativa). Sem isso, o stub do
+// Brave (que não retorna) consumiria 5 min por conjunto de flags e o fallback
+// `winget install` só rodaria dezenas de minutos depois.
+func TestExecuteHiddenProcessHonorsParentDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	started := time.Now()
+	_, err := executeHiddenProcess(ctx, 10*time.Minute, "cmd", []string{"/c", "ping -n 30 127.0.0.1 > nul"})
+	if err == nil {
+		t.Fatal("esperava erro: o deadline do ctx pai precisa cancelar a tentativa")
+	}
+	if elapsed := time.Since(started); elapsed > 20*time.Second {
+		t.Fatalf("deadline do ctx pai ignorado: a tentativa levou %s", elapsed)
 	}
 }
 
@@ -71,7 +97,8 @@ func TestEvidenceUnavailable(t *testing.T) {
 		{name: "install com lista ok", installed: stubInstalledWithBrave, op: "install", want: false},
 		{name: "install com erro", installed: stubInstalledWithBrave, instErr: err, op: "install", want: true},
 		{name: "install com lista vazia", installed: "  ", op: "install", want: true},
-		{name: "upgrade com list ok mas upgrade vazio", installed: stubInstalledWithBrave, op: "upgrade", want: true},
+		{name: "upgrade com lista vazia (sem erro) nao e indisponibilidade", installed: stubInstalledWithBrave, op: "upgrade", want: false},
+		{name: "upgrade com erro do winget e indisponibilidade", installed: stubInstalledWithBrave, upErr: err, op: "upgrade", want: true},
 		{name: "upgrade com tudo ok", installed: stubInstalledWithBrave, upgradable: stubUpgradableWithoutBrave, op: "upgrade", want: false},
 	}
 	for _, tc := range cases {

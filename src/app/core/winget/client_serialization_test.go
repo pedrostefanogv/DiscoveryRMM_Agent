@@ -14,6 +14,14 @@ func TestWingetRunSerialized(t *testing.T) {
 	if err := acquireWingetRun(ctx); err != nil {
 		t.Fatalf("primeira reserva: %v", err)
 	}
+	// O semáforo é GLOBAL do pacote: se este teste falhar segurando a vez, os
+	// demais testes que chamam run() ficariam bloqueados. Garante a liberação.
+	released := false
+	defer func() {
+		if !released {
+			releaseWingetRun()
+		}
+	}()
 
 	acquired := make(chan struct{})
 	go func() {
@@ -32,6 +40,7 @@ func TestWingetRunSerialized(t *testing.T) {
 	}
 
 	releaseWingetRun()
+	released = true
 
 	select {
 	case <-acquired:

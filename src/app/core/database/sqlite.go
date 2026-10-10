@@ -323,6 +323,11 @@ func (db *DB) initializeCurrent() error {
 
 		CREATE INDEX IF NOT EXISTS idx_automation_execution_agent_started ON automation_execution_history(agent_id, started_at DESC);
 
+		-- Watchdog de execuções presas: consulta por (agent_id, status) com corte em
+		-- started_at. Sem este índice o sweep é full scan numa tabela com retenção
+		-- de 30 dias.
+		CREATE INDEX IF NOT EXISTS idx_automation_execution_agent_status_started ON automation_execution_history(agent_id, status, started_at);
+
 		CREATE TABLE IF NOT EXISTS automation_callback_queue (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			agent_id TEXT NOT NULL,

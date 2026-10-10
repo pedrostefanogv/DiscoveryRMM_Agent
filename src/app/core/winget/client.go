@@ -183,7 +183,12 @@ func (c *Client) Download(ctx context.Context, id, downloadDir string) (string, 
 	)
 }
 
-// wingetRunSem serializa as invocacoes do winget no processo. Chamadas
+// wingetRunSem serializa as invocacoes do winget no processo.
+//
+// NÃO é reentrante: nenhum método do Client pode ser chamado de dentro de outro
+// (nem de dentro de run), sob pena de deadlock permanente. Hoje a única origem
+// de execução do winget é run(); core/winget/resolve.go só usa os.Stat e
+// PowerShell/registro, nunca o binário winget. Chamadas
 // concorrentes (a automacao dispara install enquanto o preload roda download e
 // a UI roda list/upgrade) disputam o cache de fontes do winget e falham com
 // 0x8a150001 (APPINSTALLER_CLI_ERROR_INTERNAL_ERROR) — observado em campo

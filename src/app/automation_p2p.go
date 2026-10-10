@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/sys/windows"
@@ -615,7 +616,11 @@ func evidenceUnavailable(installedOut string, installedErr error, upgradableOut 
 	if installedErr != nil || strings.TrimSpace(installedOut) == "" {
 		return true
 	}
-	if strings.TrimSpace(operation) == "upgrade" && (upgradableErr != nil || strings.TrimSpace(upgradableOut) == "") {
+	// Só ERRO indica indisponibilidade no upgrade: `winget upgrade` sem
+	// pendências legitimamente não lista nada, e tratar isso como
+	// indisponibilidade forçava um subprocesso winget extra em toda execução
+	// sem atualizações.
+	if strings.TrimSpace(operation) == "upgrade" && upgradableErr != nil {
 		return true
 	}
 	return false
@@ -635,10 +640,12 @@ func localInstallVerified(packageID, installedOut string, installedErr error, up
 	case "install":
 		return automation.IsPackageInOutput(installedOut, packageID)
 	case "upgrade":
-		if upgradableErr != nil || strings.TrimSpace(upgradableOut) == "" {
+		if upgradableErr != nil {
 			return false
 		}
-		// Ainda listado como atualizável → o upgrade não teve efeito.
+		// Lista VAZIA com exit 0 é evidência válida de "nada a atualizar"
+		// (comportamento histórico). Ainda listado como atualizável → o upgrade
+		// não teve efeito.
 		return !automation.IsPackageInOutput(upgradableOut, packageID)
 	default:
 		return false
@@ -836,6 +843,18 @@ func runLocalInstallerWithSwitches(ctx context.Context, artifactPath, silent, si
 	return runLocalInstallerFull(ctx, artifactPath, silent, silentWithProgress, "")
 }
 
+const (
+	// localInstallerExeBudget é o orçamento total das tentativas de execução
+	// direta de um .exe (catálogo + cascata heurística). Precisa caber: 1
+	// tentativa completa do catálogo (5 min) + uma fatia da cascata, antes de
+	// entregar ao `winget install`. Medido em campo: o stub do Brave não
+	// retorna e consumia 5 min por conjunto de flags.
+	localInstallerExeBudget = 6 * time.Minute
+	// localInstallerMSIBudget cobre o msiexec (tentativa única de 10 min +
+	// retry de UAC).
+	localInstallerMSIBudget = 12 * time.Minute
+)
+
 func runLocalInstallerFull(ctx context.Context, artifactPath, silent, silentWithProgress, installerType string) (string, error) {
 	artifactPath = strings.TrimSpace(artifactPath)
 	if artifactPath == "" {
@@ -854,13 +873,25 @@ func runLocalInstallerFull(ctx context.Context, artifactPath, silent, silentWith
 
 	// Prazo curto: instaladores stub/online (ex.: BraveSilentSetup, que instala
 	// por usuário) FICAM TRAVADOS como SYSTEM sem instalar. Com prazo curto o
-	// processo é morto (CommandContext) e o router cai para o winget install,
-	// que conhece o escopo correto (machine) e conclui. Falha de verificação
-	// pós-instalação também cai para o winget.
+	// processo é morto (CommandContext) e o router cai para o winget install.
+	// Falha de verificação pós-instalação também cai para o winget.
 	timeout := 10 * time.Minute
 	if !isMSIFamily {
 		timeout = 5 * time.Minute
 	}
+
+	// Orçamento TOTAL das tentativas de execução direta. Cada conjunto de flags
+	// consome o timeout inteiro quando o instalador trava (caso Brave medido: o
+	// stub sobe "BraveUpdate" e não retorna; >8 min por tentativa, ~30 min até o
+	// fallback). Sem teto global o agente fica dezenas de minutos sem instalar
+	// nada antes de chegar ao `winget install`, que é o caminho autoritativo.
+	// Orçamento esgotado → erro → o router cai para o winget.
+	budget := localInstallerExeBudget
+	if isMSIFamily {
+		budget = localInstallerMSIBudget
+	}
+	ctx, cancelBudget := context.WithTimeout(ctx, budget)
+	defer cancelBudget()
 
 	switch {
 	case isPortable:
@@ -995,38 +1026,36 @@ func runExeInstallerSilent(ctx context.Context, timeout time.Duration, artifactP
 	var lastOutput string
 	var lastErr error
 
-	// Prioridade 1: switches do catálogo + escopo de MÁQUINA. O catálogo traz os
-	// switches silenciosos do manifesto winget (ex.: "/silent /install" para o
-	// Brave), mas NÃO o escopo: instaladores stub/online (Chromium/Omaha) são
-	// PER-USER por padrão e, executados pelo agente (SYSTEM) sem o switch de
-	// escopo, saem com 0 instalando no perfil do SYSTEM — invisível para o
-	// usuário (caso Brave: 167 MB baixados, nada instalado para a máquina).
-	//
-	// O escopo vem PRIMEIRO de propósito: se a tentativa sem escopo viesse antes
-	// e "funcionasse", a verificação pós-instalação enxergaria a instalação
-	// per-user do próprio SYSTEM (winget list roda como SYSTEM) e encerraria o
-	// fluxo como sucesso — que é exatamente a classe de falso positivo que esta
-	// correção elimina. Se o instalador não entender a flag, ele falha e a
-	// tentativa sem escopo segue logo abaixo.
-	for _, candidate := range []struct {
-		name string
-		args string
-	}{{"silent", silent}, {"silentWithProgress", silentWithProgress}} {
-		sw := strings.TrimSpace(candidate.args)
-		if sw == "" {
-			continue
+	// Conjuntos de flags já tentados (chave = args unidos). Sem esta dedup, quando
+	// o catálogo traz silent == silentWithProgress (ex.: Brave: "/silent /install")
+	// o MESMO comando roda 2x por estágio, e a cascata heurística repete sets já
+	// tentados — multiplicando o tempo total de instalação.
+	tried := make(map[string]bool)
+	attempt := func(args []string) (string, bool) {
+		key := strings.Join(args, "\x00")
+		if tried[key] {
+			return "", false
 		}
-		scopedArgs := append(splitInstallerSwitches(sw), "--system-level")
-		output, err := executeHiddenProcess(ctx, timeout, artifactPath, scopedArgs)
+		tried[key] = true
+		output, err := executeHiddenProcess(ctx, timeout, artifactPath, args)
 		if err == nil {
-			return fmt.Sprintf("[p2p-installer] switches do catalogo (%s) + escopo de maquina bem-sucedidos: %s\n%s", candidate.name, strings.Join(scopedArgs, " "), output), nil
+			return output, true
 		}
 		lastOutput, lastErr = output, err
+		return "", false
 	}
 
-	// Prioridade 2: switches oficiais do catálogo, SEM a flag de escopo
-	// (comportamento anterior, para instaladores que rejeitam --system-level).
-	// São divididos em campos antes de passar ao processo (ex.: "/S /PreventReboot=true").
+	// NOTA (evidência de campo 2026-10-10): existiu aqui uma tentativa prévia com
+	// `--system-level` (escopo de máquina). Ela foi REMOVIDA: o manifesto do winget
+	// do Brave (Brave.Brave 155.1.97.56) é `Scope: user`, NÃO declara
+	// InstallerSwitches (o binário baixado é o `BraveBrowserStandaloneSilentSetup`,
+	// já silencioso) e lista `invalidParameter` como retorno ESPERADO. Recebendo
+	// `/silent /install --system-level`, esse stub sobe o filho "BraveUpdate" e
+	// NÃO RETORNA quando executado como SYSTEM — nenhuma tentativa com escopo
+	// inventado pelo agente pode instalar o que o próprio manifesto não suporta.
+	// Em vez de adivinhar escopo, o orçamento de tempo (runLocalInstallerFull)
+	// garante que o fallback `winget install` — autoritativo, que aplica os
+	// switches do manifesto — seja alcançado em minutos, não em dezenas de minutos.
 	for _, candidate := range []struct {
 		name string
 		args string
@@ -1035,11 +1064,9 @@ func runExeInstallerSilent(ctx context.Context, timeout time.Duration, artifactP
 		if sw == "" {
 			continue
 		}
-		output, err := executeHiddenProcess(ctx, timeout, artifactPath, splitInstallerSwitches(sw))
-		if err == nil {
+		if output, ok := attempt(splitInstallerSwitches(sw)); ok {
 			return fmt.Sprintf("[p2p-installer] switches do catalogo (%s) bem-sucedidos: %s\n%s", candidate.name, sw, output), nil
 		}
-		lastOutput, lastErr = output, err
 	}
 
 	// Fallback: cascata heurística por framework detectado (comportamento anterior).
@@ -1047,16 +1074,18 @@ func runExeInstallerSilent(ctx context.Context, timeout time.Duration, artifactP
 	cascade := installerFlagCascade(kind)
 
 	for i, args := range cascade {
-		output, err := executeHiddenProcess(ctx, timeout, artifactPath, args)
-		if err == nil {
-			if i > 0 {
-				// Loga qual conjunto de flags funcionou (facilita diagnóstico).
-				return fmt.Sprintf("[p2p-installer] flags heurísticas bem-sucedidas: %s\n%s", strings.Join(args, " "), output), nil
-			}
-			return output, nil
+		output, ok := attempt(args)
+		if !ok {
+			continue
 		}
-		lastOutput = output
-		lastErr = err
+		if i > 0 {
+			// Loga qual conjunto de flags funcionou (facilita diagnóstico).
+			return fmt.Sprintf("[p2p-installer] flags heurísticas bem-sucedidas: %s\n%s", strings.Join(args, " "), output), nil
+		}
+		return output, nil
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("nenhum conjunto de flags aplicavel")
 	}
 	return lastOutput, fmt.Errorf("nenhum conjunto de flags silenciosas funcionou (último: %v): %w", cascade[len(cascade)-1], lastErr)
 }
@@ -1145,7 +1174,31 @@ func executeHiddenProcess(parent context.Context, timeout time.Duration, executa
 		job = nil
 	}
 	if job != nil {
-		defer job.Close()
+		// Encerra a ÁRVORE assim que o contexto terminar. O exec.CommandContext
+		// mata apenas o processo DIRETO; netos (ex.: BraveUpdate, criado pelo stub
+		// do Brave) continuam vivos segurando os pipes de stdout/stderr, e
+		// cmd.Wait() fica bloqueado até eles saírem — ou seja, o timeout e o
+		// orçamento de execução NÃO eram respeitados (medido: comando de 30s com
+		// deadline de 2s só retornou depois de 29s). Terminate concorrente fecha a
+		// árvore e libera o Wait.
+		stopWatch := make(chan struct{})
+		var watcher sync.WaitGroup
+		watcher.Add(1)
+		go func() {
+			defer watcher.Done()
+			select {
+			case <-ctx.Done():
+				_ = job.Terminate()
+			case <-stopWatch:
+			}
+		}()
+		// Garante que o watcher terminou antes de fechar o handle (evita corrida
+		// entre Terminate e Close, que zera j.handle).
+		defer func() {
+			close(stopWatch)
+			watcher.Wait()
+			job.Close()
+		}()
 	}
 
 	err := cmd.Wait()
