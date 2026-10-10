@@ -5,6 +5,7 @@ package native
 import (
 	"context"
 	"errors"
+	"time"
 
 	"discovery/app/core/models"
 )
@@ -56,6 +57,21 @@ func (unsupportedCollector) CollectScheduledTasks(context.Context) ([]models.Sch
 func (unsupportedCollector) CollectLoggedInUsers(context.Context) ([]models.LoggedInUser, error) {
 	return nil, ErrUnsupported
 }
+
+// PrimaryLoggedInUser não tem sessão interativa fora do Windows.
+type PrimaryLoggedInUser struct {
+	User    string
+	LogonAt time.Time
+}
+
+// CollectPrimaryLoggedInUser não tem implementação fora do Windows.
+func CollectPrimaryLoggedInUser() string { return "" }
+
+// CollectPrimaryLoggedInUserSession não tem implementação fora do Windows.
+func CollectPrimaryLoggedInUserSession() PrimaryLoggedInUser {
+	return PrimaryLoggedInUser{}
+}
+
 func (unsupportedCollector) CollectBitLocker(context.Context) ([]models.BitLockerInfo, error) {
 	return nil, ErrUnsupported
 }

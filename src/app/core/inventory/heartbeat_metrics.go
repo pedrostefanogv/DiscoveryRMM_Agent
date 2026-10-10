@@ -70,6 +70,17 @@ LEFT JOIN (
 LIMIT 1
 `
 
+// loggedUserQuerySQL devolve o usuário da sessão mais recente via osquery.
+// Usada apenas fora do Windows (onde não há WTS); required=false porque a
+// tabela logged_in_users pode não existir na instalação do osquery.
+const loggedUserQuerySQL = `
+SELECT user, time
+FROM logged_in_users
+WHERE user IS NOT NULL AND user != ''
+ORDER BY time DESC
+LIMIT 1
+`
+
 // CollectHeartbeatMetrics coleta métricas do sistema para o heartbeat
 // usando APIs nativas do Windows sempre que disponível, com osquery como
 // fallback para plataformas não-Windows onde as APIs nativas não existem.
@@ -88,6 +99,10 @@ func CollectHeartbeatMetrics(ctx context.Context) *agentconn.AgentHeartbeatMetri
 		DiskReadPercent:  -1,
 		DiskWritePercent: -1,
 		DiskResponseMs:   -1,
+		// Sentinela obrigatório: sem ele o default 0 faz o guard
+		// hasAnyHeartbeatMetric() (CpuTemperatureCelsius >= 0) sempre passar e
+		// um payload sem nenhuma métrica válida seria enviado.
+		CpuTemperatureCelsius: -1,
 	}
 
 	if runtime.GOOS == "windows" {
@@ -149,6 +164,15 @@ func collectHeartbeatMetricsWindows(ctx context.Context, metrics *agentconn.Agen
 
 	// Temperatura da CPU: PDH nativo (pdh.dll) — zero subprocessos
 	collectHeartbeatCPUTemperatureWindowsNative(ctx, metrics)
+
+	// Usuário logado (sessão de console ativa) — reportado no heartbeat para
+	// exibição/busca no console web. Vazio quando não há sessão interativa.
+	if logged := collectLoggedUserNativeFunc(); strings.TrimSpace(logged.User) != "" {
+		metrics.LoggedUser = strings.TrimSpace(logged.User)
+		if !logged.Since.IsZero() {
+			metrics.LoggedUserSince = logged.Since
+		}
+	}
 }
 
 // collectHeartbeatMetricsOsquery é o fallback para plataformas não-Windows
@@ -164,6 +188,9 @@ func collectHeartbeatMetricsOsquery(ctx context.Context, metrics *agentconn.Agen
 
 	queries := []osqueryQuery{
 		{name: "heartbeat_metrics", sql: heartbeatMetricsSQL, required: true},
+		// Usuário logado: tabela pode não existir/estar desabilitada — não pode
+		// derrubar a coleta principal de métricas.
+		{name: "logged_user", sql: loggedUserQuerySQL, required: false},
 	}
 
 	var results map[string]osqueryResult
@@ -171,26 +198,14 @@ func collectHeartbeatMetricsOsquery(ctx context.Context, metrics *agentconn.Agen
 	// 1. Tentar socket osqueryd (daemon rodando)
 	if socketPath := findOsquerydSocket(); socketPath != "" {
 		results = runQueriesViaSocket(runCtx, socketPath, queries, nil)
-		if results != nil {
-			if r, ok := results["heartbeat_metrics"]; ok && r.err == nil && len(r.rows) > 0 {
-				if m := mapHeartbeatRow(r.rows[0]); m != nil {
-					*metrics = *m
-				}
-			}
-		}
+		applyOsqueryHeartbeat(results, metrics)
 		return
 	}
 
 	// 2. Try keep-alive pool (reuses osqueryi from previous calls).
 	if socketPath := acquireOsqueryiSocket(); socketPath != "" {
 		results = runQueriesViaSocket(runCtx, socketPath, queries, nil)
-		if results != nil {
-			if r, ok := results["heartbeat_metrics"]; ok && r.err == nil && len(r.rows) > 0 {
-				if m := mapHeartbeatRow(r.rows[0]); m != nil {
-					*metrics = *m
-				}
-			}
-		}
+		applyOsqueryHeartbeat(results, metrics)
 		return
 	}
 
@@ -202,18 +217,55 @@ func collectHeartbeatMetricsOsquery(ctx context.Context, metrics *agentconn.Agen
 	storeOsqueryiSocket(proc)
 
 	results = runQueriesViaSocket(runCtx, proc.socketPath, queries, nil)
-	if results != nil {
-		if r, ok := results["heartbeat_metrics"]; ok && r.err == nil && len(r.rows) > 0 {
-			if m := mapHeartbeatRow(r.rows[0]); m != nil {
-				*metrics = *m
-			}
-		}
-	}
+	applyOsqueryHeartbeat(results, metrics)
 
 	// Aplicar fallbacks para preencher lacunas do osquery
 	applyHeartbeatCPUFallback(ctx, metrics)
 	applyHeartbeatDiskIOFallback(ctx, metrics)
 	applyHeartbeatMemoryFallback(ctx, metrics)
+}
+
+// applyOsqueryHeartbeat aplica o resultado das queries do osquery. O usuário
+// logado é aplicado DEPOIS de *metrics = *m, porque a atribuição substitui o
+// struct inteiro (apagaria o usuário já coletado).
+func applyOsqueryHeartbeat(results map[string]osqueryResult, metrics *agentconn.AgentHeartbeatMetrics) {
+	if results == nil || metrics == nil {
+		return
+	}
+
+	if r, ok := results["heartbeat_metrics"]; ok && r.err == nil && len(r.rows) > 0 {
+		if m := mapHeartbeatRow(r.rows[0]); m != nil {
+			*metrics = *m
+		}
+	}
+
+	if r, ok := results["logged_user"]; ok && r.err == nil {
+		if user, since := mapLoggedUserRow(r.rows); user != "" {
+			metrics.LoggedUser = user
+			if !since.IsZero() {
+				metrics.LoggedUserSince = since
+			}
+		}
+	}
+}
+
+// mapLoggedUserRow extrai usuário e instante de logon de uma linha de
+// logged_in_users (time é unixtime).
+func mapLoggedUserRow(rows []map[string]any) (string, time.Time) {
+	for _, row := range rows {
+		user := strings.TrimSpace(getString(row, "user"))
+		if user == "" {
+			continue
+		}
+
+		var since time.Time
+		if seconds := parseHeartbeatFloat(row, "time", 0); seconds > 0 {
+			since = time.Unix(int64(seconds), 0).UTC()
+		}
+		return user, since
+	}
+
+	return "", time.Time{}
 }
 
 func hasAnyHeartbeatMetric(metrics *agentconn.AgentHeartbeatMetrics) bool {
@@ -222,6 +274,7 @@ func hasAnyHeartbeatMetric(metrics *agentconn.AgentHeartbeatMetrics) bool {
 	}
 
 	return strings.TrimSpace(metrics.Hostname) != "" ||
+		strings.TrimSpace(metrics.LoggedUser) != "" ||
 		metrics.CpuPercent >= 0 ||
 		metrics.MemoryPercent >= 0 ||
 		metrics.MemoryTotalGb > 0 ||
@@ -296,6 +349,12 @@ var collectWindowsDiskIOMetricsFunc = CollectWindowsDiskIOMetrics
 var collectHeartbeatMemoryMetricsFunc = collectHeartbeatMemoryMetrics
 var findOsqueryBinaryFunc = FindOsqueryBinary
 
+// heartbeatLoggedUser é a sessão interativa principal usada no heartbeat.
+type heartbeatLoggedUser struct {
+	User  string
+	Since time.Time
+}
+
 // Native Windows collectors — mockable for testing.
 var (
 	collectWindowsCPUPercentNativeFunc = collectWindowsCPUPercentNative
@@ -303,6 +362,7 @@ var (
 	collectDiskSpaceNativeFunc         = collectDiskSpaceNative
 	collectUptimeSecondsFunc           = collectUptimeSeconds
 	collectProcessCountNativeFunc      = collectProcessCountNative
+	collectLoggedUserNativeFunc        = collectLoggedUserNative
 )
 
 func applyHeartbeatCPUFallback(ctx context.Context, metrics *agentconn.AgentHeartbeatMetrics) {

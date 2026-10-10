@@ -1294,6 +1294,13 @@ func mergeHeartbeatMetrics(dst *agentconn.AgentHeartbeatMetrics, src *agentconn.
 	if src.ProcessCount > 0 {
 		dst.ProcessCount = src.ProcessCount
 	}
+	// Usuário logado (sessão interativa). Copiado junto com o início da sessão;
+	// sem isto o heartbeat real NUNCA levava o campo (o struct é remontado em
+	// getHeartbeatMetrics e este merge descartava o valor coletado).
+	if user := strings.TrimSpace(src.LoggedUser); user != "" {
+		dst.LoggedUser = user
+		dst.LoggedUserSince = src.LoggedUserSince
+	}
 	if src.PeerID != "" {
 		dst.PeerID = src.PeerID
 	}

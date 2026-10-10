@@ -114,6 +114,17 @@ type AgentHeartbeat struct {
 	// IPC — útil para o servidor decidir roteamento de notificações interativas
 	// e remote session. Omitido quando o processo não é serviço (UI standalone).
 	UIOnline *bool `json:"uiOnline,omitempty"`
+	// LoggedUser é o usuário da sessão interativa (console) reportado a cada
+	// heartbeat, usado para exibição e busca de agentes no console web.
+	//
+	// SEM omitempty de propósito: o campo vazio ("") sinaliza "agent novo, sem
+	// sessão interativa"; a ausência do campo sinaliza "agent antigo que não
+	// reporta usuário" — o servidor usa isso para decidir entre mostrar "—" e
+	// cair para o último usuário conhecido.
+	LoggedUser string `json:"loggedUser"`
+	// LoggedUserSince é o instante (RFC3339) em que a sessão interativa atual
+	// iniciou. Vazio quando não há sessão/agent antigo.
+	LoggedUserSince string `json:"loggedUserSince,omitempty"`
 }
 
 // AgentHeartbeatMetrics is a lightweight struct for collecting
@@ -140,6 +151,12 @@ type AgentHeartbeatMetrics struct {
 	Port   int
 	// UIOnline: nil = não aplicável (não é serviço); true/false = estado IPC
 	UIOnline *bool
+	// LoggedUser: usuário da sessão de console ativa ("DOMINIO\usuario"), vazio
+	// quando não há sessão interativa. Coletado nativamente no Windows.
+	LoggedUser string
+	// LoggedUserSince: início da sessão interativa atual (zero quando
+	// desconhecido/sem sessão).
+	LoggedUserSince time.Time
 }
 
 type natsResultEnvelope struct {
@@ -532,6 +549,17 @@ func (r *Runtime) collectHeartbeat(cfg Config, ipAddr string) AgentHeartbeat {
 		// UI online (companion conectada via IPC) — apenas no modo serviço.
 		if m.UIOnline != nil {
 			hb.UIOnline = m.UIOnline
+		}
+		// Usuário logado (sessão interativa/console). Sempre presente (mesmo
+		// vazio) para o servidor distinguir "sem sessão" de "agent antigo".
+		// Cap defensivo em runes para não cortar UTF-8.
+		user := strings.TrimSpace(m.LoggedUser)
+		if runes := []rune(user); len(runes) > 256 {
+			user = string(runes[:256])
+		}
+		hb.LoggedUser = user
+		if !m.LoggedUserSince.IsZero() {
+			hb.LoggedUserSince = m.LoggedUserSince.UTC().Format(time.RFC3339)
 		}
 	}
 	return hb

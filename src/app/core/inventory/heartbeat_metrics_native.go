@@ -8,6 +8,8 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+
+	"discovery/app/core/inventory/native"
 )
 
 var (
@@ -167,4 +169,14 @@ func collectWindowsCPUPercentNative() (float64, bool) {
 		percent = 100
 	}
 	return normalizeHeartbeatPercent(percent), true
+}
+
+// ─── Usuário logado (sessão de console) ──────────────────────────────
+
+// collectLoggedUserNative devolve o usuário e o início da sessão interativa
+// (console) via WTS. Sem subprocessos, disponível também no modo serviço
+// (SYSTEM).
+func collectLoggedUserNative() heartbeatLoggedUser {
+	session := native.CollectPrimaryLoggedInUserSession()
+	return heartbeatLoggedUser{User: session.User, Since: session.LogonAt}
 }

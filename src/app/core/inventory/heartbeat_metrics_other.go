@@ -28,6 +28,10 @@ func collectProcessCountNative() int {
 	return -1
 }
 
+// collectLoggedUserNative não tem implementação nativa fora do Windows.
+func collectLoggedUserNative() heartbeatLoggedUser { return heartbeatLoggedUser{} }
+
 func collectHeartbeatDiskIOWindowsNative(_ *agentconn.AgentHeartbeatMetrics) {}
 
-func collectHeartbeatCPUTemperatureWindowsNative(_ context.Context, _ *agentconn.AgentHeartbeatMetrics) {}
+func collectHeartbeatCPUTemperatureWindowsNative(_ context.Context, _ *agentconn.AgentHeartbeatMetrics) {
+}

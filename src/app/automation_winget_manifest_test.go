@@ -63,6 +63,61 @@ func TestParseWingetManifestInfo_MachineScopeWithSwitches(t *testing.T) {
 	}
 }
 
+// Manifesto merged com DUAS variantes que divergem (é o caso do Brave.Brave:
+// pacote user E machine). Sem saber QUAL entrada corresponde ao arquivo
+// baixado, dirigir o binário com switches de outra entrada é exatamente o que
+// travava o stub — então o resultado tem de ser "desconhecido".
+const divergentManifestYAML = `PackageIdentifier: Brave.Brave
+PackageVersion: 155.1.97.56
+Installers:
+- Architecture: x64
+  InstallerType: exe
+  InstallerUrl: https://example.invalid/BraveBrowserStandaloneSilentSetup.exe
+  Scope: user
+- Architecture: x64
+  InstallerType: exe
+  InstallerUrl: https://example.invalid/BraveBrowserStandaloneSetup.exe
+  Scope: machine
+  InstallerSwitches:
+    Silent: /silent /install
+`
+
+const agreeingManifestYAML = `PackageIdentifier: Vendor.App
+PackageVersion: 1.0.0
+Installers:
+- Architecture: x64
+  InstallerType: nullsoft
+  Scope: machine
+  InstallerSwitches:
+    Silent: /S
+- Architecture: x86
+  InstallerType: nullsoft
+  Scope: machine
+  InstallerSwitches:
+    Silent: /S
+`
+
+func TestParseWingetManifestInfoAgreed(t *testing.T) {
+	// Divergem (user sem switches x machine com switches) -> desconhecido.
+	if info, ok := parseWingetManifestInfoAgreed(divergentManifestYAML); ok {
+		t.Fatalf("entradas divergentes deveriam resultar em desconhecido, obtido %+v", info)
+	}
+
+	// Concordam -> usa os valores comuns.
+	info, ok := parseWingetManifestInfoAgreed(agreeingManifestYAML)
+	if !ok {
+		t.Fatal("entradas concordantes deveriam ser aceitas")
+	}
+	if info.Scope != "machine" || info.Silent != "/S" {
+		t.Fatalf("valores comuns nao lidos: %+v", info)
+	}
+
+	// Uma única entrada continua valendo (caso do Brave baixado).
+	if _, ok := parseWingetManifestInfoAgreed(braveManifestYAML); !ok {
+		t.Fatal("manifesto de entrada unica deveria ser aceito")
+	}
+}
+
 // YAML vazio/lixo não pode entrar em pânico nem inventar dados.
 func TestParseWingetManifestInfo_DegenerateInputs(t *testing.T) {
 	for _, in := range []string{"", "   ", "Installers:", "Installers:\n- Architecture: x64\n", "not: [valid: yaml"} {

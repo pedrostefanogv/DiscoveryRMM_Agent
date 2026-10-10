@@ -36,6 +36,10 @@ type agentHardwareEnvelope struct {
 	InventoryRaw           string          `json:"inventoryRaw"`
 	InventorySchemaVersion string          `json:"inventorySchemaVersion"`
 	InventoryCollectedAt   string          `json:"inventoryCollectedAt"`
+	// LoggedUser: usuário da sessão interativa principal (console). Ajuda a API
+	// a persistir o MESMO usuário que o heartbeat reporta ao vivo; omitido em
+	// syncs parciais (a API preserva o último valor).
+	LoggedUser string `json:"loggedUser,omitempty"`
 }
 
 type agentHardwareComponents struct {
@@ -1638,9 +1642,22 @@ func buildAgentHardwareEnvelope(report models.InventoryReport, version, commitHa
 		InventoryRaw:           string(rawJSON),
 		InventorySchemaVersion: "",
 		InventoryCollectedAt:   collected,
+		LoggedUser:             primaryInventoryLoggedUser(report.LoggedInUsers),
 	}
 
 	return envelope
+}
+
+// primaryInventoryLoggedUser escolhe o usuário principal do inventário. O
+// coletor WTS já devolve a sessão de console em primeiro lugar, então basta
+// pegar a primeira entrada válida — mantendo paridade com o heartbeat.
+func primaryInventoryLoggedUser(users []models.LoggedInUser) string {
+	for _, u := range users {
+		if user := strings.TrimSpace(u.User); user != "" {
+			return trimToMaxLen(user, 256)
+		}
+	}
+	return ""
 }
 
 func buildCleanInventoryRaw(report models.InventoryReport, disks []agentDiskInfo, adapters []agentNetworkAdapterInfo, modules []agentMemoryModuleInfo, printers []agentPrinterInfo) json.RawMessage {

@@ -275,6 +275,39 @@ func TestCollectLoggedInUsers(t *testing.T) {
 	_ = users
 }
 
+// TestCollectPrimaryLoggedInUser verifies the primary interactive user helper
+// does not panic and returns a trimmed value. The value may legitimately be
+// empty in CI/containers without an interactive session.
+func TestCollectPrimaryLoggedInUser(t *testing.T) {
+	user := CollectPrimaryLoggedInUser()
+	if user != strings.TrimSpace(user) {
+		t.Fatalf("CollectPrimaryLoggedInUser deveria devolver valor trimado, veio %q", user)
+	}
+}
+
+// TestCollectPrimaryLoggedInUserSession valida que a sessão principal é
+// resolvida sem panic (usuário pode ser vazio em CI sem sessão interativa).
+func TestCollectPrimaryLoggedInUserSession(t *testing.T) {
+	session := CollectPrimaryLoggedInUserSession()
+	if session.User != strings.TrimSpace(session.User) {
+		t.Fatalf("usuário deveria ser trimado, veio %q", session.User)
+	}
+}
+
+// TestFiletimeToTime valida a conversão FILETIME (100ns desde 1601) → time UTC.
+func TestFiletimeToTime(t *testing.T) {
+	// 116444736000000000 ticks = 1970-01-01T00:00:00Z
+	if got := filetimeToTime(116444736000000000); !got.Equal(time.Unix(0, 0).UTC()) {
+		t.Fatalf("filetimeToTime(epoch) = %v, want 1970-01-01T00:00:00Z", got)
+	}
+
+	want := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	ticks := uint64(want.Unix()+11644473600)*10_000_000 + uint64(want.Nanosecond()/100)
+	if got := filetimeToTime(ticks); !got.Equal(want) {
+		t.Fatalf("filetimeToTime(2026) = %v, want %v", got, want)
+	}
+}
+
 // TestCollectBattery verifies that battery info is collected.
 func TestCollectBattery(t *testing.T) {
 	battery, err := collectBatteryNative(context.Background())

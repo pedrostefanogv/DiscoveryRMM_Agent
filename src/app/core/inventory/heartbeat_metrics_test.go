@@ -302,6 +302,54 @@ func TestCollectHeartbeatMetrics_ReturnsMemoryFallbackWithoutOsquery(t *testing.
 	}
 }
 
+// TestHasAnyHeartbeatMetric_IncludesLoggedUser garante que o usuário logado,
+// sozinho, mantém o heartbeat válido (não descarta o payload quando os
+// coletores numéricos falham).
+func TestHasAnyHeartbeatMetric_IncludesLoggedUser(t *testing.T) {
+	// Sentinela idêntico ao estado inicial de CollectHeartbeatMetrics: nenhum
+	// coletor numérico preencheu nada.
+	emptyMetrics := func() *agentconn.AgentHeartbeatMetrics {
+		return &agentconn.AgentHeartbeatMetrics{
+			CpuPercent:            -1,
+			MemoryPercent:         -1,
+			DiskPercent:           -1,
+			DiskReadPercent:       -1,
+			DiskWritePercent:      -1,
+			DiskResponseMs:        -1,
+			CpuTemperatureCelsius: -1,
+		}
+	}
+
+	if hasAnyHeartbeatMetric(emptyMetrics()) {
+		t.Fatalf("métricas sem nenhum coletor válido deveriam ser inválidas")
+	}
+
+	withUser := emptyMetrics()
+	withUser.LoggedUser = "CORP\\pedro"
+	if !hasAnyHeartbeatMetric(withUser) {
+		t.Fatalf("loggedUser preenchido deveria contar como métrica de heartbeat")
+	}
+}
+
+// TestMapLoggedUserRow valida o parser da query osquery logged_in_users
+// (fallback de usuário logado fora do Windows).
+func TestMapLoggedUserRow(t *testing.T) {
+	user, since := mapLoggedUserRow([]map[string]any{
+		{"user": "", "time": "100"},
+		{"user": "  joao.silva  ", "time": "1767225845"},
+	})
+	if user != "joao.silva" {
+		t.Fatalf("user = %q, want joao.silva", user)
+	}
+	if since.Unix() != 1767225845 {
+		t.Fatalf("since = %v, want unix 1767225845", since)
+	}
+
+	if u, s := mapLoggedUserRow(nil); u != "" || !s.IsZero() {
+		t.Fatalf("linhas vazias deveriam devolver zero, veio %q/%v", u, s)
+	}
+}
+
 func TestCollectWindowsCPUPercent_Local(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("coleta local de CPU suportada apenas no Windows")
@@ -316,5 +364,32 @@ func TestCollectWindowsCPUPercent_Local(t *testing.T) {
 	}
 	if cpuPercent < 0 || cpuPercent > 100 {
 		t.Fatalf("CpuPercent fora da faixa: %v", cpuPercent)
+	}
+}
+
+// TestCollectHeartbeatMetrics_IncludesLoggedUser garante que o usuário logado
+// coletado nativamente entra no payload do heartbeat (campo usado pelo console
+// web para exibir/buscar o "usuário logado no Windows").
+func TestCollectHeartbeatMetrics_IncludesLoggedUser(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("coleta nativa de usuário logado testada apenas no Windows")
+	}
+
+	previous := collectLoggedUserNativeFunc
+	since := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	collectLoggedUserNativeFunc = func() heartbeatLoggedUser {
+		return heartbeatLoggedUser{User: "  CORP\\pedro  ", Since: since}
+	}
+	defer func() { collectLoggedUserNativeFunc = previous }()
+
+	metrics := CollectHeartbeatMetrics(context.Background())
+	if metrics == nil {
+		t.Fatalf("CollectHeartbeatMetrics retornou nil")
+	}
+	if metrics.LoggedUser != "CORP\\pedro" {
+		t.Fatalf("LoggedUser = %q, want %q", metrics.LoggedUser, "CORP\\pedro")
+	}
+	if !metrics.LoggedUserSince.Equal(since) {
+		t.Fatalf("LoggedUserSince = %v, want %v", metrics.LoggedUserSince, since)
 	}
 }

@@ -107,6 +107,55 @@ func TestBuildAgentHardwareEnvelope_FiltersInvalidRequiredComponents(t *testing.
 	}
 }
 
+func TestBuildAgentHardwareEnvelope_IncludesPrimaryLoggedUser(t *testing.T) {
+	report := models.InventoryReport{
+		CollectedAt: "2026-03-12T19:31:36Z",
+		Hardware:    models.HardwareInfo{Hostname: "PC-123"},
+		// Primeira entrada vazia deve ser ignorada (o coletor WTS já coloca a
+		// sessão de console na frente).
+		LoggedInUsers: []models.LoggedInUser{
+			{User: "   ", Type: "active"},
+			{User: "CORP\\pedro", Type: "active"},
+		},
+	}
+
+	env := buildAgentHardwareEnvelope(report, "dev", "", nil)
+	if env.LoggedUser != "CORP\\pedro" {
+		t.Fatalf("loggedUser = %q, esperado %q", env.LoggedUser, "CORP\\pedro")
+	}
+
+	body, err := json.Marshal(env)
+	if err != nil {
+		t.Fatalf("marshal envelope: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if payload["loggedUser"] != "CORP\\pedro" {
+		t.Fatalf("payload[loggedUser] = %v, esperado CORP\\pedro", payload["loggedUser"])
+	}
+}
+
+func TestBuildAgentHardwareEnvelope_OmitsLoggedUserWithoutSession(t *testing.T) {
+	report := models.InventoryReport{
+		CollectedAt: "2026-03-12T19:31:36Z",
+		Hardware:    models.HardwareInfo{Hostname: "PC-123"},
+	}
+
+	env := buildAgentHardwareEnvelope(report, "dev", "", nil)
+	if env.LoggedUser != "" {
+		t.Fatalf("loggedUser = %q, esperado vazio", env.LoggedUser)
+	}
+
+	body, _ := json.Marshal(env)
+	var payload map[string]any
+	_ = json.Unmarshal(body, &payload)
+	if _, exists := payload["loggedUser"]; exists {
+		t.Fatalf("loggedUser deveria ser omitido no sync sem sessão")
+	}
+}
+
 func TestBuildAgentSoftwareEnvelope_AppliesContractLimits(t *testing.T) {
 	veryLong := strings.Repeat("x", 2000)
 	report := models.InventoryReport{

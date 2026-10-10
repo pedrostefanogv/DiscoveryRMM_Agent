@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -188,10 +189,15 @@ func (m *automationPackageManagerRouter) upgradeMachineThenUser(ctx context.Cont
 	defer cleanup()
 	m.logf("[automation][p2p] tentando upgrade na sessao do usuario logado packageId=%s", strings.TrimSpace(id))
 	userOut, userErr := m.fallback.UpgradeWithSwitches(userCtx, id, silent, silentWithProgress)
-	if userErr == nil {
+	if userErr != nil {
+		return out, fmt.Errorf("%w (upgrade na sessao do usuario tambem falhou: %v)", err, userErr)
+	}
+	// Simetria com o install: confirma no MESMO contexto do usuário (o
+	// `winget upgrade` como SYSTEM não enxerga pendências do perfil dele).
+	if m.verifyLocalInstallResult(userCtx, id, "upgrade") {
 		return userOut, nil
 	}
-	return out, fmt.Errorf("%w (upgrade na sessao do usuario tambem falhou: %v)", err, userErr)
+	return out, fmt.Errorf("%w (upgrade na sessao do usuario concluiu sem atualizar o pacote)", err)
 }
 
 // installedVisibleToUser confirma, NO CONTEXTO DO USUÁRIO logado, que o pacote
@@ -927,6 +933,9 @@ func (m *automationPackageManagerRouter) pruneArtifactAfterInstall(artifactName 
 	}
 	if m.app.P2PCoord.DeleteArtifactAfterInstall(artifactName) {
 		m.logf("[automation][p2p] instalador removido do P2P_Temp apos instalacao artifact=%s", artifactName)
+		// O sidecar do manifesto não pode sobreviver ao artifact: metadata de um
+		// binário que não existe mais poderia autorizar execução direta errada.
+		_ = os.Remove(m.artifactManifestPath(artifactName))
 	}
 }
 
@@ -1029,25 +1038,11 @@ func normalizePackageLookupKey(value string) string {
 	return b.String()
 }
 
-// runLocalInstaller executa o instalador local (.msi/.exe) com flags silenciosas.
-// catalogSilent contém os switches vindos do catálogo da loja (campo "silent"),
-// que têm PRIORIDADE sobre a detecção heurística — elimina o "adivinhar".
-// Tenta uma cascata de flags conhecidas para .exe (NSIS, Inno Setup, WiX Burn,
-// InstallShield) até que uma tenha sucesso, logando qual funcionou.
-func runLocalInstaller(ctx context.Context, artifactPath string) (string, error) {
-	return runLocalInstallerWithSwitches(ctx, artifactPath, "", "")
-}
-
-// runLocalInstallerWithSwitches executa o instalador local (.msi/.exe) usando
-// os switches do catálogo como primeira tentativa (silent → silentWithProgress),
-// com fallback para a cascata heurística quando não houver switches ou falharem.
-// installerType (do manifesto winget: "wix", "burn", "msi", "nullsoft", "inno",
-// "zip", "portable", ...) tem prioridade sobre a extensão do arquivo — um
-// instalador "wix" empacotado como .exe precisa de msiexec, e "portable"/"zip"
-// não são instaladores executáveis.
-func runLocalInstallerWithSwitches(ctx context.Context, artifactPath, silent, silentWithProgress string) (string, error) {
-	return runLocalInstallerFull(ctx, artifactPath, silent, silentWithProgress, "", false)
-}
+// NOTA: os wrappers runLocalInstaller/runLocalInstallerWithSwitches foram
+// removidos — não tinham chamadores. A cascata heurística
+// (detectInstallerType/installerFlagCascade) permanece apenas para o modo
+// NON-exact (exactSwitches=false), que a automação não usa: todo caminho de
+// produção passa exactSwitches=true com os switches do MANIFESTO.
 
 const (
 	// localInstallerExeBudget é o orçamento total das tentativas de execução
@@ -1376,6 +1371,12 @@ func executeHiddenProcess(parent context.Context, timeout time.Duration, executa
 	var outputBuf bytes.Buffer
 	cmd.Stdout = &outputBuf
 	cmd.Stderr = &outputBuf
+	// Rede de segurança quando NÃO há Job Object (falha de NewJobObject/Assign em
+	// ambientes com EDR/sandbox que bloqueiam job nesting): o exec.CommandContext
+	// mata só o processo direto, e netos (BraveUpdate) segurando os pipes deixariam
+	// cmd.Wait() bloqueado para sempre — o prazo/orçamento deixaria de valer.
+	// WaitDelay fecha os pipes e encerra o processo depois do deadline.
+	cmd.WaitDelay = 30 * time.Second
 	if startErr := cmd.Start(); startErr != nil {
 		// Falha de CreateProcess (ex.: ERROR_ELEVATION_REQUIRED 740 / binário sem
 		// permissão): mantém o fallback de UAC do caminho antigo — sem isso o
@@ -1390,10 +1391,12 @@ func executeHiddenProcess(parent context.Context, timeout time.Duration, executa
 	job, jobErr := processutil.NewJobObject()
 	if jobErr == nil {
 		if assignErr := job.Assign(cmd.Process); assignErr != nil {
+			log.Printf("[automation][p2p] aviso: nao foi possivel atribuir o instalador a um Job Object (%v) - o encerramento da arvore dependera do WaitDelay", assignErr)
 			job.Close()
 			job = nil
 		}
 	} else {
+		log.Printf("[automation][p2p] aviso: Job Object indisponivel (%v) - o encerramento da arvore dependera do WaitDelay", jobErr)
 		job = nil
 	}
 	if job != nil {
