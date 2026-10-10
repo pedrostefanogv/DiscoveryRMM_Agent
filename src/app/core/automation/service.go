@@ -28,6 +28,16 @@ const (
 	recentExecutionLimit = 15
 	defaultDeferTimes    = 3
 	defaultDeferInterval = 30 * time.Minute
+	// executionHardTimeoutMin/Max limitam QUALQUER execucao de task. Sem um
+	// teto, o goroutine de execucao podia ficar vivo indefinidamente (prompt,
+	// winget, instalador stub) e a linha de historico ficava em "Dispatched"
+	// para sempre — e a task nunca mais era disparada.
+	executionHardTimeoutMin = 10 * time.Minute
+	executionHardTimeoutMax = 60 * time.Minute
+	// executionStaleTimeout fica ACIMA de qualquer execucao legitima (teto
+	// acima). Usado pelo watchdog para encerrar linhas nao terminais que
+	// sobreviveram ao processo que as criou.
+	executionStaleTimeout = 90 * time.Minute
 )
 
 type deferState struct {
@@ -73,12 +83,19 @@ type Service struct {
 	// de falha a cada ~3 min). Estado em memória: após restart do agente o
 	// primeiro ciclo volta a notificar — intencional, o usuário deve ver o
 	// estado atual ao menos uma vez por sessão.
-	notifDedup       map[string]automationNotifDedupState
-	state            State
-	currentAgent     string
-	cron             *cron.Cron
-	cronEntries      map[string]cron.EntryID
-	activeTasks      map[string]bool
+	notifDedup   map[string]automationNotifDedupState
+	state        State
+	currentAgent string
+	cron         *cron.Cron
+	cronEntries  map[string]cron.EntryID
+	activeTasks  map[string]bool
+	// activeExecutions rastreia as execuções EM VOO neste processo (por
+	// executionID). O sweep periódico do watchdog precisa ignorá-las: o pior
+	// caso legítimo (prompt de até 60 min + execução de até 60 min) ultrapassa
+	// o cutoff de execuções "presas" — sem este guarda o watchdog encerraria
+	// uma execução legítima como falha e LIBERARIA o gatilho, disparando uma
+	// execução duplicada concorrente.
+	activeExecutions map[string]bool
 	userLoginHandled bool
 	// startupReadinessWaiter, quando configurado, é chamado uma única vez antes
 	// do PRIMEIRO refreshPolicy do processo. Permite que o App atrase o primeiro
@@ -116,16 +133,17 @@ const policyPreloadRetriggerInterval = 30 * time.Minute
 
 func NewService(getConfig func() RuntimeConfig, logger func(string)) *Service {
 	return &Service{
-		client:         NewClient(30 * time.Second),
-		getConfig:      getConfig,
-		logger:         logger,
-		state:          State{},
-		cronEntries:    make(map[string]cron.EntryID),
-		activeTasks:    make(map[string]bool),
-		deferByTask:    make(map[string]deferState),
-		notifDedup:     make(map[string]automationNotifDedupState),
-		processStartAt: time.Now().UTC(),
-		cfCache:        make(map[string]*ExecutionCustomFieldCtx),
+		client:           NewClient(30 * time.Second),
+		getConfig:        getConfig,
+		logger:           logger,
+		state:            State{},
+		cronEntries:      make(map[string]cron.EntryID),
+		activeTasks:      make(map[string]bool),
+		activeExecutions: make(map[string]bool),
+		deferByTask:      make(map[string]deferState),
+		notifDedup:       make(map[string]automationNotifDedupState),
+		processStartAt:   time.Now().UTC(),
+		cfCache:          make(map[string]*ExecutionCustomFieldCtx),
 	}
 }
 
@@ -214,6 +232,14 @@ func (s *Service) Run(ctx context.Context, onBeat func()) {
 	go s.runCallbackLoop(ctx, onBeat)
 
 	s.loadPersistedForCurrentAgent()
+
+	// Watchdog de execucoes presas (startup): qualquer linha nao terminal que
+	// ja existe pertence a um processo anterior — a execucao foi interrompida
+	// (restart/crash/self-update) e nunca sera finalizada por ninguem.
+	// Reconciliar ANTES do primeiro policy-sync e o que devolve a convergencia
+	// das tasks Immediate, que nao possuem outro gatilho. Sem isso o marcador
+	// de dedup permanece gravado e a task nunca mais roda (caso Brave).
+	s.reconcileStaleExecutions(strings.TrimSpace(s.getConfig().AgentID), true)
 
 	// Warmup (uma vez por processo): atrai o primeiro policy-sync para depois
 	// de uma dependência local estar pronta (ex.: discovery P2P). Os triggers
@@ -309,6 +335,9 @@ func (s *Service) refreshPolicy(ctx context.Context, includeScriptContent bool) 
 
 	s.loadPersistedForAgent(agentID)
 	s.loadDeferStateForAgent(agentID)
+	// Sweep periodico do watchdog (as execucoes legitimas nunca chegam perto
+	// de executionStaleTimeout, entao nada em andamento e afetado).
+	s.reconcileStaleExecutions(agentID, false)
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	correlationID := uuid.NewString()
@@ -513,6 +542,12 @@ func (s *Service) triggerImmediate(ctx context.Context, agentID, fingerprint str
 	if _, found, err := s.db.GetAutomationMarker(agentID, markerKey); err == nil && found {
 		return
 	}
+	// Agora que uma execução que falha LIBERA o marcador acima, sem este
+	// portão uma task permanentemente quebrada seria redisparada a cada
+	// policy-sync. O circuit breaker (mesmo marker do anti-loop) pausa a task.
+	if s.circuitBreakerPaused(agentID, task.TaskID) {
+		return
+	}
 	errutil.LogIfErr(s.db.SetAutomationMarker(agentID, markerKey, time.Now().UTC().Format(time.RFC3339)), "automation: definir marker imediato")
 	s.executeTaskAsync(ctx, agentID, task, sourceForTrigger(TriggerTypeImmediate), TriggerTypeImmediate, nil)
 }
@@ -568,6 +603,9 @@ func (s *Service) triggerOnAgentCheckIn(ctx context.Context, agentID, fingerprin
 	if _, found, err := s.db.GetAutomationMarker(agentID, markerKey); err == nil && found {
 		return
 	}
+	if s.circuitBreakerPaused(agentID, task.TaskID) {
+		return
+	}
 	errutil.LogIfErr(s.db.SetAutomationMarker(agentID, markerKey, time.Now().UTC().Format(time.RFC3339)), "automation: definir marker checkin")
 	s.executeTaskAsync(ctx, agentID, task, sourceForTrigger(TriggerTypeAgentCheckIn), TriggerTypeAgentCheckIn, nil)
 }
@@ -603,12 +641,37 @@ func (s *Service) executeTaskAsync(ctx context.Context, agentID string, task Aut
 		nowUTC := time.Now().UTC()
 		if !deferStateSnapshot.NextAttempt.IsZero() && nowUTC.Before(deferStateSnapshot.NextAttempt) {
 			s.logf("automacao: task=%s aguardando proxima tentativa de deferimento em %s", strings.TrimSpace(task.TaskID), deferStateSnapshot.NextAttempt.UTC().Format(time.RFC3339))
+			// O timer do adiamento vive só em memória e se perde num restart; sem
+			// reagendar aqui, uma task adiada cujo processo morreu no intervalo
+			// ficaria sem próxima tentativa (o estado de defer é persistido, o
+			// timer não).
+			delay := time.Until(deferStateSnapshot.NextAttempt)
+			if delay < 0 {
+				delay = 0
+			}
+			taskCopy := task
+			time.AfterFunc(delay, func() {
+				s.executeTaskAsync(context.Background(), agentID, taskCopy, sourceType, triggerType, nil)
+			})
 			return
 		}
 
 		startedAt := time.Now().UTC()
 		executionID := uuid.NewString()
 		correlationID := uuid.NewString()
+
+		// Registra a execução como EM VOO antes de gravar a linha: o finalizador
+		// de segurança é registrado depois, então (ordem LIFO dos defers) ele roda
+		// ANTES desta limpeza — a execução só sai do mapa quando já tem estado
+		// terminal persistido.
+		s.mu.Lock()
+		s.activeExecutions[executionID] = true
+		s.mu.Unlock()
+		defer func() {
+			s.mu.Lock()
+			delete(s.activeExecutions, executionID)
+			s.mu.Unlock()
+		}()
 		entry := database.AutomationExecutionEntry{
 			ExecutionID:      executionID,
 			AgentID:          agentID,
@@ -630,6 +693,42 @@ func (s *Service) executeTaskAsync(ctx context.Context, agentID string, task Aut
 			errutil.LogIfErr(s.db.UpsertAutomationExecution(entry), "automation: persistir execucao iniciada")
 		}
 		s.refreshDerivedState(agentID)
+
+		// Nenhuma saída deste goroutine pode deixar a linha em "Dispatched".
+		// Um return antecipado (ramo de adiamento), um panic, um ctx cancelado ou
+		// uma falha do upsert final deixavam a execução eternamente em
+		// andamento — e, como o marcador de trigger já havia sido gravado, a task
+		// NUNCA mais era disparada (bug do Brave: 167 MB baixados, zero
+		// instalações e o preload repetindo indefinidamente).
+		finalized := false
+		retryScheduled := false
+		defer func() {
+			if r := recover(); r != nil {
+				s.logf("automacao: panic na execucao da task=%s: %v", strings.TrimSpace(task.TaskID), r)
+			}
+			if finalized || s.db == nil {
+				return
+			}
+			if entry.Status == string(ExecutionStatusDispatched) || entry.Status == string(ExecutionStatusAcknowledged) {
+				entry.Status = string(ExecutionStatusFailed)
+			}
+			entry.FinishedAt = time.Now().UTC()
+			entry.Success = false
+			entry.SuccessSet = true
+			if strings.TrimSpace(entry.ErrorMessage) == "" {
+				entry.ErrorMessage = "execucao nao concluida (interrompida, cancelada ou sem resultado)"
+			}
+			errutil.LogIfErr(s.db.UpsertAutomationExecution(entry), "automation: persistir encerramento de execucao sem resultado")
+			s.logf("automacao: execucao encerrada sem resultado task=%s execution=%s status=%s", strings.TrimSpace(task.TaskID), entry.ExecutionID, entry.Status)
+			if !retryScheduled {
+				// Sem resultado e sem retry já agendado: registra a falha no
+				// anti-loop e LIBERA a deduplicação do gatilho para a task voltar a
+				// ser disparada. O circuit breaker limita a repetição.
+				s.updateAntiLoopState(agentID, task, ExecutionResult{Success: false, ErrorMessage: entry.ErrorMessage})
+				s.releaseTriggerMarkers(agentID, entry.TaskID)
+			}
+			s.refreshDerivedState(agentID)
+		}()
 
 		// Pré-checagem do prompt: se a ação de pacote já está em estado final
 		// (instalado/atualizado), NÃO interrompe o usuário com o Welcome/toast — o
@@ -655,6 +754,12 @@ func (s *Service) executeTaskAsync(ctx context.Context, agentID string, task Aut
 				time.AfterFunc(delay, func() {
 					s.executeTaskAsync(context.Background(), agentID, taskCopy, sourceType, triggerType, nil)
 				})
+				// Estado terminal da linha: o retry JÁ está agendado acima, logo o
+				// finalizador não deve liberar o marcador de trigger (evita disparo
+				// duplicado pelo próximo policy-sync).
+				entry.Status = string(ExecutionStatusDeferred)
+				entry.ErrorMessage = "adiada pelo usuario; nova tentativa agendada para " + next.UTC().Format(time.RFC3339)
+				retryScheduled = true
 				return
 			}
 		}
@@ -679,7 +784,10 @@ func (s *Service) executeTaskAsync(ctx context.Context, agentID string, task Aut
 		cfCtx := s.loadCustomFieldsForExecution(ctx, cfg, executionID, entry.TaskID, entry.ScriptID, correlationID)
 		defer s.clearCustomFieldCtx(executionID)
 
-		result := executeTask(ctx, packages, authorize, task, psadtPolicy, cfCtx.Fields)
+		// Teto duro: nenhuma execução pode ficar viva indefinidamente.
+		execCtx, cancelExec := context.WithTimeout(ctx, resolveExecutionHardTimeout(psadtPolicy))
+		result := executeTask(execCtx, packages, authorize, task, psadtPolicy, cfCtx.Fields)
+		cancelExec()
 
 		// Parseia valores coletados pelo script via protocolo MDZ_COLLECT.
 		collectedItems, cleanedOutput := parseCollectedValues(result.Output)
@@ -702,6 +810,9 @@ func (s *Service) executeTaskAsync(ctx context.Context, agentID string, task Aut
 		if s.db != nil {
 			errutil.LogIfErr(s.db.UpsertAutomationExecution(entry), "automation: persistir resultado da execucao")
 		}
+		// Resultado terminal persistido: o finalizador de segurança não deve
+		// mais reescrever a linha.
+		finalized = true
 
 		if entry.CommandID != "" {
 			payload := ResultRequest{
@@ -737,6 +848,16 @@ func (s *Service) executeTaskAsync(ctx context.Context, agentID string, task Aut
 		// para tasks winget recorrentes. Skips benignos consecutivos ativam
 		// backoff; falhas consecutivas idênticas abrem o circuit breaker.
 		s.updateAntiLoopState(agentID, task, result)
+
+		// Falha real (não skip benigno): LIBERA a deduplicação do gatilho para a
+		// task poder ser redisparada no próximo policy-sync (5 min). O circuit
+		// breaker acima pausa a task por 24 h após 3 falhas consecutivas, então
+		// isso não gera loop infinito — mas impede o caso "falhou uma vez e
+		// nunca mais tentou" (que era o comportamento anterior para tasks
+		// Immediate, que não têm outro gatilho).
+		if !result.Success {
+			s.releaseTriggerMarkers(agentID, entry.TaskID)
+		}
 
 		// A15: leitura do deferByTask SEMPRE sob lock — loadDeferStateForAgent
 		// substitui o mapa inteiro a cada policy-sync e recordAndGetNextDefer/
@@ -984,13 +1105,8 @@ func (s *Service) collectValidMarkerKeys(current State) []string {
 		if taskID == "" {
 			continue
 		}
-		if task.TriggerImmediate {
-			// C2: chave inclui LastUpdatedAt (mesmo formato do triggerImmediate).
-			keys = append(keys, "immediate:"+fingerprint+":"+taskID+":"+task.LastUpdatedAt)
-		}
-		if task.TriggerOnAgentCheckIn {
-			keys = append(keys, "checkin:"+fingerprint+":"+taskID+":"+task.LastUpdatedAt)
-		}
+		// C2: chave inclui LastUpdatedAt (mesmo formato dos triggers).
+		keys = append(keys, triggerMarkerKeysForTask(fingerprint, task)...)
 		if task.TriggerRecurring {
 			keys = append(keys, "recurring:last:"+taskID)
 		}
@@ -1404,6 +1520,170 @@ func (s *Service) recordExecutionNotification(eventType, taskKey string) {
 		s.notifDedup = make(map[string]automationNotifDedupState)
 	}
 	s.notifDedup[taskKey] = automationNotifDedupState{lastEventType: eventType, lastAt: time.Now().UTC()}
+}
+
+// resolveExecutionHardTimeout devolve o teto de duração de UMA execução de
+// task. Usa o timeout da policy PSADT quando configurado (default 1800s), com
+// margem para o fallback winget, limitado a [executionHardTimeoutMin,
+// executionHardTimeoutMax]. Garante que nenhuma execução fique viva para
+// sempre deixando a linha de histórico presa em "Dispatched".
+func resolveExecutionHardTimeout(policy PSADTPolicy) time.Duration {
+	timeout := executionHardTimeoutMin
+	if policy.ExecutionTimeoutSeconds > 0 {
+		timeout = time.Duration(policy.ExecutionTimeoutSeconds)*time.Second + 5*time.Minute
+	}
+	if timeout < executionHardTimeoutMin {
+		timeout = executionHardTimeoutMin
+	}
+	if timeout > executionHardTimeoutMax {
+		timeout = executionHardTimeoutMax
+	}
+	return timeout
+}
+
+// triggerMarkerKeysForTask retorna as chaves de deduplicação dos gatilhos de
+// uma task — exatamente as gravadas por triggerImmediate/triggerOnAgentCheckIn.
+func triggerMarkerKeysForTask(fingerprint string, task AutomationTask) []string {
+	taskID := strings.TrimSpace(task.TaskID)
+	if taskID == "" {
+		return nil
+	}
+	keys := make([]string, 0, 2)
+	if task.TriggerImmediate {
+		keys = append(keys, "immediate:"+fingerprint+":"+taskID+":"+task.LastUpdatedAt)
+	}
+	if task.TriggerOnAgentCheckIn {
+		keys = append(keys, "checkin:"+fingerprint+":"+taskID+":"+task.LastUpdatedAt)
+	}
+	return keys
+}
+
+// releaseTriggerMarkers libera a deduplicação de trigger de uma task cuja
+// execução NÃO chegou ao fim, permitindo que o próximo policy-sync/check-in
+// volte a dispará-la. Sem isso, um único restart no meio da execução (ou uma
+// falha) desabilita a task para sempre quando ela só tem gatilho Immediate.
+func (s *Service) releaseTriggerMarkers(agentID, taskID string) {
+	taskID = strings.TrimSpace(taskID)
+	if s.db == nil || strings.TrimSpace(agentID) == "" || taskID == "" {
+		return
+	}
+	s.mu.RLock()
+	fingerprint := s.state.PolicyFingerprint
+	var task AutomationTask
+	found := false
+	for _, candidate := range s.state.Tasks {
+		if strings.TrimSpace(candidate.TaskID) == taskID {
+			task = candidate
+			found = true
+			break
+		}
+	}
+	s.mu.RUnlock()
+	if !found {
+		return
+	}
+	for _, key := range triggerMarkerKeysForTask(fingerprint, task) {
+		removed, err := s.db.DeleteAutomationMarker(agentID, key)
+		if err != nil {
+			s.logf("automacao: falha ao liberar marcador de trigger %q: %v", key, err)
+			continue
+		}
+		if removed {
+			s.logf("automacao: marcador de trigger liberado task=%s chave=%s (execucao nao concluida) - task volta a ser disparada", taskID, key)
+		}
+	}
+}
+
+// circuitBreakerPaused informa se a task está pausada por falhas consecutivas
+// (marker circuit:fail, alimentado por updateAntiLoopState). Passou a ser
+// consultado também nos gatilhos immediate/checkin.
+func (s *Service) circuitBreakerPaused(agentID, taskID string) bool {
+	taskID = strings.TrimSpace(taskID)
+	if s.db == nil || strings.TrimSpace(agentID) == "" || taskID == "" {
+		return false
+	}
+	raw, found, err := s.db.GetAutomationMarker(agentID, "circuit:fail:"+taskID)
+	if err != nil || !found {
+		return false
+	}
+	cb, ok := parseCircuitBreakerState(raw)
+	if !ok || !circuitBreakerOpen(cb, time.Now().UTC()) {
+		return false
+	}
+	s.logf("automacao: task=%s pausada por falhas consecutivas (%d) - retoma em %s", taskID, cb.Failures, cb.OpenUntil.UTC().Format(time.RFC3339))
+	return true
+}
+
+// reconcileStaleExecutions é o watchdog de execuções presas: encerra linhas que
+// nunca receberam status terminal e LIBERA a deduplicação de trigger das tasks
+// correspondentes, para que voltem a ser disparadas.
+//
+//   - startup=true: TODA linha não terminal existente antes deste processo
+//     nascer é órfã (o processo anterior morreu no meio da execução).
+//   - startup=false (sweep periódico): apenas linhas acima de
+//     executionStaleTimeout — nada que uma execução legítima alcançaria.
+func (s *Service) reconcileStaleExecutions(agentID string, startup bool) {
+	agentID = strings.TrimSpace(agentID)
+	if s.db == nil || agentID == "" {
+		return
+	}
+	cutoff := time.Now().UTC().Add(-executionStaleTimeout)
+	if startup {
+		// Inclui tudo o que já existe (margem de 1 min no futuro).
+		cutoff = time.Now().UTC().Add(time.Minute)
+	}
+	statuses := []string{string(ExecutionStatusDispatched), string(ExecutionStatusAcknowledged)}
+	if startup {
+		// Execuções ADIADAS também entram no startup: o retry do adiamento é um
+		// timer em memória (perdido no restart) e o marcador de trigger seguiu
+		// gravado — sem isto a task adiada nunca retomava.
+		statuses = append(statuses, string(ExecutionStatusDeferred))
+	}
+	entries, err := s.db.ListAutomationExecutionsByStatus(agentID, statuses, cutoff, 100)
+	if err != nil {
+		s.logf("automacao: watchdog de execucoes falhou ao listar: %v", err)
+		return
+	}
+
+	// Execuções EM VOO neste processo nunca são reconciliadas: elas terminam
+	// pelo caminho normal (que já grava estado terminal e libera o gatilho).
+	s.mu.RLock()
+	inFlight := make(map[string]bool, len(s.activeExecutions))
+	for id := range s.activeExecutions {
+		inFlight[id] = true
+	}
+	s.mu.RUnlock()
+
+	for _, entry := range entries {
+		if inFlight[entry.ExecutionID] {
+			continue
+		}
+		if entry.Status == string(ExecutionStatusDeferred) {
+			// A linha já está em estado terminal coerente (o usuário adiou); só o
+			// gatilho precisa voltar a valer para a task reentrar em
+			// executeTaskAsync (que reagenda a próxima tentativa ou executa, se o
+			// prazo do adiamento já passou).
+			s.logf("automacao: watchdog liberou gatilho de execucao adiada execution=%s task=%s", entry.ExecutionID, entry.TaskID)
+			s.releaseTriggerMarkers(agentID, entry.TaskID)
+			continue
+		}
+		entry.Status = string(ExecutionStatusFailed)
+		entry.FinishedAt = time.Now().UTC()
+		entry.Success = false
+		entry.SuccessSet = true
+		entry.ExitCode = 0
+		entry.ExitCodeSet = false
+		entry.ErrorMessage = "execucao nao concluida (agente reiniciado durante a execucao)"
+		if err := s.db.UpsertAutomationExecution(entry); err != nil {
+			s.logf("automacao: watchdog falhou ao encerrar execution=%s: %v", entry.ExecutionID, err)
+			continue
+		}
+		s.logf("automacao: watchdog encerrou execucao presa execution=%s task=%s - task volta a ser disparada", entry.ExecutionID, entry.TaskID)
+		s.releaseTriggerMarkers(agentID, entry.TaskID)
+	}
+	if len(entries) > 0 {
+		s.refreshDerivedState(agentID)
+	}
 }
 
 func (s *Service) logf(format string, args ...any) {

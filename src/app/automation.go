@@ -120,7 +120,7 @@ func mapAutomationState(state automation.State) AutomationStateView {
 			MetadataJSON:       execution.MetadataJSON,
 			DurationLabel:      automationDurationLabel(execution.StartedAt, execution.FinishedAt),
 			SummaryLine:        automationExecutionSummary(execution),
-			HasPendingCallback: state.PendingCallbacks > 0 && strings.TrimSpace(execution.CommandID) != "" && (execution.Status == automation.ExecutionStatusDispatched || execution.Status == automation.ExecutionStatusAcknowledged || execution.Status == automation.ExecutionStatusCompleted || execution.Status == automation.ExecutionStatusFailed),
+			HasPendingCallback: state.PendingCallbacks > 0 && strings.TrimSpace(execution.CommandID) != "" && (execution.Status == automation.ExecutionStatusDispatched || execution.Status == automation.ExecutionStatusAcknowledged || execution.Status == automation.ExecutionStatusCompleted || execution.Status == automation.ExecutionStatusFailed || execution.Status == automation.ExecutionStatusDeferred),
 		}
 		view.RecentExecutions = append(view.RecentExecutions, item)
 	}
@@ -254,6 +254,8 @@ func automationStatusLabel(value string) string {
 		return "Concluído"
 	case "Failed":
 		return "Falhou"
+	case "Deferred":
+		return "Adiado"
 	default:
 		return value
 	}

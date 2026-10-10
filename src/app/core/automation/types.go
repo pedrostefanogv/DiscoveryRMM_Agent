@@ -60,6 +60,11 @@ const (
 	ExecutionStatusAcknowledged AutomationExecutionStatus = "Acknowledged"
 	ExecutionStatusCompleted    AutomationExecutionStatus = "Completed"
 	ExecutionStatusFailed       AutomationExecutionStatus = "Failed"
+	// ExecutionStatusDeferred: a execucao foi adiada pelo usuario (prompt
+	// Welcome/toast) e uma nova tentativa ja foi agendada. Estado TERMINAL da
+	// linha — sem ele o ramo de adiamento retornava deixando a execucao
+	// eternamente "Dispatched", e a task nunca mais era disparada.
+	ExecutionStatusDeferred AutomationExecutionStatus = "Deferred"
 )
 
 type AutomationScriptChangeType string

@@ -2,6 +2,8 @@ package database
 
 import (
 	"database/sql"
+	"fmt"
+	"strings"
 	"time"
 )
 
@@ -96,7 +98,16 @@ func (db *DB) ListRecentAutomationExecutions(agentID string, limit int) ([]Autom
 	}
 	defer rows.Close()
 
-	entries := make([]AutomationExecutionEntry, 0, limit)
+	return scanAutomationExecutions(rows, limit)
+}
+
+// scanAutomationExecutions materializa as linhas de automation_execution_history
+// (mesma ordem de colunas das consultas deste arquivo).
+func scanAutomationExecutions(rows *sql.Rows, capacity int) ([]AutomationExecutionEntry, error) {
+	if capacity <= 0 {
+		capacity = 20
+	}
+	entries := make([]AutomationExecutionEntry, 0, capacity)
 	for rows.Next() {
 		var entry AutomationExecutionEntry
 		var startedAt int64
@@ -126,6 +137,45 @@ func (db *DB) ListRecentAutomationExecutions(agentID string, limit int) ([]Autom
 		entries = append(entries, entry)
 	}
 	return entries, rows.Err()
+}
+
+// ListAutomationExecutionsByStatus retorna execucoes de um agente cujo status
+// esta em statuses e que comecaram ANTES de startedBefore. Usado pelo watchdog
+// de execucoes presas: uma linha que nunca recebeu status terminal (Completed/
+// Failed/Deferred) ficava em "Dispatched" para sempre e, como o marcador de
+// trigger ja tinha sido gravado, a task nunca mais era disparada.
+func (db *DB) ListAutomationExecutionsByStatus(agentID string, statuses []string, startedBefore time.Time, limit int) ([]AutomationExecutionEntry, error) {
+	if len(statuses) == 0 {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	placeholders := make([]string, len(statuses))
+	args := make([]any, 0, 2+len(statuses))
+	args = append(args, agentID)
+	for i, status := range statuses {
+		placeholders[i] = "?"
+		args = append(args, status)
+	}
+	args = append(args, startedBefore.Unix(), limit)
+
+	query := fmt.Sprintf(
+		`SELECT execution_id, agent_id, COALESCE(command_id, ''), COALESCE(task_id, ''), COALESCE(task_name, ''),
+			COALESCE(action_type, ''), COALESCE(installation_type, ''), COALESCE(source_type, ''), COALESCE(trigger_type, ''),
+			status, COALESCE(correlation_id, ''), started_at, finished_at, success, exit_code,
+			COALESCE(error_message, ''), COALESCE(output, ''), COALESCE(package_id, ''), COALESCE(script_id, ''), COALESCE(metadata_json, '')
+		 FROM automation_execution_history
+		 WHERE agent_id = ? AND status IN (%s) AND started_at < ?
+		 ORDER BY started_at ASC LIMIT ?`,
+		strings.Join(placeholders, ","))
+
+	rows, err := db.conn.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanAutomationExecutions(rows, limit)
 }
 
 func (db *DB) EnqueueAutomationCallback(entry AutomationCallbackEntry) error {

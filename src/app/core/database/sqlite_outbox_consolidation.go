@@ -452,6 +452,26 @@ func (db *DB) GetAutomationMarker(agentID, markerKey string) (string, bool, erro
 	return value, true, nil
 }
 
+// DeleteAutomationMarker remove um marcador específico. Retorna true quando uma
+// linha foi de fato removida. Usado para LIBERAR a deduplicação de trigger de uma
+// task cuja execução não chegou ao fim: sem isso um único restart no meio da
+// execução desabilita a task para sempre (caso Brave — 1 execução presa em
+// "Dispatched" e nenhuma tentativa depois).
+func (db *DB) DeleteAutomationMarker(agentID, markerKey string) (bool, error) {
+	result, err := db.conn.Exec(
+		"DELETE FROM automation_marker_state WHERE agent_id = ? AND marker_key = ?",
+		agentID, markerKey,
+	)
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return affected > 0, nil
+}
+
 // DeleteAutomationMarkersExcept remove todos os marcadores de automação do agente
 // cujas chaves NÃO estão em validKeys. Se validKeys estiver vazio, remove todos.
 // Retorna o número de linhas removidas. Usado para limpeza periódica de marcadores

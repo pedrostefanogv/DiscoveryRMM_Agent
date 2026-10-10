@@ -183,7 +183,38 @@ func (c *Client) Download(ctx context.Context, id, downloadDir string) (string, 
 	)
 }
 
+// wingetRunSem serializa as invocacoes do winget no processo. Chamadas
+// concorrentes (a automacao dispara install enquanto o preload roda download e
+// a UI roda list/upgrade) disputam o cache de fontes do winget e falham com
+// 0x8a150001 (APPINSTALLER_CLI_ERROR_INTERNAL_ERROR) — observado em campo
+// exatamente durante instalacao + preload simultaneos. Serializar elimina a
+// classe de falha sem custo funcional (o winget ja e lento por natureza).
+var wingetRunSem = make(chan struct{}, 1)
+
+// acquireWingetRun reserva a vez respeitando o ctx (nao bloqueia indefinidamente
+// quando a execucao tem prazo).
+func acquireWingetRun(ctx context.Context) error {
+	select {
+	case wingetRunSem <- struct{}{}:
+		return nil
+	default:
+	}
+	select {
+	case wingetRunSem <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func releaseWingetRun() { <-wingetRunSem }
+
 func (c *Client) run(ctx context.Context, args ...string) (string, error) {
+	if err := acquireWingetRun(ctx); err != nil {
+		return "", err
+	}
+	defer releaseWingetRun()
+
 	runCtx, cancel := ctxutil.WithTimeout(ctx, c.timeout)
 	defer cancel()
 

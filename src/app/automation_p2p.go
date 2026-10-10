@@ -588,30 +588,60 @@ func (m *automationPackageManagerRouter) downloadAndCacheForP2P(ctx context.Cont
 // instalar machine-scope. Nesses casos o router cai para o winget install, que
 // conhece o escopo correto (machine) e roda elevado (o agent é SYSTEM; sem
 // elevação, o UAC é acionado pelo caminho já existente).
-// Sem dados confiáveis do winget, assume sucesso para não duplicar a instalação.
+// Sem dados confiáveis do winget NÃO se assume sucesso: reconsulta uma vez e,
+// persistindo a indisponibilidade, retorna false para o caller cair no
+// winget install (idempotente quando o pacote já está instalado). Assumir
+// sucesso aqui mascarava instalações que nunca aconteceram.
 func (m *automationPackageManagerRouter) verifyLocalInstallResult(ctx context.Context, packageID, operation string) bool {
 	installedOut, installedErr := m.fallback.ListInstalled(ctx)
 	upgradableOut, upgradableErr := m.fallback.ListUpgradable(ctx)
+	if evidenceUnavailable(installedOut, installedErr, upgradableOut, upgradableErr, operation) {
+		// O winget falha intermitentemente (0x8a150001) sob concorrência; uma
+		// única falha não deve decidir se a instalação funcionou.
+		select {
+		case <-time.After(3 * time.Second):
+		case <-ctx.Done():
+			return false
+		}
+		installedOut, installedErr = m.fallback.ListInstalled(ctx)
+		upgradableOut, upgradableErr = m.fallback.ListUpgradable(ctx)
+	}
 	return localInstallVerified(packageID, installedOut, installedErr, upgradableOut, upgradableErr, operation)
+}
+
+// evidenceUnavailable informa se falta evidência confiável do winget para
+// verificar a operação pedida.
+func evidenceUnavailable(installedOut string, installedErr error, upgradableOut string, upgradableErr error, operation string) bool {
+	if installedErr != nil || strings.TrimSpace(installedOut) == "" {
+		return true
+	}
+	if strings.TrimSpace(operation) == "upgrade" && (upgradableErr != nil || strings.TrimSpace(upgradableOut) == "") {
+		return true
+	}
+	return false
 }
 
 // localInstallVerified é a decisão pura da verificação pós-instalação (testável
 // sem App/P2P): confirma que o instalador local realmente instalou/atualizou.
 func localInstallVerified(packageID, installedOut string, installedErr error, upgradableOut string, upgradableErr error, operation string) bool {
+	// Sem evidência confiável do winget NÃO se assume sucesso: o caller cai
+	// para o winget install (escopo machine, idempotente), que é a fonte
+	// autoritativa. Assumir sucesso aqui mascarava instalações que nunca
+	// aconteceram (stub sai 0 sem instalar + winget list indisponível).
 	if installedErr != nil || strings.TrimSpace(installedOut) == "" {
-		return true // sem evidência do winget list: não força fallback
+		return false
 	}
 	switch strings.TrimSpace(operation) {
 	case "install":
 		return automation.IsPackageInOutput(installedOut, packageID)
 	case "upgrade":
 		if upgradableErr != nil || strings.TrimSpace(upgradableOut) == "" {
-			return true // sem evidência de pendência: assume sucesso
+			return false
 		}
 		// Ainda listado como atualizável → o upgrade não teve efeito.
 		return !automation.IsPackageInOutput(upgradableOut, packageID)
 	default:
-		return true
+		return false
 	}
 }
 
@@ -965,7 +995,37 @@ func runExeInstallerSilent(ctx context.Context, timeout time.Duration, artifactP
 	var lastOutput string
 	var lastErr error
 
-	// Prioridade 1: switches oficiais do catálogo (silent → silentWithProgress).
+	// Prioridade 1: switches do catálogo + escopo de MÁQUINA. O catálogo traz os
+	// switches silenciosos do manifesto winget (ex.: "/silent /install" para o
+	// Brave), mas NÃO o escopo: instaladores stub/online (Chromium/Omaha) são
+	// PER-USER por padrão e, executados pelo agente (SYSTEM) sem o switch de
+	// escopo, saem com 0 instalando no perfil do SYSTEM — invisível para o
+	// usuário (caso Brave: 167 MB baixados, nada instalado para a máquina).
+	//
+	// O escopo vem PRIMEIRO de propósito: se a tentativa sem escopo viesse antes
+	// e "funcionasse", a verificação pós-instalação enxergaria a instalação
+	// per-user do próprio SYSTEM (winget list roda como SYSTEM) e encerraria o
+	// fluxo como sucesso — que é exatamente a classe de falso positivo que esta
+	// correção elimina. Se o instalador não entender a flag, ele falha e a
+	// tentativa sem escopo segue logo abaixo.
+	for _, candidate := range []struct {
+		name string
+		args string
+	}{{"silent", silent}, {"silentWithProgress", silentWithProgress}} {
+		sw := strings.TrimSpace(candidate.args)
+		if sw == "" {
+			continue
+		}
+		scopedArgs := append(splitInstallerSwitches(sw), "--system-level")
+		output, err := executeHiddenProcess(ctx, timeout, artifactPath, scopedArgs)
+		if err == nil {
+			return fmt.Sprintf("[p2p-installer] switches do catalogo (%s) + escopo de maquina bem-sucedidos: %s\n%s", candidate.name, strings.Join(scopedArgs, " "), output), nil
+		}
+		lastOutput, lastErr = output, err
+	}
+
+	// Prioridade 2: switches oficiais do catálogo, SEM a flag de escopo
+	// (comportamento anterior, para instaladores que rejeitam --system-level).
 	// São divididos em campos antes de passar ao processo (ex.: "/S /PreventReboot=true").
 	for _, candidate := range []struct {
 		name string
@@ -977,7 +1037,7 @@ func runExeInstallerSilent(ctx context.Context, timeout time.Duration, artifactP
 		}
 		output, err := executeHiddenProcess(ctx, timeout, artifactPath, splitInstallerSwitches(sw))
 		if err == nil {
-			return fmt.Sprintf("[p2p-installer] switches do catálogo (%s) bem-sucedidos: %s\n%s", candidate.name, sw, output), nil
+			return fmt.Sprintf("[p2p-installer] switches do catalogo (%s) bem-sucedidos: %s\n%s", candidate.name, sw, output), nil
 		}
 		lastOutput, lastErr = output, err
 	}
