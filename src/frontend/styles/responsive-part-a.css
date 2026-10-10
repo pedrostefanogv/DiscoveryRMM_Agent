@@ -695,23 +695,18 @@
   word-break: break-word;
 }
 
-/* Campos extras do modelo de chamado (perguntas + campos do departamento) */
-.ticket-template-extra {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 12px;
-  border: 1px dashed var(--border);
-  border-radius: 10px;
+/* Blocos "transparentes" do formulário de abertura do agent: o container da
+   abertura e os blocos de campos extras (departamento/modelo) não têm caixa
+   própria — display:contents faz cada .form-field filho entrar direto no flex
+   do .support-form, mantendo o mesmo espaçamento (gap 12px) e alinhamento dos
+   demais campos. Sem display:contents o bloco vira um item único e os campos
+   internos perdem o gap do formulário. */
+.ticket-open-fields,
+.ticket-extra-fields {
+  display: contents;
 }
 
-.ticket-template-extra .template-group {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.ticket-template-extra .template-group-title {
+.ticket-extra-fields .template-group-title {
   font-size: 0.8rem;
   font-weight: 700;
   text-transform: uppercase;
@@ -719,7 +714,7 @@
   color: var(--muted);
 }
 
-.ticket-template-extra select[multiple] {
+.ticket-extra-fields select[multiple] {
   min-height: 68px;
 }
 

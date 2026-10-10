@@ -223,15 +223,15 @@
           <!-- Abertura propriamente dita: só aparece depois que o departamento é
                escolhido. Os campos com opções (Categoria/Prioridade e futuros)
                vêm do servidor, por departamento (ver loadTicketDepartmentFormSchema). -->
-          <div id="ticketOpenFields" class="hidden">
-            <div id="ticketDepartmentFields" class="ticket-template-extra hidden"></div>
+          <div id="ticketOpenFields" class="ticket-open-fields hidden">
+            <div id="ticketDepartmentFields" class="ticket-extra-fields hidden"></div>
             <div class="form-field">
               <label for="ticketTemplate" data-i18n="field.template">Modelo de chamado</label>
               <select id="ticketTemplate" disabled>
                 <option value="" data-i18n="support.templateSelectDepartment">Selecione o departamento primeiro</option>
               </select>
             </div>
-            <div id="ticketTemplateExtra" class="ticket-template-extra hidden"></div>
+            <div id="ticketTemplateExtra" class="ticket-extra-fields hidden"></div>
             <div class="form-field">
               <label for="ticketTitle" data-i18n="support.ticketTitle">Titulo *</label>
               <input id="ticketTitle" type="text" placeholder="Resumo do problema" required maxlength="200"

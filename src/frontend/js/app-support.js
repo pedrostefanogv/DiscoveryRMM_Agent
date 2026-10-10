@@ -22,6 +22,12 @@ var ticketFormSchemaPrefill = {};
 // sobrescrever a selecao atual (usuario pode trocar rapido de departamento).
 var ticketFormSchemaRequestSeq = 0;
 
+// Requisicoes do formulario do departamento em transito (campos + schema).
+// Enquanto nao terminam, o formulario esta incompleto: enviar nessa janela
+// pulava a validacao dos campos obrigatorios (nao havia campo renderizado).
+var ticketDepartmentFormLoads = {};
+var ticketDepartmentFormLoadSeq = 0;
+
 // Snapshot volatil da sessao: substituido a cada carga e NUNCA persistido.
 var supportTicketsAll = [];
 
@@ -710,14 +716,39 @@ function clearTicketOpenFields() {
 // Mostra o restante do formulario (modelo, titulo, campos do servidor,
 // descricao e envio) somente com departamento escolhido. Sem departamento o
 // servidor nao calcula SLA e nao ha schema para renderizar.
+// Controle das requisicoes do formulario do departamento (campos + schema).
+function beginTicketDepartmentFormLoad(departmentId) {
+  var id = ++ticketDepartmentFormLoadSeq;
+  ticketDepartmentFormLoads[id] = String(departmentId || '');
+  updateTicketOpenFieldsVisibility();
+  return id;
+}
+
+function endTicketDepartmentFormLoad(id) {
+  delete ticketDepartmentFormLoads[id];
+  updateTicketOpenFieldsVisibility();
+}
+
+// Um departamento com carga em transito nao pode liberar o envio: sem os
+// campos renderizados a validacao de obrigatorios nao tem o que validar.
+function ticketDepartmentFormIsLoading(departmentId) {
+  var current = String(departmentId || '');
+  for (var id in ticketDepartmentFormLoads) {
+    if (ticketDepartmentFormLoads[id] === current) return true;
+  }
+  return false;
+}
+
 function updateTicketOpenFieldsVisibility() {
+  var departmentId = selectedDepartmentId();
+  var hasDepartment = !!departmentId;
   var section = document.getElementById('ticketOpenFields');
-  var hasDepartment = !!selectedDepartmentId();
   if (section) section.classList.toggle('hidden', !hasDepartment);
   var btn = document.getElementById('submitTicketBtn');
   if (btn) {
     var offline = !!supportOfflineReadOnly || !!supportServerDisconnected;
-    btn.disabled = !hasDepartment || offline;
+    var loading = hasDepartment && ticketDepartmentFormIsLoading(departmentId);
+    btn.disabled = !hasDepartment || offline || loading;
   }
 }
 
@@ -732,6 +763,7 @@ function loadTicketDepartmentFormSchema(departmentId) {
   if (ticketFormSchemaDepartmentId === departmentId && ticketFormSchemaFields.length) return;
   ticketFormSchemaRequestSeq += 1;
   var seq = ticketFormSchemaRequestSeq;
+  var loadId = beginTicketDepartmentFormLoad(departmentId);
   api.GetTicketDepartmentFormSchema(departmentId).then(function (schema) {
     // Resposta de um departamento ja trocado nao pode sobrescrever a tela.
     if (seq !== ticketFormSchemaRequestSeq || selectedDepartmentId() !== departmentId) return;
@@ -741,6 +773,8 @@ function loadTicketDepartmentFormSchema(departmentId) {
     if (seq !== ticketFormSchemaRequestSeq) return;
     console.warn('[support] falha ao carregar o formulario do departamento:', err);
     clearTicketFormSchema();
+  }).finally(function () {
+    endTicketDepartmentFormLoad(loadId);
   });
 }
 
@@ -1110,11 +1144,11 @@ function buildTemplateFieldControl(item, idAttr) {
   return '<input id="' + idAttr + '" type="text"' + lengths + maskAttr + (required ? ' required' : '') + ' />';
 }
 
-function renderTemplateGroup(titleKey, prefix, items) {
-  var list = Array.isArray(items) ? items : [];
-  if (!list.length) return '';
-  var html = '<div class="template-group"><div class="template-group-title">' + escapeHtml(translate(titleKey)) + '</div>';
-  list.forEach(function (item) {
+// Campos em si: cada item sai como .form-field puro (sem caixa/recuo), para
+// ficar alinhado aos demais campos do formulario de abertura.
+function renderTemplateFieldItems(prefix, items) {
+  var html = '';
+  (Array.isArray(items) ? items : []).forEach(function (item) {
     if (!item) return;
     var key = prefix === 'field' ? item.definitionId : item.key;
     if (!key) return;
@@ -1132,12 +1166,28 @@ function renderTemplateGroup(titleKey, prefix, items) {
       (formatHint ? '<div class="meta">' + escapeHtml(formatHint) + '</div>' : '') +
       '</div>';
   });
-  return html + '</div>';
+  return html;
+}
+
+// Título (opcional) + campos. Campos do departamento NAO tem título (ficam
+// iguais aos demais campos); as perguntas do modelo mostram o modelo em uso.
+function renderTemplateGroup(titleText, prefix, items) {
+  var list = Array.isArray(items) ? items : [];
+  if (!list.length) return '';
+  var title = titleText ? '<div class="template-group-title">' + escapeHtml(titleText) + '</div>' : '';
+  return title + renderTemplateFieldItems(prefix, list);
+}
+
+// Info mostrada no lugar do antigo título genérico: qual modelo está em uso.
+function ticketTemplateGroupTitle(template) {
+  var name = String((template && (template.title || template.name)) || '').trim();
+  if (!name) return '';
+  return translate('support.templateLabel', { name: name });
 }
 
 function renderTicketTemplateExtra(template) {
   if (!ticketTemplateExtraEl) return;
-  var html = template ? renderTemplateGroup('support.templateQuestions', 'q', template.questions) : '';
+  var html = template ? renderTemplateGroup(ticketTemplateGroupTitle(template), 'q', template.questions) : '';
   if (!html) {
     clearTicketTemplateExtra();
     return;
@@ -1224,7 +1274,8 @@ function renderDepartmentFields(fields, defaultsJson) {
     clearDepartmentFields();
     return;
   }
-  ticketDepartmentFieldsEl.innerHTML = renderTemplateGroup('support.templateFields', 'field', currentDepartmentFields);
+  // Sem título: os campos do departamento aparecem como os demais campos.
+  ticketDepartmentFieldsEl.innerHTML = renderTemplateGroup('', 'field', currentDepartmentFields);
   ticketDepartmentFieldsEl.classList.remove('hidden');
   attachInputMasks(ticketDepartmentFieldsEl);
 
@@ -1278,6 +1329,7 @@ function loadDepartmentFields(departmentId) {
     renderDepartmentFields(cached.fields, selectedTemplateDefaultsJson());
     return;
   }
+  var loadId = beginTicketDepartmentFormLoad(requested);
   api.GetTicketDepartmentFields(departmentId).then(function (fields) {
     var list = Array.isArray(fields) ? fields : [];
     departmentFieldsCache[requested] = { fields: list, at: Date.now() };
@@ -1287,6 +1339,8 @@ function loadDepartmentFields(departmentId) {
   }).catch(function (err) {
     console.warn('[support] falha ao carregar campos do departamento:', err);
     clearDepartmentFields();
+  }).finally(function () {
+    endTicketDepartmentFormLoad(loadId);
   });
 }
 
@@ -1650,6 +1704,13 @@ function initSupport() {
     // Departamento e obrigatorio: define responsavel (auto-atribuicao) e SLA.
     if (!departmentId) {
       showToast(translate('support.selectDepartment'), 'error');
+      return;
+    }
+    // Defesa em profundidade: o botao fica desabilitado durante a carga, mas
+    // enviar antes da resposta do servidor pulava a validacao dos campos
+    // obrigatorios do departamento (nenhum campo estava renderizado ainda).
+    if (ticketDepartmentFormIsLoading(departmentId)) {
+      showToast(translate('support.departmentFormLoading'), 'info');
       return;
     }
 
