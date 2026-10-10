@@ -174,21 +174,25 @@
         <span id="sidebarUserType" class="sidebar-user-type"></span>
       </div>
     </div>
-    <button id="themeToggle" class="sidebar-link" title="Alternar tema" data-i18n-title="action.toggleTheme">
-      <svg id="themeIcon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"
-        stroke-linecap="round" stroke-linejoin="round">
-        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
-      </svg>
-      <span data-i18n="theme.dark">Tema Escuro</span>
-    </button>
-    <button id="tabStatus" class="sidebar-link active" role="tab" aria-selected="true" aria-controls="statusView"
-      title="Status" aria-label="Status" data-i18n-title="tab.status" data-i18n-aria-label="tab.status">
-      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"
-        stroke-linecap="round" stroke-linejoin="round">
-        <path d="M20 6 9 17l-5-5" />
-      </svg>
-      <span data-i18n="tab.status">Status</span>
-      <span class="sidebar-version"></span>
-    </button>
+    <!-- Tema e Status dividem UMA linha: o tema fica só com o ícone (lua/sol,
+         atualizado por updateThemeIcon) e o Status leva o rótulo + a versão. -->
+    <div class="sidebar-footer-bottom">
+      <button id="themeToggle" class="sidebar-link sidebar-theme-toggle" title="Alternar tema"
+        aria-label="Alternar tema" data-i18n-title="action.toggleTheme" data-i18n-aria-label="action.toggleTheme">
+        <svg id="themeIcon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"
+          stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+        </svg>
+      </button>
+      <button id="tabStatus" class="sidebar-link active" role="tab" aria-selected="true" aria-controls="statusView"
+        title="Status" aria-label="Status" data-i18n-title="tab.status" data-i18n-aria-label="tab.status">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"
+          stroke-linecap="round" stroke-linejoin="round">
+          <path d="M20 6 9 17l-5-5" />
+        </svg>
+        <span data-i18n="tab.status">Status</span>
+        <span class="sidebar-version"></span>
+      </button>
+    </div>
   </div>
 </nav>

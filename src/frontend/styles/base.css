@@ -348,6 +348,9 @@ a:hover { text-decoration: underline; }
 .sidebar.collapsed .sidebar-link { justify-content: center; padding: 10px 0; }
 .sidebar.collapsed .sidebar-user { justify-content: center; }
 .sidebar.collapsed .sidebar-footer { padding-left: 6px; padding-right: 6px; }
+/* Sidebar recolhida (64px): tema e status não caberiam lado a lado — voltam a
+   ficar empilhados, cada um centralizado no seu ícone. */
+.sidebar.collapsed .sidebar-footer-bottom { flex-direction: column; align-items: stretch; gap: 4px; }
 
 .sidebar-brand {
   display: flex; align-items: center; gap: 10px;
@@ -420,8 +423,23 @@ a:hover { text-decoration: underline; }
   margin-top: auto;
 }
 
-.sidebar-footer-bottom .sidebar-link {
-  flex: 1;
+/* Tema (só ícone) + Status/versão na MESMA linha. O botão do tema ocupa a
+   largura natural do ícone; o Status fica com o resto e a versão é empurrada
+   para a direita por .sidebar-version (margin-left: auto). */
+.sidebar-footer-bottom .sidebar-theme-toggle {
+  flex: 0 0 auto;
+  /* `width: auto` anula o `width: 100%` de .sidebar-link — sem isso o botão do
+     tema (só ícone) reivindicaria a linha inteira como base do flex. */
+  width: auto;
+  min-width: 40px;
+  justify-content: center;
+  padding-left: 10px;
+  padding-right: 10px;
+}
+.sidebar-footer-bottom #tabStatus {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
 }
 
 .sidebar-user { display: flex; align-items: center; gap: 8px; padding: 6px 0; }
