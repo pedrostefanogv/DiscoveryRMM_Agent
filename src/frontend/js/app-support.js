@@ -1144,9 +1144,11 @@ function buildTemplateFieldControl(item, idAttr) {
   return '<input id="' + idAttr + '" type="text"' + lengths + maskAttr + (required ? ' required' : '') + ' />';
 }
 
-// Campos em si: cada item sai como .form-field puro (sem caixa/recuo), para
-// ficar alinhado aos demais campos do formulario de abertura.
-function renderTemplateFieldItems(prefix, items) {
+// Campos em si: cada item sai como .form-field puro — sem caixa, sem recuo e
+// sem título — para ficar alinhado aos demais campos do formulário. O modelo em
+// uso (quando houver) já aparece no select "Modelo de chamado" acima, então
+// repetir "Modelo: X" aqui só duplicava a informação.
+function renderTemplateFields(prefix, items) {
   var html = '';
   (Array.isArray(items) ? items : []).forEach(function (item) {
     if (!item) return;
@@ -1169,25 +1171,9 @@ function renderTemplateFieldItems(prefix, items) {
   return html;
 }
 
-// Título (opcional) + campos. Campos do departamento NAO tem título (ficam
-// iguais aos demais campos); as perguntas do modelo mostram o modelo em uso.
-function renderTemplateGroup(titleText, prefix, items) {
-  var list = Array.isArray(items) ? items : [];
-  if (!list.length) return '';
-  var title = titleText ? '<div class="template-group-title">' + escapeHtml(titleText) + '</div>' : '';
-  return title + renderTemplateFieldItems(prefix, list);
-}
-
-// Info mostrada no lugar do antigo título genérico: qual modelo está em uso.
-function ticketTemplateGroupTitle(template) {
-  var name = String((template && (template.title || template.name)) || '').trim();
-  if (!name) return '';
-  return translate('support.templateLabel', { name: name });
-}
-
 function renderTicketTemplateExtra(template) {
   if (!ticketTemplateExtraEl) return;
-  var html = template ? renderTemplateGroup(ticketTemplateGroupTitle(template), 'q', template.questions) : '';
+  var html = template ? renderTemplateFields('q', template.questions) : '';
   if (!html) {
     clearTicketTemplateExtra();
     return;
@@ -1274,8 +1260,8 @@ function renderDepartmentFields(fields, defaultsJson) {
     clearDepartmentFields();
     return;
   }
-  // Sem título: os campos do departamento aparecem como os demais campos.
-  ticketDepartmentFieldsEl.innerHTML = renderTemplateGroup('', 'field', currentDepartmentFields);
+  // Sem caixa/título: os campos do departamento aparecem como os demais.
+  ticketDepartmentFieldsEl.innerHTML = renderTemplateFields('field', currentDepartmentFields);
   ticketDepartmentFieldsEl.classList.remove('hidden');
   attachInputMasks(ticketDepartmentFieldsEl);
 

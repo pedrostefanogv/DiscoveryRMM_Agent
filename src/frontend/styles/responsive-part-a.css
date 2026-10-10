@@ -706,14 +706,6 @@
   display: contents;
 }
 
-.ticket-extra-fields .template-group-title {
-  font-size: 0.8rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  color: var(--muted);
-}
-
 .ticket-extra-fields select[multiple] {
   min-height: 68px;
 }
