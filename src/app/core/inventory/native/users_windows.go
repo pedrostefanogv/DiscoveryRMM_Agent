@@ -22,13 +22,34 @@ var (
 )
 
 const (
-	wtsCurrentServerHandle    = 0
-	wtsInfoClassUserName      = 5
-	wtsInfoClassName          = 0
-	wtsInfoClassClientAddress = 14
-	// WTSLogonTime devolve um FILETIME de 8 bytes com o início da sessão.
-	wtsInfoClassLogonTime = 18
+	wtsCurrentServerHandle = 0
+	wtsInfoClassUserName   = 5
+	// WTSWinStationName (o valor 0 é WTSInitialProgram e devolvia TTY vazio).
+	wtsInfoClassWinStationName = 6
+	wtsInfoClassClientAddress  = 14
+	// WTSSessionInfoEx traz o logon time em WTSINFOEX_LEVEL1_W. A classe
+	// WTSLogonTime (18) não é suportada neste Windows ("request is not
+	// supported"), por isso usamos a Ex.
+	wtsInfoClassSessionInfoEx = 25
 )
+
+// wtsInfoExLevel1W espelha WTSINFOEX_LEVEL1_W (apenas os campos usados).
+type wtsInfoExLevel1W struct {
+	SessionID      uint32
+	SessionState   uint32
+	SessionFlags   int32
+	WinStationName [33]uint16
+	UserName       [21]uint16
+	DomainName     [18]uint16
+	LogonTime      int64
+	ConnectTime    int64
+}
+
+// wtsInfoExW espelha WTSINFOEXW.
+type wtsInfoExW struct {
+	Level uint32
+	Data  wtsInfoExLevel1W
+}
 
 // PrimaryLoggedInUser descreve a sessão interativa principal da máquina.
 type PrimaryLoggedInUser struct {
@@ -38,10 +59,15 @@ type PrimaryLoggedInUser struct {
 	LogonAt time.Time
 }
 
-// wtsSessionInfo mirrors WTS_SESSION_INFO.
+// wtsSessionInfo mirrors the Win32 WTS_SESSION_INFO.
+//
+// Layout nativo: DWORD SessionId; LPWSTR pWinStationName; WTS_CONNECTSTATE_CLASS
+// State. O campo do nome é um PONTEIRO (8 bytes em x64), não um buffer inline —
+// usar [32]uint16 aqui desloca State e a enumeração nunca encontra sessão ativa
+// (bug que zerava o usuário logado no heartbeat e no inventário).
 type wtsSessionInfo struct {
 	SessionID      uint32
-	WinStationName [32]uint16
+	WinStationName *uint16
 	State          uint32
 }
 
@@ -96,18 +122,34 @@ func CollectPrimaryLoggedInUser() string {
 // sessão de console ativa. Sem console ativo (ex.: somente RDP), usa a primeira
 // sessão ativa. Devolve PrimaryLoggedInUser vazio quando não há sessão.
 func CollectPrimaryLoggedInUserSession() PrimaryLoggedInUser {
-	sessions := collectActiveSessions()
-	if len(sessions) == 0 {
-		return PrimaryLoggedInUser{}
-	}
-
 	consoleID := activeConsoleSessionID()
-	chosen := sessions[0]
+	sessions := collectActiveSessions()
+
+	chosen := activeSession{}
+	found := false
 	for _, s := range sessions {
+		if !found {
+			chosen = s // primeira sessão ativa (fallback)
+			found = true
+		}
 		if s.SessionID == consoleID {
 			chosen = s
 			break
 		}
+	}
+
+	if !found && consoleID != 0 {
+		// Fallback independente da enumeração: consulta direta da sessão de
+		// console. Cobre variações de layout/versão do WTS que fariam a
+		// enumeração falhar.
+		if user := strings.TrimSpace(querySessionString(consoleID, wtsInfoClassUserName)); user != "" {
+			found = true
+			chosen = activeSession{SessionID: consoleID, User: user}
+		}
+	}
+
+	if !found {
+		return PrimaryLoggedInUser{}
 	}
 
 	result := PrimaryLoggedInUser{User: strings.TrimSpace(chosen.User)}
@@ -154,7 +196,7 @@ func collectActiveSessions() []activeSession {
 		sessions = append(sessions, activeSession{
 			SessionID: info.SessionID,
 			User:      user,
-			TTY:       querySessionString(info.SessionID, wtsInfoClassName),
+			TTY:       querySessionString(info.SessionID, wtsInfoClassWinStationName),
 		})
 	}
 
@@ -170,34 +212,33 @@ func activeConsoleSessionID() uint32 {
 	return 0
 }
 
-// querySessionLogonTime devolve o início da sessão (WTSLogonTime → FILETIME).
+// querySessionLogonTime devolve o início da sessão via WTSSessionInfoEx.
 func querySessionLogonTime(sessionID uint32) (time.Time, bool) {
-	var ppBuffer *byte
+	var buffer unsafe.Pointer
 	var bytesReturned uint32
 	r, _, _ := procWTSQuerySessionInformationW.Call(
 		uintptr(wtsCurrentServerHandle),
 		uintptr(sessionID),
-		uintptr(wtsInfoClassLogonTime),
-		uintptr(unsafe.Pointer(&ppBuffer)),
+		uintptr(wtsInfoClassSessionInfoEx),
+		uintptr(unsafe.Pointer(&buffer)),
 		uintptr(unsafe.Pointer(&bytesReturned)),
 	)
-	if r == 0 || ppBuffer == nil {
+	if r == 0 || buffer == nil {
 		return time.Time{}, false
 	}
-	defer procWTSFreeMemory.Call(uintptr(unsafe.Pointer(ppBuffer)))
+	defer procWTSFreeMemory.Call(uintptr(buffer))
 
-	if bytesReturned < 8 {
-		return time.Time{}, false
-	}
-
-	low := *(*uint32)(unsafe.Pointer(ppBuffer))
-	high := *(*uint32)(unsafe.Pointer(uintptr(unsafe.Pointer(ppBuffer)) + 4))
-	ticks := uint64(high)<<32 | uint64(low)
-	if ticks == 0 {
+	logonOffset := unsafe.Offsetof(wtsInfoExW{}.Data) + unsafe.Offsetof(wtsInfoExLevel1W{}.LogonTime)
+	if bytesReturned < uint32(logonOffset)+8 {
 		return time.Time{}, false
 	}
 
-	return filetimeToTime(ticks), true
+	ticks := *(*int64)(unsafe.Add(buffer, logonOffset))
+	if ticks <= 0 {
+		return time.Time{}, false
+	}
+
+	return filetimeToTime(uint64(ticks)), true
 }
 
 // filetimeToTime converte FILETIME (intervalos de 100ns desde 1601-01-01 UTC)

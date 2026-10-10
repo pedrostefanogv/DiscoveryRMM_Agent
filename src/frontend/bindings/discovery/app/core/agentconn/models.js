@@ -151,6 +151,24 @@ export class AgentHeartbeatMetrics {
              */
             this["UIOnline"] = null;
         }
+        if (!("LoggedUser" in $$source)) {
+            /**
+             * LoggedUser: usuário da sessão de console ativa ("DOMINIO\usuario"), vazio
+             * quando não há sessão interativa. Coletado nativamente no Windows.
+             * @member
+             * @type {string}
+             */
+            this["LoggedUser"] = "";
+        }
+        if (!("LoggedUserSince" in $$source)) {
+            /**
+             * LoggedUserSince: início da sessão interativa atual (zero quando
+             * desconhecido/sem sessão).
+             * @member
+             * @type {string}
+             */
+            this["LoggedUserSince"] = "0001-01-01T00:00:00.000Z";
+        }
 
         Object.assign(this, $$source);
     }

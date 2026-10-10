@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"net"
 	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+	"unsafe"
 
 	"discovery/app/core/nettable"
 )
@@ -292,6 +294,38 @@ func TestCollectPrimaryLoggedInUserSession(t *testing.T) {
 	if session.User != strings.TrimSpace(session.User) {
 		t.Fatalf("usuário deveria ser trimado, veio %q", session.User)
 	}
+}
+
+// TestWtsSessionInfoLayoutMatchesWin32 trava o layout do struct no formato do
+// WTS_SESSION_INFO nativo. Com [32]uint16 no lugar do ponteiro, State ia para o
+// offset 68 e nenhuma sessão ativa era encontrada (usuário logado vazio).
+func TestWtsSessionInfoLayoutMatchesWin32(t *testing.T) {
+	wantStateOffset := uintptr(16)
+	wantSize := uintptr(24)
+	if strconv.IntSize == 32 {
+		wantStateOffset = 8
+		wantSize = 12
+	}
+
+	if got := unsafe.Offsetof(wtsSessionInfo{}.State); got != wantStateOffset {
+		t.Fatalf("offset de State = %d, esperado %d", got, wantStateOffset)
+	}
+	if got := unsafe.Sizeof(wtsSessionInfo{}); got != wantSize {
+		t.Fatalf("tamanho de wtsSessionInfo = %d, esperado %d", got, wantSize)
+	}
+}
+
+// TestCollectPrimaryLoggedInUserResolvesSession valida a coleta real na máquina
+// (pula apenas quando não há sessão interativa).
+func TestCollectPrimaryLoggedInUserResolvesSession(t *testing.T) {
+	session := CollectPrimaryLoggedInUserSession()
+	if session.User == "" {
+		t.Skip("sem sessão interativa nesta máquina/CI")
+	}
+	if session.LogonAt.IsZero() {
+		t.Logf("usuário %q sem logon time (WTSLogonTime indisponível)", session.User)
+	}
+	t.Logf("sessão primária: user=%q logon=%s", session.User, session.LogonAt.Format(time.RFC3339))
 }
 
 // TestFiletimeToTime valida a conversão FILETIME (100ns desde 1601) → time UTC.
