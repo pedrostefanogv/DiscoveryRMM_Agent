@@ -72,6 +72,8 @@ func (a *App) handleIPCRequest(ctx context.Context, payload map[string]any) map[
 		return a.ipcRPCSupportOptions()
 	case "support:department_fields":
 		return a.ipcRPCSupportDepartmentFields(payload)
+	case "support:department_form_schema":
+		return a.ipcRPCSupportDepartmentFormSchema(payload)
 	case "support:workflow_states":
 		return a.ipcRPCSupportWorkflowStates()
 	case "support:templates":

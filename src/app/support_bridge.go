@@ -89,6 +89,19 @@ func (a *App) GetTicketDepartmentFields(departmentID string) ([]TicketDepartment
 	})
 }
 
+// GetTicketDepartmentFormSchema expõe o schema do formulário de abertura do
+// departamento escolhido (campos + opções definidos pelo servidor). O frontend
+// busca depois da seleção do departamento porque as opções variam por
+// departamento (modelos e histórico).
+func (a *App) GetTicketDepartmentFormSchema(departmentID string) (TicketFormSchema, error) {
+	if err := a.requireSupportSvc(); err != nil {
+		return TicketFormSchema{}, err
+	}
+	return supportReadOrLocal(a, "support:department_form_schema", map[string]any{"departmentId": departmentID}, func() (TicketFormSchema, error) {
+		return a.SupportSvc.GetTicketDepartmentFormSchema(departmentID)
+	})
+}
+
 // ListDepartmentFieldsJSON expõe os campos personalizados de um departamento
 // como JSON para as ferramentas MCP da IA (create_ticket/customFields).
 func (a *App) ListDepartmentFieldsJSON(departmentID string) (json.RawMessage, error) {

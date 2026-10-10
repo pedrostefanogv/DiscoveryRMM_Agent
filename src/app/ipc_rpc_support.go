@@ -124,6 +124,11 @@ func (a *App) ipcRPCSupportDepartmentFields(payload map[string]any) map[string]a
 	return a.ipcRPCSupportCall(func() (any, error) { return a.SupportSvc.GetTicketDepartmentFields(departmentID) })
 }
 
+func (a *App) ipcRPCSupportDepartmentFormSchema(payload map[string]any) map[string]any {
+	departmentID := ipcRPCString(payload, "departmentId")
+	return a.ipcRPCSupportCall(func() (any, error) { return a.SupportSvc.GetTicketDepartmentFormSchema(departmentID) })
+}
+
 func (a *App) ipcRPCSupportWorkflowStates() map[string]any {
 	return a.ipcRPCSupportCall(func() (any, error) { return a.SupportSvc.GetTicketWorkflowStates() })
 }

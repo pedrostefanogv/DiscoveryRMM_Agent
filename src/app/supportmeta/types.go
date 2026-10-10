@@ -146,6 +146,65 @@ type TicketOptions struct {
 	WorkflowProfiles []TicketOptionProfile    `json:"workflowProfiles"`
 }
 
+// TicketFormFieldOption é uma opção de um campo de seleção do formulário de
+// abertura de chamado. O servidor é a fonte da verdade: o agent renderiza
+// exatamente as opções recebidas.
+type TicketFormFieldOption struct {
+	Value string `json:"value"`
+	Label string `json:"label"`
+}
+
+// TicketFormField descreve um campo do formulário de abertura de chamado do
+// agent. O agent NÃO tem lista fixa de campos/opções: ele só mostra o que o
+// servidor devolver (chave, rótulo, tipo, obrigatoriedade, visibilidade, valor
+// padrão e opções).
+type TicketFormField struct {
+	Key      string `json:"key"`
+	Label    string `json:"label"`
+	Type     string `json:"type"`
+	Required bool   `json:"required"`
+	// Visible é ponteiro de propósito: campo novo do servidor que não mandar
+	// "visible" (nil) continua visível. Com bool puro o zero value (false)
+	// esconderia o campo silenciosamente.
+	Visible      *bool                   `json:"visible"`
+	DefaultValue string                  `json:"defaultValue,omitempty"`
+	Options      []TicketFormFieldOption `json:"options"`
+}
+
+// IsVisible informa se o campo deve ser renderizado. Ausência de "visible" é
+// tratada como visível (mesma regra do NormalizeTicketFormSchema).
+func (f TicketFormField) IsVisible() bool {
+	return f.Visible == nil || *f.Visible
+}
+
+// TicketFormSchema é o schema do formulário de abertura de chamado de um
+// departamento. As opções variam por departamento (modelos ativos e histórico
+// do próprio departamento), por isso o agent só busca o schema depois que o
+// departamento é escolhido.
+type TicketFormSchema struct {
+	DepartmentID string            `json:"departmentId"`
+	Fields       []TicketFormField `json:"fields"`
+}
+
+// NormalizeTicketFormSchema garante slices não nulas e resolve a visibilidade
+// padrão: o binding expõe [] ao frontend em vez de null e um campo sem
+// "visible" explícito sai como visível (nunca escondido por zero value).
+func NormalizeTicketFormSchema(schema TicketFormSchema) TicketFormSchema {
+	if schema.Fields == nil {
+		schema.Fields = []TicketFormField{}
+	}
+	for i := range schema.Fields {
+		if schema.Fields[i].Options == nil {
+			schema.Fields[i].Options = []TicketFormFieldOption{}
+		}
+		if schema.Fields[i].Visible == nil {
+			visible := true
+			schema.Fields[i].Visible = &visible
+		}
+	}
+	return schema
+}
+
 // CreateTicketInput is the frontend-facing request to create a ticket.
 type CreateTicketInput struct {
 	Title       string `json:"title"`

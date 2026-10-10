@@ -155,6 +155,12 @@ type TicketOptionProfile = supportmeta.TicketOptionProfile
 
 type TicketOptions = supportmeta.TicketOptions
 
+type TicketFormFieldOption = supportmeta.TicketFormFieldOption
+
+type TicketFormField = supportmeta.TicketFormField
+
+type TicketFormSchema = supportmeta.TicketFormSchema
+
 type CloseTicketInput = supportmeta.CloseTicketInput
 
 type KnowledgeArticle = supportmeta.KnowledgeArticle
@@ -1310,6 +1316,50 @@ func (s *Service) GetTicketDepartmentFields(departmentID string) ([]TicketDepart
 	}
 	s.supportLogf("campos do departamento carregados: %d campo(s)", len(fields))
 	return fields, nil
+}
+
+// GetTicketDepartmentFormSchema retorna o schema do formulário de abertura de
+// chamado do departamento escolhido. O agent não tem lista fixa de campos nem
+// de opções: ele renderiza exatamente o que o servidor devolver (categoria,
+// prioridade, visibilidade, valor padrão e opções). As opções podem variar por
+// departamento (modelos ativos e histórico do próprio departamento), por isso a
+// busca acontece só depois da seleção do departamento.
+func (s *Service) GetTicketDepartmentFormSchema(departmentID string) (TicketFormSchema, error) {
+	departmentID = strings.TrimSpace(departmentID)
+	if !guidPattern.MatchString(departmentID) {
+		return TicketFormSchema{}, fmt.Errorf("departmentId inválido")
+	}
+
+	cfg := s.debugConfig()
+	ctx := s.ctxOrBackground()
+	target := apiScheme(cfg) + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/tickets/departments/" + departmentID + "/form-schema"
+	resp, err := doGetWithRetry(ctx, tlsutil.NewHTTPClient(10*time.Second), func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+		if err != nil {
+			return nil, err
+		}
+		if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, cfg.AgentID); err != nil {
+			return nil, err
+		}
+		return req, nil
+	})
+	if err != nil {
+		return TicketFormSchema{}, fmt.Errorf("falha ao buscar o formulário do departamento: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return TicketFormSchema{}, fmt.Errorf("HTTP %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+
+	var schema TicketFormSchema
+	if err := json.Unmarshal(body, &schema); err != nil {
+		return TicketFormSchema{}, fmt.Errorf("resposta inválida ao buscar o formulário do departamento: %w", err)
+	}
+	schema = supportmeta.NormalizeTicketFormSchema(schema)
+	s.supportLogf("formulário do departamento carregado: %d campo(s)", len(schema.Fields))
+	return schema, nil
 }
 
 // GetTicketFields retorna os campos personalizados do departamento do chamado

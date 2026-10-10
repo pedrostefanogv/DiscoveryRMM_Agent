@@ -52,6 +52,7 @@ export {
     TicketComment,
     TicketDepartmentField,
     TicketFieldValue,
+    TicketFormSchema,
     TicketOptions,
     TicketTemplateOption
 } from "./models.js";

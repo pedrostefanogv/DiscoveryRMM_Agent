@@ -516,7 +516,7 @@ func RegisterDiscoveryTools(reg *Registry, app AppBridge) {
 			{Name: "title", Type: "string", Description: "Titulo do chamado", Required: true},
 			{Name: "description", Type: "string", Description: "Descricao detalhada do problema", Required: true},
 			{Name: "priority", Type: "integer", Description: "Prioridade: 1=Baixa, 2=Media, 3=Alta, 4=Critica", Required: false},
-			{Name: "category", Type: "string", Description: "Categoria (Hardware, Software, Rede, Acesso, Email, Impressora, VPN, Outro)", Required: false},
+			{Name: "category", Type: "string", Description: "Categoria do chamado (texto livre). As opcoes disponiveis sao definidas pelo servidor por departamento (formulario de abertura do agent); consulte a lista de departamentos e envie uma categoria coerente com o problema.", Required: false},
 			{Name: "templateId", Type: "string", Description: "GUID do template escolhido (opcional; obtenha em list_ticket_templates)", Required: false},
 			{Name: "departmentId", Type: "string", Description: "GUID do departamento responsavel (obrigatorio; obtenha em list_departments e escolha o que melhor se enquadra ou pergunte ao usuario)", Required: true},
 			{Name: "customFields", Type: "string", Description: "JSON objeto com os valores dos CAMPOS do departamento, mapeando definitionId para valor (opcional)", Required: false},

@@ -1145,6 +1145,12 @@ export const TicketFieldValue = supportmeta$0.TicketFieldValue;
  * @typedef {supportmeta$0.TicketFieldValue} TicketFieldValue
  */
 
+export const TicketFormSchema = supportmeta$0.TicketFormSchema;
+
+/**
+ * @typedef {supportmeta$0.TicketFormSchema} TicketFormSchema
+ */
+
 export const TicketOptions = supportmeta$0.TicketOptions;
 
 /**

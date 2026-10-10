@@ -994,6 +994,174 @@ export class TicketFieldValue {
 }
 
 /**
+ * TicketFormField descreve um campo do formulário de abertura de chamado do
+ * agent. O agent NÃO tem lista fixa de campos/opções: ele só mostra o que o
+ * servidor devolver (chave, rótulo, tipo, obrigatoriedade, visibilidade, valor
+ * padrão e opções).
+ */
+export class TicketFormField {
+    /**
+     * Creates a new TicketFormField instance.
+     * @param {Partial<TicketFormField>} [$$source = {}] - The source object to create the TicketFormField.
+     */
+    constructor($$source = {}) {
+        if (!("key" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["key"] = "";
+        }
+        if (!("label" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["label"] = "";
+        }
+        if (!("type" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["type"] = "";
+        }
+        if (!("required" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["required"] = false;
+        }
+        if (!("visible" in $$source)) {
+            /**
+             * Visible é ponteiro de propósito: campo novo do servidor que não mandar
+             * "visible" (nil) continua visível. Com bool puro o zero value (false)
+             * esconderia o campo silenciosamente.
+             * @member
+             * @type {boolean | null}
+             */
+            this["visible"] = null;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["defaultValue"] = undefined;
+        }
+        if (!("options" in $$source)) {
+            /**
+             * @member
+             * @type {TicketFormFieldOption[]}
+             */
+            this["options"] = [];
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new TicketFormField instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {TicketFormField}
+     */
+    static createFrom($$source = {}) {
+        const $$createField6_0 = $$createType7;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("options" in $$parsedSource) {
+            $$parsedSource["options"] = $$createField6_0($$parsedSource["options"]);
+        }
+        return new TicketFormField(/** @type {Partial<TicketFormField>} */($$parsedSource));
+    }
+}
+
+/**
+ * TicketFormFieldOption é uma opção de um campo de seleção do formulário de
+ * abertura de chamado. O servidor é a fonte da verdade: o agent renderiza
+ * exatamente as opções recebidas.
+ */
+export class TicketFormFieldOption {
+    /**
+     * Creates a new TicketFormFieldOption instance.
+     * @param {Partial<TicketFormFieldOption>} [$$source = {}] - The source object to create the TicketFormFieldOption.
+     */
+    constructor($$source = {}) {
+        if (!("value" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["value"] = "";
+        }
+        if (!("label" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["label"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new TicketFormFieldOption instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {TicketFormFieldOption}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new TicketFormFieldOption(/** @type {Partial<TicketFormFieldOption>} */($$parsedSource));
+    }
+}
+
+/**
+ * TicketFormSchema é o schema do formulário de abertura de chamado de um
+ * departamento. As opções variam por departamento (modelos ativos e histórico
+ * do próprio departamento), por isso o agent só busca o schema depois que o
+ * departamento é escolhido.
+ */
+export class TicketFormSchema {
+    /**
+     * Creates a new TicketFormSchema instance.
+     * @param {Partial<TicketFormSchema>} [$$source = {}] - The source object to create the TicketFormSchema.
+     */
+    constructor($$source = {}) {
+        if (!("departmentId" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["departmentId"] = "";
+        }
+        if (!("fields" in $$source)) {
+            /**
+             * @member
+             * @type {TicketFormField[]}
+             */
+            this["fields"] = [];
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new TicketFormSchema instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {TicketFormSchema}
+     */
+    static createFrom($$source = {}) {
+        const $$createField1_0 = $$createType9;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("fields" in $$parsedSource) {
+            $$parsedSource["fields"] = $$createField1_0($$parsedSource["fields"]);
+        }
+        return new TicketFormSchema(/** @type {Partial<TicketFormSchema>} */($$parsedSource));
+    }
+}
+
+/**
  * TicketOptionDepartment is a department option for the agent ticket form.
  */
 export class TicketOptionDepartment {
@@ -1109,8 +1277,8 @@ export class TicketOptions {
      * @returns {TicketOptions}
      */
     static createFrom($$source = {}) {
-        const $$createField0_0 = $$createType7;
-        const $$createField1_0 = $$createType9;
+        const $$createField0_0 = $$createType11;
+        const $$createField1_0 = $$createType13;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("departments" in $$parsedSource) {
             $$parsedSource["departments"] = $$createField0_0($$parsedSource["departments"]);
@@ -1302,8 +1470,8 @@ export class TicketTemplateOption {
      * @returns {TicketTemplateOption}
      */
     static createFrom($$source = {}) {
-        const $$createField8_0 = $$createType11;
-        const $$createField9_0 = $$createType13;
+        const $$createField8_0 = $$createType15;
+        const $$createField9_0 = $$createType17;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("questions" in $$parsedSource) {
             $$parsedSource["questions"] = $$createField8_0($$parsedSource["questions"]);
@@ -1435,11 +1603,15 @@ const $$createType2 = $Create.Map($Create.Any, $Create.Any);
 const $$createType3 = $Create.Array($Create.Any);
 const $$createType4 = KnowledgePage.createFrom;
 const $$createType5 = $Create.Array($$createType4);
-const $$createType6 = TicketOptionDepartment.createFrom;
+const $$createType6 = TicketFormFieldOption.createFrom;
 const $$createType7 = $Create.Array($$createType6);
-const $$createType8 = TicketOptionProfile.createFrom;
+const $$createType8 = TicketFormField.createFrom;
 const $$createType9 = $Create.Array($$createType8);
-const $$createType10 = TicketTemplateQuestion.createFrom;
+const $$createType10 = TicketOptionDepartment.createFrom;
 const $$createType11 = $Create.Array($$createType10);
-const $$createType12 = TicketTemplateField.createFrom;
+const $$createType12 = TicketOptionProfile.createFrom;
 const $$createType13 = $Create.Array($$createType12);
+const $$createType14 = TicketTemplateQuestion.createFrom;
+const $$createType15 = $Create.Array($$createType14);
+const $$createType16 = TicketTemplateField.createFrom;
+const $$createType17 = $Create.Array($$createType16);

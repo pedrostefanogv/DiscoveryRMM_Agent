@@ -220,52 +220,33 @@
               <option value="" data-i18n="support.select">Selecione...</option>
             </select>
           </div>
-          <div id="ticketDepartmentFields" class="ticket-template-extra hidden"></div>
-          <div class="form-field">
-            <label for="ticketTemplate" data-i18n="field.template">Modelo de chamado</label>
-            <select id="ticketTemplate" disabled>
-              <option value="" data-i18n="support.templateSelectDepartment">Selecione o departamento primeiro</option>
-            </select>
-          </div>
-          <div id="ticketTemplateExtra" class="ticket-template-extra hidden"></div>
-          <div class="form-field">
-            <label for="ticketTitle" data-i18n="support.ticketTitle">Titulo *</label>
-            <input id="ticketTitle" type="text" placeholder="Resumo do problema" required maxlength="200"
-              data-i18n-placeholder="support.problemSummary" />
-          </div>
-          <div class="form-row">
+          <!-- Abertura propriamente dita: só aparece depois que o departamento é
+               escolhido. Os campos com opções (Categoria/Prioridade e futuros)
+               vêm do servidor, por departamento (ver loadTicketDepartmentFormSchema). -->
+          <div id="ticketOpenFields" class="hidden">
+            <div id="ticketDepartmentFields" class="ticket-template-extra hidden"></div>
             <div class="form-field">
-              <label for="ticketCategory" data-i18n="field.category">Categoria</label>
-              <select id="ticketCategory">
-                <option value="" data-i18n="support.select">Selecione...</option>
-                <option value="Hardware" data-i18n="support.category.hardware">Hardware</option>
-                <option value="Software" data-i18n="support.category.software">Software</option>
-                <option value="Rede" data-i18n="support.category.network">Rede</option>
-                <option value="Acesso" data-i18n="support.category.access">Acesso / Permissoes</option>
-                <option value="Email" data-i18n="support.category.email">E-mail</option>
-                <option value="Impressora" data-i18n="support.category.printer">Impressora</option>
-                <option value="VPN" data-i18n="support.category.vpn">VPN</option>
-                <option value="Outro" data-i18n="support.category.other">Outro</option>
+              <label for="ticketTemplate" data-i18n="field.template">Modelo de chamado</label>
+              <select id="ticketTemplate" disabled>
+                <option value="" data-i18n="support.templateSelectDepartment">Selecione o departamento primeiro</option>
               </select>
             </div>
+            <div id="ticketTemplateExtra" class="ticket-template-extra hidden"></div>
             <div class="form-field">
-              <label for="ticketPriority" data-i18n="field.priority">Prioridade</label>
-              <select id="ticketPriority">
-                <option value="1" data-i18n="support.priority.low">Baixa</option>
-                <option value="2" selected data-i18n="support.priority.medium">Media</option>
-                <option value="3" data-i18n="support.priority.high">Alta</option>
-                <option value="4" data-i18n="support.priority.critical">Critica</option>
-              </select>
+              <label for="ticketTitle" data-i18n="support.ticketTitle">Titulo *</label>
+              <input id="ticketTitle" type="text" placeholder="Resumo do problema" required maxlength="200"
+                data-i18n-placeholder="support.problemSummary" />
             </div>
+            <div id="ticketFormSchemaFields" class="form-row hidden"></div>
+            <div class="form-field">
+              <label for="ticketDescription" data-i18n="support.descriptionRequired">Descricao *</label>
+              <textarea id="ticketDescription" rows="6" placeholder="Descreva o problema com detalhes..." required
+                data-i18n-placeholder="support.describeProblemDetails" data-app-lang="true"></textarea>
+            </div>
+            <div id="ticketFormStatus" class="form-status hidden"></div>
+            <button type="submit" id="submitTicketBtn" class="btn primary full" data-i18n="action.sendTicket">Enviar
+              Chamado</button>
           </div>
-          <div class="form-field">
-            <label for="ticketDescription" data-i18n="support.descriptionRequired">Descricao *</label>
-            <textarea id="ticketDescription" rows="6" placeholder="Descreva o problema com detalhes..." required
-              data-i18n-placeholder="support.describeProblemDetails" data-app-lang="true"></textarea>
-          </div>
-          <div id="ticketFormStatus" class="form-status hidden"></div>
-          <button type="submit" id="submitTicketBtn" class="btn primary full" data-i18n="action.sendTicket">Enviar
-            Chamado</button>
         </form>
       </div>
     </div>

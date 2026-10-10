@@ -10,6 +10,18 @@ var WORKFLOW_STATES_CACHE_TTL_MS = 10 * 60 * 1000;
 // Departamentos/perfis para o picker do formulario de abertura de chamado.
 var ticketOptionsCache = { departments: [], workflowProfiles: [] };
 
+// Campos do formulario de abertura fornecidos pelo SERVIDOR para o
+// departamento escolhido. Nada e fixo aqui: o servidor define quais campos
+// existem (e se estao visiveis) e quais opcoes cada um tem.
+var ticketFormSchemaFields = [];
+var ticketFormSchemaDepartmentId = '';
+// Preenchimento pendente do modelo (categoria/prioridade) que chegou antes do
+// schema do departamento: aplicado assim que o servidor responder.
+var ticketFormSchemaPrefill = {};
+// Sequencia das buscas de schema: resposta de um departamento antigo nao pode
+// sobrescrever a selecao atual (usuario pode trocar rapido de departamento).
+var ticketFormSchemaRequestSeq = 0;
+
 // Snapshot volatil da sessao: substituido a cada carga e NUNCA persistido.
 var supportTicketsAll = [];
 
@@ -38,6 +50,9 @@ function applySupportOfflineMode() {
   // não é possível enviar comentário enquanto não houver comunicação.
   var hint = document.getElementById('commentOfflineHint');
   if (hint) hint.classList.toggle('hidden', !offline);
+  // O botao de abrir chamado tem DUAS condicoes (online E departamento
+  // escolhido): o dono do estado final e updateTicketOpenFieldsVisibility().
+  updateTicketOpenFieldsVisibility();
 }
 
 function formatCacheAge(iso) {
@@ -514,11 +529,12 @@ function showNewTicketForm() {
   // O cabecalho unificado (busca/filtros/acoes) nao faz sentido no formulario.
   if (supportStatusBarEl) supportStatusBarEl.classList.add("hidden");
   hideTicketFormStatus();
-  // Reabrir o formulario comeca limpo (modelo/campos do departamento).
-  if (ticketTemplateSelectEl) ticketTemplateSelectEl.value = '';
-  lastAppliedTemplateId = '';
-  clearTicketTemplateExtra();
-  clearDepartmentFields();
+  // Reabrir o formulario comeca limpo: o departamento e escolhido de novo e e
+  // ele que libera os demais campos (modelo/campos do servidor/descricao).
+  var departmentSelect = document.getElementById('ticketDepartment');
+  if (departmentSelect) departmentSelect.value = '';
+  clearTicketOpenFields();
+  updateTicketOpenFieldsVisibility();
   // Campos do departamento sao recarregados a cada abertura do formulario
   // (evita cache velho quando um campo e adicionado no servidor).
   departmentFieldsCache = {};
@@ -550,8 +566,181 @@ function loadTicketOptions() {
       });
       deptSelect.innerHTML = html;
     }
+    // Reconstruir a lista zera a selecao: reaplica o gating e descarta um
+    // schema que tenha ficado de um departamento anterior.
+    updateTicketOpenFieldsVisibility();
+    if (!selectedDepartmentId()) clearTicketFormSchema();
   }).catch(function (err) {
     console.warn('[support] falha ao carregar departamentos:', err);
+  });
+}
+
+// ── Schema do formulario de abertura (fornecido pelo servidor) ─────────────
+//
+// O agent NAO tem lista fixa de campos/opcoes. Depois que o usuario escolhe o
+// departamento, buscamos o schema do departamento no servidor e renderizamos
+// exatamente o que vier: campos invisiveis (ou sem opcoes) nao aparecem. Assim,
+// cada departamento pode ter campos e opcoes diferentes (modelos ativos e
+// historico do proprio departamento).
+
+function ticketSchemaFieldInputId(key) {
+  return 'ticketSchemaField_' + String(key || '');
+}
+
+function ticketSchemaFieldIsVisible(field) {
+  if (!field || !field.key) return false;
+  if (field.visible === false) return false;
+  var type = String(field.type || 'select').toLowerCase();
+  if (type === 'select') {
+    return Array.isArray(field.options) && field.options.length > 0;
+  }
+  return true;
+}
+
+function renderTicketFormSchema(schema) {
+  var container = document.getElementById('ticketFormSchemaFields');
+  var received = schema && Array.isArray(schema.fields) ? schema.fields : [];
+  ticketFormSchemaFields = received.filter(ticketSchemaFieldIsVisible);
+  if (!container) return;
+
+  var html = '';
+  ticketFormSchemaFields.forEach(function (field) {
+    var id = ticketSchemaFieldInputId(field.key);
+    var type = String(field.type || 'select').toLowerCase();
+    var options = Array.isArray(field.options) ? field.options : [];
+    var defaultValue = field.defaultValue == null ? '' : String(field.defaultValue);
+
+    html += '<div class="form-field">';
+    html += '<label for="' + escapeHtmlAttr(id) + '">' + escapeOptionLabel(field.label || field.key);
+    if (field.required) html += ' *';
+    html += '</label>';
+
+    if (type === 'select') {
+      html += '<select id="' + escapeHtmlAttr(id) + '">';
+      html += '<option value="">' + escapeHtml(translate('support.select')) + '</option>';
+      options.forEach(function (option) {
+        var value = option && option.value != null ? String(option.value) : '';
+        var label = option && option.label ? String(option.label) : value;
+        html += '<option value="' + escapeHtmlAttr(value) + '"' +
+          (value === defaultValue ? ' selected' : '') + '>' + escapeOptionLabel(label) + '</option>';
+      });
+      html += '</select>';
+    } else if (type === 'textarea') {
+      html += '<textarea id="' + escapeHtmlAttr(id) + '" rows="3"></textarea>';
+    } else {
+      html += '<input id="' + escapeHtmlAttr(id) + '" type="text"';
+      if (defaultValue) html += ' value="' + escapeHtmlAttr(defaultValue) + '"';
+      html += '/>';
+    }
+    html += '</div>';
+  });
+
+  container.innerHTML = html;
+  container.classList.toggle('hidden', ticketFormSchemaFields.length === 0);
+  container.classList.toggle('form-row-single', ticketFormSchemaFields.length === 1);
+
+  // Modelo escolhido antes da resposta da API: aplica o preenchimento que
+  // ficou na fila agora que os campos existem.
+  Object.keys(ticketFormSchemaPrefill).forEach(function (key) {
+    applyTicketFormSchemaValue(key, ticketFormSchemaPrefill[key]);
+  });
+}
+
+function readTicketFormSchemaValue(key) {
+  var el = document.getElementById(ticketSchemaFieldInputId(key));
+  if (!el) return '';
+  return String(el.value == null ? '' : el.value).trim();
+}
+
+// Aplica um valor no campo do schema, se ele ja estiver renderizado. Valor
+// fora da lista do servidor (modelo com categoria propria) entra como opcao
+// extra para nao ser perdido.
+function applyTicketFormSchemaValue(key, value) {
+  var el = document.getElementById(ticketSchemaFieldInputId(key));
+  if (!el) return false;
+  var next = String(value);
+  if (el.tagName === 'SELECT') {
+    var found = false;
+    for (var i = 0; i < el.options.length; i++) {
+      if (el.options[i].value === next) { found = true; break; }
+    }
+    if (!found) {
+      var option = document.createElement('option');
+      option.value = next;
+      option.textContent = next;
+      el.appendChild(option);
+    }
+  }
+  el.value = next;
+  return true;
+}
+
+// Preenchimento vindo do modelo (categoria/prioridade). Fica na fila mesmo que
+// os campos ainda nao existam (schema do departamento em transito).
+function setTicketFormSchemaValue(key, value) {
+  if (!key || value == null || value === '') return;
+  ticketFormSchemaPrefill[key] = String(value);
+  applyTicketFormSchemaValue(key, value);
+}
+
+function collectTicketFormSchemaMissing() {
+  var missing = [];
+  ticketFormSchemaFields.forEach(function (field) {
+    if (!field.required) return;
+    if (readTicketFormSchemaValue(field.key) === '') missing.push(field.label || field.key);
+  });
+  return missing;
+}
+
+function clearTicketFormSchema() {
+  ticketFormSchemaRequestSeq += 1;
+  ticketFormSchemaDepartmentId = '';
+  ticketFormSchemaPrefill = {};
+  renderTicketFormSchema(null);
+}
+
+function clearTicketOpenFields() {
+  if (ticketTemplateSelectEl) ticketTemplateSelectEl.value = '';
+  lastAppliedTemplateId = '';
+  clearTicketTemplateExtra();
+  clearDepartmentFields();
+  clearTicketFormSchema();
+}
+
+// Mostra o restante do formulario (modelo, titulo, campos do servidor,
+// descricao e envio) somente com departamento escolhido. Sem departamento o
+// servidor nao calcula SLA e nao ha schema para renderizar.
+function updateTicketOpenFieldsVisibility() {
+  var section = document.getElementById('ticketOpenFields');
+  var hasDepartment = !!selectedDepartmentId();
+  if (section) section.classList.toggle('hidden', !hasDepartment);
+  var btn = document.getElementById('submitTicketBtn');
+  if (btn) {
+    var offline = !!supportOfflineReadOnly || !!supportServerDisconnected;
+    btn.disabled = !hasDepartment || offline;
+  }
+}
+
+function loadTicketDepartmentFormSchema(departmentId) {
+  var api = appApi();
+  if (!departmentId || !api || typeof api.GetTicketDepartmentFormSchema !== 'function') {
+    clearTicketFormSchema();
+    return;
+  }
+  // Mesmo departamento ja renderizado: nao repete o round-trip (reabrir o
+  // formulario com o departamento ja escolhido).
+  if (ticketFormSchemaDepartmentId === departmentId && ticketFormSchemaFields.length) return;
+  ticketFormSchemaRequestSeq += 1;
+  var seq = ticketFormSchemaRequestSeq;
+  api.GetTicketDepartmentFormSchema(departmentId).then(function (schema) {
+    // Resposta de um departamento ja trocado nao pode sobrescrever a tela.
+    if (seq !== ticketFormSchemaRequestSeq || selectedDepartmentId() !== departmentId) return;
+    ticketFormSchemaDepartmentId = departmentId;
+    renderTicketFormSchema(schema);
+  }).catch(function (err) {
+    if (seq !== ticketFormSchemaRequestSeq) return;
+    console.warn('[support] falha ao carregar o formulario do departamento:', err);
+    clearTicketFormSchema();
   });
 }
 
@@ -1144,9 +1333,11 @@ function applyTicketTemplate(templateId) {
     document.getElementById('ticketDescription'),
     template.description,
     previousTemplate ? previousTemplate.description : null);
-  setSelectValueIfPresent(document.getElementById('ticketCategory'), template.category);
+  // Pre-preenche os campos definidos pelo servidor (o modelo traz categoria e
+  // prioridade). O valor entra mesmo que nao esteja na lista do departamento.
+  setTicketFormSchemaValue('category', template.category);
   var priority = templatePriorityToInt(template.priority);
-  if (priority) setSelectValueIfPresent(document.getElementById('ticketPriority'), String(priority));
+  if (priority) setTicketFormSchemaValue('priority', String(priority));
   // O departamento NAO e alterado pelo modelo: ele foi escolhido antes e o
   // modelo ja foi filtrado por ele.
   renderTicketTemplateExtra(template);
@@ -1442,8 +1633,11 @@ function initSupport() {
   supportFormEl.addEventListener('submit', async function (e) {
     e.preventDefault();
     var title = document.getElementById('ticketTitle') ? document.getElementById('ticketTitle').value.trim() : '';
-    var category = document.getElementById('ticketCategory') ? document.getElementById('ticketCategory').value : '';
-    var priority = parseInt(document.getElementById('ticketPriority') ? document.getElementById('ticketPriority').value : '2', 10);
+    // Categoria/prioridade (e qualquer campo futuro) vem do schema do
+    // servidor para o departamento escolhido. Campo que o servidor nao mandou
+    // nao existe no formulario e nao vai no payload.
+    var category = readTicketFormSchemaValue('category');
+    var priority = parseInt(readTicketFormSchemaValue('priority') || '0', 10);
     var departmentId = document.getElementById('ticketDepartment') ? document.getElementById('ticketDepartment').value : '';
     var description = document.getElementById('ticketDescription') ? document.getElementById('ticketDescription').value.trim() : '';
     var templateId = ticketTemplateSelectEl ? ticketTemplateSelectEl.value : '';
@@ -1462,7 +1656,9 @@ function initSupport() {
     // Obrigatorios: perguntas do modelo + campos personalizados do departamento.
     var templateExtra = collectTicketTemplateExtra(template);
     var departmentExtra = collectDepartmentFieldValues();
-    var missingFields = templateExtra.missing.concat(departmentExtra.missing);
+    var missingFields = templateExtra.missing
+      .concat(departmentExtra.missing)
+      .concat(collectTicketFormSchemaMissing());
     if (missingFields.length) {
       showToast(translate('support.fieldRequired', { fields: missingFields.join(', ') }), 'error');
       return;
@@ -1485,7 +1681,9 @@ function initSupport() {
     showTicketFormStatus(translate('support.submittingTicket'), false);
 
     try {
-      var payload = { title: title, description: description, priority: priority, category: category, departmentId: departmentId };
+      var payload = { title: title, description: description, departmentId: departmentId };
+      if (category) payload.category = category;
+      if (Number.isFinite(priority) && priority > 0) payload.priority = priority;
       if (Object.keys(departmentExtra.values).length) payload.customFieldValues = departmentExtra.values;
       if (templateId) {
         payload.templateId = templateId;
@@ -1494,10 +1692,7 @@ function initSupport() {
       await appApi().CreateSupportTicket(payload);
       showToast(translate('support.ticketCreatedSuccess'), 'success');
       supportFormEl.reset();
-      if (ticketTemplateSelectEl) ticketTemplateSelectEl.value = '';
-      lastAppliedTemplateId = '';
-      clearTicketTemplateExtra();
-      clearDepartmentFields();
+      clearTicketOpenFields();
       hideTicketFormStatus();
       showSupportList();
       loadSupportTickets();
@@ -1505,7 +1700,9 @@ function initSupport() {
       showTicketFormStatus(translate('support.ticketCreateError', { error: String(err) }), true);
       showToast(translate('support.ticketCreateError', { error: String(err) }), 'error');
     } finally {
-      if (btn) { btn.disabled = false; btn.textContent = translate('action.sendTicket'); }
+      if (btn) btn.textContent = translate('action.sendTicket');
+      // O botao volta ao estado calculado (online E departamento escolhido).
+      updateTicketOpenFieldsVisibility();
     }
   });
 
@@ -1519,9 +1716,12 @@ function initSupport() {
     // Departamento primeiro: ao trocar, reseta o modelo e recarrega os campos
     // personalizados e os modelos permitidos para o novo departamento.
     ticketDepartmentSelect.addEventListener('change', function () {
-      if (ticketTemplateSelectEl) ticketTemplateSelectEl.value = '';
-      clearTicketTemplateExtra();
+      // Trocar o departamento invalida tudo que era dele: modelo, campos
+      // personalizados e o schema (campos/opcoes) fornecido pelo servidor.
+      clearTicketOpenFields();
+      updateTicketOpenFieldsVisibility();
       renderTicketTemplateOptions();
+      loadTicketDepartmentFormSchema(ticketDepartmentSelect.value);
       loadDepartmentFields(ticketDepartmentSelect.value);
     });
   }

@@ -1233,6 +1233,20 @@ export function GetTicketDepartmentFields(departmentID) {
 }
 
 /**
+ * GetTicketDepartmentFormSchema expõe o schema do formulário de abertura do
+ * departamento escolhido (campos + opções definidos pelo servidor). O frontend
+ * busca depois da seleção do departamento porque as opções variam por
+ * departamento (modelos e histórico).
+ * @param {string} departmentID
+ * @returns {$CancellablePromise<$models.TicketFormSchema>}
+ */
+export function GetTicketDepartmentFormSchema(departmentID) {
+    return $Call.ByID(1010227033, departmentID).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType64($result);
+    }));
+}
+
+/**
  * GetTicketFields expõe os campos personalizados do departamento do chamado
  * (com os valores gravados) para o detalhe da aba Suporte.
  * @param {string} ticketID
@@ -1240,7 +1254,7 @@ export function GetTicketDepartmentFields(departmentID) {
  */
 export function GetTicketFields(ticketID) {
     return $Call.ByID(3134798079, ticketID).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType65($result);
+        return $$createType66($result);
     }));
 }
 
@@ -1249,7 +1263,7 @@ export function GetTicketFields(ticketID) {
  */
 export function GetTicketOptions() {
     return $Call.ByID(1795408764).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType66($result);
+        return $$createType67($result);
     }));
 }
 
@@ -1261,7 +1275,7 @@ export function GetTicketOptions() {
  */
 export function GetTicketTemplates() {
     return $Call.ByID(2958474053).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType68($result);
+        return $$createType69($result);
     }));
 }
 
@@ -1270,7 +1284,7 @@ export function GetTicketTemplates() {
  */
 export function GetTicketWorkflowStates() {
     return $Call.ByID(2054776725).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType70($result);
+        return $$createType71($result);
     }));
 }
 
@@ -1441,7 +1455,7 @@ export function ListOpenWindowsJSON(includeUntitled) {
  */
 export function ListP2PArtifacts() {
     return $Call.ByID(1832312099).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType71($result);
+        return $$createType72($result);
     }));
 }
 
@@ -1450,7 +1464,7 @@ export function ListP2PArtifacts() {
  */
 export function ListP2PAuditEvents() {
     return $Call.ByID(2100415322).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType73($result);
+        return $$createType74($result);
     }));
 }
 
@@ -1462,7 +1476,7 @@ export function ListP2PAuditEvents() {
  */
 export function ListP2PAuditEventsFiltered(action, peerAgentID, status) {
     return $Call.ByID(1530405413, action, peerAgentID, status).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType73($result);
+        return $$createType74($result);
     }));
 }
 
@@ -1526,7 +1540,7 @@ export function ListTicketDepartmentsJSON() {
  */
 export function LoadEffectiveAppStorePolicy(forceRefresh) {
     return $Call.ByID(2011064705, forceRefresh).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType74($result);
+        return $$createType75($result);
     }));
 }
 
@@ -1536,7 +1550,7 @@ export function LoadEffectiveAppStorePolicy(forceRefresh) {
  */
 export function LoadInstallerConfig() {
     return $Call.ByID(336072596).then(/** @type {($result: any) => any} */(($result) => {
-        $result[0] = $$createType75($result[0]);
+        $result[0] = $$createType76($result[0]);
         return $result;
     }));
 }
@@ -1781,7 +1795,7 @@ export function RefreshKnowledgeBase() {
  */
 export function RefreshListeningPorts() {
     return $Call.ByID(1221992142).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType77($result);
+        return $$createType78($result);
     }));
 }
 
@@ -1790,7 +1804,7 @@ export function RefreshListeningPorts() {
  */
 export function RefreshNetworkConnections() {
     return $Call.ByID(964299066).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType78($result);
+        return $$createType79($result);
     }));
 }
 
@@ -1815,7 +1829,7 @@ export function RefreshPeerArtifactIndex(source) {
  */
 export function RefreshSoftware() {
     return $Call.ByID(2717679924).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType80($result);
+        return $$createType81($result);
     }));
 }
 
@@ -1824,7 +1838,7 @@ export function RefreshSoftware() {
  */
 export function RefreshStartupItems() {
     return $Call.ByID(3800784882).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType82($result);
+        return $$createType83($result);
     }));
 }
 
@@ -2030,7 +2044,7 @@ export function RunOsqueryQueryJSON(sql, limit) {
  */
 export function RunPSADTPreflightChecks() {
     return $Call.ByID(2615823421).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType83($result);
+        return $$createType84($result);
     }));
 }
 
@@ -2460,23 +2474,24 @@ const $$createType60 = $Create.Array($$createType59);
 const $$createType61 = $Create.Array($$createType1);
 const $$createType62 = supportmeta$0.TicketDepartmentField.createFrom;
 const $$createType63 = $Create.Array($$createType62);
-const $$createType64 = supportmeta$0.TicketFieldValue.createFrom;
-const $$createType65 = $Create.Array($$createType64);
-const $$createType66 = supportmeta$0.TicketOptions.createFrom;
-const $$createType67 = supportmeta$0.TicketTemplateOption.createFrom;
-const $$createType68 = $Create.Array($$createType67);
-const $$createType69 = supportmeta$0.APIWorkflowState.createFrom;
-const $$createType70 = $Create.Array($$createType69);
-const $$createType71 = $Create.Array($$createType12);
-const $$createType72 = p2pmeta$0.AuditEvent.createFrom;
-const $$createType73 = $Create.Array($$createType72);
-const $$createType74 = appstore$0.EffectivePolicy.createFrom;
-const $$createType75 = debug$0.InstallerConfig.createFrom;
-const $$createType76 = models$0.ListeningPortInfo.createFrom;
-const $$createType77 = $Create.Array($$createType76);
-const $$createType78 = models$0.NetworkConnectionsReport.createFrom;
-const $$createType79 = models$0.SoftwareItem.createFrom;
-const $$createType80 = $Create.Array($$createType79);
-const $$createType81 = models$0.StartupItem.createFrom;
-const $$createType82 = $Create.Array($$createType81);
-const $$createType83 = $models.PSADTPreflightResult.createFrom;
+const $$createType64 = supportmeta$0.TicketFormSchema.createFrom;
+const $$createType65 = supportmeta$0.TicketFieldValue.createFrom;
+const $$createType66 = $Create.Array($$createType65);
+const $$createType67 = supportmeta$0.TicketOptions.createFrom;
+const $$createType68 = supportmeta$0.TicketTemplateOption.createFrom;
+const $$createType69 = $Create.Array($$createType68);
+const $$createType70 = supportmeta$0.APIWorkflowState.createFrom;
+const $$createType71 = $Create.Array($$createType70);
+const $$createType72 = $Create.Array($$createType12);
+const $$createType73 = p2pmeta$0.AuditEvent.createFrom;
+const $$createType74 = $Create.Array($$createType73);
+const $$createType75 = appstore$0.EffectivePolicy.createFrom;
+const $$createType76 = debug$0.InstallerConfig.createFrom;
+const $$createType77 = models$0.ListeningPortInfo.createFrom;
+const $$createType78 = $Create.Array($$createType77);
+const $$createType79 = models$0.NetworkConnectionsReport.createFrom;
+const $$createType80 = models$0.SoftwareItem.createFrom;
+const $$createType81 = $Create.Array($$createType80);
+const $$createType82 = models$0.StartupItem.createFrom;
+const $$createType83 = $Create.Array($$createType82);
+const $$createType84 = $models.PSADTPreflightResult.createFrom;

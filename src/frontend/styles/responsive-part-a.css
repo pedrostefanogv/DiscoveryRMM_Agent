@@ -884,6 +884,12 @@
   gap: 10px;
 }
 
+/* Formulario de abertura do agent: o servidor define quantos campos existem.
+   Com um unico campo, ele ocupa a linha inteira (nao metade). */
+.form-row.form-row-single {
+  grid-template-columns: 1fr;
+}
+
 .form-status {
   font-size: 0.85rem;
   padding: 8px 12px;
