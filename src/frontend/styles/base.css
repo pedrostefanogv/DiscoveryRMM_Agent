@@ -259,7 +259,11 @@ a:hover { text-decoration: underline; }
   width: 10px; height: 10px; border-radius: 50%;
   background: var(--muted); opacity: 0.6;
   flex: 0 0 auto; flex-shrink: 0;
-  margin: 0 1px;
+  /* 3px à esquerda: o anel (box-shadow de 2px) do estado online precisa caber
+     DENTRO do .window-chrome-meta, que tem overflow: hidden — com 1px o anel
+     era cortado na borda esquerda ("pontinha" faltando no indicador). À direita
+     o gap para o nome do PC já dá o espaço necessário. */
+  margin: 0 1px 0 3px;
   transition: background 0.3s ease, box-shadow 0.3s ease;
 }
 .window-meta-dot.online {
