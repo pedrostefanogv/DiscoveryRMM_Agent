@@ -233,6 +233,14 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 		return true, exitCode, output, errText
 	}
 
+	// Descomissionamento remoto: o painel moveu o agente para a lixeira e pediu
+	// a desinstalação desta máquina (uninstaller NSIS silencioso). Fica ANTES do
+	// guard de RemoteDebug — a desinstalação não depende do debug remoto e não
+	// pode cair no fallback de "tipo de comando desconhecido".
+	if isAgentDecommissionCommandType(cmdType) {
+		return a.handleAgentDecommissionCommand(parent, payload)
+	}
+
 	if a == nil || a.RemoteDebug == nil {
 		return false, 0, "", ""
 	}
@@ -330,12 +338,6 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 	// Desinstalação de software instalado (inventário do dashboard).
 	if IsSoftwareUninstallCommandType(cmdType) {
 		return a.handleSoftwareUninstallCommand(parent, payload)
-	}
-
-	// Descomissionamento remoto: o painel moveu o agente para a lixeira e pediu
-	// a desinstalação desta máquina (uninstaller NSIS silencioso).
-	if isAgentDecommissionCommandType(cmdType) {
-		return a.handleAgentDecommissionCommand(parent, payload)
 	}
 
 	// Delega comandos de inventário sob demanda (SystemInfo)
