@@ -412,6 +412,10 @@ function screenshotEnsureOverlayEls() {
   if (winBtn) winBtn.textContent = screenshotT("screenshot.window");
   var cancel = document.getElementById("screenshotModeCancel");
   if (cancel) cancel.textContent = screenshotT("screenshot.cancel");
+  // O campo de anotação é criado por JS: o placeholder precisa ser aplicado aqui
+  // (o applyI18n já rodou quando o overlay é montado sob demanda).
+  var annotTextInput = document.getElementById("screenshotAnnotTextInput");
+  if (annotTextInput) annotTextInput.placeholder = screenshotT("screenshot.annotText");
   // A barra do topo também é arrastável (alça ⣿ ou fundo), como a de anotações.
   var overlayBar = document.getElementById("screenshotOverlayToolbar");
   if (overlayBar) overlayBar.addEventListener("mousedown", screenshotStartOverlayToolbarDrag);
@@ -1649,10 +1653,24 @@ function screenshotOpenTextInput(clientX, clientY, imagePoint) {
   if (!input) return;
   input.dataset.imageX = String(imagePoint.x);
   input.dataset.imageY = String(imagePoint.y);
-  input.style.left = (clientX - metrics.rect.left) + "px";
-  input.style.top = (clientY - metrics.rect.top) + "px";
   input.value = "";
   input.classList.remove("hidden");
+  input.style.left = (clientX - metrics.rect.left) + "px";
+  input.style.top = (clientY - metrics.rect.top) + "px";
+  // O campo flutua SOBRE o print, ancorado no ponto clicado. Como ele tem largura
+  // própria, um clique perto da borda direita/inferior jogaria parte do editor
+  // para fora da janela (a viewport do overlay recorta). Aqui ele é empurrado de
+  // volta para dentro — o texto continua sendo desenhado no ponto original.
+  var rect = input.getBoundingClientRect();
+  var margin = 8;
+  var dx = 0;
+  var dy = 0;
+  if (rect.right > window.innerWidth - margin) dx = rect.right - (window.innerWidth - margin);
+  if (rect.left - dx < margin) dx = rect.left - margin;
+  if (rect.bottom > window.innerHeight - margin) dy = rect.bottom - (window.innerHeight - margin);
+  if (rect.top - dy < margin) dy = rect.top - margin;
+  if (dx) input.style.left = (clientX - metrics.rect.left - dx) + "px";
+  if (dy) input.style.top = (clientY - metrics.rect.top - dy) + "px";
   input.focus();
 }
 
