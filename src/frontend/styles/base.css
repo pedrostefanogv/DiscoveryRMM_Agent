@@ -265,8 +265,10 @@ a:hover { text-decoration: underline; }
 .window-meta-dot.online {
   background: var(--status-indicator-online, #4caf50);
   opacity: 1;
+  /* Sem pulso: o anel estático já comunica o estado. A animação (anel 2px↔6px a
+     cada 2s) era percebida como "piscada" na barra superior, ao lado do nome do
+     PC. As keyframes seguem existindo para o indicador da página de Status. */
   box-shadow: 0 0 0 2px var(--status-indicator-online-ring, rgba(76,175,80,.3));
-  animation: pulse-green 2s infinite;
 }
 .window-meta-dot.offline {
   background: var(--danger, #d9534f);
