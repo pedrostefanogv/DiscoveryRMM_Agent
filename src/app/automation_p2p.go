@@ -60,8 +60,9 @@ func (m *automationPackageManagerRouter) Install(ctx context.Context, id string)
 	output, p2pErr := m.installViaP2P(ctx, id)
 	if p2pErr == nil {
 		// Instalador saiu 0 — mas stub/online pode sair sem instalar. Confirma o
-		// estado real; se não instalou, cai para o winget (escopo correto).
-		if m.verifyLocalInstallResult(ctx, id, "install") {
+		// estado real (e, com sessão interativa, que o USUÁRIO logado enxerga o
+		// pacote); se não instalou, cai para o winget.
+		if m.confirmInstallBeforeSkip(ctx, id) {
 			return output, nil
 		}
 		m.logf("[automation][p2p] instalador local concluiu sem instalar o pacote, fallback para winget direto packageId=%s", strings.TrimSpace(id))
@@ -74,7 +75,7 @@ func (m *automationPackageManagerRouter) Install(ctx context.Context, id string)
 
 		output, dlErr := m.downloadAndCacheForP2P(ctx, id)
 		if dlErr == nil {
-			if m.verifyLocalInstallResult(ctx, id, "install") {
+			if m.confirmInstallBeforeSkip(ctx, id) {
 				return output, nil
 			}
 			m.logf("[automation][p2p] instalador baixado concluiu sem instalar o pacote, fallback para winget direto packageId=%s", strings.TrimSpace(id))
@@ -149,6 +150,13 @@ func (m *automationPackageManagerRouter) installMachineThenUser(ctx context.Cont
 	if err == nil {
 		return out, nil
 	}
+	// Falha do winget com a instalação de máquina EFETIVADA (exit code ruidoso)
+	// não pode gerar uma SEGUNDA cópia, agora por usuário: confirma o estado —
+	// e, com sessão interativa, que o USUÁRIO logado também enxerga o pacote.
+	if m.confirmInstallBeforeSkip(ctx, id) {
+		m.logf("[automation][p2p] winget retornou erro mas o pacote esta instalado - sem segunda tentativa packageId=%s", strings.TrimSpace(id))
+		return out, nil
+	}
 	userOut, userErr := m.installInUserSession(ctx, id, silent, silentWithProgress)
 	if userErr == nil {
 		return userOut, nil
@@ -175,6 +183,43 @@ func (m *automationPackageManagerRouter) upgradeMachineThenUser(ctx context.Cont
 		return userOut, nil
 	}
 	return out, fmt.Errorf("%w (upgrade na sessao do usuario tambem falhou: %v)", err, userErr)
+}
+
+// installedVisibleToUser confirma, NO CONTEXTO DO USUÁRIO logado, que o pacote
+// está instalado para ele. Retorna (instalado, verificavel): verificavel=false
+// quando não há sessão interativa ou o winget do usuário não responde — nesse
+// caso o caller mantém o comportamento anterior (não piora nada).
+func (m *automationPackageManagerRouter) installedVisibleToUser(ctx context.Context, packageID string) (bool, bool) {
+	userCtx, cleanup, ok := activeUserTokenFn(ctx)
+	if !ok {
+		return false, false
+	}
+	defer cleanup()
+	out, err := m.fallback.ListInstalled(userCtx)
+	if err != nil || strings.TrimSpace(out) == "" {
+		return false, false
+	}
+	return automation.IsPackageInOutput(out, packageID), true
+}
+
+// confirmInstallBeforeSkip decide se o "já instalado" observado é suficiente
+// para encerrar a instalação com sucesso.
+//
+// Motivo: o `winget list` do agente roda como SYSTEM, que enxerga também o
+// perfil DO PRÓPRIO SYSTEM. Um stub que instala per-user sob SYSTEM (exit 0)
+// aparece nessa lista e faria o agente reportar sucesso sem que o usuário
+// logado tivesse o app — falso sucesso. Com sessão interativa, exige que o
+// usuário também veja o pacote; sem como verificar, mantém o comportamento
+// anterior.
+func (m *automationPackageManagerRouter) confirmInstallBeforeSkip(ctx context.Context, packageID string) bool {
+	if !m.verifyLocalInstallResult(ctx, packageID, "install") {
+		return false
+	}
+	if installed, verifiable := m.installedVisibleToUser(ctx, packageID); verifiable && !installed {
+		m.logf("[automation][p2p] pacote consta instalado para o SYSTEM mas NAO para o usuario logado - seguindo para instalar no perfil dele packageId=%s", strings.TrimSpace(packageID))
+		return false
+	}
+	return true
 }
 
 // installInUserSession executa a instalação no perfil do usuário da sessão

@@ -353,13 +353,23 @@ func newestMatch(pattern string) string {
 }
 
 // command cria o exec.Cmd usando o caminho resolvido do winget.
-func (c *Client) command(ctx context.Context, args ...string) *exec.Cmd {
+//
+// Com token de usuário no ctx, o winget do PRÓPRIO usuário tem prioridade: o
+// binário é um MSIX por perfil e o caminho cacheado pelo processo do serviço
+// pode não ser executável por outra conta. Se o winget do usuário não puder ser
+// resolvido, devolve ERRO (nunca cai em silêncio no caminho do SYSTEM).
+func (c *Client) command(ctx context.Context, args ...string) (*exec.Cmd, error) {
+	if exe, err := resolveUserContextExecutable(ctx); err != nil {
+		return nil, err
+	} else if exe != "" {
+		return exec.CommandContext(ctx, exe, args...), nil
+	}
 	if exe, _ := ResolveExecutable(); exe != "" {
-		return exec.CommandContext(ctx, exe, args...)
+		return exec.CommandContext(ctx, exe, args...), nil
 	}
 	// Sem caminho resolvido: mantém o comportamento anterior (o erro resultante
 	// é tratado pelos callers como falha transitória e preserva a última lista).
-	return exec.CommandContext(ctx, "winget", args...)
+	return exec.CommandContext(ctx, "winget", args...), nil
 }
 
 // lookPathWinget expõe exec.LookPath para os testes.

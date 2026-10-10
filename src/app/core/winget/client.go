@@ -249,7 +249,10 @@ func (c *Client) run(ctx context.Context, args ...string) (string, error) {
 	runCtx, cancel := ctxutil.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
-	cmd := c.command(runCtx, args...)
+	cmd, cmdErr := c.command(runCtx, args...)
+	if cmdErr != nil {
+		return "", cmdErr
+	}
 	processutil.HideWindow(cmd)
 	// Honra um token de usuário colocado no ctx (sessão interativa): sem isso,
 	// `winget list/install` rodam sempre como SYSTEM e não enxergam (nem
