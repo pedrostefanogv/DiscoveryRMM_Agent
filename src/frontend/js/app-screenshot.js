@@ -359,6 +359,9 @@ function screenshotEnsureOverlayEls() {
     '  <button type="button" class="screenshot-zoom-btn" id="screenshotZoomOut" data-i18n-title="screenshot.zoomOut">−</button>',
     '  <span id="screenshotZoomLabel" class="screenshot-zoom-label" data-i18n-title="screenshot.zoomHint">100%</span>',
     '  <button type="button" class="screenshot-zoom-btn" id="screenshotZoomIn" data-i18n-title="screenshot.zoomIn">+</button>',
+    // Ampliar a área selecionada: ação explícita (aparece só com a seleção
+    // travada). Sem ela, travar uma região pequena a exibia ampliada na tela toda.
+    '  <button type="button" class="screenshot-zoom-btn hidden" id="screenshotZoomArea" data-i18n-title="screenshot.zoomArea"><svg viewBox="0 0 16 16" class="screenshot-annot-icon" aria-hidden="true"><rect x="2" y="3" width="12" height="10" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="8" cy="8" r="2.6" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></button>',
     '  <button type="button" class="screenshot-zoom-btn" id="screenshotZoomFit" data-i18n-title="screenshot.zoomFit">⤢</button>',
     '</div>',
     '<div id="screenshotAnnotToolbar" class="screenshot-annot-toolbar hidden">',
@@ -430,8 +433,12 @@ function screenshotEnsureOverlayEls() {
   var canvas = document.getElementById("screenshotAnnotCanvas");
   canvas.addEventListener("mousedown", screenshotAnnotDown);
   canvas.addEventListener("mousemove", screenshotAnnotMove);
+  canvas.addEventListener("mousemove", screenshotAnnotHoverCursor);
   canvas.addEventListener("mouseup", screenshotAnnotUp);
-  canvas.addEventListener("mouseleave", screenshotAnnotUp);
+  canvas.addEventListener("mouseleave", function () {
+    canvas.classList.remove("outside");
+    screenshotAnnotUp();
+  });
   Array.prototype.forEach.call(root.querySelectorAll("[data-annot-tool]"), function (btn) {
     btn.addEventListener("click", function () { screenshotSetAnnotTool(btn.getAttribute("data-annot-tool")); });
   });
@@ -485,6 +492,8 @@ function screenshotEnsureOverlayEls() {
   if (zoomIn) zoomIn.addEventListener("click", function () { screenshotSetZoom(screenshotOverlayView.zoom * screenshotZoomStep); });
   var zoomFit = document.getElementById("screenshotZoomFit");
   if (zoomFit) zoomFit.addEventListener("click", screenshotResetOverlayView);
+  var zoomArea = document.getElementById("screenshotZoomArea");
+  if (zoomArea) zoomArea.addEventListener("click", screenshotZoomToSelection);
 
   var undoBtn = document.getElementById("screenshotAnnotUndo");
   if (undoBtn) undoBtn.addEventListener("click", screenshotAnnotUndo);
@@ -565,9 +574,11 @@ function screenshotShowOverlay(payload) {
   };
   screenshotSetAnnotToolbarVisible(false);
   // Nova sessão: zoom/pan zerados (sem herdar o enquadramento da captura
-  // anterior) e barra de zoom visível nas duas fases da captura.
+  // anterior) e barra de zoom visível nas duas fases da captura. O botão de
+  // "ampliar a área" só aparece depois de travar a seleção.
   screenshotResetOverlayView();
   screenshotSetZoomBarVisible(true);
+  screenshotSetZoomAreaVisible(false);
   // Nova sessão: barra do topo visível e de volta ao centro (posição arrastada
   // na captura anterior não é herdada).
   screenshotSetOverlayToolbarVisible(true);
@@ -672,13 +683,15 @@ function screenshotPhysicalScale(metrics) {
   return { x: sx, y: sy };
 }
 
-// ── Zoom/pan do overlay (dentro do print selecionado) ─────────────────────
+// ── Zoom/pan do overlay (na tela congelada) ──────────────────────────────
 //
 // Existe uma CAIXA DE VISUALIZAÇÃO (`screenshotViewBox`, em pixels da imagem):
-// é a tela inteira enquanto o usuário escolhe a área e, depois de travar a
-// seleção, SOMENTE o recorte escolhido. O conteúdo (imagem + canvas + caixas) é
+// é SEMPRE a tela congelada inteira, nas duas fases da captura (na fase de escolha
+// e depois de travar a seleção). A região selecionada continua, portanto, exibida
+// na mesma posição e escala em que está na tela; o recorte só delimita as
+// anotações e o entorno escurecido. O conteúdo (imagem + canvas + caixas) é
 // dimensionado por `natural × escala` e deslocado por translate, com o pan
-// limitado à caixa — ou seja, o zoom nunca sai do print.
+// limitado à caixa — ou seja, o zoom nunca sai da tela congelada.
 //
 // Os conversores de coordenadas continuam partindo de
 // img.getBoundingClientRect() (posição/tamanho reais com zoom e deslocamento).
@@ -713,23 +726,15 @@ function screenshotViewportBox() {
   };
 }
 
-// screenshotViewBox devolve a caixa de visualização em pixels da IMAGEM: o
-// recorte selecionado quando existe, senão a tela congelada inteira.
+// screenshotViewBox devolve a caixa de visualização em pixels da IMAGEM: SEMPRE a
+// tela congelada inteira. A seleção NÃO muda o enquadramento — ela trava o recorte,
+// o entorno escurecido e a barra de anotações. Assim a região continua na mesma
+// posição e escala em que o usuário a desenhou na tela; ampliar é uma ação
+// explícita (roda, +/− ou o botão "ampliar a área").
 function screenshotViewBox() {
   var img = screenshotOverlayImg();
   var natW = img && img.naturalWidth > 0 ? img.naturalWidth : 0;
   var natH = img && img.naturalHeight > 0 ? img.naturalHeight : 0;
-  var sel = screenshotSelectionImageRect();
-  if (sel && sel.w > 0 && sel.h > 0 && natW > 0 && natH > 0) {
-    // A seleção de JANELA pode ter partes fora do desktop (janela arrastada para
-    // fora da tela): sem limitar à imagem, os limites de pan ficavam invertidos e
-    // a "janela" mostrava faixas fora do print.
-    var x = Math.max(0, Math.min(sel.x, natW - 1));
-    var y = Math.max(0, Math.min(sel.y, natH - 1));
-    var w = Math.max(1, Math.min(sel.w, natW - x));
-    var h = Math.max(1, Math.min(sel.h, natH - y));
-    return { x: x, y: y, w: w, h: h };
-  }
   if (natW > 0 && natH > 0) {
     return { x: 0, y: 0, w: natW, h: natH };
   }
@@ -737,22 +742,33 @@ function screenshotViewBox() {
   return { x: 0, y: 0, w: box.w, h: box.h };
 }
 
-// screenshotViewLocked informa se a área já foi escolhida (a caixa de
-// visualização é o recorte).
-function screenshotViewLocked() {
-  var state = screenshotOverlayState;
-  return !!(state && state.selection);
+// screenshotSelectionClampedRect devolve a seleção em pixels da IMAGEM limitada aos
+// limites da imagem. Usada pela lupa (screenshotAnnotBounds): a seleção de JANELA
+// pode ter partes fora do desktop (janela arrastada para fora da tela) e a lente
+// não pode ser jogada para fora da área que será exportada.
+function screenshotSelectionClampedRect() {
+  var img = screenshotOverlayImg();
+  var natW = img && img.naturalWidth > 0 ? img.naturalWidth : 0;
+  var natH = img && img.naturalHeight > 0 ? img.naturalHeight : 0;
+  var sel = screenshotSelectionImageRect();
+  if (!sel || sel.w <= 0 || sel.h <= 0 || natW <= 0 || natH <= 0) return null;
+  var x = Math.max(0, Math.min(sel.x, natW - 1));
+  var y = Math.max(0, Math.min(sel.y, natH - 1));
+  return {
+    x: x,
+    y: y,
+    w: Math.max(1, Math.min(sel.w, natW - x)),
+    h: Math.max(1, Math.min(sel.h, natH - y)),
+  };
 }
 
 // screenshotViewFit calcula o encaixe da caixa de visualização na viewport:
-//
-//   * fase de seleção: preenche a LARGURA (como sempre foi — a janela do overlay
-//     cobre exatamente o desktop virtual, então a imagem não distorce);
-//   * com a área travada: `contain`, para o print inteiro caber na tela.
+// preenche a LARGURA (a janela do overlay cobre exatamente o desktop virtual,
+// então a imagem não distorce e a região fica no mesmo lugar da tela). O MESMO
+// fator vale nas duas fases — não há salto ao travar a seleção. O antigo ramo
+// `contain` sobre o recorte ampliava qualquer região pequena para a tela inteira.
 function screenshotViewFit(box, vb) {
-  var fitW = box.w / Math.max(1, vb.w);
-  if (!screenshotViewLocked()) return fitW;
-  return Math.min(fitW, box.h / Math.max(1, vb.h));
+  return box.w / Math.max(1, vb.w);
 }
 
 // screenshotImageScale é a escala atual "px da imagem → px de CSS", já com o
@@ -773,8 +789,8 @@ function screenshotClampPan(value, min, max) {
 }
 
 // screenshotApplyView recalcula tamanho do conteúdo, deslocamento e o quadro da
-// seleção. O pan é limitado à caixa de visualização: com a área travada, nada
-// além do print selecionado entra na janela.
+// seleção. O pan é limitado à caixa de visualização (a tela congelada inteira):
+// nunca sobra área preta na janela.
 function screenshotApplyView() {
   var content = screenshotOverlayContent();
   if (!content) return;
@@ -867,6 +883,59 @@ function screenshotResetOverlayView() {
   view.panX = 0;
   view.panY = 0;
   screenshotApplyView();
+  // Volta a 100%: a região retorna ao lugar original e a barra a acompanha
+  // (sem efeito quando não há seleção travada nem barra arrastada).
+  screenshotRepositionAnnotToolbar();
+}
+
+// screenshotSetZoomAreaVisible mostra/esconde o botão "ampliar a área": a ação só
+// faz sentido depois que existe uma seleção travada.
+function screenshotSetZoomAreaVisible(visible) {
+  var btn = document.getElementById("screenshotZoomArea");
+  if (btn) btn.classList.toggle("hidden", !visible);
+}
+
+// screenshotZoomToSelection amplia a ÁREA selecionada até ela caber na tela e a
+// centraliza. É a ação EXPLÍCITA que substitui o antigo enquadramento automático
+// (que ampliava qualquer recorte pequeno assim que a seleção era travada).
+function screenshotZoomToSelection() {
+  var state = screenshotOverlayState;
+  if (!state || !state.selection) return;
+  var rect = screenshotSelectionImageRect();
+  if (!rect || rect.w <= 0 || rect.h <= 0) return;
+  var box = screenshotViewportBox();
+  var base = screenshotViewFit(box, screenshotViewBox());
+  if (!(base > 0)) return;
+  var view = screenshotOverlayView;
+  // Escala (imagem px → CSS) necessária para a seleção caber inteira na viewport.
+  var fit = Math.min(box.w / rect.w, box.h / rect.h);
+  view.zoom = Math.max(screenshotZoomMin, Math.min(screenshotZoomMax, fit / base));
+  var scale = base * view.zoom;
+  // Centraliza a seleção; screenshotApplyView limita o pan aos limites da imagem.
+  view.panX = (rect.x + rect.w / 2) * scale - box.w / 2;
+  view.panY = (rect.y + rect.h / 2) * scale - box.h / 2;
+  screenshotApplyView();
+  screenshotRepositionAnnotToolbar();
+}
+
+// screenshotRepositionAnnotToolbar devolve a barra de anotações para junto da
+// seleção (abaixo quando couber, senão acima) quando o usuário não a arrastou. A
+// barra é `fixed` (coordenadas da VIEWPORT) e a seleção está em px da IMAGEM:
+// converte pela escala vigente e subtrai o deslocamento do pan.
+function screenshotRepositionAnnotToolbar() {
+  var state = screenshotOverlayState;
+  if (!state || !state.selection) return;
+  var rect = screenshotSelectionImageRect();
+  if (!rect) return;
+  var vp = screenshotOverlayViewport();
+  var vpRect = vp ? vp.getBoundingClientRect() : { left: 0, top: 0 };
+  var scale = screenshotImageScale();
+  screenshotPlaceAnnotToolbar({
+    left: vpRect.left + rect.x * scale - screenshotOverlayView.panX,
+    top: vpRect.top + rect.y * scale - screenshotOverlayView.panY,
+    width: rect.w * scale,
+    height: rect.h * scale,
+  });
 }
 
 // screenshotOverlayWheel: roda = zoom ancorado no cursor (como em visualizadores
@@ -1068,30 +1137,26 @@ function screenshotLockSelection(selection) {
   state.selection = selection;
   state.annotations = [];
   state.draft = null;
-  // A partir daqui a caixa de visualização é o RECORTE: o print passa a ocupar a
-  // tela e o zoom/pan fica limitado a ele (nunca volta a mostrar o resto do
-  // desktop). O quadro da seleção é reposicionado por screenshotApplyView.
+  // A seleção está travada, mas a caixa de visualização CONTINUA sendo a tela
+  // congelada inteira: a região permanece na mesma posição e escala em que foi
+  // desenhada (o quadro é reposicionado por screenshotApplyView). Ampliar agora é
+  // uma ação explícita do usuário, nunca um efeito de travar a seleção.
   screenshotResetOverlayView();
   var canvas = screenshotOverlayCanvas();
-  if (canvas) canvas.classList.remove("hidden");
+  if (canvas) {
+    canvas.classList.remove("hidden");
+    // Seleção nova: volta o cursor de desenho até o próximo mousemove decidir.
+    canvas.classList.remove("outside");
+  }
   screenshotSetAnnotToolbarVisible(true);
+  // O botão "ampliar a área" só passa a existir com a seleção travada.
+  screenshotSetZoomAreaVisible(true);
   // A barra do topo (dica + tela inteira/janela/cancelar) some assim que a área
   // é escolhida: a partir daqui quem manda é a barra de anotações.
   screenshotSetOverlayToolbarVisible(false);
-  // A barra é `fixed`, em coordenadas da VIEWPORT; a seleção está em px da
-  // IMAGEM. Converte pela escala vigente e subtrai o deslocamento do pan.
-  var rect = screenshotSelectionImageRect();
-  if (rect) {
-    var vp = screenshotOverlayViewport();
-    var vpRect = vp ? vp.getBoundingClientRect() : { left: 0, top: 0 };
-    var scale = screenshotImageScale();
-    screenshotPlaceAnnotToolbar({
-      left: vpRect.left + rect.x * scale - screenshotOverlayView.panX,
-      top: vpRect.top + rect.y * scale - screenshotOverlayView.panY,
-      width: rect.w * scale,
-      height: rect.h * scale,
-    });
-  }
+  // A barra já está visível (offsetHeight real), então o reposicionamento junto da
+  // seleção é feito agora — e refeito a cada ajuste de zoom.
+  screenshotRepositionAnnotToolbar();
   screenshotAnnotRedraw();
 }
 
@@ -1112,10 +1177,11 @@ function screenshotAnnotReselect() {
   if (canvas) canvas.classList.add("hidden");
   var textInput = document.getElementById("screenshotAnnotTextInput");
   if (textInput) textInput.classList.add("hidden");
-  // Sem seleção a caixa de visualização volta a ser a tela inteira (o quadro é
-  // escondido por screenshotPositionSelectionBox dentro do ApplyView).
+  // Sem seleção o quadro é escondido por screenshotPositionSelectionBox dentro do
+  // ApplyView e o botão "ampliar a área" volta a ficar oculto.
   screenshotResetOverlayView();
   screenshotSetAnnotToolbarVisible(false);
+  screenshotSetZoomAreaVisible(false);
   // Volta a mostrar dica e atalhos para escolher outra área/janela.
   screenshotSetOverlayToolbarVisible(true);
 }
@@ -1358,6 +1424,20 @@ function screenshotIsDragTool(tool) {
   return tool === "rect" || tool === "circle" || tool === "arrow" || tool === "line" || tool === "blur" || tool === "magnify";
 }
 
+// screenshotAnnotHoverCursor dá o retorno visual de que só a área selecionada é
+// editável: fora dela o cursor deixa de ser a cruz de desenho. Sem isso, clicar
+// fora da seleção (o traço é clipado) parecia "ferramenta quebrada".
+function screenshotAnnotHoverCursor(event) {
+  var state = screenshotOverlayState;
+  var canvas = screenshotOverlayCanvas();
+  if (!state || !state.selection || !canvas) return;
+  // Durante um arraste o traço continua válido mesmo saindo da área (é clipado):
+  // não trocar o cursor no meio do gesto.
+  if (state.draft) return;
+  var inside = screenshotPointInRect(screenshotAnnotPoint(event), screenshotSelectionImageRect());
+  canvas.classList.toggle("outside", !inside);
+}
+
 function screenshotAnnotDown(event) {
   var state = screenshotOverlayState;
   if (!state || !state.selection) return;
@@ -1365,6 +1445,10 @@ function screenshotAnnotDown(event) {
   if (event.button !== 0) return;
   event.preventDefault();
   var point = screenshotAnnotPoint(event);
+  // Com a tela congelada inteira visível, é fácil começar um traço FORA da
+  // seleção. Ele sairia clipado (invisível) e pareceria que a ferramenta falhou:
+  // melhor ignorar o clique e deixar claro que só a área selecionada é editável.
+  if (!screenshotPointInRect(point, screenshotSelectionImageRect())) return;
   if (state.tool === "text") {
     screenshotOpenTextInput(event.clientX, event.clientY, point);
     return;
@@ -1723,10 +1807,10 @@ function screenshotStrokeEllipse(ctx, shape) {
 // a imagem final) quando existe, senão a imagem inteira. A lupa usa isso para
 // não jogar a lente para fora da área que será exportada.
 function screenshotAnnotBounds() {
-  // Reusa a caixa de visualização (já limitada à imagem), evitando divergência
-  // entre o enquadramento do zoom e os limites das anotações (ex.: lupa em
-  // seleção de janela parcialmente fora do desktop).
-  var vb = screenshotViewBox();
+  // Usa a SELEÇÃO limitada à imagem — não a caixa de visualização, que agora é
+  // sempre a tela inteira: a lente não pode sair da área que será exportada
+  // (ex.: seleção de janela parcialmente fora do desktop).
+  var vb = screenshotSelectionClampedRect();
   if (vb && vb.w > 0 && vb.h > 0) return vb;
   return null;
 }

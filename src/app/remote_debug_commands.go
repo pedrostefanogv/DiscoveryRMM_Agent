@@ -332,6 +332,12 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 		return a.handleSoftwareUninstallCommand(parent, payload)
 	}
 
+	// Descomissionamento remoto: o painel moveu o agente para a lixeira e pediu
+	// a desinstalação desta máquina (uninstaller NSIS silencioso).
+	if isAgentDecommissionCommandType(cmdType) {
+		return a.handleAgentDecommissionCommand(parent, payload)
+	}
+
 	// Delega comandos de inventário sob demanda (SystemInfo)
 	if cmdType == "systeminfo" {
 		return a.handleSystemInfoCommand(parent, payload)

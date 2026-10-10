@@ -1499,6 +1499,11 @@ func (a *App) runCoreStartup(ctx context.Context) {
 		a.ConsolEngine = consolidation.New(db, agentIDForEngine)
 	}
 
+	// Retoma um descomissionamento interrompido (pedido gravado no SQLite mas
+	// uninstaller ainda não lançado — ex.: serviço caiu durante o atraso de
+	// resposta ao comando) antes de religar o core.
+	a.resumeAgentDecommissionIfPending()
+
 	log.Println("[service] core ativo — staged startup iniciando")
 
 	a.runStagedStartup(ctx)

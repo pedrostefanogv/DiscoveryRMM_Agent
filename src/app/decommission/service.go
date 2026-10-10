@@ -253,7 +253,14 @@ func PerformDelete(ctx context.Context, target Target) error {
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return nil
 	}
-	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone {
+	// 404/410 = o registro já não existe. 401/403 = token revogado — cenário do
+	// descomissionamento iniciado pelo painel, que apaga o agente e revoga os
+	// tokens antes de o uninstaller rodar. Insistir (outbox com backoff) só
+	// geraria retry inútil de um estado terminal.
+	if resp.StatusCode == http.StatusNotFound ||
+		resp.StatusCode == http.StatusGone ||
+		resp.StatusCode == http.StatusUnauthorized ||
+		resp.StatusCode == http.StatusForbidden {
 		return nil
 	}
 	return fmt.Errorf("delete agent retornou HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))

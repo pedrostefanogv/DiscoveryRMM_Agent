@@ -347,18 +347,21 @@ func isProcessElevated() bool {
 	return elevation.TokenIsElevated != 0
 }
 
-// launchInstallerCreateProcess lanca o instalador via CreateProcess.
-// Caminho PRIMÁRIO quando o agente já é elevado (independência via
-// CREATE_BREAKAWAY_FROM_JOB + DETACHED_PROCESS) e fallback quando
-// ShellExecuteEx("runas") falha. Só funciona se o processo atual já tem
-// privilégios de admin (ex.: Task Scheduler rodando como SYSTEM).
-func (u *Updater) launchInstallerCreateProcess(exePath string, context string) error {
+// LaunchDetachedCreateProcess cria um processo independente do agente
+// (CREATE_BREAKAWAY_FROM_JOB + DETACHED_PROCESS + CREATE_NO_WINDOW) e devolve a
+// estrutura do processo. NÃO eleva privilégios: só é útil quando o processo
+// atual já é elevado (serviço SYSTEM, Task Scheduler elevado, terminal admin).
+// O chamador é dono do handle e responsável por fechá-lo.
+//
+// É a base do self-update e do descomissionamento remoto (uninstaller NSIS): o
+// processo precisa sobreviver ao encerramento/remoção do próprio agente.
+func LaunchDetachedCreateProcess(exePath, args string) (windows.ProcessInformation, error) {
 	argv0, argvErr := windows.UTF16PtrFromString(exePath)
 	if argvErr != nil {
-		return fmt.Errorf("UTF16PtrFromString: %w (contexto: %s)", argvErr, context)
+		return windows.ProcessInformation{}, fmt.Errorf("UTF16PtrFromString: %w", argvErr)
 	}
 
-	cmdLine := windows.StringToUTF16Ptr(fmt.Sprintf(`"%s" /S /UPDATE`, exePath))
+	cmdLine := windows.StringToUTF16Ptr(fmt.Sprintf(`"%s" %s`, exePath, strings.TrimSpace(args)))
 
 	var si windows.StartupInfo
 	si.Flags = windows.STARTF_USESHOWWINDOW
@@ -369,7 +372,7 @@ func (u *Updater) launchInstallerCreateProcess(exePath string, context string) e
 	createFlags |= breakawayFromJobFlag
 	createFlags |= newProcessGroupFlag
 
-	err := windows.CreateProcess(
+	if err := windows.CreateProcess(
 		argv0,
 		cmdLine,
 		nil,
@@ -380,7 +383,20 @@ func (u *Updater) launchInstallerCreateProcess(exePath string, context string) e
 		nil,
 		&si,
 		&pi,
-	)
+	); err != nil {
+		return windows.ProcessInformation{}, err
+	}
+
+	return pi, nil
+}
+
+// launchInstallerCreateProcess lanca o instalador via CreateProcess.
+// Caminho PRIMÁRIO quando o agente já é elevado (independência via
+// CREATE_BREAKAWAY_FROM_JOB + DETACHED_PROCESS) e fallback quando
+// ShellExecuteEx("runas") falha. Só funciona se o processo atual já tem
+// privilégios de admin (ex.: Task Scheduler rodando como SYSTEM).
+func (u *Updater) launchInstallerCreateProcess(exePath string, context string) error {
+	pi, err := LaunchDetachedCreateProcess(exePath, "/S /UPDATE")
 	if err != nil {
 		return fmt.Errorf("CreateProcess falhou: %w (contexto: %s)", err, context)
 	}
