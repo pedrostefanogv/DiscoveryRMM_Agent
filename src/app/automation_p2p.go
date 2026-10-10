@@ -32,6 +32,15 @@ import (
 // (que conhece as flags silenciosas corretas do manifesto do pacote).
 var errInstallerExec = errors.New("installer execution failed")
 
+// errInstallerNotDrivable indica que o agente NÃO deve dirigir o instalador
+// baixado: ou o manifesto declara escopo de usuário (não existe instalador de
+// máquina) ou não declara switches silenciosos (o binário já é silencioso por
+// construção). Nos dois casos, executá-lo como SYSTEM com switches inventados
+// pelo catálogo faz o stub subir o updater e TRAVAR, deixando processos órfãos
+// sem instalar (caso Brave). O caminho correto é o `winget`, que aplica os
+// switches do próprio manifesto.
+var errInstallerNotDrivable = errors.New("instalador nao dirigivel diretamente")
+
 type automationPackageManagerRouter struct {
 	app      *App
 	fallback *services.AppsService
@@ -66,7 +75,7 @@ func (m *automationPackageManagerRouter) Install(ctx context.Context, id string)
 			return output, nil
 		}
 		m.logf("[automation][p2p] instalador local concluiu sem instalar o pacote, fallback para winget direto packageId=%s", strings.TrimSpace(id))
-	} else if errors.Is(p2pErr, errInstallerExec) {
+	} else if errors.Is(p2pErr, errInstallerExec) || errors.Is(p2pErr, errInstallerNotDrivable) {
 		// O instalador já está em disco — re-baixar seria desperdício de banda.
 		// Vai direto ao winget install, que aplica as flags corretas do manifesto.
 		m.logf("[automation][p2p] instalador adquirido mas execução falhou, fallback para winget direto packageId=%s motivo=%v", strings.TrimSpace(id), p2pErr)
@@ -110,7 +119,7 @@ func (m *automationPackageManagerRouter) Upgrade(ctx context.Context, id string)
 			return output, nil
 		}
 		m.logf("[automation][p2p] instalador local concluiu sem atualizar o pacote, fallback para winget direto packageId=%s", strings.TrimSpace(id))
-	} else if errors.Is(p2pErr, errInstallerExec) {
+	} else if errors.Is(p2pErr, errInstallerExec) || errors.Is(p2pErr, errInstallerNotDrivable) {
 		m.logf("[automation][p2p] instalador adquirido mas execução falhou, fallback para winget direto packageId=%s motivo=%v", strings.TrimSpace(id), p2pErr)
 	} else {
 		m.logf("[automation][p2p] artifact nao encontrado na rede P2P, tentando download+cache packageId=%s", strings.TrimSpace(id))
@@ -411,15 +420,63 @@ func (m *automationPackageManagerRouter) installViaP2P(ctx context.Context, pack
 		}
 	}
 
+	// Só dirigimos o binário quando o MANIFESTO diz como fazê-lo (sidecar do
+	// download) e o escopo não é de usuário. Caso contrário, executá-lo como
+	// SYSTEM com switches do catálogo — que podem descrever OUTRO instalador —
+	// trava o stub (BraveUpdate) e deixa processos órfãos sem instalar nada.
+	if !m.directExecAllowed(artifact) {
+		return "", fmt.Errorf("%w: artifact=%s", errInstallerNotDrivable, artifact)
+	}
+	info, _ := m.artifactManifestInfo(artifact)
 	artifactPath := filepath.Join(m.app.p2pTempDir(), artifact)
-	catSilent, catSilentWithProgress, catInstallerType := m.catalogInstallerInfo(packageID)
-	output, err := runLocalInstallerFull(ctx, artifactPath, catSilent, catSilentWithProgress, catInstallerType)
+	_, _, catInstallerType := m.catalogInstallerInfo(packageID)
+	if t := strings.TrimSpace(info.InstallerType); t != "" {
+		catInstallerType = t
+	}
+	m.logf("[automation][p2p] execucao direta com switches do MANIFESTO artifact=%s silent=%q scope=%q", artifact, info.Silent, info.Scope)
+	output, err := runLocalInstallerFull(ctx, artifactPath, info.Silent, info.SilentWithProgress, catInstallerType, true)
 	if err != nil {
 		// Erro tipado: o artifact está em disco, apenas a execução falhou.
 		// O caller NÃO deve re-baixar — deve ir direto ao winget install.
 		return "", fmt.Errorf("%w: %v", errInstallerExec, err)
 	}
 	return output, nil
+}
+
+// localArtifactNameForPackage devolve o nome do artifact já em cache local para
+// o pacote ("" quando não há).
+func (m *automationPackageManagerRouter) localArtifactNameForPackage(packageID string) string {
+	if m == nil || m.app == nil || m.app.P2PCoord == nil {
+		return ""
+	}
+	artifactID := "winget:" + normalizePackageLookupKey(packageID)
+	if artifactID == "winget:" {
+		return ""
+	}
+	artifacts, err := m.app.ListP2PArtifacts()
+	if err != nil {
+		return ""
+	}
+	for _, a := range artifacts {
+		if !strings.EqualFold(strings.TrimSpace(a.ArtifactID), artifactID) || !a.Available {
+			continue
+		}
+		return strings.TrimSpace(a.ArtifactName)
+	}
+	return ""
+}
+
+// directExecAllowed decide se o agente pode executar o artifact local trocando
+// os switches por conta própria. Só com o MANIFESTO conhecido (sidecar gravado
+// no download), com switches silenciosos DECLARADOS por ele e sem escopo de
+// usuário. Em qualquer outra situação vai para o winget, que é quem conhece o
+// binário que ele mesmo baixou.
+func (m *automationPackageManagerRouter) directExecAllowed(artifactName string) bool {
+	info, ok := m.artifactManifestInfo(artifactName)
+	if !ok || info.Scope == "user" {
+		return false
+	}
+	return strings.TrimSpace(info.Silent) != "" || strings.TrimSpace(info.SilentWithProgress) != ""
 }
 
 // resolveArtifactSources localiza o artifact do pacote e retorna TODOS os
@@ -577,6 +634,11 @@ func (m *automationPackageManagerRouter) PreloadPackageForP2P(ctx context.Contex
 		return
 	}
 	m.logf("[automation][p2p] preload: artifact publicado no cache P2P packageId=%s artifactID=%s artifactName=%s", packageID, artifactID, published.ArtifactName)
+	// Guarda o que o MANIFESTO diz sobre este binário: é o que autoriza (ou não) a
+	// execução direta depois, e com quais switches.
+	if info, ok := manifestInfoFromDownloadDir(tmpDir); ok {
+		m.writeArtifactManifest(published.ArtifactName, info)
+	}
 }
 
 // downloadAndCacheForP2P baixa o instalador via winget download, publica no cache
@@ -601,8 +663,15 @@ func (m *automationPackageManagerRouter) downloadAndCacheForP2P(ctx context.Cont
 	// ciclo se repete.
 	if existing := m.findLocalArtifactByID(artifactID); existing != "" {
 		m.logf("[automation][p2p] artifact já presente no cache local, instalando sem republicar artifactID=%s artifact=%s", artifactID, existing)
-		catSilent, catSilentWithProgress, catInstallerType := m.catalogInstallerInfo(packageID)
-		output, err := runLocalInstallerFull(ctx, existing, catSilent, catSilentWithProgress, catInstallerType)
+		if !m.directExecAllowed(filepath.Base(existing)) {
+			return "", fmt.Errorf("%w: artifact=%s (sem manifesto dirigivel no cache)", errInstallerNotDrivable, filepath.Base(existing))
+		}
+		info, _ := m.artifactManifestInfo(filepath.Base(existing))
+		_, _, catInstallerType := m.catalogInstallerInfo(packageID)
+		if t := strings.TrimSpace(info.InstallerType); t != "" {
+			catInstallerType = t
+		}
+		output, err := runLocalInstallerFull(ctx, existing, info.Silent, info.SilentWithProgress, catInstallerType, true)
 		if err != nil {
 			// Erro tipado: artifact em disco, execução falhou. O caller
 			// (Install/Upgrade) vai direto ao winget install sem re-baixar.
@@ -646,6 +715,14 @@ func (m *automationPackageManagerRouter) downloadAndCacheForP2P(ctx context.Cont
 	}
 	m.logf("[automation][p2p] instalador encontrado: %s", installerPath)
 
+	// 3a. O que o MANIFESTO diz sobre este binário (o `winget download` grava o
+	// YAML ao lado). É a única fonte confiável de switches/escopo: o catálogo da
+	// loja pode descrever OUTRO instalador (caso Brave).
+	manifestInfo, hasManifest := manifestInfoFromDownloadDir(tmpDir)
+	if hasManifest {
+		m.logf("[automation][p2p] manifesto do download: scope=%q silent=%q type=%q", manifestInfo.Scope, manifestInfo.Silent, manifestInfo.InstallerType)
+	}
+
 	// 3b. Extrair a versão real do instalador (nome do arquivo ou output do
 	// winget upgrade) para versionar o artifact no P2P — permite que outros
 	// agents comparem "versão disponível na rede" vs "versão instalada" e
@@ -675,19 +752,36 @@ func (m *automationPackageManagerRouter) downloadAndCacheForP2P(ctx context.Cont
 		// Fallback: instalar direto do tmpDir se a publicação falhar.
 		// Erro tipado: instalador em disco, execução falhou → caller vai
 		// direto ao winget install sem re-baixar.
-		catSilent, catSilentWithProgress, catInstallerType := m.catalogInstallerInfo(packageID)
-		output, err := runLocalInstallerFull(ctx, installerPath, catSilent, catSilentWithProgress, catInstallerType)
+		_, _, catInstallerType := m.catalogInstallerInfo(packageID)
+		if t := strings.TrimSpace(manifestInfo.InstallerType); t != "" {
+			catInstallerType = t
+		}
+		output, err := runLocalInstallerFull(ctx, installerPath, manifestInfo.Silent, manifestInfo.SilentWithProgress, catInstallerType, true)
 		if err != nil {
 			return "", fmt.Errorf("%w: %v", errInstallerExec, err)
 		}
 		return output, nil
 	}
 	m.logf("[automation][p2p] artifact publicado no cache P2P artifactID=%s artifactName=%s", artifactID, published.ArtifactName)
+	if hasManifest {
+		m.writeArtifactManifest(published.ArtifactName, manifestInfo)
+	}
+
+	// Só executamos o binário quando o MANIFESTO descreve como fazê-lo. Caso
+	// contrário (ex.: Scope: user, ou sem switches declarados) entregamos ao
+	// winget: ele baixa e aplica o manifesto, no contexto correto.
+	if !hasManifest || manifestInfo.Scope == "user" ||
+		(strings.TrimSpace(manifestInfo.Silent) == "" && strings.TrimSpace(manifestInfo.SilentWithProgress) == "") {
+		return "", fmt.Errorf("%w: artifact=%s scope=%q silent=%q", errInstallerNotDrivable, published.ArtifactName, manifestInfo.Scope, manifestInfo.Silent)
+	}
 
 	// 5. Instalar a partir da cópia persistente no P2P_Temp (não do tmpDir efêmero)
 	p2pInstallerPath := filepath.Join(m.app.p2pTempDir(), published.ArtifactName)
-	catSilent, catSilentWithProgress, catInstallerType := m.catalogInstallerInfo(packageID)
-	output, err := runLocalInstallerFull(ctx, p2pInstallerPath, catSilent, catSilentWithProgress, catInstallerType)
+	_, _, catInstallerType := m.catalogInstallerInfo(packageID)
+	if t := strings.TrimSpace(manifestInfo.InstallerType); t != "" {
+		catInstallerType = t
+	}
+	output, err := runLocalInstallerFull(ctx, p2pInstallerPath, manifestInfo.Silent, manifestInfo.SilentWithProgress, catInstallerType, true)
 	if err != nil {
 		return "", fmt.Errorf("%w: %v", errInstallerExec, err)
 	}
@@ -952,7 +1046,7 @@ func runLocalInstaller(ctx context.Context, artifactPath string) (string, error)
 // instalador "wix" empacotado como .exe precisa de msiexec, e "portable"/"zip"
 // não são instaladores executáveis.
 func runLocalInstallerWithSwitches(ctx context.Context, artifactPath, silent, silentWithProgress string) (string, error) {
-	return runLocalInstallerFull(ctx, artifactPath, silent, silentWithProgress, "")
+	return runLocalInstallerFull(ctx, artifactPath, silent, silentWithProgress, "", false)
 }
 
 const (
@@ -967,7 +1061,10 @@ const (
 	localInstallerMSIBudget = 12 * time.Minute
 )
 
-func runLocalInstallerFull(ctx context.Context, artifactPath, silent, silentWithProgress, installerType string) (string, error) {
+// exactSwitches=true usa SOMENTE os switches informados (sem cascata heurística):
+// é o modo do caminho dirigido pelo MANIFESTO, onde os switches são os do próprio
+// binário baixado e chutar outros frameworks só pode travar o instalador.
+func runLocalInstallerFull(ctx context.Context, artifactPath, silent, silentWithProgress, installerType string, exactSwitches bool) (string, error) {
 	artifactPath = strings.TrimSpace(artifactPath)
 	if artifactPath == "" {
 		return "", fmt.Errorf("artifact path vazio")
@@ -1024,7 +1121,7 @@ func runLocalInstallerFull(ctx context.Context, artifactPath, silent, silentWith
 		}
 		return executeHiddenProcess(ctx, timeout, "msiexec", args)
 	case ext == ".exe":
-		return runExeInstallerSilent(ctx, timeout, artifactPath, silent, silentWithProgress)
+		return runExeInstallerSilent(ctx, timeout, artifactPath, silent, silentWithProgress, exactSwitches)
 	default:
 		return "", fmt.Errorf("formato de instalador não suportado para P2P: %s (installerType=%q)", ext, it)
 	}
@@ -1134,7 +1231,7 @@ func installerFlagCascade(kind installerType) [][]string {
 //  3. cascata completa.
 //
 // Retorna a saída do primeiro conjunto de flags que teve sucesso.
-func runExeInstallerSilent(ctx context.Context, timeout time.Duration, artifactPath, silent, silentWithProgress string) (string, error) {
+func runExeInstallerSilent(ctx context.Context, timeout time.Duration, artifactPath, silent, silentWithProgress string, exactSwitches bool) (string, error) {
 	var lastOutput string
 	var lastErr error
 
@@ -1179,6 +1276,16 @@ func runExeInstallerSilent(ctx context.Context, timeout time.Duration, artifactP
 		if output, ok := attempt(splitInstallerSwitches(sw)); ok {
 			return fmt.Sprintf("[p2p-installer] switches do catalogo (%s) bem-sucedidos: %s\n%s", candidate.name, sw, output), nil
 		}
+	}
+
+	// Modo dirigido pelo MANIFESTO: sem cascata. Os switches vieram do próprio
+	// manifesto do binário baixado; aplicar flags de outros frameworks pode fazer
+	// um stub subir o updater e travar (caso Brave).
+	if exactSwitches {
+		if lastErr == nil {
+			lastErr = fmt.Errorf("switches do manifesto nao aplicaveis")
+		}
+		return lastOutput, fmt.Errorf("execucao direta (switches do manifesto) falhou: %w", lastErr)
 	}
 
 	// Fallback: cascata heurística por framework detectado (comportamento anterior).
