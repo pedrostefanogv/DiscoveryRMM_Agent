@@ -1183,16 +1183,6 @@ function renderTicketTemplateExtra(template) {
   attachInputMasks(ticketTemplateExtraEl);
 }
 
-function setSelectValueIfPresent(select, value) {
-  if (!select || !value) return;
-  for (var i = 0; i < select.options.length; i++) {
-    if (select.options[i].value === value) {
-      select.value = value;
-      return;
-    }
-  }
-}
-
 // ── Campos personalizados do departamento ──────────────────────────────────
 // Valem para TODO chamado do departamento (com ou sem template), por isso sao
 // carregados do endpoint do departamento — nao apenas dos campos do template.
