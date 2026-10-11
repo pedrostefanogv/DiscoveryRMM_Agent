@@ -194,6 +194,59 @@ func (a *App) SupportChatDownloadAttachment(attachmentID string) (map[string]str
 	}, nil
 }
 
+// SupportChatOpenInviteWindow abre a janela do chat já com o convite pendente.
+//
+// Chamado pelo processo de UI quando recebe `supportchat:invite` (o serviço, que
+// recebe o comando do servidor, não tem Wails para abrir janela).
+func (a *App) SupportChatOpenInviteWindow(sessionID, ticketID, ticketTitle, supportName string) error {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return errSupportChatInvalidInvite
+	}
+
+	svc := a.supportChatService()
+
+	// Defesa extra: um convite não pode derrubar uma conversa ATIVA de outro
+	// chamado (a recusa por busy é resolvida no serviço).
+	if state := svc.State(); state.Status == supportchat.StatusActive && state.SessionID != sessionID {
+		return errSupportChatBusy
+	}
+
+	svc.PrepareInvite(supportchat.Invite{
+		SessionID:   sessionID,
+		TicketID:    ticketID,
+		TicketTitle: ticketTitle,
+		SupportName: supportName,
+	})
+
+	a.openSupportChatWindow()
+	return nil
+}
+
+// SupportChatRespondInvite responde ao convite DENTRO da janela do chat.
+//
+//   - aceite: reporta ao servidor, transita o estado e carrega a conversa;
+//   - recusa: reporta, descarta o estado e fecha a janela.
+func (a *App) SupportChatRespondInvite(accepted bool, reason string) error {
+	svc := a.supportChatService()
+
+	ctx, cancel := context.WithTimeout(a.supportChatContext(), supportChatCallWait)
+	defer cancel()
+
+	if err := svc.RespondInvite(ctx, accepted, reason); err != nil {
+		return err
+	}
+
+	if accepted {
+		_, err := svc.Refresh(ctx)
+		return err
+	}
+
+	svc.ClearState()
+	a.closeSupportChatWindow()
+	return nil
+}
+
 // SupportChatEnd encerra a sessão pelo usuário.
 func (a *App) SupportChatEnd(reason string) error {
 	ctx, cancel := context.WithTimeout(a.supportChatContext(), supportChatCallWait)

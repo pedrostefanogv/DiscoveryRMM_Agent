@@ -17,6 +17,9 @@
   var state = {
     status: "none",
     connected: false,
+    hasSession: false,
+    ticketTitle: "",
+    supportName: "",
     messages: [],
     pending: [],
     policy: {
@@ -46,6 +49,10 @@
     els.confirm = byId("scConfirm");
     els.confirmOk = byId("scConfirmOk");
     els.confirmCancel = byId("scConfirmCancel");
+    els.invite = byId("scInvite");
+    els.inviteText = byId("scInviteText");
+    els.inviteAccept = byId("scInviteAccept");
+    els.inviteReject = byId("scInviteReject");
   }
 
   function call(method) {
@@ -91,6 +98,7 @@
       els.banner.hidden = true;
     }
 
+    renderInvite();
     renderMessages();
     renderPending();
 
@@ -106,6 +114,47 @@
     var date = new Date(raw);
     if (isNaN(date.getTime())) return "";
     return date.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+  }
+
+  /**
+   * A confirmação do convite é renderizada AQUI, na janela do chat — é ela que
+   * o usuário atende, no mesmo padrão do modal "Encerrar o chat?".
+   */
+  function renderInvite() {
+    if (!els.invite) return;
+
+    if (state.status !== "waiting") {
+      els.invite.hidden = true;
+      return;
+    }
+
+    var who = state.supportName || "Um atendente do suporte";
+    var ticket = state.ticketTitle ? " no chamado '" + state.ticketTitle + "'" : "";
+    if (els.inviteText) {
+      els.inviteText.textContent = who + " abriu um chat" + ticket + ". Deseja conversar agora?";
+    }
+
+    els.invite.hidden = false;
+  }
+
+  function respondInvite(accepted) {
+    if (els.inviteAccept) els.inviteAccept.disabled = true;
+    if (els.inviteReject) els.inviteReject.disabled = true;
+
+    call("SupportChatRespondInvite", accepted, accepted ? "" : "user_denied")
+      .then(function () {
+        if (els.invite) els.invite.hidden = true;
+        if (els.inviteAccept) els.inviteAccept.disabled = false;
+        if (els.inviteReject) els.inviteReject.disabled = false;
+        if (accepted) return refresh();
+        // Recusa: o Go descarta o estado e fecha a janela.
+        return null;
+      })
+      .catch(function (err) {
+        if (els.inviteAccept) els.inviteAccept.disabled = false;
+        if (els.inviteReject) els.inviteReject.disabled = false;
+        showBanner("Não foi possível responder ao convite: " + describe(err));
+      });
   }
 
   function renderMessages() {
@@ -194,11 +243,46 @@
     });
   }
 
+  /**
+   * Une as mensagens por sequência (e por id, para as otimistas).
+   *
+   * Com o split serviço/UI o estado chega de DOIS produtores: o serviço (NATS,
+   * via IPC) e o REST chamado por esta janela. Substituir a lista faria um
+   * snapshot atrasado apagar mensagens já exibidas.
+   */
+  function mergeMessages(incoming) {
+    var seen = {};
+    var merged = [];
+
+    function push(message) {
+      if (!message) return;
+      var key = message.sequenceNumber
+        ? "s:" + message.sequenceNumber
+        : "id:" + (message.id || "");
+      if (key === "id:") return;
+      if (seen[key]) return;
+      seen[key] = true;
+      merged.push(message);
+    }
+
+    (state.messages || []).forEach(push);
+    (incoming || []).forEach(push);
+
+    merged.sort(function (a, b) {
+      return (a.sequenceNumber || 0) - (b.sequenceNumber || 0);
+    });
+
+    return merged;
+  }
+
   function applyState(next) {
     if (!next) return;
     state.status = next.status || "none";
     state.connected = !!next.connected;
-    state.messages = Array.isArray(next.messages) ? next.messages : [];
+    state.hasSession = !!next.hasSession;
+    state.ticketTitle = next.ticketTitle || state.ticketTitle;
+    state.supportName = next.supportName || state.supportName;
+    state.messages = mergeMessages(Array.isArray(next.messages) ? next.messages : []);
     if (next.supportName || next.ticketTitle) {
       var parts = [];
       if (next.supportName) parts.push("Atendente: " + next.supportName);
@@ -389,6 +473,9 @@
         }
       });
     });
+
+    els.inviteAccept.addEventListener("click", function () { respondInvite(true); });
+    els.inviteReject.addEventListener("click", function () { respondInvite(false); });
 
     els.end.addEventListener("click", askClose);
     els.confirmOk.addEventListener("click", function () {

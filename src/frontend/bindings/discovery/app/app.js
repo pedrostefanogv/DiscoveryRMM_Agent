@@ -2347,6 +2347,21 @@ export function SupportChatEnd(reason) {
 }
 
 /**
+ * SupportChatOpenInviteWindow abre a janela do chat já com o convite pendente.
+ * 
+ * Chamado pelo processo de UI quando recebe `supportchat:invite` (o serviço, que
+ * recebe o comando do servidor, não tem Wails para abrir janela).
+ * @param {string} sessionID
+ * @param {string} ticketID
+ * @param {string} ticketTitle
+ * @param {string} supportName
+ * @returns {$CancellablePromise<void>}
+ */
+export function SupportChatOpenInviteWindow(sessionID, ticketID, ticketTitle, supportName) {
+    return $Call.ByID(879178602, sessionID, ticketID, ticketTitle, supportName);
+}
+
+/**
  * SupportChatRefresh faz o snapshot REST (abertura da janela / reconciliação).
  * @returns {$CancellablePromise<supportchat$0.State>}
  */
@@ -2354,6 +2369,19 @@ export function SupportChatRefresh() {
     return $Call.ByID(277848266).then(/** @type {($result: any) => any} */(($result) => {
         return $$createType85($result);
     }));
+}
+
+/**
+ * SupportChatRespondInvite responde ao convite DENTRO da janela do chat.
+ * 
+ *   - aceite: reporta ao servidor, transita o estado e carrega a conversa;
+ *   - recusa: reporta, descarta o estado e fecha a janela.
+ * @param {boolean} accepted
+ * @param {string} reason
+ * @returns {$CancellablePromise<void>}
+ */
+export function SupportChatRespondInvite(accepted, reason) {
+    return $Call.ByID(1226572069, accepted, reason);
 }
 
 /**

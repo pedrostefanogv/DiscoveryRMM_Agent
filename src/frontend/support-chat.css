@@ -258,6 +258,8 @@
   box-shadow: 0 18px 48px rgba(0, 0, 0, .28);
 }
 
+#scInvite .sc-modal { border-color: var(--accent); }
+
 .sc-modal h3 { margin: 0 0 8px; font-size: 16px; }
 .sc-modal p { margin: 0 0 16px; font-size: 13px; color: var(--muted); }
 

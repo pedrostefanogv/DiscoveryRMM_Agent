@@ -252,6 +252,15 @@ func (s *Service) applySessionOpened(envelope Envelope) {
 
 func (s *Service) applySessionEnded(envelope Envelope) {
 	s.mu.Lock()
+
+	// Mesma guarda de sessão dos outros eventos: um SessionEnded REENTREGUE
+	// (AckWait) de uma conversa anterior encerraria a conversa ativa.
+	if envelope.SessionID != "" && s.state.SessionID != "" && envelope.SessionID != s.state.SessionID {
+		s.mu.Unlock()
+		s.deps.Logf("[supportchat] SessionEnded de outra sessão ignorado: " + envelope.SessionID)
+		return
+	}
+
 	s.state.Status = StatusEnded
 	s.state.HasSession = false
 	s.state.SessionID = envelope.SessionID

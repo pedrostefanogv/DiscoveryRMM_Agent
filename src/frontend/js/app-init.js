@@ -575,6 +575,30 @@ async function bootstrapApp() {
   ) {
     window.wails.on("notification:new", handleNotificationEvent);
   }
+
+  // Convite de chat de suporte: quem abre a janela do chat é o processo de UI.
+  // O comando chega no SERVIÇO (sem Wails) e é reemitido por IPC — este handler
+  // é o elo que faltava para a janela abrir na hora do convite, sem depender de
+  // reiniciar o agent.
+  if (window.wails && typeof window.wails.on === "function") {
+    window.wails.on("supportchat:invite", function (payload) {
+      var data = payload || {};
+      var api = window.go && window.go.app && window.go.app.App;
+      if (!api || typeof api.SupportChatOpenInviteWindow !== "function") {
+        return;
+      }
+      api
+        .SupportChatOpenInviteWindow(
+          String(data.sessionId || ""),
+          String(data.ticketId || ""),
+          String(data.ticketTitle || ""),
+          String(data.supportName || ""),
+        )
+        .catch(function (err) {
+          console.error("[supportchat] falha ao abrir a janela do convite:", err);
+        });
+    });
+  }
   if (typeof startUIRuntimeMonitor === "function") {
     startUIRuntimeMonitor("bootstrap");
   }
