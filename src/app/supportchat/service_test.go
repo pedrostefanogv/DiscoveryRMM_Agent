@@ -371,6 +371,169 @@ func TestMergeMessages_CapsInMemoryTranscript(t *testing.T) {
 	}
 }
 
+// BUG CORRIGIDO: ao iniciar uma NOVA conversa as mensagens da anterior ficavam
+// no estado e se misturavam com as novas (com sequence_number colidindo entre
+// sessões, a ordem saía embaralhada).
+func TestPrepareInvite_NewSessionDropsPreviousTranscript(t *testing.T) {
+	svc := newTestService()
+
+	// A sessão "antiga" é a mesma dos envelopes do helper.
+	svc.PrepareInvite(Invite{SessionID: testSessionID, TicketID: testTicketID, SupportName: "Ana"})
+	_ = svc.HandleEnvelope(messageEnvelope("a1", "mensagem da conversa antiga", 1))
+
+	if got := len(svc.State().Messages); got != 1 {
+		t.Fatalf("preparo do teste falhou: %d mensagens", got)
+	}
+
+	// Nova conversa (sessão diferente): a transcrição anterior precisa sair.
+	svc.PrepareInvite(Invite{SessionID: "sessao-nova", TicketID: testTicketID, SupportName: "Ana"})
+
+	state := svc.State()
+	if state.SessionID != "sessao-nova" {
+		t.Fatalf("sessão não trocou: %q", state.SessionID)
+	}
+	if len(state.Messages) != 0 {
+		t.Fatalf("a conversa anterior deveria ter sido descartada, obteve %+v", state.Messages)
+	}
+}
+
+// O convite REENVIADO da MESMA sessão (retry) não pode apagar a conversa.
+func TestPrepareInvite_SameSessionKeepsTranscript(t *testing.T) {
+	svc := newTestService()
+
+	svc.PrepareInvite(Invite{SessionID: testSessionID, TicketID: testTicketID})
+	_ = svc.HandleEnvelope(messageEnvelope("m1", "mensagem atual", 1))
+
+	svc.PrepareInvite(Invite{SessionID: testSessionID, TicketID: testTicketID})
+
+	if got := len(svc.State().Messages); got != 1 {
+		t.Fatalf("retry da mesma sessão não pode limpar a conversa: %d mensagens", got)
+	}
+}
+
+// O snapshot REST que devolve OUTRA sessão também precisa descartar a anterior.
+func TestRefresh_NewSessionDropsPreviousTranscript(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/active"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"hasSession": true,
+				"session":    map[string]any{"id": "sessao-nova", "ticketId": testTicketID, "status": "Active"},
+			})
+		case strings.HasSuffix(r.URL.Path, "/messages"):
+			_ = json.NewEncoder(w).Encode([]map[string]any{})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	svc := servicePointingAt(server.URL)
+
+	svc.PrepareInvite(Invite{SessionID: "sessao-antiga", TicketID: testTicketID})
+	_ = svc.HandleEnvelope(messageEnvelope("a1", "conversa antiga", 1))
+
+	if _, err := svc.Refresh(t.Context()); err != nil {
+		t.Fatalf("refresh falhou: %v", err)
+	}
+
+	state := svc.State()
+	if state.SessionID != "sessao-nova" {
+		t.Fatalf("sessão não trocou: %q", state.SessionID)
+	}
+	if len(state.Messages) != 0 {
+		t.Fatalf("a conversa da sessão antiga deveria ter sido descartada: %+v", state.Messages)
+	}
+}
+
+// Depois que a conversa termina, a reconciliação REST continua rodando (startup,
+// reconexão do NATS e o ticker de 60s). Se ela zerar o estado local, a janela
+// perde a conversa que o usuário ainda está lendo — inclusive a nota de sistema
+// com quem encerrou. O agent NÃO guarda histórico: preservar isso é só manter em
+// memória a sessão encerrada enquanto a janela está aberta.
+func TestRefresh_KeepsEndedTranscriptWhenServerHasNoSession(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/active") {
+			_ = json.NewEncoder(w).Encode(map[string]any{"hasSession": false})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	svc := servicePointingAt(server.URL)
+
+	if _, err := svc.Refresh(t.Context()); err != nil {
+		t.Fatalf("refresh inicial falhou: %v", err)
+	}
+
+	svc.PrepareInvite(Invite{SessionID: testSessionID, TicketID: testTicketID})
+	_ = svc.HandleEnvelope(messageEnvelope("m1", "conversa", 1))
+
+	ended, _ := json.Marshal(Envelope{
+		EventType: EventSessionEnded,
+		SessionID: testSessionID,
+		TicketID:  testTicketID,
+	})
+	if err := svc.HandleEnvelope(ended); err != nil {
+		t.Fatalf("session-ended falhou: %v", err)
+	}
+
+	if state := svc.State(); state.Status != StatusEnded {
+		t.Fatalf("estado deveria ser ended, obteve %q", state.Status)
+	}
+
+	state, err := svc.Refresh(t.Context())
+	if err != nil {
+		t.Fatalf("refresh falhou: %v", err)
+	}
+	if state.Status != StatusEnded {
+		t.Fatalf("a reconciliação zerou uma conversa encerrada: status %q", state.Status)
+	}
+	if len(state.Messages) != 1 {
+		t.Fatalf("a conversa encerrada deveria continuar legível: %+v", state.Messages)
+	}
+
+	// Serviço sem conversa encerrada continua sendo zerado (sem histórico local).
+	fresh := servicePointingAt(server.URL)
+	fresh.PrepareInvite(Invite{SessionID: "outra-sessao", TicketID: testTicketID})
+	_ = fresh.HandleEnvelope(messageEnvelope("x1", "rascunho", 1))
+	cleared, err := fresh.Refresh(t.Context())
+	if err != nil {
+		t.Fatalf("refresh do serviço novo falhou: %v", err)
+	}
+	if cleared.Status != StatusNone || len(cleared.Messages) != 0 {
+		t.Fatalf("sem sessão ativa o estado deveria zerar: %+v", cleared)
+	}
+}
+
+// A mensagem de SISTEMA do encerramento chega pelo canal com authorKind
+// "system": o authorKind precisa sobreviver ao ingest para a UI desenhar a nota
+// de encerramento em vez de uma bolha de conversa.
+func TestHandleEnvelope_KeepsSystemAuthorKind(t *testing.T) {
+	svc := newTestService()
+
+	payload, _ := json.Marshal(Envelope{
+		EventType:  EventMessage,
+		SessionID:  testSessionID,
+		TicketID:   testTicketID,
+		AuthorKind: "system",
+		Body:       "Chat de suporte encerrado pelo usuário",
+		Sequence:   7,
+	})
+	if err := svc.HandleEnvelope(payload); err != nil {
+		t.Fatalf("envelope falhou: %v", err)
+	}
+
+	messages := svc.State().Messages
+	if len(messages) != 1 {
+		t.Fatalf("esperava 1 mensagem, obteve %d", len(messages))
+	}
+	if messages[0].AuthorKind != "system" {
+		t.Fatalf("authorKind da mensagem de sistema foi perdido: %q", messages[0].AuthorKind)
+	}
+}
+
 func servicePointingAt(rawURL string) *Service {
 	base := strings.TrimPrefix(strings.TrimPrefix(rawURL, "http://"), "https://")
 	return New(Deps{
@@ -381,4 +544,3 @@ func servicePointingAt(rawURL string) *Service {
 		Emit: func(string, ...any) {},
 	})
 }
-

@@ -94,7 +94,13 @@
       els.subtitle.textContent = "Aguardando o suporte iniciar a conversa";
       els.banner.hidden = true;
     } else if (state.status === "ended") {
-      els.subtitle.textContent = "Conversa encerrada";
+      // Quem encerrou fica registrado na mensagem de sistema; a janela NÃO é
+      // fechada sozinha para o usuário continuar lendo o que já foi conversado.
+      var reason = "";
+      state.messages.forEach(function (message) {
+        if (isSystemMessage(message) && message.body) reason = message.body;
+      });
+      els.subtitle.textContent = reason || "Conversa encerrada";
       els.banner.hidden = true;
     } else {
       els.subtitle.textContent = "Conversa em andamento";
@@ -185,7 +191,22 @@
     container.scrollTop = container.scrollHeight;
   }
 
+  // Mensagem de SISTEMA (ex.: "Chat de suporte encerrado pelo usuário"): não é
+  // fala de ninguém — sai como nota centralizada no meio da conversa.
+  function isSystemMessage(message) {
+    return String((message && message.authorKind) || "").toLowerCase() === "system";
+  }
+
+  function buildSystemRow(message) {
+    var note = document.createElement("div");
+    note.className = "sc-system";
+    note.textContent = message.body || "";
+    return note;
+  }
+
   function buildRow(message) {
+    if (isSystemMessage(message)) return buildSystemRow(message);
+
     var own = String(message.authorKind || "").toLowerCase() === "enduser";
 
     var row = document.createElement("div");
@@ -294,7 +315,10 @@
     // local é sempre false e o banner "sem conexão em tempo real" aparecia mesmo
     // com tudo funcionando. A conversa só é "ao vivo" quando existe sessão
     // carregada — o serviço entrega os eventos por IPC.
-    state.connected = !!next.connected || !!next.hasSession;
+    // "ended" também é um estado legível (a janela fica aberta em leitura):
+    // sem isso o banner "sem conexão em tempo real" cobria a nota de
+    // encerramento, porque HasSession já é false no fim da conversa.
+    state.connected = !!next.connected || !!next.hasSession || next.status === "ended";
     state.hasSession = !!next.hasSession;
     state.ticketTitle = next.ticketTitle || state.ticketTitle;
     state.supportName = next.supportName || state.supportName;

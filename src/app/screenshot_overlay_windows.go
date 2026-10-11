@@ -40,7 +40,13 @@ var (
 
 // enterScreenshotOverlayBounds posiciona a janela principal sobre o desktop
 // virtual e devolve a função de restauração.
-func (a *App) enterScreenshotOverlayBounds(x, y, w, h int) (func(), error) {
+//
+// wasVisible/wasMinimised/wasMaximised vêm do estado ANTES de a janela ser
+// escondida para o print: o SetWindowPos abaixo usa SWP_SHOWWINDOW (obrigatório
+// para desenhar o overlay), mas a janela do agent pode estar no tray. Ler o
+// estado AQUI leria a janela já escondida e a captura terminaria sempre com a
+// janela principal oculta — mesmo que ela estivesse aberta antes.
+func (a *App) enterScreenshotOverlayBounds(x, y, w, h int, wasVisible, wasMinimised, wasMaximised bool) (func(), error) {
 	win := a.mainWindow
 	if win == nil {
 		return nil, fmt.Errorf("janela principal indisponivel")
@@ -51,8 +57,7 @@ func (a *App) enterScreenshotOverlayBounds(x, y, w, h int) (func(), error) {
 	}
 	var prev overlayRect
 	procGetWindowRectO.Call(hwnd, uintptr(unsafe.Pointer(&prev)))
-	wasMaximised := win.IsMaximised()
-	if win.IsMinimised() {
+	if wasMinimised {
 		win.UnMinimise()
 	}
 	win.UnMaximise()
@@ -95,6 +100,13 @@ func (a *App) enterScreenshotOverlayBounds(x, y, w, h int) (func(), error) {
 		a.screenshotOverlayActive.Store(false)
 		if wasMaximised {
 			win.Maximise()
+		}
+		// Devolve a janela ao estado anterior: se estava no tray, volta para o
+		// tray; se estava minimizada, volta minimizada.
+		if !wasVisible {
+			win.Hide()
+		} else if wasMinimised {
+			win.Minimise()
 		}
 	}
 	return restore, nil

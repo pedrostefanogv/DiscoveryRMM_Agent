@@ -46,10 +46,10 @@ type Message struct {
 	// (SequenceNumber == 0) pela versão persistida sem heurística de corpo/data.
 	ClientMessageID string       `json:"clientMessageId,omitempty"`
 	AuthorKind      string       `json:"authorKind"`
-	AuthorName     string       `json:"authorName,omitempty"`
-	Body           string       `json:"body"`
-	CreatedAt      string       `json:"createdAt"`
-	Attachments    []Attachment `json:"attachments,omitempty"`
+	AuthorName      string       `json:"authorName,omitempty"`
+	Body            string       `json:"body"`
+	CreatedAt       string       `json:"createdAt"`
+	Attachments     []Attachment `json:"attachments,omitempty"`
 }
 
 // State é o estado exposto à janela do chat.

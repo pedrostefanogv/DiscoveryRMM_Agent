@@ -55,3 +55,36 @@ func TestChatWindow_ModaisRespeitamAtributoHidden(t *testing.T) {
 		t.Fatal("app-support-chat.js deve ter wiring resiliente (helper on()) para um elemento ausente não derrubar o resto dos listeners")
 	}
 }
+
+// Guarda de regressão: mensagem de SISTEMA (quem encerrou a conversa) precisa
+// ser renderizada como NOTA centralizada, não como fala de um dos lados.
+//
+// O servidor grava a mensagem de sistema no encerramento ("Chat de suporte
+// encerrado pelo usuário/suporte") e a envia ao agent. Sem tratamento dedicado
+// ela caía no ramo "não é minha" e aparecia como se o SUPORTE tivesse escrito
+// aquilo — e, pior, a janela podia ser fechada automaticamente, tirando do
+// usuário o que já havia sido conversado.
+func TestChatWindow_MensagemDeSistemaViraNota(t *testing.T) {
+	jsPath := filepath.Join("..", "..", "frontend", "js", "app-support-chat.js")
+	js, err := os.ReadFile(jsPath)
+	if err != nil {
+		t.Fatalf("não foi possível ler %s: %v", jsPath, err)
+	}
+	jsText := string(js)
+
+	if !strings.Contains(jsText, "isSystemMessage") {
+		t.Fatal("app-support-chat.js deve reconhecer mensagens de sistema (isSystemMessage)")
+	}
+	if !strings.Contains(jsText, "sc-system") {
+		t.Fatal("mensagens de sistema devem ser renderizadas como nota (classe sc-system), não como bolha de conversa")
+	}
+
+	cssPath := filepath.Join("..", "..", "frontend", "support-chat.css")
+	css, err := os.ReadFile(cssPath)
+	if err != nil {
+		t.Fatalf("não foi possível ler %s: %v", cssPath, err)
+	}
+	if !strings.Contains(string(css), ".sc-system") {
+		t.Fatal("support-chat.css precisa estilizar a nota de sistema (.sc-system)")
+	}
+}

@@ -1042,7 +1042,9 @@ func (a *App) ServiceStartup(ctx context.Context, options application.ServiceOpt
 	// Retoma o chat de suporte quando existe sessão ativa (agent reiniciado no
 	// meio de uma conversa). Roda em goroutine com atraso curto para que a
 	// aplicação já consiga servir a nova janela.
-	go a.resumeSupportChatIfActive()
+	go a.resumeSupportChatIfActive(3 * time.Second)
+	// Reconciliação periódica (só na UI: é ela que abre janelas).
+	go a.runSupportChatReconcileLoop()
 
 	return nil
 }
@@ -1343,6 +1345,11 @@ func (a *App) onNatsConnected(nc *nats.Conn, cfg agentconn.Config) {
 	// Chat de suporte: assina o canal servidor -> agent com consumer durável.
 	// Independente do remote session (roda mesmo com o manager ausente).
 	a.supportChatService().OnNATSConnected(nc, cfg.ClientID, cfg.SiteID, cfg.AgentID)
+
+	// Um convite pode ter se perdido enquanto o NATS estava fora (o canal de
+	// comando é unicast, sem replay). Descobre sessões pendentes/ativas pelo
+	// REST e abre a janela — sem roubar foco de uma janela já aberta.
+	go a.resumeSupportChatIfActive(time.Second)
 
 	if a.RemoteSessionMgr == nil {
 		return

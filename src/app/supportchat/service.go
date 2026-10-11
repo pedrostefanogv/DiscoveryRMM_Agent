@@ -199,6 +199,7 @@ func (s *Service) applySessionOpened(envelope Envelope) {
 		return
 	}
 
+	s.resetTranscriptForSessionLocked(envelope.SessionID)
 	s.state.HasSession = true
 	s.state.SessionID = envelope.SessionID
 	s.state.TicketID = envelope.TicketID
@@ -272,10 +273,10 @@ func (s *Service) applyMessage(envelope Envelope) error {
 		ClientMessageID: envelope.ClientMessageID,
 		SequenceNumber:  envelope.Sequence,
 		AuthorKind:      strings.TrimSpace(envelope.AuthorKind),
-		AuthorName:     envelope.AuthorName,
-		Body:           envelope.Body,
-		CreatedAt:      envelope.TimestampUTC,
-		Attachments:    attachments,
+		AuthorName:      envelope.AuthorName,
+		Body:            envelope.Body,
+		CreatedAt:       envelope.TimestampUTC,
+		Attachments:     attachments,
 	})
 	s.trimMessagesLocked()
 	s.mu.Unlock()
@@ -422,10 +423,33 @@ func (s *Service) doJSON(ctx context.Context, method, path string, body any, out
 	return json.NewDecoder(resp.Body).Decode(out)
 }
 
+// resetTranscriptForSessionLocked descarta a conversa em memória quando a
+// sessão MUDA.
+//
+// BUG CORRIGIDO: o estado guardava as mensagens da conversa anterior; ao iniciar
+// uma nova conversa elas permaneciam e se misturavam com as novas — e como os
+// sequence_number recomeçam em cada sessão, a ordenação ficava embaralhada
+// (mensagens antigas apareciam entre as novas).
+//
+// O chamador deve estar com s.mu travado.
+func (s *Service) resetTranscriptForSessionLocked(sessionID string) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" || sessionID == s.state.SessionID {
+		return
+	}
+
+	s.deps.Logf("[supportchat] nova sessão detectada; descartando a conversa anterior da memória")
+	s.state.Messages = []Message{}
+	// A deduplicação de clientMessageId também é por sessão.
+	s.seenClientIDs = make(map[string]time.Time)
+	s.seenOrder = nil
+}
+
 // PrepareInvite registra o convite recebido (estado "aguardando confirmação").
 // A janela do chat só é aberta DEPOIS do aceite do usuário.
 func (s *Service) PrepareInvite(invite Invite) {
 	s.mu.Lock()
+	s.resetTranscriptForSessionLocked(invite.SessionID)
 	s.state.HasSession = true
 	s.state.SessionID = strings.TrimSpace(invite.SessionID)
 	s.state.TicketID = strings.TrimSpace(invite.TicketID)
@@ -461,9 +485,16 @@ func (s *Service) Refresh(ctx context.Context) (State, error) {
 
 	s.mu.Lock()
 	if !response.HasSession || response.Session == nil {
-		// Sem sessão ativa: zera o estado local (nada de histórico no agent).
-		s.state = State{Status: StatusNone, Messages: []Message{}}
+		// Sem sessão ATIVA no servidor. Quando a conversa local TERMINOU, o
+		// estado "ended" (com a thread em memória) é preservado: zerar aqui
+		// apagava da tela, na primeira reconciliação depois do fim, exatamente
+		// o que o usuário ainda estava lendo — inclusive a nota de quem
+		// encerrou. O agent continua sem histórico: nada é persistido.
+		if s.state.Status != StatusEnded || s.state.SessionID == "" {
+			s.state = State{Status: StatusNone, Messages: []Message{}}
+		}
 	} else {
+		s.resetTranscriptForSessionLocked(response.Session.ID)
 		s.state.HasSession = true
 		s.state.SessionID = response.Session.ID
 		s.state.TicketID = response.Session.TicketID

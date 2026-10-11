@@ -98,18 +98,34 @@ func (a *App) supportChatContext() context.Context {
 
 // ── Bindings expostos à janela do chat ──────────────────────────────────────
 
-// resumeSupportChatIfActive consulta o servidor no startup e reabre a janela do
-// chat quando existe sessão ativa/pendente deste agent.
+// supportChatWindowOpen informa se a janela do chat já existe.
+func (a *App) supportChatWindowOpen() bool {
+	a.supportChatMu.Lock()
+	defer a.supportChatMu.Unlock()
+	return a.supportChatWin != nil
+}
+
+// resumeSupportChatIfActive consulta o servidor e abre a janela do chat quando
+// existe sessão ativa/pendente deste agent E ainda não há janela aberta.
 //
-// O consumer JetStream durável já reentregaria as mensagens não confirmadas, mas
-// a JANELA precisa ser reaberta: sem isso o usuário ficaria com uma conversa
-// "ativa" no servidor sem nenhuma interface para responder.
-func (a *App) resumeSupportChatIfActive() {
-	// Atraso curto: o asset server precisa estar pronto para servir a página.
-	select {
-	case <-time.After(3 * time.Second):
-	case <-a.supportChatContext().Done():
-		return
+// Chamado no startup E a cada (re)conexão do NATS. Motivo: o convite trafega no
+// canal unicast (`...agent.{id}.command`, core NATS — SEM replay). Num flap de
+// conexão a mensagem se perde e a sessão fica `Pending` no servidor; o servidor
+// só reentrega depois de ~2 min. Descobrir a sessão pendente pelo REST fecha
+// essa janela de tempo — era o caso em que "o chat só aparecia reiniciando o
+// agent".
+//
+// Nunca rouba foco: se a janela já existe (mesmo minimizada), não faz nada — o
+// convite de uma conversa NOVA chega pelo evento `supportchat:invite`.
+func (a *App) resumeSupportChatIfActive(delay time.Duration) {
+	// Atraso curto: no startup o asset server precisa estar pronto para servir a
+	// página; nas reconciliações seguintes o atraso é pequeno (ou zero).
+	if delay > 0 {
+		select {
+		case <-time.After(delay):
+		case <-a.supportChatContext().Done():
+			return
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(a.supportChatContext(), supportChatCallWait)
@@ -125,8 +141,36 @@ func (a *App) resumeSupportChatIfActive() {
 		return
 	}
 
-	a.Logs.Append("[supportchat] sessão ativa encontrada no startup; reabrindo a janela do chat")
+	if a.supportChatWindowOpen() {
+		return
+	}
+
+	a.Logs.Append("[supportchat] sessão ativa/pendente encontrada sem janela aberta; abrindo o chat")
 	a.openSupportChatWindow()
+}
+
+// runSupportChatReconcileLoop reconcilia o estado do chat periodicamente.
+//
+// Rede de segurança contra o convite perdido no canal unicast (core NATS, sem
+// replay) SEM depender de reconexão: o servidor só reentrega comando pendente
+// depois de ~2 min, e o usuário não pode ficar esperando. Também cobre a
+// retomada após suspensão da máquina.
+func (a *App) runSupportChatReconcileLoop() {
+	// Piso de 30s: é uma consulta pequena, mas não precisa ser frequente — o
+	// caminho normal (evento supportchat:invite) continua sendo imediato.
+	const interval = 60 * time.Second
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-a.supportChatContext().Done():
+			return
+		case <-ticker.C:
+			a.resumeSupportChatIfActive(0)
+		}
+	}
 }
 
 // SupportChatAttachmentPolicyJSON devolve accept/tamanho para o seletor de arquivos.
@@ -182,7 +226,9 @@ func (a *App) SupportChatRequestScreenshot() error {
 		return errSupportChatNoUI
 	}
 
-	a.ShowMainWindow()
+	// NÃO trazemos a janela principal para frente: quem a mostra é o próprio
+	// overlay (`enterScreenshotOverlayBounds` usa SWP_SHOWWINDOW) e ela volta ao
+	// estado anterior (tray/minimizada) quando a captura termina.
 	a.EmitEvent("supportchat:capture_requested")
 	a.Logs.Append("[supportchat] captura assistida solicitada pelo usuário (overlay na janela principal)")
 

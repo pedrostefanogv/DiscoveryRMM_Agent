@@ -810,6 +810,44 @@ func (a *App) hideAgentWindowForCapture() func() {
 	}
 }
 
+// hideSupportChatForCapture esconde a janela do CHAT DE SUPORTE durante a captura
+// assistida e devolve a função de restauração.
+//
+// Sem isso a própria janela do chat saía no print (ela está em primeiro plano
+// quando o usuário clica no botão de captura). A restauração é composta no
+// `restore` da sessão do overlay, então a janela volta só quando a captura
+// termina — não no meio da seleção.
+//
+// Diferente da janela principal, isto NÃO depende de hideAgentWindow: a janela
+// do chat contém a conversa com o suporte e nunca pode entrar numa captura — que
+// é justamente o que o usuário vai anexar nessa conversa. A política de
+// privacidade só decide se a interface principal do agent é escondida.
+func (a *App) hideSupportChatForCapture() func() {
+	if a == nil {
+		return func() {}
+	}
+
+	a.supportChatMu.Lock()
+	win := a.supportChatWin
+	a.supportChatMu.Unlock()
+
+	if win == nil || !win.IsVisible() {
+		return func() {}
+	}
+
+	win.Hide()
+	time.Sleep(agentHideBeforeCaptureDelay)
+
+	shown := false
+	return func() {
+		if shown {
+			return
+		}
+		shown = true
+		win.Show()
+	}
+}
+
 // screenshotStoredImage é a imagem cheia de uma captura mantida em memória.
 type screenshotStoredImage struct {
 	Data   []byte
@@ -1135,12 +1173,23 @@ func (a *App) openScreenshotOverlay(reason string, byLLM bool, sessionAuthorized
 	if !ok {
 		return nil, fmt.Errorf("nao foi possivel determinar o desktop virtual")
 	}
+	// Estado ORIGINAL da janela principal: ela é escondida logo abaixo para não
+	// sair no print e reexibida como overlay (SWP_SHOWWINDOW). Guardar isso
+	// ANTES do hide é o que permite devolvê-la ao estado anterior no fim —
+	// inclusive mantê-la no tray quando o print é tirado pela janela do chat.
+	wasVisible := a.mainWindow.IsVisible()
+	wasMinimised := a.mainWindow.IsMinimised()
+	wasMaximised := a.mainWindow.IsMaximised()
 	// A janela do agente é ocultada ANTES do print (não sai na tela congelada)
 	// e reaparece já como overlay, posicionada sobre o desktop virtual.
 	restoreVisibility := a.hideAgentWindowForCapture()
+	// A janela do chat de suporte também fica fora do print (é ela que está em
+	// primeiro plano quando o usuário pede a captura).
+	restoreSupportChat := a.hideSupportChatForCapture()
 	frame, err := a.captureDesktopFrame(vx, vy, vw, vh)
 	if err != nil {
 		restoreVisibility()
+		restoreSupportChat()
 		return nil, err
 	}
 	// Qualidade alta: a tela congelada é o que o usuário lê para escolher a
@@ -1175,9 +1224,10 @@ func (a *App) openScreenshotOverlay(reason string, byLLM bool, sessionAuthorized
 		PolicyFullScreenAllowed: policy.FullScreenAllowed(),
 		PolicyWindowRequired:    policy.WindowRequired(),
 	}
-	restore, err := a.enterScreenshotOverlayBounds(vx, vy, vw, vh)
+	restore, err := a.enterScreenshotOverlayBounds(vx, vy, vw, vh, wasVisible, wasMinimised, wasMaximised)
 	if err != nil {
 		restoreVisibility()
+		restoreSupportChat()
 		return nil, err
 	}
 	// Garante a janela visível já como overlay (o SetWindowPos acima usa
@@ -1190,8 +1240,13 @@ func (a *App) openScreenshotOverlay(reason string, byLLM bool, sessionAuthorized
 		sessionAuthorized: sessionAuthorized,
 		payload:           payload,
 		frame:             frame,
-		restore:           restore,
-		waiter:            make(chan screenshotOverlayOutcome, 1),
+		restore: func() {
+			// Ordem: devolve a janela principal ao estado anterior e só então
+			// reexibe a janela do chat (que ficou escondida durante a captura).
+			restore()
+			restoreSupportChat()
+		},
+		waiter: make(chan screenshotOverlayOutcome, 1),
 	}
 	a.screenshotMu.Lock()
 	a.screenshotOverlay = session

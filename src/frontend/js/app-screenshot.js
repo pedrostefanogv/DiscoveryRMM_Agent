@@ -2199,22 +2199,43 @@ function screenshotCancelOverlay() {
 
 // ── Entrada manual + eventos do backend ──────────────────────────────────
 
-function openScreenshotCapture() {
+/**
+ * Abre o overlay de captura assistida.
+ *
+ * `options.supportChat` marca o destino do resultado: quando vem da janela do
+ * chat de suporte, o print anotado é reemitido para ela em vez de virar anexo do
+ * chat com a IA. A marca só é aplicada quando o overlay ABRE de fato — se
+ * ficasse ligada numa falha, a próxima captura manual do chat com a IA seria
+ * entregue ao chat de suporte por engano.
+ */
+function openScreenshotCapture(options) {
   var api = screenshotApi();
   if (!api || typeof api.PrepareScreenshotOverlay !== "function") {
+    supportChatCapturePending = false;
     screenshotFeedback(screenshotT("screenshot.unavailable"), true);
     return;
   }
   if (screenshotOverlayState) return;
   screenshotFeedback(screenshotT("screenshot.capturing"), false);
+  // Esconde o chrome do app ANTES do round-trip: o Go só exibe a janela
+  // (SWP_SHOWWINDOW) depois de congelar a tela, e sem isso a interface
+  // principal do agent ficava visível por alguns instantes — parecia que
+  // "tirar um print abria a janela principal". Classe idempotente com a que
+  // screenshotShowOverlay aplica.
+  document.body.classList.add("screenshot-active");
   api.PrepareScreenshotOverlay("captura manual do usuario").then(function (raw) {
     var payload = screenshotParse(raw);
     if (!payload || !payload.session) {
+      supportChatCapturePending = false;
+      document.body.classList.remove("screenshot-active");
       screenshotFeedback(screenshotT("screenshot.failed"), true);
       return;
     }
+    supportChatCapturePending = !!(options && options.supportChat);
     screenshotShowOverlay(payload);
   }).catch(function (err) {
+    supportChatCapturePending = false;
+    document.body.classList.remove("screenshot-active");
     screenshotFeedback(screenshotT("screenshot.failed") + ": " + err, true);
   });
 }
@@ -2816,7 +2837,7 @@ function initScreenshotPrivacy() {
 function initScreenshotCapture() {
   var button = document.getElementById("chatScreenshotBtn");
   if (button) {
-    button.addEventListener("click", openScreenshotCapture);
+    button.addEventListener("click", function () { openScreenshotCapture(); });
   }
 
   // Pedido de captura vindo da janela do chat de suporte (binding Go
@@ -2824,8 +2845,7 @@ function initScreenshotCapture() {
   if (window.wails && typeof window.wails.on === "function") {
     window.wails.on("supportchat:capture_requested", function () {
       if (screenshotOverlayState) return; // já existe captura em andamento
-      supportChatCapturePending = true;
-      openScreenshotCapture();
+      openScreenshotCapture({ supportChat: true });
     });
   }
   initScreenshotPrivacy();
