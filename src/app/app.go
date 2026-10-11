@@ -57,6 +57,7 @@ import (
 	"discovery/app/services/notifications"
 	"discovery/app/services/psadt"
 	appsupport "discovery/app/support"
+	"discovery/app/supportchat"
 	syncsvc "discovery/app/sync"
 	"discovery/app/updates"
 	"path/filepath"
@@ -115,6 +116,16 @@ type App struct {
 	mcpRegistry *mcp.Registry
 	chatSvc     *chat.Service
 	psadtSvc    *psadt.Service
+
+	// ── Chat de suporte vinculado ao chamado ──
+	// Estado 100% em memória (sem persistência no agent) + a janela dedicada,
+	// independente da interface principal.
+	supportChatSvc *supportchat.Service
+	supportChatMu  sync.Mutex
+	supportChatWin application.Window
+	// supportChatAllowClose libera o fechamento programático da janela depois
+	// da confirmação do usuário (o hook de WindowClosing cancela o resto).
+	supportChatAllowClose atomic.Bool
 	// logStore é o banco unificado de logs do processo (nil quando indisponível).
 	logStore *logstore.Store
 
@@ -668,6 +679,7 @@ func NewApp(opts AppStartupOptions) *App {
 		OnP2PDiscoverySnapshot:        a.handleP2PDiscoverySnapshot,
 		OnP2PEvent:                    a.handleP2PEvent,
 		HandleCommand:                 a.handleAgentRuntimeCommand,
+		HandleSupportChatEnvelope:     a.handleSupportChatEnvelope,
 		OnCommandOutput:               a.onAgentCommandOutput,
 		OnNatsConnected:               a.onNatsConnected,
 		OnConnectivityChange:          a.onConnectivityChange,
@@ -1026,6 +1038,12 @@ func (a *App) ServiceStartup(ctx context.Context, options application.ServiceOpt
 	// application.Options.Services — para não expor a API de notificações ao
 	// webview e para que uma falha de registro do toast não aborte o startup.
 	a.startNativeNotificationService(ctx)
+
+	// Retoma o chat de suporte quando existe sessão ativa (agent reiniciado no
+	// meio de uma conversa). Roda em goroutine com atraso curto para que a
+	// aplicação já consiga servir a nova janela.
+	go a.resumeSupportChatIfActive()
+
 	return nil
 }
 
@@ -1322,6 +1340,10 @@ func (a *App) getKnownP2PPeers() int {
 // onNatsConnected é chamado pelo agentconn após a conexão NATS ser estabelecida.
 // Injeta a conexão NATS no remoteSessionMgr para habilitar o streaming de frames.
 func (a *App) onNatsConnected(nc *nats.Conn, cfg agentconn.Config) {
+	// Chat de suporte: assina o canal servidor -> agent com consumer durável.
+	// Independente do remote session (roda mesmo com o manager ausente).
+	a.supportChatService().OnNATSConnected(nc, cfg.ClientID, cfg.SiteID, cfg.AgentID)
+
 	if a.RemoteSessionMgr == nil {
 		return
 	}

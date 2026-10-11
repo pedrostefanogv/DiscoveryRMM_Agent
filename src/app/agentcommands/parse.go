@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"discovery/app/services/notifications"
+	"discovery/app/supportchat"
 )
 
 // NotificationDispatchRequest é o payload de uma notificação.
@@ -152,6 +153,49 @@ func ParseNotificationDispatchPayload(payload any) (NotificationDispatchRequest,
 			return NotificationDispatchRequest{}, fmt.Errorf("payload de notificacao invalido: %w", err)
 		}
 		return req, nil
+	}
+}
+
+// ── Support Chat Invite Commands ──
+
+// IsTicketChatInviteCommandType verifica se o cmdType é o convite de chat de
+// suporte (chat vinculado ao chamado, iniciado pelo atendente no console web).
+func IsTicketChatInviteCommandType(cmdType string) bool {
+	switch strings.ToLower(strings.TrimSpace(cmdType)) {
+	case "ticketchatinvite", "ticket_chat_invite", "supportchatinvite":
+		return true
+	default:
+		return false
+	}
+}
+
+// ParseTicketChatInvitePayload parseia o payload do convite. O payload carrega
+// apenas metadados de exibição/correlação — nunca o conteúdo de mensagens.
+func ParseTicketChatInvitePayload(payload any) (supportchat.Invite, error) {
+	if payload == nil {
+		return supportchat.Invite{}, nil
+	}
+
+	switch typed := payload.(type) {
+	case string:
+		if strings.TrimSpace(typed) == "" {
+			return supportchat.Invite{}, nil
+		}
+		var invite supportchat.Invite
+		if err := json.Unmarshal([]byte(typed), &invite); err != nil {
+			return supportchat.Invite{}, fmt.Errorf("payload de convite de chat invalido: %w", err)
+		}
+		return invite, nil
+	default:
+		raw, err := json.Marshal(typed)
+		if err != nil {
+			return supportchat.Invite{}, fmt.Errorf("falha ao serializar payload do convite de chat: %w", err)
+		}
+		var invite supportchat.Invite
+		if err := json.Unmarshal(raw, &invite); err != nil {
+			return supportchat.Invite{}, fmt.Errorf("payload de convite de chat invalido: %w", err)
+		}
+		return invite, nil
 	}
 }
 

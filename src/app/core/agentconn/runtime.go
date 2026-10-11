@@ -266,6 +266,12 @@ type natsSubjects struct {
 	SyncPing           string
 	P2PDiscovery       string
 	P2PEvents          string
+	// SupportChatServer e o canal SERVIDOR -> AGENT do chat de suporte
+	// (consumer JetStream duravel: replay sem perda apos reconexao/restart).
+	SupportChatServer string
+	// SupportChatAgent e o canal AGENT -> SERVIDOR (mensagens do usuario final
+	// e resposta ao convite), publicado com js.Publish para ter PubAck.
+	SupportChatAgent string
 }
 
 // Options defines dependencies injected by the app layer.
@@ -276,6 +282,9 @@ type Options struct {
 	OnGlobalPong           func(GlobalPongMessage)
 	OnP2PDiscoverySnapshot func(P2PDiscoverySnapshot)
 	HandleCommand          func(parent context.Context, cmdType string, payload any) (handled bool, exitCode int, output string, errText string)
+	// HandleSupportChatEnvelope recebe um envelope do chat de suporte vindo do
+	// servidor (canal servidor -> agent). Erro devolve o Ack (reentrega).
+	HandleSupportChatEnvelope func(parent context.Context, data []byte) error
 	OnCommandOutput        func(cmdType string, output string, errText string)
 
 	GetHeartbeatMetrics           func() AgentHeartbeatMetrics

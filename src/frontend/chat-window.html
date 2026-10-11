@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="pt-BR">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="light dark" />
+  <title>Chat com o suporte</title>
+  <!-- Reaproveita os design tokens/componentes do agent e adiciona o layout do chat. -->
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="support-chat.css" />
+</head>
+
+<body class="support-chat-body">
+  <div class="support-chat-shell">
+    <header class="support-chat-header">
+      <div class="support-chat-title">
+        <span id="scStatusDot" class="sc-dot sc-dot--offline" aria-hidden="true"></span>
+        <div class="support-chat-title-text">
+          <strong>Chat com o suporte</strong>
+          <span id="scSubtitle" class="support-chat-subtitle">Conectando…</span>
+        </div>
+      </div>
+      <div class="support-chat-header-actions">
+        <span id="scStatusChip" class="sc-chip">aguardando</span>
+        <button id="scEndBtn" type="button" class="sc-btn sc-btn--ghost" title="Encerrar o chat">
+          Encerrar
+        </button>
+      </div>
+    </header>
+
+    <div id="scBanner" class="sc-banner" hidden></div>
+
+    <main id="scMessages" class="support-chat-messages" aria-live="polite">
+      <div id="scEmpty" class="sc-empty">Aguardando o início da conversa…</div>
+    </main>
+
+    <div id="scPending" class="sc-pending" hidden></div>
+
+    <footer class="support-chat-composer">
+      <textarea id="scInput" class="sc-input" rows="2" placeholder="Escreva uma mensagem… (Enter envia, Shift+Enter quebra linha)"></textarea>
+      <div class="support-chat-composer-actions">
+        <input id="scFileInput" type="file" multiple hidden />
+        <button id="scAttachBtn" type="button" class="sc-btn sc-btn--icon" title="Anexar arquivo ou print">📎</button>
+        <button id="scSendBtn" type="button" class="sc-btn sc-btn--primary" title="Enviar (Enter)">Enviar</button>
+      </div>
+    </footer>
+  </div>
+
+  <div id="scConfirm" class="sc-modal-overlay" hidden>
+    <div class="sc-modal" role="dialog" aria-modal="true" aria-labelledby="scConfirmTitle">
+      <h3 id="scConfirmTitle">Encerrar o chat?</h3>
+      <p>A janela só fecha quando a conversa termina. Ao encerrar, o suporte é avisado e o histórico fica disponível no chamado.</p>
+      <div class="sc-modal-actions">
+        <button id="scConfirmCancel" type="button" class="sc-btn sc-btn--ghost">Continuar conversando</button>
+        <button id="scConfirmOk" type="button" class="sc-btn sc-btn--danger">Encerrar chat</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Wails v3 bridge: expõe window.go.app.App e window.wails (mesmo bridge da UI principal). -->
+  <script type="module" src="wails-bridge.js"></script>
+  <script src="js/app-support-chat.js"></script>
+</body>
+
+</html>

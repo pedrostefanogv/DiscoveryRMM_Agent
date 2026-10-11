@@ -62,6 +62,9 @@ import * as status$0 from "./status/models.js";
 import * as support$0 from "./support/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
+import * as supportchat$0 from "./supportchat/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
 import * as supportmeta$0 from "./supportmeta/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
@@ -2303,6 +2306,78 @@ export function StopDebugHTTPServer() {
 }
 
 /**
+ * SupportChatAttachmentPolicyJSON devolve accept/tamanho para o seletor de arquivos.
+ * @returns {$CancellablePromise<{ [_ in string]?: any }>}
+ */
+export function SupportChatAttachmentPolicyJSON() {
+    return $Call.ByID(2718511910).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType39($result);
+    }));
+}
+
+/**
+ * SupportChatConfirmClose encerra o chat e fecha a janela (chamado após o
+ * usuário confirmar no modal). O estado local é descartado — o agent não
+ * mantém histórico de conversas.
+ * @returns {$CancellablePromise<void>}
+ */
+export function SupportChatConfirmClose() {
+    return $Call.ByID(2061711663);
+}
+
+/**
+ * SupportChatDownloadAttachment devolve o anexo em base64 + content type para
+ * a janela exibir/baixar (o webview não carrega o token do agent).
+ * @param {string} attachmentID
+ * @returns {$CancellablePromise<{ [_ in string]?: string }>}
+ */
+export function SupportChatDownloadAttachment(attachmentID) {
+    return $Call.ByID(2015476254, attachmentID).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType20($result);
+    }));
+}
+
+/**
+ * SupportChatEnd encerra a sessão pelo usuário.
+ * @param {string} reason
+ * @returns {$CancellablePromise<void>}
+ */
+export function SupportChatEnd(reason) {
+    return $Call.ByID(84991444, reason);
+}
+
+/**
+ * SupportChatRefresh faz o snapshot REST (abertura da janela / reconciliação).
+ * @returns {$CancellablePromise<supportchat$0.State>}
+ */
+export function SupportChatRefresh() {
+    return $Call.ByID(277848266).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType85($result);
+    }));
+}
+
+/**
+ * SupportChatSendMessage envia uma mensagem do usuário final.
+ * @param {string} body
+ * @param {string[]} attachmentIDs
+ * @returns {$CancellablePromise<void>}
+ */
+export function SupportChatSendMessage(body, attachmentIDs) {
+    return $Call.ByID(707178856, body, attachmentIDs);
+}
+
+/**
+ * SupportChatUploadAttachment sobe um anexo (prepare -> PUT -> complete).
+ * @param {string} fileName
+ * @param {string} contentType
+ * @param {string} base64Data
+ * @returns {$CancellablePromise<string>}
+ */
+export function SupportChatUploadAttachment(fileName, contentType, base64Data) {
+    return $Call.ByID(666225623, fileName, contentType, base64Data);
+}
+
+/**
  * @returns {$CancellablePromise<void>}
  */
 export function SyncNetworkConnections() {
@@ -2495,3 +2570,4 @@ const $$createType81 = $Create.Array($$createType80);
 const $$createType82 = models$0.StartupItem.createFrom;
 const $$createType83 = $Create.Array($$createType82);
 const $$createType84 = $models.PSADTPreflightResult.createFrom;
+const $$createType85 = supportchat$0.State.createFrom;

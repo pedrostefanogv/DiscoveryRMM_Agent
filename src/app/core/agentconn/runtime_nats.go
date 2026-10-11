@@ -151,6 +151,12 @@ func (r *Runtime) runNATSSession(ctx context.Context, cfg Config, server, transp
 			r.logf("[p2p][events] inscrito em %s", subjects.P2PEvents)
 		}
 	}
+	// Chat de suporte: canal servidor -> agent com consumer JetStream durável.
+	// Não é fatal — o chat é um recurso opcional e o fallback core segue valendo.
+	if chatErr := r.subscribeSupportChat(nc, subjects); chatErr != nil {
+		r.logf("[supportchat] falha ao assinar o canal do chat de suporte: %v (continuando)", chatErr)
+	}
+
 	globalPongReceived := make(chan time.Time, 1)
 	if _, err = nc.Subscribe(subjects.GlobalPong, r.natsGlobalPongHandler(globalPongReceived)); err != nil {
 		return fmt.Errorf("falha ao inscrever no subject de global pong: %w", err)
@@ -203,6 +209,67 @@ func (r *Runtime) subscribeFanoutCommand(ctx context.Context, nc *nats.Conn, cfg
 		return subErr
 	}
 	r.logf("[nats][core] fan-out sem replay subject=%s", subject)
+	return nil
+}
+
+
+// subscribeSupportChat assina o canal servidor -> agent do chat de suporte.
+//
+// Usa consumer JetStream durável (AckExplicit/ManualAck/DeliverAll) para que
+// uma mensagem do atendente enviada enquanto o agent estava reconectando seja
+// entregue no replay. Se o stream não existir (ou o JetStream estiver
+// indisponível), cai para core NATS com log explícito do risco de perda —
+// nesse modo a reconciliação acontece pelo snapshot REST ao abrir a janela.
+func (r *Runtime) subscribeSupportChat(nc *nats.Conn, subjects natsSubjects) error {
+	if r.opts.HandleSupportChatEnvelope == nil {
+		return nil
+	}
+
+	handler := func(msg *nats.Msg) {
+		err := r.opts.HandleSupportChatEnvelope(context.Background(), msg.Data)
+
+		if msg.Reply != "" {
+			if err != nil {
+				_ = msg.Nak()
+			} else {
+				_ = msg.Ack()
+			}
+		}
+
+		if err != nil {
+			r.logf("[supportchat] falha ao processar envelope do servidor: %v", err)
+		}
+	}
+
+	if js, err := nc.JetStream(); err == nil {
+		durable := "agent-" + strings.ReplaceAll(strings.ToLower(subjects.AgentID), "-", "")
+		if len(durable) > 80 {
+			durable = durable[:80]
+		}
+		durable += "-supportchat"
+
+		if _, subErr := js.Subscribe(subjects.SupportChatServer, handler,
+			nats.Durable(durable),
+			nats.ManualAck(),
+			nats.AckExplicit(),
+			nats.AckWait(30*time.Second),
+			nats.DeliverAll(),
+			nats.MaxAckPending(64),
+		); subErr == nil {
+			r.logf("[supportchat][jetstream] canal servidor->agent com replay ativo subject=%s durable=%s", subjects.SupportChatServer, durable)
+			return nil
+		} else {
+			r.logf("[supportchat][jetstream] indisponivel (fallback core, SEM replay): %v", subErr)
+		}
+	} else {
+		r.logf("[supportchat][jetstream] indisponivel (fallback core, SEM replay): %v", err)
+	}
+
+	if _, err := nc.Subscribe(subjects.SupportChatServer, handler); err != nil {
+		return err
+	}
+
+	r.logf("[supportchat][core] canal servidor->agent sem replay subject=%s", subjects.SupportChatServer)
 	return nil
 }
 
@@ -745,6 +812,8 @@ func resolveNATSSubjects(cfg Config) (natsSubjects, error) {
 		SyncPing:            prefix + ".sync.ping",
 		P2PDiscovery:        fmt.Sprintf("tenant.%s.site.%s.p2p.discovery", clientID, siteID),
 		P2PEvents:           fmt.Sprintf("tenant.%s.p2p.events", clientID),
+		SupportChatServer:   prefix + ".supportchat.server",
+		SupportChatAgent:    prefix + ".supportchat.agent",
 	}, nil
 }
 

@@ -68,6 +68,11 @@ func (a *App) handleAgentRuntimeCommand(parent context.Context, cmdType string, 
 		return true, exitCode, output, errText
 	}
 
+	if isTicketChatInviteCommandType(cmdType) {
+		handled, exitCode, output, errText := a.handleTicketChatInviteCommand(parent, payload)
+		return handled, exitCode, output, errText
+	}
+
 	if isNotificationDispatchCommandType(cmdType) {
 		req, err := parseNotificationDispatchPayload(payload)
 		if err != nil {
