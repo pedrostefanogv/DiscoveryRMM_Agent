@@ -3,12 +3,14 @@ package app
 import (
 	"context"
 	"encoding/base64"
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
 
+	"discovery/app/core/screenshot"
 	"discovery/app/supportchat"
 )
 
@@ -167,6 +169,58 @@ func (a *App) SupportChatUploadAttachment(fileName, contentType, base64Data stri
 	defer cancel()
 
 	return a.supportChatService().UploadAttachment(ctx, fileName, contentType, data)
+}
+
+// SupportChatCaptureScreen captura a tela do monitor principal para o usuário
+// anexar ao chat — o mesmo recurso que o chat com a IA tem.
+//
+// A captura é iniciada pelo PRÓPRIO usuário (clique no botão), então não passa
+// pelo fluxo de consentimento por captura usado quando quem pede é a IA: o
+// clique é o consentimento. A imagem é redimensionada para um teto de 1920px a
+// fim de caber na allowlist/tamanho de anexo do servidor.
+func (a *App) SupportChatCaptureScreen() (map[string]string, error) {
+	a.initScreenshotService()
+
+	monitorIndex := 0
+	for _, monitor := range screenshot.ListMonitors() {
+		if monitor.Primary {
+			monitorIndex = monitor.Index
+			break
+		}
+	}
+
+	result, err := screenshot.CaptureScreen(screenshot.Request{
+		Mode:         screenshot.ModeMonitor,
+		MonitorIndex: monitorIndex,
+		MaxDimension: 1920,
+		Format:       "png",
+	})
+	if err != nil {
+		a.Logs.Append("[supportchat] captura de tela falhou: " + err.Error())
+		return nil, err
+	}
+
+	contentType := strings.TrimSpace(result.MIME)
+	extension := "png"
+	switch {
+	case strings.Contains(contentType, "webp"):
+		extension = "webp"
+	case strings.Contains(contentType, "jpeg"), strings.Contains(contentType, "jpg"):
+		extension = "jpg"
+	}
+	if contentType == "" {
+		contentType = "image/png"
+	}
+
+	fileName := "print-" + time.Now().Format("20060102-150405") + "." + extension
+	a.Logs.Append(fmt.Sprintf("[supportchat] captura de tela anexada pelo usuário (%s, monitor %d, %dx%d)",
+		fileName, result.Monitor, result.Width, result.Height))
+
+	return map[string]string{
+		"contentType": contentType,
+		"base64":      result.Base64(),
+		"fileName":    fileName,
+	}, nil
 }
 
 // SupportChatDownloadAttachment devolve o anexo em base64 + content type para

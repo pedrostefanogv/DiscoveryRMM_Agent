@@ -44,6 +44,7 @@
     els.input = byId("scInput");
     els.send = byId("scSendBtn");
     els.attach = byId("scAttachBtn");
+    els.shot = byId("scShotBtn");
     els.fileInput = byId("scFileInput");
     els.end = byId("scEndBtn");
     els.confirm = byId("scConfirm");
@@ -108,6 +109,7 @@
     els.send.disabled = !canSend;
     els.input.disabled = state.status === "ended";
     els.attach.disabled = !canSend;
+    if (els.shot) els.shot.disabled = !canSend;
     els.end.disabled = state.status === "none";
     els.end.textContent = state.status === "waiting" ? "Recusar" : "Encerrar";
   }
@@ -402,6 +404,41 @@
     reader.readAsDataURL(file);
   }
 
+  /**
+   * Captura a tela do monitor principal e anexa à mensagem — mesmo recurso do
+   * chat com a IA. O clique é o consentimento; a imagem passa pelo mesmo fluxo
+   * presigned dos outros anexos (allowlist/tamanho validados no servidor).
+   */
+  function captureScreen() {
+    if (state.status !== "active" || state.sending) return;
+
+    if (els.shot) els.shot.disabled = true;
+    showBanner("Capturando a tela…");
+
+    call("SupportChatCaptureScreen")
+      .then(function (shot) {
+        var base64 = shot && shot.base64 ? shot.base64 : "";
+        if (!base64) throw new Error("captura vazia");
+
+        var contentType = (shot && shot.contentType) || "image/png";
+        var bytes = atob(base64);
+        var buffer = new Uint8Array(bytes.length);
+        for (var i = 0; i < bytes.length; i++) buffer[i] = bytes.charCodeAt(i);
+
+        var blob = new Blob([buffer], { type: contentType });
+        var name = (shot && shot.fileName) || ("print-" + Date.now() + ".png");
+
+        uploadFile(new File([blob], name, { type: contentType }));
+      })
+      .catch(function (err) {
+        showBanner("Falha na captura de tela: " + describe(err));
+      })
+      .then(function () {
+        if (els.shot) els.shot.disabled = false;
+        render();
+      });
+  }
+
   function downloadAttachment(attachment) {
     if (!attachment || !attachment.id) return;
 
@@ -512,6 +549,7 @@
       }
     });
 
+    on(els.shot, "click", captureScreen);
     on(els.attach, "click", function () { if (els.fileInput) els.fileInput.click(); });
     on(els.fileInput, "change", function () {
       attachFiles(els.fileInput.files);

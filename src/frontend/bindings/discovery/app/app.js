@@ -2316,6 +2316,22 @@ export function SupportChatAttachmentPolicyJSON() {
 }
 
 /**
+ * SupportChatCaptureScreen captura a tela do monitor principal para o usuário
+ * anexar ao chat — o mesmo recurso que o chat com a IA tem.
+ * 
+ * A captura é iniciada pelo PRÓPRIO usuário (clique no botão), então não passa
+ * pelo fluxo de consentimento por captura usado quando quem pede é a IA: o
+ * clique é o consentimento. A imagem é redimensionada para um teto de 1920px a
+ * fim de caber na allowlist/tamanho de anexo do servidor.
+ * @returns {$CancellablePromise<{ [_ in string]?: string }>}
+ */
+export function SupportChatCaptureScreen() {
+    return $Call.ByID(2327795395).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType20($result);
+    }));
+}
+
+/**
  * SupportChatConfirmClose encerra o chat e fecha a janela (chamado após o
  * usuário confirmar no modal). O estado local é descartado — o agent não
  * mantém histórico de conversas.
