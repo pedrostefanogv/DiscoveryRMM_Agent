@@ -85,6 +85,24 @@
 
 .screenshot-overlay.hidden { display: none; }
 
+/* Aviso central enquanto o backend congela a tela: a janela já cobre o desktop
+   com este fundo preto, e sem a mensagem o usuário via "a tela toda preta". */
+.screenshot-overlay-loading {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 9005;
+  padding: 14px 22px;
+  border: 1px solid var(--border, #3a3a3a);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.72);
+  color: var(--text, #f5f5f5);
+  font-size: 14px;
+  pointer-events: none;
+}
+.screenshot-overlay-loading.hidden { display: none; }
+
 /* Viewport recorta o conteúdo ampliado; o conteúdo cresce com o zoom e anda
    por translate (o pan é limitado em JS para não sobrar área preta). */
 .screenshot-overlay-viewport {

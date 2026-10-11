@@ -424,7 +424,7 @@
           entry.failed = true;
           state.pending = state.pending.filter(function (p) { return p !== entry; });
           renderPending();
-          showBanner("Falha no anexo: " + describe(err));
+          showBanner("Não foi possível enviar o anexo: " + describe(err));
         });
     };
     reader.onerror = function () {

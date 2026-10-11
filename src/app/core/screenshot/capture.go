@@ -196,6 +196,64 @@ func CaptureDesktopFrame(x, y, w, h int) (*screen.Frame, error) {
 	return toneMapIfHDR(frame), nil
 }
 
+// CaptureDesktopFrameGDI força o frame do desktop pelo caminho GDI (BitBlt).
+//
+// O caminho normal (CaptureDesktopFrame) prefere o capturer HDR-aware/DXGI em
+// monitores Advanced Color, mas a Desktop Duplication devolve frames PRETOS em
+// vários cenários (primeiro frame da sessão, tela segura/bloqueada, driver
+// antigo) — foi o que produziu o overlay "a tela toda preta" sem nenhum erro.
+// O BitBlt é justamente o caminho que o acesso remoto usa por ser confiável
+// nesses casos (ver remotesession/session_screen.go).
+func CaptureDesktopFrameGDI(x, y, w, h int) (*screen.Frame, error) {
+	c, err := screen.NewGDICapturerRegion(x, y, w, h)
+	if err != nil {
+		return nil, err
+	}
+	frame, err := captureWithCapturer(c)
+	if err != nil {
+		return nil, err
+	}
+	// Mesmo tone mapping do caminho normal: a política/consumidores esperam BGRA.
+	return toneMapIfHDR(frame), nil
+}
+
+// FrameIsBlank informa se o frame é uniforme e escuro (tudo preto/praticamente
+// preto em BGRA 8-bit).
+//
+// Existe para detectar o frame PRETO devolvido pela Desktop Duplication: sem
+// essa checagem o overlay exibia uma "tela congelada" preta e o usuário ficava
+// sem pista do que aconteceu. A amostragem é fixa (~4096 pontos), então a
+// checagem é barata mesmo em desktop 4K/multi-monitor e suficiente para o caso
+// "frame inteiro preto". tolerance é o valor máximo por canal para considerar o
+// pixel preto (0 usa o padrão 12).
+func FrameIsBlank(f *screen.Frame, tolerance int) bool {
+	if f == nil || f.Width <= 0 || f.Height <= 0 || len(f.Data) < 4 {
+		return true
+	}
+	if tolerance <= 0 {
+		tolerance = 12
+	}
+	stride := f.Stride
+	if stride <= 0 {
+		stride = f.Width * 4
+	}
+	total := f.Width * f.Height
+	step := total / 4096
+	if step < 1 {
+		step = 1
+	}
+	for i := 0; i < total; i += step {
+		off := (i/f.Width)*stride + (i%f.Width)*4
+		if off+2 >= len(f.Data) {
+			continue
+		}
+		if int(f.Data[off]) > tolerance || int(f.Data[off+1]) > tolerance || int(f.Data[off+2]) > tolerance {
+			return false
+		}
+	}
+	return true
+}
+
 // captureRegionFrame captura o retângulo físico. Em monitor Advanced Color/HDR,
 // o BitBlt (GDI) devolve SDR LAVADO e ignora o tone mapping, então preferimos
 // capturar o monitor inteiro pelo capturer HDR-aware e recortar. Qualquer

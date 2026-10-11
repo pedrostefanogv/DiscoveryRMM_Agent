@@ -16,6 +16,13 @@
 
 var screenshotAttachments = [];
 var screenshotOverlayState = null;
+// Token da captura em andamento: guarda contra a espera "eterna" do overlay
+// (janela preta cobrindo o desktop) quando o backend não responde.
+var screenshotCaptureToken = null;
+// Cancelamento pedido ANTES de o backend responder (Esc/clique no X durante o
+// "preparando"): a sessão só existe no payload, então o cancelamento é aplicado
+// quando ele chega.
+var screenshotCaptureAborted = false;
 
 function screenshotApi() {
   return typeof appApi === "function" ? appApi() : null;
@@ -364,6 +371,10 @@ function screenshotEnsureOverlayEls() {
     '  <button type="button" class="screenshot-zoom-btn hidden" id="screenshotZoomArea" data-i18n-title="screenshot.zoomArea"><svg viewBox="0 0 16 16" class="screenshot-annot-icon" aria-hidden="true"><rect x="2" y="3" width="12" height="10" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="8" cy="8" r="2.6" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></button>',
     '  <button type="button" class="screenshot-zoom-btn" id="screenshotZoomFit" data-i18n-title="screenshot.zoomFit">⤢</button>',
     '</div>',
+    // Mensagem exibida enquanto o backend congela a tela: a janela já cobre o
+    // desktop com fundo preto nesse intervalo, e sem isto o usuário via uma
+    // "tela toda preta" sem nenhuma pista do que estava acontecendo.
+    '<div id="screenshotOverlayLoading" class="screenshot-overlay-loading hidden"></div>',
     '<div id="screenshotAnnotToolbar" class="screenshot-annot-toolbar hidden">',
     '  <span id="screenshotAnnotDrag" class="screenshot-annot-drag" data-i18n-title="screenshot.annotDrag">⣿</span>',
     '  <button type="button" class="screenshot-annot-btn" data-annot-tool="rect" data-i18n-title="screenshot.annotRect">▭</button>',
@@ -532,7 +543,9 @@ function screenshotEnsureOverlayEls() {
   }
 
   document.addEventListener("keydown", function (event) {
-    if (!screenshotOverlayState) return;
+    // Durante o "preparando" ainda não há estado, mas a janela já cobre o
+    // desktop: Esc/clique no X precisa poder cancelar a captura.
+    if (!screenshotOverlayState && !screenshotCaptureToken) return;
     // Digitação de anotação/campo não pode disparar atalhos (setas, 0, +, -).
     var tag = event.target && event.target.tagName ? String(event.target.tagName).toUpperCase() : "";
     if (tag === "INPUT" || tag === "TEXTAREA" || event.target === textInput) return;
@@ -548,6 +561,37 @@ function screenshotEnsureOverlayEls() {
     if (event.key === "ArrowUp") { event.preventDefault(); screenshotPanBy(0, -80); return; }
     if (event.key === "ArrowDown") { event.preventDefault(); screenshotPanBy(0, 80); }
   });
+}
+
+/**
+ * Mostra o overlay em modo "preparando" enquanto o backend congela a tela.
+ *
+ * A janela principal já foi/está sendo redimensionada para cobrir o desktop
+ * (SWP_SHOWWINDOW no Go) e, sem o chrome do app, o usuário ficava olhando um
+ * retângulo PRETO sem nenhuma mensagem. Aqui o overlay aparece com o fundo e a
+ * dica "capturando"; a tela congelada substitui isso em screenshotShowOverlay.
+ */
+function screenshotShowPreparing() {
+  screenshotEnsureOverlayEls();
+  var root = screenshotOverlayRoot();
+  if (!root) return;
+
+  root.classList.remove("hidden");
+  document.body.classList.add("screenshot-active");
+
+  var loading = document.getElementById("screenshotOverlayLoading");
+  if (loading) {
+    loading.textContent = screenshotT("screenshot.capturing");
+    loading.classList.remove("hidden");
+  }
+  var toolbar = document.getElementById("screenshotOverlayToolbar");
+  if (toolbar) {
+    var hint = document.getElementById("screenshotOverlayHint");
+    if (hint) hint.textContent = screenshotT("screenshot.capturing");
+    var size = document.getElementById("screenshotOverlaySize");
+    if (size) size.textContent = "";
+    toolbar.classList.remove("hidden");
+  }
 }
 
 function screenshotShowOverlay(payload) {
@@ -574,6 +618,10 @@ function screenshotShowOverlay(payload) {
   root.classList.remove("hidden");
   // Esconde o chrome do app durante a captura (a janela está em modo overlay).
   document.body.classList.add("screenshot-active");
+  var loadingEl = document.getElementById("screenshotOverlayLoading");
+  if (loadingEl) loadingEl.classList.add("hidden");
+  // O backend respondeu: a espera "eterna" pelo prepare não vale mais.
+  screenshotCaptureToken = null;
   // ready=false até a imagem da tela congelada carregar: sem isso, um movimento
   // de mouse antes do onload mapearia coordenadas com naturalWidth=0 (escala 1)
   // e a seleção sairia deslocada.
@@ -624,6 +672,16 @@ function screenshotShowOverlay(payload) {
     screenshotOverlayState.ready = true;
     screenshotPrepareCanvas();
   }
+  // Rede de segurança: se a tela congelada não carregar (payload vazio, data URL
+  // recusada), o overlay ficaria preto para sempre por cima do desktop. Sem
+  // imagem não há captura: cancela e avisa.
+  setTimeout(function () {
+    var state = screenshotOverlayState;
+    if (!state || state.payload.session !== payload.session) return;
+    if (state.ready) return;
+    screenshotFeedback("Não foi possível exibir a tela capturada. Tente novamente.", true);
+    screenshotCancelOverlay();
+  }, 8000);
   var hint = document.getElementById("screenshotOverlayHint");
   if (hint) {
     hint.textContent = payload.requestedByLlm
@@ -656,6 +714,9 @@ function screenshotPrepareCanvas() {
 }
 
 function screenshotHideOverlay() {
+  screenshotCaptureToken = null;
+  var loading = document.getElementById("screenshotOverlayLoading");
+  if (loading) loading.classList.add("hidden");
   var root = screenshotOverlayRoot();
   if (root) root.classList.add("hidden");
   document.body.classList.remove("screenshot-active");
@@ -2200,7 +2261,15 @@ function screenshotFinishSelection(selection) {
 function screenshotCancelOverlay() {
   supportChatCapturePending = false;
   var state = screenshotOverlayState;
-  if (!state) return;
+  if (!state) {
+    // Cancelamento durante o "preparando": não há sessão ainda. Marca para
+    // cancelar/descartar assim que o payload chegar e devolve o chrome agora.
+    if (screenshotCaptureToken) {
+      screenshotCaptureAborted = true;
+      screenshotHideOverlay();
+    }
+    return;
+  }
   var api = screenshotApi();
   var session = state.payload.session;
   screenshotHideOverlay();
@@ -2232,25 +2301,53 @@ function openScreenshotCapture(options) {
   }
   if (screenshotOverlayState) return;
   screenshotFeedback(screenshotT("screenshot.capturing"), false);
-  // Esconde o chrome do app ANTES do round-trip: o Go só exibe a janela
-  // (SWP_SHOWWINDOW) depois de congelar a tela, e sem isso a interface
-  // principal do agent ficava visível por alguns instantes — parecia que
-  // "tirar um print abria a janela principal". Classe idempotente com a que
-  // screenshotShowOverlay aplica.
-  document.body.classList.add("screenshot-active");
+  // O overlay entra em modo "preparando" ANTES do round-trip: o Go só exibe a
+  // janela (SWP_SHOWWINDOW) depois de congelar a tela, e sem isso a interface
+  // principal do agent ficava visível por alguns instantes — parecia que "tirar
+  // um print abria a janela principal". Com o overlay já visível, o intervalo
+  // mostra "capturando a tela" em vez de um retângulo preto.
+  screenshotShowPreparing();
+  screenshotCaptureAborted = false;
+
+  // Se o backend não responder (captura travada), a janela ficaria cobrindo o
+  // desktop indefinidamente: devolve o chrome e avisa.
+  var token = {};
+  screenshotCaptureToken = token;
+  setTimeout(function () {
+    if (screenshotCaptureToken !== token) return;
+    if (screenshotOverlayState) return; // overlay já desenhado; vale o timeout da imagem
+    screenshotCaptureToken = null;
+    screenshotHideOverlay();
+    screenshotFeedback("A captura de tela não respondeu. Tente novamente.", true);
+  }, 15000);
+
   api.PrepareScreenshotOverlay("captura manual do usuario").then(function (raw) {
     var payload = screenshotParse(raw);
     if (!payload || !payload.session) {
       supportChatCapturePending = false;
-      document.body.classList.remove("screenshot-active");
+      screenshotHideOverlay();
       screenshotFeedback(screenshotT("screenshot.failed"), true);
+      return;
+    }
+    if (screenshotCaptureAborted) {
+      // Cancelado enquanto o backend congelava a tela: a sessão precisa ser
+      // encerrada aqui (senão a janela ficaria com os bounds do overlay).
+      screenshotCaptureAborted = false;
+      supportChatCapturePending = false;
+      var abortApi = screenshotApi();
+      if (abortApi && typeof abortApi.CancelScreenshotOverlay === "function") {
+        try {
+          var pendingAbort = abortApi.CancelScreenshotOverlay(payload.session);
+          if (pendingAbort && typeof pendingAbort.catch === "function") pendingAbort.catch(function () {});
+        } catch (_) {}
+      }
       return;
     }
     supportChatCapturePending = !!(options && options.supportChat);
     screenshotShowOverlay(payload);
   }).catch(function (err) {
     supportChatCapturePending = false;
-    document.body.classList.remove("screenshot-active");
+    screenshotHideOverlay();
     screenshotFeedback(screenshotT("screenshot.failed") + ": " + err, true);
   });
 }

@@ -186,6 +186,10 @@ func main() {
 	// ordem inversa.
 	appInstance := application.New(application.Options{
 		Name: "Discovery",
+		// Ícone de janela no Windows (fallback quando o recurso ID 3 do
+		// executável não existe): sem ele a janela do chat de suporte ficava com
+		// o ícone padrão do sistema na barra de título.
+		Icon: appIconICO,
 		Windows: application.WindowsOptions{
 			// ── WebView2 User Data Folder fixo ──
 			// Sem isso, o Wails usa %APPDATA%\discovery-agent.exe\EBWebView.

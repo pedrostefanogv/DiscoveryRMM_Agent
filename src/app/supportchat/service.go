@@ -413,14 +413,65 @@ func (s *Service) doJSON(ctx context.Context, method, path string, body any, out
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("%s", apiErrorMessage(resp.StatusCode, string(raw)))
 	}
 
 	if out == nil {
 		return nil
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+// apiErrorMessage traduz a resposta de erro da API para uma mensagem que o
+// usuário final entende.
+//
+// BUG CORRIGIDO: o corpo JSON cru ia direto para o banner da janela do chat
+// ("Falha no anexo: HTTP 400: {\"error\":\"Requisição inválida\",\"message\":\"Object
+// storage não está configurado..., \"traceId\":\"...\"}"). A janela é do usuário
+// final: além de ilegível, o texto não dizia o que fazer. Aqui extraímos o campo
+// message do ProblemDetails e traduzimos os casos conhecidos — em especial o
+// object storage não configurado, que é o que impede QUALQUER anexo.
+func apiErrorMessage(status int, raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return fmt.Sprintf("o servidor recusou a operação (HTTP %d)", status)
+	}
+
+	var payload struct {
+		Message string `json:"message"`
+		Error   string `json:"error"`
+		Title   string `json:"title"`
+	}
+	message := ""
+	if json.Unmarshal([]byte(raw), &payload) == nil {
+		message = strings.TrimSpace(payload.Message)
+		if message == "" {
+			message = strings.TrimSpace(payload.Error)
+		}
+		if message == "" {
+			message = strings.TrimSpace(payload.Title)
+		}
+	}
+	if message == "" {
+		// Corpo não-JSON (HTML de proxy, texto puro): corta para não estourar a UI.
+		message = raw
+		if len(message) > 300 {
+			message = message[:300] + "..."
+		}
+	}
+
+	lower := strings.ToLower(message)
+	if strings.Contains(lower, "object storage") || strings.Contains(lower, "bucketname") ||
+		strings.Contains(lower, "accesskey") || strings.Contains(lower, "endpoint é obrigatório") {
+		return "o armazenamento de arquivos (object storage) não está configurado no servidor. " +
+			"Peça ao administrador para preencher os dados em Configurações > Servidor — " +
+			"enquanto isso, anexos e prints não podem ser enviados."
+	}
+	if status == http.StatusConflict && strings.Contains(lower, "session_not_active") {
+		return "a conversa não está mais ativa."
+	}
+	return message
 }
 
 // resetTranscriptForSessionLocked descarta a conversa em memória quando a

@@ -1186,8 +1186,12 @@ func (a *App) openScreenshotOverlay(reason string, byLLM bool, sessionAuthorized
 	// A janela do chat de suporte também fica fora do print (é ela que está em
 	// primeiro plano quando o usuário pede a captura).
 	restoreSupportChat := a.hideSupportChatForCapture()
-	frame, err := a.captureDesktopFrame(vx, vy, vw, vh)
+	frame, err := a.captureOverlayFrame(vx, vy, vw, vh)
 	if err != nil {
+		// Nenhum caminho devolveu uma tela utilizável (inclusive o BitBlt): a
+		// janela precisa voltar ao estado anterior e o usuário receber o erro —
+		// antes um frame PRETO da Desktop Duplication passava por "sucesso" e o
+		// overlay aparecia como uma tela toda preta.
 		restoreVisibility()
 		restoreSupportChat()
 		return nil, err
@@ -1196,6 +1200,7 @@ func (a *App) openScreenshotOverlay(reason string, byLLM bool, sessionAuthorized
 	// área e o fundo da imagem anotada enviada ao LLM.
 	overlayBytes, mime, err := screenshot.EncodeOverlayFrame(frame, overlayImageMaxDim)
 	if err != nil {
+		a.Logs.Append("[screenshot] falha ao codificar a tela congelada do overlay: " + err.Error())
 		return nil, err
 	}
 	// O canvas/anotações do frontend trabalham em pixels da IMAGEM reduzida:
@@ -1275,6 +1280,63 @@ func (a *App) captureDesktopFrame(x, y, w, h int) (*screen.Frame, error) {
 		return nil, fmt.Errorf("captura do desktop para o overlay: %w", err)
 	}
 	return frame, nil
+}
+
+// captureOverlayFrame congela o desktop para o overlay com detecção de frame
+// PRETO.
+//
+// BUG CORRIGIDO (relato "quando manda anexar print da tela, a tela toda fica
+// preta"): em monitores Advanced Color o overlay usa o capturer DXGI/HDR, e a
+// Desktop Duplication devolve um frame PRETO em vários cenários (primeiro frame
+// da sessão, driver, tela segura) SEM erro nenhum. O frame preto passava por
+// sucesso, virava a "tela congelada" e o overlay — que é uma janela preta
+// cobrindo o desktop — aparecia todo preto, sem nenhuma mensagem.
+//
+// A defesa é: repetir a captura (o primeiro frame da duplication costuma vir
+// vazio), depois cair para o BitBlt (caminho confiável usado pelo acesso
+// remoto) e, se nem ele render, devolver erro — a janela avisa o usuário em vez
+// de mostrar uma tela preta.
+func (a *App) captureOverlayFrame(x, y, w, h int) (*screen.Frame, error) {
+	const attempts = 3
+
+	var last *screen.Frame
+	var lastErr error
+
+	for attempt := 1; attempt <= attempts; attempt++ {
+		frame, err := a.captureDesktopFrame(x, y, w, h)
+		if err == nil && frame != nil {
+			if !screenshot.FrameIsBlank(frame, 0) {
+				return frame, nil
+			}
+			last = frame
+			a.Logs.Append(fmt.Sprintf("[screenshot] tela congelada veio PRETA (tentativa %d/%d); repetindo a captura", attempt, attempts))
+		} else {
+			lastErr = err
+			a.Logs.Append(fmt.Sprintf("[screenshot] captura do desktop falhou (tentativa %d/%d): %v", attempt, attempts, err))
+		}
+		if attempt < attempts {
+			time.Sleep(120 * time.Millisecond)
+		}
+	}
+
+	gdiFrame, gdiErr := screenshot.CaptureDesktopFrameGDI(x, y, w, h)
+	if gdiErr == nil && gdiFrame != nil && !screenshot.FrameIsBlank(gdiFrame, 0) {
+		a.Logs.Append("[screenshot] tela congelada obtida pelo caminho GDI (BitBlt) apos frames pretos do DXGI")
+		return gdiFrame, nil
+	}
+	if gdiErr != nil {
+		a.Logs.Append("[screenshot] fallback GDI (BitBlt) falhou: " + gdiErr.Error())
+	} else if gdiFrame != nil {
+		a.Logs.Append("[screenshot] fallback GDI (BitBlt) tambem retornou uma imagem preta")
+	}
+
+	if last != nil {
+		return nil, fmt.Errorf("a captura do desktop retornou uma imagem preta (DXGI e BitBlt) — tente novamente")
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, fmt.Errorf("nao foi possivel congelar a tela para a captura")
 }
 
 func (a *App) captureInteractive(ctx context.Context, reason string, byLLM bool, sessionAuthorized bool) (json.RawMessage, error) {
