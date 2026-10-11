@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -234,29 +235,44 @@ func TestRefresh_LoadsMessagesFromSnapshot(t *testing.T) {
 	}
 }
 
-// BUGFIX 2: a bolha otimista (sequence 0) não pode duplicar quando o snapshot
-// canônico chega.
-func TestMergeMessages_DropsOptimisticPlaceholders(t *testing.T) {
+// BUGFIX 2 (revisado): a bolha otimista só é substituída quando a mensagem
+// canônica CORRESPONDENTE chega (casada por clientMessageId).
+func TestMergeMessages_ReplacesOptimisticOnlyWhenConfirmed(t *testing.T) {
 	svc := newTestService()
 
 	svc.mu.Lock()
 	svc.state.SessionID = testSessionID
 	svc.state.HasSession = true
 	svc.state.Messages = []Message{
-		{ID: "local-1", SequenceNumber: 0, AuthorKind: "enduser", Body: "enviada agora"},
+		{ID: "local-1", ClientMessageID: "local-1", SequenceNumber: 0, AuthorKind: "enduser", Body: "enviada agora"},
 	}
 	svc.mu.Unlock()
 
+	// Snapshot que ainda NÃO contém a mensagem (publish assíncrono por NATS):
+	// descartar a otimista aqui faria a mensagem recém-enviada desaparecer da
+	// janela para sempre — o agent não recebe de volta as próprias mensagens.
 	svc.mergeMessages([]Message{
-		{ID: "canonica-1", SequenceNumber: 1, AuthorKind: "EndUser", Body: "enviada agora", CreatedAt: "2026-01-01T10:00:00Z"},
+		{ID: "outra", ClientMessageID: "outra", SequenceNumber: 1, AuthorKind: "Support", Body: "anterior", CreatedAt: "2026-01-01T10:00:00Z"},
 	})
 
-	messages := svc.State().Messages
-	if len(messages) != 1 {
-		t.Fatalf("esperava 1 mensagem canônica, obteve %d: %+v", len(messages), messages)
+	state := svc.State()
+	if len(state.Messages) != 2 {
+		t.Fatalf("a bolha otimista deveria sobreviver ao snapshot parcial, obteve %+v", state.Messages)
 	}
-	if messages[0].SequenceNumber != 1 {
-		t.Fatalf("a mensagem canônica deveria substituir o placeholder: %+v", messages[0])
+
+	// Chega a versão persistida da MESMA mensagem → a otimista sai (sem duplicar).
+	svc.mergeMessages([]Message{
+		{ID: "canonica-2", ClientMessageID: "local-1", SequenceNumber: 2, AuthorKind: "EndUser", Body: "enviada agora", CreatedAt: "2026-01-01T10:00:05Z"},
+	})
+
+	state = svc.State()
+	if len(state.Messages) != 2 {
+		t.Fatalf("esperava 2 mensagens (1 support + 1 canônica), obteve %d: %+v", len(state.Messages), state.Messages)
+	}
+	for _, message := range state.Messages {
+		if message.SequenceNumber == 0 {
+			t.Fatalf("a bolha otimista deveria ter sido substituída: %+v", state.Messages)
+		}
 	}
 }
 
@@ -321,6 +337,37 @@ func TestHandleEnvelope_IgnoresEnvelopeFromOtherSession(t *testing.T) {
 	}
 	if len(state.Messages) != 1 || state.Messages[0].Body != "conversa atual" {
 		t.Fatalf("conversa misturada com sessão antiga: %+v", state.Messages)
+	}
+}
+
+// A transcrição em memória não pode crescer sem limite (o histórico canônico é
+// do servidor; o agent não deve acumular conversa).
+func TestMergeMessages_CapsInMemoryTranscript(t *testing.T) {
+	svc := newTestService()
+
+	batch := make([]Message, 0, maxInMemoryMessages+120)
+	for i := 1; i <= maxInMemoryMessages+120; i++ {
+		batch = append(batch, Message{
+			ID:              "m" + strconv.Itoa(i),
+			ClientMessageID: "m" + strconv.Itoa(i),
+			SequenceNumber:  int64(i),
+			AuthorKind:      "Support",
+			Body:            "mensagem",
+			CreatedAt:       "2026-01-01T10:00:00Z",
+		})
+	}
+
+	svc.mergeMessages(batch)
+
+	messages := svc.State().Messages
+	if len(messages) != maxInMemoryMessages {
+		t.Fatalf("esperava o teto de %d mensagens, obteve %d", maxInMemoryMessages, len(messages))
+	}
+	if messages[len(messages)-1].SequenceNumber != int64(maxInMemoryMessages+120) {
+		t.Fatalf("a poda deve manter as mensagens MAIS RECENTES: última=%d", messages[len(messages)-1].SequenceNumber)
+	}
+	if messages[0].SequenceNumber != 121 {
+		t.Fatalf("a poda deve descartar as mais antigas: primeira=%d", messages[0].SequenceNumber)
 	}
 }
 

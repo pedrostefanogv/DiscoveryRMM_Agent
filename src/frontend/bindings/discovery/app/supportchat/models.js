@@ -88,6 +88,16 @@ export class Message {
              */
             this["sequenceNumber"] = 0;
         }
+        if (/** @type {any} */(false)) {
+            /**
+             * ClientMessageID é a chave de idempotência do EMISSOR. O servidor devolve a
+             * mesma chave na mensagem canônica, o que permite trocar a bolha otimista
+             * (SequenceNumber == 0) pela versão persistida sem heurística de corpo/data.
+             * @member
+             * @type {string | undefined}
+             */
+            this["clientMessageId"] = undefined;
+        }
         if (!("authorKind" in $$source)) {
             /**
              * @member
@@ -133,10 +143,10 @@ export class Message {
      * @returns {Message}
      */
     static createFrom($$source = {}) {
-        const $$createField6_0 = $$createType1;
+        const $$createField7_0 = $$createType1;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("attachments" in $$parsedSource) {
-            $$parsedSource["attachments"] = $$createField6_0($$parsedSource["attachments"]);
+            $$parsedSource["attachments"] = $$createField7_0($$parsedSource["attachments"]);
         }
         return new Message(/** @type {Partial<Message>} */($$parsedSource));
     }

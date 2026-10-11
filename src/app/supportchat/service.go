@@ -22,6 +22,13 @@ const (
 	requestTimeout = 30 * time.Second
 	// seenClientIDsLimit limita o mapa de deduplicação em memória.
 	seenClientIDsLimit = 256
+	// maxInMemoryMessages limita a transcrição mantida em memória.
+	//
+	// O histórico canônico é do servidor (e só consultável no console); aqui é
+	// apenas a janela visível. Sem teto, uma conversa longa dentro de um turno
+	// cresceria indefinidamente no processo — e o requisito é justamente NÃO
+	// guardar conversa no agent.
+	maxInMemoryMessages = 500
 )
 
 // Deps são as dependências injetadas pelo App.
@@ -261,18 +268,34 @@ func (s *Service) applyMessage(envelope Envelope) error {
 	}
 
 	s.state.Messages = append(s.state.Messages, Message{
-		ID:             envelope.ClientMessageID,
-		SequenceNumber: envelope.Sequence,
-		AuthorKind:     strings.TrimSpace(envelope.AuthorKind),
+		ID:              envelope.ClientMessageID,
+		ClientMessageID: envelope.ClientMessageID,
+		SequenceNumber:  envelope.Sequence,
+		AuthorKind:      strings.TrimSpace(envelope.AuthorKind),
 		AuthorName:     envelope.AuthorName,
 		Body:           envelope.Body,
 		CreatedAt:      envelope.TimestampUTC,
 		Attachments:    attachments,
 	})
+	s.trimMessagesLocked()
 	s.mu.Unlock()
 
 	s.emitState("message")
 	return nil
+}
+
+// trimMessagesLocked descarta as mensagens mais antigas acima do teto. A lista
+// está ordenada por sequência crescente (as otimistas, sem sequência, ficam no
+// fim), então podar a frente remove exatamente as mais antigas.
+func (s *Service) trimMessagesLocked() {
+	if len(s.state.Messages) <= maxInMemoryMessages {
+		return
+	}
+
+	drop := len(s.state.Messages) - maxInMemoryMessages
+	kept := make([]Message, len(s.state.Messages)-drop)
+	copy(kept, s.state.Messages[drop:])
+	s.state.Messages = kept
 }
 
 func (s *Service) alreadySeen(clientMessageID string) bool {
@@ -506,15 +529,36 @@ func (s *Service) mergeMessages(incoming []Message) {
 		s.state.Messages = []Message{}
 	}
 
-	// BUGFIX: as bolhas otimistas do usuário (SequenceNumber == 0, ainda sem
-	// sequência canônica) seriam duplicadas quando o servidor devolvesse a
-	// mensagem real. Sempre que um snapshot canônico chega, os placeholders
-	// otimistas são descartados.
+	// BUGFIX (revisão): descarta a bolha otimista (SequenceNumber == 0) SÓ quando
+	// a mensagem canônica correspondente chega — casada por clientMessageId.
+	//
+	// Antes qualquer snapshot descartava TODAS as otimistas: se o envio saísse
+	// por NATS (processo único, sem o serviço), o refresh() imediato apagava a
+	// mensagem recém-enviada e ela nunca reaparecia na janela (o agent não recebe
+	// de volta as próprias mensagens pelo canal do servidor).
+	confirmed := make(map[string]struct{}, len(incoming))
+	for _, message := range incoming {
+		if message.SequenceNumber > 0 {
+			key := strings.TrimSpace(message.ClientMessageID)
+			if key == "" {
+				key = message.ID
+			}
+			if key != "" {
+				confirmed[key] = struct{}{}
+			}
+		}
+	}
+
 	canonical := make([]Message, 0, len(s.state.Messages))
 	for _, message := range s.state.Messages {
 		if message.SequenceNumber > 0 {
 			canonical = append(canonical, message)
+			continue
 		}
+		if _, ok := confirmed[message.ID]; ok {
+			continue // substituída pela versão persistida
+		}
+		canonical = append(canonical, message)
 	}
 	s.state.Messages = canonical
 
@@ -536,6 +580,7 @@ func (s *Service) mergeMessages(incoming []Message) {
 	}
 
 	sortMessages(s.state.Messages)
+	s.trimMessagesLocked()
 }
 
 // SendMessage envia uma mensagem do usuário final pelo NATS (com PubAck) e cai
@@ -569,11 +614,13 @@ func (s *Service) SendMessage(ctx context.Context, body string, attachmentIDs []
 		// snapshot seguinte do console/janela.
 		s.mu.Lock()
 		s.state.Messages = append(s.state.Messages, Message{
-			ID:         clientMessageID,
-			AuthorKind: "enduser",
-			Body:       body,
-			CreatedAt:  time.Now().UTC().Format(time.RFC3339),
+			ID:              clientMessageID,
+			ClientMessageID: clientMessageID,
+			AuthorKind:      "enduser",
+			Body:            body,
+			CreatedAt:       time.Now().UTC().Format(time.RFC3339),
 		})
+		s.trimMessagesLocked()
 		s.mu.Unlock()
 		s.emitState("message-sent-nats")
 		return nil

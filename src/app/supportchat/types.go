@@ -39,9 +39,13 @@ type Attachment struct {
 
 // Message é uma mensagem do chat.
 type Message struct {
-	ID             string       `json:"id"`
-	SequenceNumber int64        `json:"sequenceNumber"`
-	AuthorKind     string       `json:"authorKind"`
+	ID             string `json:"id"`
+	SequenceNumber int64  `json:"sequenceNumber"`
+	// ClientMessageID é a chave de idempotência do EMISSOR. O servidor devolve a
+	// mesma chave na mensagem canônica, o que permite trocar a bolha otimista
+	// (SequenceNumber == 0) pela versão persistida sem heurística de corpo/data.
+	ClientMessageID string       `json:"clientMessageId,omitempty"`
+	AuthorKind      string       `json:"authorKind"`
 	AuthorName     string       `json:"authorName,omitempty"`
 	Body           string       `json:"body"`
 	CreatedAt      string       `json:"createdAt"`

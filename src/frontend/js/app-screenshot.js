@@ -2131,6 +2131,25 @@ function screenshotConfirmSelection() {
   screenshotFinishSelection(selection);
 }
 
+// ── Captura pedida pela JANELA DO CHAT DE SUPORTE ────────────────────────
+//
+// O overlay assistido (seleção de janela/região + setas/marcações) é
+// renderizado NESTA janela, porque é ela que o Go expande para cobrir o
+// desktop. Quando o pedido vem da janela do chat de suporte, o resultado NÃO
+// vira anexo do chat com a IA: é reemitido para a janela do chat, que o sobe
+// pelo fluxo presigned de anexos.
+var supportChatCapturePending = false;
+
+function supportChatForwardScreenshot(result) {
+  supportChatCapturePending = false;
+  if (!result || !result.dataUrl) return;
+  if (!window.wails || typeof window.wails.emit !== "function") return;
+  window.wails.emit("supportchat:screenshot", {
+    dataUrl: result.dataUrl,
+    at: Date.now(),
+  });
+}
+
 function screenshotFinishSelection(selection) {
   var state = screenshotOverlayState;
   if (!state) return;
@@ -2153,6 +2172,8 @@ function screenshotFinishSelection(selection) {
     }
     if (byLLM) {
       screenshotAppendInfoBubble(result, screenshotT("screenshot.llmCaptured"));
+    } else if (supportChatCapturePending) {
+      supportChatForwardScreenshot(result);
     } else {
       screenshotAttach(result);
     }
@@ -2162,6 +2183,7 @@ function screenshotFinishSelection(selection) {
 }
 
 function screenshotCancelOverlay() {
+  supportChatCapturePending = false;
   var state = screenshotOverlayState;
   if (!state) return;
   var api = screenshotApi();
@@ -2795,6 +2817,16 @@ function initScreenshotCapture() {
   var button = document.getElementById("chatScreenshotBtn");
   if (button) {
     button.addEventListener("click", openScreenshotCapture);
+  }
+
+  // Pedido de captura vindo da janela do chat de suporte (binding Go
+  // SupportChatRequestScreenshot). O clique já é o consentimento.
+  if (window.wails && typeof window.wails.on === "function") {
+    window.wails.on("supportchat:capture_requested", function () {
+      if (screenshotOverlayState) return; // já existe captura em andamento
+      supportChatCapturePending = true;
+      openScreenshotCapture();
+    });
   }
   initScreenshotPrivacy();
   initScreenshotLightbox();

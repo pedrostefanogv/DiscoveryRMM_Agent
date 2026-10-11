@@ -2316,22 +2316,6 @@ export function SupportChatAttachmentPolicyJSON() {
 }
 
 /**
- * SupportChatCaptureScreen captura a tela do monitor principal para o usuário
- * anexar ao chat — o mesmo recurso que o chat com a IA tem.
- * 
- * A captura é iniciada pelo PRÓPRIO usuário (clique no botão), então não passa
- * pelo fluxo de consentimento por captura usado quando quem pede é a IA: o
- * clique é o consentimento. A imagem é redimensionada para um teto de 1920px a
- * fim de caber na allowlist/tamanho de anexo do servidor.
- * @returns {$CancellablePromise<{ [_ in string]?: string }>}
- */
-export function SupportChatCaptureScreen() {
-    return $Call.ByID(2327795395).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType20($result);
-    }));
-}
-
-/**
  * SupportChatConfirmClose encerra o chat e fecha a janela (chamado após o
  * usuário confirmar no modal). O estado local é descartado — o agent não
  * mantém histórico de conversas.
@@ -2385,6 +2369,21 @@ export function SupportChatRefresh() {
     return $Call.ByID(277848266).then(/** @type {($result: any) => any} */(($result) => {
         return $$createType85($result);
     }));
+}
+
+/**
+ * SupportChatRequestScreenshot inicia a captura ASSISTIDA — o MESMO overlay do
+ * chat com a IA: seleção de janela/aplicativo ou região da tela e ferramentas
+ * de anotação (setas, marcações, passos).
+ * 
+ * O overlay é renderizado na JANELA PRINCIPAL porque é ela que o Go expande
+ * para cobrir o desktop; esta binding apenas traz a janela para frente e pede ao
+ * frontend dela para abrir a captura, marcando o destino do resultado como a
+ * janela do chat de suporte (ver app-screenshot.js → supportChatCapturePending).
+ * @returns {$CancellablePromise<void>}
+ */
+export function SupportChatRequestScreenshot() {
+    return $Call.ByID(1892816940);
 }
 
 /**

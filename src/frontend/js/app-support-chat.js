@@ -273,8 +273,15 @@
     (state.messages || []).forEach(push);
     (incoming || []).forEach(push);
 
+    // Sequência 0 = bolha otimista (ainda sem número canônico): vai para o FIM.
+    // Antes ela ordenava primeiro e a mensagem recém-enviada aparecia no topo da
+    // conversa até o snapshot canônico chegar.
+    function order(message) {
+      return message.sequenceNumber > 0 ? message.sequenceNumber : Number.MAX_SAFE_INTEGER;
+    }
+
     merged.sort(function (a, b) {
-      return (a.sequenceNumber || 0) - (b.sequenceNumber || 0);
+      return order(a) - order(b);
     });
 
     return merged;
@@ -405,38 +412,53 @@
   }
 
   /**
-   * Captura a tela do monitor principal e anexa à mensagem — mesmo recurso do
-   * chat com a IA. O clique é o consentimento; a imagem passa pelo mesmo fluxo
-   * presigned dos outros anexos (allowlist/tamanho validados no servidor).
+   * Abre a captura ASSISTIDA — o mesmo overlay do chat com a IA: seleção de
+   * janela/aplicativo ou região da tela e ferramentas de anotação (setas,
+   * marcações, passos).
+   *
+   * O overlay roda na janela principal (é ela que o Go expande para cobrir o
+   * desktop); o resultado volta pelo evento `supportchat:screenshot` e entra no
+   * fluxo presigned de anexos.
    */
-  function captureScreen() {
+  function requestScreenshot() {
     if (state.status !== "active" || state.sending) return;
 
     if (els.shot) els.shot.disabled = true;
-    showBanner("Capturando a tela…");
+    showBanner("Abrindo a captura de tela…");
 
-    call("SupportChatCaptureScreen")
-      .then(function (shot) {
-        var base64 = shot && shot.base64 ? shot.base64 : "";
-        if (!base64) throw new Error("captura vazia");
-
-        var contentType = (shot && shot.contentType) || "image/png";
-        var bytes = atob(base64);
-        var buffer = new Uint8Array(bytes.length);
-        for (var i = 0; i < bytes.length; i++) buffer[i] = bytes.charCodeAt(i);
-
-        var blob = new Blob([buffer], { type: contentType });
-        var name = (shot && shot.fileName) || ("print-" + Date.now() + ".png");
-
-        uploadFile(new File([blob], name, { type: contentType }));
-      })
+    call("SupportChatRequestScreenshot")
       .catch(function (err) {
-        showBanner("Falha na captura de tela: " + describe(err));
+        showBanner("Falha ao abrir a captura de tela: " + describe(err));
       })
       .then(function () {
         if (els.shot) els.shot.disabled = false;
         render();
       });
+  }
+
+  /** Anexa um print anotado (data URL) vindo do overlay da captura assistida. */
+  function attachScreenshotDataUrl(dataUrl) {
+    dataUrl = String(dataUrl || "");
+    var comma = dataUrl.indexOf(",");
+    if (comma < 0) return;
+
+    var meta = dataUrl.substring(0, comma);
+    var base64 = dataUrl.substring(comma + 1);
+
+    var contentType = "image/png";
+    var match = /data:([^;]+)/.exec(meta);
+    if (match) contentType = match[1];
+
+    var bytes = atob(base64);
+    var buffer = new Uint8Array(bytes.length);
+    for (var i = 0; i < bytes.length; i++) buffer[i] = bytes.charCodeAt(i);
+
+    var blob = new Blob([buffer], { type: contentType });
+    var extension = contentType.indexOf("webp") >= 0 ? "webp" : (contentType.indexOf("jpeg") >= 0 ? "jpg" : "png");
+    var name = "print-" + new Date().toISOString().replace(/[:.]/g, "-") + "." + extension;
+
+    uploadFile(new File([blob], name, { type: contentType }));
+    showBanner("Print anexado. Escreva a mensagem e envie.");
   }
 
   function downloadAttachment(attachment) {
@@ -549,7 +571,7 @@
       }
     });
 
-    on(els.shot, "click", captureScreen);
+    on(els.shot, "click", requestScreenshot);
     on(els.attach, "click", function () { if (els.fileInput) els.fileInput.click(); });
     on(els.fileInput, "change", function () {
       attachFiles(els.fileInput.files);
@@ -601,6 +623,13 @@
     window.wails.on("supportchat:state", function (payload) { applyState(payload); });
     window.wails.on("supportchat:error", function (message) { showBanner(String(message || "Erro no chat.")); });
     window.wails.on("supportchat:confirm_close", function () { askClose(); });
+
+    // Print anotado produzido pelo overlay assistido (janela principal).
+    window.wails.on("supportchat:screenshot", function (payload) {
+      var dataUrl = payload && payload.dataUrl ? payload.dataUrl : "";
+      if (!dataUrl) return;
+      attachScreenshotDataUrl(dataUrl);
+    });
   }
 
   function bootstrap() {
