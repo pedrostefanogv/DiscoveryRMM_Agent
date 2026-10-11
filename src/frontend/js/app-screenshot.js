@@ -555,7 +555,22 @@ function screenshotShowOverlay(payload) {
   screenshotEnsureOverlayEls();
   var root = screenshotOverlayRoot();
   var img = document.getElementById("screenshotOverlayImage");
-  if (!root || !img) return;
+  if (!root || !img) {
+    // Sem os elementos do overlay não há como desenhar a captura: o chrome do
+    // app (escondido ANTES do round-trip para não piscar a janela principal)
+    // precisa voltar, e a sessão do backend ser cancelada — senão a janela
+    // ficaria cobrindo o desktop com a UI invisível.
+    document.body.classList.remove("screenshot-active");
+    supportChatCapturePending = false;
+    var missingApi = screenshotApi();
+    if (missingApi && typeof missingApi.CancelScreenshotOverlay === "function") {
+      try {
+        var pendingCancel = missingApi.CancelScreenshotOverlay(payload.session);
+        if (pendingCancel && typeof pendingCancel.catch === "function") pendingCancel.catch(function () {});
+      } catch (_) {}
+    }
+    return;
+  }
   root.classList.remove("hidden");
   // Esconde o chrome do app durante a captura (a janela está em modo overlay).
   document.body.classList.add("screenshot-active");
