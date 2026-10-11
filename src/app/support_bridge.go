@@ -1,7 +1,9 @@
 package app
 
 import (
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 
 	appsupport "discovery/app/support"
 )
@@ -175,6 +177,76 @@ func (a *App) GetTicketComments(ticketID string) ([]TicketComment, error) {
 	})
 }
 
+// ── Anexos de chamado (bindings do webview) ───────────────────────────────
+//
+// Permitem anexar arquivos/prints AO COMENTAR um chamado (antes so existia o
+// painel de anexos). O webview manda base64 porque nao tem o token do agent.
+
+func (a *App) UploadTicketAttachment(ticketID, fileName, contentType, dataBase64 string) (string, error) {
+	if err := a.requireSupportSvc(); err != nil {
+		return "", err
+	}
+	type result struct {
+		AttachmentID string `json:"attachmentId"`
+	}
+	res, err := supportWriteOrLocal(a, "support:ticket_attachment_upload", map[string]any{
+		"ticketId":    ticketID,
+		"fileName":    fileName,
+		"contentType": contentType,
+		"dataBase64":  dataBase64,
+	}, func() (result, error) {
+		data, decodeErr := base64.StdEncoding.DecodeString(dataBase64)
+		if decodeErr != nil {
+			return result{}, fmt.Errorf("anexo inválido: %w", decodeErr)
+		}
+		attachmentID, uploadErr := a.SupportSvc.UploadTicketAttachment(ticketID, fileName, contentType, data)
+		if uploadErr != nil {
+			return result{}, uploadErr
+		}
+		return result{AttachmentID: attachmentID}, nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return res.AttachmentID, nil
+}
+
+func (a *App) DownloadTicketAttachment(ticketID, attachmentID string) (map[string]string, error) {
+	if err := a.requireSupportSvc(); err != nil {
+		return nil, err
+	}
+	type payload struct {
+		ContentType string `json:"contentType"`
+		Base64      string `json:"base64"`
+	}
+	res, err := supportReadOrLocal(a, "support:ticket_attachment_download", map[string]any{
+		"ticketId":     ticketID,
+		"attachmentId": attachmentID,
+	}, func() (payload, error) {
+		data, contentType, downloadErr := a.SupportSvc.DownloadTicketAttachment(ticketID, attachmentID)
+		if downloadErr != nil {
+			return payload{}, downloadErr
+		}
+		return payload{ContentType: contentType, Base64: base64.StdEncoding.EncodeToString(data)}, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return map[string]string{"contentType": res.ContentType, "base64": res.Base64}, nil
+}
+
+func (a *App) TicketAttachmentSettings() (json.RawMessage, error) {
+	if err := a.requireSupportSvc(); err != nil {
+		return nil, err
+	}
+	settings, err := supportReadOrLocal(a, "support:ticket_attachment_settings", nil, func() (appsupport.TicketAttachmentSettings, error) {
+		return a.SupportSvc.GetTicketAttachmentSettings()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(settings)
+}
 func (a *App) AddTicketCommentWithOptions(ticketID, content string) (TicketComment, error) {
 	if err := a.requireSupportSvc(); err != nil {
 		return TicketComment{}, err

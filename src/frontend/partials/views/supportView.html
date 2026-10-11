@@ -136,6 +136,15 @@
             <div class="meta" data-i18n="common.loading">Carregando...</div>
           </div>
           <div id="commentCompose" class="comment-compose">
+            <div class="comment-attach-toolbar">
+              <input id="commentFileInput" type="file" multiple hidden />
+              <button id="commentAttachBtn" type="button" class="btn subtle" title="Anexar arquivo (ou cole um print com Ctrl+V)"
+                data-i18n="support.attachFile" data-i18n-title="support.attachFileHint">Anexar</button>
+              <button id="commentScreenshotBtn" type="button" class="btn subtle" title="Print da tela (recorte, setas e marcacoes)"
+                data-i18n="support.attachScreenshot" data-i18n-title="support.attachScreenshotHint">Print da tela</button>
+              <span class="meta" data-i18n="support.attachHint">Anexe arquivos ou cole um print (Ctrl+V)</span>
+            </div>
+            <div id="commentAttachments" class="comment-attachments hidden"></div>
             <textarea id="commentInput" rows="3" placeholder="Escreva um comentario..."
               data-i18n-placeholder="support.writeCommentPlaceholder" data-app-lang="true"></textarea>
             <button id="submitCommentBtn" class="btn primary" data-i18n="action.sendComment">Enviar Comentario</button>

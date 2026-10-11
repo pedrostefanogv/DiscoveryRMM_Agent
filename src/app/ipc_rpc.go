@@ -80,6 +80,12 @@ func (a *App) handleIPCRequest(ctx context.Context, payload map[string]any) map[
 		return a.ipcRPCSupportTemplates()
 	case "support:create":
 		return a.ipcRPCSupportCreate(payload)
+	case "support:ticket_attachment_upload":
+		return a.ipcRPCSupportTicketAttachmentUpload(payload)
+	case "support:ticket_attachment_download":
+		return a.ipcRPCSupportTicketAttachmentDownload(payload)
+	case "support:ticket_attachment_settings":
+		return a.ipcRPCSupportTicketAttachmentSettings(payload)
 	case "support:comment_add":
 		return a.ipcRPCSupportAddComment(payload)
 	case "support:comment_add_legacy":

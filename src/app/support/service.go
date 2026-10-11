@@ -1911,6 +1911,212 @@ func (s *Service) AddTicketCommentWithOptions(ticketID, content string) (TicketC
 	return created, nil
 }
 
+// ticketAPIErrorMessage extrai a mensagem legivel do corpo de erro da API
+// (ProblemDetails) — sem isso a UI mostraria o JSON cru ("{\"error\":...)").
+func ticketAPIErrorMessage(status int, raw string) string {
+	var payload struct {
+		Message string `json:"message"`
+		Error   string `json:"error"`
+	}
+	if json.Unmarshal([]byte(raw), &payload) == nil {
+		if msg := strings.TrimSpace(payload.Message); msg != "" {
+			return msg
+		}
+		if msg := strings.TrimSpace(payload.Error); msg != "" {
+			return msg
+		}
+	}
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return fmt.Sprintf("o servidor recusou a operação (HTTP %d)", status)
+	}
+	if len(trimmed) > 300 {
+		trimmed = trimmed[:300] + "..."
+	}
+	return trimmed
+}
+
+// ── Anexos de chamado (agent) ─────────────────────────────────────────────
+//
+// O agent precisa anexar arquivos/prints AO COMENTAR um chamado. O fluxo e o
+// mesmo do console: prepare (URL pre-assinada) -> PUT direto no storage ->
+// complete. O backend valida tipos/tamanho (TicketAttachmentSettings) e grava
+// o anexo no CHAMADO (EntityType "Ticket").
+
+// TicketAttachmentSettings espelha a policy devolvida pela API.
+type TicketAttachmentSettings struct {
+	Enabled             bool     `json:"enabled"`
+	AllowedContentTypes []string `json:"allowedContentTypes"`
+	MaxFileSizeBytes    int64    `json:"maxFileSizeBytes"`
+}
+
+type ticketPresignedUpload struct {
+	AttachmentID string `json:"attachmentId"`
+	ObjectKey    string `json:"objectKey"`
+	UploadURL    string `json:"uploadUrl"`
+	HTTPMethod   string `json:"httpMethod"`
+}
+
+// GetTicketAttachmentSettings devolve a policy vigente (tipos/tamanho/habilitado).
+func (s *Service) GetTicketAttachmentSettings() (TicketAttachmentSettings, error) {
+	cfg := s.debugConfig()
+	target := apiScheme(cfg) + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/tickets/attachment-settings"
+	req, err := http.NewRequestWithContext(s.ctxOrBackground(), http.MethodGet, target, nil)
+	if err != nil {
+		return TicketAttachmentSettings{}, err
+	}
+	if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, cfg.AgentID); err != nil {
+		return TicketAttachmentSettings{}, err
+	}
+	resp, err := tlsutil.NewHTTPClient(10 * time.Second).Do(req)
+	if err != nil {
+		return TicketAttachmentSettings{}, s.transportError("ler configuração de anexos", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return TicketAttachmentSettings{}, fmt.Errorf("%s", ticketAPIErrorMessage(resp.StatusCode, string(body)))
+	}
+	var settings TicketAttachmentSettings
+	if err := json.Unmarshal(body, &settings); err != nil {
+		return TicketAttachmentSettings{}, fmt.Errorf("resposta inválida de configuração de anexos: %w", err)
+	}
+	s.markReachable()
+	return settings, nil
+}
+
+// UploadTicketAttachment sobe um anexo do chamado (prepare -> PUT -> complete) e
+// devolve o ID do anexo criado.
+func (s *Service) UploadTicketAttachment(ticketID, fileName, contentType string, data []byte) (string, error) {
+	ticketID = strings.TrimSpace(ticketID)
+	if !guidPattern.MatchString(ticketID) {
+		return "", fmt.Errorf("ticketId inválido")
+	}
+	if strings.TrimSpace(fileName) == "" || len(data) == 0 {
+		return "", fmt.Errorf("arquivo inválido")
+	}
+	if strings.TrimSpace(contentType) == "" {
+		contentType = "application/octet-stream"
+	}
+
+	cfg := s.debugConfig()
+	ctx := s.ctxOrBackground()
+	base := apiScheme(cfg) + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/tickets/" + ticketID + "/attachments"
+
+	payload, _ := json.Marshal(map[string]any{
+		"fileName":    fileName,
+		"contentType": contentType,
+		"sizeBytes":   len(data),
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/presigned-upload", bytes.NewReader(payload))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, cfg.AgentID); err != nil {
+		return "", err
+	}
+	resp, err := doPostWithRetry(ctx, tlsutil.NewHTTPClient(15*time.Second), req)
+	if err != nil {
+		return "", s.transportError("preparar anexo", err)
+	}
+	prepareBody, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("%s", ticketAPIErrorMessage(resp.StatusCode, string(prepareBody)))
+	}
+	var prepared ticketPresignedUpload
+	if err := json.Unmarshal(prepareBody, &prepared); err != nil || prepared.UploadURL == "" {
+		return "", fmt.Errorf("resposta inválida ao preparar o anexo")
+	}
+
+	method := strings.ToUpper(strings.TrimSpace(prepared.HTTPMethod))
+	if method == "" {
+		method = http.MethodPut
+	}
+	putReq, err := http.NewRequestWithContext(ctx, method, prepared.UploadURL, bytes.NewReader(data))
+	if err != nil {
+		return "", err
+	}
+	putReq.Header.Set("Content-Type", contentType)
+	putResp, err := tlsutil.NewHTTPClient(60 * time.Second).Do(putReq)
+	if err != nil {
+		return "", s.transportError("enviar anexo ao storage", err)
+	}
+	putResp.Body.Close()
+	if putResp.StatusCode < 200 || putResp.StatusCode >= 300 {
+		return "", fmt.Errorf("storage recusou o upload (HTTP %d)", putResp.StatusCode)
+	}
+
+	completePayload, _ := json.Marshal(map[string]any{
+		"attachmentId": prepared.AttachmentID,
+		"objectKey":    prepared.ObjectKey,
+		"fileName":     fileName,
+		"contentType":  contentType,
+		"sizeBytes":    len(data),
+	})
+	completeReq, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/complete-upload", bytes.NewReader(completePayload))
+	if err != nil {
+		return "", err
+	}
+	completeReq.Header.Set("Content-Type", "application/json")
+	if err := netutil.SetAgentAuthHeadersWithAgentID(completeReq, cfg.AuthToken, cfg.AgentID); err != nil {
+		return "", err
+	}
+	completeResp, err := doPostWithRetry(ctx, tlsutil.NewHTTPClient(30*time.Second), completeReq)
+	if err != nil {
+		return "", s.transportError("confirmar anexo", err)
+	}
+	completeBody, _ := io.ReadAll(completeResp.Body)
+	completeResp.Body.Close()
+	if completeResp.StatusCode < 200 || completeResp.StatusCode >= 300 {
+		return "", fmt.Errorf("%s", ticketAPIErrorMessage(completeResp.StatusCode, string(completeBody)))
+	}
+
+	s.markReachable()
+	return prepared.AttachmentID, nil
+}
+
+// DownloadTicketAttachment baixa um anexo do chamado (o webview nao carrega o
+// token do agent, entao os bytes vem por aqui).
+func (s *Service) DownloadTicketAttachment(ticketID, attachmentID string) ([]byte, string, error) {
+	ticketID = strings.TrimSpace(ticketID)
+	attachmentID = strings.TrimSpace(attachmentID)
+	if !guidPattern.MatchString(ticketID) || !guidPattern.MatchString(attachmentID) {
+		return nil, "", fmt.Errorf("identificador inválido")
+	}
+
+	cfg := s.debugConfig()
+	target := apiScheme(cfg) + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/tickets/" + ticketID +
+		"/attachments/" + attachmentID + "/download"
+	req, err := http.NewRequestWithContext(s.ctxOrBackground(), http.MethodGet, target, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, cfg.AgentID); err != nil {
+		return nil, "", err
+	}
+	resp, err := tlsutil.NewHTTPClient(60 * time.Second).Do(req)
+	if err != nil {
+		return nil, "", s.transportError("baixar anexo", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, "", fmt.Errorf("%s", ticketAPIErrorMessage(resp.StatusCode, string(body)))
+	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, "", err
+	}
+	contentType := strings.TrimSpace(resp.Header.Get("Content-Type"))
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	s.markReachable()
+	return data, contentType, nil
+}
+
 // AddTicketComment adds a comment to a ticket.
 func (s *Service) AddTicketComment(ticketID, author, content string) error {
 	_ = author

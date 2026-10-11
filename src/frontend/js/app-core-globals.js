@@ -110,6 +110,10 @@ const closeTicketModalCancelBottomBtnEl = document.getElementById('closeTicketMo
 const commentsListEl = document.getElementById('commentsList');
 const commentInputEl = document.getElementById('commentInput');
 const submitCommentBtnEl = document.getElementById('submitCommentBtn');
+const commentAttachBtnEl = document.getElementById('commentAttachBtn');
+const commentScreenshotBtnEl = document.getElementById('commentScreenshotBtn');
+const commentFileInputEl = document.getElementById('commentFileInput');
+const commentAttachmentsEl = document.getElementById('commentAttachments');
 const ticketFormStatusEl = document.getElementById('ticketFormStatus');
 // Suporte: busca/filtros, reabertura e avaliacao pos-fechamento
 const ticketSearchInputEl = document.getElementById('ticketSearchInput');

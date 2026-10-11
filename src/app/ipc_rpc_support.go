@@ -12,7 +12,9 @@ package app
 // serviço (que tem DB, identidade durável e snapshots) à UI companion.
 
 import (
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	appsupport "discovery/app/support"
@@ -180,6 +182,52 @@ func (a *App) ipcRPCSupportAddCommentLegacy(payload map[string]any) map[string]a
 	})
 }
 
+// ── Anexos de chamado (RPC do servico) ────────────────────────────────────
+
+func (a *App) ipcRPCSupportTicketAttachmentUpload(payload map[string]any) map[string]any {
+	if err := a.requireSupportSvc(); err != nil {
+		return ipcRPCError(err)
+	}
+	ticketID := ipcRPCString(payload, "ticketId")
+	fileName := ipcRPCString(payload, "fileName")
+	contentType := ipcRPCString(payload, "contentType")
+	dataBase64 := ipcRPCString(payload, "dataBase64")
+	data, err := base64.StdEncoding.DecodeString(dataBase64)
+	if err != nil {
+		return ipcRPCError(fmt.Errorf("anexo inválido: %w", err))
+	}
+	attachmentID, err := a.SupportSvc.UploadTicketAttachment(ticketID, fileName, contentType, data)
+	if err != nil {
+		return ipcRPCError(err)
+	}
+	return ipcRPCResult(map[string]any{"attachmentId": attachmentID})
+}
+
+func (a *App) ipcRPCSupportTicketAttachmentDownload(payload map[string]any) map[string]any {
+	if err := a.requireSupportSvc(); err != nil {
+		return ipcRPCError(err)
+	}
+	data, contentType, err := a.SupportSvc.DownloadTicketAttachment(
+		ipcRPCString(payload, "ticketId"), ipcRPCString(payload, "attachmentId"))
+	if err != nil {
+		return ipcRPCError(err)
+	}
+	return ipcRPCResult(map[string]any{
+		"contentType": contentType,
+		"base64":      base64.StdEncoding.EncodeToString(data),
+	})
+}
+
+func (a *App) ipcRPCSupportTicketAttachmentSettings(payload map[string]any) map[string]any {
+	if err := a.requireSupportSvc(); err != nil {
+		return ipcRPCError(err)
+	}
+	settings, err := a.SupportSvc.GetTicketAttachmentSettings()
+	if err != nil {
+		return ipcRPCError(err)
+	}
+	return ipcRPCResult(settings)
+}
 func (a *App) ipcRPCSupportClose(payload map[string]any) map[string]any {
 	if err := a.requireSupportSvc(); err != nil {
 		return ipcRPCError(err)

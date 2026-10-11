@@ -2215,6 +2215,9 @@ function screenshotConfirmSelection() {
 // vira anexo do chat com a IA: é reemitido para a janela do chat, que o sobe
 // pelo fluxo presigned de anexos.
 var supportChatCapturePending = false;
+// Destino "comentario de chamado": o print anotado volta para o composer de
+// comentarios (mesma janela principal) via window.dsvTicketCommentScreenshot.
+var ticketCommentCapturePending = false;
 
 function supportChatForwardScreenshot(result) {
   supportChatCapturePending = false;
@@ -2224,6 +2227,16 @@ function supportChatForwardScreenshot(result) {
     dataUrl: result.dataUrl,
     at: Date.now(),
   });
+}
+
+// Encaminha o print anotado para o composer de comentario do chamado (mesma
+// janela, entao basta chamar o hook global exposto pelo app-support.js).
+function forwardTicketCommentScreenshot(result) {
+  ticketCommentCapturePending = false;
+  if (!result || !result.dataUrl) return;
+  if (typeof window.dsvTicketCommentScreenshot === 'function') {
+    window.dsvTicketCommentScreenshot(result.dataUrl);
+  }
 }
 
 function screenshotFinishSelection(selection) {
@@ -2250,6 +2263,8 @@ function screenshotFinishSelection(selection) {
       screenshotAppendInfoBubble(result, screenshotT("screenshot.llmCaptured"));
     } else if (supportChatCapturePending) {
       supportChatForwardScreenshot(result);
+    } else if (ticketCommentCapturePending) {
+      forwardTicketCommentScreenshot(result);
     } else {
       screenshotAttach(result);
     }
@@ -2260,6 +2275,7 @@ function screenshotFinishSelection(selection) {
 
 function screenshotCancelOverlay() {
   supportChatCapturePending = false;
+  ticketCommentCapturePending = false;
   var state = screenshotOverlayState;
   if (!state) {
     // Cancelamento durante o "preparando": não há sessão ainda. Marca para
@@ -2296,6 +2312,7 @@ function openScreenshotCapture(options) {
   var api = screenshotApi();
   if (!api || typeof api.PrepareScreenshotOverlay !== "function") {
     supportChatCapturePending = false;
+    ticketCommentCapturePending = false;
     screenshotFeedback(screenshotT("screenshot.unavailable"), true);
     return;
   }
@@ -2325,6 +2342,7 @@ function openScreenshotCapture(options) {
     var payload = screenshotParse(raw);
     if (!payload || !payload.session) {
       supportChatCapturePending = false;
+      ticketCommentCapturePending = false;
       screenshotHideOverlay();
       screenshotFeedback(screenshotT("screenshot.failed"), true);
       return;
@@ -2334,6 +2352,7 @@ function openScreenshotCapture(options) {
       // encerrada aqui (senão a janela ficaria com os bounds do overlay).
       screenshotCaptureAborted = false;
       supportChatCapturePending = false;
+      ticketCommentCapturePending = false;
       var abortApi = screenshotApi();
       if (abortApi && typeof abortApi.CancelScreenshotOverlay === "function") {
         try {
@@ -2344,6 +2363,8 @@ function openScreenshotCapture(options) {
       return;
     }
     supportChatCapturePending = !!(options && options.supportChat);
+    ticketCommentCapturePending = !!(options && options.ticketComment);
+    if (ticketCommentCapturePending) supportChatCapturePending = false;
     screenshotShowOverlay(payload);
   }).catch(function (err) {
     supportChatCapturePending = false;
