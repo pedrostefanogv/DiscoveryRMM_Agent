@@ -64,6 +64,7 @@ func (a *App) openSupportChatWindow() {
 		// Cancelar e pedir confirmação: o chat só termina quando o usuário
 		// confirmar (ou quando o suporte encerrar pelo console).
 		ev.Cancel()
+		a.Logs.Append("[supportchat] fechamento da janela interceptado; aguardando confirmação do usuário")
 		a.EmitEvent("supportchat:confirm_close")
 	})
 

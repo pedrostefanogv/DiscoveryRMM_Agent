@@ -47,6 +47,8 @@
     els.fileInput = byId("scFileInput");
     els.end = byId("scEndBtn");
     els.confirm = byId("scConfirm");
+    els.confirmTitle = byId("scConfirmTitle");
+    els.confirmText = byId("scConfirmText");
     els.confirmOk = byId("scConfirmOk");
     els.confirmCancel = byId("scConfirmCancel");
     els.invite = byId("scInvite");
@@ -107,6 +109,7 @@
     els.input.disabled = state.status === "ended";
     els.attach.disabled = !canSend;
     els.end.disabled = state.status === "none";
+    els.end.textContent = state.status === "waiting" ? "Recusar" : "Encerrar";
   }
 
   function formatTime(raw) {
@@ -278,7 +281,11 @@
   function applyState(next) {
     if (!next) return;
     state.status = next.status || "none";
-    state.connected = !!next.connected;
+    // No processo de UI o serviço é quem fala com o NATS: `connected` do serviço
+    // local é sempre false e o banner "sem conexão em tempo real" aparecia mesmo
+    // com tudo funcionando. A conversa só é "ao vivo" quando existe sessão
+    // carregada — o serviço entrega os eventos por IPC.
+    state.connected = !!next.connected || !!next.hasSession;
     state.hasSession = !!next.hasSession;
     state.ticketTitle = next.ticketTitle || state.ticketTitle;
     state.supportName = next.supportName || state.supportName;
@@ -423,12 +430,51 @@
 
   // ── Encerramento ─────────────────────────────────────────────────────────
 
+  // "end" encerra a conversa; "invite" recusa o convite ainda não aceito.
+  var confirmMode = "end";
+
   function askClose() {
+    if (state.closing) return;
+
+    // Enquanto o convite não foi aceito, fechar a janela significa RECUSAR —
+    // não faz sentido perguntar "Encerrar o chat?" para uma conversa que ainda
+    // não começou.
+    if (state.status === "waiting") {
+      confirmMode = "invite";
+      applyConfirmCopy();
+      if (els.confirm) els.confirm.hidden = false;
+      return;
+    }
+
     if (state.status === "ended" || state.status === "none") {
       finishClose();
       return;
     }
-    els.confirm.hidden = false;
+
+    confirmMode = "end";
+    applyConfirmCopy();
+    if (els.confirm) els.confirm.hidden = false;
+  }
+
+  function applyConfirmCopy() {
+    if (confirmMode === "invite") {
+      if (els.confirmTitle) els.confirmTitle.textContent = "Recusar o convite?";
+      if (els.confirmText) {
+        els.confirmText.textContent =
+          "O chat ainda não começou. Recusar avisa o suporte de que você não pode atender agora.";
+      }
+      if (els.confirmOk) els.confirmOk.textContent = "Recusar convite";
+      if (els.confirmCancel) els.confirmCancel.textContent = "Aceitar e conversar";
+      return;
+    }
+
+    if (els.confirmTitle) els.confirmTitle.textContent = "Encerrar o chat?";
+    if (els.confirmText) {
+      els.confirmText.textContent =
+        "A janela só fecha quando a conversa termina. Ao encerrar, o suporte é avisado e o histórico fica disponível no chamado.";
+    }
+    if (els.confirmOk) els.confirmOk.textContent = "Encerrar chat";
+    if (els.confirmCancel) els.confirmCancel.textContent = "Continuar conversando";
   }
 
   function finishClose() {
@@ -443,18 +489,31 @@
 
   // ── Wiring ───────────────────────────────────────────────────────────────
 
-  function wireEvents() {
-    els.send.addEventListener("click", send);
+  /**
+   * Registra um listener só se o elemento existir.
+   *
+   * Antes, um único id ausente (ex.: build antigo sem o modal de convite)
+   * lançava no meio do wiring e os listeners seguintes nunca eram registrados —
+   * o botão "Continuar conversando" ficava inerte.
+   */
+  function on(el, event, handler) {
+    if (el && typeof el.addEventListener === "function") {
+      el.addEventListener(event, handler);
+    }
+  }
 
-    els.input.addEventListener("keydown", function (event) {
+  function wireEvents() {
+    on(els.send, "click", send);
+
+    on(els.input, "keydown", function (event) {
       if (event.key === "Enter" && !event.shiftKey) {
         event.preventDefault();
         send();
       }
     });
 
-    els.attach.addEventListener("click", function () { els.fileInput.click(); });
-    els.fileInput.addEventListener("change", function () {
+    on(els.attach, "click", function () { if (els.fileInput) els.fileInput.click(); });
+    on(els.fileInput, "change", function () {
       attachFiles(els.fileInput.files);
       els.fileInput.value = "";
     });
@@ -474,15 +533,28 @@
       });
     });
 
-    els.inviteAccept.addEventListener("click", function () { respondInvite(true); });
-    els.inviteReject.addEventListener("click", function () { respondInvite(false); });
+    on(els.inviteAccept, "click", function () { respondInvite(true); });
+    on(els.inviteReject, "click", function () { respondInvite(false); });
 
-    els.end.addEventListener("click", askClose);
-    els.confirmOk.addEventListener("click", function () {
+    on(els.end, "click", askClose);
+
+    // O mesmo modal serve para "recusar convite" (confirmMode = invite) e para
+    // "encerrar chat" (confirmMode = end).
+    on(els.confirmOk, "click", function () {
       els.confirm.hidden = true;
+      if (confirmMode === "invite") {
+        respondInvite(false);
+        return;
+      }
       finishClose();
     });
-    els.confirmCancel.addEventListener("click", function () { els.confirm.hidden = true; });
+
+    on(els.confirmCancel, "click", function () {
+      els.confirm.hidden = true;
+      if (confirmMode === "invite") {
+        respondInvite(true);
+      }
+    });
   }
 
   function wireRealtime() {

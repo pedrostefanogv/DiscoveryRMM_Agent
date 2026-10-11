@@ -22,8 +22,6 @@ const (
 	requestTimeout = 30 * time.Second
 	// seenClientIDsLimit limita o mapa de deduplicação em memória.
 	seenClientIDsLimit = 256
-	// supportChatAckWait é o AckWait do consumer durável do canal servidor -> agent.
-	supportChatAckWait = 30 * time.Second
 )
 
 // Deps são as dependências injetadas pelo App.
@@ -48,7 +46,6 @@ type Service struct {
 
 	natsMu     sync.Mutex
 	nc         *nats.Conn
-	serverSub  *nats.Subscription
 	serverSubj string
 	agentSubj  string
 	natsReady  bool
@@ -107,8 +104,16 @@ func (s *Service) emitError(message string) {
 
 // ── Ciclo de vida NATS ──────────────────────────────────────────────────────
 
-// OnNATSConnected monta os subjects e assina o canal servidor -> agent com
-// consumer JetStream durável (fallback core NATS com log explícito do risco).
+// OnNATSConnected registra a conexão e os subjects do chat.
+//
+// NÃO assina o canal servidor -> agent: a assinatura (consumer JetStream
+// durável) é responsabilidade do agentconn, que é o dono das subscriptions.
+//
+// BUG CORRIGIDO: existiam DUAS assinaturas — esta e a do agentconn — com o
+// mesmo durable. O broker responde "consumer is already bound to a
+// subscription", o agent caía para core NATS sem replay e cada mensagem era
+// processada duas vezes (o serviço chegava a emitir "session-ended" em
+// duplicidade).
 func (s *Service) OnNATSConnected(nc *nats.Conn, clientID, siteID, agentID string) {
 	if nc == nil {
 		return
@@ -127,71 +132,20 @@ func (s *Service) OnNATSConnected(nc *nats.Conn, clientID, siteID, agentID strin
 	agentSubject := prefix + ".supportchat.agent"
 
 	s.natsMu.Lock()
-	if s.serverSub != nil {
-		_ = s.serverSub.Unsubscribe()
-		s.serverSub = nil
-	}
 	s.nc = nc
 	s.serverSubj = serverSubject
 	s.agentSubj = agentSubject
 	s.natsReady = true
 	s.natsMu.Unlock()
 
-	handler := func(msg *nats.Msg) {
-		err := s.HandleEnvelope(msg.Data)
-		if msg.Reply != "" {
-			if err != nil {
-				_ = msg.Nak()
-			} else {
-				_ = msg.Ack()
-			}
-		}
-	}
-
-	durable := "agent-" + strings.ReplaceAll(strings.ToLower(agentID), "-", "")
-	if len(durable) > 80 {
-		durable = durable[:80]
-	}
-	durable += "-supportchat"
-
-	if js, err := nc.JetStream(); err == nil {
-		sub, subErr := js.Subscribe(serverSubject, handler,
-			nats.Durable(durable),
-			nats.ManualAck(),
-			nats.AckExplicit(),
-			nats.AckWait(supportChatAckWait),
-			nats.DeliverAll(),
-			nats.MaxAckPending(64),
-		)
-		if subErr == nil {
-			s.natsMu.Lock()
-			s.serverSub = sub
-			s.natsMu.Unlock()
-			s.deps.Logf("[supportchat][jetstream] replay ativo durable=" + durable)
-			s.emitState("nats-connected-jetstream")
-			return
-		}
-		s.deps.Logf(fmt.Sprintf("[supportchat][jetstream] indisponivel (fallback core, SEM replay): %v", subErr))
-	} else {
-		s.deps.Logf(fmt.Sprintf("[supportchat][jetstream] indisponivel (fallback core, SEM replay): %v", err))
-	}
-
-	if sub, err := nc.Subscribe(serverSubject, handler); err != nil {
-		s.deps.Logf("[supportchat] falha ao assinar canal core: " + err.Error())
-	} else {
-		s.natsMu.Lock()
-		s.serverSub = sub
-		s.natsMu.Unlock()
-	}
-
-	s.emitState("nats-connected-core")
+	s.deps.Logf("[supportchat] conexão NATS registrada (assinatura do canal é do agentconn)")
+	s.emitState("nats-connected")
 }
 
 // OnNATSDisconnected limpa a conexão (a janela mostra o banner de reconexão).
 func (s *Service) OnNATSDisconnected() {
 	s.natsMu.Lock()
 	s.nc = nil
-	s.serverSub = nil
 	s.natsReady = false
 	s.natsMu.Unlock()
 

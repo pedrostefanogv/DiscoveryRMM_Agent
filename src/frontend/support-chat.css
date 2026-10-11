@@ -249,6 +249,12 @@
   padding: 20px;
 }
 
+/* O atributo `hidden` é sobrescrito por qualquer `display` do autor: sem esta
+   regra o UA não consegue esconder o overlay (os modais de convite e de
+   encerramento ficavam AMBOS visíveis, um cobrindo o outro, e
+   `el.hidden = true` não tinha efeito nenhum). */
+.sc-modal-overlay[hidden] { display: none; }
+
 .sc-modal {
   background: var(--surface);
   border: 1px solid var(--border);

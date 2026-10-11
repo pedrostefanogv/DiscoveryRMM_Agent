@@ -248,19 +248,36 @@ func (r *Runtime) subscribeSupportChat(nc *nats.Conn, subjects natsSubjects) err
 		}
 		durable += "-supportchat"
 
-		if _, subErr := js.Subscribe(subjects.SupportChatServer, handler,
-			nats.Durable(durable),
-			nats.ManualAck(),
-			nats.AckExplicit(),
-			nats.AckWait(30*time.Second),
-			nats.DeliverAll(),
-			nats.MaxAckPending(64),
-		); subErr == nil {
-			r.logf("[supportchat][jetstream] canal servidor->agent com replay ativo subject=%s durable=%s", subjects.SupportChatServer, durable)
-			return nil
-		} else {
-			r.logf("[supportchat][jetstream] indisponivel (fallback core, SEM replay): %v", subErr)
+		// Retry curto: numa reconexão o broker pode ainda considerar o consumer
+		// durável "preso" à conexão anterior ("consumer is already bound to a
+		// subscription"). Sem o retry o agent degradava para core NATS (SEM
+		// replay) logo no primeiro reconectar — perdendo a durabilidade.
+		const subscribeAttempts = 3
+		var subErr error
+
+		for attempt := 1; attempt <= subscribeAttempts; attempt++ {
+			_, subErr = js.Subscribe(subjects.SupportChatServer, handler,
+				nats.Durable(durable),
+				nats.ManualAck(),
+				nats.AckExplicit(),
+				nats.AckWait(30*time.Second),
+				nats.DeliverAll(),
+				nats.MaxAckPending(64),
+			)
+			if subErr == nil {
+				r.logf("[supportchat][jetstream] canal servidor->agent com replay ativo subject=%s durable=%s", subjects.SupportChatServer, durable)
+				return nil
+			}
+
+			if !strings.Contains(subErr.Error(), "already bound") || attempt == subscribeAttempts {
+				break
+			}
+
+			r.logf("[supportchat][jetstream] durable ainda preso à conexao anterior (tentativa %d/%d): %v", attempt, subscribeAttempts, subErr)
+			time.Sleep(time.Duration(attempt) * 500 * time.Millisecond)
 		}
+
+		r.logf("[supportchat][jetstream] indisponivel (fallback core, SEM replay): %v", subErr)
 	} else {
 		r.logf("[supportchat][jetstream] indisponivel (fallback core, SEM replay): %v", err)
 	}
