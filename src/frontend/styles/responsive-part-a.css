@@ -706,8 +706,30 @@
   display: contents;
 }
 
-.ticket-extra-fields select[multiple] {
-  min-height: 68px;
+/* ListBox com opções: os mesmos checkboxes que a tela do chamado do site usa,
+   para o mesmo campo ter o mesmo controle no agent e no site. */
+.ticket-checkbox-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.ticket-checkbox-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9rem;
+  color: var(--text);
+}
+
+.ticket-checkbox-option input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
 }
 
 .support-header-count {

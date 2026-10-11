@@ -1104,8 +1104,15 @@ function buildTemplateFieldControl(item, idAttr) {
   var maskAttr = (item && item.inputMask)
     ? ' data-input-mask="' + escapeHtmlAttr(item.inputMask) + '"'
     : '';
+  // Exemplo visual da máscara dentro do controle (mesmo do site).
+  var maskExample = fieldMaskPlaceholder(item && item.inputMask);
+  var maskPlaceholderAttr = maskExample
+    ? ' placeholder="' + escapeHtmlAttr(maskExample) + '"'
+    : '';
 
-  if (dataType === 'Dropdown' && options.length) {
+  // Dropdown é SEMPRE select (com ou sem opções), igual ao site: com a lista
+  // vazia ele mostra só o placeholder em vez de virar um campo de texto.
+  if (dataType === 'Dropdown') {
     var selectHtml = '<select id="' + idAttr + '"' + (required ? ' required' : '') + '><option value="">' + escapeHtml(translate('support.select')) + '</option>';
     options.forEach(function (o) {
       selectHtml += '<option value="' + escapeHtmlAttr(o) + '">' + escapeHtml(o) + '</option>';
@@ -1113,11 +1120,19 @@ function buildTemplateFieldControl(item, idAttr) {
     return selectHtml + '</select>';
   }
   if (dataType === 'ListBox') {
-    var listHtml = '<select id="' + idAttr + '" multiple size="' + Math.min(5, Math.max(2, options.length || 2)) + '"' + (required ? ' required' : '') + '>';
+    // Mesma UI do site: com opções cadastradas vira checkboxes; sem opções,
+    // texto separado por vírgula. (Antes o agent usava <select multiple>, que
+    // escondia a seleção e divergia da tela do chamado.)
+    if (!options.length) {
+      return '<textarea id="' + idAttr + '" rows="2"></textarea>';
+    }
+    var groupHtml = '<div class="ticket-checkbox-group" id="' + idAttr + '" role="group"' +
+      ' aria-label="' + escapeHtmlAttr(item.label || item.name || '') + '"' +
+      (required ? ' aria-required="true"' : '') + '>';
     options.forEach(function (o) {
-      listHtml += '<option value="' + escapeHtmlAttr(o) + '">' + escapeHtml(o) + '</option>';
+      groupHtml += listBoxOptionHtml(o, false);
     });
-    return listHtml + '</select>';
+    return groupHtml + '</div>';
   }
   if (dataType === 'Boolean') {
     return '<select id="' + idAttr + '"' + (required ? ' required' : '') + '>' +
@@ -1131,17 +1146,31 @@ function buildTemplateFieldControl(item, idAttr) {
     : '';
   if (dataType === 'Integer') {
     return numberMask
-      ? '<input id="' + idAttr + '" type="text" inputmode="numeric"' + numberMask + ' data-number-type="Integer"' + (required ? ' required' : '') + ' />'
+      ? '<input id="' + idAttr + '" type="text" inputmode="numeric"' + numberMask + ' data-number-type="Integer"' + maskPlaceholderAttr + (required ? ' required' : '') + ' />'
       : '<input id="' + idAttr + '" type="number" step="1"' + bounds + (required ? ' required' : '') + ' />';
   }
   if (dataType === 'Decimal') {
     return numberMask
-      ? '<input id="' + idAttr + '" type="text" inputmode="decimal"' + numberMask + ' data-number-type="Decimal"' + (required ? ' required' : '') + ' />'
-      : '<input id="' + idAttr + '" type="number" step="0.01"' + bounds + (required ? ' required' : '') + ' />';
+      ? '<input id="' + idAttr + '" type="text" inputmode="decimal"' + numberMask + ' data-number-type="Decimal"' + maskPlaceholderAttr + (required ? ' required' : '') + ' />'
+      // step="any" igual ao site: o servidor valida os limites, o controle não
+      // deve recusar decimais com mais casas.
+      : '<input id="' + idAttr + '" type="number" step="any"' + bounds + (required ? ' required' : '') + ' />';
   }
   if (dataType === 'Date') return '<input id="' + idAttr + '" type="date"' + (required ? ' required' : '') + ' />';
   if (dataType === 'DateTime') return '<input id="' + idAttr + '" type="datetime-local"' + (required ? ' required' : '') + ' />';
-  return '<input id="' + idAttr + '" type="text"' + lengths + maskAttr + (required ? ' required' : '') + ' />';
+  return '<input id="' + idAttr + '" type="text"' + lengths + maskAttr + maskPlaceholderAttr + (required ? ' required' : '') + ' />';
+}
+
+// HTML interno de uma opção de ListBox (checkbox + rótulo + marcação de valor
+// legado). Compartilhado pelo render e pelo preenchimento de valores antigos.
+function listBoxOptionInnerHtml(option, legacy) {
+  return '<input type="checkbox" value="' + escapeHtmlAttr(option) + '" />' +
+    '<span>' + escapeHtml(option) + '</span>' +
+    (legacy ? '<span class="meta">' + escapeHtml(translate('support.currentValue')) + '</span>' : '');
+}
+
+function listBoxOptionHtml(option, legacy) {
+  return '<label class="ticket-checkbox-option">' + listBoxOptionInnerHtml(option, legacy) + '</label>';
 }
 
 // Campos em si: cada item sai como .form-field puro — sem caixa, sem recuo e
@@ -1156,14 +1185,22 @@ function renderTemplateFields(prefix, items) {
     if (!key) return;
     var idAttr = templateInputId(prefix, key);
     var label = item.label || item.name || key;
+    var isListBox = String(item.dataType || '') === 'ListBox';
+    var hasOptions = Array.isArray(item.options) && item.options.length > 0;
     var formatHint = describeFieldFormat({
       inputMask: item.inputMask,
       validationRegex: item.validationRegex,
       helpText: item.helpText,
       description: item.description
     });
+    // Grupo de checkboxes não é "labelável": o rótulo fica só ao lado do grupo
+    // (igual ao site) e o texto de ajuda padrão orienta a seleção.
+    if (!formatHint && isListBox) {
+      formatHint = translate(hasOptions ? 'support.selectOneOrMore' : 'support.commaSeparatedValues');
+    }
+    var labelFor = (!isListBox || !hasOptions) ? ' for="' + idAttr + '"' : '';
     html += '<div class="form-field">' +
-      '<label for="' + idAttr + '">' + escapeHtml(label) + (item.isRequired ? ' *' : '') + '</label>' +
+      '<label' + labelFor + '>' + escapeHtml(label) + (item.isRequired ? ' *' : '') + '</label>' +
       buildTemplateFieldControl(item, idAttr) +
       (formatHint ? '<div class="meta">' + escapeHtml(formatHint) + '</div>' : '') +
       '</div>';
@@ -1211,9 +1248,36 @@ function setTemplateControlValue(idAttr, dataType, value) {
   if (!el || value === null || value === undefined) return;
   if (dataType === 'ListBox') {
     var wanted = Array.isArray(value) ? value.map(String) : [String(value)];
-    for (var i = 0; i < el.options.length; i++) {
-      el.options[i].selected = wanted.indexOf(el.options[i].value) >= 0;
+    // Grupo de checkboxes identificado pela classe: textarea também tem
+    // querySelectorAll e não pode entrar aqui (o valor seria perdido e os
+    // labels cairiam dentro do textarea).
+    if (el.classList && el.classList.contains('ticket-checkbox-group')) {
+      var boxes = el.querySelectorAll('input[type="checkbox"]');
+      var found = {};
+      for (var b = 0; b < boxes.length; b++) {
+        boxes[b].checked = wanted.indexOf(boxes[b].value) >= 0;
+        found[boxes[b].value] = true;
+      }
+      // Valor que não está mais cadastrado continua selecionável como
+      // "(valor atual)" — mesmo comportamento do site.
+      wanted.forEach(function (option) {
+        if (found[option]) return;
+        var label = document.createElement('label');
+        label.className = 'ticket-checkbox-option';
+        label.innerHTML = listBoxOptionInnerHtml(option, true);
+        el.appendChild(label);
+        var input = label.querySelector('input[type="checkbox"]');
+        if (input) input.checked = true;
+      });
+      return;
     }
+    if (el.tagName === 'SELECT') {
+      for (var i = 0; i < el.options.length; i++) {
+        el.options[i].selected = wanted.indexOf(el.options[i].value) >= 0;
+      }
+      return;
+    }
+    el.value = wanted.join(', ');
     return;
   }
   if (dataType === 'Boolean') {
@@ -1385,6 +1449,21 @@ function readTemplateControlValue(idAttr, dataType) {
   var el = document.getElementById(idAttr);
   if (!el) return undefined;
   if (dataType === 'ListBox') {
+    // Com opções o controle é um grupo de checkboxes; sem opções é textarea
+    // (valores separados por vírgula) — mesma regra do site.
+    if (el.classList && el.classList.contains('ticket-checkbox-group')) {
+      var checked = [];
+      var boxes = el.querySelectorAll('input[type="checkbox"]');
+      for (var b = 0; b < boxes.length; b++) {
+        if (boxes[b].checked) checked.push(boxes[b].value);
+      }
+      return checked.length ? checked : undefined;
+    }
+    if (el.tagName !== 'SELECT') {
+      var text = String(el.value || '').trim();
+      if (!text) return undefined;
+      return text.split(',').map(function (part) { return part.trim(); }).filter(Boolean);
+    }
     var selected = [];
     for (var i = 0; i < el.options.length; i++) {
       if (el.options[i].selected) selected.push(el.options[i].value);
