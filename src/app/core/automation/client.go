@@ -244,14 +244,26 @@ func (c *Client) GetRuntimeCustomFields(ctx context.Context, cfg RuntimeConfig, 
 		return nil, fmt.Errorf("runtime custom fields retornou status %d", resp.StatusCode)
 	}
 
+	// Contrato canônico: array de RuntimeCustomField. A API já respondeu também
+	// {"fields":[...]}; aceitamos as duas formas para que uma divergência de
+	// contrato nunca vire "nenhum campo" silencioso (era o que travava o MDZ_COLLECT).
 	var result []RuntimeCustomField
 	if err := json.Unmarshal(body, &result); err != nil {
-		// Backend pode retornar um objeto vazio ({}) quando não há custom fields,
-		// em vez de um array vazio ([]). Tratamos como slice vazio.
-		if strings.Contains(err.Error(), "cannot unmarshal object into Go value of type []") {
-			return []RuntimeCustomField{}, nil
+		var wrapper struct {
+			Fields []RuntimeCustomField `json:"fields"`
 		}
-		return nil, fmt.Errorf("falha ao decodificar runtime custom fields: %w", err)
+		if wrapperErr := json.Unmarshal(body, &wrapper); wrapperErr != nil {
+			return nil, fmt.Errorf("falha ao decodificar runtime custom fields: %w", err)
+		}
+		result = wrapper.Fields
+		if result == nil {
+			result = []RuntimeCustomField{}
+		}
+	}
+
+	// Normaliza valueJson (string JSON duplamente codificada vira JSON bruto).
+	for index := range result {
+		result[index].ValueJson = normalizeRuntimeValueJSON(result[index].ValueJson)
 	}
 	return result, nil
 }

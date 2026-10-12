@@ -3,6 +3,8 @@ package automation
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
 )
 
 type AppApprovalScopeType string
@@ -333,6 +335,66 @@ const (
 	FieldScopeSite   FieldScopeType = 2
 	FieldScopeAgent  FieldScopeType = 3
 )
+
+// UnmarshalJSON aceita o escopo tanto como número (contrato canônico consumido
+// pelo agent) quanto como string ("Agent"), formato que a API já devolveu por
+// causa do JsonStringEnumConverter global. Sem isto, a resposta inteira era
+// descartada como "lista vazia".
+func (s *FieldScopeType) UnmarshalJSON(data []byte) error {
+	trimmed := strings.TrimSpace(string(data))
+	if trimmed == "" || trimmed == "null" {
+		*s = FieldScopeServer
+		return nil
+	}
+
+	if trimmed[0] == '"' {
+		var name string
+		if err := json.Unmarshal(data, &name); err != nil {
+			return err
+		}
+		switch strings.ToLower(strings.TrimSpace(name)) {
+		case "server":
+			*s = FieldScopeServer
+		case "client":
+			*s = FieldScopeClient
+		case "site":
+			*s = FieldScopeSite
+		case "agent":
+			*s = FieldScopeAgent
+		default:
+			return fmt.Errorf("scopeType desconhecido: %q", name)
+		}
+		return nil
+	}
+
+	var numeric int
+	if err := json.Unmarshal(data, &numeric); err != nil {
+		return err
+	}
+	*s = FieldScopeType(numeric)
+	return nil
+}
+
+// normalizeRuntimeValueJSON aceita valueJson como JSON bruto (canônico) ou como
+// string JSON duplamente codificada (formato antigo da API) e devolve o JSON bruto.
+func normalizeRuntimeValueJSON(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 {
+		return raw
+	}
+
+	var asString string
+	if err := json.Unmarshal(raw, &asString); err != nil {
+		return raw // já é JSON não-string (número, booleano, objeto...)
+	}
+
+	trimmed := strings.TrimSpace(asString)
+	// Só desembrulha quando o conteúdo é claramente JSON estrutural (string/objeto/
+	// array). "42" ou "true" como valor legítimo de texto NÃO pode virar número/bool.
+	if trimmed != "" && (trimmed[0] == '"' || trimmed[0] == '{' || trimmed[0] == '[') && json.Valid([]byte(trimmed)) {
+		return json.RawMessage(trimmed)
+	}
+	return raw
+}
 
 // RuntimeCustomField representa um custom field retornado pelo endpoint de runtime.
 // ValueJson é armazenado como json.RawMessage para suportar qualquer tipo JSON.
