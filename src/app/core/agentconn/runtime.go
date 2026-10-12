@@ -295,6 +295,63 @@ type Options struct {
 	ListDueCommandResultOutbox    func(transport string, now time.Time, limit int) ([]CommandResultOutboxItem, error)
 	MarkSentCommandResultOutbox   func(id int64) error
 	RescheduleCommandResultOutbox func(id int64, attempts int, nextAttemptAt time.Time, lastError string) error
+
+	// LoadCommandDedupe devolve as chaves de dedupe de comando persistidas
+	// (gravadas por PersistCommandDedupe) que ainda estão vigentes. Opcional:
+	// quando nil o dedupe continua apenas em memória — e um reboot no meio de
+	// um comando de energia apaga o histórico (ver CommandDedupeEntry).
+	LoadCommandDedupe func() []CommandDedupeEntry
+	// PersistCommandDedupe grava/renova uma entrada de dedupe de comando.
+	// Opcional. Só chaves de comando endereçado a UM agente são persistidas.
+	PersistCommandDedupe func(CommandDedupeEntry) error
+}
+
+// CommandDedupeEntry é uma entrada do dedupe de comandos do agent pronta para
+// ser persistida entre execuções do processo.
+//
+// Motivo: um comando de energia (restart/shutdown) reinicia a máquina no meio
+// da execução. O dedupe em memória morre junto com o processo, então a
+// reentrega do servidor (PendingCommandRedeliveryService, janela de 24h)
+// reexecutava o reboot a cada reentrega — loop de reinício observado em
+// produção (54 reboots em ~5h por um único comando). Persistir a chave com o
+// mesmo TTL de 24h fecha esse ciclo mesmo se o result não chegar ao servidor.
+type CommandDedupeEntry struct {
+	Key       string
+	ExpiresAt time.Time
+	Result    *CommandResultSnapshot
+}
+
+// CommandResultSnapshot é o resultado já publicado de um comando, guardado no
+// dedupe persistido para ser republicado numa reentrega SEM reexecutar.
+type CommandResultSnapshot struct {
+	DispatchID   string
+	CommandID    string
+	AgentID      string
+	ExitCode     int
+	Output       string
+	ErrorMessage string
+}
+
+func (s CommandResultSnapshot) toEnvelope() natsResultEnvelope {
+	return natsResultEnvelope{
+		DispatchID:   s.DispatchID,
+		CommandID:    s.CommandID,
+		AgentID:      s.AgentID,
+		ExitCode:     s.ExitCode,
+		Output:       s.Output,
+		ErrorMessage: s.ErrorMessage,
+	}
+}
+
+func resultSnapshotFromEnvelope(env natsResultEnvelope) *CommandResultSnapshot {
+	return &CommandResultSnapshot{
+		DispatchID:   env.DispatchID,
+		CommandID:    env.CommandID,
+		AgentID:      env.AgentID,
+		ExitCode:     env.ExitCode,
+		Output:       env.Output,
+		ErrorMessage: env.ErrorMessage,
+	}
 }
 
 type CommandResultOutboxItem struct {
@@ -334,6 +391,10 @@ type Runtime struct {
 
 	dedupeMu     sync.Mutex
 	fanoutDedupe map[string]fanoutDedupeRecord
+	// dedupeLoaded garante uma única leitura do dedupe persistido (lazy, na
+	// primeira mensagem): o carregamento depende do banco local, que sobe
+	// depois do Runtime em modo serviço.
+	dedupeLoaded bool
 
 	// forceHeartbeatCh is a channel used by ForceHeartbeat() to trigger
 	// an immediate heartbeat send in the active connection event loop.

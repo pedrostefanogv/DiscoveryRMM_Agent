@@ -9,8 +9,8 @@ import (
 
 func resolvePSADTWelcomeOptions(task AutomationTask) psadtWelcomeOptions {
 	// Defaults do contrato: usuario pode adiar e a acao padrao (timeout) e
-	// continuar. Os campos da task vem do policy-sync (server novo); o payload
-	// (CommandPayload/metadata do script) continua podendo sobrescrever tudo.
+	// continuar. Os campos da task vem do policy-sync (server novo); o
+	// CommandPayload da tarefa continua podendo sobrescrever tudo.
 	allowDefer := true
 	if task.AllowDefer != nil {
 		allowDefer = *task.AllowDefer
@@ -65,9 +65,6 @@ func resolvePSADTWelcomeOptions(task AutomationTask) psadtWelcomeOptions {
 	}
 
 	applyPayload(task.CommandPayload)
-	if task.Script != nil {
-		applyPayload(task.Script.MetadataJSON)
-	}
 
 	if options.DeferTimes <= 0 {
 		options.DeferTimes = defaultDeferTimes

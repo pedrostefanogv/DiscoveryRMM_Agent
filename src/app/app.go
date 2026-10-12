@@ -134,6 +134,9 @@ type App struct {
 	supportChatAllowClose *atomic.Bool
 	// logStore é o banco unificado de logs do processo (nil quando indisponível).
 	logStore *logstore.Store
+	// commandDedupe é o dedupe persistido de comandos (sobrevive ao reboot no
+	// meio de um restart/shutdown — ver command_dedupe_store.go).
+	commandDedupe *commandDedupeStore
 
 	// ── Captura de tela assistida (chat IA) ──
 	// screenshotConsent controla a autorização do usuário; screenshotMu/
@@ -318,6 +321,7 @@ func NewApp(opts AppStartupOptions) *App {
 		trayIcon:            opts.TrayIcon,
 		trayProvisioning:    opts.TrayProvisioningIcon,
 		trayOffline:         opts.TrayOfflineIcon,
+		commandDedupe:       newCommandDedupeStore(),
 	}
 	a.RuntimeFlags = coreagent.RuntimeFlags{DebugMode: opts.DebugMode, ServiceMode: opts.ServiceMode}
 	// Campos do core (migração lote 1 — embed coreagent.CoreAgent).
@@ -732,6 +736,8 @@ func NewApp(opts AppStartupOptions) *App {
 		ListDueCommandResultOutbox:    a.listDueCommandResultOutbox,
 		MarkSentCommandResultOutbox:   a.markSentCommandResultOutbox,
 		RescheduleCommandResultOutbox: a.rescheduleCommandResultOutbox,
+		LoadCommandDedupe:             a.loadCommandDedupe,
+		PersistCommandDedupe:          a.persistCommandDedupe,
 	})
 	a.DebugSvc = debug.NewService(debug.Options{
 		Logf: func(line string) {

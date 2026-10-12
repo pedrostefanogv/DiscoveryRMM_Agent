@@ -379,7 +379,49 @@ func (r *Runtime) natsCommandHandler(ctx context.Context, nc *nats.Conn, cfg Con
 }
 
 func (r *Runtime) executeAndPublishNATSCommand(ctx context.Context, nc *nats.Conn, cfg Config, subjects natsSubjects, env natsCommandEnvelope, msg *nats.Msg, requiresAck bool, dedupeKey string) {
-	exitCode, output, errText := r.executeCommand(ctx, normalizeCommandType(env.CommandType), env.Payload)
+	cmdType := normalizeCommandType(env.CommandType)
+
+	// ── Comandos de energia: confirmar ANTES de executar ──
+	//
+	// Restart/shutdown reiniciam a máquina no meio da execução: o handler nunca
+	// retorna, o result abaixo jamais é publicado e o ack nunca é dado. O
+	// servidor então reentrega o comando a cada ~5 min por até 24 h
+	// (PendingCommandRedeliveryService) e a máquina reinicia a cada reentrega —
+	// loop de reinício observado em produção (54 reboots em ~5 h por um único
+	// comando). Confirmando antes, o comando sai da fila de reentrega.
+	//
+	// Se o reboot NÃO acontecer (PSADT indisponível, usuário adiou, etc.), o
+	// handler retorna e o resultado final publicado logo abaixo corrige o
+	// estado no servidor.
+	earlyConfirmed := false
+	if isPowerActionWireType(cmdType) {
+		confirmation := natsResultEnvelope{
+			DispatchID: env.DispatchID,
+			CommandID:  env.CommandID,
+			AgentID:    strings.TrimSpace(cfg.AgentID),
+			ExitCode:   0,
+			Output:     fmt.Sprintf("comando de energia aceito pelo agente (tipo=%s); acao agendada — confirmacao antecipada para evitar reentrega apos o reboot", cmdType),
+		}
+		if dedupeKey != "" {
+			r.completeFanoutDispatch(dedupeKey, confirmation)
+		}
+		if err := publishJSONResult(nc, subjects.Result, confirmation); err != nil {
+			// Sem confirmacao publicada NAO adianta ackar: deixar a mensagem
+			// pendente permite a reentrega e o result final ainda sai.
+			r.logf("falha ao publicar confirmacao antecipada do comando de energia (cmdId=%s): %v", env.CommandID, err)
+			r.enqueueCommandResultOutbox("nats", env.DispatchID, env.CommandID, confirmation.ExitCode, confirmation.Output, "", err)
+		} else {
+			if requiresAck {
+				if err := ackNATSMessage(msg); err != nil {
+					r.logf("falha ao ack antecipado do comando de energia (cmdId=%s): %v", env.CommandID, err)
+				}
+			}
+			earlyConfirmed = true
+			r.logf("power-action confirmado antes da execucao (result+ack) cmdId=%s tipo=%s — evita reentrega apos o reboot", env.CommandID, cmdType)
+		}
+	}
+
+	exitCode, output, errText := r.executeCommand(ctx, cmdType, env.Payload)
 	if len(output) > maxOutputBytes {
 		output = output[:maxOutputBytes] + "\n... output truncado ..."
 	}
@@ -401,7 +443,7 @@ func (r *Runtime) executeAndPublishNATSCommand(ctx context.Context, nc *nats.Con
 		r.enqueueCommandResultOutbox("nats", env.DispatchID, env.CommandID, exitCode, output, errText, err)
 		return
 	}
-	if requiresAck {
+	if requiresAck && !earlyConfirmed {
 		if err := ackNATSMessage(msg); err != nil {
 			r.logf("falha ao ack do comando fan-out dispatchId=%s commandId=%s: %v", env.DispatchID, env.CommandID, err)
 			return
@@ -499,6 +541,10 @@ func fanoutDedupeKey(env natsCommandEnvelope) string {
 	return strings.ToLower(strings.TrimSpace(env.IdempotencyKey)) + "|" + strings.ToLower(strings.TrimSpace(env.DispatchID))
 }
 
+// agentCommandDedupePrefix marca as chaves de dedupe de comando endereçado a
+// UM agente — as únicas persistidas entre reboots (ver persistCommandDedupe).
+const agentCommandDedupePrefix = "agent-cmd:"
+
 // agentCommandDedupeKey identifica um comando endereçado a um único agente.
 // Retorna "" quando o envelope não traz CommandId (nada a deduplicar).
 func agentCommandDedupeKey(env natsCommandEnvelope) string {
@@ -506,7 +552,7 @@ func agentCommandDedupeKey(env natsCommandEnvelope) string {
 	if commandID == "" {
 		return ""
 	}
-	return "agent-cmd:" + commandID
+	return agentCommandDedupePrefix + commandID
 }
 
 func fanoutDedupeTTL(expiresAt *time.Time, now time.Time) time.Duration {
@@ -533,7 +579,7 @@ func (r *Runtime) reserveFanoutDispatch(dedupeKey string, ttl time.Duration) (*n
 	now := time.Now().UTC()
 
 	r.dedupeMu.Lock()
-	defer r.dedupeMu.Unlock()
+	r.ensureDedupeLoadedLocked(now)
 
 	for key, entry := range r.fanoutDedupe {
 		if !entry.ExpiresAt.After(now) {
@@ -544,13 +590,74 @@ func (r *Runtime) reserveFanoutDispatch(dedupeKey string, ttl time.Duration) (*n
 	if existing, ok := r.fanoutDedupe[dedupeKey]; ok {
 		if existing.Result != nil {
 			copyResult := *existing.Result
+			r.dedupeMu.Unlock()
 			return &copyResult, false
 		}
+		r.dedupeMu.Unlock()
 		return nil, false
 	}
 
-	r.fanoutDedupe[dedupeKey] = fanoutDedupeRecord{ExpiresAt: now.Add(ttl)}
+	expiresAt := now.Add(ttl)
+	r.fanoutDedupe[dedupeKey] = fanoutDedupeRecord{ExpiresAt: expiresAt}
+	r.dedupeMu.Unlock()
+
+	// Persiste a reserva: se o processo morrer no meio (reboot do comando de
+	// energia), o próximo boot ainda reconhece o comando como já executado.
+	r.persistCommandDedupe(dedupeKey, expiresAt, nil)
 	return nil, true
+}
+
+// ensureDedupeLoadedLocked carrega (uma única vez) o dedupe persistido do
+// disco. Chamado com dedupeMu travado. Best-effort: falha de I/O não impede a
+// execução do comando — só mantém o dedupe em memória.
+func (r *Runtime) ensureDedupeLoadedLocked(now time.Time) {
+	if r.dedupeLoaded {
+		return
+	}
+	r.dedupeLoaded = true
+	if r.opts.LoadCommandDedupe == nil {
+		return
+	}
+
+	entries := r.opts.LoadCommandDedupe()
+	loaded := 0
+	for _, entry := range entries {
+		key := strings.TrimSpace(entry.Key)
+		if key == "" || !entry.ExpiresAt.After(now) {
+			continue
+		}
+		record := fanoutDedupeRecord{ExpiresAt: entry.ExpiresAt.UTC()}
+		if entry.Result != nil {
+			envelope := entry.Result.toEnvelope()
+			record.Result = &envelope
+		}
+		r.fanoutDedupe[key] = record
+		loaded++
+	}
+	if loaded > 0 {
+		r.logf("[agent] dedupe de comandos restaurado do disco: %d entrada(s) (reentrega apos reboot nao reexecuta)", loaded)
+	}
+}
+
+// persistCommandDedupe grava uma entrada de dedupe, quando o app injetou o
+// hook. Só comandos endereçados a UM agente (prefixo "agent-cmd:") são
+// persistidos: são os que a reentrega do servidor repete por CommandId após o
+// reboot. Artifacts de fan-out continuam só em memória/JetStream.
+func (r *Runtime) persistCommandDedupe(dedupeKey string, expiresAt time.Time, result *natsResultEnvelope) {
+	if r.opts.PersistCommandDedupe == nil {
+		return
+	}
+	if !strings.HasPrefix(dedupeKey, agentCommandDedupePrefix) {
+		return
+	}
+
+	entry := CommandDedupeEntry{Key: dedupeKey, ExpiresAt: expiresAt.UTC()}
+	if result != nil {
+		entry.Result = resultSnapshotFromEnvelope(*result)
+	}
+	if err := r.opts.PersistCommandDedupe(entry); err != nil {
+		r.logf("falha ao persistir dedupe de comando cmd=%s: %v", dedupeKey, err)
+	}
 }
 
 func (r *Runtime) completeFanoutDispatch(dedupeKey string, result natsResultEnvelope) {
@@ -560,7 +667,7 @@ func (r *Runtime) completeFanoutDispatch(dedupeKey string, result natsResultEnve
 	now := time.Now().UTC()
 
 	r.dedupeMu.Lock()
-	defer r.dedupeMu.Unlock()
+	r.ensureDedupeLoadedLocked(now)
 
 	entry, ok := r.fanoutDedupe[dedupeKey]
 	if !ok {
@@ -572,6 +679,12 @@ func (r *Runtime) completeFanoutDispatch(dedupeKey string, result natsResultEnve
 	copyResult := result
 	entry.Result = &copyResult
 	r.fanoutDedupe[dedupeKey] = entry
+	expiresAt := entry.ExpiresAt
+	r.dedupeMu.Unlock()
+
+	// Persiste o resultado junto da chave: numa reentrega pós-reboot o agente
+	// republica esse result (em vez de reexecutar o comando) e consegue ackar.
+	r.persistCommandDedupe(dedupeKey, expiresAt, &result)
 }
 
 func ackNATSMessage(msg *nats.Msg) error {

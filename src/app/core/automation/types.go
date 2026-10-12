@@ -161,16 +161,14 @@ type AutomationTask struct {
 }
 
 type AutomationScript struct {
-	ScriptID             string               `json:"ScriptId"`
-	Name                 string               `json:"Name"`
-	Version              string               `json:"Version"`
-	Summary              string               `json:"Summary"`
-	ScriptType           AutomationScriptType `json:"ScriptType"`
-	LastUpdatedAt        string               `json:"LastUpdatedAt"`
-	ContentHashSHA256    string               `json:"ContentHashSha256"`
-	Content              string               `json:"Content,omitempty"`
-	ParametersSchemaJSON string               `json:"ParametersSchemaJson,omitempty"`
-	MetadataJSON         string               `json:"MetadataJson,omitempty"`
+	ScriptID          string               `json:"ScriptId"`
+	Name              string               `json:"Name"`
+	Version           string               `json:"Version"`
+	Summary           string               `json:"Summary"`
+	ScriptType        AutomationScriptType `json:"ScriptType"`
+	LastUpdatedAt     string               `json:"LastUpdatedAt"`
+	ContentHashSHA256 string               `json:"ContentHashSha256"`
+	Content           string               `json:"Content,omitempty"`
 }
 
 type RuntimeConfig struct {

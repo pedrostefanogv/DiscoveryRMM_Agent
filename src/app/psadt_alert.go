@@ -497,6 +497,18 @@ func (a *App) showPSADTFluentPowerCountdown(action string, delaySeconds int, mes
 		if result.Success || strings.Contains(result.Output, "RestartPrompt encerrado") {
 			return "handled"
 		}
+		// Falso negativo conhecido: o PSADT dispara o reboot e o processo e
+		// morto antes de imprimir o marcador — sobra exit=1 sem "RestartPrompt
+		// encerrado". O Windows inicia o encerramento poucos segundos depois,
+		// entao esperamos esse sinal antes de tratar como falha (sem isso o
+		// agente logava "PSADT indisponivel" e abria uma segunda notificacao de
+		// fallback com a maquina ja reiniciando).
+		if waitForSystemShutdown(powerRebootDetectTimeout) {
+			if a != nil {
+				a.Logs.Append(fmt.Sprintf("[agent] %s-action [OK-REBOOT] RestartPrompt encerrado pelo reboot em andamento (exit=%d) — reinicio entregue, sem fallback", action, result.ExitCode))
+			}
+			return "handled"
+		}
 		if a != nil {
 			a.Logs.Append(fmt.Sprintf("[agent] %s-action [WARN] RestartPrompt PSADT nao exibido (exit=%d): %s", action, result.ExitCode, strings.TrimSpace(result.Error)))
 		}

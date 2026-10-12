@@ -255,6 +255,12 @@ func (s *discoveryService) Execute(_ []string, r <-chan svc.ChangeRequest, chang
 				time.Sleep(100 * time.Millisecond)
 				changes <- status
 			case actionTeardownNow:
+				if c.Cmd == svc.PreShutdown || c.Cmd == svc.Shutdown {
+					// grace=0 (ou Shutdown legado): o encerramento do SO é
+					// imediato, mas o sinal continua valendo para o caminho de
+					// power action não tratar o reboot como falha do PSADT.
+					noteSystemShutdown()
+				}
 				log.Printf("[service] SCM %s recebido — encerrando imediatamente", svcCmdName(c.Cmd))
 				changes <- svc.Status{State: svc.StopPending, Accepts: cmdsAccepted}
 				return stopAndReturn("SCM " + svcCmdName(c.Cmd))
@@ -265,6 +271,9 @@ func (s *discoveryService) Execute(_ []string, r <-chan svc.ChangeRequest, chang
 					continue
 				}
 				stopPending = true
+				if c.Cmd == svc.PreShutdown || c.Cmd == svc.Shutdown {
+					noteSystemShutdown()
+				}
 				d := graceDurationFor(c.Cmd, graceSeconds)
 				log.Printf("[service] SCM %s recebido — grace de encerramento ativo por %s (remoto preservado)", svcCmdName(c.Cmd), d)
 				changes <- svc.Status{State: svc.StopPending, Accepts: cmdsAccepted, CheckPoint: checkPoint, WaitHint: uint32(d.Milliseconds())}

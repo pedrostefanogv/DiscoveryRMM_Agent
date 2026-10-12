@@ -138,6 +138,19 @@ func normalizeCommandType(raw any) string {
 	return strings.ToLower(strings.TrimSpace(toString(raw)))
 }
 
+// isPowerActionWireType identifica comandos de energia (restart/reboot/
+// shutdown) já no formato de wire. Espelha app/agentcommands.
+// IsPowerActionCommandType — a lista fica duplicada aqui de propósito para o
+// pacote core não depender da camada app.
+func isPowerActionWireType(cmdType string) bool {
+	switch normalizeCommandType(cmdType) {
+	case "restart", "reboot", "shutdown":
+		return true
+	default:
+		return false
+	}
+}
+
 func parseSyncPingArgs(raw any) (SyncPing, bool) {
 	arr, ok := raw.([]any)
 	if !ok || len(arr) == 0 {
