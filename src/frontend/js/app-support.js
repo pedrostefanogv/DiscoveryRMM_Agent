@@ -1805,7 +1805,14 @@ function initSupport() {
         payload.templateId = templateId;
         if (Object.keys(templateExtra.templateAnswers).length) payload.templateAnswers = templateExtra.templateAnswers;
       }
-      await appApi().CreateSupportTicket(payload);
+      var createdTicket = await appApi().CreateSupportTicket(payload);
+      // Anexos escolhidos na abertura sobem AGORA, para o chamado que acabou de
+      // ser criado (a API de anexos exige um ticketId existente).
+      if (newTicketAttachments.length && createdTicket && createdTicket.id) {
+        await uploadNewTicketAttachments(createdTicket.id);
+      }
+      newTicketAttachments = [];
+      renderNewTicketAttachments();
       showToast(translate('support.ticketCreatedSuccess'), 'success');
       supportFormEl.reset();
       clearTicketOpenFields();
@@ -1883,6 +1890,27 @@ function initSupport() {
   }
   if (commentScreenshotBtnEl) {
     commentScreenshotBtnEl.addEventListener('click', requestCommentScreenshot);
+  }
+  // Abertura de chamado: mesmos recursos de anexo/print do comentario.
+  if (newTicketAttachBtnEl && newTicketFileInputEl) {
+    newTicketAttachBtnEl.addEventListener('click', function () { newTicketFileInputEl.click(); });
+    newTicketFileInputEl.addEventListener('change', function () {
+      handleNewTicketFiles(newTicketFileInputEl.files);
+      newTicketFileInputEl.value = '';
+    });
+  }
+  if (newTicketScreenshotBtnEl) {
+    newTicketScreenshotBtnEl.addEventListener('click', requestNewTicketScreenshot);
+  }
+  var ticketDescriptionPasteEl = document.getElementById('ticketDescription');
+  if (ticketDescriptionPasteEl) {
+    ticketDescriptionPasteEl.addEventListener('paste', function (e) {
+      var files = e.clipboardData && e.clipboardData.files;
+      if (files && files.length) {
+        e.preventDefault();
+        handleNewTicketFiles(files);
+      }
+    });
   }
   if (ticketSearchInputEl) {
     ticketSearchInputEl.addEventListener('input', debounce(function () {
@@ -2261,6 +2289,11 @@ async function refreshCurrentTicketDetail() {
 // os bindings UploadTicketAttachment/DownloadTicketAttachment.
 
 var commentAttachments = [];
+// Abertura de chamado: o ticket ainda NAO existe, entao os anexos ficam em fila
+// (base64) e sobem para o chamado recem-criado no submit.
+var newTicketAttachments = [];
+// Origem do proximo print capturado pelo overlay: comentario ou abertura.
+var screenshotTarget = 'comment';
 
 function renderCommentAttachments() {
   if (!commentAttachmentsEl) return;
@@ -2356,7 +2389,8 @@ function handleCommentFiles(files) {
   });
 }
 
-// Recebe o print anotado do overlay assistido (mesma janela).
+// Recebe o print anotado do overlay assistido (mesma janela) e entrega para a
+// fila do contexto que pediu a captura (comentario ou abertura de chamado).
 window.dsvTicketCommentScreenshot = function (dataUrl) {
   var raw = String(dataUrl || '');
   if (!raw) return;
@@ -2365,10 +2399,105 @@ window.dsvTicketCommentScreenshot = function (dataUrl) {
   if (match) contentType = match[1];
   var extension = contentType.indexOf('webp') >= 0 ? 'webp' : (contentType.indexOf('jpeg') >= 0 ? 'jpg' : 'png');
   var name = 'print-' + new Date().toISOString().replace(/[:.]/g, '-') + '.' + extension;
-  uploadCommentAttachment(name, contentType, dataUrlToBase64(raw));
+  var base64 = dataUrlToBase64(raw);
+  if (screenshotTarget === 'newTicket') {
+    queueNewTicketAttachment(name, contentType, base64);
+  } else {
+    uploadCommentAttachment(name, contentType, base64);
+  }
+  screenshotTarget = 'comment';
 };
 
+// ── Anexos na ABERTURA do chamado (fila local ate o ticket existir) ────────
+
+function renderNewTicketAttachments() {
+  if (!newTicketAttachmentsEl) return;
+  while (newTicketAttachmentsEl.firstChild) newTicketAttachmentsEl.removeChild(newTicketAttachmentsEl.firstChild);
+  if (!newTicketAttachments.length) {
+    newTicketAttachmentsEl.classList.add('hidden');
+    return;
+  }
+  newTicketAttachmentsEl.classList.remove('hidden');
+  newTicketAttachments.forEach(function (item) {
+    var chip = document.createElement('span');
+    chip.className = 'comment-attachment-chip' + (item.failed ? ' comment-attachment-chip--error' : '');
+    var label = document.createElement('span');
+    label.textContent = item.fileName;
+    if (item.error) { label.title = item.error; }
+    chip.appendChild(label);
+    var remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'comment-attachment-remove';
+    remove.textContent = '\u00d7';
+    remove.title = translate('support.removeAttachment');
+    remove.addEventListener('click', function () {
+      newTicketAttachments = newTicketAttachments.filter(function (entry) { return entry !== item; });
+      renderNewTicketAttachments();
+    });
+    chip.appendChild(remove);
+    newTicketAttachmentsEl.appendChild(chip);
+  });
+}
+
+function queueNewTicketAttachment(fileName, contentType, base64Data) {
+  newTicketAttachments.push({
+    fileName: fileName,
+    contentType: contentType || 'application/octet-stream',
+    base64Data: base64Data,
+    failed: false,
+    error: null,
+  });
+  renderNewTicketAttachments();
+}
+
+function handleNewTicketFiles(files) {
+  Array.prototype.slice.call(files || []).forEach(function (file) {
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function () {
+      queueNewTicketAttachment(file.name || 'anexo', file.type, dataUrlToBase64(reader.result));
+    };
+    reader.onerror = function () {
+      showToast(translate('support.attachmentReadError', { name: file.name }), 'error');
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+// Sobe a fila para o chamado recem-criado. Falha em um anexo nao impede o
+// chamado (que ja existe) — o usuario ve o aviso e pode anexar depois.
+async function uploadNewTicketAttachments(ticketId) {
+  var failures = 0;
+  var pending = newTicketAttachments.slice();
+  for (var i = 0; i < pending.length; i += 1) {
+    var item = pending[i];
+    try {
+      await appApi().UploadTicketAttachment(
+        ticketId, item.fileName, item.contentType, item.base64Data);
+    } catch (err) {
+      failures += 1;
+      showToast(translate('support.attachmentError', { name: item.fileName, error: String(err) }), 'error');
+    }
+  }
+  newTicketAttachments = [];
+  renderNewTicketAttachments();
+  if (failures === 0 && pending.length > 0) {
+    showToast(translate('support.attachmentsSent', { count: pending.length }), 'success');
+  }
+}
+
+function requestNewTicketScreenshot() {
+  screenshotTarget = 'newTicket';
+  if (typeof openScreenshotCapture !== 'function') {
+    screenshotTarget = 'comment';
+    showToast(translate('support.attachmentScreenshotUnavailable'), 'error');
+    return;
+  }
+  openScreenshotCapture({ ticketComment: true });
+}
+
 function requestCommentScreenshot() {
+  screenshotTarget = 'comment';
   if (typeof openScreenshotCapture !== 'function') {
     showToast(translate('support.attachmentScreenshotUnavailable'), 'error');
     return;

@@ -957,6 +957,36 @@
   filter: none;
 }
 
+/* Campo do comentario com a barra de acoes no canto inferior (mesmo padrao do
+   campo do chat com a IA). */
+.comment-input-box {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  padding: 10px 10px 8px;
+}
+
+.comment-compose .comment-input-box textarea {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  resize: vertical;
+  padding: 0;
+}
+
+.comment-input-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.comment-input-toolbar .comment-attach-hint {
+  margin-right: auto;
+}
+
 /* Anexos do comentario do chamado (barra + chips de status). */
 .comment-attach-toolbar {
   display: flex;

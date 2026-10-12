@@ -114,6 +114,10 @@ const commentAttachBtnEl = document.getElementById('commentAttachBtn');
 const commentScreenshotBtnEl = document.getElementById('commentScreenshotBtn');
 const commentFileInputEl = document.getElementById('commentFileInput');
 const commentAttachmentsEl = document.getElementById('commentAttachments');
+const newTicketAttachBtnEl = document.getElementById('newTicketAttachBtn');
+const newTicketScreenshotBtnEl = document.getElementById('newTicketScreenshotBtn');
+const newTicketFileInputEl = document.getElementById('newTicketFileInput');
+const newTicketAttachmentsEl = document.getElementById('newTicketAttachments');
 const ticketFormStatusEl = document.getElementById('ticketFormStatus');
 // Suporte: busca/filtros, reabertura e avaliacao pos-fechamento
 const ticketSearchInputEl = document.getElementById('ticketSearchInput');

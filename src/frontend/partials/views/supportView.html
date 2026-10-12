@@ -136,18 +136,20 @@
             <div class="meta" data-i18n="common.loading">Carregando...</div>
           </div>
           <div id="commentCompose" class="comment-compose">
-            <div class="comment-attach-toolbar">
-              <input id="commentFileInput" type="file" multiple hidden />
-              <button id="commentAttachBtn" type="button" class="btn subtle" title="Anexar arquivo (ou cole um print com Ctrl+V)"
-                data-i18n="support.attachFile" data-i18n-title="support.attachFileHint">Anexar</button>
-              <button id="commentScreenshotBtn" type="button" class="btn subtle" title="Print da tela (recorte, setas e marcacoes)"
-                data-i18n="support.attachScreenshot" data-i18n-title="support.attachScreenshotHint">Print da tela</button>
-              <span class="meta" data-i18n="support.attachHint">Anexe arquivos ou cole um print (Ctrl+V)</span>
-            </div>
+            <input id="commentFileInput" type="file" multiple hidden />
             <div id="commentAttachments" class="comment-attachments hidden"></div>
-            <textarea id="commentInput" rows="3" placeholder="Escreva um comentario..."
-              data-i18n-placeholder="support.writeCommentPlaceholder" data-app-lang="true"></textarea>
-            <button id="submitCommentBtn" class="btn primary" data-i18n="action.sendComment">Enviar Comentario</button>
+            <div class="comment-input-box">
+              <textarea id="commentInput" rows="3" placeholder="Escreva um comentario..."
+                data-i18n-placeholder="support.writeCommentPlaceholder" data-app-lang="true"></textarea>
+              <div class="comment-input-toolbar">
+                <span class="meta comment-attach-hint" data-i18n="support.attachHint">Anexe arquivos ou cole um print (Ctrl+V)</span>
+                <button id="commentAttachBtn" type="button" class="btn subtle" title="Anexar arquivo (ou cole um print com Ctrl+V)"
+                  data-i18n="support.attachFile" data-i18n-title="support.attachFileHint">Anexar</button>
+                <button id="commentScreenshotBtn" type="button" class="btn subtle" title="Print da tela (recorte, setas e marcacoes)"
+                  data-i18n="support.attachScreenshot" data-i18n-title="support.attachScreenshotHint">Print</button>
+                <button id="submitCommentBtn" class="btn primary" data-i18n="action.sendComment">Enviar Comentario</button>
+              </div>
+            </div>
             <div id="commentOfflineHint" class="meta hidden" data-i18n="support.commentOfflineHint"></div>
           </div>
         </div>
@@ -252,6 +254,15 @@
               <textarea id="ticketDescription" rows="6" placeholder="Descreva o problema com detalhes..." required
                 data-i18n-placeholder="support.describeProblemDetails" data-app-lang="true"></textarea>
             </div>
+            <div class="comment-attach-toolbar">
+              <input id="newTicketFileInput" type="file" multiple hidden />
+              <button id="newTicketAttachBtn" type="button" class="btn subtle" title="Anexar arquivo (ou cole um print com Ctrl+V)"
+                data-i18n="support.attachFile" data-i18n-title="support.attachFileHint">Anexar</button>
+              <button id="newTicketScreenshotBtn" type="button" class="btn subtle" title="Print da tela (recorte, setas e marcacoes)"
+                data-i18n="support.attachScreenshot" data-i18n-title="support.attachScreenshotHint">Print da tela</button>
+              <span class="meta" data-i18n="support.attachHint">Anexe arquivos ou cole um print (Ctrl+V)</span>
+            </div>
+            <div id="newTicketAttachments" class="comment-attachments hidden"></div>
             <div id="ticketFormStatus" class="form-status hidden"></div>
             <button type="submit" id="submitTicketBtn" class="btn primary full" data-i18n="action.sendTicket">Enviar
               Chamado</button>
