@@ -151,6 +151,11 @@ func executeScript(ctx context.Context, task AutomationTask, customFields map[st
 		return ExecutionResult{Success: false, ExitCode: 2, ExitCodeSet: true, ErrorMessage: "conteudo do script nao disponivel; refaca o sync com IncludeScriptContent"}
 	}
 
+	// [[campo:chave]] também vale no conteúdo do script (mesma fonte do
+	// MDZ_CUSTOM_FIELDS). O hash de integridade continua sendo o do conteúdo
+	// original enviado pelo servidor — a expansão é só em runtime.
+	content = expandCustomFieldTokens(content, customFields)
+
 	// M30: verificação de integridade — o ContentHashSHA256 declarado pelo
 	// servidor era ignorado; um payload corrompido/adulterado executava igual.
 	// Algoritmo espelha o servidor (SHA256 do UTF8 do content cru, hex lower).

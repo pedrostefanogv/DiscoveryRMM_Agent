@@ -139,6 +139,9 @@ type AutomationTask struct {
 	// esta feature) faz o agent cair no comportamento legado: RequiresApproval =
 	// Prompt, caso contrario Toast.
 	NotificationMode string `json:"NotificationMode,omitempty"`
+	// CollectorFieldDefinitionId: quando preenchido, a tarefa e coletora e o
+	// agent grava a ultima linha da saida neste campo customizado de agente.
+	CollectorFieldDefinitionID string `json:"CollectorFieldDefinitionId,omitempty"`
 	// ToastTiming: "Before" (antes de executar) | "After" (apos a conclusao).
 	// Vazio equivale a "After". So se aplica a NotificationMode = Toast.
 	ToastTiming           string            `json:"ToastTiming,omitempty"`

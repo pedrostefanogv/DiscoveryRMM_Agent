@@ -3,6 +3,7 @@ package automation
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -214,6 +215,140 @@ func expandCustomFieldTokens(value string, fields map[string]any) string {
 	}
 
 	return builder.String()
+}
+
+// buildCustomFieldReportMetadata devolve o bloco "customFields" do relatório da
+// execução. Só NOMES: os valores não entram no relatório (evita vazar dados de
+// campos, inclusive secretos, para o histórico do portal).
+func buildCustomFieldReportMetadata(cfCtx *ExecutionCustomFieldCtx, collected []CollectedValueRequest, collectorFieldID string) string {
+	read := make([]string, 0)
+
+	if cfCtx != nil {
+		for name := range cfCtx.Fields {
+			read = append(read, name)
+		}
+		sort.Strings(read)
+	}
+
+	seen := make(map[string]bool)
+	collectedReport := make([]collectedFieldReport, 0)
+	for index := range collected {
+		name := ""
+		if collected[index].Name != nil {
+			name = strings.TrimSpace(*collected[index].Name)
+		}
+
+		var rawField *RuntimeCustomField
+		if collected[index].DefinitionID != nil && cfCtx != nil {
+			if found, ok := cfCtx.rawByID[strings.TrimSpace(*collected[index].DefinitionID)]; ok {
+				rawField = &found
+				if name == "" {
+					name = strings.TrimSpace(found.Name)
+				}
+			}
+		}
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+
+		// O valor entra truncado; campo secreto nunca vai em claro no relatório.
+		value := formatCollectedReportValue(collected[index].Value)
+		if rawField != nil && rawField.IsSecret {
+			value = "***"
+		}
+		collectedReport = append(collectedReport, collectedFieldReport{
+			Name:  name,
+			Value: truncateReportValue(value, 60),
+		})
+	}
+
+	payload := struct {
+		Read           []string               `json:"read"`
+		Collected      []collectedFieldReport `json:"collected"`
+		CollectorField string                 `json:"collectorField,omitempty"`
+	}{Read: read, Collected: collectedReport, CollectorField: strings.TrimSpace(collectorFieldID)}
+
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return ""
+	}
+	return string(encoded)
+}
+
+// collectedFieldReport é um item coletado exibido no relatório da execução.
+type collectedFieldReport struct {
+	Name  string `json:"name"`
+	Value string `json:"value,omitempty"`
+}
+
+func formatCollectedReportValue(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+
+	var decoded any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return string(raw)
+	}
+
+	switch typed := decoded.(type) {
+	case string:
+		return typed
+	case nil:
+		return ""
+	case []any:
+		parts := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if item != nil {
+				parts = append(parts, fmt.Sprintf("%v", item))
+			}
+		}
+		return strings.Join(parts, ", ")
+	default:
+		return fmt.Sprintf("%v", typed)
+	}
+}
+
+func truncateReportValue(value string, max int) string {
+	trimmed := strings.TrimSpace(value)
+	if max <= 0 || len(trimmed) <= max {
+		return trimmed
+	}
+	return trimmed[:max] + "..."
+}
+
+// mergeJSONMetadata injeta um bloco em um JSON de metadata já existente.
+func mergeJSONMetadata(base string, key string, raw string) string {
+	if raw == "" {
+		return base
+	}
+
+	merged := make(map[string]any)
+	if trimmed := strings.TrimSpace(base); trimmed != "" && trimmed != "{}" {
+		if err := json.Unmarshal([]byte(trimmed), &merged); err != nil {
+			return base
+		}
+	}
+
+	merged[key] = json.RawMessage(raw)
+	encoded, err := json.Marshal(merged)
+	if err != nil {
+		return base
+	}
+	return string(encoded)
+}
+
+// collectorValueFromOutput devolve a ultima linha nao vazia da saida - e o
+// valor que uma tarefa coletora grava no campo customizado configurado.
+func collectorValueFromOutput(output string) string {
+	lines := strings.Split(output, "\n")
+	for index := len(lines) - 1; index >= 0; index-- {
+		if trimmed := strings.TrimSpace(lines[index]); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func resolveCustomFieldToken(fields map[string]any, key string) (string, bool) {

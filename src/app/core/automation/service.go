@@ -817,6 +817,9 @@ func (s *Service) executeTaskAsync(ctx context.Context, agentID string, task Aut
 		result.Output = cleanedOutput
 		s.postCollectedValues(ctx, cfg, executionID, task, collectedItems, cfCtx, correlationID)
 
+		// Tarefa coletora: grava a última linha da saída no campo configurado.
+		s.postCollectorValue(ctx, cfg, task, result, correlationID)
+
 		entry.FinishedAt = time.Now().UTC()
 		entry.Success = result.Success
 		entry.SuccessSet = true
@@ -825,6 +828,11 @@ func (s *Service) executeTaskAsync(ctx context.Context, agentID string, task Aut
 		entry.Output = result.Output
 		entry.ErrorMessage = result.ErrorMessage
 		entry.MetadataJSON = buildExecutionMetadata(task, triggerType, "result", &result, &psadtPolicy)
+		// Relatório: quais campos a execução leu/coletou (somente nomes).
+		entry.MetadataJSON = mergeJSONMetadata(
+			entry.MetadataJSON,
+			"customFields",
+			buildCustomFieldReportMetadata(cfCtx, collectedItems, task.CollectorFieldDefinitionID))
 		if result.Success {
 			entry.Status = string(ExecutionStatusCompleted)
 		} else {
@@ -953,6 +961,44 @@ func (s *Service) sendOrQueueCallback(ctx context.Context, agentID, executionID,
 		return err
 	}
 	return callbackErr
+}
+
+// postCollectorValue grava a saída de uma tarefa coletora no campo customizado
+// escolhido na definição da tarefa. O servidor continua sendo a autoridade:
+// valida vínculo/allowAgentWrite, aplica o rate-limit e audita a escrita.
+func (s *Service) postCollectorValue(ctx context.Context, cfg RuntimeConfig, task AutomationTask, result ExecutionResult, correlationID string) {
+	fieldID := strings.TrimSpace(task.CollectorFieldDefinitionID)
+	if fieldID == "" {
+		return
+	}
+
+	// Tarefa que falhou não grava: a "última linha" de um script com erro costuma
+	// ser a mensagem de falha, que não é o dado coletado.
+	if !result.Success {
+		s.logf("automacao: coletor ignorado porque a execucao falhou (task=%s)", task.TaskID)
+		return
+	}
+
+	value := collectorValueFromOutput(result.Output)
+	if value == "" {
+		s.logf("automacao: tarefa coletora sem saida para gravar (task=%s)", task.TaskID)
+		return
+	}
+
+	payload := CollectedValueRequest{
+		DefinitionID: &fieldID,
+		Value:        json.RawMessage(strconv.Quote(value)),
+	}
+	if taskID := strings.TrimSpace(task.TaskID); taskID != "" {
+		payload.TaskID = &taskID
+	}
+	if scriptID := strings.TrimSpace(task.ScriptID); scriptID != "" {
+		payload.ScriptID = &scriptID
+	}
+
+	if _, err := s.client.CollectCustomFieldValue(ctx, cfg, payload, correlationID); err != nil {
+		s.logf("automacao: falha ao gravar campo do coletor (task=%s): %v", task.TaskID, err)
+	}
 }
 
 // loadCustomFieldsForExecution consulta o endpoint de runtime e armazena o contexto em memória
