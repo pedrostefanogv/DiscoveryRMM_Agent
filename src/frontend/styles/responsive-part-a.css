@@ -1053,6 +1053,49 @@
   font-weight: 700;
 }
 
+/* Comentario EXCLUIDO no console: continua legivel, apenas marcado. */
+.ticket-msg.deleted .ticket-bubble {
+  opacity: 0.72;
+  border: 1px dashed var(--danger, #d9534f);
+}
+
+.ticket-msg-deleted {
+  color: var(--danger, #d9534f);
+  font-style: italic;
+}
+
+/* Anexos do COMENTARIO (nivel conversa): chips com o nome do arquivo. */
+.ticket-msg-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.ticket-msg-attachment {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-1);
+  color: var(--text);
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+
+.ticket-msg-attachment:hover {
+  border-color: var(--accent);
+}
+
+.ticket-msg-attachment-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .comment-compose {
   display: flex;
   flex-direction: column;

@@ -88,3 +88,46 @@ func TestChatWindow_MensagemDeSistemaViraNota(t *testing.T) {
 		t.Fatal("support-chat.css precisa estilizar a nota de sistema (.sc-system)")
 	}
 }
+
+// Guarda de regressão: a janela do chat também identifica o TÉCNICO que abriu a
+// conversa e mostra os COMENTÁRIOS do chamado (conversa do ticket), separados do
+// chat ao vivo. Notas internas do suporte NÃO podem aparecer para o usuário
+// final, e o painel (display: flex) precisa respeitar o atributo hidden — mesmo
+// caso dos modais.
+func TestChatWindow_TecnicoEComentariosDoChamado(t *testing.T) {
+	htmlPath := filepath.Join("..", "..", "frontend", "chat-window.html")
+	html, err := os.ReadFile(htmlPath)
+	if err != nil {
+		t.Fatalf("não foi possível ler %s: %v", htmlPath, err)
+	}
+	htmlText := string(html)
+	for _, needle := range []string{`id="scTechnician"`, `id="scComments"`, `id="scCommentsToggle"`, `id="scCommentsList"`} {
+		if !strings.Contains(htmlText, needle) {
+			t.Fatalf("chat-window.html deve conter %s", needle)
+		}
+	}
+
+	jsPath := filepath.Join("..", "..", "frontend", "js", "app-support-chat.js")
+	js, err := os.ReadFile(jsPath)
+	if err != nil {
+		t.Fatalf("não foi possível ler %s: %v", jsPath, err)
+	}
+	jsText := string(js)
+	if !strings.Contains(jsText, `call("GetTicketComments", ticketId)`) {
+		t.Fatal("app-support-chat.js deve carregar os comentários do chamado (GetTicketComments)")
+	}
+	if !strings.Contains(jsText, "isInternal") {
+		t.Fatal("app-support-chat.js deve filtrar as notas internas (isInternal) do suporte")
+	}
+
+	cssPath := filepath.Join("..", "..", "frontend", "support-chat.css")
+	css, err := os.ReadFile(cssPath)
+	if err != nil {
+		t.Fatalf("não foi possível ler %s: %v", cssPath, err)
+	}
+	for _, rule := range []string{".sc-comments[hidden]", ".sc-comments-list[hidden]"} {
+		if !strings.Contains(string(css), rule) {
+			t.Fatalf("support-chat.css precisa conter %q — display:flex do autor vence o hidden do UA", rule)
+		}
+	}
+}

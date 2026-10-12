@@ -247,6 +247,80 @@ func (a *App) TicketAttachmentSettings() (json.RawMessage, error) {
 	}
 	return json.Marshal(settings)
 }
+// ── Anexos de COMENTARIO (bindings do webview) ────────────────────────────
+//
+// O anexo de conversa e filho do COMENTARIO: o webview cria o comentario e, com
+// o id devolvido, envia os arquivos por aqui (base64).
+
+func (a *App) UploadTicketCommentAttachment(ticketID, commentID, fileName, contentType, dataBase64 string) (string, error) {
+	if err := a.requireSupportSvc(); err != nil {
+		return "", err
+	}
+	type result struct {
+		AttachmentID string `json:"attachmentId"`
+	}
+	res, err := supportWriteOrLocal(a, "support:comment_attachment_upload", map[string]any{
+		"ticketId":    ticketID,
+		"commentId":   commentID,
+		"fileName":    fileName,
+		"contentType": contentType,
+		"dataBase64":  dataBase64,
+	}, func() (result, error) {
+		data, decodeErr := base64.StdEncoding.DecodeString(dataBase64)
+		if decodeErr != nil {
+			return result{}, fmt.Errorf("anexo inválido: %w", decodeErr)
+		}
+		attachmentID, uploadErr := a.SupportSvc.UploadTicketCommentAttachment(
+			ticketID, commentID, fileName, contentType, data)
+		if uploadErr != nil {
+			return result{}, uploadErr
+		}
+		return result{AttachmentID: attachmentID}, nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return res.AttachmentID, nil
+}
+
+func (a *App) DownloadTicketCommentAttachment(ticketID, commentID, attachmentID string) (map[string]string, error) {
+	if err := a.requireSupportSvc(); err != nil {
+		return nil, err
+	}
+	type payload struct {
+		ContentType string `json:"contentType"`
+		Base64      string `json:"base64"`
+	}
+	res, err := supportReadOrLocal(a, "support:comment_attachment_download", map[string]any{
+		"ticketId":     ticketID,
+		"commentId":    commentID,
+		"attachmentId": attachmentID,
+	}, func() (payload, error) {
+		data, contentType, downloadErr := a.SupportSvc.DownloadTicketCommentAttachment(ticketID, commentID, attachmentID)
+		if downloadErr != nil {
+			return payload{}, downloadErr
+		}
+		return payload{ContentType: contentType, Base64: base64.StdEncoding.EncodeToString(data)}, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return map[string]string{"contentType": res.ContentType, "base64": res.Base64}, nil
+}
+
+func (a *App) TicketCommentAttachmentSettings() (json.RawMessage, error) {
+	if err := a.requireSupportSvc(); err != nil {
+		return nil, err
+	}
+	settings, err := supportReadOrLocal(a, "support:comment_attachment_settings", nil, func() (appsupport.TicketAttachmentSettings, error) {
+		return a.SupportSvc.GetTicketCommentAttachmentSettings()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(settings)
+}
+
 func (a *App) AddTicketCommentWithOptions(ticketID, content string) (TicketComment, error) {
 	if err := a.requireSupportSvc(); err != nil {
 		return TicketComment{}, err

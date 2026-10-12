@@ -48,6 +48,20 @@
   text-overflow: ellipsis;
 }
 
+/* Técnico/atendente que abriu a conversa. */
+.support-chat-technician {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.support-chat-technician strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
 .support-chat-header-actions {
   display: flex;
   align-items: center;
@@ -195,33 +209,110 @@
   background: var(--surface-2);
 }
 
+/* ── Comentários do chamado (conversa do ticket) ────────────────────────────
+   Ficam separados do chat ao vivo: um painel recolhível acima do composer. */
+.sc-comments {
+  flex-shrink: 0;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  max-height: 46vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.sc-comments-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 14px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.sc-comments-toggle:hover { color: var(--text); }
+
+.sc-comments-chevron {
+  flex-shrink: 0;
+  transition: transform var(--transition, .15s ease);
+}
+
+.sc-comments-toggle[aria-expanded="true"] .sc-comments-chevron { transform: rotate(90deg); }
+
+.sc-comments-title { font-weight: 600; color: var(--text); }
+
+.sc-comments-count {
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  font-size: 11px;
+}
+
+.sc-comments-list {
+  overflow-y: auto;
+  max-height: 38vh;
+  padding: 0 14px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sc-comments-empty {
+  color: var(--muted);
+  font-size: 12px;
+  padding: 2px 0;
+}
+
+/* Mesmo caso dos modais: qualquer `display` do autor vence o `[hidden]` do UA.
+   Sem esta regra o painel (e a faixa de anexos pendentes) apareciam vazios. */
+.sc-comments[hidden],
+.sc-comments-list[hidden],
+.sc-pending[hidden] { display: none; }
+
+.sc-comment {
+  display: flex;
+  flex-direction: column;
+  max-width: 88%;
+}
+
+.sc-comment--own { align-self: flex-end; align-items: flex-end; }
+.sc-comment--other { align-self: flex-start; align-items: flex-start; }
+
+.sc-comment .sc-bubble { font-size: 13px; }
+
+.sc-comment--deleted .sc-bubble {
+  opacity: .72;
+  border: 1px dashed var(--danger);
+}
+
+.sc-comment-deleted { color: var(--danger); font-style: italic; }
+
+.sc-comment-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+  justify-content: inherit;
+}
+
 .support-chat-composer {
   border-top: 1px solid var(--border);
   background: var(--surface);
   padding: 10px 14px 12px;
 }
 
-.sc-input {
-  width: 100%;
-  resize: none;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 8px 10px;
-  font: inherit;
-  font-size: 14px;
-  background: var(--input-bg);
-  color: var(--text);
-  outline: none;
-}
-
-.sc-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--focus-ring); }
-
-.support-chat-composer-actions {
-  display: flex;
-  justify-content: flex-end;
-  align-items: center;
-  gap: 8px;
-  margin-top: 8px;
+/* O composer reusa .chat-input-wrap / .chat-input / .chat-input-actions do chat
+   com a IA (styles/responsive-part-b.css) e os mesmos ícones SVG. A única
+   diferença é a reserva à direita: aqui são TRÊS botões flutuantes (clipe,
+   câmera e avião), contra dois no chat da IA. */
+.support-chat-composer .chat-input {
+  padding-right: 96px;
 }
 
 .sc-btn {
@@ -250,8 +341,6 @@
 }
 
 .sc-btn--ghost { background: transparent; }
-
-.sc-btn--icon { padding: 7px 10px; font-size: 16px; line-height: 1; }
 
 .sc-modal-overlay {
   position: fixed;

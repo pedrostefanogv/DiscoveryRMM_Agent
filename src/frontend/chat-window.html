@@ -19,6 +19,9 @@
         <div class="support-chat-title-text">
           <strong>Chat com o suporte</strong>
           <span id="scSubtitle" class="support-chat-subtitle">Conectando…</span>
+          <!-- Técnico (atendente) que abriu a conversa: só aparece quando o
+               servidor informa o nome. -->
+          <span id="scTechnician" class="support-chat-technician" hidden></span>
         </div>
       </div>
       <div class="support-chat-header-actions">
@@ -37,13 +40,58 @@
 
     <div id="scPending" class="sc-pending" hidden></div>
 
+    <!-- Comentários do CHAMADO (conversa assíncrona do ticket), separados do
+         chat ao vivo: o usuário vê o histórico e quem comentou. Notas internas
+         do suporte NÃO são exibidas aqui. -->
+    <section id="scComments" class="sc-comments" hidden>
+      <button id="scCommentsToggle" type="button" class="sc-comments-toggle" aria-expanded="false"
+        aria-controls="scCommentsList">
+        <svg class="sc-comments-chevron" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor"
+          stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <polyline points="9 6 15 12 9 18" />
+        </svg>
+        <span class="sc-comments-title">Comentários do chamado</span>
+        <span id="scCommentsCount" class="sc-comments-count"></span>
+      </button>
+      <div id="scCommentsList" class="sc-comments-list" hidden></div>
+    </section>
+
+    <!-- Mesma caixa/botoes do composer do chat com a IA: o textarea e o corpo do
+         box e os icones (anexo = clipe, captura = camera, enviar = aviao)
+         flutuam no canto inferior direito. -->
     <footer class="support-chat-composer">
-      <textarea id="scInput" class="sc-input" rows="2" placeholder="Escreva uma mensagem… (Enter envia, Shift+Enter quebra linha)"></textarea>
-      <div class="support-chat-composer-actions">
+      <div class="chat-input-wrap">
+        <textarea id="scInput" class="chat-input" rows="2"
+          placeholder="Escreva uma mensagem… (Enter envia, Shift+Enter quebra linha)"></textarea>
+        <div class="chat-input-actions">
         <input id="scFileInput" type="file" multiple hidden />
-        <button id="scShotBtn" type="button" class="sc-btn sc-btn--icon" title="Capturar tela: escolher janela/região e anotar (setas, marcações)">📷</button>
-        <button id="scAttachBtn" type="button" class="sc-btn sc-btn--icon" title="Anexar arquivo ou print">📎</button>
-        <button id="scSendBtn" type="button" class="sc-btn sc-btn--primary" title="Enviar (Enter)">Enviar</button>
+        <button id="scAttachBtn" type="button" class="chat-icon-btn" title="Anexar arquivo (ou cole um print com Ctrl+V)"
+          aria-label="Anexar arquivo">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+          </svg>
+        </button>
+        <button id="scShotBtn" type="button" class="chat-icon-btn chat-screenshot-btn"
+          title="Capturar tela (escolher janela/região e anotar)" aria-label="Capturar tela">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M4 8V6a2 2 0 0 1 2-2h2" />
+            <path d="M16 4h2a2 2 0 0 1 2 2v2" />
+            <path d="M20 16v2a2 2 0 0 1-2 2h-2" />
+            <path d="M8 20H6a2 2 0 0 1-2-2v-2" />
+            <circle cx="12" cy="12" r="3.5" />
+          </svg>
+        </button>
+        <button id="scSendBtn" type="button" class="chat-icon-btn chat-send-btn" title="Enviar (Enter)"
+          aria-label="Enviar">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2"
+            stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="m22 2-7 20-4-9-9-4Z" />
+            <path d="M22 2 11 13" />
+          </svg>
+        </button>
+        </div>
       </div>
     </footer>
   </div>

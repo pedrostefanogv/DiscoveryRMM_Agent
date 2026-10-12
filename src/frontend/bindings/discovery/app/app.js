@@ -480,6 +480,29 @@ export function DownloadP2PArtifactSwarm(artifactName) {
 }
 
 /**
+ * @param {string} ticketID
+ * @param {string} attachmentID
+ * @returns {$CancellablePromise<{ [_ in string]?: string }>}
+ */
+export function DownloadTicketAttachment(ticketID, attachmentID) {
+    return $Call.ByID(514527115, ticketID, attachmentID).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType13($result);
+    }));
+}
+
+/**
+ * @param {string} ticketID
+ * @param {string} commentID
+ * @param {string} attachmentID
+ * @returns {$CancellablePromise<{ [_ in string]?: string }>}
+ */
+export function DownloadTicketCommentAttachment(ticketID, commentID, attachmentID) {
+    return $Call.ByID(1251948766, ticketID, commentID, attachmentID).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType13($result);
+    }));
+}
+
+/**
  * @param {$models.PSADTDebugNotificationRequest} req
  * @returns {$CancellablePromise<void>}
  */
@@ -505,7 +528,7 @@ export function EnsureChatSSEServer() {
  */
 export function ExecuteCustomPSADTScript(scriptContent) {
     return $Call.ByID(540611217, scriptContent).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType13($result);
+        return $$createType14($result);
     }));
 }
 
@@ -517,7 +540,7 @@ export function ExecuteCustomPSADTScript(scriptContent) {
  */
 export function ExecutePSADTTestScript(appName, appVersion) {
     return $Call.ByID(1972049288, appName, appVersion).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType13($result);
+        return $$createType14($result);
     }));
 }
 
@@ -529,7 +552,7 @@ export function ExecutePSADTTestScript(appName, appVersion) {
  */
 export function ExecutePSADTVisualNotification(req) {
     return $Call.ByID(3179337240, req).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType13($result);
+        return $$createType14($result);
     }));
 }
 
@@ -580,7 +603,7 @@ export function ExportPDF() {
  */
 export function FindP2PArtifactPeers(artifactName) {
     return $Call.ByID(1714534520, artifactName).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType14($result);
+        return $$createType15($result);
     }));
 }
 
@@ -599,7 +622,7 @@ export function FinishScreenshotOverlay(sessionID, selectionJSON) {
  */
 export function GetAgentConfiguration() {
     return $Call.ByID(1761911899).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType15($result);
+        return $$createType16($result);
     }));
 }
 
@@ -608,7 +631,7 @@ export function GetAgentConfiguration() {
  */
 export function GetAgentInfo() {
     return $Call.ByID(2162875159).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType16($result);
+        return $$createType17($result);
     }));
 }
 
@@ -624,7 +647,7 @@ export function GetAgentInfoJSON() {
  */
 export function GetAgentStatus() {
     return $Call.ByID(42559989).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType17($result);
+        return $$createType18($result);
     }));
 }
 
@@ -644,7 +667,7 @@ export function GetAgentTicketDetails(ticketID) {
  */
 export function GetAutoProvisioningStats() {
     return $Call.ByID(1243203927).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType18($result);
+        return $$createType19($result);
     }));
 }
 
@@ -653,7 +676,7 @@ export function GetAutoProvisioningStats() {
  */
 export function GetAutomationState() {
     return $Call.ByID(2021899546).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType19($result);
+        return $$createType20($result);
     }));
 }
 
@@ -1024,7 +1047,7 @@ export function GetPSADTScriptTemplate() {
  */
 export function GetPackageActions() {
     return $Call.ByID(3765516573).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType20($result);
+        return $$createType13($result);
     }));
 }
 
@@ -1750,7 +1773,7 @@ export function RefreshAgentConfiguration() {
  */
 export function RefreshAutomationPolicy(includeScriptContent) {
     return $Call.ByID(2602153952, includeScriptContent).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType19($result);
+        return $$createType20($result);
     }));
 }
 
@@ -2333,7 +2356,7 @@ export function SupportChatConfirmClose() {
  */
 export function SupportChatDownloadAttachment(attachmentID) {
     return $Call.ByID(2015476254, attachmentID).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType20($result);
+        return $$createType13($result);
     }));
 }
 
@@ -2461,6 +2484,20 @@ export function TestDebugConnection(cfg) {
 }
 
 /**
+ * @returns {$CancellablePromise<json$0.RawMessage>}
+ */
+export function TicketAttachmentSettings() {
+    return $Call.ByID(912739846);
+}
+
+/**
+ * @returns {$CancellablePromise<json$0.RawMessage>}
+ */
+export function TicketCommentAttachmentSettings() {
+    return $Call.ByID(2075851771);
+}
+
+/**
  * TriggerZeroTouchConfigRegistrationOnPeerDiscovery expõe o método via interface.
  * @param {$models.p2pDiscoveredPeer} peer
  * @returns {$CancellablePromise<void>}
@@ -2516,6 +2553,29 @@ export function UpgradePackage(id) {
 }
 
 /**
+ * @param {string} ticketID
+ * @param {string} fileName
+ * @param {string} contentType
+ * @param {string} dataBase64
+ * @returns {$CancellablePromise<string>}
+ */
+export function UploadTicketAttachment(ticketID, fileName, contentType, dataBase64) {
+    return $Call.ByID(2102269290, ticketID, fileName, contentType, dataBase64);
+}
+
+/**
+ * @param {string} ticketID
+ * @param {string} commentID
+ * @param {string} fileName
+ * @param {string} contentType
+ * @param {string} dataBase64
+ * @returns {$CancellablePromise<string>}
+ */
+export function UploadTicketCommentAttachment(ticketID, commentID, fileName, contentType, dataBase64) {
+    return $Call.ByID(3313002597, ticketID, commentID, fileName, contentType, dataBase64);
+}
+
+/**
  * UpsertCollectedCustomField envia um campo customizado coletado para o servidor.
  * Delega para o customfields.Service.
  * @param {string} name
@@ -2541,15 +2601,15 @@ const $$createType9 = apiclient$0.ApiVersionInfo.createFrom;
 const $$createType10 = $Create.Nullable($$createType9);
 const $$createType11 = notifications$0.DispatchResponse.createFrom;
 const $$createType12 = p2pmeta$0.ArtifactView.createFrom;
-const $$createType13 = $models.PSADTScriptResult.createFrom;
-const $$createType14 = p2pmeta$0.ArtifactAvailabilityView.createFrom;
-const $$createType15 = agentconfig$0.AgentConfiguration.createFrom;
-const $$createType16 = supportmeta$0.AgentInfo.createFrom;
-const $$createType17 = debug$0.AgentStatus.createFrom;
-const $$createType18 = p2pmeta$0.AutoProvisioningStats.createFrom;
-const $$createType19 = automation$0.StateView.createFrom;
-const $$createType20 = $Create.Map($Create.Any, $Create.Any);
-const $$createType21 = $Create.Array($$createType20);
+const $$createType13 = $Create.Map($Create.Any, $Create.Any);
+const $$createType14 = $models.PSADTScriptResult.createFrom;
+const $$createType15 = p2pmeta$0.ArtifactAvailabilityView.createFrom;
+const $$createType16 = agentconfig$0.AgentConfiguration.createFrom;
+const $$createType17 = supportmeta$0.AgentInfo.createFrom;
+const $$createType18 = debug$0.AgentStatus.createFrom;
+const $$createType19 = p2pmeta$0.AutoProvisioningStats.createFrom;
+const $$createType20 = automation$0.StateView.createFrom;
+const $$createType21 = $Create.Array($$createType13);
 const $$createType22 = models$0.Catalog.createFrom;
 const $$createType23 = $models.ChatConfig.createFrom;
 const $$createType24 = $models.ChatMessage.createFrom;

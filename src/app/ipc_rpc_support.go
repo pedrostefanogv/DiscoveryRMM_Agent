@@ -228,6 +228,56 @@ func (a *App) ipcRPCSupportTicketAttachmentSettings(payload map[string]any) map[
 	}
 	return ipcRPCResult(settings)
 }
+// ── Anexos de COMENTARIO (conversa) ──────────────────────────────────────
+
+func (a *App) ipcRPCSupportCommentAttachmentUpload(payload map[string]any) map[string]any {
+	if err := a.requireSupportSvc(); err != nil {
+		return ipcRPCError(err)
+	}
+	data, err := base64.StdEncoding.DecodeString(ipcRPCString(payload, "dataBase64"))
+	if err != nil {
+		return ipcRPCError(fmt.Errorf("anexo inválido: %w", err))
+	}
+	attachmentID, err := a.SupportSvc.UploadTicketCommentAttachment(
+		ipcRPCString(payload, "ticketId"),
+		ipcRPCString(payload, "commentId"),
+		ipcRPCString(payload, "fileName"),
+		ipcRPCString(payload, "contentType"),
+		data)
+	if err != nil {
+		return ipcRPCError(err)
+	}
+	return ipcRPCResult(map[string]any{"attachmentId": attachmentID})
+}
+
+func (a *App) ipcRPCSupportCommentAttachmentDownload(payload map[string]any) map[string]any {
+	if err := a.requireSupportSvc(); err != nil {
+		return ipcRPCError(err)
+	}
+	data, contentType, err := a.SupportSvc.DownloadTicketCommentAttachment(
+		ipcRPCString(payload, "ticketId"),
+		ipcRPCString(payload, "commentId"),
+		ipcRPCString(payload, "attachmentId"))
+	if err != nil {
+		return ipcRPCError(err)
+	}
+	return ipcRPCResult(map[string]any{
+		"contentType": contentType,
+		"base64":      base64.StdEncoding.EncodeToString(data),
+	})
+}
+
+func (a *App) ipcRPCSupportCommentAttachmentSettings(payload map[string]any) map[string]any {
+	if err := a.requireSupportSvc(); err != nil {
+		return ipcRPCError(err)
+	}
+	settings, err := a.SupportSvc.GetTicketCommentAttachmentSettings()
+	if err != nil {
+		return ipcRPCError(err)
+	}
+	return ipcRPCResult(settings)
+}
+
 func (a *App) ipcRPCSupportClose(payload map[string]any) map[string]any {
 	if err := a.requireSupportSvc(); err != nil {
 		return ipcRPCError(err)

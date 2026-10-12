@@ -125,6 +125,22 @@ type TicketComment struct {
 	Content    string `json:"content"`
 	IsInternal bool   `json:"isInternal"`
 	CreatedAt  string `json:"createdAt"`
+	// Soft delete: comentário excluído no console continua legível e marcado.
+	DeletedAt *string `json:"deletedAt,omitempty"`
+	DeletedBy string  `json:"deletedBy,omitempty"`
+	// Anexos do nível CONVERSA (pequenos, com miniatura). O repositório do
+	// chamado é outra família (TicketAttachment).
+	Attachments []TicketCommentAttachment `json:"attachments,omitempty"`
+}
+
+// TicketCommentAttachment é um anexo ligado ao COMENTÁRIO (conversa).
+type TicketCommentAttachment struct {
+	ID          string `json:"id"`
+	FileName    string `json:"fileName"`
+	ContentType string `json:"contentType"`
+	SizeBytes   int64  `json:"sizeBytes"`
+	UploadedBy  string `json:"uploadedBy,omitempty"`
+	CreatedAt   string `json:"createdAt"`
 }
 
 // TicketOptionDepartment is a department option for the agent ticket form.

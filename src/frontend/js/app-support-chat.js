@@ -28,7 +28,13 @@
       maxFileSizeBytes: 10 * 1024 * 1024
     },
     sending: false,
-    closing: false
+    closing: false,
+    // Comentários do CHAMADO (conversa do ticket), além do chat ao vivo.
+    ticketId: "",
+    comments: [],
+    commentsLoadedFor: "",
+    commentsLoading: false,
+    commentsOpen: false
   };
 
   function byId(id) { return document.getElementById(id); }
@@ -37,10 +43,15 @@
     els.statusDot = byId("scStatusDot");
     els.statusChip = byId("scStatusChip");
     els.subtitle = byId("scSubtitle");
+    els.technician = byId("scTechnician");
     els.banner = byId("scBanner");
     els.messages = byId("scMessages");
     els.empty = byId("scEmpty");
     els.pending = byId("scPending");
+    els.comments = byId("scComments");
+    els.commentsToggle = byId("scCommentsToggle");
+    els.commentsCount = byId("scCommentsCount");
+    els.commentsList = byId("scCommentsList");
     els.input = byId("scInput");
     els.send = byId("scSendBtn");
     els.attach = byId("scAttachBtn");
@@ -110,6 +121,8 @@
     renderInvite();
     renderMessages();
     renderPending();
+    renderTechnician();
+    renderComments();
 
     var canSend = state.status === "active" && !state.sending;
     els.send.disabled = !canSend;
@@ -269,6 +282,214 @@
     });
   }
 
+  // ── Técnico (atendente) que abriu a conversa ─────────────────────────────
+
+  function renderTechnician() {
+    if (!els.technician) return;
+
+    var name = String(state.supportName || "").trim();
+    if (!name) {
+      els.technician.hidden = true;
+      els.technician.textContent = "";
+      return;
+    }
+
+    els.technician.hidden = false;
+    els.technician.textContent = "";
+
+    var label = document.createElement("span");
+    label.textContent = "Técnico: ";
+    var strong = document.createElement("strong");
+    strong.textContent = name;
+
+    els.technician.appendChild(label);
+    els.technician.appendChild(strong);
+  }
+
+  // ── Comentários do CHAMADO (conversa do ticket) ──────────────────────────
+  // São um canal separado do chat ao vivo: aqui o usuário vê o histórico do
+  // chamado e quem comentou. Notas internas do suporte NÃO são exibidas.
+
+  function isOwnComment(comment) {
+    return String((comment && comment.author) || "").trim().toLowerCase() === "agent";
+  }
+
+  function visibleComments(list) {
+    return (Array.isArray(list) ? list : []).filter(function (comment) {
+      return comment && !comment.isInternal;
+    });
+  }
+
+  function formatCommentStamp(raw) {
+    if (!raw) return "";
+    var date = new Date(raw);
+    if (isNaN(date.getTime())) return "";
+    try {
+      var day = date.toLocaleDateString("pt-BR");
+      var time = formatTime(raw);
+      return time ? day + " " + time : day;
+    } catch (err) {
+      return formatTime(raw);
+    }
+  }
+
+  function downloadCommentAttachment(comment, attachment) {
+    var ticketId = state.ticketId;
+    if (!ticketId || !comment || !attachment) return;
+
+    call("DownloadTicketCommentAttachment", ticketId, comment.id, attachment.id)
+      .then(function (payload) {
+        var base64 = payload && payload.base64 ? payload.base64 : "";
+        if (!base64) return;
+
+        var contentType = (payload && payload.contentType) || "application/octet-stream";
+        var bytes = atob(base64);
+        var buffer = new Uint8Array(bytes.length);
+        for (var i = 0; i < bytes.length; i++) buffer[i] = bytes.charCodeAt(i);
+
+        var blob = new Blob([buffer], { type: contentType });
+        var url = URL.createObjectURL(blob);
+        var link = document.createElement("a");
+        link.href = url;
+        link.download = attachment.fileName || "anexo";
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        setTimeout(function () { URL.revokeObjectURL(url); }, 30000);
+      })
+      .catch(function (err) {
+        showBanner("Não foi possível baixar o anexo do comentário: " + describe(err));
+      });
+  }
+
+  function buildCommentRow(comment) {
+    var own = isOwnComment(comment);
+    var deleted = !!(comment && comment.deletedAt);
+
+    var row = document.createElement("div");
+    row.className = "sc-comment " + (own ? "sc-comment--own" : "sc-comment--other") +
+      (deleted ? " sc-comment--deleted" : "");
+
+    var bubble = document.createElement("div");
+    bubble.className = "sc-bubble";
+    bubble.textContent = comment.content || "";
+    if (deleted) {
+      var tag = document.createElement("span");
+      tag.className = "sc-comment-deleted";
+      tag.textContent = " (comentário excluído)";
+      bubble.appendChild(tag);
+    }
+    row.appendChild(bubble);
+
+    var attachments = Array.isArray(comment.attachments) ? comment.attachments : [];
+    if (attachments.length) {
+      var wrap = document.createElement("div");
+      wrap.className = "sc-comment-attachments";
+      attachments.forEach(function (attachment) {
+        var chip = document.createElement("button");
+        chip.type = "button";
+        chip.className = "sc-attachment";
+        chip.textContent = attachment.fileName || "anexo";
+        chip.title = "Baixar anexo";
+        chip.addEventListener("click", function () { downloadCommentAttachment(comment, attachment); });
+        wrap.appendChild(chip);
+      });
+      row.appendChild(wrap);
+    }
+
+    var meta = document.createElement("div");
+    meta.className = "sc-meta";
+    var who = own ? "Você" : (comment.author || "Suporte");
+    var when = formatCommentStamp(comment.createdAt);
+    meta.textContent = when ? who + " · " + when : who;
+    row.appendChild(meta);
+
+    return row;
+  }
+
+  function commentPlaceholder(text) {
+    var el = document.createElement("div");
+    el.className = "sc-comments-empty";
+    el.textContent = text;
+    return el;
+  }
+
+  function renderComments() {
+    if (!els.comments) return;
+
+    if (!state.ticketId) {
+      els.comments.hidden = true;
+      return;
+    }
+
+    els.comments.hidden = false;
+
+    if (els.commentsCount) {
+      els.commentsCount.hidden = !state.comments.length;
+      els.commentsCount.textContent = state.comments.length ? String(state.comments.length) : "";
+    }
+    if (els.commentsToggle) {
+      els.commentsToggle.setAttribute("aria-expanded", state.commentsOpen ? "true" : "false");
+    }
+    if (!els.commentsList) return;
+
+    els.commentsList.hidden = !state.commentsOpen;
+    if (!state.commentsOpen) return;
+
+    while (els.commentsList.firstChild) els.commentsList.removeChild(els.commentsList.firstChild);
+
+    if (state.commentsLoading && !state.comments.length) {
+      els.commentsList.appendChild(commentPlaceholder("Carregando comentários…"));
+      return;
+    }
+    if (!state.comments.length) {
+      els.commentsList.appendChild(commentPlaceholder("Nenhum comentário no chamado ainda."));
+      return;
+    }
+
+    state.comments.forEach(function (comment) {
+      els.commentsList.appendChild(buildCommentRow(comment));
+    });
+  }
+
+  /**
+   * Carrega os comentários do chamado vinculado à sessão do chat.
+   *
+   * O parâmetro force ignora o cache por ticket: usado ao abrir o painel, para
+   * o usuário conseguir atualizar a conversa sem reiniciar o chat.
+   */
+  function loadTicketComments(force) {
+    var ticketId = state.ticketId;
+    if (!ticketId) return Promise.resolve();
+    if (!force && state.commentsLoadedFor === ticketId) return Promise.resolve();
+
+    state.commentsLoading = true;
+    renderComments();
+
+    return call("GetTicketComments", ticketId)
+      .then(function (list) {
+        if (state.ticketId !== ticketId) return;
+        state.commentsLoadedFor = ticketId;
+        state.comments = visibleComments(list);
+      })
+      .catch(function (err) {
+        if (state.ticketId !== ticketId) return;
+        state.commentsLoadedFor = "";
+        showBanner("Não foi possível carregar os comentários do chamado: " + describe(err));
+      })
+      .then(function () {
+        if (state.ticketId !== ticketId) return;
+        state.commentsLoading = false;
+        renderComments();
+      });
+  }
+
+  function toggleComments() {
+    state.commentsOpen = !state.commentsOpen;
+    renderComments();
+    if (state.commentsOpen) loadTicketComments(true);
+  }
+
   /**
    * Une as mensagens por sequência (e por id, para as otimistas).
    *
@@ -322,6 +543,17 @@
     state.hasSession = !!next.hasSession;
     state.ticketTitle = next.ticketTitle || state.ticketTitle;
     state.supportName = next.supportName || state.supportName;
+
+    // Comentários do chamado: um ticket novo invalida o cache do anterior.
+    var nextTicketId = String(next.ticketId || "");
+    if (nextTicketId && nextTicketId !== state.ticketId) {
+      state.ticketId = nextTicketId;
+      state.comments = [];
+      state.commentsLoadedFor = "";
+      state.commentsOpen = false;
+    } else if (nextTicketId) {
+      state.ticketId = nextTicketId;
+    }
     state.messages = mergeMessages(Array.isArray(next.messages) ? next.messages : []);
     if (next.supportName || next.ticketTitle) {
       var parts = [];
@@ -330,6 +562,10 @@
       document.title = "Chat — " + parts.join(" · ");
     }
     render();
+
+    // O ticket vem do snapshot do chat; os comentários entram assim que ele é
+    // conhecido (e uma única vez por ticket).
+    if (state.ticketId) loadTicketComments(false);
   }
 
   // ── Envio ────────────────────────────────────────────────────────────────
@@ -595,6 +831,7 @@
       }
     });
 
+    on(els.commentsToggle, "click", toggleComments);
     on(els.shot, "click", requestScreenshot);
     on(els.attach, "click", function () { if (els.fileInput) els.fileInput.click(); });
     on(els.fileInput, "change", function () {

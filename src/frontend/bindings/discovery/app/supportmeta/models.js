@@ -797,6 +797,30 @@ export class TicketComment {
              */
             this["createdAt"] = "";
         }
+        if (/** @type {any} */(false)) {
+            /**
+             * Soft delete: comentário excluído no console continua legível e marcado.
+             * @member
+             * @type {string | null | undefined}
+             */
+            this["deletedAt"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["deletedBy"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * Anexos do nível CONVERSA (pequenos, com miniatura). O repositório do
+             * chamado é outra família (TicketAttachment).
+             * @member
+             * @type {TicketCommentAttachment[] | undefined}
+             */
+            this["attachments"] = undefined;
+        }
 
         Object.assign(this, $$source);
     }
@@ -807,8 +831,78 @@ export class TicketComment {
      * @returns {TicketComment}
      */
     static createFrom($$source = {}) {
+        const $$createField7_0 = $$createType7;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("attachments" in $$parsedSource) {
+            $$parsedSource["attachments"] = $$createField7_0($$parsedSource["attachments"]);
+        }
         return new TicketComment(/** @type {Partial<TicketComment>} */($$parsedSource));
+    }
+}
+
+/**
+ * TicketCommentAttachment é um anexo ligado ao COMENTÁRIO (conversa).
+ */
+export class TicketCommentAttachment {
+    /**
+     * Creates a new TicketCommentAttachment instance.
+     * @param {Partial<TicketCommentAttachment>} [$$source = {}] - The source object to create the TicketCommentAttachment.
+     */
+    constructor($$source = {}) {
+        if (!("id" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["id"] = "";
+        }
+        if (!("fileName" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["fileName"] = "";
+        }
+        if (!("contentType" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["contentType"] = "";
+        }
+        if (!("sizeBytes" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["sizeBytes"] = 0;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["uploadedBy"] = undefined;
+        }
+        if (!("createdAt" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["createdAt"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new TicketCommentAttachment instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {TicketCommentAttachment}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new TicketCommentAttachment(/** @type {Partial<TicketCommentAttachment>} */($$parsedSource));
     }
 }
 
@@ -1067,7 +1161,7 @@ export class TicketFormField {
      * @returns {TicketFormField}
      */
     static createFrom($$source = {}) {
-        const $$createField6_0 = $$createType7;
+        const $$createField6_0 = $$createType9;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("options" in $$parsedSource) {
             $$parsedSource["options"] = $$createField6_0($$parsedSource["options"]);
@@ -1152,7 +1246,7 @@ export class TicketFormSchema {
      * @returns {TicketFormSchema}
      */
     static createFrom($$source = {}) {
-        const $$createField1_0 = $$createType9;
+        const $$createField1_0 = $$createType11;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("fields" in $$parsedSource) {
             $$parsedSource["fields"] = $$createField1_0($$parsedSource["fields"]);
@@ -1277,8 +1371,8 @@ export class TicketOptions {
      * @returns {TicketOptions}
      */
     static createFrom($$source = {}) {
-        const $$createField0_0 = $$createType11;
-        const $$createField1_0 = $$createType13;
+        const $$createField0_0 = $$createType13;
+        const $$createField1_0 = $$createType15;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("departments" in $$parsedSource) {
             $$parsedSource["departments"] = $$createField0_0($$parsedSource["departments"]);
@@ -1470,8 +1564,8 @@ export class TicketTemplateOption {
      * @returns {TicketTemplateOption}
      */
     static createFrom($$source = {}) {
-        const $$createField8_0 = $$createType15;
-        const $$createField9_0 = $$createType17;
+        const $$createField8_0 = $$createType17;
+        const $$createField9_0 = $$createType19;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("questions" in $$parsedSource) {
             $$parsedSource["questions"] = $$createField8_0($$parsedSource["questions"]);
@@ -1603,15 +1697,17 @@ const $$createType2 = $Create.Map($Create.Any, $Create.Any);
 const $$createType3 = $Create.Array($Create.Any);
 const $$createType4 = KnowledgePage.createFrom;
 const $$createType5 = $Create.Array($$createType4);
-const $$createType6 = TicketFormFieldOption.createFrom;
+const $$createType6 = TicketCommentAttachment.createFrom;
 const $$createType7 = $Create.Array($$createType6);
-const $$createType8 = TicketFormField.createFrom;
+const $$createType8 = TicketFormFieldOption.createFrom;
 const $$createType9 = $Create.Array($$createType8);
-const $$createType10 = TicketOptionDepartment.createFrom;
+const $$createType10 = TicketFormField.createFrom;
 const $$createType11 = $Create.Array($$createType10);
-const $$createType12 = TicketOptionProfile.createFrom;
+const $$createType12 = TicketOptionDepartment.createFrom;
 const $$createType13 = $Create.Array($$createType12);
-const $$createType14 = TicketTemplateQuestion.createFrom;
+const $$createType14 = TicketOptionProfile.createFrom;
 const $$createType15 = $Create.Array($$createType14);
-const $$createType16 = TicketTemplateField.createFrom;
+const $$createType16 = TicketTemplateQuestion.createFrom;
 const $$createType17 = $Create.Array($$createType16);
+const $$createType18 = TicketTemplateField.createFrom;
+const $$createType19 = $Create.Array($$createType18);

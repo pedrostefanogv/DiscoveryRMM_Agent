@@ -2337,50 +2337,105 @@ function dataUrlToBase64(dataUrl) {
   return comma >= 0 ? raw.substring(comma + 1) : raw;
 }
 
-async function uploadCommentAttachment(fileName, contentType, base64Data) {
-  // Fixa o ticket no INICIO: se o usuario trocar de chamado durante o upload, o
-  // resultado nao pode reaparecer no composer de outro chamado.
-  var ticketId = currentTicketId;
-  if (!ticketId) {
-    showToast(translate('support.attachmentNoTicket'), 'error');
+// ── Anexos do COMENTÁRIO (conversa) ──────────────────────────────────────
+// O anexo de conversa e filho do COMENTARIO (EntityType "TicketComment") e tem
+// limite proprio (10 MB, imagens + PDF por padrao). Como o comentario so existe
+// no submit, os arquivos ficam em FILA local (base64) e sobem logo depois de o
+// comentario ser criado, usando o id devolvido pela API.
+var commentAttachmentSettings = null;
+
+async function ensureCommentAttachmentSettings() {
+  if (commentAttachmentSettings) return commentAttachmentSettings;
+  try {
+    commentAttachmentSettings = await appApi().TicketCommentAttachmentSettings();
+  } catch (err) {
+    // Sem policy do servidor: cai no padrao local (o backend revalida sempre).
+    commentAttachmentSettings = null;
+  }
+  return commentAttachmentSettings;
+}
+
+function commentAttachmentLimitBytes() {
+  var max = commentAttachmentSettings && Number(commentAttachmentSettings.maxFileSizeBytes);
+  return max > 0 ? max : 10 * 1024 * 1024;
+}
+
+function commentAttachmentAllowed(contentType) {
+  var list = (commentAttachmentSettings && commentAttachmentSettings.allowedContentTypes) || [];
+  if (!list.length) return true;
+  var wanted = String(contentType || '').toLowerCase();
+  for (var i = 0; i < list.length; i++) {
+    if (String(list[i]).toLowerCase() === wanted) return true;
+  }
+  return false;
+}
+
+function commentAttachmentSizeLabel(bytes) {
+  var value = Number(bytes) || 0;
+  if (value >= 1048576) return (value / 1048576).toFixed(1) + ' MB';
+  if (value >= 1024) return (value / 1024).toFixed(1) + ' KB';
+  return value + ' B';
+}
+
+// Enfileira o arquivo/print para o COMENTARIO (nao sobe nada ainda).
+function queueCommentAttachment(fileName, contentType, base64Data, sizeBytes) {
+  var approx = Number(sizeBytes) || Math.floor(String(base64Data || '').length * 3 / 4);
+  var limit = commentAttachmentLimitBytes();
+
+  if (!commentAttachmentAllowed(contentType)) {
+    showToast(translate('support.commentAttachmentTypeBlocked', { name: fileName }), 'error');
     return;
   }
-  var entry = { fileName: fileName, uploading: true, attachmentId: null, failed: false, error: null };
-  commentAttachments.push(entry);
+  if (approx > limit) {
+    // Aviso com o limite: o arquivo NAO vai automaticamente para o repositorio
+    // (o painel de anexos do chamado tem fluxo e limites proprios).
+    showToast(translate('support.commentAttachmentTooLarge', {
+      name: fileName,
+      size: commentAttachmentSizeLabel(approx),
+      limit: commentAttachmentSizeLabel(limit),
+    }), 'error');
+    showToast(translate('support.commentAttachmentUseRepository'), 'error');
+    return;
+  }
+
+  commentAttachments.push({
+    fileName: fileName,
+    contentType: contentType,
+    base64: base64Data,
+    uploading: false,
+    attachmentId: null,
+    failed: false,
+    error: null,
+  });
+  renderCommentAttachments();
+}
+
+// Sobe UM anexo enfileirado para o comentario recem-criado.
+async function uploadCommentAttachment(ticketId, commentId, entry) {
+  entry.uploading = true;
   renderCommentAttachments();
   try {
-    var attachmentId = await appApi().UploadTicketAttachment(
-      ticketId, fileName, contentType || 'application/octet-stream', base64Data);
-    if (ticketId !== currentTicketId) {
-      // Chamado trocou durante o envio: anexo ja esta no chamado certo, mas
-      // nao deve aparecer na fila do composer atual.
-      commentAttachments = commentAttachments.filter(function (item) { return item !== entry; });
-      renderCommentAttachments();
-      return;
-    }
+    entry.attachmentId = await appApi().UploadTicketCommentAttachment(
+      ticketId, commentId, entry.fileName,
+      entry.contentType || 'application/octet-stream', entry.base64);
     entry.uploading = false;
-    entry.attachmentId = attachmentId;
     renderCommentAttachments();
-    showToast(translate('support.attachmentSent', { name: fileName }), 'success');
   } catch (err) {
-    if (ticketId !== currentTicketId) {
-      commentAttachments = commentAttachments.filter(function (item) { return item !== entry; });
-    } else {
-      entry.uploading = false;
-      entry.failed = true;
-      entry.error = String(err);
-    }
+    entry.uploading = false;
+    entry.failed = true;
+    entry.error = String(err);
     renderCommentAttachments();
-    showToast(translate('support.attachmentError', { name: fileName, error: String(err) }), 'error');
+    showToast(translate('support.attachmentError', { name: entry.fileName, error: String(err) }), 'error');
   }
 }
 
 function handleCommentFiles(files) {
   Array.prototype.slice.call(files || []).forEach(function (file) {
     if (!file) return;
+    void ensureCommentAttachmentSettings();
     var reader = new FileReader();
     reader.onload = function () {
-      uploadCommentAttachment(file.name || 'anexo', file.type, dataUrlToBase64(reader.result));
+      queueCommentAttachment(file.name || 'anexo', file.type, dataUrlToBase64(reader.result), file.size);
     };
     reader.onerror = function () {
       showToast(translate('support.attachmentReadError', { name: file.name }), 'error');
@@ -2403,7 +2458,8 @@ window.dsvTicketCommentScreenshot = function (dataUrl) {
   if (screenshotTarget === 'newTicket') {
     queueNewTicketAttachment(name, contentType, base64);
   } else {
-    uploadCommentAttachment(name, contentType, base64);
+    void ensureCommentAttachmentSettings();
+    queueCommentAttachment(name, contentType, base64, Math.floor(base64.length * 3 / 4));
   }
   screenshotTarget = 'comment';
 };
@@ -2517,12 +2573,28 @@ async function submitTicketComment() {
     showToast(translate('support.attachmentUploading'), 'error');
     return;
   }
+  var queuedAttachments = commentAttachments.filter(function (item) { return !item.failed && !item.attachmentId; });
   submitCommentBtnEl.disabled = true;
   try {
-    await appApi().AddTicketComment(currentTicketId, '', content);
+    // O comentario nasce ANTES dos anexos: o anexo de conversa e filho do
+    // comentario (EntityType "TicketComment"), entao precisamos do id.
+    var created = await appApi().AddTicketCommentWithOptions(currentTicketId, content);
+    var commentId = created && created.id;
     commentInputEl.value = '';
-    // Os anexos concluidos ja estao no chamado (aparecem no detalhe); mantem
-    // apenas os que falharam para o usuario poder tentar de novo.
+    if (queuedAttachments.length) {
+      if (commentId) {
+        for (var i = 0; i < queuedAttachments.length; i++) {
+          await uploadCommentAttachment(currentTicketId, commentId, queuedAttachments[i]);
+        }
+      } else {
+        showToast(translate('support.commentAttachmentNoId'), 'error');
+        queuedAttachments.forEach(function (item) {
+          item.failed = true;
+          item.error = 'comentario sem id';
+        });
+      }
+    }
+    // Mantem apenas os que falharam para o usuario poder tentar de novo.
     commentAttachments = commentAttachments.filter(function (item) { return item.failed; });
     renderCommentAttachments();
     showToast(translate('support.commentSent'), 'success');
@@ -2698,17 +2770,75 @@ function ticketCommentHtml(c) {
   var own = isOwnTicketComment(c);
   var author = own ? translate('support.you') : (c.author || translate('support.supportTeam'));
   var when = formatChatDayTime(c.createdAt);
-  return '<div class="ticket-msg ' + (own ? 'own' : 'other') + '">' +
-    '<div class="ticket-bubble">' + escapeHtml(c.content) + '</div>' +
+  // Comentario excluido no console continua LEGIVEL: apenas marcado.
+  var deleted = !!(c && c.deletedAt);
+  var attachments = (c && c.attachments) || [];
+  var attachmentsHtml = '';
+  if (attachments.length) {
+    attachmentsHtml = '<div class="ticket-msg-attachments">' +
+      attachments.map(function (a) {
+        return '<button type="button" class="ticket-msg-attachment"' +
+          ' data-comment-id="' + escapeHtml(c.id) + '"' +
+          ' data-attachment-id="' + escapeHtml(a.id) + '"' +
+          ' data-file-name="' + escapeHtml(a.fileName) + '"' +
+          ' title="' + escapeHtml(a.fileName) + '">' +
+          '<span class="ticket-msg-attachment-name">' + escapeHtml(a.fileName) + '</span>' +
+          '</button>';
+      }).join('') +
+    '</div>';
+  }
+  return '<div class="ticket-msg ' + (own ? 'own' : 'other') + (deleted ? ' deleted' : '') + '">' +
+    '<div class="ticket-bubble">' +
+      (deleted ? '<em>' + escapeHtml(c.content) + '</em>' : escapeHtml(c.content)) +
+      attachmentsHtml +
+    '</div>' +
     '<div class="ticket-msg-meta">' +
       '<span class="ticket-msg-author">' + escapeHtml(author) + '</span>' +
       (when ? '<span class="ticket-msg-time">' + escapeHtml(when) + '</span>' : '') +
+      (deleted ? '<span class="ticket-msg-deleted">' + escapeHtml(translate('support.commentDeleted')) + '</span>' : '') +
     '</div>' +
   '</div>';
 }
 
+// Salva um anexo baixado (base64) como arquivo local, sem depender de dialog.
+function saveAttachmentFromBase64(base64, contentType, fileName) {
+  var mime = contentType || 'application/octet-stream';
+  var dataUrl = 'data:' + mime + ';base64,' + String(base64 || '');
+  var anchor = document.createElement('a');
+  anchor.href = dataUrl;
+  anchor.download = fileName || 'anexo';
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+}
+
+// Liga os botoes de anexo do comentario (o webview nao carrega o token do agent
+// e o endpoint exige Authorization, entao os bytes vem pelo binding).
+function bindCommentAttachmentDownloads() {
+  if (!commentsListEl) return;
+  var buttons = commentsListEl.querySelectorAll('.ticket-msg-attachment');
+  Array.prototype.forEach.call(buttons, function (btn) {
+    btn.addEventListener('click', function () {
+      var ticketId = currentTicketId;
+      var commentId = btn.getAttribute('data-comment-id');
+      var attachmentId = btn.getAttribute('data-attachment-id');
+      var fileName = btn.getAttribute('data-file-name') || 'anexo';
+      if (!ticketId || !commentId || !attachmentId) return;
+      appApi().DownloadTicketCommentAttachment(ticketId, commentId, attachmentId)
+        .then(function (res) {
+          saveAttachmentFromBase64(res && res.base64, (res && res.contentType) || 'application/octet-stream', fileName);
+        })
+        .catch(function (err) {
+          showToast(translate('support.attachmentError', { name: fileName, error: String(err) }), 'error');
+        });
+    });
+  });
+}
+
 async function loadTicketComments(ticketId) {
   if (!commentsListEl) return;
+  // Policy do nivel conversa (limite/tipos) para validar o anexo antes da fila.
+  void ensureCommentAttachmentSettings();
   commentsListEl.innerHTML = '<div class="meta">' + escapeHtml(translate('support.loadingComments')) + '</div>';
   try {
     var comments = await appApi().GetTicketComments(ticketId);
@@ -2725,6 +2855,7 @@ async function loadTicketComments(ticketId) {
       html += ticketCommentHtml(c);
     });
     commentsListEl.innerHTML = html;
+    bindCommentAttachmentDownloads();
     // Rola para o comentario mais recente
     commentsListEl.scrollTop = commentsListEl.scrollHeight;
   } catch (err) {

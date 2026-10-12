@@ -12,6 +12,7 @@ export {
     KnowledgePage,
     TicketAnswer,
     TicketComment,
+    TicketCommentAttachment,
     TicketDepartmentField,
     TicketFieldValue,
     TicketFormField,
