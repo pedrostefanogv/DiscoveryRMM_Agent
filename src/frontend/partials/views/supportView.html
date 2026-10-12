@@ -135,19 +135,40 @@
           <div id="commentsList" class="comments-list">
             <div class="meta" data-i18n="common.loading">Carregando...</div>
           </div>
-          <div id="commentCompose" class="comment-compose">
-            <input id="commentFileInput" type="file" multiple hidden />
+          <div id="commentCompose" class="comment-compose">            <input id="commentFileInput" type="file" multiple hidden />
             <div id="commentAttachments" class="comment-attachments hidden"></div>
-            <div class="comment-input-box">
-              <textarea id="commentInput" rows="3" placeholder="Escreva um comentario..."
+            <!-- Mesma caixa/botoes do composer do chat com a IA: o textarea e o corpo
+                 do box e os icones flutuam no canto inferior direito. -->
+            <div class="chat-input-wrap">
+              <textarea id="commentInput" class="chat-input" rows="3" placeholder="Escreva um comentario..."
                 data-i18n-placeholder="support.writeCommentPlaceholder" data-app-lang="true"></textarea>
-              <div class="comment-input-toolbar">
-                <span class="meta comment-attach-hint" data-i18n="support.attachHint">Anexe arquivos ou cole um print (Ctrl+V)</span>
-                <button id="commentAttachBtn" type="button" class="btn subtle" title="Anexar arquivo (ou cole um print com Ctrl+V)"
-                  data-i18n="support.attachFile" data-i18n-title="support.attachFileHint">Anexar</button>
-                <button id="commentScreenshotBtn" type="button" class="btn subtle" title="Print da tela (recorte, setas e marcacoes)"
-                  data-i18n="support.attachScreenshot" data-i18n-title="support.attachScreenshotHint">Print</button>
-                <button id="submitCommentBtn" class="btn primary" data-i18n="action.sendComment">Enviar Comentario</button>
+              <div class="chat-input-actions">
+                <button id="commentAttachBtn" type="button" class="chat-icon-btn" title="Anexar arquivo (ou cole um print com Ctrl+V)"
+                  aria-label="Anexar arquivo" data-i18n-title="support.attachFileHint" data-i18n-aria-label="support.attachFile">
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"
+                  stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+                </svg>
+                </button>
+                <button id="commentScreenshotBtn" type="button" class="chat-icon-btn chat-screenshot-btn" title="Print da tela (recorte, setas e marcacoes)"
+                  aria-label="Print da tela" data-i18n-title="support.attachScreenshotHint" data-i18n-aria-label="support.attachScreenshot">
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"
+                  stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M4 8V6a2 2 0 0 1 2-2h2" />
+                  <path d="M16 4h2a2 2 0 0 1 2 2v2" />
+                  <path d="M20 16v2a2 2 0 0 1-2 2h-2" />
+                  <path d="M8 20H6a2 2 0 0 1-2-2v-2" />
+                  <circle cx="12" cy="12" r="3.5" />
+                </svg>
+                </button>
+                <button id="submitCommentBtn" type="button" class="chat-icon-btn chat-send-btn" title="Enviar comentario"
+                  aria-label="Enviar comentario" data-i18n-title="action.sendComment" data-i18n-aria-label="action.sendComment">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2"
+                  stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="m22 2-7 20-4-9-9-4Z" />
+                  <path d="M22 2 11 13" />
+                </svg>
+                </button>
               </div>
             </div>
             <div id="commentOfflineHint" class="meta hidden" data-i18n="support.commentOfflineHint"></div>
@@ -256,11 +277,24 @@
             </div>
             <div class="comment-attach-toolbar">
               <input id="newTicketFileInput" type="file" multiple hidden />
-              <button id="newTicketAttachBtn" type="button" class="btn subtle" title="Anexar arquivo (ou cole um print com Ctrl+V)"
-                data-i18n="support.attachFile" data-i18n-title="support.attachFileHint">Anexar</button>
-              <button id="newTicketScreenshotBtn" type="button" class="btn subtle" title="Print da tela (recorte, setas e marcacoes)"
-                data-i18n="support.attachScreenshot" data-i18n-title="support.attachScreenshotHint">Print da tela</button>
-              <span class="meta" data-i18n="support.attachHint">Anexe arquivos ou cole um print (Ctrl+V)</span>
+              <button id="newTicketAttachBtn" type="button" class="chat-icon-btn" title="Anexar arquivo (ou cole um print com Ctrl+V)"
+                aria-label="Anexar arquivo" data-i18n-title="support.attachFileHint" data-i18n-aria-label="support.attachFile">
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"
+                  stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+                </svg>
+              </button>
+              <button id="newTicketScreenshotBtn" type="button" class="chat-icon-btn chat-screenshot-btn" title="Print da tela (recorte, setas e marcacoes)"
+                aria-label="Print da tela" data-i18n-title="support.attachScreenshotHint" data-i18n-aria-label="support.attachScreenshot">
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"
+                  stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M4 8V6a2 2 0 0 1 2-2h2" />
+                  <path d="M16 4h2a2 2 0 0 1 2 2v2" />
+                  <path d="M20 16v2a2 2 0 0 1-2 2h-2" />
+                  <path d="M8 20H6a2 2 0 0 1-2-2v-2" />
+                  <circle cx="12" cy="12" r="3.5" />
+                </svg>
+              </button>
             </div>
             <div id="newTicketAttachments" class="comment-attachments hidden"></div>
             <div id="ticketFormStatus" class="form-status hidden"></div>

@@ -959,32 +959,26 @@
 
 /* Campo do comentario com a barra de acoes no canto inferior (mesmo padrao do
    campo do chat com a IA). */
-.comment-input-box {
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--surface);
-  padding: 10px 10px 8px;
-}
-
-.comment-compose .comment-input-box textarea {
-  width: 100%;
-  border: 0;
-  background: transparent;
+/* Composer do comentario reaproveita a caixa e os botoes-icone do chat com a IA. */
+.comment-compose .chat-input {
+  /* Reserva a largura dos TRES icones (clipe, print, enviar). */
+  padding-right: 96px;
   resize: vertical;
-  padding: 0;
+  max-height: none;
+  /* O tema antigo do comentario (`.comment-compose textarea`) tem especificidade
+     maior que `.chat-input`; aqui neutralizamos borda/fundo/padding para o
+     textarea ser o corpo do box, como no chat. */
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding-top: 0;
+  padding-bottom: 0;
+  padding-left: 0;
+  min-height: 60px;
 }
 
-.comment-input-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 8px;
-}
-
-.comment-input-toolbar .comment-attach-hint {
-  margin-right: auto;
+.comment-compose .chat-input:focus {
+  border: 0;
 }
 
 /* Anexos do comentario do chamado (barra + chips de status). */
