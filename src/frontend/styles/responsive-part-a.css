@@ -1150,7 +1150,8 @@
 
 .ticket-msg-attachment-name-btn:hover .ticket-msg-attachment-name { text-decoration: underline; }
 
-/* Anexos do REPOSITORIO do chamado (arquivos grandes), abaixo da conversa. */
+/* LEGADO: lista de anexos do repositório que ficava abaixo da conversa. Não é
+   mais renderizada (os anexos agora abrem no modal do topo). */
 .ticket-attachments {
   margin-top: 14px;
   padding-top: 10px;
@@ -1197,6 +1198,91 @@
 
 .ticket-attachment-size {
   color: var(--muted);
+}
+
+/* ── Anexos do chamado: botão no topo + modal ──────────────────────────────
+   Substitui o antigo bloco de anexos colado no rodapé da linha do tempo. As
+   classes .ticket-attachments/.ticket-attachment-item acima ficaram como
+   legado (não são mais renderizadas). */
+
+.support-detail-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ticket-attachments-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.ticket-attachments-count.hidden { display: none; }
+
+/* Mesma linguagem do "Fechar chamado", com lista rolável. */
+.ticket-attachments-modal-card {
+  width: min(640px, 96vw);
+}
+
+.ticket-attachments-modal-list {
+  max-height: min(60vh, 520px);
+  overflow-y: auto;
+  padding: 12px 18px 18px 18px;
+}
+
+.ticket-attachment-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ticket-attachment-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-1);
+}
+
+.ticket-attachment-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ticket-attachment-row-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.8rem;
+}
+
+.ticket-attachment-row-meta {
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.ticket-attachment-row-actions {
+  display: flex;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.ticket-attachments-empty {
+  padding: 8px 0;
 }
 
 .comment-compose {

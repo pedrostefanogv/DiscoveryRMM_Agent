@@ -228,6 +228,7 @@ func (a *App) ipcRPCSupportTicketAttachmentSettings(payload map[string]any) map[
 	}
 	return ipcRPCResult(settings)
 }
+
 // ── Anexos: lista consolidada + salvar em disco ──────────────────────────
 //
 // O download nao devolve base64 pro webview: o servico grava o arquivo em
@@ -245,6 +246,23 @@ func (a *App) ipcRPCSupportTicketAttachmentsAll(payload map[string]any) map[stri
 	return ipcRPCResult(items)
 }
 
+// saveAttachmentFromRPC grava o anexo baixado pelo serviço respeitando o
+// destino pedido pela UI:
+//
+//	destPath (escolhido no "Salvar como") > destDir (pasta padrão resolvida no
+//	processo da UI, que roda como o usuário) > pasta padrão do serviço.
+//
+// Sem destDir, o serviço (SYSTEM) gravaria em ...\systemprofile\Downloads.
+func saveAttachmentFromRPC(payload map[string]any, fileName string, data []byte) (string, error) {
+	if destPath := ipcRPCString(payload, "destPath"); destPath != "" {
+		return saveAttachmentBytesAt(destPath, fileName, data)
+	}
+	if destDir := ipcRPCString(payload, "destDir"); destDir != "" {
+		return saveDownloadedAttachmentToDir(destDir, fileName, data)
+	}
+	return saveDownloadedAttachment(fileName, data)
+}
+
 func (a *App) ipcRPCSupportTicketAttachmentSave(payload map[string]any) map[string]any {
 	if err := a.requireSupportSvc(); err != nil {
 		return ipcRPCError(err)
@@ -254,7 +272,7 @@ func (a *App) ipcRPCSupportTicketAttachmentSave(payload map[string]any) map[stri
 	if err != nil {
 		return ipcRPCError(err)
 	}
-	path, err := saveDownloadedAttachment(ipcRPCString(payload, "fileName"), data)
+	path, err := saveAttachmentFromRPC(payload, ipcRPCString(payload, "fileName"), data)
 	if err != nil {
 		return ipcRPCError(err)
 	}
@@ -272,7 +290,7 @@ func (a *App) ipcRPCSupportCommentAttachmentSave(payload map[string]any) map[str
 	if err != nil {
 		return ipcRPCError(err)
 	}
-	path, err := saveDownloadedAttachment(ipcRPCString(payload, "fileName"), data)
+	path, err := saveAttachmentFromRPC(payload, ipcRPCString(payload, "fileName"), data)
 	if err != nil {
 		return ipcRPCError(err)
 	}

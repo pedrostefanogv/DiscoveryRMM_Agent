@@ -107,6 +107,12 @@ const openCloseTicketBtnEl = document.getElementById('openCloseTicketBtn');
 const closeTicketModalEl = document.getElementById('closeTicketModal');
 const closeTicketModalCancelBtnEl = document.getElementById('closeTicketModalCancelBtn');
 const closeTicketModalCancelBottomBtnEl = document.getElementById('closeTicketModalCancelBottomBtn');
+// Anexos do chamado: botao no topo do detalhe + modal (repositorio + conversa).
+const ticketAttachmentsBtnEl = document.getElementById('ticketAttachmentsBtn');
+const ticketAttachmentsCountEl = document.getElementById('ticketAttachmentsCount');
+const ticketAttachmentsModalEl = document.getElementById('ticketAttachmentsModal');
+const ticketAttachmentsModalCloseBtnEl = document.getElementById('ticketAttachmentsModalCloseBtn');
+const ticketAttachmentsModalListEl = document.getElementById('ticketAttachmentsModalList');
 const commentsListEl = document.getElementById('commentsList');
 const commentInputEl = document.getElementById('commentInput');
 const submitCommentBtnEl = document.getElementById('submitCommentBtn');

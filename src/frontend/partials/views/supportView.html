@@ -62,8 +62,21 @@
       <div class="support-detail-header-row">
         <button id="backToListBtn" class="btn subtle kb-detail-back" type="button" data-i18n="action.back">&#x2190;
           Voltar</button>
-        <button id="openCloseTicketBtn" class="btn danger" type="button" data-i18n="action.closeTicket">Fechar
-          Chamado</button>
+        <div class="support-detail-header-actions">
+          <button id="ticketAttachmentsBtn" class="btn subtle" type="button"
+            data-i18n-title="support.ticketAttachments" data-i18n-aria-label="support.ticketAttachments"
+            aria-haspopup="dialog" aria-controls="ticketAttachmentsModal" aria-label="Anexos do chamado"
+            title="Anexos do chamado">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+            </svg>
+            <span data-i18n="support.ticketAttachments">Anexos do chamado</span>
+            <span id="ticketAttachmentsCount" class="ticket-attachments-count hidden"></span>
+          </button>
+          <button id="openCloseTicketBtn" class="btn danger" type="button" data-i18n="action.closeTicket">Fechar
+            Chamado</button>
+        </div>
       </div>
       <div id="supportTicketDetail" class="support-form-card">
         <div class="ticket-detail-top">
@@ -236,6 +249,22 @@
               data-i18n="action.cancel">Cancelar</button>
             <button id="closeTicketBtn" class="btn danger" data-i18n="action.closeTicket">Fechar Chamado</button>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Anexos do chamado em modal: botao no topo do detalhe. Antes a lista do
+         repositorio aparecia colada no rodape da conversa. -->
+    <div id="ticketAttachmentsModal" class="close-ticket-modal hidden" role="dialog" aria-modal="true"
+      aria-labelledby="ticketAttachmentsModalTitle">
+      <div class="close-ticket-modal-card ticket-attachments-modal-card">
+        <div class="close-ticket-modal-header">
+          <h4 id="ticketAttachmentsModalTitle" data-i18n="support.ticketAttachments">Anexos do chamado</h4>
+          <button id="ticketAttachmentsModalCloseBtn" class="btn subtle btn-icon" type="button" aria-label="Fechar"
+            title="Fechar">&times;</button>
+        </div>
+        <div id="ticketAttachmentsModalList" class="ticket-attachments-modal-list">
+          <div class="meta" data-i18n="common.loading">Carregando...</div>
         </div>
       </div>
     </div>

@@ -2017,6 +2017,25 @@ function initSupport() {
       }
     });
   }
+
+  // Anexos do chamado: botao no topo abre o modal; clique no fundo/fechar sai.
+  if (ticketAttachmentsBtnEl) {
+    ticketAttachmentsBtnEl.addEventListener('click', function () {
+      if (!currentTicketId || !currentTicketAttachments.length) return;
+      showTicketAttachmentsModal();
+    });
+  }
+  if (ticketAttachmentsModalCloseBtnEl) {
+    ticketAttachmentsModalCloseBtnEl.addEventListener('click', hideTicketAttachmentsModal);
+  }
+  if (ticketAttachmentsModalEl) {
+    ticketAttachmentsModalEl.addEventListener('click', function (e) {
+      if (e.target === ticketAttachmentsModalEl) {
+        hideTicketAttachmentsModal();
+      }
+    });
+  }
+  bindTicketAttachmentsModalActions();
 }
 
 // ── Listagem ───────────────────────────────────────────────────────────────
@@ -2235,6 +2254,10 @@ function renderTicketDetail(t) {
   // Cache de miniaturas tambem e por chamado.
   commentThumbCache = {};
   commentThumbOrder = [];
+  // Anexos do chamado no modal tambem sao por chamado: limpa e fecha o modal
+  // (o loadTicketComments do chamado novo repovoa em seguida).
+  setTicketAttachments([]);
+  hideTicketAttachmentsModal();
   if (ticketClosedNoticeEl) ticketClosedNoticeEl.classList.toggle('hidden', !closed);
   if (closed && ticketClosedNoticeTextEl) {
     ticketClosedNoticeTextEl.textContent = t.closedAt
@@ -2258,6 +2281,8 @@ function renderTicketDetail(t) {
 function closeTicketDetail() {
   currentTicketId = '';
   currentTicket = null;
+  setTicketAttachments([]);
+  hideTicketAttachmentsModal();
   showSupportList();
   hideCloseTicketModal();
   resetRating();
@@ -2940,48 +2965,155 @@ function ticketCommentHtml(c) {
   '</div>';
 }
 
-// Lista os anexos do REPOSITORIO do chamado (arquivos grandes) junto da
-// conversa. Antes o agent nao tinha como ver nem baixar esses arquivos.
-function ticketAttachmentsHtml(items) {
-  if (!items || !items.length) return '';
-  var chips = items.map(function (a) {
-    return '<button type="button" class="ticket-attachment-item"' +
-      ' data-attachment-id="' + escapeHtml(a.id) + '"' +
-      ' data-file-name="' + escapeHtml(a.fileName) + '"' +
-      ' title="' + escapeHtml(a.fileName) + '">' +
-      '<span class="ticket-attachment-name">' + escapeHtml(a.fileName) + '</span>' +
-      '<span class="ticket-attachment-size">' + escapeHtml(commentAttachmentSizeLabel(a.sizeBytes)) + '</span>' +
-      '</button>';
-  }).join('');
-  return '<div class="ticket-attachments">' +
-    '<div class="ticket-attachments-title">' +
-      escapeHtml(translate('support.ticketAttachments')) + ' (' + items.length + ')' +
-    '</div>' +
-    '<div class="ticket-msg-attachments">' + chips + '</div>' +
-  '</div>';
+// ── Anexos do CHAMADO (modal no topo do detalhe) ─────────────────────────
+//
+// Antes a lista de anexos do repositório era jogada no RODAPÉ da linha do tempo
+// dos comentários. Agora vive em um modal aberto pelo botão "Anexos" no topo do
+// detalhe e cobre os DOIS níveis (repositório + conversa). O download continua
+// sendo feito pelo serviço (grava em disco e devolve o caminho).
+
+// Anexos do chamado atual (repositório + conversa), preenchidos por
+// loadTicketComments. Ficam em memória até trocar de chamado.
+var currentTicketAttachments = [];
+
+function ticketAttachmentOriginLabel(item) {
+  return item && item.origin === 'comment'
+    ? translate('support.attachmentsOriginComment')
+    : translate('support.attachmentsOriginRepository');
 }
 
-// Liga os botoes de anexo do REPOSITORIO: o download e feito pelo servico, que
-// grava o arquivo em disco e devolve o caminho (sem base64/data URL no webview).
-function bindTicketAttachmentSaves() {
-  if (!commentsListEl) return;
-  var buttons = commentsListEl.querySelectorAll('.ticket-attachment-item');
-  Array.prototype.forEach.call(buttons, function (btn) {
-    btn.addEventListener('click', function () {
-      var ticketId = currentTicketId;
-      var attachmentId = btn.getAttribute('data-attachment-id');
-      var fileName = btn.getAttribute('data-file-name') || 'anexo';
-      if (!ticketId || !attachmentId) return;
-      btn.disabled = true;
-      appApi().SaveTicketAttachment(ticketId, attachmentId, fileName)
-        .then(function (path) {
-          showToast(translate('support.attachmentSaved', { path: path || '' }), 'success');
-        })
-        .catch(function (err) {
-          showToast(translate('support.attachmentError', { name: fileName, error: String(err) }), 'error');
-        })
-        .then(function () { btn.disabled = false; });
+function ticketAttachmentsModalHtml(items) {
+  if (!items || !items.length) {
+    return '<div class="meta ticket-attachments-empty">' +
+      escapeHtml(translate('support.attachmentsEmpty')) + '</div>';
+  }
+  var rows = items.map(function (a) {
+    var isComment = a.origin === 'comment';
+    var meta = [ticketAttachmentOriginLabel(a), commentAttachmentSizeLabel(a.sizeBytes)];
+    if (isComment && a.commentAuthor) meta.push(a.commentAuthor);
+    return '<div class="ticket-attachment-row ticket-attachment-row--' + (isComment ? 'comment' : 'repository') + '"' +
+      ' data-attachment-id="' + escapeHtml(a.id) + '"' +
+      ' data-comment-id="' + escapeHtml(a.commentId || '') + '"' +
+      ' data-origin="' + (isComment ? 'comment' : 'repository') + '"' +
+      ' data-file-name="' + escapeHtml(a.fileName) + '">' +
+      '<div class="ticket-attachment-info">' +
+        '<span class="ticket-attachment-row-name" title="' + escapeHtml(a.fileName) + '">' +
+          escapeHtml(a.fileName) + '</span>' +
+        '<span class="ticket-attachment-row-meta">' + escapeHtml(meta.join(' \u00b7 ')) + '</span>' +
+      '</div>' +
+      '<div class="ticket-attachment-row-actions">' +
+        '<button type="button" class="btn subtle btn-sm" data-action="save">' +
+          escapeHtml(translate('support.saveAttachment')) + '</button>' +
+        '<button type="button" class="btn subtle btn-sm" data-action="save-as">' +
+          escapeHtml(translate('support.saveAs')) + '</button>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+  return '<div class="ticket-attachment-rows">' + rows + '</div>';
+}
+
+function renderTicketAttachmentsModal() {
+  if (!ticketAttachmentsModalListEl) return;
+  ticketAttachmentsModalListEl.innerHTML = ticketAttachmentsModalHtml(currentTicketAttachments);
+}
+
+// Atualiza o contador do botão do topo (some quando não há anexo).
+function updateTicketAttachmentsButton() {
+  var count = (currentTicketAttachments || []).length;
+  if (ticketAttachmentsCountEl) {
+    ticketAttachmentsCountEl.textContent = String(count);
+    ticketAttachmentsCountEl.classList.toggle('hidden', count === 0);
+  }
+  if (ticketAttachmentsBtnEl) {
+    ticketAttachmentsBtnEl.disabled = count === 0;
+  }
+}
+
+function setTicketAttachments(items) {
+  currentTicketAttachments = (items || []).filter(function (a) { return !!a; });
+  updateTicketAttachmentsButton();
+  if (ticketAttachmentsModalEl && !ticketAttachmentsModalEl.classList.contains('hidden')) {
+    renderTicketAttachmentsModal();
+  }
+}
+
+function showTicketAttachmentsModal() {
+  if (!currentTicketId) return;
+  renderTicketAttachmentsModal();
+  if (ticketAttachmentsModalEl) ticketAttachmentsModalEl.classList.remove('hidden');
+}
+
+function hideTicketAttachmentsModal() {
+  if (ticketAttachmentsModalEl) ticketAttachmentsModalEl.classList.add('hidden');
+}
+
+function ticketAttachmentItemFromRow(row) {
+  return {
+    id: row.getAttribute('data-attachment-id') || '',
+    commentId: row.getAttribute('data-comment-id') || '',
+    origin: row.getAttribute('data-origin') || 'repository',
+    fileName: row.getAttribute('data-file-name') || 'anexo'
+  };
+}
+
+// Baixa o anexo pelo serviço. destPath vazio = pasta padrão (Downloads do
+// usuário, resolvida no backend); com destPath = caminho do "Salvar como".
+function saveTicketAttachmentItem(item, destPath) {
+  var api = appApi();
+  var ticketId = currentTicketId;
+  if (!ticketId || !item || !item.id) return Promise.reject(new Error('anexo invalido'));
+  if (item.origin === 'comment') {
+    if (!item.commentId) return Promise.reject(new Error('comentario do anexo ausente'));
+    if (destPath) {
+      return api.SaveTicketCommentAttachmentAs(ticketId, item.commentId, item.id, item.fileName, destPath);
+    }
+    return api.SaveTicketCommentAttachment(ticketId, item.commentId, item.id, item.fileName);
+  }
+  if (destPath) {
+    return api.SaveTicketAttachmentAs(ticketId, item.id, item.fileName, destPath);
+  }
+  return api.SaveTicketAttachment(ticketId, item.id, item.fileName);
+}
+
+// askPath = true abre o diálogo nativo "Salvar como"; false salva na pasta padrão.
+function saveTicketAttachment(item, askPath, button) {
+  if (button) button.disabled = true;
+  var start = Promise.resolve({ destPath: '', asked: false });
+  if (askPath) {
+    start = Promise.resolve().then(function () {
+      var api = appApi();
+      if (typeof api.ChooseTicketAttachmentSavePath !== 'function') {
+        // Build antigo sem o binding do diálogo: não trava o download, cai para
+        // a pasta padrão.
+        return { destPath: '', asked: false };
+      }
+      return api.ChooseTicketAttachmentSavePath(item.fileName, translate('support.saveAsDialogTitle'))
+        .then(function (destPath) { return { destPath: destPath || '', asked: true }; });
     });
+  }
+  return start.then(function (choice) {
+    // Usuário cancelou o diálogo: não baixa nem avisa.
+    if (choice.asked && !choice.destPath) return null;
+    return saveTicketAttachmentItem(item, choice.destPath);
+  }).then(function (path) {
+    if (path === null) return;
+    showToast(translate('support.attachmentSaved', { path: path || '' }), 'success');
+  }).catch(function (err) {
+    showToast(translate('support.attachmentError', { name: item.fileName, error: String(err) }), 'error');
+  }).then(function () {
+    if (button) button.disabled = false;
+  });
+}
+
+// Delegação de evento no container do modal (os itens são re-renderizados).
+function bindTicketAttachmentsModalActions() {
+  if (!ticketAttachmentsModalListEl) return;
+  ticketAttachmentsModalListEl.addEventListener('click', function (e) {
+    var btn = e.target && e.target.closest ? e.target.closest('button[data-action]') : null;
+    if (!btn) return;
+    var row = btn.closest ? btn.closest('.ticket-attachment-row') : null;
+    if (!row) return;
+    saveTicketAttachment(ticketAttachmentItemFromRow(row), btn.getAttribute('data-action') === 'save-as', btn);
   });
 }
 
@@ -3037,9 +3169,8 @@ async function loadTicketComments(ticketId) {
     // Ignora resposta tardia de um chamado que nao esta mais aberto (troca rapida).
     if (currentTicketId !== ticketId) return;
 
-    // Anexos do chamado (repositorio) no mesmo lugar da conversa. O endpoint
-    // devolve os DOIS niveis; aqui mostramos o repositorio, pois os de conversa
-    // ja aparecem no proprio balao.
+    // Anexos do chamado (repositorio + conversa) alimentam o modal do botao no
+    // TOPO do detalhe. Antes o repositorio era despejado no rodape da conversa.
     var allAttachments = [];
     try {
       allAttachments = (await appApi().GetTicketAttachments(ticketId)) || [];
@@ -3047,9 +3178,6 @@ async function loadTicketComments(ticketId) {
       allAttachments = [];
     }
     if (currentTicketId !== ticketId) return;
-    var repositoryAttachments = allAttachments.filter(function (a) {
-      return a && a.origin !== 'comment';
-    });
 
     // Cada balao carrega a propria data/hora no meta (autor + data + hora);
     // nao ha mais separador de dia centralizado entre as mensagens.
@@ -3060,10 +3188,11 @@ async function loadTicketComments(ticketId) {
     if (!comments || !comments.length) {
       html += '<div class="meta">' + escapeHtml(translate('support.noComments')) + '</div>';
     }
-    html += ticketAttachmentsHtml(repositoryAttachments);
     commentsListEl.innerHTML = html;
+    // Anexos do chamado vivem no modal do topo (só atualiza o DOM, sem re-render
+    // da conversa).
+    setTicketAttachments(allAttachments);
     bindCommentAttachmentDownloads();
-    bindTicketAttachmentSaves();
     // Miniaturas das imagens da conversa (download autenticado, assincrono).
     hydrateCommentAttachmentThumbnails(ticketId);
     // Rola para o comentario mais recente
