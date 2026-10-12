@@ -256,6 +256,44 @@ func (c *Client) GetRuntimeCustomFields(ctx context.Context, cfg RuntimeConfig, 
 	return result, nil
 }
 
+// CreateAgentNote grava uma nota no próprio agent (histórico do agente), usada
+// pelas tarefas com "gravar saída como nota".
+func (c *Client) CreateAgentNote(ctx context.Context, cfg RuntimeConfig, content, correlationID string) error {
+	baseURL, err := normalizeBaseURL(cfg.BaseURL)
+	if err != nil {
+		return err
+	}
+
+	payload, err := json.Marshal(map[string]any{"content": content, "isPinned": false})
+	if err != nil {
+		return fmt.Errorf("falha ao serializar nota: %w", err)
+	}
+
+	reqCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	endpoint := baseURL + "/api/v1/agent-auth/me/notes"
+	httpReq, err := http.NewRequestWithContext(reqCtx, http.MethodPost, endpoint, bytes.NewReader(payload))
+	if err != nil {
+		return fmt.Errorf("falha ao criar request de nota: %w", err)
+	}
+	if err := setAutomationHeaders(httpReq, cfg, correlationID); err != nil {
+		return err
+	}
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("falha ao enviar nota: %w", err)
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("nota rejeitada pelo servidor (HTTP %d)", resp.StatusCode)
+	}
+	return nil
+}
+
 // CollectCustomFieldValue registra um valor coletado durante uma execução.
 // Retorna ErrCustomFieldWrite para erros de negócio (HTTP 400) não-retentáveis.
 func (c *Client) CollectCustomFieldValue(ctx context.Context, cfg RuntimeConfig, req CollectedValueRequest, correlationID string) (*CollectedValueResponse, error) {

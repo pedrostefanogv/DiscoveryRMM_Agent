@@ -142,6 +142,8 @@ type AutomationTask struct {
 	// CollectorFieldDefinitionId: quando preenchido, a tarefa e coletora e o
 	// agent grava a ultima linha da saida neste campo customizado de agente.
 	CollectorFieldDefinitionID string `json:"CollectorFieldDefinitionId,omitempty"`
+	// WriteOutputToNote: grava a saida da execucao como uma nota no agent.
+	WriteOutputToNote bool `json:"WriteOutputToNote,omitempty"`
 	// ToastTiming: "Before" (antes de executar) | "After" (apos a conclusao).
 	// Vazio equivale a "After". So se aplica a NotificationMode = Toast.
 	ToastTiming           string            `json:"ToastTiming,omitempty"`

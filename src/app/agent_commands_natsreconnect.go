@@ -12,7 +12,7 @@ import (
 )
 
 // natsReconnectPayload implementa o contrato do comando `nats.reconnect`
-// (docs_planejamento/CONTRATO_AGENT_RECONNECT_COMMAND.md no backend).
+// (DiscoveryRMM_API/docs/CONTRATO_AGENT_RECONNECT_COMMAND.md no backend).
 // Enviado pelo servidor apÃ³s uma transferÃªncia de site do agent, no subject
 // ANTIGO (Ãºnico que o agent ainda consegue receber antes de re-autenticar).
 type natsReconnectPayload struct {

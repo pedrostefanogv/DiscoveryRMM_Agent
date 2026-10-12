@@ -11,8 +11,7 @@ import (
 // estado do loop (não gera token, tool call nem encerra o stream).
 //
 // Contexto: sem esse heartbeat, o frontend não distinguia "processando"
-// de "travado" durante tool chains longas — ver
-// DiscoveryRMM_API/docs_planejamento/AI_CHAT_AGENT_LOOP_PLAN.md.
+// de "travado" durante tool chains longas.
 func TestParseMultiRoundSSE_LoopProgress(t *testing.T) {
 	const sse = "data: {\"type\":\"loop_progress\",\"loopRound\":2,\"loopMaxRounds\":10}\n" +
 		"data: {\"type\":\"token\",\"content\":\"resposta\"}\n" +

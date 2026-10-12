@@ -820,6 +820,9 @@ func (s *Service) executeTaskAsync(ctx context.Context, agentID string, task Aut
 		// Tarefa coletora: grava a última linha da saída no campo configurado.
 		s.postCollectorValue(ctx, cfg, task, result, correlationID)
 
+		// Opção "gravar saída como nota": registra o resultado no histórico do agente.
+		s.postExecutionNote(ctx, cfg, task, result, correlationID)
+
 		entry.FinishedAt = time.Now().UTC()
 		entry.Success = result.Success
 		entry.SuccessSet = true
@@ -961,6 +964,23 @@ func (s *Service) sendOrQueueCallback(ctx context.Context, agentID, executionID,
 		return err
 	}
 	return callbackErr
+}
+
+// postExecutionNote grava a saída da execução como nota no agent (histórico),
+// quando a tarefa tem a opção habilitada.
+func (s *Service) postExecutionNote(ctx context.Context, cfg RuntimeConfig, task AutomationTask, result ExecutionResult, correlationID string) {
+	if !task.WriteOutputToNote {
+		return
+	}
+
+	content := buildExecutionNoteContent(task, result)
+	if strings.TrimSpace(content) == "" {
+		return
+	}
+
+	if err := s.client.CreateAgentNote(ctx, cfg, content, correlationID); err != nil {
+		s.logf("automacao: falha ao gravar a saida como nota (task=%s): %v", task.TaskID, err)
+	}
 }
 
 // postCollectorValue grava a saída de uma tarefa coletora no campo customizado

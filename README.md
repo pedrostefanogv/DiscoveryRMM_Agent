@@ -107,14 +107,17 @@ Detalhes em [BRANCHING.md](BRANCHING.md).
 - [ARCHITECTURE.md](ARCHITECTURE.md) — visão arquitetural / architecture overview
 - [SECURITY.md](SECURITY.md) — política de segurança / security policy
 - [BRANCHING.md](BRANCHING.md) — fluxo de branches / branch workflow
+- [CONFIG_AGENTE.md](CONFIG_AGENTE.md) — configuração local do agente / local agent configuration
 - [DOCs/](DOCs/) — guias técnicos e operacionais / technical and operational guides
+  - [PLANO_SEPARACAO_SERVICO_UI.md](DOCs/PLANO_SEPARACAO_SERVICO_UI.md) — separação serviço × UI (arquitetura implementada) / service × UI separation (implemented architecture)
+  - [GUIA_INTEGRACAO_PSADT_API_OPERACAO.md](DOCs/GUIA_INTEGRACAO_PSADT_API_OPERACAO.md) — integração PSADT e notificações
 
 ---
 
 ## 🛠️ Build (Contribuidores / Contributors)
 
-**PT_BR:** este projeto usa GitHub Actions para build oficial. Para desenvolvimento local consulte [DOCs/README.md](DOCs/README.md).
-**EN:** official builds run on GitHub Actions. For local development see [DOCs/README.md](DOCs/README.md).
+**PT_BR:** este projeto usa GitHub Actions para build oficial. Para desenvolvimento local consulte [DOCs/](DOCs/).
+**EN:** official builds run on GitHub Actions. For local development see [DOCs/](DOCs/).
 
 Requisitos mínimos / Minimum requirements: Windows 10+, Go 1.26+, NSIS no `PATH`.
 

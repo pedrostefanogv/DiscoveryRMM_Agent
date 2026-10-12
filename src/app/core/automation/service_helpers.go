@@ -318,6 +318,34 @@ func truncateReportValue(value string, max int) string {
 	return trimmed[:max] + "..."
 }
 
+// buildExecutionNoteContent monta o texto da nota criada no agent quando a
+// tarefa tem a opção "gravar saída como nota".
+func buildExecutionNoteContent(task AutomationTask, result ExecutionResult) string {
+	var builder strings.Builder
+	builder.WriteString("Tarefa: ")
+	builder.WriteString(strings.TrimSpace(task.Name))
+	builder.WriteString("\nResultado: ")
+	if result.Success {
+		builder.WriteString("sucesso")
+	} else {
+		builder.WriteString("falha")
+	}
+
+	if result.ExitCodeSet {
+		builder.WriteString(fmt.Sprintf("\nExitCode: %d", result.ExitCode))
+	}
+	if message := strings.TrimSpace(result.ErrorMessage); message != "" {
+		builder.WriteString("\nErro: ")
+		builder.WriteString(message)
+	}
+	if output := strings.TrimSpace(result.Output); output != "" {
+		builder.WriteString("\n\nSaída:\n")
+		builder.WriteString(truncateReportValue(output, 4000))
+	}
+
+	return builder.String()
+}
+
 // mergeJSONMetadata injeta um bloco em um JSON de metadata já existente.
 func mergeJSONMetadata(base string, key string, raw string) string {
 	if raw == "" {

@@ -153,6 +153,54 @@ func TestMergeJSONMetadata(t *testing.T) {
 	}
 }
 
+
+func TestBuildExecutionNoteContent(t *testing.T) {
+	task := AutomationTask{TaskID: "t1", Name: "Coletar inventário"}
+	ok := ExecutionResult{Success: true, ExitCodeSet: true, ExitCode: 0, Output: "linha A\nlinha B"}
+	note := buildExecutionNoteContent(task, ok)
+
+	if !strings.Contains(note, "Tarefa: Coletar inventário") || !strings.Contains(note, "Resultado: sucesso") {
+		t.Errorf("nota sem cabeçalho esperado: %q", note)
+	}
+	if !strings.Contains(note, "ExitCode: 0") || !strings.Contains(note, "linha B") {
+		t.Errorf("nota sem exit code/saida: %q", note)
+	}
+
+	failed := buildExecutionNoteContent(task, ExecutionResult{Success: false, ExitCodeSet: true, ExitCode: 1, ErrorMessage: "boom"})
+	if !strings.Contains(failed, "Resultado: falha") || !strings.Contains(failed, "Erro: boom") {
+		t.Errorf("nota de falha inesperada: %q", failed)
+	}
+}
+
+func TestCreateAgentNote_PostsToMeNotes(t *testing.T) {
+	var gotPath string
+	var gotBody map[string]any
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte("{}"))
+	}))
+	defer srv.Close()
+
+	client := NewClient(0)
+	err := client.CreateAgentNote(
+		context.Background(),
+		RuntimeConfig{BaseURL: srv.URL, Token: "mdz_tok", AgentID: "8f6d6d72-4a8a-4c87-bffa-34ba29dc0bb7"},
+		"Tarefa: x\nResultado: sucesso",
+		"c1")
+	if err != nil {
+		t.Fatalf("erro inesperado: %v", err)
+	}
+	if !strings.Contains(gotPath, "/agent-auth/me/notes") {
+		t.Fatalf("caminho inesperado: %q", gotPath)
+	}
+	if gotBody["content"] != "Tarefa: x\nResultado: sucesso" {
+		t.Errorf("conteudo da nota inesperado: %v", gotBody["content"])
+	}
+}
+
 func strPtr(value string) *string { return &value }
 
 func TestPostCollectorValue_NoOutputDoesNotCall(t *testing.T) {
