@@ -123,6 +123,12 @@ export class SupportTicketList {
     }
 }
 
+export const TicketAttachment = supportmeta$0.TicketAttachment;
+
+/**
+ * @typedef {supportmeta$0.TicketAttachment} TicketAttachment
+ */
+
 // Private type creation functions
 const $$createType0 = supportmeta$0.KnowledgeArticle.createFrom;
 const $$createType1 = $Create.Array($$createType0);

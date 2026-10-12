@@ -92,6 +92,12 @@ func (a *App) handleIPCRequest(ctx context.Context, payload map[string]any) map[
 		return a.ipcRPCSupportCommentAttachmentDownload(payload)
 	case "support:comment_attachment_settings":
 		return a.ipcRPCSupportCommentAttachmentSettings(payload)
+	case "support:ticket_attachments_all":
+		return a.ipcRPCSupportTicketAttachmentsAll(payload)
+	case "support:ticket_attachment_save":
+		return a.ipcRPCSupportTicketAttachmentSave(payload)
+	case "support:comment_attachment_save":
+		return a.ipcRPCSupportCommentAttachmentSave(payload)
 	case "support:comment_add":
 		return a.ipcRPCSupportAddComment(payload)
 	case "support:comment_add_legacy":

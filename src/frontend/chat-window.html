@@ -118,6 +118,15 @@
     </div>
   </div>
 
+  <!-- Visor do anexo de imagem: o print enviado pelo suporte abre DENTRO da
+       janela (antes o clique só baixava o arquivo). Segue o mesmo padrão dos
+       modais — começa oculto e depende da regra .sc-modal-overlay[hidden]. -->
+  <div id="scAttachmentViewer" class="sc-modal-overlay sc-viewer" hidden>
+    <button id="scViewerClose" type="button" class="sc-viewer-close" aria-label="Fechar imagem">&times;</button>
+    <img id="scViewerImage" class="sc-viewer-image" alt="" />
+    <div id="scViewerCaption" class="sc-viewer-caption"></div>
+  </div>
+
   <!-- Wails v3 bridge: expõe window.go.app.App e window.wails (mesmo bridge da UI principal). -->
   <script type="module" src="wails-bridge.js"></script>
   <script src="js/app-support-chat.js"></script>

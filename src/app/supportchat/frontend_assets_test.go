@@ -131,3 +131,71 @@ func TestChatWindow_TecnicoEComentariosDoChamado(t *testing.T) {
 		}
 	}
 }
+
+// BUG CORRIGIDO: o anexo/imagem enviado pelo suporte não aparecia na janela do
+// chat. Além de o envelope do NATS não trazer os anexos, o merge do frontend
+// mantinha a cópia antiga (sem anexo) quando o snapshot canônico chegava — e o
+// clique no chip apenas BAIXAVA o arquivo, sem forma de ver a imagem.
+func TestChatWindow_AnexoDeImagemTemVisorEMergeCanonico(t *testing.T) {
+	htmlPath := filepath.Join("..", "..", "frontend", "chat-window.html")
+	html, err := os.ReadFile(htmlPath)
+	if err != nil {
+		t.Fatalf("não foi possível ler %s: %v", htmlPath, err)
+	}
+	for _, needle := range []string{`id="scAttachmentViewer"`, `id="scViewerImage"`, `id="scViewerClose"`} {
+		if !strings.Contains(string(html), needle) {
+			t.Fatalf("chat-window.html deve conter %s (visor do anexo de imagem)", needle)
+		}
+	}
+
+	jsPath := filepath.Join("..", "..", "frontend", "js", "app-support-chat.js")
+	js, err := os.ReadFile(jsPath)
+	if err != nil {
+		t.Fatalf("não foi possível ler %s: %v", jsPath, err)
+	}
+	jsText := string(js)
+	for _, needle := range []string{"function openAttachment(", "function payloadToBlob(", "function messageKey("} {
+		if !strings.Contains(jsText, needle) {
+			t.Fatalf("app-support-chat.js deve declarar %s", needle)
+		}
+	}
+
+	// O snapshot CANÔNICO (incoming) precisa ser aplicado ANTES da cópia local:
+	// era a ordem inversa que deixava o anexo invisível para sempre.
+	incomingIdx := strings.Index(jsText, "(incoming || []).forEach(push);")
+	existingIdx := strings.Index(jsText, "(state.messages || []).forEach(push);")
+	if incomingIdx < 0 || existingIdx < 0 || incomingIdx > existingIdx {
+		t.Fatal("mergeMessages deve aplicar o snapshot canônico (incoming) antes da cópia local, caso contrário a mensagem enriquecida com anexos é descartada")
+	}
+
+	cssPath := filepath.Join("..", "..", "frontend", "support-chat.css")
+	css, err := os.ReadFile(cssPath)
+	if err != nil {
+		t.Fatalf("não foi possível ler %s: %v", cssPath, err)
+	}
+	if !strings.Contains(string(css), ".sc-viewer-image") {
+		t.Fatal("support-chat.css precisa estilizar o visor do anexo (.sc-viewer-image)")
+	}
+}
+
+// BUG CORRIGIDO: o anexo de imagem de um COMENTÁRIO na conversa aparecia só
+// como um chip com o nome do arquivo, enquanto o anexo do chat ao vivo já
+// tinha miniatura e visor. Agora os dois usam a mesma linguagem visual.
+func TestChatWindow_ComentarioComAnexoDeImagemTemMiniatura(t *testing.T) {
+	jsPath := filepath.Join("..", "..", "frontend", "js", "app-support-chat.js")
+	js, err := os.ReadFile(jsPath)
+	if err != nil {
+		t.Fatalf("não foi possível ler %s: %v", jsPath, err)
+	}
+	jsText := string(js)
+	for _, needle := range []string{
+		"function buildCommentAttachments(",
+		"function loadCommentThumbnail(",
+		`call("DownloadTicketCommentAttachment", state.ticketId, comment.id, attachment.id)`,
+		"sc-attachment--thumb",
+	} {
+		if !strings.Contains(jsText, needle) {
+			t.Fatalf("app-support-chat.js deve conter %q (miniatura do anexo de comentário)", needle)
+		}
+	}
+}

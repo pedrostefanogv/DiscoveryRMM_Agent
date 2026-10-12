@@ -137,6 +137,7 @@ type TicketPriority = supportmeta.TicketPriority
 type APITicket = supportmeta.APITicket
 
 type TicketComment = supportmeta.TicketComment
+type TicketAttachment = supportmeta.TicketAttachment
 
 type CreateTicketInput = supportmeta.CreateTicketInput
 type TicketTemplateOption = supportmeta.TicketTemplateOption
@@ -2242,6 +2243,51 @@ func (s *Service) DownloadTicketCommentAttachment(ticketID, commentID, attachmen
 	}
 	s.markReachable()
 	return data, contentType, nil
+}
+
+// GetTicketAttachments lista os anexos do chamado na visao CONSOLIDADA
+// (repositório do chamado + conversa), paginada no servidor. Antes o agent só
+// enxergava os anexos de conversa grudados nos comentários; os do repositório
+// nao apareciam em lugar nenhum.
+func (s *Service) GetTicketAttachments(ticketID string) ([]TicketAttachment, error) {
+	ticketID = strings.TrimSpace(ticketID)
+	if !guidPattern.MatchString(ticketID) {
+		return nil, fmt.Errorf("ticketId inválido")
+	}
+
+	cfg := s.debugConfig()
+	target := apiScheme(cfg) + "://" + cfg.ApiServer + "/api/v1/agent-auth/me/tickets/" + ticketID +
+		"/attachments/all?limit=200"
+	req, err := http.NewRequestWithContext(s.ctxOrBackground(), http.MethodGet, target, nil)
+	if err != nil {
+		return nil, err
+	}
+	if err := netutil.SetAgentAuthHeadersWithAgentID(req, cfg.AuthToken, cfg.AgentID); err != nil {
+		return nil, err
+	}
+	resp, err := tlsutil.NewHTTPClient(20 * time.Second).Do(req)
+	if err != nil {
+		return nil, s.transportError("listar anexos do chamado", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("%s", ticketAPIErrorMessage(resp.StatusCode, string(body)))
+	}
+
+	// O endpoint devolve CursorPageDto<T> ({ items, hasMore, nextCursor }).
+	var page struct {
+		Items []TicketAttachment `json:"items"`
+	}
+	if err := json.Unmarshal(body, &page); err != nil {
+		var direct []TicketAttachment
+		if err2 := json.Unmarshal(body, &direct); err2 != nil {
+			return nil, fmt.Errorf("resposta inválida de anexos: %w", err)
+		}
+		return direct, nil
+	}
+	s.markReachable()
+	return page.Items, nil
 }
 
 // DownloadTicketAttachment baixa um anexo do chamado (o webview nao carrega o

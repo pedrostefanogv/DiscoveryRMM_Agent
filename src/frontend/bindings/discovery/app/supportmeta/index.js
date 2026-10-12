@@ -11,6 +11,7 @@ export {
     KnowledgeArticle,
     KnowledgePage,
     TicketAnswer,
+    TicketAttachment,
     TicketComment,
     TicketCommentAttachment,
     TicketDepartmentField,

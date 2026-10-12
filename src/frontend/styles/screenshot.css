@@ -34,6 +34,28 @@
   background: #000;
 }
 
+/* Arquivo sem miniatura (PDF/zip) no composer: mesmo quadro da imagem. */
+.chat-attachment-file {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 108px;
+  height: 64px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+}
+
+.chat-attachment--error {
+  color: var(--danger, #e5484d);
+}
+
+.chat-attachment--error .chat-attachment-file,
+.chat-attachment--error img {
+  border-color: color-mix(in srgb, var(--danger, #e5484d) 45%, var(--border));
+}
+
 .chat-attachment-meta {
   font-size: 10px;
   color: var(--muted);

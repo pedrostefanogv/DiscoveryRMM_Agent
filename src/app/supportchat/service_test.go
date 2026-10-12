@@ -534,6 +534,134 @@ func TestHandleEnvelope_KeepsSystemAuthorKind(t *testing.T) {
 	}
 }
 
+// BUG CORRIGIDO: o envelope do NATS entrega os anexos apenas por ID. Se o ID
+// não sobreviver ao ingest, o print do suporte some da conversa (foi o caso
+// relatado: "o suporte manda a imagem e ela não aparece para o usuário").
+func TestHandleEnvelope_KeepsAttachmentIds(t *testing.T) {
+	svc := newTestService()
+
+	attachmentID := "11111111-2222-3333-4444-555555555555"
+	payload, _ := json.Marshal(Envelope{
+		EventType:       EventMessage,
+		SessionID:       testSessionID,
+		TicketID:        testTicketID,
+		AuthorKind:      "support",
+		Body:            "segue o print",
+		Sequence:        4,
+		ClientMessageID: "m-print",
+		AttachmentIDs:   []string{attachmentID},
+	})
+	if err := svc.HandleEnvelope(payload); err != nil {
+		t.Fatalf("envelope falhou: %v", err)
+	}
+
+	messages := svc.State().Messages
+	if len(messages) != 1 || len(messages[0].Attachments) != 1 {
+		t.Fatalf("o anexo do envelope foi perdido: %+v", messages)
+	}
+	if messages[0].Attachments[0].ID != attachmentID {
+		t.Fatalf("id do anexo inesperado: %+v", messages[0].Attachments)
+	}
+}
+
+// BUG CORRIGIDO: o snapshot REST só completava nome/tipo/tamanho quando a
+// mensagem não tinha NENHUM anexo. Com o envelope passando a trazer os IDs, o
+// anexo ficaria eternamente exibido como "anexo" na janela.
+func TestMergeMessages_EnrichesAttachmentMetadataById(t *testing.T) {
+	svc := newTestService()
+
+	svc.mu.Lock()
+	svc.state.SessionID = testSessionID
+	svc.state.HasSession = true
+	svc.state.Messages = []Message{{
+		ID:              "m-print",
+		ClientMessageID: "m-print",
+		SequenceNumber:  4,
+		AuthorKind:      "support",
+		Body:            "segue o print",
+		CreatedAt:       "2026-01-01T10:00:00Z",
+		Attachments:     []Attachment{{ID: "att-1"}},
+	}}
+	svc.mu.Unlock()
+
+	// Snapshot REST: mesma sequência, agora com os metadados resolvidos.
+	svc.mergeMessages([]Message{{
+		ID:              "m-print",
+		ClientMessageID: "m-print",
+		SequenceNumber:  4,
+		AuthorKind:      "support",
+		Body:            "segue o print",
+		CreatedAt:       "2026-01-01T10:00:00Z",
+		Attachments: []Attachment{{
+			ID:          "att-1",
+			FileName:    "print.png",
+			ContentType: "image/png",
+			SizeBytes:   2048,
+			UploadedBy:  "suporte",
+		}},
+	}})
+
+	messages := svc.State().Messages
+	if len(messages) != 1 {
+		t.Fatalf("esperava 1 mensagem, obteve %d: %+v", len(messages), messages)
+	}
+	attachment := messages[0].Attachments[0]
+	if attachment.FileName != "print.png" || attachment.ContentType != "image/png" || attachment.SizeBytes != 2048 {
+		t.Fatalf("metadados do anexo não foram enriquecidos: %+v", attachment)
+	}
+}
+
+// BUG CORRIGIDO: mensagem SÓ com anexo (print sem legenda) era recusada como
+// "mensagem vazia" — as duas UIs permitem esse envio.
+func TestSendMessage_AllowsAttachmentOnly(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/messages") {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":             "m1",
+				"sequenceNumber": 1,
+				"authorKind":     "enduser",
+				"body":           "",
+				"createdAt":      "2026-01-01T10:00:00Z",
+				"attachments": []map[string]any{{
+					"id":          "att-1",
+					"fileName":    "print.png",
+					"contentType": "image/png",
+				}},
+			})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	svc := servicePointingAt(server.URL)
+	svc.PrepareInvite(Invite{SessionID: testSessionID, TicketID: testTicketID})
+
+	// Sem canal NATS (nc nil), o envio cai para o REST — é justamente o caminho
+	// de fallback. O importante aqui é o guard: corpo vazio + anexo é aceito.
+	if err := svc.SendMessage(t.Context(), "", []string{"att-1"}); err != nil {
+		t.Fatalf("mensagem só com anexo deveria ser aceita, obteve %v", err)
+	}
+
+	messages := svc.State().Messages
+	if len(messages) != 1 || len(messages[0].Attachments) != 1 {
+		t.Fatalf("anexo perdido no envio só com anexo: %+v", messages)
+	}
+	if messages[0].Attachments[0].FileName != "print.png" {
+		t.Fatalf("metadados do anexo não vieram do snapshot: %+v", messages[0].Attachments)
+	}
+}
+
+// Corpo vazio SEM anexo continua sendo recusado.
+func TestSendMessage_RejectsEmptyBodyWithoutAttachment(t *testing.T) {
+	svc := newTestService()
+	svc.PrepareInvite(Invite{SessionID: testSessionID, TicketID: testTicketID})
+
+	err := svc.SendMessage(t.Context(), "   ", nil)
+	if err == nil || !strings.Contains(err.Error(), "mensagem vazia") {
+		t.Fatalf("corpo vazio sem anexo deveria ser recusado, obteve %v", err)
+	}
+}
 func servicePointingAt(rawURL string) *Service {
 	base := strings.TrimPrefix(strings.TrimPrefix(rawURL, "http://"), "https://")
 	return New(Deps{

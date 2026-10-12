@@ -2232,6 +2232,9 @@ function renderTicketDetail(t) {
   // upload usa currentTicketId).
   commentAttachments = [];
   renderCommentAttachments();
+  // Cache de miniaturas tambem e por chamado.
+  commentThumbCache = {};
+  commentThumbOrder = [];
   if (ticketClosedNoticeEl) ticketClosedNoticeEl.classList.toggle('hidden', !closed);
   if (closed && ticketClosedNoticeTextEl) {
     ticketClosedNoticeTextEl.textContent = t.closedAt
@@ -2295,34 +2298,82 @@ var newTicketAttachments = [];
 // Origem do proximo print capturado pelo overlay: comentario ou abertura.
 var screenshotTarget = 'comment';
 
+// Tipo de imagem (a miniatura so faz sentido para image/*).
+function isImageAttachment(contentType) {
+  return String(contentType || '').toLowerCase().indexOf('image/') === 0;
+}
+
+// Data URL da miniatura de um anexo que ja esta em base64 na fila local.
+function attachmentDataUrl(contentType, base64Data) {
+  if (!base64Data) return '';
+  return 'data:' + (contentType || 'image/png') + ';base64,' + base64Data;
+}
+
+// Icone de arquivo (PDF, zip...) quando nao ha miniatura de imagem.
+var ATTACHMENT_FILE_ICON_SVG =
+  '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" />' +
+  '<path d="M14 2v6h6" /></svg>';
+
+// Tile do composer no MESMO visual do chat com a IA (classe chat-attachment):
+// miniatura clicavel, nome do arquivo e botao de remover ANTES de enviar.
+function buildPendingAttachmentTile(item, onRemove) {
+  var tile = document.createElement('div');
+  tile.className = 'chat-attachment' + (item.failed ? ' chat-attachment--error' : '');
+  if (item.error) { tile.title = item.error; }
+
+  var base64 = item.base64 || item.base64Data || '';
+  if (isImageAttachment(item.contentType) && base64) {
+    var img = document.createElement('img');
+    img.src = attachmentDataUrl(item.contentType, base64);
+    img.alt = item.fileName || 'print';
+    img.title = translate('support.viewImage');
+    img.addEventListener('click', function () {
+      if (typeof screenshotOpenLightbox === 'function') {
+        screenshotOpenLightbox(img.src, item.fileName || '');
+      }
+    });
+    tile.appendChild(img);
+  } else {
+    var icon = document.createElement('div');
+    icon.className = 'chat-attachment-file';
+    icon.innerHTML = ATTACHMENT_FILE_ICON_SVG;
+    tile.appendChild(icon);
+  }
+
+  var meta = document.createElement('span');
+  meta.className = 'chat-attachment-meta';
+  meta.textContent = item.uploading
+    ? item.fileName + ' (' + translate('support.attachmentSending') + ')'
+    : item.fileName;
+  tile.appendChild(meta);
+
+  if (!item.uploading) {
+    var remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'chat-attachment-remove';
+    remove.textContent = '\u00d7';
+    remove.title = translate('support.removeAttachment');
+    remove.addEventListener('click', onRemove);
+    tile.appendChild(remove);
+  }
+  return tile;
+}
+
 function renderCommentAttachments() {
   if (!commentAttachmentsEl) return;
-  while (commentAttachmentsEl.firstChild) commentAttachmentsEl.removeChild(commentAttachmentsEl.firstChild);
+  commentAttachmentsEl.innerHTML = '';
   if (!commentAttachments.length) {
     commentAttachmentsEl.classList.add('hidden');
     return;
   }
   commentAttachmentsEl.classList.remove('hidden');
   commentAttachments.forEach(function (item) {
-    var chip = document.createElement('span');
-    chip.className = 'comment-attachment-chip' + (item.failed ? ' comment-attachment-chip--error' : '');
-    var label = document.createElement('span');
-    label.textContent = item.uploading ? (item.fileName + ' (enviando...)') : item.fileName;
-    if (item.error) { label.title = item.error; }
-    chip.appendChild(label);
-    if (!item.uploading) {
-      var remove = document.createElement('button');
-      remove.type = 'button';
-      remove.className = 'comment-attachment-remove';
-      remove.textContent = '\u00d7';
-      remove.title = translate('support.removeAttachment');
-      remove.addEventListener('click', function () {
-        commentAttachments = commentAttachments.filter(function (entry) { return entry !== item; });
-        renderCommentAttachments();
-      });
-      chip.appendChild(remove);
-    }
-    commentAttachmentsEl.appendChild(chip);
+    commentAttachmentsEl.appendChild(buildPendingAttachmentTile(item, function () {
+      commentAttachments = commentAttachments.filter(function (entry) { return entry !== item; });
+      renderCommentAttachments();
+    }));
   });
 }
 
@@ -2429,10 +2480,12 @@ async function uploadCommentAttachment(ticketId, commentId, entry) {
   }
 }
 
-function handleCommentFiles(files) {
+async function handleCommentFiles(files) {
+  // Aguarda a policy antes de validar: sem isso o PRIMEIRO arquivo era checado
+  // com o padrão local (10 MB) mesmo se o servidor tivesse um limite menor.
+  await ensureCommentAttachmentSettings();
   Array.prototype.slice.call(files || []).forEach(function (file) {
     if (!file) return;
-    void ensureCommentAttachmentSettings();
     var reader = new FileReader();
     reader.onload = function () {
       queueCommentAttachment(file.name || 'anexo', file.type, dataUrlToBase64(reader.result), file.size);
@@ -2468,30 +2521,18 @@ window.dsvTicketCommentScreenshot = function (dataUrl) {
 
 function renderNewTicketAttachments() {
   if (!newTicketAttachmentsEl) return;
-  while (newTicketAttachmentsEl.firstChild) newTicketAttachmentsEl.removeChild(newTicketAttachmentsEl.firstChild);
+  newTicketAttachmentsEl.innerHTML = '';
   if (!newTicketAttachments.length) {
     newTicketAttachmentsEl.classList.add('hidden');
     return;
   }
   newTicketAttachmentsEl.classList.remove('hidden');
   newTicketAttachments.forEach(function (item) {
-    var chip = document.createElement('span');
-    chip.className = 'comment-attachment-chip' + (item.failed ? ' comment-attachment-chip--error' : '');
-    var label = document.createElement('span');
-    label.textContent = item.fileName;
-    if (item.error) { label.title = item.error; }
-    chip.appendChild(label);
-    var remove = document.createElement('button');
-    remove.type = 'button';
-    remove.className = 'comment-attachment-remove';
-    remove.textContent = '\u00d7';
-    remove.title = translate('support.removeAttachment');
-    remove.addEventListener('click', function () {
+    // Mesmo visual (e miniatura) do composer de comentario/chat com a IA.
+    newTicketAttachmentsEl.appendChild(buildPendingAttachmentTile(item, function () {
       newTicketAttachments = newTicketAttachments.filter(function (entry) { return entry !== item; });
       renderNewTicketAttachments();
-    });
-    chip.appendChild(remove);
-    newTicketAttachmentsEl.appendChild(chip);
+    }));
   });
 }
 
@@ -2766,6 +2807,118 @@ function formatChatDayTime(value) {
   return day || time;
 }
 
+// Anexo de COMENTARIO na conversa. Imagem vira MINIATURA clicavel (abre no
+// lightbox, igual ao anexo do chat com a IA); o nome continua baixando o
+// arquivo pelo servico. Antes o anexo era so um chip de texto com o nome.
+function ticketCommentAttachmentHtml(comment, a) {
+  var fileName = escapeHtml(a.fileName || 'anexo');
+  var attrs = ' data-comment-id="' + escapeHtml(comment.id) + '"' +
+    ' data-attachment-id="' + escapeHtml(a.id) + '"' +
+    ' data-file-name="' + fileName + '"' +
+    ' data-content-type="' + escapeHtml(a.contentType || '') + '"';
+  var nameButton = '<button type="button" class="ticket-msg-attachment-name-btn"' +
+    ' data-action="download" title="' + fileName + '">' +
+    '<span class="ticket-msg-attachment-name">' + fileName + '</span>' +
+    '</button>';
+  if (!isImageAttachment(a.contentType)) {
+    return '<div class="ticket-msg-attachment"' + attrs + '>' + nameButton + '</div>';
+  }
+  return '<div class="ticket-msg-attachment ticket-msg-attachment--image"' + attrs + '>' +
+    '<button type="button" class="ticket-msg-attachment-thumb-btn" data-action="preview"' +
+    ' title="' + escapeHtml(translate('support.viewImage')) + '">' +
+    '<img class="ticket-msg-attachment-thumb" alt="' + fileName + '" hidden />' +
+    '</button>' +
+    nameButton +
+    '</div>';
+}
+
+function ticketCommentAttachmentsHtml(comment, attachments) {
+  if (!attachments || !attachments.length) return '';
+  return '<div class="ticket-msg-attachments">' +
+    attachments.map(function (a) { return ticketCommentAttachmentHtml(comment, a); }).join('') +
+    '</div>';
+}
+
+// Cache das miniaturas ja baixadas (chave = id do anexo) para nao repetir o
+// download a cada re-render da conversa. Teto de 24 (mesmo limite do chat):
+// cada miniatura pode chegar a 10 MB em base64, sem teto a memoria crescia
+// sem limite em chamados com muitos prints.
+var commentThumbCache = {};
+var commentThumbOrder = [];
+var COMMENT_THUMB_LIMIT = 24;
+
+function rememberCommentThumbnail(attachmentId, dataUrl) {
+  commentThumbCache[attachmentId] = dataUrl;
+  commentThumbOrder.push(attachmentId);
+  while (commentThumbOrder.length > COMMENT_THUMB_LIMIT) {
+    var oldest = commentThumbOrder.shift();
+    if (oldest !== attachmentId) { delete commentThumbCache[oldest]; }
+  }
+}
+
+// Re-ancora no fim da conversa quando a miniatura termina de carregar e o
+// usuario ainda estava no fim (senao o print novo ficava abaixo do quadro,
+// porque a altura da lista muda DEPOIS do scroll inicial).
+function pinCommentsToBottomIfNear() {
+  if (!commentsListEl) return;
+  var distance = commentsListEl.scrollHeight - commentsListEl.scrollTop - commentsListEl.clientHeight;
+  if (distance <= 64) { commentsListEl.scrollTop = commentsListEl.scrollHeight; }
+}
+
+function loadCommentThumbnail(ticketId, commentId, attachmentId, contentType) {
+  if (commentThumbCache[attachmentId]) {
+    return Promise.resolve(commentThumbCache[attachmentId]);
+  }
+  var request;
+  try {
+    request = appApi().DownloadTicketCommentAttachment(ticketId, commentId, attachmentId);
+  } catch (err) {
+    // appApi() lanca quando o binding do Wails nao esta disponivel. Sem isto o
+    // throw SINCRONO escapava do hydrate e derrubava a conversa inteira.
+    return Promise.reject(err);
+  }
+  return Promise.resolve(request).then(function (payload) {
+    var dataUrl = attachmentDataUrl(
+      (payload && payload.contentType) || contentType,
+      payload && payload.base64);
+    if (dataUrl) rememberCommentThumbnail(attachmentId, dataUrl);
+    return dataUrl;
+  });
+}
+
+// Preenche as miniaturas dos anexos de imagem ja renderizados nos balões.
+// Falha e silenciosa: sem miniatura, o nome continua baixando o arquivo.
+function hydrateCommentAttachmentThumbnails(ticketId) {
+  if (!commentsListEl) return;
+  var tiles = commentsListEl.querySelectorAll('.ticket-msg-attachment--image');
+  Array.prototype.forEach.call(tiles, function (tile) {
+    try {
+      var img = tile.querySelector('.ticket-msg-attachment-thumb');
+      if (!img || img.getAttribute('src')) return;
+      var commentId = tile.getAttribute('data-comment-id');
+      var attachmentId = tile.getAttribute('data-attachment-id');
+      if (!commentId || !attachmentId) return;
+      loadCommentThumbnail(ticketId, commentId, attachmentId, tile.getAttribute('data-content-type'))
+        .then(function (dataUrl) {
+          if (!dataUrl || !img.isConnected) return;
+          img.addEventListener('load', pinCommentsToBottomIfNear);
+          img.src = dataUrl;
+          img.removeAttribute('hidden');
+          var btn = tile.querySelector('.ticket-msg-attachment-thumb-btn');
+          if (btn) btn.classList.add('ticket-msg-attachment-thumb-btn--ready');
+        })
+        .catch(function () {
+          // Sem miniatura (offline/erro): vira chip de nome, sem caixa vazia.
+          var btn = tile.querySelector('.ticket-msg-attachment-thumb-btn');
+          if (btn) btn.remove();
+          tile.classList.remove('ticket-msg-attachment--image');
+        });
+    } catch (err) {
+      // Um tile problemático nao pode impedir a hidratacao dos demais.
+    }
+  });
+}
+
 function ticketCommentHtml(c) {
   var own = isOwnTicketComment(c);
   var author = own ? translate('support.you') : (c.author || translate('support.supportTeam'));
@@ -2773,20 +2926,7 @@ function ticketCommentHtml(c) {
   // Comentario excluido no console continua LEGIVEL: apenas marcado.
   var deleted = !!(c && c.deletedAt);
   var attachments = (c && c.attachments) || [];
-  var attachmentsHtml = '';
-  if (attachments.length) {
-    attachmentsHtml = '<div class="ticket-msg-attachments">' +
-      attachments.map(function (a) {
-        return '<button type="button" class="ticket-msg-attachment"' +
-          ' data-comment-id="' + escapeHtml(c.id) + '"' +
-          ' data-attachment-id="' + escapeHtml(a.id) + '"' +
-          ' data-file-name="' + escapeHtml(a.fileName) + '"' +
-          ' title="' + escapeHtml(a.fileName) + '">' +
-          '<span class="ticket-msg-attachment-name">' + escapeHtml(a.fileName) + '</span>' +
-          '</button>';
-      }).join('') +
-    '</div>';
-  }
+  var attachmentsHtml = ticketCommentAttachmentsHtml(c, attachments);
   return '<div class="ticket-msg ' + (own ? 'own' : 'other') + (deleted ? ' deleted' : '') + '">' +
     '<div class="ticket-bubble">' +
       (deleted ? '<em>' + escapeHtml(c.content) + '</em>' : escapeHtml(c.content)) +
@@ -2800,38 +2940,90 @@ function ticketCommentHtml(c) {
   '</div>';
 }
 
-// Salva um anexo baixado (base64) como arquivo local, sem depender de dialog.
-function saveAttachmentFromBase64(base64, contentType, fileName) {
-  var mime = contentType || 'application/octet-stream';
-  var dataUrl = 'data:' + mime + ';base64,' + String(base64 || '');
-  var anchor = document.createElement('a');
-  anchor.href = dataUrl;
-  anchor.download = fileName || 'anexo';
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
+// Lista os anexos do REPOSITORIO do chamado (arquivos grandes) junto da
+// conversa. Antes o agent nao tinha como ver nem baixar esses arquivos.
+function ticketAttachmentsHtml(items) {
+  if (!items || !items.length) return '';
+  var chips = items.map(function (a) {
+    return '<button type="button" class="ticket-attachment-item"' +
+      ' data-attachment-id="' + escapeHtml(a.id) + '"' +
+      ' data-file-name="' + escapeHtml(a.fileName) + '"' +
+      ' title="' + escapeHtml(a.fileName) + '">' +
+      '<span class="ticket-attachment-name">' + escapeHtml(a.fileName) + '</span>' +
+      '<span class="ticket-attachment-size">' + escapeHtml(commentAttachmentSizeLabel(a.sizeBytes)) + '</span>' +
+      '</button>';
+  }).join('');
+  return '<div class="ticket-attachments">' +
+    '<div class="ticket-attachments-title">' +
+      escapeHtml(translate('support.ticketAttachments')) + ' (' + items.length + ')' +
+    '</div>' +
+    '<div class="ticket-msg-attachments">' + chips + '</div>' +
+  '</div>';
 }
 
-// Liga os botoes de anexo do comentario (o webview nao carrega o token do agent
-// e o endpoint exige Authorization, entao os bytes vem pelo binding).
-function bindCommentAttachmentDownloads() {
+// Liga os botoes de anexo do REPOSITORIO: o download e feito pelo servico, que
+// grava o arquivo em disco e devolve o caminho (sem base64/data URL no webview).
+function bindTicketAttachmentSaves() {
   if (!commentsListEl) return;
-  var buttons = commentsListEl.querySelectorAll('.ticket-msg-attachment');
+  var buttons = commentsListEl.querySelectorAll('.ticket-attachment-item');
   Array.prototype.forEach.call(buttons, function (btn) {
     btn.addEventListener('click', function () {
       var ticketId = currentTicketId;
-      var commentId = btn.getAttribute('data-comment-id');
       var attachmentId = btn.getAttribute('data-attachment-id');
       var fileName = btn.getAttribute('data-file-name') || 'anexo';
-      if (!ticketId || !commentId || !attachmentId) return;
-      appApi().DownloadTicketCommentAttachment(ticketId, commentId, attachmentId)
-        .then(function (res) {
-          saveAttachmentFromBase64(res && res.base64, (res && res.contentType) || 'application/octet-stream', fileName);
+      if (!ticketId || !attachmentId) return;
+      btn.disabled = true;
+      appApi().SaveTicketAttachment(ticketId, attachmentId, fileName)
+        .then(function (path) {
+          showToast(translate('support.attachmentSaved', { path: path || '' }), 'success');
         })
         .catch(function (err) {
           showToast(translate('support.attachmentError', { name: fileName, error: String(err) }), 'error');
-        });
+        })
+        .then(function () { btn.disabled = false; });
     });
+  });
+}
+
+// Baixa o anexo do comentario pelo servico (grava em disco e devolve o
+// caminho) — o webview nao monta mais data URL com o arquivo inteiro.
+function saveCommentAttachment(tile) {
+  var ticketId = currentTicketId;
+  var commentId = tile.getAttribute('data-comment-id');
+  var attachmentId = tile.getAttribute('data-attachment-id');
+  var fileName = tile.getAttribute('data-file-name') || 'anexo';
+  if (!ticketId || !commentId || !attachmentId) return;
+  appApi().SaveTicketCommentAttachment(ticketId, commentId, attachmentId, fileName)
+    .then(function (path) {
+      showToast(translate('support.attachmentSaved', { path: path || '' }), 'success');
+    })
+    .catch(function (err) {
+      showToast(translate('support.attachmentError', { name: fileName, error: String(err) }), 'error');
+    });
+}
+
+// Liga os anexos de comentario renderizados: a MINIATURA de imagem abre no
+// lightbox (mesmo gesto do chat) e o nome do arquivo baixa/salva em disco.
+function bindCommentAttachmentDownloads() {
+  if (!commentsListEl) return;
+  var tiles = commentsListEl.querySelectorAll('.ticket-msg-attachment');
+  Array.prototype.forEach.call(tiles, function (tile) {
+    var preview = tile.querySelector('[data-action="preview"]');
+    if (preview) {
+      preview.addEventListener('click', function () {
+        var img = tile.querySelector('.ticket-msg-attachment-thumb');
+        var src = img && img.getAttribute('src');
+        if (src && typeof screenshotOpenLightbox === 'function') {
+          screenshotOpenLightbox(src, tile.getAttribute('data-file-name') || '');
+          return;
+        }
+        saveCommentAttachment(tile);
+      });
+    }
+    var download = tile.querySelector('[data-action="download"]');
+    if (download) {
+      download.addEventListener('click', function () { saveCommentAttachment(tile); });
+    }
   });
 }
 
@@ -2844,18 +3036,36 @@ async function loadTicketComments(ticketId) {
     var comments = await appApi().GetTicketComments(ticketId);
     // Ignora resposta tardia de um chamado que nao esta mais aberto (troca rapida).
     if (currentTicketId !== ticketId) return;
-    if (!comments || !comments.length) {
-      commentsListEl.innerHTML = '<div class="meta">' + escapeHtml(translate('support.noComments')) + '</div>';
-      return;
+
+    // Anexos do chamado (repositorio) no mesmo lugar da conversa. O endpoint
+    // devolve os DOIS niveis; aqui mostramos o repositorio, pois os de conversa
+    // ja aparecem no proprio balao.
+    var allAttachments = [];
+    try {
+      allAttachments = (await appApi().GetTicketAttachments(ticketId)) || [];
+    } catch (attachErr) {
+      allAttachments = [];
     }
+    if (currentTicketId !== ticketId) return;
+    var repositoryAttachments = allAttachments.filter(function (a) {
+      return a && a.origin !== 'comment';
+    });
+
     // Cada balao carrega a propria data/hora no meta (autor + data + hora);
     // nao ha mais separador de dia centralizado entre as mensagens.
     var html = '';
-    comments.forEach(function (c) {
+    (comments || []).forEach(function (c) {
       html += ticketCommentHtml(c);
     });
+    if (!comments || !comments.length) {
+      html += '<div class="meta">' + escapeHtml(translate('support.noComments')) + '</div>';
+    }
+    html += ticketAttachmentsHtml(repositoryAttachments);
     commentsListEl.innerHTML = html;
     bindCommentAttachmentDownloads();
+    bindTicketAttachmentSaves();
+    // Miniaturas das imagens da conversa (download autenticado, assincrono).
+    hydrateCommentAttachmentThumbnails(ticketId);
     // Rola para o comentario mais recente
     commentsListEl.scrollTop = commentsListEl.scrollHeight;
   } catch (err) {

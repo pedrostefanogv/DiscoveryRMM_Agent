@@ -228,6 +228,57 @@ func (a *App) ipcRPCSupportTicketAttachmentSettings(payload map[string]any) map[
 	}
 	return ipcRPCResult(settings)
 }
+// ── Anexos: lista consolidada + salvar em disco ──────────────────────────
+//
+// O download nao devolve base64 pro webview: o servico grava o arquivo em
+// disco e devolve o caminho. Vale para o repositorio (arquivos grandes) e para
+// a conversa, sem montar data URL no renderer.
+
+func (a *App) ipcRPCSupportTicketAttachmentsAll(payload map[string]any) map[string]any {
+	if err := a.requireSupportSvc(); err != nil {
+		return ipcRPCError(err)
+	}
+	items, err := a.SupportSvc.GetTicketAttachments(ipcRPCString(payload, "ticketId"))
+	if err != nil {
+		return ipcRPCError(err)
+	}
+	return ipcRPCResult(items)
+}
+
+func (a *App) ipcRPCSupportTicketAttachmentSave(payload map[string]any) map[string]any {
+	if err := a.requireSupportSvc(); err != nil {
+		return ipcRPCError(err)
+	}
+	data, _, err := a.SupportSvc.DownloadTicketAttachment(
+		ipcRPCString(payload, "ticketId"), ipcRPCString(payload, "attachmentId"))
+	if err != nil {
+		return ipcRPCError(err)
+	}
+	path, err := saveDownloadedAttachment(ipcRPCString(payload, "fileName"), data)
+	if err != nil {
+		return ipcRPCError(err)
+	}
+	return ipcRPCResult(map[string]any{"path": path})
+}
+
+func (a *App) ipcRPCSupportCommentAttachmentSave(payload map[string]any) map[string]any {
+	if err := a.requireSupportSvc(); err != nil {
+		return ipcRPCError(err)
+	}
+	data, _, err := a.SupportSvc.DownloadTicketCommentAttachment(
+		ipcRPCString(payload, "ticketId"),
+		ipcRPCString(payload, "commentId"),
+		ipcRPCString(payload, "attachmentId"))
+	if err != nil {
+		return ipcRPCError(err)
+	}
+	path, err := saveDownloadedAttachment(ipcRPCString(payload, "fileName"), data)
+	if err != nil {
+		return ipcRPCError(err)
+	}
+	return ipcRPCResult(map[string]any{"path": path})
+}
+
 // ── Anexos de COMENTARIO (conversa) ──────────────────────────────────────
 
 func (a *App) ipcRPCSupportCommentAttachmentUpload(payload map[string]any) map[string]any {

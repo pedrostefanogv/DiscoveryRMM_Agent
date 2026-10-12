@@ -282,7 +282,44 @@ func (s *Service) applyMessage(envelope Envelope) error {
 	s.mu.Unlock()
 
 	s.emitState("message")
+
+	// O envelope do NATS carrega só os IDs dos anexos. Os metadados (nome, tipo,
+	// tamanho) chegam no snapshot REST: sem esta busca imediata o anexo ficaria
+	// exibido como "anexo" até a próxima reconciliação (até 60s).
+	if len(envelope.AttachmentIDs) > 0 {
+		go s.enrichAttachmentsFromREST(envelope.SessionID)
+	}
 	return nil
+}
+
+// enrichAttachmentsFromREST busca o snapshot da sessão para completar os
+// metadados dos anexos entregues pelo envelope apenas com o ID.
+//
+// Best-effort e assíncrono: não bloqueia o consumidor do JetStream; se falhar,
+// a reconciliação periódica da janela ainda completa os dados depois.
+func (s *Service) enrichAttachmentsFromREST(sessionID string) {
+	ctxFn := s.deps.Ctx
+	if ctxFn == nil {
+		return
+	}
+
+	s.mu.Lock()
+	current := s.state.SessionID
+	s.mu.Unlock()
+	if sessionID == "" || current != sessionID {
+		return
+	}
+
+	base := ctxFn()
+	if base == nil {
+		base = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(base, requestTimeout)
+	defer cancel()
+
+	if _, err := s.ListMessages(ctx, 0, 300); err != nil {
+		s.deps.Logf("[supportchat] enriquecimento de anexos indisponível: " + err.Error())
+	}
 }
 
 // trimMessagesLocked descarta as mensagens mais antigas acima do teto. A lista
@@ -651,10 +688,7 @@ func (s *Service) mergeMessages(incoming []Message) {
 
 	for _, message := range incoming {
 		if index, ok := existing[message.SequenceNumber]; ok {
-			// Preenche anexos que o envelope do NATS não carrega.
-			if len(message.Attachments) > 0 && len(s.state.Messages[index].Attachments) == 0 {
-				s.state.Messages[index].Attachments = message.Attachments
-			}
+			mergeAttachmentMetadata(&s.state.Messages[index], message.Attachments)
 			continue
 		}
 		s.state.Messages = append(s.state.Messages, message)
@@ -665,11 +699,57 @@ func (s *Service) mergeMessages(incoming []Message) {
 	s.trimMessagesLocked()
 }
 
+// mergeAttachmentMetadata completa os metadados dos anexos já conhecidos.
+//
+// BUG CORRIGIDO: o preenchimento só acontecia quando a mensagem não tinha
+// NENHUM anexo. Como o envelope do NATS passou a trazer os IDs, o snapshot REST
+// deixou de completar nome/tipo/tamanho e o anexo ficaria eternamente exibido
+// como "anexo". Agora os metadados são casados por ID.
+func mergeAttachmentMetadata(message *Message, incoming []Attachment) {
+	if message == nil || len(incoming) == 0 {
+		return
+	}
+	if len(message.Attachments) == 0 {
+		message.Attachments = incoming
+		return
+	}
+
+	byID := make(map[string]Attachment, len(incoming))
+	for _, attachment := range incoming {
+		if attachment.ID != "" {
+			byID[attachment.ID] = attachment
+		}
+	}
+
+	for i, attachment := range message.Attachments {
+		rich, ok := byID[attachment.ID]
+		if !ok {
+			continue
+		}
+		if message.Attachments[i].FileName == "" {
+			message.Attachments[i].FileName = rich.FileName
+		}
+		if message.Attachments[i].ContentType == "" {
+			message.Attachments[i].ContentType = rich.ContentType
+		}
+		if message.Attachments[i].SizeBytes == 0 {
+			message.Attachments[i].SizeBytes = rich.SizeBytes
+		}
+		if message.Attachments[i].UploadedBy == "" {
+			message.Attachments[i].UploadedBy = rich.UploadedBy
+		}
+	}
+}
+
 // SendMessage envia uma mensagem do usuário final pelo NATS (com PubAck) e cai
 // para o REST apenas se o canal estiver indisponível.
 func (s *Service) SendMessage(ctx context.Context, body string, attachmentIDs []string) error {
 	body = strings.TrimSpace(body)
-	if body == "" {
+
+	// BUG CORRIGIDO: enviar SÓ o anexo (print sem legenda) era recusado aqui e
+	// no servidor ("a mensagem não pode ser vazia"). O botão de anexo da janela
+	// permite esse envio, então a imagem nunca saía.
+	if body == "" && len(attachmentIDs) == 0 {
 		return fmt.Errorf("mensagem vazia")
 	}
 
@@ -694,6 +774,15 @@ func (s *Service) SendMessage(ctx context.Context, body string, attachmentIDs []
 	if err := s.publishAgentEnvelope(envelope); err == nil {
 		// Otimista: aparece imediatamente; a sequência canônica chega no
 		// snapshot seguinte do console/janela.
+		//
+		// Os anexos entram só com o ID (é o que o envelope carrega); nome/tipo
+		// vêm no snapshot REST, casados por ID em mergeAttachmentMetadata.
+		attachments := make([]Attachment, 0, len(attachmentIDs))
+		for _, id := range attachmentIDs {
+			if strings.TrimSpace(id) != "" {
+				attachments = append(attachments, Attachment{ID: id})
+			}
+		}
 		s.mu.Lock()
 		s.state.Messages = append(s.state.Messages, Message{
 			ID:              clientMessageID,
@@ -701,6 +790,7 @@ func (s *Service) SendMessage(ctx context.Context, body string, attachmentIDs []
 			AuthorKind:      "enduser",
 			Body:            body,
 			CreatedAt:       time.Now().UTC().Format(time.RFC3339),
+			Attachments:     attachments,
 		})
 		s.trimMessagesLocked()
 		s.mu.Unlock()

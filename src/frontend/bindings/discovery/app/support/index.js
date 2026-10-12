@@ -6,5 +6,6 @@ export {
     APITicket,
     KnowledgeArticle,
     KnowledgeArticleList,
-    SupportTicketList
+    SupportTicketList,
+    TicketAttachment
 } from "./models.js";

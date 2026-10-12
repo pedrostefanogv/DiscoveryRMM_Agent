@@ -34,8 +34,25 @@
     comments: [],
     commentsLoadedFor: "",
     commentsLoading: false,
-    commentsOpen: false
+    commentsOpen: false,
+    // Object URL da imagem aberta no visor. `viewerOwnsUrl` distingue a URL
+    // criada aqui (revogada ao fechar) da URL reaproveitada do cache de
+    // miniaturas (que continua viva para o chip).
+    viewerUrl: null,
+    viewerOwnsUrl: false
   };
+
+  // ── Cache de miniaturas ───────────────────────────────────────────────────
+  //
+  // `render()` reconstrói TODAS as mensagens a cada evento de estado (mensagem
+  // nova, refresh de até 60s, envio). Sem cache, cada print seria baixado de
+  // novo — base64 pela ponte do Go, em tamanho cheio — a cada render, o que
+  // pesa numa conversa com várias imagens. O cache é por id de anexo e tem
+  // teto: ao sair, a URL é revogada.
+  var thumbnailUrls = {};
+  var thumbnailFailed = {};
+  var thumbnailOrder = [];
+  var thumbnailLimit = 24;
 
   function byId(id) { return document.getElementById(id); }
 
@@ -67,6 +84,10 @@
     els.inviteText = byId("scInviteText");
     els.inviteAccept = byId("scInviteAccept");
     els.inviteReject = byId("scInviteReject");
+    els.viewer = byId("scAttachmentViewer");
+    els.viewerImage = byId("scViewerImage");
+    els.viewerCaption = byId("scViewerCaption");
+    els.viewerClose = byId("scViewerClose");
   }
 
   function call(method) {
@@ -245,21 +266,85 @@
     return row;
   }
 
+  // BUG CORRIGIDO: o anexo enviado pelo suporte aparecia só como um chip com o
+  // nome "anexo" (o envelope do NATS não trazia nome/tipo) e o clique apenas
+  // BAIXAVA o arquivo — não havia como VER o print dentro da janela. Agora a
+  // imagem ganha miniatura e abre num visor; os demais tipos continuam baixando.
   function buildAttachments(attachments) {
     var wrap = document.createElement("div");
     wrap.className = "sc-attachments";
 
     attachments.forEach(function (attachment) {
+      var isImage = String(attachment.contentType || "").toLowerCase().indexOf("image/") === 0;
+
       var chip = document.createElement("button");
       chip.type = "button";
-      chip.className = "sc-attachment";
-      chip.textContent = attachment.fileName || "anexo";
-      chip.title = "Baixar anexo";
-      chip.addEventListener("click", function () { downloadAttachment(attachment); });
+      chip.className = "sc-attachment" + (isImage ? " sc-attachment--image" : "");
+      chip.title = isImage ? "Abrir imagem" : "Baixar anexo";
+
+      var label = document.createElement("span");
+      label.className = "sc-attachment-name";
+      label.textContent = attachment.fileName || "anexo";
+      chip.appendChild(label);
+
+      chip.addEventListener("click", function () { openAttachment(attachment); });
       wrap.appendChild(chip);
+
+      if (isImage) loadAttachmentThumbnail(chip, attachment);
     });
 
     return wrap;
+  }
+
+  /**
+   * Miniatura do print dentro do próprio chip.
+   *
+   * O webview não tem o token do agent: os bytes vêm do Go em base64 (o mesmo
+   * caminho do clique). Falha aqui é silenciosa — o chip segue clicável.
+   */
+  function loadAttachmentThumbnail(chip, attachment) {
+    if (!attachment || !attachment.id) return;
+
+    if (thumbnailUrls[attachment.id]) {
+      attachThumbnail(chip, thumbnailUrls[attachment.id], attachment);
+      return;
+    }
+    if (thumbnailFailed[attachment.id]) return;
+
+    call("SupportChatDownloadAttachment", attachment.id)
+      .then(function (payload) {
+        var blob = payloadToBlob(payload, attachment.contentType);
+        if (!blob) {
+          thumbnailFailed[attachment.id] = true;
+          return;
+        }
+
+        var url = URL.createObjectURL(blob);
+        thumbnailUrls[attachment.id] = url;
+        thumbnailOrder.push(attachment.id);
+        while (thumbnailOrder.length > thumbnailLimit) {
+          var oldest = thumbnailOrder.shift();
+          if (thumbnailUrls[oldest]) {
+            URL.revokeObjectURL(thumbnailUrls[oldest]);
+            delete thumbnailUrls[oldest];
+          }
+        }
+
+        attachThumbnail(chip, url, attachment);
+      })
+      .catch(function () {
+        // Sem miniatura o chip continua clicável; não repetimos a tentativa a
+        // cada render (o clique em "abrir" tenta de novo).
+        thumbnailFailed[attachment.id] = true;
+      });
+  }
+
+  function attachThumbnail(chip, url, attachment) {
+    var img = document.createElement("img");
+    img.alt = attachment.fileName || "print";
+    img.src = url;
+    chip.insertBefore(img, chip.firstChild);
+    chip.className += " sc-attachment--thumb";
   }
 
   function renderPending() {
@@ -362,6 +447,82 @@
       });
   }
 
+  /**
+   * Anexos do COMENTÁRIO na conversa: mesma linguagem do anexo do chat ao
+   * vivo — imagem ganha MINIATURA (abre no visor) e os demais baixam.
+   */
+  function buildCommentAttachments(comment) {
+    var attachments = Array.isArray(comment.attachments) ? comment.attachments : [];
+    if (!attachments.length) return null;
+
+    var wrap = document.createElement("div");
+    wrap.className = "sc-comment-attachments";
+
+    attachments.forEach(function (attachment) {
+      var isImage = String(attachment.contentType || "").toLowerCase().indexOf("image/") === 0;
+
+      var chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "sc-attachment" + (isImage ? " sc-attachment--image" : "");
+      chip.title = isImage ? "Abrir imagem" : "Baixar anexo";
+
+      var label = document.createElement("span");
+      label.className = "sc-attachment-name";
+      label.textContent = attachment.fileName || "anexo";
+      chip.appendChild(label);
+
+      chip.addEventListener("click", function () {
+        if (thumbnailUrls[attachment.id]) {
+          showAttachmentViewer(thumbnailUrls[attachment.id], attachment.fileName || "imagem", false);
+          return;
+        }
+        downloadCommentAttachment(comment, attachment);
+      });
+
+      wrap.appendChild(chip);
+
+      if (isImage) loadCommentThumbnail(chip, comment, attachment);
+    });
+
+    return wrap;
+  }
+
+  /** Miniatura de um anexo de comentário (mesmo cache do anexo do chat). */
+  function loadCommentThumbnail(chip, comment, attachment) {
+    if (!comment || !attachment || !attachment.id || !state.ticketId) return;
+
+    if (thumbnailUrls[attachment.id]) {
+      attachThumbnail(chip, thumbnailUrls[attachment.id], attachment);
+      return;
+    }
+    if (thumbnailFailed[attachment.id]) return;
+
+    call("DownloadTicketCommentAttachment", state.ticketId, comment.id, attachment.id)
+      .then(function (payload) {
+        var blob = payloadToBlob(payload, attachment.contentType);
+        if (!blob) {
+          thumbnailFailed[attachment.id] = true;
+          return;
+        }
+
+        var url = URL.createObjectURL(blob);
+        thumbnailUrls[attachment.id] = url;
+        thumbnailOrder.push(attachment.id);
+        while (thumbnailOrder.length > thumbnailLimit) {
+          var oldest = thumbnailOrder.shift();
+          if (thumbnailUrls[oldest]) {
+            URL.revokeObjectURL(thumbnailUrls[oldest]);
+            delete thumbnailUrls[oldest];
+          }
+        }
+
+        attachThumbnail(chip, url, attachment);
+      })
+      .catch(function () {
+        thumbnailFailed[attachment.id] = true;
+      });
+  }
+
   function buildCommentRow(comment) {
     var own = isOwnComment(comment);
     var deleted = !!(comment && comment.deletedAt);
@@ -381,21 +542,8 @@
     }
     row.appendChild(bubble);
 
-    var attachments = Array.isArray(comment.attachments) ? comment.attachments : [];
-    if (attachments.length) {
-      var wrap = document.createElement("div");
-      wrap.className = "sc-comment-attachments";
-      attachments.forEach(function (attachment) {
-        var chip = document.createElement("button");
-        chip.type = "button";
-        chip.className = "sc-attachment";
-        chip.textContent = attachment.fileName || "anexo";
-        chip.title = "Baixar anexo";
-        chip.addEventListener("click", function () { downloadCommentAttachment(comment, attachment); });
-        wrap.appendChild(chip);
-      });
-      row.appendChild(wrap);
-    }
+    var attachmentsWrap = buildCommentAttachments(comment);
+    if (attachmentsWrap) row.appendChild(attachmentsWrap);
 
     var meta = document.createElement("div");
     meta.className = "sc-meta";
@@ -491,11 +639,33 @@
   }
 
   /**
-   * Une as mensagens por sequência (e por id, para as otimistas).
+   * Chave de identidade da mensagem na união de snapshots.
+   *
+   * `clientMessageId` vem primeiro porque é a chave de idempotência do EMISSOR:
+   * é ela que casa a bolha otimista (ainda sem sequência) com a mensagem
+   * persistida. Antes a chave era só sequência/id, as duas cópias não casavam e
+   * a mensagem própria aparecia DUPLICADA na janela.
+   */
+  function messageKey(message) {
+    if (!message) return "";
+    var clientID = String(message.clientMessageId || "");
+    if (clientID) return "c:" + clientID;
+    if (message.sequenceNumber) return "s:" + message.sequenceNumber;
+    return message.id ? "id:" + message.id : "";
+  }
+
+  /**
+   * Une as mensagens do serviço (incoming) com as já exibidas.
    *
    * Com o split serviço/UI o estado chega de DOIS produtores: o serviço (NATS,
-   * via IPC) e o REST chamado por esta janela. Substituir a lista faria um
-   * snapshot atrasado apagar mensagens já exibidas.
+   * via IPC) e o REST chamado por esta janela — por isso a UNIÃO da lista, e
+   * não a substituição.
+   *
+   * BUG CORRIGIDO: o snapshot CANÔNICO (incoming) precisa vencer. A mensagem
+   * chega pelo NATS só com os IDs dos anexos e o snapshot REST seguinte completa
+   * nome/tipo no serviço; como a versão antiga era mantida por ser a primeira,
+   * o anexo enviado pelo suporte nunca aparecia na conversa ao vivo — só
+   * fechando e reabrindo a janela.
    */
   function mergeMessages(incoming) {
     var seen = {};
@@ -503,17 +673,15 @@
 
     function push(message) {
       if (!message) return;
-      var key = message.sequenceNumber
-        ? "s:" + message.sequenceNumber
-        : "id:" + (message.id || "");
-      if (key === "id:") return;
+      var key = messageKey(message);
+      if (!key) return;
       if (seen[key]) return;
       seen[key] = true;
       merged.push(message);
     }
 
-    (state.messages || []).forEach(push);
     (incoming || []).forEach(push);
+    (state.messages || []).forEach(push);
 
     // Sequência 0 = bolha otimista (ainda sem número canônico): vai para o FIM.
     // Antes ela ordenava primeiro e a mensagem recém-enviada aparecia no topo da
@@ -721,30 +889,90 @@
     showBanner("Print anexado. Escreva a mensagem e envie.");
   }
 
-  function downloadAttachment(attachment) {
-    if (!attachment || !attachment.id) return;
+  /**
+   * Abre um anexo da conversa: imagem no visor da própria janela, qualquer
+   * outro tipo como download.
+   *
+   * BUG CORRIGIDO: um anexo sem identificador (mensagem antiga/replay) morria
+   * em silêncio no clique — o usuário não tinha retorno nenhum.
+   */
+  function openAttachment(attachment) {
+    if (!attachment || !attachment.id) {
+      showBanner("Anexo indisponível: o servidor não informou o identificador do arquivo.");
+      return;
+    }
+
+    // Miniatura já baixada e já é imagem: abre direto, sem segundo download.
+    if (thumbnailUrls[attachment.id]) {
+      showAttachmentViewer(thumbnailUrls[attachment.id], attachment.fileName || "imagem", false);
+      return;
+    }
 
     call("SupportChatDownloadAttachment", attachment.id)
       .then(function (payload) {
-        var base64 = payload && payload.base64 ? payload.base64 : "";
-        var contentType = (payload && payload.contentType) || "application/octet-stream";
-        if (!base64) return;
+        var blob = payloadToBlob(payload, attachment.contentType);
+        if (!blob) {
+          showBanner("O anexo veio vazio do servidor.");
+          return;
+        }
 
-        var bytes = atob(base64);
-        var buffer = new Uint8Array(bytes.length);
-        for (var i = 0; i < bytes.length; i++) buffer[i] = bytes.charCodeAt(i);
-
-        var blob = new Blob([buffer], { type: contentType });
+        var contentType = String(blob.type || attachment.contentType || "").toLowerCase();
         var url = URL.createObjectURL(blob);
-        var link = document.createElement("a");
-        link.href = url;
-        link.download = attachment.fileName || "anexo";
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        setTimeout(function () { URL.revokeObjectURL(url); }, 30000);
+
+        if (contentType.indexOf("image/") === 0) {
+          showAttachmentViewer(url, attachment.fileName || "imagem", true);
+          return;
+        }
+
+        triggerDownload(url, attachment.fileName || "anexo");
       })
       .catch(function (err) { showBanner("Falha ao baixar o anexo: " + describe(err)); });
+  }
+
+  /** Converte o payload base64 devolvido pelo Go em Blob tipado. */
+  function payloadToBlob(payload, fallbackContentType) {
+    var base64 = payload && payload.base64 ? payload.base64 : "";
+    if (!base64) return null;
+
+    var contentType = (payload && payload.contentType) || fallbackContentType || "application/octet-stream";
+    var bytes = atob(base64);
+    var buffer = new Uint8Array(bytes.length);
+    for (var i = 0; i < bytes.length; i++) buffer[i] = bytes.charCodeAt(i);
+    return new Blob([buffer], { type: contentType });
+  }
+
+  function triggerDownload(url, fileName) {
+    var link = document.createElement("a");
+    link.href = url;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 30000);
+  }
+
+  function showAttachmentViewer(url, fileName, owned) {
+    closeAttachmentViewer();
+    state.viewerUrl = url;
+    state.viewerOwnsUrl = !!owned;
+    if (els.viewerCaption) els.viewerCaption.textContent = fileName || "";
+    if (els.viewerImage) {
+      els.viewerImage.src = url;
+      els.viewerImage.alt = fileName || "anexo";
+    }
+    if (els.viewer) els.viewer.hidden = false;
+  }
+
+  function closeAttachmentViewer() {
+    // Só revoga a URL criada pelo próprio visor; a do cache de miniaturas
+    // continua em uso pelo chip.
+    if (state.viewerUrl && state.viewerOwnsUrl) {
+      URL.revokeObjectURL(state.viewerUrl);
+    }
+    state.viewerUrl = null;
+    state.viewerOwnsUrl = false;
+    if (els.viewerImage) els.viewerImage.removeAttribute("src");
+    if (els.viewer) els.viewer.hidden = true;
   }
 
   // ── Encerramento ─────────────────────────────────────────────────────────
@@ -858,6 +1086,16 @@
     on(els.inviteReject, "click", function () { respondInvite(false); });
 
     on(els.end, "click", askClose);
+
+    // Visor de imagem: fecha no X, no clique fora da figura e no Esc.
+    on(els.viewer, "click", function (event) {
+      if (event.target === els.viewer || event.target === els.viewerClose) {
+        closeAttachmentViewer();
+      }
+    });
+    document.addEventListener("keydown", function (event) {
+      if (event.key === "Escape") closeAttachmentViewer();
+    });
 
     // O mesmo modal serve para "recusar convite" (confirmMode = invite) e para
     // "encerrar chat" (confirmMode = end).

@@ -1096,6 +1096,109 @@
   white-space: nowrap;
 }
 
+/* Anexo de IMAGEM da conversa: miniatura clicavel (mesmo gesto do chat).
+   O nome continua abaixo e leva ao download pelo servico. */
+.ticket-msg-attachment--image {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  max-width: 200px;
+  padding: 6px;
+  border-radius: 12px;
+}
+
+.ticket-msg-attachment-thumb-btn {
+  width: 160px;
+  height: 96px;
+  padding: 0;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: var(--surface-2, var(--surface-1));
+  cursor: zoom-in;
+  overflow: hidden;
+}
+
+.ticket-msg-attachment-thumb-btn--ready {
+  border-style: solid;
+  border-color: transparent;
+}
+
+.ticket-msg-attachment-thumb {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 7px;
+}
+
+/* `display: block` acima venceria o [hidden] do UA sem esta regra. */
+.ticket-msg-attachment-thumb[hidden] { display: none; }
+
+.ticket-msg-attachment--image .ticket-msg-attachment-name { max-width: 160px; }
+
+.ticket-msg-attachment-name-btn {
+  display: block;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.ticket-msg-attachment-name-btn:hover .ticket-msg-attachment-name { text-decoration: underline; }
+
+/* Anexos do REPOSITORIO do chamado (arquivos grandes), abaixo da conversa. */
+.ticket-attachments {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.ticket-attachments-title {
+  margin-bottom: 8px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.ticket-attachment-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 260px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 0.74rem;
+  cursor: pointer;
+}
+
+.ticket-attachment-item:hover {
+  border-color: var(--accent);
+}
+
+.ticket-attachment-item:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.ticket-attachment-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ticket-attachment-size {
+  color: var(--muted);
+}
+
 .comment-compose {
   display: flex;
   flex-direction: column;

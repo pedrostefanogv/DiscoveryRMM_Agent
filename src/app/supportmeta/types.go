@@ -133,6 +133,21 @@ type TicketComment struct {
 	Attachments []TicketCommentAttachment `json:"attachments,omitempty"`
 }
 
+// TicketAttachment é um anexo do chamado na lista CONSOLIDADA (repositório do
+// chamado + conversa). Origin: "repository" | "comment".
+type TicketAttachment struct {
+	ID             string `json:"id"`
+	FileName       string `json:"fileName"`
+	ContentType    string `json:"contentType"`
+	SizeBytes      int64  `json:"sizeBytes"`
+	UploadedBy     string `json:"uploadedBy,omitempty"`
+	CreatedAt      string `json:"createdAt"`
+	Origin         string `json:"origin"`
+	CommentID      string `json:"commentId,omitempty"`
+	CommentAuthor  string `json:"commentAuthor,omitempty"`
+	CommentDeleted bool   `json:"commentDeleted,omitempty"`
+}
+
 // TicketCommentAttachment é um anexo ligado ao COMENTÁRIO (conversa).
 type TicketCommentAttachment struct {
 	ID          string `json:"id"`

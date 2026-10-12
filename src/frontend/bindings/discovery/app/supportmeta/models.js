@@ -754,6 +754,101 @@ export class TicketAnswer {
 }
 
 /**
+ * TicketAttachment é um anexo do chamado na lista CONSOLIDADA (repositório do
+ * chamado + conversa). Origin: "repository" | "comment".
+ */
+export class TicketAttachment {
+    /**
+     * Creates a new TicketAttachment instance.
+     * @param {Partial<TicketAttachment>} [$$source = {}] - The source object to create the TicketAttachment.
+     */
+    constructor($$source = {}) {
+        if (!("id" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["id"] = "";
+        }
+        if (!("fileName" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["fileName"] = "";
+        }
+        if (!("contentType" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["contentType"] = "";
+        }
+        if (!("sizeBytes" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["sizeBytes"] = 0;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["uploadedBy"] = undefined;
+        }
+        if (!("createdAt" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["createdAt"] = "";
+        }
+        if (!("origin" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["origin"] = "";
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["commentId"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["commentAuthor"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {boolean | undefined}
+             */
+            this["commentDeleted"] = undefined;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new TicketAttachment instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {TicketAttachment}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new TicketAttachment(/** @type {Partial<TicketAttachment>} */($$parsedSource));
+    }
+}
+
+/**
  * TicketComment is a comment on a ticket.
  */
 export class TicketComment {
