@@ -550,7 +550,8 @@ function screenshotEnsureOverlayEls() {
     var tag = event.target && event.target.tagName ? String(event.target.tagName).toUpperCase() : "";
     if (tag === "INPUT" || tag === "TEXTAREA" || event.target === textInput) return;
     if (event.key === "Escape") { event.preventDefault(); screenshotCancelOverlay(); return; }
-    if (event.key === "Enter" && screenshotOverlayState.selection) { event.preventDefault(); screenshotConfirmSelection(); return; }
+    // screenshotOverlayState pode ser nulo no "preparando" (só o token existe).
+    if (event.key === "Enter" && screenshotOverlayState && screenshotOverlayState.selection) { event.preventDefault(); screenshotConfirmSelection(); return; }
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") { event.preventDefault(); screenshotAnnotUndo(); return; }
     // Zoom/pan por teclado (mesmos passos da barra de zoom).
     if (event.key === "+" || event.key === "=") { event.preventDefault(); screenshotSetZoom(screenshotOverlayView.zoom * screenshotZoomStep); return; }
@@ -2218,6 +2219,14 @@ var supportChatCapturePending = false;
 // Destino "comentario de chamado": o print anotado volta para o composer de
 // comentarios (mesma janela principal) via window.dsvTicketCommentScreenshot.
 var ticketCommentCapturePending = false;
+// screenshotPreparePending cobre a janela em que o overlay ainda NÃO existe
+// (round-trip do binding PrepareScreenshotOverlay, ~1 s): sem ela, cada clique
+// ou pedido recebido nesse intervalo abria uma captura nova.
+var screenshotPreparePending = false;
+// screenshotPrepareToken é o token do watchdog do preparando: sobrevive ao
+// cancelamento (que zera o screenshotCaptureToken) para que o watchdog sempre
+// consiga liberar screenshotPreparePending.
+var screenshotPrepareToken = null;
 
 function supportChatForwardScreenshot(result) {
   supportChatCapturePending = false;
@@ -2257,6 +2266,8 @@ function screenshotFinishSelection(selection) {
     var result = screenshotParse(raw);
     if (!result || !result.ok) {
       screenshotFeedback(screenshotT("screenshot.failed"), true);
+      screenshotCancelBackendSession(payload.session);
+      supportChatNotifyCaptureFailed("captura recusada pelo agent");
       return;
     }
     if (byLLM) {
@@ -2270,11 +2281,41 @@ function screenshotFinishSelection(selection) {
     }
   }).catch(function (err) {
     screenshotFeedback(screenshotT("screenshot.failed") + ": " + err, true);
+    // A sessão pode não existir mais no backend (id de uma captura abortada por
+    // fechar/ocultar a janela, por exemplo). Cancelar é idempotente e é o que
+    // devolve a janela aos bounds normais — sem isto ela continuava frameless e
+    // sempre-no-topo cobrindo o desktop inteiro (a "tela toda preta").
+    screenshotCancelBackendSession(payload.session);
+    supportChatNotifyCaptureFailed(err);
   });
 }
 
-function screenshotCancelOverlay() {
+// screenshotCancelBackendSession encerra uma sessão do overlay pelo id, sem
+// depender do estado local (que o screenshotHideOverlay já zerou).
+function screenshotCancelBackendSession(session) {
+  if (!session) return;
+  var api = screenshotApi();
+  if (!api || typeof api.CancelScreenshotOverlay !== "function") return;
+  try {
+    var pending = api.CancelScreenshotOverlay(session);
+    if (pending && typeof pending.catch === "function") pending.catch(function () {});
+  } catch (_) {}
+}
+
+// supportChatNotifyCaptureFailed avisa a janela do chat de suporte que a
+// captura pedida por ela não produziu print: lá o botão fica desabilitado
+// esperando o evento "supportchat:screenshot" e, sem este aviso, só voltaria
+// pelo watchdog.
+function supportChatNotifyCaptureFailed(reason) {
+  var pending = supportChatCapturePending;
   supportChatCapturePending = false;
+  if (!pending) return;
+  if (!window.wails || typeof window.wails.emit !== "function") return;
+  window.wails.emit("supportchat:screenshot_failed", { error: String(reason || "") });
+}
+
+function screenshotCancelOverlay() {
+  supportChatNotifyCaptureFailed("captura cancelada");
   ticketCommentCapturePending = false;
   var state = screenshotOverlayState;
   if (!state) {
@@ -2316,7 +2357,12 @@ function openScreenshotCapture(options) {
     screenshotFeedback(screenshotT("screenshot.unavailable"), true);
     return;
   }
-  if (screenshotOverlayState) return;
+  // Já existe overlay desenhado OU uma abertura em andamento: não dispara outra
+  // captura. Sem a segunda guarda, cada clique/pedido durante a fase
+  // "preparando" (o binding do Go leva ~1 s) iniciava uma captura nova — era a
+  // origem das 16 chamadas em ~3 s do log e do id órfão no Finish.
+  if (screenshotOverlayState || screenshotPreparePending) return;
+  screenshotPreparePending = true;
   screenshotFeedback(screenshotT("screenshot.capturing"), false);
   // O overlay entra em modo "preparando" ANTES do round-trip: o Go só exibe a
   // janela (SWP_SHOWWINDOW) depois de congelar a tela, e sem isso a interface
@@ -2330,15 +2376,28 @@ function openScreenshotCapture(options) {
   // desktop indefinidamente: devolve o chrome e avisa.
   var token = {};
   screenshotCaptureToken = token;
+  screenshotPrepareToken = token;
   setTimeout(function () {
-    if (screenshotCaptureToken !== token) return;
+    // O preparando ainda é o NOSSO (mesmo que o cancelamento já tenha zerado o
+    // screenshotCaptureToken)? Se sim, libera a flag — sem isso um cancelamento
+    // durante a abertura deixaria o botão de print morto.
+    if (screenshotPrepareToken !== token) return;
+    screenshotPrepareToken = null;
+    screenshotPreparePending = false;
     if (screenshotOverlayState) return; // overlay já desenhado; vale o timeout da imagem
+    if (screenshotCaptureToken !== token) return; // cancelado: chrome já devolvido
     screenshotCaptureToken = null;
+    // Sem marcar o abort, o payload que chegasse depois reabriria o overlay por
+    // cima da mensagem de falha — e, com a janela fechada, deixaria a sessão
+    // viva com os bounds do overlay.
+    screenshotCaptureAborted = true;
     screenshotHideOverlay();
     screenshotFeedback("A captura de tela não respondeu. Tente novamente.", true);
   }, 15000);
 
   api.PrepareScreenshotOverlay("captura manual do usuario").then(function (raw) {
+    screenshotPrepareToken = null;
+    screenshotPreparePending = false;
     var payload = screenshotParse(raw);
     if (!payload || !payload.session) {
       supportChatCapturePending = false;
@@ -2367,7 +2426,10 @@ function openScreenshotCapture(options) {
     if (ticketCommentCapturePending) supportChatCapturePending = false;
     screenshotShowOverlay(payload);
   }).catch(function (err) {
-    supportChatCapturePending = false;
+    screenshotPrepareToken = null;
+    screenshotPreparePending = false;
+    supportChatNotifyCaptureFailed(err);
+    ticketCommentCapturePending = false;
     screenshotHideOverlay();
     screenshotFeedback(screenshotT("screenshot.failed") + ": " + err, true);
   });
@@ -2399,6 +2461,10 @@ function onScreenshotOverlayClose(data) {
   if (!screenshotOverlayState) return;
   var info = screenshotParse(data);
   if (!info || !info.session || info.session === screenshotOverlayState.payload.session) {
+    // A sessão foi encerrada pelo backend (ex.: janela fechada/ocultada durante
+    // a captura). Se o print vinha do chat de suporte, avisa para o botão de lá
+    // não ficar preso até o watchdog.
+    if (info && info.ok === false) supportChatNotifyCaptureFailed("captura encerrada pelo agent");
     screenshotHideOverlay();
   }
 }

@@ -3,6 +3,8 @@ package inventory
 import (
 	"archive/zip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log"
@@ -442,8 +444,10 @@ func (s *Service) Upgrade(id string) (string, error) {
 	case string(appstore.InstallationChocolatey):
 		out, err = s.runChocolatey(s.ctx(), "upgrade", packageID)
 	case string(appstore.InstallationCustom):
-		// O servidor ainda não publica comando de atualização para apps custom.
-		err = fmt.Errorf("atualização de apps Custom ainda não suportada: o servidor não publica comando de upgrade")
+		// Pacote custom não tem "comando de upgrade" separado: atualizar é
+		// reexecutar o instalador publicado (mesmo fluxo do install, com
+		// download + verificação de tamanho/checksum).
+		out, err = s.runCustomInstallCommand(s.ctx(), allowed, packageID)
 	default:
 		err = fmt.Errorf("installationType %q não suportado", allowed.InstallationType)
 	}
@@ -478,6 +482,18 @@ func (s *Service) UpgradeFromSource(installationType, packageID string) (string,
 		out, err = s.apps.Upgrade(s.ctx(), packageID)
 	case string(appstore.InstallationChocolatey):
 		out, err = s.runChocolatey(s.ctx(), "upgrade", packageID)
+	case string(appstore.InstallationCustom):
+		// Custom exige o Item (comando/arquivo), que vem da política da loja.
+		allowed, resolveErr := s.resolveAllowed(s.ctx(), packageID)
+		if resolveErr != nil {
+			err = resolveErr
+			break
+		}
+		if normalizeAppStoreInstallationType(allowed.InstallationType) != string(appstore.InstallationCustom) {
+			err = fmt.Errorf("pacote %q não é do tipo Custom", packageID)
+			break
+		}
+		out, err = s.runCustomInstallCommand(s.ctx(), allowed, packageID)
 	default:
 		err = fmt.Errorf("installationType %q não suportado para atualização remota", installationType)
 	}
@@ -511,6 +527,18 @@ func (s *Service) UninstallFromSource(installationType, packageID string) (strin
 		out, err = s.apps.Uninstall(s.ctx(), packageID)
 	case string(appstore.InstallationChocolatey):
 		out, err = s.runChocolatey(s.ctx(), "uninstall", packageID)
+	case string(appstore.InstallationCustom):
+		allowed, resolveErr := s.resolveAllowed(s.ctx(), packageID)
+		if resolveErr != nil {
+			err = resolveErr
+			break
+		}
+		uninstallCommand := strings.TrimSpace(allowed.UninstallCommand)
+		if uninstallCommand == "" {
+			err = fmt.Errorf("app custom %q sem comando de desinstalação registrado no servidor", packageID)
+			break
+		}
+		out, err = s.runCustomShellCommand(s.ctx(), uninstallCommand, "")
 	default:
 		err = fmt.Errorf("installationType %q não suportado para desinstalação remota", installationType)
 	}
@@ -961,12 +989,14 @@ func (s *Service) runCustomInstallCommand(ctx context.Context, allowed appstore.
 
 	var installerPath, workDir string
 	if strings.TrimSpace(allowed.FileURL) != "" {
-		downloaded, err := s.downloadCustomAsset(runCtx, allowed.FileURL, packageID)
+		downloaded, err := s.downloadCustomAsset(runCtx, allowed, packageID)
 		if err != nil {
 			return "", err
 		}
-		// A pasta temporária é removida ao fim da execução (sucesso ou falha).
-		defer func() { _ = os.RemoveAll(filepath.Dir(downloaded)) }()
+		// NÃO remove a pasta imediatamente: instaladores podem disparar um
+		// processo filho que continua lendo os arquivos após o cmd retornar.
+		// A limpeza é agendada com folga (e sobras antigas são varridas).
+		s.scheduleCustomAssetCleanup(filepath.Dir(downloaded))
 
 		installerPath = downloaded
 		workDir = filepath.Dir(downloaded)
@@ -1036,7 +1066,8 @@ func applyCustomCommandPlaceholders(command, installerPath, workDir string) stri
 // downloadCustomAsset baixa o instalador publicado pelo servidor para uma pasta
 // temporária usando o token do próprio agent. Aceita URL absoluta ou relativa
 // (relativa é resolvida contra apiServer da configuração).
-func (s *Service) downloadCustomAsset(ctx context.Context, fileURL, packageID string) (string, error) {
+func (s *Service) downloadCustomAsset(ctx context.Context, item appstore.Item, packageID string) (string, error) {
+	fileURL := strings.TrimSpace(item.FileURL)
 	if s.debugConfig == nil {
 		return "", fmt.Errorf("configuração do servidor indisponível para baixar o instalador do app custom %q", packageID)
 	}
@@ -1048,7 +1079,17 @@ func (s *Service) downloadCustomAsset(ctx context.Context, fileURL, packageID st
 		return "", fmt.Errorf("configuração do servidor API incompleta para baixar o instalador do app custom %q", packageID)
 	}
 
-	target := strings.TrimSpace(fileURL)
+	// Espaço em disco: falhar no meio de um download de ~2 GB deixa lixo no
+	// temp e uma mensagem ruim. Checa antes quando o servidor informa o tamanho.
+	if expected := item.FileSizeBytes; expected > 0 {
+		if free, err := freeDiskBytes(os.TempDir()); err == nil && free > 0 && uint64(expected) > free {
+			return "", fmt.Errorf(
+				"espaço em disco insuficiente para baixar o instalador do app custom %q: necessário %s, livre %s",
+				packageID, humanBytes(uint64(expected)), humanBytes(free))
+		}
+	}
+
+	target := fileURL
 	if !strings.HasPrefix(target, "http://") && !strings.HasPrefix(target, "https://") {
 		target = cfg.APIScheme() + "://" + apiServer + target
 	}
@@ -1072,6 +1113,9 @@ func (s *Service) downloadCustomAsset(ctx context.Context, fileURL, packageID st
 		return "", fmt.Errorf("download do instalador do app custom %q retornou HTTP %s", packageID, resp.Status)
 	}
 
+	// Varre sobras de execuções anteriores antes de criar uma nova pasta.
+	cleanupStaleCustomAssets()
+
 	tempDir, err := os.MkdirTemp("", "discovery-custom-*")
 	if err != nil {
 		return "", fmt.Errorf("falha ao criar pasta temporária para o instalador: %w", err)
@@ -1083,15 +1127,120 @@ func (s *Service) downloadCustomAsset(ctx context.Context, fileURL, packageID st
 		_ = os.RemoveAll(tempDir)
 		return "", fmt.Errorf("falha ao gravar instalador em %s: %w", dest, err)
 	}
-	defer out.Close()
 
-	if _, err := io.Copy(out, resp.Body); err != nil {
+	// O SHA-256 é calculado durante a cópia (sem segunda passada) para validar
+	// a integridade antes de executar qualquer coisa.
+	hasher := sha256.New()
+	written, copyErr := io.Copy(io.MultiWriter(out, hasher), resp.Body)
+	closeErr := out.Close()
+
+	if copyErr != nil {
 		_ = os.RemoveAll(tempDir)
-		return "", fmt.Errorf("falha ao gravar instalador do app custom %q: %w", packageID, err)
+		return "", fmt.Errorf("falha ao gravar instalador do app custom %q: %w", packageID, copyErr)
+	}
+	if closeErr != nil {
+		_ = os.RemoveAll(tempDir)
+		return "", fmt.Errorf("falha ao finalizar instalador do app custom %q: %w", packageID, closeErr)
+	}
+
+	if expected := item.FileSizeBytes; expected > 0 && written != expected {
+		_ = os.RemoveAll(tempDir)
+		return "", fmt.Errorf(
+			"tamanho do instalador do app custom %q não confere: esperado %d bytes, recebido %d",
+			packageID, expected, written)
+	}
+
+	// Só validamos quando o checksum é de fato um SHA-256 (64 hex). Pacotes
+	// cadastrados antes desta mudança gravaram o ETag do S3 (MD5) — comparar
+	// isso com SHA-256 bloquearia instalações que já funcionavam.
+	if expected := strings.TrimSpace(item.FileChecksum); isSHA256Hex(expected) {
+		got := hex.EncodeToString(hasher.Sum(nil))
+		if !strings.EqualFold(expected, got) {
+			_ = os.RemoveAll(tempDir)
+			return "", fmt.Errorf(
+				"checksum do instalador do app custom %q não confere (esperado %s, obtido %s)",
+				packageID, expected, got)
+		}
+		s.logf(fmt.Sprintf("[install %s] checksum SHA-256 validado", packageID))
 	}
 
 	s.logf(fmt.Sprintf("[install %s] instalador baixado para %s", packageID, dest))
 	return dest, nil
+}
+
+// isSHA256Hex reconhece um SHA-256 em hexadecimal (64 dígitos). Valores com
+// outro formato (ex.: ETag/MD5 de pacotes antigos) não são verificáveis como
+// SHA-256 e são ignorados.
+func isSHA256Hex(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	for _, r := range value {
+		isDigit := r >= '0' && r <= '9'
+		isLower := r >= 'a' && r <= 'f'
+		isUpper := r >= 'A' && r <= 'F'
+		if !isDigit && !isLower && !isUpper {
+			return false
+		}
+	}
+	return true
+}
+
+// customAssetCleanupDelay é a folga antes de apagar a pasta do instalador:
+// instaladores que disparam um processo filho continuam lendo os arquivos
+// depois que o cmd retorna (instalação assíncrona).
+const customAssetCleanupDelay = 30 * time.Minute
+
+// scheduleCustomAssetCleanup agenda a remoção da pasta do instalador e, de
+// quebra, varre pastas de instalações anteriores que ficaram para trás.
+func (s *Service) scheduleCustomAssetCleanup(dir string) {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return
+	}
+
+	go func() {
+		time.Sleep(customAssetCleanupDelay)
+		_ = os.RemoveAll(dir)
+	}()
+}
+
+// cleanupStaleCustomAssets remove pastas discovery-custom-* no temp com mais de
+// 24h (sobras de execuções encerradas/abortadas).
+func cleanupStaleCustomAssets() {
+	entries, err := os.ReadDir(os.TempDir())
+	if err != nil {
+		return
+	}
+
+	cutoff := time.Now().Add(-24 * time.Hour)
+	for _, entry := range entries {
+		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "discovery-custom-") {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil || info.ModTime().After(cutoff) {
+			continue
+		}
+		_ = os.RemoveAll(filepath.Join(os.TempDir(), entry.Name()))
+	}
+}
+
+// humanBytes formata bytes para exibição em mensagens de erro.
+func humanBytes(value uint64) string {
+	const unit = 1024
+	if value < unit {
+		return fmt.Sprintf("%d B", value)
+	}
+
+	units := []string{"KB", "MB", "GB", "TB"}
+	size := float64(value)
+	index := -1
+	for size >= unit && index < len(units)-1 {
+		size /= unit
+		index++
+	}
+	return fmt.Sprintf("%.2f %s", size, units[index])
 }
 
 // customAssetFileName escolhe o nome do arquivo baixado a partir do

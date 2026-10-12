@@ -28,6 +28,9 @@
       maxFileSizeBytes: 10 * 1024 * 1024
     },
     sending: false,
+    // capturePending: pedido de print feito e ainda sem resultado (o botão fica
+    // desabilitado nesse intervalo; ver requestScreenshot/clearCapturePending).
+    capturePending: false,
     closing: false,
     // Comentários do CHAMADO (conversa do ticket), além do chat ao vivo.
     ticketId: "",
@@ -49,6 +52,9 @@
   // novo — base64 pela ponte do Go, em tamanho cheio — a cada render, o que
   // pesa numa conversa com várias imagens. O cache é por id de anexo e tem
   // teto: ao sair, a URL é revogada.
+  // Watchdog do pedido de print: se nem o resultado nem o aviso de falha
+  // chegarem (janela principal fechada, sem UI), o botão não fica travado.
+  var captureWatchdog = null;
   var thumbnailUrls = {};
   var thumbnailFailed = {};
   var thumbnailOrder = [];
@@ -149,7 +155,7 @@
     els.send.disabled = !canSend;
     els.input.disabled = state.status === "ended";
     els.attach.disabled = !canSend;
-    if (els.shot) els.shot.disabled = !canSend;
+    if (els.shot) els.shot.disabled = !canSend || state.capturePending;
     els.end.disabled = state.status === "none";
     els.end.textContent = state.status === "waiting" ? "Recusar" : "Encerrar";
   }
@@ -849,19 +855,48 @@
    * fluxo presigned de anexos.
    */
   function requestScreenshot() {
-    if (state.status !== "active" || state.sending) return;
+    if (state.status !== "active" || state.sending || state.capturePending) return;
 
+    state.capturePending = true;
     if (els.shot) els.shot.disabled = true;
     showBanner("Abrindo a captura de tela…");
 
+    // Watchdog: sem ele, uma captura que não devolve nem print nem falha
+    // deixaria o botão desabilitado para sempre. O caminho normal é o evento
+    // (supportchat:screenshot / *_failed); isto cobre "janela principal sem UI".
+    if (captureWatchdog) clearTimeout(captureWatchdog);
+    captureWatchdog = setTimeout(function () {
+      captureWatchdog = null;
+      if (state.closing) {
+        state.capturePending = false;
+        return;
+      }
+      if (!state.capturePending) return;
+      clearCapturePending();
+      showBanner("A captura de tela não respondeu. Tente novamente.");
+    }, 60000);
+
     call("SupportChatRequestScreenshot")
       .catch(function (err) {
+        clearCapturePending();
         showBanner("Falha ao abrir a captura de tela: " + describe(err));
-      })
-      .then(function () {
-        if (els.shot) els.shot.disabled = false;
-        render();
       });
+  }
+
+  // clearCapturePending libera o botão de print. Ele fica desabilitado entre o
+  // pedido e o resultado (eventos supportchat:screenshot / *_failed): era o
+  // clique repetido durante a captura que gerava dezenas de pedidos
+  // concorrentes — e, no backend, o erro "sessão de captura expirada ou
+  // inválida" na hora de concluir a seleção.
+  function clearCapturePending() {
+    state.capturePending = false;
+    if (captureWatchdog) {
+      clearTimeout(captureWatchdog);
+      captureWatchdog = null;
+    }
+    // Janela já encerrada: o DOM foi desmontado, render() estouraria.
+    if (state.closing) return;
+    render();
   }
 
   /** Anexa um print anotado (data URL) vindo do overlay da captura assistida. */
@@ -1127,7 +1162,16 @@
     window.wails.on("supportchat:screenshot", function (payload) {
       var dataUrl = payload && payload.dataUrl ? payload.dataUrl : "";
       if (!dataUrl) return;
+      clearCapturePending();
       attachScreenshotDataUrl(dataUrl);
+    });
+
+    // O overlay não produziu print (sessão inválida, cancelamento, erro de
+    // encode): libera o botão em vez de deixá-lo preso até o watchdog.
+    window.wails.on("supportchat:screenshot_failed", function (payload) {
+      var reason = payload && payload.error ? String(payload.error) : "";
+      clearCapturePending();
+      showBanner("Não foi possível capturar a tela." + (reason ? " " + reason : ""));
     });
   }
 

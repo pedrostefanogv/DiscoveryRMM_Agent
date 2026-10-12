@@ -441,7 +441,7 @@ func (s *Service) buildCatalogFromPolicy(ctx context.Context, forceRefresh bool)
 			// Fallback: se Silent não veio do feed, usa SilentWithProgress.
 			SilentWithProgress: strings.TrimSpace(item.SilentWithProgress),
 			Category:           category,
-			Icon:               strings.TrimSpace(item.IconURL),
+			Icon:               absoluteAssetURL(s.getDebugConfig(), item.IconURL),
 			// Origem do app para exibição na loja (Winget/Chocolatey/Custom) e
 			// escopo da regra de aprovação (Global/Client/Site/Agent).
 			InstallationType: strings.TrimSpace(item.InstallationType),
@@ -465,6 +465,28 @@ func (s *Service) buildCatalogFromPolicy(ctx context.Context, forceRefresh bool)
 		PackagesWithIcon: withIcon,
 		Packages:         packages,
 	}, nil
+}
+
+// absoluteAssetURL resolve URLs relativas devolvidas pela API (ex.: o ícone
+// de um pacote custom em /api/v1/app-store/custom/{id}/icon) para uma URL
+// absoluta. Sem isso a tag <img> do WebView do agent resolve a URL contra a
+// origem local do Wails e a imagem não carrega.
+func absoluteAssetURL(cfg DebugConfig, raw string) string {
+	value := strings.TrimSpace(raw)
+	if value == "" || !strings.HasPrefix(value, "/") {
+		return value
+	}
+
+	server := strings.TrimSpace(cfg.ApiServer)
+	if server == "" {
+		return value
+	}
+
+	scheme := strings.TrimSpace(strings.ToLower(cfg.ApiScheme))
+	if scheme != "http" && scheme != "https" {
+		scheme = "https"
+	}
+	return scheme + "://" + server + value
 }
 
 // FindAllowedPackage valida se um pacote está autorizado para o agent.

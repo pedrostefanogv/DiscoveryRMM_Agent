@@ -155,6 +155,15 @@ export class Item {
              */
             this["fileUrl"] = "";
         }
+        if (!("fileChecksum" in $$source)) {
+            /**
+             * FileChecksum é o SHA-256 (hex) do instalador. Quando presente, o agent
+             * valida a integridade do arquivo baixado antes de executá-lo.
+             * @member
+             * @type {string}
+             */
+            this["fileChecksum"] = "";
+        }
         if (!("silent" in $$source)) {
             /**
              * SilentCommand contém os switches silenciosos do manifesto winget
@@ -214,14 +223,14 @@ export class Item {
      * @returns {Item}
      */
     static createFrom($$source = {}) {
-        const $$createField15_0 = $$createType2;
         const $$createField16_0 = $$createType2;
+        const $$createField17_0 = $$createType2;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("installerUrlsByArch" in $$parsedSource) {
-            $$parsedSource["installerUrlsByArch"] = $$createField15_0($$parsedSource["installerUrlsByArch"]);
+            $$parsedSource["installerUrlsByArch"] = $$createField16_0($$parsedSource["installerUrlsByArch"]);
         }
         if ("installerTypesByArch" in $$parsedSource) {
-            $$parsedSource["installerTypesByArch"] = $$createField16_0($$parsedSource["installerTypesByArch"]);
+            $$parsedSource["installerTypesByArch"] = $$createField17_0($$parsedSource["installerTypesByArch"]);
         }
         return new Item(/** @type {Partial<Item>} */($$parsedSource));
     }

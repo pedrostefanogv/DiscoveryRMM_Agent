@@ -786,6 +786,11 @@ const (
 	// overlayImageMaxDim é o lado maior da imagem congelada exibida no overlay
 	// (fundo da seleção/anotação). 0 = resolução original da captura.
 	overlayImageMaxDim = 0
+	// screenshotOpenWaitMax é o teto de espera de um pedido que chegou enquanto
+	// outra abertura de overlay está em andamento. Sem ele, uma captura travada
+	// no driver (DXGI/PrintWindow pendurado) deixava TODOS os pedidos seguintes
+	// presos no canal para sempre — e a captura de tela morta até reiniciar.
+	screenshotOpenWaitMax = 30 * time.Second
 )
 
 // hideAgentWindowForCapture oculta a janela do agente (se a política permitir e
@@ -1023,6 +1028,9 @@ func (a *App) FinishScreenshotOverlay(sessionID, selectionJSON string) (string, 
 // CancelScreenshotOverlay cancela a seleção e restaura a janela.
 func (a *App) CancelScreenshotOverlay(sessionID string) error {
 	a.releaseScreenshotOverlay(sessionID, nil, fmt.Errorf("captura cancelada pelo usuario"))
+	// Cancelar um id que não corresponde a nenhuma sessão ativa é inofensivo e
+	// não pode deixar a janela presa no modo overlay (mesma defesa do Finish).
+	a.restoreOrphanScreenshotOverlay()
 	return nil
 }
 
@@ -1138,10 +1146,21 @@ func (a *App) GetScreenshotAuditPanel() (string, error) {
 func (a *App) abortScreenshotOverlay(reason string) {
 	a.screenshotMu.Lock()
 	session := a.screenshotOverlay
-	a.screenshotMu.Unlock()
 	if session == nil {
+		// Abertura em andamento: a sessão ainda não existe, mas a janela já
+		// foi/está sendo capturada. Marca para o build liberar tudo ao terminar
+		// em vez de publicar uma sessão viva numa janela fechada/ocultada (a
+		// próxima captura devolveria aquele frame congelado antigo).
+		if a.screenshotOpening {
+			a.screenshotOpenAbort = true
+			a.screenshotMu.Unlock()
+			a.Logs.Append("[screenshot] abertura abortada durante a captura: " + reason)
+			return
+		}
+		a.screenshotMu.Unlock()
 		return
 	}
+	a.screenshotMu.Unlock()
 	a.releaseScreenshotOverlay(session.id, nil, fmt.Errorf("captura cancelada: %s", reason))
 }
 
@@ -1154,17 +1173,89 @@ func (a *App) GetOpenWindows() (string, error) {
 	return string(b), nil
 }
 
+// openScreenshotOverlay abre a sessão do overlay, SERIALIZANDO as chamadas
+// concorrentes: enquanto uma captura está sendo preparada (esconder janelas +
+// congelar tela + encode, ~1 s), os pedidos que chegam esperam a MESMA sessão
+// em vez de dispararem outra captura e outra sessão.
+//
+// BUG CORRIGIDO (relato "a tela do PC fica toda preta" + "Falha na captura de
+// tela: RuntimeError: sessao de captura expirada ou invalida"): o binding é
+// atendido pelo Wails em goroutine própria e a sessão só era publicada no FIM
+// da captura. Com N pedidos em poucos segundos (16 em ~3 s no log do usuário),
+// todos passavam pelo check inicial, cada um criava a SUA sessão e só a última
+// ficava em a.screenshotOverlay — os restore das perdedoras (bounds da janela,
+// janela do chat, hooks) eram descartados. O front desenhava um payload cujo id
+// já não existia no backend: o Finish falhava com "sessao de captura expirada ou
+// invalida" e a janela ficava frameless/always-on-top cobrindo o desktop.
 func (a *App) openScreenshotOverlay(reason string, byLLM bool, sessionAuthorized bool) (*screenshotOverlaySession, error) {
-	a.screenshotMu.Lock()
-	if a.screenshotOverlay != nil {
-		active := a.screenshotOverlay
-		a.screenshotMu.Unlock()
-		if active.byLLM == byLLM {
-			return active, nil
+	for {
+		a.screenshotMu.Lock()
+		if active := a.screenshotOverlay; active != nil {
+			a.screenshotMu.Unlock()
+			if active.byLLM == byLLM {
+				return active, nil
+			}
+			return nil, fmt.Errorf("ja existe uma captura de tela em andamento")
 		}
-		return nil, fmt.Errorf("ja existe uma captura de tela em andamento")
+		if a.screenshotOpening {
+			done := a.screenshotOpenDone
+			a.screenshotMu.Unlock()
+			// Teto de espera: uma captura pendurada no driver não pode deixar
+			// TODOS os pedidos seguintes presos neste canal para sempre (a
+			// guarda de abertura nunca seria liberada).
+			select {
+			case <-done:
+			case <-time.After(screenshotOpenWaitMax):
+				a.Logs.Append("[screenshot] abertura anterior nao concluiu em " + screenshotOpenWaitMax.String() + "; devolvendo erro ao pedido")
+				return nil, fmt.Errorf("ja existe uma captura de tela em andamento (sem resposta); tente novamente")
+			}
+			// A abertura terminou: devolve a sessão criada ou o MESMO erro —
+			// recapturar aqui multiplicaria a captura por clique.
+			a.screenshotMu.Lock()
+			active := a.screenshotOverlay
+			err := a.screenshotOpenErr
+			a.screenshotMu.Unlock()
+			if active != nil {
+				if active.byLLM == byLLM {
+					return active, nil
+				}
+				return nil, fmt.Errorf("ja existe uma captura de tela em andamento")
+			}
+			if err == nil {
+				err = fmt.Errorf("captura de tela indisponivel no momento")
+			}
+			return nil, err
+		}
+		a.screenshotOpening = true
+		a.screenshotOpenDone = make(chan struct{})
+		// NÃO zerar screenshotOpenErr aqui: um pedido que acorda de uma abertura
+		// ANTERIOR leria nil enquanto esta abertura ainda corre e receberia um
+		// erro genérico. O erro é sobrescrito no fim da abertura (defer) — o
+		// valor lido por quem esperou é sempre um erro real, nunca nil.
+		a.screenshotOpenAbort = false
+		a.screenshotMu.Unlock()
+		break
 	}
-	a.screenshotMu.Unlock()
+	return a.buildScreenshotOverlay(reason, byLLM, sessionAuthorized)
+}
+
+// buildScreenshotOverlay executa a captura do overlay. Chamado apenas por
+// openScreenshotOverlay, que garante no máximo UMA abertura em andamento e
+// publica o resultado (sessão ou erro) para os pedidos que esperaram na guarda.
+func (a *App) buildScreenshotOverlay(reason string, byLLM bool, sessionAuthorized bool) (session *screenshotOverlaySession, err error) {
+	// Publica o fim da abertura SEMPRE (inclusive em erro): sem isto um erro
+	// deixaria os pedidos concorrentes presos no canal para sempre.
+	defer func() {
+		a.screenshotMu.Lock()
+		a.screenshotOpening = false
+		a.screenshotOpenErr = err
+		done := a.screenshotOpenDone
+		a.screenshotOpenDone = nil
+		a.screenshotMu.Unlock()
+		if done != nil {
+			close(done)
+		}
+	}()
 
 	if a.mainWindow == nil {
 		return nil, fmt.Errorf("janela principal indisponivel para o overlay")
@@ -1201,6 +1292,11 @@ func (a *App) openScreenshotOverlay(reason string, byLLM bool, sessionAuthorized
 	overlayBytes, mime, err := screenshot.EncodeOverlayFrame(frame, overlayImageMaxDim)
 	if err != nil {
 		a.Logs.Append("[screenshot] falha ao codificar a tela congelada do overlay: " + err.Error())
+		// Sem devolver a visibilidade aqui, uma falha de encode deixava a janela
+		// do agent e a do chat de suporte OCULTAS (elas só voltavam no restore
+		// da sessão, que nunca chega a existir).
+		restoreVisibility()
+		restoreSupportChat()
 		return nil, err
 	}
 	// O canvas/anotações do frontend trabalham em pixels da IMAGEM reduzida:
@@ -1235,10 +1331,21 @@ func (a *App) openScreenshotOverlay(reason string, byLLM bool, sessionAuthorized
 		restoreSupportChat()
 		return nil, err
 	}
+	// A janela foi fechada/ocultada ENQUANTO a captura acontecia: não publicar
+	// a sessão (ela ficaria viva com a janela já fora do estado anterior).
+	a.screenshotMu.Lock()
+	openAborted := a.screenshotOpenAbort
+	a.screenshotOpenAbort = false
+	a.screenshotMu.Unlock()
+	if openAborted {
+		restore()
+		restoreSupportChat()
+		return nil, fmt.Errorf("captura cancelada: janela principal fechada ou ocultada")
+	}
 	// Garante a janela visível já como overlay (o SetWindowPos acima usa
 	// SWP_SHOWWINDOW; o Show é idempotente e cobre o caso de hide pendente).
 	restoreVisibility()
-	session := &screenshotOverlaySession{
+	session = &screenshotOverlaySession{
 		id:                id,
 		reason:            reason,
 		byLLM:             byLLM,
@@ -1255,6 +1362,11 @@ func (a *App) openScreenshotOverlay(reason string, byLLM bool, sessionAuthorized
 	}
 	a.screenshotMu.Lock()
 	a.screenshotOverlay = session
+	// Guarda o restore da sessão viva: é o que devolve a janela aos bounds
+	// normais quando o Finish chega com um id que não existe mais (ver
+	// restoreOrphanScreenshotOverlay) — sem isso a janela ficava cobrindo o
+	// desktop virtual em modo overlay até fechar/reabrir o agent.
+	a.screenshotRestore = session.restore
 	a.screenshotMu.Unlock()
 
 	// O evento só é necessário quando a IA pediu a seleção: o fluxo manual
@@ -1370,6 +1482,15 @@ func (a *App) finishScreenshotOverlay(sessionID, selectionJSON string) (*screens
 	session := a.screenshotOverlay
 	a.screenshotMu.Unlock()
 	if session == nil || session.id != sessionID {
+		// BUG CORRIGIDO: o front pode concluir a seleção de uma sessão que já
+		// não existe (abortada ao fechar/ocultar a janela, ou de uma captura
+		// concorrente). Antes o erro era devolvido SEM restaurar a janela: ela
+		// continuava frameless/always-on-top nos bounds do overlay, cobrindo o
+		// desktop inteiro — a "tela toda preta" que só voltava fechando e
+		// reabrindo o agent pelo tray.
+		if session == nil {
+			a.restoreOrphanScreenshotOverlay()
+		}
 		return nil, fmt.Errorf("sessao de captura expirada ou invalida")
 	}
 	var sel screenshot.Selection
@@ -1466,6 +1587,34 @@ func (a *App) captureFromSelection(session *screenshotOverlaySession, sel screen
 	return res, nil
 }
 
+// restoreOrphanScreenshotOverlay devolve a janela principal ao estado normal
+// quando NÃO existe sessão ativa mas o overlay continua registrado (o front
+// chamou Finish/Cancel com um id que o backend já não tem).
+//
+// É a defesa contra a "tela toda preta": a sessão morre sem release, a janela
+// fica frameless/always-on-top nos bounds do overlay cobrindo o desktop virtual
+// e o usuário só recupera fechando e reabrindo o agent pelo tray (o hook de
+// WindowClosing abortava a sessão e restaurava). Aqui a restauração acontece no
+// próprio erro devolvido ao front.
+func (a *App) restoreOrphanScreenshotOverlay() {
+	a.screenshotMu.Lock()
+	if a.screenshotOverlay != nil {
+		// Há sessão viva: os bounds do overlay são legítimos (o id que não bate
+		// é que era velho). Não mexer.
+		a.screenshotMu.Unlock()
+		return
+	}
+	restore := a.screenshotRestore
+	a.screenshotRestore = nil
+	a.screenshotMu.Unlock()
+	if restore == nil {
+		return
+	}
+	// Fora do lock: o restore faz chamadas de janela (Wails/Win32).
+	restore()
+	a.Logs.Append("[screenshot] sessao inexistente no Finish/Cancel: bounds da janela restaurados")
+}
+
 // releaseScreenshotOverlay restaura a janela, limpa a sessão e entrega o
 // resultado ao waiter (fluxo da IA). Idempotente por sessão.
 func (a *App) releaseScreenshotOverlay(sessionID string, res *screenshot.CaptureResult, resErr error) {
@@ -1484,6 +1633,7 @@ func (a *App) releaseScreenshotOverlay(sessionID string, res *screenshot.Capture
 		a.screenshotMu.Lock()
 		if a.screenshotOverlay == session {
 			a.screenshotOverlay = nil
+			a.screenshotRestore = nil
 		}
 		a.screenshotMu.Unlock()
 		closeJSON, _ := json.Marshal(map[string]any{"session": session.id, "ok": resErr == nil})

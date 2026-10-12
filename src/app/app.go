@@ -141,6 +141,26 @@ type App struct {
 	screenshotMu      sync.Mutex
 	screenshotConsent *screenshot.ConsentManager
 	screenshotOverlay *screenshotOverlaySession
+	// screenshotOpening/screenshotOpenDone/screenshotOpenErr serializam a
+	// ABERTURA do overlay: enquanto uma captura está sendo preparada (hide +
+	// freeze + encode, ~1 s), os pedidos que chegam esperam a MESMA sessão em
+	// vez de dispararem outra captura e outra sessão. Sem isto, N cliques
+	// concorrentes no botão de print do chat de suporte criavam N sessões, os
+	// `restore` das perdedoras eram descartados e o Finish do front chegava com
+	// um id que o backend já não tinha ("sessao de captura expirada ou invalida").
+	screenshotOpening  bool
+	screenshotOpenDone chan struct{}
+	screenshotOpenErr  error
+	// screenshotOpenAbort é marcado quando a janela é fechada/ocultada DURANTE a
+	// abertura (a sessão ainda não foi publicada): o build libera a janela e
+	// devolve erro em vez de publicar uma sessão órfã — a próxima captura
+	// devolveria o frame congelado antigo.
+	screenshotOpenAbort bool
+	// screenshotRestore devolve a janela principal aos bounds normais quando a
+	// sessão some sem release (Finish/cancel com id inválido): sem isso ela
+	// ficava frameless e sempre-no-topo cobrindo todo o desktop — a "tela toda
+	// preta" relatada, que só voltava fechando e reabrindo a janela pelo tray.
+	screenshotRestore func()
 	// screenshotOverlayActive evita que o clamp de janela (FitWindowToWorkArea)
 	// desfaça o overlay em tela cheia durante a seleção.
 	screenshotOverlayActive atomic.Bool

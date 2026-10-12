@@ -40,6 +40,9 @@ type Item struct {
 	// FileURL é a URL (relativa) do instalador no servidor; o agent baixa com o
 	// próprio token de autenticação. Vazia quando o pacote não tem arquivo.
 	FileURL string `json:"fileUrl"`
+	// FileChecksum é o SHA-256 (hex) do instalador. Quando presente, o agent
+	// valida a integridade do arquivo baixado antes de executá-lo.
+	FileChecksum string `json:"fileChecksum"`
 	// SilentCommand contém os switches silenciosos do manifesto winget
 	// (ex.: "/S /PreventRebootRequired=true"). Fallback: SilentWithProgress.
 	SilentCommand string `json:"silent"`
