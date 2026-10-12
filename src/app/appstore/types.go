@@ -28,6 +28,18 @@ type Item struct {
 	Publisher        string `json:"publisher"`
 	Version          string `json:"version"`
 	InstallCommand   string `json:"installCommand"`
+	// UninstallCommand é o comando de remoção de apps custom (cadastro manual).
+	UninstallCommand string `json:"uninstallCommand"`
+	// ExtractZip indica que o arquivo do pacote é um ZIP e deve ser extraído
+	// no host antes de executar o comando de instalação.
+	ExtractZip bool `json:"extractZip"`
+	// FileName é o nome original do instalador publicado pelo servidor.
+	FileName string `json:"fileName"`
+	// FileSizeBytes é o tamanho do instalador em bytes (0 quando desconhecido).
+	FileSizeBytes int64 `json:"fileSizeBytes"`
+	// FileURL é a URL (relativa) do instalador no servidor; o agent baixa com o
+	// próprio token de autenticação. Vazia quando o pacote não tem arquivo.
+	FileURL string `json:"fileUrl"`
 	// SilentCommand contém os switches silenciosos do manifesto winget
 	// (ex.: "/S /PreventRebootRequired=true"). Fallback: SilentWithProgress.
 	SilentCommand string `json:"silent"`

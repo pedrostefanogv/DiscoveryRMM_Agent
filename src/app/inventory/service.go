@@ -1,10 +1,18 @@
 package inventory
 
 import (
+	"archive/zip"
 	"context"
 	"fmt"
+	"io"
 	"log"
+	"mime"
+	"net/http"
+	"net/url"
+	"os"
 	"os/exec"
+	"path"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -14,7 +22,9 @@ import (
 	"discovery/app/core/inventory"
 	"discovery/app/core/models"
 	"discovery/app/core/processutil"
+	"discovery/app/core/tlsutil"
 	"discovery/app/debug"
+	"discovery/app/netutil"
 	"discovery/app/services/hardwareid"
 )
 
@@ -365,8 +375,20 @@ func (s *Service) Uninstall(id string) (string, error) {
 	case string(appstore.InstallationChocolatey):
 		out, err = s.runChocolatey(s.ctx(), "uninstall", packageID)
 	case string(appstore.InstallationCustom):
-		// O servidor ainda não publica comando de remoção para apps custom.
-		err = fmt.Errorf("remoção de apps Custom ainda não suportada: o servidor não publica comando de desinstalação")
+		// Comando de remoção opcional registrado no servidor. Sem ele não há
+		// como remover com segurança (não inventamos um comando genérico).
+		uninstallCommand := strings.TrimSpace(allowed.UninstallCommand)
+		if uninstallCommand == "" {
+			err = fmt.Errorf("app custom %q sem comando de desinstalação registrado no servidor", packageID)
+			break
+		}
+		runCtx := s.ctx()
+		if runCtx == nil {
+			runCtx = context.Background()
+		}
+		runCtx, cancel := context.WithTimeout(runCtx, customInstallCommandTimeout)
+		defer cancel()
+		out, err = s.runCustomShellCommand(runCtx, uninstallCommand, "")
 	default:
 		err = fmt.Errorf("installationType %q não suportado", allowed.InstallationType)
 	}
@@ -904,10 +926,13 @@ func (s *Service) InstallOsquery() (string, error) {
 const customInstallCommandTimeout = 30 * time.Minute
 
 // runCustomInstallCommand executa o InstallCommand de um app custom (cadastro
-// manual no servidor). Segue o padrão do executor de automação
-// (core/automation/executor.go): comando de texto livre via cmd /C, janela
-// oculta e timeout fixo. Só é chamado após FindAllowedPackage autorizar o
-// pacote — sem allow no escopo do agent não há execução.
+// manual no servidor). Quando o servidor publica um instalador (FileURL), o
+// arquivo é baixado com o token do agent e, se ExtractZip estiver marcado (ou a
+// extensão for .zip), extraído no host. Os placeholders {{installer}} e
+// {{installerDir}} do comando são substituídos pelo caminho real. Segue o
+// padrão do executor de automação (core/automation/executor.go). Só é chamado
+// após FindAllowedPackage autorizar o pacote — sem allow no escopo do agent não
+// há execução.
 func (s *Service) runCustomInstallCommand(ctx context.Context, allowed appstore.Item, packageID string) (string, error) {
 	command := strings.TrimSpace(allowed.InstallCommand)
 	if command == "" {
@@ -921,13 +946,50 @@ func (s *Service) runCustomInstallCommand(ctx context.Context, allowed appstore.
 	runCtx, cancel := context.WithTimeout(runCtx, customInstallCommandTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(runCtx, "cmd", "/C", command)
+	var installerPath, workDir string
+	if strings.TrimSpace(allowed.FileURL) != "" {
+		downloaded, err := s.downloadCustomAsset(runCtx, allowed.FileURL, packageID)
+		if err != nil {
+			return "", err
+		}
+		// A pasta temporária é removida ao fim da execução (sucesso ou falha).
+		defer func() { _ = os.RemoveAll(filepath.Dir(downloaded)) }()
+
+		installerPath = downloaded
+		workDir = filepath.Dir(downloaded)
+
+		if allowed.ExtractZip || strings.EqualFold(filepath.Ext(downloaded), ".zip") {
+			extractedDir := filepath.Join(workDir, "extracted")
+			if err := extractZipArchive(downloaded, extractedDir); err != nil {
+				return "", err
+			}
+			workDir = resolveExtractionRoot(extractedDir)
+			s.logf(fmt.Sprintf("[install %s] ZIP extraido em %s", packageID, workDir))
+		}
+	}
+
+	command = applyCustomCommandPlaceholders(command, installerPath, workDir)
+	return s.runCustomShellCommand(runCtx, command, workDir)
+}
+
+// runCustomShellCommand executa um comando de texto livre de pacote custom via
+// cmd /C, com janela oculta e timeout. Comando vazio é rejeitado.
+func (s *Service) runCustomShellCommand(ctx context.Context, command, workDir string) (string, error) {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return "", fmt.Errorf("comando custom vazio")
+	}
+
+	cmd := exec.CommandContext(ctx, "cmd", "/C", command)
+	if workDir != "" {
+		cmd.Dir = workDir
+	}
 	processutil.HideWindow(cmd)
 	output, err := cmd.CombinedOutput()
 	text := strings.TrimSpace(string(output))
 	if err != nil {
-		if runCtx.Err() == context.DeadlineExceeded {
-			return text, fmt.Errorf("comando de instalação custom excedeu %s", customInstallCommandTimeout)
+		if ctx.Err() == context.DeadlineExceeded {
+			return text, fmt.Errorf("comando custom excedeu %s", customInstallCommandTimeout)
 		}
 		if text == "" {
 			text = err.Error()
@@ -935,6 +997,179 @@ func (s *Service) runCustomInstallCommand(ctx context.Context, allowed appstore.
 		return text, fmt.Errorf("erro executando comando custom: %w", err)
 	}
 	return text, nil
+}
+
+// applyCustomCommandPlaceholders troca os marcadores do comando pelos caminhos
+// reais do arquivo baixado ({{installer}}/`%INSTALLER%`) e da pasta de trabalho
+// ({{installerDir}}/`%INSTALLER_DIR%`). Sem arquivo baixado, o comando é
+// devolvido intacto.
+func applyCustomCommandPlaceholders(command, installerPath, workDir string) string {
+	if strings.TrimSpace(installerPath) == "" {
+		return command
+	}
+
+	replacements := map[string]string{
+		"{{installer}}":    installerPath,
+		"{{installerDir}}": workDir,
+		"%INSTALLER%":      installerPath,
+		"%INSTALLER_DIR%":  workDir,
+	}
+	for placeholder, value := range replacements {
+		command = strings.ReplaceAll(command, placeholder, value)
+	}
+	return command
+}
+
+// downloadCustomAsset baixa o instalador publicado pelo servidor para uma pasta
+// temporária usando o token do próprio agent. Aceita URL absoluta ou relativa
+// (relativa é resolvida contra apiServer da configuração).
+func (s *Service) downloadCustomAsset(ctx context.Context, fileURL, packageID string) (string, error) {
+	if s.debugConfig == nil {
+		return "", fmt.Errorf("configuração do servidor indisponível para baixar o instalador do app custom %q", packageID)
+	}
+
+	cfg := s.debugConfig()
+	apiServer := strings.TrimSpace(cfg.ApiServer)
+	token := strings.TrimSpace(cfg.AuthToken)
+	if apiServer == "" || token == "" {
+		return "", fmt.Errorf("configuração do servidor API incompleta para baixar o instalador do app custom %q", packageID)
+	}
+
+	target := strings.TrimSpace(fileURL)
+	if !strings.HasPrefix(target, "http://") && !strings.HasPrefix(target, "https://") {
+		target = cfg.APIScheme() + "://" + apiServer + target
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return "", fmt.Errorf("falha ao preparar download do instalador %q: %w", packageID, err)
+	}
+	req.Header.Set("Accept", "application/octet-stream")
+	if err := netutil.SetAgentAuthHeadersWithAgentID(req, token, strings.TrimSpace(cfg.AgentID)); err != nil {
+		return "", err
+	}
+
+	resp, err := tlsutil.NewHTTPClient(customInstallCommandTimeout).Do(req)
+	if err != nil {
+		return "", fmt.Errorf("falha ao baixar instalador do app custom %q: %w", packageID, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("download do instalador do app custom %q retornou HTTP %s", packageID, resp.Status)
+	}
+
+	tempDir, err := os.MkdirTemp("", "discovery-custom-*")
+	if err != nil {
+		return "", fmt.Errorf("falha ao criar pasta temporária para o instalador: %w", err)
+	}
+
+	dest := filepath.Join(tempDir, customAssetFileName(resp, target))
+	out, err := os.Create(dest)
+	if err != nil {
+		_ = os.RemoveAll(tempDir)
+		return "", fmt.Errorf("falha ao gravar instalador em %s: %w", dest, err)
+	}
+	defer out.Close()
+
+	if _, err := io.Copy(out, resp.Body); err != nil {
+		_ = os.RemoveAll(tempDir)
+		return "", fmt.Errorf("falha ao gravar instalador do app custom %q: %w", packageID, err)
+	}
+
+	s.logf(fmt.Sprintf("[install %s] instalador baixado para %s", packageID, dest))
+	return dest, nil
+}
+
+// customAssetFileName escolhe o nome do arquivo baixado a partir do
+// Content-Disposition; fallback para o último segmento da URL.
+func customAssetFileName(resp *http.Response, rawURL string) string {
+	if disposition := resp.Header.Get("Content-Disposition"); disposition != "" {
+		if _, params, err := mime.ParseMediaType(disposition); err == nil {
+			if name := strings.TrimSpace(params["filename"]); name != "" {
+				if base := filepath.Base(name); base != "." && base != string(filepath.Separator) {
+					return base
+				}
+			}
+		}
+	}
+
+	if parsed, err := url.Parse(rawURL); err == nil {
+		if base := path.Base(parsed.Path); base != "." && base != "/" && base != "" {
+			return base
+		}
+	}
+
+	return "installer.bin"
+}
+
+// extractZipArchive extrai um ZIP para destDir protegendo contra zip-slip
+// (caminhos que escapam do diretório de destino).
+func extractZipArchive(zipPath, destDir string) error {
+	reader, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return fmt.Errorf("falha ao abrir ZIP %q: %w", filepath.Base(zipPath), err)
+	}
+	defer reader.Close()
+
+	cleanDest := filepath.Clean(destDir)
+	if err := os.MkdirAll(cleanDest, 0o755); err != nil {
+		return fmt.Errorf("falha ao criar pasta de extração: %w", err)
+	}
+
+	for _, entry := range reader.File {
+		target := filepath.Join(cleanDest, entry.Name)
+		if target != cleanDest && !strings.HasPrefix(target, cleanDest+string(os.PathSeparator)) {
+			return fmt.Errorf("ZIP inválido %q: caminho %q fora do diretório de extração", filepath.Base(zipPath), entry.Name)
+		}
+
+		if entry.FileInfo().IsDir() {
+			if err := os.MkdirAll(target, 0o755); err != nil {
+				return fmt.Errorf("falha ao criar pasta %q: %w", target, err)
+			}
+			continue
+		}
+
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return fmt.Errorf("falha ao criar pasta %q: %w", filepath.Dir(target), err)
+		}
+
+		if err := writeZipEntry(entry, target); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func writeZipEntry(entry *zip.File, target string) error {
+	source, err := entry.Open()
+	if err != nil {
+		return fmt.Errorf("falha ao ler %q do ZIP: %w", entry.Name, err)
+	}
+	defer source.Close()
+
+	destination, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		return fmt.Errorf("falha ao criar %q: %w", target, err)
+	}
+	defer destination.Close()
+
+	if _, err := io.Copy(destination, source); err != nil {
+		return fmt.Errorf("falha ao extrair %q: %w", entry.Name, err)
+	}
+	return nil
+}
+
+// resolveExtractionRoot devolve a pasta raiz real do conteúdo extraído: quando
+// o ZIP tem um único diretório no topo (padrão de distribuição), usa esse
+// diretório; caso contrário mantém a própria pasta de extração.
+func resolveExtractionRoot(destDir string) string {
+	entries, err := os.ReadDir(destDir)
+	if err != nil || len(entries) != 1 || !entries[0].IsDir() {
+		return destDir
+	}
+	return filepath.Join(destDir, entries[0].Name())
 }
 
 func (s *Service) runChocolatey(ctx context.Context, operation, packageID string) (string, error) {
