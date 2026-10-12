@@ -3,6 +3,7 @@ package automation
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -171,6 +172,85 @@ func nextRunInterval(state State) time.Duration {
 // --- Custom Fields helpers ---
 
 const collectPrefix = "MDZ_COLLECT:"
+
+// Marcador próprio para usar o valor de um campo customizado dentro de um
+// comando/argumento: [[campo:anydesk]]. A chave é o "name" da definição.
+// Tokens sem campo correspondente (ou com valor nulo) ficam como estão — nunca
+// apagamos texto do usuário silenciosamente.
+const customFieldTokenPrefix = "[[campo:"
+const customFieldTokenSuffix = "]]"
+
+func expandCustomFieldTokens(value string, fields map[string]any) string {
+	if value == "" || len(fields) == 0 || !strings.Contains(value, customFieldTokenPrefix) {
+		return value
+	}
+
+	var builder strings.Builder
+	remaining := value
+	for {
+		start := strings.Index(remaining, customFieldTokenPrefix)
+		if start < 0 {
+			builder.WriteString(remaining)
+			break
+		}
+
+		end := strings.Index(remaining[start:], customFieldTokenSuffix)
+		if end < 0 {
+			builder.WriteString(remaining)
+			break
+		}
+
+		end += start
+		builder.WriteString(remaining[:start])
+
+		key := strings.TrimSpace(remaining[start+len(customFieldTokenPrefix) : end])
+		if resolved, ok := resolveCustomFieldToken(fields, key); ok {
+			builder.WriteString(resolved)
+		} else {
+			builder.WriteString(remaining[start : end+len(customFieldTokenSuffix)])
+		}
+
+		remaining = remaining[end+len(customFieldTokenSuffix):]
+	}
+
+	return builder.String()
+}
+
+func resolveCustomFieldToken(fields map[string]any, key string) (string, bool) {
+	if key == "" {
+		return "", false
+	}
+
+	value, ok := fields[key]
+	if !ok || value == nil {
+		return "", false
+	}
+
+	switch typed := value.(type) {
+	case string:
+		return typed, true
+	case bool:
+		if typed {
+			return "true", true
+		}
+		return "false", true
+	case float64:
+		return strconv.FormatFloat(typed, 'f', -1, 64), true
+	case int:
+		return strconv.Itoa(typed), true
+	case []any:
+		parts := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if item == nil {
+				continue
+			}
+			parts = append(parts, fmt.Sprintf("%v", item))
+		}
+		return strings.Join(parts, ", "), true
+	default:
+		return fmt.Sprintf("%v", typed), true
+	}
+}
 
 // buildExecutionCustomFieldCtx converte a lista de campos de runtime em um contexto de execução.
 // Campos com isSecret=true são excluídos do mapa Fields, mas indexados para validação de escrita.

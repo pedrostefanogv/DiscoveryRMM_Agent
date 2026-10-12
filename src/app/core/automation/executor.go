@@ -183,6 +183,13 @@ func executeCustomCommand(ctx context.Context, task AutomationTask, customFields
 		return ExecutionResult{Success: false, ExitCode: 2, ExitCodeSet: true, ErrorMessage: err.Error()}
 	}
 
+	// [[campo:chave]] no comando/argumentos recebe o valor do campo customizado
+	// desta execução (mesma fonte da variável MDZ_CUSTOM_FIELDS).
+	command = expandCustomFieldTokens(command, customFields)
+	for index := range args {
+		args[index] = expandCustomFieldTokens(args[index], customFields)
+	}
+
 	extraEnv := buildCustomFieldsEnv(customFields)
 	switch commandType {
 	case "powershell", "ps":
