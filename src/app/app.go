@@ -737,6 +737,7 @@ func NewApp(opts AppStartupOptions) *App {
 			return a.findAllowedPackage(ctx, installationType, packageID)
 		},
 		GetCatalog:        a.getCatalogFromAppStore,
+		RefreshCatalog:    a.refreshCatalogFromAppStore,
 		PendingUpdates:    a.pendingUpdatesForInventory,
 		InstalledPackages: a.installedPackagesForInventory,
 		BeginActivity:     a.beginActivity,

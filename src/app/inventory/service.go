@@ -102,6 +102,8 @@ type Options struct {
 	ResolveAllowed       func(context.Context, string) (appstore.Item, error)
 	ResolveAllowedByType func(context.Context, string, string) (appstore.Item, error)
 	GetCatalog           func(context.Context) (models.Catalog, error)
+	// RefreshCatalog força um fetch novo do catálogo da loja (ignora cache).
+	RefreshCatalog       func(context.Context) (models.Catalog, error)
 	BeginActivity        ActivityFunc
 	DispatchNotification InventoryNotificationDispatcher
 	Logf                 func(string)
@@ -135,6 +137,7 @@ type Service struct {
 	resolveAllowed         func(context.Context, string) (appstore.Item, error)
 	resolveAllowedByType   func(context.Context, string, string) (appstore.Item, error)
 	getCatalog             func(context.Context) (models.Catalog, error)
+	refreshCatalog         func(context.Context) (models.Catalog, error)
 	beginActivity          ActivityFunc
 	dispatchNotification   InventoryNotificationDispatcher
 	logf                   func(string)
@@ -189,6 +192,7 @@ func NewService(opts Options) *Service {
 		resolveAllowed:                   opts.ResolveAllowed,
 		resolveAllowedByType:             opts.ResolveAllowedByType,
 		getCatalog:                       opts.GetCatalog,
+		refreshCatalog:                   opts.RefreshCatalog,
 		beginActivity:                    opts.BeginActivity,
 		dispatchNotification:             opts.DispatchNotification,
 		logf:                             logf,
@@ -280,6 +284,15 @@ func (s *Service) GetCatalog() (models.Catalog, error) {
 	}
 	ctx := s.ctx()
 	return s.getCatalog(ctx)
+}
+
+// RefreshCatalog força um fetch novo do catálogo da loja no servidor. Sem o
+// callback (modo sem app-store) cai no GetCatalog normal.
+func (s *Service) RefreshCatalog() (models.Catalog, error) {
+	if s.refreshCatalog == nil {
+		return s.GetCatalog()
+	}
+	return s.refreshCatalog(s.ctx())
 }
 
 // Install installs the selected package.

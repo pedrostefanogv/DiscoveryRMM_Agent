@@ -113,6 +113,48 @@ export class Item {
              */
             this["installCommand"] = "";
         }
+        if (!("uninstallCommand" in $$source)) {
+            /**
+             * UninstallCommand é o comando de remoção de apps custom (cadastro manual).
+             * @member
+             * @type {string}
+             */
+            this["uninstallCommand"] = "";
+        }
+        if (!("extractZip" in $$source)) {
+            /**
+             * ExtractZip indica que o arquivo do pacote é um ZIP e deve ser extraído
+             * no host antes de executar o comando de instalação.
+             * @member
+             * @type {boolean}
+             */
+            this["extractZip"] = false;
+        }
+        if (!("fileName" in $$source)) {
+            /**
+             * FileName é o nome original do instalador publicado pelo servidor.
+             * @member
+             * @type {string}
+             */
+            this["fileName"] = "";
+        }
+        if (!("fileSizeBytes" in $$source)) {
+            /**
+             * FileSizeBytes é o tamanho do instalador em bytes (0 quando desconhecido).
+             * @member
+             * @type {number}
+             */
+            this["fileSizeBytes"] = 0;
+        }
+        if (!("fileUrl" in $$source)) {
+            /**
+             * FileURL é a URL (relativa) do instalador no servidor; o agent baixa com o
+             * próprio token de autenticação. Vazia quando o pacote não tem arquivo.
+             * @member
+             * @type {string}
+             */
+            this["fileUrl"] = "";
+        }
         if (!("silent" in $$source)) {
             /**
              * SilentCommand contém os switches silenciosos do manifesto winget
@@ -172,14 +214,14 @@ export class Item {
      * @returns {Item}
      */
     static createFrom($$source = {}) {
-        const $$createField10_0 = $$createType2;
-        const $$createField11_0 = $$createType2;
+        const $$createField15_0 = $$createType2;
+        const $$createField16_0 = $$createType2;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("installerUrlsByArch" in $$parsedSource) {
-            $$parsedSource["installerUrlsByArch"] = $$createField10_0($$parsedSource["installerUrlsByArch"]);
+            $$parsedSource["installerUrlsByArch"] = $$createField15_0($$parsedSource["installerUrlsByArch"]);
         }
         if ("installerTypesByArch" in $$parsedSource) {
-            $$parsedSource["installerTypesByArch"] = $$createField11_0($$parsedSource["installerTypesByArch"]);
+            $$parsedSource["installerTypesByArch"] = $$createField16_0($$parsedSource["installerTypesByArch"]);
         }
         return new Item(/** @type {Partial<Item>} */($$parsedSource));
     }

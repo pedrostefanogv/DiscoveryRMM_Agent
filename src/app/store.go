@@ -49,6 +49,15 @@ func (a *App) getCatalogFromAppStore(ctx context.Context) (models.Catalog, error
 	return a.AppStoreSvc.GetCatalogFromAppStore(ctx)
 }
 
+// refreshCatalogFromAppStore força um fetch novo da app-store antes de montar o
+// catálogo (botão "atualizar" da loja).
+func (a *App) refreshCatalogFromAppStore(ctx context.Context) (models.Catalog, error) {
+	if a == nil || a.AppStoreSvc == nil {
+		return models.Catalog{}, nil
+	}
+	return a.AppStoreSvc.RefreshCatalogFromAppStore(ctx)
+}
+
 // findAllowedPackage valida se um pacote está autorizado para o agent.
 func (a *App) findAllowedPackage(ctx context.Context, installationType, packageID string) (AppStoreItem, error) {
 	if a == nil || a.AppStoreSvc == nil {

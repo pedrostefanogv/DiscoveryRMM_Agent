@@ -53,8 +53,18 @@ func (a *App) ipcRequestTimeout(method string, payload map[string]any, timeout t
 // companion. Retorna (zero, false) quando standalone ou falhou.
 // Timeout de 30s: um fetch frio no serviço (cache vazio + várias páginas da
 // API) pode passar do padrão de 10s.
-func (a *App) getStoreCatalogCompanion() (models.Catalog, bool) {
-	resp, ok := a.ipcRequestTimeout("store:catalog", nil, 30*time.Second)
+func (a *App) getStoreCatalogCompanion(force bool) (models.Catalog, bool) {
+	payload := map[string]any{}
+	if force {
+		payload["force"] = true
+	}
+	// Fetch frio forçado pode baixar várias páginas da API; 60s dá folga sem
+	// travar a UI (que mostra o spinner de "atualizar catálogo").
+	timeout := 30 * time.Second
+	if force {
+		timeout = 60 * time.Second
+	}
+	resp, ok := a.ipcRequestTimeout("store:catalog", payload, timeout)
 	if !ok {
 		return models.Catalog{}, false
 	}
@@ -70,12 +80,25 @@ func (a *App) getStoreCatalogCompanion() (models.Catalog, bool) {
 	return catalog, true
 }
 
+// refreshStoreCatalogCompanion consulta o catálogo forçando fetch novo no serviço.
+func (a *App) refreshStoreCatalogCompanion() (models.Catalog, bool) {
+	return a.getStoreCatalogCompanion(true)
+}
+
 // ipcRPCStoreCatalog devolve o catálogo da loja (lado do serviço).
-func (a *App) ipcRPCStoreCatalog() map[string]any {
+// payload["force"]=true força um fetch novo da API antes de montar o catálogo.
+func (a *App) ipcRPCStoreCatalog(payload map[string]any) map[string]any {
 	if err := a.requireInventorySvc(); err != nil {
 		return map[string]any{"ok": false, "error": err.Error()}
 	}
-	catalog, err := a.InventorySvc.GetCatalog()
+	force, _ := payload["force"].(bool)
+	var catalog models.Catalog
+	var err error
+	if force {
+		catalog, err = a.InventorySvc.RefreshCatalog()
+	} else {
+		catalog, err = a.InventorySvc.GetCatalog()
+	}
 	if err != nil {
 		return map[string]any{"ok": false, "error": err.Error()}
 	}

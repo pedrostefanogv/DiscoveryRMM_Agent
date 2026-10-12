@@ -402,9 +402,23 @@ func (s *Service) fetchEffectivePolicy(ctx context.Context) (EffectivePolicy, er
 	return policy, nil
 }
 
-// GetCatalogFromAppStore converte a política efetiva em um catálogo.
+// GetCatalogFromAppStore converte a política efetiva em um catálogo (usa cache).
 func (s *Service) GetCatalogFromAppStore(ctx context.Context) (models.Catalog, error) {
-	policy, err := s.LoadEffectivePolicy(ctx, false)
+	return s.buildCatalogFromPolicy(ctx, false)
+}
+
+// RefreshCatalogFromAppStore monta o catálogo forçando um fetch novo da API
+// (ignora o cache de memória). É usado pelo botão de atualizar da loja para
+// refletir imediatamente pacotes custom recém-cadastrados/aprovados no servidor.
+// Se o fetch falhar, o LoadEffectivePolicy serve o cache stale persistido — a
+// loja continua utilizável offline.
+func (s *Service) RefreshCatalogFromAppStore(ctx context.Context) (models.Catalog, error) {
+	return s.buildCatalogFromPolicy(ctx, true)
+}
+
+// buildCatalogFromPolicy monta o catálogo a partir da política efetiva.
+func (s *Service) buildCatalogFromPolicy(ctx context.Context, forceRefresh bool) (models.Catalog, error) {
+	policy, err := s.LoadEffectivePolicy(ctx, forceRefresh)
 	if err != nil {
 		return models.Catalog{}, err
 	}

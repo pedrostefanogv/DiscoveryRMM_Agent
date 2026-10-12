@@ -87,7 +87,9 @@ function initAppBindings() {
     searchEl.addEventListener("input", debounce(applyFilter, 300));
   }
   if (reloadBtn) {
-    reloadBtn.addEventListener("click", loadCatalog);
+    // Passa true explicitamente: sem isso o Event do clique viraria o argumento
+    // forceRefresh (truthy) do loadCatalog, forçando fetch sempre.
+    reloadBtn.addEventListener("click", function () { loadCatalog(true); });
   }
   if (homeBtn) {
     homeBtn.addEventListener("click", function () {

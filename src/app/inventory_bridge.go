@@ -12,13 +12,27 @@ func (a *App) GetCatalog() (models.Catalog, error) {
 	// app-store (SQLite 7 dias); a UI não tem DB local. Com a API fora do ar a
 	// loja continua carregando pelo cache do serviço. Em falha de IPC (ex.:
 	// serviço ausente) cai no caminho local (standalone).
-	if catalog, ok := a.getStoreCatalogCompanion(); ok {
+	if catalog, ok := a.getStoreCatalogCompanion(false); ok {
 		return catalog, nil
 	}
 	if err := a.requireInventorySvc(); err != nil {
 		return models.Catalog{}, err
 	}
 	return a.InventorySvc.GetCatalog()
+}
+
+// RefreshCatalog força a loja a buscar o catálogo atualizado no servidor.
+// É o que o botão "atualizar" da loja chama: sem ele, o catálogo vinha apenas
+// do cache de política (memória/SQLite) e um pacote custom recém-cadastrado
+// podia demorar até o próximo sync de background para aparecer.
+func (a *App) RefreshCatalog() (models.Catalog, error) {
+	if catalog, ok := a.refreshStoreCatalogCompanion(); ok {
+		return catalog, nil
+	}
+	if err := a.requireInventorySvc(); err != nil {
+		return models.Catalog{}, err
+	}
+	return a.InventorySvc.RefreshCatalog()
 }
 
 func (a *App) Install(id string) (string, error) {

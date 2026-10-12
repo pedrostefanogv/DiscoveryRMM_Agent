@@ -34,7 +34,7 @@ func (a *App) handleIPCRequest(ctx context.Context, payload map[string]any) map[
 	case "debug:set":
 		return a.ipcRPCDebugSet(payload)
 	case "store:catalog":
-		return a.ipcRPCStoreCatalog()
+		return a.ipcRPCStoreCatalog(payload)
 	case "inventory:snapshot":
 		return a.ipcRPCInventorySnapshot()
 	case "memory:list":

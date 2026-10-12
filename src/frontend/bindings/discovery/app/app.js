@@ -263,6 +263,21 @@ export function CheckPSADTModuleStatus() {
 }
 
 /**
+ * ChooseTicketAttachmentSavePath abre o diálogo NATIVO "Salvar como" no processo
+ * da UI (usuário interativo) e devolve o caminho completo escolhido. Devolve
+ * string vazia quando o usuário cancela. O download em si continua no serviço
+ * (dono do token e do SQLite) — a UI só escolhe ONDE gravar.
+ * 
+ * Sem webview (serviço/standalone) não há diálogo: devolve o caminho padrão.
+ * @param {string} fileName
+ * @param {string} title
+ * @returns {$CancellablePromise<string>}
+ */
+export function ChooseTicketAttachmentSavePath(fileName, title) {
+    return $Call.ByID(1521046828, fileName, title);
+}
+
+/**
  * CleanupExpiredP2PTempArtifacts expõe cleanupExpiredP2PTempArtifacts via interface.
  * @param {string} now
  * @returns {$CancellablePromise<number>}
@@ -1799,6 +1814,19 @@ export function RefreshAutomationPolicyError(includeScriptContent) {
 }
 
 /**
+ * RefreshCatalog força a loja a buscar o catálogo atualizado no servidor.
+ * É o que o botão "atualizar" da loja chama: sem ele, o catálogo vinha apenas
+ * do cache de política (memória/SQLite) e um pacote custom recém-cadastrado
+ * podia demorar até o próximo sync de background para aparecer.
+ * @returns {$CancellablePromise<models$0.Catalog>}
+ */
+export function RefreshCatalog() {
+    return $Call.ByID(1666376796).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType22($result);
+    }));
+}
+
+/**
  * RefreshHardwareIdentity limpa o cache e re-coleta a identidade de hardware.
  * Útil quando o usuário quer forçar uma nova leitura (ex.: após habilitar o TPM
  * na BIOS). Exposto ao frontend via Wails e ao debug HTTP via /api/.
@@ -2112,7 +2140,9 @@ export function SaveScreenshotPolicy(policyJSON) {
 }
 
 /**
- * SaveTicketAttachment baixa um anexo do REPOSITÓRIO e salva em disco.
+ * SaveTicketAttachment baixa um anexo do REPOSITÓRIO e salva na pasta padrão
+ * (Downloads do usuário). A pasta é resolvida no processo da UI e vai no RPC,
+ * para não cair no perfil do SYSTEM.
  * @param {string} ticketID
  * @param {string} attachmentID
  * @param {string} fileName
@@ -2123,7 +2153,21 @@ export function SaveTicketAttachment(ticketID, attachmentID, fileName) {
 }
 
 /**
- * SaveTicketCommentAttachment baixa um anexo da CONVERSA e salva em disco.
+ * SaveTicketAttachmentAs salva um anexo do REPOSITÓRIO no caminho escolhido no
+ * diálogo nativo (Save As).
+ * @param {string} ticketID
+ * @param {string} attachmentID
+ * @param {string} fileName
+ * @param {string} destPath
+ * @returns {$CancellablePromise<string>}
+ */
+export function SaveTicketAttachmentAs(ticketID, attachmentID, fileName, destPath) {
+    return $Call.ByID(1663567054, ticketID, attachmentID, fileName, destPath);
+}
+
+/**
+ * SaveTicketCommentAttachment baixa um anexo da CONVERSA e salva na pasta
+ * padrão (Downloads do usuário).
  * @param {string} ticketID
  * @param {string} commentID
  * @param {string} attachmentID
@@ -2132,6 +2176,20 @@ export function SaveTicketAttachment(ticketID, attachmentID, fileName) {
  */
 export function SaveTicketCommentAttachment(ticketID, commentID, attachmentID, fileName) {
     return $Call.ByID(2535012477, ticketID, commentID, attachmentID, fileName);
+}
+
+/**
+ * SaveTicketCommentAttachmentAs salva um anexo da CONVERSA no caminho escolhido
+ * no diálogo nativo (Save As).
+ * @param {string} ticketID
+ * @param {string} commentID
+ * @param {string} attachmentID
+ * @param {string} fileName
+ * @param {string} destPath
+ * @returns {$CancellablePromise<string>}
+ */
+export function SaveTicketCommentAttachmentAs(ticketID, commentID, attachmentID, fileName, destPath) {
+    return $Call.ByID(3919314181, ticketID, commentID, attachmentID, fileName, destPath);
 }
 
 /**

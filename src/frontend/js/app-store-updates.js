@@ -341,12 +341,18 @@ function goHome() {
   renderCards();
 }
 
-async function loadCatalog() {
+// loadCatalog(forceRefresh) carrega o catálogo da loja. Com forceRefresh=true
+// (botão "atualizar") faz um fetch novo no servidor — necessário para um pacote
+// custom recém-cadastrado/aprovado aparecer sem esperar o próximo sync de
+// background. Sem o parâmetro, usa o cache de política do serviço.
+async function loadCatalog(forceRefresh) {
   if (reloadBtn) reloadBtn.classList.add('loading');
   try {
-    showFeedback(translate('store.catalogLoading'));
+    showFeedback(translate(forceRefresh ? 'store.catalogRefreshing' : 'store.catalogLoading'));
     var api = appApi();
-    var catalog = await api.GetCatalog();
+    var catalog = forceRefresh && typeof api.RefreshCatalog === 'function'
+      ? await api.RefreshCatalog()
+      : await api.GetCatalog();
     state.allPackages = catalog.packages || [];
     await loadPackageActions(api);
     state.filtered = state.allPackages;
