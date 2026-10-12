@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -54,11 +55,15 @@ func (a *App) openSupportChatWindow() {
 		MinHeight: 420,
 		URL:       "/chat-window.html",
 	})
+	// Portão por janela: o hook consulta ESTA janela e não um estado global que
+	// sobrevive ao fechamento anterior.
+	allowClose := &atomic.Bool{}
 	a.supportChatWin = win
+	a.supportChatAllowClose = allowClose
 	a.supportChatMu.Unlock()
 
 	win.RegisterHook(events.Common.WindowClosing, func(ev *application.WindowEvent) {
-		if a.supportChatAllowClose.Load() {
+		if allowClose.Load() {
 			return
 		}
 		// Cancelar e pedir confirmação: o chat só termina quando o usuário
@@ -77,14 +82,18 @@ func (a *App) openSupportChatWindow() {
 func (a *App) closeSupportChatWindow() {
 	a.supportChatMu.Lock()
 	win := a.supportChatWin
+	allowClose := a.supportChatAllowClose
 	a.supportChatWin = nil
+	a.supportChatAllowClose = nil
 	a.supportChatMu.Unlock()
 
 	if win == nil {
 		return
 	}
 
-	a.supportChatAllowClose.Store(true)
+	if allowClose != nil {
+		allowClose.Store(true)
+	}
 	win.Close()
 	a.Logs.Append("[supportchat] janela do chat fechada")
 }
@@ -128,16 +137,30 @@ func (a *App) resumeSupportChatIfActive(delay time.Duration) {
 		}
 	}
 
+	svc := a.supportChatService()
+
+	// Estado local ANTES do snapshot: é ele que diz se a janela aberta apenas
+	// aguardava um convite (waiting). Conversa ATIVA nunca é fechada por aqui.
+	previous := svc.State()
+
 	ctx, cancel := context.WithTimeout(a.supportChatContext(), supportChatCallWait)
 	defer cancel()
 
-	state, err := a.supportChatService().Refresh(ctx)
+	state, err := svc.Refresh(ctx)
 	if err != nil {
 		a.Logs.Append("[supportchat] retomada no startup: servidor indisponível — " + err.Error())
 		return
 	}
 
 	if !state.HasSession {
+		// Convite que morreu no servidor (expirou/foi encerrado) sem evento de
+		// fim: a janela ficaria aberta e vazia ("SEM CONVERSA"). Ela é fechada
+		// porque a conversa nunca começou — a ATIVA é preservada.
+		if previous.Status == supportchat.StatusWaiting && a.supportChatWindowOpen() {
+			a.Logs.Append("[supportchat] convite sem sessão no servidor; fechando a janela do chat")
+			svc.ClearState()
+			a.closeSupportChatWindow()
+		}
 		return
 	}
 
@@ -276,6 +299,27 @@ func (a *App) SupportChatOpenInviteWindow(sessionID, ticketID, ticketTitle, supp
 	// Defesa extra: um convite não pode derrubar uma conversa ATIVA de outro
 	// chamado (a recusa por busy é resolvida no serviço).
 	if state := svc.State(); state.Status == supportchat.StatusActive && state.SessionID != sessionID {
+		return errSupportChatBusy
+	}
+
+	// Um convite só abre a janela depois de o SERVIDOR confirmar que esta sessão
+	// ainda existe (pendente/ativa). A reentrega de comandos do servidor pode
+	// entregar o convite minutos depois: sem esta checagem, o eco de uma sessão
+	// já encerrada abria a janela vazia ("SEM CONVERSA") sozinho.
+	ctx, cancel := context.WithTimeout(a.supportChatContext(), supportChatCallWait)
+	defer cancel()
+
+	state, err := svc.Refresh(ctx)
+	if err != nil {
+		a.Logs.Append("[supportchat] convite ignorado: falha ao confirmar a sessão no servidor — " + err.Error())
+		return err
+	}
+	if !state.HasSession || state.SessionID == "" {
+		a.Logs.Append("[supportchat] convite ignorado: sessão " + sessionID + " não está mais pendente/ativa no servidor")
+		return errSupportChatInviteStale
+	}
+	if state.SessionID != sessionID {
+		a.Logs.Append("[supportchat] convite ignorado: o servidor tem outra sessão ativa (" + state.SessionID + ")")
 		return errSupportChatBusy
 	}
 

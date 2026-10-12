@@ -36,6 +36,21 @@ func (a *App) handleTicketChatInviteCommand(parent context.Context, payload any)
 		return true, 2, "", "payload de convite de chat sem sessionId/ticketId"
 	}
 
+	// Guarda contra convite ATRASADO: o servidor reentrega comandos não
+	// confirmados depois de alguns minutos (Nats:CommandRedelivery), então este
+	// comando pode chegar bem depois do vencimento — inclusive de uma sessão que
+	// já foi aceita e encerrada. Sem esta checagem o agente abria a janela do
+	// chat "do nada", vazia, no meio do trabalho do usuário.
+	//
+	// NÃO respondemos "recusado" ao servidor aqui: a decisão usa o relógio da
+	// máquina (que pode estar adiantado) e responder reescreveria o estado de
+	// uma sessão que o servidor ainda considera pendente. O filtro autoritativo
+	// é o estado no servidor, checado em SupportChatOpenInviteWindow.
+	if invite.ExpiredAt(time.Now()) {
+		a.Logs.Append("[supportchat] convite ignorado: expirado em " + invite.ExpiresAt + " (sessionId=" + invite.SessionID + ")")
+		return true, 1, "", "convite de chat expirado"
+	}
+
 	svc := a.supportChatService()
 
 	// Uma sessão por máquina: se já existe OUTRO chat ativo, recusa o convite

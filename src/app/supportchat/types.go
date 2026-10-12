@@ -12,6 +12,11 @@
 //     fallback de envio.
 package supportchat
 
+import (
+	"strings"
+	"time"
+)
+
 // Status possíveis do chat no lado do agent.
 const (
 	StatusNone    = "none"
@@ -73,6 +78,40 @@ type Invite struct {
 	SupportName string `json:"supportUserName"`
 	ExpiresAt   string `json:"expiresAtUtc"`
 }
+
+// ExpiredAt informa se o convite já venceu no instante informado.
+//
+// A entrega do comando NÃO é pontual: o servidor reentrega comandos não
+// confirmados depois de alguns minutos (Nats:CommandRedelivery). Sem esta
+// checagem, o eco tardio de um convite de uma sessão já encerrada reabria a
+// janela do chat "do nada" no PC do usuário.
+//
+// Sem expiresAtUtc (payload antigo/ausente) o convite é tratado como válido —
+// a validação de estado no servidor continua sendo a rede de segurança.
+func (i Invite) ExpiredAt(now time.Time) bool {
+	raw := strings.TrimSpace(i.ExpiresAt)
+	if raw == "" {
+		return false
+	}
+
+	expiresAt, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return false
+	}
+
+	// Folga para não descartar um convite válido por desvio de relógio da
+	// máquina em relação ao servidor.
+	return now.After(expiresAt.Add(inviteExpiryGrace))
+}
+
+// inviteExpiryGrace é a folga aplicada ao vencimento do convite.
+//
+// O filtro AUTORITATIVO é o estado da sessão no servidor (ver
+// SupportChatOpenInviteWindow); aqui é só um corte barato de convites
+// claramente velhos. A reentrega que motivou a guarda chegou ~6 min depois de
+// criada — quase 4 min após o vencimento, bem acima desta folga — e nenhum
+// relógio razoavelmente sincronizado erra 2 minutos.
+const inviteExpiryGrace = 2 * time.Minute
 
 // Envelope é o contrato do stream do chat de suporte (JSON camelCase; espelha
 // Discovery.Core.DTOs.TicketChatEnvelope).

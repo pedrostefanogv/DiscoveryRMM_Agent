@@ -125,7 +125,13 @@ type App struct {
 	supportChatWin application.Window
 	// supportChatAllowClose libera o fechamento programático da janela depois
 	// da confirmação do usuário (o hook de WindowClosing cancela o resto).
-	supportChatAllowClose atomic.Bool
+	//
+	// É POR JANELA (um portão novo a cada janela criada): um flag global ficava
+	// "true" para sempre depois do primeiro fechamento programático, e a janela
+	// seguinte passava a fechar no X sem o modal — sem encerrar a sessão pelo
+	// caminho síncrono do Go (o end virava best-effort no beforeunload e podia
+	// não chegar, deixando a sessão viva para a reconciliação reabrir a janela).
+	supportChatAllowClose *atomic.Bool
 	// logStore é o banco unificado de logs do processo (nil quando indisponível).
 	logStore *logstore.Store
 
