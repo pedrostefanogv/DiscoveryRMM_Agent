@@ -19,6 +19,10 @@ import (
 // -> o agent mostra um pedido de confirmação (modal na janela principal,
 // trazida à frente, + toast nativo quando o app está no tray) -> no ACEITE o
 // agent responde ao servidor e abre a JANELA INDEPENDENTE do chat.
+//
+// O convite pode ser de conversa VINCULADA A CHAMADO ou AVULSA (sem chamado,
+// aberta pela lista/detalhe do agent). Só o sessionId é obrigatório; o ticketId
+// vem vazio na conversa avulsa.
 
 // supportChatInviteNotificationID identifica o pedido de confirmação.
 const supportChatInviteNotificationID = "discovery.supportchat.invite"
@@ -32,8 +36,8 @@ func (a *App) handleTicketChatInviteCommand(parent context.Context, payload any)
 
 	invite.SessionID = strings.TrimSpace(invite.SessionID)
 	invite.TicketID = strings.TrimSpace(invite.TicketID)
-	if invite.SessionID == "" || invite.TicketID == "" {
-		return true, 2, "", "payload de convite de chat sem sessionId/ticketId"
+	if invite.SessionID == "" {
+		return true, 2, "", "payload de convite de chat sem sessionId"
 	}
 
 	// Guarda contra convite ATRASADO: o servidor reentrega comandos não

@@ -71,9 +71,12 @@ type State struct {
 }
 
 // Invite é o payload do comando TicketChatInvite.
+//
+// TicketID é OPCIONAL: conversas avulsas (sem chamado), abertas pela
+// lista/detalhe do agent no console, chegam com o campo vazio/ausente.
 type Invite struct {
 	SessionID   string `json:"sessionId"`
-	TicketID    string `json:"ticketId"`
+	TicketID    string `json:"ticketId,omitempty"`
 	TicketTitle string `json:"ticketTitle"`
 	SupportName string `json:"supportUserName"`
 	ExpiresAt   string `json:"expiresAtUtc"`
