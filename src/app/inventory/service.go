@@ -2,6 +2,7 @@ package inventory
 
 import (
 	"archive/zip"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -129,6 +130,18 @@ type Options struct {
 	// (winget list: Name/Id/Version) para correlacionar o inventário de registro
 	// ao Id real do pacote. Best-effort.
 	InstalledPackages func(context.Context) ([]models.InstalledPackage, error)
+
+	// PublishCustomInstallerForP2P publica no cache P2P (P2P_Temp) o instalador
+	// de um app custom recém-baixado da API, tornando este agent seed para o
+	// site, e devolve o caminho do artifact publicado para que a instalação
+	// rode a partir dele. Best-effort: erro aqui não impede a instalação.
+	// Pode ser nil (P2P off).
+	PublishCustomInstallerForP2P func(ctx context.Context, packageID, version, installerPath string) (string, error)
+
+	// CustomInstallerFromP2P tenta obter o instalador de um app custom já
+	// publicado por um peer (mesma versão) antes de baixar da API. Devolve o
+	// caminho local e ok=true quando conseguiu. Pode ser nil (P2P off).
+	CustomInstallerFromP2P func(ctx context.Context, packageID, version string) (string, bool)
 }
 
 // Service handles inventory, installs and sync operations.
@@ -157,12 +170,14 @@ type Service struct {
 	// pendingUpdatesGoodAt é o carimbo do último scan NÃO-VAZIO bem-sucedido.
 	// Diferente de pendingUpdatesLastAt, ele não é zerado pela invalidação do
 	// cache: é a referência para decidir se um scan vazio é suspeito.
-	pendingUpdatesGoodAt    time.Time
-	installedPackages       func(context.Context) ([]models.InstalledPackage, error)
-	installedPackagesMu     sync.Mutex
-	installedPackagesLast   []models.InstalledPackage
-	installedPackagesLastAt time.Time
-	installedPackagesLoaded bool
+	pendingUpdatesGoodAt         time.Time
+	installedPackages            func(context.Context) ([]models.InstalledPackage, error)
+	installedPackagesMu          sync.Mutex
+	installedPackagesLast        []models.InstalledPackage
+	installedPackagesLastAt      time.Time
+	publishCustomInstallerForP2P func(ctx context.Context, packageID, version, installerPath string) (string, error)
+	customInstallerFromP2P       func(ctx context.Context, packageID, version string) (string, bool)
+	installedPackagesLoaded      bool
 	// installedPackagesGoodAt: idem, para o "winget list".
 	installedPackagesGoodAt          time.Time
 	catalogChocoMu                   sync.Mutex
@@ -206,6 +221,8 @@ func NewService(opts Options) *Service {
 		shouldDeferNonCritical:           opts.ShouldDeferNonCritical,
 		pendingUpdates:                   opts.PendingUpdates,
 		installedPackages:                opts.InstalledPackages,
+		publishCustomInstallerForP2P:     opts.PublishCustomInstallerForP2P,
+		customInstallerFromP2P:           opts.CustomInstallerFromP2P,
 		postInstallInventoryRefreshDelay: postInstallInventoryRefreshDelayDefault,
 		hardwareIdentity:                 opts.HardwareIdentity,
 	}
@@ -348,9 +365,16 @@ func (s *Service) Install(id string) (string, error) {
 	s.logf(out)
 
 	if err != nil {
-		s.emitInstallNotification(correlationID, packageID, "install_failed", "instalacao", "failed", "Falha na instalação", "Não foi possível concluir a instalação do aplicativo.", map[string]any{
-			"error": err.Error(),
-		})
+		// Falhas sem saída (ex.: download recusado) não deixavam rastro nenhum
+		// no log local — só a notificação, que carrega o erro embrulhado
+		// ("exit status 1") e esconde o motivo real.
+		s.logf(fmt.Sprintf("[install %s] falhou: %v", packageID, err))
+
+		details := map[string]any{"error": err.Error()}
+		if trimmed := strings.TrimSpace(out); trimmed != "" {
+			details["output"] = truncateNotificationOutput(trimmed)
+		}
+		s.emitInstallNotification(correlationID, packageID, "install_failed", "instalacao", "failed", "Falha na instalação", "Não foi possível concluir a instalação do aplicativo.", details)
 		return out, err
 	}
 
@@ -408,6 +432,10 @@ func (s *Service) Uninstall(id string) (string, error) {
 		err = fmt.Errorf("installationType %q não suportado", allowed.InstallationType)
 	}
 	s.logf(out)
+	if err != nil {
+		// Mesmo motivo do Install: sem isto a falha fica sem rastro local.
+		s.logf(fmt.Sprintf("[uninstall %s] falhou: %v", packageID, err))
+	}
 	if err == nil {
 		s.scheduleInventoryRefreshAfterPackageChange("uninstall", packageID)
 	}
@@ -989,19 +1017,58 @@ func (s *Service) runCustomInstallCommand(ctx context.Context, allowed appstore.
 
 	var installerPath, workDir string
 	if strings.TrimSpace(allowed.FileURL) != "" {
-		downloaded, err := s.downloadCustomAsset(runCtx, allowed, packageID)
-		if err != nil {
-			return "", err
+		downloaded := ""
+		fromP2P := false
+
+		// P2P primeiro: se algum agent do site já publicou este instalador na
+		// mesma versão (ou se já está no cache local), baixar da LAN evita
+		// repetir GBs de download da API.
+		if s.customInstallerFromP2P != nil {
+			if path, ok := s.customInstallerFromP2P(runCtx, packageID, allowed.Version); ok {
+				downloaded, fromP2P = path, true
+				s.logf(fmt.Sprintf("[install %s] instalador obtido do cache/rede P2P: %s", packageID, path))
+			}
 		}
-		// NÃO remove a pasta imediatamente: instaladores podem disparar um
-		// processo filho que continua lendo os arquivos após o cmd retornar.
-		// A limpeza é agendada com folga (e sobras antigas são varridas).
-		s.scheduleCustomAssetCleanup(filepath.Dir(downloaded))
+
+		if !fromP2P {
+			path, err := s.downloadCustomAsset(runCtx, allowed, packageID)
+			if err != nil {
+				return "", err
+			}
+			downloaded = path
+			// NÃO remove a pasta imediatamente: instaladores podem disparar um
+			// processo filho que continua lendo os arquivos após o cmd retornar.
+			// A limpeza é agendada com folga (e sobras antigas são varridas).
+			s.scheduleCustomAssetCleanup(filepath.Dir(path))
+
+			// Vira seed: publica o instalador no cache P2P (P2P_Temp) para os
+			// demais agents do site e passa a instalar a partir do artifact
+			// publicado, deixando a cópia temporária apenas como sobra a limpar.
+			// Best-effort — falha aqui não impede a instalação.
+			if s.publishCustomInstallerForP2P != nil {
+				publishedPath, pubErr := s.publishCustomInstallerForP2P(runCtx, packageID, allowed.Version, path)
+				if pubErr != nil {
+					s.logf(fmt.Sprintf("[install %s] aviso: falha ao publicar instalador no P2P: %v", packageID, pubErr))
+				} else if strings.TrimSpace(publishedPath) != "" {
+					downloaded, fromP2P = publishedPath, true
+				}
+			}
+		}
 
 		installerPath = downloaded
 		workDir = filepath.Dir(downloaded)
 
 		if allowed.ExtractZip || strings.EqualFold(filepath.Ext(downloaded), ".zip") {
+			// A pasta do cache P2P não é área de trabalho: extrair ali deixaria
+			// lixo dentro do diretório de artifacts publicados.
+			if fromP2P {
+				if tempDir, err := os.MkdirTemp("", "discovery-custom-*"); err == nil {
+					s.scheduleCustomAssetCleanup(tempDir)
+					workDir = tempDir
+				} else {
+					s.logf(fmt.Sprintf("[install %s] aviso: falha ao criar pasta de extração: %v", packageID, err))
+				}
+			}
 			extractedDir := filepath.Join(workDir, "extracted")
 			if err := extractZipArchive(downloaded, extractedDir); err != nil {
 				return "", err
@@ -1121,7 +1188,21 @@ func (s *Service) downloadCustomAsset(ctx context.Context, item appstore.Item, p
 		return "", fmt.Errorf("falha ao criar pasta temporária para o instalador: %w", err)
 	}
 
-	dest := filepath.Join(tempDir, customAssetFileName(resp, target))
+	// O nome vindo do servidor pode não ter extensão (ex.: Content-Disposition
+	// gravado apenas com o packageId quando o cadastro não guardou o nome do
+	// arquivo). Um PE sem extensão não é iniciado por `cmd /C` — a instalação
+	// falha com "não é reconhecido como um comando interno" mesmo o binário
+	// sendo válido. Detecta o tipo pelos primeiros bytes (e pelo Content-Type)
+	// e completa a extensão antes de gravar; o stream é reconstruído para que
+	// nada se perca.
+	assetName := customAssetFileName(resp, target)
+	body, renamed := ensureInstallerExtension(assetName, resp.Body, resp.Header.Get("Content-Type"))
+	if renamed != "" {
+		assetName = renamed
+		s.logf(fmt.Sprintf("[install %s] instalador veio sem extensão; gravando como %s", packageID, assetName))
+	}
+
+	dest := filepath.Join(tempDir, assetName)
 	out, err := os.Create(dest)
 	if err != nil {
 		_ = os.RemoveAll(tempDir)
@@ -1131,7 +1212,7 @@ func (s *Service) downloadCustomAsset(ctx context.Context, item appstore.Item, p
 	// O SHA-256 é calculado durante a cópia (sem segunda passada) para validar
 	// a integridade antes de executar qualquer coisa.
 	hasher := sha256.New()
-	written, copyErr := io.Copy(io.MultiWriter(out, hasher), resp.Body)
+	written, copyErr := io.Copy(io.MultiWriter(out, hasher), body)
 	closeErr := out.Close()
 
 	if copyErr != nil {
@@ -1263,6 +1344,118 @@ func customAssetFileName(resp *http.Response, rawURL string) string {
 	}
 
 	return "installer.bin"
+}
+
+// installerMagicBytes é quantos bytes são lidos do corpo do download para
+// detectar o tipo do instalador quando o servidor manda um nome sem extensão.
+const installerMagicBytes = 8
+
+// allowedInstallerExtensions espelha a lista aceita no upload do servidor
+// (CustomPackageAssetService). Nome já com uma dessas extensões é preservado.
+var allowedInstallerExtensions = map[string]struct{}{
+	".exe": {}, ".msi": {}, ".msix": {}, ".msixbundle": {}, ".appx": {},
+	".zip": {}, ".7z": {}, ".rar": {}, ".ps1": {}, ".bat": {}, ".cmd": {},
+	".msu": {}, ".cab": {}, ".iso": {}, ".tar": {}, ".gz": {}, ".pkg": {},
+	".dmg": {},
+}
+
+// ensureInstallerExtension devolve o corpo do download e o nome corrigido
+// quando o nome original não termina numa extensão de instalador reconhecida.
+// Nome já utilizável volta intacto (segundo valor vazio) e o corpo é devolvido
+// sem nenhuma leitura prévia.
+func ensureInstallerExtension(name string, body io.Reader, contentType string) (io.Reader, string) {
+	if hasInstallerExtension(name) {
+		return body, ""
+	}
+
+	sniff := make([]byte, installerMagicBytes)
+	n, _ := io.ReadFull(body, sniff)
+	sniff = sniff[:n]
+
+	renamed := appendInstallerExtension(name, sniff, contentType)
+	if renamed == name {
+		return body, ""
+	}
+	return io.MultiReader(bytes.NewReader(sniff), body), renamed
+}
+
+// hasInstallerExtension indica se o nome já termina numa extensão que o
+// instalador aceita e que o `cmd /C` consegue iniciar.
+func hasInstallerExtension(name string) bool {
+	_, ok := allowedInstallerExtensions[strings.ToLower(filepath.Ext(name))]
+	return ok
+}
+
+// appendInstallerExtension completa (ou corrige) a extensão de um instalador
+// baixado sem extensão reconhecida, usando a assinatura do arquivo e, na
+// sequência, o Content-Type. Sem nenhuma pista assume .exe: é a extensão que o
+// `cmd /C` aceita iniciar e a alternativa é repetir a falha.
+func appendInstallerExtension(name string, head []byte, contentType string) string {
+	if strings.TrimSpace(name) == "" {
+		name = "installer"
+	}
+
+	detected := installerExtensionFromMagic(head)
+	if detected == "" {
+		detected = installerExtensionFromContentType(contentType)
+	}
+	if detected == "" {
+		detected = ".exe"
+	}
+
+	if existing := filepath.Ext(name); existing != "" {
+		return strings.TrimSuffix(name, existing) + detected
+	}
+	return name + detected
+}
+
+// installerExtensionFromMagic reconhece as assinaturas dos instaladores mais
+// comuns publicados na loja.
+func installerExtensionFromMagic(head []byte) string {
+	switch {
+	case len(head) >= 2 && head[0] == 'M' && head[1] == 'Z':
+		return ".exe"
+	case len(head) >= 4 && head[0] == 'P' && head[1] == 'K' && head[2] == 0x03 && head[3] == 0x04:
+		return ".zip"
+	case len(head) >= 8 && bytes.Equal(head[:8], []byte{0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1}):
+		return ".msi" // contêiner OLE/CFB (MSI, MSIX, CAB antigo)
+	case len(head) >= 6 && bytes.Equal(head[:6], []byte{'7', 'z', 0xBC, 0xAF, 0x27, 0x1C}):
+		return ".7z"
+	case len(head) >= 4 && bytes.Equal(head[:4], []byte{'R', 'a', 'r', '!'}):
+		return ".rar"
+	case len(head) >= 4 && bytes.Equal(head[:4], []byte{'M', 'S', 'C', 'F'}):
+		return ".cab"
+	}
+	return ""
+}
+
+// installerExtensionFromContentType mapeia o Content-Type anunciado pelo
+// servidor para a extensão correspondente.
+func installerExtensionFromContentType(contentType string) string {
+	ct := strings.ToLower(strings.TrimSpace(contentType))
+	if index := strings.Index(ct, ";"); index >= 0 {
+		ct = strings.TrimSpace(ct[:index])
+	}
+
+	switch ct {
+	case "application/zip", "application/x-zip-compressed", "multipart/x-zip":
+		return ".zip"
+	case "application/x-msdownload", "application/x-msdos-program",
+		"application/vnd.microsoft.portable-executable", "application/x-dosexec",
+		"application/x-winexe":
+		return ".exe"
+	case "application/x-msi", "application/x-msinstaller":
+		return ".msi"
+	case "application/x-7z-compressed":
+		return ".7z"
+	case "application/vnd.rar", "application/x-rar-compressed":
+		return ".rar"
+	case "application/vnd.ms-cab-compressed":
+		return ".cab"
+	case "application/x-iso9660-image":
+		return ".iso"
+	}
+	return ""
 }
 
 // extractZipArchive extrai um ZIP para destDir protegendo contra zip-slip
@@ -1411,6 +1604,19 @@ func normalizePackageManagerSourceHint(raw string) string {
 	default:
 		return ""
 	}
+}
+
+// notificationOutputLimit limita o texto do instalador anexado à notificação:
+// o metadata trafega por NATS e não pode carregar saída ilimitada.
+const notificationOutputLimit = 4000
+
+// truncateNotificationOutput corta a saída do comando preservando o começo do
+// texto (onde ficam os erros do instalador).
+func truncateNotificationOutput(text string) string {
+	if len(text) <= notificationOutputLimit {
+		return text
+	}
+	return text[:notificationOutputLimit] + "... (truncado)"
 }
 
 func (s *Service) emitInstallNotification(correlationID, packageID, eventType, phase, status, title, message string, extra map[string]any) {

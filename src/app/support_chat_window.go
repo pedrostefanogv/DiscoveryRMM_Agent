@@ -240,20 +240,26 @@ func (a *App) SupportChatUploadAttachment(fileName, contentType, base64Data stri
 // chat com a IA: seleção de janela/aplicativo ou região da tela e ferramentas
 // de anotação (setas, marcações, passos).
 //
-// O overlay é renderizado na JANELA PRINCIPAL porque é ela que o Go expande
-// para cobrir o desktop; esta binding apenas traz a janela para frente e pede ao
-// frontend dela para abrir a captura, marcando o destino do resultado como a
-// janela do chat de suporte (ver app-screenshot.js → supportChatCapturePending).
+// A captura é conduzida AQUI, em goroutine, pela JANELA DEDICADA do overlay
+// (screenshot_overlay_window.go) — não passa mais pela janela principal, que
+// normalmente está no tray enquanto o usuário conversa com o suporte. O
+// resultado volta para esta conversa como anexo pelo evento
+// "supportchat:screenshot" (ou "supportchat:screenshot_failed" no erro).
 func (a *App) SupportChatRequestScreenshot() error {
 	if a.app == nil {
 		return errSupportChatNoUI
 	}
 
-	// NÃO trazemos a janela principal para frente: quem a mostra é o próprio
-	// overlay (`enterScreenshotOverlayBounds` usa SWP_SHOWWINDOW) e ela volta ao
-	// estado anterior (tray/minimizada) quando a captura termina.
-	a.EmitEvent("supportchat:capture_requested")
-	a.Logs.Append("[supportchat] captura assistida solicitada pelo usuário (overlay na janela principal)")
+	go func() {
+		if _, err := a.PrepareScreenshotOverlay("captura manual do usuario", screenshotDestinationSupportChat); err != nil {
+			a.Logs.Append("[supportchat] captura assistida falhou: " + err.Error())
+			// Libera o botão de print da janela do chat em vez de deixá-lo preso
+			// até o watchdog de 60 s.
+			a.EmitEvent("supportchat:screenshot_failed", map[string]any{"error": err.Error()})
+			return
+		}
+		a.Logs.Append("[supportchat] captura assistida solicitada pelo usuário (janela dedicada de overlay)")
+	}()
 
 	return nil
 }

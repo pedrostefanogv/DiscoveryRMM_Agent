@@ -31,12 +31,41 @@ const (
 	screenshotAuditThumbLimit = 12
 )
 
+// Destinos do print capturado no overlay. O overlay roda numa janela
+// DEDICADA (screenshot_overlay_window.go), então o resultado precisa voltar
+// para a janela de origem por evento — o destino diz para onde.
+const (
+	// screenshotDestinationAIChat é o composer do chat com a IA (padrão).
+	screenshotDestinationAIChat = "aiChat"
+	// screenshotDestinationSupportChat é a janela do chat de suporte.
+	screenshotDestinationSupportChat = "supportChat"
+	// screenshotDestinationTicketComment é o composer de comentário do chamado.
+	screenshotDestinationTicketComment = "ticketComment"
+	// screenshotDestinationLLM é a seleção interativa pedida pela IA.
+	screenshotDestinationLLM = "llm"
+)
+
+// normalizeScreenshotDestination valida o destino vindo do frontend.
+func normalizeScreenshotDestination(destination string) string {
+	switch strings.TrimSpace(destination) {
+	case screenshotDestinationSupportChat:
+		return screenshotDestinationSupportChat
+	case screenshotDestinationTicketComment:
+		return screenshotDestinationTicketComment
+	case screenshotDestinationLLM:
+		return screenshotDestinationLLM
+	default:
+		return screenshotDestinationAIChat
+	}
+}
+
 // screenshotOverlaySession é a sessão ativa do overlay de captura.
 type screenshotOverlaySession struct {
-	id      string
-	reason  string
-	byLLM   bool
-	payload *screenshot.OverlayPayload
+	id          string
+	reason      string
+	byLLM       bool
+	destination string
+	payload     *screenshot.OverlayPayload
 	// frame é o print do desktop em resolução física cheia, usado para recortar
 	// exatamente o que o usuário viu (tela congelada).
 	frame   *screen.Frame
@@ -986,19 +1015,24 @@ func (s *screenshotOverlaySession) authorized() bool {
 
 // ── Overlay de seleção (tela congelada) ───────────────────────────────────
 
-// PrepareScreenshotOverlay captura o desktop, coloca a janela principal em
-// modo overlay cobrindo o desktop virtual e devolve o payload para a UI.
-func (a *App) PrepareScreenshotOverlay(reason string) (string, error) {
+// PrepareScreenshotOverlay congela o desktop e entrega a seleção à JANELA
+// DEDICADA do overlay (screenshot_overlay_window.go), que a desenha.
+//
+// O chamador (janela principal) recebe apenas um ack: o payload da tela
+// congelada vai para a janela do overlay pelo canal de entrega. Isto é o que
+// torna a captura independente da janela principal — inclusive quando ela está
+// no tray. "destination" diz para onde o print volta ao terminar.
+func (a *App) PrepareScreenshotOverlay(reason, destination string) (string, error) {
 	a.initScreenshotService()
-	session, err := a.openScreenshotOverlay(strings.TrimSpace(reason), false, false)
+	session, err := a.openScreenshotOverlay(strings.TrimSpace(reason), false, false, normalizeScreenshotDestination(destination))
 	if err != nil {
 		return "", err
 	}
-	payload, err := json.Marshal(session.payload)
+	ack, err := json.Marshal(map[string]any{"ok": true, "session": session.id})
 	if err != nil {
 		return "", err
 	}
-	return string(payload), nil
+	return string(ack), nil
 }
 
 // FinishScreenshotOverlay materializa a seleção do usuário e restaura a janela.
@@ -1187,7 +1221,7 @@ func (a *App) GetOpenWindows() (string, error) {
 // janela do chat, hooks) eram descartados. O front desenhava um payload cujo id
 // já não existia no backend: o Finish falhava com "sessao de captura expirada ou
 // invalida" e a janela ficava frameless/always-on-top cobrindo o desktop.
-func (a *App) openScreenshotOverlay(reason string, byLLM bool, sessionAuthorized bool) (*screenshotOverlaySession, error) {
+func (a *App) openScreenshotOverlay(reason string, byLLM bool, sessionAuthorized bool, destination string) (*screenshotOverlaySession, error) {
 	for {
 		a.screenshotMu.Lock()
 		if active := a.screenshotOverlay; active != nil {
@@ -1236,13 +1270,13 @@ func (a *App) openScreenshotOverlay(reason string, byLLM bool, sessionAuthorized
 		a.screenshotMu.Unlock()
 		break
 	}
-	return a.buildScreenshotOverlay(reason, byLLM, sessionAuthorized)
+	return a.buildScreenshotOverlay(reason, byLLM, sessionAuthorized, destination)
 }
 
 // buildScreenshotOverlay executa a captura do overlay. Chamado apenas por
 // openScreenshotOverlay, que garante no máximo UMA abertura em andamento e
 // publica o resultado (sessão ou erro) para os pedidos que esperaram na guarda.
-func (a *App) buildScreenshotOverlay(reason string, byLLM bool, sessionAuthorized bool) (session *screenshotOverlaySession, err error) {
+func (a *App) buildScreenshotOverlay(reason string, byLLM bool, sessionAuthorized bool, destination string) (session *screenshotOverlaySession, err error) {
 	// Publica o fim da abertura SEMPRE (inclusive em erro): sem isto um erro
 	// deixaria os pedidos concorrentes presos no canal para sempre.
 	defer func() {
@@ -1260,19 +1294,25 @@ func (a *App) buildScreenshotOverlay(reason string, byLLM bool, sessionAuthorize
 	if a.mainWindow == nil {
 		return nil, fmt.Errorf("janela principal indisponivel para o overlay")
 	}
+	// A janela DEDICADA do overlay é criada (uma única vez) ANTES da captura: a
+	// página carrega enquanto o desktop é congelado, então o primeiro pedido não
+	// paga o custo da janela no caminho crítico. Ela é independente da janela
+	// principal — funciona com o agent no tray.
+	overlayWin, winErr := a.ensureScreenshotOverlayWindow()
+	if winErr != nil {
+		return nil, winErr
+	}
+	if readyErr := a.waitScreenshotOverlayReady(overlayWin); readyErr != nil {
+		return nil, readyErr
+	}
 	vx, vy, vw, vh, ok := screenshot.VirtualBounds()
 	if !ok {
 		return nil, fmt.Errorf("nao foi possivel determinar o desktop virtual")
 	}
-	// Estado ORIGINAL da janela principal: ela é escondida logo abaixo para não
-	// sair no print e reexibida como overlay (SWP_SHOWWINDOW). Guardar isso
-	// ANTES do hide é o que permite devolvê-la ao estado anterior no fim —
-	// inclusive mantê-la no tray quando o print é tirado pela janela do chat.
-	wasVisible := a.mainWindow.IsVisible()
-	wasMinimised := a.mainWindow.IsMinimised()
-	wasMaximised := a.mainWindow.IsMaximised()
-	// A janela do agente é ocultada ANTES do print (não sai na tela congelada)
-	// e reaparece já como overlay, posicionada sobre o desktop virtual.
+	// As janelas do agent (principal e chat de suporte) ficam FORA da tela
+	// congelada: a principal porque pode estar em primeiro plano, o chat porque é
+	// de onde o pedido normalmente vem. As duas voltam ao estado original no fim
+	// da sessão (a principal pode voltar para o tray).
 	restoreVisibility := a.hideAgentWindowForCapture()
 	// A janela do chat de suporte também fica fora do print (é ela que está em
 	// primeiro plano quando o usuário pede a captura).
@@ -1321,11 +1361,14 @@ func (a *App) buildScreenshotOverlay(reason string, byLLM bool, sessionAuthorize
 		Monitors:       screenshot.ListMonitors(),
 		Windows:        wins,
 		RequestedByLLM: byLLM,
+		// Destino do print anotado: a janela do overlay reencaminha o resultado
+		// para a janela que o pediu (chat de suporte, comentário, chat da IA).
+		Destination: destination,
 		// A UI usa isso para não oferecer "Tela inteira" quando a política proíbe.
 		PolicyFullScreenAllowed: policy.FullScreenAllowed(),
 		PolicyWindowRequired:    policy.WindowRequired(),
 	}
-	restore, err := a.enterScreenshotOverlayBounds(vx, vy, vw, vh, wasVisible, wasMinimised, wasMaximised)
+	restore, err := a.enterOverlayBounds(overlayWin, vx, vy, vw, vh)
 	if err != nil {
 		restoreVisibility()
 		restoreSupportChat()
@@ -1339,23 +1382,29 @@ func (a *App) buildScreenshotOverlay(reason string, byLLM bool, sessionAuthorize
 	a.screenshotMu.Unlock()
 	if openAborted {
 		restore()
+		restoreVisibility()
 		restoreSupportChat()
-		return nil, fmt.Errorf("captura cancelada: janela principal fechada ou ocultada")
+		return nil, fmt.Errorf("captura cancelada: janela do overlay fechada ou ocultada")
 	}
-	// Garante a janela visível já como overlay (o SetWindowPos acima usa
-	// SWP_SHOWWINDOW; o Show é idempotente e cobre o caso de hide pendente).
-	restoreVisibility()
+	// Entrega a tela congelada à janela do overlay (pull por
+	// ScreenshotOverlayNext) ANTES de aparecer: o frontend decodifica a imagem
+	// enquanto a janela é exibida, sem o retângulo escuro intermediário.
+	payloadJSON, _ := json.Marshal(payload)
+	a.deliverScreenshotOverlayPayload(string(payloadJSON))
 	session = &screenshotOverlaySession{
 		id:                id,
 		reason:            reason,
 		byLLM:             byLLM,
+		destination:       destination,
 		sessionAuthorized: sessionAuthorized,
 		payload:           payload,
 		frame:             frame,
 		restore: func() {
-			// Ordem: devolve a janela principal ao estado anterior e só então
-			// reexibe a janela do chat (que ficou escondida durante a captura).
+			// Ordem: esconde o overlay, descarta payload órfão e devolve as
+			// janelas do agent (principal no estado anterior, chat de volta).
 			restore()
+			a.drainScreenshotOverlayDeliver()
+			restoreVisibility()
 			restoreSupportChat()
 		},
 		waiter: make(chan screenshotOverlayOutcome, 1),
@@ -1369,15 +1418,10 @@ func (a *App) buildScreenshotOverlay(reason string, byLLM bool, sessionAuthorize
 	a.screenshotRestore = session.restore
 	a.screenshotMu.Unlock()
 
-	// O evento só é necessário quando a IA pediu a seleção: o fluxo manual
-	// recebe o payload na resposta do binding. Emitir no fluxo manual deixava um
-	// evento órfão no broker, entregue no próximo poll e capaz de reabrir o
-	// overlay com uma sessão já encerrada.
-	if byLLM {
-		payloadJSON, _ := json.Marshal(payload)
-		a.EmitEvent("screenshot:request", string(payloadJSON))
-		a.PublishChatEvent("screenshot:request", string(payloadJSON))
-	}
+	// Nenhum evento com o payload é necessário: a janela do overlay o puxa por
+	// ScreenshotOverlayNext. Emitir aqui deixava um evento órfão no broker,
+	// entregue no próximo poll e capaz de reabrir o overlay de uma sessão já
+	// encerrada.
 	return session, nil
 }
 
@@ -1452,7 +1496,7 @@ func (a *App) captureOverlayFrame(x, y, w, h int) (*screen.Frame, error) {
 }
 
 func (a *App) captureInteractive(ctx context.Context, reason string, byLLM bool, sessionAuthorized bool) (json.RawMessage, error) {
-	session, err := a.openScreenshotOverlay(reason, byLLM, sessionAuthorized)
+	session, err := a.openScreenshotOverlay(reason, byLLM, sessionAuthorized, screenshotDestinationLLM)
 	if err != nil {
 		return nil, err
 	}

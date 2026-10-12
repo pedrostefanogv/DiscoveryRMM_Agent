@@ -147,6 +147,14 @@ func circuitBreakerOpen(st circuitBreakerState, now time.Time) bool {
 
 // ── Atualização de estado pós-execução ──────────────────────────────────────
 
+// isScriptContentMissing reconhece a falha de sincronização "conteúdo do script
+// não disponível". Ela não deve abrir o circuit breaker: pausar a task por 24h
+// esconderia o problema real (conteúdo não sincronizado) e impediria a
+// recuperação assim que o conteúdo chegasse por um sync com IncludeScriptContent.
+func isScriptContentMissing(result ExecutionResult) bool {
+	return !result.Success && strings.Contains(result.ErrorMessage, errMsgScriptContentMissing)
+}
+
 // updateAntiLoopState atualiza os markers de anti-loop (backoff de skips e
 // circuit breaker) após uma execução de task. Chamado no executeTaskAsync
 // após obter o resultado.
@@ -162,7 +170,7 @@ func (s *Service) updateAntiLoopState(agentID string, task AutomationTask, resul
 
 	// ── Circuit breaker (vale para qualquer task) ───────────────────────────
 	cbKey := "circuit:fail:" + taskID
-	if !result.Success {
+	if !result.Success && !isScriptContentMissing(result) {
 		cbRaw, found, _ := s.db.GetAutomationMarker(agentID, cbKey)
 		cb, _ := parseCircuitBreakerState(cbRaw)
 		if !found {
@@ -180,11 +188,15 @@ func (s *Service) updateAntiLoopState(agentID string, task AutomationTask, resul
 			s.logf("automacao: circuit breaker aberto para task=%s (%d falhas consecutivas) - pausada ate %s", taskID, cb.Failures, cb.OpenUntil.UTC().Format(time.RFC3339))
 		}
 		errutil.LogIfErr(s.db.SetAutomationMarker(agentID, cbKey, encodeCircuitBreakerState(cb)), "automacao: atualizar circuit breaker")
-	} else if cbRaw, found, _ := s.db.GetAutomationMarker(agentID, cbKey); found {
-		if cb, ok := parseCircuitBreakerState(cbRaw); ok && (cb.Failures > 0 || !cb.OpenUntil.IsZero()) {
-			// Sucesso reseta o circuit breaker: grava estado zerado (não há API
-			// de remoção individual de marker).
-			s.db.SetAutomationMarker(agentID, cbKey, encodeCircuitBreakerState(circuitBreakerState{}))
+	} else if result.Success {
+		// Só SUCESSO reseta o circuit breaker. Falha de conteúdo ausente não entra
+		// no ramo acima nem aqui: ela não abre nem zera o breaker (não é falha da
+		// task).
+		if cbRaw, found, _ := s.db.GetAutomationMarker(agentID, cbKey); found {
+			if cb, ok := parseCircuitBreakerState(cbRaw); ok && (cb.Failures > 0 || !cb.OpenUntil.IsZero()) {
+				// Grava estado zerado (não há API de remoção individual de marker).
+				s.db.SetAutomationMarker(agentID, cbKey, encodeCircuitBreakerState(circuitBreakerState{}))
+			}
 		}
 	}
 

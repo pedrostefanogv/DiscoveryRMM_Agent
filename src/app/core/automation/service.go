@@ -362,7 +362,12 @@ func (s *Service) refreshPolicy(ctx context.Context, includeScriptContent bool) 
 	current := s.GetState()
 	knownFingerprint := strings.TrimSpace(current.PolicyFingerprint)
 	req := PolicySyncRequest{}
-	if knownFingerprint != "" {
+	// Quando o conteúdo do script é pedido explicitamente, o fingerprint conhecido
+	// NÃO é enviado: o servidor usa o fingerprint para responder "up-to-date" com
+	// Tasks=[] (sem conteúdo), o que tornaria o pedido inútil para um agent que já
+	// sincronizou antes — era exatamente o caso da task que falhava com
+	// "conteudo do script nao disponivel; refaca o sync com IncludeScriptContent".
+	if knownFingerprint != "" && !includeScriptContent {
 		req.KnownPolicyFingerprint = &knownFingerprint
 	}
 	req.IncludeScriptContent = &includeScriptContent
@@ -390,6 +395,21 @@ func (s *Service) refreshPolicy(ctx context.Context, includeScriptContent bool) 
 	effectiveTasks := cloneTasks(resp.Tasks)
 	if resp.UpToDate && len(effectiveTasks) == 0 {
 		effectiveTasks = cloneTasks(current.Tasks)
+	} else {
+		// Sync automático (IncludeScriptContent=false) traz só a referência do
+		// script: preserva o conteúdo já baixado quando o hash declarado confere.
+		// Sem isso, o próximo sync automático apagava o conteúdo sincronizado.
+		preserveScriptContent(current.Tasks, effectiveTasks)
+	}
+
+	// Auto-recuperação: se alguma task RunScript ficou sem o corpo do script,
+	// refaz o sync pedindo o conteúdo. Sem isso ela falharia sempre até o
+	// operador marcar "Incluir conteúdo" no sync manual (que ficava inútil pelo
+	// atalho up-to-date do servidor). A segunda chamada usa
+	// includeScriptContent=true, então não recursa.
+	if !includeScriptContent && tasksMissingScriptContent(effectiveTasks) {
+		s.logf("automacao: policy-sync entregou task RunScript sem conteudo; refazendo sync com IncludeScriptContent")
+		return s.refreshPolicy(ctx, true)
 	}
 
 	next := current

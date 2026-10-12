@@ -144,6 +144,10 @@ type OverlayPayload struct {
 	Monitors       []MonitorInfo `json:"monitors"`
 	Windows        []WindowInfo  `json:"windows"`
 	RequestedByLLM bool          `json:"requestedByLlm"`
+	// Destination diz para onde o print anotado deve voltar quando a captura é
+	// conduzida por uma janela dedicada de overlay ("aiChat", "supportChat",
+	// "ticketComment" ou "llm"). Vazio equivale ao chat com a IA.
+	Destination string `json:"destination,omitempty"`
 	// Flags da política local para a UI não oferecer ações proibidas.
 	PolicyFullScreenAllowed bool `json:"policyFullScreenAllowed"`
 	PolicyWindowRequired    bool `json:"policyWindowRequired"`

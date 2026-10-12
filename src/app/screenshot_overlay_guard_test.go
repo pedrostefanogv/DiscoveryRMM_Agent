@@ -33,7 +33,7 @@ func TestOpenScreenshotOverlayEsperaAberturaEmAndamento(t *testing.T) {
 		close(done)
 	}()
 
-	_, err := a.openScreenshotOverlay("teste", false, false)
+	_, err := a.openScreenshotOverlay("teste", false, false, screenshotDestinationAIChat)
 	if err == nil || err.Error() != "falha simulada da abertura" {
 		t.Fatalf("esperava o erro da abertura em andamento, obteve %v", err)
 	}
@@ -54,7 +54,7 @@ func TestOpenScreenshotOverlayConcorrenteNaoTrava(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			<-start
-			_, err := a.openScreenshotOverlay("teste", false, false)
+			_, err := a.openScreenshotOverlay("teste", false, false, screenshotDestinationAIChat)
 			errs[i] = err
 		}(i)
 	}

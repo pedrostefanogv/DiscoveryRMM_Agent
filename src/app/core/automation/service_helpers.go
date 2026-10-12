@@ -35,6 +35,63 @@ func cloneTasks(in []AutomationTask) []AutomationTask {
 	return out
 }
 
+// preserveScriptContent reusa o conteúdo de script já sincronizado quando o
+// policy-sync atual entrega apenas a referência (IncludeScriptContent=false).
+// Só preserva quando o hash declarado bate: hash diferente indica script
+// alterado no servidor e o conteúdo antigo seria incorreto. Sem isso, qualquer
+// sync automático posterior sobrescrevia o snapshot local e apagava o conteúdo.
+func preserveScriptContent(previous, next []AutomationTask) {
+	if len(previous) == 0 || len(next) == 0 {
+		return
+	}
+	byScriptID := make(map[string]AutomationScript, len(previous))
+	for i := range previous {
+		ref := previous[i].Script
+		if ref == nil || strings.TrimSpace(ref.Content) == "" || strings.TrimSpace(ref.ScriptID) == "" {
+			continue
+		}
+		byScriptID[strings.TrimSpace(ref.ScriptID)] = *ref
+	}
+	if len(byScriptID) == 0 {
+		return
+	}
+	for i := range next {
+		ref := next[i].Script
+		if ref == nil || strings.TrimSpace(ref.Content) != "" {
+			continue
+		}
+		prev, ok := byScriptID[strings.TrimSpace(ref.ScriptID)]
+		if !ok {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(prev.ContentHashSHA256), strings.TrimSpace(ref.ContentHashSHA256)) {
+			continue
+		}
+		copied := *ref
+		copied.Content = prev.Content
+		next[i].Script = &copied
+	}
+}
+
+// tasksMissingScriptContent informa se alguma task RunScript já resolvida ficou
+// sem o corpo do script — a condição que faz executeScript falhar com
+// errMsgScriptContentMissing.
+func tasksMissingScriptContent(tasks []AutomationTask) bool {
+	for i := range tasks {
+		if tasks[i].ActionType != ActionRunScript {
+			continue
+		}
+		ref := tasks[i].Script
+		if ref == nil {
+			continue
+		}
+		if strings.TrimSpace(ref.Content) == "" {
+			return true
+		}
+	}
+	return false
+}
+
 func mapExecutionEntries(entries []database.AutomationExecutionEntry) []ExecutionRecord {
 	out := make([]ExecutionRecord, 0, len(entries))
 	for _, entry := range entries {

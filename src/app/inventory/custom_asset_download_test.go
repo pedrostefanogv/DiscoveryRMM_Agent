@@ -107,6 +107,75 @@ func TestDownloadCustomAssetValidaIntegridade(t *testing.T) {
 	})
 }
 
+// TestDownloadCustomAssetCompletaExtensaoDoInstalador reproduz o caso real do
+// app foxitedito: o servidor manda Content-Disposition apenas com o packageId
+// (sem extensão) e o binário é um PE. O arquivo precisa ser gravado com .exe —
+// `cmd /C` não inicia executável sem extensão — e o conteúdo/tamanho não podem
+// ser alterados pela leitura usada na detecção da assinatura.
+func TestDownloadCustomAssetCompletaExtensaoDoInstalador(t *testing.T) {
+	payload := append([]byte{'M', 'Z', 0x90, 0x00}, bytes.Repeat([]byte{0xAB}, 4096)...)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/sem-extensao":
+			w.Header().Set("Content-Disposition", `attachment; filename="foxitedito"`)
+		case "/com-extensao":
+			w.Header().Set("Content-Disposition", `attachment; filename="FoxitPDFEditor.exe"`)
+		}
+		_, _ = w.Write(payload)
+	}))
+	defer server.Close()
+
+	svc := NewService(Options{
+		DebugConfig: func() debug.Config {
+			return debug.Config{
+				ApiInsecure: true,
+				ApiServer:   strings.TrimPrefix(server.URL, "http://"),
+				AuthToken:   "mdz_test_token",
+				AgentID:     "8f6d6d72-4a8a-4c87-bffa-34ba29dc0bb7",
+			}
+		},
+		Ctx: func() context.Context { return context.Background() },
+	})
+
+	t.Run("nome sem extensão vira .exe", func(t *testing.T) {
+		path, err := svc.downloadCustomAsset(context.Background(), appstore.Item{
+			FileURL:       "/sem-extensao",
+			FileSizeBytes: int64(len(payload)),
+		}, "foxitedito")
+		if err != nil {
+			t.Fatalf("download deveria ter sucesso: %v", err)
+		}
+		defer func() { _ = os.RemoveAll(filepath.Dir(path)) }()
+
+		if filepath.Base(path) != "foxitedito.exe" {
+			t.Fatalf("esperava foxitedito.exe, veio %q", filepath.Base(path))
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ler arquivo baixado: %v", err)
+		}
+		if !bytes.Equal(data, payload) {
+			t.Fatalf("conteúdo baixado difere do servido (%d bytes vs %d)", len(data), len(payload))
+		}
+	})
+
+	t.Run("nome com extensão é preservado", func(t *testing.T) {
+		path, err := svc.downloadCustomAsset(context.Background(), appstore.Item{
+			FileURL:       "/com-extensao",
+			FileSizeBytes: int64(len(payload)),
+		}, "foxitedito")
+		if err != nil {
+			t.Fatalf("download deveria ter sucesso: %v", err)
+		}
+		defer func() { _ = os.RemoveAll(filepath.Dir(path)) }()
+
+		if filepath.Base(path) != "FoxitPDFEditor.exe" {
+			t.Fatalf("nome deveria ser preservado, veio %q", filepath.Base(path))
+		}
+	})
+}
+
 func TestHumanBytes(t *testing.T) {
 	cases := map[uint64]string{
 		512:                    "512 B",

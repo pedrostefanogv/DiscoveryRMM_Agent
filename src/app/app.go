@@ -164,8 +164,27 @@ type App struct {
 	// screenshotOverlayActive evita que o clamp de janela (FitWindowToWorkArea)
 	// desfaça o overlay em tela cheia durante a seleção.
 	screenshotOverlayActive atomic.Bool
-	// mainWindowFrameless guarda o modo da janela para restaurar após o overlay.
+	// mainWindowFrameless guarda o modo da janela principal na inicialização.
+	// O overlay NÃO mexe mais nela (ver screenshot_overlay_window.go).
 	mainWindowFrameless bool
+	// ── Janela DEDICADA do overlay de captura ──
+	// O overlay de seleção não roda mais na janela principal: quando o pedido
+	// vem da janela do chat de suporte a janela principal costuma estar no tray,
+	// e uma janela escondida tem o controller do WebView2 oculto pelo Wails — o
+	// SetWindowPos cru a exibia como um retângulo preto cobrindo o desktop, sem
+	// UI nenhuma ("a tela fica escura na captura"). A janela dedicada é criada
+	// sob demanda e exibida pelo caminho normal do Wails (Show → WebView visível).
+	screenshotOverlayWinMu sync.Mutex
+	screenshotOverlayWin   application.Window
+	// screenshotOverlayReady é fechado quando o frontend da janela do overlay
+	// reporta que carregou (binding ScreenshotOverlayReady): o build espera por
+	// ele antes de congelar a tela, para a janela nunca aparecer vazia.
+	screenshotOverlayReadyFlag bool
+	screenshotOverlayReady     chan struct{}
+	// screenshotOverlayDeliver entrega o payload da tela congelada à janela do
+	// overlay (consumido por ScreenshotOverlayNext). Capacidade 1: um payload
+	// não consumido é descartado na entrega seguinte.
+	screenshotOverlayDeliver chan string
 	// Buffer das últimas capturas cheias (lightbox do chat): memória apenas.
 	screenshotImagesMu   sync.Mutex
 	screenshotImages     map[int64]screenshotStoredImage
@@ -785,8 +804,13 @@ func NewApp(opts AppStartupOptions) *App {
 		Ctx: func() context.Context {
 			return a.ctx
 		},
-		DB:          nil,
-		DebugConfig: a.GetDebugConfig,
+		// Distribuição P2P do instalador de apps custom: publica o arquivo
+		// baixado (vira seed do site) e tenta obtê-lo de um peer da mesma
+		// versão antes de baixar da API.
+		PublishCustomInstallerForP2P: a.publishCustomInstallerForP2P,
+		CustomInstallerFromP2P:       a.fetchCustomInstallerFromP2P,
+		DB:                           nil,
+		DebugConfig:                  a.GetDebugConfig,
 		// Fonte ÚNICA de versão/commit para relato ao servidor: buildinfo
 		// (injetado por ldflags em TODOS os binários oficiais, incluindo o
 		// discovery-service). app.Version só é injetado no binário de UI —

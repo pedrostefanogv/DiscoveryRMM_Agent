@@ -11,12 +11,14 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/events"
 )
 
-// ── Overlay de captura: janela principal cobrindo o desktop virtual ────────
+// ── Overlay de captura: JANELA DEDICADA cobrindo o desktop virtual ─────────
 //
-// Em vez de criar uma segunda janela Wails (custosa e com estado próprio), o
-// overlay reaproveita a janela principal: ela é redimensionada (coordenadas
-// FÍSICAS, DPI-aware pelo manifest PerMonitorV2) para cobrir todo o desktop
-// virtual, sempre-no-topo, e o frontend desenha a tela congelada por cima.
+// A janela usada aqui é a janela de overlay criada sob demanda
+// (screenshot_overlay_window.go) — NÃO a janela principal. Além de isolar a
+// captura do estado do tray, a troca elimina a "tela escura": o Wails mantém o
+// controller do WebView2 oculto em janelas escondidas, e o SetWindowPos cru
+// (SWP_SHOWWINDOW) mostrava a moldura sem nada pintado. Aqui a janela é sempre
+// exibida pelo caminho normal do Wails (Show), que reexibe o controller.
 
 const (
 	hwndTopMost    = ^uintptr(0) // HWND_TOPMOST (-1)
@@ -38,18 +40,11 @@ var (
 	procSetWindowPosO  = user32Overlay.NewProc("SetWindowPos")
 )
 
-// enterScreenshotOverlayBounds posiciona a janela principal sobre o desktop
-// virtual e devolve a função de restauração.
-//
-// wasVisible/wasMinimised/wasMaximised vêm do estado ANTES de a janela ser
-// escondida para o print: o SetWindowPos abaixo usa SWP_SHOWWINDOW (obrigatório
-// para desenhar o overlay), mas a janela do agent pode estar no tray. Ler o
-// estado AQUI leria a janela já escondida e a captura terminaria sempre com a
-// janela principal oculta — mesmo que ela estivesse aberta antes.
-func (a *App) enterScreenshotOverlayBounds(x, y, w, h int, wasVisible, wasMinimised, wasMaximised bool) (func(), error) {
-	win := a.mainWindow
+// enterOverlayBounds posiciona a janela do overlay sobre o desktop virtual,
+// garante o WebView visível e devolve a função de restauração.
+func (a *App) enterOverlayBounds(win application.Window, x, y, w, h int) (func(), error) {
 	if win == nil {
-		return nil, fmt.Errorf("janela principal indisponivel")
+		return nil, fmt.Errorf("janela do overlay indisponivel")
 	}
 	hwnd := uintptr(win.NativeWindow())
 	if hwnd == 0 {
@@ -57,57 +52,49 @@ func (a *App) enterScreenshotOverlayBounds(x, y, w, h int, wasVisible, wasMinimi
 	}
 	var prev overlayRect
 	procGetWindowRectO.Call(hwnd, uintptr(unsafe.Pointer(&prev)))
-	if wasMinimised {
-		win.UnMinimise()
-	}
-	win.UnMaximise()
-	// Durante o overlay a janela cobre o desktop virtual inteiro (inclusive
+
+	// Durante o overlay a janela cobre o desktop virtual inteiro (inclusive a
 	// taskbar): sem moldura para o webview coincidir com a tela e sem o clamp de
-	// WorkArea (ver FitWindowToWorkArea). Ambas as mudanças são restauradas no
-	// fim da sessão.
+	// WorkArea (ver FitWindowToWorkArea).
 	a.screenshotOverlayActive.Store(true)
 	win.SetFrameless(true)
 	win.SetAlwaysOnTop(true)
 	ret, _, callErr := procSetWindowPosO.Call(hwnd, hwndTopMost,
 		uintptr(int(x)), uintptr(int(y)), uintptr(w), uintptr(h), swpShowWindow|swpNoActivate)
 	if ret == 0 {
-		win.SetFrameless(a.mainWindowFrameless)
+		win.SetFrameless(false)
+		win.SetAlwaysOnTop(false)
 		a.screenshotOverlayActive.Store(false)
 		return nil, fmt.Errorf("SetWindowPos falhou ao preparar o overlay: %v", callErr)
 	}
 
-	// Se a janela principal for fechada (close-to-tray) ou ocultada durante o
-	// overlay, a sessão precisa ser encerrada e os bounds restaurados — senão ao
-	// reabrir a janela ela reapareceria cobrindo o desktop virtual. O abort roda
-	// em goroutine para não fazer chamadas Wails dentro do callback de evento.
+	// O SetWindowPos cru mostra a moldura, mas NÃO reexibe o controller do
+	// WebView2 (uma janela criada/escondida tem chromium.Hide()). Sem este Show
+	// a janela apareceria preta — causa raiz do relato da captura pelo chat.
+	win.Show()
+
+	// Fechar/ocultar a janela do overlay durante a sessão encerra a captura e
+	// devolve as janelas. O abort roda em goroutine para não chamar a API do
+	// Wails dentro do callback do evento.
 	unregisterClose := win.RegisterHook(events.Common.WindowClosing, func(*application.WindowEvent) {
-		go a.abortScreenshotOverlay("janela principal fechada")
+		go a.abortScreenshotOverlay("janela de captura fechada")
 	})
 	unregisterHide := win.RegisterHook(events.Common.WindowHide, func(*application.WindowEvent) {
-		go a.abortScreenshotOverlay("janela principal ocultada")
+		go a.abortScreenshotOverlay("janela de captura ocultada")
 	})
 
 	restore := func() {
+		// Desregistra ANTES de esconder: o hook de WindowHide não pode reabrir a
+		// sessão que está sendo encerrada.
 		unregisterClose()
 		unregisterHide()
-		// Sem SWP_SHOWWINDOW: se a janela foi ocultada (tray), não forçamos
-		// reexibição — apenas restauramos posição/tamanho/z-order.
+		win.Hide()
 		procSetWindowPosO.Call(hwnd, hwndNotTopMost,
 			uintptr(int(prev.Left)), uintptr(int(prev.Top)),
 			uintptr(int(prev.Right-prev.Left)), uintptr(int(prev.Bottom-prev.Top)), 0)
 		win.SetAlwaysOnTop(false)
-		win.SetFrameless(a.mainWindowFrameless)
+		win.SetFrameless(false)
 		a.screenshotOverlayActive.Store(false)
-		if wasMaximised {
-			win.Maximise()
-		}
-		// Devolve a janela ao estado anterior: se estava no tray, volta para o
-		// tray; se estava minimizada, volta minimizada.
-		if !wasVisible {
-			win.Hide()
-		} else if wasMinimised {
-			win.Minimise()
-		}
 	}
 	return restore, nil
 }

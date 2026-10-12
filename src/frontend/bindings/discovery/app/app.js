@@ -1704,13 +1704,19 @@ export function PostP2PTelemetryPayload(payload, idempotencyKey) {
 }
 
 /**
- * PrepareScreenshotOverlay captura o desktop, coloca a janela principal em
- * modo overlay cobrindo o desktop virtual e devolve o payload para a UI.
+ * PrepareScreenshotOverlay congela o desktop e entrega a seleção à JANELA
+ * DEDICADA do overlay (screenshot_overlay_window.go), que a desenha.
+ * 
+ * O chamador (janela principal) recebe apenas um ack: o payload da tela
+ * congelada vai para a janela do overlay pelo canal de entrega. Isto é o que
+ * torna a captura independente da janela principal — inclusive quando ela está
+ * no tray. "destination" diz para onde o print volta ao terminar.
  * @param {string} reason
+ * @param {string} destination
  * @returns {$CancellablePromise<string>}
  */
-export function PrepareScreenshotOverlay(reason) {
-    return $Call.ByID(373583411, reason);
+export function PrepareScreenshotOverlay(reason, destination) {
+    return $Call.ByID(373583411, reason, destination);
 }
 
 /**
@@ -2204,6 +2210,27 @@ export function ScreenshotConsentStatusJSON() {
 }
 
 /**
+ * ScreenshotOverlayNext entrega o payload da tela congelada para a janela
+ * dedicada. É um pull: a janela chama em laço e fica esperando a próxima
+ * captura; sem payload devolve string vazia (o frontend tenta de novo).
+ * 
+ * Exportado como binding do Wails.
+ * @returns {$CancellablePromise<string>}
+ */
+export function ScreenshotOverlayNext() {
+    return $Call.ByID(1125329499);
+}
+
+/**
+ * ScreenshotOverlayReady é chamado pelo frontend da janela dedicada quando o
+ * documento carregou. Exportado como binding do Wails.
+ * @returns {$CancellablePromise<void>}
+ */
+export function ScreenshotOverlayReady() {
+    return $Call.ByID(2447189349);
+}
+
+/**
  * @param {string} query
  * @returns {$CancellablePromise<json$0.RawMessage>}
  */
@@ -2491,10 +2518,11 @@ export function SupportChatRefresh() {
  * chat com a IA: seleção de janela/aplicativo ou região da tela e ferramentas
  * de anotação (setas, marcações, passos).
  * 
- * O overlay é renderizado na JANELA PRINCIPAL porque é ela que o Go expande
- * para cobrir o desktop; esta binding apenas traz a janela para frente e pede ao
- * frontend dela para abrir a captura, marcando o destino do resultado como a
- * janela do chat de suporte (ver app-screenshot.js → supportChatCapturePending).
+ * A captura é conduzida AQUI, em goroutine, pela JANELA DEDICADA do overlay
+ * (screenshot_overlay_window.go) — não passa mais pela janela principal, que
+ * normalmente está no tray enquanto o usuário conversa com o suporte. O
+ * resultado volta para esta conversa como anexo pelo evento
+ * "supportchat:screenshot" (ou "supportchat:screenshot_failed" no erro).
  * @returns {$CancellablePromise<void>}
  */
 export function SupportChatRequestScreenshot() {

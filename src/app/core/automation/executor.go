@@ -19,6 +19,12 @@ import (
 const (
 	defaultExecutionTimeout = 10 * time.Minute
 	maxStoredOutputBytes    = 64 * 1024
+
+	// errMsgScriptContentMissing: a policy referenciou o script (hash incluído)
+	// mas o corpo não foi sincronizado. É falha de SINCRONIZAÇÃO, não defeito da
+	// task — ver isScriptContentMissing (anti_loop.go), que impede o circuit
+	// breaker de pausar a task por 24h nesse caso.
+	errMsgScriptContentMissing = "conteudo do script nao disponivel; refaca o sync com IncludeScriptContent"
 )
 
 type PackageAuthorizationFunc func(ctx context.Context, installationType AppInstallationType, packageID, operation string) error
@@ -148,7 +154,7 @@ func executeScript(ctx context.Context, task AutomationTask, customFields map[st
 	}
 	content := strings.TrimSpace(task.Script.Content)
 	if content == "" {
-		return ExecutionResult{Success: false, ExitCode: 2, ExitCodeSet: true, ErrorMessage: "conteudo do script nao disponivel; refaca o sync com IncludeScriptContent"}
+		return ExecutionResult{Success: false, ExitCode: 2, ExitCodeSet: true, ErrorMessage: errMsgScriptContentMissing}
 	}
 
 	// [[campo:chave]] também vale no conteúdo do script (mesma fonte do

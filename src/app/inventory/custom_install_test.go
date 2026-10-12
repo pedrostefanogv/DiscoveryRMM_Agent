@@ -2,6 +2,8 @@ package inventory
 
 import (
 	"archive/zip"
+	"bytes"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -72,6 +74,100 @@ func TestCustomAssetFileName(t *testing.T) {
 	withoutHeader := &http.Response{Header: http.Header{}}
 	if name := customAssetFileName(withoutHeader, raw); name != "file" {
 		t.Fatalf("esperava fallback 'file', veio %q", name)
+	}
+}
+
+func TestHasInstallerExtension(t *testing.T) {
+	valid := []string{"setup.exe", "PACKAGE.ZIP", "app.msi", "patch.msu", "script.ps1"}
+	for _, name := range valid {
+		if !hasInstallerExtension(name) {
+			t.Fatalf("%q deveria ser reconhecido como instalador", name)
+		}
+	}
+
+	invalid := []string{"foxitedito", "installer.bin", "file", "pacote.exe.zip.bak"}
+	for _, name := range invalid {
+		if hasInstallerExtension(name) {
+			t.Fatalf("%q não deveria ser reconhecido como instalador", name)
+		}
+	}
+}
+
+func TestAppendInstallerExtension(t *testing.T) {
+	cases := []struct {
+		name        string
+		head        []byte
+		contentType string
+		want        string
+	}{
+		// Caso real do app foxitedito: PE sem extensão no Content-Disposition.
+		{"foxitedito", []byte{'M', 'Z', 0x90, 0x00}, "application/octet-stream", "foxitedito.exe"},
+		{"foxitedito", []byte{'M', 'Z'}, "", "foxitedito.exe"},
+		{"pacote", []byte{'P', 'K', 0x03, 0x04}, "", "pacote.zip"},
+		{"setup", []byte{0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1}, "", "setup.msi"},
+		{"compactado", []byte{'7', 'z', 0xBC, 0xAF, 0x27, 0x1C}, "", "compactado.7z"},
+		{"driver", []byte{'M', 'S', 'C', 'F'}, "", "driver.cab"},
+		// Extensão presente mas não utilizável: é corrigida.
+		{"installer.bin", []byte{'M', 'Z'}, "", "installer.exe"},
+		// Sem assinatura conhecida: cai no Content-Type.
+		{"arquivo", []byte{0x01, 0x02}, "application/zip", "arquivo.zip"},
+		// Sem assinatura nem Content-Type útil: assume executável.
+		{"arquivo", []byte{0x01, 0x02}, "text/plain", "arquivo.exe"},
+		{"", []byte{'M', 'Z'}, "", "installer.exe"},
+	}
+
+	for _, tc := range cases {
+		if got := appendInstallerExtension(tc.name, tc.head, tc.contentType); got != tc.want {
+			t.Fatalf("appendInstallerExtension(%q, %v, %q) = %q, esperado %q",
+				tc.name, tc.head, tc.contentType, got, tc.want)
+		}
+	}
+}
+
+func TestEnsureInstallerExtension(t *testing.T) {
+	// Nome já válido: corpo passa intacto e nada é renomeado.
+	original := []byte("conteudo-original")
+	body, renamed := ensureInstallerExtension("setup.exe", bytes.NewReader(original), "")
+	if renamed != "" {
+		t.Fatalf("nome válido não deveria ser renomeado, veio %q", renamed)
+	}
+	got, err := io.ReadAll(body)
+	if err != nil {
+		t.Fatalf("ler corpo: %v", err)
+	}
+	if string(got) != string(original) {
+		t.Fatalf("corpo alterado: %q", got)
+	}
+
+	// Nome sem extensão: renomeia e o corpo precisa continuar COMPLETO — os
+	// bytes usados na detecção da assinatura voltam para o começo do stream.
+	pe := append([]byte{'M', 'Z', 0x90, 0x00}, []byte("resto-do-instalador")...)
+	body, renamed = ensureInstallerExtension("foxitedito", bytes.NewReader(pe), "")
+	if renamed != "foxitedito.exe" {
+		t.Fatalf("esperava foxitedito.exe, veio %q", renamed)
+	}
+	got, err = io.ReadAll(body)
+	if err != nil {
+		t.Fatalf("ler corpo: %v", err)
+	}
+	if !bytes.Equal(got, pe) {
+		t.Fatalf("corpo reconstruído difere do original: %q", got)
+	}
+}
+
+func TestTruncateNotificationOutput(t *testing.T) {
+	short := "falha curta"
+	if got := truncateNotificationOutput(short); got != short {
+		t.Fatalf("texto curto foi alterado: %q", got)
+	}
+
+	long := strings.Repeat("x", notificationOutputLimit+50)
+	got := truncateNotificationOutput(long)
+	if !strings.HasSuffix(got, "... (truncado)") {
+		t.Fatalf("texto longo deveria ser truncado: %q", got[:40])
+	}
+	if len(got) != notificationOutputLimit+len("... (truncado)") {
+		t.Fatalf("tamanho inesperado após truncar: %d", len(got))
 	}
 }
 

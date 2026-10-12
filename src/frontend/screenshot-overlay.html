@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="pt-BR">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="dark" />
+  <title>Seleção de captura</title>
+  <!-- Janela DEDICADA do overlay de captura (ver app/screenshot_overlay_window.go).
+       Ela cobre o desktop virtual durante a seleção e é independente da janela
+       principal do agent — a captura funciona com o agent no tray. -->
+  <link rel="stylesheet" href="styles.css" />
+  <style>
+    /* A janela é sempre do tamanho do desktop virtual: nunca rola e nasce escura
+       (o overlay substitui o preto pela tela congelada assim que ela chega). */
+    html,
+    body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #000;
+    }
+  </style>
+</head>
+
+<body class="screenshot-overlay-body">
+  <!-- Wails v3 bridge (window.go.app.App + window.wails), igual à UI principal. -->
+  <script type="module" src="wails-bridge.js"></script>
+  <!-- i18n: o módulo do overlay usa translate() para os rótulos. -->
+  <script src="js/app-utils.js"></script>
+  <!-- Host do overlay: precisa rodar ANTES de app-screenshot.js (define o shim de
+       appApi/showFeedback e a marca __SCREENSHOT_OVERLAY_HOST__). -->
+  <script src="js/app-screenshot-overlay.js"></script>
+  <script src="js/app-screenshot.js"></script>
+</body>
+
+</html>
