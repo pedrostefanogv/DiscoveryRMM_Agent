@@ -39,24 +39,47 @@ func listUpgradableForDecision(ctx context.Context, packages PackageManager) (st
 // Só faz sentido quando a tarefa exigiria confirmação; não é usado para
 // RunScript/CustomCommand/RemovePackage (esses sempre executam).
 func ShouldSkipPackageActionBeforePrompt(ctx context.Context, packages PackageManager, task AutomationTask) bool {
+	return ShouldSkipPackageActionBeforeExecution(ctx, packages, task).Skip
+}
+
+// ShouldSkipPackageActionBeforeExecution decide se uma ação de PACOTE não tem
+// trabalho a fazer, devolvendo a decisão (com motivo) para log e relatório.
+//
+// É o portão usado no GATILHO de policy-sync (Immediate/AgentCheckIn): quando o
+// pacote já está instalado/atualizado, a execução nem é criada — sem registro,
+// sem notificação e sem spawn do winget dentro do executor, que é onde a
+// verificação acontecia antes.
+//
+// Fail-safe: sem evidência confiável (gerenciador ausente, packageId vazio,
+// winget indisponível ou ação que não é de pacote) devolve Skip=false e a
+// execução segue normalmente.
+func ShouldSkipPackageActionBeforeExecution(ctx context.Context, packages PackageManager, task AutomationTask) wingetActionDecision {
 	if packages == nil {
-		return false
+		return wingetActionDecision{}
 	}
 	packageID := strings.TrimSpace(task.PackageID)
 	if packageID == "" {
-		return false
+		return wingetActionDecision{}
 	}
 
 	switch task.ActionType {
 	case ActionInstallPackage:
-		return decideWingetAction(ctx, packages, "install", packageID).Skip
+		return decideWingetAction(ctx, packages, "install", packageID)
 	case ActionUpdatePackage:
-		return decideWingetAction(ctx, packages, "upgrade", packageID).Skip
+		return decideWingetAction(ctx, packages, "upgrade", packageID)
 	case ActionUpdateOrInstallPackage:
 		// Instalado E sem update pendente → nada a fazer.
-		return !ShouldPreloadPackage(ctx, packages, ActionUpdateOrInstallPackage, packageID)
+		if ShouldPreloadPackage(ctx, packages, ActionUpdateOrInstallPackage, packageID) {
+			return wingetActionDecision{}
+		}
+		return wingetActionDecision{
+			Skip:      true,
+			Benign:    true,
+			Reason:    fmt.Sprintf("pacote %s ja instalado e sem atualizacao pendente — nada a fazer", packageID),
+			DecidedBy: decidedByWinget,
+		}
 	default:
-		return false
+		return wingetActionDecision{}
 	}
 }
 

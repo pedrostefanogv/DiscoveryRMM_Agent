@@ -146,6 +146,9 @@ type AutomationTask struct {
 	CollectorFieldDefinitionID string `json:"CollectorFieldDefinitionId,omitempty"`
 	// WriteOutputToNote: grava a saida da execucao como uma nota no agent.
 	WriteOutputToNote bool `json:"WriteOutputToNote,omitempty"`
+	// ExecutionOrder: ordem de execucao da task na policy (0–99). O agent roda
+	// da menor para a maior; empate desempata pela LastUpdatedAt mais antiga.
+	ExecutionOrder int `json:"ExecutionOrder,omitempty"`
 	// ToastTiming: "Before" (antes de executar) | "After" (apos a conclusao).
 	// Vazio equivale a "After". So se aplica a NotificationMode = Toast.
 	ToastTiming           string            `json:"ToastTiming,omitempty"`
@@ -266,9 +269,13 @@ type ExecutionResult struct {
 	ErrorMessage string
 	MetadataJSON string
 	// NoOp marca execução que NÃO alterou nada no host: o decisor de pacote
-	// pulou a operação (já instalado / já atualizado / ausente). Nesse caso o
-	// resultado não deve gerar toast de conclusão — só ruído a cada ciclo.
+	// pulou a operação (já instalado / já atualizado / ausente) ou o script
+	// declarou "nada a fazer" via MDZ_SKIP. Nesse caso o resultado não deve
+	// gerar toast de conclusão — só ruído a cada ciclo.
 	NoOp bool
+	// NoOpReason explica o skip (ex.: "pacote X ja instalado"; motivo do
+	// MDZ_SKIP). Vai para log e relatório do servidor.
+	NoOpReason string
 }
 
 // PSADTPolicy representa a policy efetiva usada em runtime no executor PSADT.

@@ -133,6 +133,10 @@ type Service struct {
 	// cada policy-sync (a cada ~5 min), mantendo um retry a cada 30 min.
 	lastPreloadSignature string
 	lastPreloadAt        time.Time
+	// execQueue serializa as execuções disparadas pela policy na ordem de
+	// execução (menor primeiro; empate pela data de update mais antiga).
+	// RunNow/manual não entra na fila. Ver execution_order.go.
+	execQueue executionOrderQueue
 }
 
 // policyPreloadRetriggerInterval é o intervalo mínimo para reacionar a MESMA
@@ -166,7 +170,10 @@ func (s *Service) SetDB(db *database.DB) {
 func (s *Service) SetPackageManager(manager PackageManager) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.packageManager = manager
+	// Envolve com o cache de listagens do decisor: pré-carga P2P, pré-check de
+	// gatilho e executor compartilham um único "winget list/upgrade" por
+	// janela, em vez de um spawn por tarefa a cada ciclo.
+	s.packageManager = newDecisionListCache(manager)
 }
 
 func (s *Service) SetPackageAuthorization(authorize PackageAuthorizationFunc) {
@@ -321,7 +328,7 @@ func (s *Service) triggerUserLoginTasks(ctx context.Context, sessionID uint32) {
 	s.mu.RLock()
 	state := cloneState(s.state)
 	s.mu.RUnlock()
-	for _, task := range state.Tasks {
+	for _, task := range orderedExecutionTasks(state.Tasks) {
 		if !task.TriggerOnUserLogin {
 			continue
 		}
@@ -517,7 +524,7 @@ func preloadPackagesSignature(packages []PreloadPackage) string {
 func (s *Service) reconcilePolicy(ctx context.Context, previous State, current State, agentID string) error {
 	s.rebuildRecurringSchedules(ctx, previous.Tasks, current.Tasks)
 
-	for _, task := range current.Tasks {
+	for _, task := range orderedExecutionTasks(current.Tasks) {
 		task := task
 		if task.TriggerImmediate {
 			s.triggerImmediate(ctx, agentID, current.PolicyFingerprint, task)
@@ -544,7 +551,7 @@ func (s *Service) reconcilePolicy(ctx context.Context, previous State, current S
 
 	if !s.userLoginHandled {
 		triggered := false
-		for _, task := range current.Tasks {
+		for _, task := range orderedExecutionTasks(current.Tasks) {
 			if task.TriggerOnUserLogin {
 				triggered = true
 				s.executeTaskAsync(ctx, agentID, task, sourceForTrigger(TriggerTypeUserLogin), TriggerTypeUserLogin, nil)
@@ -567,8 +574,30 @@ func (s *Service) reconcilePolicy(ctx context.Context, previous State, current S
 	return nil
 }
 
+// shouldSkipTriggeredPackageTask aplica o pré-check de estado no GATILHO de
+// policy-sync: se a ação de pacote não tem trabalho a fazer, a execução não é
+// criada — nem registro, nem notificação, nem spawn do winget no executor.
+//
+// Vale apenas para gatilhos automáticos (Immediate/AgentCheckIn). Execução
+// manual/RunNow continua disparando: quem pediu espera que rode.
+func (s *Service) shouldSkipTriggeredPackageTask(ctx context.Context, task AutomationTask) (wingetActionDecision, bool) {
+	if !isPackageAction(task.ActionType) {
+		return wingetActionDecision{}, false
+	}
+	s.mu.RLock()
+	packages := s.packageManager
+	s.mu.RUnlock()
+	dec := ShouldSkipPackageActionBeforeExecution(ctx, packages, task)
+	return dec, dec.Skip
+}
+
 func (s *Service) triggerImmediate(ctx context.Context, agentID, fingerprint string, task AutomationTask) {
 	if s.db == nil || agentID == "" || fingerprint == "" {
+		if dec, skip := s.shouldSkipTriggeredPackageTask(ctx, task); skip {
+			s.logf("automacao: task=%s dispensada no gatilho immediate (%s) - execucao nao criada", strings.TrimSpace(task.TaskID), dec.Reason)
+			go s.reportTriggerSkip(agentID, task, sourceForTrigger(TriggerTypeImmediate), TriggerTypeImmediate, dec.Reason)
+			return
+		}
 		s.executeTaskAsync(ctx, agentID, task, sourceForTrigger(TriggerTypeImmediate), TriggerTypeImmediate, nil)
 		return
 	}
@@ -584,6 +613,15 @@ func (s *Service) triggerImmediate(ctx context.Context, agentID, fingerprint str
 	// portão uma task permanentemente quebrada seria redisparada a cada
 	// policy-sync. O circuit breaker (mesmo marker do anti-loop) pausa a task.
 	if s.circuitBreakerPaused(agentID, task.TaskID) {
+		return
+	}
+	// Pré-check de estado NO GATILHO: pacote já instalado/atualizado não vira
+	// execução. O marcador é armado para não reavaliar a cada policy-sync (a
+	// próxima mudança de fingerprint/LastUpdatedAt reabre a avaliação).
+	if dec, skip := s.shouldSkipTriggeredPackageTask(ctx, task); skip {
+		s.logf("automacao: task=%s dispensada no gatilho immediate (%s) - execucao nao criada", strings.TrimSpace(task.TaskID), dec.Reason)
+		errutil.LogIfErr(s.db.SetAutomationMarker(agentID, markerKey, time.Now().UTC().Format(time.RFC3339)), "automacao: definir marker imediato (sem trabalho)")
+		go s.reportTriggerSkip(agentID, task, sourceForTrigger(TriggerTypeImmediate), TriggerTypeImmediate, dec.Reason)
 		return
 	}
 	// Arma o marcador SOMENTE se a execução realmente iniciou. Se o guard de
@@ -619,7 +657,7 @@ func (s *Service) TriggerAgentCheckInTasks(ctx context.Context) {
 
 	const checkInWindow = time.Hour
 	now := time.Now().UTC()
-	for _, task := range state.Tasks {
+	for _, task := range orderedExecutionTasks(state.Tasks) {
 		if !task.TriggerOnAgentCheckIn {
 			continue
 		}
@@ -633,12 +671,22 @@ func (s *Service) TriggerAgentCheckInTasks(ctx context.Context) {
 			}
 			errutil.LogIfErr(s.db.SetAutomationMarker(agentID, markerKey, now.Format(time.RFC3339)), "automation: definir marker checkin-cycle")
 		}
+		if dec, skip := s.shouldSkipTriggeredPackageTask(ctx, task); skip {
+			s.logf("automacao: task=%s dispensada no check-in cycle (%s) - execucao nao criada", taskID, dec.Reason)
+			go s.reportTriggerSkip(agentID, task, sourceForTrigger(TriggerTypeAgentCheckIn), TriggerTypeAgentCheckIn, dec.Reason)
+			continue
+		}
 		s.logf("automacao: check-in cycle — disparando tarefa %s", taskID)
 		s.executeTaskAsync(ctx, agentID, task, sourceForTrigger(TriggerTypeAgentCheckIn), TriggerTypeAgentCheckIn, nil)
 	}
 }
 func (s *Service) triggerOnAgentCheckIn(ctx context.Context, agentID, fingerprint string, task AutomationTask) {
 	if s.db == nil || agentID == "" || fingerprint == "" {
+		if dec, skip := s.shouldSkipTriggeredPackageTask(ctx, task); skip {
+			s.logf("automacao: task=%s dispensada no gatilho checkin (%s) - execucao nao criada", strings.TrimSpace(task.TaskID), dec.Reason)
+			go s.reportTriggerSkip(agentID, task, sourceForTrigger(TriggerTypeAgentCheckIn), TriggerTypeAgentCheckIn, dec.Reason)
+			return
+		}
 		s.executeTaskAsync(ctx, agentID, task, sourceForTrigger(TriggerTypeAgentCheckIn), TriggerTypeAgentCheckIn, nil)
 		return
 	}
@@ -648,6 +696,13 @@ func (s *Service) triggerOnAgentCheckIn(ctx context.Context, agentID, fingerprin
 		return
 	}
 	if s.circuitBreakerPaused(agentID, task.TaskID) {
+		return
+	}
+	// Mesmo pré-check de estado do immediate (ver triggerImmediate).
+	if dec, skip := s.shouldSkipTriggeredPackageTask(ctx, task); skip {
+		s.logf("automacao: task=%s dispensada no gatilho checkin (%s) - execucao nao criada", strings.TrimSpace(task.TaskID), dec.Reason)
+		errutil.LogIfErr(s.db.SetAutomationMarker(agentID, markerKey, time.Now().UTC().Format(time.RFC3339)), "automacao: definir marker checkin (sem trabalho)")
+		go s.reportTriggerSkip(agentID, task, sourceForTrigger(TriggerTypeAgentCheckIn), TriggerTypeAgentCheckIn, dec.Reason)
 		return
 	}
 	if !s.executeTaskAsync(ctx, agentID, task, sourceForTrigger(TriggerTypeAgentCheckIn), TriggerTypeAgentCheckIn, nil) {
@@ -682,11 +737,26 @@ func (s *Service) executeTaskAsync(ctx context.Context, agentID string, task Aut
 	deferStateSnapshot := s.deferByTask[strings.TrimSpace(task.TaskID)]
 	s.mu.Unlock()
 
+	// Fila ordenada da policy: o ticket entra ANTES de a goroutine existir, para
+	// a ordem de execução ser a ordem de enfileiramento (e não o agendamento do
+	// runtime). RunNow/manual continua fora da fila.
+	ticket := ""
+	if isPolicyOrderedTrigger(triggerType) {
+		ticket = activeKey + "|" + uuid.NewString()
+		s.execQueue.enqueue(ticket)
+	}
+
 	go func() {
+		if ticket != "" {
+			s.execQueue.waitTurn(ticket)
+		}
 		defer func() {
 			s.mu.Lock()
 			delete(s.activeTasks, activeKey)
 			s.mu.Unlock()
+			if ticket != "" {
+				s.execQueue.release(ticket)
+			}
 		}()
 
 		welcome := resolvePSADTWelcomeOptions(task)
@@ -715,10 +785,20 @@ func (s *Service) executeTaskAsync(ctx context.Context, agentID string, task Aut
 			delete(s.activeExecutions, executionID)
 			s.mu.Unlock()
 		}()
+		// Execução disparada por POLICY (sem comando despachado pelo servidor):
+		// geramos um commandId local para que ack/result cheguem ao servidor pelo
+		// caminho já previsto na API (UpsertPolicyExecutionAsync documenta
+		// exatamente "commandId gerado pelo próprio agent"). Sem isso, execuções
+		// de policy-sync não apareciam no dashboard e o motivo do skip (NoOp) se
+		// perdia.
+		commandID := strings.TrimSpace(task.CommandID)
+		if commandID == "" {
+			commandID = uuid.NewString()
+		}
 		entry := database.AutomationExecutionEntry{
 			ExecutionID:      executionID,
 			AgentID:          agentID,
-			CommandID:        strings.TrimSpace(task.CommandID),
+			CommandID:        commandID,
 			TaskID:           strings.TrimSpace(task.TaskID),
 			TaskName:         strings.TrimSpace(task.Name),
 			ActionType:       string(task.ActionType),
@@ -835,6 +915,18 @@ func (s *Service) executeTaskAsync(ctx context.Context, agentID string, task Aut
 		// Parseia valores coletados pelo script via protocolo MDZ_COLLECT.
 		collectedItems, cleanedOutput := parseCollectedValues(result.Output)
 		result.Output = cleanedOutput
+		// Sinal de "nada a fazer" emitido pelo próprio script (MDZ_SKIP): vira
+		// NoOp para não notificar conclusão e para o anti-loop contar o skip.
+		if skipReason, cleanedBySkip := parseSkipSignal(result.Output); skipReason != "" {
+			result.Output = cleanedBySkip
+			if result.Success {
+				result.NoOp = true
+				if strings.TrimSpace(result.NoOpReason) == "" {
+					result.NoOpReason = skipReason
+				}
+				s.logf("automacao: task=%s declarou nada a fazer (MDZ_SKIP): %s", strings.TrimSpace(task.TaskID), skipReason)
+			}
+		}
 		s.postCollectedValues(ctx, cfg, executionID, task, collectedItems, cfCtx, correlationID)
 
 		// Tarefa coletora: grava a última linha da saída no campo configurado.
@@ -934,6 +1026,53 @@ func (s *Service) executeTaskAsync(ctx context.Context, agentID string, task Aut
 		s.refreshDerivedState(agentID)
 	}()
 	return true
+}
+
+// reportTriggerSkip registra no servidor que a tarefa foi dispensada NO
+// GATILHO por já estar em estado final (pré-check de estado). Usa o mesmo
+// caminho ack/result das execuções disparadas por policy — a API cria o report
+// a partir do commandId gerado pelo agente — e marca no metadata que NÃO houve
+// execução (stage=trigger-skip, noOp=true, motivo), para o dashboard
+// distinguir "já estava instalado" de "instalou agora".
+//
+// Roda em goroutine: o policy-sync percorre todas as tarefas e não pode ficar
+// preso em round-trip HTTP.
+func (s *Service) reportTriggerSkip(agentID string, task AutomationTask, sourceType AutomationExecutionSourceType, triggerType TriggerType, reason string) {
+	if s == nil || s.client == nil || s.db == nil || strings.TrimSpace(agentID) == "" {
+		return
+	}
+	taskID := strings.TrimSpace(task.TaskID)
+	meta := map[string]any{
+		"stage":       "trigger-skip",
+		"triggerType": string(triggerType),
+		"taskName":    task.Name,
+		"actionType":  string(task.ActionType),
+		"packageId":   task.PackageID,
+		"scriptId":    task.ScriptID,
+		"noOp":        true,
+	}
+	if trimmed := strings.TrimSpace(reason); trimmed != "" {
+		meta["noOpReason"] = trimmed
+	}
+	raw, err := json.Marshal(meta)
+	if err != nil {
+		return
+	}
+
+	ctx := context.Background()
+	commandID := uuid.NewString()
+	executionID := uuid.NewString()
+	correlationID := uuid.NewString()
+
+	ack := AckRequest{TaskID: taskID, ScriptID: task.ScriptID, SourceType: sourceType, MetadataJSON: string(raw)}
+	if err := s.sendOrQueueCallback(ctx, agentID, executionID, commandID, CallbackTypeAck, ack, correlationID); err != nil {
+		s.logf("automacao: falha ao reportar skip no gatilho (task=%s): %v", taskID, err)
+		return
+	}
+	result := ResultRequest{TaskID: taskID, ScriptID: task.ScriptID, SourceType: sourceType, Success: true, MetadataJSON: string(raw)}
+	if err := s.sendOrQueueCallback(ctx, agentID, executionID, commandID, CallbackTypeResult, result, correlationID); err != nil {
+		s.logf("automacao: falha ao reportar resultado do skip no gatilho (task=%s): %v", taskID, err)
+	}
 }
 
 func (s *Service) sendOrQueueCallback(ctx context.Context, agentID, executionID, commandID string, callbackType CallbackType, payload any, correlationID string) error {

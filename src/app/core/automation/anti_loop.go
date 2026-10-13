@@ -217,12 +217,19 @@ func (s *Service) updateAntiLoopState(agentID string, task AutomationTask, resul
 		}
 	}
 
-	// ── Backoff de skips benignos (apenas tasks de pacote) ─────────────────
+	// ── Backoff de skips benignos ──────────────────────────────────────────
+	// Vale para tasks de pacote e para scripts que declararam "nada a fazer"
+	// (MDZ_SKIP → result.NoOp). Scripts sem sinal sempre executam.
 	skipKey := "skipbackoff:" + taskID
-	if !isPackageAction(task.ActionType) {
+	if !isPackageAction(task.ActionType) && !result.NoOp {
 		return
 	}
 	outcome := classifyPackageResult(result)
+	if outcome == skipNone && result.NoOp {
+		// Skip declarado pelo executor/script: conta como benigno mesmo que a
+		// mensagem não seja uma das conhecidas do winget.
+		outcome = skipBenign
+	}
 	if outcome == skipNone {
 		// Execução real (efetivo ou falha) reseta o backoff: grava estado zerado.
 		if _, found, _ := s.db.GetAutomationMarker(agentID, skipKey); found {

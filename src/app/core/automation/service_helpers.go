@@ -165,6 +165,15 @@ func buildExecutionMetadata(task AutomationTask, triggerType TriggerType, stage 
 		if result.ExitCodeSet {
 			payload["exitCode"] = result.ExitCode
 		}
+		// NoOp: execução sem mudança no host (skip do decisor de pacote ou
+		// MDZ_SKIP do script). Vai no metadata do resultado para o servidor
+		// distinguir "instalou" de "já estava lá" no histórico.
+		if result.NoOp {
+			payload["noOp"] = true
+			if reason := strings.TrimSpace(result.NoOpReason); reason != "" {
+				payload["noOpReason"] = reason
+			}
+		}
 		// Metadados específicos do executor (ex.: wingetDecision) são mesclados no
 		// topo do payload enviado ao servidor.
 		if extra := strings.TrimSpace(result.MetadataJSON); extra != "" {
@@ -573,6 +582,44 @@ func parseCollectedValues(output string) (items []CollectedValueRequest, cleaned
 	}
 	cleanedOutput = strings.TrimSpace(strings.Join(kept, "\n"))
 	return items, cleanedOutput
+}
+
+// skipPrefix é o marcador de "nada a fazer" emitido pelo PRÓPRIO script.
+//
+// É a versão viável do item "verificação funcional" para SCRIPTS: cada script
+// define sua checagem (registro, serviço, arquivo, versão...) e, quando não há
+// nada a fazer, imprime "MDZ_SKIP: <motivo>". O agente então trata o resultado
+// como NoOp: sem toast de conclusão, contabilizado no backoff de skips e
+// reportado como skip (em vez de "executou com sucesso").
+//
+// Para PACOTES isso seria inviável: cada instalador tem a sua forma de
+// verificar estado, e o agente já tem o decisor de winget para isso.
+const skipPrefix = "MDZ_SKIP:"
+
+// parseSkipSignal varre o output em busca de linhas "MDZ_SKIP: <motivo>".
+// Devolve o motivo da primeira ocorrência (vazio quando não há sinal) e o
+// output sem essas linhas.
+func parseSkipSignal(output string) (reason string, cleaned string) {
+	if !strings.Contains(output, skipPrefix) {
+		return "", output
+	}
+	lines := strings.Split(output, "\n")
+	kept := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, skipPrefix) {
+			if reason == "" {
+				reason = strings.TrimSpace(trimmed[len(skipPrefix):])
+			}
+			continue
+		}
+		kept = append(kept, line)
+	}
+	if reason == "" {
+		// Sinal presente sem motivo textual: ainda é um skip declarado.
+		reason = "script declarou nada a fazer (MDZ_SKIP)"
+	}
+	return reason, strings.TrimSpace(strings.Join(kept, "\n"))
 }
 
 // sanitizeCustomFieldErrForLog retorna uma mensagem de erro sanitizada para log,
