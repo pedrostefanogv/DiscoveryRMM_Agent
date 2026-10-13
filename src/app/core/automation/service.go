@@ -1373,6 +1373,8 @@ func ResolveNotificationMode(task AutomationTask) string {
 		return NotificationModePrompt
 	case "toast":
 		return NotificationModeToast
+	case "nativetoast":
+		return NotificationModeNativeToast
 	}
 	if task.RequiresApproval {
 		return NotificationModePrompt
@@ -1380,11 +1382,39 @@ func ResolveNotificationMode(task AutomationTask) string {
 	return NotificationModeToast
 }
 
+// IsToastNotificationMode informa se o modo e um toast informativo — tanto o
+// desenhado pela interface do agent quanto o nativo do sistema.
+func IsToastNotificationMode(mode string) bool {
+	trimmed := strings.TrimSpace(mode)
+	return strings.EqualFold(trimmed, NotificationModeToast) ||
+		strings.EqualFold(trimmed, NotificationModeNativeToast)
+}
+
+// NotificationSurfaceForMode devolve a superficie do toast informativo:
+// "native" para o toast nativo do sistema (mesmo caminho do Chat IA) e "agent"
+// para o toast desenhado pela interface do agent.
+func NotificationSurfaceForMode(mode string) string {
+	if strings.EqualFold(strings.TrimSpace(mode), NotificationModeNativeToast) {
+		return NotificationSurfaceNative
+	}
+	return NotificationSurfaceAgent
+}
+
+// IsNativeNotificationSurface informa se o metadata da notificacao pede o toast
+// nativo do sistema.
+func IsNativeNotificationSurface(metadata map[string]any) bool {
+	if metadata == nil {
+		return false
+	}
+	value, _ := metadata[NotificationSurfaceMetadataKey].(string)
+	return strings.EqualFold(strings.TrimSpace(value), NotificationSurfaceNative)
+}
+
 // HasExplicitNotificationMode informa se a policy trouxe o modo novo. Diferencia
 // o modo Toast explicito (com escolha Before/After) do legado (sempre ambos).
 func HasExplicitNotificationMode(task AutomationTask) bool {
 	switch strings.ToLower(strings.TrimSpace(task.NotificationMode)) {
-	case "silent", "prompt", "toast":
+	case "silent", "prompt", "toast", "nativetoast":
 		return true
 	}
 	return false
@@ -1418,7 +1448,7 @@ func (s *Service) dispatchExecutionNotification(dispatcher func(AutomationNotifi
 	// Toast simples: o usuario escolhe se o aviso aparece antes de executar ou
 	// apenas apos a conclusao. No legado (modo ausente) mantem-se ambos.
 	toastTiming := ResolveToastTiming(task)
-	if notificationMode == NotificationModeToast && HasExplicitNotificationMode(task) {
+	if IsToastNotificationMode(notificationMode) && HasExplicitNotificationMode(task) {
 		if toastTiming == ToastTimingAfter && result == nil {
 			return AutomationNotificationResponse{}
 		}
@@ -1492,6 +1522,7 @@ func (s *Service) dispatchExecutionNotification(dispatcher func(AutomationNotifi
 		"defaultAction":                  "continue",
 		"usePsadtWelcome":                notificationMode == NotificationModePrompt,
 		"notificationMode":               notificationMode,
+		NotificationSurfaceMetadataKey:   NotificationSurfaceForMode(notificationMode),
 		"toastTiming":                    toastTiming,
 	}
 	if !deferSnapshot.NextAttempt.IsZero() {

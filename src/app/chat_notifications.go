@@ -120,10 +120,15 @@ func (a *App) SetNativeNotificationService(ns *wailsnotifications.NotificationSe
 		if result.Error != nil {
 			return
 		}
-		if result.Response.ID != chatNotificationID {
+		if result.Response.ID == chatNotificationID {
+			a.openChatFromNotification()
 			return
 		}
-		a.openChatFromNotification()
+		// Clique no toast nativo de uma automation task ("Toast nativo do app"):
+		// traz a janela do agent para a frente (o detalhe fica na tarefa/historico).
+		if strings.HasPrefix(result.Response.ID, "automation-") {
+			a.ShowMainWindow()
+		}
 	})
 }
 

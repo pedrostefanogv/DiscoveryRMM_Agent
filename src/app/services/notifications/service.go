@@ -204,6 +204,29 @@ func (s *Service) AllowsUserPrompt(req DispatchRequest) bool {
 	return true
 }
 
+// AllowsNotification informa se a notificação informativa (notify_only) pode
+// ser entregue ao usuário depois da política por eventType e do rollout.
+//
+// É o portão do toast NATIVO de automation task: esse envio acontece antes do
+// Dispatch (o App dispara o toast do sistema e o evento segue só para atualizar
+// o progresso na UI), então sem ele o kill switch do rollout
+// (enableNotifications / blockedNotificationEventTypes / allowed…), a política
+// que rebaixa o evento para "silent" e a que exige confirmação seriam furados.
+func (s *Service) AllowsNotification(req DispatchRequest) bool {
+	if s == nil || s.getAgentConfiguration == nil {
+		return false
+	}
+	cfg := s.getAgentConfiguration()
+	effective := applyPolicyByEventType(req, cfg)
+	if !isEnabledForRollout(cfg.Rollout, effective.EventType) {
+		return false
+	}
+	// Só o aviso informativo usa a via nativa: "silent" não notifica nada e
+	// "require_confirmation" tem UI própria (modal/Welcome) — um toast nativo
+	// aí duplicaria o aviso.
+	return normalizeMode(effective.Mode) == "notify_only"
+}
+
 // Dispatch processa e despacha uma notificação.
 func (s *Service) Dispatch(req DispatchRequest) DispatchResponse {
 	if s.getAgentConfiguration != nil {

@@ -614,6 +614,30 @@ func NewApp(opts AppStartupOptions) *App {
 			TimeoutSeconds: req.TimeoutSeconds,
 			Metadata:       req.Metadata,
 		}
+		// Toast nativo do app (mesmo caminho do Chat IA): no modo standalone quem
+		// tem o servico nativo de notificacoes do Wails e este processo, entao o
+		// envio acontece aqui e o evento segue para a UI apenas atualizar o
+		// progresso (o frontend nao repete o toast quando a superficie e nativa).
+		// No modo servico quem envia e a UI companion via IPC
+		// (ipc_app_integration.go) ou, sem UI, o fallback headless ja existente.
+		// Se o envio nativo falhar, a marca sai do metadata e o usuario recebe o
+		// toast da interface do agent em vez de nada.
+		// AllowsNotification aplica a política por eventType e o rollout ANTES do
+		// envio: sem esse portão o kill switch (enableNotifications/eventos
+		// bloqueados) e a política que rebaixa o evento para "silent" (ou que
+		// exige confirmação) não valeriam para o toast nativo, porque ele sai do
+		// processo antes do Dispatch.
+		if !a.RuntimeFlags.ServiceMode && automation.IsNativeNotificationSurface(dispatchReq.Metadata) {
+			sent := a.NotificationSvc != nil &&
+				a.NotificationSvc.AllowsNotification(dispatchReq) &&
+				a.sendNativeTaskNotification(dispatchReq.NotificationID, dispatchReq.Title, dispatchReq.Message)
+			if !sent {
+				// Sem via nativa disponível ou sem permissão da política: volta
+				// para a superfície da interface do agent (o Dispatch decide o
+				// resto — bloqueio por rollout não emite nada).
+				delete(dispatchReq.Metadata, automation.NotificationSurfaceMetadataKey)
+			}
+		}
 		// Task com "notificar usuario" (RequiresApproval): tenta o Welcome nativo
 		// do PSADT antes do toast. O portão AllowsUserPrompt aplica a política por
 		// eventType e o rollout (enableRequireConfirmation/enableNotifications) —

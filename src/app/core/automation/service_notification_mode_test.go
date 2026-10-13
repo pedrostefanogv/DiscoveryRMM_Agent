@@ -144,6 +144,82 @@ func TestDispatch_NotificationModeToast_NonPackageAllowed(t *testing.T) {
 	}
 }
 
+// Toast nativo do app: mesma janela do Toast (Before/After), mas com a
+// superficie marcada no metadata para o App enviar a notificacao nativa do
+// sistema (mesmo caminho do Chat IA).
+func TestDispatch_NotificationModeNativeToast_MarksNativeSurface(t *testing.T) {
+	svc := &Service{}
+	var dispatched []AutomationNotificationRequest
+	dispatcher := func(req AutomationNotificationRequest) AutomationNotificationResponse {
+		dispatched = append(dispatched, req)
+		return AutomationNotificationResponse{Accepted: true, Result: "approved"}
+	}
+	task := notifTask(NotificationModeNativeToast, ToastTimingAfter)
+	success := ExecutionResult{Success: true, ExitCodeSet: true, ExitCode: 0}
+
+	svc.dispatchExecutionNotification(dispatcher, task, notifEntry("nt1"), nil, deferState{}, resolvePSADTWelcomeOptions(task))
+	svc.dispatchExecutionNotification(dispatcher, task, notifEntry("nt2"), &success, deferState{}, resolvePSADTWelcomeOptions(task))
+
+	if len(dispatched) != 1 {
+		t.Fatalf("NativeToast After: esperado 1 notificacao (resultado), got %d", len(dispatched))
+	}
+	if dispatched[0].EventType != "install_end" || dispatched[0].Mode != "notify_only" || dispatched[0].Layout != "toast" {
+		t.Fatalf("NativeToast: esperado install_end/notify_only/toast, got %s/%s/%s", dispatched[0].EventType, dispatched[0].Mode, dispatched[0].Layout)
+	}
+	if got := dispatched[0].Metadata[NotificationSurfaceMetadataKey]; got != NotificationSurfaceNative {
+		t.Fatalf("metadata %s=%v, want %s", NotificationSurfaceMetadataKey, got, NotificationSurfaceNative)
+	}
+	if !IsNativeNotificationSurface(dispatched[0].Metadata) {
+		t.Fatal("IsNativeNotificationSurface deve reconhecer a superficie nativa")
+	}
+}
+
+// Toast da interface do agent continua marcado como superficie "agent" (o App
+// nao envia notificacao nativa nesse caso).
+func TestDispatch_NotificationModeToast_KeepsAgentSurface(t *testing.T) {
+	svc := &Service{}
+	var dispatched []AutomationNotificationRequest
+	dispatcher := func(req AutomationNotificationRequest) AutomationNotificationResponse {
+		dispatched = append(dispatched, req)
+		return AutomationNotificationResponse{Accepted: true, Result: "approved"}
+	}
+	task := notifTask(NotificationModeToast, ToastTimingAfter)
+	success := ExecutionResult{Success: true, ExitCodeSet: true, ExitCode: 0}
+
+	svc.dispatchExecutionNotification(dispatcher, task, notifEntry("ag1"), &success, deferState{}, resolvePSADTWelcomeOptions(task))
+
+	if len(dispatched) != 1 {
+		t.Fatalf("Toast After: esperado 1 notificacao, got %d", len(dispatched))
+	}
+	if got := dispatched[0].Metadata[NotificationSurfaceMetadataKey]; got != NotificationSurfaceAgent {
+		t.Fatalf("metadata %s=%v, want %s", NotificationSurfaceMetadataKey, got, NotificationSurfaceAgent)
+	}
+	if IsNativeNotificationSurface(dispatched[0].Metadata) {
+		t.Fatal("Toast do agent nao pode ser marcado como superficie nativa")
+	}
+}
+
+func TestNotificationSurfaceHelpers(t *testing.T) {
+	if !IsToastNotificationMode(NotificationModeToast) || !IsToastNotificationMode(NotificationModeNativeToast) {
+		t.Fatal("Toast e NativeToast sao modos de toast informativo")
+	}
+	if IsToastNotificationMode(NotificationModePrompt) || IsToastNotificationMode(NotificationModeSilent) {
+		t.Fatal("Prompt/Silent nao sao modos de toast informativo")
+	}
+	if got := NotificationSurfaceForMode(NotificationModeNativeToast); got != NotificationSurfaceNative {
+		t.Fatalf("NotificationSurfaceForMode(NativeToast)=%s", got)
+	}
+	if got := NotificationSurfaceForMode(NotificationModeToast); got != NotificationSurfaceAgent {
+		t.Fatalf("NotificationSurfaceForMode(Toast)=%s", got)
+	}
+	if IsNativeNotificationSurface(nil) || IsNativeNotificationSurface(map[string]any{}) {
+		t.Fatal("metadata vazio nao e superficie nativa")
+	}
+	if !IsNativeNotificationSurface(map[string]any{NotificationSurfaceMetadataKey: "NATIVE"}) {
+		t.Fatal("superficie nativa deve ser case-insensitive")
+	}
+}
+
 // Compatibilidade: policy antiga (modo vazio) mantem o comportamento anterior
 // (RequiresApproval=false -> toast de inicio e resultado).
 func TestDispatch_LegacyPolicyWithoutMode_KeepsOldBehavior(t *testing.T) {
@@ -173,6 +249,8 @@ func TestResolveNotificationMode_AndTiming(t *testing.T) {
 		{AutomationTask{NotificationMode: "Prompt"}, NotificationModePrompt, ToastTimingAfter},
 		{AutomationTask{NotificationMode: "toast", ToastTiming: "before"}, NotificationModeToast, ToastTimingBefore},
 		{AutomationTask{NotificationMode: "toast", ToastTiming: "garbage"}, NotificationModeToast, ToastTimingAfter},
+		{AutomationTask{NotificationMode: "nativetoast", ToastTiming: "after"}, NotificationModeNativeToast, ToastTimingAfter},
+		{AutomationTask{NotificationMode: "NativeToast", ToastTiming: "before"}, NotificationModeNativeToast, ToastTimingBefore},
 		{AutomationTask{RequiresApproval: true}, NotificationModePrompt, ToastTimingAfter},
 		{AutomationTask{}, NotificationModeToast, ToastTimingAfter},
 	}

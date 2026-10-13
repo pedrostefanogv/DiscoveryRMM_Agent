@@ -342,6 +342,12 @@ func (a *App) startIPCClient() {
 				if name == "" {
 					return
 				}
+				// Toast nativo do app: no modo companion quem tem o servico nativo
+				// de notificacoes do Wails e esta UI, entao o envio acontece aqui
+				// (o frontend nao repete o toast quando a superficie e nativa).
+				if name == "notification:new" {
+					a.maybeSendCompanionNativeToast(eventData)
+				}
 				// Guarda o snapshot de conectividade para o tray/status Go-side
 				// (GetAgentStatus) refletirem o core que roda no serviço.
 				if name == "agent:status_snapshot" || name == "agent:connectivity" {

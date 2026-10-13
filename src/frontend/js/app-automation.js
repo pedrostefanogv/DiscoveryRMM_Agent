@@ -70,6 +70,13 @@ function triggerChips(task) {
         : 'automation.notifyToastAfter',
     );
     items.push('<span class="automation-chip">' + escapeHtml(toastChip) + '</span>');
+  } else if (notificationMode === 'NativeToast') {
+    var nativeToastChip = translate(
+      task.toastTiming === 'Before'
+        ? 'automation.notifyNativeToastBefore'
+        : 'automation.notifyNativeToastAfter',
+    );
+    items.push('<span class="automation-chip">' + escapeHtml(nativeToastChip) + '</span>');
   }
   return items.join(' ');
 }

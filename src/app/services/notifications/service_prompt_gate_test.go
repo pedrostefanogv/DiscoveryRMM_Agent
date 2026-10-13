@@ -99,3 +99,75 @@ func TestAllowsUserPrompt_RolloutGating(t *testing.T) {
 		}
 	})
 }
+
+// Portão do toast NATIVO de automation task: o envio sai do processo ANTES do
+// Dispatch, então precisa das mesmas regras de política/rollout do Dispatch.
+func TestAllowsNotification_RolloutGating(t *testing.T) {
+	baseReq := DispatchRequest{
+		NotificationID: "n-native",
+		EventType:      "install_start",
+		Mode:           "notify_only",
+	}
+
+	configured := func(cfg AgentConfiguration) *Service {
+		return New(Deps{
+			Logf:                  func(string) {},
+			GetAgentConfiguration: func() AgentConfiguration { return cfg },
+		})
+	}
+
+	t.Run("sem configuracao bloqueia", func(t *testing.T) {
+		if newTestService().AllowsNotification(baseReq) {
+			t.Fatal("sem getAgentConfiguration deveria bloquear o toast nativo")
+		}
+	})
+
+	t.Run("rollout padrao permite notify_only", func(t *testing.T) {
+		if !configured(AgentConfiguration{}).AllowsNotification(baseReq) {
+			t.Fatal("rollout sem restricoes deveria permitir o toast nativo")
+		}
+	})
+
+	t.Run("enableNotifications=false bloqueia", func(t *testing.T) {
+		s := configured(AgentConfiguration{Rollout: AgentRolloutConfig{EnableNotifications: boolPtr(false)}})
+		if s.AllowsNotification(baseReq) {
+			t.Fatal("notificacoes desligadas deveriam bloquear o toast nativo")
+		}
+	})
+
+	t.Run("eventType bloqueado bloqueia", func(t *testing.T) {
+		s := configured(AgentConfiguration{Rollout: AgentRolloutConfig{BlockedNotificationEventTypes: []string{"install_start"}}})
+		if s.AllowsNotification(baseReq) {
+			t.Fatal("eventType bloqueado deveria bloquear o toast nativo")
+		}
+	})
+
+	t.Run("allowedNotificationEventTypes sem o evento bloqueia", func(t *testing.T) {
+		s := configured(AgentConfiguration{Rollout: AgentRolloutConfig{AllowedNotificationEventTypes: []string{"install_end"}}})
+		if s.AllowsNotification(baseReq) {
+			t.Fatal("allowlist sem install_start deveria bloquear o toast nativo")
+		}
+	})
+
+	t.Run("politica que rebaixa para silent bloqueia", func(t *testing.T) {
+		s := configured(AgentConfiguration{
+			NotificationPolicies: []AgentNotificationPolicy{
+				{EventType: "install_start", Mode: "silent"},
+			},
+		})
+		if s.AllowsNotification(baseReq) {
+			t.Fatal("politica silent deveria bloquear o toast nativo")
+		}
+	})
+
+	t.Run("politica que exige confirmacao bloqueia o toast informativo", func(t *testing.T) {
+		s := configured(AgentConfiguration{
+			NotificationPolicies: []AgentNotificationPolicy{
+				{EventType: "install_start", Mode: "require_confirmation"},
+			},
+		})
+		if s.AllowsNotification(baseReq) {
+			t.Fatal("require_confirmation tem UI propria; toast nativo duplicaria o aviso")
+		}
+	})
+}

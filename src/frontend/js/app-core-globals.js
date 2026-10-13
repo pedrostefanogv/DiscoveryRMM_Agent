@@ -1155,6 +1155,10 @@ function handleNotificationEvent(payload) {
   var message = String(notification.message || '');
   var layout = String(notification.layout || 'toast').toLowerCase();
   var metadata = notification.metadata && typeof notification.metadata === 'object' ? notification.metadata : {};
+  // Superfície "native": o App já enviou o toast nativo do sistema (mesmo caminho
+  // do Chat IA, ex.: task com "Toast nativo do app"). Aqui só atualizamos o
+  // progresso — repetir o toast na interface do agent duplicaria o aviso.
+  var nativeSurface = String(metadata.notificationSurface || '').toLowerCase() === 'native';
   var eventType = String(notification.eventType || '').toLowerCase();
   var actions = Array.isArray(metadata.actions) ? metadata.actions : [];
   var microcopy = buildNotificationMicrocopy(eventType, severity);
@@ -1176,7 +1180,9 @@ function handleNotificationEvent(payload) {
   // iniciada: …") e, sem eventType conhecido, exibia o genérico
   // "Notificação de instalação - Notificação".
   var toastHeading = String(notification.title || '').trim() || microcopy.eventLabel;
-  showToast(toastHeading + (message ? ': ' + message : ''), toastType);
+  if (!nativeSurface) {
+    showToast(toastHeading + (message ? ': ' + message : ''), toastType);
+  }
 
   if (layout === 'banner' && mode !== 'require_confirmation') {
     showNotificationBanner(notification, microcopy, theme);

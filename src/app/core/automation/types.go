@@ -284,10 +284,23 @@ type PSADTPolicy struct {
 const (
 	NotificationModeSilent = "Silent"
 	NotificationModePrompt = "Prompt"
-	NotificationModeToast  = "Toast"
+	// NotificationModeToast: toast informativo desenhado pela interface do agent.
+	NotificationModeToast = "Toast"
+	// NotificationModeNativeToast: toast nativo do sistema (Action Center),
+	// enviado pelo proprio app pelo mesmo caminho do Chat IA.
+	NotificationModeNativeToast = "NativeToast"
 )
 
-// Momentos do toast informativo (NotificationMode = Toast).
+// Superficie do toast informativo, carregada no metadata da notificacao.
+// "native" faz o App enviar a notificacao nativa do sistema; ausente/"agent"
+// mantem o toast desenhado pela interface do agent.
+const (
+	NotificationSurfaceMetadataKey = "notificationSurface"
+	NotificationSurfaceAgent       = "agent"
+	NotificationSurfaceNative      = "native"
+)
+
+// Momentos do toast informativo (NotificationMode = Toast | NativeToast).
 const (
 	ToastTimingBefore = "Before"
 	ToastTimingAfter  = "After"
