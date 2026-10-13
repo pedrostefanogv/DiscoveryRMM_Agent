@@ -94,7 +94,9 @@ func executePackageAction(ctx context.Context, packages PackageManager, authoriz
 		// originais (consumidas pelo anti-loop / classifyPackageResult).
 		decision := decideWingetAction(ctx, packages, operation, packageID)
 		if decision.Skip {
-			result := ExecutionResult{Success: true, ExitCode: 0, ExitCodeSet: true, Output: decision.Reason}
+			// NoOp: o check de "já instalado/atualizado" pulou a operação. O
+			// resultado não mudou o host, então não deve notificar o usuário.
+			result := ExecutionResult{Success: true, ExitCode: 0, ExitCodeSet: true, Output: decision.Reason, NoOp: true}
 			// Telemetria: o servidor registra o motivo do skip e a fonte da decisão
 			// (winget × cache do inventário) para medir decisões sem download.
 			result.MetadataJSON = buildWingetDecisionMetadata(operation, decision)

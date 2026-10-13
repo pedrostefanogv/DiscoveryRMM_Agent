@@ -57,6 +57,23 @@ func classifyPackageResult(result ExecutionResult) skipOutcome {
 	return skipNone
 }
 
+// isNoOpExecutionResult informa se a execução não alterou nada no host: o
+// decisor de pacote pulou a operação (NoOp) ou a saída traz uma mensagem de
+// skip conhecida ("ja instalado", "ja atualizado", "nao encontrado").
+//
+// É o portão usado para não notificar o usuário com "Instalação concluída" em
+// ciclos que apenas reavaliaram o estado — cenário que gerava uma sequência de
+// toasts a cada policy-sync.
+func isNoOpExecutionResult(result ExecutionResult) bool {
+	if !result.Success {
+		return false
+	}
+	if result.NoOp {
+		return true
+	}
+	return classifyPackageResult(result) != skipNone
+}
+
 // isPackageAction já está definida em service_helpers.go.
 
 // ── Backoff de skips benignos ────────────────────────────────────────────────

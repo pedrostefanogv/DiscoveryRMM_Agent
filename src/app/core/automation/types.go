@@ -265,6 +265,10 @@ type ExecutionResult struct {
 	Output       string
 	ErrorMessage string
 	MetadataJSON string
+	// NoOp marca execução que NÃO alterou nada no host: o decisor de pacote
+	// pulou a operação (já instalado / já atualizado / ausente). Nesse caso o
+	// resultado não deve gerar toast de conclusão — só ruído a cada ciclo.
+	NoOp bool
 }
 
 // PSADTPolicy representa a policy efetiva usada em runtime no executor PSADT.

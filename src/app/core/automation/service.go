@@ -1445,6 +1445,38 @@ func (s *Service) dispatchExecutionNotification(dispatcher func(AutomationNotifi
 		return AutomationNotificationResponse{}
 	}
 
+	// Tarefa sem mudança real no host (o decisor de pacote pulou a operação:
+	// já instalado / já atualizado / ausente): NÃO avisa o usuário.
+	//
+	// Antes, o "install_end" passava sempre pelo dedup ("resultados sempre
+	// passam"), então cada policy-sync reexecutava todas as tarefas e cada
+	// tarefa já instalada gerava um novo toast "Instalação concluída" — era o
+	// loop de notificações em sequência visto na UI. O resultado continua
+	// persistido e reportado ao servidor; apenas o toast é omitido.
+	if result != nil && isNoOpExecutionResult(*result) {
+		s.logf("automacao: notificacao suprimida (tarefa sem mudanca) task=%s event=skip", strings.TrimSpace(entry.TaskID))
+		return AutomationNotificationResponse{
+			Accepted:    false,
+			AgentAction: "suppressed_noop",
+			Message:     "notificacao suprimida: execucao sem mudanca no host",
+		}
+	}
+
+	// Reavaliação por policy-sync: tarefas que NÃO são de pacote
+	// (RunScript/CustomCommand) executam de verdade a cada revisão de política
+	// e geravam um toast "Tarefa concluída" por ciclo — era o ruído dos
+	// coletores (ex.: ColetarAnydesk / Coletar teamviewerID). O resultado
+	// continua registrado e reportado ao servidor; execuções agendadas, por
+	// login ou manuais seguem notificando normalmente.
+	if result != nil && !isPackageAction(task.ActionType) && isPolicySyncReevaluation(entry) {
+		s.logf("automacao: notificacao suprimida (policy-sync) task=%s trigger=%s", strings.TrimSpace(entry.TaskID), entry.TriggerType)
+		return AutomationNotificationResponse{
+			Accepted:    false,
+			AgentAction: "suppressed_policy_sync",
+			Message:     "notificacao suprimida: reavaliacao por policy-sync",
+		}
+	}
+
 	// Toast simples: o usuario escolhe se o aviso aparece antes de executar ou
 	// apenas apos a conclusao. No legado (modo ausente) mantem-se ambos.
 	toastTiming := ResolveToastTiming(task)

@@ -313,3 +313,151 @@ func TestDispatchExecutionNotification_SuppressesRepeatedCycles(t *testing.T) {
 		t.Fatalf("install_end nunca deve ser suprimido")
 	}
 }
+
+// Tarefa sem mudança no host (skip do decisor de pacote) não deve gerar toast
+// de conclusão: era a origem do loop de "Instalação concluída" a cada
+// policy-sync. O resultado segue persistido/reportado ao servidor; só o toast
+// é omitido.
+func TestDispatchExecutionNotification_NoOpResultSuppressed(t *testing.T) {
+	svc := &Service{}
+	var dispatched []AutomationNotificationRequest
+	dispatcher := func(req AutomationNotificationRequest) AutomationNotificationResponse {
+		dispatched = append(dispatched, req)
+		return AutomationNotificationResponse{Accepted: true, Result: "approved"}
+	}
+
+	task := AutomationTask{
+		TaskID:     "task-noop",
+		Name:       "Anydesk",
+		ActionType: ActionInstallPackage,
+		PackageID:  "anydesk.anydesk",
+	}
+	entry := database.AutomationExecutionEntry{
+		ExecutionID: "exec-noop",
+		TaskID:      "task-noop",
+		ActionType:  string(ActionInstallPackage),
+		Status:      string(ExecutionStatusCompleted),
+		PackageID:   task.PackageID,
+	}
+
+	noop := ExecutionResult{
+		Success:     true,
+		ExitCodeSet: true,
+		ExitCode:    0,
+		NoOp:        true,
+		Output:      "pacote anydesk.anydesk ja instalado — pulando install",
+	}
+	resp := svc.dispatchExecutionNotification(dispatcher, task, entry, &noop, deferState{}, resolvePSADTWelcomeOptions(task))
+	if len(dispatched) != 0 {
+		t.Fatalf("execucao sem mudanca nao deve notificar, got %d", len(dispatched))
+	}
+	if resp.AgentAction != "suppressed_noop" {
+		t.Fatalf("esperado AgentAction=suppressed_noop, got %q", resp.AgentAction)
+	}
+}
+
+// Mesmo sem o flag NoOp (resultado vindo de outra via), a mensagem de skip
+// conhecida do winget também suprime o toast de conclusão.
+func TestDispatchExecutionNotification_BenignSkipOutputSuppressed(t *testing.T) {
+	svc := &Service{}
+	called := false
+	dispatcher := func(req AutomationNotificationRequest) AutomationNotificationResponse {
+		called = true
+		return AutomationNotificationResponse{Accepted: true, Result: "approved"}
+	}
+
+	task := AutomationTask{
+		TaskID:     "task-skip-text",
+		Name:       "7-ZIP",
+		ActionType: ActionInstallPackage,
+		PackageID:  "7zip.7zip",
+	}
+	entry := database.AutomationExecutionEntry{
+		ExecutionID: "exec-skip-text",
+		TaskID:      "task-skip-text",
+		ActionType:  string(ActionInstallPackage),
+		Status:      string(ExecutionStatusCompleted),
+		PackageID:   task.PackageID,
+	}
+
+	skip := ExecutionResult{
+		Success:     true,
+		ExitCodeSet: true,
+		ExitCode:    0,
+		Output:      "pacote 7zip.7zip ja atualizado — pulando upgrade",
+	}
+	svc.dispatchExecutionNotification(dispatcher, task, entry, &skip, deferState{}, resolvePSADTWelcomeOptions(task))
+	if called {
+		t.Fatalf("skip benigno nao deve notificar conclusao")
+	}
+}
+
+// Tarefa não-pacote (RunScript) reexecutada por policy-sync (Immediate /
+// AgentCheckIn) não deve notificar conclusão: era o ruído dos coletores
+// (ColetarAnydesk / Coletar teamviewerID) a cada revisão de política.
+func TestDispatchExecutionNotification_RunScriptPolicySyncSuppressed(t *testing.T) {
+	svc := &Service{}
+	var dispatched []AutomationNotificationRequest
+	dispatcher := func(req AutomationNotificationRequest) AutomationNotificationResponse {
+		dispatched = append(dispatched, req)
+		return AutomationNotificationResponse{Accepted: true, Result: "approved"}
+	}
+
+	task := AutomationTask{
+		TaskID:           "task-collector",
+		Name:             "ColetarAnydesk",
+		ActionType:       ActionRunScript,
+		NotificationMode: NotificationModeToast,
+	}
+	entry := database.AutomationExecutionEntry{
+		ExecutionID:   "exec-collector",
+		TaskID:        "task-collector",
+		TaskName:      task.Name,
+		ActionType:    string(ActionRunScript),
+		Status:        string(ExecutionStatusCompleted),
+		TriggerType:   string(TriggerTypeImmediate),
+		SourceType:    "ForceSync",
+		CorrelationID: "corr-collector",
+	}
+
+	ok := ExecutionResult{Success: true, ExitCodeSet: true, ExitCode: 0}
+	resp := svc.dispatchExecutionNotification(dispatcher, task, entry, &ok, deferState{}, resolvePSADTWelcomeOptions(task))
+	if len(dispatched) != 0 {
+		t.Fatalf("runscript em policy-sync nao deve notificar, got %d", len(dispatched))
+	}
+	if resp.AgentAction != "suppressed_policy_sync" {
+		t.Fatalf("esperado AgentAction=suppressed_policy_sync, got %q", resp.AgentAction)
+	}
+}
+
+// A mesma tarefa com gatilho agendado (Recurring) continua notificando.
+func TestDispatchExecutionNotification_RunScriptScheduledStillNotifies(t *testing.T) {
+	svc := &Service{}
+	var dispatched []AutomationNotificationRequest
+	dispatcher := func(req AutomationNotificationRequest) AutomationNotificationResponse {
+		dispatched = append(dispatched, req)
+		return AutomationNotificationResponse{Accepted: true, Result: "approved"}
+	}
+
+	task := AutomationTask{
+		TaskID:           "task-collector-sched",
+		Name:             "ColetarAnydesk",
+		ActionType:       ActionRunScript,
+		NotificationMode: NotificationModeToast,
+	}
+	entry := database.AutomationExecutionEntry{
+		ExecutionID:   "exec-collector-sched",
+		TaskID:        "task-collector-sched",
+		TaskName:      task.Name,
+		ActionType:    string(ActionRunScript),
+		Status:        string(ExecutionStatusCompleted),
+		TriggerType:   string(TriggerTypeRecurring),
+		CorrelationID: "corr-collector-sched",
+	}
+
+	ok := ExecutionResult{Success: true, ExitCodeSet: true, ExitCode: 0}
+	svc.dispatchExecutionNotification(dispatcher, task, entry, &ok, deferState{}, resolvePSADTWelcomeOptions(task))
+	if len(dispatched) != 1 || dispatched[0].EventType != "install_end" {
+		t.Fatalf("runscript agendado deve continuar notificando")
+	}
+}

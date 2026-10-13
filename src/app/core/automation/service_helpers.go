@@ -121,6 +121,20 @@ func mapExecutionEntries(entries []database.AutomationExecutionEntry) []Executio
 	return out
 }
 
+// isPolicySyncReevaluation informa se a execução veio de reavaliação de
+// política (policy-sync): gatilhos Immediate e AgentCheckIn, que
+// reconcilePolicy dispara a cada mudança de fingerprint da policy.
+//
+// Tarefas que não são de pacote (RunScript/CustomCommand) executam de verdade
+// nesses ciclos; o toast de conclusão de cada ciclo é ruído puro.
+func isPolicySyncReevaluation(entry database.AutomationExecutionEntry) bool {
+	switch TriggerType(strings.TrimSpace(entry.TriggerType)) {
+	case TriggerTypeImmediate, TriggerTypeAgentCheckIn:
+		return true
+	}
+	return false
+}
+
 func sourceForTrigger(triggerType TriggerType) AutomationExecutionSourceType {
 	switch triggerType {
 	case TriggerTypeImmediate, TriggerTypeAgentCheckIn:
