@@ -184,7 +184,16 @@ func executeScript(ctx context.Context, task AutomationTask, customFields map[st
 	case ScriptShell, ScriptBatch, ScriptCustom:
 		return executeProcessWithEnv(ctx, "cmd", []string{"/C", content}, defaultExecutionTimeout, extraEnv)
 	case ScriptPython:
-		return executeProcessWithEnv(ctx, "python", []string{"-c", content}, defaultExecutionTimeout, extraEnv)
+		// "python" fixo quebrava em máquinas onde só existe o stub da Microsoft
+		// Store ou o launcher "py". resolvePythonInterpreter() prova os candidatos
+		// (python, python3, py -3, caminhos comuns) e devolve o primeiro que
+		// executa Python 3.
+		interpreter, resolved := resolvePythonInterpreter()
+		result := executeProcessWithEnv(ctx, interpreter.name, pythonCommandArgs(interpreter, content), defaultExecutionTimeout, extraEnv)
+		if !resolved && !result.Success && !strings.Contains(result.ErrorMessage, pythonMissingInterpreterHint) {
+			result.ErrorMessage = pythonMissingInterpreterHint + ": " + result.ErrorMessage
+		}
+		return result
 	default:
 		return ExecutionResult{Success: false, ExitCode: 2, ExitCodeSet: true, ErrorMessage: "scriptType nao suportado"}
 	}

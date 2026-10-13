@@ -332,7 +332,7 @@ func (s *Service) triggerUserLoginTasks(ctx context.Context, sessionID uint32) {
 		if !task.TriggerOnUserLogin {
 			continue
 		}
-		s.executeTaskAsync(ctx, agentID, task, sourceForTrigger(TriggerTypeUserLogin), TriggerTypeUserLogin, nil)
+		s.executeTaskAsync(ctx, agentID, task, sourceForTrigger(TriggerTypeUserLogin), TriggerTypeUserLogin, nil, nil)
 	}
 }
 func (s *Service) RefreshPolicy(ctx context.Context, includeScriptContent bool) (State, error) {
@@ -554,7 +554,7 @@ func (s *Service) reconcilePolicy(ctx context.Context, previous State, current S
 		for _, task := range orderedExecutionTasks(current.Tasks) {
 			if task.TriggerOnUserLogin {
 				triggered = true
-				s.executeTaskAsync(ctx, agentID, task, sourceForTrigger(TriggerTypeUserLogin), TriggerTypeUserLogin, nil)
+				s.executeTaskAsync(ctx, agentID, task, sourceForTrigger(TriggerTypeUserLogin), TriggerTypeUserLogin, nil, nil)
 			}
 		}
 		if triggered {
@@ -598,7 +598,7 @@ func (s *Service) triggerImmediate(ctx context.Context, agentID, fingerprint str
 			go s.reportTriggerSkip(agentID, task, sourceForTrigger(TriggerTypeImmediate), TriggerTypeImmediate, dec.Reason)
 			return
 		}
-		s.executeTaskAsync(ctx, agentID, task, sourceForTrigger(TriggerTypeImmediate), TriggerTypeImmediate, nil)
+		s.executeTaskAsync(ctx, agentID, task, sourceForTrigger(TriggerTypeImmediate), TriggerTypeImmediate, nil, nil)
 		return
 	}
 	// C2: a chave inclui LastUpdatedAt — se a task for atualizada no servidor,
@@ -624,14 +624,17 @@ func (s *Service) triggerImmediate(ctx context.Context, agentID, fingerprint str
 		go s.reportTriggerSkip(agentID, task, sourceForTrigger(TriggerTypeImmediate), TriggerTypeImmediate, dec.Reason)
 		return
 	}
-	// Arma o marcador SOMENTE se a execução realmente iniciou. Se o guard de
-	// concorrência bloqueou (execução anterior ainda finalizando), armar aqui
-	// deixaria a task muda: o próximo policy-sync cairia no dedup sem executar.
-	if !s.executeTaskAsync(ctx, agentID, task, sourceForTrigger(TriggerTypeImmediate), TriggerTypeImmediate, nil) {
+	// O marcador é armado no onStart, DEPOIS que a vez na fila chega e a linha da
+	// execução existe. Se o guard de concorrência bloquear (execução anterior
+	// ainda finalizando), o onStart não roda e o marcador não é armado — armar
+	// sem execução deixaria a task muda: o próximo policy-sync cairia no dedup
+	// sem executar.
+	if !s.executeTaskAsync(ctx, agentID, task, sourceForTrigger(TriggerTypeImmediate), TriggerTypeImmediate, func() {
+		errutil.LogIfErr(s.db.SetAutomationMarker(agentID, markerKey, time.Now().UTC().Format(time.RFC3339)), "automation: definir marker imediato")
+	}, nil) {
 		s.logf("automacao: execucao da task=%s nao iniciou (ja em andamento) - marcador de trigger nao armado", strings.TrimSpace(task.TaskID))
 		return
 	}
-	errutil.LogIfErr(s.db.SetAutomationMarker(agentID, markerKey, time.Now().UTC().Format(time.RFC3339)), "automation: definir marker imediato")
 }
 
 // triggerOnAgentCheckIn dispara tarefas TriggerOnAgentCheckIn com deduplicação por marcador.
@@ -677,7 +680,7 @@ func (s *Service) TriggerAgentCheckInTasks(ctx context.Context) {
 			continue
 		}
 		s.logf("automacao: check-in cycle — disparando tarefa %s", taskID)
-		s.executeTaskAsync(ctx, agentID, task, sourceForTrigger(TriggerTypeAgentCheckIn), TriggerTypeAgentCheckIn, nil)
+		s.executeTaskAsync(ctx, agentID, task, sourceForTrigger(TriggerTypeAgentCheckIn), TriggerTypeAgentCheckIn, nil, nil)
 	}
 }
 func (s *Service) triggerOnAgentCheckIn(ctx context.Context, agentID, fingerprint string, task AutomationTask) {
@@ -687,7 +690,7 @@ func (s *Service) triggerOnAgentCheckIn(ctx context.Context, agentID, fingerprin
 			go s.reportTriggerSkip(agentID, task, sourceForTrigger(TriggerTypeAgentCheckIn), TriggerTypeAgentCheckIn, dec.Reason)
 			return
 		}
-		s.executeTaskAsync(ctx, agentID, task, sourceForTrigger(TriggerTypeAgentCheckIn), TriggerTypeAgentCheckIn, nil)
+		s.executeTaskAsync(ctx, agentID, task, sourceForTrigger(TriggerTypeAgentCheckIn), TriggerTypeAgentCheckIn, nil, nil)
 		return
 	}
 	// C2: mesma correção do triggerImmediate — LastUpdatedAt na chave.
@@ -705,19 +708,26 @@ func (s *Service) triggerOnAgentCheckIn(ctx context.Context, agentID, fingerprin
 		go s.reportTriggerSkip(agentID, task, sourceForTrigger(TriggerTypeAgentCheckIn), TriggerTypeAgentCheckIn, dec.Reason)
 		return
 	}
-	if !s.executeTaskAsync(ctx, agentID, task, sourceForTrigger(TriggerTypeAgentCheckIn), TriggerTypeAgentCheckIn, nil) {
+	// Mesmo motivo do immediate: o marcador só é armado quando a execução
+	// realmente começa (onStart), não no enfileiramento.
+	if !s.executeTaskAsync(ctx, agentID, task, sourceForTrigger(TriggerTypeAgentCheckIn), TriggerTypeAgentCheckIn, func() {
+		errutil.LogIfErr(s.db.SetAutomationMarker(agentID, markerKey, time.Now().UTC().Format(time.RFC3339)), "automation: definir marker checkin")
+	}, nil) {
 		s.logf("automacao: execucao da task=%s nao iniciou (ja em andamento) - marcador de checkin nao armado", strings.TrimSpace(task.TaskID))
 		return
 	}
-	errutil.LogIfErr(s.db.SetAutomationMarker(agentID, markerKey, time.Now().UTC().Format(time.RFC3339)), "automation: definir marker checkin")
 }
 
-// executeTaskAsync dispara a execução em background e informa se ela foi de
-// fato iniciada. Retorna false quando o agente é inválido ou já existe uma
-// execução da mesma task+trigger em andamento — nesse caso o caller NÃO deve
-// armar o marcador de deduplicação do gatilho: marcador armado sem execução
-// deixa a task muda até o próximo restart/falha (mesma classe do bug original).
-func (s *Service) executeTaskAsync(ctx context.Context, agentID string, task AutomationTask, sourceType AutomationExecutionSourceType, triggerType TriggerType, onComplete func(success bool)) bool {
+// executeTaskAsync dispara a execução em background e informa se ela foi
+// ACEITA (não se já começou a rodar: com a fila ordenada ela pode esperar a vez
+// por minutos). Retorna false quando o agente é inválido ou já existe uma
+// execução da mesma task+trigger em andamento.
+//
+// onStart (opcional) roda dentro da goroutine, quando a vez chega e a linha da
+// execução já existe. É o lugar para armar o marcador de dedup do gatilho:
+// armar no enfileiramento deixaria a task MUDA se o processo reiniciasse antes
+// de a execução criar a linha (não haveria nada para o watchdog reconciliar).
+func (s *Service) executeTaskAsync(ctx context.Context, agentID string, task AutomationTask, sourceType AutomationExecutionSourceType, triggerType TriggerType, onStart func(), onComplete func(success bool)) bool {
 	if agentID == "" {
 		return false
 	}
@@ -853,6 +863,12 @@ func (s *Service) executeTaskAsync(ctx context.Context, agentID string, task Aut
 			s.refreshDerivedState(agentID)
 		}()
 
+		// A vez na fila chegou, a linha da execução já foi persistida e o
+		// finalizador (que libera o marcador em falha) já está armado.
+		if onStart != nil {
+			onStart()
+		}
+
 		// Pré-checagem do prompt: se a ação de pacote já está em estado final
 		// (instalado/atualizado), NÃO interrompe o usuário com o Welcome/toast — o
 		// executor faria o skip logo depois da confirmação. O prompt só ocorre
@@ -875,7 +891,7 @@ func (s *Service) executeTaskAsync(ctx context.Context, agentID string, task Aut
 					delay = 0
 				}
 				time.AfterFunc(delay, func() {
-					s.executeTaskAsync(context.Background(), agentID, taskCopy, sourceType, triggerType, nil)
+					s.executeTaskAsync(context.Background(), agentID, taskCopy, sourceType, triggerType, nil, nil)
 				})
 				// Estado terminal da linha: o retry JÁ está agendado acima, logo o
 				// finalizador não deve liberar o marcador de trigger (evita disparo
@@ -1324,7 +1340,7 @@ func (s *Service) rebuildRecurringSchedules(ctx context.Context, previous, curre
 			}
 			// O marcador é atualizado APÓS a execução via callback onComplete,
 			// garantindo que falhas não bloqueiem o próximo slot do cron.
-			s.executeTaskAsync(ctx, agentID, taskCopy, sourceForTrigger(TriggerTypeRecurring), TriggerTypeRecurring,
+			s.executeTaskAsync(ctx, agentID, taskCopy, sourceForTrigger(TriggerTypeRecurring), TriggerTypeRecurring, nil,
 				func(success bool) {
 					s.mu.RLock()
 					db := s.db
@@ -2022,7 +2038,7 @@ func (s *Service) scheduleDeferRetry(agentID string, task AutomationTask, source
 		existing.Stop()
 	}
 	s.deferTimers[taskID] = time.AfterFunc(delay, func() {
-		s.executeTaskAsync(context.Background(), agentID, taskCopy, sourceType, triggerType, nil)
+		s.executeTaskAsync(context.Background(), agentID, taskCopy, sourceType, triggerType, nil, nil)
 	})
 	s.mu.Unlock()
 }

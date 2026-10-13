@@ -1,6 +1,7 @@
 package automation
 
 import (
+	"context"
 	"reflect"
 	"sync"
 	"testing"
@@ -89,6 +90,39 @@ func TestExecutionOrderQueue_RunsInEnqueueOrder(t *testing.T) {
 
 	if !reflect.DeepEqual(got, []string{"a", "b", "c"}) {
 		t.Fatalf("ordem de execução da fila errada: got=%v want=[a b c]", got)
+	}
+}
+
+// Regressão: o marcador de dedup do gatilho só pode ser armado quando a
+// execução REALMENTE começa (onStart), não quando ela apenas entra na fila. Antes
+// disso, um restart com a task ainda esperando a vez deixava o marcador armado
+// sem linha de execução — e a task ficava muda até a política mudar.
+func TestExecuteTaskAsync_OnStartWaitsForQueueTurn(t *testing.T) {
+	service := NewService(func() RuntimeConfig { return RuntimeConfig{} }, func(string) {})
+
+	// Bloqueia a fila com um ticket que ninguém libera ainda.
+	service.execQueue.enqueue("blocker")
+
+	started := make(chan struct{})
+	task := AutomationTask{TaskID: "task-1", Name: "coletor", ActionType: ActionRunScript}
+	go service.executeTaskAsync(
+		context.Background(), "agent-1", task, ExecutionSourceForceSync, TriggerTypeImmediate,
+		func() { close(started) },
+		nil,
+	)
+
+	select {
+	case <-started:
+		t.Fatal("onStart não pode rodar antes de a vez na fila chegar")
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	service.execQueue.release("blocker")
+
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("onStart não rodou depois de liberar a fila")
 	}
 }
 

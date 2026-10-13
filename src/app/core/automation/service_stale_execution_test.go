@@ -130,7 +130,7 @@ func TestDeferredExecutionDoesNotStayDispatched(t *testing.T) {
 		return AutomationNotificationResponse{Accepted: true, Result: "deferred", AgentAction: "user_decision"}
 	})
 
-	svc.executeTaskAsync(context.Background(), "agent-1", task, ExecutionSourceForceSync, TriggerTypeImmediate, nil)
+	svc.executeTaskAsync(context.Background(), "agent-1", task, ExecutionSourceForceSync, TriggerTypeImmediate, nil, nil)
 
 	deadline := time.Now().Add(5 * time.Second)
 	var status string
